@@ -169,7 +169,16 @@ LLAMA_API bool llama_model_classifier_free_guidance(const struct llama_model * m
 // n_ubatch of such a context bounds the output rows of one encode, and sets its compute reservation
 static const enum llama_context_type LLAMA_CONTEXT_TYPE_ENCODER = (enum llama_context_type) 16;
 
+// context role for mmproj models with an audio generation stage: per-frame head on backbone rows (code predictor)
+// a batch entry carries a token (the code the backbone sampled) and a state embedding (the backbone hidden state)
+// the codes are sampled in the graph by the sampler of the sequence (llama_set_sampler), greedy without one
+// outputs: llama_get_sampled_tokens_ith() for the codes, llama_get_embeddings_ith() for the feedback embedding
+static const enum llama_context_type LLAMA_CONTEXT_TYPE_GEN_CODE = (enum llama_context_type) 17;
+
 LLAMA_API bool llama_model_has_context_type(const struct llama_model * model, enum llama_context_type type);
+
+// several sampled tokens for output row i (the codes of one audio frame); returns their count, copies up to n_max into out
+LLAMA_API int32_t llama_get_sampled_tokens_ith(struct llama_context * ctx, int32_t i, llama_token * out, int32_t n_max);
 
 struct llama_media_proc;
 struct llama_media_layout;

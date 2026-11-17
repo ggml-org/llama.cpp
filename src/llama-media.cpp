@@ -19,7 +19,13 @@ static const llama_model_clip * as_clip(const llama_model * model) {
 
 bool llama_model_has_context_type(const struct llama_model * model, enum llama_context_type type) {
     if (const auto * clip = as_clip(model)) {
-        return type == LLAMA_CONTEXT_TYPE_ENCODER && clip->vhp.has_vision && clip->vhp.proj != LLAMA_CLIP_PROJ_UNKNOWN;
+        if (type == LLAMA_CONTEXT_TYPE_ENCODER) {
+            return clip->vhp.has_vision && clip->vhp.proj != LLAMA_CLIP_PROJ_UNKNOWN;
+        }
+        if (type == LLAMA_CONTEXT_TYPE_GEN_CODE) {
+            return !clip->vhp.has_vision && clip->ghp.has_gen && clip->ghp.proj == LLAMA_CLIP_PROJ_QWEN3TTS_GEN;
+        }
+        return false;
     }
     switch (type) {
         case LLAMA_CONTEXT_TYPE_DEFAULT: return true;

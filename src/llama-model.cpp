@@ -1,4 +1,5 @@
 #include "llama-model.h"
+#include "llama-batch.h"
 
 #include "llama-arch.h"
 #include "llama-ext.h"
@@ -2020,7 +2021,8 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
-    ml.done_getting_tensors();
+    // an mmproj holds several towers, libllama loads the ported ones
+    ml.done_getting_tensors(arch == LLM_ARCH_CLIP);
 
     if (per_layer_tok_embd && ml.lazy.has(per_layer_tok_embd)) {
         LLAMA_LOG_INFO("%s: enabling prefetch for '%s'\n", __func__, per_layer_tok_embd->name);
@@ -3707,6 +3709,15 @@ const char * llama_model_decision_label(const struct llama_model * model, uint32
     }
 
     return nullptr;
+}
+
+uint32_t llama_model::ctx_n_vocab(enum llama_context_type type) const {
+    GGML_UNUSED(type);
+    return vocab.n_tokens();
+}
+
+uint32_t llama_model::ctx_n_embd_state(enum llama_context_type type) const {
+    return (uint32_t) llama_batch_ext_select_n_embd_state(type, hparams);
 }
 
 llama_rope_type llama_model_rope_type(const llama_model * model) {

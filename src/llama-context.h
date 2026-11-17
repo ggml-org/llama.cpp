@@ -163,6 +163,10 @@ struct llama_context {
     int encode(const llama_batch_ext & batch_inp);
     // encode the media of an ENCODER batch into their rows
     int encode_media(const llama_batch_ext & batch_inp);
+
+    // GEN_CODE context: one frame per entry, codes sampled in the graph
+    int gen_code(const llama_batch_ext & batch_inp);
+    int32_t get_sampled_tokens_ith(int32_t i, llama_token * out, int32_t n_max) const;
     int decode(const llama_batch_ext & batch_inp);
 
     // compat version
@@ -457,6 +461,10 @@ private:
     llm_graph_result_ptr gf_res_reserve;
 
     llm_graph_result * gf_res_prev_active = nullptr;
+
+    // codes of the last GEN_CODE decode, n_gen_codes per output row
+    std::vector<llama_token> gen_codes;
+    int32_t                  n_gen_codes = 0;
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;

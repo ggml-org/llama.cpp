@@ -29,6 +29,15 @@ All new functions are `LLAMA_API` and exported from libllama. The header is C++ 
 
 Rules enforced by `llama_init_from_model`: an mmproj (`general.architecture = clip`) model needs an ENCODER context, and an ENCODER context needs an mmproj model. An ENCODER context always has `embeddings = true`, non-causal attention and no pooling, whatever the params say. Its `n_ubatch` bounds the output rows of one media and sets the compute reservation.
 
+### Audio generation: code predictor
+
+| Item | Status | Notes |
+|---|---|---|
+| `LLAMA_CONTEXT_TYPE_GEN_CODE` | done | staging value 17, outside the enum like ENCODER. Offered by mmproj files whose generation tower is ported (Qwen3-TTS). |
+| `llama_get_sampled_tokens_ith(ctx, i, out, n_max)` | done | the codes of output row i (16 for Qwen3-TTS). |
+
+A GEN_CODE batch entry carries a token (the code the backbone sampled) and a state embedding (the backbone hidden state), set with the existing `llama_batch_ext_add_token` and `llama_batch_ext_set_embd_state`. `llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch)` runs one frame per entry. The feedback embedding comes back through the existing `llama_get_embeddings_ith`. The codes are sampled in the graph by the sampler chain of the sequence (`llama_set_sampler`, existing API), greedy without one: the code predictor calls the chain's `backend_apply` once per codebook, 15 times in one graph. The k/v of the predictor lives in the graph, so no `llama_memory` is involved. Temperature is not applied, like the mtmd graph ("TODO: handle this on graph").
+
 ### Preprocessing and layout
 
 | Function | Status |
@@ -66,7 +75,7 @@ On a batch of an ENCODER context it queues the media for `llama_process(ctx, LLA
 |---|---|
 | 1 (rest) | `llama_media_proc_video_hint`, full video builder, audio input (`add_audio`) |
 | 3 | `llama_audio_stream_*` (10 functions), removal of `llama_model_n_tokens_delay` and `llama_model_get_tok_embd_rows` |
-| 4 | `LLAMA_CONTEXT_TYPE_GEN_CODE/GEN_WAV/GEN_NAR`, `llama_get_sampled_tokens_ith`, `llama_batch_ext_add_codes`, `llama_set_seed_seq`, `llama_set_cfg_scale`, `llama_batch_ext_set_cond`, `llama_set_cond_media`, voice queries; removal of `llama_model_get_tok_embd` |
+| 4 | `LLAMA_CONTEXT_TYPE_GEN_WAV/GEN_NAR`, `llama_batch_ext_add_codes`, `llama_set_seed_seq`, `llama_set_cfg_scale`, `llama_batch_ext_set_cond`, `llama_set_cond_media`, voice queries; removal of `llama_model_get_tok_embd` (GEN_CODE and `llama_get_sampled_tokens_ith` are done) |
 
 ## `tools/mtmd/mtmd.h`
 
@@ -82,6 +91,7 @@ Behaviour of libmtmd with the shim:
 - `mtmd_get_output_embd` and `mtmd_batch_get_output_embd` still return host rows (copied from the media).
 - `mtmd_helper_decode_image_chunk` uses `llama_batch_ext_add_media` for libllama media when no post-decode callback is set: no `llama_set_causal_attn` toggle, positions and span set by libllama. With a callback (speculative decoding mirror), it keeps the old path.
 - `MTMD_DEBUG_EMBEDDINGS=<path>` dumps the libllama rows in the same format as the old engine.
+- Qwen3-TTS: the code predictor (`mtmd_gen_audio_process` with `MTMD_GEN_PROCESS_TYPE_GEN_CODE`) runs on a GEN_CODE `llama_context`, one per `mtmd_gen_state`, with a sampler chain built from the call's `top_k` / `top_p` and the state seed. Greedy output is identical to the old engine; sampled output differs because the random draws come from libllama's dist sampler instead of mtmd's generator. The speaker encoder and code2wav stay on the old engine for now.
 - Image chunks of libllama media carry their grid (`nx`, `ny`) and one placeholder entry, so `mtmd_image_tokens_get_nx/ny`, `mtmd_input_chunk_get_n_tokens` and serialized chunks keep the same counts.
 - Qwen3-VL video frames stay on the old engine: the model sizes video frames differently from images and that preprocessing is not ported yet.
 
@@ -94,7 +104,9 @@ Behaviour of libmtmd with the shim:
 | `llama_batch_allocr` | copies spans into ubatches; `split_simple` and `split_seq` never cut a bidirectional span (they give back its head), following the `n_keep_tail` precedent |
 | `llama_kv_cache::set_input_attn_mask` | a query inside a bidirectional span sees the later keys of its own span; everything else stays causal |
 | `llama_context` | `encode()` routes batches with media to `encode_media()`: one ubatch per media, `n_tokens` = output rows, rows copied into the media |
-| `llama_model` | virtual `media_bidirectional(type)` (false by default, true for images in Gemma 3); `print_info` skips the vocab of vocab-less models |
+| `llama_model` | virtual `media_bidirectional(type)` (false by default, true for images in Gemma 3); virtual `graph_max_nodes_hint()` (8192 for vision towers, 32768 for the unrolled code predictor); virtuals `ctx_n_vocab(type)` / `ctx_n_embd_state(type)` giving the batch input widths per context type; `print_info` skips the vocab of vocab-less models; `done_getting_tensors` runs in partial mode for `clip`, so towers that are not ported stay in the file unread |
+| `llm_graph_result` | `t_codes` (codes sampled in the graph) |
+| `llama_context` | `gen_code()`: one ubatch per entry for GEN_CODE contexts, codes kept per output row |
 | `llama_model_base::load_hparams` | for `clip`, calls the arch's `load_arch_hparams` instead of returning early |
 | `llama_model::create_memory` | `clip` keeps no memory |
 | `src/llama.cpp` | the "CLIP cannot be used as main model" error is gone; the context-type check replaces it |

@@ -112,9 +112,12 @@ static void llama_verify_hadamard_graph(
 }
 
 static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
-    // staging value, not part of enum llama_context_type yet
+    // staging values, not part of enum llama_context_type yet
     if (ctx_type == LLAMA_CONTEXT_TYPE_ENCODER) {
         return LLM_GRAPH_TYPE_ENCODER;
+    }
+    if (ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE) {
+        return LLM_GRAPH_TYPE_DECODER;
     }
     switch (ctx_type) {
         case LLAMA_CONTEXT_TYPE_DEFAULT: return LLM_GRAPH_TYPE_DEFAULT;
@@ -324,7 +327,7 @@ llama_context::llama_context(
         cparams.causal_attn = params.attention_type == LLAMA_ATTENTION_TYPE_CAUSAL;
     }
 
-    if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_ENCODER) {
+    if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_ENCODER || cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE) {
         // media encoders output one embedding row per media token, with full attention inside a media
         cparams.embeddings   = true;
         cparams.causal_attn  = false;
@@ -2243,7 +2246,124 @@ static bool needs_raw_logits(const llama_ubatch & ubatch, const std::map<llama_s
     return false; // all sequences use backend sampling
 }
 
+int llama_context::gen_code(const llama_batch_ext & batch_inp) {
+    if (batch_inp.tokens.empty()) {
+        LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
+        return -1;
+    }
+
+    if (t_compute_start_us == 0) {
+        t_compute_start_us = ggml_time_us();
+    }
+
+    sched_reserve();
+
+    const int32_t n_entries = (int32_t) batch_inp.tokens.size();
+    if (output_reserve(n_entries) < (uint32_t) n_entries) {
+        LLAMA_LOG_ERROR("%s: could not reserve space for %d outputs\n", __func__, n_entries);
+        return -2;
+    }
+
+    const size_t   n_embd_state = batch_inp.n_embd_state;
+    const uint32_t n_embd_out   = model.hparams.n_embd_out();
+
+    gen_codes.clear();
+    n_gen_codes = 0;
+
+    // one entry per ubatch: the graph runs one frame of one sequence
+    for (int32_t i = 0; i < n_entries; ++i) {
+        const auto & tok = batch_inp.tokens[i];
+        if (tok.id == LLAMA_TOKEN_NULL || !tok.has_state || tok.seq_ids.size() != 1) {
+            LLAMA_LOG_ERROR("%s: entry %d needs a token, a state embedding and one sequence\n", __func__, i);
+            return -1;
+        }
+        const llama_seq_id seq = *tok.seq_ids.begin();
+
+        auto udata = std::make_shared<llama_ubatch::data_t>();
+        udata->token     = { tok.id };
+        udata->embd_state.assign(batch_inp.state.begin() + tok.state_off, batch_inp.state.begin() + tok.state_off + n_embd_state);
+        udata->pos       = { 0 };
+        udata->n_seq_id  = { 1 };
+        udata->seq_id_data = { seq };
+        udata->seq_id    = { udata->seq_id_data.data() };
+        udata->seq_id_unq = { seq };
+        udata->seq_idx   .assign(LLAMA_MAX_SEQ, -1);
+        udata->seq_idx[seq] = 0;
+        udata->output    = { 1 };
+
+        llama_ubatch ubatch {
+            /*.b_equal_seqs =*/ true,
+            /*.n_tokens     =*/ 1,
+            /*.n_seq_tokens =*/ 1,
+            /*.n_seqs       =*/ 1,
+            /*.n_seqs_unq   =*/ 1,
+            /*.n_pos        =*/ 1,
+            /*.token        =*/ udata->token.data(),
+            /*.embd         =*/ nullptr,
+            /*.embd_state   =*/ udata->embd_state.data(),
+            /*.embd_row     =*/ nullptr,
+            /*.pos          =*/ udata->pos.data(),
+            /*.n_seq_id     =*/ udata->n_seq_id.data(),
+            /*.seq_id       =*/ udata->seq_id.data(),
+            /*.seq_id_unq   =*/ udata->seq_id_unq.data(),
+            /*.seq_idx      =*/ udata->seq_idx.data(),
+            /*.output       =*/ udata->output.data(),
+            /*.type         =*/ nullptr,
+            /*.decision_order =*/ nullptr,
+            /*.span         =*/ nullptr,
+            /*.media        =*/ nullptr,
+            /*.data         =*/ udata,
+        };
+
+        n_queued_tokens += 1;
+        n_outputs = 1;
+
+        ggml_status status;
+        const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, nullptr, status);
+        if (!res) {
+            switch (status) {
+                case GGML_STATUS_ABORTED:      return  2;
+                case GGML_STATUS_ALLOC_FAILED: return -2;
+                case GGML_STATUS_FAILED:       return -3;
+                case GGML_STATUS_SUCCESS:      GGML_ABORT("should not happen");
+            }
+        }
+
+        synchronize();
+
+        ggml_tensor * t_embd  = res->get_embd();
+        ggml_tensor * t_codes = res->t_codes;
+        GGML_ASSERT(t_embd && t_codes && t_embd->ne[0] == (int64_t) n_embd_out);
+
+        ggml_backend_tensor_get(t_embd, embd.data + (size_t) i * n_embd_out, 0, n_embd_out * sizeof(float));
+        output_ids[i] = i;
+
+        n_gen_codes = (int32_t) ggml_nelements(t_codes);
+        const size_t off = gen_codes.size();
+        gen_codes.resize(off + n_gen_codes);
+        ggml_backend_tensor_get(t_codes, gen_codes.data() + off, 0, n_gen_codes * sizeof(int32_t));
+    }
+
+    n_outputs = n_entries;
+
+    return 0;
+}
+
+int32_t llama_context::get_sampled_tokens_ith(int32_t i, llama_token * out, int32_t n_max) const {
+    if (i < 0 || n_gen_codes == 0 || (size_t) (i + 1) * n_gen_codes > gen_codes.size()) {
+        return 0;
+    }
+    if (out) {
+        std::copy_n(gen_codes.begin() + (size_t) i * n_gen_codes, std::min(n_max, n_gen_codes), out);
+    }
+    return n_gen_codes;
+}
+
 int llama_context::decode(const llama_batch_ext & batch_inp) {
+    if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE) {
+        return gen_code(batch_inp);
+    }
+
     if (!memory) {
         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
         return encode(batch_inp);
@@ -3041,6 +3161,8 @@ uint32_t llama_context::graph_max_nodes() const {
             res += lora->get_n_nodes();
         }
     }
+
+    res = std::max(res, model.graph_max_nodes_hint());
 
     // every sampler builds n_outputs_max_per_seq chains, see llm_graph_context::build_sampling
     for (const auto & [seq_id, sampler] : sampling.samplers) {
@@ -4686,9 +4808,16 @@ llama_context * llama_init_from_model(
                        model->hparams.pooling_type, params.pooling_type);
     }
 
-    if ((model->arch == LLM_ARCH_CLIP) != (params.ctx_type == LLAMA_CONTEXT_TYPE_ENCODER)) {
-        LLAMA_LOG_ERROR("%s: mmproj models need an ENCODER context, and ENCODER contexts need an mmproj model\n", __func__);
-        return nullptr;
+    {
+        const bool media_ctx = params.ctx_type == LLAMA_CONTEXT_TYPE_ENCODER || params.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE;
+        if ((model->arch == LLM_ARCH_CLIP) != media_ctx) {
+            LLAMA_LOG_ERROR("%s: mmproj models need an ENCODER or GEN_CODE context, and those contexts need an mmproj model\n", __func__);
+            return nullptr;
+        }
+        if (media_ctx && !llama_model_has_context_type(model, params.ctx_type)) {
+            LLAMA_LOG_ERROR("%s: this mmproj does not offer the requested context type\n", __func__);
+            return nullptr;
+        }
     }
 
     // router_layer >= 0 means n_layer_nextn is repurposed for a router layer, not real MTP
@@ -5295,4 +5424,8 @@ llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * c
 
 llama_context * llama_get_ctx_other(struct llama_context * ctx) {
     return ctx->get_cparams().ctx_other;
+}
+
+int32_t llama_get_sampled_tokens_ith(struct llama_context * ctx, int32_t i, llama_token * out, int32_t n_max) {
+    return ctx->get_sampled_tokens_ith(i, out, n_max);
 }

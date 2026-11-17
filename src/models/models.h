@@ -387,6 +387,7 @@ enum llama_clip_projector {
     LLAMA_CLIP_PROJ_QWEN2VL,
     LLAMA_CLIP_PROJ_QWEN25VL,
     LLAMA_CLIP_PROJ_QWEN3VL,
+    LLAMA_CLIP_PROJ_QWEN3TTS_GEN,
 };
 
 struct llama_media_input;
@@ -430,6 +431,31 @@ struct llama_model_clip : public llama_model_base {
         std::vector<int32_t> deepstack_layers;
     } vhp;
 
+    // audio generation tower, loaded as the main tower when the file has no vision tower
+    struct gen_hparams {
+        bool has_gen = false;
+
+        llama_clip_projector proj = LLAMA_CLIP_PROJ_UNKNOWN;
+        std::string          proj_name;
+
+        int32_t n_embd_in  = 0;          // backbone hidden size (state input and feedback output)
+        float   rope_theta = 1000000.0f; // code predictor RoPE base
+    } ghp;
+
+    // Qwen3-TTS code predictor
+    ggml_tensor * gc_head     = nullptr; // [n_embd, n_vocab, n_acoustic]
+    ggml_tensor * gc_embd     = nullptr; // [n_embd_in, n_vocab, n_acoustic]
+    ggml_tensor * gc_out_embd = nullptr; // [n_embd_in, n_vocab_backbone], code0 rows
+    ggml_tensor * gc_norm     = nullptr;
+    ggml_tensor * gc_proj_in  = nullptr;
+    ggml_tensor * gc_proj_in_b = nullptr;
+
+    // vision graphs are wide (mtmd used 8192), the code predictor unrolls 15 steps with a sampler chain each
+    uint32_t graph_max_nodes_hint() const override { return vhp.has_vision ? 8192 : 32768; }
+
+    uint32_t ctx_n_vocab(enum llama_context_type type) const override;
+    uint32_t ctx_n_embd_state(enum llama_context_type type) const override;
+
     // vision stem and projector
     ggml_tensor * v_patch_embd   = nullptr;
     ggml_tensor * v_patch_embd_1 = nullptr; // second temporal kernel (qwen-vl)
@@ -461,6 +487,9 @@ struct llama_model_clip : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
+    void load_gen_hparams(llama_model_loader & ml);
+    void load_gen_tensors(llama_model_loader & ml);
+
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 
     //
@@ -481,6 +510,7 @@ struct llama_model_clip : public llama_model_base {
     struct graph_gemma3;
     struct graph_qwen2vl;
     struct graph_qwen3vl;
+    struct graph_qwen3tts_code;
 };
 
 struct llama_model_mpt : public llama_model_base {

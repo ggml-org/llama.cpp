@@ -899,6 +899,11 @@ struct mtmd_context {
     // libllama engine for ported projectors, nullptr otherwise
     std::unique_ptr<mtmd_lm> lm;
 
+    // libllama model of the audio generation stages (Qwen3-TTS code predictor), nullptr otherwise
+    llama_model_ptr lm_gen_model;
+    int32_t         lm_gen_threads = 1;
+    llama_flash_attn_type lm_gen_fa = LLAMA_FLASH_ATTN_TYPE_AUTO;
+
     // TODO @ngxson : add timings
 
     mtmd_context(const char * mmproj_fname,
@@ -1042,6 +1047,31 @@ struct mtmd_context {
         if (ctx_v && text_model && !no_alloc && mtmd_lm_ported(ctx_v->model.proj_type) && std::getenv("MTMD_LEGACY_ENGINE") == nullptr) {
             init_lm(mmproj_fname, ctx_params, device);
         }
+        if (ctx_gen_a && !ctx_v && !no_alloc && ctx_gen_a->model.proj_type == PROJECTOR_TYPE_QWEN3TTS_GEN && std::getenv("MTMD_LEGACY_ENGINE") == nullptr) {
+            init_lm_gen(mmproj_fname, ctx_params, device);
+        }
+    }
+
+    // the code predictor runs as a GEN_CODE llama_context, one per gen state (see mtmd_gen_state_init)
+    void init_lm_gen(const char * mmproj_fname, const mtmd_context_params & ctx_params, ggml_backend_dev_t device) {
+        llama_model_params mp = llama_model_default_params();
+        ggml_backend_dev_t devs[2] = { device, nullptr };
+        mp.n_gpu_layers = device ? 999 : 0;
+        mp.devices      = device ? devs : nullptr;
+        if (const char * lm_mode = std::getenv("MTMD_LM_LOAD_MODE")) {
+            if (strcmp(lm_mode, "dio") == 0) {
+                mp.load_mode = LLAMA_LOAD_MODE_DIRECT_IO;
+            }
+        }
+        lm_gen_model.reset(llama_model_load_from_file(mmproj_fname, mp));
+        if (!lm_gen_model || !llama_model_has_context_type(lm_gen_model.get(), LLAMA_CONTEXT_TYPE_GEN_CODE)) {
+            LOG_WRN("%s: libllama could not load the generation stages of %s, using the mtmd engine\n", __func__, mmproj_fname);
+            lm_gen_model.reset();
+            return;
+        }
+        lm_gen_threads = ctx_params.n_threads;
+        lm_gen_fa      = ctx_params.flash_attn_type;
+        LOG_WRN("%s: the code predictor runs on the libllama engine (MTMD_LEGACY_ENGINE=1 to disable)\n", __func__);
     }
 
     // load the mmproj a second time, as a llama_model, and run ported projectors on libllama
@@ -3502,6 +3532,13 @@ struct mtmd_gen_state {
     std::vector<float> flow_prev_latent;
     std::vector<float> flow_prev_cond;
 
+    // libllama engine: the code predictor context and the sampler chain of its sequence (declared first, freed last)
+    llama_sampler_ptr lm_smpl;
+    llama_context_ptr lm_ctx;
+    uint32_t lm_seed  = 0;
+    int32_t  lm_top_k = -1;
+    float    lm_top_p = -1.0f;
+
     ~mtmd_gen_state() {
         delete gen_state;
     }
@@ -3523,6 +3560,24 @@ mtmd_gen_state * mtmd_gen_state_init(mtmd_context * ctx, mtmd_gen_state_params p
     st->gen_state = ctx->ctx_gen_a->gen_state_init(params.seed);
     if (!st->gen_state) {
         return nullptr;
+    }
+    if (ctx->lm_gen_model) {
+        llama_context_params cp = llama_context_default_params();
+        cp.ctx_type        = LLAMA_CONTEXT_TYPE_GEN_CODE;
+        cp.n_ctx           = 16;
+        cp.n_batch         = 1;
+        cp.n_ubatch        = 1;
+        cp.n_seq_max       = 1;
+        cp.n_threads       = ctx->lm_gen_threads;
+        cp.n_threads_batch = ctx->lm_gen_threads;
+        cp.flash_attn_type = ctx->lm_gen_fa;
+        cp.no_perf         = true;
+        st->lm_ctx.reset(llama_init_from_model(ctx->lm_gen_model.get(), cp));
+        if (!st->lm_ctx) {
+            LOG_ERR("%s: libllama could not create the code predictor context\n", __func__);
+            return nullptr;
+        }
+        st->lm_seed = params.seed;
     }
     if (ctx->ctx_gen_a->model.proj_type == PROJECTOR_TYPE_LFM3A_GEN) {
         const auto * hparams = &ctx->ctx_gen_a->model.hparams;
@@ -4271,6 +4326,65 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
     }
     if (inp->type == MTMD_GEN_PROCESS_TYPE_GEN_WAV && sctx->model.proj_type == PROJECTOR_TYPE_ZONOS3_GEN) {
         return mtmd_gen_wav_zonos3(ctx, state, inp, out);
+    }
+
+    if (inp->type == MTMD_GEN_PROCESS_TYPE_GEN_CODE && state->lm_ctx) {
+        llama_context * lctx = state->lm_ctx.get();
+        const int32_t n_embd = llama_model_n_embd_out(ctx->lm_gen_model.get());
+
+        // the sampler chain follows the call parameters; temperature is ignored, as by the mtmd graph
+        if (!state->lm_smpl || inp->top_k != state->lm_top_k || inp->top_p != state->lm_top_p) {
+            llama_sampler * chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
+            if (inp->top_k == 1) {
+                llama_sampler_chain_add(chain, llama_sampler_init_greedy());
+            } else {
+                if (inp->top_k > 0) {
+                    llama_sampler_chain_add(chain, llama_sampler_init_top_k(inp->top_k));
+                }
+                if (inp->top_p < 1.0f) {
+                    llama_sampler_chain_add(chain, llama_sampler_init_top_p(inp->top_p, 1));
+                }
+                llama_sampler_chain_add(chain, llama_sampler_init_dist(state->lm_seed));
+            }
+            if (!llama_set_sampler(lctx, 0, chain)) {
+                llama_sampler_free(chain);
+                LOG_ERR("%s: the code predictor context does not take this sampler\n", __func__);
+                return 1;
+            }
+            state->lm_smpl.reset(chain);
+            state->lm_top_k = inp->top_k;
+            state->lm_top_p = inp->top_p;
+        }
+
+        std::vector<float> h(n_embd, 0.0f);
+        if (inp->embd) {
+            std::copy(inp->embd, inp->embd + n_embd, h.begin());
+        }
+
+        llama_batch_ext * batch = llama_batch_ext_init(lctx);
+        const int32_t idx = llama_batch_ext_add_token(batch, 0, inp->code0);
+        bool ok = idx >= 0 && llama_batch_ext_set_embd_state(batch, idx, { h.data(), 1, (size_t) n_embd });
+        ok = ok && llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch) == 0;
+        llama_batch_ext_free(batch);
+        if (!ok) {
+            LOG_ERR("%s: libllama code predictor failed\n", __func__);
+            return 1;
+        }
+
+        const int32_t n_codes = llama_get_sampled_tokens_ith(lctx, 0, nullptr, 0);
+        state->out_codes.resize(n_codes);
+        llama_get_sampled_tokens_ith(lctx, 0, state->out_codes.data(), n_codes);
+        const float * embd = llama_get_embeddings_ith(lctx, 0);
+        state->out_embd.assign(embd, embd + n_embd);
+        state->out_feats.clear();
+
+        out->embd    = state->out_embd.data();
+        out->codes   = state->out_codes.data();
+        out->n_codes = state->out_codes.size();
+        out->feats   = nullptr;
+        out->n_feats = 0;
+        out->is_eos  = false;
+        return 0;
     }
 
     if (inp->type == MTMD_GEN_PROCESS_TYPE_GEN_CODE) {

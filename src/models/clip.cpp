@@ -61,6 +61,65 @@ void llama_model_clip::load_vocab(llama_model_loader &) {
     // an mmproj has no vocabulary
 }
 
+// the audio generation tower becomes the main tower of a file without a vision tower
+// other audio-only files are not ported yet; llama-quantize still opens them
+static const char * KEY_HAS_GEN     = "clip.has_gen_audio_encoder";
+static const char * KEY_GEN_PROJ    = "clip.gen.audio.projector_type";
+
+void llama_model_clip::load_gen_hparams(llama_model_loader & ml) {
+    ml.get_key(std::string(KEY_HAS_GEN), ghp.has_gen, false);
+    if (!ghp.has_gen) {
+        return;
+    }
+    ml.get_key(std::string(KEY_GEN_PROJ), ghp.proj_name, false);
+    ghp.proj = ghp.proj_name == "qwen3tts_gen" ? LLAMA_CLIP_PROJ_QWEN3TTS_GEN : LLAMA_CLIP_PROJ_UNKNOWN;
+    if (ghp.proj == LLAMA_CLIP_PROJ_UNKNOWN) {
+        return;
+    }
+
+    const LLM_KV kv(LLM_ARCH_CLIP, nullptr, "clip.gen.audio");
+
+    uint32_t n_ff      = 0;
+    uint32_t n_head    = 0;
+    uint32_t n_head_kv = 0;
+
+    ml.get_key(kv(LLM_KV_EMBEDDING_LENGTH),        hparams.n_embd);
+    ml.get_key(kv(LLM_KV_BLOCK_COUNT),             hparams.n_layer_all);
+    ml.get_key(kv(LLM_KV_FEED_FORWARD_LENGTH),     n_ff);
+    ml.get_key(kv(LLM_KV_ATTENTION_HEAD_COUNT),    n_head);
+    ml.get_key(kv(LLM_KV_ATTENTION_LAYERNORM_EPS), hparams.f_norm_rms_eps);
+    n_head_kv = n_head;
+    ml.get_key(kv(LLM_KV_ATTENTION_HEAD_COUNT_KV), n_head_kv, false);
+    clip_get_i32(ml, "clip.gen.audio.projection_dim", ghp.n_embd_in);
+
+    GGML_ASSERT(hparams.n_layer_all > 0 && hparams.n_layer_all <= LLAMA_MAX_LAYERS);
+
+    hparams.f_norm_eps = hparams.f_norm_rms_eps;
+    std::fill(hparams.n_head_arr.begin(),    hparams.n_head_arr.end(),    0);
+    std::fill(hparams.n_head_kv_arr.begin(), hparams.n_head_kv_arr.end(), 0);
+    std::fill(hparams.n_ff_arr.begin(),      hparams.n_ff_arr.end(),      0);
+    std::fill(hparams.n_head_arr.begin(),    hparams.n_head_arr.begin()    + hparams.n_layer_all, n_head);
+    std::fill(hparams.n_head_kv_arr.begin(), hparams.n_head_kv_arr.begin() + hparams.n_layer_all, n_head_kv);
+    std::fill(hparams.n_ff_arr.begin(),      hparams.n_ff_arr.begin()      + hparams.n_layer_all, n_ff);
+
+    // the head dim is not n_embd / n_head, the tensors give it (see load_arch_tensors)
+    hparams.n_rot_full = 0;
+
+    // the feedback embedding goes back to the backbone
+    hparams.n_embd_out_impl = ghp.n_embd_in;
+}
+
+uint32_t llama_model_clip::ctx_n_vocab(enum llama_context_type type) const {
+    if (type == LLAMA_CONTEXT_TYPE_GEN_CODE && gc_out_embd) {
+        return (uint32_t) gc_out_embd->ne[1];
+    }
+    return 0;
+}
+
+uint32_t llama_model_clip::ctx_n_embd_state(enum llama_context_type type) const {
+    return type == LLAMA_CONTEXT_TYPE_GEN_CODE ? (uint32_t) ghp.n_embd_in : 0;
+}
+
 void llama_model_clip::load_arch_hparams(llama_model_loader & ml) {
     hparams.causal_attn = false;
     hparams.n_ctx_train = 8192; // unused, encoders keep no memory
@@ -75,7 +134,7 @@ void llama_model_clip::load_arch_hparams(llama_model_loader & ml) {
     vhp.proj      = clip_projector_from_string(proj);
 
     if (!vhp.has_vision) {
-        // audio-only and generation mmproj files are not ported yet; llama-quantize still opens them
+        load_gen_hparams(ml);
         return;
     }
 
@@ -187,6 +246,10 @@ void llama_model_clip::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
     if (!vhp.has_vision) {
+        if (ghp.has_gen && ghp.proj == LLAMA_CLIP_PROJ_QWEN3TTS_GEN) {
+            load_gen_tensors(ml);
+            return;
+        }
         throw std::runtime_error("clip: this mmproj has no vision tower, other towers are not supported by libllama yet");
     }
     if (vhp.proj == LLAMA_CLIP_PROJ_UNKNOWN) {
@@ -308,6 +371,52 @@ void llama_model_clip::load_arch_tensors(llama_model_loader & ml) {
     }
 
     hparams.n_embd_out_impl = vhp.n_embd_out;
+}
+
+void llama_model_clip::load_gen_tensors(llama_model_loader & ml) {
+    LLAMA_LOAD_LOCALS;
+
+    auto create_as_file = [&](const LLM_TN_IMPL & tname, int flags) -> ggml_tensor * {
+        const std::string name = tname.str();
+        const ggml_tensor * meta = ml.get_tensor_meta(name.c_str());
+        if (meta == nullptr) {
+            if (flags & TENSOR_NOT_REQUIRED) {
+                return nullptr;
+            }
+            throw std::runtime_error(format("clip: missing tensor '%s'", name.c_str()));
+        }
+        switch (ggml_n_dims(meta)) {
+            case 1:  return create_tensor(tname, {meta->ne[0]}, flags);
+            case 2:  return create_tensor(tname, {meta->ne[0], meta->ne[1]}, flags);
+            default: return create_tensor(tname, {meta->ne[0], meta->ne[1], meta->ne[2]}, flags);
+        }
+    };
+
+    for (int il = 0; il < n_layer; ++il) {
+        auto & layer = layers[il];
+        layer.attn_norm   = create_tensor (tn(LLM_TENSOR_A_GEN_CODE_INPUT_NORM,     "weight", il), {n_embd}, 0);
+        layer.wq          = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_ATTN_Q,         "weight", il), 0);
+        layer.wk          = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_ATTN_K,         "weight", il), 0);
+        layer.wv          = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_ATTN_V,         "weight", il), 0);
+        layer.wo          = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_ATTN_O,         "weight", il), 0);
+        layer.attn_q_norm = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_ATTN_Q_NORM,    "weight", il), TENSOR_NOT_REQUIRED);
+        layer.attn_k_norm = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_ATTN_K_NORM,    "weight", il), TENSOR_NOT_REQUIRED);
+        layer.ffn_norm    = create_tensor (tn(LLM_TENSOR_A_GEN_CODE_POST_ATTN_NORM, "weight", il), {n_embd}, 0);
+        layer.ffn_gate    = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_FFN_GATE,       "weight", il), 0);
+        layer.ffn_up      = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_FFN_UP,         "weight", il), 0);
+        layer.ffn_down    = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_FFN_DOWN,       "weight", il), 0);
+    }
+
+    gc_head      = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_HEAD,        "weight"), 0);
+    gc_embd      = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_EMBD,        "weight"), 0);
+    gc_out_embd  = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_OUT_EMBD,    "weight"), 0);
+    gc_norm      = create_tensor (tn(LLM_TENSOR_A_GEN_CODE_OUTPUT_NORM, "weight"), {n_embd}, 0);
+    gc_proj_in   = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_PROJ_IN,     "weight"), TENSOR_NOT_REQUIRED);
+    gc_proj_in_b = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_PROJ_IN,     "bias"),   TENSOR_NOT_REQUIRED);
+
+    const int64_t head_dim = layers[0].wq->ne[1] / n_head;
+    hparams.n_embd_head_k_full = (uint32_t) head_dim;
+    hparams.n_embd_head_v_full = (uint32_t) head_dim;
 }
 
 //
@@ -812,7 +921,239 @@ struct llama_model_clip::graph_qwen3vl : public llama_model_clip::graph_vit {
     }
 };
 
+// Qwen3-TTS code predictor: backbone hidden state + code0 -> 16 codes and the feedback embedding
+// the 15 autoregressive steps are unrolled in one graph, with a k/v scratch that lives in the graph (no llama_memory)
+// codes are sampled by the sequence's sampler chain (llama_set_sampler), greedy without one
+class llm_graph_input_gen_code : public llm_graph_input_i {
+public:
+    void set_input(const llama_ubatch * ubatch) override {
+        GGML_ASSERT(ubatch->token && ubatch->embd_state);
+        ggml_backend_tensor_set(code0, ubatch->token, 0, sizeof(int32_t));
+        ggml_backend_tensor_set(h, ubatch->embd_state, 0, ggml_nbytes(h));
+    }
+
+    ggml_tensor * code0 = nullptr; // I32 [1]
+    ggml_tensor * h     = nullptr; // F32 [n_embd_in]
+};
+
+struct llama_model_clip::graph_qwen3tts_code : public llm_graph_context {
+    const llama_model_clip & clip;
+
+    llama_sampler * smpl = nullptr;
+
+    graph_qwen3tts_code(const llama_model_clip & clip, const llm_graph_params & params) : llm_graph_context(params), clip(clip) {
+        const int64_t n_embd_in  = clip.ghp.n_embd_in;
+        const int64_t n_acoustic = clip.gc_head->ne[2];
+        const int64_t n_codes    = n_acoustic + 1;
+        const int64_t n_kv_pad   = n_codes;
+        const int64_t d_head     = hparams.n_embd_head_k();
+
+        auto inp = std::make_unique<llm_graph_input_gen_code>();
+        inp->code0 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
+        inp->h     = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_embd_in);
+        ggml_set_input(inp->code0);
+        ggml_set_input(inp->h);
+        ggml_tensor * code0 = inp->code0;
+        ggml_tensor * h     = inp->h;
+        res->add_input(std::move(inp));
+
+        // the sampler of the sequence of this frame, also used for every codebook
+        {
+            const llama_seq_id seq = ubatch.n_tokens > 0 ? ubatch.seq_id[0][0] : 0;
+            const auto it = samplers.find(seq);
+            if (it != samplers.end()) {
+                smpl = it->second;
+                if (smpl->iface->backend_reset) {
+                    smpl->iface->backend_reset(smpl);
+                }
+                res->add_input(std::make_unique<llm_graph_input_sampling>(samplers));
+            }
+        }
+
+        std::vector<ggml_tensor *> k_cache(n_layer);
+        std::vector<ggml_tensor *> v_cache(n_layer);
+        for (int il = 0; il < n_layer; il++) {
+            k_cache[il] = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, d_head * n_head_kv, n_kv_pad), 0.0f);
+            v_cache[il] = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, d_head * n_head_kv, n_kv_pad), 0.0f);
+        }
+
+        ggml_tensor * code0_embd = ggml_get_rows(ctx0, clip.gc_out_embd, code0);
+        code0_embd = ggml_reshape_1d(ctx0, code0_embd, code0_embd->ne[0]);
+
+        ggml_tensor * codes = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_codes);
+        codes = cache_set(codes, 0, code0);
+
+        // position 0: the hidden state seeds the cache
+        {
+            ggml_tensor * cur = project_in(h);
+            for (int il = 0; il < n_layer; il++) {
+                cur = layer_forward(cur, il, 0, k_cache[il], v_cache[il]);
+            }
+        }
+
+        // positions 1..n_acoustic: embed the previous code, sample the next one
+        ggml_tensor * cur_in = code0_embd;
+        for (int64_t g = 0; g < n_acoustic; g++) {
+            const int pos = (int) g + 1;
+            if (g > 0) {
+                ggml_tensor * code_prev = ggml_view_1d(ctx0, codes, 1, (size_t) g * codes->nb[1]);
+                cur_in = codebook_embd(g - 1, code_prev);
+            }
+            ggml_tensor * cur = project_in(cur_in);
+            for (int il = 0; il < n_layer; il++) {
+                cur = layer_forward(cur, il, pos, k_cache[il], v_cache[il]);
+            }
+            cur = ggml_rms_norm(ctx0, cur, hparams.f_norm_rms_eps);
+            cur = ggml_mul(ctx0, cur, clip.gc_norm);
+
+            ggml_tensor * head_g = ggml_view_2d(ctx0, clip.gc_head, clip.gc_head->ne[0], clip.gc_head->ne[1],
+                                                clip.gc_head->nb[1], (size_t) g * clip.gc_head->nb[2]);
+            ggml_tensor * logits = ggml_mul_mat(ctx0, head_g, cur);
+            cb(logits, "code_logits", (int) g);
+
+            codes = cache_set(codes, pos, sample(logits));
+        }
+
+        // feedback embedding: sum of the 16 codebook rows
+        ggml_tensor * out_embd = code0_embd;
+        for (int64_t g = 1; g <= n_acoustic; g++) {
+            ggml_tensor * code_g = ggml_view_1d(ctx0, codes, 1, (size_t) g * codes->nb[1]);
+            out_embd = ggml_add(ctx0, out_embd, codebook_embd(g - 1, code_g));
+        }
+        out_embd = ggml_reshape_2d(ctx0, out_embd, out_embd->ne[0], 1);
+
+        ggml_tensor * out_codes = ggml_cont(ctx0, codes);
+
+        cb(out_embd,  "result_embd",  -1);
+        cb(out_codes, "result_codes", -1);
+        ggml_set_output(out_embd);
+        ggml_set_output(out_codes);
+        res->t_embd  = out_embd;
+        res->t_codes = out_codes;
+        ggml_build_forward_expand(gf, out_codes);
+        ggml_build_forward_expand(gf, out_embd);
+    }
+
+    // logits [n_vocab, 1] -> I32 [1]
+    ggml_tensor * sample(ggml_tensor * logits) {
+        logits = ggml_reshape_1d(ctx0, logits, ggml_nelements(logits));
+        if (smpl) {
+            llama_sampler_data data = { logits, nullptr, nullptr, nullptr };
+            smpl->iface->backend_apply(smpl, ctx0, gf, &data);
+            if (data.sampled) {
+                return data.sampled;
+            }
+            if (data.logits) {
+                logits = data.logits;
+            }
+        }
+        return ggml_argmax(ctx0, ggml_reshape_2d(ctx0, logits, logits->ne[0], 1));
+    }
+
+    ggml_tensor * codebook_embd(int64_t book, ggml_tensor * code) {
+        ggml_tensor * table = ggml_view_2d(ctx0, clip.gc_embd, clip.gc_embd->ne[0], clip.gc_embd->ne[1],
+                                           clip.gc_embd->nb[1], (size_t) book * clip.gc_embd->nb[2]);
+        ggml_tensor * e = ggml_get_rows(ctx0, table, code);
+        return ggml_reshape_1d(ctx0, e, e->ne[0]);
+    }
+
+    ggml_tensor * project_in(ggml_tensor * cur) {
+        if (!clip.gc_proj_in) {
+            return cur;
+        }
+        cur = ggml_mul_mat(ctx0, clip.gc_proj_in, cur);
+        if (clip.gc_proj_in_b) {
+            cur = ggml_add(ctx0, cur, clip.gc_proj_in_b);
+        }
+        return cur;
+    }
+
+    // a const I32 [1] without a host upload
+    ggml_tensor * const_i32(ggml_tensor * anchor, float value) {
+        ggml_tensor * v = ggml_view_1d(ctx0, anchor, 1, 0);
+        if (v->type != GGML_TYPE_F32) {
+            v = ggml_cast(ctx0, v, GGML_TYPE_F32);
+        }
+        return ggml_cast(ctx0, ggml_scale_bias(ctx0, v, 0.0f, value), GGML_TYPE_I32);
+    }
+
+    // a copy of cache with row row_idx replaced by value
+    ggml_tensor * cache_set(ggml_tensor * cache, int row_idx, ggml_tensor * value) {
+        const int64_t n_row   = cache->ne[0];
+        const int64_t n_cache = cache->ne[1];
+        ggml_tensor * ext = ggml_concat(ctx0, cache, ggml_reshape_2d(ctx0, value, n_row, 1), 1);
+        ggml_tensor * idx = const_i32(cache, (float) n_cache);
+        if (row_idx > 0) {
+            idx = ggml_concat(ctx0, ggml_cast(ctx0, ggml_arange(ctx0, 0.0f, (float) row_idx, 1.0f), GGML_TYPE_I32), idx, 0);
+        }
+        if (row_idx < n_cache - 1) {
+            idx = ggml_concat(ctx0, idx, ggml_cast(ctx0, ggml_arange(ctx0, (float) (row_idx + 1), (float) n_cache, 1.0f), GGML_TYPE_I32), 0);
+        }
+        return ggml_get_rows(ctx0, ext, idx);
+    }
+
+    // causal mask row of a query at pos over the n_kv_pad cache rows
+    ggml_tensor * causal_mask_row(int64_t n_kv_pad, int pos) {
+        ggml_tensor * ones = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv_pad, n_kv_pad), 1.0f);
+        ggml_tensor * keep = ggml_tri(ctx0, ones, GGML_TRI_TYPE_LOWER_DIAG);
+        ggml_tensor * row  = ggml_view_1d(ctx0, keep, n_kv_pad, (size_t) pos * keep->nb[1]);
+        ggml_tensor * mask = ggml_reshape_2d(ctx0, ggml_log(ctx0, row), n_kv_pad, 1);
+        if (cparams.flash_attn) {
+            mask = ggml_cast(ctx0, mask, GGML_TYPE_F16);
+        }
+        return mask;
+    }
+
+    ggml_tensor * layer_forward(ggml_tensor * cur, int il, int pos, ggml_tensor *& k_cache, ggml_tensor *& v_cache) {
+        const auto & layer = model.layers[il];
+        const int64_t d_head   = hparams.n_embd_head_k();
+        const int64_t n_kv_pad = k_cache->ne[1];
+        const float   kq_scale = 1.0f / sqrtf((float) d_head);
+
+        ggml_tensor * inp_pos = const_i32(k_cache, (float) pos);
+        ggml_tensor * kq_mask = causal_mask_row(n_kv_pad, pos);
+
+        ggml_tensor * x = ggml_rms_norm(ctx0, cur, hparams.f_norm_rms_eps);
+        x = ggml_mul(ctx0, x, layer.attn_norm);
+
+        ggml_tensor * q = ggml_reshape_3d(ctx0, ggml_mul_mat(ctx0, layer.wq, x), d_head, n_head,    1);
+        ggml_tensor * k = ggml_reshape_3d(ctx0, ggml_mul_mat(ctx0, layer.wk, x), d_head, n_head_kv, 1);
+        ggml_tensor * v = ggml_mul_mat(ctx0, layer.wv, x);
+
+        if (layer.attn_q_norm) {
+            q = ggml_mul(ctx0, ggml_rms_norm(ctx0, q, hparams.f_norm_rms_eps), layer.attn_q_norm);
+            k = ggml_mul(ctx0, ggml_rms_norm(ctx0, k, hparams.f_norm_rms_eps), layer.attn_k_norm);
+        }
+
+        q = ggml_rope_ext(ctx0, q, inp_pos, nullptr, (int) d_head, GGML_ROPE_TYPE_NEOX, 0, clip.ghp.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        k = ggml_rope_ext(ctx0, k, inp_pos, nullptr, (int) d_head, GGML_ROPE_TYPE_NEOX, 0, clip.ghp.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+
+        k_cache = cache_set(k_cache, pos, ggml_reshape_1d(ctx0, k, d_head * n_head_kv));
+        v_cache = cache_set(v_cache, pos, v);
+
+        ggml_tensor * kc = ggml_reshape_3d(ctx0, k_cache, d_head, n_head_kv, n_kv_pad);
+        ggml_tensor * vc = ggml_reshape_3d(ctx0, v_cache, d_head, n_head_kv, n_kv_pad);
+
+        ggml_tensor * attn = build_attn_mha(q, kc, vc, nullptr, kq_mask, nullptr, nullptr, nullptr, 0, kq_scale, il);
+        attn = ggml_mul_mat(ctx0, layer.wo, attn);
+
+        cur = ggml_add(ctx0, cur, attn);
+
+        ggml_tensor * x2 = ggml_rms_norm(ctx0, cur, hparams.f_norm_rms_eps);
+        x2 = ggml_mul(ctx0, x2, layer.ffn_norm);
+
+        ggml_tensor * gate = ggml_mul_mat(ctx0, layer.ffn_gate, x2);
+        ggml_tensor * up   = ggml_mul_mat(ctx0, layer.ffn_up,   x2);
+        ggml_tensor * down = ggml_mul_mat(ctx0, layer.ffn_down, ggml_swiglu_split(ctx0, gate, up));
+
+        return ggml_add(ctx0, cur, down);
+    }
+};
+
 std::unique_ptr<llm_graph_context> llama_model_clip::build_arch_graph(const llm_graph_params & params) const {
+    if (!vhp.has_vision && ghp.proj == LLAMA_CLIP_PROJ_QWEN3TTS_GEN) {
+        return std::make_unique<graph_qwen3tts_code>(*this, params);
+    }
     switch (vhp.proj) {
         case LLAMA_CLIP_PROJ_GEMMA3:
             return std::make_unique<graph_gemma3>(*this, params);
