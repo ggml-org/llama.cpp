@@ -41,7 +41,7 @@
 	let editor: MarkdownEditor | undefined = $state();
 	let box: HTMLDivElement | undefined = $state();
 
-	let livePreview = $derived(settingsStore.config[SETTINGS_KEYS.LIVE_MARKDOWN_PREVIEW] !== false);
+	let livePreview = $derived(settingsStore.config[SETTINGS_KEYS.LIVE_MARKDOWN_PREVIEW] === true);
 
 	// Rendered mention badges label paths by these, so the blocks render again on a change
 	let renderKey = $derived(
@@ -76,6 +76,13 @@
 
 				return event.defaultPrevented;
 			}
+		}),
+		// CodeMirror turns spellcheck, autocorrect and autocapitalize off for code; the
+		// message input is prose, so it gets a textarea's defaults back
+		EditorView.contentAttributes.of({
+			autocapitalize: 'on',
+			autocorrect: 'on',
+			spellcheck: 'true'
 		})
 	];
 
