@@ -25,6 +25,34 @@ The Hugging Face platform provides a variety of online tools for converting, qua
 - Use the [GGUF-editor space](https://huggingface.co/spaces/CISCai/gguf-editor) to edit GGUF meta data in the browser (more info: https://github.com/ggml-org/llama.cpp/discussions/9268)
 - Use the [Inference Endpoints](https://ui.endpoints.huggingface.co/) to directly host `llama.cpp` in the cloud (more info: https://github.com/ggml-org/llama.cpp/discussions/9669)
 
+## MiniCPM5 MoE
+
+HF checkpoints with architecture `MiniCPM5MoEForCausalLM` can be converted with the standard exporter. Keep the checkpoint's `config.json`, tokenizer files, chat template, and all weight files together in the model directory. Both PyTorch `pytorch_model*.bin` and safetensors checkpoints use the existing conversion paths.
+
+```sh
+python3 -m pip install -r requirements/requirements-convert_hf_to_gguf.txt
+python3 convert_hf_to_gguf.py /path/to/MiniCPM5-15B-A2.5B --outtype bf16 --outfile MiniCPM5-15B-A2.5B-BF16.gguf
+```
+
+The exporter separates the per-head query and attention-gate projections, preserves the Q/K layout for NeoX-style RoPE, and groups the routed experts into GGUF expert tensors. It preserves the configured head dimension, leading dense layers, shared experts, routing normalization, and routing scale. The routing scale is stored as metadata rather than folded into the weights.
+
+To quantize the exported model using the existing kernels:
+
+```sh
+llama-quantize MiniCPM5-15B-A2.5B-BF16.gguf MiniCPM5-15B-A2.5B-Q8_0.gguf Q8_0
+llama-quantize MiniCPM5-15B-A2.5B-BF16.gguf MiniCPM5-15B-A2.5B-Q4_K_M.gguf Q4_K_M
+```
+
+Run a GGUF with its embedded chat template:
+
+```sh
+llama-server -m MiniCPM5-15B-A2.5B-Q4_K_M.gguf -ngl 99 --jinja -ctk f16 -ctv f16
+```
+
+The quantization labels above refer to model weights. The example keeps the K/V cache in FP16. A checkpoint's `chat_template.jinja` is embedded during conversion; `--chat-template-file /path/to/template.jinja` can override it at inference time.
+
+For a compatible MiniCPM5 target/draft GGUF pair, see the [MiniCPM5 MoE DSpark example](speculative.md#minicpm5-moe-target).
+
 ## Exporting per-layer embeddings separately
 
 For models with a per-layer embedding (PLE) table, export the backbone and table from the same checkpoint:
