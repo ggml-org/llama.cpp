@@ -1640,7 +1640,7 @@ Models that answer after the audio, like LFM3-Audio and LFM3-Omni, hold a conver
 `session.type` selects the session, it can be changed with `session.update` before the first audio or message:
 
 - `realtime` (default): a conversation, every response stays in context for the next turns
-- `transcription`: each committed audio buffer is transcribed on its own, `audio.input.transcription.language` picks the language
+- `transcription`: each committed audio buffer is transcribed on its own, `audio.input.transcription.language` picks the language and `audio.input.transcription.prompt` replaces the default instruction (`Transcribe audio to text`) as the `prompt` of `/v1/audio/transcriptions` does; the prompt can change between utterances
 
 *Client events:*
 
