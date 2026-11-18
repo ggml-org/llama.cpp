@@ -692,8 +692,7 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                             split_node = rt_info[rt_key].as<std::weak_ptr<ov::Node>>().lock();
                         }
                         if (split_node == nullptr) {
-                            auto axis_const =
-                                ov::op::v0::Constant::create(ov::element::i64, {}, {static_cast<int64_t>(split_dim)});
+                            auto axis_const = ov::op::v0::Constant::create(ov::element::i64, {}, {split_axis});
                             split_node =
                                 std::make_shared<ov::op::v1::Split>(input, axis_const, static_cast<size_t>(num_splits));
                             split_node->set_friendly_name(src_node->get_friendly_name() + "_split");

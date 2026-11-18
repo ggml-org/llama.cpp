@@ -1935,17 +1935,6 @@ void GgmlOvDecoder::compute_model_outputs() {
             continue;
         }
         const bool inactive_top_k = is_sampling_top_k(cur_node) && !(cur_node->flags & GGML_TENSOR_FLAG_COMPUTE);
-        if ((cur_node->flags & GGML_TENSOR_FLAG_OUTPUT) || inactive_top_k) {
-            const auto name = get_tensor_ov_name(m_cgraph, cur_node);
-            m_model_outputs[name] = cur_node;
-            m_model_output_names.insert(name);
-        }
-        if (is_gdn_snapshot_writeback(cur_node)) {
-            auto * cache = cur_node->view_src;
-            const auto name = get_tensor_ov_name(m_cgraph, cache);
-            m_model_outputs[name] = cache;
-            m_model_output_names.insert(name);
-        }
         auto cur_node_use_count = m_cgraph->use_counts[ggml_hash_find(&m_cgraph->visited_hash_set, cur_node)];
         // llama flags result_norm in every graph but reads it only with embeddings on, when it has no consumer
         // and is kept by the rule below.
@@ -2822,10 +2811,6 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                     continue;
                 }
                 if (is_inp_scale_rows(src, node) || is_inp_embd_leaf(src, node)) {
-                    m_node_dynamic_dims[src] = 1;
-                    continue;
-                }
-                if (!m_is_static && is_activation_input(src, node)) {
                     m_node_dynamic_dims[src] = 1;
                     continue;
                 }
