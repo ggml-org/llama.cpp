@@ -12,6 +12,7 @@
 #define HTP_GDN_MAX_SV     128
 #define HTP_GDN_CHUNK_SIZE 64
 #define HTP_GDN_MIN_TOKENS 8
+#define HTP_GDN_TOKEN_TILE 16
 
 #ifndef HMX_FP16_TILE_SIZE
 #define HMX_FP16_TILE_SIZE 2048
@@ -60,6 +61,11 @@ _Static_assert(sizeof(struct htp_gdn_kernel_params) <= 128, "htp_gdn_kernel_para
 struct htp_gdn_vtcm_layout {
     size_t state_aligned;
     size_t scratch_bytes;
+    size_t tile_vec_bytes;
+    size_t tile_scalar_bytes;
+    size_t spad_stride;
+    size_t off_scratch;
+    size_t off_spad;
     size_t bytes_per_hvx;
     size_t off_state;
     size_t total_bytes;
@@ -70,10 +76,16 @@ static inline void htp_gdn_vtcm_layout_build(
     uint32_t S_v,
     uint32_t n_hvx
 ) {
-    size_t state_bytes = (size_t) S_v * S_v * sizeof(float);
-    L->state_aligned = hex_round_up(state_bytes, 128);
-    L->scratch_bytes = 24 * 128;
-    L->bytes_per_hvx = 2 * L->state_aligned + L->scratch_bytes;
+    const size_t state_bytes  = (size_t) S_v * S_v * sizeof(float);
+    const size_t vec_aligned  = hex_round_up((size_t) S_v * sizeof(float), 128);
+    L->state_aligned          = hex_round_up(state_bytes, 128);
+    L->scratch_bytes          = 24 * 128;
+    L->tile_vec_bytes         = HTP_GDN_TOKEN_TILE * vec_aligned;
+    L->tile_scalar_bytes      = hex_round_up(HTP_GDN_TOKEN_TILE * sizeof(float), 128);
+    L->spad_stride            = 5 * L->tile_vec_bytes + L->tile_scalar_bytes;
+    L->off_scratch            = 2 * L->state_aligned;
+    L->off_spad               = L->off_scratch + L->scratch_bytes;
+    L->bytes_per_hvx          = L->off_spad + 2 * L->spad_stride + 128;
     size_t off = 0;
     VTCM_LAYOUT_ALLOC(off, off_state, L->bytes_per_hvx * n_hvx);
     L->total_bytes = off;

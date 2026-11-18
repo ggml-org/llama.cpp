@@ -8,6 +8,7 @@
 #include "hvx-copy.h"
 #include "hvx-reduce.h"
 #include "hvx-exp.h"
+#include "hvx-repl.h"
 #include "dma-queue.h"
 #include "ggml-common.h"
 #include "htp-ctx.h"
@@ -34,8 +35,8 @@ typedef void (*gdn_step_fn_t)(
     const void * restrict k_t,
     const void * restrict v_t,
     const float * restrict g_t,
+    const float * restrict beta_t,
     HVX_Vector * restrict vtcm_scratch,
-    float beta_val,
     float scale,
     uint32_t S_v
 );
@@ -256,16 +257,16 @@ static __attribute__((noinline)) HVX_Vector gdn_mul_scalar_dot4_f32(float * rest
 
 static __attribute__((noinline)) HVX_Vector gdn_add_scaled_dot4_f32(float * restrict dst0, float * restrict dst1,
         float * restrict dst2, float * restrict dst3,
-        const HVX_Vector * restrict src, const float * restrict scale,
+        const HVX_Vector * restrict src, HVX_Vector vscale,
         const HVX_Vector * restrict dot, uint32_t n) {
     HVX_Vector acc0 = Q6_V_vzero();
     HVX_Vector acc1 = Q6_V_vzero();
     HVX_Vector acc2 = Q6_V_vzero();
     HVX_Vector acc3 = Q6_V_vzero();
-    const HVX_Vector scale0 = hvx_vec_splat_f32(scale[0]);
-    const HVX_Vector scale1 = hvx_vec_splat_f32(scale[1]);
-    const HVX_Vector scale2 = hvx_vec_splat_f32(scale[2]);
-    const HVX_Vector scale3 = hvx_vec_splat_f32(scale[3]);
+    const HVX_Vector scale0 = hvx_vec_repl_f32(vscale);
+    const HVX_Vector scale1 = hvx_vec_repl_f32(Q6_V_vror_VR(vscale, 1 * sizeof(float)));
+    const HVX_Vector scale2 = hvx_vec_repl_f32(Q6_V_vror_VR(vscale, 2 * sizeof(float)));
+    const HVX_Vector scale3 = hvx_vec_repl_f32(Q6_V_vror_VR(vscale, 3 * sizeof(float)));
 
     const uint32_t epv = 128 / sizeof(float);
     const uint32_t nvec = n / epv;
@@ -500,7 +501,7 @@ static __attribute__((noinline)) HVX_Vector gdn_mul_scalar_dot8_f32(float * rest
 static __attribute__((noinline)) HVX_Vector gdn_add_scaled_dot8_f32(float * restrict dst0, float * restrict dst1,
         float * restrict dst2, float * restrict dst3, float * restrict dst4,
         float * restrict dst5, float * restrict dst6, float * restrict dst7,
-        const HVX_Vector * restrict src, const float * restrict scale,
+        const HVX_Vector * restrict src, HVX_Vector vscale,
         const HVX_Vector * restrict dot, uint32_t n) {
     HVX_Vector acc0 = Q6_V_vzero();
     HVX_Vector acc1 = Q6_V_vzero();
@@ -510,14 +511,14 @@ static __attribute__((noinline)) HVX_Vector gdn_add_scaled_dot8_f32(float * rest
     HVX_Vector acc5 = Q6_V_vzero();
     HVX_Vector acc6 = Q6_V_vzero();
     HVX_Vector acc7 = Q6_V_vzero();
-    const HVX_Vector scale0 = hvx_vec_splat_f32(scale[0]);
-    const HVX_Vector scale1 = hvx_vec_splat_f32(scale[1]);
-    const HVX_Vector scale2 = hvx_vec_splat_f32(scale[2]);
-    const HVX_Vector scale3 = hvx_vec_splat_f32(scale[3]);
-    const HVX_Vector scale4 = hvx_vec_splat_f32(scale[4]);
-    const HVX_Vector scale5 = hvx_vec_splat_f32(scale[5]);
-    const HVX_Vector scale6 = hvx_vec_splat_f32(scale[6]);
-    const HVX_Vector scale7 = hvx_vec_splat_f32(scale[7]);
+    const HVX_Vector scale0 = hvx_vec_repl_f32(vscale);
+    const HVX_Vector scale1 = hvx_vec_repl_f32(Q6_V_vror_VR(vscale, 1 * sizeof(float)));
+    const HVX_Vector scale2 = hvx_vec_repl_f32(Q6_V_vror_VR(vscale, 2 * sizeof(float)));
+    const HVX_Vector scale3 = hvx_vec_repl_f32(Q6_V_vror_VR(vscale, 3 * sizeof(float)));
+    const HVX_Vector scale4 = hvx_vec_repl_f32(Q6_V_vror_VR(vscale, 4 * sizeof(float)));
+    const HVX_Vector scale5 = hvx_vec_repl_f32(Q6_V_vror_VR(vscale, 5 * sizeof(float)));
+    const HVX_Vector scale6 = hvx_vec_repl_f32(Q6_V_vror_VR(vscale, 6 * sizeof(float)));
+    const HVX_Vector scale7 = hvx_vec_repl_f32(Q6_V_vror_VR(vscale, 7 * sizeof(float)));
 
     const uint32_t epv = 128 / sizeof(float);
     const uint32_t nvec = n / epv;
@@ -678,10 +679,6 @@ static __attribute__((noinline)) HVX_Vector gdn_vec_exp_f32(HVX_Vector v) {
     return hvx_vec_exp_f32(v);
 }
 
-static __attribute__((noinline)) void gdn_copy_state_f32(float * restrict dst, const float * restrict src, uint32_t n) {
-    hvx_copy_f32_uu((uint8_t *) dst, (const uint8_t *) src, n);
-}
-
 static __attribute__((noinline)) void gdn_step_kda_f32(
     const struct htp_gdn_context * gctx,
     float * restrict s_work,
@@ -690,8 +687,8 @@ static __attribute__((noinline)) void gdn_step_kda_f32(
     const void * restrict k_t,
     const void * restrict v_t,
     const float * restrict g_t,
+    const float * restrict beta_t,
     HVX_Vector * restrict vtcm_scratch,
-    float beta_val,
     float scale,
     uint32_t S_v
 ) {
@@ -704,7 +701,6 @@ static __attribute__((noinline)) void gdn_step_kda_f32(
     HVX_Vector * restrict vg  = vtcm_scratch + 8;
     float * restrict v_buf    = (float *) (vtcm_scratch + 12);
     float * restrict out_buf  = (float *) (vtcm_scratch + 16);
-    float * restrict delta    = (float *) (vtcm_scratch + 20);
 
     gctx->load_q(vq, q_t, S_v);
     gctx->load_k(vk, k_t, S_v);
@@ -717,7 +713,7 @@ static __attribute__((noinline)) void gdn_step_kda_f32(
         vg[nvec] = gdn_vec_exp_f32(hvx_vec_load_u(g_t + nvec * epv, nloe * sizeof(float)));
     }
 
-    const HVX_Vector vbeta  = hvx_vec_splat_f32(beta_val);
+    const HVX_Vector vbeta  = hvx_vec_repl_f32(hvx_vmemu(beta_t));
     const HVX_Vector vscale = hvx_vec_splat_f32(scale);
 
     uint32_t j = 0;
@@ -737,10 +733,9 @@ static __attribute__((noinline)) void gdn_step_kda_f32(
         HVX_Vector vv_t   = hvx_vmemu(v_buf + j);
         HVX_Vector diff   = hvx_vec_sub_f32_f32(vv_t, vsums);
         HVX_Vector vdelta = hvx_vec_mul_f32_f32(diff, vbeta);
-        hvx_vec_store_u(delta, 8 * sizeof(float), vdelta);
 
         HVX_Vector vattn = gdn_add_scaled_dot8_f32(row0, row1, row2, row3, row4, row5, row6, row7,
-                                                   vk, delta, vq, S_v);
+                                                   vk, vdelta, vq, S_v);
 
         HVX_Vector res_attn = hvx_vec_mul_f32_f32(vattn, vscale);
         hvx_vec_store_u(out_buf + j, 8 * sizeof(float), res_attn);
@@ -756,9 +751,8 @@ static __attribute__((noinline)) void gdn_step_kda_f32(
         HVX_Vector vv_t   = hvx_vmemu(v_buf + j);
         HVX_Vector diff   = hvx_vec_sub_f32_f32(vv_t, vsums);
         HVX_Vector vdelta = hvx_vec_mul_f32_f32(diff, vbeta);
-        hvx_vec_store_u(delta, 4 * sizeof(float), vdelta);
 
-        HVX_Vector vattn = gdn_add_scaled_dot4_f32(row0, row1, row2, row3, vk, delta, vq, S_v);
+        HVX_Vector vattn = gdn_add_scaled_dot4_f32(row0, row1, row2, row3, vk, vdelta, vq, S_v);
 
         HVX_Vector res_attn = hvx_vec_mul_f32_f32(vattn, vscale);
         hvx_vec_store_u(out_buf + j, 4 * sizeof(float), res_attn);
@@ -766,7 +760,7 @@ static __attribute__((noinline)) void gdn_step_kda_f32(
     for (; j < S_v; ++j) {
         float * row = s_work + j * S_v;
         HVX_Vector vsum = gdn_mul_dot_f32(row, vg, vk, S_v);
-        HVX_Vector vv_t = hvx_vec_splat_f32(v_buf[j]);
+        HVX_Vector vv_t = hvx_vec_repl_f32(hvx_vmemu(v_buf + j));
         HVX_Vector vdj  = hvx_vec_mul_f32_f32(hvx_vec_sub_f32_f32(vv_t, vsum), vbeta);
         HVX_Vector vres = gdn_add_scaled_dot_f32(row, vk, vdj, vq, S_v);
         hvx_vec_store_u(out_buf + j, sizeof(float), hvx_vec_mul_f32_f32(vres, vscale));
@@ -783,8 +777,8 @@ static __attribute__((noinline)) void gdn_step_scalar_f32(
     const void * restrict k_t,
     const void * restrict v_t,
     const float * restrict g_t,
+    const float * restrict beta_t,
     HVX_Vector * restrict vtcm_scratch,
-    float beta_val,
     float scale,
     uint32_t S_v
 ) {
@@ -792,14 +786,13 @@ static __attribute__((noinline)) void gdn_step_scalar_f32(
     HVX_Vector * restrict vk  = vtcm_scratch + 4;
     float * restrict v_buf    = (float *) (vtcm_scratch + 12);
     float * restrict out_buf  = (float *) (vtcm_scratch + 16);
-    float * restrict delta    = (float *) (vtcm_scratch + 20);
 
     gctx->load_q(vq, q_t, S_v);
     gctx->load_k(vk, k_t, S_v);
     gctx->load_v((HVX_Vector *) v_buf, v_t, S_v);
 
-    const HVX_Vector vgate  = gdn_vec_exp_f32(hvx_vec_splat_f32(g_t[0]));
-    const HVX_Vector vbeta  = hvx_vec_splat_f32(beta_val);
+    const HVX_Vector vgate  = gdn_vec_exp_f32(hvx_vec_repl_f32(hvx_vmemu(g_t)));
+    const HVX_Vector vbeta  = hvx_vec_repl_f32(hvx_vmemu(beta_t));
     const HVX_Vector vscale = hvx_vec_splat_f32(scale);
 
     uint32_t j = 0;
@@ -819,10 +812,9 @@ static __attribute__((noinline)) void gdn_step_scalar_f32(
         HVX_Vector vv_t   = hvx_vmemu(v_buf + j);
         HVX_Vector diff   = hvx_vec_sub_f32_f32(vv_t, vsums);
         HVX_Vector vdelta = hvx_vec_mul_f32_f32(diff, vbeta);
-        hvx_vec_store_u(delta, 8 * sizeof(float), vdelta);
 
         HVX_Vector vattn = gdn_add_scaled_dot8_f32(row0, row1, row2, row3, row4, row5, row6, row7,
-                                                   vk, delta, vq, S_v);
+                                                   vk, vdelta, vq, S_v);
 
         HVX_Vector res_attn = hvx_vec_mul_f32_f32(vattn, vscale);
         hvx_vec_store_u(out_buf + j, 8 * sizeof(float), res_attn);
@@ -838,9 +830,8 @@ static __attribute__((noinline)) void gdn_step_scalar_f32(
         HVX_Vector vv_t   = hvx_vmemu(v_buf + j);
         HVX_Vector diff   = hvx_vec_sub_f32_f32(vv_t, vsums);
         HVX_Vector vdelta = hvx_vec_mul_f32_f32(diff, vbeta);
-        hvx_vec_store_u(delta, 4 * sizeof(float), vdelta);
 
-        HVX_Vector vattn = gdn_add_scaled_dot4_f32(row0, row1, row2, row3, vk, delta, vq, S_v);
+        HVX_Vector vattn = gdn_add_scaled_dot4_f32(row0, row1, row2, row3, vk, vdelta, vq, S_v);
 
         HVX_Vector res_attn = hvx_vec_mul_f32_f32(vattn, vscale);
         hvx_vec_store_u(out_buf + j, 4 * sizeof(float), res_attn);
@@ -848,13 +839,48 @@ static __attribute__((noinline)) void gdn_step_scalar_f32(
     for (; j < S_v; ++j) {
         float * row = s_work + j * S_v;
         HVX_Vector vsum = gdn_mul_scalar_dot_f32(row, vgate, vk, S_v);
-        HVX_Vector vv_t = hvx_vec_splat_f32(v_buf[j]);
+        HVX_Vector vv_t = hvx_vec_repl_f32(hvx_vmemu(v_buf + j));
         HVX_Vector vdj  = hvx_vec_mul_f32_f32(hvx_vec_sub_f32_f32(vv_t, vsum), vbeta);
         HVX_Vector vres = gdn_add_scaled_dot_f32(row, vk, vdj, vq, S_v);
         hvx_vec_store_u(out_buf + j, sizeof(float), hvx_vec_mul_f32_f32(vres, vscale));
     }
 
     gctx->store_out(attn_out, (const HVX_Vector *) out_buf, S_v);
+}
+
+static inline void gdn_dma_push_tile_inputs(
+    dma_queue * dma_q,
+    void * vtcm_q,
+    void * vtcm_k,
+    void * vtcm_v,
+    void * vtcm_g,
+    void * vtcm_b,
+    const struct htp_tensor * q,
+    const struct htp_tensor * k,
+    const struct htp_tensor * v,
+    const struct htp_tensor * g,
+    const struct htp_tensor * beta,
+    uint32_t iq3, uint32_t iq1,
+    uint32_t ik3, uint32_t ik1,
+    uint32_t iv3, uint32_t iv1,
+    uint32_t t_base,
+    uint32_t tile_tokens,
+    uint32_t q_row_bytes,
+    uint32_t k_row_bytes,
+    uint32_t v_row_bytes,
+    uint32_t g_row_bytes
+) {
+    const dma_addr_t q_dma = q->data + ((size_t) iq3 * q->nb[3] + (size_t) t_base * q->nb[2] + (size_t) iq1 * q->nb[1]);
+    const dma_addr_t k_dma = k->data + ((size_t) ik3 * k->nb[3] + (size_t) t_base * k->nb[2] + (size_t) ik1 * k->nb[1]);
+    const dma_addr_t v_dma = v->data + ((size_t) iv3 * v->nb[3] + (size_t) t_base * v->nb[2] + (size_t) iv1 * v->nb[1]);
+    const dma_addr_t g_dma = g->data + ((size_t) iv3 * g->nb[3] + (size_t) t_base * g->nb[2] + (size_t) iv1 * g->nb[1]);
+    const dma_addr_t b_dma = beta->data + ((size_t) iv3 * beta->nb[3] + (size_t) t_base * beta->nb[2] + (size_t) iv1 * beta->nb[1]);
+
+    dma_queue_push(dma_q, dma_make_data(vtcm_q, q_dma), q_row_bytes, q->nb[2], q_row_bytes, tile_tokens);
+    dma_queue_push(dma_q, dma_make_data(vtcm_k, k_dma), k_row_bytes, k->nb[2], k_row_bytes, tile_tokens);
+    dma_queue_push(dma_q, dma_make_data(vtcm_v, v_dma), v_row_bytes, v->nb[2], v_row_bytes, tile_tokens);
+    dma_queue_push(dma_q, dma_make_data(vtcm_g, g_dma), g_row_bytes, g->nb[2], g_row_bytes, tile_tokens);
+    dma_queue_push(dma_q, dma_make_data(vtcm_b, b_dma), sizeof(float), beta->nb[2], sizeof(float), tile_tokens);
 }
 
 static void gated_delta_net_f32_pp_thread(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
@@ -883,17 +909,35 @@ static void gated_delta_net_f32_pp_thread(const htp_thread_t * th, unsigned int 
 
     const struct htp_tensor * dst_cache = octx->dsts[1];
     const float scale = kparams->scale;
-    const uint32_t dst_elem_size = (dst->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
-    uint8_t * dst_base           = (uint8_t *) (uintptr_t) dst->data;
-    float * state_out_base       = dst_cache ? (float *) (uintptr_t) dst_cache->data : ((float *) dst_base + S_v * H * n_tokens * n_seqs);
+
+    const uint32_t q_row_bytes    = S_v * ((q->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float));
+    const uint32_t k_row_bytes    = S_v * ((k->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float));
+    const uint32_t v_row_bytes    = S_v * ((v->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float));
+    const uint32_t g_row_bytes    = (kparams->kda ? S_v : 1) * sizeof(float);
+    const uint32_t out_row_bytes  = S_v * ((dst->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float));
+    const uint32_t dst_row_stride = H * out_row_bytes;
 
     dma_queue * dma_q = th->dma_q;
     const struct htp_gdn_vtcm_layout * layout = &gctx->layout;
     uint8_t * th_vtcm = gctx->vtcm_base + layout->bytes_per_hvx * ith;
-    float * s_work[2];
-    s_work[0] = (float *) th_vtcm;
-    s_work[1] = (float *) (th_vtcm + layout->state_aligned);
-    HVX_Vector * vtcm_scratch = (HVX_Vector *) (th_vtcm + 2 * layout->state_aligned);
+    float * s_work_curr = (float *) th_vtcm;
+    HVX_Vector * vtcm_scratch = (HVX_Vector *) (th_vtcm + layout->off_scratch);
+
+    uint8_t * q_spad[2];
+    uint8_t * k_spad[2];
+    uint8_t * v_spad[2];
+    uint8_t * g_spad[2];
+    uint8_t * o_spad[2];
+    float *   beta_spad[2];
+    for (int b = 0; b < 2; ++b) {
+        uint8_t * spad = th_vtcm + layout->off_spad + (size_t) b * layout->spad_stride;
+        q_spad[b]    = spad + 0 * layout->tile_vec_bytes;
+        k_spad[b]    = spad + 1 * layout->tile_vec_bytes;
+        v_spad[b]    = spad + 2 * layout->tile_vec_bytes;
+        g_spad[b]    = spad + 3 * layout->tile_vec_bytes;
+        o_spad[b]    = spad + 4 * layout->tile_vec_bytes;
+        beta_spad[b] = (float *) (spad + 5 * layout->tile_vec_bytes);
+    }
 
     const struct fastdiv_values * fd_H   = &kparams->div_H;
     const struct fastdiv_values * fd_q1  = &kparams->div_q1;
@@ -903,42 +947,13 @@ static void gated_delta_net_f32_pp_thread(const htp_thread_t * th, unsigned int 
 
     const uint32_t state_seq_stride    = kparams->state_seq_stride;
     const uint32_t state_size_per_snap = kparams->state_size_per_snap;
-    const dma_addr_t state_out_dma_base = dst_cache ? dst_cache->data : (dst->data + S_v * H * n_tokens * n_seqs * sizeof(float));
-
-    uint32_t ir_prefetch = gctx->row_start + ith;
-    int spad_idx = 0;
-
-    // Prefetch preamble (up to 2 steps)
-    for (int step = 0; step < 2 && ir_prefetch < row_end; step++) {
-        const uint32_t piv1 = fastmodulo(ir_prefetch, H, fd_H);
-        const uint32_t piv3 = fastdiv(ir_prefetch, fd_H);
-        dma_addr_t ps_in  = state->data + (piv3 * state_seq_stride + piv1 * S_v * S_v) * sizeof(float);
-        dma_addr_t ps_out = state_out_dma_base + (piv3 * H + piv1) * S_v * S_v * sizeof(float);
-
-        // Push dummy write-back
-        dma_queue_push(dma_q, dma_make_data(ps_out, s_work[spad_idx]),
-                       S_v * sizeof(float), S_v * sizeof(float),
-                       S_v * sizeof(float), 0);
-
-        // Push fetch
-        dma_queue_push(dma_q, dma_make_data(s_work[spad_idx], ps_in),
-                       S_v * sizeof(float), S_v * sizeof(float),
-                       S_v * sizeof(float), S_v);
-
-        ir_prefetch += nth;
-        spad_idx ^= 1;
-    }
+    const dma_addr_t state_out_dma_base = dst_cache ? dst_cache->data : (dst->data + (size_t) S_v * H * n_tokens * n_seqs * sizeof(float));
 
     struct htp_thread_trace * tr = th->trace;
     const gdn_step_fn_t step_fn  = gctx->step_fn;
+    const uint32_t n_tiles       = (n_tokens + HTP_GDN_TOKEN_TILE - 1) / HTP_GDN_TOKEN_TILE;
 
-    int curr_spad_idx = 0;
     for (uint32_t ir = gctx->row_start + ith; ir < row_end; ir += nth) {
-        dma_queue_pop(dma_q);
-        dma_queue_pop(dma_q);
-
-        float * s_work_curr = s_work[curr_spad_idx];
-
         const uint32_t iv1 = fastmodulo(ir, H, fd_H);
         const uint32_t iv3 = fastdiv(ir, fd_H);
 
@@ -947,56 +962,93 @@ static void gated_delta_net_f32_pp_thread(const htp_thread_t * th, unsigned int 
         const uint32_t iq3 = fastdiv(iv3, fd_rq3);
         const uint32_t ik3 = fastdiv(iv3, fd_rk3);
 
-        dma_addr_t s_out    = state_out_dma_base + (iv3 * H + iv1) * S_v * S_v * sizeof(float);
-        uint8_t * attn_data = dst_base + (iv3 * n_tokens * H + iv1) * S_v * dst_elem_size;
+        const dma_addr_t s_in  = state->data + ((size_t) iv3 * state_seq_stride + (size_t) iv1 * S_v * S_v) * sizeof(float);
+        const dma_addr_t s_out = state_out_dma_base + ((size_t) iv3 * H + iv1) * S_v * S_v * sizeof(float);
 
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
-        for (uint32_t t = 0; t < n_tokens; ++t) {
-            const void * q_t = (const uint8_t *) (uintptr_t) q->data +
-                    (iq3 * q->nb[3] + t * q->nb[2] + iq1 * q->nb[1]);
-            const void * k_t = (const uint8_t *) (uintptr_t) k->data +
-                    (ik3 * k->nb[3] + t * k->nb[2] + ik1 * k->nb[1]);
-            const void * v_t = (const uint8_t *) (uintptr_t) v->data +
-                    (iv3 * v->nb[3] + t * v->nb[2] + iv1 * v->nb[1]);
-            const float * g_t = (const float *) ((const uint8_t *) (uintptr_t) g->data +
-                    (iv3 * g->nb[3] + t * g->nb[2] + iv1 * g->nb[1]));
-            const float beta_val = *(const float *) ((const uint8_t *) (uintptr_t) beta->data +
-                    (iv3 * beta->nb[3] + t * beta->nb[2] + iv1 * beta->nb[1]));
+        dma_queue_push(dma_q, dma_make_data(s_work_curr, s_in),
+                       S_v * sizeof(float), S_v * sizeof(float),
+                       S_v * sizeof(float), S_v);
+        dma_queue_pop(dma_q);
 
-            step_fn(gctx, s_work_curr, attn_data, q_t, k_t, v_t, g_t, vtcm_scratch, beta_val, scale, S_v);
+        const uint32_t first_tokens = hex_smin(HTP_GDN_TOKEN_TILE, n_tokens);
+        gdn_dma_push_tile_inputs(dma_q, q_spad[0], k_spad[0], v_spad[0], g_spad[0], beta_spad[0],
+                                 q, k, v, g, beta, iq3, iq1, ik3, ik1, iv3, iv1,
+                                 0, first_tokens, q_row_bytes, k_row_bytes, v_row_bytes, g_row_bytes);
 
-            if (K > 1) {
-                const int32_t target_slot = (int32_t) n_tokens - 1 - (int32_t) t;
-                if (target_slot > 0 && target_slot < (int32_t) K) {
-                    float * curr_state_o = state_out_base + (uint32_t) target_slot * state_size_per_snap + (iv3 * H + iv1) * S_v * S_v;
-                    gdn_copy_state_f32(curr_state_o, s_work_curr, S_v * S_v);
-                }
+        for (uint32_t tile_idx = 0; tile_idx < n_tiles; ++tile_idx) {
+            const uint32_t curr_buf    = tile_idx & 1;
+            const uint32_t next_buf    = curr_buf ^ 1;
+            const uint32_t t_base      = tile_idx * HTP_GDN_TOKEN_TILE;
+            const uint32_t tile_tokens = hex_smin(HTP_GDN_TOKEN_TILE, n_tokens - t_base);
+
+            for (int d = 0; d < 5; ++d) {
+                dma_queue_pop(dma_q);
+            }
+            if (tile_idx > 0) {
+                dma_queue_pop(dma_q);
             }
 
-            attn_data += S_v * H * dst_elem_size;
-        }
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
+            if (K <= 1 && tile_idx + 1 < n_tiles) {
+                const uint32_t next_t_base = (tile_idx + 1) * HTP_GDN_TOKEN_TILE;
+                const uint32_t next_tokens = hex_smin(HTP_GDN_TOKEN_TILE, n_tokens - next_t_base);
+                gdn_dma_push_tile_inputs(dma_q, q_spad[next_buf], k_spad[next_buf], v_spad[next_buf], g_spad[next_buf], beta_spad[next_buf],
+                                         q, k, v, g, beta, iq3, iq1, ik3, ik1, iv3, iv1,
+                                         next_t_base, next_tokens, q_row_bytes, k_row_bytes, v_row_bytes, g_row_bytes);
+            }
 
-        // Push real write-back
+            const uint8_t * q_curr = q_spad[curr_buf];
+            const uint8_t * k_curr = k_spad[curr_buf];
+            const uint8_t * v_curr = v_spad[curr_buf];
+            const uint8_t * g_curr = g_spad[curr_buf];
+            const float *   b_curr = beta_spad[curr_buf];
+            uint8_t *       o_curr = o_spad[curr_buf];
+
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
+            for (uint32_t t_local = 0; t_local < tile_tokens; ++t_local) {
+                step_fn(gctx, s_work_curr,
+                        o_curr + t_local * out_row_bytes,
+                        q_curr + t_local * q_row_bytes,
+                        k_curr + t_local * k_row_bytes,
+                        v_curr + t_local * v_row_bytes,
+                        (const float *) (g_curr + t_local * g_row_bytes),
+                        b_curr + t_local,
+                        vtcm_scratch, scale, S_v);
+
+                if (K > 1) {
+                    const uint32_t t = t_base + t_local;
+                    const int32_t target_slot = (int32_t) n_tokens - 1 - (int32_t) t;
+                    if (target_slot > 0 && target_slot < (int32_t) K) {
+                        const dma_addr_t snap_dma = state_out_dma_base +
+                            ((size_t) target_slot * state_size_per_snap + ((size_t) iv3 * H + iv1) * S_v * S_v) * sizeof(float);
+                        dma_queue_push(dma_q, dma_make_data(snap_dma, s_work_curr),
+                                       S_v * sizeof(float), S_v * sizeof(float),
+                                       S_v * sizeof(float), S_v);
+                        dma_queue_pop(dma_q);
+                    }
+                }
+            }
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
+
+            if (K > 1 && tile_idx + 1 < n_tiles) {
+                const uint32_t next_t_base = (tile_idx + 1) * HTP_GDN_TOKEN_TILE;
+                const uint32_t next_tokens = hex_smin(HTP_GDN_TOKEN_TILE, n_tokens - next_t_base);
+                gdn_dma_push_tile_inputs(dma_q, q_spad[next_buf], k_spad[next_buf], v_spad[next_buf], g_spad[next_buf], beta_spad[next_buf],
+                                         q, k, v, g, beta, iq3, iq1, ik3, ik1, iv3, iv1,
+                                         next_t_base, next_tokens, q_row_bytes, k_row_bytes, v_row_bytes, g_row_bytes);
+            }
+
+            const dma_addr_t attn_out_dma = dst->data +
+                ((size_t) (iv3 * n_tokens + t_base) * H + iv1) * out_row_bytes;
+            dma_queue_push(dma_q, dma_make_data(attn_out_dma, o_curr),
+                           dst_row_stride, out_row_bytes, out_row_bytes, tile_tokens);
+        }
+
+        dma_queue_pop(dma_q);
+
         dma_queue_push(dma_q, dma_make_data(s_out, s_work_curr),
                        S_v * sizeof(float), S_v * sizeof(float),
                        S_v * sizeof(float), S_v);
-
-        // Prefetch next block (if any)
-        if (ir_prefetch < row_end) {
-            const uint32_t piv1 = fastmodulo(ir_prefetch, H, fd_H);
-            const uint32_t piv3 = fastdiv(ir_prefetch, fd_H);
-            dma_addr_t ps_in = state->data + (piv3 * state_seq_stride + piv1 * S_v * S_v) * sizeof(float);
-
-            dma_queue_push(dma_q, dma_make_data(s_work[spad_idx], ps_in),
-                           S_v * sizeof(float), S_v * sizeof(float),
-                           S_v * sizeof(float), S_v);
-
-            ir_prefetch += nth;
-            spad_idx ^= 1;
-        }
-
-        curr_spad_idx ^= 1;
+        dma_queue_pop(dma_q);
     }
     dma_queue_flush(dma_q);
 }
@@ -1025,8 +1077,12 @@ static void gated_delta_net_f32_tg_thread(const htp_thread_t * th, unsigned int 
 
     const struct htp_tensor * dst_cache = octx->dsts[1];
     const float scale = kparams->scale;
-    const uint32_t dst_elem_size = (dst->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
-    uint8_t * dst_base           = (uint8_t *) (uintptr_t) dst->data;
+
+    const uint32_t q_row_bytes   = S_v * ((q->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float));
+    const uint32_t k_row_bytes   = S_v * ((k->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float));
+    const uint32_t v_row_bytes   = S_v * ((v->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float));
+    const uint32_t g_row_bytes   = (kparams->kda ? S_v : 1) * sizeof(float);
+    const uint32_t out_row_bytes = S_v * ((dst->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float));
 
     dma_queue * dma_q = th->dma_q;
     const struct htp_gdn_vtcm_layout * layout = &gctx->layout;
@@ -1034,7 +1090,23 @@ static void gated_delta_net_f32_tg_thread(const htp_thread_t * th, unsigned int 
     float * s_work[2];
     s_work[0] = (float *) th_vtcm;
     s_work[1] = (float *) (th_vtcm + layout->state_aligned);
-    HVX_Vector * vtcm_scratch = (HVX_Vector *) (th_vtcm + 2 * layout->state_aligned);
+    HVX_Vector * vtcm_scratch = (HVX_Vector *) (th_vtcm + layout->off_scratch);
+
+    uint8_t * q_spad[2];
+    uint8_t * k_spad[2];
+    uint8_t * v_spad[2];
+    uint8_t * g_spad[2];
+    uint8_t * o_spad[2];
+    float *   beta_spad[2];
+    for (int b = 0; b < 2; ++b) {
+        uint8_t * spad = th_vtcm + layout->off_spad + (size_t) b * layout->spad_stride;
+        q_spad[b]    = spad + 0 * layout->tile_vec_bytes;
+        k_spad[b]    = spad + 1 * layout->tile_vec_bytes;
+        v_spad[b]    = spad + 2 * layout->tile_vec_bytes;
+        g_spad[b]    = spad + 3 * layout->tile_vec_bytes;
+        o_spad[b]    = spad + 4 * layout->tile_vec_bytes;
+        beta_spad[b] = (float *) (spad + 5 * layout->tile_vec_bytes);
+    }
 
     const struct fastdiv_values * fd_H   = &kparams->div_H;
     const struct fastdiv_values * fd_q1  = &kparams->div_q1;
@@ -1043,7 +1115,7 @@ static void gated_delta_net_f32_tg_thread(const htp_thread_t * th, unsigned int 
     const struct fastdiv_values * fd_rk3 = &kparams->div_rk3;
 
     const uint32_t state_seq_stride = kparams->state_seq_stride;
-    const dma_addr_t state_out_dma_base = dst_cache ? dst_cache->data : (dst->data + S_v * H * n_seqs * sizeof(float));
+    const dma_addr_t state_out_dma_base = dst_cache ? dst_cache->data : (dst->data + (size_t) S_v * H * n_seqs * sizeof(float));
 
     uint32_t ir_prefetch = gctx->row_start + ith;
     int spad_idx = 0;
@@ -1052,18 +1124,27 @@ static void gated_delta_net_f32_tg_thread(const htp_thread_t * th, unsigned int 
     for (int step = 0; step < 2 && ir_prefetch < row_end; step++) {
         const uint32_t piv1 = fastmodulo(ir_prefetch, H, fd_H);
         const uint32_t piv3 = fastdiv(ir_prefetch, fd_H);
-        dma_addr_t ps_in  = state->data + (piv3 * state_seq_stride + piv1 * S_v * S_v) * sizeof(float);
-        dma_addr_t ps_out = state_out_dma_base + (piv3 * H + piv1) * S_v * S_v * sizeof(float);
+        const uint32_t piq1 = fastmodulo(piv1, q->ne[1], fd_q1);
+        const uint32_t pik1 = fastmodulo(piv1, k->ne[1], fd_k1);
+        const uint32_t piq3 = fastdiv(piv3, fd_rq3);
+        const uint32_t pik3 = fastdiv(piv3, fd_rk3);
 
-        // Push dummy write-back
+        const dma_addr_t ps_in  = state->data + ((size_t) piv3 * state_seq_stride + (size_t) piv1 * S_v * S_v) * sizeof(float);
+        const dma_addr_t ps_out = state_out_dma_base + ((size_t) piv3 * H + piv1) * S_v * S_v * sizeof(float);
+        const dma_addr_t po_out = dst->data + ((size_t) piv3 * H + piv1) * out_row_bytes;
+
         dma_queue_push(dma_q, dma_make_data(ps_out, s_work[spad_idx]),
                        S_v * sizeof(float), S_v * sizeof(float),
                        S_v * sizeof(float), 0);
+        dma_queue_push(dma_q, dma_make_data(po_out, o_spad[spad_idx]),
+                       out_row_bytes, out_row_bytes, out_row_bytes, 0);
 
-        // Push fetch
         dma_queue_push(dma_q, dma_make_data(s_work[spad_idx], ps_in),
                        S_v * sizeof(float), S_v * sizeof(float),
                        S_v * sizeof(float), S_v);
+        gdn_dma_push_tile_inputs(dma_q, q_spad[spad_idx], k_spad[spad_idx], v_spad[spad_idx], g_spad[spad_idx], beta_spad[spad_idx],
+                                 q, k, v, g, beta, piq3, piq1, pik3, pik1, piv3, piv1,
+                                 0, 1, q_row_bytes, k_row_bytes, v_row_bytes, g_row_bytes);
 
         ir_prefetch += nth;
         spad_idx ^= 1;
@@ -1074,51 +1155,45 @@ static void gated_delta_net_f32_tg_thread(const htp_thread_t * th, unsigned int 
 
     int curr_spad_idx = 0;
     for (uint32_t ir = gctx->row_start + ith; ir < row_end; ir += nth) {
-        dma_queue_pop(dma_q);
-        dma_queue_pop(dma_q);
-
-        float * s_work_curr = s_work[curr_spad_idx];
+        for (int d = 0; d < 8; ++d) {
+            dma_queue_pop(dma_q);
+        }
 
         const uint32_t iv1 = fastmodulo(ir, H, fd_H);
         const uint32_t iv3 = fastdiv(ir, fd_H);
 
-        const uint32_t iq1 = fastmodulo(iv1, q->ne[1], fd_q1);
-        const uint32_t ik1 = fastmodulo(iv1, k->ne[1], fd_k1);
-        const uint32_t iq3 = fastdiv(iv3, fd_rq3);
-        const uint32_t ik3 = fastdiv(iv3, fd_rk3);
-
-        dma_addr_t s_out    = state_out_dma_base + (iv3 * H + iv1) * S_v * S_v * sizeof(float);
-        uint8_t * attn_data = dst_base + (iv3 * H + iv1) * S_v * dst_elem_size;
-
-        const void * q_t = (const uint8_t *) (uintptr_t) q->data +
-                (iq3 * q->nb[3] + iq1 * q->nb[1]);
-        const void * k_t = (const uint8_t *) (uintptr_t) k->data +
-                (ik3 * k->nb[3] + ik1 * k->nb[1]);
-        const void * v_t = (const uint8_t *) (uintptr_t) v->data +
-                (iv3 * v->nb[3] + iv1 * v->nb[1]);
-        const float * g_t = (const float *) ((const uint8_t *) (uintptr_t) g->data +
-                (iv3 * g->nb[3] + iv1 * g->nb[1]));
-        const float beta_val = *(const float *) ((const uint8_t *) (uintptr_t) beta->data +
-                (iv3 * beta->nb[3] + iv1 * beta->nb[1]));
+        const dma_addr_t s_out  = state_out_dma_base + ((size_t) iv3 * H + iv1) * S_v * S_v * sizeof(float);
+        const dma_addr_t po_out = dst->data + ((size_t) iv3 * H + iv1) * out_row_bytes;
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
-        step_fn(gctx, s_work_curr, attn_data, q_t, k_t, v_t, g_t, vtcm_scratch, beta_val, scale, S_v);
+        step_fn(gctx, s_work[curr_spad_idx], o_spad[curr_spad_idx],
+                q_spad[curr_spad_idx], k_spad[curr_spad_idx], v_spad[curr_spad_idx],
+                (const float *) g_spad[curr_spad_idx], beta_spad[curr_spad_idx],
+                vtcm_scratch, scale, S_v);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
 
-        // Push real write-back
-        dma_queue_push(dma_q, dma_make_data(s_out, s_work_curr),
+        dma_queue_push(dma_q, dma_make_data(s_out, s_work[curr_spad_idx]),
                        S_v * sizeof(float), S_v * sizeof(float),
                        S_v * sizeof(float), S_v);
+        dma_queue_push(dma_q, dma_make_data(po_out, o_spad[curr_spad_idx]),
+                       out_row_bytes, out_row_bytes, out_row_bytes, 1);
 
-        // Prefetch next block (if any)
         if (ir_prefetch < row_end) {
             const uint32_t piv1 = fastmodulo(ir_prefetch, H, fd_H);
             const uint32_t piv3 = fastdiv(ir_prefetch, fd_H);
-            dma_addr_t ps_in = state->data + (piv3 * state_seq_stride + piv1 * S_v * S_v) * sizeof(float);
+            const uint32_t piq1 = fastmodulo(piv1, q->ne[1], fd_q1);
+            const uint32_t pik1 = fastmodulo(piv1, k->ne[1], fd_k1);
+            const uint32_t piq3 = fastdiv(piv3, fd_rq3);
+            const uint32_t pik3 = fastdiv(piv3, fd_rk3);
+
+            const dma_addr_t ps_in = state->data + ((size_t) piv3 * state_seq_stride + (size_t) piv1 * S_v * S_v) * sizeof(float);
 
             dma_queue_push(dma_q, dma_make_data(s_work[spad_idx], ps_in),
                            S_v * sizeof(float), S_v * sizeof(float),
                            S_v * sizeof(float), S_v);
+            gdn_dma_push_tile_inputs(dma_q, q_spad[spad_idx], k_spad[spad_idx], v_spad[spad_idx], g_spad[spad_idx], beta_spad[spad_idx],
+                                     q, k, v, g, beta, piq3, piq1, pik3, pik1, piv3, piv1,
+                                     0, 1, q_row_bytes, k_row_bytes, v_row_bytes, g_row_bytes);
 
             ir_prefetch += nth;
             spad_idx ^= 1;
@@ -2486,11 +2561,6 @@ int op_gated_delta_net(struct htp_ops_context * octx) {
     const struct htp_tensor * dst       = octx->dst;
     const struct htp_tensor * dst_cache = octx->dsts[1];
 
-    for (int i = 0; i < 6; i++) {
-        if (htp_tensor_is_extended(octx->src[i])) {
-            return HTP_STATUS_NO_SUPPORT;
-        }
-    }
     for (int i = 0; i < 3; i++) {
         if (octx->src[i]->type != HTP_TYPE_F32 && octx->src[i]->type != HTP_TYPE_F16) {
             return HTP_STATUS_NO_SUPPORT;
@@ -2501,11 +2571,8 @@ int op_gated_delta_net(struct htp_ops_context * octx) {
             return HTP_STATUS_NO_SUPPORT;
         }
     }
-    if (htp_tensor_is_extended(dst)) {
-        return HTP_STATUS_NO_SUPPORT;
-    }
     if (dst_cache) {
-        if (dst_cache->type != HTP_TYPE_F32 || htp_tensor_is_extended(dst_cache)) {
+        if (dst_cache->type != HTP_TYPE_F32) {
             return HTP_STATUS_NO_SUPPORT;
         }
         if (dst->type != HTP_TYPE_F32 && dst->type != HTP_TYPE_F16) {
