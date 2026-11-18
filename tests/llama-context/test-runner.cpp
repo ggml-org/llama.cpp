@@ -72,8 +72,9 @@ std::vector<case_run> run_cases(model_run & mr, const std::vector<const ctx_test
             } else {
                 // the recurrent cases are also run against a cache pre-filled with a known
                 // pattern, so that a restore reading cells it never wrote cannot pass
+                // with 0xff repeated every float of the state becomes NaN to test that the next sequence is not affected
 
-                for (const uint8_t fill : { 0, 0x3e }) {
+                for (const uint8_t fill : { 0, 0x3e, 0xff }) {
                     TLOG_INF("(fill 0x%02x)\n", fill);
 
                     mr.fill = fill;
