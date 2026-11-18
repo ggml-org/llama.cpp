@@ -24,7 +24,7 @@ struct get_rows_context;
 
 typedef uint32_t (*get_rows_read_index_fn_t)(const void * src1, uint32_t idx, int idx_type);
 typedef void (*get_rows_flat_compute_fn_t)(float * dst_spad, const void * src_spad, uint32_t cur_elems);
-typedef void (*get_rows_tiled_compute_fn_t)(float * dst_spad, const uint8_t * src_spad, uint32_t n_k_tiles, uint32_t tile_stride, uint32_t row);
+typedef void (*get_rows_tiled_compute_fn_t)(void * dst_spad, const uint8_t * src_spad, uint32_t n_k_tiles, uint32_t tile_stride, uint32_t row);
 
 struct get_rows_context {
     struct htp_ops_context * octx;
@@ -353,7 +353,7 @@ static void get_rows_thread_tiled(const htp_thread_t * th, unsigned int nth, uns
 
     for (uint32_t step = 0; step < ir1 - ir0; ++step) {
         const uint32_t i = ir0 + step;
-        float * dst_spad   = (float *) dma_queue_pop(dma_q).src;
+        void * dst_spad    = (void *) dma_queue_pop(dma_q).src;
         uint8_t * src_spad = (uint8_t *) dma_queue_pop(dma_q).dst;
 
         struct get_rows_tiled_task task = get_rows_tiled_calc_task(octx, grctx, i, n_k_tiles, tile_size);
@@ -423,7 +423,9 @@ int op_get_rows(struct htp_ops_context * octx) {
             return HTP_STATUS_NO_SUPPORT;
         }
     } else if (octx->dst->type == HTP_TYPE_F16) {
-        if (kparams->kernel_type != HTP_GET_ROWS_KERNEL_FLAT || octx->src[0]->type != HTP_TYPE_F32) {
+        const bool flat_f32_to_f16  = (kparams->kernel_type == HTP_GET_ROWS_KERNEL_FLAT  && octx->src[0]->type == HTP_TYPE_F32);
+        const bool tiled_f16_to_f16 = (kparams->kernel_type == HTP_GET_ROWS_KERNEL_TILED && octx->src[0]->type == HTP_TYPE_F16);
+        if (!flat_f32_to_f16 && !tiled_f16_to_f16) {
             return HTP_STATUS_NO_SUPPORT;
         }
     } else if (octx->dst->type != HTP_TYPE_F32 || octx->src[0]->type == HTP_TYPE_F32) {
@@ -488,16 +490,23 @@ int op_get_rows(struct htp_ops_context * octx) {
             q_func = get_rows_thread_sametype;
             break;
         case HTP_GET_ROWS_KERNEL_TILED:
-            switch (octx->src[0]->type) {
-                case HTP_TYPE_F16:  grctx.compute_tiled = hvx_dequantize_row_tiled_f16_f32;  break;
-                case HTP_TYPE_Q1_0: grctx.compute_tiled = hvx_dequantize_row_tiled_q1_0_f32; break;
-                case HTP_TYPE_Q2_0: grctx.compute_tiled = hvx_dequantize_row_tiled_q2_0_f32; break;
-                case HTP_TYPE_Q8_0: grctx.compute_tiled = hvx_dequantize_row_tiled_q8_0_f32; break;
-                case HTP_TYPE_Q4_0: grctx.compute_tiled = hvx_dequantize_row_tiled_q4_0_f32; break;
-                case HTP_TYPE_Q4_K: grctx.compute_tiled = hvx_dequantize_row_tiled_q4_k_f32; break;
-                case HTP_TYPE_Q5_K: grctx.compute_tiled = hvx_dequantize_row_tiled_q5_k_f32; break;
-                case HTP_TYPE_Q6_K: grctx.compute_tiled = hvx_dequantize_row_tiled_q6_k_f32; break;
-                default:            return HTP_STATUS_NO_SUPPORT;
+            if (octx->dst->type == HTP_TYPE_F16) {
+                if (octx->src[0]->type != HTP_TYPE_F16) {
+                    return HTP_STATUS_NO_SUPPORT;
+                }
+                grctx.compute_tiled = hvx_dequantize_row_tiled_f16_f16;
+            } else {
+                switch (octx->src[0]->type) {
+                    case HTP_TYPE_F16:  grctx.compute_tiled = hvx_dequantize_row_tiled_f16_f32;  break;
+                    case HTP_TYPE_Q1_0: grctx.compute_tiled = hvx_dequantize_row_tiled_q1_0_f32; break;
+                    case HTP_TYPE_Q2_0: grctx.compute_tiled = hvx_dequantize_row_tiled_q2_0_f32; break;
+                    case HTP_TYPE_Q8_0: grctx.compute_tiled = hvx_dequantize_row_tiled_q8_0_f32; break;
+                    case HTP_TYPE_Q4_0: grctx.compute_tiled = hvx_dequantize_row_tiled_q4_0_f32; break;
+                    case HTP_TYPE_Q4_K: grctx.compute_tiled = hvx_dequantize_row_tiled_q4_k_f32; break;
+                    case HTP_TYPE_Q5_K: grctx.compute_tiled = hvx_dequantize_row_tiled_q5_k_f32; break;
+                    case HTP_TYPE_Q6_K: grctx.compute_tiled = hvx_dequantize_row_tiled_q6_k_f32; break;
+                    default:            return HTP_STATUS_NO_SUPPORT;
+                }
             }
             grctx.tile_size   = htp_tensor_get_tile_size(octx->src[0]->type);
             grctx.tile_stride = htp_tensor_get_tile_padded_size(octx->src[0]->type);

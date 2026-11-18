@@ -53,22 +53,20 @@ struct htp_opnode;
 
 bool htp_kparams_solve(
     const struct ggml_hexagon_session * sess,
-    struct htp_opnode & node,
-    bool internal_f16 = true
+    struct htp_opnode & node
 );
 
 bool htp_kparams_solve(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
-    void * kparams = nullptr,
-    bool internal_f16 = false
+    void * kparams = nullptr
 );
 
 static inline bool htp_kparams_check(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op
 ) {
-    return htp_kparams_solve(sess, op, nullptr, false);
+    return htp_kparams_solve(sess, op, nullptr);
 }
 
 bool htp_kparams_solve_allreduce(
@@ -131,7 +129,6 @@ bool htp_kparams_solve_repeat_get_rows(
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
     const struct ggml_tensor * dst,
-    bool internal_f16,
     struct htp_get_rows_kernel_params * kparams
 );
 

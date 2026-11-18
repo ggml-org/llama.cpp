@@ -322,7 +322,6 @@ Writing high-performance operators for Hexagon requires following specific guide
 ### FP16 and Mixed-Precision Operator Support
 
 - New and updated Hexagon compute operators must support `F16` (and mixed `F16`/`F32` where applicable for graph lowering) across activation inputs and outputs, even when `ggml-cpu` only implements `F32`.
-- Gate lowered-only type combinations (those not constructible in standard GGML graphs) behind `internal_f16` in `htp-kparams.cpp` so `supports_op` stays aligned with standard GGML semantics while `htp-lower` can lower internal tensors to `F16`.
 
 ### Multiline Macro Formatting
 

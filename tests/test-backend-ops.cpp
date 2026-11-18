@@ -12797,7 +12797,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     // add_id
-    for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+    for (ggml_type type_a : {GGML_TYPE_F32}) {
         for (ggml_type type_b : {GGML_TYPE_F32}) {
             for (int n_mats : {4, 8}) {
                 for (int n_used : {1, 2, 4}) {

@@ -434,7 +434,7 @@ void htp_lightning_indexer_collapse_tensors(
     }
 }
 
-void htp_lower_opnode(const struct ggml_hexagon_session * sess, htp_opnode & node, struct ggml_tensor * scratch, bool apply_f16) {
+void htp_lower_opnode(const struct ggml_hexagon_session * sess, htp_opnode & node, struct ggml_tensor * scratch) {
     const uint32_t n_hvx = htp_session_n_hvx(sess);
     const size_t   n_in  = node.inputs.size();
     const size_t   n_out = node.outputs.size();
@@ -446,13 +446,13 @@ void htp_lower_opnode(const struct ggml_hexagon_session * sess, htp_opnode & nod
 
     for (size_t i = 0; i < n_in; ++i) {
         if (node.inputs[i]) {
-            in_dirty[i] = apply_f16 && ggml_hexagon_tensor_is_lowered_f16(node.inputs[i]);
-            in_mat[i]   = apply_f16 ? htp_tensor_lower_f16(node.inputs[i]) : *node.inputs[i];
+            in_dirty[i] = ggml_hexagon_tensor_is_lowered_f16(node.inputs[i]);
+            in_mat[i]   = htp_tensor_lower_f16(node.inputs[i]);
         }
     }
     for (size_t i = 0; i < n_out; ++i) {
-        out_dirty[i] = apply_f16 && ggml_hexagon_tensor_is_lowered_f16(node.outputs[i]);
-        out_mat[i]   = apply_f16 ? htp_tensor_lower_f16(node.outputs[i]) : *node.outputs[i];
+        out_dirty[i] = ggml_hexagon_tensor_is_lowered_f16(node.outputs[i]);
+        out_mat[i]   = htp_tensor_lower_f16(node.outputs[i]);
     }
 
     if (htp_op_is_unary(node.opcode) && htp_unary_is_elementwise(node.opcode)) {
@@ -908,7 +908,7 @@ void htp_unpack_tensor_lowered_f16(void * dst, const struct ggml_tensor * t, siz
 void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml_cgraph * graph, std::vector<htp_opnode> & nodes) {
     if (opt_oplower <= 0) {
         for (htp_opnode & node : nodes) {
-            htp_lower_opnode(sess, node, nullptr, false);
+            htp_lower_opnode(sess, node);
         }
         return;
     }
@@ -1134,7 +1134,7 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
                     continue;
                 }
                 htp_opnode * tnode = touched[i].node;
-                if (htp_lower_inplace_types_ok(*tnode) && htp_kparams_solve(sess, *tnode, true)) {
+                if (htp_lower_inplace_types_ok(*tnode) && htp_kparams_solve(sess, *tnode)) {
                     touched[i].dirty = false;
                     continue;
                 }

@@ -430,7 +430,7 @@ static bool fuse_repeat_get_rows(const ggml_hexagon_session * sess, htp_opnode &
     if (repeat_src0->type != repeat_out->type) return false;
 
     struct htp_get_rows_kernel_params kparams;
-    if (!htp_kparams_solve_repeat_get_rows(sess, repeat_src0, gr_src1, gr_dst, true, &kparams) || kparams.vtcm_size == 0) return false;
+    if (!htp_kparams_solve_repeat_get_rows(sess, repeat_src0, gr_src1, gr_dst, &kparams) || kparams.vtcm_size == 0) return false;
 
     prev.opcode  = HTP_OP_GET_ROWS;
     prev.inputs  = { repeat_src0, gr_src1 };

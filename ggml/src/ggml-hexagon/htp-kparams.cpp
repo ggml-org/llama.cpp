@@ -467,7 +467,6 @@ static bool htp_kparams_solve_flash_attn(
 static bool htp_kparams_solve_gated_delta_net(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
-    bool internal_f16,
     const struct ggml_tensor * dst_cache,
     struct htp_gdn_kernel_params * kparams
 ) {
@@ -485,8 +484,8 @@ static bool htp_kparams_solve_gated_delta_net(
     const struct ggml_tensor * state = op->src[5];
     const struct ggml_tensor * dst   = op;
 
-    auto is_act_type = [internal_f16](ggml_type t) {
-        return t == GGML_TYPE_F32 || (internal_f16 && t == GGML_TYPE_F16);
+    auto is_act_type = [](ggml_type t) {
+        return t == GGML_TYPE_F32 || t == GGML_TYPE_F16;
     };
 
     if (!is_act_type(q->type) || !is_act_type(k->type) || !is_act_type(v->type) ||
@@ -496,7 +495,7 @@ static bool htp_kparams_solve_gated_delta_net(
     if (dst_cache && (dst_cache->type != GGML_TYPE_F32 || !ggml_is_contiguous(dst_cache))) {
         return false;
     }
-    if (dst->type != GGML_TYPE_F32 && !(internal_f16 && dst_cache != nullptr && dst->type == GGML_TYPE_F16)) {
+    if (dst->type != GGML_TYPE_F32 && !(dst_cache != nullptr && dst->type == GGML_TYPE_F16)) {
         return false;
     }
 
@@ -959,12 +958,11 @@ finalize:
 static bool htp_matmul_check_types(
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
-    const struct ggml_tensor * dst,
-    bool internal_f16 = false
+    const struct ggml_tensor * dst
 ) {
     const bool is_matmul_id = (dst->op == GGML_OP_MUL_MAT_ID);
 
-    if (dst->type != GGML_TYPE_F32 && (!internal_f16 || dst->type != GGML_TYPE_F16)) {
+    if (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) {
         return false;
     }
 
@@ -974,8 +972,7 @@ static bool htp_matmul_check_types(
 
     if (is_matmul_id) {
         const struct ggml_tensor * src2 = dst->src[2];
-        const bool src1_ok = (src1->type == GGML_TYPE_F32) ||
-                             (src1->type == GGML_TYPE_F16 && (internal_f16 || src0->type == GGML_TYPE_F16));
+        const bool src1_ok = (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);
         if (!src1_ok || !src2 || src2->type != GGML_TYPE_I32) {
             return false;
         }
@@ -1060,14 +1057,13 @@ static bool htp_matmul_check_types(
 static bool htp_kparams_solve_matmul(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
-    bool internal_f16,
     struct htp_mm_kernel_params * kparams
 ) {
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * dst  = op;
 
-    if (!htp_matmul_check_types(src0, src1, dst, internal_f16)) {
+    if (!htp_matmul_check_types(src0, src1, dst)) {
         return false;
     }
     if (htp_matmul_can_collapse(src0, src1, dst)) {
@@ -1209,7 +1205,6 @@ bool htp_kparams_solve_mmidnx(
 static bool htp_kparams_solve_binary(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op_tensor,
-    bool internal_f16,
     struct htp_binary_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
@@ -1220,17 +1215,15 @@ static bool htp_kparams_solve_binary(
     const struct ggml_tensor * src2 = (op == HTP_OP_ADD_ID) ? op_tensor->src[2] : nullptr;
     const struct ggml_tensor * dst  = op_tensor;
 
+    if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+        (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) ||
+        (dst->type  != GGML_TYPE_F32 && dst->type  != GGML_TYPE_F16)) {
+        return false;
+    }
+
     const bool is_add_id = (op == HTP_OP_ADD_ID);
     if (is_add_id) {
-        if (!src2) {
-            return false;
-        }
-        if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
-            (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) ||
-            (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) || src2->type != GGML_TYPE_I32) {
-            return false;
-        }
-        if (!internal_f16 && (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32)) {
+        if (src2->type != GGML_TYPE_I32) {
             return false;
         }
         if (!ggml_are_same_shape(src0, dst)) {
@@ -1253,18 +1246,6 @@ static bool htp_kparams_solve_binary(
             return false;
         }
     } else {
-        if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
-            (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) ||
-            (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16)) {
-            return false;
-        }
-        const bool cpu_supported =
-            (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) ||
-            (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) ||
-            (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32);
-        if (!internal_f16 && !cpu_supported) {
-            return false;
-        }
         if (ggml_is_permuted(src0) || ggml_is_permuted(dst) || !ggml_are_same_shape(src0, dst)) {
             return false;
         }
@@ -1440,7 +1421,6 @@ static bool htp_kparams_solve_unary_impl(
     const struct ggml_tensor * src1,
     const struct ggml_tensor * src2,
     const struct ggml_tensor * dst,
-    bool internal_f16,
     struct htp_unary_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
@@ -1461,26 +1441,20 @@ static bool htp_kparams_solve_unary_impl(
             return false;
         }
     } else if (is_rms_norm) {
-        if (!internal_f16) {
-            if (op != HTP_OP_RMS_NORM || src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+            (dst->type  != GGML_TYPE_F32 && dst->type  != GGML_TYPE_F16)) {
+            return false;
+        }
+        if (op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD) {
+            if ((src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) ||
+                !ggml_is_contiguous_rows(src1) || src1->ne[0] != src0->ne[0]) {
                 return false;
             }
-        } else {
-            if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
-                (dst->type  != GGML_TYPE_F32 && dst->type  != GGML_TYPE_F16)) {
+        }
+        if (op == HTP_OP_RMS_NORM_MUL_ADD) {
+            if ((src2->type != GGML_TYPE_F32 && src2->type != GGML_TYPE_F16) ||
+                !ggml_is_contiguous_rows(src2) || !ggml_are_same_shape(src0, src2)) {
                 return false;
-            }
-            if (op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD) {
-                if ((src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) ||
-                    !ggml_is_contiguous_rows(src1) || src1->ne[0] != src0->ne[0]) {
-                    return false;
-                }
-            }
-            if (op == HTP_OP_RMS_NORM_MUL_ADD) {
-                if ((src2->type != GGML_TYPE_F32 && src2->type != GGML_TYPE_F16) ||
-                    !ggml_is_contiguous_rows(src2) || !ggml_are_same_shape(src0, src2)) {
-                    return false;
-                }
             }
         }
     } else {
@@ -1595,7 +1569,7 @@ bool htp_kparams_solve_rms_norm_mul(
     const struct ggml_tensor * dst,
     struct htp_unary_kernel_params * kparams
 ) {
-    return htp_kparams_solve_unary_impl(sess, HTP_OP_RMS_NORM_MUL, src0, src1, nullptr, dst, true, kparams);
+    return htp_kparams_solve_unary_impl(sess, HTP_OP_RMS_NORM_MUL, src0, src1, nullptr, dst, kparams);
 }
 
 bool htp_kparams_solve_rms_norm_mul_add(
@@ -1606,7 +1580,7 @@ bool htp_kparams_solve_rms_norm_mul_add(
     const struct ggml_tensor * dst,
     struct htp_unary_kernel_params * kparams
 ) {
-    return htp_kparams_solve_unary_impl(sess, HTP_OP_RMS_NORM_MUL_ADD, src0, src1, src2, dst, true, kparams);
+    return htp_kparams_solve_unary_impl(sess, HTP_OP_RMS_NORM_MUL_ADD, src0, src1, src2, dst, kparams);
 }
 
 bool htp_kparams_solve_repeat_get_rows(
@@ -1614,7 +1588,6 @@ bool htp_kparams_solve_repeat_get_rows(
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
     const struct ggml_tensor * dst,
-    bool internal_f16,
     struct htp_get_rows_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
@@ -1640,7 +1613,7 @@ bool htp_kparams_solve_repeat_get_rows(
             return false;
         }
     } else if (dst->type == GGML_TYPE_F16) {
-        if (!internal_f16 || tiled || (src0->type != GGML_TYPE_F16 && src0->type != GGML_TYPE_F32)) {
+        if (src0->type != GGML_TYPE_F16 && src0->type != GGML_TYPE_F32) {
             return false;
         }
     } else if (dst->type != GGML_TYPE_F32) {
@@ -1703,10 +1676,9 @@ bool htp_kparams_solve_repeat_get_rows(
 static bool htp_kparams_solve_get_rows(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
-    bool internal_f16,
     struct htp_get_rows_kernel_params * kparams
 ) {
-    return htp_kparams_solve_repeat_get_rows(sess, op->src[0], op->src[1], op, internal_f16, kparams);
+    return htp_kparams_solve_repeat_get_rows(sess, op->src[0], op->src[1], op, kparams);
 }
 
 static bool htp_kparams_solve_set_rows(
@@ -1748,7 +1720,6 @@ static bool htp_kparams_solve_set_rows(
 static bool htp_kparams_solve_softmax(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
-    bool internal_f16,
     struct htp_softmax_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
@@ -1758,15 +1729,9 @@ static bool htp_kparams_solve_softmax(
     const struct ggml_tensor * src2 = op->src[2];
     const struct ggml_tensor * dst  = op;
 
-    if (!internal_f16) {
-        if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
-            return false;
-        }
-    } else {
-        if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
-            (dst->type  != GGML_TYPE_F32 && dst->type  != GGML_TYPE_F16)) {
-            return false;
-        }
+    if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+        (dst->type  != GGML_TYPE_F32 && dst->type  != GGML_TYPE_F16)) {
+        return false;
     }
     if (src0->ne[2] > 512) {
         return false;
@@ -1981,7 +1946,6 @@ static bool htp_kparams_solve_rope(
 static bool htp_kparams_solve_sum_rows(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
-    bool internal_f16,
     struct htp_sum_rows_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
@@ -1994,15 +1958,9 @@ static bool htp_kparams_solve_sum_rows(
     const uint32_t max_hvx_sess = htp_session_n_hvx(sess);
 
     if (op->op == GGML_OP_SUM_ROWS) {
-        if (!internal_f16) {
-            if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
-                return false;
-            }
-        } else {
-            if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
-                (dst->type  != GGML_TYPE_F32 && dst->type  != GGML_TYPE_F16)) {
-                return false;
-            }
+        if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+            (dst->type  != GGML_TYPE_F32 && dst->type  != GGML_TYPE_F16)) {
+            return false;
         }
         if (dst->ne[0] != 1 ||
             dst->ne[1] != src0->ne[1] ||
@@ -2215,13 +2173,12 @@ static bool htp_kparams_solve_ssm_conv(
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
     const struct ggml_tensor * dst,
-    bool internal_f16,
     struct htp_ssm_conv_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
 
-    const auto is_valid_type = [internal_f16](ggml_type t) {
-        return t == GGML_TYPE_F32 || (internal_f16 && t == GGML_TYPE_F16);
+    const auto is_valid_type = [](ggml_type t) {
+        return t == GGML_TYPE_F32 || t == GGML_TYPE_F16;
     };
     if (!is_valid_type(src0->type) || !is_valid_type(src1->type) || !is_valid_type(dst->type)) {
         return false;
@@ -2466,7 +2423,6 @@ static bool htp_kparams_solve_ssm_scan(
 static bool htp_kparams_solve_sort(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
-    bool internal_f16,
     struct htp_sort_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
@@ -2475,8 +2431,7 @@ static bool htp_kparams_solve_sort(
     const struct ggml_tensor * dst  = op;
     const bool is_top_k             = (op->op == GGML_OP_TOP_K);
 
-    const bool src0_ok = (src0->type == GGML_TYPE_F32) || (internal_f16 && src0->type == GGML_TYPE_F16);
-    if (!src0_ok || dst->type != GGML_TYPE_I32) {
+    if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) || dst->type != GGML_TYPE_I32) {
         return false;
     }
 
@@ -2809,7 +2764,6 @@ bool htp_kparams_solve_upscale(
 static bool htp_kparams_solve_concat(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
-    bool internal_f16,
     struct htp_concat_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
@@ -2819,10 +2773,6 @@ static bool htp_kparams_solve_concat(
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * dst  = op;
 
-    if (!src0 || !src1 || !dst) {
-        return false;
-    }
-
     int dim = ((const int32_t *) op->op_params)[0];
     if (dim < 0 || dim >= GGML_MAX_DIMS) {
         return false;
@@ -2830,20 +2780,14 @@ static bool htp_kparams_solve_concat(
     kparams->dim = dim;
 
     const bool all_same = (src0->type == dst->type && src1->type == dst->type);
-    if (all_same) {
-        if (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16 && dst->type != GGML_TYPE_I32) {
+    if (dst->type == GGML_TYPE_I32) {
+        if (!all_same) {
             return false;
         }
-    } else {
-        if (!internal_f16) {
-            return false;
-        }
-        const bool src0_fp = (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
-        const bool src1_fp = (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);
-        const bool dst_fp  = (dst->type  == GGML_TYPE_F32 || dst->type  == GGML_TYPE_F16);
-        if (!src0_fp || !src1_fp || !dst_fp) {
-            return false;
-        }
+    } else if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+               (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) ||
+               (dst->type  != GGML_TYPE_F32 && dst->type  != GGML_TYPE_F16)) {
+        return false;
     }
 
     const uint32_t src0_es    = ggml_type_size(src0->type);
@@ -5275,12 +5219,11 @@ static inline bool htp_kparams_invoke(
 
 bool htp_kparams_solve(
     const struct ggml_hexagon_session * sess,
-    htp_opnode & node,
-    bool internal_f16
+    htp_opnode & node
 ) {
     ggml_tensor scratch[HTP_OP_MAX_INPUTS + HTP_OP_MAX_OUTPUTS];
     htp_opnode tmp = node;
-    htp_lower_opnode(sess, tmp, scratch, internal_f16);
+    htp_lower_opnode(sess, tmp, scratch);
 
     const ggml_tensor * src0 = tmp.inputs.empty() ? nullptr : tmp.inputs[0];
     const ggml_tensor * src1 = tmp.inputs.size() > 1 ? tmp.inputs[1] : nullptr;
@@ -5295,13 +5238,13 @@ bool htp_kparams_solve(
 
     if (htp_op_is_unary(tmp.opcode)) {
         const ggml_tensor * src2 = tmp.inputs.size() > 2 ? tmp.inputs[2] : nullptr;
-        return commit(htp_kparams_solve_unary_impl(sess, tmp.opcode, src0, src1, src2, dst, internal_f16, tmp.kparams<htp_unary_kernel_params>()));
+        return commit(htp_kparams_solve_unary_impl(sess, tmp.opcode, src0, src1, src2, dst, tmp.kparams<htp_unary_kernel_params>()));
     }
     if (htp_op_is_glu(tmp.opcode)) {
         return commit(htp_kparams_solve_unary_mul_glu(sess, tmp.opcode, src0, src1, dst, tmp.kparams<htp_glu_kernel_params>()));
     }
     if (tmp.opcode == HTP_OP_MUL_MAT || tmp.opcode == HTP_OP_MUL_MAT_ID) {
-        if (!htp_matmul_check_types(src0, src1, dst, internal_f16)) {
+        if (!htp_matmul_check_types(src0, src1, dst)) {
             return false;
         }
         return commit(htp_kparams_solve_matmul_impl(sess, src0, src1, nullptr, dst, tmp.kparams<htp_mm_kernel_params>()));
@@ -5313,7 +5256,7 @@ bool htp_kparams_solve(
         const ggml_tensor * src2 = tmp.inputs[2];
         if ((src2->type != GGML_TYPE_F32 && src2->type != GGML_TYPE_F16) ||
             src2->nb[0] != ggml_type_size(src2->type) ||
-            !htp_matmul_check_types(src0, src1, dst, internal_f16)) {
+            !htp_matmul_check_types(src0, src1, dst)) {
             return false;
         }
         return commit(htp_kparams_solve_matmul_impl(sess, src0, src1, src2, dst, tmp.kparams<htp_mm_kernel_params>()));
@@ -5326,7 +5269,7 @@ bool htp_kparams_solve(
         const ggml_tensor * act = tmp.inputs[n_w];
         const ggml_tensor * dst_for_solve = tmp.outputs[0];
         for (size_t i = 0; i < n_w; ++i) {
-            if (!htp_matmul_check_types(tmp.inputs[i], act, tmp.outputs[i], internal_f16)) {
+            if (!htp_matmul_check_types(tmp.inputs[i], act, tmp.outputs[i])) {
                 return false;
             }
             dst_for_solve = htp_mdev_worst_dst(dst_for_solve, tmp.outputs[i]);
@@ -5347,7 +5290,7 @@ bool htp_kparams_solve(
         const ggml_tensor * act = tmp.inputs[n_w];
         const ggml_tensor * dst_for_solve = tmp.outputs[0];
         for (size_t i = 0; i < n_w; ++i) {
-            if (!htp_matmul_check_types(tmp.inputs[i], act, tmp.outputs[i], internal_f16)) {
+            if (!htp_matmul_check_types(tmp.inputs[i], act, tmp.outputs[i])) {
                 return false;
             }
             if (!htp_can_row_partition(tmp.outputs[i])) {
@@ -5380,12 +5323,12 @@ bool htp_kparams_solve(
         return commit(htp_kparams_solve_lightning_indexer_impl(sess, src0, src1, src2, src3, dst, tmp.kparams<htp_lid_kernel_params>()));
     }
     if (tmp.opcode == HTP_OP_GET_ROWS) {
-        return commit(htp_kparams_solve_repeat_get_rows(sess, src0, src1, dst, internal_f16, tmp.kparams<htp_get_rows_kernel_params>()));
+        return commit(htp_kparams_solve_repeat_get_rows(sess, src0, src1, dst, tmp.kparams<htp_get_rows_kernel_params>()));
     }
     if (tmp.opcode == HTP_OP_SSM_CONV) {
         auto * kp = tmp.kparams<htp_ssm_conv_kernel_params>();
         const uint32_t silu = kp->silu;
-        const bool ok = htp_kparams_solve_ssm_conv(sess, src0, src1, dst, internal_f16, kp);
+        const bool ok = htp_kparams_solve_ssm_conv(sess, src0, src1, dst, kp);
         kp->silu = silu;
         return commit(ok);
     }
@@ -5401,7 +5344,7 @@ bool htp_kparams_solve(
             op_view.src[i] = const_cast<ggml_tensor *>(tmp.inputs[i]);
         }
         const ggml_tensor * dst_cache = (tmp.outputs.size() == 2) ? tmp.outputs[1] : nullptr;
-        return commit(htp_kparams_solve_gated_delta_net(sess, &op_view, internal_f16, dst_cache, tmp.kparams<htp_gdn_kernel_params>()));
+        return commit(htp_kparams_solve_gated_delta_net(sess, &op_view, dst_cache, tmp.kparams<htp_gdn_kernel_params>()));
     }
 
     if (!tmp.fused.empty()) {
@@ -5416,19 +5359,18 @@ bool htp_kparams_solve(
         op_view.src[i] = const_cast<ggml_tensor *>(tmp.inputs[i]);
     }
 
-    return commit(htp_kparams_solve(sess, &op_view, tmp.kernel_params, internal_f16));
+    return commit(htp_kparams_solve(sess, &op_view, tmp.kernel_params));
 }
 
 bool htp_kparams_solve(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
-    void * kparams,
-    bool internal_f16
+    void * kparams
 ) {
     const htp_op_code opcode = htp_op_remap(op);
     if (htp_op_is_unary(opcode) || htp_op_is_glu(opcode) || opcode == HTP_OP_UPSCALE) {
         htp_opnode tmp(opcode, op);
-        if (!htp_kparams_solve(sess, tmp, internal_f16)) {
+        if (!htp_kparams_solve(sess, tmp)) {
             return false;
         }
         if (kparams) {
@@ -5440,32 +5382,20 @@ bool htp_kparams_solve(
     switch (opcode) {
         case HTP_OP_MUL_MAT:
         case HTP_OP_MUL_MAT_ID:
-        {
-            struct htp_mm_kernel_params tmp;
-            return htp_kparams_solve_matmul(sess, op, internal_f16,
-                                            kparams ? (struct htp_mm_kernel_params *) kparams : &tmp);
-        }
+            return htp_kparams_invoke<htp_kparams_solve_matmul>(sess, op, kparams);
 
         case HTP_OP_MUL:
         case HTP_OP_ADD:
         case HTP_OP_ADD_ID:
         case HTP_OP_SUB:
         case HTP_OP_DIV:
-        {
-            struct htp_binary_kernel_params tmp;
-            return htp_kparams_solve_binary(sess, op, internal_f16,
-                                            kparams ? (struct htp_binary_kernel_params *) kparams : &tmp);
-        }
+            return htp_kparams_invoke<htp_kparams_solve_binary>(sess, op, kparams);
 
         case HTP_OP_FLASH_ATTN_EXT:
             return htp_kparams_invoke<htp_kparams_solve_flash_attn>(sess, op, kparams);
 
         case HTP_OP_GET_ROWS:
-        {
-            struct htp_get_rows_kernel_params tmp;
-            return htp_kparams_solve_get_rows(sess, op, internal_f16,
-                                              kparams ? (struct htp_get_rows_kernel_params *) kparams : &tmp);
-        }
+            return htp_kparams_invoke<htp_kparams_solve_get_rows>(sess, op, kparams);
 
         case HTP_OP_SET_ROWS:
             return htp_kparams_invoke<htp_kparams_solve_set_rows>(sess, op, kparams);
@@ -5476,7 +5406,7 @@ bool htp_kparams_solve(
         case HTP_OP_SSM_CONV:
         {
             struct htp_ssm_conv_kernel_params tmp;
-            return htp_kparams_solve_ssm_conv(sess, op->src[0], op->src[1], op, internal_f16,
+            return htp_kparams_solve_ssm_conv(sess, op->src[0], op->src[1], op,
                                               kparams ? (struct htp_ssm_conv_kernel_params *) kparams : &tmp);
         }
 
@@ -5484,37 +5414,25 @@ bool htp_kparams_solve(
             return htp_kparams_invoke<htp_kparams_solve_ssm_scan>(sess, op, kparams);
 
         case HTP_OP_SOFTMAX:
-        {
-            struct htp_softmax_kernel_params tmp;
-            return htp_kparams_solve_softmax(sess, op, internal_f16,
-                                             kparams ? (struct htp_softmax_kernel_params *) kparams : &tmp);
-        }
+            return htp_kparams_invoke<htp_kparams_solve_softmax>(sess, op, kparams);
 
         case HTP_OP_GATED_DELTA_NET:
         {
             struct htp_gdn_kernel_params tmp;
-            return htp_kparams_solve_gated_delta_net(sess, op, internal_f16, nullptr,
+            return htp_kparams_solve_gated_delta_net(sess, op, nullptr,
                                                      kparams ? (struct htp_gdn_kernel_params *) kparams : &tmp);
         }
 
         case HTP_OP_ARGSORT:
         case HTP_OP_TOP_K:
-        {
-            struct htp_sort_kernel_params tmp;
-            return htp_kparams_solve_sort(sess, op, internal_f16,
-                                          kparams ? (struct htp_sort_kernel_params *) kparams : &tmp);
-        }
+            return htp_kparams_invoke<htp_kparams_solve_sort>(sess, op, kparams);
 
         case HTP_OP_POOL_2D:
         case HTP_OP_POOL_1D:
             return htp_kparams_invoke<htp_kparams_solve_pool_2d>(sess, op, kparams);
 
         case HTP_OP_CONCAT:
-        {
-            struct htp_concat_kernel_params tmp;
-            return htp_kparams_solve_concat(sess, op, internal_f16,
-                                            kparams ? (struct htp_concat_kernel_params *) kparams : &tmp);
-        }
+            return htp_kparams_invoke<htp_kparams_solve_concat>(sess, op, kparams);
 
         case HTP_OP_CPY:
         case HTP_OP_CPY_FENCE:
@@ -5538,11 +5456,7 @@ bool htp_kparams_solve(
         case HTP_OP_SUM_ROWS:
         case HTP_OP_SUM:
         case HTP_OP_ARGMAX:
-        {
-            struct htp_sum_rows_kernel_params tmp;
-            return htp_kparams_solve_sum_rows(sess, op, internal_f16,
-                                              kparams ? (struct htp_sum_rows_kernel_params *) kparams : &tmp);
-        }
+            return htp_kparams_invoke<htp_kparams_solve_sum_rows>(sess, op, kparams);
 
         case HTP_OP_REPEAT:
             return htp_kparams_invoke<htp_kparams_solve_repeat>(sess, op, kparams);
