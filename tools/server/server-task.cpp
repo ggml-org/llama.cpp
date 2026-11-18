@@ -394,7 +394,6 @@ json server_task_result_cmpl_final::to_json_oaicompat() {
 
     if (!last_hidden_state.empty()) {
         res["last_hidden_state"] = last_hidden_state;
-        res["choices"][0]["last_hidden_state"] = last_hidden_state;
     }
     // extra fields for debugging purposes
     if (verbose) {
@@ -446,8 +445,6 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
 
     if (!last_hidden_state.empty()) {
         res["last_hidden_state"] = last_hidden_state;
-        res["kv_transfer_params"] = json{{"last_hidden_state", last_hidden_state}};
-        res["choices"][0]["message"]["last_hidden_state"] = last_hidden_state;
     }
 
     // extra fields for debugging purposes

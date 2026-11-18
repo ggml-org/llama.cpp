@@ -521,21 +521,6 @@ task_params eval_llama_cmpl_schema(
         f->eval(ctx, data);
     }
 
-    if (data.contains("extra_body") && data.at("extra_body").is_object()) {
-        const auto & extra = data.at("extra_body");
-        if (extra.contains("return_last_hidden_state")) {
-            params.return_last_hidden_state = extra.at("return_last_hidden_state").get<bool>();
-        } else if (extra.contains("return_hidden_state")) {
-            params.return_last_hidden_state = extra.at("return_hidden_state").get<bool>();
-        }
-        if (extra.contains("kv_transfer_params") && extra.at("kv_transfer_params").is_object()) {
-            const auto & kv = extra.at("kv_transfer_params");
-            if (kv.contains("return_last_hidden_state")) {
-                params.return_last_hidden_state = kv.at("return_last_hidden_state").get<bool>();
-            }
-        }
-    }
-
     // debugging
     {
         auto budget = params.sampling.reasoning_budget_tokens;
