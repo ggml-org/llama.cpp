@@ -38,24 +38,23 @@ describe('PWA Build Output', () => {
 			).toBeTruthy();
 		});
 
-		it('SvelteKit bundle.js exists in _app/immutable/', () => {
-			// SvelteKit generates hashed bundle names in _app/immutable/
-			const appDir = resolve(DIST_DIR, '_app', 'immutable');
+		it('SvelteKit entry start.js and app.js exist in _app/immutable/entry/', () => {
+			// a split build: hashed entry points in _app/immutable/entry/, the rest in chunks/ and nodes/
+			const entryDir = resolve(DIST_DIR, '_app', 'immutable', 'entry');
 
-			expect(existsSync(appDir), '_app/immutable/ not found').toBeTruthy();
-			const files = readdirSync(appDir).filter((f) => f.startsWith('bundle.') && f.endsWith('.js'));
+			expect(existsSync(entryDir), '_app/immutable/entry/ not found').toBeTruthy();
+			const files = readdirSync(entryDir);
 
-			expect(files.length).toBeGreaterThan(0);
+			expect(files.some((f) => /^start\.[a-zA-Z0-9_-]+\.js$/.test(f))).toBe(true);
+			expect(files.some((f) => /^app\.[a-zA-Z0-9_-]+\.js$/.test(f))).toBe(true);
 		});
 
-		it('SvelteKit bundle.css exists in _app/immutable/assets/', () => {
-			// SvelteKit generates hashed CSS bundles in _app/immutable/assets/
+		it('SvelteKit CSS exists in _app/immutable/assets/', () => {
+			// SvelteKit generates hashed CSS files in _app/immutable/assets/
 			const cssDir = resolve(DIST_DIR, '_app', 'immutable', 'assets');
 
 			expect(existsSync(cssDir), '_app/immutable/assets/ not found').toBeTruthy();
-			const files = readdirSync(cssDir).filter(
-				(f) => f.startsWith('bundle.') && f.endsWith('.css')
-			);
+			const files = readdirSync(cssDir).filter((f) => f.endsWith('.css'));
 
 			expect(files.length).toBeGreaterThan(0);
 		});
@@ -81,12 +80,15 @@ describe('PWA Build Output', () => {
 	});
 
 	describe('Service worker content', () => {
-		it('precache contains SvelteKit bundle.js with content hash', () => {
-			expect(swContent).toMatch(/["'`]_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js["'`]/);
-		});
+		it('precache contains every file in _app/immutable/, so lazily loaded chunks work offline', () => {
+			const immutableDir = resolve(DIST_DIR, '_app', 'immutable');
+			const files = readdirSync(immutableDir, { recursive: true, withFileTypes: true })
+				.filter((entry) => entry.isFile())
+				.map((entry) => resolve(entry.parentPath, entry.name).slice(resolve(DIST_DIR).length + 1));
 
-		it('precache contains SvelteKit bundle.css with content hash', () => {
-			expect(swContent).toMatch(/["'`]_app\/immutable\/assets\/bundle\.[a-zA-Z0-9_-]+\.css["'`]/);
+			expect(files.length).toBeGreaterThan(0);
+
+			for (const file of files) expect(swContent).toContain(file);
 		});
 
 		it('precache contains the app shell, _app/version.json and manifest.webmanifest', () => {
@@ -119,23 +121,27 @@ describe('PWA Build Output', () => {
 	});
 
 	describe('index.html content', () => {
-		it('has modulepreload link for SvelteKit bundle with content hash', () => {
-			expect(indexContent).toBeTruthy();
-			// SvelteKit generates hashed bundle names in _app/immutable/
-			expect(indexContent).toMatch(/href="(\.\/|\/)_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js"/);
-		});
-
-		it('has stylesheet link for SvelteKit bundle.css with content hash', () => {
+		it('has modulepreload link for the SvelteKit entry with content hash', () => {
 			expect(indexContent).toBeTruthy();
 			expect(indexContent).toMatch(
-				/href="(\.\/|\/)_app\/immutable\/assets\/bundle\.[a-zA-Z0-9_-]+\.css"/
+				/href="(\.\/|\/)_app\/immutable\/entry\/start\.[a-zA-Z0-9_-]+\.js"/
 			);
 		});
 
-		it('has dynamic import for SvelteKit bundle with content hash', () => {
+		it('has stylesheet link for SvelteKit CSS with content hash', () => {
 			expect(indexContent).toBeTruthy();
 			expect(indexContent).toMatch(
-				/import\("(\.\/|\/)_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js"\)/
+				/href="(\.\/|\/)_app\/immutable\/assets\/[a-zA-Z0-9_.-]+\.[a-zA-Z0-9_-]+\.css"/
+			);
+		});
+
+		it('has dynamic imports for the SvelteKit entry with content hash', () => {
+			expect(indexContent).toBeTruthy();
+			expect(indexContent).toMatch(
+				/import\("(\.\/|\/)_app\/immutable\/entry\/start\.[a-zA-Z0-9_-]+\.js"\)/
+			);
+			expect(indexContent).toMatch(
+				/import\("(\.\/|\/)_app\/immutable\/entry\/app\.[a-zA-Z0-9_-]+\.js"\)/
 			);
 		});
 

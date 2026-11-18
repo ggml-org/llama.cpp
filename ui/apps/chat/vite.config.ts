@@ -55,7 +55,7 @@ export default defineConfig(({ mode }) => {
 					strict: true
 				}),
 				extensions: ['.svelte', '.svx'],
-				output: { bundleStrategy: 'single' },
+				output: { bundleStrategy: 'split' },
 				paths: { relative: true },
 				// Consult https://svelte.dev/docs/kit/integrations
 				// for more information about preprocessors
