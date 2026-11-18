@@ -165,11 +165,11 @@ ggml_tensor * llama_model_inkling2::graph::convolve(ggml_tensor * cur, ggml_tens
 }
 
 llama_model_inkling2::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
-    auto * inp = build_inp_mem_hybrid_iswa();
+    auto * inp = build_inp_mem_hybrid_iswa_rel(hparams.n_relative_extent, hparams.n_swa);
+    auto * attn = inp->get_attn();
     auto * recr = inp->get_recr();
     auto * positions = build_inp_pos();
     auto * out_ids = build_inp_out_ids();
-    auto * rel = build_inp_attn_rel_pos(inp, hparams.n_relative_extent, hparams.n_swa);
     auto * tau = ggml_scale_bias(ctx0, ggml_cast(ctx0, positions, GGML_TYPE_F32), 1.0f, 1.0f);
     tau = ggml_log(ctx0, ggml_clamp(ctx0, ggml_scale(ctx0, tau, 1.0f/hparams.n_log_scale_floor), 1.0f, INFINITY));
     tau = ggml_reshape_3d(ctx0, ggml_scale_bias(ctx0, tau, hparams.f_log_scale_alpha, 1.0f), 1, 1, n_tokens);
@@ -219,8 +219,8 @@ llama_model_inkling2::graph::graph(const llm_graph_params & params) : llm_graph_
             q = ggml_mul(ctx0, q, tau);
             r = ggml_mul(ctx0, r, tau);
         }
-        auto * distances = swa ? rel->self_rel_pos_swa : rel->self_rel_pos;
-        const int64_t streams = (swa ? rel->self_attn_mask_swa.raw : rel->self_attn_mask.raw)->ne[3];
+        auto * distances = swa ? inp->self_rel_pos_swa : inp->self_rel_pos;
+        const int64_t streams = (swa ? attn->self_attn_mask_swa.raw : attn->self_attn_mask.raw)->ne[3];
         const int64_t n_kv = distances->ne[0];
         auto * sinks = build_lora_mm(l.attn_sink_proj, inputs[0]);
         // project r on the bias table first, then gather by distance: only the gathered bias is n_kv x n_tokens x nh
@@ -231,7 +231,7 @@ llama_model_inkling2::graph::graph(const llm_graph_params & params) : llm_graph_
         auto * bias = ggml_get_rows(ctx0, table, distances);
         bias = ggml_cont(ctx0, ggml_permute(ctx0, ggml_reshape_4d(ctx0, bias, nh, n_kv, n_tokens/streams, streams), 2, 0, 1, 3));
         sinks = ggml_fill(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, nh), 0.0f);
-        cur = build_attn(rel, nullptr, nullptr, nullptr, q, k, v, bias, sinks, 1.0f/sqrtf(hd), il);
+        cur = build_attn(inp, nullptr, nullptr, nullptr, q, k, v, bias, sinks, 1.0f/sqrtf(hd), il);
         cur = ggml_mul(ctx0, cur, ggml_sigmoid(ctx0, build_lora_mm(l.wqkv_gate, inputs[0])));
         cur = convolve(build_lora_mm(l.wo, cur), l.attn_post_conv, nullptr, state, history, recr, 2*kv);
         if (il % hparams.attn_res_block_size == 0) {
