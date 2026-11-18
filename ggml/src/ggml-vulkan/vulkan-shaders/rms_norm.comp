@@ -10,6 +10,8 @@
 #endif
 
 layout (constant_id = 3) const int BLOCK_SIZE = 512;
+// false: loop with a runtime count instead of instantiating rms_norm() for fixed counts
+layout (constant_id = 4) const bool UNROLL = true;
 layout(local_size_x_id = 3, local_size_y = 1, local_size_z = 1) in;
 
 #if RMS_NORM_ROPE_FUSION
@@ -186,7 +188,7 @@ void main() {
     // instantiate the rms_norm function for several different
     // dimensions, to allow loop unrolling
     uint num_blocks = (p.ne00 + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    if (num_blocks > 32) {
+    if (!UNROLL || num_blocks > 32) {
         rms_norm(num_blocks);
     } else if (num_blocks > 16) {
         rms_norm(32);
