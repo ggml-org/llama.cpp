@@ -192,6 +192,30 @@ struct helper_check {
     float         expected; // The expected value that the tensor data should have after graph execution.
 };
 
+// asks whether the backend implements the op, independent of where the sources of this node currently live.
+// the latter is a limitation of ggml_backend_supports_op() and led to skipped tests in multi-GPU setups.
+static bool backend_implements_op(ggml_backend_t backend, const ggml_tensor * node) {
+    ggml_init_params params = {
+        /*.mem_size   =*/ GGML_MAX_SRC*ggml_tensor_overhead(),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context_ptr ctx(ggml_init(params));
+
+    ggml_tensor probe = *node;
+    probe.buffer   = nullptr;
+    probe.view_src = nullptr;
+    probe.data     = nullptr;
+
+    for (ggml_tensor *& src : probe.src) {
+        if (src != nullptr) {
+            src = ggml_new_tensor(ctx.get(), src->type, GGML_MAX_DIMS, src->ne);
+        }
+    }
+
+    return ggml_backend_supports_op(backend, &probe);
+}
+
 // executes the graph, then checks the number of splits and the results
 static test_result run_and_check(ggml_backend_sched_t sched, const helper_graph & g,
         const std::vector<ggml_backend_t> & backends, const std::vector<helper_check> & checks, int64_t ne) {
@@ -199,7 +223,7 @@ static test_result run_and_check(ggml_backend_sched_t sched, const helper_graph 
     // ggml_backend_sched_set_tensor_backend does not validate the op, an unsupported one would abort inside the backend
     for (size_t i = 0; i < g.nodes.size(); i++) {
         ggml_backend_t backend = backends[g.backend_id[i]];
-        if (!ggml_backend_supports_op(backend, g.nodes[i])) {
+        if (!backend_implements_op(backend, g.nodes[i])) {
             return skip("%s does not support %s", ggml_backend_name(backend), ggml_op_name(g.nodes[i]->op));
         }
     }
