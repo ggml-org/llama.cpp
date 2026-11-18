@@ -7,6 +7,7 @@
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_KHR_shader_subgroup_shuffle_relative : require
 #extension GL_KHR_cooperative_matrix : require
 #extension GL_NV_cooperative_matrix2 : require
 
@@ -229,7 +230,14 @@ void main() {
         barrier();
         if (gl_SubgroupID == 0) {
             const uint r = gl_SubgroupInvocationID;
-            const float sum = subgroupInclusiveAdd(greg);
+            // shuffle scan instead of subgroupInclusiveAdd: works around an NVIDIA r620 shader compiler crash
+            float sum = greg;
+            [[unroll]] for (uint d = 1; d < C; d <<= 1) {
+                const float t = subgroupShuffleUp(sum, d);
+                if (r >= d) {
+                    sum += t;
+                }
+            }
             const float last = subgroupShuffle(sum, valid - 1);
             if (r < C) {
                 sh_prefix[r] = sum;
