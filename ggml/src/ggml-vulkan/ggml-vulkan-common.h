@@ -34,7 +34,7 @@ bool ggml_vk_intel_windows_driver_in_range(uint32_t driver_version, uint32_t low
 
 // shaders
 void ggml_vk_destroy_pipeline(vk::Device& device, vk_pipeline& pipeline);
-vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type k_type, ggml_type v_type, bool f32acc);
+vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type k_type, ggml_type v_type, bool f32acc, uint32_t qk_ratio, bool allow_flip = true);
 vk_fa_pipeline_state get_fa_pipeline_state(const vk_device& device, const vk_fa_tuning_params& params, uint32_t hsk, uint32_t hsv, bool aligned, bool f32acc, bool use_mask, bool use_mask_opt, bool use_logit_softcap, bool use_sparse, ggml_type k_type, ggml_type v_type);
 uint32_t get_subgroup_size(const std::string &pipeline_name, const vk_device_architecture &arch);
 void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested = nullptr);
@@ -59,12 +59,18 @@ void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, size_t sp
 void ggml_vk_buffer_read(vk_buffer& src, size_t offset, void * dst, size_t size);
 void ggml_vk_buffer_copy_async(vk_context& ctx, vk_buffer& dst, size_t dst_offset, vk_buffer& src, size_t src_offset, size_t size);
 void ggml_vk_buffer_copy(vk_buffer& dst, size_t dst_offset, vk_buffer& src, size_t src_offset, size_t size);
+size_t ggml_vk_buffer_write_n_async(vk_context& subctx, const vk_buffer_region * regions, size_t n, vk_buffer * staging = nullptr, size_t * staging_offset = nullptr);
+size_t ggml_vk_buffer_read_n_async(vk_context& subctx, const vk_buffer_region * regions, size_t n, vk_buffer * staging = nullptr, size_t * staging_offset = nullptr);
+void ggml_vk_buffer_copy_n_async(vk_context& subctx, const vk_buffer_copy_region * regions, size_t n);
+void ggml_vk_buffer_write_n(const vk_buffer_region * regions, size_t n);
+void ggml_vk_buffer_read_n(const vk_buffer_region * regions, size_t n);
+void ggml_vk_buffer_copy_n(const vk_buffer_copy_region * regions, size_t n);
 void ggml_vk_buffer_memset_async(vk_context& ctx, vk_buffer& dst, size_t offset, uint32_t c, size_t size);
 void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, size_t size);
 vk_buffer ggml_vk_buffer_from_host_ptr(vk_device & device, void * ptr, size_t size);
 
 // pipelines
-uint64_t vk_tensor_offset(const ggml_tensor * tensor);
+size_t vk_tensor_offset(const ggml_tensor * tensor);
 uint32_t get_misalign_bytes(const ggml_backend_vk_context * ctx, const ggml_tensor * t);
 void ggml_vk_wait_for_fence(ggml_backend_vk_context * ctx);
 void ggml_pipeline_request_descriptor_sets(ggml_backend_vk_context *ctx, vk_pipeline& pipeline, uint32_t n);
@@ -103,6 +109,7 @@ void ggml_vk_quantize_q8_1(ggml_backend_vk_context * ctx, vk_context& subctx, co
 void ggml_vk_dsv4_hc_comb(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * mixes, const ggml_tensor * scale, const ggml_tensor * base, ggml_tensor * dst);
 void ggml_vk_dsv4_hc_pre(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * x, const ggml_tensor * weights, ggml_tensor * dst);
 void ggml_vk_dsv4_hc_post(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * x, const ggml_tensor * residual, const ggml_tensor * post, const ggml_tensor * comb, ggml_tensor * dst, const ggml_tensor * gate_scale_in = nullptr);
+void ggml_vk_top_k_mask(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst);
 void ggml_vk_mul_mat(ggml_backend_vk_context * ctx, vk_context& subctx, const struct ggml_cgraph * cgraph, int node_idx);
 bool ggml_vk_use_mul_mat_vec_id(const struct ggml_cgraph * cgraph, int node_idx);
 void ggml_vk_mul_mat_id(ggml_backend_vk_context * ctx, vk_context& subctx, const struct ggml_cgraph * cgraph, int node_idx);
@@ -166,7 +173,6 @@ void ggml_vk_l2_norm(ggml_backend_vk_context * ctx, vk_context& subctx, const gg
 void ggml_vk_unary(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst);
 void ggml_vk_xielu(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst);
 void ggml_vk_glu(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
-void ggml_vk_diag_mask_inf(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst);
 void ggml_vk_soft_max(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, ggml_tensor * dst);
 void ggml_vk_soft_max_back(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_vk_topk_moe(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_cgraph * cgraph, int node_idx);
@@ -227,6 +233,9 @@ void ggml_backend_vk_buffer_set_tensor_2d(ggml_backend_buffer_t buffer, ggml_ten
 void ggml_backend_vk_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size);
 void ggml_backend_vk_buffer_get_tensor_2d(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data);
 bool ggml_backend_vk_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst);
+void ggml_backend_vk_buffer_set_tensor_n(ggml_backend_buffer_t buffer, ggml_tensor * const * tensors, const void * const * data, const size_t * offsets, const size_t * sizes, size_t n_tensors);
+void ggml_backend_vk_buffer_get_tensor_n(ggml_backend_buffer_t buffer, const ggml_tensor * const * tensors, void * const * data, const size_t * offsets, const size_t * sizes, size_t n_tensors);
+bool ggml_backend_vk_buffer_cpy_tensor_n(ggml_backend_buffer_t buffer, const ggml_tensor * const * srcs, ggml_tensor * const * dsts, size_t n_tensors);
 void ggml_backend_vk_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value);
 const char * ggml_backend_vk_buffer_type_name(ggml_backend_buffer_type_t buft);
 ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size);

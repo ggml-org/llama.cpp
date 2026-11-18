@@ -1035,8 +1035,6 @@ void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph
         } else if (tensor->op == GGML_OP_SCALE) {
             const float * params = (const float *)tensor->op_params;
             tensor_clone = ggml_scale_bias(ggml_ctx, src_clone[0], params[0], params[1]);
-        } else if (tensor->op == GGML_OP_ADD1) {
-            tensor_clone = ggml_add1(ggml_ctx, src_clone[0], src_clone[1]);
         } else if (tensor->op == GGML_OP_ARANGE) {
             const float start = ggml_get_op_params_f32(tensor, 0);
             const float stop = ggml_get_op_params_f32(tensor, 1);
@@ -1101,12 +1099,9 @@ void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph
             }
         } else if (tensor->op == GGML_OP_SOFT_MAX_BACK) {
             tensor_clone = ggml_soft_max_ext_back(ggml_ctx, src_clone[0], src_clone[1], ((float *)tensor->op_params)[0], ((float *)tensor->op_params)[1]);
-        } else if (tensor->op == GGML_OP_DIAG_MASK_INF) {
-            tensor_clone = ggml_diag_mask_inf(ggml_ctx, src_clone[0], tensor->op_params[0]);
         } else if (tensor->op == GGML_OP_ROPE || tensor->op == GGML_OP_ROPE_BACK) {
             const int n_dims      = ((int32_t *) tensor->op_params)[1];
             const int mode        = ((int32_t *) tensor->op_params)[2];
-            //const int n_ctx_ggml       = ((int32_t *) tensor->op_params)[3];
             const int n_ctx_orig_ggml  = ((int32_t *) tensor->op_params)[4];
             const float freq_base       = ((float *) tensor->op_params)[5];
             const float freq_scale      = ((float *) tensor->op_params)[6];
@@ -1128,6 +1123,7 @@ void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph
                     tensor_clone = ggml_rope_ext_back(ggml_ctx, src_clone[0], src_clone[1], src_clone[2], n_dims, mode, n_ctx_orig_ggml, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
                 }
             }
+            ggml_rope_set_truncate(tensor_clone, ggml_rope_get_truncate(tensor));
             const int n_offs = ((int32_t *) tensor->op_params)[15];
             if (n_offs != 0) {
                 tensor_clone = ggml_rope_set_offset(tensor_clone, n_offs);

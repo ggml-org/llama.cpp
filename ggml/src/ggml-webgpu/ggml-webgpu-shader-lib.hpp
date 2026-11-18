@@ -333,14 +333,18 @@ struct ggml_webgpu_rms_norm_mul_shader_decisions {
 /** Pad **/
 struct ggml_webgpu_pad_pipeline_key {
     bool circular;
+    bool reflect;
 
-    bool operator==(const ggml_webgpu_pad_pipeline_key & other) const { return circular == other.circular; }
+    bool operator==(const ggml_webgpu_pad_pipeline_key & other) const {
+        return circular == other.circular && reflect == other.reflect;
+    }
 };
 
 struct ggml_webgpu_pad_pipeline_key_hash {
     size_t operator()(const ggml_webgpu_pad_pipeline_key & key) const {
         size_t seed = 0;
         ggml_webgpu_hash_combine(seed, key.circular);
+        ggml_webgpu_hash_combine(seed, key.reflect);
         return seed;
     }
 };
@@ -958,13 +962,16 @@ inline uint32_t ggml_webgpu_flash_attn_get_vec_kv_tile(size_t   wg_mem_limit_byt
                                                        uint32_t head_dim_qk,
                                                        uint32_t head_dim_v,
                                                        bool     has_mask,
-                                                       bool     kv_direct) {
-    const uint32_t max_kv_tile =
-        ggml_webgpu_flash_attn_max_kv_tile(wg_mem_limit_bytes, 1u, 1u, head_dim_qk, head_dim_v, has_mask, kv_direct);
+                                                       bool     k_direct,
+                                                       bool     v_direct) {
+    // kv_shmem is dropped only when both K and V are read directly
+    const uint32_t max_kv_tile = ggml_webgpu_flash_attn_max_kv_tile(wg_mem_limit_bytes, 1u, 1u, head_dim_qk, head_dim_v,
+                                                                    has_mask, k_direct && v_direct);
     GGML_ASSERT(max_kv_tile > 0);
 
     uint32_t kv_tile = std::min(GGML_WEBGPU_FLASH_ATTN_VEC_MAX_KV_TILE, max_kv_tile);
-    if (kv_direct) {
+    // a direct read has no bounds check, so the tile must divide the KV padding
+    if (k_direct || v_direct) {
         kv_tile = std::min(kv_tile, GGML_WEBGPU_KV_SEQ_PAD);
         while (GGML_WEBGPU_KV_SEQ_PAD % kv_tile != 0) {
             kv_tile -= 1u;
@@ -1257,15 +1264,16 @@ class ggml_webgpu_shader_lib {
     wgpu::Device           device;
     pre_wgsl::Preprocessor preprocessor;
 
-    std::unordered_map<int, webgpu_pipeline> sum_rows_pipelines;       // key is whether to compute the mean
-    std::unordered_map<int, webgpu_pipeline> argmax_pipelines;         // key is vec4
-    std::unordered_map<int, webgpu_pipeline> argsort_pipelines;        // key is order
-    std::unordered_map<int, webgpu_pipeline> argsort_merge_pipelines;  // key is order
-    std::unordered_map<int, webgpu_pipeline> cumsum_pipelines;         // key is fixed, no variants yet
-    std::unordered_map<int, webgpu_pipeline> arange_pipelines;         // key is fixed, no variants yet
-    std::unordered_map<int, webgpu_pipeline> count_equal_pipelines;    // key is src_overlap
+    std::unordered_map<int, webgpu_pipeline> sum_rows_pipelines;            // key is whether to compute the mean
+    std::unordered_map<int, webgpu_pipeline> argmax_pipelines;              // key is vec4
+    std::unordered_map<int, webgpu_pipeline> argsort_pipelines;             // key is order
+    std::unordered_map<int, webgpu_pipeline> argsort_merge_pipelines;       // key is order
+    std::unordered_map<int, webgpu_pipeline> cumsum_pipelines;              // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> arange_pipelines;              // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> count_equal_pipelines;         // key is src_overlap
+    std::unordered_map<int, webgpu_pipeline> timestep_embedding_pipelines;  // key is fixed, no variants yet
     std::unordered_map<ggml_webgpu_row_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_row_norm_pipeline_key_hash>
-        row_norm_pipelines;                                            // op/inplace
+        row_norm_pipelines;                                                 // op/inplace
 
     std::unordered_map<ggml_webgpu_get_rows_pipeline_key, webgpu_pipeline, ggml_webgpu_get_rows_pipeline_key_hash>
         get_rows_pipelines;   // src_type, vectorized
@@ -1624,6 +1632,20 @@ class ggml_webgpu_shader_lib {
         auto processed      = preprocessor.preprocess(wgsl_cumsum, defines);
         cumsum_pipelines[1] = ggml_webgpu_create_pipeline(device, processed, "cumsum");
         return cumsum_pipelines[1];
+    }
+
+    webgpu_pipeline get_timestep_embedding_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        auto it = timestep_embedding_pipelines.find(1);
+        if (it != timestep_embedding_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed                  = preprocessor.preprocess(wgsl_timestep_embedding, defines);
+        timestep_embedding_pipelines[1] = ggml_webgpu_create_pipeline(device, processed, "timestep_embedding");
+        return timestep_embedding_pipelines[1];
     }
 
     webgpu_pipeline get_argsort_pipeline(const ggml_webgpu_shader_lib_context & context) {
@@ -2047,7 +2069,8 @@ class ggml_webgpu_shader_lib {
 
     webgpu_pipeline get_pad_pipeline(const ggml_webgpu_shader_lib_context & context) {
         ggml_webgpu_pad_pipeline_key key = {};
-        key.circular                     = ggml_get_op_params_i32(context.dst, 8) != 0;
+        key.reflect                      = context.dst->op == GGML_OP_PAD_REFLECT_1D;
+        key.circular                     = !key.reflect && ggml_get_op_params_i32(context.dst, 8) != 0;
 
         auto it = pad_pipelines.find(key);
         if (it != pad_pipelines.end()) {
@@ -2057,6 +2080,10 @@ class ggml_webgpu_shader_lib {
         std::vector<std::string> defines;
         std::string              variant = "pad";
 
+        if (key.reflect) {
+            defines.push_back("REFLECT");
+            variant += "_reflect";
+        }
         if (key.circular) {
             defines.push_back("CIRCULAR");
             variant += "_circular";
@@ -3041,7 +3068,7 @@ class ggml_webgpu_shader_lib {
         uint32_t max_kv_tile = ggml_webgpu_flash_attn_max_kv_tile(
             context.wg_mem_limit_bytes, decisions.q_tile, decisions.use_sg_matrix ? context.sg_mat_n : 1u,
             key.common.head_dim_qk, key.common.head_dim_v, key.common.has_mask,
-            key.common.k_direct || key.common.v_direct);
+            key.common.k_direct && key.common.v_direct);
 
         // WorkGroup storage size isn't enough for some params with subgroup matrices path (ref. https://github.com/ggml-org/llama.cpp/pull/26566)
         if (max_kv_tile == 0) {
@@ -3054,7 +3081,7 @@ class ggml_webgpu_shader_lib {
             key.use_sg_matrix       = false;
             max_kv_tile             = ggml_webgpu_flash_attn_max_kv_tile(
                 context.wg_mem_limit_bytes, decisions.q_tile, 1u, key.common.head_dim_qk, key.common.head_dim_v,
-                key.common.has_mask, key.common.k_direct || key.common.v_direct);
+                key.common.has_mask, key.common.k_direct && key.common.v_direct);
             GGML_ASSERT(max_kv_tile > 0);
         }
 
@@ -3116,7 +3143,7 @@ class ggml_webgpu_shader_lib {
         ggml_webgpu_flash_attn_vec_decisions decisions = {};
         decisions.kv_tile = ggml_webgpu_flash_attn_get_vec_kv_tile(context.wg_mem_limit_bytes, key.common.head_dim_qk,
                                                                    key.common.head_dim_v, key.common.has_mask,
-                                                                   key.common.k_direct || key.common.v_direct);
+                                                                   key.common.k_direct, key.common.v_direct);
         decisions.wg_size = context.max_subgroup_size;
 
         std::string              variant = "flash_attn_vec";

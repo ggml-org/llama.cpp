@@ -171,6 +171,38 @@ void extract_q4_1_data(const ggml_tensor * tensor,
     }
 }
 
+// Extracts (weight, scales) from Q5_0 tensors.
+// Data layout is: |16 bit scale|32 bit qh (5th bits)|32 x 4bit low nibbles|.
+// Reconstructed quant q in [0,31]: q = (low nibble) | (qh_bit << 4). Dequant: (q - 16) * d.
+// Weights are stored as signed i8 (q - 16), symmetric like Q8_0, so there is no zero point.
+void extract_q5_0_data(const ggml_tensor * tensor, ov::Tensor & weights_arr, ov::Tensor & scales_arr) {
+    const uint64_t bytes_per_block = 22;  // 2 scale + 4 qh + 16 (32x0.5) weights
+    const int qk = 32;
+
+    OPENVINO_ASSERT(weights_arr.get_element_type() == ov::element::i8, "Q5_0 weights are extracted as i8");
+
+    auto * data = static_cast<uint8_t *>(tensor->data);
+    auto * weights = static_cast<int8_t *>(weights_arr.data());
+    auto * scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+
+    ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
+        const uint8_t * block = data + i * bytes_per_block;
+        uint16_t d;
+        memcpy(&d, block, sizeof(d));
+        uint32_t qh;
+        memcpy(&qh, block + 2, sizeof(qh));
+        const uint8_t * qs = block + 6;
+        int8_t * dst = weights + i * qk;
+        scales[i] = ov::float16::from_bits(d);
+        for (int j = 0; j < qk / 2; ++j) {
+            const uint8_t bit_lo = (qh >> j) & 1;
+            const uint8_t bit_hi = (qh >> (j + qk / 2)) & 1;
+            dst[j] = static_cast<int8_t>(((qs[j] & 0x0F) | (bit_lo << 4)) - 16);        // first 16 weights
+            dst[j + qk / 2] = static_cast<int8_t>(((qs[j] >> 4) | (bit_hi << 4)) - 16);  // last 16 weights
+        }
+    });
+}
+
 // Extracts (weight, scales, zp) from Q5_1 tensors.
 // Data layout is: |16 bit scale|16 bit min|32 bit qh (5th bits)|32 x 4bit low nibbles|.
 // Reconstructed quant q in [0,31]: q = (low nibble) | (qh_bit << 4). Dequant: w*d + m.
@@ -771,7 +803,8 @@ void quantize_q4_0(const float * x,
                    ov::Tensor & scales_arr,
                    ov::Tensor & zp_arr,
                    int64_t k,
-                   int64_t qk) {
+                   int64_t qk,
+                   int64_t block_offset = 0) {
     assert(k % qk == 0);
     const int nb = k / qk;
 
@@ -782,6 +815,9 @@ void quantize_q4_0(const float * x,
     if (!is_symmetric) {
         auto * zp = static_cast<uint8_t *>(zp_arr.data());
         for (int i = 0; i < nb; i++) {
+            // Destination block index. Chunks are emitted in increasing order, so the
+            // even-block assignment always precedes the odd-block OR of the same zp byte.
+            const int64_t gi = block_offset + i;
             float amax = 0.0f;
             float max = 0.0f;
             for (int j = 0; j < qk; j++) {
@@ -793,33 +829,34 @@ void quantize_q4_0(const float * x,
             }
             const float d = max / -8;
             if (d == 0) {
-                scales[i] = ov::float16(1.0f);
-                if (i % 2 == 0) {
-                    zp[i / 2] = 8;
+                scales[gi] = ov::float16(1.0f);
+                if (gi % 2 == 0) {
+                    zp[gi / 2] = 8;
                 } else {
-                    zp[i / 2] |= (8 << 4);
+                    zp[gi / 2] |= (8 << 4);
                 }
-                memset(weights + i * qk / 2, 8 | (8 << 4), qk / 2);
+                memset(weights + gi * qk / 2, 8 | (8 << 4), qk / 2);
                 continue;
             }
             const float id = 1.0f / d;
-            scales[i] = ov::float16(d);
-            if (i % 2 == 0) {
-                zp[i / 2] = 8;
+            scales[gi] = ov::float16(d);
+            if (gi % 2 == 0) {
+                zp[gi / 2] = 8;
             } else {
-                zp[i / 2] |= (8 << 4);
+                zp[gi / 2] |= (8 << 4);
             }
             for (int j = 0; j < qk / 2; ++j) {
                 const float x0 = x[i * qk + 2 * j] * id;
                 const float x1 = x[i * qk + 2 * j + 1] * id;
                 const uint8_t xi0 = MIN(15, (int8_t) (x0 + 8.5f));
                 const uint8_t xi1 = MIN(15, (int8_t) (x1 + 8.5f));
-                weights[i * qk / 2 + j] = xi0 | (xi1 << 4);
+                weights[gi * qk / 2 + j] = xi0 | (xi1 << 4);
             }
         }
     } else {
         // Symmetric: produce signed i4 values in [-8, 7]
         for (int i = 0; i < nb; i++) {
+            const int64_t gi = block_offset + i;
             float amax = 0.0f;
             float max = 0.0f;
             for (int j = 0; j < qk; j++) {
@@ -831,20 +868,20 @@ void quantize_q4_0(const float * x,
             }
             const float d = max / -8;
             if (d == 0) {
-                scales[i] = ov::float16(1.0f);
+                scales[gi] = ov::float16(1.0f);
                 // i4 value 0 packed: 0x00
-                memset(weights + i * qk / 2, 0, qk / 2);
+                memset(weights + gi * qk / 2, 0, qk / 2);
                 continue;
             }
             const float id = 1.0f / d;
-            scales[i] = ov::float16(d);
+            scales[gi] = ov::float16(d);
             for (int j = 0; j < qk / 2; ++j) {
                 const float x0 = x[i * qk + 2 * j] * id;
                 const float x1 = x[i * qk + 2 * j + 1] * id;
                 // Signed i4: range [-8, 7]. Quantize as round(x*id), then pack as 4-bit two's complement.
                 int8_t si0 = (int8_t) std::max(-8, std::min(7, (int) roundf(x0)));
                 int8_t si1 = (int8_t) std::max(-8, std::min(7, (int) roundf(x1)));
-                weights[i * qk / 2 + j] = (si0 & 0x0F) | ((si1 & 0x0F) << 4);
+                weights[gi * qk / 2 + j] = (si0 & 0x0F) | ((si1 & 0x0F) << 4);
             }
         }
     }
@@ -1019,7 +1056,7 @@ std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
                                                     ov::Tensor & scales,
                                                     ov::Tensor & zp,
                                                     // Use an exact f16 zero point (vs. a rounded integer one); always
-                                                    // used for for_gather_matmul (3D MoE expert) weights regardless of
+                                                    // used for MoE expert weights regardless of
                                                     // this flag, and also settable explicitly for test-backend-ops.
                                                     bool use_bias = false) {
     // Create a temporary tensor for extraction functions that read from tensor->data
@@ -1044,6 +1081,7 @@ std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
         weights_per_block = 32;
         break;
     case GGML_TYPE_Q8_0:
+    case GGML_TYPE_Q5_0:
     case GGML_TYPE_Q5_1:
     case GGML_TYPE_Q5_K:
         is_u4 = false;
@@ -1058,12 +1096,11 @@ std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
                                  std::string(ggml_type_name(tensor->type)));
     }
 
-    // 3D MoE expert weights (for_gather_matmul) always use the exact f16 zero-point extraction
-    // (see make_int8_weights/make_int4_weights) rather than the rounded integer zero point --
-    // round(min/scale) error is what corrupts Q4_K/Q5_1 experts, and the f16-zp form still fuses
-    // into GatherMatmulCompressed since it stays a Subtract, not an Add.
+    // An exact f16 zero point avoids the round(min/scale) error of the integer one, which corrupts
+    // Q4_K/Q5_1 MoE experts and costs accuracy on dense weights. It stays a Subtract, so the
+    // weights still fuse into GatherMatmulCompressed / compressed FullyConnected.
     const bool for_gather_matmul = tensor->ne[2] > 1;
-    use_bias = use_bias || for_gather_matmul;
+    use_bias = use_bias || ggml_openvino_use_exact_zero_point(tensor);
 
     // Extract quantized data
     switch (tensor->type) {
@@ -1075,6 +1112,9 @@ std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
         break;
     case GGML_TYPE_Q4_K:
         extract_q4_k_data(&temp_tensor, weights, scales, zp, use_bias);
+        break;
+    case GGML_TYPE_Q5_0:
+        extract_q5_0_data(&temp_tensor, weights, scales);
         break;
     case GGML_TYPE_Q5_1:
         extract_q5_1_data(&temp_tensor, weights, scales, zp, use_bias);
@@ -1125,19 +1165,18 @@ std::shared_ptr<ov::Node> requantize_to_buffers(const ggml_tensor * tensor,
     bool is_u4 = (requant_type == ExtraQuantType::Q4_0_C || requant_type == ExtraQuantType::Q4_0_128 ||
                   requant_type == ExtraQuantType::Q4_0_64 || requant_type == ExtraQuantType::Q4_1_64);
 
-    // Streaming dequant (opt-in via GGML_OPENVINO_REDUCE_COMPILE_MEM or
-    // GGML_OPENVINO_MEMORY_OPTIMIZE): instead of
-    // materializing the full n_elements F32 array (e.g. ~1 GB for token_embd), dequantize
-    // a chunk of complete rows into a small scratch and quantize/convert it straight into
-    // the output buffers, capping the transient F32 footprint at CHUNK_ROWS*ne0 floats.
+    // Streaming dequant: instead of materializing the full n_elements F32 array (e.g. ~1 GB
+    // for token_embd), dequantize a chunk of complete rows into a small scratch and
+    // quantize/convert it straight into the output buffers, capping the transient F32
+    // footprint at CHUNK_ROWS*ne0 floats, with identical output.
     //
-    // Only valid (and only used) for the Q8_0_C / Q8_1_C / F16 targets whose block size
-    // divides a row (channel-wise _C uses block_size == ne0) so no target block straddles
-    // a row boundary, and Q8/F16 have no cross-block packing. The u4 (Q4_0) path packs two
-    // weights per byte with running zp ORs that assume a single whole-array call, so it is
-    // never streamed. When the flag is off, behavior is identical to the original
-    // full-materialization path.
-    const bool stream_requant = ggml_openvino_reduce_compile_mem_enabled() && !is_u4 &&
+    // Only valid (and only used) when the target block size divides a row (channel-wise _C
+    // uses block_size == ne0) so no target block straddles a row boundary. The u4 (Q4_0)
+    // path packs two weights per byte and ORs zp nibbles in pairs, but both are indexed by
+    // an absolute block index and chunks are emitted in increasing order, so whole-row
+    // chunks stay byte-aligned and the even-block write always precedes the odd-block OR.
+    // Q4_1_64 (asymmetric u4) has no chunked quantizer, so it always takes the full path.
+    const bool stream_requant = requant_type != ExtraQuantType::Q4_1_64 &&
                                 !(block_size > 0 && ne0 % block_size != 0);
 
     if (!stream_requant) {
@@ -1178,7 +1217,9 @@ std::shared_ptr<ov::Node> requantize_to_buffers(const ggml_tensor * tensor,
                     ->from_float_ref(scratch.data(), f16_base + (r0 * ne0) * sizeof(uint16_t), elems);
             } else {
                 const int64_t block_offset = (r0 * ne0) / block_size;
-                if (requant_type == ExtraQuantType::Q8_1_C) {
+                if (is_u4) {
+                    quantize_q4_0(scratch.data(), weights, scales, zp, elems, block_size, block_offset);
+                } else if (requant_type == ExtraQuantType::Q8_1_C) {
                     quantize_q8_1(scratch.data(), weights, scales, zp, elems, block_size, block_offset);
                 } else {
                     quantize_q8_0(scratch.data(), weights, scales, zp, elems, block_size, block_offset);
@@ -1258,13 +1299,9 @@ OvWeight process_weight_tensor(const ggml_tensor * tensor, const void * data, vo
         OPENVINO_THROW("Unsupported quantized type: ", ggml_type_name(tensor->type));
     }
 
-    // 3D MoE expert weights (for_gather_matmul) always use the exact f16 zero-point path (see
-    // extract_quantized_weights) -- must be kept in sync with the "use_bias || for_gather_matmul"
-    // check in ggml_openvino_get_extracted_layout, which sizes/offsets the zp slot accordingly.
-    // Requantized tensors (layout.is_requant) are handled by requantize_to_buffers instead, whose
-    // zp sizing/type is unaffected by for_gather_matmul, so they are excluded here.
-    const bool for_gather_matmul = tensor->ne[2] > 1;
-    const bool zp_is_f16 = !layout.is_requant && (use_bias || for_gather_matmul);
+    // Keep in sync with ggml_openvino_get_extracted_layout, which sizes the zp slot. Requantized
+    // tensors are handled by requantize_to_buffers and keep an integer zero point.
+    const bool zp_is_f16 = !layout.is_requant && (use_bias || ggml_openvino_use_exact_zero_point(tensor));
 
     const bool is_3d_mxfp4_moe = tensor->type == GGML_TYPE_MXFP4 && (tensor->ne[2] > 1 || tensor->ne[3] > 1);
     if (is_3d_mxfp4_moe) {

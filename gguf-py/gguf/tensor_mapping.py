@@ -66,6 +66,8 @@ class TensorNameMap:
             "model.layers.0.pre_norm",    # rwkv7
             "backbone.norm",              # wavtokenizer
             "model.embedding_norm",       # lfm2
+            "model.embed_tokens.embed_norm", # inkling2
+            "model.embed_norm",           # inkling2
         ),
 
         # Position embeddings
@@ -90,6 +92,7 @@ class TensorNameMap:
             "model.transformer.ff_out",  # llada
             "head.decoder",              # modern-bert
             "embedding_projection",      # embeddinggemma2
+            "model.unembed",             # inkling2
         ),
         MODEL_TENSOR.DENSE_2_OUT: (
             "dense_2_out",  # embeddinggemma
@@ -121,6 +124,11 @@ class TensorNameMap:
             "final_norm",                              # modern-bert
             "model.norm",                              # cogvlm
             "model.embedding_norm",                    # lfm3
+        ),
+
+        MODEL_TENSOR.OUTPUT_RES_QUERY: (
+            "model.final_input.query",      # inkling2
+            "model.attn_res.output_query",  # inkling2
         ),
 
         # Rope frequencies
@@ -260,6 +268,7 @@ class TensorNameMap:
             "model.layers.{bid}.attention_layernorm",               # apertus
             "model.layers.{bid}.pre_attention_layernorm",           # kormo
             "head.layers.{bid}.norm1",  # laya
+            "model.layers.{bid}.attn_norm",                         # inkling2
         ),
 
         # Attention norm 2
@@ -318,6 +327,7 @@ class TensorNameMap:
             "layers.{bid}.self_attn.q_proj",                             # qwen3-embedding
             "backbone.layers.{bid}.mixer.q_proj",                        # nemotron-h
             "model.blocks.{bid}.attn.attn_query",                        # talkie
+            "model.layers.{bid}.attn.wq_du",                             # inkling2
         ),
 
         # Attention key
@@ -340,6 +350,7 @@ class TensorNameMap:
             "layers.{bid}.self_attn.k_proj",                           # qwen3-embedding
             "backbone.layers.{bid}.mixer.k_proj",                      # nemotron-h
             "model.blocks.{bid}.attn.attn_key",                        # talkie
+            "model.layers.{bid}.attn.wk_dv",                           # inkling2
         ),
 
         # Attention value
@@ -361,6 +372,7 @@ class TensorNameMap:
             "layers.{bid}.self_attn.v_proj",                             # qwen3-embedding
             "backbone.layers.{bid}.mixer.v_proj",                        # nemotron-h
             "model.blocks.{bid}.attn.attn_value",                        # talkie
+            "model.layers.{bid}.attn.wv_dv",                             # inkling2
         ),
 
         # Attention output
@@ -405,6 +417,7 @@ class TensorNameMap:
             "model.blocks.{bid}.attn.attn_resid",                           # talkie
             "head.layers.{bid}.self_attn.out_proj",  # laya
             "layers.{bid}.mixer.out",                                       # metis16
+            "model.layers.{bid}.attn.wo_ud",                                # inkling2
         ),
 
         # Attention output norm
@@ -449,10 +462,80 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.output_gate",  # minimax-01
             "model.layers.{bid}.self_attn.linear_gate",  # hy-v4
             "model.layers.{bid}.self_attn.attn_gate_proj",  # k2-horizon
+            "model.layers.{bid}.attn.gate_attn",         # inkling2
         ),
 
         MODEL_TENSOR.ATTN_VRES_LAMBDA: (
             "model.layers.{bid}.self_attn.value_res_lambda",  # ricursive
+        ),
+
+        MODEL_TENSOR.ATTN_REL: (
+            "model.layers.{bid}.self_attn.r_proj",  # inkling2
+            "model.layers.{bid}.attn.wr_du",        # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_REL_BIAS: (
+            "model.layers.{bid}.self_attn.rel_logits_proj.proj",  # inkling2
+            "model.layers.{bid}.attn.rel_logits_proj.proj",       # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_Q_CLIP: (
+            "model.layers.{bid}.self_attn.q_l2_clip.scale",  # inkling2
+            "model.layers.{bid}.attn.q_l2_clip.scale",       # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_REL_CLIP: (
+            "model.layers.{bid}.self_attn.rel_l2_clip.scale",  # inkling2
+            "model.layers.{bid}.attn.rel_l2_clip.scale",       # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_SINK_PROJ: (
+            "model.layers.{bid}.self_attn.sink_proj",  # inkling2
+            "model.layers.{bid}.attn.attn_sink_proj",  # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_Q_INP_NORM: (
+            "model.layers.{bid}.q_input_layernorm",  # inkling2
+            "model.layers.{bid}.q_input_norm",       # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_K_INP_NORM: (
+            "model.layers.{bid}.k_input_layernorm",  # inkling2
+            "model.layers.{bid}.k_input_norm",       # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_V_INP_NORM: (
+            "model.layers.{bid}.v_input_layernorm",  # inkling2
+            "model.layers.{bid}.v_input_norm",       # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_K_CONV: (
+            "model.layers.{bid}.self_attn.k_sconv.conv1d",  # inkling2
+            "model.layers.{bid}.attn.k_sconv",              # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_V_CONV: (
+            "model.layers.{bid}.self_attn.v_sconv.conv1d",  # inkling2
+            "model.layers.{bid}.attn.v_sconv",              # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_K_CONV_PROJ: (
+            "model.layers.{bid}.self_attn.k_sconv.weight_proj",  # inkling2
+            "model.layers.{bid}.attn.k_sconv.weight_proj",       # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_V_CONV_PROJ: (
+            "model.layers.{bid}.self_attn.v_sconv.weight_proj",  # inkling2
+            "model.layers.{bid}.attn.v_sconv.weight_proj",       # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_POST_CONV: (
+            "model.layers.{bid}.post_attention_convolution.conv1d",  # inkling2
+            "model.layers.{bid}.attn_sconv",                         # inkling2
+        ),
+
+        MODEL_TENSOR.ATTN_RES_QUERY: (
+            "model.layers.{bid}.attention_input.query",  # inkling2
         ),
 
         # Feed-forward norm
@@ -484,6 +567,7 @@ class TensorNameMap:
             "model.layers.{bid}.pre_mlp_layernorm",                          # kormo
             "layers.{bid}.mlp_norm",                                         # modern-bert
             "head.layers.{bid}.norm2",  # laya
+            "model.layers.{bid}.mlp_norm",                                   # inkling2
         ),
 
         # Pre feed-forward norm
@@ -712,6 +796,16 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.fc2_latent_proj",                 # nemotron 3 super
             "model.layers.{bid}.mlp.post_expert_proj",                     # muse-spark
             "layers.{bid}.moe.latent_up",                                  # metis16
+        ),
+
+        MODEL_TENSOR.FFN_POST_CONV: (
+            "model.layers.{bid}.post_mlp_convolution.conv1d",  # inkling2
+            "model.layers.{bid}.mlp_sconv",                    # inkling2
+        ),
+
+        MODEL_TENSOR.FFN_RES_QUERY: (
+            "model.layers.{bid}.mlp_input.query",  # inkling2
+            "model.attn_res.mlp_queries.{bid}",    # inkling2
         ),
 
         MODEL_TENSOR.STREAM_EMBD: (
@@ -1861,6 +1955,8 @@ class TensorNameMap:
             "vision_model.radio_model.model.patch_generator.cls_token.token", # Nemotron Nano v2 VL
             "vision_model.embeddings.cls_register_token", # Nemotron Omni
             "model.vision_model.embeddings.class_embedding", # Deepseek-OCR
+            "model.vision_tower.embeddings.class_embedding", # inkling2
+            "model.visual.backbone.embeddings.class_embedding", # inkling2
         ),
 
         MODEL_TENSOR.V_ENC_ROPE_FREQS: (
@@ -1893,6 +1989,7 @@ class TensorNameMap:
             "vision_model.conv1", # Step3-VL
             "model.vision_embedder.patch_dense", # gemma4 unified
             "model.vision_tower.patch_embedder.patch_embedding", # muse-glimmer
+            "model.visual.backbone.embeddings.patch_embedding", # inkling2
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_NORM: (
@@ -1903,6 +2000,11 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_ENC_EMBD_PATCH_NORM: (
             "model.vision_embedder.patch_ln{bid}", # gemma4 unified
+        ),
+
+        MODEL_TENSOR.V_ENC_EMBD_CLS_POS: (
+            "model.vision_tower.embeddings.cls_position_embedding", # inkling2
+            "model.visual.backbone.embeddings.cls_position_embedding", # inkling2
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_POS: (
@@ -1923,6 +2025,7 @@ class TensorNameMap:
             "model.vision_tower.patch_embedder.position_embedding_table", # gemma4
             "vision_model.positional_embedding", # Step3-VL
             "model.vision_embedder.pos_embedding", # gemma4 unified
+            "model.visual.backbone.embeddings.position_embedding", # inkling2
         ),
 
         # TODO: I think these should all be moved to mapping_cfg?
@@ -1970,6 +2073,7 @@ class TensorNameMap:
             "vision_model.model.layers.{bid}.self_attn.q_proj.linear", # gemma4
             "model.qwen2_model.model.model.layers.{bid}.self_attn.q_proj", # Deepseek-OCR-2 qwen2
             "model.vision_tower.layers.{bid}.attn.q_proj", # muse-glimmer
+            "model.visual.backbone.layers.{bid}.self_attn.q_proj", # inkling2
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q_NORM: (
@@ -2001,6 +2105,7 @@ class TensorNameMap:
             "vision_model.model.layers.{bid}.self_attn.k_proj.linear", # gemma4
             "model.qwen2_model.model.model.layers.{bid}.self_attn.k_proj", # Deepseek-OCR-2 qwen2
             "model.vision_tower.layers.{bid}.attn.k_proj", # muse-glimmer
+            "model.visual.backbone.layers.{bid}.self_attn.k_proj", # inkling2
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_K_NORM: (
@@ -2032,6 +2137,7 @@ class TensorNameMap:
             "vision_model.model.layers.{bid}.self_attn.v_proj.linear", # gemma4
             "model.qwen2_model.model.model.layers.{bid}.self_attn.v_proj", # Deepseek-OCR-2 qwen2
             "model.vision_tower.layers.{bid}.attn.v_proj", # muse-glimmer
+            "model.visual.backbone.layers.{bid}.self_attn.v_proj", # inkling2
         ),
 
         MODEL_TENSOR.V_ENC_INPUT_NORM: (
@@ -2061,6 +2167,8 @@ class TensorNameMap:
             "vision_model.transformer.resblocks.{bid}.ln_1", # Step3-VL
             "model.qwen2_model.model.model.layers.{bid}.input_layernorm", # Deepseek-OCR-2 qwen2
             "model.vision_tower.layers.{bid}.norm1", # muse-glimmer
+            "model.vision_tower.layers.{bid}.layernorm_before", # inkling2
+            "model.visual.backbone.layers.{bid}.ln_1", # inkling2
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_O: (
@@ -2092,6 +2200,7 @@ class TensorNameMap:
             "vision_encoder.blocks.{bid}.attn.proj", # dots3note
             "vision_model.transformer.resblocks.{bid}.attn.out_proj", # Step3-VL
             "model.vision_tower.layers.{bid}.attn.proj", # muse-glimmer
+            "model.visual.backbone.layers.{bid}.self_attn.out_proj", # inkling2
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_SINKS: (
@@ -2126,6 +2235,8 @@ class TensorNameMap:
             "vision_model.transformer.resblocks.{bid}.ln_2", # Step3-VL
             "model.qwen2_model.model.model.layers.{bid}.post_attention_layernorm", # Deepseek-OCR-2 qwen2
             "model.vision_tower.layers.{bid}.norm2", # muse-glimmer
+            "model.vision_tower.layers.{bid}.layernorm_after", # inkling2
+            "model.visual.backbone.layers.{bid}.ln_2", # inkling2
         ),
 
         MODEL_TENSOR.V_ENC_FFN_UP: (
@@ -2156,6 +2267,7 @@ class TensorNameMap:
             "vision_model.transformer.resblocks.{bid}.mlp.c_fc", # Step3-VL
             "model.qwen2_model.model.model.layers.{bid}.mlp.up_proj", # Deepseek-OCR-2 qwen2
             "model.vision_tower.layers.{bid}.mlp.fc1", # muse-glimmer
+            "model.visual.backbone.layers.{bid}.mlp.c_fc", # inkling2
         ),
 
         MODEL_TENSOR.V_ENC_FFN_GATE: (
@@ -2197,6 +2309,7 @@ class TensorNameMap:
             "vision_model.model.layers.{bid}.mlp.down_proj", # gemma4
             "vision_model.transformer.resblocks.{bid}.mlp.c_proj", # Step3-VL
             "model.vision_tower.layers.{bid}.mlp.fc2", # muse-glimmer
+            "model.visual.backbone.layers.{bid}.mlp.c_proj", # inkling2
         ),
 
 
@@ -2235,6 +2348,8 @@ class TensorNameMap:
             "vision_tower.vision_model.encoder.layers.{bid}.ls1", # InternVL
             "model.vision_tower.encoder.layer.{bid}.lambda_1", # Intern-S1
             "vision_model.transformer.resblocks.{bid}.ls_1", # Step3-VL
+            "model.vision_tower.layers.{bid}.lambda_1", # inkling2
+            "model.visual.backbone.layers.{bid}.ls_1", # inkling2
         ),
 
         MODEL_TENSOR.V_LAYER_SCALE_2: (
@@ -2242,6 +2357,8 @@ class TensorNameMap:
             "vision_tower.vision_model.encoder.layers.{bid}.ls2", # InternVL
             "model.vision_tower.encoder.layer.{bid}.lambda_2", # Intern-S1
             "vision_model.transformer.resblocks.{bid}.ls_2", # Step3-VL
+            "model.vision_tower.layers.{bid}.lambda_2", # inkling2
+            "model.visual.backbone.layers.{bid}.ls_2", # inkling2
         ),
 
         MODEL_TENSOR.V_LAYER_OUT_SCALE: (
@@ -2259,6 +2376,8 @@ class TensorNameMap:
             "vision_encoder.patch_embed.norm", # dots3note
             "vision_model.ln_pre", # Step3-VL
             "model.vision_tower.ln_pre", # muse-glimmer
+            "model.vision_tower.pre_layernorm", # inkling2
+            "model.visual.backbone.ln_pre", # inkling2
         ),
 
         MODEL_TENSOR.V_POST_NORM: (
@@ -2282,6 +2401,7 @@ class TensorNameMap:
             "vision_tower.post_trunk_norm", # dots.ocr
             "vision_encoder.post_trunk_norm", # dots3note
             "vit.perceive.after_rms", # HunyuanVL
+            "mm_projector.post_norm", # Kimi-K3.1
         ),
 
         MODEL_TENSOR.V_MM_INP_PROJ: (
@@ -2853,6 +2973,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_DOWNSAMPLE_CONV: (
             "encoder.down_sample_layer.0", # mimo-audio-tokenizer
+            "audio_encoder_proj.temporal", # higgs-audio
         ),
 
         MODEL_TENSOR.A_ENC_DOWNSAMPLE_NORM: (
@@ -2906,6 +3027,7 @@ class TensorNameMap:
             "mlp.model.{bid}", # lfm3a
             "audio_tower.proj{bid}", # qwen3omni
             "sound_projection.linear{bid}", # parakeet (linear1, linear2)
+            "audio_encoder_proj.linear{bid}", # higgs-audio (linear1, linear2)
         ),
 
         MODEL_TENSOR.A_MMPROJ_FC: (

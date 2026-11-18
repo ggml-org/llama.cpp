@@ -5,10 +5,13 @@
 #include <mublas.h>
 #include <musa_bf16.h>
 #include <musa_fp16.h>
+#include <cstdint>
 
 #ifdef __MUSA_ARCH__
 #define __CUDA_ARCH__ 1300 // GGML_CUDA_CC_RUBIN
 #endif // __MUSA_ARCH__
+
+typedef uint32_t ggml_cuda_thread_mask_t;
 
 #define CUBLAS_COMPUTE_16F CUDA_R_16F
 #define CUBLAS_COMPUTE_32F CUDA_R_32F
@@ -129,6 +132,7 @@
 
 // Additional mappings for MUSA graphs
 #define CUDA_SUCCESS MUSA_SUCCESS
+#define CUDA_ERROR_OUT_OF_MEMORY MUSA_ERROR_OUT_OF_MEMORY
 #define CUresult MUresult
 #define cuGetErrorString muGetErrorString
 #define cudaErrorGraphExecUpdateFailure musaErrorGraphExecUpdateFailure

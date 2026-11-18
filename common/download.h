@@ -31,6 +31,8 @@ struct common_remote_params {
     common_header_list headers;
     long timeout  = 0;           // in seconds, 0 means no timeout
     long max_size = 0;           // unlimited if 0
+    // if set: called per hop (redirects too), returns the address to connect to, throws to refuse
+    std::function<std::string(const std::string & host)> resolve_host;
 };
 
 // get remote file content, returns <http_code, raw_response_body>

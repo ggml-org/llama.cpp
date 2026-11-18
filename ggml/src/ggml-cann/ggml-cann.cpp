@@ -1398,34 +1398,35 @@ static void ggml_backend_cann_buffer_get_tensor(ggml_backend_buffer_t buffer,
 static bool ggml_backend_cann_buffer_cpy_tensor(ggml_backend_buffer_t buffer,
                                                 const ggml_tensor *   src,
                                                 ggml_tensor *         dst) {
-    if (ggml_backend_buft_is_cann(src->buffer->buft)) {
-        ggml_backend_cann_buffer_context * src_ctx = (ggml_backend_cann_buffer_context *) src->buffer->context;
-        ggml_backend_cann_buffer_context * dst_ctx = (ggml_backend_cann_buffer_context *) buffer->context;
+    if (!ggml_backend_buft_is_cann(src->buffer->buft)) {
+        return false;
+    }
 
-        size_t memcpy_size = ggml_nbytes(src);
-        // Same device.
-        if (src_ctx->device == dst_ctx->device) {
-            ACL_CHECK(aclrtMemcpy((char *) dst->data, memcpy_size, (const char *) src->data, memcpy_size,
-                                  ACL_MEMCPY_DEVICE_TO_DEVICE));
-            return true;
-        } else {
+    ggml_backend_cann_buffer_context * src_ctx = (ggml_backend_cann_buffer_context *) src->buffer->context;
+    ggml_backend_cann_buffer_context * dst_ctx = (ggml_backend_cann_buffer_context *) buffer->context;
+
+    size_t memcpy_size = ggml_nbytes(src);
+    // Same device.
+    if (src_ctx->device == dst_ctx->device) {
+        ACL_CHECK(aclrtMemcpy((char *) dst->data, memcpy_size, (const char *) src->data, memcpy_size,
+                                ACL_MEMCPY_DEVICE_TO_DEVICE));
+        return true;
+    } else {
 #ifdef ASCEND_310P
-            // TODO: Support 310p P2P copy
-            return false;
+        // TODO: Support 310p P2P copy
+        return false;
 #endif
-            // Different device but can access by peer.
-            int32_t canAccessPeer = 0;
-            ACL_CHECK(aclrtDeviceCanAccessPeer(&canAccessPeer, src_ctx->device, dst_ctx->device));
-            if (canAccessPeer) {
-                ggml_cann_set_device(src_ctx->device);
-                ACL_CHECK(aclrtDeviceEnablePeerAccess(dst_ctx->device, 0));
-                ACL_CHECK(aclrtMemcpy((char *) dst->data, memcpy_size, (const char *) src->data, memcpy_size,
-                                      ACL_MEMCPY_DEVICE_TO_DEVICE));
-                return true;
-            }
+        // Different device but can access by peer.
+        int32_t canAccessPeer = 0;
+        ACL_CHECK(aclrtDeviceCanAccessPeer(&canAccessPeer, src_ctx->device, dst_ctx->device));
+        if (canAccessPeer) {
+            ggml_cann_set_device(src_ctx->device);
+            ACL_CHECK(aclrtDeviceEnablePeerAccess(dst_ctx->device, 0));
+            ACL_CHECK(aclrtMemcpy((char *) dst->data, memcpy_size, (const char *) src->data, memcpy_size,
+                                    ACL_MEMCPY_DEVICE_TO_DEVICE));
+            return true;
         }
     }
-    return false;
 }
 
 /**
@@ -1792,7 +1793,6 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context & ctx, struct gg
             ggml_cann_dup(ctx, dst);
             break;
         case GGML_OP_ADD:
-        case GGML_OP_ADD1:
             ggml_cann_binary_op<aclnn_add>(ctx, dst);
             break;
         case GGML_OP_SUB:
@@ -1956,9 +1956,6 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context & ctx, struct gg
         case GGML_OP_VIEW:
         case GGML_OP_PERMUTE:
         case GGML_OP_TRANSPOSE:
-            break;
-        case GGML_OP_DIAG_MASK_INF:
-            ggml_cann_diag_mask(ctx, dst, -INFINITY);
             break;
         case GGML_OP_SOFT_MAX:
             ggml_cann_softmax(ctx, dst);
@@ -2446,6 +2443,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
             break;
         case GGML_OP_MUL_MAT:
             {
+                if (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) {
+                    return false;
+                }
                 switch (op->src[0]->type) {
 #ifndef ASCEND_310P
                     case GGML_TYPE_BF16:
@@ -2601,6 +2601,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
             }
         case GGML_OP_SUM:
             return ggml_is_contiguous_rows(op->src[0]);
+        case GGML_OP_RMS_NORM:
+            // the cached gamma of ones does not track its type, so F32 and BF16 can not share it
+            return op->src[0]->type != GGML_TYPE_BF16;
         case GGML_OP_L2_NORM:
         case GGML_OP_CROSS_ENTROPY_LOSS:
         case GGML_OP_DUP:
@@ -2614,15 +2617,12 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
         case GGML_OP_TRANSPOSE:
         case GGML_OP_NORM:
         case GGML_OP_ADD:
-        case GGML_OP_ADD1:
         case GGML_OP_SUB:
         case GGML_OP_MUL:
         case GGML_OP_DIV:
-        case GGML_OP_RMS_NORM:
         case GGML_OP_SQR:
         case GGML_OP_SQRT:
         case GGML_OP_CLAMP:
-        case GGML_OP_DIAG_MASK_INF:
         case GGML_OP_SUM_ROWS:
         case GGML_OP_ARGSORT:
         case GGML_OP_ACC:
@@ -2864,12 +2864,13 @@ static ggml_backend_t ggml_backend_cann_device_init(ggml_backend_dev_t dev, cons
  *              otherwise false.
  */
 static bool ggml_backend_cann_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
-    if (ggml_backend_buft_is_cann(buft)) {
-        ggml_backend_cann_device_context *      dev_ctx  = (ggml_backend_cann_device_context *) dev->context;
-        ggml_backend_cann_buffer_type_context * buft_ctx = (ggml_backend_cann_buffer_type_context *) buft->context;
-        return buft_ctx->device == dev_ctx->device;
+    if (!ggml_backend_buft_is_cann(buft)) {
+        return false;
     }
-    return false;
+
+    ggml_backend_cann_device_context *      dev_ctx  = (ggml_backend_cann_device_context *) dev->context;
+    ggml_backend_cann_buffer_type_context * buft_ctx = (ggml_backend_cann_buffer_type_context *) buft->context;
+    return buft_ctx->device == dev_ctx->device;
 }
 
 static ggml_backend_buffer_type_t ggml_backend_cann_device_get_buffer_type(ggml_backend_dev_t dev) {

@@ -18,11 +18,12 @@ static __global__ __launch_bounds__(CUDA_PAD_REFLECT_1D_BLOCK_SIZE, 1) void
         const int64_t             nb2,
         const int64_t             nb3,
         const int                 p0,
-        const int                 p1) {
+        const int                 p1,
+        const uint32_t            block_offset) {
     const int64_t i3 = blockIdx.z;
     const int64_t i2 = blockIdx.y;
 
-    const uint2   div_mod_packed = fast_div_modulo(blockIdx.x, ne01);
+    const uint2   div_mod_packed = fast_div_modulo(blockIdx.x + block_offset, ne01);
     const int64_t tile1          = div_mod_packed.y;  // i1
     const int64_t tile0          = div_mod_packed.x;  // nth i0 tile
     const int64_t i1             = tile1;
@@ -77,15 +78,21 @@ void ggml_cuda_op_pad_reflect_1d(ggml_backend_cuda_context & ctx, ggml_tensor * 
     // sanity: padded length matches
     GGML_ASSERT(ne0 == ne00 + p0 + p1);
 
-    constexpr int64_t bx     = CUDA_PAD_REFLECT_1D_BLOCK_SIZE;  // threads per block (x)
-    const int64_t     tiles0 = (ne0 + bx - 1) / bx;             // number of tiles along i0
-    // grid.x covers i1 and all tiles of i0: [ne01 * tiles0]
-    // grid.y covers i2: [ne02]
-    // grid.z covers i3: [ne03]
-    const dim3        grid_dims((unsigned) (ne01 * tiles0), (unsigned) ne02, (unsigned) ne03);
+    constexpr int64_t bx         = CUDA_PAD_REFLECT_1D_BLOCK_SIZE;  // threads per block (x)
+    constexpr int64_t max_blocks = UINT32_MAX / bx;                 // HIP refuses more than 2^32 threads per grid dimension
+    const int64_t     tiles0     = (ne0 + bx - 1) / bx;             // number of tiles along i0
+    const int64_t     nblocks    = ne01 * tiles0;                   // blocks covering i1 and all tiles of i0
+    GGML_ASSERT(nblocks <= UINT32_MAX);
     const dim3        block_dims((unsigned) bx, 1, 1);
 
-    pad_reflect_1d_kernel_f32<<<grid_dims, block_dims, 0, stream>>>(
-        src0->data, dst->data, ne0, ne00, ne01_packed, ne02, ne03, src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3],
-        dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3], p0, p1);
+    // grid.x covers a chunk of at most max_blocks of the nblocks
+    // grid.y covers i2: [ne02]
+    // grid.z covers i3: [ne03]
+    for (int64_t offset = 0; offset < nblocks; offset += max_blocks) {
+        const dim3 grid_dims((unsigned) std::min(nblocks - offset, max_blocks), (unsigned) ne02, (unsigned) ne03);
+
+        pad_reflect_1d_kernel_f32<<<grid_dims, block_dims, 0, stream>>>(
+            src0->data, dst->data, ne0, ne00, ne01_packed, ne02, ne03, src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3],
+            dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3], p0, p1, (uint32_t) offset);
+    }
 }
