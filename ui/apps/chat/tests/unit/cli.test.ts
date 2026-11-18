@@ -1,10 +1,4 @@
-import {
-	buildStatic,
-	createChatServer,
-	DEFAULTS,
-	parseCliArgs,
-	parseServerUrl
-} from '../../cli/server.js';
+import { buildStatic, createChatServer, DEFAULTS, parseCliArgs } from '../../cli/server.js';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -31,22 +25,12 @@ describe('llama-chat CLI arguments', () => {
 		expect(options.host).toBe(DEFAULTS.host);
 		expect(options.port).toBe(DEFAULTS.port);
 		expect(options.open).toBe(true);
-		expect(options.server.href).toBe(`${DEFAULTS.server}/`);
 	});
 
 	it('reads the documented flags', () => {
-		const options = parseCliArgs([
-			'--server',
-			'http://192.168.1.20:9931',
-			'--host',
-			'0.0.0.0',
-			'--port',
-			'3001',
-			'--no-open'
-		]);
+		const options = parseCliArgs(['--host', '0.0.0.0', '--port', '3001', '--no-open']);
 
 		expect(options).toMatchObject({ host: '0.0.0.0', open: false, port: 3001 });
-		expect(options.server.href).toBe('http://192.168.1.20:9931/');
 	});
 
 	it('accepts start as a verb that changes nothing', () => {
@@ -58,6 +42,8 @@ describe('llama-chat CLI arguments', () => {
 		expect(() => parseCliArgs(['--nope'])).toThrow();
 		expect(() => parseCliArgs(['--port', 'abc'])).toThrow(/invalid --port/);
 		expect(() => parseCliArgs(['--port', '70000'])).toThrow(/invalid --port/);
+		// it forwards nothing, so there is no llama-server to name
+		expect(() => parseCliArgs(['--server', 'http://127.0.0.1:9931'])).toThrow();
 	});
 
 	it('reads build with its own flags, and keeps serving flags out of it', () => {
@@ -74,11 +60,6 @@ describe('llama-chat CLI arguments', () => {
 		expect(parseCliArgs([]).command).toBe('serve');
 		expect(() => parseCliArgs(['build', '--port', '3001'])).toThrow(/does not apply to build/);
 		expect(() => parseCliArgs(['--out', 'public'])).toThrow(/does not apply to serving/);
-	});
-
-	it('takes a server address without a scheme as http', () => {
-		expect(parseServerUrl('localhost:9931').href).toBe('http://localhost:9931/');
-		expect(() => parseServerUrl('ftp://localhost')).toThrow(/invalid --server/);
 	});
 });
 
@@ -148,13 +129,8 @@ describe('llama-chat build', () => {
 
 describe('llama-chat server', () => {
 	let dist: string;
-	let upstream: http.Server;
-	let upstreamUrl: string;
 	let chat: http.Server;
 	let chatUrl: string;
-
-	const seen: { headers: http.IncomingHttpHeaders; method?: string; url?: string; body: string }[] =
-		[];
 
 	beforeAll(async () => {
 		dist = await mkdtemp(join(tmpdir(), 'llama-chat-dist-'));
@@ -164,25 +140,12 @@ describe('llama-chat server', () => {
 		await writeFile(join(dist, 'service-worker.js'), 'self;');
 		await writeFile(join(dist, '_app', 'immutable', 'app.abc123.js'), 'export {};');
 
-		upstream = http.createServer((req, res) => {
-			let body = '';
-
-			req.on('data', (chunk) => (body += chunk));
-			req.on('end', () => {
-				seen.push({ body, headers: req.headers, method: req.method, url: req.url });
-				res.writeHead(200, { 'Content-Type': 'application/json' });
-				res.end(JSON.stringify({ path: req.url }));
-			});
-		});
-		upstreamUrl = await listen(upstream);
-
-		chat = createChatServer({ distDir: dist, server: new URL(`${upstreamUrl}/prefix/`) });
+		chat = createChatServer({ distDir: dist });
 		chatUrl = await listen(chat);
 	});
 
 	afterAll(async () => {
 		await close(chat);
-		await close(upstream);
 		await rm(dist, { force: true, recursive: true });
 	});
 
@@ -218,83 +181,32 @@ describe('llama-chat server', () => {
 		expect(worker.headers.get('cache-control')).toBe('no-cache');
 	});
 
-	it('forwards API calls to the llama-server as its own page', async () => {
-		const res = await fetch(`${chatUrl}/v1/chat/completions?x=1`, {
+	it('forwards nothing: API paths are not found and other methods are refused', async () => {
+		const props = await fetch(`${chatUrl}/props`);
+
+		expect(props.status).toBe(404);
+
+		const post = await fetch(`${chatUrl}/v1/chat/completions`, {
 			body: '{"messages":[]}',
-			headers: { 'Content-Type': 'application/json', Origin: chatUrl },
+			headers: { 'Content-Type': 'application/json' },
 			method: 'POST'
 		});
 
-		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ path: '/prefix/v1/chat/completions?x=1' });
-
-		const request = seen.at(-1)!;
-
-		expect(request.method).toBe('POST');
-		expect(request.body).toBe('{"messages":[]}');
-		expect(request.headers.origin).toBeUndefined();
-		expect(request.headers.host).toBe(new URL(upstreamUrl).host);
-	});
-
-	it("passes another page's Origin through, so llama-server can refuse it", async () => {
-		await fetch(`${chatUrl}/props`, {
-			headers: { Origin: 'http://evil.example', 'Sec-Fetch-Site': 'cross-site' }
-		});
-
-		const request = seen.at(-1)!;
-
-		expect(request.headers.origin).toBe('http://evil.example');
-		expect(request.headers['sec-fetch-site']).toBe('cross-site');
-	});
-
-	it('refuses other host names on loopback, against DNS rebinding', async () => {
-		// fetch() sets Host itself, so the request goes out through http.request
-		const status = (host: string) =>
-			new Promise<number>((resolve, reject) => {
-				const { port } = new URL(chatUrl);
-
-				http
-					.request({ headers: { host }, host: '127.0.0.1', path: '/props', port }, (res) => {
-						res.resume();
-						resolve(res.statusCode ?? 0);
-					})
-					.on('error', reject)
-					.end();
-			});
-
-		expect(await status('rebind.example:3000')).toBe(403);
-		expect(await status('localhost:3000')).toBe(200);
-		expect(await status('[::1]:3000')).toBe(200);
+		expect(post.status).toBe(405);
+		expect(post.headers.get('allow')).toBe('GET, HEAD');
 	});
 
 	it('does not serve files from outside dist', async () => {
 		// fetch() would resolve the dots itself, so the raw path goes out through http.get
-		const path = '/..%2f..%2f..%2fetc%2fpasswd';
-		const body = await new Promise<string>((resolve, reject) => {
+		const status = await new Promise<number>((resolve, reject) => {
 			http
-				.get(`${chatUrl}${path}`, (res) => {
-					let data = '';
-
-					res.on('data', (chunk) => (data += chunk));
-					res.on('end', () => resolve(data));
+				.get(`${chatUrl}/..%2f..%2f..%2fetc%2fpasswd`, (res) => {
+					res.resume();
+					resolve(res.statusCode ?? 0);
 				})
 				.on('error', reject);
 		});
 
-		expect(JSON.parse(body)).toEqual({ path: `/prefix${path}` });
-	});
-
-	it('answers 502 when the llama-server is down', async () => {
-		const down = createChatServer({ distDir: dist, server: new URL('http://127.0.0.1:9') });
-		const url = await listen(down);
-
-		try {
-			const res = await fetch(`${url}/props`);
-
-			expect(res.status).toBe(502);
-			expect((await res.json()).error.message).toMatch(/could not reach the llama-server/);
-		} finally {
-			await close(down);
-		}
+		expect(status).toBe(404);
 	});
 });

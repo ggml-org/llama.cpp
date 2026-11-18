@@ -1,19 +1,18 @@
 /**
- * `npx @ggml-org/llama-chat`: serves the prebuilt Llama Chat (`dist`) on localhost and forwards
- * its API calls to a llama-server. `npx @ggml-org/llama-chat build` writes the same files to a
- * folder instead, for any static file server. Node built-ins only, so the published package has
- * no dependencies: no llama-server, no models, no Vite or SvelteKit.
+ * `npx @ggml-org/llama-chat`: serves the prebuilt Llama Chat (`dist`) as static files on
+ * localhost. `npx @ggml-org/llama-chat build` writes the same files to a folder instead, for any
+ * static file server. Node built-ins only, so the published package has no dependencies: no
+ * llama-server, no models, no Vite or SvelteKit.
  *
- * The app calls the server on its own origin (`./v1/...`, `./props`, ...), as it does when
- * llama-server serves it. So a request is answered from `dist` when a file there matches its
- * path, and forwarded to the llama-server otherwise.
+ * It only serves files and forwards nothing: the browser calls each llama-server the app is
+ * pointed at directly, so llama-server's own rules (--cors-origins, --api-key) apply as they do
+ * to any other page.
  */
 
 import { spawn } from 'node:child_process';
 import { createReadStream, readFileSync } from 'node:fs';
 import { cp, readdir, stat } from 'node:fs/promises';
 import http from 'node:http';
-import https from 'node:https';
 import { extname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -26,9 +25,7 @@ export const DEFAULTS = Object.freeze({
 	// the folder `build` writes to, in the current directory
 	out: 'llama-chat',
 	// fixed, so the origin, and the chats the browser stores under it, stay the same between runs
-	port: 3000,
-	// where llama-server listens when started without --host or --port
-	server: 'http://127.0.0.1:9931'
+	port: 3000
 });
 
 // The same caching llama-server applies to the UI it embeds (tools/server/server-http.cpp):
@@ -64,29 +61,17 @@ const MIME_TYPES = {
 	'.woff': 'font/woff',
 	'.woff2': 'font/woff2'
 };
-// hop-by-hop headers, which a proxy does not pass on
-const HOP_BY_HOP = [
-	'connection',
-	'keep-alive',
-	'proxy-authenticate',
-	'proxy-authorization',
-	'proxy-connection',
-	'te',
-	'trailer',
-	'transfer-encoding',
-	'upgrade'
-];
-const SERVE_OPTIONS = ['host', 'open', 'port', 'server'];
+const SERVE_OPTIONS = ['host', 'open', 'port'];
 const BUILD_OPTIONS = ['force', 'out'];
 
 export const USAGE = `Usage: llama-chat [options]
        llama-chat build [--out <dir>] [--force]
 
-Serves Llama Chat on localhost and connects it to a llama-server, or, with
-build, writes it to a folder as static files for any HTTP server.
+Serves Llama Chat on localhost as static files, or, with build, writes them to
+a folder for any HTTP server. The browser talks to llama-server directly: start
+it with --cors-origins set to this page's address when it restricts origins.
 
 Options:
-  --server <url>   llama-server to connect to (default: ${DEFAULTS.server})
   --port <n>       port to listen on (default: ${DEFAULTS.port})
   --host <addr>    address to listen on, 0.0.0.0 for the LAN (default: ${DEFAULTS.host})
   --open           open the browser once it listens (default)
@@ -100,7 +85,6 @@ Build options:
 
 Examples:
   npx @ggml-org/llama-chat
-  npx @ggml-org/llama-chat --server http://192.168.1.20:9931
   npx @ggml-org/llama-chat --host 0.0.0.0 --port 3000 --no-open
   npx @ggml-org/llama-chat build --out ./public`;
 
@@ -113,7 +97,7 @@ export function packageVersion() {
  * Reads the command line. No verb serves the app, `start` means the same, and `build` writes it
  * to a folder.
  * @param {string[]} argv the arguments after the command
- * @returns {{ command: 'build' | 'serve', force: boolean, help: boolean, host: string, open: boolean, out: string, port: number, server: URL, version: boolean }}
+ * @returns {{ command: 'build' | 'serve', force: boolean, help: boolean, host: string, open: boolean, out: string, port: number, version: boolean }}
  */
 export function parseCliArgs(argv) {
 	const { positionals, values } = parseArgs({
@@ -127,7 +111,6 @@ export function parseCliArgs(argv) {
 			open: { type: 'boolean' },
 			out: { type: 'string' },
 			port: { type: 'string' },
-			server: { type: 'string' },
 			version: { short: 'v', type: 'boolean' }
 		},
 		strict: true
@@ -163,23 +146,8 @@ export function parseCliArgs(argv) {
 		open: values.open ?? true,
 		out: values.out ?? DEFAULTS.out,
 		port,
-		server: parseServerUrl(values.server ?? DEFAULTS.server),
 		version: values.version ?? false
 	};
-}
-
-/**
- * @param {string} value a llama-server address, with or without `http://`
- * @returns {URL}
- */
-export function parseServerUrl(value) {
-	const url = new URL(/^[a-z][a-z\d+.-]*:\/\//i.test(value) ? value : `http://${value}`);
-
-	if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-		throw new Error(`invalid --server: ${value} (use an http:// or https:// address)`);
-	}
-
-	return url;
 }
 
 /**
@@ -246,132 +214,42 @@ function sendFile(req, res, file, pathname, stats) {
 }
 
 /**
- * The host name in a Host header, lower case and without the port or IPv6 brackets.
- * @param {string} host
- */
-function hostName(host) {
-	const name = host.startsWith('[') ? host.slice(1, host.indexOf(']')) : host.split(':')[0];
-
-	return name.toLowerCase();
-}
-
-/** @param {string} address */
-function isLoopback(address) {
-	return /^(127\.|::1$|::ffff:127\.)/.test(address);
-}
-
-/**
- * DNS rebinding guard, as llama-server has: a page whose own name resolves to 127.0.0.1 reaches
- * a loopback listener with that name in Host, so there Host must name loopback itself.
- * @param {http.IncomingMessage} req
- */
-function hostIsAllowed(req) {
-	if (!isLoopback(req.socket.localAddress ?? '')) return true;
-
-	const name = hostName(req.headers.host ?? '');
-
-	return name === 'localhost' || name === '0.0.0.0' || name === '::' || isLoopback(name);
-}
-
-/**
- * Forwards a request to the llama-server. llama-server takes cross-origin browser requests only
- * from its --cors-origins, so, like the Vite dev proxy, this calls it as its own page: with the
- * Host of the server, and without the Origin of this page. Another page's Origin and
- * Sec-Fetch-Site pass through, so llama-server still refuses what it would refuse directly.
- * @param {http.IncomingMessage} req
  * @param {http.ServerResponse} res
- * @param {URL} server
+ * @param {number} status
+ * @param {string} message
  */
-function proxy(req, res, server) {
-	const prefix = server.pathname.replace(/\/+$/, '');
-	const target = new URL(prefix + (req.url ?? '/'), server.origin);
-	/** @type {http.OutgoingHttpHeaders} */
-	const headers = { ...req.headers, host: target.host };
-	const origin = req.headers.origin ?? '';
-
-	if (origin.slice(origin.indexOf('://') + 3).toLowerCase() === req.headers.host?.toLowerCase()) {
-		delete headers.origin;
-	}
-
-	for (const name of HOP_BY_HOP) delete headers[name];
-
-	const upstream = (target.protocol === 'https:' ? https : http).request(
-		target,
-		{ headers, method: req.method },
-		(response) => {
-			const responseHeaders = { ...response.headers };
-
-			for (const name of HOP_BY_HOP) delete responseHeaders[name];
-
-			res.writeHead(response.statusCode ?? 502, responseHeaders);
-			response.pipe(res);
-		}
-	);
-
-	upstream.on('error', (error) => {
-		if (res.headersSent) {
-			res.destroy(error);
-
-			return;
-		}
-
-		res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
-		res.end(
-			JSON.stringify({
-				error: {
-					code: 502,
-					message: `llama-chat could not reach the llama-server at ${server.href}: ${error.message}`,
-					type: 'unavailable_error'
-				}
-			})
-		);
-	});
-
-	// a stream the browser stops reading (Stop, a closed tab) stops the generation on the server
-	res.on('close', () => {
-		if (!res.writableFinished) upstream.destroy();
-	});
-
-	req.pipe(upstream);
+function sendError(res, status, message) {
+	res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8' });
+	res.end(`${message}\n`);
 }
 
 /**
- * The HTTP server: files from `dist`, everything else from the llama-server.
- * @param {{ distDir?: string, server: URL }} options
+ * The HTTP server: the files of `dist`, read-only.
+ * @param {{ distDir?: string }} [options]
  */
-export function createChatServer({ distDir = DIST_DIR, server }) {
+export function createChatServer({ distDir = DIST_DIR } = {}) {
 	const root = normalize(distDir);
 
 	return http.createServer(async (req, res) => {
 		const { pathname } = new URL(req.url ?? '/', 'http://localhost');
 
-		if (!hostIsAllowed(req)) {
-			res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
-			res.end(
-				JSON.stringify({
-					error: {
-						code: 403,
-						message: `llama-chat refused the host name ${req.headers.host}, open it on localhost or 127.0.0.1`,
-						type: 'permission_error'
-					}
-				})
-			);
+		if (req.method !== 'GET' && req.method !== 'HEAD') {
+			res.setHeader('Allow', 'GET, HEAD');
+			sendError(res, 405, 'Method Not Allowed');
 
 			return;
 		}
 
-		if (req.method === 'GET' || req.method === 'HEAD') {
-			const file = resolveStatic(root, pathname);
-			const stats = file ? await stat(file).catch(() => null) : null;
+		const file = resolveStatic(root, pathname);
+		const stats = file ? await stat(file).catch(() => null) : null;
 
-			if (file && stats?.isFile()) {
-				sendFile(req, res, file, pathname, stats);
+		if (file && stats?.isFile()) {
+			sendFile(req, res, file, pathname, stats);
 
-				return;
-			}
+			return;
 		}
 
-		proxy(req, res, server);
+		sendError(res, 404, 'Not Found');
 	});
 }
 
@@ -465,9 +343,7 @@ export async function main(argv) {
 			const shown = relative(process.cwd(), target) || '.';
 
 			console.log(`Llama Chat ${packageVersion()} written to ${target}`);
-			console.log(
-				`Serve it on the same origin as the llama-server API, e.g.: npx http-server ${shown} -P ${DEFAULTS.server}`
-			);
+			console.log(`Serve it with any static file server, e.g.: npx http-server ${shown}`);
 		} catch (error) {
 			console.error(`llama-chat: ${error instanceof Error ? error.message : error}`);
 			process.exitCode = 1;
@@ -476,7 +352,7 @@ export async function main(argv) {
 		return;
 	}
 
-	const server = createChatServer({ server: options.server });
+	const server = createChatServer();
 
 	return new Promise((resolve) => {
 		server.on('error', (error) => {
@@ -497,7 +373,9 @@ export async function main(argv) {
 			const url = `http://${shown.includes(':') ? `[${shown}]` : shown}:${address.port}/`;
 
 			console.log(`Llama Chat ${packageVersion()} on ${url}`);
-			console.log(`Connected to the llama-server at ${options.server.href}`);
+			console.log(
+				`If llama-server restricts origins (tools or MCP on), start it with --cors-origins ${url.slice(0, -1)}`
+			);
 
 			if (options.open) openBrowser(url);
 
