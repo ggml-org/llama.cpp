@@ -752,7 +752,13 @@ typedef struct {
     int32_t  p1;
     int32_t  d0;
     int32_t  d1;
+    int32_t  nk;    // reduction length per split
 } ggml_metal_kargs_conv_2d;
+
+typedef struct {
+    int32_t  ne;     // output elements
+    int32_t  nsplit;
+} ggml_metal_kargs_conv_2d_reduce;
 
 typedef struct {
     uint64_t nb00;  // kernel strides

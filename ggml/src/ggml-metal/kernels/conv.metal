@@ -282,6 +282,7 @@ kernel void kernel_conv_2d_mm(
         device       char * dst,
         threadgroup  char * shmem [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
+        uint3   tgpg[[threadgroups_per_grid]],
         ushort  tiitg[[thread_index_in_threadgroup]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
@@ -299,6 +300,10 @@ kernel void kernel_conv_2d_mm(
 
     const int K  = args.IC*args.KH*args.KW;
     const int NP = args.N*args.OH*args.OW;
+
+    // this threadgroup reduces [k_begin, k_end), the splits are summed by kernel_conv_2d_mm_reduce
+    const int k_begin = tgpig.z*args.nk;
+    const int k_end   = min(K, k_begin + args.nk);
 
     const int r0 = tgpig.y*NR0;
     const int r1 = tgpig.x*NR1;
@@ -337,7 +342,7 @@ kernel void kernel_conv_2d_mm(
         mc[i] = make_filled_simdgroup_matrix<float, 8>(0.f);
     }
 
-    for (int k0 = 0; k0 < K; k0 += NK) {
+    for (int k0 = k_begin; k0 < k_end; k0 += NK) {
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         {
@@ -349,7 +354,7 @@ kernel void kernel_conv_2d_mm(
                 const int   oc  = r0 + row;
 
                 half v = 0;
-                if (kk < K && oc < args.OC) {
+                if (kk < k_end && oc < args.OC) {
                     v = *((device const TK *)(weights + oc*args.nb03) + kk);
                 }
 
@@ -376,7 +381,7 @@ kernel void kernel_conv_2d_mm(
                     const int iy = iy0[t] + kh*args.d1;
 
                     half v = 0;
-                    if (ip_ok[t] && kk < K && ix >= 0 && ix < args.IW && iy >= 0 && iy < args.IH) {
+                    if (ip_ok[t] && kk < k_end && ix >= 0 && ix < args.IW && iy >= 0 && iy < args.IH) {
                         v = *(device const float *)(srcb[t] + ic*args.nb12 + iy*args.nb11 + ix*args.nb10);
                     }
 
@@ -398,7 +403,7 @@ kernel void kernel_conv_2d_mm(
 
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        const short nkb = min((K - k0 + 7)/8, (int) NKB);
+        const short nkb = min((k_end - k0 + 7)/8, (int) NKB);
 
         for (short ik = 0; ik < nkb; ik++) {
             FOR_UNROLL (short i = 0; i < 4; i++) {
@@ -436,7 +441,8 @@ kernel void kernel_conv_2d_mm(
     const int oh = (p / args.OW) % args.OH;
     const int n  = p / (args.OW*args.OH);
 
-    device char * dstp = dst + n*args.nb3 + oh*args.nb1 + ow*args.nb0;
+    // with several splits, dst is the partial sum buffer of this split, laid out like a contiguous output
+    device char * dstp = dst + n*args.nb3 + oh*args.nb1 + ow*args.nb0 + (uint64_t) tgpig.z*(tgpg.z > 1 ? args.N*args.nb3 : 0);
 
     for (short j = 0; j < NR0*NR1/NTH; j++) {
         const short row = tiitg/NR1 + (NTH/NR1)*j;
@@ -446,6 +452,138 @@ kernel void kernel_conv_2d_mm(
             *(device float *)(dstp + oc*args.nb2) = sc[NR1*row + cn];
         }
     }
+}
+
+#ifdef GGML_METAL_HAS_TENSOR
+// conv_2d as a matmul on the tensor cores: the patches of NRA output positions are gathered into threadgroup memory
+// as the left operand, the kernel rows are read from device memory as the right operand, like kernel_mul_mm
+// one threadgroup computes NRA positions of one image times NRB output channels, over the reduction range of its split
+template <typename TK>
+kernel void kernel_conv_2d_mm_tensor(
+        constant ggml_metal_kargs_conv_2d & args,
+        device const char * weights,
+        device const char * src,
+        device       char * dst,
+        threadgroup  char * shmem [[threadgroup(0)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        uint3   tgpg[[threadgroups_per_grid]],
+        ushort  tiitg[[thread_index_in_threadgroup]]) {
+    constexpr int NRB = SZ_SIMDGROUP * N_MM_BLOCK_X * N_MM_SIMD_GROUP_X; // output channels
+    constexpr int NRA = SZ_SIMDGROUP * N_MM_BLOCK_Y * N_MM_SIMD_GROUP_Y; // output positions
+    constexpr int NK  = N_MM_NK_TOTAL;
+    constexpr int NTH = N_SIMDWIDTH * N_MM_SIMD_GROUP_X * N_MM_SIMD_GROUP_Y;
+
+    // each thread gathers NK/(NTH/NRA) consecutive reduction indices of one position
+    constexpr int KPT = NK/(NTH/NRA);
+
+    const int K   = args.IC*args.KH*args.KW;
+    const int OHW = args.OH*args.OW;
+
+    const int nsplit = tgpg.z/args.N;
+    const int img    = tgpig.z/nsplit;
+    const int split  = tgpig.z%nsplit;
+
+    const int k_begin = split*args.nk;
+    const int k_end   = min(K, k_begin + args.nk);
+
+    const int ra = tgpig.y*NRA;
+    const int rb = tgpig.x*NRB;
+
+    threadgroup half * sa = (threadgroup half *) shmem;
+
+    // the position this thread gathers
+    const int  row = tiitg%NRA;
+    const int  kc  = (tiitg/NRA)*KPT;
+    const int  p   = ra + row;
+    const bool pok = p < OHW;
+    const int  ix0 = (p%args.OW)*args.s0 - args.p0;
+    const int  iy0 = (p/args.OW)*args.s1 - args.p1;
+
+    device const char * srcb = src + img*args.nb13;
+
+    device TK * ptrB = (device TK *) weights;
+    const int strideB = args.nb03/sizeof(TK);
+
+    mpp::tensor_ops::matmul2d<
+        mpp::tensor_ops::matmul2d_descriptor(
+            NRB, NRA, static_cast<int>(dynamic_extent), false, true, true,
+            mpp::tensor_ops::matmul2d_descriptor::mode::multiply_accumulate),
+        execution_simdgroups<N_MM_SIMD_GROUP_X * N_MM_SIMD_GROUP_Y>> mm;
+
+    auto tB0 = tensor(ptrB, dextents<int32_t, 2>(K, args.OC), array<int, 2>({1, strideB}));
+    auto tA0 = tensor(sa,   dextents<int32_t, 2>(NK, NRA));
+    auto cT  = mm.get_destination_cooperative_tensor<decltype(tB0), decltype(tA0), float>();
+
+    for (int k0 = k_begin; k0 < k_end; k0 += NK) {
+        // gather KPT patch values of this position, walking the reduction index incrementally
+        int kk = k0 + kc;
+        int kw = kk % args.KW;
+        int kh = (kk / args.KW) % args.KH;
+        int ic = kk / (args.KW*args.KH);
+
+        FOR_UNROLL (short i = 0; i < KPT; i++) {
+            const int ix = ix0 + kw*args.d0;
+            const int iy = iy0 + kh*args.d1;
+
+            half v = 0;
+            if (pok && kk < k_end && ix >= 0 && ix < args.IW && iy >= 0 && iy < args.IH) {
+                v = *(device const float *)(srcb + ic*args.nb12 + iy*args.nb11 + ix*args.nb10);
+            }
+            sa[row*NK + kc + i] = v;
+
+            kk++;
+            if (++kw == args.KW) {
+                kw = 0;
+                if (++kh == args.KH) {
+                    kh = 0;
+                    ic++;
+                }
+            }
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        // clamp the reduction extent so neither operand is read past the end of the split
+        const int kExt = min(NK, k_end - k0);
+
+        auto tAv = tensor(sa, dextents<int32_t, 2>(kExt, NRA), array<int, 2>({1, NK}));
+        auto tBv = tensor(ptrB + k0 + rb*strideB, dextents<int32_t, 2>(kExt, args.OC - rb), array<int, 2>({1, strideB}));
+
+        mm.run(tBv, tAv, cT);
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    // dst holds [OHW, OC] per image, with several splits it is the partial sum buffer of this split
+    const int tileM = min(NRA, OHW - ra);
+    const int tileN = min(NRB, args.OC - rb);
+
+    device float * dstTile = (device float *) (dst + img*args.nb3 + (uint64_t) split*(nsplit > 1 ? args.N*args.nb3 : 0)) + (uint64_t) rb*OHW + ra;
+
+    auto tD = tensor(dstTile, dextents<int32_t, 2>(tileM, tileN), array<int, 2>({1, OHW}));
+    cT.store(tD);
+}
+
+typedef decltype(kernel_conv_2d_mm_tensor<float>) kernel_conv_2d_mm_tensor_t;
+
+template [[host_name("kernel_conv_2d_mm_tensor_f32_f32")]] kernel kernel_conv_2d_mm_tensor_t kernel_conv_2d_mm_tensor<float>;
+template [[host_name("kernel_conv_2d_mm_tensor_f16_f32")]] kernel kernel_conv_2d_mm_tensor_t kernel_conv_2d_mm_tensor<half>;
+#endif
+
+kernel void kernel_conv_2d_mm_reduce(
+        constant ggml_metal_kargs_conv_2d_reduce & args,
+        device const float * tmp,
+        device       float * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    if ((int) tpig >= args.ne) {
+        return;
+    }
+
+    float sum = 0.0f;
+    for (int s = 0; s < args.nsplit; ++s) {
+        sum += tmp[(uint64_t) s*args.ne + tpig];
+    }
+    dst[tpig] = sum;
 }
 
 typedef decltype(kernel_conv_2d_mm<float, 64, 32>) kernel_conv_2d_mm_t;
