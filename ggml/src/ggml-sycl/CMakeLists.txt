@@ -23,6 +23,12 @@ ggml_add_backend_library(ggml-sycl
                          ../../include/ggml-sycl.h
                         )
 
+option(XMX_ENABLE_SLM "Split Arrow Lake-H ESIMD XMX K reductions in shared local memory" OFF)
+option(XMX_ENABLE_TRANSPOSED_2D_LOADS "Use native 2D loads when the Arrow Lake-H XMX device and layout support them" OFF)
+option(XMX_ENABLE_GATHER_TRANSPOSE "Use LSC gathers for Arrow Lake-H ESIMD XMX weights and scales" ON)
+set_source_files_properties(mmvq-arl.cpp PROPERTIES COMPILE_DEFINITIONS
+    "XMX_ENABLE_SLM=$<BOOL:${XMX_ENABLE_SLM}>;XMX_ENABLE_TRANSPOSED_2D_LOADS=$<BOOL:${XMX_ENABLE_TRANSPOSED_2D_LOADS}>;XMX_ENABLE_GATHER_TRANSPOSE=$<BOOL:${XMX_ENABLE_GATHER_TRANSPOSE}>")
+
 file(GLOB   GGML_HEADERS_SYCL "*.hpp")
 file(GLOB   GGML_SOURCES_SYCL "*.cpp")
 file(GLOB   SRCS "template-instances/fattn-tile*.cpp")
@@ -219,7 +225,8 @@ endif()
 if (GGML_SYCL_TARGET STREQUAL "INTEL")
     add_compile_definitions(GGML_SYCL_WARP_SIZE=16)
     if (NOT GGML_SYCL_DEVICE_ARCH)
-        target_link_options(ggml-sycl PRIVATE -Xs -ze-intel-greater-than-4GB-buffer-required)
+        # Xe-LPG+ DPAS kernels need automatic GRF allocation to avoid scratch spills.
+        target_link_options(ggml-sycl PRIVATE -Xs "-ze-intel-greater-than-4GB-buffer-required -ze-intel-enable-auto-large-GRF-mode")
     else()
         message(STATUS "spir64_gen AOT: -ze-intel-greater-than-4GB-buffer-required passed to ocloc")
     endif()
@@ -248,10 +255,11 @@ endif()
 
 if (GGML_SYCL_DEVICE_ARCH)
     message(STATUS "GGML_SYCL_DEVICE_ARCH=${GGML_SYCL_DEVICE_ARCH} (AOT via spir64_gen)")
+    set(_ggml_sycl_device_options "-device ${GGML_SYCL_DEVICE_ARCH} -options \"-ze-intel-greater-than-4GB-buffer-required -ze-intel-enable-auto-large-GRF-mode\"")
     target_compile_options(
         ggml-sycl PRIVATE
         -fsycl-targets=spir64_gen
-        "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_DEVICE_ARCH} -options -ze-intel-greater-than-4GB-buffer-required\""
+        -Xsycl-target-backend=spir64_gen "${_ggml_sycl_device_options}"
     )
 
     # Pass through parallel job (process) count for parallelising the
@@ -266,7 +274,7 @@ if (GGML_SYCL_DEVICE_ARCH)
     target_link_options(
         ggml-sycl PRIVATE
         -fsycl-targets=spir64_gen
-        "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_DEVICE_ARCH} -options -ze-intel-greater-than-4GB-buffer-required\""
+        -Xsycl-target-backend=spir64_gen "${_ggml_sycl_device_options}"
         -fsycl-max-parallel-link-jobs=${GGML_SYCL_MAX_PARALLEL_LINK_JOBS}
     )
 
