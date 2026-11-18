@@ -27,7 +27,7 @@ jobs:
   deploy:
     name: Deploy to Hugging Face Spaces
     if: github.repository == 'ggml-org/llama.cpp'
-    runs-on: ubuntu-24.04
+    runs-on: hf-jobs-cpu-upgrade:ubuntu26_04
 
     env:
       HF_SPACE: ${{ vars.HF_SPACE_UI_STORYBOOK || 'ggml-org/llama-ui-storybook' }}
@@ -67,12 +67,15 @@ jobs:
 
       - name: Install Hugging Face Hub CLI
         run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-venv
           python3 -m venv .venv-hf
           .venv-hf/bin/pip install -U huggingface_hub==1.28.0
 
       - name: Upload to the Space
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN_UI_STATIC_OUTPUT }}
+          # a token with write access to the Space; HF_TOKEN_UI_STATIC_OUTPUT if that one has it
+          HF_TOKEN: ${{ secrets.HF_TOKEN_UI_STORYBOOK || secrets.HF_TOKEN_UI_STATIC_OUTPUT }}
         run: |
           # --delete '*' removes files the new build no longer has; the Space's .gitattributes is always kept
           .venv-hf/bin/hf upload "$HF_SPACE" ui/apps/chat/storybook-static . \
