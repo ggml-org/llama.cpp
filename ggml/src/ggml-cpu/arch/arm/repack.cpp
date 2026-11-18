@@ -862,9 +862,9 @@ void ggml_gemv_q4_K_8x8_q8_K(int                        n,
 #if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
     {
         const block_q8_K * GGML_RESTRICT q8_ptr = (const block_q8_K *) vy;
-        const int vl_words = (int) svcntw();
+        const int vl_words = (int) svcntb();
 
-        if (vl_words == 4) {  // 128-bit SVE
+        if (vl_words == 16) {  // 128-bit SVE
             const svbool_t  pg8  = svptrue_b8();
             const svbool_t  pg16 = svptrue_b16();
             const svbool_t  pg32 = svptrue_b32();
@@ -964,7 +964,7 @@ void ggml_gemv_q4_K_8x8_q8_K(int                        n,
             return;
         }
 
-        if (vl_words == 8) {  // 256-bit SVE: one 8-wide f32 vector covers the whole tile
+        if (vl_words == 32) {  // 256-bit SVE: one 8-wide f32 vector covers the whole tile
             const svbool_t  pg8    = svptrue_b8();
             const svbool_t  pg16   = svptrue_b16();
             const svbool_t  pg16_8 = svptrue_pat_b16(SV_VL8);
