@@ -329,6 +329,7 @@ class Keys:
         CORE_START = "{arch}.loop.core_start"
         CORE_END   = "{arch}.loop.core_end"
         NUM_PASSES = "{arch}.loop.num_passes"
+        GATE_RANK  = "{arch}.loop.gate_rank"
 
     class Metis:
         PASS_COUNT               = "{arch}.metis.pass_count"
