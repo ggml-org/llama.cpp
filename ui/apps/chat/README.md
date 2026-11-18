@@ -36,7 +36,7 @@ npx @ggml-org/llama-chat
 
 ```bash
 # the same, by its short name, against a llama-server elsewhere on the network
-npx llama-chat --server http://192.168.1.20:8080
+npx llama-chat --server http://192.168.1.20:9931
 ```
 
 ```bash
@@ -51,7 +51,7 @@ npx llama-chat build
 
 | Flag                              | Default                 | What it does                                                                                |
 | --------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------- |
-| `--server <url>`                  | `http://127.0.0.1:8080` | The llama-server to connect to. A path is kept, for a server started with `--api-prefix`    |
+| `--server <url>`                  | `http://127.0.0.1:9931` | The llama-server to connect to. A path is kept, for a server started with `--api-prefix`    |
 | `--port <n>`                      | `3000`                  | Fixed, so the origin, and the chats the browser stores under it, stay the same between runs |
 | `--host <addr>`                   | `127.0.0.1`             | `0.0.0.0` to open it to the LAN                                                             |
 | `--open` / `--no-open`            | open                    | Opens the default browser once it listens                                                   |
@@ -72,7 +72,7 @@ The app is static and uses relative paths and a hash router, so any static host 
 
   ```bash
   npx llama-chat build
-  npx http-server llama-chat -p 3000 -P http://127.0.0.1:8080
+  npx http-server llama-chat -p 3000 -P http://127.0.0.1:9931
   ```
 
   A plain file server sends the browser's `Origin` on to llama-server, so start llama-server with `--cors-origins http://127.0.0.1:3000` (the address you open) when it restricts origins, as it does with tools or MCP enabled. Send the headers listed above with `index.html` and the PWA files, so the app behaves as it does under llama-server (see [Remote Assets Under Cross-Origin Isolation](#9-remote-assets-under-cross-origin-isolation)).
@@ -847,7 +847,7 @@ To try a package before it is published:
 ```bash
 npm run build
 npm pack
-npx ./ggml-org-llama-chat-<version>.tgz --server http://127.0.0.1:8080
+npx ./ggml-org-llama-chat-<version>.tgz --server http://127.0.0.1:9931
 ```
 
 Build right before packing: the package carries whatever is in `dist`, and this folder's `.npmrc` sets `ignore-scripts`, so npm runs no lifecycle script such as `prepack` that could build it for you.

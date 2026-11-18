@@ -28,7 +28,7 @@ export const DEFAULTS = Object.freeze({
 	// fixed, so the origin, and the chats the browser stores under it, stay the same between runs
 	port: 3000,
 	// where llama-server listens when started without --host or --port
-	server: 'http://127.0.0.1:8080'
+	server: 'http://127.0.0.1:9931'
 });
 
 // The same caching llama-server applies to the UI it embeds (tools/server/server-http.cpp):
@@ -100,7 +100,7 @@ Build options:
 
 Examples:
   npx @ggml-org/llama-chat
-  npx @ggml-org/llama-chat --server http://192.168.1.20:8080
+  npx @ggml-org/llama-chat --server http://192.168.1.20:9931
   npx @ggml-org/llama-chat --host 0.0.0.0 --port 3000 --no-open
   npx @ggml-org/llama-chat build --out ./public`;
 

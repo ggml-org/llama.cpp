@@ -37,7 +37,7 @@ describe('llama-chat CLI arguments', () => {
 	it('reads the documented flags', () => {
 		const options = parseCliArgs([
 			'--server',
-			'http://192.168.1.20:8080',
+			'http://192.168.1.20:9931',
 			'--host',
 			'0.0.0.0',
 			'--port',
@@ -46,7 +46,7 @@ describe('llama-chat CLI arguments', () => {
 		]);
 
 		expect(options).toMatchObject({ host: '0.0.0.0', open: false, port: 3001 });
-		expect(options.server.href).toBe('http://192.168.1.20:8080/');
+		expect(options.server.href).toBe('http://192.168.1.20:9931/');
 	});
 
 	it('accepts start as a verb that changes nothing', () => {
@@ -77,7 +77,7 @@ describe('llama-chat CLI arguments', () => {
 	});
 
 	it('takes a server address without a scheme as http', () => {
-		expect(parseServerUrl('localhost:8080').href).toBe('http://localhost:8080/');
+		expect(parseServerUrl('localhost:9931').href).toBe('http://localhost:9931/');
 		expect(() => parseServerUrl('ftp://localhost')).toThrow(/invalid --server/);
 	});
 });
