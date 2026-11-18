@@ -131,15 +131,14 @@
 }
 
 /* Floating panel (menus, popovers, drawers): frosted fill, faint rim, lifted shadow. The edge is the hairline ring
-   baked into the shadow, not the border, so the two never draw a double edge; the border stays transparent so the
-   panel keeps its size. */
+   baked into the shadow; the panel's 1px border is its rim, the inner highlight right inside the ring. An inset
+   shadow for the rim would sit inside the border instead, and the 1px between the two would draw a double edge. */
 @utility matte-float {
 	background-color: var(--float-background, var(--float-panel-background));
-	border-color: transparent;
+	border-color: var(--float-panel-highlight);
 	color: var(--float-panel-text);
 	backdrop-filter: blur(var(--blur-surface)) saturate(1.5);
 	box-shadow:
-		inset 0 0 0 1px var(--float-panel-highlight),
 		var(--float-panel-shadow),
 		0 0 0 var(--elevation-ring-width) var(--float-panel-edge);
 }

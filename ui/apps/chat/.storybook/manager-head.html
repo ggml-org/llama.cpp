@@ -1,0 +1,86 @@
+<!--
+	Old links keep working: stories that moved redirect to where they are now (the brand pages that became Llama UI's
+	foundations, and the old UI section, which became Llama UI for the library and Llama Chat for the app), and a link
+	to a story that no longer exists opens Storybook's start page instead of the "Couldn't find story" error.
+-->
+<script>
+	(function () {
+		var match = location.search.match(/[?&]path=\/(story|docs)\/([^&]+)/);
+
+		if (!match) return;
+
+		var id = decodeURIComponent(match[2]);
+
+		// moved stories, old id: new id
+		var moved = {
+			'brand-colors-primitives--primitives': 'llama-ui-foundations-colors--primitives',
+			'brand-logo-app-icons--splash-screens': 'llama-chat-foundations-brand--splash-screens',
+			'brand-logo-usage--splash-screens': 'llama-chat-foundations-brand--splash-screens',
+			'introduction-design-guidelines--docs': 'agents-design-guidelines--docs'
+		};
+
+		// renamed groups, old id prefix: new id prefix, the first that matches wins (the UI section, split in two)
+		var renamed = [
+			[
+				'ui-blocks-chat-chatscreen-chatscreenform-accessibility',
+				'llama-chat-chat-chatform-chatscreenform-accessibility'
+			],
+			[
+				'ui-blocks-chat-chatmessagestatistics-accessibility',
+				'llama-chat-chat-chatmessages-chatmessagestatistics-accessibility'
+			],
+			['ui-blocks-chat-chatscreen-chatattachments-', 'llama-chat-chat-chatattachments-'],
+			['ui-blocks-chat-chatscreen-chatform-', 'llama-chat-chat-chatform-'],
+			['ui-blocks-chat-chatscreen-chatmessages-', 'llama-chat-chat-chatmessages-'],
+			['ui-blocks-chat-chatscreen-chattabs-', 'llama-chat-chat-chattabs-'],
+			['ui-blocks-chat-chatscreen-', 'llama-chat-chat-chatscreen-'],
+			['ui-blocks-content-syntaxhighlightedcode', 'llama-ui-app-components-syntaxhighlightedcode'],
+			['ui-blocks-app-pwarefreshalert', 'llama-chat-pwa-pwarefreshalert'],
+			['ui-blocks-app-serversplash', 'llama-chat-servers-serversplash'],
+			['ui-blocks-app-scrollcarousel', 'llama-chat-misc-scrollcarousel'],
+			['ui-blocks-', 'llama-chat-'],
+			['ui-actions-actionicon', 'llama-ui-app-components-actionicon'],
+			['ui-actions-', 'llama-ui-components-actions-'],
+			['ui-display-', 'llama-ui-components-display-'],
+			['ui-forms-', 'llama-ui-components-forms-'],
+			['ui-navigation-', 'llama-ui-components-navigation-'],
+			['ui-overlays-', 'llama-ui-components-overlays-'],
+			['ui-foundations-brand', 'llama-chat-foundations-brand'],
+			['ui-foundations-safe-areas', 'llama-chat-foundations-safe-areas'],
+			['ui-foundations-', 'llama-ui-foundations-'],
+			['ui-patterns-actionicon', 'llama-ui-app-components-actionicon'],
+			['ui-patterns-searchinput', 'llama-ui-app-components-searchinput'],
+			['ui-patterns-glasskey', 'llama-chat-actions-glasskey'],
+			['ui-patterns-infobadges', 'llama-chat-badges-infobadges'],
+			['ui-patterns-dialogconfirmation', 'llama-chat-dialogs-dialogconfirmation'],
+			['ui-patterns-inputwithsuggestions', 'llama-chat-forms-inputwithsuggestions'],
+			['ui-patterns-keyvaluepairs', 'llama-chat-forms-keyvaluepairs'],
+			['ui-patterns-', 'llama-chat-misc-']
+		];
+
+		function go(to) {
+			var url =
+				location.pathname +
+				(to ? '?path=/' + (/--docs$/.test(to) ? 'docs' : 'story') + '/' + to : '');
+
+			if (url !== location.pathname + location.search) location.replace(url);
+		}
+
+		if (moved[id]) return go(moved[id]);
+
+		for (var i = 0; i < renamed.length; i++) {
+			if (id.indexOf(renamed[i][0]) === 0)
+				return go(renamed[i][1] + id.slice(renamed[i][0].length));
+		}
+
+		// any other id: open the start page if the story is gone
+		fetch('./index.json')
+			.then(function (response) {
+				return response.json();
+			})
+			.then(function (index) {
+				if (!index.entries || !index.entries[id]) go('');
+			})
+			.catch(function () {});
+	})();
+</script>
