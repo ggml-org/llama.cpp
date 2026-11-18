@@ -5,7 +5,6 @@
 -->
 <script lang="ts">
 	import './lib/styles/logo.css';
-	import '../fonts/fonts.css';
 	import type { Snippet } from 'svelte';
 
 	let { children }: { children: Snippet } = $props();

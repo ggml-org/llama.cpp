@@ -45,7 +45,7 @@ The component library **Llama UI**, built on the **Llama Brand** (the icon, Llam
 	<Products />
 </Figure>
 
-Inside Llama UI, the tokens go from primitives to semantic roles to components, in `ui/lib/ui/src/lib/styles/tokens/`, and `DESIGN.md` is generated from them. Llama UI draws the interface and handles interaction; each app owns its own state.
+Inside Llama UI, the tokens go from primitives to semantic roles to components, in `ui/lib/ui/src/lib/styles/tokens/`, and the token sections of `DESIGN.md` are generated from them (`npm run design:tokens`); its rules are written by hand. Llama UI draws the interface and handles interaction; each app owns its own state.
 
 ## How it's laid out
 

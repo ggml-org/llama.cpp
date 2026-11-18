@@ -1,9 +1,9 @@
 <script lang="ts" module>
-	import StateGallery from '../helpers/StateGallery.svelte';
-	import StateGalleryItem from '../helpers/StateGalleryItem.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import { KeyValuePairs } from '#lib/components/app/index.ts';
 	import type { KeyValuePair } from '#lib/types/index.ts';
+	import StateGallery from '$llama-ui-stories/helpers/StateGallery.svelte';
+	import StateGalleryItem from '$llama-ui-stories/helpers/StateGalleryItem.svelte';
 
 	// the editable key and value list, as used for MCP server headers
 	const { Story } = defineMeta({

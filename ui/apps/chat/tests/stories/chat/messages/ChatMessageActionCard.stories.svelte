@@ -1,10 +1,10 @@
 <script lang="ts" module>
-	import StateGallery from '../../helpers/StateGallery.svelte';
-	import StateGalleryItem from '../../helpers/StateGalleryItem.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatMessageActionCardContinueRequest from '#lib/components/app/chat/ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardContinueRequest.svelte';
 	import ChatMessageActionCardPermissionRequest from '#lib/components/app/chat/ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardPermissionRequest.svelte';
 	import { BuiltInTool } from '#lib/enums/index.ts';
+	import StateGallery from '$llama-ui-stories/helpers/StateGallery.svelte';
+	import StateGalleryItem from '$llama-ui-stories/helpers/StateGalleryItem.svelte';
 
 	const { Story } = defineMeta({
 		component: ChatMessageActionCardPermissionRequest,
