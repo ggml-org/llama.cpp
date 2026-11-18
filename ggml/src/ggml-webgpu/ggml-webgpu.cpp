@@ -4451,7 +4451,7 @@ static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer
                     if (mask != nullptr) {
                         const uint32_t blk_nblk0       = CEIL_DIV((uint32_t) K->ne[1], kv_tile);
                         const uint32_t blk_nblk1       = (uint32_t) n_q;
-                        const uint32_t blk_batch_count = (uint32_t) mask->ne[3] * (uint32_t) mask->ne[2];
+                        const uint32_t blk_batch_count = (uint32_t) Q->ne[3] * (uint32_t) mask->ne[2];
                         const uint64_t blk_elems       = (uint64_t) blk_nblk0 * blk_nblk1 * blk_batch_count;
                         const size_t   blk_size_bytes =
                             ROUNDUP_POW2(blk_elems * sizeof(uint32_t), WEBGPU_STORAGE_BUF_BINDING_MULT);
