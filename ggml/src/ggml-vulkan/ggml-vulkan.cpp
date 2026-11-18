@@ -5436,6 +5436,8 @@ vk_device ggml_vk_get_device(size_t idx) {
         device->idx = idx;
 
         device->serialize_submissions = getenv("GGML_VK_SERIALIZE_SUBMISSIONS") != nullptr;
+        // the i915 kernel driver cancels work that stays in the queue for more than 20 seconds
+        device->limit_pending_work = device->driver_id == vk::DriverId::eIntelOpenSourceMESA;
 
         device->disable_fusion = getenv("GGML_VK_DISABLE_FUSION") != nullptr;
         device->disable_stream_k = getenv("GGML_VK_DISABLE_STREAM_K") != nullptr;
@@ -14439,6 +14441,7 @@ void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
             ggml_vk_wait_for_fence(ctx);
         }
         ctx->submit_pending = false;
+        ctx->pending_flops = 0;
         if (cmd_buf) {
             cmd_buf->in_use = false;
             cmd_buf->buf.reset();
@@ -15339,6 +15342,15 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
             ctx->device->diag_cgraph = cgraph;
             ctx->device->diag_prev_start = start;
             ctx->device->diag_prev_end = end;
+        } else if (ctx->device->limit_pending_work) {
+            ctx->pending_flops += batch_flops;
+            if (ctx->pending_flops >= flops_cap) {
+                // wait until the queue is empty before more work is submitted
+                ctx->device->compute_queue->handle->submit({}, ctx->fence);
+                VK_CHECK(ctx->device->device.waitForFences({ ctx->fence }, true, UINT64_MAX), "pending work waitForFences", ctx->device);
+                ctx->device->device.resetFences({ ctx->fence });
+                ctx->pending_flops = 0;
+            }
         }
         first_node_in_batch = true;
         submitted_nodes = 0;
