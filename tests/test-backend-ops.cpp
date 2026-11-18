@@ -4916,9 +4916,10 @@ struct test_ssm_scan : public test_case {
     const bool    xbc_overlap;
     const int64_t K;
     const bool    weak_decay;
+    const bool    proj_split; // x/B/C regroup one span of each xBC row, like mamba-base.cpp
 
     std::string vars() override {
-        return VARS_TO_STR10(type, d_state, head_dim, n_head, n_group, n_seq_tokens, n_seqs, xbc_overlap, K, weak_decay);
+        return VARS_TO_STR11(type, d_state, head_dim, n_head, n_group, n_seq_tokens, n_seqs, xbc_overlap, K, weak_decay, proj_split);
     }
 
     test_ssm_scan(ggml_type type = GGML_TYPE_F32,
@@ -4930,8 +4931,9 @@ struct test_ssm_scan : public test_case {
             int64_t n_seqs = 32,
             bool xbc_overlap = false,
             int64_t K = 1,
-            bool weak_decay = false)
-        : type(type), d_state(d_state), head_dim(head_dim), n_head(n_head), n_group(n_group), n_seq_tokens(n_seq_tokens), n_seqs(n_seqs), xbc_overlap(xbc_overlap), K(K), weak_decay(weak_decay) {}
+            bool weak_decay = false,
+            bool proj_split = false)
+        : type(type), d_state(d_state), head_dim(head_dim), n_head(n_head), n_group(n_group), n_seq_tokens(n_seq_tokens), n_seqs(n_seqs), xbc_overlap(xbc_overlap), K(K), weak_decay(weak_decay), proj_split(proj_split) {}
 
     double max_nmse_err() override {
         // SSD path (head_dim > 1) uses FP16 intermediates (M matrix, X_dt); Mamba-1 is pure FP32.
@@ -4954,6 +4956,17 @@ struct test_ssm_scan : public test_case {
                              xbc->nb[1], xbc->nb[2], xbc->nb[3], 0);
             C = ggml_view_4d(ctx, xbc, d_state, n_group, n_seq_tokens, n_seqs,
                              xbc->nb[1], xbc->nb[2], xbc->nb[3], 2 * xbc->nb[3]);
+        } else if (proj_split) {
+            // mamba-base.cpp splits the conv output rows into x | B | C
+            const int64_t d_inner  = head_dim * n_head;
+            const int64_t conv_dim = d_inner + 2 * n_group * d_state;
+            ggml_tensor * xbc = ggml_new_tensor_3d(ctx, type, conv_dim, n_seq_tokens, n_seqs);
+            x = ggml_view_4d(ctx, xbc, head_dim, n_head, n_seq_tokens, n_seqs, head_dim * xbc->nb[0],
+                             xbc->nb[1], xbc->nb[2], 0);
+            B = ggml_view_4d(ctx, xbc, d_state, n_group, n_seq_tokens, n_seqs, d_state * xbc->nb[0],
+                             xbc->nb[1], xbc->nb[2], d_inner * ggml_element_size(xbc));
+            C = ggml_view_4d(ctx, xbc, d_state, n_group, n_seq_tokens, n_seqs, d_state * xbc->nb[0],
+                             xbc->nb[1], xbc->nb[2], (d_inner + n_group * d_state) * ggml_element_size(xbc));
         } else {
             x = ggml_new_tensor_4d(ctx, type, head_dim, n_head, n_seq_tokens, n_seqs);
             B = ggml_new_tensor_4d(ctx, type, d_state,  n_group, n_seq_tokens, n_seqs);
@@ -11785,6 +11798,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 32, 4)); // Mamba-2
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 256, 64,  8, 2, 32, 4)); // Falcon-H1
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 128, 4, 4, 16, 2, true)); // x/B/C overlap
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 32, 1, false, 1, false, true)); // mamba-base x/B/C row split
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 1, 1, false, 1, false, true)); // mamba-base row split, decode
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 8, 2, false, 1, false, true)); // mamba-base row split, 2 seqs
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 80, 128, 1, 256, 1)); // Nemotron-9B SSD path
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 80, 128, 1, 512, 1)); // Nemotron-9B SSD multi-chunk (2 aligned chunks)
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 80, 8, 300, 2)); // Mamba-2 SSD multi-chunk (partial 2nd chunk, 2 seqs)

@@ -612,6 +612,32 @@ public:
                node->src[1]->op == GGML_OP_VIEW && node->src[1]->view_src == node->view_src;
     }
 
+    // The final-state writeback of SSM_SCAN (K == 1): the state tail of the packed [y | state]
+    // output copied into a slot block of the recurrent cache.
+    inline static bool is_ssm_state_writeback(const ggml_tensor * node) {
+        if (!(node != nullptr && node->op == GGML_OP_CPY && node->view_src != nullptr && node->src[0] != nullptr &&
+              node->src[0]->op == GGML_OP_VIEW && node->src[0]->src[0] != nullptr &&
+              node->src[0]->src[0]->op == GGML_OP_SSM_SCAN && node->src[0]->src[0]->op_params[0] == 1 &&
+              node->src[1] != nullptr && node->src[1]->op == GGML_OP_VIEW &&
+              node->src[1]->view_src == node->view_src)) {
+            return false;
+        }
+        const auto * scan = node->src[0]->src[0];
+        const auto * src = node->src[0];
+        const auto * dst = node->src[1];
+        if (node->type != GGML_TYPE_F32 || src->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
+            src->ne[2] != 1 || src->ne[3] != 1) {
+            return false;
+        }
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            if (src->ne[i] != dst->ne[i]) {
+                return false;
+            }
+        }
+        return dst->nb[1] > 0 && dst->view_offs % dst->nb[1] == 0 &&
+               src->view_offs == (size_t) ggml_nelements(scan->src[1]) * ggml_type_size(scan->type);
+    }
+
     // build_conv_state_store writes overlapping [history, window, channel, seq] windows into newest-first rollback planes.
     // Match this layout separately from general SET_ROWS.
     static bool is_conv_state_snapshot_writeback(const ggml_tensor * node);

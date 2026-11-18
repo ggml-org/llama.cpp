@@ -465,6 +465,25 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
         return input;
     }
 
+    // A VIEW over the packed SSM_SCAN output selects one whole Concat part: y at offset 0, the
+    // final state after it. The y length is token-dependent, so a static Slice of the flat
+    // tensor would bake in the captured token count; return the native part instead.
+    if (view_input_size == 1 && input.get_node_shared_ptr()->get_rt_info().count(GGML_OV_SSM_SCAN_PACKED)) {
+        const bool is_y = context.get_view_input_offset(input_index, 0) == 0;
+        auto part = input.get_node_shared_ptr()->input_value(is_y ? 0 : 1).get_node_shared_ptr()->input_value(0);
+        if (is_y) {
+            // y keeps its native [n_seqs, n_tokens, n_head, head_dim] layout
+            return part;
+        }
+        // state [n_seqs, n_head, head_dim, d_state] -> view layout [1, 1, n_seqs, d_state * d_inner]
+        auto n_seqs = get_dimensions(std::make_shared<ov::op::v3::ShapeOf>(part, ov::element::i64), {0});
+        auto target = std::make_shared<ov::op::v0::Concat>(
+            ov::OutputVector{ov::op::v0::Constant::create(ov::element::i64, {2}, {1, 1}), n_seqs,
+                             ov::op::v0::Constant::create(ov::element::i64, {1}, {-1})},
+            0);
+        return std::make_shared<ov::op::v1::Reshape>(part, target, false);
+    }
+
     // Integer router views can share these strides when their row count is zero.
     // Packed projections can store query and gate in separate halves of each head.
     if (!context.is_static() && view_input_size == 1 && input.get_element_type().is_real()) {
@@ -529,6 +548,70 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                         ov::op::v0::Constant::create(ov::element::i64, {2},
                             std::vector<int64_t>{int64_t(view[2]), int64_t(view[3])})}, 0);
                     return std::make_shared<ov::op::v1::Reshape>(sliced, shape, false);
+                }
+            }
+        }
+    }
+
+    // A VIEW that regroups one contiguous span of every source row, e.g. the z/x/B/C splits of the
+    // fused mamba projections: [head_dim, n_head, nt, ns] over [d_in_proj, nt, ns] rows. The span
+    // dims are packed and the remaining dims carry the source's outer strides, so the view is a
+    // Slice of the source's innermost axis plus a Reshape.
+    if (!context.is_static() && view_input_size == 1 && input.get_element_type().is_real()) {
+        const auto source = context.get_view_input_src_ggml_shape(input_index, 0);
+        const auto view = context.get_view_input_ggml_shape(input_index, 0);
+        const auto source_stride = context.get_view_input_src_stride(input_index, 0);
+        const auto view_stride = context.get_view_input_stride(input_index, 0);
+        const auto in_rank = input.get_partial_shape().rank();
+        const size_t nd = view.size();
+        if (nd == 4 && source.size() == nd && view_stride.size() == nd && source_stride.size() == nd &&
+            in_rank.is_static() && in_rank.get_length() == static_cast<int64_t>(nd) &&
+            view_stride[nd - 1] == source_stride[nd - 1] && source_stride[nd - 1] > 0) {
+            const size_t es = source_stride[nd - 1];
+            int j = static_cast<int>(nd) - 1;
+            size_t span = 1;
+            while (j >= 0 && view_stride[j] == span * es) {
+                span *= view[j];
+                --j;
+            }
+            // at least two packed dims replace the source's innermost dim; a one-dim span keeps the
+            // source rank and is handled by the generic paths below
+            const int shift = static_cast<int>(nd) - 2 - j;
+            bool matches = j >= 0 && shift >= 1;
+            for (int t = 0; matches && t <= j; ++t) {
+                matches = view[t] == source[t + shift] && view_stride[t] == source_stride[t + shift];
+            }
+            for (int t = 0; matches && t < shift; ++t) {
+                matches = source[t] == 1;
+            }
+            const size_t offset = context.get_view_input_offset(input_index, 0);
+            const size_t src_offset = context.get_view_input_src_offset(input_index, 0);
+            if (matches && offset >= src_offset && (offset - src_offset) % es == 0) {
+                const int64_t begin = static_cast<int64_t>((offset - src_offset) / es);
+                if (begin + static_cast<int64_t>(span) <= static_cast<int64_t>(source[nd - 1])) {
+                    auto sliced = std::make_shared<ov::op::v8::Slice>(
+                        input, ov::op::v0::Constant::create(ov::element::i64, {1}, {begin}),
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {begin + static_cast<int64_t>(span)}),
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {static_cast<int64_t>(nd) - 1}));
+                    const auto view_ov_shape = context.get_view_input_ov_shape(input_index, 0);
+                    std::vector<int64_t> pattern(nd);
+                    size_t dynamic_dims = 0;
+                    for (size_t i = 0; i < nd; ++i) {
+                        if (view_ov_shape.rank().is_static() && view_ov_shape[i].is_static()) {
+                            pattern[i] = view_ov_shape[i].get_length();
+                        } else {
+                            pattern[i] = -1;
+                            ++dynamic_dims;
+                        }
+                    }
+                    if (dynamic_dims > 1) {
+                        for (size_t i = 0; i < nd; ++i) {
+                            pattern[i] = static_cast<int64_t>(view[i]);
+                        }
+                    }
+                    return std::make_shared<ov::op::v1::Reshape>(
+                        sliced, ov::op::v0::Constant::create(ov::element::i64, {nd}, pattern), false);
                 }
             }
         }
