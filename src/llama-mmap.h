@@ -88,5 +88,3 @@ using llama_memory_ranges = std::vector<llama_memory_range>;
 
 // Prefetch the host pages covering these memory ranges.
 void llama_prefetch(llama_memory_ranges mr);
-
-size_t llama_path_max();
