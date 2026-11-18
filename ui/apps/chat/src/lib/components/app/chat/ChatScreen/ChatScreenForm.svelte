@@ -3,7 +3,7 @@
 	import { SETTINGS_KEYS } from '#lib/constants/index.ts';
 	import { useDraftMessages } from '#lib/hooks/use-draft-messages.svelte.ts';
 	import { deviceStore, settingsStore } from '#lib/stores/index.ts';
-	import { hapticTap } from '#lib/utils/index.ts';
+	import { hapticTap, shouldTypeToFocus } from '#lib/utils/index.ts';
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onMount, tick } from 'svelte';
@@ -127,6 +127,14 @@
 		chatFormRef?.focus();
 	}
 
+	// Typing while nothing takes text starts the message: focused during keydown, the
+	// character the key types lands in the form
+	function handleWindowKeydown(event: KeyboardEvent) {
+		if (disabled || deviceStore.isMobile || !shouldTypeToFocus(event)) return;
+
+		chatFormRef?.focus();
+	}
+
 	onMount(() => {
 		if (!deviceStore.isMobile) {
 			setTimeout(focusFormUnlessCaptured, 100);
@@ -147,6 +155,8 @@
 		previousIsLoading = isLoading;
 	});
 </script>
+
+<svelte:window onkeydown={handleWindowKeydown} />
 
 <div bind:this={formWrapperEl} class="chat-screen-form-wrapper">
 	<ChatForm
