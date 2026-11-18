@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <array>
+#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -880,6 +881,78 @@ MAKE_TEST(test_legacy_canvas_chunk) {
 
     // a truncated buffer fails to load (and leaks nothing)
     t.assert_true("truncated", mtmd_input_chunk_load(buf.data(), buf.size() - 3) == nullptr);
+}
+
+// a malformed legacy chunk fails to load instead of dividing by zero or allocating its declared geometry
+MAKE_TEST(test_legacy_chunk_bounds) {
+    std::vector<char> buf;
+    auto put = [&buf](const void * p, size_t n) { buf.insert(buf.end(), (const char *) p, (const char *) p + n); };
+    auto u8  = [&put](uint8_t v)  { put(&v, sizeof(v)); };
+    auto u32 = [&put](uint32_t v) { put(&v, sizeof(v)); };
+    auto i32 = [&put](int32_t v)  { put(&v, sizeof(v)); };
+    auto u64 = [&put](uint64_t v) { put(&v, sizeof(v)); };
+
+    // version 3 image chunk; entries: { suffix, grid_x, grid_y, pixel nx, pixel ny }
+    auto image_chunk = [&](uint32_t nx, uint32_t ny, uint32_t pos, const std::vector<std::array<int32_t, 5>> & entries) {
+        buf.clear();
+        u64(3); u32(MTMD_INPUT_CHUNK_TYPE_IMAGE); u64(0); u8(1);
+        u32(nx); u32(ny); u32(pos); u32(0); u32(1); u64(0);
+        u8(0); u64(entries.size());
+        for (const auto & e : entries) {
+            u8(0); u8(0); i32(0);
+            i32(e[0]); i32(e[1]); i32(e[2]); i32(0); i32(0);
+            i32(e[3]); i32(e[4]);
+        }
+        u8(0);
+        return mtmd_input_chunk_load(buf.data(), buf.size());
+    };
+
+    // canvas slices without the anyres grid of the overview
+    t.assert_true("canvas without grid", image_chunk(16, 16, 3, { { 2, 0, 0, 448, 448 }, { 5, 0, 0, 448, 448 } }) == nullptr);
+    // 65536 x 65536 rows of M-RoPE
+    t.assert_true("huge grid", image_chunk(65536, 65536, 1, { { 0, 0, 0, 448, 448 } }) == nullptr);
+    // a HunyuanVL grid whose row count wraps 32 bits
+    t.assert_true("wrapping grid", image_chunk(UINT32_MAX, 2, 2, { { 0, 0, 0, 448, 448 } }) == nullptr);
+
+    // a 2 x 1 canvas: the overview, two slices, their separators; positions survive a save in the current version
+    mtmd_input_chunk * chunk = image_chunk(16, 16, 3, { { 2, 2, 1, 448, 448 }, { 3, 0, 0, 448, 448 }, { 5, 0, 0, 448, 448 } });
+    t.assert_true("canvas loaded", chunk != nullptr);
+    if (!chunk) {
+        return;
+    }
+    t.assert_equal("canvas rows", (size_t) 773, mtmd_input_chunk_get_n_tokens(chunk));
+    t.assert_equal("canvas positions", (llama_pos) 8, mtmd_input_chunk_get_n_pos(chunk));
+    size_t n_saved = 0;
+    t.assert_true("saved", mtmd_input_chunk_save(chunk, nullptr, 0, &n_saved) == 0);
+    std::vector<char> saved(n_saved);
+    t.assert_true("saved", mtmd_input_chunk_save(chunk, saved.data(), saved.size(), nullptr) == 0);
+    mtmd_input_chunk * reloaded = mtmd_input_chunk_load(saved.data(), saved.size());
+    mtmd_input_chunk * placeholder = mtmd_input_chunk_get_placeholder(chunk);
+    t.assert_true("reloaded", reloaded != nullptr);
+    if (reloaded) {
+        const mtmd_image_tokens * a = mtmd_input_chunk_get_tokens_image(chunk);
+        const mtmd_image_tokens * b = mtmd_input_chunk_get_tokens_image(reloaded);
+        const mtmd_image_tokens * c = mtmd_input_chunk_get_tokens_image(placeholder);
+        size_t n_diff = 0;
+        for (llama_pos pos_0 : { 0, 100 }) {
+            for (size_t i = 0; i < 773; ++i) {
+                const mtmd_decoder_pos pa = mtmd_image_tokens_get_decoder_pos(a, pos_0, i);
+                for (const mtmd_image_tokens * o : { b, c }) {
+                    const mtmd_decoder_pos po = mtmd_image_tokens_get_decoder_pos(o, pos_0, i);
+                    n_diff += pa.t != po.t || pa.x != po.x || pa.y != po.y || pa.z != po.z;
+                }
+            }
+        }
+        t.assert_equal("positions after a save and in the placeholder", (size_t) 0, n_diff);
+        // the second slice starts right of the first, on the same row of the canvas
+        const mtmd_decoder_pos s1 = mtmd_image_tokens_get_decoder_pos(a, 100, 258);
+        const mtmd_decoder_pos s2 = mtmd_image_tokens_get_decoder_pos(a, 100, 516);
+        t.assert_equal("slice 2 x", (llama_pos) s1.x + 16, (llama_pos) s2.x);
+        t.assert_equal("slice 2 y", (llama_pos) s1.y, (llama_pos) s2.y);
+    }
+    mtmd_input_chunk_free(placeholder);
+    mtmd_input_chunk_free(reloaded);
+    mtmd_input_chunk_free(chunk);
 }
 
 //

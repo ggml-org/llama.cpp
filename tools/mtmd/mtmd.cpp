@@ -323,18 +323,18 @@ struct mtmd_legacy_layout {
     uint32_t image_idx = 0;
     std::vector<mtmd_legacy_entry> entries;
 
-    // MiniCPM-V 4.7 canvas: the token grid of tile k, scaled from its pixel size
-    std::pair<uint32_t, uint32_t> tile_grid(size_t k) const {
+    // MiniCPM-V 4.7 canvas: the token grid of tile k, scaled from its pixel size (checked to fit by the loader)
+    std::pair<uint64_t, uint64_t> tile_grid(size_t k) const {
         const auto & ref = entries.back();
-        return { (uint32_t) entries[k].nx * nx / ref.nx, (uint32_t) entries[k].ny * ny / ref.ny };
+        return { (uint64_t) entries[k].nx * nx / (uint64_t) ref.nx, (uint64_t) entries[k].ny * ny / (uint64_t) ref.ny };
     }
 
-    static uint32_t canvas_scale(uint32_t coord, uint32_t grid, uint32_t canvas) {
+    static uint32_t canvas_scale(uint32_t coord, uint32_t grid, uint64_t canvas) {
         if (grid <= 1 || canvas <= 1) {
             return 0;
         }
         const double v = (double) coord * (double) (canvas - 1) / (double) (grid - 1);
-        return std::min((uint32_t) std::nearbyint(v), canvas - 1);
+        return (uint32_t) std::min({ std::nearbyint(v), (double) (canvas - 1), (double) UINT32_MAX });
     }
 
     std::array<llama_pos, 4> row_pos(llama_pos pos_0, uint32_t i) const {
@@ -355,12 +355,14 @@ struct mtmd_legacy_layout {
             case MTMD_LEGACY_POS_CANVAS:
                 {
                     const bool tiled = entries[0].grid_x > 0 && entries[0].grid_y > 0;
-                    const uint32_t canvas_w = tiled ? entries[0].grid_x * nx : nx;
-                    const uint32_t canvas_h = tiled ? entries[0].grid_y * ny : ny;
+                    const uint64_t canvas_w = tiled ? (uint64_t) entries[0].grid_x * nx : nx;
+                    const uint64_t canvas_h = tiled ? (uint64_t) entries[0].grid_y * ny : ny;
                     const llama_pos base = pos_0 - 1;
                     llama_pos tp = pos_0;
                     for (size_t k = 0; k < entries.size(); ++k) {
-                        const auto [gw, gh] = tile_grid(k);
+                        const auto [gw64, gh64] = tile_grid(k);
+                        const uint32_t gw = (uint32_t) gw64;
+                        const uint32_t gh = (uint32_t) gh64;
                         if (i < gw * gh) {
                             const uint32_t row = i / gw;
                             const uint32_t col = i % gw;
@@ -403,8 +405,11 @@ struct mtmd_image_tokens {
 
     mtmd_lmedia_ref lmedia; // nullptr once loaded from a buffer: counts and positions only
 
-    // decoder positions of a chunk without media (loaded from a buffer): row i at pos_0 is
-    // pos_base[4i + d] + pos_0 if bit d of pos_shift[i] is set, else pos_base[4i + d]; empty if unknown
+    // the decoder positions of a chunk without media, if known:
+    // loaded from versions 2 to 5, the layout of the old engine, computed on demand
+    std::shared_ptr<const mtmd_legacy_layout> legacy;
+    // else (version 7, or a placeholder): row i at pos_0 is pos_base[4i + d] + pos_0 if bit d of pos_shift[i] is
+    // set, else pos_base[4i + d]
     std::vector<llama_pos> pos_base;
     std::vector<uint8_t>   pos_shift;
 
@@ -420,6 +425,8 @@ struct mtmd_image_tokens {
         p.fill(pos_0 + (llama_pos) i);
         if (lmedia.m) {
             llama_media_get_row_pos(lmedia.m, pos_0, i, p.data(), 4);
+        } else if (legacy) {
+            p = legacy->row_pos(pos_0, i);
         } else if ((size_t) i < pos_shift.size()) {
             for (int d = 0; d < 4; ++d) {
                 p[d] = pos_base[4 * (size_t) i + d] + ((pos_shift[i] >> d) & 1 ? pos_0 : 0);
@@ -428,20 +435,35 @@ struct mtmd_image_tokens {
         return p;
     }
 
-    // every layout is affine in pos_0 with a slope of 0 or 1 per dimension
-    template <typename F>
-    void set_positions(F && pos_at) {
-        pos_base.resize((size_t) n_tok * 4);
-        pos_shift.assign(n_tok, 0);
-        for (uint32_t i = 0; i < n_tok; ++i) {
-            const auto p0 = pos_at(0, i);
-            const auto p1 = pos_at(1, i);
-            for (int d = 0; d < 4; ++d) {
-                pos_base[4 * (size_t) i + d] = p0[d];
-                if (p1[d] != p0[d]) {
-                    pos_shift[i] |= 1 << d;
-                }
+    bool has_positions() const {
+        return lmedia.m || legacy || !pos_shift.empty();
+    }
+
+    // row i as a base and a mask of the dimensions that move with pos_0: every layout is affine in pos_0 with a
+    // slope of 0 or 1 per dimension
+    std::pair<std::array<llama_pos, 4>, uint8_t> row_pos_affine(uint32_t i) const {
+        const auto p0 = row_pos(0, i);
+        const auto p1 = row_pos(1, i);
+        uint8_t shift = 0;
+        for (int d = 0; d < 4; ++d) {
+            if (p1[d] != p0[d]) {
+                shift |= 1 << d;
             }
+        }
+        return { p0, shift };
+    }
+
+    // a table of the current positions, which then outlive the media
+    void keep_positions() {
+        if (!lmedia.m || !pos_shift.empty()) {
+            return;
+        }
+        pos_base.resize((size_t) n_tok * 4);
+        pos_shift.resize(n_tok);
+        for (uint32_t i = 0; i < n_tok; ++i) {
+            const auto [p, shift] = row_pos_affine(i);
+            std::copy(p.begin(), p.end(), pos_base.begin() + 4 * (size_t) i);
+            pos_shift[i] = shift;
         }
     }
 
@@ -452,23 +474,19 @@ struct mtmd_image_tokens {
         ser.write((int32_t) n_pos);
         ser.write(id);
         // version 7: the positions of every row
-        mtmd_image_tokens tmp;
-        const mtmd_image_tokens * src = this;
-        if (lmedia.m && pos_shift.empty()) {
-            tmp.n_tok = n_tok;
-            tmp.set_positions([this](llama_pos pos_0, uint32_t i) { return row_pos(pos_0, i); });
-            src = &tmp;
-        }
-        ser.write((uint32_t) src->pos_shift.size());
-        for (size_t i = 0; i < src->pos_shift.size(); ++i) {
+        const uint32_t n = has_positions() ? n_tok : 0;
+        ser.write(n);
+        for (uint32_t i = 0; i < n; ++i) {
+            const auto [p, shift] = row_pos_affine(i);
             for (int d = 0; d < 4; ++d) {
-                ser.write((int32_t) src->pos_base[4 * i + d]);
+                ser.write((int32_t) p[d]);
             }
-            ser.write((uint8_t) src->pos_shift[i]);
+            ser.write(shift);
         }
     }
     void deserialize(mtmd_serialization & ser) {
         lmedia.reset();
+        legacy.reset();
         pos_base.clear();
         pos_shift.clear();
         if (ser.version < 6) {
@@ -500,7 +518,8 @@ struct mtmd_image_tokens {
     }
 
     void deserialize_legacy(mtmd_serialization & ser) {
-        mtmd_legacy_layout lay;
+        auto lay_ptr = std::make_shared<mtmd_legacy_layout>();
+        mtmd_legacy_layout & lay = *lay_ptr;
         nx = ser.read<uint32_t>();
         ny = ser.read<uint32_t>();
         const uint32_t pos = ser.read<uint32_t>();
@@ -523,24 +542,41 @@ struct mtmd_image_tokens {
             lay.pos = MTMD_LEGACY_POS_CANVAS;
         }
 
+        // the counts of a malformed chunk must not wrap: rows and positions are int32
+        const uint64_t n_max = INT32_MAX;
+        uint64_t n = 0;
         if (lay.pos == MTMD_LEGACY_POS_HUNYUANVL) {
-            n_tok = (nx + 1) * ny + 2;
+            n = ((uint64_t) nx + 1) * ny + 2;
         } else if (lay.pos == MTMD_LEGACY_POS_CANVAS) {
-            if (entries.empty() || entries.back().nx == 0 || entries.back().ny == 0) {
+            if (entries.empty() || entries.back().nx <= 0 || entries.back().ny <= 0) {
                 throw std::runtime_error("invalid canvas chunk");
             }
-            n_tok = 0;
-            for (size_t k = 0; k < entries.size(); ++k) {
+            // the slices sit on the anyres grid of the overview
+            if (entries.size() > 1 && (entries[0].grid_x <= 0 || entries[0].grid_y <= 0)) {
+                throw std::runtime_error("invalid canvas grid");
+            }
+            for (size_t k = 0; k < entries.size() && n <= n_max; ++k) {
+                if (entries[k].nx < 0 || entries[k].ny < 0) {
+                    throw std::runtime_error("invalid canvas tile");
+                }
                 const auto [gw, gh] = lay.tile_grid(k);
-                n_tok += gw * gh + (uint32_t) mtmd_legacy_suffix_rows(entries[k].suffix_type);
+                if (gw > n_max || gh > n_max) {
+                    throw std::runtime_error("invalid canvas tile");
+                }
+                n += gw * gh + mtmd_legacy_suffix_rows(entries[k].suffix_type);
             }
         } else {
-            uint32_t nz = entries.size();
+            uint64_t nz = entries.size();
             if (n_temporal_merge > 1) {
                 nz = (nz + n_temporal_merge - 1) / n_temporal_merge;
             }
-            n_tok = nx * ny * nz;
+            n = (uint64_t) nx * ny;
+            n = n <= n_max ? n * nz : n;
         }
+        if (n > n_max) {
+            throw std::runtime_error("image chunk too large");
+        }
+        n_tok = (uint32_t) n;
         switch (lay.pos) {
             case MTMD_LEGACY_POS_MROPE:        n_pos = std::max(nx, ny); break;
             case MTMD_LEGACY_POS_SENSENOVA_U1: n_pos = 1;                break;
@@ -557,7 +593,7 @@ struct mtmd_image_tokens {
             throw std::runtime_error("invalid image grid");
         }
         lay.n_tok = n_tok;
-        set_positions([&lay](llama_pos pos_0, uint32_t i) { return lay.row_pos(pos_0, i); });
+        legacy = std::move(lay_ptr);
     }
 };
 using mtmd_image_tokens_ptr = std::unique_ptr<mtmd_image_tokens>;
@@ -673,7 +709,6 @@ struct mtmd_input_chunks {
     std::vector<mtmd_input_chunk> entries;
 };
 
-// the output of an encode: the rows stay in the media, a copy is made only when they are not in host memory
 // the output of an encode: a copy of the rows of each media, owned by the caller of the encode until the next one
 // (writes to it do not reach the media, which may serve other encodes of the same chunk)
 struct mtmd_encode_out {
@@ -903,6 +938,22 @@ static llama_context_params mtmd_native_gen_ctx_params(const mtmd_context_params
 // mtmd_context
 //
 
+// shared by a context and the objects it hands out (gen states, audio streams), which may outlive it: they lock the
+// mutex and check `alive` before touching the context, which clears it under the mutex when it is freed
+struct mtmd_ctx_life {
+    std::mutex mutex; // held by every public function that runs a graph
+    bool alive = true;
+};
+
+// a set of GEN contexts, a sequence per gen state (as mtmd shared one scheduler): the engine runs both stages on
+// gen_ctx, the native graphs on gen_code_ctx and gen_wav_ctx; a context adds a set when all its sequences are taken
+struct mtmd_gen_bank {
+    llama_context_ptr gen_ctx;
+    llama_context_ptr gen_code_ctx;
+    llama_context_ptr gen_wav_ctx;
+    std::vector<bool> used;
+};
+
 struct mtmd_context {
     // the mmproj, shared by the encoder and the gen contexts
     std::shared_ptr<llama_model> model;
@@ -914,25 +965,18 @@ struct mtmd_context {
 
     mtmd_file_info info;
 
-    // held by every public function that runs a graph
-    std::mutex compute_mutex;
+    std::shared_ptr<mtmd_ctx_life> life = std::make_shared<mtmd_ctx_life>();
+    std::mutex & compute_mutex = life->mutex;
 
     mtmd_encode_out out; // output of mtmd_encode*
 
     // gen stages: native graphs (Qwen3-TTS) or the engine (llama_batch_ext_add_gen), see mtmd_gen_is_native()
     bool gen_native = false;
 
-    // one set of GEN contexts for every gen state, a sequence each (as mtmd shared one scheduler):
-    // the engine runs both stages on gen_ctx, the native graphs on gen_code_ctx and gen_wav_ctx
-    static constexpr uint32_t n_gen_seq_max = 64;
-    llama_context_ptr gen_ctx;
-    llama_context_ptr gen_code_ctx;
-    llama_context_ptr gen_wav_ctx;
-    std::vector<bool> gen_seq_used;
-
-    // the gen states may outlive the context (a client freeing them in any order): they check this before
-    // giving their sequence back
-    std::shared_ptr<char> alive = std::make_shared<char>(0);
+    // the GEN contexts: [0] made with the context (it encodes the references), the others as gen states need them
+    static constexpr uint32_t n_gen_seq_max = 64; // sequences of a bank
+    std::vector<std::unique_ptr<mtmd_gen_bank>> gen_banks;
+    mtmd_context_params gen_cparams; // threads, flash attention and eval callback of the GEN contexts
 
     // the last media encoded, the speaker reference of mtmd_gen_state_set_ref()
     mtmd_lmedia_ref last_ref;
@@ -950,6 +994,7 @@ struct mtmd_context {
     mtmd_context(const char * mmproj_fname,
                  const llama_model * text_model,
                  const mtmd_context_params & ctx_params) :
+        gen_cparams     (ctx_params),
         print_timings   (ctx_params.print_timings),
         n_threads       (ctx_params.n_threads),
         media_marker    (ctx_params.media_marker),
@@ -994,25 +1039,15 @@ struct mtmd_context {
 
         if (info.has_gen_audio) {
             gen_native = mtmd_gen_is_native(m);
-        }
-
-        if (info.has_gen_audio && !gen_native) {
-            // one context for the generation stages and the references they encode: one set of compute buffers
-            gen_ctx.reset(llama_init_from_model(m, mtmd_gen_ctx_params(ctx_params, n_gen_seq_max)));
-            if (!gen_ctx) {
-                throw std::runtime_error("failed to create the gen context");
-            }
-            gen_seq_used.assign(n_gen_seq_max, false);
-            enc = gen_ctx.get();
-        } else if (info.has_gen_audio) {
-            // the codec context also encodes the references: its compute buffers fit the speaker tower
-            gen_code_ctx.reset(llama_init_from_model(m, mtmd_native_gen_ctx_params(ctx_params, LLAMA_CONTEXT_TYPE_GEN_CODE, n_gen_seq_max)));
-            gen_wav_ctx .reset(llama_init_from_model(m, mtmd_native_gen_ctx_params(ctx_params, LLAMA_CONTEXT_TYPE_GEN_WAV,  n_gen_seq_max)));
-            if (!gen_code_ctx || !gen_wav_ctx) {
+            auto bank = make_gen_bank();
+            if (!bank) {
                 throw std::runtime_error("failed to create the gen contexts");
             }
-            gen_seq_used.assign(n_gen_seq_max, false);
-            enc = info.has_audio || info.has_vision ? gen_wav_ctx.get() : nullptr;
+            gen_banks.push_back(std::move(bank));
+            // the GEN contexts also encode the references: one set of compute buffers; the codec context of the
+            // native graphs fits the speaker tower
+            const mtmd_gen_bank & b0 = *gen_banks[0];
+            enc = !gen_native ? b0.gen_ctx.get() : info.has_audio || info.has_vision ? b0.gen_wav_ctx.get() : nullptr;
         } else if (llama_model_has_context_type(m, LLAMA_CONTEXT_TYPE_ENCODER)) {
             ctx_enc.reset(mtmd_init_encoder(m, ctx_params));
             if (!ctx_enc) {
@@ -1031,8 +1066,32 @@ struct mtmd_context {
     }
 
     ~mtmd_context() {
+        {
+            std::lock_guard<std::mutex> lock(life->mutex);
+            life->alive = false;
+        }
         last_ref.reset();
         llama_media_proc_free(proc);
+    }
+
+    // a set of GEN contexts, nullptr on failure
+    std::unique_ptr<mtmd_gen_bank> make_gen_bank() const {
+        auto b = std::make_unique<mtmd_gen_bank>();
+        llama_model * m = model.get();
+        if (gen_native) {
+            b->gen_code_ctx.reset(llama_init_from_model(m, mtmd_native_gen_ctx_params(gen_cparams, LLAMA_CONTEXT_TYPE_GEN_CODE, n_gen_seq_max)));
+            b->gen_wav_ctx .reset(llama_init_from_model(m, mtmd_native_gen_ctx_params(gen_cparams, LLAMA_CONTEXT_TYPE_GEN_WAV,  n_gen_seq_max)));
+            if (!b->gen_code_ctx || !b->gen_wav_ctx) {
+                return nullptr;
+            }
+        } else {
+            b->gen_ctx.reset(llama_init_from_model(m, mtmd_gen_ctx_params(gen_cparams, n_gen_seq_max)));
+            if (!b->gen_ctx) {
+                return nullptr;
+            }
+        }
+        b->used.assign(n_gen_seq_max, false);
+        return b;
     }
 
     int64_t n_embd_out() const {
@@ -1362,13 +1421,8 @@ struct mtmd_tokenizer {
         image_tokens->n_tok  = llama_media_n_tokens(m);
         image_tokens->n_pos  = llama_media_n_pos(m);
         image_tokens->lmedia = mtmd_lmedia_ref(m);
-        // the token grid, from the positions of the last row
-        if (ctx->use_mrope) {
-            llama_pos p[4];
-            llama_media_get_row_pos(m, 0, image_tokens->n_tok - 1, p, 4);
-            image_tokens->nx = p[2] + 1;
-            image_tokens->ny = p[1] + 1;
-        } else {
+        // the token grid as the clip engine counts it, for the deprecated getters and the saved chunk
+        if (!ctx->use_mrope || !llama_media_get_grid(m, &image_tokens->nx, &image_tokens->ny)) {
             image_tokens->nx = image_tokens->n_tok;
             image_tokens->ny = 1;
         }
@@ -2011,6 +2065,7 @@ static int32_t mtmd_input_chunk_save_impl(const mtmd_input_chunk * chunk, std::v
 mtmd_input_chunk * mtmd_input_chunk_get_placeholder(const mtmd_input_chunk * chunk) {
     mtmd_input_chunk * copy = mtmd_input_chunk_copy(chunk);
     if (copy->tokens_image) {
+        copy->tokens_image->keep_positions(); // a saved placeholder keeps the row positions of the image
         copy->tokens_image->lmedia.reset();
     }
     if (copy->tokens_audio) {
@@ -2146,12 +2201,17 @@ mtmd_memory_usage mtmd_get_memory_usage(const char * mmproj_fname, struct mtmd_c
     // the model and the context of mtmd_init_from_file(), allocations simulated, quietly
     auto saved_log_callback  = g_logger_state.log_callback;
     auto saved_log_user_data = g_logger_state.log_callback_user_data;
+    // libllama's logger and ggml's can differ (a client setting ggml's after llama_log_set): both are restored
     ggml_log_callback saved_llama_log_callback  = nullptr;
     void *            saved_llama_log_user_data = nullptr;
-    llama_log_get(&saved_llama_log_callback, &saved_llama_log_user_data);
+    ggml_log_callback saved_ggml_log_callback   = nullptr;
+    void *            saved_ggml_log_user_data  = nullptr;
+    llama_log_get_llama(&saved_llama_log_callback, &saved_llama_log_user_data);
+    ggml_log_get(&saved_ggml_log_callback, &saved_ggml_log_user_data);
     auto restore_logs = [&]() {
         mtmd_log_set(saved_log_callback, saved_log_user_data);
-        llama_log_set(saved_llama_log_callback, saved_llama_log_user_data);
+        llama_log_set(saved_llama_log_callback, saved_llama_log_user_data); // sets ggml's too
+        ggml_log_set(saved_ggml_log_callback, saved_ggml_log_user_data);
     };
     try {
         mtmd_log_set(stub_log_callback, nullptr);
@@ -2253,8 +2313,10 @@ void mtmd_debug_preprocess_audio(mtmd_context * ctx, const std::vector<float> & 
 // realtime audio input
 //
 
+// the stream steps run graphs on the encoder context, which the gen states of LFM3 share: they hold its compute
+// mutex; a stream may outlive its context (a server freeing its slots after the context)
 struct mtmd_audio_stream {
-    mtmd_context * ctx = nullptr; // its encoder context also runs the gen stages (LFM3): compute_mutex
+    std::shared_ptr<mtmd_ctx_life> life;
     llama_audio_stream * ls = nullptr;
     int n_embd = 0;
 
@@ -2285,7 +2347,7 @@ mtmd_audio_stream * mtmd_audio_stream_init(mtmd_context * ctx, mtmd_audio_stream
     lp.prompt   = params.prompt;
     lp.n_prompt = params.n_prompt;
     auto s = std::make_unique<mtmd_audio_stream>();
-    s->ctx = ctx;
+    s->life = ctx->life;
     {
         std::lock_guard<std::mutex> lock(ctx->compute_mutex);
         s->ls = llama_audio_stream_init(ctx->proc, lp);
@@ -2299,26 +2361,38 @@ mtmd_audio_stream * mtmd_audio_stream_init(mtmd_context * ctx, mtmd_audio_stream
 
 void mtmd_audio_stream_free(mtmd_audio_stream * stream) {
     if (stream) {
-        std::lock_guard<std::mutex> lock(stream->ctx->compute_mutex);
+        // the stream state holds no reference to the freed context: it can go after it
+        std::lock_guard<std::mutex> lock(stream->life->mutex);
         llama_audio_stream_free(stream->ls);
         stream->ls = nullptr;
     }
     delete stream;
 }
 
-// the stream steps run graphs on the encoder context, which the gen states of LFM3 share
 int32_t mtmd_audio_stream_push(mtmd_audio_stream * s, const float * samples, size_t n_samples) {
-    std::lock_guard<std::mutex> lock(s->ctx->compute_mutex);
+    std::lock_guard<std::mutex> lock(s->life->mutex);
+    if (!s->life->alive) {
+        LOG_ERR("%s: the context of the stream was freed\n", __func__);
+        return 1;
+    }
     return llama_audio_stream_push(s->ls, samples, n_samples);
 }
 
 int32_t mtmd_audio_stream_flush(mtmd_audio_stream * s, bool end) {
-    std::lock_guard<std::mutex> lock(s->ctx->compute_mutex);
+    std::lock_guard<std::mutex> lock(s->life->mutex);
+    if (!s->life->alive) {
+        LOG_ERR("%s: the context of the stream was freed\n", __func__);
+        return 1;
+    }
     return llama_audio_stream_flush(s->ls, end);
 }
 
 int32_t mtmd_audio_stream_step(mtmd_audio_stream * s, llama_token last_token) {
-    std::lock_guard<std::mutex> lock(s->ctx->compute_mutex);
+    std::lock_guard<std::mutex> lock(s->life->mutex);
+    if (!s->life->alive) {
+        LOG_ERR("%s: the context of the stream was freed\n", __func__);
+        return -2;
+    }
     return llama_audio_stream_step(s->ls, last_token);
 }
 
@@ -2441,7 +2515,9 @@ static ggml_tensor * mtmd_code_sampler_build(ggml_context * ctx0, const mtmd_cod
     // the code where the cdf crosses the draw
     ggml_tensor * cumsum     = ggml_cumsum(ctx0, ggml_soft_max(ctx0, cur));
     ggml_tensor * cross_mask = ggml_step(ctx0, ggml_sub(ctx0, cumsum, inp_rand));
-    ggml_tensor * idx        = ggml_cast(ctx0, ggml_scale_bias(ctx0, ggml_sum(ctx0, cross_mask), -1.0f, (float) cross_mask->ne[0]), GGML_TYPE_I32);
+    // a cdf that rounds to at most the draw crosses nowhere: the last code, as the backend dist sampler does
+    ggml_tensor * idxf       = ggml_scale_bias(ctx0, ggml_sum(ctx0, cross_mask), -1.0f, (float) cross_mask->ne[0]);
+    ggml_tensor * idx        = ggml_cast(ctx0, ggml_clamp(ctx0, idxf, 0.0f, (float) cross_mask->ne[0] - 1), GGML_TYPE_I32);
 
     if (candidates) {
         idx = ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, candidates, 1, candidates->ne[0]), idx);
@@ -2504,9 +2580,10 @@ static llama_sampler_i mtmd_code_sampler_i = {
 };
 
 struct mtmd_gen_state {
-    mtmd_context * ctx = nullptr;
-    llama_seq_id   seq = -1; // the sequence of the shared GEN contexts
-    std::weak_ptr<char> ctx_alive; // expired once ctx is freed: its sequences went with it
+    mtmd_context  * ctx  = nullptr;
+    mtmd_gen_bank * bank = nullptr; // the GEN contexts of ctx holding the sequence
+    llama_seq_id    seq  = -1;
+    std::shared_ptr<mtmd_ctx_life> life; // ctx and bank are valid while life->alive, under its mutex
 
     std::vector<int32_t> out_codes; // this frame's sampled codes (GEN_CODE)
     std::vector<float>   out_feats; // this frame's continuous features, if any (GEN_CODE)
@@ -2518,25 +2595,22 @@ struct mtmd_gen_state {
     llama_sampler_ptr   lm_smpl;
     mtmd_code_sampler * code_smpl = nullptr;
 
-    // the per-sequence state of the GEN contexts (decoder slots, RNG), the caller holds compute_mutex
-    void clear_seq() {
-        if (ctx->gen_native) {
-            llama_memory_seq_rm(llama_get_memory(ctx->gen_wav_ctx.get()), seq, -1, -1);
-        } else {
-            llama_memory_seq_rm(llama_get_memory(ctx->gen_ctx.get()), seq, -1, -1);
-        }
-    }
-
     ~mtmd_gen_state() {
-        const auto alive = ctx_alive.lock();
-        if (seq >= 0 && alive) {
-            std::lock_guard<std::mutex> lock(ctx->compute_mutex);
-            clear_seq();
-            if (ctx->gen_native) {
-                llama_set_sampler(ctx->gen_code_ctx.get(), seq, nullptr);
-            }
-            ctx->gen_seq_used[seq] = false;
+        if (!life || seq < 0) {
+            return;
         }
+        std::lock_guard<std::mutex> lock(life->mutex);
+        if (!life->alive) {
+            return; // the sequences went with the context
+        }
+        // the per-sequence state of the GEN contexts (decoder slots, RNG) and the sampler
+        if (ctx->gen_native) {
+            llama_memory_seq_rm(llama_get_memory(bank->gen_wav_ctx.get()), seq, -1, -1);
+            llama_set_sampler(bank->gen_code_ctx.get(), seq, nullptr);
+        } else {
+            llama_memory_seq_rm(llama_get_memory(bank->gen_ctx.get()), seq, -1, -1);
+        }
+        bank->used[seq] = false;
     }
 };
 
@@ -2554,22 +2628,38 @@ mtmd_gen_state * mtmd_gen_state_init(mtmd_context * ctx, mtmd_gen_state_params p
     auto st = std::make_unique<mtmd_gen_state>();
 
     std::lock_guard<std::mutex> lock(ctx->compute_mutex);
-    if (!ctx->gen_ctx && !ctx->gen_wav_ctx) {
+    if (ctx->gen_banks.empty()) {
         LOG_ERR("%s: the gen contexts are missing\n", __func__);
         return nullptr;
     }
-    const auto it = std::find(ctx->gen_seq_used.begin(), ctx->gen_seq_used.end(), false);
-    if (it == ctx->gen_seq_used.end()) {
-        LOG_ERR("%s: too many gen states (max %u)\n", __func__, mtmd_context::n_gen_seq_max);
-        return nullptr;
+    // the first free sequence; a new set of GEN contexts when every one is taken
+    mtmd_gen_bank * bank = nullptr;
+    llama_seq_id    seq  = -1;
+    for (const auto & b : ctx->gen_banks) {
+        const auto it = std::find(b->used.begin(), b->used.end(), false);
+        if (it != b->used.end()) {
+            bank = b.get();
+            seq  = (llama_seq_id) (it - b->used.begin());
+            break;
+        }
     }
-    const llama_seq_id seq = (llama_seq_id) (it - ctx->gen_seq_used.begin());
+    if (!bank) {
+        LOG_INF("%s: more than %zu gen states, adding gen contexts\n", __func__, ctx->gen_banks.size() * mtmd_context::n_gen_seq_max);
+        auto b = ctx->make_gen_bank();
+        if (!b) {
+            LOG_ERR("%s: failed to create the gen contexts\n", __func__);
+            return nullptr;
+        }
+        ctx->gen_banks.push_back(std::move(b));
+        bank = ctx->gen_banks.back().get();
+        seq  = 0;
+    }
     if (ctx->gen_native) {
         auto * cs = new mtmd_code_sampler;
         cs->rng.seed(params.seed == UINT32_MAX ? std::random_device{}() : params.seed);
         llama_sampler * chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
         llama_sampler_chain_add(chain, llama_sampler_init(&mtmd_code_sampler_i, cs));
-        if (!llama_set_sampler(ctx->gen_code_ctx.get(), seq, chain)) {
+        if (!llama_set_sampler(bank->gen_code_ctx.get(), seq, chain)) {
             llama_sampler_free(chain);
             LOG_ERR("%s: the code predictor context does not take the code sampler\n", __func__);
             return nullptr;
@@ -2577,12 +2667,13 @@ mtmd_gen_state * mtmd_gen_state_init(mtmd_context * ctx, mtmd_gen_state_params p
         st->lm_smpl.reset(chain);
         st->code_smpl = cs;
     } else {
-        llama_gen_set_seed(ctx->gen_ctx.get(), seq, params.seed);
+        llama_gen_set_seed(bank->gen_ctx.get(), seq, params.seed);
     }
-    *it = true;
-    st->ctx       = ctx;
-    st->seq       = seq;
-    st->ctx_alive = ctx->alive;
+    bank->used[seq] = true;
+    st->ctx  = ctx;
+    st->bank = bank;
+    st->seq  = seq;
+    st->life = ctx->life;
     return st.release();
 }
 
@@ -2592,26 +2683,26 @@ void mtmd_gen_state_free(mtmd_gen_state * state) {
 
 // a new utterance: the decoder state goes, the RNG position and the speaker reference stay
 void mtmd_gen_state_reset(mtmd_gen_state * state) {
-    const auto alive = state ? state->ctx_alive.lock() : nullptr;
-    if (!alive || state->seq < 0) {
+    if (!state || !state->life || state->seq < 0) {
         return;
     }
-    mtmd_context * ctx = state->ctx;
-    std::lock_guard<std::mutex> lock(ctx->compute_mutex);
-    if (ctx->gen_native) {
-        llama_memory_seq_rm(llama_get_memory(ctx->gen_wav_ctx.get()), state->seq, -1, -1); // the codec slots
-    } else {
-        llama_gen_reset(ctx->gen_ctx.get(), state->seq);
+    std::lock_guard<std::mutex> lock(state->life->mutex);
+    if (!state->life->alive) {
+        return;
     }
+    // the codec slots of the native graphs, the decoder state of the engine
+    llama_gen_reset(state->ctx->gen_native ? state->bank->gen_wav_ctx.get() : state->bank->gen_ctx.get(), state->seq);
 }
 
 int32_t mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state) {
-    if (!state || state->ctx != ctx) {
+    // the state holds the life of its context: a context at the address of a freed one has another
+    if (!state || state->life != ctx->life) {
         LOG_ERR("%s: invalid gen state\n", __func__);
         return 1;
     }
     std::lock_guard<std::mutex> lock(ctx->compute_mutex);
-    if (state->seq < 0 || !ctx->gen_ctx || !ctx->last_ref.m || llama_gen_set_ref(ctx->gen_ctx.get(), state->seq, ctx->last_ref.m) != 0) {
+    llama_context * gctx = state->bank->gen_ctx.get();
+    if (state->seq < 0 || !gctx || !ctx->last_ref.m || llama_gen_set_ref(gctx, state->seq, ctx->last_ref.m) != 0) {
         LOG_ERR("%s: the last encode produced no reference data\n", __func__);
         return 1;
     }
@@ -2620,7 +2711,8 @@ int32_t mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state) {
 
 // the code predictor of the native graphs (Qwen3-TTS): one frame of the sequence, codes sampled in the graph
 static int32_t mtmd_gen_code_native(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
-    llama_context * lctx = ctx->gen_code_ctx.get();
+    llama_context * lctx = state->bank->gen_code_ctx.get();
+    GGML_ASSERT(state->code_smpl != nullptr);
     const int32_t n_embd = llama_model_n_embd_out(ctx->model.get());
 
     // the parameters of this call, read when the graph is built; temperature is ignored, as by the clip engine
@@ -2657,10 +2749,15 @@ static int32_t mtmd_gen_code_native(mtmd_context * ctx, mtmd_gen_state * state, 
 
 // the codec of the native graphs (Qwen3-TTS): frames of the sequence
 static int32_t mtmd_gen_wav_native(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
-    llama_context * wctx = ctx->gen_wav_ctx.get();
+    GGML_UNUSED(ctx);
+    llama_context * wctx = state->bank->gen_wav_ctx.get();
     const int32_t n_cb = 16;
     if (!inp->codes || inp->n_codes == 0 || inp->n_codes % n_cb != 0) {
         LOG_ERR("%s: codes required for gen_wav\n", __func__);
+        return 1;
+    }
+    if (inp->n_codes / n_cb > (size_t) INT32_MAX) {
+        LOG_ERR("%s: too many frames\n", __func__);
         return 1;
     }
     int32_t n_frames = (int32_t) (inp->n_codes / n_cb);
@@ -2678,8 +2775,19 @@ static int32_t mtmd_gen_wav_native(mtmd_context * ctx, mtmd_gen_state * state, c
         n_frames = 72;
     }
 
-    state->out_audio.clear();
     llama_batch_ext * batch = llama_batch_ext_init(wctx);
+
+    // every frame is checked before a window runs: a bad code must not leave the earlier windows in the codec state
+    for (int32_t f = 0; f < n_real; ++f) {
+        llama_batch_ext_clear(batch);
+        if (llama_batch_ext_add_codes(batch, state->seq, inp->codes + (size_t) f * n_cb, n_cb) < 0) {
+            llama_batch_ext_free(batch);
+            LOG_ERR("%s: frame %d: invalid codes\n", __func__, f);
+            return 1;
+        }
+    }
+
+    state->out_audio.clear();
     for (int32_t f0 = 0; f0 < n_frames; f0 += (int32_t) llama_n_batch(wctx)) {
         const int32_t n = std::min<int32_t>((int32_t) llama_n_batch(wctx), n_frames - f0);
         llama_batch_ext_clear(batch);
@@ -2715,7 +2823,7 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
                                                            : mtmd_gen_wav_native(ctx, state, inp, out);
     }
 
-    llama_context * lctx = ctx->gen_ctx.get();
+    llama_context * lctx = state->bank->gen_ctx.get();
     llama_gen_inp li{};
     li.type                = inp->type == MTMD_GEN_PROCESS_TYPE_GEN_WAV ? LLAMA_GEN_STAGE_WAV : LLAMA_GEN_STAGE_CODE;
     li.code0               = inp->code0;
@@ -2762,7 +2870,8 @@ int32_t mtmd_gen_audio_process(mtmd_context * ctx, mtmd_gen_state * state, const
         LOG_ERR("%s: model does not support audio generation\n", __func__);
         return 1;
     }
-    if (state->ctx != ctx) {
+    // the state holds the life of its context: a context at the address of a freed one has another
+    if (state->life != ctx->life) {
         LOG_ERR("%s: the gen state belongs to another context\n", __func__);
         return 1;
     }

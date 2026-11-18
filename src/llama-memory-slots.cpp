@@ -95,13 +95,31 @@ void llama_memory_slots::clear(bool data) {
 }
 
 bool llama_memory_slots::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
-    // a slot is the result of the whole history: only removing all of it is possible
-    if (p0 > 0 || (p1 >= 0 && p1 <= seq_pos_max(seq_id))) {
+    if (seq_id >= 0 && (uint32_t) seq_id >= n_seq_max) {
         return false;
     }
+    // a slot is the result of the whole history: only removing all of it is possible; a sequence without history
+    // (slots allocated by a reservation or by a call that failed) goes whole
+    auto untouched = [&](llama_seq_id s) { return n_pos[s] >= 0 && p0 > n_pos[s]; };
+    auto whole     = [&](llama_seq_id s) { return n_pos[s] < 0 || (p0 <= 0 && (p1 < 0 || p1 > n_pos[s])); };
     if (seq_id < 0) {
-        clear(true);
+        for (uint32_t s = 0; s < n_seq_max; ++s) {
+            if (!untouched((llama_seq_id) s) && !whole((llama_seq_id) s)) {
+                return false;
+            }
+        }
+        for (uint32_t s = 0; s < n_seq_max; ++s) {
+            if (!untouched((llama_seq_id) s)) {
+                free_seq((llama_seq_id) s);
+            }
+        }
         return true;
+    }
+    if (untouched(seq_id)) {
+        return true;
+    }
+    if (!whole(seq_id)) {
+        return false;
     }
     free_seq(seq_id);
     return true;
@@ -110,16 +128,22 @@ bool llama_memory_slots::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1)
 void llama_memory_slots::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
     GGML_UNUSED(p0);
     GGML_UNUSED(p1);
+    if (seq_id_src < 0 || (uint32_t) seq_id_src >= n_seq_max || seq_id_dst < 0 || (uint32_t) seq_id_dst >= n_seq_max ||
+            seq_id_src == seq_id_dst) {
+        return;
+    }
     if (!seqs[seq_id_src].buf) {
         free_seq(seq_id_dst);
         return;
     }
     const seq_slots & src = seqs[seq_id_src];
     seq_slots       & dst = alloc_seq(seq_id_dst);
-    for (const auto & [name, t] : src.tensors) {
-        std::vector<uint8_t> tmp(ggml_nbytes(t));
-        ggml_backend_tensor_get(t, tmp.data(), 0, tmp.size());
-        ggml_backend_tensor_set(dst.tensors.at(name), tmp.data(), 0, tmp.size());
+    if (!no_alloc) { // the tensors of an estimate have no data
+        for (const auto & [name, t] : src.tensors) {
+            std::vector<uint8_t> tmp(ggml_nbytes(t));
+            ggml_backend_tensor_get(t, tmp.data(), 0, tmp.size());
+            ggml_backend_tensor_set(dst.tensors.at(name), tmp.data(), 0, tmp.size());
+        }
     }
     n_pos[seq_id_dst] = n_pos[seq_id_src];
 }
@@ -136,11 +160,11 @@ void llama_memory_slots::seq_add(llama_seq_id, llama_pos, llama_pos, llama_pos) 
 void llama_memory_slots::seq_div(llama_seq_id, llama_pos, llama_pos, int) {}
 
 llama_pos llama_memory_slots::seq_pos_min(llama_seq_id seq_id) const {
-    return n_pos.at(seq_id) < 0 ? -1 : 0;
+    return seq_id < 0 || (uint32_t) seq_id >= n_seq_max || n_pos[seq_id] < 0 ? -1 : 0;
 }
 
 llama_pos llama_memory_slots::seq_pos_max(llama_seq_id seq_id) const {
-    return n_pos.at(seq_id);
+    return seq_id < 0 || (uint32_t) seq_id >= n_seq_max ? -1 : n_pos[seq_id];
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_memory_slots::memory_breakdown() const {
@@ -150,9 +174,7 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_memory_slots::memory_breakdow
             continue;
         }
         if (no_alloc) {
-            for (const auto & [name, t] : s.tensors) {
-                size += ggml_backend_buft_get_alloc_size(buft, t);
-            }
+            size += ggml_backend_alloc_ctx_tensors_from_buft_size(s.ctx.get(), buft);
         } else {
             size += ggml_backend_buffer_get_size(s.buf.get());
         }

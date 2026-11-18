@@ -32,6 +32,9 @@ LLAMA_API bool llama_arch_supports_sm_tensor(llm_arch arch);
 
 LLAMA_API bool llama_arch_supports_mixed_batch(llm_arch arch);
 
+// the callback of libllama's own messages (llama_log_get() returns the ggml one, which llama_log_set() sets too)
+LLAMA_API void llama_log_get_llama(ggml_log_callback * log_callback, void ** user_data);
+
 // FIXME temporary function for better error messages
 LLAMA_API bool llama_arch_supports_save(llm_arch arch);
 
@@ -422,6 +425,8 @@ LLAMA_API int64_t               llama_media_get_rows      (const struct llama_me
 // TRANSITIONAL: decoder positions of one row (n_pos values, [t, y, x, z] for M-RoPE), for callers that decode host rows
 // with llama_batch_ext_add_embd instead of llama_batch_ext_add_media
 LLAMA_API bool                  llama_media_get_row_pos   (const struct llama_media * m, llama_pos pos_0, uint32_t row, llama_pos * pos, uint32_t n_pos);
+// the token grid of an image as the clip engine counts it (M-RoPE: tokens per row and rows; else n_tokens x 1); false otherwise
+LLAMA_API bool                  llama_media_get_grid      (const struct llama_media * m, uint32_t * nx, uint32_t * ny);
 
 // meaning depends on the context type of the batch:
 // context of an mmproj (ENCODER, GEN): queue the media for encoding (row0, n_rows and pos_0 are ignored); llama_process(ENCODE) writes the rows into the media

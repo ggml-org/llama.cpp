@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cinttypes>
 #include <climits>
+#include <cstring>
 #include <vector>
 
 //#define MTMD_AUDIO_DEBUG
@@ -107,6 +108,21 @@ private:
     bool enabled_;
 };
 
+// whether the rows a caller passes are the encoded rows of the media: rows edited after the encode take the path
+// of explicit rows
+static bool mtmd_helper_rows_are_media(const llama_media * m, const float * embd) {
+    if (embd == nullptr) {
+        return true;
+    }
+    const int64_t n_rows = llama_media_n_tokens(m);
+    const int64_t n_embd = llama_media_get_rows(m, 0, 0, nullptr);
+    std::vector<float> rows((size_t) n_rows * n_embd);
+    if (n_embd == 0 || llama_media_get_rows(m, 0, n_rows, rows.data()) != n_embd) {
+        return false;
+    }
+    return std::memcmp(rows.data(), embd, rows.size() * sizeof(float)) == 0;
+}
+
 // Helper function for decoding an image whose embeddings have already been calculated
 int32_t mtmd_helper_decode_image_chunk(
         mtmd_context * ctx,
@@ -128,7 +144,8 @@ int32_t mtmd_helper_decode_image_chunk(
     }
 
     // libllama engine: the media rows carry their positions and attention span, no causal toggle
-    if (llama_media * lmedia = mtmd_input_chunk_get_llama_media(chunk); lmedia && callback == nullptr && llama_media_is_encoded(lmedia)) {
+    if (llama_media * lmedia = mtmd_input_chunk_get_llama_media(chunk);
+            lmedia && callback == nullptr && llama_media_is_encoded(lmedia) && mtmd_helper_rows_are_media(lmedia, encoded_embd)) {
         const uint32_t n_rows = llama_media_n_tokens(lmedia);
         const uint32_t step   = llama_media_is_atomic(lmedia) ? n_rows : (uint32_t) n_batch;
         llama_batch_ext * batch = llama_batch_ext_init(lctx);
@@ -275,7 +292,9 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
 
         LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
 
-        float * embd = mtmd_get_output_embd(ctx);
+        // rows encoded here and not edited: an encoded media decodes its own rows, with no comparison
+        const llama_media * lmedia = mtmd_input_chunk_get_llama_media(chunk);
+        float * embd = lmedia && llama_media_is_encoded(lmedia) ? nullptr : mtmd_get_output_embd(ctx);
         ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past, nullptr, nullptr);
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);

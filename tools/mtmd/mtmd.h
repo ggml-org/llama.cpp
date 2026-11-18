@@ -113,7 +113,7 @@ struct mtmd_context_params {
     const char * image_marker; // deprecated, use media_marker instead
     const char * media_marker;
     enum llama_flash_attn_type flash_attn_type;
-    bool warmup; // whether to run a warmup encode pass after initialization
+    bool warmup; // ignored: the encoder context reserves its compute buffers when it is created
 
     // limit number of image tokens, only for vision models with dynamic resolution
     int image_min_tokens; // minimum number of tokens for image input (default: read from metadata)
@@ -314,12 +314,12 @@ struct mtmd_decoder_pos {
     uint32_t t;
     uint32_t x;
     uint32_t y;
-    uint32_t z; // unused for now, reserved for future use
+    uint32_t z; // the fourth section (HunyuanVL: image index, MiniCPM-V canvas: origin), else 0 or sequential
 };
 // get position for decoder attention, to be used by M-RoPE models
 // i is the index of the embedding token, ranging from 0 to mtmd_image_tokens_get_n_tokens() - 1
 // pos_0 is the absolute position of the first token
-// return relative position (for example, embedding 0 will have position (0, 0, 0); remember to adjust it to the current absolute position)
+// returns the position to decode token i at: pos_0 is already applied to the sections that depend on it
 MTMD_API struct mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * image_tokens, llama_pos pos_0, size_t i);
 
 // tokenize an input text prompt and a list of bitmaps (image/audio)

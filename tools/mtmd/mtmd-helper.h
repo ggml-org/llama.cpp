@@ -197,6 +197,7 @@ typedef int32_t (*mtmd_helper_post_decode_callback)(const struct mtmd_helper_emb
 
 // helper function to decode an image whose embeddings have already been calculated
 // this helper will handle batching and pre/post decoding setup (for ex. gemma 3 requires non-causal attention)
+// encoded_embd may be NULL for a chunk encoded by mtmd_encode_chunk() when callback is NULL: its own rows are decoded
 // ret 0 on success, -1 on chunk not being a valid image chunk, 1 on decode failure
 MTMD_API int32_t mtmd_helper_decode_image_chunk(mtmd_context * ctx,
                                                 struct llama_context * lctx,

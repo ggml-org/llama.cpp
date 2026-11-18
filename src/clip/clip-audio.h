@@ -6,6 +6,7 @@
 #include "clip-model.h"
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 #include <string>
 
@@ -81,6 +82,9 @@ struct clip_audio_mel_config {
 struct clip_audio_preproc_out {
     std::vector<clip_image_f32> entries; // one per chunk, empty on failure
     std::vector<float> samples;          // input of compute(), empty if entries already hold the data
+
+    // the chunks of a deferred source share it across encoder contexts: compute() and the reads of entries hold it
+    std::shared_ptr<std::mutex> mutex = std::make_shared<std::mutex>();
 
     bool needs_compute() const {
         return !samples.empty() && (entries.empty() || entries[0].is_placeholder());

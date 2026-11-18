@@ -4,6 +4,7 @@
 #include "ggml-backend.h"
 #include "gguf.h"
 #include "llama.h"
+#include "llama-ext.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -49,6 +50,11 @@ time_meas::~time_meas() {
 
 void llama_log_get(ggml_log_callback * log_callback, void ** user_data) {
     ggml_log_get(log_callback, user_data);
+}
+
+void llama_log_get_llama(ggml_log_callback * log_callback, void ** user_data) {
+    *log_callback = g_logger_state.log_callback;
+    *user_data    = g_logger_state.log_callback_user_data;
 }
 
 void llama_log_set(ggml_log_callback log_callback, void * user_data) {

@@ -12,6 +12,7 @@
 
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -211,6 +212,7 @@ struct clip_audio_track {
     uint32_t n_tokens = 0;
     std::vector<float> embd;        // filled by the first encode
     std::shared_ptr<const clip_gen_ref> gen_ref; // gen-side reference of a predefined voice, if any
+    std::mutex mutex;               // the pieces of a track may be encoded on several contexts at once: guards embd
 };
 
 struct clip_audio_tokens {

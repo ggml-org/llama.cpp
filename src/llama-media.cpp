@@ -517,6 +517,15 @@ int64_t llama_media_get_rows(const struct llama_media * m, int64_t row0, int64_t
     return m->n_embd;
 }
 
+bool llama_media_get_grid(const struct llama_media * m, uint32_t * nx, uint32_t * ny) {
+    if (m == nullptr || !m->img) {
+        return false;
+    }
+    *nx = m->img->nx;
+    *ny = m->img->ny;
+    return true;
+}
+
 bool llama_media_get_row_pos(const struct llama_media * m, llama_pos pos_0, uint32_t row, llama_pos * pos, uint32_t n_pos) {
     if (row >= m->n_tokens || n_pos == 0 || n_pos > GGML_MROPE_SECTIONS) {
         return false;
@@ -600,6 +609,10 @@ int32_t llama_batch_ext_add_media(struct llama_batch_ext * batch, llama_seq_id s
 int32_t llama_batch_ext_add_codes(struct llama_batch_ext * batch, llama_seq_id seq_id, const llama_token * codes, int32_t n_codes) {
     if (n_codes <= 0 || codes == nullptr) {
         return -2;
+    }
+    // checked here too, so that a caller can validate a whole request before running any part of it
+    if (const auto * clip = as_clip(batch->model); clip && !clip->c2w_codes_valid(codes, n_codes)) {
+        return -3;
     }
     const int32_t idx = batch->add_token(seq_id);
     if (idx < 0) {

@@ -7,6 +7,7 @@
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-memory.h"
+#include "llama-memory-slots.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-moe-cache.h"
@@ -1786,6 +1787,17 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
 
         sampler->iface->backend_init(sampler, buft, cparams.n_outputs_max_per_seq);
 
+        // the native code predictor (Qwen3-TTS) draws every code inside its graph, with no host step after it:
+        // a chain that stops at a host-only sampler would silently fall back to argmax
+        if (model.arch == LLM_ARCH_CLIP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE &&
+                static_cast<const llama_model_clip &>(model).native_gen && strcmp(llama_sampler_name(sampler), "chain") == 0) {
+            const auto * chain = (const llama_sampler_chain *) sampler->ctx;
+            if (std::any_of(chain->samplers.begin(), chain->samplers.end(), [](const auto & s) { return !s.is_backend; })) {
+                LLAMA_LOG_ERROR("%s: seq_id = %d: every sampler of the chain must run on the backend in the code predictor\n", __func__, seq_id);
+                return false;
+            }
+        }
+
         sampling.samplers[seq_id] = sampler;
 
         sched_need_reserve = true;
@@ -1991,6 +2003,8 @@ static llama_ubatch llama_media_ubatch(uint32_t n_rows, const llama_media_input 
 }
 
 clip_subcontext * llama_context::clip_sub(const clip_model & m) {
+    // a processor's stream queries may race the first encode of the tower
+    std::lock_guard<std::mutex> lock(clip_subs_mutex);
     auto & sub = clip_subs[&m];
     if (!sub) {
         sub = std::make_unique<clip_subcontext>(m, llama_model_clip::engine_flash_attn(m, cparams));
@@ -2126,15 +2140,16 @@ int llama_context::encode_media_engine(llama_media & m) {
         // the log-mel of a source is computed by its first encode, its chunks share the result
         auto encode = [&](const clip_image_f32_batch & batch_f32, clip_audio_preproc_out * source, uint32_t idx, std::vector<float> & dst) {
             clip_image_f32_batch batch = batch_f32.clone();
-            if (source && source->needs_compute()) {
-                GGML_ASSERT(m.aud_preproc != nullptr && m.aud_cpu != nullptr);
-                const bool mel_ok = m.aud_preproc->compute(*source);
-                if (!mel_ok) {
-                    LLAMA_LOG_ERROR("%s: unable to compute the mel\n", __func__);
-                    return false;
-                }
-            }
             if (source) {
+                // other chunks of the source may be encoding on other contexts
+                std::lock_guard<std::mutex> lock(*source->mutex);
+                if (source->needs_compute()) {
+                    GGML_ASSERT(m.aud_preproc != nullptr && m.aud_cpu != nullptr);
+                    if (!m.aud_preproc->compute(*source)) {
+                        LLAMA_LOG_ERROR("%s: unable to compute the mel\n", __func__);
+                        return false;
+                    }
+                }
                 GGML_ASSERT(idx < source->entries.size());
                 batch.entries[0] = source->entries[idx];
             }
@@ -2143,12 +2158,14 @@ int llama_context::encode_media_engine(llama_media & m) {
 
         if (at.track) {
             auto & track = *at.track;
+            // the other pieces of the track wait for its rows
+            std::lock_guard<std::mutex> lock(track.mutex);
             if (track.embd.empty()) {
-                track.embd.resize((size_t) track.n_tokens * n_embd);
-                if (!encode(track.batch_f32, track.source.get(), 0, track.embd)) {
-                    track.embd.clear();
+                std::vector<float> embd((size_t) track.n_tokens * n_embd);
+                if (!encode(track.batch_f32, track.source.get(), 0, embd)) {
                     return -3;
                 }
+                track.embd = std::move(embd);
             }
             const size_t n_row_embd = track.embd.size() / track.n_tokens;
             const size_t off = (size_t) at.row_begin * n_row_embd;
@@ -2814,6 +2831,11 @@ int llama_context::gen_wav(const llama_batch_ext & batch_inp) {
     }
 
     synchronize();
+
+    // the frames went through the state slots of the sequence: its positions, see llama_memory_seq_pos_max()
+    if (auto * slots = dynamic_cast<llama_memory_slots *>(memory.get())) {
+        slots->advance(seq, n_frames);
+    }
 
     const uint32_t n_embd = n_embd_out_ctx();
     ggml_tensor * t_embd = res->get_embd();
@@ -5950,6 +5972,8 @@ void llama_gen_set_seed(llama_context * ctx, llama_seq_id seq_id, uint32_t seed)
 void llama_gen_reset(llama_context * ctx, llama_seq_id seq_id) {
     if (auto * mem = dynamic_cast<llama_memory_clip_gen *>(llama_get_memory(ctx))) {
         mem->reset(seq_id);
+    } else if (auto * slots = dynamic_cast<llama_memory_slots *>(llama_get_memory(ctx))) {
+        slots->seq_rm(seq_id, -1, -1); // the codec of the native graphs: its slots are the decoder state
     }
 }
 

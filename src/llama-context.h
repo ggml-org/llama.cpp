@@ -15,6 +15,7 @@
 #include <array>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 struct llama_model;
@@ -295,6 +296,7 @@ struct llama_context {
 private:
     // clip engine runtimes, one per tower in use
     std::map<const clip_model *, std::unique_ptr<clip_subcontext>> clip_subs;
+    std::mutex clip_subs_mutex;
 
     std::unique_ptr<clip_gen_ctx> clip_gen;
 
