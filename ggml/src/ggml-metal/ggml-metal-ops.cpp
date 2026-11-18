@@ -5043,10 +5043,12 @@ int ggml_metal_op_conv_2d(ggml_metal_op_t ctx, int idx) {
 
     const ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx->dev);
 
-    if (props_dev->has_simdgroup_mm) {
-        // the matmul kernels walk the patches with 32-bit byte offsets inside an image
-        GGML_ASSERT(nb13 <= UINT32_MAX);
+    // the matmul kernels walk the patches with 32-bit byte offsets inside an image
+    // larger images, possibly a strided view, take the generic kernel
+    const uint64_t max_off = (ne12 - 1)*nb12 + (ne11 - 1)*nb11 + (ne10 - 1)*nb10 + sizeof(float);
+    const bool     fits_32 = max_off <= UINT32_MAX;
 
+    if (props_dev->has_simdgroup_mm && fits_32) {
         auto pipeline = ggml_metal_library_get_pipeline_conv_2d_mm(lib, op);
 
         const int nr0 = pipeline.nr0;
