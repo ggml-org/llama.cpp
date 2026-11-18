@@ -1,7 +1,8 @@
 /**
  * `npx @ggml-org/llama-chat`: serves the prebuilt Llama Chat (`dist`) on localhost and forwards
- * its API calls to a llama-server. Node built-ins only, so the published package has no
- * dependencies: no llama-server, no models, no Vite or SvelteKit.
+ * its API calls to a llama-server. `npx @ggml-org/llama-chat build` writes the same files to a
+ * folder instead, for any static file server. Node built-ins only, so the published package has
+ * no dependencies: no llama-server, no models, no Vite or SvelteKit.
  *
  * The app calls the server on its own origin (`./v1/...`, `./props`, ...), as it does when
  * llama-server serves it. So a request is answered from `dist` when a file there matches its
@@ -10,10 +11,10 @@
 
 import { spawn } from 'node:child_process';
 import { createReadStream, readFileSync } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { cp, readdir, stat } from 'node:fs/promises';
 import http from 'node:http';
 import https from 'node:https';
-import { extname, join, normalize, sep } from 'node:path';
+import { extname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
@@ -22,6 +23,8 @@ export const DIST_DIR = join(PACKAGE_ROOT, 'dist');
 
 export const DEFAULTS = Object.freeze({
 	host: '127.0.0.1',
+	// the folder `build` writes to, in the current directory
+	out: 'llama-chat',
 	// fixed, so the origin, and the chats the browser stores under it, stay the same between runs
 	port: 3000,
 	// where llama-server listens when started without --host or --port
@@ -73,10 +76,14 @@ const HOP_BY_HOP = [
 	'transfer-encoding',
 	'upgrade'
 ];
+const SERVE_OPTIONS = ['host', 'open', 'port', 'server'];
+const BUILD_OPTIONS = ['force', 'out'];
 
 export const USAGE = `Usage: llama-chat [options]
+       llama-chat build [--out <dir>] [--force]
 
-Serves Llama Chat on localhost and connects it to a llama-server.
+Serves Llama Chat on localhost and connects it to a llama-server, or, with
+build, writes it to a folder as static files for any HTTP server.
 
 Options:
   --server <url>   llama-server to connect to (default: ${DEFAULTS.server})
@@ -87,10 +94,15 @@ Options:
   -v, --version    print the version
   -h, --help       print this help
 
+Build options:
+  --out <dir>      folder to write to (default: ./${DEFAULTS.out})
+  --force          write into a folder that is not empty
+
 Examples:
   npx @ggml-org/llama-chat
   npx @ggml-org/llama-chat --server http://192.168.1.20:8080
-  npx @ggml-org/llama-chat --host 0.0.0.0 --port 3000 --no-open`;
+  npx @ggml-org/llama-chat --host 0.0.0.0 --port 3000 --no-open
+  npx @ggml-org/llama-chat build --out ./public`;
 
 /** The version in this package's package.json. */
 export function packageVersion() {
@@ -98,9 +110,10 @@ export function packageVersion() {
 }
 
 /**
- * Reads the command line. `start` is accepted as a verb and means the same as none.
+ * Reads the command line. No verb serves the app, `start` means the same, and `build` writes it
+ * to a folder.
  * @param {string[]} argv the arguments after the command
- * @returns {{ help: boolean, host: string, open: boolean, port: number, server: URL, version: boolean }}
+ * @returns {{ command: 'build' | 'serve', force: boolean, help: boolean, host: string, open: boolean, out: string, port: number, server: URL, version: boolean }}
  */
 export function parseCliArgs(argv) {
 	const { positionals, values } = parseArgs({
@@ -108,9 +121,11 @@ export function parseCliArgs(argv) {
 		allowPositionals: true,
 		args: argv,
 		options: {
+			force: { type: 'boolean' },
 			help: { short: 'h', type: 'boolean' },
 			host: { type: 'string' },
 			open: { type: 'boolean' },
+			out: { type: 'string' },
 			port: { type: 'string' },
 			server: { type: 'string' },
 			version: { short: 'v', type: 'boolean' }
@@ -119,8 +134,19 @@ export function parseCliArgs(argv) {
 	});
 	const [verb, ...rest] = positionals;
 
-	if ((verb !== undefined && verb !== 'start') || rest.length > 0) {
+	if ((verb !== undefined && verb !== 'start' && verb !== 'build') || rest.length > 0) {
 		throw new Error(`unknown command: ${positionals.join(' ')}`);
+	}
+
+	const command = verb === 'build' ? 'build' : 'serve';
+	const misplaced = (command === 'build' ? SERVE_OPTIONS : BUILD_OPTIONS).find(
+		(name) => name in values
+	);
+
+	if (misplaced) {
+		throw new Error(
+			`--${misplaced} does not apply to ${command === 'build' ? 'build' : 'serving'}`
+		);
 	}
 
 	const port = Number(values.port ?? DEFAULTS.port);
@@ -130,9 +156,12 @@ export function parseCliArgs(argv) {
 	}
 
 	return {
+		command,
+		force: values.force ?? false,
 		help: values.help ?? false,
 		host: values.host ?? DEFAULTS.host,
 		open: values.open ?? true,
+		out: values.out ?? DEFAULTS.out,
 		port,
 		server: parseServerUrl(values.server ?? DEFAULTS.server),
 		version: values.version ?? false
@@ -347,6 +376,32 @@ export function createChatServer({ distDir = DIST_DIR, server }) {
 }
 
 /**
+ * Writes the app to a folder: the files of `dist` without source maps, ready for any static
+ * file server. Refuses a folder that is not empty unless `force` is set, and a folder in `dist`.
+ * @param {{ distDir?: string, force?: boolean, out: string }} options
+ * @returns {Promise<string>} the absolute path of the folder
+ */
+export async function buildStatic({ distDir = DIST_DIR, force = false, out }) {
+	const source = resolve(distDir);
+	const target = resolve(out);
+	const inside = relative(source, target);
+
+	if (inside === '' || !(inside.startsWith('..') || isAbsolute(inside))) {
+		throw new Error(`cannot build into ${target}, it is inside the app's own files`);
+	}
+
+	const entries = await readdir(target).catch(() => []);
+
+	if (entries.length > 0 && !force) {
+		throw new Error(`${target} is not empty, pick another --out or add --force`);
+	}
+
+	await cp(source, target, { filter: (file) => !file.endsWith('.map'), recursive: true });
+
+	return target;
+}
+
+/**
  * Opens a URL in the default browser, quietly doing nothing where that fails.
  * @param {string} url
  */
@@ -400,6 +455,23 @@ export async function main(argv) {
 	if (!(await stat(join(DIST_DIR, 'index.html')).catch(() => null))) {
 		console.error(`llama-chat: no build found in ${DIST_DIR}, run \`npm run build\` first`);
 		process.exitCode = 1;
+
+		return;
+	}
+
+	if (options.command === 'build') {
+		try {
+			const target = await buildStatic({ force: options.force, out: options.out });
+			const shown = relative(process.cwd(), target) || '.';
+
+			console.log(`Llama Chat ${packageVersion()} written to ${target}`);
+			console.log(
+				`Serve it on the same origin as the llama-server API, e.g.: npx http-server ${shown} -P ${DEFAULTS.server}`
+			);
+		} catch (error) {
+			console.error(`llama-chat: ${error instanceof Error ? error.message : error}`);
+			process.exitCode = 1;
+		}
 
 		return;
 	}

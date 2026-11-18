@@ -1,5 +1,11 @@
-import { createChatServer, DEFAULTS, parseCliArgs, parseServerUrl } from '../../cli/server.js';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+	buildStatic,
+	createChatServer,
+	DEFAULTS,
+	parseCliArgs,
+	parseServerUrl
+} from '../../cli/server.js';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -54,6 +60,22 @@ describe('llama-chat CLI arguments', () => {
 		expect(() => parseCliArgs(['--port', '70000'])).toThrow(/invalid --port/);
 	});
 
+	it('reads build with its own flags, and keeps serving flags out of it', () => {
+		expect(parseCliArgs(['build'])).toMatchObject({
+			command: 'build',
+			force: false,
+			out: DEFAULTS.out
+		});
+		expect(parseCliArgs(['build', '--out', 'public', '--force'])).toMatchObject({
+			command: 'build',
+			force: true,
+			out: 'public'
+		});
+		expect(parseCliArgs([]).command).toBe('serve');
+		expect(() => parseCliArgs(['build', '--port', '3001'])).toThrow(/does not apply to build/);
+		expect(() => parseCliArgs(['--out', 'public'])).toThrow(/does not apply to serving/);
+	});
+
 	it('takes a server address without a scheme as http', () => {
 		expect(parseServerUrl('localhost:8080').href).toBe('http://localhost:8080/');
 		expect(() => parseServerUrl('ftp://localhost')).toThrow(/invalid --server/);
@@ -71,6 +93,56 @@ describe('llama-chat packages', () => {
 		expect(app.bin['llama-chat']).toBe('./bin/cli.js');
 		expect(alias.version).toBe(app.version);
 		expect(alias.dependencies[app.name]).toBe(app.version);
+	});
+});
+
+describe('llama-chat build', () => {
+	let dist: string;
+	let work: string;
+
+	beforeAll(async () => {
+		dist = await mkdtemp(join(tmpdir(), 'llama-chat-dist-'));
+		work = await mkdtemp(join(tmpdir(), 'llama-chat-out-'));
+		await mkdir(join(dist, '_app'), { recursive: true });
+		await writeFile(join(dist, 'index.html'), '<!doctype html>');
+		await writeFile(join(dist, '_app', 'app.js'), 'export {};');
+		await writeFile(join(dist, '_app', 'app.js.map'), '{}');
+	});
+
+	afterAll(async () => {
+		await rm(dist, { force: true, recursive: true });
+		await rm(work, { force: true, recursive: true });
+	});
+
+	it('writes dist to the folder without source maps', async () => {
+		const out = await buildStatic({ distDir: dist, out: join(work, 'site') });
+
+		expect((await readdir(out, { recursive: true })).sort()).toEqual([
+			'_app',
+			join('_app', 'app.js'),
+			'index.html'
+		]);
+	});
+
+	it('refuses a folder that is not empty unless forced', async () => {
+		const out = join(work, 'busy');
+
+		await mkdir(out);
+		await writeFile(join(out, 'keep.txt'), 'mine');
+
+		await expect(buildStatic({ distDir: dist, out })).rejects.toThrow(/not empty/);
+		await buildStatic({ distDir: dist, force: true, out });
+		expect(await readFile(join(out, 'keep.txt'), 'utf8')).toBe('mine');
+		expect(await readFile(join(out, 'index.html'), 'utf8')).toBe('<!doctype html>');
+	});
+
+	it('refuses to write into the app files themselves', async () => {
+		await expect(buildStatic({ distDir: dist, force: true, out: dist })).rejects.toThrow(
+			/inside the app's own files/
+		);
+		await expect(
+			buildStatic({ distDir: dist, force: true, out: join(dist, '_app', 'copy') })
+		).rejects.toThrow(/inside the app's own files/);
 	});
 });
 

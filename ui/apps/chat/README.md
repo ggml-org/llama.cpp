@@ -27,7 +27,7 @@ Llama UI supports two server operation modes:
 
 ## Run it with npx
 
-Llama Chat is published to npm as [`@ggml-org/llama-chat`](https://www.npmjs.com/package/@ggml-org/llama-chat), with [`llama-chat`](https://www.npmjs.com/package/llama-chat) as its short name. It serves the prebuilt app on localhost and connects it to a llama-server you run yourself; it brings no server and no models of its own. It needs Node.js 20 or later.
+Llama Chat is published to npm as [`@ggml-org/llama-chat`](https://www.npmjs.com/package/@ggml-org/llama-chat), with [`llama-chat`](https://www.npmjs.com/package/llama-chat) as its short name. It serves the prebuilt app on localhost and connects it to a llama-server you run yourself, or writes it to a folder for any static file server (see [Self-hosting](#self-hosting)); it brings no server and no models of its own. It needs Node.js 20 or later.
 
 ```bash
 # start llama-server, then serve Llama Chat on http://127.0.0.1:3000 and open the browser
@@ -44,6 +44,11 @@ npx llama-chat --server http://192.168.1.20:8080
 npx llama-chat --host 0.0.0.0 --port 3000 --no-open
 ```
 
+```bash
+# write the static app to ./llama-chat instead of serving it
+npx llama-chat build
+```
+
 | Flag                              | Default                 | What it does                                                                                |
 | --------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------- |
 | `--server <url>`                  | `http://127.0.0.1:8080` | The llama-server to connect to. A path is kept, for a server started with `--api-prefix`    |
@@ -52,7 +57,7 @@ npx llama-chat --host 0.0.0.0 --port 3000 --no-open
 | `--open` / `--no-open`            | open                    | Opens the default browser once it listens                                                   |
 | `-v`, `--version`, `-h`, `--help` |                         | As usual                                                                                    |
 
-The bare command is the documented form; `start` is accepted as an alias for it.
+The bare command is the documented form; `start` is accepted as an alias for it. `build` takes `--out <dir>` (default `./llama-chat`) and `--force`, which lets it write into a folder that is not empty.
 
 How it works: the app calls its server on its own origin (`./v1/...`, `./props`, ...), as it does when llama-server serves it. The CLI answers a request from `dist` when a file there matches its path and forwards everything else to the llama-server as if from the server's own page (its `Host`, and without the CLI page's `Origin`), so the server needs no `--cors-origins`. Requests from other pages keep their `Origin` and `Sec-Fetch-Site`, so llama-server refuses them as it would directly, and a CLI listening on loopback answers only to `localhost` and loopback addresses, which stops DNS rebinding. It sends the response headers llama-server sends for the UI: `index.html` is cross-origin isolated (`Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy`) and revalidated, `service-worker.js`, `sw.js`, `manifest.webmanifest`, `build.json` and `_app/version.json` are revalidated, and every other file is cached for good. It is plain Node.js (`node:http`) with no dependencies.
 
@@ -60,10 +65,17 @@ An `http://` page can call a plain `http://` llama-server on the LAN, which an `
 
 ## Self-hosting
 
-The build in `dist` is static and uses relative paths and a hash router, so any static host can serve it at any path. Two ways to host it:
+The app is static and uses relative paths and a hash router, so any static host can serve it at any path. Two ways to host it:
 
 - **Run the CLI behind your reverse proxy**: `npx @ggml-org/llama-chat --host 0.0.0.0 --no-open --server <llama-server>`, then proxy your domain to its port. Long chat responses stream as server-sent events, so turn off response buffering in the proxy.
-- **Serve `dist` yourself**: `npm run build`, or take `dist` from the npm package (`node_modules/@ggml-org/llama-chat/dist`). Serve it from the same origin as the llama-server API: forward `/v1`, `/props`, `/models`, `/slots`, `/tools` and `/cors-proxy` to llama-server, and everything else from `dist`. Send the headers listed above with `index.html` and the PWA files, so the app behaves as it does under llama-server (see [Remote Assets Under Cross-Origin Isolation](#9-remote-assets-under-cross-origin-isolation)).
+- **Serve the static files yourself**: `npx @ggml-org/llama-chat build --out <dir>` writes them (as does `npm run build` here, to `dist`). Serve them from the same origin as the llama-server API: a path with a file answers from the folder, and every other path goes to llama-server. For example, with [http-server](https://www.npmjs.com/package/http-server), which forwards what it has no file for:
+
+  ```bash
+  npx llama-chat build
+  npx http-server llama-chat -p 3000 -P http://127.0.0.1:8080
+  ```
+
+  A plain file server sends the browser's `Origin` on to llama-server, so start llama-server with `--cors-origins http://127.0.0.1:3000` (the address you open) when it restricts origins, as it does with tools or MCP enabled. Send the headers listed above with `index.html` and the PWA files, so the app behaves as it does under llama-server (see [Remote Assets Under Cross-Origin Isolation](#9-remote-assets-under-cross-origin-isolation)).
 
 Until the app can add a server by URL, it reaches only the llama-server on its own origin: through the CLI, a reverse proxy, or llama-server itself (`--path dist`).
 
