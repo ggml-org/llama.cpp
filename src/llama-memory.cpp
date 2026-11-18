@@ -3,7 +3,6 @@
 #include "llama-ext.h"
 #include "llama-io.h"
 
-#include <algorithm>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -115,7 +114,7 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_memory_bufs::memory_breakdown
 
 // collects the tensors that a state write visits, without keeping the data
 struct llama_memory_tensors_writer : public llama_io_write_i {
-    std::vector<ggml_tensor *> tensors;
+    std::set<ggml_tensor *> tensors;
     size_t size = 0;
 
     void write(const void *, size_t n) override {
@@ -123,9 +122,7 @@ struct llama_memory_tensors_writer : public llama_io_write_i {
     }
 
     void write_tensor(ggml_tensor * tensor, size_t, size_t n) override {
-        if (std::find(tensors.begin(), tensors.end(), tensor) == tensors.end()) {
-            tensors.push_back(tensor);
-        }
+        tensors.insert(tensor);
         size += n;
     }
 
@@ -143,7 +140,7 @@ std::vector<ggml_tensor *> llama_memory_get_tensors(const llama_memory_t mem) {
 
     mem->state_write(writer);
 
-    return writer.tensors;
+    return std::vector<ggml_tensor *>(writer.tensors.begin(), writer.tensors.end());
 }
 
 std::vector<ggml_backend_buffer_t> llama_memory_get_buffers(const llama_memory_t mem) {
