@@ -49,4 +49,16 @@ describe('PauseDetector', () => {
 		expect(hold(detector, 0.6, 2500)).toBe(false);
 		expect(detector.push(0.1)).toBe(true);
 	});
+
+	it('cuts anyway when no quiet moment comes, as with music playing in the room', () => {
+		const detector = new PauseDetector({ intervalMs: INTERVAL, maxSegmentMs: 2000 });
+
+		expect(hold(detector, 0.1, 100)).toBe(false);
+		// speech over music: the level never comes back down
+		expect(hold(detector, 0.6, 2850)).toBe(false);
+		expect(detector.push(0.6)).toBe(true);
+		// and again for the next piece
+		expect(hold(detector, 0.6, 2950)).toBe(false);
+		expect(detector.push(0.6)).toBe(true);
+	});
 });

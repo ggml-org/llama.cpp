@@ -11,7 +11,11 @@ export interface PauseDetectorOptions {
 	pauseMs?: number;
 	/** Speech needed before a pause counts */
 	minSpeechMs?: number;
-	/** A piece longer than this is cut at its next quiet moment, pause or not */
+	/**
+	 * A piece longer than this is cut at its next quiet moment, pause or not; half as
+	 * long again and it is cut where it is, as with music or talk in the room no moment
+	 * is ever quiet
+	 */
 	maxSegmentMs?: number;
 }
 
@@ -20,6 +24,8 @@ const SPEECH_ABOVE_FLOOR = 0.15;
 const QUIET_ABOVE_FLOOR = 0.08;
 /** How fast the floor rises back after it dropped to a quieter level, per level. */
 const FLOOR_RISE = 0.002;
+/** How far past its longest length a piece waits for a quiet moment before it is cut anyway. */
+const OVERTIME = 1.5;
 
 export class PauseDetector {
 	private floor = 1;
@@ -48,18 +54,26 @@ export class PauseDetector {
 		this.floor = Math.min(level, this.floor + FLOOR_RISE);
 		this.segmentMs += this.intervalMs;
 
-		if (level > this.floor + SPEECH_ABOVE_FLOOR) {
+		const loud = level > this.floor + SPEECH_ABOVE_FLOOR;
+
+		if (loud) {
 			this.speechMs += this.intervalMs;
 			this.quietMs = 0;
-
-			return false;
 		}
 
-		if (level > this.floor + QUIET_ABOVE_FLOOR) return false;
+		const spoke = this.speechMs >= this.minSpeechMs;
+
+		// no quiet moment came: the text must not wait for one that a noisy room never has
+		if (spoke && this.segmentMs >= this.maxSegmentMs * OVERTIME) {
+			this.reset();
+
+			return true;
+		}
+
+		if (loud || level > this.floor + QUIET_ABOVE_FLOOR) return false;
 
 		this.quietMs += this.intervalMs;
 
-		const spoke = this.speechMs >= this.minSpeechMs;
 		const cut = spoke && (this.quietMs >= this.pauseMs || this.segmentMs >= this.maxSegmentMs);
 
 		if (cut) this.reset();
