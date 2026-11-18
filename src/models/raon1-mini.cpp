@@ -42,6 +42,9 @@ void llama_model_raon1_mini::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ACTIVATION_SITU_BETA,          hparams.situ_beta);
     ml.get_key(LLM_KV_ACTIVATION_SITU_LINEAR_BETA,   hparams.situ_linear_beta);
 
+    // The Raon router normalizes selected scores by sum(scores) + 1e-20.
+    hparams.expert_weights_norm_eps = 1e-20f;
+
     auto require = [](bool ok, const std::string & what) {
         if (!ok) {
             throw std::runtime_error("invalid Raon-1 mini hyperparameters: " + what);
