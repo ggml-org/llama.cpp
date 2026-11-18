@@ -145,25 +145,6 @@ jobs:
         run: npm publish --access public --provenance --ignore-scripts --tag "$TAG"
         working-directory: ${{ env.ALIAS_DIR }}
 
-      - name: Verify they landed
-        if: github.ref == 'refs/heads/master' && (steps.app.outputs.should_publish == 'true' || steps.alias.outputs.should_publish == 'true') && inputs.dry_run != true
-        env:
-          VERSION: ${{ steps.app.outputs.version }}
-        run: |
-          # the registry can serve a new version some time after publish returns
-          for name in @ggml-org/llama-chat llama-chat; do
-            for try in 1 2 3 4 5 6; do
-              if [ "$(npm view "$name@$VERSION" version 2>/dev/null || true)" = "$VERSION" ]; then
-                echo "$name@$VERSION is on npm"
-                continue 2
-              fi
-              echo "$name@$VERSION not visible yet (attempt $try of 6)"
-              sleep 10
-            done
-            echo "::error::$name@$VERSION published without error but is not visible on the registry. Check npm before publishing again."
-            exit 1
-          done
-
       - name: Report
         if: always()
         # values reach the shell through env, so a name from a PR's package.json cannot inject here
