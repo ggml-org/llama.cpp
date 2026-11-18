@@ -217,9 +217,38 @@ function sendFile(req, res, file, pathname, stats) {
 }
 
 /**
+ * The host name in a Host header, lower case and without the port or IPv6 brackets.
+ * @param {string} host
+ */
+function hostName(host) {
+	const name = host.startsWith('[') ? host.slice(1, host.indexOf(']')) : host.split(':')[0];
+
+	return name.toLowerCase();
+}
+
+/** @param {string} address */
+function isLoopback(address) {
+	return /^(127\.|::1$|::ffff:127\.)/.test(address);
+}
+
+/**
+ * DNS rebinding guard, as llama-server has: a page whose own name resolves to 127.0.0.1 reaches
+ * a loopback listener with that name in Host, so there Host must name loopback itself.
+ * @param {http.IncomingMessage} req
+ */
+function hostIsAllowed(req) {
+	if (!isLoopback(req.socket.localAddress ?? '')) return true;
+
+	const name = hostName(req.headers.host ?? '');
+
+	return name === 'localhost' || name === '0.0.0.0' || name === '::' || isLoopback(name);
+}
+
+/**
  * Forwards a request to the llama-server. llama-server takes cross-origin browser requests only
  * from its --cors-origins, so, like the Vite dev proxy, this calls it as its own page: with the
- * Host of the server and no Origin.
+ * Host of the server, and without the Origin of this page. Another page's Origin and
+ * Sec-Fetch-Site pass through, so llama-server still refuses what it would refuse directly.
  * @param {http.IncomingMessage} req
  * @param {http.ServerResponse} res
  * @param {URL} server
@@ -229,8 +258,11 @@ function proxy(req, res, server) {
 	const target = new URL(prefix + (req.url ?? '/'), server.origin);
 	/** @type {http.OutgoingHttpHeaders} */
 	const headers = { ...req.headers, host: target.host };
+	const origin = req.headers.origin ?? '';
 
-	delete headers.origin;
+	if (origin.slice(origin.indexOf('://') + 3).toLowerCase() === req.headers.host?.toLowerCase()) {
+		delete headers.origin;
+	}
 
 	for (const name of HOP_BY_HOP) delete headers[name];
 
@@ -284,6 +316,21 @@ export function createChatServer({ distDir = DIST_DIR, server }) {
 	return http.createServer(async (req, res) => {
 		const { pathname } = new URL(req.url ?? '/', 'http://localhost');
 
+		if (!hostIsAllowed(req)) {
+			res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+			res.end(
+				JSON.stringify({
+					error: {
+						code: 403,
+						message: `llama-chat refused the host name ${req.headers.host}, open it on localhost or 127.0.0.1`,
+						type: 'permission_error'
+					}
+				})
+			);
+
+			return;
+		}
+
 		if (req.method === 'GET' || req.method === 'HEAD') {
 			const file = resolveStatic(root, pathname);
 			const stats = file ? await stat(file).catch(() => null) : null;
@@ -312,7 +359,8 @@ function openBrowser(url) {
 				: ['xdg-open', [url]];
 
 	try {
-		spawn(command, args, { detached: true, stdio: 'ignore' })
+		// verbatim, or Node quotes the empty title of `start` into one cmd.exe misreads
+		spawn(command, args, { detached: true, stdio: 'ignore', windowsVerbatimArguments: true })
 			.on('error', () => {})
 			.unref();
 	} catch {

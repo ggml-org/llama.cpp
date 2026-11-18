@@ -149,7 +149,7 @@ describe('llama-chat server', () => {
 	it('forwards API calls to the llama-server as its own page', async () => {
 		const res = await fetch(`${chatUrl}/v1/chat/completions?x=1`, {
 			body: '{"messages":[]}',
-			headers: { 'Content-Type': 'application/json', Origin: 'http://localhost:3000' },
+			headers: { 'Content-Type': 'application/json', Origin: chatUrl },
 			method: 'POST'
 		});
 
@@ -162,6 +162,37 @@ describe('llama-chat server', () => {
 		expect(request.body).toBe('{"messages":[]}');
 		expect(request.headers.origin).toBeUndefined();
 		expect(request.headers.host).toBe(new URL(upstreamUrl).host);
+	});
+
+	it("passes another page's Origin through, so llama-server can refuse it", async () => {
+		await fetch(`${chatUrl}/props`, {
+			headers: { Origin: 'http://evil.example', 'Sec-Fetch-Site': 'cross-site' }
+		});
+
+		const request = seen.at(-1)!;
+
+		expect(request.headers.origin).toBe('http://evil.example');
+		expect(request.headers['sec-fetch-site']).toBe('cross-site');
+	});
+
+	it('refuses other host names on loopback, against DNS rebinding', async () => {
+		// fetch() sets Host itself, so the request goes out through http.request
+		const status = (host: string) =>
+			new Promise<number>((resolve, reject) => {
+				const { port } = new URL(chatUrl);
+
+				http
+					.request({ headers: { host }, host: '127.0.0.1', path: '/props', port }, (res) => {
+						res.resume();
+						resolve(res.statusCode ?? 0);
+					})
+					.on('error', reject)
+					.end();
+			});
+
+		expect(await status('rebind.example:3000')).toBe(403);
+		expect(await status('localhost:3000')).toBe(200);
+		expect(await status('[::1]:3000')).toBe(200);
 	});
 
 	it('does not serve files from outside dist', async () => {
