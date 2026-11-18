@@ -41,6 +41,26 @@ llama-server -hf ggml-org/gemma-3-4b-it-GGUF --no-mmproj-offload
 > - Dots.OCR: https://github.com/ggml-org/llama.cpp/pull/17575
 > - HunyuanOCR: https://github.com/ggml-org/llama.cpp/pull/21395
 
+## Realtime audio
+
+Models that take an audio stream can run a live session in `llama-mtmd-cli` with `--realtime`. The audio comes from the default microphone, and the audio that the model generates is played on the default speaker.
+
+```sh
+# live transcription
+llama-mtmd-cli -hf ggml-org/Voxtral-Mini-4B-Realtime-2602-GGUF --realtime
+
+# conversation: the model answers when you stop speaking
+llama-mtmd-cli -hf ggml-org/LFM3-Omni-2B-GGUF --realtime
+
+# an audio file replaces the microphone (fed at the pace of a live input), a WAV file replaces the speaker
+llama-mtmd-cli -hf ggml-org/LFM3-Omni-2B-GGUF --realtime --audio input.wav -o output.wav
+```
+
+Notes:
+- A turn of a conversation ends after 700 ms of silence
+- The microphone is ignored while the model speaks. There is no echo cancellation
+- For use in an application, see the `/v1/realtime` endpoint of `llama-server`
+
 ## Pre-quantized models
 
 These are ready-to-use models, most of them come with `Q4_K_M` quantization by default. They can be found at the Hugging Face page of the ggml-org: https://huggingface.co/collections/ggml-org/multimodal-ggufs-68244e01ff1f39e5bebeeedc

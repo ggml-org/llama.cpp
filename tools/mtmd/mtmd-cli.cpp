@@ -9,7 +9,10 @@
 #include "chat.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "mtmd-cli-audio.h"
 
+#include <chrono>
+#include <thread>
 #include <vector>
 #include <limits.h>
 #include <cinttypes>
@@ -44,6 +47,7 @@ static void show_additional_info(int /*argc*/, char ** argv) {
         "  -m and --mmproj are required\n"
         "  -hf user/repo can replace both -m and --mmproj in most cases\n"
         "  --image, --audio and -p are optional, if NOT provided, the CLI will run in chat mode\n"
+        "  --realtime starts a live audio session with the microphone, for models that take an audio stream\n"
         "  to disable using GPU for mmproj model, add --no-mmproj-offload\n",
         argv[0]
     );
@@ -258,76 +262,115 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
     return 0;
 }
 
-// feed an audio file to a realtime model chunk by chunk, printing the transcript as it is produced
-static int run_audio_stream(mtmd_cli_context & ctx, const std::string & fname, int n_predict) {
-    auto res = mtmd_helper_bitmap_init_from_file(ctx.ctx_vision.get(), fname.c_str(), false, ctx.init_opt);
-    if (!res.bitmap) {
-        return 1; // error is already printed by libmtmd
-    }
-    mtmd::bitmap bmp(res.bitmap);
-    if (!mtmd_bitmap_is_audio(bmp.ptr.get())) {
-        LOG_ERR("%s: %s is not an audio file\n", __func__, fname.c_str());
-        return 1;
-    }
-    const float * samples   = (const float *) bmp.data();
-    const size_t  n_samples = bmp.n_bytes() / sizeof(float);
-    const int     rate      = mtmd_get_audio_sample_rate(ctx.ctx_vision.get());
+// the audio of a realtime session: the microphone, or one audio file
+struct mtmd_cli_audio_input {
+    mtmd::bitmap      bmp; // owns the samples of a file
+    mtmd_cli_audio_in in;
+    int               rate = 0;
 
-    const auto sparams = mtmd_audio_stream_params_default();
-    mtmd::audio_stream_ptr stream(mtmd_audio_stream_init(ctx.ctx_vision.get(), sparams));
+    bool init(mtmd_cli_context & ctx, const common_params & params) {
+        rate = mtmd_get_audio_sample_rate(ctx.ctx_vision.get());
+        if (params.image.empty() && params.realtime) {
+            return in.init_mic(rate);
+        }
+        if (params.image.size() != 1) {
+            LOG_ERR("This model takes an audio stream, pass exactly one --audio file%s\n", params.realtime ? "" : " or --realtime");
+            return false;
+        }
+        const std::string & fname = params.image[0];
+        auto res = mtmd_helper_bitmap_init_from_file(ctx.ctx_vision.get(), fname.c_str(), false, ctx.init_opt);
+        if (!res.bitmap) {
+            return false; // error is already printed by libmtmd
+        }
+        bmp.ptr.reset(res.bitmap);
+        if (!mtmd_bitmap_is_audio(bmp.ptr.get())) {
+            LOG_ERR("%s: %s is not an audio file\n", __func__, fname.c_str());
+            return false;
+        }
+        const size_t n_chunk = (size_t) rate * mtmd_audio_stream_params_default().step_ms / 1000;
+        in.init_samples((const float *) bmp.data(), bmp.n_bytes() / sizeof(float), rate, params.realtime, n_chunk);
+        return true;
+    }
+};
+
+static void wait_for_audio() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+}
+
+// decode the rows that the audio stream has ready, returns their count or -1 on error
+static int32_t decode_audio_rows(mtmd_cli_context & ctx, mtmd_audio_stream * stream, llama_token last_token, bool logits_last) {
+    const int32_t n = mtmd_audio_stream_step(stream, last_token);
+    if (n == -2) {
+        LOG_ERR("%s: stream error\n", __func__);
+        return -1;
+    }
+    if (n <= 0) {
+        return 0;
+    }
+    if (mtmd_audio_stream_is_seq_start(stream)) {
+        // the model restarts its context, the text goes on in a new line
+        llama_memory_clear(llama_get_memory(ctx.lctx), true);
+        if (ctx.n_past > 0) {
+            LOG("\n");
+        }
+        ctx.n_past = 0;
+    }
+    if (ctx.n_past + n > (llama_pos) llama_n_ctx(ctx.lctx)) {
+        LOG_ERR("\n%s: the context is full, increase it with -c\n", __func__);
+        return -1;
+    }
+    const int     n_embd = llama_model_n_embd_inp(ctx.model);
+    const float * rows   = mtmd_audio_stream_get_output_embd(stream);
+    ctx.batch.clear();
+    for (int32_t i = 0; i < n; i++) {
+        const llama_pos pos[GGML_MROPE_SECTIONS] = { ctx.n_past, ctx.n_past, ctx.n_past, 0 };
+        ctx.n_past++;
+        ctx.batch.add_embd({ rows + (size_t) i * n_embd, 1, (size_t) n_embd }, pos, 0, logits_last && i == n - 1);
+    }
+    if (llama_process(ctx.lctx, LLAMA_PROCESS_TYPE_DECODE, ctx.batch.get())) {
+        LOG_ERR("%s: failed to decode\n", __func__);
+        return -1;
+    }
+    return n;
+}
+
+// realtime transcription model: print the transcript as the audio comes in
+static int run_transcription(mtmd_cli_context & ctx, mtmd_cli_audio_input & input, int n_predict) {
+    mtmd::audio_stream_ptr stream(mtmd_audio_stream_init(ctx.ctx_vision.get(), mtmd_audio_stream_params_default()));
     if (!stream) {
         return 1;
     }
 
-    const size_t n_chunk = (size_t) rate * sparams.step_ms / 1000;
-    const int    n_embd  = llama_model_n_embd_inp(ctx.model);
-
-    LOG("Transcribing %.1f s of audio, fed in chunks of %d ms\n\n", (double) n_samples / rate, sparams.step_ms);
-
-    size_t      n_fed  = 0;
-    int         n_gen  = 0;
-    llama_token tok    = LLAMA_TOKEN_NULL;
+    size_t      n_fed     = 0;
+    int         n_gen     = 0;
+    int64_t     n_dropped = 0;
+    llama_token tok       = LLAMA_TOKEN_NULL;
+    std::vector<float> buf;
     const int64_t t_start = ggml_time_us();
-    int64_t       t_enc   = 0; // time spent in the stream (mel + encoder)
-    int64_t       t_dec   = 0; // time spent in the decoder
     while (!g_is_interrupted) {
-        const int64_t t0 = ggml_time_us();
-        const int32_t n = mtmd_audio_stream_step(stream.get(), tok);
-        t_enc += ggml_time_us() - t0;
+        const int32_t n = decode_audio_rows(ctx, stream.get(), tok, true);
         if (n < 0) {
-            if (n == -2) {
-                LOG_ERR("%s: stream error\n", __func__);
-                return 1;
-            }
-            break; // end of stream
+            return 1;
         }
         if (n == 0) {
-            if (n_fed < n_samples) {
-                const size_t cnt = std::min(n_chunk, n_samples - n_fed);
-                mtmd_audio_stream_push(stream.get(), samples + n_fed, cnt);
-                n_fed += cnt;
+            buf.clear();
+            if (input.in.read(buf) > 0) {
+                mtmd_audio_stream_push(stream.get(), buf.data(), buf.size());
+                n_fed += buf.size();
+            } else if (!input.in.is_end()) {
+                wait_for_audio();
             } else if (mtmd_audio_stream_flush(stream.get(), true) != 0) {
-                break; // already ended
+                break; // all the audio is transcribed
+            }
+            if (input.in.n_dropped() > n_dropped) {
+                n_dropped = input.in.n_dropped();
+                LOG_WRN("\n%s: the model is slower than the audio, %.1f s lost so far\n", __func__, (double) n_dropped / input.rate);
             }
             continue;
         }
 
-        const int64_t t1 = ggml_time_us();
-        const float * rows = mtmd_audio_stream_get_output_embd(stream.get());
-        ctx.batch.clear();
-        for (int32_t i = 0; i < n; i++) {
-            const llama_pos pos[GGML_MROPE_SECTIONS] = { ctx.n_past, ctx.n_past, ctx.n_past, 0 };
-            ctx.n_past++;
-            ctx.batch.add_embd({ rows + (size_t) i * n_embd, 1, (size_t) n_embd }, pos, 0, i == n - 1);
-        }
-        if (llama_process(ctx.lctx, LLAMA_PROCESS_TYPE_DECODE, ctx.batch.get())) {
-            LOG_ERR("%s: failed to decode\n", __func__);
-            return 1;
-        }
-
         tok = common_sampler_sample(ctx.smpl, ctx.lctx, -1);
         common_sampler_accept(ctx.smpl, tok, true);
-        t_dec += ggml_time_us() - t1;
         if (llama_vocab_is_eog(ctx.vocab, tok)) {
             break;
         }
@@ -342,12 +385,260 @@ static int run_audio_stream(mtmd_cli_context & ctx, const std::string & fname, i
     }
 
     const double t_total = (ggml_time_us() - t_start) / 1e6;
-    LOG("\n\n%s: %d tokens, %.2f s audio in %.2f s (%.2fx realtime)\n", __func__,
-        n_gen, (double) n_samples / rate, t_total, (double) n_samples / rate / t_total);
-    LOG("%s: encoder %.2f s, decoder %.2f s, %.1f ms per 80 ms step\n", __func__,
-        t_enc / 1e6, t_dec / 1e6, (t_enc + t_dec) / 1e3 / std::max(n_gen, 1));
+    const double t_audio = (double) n_fed / input.rate;
+    LOG("\n\n%s: %d tokens, %.2f s audio in %.2f s (%.2fx realtime)\n", __func__, n_gen, t_audio, t_total, t_audio / t_total);
     llama_perf_context_print(ctx.lctx);
 
+    return 0;
+}
+
+// the text around the turns of a conversation, taken from the chat template with placeholder messages
+// (same method as the realtime API of llama-server)
+struct mtmd_cli_turn_text {
+    std::string first_header; // system prompt + first user header
+    std::string user_header;
+    std::string user_footer;
+    std::string assistant_header;
+    std::string assistant_footer;
+
+    bool init(mtmd_cli_context & ctx, const common_params & params) {
+        const std::string user  = "@@USER@@";
+        const std::string reply = "@@REPLY@@";
+        auto render = [&](std::vector<std::string> roles, bool add_generation_prompt) {
+            common_chat_templates_inputs inputs;
+            if (!params.system_prompt.empty()) {
+                roles.insert(roles.begin(), "system");
+            }
+            for (const auto & role : roles) {
+                common_chat_msg msg;
+                msg.role    = role;
+                msg.content = role == "system" ? params.system_prompt : role == "user" ? user : reply;
+                inputs.messages.push_back(std::move(msg));
+            }
+            inputs.add_generation_prompt = add_generation_prompt;
+            inputs.use_jinja             = ctx.use_jinja;
+            inputs.enable_thinking       = false;
+            inputs.chat_template_kwargs  = params.default_template_kwargs;
+            return common_chat_templates_apply(ctx.tmpls.get(), inputs).prompt.str();
+        };
+        std::string a, g, c, d;
+        try {
+            a = render({"user"}, false);
+            g = render({"user"}, true);
+            c = render({"user", "assistant"}, false);
+            d = render({"user", "assistant", "user"}, false);
+        } catch (const std::exception & e) {
+            LOG_ERR("%s: %s\n", __func__, e.what());
+            return false;
+        }
+
+        const size_t pa = a.find(user);
+        const size_t pc = c.find(reply);
+        const size_t pd = d.find(user, c.size());
+        if (pa == std::string::npos || pc == std::string::npos || pd == std::string::npos ||
+            c.compare(0, a.size(), a) != 0 || d.compare(0, c.size(), c) != 0 || g.compare(0, a.size(), a) != 0 || pc < a.size()) {
+            return false;
+        }
+        first_header     = a.substr(0, pa);
+        user_footer      = a.substr(pa + user.size());
+        assistant_header = g.substr(a.size());
+        assistant_footer = c.substr(pc + reply.size());
+        user_header      = d.substr(c.size(), pd - c.size());
+        return true;
+    }
+};
+
+static int decode_text(mtmd_cli_context & ctx, const std::string & text, bool logits_last) {
+    const llama_tokens toks = common_tokenize(ctx.lctx, text, false, true);
+    if (ctx.n_past + (llama_pos) toks.size() > (llama_pos) llama_n_ctx(ctx.lctx)) {
+        LOG_ERR("\n%s: the context is full, increase it with -c\n", __func__);
+        return 1;
+    }
+    for (size_t i = 0; i < toks.size(); i += ctx.n_batch) {
+        const size_t n = std::min(toks.size() - i, (size_t) ctx.n_batch);
+        ctx.batch.clear();
+        for (size_t j = 0; j < n; j++) {
+            ctx.batch.add(toks[i + j], ctx.n_past++, 0, logits_last && i + j == toks.size() - 1);
+        }
+        if (llama_process(ctx.lctx, LLAMA_PROCESS_TYPE_DECODE, ctx.batch.get())) {
+            LOG_ERR("%s: failed to decode\n", __func__);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// response of a model that generates audio: the gen-audio pipeline continues the conversation from prompt
+// the pipeline decodes on its own, n_past is updated at the end
+static int generate_audio_response(mtmd_cli_context & ctx, const common_params & params, mtmd_helper::gen_audio & gen,
+                                   mtmd_cli_audio_out & out, const std::string & prompt, int n_predict) {
+    mtmd_helper::gen_audio::inp inp;
+    inp.set_prompt(prompt);
+    inp.data.n_past   = ctx.n_past;
+    inp.data.seed     = params.sampling.seed;
+    inp.data.stream   = true;
+    inp.data.out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM;
+    inp.data.out_mode = MTMD_HELPER_GEN_AUDIO_OUT_MIXED;
+    if (gen.set_input(inp.get()) != 0) {
+        LOG_ERR("%s: failed to start the response\n", __func__);
+        return 1;
+    }
+    // the pipeline may bias some text tokens
+    common_params_sampling sparams = params.sampling;
+    for (const auto & b : gen.logit_bias()) {
+        sparams.logit_bias.push_back(b);
+    }
+    common_sampler_ptr smpl(common_sampler_init(ctx.model, sparams));
+
+    int32_t ret;
+    while ((ret = gen.step_prompt(ctx.n_batch)) > 0) {
+    }
+    if (ret < 0) {
+        LOG_ERR("%s: failed to start the response\n", __func__);
+        return 1;
+    }
+    const int n_embd = llama_model_n_embd(ctx.model);
+    const float * h  = llama_get_embeddings_ith(ctx.lctx, -1);
+    std::vector<float> h_state(h, h + n_embd);
+
+    const llama_pos n_ctx = (llama_pos) llama_n_ctx(ctx.lctx);
+    bool done = false;
+    for (int i = 0; !done; i++) {
+        llama_token tok = LLAMA_TOKEN_NULL;
+        if (gen.next_is_text()) {
+            tok = common_sampler_sample(smpl.get(), ctx.lctx, -1);
+            common_sampler_accept(smpl.get(), tok, true);
+        }
+        bool stop = false;
+        const float * h_next = nullptr;
+        if (gen.step_gen(tok, h_state.data(), &h_next, &stop) != 0) {
+            LOG_ERR("\n%s: response generation failed\n", __func__);
+            return 1;
+        }
+        if (tok != LLAMA_TOKEN_NULL && !stop && !llama_vocab_is_control(ctx.vocab, tok)) {
+            LOG("%s", common_token_to_piece(ctx.lctx, tok).c_str());
+            fflush(stdout);
+        }
+        if (h_next) {
+            h_state.assign(h_next, h_next + n_embd);
+        }
+
+        const bool ctx_full = llama_memory_seq_pos_max(llama_get_memory(ctx.lctx), 0) + 2 >= n_ctx;
+        done = stop || ctx_full || i + 1 >= n_predict || !g_is_generating || g_is_interrupted;
+        if (done) {
+            gen.flush();
+        }
+        int32_t      sample_rate = 0;
+        const char * data        = nullptr;
+        size_t       data_len    = 0;
+        if (gen.get_output(&sample_rate, &data, &data_len) == 0 && data_len > 0) {
+            out.write((const float *) data, data_len / sizeof(float));
+        }
+    }
+    LOG("\n");
+    ctx.n_past = llama_memory_seq_pos_max(llama_get_memory(ctx.lctx), 0) + 1;
+    return 0;
+}
+
+// realtime conversation: the model listens to a turn, then answers with text and audio (if it generates audio)
+// the audio of a turn is decoded while it comes in, so the response starts right after the turn
+static int run_conversation(mtmd_cli_context & ctx, const common_params & params, mtmd_cli_audio_input & input, int n_predict) {
+    mtmd_cli_turn_text text;
+    if (!text.init(ctx, params)) {
+        LOG_ERR("%s: the chat template does not fit the realtime turn format\n", __func__);
+        return 1;
+    }
+
+    mtmd_helper::gen_audio gen;
+    mtmd_cli_audio_out     out;
+    if (ctx.mtmd_cap.audio_gen) {
+        gen.init(ctx.lctx, ctx.ctx_vision.get());
+        const auto info = mtmd_gen_audio_get_info(ctx.ctx_vision.get());
+        const bool ok   = params.out_file.empty() ?
+            out.init_speaker(info.sample_rate, info.n_channels) :
+            out.init_file(params.out_file, info.sample_rate, info.n_channels);
+        if (!gen.valid() || !ok) {
+            return 1;
+        }
+    }
+    const int silence_ms = 700; // silence that ends a turn
+    mtmd_cli_vad vad(input.rate, silence_ms);
+    std::vector<float> buf;
+    LOG("\nListening, press Ctrl+C to quit\n");
+
+    for (int n_turns = 0; !g_is_interrupted && !input.in.is_end(); n_turns++) {
+        g_is_generating = false;
+        LOG("\n> ");
+        fflush(stdout);
+
+        // user turn: its text is decoded when the speech starts
+        mtmd::audio_stream_ptr stream;
+        bool end = false;
+        while (!end && !g_is_interrupted) {
+            buf.clear();
+            if (input.in.read(buf) == 0) {
+                if (!input.in.is_end()) {
+                    wait_for_audio();
+                    continue;
+                }
+                end = true;
+            }
+            const std::vector<float> speech = vad.process(buf.data(), buf.size());
+            end = end || vad.turn_ended();
+            if (speech.empty() && !stream) {
+                continue;
+            }
+            if (!stream) {
+                LOG("(listening)");
+                fflush(stdout);
+                if (decode_text(ctx, n_turns == 0 ? text.first_header : text.assistant_footer + text.user_header, false)) {
+                    return 1;
+                }
+                stream.reset(mtmd_audio_stream_init(ctx.ctx_vision.get(), mtmd_audio_stream_params_default()));
+                if (!stream) {
+                    return 1;
+                }
+            }
+            mtmd_audio_stream_push(stream.get(), speech.data(), speech.size());
+            if (end) {
+                mtmd_audio_stream_flush(stream.get(), true);
+            }
+            int32_t n;
+            while ((n = decode_audio_rows(ctx, stream.get(), LLAMA_TOKEN_NULL, false)) > 0) {
+            }
+            if (n < 0) {
+                return 1;
+            }
+        }
+        if (!stream || g_is_interrupted) {
+            break; // no speech before the end of the input
+        }
+
+        LOG("\n\n");
+        g_is_generating = true;
+        const std::string prompt = text.user_footer + text.assistant_header;
+        if (gen.valid()) {
+            // the pipeline reads the hidden state of the backbone
+            llama_set_embeddings(ctx.lctx, true);
+            const int ret = generate_audio_response(ctx, params, gen, out, prompt, n_predict);
+            llama_set_embeddings(ctx.lctx, false);
+            if (ret) {
+                return 1;
+            }
+        } else {
+            if (decode_text(ctx, prompt, true) || generate_response(ctx, n_predict)) {
+                return 1;
+            }
+        }
+
+        // the microphone hears the response, drop what it recorded
+        out.drain(g_is_interrupted);
+        input.in.discard();
+        vad.reset();
+    }
+
+    LOG("\n");
+    llama_perf_context_print(ctx.lctx);
     return 0;
 }
 
@@ -568,15 +859,28 @@ int main(int argc, char ** argv) {
 
     if (g_is_interrupted) return 130;
 
+    if (params.realtime && !ctx.mtmd_cap.audio_stream) {
+        LOG_ERR("--realtime needs a model that takes an audio stream\n");
+        return 1;
+    }
+
     // realtime transcription models (no chat) transcribe while they listen, the others answer after the audio
     const bool transcribes = ctx.mtmd_cap.audio_stream && !ctx.mtmd_cap.chat;
 
     if (transcribes) {
-        if (params.image.size() != 1) {
-            LOG_ERR("This model transcribes audio in realtime, pass exactly one --audio file\n");
+        mtmd_cli_audio_input input;
+        if (!input.init(ctx, params)) {
             return 1;
         }
-        return run_audio_stream(ctx, params.image[0], n_predict);
+        return run_transcription(ctx, input, n_predict);
+    }
+
+    if (params.realtime) {
+        mtmd_cli_audio_input input;
+        if (!input.init(ctx, params)) {
+            return 1;
+        }
+        return run_conversation(ctx, params, input, n_predict);
     }
 
     auto eval_system_prompt_if_present = [&] {
