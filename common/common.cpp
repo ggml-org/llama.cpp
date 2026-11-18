@@ -1151,7 +1151,45 @@ struct common_init_result::impl {
 
     std::vector<common_sampler_ptr> samplers;
     std::vector<llama_sampler_seq_config> samplers_seq_config;
+
+    // final params, used to recreate the context
+    common_params_sampling sparams;
+    llama_context_params   cparams;
+    ggml_sched_priority    priority = GGML_SCHED_PRIO_NORMAL;
+
+    bool init_context(const common_params & params);
 };
+
+bool common_init_result::impl::init_context(const common_params & params) {
+    GGML_ASSERT(model && !context);
+
+    // backend sampler chains can be initialized only once, so they are recreated with the context
+    samplers.resize(cparams.n_seq_max);
+    samplers_seq_config.resize(cparams.n_seq_max);
+
+    for (int i = 0; i < (int) cparams.n_seq_max; ++i) {
+        samplers[i].reset(common_sampler_init(model.get(), sparams));
+        samplers_seq_config[i] = { i, common_sampler_get(samplers[i].get()) };
+    }
+
+    if (sparams.backend_sampling) {
+        cparams.samplers   = samplers_seq_config.data();
+        cparams.n_samplers = samplers_seq_config.size();
+    }
+
+    llama_context * lctx = llama_init_from_model(model.get(), cparams);
+    if (lctx == NULL) {
+        return false;
+    }
+
+    context.reset(lctx);
+
+    set_process_priority(priority);
+
+    threadpools.init(lctx, params);
+
+    return true;
+}
 
 static const std::map<common_decision_type, std::string> COMMON_DECISION_TYPE_NAMES = {
     { COMMON_DECISION_TYPE_OPENJEV,        "openjev"       },
@@ -1374,31 +1412,13 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
                 params.sampling.logit_bias_eog.begin(), params.sampling.logit_bias_eog.end());
     }
 
-    // init the backend samplers as part of the context creation
-    pimpl->samplers.resize(cparams.n_seq_max);
-    pimpl->samplers_seq_config.resize(cparams.n_seq_max);
+    pimpl->sparams  = params.sampling;
+    pimpl->cparams  = cparams;
+    pimpl->priority = params.cpuparams.priority;
 
-    for (int i = 0; i < (int) cparams.n_seq_max; ++i) {
-        pimpl->samplers[i].reset(common_sampler_init(model, params.sampling));
-        pimpl->samplers_seq_config[i] = { i, common_sampler_get(pimpl->samplers[i].get()) };
-    }
-
-    if (params.sampling.backend_sampling) {
-        cparams.samplers   = pimpl->samplers_seq_config.data();
-        cparams.n_samplers = pimpl->samplers_seq_config.size();
-    }
-
-    llama_context * lctx = llama_init_from_model(model, cparams);
-    if (lctx == NULL) {
+    if (!pimpl->init_context(params)) {
         COM_ERR("failed to create context with model '%s'\n", params.model.path.c_str());
-        return;
     }
-
-    pimpl->context.reset(lctx);
-
-    set_process_priority(params.cpuparams.priority);
-
-    pimpl->threadpools.init(lctx, params);
 }
 
 llama_model * common_init_result::model() {
@@ -1424,6 +1444,61 @@ void common_init_result::reset_samplers() {
 
 std::vector<llama_adapter_lora_ptr> & common_init_result::lora() {
     return pimpl->lora;
+}
+
+static bool common_init_cvec(llama_context * lctx, common_params & params) {
+    if (params.control_vectors.empty()) {
+        return true;
+    }
+
+    const llama_model * model = llama_get_model(lctx);
+
+    if (params.control_vector_layer_start <= 0) params.control_vector_layer_start = 1;
+    if (params.control_vector_layer_end   <= 0) params.control_vector_layer_end   = llama_model_n_layer(model);
+
+    const auto cvec = common_control_vector_load(params.control_vectors, llama_model_n_layer(model));
+    if (cvec.n_embd == -1) {
+        return false;
+    }
+
+    int err = llama_set_adapter_cvec(
+            lctx,
+            cvec.data.data(),
+            cvec.data.size(),
+            cvec.n_embd,
+            params.control_vector_layer_start,
+            params.control_vector_layer_end);
+
+    return err == 0;
+}
+
+void common_init_result::free_context() {
+    // order matters: the context holds pointers to the threadpools and the backend samplers
+    pimpl->context.reset();
+    pimpl->threadpools.reset();
+    pimpl->samplers.clear();
+    pimpl->samplers_seq_config.clear();
+}
+
+bool common_init_result::init_context(common_params & params) {
+    if (!pimpl->init_context(params)) {
+        COM_ERR("failed to create context with model '%s'\n", params.model.path.c_str());
+        return false;
+    }
+
+    llama_context * lctx = pimpl->context.get();
+
+    if (!common_init_cvec(lctx, params)) {
+        COM_ERR("%s", "failed to apply control vectors\n");
+        free_context();
+        return false;
+    }
+
+    if (!params.lora_init_without_apply) {
+        common_set_adapter_lora(lctx, params.lora_adapters);
+    }
+
+    return true;
 }
 
 // only for warmup and probe decodes, fill zeros as dummy input
@@ -1460,25 +1535,8 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
         params.ctx_shift = false;
     }
 
-    if (!params.control_vectors.empty()) {
-        if (params.control_vector_layer_start <= 0) params.control_vector_layer_start = 1;
-        if (params.control_vector_layer_end   <= 0) params.control_vector_layer_end   = llama_model_n_layer(model);
-
-        const auto cvec = common_control_vector_load(params.control_vectors, llama_model_n_layer(model));
-        if (cvec.n_embd == -1) {
-            return res;
-        }
-
-        int err = llama_set_adapter_cvec(
-                lctx,
-                cvec.data.data(),
-                cvec.data.size(),
-                cvec.n_embd,
-                params.control_vector_layer_start,
-                params.control_vector_layer_end);
-        if (err) {
-            return res;
-        }
+    if (!common_init_cvec(lctx, params)) {
+        return res;
     }
 
     if (llama_pooling_type(lctx) == LLAMA_POOLING_TYPE_RANK) {
@@ -1803,11 +1861,17 @@ struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const commo
 }
 
 common_threadpools::~common_threadpools() {
+    reset();
+}
+
+void common_threadpools::reset() {
     if (!free_fn) {
         return;
     }
     free_fn(threadpool);
     free_fn(threadpool_batch);
+    threadpool       = nullptr;
+    threadpool_batch = nullptr;
 }
 
 void common_threadpools::init(llama_context * ctx, const common_params & params) {

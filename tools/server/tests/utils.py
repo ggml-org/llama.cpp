@@ -121,6 +121,7 @@ class ServerProcess:
     no_mmproj: bool | None = None
     media_path: str | None = None
     sleep_idle_seconds: int | None = None
+    sleep_mode: str | None = None
     cache_ram: int | None = None
     override_kv: str | None = None
     no_cache_idle_slots: bool = False
@@ -305,6 +306,8 @@ class ServerProcess:
             server_args.extend(["--media-path", self.media_path])
         if self.sleep_idle_seconds is not None:
             server_args.extend(["--sleep-idle-seconds", self.sleep_idle_seconds])
+        if self.sleep_mode is not None:
+            server_args.extend(["--sleep-mode", self.sleep_mode])
         if self.cache_ram is not None:
             server_args.extend(["--cache-ram", self.cache_ram])
         if self.override_kv:

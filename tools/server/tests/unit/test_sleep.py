@@ -164,3 +164,38 @@ def test_server_sleep_token_counting_wake():
     assert res.status_code == 200
     assert res.body["input_tokens"] > 0
     assert is_sleeping(server) == False
+
+
+def test_server_sleep_mode_memory():
+    global server
+    server.sleep_idle_seconds = 1
+    server.sleep_mode = "memory"
+    server.start()
+
+    res = server.make_request("POST", "/completion", data={
+        "n_predict": 8,
+        "prompt": "Hello",
+        "temperature": 0.0,
+    })
+    assert res.status_code == 200
+    content = res.body["content"]
+
+    wait_for_sleep(server)
+
+    # read-only endpoints must not wake the server up
+    assert server.make_request("GET", "/health").status_code == 200
+    assert server.make_request("GET", "/models").status_code == 200
+    assert is_sleeping(server)
+
+    # the context is recreated with the same params, so the output is the same
+    res = server.make_request("POST", "/completion", data={
+        "n_predict": 8,
+        "prompt": "Hello",
+        "temperature": 0.0,
+    })
+    assert res.status_code == 200
+    assert res.body["content"] == content
+    assert is_sleeping(server) == False
+
+    # and it can sleep again
+    wait_for_sleep(server)
