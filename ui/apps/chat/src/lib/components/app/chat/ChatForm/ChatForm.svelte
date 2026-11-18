@@ -428,9 +428,7 @@
 
 			event.preventDefault();
 
-			if (!canSubmit || disabled || hasLoadingAttachments) return;
-
-			onSubmit?.();
+			void submit();
 		}
 	}
 
@@ -637,6 +635,29 @@
 		}
 	}
 
+	// a send asked for while the dictated text is still being refined waits for it
+	let isSendWaiting = $state(false);
+
+	/** Sends the message; dictated text that is still being refined is sent refined. */
+	async function submit() {
+		if (!canSubmit || disabled || hasLoadingAttachments || isSendWaiting) return;
+
+		if (voice.isRefining) {
+			isSendWaiting = true;
+
+			try {
+				await voice.settled();
+				await tick();
+			} finally {
+				isSendWaiting = false;
+			}
+
+			if (!canSubmit || disabled || hasLoadingAttachments) return;
+		}
+
+		onSubmit?.();
+	}
+
 	/** Stops the recording and sends the message once its text or clip is in the form. */
 	async function handleStopAndSend() {
 		await voice.stop();
@@ -673,10 +694,7 @@
 	onfocusin={handleFocusIn}
 	onsubmit={(event) => {
 		event.preventDefault();
-
-		if (!canSubmit || disabled || hasLoadingAttachments) return;
-
-		onSubmit?.();
+		void submit();
 	}}
 >
 	<!-- the pickers' own triggers fill this box, so all of them share the anchor -->
@@ -834,6 +852,8 @@
 						inline={isSingleRow}
 						{isLoading}
 						isReasoning={chatStore.isReasoning}
+						{isSendWaiting}
+						isVoiceRefining={voice.isRefining}
 						micWarning={micUnavailableReason ?? micError}
 						onFileUpload={handleFileUpload}
 						onMicClick={handleMicClick}

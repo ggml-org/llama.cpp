@@ -162,6 +162,8 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 	let ticker: ReturnType<typeof setInterval> | undefined;
 	// state: a voice message's text leaves the placeholder once it is in the message
 	let span = $state<DictationSpan | null>(null);
+	// the pass over the whole recording that follows live text, while it is still out
+	let refining = $state<Promise<void> | null>(null);
 	let lastValue = '';
 	// bumped by cancel, so a transcript still on its way is dropped
 	let generation = 0;
@@ -371,21 +373,32 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 			return;
 		}
 
-		// with live text the message already shows it; otherwise wait for the text
+		// with live text the message already shows it and can be edited, while the whole
+		// recording is transcribed once more to refine it; otherwise wait for the text
 		if (!liveText) state = 'transcribing';
 		else state = 'idle';
 
-		try {
-			const text = await transcript;
+		const refined = (async () => {
+			try {
+				const text = await transcript;
 
-			if (run !== generation) return;
+				if (run !== generation) return;
 
-			if (text.trim() || !liveText) writeDictation(text);
-		} catch (error) {
-			if (run !== generation) return;
+				if (text.trim() || !liveText) writeDictation(text);
+			} catch (error) {
+				if (run !== generation) return;
 
-			toast.error(error instanceof Error ? error.message : 'Transcription failed');
-		}
+				toast.error(error instanceof Error ? error.message : 'Transcription failed');
+			}
+		})();
+
+		if (liveText) refining = refined;
+
+		await refined;
+
+		if (refining === refined) refining = null;
+
+		if (run !== generation) return;
 
 		state = 'idle';
 		span = null;
@@ -435,6 +448,10 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		get isActive() {
 			return state !== 'idle';
 		},
+		/** The dictated text shown is still being refined by a pass over the whole recording. */
+		get isRefining() {
+			return refining !== null;
+		},
 		/** What the microphone button says it will do. */
 		get label() {
 			return voiceModeLabel(resolution);
@@ -452,6 +469,10 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		},
 		get resolution() {
 			return resolution;
+		},
+		/** Resolves once the text in the message is final, at once when nothing is refining it. */
+		settled(): Promise<void> {
+			return refining ?? Promise.resolve();
 		},
 		/** Whether the form shows a microphone button at all. */
 		get showButton() {

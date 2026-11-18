@@ -238,6 +238,33 @@ describe('dictation', () => {
 		expect(state.files).toHaveLength(0);
 	});
 
+	it('says the live text is being refined, and a send waits for the refined text', async () => {
+		seed(true, VoiceInputMode.DICTATION);
+
+		const { recorder, screen, state } = await renderForm();
+		const transcript = deferred<string>();
+
+		recorder.transcript = transcript.promise;
+		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
+		await expect.poll(() => recorder.status).toBe('recording');
+		recorder.say('I went. To the store.');
+		await expect.poll(() => state.value).toBe('I went. To the store.');
+		await screen.getByRole('button', { name: 'Stop recording' }).last().click();
+
+		await expect.element(screen.getByText(VOICE_MODE_MESSAGE.refining)).toBeInTheDocument();
+
+		await screen.getByRole('button', { name: 'Send' }).click();
+		await expect
+			.element(screen.getByText(VOICE_MODE_MESSAGE.sendAfterRefining))
+			.toBeInTheDocument();
+		expect(state.sent).toBe(0);
+
+		transcript.resolve('I went to the store.');
+		await expect.poll(() => state.sent).toBe(1);
+		expect(state.value).toBe('I went to the store.');
+		expect(screen.container.querySelector('[data-slot="voice-refining"]')).toBeNull();
+	});
+
 	it('stops and sends the dictated text in one go', async () => {
 		seed(true, VoiceInputMode.DICTATION);
 

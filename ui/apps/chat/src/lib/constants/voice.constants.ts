@@ -5,6 +5,8 @@ export const VOICE_MODE_MESSAGE = {
 	dictate: 'Dictate',
 	dictating: 'Dictating',
 	recording: 'Recording a voice message',
+	refining: 'Refining transcript...',
+	sendAfterRefining: 'Sending once the transcript is refined',
 	separateModelHint:
 		'The transcription model is loaded on the server alongside the chat model, which a server that keeps one model at a time unloads.',
 	starting: 'Starting...',

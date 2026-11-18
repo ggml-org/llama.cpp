@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Button } from '@ggml-org/llama-ui/ui/button';
-	import { SkipForward, Square } from '@lucide/svelte';
+	import { LoaderCircle, SkipForward, Square } from '@lucide/svelte';
 	import {
 		ChatFormActionRecord,
 		ChatFormActionsAdd,
@@ -8,7 +8,11 @@
 		ChatFormContextGauge,
 		ModelsSelector
 	} from '#lib/components/app/index.ts';
-	import { ICON_CLASS_DEFAULT, SET_WORKING_DIRECTORY_LABEL } from '#lib/constants/index.ts';
+	import {
+		ICON_CLASS_DEFAULT,
+		SET_WORKING_DIRECTORY_LABEL,
+		VOICE_MODE_MESSAGE
+	} from '#lib/constants/index.ts';
 	import { setChatFormActionsContext } from '#lib/contexts/index.ts';
 	import { FileTypeCategory } from '#lib/enums/index.ts';
 	import { useChatFormModel } from '#lib/hooks/use-chat-form-model.svelte.ts';
@@ -25,6 +29,10 @@
 		inline?: boolean;
 		isLoading?: boolean;
 		isReasoning?: boolean;
+		/** A send was asked for and waits for the dictated text to be refined. */
+		isSendWaiting?: boolean;
+		/** The dictated text in the message is still being refined. */
+		isVoiceRefining?: boolean;
 		/** Why the microphone can't record, shown on its button. */
 		micWarning?: string | null;
 		/** Voice input: whether the microphone shows, what it does, and why it can't. */
@@ -53,6 +61,8 @@
 		inline = false,
 		isLoading = false,
 		isReasoning = false,
+		isSendWaiting = false,
+		isVoiceRefining = false,
 		micWarning = null,
 		onFileUpload,
 		onMicClick,
@@ -171,6 +181,18 @@
 		{/if}
 	</div>
 
+	{#if isVoiceRefining}
+		<span
+			class="flex items-center gap-1.5 text-xs whitespace-nowrap text-muted-foreground"
+			data-slot="voice-refining"
+			role="status"
+		>
+			<LoaderCircle class="size-icon-sm animate-spin" />
+
+			{isSendWaiting ? VOICE_MODE_MESSAGE.sendAfterRefining : VOICE_MODE_MESSAGE.refining}
+		</span>
+	{/if}
+
 	{#if isReasoning && !canSend}
 		<Button
 			class="group size-8 rounded-full p-0 max-md:size-9"
@@ -226,6 +248,7 @@
 		<ChatFormActionSubmit
 			canSend={canSend && (showModelSelector ? hasModelSelected && isSelectedModelInCache : true)}
 			{disabled}
+			loading={isSendWaiting}
 			showErrorState={showModelSelector && hasModelSelected && !isSelectedModelInCache}
 			tooltipLabel={submitTooltip}
 		/>
