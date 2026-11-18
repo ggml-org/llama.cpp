@@ -89,21 +89,22 @@ value statement::execute(context & ctx) const {
 }
 
 value identifier::execute_impl(context & ctx) const {
-    auto it = ctx.get_val(val);
-    auto builtins = global_builtins();
-    if (!it->is_undefined()) {
+    auto it = ctx.find_val(key);
+    if (it && !it->is_undefined()) {
         if (ctx.is_get_stats) {
             value_t::stats_t::mark_used(it);
         }
         JJ_DEBUG("Identifier '%s' found, type = %s", val.c_str(), it->type().c_str());
         return it;
-    } else if (builtins.find(val) != builtins.end()) {
-        JJ_DEBUG("Identifier '%s' found in builtins", val.c_str());
-        return mk_val<value_func>(val, builtins.at(val));
-    } else {
-        JJ_DEBUG("Identifier '%s' not found, returning undefined", val.c_str());
-        return mk_val<value_undefined>(val);
     }
+    const auto & builtins = global_builtins();
+    auto builtin = builtins.find(val);
+    if (builtin != builtins.end()) {
+        JJ_DEBUG("Identifier '%s' found in builtins", val.c_str());
+        return mk_val<value_func>(val, builtin->second);
+    }
+    JJ_DEBUG("Identifier '%s' not found, returning undefined", val.c_str());
+    return mk_val<value_undefined>(val);
 }
 
 value object_literal::execute_impl(context & ctx) const {
@@ -117,20 +118,8 @@ value object_literal::execute_impl(context & ctx) const {
     return obj;
 }
 
-value binary_expression::execute_impl(context & ctx) const {
-    value left_val = left->execute(ctx);
-
-    // Logical operators
-    if (op.value == "and") {
-        JJ_DEBUG("Executing logical test: %s AND %s", left->type().c_str(), right->type().c_str());
-        return left_val->as_bool() ? right->execute(ctx) : std::move(left_val);
-    } else if (op.value == "or") {
-        JJ_DEBUG("Executing logical test: %s OR %s", left->type().c_str(), right->type().c_str());
-        return left_val->as_bool() ? std::move(left_val) : right->execute(ctx);
-    }
-
+static value exec_binary_op(context & ctx, const token & op, value left_val, value right_val) {
     // Equality operators
-    value right_val = right->execute(ctx);
     JJ_DEBUG("Executing binary expression %s '%s' %s", left_val->type().c_str(), op.value.c_str(), right_val->type().c_str());
     if (op.value == "==") {
         return mk_val<value_bool>(*left_val == *right_val);
@@ -202,11 +191,30 @@ value binary_expression::execute_impl(context & ctx) const {
             if (is_float) {
                 return mk_val<value_float>(res);
             } else {
-                return mk_val<value_int>(static_cast<int64_t>(res));
+                return mk_val<value_int>(float_to_int(res));
             }
         } else if (op.value == "/") {
             JJ_DEBUG("Division operation: %f / %f", a, b);
             return mk_val<value_float>(a / b);
+        } else if (op.value == "//") {
+            // python semantics: round toward -inf
+            if (is_val<value_int>(left_val) && is_val<value_int>(right_val)) {
+                const int64_t x = left_val->as_int();
+                const int64_t y = right_val->as_int();
+                if (y == 0) {
+                    throw std::runtime_error("integer division by zero");
+                }
+                if (y == -1) {
+                    // INT64_MIN / -1 is UB, wrap around instead
+                    return mk_val<value_int>((int64_t) (0 - (uint64_t) x));
+                }
+                int64_t q = x / y;
+                if (x % y != 0 && (x < 0) != (y < 0)) {
+                    q -= 1;
+                }
+                return mk_val<value_int>(q);
+            }
+            return mk_val<value_float>(std::floor(a / b));
         } else if (op.value == "%") {
             double rem = std::fmod(a, b);
             JJ_DEBUG("Modulo operation: %f %% %f = %f", a, b, rem);
@@ -214,7 +222,7 @@ value binary_expression::execute_impl(context & ctx) const {
             if (is_float) {
                 return mk_val<value_float>(rem);
             } else {
-                return mk_val<value_int>(static_cast<int64_t>(rem));
+                return mk_val<value_int>(float_to_int(rem));
             }
         } else if (op.value == "<") {
             JJ_DEBUG("Comparison operation: %f < %f is %d", a, b, a < b);
@@ -285,12 +293,17 @@ value binary_expression::execute_impl(context & ctx) const {
     // String membership
     if (is_val<value_string>(left_val) && is_val<value_string>(right_val)) {
         // case: "a" in "abc"
-        bool member = test_is_in();
-        if (op.value == "in") {
-            return mk_val<value_bool>(member);
-        } else if (op.value == "not in") {
-            return mk_val<value_bool>(!member);
+        if (op.value == "in" || op.value == "not in") {
+            bool member = test_is_in();
+            return mk_val<value_bool>(op.value == "in" ? member : !member);
         }
+        // case: "a" < "b"; UTF-8 byte order is the same as codepoint order, like python
+        const std::string a = left_val->as_string().str();
+        const std::string b = right_val->as_string().str();
+        if (op.value == "<")  { return mk_val<value_bool>(a <  b); }
+        if (op.value == ">")  { return mk_val<value_bool>(a >  b); }
+        if (op.value == "<=") { return mk_val<value_bool>(a <= b); }
+        if (op.value == ">=") { return mk_val<value_bool>(a >= b); }
     }
 
     // Value key in object
@@ -307,58 +320,74 @@ value binary_expression::execute_impl(context & ctx) const {
     throw std::runtime_error("Unknown operator \"" + op.value + "\" between " + left_val->type() + " and " + right_val->type());
 }
 
-static value try_builtin_func(context & ctx, const std::string & name, value & input, bool undef_on_missing = false) {
-    JJ_DEBUG("Trying built-in function '%s' for type %s", name.c_str(), input->type().c_str());
-    if (ctx.is_get_stats) {
-        value_t::stats_t::mark_used(input);
-        input->stats.ops.insert(name);
+value binary_expression::execute_impl(context & ctx) const {
+    value left_val = left->execute(ctx);
+
+    // Logical operators
+    if (op.value == "and") {
+        JJ_DEBUG("Executing logical test: %s AND %s", left->type().c_str(), right->type().c_str());
+        return left_val->as_bool() ? right->execute(ctx) : std::move(left_val);
+    } else if (op.value == "or") {
+        JJ_DEBUG("Executing logical test: %s OR %s", left->type().c_str(), right->type().c_str());
+        return left_val->as_bool() ? std::move(left_val) : right->execute(ctx);
     }
-    auto builtins = input->get_builtins();
-    auto it = builtins.find(name);
-    if (it != builtins.end()) {
-        JJ_DEBUG("Binding built-in '%s'", name.c_str());
-        return mk_val<value_func>(name, it->second, input);
+
+    return exec_binary_op(ctx, op, std::move(left_val), right->execute(ctx));
+}
+
+value comparison_chain_expression::execute_impl(context & ctx) const {
+    value left_val = operands[0]->execute(ctx);
+    value res;
+    for (size_t i = 0; i < ops.size(); ++i) {
+        value right_val = operands[i + 1]->execute(ctx);
+        res = exec_binary_op(ctx, ops[i], left_val, right_val);
+        if (!res->as_bool()) {
+            break; // same as "and", the next operands are not executed
+        }
+        left_val = std::move(right_val);
     }
-    if (undef_on_missing) {
-        return mk_val<value_undefined>(name);
+    return res;
+}
+
+static void exec_call_args(context & ctx, const statements & arg_stmts, func_args & args) {
+    for (const auto & arg_stmt : arg_stmts) {
+        if (!is_stmt<spread_expression>(arg_stmt)) {
+            auto arg_val = arg_stmt->execute(ctx);
+            JJ_DEBUG("  Argument type: %s", arg_val->type().c_str());
+            args.push_back(arg_val);
+            continue;
+        }
+        auto spread = cast_stmt<spread_expression>(arg_stmt);
+        value val = spread->argument->execute(ctx);
+        JJ_DEBUG("  Unpacked argument type: %s", val->type().c_str());
+        if (spread->is_kwargs) {
+            if (!is_val<value_object>(val)) {
+                throw std::runtime_error("Argument after ** must be an object, got " + val->type());
+            }
+            for (const auto & pair : val->as_ordered_object()) {
+                if (!is_val<value_string>(pair.first)) {
+                    throw std::runtime_error("Keyword argument key must be a string, got " + pair.first->type());
+                }
+                args.push_back(mk_val<value_kwarg>(pair.first->as_string().str(), pair.second));
+            }
+        } else {
+            if (!is_val<value_array>(val)) {
+                throw std::runtime_error("Argument after * must be an array, got " + val->type());
+            }
+            for (const auto & item : val->as_array()) {
+                args.push_back(item);
+            }
+        }
     }
-    throw std::runtime_error("Unknown (built-in) filter '" + name + "' for type " + input->type());
 }
 
 static value apply_filter(context & ctx, const statement_ptr & filter, value input) {
     JJ_DEBUG("Applying filter to %s", input->type().c_str());
 
-    auto set_filter_alias = [](auto & filter_id) {
-        if (filter_id == "count") {
-            filter_id = "length";
-        } else if (filter_id == "d") {
-            filter_id = "default";
-        } else if (filter_id == "e") {
-            filter_id = "escape";
-        } else if (filter_id == "trim") {
-            filter_id = "strip";
-        }
-    };
-
     if (is_stmt<identifier>(filter)) {
         auto filter_id = cast_stmt<identifier>(filter)->val;
-
-        set_filter_alias(filter_id);
         JJ_DEBUG("Applying filter '%s' to %s", filter_id.c_str(), input->type().c_str());
-        // TODO: Refactor filters so this coercion can be done automatically
-        if (!input->is_undefined() && !is_val<value_string>(input) && (
-            filter_id == "capitalize" ||
-            filter_id == "lower" ||
-            filter_id == "replace" ||
-            filter_id == "strip" ||
-            filter_id == "title" ||
-            filter_id == "upper" ||
-            filter_id == "wordcount"
-        )) {
-            JJ_DEBUG("Coercing %s to String for '%s' filter", input->type().c_str(), filter_id.c_str());
-            input = mk_val<value_string>(input->as_string());
-        }
-        return try_builtin_func(ctx, filter_id, input)->invoke(func_args(ctx));
+        return apply_filter_by_name(ctx, filter_id, input, func_args(ctx));
 
     } else if (is_stmt<call_expression>(filter)) {
         auto call = cast_stmt<call_expression>(filter);
@@ -367,14 +396,11 @@ static value apply_filter(context & ctx, const statement_ptr & filter, value inp
         }
         auto filter_id = cast_stmt<identifier>(call->callee)->val;
 
-        set_filter_alias(filter_id);
         JJ_DEBUG("Applying filter '%s' with arguments to %s", filter_id.c_str(), input->type().c_str());
         func_args args(ctx);
-        for (const auto & arg_expr : call->args) {
-            args.push_back(arg_expr->execute(ctx));
-        }
+        exec_call_args(ctx, call->args, args);
 
-        return try_builtin_func(ctx, filter_id, input)->invoke(args);
+        return apply_filter_by_name(ctx, filter_id, input, args);
 
     } else {
         throw std::runtime_error("Invalid filter expression");
@@ -415,9 +441,7 @@ value test_expression::execute_impl(context & ctx) const {
         test_id = cast_stmt<identifier>(call->callee)->val;
 
         JJ_DEBUG("Applying test '%s' with arguments to %s", test_id.c_str(), input->type().c_str());
-        for (const auto & arg_expr : call->args) {
-            args.push_back(arg_expr->execute(ctx));
-        }
+        exec_call_args(ctx, call->args, args);
 
     } else {
         throw std::runtime_error("Invalid test expression");
@@ -694,7 +718,7 @@ value set_statement::execute_impl(context & ctx) const {
         }
         auto obj_ptr = cast_val<value_object>(object);
         JJ_DEBUG("Setting object property '%s' with value type %s", prop_name.c_str(), rhs->type().c_str());
-        obj_ptr->insert(prop_name, rhs);
+        obj_ptr->insert(cached_val<value_string>(ctx, member->static_property), rhs);
 
     } else {
         throw std::runtime_error("Invalid LHS inside assignment expression: " + assignee->type());
@@ -787,13 +811,14 @@ value call_statement::execute_impl(context & ctx) const {
     }
     auto * callee_func = cast_val<value_func>(callee_val);
 
-    context caller_ctx(ctx); // new scope for caller execution
+    // caller() can be saved and called after this scope ended, it owns a snapshot of the variables
+    auto caller_ctx = std::make_shared<context>(ctx.snapshot());
 
-    const func_handler func = [this, caller_ctx = std::move(caller_ctx)](const func_args & args) -> value {
+    const func_handler func = [this, caller_ctx](const func_args & args) -> value {
         if (args.ctx.macro_depth >= JINJA_RECURSIVE_LIMIT) {
             throw std::runtime_error("macro calls are nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
         }
-        context block_ctx(caller_ctx); // new scope for block execution
+        context block_ctx(*caller_ctx); // new scope for block execution
         block_ctx.macro_depth = args.ctx.macro_depth + 1;
 
         bind_parameters("caller", this->caller_args, args, block_ctx);
@@ -808,15 +833,23 @@ value call_statement::execute_impl(context & ctx) const {
     call_ctx.set_val("caller", mk_val<value_func>("caller", func));
 
     func_args args(call_ctx);
-
-    for (const auto & arg_expr : call_expr->args) {
-        auto arg_val = arg_expr->execute(ctx);
-        JJ_DEBUG("  Argument type: %s", arg_val->type().c_str());
-        args.push_back(arg_val);
-    }
+    exec_call_args(ctx, call_expr->args, args);
 
     JJ_DEBUG("Calling macro '%s' with %zu arguments", callee_func->name.c_str(), args.count());
     return callee_func->invoke(args);
+}
+
+member_expression::member_expression(statement_ptr && object, statement_ptr && property, bool computed) :
+    object(std::move(object)),
+    property(std::move(property)),
+    computed(computed) {
+    chk_type<expression>(this->object);
+    chk_type<expression>(this->property);
+    if (!computed) {
+        if (const auto * id = cast_stmt<identifier>(this->property)) {
+            static_property = id->key;
+        }
+    }
 }
 
 value member_expression::execute_impl(context & ctx) const {
@@ -827,14 +860,13 @@ value member_expression::execute_impl(context & ctx) const {
         // syntax: obj[expr]
         JJ_DEBUG("Member expression, computing property type %s", this->property->type().c_str());
 
-        int64_t arr_size = 0;
-        if (is_val<value_array>(object)) {
-            arr_size = object->as_array().size();
-        } else if (is_val<value_string>(object)) {
-            arr_size = object->as_string().length();
-        }
-
         if (is_stmt<slice_expression>(this->property)) {
+            int64_t arr_size = 0;
+            if (is_val<value_array>(object)) {
+                arr_size = static_cast<int64_t>(object->as_array().size());
+            } else if (is_val<value_string>(object)) {
+                arr_size = static_cast<int64_t>(cast_val<value_string>(object)->val_str.length());
+            }
             auto s = cast_stmt<slice_expression>(this->property);
             value step_val  = s->step_expr  ? s->step_expr->execute(ctx)  : mk_val<value_int>(1);
             value start_val = s->start_expr ? s->start_expr->execute(ctx) : (step_val->as_int() < 0 ? mk_val<value_int>(arr_size - 1) : mk_val<value_int>(0));
@@ -856,7 +888,7 @@ value member_expression::execute_impl(context & ctx) const {
         }
     } else if (is_stmt<integer_literal>(this->property)) {
         // syntax: obj.index
-        property = mk_val<value_int>(cast_stmt<integer_literal>(this->property)->val);
+        property = this->property->execute(ctx);
         if (property->as_int() < 0) {
             throw std::runtime_error("Static member property cannot be negative");
         }
@@ -865,8 +897,8 @@ value member_expression::execute_impl(context & ctx) const {
         if (!is_stmt<identifier>(this->property)) {
             throw std::runtime_error("Static member property must be an identifier");
         }
-        property = mk_val<value_string>(cast_stmt<identifier>(this->property)->val);
-        std::string prop = property->as_string().str();
+        property = cached_val<value_string>(ctx, static_property);
+        const auto & prop = cast_stmt<identifier>(this->property)->val;
         JJ_DEBUG("Member expression, object type %s, static property '%s'", object->type().c_str(), prop.c_str());
 
         // behavior of jinja2: obj having prop as a built-in function AND 'prop', as an object key,
@@ -874,51 +906,56 @@ value member_expression::execute_impl(context & ctx) const {
         // while obj['prop'] returns the property value.
         // example: {"obj": {"items": 123}} -> obj.items is the built-in function, obj['items'] is 123
 
-        value val = try_builtin_func(ctx, prop, object, true);
-        if (!is_val<value_undefined>(val)) {
+        value val = find_builtin_func(ctx, prop, object);
+        if (val) {
             return val;
         }
         // else, fallthrough to normal property access below
     }
 
     JJ_DEBUG("Member expression on object type %s, property type %s", object->type().c_str(), property->type().c_str());
-    value val = mk_val<value_undefined>("object_property");
+    value val;
 
     if (property->is_undefined()) {
         JJ_DEBUG("%s", "Member expression property is undefined, returning undefined");
-        return val;
+        return mk_val<value_undefined>("object_property");
     }
 
     ensure_key_type_allowed(property);
 
     if (is_val<value_undefined>(object)) {
         JJ_DEBUG("%s", "Accessing property on undefined object, returning undefined");
-        return val;
+        return mk_val<value_undefined>("object_property");
 
     } else if (is_val<value_object>(object)) {
-        auto key = property->as_string().str();
-        val = object->at(property, val);
-        if (is_val<value_undefined>(val)) {
-            val = try_builtin_func(ctx, key, object, true);
+        val = object->find(property);
+        if (!val || is_val<value_undefined>(val)) {
+            val = try_builtin_func(ctx, property->as_string().str(), object, true);
         }
-        JJ_DEBUG("Accessed property '%s' value, got type: %s", key.c_str(), val->type().c_str());
+        JJ_DEBUG("Accessed property '%s' value, got type: %s", property->as_string().str().c_str(), val->type().c_str());
 
     } else if (is_val<value_array>(object) || is_val<value_string>(object)) {
         if (is_val<value_int>(property) || is_val<value_bool>(property)) {
             int64_t index = property->as_int();
             JJ_DEBUG("Accessing %s index %d", object->type().c_str(), (int)index);
             if (is_val<value_array>(object)) {
-                auto & arr = object->as_array();
+                const auto * arr = cast_val<value_array>(object);
+                const auto count = arr->as_array().size();
                 if (index < 0) {
-                    index += static_cast<int64_t>(arr.size());
-                }
-                if (index >= 0 && index < static_cast<int64_t>(arr.size())) {
-                    val = arr[index];
+                    // Avoid negating INT64_MIN.
+                    const uint64_t distance = static_cast<uint64_t>(-(index + 1)) + 1;
+                    if (distance <= count) {
+                        val = arr->as_array().at(static_cast<size_t>(count - distance));
+                    }
+                } else if (static_cast<uint64_t>(index) < count) {
+                    val = arr->as_array().at(static_cast<size_t>(index));
                 }
             } else { // value_string
-                auto str = object->as_string().str();
-                if (index >= 0 && index < static_cast<int64_t>(str.size())) {
-                    val = mk_val<value_string>(std::string(1, str[index]));
+                if (index >= 0) {
+                    const auto byte = cast_val<value_string>(object)->val_str.byte_at(static_cast<size_t>(index));
+                    if (byte) {
+                        val = mk_val<value_string>(std::string(1, *byte));
+                    }
                 }
             }
 
@@ -936,7 +973,10 @@ value member_expression::execute_impl(context & ctx) const {
         val = try_builtin_func(ctx, key, object, true);
     }
 
-    if (ctx.is_get_stats && val && object && property) {
+    if (!val) {
+        val = mk_val<value_undefined>("object_property");
+    }
+    if (ctx.is_get_stats && object && property) {
         value_t::stats_t::mark_used(val);
         value_t::stats_t::mark_used(object);
         value_t::stats_t::mark_used(property);
@@ -953,11 +993,7 @@ value member_expression::execute_impl(context & ctx) const {
 value call_expression::execute_impl(context & ctx) const {
     // gather arguments
     func_args args(ctx);
-    for (auto & arg_stmt : this->args) {
-        auto arg_val = arg_stmt->execute(ctx);
-        JJ_DEBUG("  Argument type: %s", arg_val->type().c_str());
-        args.push_back(arg_val);
-    }
+    exec_call_args(ctx, this->args, args);
     // execute callee
     value callee_val = callee->execute(ctx);
     if (!is_val<value_func>(callee_val)) {

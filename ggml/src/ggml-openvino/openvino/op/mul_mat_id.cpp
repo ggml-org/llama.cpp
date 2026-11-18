@@ -8,20 +8,36 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <numeric>
+#include <openvino/op/add.hpp>
 #include <openvino/op/bitwise_and.hpp>
 #include <openvino/op/bitwise_right_shift.hpp>
 #include <openvino/op/broadcast.hpp>
 #include <openvino/op/concat.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/convert.hpp>
+#include <openvino/op/cum_sum.hpp>
+#include <openvino/op/equal.hpp>
 #include <openvino/op/gather.hpp>
+#include <openvino/op/greater_eq.hpp>
+#include <openvino/op/less.hpp>
+#include <openvino/op/logical_and.hpp>
+#include <openvino/op/logical_not.hpp>
 #include <openvino/op/matmul.hpp>
+#include <openvino/op/maximum.hpp>
 #include <openvino/op/multiply.hpp>
+#include <openvino/op/reduce_logical_or.hpp>
+#include <openvino/op/reduce_sum.hpp>
 #include <openvino/op/reshape.hpp>
+#include <openvino/op/select.hpp>
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/slice.hpp>
+#include <openvino/op/squeeze.hpp>
+#include <openvino/op/strided_slice.hpp>
 #include <openvino/op/transpose.hpp>
 #include <openvino/op/unsqueeze.hpp>
+#include <openvino/op/util/topk_base.hpp>
+#include <optional>
 #include <vector>
 
 namespace ov {
@@ -71,6 +87,79 @@ ov::Output<ov::Node> static_shape_dims_or_shapeof(const ov::Output<ov::Node> & i
     return get_dimensions(shape, dims);
 }
 
+// TopK indices are never -1. Model graphs take the ids from the router's TopK through views and
+// reshapes, so they skip the -1 handling below and keep the GatherMatmul pattern that the GPU MoE
+// fusion matches.
+bool ids_from_topk(ov::Output<ov::Node> ids) {
+    for (;;) {
+        const auto node = ids.get_node_shared_ptr();
+        if (ov::is_type<ov::op::util::TopKBase>(node)) {
+            return ids.get_index() == 1;
+        }
+        if (!ov::is_type<ov::op::v1::Reshape>(node) && !ov::is_type<ov::op::v0::Unsqueeze>(node) &&
+            !ov::is_type<ov::op::v0::Squeeze>(node) && !ov::is_type<ov::op::v0::Convert>(node) &&
+            !ov::is_type<ov::op::v1::Transpose>(node) && !ov::is_type<ov::op::v8::Slice>(node) &&
+            !ov::is_type<ov::op::v1::StridedSlice>(node)) {
+            return false;
+        }
+        ids = node->input_value(0);
+    }
+}
+
+// An id of -1 skips the slot and zeroes the matching row of the result. The skipped slot looks up a
+// valid expert, and the result is multiplied by this mask: 1 for a kept slot, 0 for a skipped one,
+// shaped [ids..., 1] to broadcast over the row.
+ov::Output<ov::Node> kept_slots_mask(const ov::Output<ov::Node> & ids, const ov::element::Type & type) {
+    auto zero = ov::op::v0::Constant::create(ids.get_element_type(), ov::Shape{}, {0});
+    ov::Output<ov::Node> keep = std::make_shared<ov::op::v1::GreaterEqual>(ids, zero);
+    keep = std::make_shared<ov::op::v0::Convert>(keep, type);
+    return std::make_shared<ov::op::v0::Unsqueeze>(keep, const_i64({-1}));
+}
+
+ov::Output<ov::Node> clamp_skipped_ids(const ov::Output<ov::Node> & ids) {
+    auto zero = ov::op::v0::Constant::create(ids.get_element_type(), ov::Shape{}, {0});
+    return std::make_shared<ov::op::v1::Maximum>(ids, zero);
+}
+
+// GatherMatmul computes a wrong row when two slots of a token name the same expert (ggml leaves
+// that undefined too, see TAG_MUL_MAT_ID_DUPLICATE_ID), so a skipped slot cannot simply look up
+// expert 0 while another slot of the row keeps it. A row with S skipped slots keeps at most
+// n_used - S experts, so [0, n_used) holds at least S unused ones: the r-th skipped slot of a row
+// looks up the r-th of them. ids is [n_tokens, n_used].
+ov::Output<ov::Node> distinct_ids_for_skipped_slots(const ov::Output<ov::Node> & ids) {
+    using namespace ov::op;
+    const auto & ps = ids.get_partial_shape();
+    if (ps.rank().is_dynamic() || ps[ps.rank().get_length() - 1].is_dynamic()) {
+        return clamp_skipped_ids(ids);
+    }
+    const auto type = ids.get_element_type();
+    const int64_t n_used = ps[ps.rank().get_length() - 1].get_length();
+    std::vector<int64_t> range(n_used);
+    std::iota(range.begin(), range.end(), 0);
+    auto experts = v0::Constant::create(type, ov::Shape{static_cast<size_t>(n_used)}, range);
+    auto zero = v0::Constant::create(type, ov::Shape{}, {0});
+    auto one = v0::Constant::create(type, ov::Shape{}, {1});
+    auto last_axis = v0::Constant::create(ov::element::i64, ov::Shape{}, {-1});
+
+    // free[t, e]: no slot of row t uses expert e, for e in [0, n_used)
+    auto uses = std::make_shared<v1::Equal>(std::make_shared<v0::Unsqueeze>(ids, const_i64({-1})), experts);
+    auto free = std::make_shared<v1::LogicalNot>(std::make_shared<v1::ReduceLogicalOr>(uses, const_i64({-2}), false));
+    // 1-based rank of each free expert in its row, and of each skipped slot in its row
+    auto free_rank = std::make_shared<v0::CumSum>(std::make_shared<v0::Convert>(free, type), last_axis);
+    auto skip = std::make_shared<v1::Less>(ids, zero);
+    auto skip_rank = std::make_shared<v1::Add>(
+        std::make_shared<v0::CumSum>(std::make_shared<v0::Convert>(skip, type), last_axis, true), one);
+
+    // pick[t, j, e]: expert e is the skip_rank[t, j]-th free expert of row t
+    auto pick = std::make_shared<v1::LogicalAnd>(
+        std::make_shared<v1::Equal>(std::make_shared<v0::Unsqueeze>(skip_rank, const_i64({-1})),
+                                    std::make_shared<v0::Unsqueeze>(free_rank, const_i64({-2}))),
+        std::make_shared<v0::Unsqueeze>(free, const_i64({-2})));
+    auto picked = std::make_shared<v1::ReduceSum>(
+        std::make_shared<v1::Multiply>(std::make_shared<v0::Convert>(pick, type), experts), const_i64({-1}), false);
+    return std::make_shared<v1::Select>(skip, picked, ids);
+}
+
 ov::Output<ov::Node> translate_mul_mat_id_mxfp4_packed(const NodeContext & context,
                                                        ov::Output<ov::Node> expert_weights,
                                                        ov::Output<ov::Node> activations,
@@ -97,6 +186,13 @@ ov::Output<ov::Node> translate_mul_mat_id_mxfp4_packed(const NodeContext & conte
     ids = std::make_shared<ov::op::v1::Reshape>(ids, ids_shape_2d, false);
     if (ids.get_element_type() != ov::element::i32 && ids.get_element_type() != ov::element::i64) {
         ids = std::make_shared<ov::op::v0::Convert>(ids, ov::element::i32);
+    }
+    const auto output_type = context.get_output_type();
+    // Gather and MatMul handle repeated ids, so clamping a skipped slot to expert 0 is enough here.
+    std::optional<ov::Output<ov::Node>> keep;
+    if (!ids_from_topk(ids)) {
+        keep = kept_slots_mask(ids, output_type);
+        ids = clamp_skipped_ids(ids);
     }
 
     auto gather_axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {0});
@@ -156,9 +252,11 @@ ov::Output<ov::Node> translate_mul_mat_id_mxfp4_packed(const NodeContext & conte
         ov::OutputVector{batch_dim, get_dimensions(ids_shape, {0, 1}), row_dim}, 0);
     result = std::make_shared<ov::op::v1::Reshape>(result, result_target_dims, false);
 
-    const auto output_type = context.get_output_type();
     if (result.get_element_type() != output_type) {
         result = std::make_shared<ov::op::v0::Convert>(result, output_type);
+    }
+    if (keep) {
+        result = std::make_shared<ov::op::v1::Multiply>(result, *keep);
     }
     return result;
 }
@@ -219,6 +317,12 @@ OutputVector translate_mul_mat_id(const NodeContext & context) {
     }
 
     const auto output_type = context.get_output_type();
+    std::optional<ov::Output<ov::Node>> keep;
+    if (!ids_from_topk(ids)) {
+        keep = kept_slots_mask(ids, output_type);
+        ids = distinct_ids_for_skipped_slots(ids);
+    }
+
     const auto activations_type = ggml_openvino_is_gpu() ? ov::element::f16 : ov::element::f32;
     if (activations.get_element_type() != activations_type) {
         activations = std::make_shared<ov::op::v0::Convert>(activations, activations_type);
@@ -243,6 +347,9 @@ OutputVector translate_mul_mat_id(const NodeContext & context) {
 
     if (result.get_element_type() != output_type) {
         result = std::make_shared<ov::op::v0::Convert>(result, output_type);
+    }
+    if (keep) {
+        result = std::make_shared<ov::op::v1::Multiply>(result, *keep);
     }
 
     return rename_outputs_with_suffix({result}, context.get_name());

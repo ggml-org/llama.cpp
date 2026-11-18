@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_tensor * clip_graph_minimax_m3::apply_rope(
+ggml_tensor * mtmd_graph_minimax_m3::apply_rope(
         ggml_tensor * x, ggml_tensor * pos_h, ggml_tensor * pos_w) {
     const int dh  = (int) x->ne[0];
     const int axd = 2 * ((2 * (dh / 2) / 3) / 2);
@@ -20,7 +20,7 @@ ggml_tensor * clip_graph_minimax_m3::apply_rope(
     return x;
 }
 
-ggml_cgraph * clip_graph_minimax_m3::build() {
+ggml_cgraph * mtmd_graph_minimax_m3::build() {
     GGML_ASSERT(model.patch_bias     == nullptr);
     GGML_ASSERT(model.class_embedding == nullptr);
     GGML_ASSERT(model.patch_embeddings_0 && model.patch_embeddings_1);
@@ -54,7 +54,7 @@ ggml_cgraph * clip_graph_minimax_m3::build() {
 
     ggml_tensor * inpL = build_vit(
         inp, n_pos, NORM_TYPE_NORMAL, FFN_GELU_ERF, nullptr,
-        [&](ggml_tensor * c, const clip_layer &) {
+        [&](ggml_tensor * c, const mtmd_layer &) {
             return apply_rope(c, pos_h, pos_w);
         });
 

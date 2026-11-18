@@ -74,7 +74,24 @@ void llama_model_deepseek2ocr::load_arch_tensors(llama_model_loader &) {
     }
 }
 
+llama_rope_params llama_model_deepseek2ocr::get_rope_params(const llama_cparams & cparams, int il) const {
+    auto res = llama_model::get_rope_params(cparams, il);
+
+    res.n_rot       = hparams.n_embd_head_k(il);
+    res.n_offs      = 0;
+    res.type        = LLAMA_ROPE_TYPE_NEOX;
+    res.n_ctx_orig  = 0;
+    res.freq_scale  = 1.0f;
+    res.ext_factor  = 0.0f;
+    res.attn_factor = 1.0f;
+    res.beta_fast   = 0.0f;
+    res.beta_slow   = 0.0f;
+    res.factors     = nullptr;
+
+    return res;
+}
+
 std::unique_ptr<llm_graph_context> llama_model_deepseek2ocr::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 

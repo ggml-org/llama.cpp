@@ -11,7 +11,7 @@ server: ServerProcess
 def get_test_image_base64() -> str:
     """Get a test image in base64 format"""
     # Use the same test image as test_vision_api.py
-    IMG_URL = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/11_truck.png"
+    IMG_URL = "https://huggingface.co/ggml-org-dev/tinygemma3-GGUF/resolve/main/test/11_truck.png"
     response = requests.get(IMG_URL)
     response.raise_for_status()
     return base64.b64encode(response.content).decode("utf-8")
@@ -849,6 +849,32 @@ def test_anthropic_thinking():
 
     assert res.status_code == 200
     assert res.body["type"] == "message"
+
+
+def test_anthropic_output_config_effort():
+    """output_config.effort must reach the chat template, same as chat_template_kwargs.reasoning_effort"""
+    global server
+    server.jinja = True
+    server.chat_template_file = '../../../models/templates/openai-gpt-oss-120b.jinja'
+    server.start()
+    effort = "low"
+
+    def count_tokens(extra):
+        res = server.make_request("POST", "/v1/messages/count_tokens", data={
+            "model": "test",
+            "messages": [{"role": "user", "content": "Hello"}],
+            **extra,
+        })
+        assert res.status_code == 200, res.body
+        return res.body["input_tokens"]
+
+    n_default = count_tokens({})
+    n_kwargs = count_tokens({"chat_template_kwargs": {"reasoning_effort": effort}})
+    n_output_config = count_tokens({"thinking": {"type": "adaptive"}, "output_config": {"effort": effort}})
+
+    # the template renders "Reasoning: medium" by default, so the effort must change the prompt
+    assert n_kwargs != n_default
+    assert n_output_config == n_kwargs
 
 
 def test_anthropic_metadata():

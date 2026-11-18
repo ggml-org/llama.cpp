@@ -31,3 +31,20 @@ if (GGML_OPENVINO)
         message(FATAL_ERROR "OpenVINO: OpenVINO toolkit supports x86-64 and arm64 but not ${CMAKE_SYSTEM_PROCESSOR}")
     endif()
 endif()
+
+# Released runtimes retain the ordinary cache translators.
+include(CheckCXXSourceCompiles)
+unset(GGML_OPENVINO_HAS_CACHE_UPDATE CACHE)
+set(CMAKE_REQUIRED_LIBRARIES openvino::runtime)
+set(CMAKE_REQUIRED_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/openvino/op")
+check_cxx_source_compiles("#include <recurrent_cache_update.hpp>
+int main() {
+    auto conv = std::make_shared<ov::op::internal::RecurrentConvCacheUpdate>(ov::OutputVector{}, 3);
+    auto gdn = std::make_shared<ov::op::internal::RecurrentGatedDeltaNetUpdate>(ov::OutputVector{});
+}"
+    GGML_OPENVINO_HAS_CACHE_UPDATE)
+unset(CMAKE_REQUIRED_LIBRARIES)
+unset(CMAKE_REQUIRED_INCLUDES)
+if(GGML_OPENVINO_HAS_CACHE_UPDATE)
+    target_compile_definitions(ggml-openvino PRIVATE GGML_OPENVINO_HAS_CACHE_UPDATE=1)
+endif()

@@ -75,13 +75,14 @@ class Dots3NoteModel(DeepseekV2Model):
     def set_vocab(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        assert tokenizer is not None
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         tokens, toktypes, tokpre = self.get_vocab_base()
         self.gguf_writer.add_tokenizer_model("gpt2")
         self.gguf_writer.add_tokenizer_pre(tokpre)
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
-        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|endofassistant|>"])  # ty: ignore[unresolved-attribute]
+        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|endofassistant|>"])
         special_vocab.add_to_gguf(self.gguf_writer)
 
     @classmethod

@@ -57,10 +57,10 @@ void llama_model_minicpm3::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_minicpm3::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_minicpm3::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     //TODO: if the model varies, these parameters need to be read from the model
     const int64_t n_embd_base = 256;
     const float scale_embd  = 12.0f;
@@ -90,8 +90,6 @@ llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_pa
 
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * inpSA = inpL;
-
-        ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
 
         // norm
         cur = build_norm(inpL,
@@ -162,20 +160,12 @@ llama_model_minicpm3::graph::graph(const llama_model & model, const llm_graph_pa
             v_states = ggml_cont(ctx0, v_states);
             cb(v_states, "v_states", il);
 
-            q = ggml_rope_ext(
-                    ctx0, q, inp_pos, rope_factors,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
+            q = build_rope(q, inp_pos, il);
             q = ggml_rope_set_offset(q, n_embd_head_qk_nope);
             cb(q, "q_rope", il);
 
             // shared RoPE key
-            k_pe = ggml_rope_ext(
-                    ctx0, k_pe, inp_pos, rope_factors,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
+            k_pe = build_rope(k_pe, inp_pos, il);
             cb(k_pe, "k_pe", il);
 
             ggml_tensor * q_states = q;

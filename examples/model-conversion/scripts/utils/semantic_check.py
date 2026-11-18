@@ -7,7 +7,7 @@ import importlib
 from pathlib import Path
 
 from transformers import AutoTokenizer, AutoConfig, AutoModelForCausalLM, AutoModel
-from common import compare_tokens, exit_with_warning  # type: ignore[import-not-found, ty:unresolved-import]
+from common import compare_tokens, exit_with_warning  # ty: ignore[import-not-found]
 
 unreleased_model_name = os.getenv('UNRELEASED_MODEL_NAME')
 
@@ -183,6 +183,7 @@ def main():
     # Load the python model to get configuration information and also to load the tokenizer.
     print("Loading model and tokenizer using AutoTokenizer:", args.model_path)
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
+    assert tokenizer is not None
     config = AutoConfig.from_pretrained(args.model_path, trust_remote_code=True)
 
     if unreleased_model_name:
@@ -207,8 +208,8 @@ def main():
         else:
             model = AutoModel.from_pretrained(args.model_path, trust_remote_code=True)
 
-    encoded = tokenizer(prompt, return_tensors="pt")  # ty: ignore[call-non-callable]
-    tokens = tokenizer.convert_ids_to_tokens(encoded['input_ids'][0])  # ty: ignore[unresolved-attribute]
+    encoded = tokenizer(prompt, return_tensors="pt")
+    tokens = tokenizer.convert_ids_to_tokens(encoded['input_ids'][0])
     n_tokens = len(tokens)
     print(f"n_tokens: {n_tokens}");
     print(f"hidden_size: {model.config.hidden_size}")

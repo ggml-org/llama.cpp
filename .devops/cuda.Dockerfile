@@ -17,12 +17,15 @@ FROM docker.io/node:$NODE_VERSION AS web
 
 ARG APP_VERSION
 
-WORKDIR /app/tools/ui
+WORKDIR /app/ui/apps/chat
 
-COPY tools/ui/package.json tools/ui/package-lock.json ./
+COPY ui/apps/chat/package.json ui/apps/chat/package-lock.json ./
 RUN npm ci
 
-COPY tools/ui/ ./
+COPY ui/apps/chat/ ./
+# the app compiles Llama UI from its source next to it
+COPY ui/lib/ui/package.json /app/ui/lib/ui/package.json
+COPY ui/lib/ui/src/lib/ /app/ui/lib/ui/src/lib/
 RUN LLAMA_BUILD_NUMBER="$APP_VERSION" npm run build
 
 FROM ${BASE_CUDA_DEV_CONTAINER} AS build
@@ -40,7 +43,7 @@ WORKDIR /app
 
 COPY . .
 
-COPY --from=web /app/tools/ui/dist tools/ui/dist
+COPY --from=web /app/ui/apps/chat/dist ui/apps/chat/dist
 
 RUN if [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
     export CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_DOCKER_ARCH}"; \
@@ -83,6 +86,9 @@ RUN apt-get update \
     && rm -rf /tmp/* /var/tmp/* \
     && find /var/cache/apt/archives /var/lib/apt/lists -not -name lock -type f -delete \
     && find /var/cache -type f -delete
+
+# Some hosts (e.g. GKE) only mount the driver here, and CUDA 12.8.1-12.9.1 base images don't set these paths
+ENV LD_LIBRARY_PATH=/usr/local/nvidia/lib64:/usr/local/nvidia/lib:${LD_LIBRARY_PATH}
 
 COPY --from=build /app/lib/ /app
 

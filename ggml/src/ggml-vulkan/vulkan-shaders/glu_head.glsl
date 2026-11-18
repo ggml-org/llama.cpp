@@ -1,5 +1,6 @@
 #extension GL_EXT_shader_16bit_storage : require
 
+#include "types.glsl"
 #include "utils.glsl"
 
 

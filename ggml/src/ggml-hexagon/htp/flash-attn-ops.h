@@ -46,7 +46,7 @@ struct htp_fa_kernel_params {
     uint8_t  kernel_type;        // enum htp_fa_kernel_type
     uint8_t  head_split;         // 1 = partition by KV heads in multicore, 0 = token partition
     uint8_t  flags;              // HTP_FA_FLAG_*
-    uint8_t  n_threads;          // Number of threads to run
+    uint8_t  n_hvx;              // Number of threads to run
 
     // Common parameters
     uint16_t Br;
@@ -155,7 +155,7 @@ struct hmx_fa_vtcm_layout {
 
 static inline void hmx_fa_vtcm_layout_build(struct hmx_fa_vtcm_layout * L,
                                             size_t gqa_factor, size_t DK, size_t DV,
-                                            size_t Br, size_t Bc, size_t n_threads,
+                                            size_t Br, size_t Bc, size_t n_hvx,
                                             bool pipeline, bool is_q_fp32,
                                             bool has_sinks, size_t n_heads) {
     const size_t g_br         = hex_align_up(gqa_factor * Br, HMX_FP16_TILE_N_ROWS);
@@ -207,7 +207,7 @@ static inline void hmx_fa_vtcm_layout_build(struct hmx_fa_vtcm_layout * L,
     VTCM_LAYOUT_ALLOC_OPTIONAL(off_group_b, off_p_tiles[1], s_tile_size, pipeline);
     VTCM_LAYOUT_ALLOC(off_group_b, off_s_rowmax,      col_vec_size);
     VTCM_LAYOUT_ALLOC(off_group_b, off_p_rowsum,      col_vec_size);
-    VTCM_LAYOUT_ALLOC(off_group_b, off_row_bufs,      row_vec_size * 2 * n_threads);
+    VTCM_LAYOUT_ALLOC(off_group_b, off_row_bufs,      row_vec_size * 2 * n_hvx);
 
     const size_t group_b_size = off_group_b - off_group_b_c;
 
@@ -251,9 +251,9 @@ static inline void hmx_fa_vtcm_layout_build(struct hmx_fa_vtcm_layout * L,
 }
 
 // Exact VTCM usage for a given (gqa_factor, DK, DV, Br, Bc) configuration.
-static inline size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, size_t DV, size_t Br, size_t Bc, size_t n_threads, bool pipeline, bool is_q_fp32, bool has_sinks, size_t n_heads) {
+static inline size_t hmx_fa_compute_vtcm_usage(size_t gqa_factor, size_t DK, size_t DV, size_t Br, size_t Bc, size_t n_hvx, bool pipeline, bool is_q_fp32, bool has_sinks, size_t n_heads) {
     struct hmx_fa_vtcm_layout L;
-    hmx_fa_vtcm_layout_build(&L, gqa_factor, DK, DV, Br, Bc, n_threads, pipeline, is_q_fp32, has_sinks, n_heads);
+    hmx_fa_vtcm_layout_build(&L, gqa_factor, DK, DV, Br, Bc, n_hvx, pipeline, is_q_fp32, has_sinks, n_heads);
     return L.total_bytes;
 }
 
@@ -282,7 +282,7 @@ static inline void hvx_fa_vtcm_layout_build(struct hvx_fa_vtcm_layout * L,
                                             size_t DK, size_t DV,
                                             bool is_q_fp32, bool has_mask,
                                             bool has_sinks, size_t n_heads,
-                                            size_t n_threads) {
+                                            size_t n_hvx) {
     const size_t size_q_row_padded = hex_round_up(DK * (is_q_fp32 ? 4 : 2), 128);
     const size_t size_k_row_padded = hex_round_up(DK * sizeof(__fp16), 128);
     const size_t size_v_row_padded = hex_round_up(DV * sizeof(__fp16), 128);
@@ -296,11 +296,11 @@ static inline void hvx_fa_vtcm_layout_build(struct hvx_fa_vtcm_layout * L,
 
     size_t off = 0;
 
-    VTCM_LAYOUT_ALLOC(off, off_q, size_q_block * n_threads);
-    VTCM_LAYOUT_ALLOC(off, off_k, size_k_block * 2 * n_threads);
-    VTCM_LAYOUT_ALLOC(off, off_v, size_v_block * 2 * n_threads);
-    VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_m, size_m_block * HVX_FA_DMA_CACHE_SIZE * n_threads, has_mask);
-    VTCM_LAYOUT_ALLOC(off, off_a, size_vkq_acc * n_threads);
+    VTCM_LAYOUT_ALLOC(off, off_q, size_q_block * n_hvx);
+    VTCM_LAYOUT_ALLOC(off, off_k, size_k_block * 2 * n_hvx);
+    VTCM_LAYOUT_ALLOC(off, off_v, size_v_block * 2 * n_hvx);
+    VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_m, size_m_block * HVX_FA_DMA_CACHE_SIZE * n_hvx, has_mask);
+    VTCM_LAYOUT_ALLOC(off, off_a, size_vkq_acc * n_hvx);
     VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_sinks, size_sinks, has_sinks);
 
     L->size_q_block = size_q_block;
@@ -312,9 +312,9 @@ static inline void hvx_fa_vtcm_layout_build(struct hvx_fa_vtcm_layout * L,
     L->total_bytes  = off;
 }
 
-static inline size_t hvx_fa_compute_vtcm_usage(size_t DK, size_t DV, bool is_q_fp32, bool has_mask, bool has_sinks, size_t n_heads, size_t n_threads) {
+static inline size_t hvx_fa_compute_vtcm_usage(size_t DK, size_t DV, bool is_q_fp32, bool has_mask, bool has_sinks, size_t n_heads, size_t n_hvx) {
     struct hvx_fa_vtcm_layout L;
-    hvx_fa_vtcm_layout_build(&L, DK, DV, is_q_fp32, has_mask, has_sinks, n_heads, n_threads);
+    hvx_fa_vtcm_layout_build(&L, DK, DV, is_q_fp32, has_mask, has_sinks, n_heads, n_hvx);
     return L.total_bytes;
 }
 
@@ -329,7 +329,7 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
                                          size_t   qo_len,
                                          size_t   kv_len,
                                          size_t   vtcm_budget,
-                                         size_t   n_threads,
+                                         size_t   n_hvx,
                                          bool     is_q_fp32,
                                          bool     has_sinks,
                                          size_t   n_heads,
@@ -337,7 +337,7 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
     const size_t T       = HMX_FP16_TILE_N_ROWS;  // 32
     const size_t br_unit = hmx_ceil_div(T, gqa_factor);
     const size_t bc_unit = HMX_FP16_TILE_N_COLS * 2;  // 64
-    const bool   can_pipeline = (kv_len >= FA_MIN_KV_BLOCKS * bc_unit && n_threads >= 2);
+    const bool   can_pipeline = (kv_len >= FA_MIN_KV_BLOCKS * bc_unit && n_hvx >= 2);
 
     // Br_max: largest Br aligned to br_unit that does not exceed qo_len.
     const size_t Br_max = qo_len >= br_unit ? hex_align_down(qo_len, br_unit) : br_unit;
@@ -361,15 +361,15 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
     for (size_t Br = Br_max; Br >= br_unit; Br -= br_unit) {
         // Try all Bc candidates from Bc_limit down to bc_unit
         for (size_t Bc = Bc_limit; Bc >= bc_unit; Bc -= bc_unit) {
-            size_t vtcm_needed = hmx_fa_compute_vtcm_usage(gqa_factor, DK, DV, Br, Bc, n_threads, can_pipeline, is_q_fp32, has_sinks, n_heads);
+            size_t vtcm_needed = hmx_fa_compute_vtcm_usage(gqa_factor, DK, DV, Br, Bc, n_hvx, can_pipeline, is_q_fp32, has_sinks, n_heads);
             if (vtcm_needed <= vtcm_budget) {
                 // This Bc fits for this Br!
                 const size_t q_blocks       = (qo_len + Br - 1) / Br;
                 const size_t kv_blocks      = (kv_len + Bc - 1) / Bc;
-                const size_t actual_threads = (kv_blocks >= 3 && n_threads >= 2) ? n_threads : 1;
+                const size_t actual_hvx     = (kv_blocks >= 3 && n_hvx >= 2) ? n_hvx : 1;
                 const size_t n_rows_g       = Br * gqa_factor;
                 const size_t n_row_vec_cnt  = (n_rows_g + 63) / 64;
-                const size_t n_use          = n_row_vec_cnt < actual_threads ? n_row_vec_cnt : actual_threads;
+                const size_t n_use          = n_row_vec_cnt < actual_hvx ? n_row_vec_cnt : actual_hvx;
                 const size_t vecs_per_t     = n_use > 0 ? (n_row_vec_cnt + n_use - 1) / n_use : 1;
 
                 const size_t c_iter_actual  = c_iter_base + c_softmax * vecs_per_t;

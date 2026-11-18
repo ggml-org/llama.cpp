@@ -105,7 +105,7 @@ static ggml_tensor * conv_2d_f32(ggml_context * ctx0, ggml_tensor * a, ggml_tens
 }
 
 
-ggml_tensor * clip_graph_deepseekocr::build_sam(ggml_tensor * inp_raw) {
+ggml_tensor * mtmd_graph_deepseekocr::build_sam(ggml_tensor * inp_raw) {
     // Building SAM
     const int n_embd  = hparams.sam_n_embd;
     const int n_layer = hparams.sam_n_layer;
@@ -211,7 +211,7 @@ ggml_tensor * clip_graph_deepseekocr::build_sam(ggml_tensor * inp_raw) {
             mask = ggml_add(ctx0, rw, rh); // [B*n_heads, H*W, H, W]
             mask = ggml_reshape_4d(ctx0, mask, W * H, W * H, n_heads, B);
             // casting mask to F16 only required when flash-attn is enabled
-            if (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
+            if (flash_attn_type == MTMD_FLASH_ATTN_TYPE_ENABLED) {
                 mask = ggml_cast(ctx0, mask, GGML_TYPE_F16);
             }
 
@@ -264,7 +264,7 @@ ggml_tensor * clip_graph_deepseekocr::build_sam(ggml_tensor * inp_raw) {
     return cur;
 }
 
-ggml_cgraph * clip_graph_deepseekocr::build() {
+ggml_cgraph * mtmd_graph_deepseekocr::build() {
     // patch embedding
     ggml_tensor * inp_raw = build_inp_raw();
 

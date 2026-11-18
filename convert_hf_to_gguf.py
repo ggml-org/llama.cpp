@@ -58,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "tq1_0", "tq2_0", "auto"], default="auto",
-        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, tq1_0 or tq2_0 for ternary, and auto for the highest-fidelity 16-bit float type",
+        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, tq1_0 or tq2_0 for ternary, and auto to preserve supported FP8 weights and otherwise select the highest-fidelity 16-bit float type",
     )
     parser.add_argument(
         "--bigendian", action="store_true",
@@ -125,9 +125,18 @@ def parse_args() -> argparse.Namespace:
         "--no-nextn", "--no-mtp", dest="no_mtp", action="store_true",
         help="Exclude NextN speculative draft tensors from the converted GGUF. Pair with --mtp or --dspark on a second run to publish target and draft as two files.",
     )
+    ple_group = parser.add_mutually_exclusive_group()
+    ple_group.add_argument(
+        "--ple-only", action="store_true",
+        help="Export only the per-layer embedding table as a separate GGUF for use with --shard (alias: --ple).",
+    )
+    ple_group.add_argument(
+        "--no-ple", action="store_true",
+        help="Exclude the per-layer embedding table while retaining its metadata. Load the table separately with --shard (alias: --ple).",
+    )
     parser.add_argument(
         "--dspark", action="store_true",
-        help="Export only the DeepSeek-V4 DSpark draft tensors as a separate GGUF.",
+        help="Export only the DeepSeek-V4 or Mistral Large 4 DSpark draft tensors as a separate GGUF.",
     )
     parser.add_argument(
         "--mistral-format", action="store_true",
@@ -173,6 +182,10 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if not args.print_supported_models and args.model is None:
         parser.error("the following arguments are required: model")
+    if (args.ple_only or args.no_ple) and (args.vocab_only or args.mmproj or args.mtp or args.dspark):
+        parser.error("--ple-only / --no-ple cannot be combined with --vocab-only, --mmproj, --mtp, or --dspark")
+    if args.ple_only and args.no_tensor_first_split:
+        parser.error("--ple-only cannot be combined with --no-tensor-first-split")
     return args
 
 
@@ -255,6 +268,9 @@ def main() -> None:
             assert hparams.get("vision_encoder") is not None, "This model does not support multimodal"
             from conversion.pixtral import PixtralModel
             model_class = PixtralModel
+        elif hparams.get("moe") is not None and hparams.get("dsa") is not None:
+            from conversion.mistral4 import MistralLarge4Model
+            model_class = MistralLarge4Model
         elif hparams.get("moe") is not None:
             from conversion.mistral import MistralMoeModel
             model_class = MistralMoeModel
@@ -267,10 +283,16 @@ def main() -> None:
             sys.exit(1)
 
         if args.dspark:
-            if is_mistral_format or model_architecture not in ("DeepseekV4ForCausalLM", "DeepseekV41ForCausalLM"):
-                logger.error("--dspark is only supported for DeepseekV4ForCausalLM and DeepseekV41ForCausalLM")
+            if is_mistral_format or model_architecture == "MistralLarge4ForConditionalGeneration":
+                if model_class.__name__ != "MistralLarge4Model":
+                    logger.error("--dspark is only supported for Mistral Large 4 among Mistral-format models")
+                    sys.exit(1)
+                from conversion.mistral4 import MistralLarge4DSparkModel
+                model_class = MistralLarge4DSparkModel
+            elif model_architecture not in ("DeepseekV4ForCausalLM", "DeepseekV41ForCausalLM"):
+                logger.error("--dspark is only supported for DeepseekV4ForCausalLM, DeepseekV41ForCausalLM and Mistral Large 4")
                 sys.exit(1)
-            if model_architecture == "DeepseekV41ForCausalLM":
+            elif model_architecture == "DeepseekV41ForCausalLM":
                 from conversion.deepseek41 import DeepseekV41DSparkModel
                 model_class = DeepseekV41DSparkModel
             else:
@@ -299,6 +321,7 @@ def main() -> None:
                                      fuse_gate_up_exps=args.fuse_gate_up_exps,
                                      fp8_as_q8=args.fp8_as_q8,
                                      fuse_qkv=args.fuse_qkv,
+                                     ple_only=args.ple_only, no_ple=args.no_ple,
                                      )
 
         if args.vocab_only:

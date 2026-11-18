@@ -1921,8 +1921,9 @@ shared int8_t kvalues_mxfp4[16];
 #endif
 
 #if defined(DATA_A_NVFP4) && !defined(USE_OCP_FP4)
-// UE4M3 scale in NVFP4 blocks use only 7 bits; sign (bit 7) is always zero.
-shared float ue4m3_fp32_lut[128];
+// Cover all scale bytes accepted by ggml_validate_row_data.
+// ue4m3_to_fp32_build() masks the exponent and mantissa, but checks the full byte for 0 and 0x7F.
+shared float ue4m3_fp32_lut[256];
 
 float ue4m3_to_fp32_build(uint u) {
     if (u == 0u || u == 127u) {
@@ -1947,7 +1948,7 @@ void init_iq_shmem(uvec3 wgsize)
         kvalues_mxfp4[i] = kvalues_mxfp4_const[i];
     }
 #if defined(DATA_A_NVFP4)
-    for (uint i = gl_LocalInvocationIndex.x; i < 128u; i += wgsize.x) {
+    for (uint i = gl_LocalInvocationIndex.x; i < 256u; i += wgsize.x) {
         ue4m3_fp32_lut[i] = ue4m3_to_fp32_build(i);
     }
 #endif
@@ -1974,6 +1975,27 @@ vec4 bf16_to_fp32(uvec4 u)
 {
     return vec4(bf16_to_fp32(u.x), bf16_to_fp32(u.y), bf16_to_fp32(u.z), bf16_to_fp32(u.w));
 }
+
+#if defined(DATA_A_BF16)
+#define A_TO_FLOAT(x) bf16_to_fp32(uint32_t(x))
+#else
+#define A_TO_FLOAT(x) float(x)
+#endif
+#if defined(DATA_B_BF16)
+#define B_TO_FLOAT(x) bf16_to_fp32(uint32_t(x))
+#else
+#define B_TO_FLOAT(x) float(x)
+#endif
+#if defined(DATA_C_BF16)
+#define C_TO_FLOAT(x) bf16_to_fp32(uint32_t(x))
+#else
+#define C_TO_FLOAT(x) float(x)
+#endif
+#if defined(DATA_D_BF16)
+#define FLOAT_TO_D(x) D_TYPE(fp32_to_bf16(x))
+#else
+#define FLOAT_TO_D(x) D_TYPE(x)
+#endif
 
 float e8m0_to_fp32(uint8_t x) {
     uint32_t bits;
