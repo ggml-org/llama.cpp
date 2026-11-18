@@ -545,6 +545,12 @@ static constexpr __host__ __device__ inline int ggml_cuda_fattn_mma_fused_type_f
 static bool ggml_cuda_fattn_mma_fused_type_supported(const ggml_type type) {
     return type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q4_0 || type == GGML_TYPE_F8_E4M3;
 }
+// Pipelined fused staging: two half-chunks in two slots, same total bytes as one chunk slot (smem and alloc predictor unchanged).
+// The half-chunk row must be whole blocks and 16 B aligned: 8 B cp.async staging (q8_0/q4_0) measured slower than the wait it hides.
+template<int nbatch2, int block_bytes>
+static constexpr __device__ bool ggml_cuda_fattn_mma_fused_stage_pipelined() {
+    return nbatch2 % 32 == 0 && (nbatch2 / 2 / 16) * block_bytes % 16 == 0;
+}
 // 8 B cp.async variant for the fused DKQ=DV=128 staging: q8_0/q4_0 rows of a 128-value head are 136/72 B (≡ 8 mod 16), never 16 B
 // aligned like the cache row pitch they read from. .ca supports 4/8/16 B transfers (.cg upstream only 16 B); both pointers need 8 B alignment.
 static __device__ __forceinline__ void cp_async_ca_8(const unsigned int dst, const void * src) {
@@ -605,7 +611,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile_q(
 // The arithmetic matches dequantize_block_q8_0_f16, i.e. the result is bit-identical to the standalone f16 conversion.
 template<int stride_tile, int nwarps, int nbatch_fa, int D2>
 static __device__ __forceinline__ void flash_attn_ext_f16_dequant_tile_q8(
-        const char * const __restrict__ stage, half2 * const __restrict__ tile) {
+        const char * const __restrict__ stage, half2 * const __restrict__ tile, const int blk_off = 0) {
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int nblk = D2 / 16; // q8_0 blocks per row, 32 values each
     constexpr int row_bytes = nblk * FATTN_MMA_Q8_0_BLOCK_BYTES;
@@ -630,7 +636,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_dequant_tile_q8(
                 vals[2*l + 0] = v.x;
                 vals[2*l + 1] = v.y;
             }
-            ggml_cuda_memcpy_1<16>(swizzle<stride_tile>(tile, i*stride_tile + (4*j + q)*4, i), vals);
+            ggml_cuda_memcpy_1<16>(swizzle<stride_tile>(tile, i*stride_tile + (4*(j + blk_off) + q)*4, i), vals);
         }
     }
 }
@@ -638,7 +644,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_dequant_tile_q8(
 // The arithmetic matches dequantize_block_q4_0 for dst_t=half, i.e. the result is bit-identical to the standalone f16 conversion.
 template<int stride_tile, int nwarps, int nbatch_fa, int D2>
 static __device__ __forceinline__ void flash_attn_ext_f16_dequant_tile_q4(
-        const char * const __restrict__ stage, half2 * const __restrict__ tile) {
+        const char * const __restrict__ stage, half2 * const __restrict__ tile, const int blk_off = 0) {
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int nblk = D2 / 16; // q4_0 blocks per row, 32 values each
     constexpr int row_bytes = nblk * FATTN_MMA_Q4_0_BLOCK_BYTES;
@@ -661,7 +667,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_dequant_tile_q4(
                 vals[2*l + 0] = __float2half(d * (float) n0 + dm);
                 vals[2*l + 1] = __float2half(d * (float) n1 + dm);
             }
-            ggml_cuda_memcpy_1<16>(swizzle<stride_tile>(tile, i*stride_tile + (4*j + q)*4, i), vals);
+            ggml_cuda_memcpy_1<16>(swizzle<stride_tile>(tile, i*stride_tile + (4*(j + blk_off) + q)*4, i), vals);
         }
     }
 }
@@ -676,10 +682,11 @@ static __device__ __forceinline__ half2 fattn_f8x2_to_half2(const uint16_t pair)
 #endif // defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 // Dequantizes the raw f8_e4m3 staging area into an f16 tile with the same swizzle as flash_attn_ext_f16_load_tile.
-// Rows are plain byte arrays (1 B/value, no scale), so this is just the pair-wise cvt above.
+// Rows are plain byte arrays (1 B/value, no scale), so this is just the pair-wise cvt above; the stage is read in 16 B
+// units (16 values, same pairs as the byte-pair reads) because smem scalar loads dominated the kernel's L1 traffic.
 template<int stride_tile, int nwarps, int nbatch_fa, int D2>
 static __device__ __forceinline__ void flash_attn_ext_f16_dequant_tile_f8(
-        const char * const __restrict__ stage, half2 * const __restrict__ tile) {
+        const char * const __restrict__ stage, half2 * const __restrict__ tile, const int blk_off = 0) {
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int nblk = D2 / 16; // f8_e4m3 blocks per row, 32 single-byte values each
     constexpr int row_bytes = nblk * FATTN_MMA_F8_E4M3_BLOCK_BYTES;
@@ -689,31 +696,31 @@ static __device__ __forceinline__ void flash_attn_ext_f16_dequant_tile_f8(
         const int j = u % nblk;
         const char * const b = stage + i*row_bytes + j*FATTN_MMA_F8_E4M3_BLOCK_BYTES;
 #pragma unroll
-        for (int q = 0; q < 4; ++q) {
-            alignas(16) half vals[8];
-#pragma unroll
-            for (int l = 0; l < 4; ++l) {
-                // unlike q8_0/q4_0 there is no scale prefix and the values are linear: byte k is value k
-                const half2 v = fattn_f8x2_to_half2(*(const uint16_t *) (b + q*8 + l*2));
-                vals[2*l + 0] = v.x;
-                vals[2*l + 1] = v.y;
-            }
-            ggml_cuda_memcpy_1<16>(swizzle<stride_tile>(tile, i*stride_tile + (4*j + q)*4, i), vals);
+        for (int v = 0; v < 2; ++v) {
+            const uint4 w = *(const uint4 *) (b + v*16);
+            alignas(16) half2 lo[4] = {
+                fattn_f8x2_to_half2((uint16_t) w.x), fattn_f8x2_to_half2((uint16_t) (w.x >> 16)),
+                fattn_f8x2_to_half2((uint16_t) w.y), fattn_f8x2_to_half2((uint16_t) (w.y >> 16))};
+            alignas(16) half2 hi[4] = {
+                fattn_f8x2_to_half2((uint16_t) w.z), fattn_f8x2_to_half2((uint16_t) (w.z >> 16)),
+                fattn_f8x2_to_half2((uint16_t) w.w), fattn_f8x2_to_half2((uint16_t) (w.w >> 16))};
+            ggml_cuda_memcpy_1<16>(swizzle<stride_tile>(tile, i*stride_tile + (4*(j + blk_off) + 2*v + 0)*4, i), lo);
+            ggml_cuda_memcpy_1<16>(swizzle<stride_tile>(tile, i*stride_tile + (4*(j + blk_off) + 2*v + 1)*4, i), hi);
         }
     }
 }
 // Dispatches the staging-area dequant to the type-specific arithmetic, mirroring flash_attn_ext_f16_load_tile_q.
 template<int fused, int stride_tile, int nwarps, int nbatch_fa, int D2>
 static __device__ __forceinline__ void flash_attn_ext_f16_dequant_tile_q(
-        const char * const __restrict__ stage, half2 * const __restrict__ tile) {
+        const char * const __restrict__ stage, half2 * const __restrict__ tile, const int blk_off = 0) {
     static_assert(fused == FATTN_MMA_FUSED_Q8_0 || fused == FATTN_MMA_FUSED_Q4_0 || fused == FATTN_MMA_FUSED_F8_E4M3,
         "unhandled fused type");
     if constexpr (fused == FATTN_MMA_FUSED_Q8_0) {
-        flash_attn_ext_f16_dequant_tile_q8<stride_tile, nwarps, nbatch_fa, D2>(stage, tile);
+        flash_attn_ext_f16_dequant_tile_q8<stride_tile, nwarps, nbatch_fa, D2>(stage, tile, blk_off);
     } else if constexpr (fused == FATTN_MMA_FUSED_Q4_0) {
-        flash_attn_ext_f16_dequant_tile_q4<stride_tile, nwarps, nbatch_fa, D2>(stage, tile);
+        flash_attn_ext_f16_dequant_tile_q4<stride_tile, nwarps, nbatch_fa, D2>(stage, tile, blk_off);
     } else {
-        flash_attn_ext_f16_dequant_tile_f8<stride_tile, nwarps, nbatch_fa, D2>(stage, tile);
+        flash_attn_ext_f16_dequant_tile_f8<stride_tile, nwarps, nbatch_fa, D2>(stage, tile, blk_off);
     }
 }
 // Linear staging area for raw quantized tiles, located right after the mask tiles.
@@ -880,6 +887,14 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
     T_C_KQ KQ_C[nbatch_fa/(np*T_C_KQ::J)];
 #endif // defined(TURING_MMA_AVAILABLE)
 
+    // Pipelined fused staging eligibility, see ggml_cuda_fattn_mma_fused_stage_pipelined.
+    constexpr int  block_bytes_K = ggml_cuda_fattn_mma_fused_block_bytes(fused_K_eff);
+    constexpr int  block_bytes_V = ggml_cuda_fattn_mma_fused_block_bytes(fused_V_eff);
+    constexpr bool pipe_K = nstages <= 1 && q_K && ggml_cuda_fattn_mma_fused_stage_pipelined<nbatch_K2, block_bytes_K>();
+    constexpr bool pipe_V = nstages <= 1 && q_V && ggml_cuda_fattn_mma_fused_stage_pipelined<nbatch_V2, block_bytes_V>();
+    int kh = 0, vh = 0; // staged half-chunk counters (slot parity), K and V side
+    GGML_UNUSED_VARS(kh, vh);
+
     if constexpr (nstages > 1) {
         static_assert(!oob_check, "OOB check incompatible with multi-stage pipeline");
         static_assert(!V_is_K_view, "K data reuse not implemented multi-stage loading");
@@ -909,6 +924,12 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
             flash_attn_ext_f16_load_mask<ncols1, nwarps, nbatch_fa, use_cp_async, oob_check, use_sparse>
                 (mask_h, tile_mask, stride_mask, k_VKQ_0, k_VKQ_sup, jt*ncols1, ne01, indices);
         }
+        if constexpr (pipe_K) {
+            constexpr int k0_first = (DKQp/2-1) - (DKQp/2-1) % nbatch_K2;
+            flash_attn_ext_f16_load_tile_q<fused_K_eff, nwarps, nbatch_fa, nbatch_K2/2, use_sparse>
+                ((const char *) K_h2 + (k0_first/16) * block_bytes_K, stage, stride_K, k_VKQ_0, indices, k_VKQ_sup);
+            cp_async_commit_group();
+        }
     }
 
     // For MLA K and V have the same data.
@@ -922,12 +943,32 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                 // Chunk-granular fused staging (DKQ=DV=512 or the sparse kernel): stage the chunk's blocks via the indices, then dequantize into this tile slot.
                 static_assert(!use_sparse || nstages == 1, "fused sparse gather requires the single-stage pass");
                 static_assert(nbatch_K2 % 16 == 0, "fused chunk staging requires whole quantization blocks");
-                constexpr int block_bytes_K = ggml_cuda_fattn_mma_fused_block_bytes(fused_K_eff);
-                flash_attn_ext_f16_load_tile_q<fused_K_eff, nwarps, nbatch_fa, nbatch_K2, use_sparse>
-                    ((const char *) K_h2 + (k0_start/16) * block_bytes_K, stage, stride_K, k_VKQ_0, indices, k_VKQ_sup);
-                cp_async_wait_all();
-                __syncthreads(); // The staged bytes are read by other threads' dequant below.
-                flash_attn_ext_f16_dequant_tile_q<fused_K_eff, stride_tile_K, nwarps, nbatch_fa, nbatch_K2>(stage, tile_K);
+                if constexpr (pipe_K) {
+                    constexpr int D2h_K        = nbatch_K2 / 2;
+                    constexpr int slot_bytes_K = nbatch_fa * (D2h_K/16) * block_bytes_K;
+#pragma unroll
+                    for (int hh = 0; hh < 2; ++hh) {
+                        if (hh == 0 || k0_start >= nbatch_K2) { // issue the next half-chunk (or an empty tail group) first
+                            const int k_next = hh == 0 ? k0_start + D2h_K : k0_start - nbatch_K2;
+                            flash_attn_ext_f16_load_tile_q<fused_K_eff, nwarps, nbatch_fa, D2h_K, use_sparse>
+                                ((const char *) K_h2 + (k_next/16) * block_bytes_K,
+                                 stage + ((kh + 1) & 1) * slot_bytes_K, stride_K, k_VKQ_0, indices, k_VKQ_sup);
+                        }
+                        cp_async_commit_group();
+                        cp_async_wait_group<1>(); // the current group landed; the next one stays in flight
+                        __syncthreads(); // The staged bytes are read by other threads' dequant below.
+                        flash_attn_ext_f16_dequant_tile_q<fused_K_eff, stride_tile_K, nwarps, nbatch_fa, D2h_K>(
+                            stage + (kh & 1) * slot_bytes_K, tile_K, hh * (D2h_K/16));
+                        __syncthreads(); // The next group re-stages the slot just read; all reads must be done first.
+                        ++kh;
+                    }
+                } else {
+                    flash_attn_ext_f16_load_tile_q<fused_K_eff, nwarps, nbatch_fa, nbatch_K2, use_sparse>
+                        ((const char *) K_h2 + (k0_start/16) * block_bytes_K, stage, stride_K, k_VKQ_0, indices, k_VKQ_sup);
+                    cp_async_wait_all();
+                    __syncthreads(); // The staged bytes are read by other threads' dequant below.
+                    flash_attn_ext_f16_dequant_tile_q<fused_K_eff, stride_tile_K, nwarps, nbatch_fa, nbatch_K2>(stage, tile_K);
+                }
             } else {
                 const int k0_diff = min(k0_stop, DKQ/2) - k0_start; // Only load the real head size from global memory.
                 constexpr bool use_cp_async = nstages == 1;
@@ -1284,6 +1325,12 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
     }
 
 
+    if constexpr (pipe_V) {
+        flash_attn_ext_f16_load_tile_q<fused_V_eff, nwarps, nbatch_fa, nbatch_V2/2, use_sparse>
+            ((const char *) V_h2, stage, stride_V, k_VKQ_0, indices, k_VKQ_sup);
+        cp_async_commit_group();
+    }
+
     // Calculate VKQ tile, need to use logical rather than physical elements for i0 due to transposition of V:
 #pragma unroll
     for (int i0_start = 0; i0_start < DVp; i0_start += 2*nbatch_V2) {
@@ -1297,12 +1344,32 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                     static_assert(!V_is_K_view, "fused V dequant does not support the K view");
                     static_assert(!use_sparse || nstages == 1, "fused sparse gather requires the single-stage pass");
                     static_assert(nbatch_V2 % 16 == 0, "fused chunk staging requires whole quantization blocks");
-                    constexpr int block_bytes_V = ggml_cuda_fattn_mma_fused_block_bytes(fused_V_eff);
-                    flash_attn_ext_f16_load_tile_q<fused_V_eff, nwarps, nbatch_fa, nbatch_V2, use_sparse>
-                        ((const char *) V_h2 + (i0_start/32) * block_bytes_V, stage, stride_V, k_VKQ_0, indices, k_VKQ_sup);
-                    cp_async_wait_all();
-                    __syncthreads(); // Staged bytes visible to the dequant below; K tile reads complete before its overwrite.
-                    flash_attn_ext_f16_dequant_tile_q<fused_V_eff, stride_tile_V, nwarps, nbatch_fa, nbatch_V2>(stage, tile_V);
+                    if constexpr (pipe_V) {
+                        constexpr int D2h_V        = nbatch_V2 / 2;
+                        constexpr int slot_bytes_V = nbatch_fa * (D2h_V/16) * block_bytes_V;
+#pragma unroll
+                        for (int hh = 0; hh < 2; ++hh) {
+                            if (hh == 0 || i0_start + 2*nbatch_V2 < DVp) { // issue the next half-chunk (or an empty tail group) first
+                                const int i_next = hh == 0 ? i0_start + nbatch_V2 : i0_start + 2*nbatch_V2;
+                                flash_attn_ext_f16_load_tile_q<fused_V_eff, nwarps, nbatch_fa, D2h_V, use_sparse>
+                                    ((const char *) V_h2 + (i_next/32) * block_bytes_V,
+                                     stage + ((vh + 1) & 1) * slot_bytes_V, stride_V, k_VKQ_0, indices, k_VKQ_sup);
+                            }
+                            cp_async_commit_group();
+                            cp_async_wait_group<1>(); // the current group landed; the next one stays in flight
+                            __syncthreads(); // Staged bytes visible to the dequant below; K tile reads complete before its overwrite.
+                            flash_attn_ext_f16_dequant_tile_q<fused_V_eff, stride_tile_V, nwarps, nbatch_fa, D2h_V>(
+                                stage + (vh & 1) * slot_bytes_V, tile_V, hh * (D2h_V/16));
+                            __syncthreads(); // The next group re-stages the slot just read; all reads must be done first.
+                            ++vh;
+                        }
+                    } else {
+                        flash_attn_ext_f16_load_tile_q<fused_V_eff, nwarps, nbatch_fa, nbatch_V2, use_sparse>
+                            ((const char *) V_h2 + (i0_start/32) * block_bytes_V, stage, stride_V, k_VKQ_0, indices, k_VKQ_sup);
+                        cp_async_wait_all();
+                        __syncthreads(); // Staged bytes visible to the dequant below; K tile reads complete before its overwrite.
+                        flash_attn_ext_f16_dequant_tile_q<fused_V_eff, stride_tile_V, nwarps, nbatch_fa, nbatch_V2>(stage, tile_V);
+                    }
                 } else {
                     const int i0_diff = min(i0_stop, DV) - i0_start; // Only load the real head size from global memory.
                     constexpr bool use_cp_async = nstages == 1;
