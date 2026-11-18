@@ -30,45 +30,7 @@ layout(binding = 2) writeonly buffer D {
     D_TYPE dst_data[];
 };  // dst - result:    [OW, OH, OD, OC*N]
 
-layout(push_constant) uniform parameter {
-    // I/O channels, batch size
-    uint32_t OC;
-    uint32_t IC;
-    uint32_t N;
-
-    // Tensor spatial sizes: input, output
-    uint32_t IW;
-    uint32_t IH;
-    uint32_t ID;
-    uint32_t OW;
-    uint32_t OH;
-    uint32_t OD;
-
-    // Strides in elements
-    uint32_t nb01;
-    uint32_t nb02;
-    uint32_t nb03;
-
-    uint32_t nb11;
-    uint32_t nb12;
-    uint32_t nb13;
-
-    uint32_t nb1;
-    uint32_t nb2;
-    uint32_t nb3;
-
-    // fastdiv helper values
-    uint32_t OWmp;   uint32_t OWL;
-    uint32_t OWOHmp; uint32_t OWOHL;
-    uint32_t OWOHODmp; uint32_t OWOHODL;
-
-    // element offsets for misaligned buffer bindings
-    uint32_t knl_offset;
-    uint32_t src_offset;
-    uint32_t dst_offset;
-}
-
-p;
+#include "conv3d_push_constants.glsl"
 
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 // Blocktile sizes

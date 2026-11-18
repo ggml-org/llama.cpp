@@ -890,6 +890,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_cpy_f32_quant[GGML_TYPE_COUNT];
     vk_pipeline pipeline_cpy_quant_f32[GGML_TYPE_COUNT];
     vk_pipeline pipeline_cpy_transpose_16, pipeline_cpy_transpose_32;
+    vk_pipeline pipeline_cpy_transpose_f32_f16;
     vk_pipeline pipeline_cpy_transpose_02_16, pipeline_cpy_transpose_02_32;
     // [src0 0=fp32,1=fp16][dst]
     vk_pipeline pipeline_set_rows_i32[2][GGML_TYPE_COUNT];
@@ -998,6 +999,9 @@ struct vk_device_struct {
     vk_pipeline pipeline_opt_step_sgd_f32;
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv2d_f32[CONV_SHAPE_COUNT];
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv2d_f16_f32[CONV_SHAPE_COUNT];
+    // conv_halo.comp for CONV_2D and CONV_3D, keyed by vk_conv_halo_params::key().
+    std::map<std::array<uint32_t, 11>, vk_pipeline> pipeline_conv2d_halo_f16_f32;
+    std::map<std::array<uint32_t, 11>, vk_pipeline> pipeline_conv3d_halo_f16_f32;
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv_transpose_2d_f32[CONV_SHAPE_COUNT];
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv_transpose_2d_f16_f32[CONV_SHAPE_COUNT];
     std::map<vk_conv3d_pipeline_state, vk_pipeline> pipeline_conv3d_f32[CONV_SHAPE_COUNT];

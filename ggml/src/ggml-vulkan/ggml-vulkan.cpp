@@ -1940,6 +1940,53 @@ static bool ggml_vk_amd_large_tile_supported(const vk_device& device) {
     return major > 2 || (major == 2 && build >= 416);
 }
 
+// Box width in pixels (HALO_W in conv_halo.comp): the output tile width plus
+// KW - 1, rounded up so that the accumulator width, out_rows * HALO_W, is a
+// multiple of 32.
+static uint32_t ggml_vk_conv_halo_width(uint32_t out_rows, uint32_t out_cols, uint32_t KW) {
+    return ROUNDUP_POW2(out_cols + KW - 1, 32 / out_rows);
+}
+
+// Whether the device can run the halo convolution, which uses KHR cooperative
+// matrices (coopmat1): the same requirements as conv2d_mm's coopmat1 path.
+// Devices with coopmat2 use it too; a coopmat2 version was slower overall.
+static bool ggml_vk_conv_halo_cm1(const vk_device & device) {
+#if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+    return device->coopmat_support && device->coopmat_support_16x16x16_f16acc &&
+           device->subgroup_size_control && (device->subgroup_size == 32 || device->subgroup_size == 64);
+#else
+    GGML_UNUSED(device);
+    return false;
+#endif
+}
+
+// Splits the coopmat1 halo accumulator (bs_k channels x nt columns) between
+// the subgroups as a grid, giving each a wm x wn tile of whole 16x16 fragments.
+// Keeps as many subgroups busy as possible. Among such grids it picks the one
+// with the fewest fragment loads per subgroup and tap (wm / 16 from the filter
+// plus wn / 16 from the box), which is the squarest tile.
+static void ggml_vk_conv_halo_cm1_tile(uint32_t bs_k, uint32_t nt, uint32_t subgroups, uint32_t & wm, uint32_t & wn) {
+    const uint32_t frag_rows = bs_k / 16;  // 2 or 4
+    const uint32_t frag_cols = nt / 16;
+    uint32_t best_busy = 0, best_loads = 0;
+    // Split the channels 1, 2 or 4 ways, and the columns as many ways as the
+    // remaining subgroups allow while dividing them evenly.
+    for (uint32_t row_splits = 1; row_splits <= frag_rows; row_splits *= 2) {
+        uint32_t col_splits = std::min(subgroups / row_splits, frag_cols);
+        while (frag_cols % col_splits != 0) {
+            col_splits--;
+        }
+        const uint32_t busy  = row_splits * col_splits;
+        const uint32_t loads = frag_rows / row_splits + frag_cols / col_splits;
+        if (busy > best_busy || (busy == best_busy && loads < best_loads)) {
+            best_busy  = busy;
+            best_loads = loads;
+            wm = bs_k / row_splits;
+            wn = nt / col_splits;
+        }
+    }
+}
+
 void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     VK_LOG_DEBUG("ggml_vk_load_shaders(" << device->name << ")");
 
@@ -3696,6 +3743,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
     ggml_vk_create_pipeline(device, device->pipeline_cpy_transpose_32, "cpy_transpose_32", cpy_transpose_32_len, cpy_transpose_32_data, "main", 2, sizeof(vk_op_unary_push_constants), {1, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_cpy_transpose_16, "cpy_transpose_16", cpy_transpose_16_len, cpy_transpose_16_data, "main", 2, sizeof(vk_op_unary_push_constants), {1, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_cpy_transpose_f32_f16, "cpy_transpose_f32_f16", cpy_transpose_f32_f16_len, cpy_transpose_f32_f16_data, "main", 2, sizeof(vk_op_unary_push_constants), {1, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_cpy_transpose_02_32, "cpy_transpose_02_32", cpy_transpose_02_32_len, cpy_transpose_02_32_data, "main", 2, sizeof(vk_op_unary_push_constants), {1, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_cpy_transpose_02_16, "cpy_transpose_02_16", cpy_transpose_02_16_len, cpy_transpose_02_16_data, "main", 2, sizeof(vk_op_unary_push_constants), {1, 1, 1}, {}, 1);
 
@@ -4405,6 +4453,27 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 #undef CREATE_CONV3D
     }
 
+#if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+    // conv_halo.comp, one pipeline per vk_conv_halo_params::key().
+    if (ggml_vk_conv_halo_cm1(device)) {
+        auto create_halo = [&](std::map<std::array<uint32_t, 11>, vk_pipeline> & pipelines, const char * name,
+                               size_t spv_len, const void * spv_data, uint32_t pc_size) {
+            for (auto & c : pipelines) {
+                const std::array<uint32_t, 11> & k = c.first;
+                uint32_t wm = 0, wn = 0;
+                ggml_vk_conv_halo_cm1_tile(k[0], k[1] * ggml_vk_conv_halo_width(k[1], k[2], k[3]),
+                                           256 / device->subgroup_size, wm, wn);
+                const std::vector<uint32_t> spec = { 256, k[0], 16, k[1], k[2], k[3], k[4], k[5], k[6], k[7], k[8], k[9], k[10], wm, wn };
+                ggml_vk_create_pipeline(device, c.second, name, spv_len, spv_data, "main", 3, pc_size, { k[0], 1, 1 },
+                                        spec, 1, true, true, device->subgroup_size);
+            }
+        };
+        create_halo(device->pipeline_conv2d_halo_f16_f32, "conv2d_halo_f16_f32", conv2d_halo_f16_f32_cm1_len,
+                    conv2d_halo_f16_f32_cm1_data, sizeof(vk_op_conv2d_push_constants));
+        create_halo(device->pipeline_conv3d_halo_f16_f32, "conv3d_halo_f16_f32", conv3d_halo_f16_f32_cm1_len,
+                    conv3d_halo_f16_f32_cm1_data, sizeof(vk_op_conv3d_push_constants));
+    }
+#endif
     ggml_vk_create_pipeline(device, device->pipeline_conv2d_dw_whcn_f32, "conv2d_dw_whcn_f32", conv2d_dw_whcn_f32_len, conv2d_dw_whcn_f32_data, "main", 3, sizeof(vk_op_conv2d_dw_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_conv2d_dw_cwhn_f32, "conv2d_dw_cwhn_f32", conv2d_dw_cwhn_f32_len, conv2d_dw_cwhn_f32_data, "main", 3, sizeof(vk_op_conv2d_dw_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_conv2d_dw_whcn_f16_f32, "conv2d_dw_whcn_f16_f32", conv2d_dw_whcn_f16_f32_len, conv2d_dw_whcn_f16_f32_data, "main", 3, sizeof(vk_op_conv2d_dw_push_constants), {512, 1, 1}, {}, 1);
@@ -9665,6 +9734,193 @@ static vk_pipeline ggml_vk_float_pipeline(const vk_pipeline (&pipelines)[3], con
     return pipelines[ggml_vk_float_type_idx(dst->type)];
 }
 
+// Halo convolution (conv_halo.comp) for CONV_2D and CONV_3D, with coopmat2 or
+// KHR cooperative matrices. conv2d_mm/conv3d_mm gather the input again for every filter tap;
+// this shader loads each input pixel into shared memory once and reuses it for
+// all taps. Setting GGML_VK_DISABLE_CONV_HALO turns it off.
+//
+// Each workgroup computes bs_k output channels for an out_rows x out_cols tile
+// of one output depth slice.
+struct vk_conv_halo_params {
+    // The shader's spec constants, in the order they are passed.
+    uint32_t bs_k, out_rows, out_cols, KW, KH, a_pad, pad_w, pad_h;
+    uint32_t filter_copy; // 1: read the host's f16 copy of the filter (output channels innermost); 0: read the f16 filter in place (2D only)
+    uint32_t KD, pad_d;
+    uint32_t tiles;  // number of output tiles, over all batches and depth slices
+
+    std::array<uint32_t, 11> key() const {
+        return { bs_k, out_rows, out_cols, KW, KH, a_pad, pad_w, pad_h, filter_copy, KD, pad_d };
+    }
+};
+
+// Decides whether the halo shader handles this convolution and, if so, picks
+// its tile shape and filter staging. The shader needs stride 1, dilation 1,
+// padding smaller than the filter, a contiguous f16 or f32 filter, f32 input
+// and output, and input channels in blocks of 16.
+static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_tensor * src0, const ggml_tensor * src1,
+                                     const ggml_tensor * dst, vk_conv_halo_params & hp) {
+#if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+    static const bool disabled = getenv("GGML_VK_DISABLE_CONV_HALO") != nullptr;
+    const bool is_3d = dst->op == GGML_OP_CONV_3D;
+    if (disabled || (dst->op != GGML_OP_CONV_2D && !is_3d) || !ggml_vk_conv_halo_cm1(ctx->device) ||
+        (src0->type != GGML_TYPE_F16 && src0->type != GGML_TYPE_F32) || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
+        !ggml_is_contiguous(src0)) {
+        return false;
+    }
+    if (!is_3d) {
+        // If conv2d split-K splits this layer into full tiles, leave the
+        // layer to it: split-K was faster on mid-size UNet layers with 640 or
+        // more output channels. The halo is faster when split-K doesn't split
+        // or would pad the output channels.
+        uint32_t split_k;
+        const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, src0, dst, split_k);
+        if (split_k > 1 && dst->ne[2] % vk_conv_block_sizes[shape].K == 0) {
+            return false;
+        }
+    }
+    const int32_t * op = dst->op_params;
+    int32_t s[3], pd[3], dl[3]; // width, height, depth
+    uint32_t Cin, Cout, N, OD;
+    if (is_3d) {
+        // op params: s0, s1, s2, p0, p1, p2, d0, d1, d2, IC, N, OC
+        for (int i = 0; i < 3; ++i) {
+            s[i] = op[i];
+            pd[i] = op[3 + i];
+            dl[i] = op[6 + i];
+        }
+        Cin = (uint32_t)op[9];
+        N = (uint32_t)op[10];
+        Cout = (uint32_t)op[11];
+        hp.KD = (uint32_t)src0->ne[2];
+        OD = (uint32_t)dst->ne[2];
+    } else {
+        // op params: s0, s1, p0, p1, d0, d1
+        s[0] = op[0]; s[1] = op[1]; s[2] = 1;
+        pd[0] = op[2]; pd[1] = op[3]; pd[2] = 0;
+        dl[0] = op[4]; dl[1] = op[5]; dl[2] = 1;
+        Cin = (uint32_t)src1->ne[2];
+        Cout = (uint32_t)dst->ne[2];
+        N = (uint32_t)dst->ne[3];
+        hp.KD = 1;
+        OD = 1;
+    }
+    hp.KW = (uint32_t)src0->ne[0];
+    hp.KH = (uint32_t)src0->ne[1];
+    const uint32_t ksize[3] = { hp.KW, hp.KH, hp.KD };
+    // Stride 1, dilation 1, and padding smaller than the filter, in every dimension.
+    for (int i = 0; i < 3; ++i) {
+        if (s[i] != 1 || dl[i] != 1 || pd[i] < 0 || (uint32_t)pd[i] >= ksize[i]) {
+            return false;
+        }
+    }
+    hp.pad_w = (uint32_t)pd[0];
+    hp.pad_h = (uint32_t)pd[1];
+    hp.pad_d = (uint32_t)pd[2];
+    // The filter slices of all taps (up to 16) must fit in shared memory at
+    // once, and filters up to 9 wide leave at least 8 output columns in a
+    // 16-pixel box row.
+    const uint32_t taps = hp.KW * hp.KH;
+    if (Cin % 16 != 0 || taps > 16 || hp.KW > 9) {
+        return false;
+    }
+    // With fewer than 64 input channels there are too few passes to make up
+    // for filling the box, and 1x1 filters have nothing to reuse. Both were
+    // slower than conv2d_mm.
+    if (Cin < 64 || taps == 1) {
+        return false;
+    }
+    const uint32_t OW = (uint32_t)dst->ne[0], OH = (uint32_t)dst->ne[1];
+    // Filter staging. Copying the filter (filter_copy) is an extra
+    // pass over the whole filter, which only pays off when the layer has
+    // enough outputs, about 8K or more. Smaller 2D layers read the filter in
+    // place and reorder it in registers instead. 3D always copies, because
+    // its filter slices are not 8-byte aligned, so small 3D layers (under 4K
+    // outputs) are left to conv3d_mm.
+    const uint64_t npq = (uint64_t)N * OD * OH * OW;
+    if (is_3d && npq < 4096) {
+        return false;
+    }
+    hp.filter_copy = is_3d || npq >= 8192 ? 1 : 0;
+    // Reading in place takes 8-byte packets of f16 values. f32 filters always
+    // use the copy, which converts them to f16.
+    if (!hp.filter_copy && (src0->type != GGML_TYPE_F16 || get_misalign_bytes(ctx, src0) % 8 != 0)) {
+        hp.filter_copy = 1;
+    }
+    // The copy, with its output channels padded to a multiple of 8, is bound
+    // as one storage buffer.
+    if (hp.filter_copy && (uint64_t)Cin * ROUNDUP_POW2(Cout, 8) * taps * hp.KD * sizeof(ggml_fp16_t) > ctx->device->properties.limits.maxStorageBufferRange) {
+        return false;
+    }
+    // Output tile width: whole rows if the box row (output columns plus KW - 1)
+    // fits in 24 pixels, otherwise a 16-pixel box row.
+    hp.out_cols = OW + hp.KW - 1 <= 24 ? OW : 17 - hp.KW;
+    const uint32_t sms = ctx->device->shader_core_count > 0 ? ctx->device->shader_core_count : 32;
+    const uint64_t slices = (uint64_t)N * OD;
+    hp.bs_k = 64;
+    auto tiles_for = [&](uint32_t rows) {
+        return (uint64_t)CEIL_DIV(Cout, hp.bs_k) * slices * CEIL_DIV(OH, rows) * CEIL_DIV(OW, hp.out_cols);
+    };
+    // 16 output rows reuse each filter slice for twice as many outputs, as
+    // long as that still leaves at least 4 workgroups per SM. Small layers get
+    // fewer rows, down to 2, until there are at least half as many workgroups
+    // as SMs.
+    hp.out_rows = OH >= 16 && tiles_for(16) >= 4 * sms ? 16 : 8;
+    while (tiles_for(hp.out_rows) < sms / 2 && hp.out_rows > 2) {
+        hp.out_rows /= 2;
+    }
+    // Use 32 output channels per workgroup instead of 64 if that still gives
+    // fewer workgroups than SMs (more, smaller workgroups were faster), or if
+    // there are at most 32 output channels (the other 32 would be wasted).
+    if (tiles_for(hp.out_rows) < sms || Cout <= 32) {
+        hp.bs_k = 32;
+    }
+    const size_t halo_w = ggml_vk_conv_halo_width(hp.out_rows, hp.out_cols, hp.KW);
+    // Shared memory holds the filter slices of all taps and the box (pixels of
+    // 24 halves, plus 8 spare pixels). The same memory stages the output tile
+    // at the end, in rows of out_rows * halo_w + 8 halves. The filter is
+    // padded against bank conflicts:
+    //  - The copy is stored as columns of bs_k output channels plus 8 halves.
+    //    Unpadded, all 8 rows of a matrix load would hit the same banks, so
+    //    if the tile doesn't fit, halve the output channels instead.
+    //  - Read in place, it is stored as rows of 16 input channels plus 8
+    //    halves. Unpadded rows conflict only 2 ways, so drop the padding
+    //    first, then halve the output channels; 16-tap filters need that.
+    const size_t limit = ctx->device->properties.limits.maxComputeSharedMemorySize;
+    auto shmem = [&](uint32_t pad) {
+        const size_t filter = hp.filter_copy ? (size_t)taps * 16 * (hp.bs_k + pad) * 2 : (size_t)taps * hp.bs_k * (16 + pad) * 2;
+        const size_t pass = filter + ((hp.out_rows + hp.KH - 1) * halo_w + 8) * 24 * 2;
+        const size_t out = (size_t)hp.bs_k * (hp.out_rows * halo_w + 8) * 2;
+        return std::max(pass, out);
+    };
+    auto pick_pad = [&]() -> uint32_t { return hp.filter_copy || shmem(8) <= limit ? 8 : 0; };
+    hp.a_pad = pick_pad();
+    while (shmem(hp.a_pad) > limit && hp.bs_k > 32) {
+        hp.bs_k /= 2;
+        hp.a_pad = pick_pad();
+    }
+    if (shmem(hp.a_pad) > limit) {
+        return false;
+    }
+    hp.tiles = (uint32_t)(slices * CEIL_DIV(OH, hp.out_rows) * CEIL_DIV(OW, hp.out_cols));
+    return true;
+#else
+    GGML_UNUSED(ctx); GGML_UNUSED(src0); GGML_UNUSED(src1); GGML_UNUSED(dst); GGML_UNUSED(hp);
+    return false;
+#endif
+}
+
+// Returns the halo pipeline for these parameters. A new one is added to the
+// map here and compiled by ggml_vk_load_shaders when it is first requested.
+static vk_pipeline ggml_vk_conv_halo_pipeline(ggml_backend_vk_context * ctx, const vk_conv_halo_params & hp, bool is_3d) {
+    std::lock_guard<std::mutex> guard(ctx->device->compile_mutex);
+    auto & pipelines = is_3d ? ctx->device->pipeline_conv3d_halo_f16_f32 : ctx->device->pipeline_conv2d_halo_f16_f32;
+    vk_pipeline & slot = pipelines[hp.key()];
+    if (!slot) {
+        slot = std::make_shared<vk_pipeline_struct>();
+    }
+    return slot;
+}
+
 static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * dst, ggml_op op) {
     switch (op) {
     case GGML_OP_GET_ROWS:
@@ -10156,6 +10412,10 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
     case GGML_OP_CONV_2D:
     case GGML_OP_CONV_TRANSPOSE_2D:
         if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            vk_conv_halo_params hp;
+            if (ggml_vk_conv_halo_params(ctx, src0, src1, dst, hp)) {
+                return ggml_vk_conv_halo_pipeline(ctx, hp, false);
+            }
             uint32_t K = dst->ne[2]; // Cout
             uint32_t NPQ = dst->ne[3] * dst->ne[1] * dst->ne[0]; // N * OH * OW
             uint32_t split_k;
@@ -10230,6 +10490,10 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         return nullptr;
     case GGML_OP_CONV_3D:
         if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            vk_conv_halo_params hp;
+            if (ggml_vk_conv_halo_params(ctx, src0, src1, dst, hp)) {
+                return ggml_vk_conv_halo_pipeline(ctx, hp, true);
+            }
             const uint32_t OC = (uint32_t)ggml_get_op_params_i32(dst, 11);
             const uint32_t IC = (uint32_t)ggml_get_op_params_i32(dst, 9);
             const uint32_t N  = (uint32_t)ggml_get_op_params_i32(dst, 10);
@@ -10526,13 +10790,18 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_CONV_2D:
     case GGML_OP_CONV_TRANSPOSE_2D:
         if constexpr (std::is_same_v<PC, vk_op_conv2d_push_constants>) {
-            const uint32_t NPQ = pc.N * pc.OH * pc.OW;
-            const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, src0, dst, split_k);
-            const auto & block = vk_conv_block_sizes[shape];
-            const uint32_t NPQ_blocks = CEIL_DIV(NPQ, block.NPQ);
-            const uint32_t channel_groups = split_k > 1 ? CEIL_DIV(pc.Cout, block.K) * block.K * split_k : pc.Cout;
-
-            elements = { channel_groups, NPQ_blocks, 1 };
+            vk_conv_halo_params hp;
+            if (ggml_vk_conv_halo_params(ctx, src0, src1, dst, hp)) {
+                // One workgroup per bs_k output channels and out_rows x out_cols output tile.
+                elements = { pc.Cout, hp.tiles, 1 };
+            } else {
+                const uint32_t NPQ = pc.N * pc.OH * pc.OW;
+                const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, src0, dst, split_k);
+                const auto & block = vk_conv_block_sizes[shape];
+                const uint32_t NPQ_blocks = CEIL_DIV(NPQ, block.NPQ);
+                const uint32_t channel_groups = split_k > 1 ? CEIL_DIV(pc.Cout, block.K) * block.K * split_k : pc.Cout;
+                elements = { channel_groups, NPQ_blocks, 1 };
+            }
             if (elements[1] > 512) {
                 elements[2] = CEIL_DIV(elements[1], 512);
                 elements[1] = 512;
@@ -10543,13 +10812,18 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         break;
     case GGML_OP_CONV_3D:
         if constexpr (std::is_same_v<PC, vk_op_conv3d_push_constants>) {
-            const uint32_t NPQ = pc.N * pc.OD * pc.OH * pc.OW;
-            const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, src0, dst, split_k);
-            const auto & block = vk_conv_block_sizes[shape];
-            const uint32_t NPQ_blocks = CEIL_DIV(NPQ, block.NPQ);
-            const uint32_t channel_groups = split_k > 1 ? CEIL_DIV(pc.OC, block.K) * block.K * split_k : pc.OC;
+            vk_conv_halo_params hp;
+            if (ggml_vk_conv_halo_params(ctx, src0, src1, dst, hp)) {
+                elements = { pc.OC, hp.tiles, 1 };
+            } else {
+                const uint32_t NPQ = pc.N * pc.OD * pc.OH * pc.OW;
+                const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, src0, dst, split_k);
+                const auto & block = vk_conv_block_sizes[shape];
+                const uint32_t NPQ_blocks = CEIL_DIV(NPQ, block.NPQ);
+                const uint32_t channel_groups = split_k > 1 ? CEIL_DIV(pc.OC, block.K) * block.K * split_k : pc.OC;
 
-            elements = { channel_groups, NPQ_blocks, 1 };
+                elements = { channel_groups, NPQ_blocks, 1 };
+            }
             if (elements[1] > 512) {
                 elements[2] = CEIL_DIV(elements[1], 512);
                 elements[1] = 512;
@@ -10681,6 +10955,61 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     }
 
     if constexpr (std::is_same_v<PC, vk_op_conv3d_push_constants> || std::is_same_v<PC, vk_op_conv2d_push_constants>) {
+        vk_conv_halo_params hp;
+        if (ggml_vk_conv_halo_params(ctx, src0, src1, dst, hp)) {
+            if (!hp.filter_copy) {
+                ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { src0_buf, src1_buf, dst_buf }, pc, elements);
+                return;
+            }
+            // Copy the filter into prealloc_x as f16, output channels innermost,
+            // then run the halo shader on the copy. Outermost dimension first
+            // (KD = 1 for CONV_2D):
+            //   src: [OC][IC][KD][KH][KW]  = [OC][IC * taps]
+            //   dst: [IC][KD][KH][KW][OCP] = [IC * taps][OCP]
+            // OCP is OC rounded up to 8, so that every row starts 16-byte
+            // aligned; the padding is left unwritten. The copy is a transpose,
+            // done with the tiled transpose shader.
+            uint32_t IC, OC;
+            if constexpr (std::is_same_v<PC, vk_op_conv3d_push_constants>) {
+                IC = pc.IC;
+                OC = pc.OC;
+            } else {
+                IC = pc.Cin;
+                OC = pc.Cout;
+            }
+            const uint32_t rows = IC * hp.KW * hp.KH * hp.KD;  // (input channel, tap)
+            const uint32_t ocp = ROUNDUP_POW2(OC, 8);
+            const uint64_t size = (uint64_t)rows * ocp * sizeof(ggml_fp16_t);
+            if (ctx->prealloc_size_x < size) {
+                ctx->prealloc_size_x = size;
+                ggml_vk_preallocate_buffers(ctx, subctx);
+            }
+            vk_pipeline cpy = src0->type == GGML_TYPE_F32 ? ctx->device->pipeline_cpy_transpose_f32_f16 : ctx->device->pipeline_cpy_transpose_16;
+            ggml_pipeline_request_descriptor_sets(ctx, cpy, 1);
+            if (ctx->prealloc_x_need_sync) {
+                ggml_vk_sync_buffers(ctx, subctx);
+            }
+            vk_op_unary_push_constants cp{};
+            cp.ne = OC * rows;
+            // Dimension 0 is the output channel, dimension 1 the (input channel, tap) pair.
+            cp.ne00 = OC; cp.ne01 = rows; cp.ne02 = 1; cp.ne03 = 1;
+            cp.nb00 = rows; cp.nb01 = 1;
+            cp.ne10 = OC; cp.ne11 = rows; cp.ne12 = 1; cp.ne13 = 1;
+            cp.nb10 = 1; cp.nb11 = ocp;
+            cp.misalign_offsets = pc.knl_offset << 16;
+            init_pushconst_fastdiv(cp);
+            // One workgroup per 32x32 tile; the shader loops over tiles beyond the grid limit.
+            const auto & max_groups = ctx->device->properties.limits.maxComputeWorkGroupCount;
+            const std::array<uint32_t, 3> cpy_elements = { std::min(CEIL_DIV(OC, 32u), max_groups[0]),
+                                                           std::min(CEIL_DIV(rows, 32u), max_groups[1]), 1 };
+            vk_subbuffer knl = { ctx->prealloc_x, 0, size };
+            ggml_vk_dispatch_pipeline(ctx, subctx, cpy, { src0_buf, knl }, cp, cpy_elements);
+            ggml_vk_sync_buffers(ctx, subctx);
+            pc.knl_offset = 0;
+            ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { knl, src1_buf, dst_buf }, pc, elements);
+            ctx->prealloc_x_need_sync = true;
+            return;
+        }
         if (split_k > 1) {
             const uint32_t ne = (uint32_t)ggml_nelements(dst);
             const size_t scratch_size = ggml_nbytes(dst) * split_k;
