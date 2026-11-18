@@ -72,7 +72,7 @@ struct htp_lid_vtcm_layout {
     size_t off_o;
 
     size_t size_q_row;   // f16 Q row, padded
-    size_t size_qs_row;  // f32 Q staging row, padded
+    size_t size_qs_row;  // f32/f16 Q staging row, padded
     size_t size_k_row;   // f16 K row, padded
     size_t size_k_raw_row;
     size_t size_m_row;   // f16 mask row of one kv block, padded
@@ -129,15 +129,15 @@ struct htp_lid_hmx_vtcm_layout {
     size_t off_sc;       // per channel scales, 256 bytes per channel tile, [n_qsets][n_ch]
     size_t off_sc_id;    // identity scales
     size_t off_s;        // S tiles of one block and token tile, [n_rt][n_sg]
-    size_t off_w;        // w of the token tile, [n_qsets][n_tok][n_head] f32
-    size_t off_qs;       // per thread: f32 and f16 staging for 32 Q rows, gather scratch
+    size_t off_w;        // w of the token tile, [n_qsets][n_tok][n_head] f32/f16
+    size_t off_qs;       // per thread: f32/f16 and f16 staging for 32 Q rows, gather scratch
     size_t off_k_raw[2]; // K rows, [Bc][size_k_row]
     size_t off_k_t[2];   // K tiles [n_rt][n_dot]
     size_t off_o[2];     // O tiles [n_rt][n_u]
     size_t off_m[4];     // mask rows [n_tok][size_m_row]
     size_t off_out[2];   // f32 output rows [n_tok][size_o_row]
 
-    size_t size_qs_row;  // f32 Q row, padded
+    size_t size_qs_row;  // f32/f16 Q row, padded
     size_t size_qh_row;  // f16 Q row, padded
     size_t size_k_row;   // f16 K row, padded
     size_t size_k_raw_row;

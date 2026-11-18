@@ -5093,7 +5093,11 @@ static bool htp_kparams_solve_lightning_indexer_impl(
         return false;
     }
 
-    if (k->type != GGML_TYPE_F32 && k->type != GGML_TYPE_F16 && k->type != GGML_TYPE_Q8_0 && k->type != GGML_TYPE_Q4_0) {
+    if ((q->type != GGML_TYPE_F32 && q->type != GGML_TYPE_F16) ||
+        (k->type != GGML_TYPE_F32 && k->type != GGML_TYPE_F16 && k->type != GGML_TYPE_Q8_0 && k->type != GGML_TYPE_Q4_0) ||
+        (w->type != GGML_TYPE_F32 && w->type != GGML_TYPE_F16) ||
+        m->type != GGML_TYPE_F16 ||
+        op->type != GGML_TYPE_F32) {
         return false;
     }
 
@@ -5143,7 +5147,7 @@ static bool htp_kparams_solve_lightning_indexer_impl(
             while (nt2 > 32 && vtcm_usage(nt2, 64, 2) > htp_session_vtcm_size(sess)) {
                 nt2 /= 2;
             }
-            const size_t q_bytes = (size_t) nt2 * n_head * D * sizeof(float);
+            const size_t q_bytes = (size_t) nt2 * n_head * ggml_row_size(q->type, D);
             const size_t k_bytes = (size_t) k->ne[2] * ggml_row_size(k->type, D);
             if (vtcm_usage(nt2, 64, 2) <= htp_session_vtcm_size(sess) && q_bytes >= k_bytes) {
                 n_tok  = nt2;
