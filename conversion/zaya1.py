@@ -78,7 +78,7 @@ class ZayaModel(TextModel):
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, _ = item
-        # TiDAR draft head, not used for autoregressive decoding
+        # skip the draft head tensors now, they will be added as part of the TiDAR changes
         if name.startswith(("diffusion_output_layer.", "diffusion_markov_head.")):
             return None
 
