@@ -513,7 +513,7 @@ struct llama_file::impl {
                     if (errno == EINTR) {
                         continue;
                     }
-                    if (errno == EFAULT || errno == EINVAL) {
+                    if (errno == EFAULT || errno == EINVAL || errno == EIO) {
                         LLAMA_LOG_WARN("%s: file '%s' falling back to buffered I/O due to %s\n",
                                        __func__, fname.c_str(), strerror(errno));
                         const size_t read_offset = tell();
