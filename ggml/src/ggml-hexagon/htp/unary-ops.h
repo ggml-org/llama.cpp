@@ -117,6 +117,7 @@ static inline void htp_unary_vtcm_layout_build(
     uint32_t col_tile,
     uint32_t block,
     bool broadcast_weight,
+    uint32_t weight_nrows,
     uint32_t n_hvx
 ) {
     const bool has_weight = (op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD);
@@ -137,7 +138,7 @@ static inline void htp_unary_vtcm_layout_build(
         L->src2_bytes = has_src2 ? (L->src2_row_size_aligned * block * 2) : 0;
         L->dst_bytes  = L->dst_row_size_aligned  * block * 2;
         if (has_weight) {
-            L->src1_bytes = broadcast_weight ? L->src1_row_size_aligned : (L->src1_row_size_aligned * block * 2);
+            L->src1_bytes = broadcast_weight ? (L->src1_row_size_aligned * weight_nrows) : (L->src1_row_size_aligned * block * 2);
         } else {
             L->src1_bytes = 0;
         }
@@ -159,6 +160,7 @@ static inline void htp_unary_solve_layout(
     uint32_t ne11,
     uint32_t max_block,
     bool broadcast_weight,
+    uint32_t weight_nrows,
     uint32_t n_hvx,
     size_t vtcm_size,
     size_t src0_elem_size,
@@ -186,14 +188,14 @@ static inline void htp_unary_solve_layout(
     size_t vtcm_row_per_hvx = 0;
 
     if (op == HTP_OP_RMS_NORM_MUL_ADD) {
-        size_t src1_vtcm_total = n_hvx * src1_row_size_aligned;
+        size_t src1_vtcm_total = n_hvx * src1_row_size_aligned * weight_nrows;
         size_t available_vtcm  = (vtcm_size > src1_vtcm_total) ? (vtcm_size - src1_vtcm_total) : 0;
         vtcm_size_per_row      = 2 * (src0_row_size_aligned + src2_row_size_aligned + dst_row_size_aligned);
         vtcm_row_per_hvx       = available_vtcm / (n_hvx * vtcm_size_per_row);
     } else if (op == HTP_OP_RMS_NORM_MUL) {
         if (broadcast_weight) {
             size_t available_vtcm = vtcm_size;
-            size_t src1_vtcm_total = n_hvx * src1_row_size_aligned;
+            size_t src1_vtcm_total = n_hvx * src1_row_size_aligned * weight_nrows;
             if (available_vtcm > src1_vtcm_total) {
                 available_vtcm -= src1_vtcm_total;
             } else {
@@ -229,7 +231,7 @@ static inline void htp_unary_solve_layout(
     const uint32_t block = col_tile ? 0 : (uint32_t) vtcm_row_per_hvx;
     htp_unary_vtcm_layout_build(L, op, src0_data_row_size, dst_data_row_size, src1_data_row_size, src2_data_row_size,
                                 src0_elem_size, eff_dst_elem_size, src1_elem_size, src2_elem_size,
-                                col_tile, block, broadcast_weight, n_hvx);
+                                col_tile, block, broadcast_weight, weight_nrows, n_hvx);
 
     *out_col_tile = col_tile;
     *out_vtcm_row_per_hvx = (uint32_t) vtcm_row_per_hvx;

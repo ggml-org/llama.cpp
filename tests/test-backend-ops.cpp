@@ -4138,10 +4138,11 @@ struct test_rms_norm_mul_add : public test_case {
     const bool multi_add; // test a sequence of adds feeding into rms_norm
     const bool post_mul;
     const bool alias_rms_input;
-    const bool weight_broadcast;
+    const int  weight_broadcast;
     const ggml_type type_w;   // type of b and d, GGML_TYPE_COUNT -> same as a
     const ggml_type type_add; // type of c, GGML_TYPE_COUNT -> same as b
     const bool swap;          // the norm chain is the second operand of MUL and ADD
+    const bool has_add;
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -4161,17 +4162,20 @@ struct test_rms_norm_mul_add : public test_case {
         if (swap) {
             s += "," + VAR_TO_STR(swap);
         }
+        if (!has_add) {
+            s += "," + VAR_TO_STR(has_add);
+        }
         return s;
     }
 
     test_rms_norm_mul_add(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {64, 5, 4, 3},
             float eps = 1e-6f, bool broadcast = false, bool multi_add = false, bool post_mul = false,
-            bool alias_rms_input = false, bool weight_broadcast = false, ggml_type type_w = GGML_TYPE_COUNT,
-            ggml_type type_add = GGML_TYPE_COUNT, bool swap = false)
+            bool alias_rms_input = false, int weight_broadcast = 0, ggml_type type_w = GGML_TYPE_COUNT,
+            ggml_type type_add = GGML_TYPE_COUNT, bool swap = false, bool has_add = true)
         : type(type), ne(ne), eps(eps), broadcast(broadcast), multi_add(multi_add), post_mul(post_mul),
           alias_rms_input(alias_rms_input), weight_broadcast(weight_broadcast), type_w(type_w), type_add(type_add),
-          swap(swap) {}
+          swap(swap), has_add(has_add) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         std::array<int64_t, 4> broadcast_dims = {ne[0]*2, ne[1]*3, ne[2]*3, ne[3]*4};
@@ -4180,7 +4184,7 @@ struct test_rms_norm_mul_add : public test_case {
         const ggml_type ta = type_add == GGML_TYPE_COUNT ? tw   : type_add;
 
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, broadcast ? broadcast_dims.data() : ne.data());
-        ggml_tensor * b = weight_broadcast ? ggml_new_tensor_1d(ctx, tw, ne[0]) : ggml_new_tensor(ctx, tw, 4, ne.data());
+        ggml_tensor * b = weight_broadcast > 0 ? ggml_new_tensor_2d(ctx, tw, ne[0], weight_broadcast) : ggml_new_tensor(ctx, tw, 4, ne.data());
         ggml_tensor * c = ggml_new_tensor(ctx, ta, 4, ne.data());
         ggml_tensor * d = nullptr;
 
@@ -4204,7 +4208,7 @@ struct test_rms_norm_mul_add : public test_case {
         }
         ggml_tensor * norm = ggml_rms_norm(ctx, a, eps);
         ggml_tensor * mul  = swap ? ggml_mul(ctx, b, norm) : ggml_mul(ctx, norm, b);
-        ggml_tensor * out  = alias_rms_input ? ggml_add_inplace(ctx, a, mul) : swap ? ggml_add(ctx, c, mul) : ggml_add(ctx, mul, c);
+        ggml_tensor * out  = !has_add ? mul : (alias_rms_input ? ggml_add_inplace(ctx, a, mul) : (swap ? ggml_add(ctx, c, mul) : ggml_add(ctx, mul, c)));
         if (post_mul) {
             out = ggml_mul(ctx, out, d);
         }
@@ -11957,7 +11961,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (uint32_t n : {1, 127, 129, 511, 513, 2816, 4096, 16385}) {
         test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {n, 3, 2, 1}));
         test_cases.emplace_back(new test_rms_norm_mul_rope({n, 3, 2, 1}, 1e-6f, false, false, true, GGML_ROPE_TYPE_NORMAL, true, false));
-        test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {n, 3, 2, 1}, 1e-6f, false, false, false, false, true));
+        test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {n, 3, 2, 1}, 1e-6f, false, false, false, false, 1));
     }
 
     // BF16 x with F32 weights, n > 1 because the NMSE of a single BF16 output is too noisy
@@ -11965,11 +11969,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (uint32_t n : {127, 128, 512, 1024, 2048, 2816, 4096, 8192, 16385}) {
         test_cases.emplace_back(new test_rms_norm(GGML_TYPE_BF16, {n, 3, 2, 1}));
         test_cases.emplace_back(new test_rms_norm_mul_rope({n, 3, 2, 1}, 1e-6f, false, false, true, GGML_ROPE_TYPE_NORMAL, true, false, GGML_TYPE_F16, false, true, GGML_TYPE_BF16));
-        test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, {n, 3, 2, 1}, 1e-6f, false, false, false, false, true, GGML_TYPE_F32));
+        test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, {n, 3, 2, 1}, 1e-6f, false, false, false, false, 1, GGML_TYPE_F32));
         // BF16 residual added after the norm (post-norm models, e.g. Gemma)
-        test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, {n, 3, 2, 1}, 1e-6f, false, false, false, false, true, GGML_TYPE_F32, GGML_TYPE_BF16));
+        test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, {n, 3, 2, 1}, 1e-6f, false, false, false, false, 1, GGML_TYPE_F32, GGML_TYPE_BF16));
         for (bool multi_add : {false, true}) {
-            test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, {n, 1, 1, 1}, 1e-6f, false, multi_add, false, false, false, GGML_TYPE_F32));
+            test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, {n, 1, 1, 1}, 1e-6f, false, multi_add, false, false, 0, GGML_TYPE_F32));
         }
     }
 
@@ -11987,10 +11991,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         for (uint32_t n : { 64, 1025 }) {
             test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { n, 5, 4, 3 }, eps, false));
             test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { n, 5, 4, 3 }, eps, true));
-            test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { n, 5, 4, 3 }, eps, false, false, false, false, false, GGML_TYPE_COUNT, GGML_TYPE_COUNT, true));
-            test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { n, 5, 4, 3 }, eps, false, false, false, false, false, GGML_TYPE_F32));
-            test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { n, 5, 4, 3 }, eps, true, false, false, false, false, GGML_TYPE_F32));
-            test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { n, 5, 4, 3 }, eps, true, false, false, false, false, GGML_TYPE_F32, GGML_TYPE_BF16));
+            test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { n, 5, 4, 3 }, eps, false, false, false, false, 0, GGML_TYPE_COUNT, GGML_TYPE_COUNT, true));
+            test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { n, 5, 4, 3 }, eps, false, false, false, false, 0, GGML_TYPE_F32));
+            test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { n, 5, 4, 3 }, eps, true, false, false, false, 0, GGML_TYPE_F32));
+            test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { n, 5, 4, 3 }, eps, true, false, false, false, 0, GGML_TYPE_F32, GGML_TYPE_BF16));
             test_cases.emplace_back(new test_norm_mul_add(GGML_TYPE_F32, { n, 5, 4, 3 }, eps, false));
             test_cases.emplace_back(new test_norm_mul_add(GGML_TYPE_F32, { n, 5, 4, 3 }, eps, true));
             test_cases.emplace_back(new test_add_rms_norm(GGML_TYPE_F32, { n, 5, 4, 3 }, eps, false));
@@ -12023,13 +12027,28 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 1536, 1, 1, 1 }, 1e-6f, false, false, true));
     test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 256, 4, 1, 1 }, 1e-6f, false, false, true));
     test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 256, 4, 3, 2 }, 1e-6f, false, false, true));
-    test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 256, 4, 3, 2 }, 1e-6f, false, false, true, false, true));
+    test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 256, 4, 3, 2 }, 1e-6f, false, false, true, false, 1));
     test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 1536, 1, 1, 1 }, 1e-6f, false, false, false, true));
     test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 256, 4, 1, 1 }, 1e-6f, false, false, false, true));
-    test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { 1536, 1, 1, 1 }, 1e-6f, false, false, true, false, false, GGML_TYPE_F32));
-    test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { 1536, 1, 1, 1 }, 1e-6f, false, false, true, false, false, GGML_TYPE_F32, GGML_TYPE_BF16));
+    test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { 1536, 1, 1, 1 }, 1e-6f, false, false, true, false, 0, GGML_TYPE_F32));
+    test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { 1536, 1, 1, 1 }, 1e-6f, false, false, true, false, 0, GGML_TYPE_F32, GGML_TYPE_BF16));
     // the ADD operand is the BF16 input itself, added in place
-    test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { 1536, 1, 1, 1 }, 1e-6f, false, false, false, true, false, GGML_TYPE_F32));
+    test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { 1536, 1, 1, 1 }, 1e-6f, false, false, false, true, 0, GGML_TYPE_F32));
+    // dim-1 broadcast weights [ne0, ne1, 1, 1] across [ne0, ne1, ne2, ne3]
+    for (bool has_add : { false, true }) {
+        for (bool post_mul : { false, true }) {
+            test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 256, 4, 3, 2 }, 1e-6f, false, false, post_mul, false, 4, GGML_TYPE_COUNT, GGML_TYPE_COUNT, false, has_add));
+            test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 2560, 4, 33, 1 }, 1e-6f, false, false, post_mul, false, 4, GGML_TYPE_COUNT, GGML_TYPE_COUNT, false, has_add));
+            test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 5120, 4, 33, 1 }, 1e-6f, false, false, post_mul, false, 4, GGML_TYPE_COUNT, GGML_TYPE_COUNT, false, has_add));
+            test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 256, 3, 5, 2 }, 1e-6f, false, false, post_mul, false, 3, GGML_TYPE_COUNT, GGML_TYPE_COUNT, false, has_add));
+            test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { 256, 4, 3, 2 }, 1e-6f, false, false, post_mul, false, 4, GGML_TYPE_F32, GGML_TYPE_COUNT, false, has_add));
+            test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { 256, 3, 5, 2 }, 1e-6f, false, false, post_mul, false, 3, GGML_TYPE_F32, GGML_TYPE_COUNT, false, has_add));
+            if (has_add) {
+                test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { 256, 4, 3, 2 }, 1e-6f, false, false, post_mul, false, 4, GGML_TYPE_F32, GGML_TYPE_BF16, false, true));
+                test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { 256, 3, 5, 2 }, 1e-6f, false, false, post_mul, false, 3, GGML_TYPE_F32, GGML_TYPE_BF16, false, true));
+            }
+        }
+    }
 
 
     test_cases.emplace_back(new test_rms_norm_mul_rope({128, 4, 7, 2}));

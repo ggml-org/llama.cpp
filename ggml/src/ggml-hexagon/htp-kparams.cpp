@@ -1511,15 +1511,23 @@ static bool htp_kparams_solve_unary_impl(
 
     kparams->n_hvx = n_hvx;
 
-    const bool has_weight       = (op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD);
-    const bool has_src2         = (op == HTP_OP_RMS_NORM_MUL_ADD);
-    const bool broadcast_weight = has_weight && (src1->ne[1] * src1->ne[2] * src1->ne[3] == 1);
-    if (op == HTP_OP_RMS_NORM_MUL && !broadcast_weight && !ggml_are_same_shape(src0, src1)) {
-        return false;
+    const bool has_weight   = (op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD);
+    const bool has_src2     = (op == HTP_OP_RMS_NORM_MUL_ADD);
+    const bool is_row_bcast = has_weight && (src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1);
+    bool broadcast_weight   = false;
+    if (op == HTP_OP_RMS_NORM_MUL) {
+        const bool is_dim1_bcast = (src1->ne[1] == src0->ne[1] && src1->ne[2] == 1 && src1->ne[3] == 1 && (src0->ne[2] > 1 || src0->ne[3] > 1));
+        if (!is_row_bcast && !is_dim1_bcast && !ggml_are_same_shape(src0, src1)) {
+            return false;
+        }
+        broadcast_weight = is_row_bcast || is_dim1_bcast;
+    } else if (op == HTP_OP_RMS_NORM_MUL_ADD) {
+        if (!is_row_bcast && !(src1->ne[1] == src0->ne[1] && src1->ne[2] == 1 && src1->ne[3] == 1)) {
+            return false;
+        }
+        broadcast_weight = true;
     }
-    if (op == HTP_OP_RMS_NORM_MUL_ADD && !broadcast_weight) {
-        return false;
-    }
+    const uint32_t weight_nrows = broadcast_weight ? (uint32_t) src1->ne[1] : 0;
     kparams->broadcast_weight   = broadcast_weight;
 
     const bool     src0_contig        = ggml_is_contiguous_1(src0) && (!has_src2 || ggml_is_contiguous_1(src2));
@@ -1543,7 +1551,7 @@ static bool htp_kparams_solve_unary_impl(
 
     htp_unary_solve_layout(&L, op, src0->ne[0], dst->ne[0],
                            has_weight ? src1->ne[0] : 0,
-                           max_block, broadcast_weight, n_hvx, vtcm_size,
+                           max_block, broadcast_weight, weight_nrows, n_hvx, vtcm_size,
                            src0_elem_size, dst_elem_size, src1_elem_size, src2_elem_size,
                            &col_tile, &vtcm_row_per_hvx);
 
