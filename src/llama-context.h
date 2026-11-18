@@ -182,6 +182,9 @@ struct llama_context {
     // the engine runtime of one tower of a clip model, created on first use
     clip_subcontext * clip_sub(const clip_model & m);
 
+    // the code predictor of the native graphs (Qwen3-TTS): codes sampled in the graph by the sequence's sampler
+    bool clip_native_code() const;
+
     // runs one engine graph: built by the clip model, inputs set, computed, outputs read back into req
     bool clip_exec(clip_subcontext & sub, clip_subctx_encode_params * req);
 

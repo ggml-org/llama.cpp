@@ -323,6 +323,11 @@ struct mtmd_legacy_layout {
     uint32_t image_idx = 0;
     std::vector<mtmd_legacy_entry> entries;
 
+    // canvas, set by the loader: the first row of each tile (then the row count), and the position of each tile
+    // after the origin (each tile before it took one, its separators one each)
+    std::vector<uint32_t> tile_row0;
+    std::vector<uint32_t> tile_t0;
+
     // MiniCPM-V 4.7 canvas: the token grid of tile k, scaled from its pixel size (checked to fit by the loader)
     std::pair<uint64_t, uint64_t> tile_grid(size_t k) const {
         const auto & ref = entries.back();
@@ -358,36 +363,33 @@ struct mtmd_legacy_layout {
                     const uint64_t canvas_w = tiled ? (uint64_t) entries[0].grid_x * nx : nx;
                     const uint64_t canvas_h = tiled ? (uint64_t) entries[0].grid_y * ny : ny;
                     const llama_pos base = pos_0 - 1;
-                    llama_pos tp = pos_0;
-                    for (size_t k = 0; k < entries.size(); ++k) {
-                        const auto [gw64, gh64] = tile_grid(k);
-                        const uint32_t gw = (uint32_t) gw64;
-                        const uint32_t gh = (uint32_t) gh64;
-                        if (i < gw * gh) {
-                            const uint32_t row = i / gw;
-                            const uint32_t col = i % gw;
-                            uint32_t h;
-                            uint32_t w;
-                            if (k == 0) {
-                                h = canvas_scale(row, gh, canvas_h);
-                                w = canvas_scale(col, gw, canvas_w);
-                            } else {
-                                const uint32_t s = k - 1;
-                                h = (s / entries[0].grid_x) * ny + row;
-                                w = (s % entries[0].grid_x) * nx + col;
-                            }
-                            return { tp, base + (llama_pos) h, base + (llama_pos) w, base };
-                        }
-                        i -= gw * gh;
-                        const uint32_t n_sep = (uint32_t) mtmd_legacy_suffix_rows(entries[k].suffix_type);
-                        if (i < n_sep) {
-                            const llama_pos p = tp + 1 + (llama_pos) i;
-                            return { p, p, p, p };
-                        }
-                        i -= n_sep;
-                        tp += 1 + (llama_pos) n_sep;
+                    // the tile of row i: its rows, then its separators, which take a position each
+                    const size_t k = std::upper_bound(tile_row0.begin(), tile_row0.end(), i) - tile_row0.begin() - 1;
+                    if (k >= entries.size()) {
+                        throw std::runtime_error("canvas row out of range");
                     }
-                    throw std::runtime_error("canvas row out of range");
+                    const llama_pos tp = pos_0 + (llama_pos) tile_t0[k];
+                    const auto [gw64, gh64] = tile_grid(k);
+                    const uint32_t gw = (uint32_t) gw64;
+                    const uint32_t gh = (uint32_t) gh64;
+                    i -= tile_row0[k];
+                    if (i >= gw * gh) {
+                        const llama_pos p = tp + 1 + (llama_pos) (i - gw * gh);
+                        return { p, p, p, p };
+                    }
+                    const uint32_t row = i / gw;
+                    const uint32_t col = i % gw;
+                    uint32_t h;
+                    uint32_t w;
+                    if (k == 0) {
+                        h = canvas_scale(row, gh, canvas_h);
+                        w = canvas_scale(col, gw, canvas_w);
+                    } else {
+                        const uint32_t s = k - 1;
+                        h = (s / entries[0].grid_x) * ny + row;
+                        w = (s % entries[0].grid_x) * nx + col;
+                    }
+                    return { tp, base + (llama_pos) h, base + (llama_pos) w, base };
                 }
             case MTMD_LEGACY_POS_NORMAL:
             default:
@@ -542,8 +544,9 @@ struct mtmd_image_tokens {
             lay.pos = MTMD_LEGACY_POS_CANVAS;
         }
 
-        // the counts of a malformed chunk must not wrap: rows and positions are int32
-        const uint64_t n_max = INT32_MAX;
+        // the counts of a malformed chunk must not wrap, and a save writes 17 bytes per row: no real image or
+        // video chunk comes near 4M rows
+        const uint64_t n_max = 1u << 22;
         uint64_t n = 0;
         if (lay.pos == MTMD_LEGACY_POS_HUNYUANVL) {
             n = ((uint64_t) nx + 1) * ny + 2;
@@ -563,8 +566,11 @@ struct mtmd_image_tokens {
                 if (gw > n_max || gh > n_max) {
                     throw std::runtime_error("invalid canvas tile");
                 }
+                lay.tile_row0.push_back((uint32_t) n);
+                lay.tile_t0.push_back((uint32_t) (k == 0 ? 0 : lay.tile_t0.back() + 1 + mtmd_legacy_suffix_rows(entries[k - 1].suffix_type)));
                 n += gw * gh + mtmd_legacy_suffix_rows(entries[k].suffix_type);
             }
+            lay.tile_row0.push_back((uint32_t) std::min(n, n_max + 1));
         } else {
             uint64_t nz = entries.size();
             if (n_temporal_merge > 1) {
@@ -577,6 +583,9 @@ struct mtmd_image_tokens {
             throw std::runtime_error("image chunk too large");
         }
         n_tok = (uint32_t) n;
+        if (lay.pos == MTMD_LEGACY_POS_MROPE && std::max(nx, ny) > n_max) {
+            throw std::runtime_error("invalid image grid");
+        }
         switch (lay.pos) {
             case MTMD_LEGACY_POS_MROPE:        n_pos = std::max(nx, ny); break;
             case MTMD_LEGACY_POS_SENSENOVA_U1: n_pos = 1;                break;
@@ -701,6 +710,11 @@ struct mtmd_input_chunk {
         }
         if (type == MTMD_INPUT_CHUNK_TYPE_AUDIO && !tokens_audio) {
             throw std::runtime_error("type is AUDIO but tokens_audio is missing");
+        }
+        // a chunk carries the payload of its type only, as every writer made it
+        if ((type != MTMD_INPUT_CHUNK_TYPE_IMAGE && tokens_image) || (type != MTMD_INPUT_CHUNK_TYPE_AUDIO && tokens_audio) ||
+                (type != MTMD_INPUT_CHUNK_TYPE_TEXT && !tokens_text.empty())) {
+            throw std::runtime_error("the payload does not match the chunk type");
         }
     }
 };
@@ -2611,6 +2625,11 @@ struct mtmd_gen_state {
             llama_memory_seq_rm(llama_get_memory(bank->gen_ctx.get()), seq, -1, -1);
         }
         bank->used[seq] = false;
+        // a set added for a peak of states goes with its last state; the first one encodes the references
+        auto & banks = ctx->gen_banks;
+        if (bank != banks[0].get() && std::none_of(bank->used.begin(), bank->used.end(), [](bool u) { return u; })) {
+            banks.erase(std::find_if(banks.begin(), banks.end(), [this](const auto & b) { return b.get() == bank; }));
+        }
     }
 };
 
@@ -2788,8 +2807,8 @@ static int32_t mtmd_gen_wav_native(mtmd_context * ctx, mtmd_gen_state * state, c
     }
 
     state->out_audio.clear();
-    for (int32_t f0 = 0; f0 < n_frames; f0 += (int32_t) llama_n_batch(wctx)) {
-        const int32_t n = std::min<int32_t>((int32_t) llama_n_batch(wctx), n_frames - f0);
+    for (int64_t f0 = 0; f0 < n_frames; f0 += llama_n_batch(wctx)) {
+        const int32_t n = (int32_t) std::min<int64_t>(llama_n_batch(wctx), n_frames - f0);
         llama_batch_ext_clear(batch);
         for (int32_t f = 0; f < n; ++f) {
             if (llama_batch_ext_add_codes(batch, state->seq, codes_src + (size_t) (f0 + f) * n_cb, n_cb) < 0) {

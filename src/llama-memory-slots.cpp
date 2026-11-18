@@ -125,6 +125,7 @@ bool llama_memory_slots::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1)
     return true;
 }
 
+// the whole state of the source replaces the destination's, whatever the range, as in the recurrent memory
 void llama_memory_slots::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
     GGML_UNUSED(p0);
     GGML_UNUSED(p1);

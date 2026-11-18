@@ -395,6 +395,9 @@ llama_context::llama_context(
                 const int n_samplers = llama_sampler_chain_n(config.sampler);
 
                 LLAMA_LOG_INFO("%s: setting backend sampler for seq_id %d (n = %d)\n", __func__, config.seq_id, n_samplers);
+            } else if (clip_native_code()) {
+                // the code predictor has no host sampling to fall back to
+                throw std::runtime_error("the code predictor takes only sampler chains that run on the backend");
             }
         }
     }
@@ -928,9 +931,7 @@ void llama_context::sched_reserve() {
 
     // clip models: a context runs every encoder tower of the file (a GEN context too, for the references of its
     // pipeline), the buffers fit the largest graph; the native code predictor (Qwen3-TTS) encodes nothing
-    const bool clip_native_code = model.arch == LLM_ARCH_CLIP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE &&
-                                  static_cast<const llama_model_clip &>(model).native_gen;
-    if (model.arch == LLM_ARCH_CLIP && !clip_native_code) {
+    if (model.arch == LLM_ARCH_CLIP && !clip_native_code()) {
         const auto & clip = static_cast<const llama_model_clip &>(model);
         const clip_model * main_tower = clip.engine_for_ctx(cparams.ctx_type);
         for (const clip_model * tower : { clip.engine_vision(), clip.engine_audio() }) {
@@ -1785,17 +1786,24 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
     if (sampler && can_offload) {
         auto * buft = ggml_backend_dev_buffer_type(model.dev_output());
 
+        // the native code predictor (Qwen3-TTS) draws every code inside its graph, with no host step after it:
+        // a chain that stops at a host-only sampler would silently fall back to argmax. A sampler without the
+        // backend API is refused before the chain is initialized, so that the caller can still use it
+        const bool whole_chain = clip_native_code() && strcmp(llama_sampler_name(sampler), "chain") == 0;
+        auto all_backend = [&](auto && pred) {
+            const auto * chain = (const llama_sampler_chain *) sampler->ctx;
+            return std::all_of(chain->samplers.begin(), chain->samplers.end(), pred);
+        };
+        if (whole_chain && !all_backend([](const auto & s) { return s.ptr->iface->backend_init && s.ptr->iface->backend_apply; })) {
+            LLAMA_LOG_ERROR("%s: seq_id = %d: every sampler of the chain must run on the backend in the code predictor\n", __func__, seq_id);
+            return false;
+        }
+
         sampler->iface->backend_init(sampler, buft, cparams.n_outputs_max_per_seq);
 
-        // the native code predictor (Qwen3-TTS) draws every code inside its graph, with no host step after it:
-        // a chain that stops at a host-only sampler would silently fall back to argmax
-        if (model.arch == LLM_ARCH_CLIP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE &&
-                static_cast<const llama_model_clip &>(model).native_gen && strcmp(llama_sampler_name(sampler), "chain") == 0) {
-            const auto * chain = (const llama_sampler_chain *) sampler->ctx;
-            if (std::any_of(chain->samplers.begin(), chain->samplers.end(), [](const auto & s) { return !s.is_backend; })) {
-                LLAMA_LOG_ERROR("%s: seq_id = %d: every sampler of the chain must run on the backend in the code predictor\n", __func__, seq_id);
-                return false;
-            }
+        if (whole_chain && !all_backend([](const auto & s) { return s.is_backend; })) {
+            LLAMA_LOG_ERROR("%s: seq_id = %d: a sampler of the chain declined the backend in the code predictor\n", __func__, seq_id);
+            return false;
         }
 
         sampling.samplers[seq_id] = sampler;
@@ -2002,34 +2010,51 @@ static llama_ubatch llama_media_ubatch(uint32_t n_rows, const llama_media_input 
     return ubatch;
 }
 
+bool llama_context::clip_native_code() const {
+    return model.arch == LLM_ARCH_CLIP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE &&
+           static_cast<const llama_model_clip &>(model).native_gen;
+}
+
 clip_subcontext * llama_context::clip_sub(const clip_model & m) {
     // a processor's stream queries may race the first encode of the tower
-    std::lock_guard<std::mutex> lock(clip_subs_mutex);
-    auto & sub = clip_subs[&m];
-    if (!sub) {
-        sub = std::make_unique<clip_subcontext>(m, llama_model_clip::engine_flash_attn(m, cparams));
-        clip_subcontext * s = sub.get();
-        s->exec = [this, s](clip_subctx_encode_params * req) { return clip_exec(*s, req); };
-        ggml_backend_dev_t dev_state = model.dev_output();
-        s->state_buft = dev_state ? ggml_backend_dev_buffer_type(dev_state) : ggml_backend_cpu_buffer_type();
-
-        // whether the graph takes several media of equal geometry at once, asked on a graph that is not built
-        if (m.modality != CLIP_MODALITY_GEN_AUDIO) {
-            ggml_init_params ip = {
-                /*.mem_size   =*/ ggml_tensor_overhead() * 64 + ggml_graph_overhead(),
-                /*.mem_buffer =*/ nullptr,
-                /*.no_alloc   =*/ true,
-            };
-            ggml_context_ptr ctx_probe(ggml_init(ip));
-            s->ctx0 = ctx_probe.get();
-            s->gf   = ggml_new_graph(ctx_probe.get());
-            const clip_image_f32_batch batch = s->get_dummy_batch(true);
-            s->support_batch = clip_get_graph_builder(s, batch)->support_batch();
-            s->ctx0 = nullptr;
-            s->gf   = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(clip_subs_mutex);
+        const auto it = clip_subs.find(&m);
+        if (it != clip_subs.end()) {
+            return it->second.get();
         }
     }
-    return sub.get();
+
+    // built outside the lock: the probe below logs, and a log callback may query the processor; the first one
+    // stored wins
+    auto sub = std::make_unique<clip_subcontext>(m, llama_model_clip::engine_flash_attn(m, cparams));
+    clip_subcontext * s = sub.get();
+    s->exec = [this, s](clip_subctx_encode_params * req) { return clip_exec(*s, req); };
+    ggml_backend_dev_t dev_state = model.dev_output();
+    s->state_buft = dev_state ? ggml_backend_dev_buffer_type(dev_state) : ggml_backend_cpu_buffer_type();
+
+    // whether the graph takes several media of equal geometry at once, asked on a graph that is not built
+    if (m.modality != CLIP_MODALITY_GEN_AUDIO) {
+        ggml_init_params ip = {
+            /*.mem_size   =*/ ggml_tensor_overhead() * 64 + ggml_graph_overhead(),
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+        ggml_context_ptr ctx_probe(ggml_init(ip));
+        s->ctx0 = ctx_probe.get();
+        s->gf   = ggml_new_graph(ctx_probe.get());
+        const clip_image_f32_batch batch = s->get_dummy_batch(true);
+        s->support_batch = clip_get_graph_builder(s, batch)->support_batch();
+        s->ctx0 = nullptr;
+        s->gf   = nullptr;
+    }
+
+    std::lock_guard<std::mutex> lock(clip_subs_mutex);
+    auto & slot = clip_subs[&m];
+    if (!slot) {
+        slot = std::move(sub);
+    }
+    return slot.get();
 }
 
 int llama_context::encode_media_engine_group(llama_media * const * media, size_t n) {
@@ -2649,6 +2674,11 @@ int llama_context::gen_code(const llama_batch_ext & batch_inp) {
             return -1;
         }
         const llama_seq_id seq = *tok.seq_ids.begin();
+        // a batch built by llama_batch_ext_from_batch() carries the raw ids of a llama_batch
+        if (seq < 0 || (uint32_t) seq >= cparams.n_seq_max || tok.id < 0 || (batch_inp.n_vocab > 0 && tok.id >= batch_inp.n_vocab)) {
+            LLAMA_LOG_ERROR("%s: entry %d: invalid sequence %d or token %d\n", __func__, i, seq, tok.id);
+            return -1;
+        }
 
         auto udata = std::make_shared<llama_ubatch::data_t>();
         udata->token     = { tok.id };
@@ -2750,6 +2780,10 @@ int llama_context::gen_wav(const llama_batch_ext & batch_inp) {
     }
     const llama_seq_id seq     = *tok0.seq_ids.begin();
     const int32_t      n_codes = tok0.n_codes;
+    if (seq < 0 || (uint32_t) seq >= cparams.n_seq_max) {
+        LLAMA_LOG_ERROR("%s: invalid sequence %d\n", __func__, seq);
+        return -1;
+    }
 
     if (t_compute_start_us == 0) {
         t_compute_start_us = ggml_time_us();

@@ -109,18 +109,26 @@ private:
 };
 
 // whether the rows a caller passes are the encoded rows of the media: rows edited after the encode take the path
-// of explicit rows
-static bool mtmd_helper_rows_are_media(const llama_media * m, const float * embd) {
+// of explicit rows; n_embd is the row width of the caller's buffer
+static bool mtmd_helper_rows_are_media(const llama_media * m, const float * embd, int64_t n_embd) {
     if (embd == nullptr) {
         return true;
     }
     const int64_t n_rows = llama_media_n_tokens(m);
-    const int64_t n_embd = llama_media_get_rows(m, 0, 0, nullptr);
-    std::vector<float> rows((size_t) n_rows * n_embd);
-    if (n_embd == 0 || llama_media_get_rows(m, 0, n_rows, rows.data()) != n_embd) {
+    if (llama_media_get_rows(m, 0, 0, nullptr) != n_embd) {
         return false;
     }
-    return std::memcmp(rows.data(), embd, rows.size() * sizeof(float)) == 0;
+    // compared a block of rows at a time
+    const int64_t n_block = std::max<int64_t>(1, (1 << 16) / std::max<int64_t>(n_embd, 1));
+    std::vector<float> rows((size_t) std::min(n_rows, n_block) * n_embd);
+    for (int64_t r = 0; r < n_rows; r += n_block) {
+        const int64_t n = std::min(n_block, n_rows - r);
+        if (llama_media_get_rows(m, r, n, rows.data()) != n_embd ||
+                std::memcmp(rows.data(), embd + r * n_embd, (size_t) n * n_embd * sizeof(float)) != 0) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // Helper function for decoding an image whose embeddings have already been calculated
@@ -145,7 +153,8 @@ int32_t mtmd_helper_decode_image_chunk(
 
     // libllama engine: the media rows carry their positions and attention span, no causal toggle
     if (llama_media * lmedia = mtmd_input_chunk_get_llama_media(chunk);
-            lmedia && callback == nullptr && llama_media_is_encoded(lmedia) && mtmd_helper_rows_are_media(lmedia, encoded_embd)) {
+            lmedia && callback == nullptr && llama_media_is_encoded(lmedia) &&
+            mtmd_helper_rows_are_media(lmedia, encoded_embd, llama_model_n_embd_inp(llama_get_model(lctx)))) {
         const uint32_t n_rows = llama_media_n_tokens(lmedia);
         const uint32_t step   = llama_media_is_atomic(lmedia) ? n_rows : (uint32_t) n_batch;
         llama_batch_ext * batch = llama_batch_ext_init(lctx);
@@ -177,6 +186,10 @@ int32_t mtmd_helper_decode_image_chunk(
     int n_pos_per_embd = mtmd_decode_use_mrope(ctx) ? 4 : 1;
 
     int32_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk);
+    // the rows of an atomic media attend to each other: one call, as on the media path
+    if (const llama_media * lm = mtmd_input_chunk_get_llama_media(chunk); lm && llama_media_is_atomic(lm)) {
+        n_batch = std::max(n_batch, n_tokens);
+    }
     int32_t i_batch = 0;
     int32_t n_img_batches = (n_tokens + n_batch - 1) / n_batch;
     decode_embd_batch batch_embd(encoded_embd, n_tokens, n_pos_per_embd, n_mmproj_embd);

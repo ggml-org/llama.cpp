@@ -770,6 +770,10 @@ server_tokens server_tokens::deserialize(const llama_tokens & packed, bool has_m
         if (!chunk) {
             throw std::runtime_error("Cannot load media chunk from server tokens state");
         }
+        // the hashes below read the id of a media chunk
+        if (mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+            throw std::runtime_error("Text chunk in the media of server tokens state");
+        }
         result.map_idx_to_media[start_idx] = std::move(chunk);
     }
 

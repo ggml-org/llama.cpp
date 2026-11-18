@@ -914,6 +914,14 @@ MAKE_TEST(test_legacy_chunk_bounds) {
     // a HunyuanVL grid whose row count wraps 32 bits
     t.assert_true("wrapping grid", image_chunk(UINT32_MAX, 2, 2, { { 0, 0, 0, 448, 448 } }) == nullptr);
 
+    // an audio chunk carrying an image as well
+    buf.clear();
+    u64(3); u32(MTMD_INPUT_CHUNK_TYPE_AUDIO); u64(0);
+    u8(1); u32(16); u32(16); u32(1); u32(0); u32(1); u64(0); u8(0); u64(1);
+    u8(0); u8(0); i32(0); i32(0); i32(0); i32(0); i32(0); i32(0); i32(448); i32(448);
+    u8(1); u32(10); u64(0); u8(1); u64(0);
+    t.assert_true("audio chunk with an image", mtmd_input_chunk_load(buf.data(), buf.size()) == nullptr);
+
     // a 2 x 1 canvas: the overview, two slices, their separators; positions survive a save in the current version
     mtmd_input_chunk * chunk = image_chunk(16, 16, 3, { { 2, 2, 1, 448, 448 }, { 3, 0, 0, 448, 448 }, { 5, 0, 0, 448, 448 } });
     t.assert_true("canvas loaded", chunk != nullptr);
@@ -949,6 +957,15 @@ MAKE_TEST(test_legacy_chunk_bounds) {
         const mtmd_decoder_pos s2 = mtmd_image_tokens_get_decoder_pos(a, 100, 516);
         t.assert_equal("slice 2 x", (llama_pos) s1.x + 16, (llama_pos) s2.x);
         t.assert_equal("slice 2 y", (llama_pos) s1.y, (llama_pos) s2.y);
+        // t of each tile and separator, as the old engine's loop gave them: overview 100, its separators 101 and
+        // 102, slice 1 103, its separators 104 and 105, slice 2 106, its separator 107
+        const size_t rows[]  = { 0, 255, 256, 257, 258, 513, 514, 515, 516, 771, 772 };
+        const llama_pos ts[] = { 100, 100, 101, 102, 103, 103, 104, 105, 106, 106, 107 };
+        size_t n_t_diff = 0;
+        for (size_t k = 0; k < sizeof(rows) / sizeof(rows[0]); ++k) {
+            n_t_diff += (llama_pos) mtmd_image_tokens_get_decoder_pos(a, 100, rows[k]).t != ts[k];
+        }
+        t.assert_equal("canvas t of tiles and separators", (size_t) 0, n_t_diff);
     }
     mtmd_input_chunk_free(placeholder);
     mtmd_input_chunk_free(reloaded);

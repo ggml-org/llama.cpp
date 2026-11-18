@@ -508,7 +508,7 @@ int64_t llama_media_get_rows(const struct llama_media * m, int64_t row0, int64_t
     if (m->rows.empty()) {
         return 0;
     }
-    if (row0 < 0 || n_rows < 0 || row0 + n_rows > (int64_t) m->n_tokens) {
+    if (row0 < 0 || n_rows < 0 || row0 > (int64_t) m->n_tokens || n_rows > (int64_t) m->n_tokens - row0) {
         return 0;
     }
     if (out) {
