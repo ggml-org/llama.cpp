@@ -156,7 +156,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: false,
-				help: 'Show the Discover Models sidebar action to browse and download HuggingFace GGUF models. Turns the Hugging Face Hub API on while it is enabled. Only available in router mode.',
+				help: 'Show Discover Models on the Models page, to browse and download HuggingFace GGUF models. Turns Models and the Hugging Face Hub API on while it is enabled. Only available in router mode.',
 				key: SETTINGS_KEYS.ENABLE_DISCOVER_MODELS,
 				label: 'Enable Discover Models',
 				type: SettingsFieldType.CHECKBOX

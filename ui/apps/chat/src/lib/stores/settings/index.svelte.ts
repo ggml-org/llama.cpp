@@ -422,15 +422,18 @@ class SettingsStore {
 	}
 
 	/**
-	 * Discover needs the hub metadata reads, so a checked Discover Models keeps
-	 * the hub setting on; call wherever stored or reset state may disagree.
+	 * Discover needs the hub metadata reads and opens from the Models page, so a
+	 * checked Discover Models keeps the hub setting and Models on; call wherever
+	 * stored or reset state may disagree.
 	 */
 	private enforceDiscoverCoupling(): void {
 		if (
 			this.config[SETTINGS_KEYS.ENABLE_DISCOVER_MODELS] &&
-			!this.config[SETTINGS_KEYS.USE_HUGGING_FACE_HUB]
+			(!this.config[SETTINGS_KEYS.USE_HUGGING_FACE_HUB] ||
+				!this.config[SETTINGS_KEYS.SHOW_MODELS_MANAGER])
 		) {
 			setConfigValue(this.config, SETTINGS_KEYS.USE_HUGGING_FACE_HUB, true);
+			setConfigValue(this.config, SETTINGS_KEYS.SHOW_MODELS_MANAGER, true);
 			this.saveConfig();
 		}
 	}
