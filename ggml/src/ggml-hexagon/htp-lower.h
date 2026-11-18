@@ -31,6 +31,7 @@ void htp_lightning_indexer_collapse_tensors(const struct ggml_tensor * q, const 
 void htp_lower_opnode(const struct ggml_hexagon_session * sess, htp_opnode & node, struct ggml_tensor * scratch = nullptr);
 void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml_cgraph * graph, std::vector<htp_opnode> & nodes);
 void htp_lower_reset_graph(const struct ggml_cgraph * graph);
+void htp_pack_tensor_lowered_f16(struct ggml_tensor * t, const void * src, size_t offset, size_t size);
 void htp_unpack_tensor_lowered_f16(void * dst, const struct ggml_tensor * t, size_t offset, size_t size);
 
 #endif // HTP_LOWER_H

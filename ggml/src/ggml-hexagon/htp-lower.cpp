@@ -886,6 +886,25 @@ void htp_lower_reset_graph(const struct ggml_cgraph * graph) {
     }
 }
 
+void htp_pack_tensor_lowered_f16(struct ggml_tensor * t, const void * src, size_t offset, size_t size) {
+    if (size == 0) {
+        return;
+    }
+    GGML_ASSERT(t->type == GGML_TYPE_F32);
+    GGML_ASSERT(offset % sizeof(float) == 0 && size % sizeof(float) == 0);
+    const struct ggml_tensor * root = htp_tensor_root(t);
+    uint8_t * base = (uint8_t *) root->data + ((const uint8_t *) t->data - (const uint8_t *) root->data) / 2;
+    ggml_fp16_t * dst = (ggml_fp16_t *) (base + offset / 2);
+    const int64_t n = (int64_t) (size / sizeof(float));
+    if ((uintptr_t) src % alignof(float) == 0) {
+        ggml_fp32_to_fp16_row((const float *) src, dst, n);
+    } else {
+        std::vector<float> tmp((size_t) n);
+        memcpy(tmp.data(), src, size);
+        ggml_fp32_to_fp16_row(tmp.data(), dst, n);
+    }
+}
+
 void htp_unpack_tensor_lowered_f16(void * dst, const struct ggml_tensor * t, size_t offset, size_t size) {
     if (size == 0) {
         return;
