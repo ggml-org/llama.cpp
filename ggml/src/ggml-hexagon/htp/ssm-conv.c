@@ -21,6 +21,38 @@
 #include "hvx-utils.h"
 #include "ssm-conv.h"
 
+typedef void (*htp_ssm_conv_decode_dot_fn_t)(
+    const void * restrict  raw_in,
+    float * restrict       src0_T,
+    const float * restrict src1_raw,
+    const float * restrict src1_T,
+    float * restrict       out,
+    uint32_t               tile_n,
+    uint32_t               d_inner_stride,
+    uint32_t               tile_off,
+    uint32_t               d_conv);
+
+typedef void (*htp_ssm_conv_transpose_block_fn_t)(
+    const void * restrict raw_block,
+    float * restrict      T,
+    uint32_t              raw_stride_bytes,
+    uint32_t              ncs,
+    uint32_t              cb_n);
+
+typedef void (*htp_ssm_conv_prefill_dot_fn_t)(
+    const float * restrict src0_T,
+    const float * restrict wp,
+    float * restrict       op,
+    uint32_t               n_t,
+    uint32_t               d_conv,
+    uint32_t               d_inner_stride,
+    uint32_t               dst_tile_stride);
+
+typedef size_t (*htp_ssm_conv_epilogue_fn_t)(
+    float * restrict out,
+    uint32_t         n_t,
+    uint32_t         tile_n);
+
 struct htp_ssm_conv_context {
     struct htp_ops_context *                  octx;
     const struct htp_ssm_conv_kernel_params * kparams;
@@ -28,6 +60,11 @@ struct htp_ssm_conv_context {
     uint32_t                                  d_inner_tile;
     uint32_t                                  row_start;
     uint32_t                                  nrows;
+    bool                                      raw_dot;
+    htp_ssm_conv_decode_dot_fn_t              decode_dot_fn;
+    htp_ssm_conv_transpose_block_fn_t         transpose_block_fn;
+    htp_ssm_conv_prefill_dot_fn_t             prefill_dot_fn;
+    htp_ssm_conv_epilogue_fn_t                epilogue_fn;
 };
 
 static __attribute__((noinline)) void hvx_ssm_conv_widen_f16_vtcm(const __fp16 * restrict src,
@@ -240,14 +277,100 @@ static __attribute__((noinline)) void hvx_ssm_conv_decode_dot_gen(const float * 
     }
 }
 
+static size_t ssm_conv_epilogue_f32(float * restrict out, uint32_t n_t, uint32_t tile_n) {
+    (void) out;
+    (void) n_t;
+    return (size_t) hex_round_up(tile_n, VLEN_FP32) * sizeof(float);
+}
+
+static size_t ssm_conv_epilogue_silu_f32(float * restrict out, uint32_t n_t, uint32_t tile_n) {
+    const uint32_t dst_tile_stride = hex_round_up(tile_n, VLEN_FP32);
+    hvx_ssm_conv_silu_vtcm(out, n_t * (dst_tile_stride / VLEN_FP32));
+    return (size_t) dst_tile_stride * sizeof(float);
+}
+
+static size_t ssm_conv_epilogue_f16(float * restrict out, uint32_t n_t, uint32_t tile_n) {
+    hvx_ssm_conv_pack_f16_rows_vtcm(out, n_t, tile_n);
+    return (size_t) hex_round_up(tile_n, VLEN_FP16) * sizeof(__fp16);
+}
+
+static size_t ssm_conv_epilogue_silu_f16(float * restrict out, uint32_t n_t, uint32_t tile_n) {
+    const uint32_t dst_tile_stride = hex_round_up(tile_n, VLEN_FP32);
+    hvx_ssm_conv_silu_vtcm(out, n_t * (dst_tile_stride / VLEN_FP32));
+    hvx_ssm_conv_pack_f16_rows_vtcm(out, n_t, tile_n);
+    return (size_t) hex_round_up(tile_n, VLEN_FP16) * sizeof(__fp16);
+}
+
+static void ssm_conv_decode_dot_4_f32(const void * restrict  raw_in,
+                                      float * restrict       src0_T,
+                                      const float * restrict src1_raw,
+                                      const float * restrict src1_T,
+                                      float * restrict       out,
+                                      uint32_t               tile_n,
+                                      uint32_t               d_inner_stride,
+                                      uint32_t               tile_off,
+                                      uint32_t               d_conv) {
+    (void) src0_T;
+    (void) src1_T;
+    (void) d_inner_stride;
+    (void) d_conv;
+    hvx_ssm_conv_decode_4((const float *) raw_in, src1_raw + tile_off * 4, out, tile_n);
+}
+
+static void ssm_conv_decode_dot_4_f16(const void * restrict  raw_in,
+                                      float * restrict       src0_T,
+                                      const float * restrict src1_raw,
+                                      const float * restrict src1_T,
+                                      float * restrict       out,
+                                      uint32_t               tile_n,
+                                      uint32_t               d_inner_stride,
+                                      uint32_t               tile_off,
+                                      uint32_t               d_conv) {
+    (void) src0_T;
+    (void) src1_T;
+    (void) d_inner_stride;
+    (void) d_conv;
+    hvx_ssm_conv_decode_4_f16((const __fp16 *) raw_in, src1_raw + tile_off * 4, out, tile_n);
+}
+
+static void ssm_conv_decode_dot_gen_f32(const void * restrict  raw_in,
+                                        float * restrict       src0_T,
+                                        const float * restrict src1_raw,
+                                        const float * restrict src1_T,
+                                        float * restrict       out,
+                                        uint32_t               tile_n,
+                                        uint32_t               d_inner_stride,
+                                        uint32_t               tile_off,
+                                        uint32_t               d_conv) {
+    (void) src1_raw;
+    const uint32_t tile_stride = hex_round_up(tile_n, VLEN_FP32);
+    hvx_ssm_conv_unpack_to_T((const float *) raw_in, src0_T, tile_n, tile_stride, d_conv);
+    hvx_ssm_conv_decode_dot_gen(src0_T, src1_T, out, tile_n, tile_stride, d_inner_stride, tile_off, d_conv);
+}
+
+static void ssm_conv_decode_dot_gen_f16(const void * restrict  raw_in,
+                                        float * restrict       src0_T,
+                                        const float * restrict src1_raw,
+                                        const float * restrict src1_T,
+                                        float * restrict       out,
+                                        uint32_t               tile_n,
+                                        uint32_t               d_inner_stride,
+                                        uint32_t               tile_off,
+                                        uint32_t               d_conv) {
+    (void) src1_raw;
+    const uint32_t tile_stride = hex_round_up(tile_n, VLEN_FP32);
+    hvx_ssm_conv_unpack_to_T_f16((const __fp16 *) raw_in, src0_T, tile_n, tile_stride, d_conv);
+    hvx_ssm_conv_decode_dot_gen(src0_T, src1_T, out, tile_n, tile_stride, d_inner_stride, tile_off, d_conv);
+}
+
 // Transpose src0 for prefill: one 32-channel block {32, ncs} (VTCM) -> T {ncs, 32} (VTCM).
 // One VTCM gather per output row: lane r picks channel cb+r, the region bound drops
 // the lanes past the channel tail.
-static __attribute__((noinline)) void hvx_ssm_conv_transpose_block(const float * restrict raw_block,
-                                                                   float * restrict       T,
-                                                                   uint32_t               raw_stride_bytes,
-                                                                   uint32_t               ncs,
-                                                                   uint32_t               cb_n) {
+static __attribute__((noinline)) void hvx_ssm_conv_transpose_block(const void * restrict raw_block,
+                                                                   float * restrict      T,
+                                                                   uint32_t              raw_stride_bytes,
+                                                                   uint32_t              ncs,
+                                                                   uint32_t              cb_n) {
     const size_t     base = (size_t) raw_block;
     const uint32_t   mu   = cb_n * raw_stride_bytes - 1;
     const HVX_Vector vv   = hvx_vec_gather_offsets_w(raw_stride_bytes);
@@ -261,11 +384,11 @@ static __attribute__((noinline)) void hvx_ssm_conv_transpose_block(const float *
 
 // Transpose + widen F16 src0 for prefill: each 32-bit word gather fetches 2 consecutive F16 time steps
 // across 32 channels into even rows of T, then hvx_vec_f16_to_f32_shuff widens them into rows t and t+1.
-static __attribute__((noinline)) void hvx_ssm_conv_transpose_block_f16(const __fp16 * restrict raw_block,
-                                                                       float * restrict        T,
-                                                                       uint32_t                raw_stride_bytes,
-                                                                       uint32_t                ncs,
-                                                                       uint32_t                cb_n) {
+static __attribute__((noinline)) void hvx_ssm_conv_transpose_block_f16(const void * restrict raw_block,
+                                                                       float * restrict      T,
+                                                                       uint32_t              raw_stride_bytes,
+                                                                       uint32_t              ncs,
+                                                                       uint32_t              cb_n) {
     const size_t     base  = (size_t) raw_block;
     const uint32_t   mu    = cb_n * raw_stride_bytes - 1;
     const HVX_Vector vv    = hvx_vec_gather_offsets_w(raw_stride_bytes);
@@ -286,48 +409,56 @@ static __attribute__((noinline)) void hvx_ssm_conv_transpose_block_f16(const __f
     }
 }
 
-static __attribute__((noinline)) void hvx_ssm_conv_prefill_dot_block(const float * restrict src0_T,
-                                                                     const float * restrict wp,
-                                                                     float * restrict       op,
-                                                                     uint32_t               n_t,
-                                                                     uint32_t               d_conv,
-                                                                     uint32_t               d_inner_stride,
-                                                                     uint32_t               dst_tile_stride) {
+static __attribute__((noinline)) void hvx_ssm_conv_prefill_dot_block_4(const float * restrict src0_T,
+                                                                       const float * restrict wp,
+                                                                       float * restrict       op,
+                                                                       uint32_t               n_t,
+                                                                       uint32_t               d_conv,
+                                                                       uint32_t               d_inner_stride,
+                                                                       uint32_t               dst_tile_stride) {
+    (void) d_conv;
+    const uint32_t   C_TILE = VLEN_FP32;
+    const HVX_Vector w0     = *(const HVX_Vector *) (wp);
+    const HVX_Vector w1     = *(const HVX_Vector *) (wp + d_inner_stride);
+    const HVX_Vector w2     = *(const HVX_Vector *) (wp + 2 * d_inner_stride);
+    const HVX_Vector w3     = *(const HVX_Vector *) (wp + 3 * d_inner_stride);
+
+    HVX_Vector x0 = *(const HVX_Vector *) (src0_T);
+    HVX_Vector x1 = *(const HVX_Vector *) (src0_T + C_TILE);
+    HVX_Vector x2 = *(const HVX_Vector *) (src0_T + 2 * C_TILE);
+
+    for (uint32_t t = 0; t < n_t; ++t) {
+        const HVX_Vector x3 = *(const HVX_Vector *) (src0_T + (t + 3) * C_TILE);
+
+        HVX_Vector a = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(x0, w0),
+                                                Q6_Vqf32_vmpy_VsfVsf(x1, w1));
+        HVX_Vector b = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(x2, w2),
+                                                Q6_Vqf32_vmpy_VsfVsf(x3, w3));
+
+        *(HVX_Vector *) (op + t * dst_tile_stride) = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(a, b));
+
+        x0 = x1;
+        x1 = x2;
+        x2 = x3;
+    }
+}
+
+static __attribute__((noinline)) void hvx_ssm_conv_prefill_dot_block_gen(const float * restrict src0_T,
+                                                                         const float * restrict wp,
+                                                                         float * restrict       op,
+                                                                         uint32_t               n_t,
+                                                                         uint32_t               d_conv,
+                                                                         uint32_t               d_inner_stride,
+                                                                         uint32_t               dst_tile_stride) {
     const uint32_t C_TILE = VLEN_FP32;
-    if (d_conv == 4) {
-        const HVX_Vector w0 = *(const HVX_Vector *) (wp);
-        const HVX_Vector w1 = *(const HVX_Vector *) (wp + d_inner_stride);
-        const HVX_Vector w2 = *(const HVX_Vector *) (wp + 2 * d_inner_stride);
-        const HVX_Vector w3 = *(const HVX_Vector *) (wp + 3 * d_inner_stride);
-
-        HVX_Vector x0 = *(const HVX_Vector *) (src0_T);
-        HVX_Vector x1 = *(const HVX_Vector *) (src0_T + C_TILE);
-        HVX_Vector x2 = *(const HVX_Vector *) (src0_T + 2 * C_TILE);
-
-        for (uint32_t t = 0; t < n_t; ++t) {
-            const HVX_Vector x3 = *(const HVX_Vector *) (src0_T + (t + 3) * C_TILE);
-
-            HVX_Vector a = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(x0, w0),
-                                                    Q6_Vqf32_vmpy_VsfVsf(x1, w1));
-            HVX_Vector b = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(x2, w2),
-                                                    Q6_Vqf32_vmpy_VsfVsf(x3, w3));
-
-            *(HVX_Vector *) (op + t * dst_tile_stride) = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(a, b));
-
-            x0 = x1;
-            x1 = x2;
-            x2 = x3;
+    for (uint32_t t = 0; t < n_t; ++t) {
+        HVX_Vector acc = hvx_vec_splat_f32(0.0f);
+        for (uint32_t j = 0; j < d_conv; ++j) {
+            HVX_Vector x = *(const HVX_Vector *) (src0_T + (t + j) * C_TILE);
+            HVX_Vector w = *(const HVX_Vector *) (wp + j * d_inner_stride);
+            acc          = Q6_Vqf32_vadd_Vqf32Vqf32(acc, Q6_Vqf32_vmpy_VsfVsf(x, w));
         }
-    } else {
-        for (uint32_t t = 0; t < n_t; ++t) {
-            HVX_Vector acc = hvx_vec_splat_f32(0.0f);
-            for (uint32_t j = 0; j < d_conv; ++j) {
-                HVX_Vector x = *(const HVX_Vector *) (src0_T + (t + j) * C_TILE);
-                HVX_Vector w = *(const HVX_Vector *) (wp + j * d_inner_stride);
-                acc          = Q6_Vqf32_vadd_Vqf32Vqf32(acc, Q6_Vqf32_vmpy_VsfVsf(x, w));
-            }
-            *(HVX_Vector *) (op + t * dst_tile_stride) = Q6_Vsf_equals_Vqf32(acc);
-        }
+        *(HVX_Vector *) (op + t * dst_tile_stride) = Q6_Vsf_equals_Vqf32(acc);
     }
 }
 
@@ -343,13 +474,16 @@ static void ssm_conv_thread_f32_decode(const htp_thread_t * th, unsigned int nth
 
     dma_queue * dma_q = th->dma_q;
 
-    const uint32_t d_conv     = kparams->d_conv;
-    const uint32_t d_inner    = kparams->d_inner;
-    const uint32_t n_s        = kparams->n_s;
-    const bool     apply_silu = kparams->silu != 0;
-    const bool     src0_f16   = (src0->type == HTP_TYPE_F16);
-    const bool     src1_f16   = (src1->type == HTP_TYPE_F16);
-    const bool     dst_f16    = (dst->type  == HTP_TYPE_F16);
+    const uint32_t d_conv   = kparams->d_conv;
+    const uint32_t d_inner  = kparams->d_inner;
+    const uint32_t n_s      = kparams->n_s;
+    const bool     src0_f16 = (src0->type == HTP_TYPE_F16);
+    const bool     src1_f16 = (src1->type == HTP_TYPE_F16);
+    const bool     dst_f16  = (dst->type  == HTP_TYPE_F16);
+    const bool     raw_dot  = scctx->raw_dot;
+
+    const htp_ssm_conv_decode_dot_fn_t decode_dot_fn = scctx->decode_dot_fn;
+    const htp_ssm_conv_epilogue_fn_t   epilogue_fn   = scctx->epilogue_fn;
 
     const size_t src0_elem_size = src0_f16 ? sizeof(__fp16) : sizeof(float);
     const size_t src1_elem_size = src1_f16 ? sizeof(__fp16) : sizeof(float);
@@ -392,9 +526,6 @@ static void ssm_conv_thread_f32_decode(const htp_thread_t * th, unsigned int nth
     float * dst_tile[2] = { (float *) dst_spad_base, (float *) (dst_spad_base + dst_tile_bytes) };
 
     struct htp_thread_trace * tr = th->trace;
-
-    // raw_dot keeps both operands in the DMA layout, so src1 needs no transpose prep pass
-    const bool raw_dot = (d_conv == 4) && (d_inner_per_hvx % VLEN_FP32 == 0);
 
     const uint32_t n_tiles   = fastdiv(d_inner_per_hvx + d_inner_tile - 1, &kparams->div_d_inner_tile);
     const uint32_t n_chunks  = n_s * n_tiles;
@@ -455,28 +586,8 @@ static void ssm_conv_thread_f32_decode(const htp_thread_t * th, unsigned int nth
         float * restrict out = dst_tile[c & 1];
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) i3);
-        if (raw_dot) {
-            const float * wp = src1_raw + tile_off * 4;
-            if (src0_f16) {
-                hvx_ssm_conv_decode_4_f16((const __fp16 *) src0_tile_raw[c & 1], wp, out, tile_n);
-            } else {
-                hvx_ssm_conv_decode_4(src0_tile_raw[c & 1], wp, out, tile_n);
-            }
-        } else {
-            const uint32_t tile_stride = hex_round_up(tile_n, VLEN_FP32);
-            if (src0_f16) {
-                hvx_ssm_conv_unpack_to_T_f16((const __fp16 *) src0_tile_raw[c & 1], src0_T, tile_n, tile_stride, d_conv);
-            } else {
-                hvx_ssm_conv_unpack_to_T(src0_tile_raw[c & 1], src0_T, tile_n, tile_stride, d_conv);
-            }
-            hvx_ssm_conv_decode_dot_gen(src0_T, src1_T, out, tile_n, tile_stride, d_inner_stride, tile_off, d_conv);
-        }
-        if (apply_silu) {
-            hvx_ssm_conv_silu_vtcm(out, hex_round_up(tile_n, VLEN_FP32) / VLEN_FP32);
-        }
-        if (dst_f16) {
-            hvx_ssm_conv_pack_f16_rows_vtcm(out, 1, tile_n);
-        }
+        decode_dot_fn(src0_tile_raw[c & 1], src0_T, src1_raw, src1_T, out, tile_n, d_inner_stride, tile_off, d_conv);
+        epilogue_fn(out, 1, tile_n);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) i3);
 
         const dma_addr_t dst_ddr        = dst->data + (i3 * dst_stride_seq_bytes + (size_t) (ir0 + tile_off) * dst_elem_size);
@@ -517,15 +628,18 @@ static void ssm_conv_thread_f32_prefill(const htp_thread_t * th, unsigned int nt
 
     dma_queue * dma_q = th->dma_q;
 
-    const uint32_t d_conv     = kparams->d_conv;
-    const uint32_t d_inner    = kparams->d_inner;
-    const uint32_t n_t        = kparams->n_t;
-    const uint32_t n_s        = kparams->n_s;
-    const uint32_t ncs        = src0->ne[0];
-    const bool     apply_silu = kparams->silu != 0;
-    const bool     src0_f16   = (src0->type == HTP_TYPE_F16);
-    const bool     src1_f16   = (src1->type == HTP_TYPE_F16);
-    const bool     dst_f16    = (dst->type  == HTP_TYPE_F16);
+    const uint32_t d_conv   = kparams->d_conv;
+    const uint32_t d_inner  = kparams->d_inner;
+    const uint32_t n_t      = kparams->n_t;
+    const uint32_t n_s      = kparams->n_s;
+    const uint32_t ncs      = src0->ne[0];
+    const bool     src0_f16 = (src0->type == HTP_TYPE_F16);
+    const bool     src1_f16 = (src1->type == HTP_TYPE_F16);
+    const bool     dst_f16  = (dst->type  == HTP_TYPE_F16);
+
+    const htp_ssm_conv_transpose_block_fn_t transpose_block_fn = scctx->transpose_block_fn;
+    const htp_ssm_conv_prefill_dot_fn_t     prefill_dot_fn     = scctx->prefill_dot_fn;
+    const htp_ssm_conv_epilogue_fn_t        epilogue_fn        = scctx->epilogue_fn;
 
     const size_t src0_elem_size = src0_f16 ? sizeof(__fp16) : sizeof(float);
     const size_t src1_elem_size = src1_f16 ? sizeof(__fp16) : sizeof(float);
@@ -641,34 +755,20 @@ static void ssm_conv_thread_f32_prefill(const htp_thread_t * th, unsigned int nt
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) tile_off);
             const uint8_t * raw_ch = (const uint8_t *) raw + (size_t) cb * raw_stride_bytes;
-            if (src0_f16) {
-                hvx_ssm_conv_transpose_block_f16((const __fp16 *) raw_ch, src0_T, raw_stride_bytes, ncs, cb_n);
-            } else {
-                hvx_ssm_conv_transpose_block((const float *) raw_ch, src0_T, raw_stride_bytes, ncs, cb_n);
-            }
+            transpose_block_fn(raw_ch, src0_T, raw_stride_bytes, ncs, cb_n);
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) tile_off);
 
             const float * restrict wp = src1_T + tile_off + cb;
             float * restrict       op = out + cb;
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) tile_off);
-            hvx_ssm_conv_prefill_dot_block(src0_T, wp, op, n_t, d_conv, d_inner_stride, dst_tile_stride);
+            prefill_dot_fn(src0_T, wp, op, n_t, d_conv, d_inner_stride, dst_tile_stride);
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) tile_off);
         }
 
-        if (apply_silu) {
-            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) tile_off);
-            hvx_ssm_conv_silu_vtcm(out, n_t * (dst_tile_stride / C_TILE));
-            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) tile_off);
-        }
-
-        size_t dst_vtcm_stride_bytes = (size_t) dst_tile_stride * sizeof(float);
-        if (dst_f16) {
-            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) tile_off);
-            hvx_ssm_conv_pack_f16_rows_vtcm(out, n_t, tile_n);
-            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) tile_off);
-            dst_vtcm_stride_bytes = (size_t) hex_round_up(tile_n, VLEN_FP16) * sizeof(__fp16);
-        }
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) tile_off);
+        const size_t dst_vtcm_stride_bytes = epilogue_fn(out, n_t, tile_n);
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) tile_off);
 
         // Writeback dst_tile VTCM -> DDR via 2D DMA
         dma_queue_push(dma_q, dma_make_data(dst->data + (i3 * dst_stride_seq_bytes + (size_t) (ir0 + tile_off) * dst_elem_size), (uint8_t *) out),
@@ -755,13 +855,37 @@ int op_ssm_conv_f32(struct htp_ops_context * octx) {
     octx->src1_spad.src  = NULL;
     octx->dst_spad.src   = NULL;
 
+    const bool src0_f16   = (src0->type == HTP_TYPE_F16);
+    const bool dst_f16    = (dst->type  == HTP_TYPE_F16);
+    const bool apply_silu = kparams->silu != 0;
+    const bool raw_dot    = (kparams->d_conv == 4) && (nrows % VLEN_FP32 == 0);
+
+    htp_ssm_conv_decode_dot_fn_t decode_dot_fn;
+    if (raw_dot) {
+        decode_dot_fn = src0_f16 ? ssm_conv_decode_dot_4_f16 : ssm_conv_decode_dot_4_f32;
+    } else {
+        decode_dot_fn = src0_f16 ? ssm_conv_decode_dot_gen_f16 : ssm_conv_decode_dot_gen_f32;
+    }
+
+    htp_ssm_conv_epilogue_fn_t epilogue_fn;
+    if (apply_silu) {
+        epilogue_fn = dst_f16 ? ssm_conv_epilogue_silu_f16 : ssm_conv_epilogue_silu_f32;
+    } else {
+        epilogue_fn = dst_f16 ? ssm_conv_epilogue_f16 : ssm_conv_epilogue_f32;
+    }
+
     struct htp_ssm_conv_context scctx = {
-        .octx             = octx,
-        .kparams          = kparams,
-        .nrows_per_hvx    = d_inner_per_hvx,
-        .d_inner_tile     = kparams->d_inner_tile,
-        .row_start        = row_start,
-        .nrows            = nrows,
+        .octx               = octx,
+        .kparams            = kparams,
+        .nrows_per_hvx      = d_inner_per_hvx,
+        .d_inner_tile       = kparams->d_inner_tile,
+        .row_start          = row_start,
+        .nrows              = nrows,
+        .raw_dot            = raw_dot,
+        .decode_dot_fn      = decode_dot_fn,
+        .transpose_block_fn = src0_f16 ? hvx_ssm_conv_transpose_block_f16 : hvx_ssm_conv_transpose_block,
+        .prefill_dot_fn     = (kparams->d_conv == 4) ? hvx_ssm_conv_prefill_dot_block_4 : hvx_ssm_conv_prefill_dot_block_gen,
+        .epilogue_fn        = epilogue_fn,
     };
 
     FARF(HIGH, "ssm-conv-f32: (%ux%ux%ux%u) x (%ux%ux%ux%u) -> (%ux%ux%ux%u) : mode %s\n",

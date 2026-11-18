@@ -2212,7 +2212,15 @@ static bool htp_kparams_solve_ssm_conv(
     if (src0->nb[0] != src0_elem_size || src1->nb[0] != src1_elem_size || dst->nb[0] != dst_elem_size) {
         return false;
     }
-    if (src0->nb[1] != (size_t) src0->ne[0] * src0_elem_size || src1->nb[1] != (size_t) src1->ne[0] * src1_elem_size) {
+    if (src1->nb[1] != (size_t) src1->ne[0] * src1_elem_size) {
+        return false;
+    }
+    if ((d_inner_64 > 1 && src0->nb[1] < (size_t) src0->ne[0] * src0_elem_size) ||
+        (n_s_64 > 1 && src0->nb[2] < (size_t) d_inner_64 * src0->nb[1])) {
+        return false;
+    }
+    if ((n_t_64 > 1 && dst->nb[1] < (size_t) d_inner_64 * dst_elem_size) ||
+        (n_s_64 > 1 && dst->nb[2] < (size_t) n_t_64 * dst->nb[1])) {
         return false;
     }
 

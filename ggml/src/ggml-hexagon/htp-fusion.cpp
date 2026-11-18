@@ -399,7 +399,6 @@ static bool fuse_gdn_cpy(const ggml_hexagon_session * sess, htp_opnode & prev, c
 }
 
 static bool fuse_ssm_conv_silu(const ggml_hexagon_session * sess, htp_opnode & prev, const htp_opnode & cur) {
-    GGML_UNUSED(sess);
     if (prev.opcode != HTP_OP_SSM_CONV) return false;
 
     auto * kparams = prev.kparams<htp_ssm_conv_kernel_params>();
@@ -408,12 +407,17 @@ static bool fuse_ssm_conv_silu(const ggml_hexagon_session * sess, htp_opnode & p
 
     const ggml_tensor * conv_dst = prev.dst();
     const ggml_tensor * dst      = cur.dst();
-    if (!ggml_are_same_shape(conv_dst, dst) || !ggml_is_contiguous(conv_dst) || !ggml_is_contiguous(dst)) return false;
+    if (!ggml_are_same_shape(conv_dst, cur.src0()) || !ggml_are_same_stride(conv_dst, cur.src0())) return false;
+    if (!ggml_are_same_shape(conv_dst, dst)) return false;
     if (htp_tensors_overlap(dst, prev.src0()) || htp_tensors_overlap(dst, prev.src1())) return false;
 
-    kparams->silu   = 1;
-    prev.outputs[0] = dst;
-    prev.fused.push_back(cur.node);
+    htp_opnode cand = prev;
+    cand.outputs[0] = dst;
+    cand.fused.push_back(cur.node);
+    cand.kparams<htp_ssm_conv_kernel_params>()->silu = 1;
+    if (!htp_kparams_solve(sess, cand)) return false;
+
+    prev = std::move(cand);
     return true;
 }
 

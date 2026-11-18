@@ -4878,18 +4878,26 @@ struct test_ssm_conv : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne_a;
     const std::array<int64_t, 4> ne_b;
+    const bool non_cont;
 
     std::string vars() override {
-        return VARS_TO_STR3(type, ne_a, ne_b);
+        return VARS_TO_STR4(type, ne_a, ne_b, non_cont);
     }
 
     test_ssm_conv(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {10, 10, 10, 1},
-            std::array<int64_t, 4> ne_b = {3, 3, 1, 1})
-        : type(type), ne_a(ne_a), ne_b(ne_b) {}
+            std::array<int64_t, 4> ne_b = {3, 3, 1, 1},
+            bool non_cont = false)
+        : type(type), ne_a(ne_a), ne_b(ne_b), non_cont(non_cont) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a   = ggml_new_tensor(ctx, type, 4, ne_a.data());
+        ggml_tensor * a;
+        if (non_cont) {
+            ggml_tensor * a_full = ggml_new_tensor_4d(ctx, type, ne_a[0], ne_a[1], 2 * ne_a[2], ne_a[3]);
+            a = ggml_view_3d(ctx, a_full, ne_a[0], ne_a[1], ne_a[2], a_full->nb[1], 2 * a_full->nb[2], a_full->nb[2]);
+        } else {
+            a = ggml_new_tensor(ctx, type, 4, ne_a.data());
+        }
         ggml_tensor * b   = ggml_new_tensor(ctx, type, 4, ne_b.data());
         ggml_tensor * out = ggml_ssm_conv(ctx, a, b);
         return out;
@@ -4902,6 +4910,7 @@ struct test_ssm_conv_bias_silu : public test_case {
     const std::array<int64_t, 4> ne_a;
     const std::array<int64_t, 4> ne_b;
     const bool fuse_bias;
+    const bool non_cont;
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -4911,15 +4920,22 @@ struct test_ssm_conv_bias_silu : public test_case {
     bool run_whole_graph() override { return true; }
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne_a, ne_b, fuse_bias);
+        return VARS_TO_STR5(type, ne_a, ne_b, fuse_bias, non_cont);
     }
 
     test_ssm_conv_bias_silu(ggml_type type, std::array<int64_t, 4> ne_a, std::array<int64_t, 4> ne_b,
-            bool fuse_bias)
-        : type(type), ne_a(ne_a), ne_b(ne_b), fuse_bias(fuse_bias) {}
+            bool fuse_bias, bool non_cont = false)
+        : type(type), ne_a(ne_a), ne_b(ne_b), fuse_bias(fuse_bias), non_cont(non_cont) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_a.data());
+        ggml_tensor * a;
+        if (non_cont) {
+            ggml_tensor * a_full = ggml_new_tensor_4d(ctx, type, ne_a[0], ne_a[1], 2 * ne_a[2], ne_a[3]);
+            ggml_set_name(a_full, "a_full");
+            a = ggml_view_3d(ctx, a_full, ne_a[0], ne_a[1], ne_a[2], a_full->nb[1], 2 * a_full->nb[2], a_full->nb[2]);
+        } else {
+            a = ggml_new_tensor(ctx, type, 4, ne_a.data());
+        }
         ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne_b.data());
         ggml_set_name(a, "a");
         ggml_set_name(b, "b");
@@ -12061,6 +12077,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 4, 1}, {d_conv, d_inner, 1, 1}));
         }
     }
+    for (int64_t d_conv : {3, 4}) {
+        test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {d_conv, 1024, 4, 1}, {d_conv, 1024, 1, 1}, true));
+        test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {2 * d_conv, 1024, 4, 1}, {d_conv, 1024, 1, 1}, true));
+        test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {d_conv - 1 + 64, 1536, 4, 1}, {d_conv, 1536, 1, 1}, true));
+    }
 
     // fused ssm_conv + (optional) bias_add + silu. The bias-only graph (no silu) is intentionally
     // not tested since there's no fusion for that pattern in ggml_cuda_can_fuse.
@@ -12080,6 +12101,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 test_cases.emplace_back(new test_ssm_conv_bias_silu(
                     GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 4, 1}, {d_conv, d_inner, 1, 1}, fuse_bias));
             }
+        }
+    }
+    for (int64_t d_conv : {3, 4}) {
+        for (bool fuse_bias : {false, true}) {
+            test_cases.emplace_back(new test_ssm_conv_bias_silu(
+                GGML_TYPE_F32, {d_conv, 1024, 4, 1}, {d_conv, 1024, 1, 1}, fuse_bias, true));
+            test_cases.emplace_back(new test_ssm_conv_bias_silu(
+                GGML_TYPE_F32, {2 * d_conv, 1024, 4, 1}, {d_conv, 1024, 1, 1}, fuse_bias, true));
+            test_cases.emplace_back(new test_ssm_conv_bias_silu(
+                GGML_TYPE_F32, {d_conv - 1 + 64, 1536, 4, 1}, {d_conv, 1536, 1, 1}, fuse_bias, true));
         }
     }
 
