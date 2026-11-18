@@ -1,8 +1,44 @@
 {
 	"name": "@ggml-org/llama-chat",
-	"private": true,
-	"version": "1.0.0",
+	"version": "0.1.0",
+	"description": "Llama Chat, the chat app for llama.cpp. Run it with npx @ggml-org/llama-chat against any llama-server.",
+	"keywords": [
+		"llama.cpp",
+		"llama-server",
+		"llm",
+		"chat",
+		"local-ai"
+	],
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/ggml-org/llama.cpp.git",
+		"directory": "ui/apps/chat"
+	},
+	"homepage": "https://github.com/ggml-org/llama.cpp/tree/master/ui/apps/chat#readme",
+	"bugs": "https://github.com/ggml-org/llama.cpp/issues",
 	"type": "module",
+	"bin": {
+		"llama-chat": "./bin/cli.js"
+	},
+	"exports": {
+		"./cli": "./bin/cli.js",
+		"./server": "./cli/server.js",
+		"./dist/*": "./dist/*",
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"bin",
+		"cli",
+		"dist",
+		"!dist/**/*.map"
+	],
+	"engines": {
+		"node": ">=20"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
 	"scripts": {
 		"build": "npm run build-pwa-assets && vite build",
 		"build-pwa-assets": "pwa-assets-generator --root . --config pwa-assets.config.ts && pwa-assets-generator --root . --config pwa-assets-dark.config.ts && node scripts/make-icons-circular.js",
@@ -32,7 +68,8 @@
 		"test:ui": "vitest --project=ui",
 		"storybook": "svelte-kit sync && storybook dev -p 6006",
 		"build-storybook": "svelte-kit sync && storybook build",
-		"cleanup": "rm -rf .svelte-kit build node_modules test-results dist dev-dist debug-storybook.log static/pwa-*.png static/maskable-icon-*.png static/apple-touch-icon-*.png static/apple-splash-*.png static/favicon*.ico"
+		"cleanup": "rm -rf .svelte-kit build node_modules test-results dist dev-dist debug-storybook.log static/pwa-*.png static/maskable-icon-*.png static/apple-touch-icon-*.png static/apple-splash-*.png static/favicon*.ico",
+		"start": "node bin/cli.js"
 	},
 	"devDependencies": {
 		"@chromatic-com/storybook": "5.5.1",
