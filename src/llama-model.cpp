@@ -3316,7 +3316,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                 // Dense MTP heads use a plain attention KV cache instead of the hybrid wrapper.
                 const bool mtp_on_hybrid_qwen =
                     params.ctx_type == LLAMA_CONTEXT_TYPE_MTP &&
-                    (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE ||
+                    (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_SENSENOVA_LOOP ||
                      arch == LLM_ARCH_BAILINGMOE3);
 
                 const bool mtp_on_hybrid_nemotron =

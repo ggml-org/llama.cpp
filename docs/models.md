@@ -56,7 +56,7 @@ python3 convert_hf_to_gguf.py /path/to/SenseNova-Loop-9B-Preview --outtype bf16 
 python3 convert_hf_to_gguf.py /path/to/SenseNova-Loop-9B-Preview --mmproj --outtype f16 --outfile loop-vision-f16.gguf
 ```
 
-The GGUF stores the 32 physical layers once. The runtime evaluates 56 logical layers, with separate attention KV, convolution and recurrent states for every visit. The two-stream mHC routers remain F32 during conversion and quantization. The separate `mtp.safetensors` checkpoint is excluded; MTP is not supported.
+The GGUF stores the 32 physical layers once. The runtime evaluates 56 logical layers, with separate attention KV, convolution and recurrent states for every visit. The two-stream mHC routers remain F32 during conversion and quantization. If the checkpoint contains an MTP head, the converter appends it after the logical layers. Checkpoints without MTP weights remain supported.
 
 ```sh
 llama-quantize loop-bf16.gguf loop-Q4_K_M.gguf Q4_K_M
@@ -64,5 +64,13 @@ llama-cli -m loop-Q4_K_M.gguf -c 4096
 llama-mtmd-cli -m loop-Q4_K_M.gguf --mmproj loop-vision-f16.gguf --image image.jpg -p "Describe this image."
 llama-server -m loop-Q4_K_M.gguf --mmproj loop-vision-f16.gguf -c 4096
 ```
+
+Use `--spec-type draft-mtp` with an MTP-enabled GGUF to enable speculative decoding. The draft head uses its own attention KV cache and shares the target model's weights:
+
+```sh
+llama-server -m loop-bf16.gguf --spec-type draft-mtp --spec-draft-n-max 3 -c 4096
+```
+
+The converter also accepts `--no-mtp` to omit the head, or `--mtp` to export only the head and shared embedding/output weights. A separate head can be passed with `-md loop-mtp.gguf --spec-type draft-mtp`. The head must come from the same checkpoint as the target model.
 
 Use `-ngl 0` to run on the CPU. GPU offload uses existing backend operations; this implementation adds no model-specific GPU kernels. Tensor split mode and preserved FP8/NVFP4 checkpoints are not supported. GGUF files from experimental forks may use different tensor names and metadata; convert the original checkpoint with the matching converter.

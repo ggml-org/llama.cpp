@@ -16,11 +16,20 @@ if TYPE_CHECKING:
 @ModelBase.example("sensenova/SenseNova-Loop-9B-Preview")
 class SenseNovaLoopModel(Qwen3_5TextModel):
     model_arch = gguf.MODEL_ARCH.SENSENOVA_LOOP
-    no_mtp = True
-    supports_mtp_export = False
+    supports_mtp_export = True
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, dir_model, *args, **kwargs):
+        hparams = kwargs.pop("hparams", None)
+        if hparams is None:
+            hparams = ModelBase.load_hparams(dir_model, self.is_mistral_format)
+        n_mtp = hparams.get("text_config", hparams).get("mtp_num_hidden_layers", 0)
+        if type(n_mtp) is not int or not 0 <= n_mtp <= 1:
+            raise ValueError("SenseNova Loop supports at most one MTP layer")
+        if n_mtp == 0:
+            if self.mtp_only:
+                raise ValueError("SenseNova Loop checkpoint has no MTP layer")
+            self.no_mtp = True
+        super().__init__(dir_model, *args, hparams=hparams, **kwargs)
         hp = self.hparams
         self.loop = hp["loop_settings"]
         self.mhc = hp["mhc"]
@@ -32,16 +41,24 @@ class SenseNovaLoopModel(Qwen3_5TextModel):
             raise ValueError("Invalid SenseNova Loop execution plan")
         if self.loop["counts"] != [count]:
             raise ValueError("SenseNova Loop requires a fixed loop count")
-        if n_layer + (end - start) * (count - 1) > 512:
+        n_mtp = self.block_count - n_layer
+        if n_layer + (end - start) * (count - 1) + n_mtp > 512:
             raise ValueError("SenseNova Loop exceeds the maximum of 512 execution slots")
         layer_types = hp["layer_types"]
         if len(layer_types) != n_layer:
             raise ValueError("SenseNova Loop layer_types must describe every physical layer")
         self.plan = list(range(start)) + list(range(start, end)) * count + list(range(end, n_layer))
         self.first_visit = {p: self.plan.index(p) for p in range(n_layer)}
-        self.block_count = len(self.plan)
+        self.block_count = len(self.plan) + n_mtp
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
-        self.hparams = {**hp, "num_hidden_layers": self.block_count, "layer_types": [layer_types[p] for p in self.plan]}
+        self.hparams = {**hp, "num_hidden_layers": len(self.plan), "layer_types": [layer_types[p] for p in self.plan]}
+
+    @classmethod
+    def filter_tensors(cls, item):
+        name, tensor = item
+        if name.startswith("model.language_model."):
+            name = "model." + name.removeprefix("model.language_model.")
+        return super().filter_tensors((name, tensor))
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -71,7 +88,13 @@ class SenseNovaLoopModel(Qwen3_5TextModel):
             return
         match = re.match(r"model\.layers\.(\d+)\.(.+)", name)
         if match:
-            bid = self.first_visit[int(match[1])]
+            physical = int(match[1])
+            if physical < len(self.first_visit):
+                bid = self.first_visit[physical]
+            elif self.no_mtp:
+                return
+            else:
+                bid = len(self.plan) + physical - len(self.first_visit)
             name = f"model.layers.{bid}.{match[2]}"
         yield from super().modify_tensors(data_torch, name, bid)
 

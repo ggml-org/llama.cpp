@@ -874,7 +874,7 @@ static llama_model_ptr get_model(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER,
-        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr) {
+        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, bool load_mtp = false) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
     model_params.progress_callback = silent_model_load_progress;
@@ -883,6 +883,7 @@ static llama_model_ptr get_model(
     model_params.devices = devs_copy.data();
     model_params.split_mode = split_mode;
     model_params.tensor_buft_overrides = tensor_buft_overrides;
+    model_params.load_mtp = load_mtp;
 
     tensor_data_params tensor_params = { seed, stdev };
     llama_model_ptr model(gguf_ctx != nullptr ?
@@ -949,6 +950,54 @@ static std::vector<float> get_logits(
         }
     }
     return ret;
+}
+
+static void check_loop_mtp(const size_t seed, const float stdev) {
+    const llm_arch arch = LLM_ARCH_SENSENOVA_LOOP;
+    gguf_context_ptr metadata = get_gguf_ctx(arch, false);
+    gguf_set_val_u32(metadata.get(), llama_arch_kv_name(arch, LLM_KV_BLOCK_COUNT).c_str(), 7);
+    gguf_set_val_u32(metadata.get(), llama_arch_kv_name(arch, LLM_KV_NEXTN_PREDICT_LAYERS).c_str(), 1);
+    const uint32_t recurrent[] = {1, 0, 1, 0, 1, 0, 0};
+    gguf_set_arr_data(metadata.get(), llama_arch_kv_name(arch, LLM_KV_ATTENTION_RECURRENT_LAYERS).c_str(), GGUF_TYPE_UINT32, recurrent, 7);
+    llama_model_ptr model = get_model(metadata.get(), nullptr, seed, stdev, {}, LLAMA_SPLIT_MODE_LAYER, nullptr, true);
+    llama_context_params params = llama_context_default_params();
+    params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+    params.n_ctx = 64;
+    params.n_batch = 4;
+    params.n_ubatch = 2;
+    params.n_threads = 2;
+    params.n_threads_batch = 2;
+    llama_context_ptr ctx(llama_init_from_model(model.get(), params));
+    if (!ctx) {
+        throw std::runtime_error("failed to create SenseNova Loop MTP context");
+    }
+    const int32_t n_embd = llama_model_n_embd(model.get());
+    const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model.get()));
+    std::vector<float> hidden(4*n_embd, 0.1f);
+    std::vector<float> expected;
+    for (int32_t chunk : {4, 2}) {
+        llama_memory_clear(llama_get_memory(ctx.get()), true);
+        std::vector<float> logits;
+        for (int32_t start = 0; start < 4; start += chunk) {
+            common_batch batch(ctx.get());
+            for (int32_t i = start; i < start + chunk; ++i) {
+                const int32_t idx = batch.add(i, i, 0, true);
+                GGML_ASSERT(batch.set_embd_state(idx, {hidden.data() + i*n_embd, 1, (size_t) n_embd}));
+            }
+            if (llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
+                throw std::runtime_error("failed to decode SenseNova Loop MTP batch");
+            }
+            for (int32_t i = 0; i < chunk; ++i) {
+                const float * row = llama_get_logits_ith(ctx.get(), i);
+                logits.insert(logits.end(), row, row + n_vocab);
+            }
+        }
+        if (expected.empty()) {
+            expected = std::move(logits);
+        } else if (!(nmse(expected, logits) <= 1e-4)) {
+            throw std::runtime_error("SenseNova Loop MTP chunked decode differs from a full batch");
+        }
+    }
 }
 
 // entries [n/4, n/2) are embd rows, decoded either as token/embd/token chunks or as one mixed batch
@@ -1430,6 +1479,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
 
         const bool encode = arch == LLM_ARCH_T5 || arch == LLM_ARCH_DREAM || arch == LLM_ARCH_LLADA || arch == LLM_ARCH_LLADA_MOE || arch == LLM_ARCH_RND1;
         if (arch == LLM_ARCH_SENSENOVA_LOOP) {
+            check_loop_mtp(seed, stdev);
             gguf_context_ptr invalid = get_gguf_ctx(arch, false);
             GGML_ASSERT(gguf_remove_key(invalid.get(), llama_arch_kv_name(arch, LLM_KV_ATTENTION_RECURRENT_LAYERS).c_str()) >= 0);
             gguf_set_val_u32(invalid.get(), llama_arch_kv_name(arch, LLM_KV_FULL_ATTENTION_INTERVAL).c_str(), 0);

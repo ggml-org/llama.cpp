@@ -8,6 +8,7 @@ from pathlib import Path
 import tempfile
 from typing import Any
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -24,8 +25,9 @@ class TestSenseNovaLoopConversion(unittest.TestCase):
         self.assertIs(get_model_class(arch), SenseNovaLoopModel)
         self.assertIs(get_model_class(arch, mmproj=True), SenseNovaLoopVisionModel)
 
-    def test_shared_layers_and_precision(self):
-        hp: dict[str, Any] = {
+    @staticmethod
+    def hparams() -> dict[str, Any]:
+        return {
             "architectures": ["SenseNovaLoopForConditionalGeneration"],
             "model_type": "sensenova_loop",
             "num_hidden_layers": 4,
@@ -45,6 +47,9 @@ class TestSenseNovaLoopConversion(unittest.TestCase):
             "loop_settings": {"start": 1, "end": 3, "eval_count": 2, "counts": [2], "use_gate": False},
             "mhc": {"start": 1, "end": 3, "streams": 2, "iterations": 20, "fixed_identity": False},
         }
+
+    def test_shared_layers_and_precision(self):
+        hp = self.hparams()
         tensors = {
             "model.language_model.loop_gate.logits": torch.ones(8),
             "model.language_model.layers.1.mhc_attn.weight": torch.full((8, 16), 0.1234567),
@@ -81,6 +86,47 @@ class TestSenseNovaLoopConversion(unittest.TestCase):
                 invalid = copy.deepcopy(original)
                 invalid["loop_settings"].update(settings)
                 with self.subTest(settings=settings), self.assertRaises(ValueError):
+                    SenseNovaLoopModel(path, gguf.LlamaFileType.MOSTLY_BF16, path / "invalid.gguf", hparams=invalid)
+
+    def test_mtp_export_modes(self):
+        hp = self.hparams()
+        hp["mtp_num_hidden_layers"] = 1
+        tensors = {
+            "model.language_model.embed_tokens.weight": torch.ones(32, 8),
+            "model.language_model.norm.weight": torch.zeros(8),
+            "lm_head.weight": torch.ones(32, 8),
+            "model.language_model.layers.3.input_layernorm.weight": torch.zeros(8),
+            "mtp.fc.weight": torch.ones(8, 16),
+            "mtp.pre_fc_norm_embedding.weight": torch.zeros(8),
+            "mtp.pre_fc_norm_hidden.weight": torch.zeros(8),
+            "mtp.norm.weight": torch.zeros(8),
+            "mtp.layers.0.self_attn.q_proj.weight": torch.ones(16, 8),
+        }
+        common = {"token_embd.weight", "output_norm.weight", "output.weight"}
+        draft = {"blk.6.nextn.eh_proj.weight", "blk.6.nextn.enorm.weight", "blk.6.nextn.hnorm.weight", "blk.6.nextn.shared_head_norm.weight", "blk.6.attn_q.weight"}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            (path / "config.json").write_text(json.dumps(hp))
+            save_file(tensors, str(path / "model.safetensors"))
+            for no_mtp, mtp_only in ((False, False), (True, False), (False, True)):
+                with self.subTest(no_mtp=no_mtp, mtp_only=mtp_only), patch.object(SenseNovaLoopModel, "no_mtp", no_mtp), patch.object(SenseNovaLoopModel, "mtp_only", mtp_only):
+                    model = SenseNovaLoopModel(path, gguf.LlamaFileType.MOSTLY_BF16, path / "out.gguf", hparams=copy.deepcopy(hp))
+                    model.set_gguf_parameters()
+                    model.prepare_tensors()
+                    kv = model.gguf_writer.kv_data[0]
+                    self.assertEqual(kv["sensenova_loop.block_count"].value, 6 if no_mtp else 7)
+                    self.assertEqual(kv["sensenova_loop.attention.recurrent_layers"].value, [True, False, True, False, True, True] + ([] if no_mtp else [False]))
+                    result = model.gguf_writer.tensors[0]
+                    expected = common | (set() if mtp_only else {"blk.5.attn_norm.weight"}) | (set() if no_mtp else draft)
+                    self.assertEqual(set(result), expected)
+                    if not no_mtp:
+                        self.assertEqual(kv["sensenova_loop.nextn_predict_layers"].value, 1)
+                        np.testing.assert_array_equal(gguf.LazyNumpyTensor.to_eager(result["blk.6.nextn.hnorm.weight"].tensor), np.ones(8))
+                    else:
+                        self.assertNotIn("sensenova_loop.nextn_predict_layers", kv)
+            for count in (0, 2, -1, True):
+                invalid = {**hp, "mtp_num_hidden_layers": count}
+                with self.subTest(mtp_layers=count), patch.object(SenseNovaLoopModel, "mtp_only", True), self.assertRaises(ValueError):
                     SenseNovaLoopModel(path, gguf.LlamaFileType.MOSTLY_BF16, path / "invalid.gguf", hparams=invalid)
 
     def test_vision_pixel_limits(self):

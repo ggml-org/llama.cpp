@@ -17,7 +17,7 @@ void llama_model_sensenova_loop::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_MHC_FIXED_IDENTITY, hparams.mhc_fixed_identity);
 
     const uint32_t n_layer = hparams.n_layer();
-    if (hparams.n_layer_nextn != 0 || hparams.loop_count == 0 || hparams.loop_start >= hparams.loop_end || hparams.loop_end > n_layer) {
+    if (hparams.n_layer_nextn > 1 || hparams.loop_count == 0 || hparams.loop_start >= hparams.loop_end || hparams.loop_end > n_layer) {
         throw std::runtime_error("invalid SenseNova Loop layer range or count");
     }
     const uint64_t extra = uint64_t(hparams.loop_count - 1) * (hparams.loop_end - hparams.loop_start);
@@ -25,6 +25,9 @@ void llama_model_sensenova_loop::load_arch_hparams(llama_model_loader & ml) {
         throw std::runtime_error("SenseNova Loop execution plan exceeds the block count");
     }
     const uint32_t n_physical = n_layer - extra;
+    if (hparams.n_layer_nextn && hparams.is_recr(n_layer)) {
+        throw std::runtime_error("SenseNova Loop MTP requires a full-attention layer");
+    }
     if (hparams.mhc_start >= hparams.mhc_end || hparams.mhc_end > n_physical || hparams.mhc_streams != 2 ||
             hparams.mhc_iterations == 0 || hparams.mhc_iterations > 20 || !std::isfinite(hparams.mhc_pre_scale) || hparams.mhc_pre_scale <= 0.0f) {
         throw std::runtime_error("unsupported SenseNova mHC configuration");
@@ -68,6 +71,7 @@ void llama_model_sensenova_loop::load_arch_tensors(llama_model_loader & ml) {
     }
     llama_model_qwen35::load_arch_tensors(ml);
     LLAMA_LOAD_LOCALS;
+    const int flags = nextn_flags(ml).trunk;
     for (int il = 0; il < n_layer; ++il) {
         const uint32_t physical = physical_layer(il);
         if (physical < hparams.mhc_start || physical >= hparams.mhc_end) {
@@ -79,18 +83,22 @@ void llama_model_sensenova_loop::load_arch_tensors(llama_model_loader & ml) {
         }
         auto & layer = layers[il];
         const int64_t n_route = hparams.mhc_fixed_identity ? 4 : 8;
-        layer.hc_attn_fn   = create_tensor(tn(LLM_TENSOR_HC_ATTN_FN, "weight", il), {2*n_embd, n_route}, 0);
-        layer.hc_attn_fn_b = create_tensor(tn(LLM_TENSOR_HC_ATTN_FN, "bias",   il), {n_route}, 0);
-        layer.hc_ffn_fn    = create_tensor(tn(LLM_TENSOR_HC_FFN_FN,  "weight", il), {2*n_embd, n_route}, 0);
-        layer.hc_ffn_fn_b  = create_tensor(tn(LLM_TENSOR_HC_FFN_FN,  "bias",   il), {n_route}, 0);
-        if (layer.hc_attn_fn->type != GGML_TYPE_F32 || layer.hc_ffn_fn->type != GGML_TYPE_F32 ||
-                layer.hc_attn_fn_b->type != GGML_TYPE_F32 || layer.hc_ffn_fn_b->type != GGML_TYPE_F32) {
-            throw std::runtime_error("SenseNova mHC router tensors must be F32");
+        layer.hc_attn_fn   = create_tensor(tn(LLM_TENSOR_HC_ATTN_FN, "weight", il), {2*n_embd, n_route}, flags);
+        layer.hc_attn_fn_b = create_tensor(tn(LLM_TENSOR_HC_ATTN_FN, "bias",   il), {n_route}, flags);
+        layer.hc_ffn_fn    = create_tensor(tn(LLM_TENSOR_HC_FFN_FN,  "weight", il), {2*n_embd, n_route}, flags);
+        layer.hc_ffn_fn_b  = create_tensor(tn(LLM_TENSOR_HC_FFN_FN,  "bias",   il), {n_route}, flags);
+        for (const auto * router : {layer.hc_attn_fn, layer.hc_attn_fn_b, layer.hc_ffn_fn, layer.hc_ffn_fn_b}) {
+            if (router && router->type != GGML_TYPE_F32) {
+                throw std::runtime_error("SenseNova mHC router tensors must be F32");
+            }
         }
     }
 }
 
 std::unique_ptr<llm_graph_context> llama_model_sensenova_loop::build_arch_graph(const llm_graph_params & params) const {
+    if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
+        return std::make_unique<llama_model_qwen35::graph_mtp>(params);
+    }
     return std::make_unique<graph>(params);
 }
 
