@@ -58,11 +58,29 @@ typedef void (*unary_tiled_tri_compute_fn_t)(const void * restrict src,
                                              uint32_t ne0,
                                              int32_t ttype);
 
+typedef HVX_Vector (*rms_row_scale_fn_t)(const uint8_t * restrict src,
+                                         uint32_t num_elems,
+                                         float epsilon,
+                                         float scale);
+
+typedef float (*rms_tile_sum_sq_fn_t)(const uint8_t * restrict src,
+                                      uint32_t num_elems);
+
+typedef void (*rms_apply_row_fn_t)(const uint8_t * restrict src,
+                                   const uint8_t * restrict weight,
+                                   const uint8_t * restrict add,
+                                   uint8_t * restrict dst,
+                                   uint32_t n,
+                                   HVX_Vector scale_v);
+
 struct htp_unary_context {
     struct htp_ops_context * octx;
     const struct htp_unary_kernel_params * kparams;
 
     void *                    compute;
+    rms_row_scale_fn_t        rms_row_scale_fn;
+    rms_tile_sum_sq_fn_t      rms_tile_sum_sq_fn;
+    rms_apply_row_fn_t        rms_apply_row_fn;
 
     dma_addr_t                data_src0;
     dma_addr_t                data_src1;            // weight/scale tensor for RMS_NORM_MUL
@@ -332,24 +350,38 @@ static inline HVX_Vector rms_norm_scale_from_sum_f32(HVX_Vector sum_v, uint32_t 
     return scale_v;
 }
 
-static __attribute__((noinline)) HVX_Vector rms_norm_row_scale(const uint8_t * restrict src,
-                                                               uint32_t num_elems,
-                                                               float epsilon,
-                                                               float scale,
-                                                               bool src0_f16) {
+static __attribute__((noinline)) HVX_Vector rms_norm_row_scale_f32(const uint8_t * restrict src,
+                                                                   uint32_t num_elems,
+                                                                   float epsilon,
+                                                                   float scale) {
     HVX_Vector sum_v = Q6_V_vsplat_R(0x00000000);
-    sum_v = src0_f16 ? rms_norm_sum_sq_f16(src, num_elems, sum_v)
-                     : rms_norm_sum_sq_f32(src, num_elems, sum_v);
+    sum_v = rms_norm_sum_sq_f32(src, num_elems, sum_v);
     sum_v = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_v));
     return rms_norm_scale_from_sum_f32(sum_v, num_elems, epsilon, scale);
 }
 
-static __attribute__((noinline)) float rms_norm_tile_sum_sq(const uint8_t * restrict src,
-                                                            uint32_t num_elems,
-                                                            bool src0_f16) {
+static __attribute__((noinline)) HVX_Vector rms_norm_row_scale_f16(const uint8_t * restrict src,
+                                                                   uint32_t num_elems,
+                                                                   float epsilon,
+                                                                   float scale) {
     HVX_Vector sum_v = Q6_V_vsplat_R(0x00000000);
-    sum_v = src0_f16 ? rms_norm_sum_sq_f16(src, num_elems, sum_v)
-                     : rms_norm_sum_sq_f32(src, num_elems, sum_v);
+    sum_v = rms_norm_sum_sq_f16(src, num_elems, sum_v);
+    sum_v = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_v));
+    return rms_norm_scale_from_sum_f32(sum_v, num_elems, epsilon, scale);
+}
+
+static __attribute__((noinline)) float rms_norm_tile_sum_sq_f32(const uint8_t * restrict src,
+                                                                uint32_t num_elems) {
+    HVX_Vector sum_v = Q6_V_vsplat_R(0x00000000);
+    sum_v = rms_norm_sum_sq_f32(src, num_elems, sum_v);
+    sum_v = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_v));
+    return hvx_vec_get_f32(sum_v);
+}
+
+static __attribute__((noinline)) float rms_norm_tile_sum_sq_f16(const uint8_t * restrict src,
+                                                                uint32_t num_elems) {
+    HVX_Vector sum_v = Q6_V_vsplat_R(0x00000000);
+    sum_v = rms_norm_sum_sq_f16(src, num_elems, sum_v);
     sum_v = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_v));
     return hvx_vec_get_f32(sum_v);
 }
@@ -687,85 +719,170 @@ static inline void rms_norm_apply_row_mul_add_f16_f16_f16(const uint8_t * restri
     }
 }
 
-static __attribute__((noinline)) void rms_norm_apply_row(const uint8_t * restrict src,
-                                                         const uint8_t * restrict weight,
-                                                         const uint8_t * restrict add,
-                                                         uint8_t * restrict dst,
-                                                         uint32_t n,
-                                                         HVX_Vector scale_v,
-                                                         const struct htp_unary_context * uctx) {
-    const bool src0_f16 = uctx->src0_f16;
-    const bool src1_f16 = uctx->src1_f16;
-    const bool src2_f16 = uctx->src2_f16;
-    const bool dst_f16  = uctx->dst_f16;
-
-    if (src0_f16 && dst_f16) {
-        if (!weight && !add) {
-            rms_norm_apply_row_f16(src, dst, n, scale_v);
-            return;
-        }
-        if (weight && !add) {
-            if (src1_f16) {
-                rms_norm_apply_row_mul_f16_f16(src, weight, dst, n, scale_v);
-            } else {
-                rms_norm_apply_row_mul_f16_f32(src, weight, dst, n, scale_v);
-            }
-            return;
-        }
-        if (weight && add && src2_f16) {
-            if (src1_f16) {
-                rms_norm_apply_row_mul_add_f16_f16_f16(src, weight, add, dst, n, scale_v);
-            } else {
-                rms_norm_apply_row_mul_add_f16_f32_f16(src, weight, add, dst, n, scale_v);
-            }
-            return;
-        }
-    }
-
-    uint32_t i = 0;
-    for (; i + 64 <= n; i += 64) {
-        HVX_VectorPair sp = rms_load_pair_f32(src, i, src0_f16);
-        HVX_Vector r0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_V_lo_W(sp), scale_v));
-        HVX_Vector r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_V_hi_W(sp), scale_v));
-
-        if (weight) {
-            HVX_VectorPair wp = rms_load_pair_f32(weight, i, src1_f16);
-            r0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(r0, Q6_V_lo_W(wp)));
-            r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(r1, Q6_V_hi_W(wp)));
-        }
-        if (add) {
-            HVX_VectorPair ap = rms_load_pair_f32(add, i, src2_f16);
-            r0 = hvx_vec_add_f32_f32(r0, Q6_V_lo_W(ap));
-            r1 = hvx_vec_add_f32_f32(r1, Q6_V_hi_W(ap));
-        }
-
-        rms_store_pair_f32(dst, i, r0, r1, dst_f16);
-    }
-
-    if (i < n) {
-        const uint32_t rem = n - i;
-        HVX_Vector r0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(rms_load_vec_f32(src, i, src0_f16), scale_v));
-        HVX_Vector r1 = Q6_V_vzero();
-        if (rem > 32) {
-            r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(rms_load_vec_f32(src, i + 32, src0_f16), scale_v));
-        }
-
-        if (weight) {
-            r0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(r0, rms_load_vec_f32(weight, i, src1_f16)));
-            if (rem > 32) {
-                r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(r1, rms_load_vec_f32(weight, i + 32, src1_f16)));
-            }
-        }
-        if (add) {
-            r0 = hvx_vec_add_f32_f32(r0, rms_load_vec_f32(add, i, src2_f16));
-            if (rem > 32) {
-                r1 = hvx_vec_add_f32_f32(r1, rms_load_vec_f32(add, i + 32, src2_f16));
-            }
-        }
-
-        rms_store_tail_f32(dst, i, rem, r0, r1, dst_f16);
-    }
+static __attribute__((noinline)) void rms_norm_apply_row_f16_f16(const uint8_t * restrict src,
+                                                                 const uint8_t * restrict weight,
+                                                                 const uint8_t * restrict add,
+                                                                 uint8_t * restrict dst,
+                                                                 uint32_t n,
+                                                                 HVX_Vector scale_v) {
+    (void) weight;
+    (void) add;
+    rms_norm_apply_row_f16(src, dst, n, scale_v);
 }
+
+static __attribute__((noinline)) void rms_norm_apply_row_mul_f16_f32_f16(const uint8_t * restrict src,
+                                                                         const uint8_t * restrict weight,
+                                                                         const uint8_t * restrict add,
+                                                                         uint8_t * restrict dst,
+                                                                         uint32_t n,
+                                                                         HVX_Vector scale_v) {
+    (void) add;
+    rms_norm_apply_row_mul_f16_f32(src, weight, dst, n, scale_v);
+}
+
+static __attribute__((noinline)) void rms_norm_apply_row_mul_f16_f16_f16(const uint8_t * restrict src,
+                                                                         const uint8_t * restrict weight,
+                                                                         const uint8_t * restrict add,
+                                                                         uint8_t * restrict dst,
+                                                                         uint32_t n,
+                                                                         HVX_Vector scale_v) {
+    (void) add;
+    rms_norm_apply_row_mul_f16_f16(src, weight, dst, n, scale_v);
+}
+
+static __attribute__((noinline)) void rms_norm_apply_row_mul_add_f16_f32_f16_f16(const uint8_t * restrict src,
+                                                                                 const uint8_t * restrict weight,
+                                                                                 const uint8_t * restrict add,
+                                                                                 uint8_t * restrict dst,
+                                                                                 uint32_t n,
+                                                                                 HVX_Vector scale_v) {
+    rms_norm_apply_row_mul_add_f16_f32_f16(src, weight, add, dst, n, scale_v);
+}
+
+static __attribute__((noinline)) void rms_norm_apply_row_mul_add_f16_f16_f16_f16(const uint8_t * restrict src,
+                                                                                 const uint8_t * restrict weight,
+                                                                                 const uint8_t * restrict add,
+                                                                                 uint8_t * restrict dst,
+                                                                                 uint32_t n,
+                                                                                 HVX_Vector scale_v) {
+    rms_norm_apply_row_mul_add_f16_f16_f16(src, weight, add, dst, n, scale_v);
+}
+
+#define DEFINE_RMS_NORM_APPLY_ROW(SFX, HAS_W, HAS_A, S0_F16, S1_F16, S2_F16, D_F16)                                    \
+    static __attribute__((noinline)) void rms_norm_apply_row_##SFX(const uint8_t * restrict src,                       \
+                                                                   const uint8_t * restrict weight,                    \
+                                                                   const uint8_t * restrict add,                       \
+                                                                   uint8_t * restrict dst,                             \
+                                                                   uint32_t n,                                         \
+                                                                   HVX_Vector scale_v) {                               \
+        (void) weight;                                                                                                 \
+        (void) add;                                                                                                    \
+        uint32_t i = 0;                                                                                                \
+        for (; i + 64 <= n; i += 64) {                                                                                 \
+            HVX_VectorPair sp = rms_load_pair_f32(src, i, S0_F16);                                                     \
+            HVX_Vector r0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_V_lo_W(sp), scale_v));                         \
+            HVX_Vector r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_V_hi_W(sp), scale_v));                         \
+            if (HAS_W) {                                                                                               \
+                HVX_VectorPair wp = rms_load_pair_f32(weight, i, S1_F16);                                              \
+                r0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(r0, Q6_V_lo_W(wp)));                                     \
+                r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(r1, Q6_V_hi_W(wp)));                                     \
+            }                                                                                                          \
+            if (HAS_A) {                                                                                               \
+                HVX_VectorPair ap = rms_load_pair_f32(add, i, S2_F16);                                                 \
+                r0 = hvx_vec_add_f32_f32(r0, Q6_V_lo_W(ap));                                                           \
+                r1 = hvx_vec_add_f32_f32(r1, Q6_V_hi_W(ap));                                                           \
+            }                                                                                                          \
+            rms_store_pair_f32(dst, i, r0, r1, D_F16);                                                                 \
+        }                                                                                                              \
+        if (i < n) {                                                                                                   \
+            const uint32_t rem = n - i;                                                                                \
+            HVX_Vector r0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(rms_load_vec_f32(src, i, S0_F16), scale_v));      \
+            HVX_Vector r1 = Q6_V_vzero();                                                                              \
+            if (rem > 32) {                                                                                            \
+                r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(rms_load_vec_f32(src, i + 32, S0_F16), scale_v));        \
+            }                                                                                                          \
+            if (HAS_W) {                                                                                               \
+                r0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(r0, rms_load_vec_f32(weight, i, S1_F16)));               \
+                if (rem > 32) {                                                                                        \
+                    r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(r1, rms_load_vec_f32(weight, i + 32, S1_F16)));      \
+                }                                                                                                      \
+            }                                                                                                          \
+            if (HAS_A) {                                                                                               \
+                r0 = hvx_vec_add_f32_f32(r0, rms_load_vec_f32(add, i, S2_F16));                                        \
+                if (rem > 32) {                                                                                        \
+                    r1 = hvx_vec_add_f32_f32(r1, rms_load_vec_f32(add, i + 32, S2_F16));                               \
+                }                                                                                                      \
+            }                                                                                                          \
+            rms_store_tail_f32(dst, i, rem, r0, r1, D_F16);                                                            \
+        }                                                                                                              \
+    }
+
+DEFINE_RMS_NORM_APPLY_ROW(f32_f32,                 false, false, false, false, false, false)
+DEFINE_RMS_NORM_APPLY_ROW(f32_f16,                 false, false, false, false, false, true)
+DEFINE_RMS_NORM_APPLY_ROW(f16_f32,                 false, false, true,  false, false, false)
+
+DEFINE_RMS_NORM_APPLY_ROW(mul_f32_f32_f32,         true,  false, false, false, false, false)
+DEFINE_RMS_NORM_APPLY_ROW(mul_f32_f16_f32,         true,  false, false, true,  false, false)
+DEFINE_RMS_NORM_APPLY_ROW(mul_f32_f32_f16,         true,  false, false, false, false, true)
+DEFINE_RMS_NORM_APPLY_ROW(mul_f32_f16_f16,         true,  false, false, true,  false, true)
+DEFINE_RMS_NORM_APPLY_ROW(mul_f16_f32_f32,         true,  false, true,  false, false, false)
+DEFINE_RMS_NORM_APPLY_ROW(mul_f16_f16_f32,         true,  false, true,  true,  false, false)
+
+DEFINE_RMS_NORM_APPLY_ROW(mul_add_f32_f32_f32_f32, true,  true,  false, false, false, false)
+DEFINE_RMS_NORM_APPLY_ROW(mul_add_f32_f32_f32_f16, true,  true,  false, false, false, true)
+DEFINE_RMS_NORM_APPLY_ROW(mul_add_f32_f32_f16_f32, true,  true,  false, false, true,  false)
+DEFINE_RMS_NORM_APPLY_ROW(mul_add_f32_f32_f16_f16, true,  true,  false, false, true,  true)
+DEFINE_RMS_NORM_APPLY_ROW(mul_add_f32_f16_f32_f32, true,  true,  false, true,  false, false)
+DEFINE_RMS_NORM_APPLY_ROW(mul_add_f32_f16_f32_f16, true,  true,  false, true,  false, true)
+DEFINE_RMS_NORM_APPLY_ROW(mul_add_f32_f16_f16_f32, true,  true,  false, true,  true,  false)
+DEFINE_RMS_NORM_APPLY_ROW(mul_add_f32_f16_f16_f16, true,  true,  false, true,  true,  true)
+DEFINE_RMS_NORM_APPLY_ROW(mul_add_f16_f32_f32_f32, true,  true,  true,  false, false, false)
+DEFINE_RMS_NORM_APPLY_ROW(mul_add_f16_f32_f32_f16, true,  true,  true,  false, false, true)
+DEFINE_RMS_NORM_APPLY_ROW(mul_add_f16_f32_f16_f32, true,  true,  true,  false, true,  false)
+DEFINE_RMS_NORM_APPLY_ROW(mul_add_f16_f16_f32_f32, true,  true,  true,  true,  false, false)
+DEFINE_RMS_NORM_APPLY_ROW(mul_add_f16_f16_f32_f16, true,  true,  true,  true,  false, true)
+DEFINE_RMS_NORM_APPLY_ROW(mul_add_f16_f16_f16_f32, true,  true,  true,  true,  true,  false)
+
+#undef DEFINE_RMS_NORM_APPLY_ROW
+
+static const rms_apply_row_fn_t rms_norm_apply_row_table[2][2] = {
+    { rms_norm_apply_row_f32_f32, rms_norm_apply_row_f32_f16 },
+    { rms_norm_apply_row_f16_f32, rms_norm_apply_row_f16_f16 },
+};
+
+static const rms_apply_row_fn_t rms_norm_mul_apply_row_table[2][2][2] = {
+    {
+        { rms_norm_apply_row_mul_f32_f32_f32, rms_norm_apply_row_mul_f32_f32_f16 },
+        { rms_norm_apply_row_mul_f32_f16_f32, rms_norm_apply_row_mul_f32_f16_f16 },
+    },
+    {
+        { rms_norm_apply_row_mul_f16_f32_f32, rms_norm_apply_row_mul_f16_f32_f16 },
+        { rms_norm_apply_row_mul_f16_f16_f32, rms_norm_apply_row_mul_f16_f16_f16 },
+    },
+};
+
+static const rms_apply_row_fn_t rms_norm_mul_add_apply_row_table[2][2][2][2] = {
+    {
+        {
+            { rms_norm_apply_row_mul_add_f32_f32_f32_f32, rms_norm_apply_row_mul_add_f32_f32_f32_f16 },
+            { rms_norm_apply_row_mul_add_f32_f32_f16_f32, rms_norm_apply_row_mul_add_f32_f32_f16_f16 },
+        },
+        {
+            { rms_norm_apply_row_mul_add_f32_f16_f32_f32, rms_norm_apply_row_mul_add_f32_f16_f32_f16 },
+            { rms_norm_apply_row_mul_add_f32_f16_f16_f32, rms_norm_apply_row_mul_add_f32_f16_f16_f16 },
+        },
+    },
+    {
+        {
+            { rms_norm_apply_row_mul_add_f16_f32_f32_f32, rms_norm_apply_row_mul_add_f16_f32_f32_f16 },
+            { rms_norm_apply_row_mul_add_f16_f32_f16_f32, rms_norm_apply_row_mul_add_f16_f32_f16_f16 },
+        },
+        {
+            { rms_norm_apply_row_mul_add_f16_f16_f32_f32, rms_norm_apply_row_mul_add_f16_f16_f32_f16 },
+            { rms_norm_apply_row_mul_add_f16_f16_f16_f32, rms_norm_apply_row_mul_add_f16_f16_f16_f16 },
+        },
+    },
+};
 
 static __attribute__((noinline)) void rms_norm_apply_tile(const uint8_t * restrict src,
                                                           const uint8_t * restrict weight,
@@ -778,7 +895,7 @@ static __attribute__((noinline)) void rms_norm_apply_tile(const uint8_t * restri
                                                           float scale,
                                                           const struct htp_unary_context * uctx) {
     const HVX_Vector scale_v = rms_norm_scale_from_sum_f32(hvx_vec_splat_f32(sum_sq), ne0, epsilon, scale);
-    rms_norm_apply_row(src, weight, add, dst, n, scale_v, uctx);
+    uctx->rms_apply_row_fn(src, weight, add, dst, n, scale_v);
 }
 
 static void rms_norm_rows(const void * restrict src,
@@ -792,12 +909,15 @@ static void rms_norm_rows(const void * restrict src,
     memcpy(&epsilon, &op_params[0], sizeof(float));
     memcpy(&scale,   &op_params[1], sizeof(float));
 
+    const rms_row_scale_fn_t row_scale_fn = uctx->rms_row_scale_fn;
+    const rms_apply_row_fn_t apply_row_fn = uctx->rms_apply_row_fn;
+
     for (uint32_t ir = 0; ir < num_rows; ir++) {
         const uint8_t * restrict src_local = (const uint8_t *) src + (ir * src0_row_size_aligned);
         uint8_t * restrict dst_local       = (uint8_t *) dst + (ir * dst_row_size_aligned);
 
-        HVX_Vector scale_v = rms_norm_row_scale(src_local, ne0, epsilon, scale, uctx->src0_f16);
-        rms_norm_apply_row(src_local, NULL, NULL, dst_local, ne0, scale_v, uctx);
+        HVX_Vector scale_v = row_scale_fn(src_local, ne0, epsilon, scale);
+        apply_row_fn(src_local, NULL, NULL, dst_local, ne0, scale_v);
     }
 }
 
@@ -813,13 +933,16 @@ static void rms_norm_mul_rows(const void * restrict src,
     memcpy(&epsilon, &op_params[0], sizeof(float));
     memcpy(&scale,   &op_params[1], sizeof(float));
 
+    const rms_row_scale_fn_t row_scale_fn = uctx->rms_row_scale_fn;
+    const rms_apply_row_fn_t apply_row_fn = uctx->rms_apply_row_fn;
+
     for (uint32_t ir = 0; ir < num_rows; ir++) {
         const uint8_t * restrict src_local = (const uint8_t *) src + (ir * src0_row_size_aligned);
         const uint8_t * restrict w_local   = (const uint8_t *) weight + (uctx->broadcast_weight ? 0 : ir * uctx->src1_row_size_aligned);
         uint8_t * restrict dst_local       = (uint8_t *) dst + (ir * dst_row_size_aligned);
 
-        HVX_Vector scale_v = rms_norm_row_scale(src_local, ne0, epsilon, scale, uctx->src0_f16);
-        rms_norm_apply_row(src_local, w_local, NULL, dst_local, ne0, scale_v, uctx);
+        HVX_Vector scale_v = row_scale_fn(src_local, ne0, epsilon, scale);
+        apply_row_fn(src_local, w_local, NULL, dst_local, ne0, scale_v);
     }
 }
 
@@ -836,15 +959,17 @@ static void rms_norm_mul_add_rows(const void * restrict src,
     memcpy(&epsilon, &op_params[0], sizeof(float));
     memcpy(&scale,   &op_params[1], sizeof(float));
 
-    const uint8_t * restrict w_local = (const uint8_t *) weight;
+    const uint8_t * restrict w_local      = (const uint8_t *) weight;
+    const rms_row_scale_fn_t row_scale_fn = uctx->rms_row_scale_fn;
+    const rms_apply_row_fn_t apply_row_fn = uctx->rms_apply_row_fn;
 
     for (uint32_t ir = 0; ir < num_rows; ir++) {
         const uint8_t * restrict src_local = (const uint8_t *) src + (ir * src0_row_size_aligned);
         const uint8_t * restrict add_local = (const uint8_t *) add + (ir * uctx->src2_row_size_aligned);
         uint8_t * restrict dst_local       = (uint8_t *) dst + (ir * dst_row_size_aligned);
 
-        HVX_Vector scale_v = rms_norm_row_scale(src_local, ne0, epsilon, scale, uctx->src0_f16);
-        rms_norm_apply_row(src_local, w_local, add_local, dst_local, ne0, scale_v, uctx);
+        HVX_Vector scale_v = row_scale_fn(src_local, ne0, epsilon, scale);
+        apply_row_fn(src_local, w_local, add_local, dst_local, ne0, scale_v);
     }
 }
 
@@ -2621,6 +2746,7 @@ static void unary_thread_tiled_rms_norm(const htp_thread_t * th, unsigned int nt
     memcpy(&scale,   &octx->op_params[1], sizeof(float));
 
     dma_queue * dma_q = th->dma_q;
+    const rms_tile_sum_sq_fn_t tile_sum_sq_fn = uctx->rms_tile_sum_sq_fn;
 
     for (uint32_t row = src0_start_row; row < src0_end_row; row++) {
         const size_t src0_row_off = src0_contig ? ((size_t) row * nb01) :
@@ -2649,7 +2775,7 @@ static void unary_thread_tiled_rms_norm(const htp_thread_t * th, unsigned int nt
             const uint8_t * s0 = (const uint8_t *) (uintptr_t) dma_queue_pop(dma_q).dst;
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, row);
-            sum_sq += rms_norm_tile_sum_sq(s0, tw, uctx->src0_f16);
+            sum_sq += tile_sum_sq_fn(s0, tw);
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, row);
 
             const uint32_t pt = t + 2;
@@ -3199,16 +3325,25 @@ static int execute_op_unary(struct htp_ops_context * octx) {
 
     switch (octx->op) {
         case HTP_OP_RMS_NORM:
-            task_func    = col_tile ? unary_thread_tiled_rms_norm : unary_thread_row_block;
-            compute_func = (void *) rms_norm_rows;
+            task_func               = col_tile ? unary_thread_tiled_rms_norm : unary_thread_row_block;
+            compute_func            = (void *) rms_norm_rows;
+            uctx.rms_row_scale_fn   = is_f16 ? rms_norm_row_scale_f16   : rms_norm_row_scale_f32;
+            uctx.rms_tile_sum_sq_fn = is_f16 ? rms_norm_tile_sum_sq_f16 : rms_norm_tile_sum_sq_f32;
+            uctx.rms_apply_row_fn   = rms_norm_apply_row_table[is_f16][uctx.dst_f16];
             break;
         case HTP_OP_RMS_NORM_MUL:
-            task_func    = col_tile ? unary_thread_tiled_rms_norm : unary_thread_rms_norm_mul;
-            compute_func = (void *) rms_norm_mul_rows;
+            task_func               = col_tile ? unary_thread_tiled_rms_norm : unary_thread_rms_norm_mul;
+            compute_func            = (void *) rms_norm_mul_rows;
+            uctx.rms_row_scale_fn   = is_f16 ? rms_norm_row_scale_f16   : rms_norm_row_scale_f32;
+            uctx.rms_tile_sum_sq_fn = is_f16 ? rms_norm_tile_sum_sq_f16 : rms_norm_tile_sum_sq_f32;
+            uctx.rms_apply_row_fn   = rms_norm_mul_apply_row_table[is_f16][uctx.src1_f16][uctx.dst_f16];
             break;
         case HTP_OP_RMS_NORM_MUL_ADD:
-            task_func    = col_tile ? unary_thread_tiled_rms_norm : unary_thread_rms_norm_mul_add;
-            compute_func = (void *) rms_norm_mul_add_rows;
+            task_func               = col_tile ? unary_thread_tiled_rms_norm : unary_thread_rms_norm_mul_add;
+            compute_func            = (void *) rms_norm_mul_add_rows;
+            uctx.rms_row_scale_fn   = is_f16 ? rms_norm_row_scale_f16   : rms_norm_row_scale_f32;
+            uctx.rms_tile_sum_sq_fn = is_f16 ? rms_norm_tile_sum_sq_f16 : rms_norm_tile_sum_sq_f32;
+            uctx.rms_apply_row_fn   = rms_norm_mul_add_apply_row_table[is_f16][uctx.src1_f16][uctx.src2_f16][uctx.dst_f16];
             break;
         default:
             break;
