@@ -1,8 +1,8 @@
-# llama-ui
+# Llama Chat
 
-A modern, feature-rich web interface for llama-server built with SvelteKit. This UI provides an intuitive chat interface with advanced file handling, conversation management, and comprehensive model interaction capabilities.
+Llama Chat is the chat app for llama.cpp: a web interface for llama-server built with SvelteKit, with file handling, conversation management and model interaction. It is built on [Llama UI](../../lib/ui/README.md) (`@ggml-org/llama-ui`), the design system and component library in `ui/lib/ui`.
 
-Llama UI supports two server operation modes:
+Llama Chat supports two server operation modes:
 
 - **MODEL mode** - Single model operation (standard llama-server)
 - **ROUTER mode** - Multi-model operation with dynamic model loading/unloading
@@ -280,19 +280,19 @@ output: {
 
 ### Integration with llama-server
 
-llama-ui is embedded directly into the llama-server binary:
+Llama Chat is embedded directly into the llama-server binary:
 
 1. `npm run build` outputs `index.html` to `build/ui/apps/chat/dist/`
 2. llama-server compiles this into the binary at build time
 3. When accessing `/`, llama-server serves the bundled HTML
 
-This results in a **single portable binary** with the full Llama UI included.
+This results in a **single portable binary** with Llama Chat included.
 
 ---
 
 ## Architecture
 
-Llama UI follows a layered architecture with unidirectional data flow:
+Llama Chat follows a layered architecture with unidirectional data flow:
 
 ```text
 Routes → Components → Hooks → Stores → Services → Storage/API
