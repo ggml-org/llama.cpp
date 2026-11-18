@@ -268,6 +268,21 @@ public:
     const uint32_t n_outputs;
 };
 
+// random expert ids for the MoE GEMMs, for benchmarks only (env: LLAMA_MOE_RANDOM_ROUTING)
+class llm_graph_input_moe_ids : public llm_graph_input_i {
+public:
+    llm_graph_input_moe_ids(int64_t n_expert) : n_expert(n_expert) {}
+    virtual ~llm_graph_input_moe_ids() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    bool can_reuse(const llm_graph_params & params) override;
+
+    ggml_tensor * ids = nullptr; // I32 [n_expert_used_max, n_tokens]
+
+    const int64_t n_expert;
+};
+
 class llm_graph_input_mean : public llm_graph_input_i {
 public:
     llm_graph_input_mean(const llama_cparams & cparams) : cparams(cparams) {}
@@ -986,6 +1001,9 @@ public:
 
     std::vector<ggml_tensor *> t_sampling_all;
 
+    // [0] is the LLAMA_MOE_RANDOM_ROUTING input, the rest are views of it
+    std::vector<ggml_tensor *> t_moe_ids;
+
     std::vector<llm_graph_input_ptr> inputs;
     std::vector<llm_graph_fused_node> fused_nodes;
 
@@ -1029,11 +1047,6 @@ struct llm_graph_qkv {
 struct llm_graph_amax_src1 {
     ggml_tensor * res;     // cur rescaled
     ggml_tensor * scale_s; // scale to undo on the matmul result, or nullptr
-};
-
-struct llm_graph_moe_cache_slots {
-    ggml_tensor * slots;   // [n_expert_used, n_tokens] slots of the selected experts in the MoE cache, or nullptr
-    ggml_tensor * cpu_ids; // [n_expert_used, n_tokens] misses computed from the host experts, -1 for the other experts, or nullptr
 };
 
 struct llm_graph_context {
@@ -1136,7 +1149,7 @@ struct llm_graph_context {
               ggml_tensor * w_s = nullptr) const;
 
     // do mat_mul_id, while optionally apply lora and per-expert scale
-    // if slots is set, the experts are selected by slots instead of ids, from the MoE cache if cached (see build_moe_cache_slots)
+    // if slots is set, the experts are selected by slots instead of ids, from the MoE cache if cached (see llama_moe_cache::build_lookup)
     ggml_tensor * build_lora_mm_id(
               ggml_tensor * w,   // ggml_tensor * as
               ggml_tensor * cur, // ggml_tensor * b
@@ -1249,17 +1262,6 @@ struct llm_graph_context {
              ggml_tensor * post_exp_norm = nullptr,
                    float   post_exp_norm_eps = 1e-5f) const;
 
-    // the slots of the selected experts in the MoE cache, nullptr if the experts of the layer are not read from the cache
-    // with cpu_part, also the misses computed from the host experts, if the cache leaves any to the CPU
-    llm_graph_moe_cache_slots build_moe_cache_slots(
-             ggml_tensor * selected_experts,
-             ggml_tensor * up_exps,
-             ggml_tensor * gate_exps,
-             ggml_tensor * down_exps,
-             ggml_tensor * gate_up_exps,
-                    bool   cpu_part,
-                     int   il) const;
-
     //
     // inputs
     //
@@ -1282,6 +1284,7 @@ struct llm_graph_context {
     ggml_tensor * build_inp_out_ids() const;
     ggml_tensor * build_inp_mean() const;
     ggml_tensor * build_inp_cls() const;
+    ggml_tensor * build_inp_moe_ids(int64_t n_used, int64_t n_rows) const;
 
     ggml_tensor * build_inp_cross_embd() const;
     ggml_tensor * build_inp_pos_bucket_enc() const;
@@ -1403,7 +1406,8 @@ struct llm_graph_context {
             ggml_tensor * sinks, // [n_head_q]
             ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
                   float   kq_scale,
-                    int   il) const;
+                    int   il,
+            ggml_tensor * kq_mask = nullptr) const;
 
     llm_graph_input_attn_k_iswa * build_attn_inp_k_iswa() const;
 

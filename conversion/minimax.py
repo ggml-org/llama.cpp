@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from typing import Iterable, Sequence, TYPE_CHECKING
 
 import torch
@@ -8,6 +10,7 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 from .base import ModelBase, TextModel, MmprojModel, gguf, logger
+from .qwen import DSparkModel
 
 
 @ModelBase.register("MiniMaxText01ForCausalLM")
@@ -170,6 +173,15 @@ class MiniMaxM2Model(TextModel):
 class MiniMaxM3Model(MiniMaxM2Model):
     model_arch = gguf.MODEL_ARCH.MINIMAXM3
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # transformers 5.x folds sparse_attention_config and moe_layer_freq into other keys
+        with open(self.dir_model / "config.json", "r", encoding="utf-8") as f:
+            raw_hparams = json.load(f)
+        for key, value in raw_hparams.get("text_config", raw_hparams).items():
+            self.hparams.setdefault(key, value)
+
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         if ".indexer." in new_name:
             return gguf.GGMLQuantizationType.F32
@@ -188,6 +200,7 @@ class MiniMaxM3Model(MiniMaxM2Model):
         self.gguf_writer.add_indexer_top_k(sac["sparse_topk_blocks"])
         self.gguf_writer.add_indexer_block_size(sac["sparse_block_size"])
         self.gguf_writer.add_indexer_local_blocks(sac["sparse_local_block"])
+        self.gguf_writer.add_indexer_types([bool(v) for v in sac["sparse_attention_freq"]])
 
         moe_layer_freq = self.find_hparam(["moe_layer_freq"])
         n_dense = 0
@@ -201,7 +214,47 @@ class MiniMaxM3Model(MiniMaxM2Model):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
         # Gemma-style (1 + w) RMSNorm: bake the +1 in so llama.cpp can use plain RMSNorm
         if name.endswith("norm.weight"):
-            data_torch = data_torch + 1.0
+            data_torch = data_torch.float() + 1.0
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("DSparkMiniMaxDraftModel")
+class MiniMaxM3DSparkModel(DSparkModel):
+    model_arch = gguf.MODEL_ARCH.DFLASH
+
+    def __init__(self, dir_model, *args, **kwargs):
+        # transformers drops the draft keys when it parses the minimax_m3_vl config
+        with open(dir_model / "config.json", "r", encoding="utf-8") as f:
+            kwargs["hparams"] = json.load(f)
+        super().__init__(dir_model, *args, **kwargs)
+
+        # draft layers use a dense FFN, the MoE keys are copied from the target config
+        self.hparams["intermediate_size"] = self.hparams["dspark_ffn_hidden_size"]
+        for key in ("num_local_experts", "num_experts_per_tok", "scoring_func"):
+            self.hparams.pop(key, None)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        self.gguf_writer.add_hidden_act(self.hparams["hidden_act"])
+
+        layer_types = self.hparams["layer_types"]
+        self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
+        self.gguf_writer.add_sliding_window_pattern([t == "sliding_attention" for t in layer_types])
+
+    @classmethod
+    def filter_tensors(cls, item):
+        name, gen = item
+        name = name.removeprefix("language_model.model.dspark.").replace(".decoder_layer.", ".")
+        if name == "final_norm.weight":
+            name = "norm.weight"
+        return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        # Gemma-style (1 + w) RMSNorm, same as the target
+        if name.endswith("norm.weight"):
+            data_torch = data_torch.float() + 1.0
 
         yield from super().modify_tensors(data_torch, name, bid)
 

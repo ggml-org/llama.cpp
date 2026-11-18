@@ -270,12 +270,14 @@ struct vk_matmul_pipeline_pair {
     vk_pipeline unaligned;
     vk_pipeline aligned;
     uint32_t align;
+    uint32_t narrow_n_max = 0;
 };
 
 struct vk_tile_config {
     std::vector<uint32_t> warptile;
     std::array<uint32_t, 3> wg_denoms;
     uint32_t align;
+    uint32_t narrow_n_max = 0;
 };
 
 using matmul_tile_selector_t = std::function<uint32_t(
@@ -464,15 +466,15 @@ struct vk_conv2d_pipeline_state {
 
 struct vk_conv3d_pipeline_state {
     vk_conv3d_pipeline_state(uint32_t s0, uint32_t s1, uint32_t s2, uint32_t p0, uint32_t p1, uint32_t p2,
-                             uint32_t d0, uint32_t d1, uint32_t d2, uint32_t KW, uint32_t KH, uint32_t KD, uint32_t aligned)
-        : s0(s0), s1(s1), s2(s2), p0(p0), p1(p1), p2(p2), d0(d0), d1(d1), d2(d2), KW(KW), KH(KH), KD(KD), aligned(aligned) {}
+                             uint32_t d0, uint32_t d1, uint32_t d2, uint32_t KW, uint32_t KH, uint32_t KD, uint32_t aligned, uint32_t split_k)
+        : s0(s0), s1(s1), s2(s2), p0(p0), p1(p1), p2(p2), d0(d0), d1(d1), d2(d2), KW(KW), KH(KH), KD(KD), aligned(aligned), split_k(split_k) {}
 
     uint32_t s0, s1, s2, p0, p1, p2, d0, d1, d2, KW, KH, KD;
-    uint32_t aligned;
+    uint32_t aligned, split_k;
 
     bool operator<(const vk_conv3d_pipeline_state &b) const {
-        return std::tie(s0, s1, s2, p0, p1, p2, d0, d1, d2, KW, KH, KD, aligned) <
-               std::tie(b.s0, b.s1, b.s2, b.p0, b.p1, b.p2, b.d0, b.d1, b.d2, b.KW, b.KH, b.KD, b.aligned);
+        return std::tie(s0, s1, s2, p0, p1, p2, d0, d1, d2, KW, KH, KD, aligned, split_k) <
+               std::tie(b.s0, b.s1, b.s2, b.p0, b.p1, b.p2, b.d0, b.d1, b.d2, b.KW, b.KH, b.KD, b.aligned, b.split_k);
     }
 };
 
@@ -836,15 +838,16 @@ struct vk_device_struct {
     vk_pipeline pipeline_acc_f32;
     vk_pipeline pipeline_set_f32;
 
+    // [src0][src1][dst], 0=fp32,1=fp16,2=bf16, null where unsupported
+    vk_pipeline pipeline_add[3][3][3];
+    vk_pipeline pipeline_add_norepeat[3][3][3];
+    vk_pipeline pipeline_sub[3][3][3];
+    vk_pipeline pipeline_sub_norepeat[3][3][3];
+    vk_pipeline pipeline_mul[3][3][3];
+    vk_pipeline pipeline_mul_norepeat[3][3][3];
+    vk_pipeline pipeline_div[3][3][3];
+    vk_pipeline pipeline_div_norepeat[3][3][3];
     // [src0 0=fp32,1=fp16][src1 0=fp32,1=fp16][dst 0=fp32,1=fp16]
-    vk_pipeline pipeline_add[2][2][2];
-    vk_pipeline pipeline_add_norepeat[2][2][2];
-    vk_pipeline pipeline_sub[2][2][2];
-    vk_pipeline pipeline_sub_norepeat[2][2][2];
-    vk_pipeline pipeline_mul[2][2][2];
-    vk_pipeline pipeline_mul_norepeat[2][2][2];
-    vk_pipeline pipeline_div[2][2][2];
-    vk_pipeline pipeline_div_norepeat[2][2][2];
     vk_pipeline pipeline_add_rms[2][2][2];
     vk_pipeline pipeline_add_rms_norepeat[2][2][2];
 
@@ -857,11 +860,17 @@ struct vk_device_struct {
     vk_pipeline pipeline_concat_i8, pipeline_concat_i16, pipeline_concat_i32, pipeline_concat_i64;
     vk_pipeline pipeline_concat_transpose_i8, pipeline_concat_transpose_i16, pipeline_concat_transpose_i32;
     vk_pipeline pipeline_upscale_nearest_f32, pipeline_upscale_bilinear_f32, pipeline_upscale_bicubic_f32, pipeline_upscale_bilinear_antialias_f32;
-    vk_pipeline pipeline_scale_f32;
-    vk_pipeline pipeline_log[2];
-    vk_pipeline pipeline_tri[2];
-    vk_pipeline pipeline_diag[2];
-    vk_pipeline pipeline_clamp[2];
+    // [src/dst 0=fp32,1=fp16,2=bf16]
+    vk_pipeline pipeline_scale[3];
+    vk_pipeline pipeline_log[3];
+    vk_pipeline pipeline_tri[3];
+    vk_pipeline pipeline_diag[3];
+    vk_pipeline pipeline_clamp[3];
+    vk_pipeline pipeline_sqr[3];
+    vk_pipeline pipeline_sqrt[3];
+    vk_pipeline pipeline_sin[3];
+    vk_pipeline pipeline_cos[3];
+    vk_pipeline pipeline_leaky_relu[3];
     vk_pipeline pipeline_pad_f32;
     vk_pipeline pipeline_pad_reflect_1d_f32;
     vk_pipeline pipeline_roll_f32;
@@ -878,10 +887,10 @@ struct vk_device_struct {
     vk_pipeline pipeline_set_rows_i64[2][GGML_TYPE_COUNT];
     vk_pipeline pipeline_norm_f32;
     vk_pipeline pipeline_group_norm_f32;
-    std::array<vk_pipeline, 3> pipeline_rms_norm_f32;
-    std::array<vk_pipeline, 3> pipeline_rms_norm_mul_f32;
-    std::array<vk_pipeline, 3> pipeline_rms_norm_mul_add_f32;
-    std::array<vk_pipeline, 3> pipeline_rms_norm_mul_add_mul_f32;
+    // [src/dst 0=fp32,1=bf16][mul]
+    std::array<vk_pipeline, 3> pipeline_rms_norm[2][2];
+    // [src/dst 0=fp32,1=bf16][residual 0=fp32,1=bf16][post mul]
+    std::array<vk_pipeline, 3> pipeline_rms_norm_mul_add[2][2][2];
     vk_pipeline pipeline_rms_norm_mul_add_partials_f32;
     vk_pipeline pipeline_rms_norm_mul_add_mul_partials_f32;
     vk_pipeline pipeline_rms_norm_set_rows_f32_f32;
@@ -893,36 +902,11 @@ struct vk_device_struct {
     vk_pipeline pipeline_rms_norm_back_f32;
     vk_pipeline pipeline_l2_norm_f32;
 
-    // [src/dst 0=fp32,1=fp16]
-    vk_pipeline pipeline_exp[2];
-    vk_pipeline pipeline_expm1[2];
-    vk_pipeline pipeline_elu[2];
-    vk_pipeline pipeline_gelu[2];
-    vk_pipeline pipeline_gelu_erf[2];
-    vk_pipeline pipeline_gelu_quick[2];
-    vk_pipeline pipeline_silu[2];
-    vk_pipeline pipeline_relu[2];
-    vk_pipeline pipeline_sqr[2];
-    vk_pipeline pipeline_sqrt[2];
-    vk_pipeline pipeline_sin[2];
-    vk_pipeline pipeline_cos[2];
-    vk_pipeline pipeline_xielu[2];
-    vk_pipeline pipeline_neg[2];
-    vk_pipeline pipeline_tanh[2];
-    vk_pipeline pipeline_sigmoid[2];
-    vk_pipeline pipeline_hardsigmoid[2];
-    vk_pipeline pipeline_hardswish[2];
-    vk_pipeline pipeline_abs[2];
-    vk_pipeline pipeline_softplus[2];
-    vk_pipeline pipeline_step[2];
-    vk_pipeline pipeline_round[2];
-    vk_pipeline pipeline_ceil[2];
-    vk_pipeline pipeline_floor[2];
-    vk_pipeline pipeline_trunc[2];
-    vk_pipeline pipeline_sgn[2];
+    // [src/dst 0=fp32,1=fp16,2=bf16]
+    vk_pipeline pipeline_unary[GGML_UNARY_OP_COUNT][3];
 
-    // fused UNARY+MUL pipelines: [op][f16][norepeat][op_on_b]
-    vk_pipeline pipeline_unary_mul[4][2][2][2];
+    // fused UNARY+MUL pipelines: [op][0=fp32,1=fp16,2=bf16][norepeat][op_on_b]
+    vk_pipeline pipeline_unary_mul[4][3][2][2];
 
     vk_pipeline pipeline_add1_f16_f16;
     vk_pipeline pipeline_add1_f16_f32;
@@ -933,15 +917,9 @@ struct vk_device_struct {
     vk_pipeline pipeline_fill_f32;
     vk_pipeline pipeline_fill_f16;
 
-    vk_pipeline pipeline_geglu[2];
-    vk_pipeline pipeline_reglu[2];
-    vk_pipeline pipeline_swiglu[2];
-    vk_pipeline pipeline_swiglu_oai[2];
-    vk_pipeline pipeline_swiglu_clamp[2];
-    vk_pipeline pipeline_geglu_erf[2];
-    vk_pipeline pipeline_geglu_quick[2];
+    // [src/dst 0=fp32,1=fp16,2=bf16]
+    vk_pipeline pipeline_glu[GGML_GLU_OP_COUNT][3];
 
-    vk_pipeline pipeline_leaky_relu[2];
     vk_pipeline pipeline_silu_back_f32;
     vk_pipeline pipeline_soft_max_f32, pipeline_soft_max_f32_f16;
     vk_pipeline pipeline_soft_max_f32_wg512, pipeline_soft_max_f32_f16_wg512;
@@ -977,6 +955,8 @@ struct vk_device_struct {
     vk_pipeline pipeline_dsv4_hc_pre_gated_f32;
     vk_pipeline pipeline_dsv4_hc_post_f32;
     vk_pipeline pipeline_dsv4_hc_post_nocomb_f32;
+    vk_pipeline pipeline_top_k_mask_f16;
+    vk_pipeline pipeline_top_k_mask_f32;
     std::map<vk_solve_tri_pipeline_state, vk_pipeline> pipeline_solve_tri_f32;
     vk_pipeline pipeline_im2col_f32, pipeline_im2col_f32_f16;
     vk_pipeline pipeline_im2col_3d_f32, pipeline_im2col_3d_f32_f16;
@@ -1047,6 +1027,7 @@ struct vk_device_struct {
     bool allow_sysmem_fallback;
     bool disable_graph_optimize;
     bool xe_fa_support {};
+    bool disable_narrow_mul_mat;
 
     std::unique_ptr<vk_memory_logger> memory_logger;
 
@@ -1235,6 +1216,7 @@ inline std::mutex vk_memory_logger::log_mutex;
 
 class vk_perf_logger {
   public:
+    explicit vk_perf_logger(const vk_device & device) : device(device) {}
     void print_timings(bool force = false);
 
 
@@ -1269,6 +1251,7 @@ class vk_perf_logger {
     }
 
   private:
+    vk_device device;
     std::map<std::string, std::vector<uint64_t>> timings;
     std::map<std::string, std::vector<uint64_t>> flops;
     uint32_t print_count {};
@@ -1278,6 +1261,10 @@ struct ggml_backend_vk_context {
     std::string name;
 
     vk_device device;
+
+    // Workaround for drivers moving VRAM contents off the GPU when idle
+    std::promise<void> keepalive_stop;
+    std::thread keepalive_thread;
 
     size_t semaphore_idx, binary_semaphore_idx, event_idx;
     ggml_vk_garbage_collector gc;
@@ -1416,13 +1403,16 @@ struct vk_fa_tuning_params {
     uint32_t row_split;
     bool shmem_staging;
     bool disable_subgroups;
+    bool q_in_regs;
+    bool flip;
+    bool flip_direct;
     uint32_t limit_occupancy_shmem;
 
     void print() const {
         std::cerr << "path=" << path << " workgroup_size=" << workgroup_size << " subgroup_size=" << subgroup_size <<
                      " block_rows=" << block_rows << " block_cols=" << block_cols << " d_split=" << d_split <<
                      " row_split=" << row_split << " shmem_staging=" << shmem_staging << " disable_subgroups=" << disable_subgroups <<
-                     " limit_occupancy_shmem=" << limit_occupancy_shmem << std::endl;
+                     " q_in_regs=" << q_in_regs << " flip=" << flip << " flip_direct=" << flip_direct << " limit_occupancy_shmem=" << limit_occupancy_shmem << std::endl;
     }
 };
 

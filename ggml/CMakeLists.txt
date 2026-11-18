@@ -3,8 +3,8 @@ cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit 
 project("ggml" C CXX ASM)
 
 ### GGML Version
-set(GGML_VERSION_MAJOR 0)
-set(GGML_VERSION_MINOR 29)
+set(GGML_VERSION_MAJOR 1)
+set(GGML_VERSION_MINOR 0)
 set(GGML_VERSION_PATCH 0)
 set(GGML_VERSION_BASE "${GGML_VERSION_MAJOR}.${GGML_VERSION_MINOR}.${GGML_VERSION_PATCH}")
 
@@ -228,6 +228,7 @@ option(GGML_VULKAN_MEMORY_DEBUG             "ggml: enable Vulkan memory debug ou
 option(GGML_VULKAN_SHADER_DEBUG_INFO        "ggml: enable Vulkan shader debug info"           OFF)
 option(GGML_VULKAN_VALIDATE                 "ggml: enable Vulkan validation"                  OFF)
 option(GGML_VULKAN_RUN_TESTS                "ggml: run Vulkan tests"                          OFF)
+set   (GGML_VULKAN_SPIRV_INCLUDE_DIR "" CACHE PATH "ggml: override the SPIRV-Headers include directory")
 option(GGML_WEBGPU                          "ggml: use WebGPU"                                OFF)
 option(GGML_WEBGPU_DEBUG                    "ggml: enable WebGPU debug output"                OFF)
 option(GGML_WEBGPU_CPU_PROFILE              "ggml: enable WebGPU profiling (CPU)"             OFF)

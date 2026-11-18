@@ -326,13 +326,19 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_vocab = 3072; // TODO: should be 4096, but user code cannot get `n_vocab_out` yet [TAG_LLAMA_N_VOCAB_OUT]
     } else if (arch == LLM_ARCH_HRM_TEXT) {
         n_layer = 6; // 1 layer per stack x 2 h-cycles x (2 l-cycles + 1) cache slots
+    } else if (arch == LLM_ARCH_INKLING2) {
+        n_embd  = 128;
+        n_head  = 4;
+        n_ff    = 24;
+        n_layer = 3;
     }
 
     uint32_t n_head_kv = n_head;
     if (arch == LLM_ARCH_QWEN3) {
         n_head_kv = 1; // MQA coverage
     } else if (arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_AFMOE || arch == LLM_ARCH_MAION_CODER ||
-            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_LIMITE || arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_RICURSIVE) {
+            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_LIMITE || arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_RICURSIVE ||
+            arch == LLM_ARCH_ZAYA1) {
         n_head_kv = 2; // GQA coverage
     }
     if (arch == LLM_ARCH_BEAM) {
@@ -691,6 +697,31 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_MUDD_TAP_INDICES,            std::vector<int32_t>({-1, -1, -1, -1, 0, 2, 1, 3}));
     }
 
+    if (arch == LLM_ARCH_INKLING2) {
+        ms.add_kv(LLM_KV_ATTENTION_RELATIVE_LENGTH,   uint32_t(4));
+        ms.add_kv(LLM_KV_ATTENTION_RELATIVE_EXTENT,   uint32_t(16));
+        ms.add_kv(LLM_KV_ATTENTION_QK_CLIP,           0.25f);
+        ms.add_kv(LLM_KV_ATTENTION_RELATIVE_CLIP,     0.1f);
+        ms.add_kv(LLM_KV_ATTENTION_LOG_SCALE_FLOOR,   uint32_t(4));
+        ms.add_kv(LLM_KV_ATTENTION_LOG_SCALE_ALPHA,   0.1f);
+        ms.add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,         uint32_t(2));
+        ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,           uint32_t(4));
+        ms.add_kv(LLM_KV_VOCAB_SIZE,                  n_vocab + 2);
+        ms.add_kv(LLM_KV_VOCAB_SIZE_UNPADDED,         n_vocab);
+        ms.add_kv(LLM_KV_ACTIVATION_SITU_BETA,        0.2f);
+        ms.add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, 0.3f);
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,        8.0f);
+        ms.add_kv(LLM_KV_FINAL_LOGIT_SOFTCAPPING,     30.0f);
+        ms.add_kv(LLM_KV_EXPERT_COUNT,                uint32_t(4));
+        ms.add_kv(LLM_KV_EXPERT_USED_COUNT,           uint32_t(2));
+        std::vector<bool> pattern(n_layer);
+        for (uint32_t i = 0; i < n_layer; ++i) {
+            pattern[i] = i % 2 == 0;
+        }
+        std::vector<uint8_t> values(pattern.begin(), pattern.end());
+        gguf_set_arr_data(ret.get(), llama_arch_kv_name(arch, LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN).c_str(), GGUF_TYPE_BOOL, values.data(), values.size());
+    }
+
     // dummy tokenizer: token ids are derived from fixed-size chunks and detokenized as hex ids
     {
         std::vector<std::string> tokenizer_list(n_vocab);
@@ -714,7 +745,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,  uint32_t(2));
         // with more experts than a ubatch uses, the copy of the used experts in host memory skips some of them
         ms.add_kv(LLM_KV_EXPERT_COUNT,               uint32_t(host_experts_test(arch) ? 64 : arch == LLM_ARCH_CLOVER_MOE ? 4 : 2));
-        ms.add_kv(LLM_KV_EXPERT_USED_COUNT,          uint32_t(2));
+        ms.add_kv(LLM_KV_EXPERT_USED_COUNT,          uint32_t(arch == LLM_ARCH_ZAYA1 ? 1 : 2)); // ZAYA routes top-1
         ms.add_kv(LLM_KV_EXPERT_SHARED_COUNT,        uint32_t(1));
 
         uint32_t gating_func = 2;
@@ -755,6 +786,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, std::vector<uint32_t>{n_ff, n_ff / 2, n_ff, n_ff});
     }
 
+    if (arch == LLM_ARCH_ZONOS3) {
+        ms.add_kv(LLM_KV_MOE_LATENT_SIZE,            n_embd / 2);
+        ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, n_ff);
+    }
+
     ms.add_kv(LLM_KV_POSNET_EMBEDDING_LENGTH,   n_embd);
     ms.add_kv(LLM_KV_POSNET_BLOCK_COUNT,        n_layer);
     ms.add_kv(LLM_KV_CONVNEXT_EMBEDDING_LENGTH, n_embd);
@@ -763,8 +799,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_XIELU_ALPHA_P,             1.0f);
     ms.add_kv(LLM_KV_XIELU_BETA,                1.0f);
     ms.add_kv(LLM_KV_XIELU_EPS,                 1.0e-7f);
-    ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_CLOVER_MOE ? 256 : 2*n_embd);
-    ms.add_kv(LLM_KV_SSM_CONV_KERNEL,           uint32_t(4));
+    ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_CLOVER_MOE || arch == LLM_ARCH_ZONOS3 ? 256 : 2*n_embd);
+    ms.add_kv(LLM_KV_ROUTER_HIDDEN_SIZE,        n_embd);
+    ms.add_kv(LLM_KV_SSM_CONV_KERNEL,           uint32_t(arch == LLM_ARCH_ZAYA1 ? 2 : 4)); // ZAYA CCA convs have kernel 2
     ms.add_kv(LLM_KV_SSM_STATE_SIZE,            uint32_t(128));
     ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK,        n_head);
     ms.add_kv(LLM_KV_SSM_GROUP_COUNT,           arch == LLM_ARCH_PLAMO2 ? 0 : uint32_t(2));
@@ -984,9 +1021,62 @@ static bool check_causal_attn_toggle(
     return ok;
 }
 
+// speculative decoding: each step decodes a token and 0 to n_draft_max drafts, then rejects the drafts
+// the logits of the token must match a decode without drafts
+static double check_draft_rollback(llama_model * model, const std::vector<llama_token> & tokens, const std::vector<float> & logits_ref) {
+    const uint32_t n_vocab     = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    const uint32_t n_tokens    = tokens.size();
+    const uint32_t n_draft_max = 2;
+
+    llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.n_ctx           = 0;
+    ctx_params.n_threads       = 4;
+    ctx_params.n_threads_batch = 4;
+    ctx_params.n_ubatch        = 64;
+    ctx_params.n_rs_seq        = n_draft_max;
+
+    llama_context_ptr lctx(llama_init_from_model(model, ctx_params));
+    if (!lctx) {
+        throw std::runtime_error("failed to create llama context");
+    }
+
+    common_batch batch(lctx.get());
+    for (uint32_t pos = 0; pos < n_tokens/2; pos++) {
+        batch.add(tokens[pos], pos, 0, false);
+    }
+    if (llama_process(lctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
+        throw std::runtime_error("failed to decode batch");
+    }
+
+    std::vector<float> logits;
+    std::vector<float> ref;
+    for (uint32_t pos = n_tokens/2; pos < n_tokens; pos++) {
+        batch.clear();
+        batch.add(tokens[pos], pos, 0, true);
+        const uint32_t n_draft = pos % (n_draft_max + 1);
+        for (uint32_t i = 1; i <= n_draft; i++) {
+            batch.add((tokens[pos] + i) % n_vocab, pos + i, 0, true);
+        }
+        if (llama_process(lctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
+            throw std::runtime_error("failed to decode batch");
+        }
+
+        const float * logits_ith = llama_get_logits_ith(lctx.get(), 0);
+        logits.insert(logits.end(), logits_ith, logits_ith + n_vocab);
+        ref.insert(ref.end(), logits_ref.begin() + (size_t) pos*n_vocab, logits_ref.begin() + (size_t) (pos + 1)*n_vocab);
+
+        if (!llama_memory_seq_rm(llama_get_memory(lctx.get()), 0, pos + 1, -1)) {
+            throw std::runtime_error("failed to reject the drafts");
+        }
+    }
+
+    return nmse(ref, logits);
+}
+
 static bool moe_mandatory(const llm_arch arch) {
     switch (arch) {
         case LLM_ARCH_FLINT:
+        case LLM_ARCH_ZAYA1:
         case LLM_ARCH_LLAMA4:
         case LLM_ARCH_MAION_CODER:
         case LLM_ARCH_COHERE2MOE:
@@ -1047,6 +1137,8 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_MUSE_SPARK:
         case LLM_ARCH_KOLIBRI1:
         case LLM_ARCH_METIS16:
+        case LLM_ARCH_ZONOS3:
+        case LLM_ARCH_INKLING2:
             return true;
         default:
             return false;
@@ -1094,6 +1186,9 @@ static bool arch_supported(const llm_arch arch) {
     if (arch == LLM_ARCH_BERT || arch == LLM_ARCH_MODERN_BERT || arch == LLM_ARCH_NOMIC_BERT || arch == LLM_ARCH_NOMIC_BERT_MOE ||
             arch == LLM_ARCH_NEO_BERT || arch == LLM_ARCH_JINA_BERT_V2 || arch == LLM_ARCH_JINA_BERT_V3 || arch == LLM_ARCH_EUROBERT) {
         return false; // TODO vocab
+    }
+    if (arch == LLM_ARCH_KOKORO || arch == LLM_ARCH_TINY_VOCA) {
+        return false; // TODO encoder without memory, a sequence must fit in one ubatch
     }
     if (arch == LLM_ARCH_PLM) {
         return false; // TODO tensor shapes
@@ -1408,6 +1503,18 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                                 status_nmse = "\033[1;31mFAIL\033[0m (toggle)";
                             }
                             test_ok = false;
+                        }
+
+                        // the k-pool layout is updated in place when drafts are rejected
+                        // TODO: the meta backend aborts with n_rs_seq > 0 (view of permuted tensor not implemented)
+                        if ((arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_GLM5_NEXT) && dc.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
+                            const double nmse_rollback = check_draft_rollback(model_and_ctx_dev.first.get(), tokens, logits_dev);
+                            if (!(nmse_rollback <= 1e-4)) {
+                                if (test_ok) {
+                                    status_nmse = "\033[1;31mFAIL\033[0m (rollback)";
+                                }
+                                test_ok = false;
+                            }
                         }
                     }
 

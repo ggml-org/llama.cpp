@@ -40,7 +40,7 @@ typedef void (* fattn_kernel_t)(
                             const int32_t nb11, const int32_t nb12, const int64_t nb13,
                             const int32_t nb21, const int32_t nb22, const int64_t nb23,
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
-                            const int32_t nb31, const int32_t nb32, const int64_t nb33);
+                            const int32_t nb31, const int64_t nb32, const int64_t nb33);
 
 typedef float (*vec_dot_KQ_t)(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds);
@@ -376,8 +376,8 @@ static __device__ __forceinline__ void quantize_q8_1_to_shared(
     }
 #pragma unroll
     for (int mask = QI8_1/2; mask > 0; mask >>= 1) {
-        amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, mask, 32));
-        sum +=             __shfl_xor_sync(0xFFFFFFFF, sum,  mask, 32);
+        amax = fmaxf(amax, ggml_cuda_shfl_xor(amax, mask, 32));
+        sum +=             ggml_cuda_shfl_xor(sum,  mask, 32);
     }
 
     const float d = amax / 127;
@@ -1170,7 +1170,7 @@ void launch_fattn(
     // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
     // Only worth the overhead if there is at lease one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
     //     multiple sequences of possibly different lengths, or kv_rows lists that end with padding.
-    const bool scan_mask = !use_sparse && mask && n_kv_cols % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1 || kv_rows);
+    const bool scan_mask = !use_sparse && mask && mask->ne[2] == 1 && n_kv_cols % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1 || kv_rows);
     if (scan_mask) {
         const int64_t s31 = mask->nb[1] / sizeof(half2);
         const int64_t s33 = mask->nb[3] / sizeof(half2);
@@ -1206,7 +1206,7 @@ void launch_fattn(
     dim3 blocks_num;
     if (stream_k) {
         // Stream-K splits the work before the mask scan is applied, so skipped KV tiles make the blocks uneven.
-        const bool prefer_whole_tiles = GGML_CUDA_CC_IS_NVIDIA(cc) && cc == GGML_CUDA_CC_DGX_SPARK && async_kv_preload && scan_mask;
+        const bool prefer_whole_tiles = GGML_CUDA_CC_IS_NVIDIA(cc) && cc == GGML_CUDA_CC_GB10 && async_kv_preload && scan_mask;
 
         auto should_use_stream_k = [prefer_whole_tiles](const int cc, const int ntiles_dst, const int max_blocks, const int DKQ) {
             const int tiles_nwaves             = (ntiles_dst + max_blocks - 1) / max_blocks;
