@@ -253,49 +253,13 @@ static int ggml_cuda_parse_id(const char * devName) {
 #endif // defined(GGML_USE_HIP)
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-static bool ggml_cuda_should_use_fp32_acc(const cudaDeviceProp & prop, const int cc) {
+static bool ggml_cuda_should_use_fp32_acc(const cudaDeviceProp & prop, const int cc, const bool nvml_initialized,
+                                        decltype(&nvmlDeviceGetHandleByPciBusId_v2) get_device,
+                                        decltype(&nvmlDeviceGetBrand) get_brand) {
     if (cc == GGML_CUDA_CC_GB10) {
         return true;
     }
-    if (!fast_bf16_hardware_available(cc)) {
-        return false;
-    }
-
-#if defined(_WIN32)
-    // NVML is installed by the driver; its NVSMI directory is not added to PATH on Windows.
-    dl_handle_ptr library(LoadLibraryExW(L"nvml.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32));
-    if (!library) {
-        const DWORD size = GetEnvironmentVariableW(L"ProgramW6432", nullptr, 0);
-        if (size > 0) {
-            std::wstring path(size, L'\0');
-            const DWORD length = GetEnvironmentVariableW(L"ProgramW6432", &path[0], size);
-            if (length > 0 && length < size) {
-                path.resize(length);
-                path += L"\\NVIDIA Corporation\\NVSMI\\nvml.dll";
-                if (fs::path(path).is_absolute()) {
-                    library.reset(LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS));
-                }
-            }
-        }
-    }
-#else
-    dl_handle_ptr library(dlopen("libnvidia-ml.so.1", RTLD_NOW | RTLD_LOCAL));
-#endif // defined(_WIN32)
-    if (!library) {
-        return false;
-    }
-    const auto get_symbol = [&](const char * name) {
-#if defined(_WIN32)
-        return GetProcAddress(library.get(), name);
-#else
-        return dlsym(library.get(), name);
-#endif // defined(_WIN32)
-    };
-    const auto init = reinterpret_cast<decltype(&nvmlInit_v2)>(get_symbol("nvmlInit_v2"));
-    const auto shutdown = reinterpret_cast<decltype(&nvmlShutdown)>(get_symbol("nvmlShutdown"));
-    const auto get_device = reinterpret_cast<decltype(&nvmlDeviceGetHandleByPciBusId_v2)>(get_symbol("nvmlDeviceGetHandleByPciBusId_v2"));
-    const auto get_brand = reinterpret_cast<decltype(&nvmlDeviceGetBrand)>(get_symbol("nvmlDeviceGetBrand"));
-    if (!init || !shutdown || !get_device || !get_brand || init() != NVML_SUCCESS) {
+    if (!fast_bf16_hardware_available(cc) || !nvml_initialized) {
         return false;
     }
 
@@ -311,7 +275,6 @@ static bool ggml_cuda_should_use_fp32_acc(const cudaDeviceProp & prop, const int
                           brand == NVML_BRAND_QUADRO_RTX ||
                           brand == NVML_BRAND_NVIDIA_RTX;
     }
-    (void) shutdown();
     return prefer_fp32_acc;
 }
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
@@ -369,6 +332,41 @@ static ggml_cuda_device_info ggml_cuda_init() {
                       __func__, info.device_count, info.physical_device_count);
     }
     total_vram = 0;
+
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#if defined(_WIN32)
+    // NVML is installed by the driver; its NVSMI directory is not added to PATH on Windows.
+    dl_handle_ptr library(LoadLibraryExW(L"nvml.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32));
+    if (!library) {
+        const DWORD size = GetEnvironmentVariableW(L"ProgramW6432", nullptr, 0);
+        if (size > 0) {
+            std::wstring path(size, L'\0');
+            const DWORD length = GetEnvironmentVariableW(L"ProgramW6432", &path[0], size);
+            if (length > 0 && length < size) {
+                path.resize(length);
+                path += L"\\NVIDIA Corporation\\NVSMI\\nvml.dll";
+                if (fs::path(path).is_absolute()) {
+                    library.reset(LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS));
+                }
+            }
+        }
+    }
+#else
+    dl_handle_ptr library(dlopen("libnvidia-ml.so.1", RTLD_NOW | RTLD_LOCAL));
+#endif // defined(_WIN32)
+    const auto get_symbol = [&](const char * name) {
+#if defined(_WIN32)
+        return library ? GetProcAddress(library.get(), name) : nullptr;
+#else
+        return library ? dlsym(library.get(), name) : nullptr;
+#endif // defined(_WIN32)
+    };
+    const auto init = reinterpret_cast<decltype(&nvmlInit_v2)>(get_symbol("nvmlInit_v2"));
+    const auto shutdown = reinterpret_cast<decltype(&nvmlShutdown)>(get_symbol("nvmlShutdown"));
+    const auto get_device = reinterpret_cast<decltype(&nvmlDeviceGetHandleByPciBusId_v2)>(get_symbol("nvmlDeviceGetHandleByPciBusId_v2"));
+    const auto get_brand = reinterpret_cast<decltype(&nvmlDeviceGetBrand)>(get_symbol("nvmlDeviceGetBrand"));
+    const bool nvml_initialized = init && shutdown && get_device && get_brand && init() == NVML_SUCCESS;
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
     std::vector<std::pair<int, std::string>> turing_devices_without_mma;
     for (int id = 0; id < info.device_count; ++id) {
@@ -441,7 +439,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
         info.devices[id].cc = 100*prop.major + 10*prop.minor;
         if (info.devices[id].virtual_index == 0) {
-            info.devices[id].prefer_fp32_acc = ggml_cuda_should_use_fp32_acc(prop, info.devices[id].cc);
+            info.devices[id].prefer_fp32_acc = ggml_cuda_should_use_fp32_acc(prop, info.devices[id].cc, nvml_initialized, get_device, get_brand);
         } else {
             info.devices[id].prefer_fp32_acc = info.devices[physical_id].prefer_fp32_acc;
         }
@@ -468,6 +466,13 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
 #endif  // defined(GGML_USE_HIP)
     }
+
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    if (nvml_initialized) {
+        (void) shutdown();
+    }
+    library.reset();
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
     if (ggml_cuda_highest_compiled_arch(GGML_CUDA_CC_TURING) >= GGML_CUDA_CC_TURING && !turing_devices_without_mma.empty()) {
         GGML_LOG_INFO("The following devices will have suboptimal performance due to a lack of tensor cores:\n");
