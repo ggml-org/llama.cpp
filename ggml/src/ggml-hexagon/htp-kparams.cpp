@@ -638,7 +638,7 @@ static bool htp_kparams_solve_hmx_mm(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * act,
-    const struct ggml_tensor * src2,
+    const struct ggml_tensor * bias,
     const struct ggml_tensor * dst,
     int wtype,
     int ne00_padded,
@@ -652,13 +652,13 @@ static bool htp_kparams_solve_hmx_mm(
     size_t vtcm_budget,
     struct htp_mm_kernel_params * kparams
 ) {
-    const size_t   src2_size         = src2 ? hex_round_up(ggml_nbytes(src2), 128) : 0;
-    const bool     src2_batched      = src2 && (src2->ne[2] > 1 || src2->ne[3] > 1);
+    GGML_UNUSED(act);
+    const size_t   bias_size         = bias ? hex_round_up(ggml_nbytes(bias), 128) : 0;
+    const bool     bias_batched      = bias && (bias->ne[2] > 1 || bias->ne[3] > 1);
     const bool     is_tiled          = ggml_hexagon_tensor_will_tile(src0);
     const int      aligned_tile_size = is_tiled ? htp_tensor_get_tile_padded_size(wtype) : 0;
     const int      n_hvx             = (int) htp_session_n_hvx(sess);
     const uint32_t mdev_count        = htp_session_mdev_count(sess);
-    const int      ne10              = act->ne[0];
 
     int m_for_solver        = ne11;
     int m_for_solver_padded = ne11_padded;
@@ -712,8 +712,8 @@ static bool htp_kparams_solve_hmx_mm(
         }
     }
 
-    if (is_batched_val && wtype == GGML_TYPE_F16 && !is_tiled && group_size > 1 && !src2_batched) {
-        if (htp_mm_hmx_solve_batched_params(wtype, ne00_padded, ne01_padded, m_for_solver, group_size, n_hvx, pipeline, src2_size, vtcm_budget, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
+    if (is_batched_val && wtype == GGML_TYPE_F16 && !is_tiled && group_size > 1 && !bias_batched) {
+        if (htp_mm_hmx_solve_batched_params(wtype, ne00_padded, ne01_padded, m_for_solver, group_size, n_hvx, pipeline, bias_size, vtcm_budget, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
             use_grouped = true;
         }
     }
@@ -730,11 +730,11 @@ static bool htp_kparams_solve_hmx_mm(
             m_id_rows = hex_round_up(std::max(m_per_expert, 32), 32);
         }
         const uint32_t cost_m = is_matmul_id ? (uint32_t) m_id_rows : (uint32_t) m_for_solver;
-        if (!htp_mm_hmx_solve_2d_params_ex(kernel_type, wtype, ne00_padded, m_id_rows, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, is_matmul_id, aligned_tile_size, src2_size, vtcm_budget, k_group, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
+        if (!htp_mm_hmx_solve_2d_params_ex(kernel_type, wtype, ne00_padded, m_id_rows, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, is_matmul_id, aligned_tile_size, bias_size, vtcm_budget, k_group, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
             if (htp_mm_kernel_is_hmx_int(kernel_type)) {
                 kernel_type = fp16_kernel_type;
                 k_group     = 0;
-                if (!htp_mm_hmx_solve_2d_params_ex(kernel_type, wtype, ne00_padded, m_id_rows, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, is_matmul_id, aligned_tile_size, src2_size, vtcm_budget, 0, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
+                if (!htp_mm_hmx_solve_2d_params_ex(kernel_type, wtype, ne00_padded, m_id_rows, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, is_matmul_id, aligned_tile_size, bias_size, vtcm_budget, 0, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
                     return false;
                 }
             } else {
@@ -756,13 +756,12 @@ static bool htp_kparams_solve_hmx_mm(
     kparams->n_act_hvx          = act_hvx_selected;
     kparams->tile_size          = is_tiled ? htp_tensor_get_tile_size(wtype) : 0;
     kparams->aligned_tile_size  = aligned_tile_size;
-    kparams->act_row_size       = htp_mm_tiled_act_row_size(wtype, ne10);
     kparams->vtcm_size          = vtcm_size;
     kparams->div_n_act_hvx      = init_fastdiv_values(act_hvx_selected);
     kparams->div_ne00_padded    = init_fastdiv_values(ne00_padded);
     kparams->div_hmx_n_groups   = init_fastdiv_values(hmx_n_groups);
     kparams->div_n_k_tiles      = init_fastdiv_values(n_k_tiles);
-    kparams->vtcm_bias_size     = (int32_t) src2_size;
+    kparams->vtcm_bias_size     = (int32_t) bias_size;
     kparams->kernel_type        = kernel_type;
     return true;
 }
@@ -781,7 +780,7 @@ static void htp_kparams_solve_hvx_mm(
     int ne12,
     int ne13,
     bool is_matmul_id,
-    const size_t src2_row_size,
+    const size_t bias_row_size,
     size_t vtcm_budget,
     struct htp_mm_kernel_params * kparams
 ) {
@@ -845,7 +844,7 @@ static void htp_kparams_solve_hvx_mm(
                 for (uint32_t d = max_prefetch; d >= 2; d /= 2) {
                     htp_mm_hvx_vtcm_layout_build(
                         &L, kparams->kernel_type, wtype, ne10, src1_nrows, n_hvx,
-                        dst_row_size, src0->nb[1], act_elem_size, src2_row_size, d, false, false
+                        dst_row_size, src0->nb[1], act_elem_size, bias_row_size, d, false, false
                     );
                     if (L.total_bytes <= vtcm_budget) {
                         best_n_prefetch = d;
@@ -856,7 +855,7 @@ static void htp_kparams_solve_hvx_mm(
                 uint32_t m_chunk = 0;
                 if (htp_mm_hvx_solve_vtcm_params(
                         kparams->kernel_type, wtype, ne10, src1_nrows, n_hvx,
-                        dst_row_size, src0->nb[1], act_elem_size, src2_row_size, best_n_prefetch, vtcm_budget,
+                        dst_row_size, src0->nb[1], act_elem_size, bias_row_size, best_n_prefetch, vtcm_budget,
                         &L, &m_chunk)) {
                     kparams->n_prefetch     = best_n_prefetch;
                     kparams->m_chunk        = (m_chunk < (uint32_t) src1_nrows) ? m_chunk : 0;
@@ -886,7 +885,7 @@ static void htp_kparams_solve_hvx_mm(
         uint32_t m_chunk = 0;
         if (htp_mm_hvx_solve_vtcm_params(
                 ktype, wtype, ne10, src1_nrows, n_hvx,
-                dst_row_size, src0->nb[1], act_elem_size, src2_row_size, 16, vtcm_budget,
+                dst_row_size, src0->nb[1], act_elem_size, bias_row_size, 16, vtcm_budget,
                 &L, &m_chunk)) {
             kparams->kernel_type    = ktype;
             kparams->m_chunk        = (m_chunk < (uint32_t) src1_nrows) ? m_chunk : 0;
@@ -905,7 +904,7 @@ static bool htp_kparams_solve_matmul_impl(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
-    const struct ggml_tensor * src2,
+    const struct ggml_tensor * bias,
     const struct ggml_tensor * dst,
     struct htp_mm_kernel_params * kparams
 ) {
@@ -933,12 +932,12 @@ static bool htp_kparams_solve_matmul_impl(
 
     const bool hmx_enabled = (htp_session_n_hmx(sess) > 0) && (opt_mm_select >= 2);
     if (hmx_enabled && htp_matmul_is_hmx_eligible(src0, src1, dst, is_matmul_id, is_batched)) {
-        if (htp_kparams_solve_hmx_mm(sess, src0, src1, src2, dst, wtype, ne00_padded, ne01_tiled, ne02, ne11, ne12, ne11_padded, is_matmul_id, is_batched, vtcm_budget, kparams)) {
+        if (htp_kparams_solve_hmx_mm(sess, src0, src1, bias, dst, wtype, ne00_padded, ne01_tiled, ne02, ne11, ne12, ne11_padded, is_matmul_id, is_batched, vtcm_budget, kparams)) {
             goto finalize;
         }
     }
 
-    htp_kparams_solve_hvx_mm(sess, src0, src1, dst, wtype, is_tiled, ne02, ne03, ne10, ne11, ne12, ne13, is_matmul_id, src2 ? src2->nb[1] : 0, vtcm_budget, kparams);
+    htp_kparams_solve_hvx_mm(sess, src0, src1, dst, wtype, is_tiled, ne02, ne03, ne10, ne11, ne12, ne13, is_matmul_id, bias ? bias->nb[1] : 0, vtcm_budget, kparams);
 
 finalize:
     kparams->div_ne12_ne1 = init_fastdiv_values(ne12 * ne11);
@@ -1078,20 +1077,20 @@ bool htp_kparams_solve_matmul_add(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
-    const struct ggml_tensor * src2,
+    const struct ggml_tensor * bias,
     const struct ggml_tensor * dst,
     struct htp_mm_kernel_params * kparams
 ) {
-    if (htp_matmul_add_can_collapse(src0, src1, src2, dst)) {
+    if (htp_matmul_add_can_collapse(src0, src1, bias, dst)) {
         const ggml_tensor src1_collapsed = htp_tensor_collapse_rows(src1);
         const ggml_tensor dst_collapsed  = htp_tensor_collapse_rows(dst);
-        const ggml_tensor src2_collapsed = (src2 && (src2->ne[1] * src2->ne[2] * src2->ne[3] > 1))
-                                           ? htp_tensor_collapse_rows(src2)
-                                           : (src2 ? *src2 : ggml_tensor{});
-        const struct ggml_tensor * p_src2 = src2 ? &src2_collapsed : nullptr;
-        return htp_kparams_solve_matmul_impl(sess, src0, &src1_collapsed, p_src2, &dst_collapsed, kparams);
+        const ggml_tensor bias_collapsed = (bias && (bias->ne[1] * bias->ne[2] * bias->ne[3] > 1))
+                                           ? htp_tensor_collapse_rows(bias)
+                                           : (bias ? *bias : ggml_tensor{});
+        const struct ggml_tensor * p_bias = bias ? &bias_collapsed : nullptr;
+        return htp_kparams_solve_matmul_impl(sess, src0, &src1_collapsed, p_bias, &dst_collapsed, kparams);
     }
-    return htp_kparams_solve_matmul_impl(sess, src0, src1, src2, dst, kparams);
+    return htp_kparams_solve_matmul_impl(sess, src0, src1, bias, dst, kparams);
 }
 
 bool htp_kparams_solve_mmnx(
@@ -5261,13 +5260,13 @@ bool htp_kparams_solve(
         if (tmp.inputs.size() != 3) {
             return false;
         }
-        const ggml_tensor * src2 = tmp.inputs[2];
-        if ((src2->type != GGML_TYPE_F32 && src2->type != GGML_TYPE_F16) ||
-            src2->nb[0] != ggml_type_size(src2->type) ||
+        const ggml_tensor * bias = tmp.inputs[2];
+        if ((bias->type != GGML_TYPE_F32 && bias->type != GGML_TYPE_F16) ||
+            bias->nb[0] != ggml_type_size(bias->type) ||
             !htp_matmul_check_types(src0, src1, dst)) {
             return false;
         }
-        return commit(htp_kparams_solve_matmul_impl(sess, src0, src1, src2, dst, tmp.kparams<htp_mm_kernel_params>()));
+        return commit(htp_kparams_solve_matmul_impl(sess, src0, src1, bias, dst, tmp.kparams<htp_mm_kernel_params>()));
     }
     if (tmp.opcode == HTP_OP_MUL_MAT_NX) {
         const size_t n_w = tmp.outputs.size();

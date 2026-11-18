@@ -554,7 +554,7 @@ static inline void flat_vec_dot_f16_f16_aa_2x2(const uint32_t n, void * restrict
 
 static inline void hvx_tensor_add_f32_grid(
     const struct htp_tensor * restrict dst,
-    const struct htp_tensor * restrict src2,
+    const struct htp_tensor * restrict bias,
     uint32_t start_row,
     uint32_t end_row,
     uint32_t start_col,
@@ -565,15 +565,15 @@ static inline void hvx_tensor_add_f32_grid(
     if (start_row >= end_row || start_col >= end_col) return;
     const uint32_t nb1 = dst->nb[1];
     const uint32_t dst_elem_size  = (dst->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
-    const uint32_t src2_elem_size = (src2->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
+    const uint32_t bias_elem_size = (bias->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
 
     const uint32_t ne11 = dst->ne[1];
     const uint32_t ne12 = dst->ne[2];
     const uint32_t ne11_12 = ne11 * ne12;
 
-    const bool is_broadcast1 = (src2->ne[1] == 1);
-    const bool is_broadcast2 = (src2->ne[2] == 1);
-    const bool is_broadcast3 = (src2->ne[3] == 1);
+    const bool is_broadcast1 = (bias->ne[1] == 1);
+    const bool is_broadcast2 = (bias->ne[2] == 1);
+    const bool is_broadcast3 = (bias->ne[3] == 1);
 
     const HVX_Vector max_f16 = hvx_vec_splat_f32(65504.0f);
     const HVX_Vector min_f16 = hvx_vec_splat_f32(-65504.0f);
@@ -590,20 +590,20 @@ static inline void hvx_tensor_add_f32_grid(
         uint32_t i22 = is_broadcast2 ? 0 : i12;
         uint32_t i21 = is_broadcast1 ? 0 : i11;
 
-        const uint8_t * src2_row = (const uint8_t *) src2->data +
-                                   (size_t) i21 * src2->nb[1] + (size_t) i22 * src2->nb[2] + (size_t) i23 * src2->nb[3];
+        const uint8_t * bias_row = (const uint8_t *) bias->data +
+                                   (size_t) i21 * bias->nb[1] + (size_t) i22 * bias->nb[2] + (size_t) i23 * bias->nb[3];
 
         uint8_t * dst_ptr = dst_row + (size_t) start_col * dst_elem_size;
-        const uint8_t * src2_ptr = src2_row + (size_t) start_col * src2_elem_size;
+        const uint8_t * bias_ptr = bias_row + (size_t) start_col * bias_elem_size;
         int remaining = end_col - start_col;
         while (remaining > 0) {
             uint32_t count = (remaining >= 32) ? 32 : (uint32_t) remaining;
             HVX_Vector v_out = (dst_elem_size == sizeof(__fp16))
                 ? Q6_V_lo_W(hvx_vec_f16_to_f32(hvx_vmemu(dst_ptr)))
                 : hvx_vmemu(dst_ptr);
-            HVX_Vector v_z = (src2_elem_size == sizeof(__fp16))
-                ? Q6_V_lo_W(hvx_vec_f16_to_f32(hvx_vmemu(src2_ptr)))
-                : hvx_vmemu(src2_ptr);
+            HVX_Vector v_z = (bias_elem_size == sizeof(__fp16))
+                ? Q6_V_lo_W(hvx_vec_f16_to_f32(hvx_vmemu(bias_ptr)))
+                : hvx_vmemu(bias_ptr);
             HVX_Vector v_sum = hvx_vec_add_f32_f32(v_out, v_z);
             if (dst_elem_size == sizeof(__fp16)) {
                 v_sum = Q6_Vsf_vmax_VsfVsf(min_f16, Q6_Vsf_vmin_VsfVsf(max_f16, v_sum));
@@ -614,7 +614,7 @@ static inline void hvx_tensor_add_f32_grid(
                 hvx_vec_store_u(dst_ptr, count * sizeof(float), v_sum);
             }
             dst_ptr += count * dst_elem_size;
-            src2_ptr += count * src2_elem_size;
+            bias_ptr += count * bias_elem_size;
             remaining -= (int) count;
         }
     }

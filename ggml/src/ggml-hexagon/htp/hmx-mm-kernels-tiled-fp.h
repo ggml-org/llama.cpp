@@ -1332,23 +1332,23 @@ static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, co
 
 // output : fp16 -> f32 / f16
 
-static inline HVX_Vector hmx_load_src2_f32_32_f16(const void * src2_row_base, size_t c) {
-    const __fp16 * p = (const __fp16 *) src2_row_base + c;
+static inline HVX_Vector hmx_load_bias_f32_32_f16(const void * bias_row_base, size_t c) {
+    const __fp16 * p = (const __fp16 *) bias_row_base + c;
     return Q6_V_lo_W(hvx_vec_f16_to_f32(hvx_vmemu(p)));
 }
 
-static inline HVX_Vector hmx_load_src2_f32_32_f32(const void * src2_row_base, size_t c) {
-    const float * p = (const float *) src2_row_base + c;
+static inline HVX_Vector hmx_load_bias_f32_32_f32(const void * bias_row_base, size_t c) {
+    const float * p = (const float *) bias_row_base + c;
     return hvx_vmemu(p);
 }
 
-static inline HVX_VectorPair hmx_load_src2_f32_64_f16(const void * src2_row_base, size_t c) {
-    const __fp16 * p = (const __fp16 *) src2_row_base + c;
+static inline HVX_VectorPair hmx_load_bias_f32_64_f16(const void * bias_row_base, size_t c) {
+    const __fp16 * p = (const __fp16 *) bias_row_base + c;
     return hvx_vec_f16_to_f32(hvx_vmemu(p));
 }
 
-static inline HVX_VectorPair hmx_load_src2_f32_64_f32(const void * src2_row_base, size_t c) {
-    const float * p = (const float *) src2_row_base + c;
+static inline HVX_VectorPair hmx_load_bias_f32_64_f32(const void * bias_row_base, size_t c) {
+    const float * p = (const float *) bias_row_base + c;
     return Q6_W_vcombine_VV(hvx_vmemu(p + 32), hvx_vmemu(p));
 }
 
@@ -1360,50 +1360,50 @@ static inline HVX_Vector hmx_pack_f32_to_f16_clamped(HVX_Vector v0, HVX_Vector v
     return hvx_vec_f32_to_f16(v0, v1);
 }
 
-static inline HVX_Vector hmx_add_src2_to_f16_vec64_f16(HVX_Vector v_f16, const void * src2_row_base, size_t c) {
+static inline HVX_Vector hmx_add_bias_to_f16_vec64_f16(HVX_Vector v_f16, const void * bias_row_base, size_t c) {
     HVX_VectorPair vp_dst  = hvx_vec_f16_to_f32(v_f16);
-    HVX_VectorPair vp_src2 = hmx_load_src2_f32_64_f16(src2_row_base, c);
-    HVX_Vector v0 = hvx_vec_add_f32_f32(Q6_V_lo_W(vp_dst), Q6_V_lo_W(vp_src2));
-    HVX_Vector v1 = hvx_vec_add_f32_f32(Q6_V_hi_W(vp_dst), Q6_V_hi_W(vp_src2));
+    HVX_VectorPair vp_bias = hmx_load_bias_f32_64_f16(bias_row_base, c);
+    HVX_Vector v0 = hvx_vec_add_f32_f32(Q6_V_lo_W(vp_dst), Q6_V_lo_W(vp_bias));
+    HVX_Vector v1 = hvx_vec_add_f32_f32(Q6_V_hi_W(vp_dst), Q6_V_hi_W(vp_bias));
     return hmx_pack_f32_to_f16_clamped(v0, v1);
 }
 
-static inline HVX_Vector hmx_add_src2_to_f16_vec64_f32(HVX_Vector v_f16, const void * src2_row_base, size_t c) {
+static inline HVX_Vector hmx_add_bias_to_f16_vec64_f32(HVX_Vector v_f16, const void * bias_row_base, size_t c) {
     HVX_VectorPair vp_dst  = hvx_vec_f16_to_f32(v_f16);
-    HVX_VectorPair vp_src2 = hmx_load_src2_f32_64_f32(src2_row_base, c);
-    HVX_Vector v0 = hvx_vec_add_f32_f32(Q6_V_lo_W(vp_dst), Q6_V_lo_W(vp_src2));
-    HVX_Vector v1 = hvx_vec_add_f32_f32(Q6_V_hi_W(vp_dst), Q6_V_hi_W(vp_src2));
+    HVX_VectorPair vp_bias = hmx_load_bias_f32_64_f32(bias_row_base, c);
+    HVX_Vector v0 = hvx_vec_add_f32_f32(Q6_V_lo_W(vp_dst), Q6_V_lo_W(vp_bias));
+    HVX_Vector v1 = hvx_vec_add_f32_f32(Q6_V_hi_W(vp_dst), Q6_V_hi_W(vp_bias));
     return hmx_pack_f32_to_f16_clamped(v0, v1);
 }
 
-static inline HVX_Vector hmx_add_src2_to_f16_tail_f16(HVX_Vector v_f16, const void * src2_row_base, size_t c, size_t valid_c) {
+static inline HVX_Vector hmx_add_bias_to_f16_tail_f16(HVX_Vector v_f16, const void * bias_row_base, size_t c, size_t valid_c) {
     HVX_VectorPair vp_dst  = hvx_vec_f16_to_f32(v_f16);
-    HVX_VectorPair vp_src2 = hmx_load_src2_f32_64_f16(src2_row_base, c);
-    HVX_Vector v0 = hvx_vec_add_f32_f32(Q6_V_lo_W(vp_dst), Q6_V_lo_W(vp_src2));
-    HVX_Vector v1 = (valid_c > 32) ? hvx_vec_add_f32_f32(Q6_V_hi_W(vp_dst), Q6_V_hi_W(vp_src2)) : Q6_V_vzero();
+    HVX_VectorPair vp_bias = hmx_load_bias_f32_64_f16(bias_row_base, c);
+    HVX_Vector v0 = hvx_vec_add_f32_f32(Q6_V_lo_W(vp_dst), Q6_V_lo_W(vp_bias));
+    HVX_Vector v1 = (valid_c > 32) ? hvx_vec_add_f32_f32(Q6_V_hi_W(vp_dst), Q6_V_hi_W(vp_bias)) : Q6_V_vzero();
     return hmx_pack_f32_to_f16_clamped(v0, v1);
 }
 
-static inline HVX_Vector hmx_add_src2_to_f16_tail_f32(HVX_Vector v_f16, const void * src2_row_base, size_t c, size_t valid_c) {
+static inline HVX_Vector hmx_add_bias_to_f16_tail_f32(HVX_Vector v_f16, const void * bias_row_base, size_t c, size_t valid_c) {
     HVX_VectorPair vp_dst = hvx_vec_f16_to_f32(v_f16);
-    HVX_Vector v0 = hvx_vec_add_f32_f32(Q6_V_lo_W(vp_dst), hmx_load_src2_f32_32_f32(src2_row_base, c));
-    HVX_Vector v1 = (valid_c > 32) ? hvx_vec_add_f32_f32(Q6_V_hi_W(vp_dst), hmx_load_src2_f32_32_f32(src2_row_base, c + 32)) : Q6_V_vzero();
+    HVX_Vector v0 = hvx_vec_add_f32_f32(Q6_V_lo_W(vp_dst), hmx_load_bias_f32_32_f32(bias_row_base, c));
+    HVX_Vector v1 = (valid_c > 32) ? hvx_vec_add_f32_f32(Q6_V_hi_W(vp_dst), hmx_load_bias_f32_32_f32(bias_row_base, c + 32)) : Q6_V_vzero();
     return hmx_pack_f32_to_f16_clamped(v0, v1);
 }
 
-#define HMX_FP16_ADD_SRC2_F32_NONE(v_out, row_ptr, c) (v_out)
-#define HMX_FP16_ADD_SRC2_F32_F16(v_out, row_ptr, c)  hvx_vec_add_f32_f32((v_out), hmx_load_src2_f32_32_f16((row_ptr), (c)))
-#define HMX_FP16_ADD_SRC2_F32_F32(v_out, row_ptr, c)  hvx_vec_add_f32_f32((v_out), hmx_load_src2_f32_32_f32((row_ptr), (c)))
+#define HMX_FP16_ADD_BIAS_F32_NONE(v_out, row_ptr, c) (v_out)
+#define HMX_FP16_ADD_BIAS_F32_F16(v_out, row_ptr, c)  hvx_vec_add_f32_f32((v_out), hmx_load_bias_f32_32_f16((row_ptr), (c)))
+#define HMX_FP16_ADD_BIAS_F32_F32(v_out, row_ptr, c)  hvx_vec_add_f32_f32((v_out), hmx_load_bias_f32_32_f32((row_ptr), (c)))
 
-#define HMX_FP16_ADD_SRC2_F16_64_NONE(v_out, row_ptr, c) (v_out)
-#define HMX_FP16_ADD_SRC2_F16_64_F16(v_out, row_ptr, c)  hmx_add_src2_to_f16_vec64_f16((v_out), (row_ptr), (c))
-#define HMX_FP16_ADD_SRC2_F16_64_F32(v_out, row_ptr, c)  hmx_add_src2_to_f16_vec64_f32((v_out), (row_ptr), (c))
+#define HMX_FP16_ADD_BIAS_F16_64_NONE(v_out, row_ptr, c) (v_out)
+#define HMX_FP16_ADD_BIAS_F16_64_F16(v_out, row_ptr, c)  hmx_add_bias_to_f16_vec64_f16((v_out), (row_ptr), (c))
+#define HMX_FP16_ADD_BIAS_F16_64_F32(v_out, row_ptr, c)  hmx_add_bias_to_f16_vec64_f32((v_out), (row_ptr), (c))
 
-#define HMX_FP16_ADD_SRC2_F16_TAIL_NONE(v_out, row_ptr, c, vc) (v_out)
-#define HMX_FP16_ADD_SRC2_F16_TAIL_F16(v_out, row_ptr, c, vc)  hmx_add_src2_to_f16_tail_f16((v_out), (row_ptr), (c), (vc))
-#define HMX_FP16_ADD_SRC2_F16_TAIL_F32(v_out, row_ptr, c, vc)  hmx_add_src2_to_f16_tail_f32((v_out), (row_ptr), (c), (vc))
+#define HMX_FP16_ADD_BIAS_F16_TAIL_NONE(v_out, row_ptr, c, vc) (v_out)
+#define HMX_FP16_ADD_BIAS_F16_TAIL_F16(v_out, row_ptr, c, vc)  hmx_add_bias_to_f16_tail_f16((v_out), (row_ptr), (c), (vc))
+#define HMX_FP16_ADD_BIAS_F16_TAIL_F32(v_out, row_ptr, c, vc)  hmx_add_bias_to_f16_tail_f32((v_out), (row_ptr), (c), (vc))
 
-#define HMX_FP16_TO_FP32_COL_LOOP(ADD_SRC2)                                                         \
+#define HMX_FP16_TO_FP32_COL_LOOP(ADD_BIAS)                                                         \
     do {                                                                                            \
         _Pragma("unroll(4)")                                                                        \
         for (size_t c = 0; c < limit_c_aligned; c += HTP_MM_HMX_TILE_N_COLS) {                      \
@@ -1411,10 +1411,10 @@ static inline HVX_Vector hmx_add_src2_to_f16_tail_f32(HVX_Vector v_f16, const vo
             const __fp16 *tile = row_base + c0 * HTP_MM_HMX_TILE_N_ELMS;                            \
             HVX_Vector v = ((const HVX_Vector *) tile)[r1];                                         \
             HVX_VectorPair vp = Q6_Wqf32_vmpy_VhfVhf(v, one);                                       \
-            HVX_Vector v_out0 = ADD_SRC2(Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp)), src2_row0, c);         \
+            HVX_Vector v_out0 = ADD_BIAS(Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp)), bias_row0, c);         \
             hvx_vmemu(output_row_base + c + 0) = v_out0;                                            \
             if (r + 1 < n_rows) {                                                                   \
-                HVX_Vector v_out1 = ADD_SRC2(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp)), src2_row1, c);     \
+                HVX_Vector v_out1 = ADD_BIAS(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp)), bias_row1, c);     \
                 hvx_vmemu(output_row_base + c + dst_stride) = v_out1;                               \
             }                                                                                       \
         }                                                                                           \
@@ -1425,10 +1425,10 @@ static inline HVX_Vector hmx_add_src2_to_f16_tail_f32(HVX_Vector v_f16, const vo
             const __fp16 *tile = row_base + c0 * HTP_MM_HMX_TILE_N_ELMS;                            \
             HVX_Vector v = ((const HVX_Vector *) tile)[r1];                                         \
             HVX_VectorPair vp = Q6_Wqf32_vmpy_VhfVhf(v, one);                                       \
-            HVX_Vector v_out0 = ADD_SRC2(Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp)), src2_row0, c);         \
+            HVX_Vector v_out0 = ADD_BIAS(Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp)), bias_row0, c);         \
             hvx_vec_store_u(output_row_base + c, valid_c * sizeof(float), v_out0);                  \
             if (r + 1 < n_rows) {                                                                   \
-                HVX_Vector v_out1 = ADD_SRC2(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp)), src2_row1, c);     \
+                HVX_Vector v_out1 = ADD_BIAS(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp)), bias_row1, c);     \
                 hvx_vec_store_u(output_row_base + c + dst_stride, valid_c * sizeof(float), v_out1); \
             }                                                                                       \
         }                                                                                           \
@@ -1436,16 +1436,16 @@ static inline HVX_Vector hmx_add_src2_to_f16_tail_f32(HVX_Vector v_f16, const vo
 
 static void transfer_output_chunk_fp16_to_fp32_col_chunk(
     void *restrict dst_void,
-    const void *restrict src2,
+    const void *restrict bias,
     const __fp16 *restrict vtcm_src,
     uint32_t start_row,
     uint32_t n_rows,
     uint32_t c_len,
     uint32_t total_n_cols,
     uint32_t dst_stride,
-    uint32_t src2_stride,
+    uint32_t bias_stride,
     uint32_t dst_cols,
-    size_t src2_elem_size
+    size_t bias_elem_size
 ) {
     float *restrict dst = (float *) dst_void;
     const size_t tile_row_stride = hmx_ceil_div(total_n_cols, HTP_MM_HMX_TILE_N_COLS) * HTP_MM_HMX_TILE_N_ELMS;
@@ -1461,37 +1461,37 @@ static void transfer_output_chunk_fp16_to_fp32_col_chunk(
         const size_t r1 = (r_idx0 % HTP_MM_HMX_TILE_N_ROWS) / 2;
         const __fp16 *row_base = vtcm_src + r0 * tile_row_stride;
         float *output_row_base = dst + r * dst_stride;
-        const uint8_t *src2_row0 = src2 ? ((const uint8_t *) src2 + r * src2_stride * src2_elem_size) : NULL;
-        const uint8_t *src2_row1 = src2 ? (src2_row0 + src2_stride * src2_elem_size) : NULL;
+        const uint8_t *bias_row0 = bias ? ((const uint8_t *) bias + r * bias_stride * bias_elem_size) : NULL;
+        const uint8_t *bias_row1 = bias ? (bias_row0 + bias_stride * bias_elem_size) : NULL;
 
-        if (!src2_row0) {
-            HMX_FP16_TO_FP32_COL_LOOP(HMX_FP16_ADD_SRC2_F32_NONE);
-        } else if (src2_elem_size == sizeof(__fp16)) {
-            HMX_FP16_TO_FP32_COL_LOOP(HMX_FP16_ADD_SRC2_F32_F16);
+        if (!bias_row0) {
+            HMX_FP16_TO_FP32_COL_LOOP(HMX_FP16_ADD_BIAS_F32_NONE);
+        } else if (bias_elem_size == sizeof(__fp16)) {
+            HMX_FP16_TO_FP32_COL_LOOP(HMX_FP16_ADD_BIAS_F32_F16);
         } else {
-            HMX_FP16_TO_FP32_COL_LOOP(HMX_FP16_ADD_SRC2_F32_F32);
+            HMX_FP16_TO_FP32_COL_LOOP(HMX_FP16_ADD_BIAS_F32_F32);
         }
     }
 }
 
 static inline void transfer_output_chunk_fp16_to_fp32(
     float *restrict dst,
-    const void *restrict src2,
+    const void *restrict bias,
     const __fp16 *restrict vtcm_src,
     uint32_t start_row,
     uint32_t n_rows,
     uint32_t n_cols,
     uint32_t dst_stride,
-    uint32_t src2_stride,
+    uint32_t bias_stride,
     uint32_t dst_cols,
-    size_t src2_elem_size
+    size_t bias_elem_size
 ) {
     transfer_output_chunk_fp16_to_fp32_col_chunk(
-        dst, src2, vtcm_src, start_row, n_rows, n_cols, n_cols, dst_stride, src2_stride, dst_cols, src2_elem_size
+        dst, bias, vtcm_src, start_row, n_rows, n_cols, n_cols, dst_stride, bias_stride, dst_cols, bias_elem_size
     );
 }
 
-#define HMX_FP16_TO_FP16_COL_LOOP(ADD_SRC2_64, ADD_SRC2_TAIL)                                        \
+#define HMX_FP16_TO_FP16_COL_LOOP(ADD_BIAS_64, ADD_BIAS_TAIL)                                        \
     do {                                                                                             \
         for (size_t c = 0; c < limit_c_aligned64; c += 64) {                                         \
             const size_t c0 = c / HTP_MM_HMX_TILE_N_COLS;                                            \
@@ -1500,14 +1500,14 @@ static inline void transfer_output_chunk_fp16_to_fp32(
             HVX_Vector v_t0 = ((const HVX_Vector *) tile0)[r1];                                      \
             HVX_Vector v_t1 = ((const HVX_Vector *) tile1)[r1];                                      \
             HVX_VectorPair vp = Q6_W_vdeal_VVR(v_t1, v_t0, -2);                                      \
-            HVX_Vector v_out0 = ADD_SRC2_64(Q6_V_lo_W(vp), src2_row0, c);                            \
+            HVX_Vector v_out0 = ADD_BIAS_64(Q6_V_lo_W(vp), bias_row0, c);                            \
             if (dst_aligned_nt) {                                                                    \
                 hvx_vmem_store_nt(output_row_base + c, v_out0);                                      \
             } else {                                                                                 \
                 hvx_vmemu(output_row_base + c) = v_out0;                                             \
             }                                                                                        \
             if (r + 1 < n_rows) {                                                                    \
-                HVX_Vector v_out1 = ADD_SRC2_64(Q6_V_hi_W(vp), src2_row1, c);                        \
+                HVX_Vector v_out1 = ADD_BIAS_64(Q6_V_hi_W(vp), bias_row1, c);                        \
                 if (dst_aligned_nt) {                                                                \
                     hvx_vmem_store_nt(output_row_base + dst_stride + c, v_out1);                     \
                 } else {                                                                             \
@@ -1525,10 +1525,10 @@ static inline void transfer_output_chunk_fp16_to_fp32(
                 ? ((const HVX_Vector *) (row_base + (c0 + 1) * HTP_MM_HMX_TILE_N_ELMS))[r1]          \
                 : Q6_V_vzero();                                                                      \
             HVX_VectorPair vp = Q6_W_vdeal_VVR(v_t1, v_t0, -2);                                      \
-            HVX_Vector v_out0 = ADD_SRC2_TAIL(Q6_V_lo_W(vp), src2_row0, c, valid_c);                 \
+            HVX_Vector v_out0 = ADD_BIAS_TAIL(Q6_V_lo_W(vp), bias_row0, c, valid_c);                 \
             hvx_vec_store_u(output_row_base + c, valid_c * sizeof(__fp16), v_out0);                  \
             if (r + 1 < n_rows) {                                                                    \
-                HVX_Vector v_out1 = ADD_SRC2_TAIL(Q6_V_hi_W(vp), src2_row1, c, valid_c);             \
+                HVX_Vector v_out1 = ADD_BIAS_TAIL(Q6_V_hi_W(vp), bias_row1, c, valid_c);             \
                 hvx_vec_store_u(output_row_base + dst_stride + c, valid_c * sizeof(__fp16), v_out1); \
             }                                                                                        \
         }                                                                                            \
@@ -1536,16 +1536,16 @@ static inline void transfer_output_chunk_fp16_to_fp32(
 
 static void transfer_output_chunk_fp16_to_fp16_col_chunk(
     void *restrict dst_void,
-    const void *restrict src2,
+    const void *restrict bias,
     const __fp16 *restrict vtcm_src,
     uint32_t start_row,
     uint32_t n_rows,
     uint32_t c_len,
     uint32_t total_n_cols,
     uint32_t dst_stride,
-    uint32_t src2_stride,
+    uint32_t bias_stride,
     uint32_t dst_cols,
-    size_t src2_elem_size
+    size_t bias_elem_size
 ) {
     __fp16 *restrict dst           = (__fp16 *) dst_void;
     const size_t tile_row_stride   = hmx_ceil_div(total_n_cols, HTP_MM_HMX_TILE_N_COLS) * HTP_MM_HMX_TILE_N_ELMS;
@@ -1559,63 +1559,63 @@ static void transfer_output_chunk_fp16_to_fp16_col_chunk(
         const size_t r1 = (r_idx0 % HTP_MM_HMX_TILE_N_ROWS) / 2;
         const __fp16 *row_base = vtcm_src + r0 * tile_row_stride;
         __fp16 *output_row_base = dst + r * dst_stride;
-        const uint8_t *src2_row0 = src2 ? ((const uint8_t *) src2 + r * src2_stride * src2_elem_size) : NULL;
-        const uint8_t *src2_row1 = src2 ? (src2_row0 + src2_stride * src2_elem_size) : NULL;
+        const uint8_t *bias_row0 = bias ? ((const uint8_t *) bias + r * bias_stride * bias_elem_size) : NULL;
+        const uint8_t *bias_row1 = bias ? (bias_row0 + bias_stride * bias_elem_size) : NULL;
 
-        if (!src2_row0) {
-            HMX_FP16_TO_FP16_COL_LOOP(HMX_FP16_ADD_SRC2_F16_64_NONE, HMX_FP16_ADD_SRC2_F16_TAIL_NONE);
-        } else if (src2_elem_size == sizeof(__fp16)) {
-            HMX_FP16_TO_FP16_COL_LOOP(HMX_FP16_ADD_SRC2_F16_64_F16, HMX_FP16_ADD_SRC2_F16_TAIL_F16);
+        if (!bias_row0) {
+            HMX_FP16_TO_FP16_COL_LOOP(HMX_FP16_ADD_BIAS_F16_64_NONE, HMX_FP16_ADD_BIAS_F16_TAIL_NONE);
+        } else if (bias_elem_size == sizeof(__fp16)) {
+            HMX_FP16_TO_FP16_COL_LOOP(HMX_FP16_ADD_BIAS_F16_64_F16, HMX_FP16_ADD_BIAS_F16_TAIL_F16);
         } else {
-            HMX_FP16_TO_FP16_COL_LOOP(HMX_FP16_ADD_SRC2_F16_64_F32, HMX_FP16_ADD_SRC2_F16_TAIL_F32);
+            HMX_FP16_TO_FP16_COL_LOOP(HMX_FP16_ADD_BIAS_F16_64_F32, HMX_FP16_ADD_BIAS_F16_TAIL_F32);
         }
     }
 }
 
 static inline void transfer_output_chunk_fp16_to_fp16(
     __fp16 *restrict dst,
-    const void *restrict src2,
+    const void *restrict bias,
     const __fp16 *restrict vtcm_src,
     uint32_t start_row,
     uint32_t n_rows,
     uint32_t n_cols,
     uint32_t dst_stride,
-    uint32_t src2_stride,
+    uint32_t bias_stride,
     uint32_t dst_cols,
-    size_t src2_elem_size
+    size_t bias_elem_size
 ) {
     transfer_output_chunk_fp16_to_fp16_col_chunk(
-        dst, src2, vtcm_src, start_row, n_rows, n_cols, n_cols, dst_stride, src2_stride, dst_cols, src2_elem_size
+        dst, bias, vtcm_src, start_row, n_rows, n_cols, n_cols, dst_stride, bias_stride, dst_cols, bias_elem_size
     );
 }
 
 typedef void (*hmx_fp16_output_col_chunk_fn_t)(
     void * restrict dst,
-    const void * restrict src2,
+    const void * restrict bias,
     const __fp16 * restrict vtcm_src,
     uint32_t start_row,
     uint32_t n_rows,
     uint32_t c_len,
     uint32_t total_n_cols,
     uint32_t dst_stride,
-    uint32_t src2_stride,
+    uint32_t bias_stride,
     uint32_t dst_cols,
-    size_t src2_elem_size
+    size_t bias_elem_size
 );
 
 typedef struct {
     hmx_fp16_output_col_chunk_fn_t col_chunk_fn;
     const __fp16  *vtcm_src;
     void          *dst;
-    const void    *src2;
+    const void    *bias;
     size_t         dst_elem_size;
-    size_t         src2_elem_size;
+    size_t         bias_elem_size;
     uint32_t       n_tasks;
     uint32_t       n_tot_chunks;
     uint32_t       n_chunks_per_task;
     uint32_t       n_cols;
     uint32_t       dst_stride;  // DDR row stride
-    uint32_t       src2_stride; // DDR row stride for residual
+    uint32_t       bias_stride; // DDR row stride for residual
     uint32_t       dst_cols;    // Actual output columns
 } output_transfer_task_state_t;
 

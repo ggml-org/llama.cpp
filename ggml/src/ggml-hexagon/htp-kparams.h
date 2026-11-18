@@ -101,7 +101,7 @@ bool htp_kparams_solve_matmul_add(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
-    const struct ggml_tensor * src2,
+    const struct ggml_tensor * bias,
     const struct ggml_tensor * dst,
     struct htp_mm_kernel_params * kparams
 );

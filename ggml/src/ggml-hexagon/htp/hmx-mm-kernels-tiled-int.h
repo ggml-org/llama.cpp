@@ -1880,14 +1880,14 @@ static inline uint32_t (*stage_act_scales_to_l1d(
     return dst;
 }
 
-#define HMX_INT_FIN_ROW_NONE(acc_qf, row_idx, src2_base, src2_rb, c) \
+#define HMX_INT_FIN_ROW_NONE(acc_qf, row_idx, bias_base, bias_rb, c) \
     Q6_Vsf_equals_Vqf32(acc_qf)
 
-#define HMX_INT_FIN_ROW_F16(acc_qf, row_idx, src2_base, src2_rb, c) \
-    Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf((acc_qf), hmx_load_src2_f32_32_f16((src2_base) + (row_idx) * (src2_rb), (c))))
+#define HMX_INT_FIN_ROW_F16(acc_qf, row_idx, bias_base, bias_rb, c) \
+    Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf((acc_qf), hmx_load_bias_f32_32_f16((bias_base) + (row_idx) * (bias_rb), (c))))
 
-#define HMX_INT_FIN_ROW_F32(acc_qf, row_idx, src2_base, src2_rb, c) \
-    Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf((acc_qf), hmx_load_src2_f32_32_f32((src2_base) + (row_idx) * (src2_rb), (c))))
+#define HMX_INT_FIN_ROW_F32(acc_qf, row_idx, bias_base, bias_rb, c) \
+    Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf((acc_qf), hmx_load_bias_f32_32_f32((bias_base) + (row_idx) * (bias_rb), (c))))
 
 #define DEFINE_W8A8_EVAL_TILE_QUAD(SFX, FIN_ROW)                                                                                            \
 static inline void w8a8_sm_eval_tile_quad_1g_##SFX(                                                                                         \
@@ -1899,16 +1899,16 @@ static inline void w8a8_sm_eval_tile_quad_1g_##SFX(                             
         uint32_t da2,                                                                                                                       \
         uint32_t da3,                                                                                                                       \
         HVX_Vector sign_80,                                                                                                                 \
-        const uint8_t * restrict src2_row0,                                                                                                 \
-        size_t src2_row_bytes,                                                                                                              \
+        const uint8_t * restrict bias_row0,                                                                                                 \
+        size_t bias_row_bytes,                                                                                                              \
         uint32_t n_rows,                                                                                                                    \
         size_t r,                                                                                                                           \
         HVX_Vector * v_out0,                                                                                                                \
         HVX_Vector * v_out1,                                                                                                                \
         HVX_Vector * v_out2,                                                                                                                \
         HVX_Vector * v_out3) {                                                                                                              \
-    (void) src2_row0;                                                                                                                       \
-    (void) src2_row_bytes;                                                                                                                  \
+    (void) bias_row0;                                                                                                                       \
+    (void) bias_row_bytes;                                                                                                                  \
     const size_t     c0       = c >> 5;                                                                                                     \
     const uint8_t *  tp       = tile_base + c0 * 2 * HTP_MM_HMX_TILE_SIZE;                                                                  \
     const HVX_Vector v_hi_s8  = Q6_V_vxor_VV(*(const HVX_Vector *) tp, sign_80);                                                            \
@@ -1919,21 +1919,21 @@ static inline void w8a8_sm_eval_tile_quad_1g_##SFX(                             
     HVX_VectorPair vp_i32_23 = Q6_Ww_vunpack_Vh(Q6_V_hi_W(vp_i16));                                                                         \
     HVX_Vector v_f32_0   = Q6_Vsf_equals_Vw(Q6_V_lo_W(vp_i32_01));                                                                          \
     HVX_Vector v_acc0_qf = Q6_Vqf32_vmpy_Vqf32Vqf32(hvx_qf32_mul_sf_scalar(v_f32_0, da0), v_dw_qf);                                         \
-    *v_out0 = FIN_ROW(v_acc0_qf, 0, src2_row0, src2_row_bytes, c);                                                                          \
+    *v_out0 = FIN_ROW(v_acc0_qf, 0, bias_row0, bias_row_bytes, c);                                                                          \
     if (r + 1 < n_rows) {                                                                                                                   \
         HVX_Vector v_f32_1   = Q6_Vsf_equals_Vw(Q6_V_hi_W(vp_i32_01));                                                                      \
         HVX_Vector v_acc1_qf = Q6_Vqf32_vmpy_Vqf32Vqf32(hvx_qf32_mul_sf_scalar(v_f32_1, da1), v_dw_qf);                                     \
-        *v_out1 = FIN_ROW(v_acc1_qf, 1, src2_row0, src2_row_bytes, c);                                                                      \
+        *v_out1 = FIN_ROW(v_acc1_qf, 1, bias_row0, bias_row_bytes, c);                                                                      \
     }                                                                                                                                       \
     if (r + 2 < n_rows) {                                                                                                                   \
         HVX_Vector v_f32_2   = Q6_Vsf_equals_Vw(Q6_V_lo_W(vp_i32_23));                                                                      \
         HVX_Vector v_acc2_qf = Q6_Vqf32_vmpy_Vqf32Vqf32(hvx_qf32_mul_sf_scalar(v_f32_2, da2), v_dw_qf);                                     \
-        *v_out2 = FIN_ROW(v_acc2_qf, 2, src2_row0, src2_row_bytes, c);                                                                      \
+        *v_out2 = FIN_ROW(v_acc2_qf, 2, bias_row0, bias_row_bytes, c);                                                                      \
     }                                                                                                                                       \
     if (r + 3 < n_rows) {                                                                                                                   \
         HVX_Vector v_f32_3   = Q6_Vsf_equals_Vw(Q6_V_hi_W(vp_i32_23));                                                                      \
         HVX_Vector v_acc3_qf = Q6_Vqf32_vmpy_Vqf32Vqf32(hvx_qf32_mul_sf_scalar(v_f32_3, da3), v_dw_qf);                                     \
-        *v_out3 = FIN_ROW(v_acc3_qf, 3, src2_row0, src2_row_bytes, c);                                                                      \
+        *v_out3 = FIN_ROW(v_acc3_qf, 3, bias_row0, bias_row_bytes, c);                                                                      \
     }                                                                                                                                       \
 }                                                                                                                                           \
 static inline void w8a8_sm_eval_tile_quad_ng_##SFX(                                                                                         \
@@ -1951,18 +1951,18 @@ static inline void w8a8_sm_eval_tile_quad_ng_##SFX(                             
         uint32_t n_groups,                                                                                                                  \
         uint32_t (*da_ptr)[32],                                                                                                             \
         HVX_Vector sign_80,                                                                                                                 \
-        const uint8_t * restrict src2_row_base,                                                                                             \
+        const uint8_t * restrict bias_row_base,                                                                                             \
         size_t c,                                                                                                                           \
-        size_t src2_row_bytes,                                                                                                              \
+        size_t bias_row_bytes,                                                                                                              \
         uint32_t n_rows,                                                                                                                    \
         size_t r,                                                                                                                           \
         HVX_Vector * v_out0,                                                                                                                \
         HVX_Vector * v_out1,                                                                                                                \
         HVX_Vector * v_out2,                                                                                                                \
         HVX_Vector * v_out3) {                                                                                                              \
-    (void) src2_row_base;                                                                                                                   \
+    (void) bias_row_base;                                                                                                                   \
     (void) c;                                                                                                                               \
-    (void) src2_row_bytes;                                                                                                                  \
+    (void) bias_row_bytes;                                                                                                                  \
     HVX_Vector v_acc0_qf = Q6_V_vzero();                                                                                                    \
     HVX_Vector v_acc1_qf = Q6_V_vzero();                                                                                                    \
     HVX_Vector v_acc2_qf = Q6_V_vzero();                                                                                                    \
@@ -1992,15 +1992,15 @@ static inline void w8a8_sm_eval_tile_quad_ng_##SFX(                             
             v_acc3_qf = Q6_Vqf32_vadd_Vqf32Vqf32(v_acc3_qf, Q6_Vqf32_vmpy_Vqf32Vqf32(hvx_qf32_mul_sf_scalar(v_f32_3, da_row[3]), v_dw_qf)); \
         }                                                                                                                                   \
     }                                                                                                                                       \
-    *v_out0 = FIN_ROW(v_acc0_qf, 0, src2_row_base, src2_row_bytes, c);                                                                      \
+    *v_out0 = FIN_ROW(v_acc0_qf, 0, bias_row_base, bias_row_bytes, c);                                                                      \
     if (r + 1 < n_rows) {                                                                                                                   \
-        *v_out1 = FIN_ROW(v_acc1_qf, 1, src2_row_base, src2_row_bytes, c);                                                                  \
+        *v_out1 = FIN_ROW(v_acc1_qf, 1, bias_row_base, bias_row_bytes, c);                                                                  \
     }                                                                                                                                       \
     if (r + 2 < n_rows) {                                                                                                                   \
-        *v_out2 = FIN_ROW(v_acc2_qf, 2, src2_row_base, src2_row_bytes, c);                                                                  \
+        *v_out2 = FIN_ROW(v_acc2_qf, 2, bias_row_base, bias_row_bytes, c);                                                                  \
     }                                                                                                                                       \
     if (r + 3 < n_rows) {                                                                                                                   \
-        *v_out3 = FIN_ROW(v_acc3_qf, 3, src2_row_base, src2_row_bytes, c);                                                                  \
+        *v_out3 = FIN_ROW(v_acc3_qf, 3, bias_row_base, bias_row_bytes, c);                                                                  \
     }                                                                                                                                       \
 }
 
@@ -2016,24 +2016,24 @@ static inline void w8a16_sm_eval_tile_pair_1g_##SFX(                            
         uint32_t da0,                                                                                                                       \
         uint32_t da1,                                                                                                                       \
         HVX_Vector sign_8000,                                                                                                               \
-        const uint8_t * restrict src2_row_base,                                                                                             \
-        size_t src2_row_bytes,                                                                                                              \
+        const uint8_t * restrict bias_row_base,                                                                                             \
+        size_t bias_row_bytes,                                                                                                              \
         bool has_row1,                                                                                                                      \
         HVX_Vector * v_out0,                                                                                                                \
         HVX_Vector * v_out1) {                                                                                                              \
-    (void) src2_row_base;                                                                                                                   \
-    (void) src2_row_bytes;                                                                                                                  \
+    (void) bias_row_base;                                                                                                                   \
+    (void) bias_row_bytes;                                                                                                                  \
     const size_t     c0     = c >> 5;                                                                                                       \
     const HVX_Vector v_i16  = Q6_V_vxor_VV(*(const HVX_Vector *) (tile_base + c0 * HTP_MM_HMX_TILE_N_ELMS), sign_8000);                     \
     const HVX_Vector v_dw   = hvx_vec_f32_to_qf32(*(const HVX_Vector *) (dw_base + c));                                                     \
     HVX_VectorPair   vp_i32 = Q6_Ww_vunpack_Vh(Q6_Vh_vdeal_Vh(v_i16));                                                                      \
     HVX_Vector v_f32_0   = Q6_Vsf_equals_Vw(Q6_V_lo_W(vp_i32));                                                                             \
     HVX_Vector v_acc0_qf = Q6_Vqf32_vmpy_Vqf32Vqf32(hvx_qf32_mul_sf_scalar(v_f32_0, da0), v_dw);                                            \
-    *v_out0 = FIN_ROW(v_acc0_qf, 0, src2_row_base, src2_row_bytes, c);                                                                      \
+    *v_out0 = FIN_ROW(v_acc0_qf, 0, bias_row_base, bias_row_bytes, c);                                                                      \
     if (has_row1) {                                                                                                                         \
         HVX_Vector v_f32_1   = Q6_Vsf_equals_Vw(Q6_V_hi_W(vp_i32));                                                                         \
         HVX_Vector v_acc1_qf = Q6_Vqf32_vmpy_Vqf32Vqf32(hvx_qf32_mul_sf_scalar(v_f32_1, da1), v_dw);                                        \
-        *v_out1 = FIN_ROW(v_acc1_qf, 1, src2_row_base, src2_row_bytes, c);                                                                  \
+        *v_out1 = FIN_ROW(v_acc1_qf, 1, bias_row_base, bias_row_bytes, c);                                                                  \
     }                                                                                                                                       \
 }                                                                                                                                           \
 static inline void w8a16_sm_eval_tile_pair_ng_##SFX(                                                                                        \
@@ -2050,15 +2050,15 @@ static inline void w8a16_sm_eval_tile_pair_ng_##SFX(                            
         uint32_t n_groups,                                                                                                                  \
         uint32_t (*da_ptr)[32],                                                                                                             \
         HVX_Vector sign_8000,                                                                                                               \
-        const uint8_t * restrict src2_row_base,                                                                                             \
+        const uint8_t * restrict bias_row_base,                                                                                             \
         size_t c,                                                                                                                           \
-        size_t src2_row_bytes,                                                                                                              \
+        size_t bias_row_bytes,                                                                                                              \
         bool has_row1,                                                                                                                      \
         HVX_Vector * v_out0,                                                                                                                \
         HVX_Vector * v_out1) {                                                                                                              \
-    (void) src2_row_base;                                                                                                                   \
+    (void) bias_row_base;                                                                                                                   \
     (void) c;                                                                                                                               \
-    (void) src2_row_bytes;                                                                                                                  \
+    (void) bias_row_bytes;                                                                                                                  \
     HVX_Vector v_acc0_qf = Q6_V_vzero();                                                                                                    \
     HVX_Vector v_acc1_qf = Q6_V_vzero();                                                                                                    \
     for (uint32_t g_base = 0; g_base < n_groups; g_base += 16u) {                                                                           \
@@ -2079,9 +2079,9 @@ static inline void w8a16_sm_eval_tile_pair_ng_##SFX(                            
             v_acc1_qf = Q6_Vqf32_vadd_Vqf32Vqf32(v_acc1_qf, Q6_Vqf32_vmpy_Vqf32Vqf32(hvx_qf32_mul_sf_scalar(v_f32_1, da_row[1]), v_dw_qf)); \
         }                                                                                                                                   \
     }                                                                                                                                       \
-    *v_out0 = FIN_ROW(v_acc0_qf, 0, src2_row_base, src2_row_bytes, c);                                                                      \
+    *v_out0 = FIN_ROW(v_acc0_qf, 0, bias_row_base, bias_row_bytes, c);                                                                      \
     if (has_row1) {                                                                                                                         \
-        *v_out1 = FIN_ROW(v_acc1_qf, 1, src2_row_base, src2_row_bytes, c);                                                                  \
+        *v_out1 = FIN_ROW(v_acc1_qf, 1, bias_row_base, bias_row_bytes, c);                                                                  \
     }                                                                                                                                       \
 }
 
@@ -2103,7 +2103,7 @@ DEFINE_W8A16_EVAL_TILE_PAIR(f32,  HMX_INT_FIN_ROW_F32)
         for (size_t c = 0; c < limit_c_aligned; c += 32) {                                             \
             HVX_Vector v0, v1 = Q6_V_vzero(), v2 = Q6_V_vzero(), v3 = Q6_V_vzero();                    \
             w8a8_sm_eval_tile_quad_1g_##SFX(tile_base, dw_base, c, da0, da1, da2, da3, sign_80,        \
-                                            src2_row0, src2_row_bytes, n_rows, r, &v0, &v1, &v2, &v3); \
+                                            bias_row0, bias_row_bytes, n_rows, r, &v0, &v1, &v2, &v3); \
             hvx_vmem_store_nt(out_row0 + c + 0 * dst_stride, v0);                                      \
             hvx_vmem_store_nt(out_row0 + c + 1 * dst_stride, v1);                                      \
             hvx_vmem_store_nt(out_row0 + c + 2 * dst_stride, v2);                                      \
@@ -2113,7 +2113,7 @@ DEFINE_W8A16_EVAL_TILE_PAIR(f32,  HMX_INT_FIN_ROW_F32)
         for (size_t c = 0; c < limit_c_aligned; c += 32) {                                             \
             HVX_Vector v0, v1 = Q6_V_vzero(), v2 = Q6_V_vzero(), v3 = Q6_V_vzero();                    \
             w8a8_sm_eval_tile_quad_1g_##SFX(tile_base, dw_base, c, da0, da1, da2, da3, sign_80,        \
-                                            src2_row0, src2_row_bytes, n_rows, r, &v0, &v1, &v2, &v3); \
+                                            bias_row0, bias_row_bytes, n_rows, r, &v0, &v1, &v2, &v3); \
             HMX_INT_STORE_ROW(dst_aligned_nt, out_row0 + c + 0 * dst_stride, v0);                      \
             if (r + 1 < n_rows) HMX_INT_STORE_ROW(dst_aligned_nt, out_row0 + c + 1 * dst_stride, v1);  \
             if (r + 2 < n_rows) HMX_INT_STORE_ROW(dst_aligned_nt, out_row0 + c + 2 * dst_stride, v2);  \
@@ -2125,7 +2125,7 @@ DEFINE_W8A16_EVAL_TILE_PAIR(f32,  HMX_INT_FIN_ROW_F32)
         const size_t valid_bytes = (limit_c - c) * sizeof(float);                                      \
         HVX_Vector v0, v1 = Q6_V_vzero(), v2 = Q6_V_vzero(), v3 = Q6_V_vzero();                        \
         w8a8_sm_eval_tile_quad_1g_##SFX(tile_base, dw_base, c, da0, da1, da2, da3, sign_80,            \
-                                        src2_row0, src2_row_bytes, n_rows, r, &v0, &v1, &v2, &v3);     \
+                                        bias_row0, bias_row_bytes, n_rows, r, &v0, &v1, &v2, &v3);     \
         hvx_vec_store_u(out_row0 + c + 0 * dst_stride, valid_bytes, v0);                               \
         if (r + 1 < n_rows) hvx_vec_store_u(out_row0 + c + 1 * dst_stride, valid_bytes, v1);           \
         if (r + 2 < n_rows) hvx_vec_store_u(out_row0 + c + 2 * dst_stride, valid_bytes, v2);           \
@@ -2139,7 +2139,7 @@ DEFINE_W8A16_EVAL_TILE_PAIR(f32,  HMX_INT_FIN_ROW_F32)
         w8a8_sm_eval_tile_quad_ng_##SFX(vtcm_src, vtcm_act_scales, vtcm_weight_scales,                    \
                                         group_stride, row_tile_stride, r0, r_blk, rg, lane,               \
                                         mc_pad, c0_glob, n_groups, da_ptr, sign_80,                       \
-                                        src2_row_base, c, src2_row_bytes, n_rows, r, &v0, &v1, &v2, &v3); \
+                                        bias_row_base, c, bias_row_bytes, n_rows, r, &v0, &v1, &v2, &v3); \
         HMX_INT_STORE_ROW(dst_aligned_nt, out_row_base + c + 0 * dst_stride, v0);                         \
         if (r + 1 < n_rows) HMX_INT_STORE_ROW(dst_aligned_nt, out_row_base + c + 1 * dst_stride, v1);     \
         if (r + 2 < n_rows) HMX_INT_STORE_ROW(dst_aligned_nt, out_row_base + c + 2 * dst_stride, v2);     \
@@ -2153,7 +2153,7 @@ DEFINE_W8A16_EVAL_TILE_PAIR(f32,  HMX_INT_FIN_ROW_F32)
         w8a8_sm_eval_tile_quad_ng_##SFX(vtcm_src, vtcm_act_scales, vtcm_weight_scales,                    \
                                         group_stride, row_tile_stride, r0, r_blk, rg, lane,               \
                                         mc_pad, c0_glob, n_groups, da_ptr, sign_80,                       \
-                                        src2_row_base, c, src2_row_bytes, n_rows, r, &v0, &v1, &v2, &v3); \
+                                        bias_row_base, c, bias_row_bytes, n_rows, r, &v0, &v1, &v2, &v3); \
         hvx_vec_store_u(out_row_base + c + 0 * dst_stride, valid_bytes, v0);                              \
         if (r + 1 < n_rows) hvx_vec_store_u(out_row_base + c + 1 * dst_stride, valid_bytes, v1);          \
         if (r + 2 < n_rows) hvx_vec_store_u(out_row_base + c + 2 * dst_stride, valid_bytes, v2);          \
@@ -2165,9 +2165,9 @@ DEFINE_W8A16_EVAL_TILE_PAIR(f32,  HMX_INT_FIN_ROW_F32)
         HVX_Vector v0_lo, v1_lo = Q6_V_vzero(), v2_lo = Q6_V_vzero(), v3_lo = Q6_V_vzero();                                              \
         HVX_Vector v0_hi, v1_hi = Q6_V_vzero(), v2_hi = Q6_V_vzero(), v3_hi = Q6_V_vzero();                                              \
         w8a8_sm_eval_tile_quad_1g_##SFX(tile_base, dw_base, c, da0, da1, da2, da3, sign_80,                                              \
-                                        src2_row0, src2_row_bytes, n_rows, r, &v0_lo, &v1_lo, &v2_lo, &v3_lo);                           \
+                                        bias_row0, bias_row_bytes, n_rows, r, &v0_lo, &v1_lo, &v2_lo, &v3_lo);                           \
         w8a8_sm_eval_tile_quad_1g_##SFX(tile_base, dw_base, c + 32, da0, da1, da2, da3, sign_80,                                         \
-                                        src2_row0, src2_row_bytes, n_rows, r, &v0_hi, &v1_hi, &v2_hi, &v3_hi);                           \
+                                        bias_row0, bias_row_bytes, n_rows, r, &v0_hi, &v1_hi, &v2_hi, &v3_hi);                           \
         HMX_INT_STORE_ROW(dst_aligned_nt, out_row0 + c + 0 * dst_stride, hmx_pack_f32_to_f16_clamped(v0_lo, v0_hi));                     \
         if (r + 1 < n_rows) HMX_INT_STORE_ROW(dst_aligned_nt, out_row0 + c + 1 * dst_stride, hmx_pack_f32_to_f16_clamped(v1_lo, v1_hi)); \
         if (r + 2 < n_rows) HMX_INT_STORE_ROW(dst_aligned_nt, out_row0 + c + 2 * dst_stride, hmx_pack_f32_to_f16_clamped(v2_lo, v2_hi)); \
@@ -2180,10 +2180,10 @@ DEFINE_W8A16_EVAL_TILE_PAIR(f32,  HMX_INT_FIN_ROW_F32)
         HVX_Vector v0_lo, v1_lo = Q6_V_vzero(), v2_lo = Q6_V_vzero(), v3_lo = Q6_V_vzero();                                              \
         HVX_Vector v0_hi = Q6_V_vzero(), v1_hi = Q6_V_vzero(), v2_hi = Q6_V_vzero(), v3_hi = Q6_V_vzero();                               \
         w8a8_sm_eval_tile_quad_1g_##SFX(tile_base, dw_base, c, da0, da1, da2, da3, sign_80,                                              \
-                                        src2_row0, src2_row_bytes, n_rows, r, &v0_lo, &v1_lo, &v2_lo, &v3_lo);                           \
+                                        bias_row0, bias_row_bytes, n_rows, r, &v0_lo, &v1_lo, &v2_lo, &v3_lo);                           \
         if (valid_c > 32) {                                                                                                              \
             w8a8_sm_eval_tile_quad_1g_##SFX(tile_base, dw_base, c + 32, da0, da1, da2, da3, sign_80,                                     \
-                                            src2_row0, src2_row_bytes, n_rows, r, &v0_hi, &v1_hi, &v2_hi, &v3_hi);                       \
+                                            bias_row0, bias_row_bytes, n_rows, r, &v0_hi, &v1_hi, &v2_hi, &v3_hi);                       \
         }                                                                                                                                \
         hvx_vec_store_u(out_row0 + c + 0 * dst_stride, valid_bytes, hmx_pack_f32_to_f16_clamped(v0_lo, v0_hi));                          \
         if (r + 1 < n_rows) hvx_vec_store_u(out_row0 + c + 1 * dst_stride, valid_bytes, hmx_pack_f32_to_f16_clamped(v1_lo, v1_hi));      \
@@ -2199,11 +2199,11 @@ DEFINE_W8A16_EVAL_TILE_PAIR(f32,  HMX_INT_FIN_ROW_F32)
         w8a8_sm_eval_tile_quad_ng_##SFX(vtcm_src, vtcm_act_scales, vtcm_weight_scales,                                                       \
                                         group_stride, row_tile_stride, r0, r_blk, rg, lane,                                                  \
                                         mc_pad, c0_glob, n_groups, da_ptr, sign_80,                                                          \
-                                        src2_row_base, c, src2_row_bytes, n_rows, r, &v0_lo, &v1_lo, &v2_lo, &v3_lo);                        \
+                                        bias_row_base, c, bias_row_bytes, n_rows, r, &v0_lo, &v1_lo, &v2_lo, &v3_lo);                        \
         w8a8_sm_eval_tile_quad_ng_##SFX(vtcm_src, vtcm_act_scales, vtcm_weight_scales,                                                       \
                                         group_stride, row_tile_stride, r0, r_blk, rg, lane,                                                  \
                                         mc_pad, c0_glob + 1, n_groups, da_ptr, sign_80,                                                      \
-                                        src2_row_base, c + 32, src2_row_bytes, n_rows, r, &v0_hi, &v1_hi, &v2_hi, &v3_hi);                   \
+                                        bias_row_base, c + 32, bias_row_bytes, n_rows, r, &v0_hi, &v1_hi, &v2_hi, &v3_hi);                   \
         HMX_INT_STORE_ROW(dst_aligned_nt, out_row_base + c + 0 * dst_stride, hmx_pack_f32_to_f16_clamped(v0_lo, v0_hi));                     \
         if (r + 1 < n_rows) HMX_INT_STORE_ROW(dst_aligned_nt, out_row_base + c + 1 * dst_stride, hmx_pack_f32_to_f16_clamped(v1_lo, v1_hi)); \
         if (r + 2 < n_rows) HMX_INT_STORE_ROW(dst_aligned_nt, out_row_base + c + 2 * dst_stride, hmx_pack_f32_to_f16_clamped(v2_lo, v2_hi)); \
@@ -2219,12 +2219,12 @@ DEFINE_W8A16_EVAL_TILE_PAIR(f32,  HMX_INT_FIN_ROW_F32)
         w8a8_sm_eval_tile_quad_ng_##SFX(vtcm_src, vtcm_act_scales, vtcm_weight_scales,                                                       \
                                         group_stride, row_tile_stride, r0, r_blk, rg, lane,                                                  \
                                         mc_pad, c0_glob, n_groups, da_ptr, sign_80,                                                          \
-                                        src2_row_base, c, src2_row_bytes, n_rows, r, &v0_lo, &v1_lo, &v2_lo, &v3_lo);                        \
+                                        bias_row_base, c, bias_row_bytes, n_rows, r, &v0_lo, &v1_lo, &v2_lo, &v3_lo);                        \
         if (valid_c > 32) {                                                                                                                  \
             w8a8_sm_eval_tile_quad_ng_##SFX(vtcm_src, vtcm_act_scales, vtcm_weight_scales,                                                   \
                                             group_stride, row_tile_stride, r0, r_blk, rg, lane,                                              \
                                             mc_pad, c0_glob + 1, n_groups, da_ptr, sign_80,                                                  \
-                                            src2_row_base, c + 32, src2_row_bytes, n_rows, r, &v0_hi, &v1_hi, &v2_hi, &v3_hi);               \
+                                            bias_row_base, c + 32, bias_row_bytes, n_rows, r, &v0_hi, &v1_hi, &v2_hi, &v3_hi);               \
         }                                                                                                                                    \
         hvx_vec_store_u(out_row_base + c + 0 * dst_stride, valid_bytes, hmx_pack_f32_to_f16_clamped(v0_lo, v0_hi));                          \
         if (r + 1 < n_rows) hvx_vec_store_u(out_row_base + c + 1 * dst_stride, valid_bytes, hmx_pack_f32_to_f16_clamped(v1_lo, v1_hi));      \
@@ -2235,7 +2235,7 @@ DEFINE_W8A16_EVAL_TILE_PAIR(f32,  HMX_INT_FIN_ROW_F32)
 #define DEFINE_W8A8_COL_CHUNK(DST_SFX, DST_T, ALIGN_MASK, STEP_1G, STEP_NG, SFX)                                              \
 static __attribute__((noinline)) void transfer_output_chunk_w8a8_sm_to_##DST_SFX##_col_chunk_##SFX(                           \
         void * restrict dst_void,                                                                                             \
-        const void * restrict src2,                                                                                           \
+        const void * restrict bias,                                                                                           \
         const void * restrict vtcm_src_void,                                                                                  \
         const float * restrict vtcm_act_scales,                                                                               \
         const float * restrict vtcm_weight_scales,                                                                            \
@@ -2247,9 +2247,9 @@ static __attribute__((noinline)) void transfer_output_chunk_w8a8_sm_to_##DST_SFX
         uint32_t total_n_cols,                                                                                                \
         uint32_t n_groups,                                                                                                    \
         uint32_t dst_stride,                                                                                                  \
-        uint32_t src2_stride,                                                                                                 \
+        uint32_t bias_stride,                                                                                                 \
         uint32_t dst_cols,                                                                                                    \
-        size_t src2_elem_size) {                                                                                              \
+        size_t bias_elem_size) {                                                                                              \
     DST_T * restrict dst              = (DST_T *) dst_void;                                                                   \
     const uint8_t * restrict vtcm_src = (const uint8_t *) vtcm_src_void;                                                      \
     const size_t total_col_tiles      = hmx_ceil_div(total_n_cols, 32);                                                       \
@@ -2261,7 +2261,7 @@ static __attribute__((noinline)) void transfer_output_chunk_w8a8_sm_to_##DST_SFX
     const size_t limit_c              = hex_smin(c_len, dst_cols);                                                            \
     const size_t limit_c_aligned      = (limit_c & (ALIGN_MASK));                                                             \
     const bool   dst_aligned_nt       = ((((uintptr_t) dst | ((size_t) dst_stride * sizeof(DST_T))) & 127u) == 0);            \
-    const size_t src2_row_bytes       = (size_t) src2_stride * src2_elem_size;                                                \
+    const size_t bias_row_bytes       = (size_t) bias_stride * bias_elem_size;                                                \
     uint32_t da_buf[16][32] __attribute__((aligned(128)));                                                                    \
     uint32_t (*da_ptr)[32] = da_buf;                                                                                          \
     if (n_groups <= 1) {                                                                                                      \
@@ -2283,7 +2283,7 @@ static __attribute__((noinline)) void transfer_output_chunk_w8a8_sm_to_##DST_SFX
                 const uint8_t * tile_base = vtcm_src + r0 * row_tile_stride + c0_first * 2 * HTP_MM_HMX_TILE_SIZE + rg * 128; \
                 const float *   dw_base   = vtcm_weight_scales + c0_first * 32;                                               \
                 DST_T *         out_row0  = dst + r * dst_stride;                                                             \
-                const uint8_t * src2_row0 = (const uint8_t *) src2 + r * src2_row_bytes;                                      \
+                const uint8_t * bias_row0 = (const uint8_t *) bias + r * bias_row_bytes;                                      \
                 STEP_1G(SFX)                                                                                                  \
             }                                                                                                                 \
             r_base = r_end;                                                                                                   \
@@ -2304,7 +2304,7 @@ static __attribute__((noinline)) void transfer_output_chunk_w8a8_sm_to_##DST_SFX
             const size_t rg     = (r_idx0 & 63u) >> 2;                                                                        \
             const size_t lane   = r_idx0 & 31u;                                                                               \
             DST_T *         out_row_base  = dst + r * dst_stride;                                                             \
-            const uint8_t * src2_row_base = (const uint8_t *) src2 + r * src2_row_bytes;                                      \
+            const uint8_t * bias_row_base = (const uint8_t *) bias + r * bias_row_bytes;                                      \
             STEP_NG(SFX)                                                                                                      \
         }                                                                                                                     \
         r_base = r_end;                                                                                                       \
@@ -2324,7 +2324,7 @@ DEFINE_W8A8_COL_CHUNK(fp16, __fp16, ~63u, W8A8_COL_STEP_1G_FP16, W8A8_COL_STEP_N
         for (size_t c = 0; c < limit_c_aligned; c += 32) {                                       \
             HVX_Vector v0, v1 = Q6_V_vzero();                                                    \
             w8a16_sm_eval_tile_pair_1g_##SFX(tile_base, dw_base, c, da0, da1, sign_8000,         \
-                                             src2_row_base, src2_row_bytes, true, &v0, &v1);     \
+                                             bias_row_base, bias_row_bytes, true, &v0, &v1);     \
             hvx_vmem_store_nt(out_row_base + c, v0);                                             \
             hvx_vmem_store_nt(out_row_base + c + dst_stride, v1);                                \
         }                                                                                        \
@@ -2332,7 +2332,7 @@ DEFINE_W8A8_COL_CHUNK(fp16, __fp16, ~63u, W8A8_COL_STEP_1G_FP16, W8A8_COL_STEP_N
         for (size_t c = 0; c < limit_c_aligned; c += 32) {                                       \
             HVX_Vector v0, v1 = Q6_V_vzero();                                                    \
             w8a16_sm_eval_tile_pair_1g_##SFX(tile_base, dw_base, c, da0, da1, sign_8000,         \
-                                             src2_row_base, src2_row_bytes, has_row1, &v0, &v1); \
+                                             bias_row_base, bias_row_bytes, has_row1, &v0, &v1); \
             HMX_INT_STORE_ROW(dst_aligned_nt, out_row_base + c, v0);                             \
             if (has_row1) HMX_INT_STORE_ROW(dst_aligned_nt, out_row_base + c + dst_stride, v1);  \
         }                                                                                        \
@@ -2342,7 +2342,7 @@ DEFINE_W8A8_COL_CHUNK(fp16, __fp16, ~63u, W8A8_COL_STEP_1G_FP16, W8A8_COL_STEP_N
         const size_t valid_bytes = (limit_c - c) * sizeof(float);                                \
         HVX_Vector v0, v1 = Q6_V_vzero();                                                        \
         w8a16_sm_eval_tile_pair_1g_##SFX(tile_base, dw_base, c, da0, da1, sign_8000,             \
-                                         src2_row_base, src2_row_bytes, has_row1, &v0, &v1);     \
+                                         bias_row_base, bias_row_bytes, has_row1, &v0, &v1);     \
         hvx_vec_store_u(out_row_base + c, valid_bytes, v0);                                      \
         if (has_row1) hvx_vec_store_u(out_row_base + c + dst_stride, valid_bytes, v1);           \
     }
@@ -2354,7 +2354,7 @@ DEFINE_W8A8_COL_CHUNK(fp16, __fp16, ~63u, W8A8_COL_STEP_1G_FP16, W8A8_COL_STEP_N
         w8a16_sm_eval_tile_pair_ng_##SFX(vtcm_src, vtcm_act_scales, vtcm_weight_scales,         \
                                          group_stride, row_tile_stride, r0, r1, lane,           \
                                          mc_pad, c0_glob, n_groups, da_ptr, sign_8000,          \
-                                         src2_row_base, c, src2_row_bytes, has_row1, &v0, &v1); \
+                                         bias_row_base, c, bias_row_bytes, has_row1, &v0, &v1); \
         HMX_INT_STORE_ROW(dst_aligned_nt, out_row_base + c, v0);                                \
         if (has_row1) HMX_INT_STORE_ROW(dst_aligned_nt, out_row_base + c + dst_stride, v1);     \
     }                                                                                           \
@@ -2366,7 +2366,7 @@ DEFINE_W8A8_COL_CHUNK(fp16, __fp16, ~63u, W8A8_COL_STEP_1G_FP16, W8A8_COL_STEP_N
         w8a16_sm_eval_tile_pair_ng_##SFX(vtcm_src, vtcm_act_scales, vtcm_weight_scales,         \
                                          group_stride, row_tile_stride, r0, r1, lane,           \
                                          mc_pad, c0_glob, n_groups, da_ptr, sign_8000,          \
-                                         src2_row_base, c, src2_row_bytes, has_row1, &v0, &v1); \
+                                         bias_row_base, c, bias_row_bytes, has_row1, &v0, &v1); \
         hvx_vec_store_u(out_row_base + c, valid_bytes, v0);                                     \
         if (has_row1) hvx_vec_store_u(out_row_base + c + dst_stride, valid_bytes, v1);          \
     }
@@ -2376,9 +2376,9 @@ DEFINE_W8A8_COL_CHUNK(fp16, __fp16, ~63u, W8A8_COL_STEP_1G_FP16, W8A8_COL_STEP_N
         HVX_Vector v0_lo, v1_lo = Q6_V_vzero();                                                                                    \
         HVX_Vector v0_hi, v1_hi = Q6_V_vzero();                                                                                    \
         w8a16_sm_eval_tile_pair_1g_##SFX(tile_base, dw_base, c, da0, da1, sign_8000,                                               \
-                                         src2_row_base, src2_row_bytes, has_row1, &v0_lo, &v1_lo);                                 \
+                                         bias_row_base, bias_row_bytes, has_row1, &v0_lo, &v1_lo);                                 \
         w8a16_sm_eval_tile_pair_1g_##SFX(tile_base, dw_base, c + 32, da0, da1, sign_8000,                                          \
-                                         src2_row_base, src2_row_bytes, has_row1, &v0_hi, &v1_hi);                                 \
+                                         bias_row_base, bias_row_bytes, has_row1, &v0_hi, &v1_hi);                                 \
         HMX_INT_STORE_ROW(dst_aligned_nt, out_row_base + c, hmx_pack_f32_to_f16_clamped(v0_lo, v0_hi));                            \
         if (has_row1) HMX_INT_STORE_ROW(dst_aligned_nt, out_row_base + dst_stride + c, hmx_pack_f32_to_f16_clamped(v1_lo, v1_hi)); \
     }                                                                                                                              \
@@ -2389,10 +2389,10 @@ DEFINE_W8A8_COL_CHUNK(fp16, __fp16, ~63u, W8A8_COL_STEP_1G_FP16, W8A8_COL_STEP_N
         HVX_Vector v0_lo, v1_lo = Q6_V_vzero();                                                                                    \
         HVX_Vector v0_hi = Q6_V_vzero(), v1_hi = Q6_V_vzero();                                                                     \
         w8a16_sm_eval_tile_pair_1g_##SFX(tile_base, dw_base, c, da0, da1, sign_8000,                                               \
-                                         src2_row_base, src2_row_bytes, has_row1, &v0_lo, &v1_lo);                                 \
+                                         bias_row_base, bias_row_bytes, has_row1, &v0_lo, &v1_lo);                                 \
         if (valid_c > 32) {                                                                                                        \
             w8a16_sm_eval_tile_pair_1g_##SFX(tile_base, dw_base, c + 32, da0, da1, sign_8000,                                      \
-                                             src2_row_base, src2_row_bytes, has_row1, &v0_hi, &v1_hi);                             \
+                                             bias_row_base, bias_row_bytes, has_row1, &v0_hi, &v1_hi);                             \
         }                                                                                                                          \
         hvx_vec_store_u(out_row_base + c, valid_bytes, hmx_pack_f32_to_f16_clamped(v0_lo, v0_hi));                                 \
         if (has_row1) hvx_vec_store_u(out_row_base + dst_stride + c, valid_bytes, hmx_pack_f32_to_f16_clamped(v1_lo, v1_hi));      \
@@ -2406,11 +2406,11 @@ DEFINE_W8A8_COL_CHUNK(fp16, __fp16, ~63u, W8A8_COL_STEP_1G_FP16, W8A8_COL_STEP_N
         w8a16_sm_eval_tile_pair_ng_##SFX(vtcm_src, vtcm_act_scales, vtcm_weight_scales,                                            \
                                          group_stride, row_tile_stride, r0, r1, lane,                                              \
                                          mc_pad, c0_glob, n_groups, da_ptr, sign_8000,                                             \
-                                         src2_row_base, c, src2_row_bytes, has_row1, &v0_lo, &v1_lo);                              \
+                                         bias_row_base, c, bias_row_bytes, has_row1, &v0_lo, &v1_lo);                              \
         w8a16_sm_eval_tile_pair_ng_##SFX(vtcm_src, vtcm_act_scales, vtcm_weight_scales,                                            \
                                          group_stride, row_tile_stride, r0, r1, lane,                                              \
                                          mc_pad, c0_glob + 1, n_groups, da_ptr, sign_8000,                                         \
-                                         src2_row_base, c + 32, src2_row_bytes, has_row1, &v0_hi, &v1_hi);                         \
+                                         bias_row_base, c + 32, bias_row_bytes, has_row1, &v0_hi, &v1_hi);                         \
         HMX_INT_STORE_ROW(dst_aligned_nt, out_row_base + c, hmx_pack_f32_to_f16_clamped(v0_lo, v0_hi));                            \
         if (has_row1) HMX_INT_STORE_ROW(dst_aligned_nt, out_row_base + dst_stride + c, hmx_pack_f32_to_f16_clamped(v1_lo, v1_hi)); \
     }                                                                                                                              \
@@ -2424,12 +2424,12 @@ DEFINE_W8A8_COL_CHUNK(fp16, __fp16, ~63u, W8A8_COL_STEP_1G_FP16, W8A8_COL_STEP_N
         w8a16_sm_eval_tile_pair_ng_##SFX(vtcm_src, vtcm_act_scales, vtcm_weight_scales,                                            \
                                          group_stride, row_tile_stride, r0, r1, lane,                                              \
                                          mc_pad, c0_glob, n_groups, da_ptr, sign_8000,                                             \
-                                         src2_row_base, c, src2_row_bytes, has_row1, &v0_lo, &v1_lo);                              \
+                                         bias_row_base, c, bias_row_bytes, has_row1, &v0_lo, &v1_lo);                              \
         if (valid_c > 32) {                                                                                                        \
             w8a16_sm_eval_tile_pair_ng_##SFX(vtcm_src, vtcm_act_scales, vtcm_weight_scales,                                        \
                                              group_stride, row_tile_stride, r0, r1, lane,                                          \
                                              mc_pad, c0_glob + 1, n_groups, da_ptr, sign_8000,                                     \
-                                             src2_row_base, c + 32, src2_row_bytes, has_row1, &v0_hi, &v1_hi);                     \
+                                             bias_row_base, c + 32, bias_row_bytes, has_row1, &v0_hi, &v1_hi);                     \
         }                                                                                                                          \
         hvx_vec_store_u(out_row_base + c, valid_bytes, hmx_pack_f32_to_f16_clamped(v0_lo, v0_hi));                                 \
         if (has_row1) hvx_vec_store_u(out_row_base + dst_stride + c, valid_bytes, hmx_pack_f32_to_f16_clamped(v1_lo, v1_hi));      \
@@ -2438,7 +2438,7 @@ DEFINE_W8A8_COL_CHUNK(fp16, __fp16, ~63u, W8A8_COL_STEP_1G_FP16, W8A8_COL_STEP_N
 #define DEFINE_W8A16_COL_CHUNK(DST_SFX, DST_T, ALIGN_MASK, STEP_1G, STEP_NG, SFX)                                               \
 static __attribute__((noinline)) void transfer_output_chunk_w8a16_sm_to_##DST_SFX##_col_chunk_##SFX(                            \
         void * restrict dst_void,                                                                                               \
-        const void * restrict src2,                                                                                             \
+        const void * restrict bias,                                                                                             \
         const void * restrict vtcm_src_void,                                                                                    \
         const float * restrict vtcm_act_scales,                                                                                 \
         const float * restrict vtcm_weight_scales,                                                                              \
@@ -2450,9 +2450,9 @@ static __attribute__((noinline)) void transfer_output_chunk_w8a16_sm_to_##DST_SF
         uint32_t total_n_cols,                                                                                                  \
         uint32_t n_groups,                                                                                                      \
         uint32_t dst_stride,                                                                                                    \
-        uint32_t src2_stride,                                                                                                   \
+        uint32_t bias_stride,                                                                                                   \
         uint32_t dst_cols,                                                                                                      \
-        size_t src2_elem_size) {                                                                                                \
+        size_t bias_elem_size) {                                                                                                \
     DST_T * restrict dst               = (DST_T *) dst_void;                                                                    \
     const uint16_t * restrict vtcm_src = (const uint16_t *) vtcm_src_void;                                                      \
     const size_t total_col_tiles       = hmx_ceil_div(total_n_cols, 32);                                                        \
@@ -2464,7 +2464,7 @@ static __attribute__((noinline)) void transfer_output_chunk_w8a16_sm_to_##DST_SF
     const size_t limit_c               = hex_smin(c_len, dst_cols);                                                             \
     const size_t limit_c_aligned       = (limit_c & (ALIGN_MASK));                                                              \
     const bool   dst_aligned_nt        = ((((uintptr_t) dst | ((size_t) dst_stride * sizeof(DST_T))) & 127u) == 0);             \
-    const size_t src2_row_bytes        = (size_t) src2_stride * src2_elem_size;                                                 \
+    const size_t bias_row_bytes        = (size_t) bias_stride * bias_elem_size;                                                 \
     uint32_t da_buf[16][32] __attribute__((aligned(128)));                                                                      \
     uint32_t (*da_ptr)[32] = da_buf;                                                                                            \
     if (n_groups <= 1) {                                                                                                        \
@@ -2482,7 +2482,7 @@ static __attribute__((noinline)) void transfer_output_chunk_w8a16_sm_to_##DST_SF
                 const uint16_t * tile_base     = vtcm_src + r0 * row_tile_stride + c0_first * HTP_MM_HMX_TILE_N_ELMS + r1 * 64; \
                 const float *    dw_base       = vtcm_weight_scales + c0_first * 32;                                            \
                 DST_T *          out_row_base  = dst + r * dst_stride;                                                          \
-                const uint8_t *  src2_row_base = (const uint8_t *) src2 + r * src2_row_bytes;                                   \
+                const uint8_t *  bias_row_base = (const uint8_t *) bias + r * bias_row_bytes;                                   \
                 const bool       has_row1      = (r + 1 < n_rows);                                                              \
                 STEP_1G(SFX)                                                                                                    \
             }                                                                                                                   \
@@ -2502,7 +2502,7 @@ static __attribute__((noinline)) void transfer_output_chunk_w8a16_sm_to_##DST_SF
             const size_t lane = (start_row + r) & 31u;                                                                          \
             const size_t r1   = lane >> 1;                                                                                      \
             DST_T *         out_row_base  = dst + r * dst_stride;                                                               \
-            const uint8_t * src2_row_base = (const uint8_t *) src2 + r * src2_row_bytes;                                        \
+            const uint8_t * bias_row_base = (const uint8_t *) bias + r * bias_row_bytes;                                        \
             const bool      has_row1      = (r + 1 < n_rows);                                                                   \
             STEP_NG(SFX)                                                                                                        \
         }                                                                                                                       \
@@ -2915,7 +2915,7 @@ DEFINE_W8A16_SCATTERED(fp16, __fp16, ~63u, W8A16_SCAT_STEP_1G_FP16, W8A16_SCAT_S
 
 typedef void (*int_output_col_chunk_fn_t)(
         void * restrict dst,
-        const void * restrict src2,
+        const void * restrict bias,
         const void * restrict vtcm_src,
         const float * restrict vtcm_act_scales,
         const float * restrict vtcm_weight_scales,
@@ -2927,9 +2927,9 @@ typedef void (*int_output_col_chunk_fn_t)(
         uint32_t total_n_cols,
         uint32_t n_groups,
         uint32_t dst_stride,
-        uint32_t src2_stride,
+        uint32_t bias_stride,
         uint32_t dst_cols,
-        size_t src2_elem_size);
+        size_t bias_elem_size);
 
 typedef void (*int_output_scattered_fn_t)(
         void * restrict dst,
@@ -2954,27 +2954,27 @@ typedef void (*int_output_scattered_fn_t)(
 static inline int_output_col_chunk_fn_t resolve_int_output_col_chunk_fn(
         bool is_w8a8,
         size_t dst_elem_size,
-        const void * src2,
-        size_t src2_elem_size) {
+        const void * bias,
+        size_t bias_elem_size) {
     const bool dst_f16  = (dst_elem_size == sizeof(__fp16));
-    const bool src2_f16 = (src2_elem_size == sizeof(__fp16));
+    const bool bias_f16 = (bias_elem_size == sizeof(__fp16));
     if (is_w8a8) {
         if (dst_f16) {
-            return !src2 ? transfer_output_chunk_w8a8_sm_to_fp16_col_chunk_none
-                         : (src2_f16 ? transfer_output_chunk_w8a8_sm_to_fp16_col_chunk_f16
+            return !bias ? transfer_output_chunk_w8a8_sm_to_fp16_col_chunk_none
+                         : (bias_f16 ? transfer_output_chunk_w8a8_sm_to_fp16_col_chunk_f16
                                      : transfer_output_chunk_w8a8_sm_to_fp16_col_chunk_f32);
         }
-        return !src2 ? transfer_output_chunk_w8a8_sm_to_fp32_col_chunk_none
-                     : (src2_f16 ? transfer_output_chunk_w8a8_sm_to_fp32_col_chunk_f16
+        return !bias ? transfer_output_chunk_w8a8_sm_to_fp32_col_chunk_none
+                     : (bias_f16 ? transfer_output_chunk_w8a8_sm_to_fp32_col_chunk_f16
                                  : transfer_output_chunk_w8a8_sm_to_fp32_col_chunk_f32);
     }
     if (dst_f16) {
-        return !src2 ? transfer_output_chunk_w8a16_sm_to_fp16_col_chunk_none
-                     : (src2_f16 ? transfer_output_chunk_w8a16_sm_to_fp16_col_chunk_f16
+        return !bias ? transfer_output_chunk_w8a16_sm_to_fp16_col_chunk_none
+                     : (bias_f16 ? transfer_output_chunk_w8a16_sm_to_fp16_col_chunk_f16
                                  : transfer_output_chunk_w8a16_sm_to_fp16_col_chunk_f32);
     }
-    return !src2 ? transfer_output_chunk_w8a16_sm_to_fp32_col_chunk_none
-                 : (src2_f16 ? transfer_output_chunk_w8a16_sm_to_fp32_col_chunk_f16
+    return !bias ? transfer_output_chunk_w8a16_sm_to_fp32_col_chunk_none
+                 : (bias_f16 ? transfer_output_chunk_w8a16_sm_to_fp32_col_chunk_f16
                              : transfer_output_chunk_w8a16_sm_to_fp32_col_chunk_f32);
 }
 
