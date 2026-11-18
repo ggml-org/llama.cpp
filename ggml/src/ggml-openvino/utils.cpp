@@ -2218,11 +2218,13 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             // the power-of-two rounding. Without this, a new prompt walks up the sizes again, and since only one
             // prefill model is kept, every prompt longer than one chunk recompiles. Head-major KV is bound at the
             // storage size, so it keeps the exact match.
+            // The output count is part of the static prefill shape (more than 1 only for llama-perplexity).
             const bool reuse_larger = !ggml_openvino_npu_kv_head_major_enabled();
-            cache_hit = reuse_larger ? entry->prefill_attention_size >= c_params.attention_size &&
-                                           entry->prefill_attention_size_swa >= c_params.attention_size_swa :
-                                       entry->prefill_attention_size == c_params.attention_size &&
-                                           entry->prefill_attention_size_swa == c_params.attention_size_swa;
+            cache_hit = entry->prefill_output_len == c_params.output_len &&
+                        (reuse_larger ? entry->prefill_attention_size >= c_params.attention_size &&
+                                            entry->prefill_attention_size_swa >= c_params.attention_size_swa :
+                                        entry->prefill_attention_size == c_params.attention_size &&
+                                            entry->prefill_attention_size_swa == c_params.attention_size_swa);
             if (cache_hit) {
                 c_params.attention_size = entry->prefill_attention_size;
                 c_params.attention_size_swa = entry->prefill_attention_size_swa;
@@ -2293,6 +2295,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             entry->ptr = ggml_decoder;
             entry->prefill_attention_size = c_params.attention_size;
             entry->prefill_attention_size_swa = c_params.attention_size_swa;
+            entry->prefill_output_len = c_params.output_len;
             entry->decode_attention_size = compiled.decode_attention_size;
             entry->shared_key = shared_key;
             entry->decode_window_requests.clear();
@@ -2637,6 +2640,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             entry->ptr = ggml_decoder;
             entry->prefill_attention_size = c_params.attention_size;
             entry->prefill_attention_size_swa = c_params.attention_size_swa;
+            entry->prefill_output_len = c_params.output_len;
             entry->decode_attention_size = decode_c_params.attention_size;
             entry->shared_key = shared_key;
             entry->decode_window_requests.clear();
