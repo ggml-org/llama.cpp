@@ -29,6 +29,7 @@ struct htp_softmax_context {
     const struct htp_softmax_kernel_params * kparams;
 
     void *   prep;
+    void *   softmax;
 
     dma_addr_t data_src0;
     dma_addr_t data_src1;
@@ -355,115 +356,126 @@ static __attribute__((noinline)) void hvx_fast_softmax_prep_src16_mask_f32(
     }
 }
 
-static __attribute__((noinline)) void hvx_fast_softmax_f32(
-    const uint8_t * restrict src,
+typedef void (*softmax_fn_t)(
+    uint8_t * restrict work,
     uint8_t * restrict dst,
     const int num_elems,
-    bool has_sink,
-    float sink
-) {
-    const HVX_Vector * restrict v_src = (const HVX_Vector *) src;
-    HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
+    const float * restrict sink_ptr
+);
 
-    const int nvec = num_elems / VLEN_FP32;
-    const int nloe = num_elems % VLEN_FP32;
-
-    HVX_Vector max_vec = hvx_vec_repl4(v_src[0]);
-
-    #pragma unroll(2)
-    for (int i = 0; i < nvec; i++) {
-        HVX_Vector v1 = v_src[i];
-        max_vec       = Q6_Vsf_vmax_VsfVsf(max_vec, v1);
-    }
-
-    if (nloe > 0) {
-        HVX_VectorPred q_mask = Q6_Q_vsetq_R(nloe * sizeof(float));
-        HVX_Vector neg_inf    = hvx_vec_splat_f32(-INFINITY);
-        HVX_Vector v_tail     = Q6_V_vmux_QVV(q_mask, v_src[nvec], neg_inf);
-        max_vec               = Q6_Vsf_vmax_VsfVsf(max_vec, v_tail);
-    }
-
-    max_vec = hvx_vec_reduce_max_f32(max_vec);
-    if (has_sink) {
-        HVX_Vector sink_vec = hvx_vec_splat_f32(sink);
-        max_vec             = Q6_Vsf_vmax_VsfVsf(max_vec, sink_vec);
-    }
-
-    HVX_Vector sum_vec = Q6_V_vsplat_R(0x00000000);
-
-    #pragma nounroll
-    #pragma clang loop pipeline(disable)
-    for (int i = 0; i < nvec; i++) {
-        HVX_Vector v1 = v_src[i];
-        HVX_Vector v2 = Q6_Vqf32_vsub_VsfVsf(v1, max_vec);
-
-        HVX_Vector v3 = hvx_vec_exp_f32(Q6_Vsf_equals_Vqf32(v2));
-
-        sum_vec = Q6_Vqf32_vadd_VsfVsf(Q6_Vsf_equals_Vqf32(sum_vec), v3);
-
-        v_dst[i] = v3;
-    }
-
-    if (nloe > 0) {
-        HVX_VectorPred q_mask = Q6_Q_vsetq_R(nloe * sizeof(float));
-        HVX_Vector v1     = v_src[nvec];
-        HVX_Vector v2     = Q6_Vqf32_vsub_VsfVsf(v1, max_vec);
-        HVX_Vector v3     = hvx_vec_exp_f32(Q6_Vsf_equals_Vqf32(v2));
-        HVX_Vector v3_pad = Q6_V_vmux_QVV(q_mask, v3, Q6_V_vzero());
-
-        sum_vec     = Q6_Vqf32_vadd_VsfVsf(Q6_Vsf_equals_Vqf32(sum_vec), v3_pad);
-        v_dst[nvec] = v3_pad;
-    }
-
-    sum_vec = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_vec));
-    if (has_sink) {
-        HVX_Vector sink_vec = hvx_vec_splat_f32(sink);
-        HVX_Vector sink_sub = Q6_Vqf32_vsub_VsfVsf(sink_vec, max_vec);
-        HVX_Vector sink_exp = hvx_vec_exp_f32(Q6_Vsf_equals_Vqf32(sink_sub));
-        sum_vec             = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(sum_vec, sink_exp));
-    }
-
-    HVX_VectorPred pos_sum   = Q6_Q_vcmp_gt_VwVw(sum_vec, Q6_V_vzero());
-    HVX_Vector     v4        = hvx_vec_inverse_f32(sum_vec);
-    HVX_Vector     scale_vec = Q6_V_vmux_QVV(pos_sum, v4, hvx_vec_splat_f32(1.0f));
-
-    #pragma unroll(2)
-    for (int i = 0; i < nvec; i++) {
-        HVX_Vector v1 = v_dst[i];
-        HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(v1, scale_vec);
-        v_dst[i]      = Q6_Vsf_equals_Vqf32(v2);
-    }
-
-    if (nloe > 0) {
-        HVX_Vector v1 = v_dst[nvec];
-        HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(v1, scale_vec);
-        hvx_vec_store_a(&v_dst[nvec], nloe * sizeof(float), Q6_Vsf_equals_Vqf32(v2));
-    }
+#define DEFINE_HVX_FAST_SOFTMAX(SFX, HAS_SINK, DST_F16)                                                       \
+static __attribute__((noinline)) void hvx_fast_softmax_##SFX(                                                 \
+    uint8_t * restrict work,                                                                                  \
+    uint8_t * restrict dst,                                                                                   \
+    const int num_elems,                                                                                      \
+    const float * restrict sink_ptr                                                                           \
+) {                                                                                                           \
+    HVX_Vector * restrict v_work = (HVX_Vector *) work;                                                       \
+    HVX_Vector * restrict v_dst  = (HVX_Vector *) dst;                                                        \
+    (void) sink_ptr;                                                                                          \
+    (void) v_dst;                                                                                             \
+                                                                                                              \
+    const int nvec = num_elems / VLEN_FP32;                                                                   \
+    const int nloe = num_elems % VLEN_FP32;                                                                   \
+                                                                                                              \
+    HVX_Vector max_vec = hvx_vec_repl4(v_work[0]);                                                            \
+                                                                                                              \
+    _Pragma("unroll(2)")                                                                                      \
+    for (int i = 0; i < nvec; i++) {                                                                          \
+        HVX_Vector v1 = v_work[i];                                                                            \
+        max_vec       = Q6_Vsf_vmax_VsfVsf(max_vec, v1);                                                      \
+    }                                                                                                         \
+                                                                                                              \
+    if (nloe > 0) {                                                                                           \
+        HVX_VectorPred q_mask  = Q6_Q_vsetq_R(nloe * sizeof(float));                                          \
+        HVX_Vector     neg_inf = hvx_vec_splat_f32(-INFINITY);                                                \
+        HVX_Vector     v_tail  = Q6_V_vmux_QVV(q_mask, v_work[nvec], neg_inf);                                \
+        max_vec                = Q6_Vsf_vmax_VsfVsf(max_vec, v_tail);                                         \
+    }                                                                                                         \
+                                                                                                              \
+    max_vec = hvx_vec_reduce_max_f32(max_vec);                                                                \
+    HVX_Vector sink_vec;                                                                                      \
+    if (HAS_SINK) {                                                                                           \
+        sink_vec = hvx_vec_repl4(hvx_vmemu(sink_ptr));                                                        \
+        max_vec  = Q6_Vsf_vmax_VsfVsf(max_vec, sink_vec);                                                     \
+    }                                                                                                         \
+                                                                                                              \
+    HVX_Vector sum_vec = Q6_V_vsplat_R(0x00000000);                                                           \
+                                                                                                              \
+    _Pragma("nounroll")                                                                                       \
+    _Pragma("clang loop pipeline(disable)")                                                                   \
+    for (int i = 0; i < nvec; i++) {                                                                          \
+        HVX_Vector v1 = v_work[i];                                                                            \
+        HVX_Vector v2 = Q6_Vqf32_vsub_VsfVsf(v1, max_vec);                                                    \
+        HVX_Vector v3 = hvx_vec_exp_f32(Q6_Vsf_equals_Vqf32(v2));                                             \
+                                                                                                              \
+        sum_vec   = Q6_Vqf32_vadd_VsfVsf(Q6_Vsf_equals_Vqf32(sum_vec), v3);                                   \
+        v_work[i] = v3;                                                                                       \
+    }                                                                                                         \
+                                                                                                              \
+    if (nloe > 0) {                                                                                           \
+        HVX_VectorPred q_mask = Q6_Q_vsetq_R(nloe * sizeof(float));                                           \
+        HVX_Vector     v1     = v_work[nvec];                                                                 \
+        HVX_Vector     v2     = Q6_Vqf32_vsub_VsfVsf(v1, max_vec);                                            \
+        HVX_Vector     v3     = hvx_vec_exp_f32(Q6_Vsf_equals_Vqf32(v2));                                     \
+        HVX_Vector     v3_pad = Q6_V_vmux_QVV(q_mask, v3, Q6_V_vzero());                                      \
+                                                                                                              \
+        sum_vec      = Q6_Vqf32_vadd_VsfVsf(Q6_Vsf_equals_Vqf32(sum_vec), v3_pad);                            \
+        v_work[nvec] = v3_pad;                                                                                \
+    }                                                                                                         \
+                                                                                                              \
+    sum_vec = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_vec));                                           \
+    if (HAS_SINK) {                                                                                           \
+        HVX_Vector sink_sub = Q6_Vqf32_vsub_VsfVsf(sink_vec, max_vec);                                        \
+        HVX_Vector sink_exp = hvx_vec_exp_f32(Q6_Vsf_equals_Vqf32(sink_sub));                                 \
+        sum_vec             = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(sum_vec, sink_exp));                   \
+    }                                                                                                         \
+                                                                                                              \
+    HVX_VectorPred pos_sum   = Q6_Q_vcmp_gt_VwVw(sum_vec, Q6_V_vzero());                                      \
+    HVX_Vector     v4        = hvx_vec_inverse_f32(sum_vec);                                                  \
+    HVX_Vector     scale_vec = Q6_V_vmux_QVV(pos_sum, v4, hvx_vec_splat_f32(1.0f));                           \
+                                                                                                              \
+    if (DST_F16) {                                                                                            \
+        const int nvec_64 = num_elems / VLEN_FP16;                                                            \
+        const int nloe_64 = num_elems % VLEN_FP16;                                                            \
+                                                                                                              \
+        _Pragma("unroll(2)")                                                                                  \
+        for (int i = 0; i < nvec_64; i++) {                                                                   \
+            HVX_Vector s0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(v_work[2 * i],     scale_vec));          \
+            HVX_Vector s1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(v_work[2 * i + 1], scale_vec));          \
+            v_dst[i]      = hvx_vec_f32_to_f16(s0, s1);                                                       \
+        }                                                                                                     \
+                                                                                                              \
+        if (nloe_64 > 0) {                                                                                    \
+            HVX_Vector s0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(v_work[2 * nvec_64], scale_vec));        \
+            HVX_Vector s1 = (nloe_64 > VLEN_FP32)                                                             \
+                ? Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(v_work[2 * nvec_64 + 1], scale_vec))               \
+                : Q6_V_vzero();                                                                               \
+            HVX_Vector d  = hvx_vec_f32_to_f16(s0, s1);                                                       \
+            hvx_vec_store_a(&v_dst[nvec_64], nloe_64 * sizeof(__fp16), d);                                    \
+        }                                                                                                     \
+    } else {                                                                                                  \
+        _Pragma("unroll(2)")                                                                                  \
+        for (int i = 0; i < nvec; i++) {                                                                      \
+            HVX_Vector v1 = v_work[i];                                                                        \
+            HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(v1, scale_vec);                                              \
+            v_work[i]     = Q6_Vsf_equals_Vqf32(v2);                                                          \
+        }                                                                                                     \
+                                                                                                              \
+        if (nloe > 0) {                                                                                       \
+            HVX_Vector v1 = v_work[nvec];                                                                     \
+            HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(v1, scale_vec);                                              \
+            hvx_vec_store_a(&v_work[nvec], nloe * sizeof(float), Q6_Vsf_equals_Vqf32(v2));                    \
+        }                                                                                                     \
+    }                                                                                                         \
 }
 
-static __attribute__((noinline)) void hvx_fast_softmax_pack_f16(
-    const uint8_t * restrict src,
-    uint8_t * restrict dst,
-    const int num_elems
-) {
-    const HVX_Vector * restrict v_src = (const HVX_Vector *) src;
-    HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
+DEFINE_HVX_FAST_SOFTMAX(f32_nosink, 0, 0)
+DEFINE_HVX_FAST_SOFTMAX(f32_sink,   1, 0)
+DEFINE_HVX_FAST_SOFTMAX(f16_nosink, 0, 1)
+DEFINE_HVX_FAST_SOFTMAX(f16_sink,   1, 1)
 
-    const int nvec_64 = num_elems / VLEN_FP16;
-    const int nloe_64 = num_elems % VLEN_FP16;
-
-    #pragma unroll(2)
-    for (int i = 0; i < nvec_64; i++) {
-        v_dst[i] = hvx_vec_f32_to_f16(v_src[2 * i], v_src[2 * i + 1]);
-    }
-
-    if (nloe_64 > 0) {
-        HVX_Vector s0 = v_src[2 * nvec_64];
-        HVX_Vector s1 = (nloe_64 > VLEN_FP32) ? v_src[2 * nvec_64 + 1] : Q6_V_vzero();
-        HVX_Vector d  = hvx_vec_f32_to_f16(s0, s1);
-        hvx_vec_store_a(&v_dst[nvec_64], nloe_64 * sizeof(__fp16), d);
-    }
-}
+#undef DEFINE_HVX_FAST_SOFTMAX
 
 static __attribute__((noinline)) void softmax_init_alibi_slopes(
     float * restrict slopes,
@@ -485,6 +497,11 @@ static const softmax_prep_fn_t softmax_prep_kernels[HTP_SOFTMAX_KERNEL_COUNT] = 
     [HTP_SOFTMAX_KERNEL_SRC16_NOMASK]   = hvx_fast_softmax_prep_src16_nomask,
     [HTP_SOFTMAX_KERNEL_SRC16_MASK_F32] = hvx_fast_softmax_prep_src16_mask_f32,
     [HTP_SOFTMAX_KERNEL_SRC16_MASK_F16] = hvx_fast_softmax_prep_src16_mask_f16,
+};
+
+static const softmax_fn_t softmax_kernels[2][2] = {
+    { hvx_fast_softmax_f32_nosink, hvx_fast_softmax_f32_sink },
+    { hvx_fast_softmax_f16_nosink, hvx_fast_softmax_f16_sink },
 };
 
 static void softmax_thread_dma(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
@@ -537,11 +554,12 @@ static void softmax_thread_dma(const htp_thread_t * th, unsigned int nth, unsign
                        smctx->src0_row_size_aligned, src0_row_size, src0_row_size, 1);
     }
 
-    softmax_prep_fn_t prep = (softmax_prep_fn_t) smctx->prep;
-    const bool has_sinks   = smctx->use_src2;
-    const bool dst_f16     = smctx->dst_f16;
-    uint32_t prev_i2       = (uint32_t) -1;
-    float sink             = 0.0f;
+    softmax_prep_fn_t prep   = (softmax_prep_fn_t) smctx->prep;
+    softmax_fn_t softmax_fn  = (softmax_fn_t) smctx->softmax;
+    const bool has_sinks     = smctx->use_src2;
+    const bool dst_f16       = smctx->dst_f16;
+    uint32_t prev_i2         = (uint32_t) -1;
+    const float * sink_ptr   = NULL;
 
     for (uint32_t r = src0_start_row; r < src0_end_row; ++r) {
         void * d_spad = (void *) dma_queue_pop(dma_q).src;
@@ -552,17 +570,14 @@ static void softmax_thread_dma(const htp_thread_t * th, unsigned int nth, unsign
             uint32_t r_div_ne01 = fastdiv(r, div_ne01);
             uint32_t i2 = fastmodulo(r_div_ne01, ne02, div_ne02);
             if (i2 != prev_i2) {
-                sink    = smctx->vtcm_src2[i2];
-                prev_i2 = i2;
+                sink_ptr = smctx->vtcm_src2 + i2;
+                prev_i2  = i2;
             }
         }
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, r);
         prep(w_spad, s_spad, NULL, ne00, smctx->scale, 1.0f);
-        hvx_fast_softmax_f32((const uint8_t *) w_spad, (uint8_t *) w_spad, ne00, has_sinks, sink);
-        if (dst_f16) {
-            hvx_fast_softmax_pack_f16((const uint8_t *) w_spad, (uint8_t *) d_spad, ne00);
-        }
+        softmax_fn((uint8_t *) w_spad, (uint8_t *) d_spad, ne00, sink_ptr);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, r);
 
         dma_addr_t cur_dst = data_dst + r * dst_row_size;
@@ -658,13 +673,14 @@ static void softmax_thread_mask_dma(const htp_thread_t * th, unsigned int nth, u
                        smctx->src1_row_size_aligned, mask_row_size, mask_row_size, 1);
     }
 
-    softmax_prep_fn_t prep = (softmax_prep_fn_t) smctx->prep;
-    const bool has_bias    = smctx->max_bias > 0.0f;
-    const bool has_sinks   = smctx->use_src2;
-    const bool dst_f16     = smctx->dst_f16;
-    uint32_t prev_i2       = (uint32_t) -1;
-    float slope            = 1.0f;
-    float sink             = 0.0f;
+    softmax_prep_fn_t prep   = (softmax_prep_fn_t) smctx->prep;
+    softmax_fn_t softmax_fn  = (softmax_fn_t) smctx->softmax;
+    const bool has_bias      = smctx->max_bias > 0.0f;
+    const bool has_sinks     = smctx->use_src2;
+    const bool dst_f16       = smctx->dst_f16;
+    uint32_t prev_i2         = (uint32_t) -1;
+    float slope              = 1.0f;
+    const float * sink_ptr   = NULL;
 
     for (uint32_t r = src0_start_row; r < src0_end_row; ++r) {
         void * d_spad = (void *) (uintptr_t) dma_queue_pop(dma_q).src;
@@ -680,7 +696,7 @@ static void softmax_thread_mask_dma(const htp_thread_t * th, unsigned int nth, u
                     slope = smctx->slopes[i2];
                 }
                 if (has_sinks) {
-                    sink = smctx->vtcm_src2[i2];
+                    sink_ptr = smctx->vtcm_src2 + i2;
                 }
                 prev_i2 = i2;
             }
@@ -688,10 +704,7 @@ static void softmax_thread_mask_dma(const htp_thread_t * th, unsigned int nth, u
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, r);
         prep(w_spad, s_spad, m_spad, ne00, smctx->scale, slope);
-        hvx_fast_softmax_f32((const uint8_t *) w_spad, (uint8_t *) w_spad, ne00, has_sinks, sink);
-        if (dst_f16) {
-            hvx_fast_softmax_pack_f16((const uint8_t *) w_spad, (uint8_t *) d_spad, ne00);
-        }
+        softmax_fn((uint8_t *) w_spad, (uint8_t *) d_spad, ne00, sink_ptr);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, r);
 
         dma_addr_t cur_dst = data_dst + r * dst_row_size;
@@ -785,6 +798,7 @@ static int execute_op_softmax_f32(struct htp_ops_context * octx) {
         .octx                  = octx,
         .kparams               = kparams,
         .prep                  = (void *) softmax_prep_kernels[kparams->kernel_type],
+        .softmax               = (void *) softmax_kernels[kparams->dst_f16 != 0][kparams->use_src2 != 0],
 
         .data_src0             = src0->data,
         .data_src1             = kparams->use_src1 ? octx->src[1]->data : 0,
