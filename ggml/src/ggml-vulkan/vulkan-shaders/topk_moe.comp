@@ -130,13 +130,6 @@ void main() {
         }
     }
 
-    [[unroll]]
-    for (int i = 0; i < experts_per_thread; i++) {
-        if (isnan(probs[i])) {
-            probs[i] = uintBitsToFloat(0xFF7FFFFFu);
-        }
-    }
-
     float selection_probs[experts_per_thread];
     if (has_bias != 0) {
         [[unroll]]
@@ -151,6 +144,16 @@ void main() {
         [[unroll]]
         for (int i = 0; i < experts_per_thread; i++) {
             selection_probs[i] = probs[i];
+            if (isnan(selection_probs[i])) {
+                selection_probs[i] = uintBitsToFloat(0xFF7FFFFFu);
+            }
+        }
+    }
+
+    [[unroll]]
+    for (int i = 0; i < experts_per_thread; i++) {
+        if (isnan(probs[i])) {
+            probs[i] = uintBitsToFloat(0xFF7FFFFFu);
         }
     }
 
