@@ -1445,7 +1445,7 @@ static bool htp_kparams_solve_unary_impl(
 ) {
     memset(kparams, 0, sizeof(*kparams));
 
-    if (!htp_op_is_unary((htp_op_code) op) || !src0 || !dst) {
+    if (!htp_op_is_unary((htp_op_code) op)) {
         return false;
     }
 
@@ -1456,7 +1456,7 @@ static bool htp_kparams_solve_unary_impl(
         if (n < 32 || (n & (n - 1)) != 0) {
             return false;
         }
-        if (!dst->src[0] || dst->src[0]->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
+        if (dst->src[0]->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
             (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16)) {
             return false;
         }
@@ -1471,13 +1471,13 @@ static bool htp_kparams_solve_unary_impl(
                 return false;
             }
             if (op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD) {
-                if (!src1 || (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) ||
+                if ((src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) ||
                     !ggml_is_contiguous_rows(src1) || src1->ne[0] != src0->ne[0]) {
                     return false;
                 }
             }
             if (op == HTP_OP_RMS_NORM_MUL_ADD) {
-                if (!src2 || (src2->type != GGML_TYPE_F32 && src2->type != GGML_TYPE_F16) ||
+                if ((src2->type != GGML_TYPE_F32 && src2->type != GGML_TYPE_F16) ||
                     !ggml_is_contiguous_rows(src2) || !ggml_are_same_shape(src0, src2)) {
                     return false;
                 }
@@ -1586,17 +1586,6 @@ static bool htp_kparams_solve_unary_impl(
     kparams->div_tpr             = init_fastdiv_values(tiles_per_row);
 
     return (col_tile > 0 || vtcm_row_per_hvx > 0) && L.total_bytes <= vtcm_size;
-}
-
-static bool htp_kparams_solve_unary(
-    const struct ggml_hexagon_session * sess,
-    const struct ggml_tensor * op,
-    struct htp_unary_kernel_params * kparams
-) {
-    const htp_op_code opcode = htp_op_remap(op);
-    const struct ggml_tensor * src0 = (opcode == HTP_OP_HADAMARD) ? op->src[1] : op->src[0];
-    const struct ggml_tensor * src1 = (opcode == HTP_OP_HADAMARD) ? nullptr    : op->src[1];
-    return htp_kparams_solve_unary_impl(sess, opcode, src0, src1, op->src[2], op, false, kparams);
 }
 
 bool htp_kparams_solve_rms_norm_mul(
@@ -2183,14 +2172,6 @@ bool htp_kparams_solve_unary_mul_glu(
     return true;
 }
 
-static bool htp_kparams_solve_glu(
-    const struct ggml_hexagon_session * sess,
-    const struct ggml_tensor * op,
-    struct htp_glu_kernel_params * kparams
-) {
-    return htp_kparams_solve_unary_mul_glu(sess, htp_op_remap(op), op->src[0], op->src[1], op, kparams);
-}
-
 static bool htp_kparams_solve_repeat(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
@@ -2238,10 +2219,6 @@ static bool htp_kparams_solve_ssm_conv(
     struct htp_ssm_conv_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
-
-    if (!src0 || !src1 || !dst) {
-        return false;
-    }
 
     const auto is_valid_type = [internal_f16](ggml_type t) {
         return t == GGML_TYPE_F32 || (internal_f16 && t == GGML_TYPE_F16);
@@ -5330,8 +5307,11 @@ bool htp_kparams_solve(
         return commit(htp_kparams_solve_matmul_impl(sess, src0, src1, nullptr, dst, tmp.kparams<htp_mm_kernel_params>()));
     }
     if (tmp.opcode == HTP_OP_MUL_MAT_ADD) {
-        const ggml_tensor * src2 = tmp.inputs.size() > 2 ? tmp.inputs[2] : nullptr;
-        if (!src2 || (src2->type != GGML_TYPE_F32 && src2->type != GGML_TYPE_F16) ||
+        if (tmp.inputs.size() != 3) {
+            return false;
+        }
+        const ggml_tensor * src2 = tmp.inputs[2];
+        if ((src2->type != GGML_TYPE_F32 && src2->type != GGML_TYPE_F16) ||
             src2->nb[0] != ggml_type_size(src2->type) ||
             !htp_matmul_check_types(src0, src1, dst, internal_f16)) {
             return false;
@@ -5340,7 +5320,7 @@ bool htp_kparams_solve(
     }
     if (tmp.opcode == HTP_OP_MUL_MAT_NX) {
         const size_t n_w = tmp.outputs.size();
-        if (n_w == 0 || tmp.inputs.size() != n_w + 1 || !tmp.inputs[n_w]) {
+        if (n_w == 0 || tmp.inputs.size() != n_w + 1) {
             return false;
         }
         const ggml_tensor * act = tmp.inputs[n_w];
@@ -5361,7 +5341,7 @@ bool htp_kparams_solve(
     }
     if (tmp.opcode == HTP_OP_MUL_MAT_ID_NX) {
         const size_t n_w = tmp.outputs.size();
-        if (n_w == 0 || tmp.inputs.size() != n_w + 2 || !tmp.inputs[n_w] || !tmp.inputs[n_w + 1]) {
+        if (n_w == 0 || tmp.inputs.size() != n_w + 2) {
             return false;
         }
         const ggml_tensor * act = tmp.inputs[n_w];
@@ -5601,12 +5581,6 @@ bool htp_kparams_solve(
             return htp_kparams_invoke<htp_kparams_solve_dsv4_hc_post>(sess, op, kparams);
 
         default:
-            if (htp_op_is_unary(opcode)) {
-                return htp_kparams_invoke<htp_kparams_solve_unary>(sess, op, kparams);
-            }
-            if (htp_op_is_glu(opcode)) {
-                return htp_kparams_invoke<htp_kparams_solve_glu>(sess, op, kparams);
-            }
             return false;
     }
 }

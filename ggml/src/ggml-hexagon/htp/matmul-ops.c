@@ -5346,13 +5346,13 @@ static int hmx_mm_op_matmul_id_nx(
 
         if (htp_mm_kernel_is_hmx_int(eff_kernel_type)) {
             const struct htp_tensor * restrict dst0 = octx->dsts[0];
-            bool same_shape = (src0 != NULL && dst0 != NULL);
+            bool same_shape = true;
             void *     dst_ptrs[HTP_OP_MAX_OUTPUTS];
             dma_addr_t weight_addrs[HTP_OP_MAX_OUTPUTS];
             for (uint32_t p = 0; p < n_weights && same_shape; ++p) {
                 const struct htp_tensor * restrict sw = octx->src[p];
                 const struct htp_tensor * restrict d  = octx->dsts[p];
-                if (!sw || !d || sw->ne[0] != src0->ne[0] || sw->ne[1] != src0->ne[1] ||
+                if (sw->ne[0] != src0->ne[0] || sw->ne[1] != src0->ne[1] ||
                     sw->nb[1] != src0->nb[1] || sw->type != src0->type ||
                     d->type != dst0->type || d->nb[1] != dst0->nb[1] || d->nb[2] != dst0->nb[2]) {
                     same_shape = false;

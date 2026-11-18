@@ -171,9 +171,6 @@ bool htp_dsv4_hc_pre_can_collapse(
     const struct ggml_tensor * weights,
     const struct ggml_tensor * dst
 ) {
-    if (!x || !weights || !dst) {
-        return false;
-    }
     if (x->type != GGML_TYPE_F32 || weights->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
         return false;
     }
@@ -257,9 +254,6 @@ bool htp_dsv4_hc_post_can_collapse(
     const struct ggml_tensor * comb,
     const struct ggml_tensor * dst
 ) {
-    if (!x || !residual || !post || !dst) {
-        return false;
-    }
     if (x->type != GGML_TYPE_F32 || residual->type != GGML_TYPE_F32 || post->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
         return false;
     }
@@ -365,10 +359,6 @@ bool htp_lightning_indexer_can_collapse(
     const struct ggml_tensor * m,
     const struct ggml_tensor * dst
 ) {
-    if (!q || !k || !w || !m || !dst) {
-        return false;
-    }
-
     // 2D K normalization: ne[1] is n_kv, ne[2] is 1
     const bool can_collapse_k = (k->ne[1] > 1 && k->ne[2] == 1);
 
@@ -461,14 +451,12 @@ void htp_lower_opnode(const struct ggml_hexagon_session * sess, htp_opnode & nod
         }
     }
     for (size_t i = 0; i < n_out; ++i) {
-        if (node.outputs[i]) {
-            out_dirty[i] = apply_f16 && ggml_hexagon_tensor_is_lowered_f16(node.outputs[i]);
-            out_mat[i]   = apply_f16 ? htp_tensor_lower_f16(node.outputs[i]) : *node.outputs[i];
-        }
+        out_dirty[i] = apply_f16 && ggml_hexagon_tensor_is_lowered_f16(node.outputs[i]);
+        out_mat[i]   = apply_f16 ? htp_tensor_lower_f16(node.outputs[i]) : *node.outputs[i];
     }
 
     if (htp_op_is_unary(node.opcode) && htp_unary_is_elementwise(node.opcode)) {
-        if (n_in >= 1 && node.inputs[0] && n_out >= 1 && node.outputs[0] &&
+        if (n_in >= 1 && n_out >= 1 &&
             ggml_are_same_shape(&in_mat[0], &out_mat[0])) {
             const int64_t old_ne0   = in_mat[0].ne[0];
             const int64_t old_ne1   = in_mat[0].ne[1];
@@ -481,7 +469,7 @@ void htp_lower_opnode(const struct ggml_hexagon_session * sess, htp_opnode & nod
             }
         }
     } else if (htp_op_is_glu(node.opcode)) {
-        if (n_in >= 2 && node.inputs[0] && node.inputs[1] && n_out >= 1 && node.outputs[0] &&
+        if (n_in >= 2 && n_out >= 1 &&
             ggml_are_same_shape(&in_mat[0], &out_mat[0]) &&
             ggml_are_same_shape(&in_mat[1], &out_mat[0])) {
             const int64_t old_ne0   = in_mat[0].ne[0];
@@ -496,7 +484,7 @@ void htp_lower_opnode(const struct ggml_hexagon_session * sess, htp_opnode & nod
             }
         }
     } else if (node.opcode == HTP_OP_MUL_MAT) {
-        if (n_in >= 2 && node.inputs[0] && node.inputs[1] && n_out >= 1 && node.outputs[0] &&
+        if (n_in >= 2 && n_out >= 1 &&
             htp_matmul_can_collapse(&in_mat[0], &in_mat[1], &out_mat[0])) {
             in_mat[1]    = htp_tensor_collapse_rows(&in_mat[1]);
             out_mat[0]   = htp_tensor_collapse_rows(&out_mat[0]);
@@ -504,26 +492,23 @@ void htp_lower_opnode(const struct ggml_hexagon_session * sess, htp_opnode & nod
             out_dirty[0] = true;
         }
     } else if (node.opcode == HTP_OP_MUL_MAT_ADD) {
-        if (n_in >= 2 && node.inputs[0] && node.inputs[1] && n_out >= 1 && node.outputs[0]) {
-            const struct ggml_tensor * p_src2 = (n_in > 2 && node.inputs[2]) ? &in_mat[2] : nullptr;
-            if (htp_matmul_add_can_collapse(&in_mat[0], &in_mat[1], p_src2, &out_mat[0])) {
-                in_mat[1]    = htp_tensor_collapse_rows(&in_mat[1]);
-                out_mat[0]   = htp_tensor_collapse_rows(&out_mat[0]);
-                in_dirty[1]  = true;
-                out_dirty[0] = true;
-                if (p_src2 && (p_src2->ne[1] * p_src2->ne[2] * p_src2->ne[3] > 1)) {
-                    in_mat[2]   = htp_tensor_collapse_rows(&in_mat[2]);
-                    in_dirty[2] = true;
-                }
+        if (n_in >= 3 && n_out >= 1 &&
+            htp_matmul_add_can_collapse(&in_mat[0], &in_mat[1], &in_mat[2], &out_mat[0])) {
+            in_mat[1]    = htp_tensor_collapse_rows(&in_mat[1]);
+            out_mat[0]   = htp_tensor_collapse_rows(&out_mat[0]);
+            in_dirty[1]  = true;
+            out_dirty[0] = true;
+            if (in_mat[2].ne[1] * in_mat[2].ne[2] * in_mat[2].ne[3] > 1) {
+                in_mat[2]   = htp_tensor_collapse_rows(&in_mat[2]);
+                in_dirty[2] = true;
             }
         }
     } else if (node.opcode == HTP_OP_MUL_MAT_NX) {
         const size_t n_w = n_out;
-        if (n_w > 0 && n_in == n_w + 1 && node.inputs[n_w]) {
+        if (n_w > 0 && n_in == n_w + 1) {
             bool can_collapse = true;
             for (size_t i = 0; i < n_w; ++i) {
-                if (!node.inputs[i] || !node.outputs[i] ||
-                    !htp_matmul_can_collapse(&in_mat[i], &in_mat[n_w], &out_mat[i])) {
+                if (!htp_matmul_can_collapse(&in_mat[i], &in_mat[n_w], &out_mat[i])) {
                     can_collapse = false;
                     break;
                 }
@@ -538,7 +523,7 @@ void htp_lower_opnode(const struct ggml_hexagon_session * sess, htp_opnode & nod
             }
         }
     } else if (node.opcode == HTP_OP_UPSCALE) {
-        if (n_in >= 1 && node.inputs[0] && n_out >= 1 && node.outputs[0]) {
+        if (n_in >= 1 && n_out >= 1) {
             if ((in_mat[0].ne[3] > 1 || out_mat[0].ne[3] > 1) &&
                 in_mat[0].ne[2] == out_mat[0].ne[2] && in_mat[0].ne[3] == out_mat[0].ne[3] &&
                 in_mat[0].nb[3] == (size_t) in_mat[0].ne[2] * in_mat[0].nb[2] &&
@@ -554,7 +539,7 @@ void htp_lower_opnode(const struct ggml_hexagon_session * sess, htp_opnode & nod
             }
         }
     } else if (node.opcode == HTP_OP_DSV4_HC_PRE) {
-        if (n_in >= 2 && node.inputs[0] && node.inputs[1] && n_out >= 1 && node.outputs[0] &&
+        if (n_in >= 2 && n_out >= 1 &&
             htp_dsv4_hc_pre_can_collapse(&in_mat[0], &in_mat[1], &out_mat[0])) {
             struct ggml_tensor x_c, w_c, d_c;
             htp_dsv4_hc_pre_collapse_tensors(&in_mat[0], &in_mat[1], &out_mat[0], &x_c, &w_c, &d_c);
@@ -566,7 +551,7 @@ void htp_lower_opnode(const struct ggml_hexagon_session * sess, htp_opnode & nod
             out_dirty[0] = true;
         }
     } else if (node.opcode == HTP_OP_DSV4_HC_POST) {
-        if (n_in >= 3 && node.inputs[0] && node.inputs[1] && node.inputs[2] && n_out >= 1 && node.outputs[0]) {
+        if (n_in >= 3 && n_out >= 1) {
             const struct ggml_tensor * comb = (n_in > 3 && node.inputs[3]) ? &in_mat[3] : nullptr;
             if (htp_dsv4_hc_post_can_collapse(&in_mat[0], &in_mat[1], &in_mat[2], comb, &out_mat[0])) {
                 struct ggml_tensor x_c, r_c, p_c, c_c, d_c;
@@ -587,8 +572,7 @@ void htp_lower_opnode(const struct ggml_hexagon_session * sess, htp_opnode & nod
             }
         }
     } else if (node.opcode == HTP_OP_LIGHTNING_INDEXER) {
-        if (n_in >= 4 && node.inputs[0] && node.inputs[1] && node.inputs[2] && node.inputs[3] &&
-            n_out >= 1 && node.outputs[0] &&
+        if (n_in >= 4 && n_out >= 1 &&
             htp_lightning_indexer_can_collapse(&in_mat[0], &in_mat[1], &in_mat[2], &in_mat[3], &out_mat[0])) {
             struct ggml_tensor q_c, k_c, w_c, m_c, d_c;
             htp_lightning_indexer_collapse_tensors(&in_mat[0], &in_mat[1], &in_mat[2], &in_mat[3], &out_mat[0],
