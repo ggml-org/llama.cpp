@@ -19,7 +19,7 @@
 	"bugs": "https://github.com/ggml-org/llama.cpp/issues",
 	"type": "module",
 	"bin": {
-		"llama-chat": "./bin/cli.js"
+		"llama-chat": "bin/cli.js"
 	},
 	"exports": {
 		"./cli": "./bin/cli.js",

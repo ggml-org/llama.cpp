@@ -150,14 +150,15 @@ jobs:
         env:
           VERSION: ${{ steps.app.outputs.version }}
         run: |
-          # the registry can serve a new version some time after publish returns
+          # the registry can serve a new version some time after publish returns: seconds for a
+          # package npm knows, about four minutes for the first release of @ggml-org/llama-chat
           for name in @ggml-org/llama-chat llama-chat; do
-            for try in 1 2 3 4 5 6; do
+            for try in $(seq 1 60); do
               if [ "$(npm view "$name@$VERSION" version 2>/dev/null || true)" = "$VERSION" ]; then
                 echo "$name@$VERSION is on npm"
                 continue 2
               fi
-              echo "$name@$VERSION not visible yet (attempt $try of 6)"
+              echo "$name@$VERSION not visible yet (attempt $try of 60)"
               sleep 10
             done
             echo "::error::$name@$VERSION published without error but is not visible on the registry. Check npm before publishing again."
