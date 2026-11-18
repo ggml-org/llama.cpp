@@ -3090,11 +3090,11 @@ static void ggml_compute_forward_gelu_back_f32(
     const ggml_tensor * grad = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
-    assert(ggml_is_contiguous_1(grad));
-    assert(ggml_is_contiguous_1(src1));
-    assert(ggml_is_contiguous_1(dst));
-    assert(ggml_are_same_shape(src1, dst));
-    assert(ggml_are_same_shape(src1, grad));
+    GGML_ASSERT(ggml_is_contiguous_1(grad));
+    GGML_ASSERT(ggml_is_contiguous_1(src1));
+    GGML_ASSERT(ggml_is_contiguous_1(dst));
+    GGML_ASSERT(ggml_are_same_shape(src1, dst));
+    GGML_ASSERT(ggml_are_same_shape(src1, grad));
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -3121,11 +3121,11 @@ static void ggml_compute_forward_gelu_back_f16(
     const ggml_tensor * grad = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
-    assert(ggml_is_contiguous_1(grad));
-    assert(ggml_is_contiguous_1(src1));
-    assert(ggml_is_contiguous_1(dst));
-    assert(ggml_are_same_shape(src1, dst));
-    assert(ggml_are_same_shape(src1, grad));
+    GGML_ASSERT(ggml_is_contiguous_1(grad));
+    GGML_ASSERT(ggml_is_contiguous_1(src1));
+    GGML_ASSERT(ggml_is_contiguous_1(dst));
+    GGML_ASSERT(ggml_are_same_shape(src1, dst));
+    GGML_ASSERT(ggml_are_same_shape(src1, grad));
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -3228,11 +3228,11 @@ static void ggml_compute_forward_sigmoid_back_f32(
     const ggml_tensor * grad = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
-    assert(ggml_is_contiguous_1(grad));
-    assert(ggml_is_contiguous_1(src1));
-    assert(ggml_is_contiguous_1(dst));
-    assert(ggml_are_same_shape(src1, dst));
-    assert(ggml_are_same_shape(src1, grad));
+    GGML_ASSERT(ggml_is_contiguous_1(grad));
+    GGML_ASSERT(ggml_is_contiguous_1(src1));
+    GGML_ASSERT(ggml_is_contiguous_1(dst));
+    GGML_ASSERT(ggml_are_same_shape(src1, dst));
+    GGML_ASSERT(ggml_are_same_shape(src1, grad));
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -3271,11 +3271,11 @@ static void ggml_compute_forward_sigmoid_back_f16(
     const ggml_tensor * grad = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
-    assert(ggml_is_contiguous_1(grad));
-    assert(ggml_is_contiguous_1(src1));
-    assert(ggml_is_contiguous_1(dst));
-    assert(ggml_are_same_shape(src1, dst));
-    assert(ggml_are_same_shape(src1, grad));
+    GGML_ASSERT(ggml_is_contiguous_1(grad));
+    GGML_ASSERT(ggml_is_contiguous_1(src1));
+    GGML_ASSERT(ggml_is_contiguous_1(dst));
+    GGML_ASSERT(ggml_are_same_shape(src1, dst));
+    GGML_ASSERT(ggml_are_same_shape(src1, grad));
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -13122,7 +13122,7 @@ static void ggml_compute_forward_cross_entropy_loss_masked_f32(
         ggml_vec_max_f32(nc, &max, s0);
 
         const ggml_float sum_softmax = ggml_vec_log_soft_max_f32(nc, st, s0, max);
-        assert(sum_softmax >= 0.0);
+        GGML_ASSERT(sum_softmax >= 0.0);
 
         ggml_vec_add1_f32(nc, st, st, -sum_softmax);
 
@@ -13213,7 +13213,7 @@ static void ggml_compute_forward_cross_entropy_loss_masked_back_f32(
             float max = -INFINITY;
             ggml_vec_max_f32(nc, &max, s0);
             const ggml_float sum = ggml_vec_soft_max_f32(nc, ds0, s0, max);
-            assert(sum > 0.0);
+            GGML_ASSERT(sum > 0.0);
             ggml_vec_scale_f32(nc, ds0, 1.0/sum);
 
             ggml_vec_sub_f32(nc, ds0, ds0, s1);
