@@ -50,7 +50,7 @@ common_chat_params common_chat_params_init_ministral_3(const common_chat_templat
 
     data.supports_thinking  = true;
     data.thinking_start_tag = "[THINK]";
-    data.thinking_end_tags  = {"[/THINK]"};
+    data.thinking_end_tags  = {"[/THINK]", "[TOOL_CALLS]"};
     data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs, /* messages_override = */ adjusted_messages);
     data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs, /* messages_override = */ adjusted_messages);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
@@ -75,7 +75,7 @@ common_chat_params common_chat_params_init_ministral_3(const common_chat_templat
     data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto generation_prompt = p.eps();
         auto reasoning =
-            extract_reasoning ? p.optional("[THINK]" + p.reasoning(p.until("[/THINK]")) + "[/THINK]") : p.eps();
+            extract_reasoning ? p.optional("[THINK]" + p.reasoning(p.until_one_of({"[/THINK]", "[TOOL_CALLS]"}))  + p.choice({p.literal("[/THINK]"), p.peek(p.literal("[TOOL_CALLS]"))})) : p.eps();
 
         // Response format parser
         if (has_response_format) {

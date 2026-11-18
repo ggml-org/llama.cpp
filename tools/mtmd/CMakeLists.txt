@@ -31,6 +31,10 @@ set(MTMD_CORE_SOURCES
     mtmd-graph.h
 )
 
+if (MTMD_VIDEO)
+    list(APPEND MTMD_CORE_SOURCES mtmd-helper-video-ffmpeg.cpp)
+endif()
+
 add_library(mtmd
             ${MTMD_CORE_SOURCES}
             models/models.h
@@ -50,6 +54,7 @@ add_library(mtmd
             models/granite-speech.cpp
             models/granite4-vision.cpp
             models/hunyuanvl.cpp
+            models/inkling2v.cpp
             models/internvl.cpp
             models/kimivl.cpp
             models/kimik25.cpp
@@ -58,6 +63,7 @@ add_library(mtmd
             models/nemotron-transcribe.cpp
             models/muse-glimmer.cpp
             models/muse-spark-audio.cpp
+            models/vibevoice-asr.cpp
             models/llama4.cpp
             models/llava.cpp
             models/minicpmv.cpp
@@ -78,10 +84,19 @@ add_library(mtmd
             models/qwen3tts-spkenc.cpp
             models/qwen3tts-gen.cpp
             models/drama3-gen.cpp
+            models/fish-s2-gen.cpp
+            models/fish-s2-spkenc.cpp
+            models/zonos3-gen.cpp
+            models/yue2-gen.cpp
+            models/snake-vae.cpp
+            models/music3-gen.cpp
+            models/zonos3-spkenc.cpp
             models/pockettts-seanet.cpp
             models/pockettts-spkenc.cpp
             models/pockettts-gen.cpp
             models/soprano.cpp
+            models/kokoro.cpp
+            models/tiny-voca.cpp
             models/step3vl.cpp
             models/siglip.cpp
             models/whisper-enc.cpp

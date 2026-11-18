@@ -673,6 +673,24 @@ struct llama_layer {
     struct ggml_tensor * mudd_up          = nullptr;
     struct ggml_tensor * mudd_up_b        = nullptr;
 
+    // inkling2
+    struct ggml_tensor * attn_rel         = nullptr;
+    struct ggml_tensor * attn_rel_bias    = nullptr;
+    struct ggml_tensor * attn_q_clip      = nullptr;
+    struct ggml_tensor * attn_rel_clip    = nullptr;
+    struct ggml_tensor * attn_sink_proj   = nullptr;
+    struct ggml_tensor * attn_q_inp_norm  = nullptr;
+    struct ggml_tensor * attn_k_inp_norm  = nullptr;
+    struct ggml_tensor * attn_v_inp_norm  = nullptr;
+    struct ggml_tensor * attn_k_conv      = nullptr;
+    struct ggml_tensor * attn_v_conv      = nullptr;
+    struct ggml_tensor * attn_k_conv_proj = nullptr;
+    struct ggml_tensor * attn_v_conv_proj = nullptr;
+    struct ggml_tensor * attn_post_conv   = nullptr;
+    struct ggml_tensor * attn_res_query   = nullptr;
+    struct ggml_tensor * ffn_post_conv    = nullptr;
+    struct ggml_tensor * ffn_res_query    = nullptr;
+
     struct llama_layer_posnet posnet;
 
     struct llama_layer_convnext convnext;
@@ -797,6 +815,7 @@ struct llama_model {
 
     struct ggml_tensor * output_norm     = nullptr;
     struct ggml_tensor * output_res_score = nullptr; // kimi-k3: final cross-layer residual mix
+    struct ggml_tensor * output_res_query = nullptr; // inkling2: query of the final attention-residual mix
     struct ggml_tensor * output_norm_b   = nullptr;
     struct ggml_tensor * output          = nullptr;
     struct ggml_tensor * output_b        = nullptr;
@@ -862,6 +881,8 @@ struct llama_model {
     struct ggml_tensor * altup_proj           = nullptr;
     struct ggml_tensor * altup_unembd_proj    = nullptr;
     struct ggml_tensor * per_layer_tok_embd   = nullptr;
+    struct ggml_tensor * per_layer_tok_embd_s = nullptr; // optional scalar scale of an FP8 table
+    float per_layer_tok_embd_scale            = 1.0f;    // value of per_layer_tok_embd_s, read after load
 
     // limite value embeddings
     struct ggml_tensor * value_embd = nullptr;
@@ -936,6 +957,9 @@ struct llama_model {
 
     // gguf metadata
     std::unordered_map<std::string, std::string> gguf_kv;
+
+    // the gguf metadata string arrays kept after load, see load_hparams()
+    std::unordered_map<std::string, std::vector<std::string>> gguf_kv_arr;
 
     // list of devices used in this model
     std::vector<llama_device> devices;

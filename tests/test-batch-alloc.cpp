@@ -978,7 +978,9 @@ static void test_compat(testing & t) {
         mem.ranges[0] = {0, 9};
 
         llama_token token[3] = { 5, 6, 7 };
-        llama_batch lb = llama_batch_get_one(token, 3);
+        llama_batch lb = {};
+        lb.n_tokens = 3;
+        lb.token    = token;
 
         batch_builder bb(2, &mem, 4, 1, /*n_vocab*/ 100);
         llama_batch_compat::init(bb.b, lb);
@@ -999,7 +1001,9 @@ static void test_compat(testing & t) {
 
     t.test("auto_pos_starts_at_zero_without_memory", [&](testing & t) {
         llama_token token[2] = { 5, 6 };
-        llama_batch lb = llama_batch_get_one(token, 2);
+        llama_batch lb = {};
+        lb.n_tokens = 2;
+        lb.token    = token;
 
         batch_builder bb(2, nullptr, 4, 1, /*n_vocab*/ 100);
         llama_batch_compat::init(bb.b, lb);

@@ -33,12 +33,26 @@ ggml_tensor * mtmd_graph_pockettts_seanet::conv1d(ggml_tensor * x, ggml_tensor *
         ggml_tensor * first = ggml_view_2d(ctx0, x, 1, x->ne[1], x->nb[1], 0);
         ggml_tensor * left  = ggml_repeat_4d(ctx0, first, p_total, x->ne[1], 1, 1);
         x = ggml_concat(ctx0, left, x, 0);
-        x = ggml_pad_ext(ctx0, x, 0, p_extra, 0, 0, 0, 0, 0, 0);
+        if (pad_replicate_end && p_extra > 0) {
+            ggml_tensor * last  = ggml_view_2d(ctx0, x, 1, x->ne[1], x->nb[1], (size_t) (x->ne[0] - 1) * x->nb[0]);
+            ggml_tensor * right = ggml_repeat_4d(ctx0, last, p_extra, x->ne[1], 1, 1);
+            x = ggml_concat(ctx0, x, right, 0);
+        } else {
+            x = ggml_pad_ext(ctx0, x, 0, p_extra, 0, 0, 0, 0, 0, 0);
+        }
     } else {
         x = ggml_pad_ext(ctx0, x, p_total, p_extra, 0, 0, 0, 0, 0, 0);
     }
 
-    ggml_tensor * y = ggml_conv_1d(ctx0, w, x, stride, 0, dilation);
+    ggml_tensor * y;
+    if (f32_im2col) {
+        // ggml_conv_1d() with an F32 im2col, the kernel must be F32
+        ggml_tensor * col = ggml_im2col(ctx0, w, x, stride, 0, 0, 0, dilation, 0, false, GGML_TYPE_F32);
+        y = ggml_mul_mat(ctx0, ggml_reshape_2d(ctx0, col, col->ne[0], col->ne[2] * col->ne[1]),
+                         ggml_reshape_2d(ctx0, w, w->ne[0] * w->ne[1], w->ne[2]));
+    } else {
+        y = ggml_conv_1d(ctx0, w, x, stride, 0, dilation);
+    }
     y = ggml_reshape_2d(ctx0, y, y->ne[0], y->ne[1]);
     if (b) {
         y = ggml_add(ctx0, y, ggml_reshape_2d(ctx0, b, 1, b->ne[0]));

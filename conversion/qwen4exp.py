@@ -8,7 +8,7 @@ from torch import Tensor
 import gguf
 import numpy as np
 
-from .base import ModelBase
+from .base import LazyTorchTensor, ModelBase
 from .qwen import _LinearAttentionVReorderBase, _Qwen35MRopeMixin
 from .qwen3vl import Qwen3VLVisionModel
 
@@ -41,8 +41,18 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         self._ple_shards: dict[int, str] = {}
         self._ple_row_dim: int | None = None
         self._mtp_fc: dict[str, Tensor] = {}
-        # halves of the merged weights, keyed by (bid, merged tensor), see _merge_shared_input
-        self._merge_parts: dict[tuple[int, gguf.MODEL_TENSOR], dict[int, Tensor]] = {}
+        self._ple_scale: float | None = None
+
+    def dequant_model(self):
+        # FP8 checkpoints: all n-gram shards share one scale, stored under the parent module name
+        # there is no "ngram_embedding.weight", so the generic FP8 pass drops it or cannot map it
+        for name in list(self.model_tensors):
+            if name.endswith(".ngram_embedding.weight_scale"):
+                scale = LazyTorchTensor.to_eager(self.model_tensors.pop(name)()).float().flatten()
+                if scale.numel() != 1:
+                    raise ValueError(f"PLE scale {name!r} must be a scalar, got {scale.numel()} values")
+                self._ple_scale = float(scale[0])
+        super().dequant_model()
 
     @classmethod
     def filter_tensors(cls, item):
@@ -171,8 +181,7 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
             yield (self.map_tensor_name(name), data_torch.squeeze())
             return
 
-        for new_name, data in super().modify_tensors(data_torch, name, bid):
-            yield from self._merge_shared_input(new_name, data, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
     # matmuls that read the same input, written as one weight [a | b] so the runtime does one matmul:
     # (merged tensor, (a, b), linear-attention layers only)
@@ -182,30 +191,6 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         (gguf.MODEL_TENSOR.ATTN_QKV_GATE,       (gguf.MODEL_TENSOR.ATTN_QKV,     gguf.MODEL_TENSOR.ATTN_GATE),      True),
         (gguf.MODEL_TENSOR.SSM_BETA_ALPHA_CAT,  (gguf.MODEL_TENSOR.SSM_BETA,     gguf.MODEL_TENSOR.SSM_ALPHA),      True),
     )
-
-    # caches one half of a merged weight until the other half arrives, then yields [a | b]
-    def _merge_shared_input(self, new_name: str, data: Tensor, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # a pre-quantized checkpoint carries per-tensor scales, which one merged weight cannot hold
-        if bid is None or self.hparams.get("quantization_config"):
-            yield (new_name, data)
-            return
-
-        layer_types = self.hparams.get("layer_types") or []
-        is_linear = bid < len(layer_types) and layer_types[bid] == "linear_attention"
-
-        match = next(((merged, parts.index(part)) for merged, parts, linear_only in self._SHARED_INPUT_MERGES
-                      for part in parts
-                      if (is_linear or not linear_only) and self.match_model_tensor_name(new_name, part, bid)), None)
-        if match is None:
-            yield (new_name, data)
-            return
-
-        merged, idx = match
-        halves = self._merge_parts.setdefault((bid, merged), {})
-        halves[idx] = data
-        if len(halves) == 2:
-            del self._merge_parts[(bid, merged)]
-            yield (self.format_tensor_name(merged, bid), torch.cat([halves[0], halves[1]], dim=0))
 
     # the shards concatenate into a tensor of well over 100 GB
     # use LazyChunkedTensor here, a single shard resident at a time
@@ -230,29 +215,37 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
                     f"PLE shard {shard} has row dim {int(shape[-1])}, expected {self._ple_row_dim}")
             rows += int(shape[0])
 
+        # an FP8 table keeps its bytes and gets a scale tensor, any other type has the scale folded in
+        keep_fp8 = name in self._fp8_e4m3_preserved
         table = gguf.LazyChunkedTensor(
-            [self._load_ple_shard(shard) for shard in shards],
+            [self._load_ple_shard(shard, keep_fp8) for shard in shards],
             shape=(rows, self._ple_row_dim),
-            dtype=np.float32,
+            dtype=np.uint8 if keep_fp8 else np.float32,
         )
         gguf_name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD]
-        return [(gguf_name + ".weight", cast(Tensor, table))]
+        out = [(gguf_name + ".weight", cast(Tensor, table))]
+        if keep_fp8 and self._ple_scale is not None:
+            out.append((gguf_name + ".scale", torch.tensor([self._ple_scale], dtype=torch.float32)))
+        return out
 
-    def _load_ple_shard(self, name: str):
+    def _load_ple_shard(self, name: str, keep_fp8: bool):
         def load() -> np.ndarray:
-            from .base import LazyTorchTensor
-
             # a fresh lazy tensor every call, or to_eager() memoizes every shard
             eager = LazyTorchTensor.to_eager(self.model_tensors[name]())
-            return eager.to(torch.float32).contiguous().numpy()
+            if keep_fp8:
+                if eager.dtype != torch.float8_e4m3fn:
+                    raise ValueError(f"PLE shard {name} is {eager.dtype}, expected FP8 like the other shards")
+                return eager.contiguous().view(torch.uint8).numpy()
+            data = eager.to(torch.float32)
+            if self._ple_scale is not None:
+                data = data * self._ple_scale
+            return data.contiguous().numpy()
         return load
 
     def prepare_tensors(self):
         super().prepare_tensors()
         if self._mtp_fc:
             raise ValueError(f"MTP projection missing its other half: {sorted(self._mtp_fc)}")
-        if self._merge_parts:
-            raise ValueError(f"merged weights missing a half: {sorted((bid, t.name) for bid, t in self._merge_parts)}")
         n_parts = self.hparams.get("split_ngram_parts", 0)
         if self._ple_shards and len(self._ple_shards) != n_parts:
             raise ValueError(

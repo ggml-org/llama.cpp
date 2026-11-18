@@ -166,6 +166,18 @@ static const char * DEEPSEEK_V4_1_MIN_TEMPLATE = R"({%- for m in messages -%}
 {%- if reasoning_effort is defined and reasoning_effort is not none -%}<｜effort={{ reasoning_effort }}｜>{%- endif -%}
 {%- if add_generation_prompt -%}<｜Assistant｜>{%- if enable_thinking -%}<think>{%- else -%}</think>{%- endif -%}{%- endif -%})";
 
+// Inkling 2 stand-in: the real template ships in the GGUF; this keeps only the message blocks,
+// one per content part, and the tokens used for detection
+static const char * INKLING2_MIN_TEMPLATE = R"({%- set role_token = {"user": "<|message_user|>", "assistant": "<|message_model|>", "system": "<|message_system|>"} -%}
+{%- for m in messages -%}
+{%- if m.content is string -%}{{ role_token[m.role] }}<|content_text|>{{ m.content }}<|end_message|>
+{%- else -%}{%- for p in m.content -%}{{ role_token[m.role] }}
+{%- if p.type == 'image' -%}<|content_image|>{%- else -%}<|content_text|>{{ p.text }}{%- endif -%}
+<|end_message|>{%- endfor -%}
+{%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}<|message_model|>{%- endif -%})";
+
 static std::unique_ptr<llama_grammar> build_grammar(const std::string & grammar_str) {
     return std::unique_ptr<llama_grammar>(
         llama_grammar_init_impl(nullptr, grammar_str.c_str(), "root", false, nullptr, 0, nullptr, 0));
@@ -2214,6 +2226,21 @@ static void test_lfm2_parser(const std::string & template_path, bool detailed_de
         .expect(simple_assist_msg("", "", "empty_args", "{}"))
         .run();
 
+    // undeclared names stay tool calls instead of being forced onto a declared tool
+    tst.test("<|tool_call_start|>[reseat_sim_card()]<|tool_call_end|>")
+        .tools({ special_function_tool })
+        .expect(simple_assist_msg("", "", "reseat_sim_card", "{}"))
+        .run();
+
+    tst.test("<|tool_call_start|>[set_sim_lock(mode='pin', force=True)]<|tool_call_end|>")
+        .tools({ special_function_tool })
+        .expect_tool_calls({ { "set_sim_lock", R"({"mode": "pin", "force": true})", "" } })
+        .run();
+
+    tst.test("<|tool_call_start|>[special_function(arg1=1)]<|tool_call_end|>")
+        .tools({ special_function_tool })
+        .expect(message_assist_call)
+        .run();
 }
 
 static void test_template_output_peg_parsers(bool detailed_debug) {
@@ -2734,6 +2761,16 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist_call_thoughts)
             .run();
 
+        // Reasoning is not closed, the tool call starts inside it
+        tst.test(
+               "[THINK]I'm\nthinking"
+               R"([TOOL_CALLS]special_function[ARGS]{"arg1":1})")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
+            .run();
+
         tst.test(R"([TOOL_CALLS]special_function[ARGS]{"arg1": 1})"
                  R"([TOOL_CALLS]special_function_with_opt[ARGS]{"arg1": 1, "arg2": 2})")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
@@ -2769,20 +2806,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .json_schema(invoice_schema)
             .expect_reasoning("I need to output the invoice details in JSON")
             .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
-            .run();
-
-        // fake tool call marker in reasoning
-        tst.test(
-               "[THINK]Let me think about [TOOL_CALLS]special_function[ARGS]{\"arg1\":1} and more[/THINK]"
-               R"([TOOL_CALLS]special_function[ARGS]{"arg1": 1})")
-            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .enable_thinking(true)
-            .tools({ special_function_tool })
-            .expect_reasoning("Let me think about [TOOL_CALLS]special_function[ARGS]{\"arg1\":1} and more")
-            .expect_tool_calls({
-                { "special_function", R"({"arg1": 1})", {} },
-            })
-            .expect_reconstruction()
             .run();
 
         // Continuation tests
@@ -3178,6 +3201,17 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             })
             .run();
 
+        // Tool call after reasoning, the model did not close the thought channel (#32231)
+        tst.test(
+                "<|channel>thought\nI'm\nthinking<|tool_call>call:get_time{city:<|\"|>Paris<|\"|>}<tool_call|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ get_time_tool })
+            .expect_reasoning("I'm\nthinking")
+            .expect_tool_calls({
+                { "get_time", R"({"city": "Paris"})", {} },
+            })
+            .run();
+
         // Parallel tool calls
         tst.test(
                 "<|tool_call>call:get_time{city:<|\"|>London<|\"|>}<tool_call|>"
@@ -3265,6 +3299,61 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 "<|tool_call>call:amount{orig:1.5e10}<tool_call|>")
             .tools({ amount_tool })
             .expect(message_with_tool_calls("amount", R"({"orig": 1.5e10})"))
+            .run();
+
+        // The argument grammar follows the shape of the parameter schema: keys in
+        // alphabetical order, optional keys skipped in place, nested objects and arrays
+        // shaped the same way, any other value accepted as written.
+        common_chat_tool shape_tool{
+            /* .name = */ "shape",
+            /* .description = */ "Schema-shaped arguments",
+            /* .parameters = */ R"({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "edits": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "oldText": {"type": "string"},
+                                "newText": {"type": "string"}
+                            },
+                            "required": ["oldText", "newText"]
+                        }
+                    },
+                    "mode": {"type": "string", "enum": ["fast", "safe"]},
+                    "count": {"type": "integer"},
+                    "headers": {
+                        "type": "object",
+                        "properties": {
+                            "content-type": {"type": "string"},
+                            "accept:lang": {"type": "string"}
+                        }
+                    },
+                    "options": {"type": "object"}
+                },
+                "required": ["path", "edits"]
+            })",
+        };
+
+        tst.test(
+                "<|tool_call>call:shape{edits:[{newText:<|\"|>b<|\"|>,oldText:<|\"|>a<|\"|>}],path:<|\"|>f.c<|\"|>}<tool_call|>")
+            .tools({ shape_tool })
+            .expect(message_with_tool_calls("shape", R"({"edits":[{"newText":"b","oldText":"a"}],"path":"f.c"})"))
+            .run();
+
+        // Optional keys in place, quoted keys that are not identifiers
+        tst.test(
+                "<|tool_call>call:shape{count:3,edits:[],headers:{<|\"|>accept:lang<|\"|>:<|\"|>en<|\"|>,'content-type':<|\"|>text<|\"|>},mode:<|\"|>fast<|\"|>,options:{b:1,a:[true]},path:<|\"|>f<|\"|>}<tool_call|>")
+            .tools({ shape_tool })
+            .expect(message_with_tool_calls("shape", R"({"count":3,"edits":[],"headers":{"accept:lang":"en","content-type":"text"},"mode":"fast","options":{"b":1,"a":[true]},"path":"f"})"))
+            .run();
+
+        tst.test(
+                "<|tool_call>call:shape{edits:[],headers:{\"content-type\":<|\"|>text<|\"|>},path:<|\"|>f<|\"|>}<tool_call|>")
+            .tools({ shape_tool })
+            .expect(message_with_tool_calls("shape", R"({"edits":[],"headers":{"content-type":"text"},"path":"f"})"))
             .run();
 
         // Edge cases
@@ -5151,6 +5240,25 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_reconstruction()
             .run();
 
+        tst.test("I'm\nthinking</ifm|think>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .chat_template_kwargs({ { "reasoning_effort", R"("low")" } })
+            .expect(message_assist_thoughts)
+            .run();
+
+        tst.test(
+               "I'm\nthinking</ifm|think><ifm|tool_calls>\n"
+               "<ifm|tool_call>special_function\n"
+               "<ifm|arg_key>arg1</ifm|arg_key>\n"
+               "<ifm|arg_value>1</ifm|arg_value>\n"
+               "</ifm|tool_call>\n"
+               "</ifm|tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .chat_template_kwargs({ { "reasoning_effort", R"("medium")" } })
+            .expect(message_assist_call_thoughts)
+            .run();
+
         tst.test(
                "I'm\nthinking</ifm|think><ifm|tool_calls>\n"
                "<ifm|tool_call>{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}</ifm|tool_call>\n"
@@ -5405,6 +5513,102 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 // custom delimiter: the payload itself contains )"
                 { "python", R"JSON({"code":"print('hey')"})JSON", "" },
             })
+            .run();
+    }
+
+    // Inkling 1 and 2
+    for (const int version : { 1, 2 }) {
+        auto tst = peg_tester(version == 1 ? "models/templates/thinkingmachines-Inkling.jinja" :
+                                             "models/templates/thinkingmachines-Inkling-2-Small.jinja", detailed_debug);
+
+        // Inkling 1 has the first header in the generation prompt, Inkling 2 writes it
+        const std::string H = "<|message_model|>";
+        const std::string P = version == 1 ? "" : H;
+        const std::string E = "<|end_message|>";
+        const std::string CALL = "special_function<|content_invoke_tool_json|>{\"name\":\"special_function\",\"args\":{\"arg1\":1}}" + E;
+
+        // Content only
+        tst.test(P + "<|content_text|>Hello, world!\nWhat's up?" + E)
+            .expect(message_assist)
+            .run();
+
+        // Thinking block, then content block
+        tst.test(P + "<|content_thinking|>I'm thinking" + E + H + "<|content_text|>Hello, world!\nWhat's up?" + E)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(simple_assist_msg("Hello, world!\nWhat's up?", "I'm thinking"))
+            .run();
+
+        // Without reasoning extraction, the thinking block stays in the content
+        tst.test(P + "<|content_thinking|>I'm thinking" + E + H + "<|content_text|>Hello, world!\nWhat's up?" + E)
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .expect_content("<|content_thinking|>I'm thinking" + E + "Hello, world!\nWhat's up?")
+            .run();
+
+        // Cut by the token limit, in thinking and in content
+        tst.test(P + "<|content_thinking|>I was still thinking")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_reasoning("I was still thinking")
+            .run();
+        tst.test(P + "<|content_thinking|>I'm thinking" + E + H + "<|content_text|>Hello, wor")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(simple_assist_msg("Hello, wor", "I'm thinking"))
+            .run();
+
+        // Single tool call
+        tst.test(P + CALL)
+            .tools({ special_function_tool })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1":1})", "" },
+            })
+            .expect_rules({ "tool-0" })
+            .run();
+
+        // Thinking, content, then a tool call
+        tst.test(P + "<|content_thinking|>I should call it" + E + H + "<|content_text|>On it." + E + H + CALL)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(simple_assist_msg("On it.", "I should call it", "special_function", R"({"arg1":1})", ""))
+            .run();
+
+        // Tools given, but the model answers with content
+        tst.test(P + "<|content_thinking|>No tool needed" + E + H + "<|content_text|>Hello, world!\nWhat's up?" + E)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(simple_assist_msg("Hello, world!\nWhat's up?", "No tool needed"))
+            .run();
+
+        // Parallel tool calls, one block each
+        tst.test(P + CALL + H +
+                 "special_function_with_opt<|content_invoke_tool_json|>{\"name\":\"special_function_with_opt\",\"args\":{\"arg1\":1,\"arg2\":2}}" + E)
+            .parallel_tool_calls(true)
+            .tools({ special_function_tool, special_function_tool_with_optional_param })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1":1})", "" },
+                { "special_function_with_opt", R"({"arg1":1,"arg2":2})", "" },
+            })
+            .run();
+
+        // The block closer inside a string argument does not end the block
+        tst.test(P + "python<|content_invoke_tool_json|>{\"name\":\"python\",\"args\":{\"code\":\"print('<|end_message|>')\"}}" + E)
+            .tools({ python_tool })
+            .expect_tool_calls({
+                { "python", R"JSON({"code":"print('<|end_message|>')"})JSON", "" },
+            })
+            .run();
+
+        // Forced tool call
+        tst.test(P + "<|content_thinking|>I should call it" + E + H + CALL)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
+            .tools({ special_function_tool })
+            .expect(simple_assist_msg("", "I should call it", "special_function", R"({"arg1":1})", ""))
+            .run();
+
+        // Response format
+        tst.test(P + "<|content_thinking|>I'm thinking" + E + H + "<|content_text|>{\"amount\": 123.45}" + E)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect(simple_assist_msg("{\"amount\": 123.45}", "I'm thinking"))
             .run();
     }
 
@@ -7641,6 +7845,37 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     }
 }
 
+// Inkling 2: each media marker moves out of the text block into its own message block
+static void test_inkling2_media_blocks() {
+    LOG_DBG("%s\n", __func__);
+
+    // must be the marker used by the server, the split depends on its format
+    const std::string M = get_media_marker();
+    const std::string U = "<|message_user|>";
+    const std::string T = "<|content_text|>";
+    const std::string E = "<|end_message|>";
+
+    common_chat_templates_ptr tmpls(common_chat_templates_init(nullptr, INKLING2_MIN_TEMPLATE));
+    auto render = [&](const std::vector<std::string> & parts) {
+        common_chat_msg msg;
+        msg.role = "user";
+        for (const auto & text : parts) {
+            msg.content_parts.push_back({ /* .type = */ text == M ? "media_marker" : "text", /* .text = */ text, /* .name = */ "" });
+        }
+        common_chat_templates_inputs inputs;
+        inputs.messages = { msg };
+        inputs.add_generation_prompt = false;
+        return common_chat_templates_apply(tmpls.get(), inputs).prompt.str();
+    };
+
+    assert_equals(U + M + E + U + T + "a" + E,                 render({ M, "a" }));
+    assert_equals(U + T + "a" + E + U + M + E,                 render({ "a", M }));
+    assert_equals(U + M + E,                                   render({ M }));
+    assert_equals(U + M + E + U + M + E + U + T + "a" + E,     render({ M, M, "a" }));
+    assert_equals(U + T + "a" + E + U + M + E + U + T + "b" + E, render({ "a", M, "b" }));
+    assert_equals(U + T + "a" + E,                             render({ "a" }));
+}
+
 static void test_template_generation_prompt() {
     common_chat_msg system_msg;
     system_msg.role = "system";
@@ -8475,6 +8710,17 @@ static void test_reasoning_effort_caps() {
     assert_effort_levels("models/templates/openai-gpt-oss-120b.jinja", all_levels);
     assert_effort_levels("models/templates/Cohere2MoE.jinja", {});
     assert_effort_levels("models/templates/Qwen-Qwen3-0.6B.jinja", {});
+
+    auto assert_effort_rejected = [](const std::string & path, const std::vector<std::string> & expected) {
+        auto tmpls = read_templates(path);
+        assert_equals(json(expected).dump(), common_chat_templates_get_caps(tmpls.get()).at("reasoning_effort_rejected").dump());
+    };
+
+    assert_effort_rejected("models/templates/IFM-K2-Horizon.jinja", { "minimal", "xhigh", "max" });
+    assert_effort_rejected("models/templates/tencent-Hy3.jinja", { "minimal", "medium", "xhigh", "max" });
+    assert_effort_rejected("models/templates/deepseek-ai-DeepSeek-V4.jinja", {});
+    assert_effort_rejected("models/templates/openai-gpt-oss-120b.jinja", {});
+    assert_effort_rejected("models/templates/Cohere2MoE.jinja", {});
 }
 
 static void test_msg_diffs_compute() {
@@ -8637,6 +8883,7 @@ int main(int argc, char ** argv) {
         test_deepseek_v4_thinking_retention();
         test_deepseek_v4_tool_result_ordering();
         test_deepseek_v4_1_message_fields();
+        test_inkling2_media_blocks();
         test_template_generation_prompt();
         test_reasoning_effort_caps();
         test_prompt_parts();
