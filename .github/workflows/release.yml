@@ -900,6 +900,11 @@ jobs:
         run: |
           choco install ninja
 
+      - name: Install LLVM
+        run: |
+          choco install llvm --version=22.1.8
+          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
         with:
@@ -1145,6 +1150,11 @@ jobs:
         id: install_ninja
         run: |
           choco install ninja
+
+      - name: Install LLVM
+        run: |
+          choco install llvm --version=22.1.8
+          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
 
       # TODO: these jobs need to use llvm toolchain in order to utilize the ccache
       #- name: ccache
