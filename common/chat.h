@@ -232,11 +232,34 @@ struct common_chat_tool {
     bool defer_loading = false;
 };
 
-enum common_chat_tool_choice {
+enum common_chat_tool_choice_mode {
     COMMON_CHAT_TOOL_CHOICE_AUTO,
     COMMON_CHAT_TOOL_CHOICE_REQUIRED,
     COMMON_CHAT_TOOL_CHOICE_NONE,
 };
+
+struct common_chat_tool_choice {
+    common_chat_tool_choice_mode mode = COMMON_CHAT_TOOL_CHOICE_AUTO;
+
+    // Names of the tools the model may call, every tool when empty.
+    std::vector<std::string> allowed;
+
+    common_chat_tool_choice() = default;
+    common_chat_tool_choice(common_chat_tool_choice_mode mode) : mode(mode) {}
+
+    bool operator==(common_chat_tool_choice_mode other) const { return mode == other; }
+    bool operator!=(common_chat_tool_choice_mode other) const { return mode != other; }
+
+    bool allows(const std::string & name) const;
+
+    bool is_auto() const { return mode == COMMON_CHAT_TOOL_CHOICE_AUTO; }
+    bool is_required() const { return mode == COMMON_CHAT_TOOL_CHOICE_REQUIRED; }
+    bool is_none() const { return mode == COMMON_CHAT_TOOL_CHOICE_NONE; }
+};
+
+// Keep the original tool indices when restricting the parser's tool set.
+void common_chat_foreach_tool(const common_json & tools, const common_chat_tool_choice & tool_choice,
+                              const std::function<void(size_t, const common_json &)> & fn);
 
 enum common_chat_format {
     COMMON_CHAT_FORMAT_CONTENT_ONLY,
@@ -269,7 +292,6 @@ struct common_chat_templates_inputs {
     // Parameters below only supported when use_jinja is true
     std::vector<common_chat_tool>         tools;
     common_chat_tool_choice               tool_choice         = COMMON_CHAT_TOOL_CHOICE_AUTO;
-    std::string                           tool_choice_function;
     bool                                  parallel_tool_calls = false;
     common_reasoning_format               reasoning_format    = COMMON_REASONING_FORMAT_NONE; // TODO: refactor this to "bool enable_thinking"
     bool                                  enable_thinking     = true;
@@ -453,7 +475,7 @@ class common_chat_session {
 const char *            common_reasoning_format_name(common_reasoning_format format);
 common_reasoning_format common_reasoning_format_from_name(const std::string & format);
 
-common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const common_json & tool_choice, std::string * tool_choice_function = nullptr);
+common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const common_json & tool_choice);
 
 bool common_chat_templates_support_enable_thinking(const common_chat_templates * chat_templates);
 
