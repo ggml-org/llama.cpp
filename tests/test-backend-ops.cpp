@@ -12022,6 +12022,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat(type_a,    GGML_TYPE_F32, 16,  8, 16*256, { 1,  1}, {1, 1}));
     }
 
+    // Odd Q2_K rows and offset expert IDs; K >= 2048 reaches integer MMVQ on AMD at n = 1.
+    for (int n : {1, 4, 8}) {
+        for (int k : {256, 2048}) {
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q2_K, GGML_TYPE_F32, 17, n, k, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q2_K, GGML_TYPE_F32, 8, 4, false, 17, n, k, 0, true, true));
+        }
+    }
+
     // Multi-column MMVQ coverage for the Q4_K weight-reuse path and a Q5_K control.
     for (ggml_type type_a : { GGML_TYPE_Q4_K, GGML_TYPE_Q5_K }) {
         for (int n = 1; n <= 8; ++n) {

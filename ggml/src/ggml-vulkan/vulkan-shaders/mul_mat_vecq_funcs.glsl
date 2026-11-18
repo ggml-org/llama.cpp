@@ -221,19 +221,22 @@ FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
     const i32vec4 qs_a = repack4(ib_a, iqs * 4);
     const uint8_t scale = get_scale(ib_a, iqs * 4);
     const vec2 dm = vec2(get_dm(ib_a));
-    const int32_t scale_m = int32_t(scale >> 4) * 0x01010101; // Duplicate 8-bit value across 32-bits.
 
-    sum_d += dotPacked4x8EXT(qs_a.x, cache_b_qs[0]) * (scale & 0xF);
-    sum_m += dotPacked4x8EXT(scale_m, cache_b_qs[0]);
+    sum_d += dotPacked4x8EXT(qs_a.x, cache_b_qs[0]);
+    sum_m += dotPacked4x8EXT(0x01010101, cache_b_qs[0]);
 
-    sum_d += dotPacked4x8EXT(qs_a.y, cache_b_qs[1]) * (scale & 0xF);
-    sum_m += dotPacked4x8EXT(scale_m, cache_b_qs[1]);
+    sum_d += dotPacked4x8EXT(qs_a.y, cache_b_qs[1]);
+    sum_m += dotPacked4x8EXT(0x01010101, cache_b_qs[1]);
 
-    sum_d += dotPacked4x8EXT(qs_a.z, cache_b_qs[2]) * (scale & 0xF);
-    sum_m += dotPacked4x8EXT(scale_m, cache_b_qs[2]);
+    sum_d += dotPacked4x8EXT(qs_a.z, cache_b_qs[2]);
+    sum_m += dotPacked4x8EXT(0x01010101, cache_b_qs[2]);
 
-    sum_d += dotPacked4x8EXT(qs_a.w, cache_b_qs[3]) * (scale & 0xF);
-    sum_m += dotPacked4x8EXT(scale_m, cache_b_qs[3]);
+    sum_d += dotPacked4x8EXT(qs_a.w, cache_b_qs[3]);
+    sum_m += dotPacked4x8EXT(0x01010101, cache_b_qs[3]);
+
+    // Integer factoring preserves the dot product while applying each scale once.
+    sum_d *= int32_t(scale & 0xF);
+    sum_m *= int32_t(scale >> 4);
 
     return FLOAT_TYPE(float(cache_b_ds.x) * (float(dm.x) * float(sum_d) - float(dm.y) * float(sum_m)));
 }
