@@ -48,12 +48,20 @@
     const uint32_t nb2 = dst->nb[2];   \
     const uint32_t nb3 = dst->nb[3];
 
+struct htp_rope_context;
+
+typedef void (*rope_compute_fn_t)(const struct htp_rope_context * rctx, uint8_t * src, uint32_t nr, const float * restrict theta_cache);
+
 struct htp_rope_context {
-    int32_t n_dims;
-    int32_t n_offs;
-    int32_t mode;
-    int32_t n_ctx_orig;
-    int32_t sections[4];
+    int32_t  n_dims;
+    int32_t  n_offs;
+    int32_t  mode;
+    int32_t  n_ctx_orig;
+    int32_t  sections[4];
+    uint32_t ne_rot;
+    bool     is_f16;
+
+    rope_compute_fn_t compute_block;
 
     float freq_base;
     float freq_scale;
@@ -74,12 +82,11 @@ struct htp_rope_context {
     size_t    spad_per_hvx;
     size_t    theta_cache_offset;
 
-    size_t src0_row_size;
-    size_t src0_row_stride;
-    size_t dst_row_size;
-    size_t dst_row_stride;
-    size_t src0_row_size_aligned;
-    uint32_t src0_nrows;
+    size_t   src0_row_size;
+    size_t   src0_row_stride;
+    size_t   dst_row_size;
+    size_t   dst_row_stride;
+    size_t   src0_row_size_aligned;
     uint32_t row_start;
     uint32_t nrows;
 
@@ -520,7 +527,7 @@ static inline void hvx_rope_f32_aa(float * restrict dst, const float * restrict 
     }
 }
 
-static void inline rope_basic_f32_inplace(struct htp_rope_context * rctx, uint8_t * src,
+static __attribute__((noinline)) void rope_basic_f32_inplace(const struct htp_rope_context * rctx, uint8_t * src,
                    uint32_t nr, const float * restrict theta_cache) {
     const uint32_t n_offs = rctx->n_offs;
     #pragma unroll(4)
@@ -530,9 +537,10 @@ static void inline rope_basic_f32_inplace(struct htp_rope_context * rctx, uint8_
     }
 }
 
-static void inline rope_neox_f32_inplace(struct htp_rope_context * rctx, uint8_t * src,
-                   uint32_t nr, uint32_t ne, const float * restrict theta_cache) {
+static __attribute__((noinline)) void rope_neox_f32_inplace(const struct htp_rope_context * rctx, uint8_t * src,
+                   uint32_t nr, const float * restrict theta_cache) {
     const uint32_t n_offs = rctx->n_offs;
+    const uint32_t ne     = rctx->ne_rot;
     #pragma unroll(4)
     for (uint32_t i = 0; i < nr; i++) {
         float * s = (float *) (src + i * rctx->src0_row_size_aligned);
@@ -826,41 +834,47 @@ static __attribute__((noinline)) void hvx_rope_f16(_Float16 * restrict dst, cons
     }
 }
 
-static inline void rope_basic_f16_inplace(struct htp_rope_context * rctx, uint8_t * src,
+static __attribute__((noinline)) void rope_basic_f16_aa_inplace(const struct htp_rope_context * rctx, uint8_t * src,
                    uint32_t nr, const float * restrict theta_cache) {
     const uint32_t n_offs = rctx->n_offs;
-    if ((n_offs & 63) == 0) {
-        #pragma unroll(4)
-        for (uint32_t i = 0; i < nr; i++) {
-            _Float16 * s = (_Float16 *) (src + i * rctx->src0_row_size_aligned);
-            hvx_rope_f16_aa(s + n_offs, s + n_offs, rctx->n_dims, theta_cache);
-        }
-    } else {
-        for (uint32_t i = 0; i < nr; i++) {
-            _Float16 * s = (_Float16 *) (src + i * rctx->src0_row_size_aligned);
-            hvx_rope_f16(s + n_offs, s + n_offs, rctx->n_dims, theta_cache);
-        }
+    #pragma unroll(4)
+    for (uint32_t i = 0; i < nr; i++) {
+        _Float16 * s = (_Float16 *) (src + i * rctx->src0_row_size_aligned);
+        hvx_rope_f16_aa(s + n_offs, s + n_offs, rctx->n_dims, theta_cache);
     }
 }
 
-static inline void rope_neox_f16_inplace(struct htp_rope_context * rctx, uint8_t * src,
-                   uint32_t nr, uint32_t ne, const float * restrict theta_cache) {
+static __attribute__((noinline)) void rope_basic_f16_ua_inplace(const struct htp_rope_context * rctx, uint8_t * src,
+                   uint32_t nr, const float * restrict theta_cache) {
     const uint32_t n_offs = rctx->n_offs;
-    if ((n_offs & 63) == 0) {
-        #pragma unroll(4)
-        for (uint32_t i = 0; i < nr; i++) {
-            _Float16 * s = (_Float16 *) (src + i * rctx->src0_row_size_aligned);
-            hvx_rope_neox_f16_aa(s + n_offs, s + n_offs, ne, theta_cache);
-        }
-    } else {
-        for (uint32_t i = 0; i < nr; i++) {
-            _Float16 * s = (_Float16 *) (src + i * rctx->src0_row_size_aligned);
-            hvx_rope_neox_f16(s + n_offs, s + n_offs, ne, theta_cache);
-        }
+    for (uint32_t i = 0; i < nr; i++) {
+        _Float16 * s = (_Float16 *) (src + i * rctx->src0_row_size_aligned);
+        hvx_rope_f16(s + n_offs, s + n_offs, rctx->n_dims, theta_cache);
     }
 }
 
-static inline __attribute__((always_inline)) void rope_job_impl(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data, bool is_f16) {
+static __attribute__((noinline)) void rope_neox_f16_aa_inplace(const struct htp_rope_context * rctx, uint8_t * src,
+                   uint32_t nr, const float * restrict theta_cache) {
+    const uint32_t n_offs = rctx->n_offs;
+    const uint32_t ne     = rctx->ne_rot;
+    #pragma unroll(4)
+    for (uint32_t i = 0; i < nr; i++) {
+        _Float16 * s = (_Float16 *) (src + i * rctx->src0_row_size_aligned);
+        hvx_rope_neox_f16_aa(s + n_offs, s + n_offs, ne, theta_cache);
+    }
+}
+
+static __attribute__((noinline)) void rope_neox_f16_ua_inplace(const struct htp_rope_context * rctx, uint8_t * src,
+                   uint32_t nr, const float * restrict theta_cache) {
+    const uint32_t n_offs = rctx->n_offs;
+    const uint32_t ne     = rctx->ne_rot;
+    for (uint32_t i = 0; i < nr; i++) {
+        _Float16 * s = (_Float16 *) (src + i * rctx->src0_row_size_aligned);
+        hvx_rope_neox_f16(s + n_offs, s + n_offs, ne, theta_cache);
+    }
+}
+
+static void rope_job(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct htp_rope_context * rctx = (struct htp_rope_context *) data;
     struct htp_ops_context * octx = rctx->octx;
 
@@ -882,9 +896,7 @@ static inline __attribute__((always_inline)) void rope_job_impl(const htp_thread
         return;
     }
 
-    const int32_t mode    = rctx->mode;
-    // MROPE, IMROPE and VISION use NEOX-style pairing for the rotation
-    const bool    is_neox = (mode & HTP_ROPE_TYPE_NEOX) || (mode & HTP_ROPE_TYPE_MROPE);
+    const int32_t mode      = rctx->mode;
     const bool    is_vision = (mode == HTP_ROPE_TYPE_VISION);
 
     // VTCM setup
@@ -939,8 +951,7 @@ static inline __attribute__((always_inline)) void rope_job_impl(const htp_thread
                     prev_i2 = i2;
 
                     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, i2);
-                    // VISION rotates the full row; other modes only rotate n_dims.
-                    const uint32_t n_cache = is_vision ? ne0 : (uint32_t) rctx->n_dims;
+                    const uint32_t n_cache = rctx->ne_rot;
                     const bool is_mrope = (rctx->mode & HTP_ROPE_TYPE_MROPE) != 0;
                     if (is_mrope) {
                         // src1 holds four position arrays stacked along ne0:
@@ -967,13 +978,11 @@ static inline __attribute__((always_inline)) void rope_job_impl(const htp_thread
                 for (uint32_t d = 0; d < dma_depth; d++) { dma_queue_pop_nowait(dma_q); }
 
                 // Compute loop
-                const uint32_t ne = is_vision ? ne0 : rctx->n_dims;
                 const uint32_t base_i1 = i1;
                 const uint32_t base_ir = ir;
 
                 for (uint32_t cnr = 0, cr = 0; cr < nrows; cr += cnr) {
                     cnr = MIN(nrows - cr, HTP_ROPE_SPAD_BLOCK);
-                    const uint32_t slot = (cur_slot + cr / HTP_ROPE_SPAD_BLOCK) % HTP_ROPE_SPAD_NSLOTS;
                     const uint32_t cur_ir   = base_ir + cr;
                     const uint32_t cur_i1   = base_i1 + cr;
 
@@ -981,19 +990,7 @@ static inline __attribute__((always_inline)) void rope_job_impl(const htp_thread
                     uint8_t * cur_spad = (uint8_t *) dma_queue_pop(dma_q).dst;
 
                     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, cur_ir);
-                    if (is_f16) {
-                        if (is_neox || is_vision) {
-                            rope_neox_f16_inplace(rctx, cur_spad, cnr, ne, theta_cache);
-                        } else {
-                            rope_basic_f16_inplace(rctx, cur_spad, cnr, theta_cache);
-                        }
-                    } else {
-                        if (is_neox || is_vision) {
-                            rope_neox_f32_inplace(rctx, cur_spad, cnr, ne, theta_cache);
-                        } else {
-                            rope_basic_f32_inplace(rctx, cur_spad, cnr, theta_cache);
-                        }
-                    }
+                    rctx->compute_block(rctx, cur_spad, cnr, theta_cache);
                     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, cur_ir);
 
                     const dma_addr_t dst_data = dst->data + i3 * nb3 + i2 * nb2 + cur_i1 * nb1;
@@ -1025,15 +1022,7 @@ static inline __attribute__((always_inline)) void rope_job_impl(const htp_thread
 done:
     dma_queue_flush(dma_q);
 
-    FARF(HIGH, "rope-%s: %d/%d: (%u:%u)\n", is_f16 ? "f16" : "f32", ith, nth, src0_start_row, src0_end_row);
-}
-
-static void rope_job_f32(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
-    rope_job_impl(th, nth, ith, data, false);
-}
-
-static void rope_job_f16(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
-    rope_job_impl(th, nth, ith, data, true);
+    FARF(HIGH, "rope-%s: %d/%d: (%u:%u)\n", rctx->is_f16 ? "f16" : "f32", ith, nth, src0_start_row, src0_end_row);
 }
 
 static int execute_op_rope(struct htp_ops_context * octx) {
@@ -1134,18 +1123,34 @@ static int execute_op_rope(struct htp_ops_context * octx) {
     rctx.dst_row_stride        = dst_row_stride;
     rctx.src0_row_size_aligned = layout.src0_row_size_aligned;
 
-    rctx.src0_nrows            = nrows;
     rctx.nrows                 = nrows;
     rctx.row_start             = row_start;
     rctx.src0_nrows_per_hvx    = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div);
     rctx.div_ne2_ne1           = kparams->div_ne2_ne1;
     rctx.div_ne1               = kparams->div_ne1;
 
+    // MROPE, IMROPE and VISION use NEOX-style pairing for the rotation; VISION rotates full ne0
+    const bool is_neox   = (rctx.mode & HTP_ROPE_TYPE_NEOX) || (rctx.mode & HTP_ROPE_TYPE_MROPE);
+    const bool is_vision = (rctx.mode == HTP_ROPE_TYPE_VISION);
+    const bool f16_aa    = (rctx.n_offs & 63) == 0;
+
+    rctx.is_f16 = is_f16;
+    rctx.ne_rot = is_vision ? ne0 : (uint32_t) rctx.n_dims;
+    if (is_f16) {
+        if (is_neox || is_vision) {
+            rctx.compute_block = f16_aa ? rope_neox_f16_aa_inplace : rope_neox_f16_ua_inplace;
+        } else {
+            rctx.compute_block = f16_aa ? rope_basic_f16_aa_inplace : rope_basic_f16_ua_inplace;
+        }
+    } else {
+        rctx.compute_block = (is_neox || is_vision) ? rope_neox_f32_inplace : rope_basic_f32_inplace;
+    }
+
     FARF(HIGH, "rope-%s n-rows %u n-dims %d ne0 %u ext-factor %.6f theta-scale %.6f attn-factor %.6f\n",
-         is_f16 ? "f16" : "f32", rctx.src0_nrows, rctx.n_dims, ne0,
+         is_f16 ? "f16" : "f32", rctx.nrows, rctx.n_dims, ne0,
          rctx.ext_factor, rctx.theta_scale, rctx.attn_factor);
 
-    work_queue_run(octx->ctx->hvx_queue, is_f16 ? rope_job_f16 : rope_job_f32, &rctx, n_hvx);
+    work_queue_run(octx->ctx->hvx_queue, rope_job, &rctx, n_hvx);
 
     return err;
 }
