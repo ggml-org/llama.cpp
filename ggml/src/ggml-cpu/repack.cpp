@@ -13,6 +13,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 #include <cassert>
 #include <cstdio>  // for GGML_ASSERT
 
@@ -4552,9 +4553,50 @@ class tensor_traits_base : public ggml::cpu::tensor_traits {
     virtual int repack(struct ggml_tensor * t, const void * data, size_t data_size) = 0;
 };
 
+// Work-buffer layout for the batched (GEMM) MUL_MAT_ID path.
+//   [plain]   one PARAM_TYPE row per src1 row (used by the GEMV remainder rows)
+//   [counts]  int64 per expert, [rows] (i1,i2) per routed row, [goffs] prefix sums of 4-row groups per expert
+//   [packed]  the routed rows of each expert, 4 at a time, in the GEMM's interleaved activation layout
+//   [gather]  per-thread f32 scratch for 4 rows   [out] per-thread GEMM output tile (rows x column chunk)
+struct mmid_layout {
+    size_t  nbw1;        // bytes of one PARAM_TYPE row
+    size_t  off_counts, off_rows, off_goffs, off_packed, off_gather, off_out, total;
+    int64_t max_groups, chunk;
+};
+
+static mmid_layout mmid_layout_make(int nth, const struct ggml_tensor * op, ggml_type param_type, int64_t nb_cols) {
+    const ggml_tensor * src0 = op->src[0];
+    const ggml_tensor * src1 = op->src[1];
+    const ggml_tensor * ids  = op->src[2];
+    const int64_t ne01 = src0->ne[1];
+    const int64_t ne02 = src0->ne[2];              // n_expert
+    const int64_t ne10 = src1->ne[0];
+    const int64_t ne11 = src1->ne[1];
+    const int64_t ne12 = src1->ne[2];              // n_tokens
+    const int64_t n_ids = ids->ne[0];              // n_expert_used
+    if (nth < 1) nth = 1;
+
+    mmid_layout L;
+    L.nbw1 = ggml_row_size(param_type, ne10);
+    size_t off = GGML_PAD(L.nbw1 * ne11 * ne12, sizeof(int64_t));
+    L.off_counts = off; off += sizeof(int64_t) * ne02;
+    L.off_rows   = off; off += sizeof(int64_t) * ne02 * ne12;
+    L.off_goffs  = off; off += sizeof(int64_t) * (ne02 + 1);
+    off = GGML_PAD(off, 64);
+    L.max_groups = (ne12 * n_ids) / 4;
+    L.off_packed = off; off += (size_t) L.max_groups * 4 * L.nbw1;
+    off = GGML_PAD(off, 64);
+    L.off_gather = off; off += (size_t) nth * 4 * ne10 * sizeof(float);
+    off = GGML_PAD(off, 64);
+    L.chunk = (ne01 + nth - 1) / nth + 2 * nb_cols;
+    L.off_out = off; off += (size_t) nth * ne12 * L.chunk * sizeof(float);
+    L.total = GGML_PAD(off, 64);
+    return L;
+}
+
 template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PARAM_TYPE> class tensor_traits : public tensor_traits_base {
 
-    bool work_size(int /* n_threads */, const struct ggml_tensor * op, size_t & size) override {
+    bool work_size(int n_threads, const struct ggml_tensor * op, size_t & size) override {
         // not realy a GGML_TYPE_Q8_0 but same size.
         switch (op->op) {
             case GGML_OP_MUL_MAT:
@@ -4564,16 +4606,8 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
                 }
             case GGML_OP_MUL_MAT_ID:
                 {
-                    size = ggml_row_size(PARAM_TYPE, ggml_nelements(op->src[1]));
-                    size = GGML_PAD(size, sizeof(int64_t)); // + padding for next block.
-
-                    const int64_t ne02 = op->src[0]->ne[2]; // n_as, n_expert
-                    const int64_t ne12 = op->src[1]->ne[2]; // n_tokens
-
-                    const size_t sizeof_mmid_row_mapping = sizeof(int64_t);
-
-                    size += sizeof_mmid_row_mapping*ne02*(ne12 + 1);
-
+                    const mmid_layout L = mmid_layout_make(n_threads, op, PARAM_TYPE, NB_COLS);
+                    size = L.total;
                     return true;
                 }
             default:
@@ -4813,30 +4847,31 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
         const int n_ids = ids->ne[0]; // n_expert_used
         const int n_as  = ne02;       // n_expert
 
-        const size_t nbw1 = ggml_row_size(PARAM_TYPE, ne10);
+        const mmid_layout L = mmid_layout_make(nth, op, PARAM_TYPE, NB_COLS);
+        GGML_ASSERT(params->wsize >= L.total);
+
+        const size_t nbw1 = L.nbw1;
         const size_t nbw2 = nbw1*ne11;
-        const size_t nbw3 = nbw2*ne12;
 
         struct mmid_row_mapping {
             int32_t i1;
             int32_t i2;
         };
 
-        GGML_ASSERT(params->wsize >=
-                (GGML_PAD(nbw3, sizeof(int64_t)) +
-                 n_as*(ne12 + 1)*sizeof(mmid_row_mapping))
-                );
+        auto * wdata = (char *) params->wdata;
+        int64_t *                 matrix_row_counts = (int64_t *) (wdata + L.off_counts);                 // [n_as]
+        struct mmid_row_mapping * matrix_rows       = (struct mmid_row_mapping *) (wdata + L.off_rows);   // [n_as][ne12]
+        int64_t *                 group_offs        = (int64_t *) (wdata + L.off_goffs);                  // [n_as + 1]
+        char *                    packed            = wdata + L.off_packed;
+        float *                   gather            = (float *) (wdata + L.off_gather) + (size_t) ith * 4 * ne10;
+        float *                   out_tile          = (float *) (wdata + L.off_out) + (size_t) ith * ne12 * L.chunk;
 
-        auto * wdata          = (char *)params->wdata;
-        auto * wdata_src1_end = (char *)wdata + GGML_PAD(nbw3, sizeof(int64_t));
-
-        // total of [n_as][ne12 + 1] elements of type mmid_row_mapping (2*int32_t = int64_t)
-        auto * matrix_row_counts = (int64_t *) (wdata_src1_end);                                        // [n_as]
-        struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *) (matrix_row_counts + n_as); // [n_as][ne12]
-
-        // src1: float32 => param type
-        for (int64_t i12 = 0; i12 < ne12; ++i12) {
-            for (int64_t i11 = ith; i11 < ne11; i11 += nth) {
+        // src1: float32 => param type, one row per (token, slot); all threads share the flattened index
+        {
+            const int64_t n_rows = ne12 * ne11;
+            for (int64_t r = ith; r < n_rows; r += nth) {
+                const int64_t i12 = r / ne11;
+                const int64_t i11 = r % ne11;
                 from_float((float *)((char *) src1->data + i12 * nb12 + i11 * nb11),
                            (void *)               (wdata + i12 * nbw2 + i11 * nbw1),
                            ne10);
@@ -4866,9 +4901,40 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
                     matrix_row_counts[i02] += 1;
                 }
             }
+
+            // prefix sums of complete 4-row groups per expert
+            int64_t acc = 0;
+            for (int a = 0; a < n_as; ++a) {
+                group_offs[a] = acc;
+                acc += matrix_row_counts[a] / 4;
+            }
+            group_offs[n_as] = acc;
+            GGML_ASSERT(acc <= L.max_groups);
         }
 
         ggml_barrier(params->threadpool);
+
+        static const bool no_gemm = [] { const char * e = getenv("GGML_MMID_NO_GEMM"); return e && *e && *e != '0'; }();
+        const int64_t n_groups = no_gemm ? 0 : group_offs[n_as];
+
+        // pack the routed rows of every expert, 4 at a time, in the GEMM's interleaved activation layout
+        if (n_groups > 0) {
+            int a = 0;
+            for (int64_t g = ith; g < n_groups; g += nth) {
+                while (group_offs[a + 1] <= g) { ++a; }
+                const int64_t gl = g - group_offs[a];
+                for (int r = 0; r < 4; ++r) {
+                    const struct mmid_row_mapping rm = MMID_MATRIX_ROW(a, gl * 4 + r);
+                    const int64_t i11 = rm.i1 % ne11;
+                    const int64_t i12 = rm.i2;
+                    memcpy(gather + (size_t) r * ne10,
+                           (const char *) src1->data + i12 * nb12 + i11 * nb11,
+                           ne10 * sizeof(float));
+                }
+                ggml_quantize_mat_t<INTER_SIZE, PARAM_TYPE>(gather, (void *) (packed + (size_t) g * 4 * nbw1), 4, ne10);
+            }
+            ggml_barrier(params->threadpool);
+        }
 
         // compute each matrix multiplication in sequence
         for (int cur_a = 0; cur_a < n_as; ++cur_a) {
@@ -4897,7 +4963,27 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
                 return;
             }
 
-            for (int ir1 = 0; ir1 < nr1; ir1++) {
+            const int64_t ncols = src0_cur_end - src0_cur_start;
+            GGML_ASSERT(ncols <= L.chunk);
+
+            // complete 4-row groups: one GEMM over this thread's column slice, then scatter the rows
+            const int64_t ngrp = no_gemm ? 0 : cne1 / 4;
+            if (ngrp > 0) {
+                gemm<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(
+                    ne00, out_tile, L.chunk,
+                    src0_cur + src0_cur_start * nb01,
+                    packed + (size_t) group_offs[cur_a] * 4 * nbw1,
+                    ngrp * 4, ncols);
+
+                for (int64_t ir1 = 0; ir1 < ngrp * 4; ir1++) {
+                    const struct mmid_row_mapping rm = MMID_MATRIX_ROW(cur_a, ir1);
+                    float * dst_row = (float *) ((char *) dst->data + (rm.i1 * nb1 + rm.i2 * nb2)) + src0_cur_start;
+                    memcpy(dst_row, out_tile + (size_t) ir1 * L.chunk, ncols * sizeof(float));
+                }
+            }
+
+            // remainder rows: GEMV from the plain quantized rows
+            for (int64_t ir1 = ngrp * 4; ir1 < nr1; ir1++) {
                 struct mmid_row_mapping row_mapping = MMID_MATRIX_ROW(cur_a, ir1);
 
                 const int id = row_mapping.i1;  // selected expert index
@@ -5064,6 +5150,14 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
             }
         }
     } else if (cur->type == GGML_TYPE_Q6_K) {
+#if defined(__AVX512BW__) && defined(__AVX512DQ__)
+        static const bool no_q6k = [] { const char * e = getenv("GGML_NO_Q6K_REPACK"); return e && *e && *e != '0'; }();
+        if (!no_q6k && ggml_cpu_has_avx512()) {
+            if (cur->ne[1] % 8 == 0) {
+                return &q6_K_8x8_q8_K;
+            }
+        }
+#endif
         if (ggml_cpu_has_neon() && ggml_cpu_has_matmul_int8()) {
             if (cur->ne[1] % 8 == 0) {
                 return &q6_K_8x8_q8_K;

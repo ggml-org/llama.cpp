@@ -2380,8 +2380,8 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             {
                 // FIXME: get_rows can use additional threads, but the cost of launching additional threads
                 // decreases performance with GPU offloading
-                //n_tasks = n_threads;
-                n_tasks = 1;
+                // large gathers (recurrent-state reads, prompt embeddings) are worth the threads
+                n_tasks = ggml_nbytes(node) >= (256u << 10) ? n_threads : 1;
             } break;
         case GGML_OP_SCALE:
         case GGML_OP_SET:
@@ -3107,6 +3107,60 @@ static int ggml_cpu_try_fuse_ops(
     return 0;
 }
 
+
+// ---- optional per-op wall-time profiler: GGML_CPU_OPPROF=1 (thread 0 measures compute + barrier per node) ----
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+struct ggml_opprof_entry { char key[128]; double t_us; int64_t n; double t_max_us; double t_mean_us; };
+static double g_opprof_tcomp[GGML_MAX_N_THREADS];
+static struct ggml_opprof_entry g_opprof[2][512];
+static int    g_opprof_n[2] = {0, 0};
+static double g_opprof_tot[2] = {0, 0};
+static int    g_opprof_on = -1;
+static int    g_opprof_registered = 0;
+
+static int ggml_opprof_cmp(const void * a, const void * b) {
+    const struct ggml_opprof_entry * x = a; const struct ggml_opprof_entry * y = b;
+    return (x->t_us < y->t_us) - (x->t_us > y->t_us);
+}
+static void ggml_opprof_dump(void) {
+    for (int m = 0; m < 2; m++) {
+        if (g_opprof_n[m] == 0) continue;
+        qsort(g_opprof[m], g_opprof_n[m], sizeof(g_opprof[m][0]), ggml_opprof_cmp);
+        fprintf(stderr, "\n== GGML_CPU_OPPROF %s: total %.1f ms over all graphs ==\n", m == 0 ? "decode (n_tokens==1)" : "prefill (n_tokens>1)", g_opprof_tot[m] / 1000.0);
+        fprintf(stderr, "%6s %10s %10s %10s %8s %8s %8s  %s\n", "%", "total ms", "calls", "wall us", "slow us", "mean us", "wait%", "key");
+        for (int i = 0; i < g_opprof_n[m] && i < 90; i++) {
+            const struct ggml_opprof_entry * e = &g_opprof[m][i];
+            fprintf(stderr, "%6.2f %10.1f %10lld %10.1f %8.1f %8.1f %8.1f  %s\n", 100.0 * e->t_us / g_opprof_tot[m], e->t_us / 1000.0, (long long) e->n,
+                    e->t_us / e->n, e->t_max_us / e->n, e->t_mean_us / e->n, e->t_max_us > 0 ? 100.0 * (e->t_max_us - e->t_mean_us) / e->t_max_us : 0.0, e->key);
+        }
+    }
+}
+static void ggml_opprof_add(int m, const char * key, double t_us, double t_max, double t_mean) {
+    g_opprof_tot[m] += t_us;
+    for (int i = 0; i < g_opprof_n[m]; i++) {
+        if (strcmp(g_opprof[m][i].key, key) == 0) { g_opprof[m][i].t_us += t_us; g_opprof[m][i].n++; g_opprof[m][i].t_max_us += t_max; g_opprof[m][i].t_mean_us += t_mean; return; }
+    }
+    if (g_opprof_n[m] < 512) {
+        struct ggml_opprof_entry * e = &g_opprof[m][g_opprof_n[m]++];
+        snprintf(e->key, sizeof(e->key), "%s", key); e->t_us = t_us; e->n = 1; e->t_max_us = t_max; e->t_mean_us = t_mean;
+    }
+}
+static void ggml_opprof_key(char * out, size_t n, const struct ggml_tensor * node, int n_fused) {
+    char fam[64]; snprintf(fam, sizeof(fam), "%s", node->name);
+    // strip the layer suffix: "ffn_moe_up-12" -> "ffn_moe_up", "node_123" kept
+    char * dash = strrchr(fam, '-');
+    if (dash && dash[1] >= '0' && dash[1] <= '9') *dash = 0;
+    if (strncmp(fam, "node_", 5) == 0) { snprintf(fam, sizeof(fam), "node[%s]", ggml_type_name(node->type)); }
+    const struct ggml_tensor * s0 = node->src[0];
+    if (node->op == GGML_OP_MUL_MAT || node->op == GGML_OP_MUL_MAT_ID) {
+        snprintf(out, n, "%s%s %s %lldx%lld %s", n_fused ? "FUSED+" : "", ggml_op_name(node->op), ggml_type_name(s0->type),
+                 (long long) s0->ne[0], (long long) s0->ne[1], fam);
+    } else {
+        snprintf(out, n, "%s%s %s", n_fused ? "FUSED+" : "", ggml_op_name(node->op), fam);
+    }
+}
 static thread_ret_t ggml_graph_compute_thread(void * data) {
     struct ggml_compute_state * state = (struct ggml_compute_state *) data;
     struct ggml_threadpool    * tp    = state->threadpool;
@@ -3135,6 +3189,20 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     GGML_PRINT_DEBUG("thread #%d compute-start cplan %p last-graph %d\n", state->ith, (const void *)cplan, state->last_graph);
 #endif
 
+    int prof_mode = -1;
+    if (state->ith == 0) {
+        if (g_opprof_on < 0) { const char * e = getenv("GGML_CPU_OPPROF"); g_opprof_on = (e && *e && *e != '0') ? 1 : 0; }
+        if (g_opprof_on) {
+            if (!g_opprof_registered) { g_opprof_registered = 1; atexit(ggml_opprof_dump); }
+            int64_t n_tok = 0;
+            for (int i = 0; i < cgraph->n_nodes; i++) {
+                const struct ggml_tensor * nd = cgraph->nodes[i];
+                if (nd->op == GGML_OP_GET_ROWS && nd->src[0] && strncmp(nd->src[0]->name, "token_embd", 10) == 0) { n_tok = nd->ne[1]; break; }
+            }
+            prof_mode = (n_tok <= 1) ? 0 : 1;
+        }
+    }
+
     for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
 
@@ -3147,6 +3215,8 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
             continue;
         }
 
+        const int64_t prof_t0 = (g_opprof_on > 0) ? ggml_time_us() : 0;
+
         // TODO: move fused-op detection into ggml_graph_plan so fusion decisions are made once at planning time
         // Try fused ops, fall back to normal compute
         const int n_fused = ggml_cpu_try_fuse_ops(cgraph, node_n, &params, cplan);
@@ -3154,6 +3224,10 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
             node_n += n_fused;
         } else {
             ggml_compute_forward(&params, node);
+        }
+
+        if (g_opprof_on > 0) {
+            g_opprof_tcomp[state->ith] = (double) (ggml_time_us() - prof_t0);
         }
 
         if (state->ith == 0 && cplan->abort_callback &&
@@ -3164,6 +3238,13 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 
         if (node_n + 1 < cgraph->n_nodes) {
             ggml_barrier(state->threadpool);
+        }
+
+        if (prof_mode >= 0) {
+            char key[128]; ggml_opprof_key(key, sizeof(key), node, n_fused);
+            double tmax = 0, tsum = 0;
+            for (int t = 0; t < params.nth; t++) { tsum += g_opprof_tcomp[t]; if (g_opprof_tcomp[t] > tmax) tmax = g_opprof_tcomp[t]; }
+            ggml_opprof_add(prof_mode, key, (double) (ggml_time_us() - prof_t0), tmax, tsum / params.nth);
         }
     }
 
