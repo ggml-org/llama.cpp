@@ -72,6 +72,9 @@ target_include_directories(llama PRIVATE . ${CMAKE_CURRENT_BINARY_DIR})
 target_include_directories(llama PUBLIC ../include)
 target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
+# for M_PI in the clip engine, set here because a unity batch can include <cmath> before the source that needs it
+target_compile_definitions(llama PRIVATE _USE_MATH_DEFINES)
+
 find_package(Threads REQUIRED)
 target_link_libraries(llama PUBLIC ggml PRIVATE Threads::Threads)
 

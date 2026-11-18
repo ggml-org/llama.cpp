@@ -2187,7 +2187,7 @@ int llama_context::encode_media_engine(llama_media & m) {
                 std::vector<float> rows;
                 if (clip_qwen3tts_ref_codes(&clip_gen_host(), at.batch_f32.entries[1], ref.tokens, rows) != 0 ||
                         rows.size() != (size_t) (at.n_tokens - 1) * n_embd) {
-                    LLAMA_LOG_ERROR("%s: %zu reference rows, expected %u\n", __func__, rows.size() / n_embd, at.n_tokens - 1);
+                    LLAMA_LOG_ERROR("%s: %zu reference rows, expected %u\n", __func__, rows.size() / (size_t) n_embd, at.n_tokens - 1);
                     return -3;
                 }
                 speaker.insert(speaker.end(), rows.begin(), rows.end());
