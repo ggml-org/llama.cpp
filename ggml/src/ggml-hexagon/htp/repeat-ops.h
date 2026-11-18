@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 struct htp_repeat_kernel_params {
-    uint32_t n_threads;
+    uint32_t n_hvx;
     uint32_t nr0;
     uint32_t nr1;
     uint32_t nr2;

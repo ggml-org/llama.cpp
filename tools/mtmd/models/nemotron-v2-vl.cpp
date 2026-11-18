@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_nemotron_v2_vl::build() {
+ggml_cgraph * mtmd_graph_nemotron_v2_vl::build() {
     GGML_ASSERT(model.class_embedding != nullptr);
     GGML_ASSERT(model.position_embeddings != nullptr);
 

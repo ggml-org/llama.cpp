@@ -18,6 +18,30 @@ _TOWER_SHARED = "audio_decoder_mtp_shared.layers."
 _TOWER_RESIDUAL = "audio_decoder_mtp.layers."
 
 
+def load_codec(dir_model) -> dict[str, Tensor]:
+    sd = torch.load(dir_model / "codec.pth", map_location="cpu", mmap=True, weights_only=True)
+    return sd.get("state_dict", sd)
+
+
+def fold_conv(sd: dict[str, Tensor], prefix: str) -> Tensor:
+    # fold weight norm
+    if prefix + ".conv.weight" in sd:
+        return sd[prefix + ".conv.weight"].float()
+    g = sd[prefix + ".conv.parametrizations.weight.original0"].float()
+    v = sd[prefix + ".conv.parametrizations.weight.original1"].float()
+    return g * v / v.norm(dim=(1, 2), keepdim=True)
+
+
+def fold_wn(g: Tensor, v: Tensor) -> Tensor:
+    # fold old-style weight norm of a 1x1 conv, returns [out, in]
+    return (g.float() * v.float() / v.float().norm(dim=(1, 2), keepdim=True)).squeeze(-1)
+
+
+def fold_snake(alpha: Tensor) -> tuple[Tensor, Tensor]:
+    alpha = alpha.float().flatten()
+    return alpha, 1.0 / (alpha + 1e-9)
+
+
 @ModelBase.register("FishOmniModel")
 @ModelBase.example("fishaudio/drama-3")
 class Drama3TextModel(Qwen3_5MoeTextModel):
@@ -36,6 +60,7 @@ class Drama3TextModel(Qwen3_5MoeTextModel):
 class Drama3MmprojModel(MmprojModel):
     has_vision_encoder = False
     has_audio_encoder = False
+    gen_projector_type = gguf.VisionProjectorType.DRAMA3_GEN
 
     _LAYER_MAP = {
         "enorm.weight":                                 (gguf.MODEL_TENSOR.A_GEN_CODE_ENORM, True),
@@ -69,7 +94,7 @@ class Drama3MmprojModel(MmprojModel):
         cfg = self.hparams
         self.gguf_writer.add_file_type(self.ftype)
         self.gguf_writer.add_clip_has_gen_audio_encoder(True)
-        self.gguf_writer.add_clip_gen_audio_projector_type(gguf.VisionProjectorType.DRAMA3_GEN)
+        self.gguf_writer.add_clip_gen_audio_projector_type(self.gen_projector_type)
         self.gguf_writer.add_gen_audio_projection_dim(self.n_embd_text)
         self.gguf_writer.add_gen_audio_embedding_length(cfg["dim"])
         self.gguf_writer.add_gen_audio_feed_forward_length(cfg["intermediate_size"])
@@ -77,7 +102,7 @@ class Drama3MmprojModel(MmprojModel):
         self.gguf_writer.add_gen_audio_head_count(cfg["n_head"])
         self.gguf_writer.add_gen_audio_head_count_kv(cfg["n_local_heads"])
         self.gguf_writer.add_gen_audio_attention_layernorm_eps(cfg["norm_eps"])
-        # other tower and codec hparams are hardcoded in clip.cpp
+        # other tower and codec hparams are hardcoded in tools/mtmd
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
@@ -153,31 +178,19 @@ class Drama3MmprojModel(MmprojModel):
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         # only the DAC decoder, the encoder is for voice cloning (not supported yet)
-        sd = torch.load(self.dir_model / "codec.pth", map_location="cpu", mmap=True, weights_only=True)
-        sd = sd.get("state_dict", sd)
+        sd = load_codec(self.dir_model)
         T = gguf.MODEL_TENSOR
 
         def get(name: str) -> Tensor:
             return sd[name].float()
 
         def conv(prefix: str) -> Tensor:
-            # fold weight norm
-            if prefix + ".conv.weight" in sd:
-                return get(prefix + ".conv.weight")
-            g = get(prefix + ".conv.parametrizations.weight.original0")
-            v = get(prefix + ".conv.parametrizations.weight.original1")
-            return g * v / v.norm(dim=(1, 2), keepdim=True)
+            return fold_conv(sd, prefix)
 
         def quant_table(prefix: str) -> Tensor:
             # fold out_proj into the codebook, so decoding is a row lookup
-            g = get(prefix + ".out_proj.weight_g")
-            v = get(prefix + ".out_proj.weight_v")
-            w = (g * v / v.norm(dim=(1, 2), keepdim=True)).squeeze(-1)
+            w = fold_wn(sd[prefix + ".out_proj.weight_g"], sd[prefix + ".out_proj.weight_v"])
             return get(prefix + ".codebook.weight") @ w.T + get(prefix + ".out_proj.bias")
-
-        def snake(alpha: Tensor) -> tuple[Tensor, Tensor]:
-            alpha = alpha.flatten()
-            return alpha, 1.0 / (alpha + 1e-9)
 
         q = "quantizer."
         yield (self.format_tensor_name(T.A_GEN_WAV_QUANT_FIRST_CB), quant_table(q + "semantic_quantizer.quantizers.0"))
@@ -228,7 +241,7 @@ class Drama3MmprojModel(MmprojModel):
         yield (self.format_tensor_name(T.A_GEN_WAV_DAC_ENTRY, suffix=".bias"), get(d + "0.conv.bias"))
         for bid in range(4):
             p = f"{d}{bid + 1}.block."
-            a, b = snake(get(p + "0.alpha"))
+            a, b = fold_snake(get(p + "0.alpha"))
             yield (self.format_tensor_name(T.A_GEN_WAV_DAC_UP_SNAKE, bid, suffix=".alpha"), a)
             yield (self.format_tensor_name(T.A_GEN_WAV_DAC_UP_SNAKE, bid, suffix=".beta"), b)
             yield (self.format_tensor_name(T.A_GEN_WAV_DAC_UP_CONV, bid, suffix=".weight"), conv(p + "1"))
@@ -236,7 +249,7 @@ class Drama3MmprojModel(MmprojModel):
             for xid in range(3):
                 r = f"{p}{xid + 2}.block."
                 for act, tensor in (("0", T.A_GEN_WAV_DAC_RES_ACT1), ("2", T.A_GEN_WAV_DAC_RES_ACT2)):
-                    a, b = snake(get(r + act + ".alpha"))
+                    a, b = fold_snake(get(r + act + ".alpha"))
                     name = gguf.TENSOR_NAMES[tensor].format(bid=bid, xid=xid)
                     yield (name + ".alpha", a)
                     yield (name + ".beta", b)
@@ -244,7 +257,7 @@ class Drama3MmprojModel(MmprojModel):
                     name = gguf.TENSOR_NAMES[tensor].format(bid=bid, xid=xid)
                     yield (name + ".weight", conv(r + cv))
                     yield (name + ".bias", get(r + cv + ".conv.bias"))
-        a, b = snake(get(d + "5.alpha"))
+        a, b = fold_snake(get(d + "5.alpha"))
         yield (self.format_tensor_name(T.A_GEN_WAV_DAC_POST_SNAKE, suffix=".alpha"), a)
         yield (self.format_tensor_name(T.A_GEN_WAV_DAC_POST_SNAKE, suffix=".beta"), b)
         yield (self.format_tensor_name(T.A_GEN_WAV_DAC_POST_CONV, suffix=".weight"), conv(d + "6"))

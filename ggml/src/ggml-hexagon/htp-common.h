@@ -25,6 +25,7 @@ extern int    opt_fa_select;
 extern int    opt_fa_split;
 extern int    opt_li_select;
 extern int    opt_gdn_select;
+extern int    opt_ssm_select;
 extern int    opt_ar_select;
 extern int    opt_ar_scatter;
 
@@ -93,11 +94,28 @@ static inline bool htp_can_row_partition(const struct ggml_tensor * t) {
     return true;
 }
 
+static inline uint32_t htp_mdev_rows_per_chunk(const struct ggml_tensor * t) {
+    if ((t->data && ((uintptr_t) t->data & 127) != 0) || (t->view_offs & 127) != 0) return 0;
+    const size_t elem_size = ggml_type_size(t->type);
+    if (t->ne[0] != 1 && t->nb[0] != elem_size) return 0;
+    if (ggml_is_permuted(t)) return 0;
+    if (t->ne[2] > 1 && (t->nb[2] & 127) != 0) return 0;
+    if (t->ne[3] > 1 && (t->nb[3] & 127) != 0) return 0;
+    if (t->ne[1] > 1 && (t->nb[1] & 127) == 0) return 1;
+    const size_t row_size = (size_t) t->ne[0] * elem_size;
+    if (t->nb[1] == row_size &&
+        (t->ne[2] <= 1 || t->nb[2] == t->nb[1] * (size_t) t->ne[1]) &&
+        (t->ne[3] <= 1 || t->nb[3] == t->nb[2] * (size_t) t->ne[2])) {
+        return (row_size > 0) ? (HEX_L2_LINE_SIZE / hex_gcd_u32((uint32_t) row_size, HEX_L2_LINE_SIZE)) : 1;
+    }
+    return 0;
+}
+
 struct ggml_hexagon_session;
 
 const char * htp_session_name(const struct ggml_hexagon_session * sess);
 size_t       htp_session_vtcm_size(const struct ggml_hexagon_session * sess);
-uint32_t     htp_session_n_threads(const struct ggml_hexagon_session * sess);
+uint32_t     htp_session_n_hvx(const struct ggml_hexagon_session * sess);
 uint32_t     htp_session_n_hmx(const struct ggml_hexagon_session * sess);
 uint32_t     htp_session_mdev_count(const struct ggml_hexagon_session * sess);
 

@@ -11,7 +11,7 @@ static int64_t div_ceil(int64_t a, int64_t b) {
 
 // x: [T, IC], w: [K, IC, OC] -> [T / stride, OC]
 // the convs are causal, so the whole K - stride padding goes on the left
-ggml_tensor * clip_graph_pockettts_seanet::conv1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride, int dilation,
+ggml_tensor * mtmd_graph_pockettts_seanet::conv1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride, int dilation,
                                                   bool pad_replicate, const std::string & state_name) const {
     const int64_t k_size  = (w->ne[0] - 1) * dilation + 1;
     const int64_t p_total = k_size - stride;
@@ -33,12 +33,26 @@ ggml_tensor * clip_graph_pockettts_seanet::conv1d(ggml_tensor * x, ggml_tensor *
         ggml_tensor * first = ggml_view_2d(ctx0, x, 1, x->ne[1], x->nb[1], 0);
         ggml_tensor * left  = ggml_repeat_4d(ctx0, first, p_total, x->ne[1], 1, 1);
         x = ggml_concat(ctx0, left, x, 0);
-        x = ggml_pad_ext(ctx0, x, 0, p_extra, 0, 0, 0, 0, 0, 0);
+        if (pad_replicate_end && p_extra > 0) {
+            ggml_tensor * last  = ggml_view_2d(ctx0, x, 1, x->ne[1], x->nb[1], (size_t) (x->ne[0] - 1) * x->nb[0]);
+            ggml_tensor * right = ggml_repeat_4d(ctx0, last, p_extra, x->ne[1], 1, 1);
+            x = ggml_concat(ctx0, x, right, 0);
+        } else {
+            x = ggml_pad_ext(ctx0, x, 0, p_extra, 0, 0, 0, 0, 0, 0);
+        }
     } else {
         x = ggml_pad_ext(ctx0, x, p_total, p_extra, 0, 0, 0, 0, 0, 0);
     }
 
-    ggml_tensor * y = ggml_conv_1d(ctx0, w, x, stride, 0, dilation);
+    ggml_tensor * y;
+    if (f32_im2col) {
+        // ggml_conv_1d() with an F32 im2col, the kernel must be F32
+        ggml_tensor * col = ggml_im2col(ctx0, w, x, stride, 0, 0, 0, dilation, 0, false, GGML_TYPE_F32);
+        y = ggml_mul_mat(ctx0, ggml_reshape_2d(ctx0, col, col->ne[0], col->ne[2] * col->ne[1]),
+                         ggml_reshape_2d(ctx0, w, w->ne[0] * w->ne[1], w->ne[2]));
+    } else {
+        y = ggml_conv_1d(ctx0, w, x, stride, 0, dilation);
+    }
     y = ggml_reshape_2d(ctx0, y, y->ne[0], y->ne[1]);
     if (b) {
         y = ggml_add(ctx0, y, ggml_reshape_2d(ctx0, b, 1, b->ne[0]));
@@ -48,7 +62,7 @@ ggml_tensor * clip_graph_pockettts_seanet::conv1d(ggml_tensor * x, ggml_tensor *
 
 // x: [T, IC], w: [K, OC/groups, IC] -> [T * stride, OC]
 // the K - stride overlap tail belongs to the next call: added to its head when streaming, else dropped
-ggml_tensor * clip_graph_pockettts_seanet::conv_transpose1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride,
+ggml_tensor * mtmd_graph_pockettts_seanet::conv_transpose1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride,
                                                             const std::string & state_name) const {
     const int64_t K         = w->ne[0];
     const int64_t T         = x->ne[0];
@@ -99,7 +113,7 @@ ggml_tensor * clip_graph_pockettts_seanet::conv_transpose1d(ggml_tensor * x, ggm
     return out;
 }
 
-ggml_tensor * clip_graph_pockettts_seanet::res_unit(ggml_tensor * x, const clip_seanet::stage & stage, int dilation,
+ggml_tensor * mtmd_graph_pockettts_seanet::res_unit(ggml_tensor * x, const mtmd_seanet::stage & stage, int dilation,
                                                     const std::string & state_prefix) const {
     ggml_tensor * h = ggml_elu(ctx0, x);
     h = conv1d(h, stage.res_conv1_w, stage.res_conv1_b, 1, dilation, false, state_prefix);
@@ -109,7 +123,7 @@ ggml_tensor * clip_graph_pockettts_seanet::res_unit(ggml_tensor * x, const clip_
     return ggml_add(ctx0, x, h);
 }
 
-ggml_tensor * clip_graph_pockettts_seanet::encode(ggml_tensor * x) const {
+ggml_tensor * mtmd_graph_pockettts_seanet::encode(ggml_tensor * x) const {
     const auto & seanet = model.seanet;
 
     ggml_tensor * cur = conv1d(x, seanet.conv_in_w, seanet.conv_in_b, 1, 1);
@@ -132,7 +146,7 @@ ggml_tensor * clip_graph_pockettts_seanet::encode(ggml_tensor * x) const {
     return cur;
 }
 
-ggml_tensor * clip_graph_pockettts_seanet::decode(ggml_tensor * x) const {
+ggml_tensor * mtmd_graph_pockettts_seanet::decode(ggml_tensor * x) const {
     const auto & seanet = model.seanet;
     const bool   stream = !state_in.empty();
 

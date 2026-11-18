@@ -60,7 +60,7 @@ struct htp_conv2d_window_params {
 
 struct htp_conv2d_kernel_params {
     uint8_t  kernel_type;
-    uint8_t  n_threads;
+    uint8_t  n_hvx;
     uint8_t  cwhn;
     uint8_t  w_kmajor;
 
@@ -98,7 +98,7 @@ enum htp_conv2d_dw_kernel_type {
 
 struct htp_conv2d_dw_kernel_params {
     uint8_t  kernel_type;
-    uint8_t  n_threads;
+    uint8_t  n_hvx;
     uint8_t  cwhn;
     uint8_t  is_f16;
 
@@ -140,8 +140,8 @@ struct htp_conv2d_dw_vtcm_layout {
     size_t   off_dst;
     size_t   src_spad_half_size;
     size_t   dst_spad_half_size;
-    size_t   src_bytes_per_thread;
-    size_t   dst_bytes_per_thread;
+    size_t   src_bytes_per_hvx;
+    size_t   dst_bytes_per_hvx;
 };
 
 static inline void htp_conv2d_dw_vtcm_layout_build(
@@ -149,17 +149,17 @@ static inline void htp_conv2d_dw_vtcm_layout_build(
     uint32_t max_src_bytes,
     uint32_t max_dst_bytes,
     uint32_t w_size,
-    uint32_t n_threads
+    uint32_t n_hvx
 ) {
     L->src_spad_half_size   = hex_round_up(max_src_bytes + 256, 128);
     L->dst_spad_half_size   = hex_round_up(max_dst_bytes + 128, 128);
-    L->src_bytes_per_thread = 2 * L->src_spad_half_size;
-    L->dst_bytes_per_thread = 2 * L->dst_spad_half_size;
+    L->src_bytes_per_hvx    = 2 * L->src_spad_half_size;
+    L->dst_bytes_per_hvx    = 2 * L->dst_spad_half_size;
 
     size_t off = 0;
     VTCM_LAYOUT_ALLOC(off, off_w, hex_round_up(w_size, 128));
-    VTCM_LAYOUT_ALLOC(off, off_src, L->src_bytes_per_thread * n_threads);
-    VTCM_LAYOUT_ALLOC(off, off_dst, L->dst_bytes_per_thread * n_threads);
+    VTCM_LAYOUT_ALLOC(off, off_src, L->src_bytes_per_hvx * n_hvx);
+    VTCM_LAYOUT_ALLOC(off, off_dst, L->dst_bytes_per_hvx * n_hvx);
     L->total_bytes = off;
 }
 
@@ -181,7 +181,7 @@ static inline void htp_conv2d_vtcm_layout_build(
     size_t   act_size,
     size_t   out_size,
     size_t   thr_size,
-    uint32_t n_threads
+    uint32_t n_hvx
 ) {
     const size_t sc = hex_round_up((size_t) rt_block * HTP_CONV2D_HMX_SCALES_SIZE, 2048);
     size_t off = 0;
@@ -191,7 +191,7 @@ static inline void htp_conv2d_vtcm_layout_build(
     VTCM_LAYOUT_ALLOC(off, off_act[1], act_size);
     VTCM_LAYOUT_ALLOC(off, off_out[0], out_size);
     VTCM_LAYOUT_ALLOC(off, off_out[1], out_size);
-    VTCM_LAYOUT_ALLOC(off, off_thr,    (size_t) n_threads * thr_size);
+    VTCM_LAYOUT_ALLOC(off, off_thr,    (size_t) n_hvx * thr_size);
     L->act_size    = act_size;
     L->total_bytes = off;
 }

@@ -3,7 +3,7 @@
 #include <string>
 
 // on-device sampling: top-k, top-p, then a random draw
-ggml_tensor * clip_graph_qwen3tts_gen::code_gen::do_sampling(ggml_tensor * logits, ggml_tensor * inp_rand) const {
+ggml_tensor * mtmd_graph_qwen3tts_gen::code_gen::do_sampling(ggml_tensor * logits, ggml_tensor * inp_rand) const {
     logits = ggml_reshape_1d(ctx0, logits, ggml_nelements(logits));
     const int64_t n_vocab = logits->ne[0];
 
@@ -68,7 +68,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code_gen::do_sampling(ggml_tensor * logit
 }
 
 // returns a new cache with row row_idx set to value
-ggml_tensor * clip_graph_qwen3tts_gen::code_gen::cache_set(ggml_tensor * cache, int row_idx, ggml_tensor * value) const {
+ggml_tensor * mtmd_graph_qwen3tts_gen::code_gen::cache_set(ggml_tensor * cache, int row_idx, ggml_tensor * value) const {
     const int64_t n_embd  = cache->ne[0];
     const int64_t n_cache = cache->ne[1];
     GGML_ASSERT(row_idx >= 0 && row_idx < n_cache);
@@ -95,7 +95,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code_gen::cache_set(ggml_tensor * cache, 
 }
 
 // builds a const i32 with no host upload: view a tensor, zero it via scale, add value, cast to i32
-ggml_tensor * clip_graph_qwen3tts_gen::code_gen::const_i32(ggml_tensor * anchor, float value) const {
+ggml_tensor * mtmd_graph_qwen3tts_gen::code_gen::const_i32(ggml_tensor * anchor, float value) const {
     ggml_tensor * v = ggml_view_1d(ctx0, anchor, 1, 0);
     if (v->type != GGML_TYPE_F32) {
         v = ggml_cast(ctx0, v, GGML_TYPE_F32);
@@ -104,20 +104,20 @@ ggml_tensor * clip_graph_qwen3tts_gen::code_gen::const_i32(ggml_tensor * anchor,
 }
 
 // causal keep-mask row for a query at position pos, window size n_kv_pad
-ggml_tensor * clip_graph_qwen3tts_gen::code_gen::causal_mask_row(int64_t n_kv_pad, int pos) const {
+ggml_tensor * mtmd_graph_qwen3tts_gen::code_gen::causal_mask_row(int64_t n_kv_pad, int pos) const {
     ggml_tensor * ones = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv_pad, n_kv_pad), 1.0f);
     ggml_tensor * keep = ggml_tri(ctx0, ones, GGML_TRI_TYPE_LOWER_DIAG);
     ggml_tensor * row  = ggml_view_1d(ctx0, keep, n_kv_pad, (size_t) pos * keep->nb[1]);
     ggml_tensor * mask = ggml_log(ctx0, row); // 0 = keep, -inf = masked
     mask = ggml_reshape_4d(ctx0, mask, n_kv_pad, 1, 1, 1);
-    if (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
+    if (flash_attn_type == MTMD_FLASH_ATTN_TYPE_ENABLED) {
         mask = ggml_cast(ctx0, mask, GGML_TYPE_F16);
     }
     return mask;
 }
 
 // talker hidden size -> predictor hidden size (small_to_mtp_projection)
-ggml_tensor * clip_graph_qwen3tts_gen::code_gen::project_in(ggml_tensor * cur) const {
+ggml_tensor * mtmd_graph_qwen3tts_gen::code_gen::project_in(ggml_tensor * cur) const {
     if (!model.gen_code_proj_in_w) {
         return cur;
     }
@@ -129,9 +129,9 @@ ggml_tensor * clip_graph_qwen3tts_gen::code_gen::project_in(ggml_tensor * cur) c
 }
 
 // one transformer layer at position pos; writes k/v into k_cache_layer/v_cache_layer at row pos
-ggml_tensor * clip_graph_qwen3tts_gen::code_gen::layer_forward(
+ggml_tensor * mtmd_graph_qwen3tts_gen::code_gen::layer_forward(
         ggml_tensor * cur,
-        const clip_layer & layer,
+        const mtmd_layer & layer,
         ggml_tensor * inp_pos,
         ggml_tensor * kq_mask,
         ggml_tensor *& k_cache_layer,
@@ -156,10 +156,13 @@ ggml_tensor * clip_graph_qwen3tts_gen::code_gen::layer_forward(
     q = ggml_reshape_3d(ctx0, q, d_head, n_head, 1);
     k = ggml_reshape_3d(ctx0, k, d_head, n_head_kv, 1);
 
-    q = ggml_rms_norm(ctx0, q, hparams.eps);
-    q = ggml_mul(ctx0, q, layer.q_norm);
-    k = ggml_rms_norm(ctx0, k, hparams.eps);
-    k = ggml_mul(ctx0, k, layer.k_norm);
+    // fish_s2 fast AR has no qk norm
+    if (layer.q_norm) {
+        q = ggml_rms_norm(ctx0, q, hparams.eps);
+        q = ggml_mul(ctx0, q, layer.q_norm);
+        k = ggml_rms_norm(ctx0, k, hparams.eps);
+        k = ggml_mul(ctx0, k, layer.k_norm);
+    }
 
     q = ggml_rope_ext(ctx0, q, inp_pos, nullptr, (int) d_head, GGML_ROPE_TYPE_NEOX, 0,
                       hparams.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
@@ -192,7 +195,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code_gen::layer_forward(
 
 // position 0: hidden bridge, seeds the k/v cache, no sampling
 // position 1: embed(code0), sample with lm_head[0], write out_code_cache[1]
-void clip_graph_qwen3tts_gen::code_gen::prefill(
+void mtmd_graph_qwen3tts_gen::code_gen::prefill(
         std::vector<ggml_tensor *> & k_cache,
         std::vector<ggml_tensor *> & v_cache,
         ggml_tensor *& out_code_cache,
@@ -237,7 +240,7 @@ void clip_graph_qwen3tts_gen::code_gen::prefill(
 // - write new kv at cache row g+1, sample with lm_head[g]
 // - write result to out_code_cache[g+1]
 // step_idx must be in [1, n_acoustic - 1]
-ggml_tensor * clip_graph_qwen3tts_gen::code_gen::step(
+ggml_tensor * mtmd_graph_qwen3tts_gen::code_gen::step(
         std::vector<ggml_tensor *> & k_cache,
         std::vector<ggml_tensor *> & v_cache,
         ggml_tensor * out_code_cache,
@@ -290,7 +293,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code_gen::step(
 
 // causal conv1d, stride 1: prepend persisted left-context instead of zero-padding, then a plain conv
 // x: [T, IC] (T-first). w: [K, IC, OC]. state_name empty means K == 1 (no left-context). returns [T, OC]
-ggml_tensor * clip_graph_qwen3tts_gen::code2wav::causal_conv1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int dilation, const std::string & state_name) const {
+ggml_tensor * mtmd_graph_qwen3tts_gen::code2wav::causal_conv1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int dilation, const std::string & state_name) const {
     const int K   = (int) w->ne[0];
     const int pad = (K - 1) * dilation;
 
@@ -314,7 +317,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::causal_conv1d(ggml_tensor * x, 
 
 // causal depthwise conv1d, stride 1, dilation 1, kernel from w's shape.
 // x: [T, C]. w: [K, 1, C]. returns [T, C]. see causal_conv1d for the state contract.
-ggml_tensor * clip_graph_qwen3tts_gen::code2wav::causal_conv1d_dw(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, const std::string & state_name) const {
+ggml_tensor * mtmd_graph_qwen3tts_gen::code2wav::causal_conv1d_dw(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, const std::string & state_name) const {
     const int K   = (int) w->ne[0];
     const int pad = K - 1;
 
@@ -338,7 +341,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::causal_conv1d_dw(ggml_tensor * 
 
 // causal ConvTranspose1d, the (kernel - stride) overlap tail is kept as state for the next call
 // x: [T, IC], w: [K, OC, IC]. state_name empty means K == stride (no overlap). returns [T * stride, OC]
-ggml_tensor * clip_graph_qwen3tts_gen::code2wav::causal_conv_transpose1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride, const std::string & state_name) const {
+ggml_tensor * mtmd_graph_qwen3tts_gen::code2wav::causal_conv_transpose1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride, const std::string & state_name) const {
     const int     K        = (int) w->ne[0];
     const int     OC       = (int) w->ne[1];
     const int     trim     = K - stride;
@@ -372,7 +375,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::causal_conv_transpose1d(ggml_te
 
 // SnakeBeta activation: y = x + sin(alpha*x)^2 * inv_beta (alpha/inv_beta folded via exp/reciprocal at conversion time)
 // x: [T, C]. alpha/beta: [C], broadcasts over T
-ggml_tensor * clip_graph_qwen3tts_gen::code2wav::snake(ggml_tensor * x, ggml_tensor * alpha, ggml_tensor * beta) const {
+ggml_tensor * mtmd_graph_qwen3tts_gen::code2wav::snake(ggml_tensor * x, ggml_tensor * alpha, ggml_tensor * beta) const {
     ggml_tensor * a = ggml_reshape_2d(ctx0, alpha, 1, alpha->ne[0]);
     ggml_tensor * b = ggml_reshape_2d(ctx0, beta,  1, beta->ne[0]);
 
@@ -388,7 +391,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::snake(ggml_tensor * x, ggml_ten
 
 // RVQ codebook decode: T frames of 16 codes -> 512-dim hidden (C-first, [512, T])
 // codebook 0 (semantic) and 1..15 (acoustic) sum within their group, project separately, then add
-ggml_tensor * clip_graph_qwen3tts_gen::code2wav::quant_decode(ggml_tensor * inp_codes) const {
+ggml_tensor * mtmd_graph_qwen3tts_gen::code2wav::quant_decode(ggml_tensor * inp_codes) const {
     const auto & c2w = model.c2w;
     const int64_t T = inp_codes->ne[0];
 
@@ -418,12 +421,12 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::quant_decode(ggml_tensor * inp_
 // one pre_transformer layer over a batch of N = sliding_window new frames
 // attention runs over [(W-1)-frame prefix from the last batch] + [N new frames]
 // RoPE positions come from a persisted counter, so phases line up across batches
-ggml_tensor * clip_graph_qwen3tts_gen::code2wav::tfm_layer_forward(ggml_tensor * cur, const clip_layer & layer, int il) const {
+ggml_tensor * mtmd_graph_qwen3tts_gen::code2wav::tfm_layer_forward(ggml_tensor * cur, const mtmd_layer & layer, int il, int64_t window) const {
     const int     n_head    = hparams.wav_tfm_n_head;
     const int     n_head_kv = hparams.wav_tfm_n_head_kv;
     const int64_t d_head    = layer.q_w->ne[1] / n_head;
     const float   kq_scale  = 1.0f / sqrtf((float) d_head);
-    const int64_t W         = hparams.wav_tfm_swa; // == N, frames per batch
+    const int64_t W         = window > 0 ? window : hparams.wav_tfm_swa; // code2wav: == N, frames per batch
     const int64_t N         = cur->ne[1];
     const int64_t prefix    = W - 1;
     const int64_t total_kv  = prefix + N;
@@ -485,7 +488,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::tfm_layer_forward(ggml_tensor *
     keep = ggml_mul(ctx0, keep, warm);
 
     ggml_tensor * mask = ggml_reshape_4d(ctx0, ggml_log(ctx0, keep), total_kv, N, 1, 1); // 0 = keep, -inf = masked
-    if (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
+    if (flash_attn_type == MTMD_FLASH_ATTN_TYPE_ENABLED) {
         mask = ggml_cast(ctx0, mask, GGML_TYPE_F16);
     }
 
@@ -515,7 +518,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::tfm_layer_forward(ggml_tensor *
 
 // dwconv -> LayerNorm -> pwconv1 -> GELU -> pwconv2 -> layer scale -> residual
 // x: [T, C] T-first; LayerNorm/pwconv need C on ne0, so this transposes in and back out
-ggml_tensor * clip_graph_qwen3tts_gen::code2wav::convnext_block(ggml_tensor * x, const clip_code2wav::upsample_block & blk, const std::string & state_prefix) const {
+ggml_tensor * mtmd_graph_qwen3tts_gen::code2wav::convnext_block(ggml_tensor * x, const mtmd_code2wav::upsample_block & blk, const std::string & state_prefix) const {
     ggml_tensor * residual = x;
 
     ggml_tensor * h = causal_conv1d_dw(x, blk.dwconv_w, blk.dwconv_b, state_prefix + "_dwconv"); // [T, C]
@@ -538,7 +541,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::convnext_block(ggml_tensor * x,
 
 // SnakeBeta -> dilated causal conv (k=7) -> SnakeBeta -> pointwise causal conv (k=1) -> residual.
 // x: [T, C]. returns [T, C].
-ggml_tensor * clip_graph_qwen3tts_gen::code2wav::dac_res_unit(ggml_tensor * x, const clip_code2wav::dac_res & res, int dilation, const std::string & state_name) const {
+ggml_tensor * mtmd_graph_qwen3tts_gen::code2wav::dac_res_unit(ggml_tensor * x, const mtmd_code2wav::dac_res & res, int dilation, const std::string & state_name) const {
     ggml_tensor * residual = x;
     ggml_tensor * h = snake(x, res.act1_alpha, res.act1_beta);
     h = causal_conv1d(h, res.conv1_w, res.conv1_b, dilation, state_name);
@@ -548,7 +551,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::dac_res_unit(ggml_tensor * x, c
 }
 
 // RVQ codes -> raw PCM for a batch of N = sliding_window frames
-ggml_tensor * clip_graph_qwen3tts_gen::code2wav::decode(ggml_tensor * inp_codes) const {
+ggml_tensor * mtmd_graph_qwen3tts_gen::code2wav::decode(ggml_tensor * inp_codes) const {
     const auto & c2w = model.c2w;
 
     // 1. quantizer decode: N frames of 16 codes -> [512, N] (C-first)
@@ -613,7 +616,7 @@ ggml_tensor * clip_graph_qwen3tts_gen::code2wav::decode(ggml_tensor * inp_codes)
 
 // code2wav's persisted state buffers: RoPE position counter, K/V per pre_transformer layer,
 // left-context/tail per stateful conv. shape lookup only, no graph needed
-std::vector<c2w_state_slot> list_c2w_state_slots(const clip_hparams & hparams, const clip_model & model) {
+std::vector<c2w_state_slot> list_c2w_state_slots(const mtmd_hparams & hparams, const mtmd_model & model) {
     const auto & c2w = model.c2w;
     std::vector<c2w_state_slot> slots;
 
@@ -661,22 +664,90 @@ std::vector<c2w_state_slot> list_c2w_state_slots(const clip_hparams & hparams, c
     return slots;
 }
 
+// x: [dim, T], codebook: [dim, n_entries] -> [T] index of the nearest entry
+ggml_tensor * mtmd_graph_qwen3tts_gen::nearest_code(ggml_tensor * x, ggml_tensor * codebook) const {
+    // argmin |x - e|^2 = argmax 2 x.e - |e|^2
+    ggml_tensor * dots  = ggml_mul_mat(ctx0, codebook, x);                // [n_entries, T]
+    ggml_tensor * norms = ggml_sum_rows(ctx0, ggml_sqr(ctx0, codebook));  // [1, n_entries]
+    norms = ggml_reshape_2d(ctx0, norms, norms->ne[1], 1);                // [n_entries, 1]
+    return ggml_argmax(ctx0, ggml_sub(ctx0, ggml_scale(ctx0, dots, 2.0f), norms));
+}
+
+// the mimi encoder of the speech tokenizer, then its RVQ: one semantic codebook and n_acoustic acoustic ones
+ggml_cgraph * mtmd_graph_qwen3tts_gen::build_ref_encoder() {
+    // the waveform comes in as a single-row "mel", [n_samples, 1]
+    ggml_tensor * inp_raw = build_inp_raw(1);
+    ggml_tensor * cur = ggml_reshape_2d(ctx0, inp_raw, inp_raw->ne[0], inp_raw->ne[1]);
+
+    mtmd_graph_pockettts_seanet seanet(*this);
+    seanet.f32_im2col        = true;
+    seanet.pad_replicate_end = true;
+
+    // the checkpoint is in the transformers layout, so rope rotates halves (neox)
+    mtmd_graph_pockettts_spkenc mimi(*this);
+    mimi.tfm_n_head     = ref_enc_n_head;
+    mimi.tfm_eps        = ref_enc_eps;
+    mimi.tfm_rope_theta = ref_enc_rope_theta;
+    mimi.tfm_rope_type  = GGML_ROPE_TYPE_NEOX;
+    mimi.tfm_ffn_type   = FFN_GELU_ERF;
+
+    cur = mimi.encode(seanet, cur, model.ref_enc_layers);
+    cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur)); // [512, T]
+
+    std::vector<ggml_tensor *> codes;
+    codes.push_back(nearest_code(build_mm(model.ref_quant_first_in_w, cur), model.ref_quant_first_cb));
+
+    const int64_t n_acoustic = model.ref_quant_rest_cb->ne[2];
+    ggml_tensor * residual = build_mm(model.ref_quant_rest_in_w, cur);
+    for (int64_t i = 0; i < n_acoustic; i++) {
+        ggml_tensor * codebook = ggml_view_2d(ctx0, model.ref_quant_rest_cb, model.ref_quant_rest_cb->ne[0], model.ref_quant_rest_cb->ne[1],
+                                              model.ref_quant_rest_cb->nb[1], (size_t) i * model.ref_quant_rest_cb->nb[2]);
+        ggml_tensor * code = nearest_code(residual, codebook);
+        codes.push_back(code);
+        if (i + 1 < n_acoustic) {
+            residual = ggml_sub(ctx0, residual, ggml_get_rows(ctx0, codebook, code));
+        }
+    }
+
+    // talker input rows of the reference frames: codebook 0 from the talker table, the rest from the code predictor's
+    ggml_tensor * rows = ggml_get_rows(ctx0, model.gen_code_out_embd_w, codes[0]);
+    for (int64_t g = 1; g <= n_acoustic; g++) {
+        ggml_tensor * embd = ggml_view_2d(ctx0, model.gen_code_embd_w, model.gen_code_embd_w->ne[0], model.gen_code_embd_w->ne[1],
+                                          model.gen_code_embd_w->nb[1], (size_t) (g - 1) * model.gen_code_embd_w->nb[2]);
+        rows = ggml_add(ctx0, rows, ggml_get_rows(ctx0, embd, codes[(size_t) g]));
+    }
+
+    for (size_t g = 0; g < codes.size(); g++) {
+        ggml_set_name(codes[g], ("out_ref_code_" + std::to_string(g)).c_str());
+        ggml_set_output(codes[g]);
+        ggml_build_forward_expand(gf, codes[g]);
+    }
+    ggml_set_name(rows, "out_ref_rows");
+    ggml_set_output(rows);
+    ggml_build_forward_expand(gf, rows);
+    return gf;
+}
+
 // both sub-graphs are always built, so the topology stays constant
 // ggml_build_forward_select() then picks the one that actually runs
-ggml_cgraph * clip_graph_qwen3tts_gen::build() {
+ggml_cgraph * mtmd_graph_qwen3tts_gen::build() {
+    if (gen_process == MTMD_SUBCTX_GEN_PROCESS_TOKENIZE) {
+        return build_ref_encoder();
+    }
+
     GGML_ASSERT(n_batch == 1); // this module only ever processes one frame at a time
 
     int idx;
     switch (gen_process) {
-        case CLIP_GEN_PROCESS_GEN_CODE: idx = 0; break;
-        case CLIP_GEN_PROCESS_GEN_WAV:  idx = 1; break;
+        case MTMD_SUBCTX_GEN_PROCESS_GEN_CODE: idx = 0; break;
+        case MTMD_SUBCTX_GEN_PROCESS_GEN_WAV:  idx = 1; break;
         default: GGML_ABORT("unknown gen_process");
     }
 
-    // ---- CLIP_GEN_PROCESS_GEN_CODE: backbone hidden state -> 16 RVQ codes + next-step embd ----
+    // ---- MTMD_SUBCTX_GEN_PROCESS_GEN_CODE: backbone hidden state -> 16 RVQ codes + next-step embd ----
     // not build_inp_raw(), a GEN_WAV call's `img` has no hidden-state data
     ggml_tensor * h_state = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_mmproj_embd);
-    ggml_set_name(h_state, "inp_raw"); // must keep this exact name, clip_encode() sets it by name
+    ggml_set_name(h_state, "inp_raw"); // must keep this exact name, mtmd_subcontext::encode() sets it by name
     ggml_set_input(h_state);
 
     ggml_tensor * code0 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
@@ -740,7 +811,7 @@ ggml_cgraph * clip_graph_qwen3tts_gen::build() {
     out_embd = ggml_reshape_2d(ctx0, out_embd, out_embd->ne[0], 1);
     cb(out_embd, "gen_audio_out", -1);
 
-    // ---- CLIP_GEN_PROCESS_GEN_WAV: 16 RVQ codes -> raw PCM ----
+    // ---- MTMD_SUBCTX_GEN_PROCESS_GEN_WAV: 16 RVQ codes -> raw PCM ----
     const int n_frames = hparams.wav_tfm_swa; // frames per batch, == the attention window
 
     ggml_tensor * inp_codes = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_frames, n_codes);
@@ -764,7 +835,7 @@ ggml_cgraph * clip_graph_qwen3tts_gen::build() {
         ggml_set_output(slot.second);
     }
 
-    // out_embd goes last, clip_encode() reads it back via ggml_graph_node(gf, -1)
+    // out_embd goes last, mtmd_subcontext::encode() reads it back via ggml_graph_node(gf, -1)
     ggml_tensor * outs[2];
     outs[0] = out_codes; outs[1] = out_audio;
     ggml_build_forward_select(gf, outs, 2, idx);

@@ -9,7 +9,7 @@
 #include <string.h>
 #include "hex-utils.h"
 
-#include "hex-profile.h"
+#include "htp-trace.h"
 
 #ifdef __cplusplus
 extern "C" {

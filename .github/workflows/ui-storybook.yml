@@ -1,0 +1,81 @@
+name: UI Storybook
+
+# Builds Llama UI and Llama Chat's Storybook (ui/apps/chat) and publishes it to its Hugging Face Space
+# whenever the UI changes on master, so the Space always shows the latest build.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths: [
+      '.github/workflows/ui-storybook.yml',
+      'ui/apps/chat/**',
+      'ui/lib/ui/**'
+    ]
+
+cache-mode: none
+permissions:
+  contents: read
+
+# only the newest build matters: a newer push replaces a deploy still in progress
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy to Hugging Face Spaces
+    if: github.repository == 'ggml-org/llama.cpp'
+    runs-on: ubuntu-24.04
+
+    env:
+      HF_SPACE: ${{ vars.HF_SPACE_UI_STORYBOOK || 'ggml-org/llama-ui-storybook' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ui/apps/chat
+
+      - name: Build Storybook
+        run: npm run build-storybook
+        working-directory: ui/apps/chat
+
+      - name: Write the Space card
+        run: |
+          cat > ui/apps/chat/storybook-static/README.md << EOF
+          ---
+          title: Llama UI Storybook
+          emoji: 🦙
+          colorFrom: gray
+          colorTo: gray
+          sdk: static
+          pinned: false
+          ---
+
+          The Storybook of Llama UI and Llama Chat, built from [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) (\`ui/apps/chat\`) at ${GITHUB_SHA}.
+          EOF
+
+      - name: Install Hugging Face Hub CLI
+        run: |
+          python3 -m venv .venv-hf
+          .venv-hf/bin/pip install -U huggingface_hub==1.28.0
+
+      - name: Upload to the Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_UI_STATIC_OUTPUT }}
+        run: |
+          # --delete '*' removes files the new build no longer has; the Space's .gitattributes is always kept
+          .venv-hf/bin/hf upload "$HF_SPACE" ui/apps/chat/storybook-static . \
+            --repo-type space \
+            --delete '*' \
+            --commit-message "Storybook from ggml-org/llama.cpp@${GITHUB_SHA::10}"

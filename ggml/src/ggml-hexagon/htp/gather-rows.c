@@ -3,7 +3,7 @@
 #include <assert.h>
 
 #include "hex-common.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "hvx-utils.h"
 #include "dma-queue.h"
 #include "htp-ctx.h"
@@ -23,7 +23,7 @@ struct gather_rows_task {
     dma_addr_t                            dst;
     uint32_t                              r_start;
     uint32_t                              rows;
-    uint32_t                              rows_per_thread;
+    uint32_t                              rows_per_hvx;
     const struct htp_gather_rows_params * kparams;
     gather_rows_compute_fn_t              compute;
 };
@@ -190,21 +190,21 @@ static void gather_rows_compute_f16_vgn(
     }
 }
 
-static void gather_rows_thread_f32(unsigned int nth, unsigned int ith, void * data) {
+static void gather_rows_thread_f32(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     (void) nth;
     const struct gather_rows_task * task = (const struct gather_rows_task *) data;
     const struct htp_gather_rows_params * kparams = task->kparams;
     const struct htp_tensor * a = task->a;
     const struct htp_tensor * b = task->b;
 
-    const uint32_t r_offset = MIN(ith * task->rows_per_thread, task->rows);
+    const uint32_t r_offset = MIN(ith * task->rows_per_hvx, task->rows);
     const uint32_t r_beg    = task->r_start + r_offset;
-    const uint32_t r_end    = task->r_start + MIN(r_offset + task->rows_per_thread, task->rows);
+    const uint32_t r_end    = task->r_start + MIN(r_offset + task->rows_per_hvx, task->rows);
     if (r_beg >= r_end) {
         return;
     }
 
-    struct htp_thread_trace * tr = &task->octx->ctx->trace[ith];
+    struct htp_thread_trace * tr = th->trace;
 
     struct htp_gather_rows_vtcm_layout layout;
     htp_gather_rows_vtcm_layout_build(&layout, kparams->vg, kparams->region_size, kparams->nr_max, kparams->ne, 4);
@@ -227,7 +227,7 @@ static void gather_rows_thread_f32(unsigned int nth, unsigned int ith, void * da
     gather_rows_init_tables_f32(tab, inc, kparams, a, b);
     htp_trace_event_stop(tr, HTP_TRACE_EVT_INIT, (uint16_t) r_beg);
 
-    dma_queue * q = task->octx->ctx->dma[ith];
+    dma_queue * q = th->dma_q;
     const uint32_t n_in   = 1 + (task->b ? (kparams->b_dense ? 1 : kparams->nb) : 0);
     const uint32_t nr_max = kparams->nr_max;
     const uint32_t nr0    = MIN(nr_max, r_end - r_beg);
@@ -271,21 +271,21 @@ static void gather_rows_thread_f32(unsigned int nth, unsigned int ith, void * da
     dma_queue_flush(q);
 }
 
-static void gather_rows_thread_f16(unsigned int nth, unsigned int ith, void * data) {
+static void gather_rows_thread_f16(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     (void) nth;
     const struct gather_rows_task * task = (const struct gather_rows_task *) data;
     const struct htp_gather_rows_params * kparams = task->kparams;
     const struct htp_tensor * a = task->a;
     const struct htp_tensor * b = task->b;
 
-    const uint32_t r_offset = MIN(ith * task->rows_per_thread, task->rows);
+    const uint32_t r_offset = MIN(ith * task->rows_per_hvx, task->rows);
     const uint32_t r_beg    = task->r_start + r_offset;
-    const uint32_t r_end    = task->r_start + MIN(r_offset + task->rows_per_thread, task->rows);
+    const uint32_t r_end    = task->r_start + MIN(r_offset + task->rows_per_hvx, task->rows);
     if (r_beg >= r_end) {
         return;
     }
 
-    struct htp_thread_trace * tr = &task->octx->ctx->trace[ith];
+    struct htp_thread_trace * tr = th->trace;
 
     struct htp_gather_rows_vtcm_layout layout;
     htp_gather_rows_vtcm_layout_build(&layout, kparams->vg, kparams->region_size, kparams->nr_max, kparams->ne, 2);
@@ -308,7 +308,7 @@ static void gather_rows_thread_f16(unsigned int nth, unsigned int ith, void * da
     gather_rows_init_tables_f16(tab, inc, kparams, a, b);
     htp_trace_event_stop(tr, HTP_TRACE_EVT_INIT, (uint16_t) r_beg);
 
-    dma_queue * q = task->octx->ctx->dma[ith];
+    dma_queue * q = th->dma_q;
     const uint32_t n_in = 1 + (task->b ? (kparams->b_dense ? 1 : kparams->nb) : 0);
 
     const uint32_t nr_max = kparams->nr_max;
@@ -357,13 +357,13 @@ int htp_gather_rows(
     const struct htp_tensor * a,
     const struct htp_tensor * b,
     const struct htp_gather_rows_params * kparams,
-    uint32_t n_threads) {
+    uint32_t n_hvx) {
 
-    if (!htp_ops_context_set_n_threads(octx, n_threads)) {
+    if (!htp_ops_context_set_n_hvx(octx, n_hvx)) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
-    assert(kparams->slice * octx->n_threads <= octx->ctx->vtcm_size);
+    assert(kparams->slice * octx->n_hvx <= octx->ctx->vtcm_size);
 
     const uint32_t total_rows = kparams->total_rows;
     uint32_t r_start = 0;
@@ -389,7 +389,7 @@ int htp_gather_rows(
     task.r_start         = r_start;
     task.rows            = r_count;
     task.kparams         = kparams;
-    task.rows_per_thread = kparams->rows_per_thread;
+    task.rows_per_hvx    = kparams->rows_per_hvx;
 
     if (elem_size == 2) {
         task.compute = (kparams->vg == 1) ? gather_rows_compute_f16_vg1 : gather_rows_compute_f16_vgn;
@@ -398,6 +398,6 @@ int htp_gather_rows(
     }
 
     work_queue_func_t worker_func = (elem_size == 2) ? gather_rows_thread_f16 : gather_rows_thread_f32;
-    work_queue_run(octx->ctx->work_queue, worker_func, &task, octx->n_threads);
+    work_queue_run(octx->ctx->hvx_queue, worker_func, &task, octx->n_hvx);
     return HTP_STATUS_OK;
 }

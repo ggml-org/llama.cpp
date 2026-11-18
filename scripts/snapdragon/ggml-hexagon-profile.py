@@ -466,10 +466,11 @@ def print_bubbles_timeline(op):
     logger.info(f"    Avg Thread DMA IDLE     : {avg_dma_idle:.1f}%")
     logger.info("-" * 100)
 
+    hmx_threads = {e['thread'] for e in events if e['event'].startswith('HMX')}
     logger.info("  Per-Thread Idle Analysis:")
     for t in active_threads:
         stats = thread_stats[t]
-        thread_name = f"Thread {t:<2} (HVX)" if t != 10 else "Thread 10 (HMX)"
+        thread_name = f"Thread {t:<2} (HMX)" if t in hmx_threads else f"Thread {t:<2} (HVX)"
         logger.info(f"    {thread_name} -> Compute Idle: {stats['compute_idle_pct']:.1f}% | DMA Idle: {stats['dma_idle_pct']:.1f}%")
 
     all_bubbles = []
@@ -531,8 +532,9 @@ def print_ascii_summary(op_name, dims, types, usec, cycles, events):
                 norm_evt = normalize_event_name(evt)
                 thread_totals[t][norm_evt] += dur
 
+    hmx_threads = {e['thread'] for e in events if e['event'].startswith('HMX')}
     for t in sorted(thread_totals.keys()):
-        thread_name = f"Thread {t} (HVX)" if t != 10 else "Thread 10 (HMX)"
+        thread_name = f"Thread {t} (HMX)" if t in hmx_threads else f"Thread {t} (HVX)"
         sorted_evts = sorted(thread_totals[t].items(), key=lambda item: item[0])
 
         evt_strs = []
