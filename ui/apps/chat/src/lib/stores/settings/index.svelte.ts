@@ -19,6 +19,7 @@ import {
 	configToParameterRecord,
 	getConfigValue,
 	normalizeFloatingPoint,
+	parseMcpServerSettings,
 	setConfigValue
 } from '#lib/utils/index.ts';
 import { browser } from '$app/env';
@@ -515,6 +516,15 @@ class SettingsStore {
 			if (deviceStore.isMobile) {
 				this.config[SETTINGS_KEYS.SEND_ON_ENTER] = false;
 			}
+		}
+
+		// MCP shows by default for someone who already added a server, from before it moved
+		// behind its setting, so they keep the way to manage their servers
+		if (
+			!(SETTINGS_KEYS.SHOW_MCP in savedVal) &&
+			parseMcpServerSettings(savedVal[SETTINGS_KEYS.MCP_SERVERS]).length > 0
+		) {
+			this.config[SETTINGS_KEYS.SHOW_MCP] = true;
 		}
 
 		// Load user overrides

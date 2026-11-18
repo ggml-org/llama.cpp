@@ -57,6 +57,7 @@ export const SETTINGS_KEYS = {
 	SHOW_AGENTIC_TURN_STATS: 'showAgenticTurnStats',
 	SHOW_BUILD_VERSION: 'showBuildVersion',
 	SHOW_FULL_PATH_IN_MENTIONS: 'showFullPathInMentions',
+	SHOW_MCP: 'showMcp',
 	// Display
 	SHOW_MESSAGE_STATS: 'showMessageStats',
 	SHOW_MODEL_CAPABILITIES_IN_SELECTOR: 'showModelCapabilitiesInSelector',
@@ -64,6 +65,7 @@ export const SETTINGS_KEYS = {
 	SHOW_MODEL_ORG_NAME_ON_MOBILE: 'showModelOrgNameOnMobile',
 	SHOW_MODEL_QUANTIZATION: 'showModelQuantization',
 	SHOW_MODEL_TAGS: 'showModelTags',
+	SHOW_MODELS_MANAGER: 'showModelsManager',
 	SHOW_RAW_MODEL_NAMES: 'showRawModelNames',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
 	SHOW_SYSTEM_MESSAGE: 'showSystemMessage',

@@ -1,6 +1,6 @@
 import { CLI_FLAGS } from '#lib/constants/index.ts';
 import { ToolSource } from '#lib/enums/index.ts';
-import { conversationsStore, mcpStore, toolsStore } from '#lib/stores/index.ts';
+import { conversationsStore, mcpStore, toolsStore, uiStore } from '#lib/stores/index.ts';
 import type { ToolEntry, ToolGroup } from '#lib/types/index.ts';
 import { SvelteSet } from 'svelte/reactivity';
 
@@ -47,15 +47,20 @@ export function useToolsPanel(): UseToolsPanelReturn {
 
 		if (toolsStore.toolGroups.length > 0) return null;
 
+		// the MCP half only while MCP shows: with it hidden, there is nowhere to add a server
+		const mcpHint = uiStore.isMcpShown
+			? ' To see MCP Tools you need to add / enable MCP Server(s).'
+			: '';
+
 		// Tools endpoint unreachable (403) — server started without tools
 		if (toolsStore.isToolsEndpointUnreachable) {
-			return `To enable Server Tools you need to run llama-server with ${CLI_FLAGS.TOOLS} all or ${CLI_FLAGS.TOOLS} <name> flag. To see MCP Tools you need to add / enable MCP Server(s).`;
+			return `To enable Server Tools you need to run llama-server with ${CLI_FLAGS.TOOLS} all or ${CLI_FLAGS.TOOLS} <name> flag.${mcpHint}`;
 		}
 
 		// Other errors — return null so UI shows "Failed to load tools"
 		if (toolsStore.error) return null;
 
-		return `To enable Server Tools you need to run llama-server with ${CLI_FLAGS.TOOLS} all or ${CLI_FLAGS.TOOLS} <name> flag. To see MCP Tools you need to add / enable MCP Server(s).`;
+		return `To enable Server Tools you need to run llama-server with ${CLI_FLAGS.TOOLS} all or ${CLI_FLAGS.TOOLS} <name> flag.${mcpHint}`;
 	});
 
 	function isGroupChecked(group: ToolGroup): boolean {
