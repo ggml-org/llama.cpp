@@ -1406,6 +1406,14 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
         compute_params.attention_size =
             ggml_openvino_static_kv_window(compute_params.attention_size, model_params.ctx_per_seq);
     }
+    // The GPU plugin keeps device memory for each KV length it sees, and llama.cpp grows the KV length in steps of
+    // 256. Round it up to a power of two the same way, so that a long context uses a few lengths and not one per
+    // step. The KQ mask input is padded to this length with -inf (convert_ggml_input_to_ov).
+    if (!is_static && ggml_openvino_is_gpu() && !ggml_openvino_getenv_int("GGML_OPENVINO_STATEFUL_EXECUTION") &&
+        !compute_params.mask_name.empty() && compute_params.attention_size > 0 && model_params.ctx_per_seq > 0) {
+        compute_params.attention_size =
+            ggml_openvino_static_kv_window(compute_params.attention_size, model_params.ctx_per_seq);
+    }
     model_params.ctx = model_params.ctx_per_seq * model_params.n_seq;
     return {model_params, compute_params};
 }

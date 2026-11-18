@@ -657,6 +657,28 @@ ov::Tensor convert_ggml_input_to_ov(const std::shared_ptr<GgmlOvDecoder> & ggml_
         return *sliced;
     }
 
+    // KQ mask with fewer columns than the rounded KV length (see compute_llm_params): pad it with -inf
+    const auto & compute_params = ggml_decoder->get_compute_params();
+    if (!ggml_decoder->is_static() && name == compute_params.mask_name &&
+        compute_params.attention_size > ggml_tensor->ne[0] && ggml_is_contiguous(ggml_tensor)) {
+        const size_t rows = ggml_nrows(ggml_tensor);
+        const size_t cols = ggml_tensor->ne[0];
+        const size_t padded_cols = compute_params.attention_size;
+        ov::Shape shape = GgmlOvDecoder::get_shape(ggml_tensor);
+        shape.back() = padded_cols;
+        ov::Tensor padded(GgmlOvDecoder::get_ov_type(ggml_tensor), shape);
+        if (ggml_tensor->type == GGML_TYPE_F16) {
+            auto data = pad_input<ggml_fp16_t>((const ggml_fp16_t *) ggml_tensor->data, rows, cols, rows, padded_cols,
+                                               GGML_FP32_TO_FP16(-INFINITY));
+            std::memcpy(padded.data(), data.data(), padded.get_byte_size());
+        } else {
+            GGML_ASSERT(ggml_tensor->type == GGML_TYPE_F32);
+            auto data = pad_input<float>((const float *) ggml_tensor->data, rows, cols, rows, padded_cols, -INFINITY);
+            std::memcpy(padded.data(), data.data(), padded.get_byte_size());
+        }
+        return padded;
+    }
+
     if (ggml_decoder->is_static() &&
         GgmlOvDecoder::is_kvcache(ggml_tensor, ggml_decoder->get_tensor_used_op(ggml_tensor))) {
         const auto type = ggml_decoder->get_ov_type(ggml_tensor);
