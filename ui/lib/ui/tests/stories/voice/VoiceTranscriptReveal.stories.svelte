@@ -1,10 +1,10 @@
 <script lang="ts" module>
+	import StateGallery from '../helpers/StateGallery.svelte';
+	import StateGalleryItem from '../helpers/StateGalleryItem.svelte';
 	import { demoClip } from './fixtures';
 	import type { VoiceTranscriptStatus } from '@ggml-org/llama-ui/voice';
 	import { VoiceTranscriptReveal, VoiceWaveform } from '@ggml-org/llama-ui/voice';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import StateGallery from '$llama-ui-stories/helpers/StateGallery.svelte';
-	import StateGalleryItem from '$llama-ui-stories/helpers/StateGalleryItem.svelte';
 	import { expect, waitFor } from 'storybook/test';
 
 	// a voice message with its transcript: hidden at first, opened under the clip on hover, keyboard focus or a tap
@@ -13,7 +13,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Llama Chat/Voice/VoiceTranscriptReveal'
+		title: 'Llama UI/Voice/VoiceTranscriptReveal'
 	});
 
 	const clip = demoClip(6, 5);

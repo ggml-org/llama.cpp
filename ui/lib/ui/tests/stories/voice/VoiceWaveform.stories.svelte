@@ -1,9 +1,9 @@
 <script lang="ts" module>
+	import StateGallery from '../helpers/StateGallery.svelte';
+	import StateGalleryItem from '../helpers/StateGalleryItem.svelte';
 	import { demoClip } from './fixtures';
 	import { VoiceWaveform } from '@ggml-org/llama-ui/voice';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import StateGallery from '$llama-ui-stories/helpers/StateGallery.svelte';
-	import StateGalleryItem from '$llama-ui-stories/helpers/StateGalleryItem.svelte';
 	import { expect } from 'storybook/test';
 
 	// a recorded voice clip: play, seek along the waveform, the time beside it; the surface is the caller's
@@ -12,7 +12,7 @@
 		parameters: {
 			layout: 'centered'
 		},
-		title: 'Llama Chat/Voice/VoiceWaveform'
+		title: 'Llama UI/Voice/VoiceWaveform'
 	});
 
 	const short = demoClip(4.2, 1);
