@@ -1361,13 +1361,12 @@ bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params)
     return res;
 }
 
-void llm_graph_input_attn_rel_pos::set_input(const llama_ubatch * ubatch) {
+void llm_graph_input_mem_hybrid_iswa_rel::set_input(const llama_ubatch * ubatch) {
+    llm_graph_input_mem_hybrid_iswa::set_input(ubatch);
+
     const auto * attn_ctx = mctx->get_attn();
 
-    // tensors that no layer reads stay unallocated and are skipped, f.ex. the SWA ones without SWA layers
-    attn_ctx->get_base()->set_input_attn_mask(self_attn_mask,     ubatch, cparams.causal_attn);
-    attn_ctx->get_swa ()->set_input_attn_mask(self_attn_mask_swa, ubatch, cparams.causal_attn);
-
+    // the distances may not be allocated if there are no layers of that kind
     if (self_rel_pos->buffer) {
         attn_ctx->get_base()->set_input_relative_pos(self_rel_pos, ubatch, extent);
     }
@@ -1377,15 +1376,32 @@ void llm_graph_input_attn_rel_pos::set_input(const llama_ubatch * ubatch) {
     }
 }
 
-bool llm_graph_input_attn_rel_pos::can_reuse(const llm_graph_params & params) {
+bool llm_graph_input_mem_hybrid_iswa_rel::can_reuse(const llm_graph_params & params) {
     mctx = static_cast<const llama_memory_hybrid_iswa_context *>(params.mctx);
 
     const auto * attn_ctx = mctx->get_attn();
 
     bool res = true;
 
-    res &= can_reuse_kq_mask(self_attn_mask.raw,     attn_ctx->get_base(), params.ubatch, params.cparams);
-    res &= can_reuse_kq_mask(self_attn_mask_swa.raw, attn_ctx->get_swa(),  params.ubatch, params.cparams);
+    // the parent checks the masks for the kv_rows layout, these are always dense
+    if (inp_attn->self_k_idxs && inp_attn->self_k_idxs->buffer) {
+        res &= inp_attn->self_k_idxs->ne[0] == params.ubatch.n_tokens;
+    }
+
+    res &= can_reuse_kq_mask(inp_attn->self_attn_mask.raw, attn_ctx->get_base(), params.ubatch, params.cparams);
+
+    if (inp_attn->self_k_idxs_swa && inp_attn->self_k_idxs_swa->buffer) {
+        res &= inp_attn->self_k_idxs_swa->ne[0] == params.ubatch.n_tokens;
+    }
+
+    res &= can_reuse_kq_mask(inp_attn->self_attn_mask_swa.raw, attn_ctx->get_swa(), params.ubatch, params.cparams);
+
+    res &= inp_rs->s_copy->ne[0] == mctx->get_recr()->get_n_rs();
+
+    res &= inp_rs->s_copy_main->ne[0] == params.ubatch.n_seqs;
+
+    res &= inp_rs->head == mctx->get_recr()->get_head();
+    res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
 
     res &= self_rel_pos->ne[0] == attn_ctx->get_base()->get_n_kv();
     res &= self_rel_pos->ne[1] == params.ubatch.n_tokens;
@@ -3635,28 +3651,9 @@ ggml_tensor * llm_graph_context::build_attn(
     return cur;
 }
 
-ggml_tensor * llm_graph_context::build_attn(
-        llm_graph_input_attn_kv_iswa * inp,
-        ggml_tensor * wo,
-        ggml_tensor * wo_b,
-        ggml_tensor * wo_s,
-        ggml_tensor * q_cur,
-        ggml_tensor * k_cur,
-        ggml_tensor * v_cur,
-        ggml_tensor * kq_b,
-        ggml_tensor * sinks,
-        ggml_tensor * v_mla,
-            float     kq_scale,
-            int       il) const {
-    const bool is_swa = hparams.is_swa(il);
-
-    const auto & kq_mask = is_swa ? inp->self_attn_mask_swa.raw  : inp->self_attn_mask.raw;
-    const auto & kv_rows = is_swa ? inp->self_attn_mask_swa.rows : inp->self_attn_mask.rows;
-
-    return build_attn_iswa_impl(inp, wo, wo_b, wo_s, q_cur, k_cur, v_cur, kq_b, kq_mask, kv_rows, sinks, v_mla, kq_scale, il);
-}
-
-ggml_tensor * llm_graph_context::build_attn_iswa_impl(
+// the iswa build_attn with the KQ mask and kv_rows given by the caller, which has to keep them in sync
+static ggml_tensor * build_attn_iswa_impl(
+        const llm_graph_context & gctx,
         llm_graph_input_attn_kv_iswa * inp,
         ggml_tensor * wo,
         ggml_tensor * wo_b,
@@ -3670,7 +3667,13 @@ ggml_tensor * llm_graph_context::build_attn_iswa_impl(
         ggml_tensor * sinks,
         ggml_tensor * v_mla,
             float     kq_scale,
-            int       il) const {
+            int       il) {
+    ggml_context * ctx0 = gctx.ctx0;
+    ggml_cgraph  * gf   = gctx.gf;
+
+    const auto & hparams = gctx.hparams;
+    const auto & cparams = gctx.cparams;
+
     const bool is_swa = hparams.is_swa(il);
 
     auto * k_rot = is_swa ? inp->self_k_rot_swa[il] : inp->self_k_rot[il];
@@ -3708,7 +3711,7 @@ ggml_tensor * llm_graph_context::build_attn_iswa_impl(
     // whole seq fits into batch in training mode
     const bool use_kv_cur = cparams.training && k_cur && v_cur;
     if (use_kv_cur) {
-        GGML_ASSERT(mctx_cur->get_n_kv() == n_tokens);
+        GGML_ASSERT(mctx_cur->get_n_kv() == gctx.n_tokens);
     }
 
     const bool store_kv = !use_kv_cur || hparams.n_layer_kv_from_start >= 0;
@@ -3730,16 +3733,16 @@ ggml_tensor * llm_graph_context::build_attn_iswa_impl(
     ggml_tensor * k = use_kv_cur ? k_cur : mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = use_kv_cur ? v_cur : mctx_cur->get_v(ctx0, il);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
+    ggml_tensor * cur = gctx.build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
     cur = build_attn_scale_kv_output(ctx0, mctx_cur, cur, il);
-    cb(cur, "kqv_out", il);
+    gctx.cb(cur, "kqv_out", il);
 
     if (v_rot) {
         cur = llama_mul_mat_hadamard(ctx0, cur, v_rot);
     }
 
     if (wo) {
-        cur = build_lora_mm(wo, cur, wo_s);
+        cur = gctx.build_lora_mm(wo, cur, wo_s);
     }
 
     if (wo_b) {
@@ -3753,31 +3756,8 @@ ggml_tensor * llm_graph_context::build_attn_iswa_impl(
     return cur;
 }
 
-llm_graph_input_attn_rel_pos * llm_graph_context::build_inp_attn_rel_pos(
-        llm_graph_input_mem_hybrid_iswa * inp_mem,
-                           uint32_t   extent,
-                           uint32_t   extent_swa) const {
-    const auto * mctx_cur = static_cast<const llama_memory_hybrid_iswa_context *>(mctx);
-    const auto * attn_ctx = mctx_cur->get_attn();
-
-    auto inp = std::make_unique<llm_graph_input_attn_rel_pos>(cparams, inp_mem->get_attn(), mctx_cur, extent, extent_swa);
-
-    inp->self_attn_mask.raw     = build_attn_inp_kq_mask(ctx0, attn_ctx->get_base(), ubatch, cparams);
-    inp->self_attn_mask_swa.raw = build_attn_inp_kq_mask(ctx0, attn_ctx->get_swa(),  ubatch, cparams);
-
-    inp->self_rel_pos = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, attn_ctx->get_base()->get_n_kv(), ubatch.n_tokens);
-    ggml_set_input(inp->self_rel_pos);
-    ggml_set_name(inp->self_rel_pos, "attn_inp_rel_pos");
-
-    inp->self_rel_pos_swa = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, attn_ctx->get_swa()->get_n_kv(), ubatch.n_tokens);
-    ggml_set_input(inp->self_rel_pos_swa);
-    ggml_set_name(inp->self_rel_pos_swa, "attn_inp_rel_pos_swa");
-
-    return (llm_graph_input_attn_rel_pos *) res->add_input(std::move(inp));
-}
-
 ggml_tensor * llm_graph_context::build_attn(
-        llm_graph_input_attn_rel_pos * inp,
+        llm_graph_input_attn_kv_iswa * inp,
         ggml_tensor * wo,
         ggml_tensor * wo_b,
         ggml_tensor * wo_s,
@@ -3786,23 +3766,15 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_tensor * v_cur,
         ggml_tensor * kq_b,
         ggml_tensor * sinks,
+        ggml_tensor * v_mla,
             float     kq_scale,
             int       il) const {
     const bool is_swa = hparams.is_swa(il);
 
-    ggml_tensor * kq_mask = is_swa ? inp->self_attn_mask_swa.raw : inp->self_attn_mask.raw;
+    const auto & kq_mask = is_swa ? inp->self_attn_mask_swa.raw  : inp->self_attn_mask.raw;
+    const auto & kv_rows = is_swa ? inp->self_attn_mask_swa.rows : inp->self_attn_mask.rows;
 
-    // a mask per head, in the dense layout of the input mask, which flash attention takes in F16
-    if (kq_mask->type != GGML_TYPE_F32) {
-        kq_mask = ggml_cast(ctx0, kq_mask, GGML_TYPE_F32);
-    }
-    kq_mask = ggml_add(ctx0, kq_b, kq_mask);
-    if (cparams.flash_attn) {
-        kq_mask = ggml_cast(ctx0, kq_mask, GGML_TYPE_F16);
-    }
-    cb(kq_mask, "kq_mask_rel_pos", il);
-
-    return build_attn_iswa_impl(inp->inp_attn, wo, wo_b, wo_s, q_cur, k_cur, v_cur, nullptr, kq_mask, nullptr, sinks, nullptr, kq_scale, il);
+    return build_attn_iswa_impl(*this, inp, wo, wo_b, wo_s, q_cur, k_cur, v_cur, kq_b, kq_mask, kv_rows, sinks, v_mla, kq_scale, il);
 }
 
 ggml_tensor * llm_graph_context::build_attn(
@@ -4346,6 +4318,87 @@ llm_graph_input_mem_hybrid_iswa * llm_graph_context::build_inp_mem_hybrid_iswa()
     auto inp = std::make_unique<llm_graph_input_mem_hybrid_iswa>(cparams, std::move(inp_attn), std::move(inp_rs), mctx_cur);
 
     return (llm_graph_input_mem_hybrid_iswa *) res->add_input(std::move(inp));
+}
+
+llm_graph_input_mem_hybrid_iswa_rel * llm_graph_context::build_inp_mem_hybrid_iswa_rel(
+        uint32_t extent,
+        uint32_t extent_swa) const {
+    const auto * mctx_cur = static_cast<const llama_memory_hybrid_iswa_context *>(mctx);
+
+    auto inp_rs = build_rs_inp_impl(ctx0, ubatch, mctx_cur->get_recr());
+
+    const auto * attn_ctx = mctx_cur->get_attn();
+
+    auto inp_attn = std::make_unique<llm_graph_input_attn_kv_iswa>(hparams, cparams, attn_ctx);
+
+    // dense masks: the bias is gathered by the distance to each cell of the K/V view
+    {
+        inp_attn->self_k_idxs = attn_ctx->get_base()->build_input_k_idxs(ctx0, ubatch);
+        inp_attn->self_v_idxs = attn_ctx->get_base()->build_input_v_idxs(ctx0, ubatch);
+
+        inp_attn->self_attn_mask.raw = build_attn_inp_kq_mask(ctx0, attn_ctx->get_base(), ubatch, cparams);
+    }
+
+    {
+        inp_attn->self_k_idxs_swa = attn_ctx->get_swa()->build_input_k_idxs(ctx0, ubatch);
+        inp_attn->self_v_idxs_swa = attn_ctx->get_swa()->build_input_v_idxs(ctx0, ubatch);
+
+        inp_attn->self_attn_mask_swa.raw = build_attn_inp_kq_mask(ctx0, attn_ctx->get_swa(), ubatch, cparams);
+    }
+
+    inp_attn->self_k_rot = attn_ctx->get_base()->get_k_rot();
+    inp_attn->self_v_rot = attn_ctx->get_base()->get_v_rot();
+
+    inp_attn->self_k_rot_swa = attn_ctx->get_swa()->get_k_rot();
+    inp_attn->self_v_rot_swa = attn_ctx->get_swa()->get_v_rot();
+
+    auto inp = std::make_unique<llm_graph_input_mem_hybrid_iswa_rel>(cparams, std::move(inp_attn), std::move(inp_rs), mctx_cur, extent, extent_swa);
+
+    inp->self_rel_pos = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, attn_ctx->get_base()->get_n_kv(), ubatch.n_tokens);
+    ggml_set_input(inp->self_rel_pos);
+    ggml_set_name(inp->self_rel_pos, "attn_inp_rel_pos");
+
+    inp->self_rel_pos_swa = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, attn_ctx->get_swa()->get_n_kv(), ubatch.n_tokens);
+    ggml_set_input(inp->self_rel_pos_swa);
+    ggml_set_name(inp->self_rel_pos_swa, "attn_inp_rel_pos_swa");
+
+    return (llm_graph_input_mem_hybrid_iswa_rel *) res->add_input(std::move(inp));
+}
+
+ggml_tensor * llm_graph_context::build_attn(
+        llm_graph_input_mem_hybrid_iswa_rel * inp,
+        ggml_tensor * wo,
+        ggml_tensor * wo_b,
+        ggml_tensor * wo_s,
+        ggml_tensor * q_cur,
+        ggml_tensor * k_cur,
+        ggml_tensor * v_cur,
+        ggml_tensor * kq_b,
+        ggml_tensor * sinks,
+            float     kq_scale,
+            int       il) const {
+    const bool is_swa = hparams.is_swa(il);
+
+    auto * inp_attn = inp->get_attn();
+
+    const auto & attn_mask = is_swa ? inp_attn->self_attn_mask_swa : inp_attn->self_attn_mask;
+
+    // TODO: support kv_rows - fill the distances over the kv_rows cell lists and pass the rows to build_attn_mha,
+    //       needs a kv_rows flash attention with a per-head mask (CUDA has none)
+    GGML_ASSERT(attn_mask.rows == nullptr);
+
+    // a mask per head, in the dense layout of the input mask, which flash attention takes in F16
+    ggml_tensor * kq_mask = attn_mask.raw;
+    if (kq_mask->type != GGML_TYPE_F32) {
+        kq_mask = ggml_cast(ctx0, kq_mask, GGML_TYPE_F32);
+    }
+    kq_mask = ggml_add(ctx0, kq_b, kq_mask);
+    if (cparams.flash_attn) {
+        kq_mask = ggml_cast(ctx0, kq_mask, GGML_TYPE_F16);
+    }
+    cb(kq_mask, "kq_mask_rel_pos", il);
+
+    return build_attn_iswa_impl(*this, inp_attn, wo, wo_b, wo_s, q_cur, k_cur, v_cur, nullptr, kq_mask, nullptr, sinks, nullptr, kq_scale, il);
 }
 
 void llm_graph_context::build_dense_out(
