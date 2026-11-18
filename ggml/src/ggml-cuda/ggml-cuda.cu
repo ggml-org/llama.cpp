@@ -1723,7 +1723,12 @@ static ggml_backend_buffer_t ggml_backend_cuda_host_buffer_type_alloc_buffer(ggm
 static size_t ggml_backend_cuda_host_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
     GGML_UNUSED(buft);
     // very large pinned allocations can fail (e.g. on Windows) and fall back to pageable memory, smaller ones succeed
+#if defined(GGML_USE_HIP)
+    // ROCm on Windows requires host buffers larger than 4 GiB for large partially-offloaded MoE models.
+    return SIZE_MAX;
+#else
     return 4ull*1024*1024*1024;
+#endif
 }
 
 ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type() {
