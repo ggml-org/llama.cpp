@@ -7370,6 +7370,11 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
                     return false;
                 }
 
+                // MUL_MAT_ID copies the src1 rows as F32
+                if (op->op == GGML_OP_MUL_MAT_ID && b->type != GGML_TYPE_F32) {
+                    return false;
+                }
+
                 if (op->op == GGML_OP_MUL_MAT &&
                     (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32)) {
                     return false;
