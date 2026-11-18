@@ -6,7 +6,7 @@
 </script>
 
 <div
-	class={cn('w-px shrink-0 self-stretch bg-(--button-outline-border)', className)}
+	class={cn('w-px shrink-0 self-stretch bg-(--button-group-separator)', className)}
 	data-slot="button-group-separator"
 	{...restProps}
 ></div>
