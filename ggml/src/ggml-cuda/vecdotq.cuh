@@ -809,198 +809,148 @@ static __device__ __forceinline__ float vec_dot_q2_0_q8_1(
     return d2 * d8 * sumi;
 }
 
-// One 32-element chunk (iqs = 0..7) of a tq1_0 block against the matching q8_1 chunk.
-// Nothing is unpacked and nothing is multiplied inside the block: every weight is a ternary
-// symbol (see ggml_cuda_tq1_0_symbol in common.cuh), so each activation is added, subtracted or
-// skipped, the accumulator stays an integer for the whole chunk and the two scales are applied
-// once at the end. The chunk is handled by a single straight-line loop for all iqs, which keeps
-// the warp from splitting into one code path per chunk (the (byte, digit) mapping is uniform).
-// One 32-element chunk of a TQ1_0 block against one block_q8_1 of activations.
-//
-// Element -> (byte, trit position) inside a chunk, straight from the CPU codec:
-//   iqs 0..4: qs[0..31],  trit position n = iqs for all 32 elements (8 words of 4 bytes)
-//   iqs 5..6: qs[32..47], n = 2*(iqs-5) for elements 0..15 and n+1 for elements 16..31
-//   iqs 7:    qs[32..47] at n = 4 for elements 0..15, then qh[0..3] for elements 16..31, where
-//             the trit position IS the word index: element 16+4t+j = qh[j] at position t
-// Weights are read with get_int_b2, not get_int_b4: block_tq1_0 is 54 bytes, so odd-numbered
-// blocks are only 2-byte aligned and a 4-byte load would fault (same reason q4_0/q6_K use b2).
-// Activations are block_q8_1 (36 bytes, qs at offset 4) and always 4-byte aligned -> get_int_b4.
-// The multiply by the scales stays where it belongs: once, after the whole chunk.
+// Load 4 bytes from a 2-byte-aligned TQ block using 4-byte-aligned reads.
+// Callers shift p back by 2 bytes when kbx is odd so all word accesses stay 4-byte aligned.
+static __device__ __forceinline__ int ggml_cuda_tq_load_u32(
+    const uint32_t * p, const int idx, const int odd) {
+    const uint32_t p0 = p[idx];
+    const uint32_t p1 = odd ? p[idx + 1] : 0u;
+#if defined(GGML_USE_MUSA)
+    return odd ? (int) ((p0 >> 16) | (p1 << 16)) : (int) p0;
+#else
+    return (int) __funnelshift_r(p0, p1, 16 * odd);
+#endif // defined(GGML_USE_MUSA)
+}
+
 static __device__ __forceinline__ float vec_dot_tq1_0_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
+    const int odd = kbx & 1;
     const block_tq1_0 * bq = (const block_tq1_0 *) vbq + kbx;
+    const uint32_t * p = (const uint32_t *)((const char *) bq->qs - 2 * odd);
 
-    const block_q8_1 * bq8_1_chunk = bq8_1 + iqs;
+    const int w_04 = ggml_cuda_tq_load_u32(p, iqs, odd);
+    const int w_56 = ggml_cuda_tq_load_u32(p, 8 + (iqs & 3), odd);
+    const int w_7  = (iqs < 4) ? w_56 : ggml_cuda_tq_load_u32(p, 12, odd);
 
-    int sumi = 0;
+    int v_lo = w_04 & 0x00FF00FF;
+    int v_hi = (w_04 >> 8) & 0x00FF00FF;
 
-    if (iqs < 5) {
-        const int p3n = ggml_cuda_tq1_0_pow3(iqs);
+    float sumf = 0.0f;
+    float sumy = 0.0f;
 
+    // Elements 0..159 (chunks k = 0..4): sequential *3 unpack across all 8 threads.
 #pragma unroll
-        for (int j = 0; j < 8; ++j) {
-            const int s4 = ggml_cuda_tq1_0_symbols4(get_int_b2(bq->qs, j), p3n);
-            sumi = ggml_cuda_dp4a(s4, get_int_b4(bq8_1_chunk->qs, j), sumi);
-        }
-    } else if (iqs < 7) {
-        const int n0 = 2*(iqs - 5);
-        const int p0 = ggml_cuda_tq1_0_pow3(n0);
-        const int p1 = ggml_cuda_tq1_0_pow3(n0 + 1);
+    for (int k = 0; k < 5; ++k) {
+        const int u = get_int_b4(bq8_1[k].qs, iqs);
+        const float2 ds8f = __half22float2(bq8_1[k].ds);
+        sumy += ds8f.y;
 
-#pragma unroll
-        for (int j = 0; j < 4; ++j) {
-            const int b4 = get_int_b2(bq->qs, 8 + j); // same 4 bytes serve both halves of the chunk
-            sumi = ggml_cuda_dp4a(ggml_cuda_tq1_0_symbols4(b4, p0), get_int_b4(bq8_1_chunk->qs, j),     sumi);
-            sumi = ggml_cuda_dp4a(ggml_cuda_tq1_0_symbols4(b4, p1), get_int_b4(bq8_1_chunk->qs, 4 + j), sumi);
+        const int dlo = v_lo * 3;
+        const int dhi = v_hi * 3;
+        if (k < 4) {
+            v_lo = dlo & 0x00FF00FF;
+            v_hi = dhi & 0x00FF00FF;
         }
-    } else {
-#pragma unroll
-        for (int j = 0; j < 4; ++j) {
-            const int s4 = ggml_cuda_tq1_0_symbols4(get_int_b2(bq->qs, 8 + j), 81); // n = 4
-            sumi = ggml_cuda_dp4a(s4, get_int_b4(bq8_1_chunk->qs, j), sumi);
-        }
-
-        const int qh4  = get_int_b2(bq->qh, 0);
-#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
-        const uint32_t uqh4 = (uint32_t) qh4;
-        int       v_lo = (uqh4 & 0x000000FF) | ((uqh4 & 0x0000FF00) << 8); // qh[0], qh[1] in 16-bit lanes
-        int       v_hi = ((uqh4 >> 16) & 0x000000FF) | ((uqh4 >> 8) & 0x00FF0000); // qh[2], qh[3]
-#else
-        int       v_lo = __byte_perm(qh4, 0, 0x4140); // qh[0], qh[1] in 16-bit lanes
-        int       v_hi = __byte_perm(qh4, 0, 0x4342); // qh[2], qh[3]
-#endif
-
-#pragma unroll
-        for (int t = 0; t < 4; ++t) {
-            const int w_lo = v_lo * 3;
-            const int w_hi = v_hi * 3;
-            v_lo = w_lo & 0x00FF00FF; // remainder carries to the next trit position
-            v_hi = w_hi & 0x00FF00FF;
-
-#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
-            const uint32_t uw_lo = (uint32_t) w_lo;
-            const uint32_t uw_hi = (uint32_t) w_hi;
-            const int merged = ((uw_lo >> 8) & 0x000000FF) | ((uw_lo >> 16) & 0x0000FF00)
-                             | ((uw_hi << 8) & 0x00FF0000) | (uw_hi & 0xFF000000);
-            const int s4 = __vsub4(merged, 0x01010101);
-#else
-            const int s4 = __vsub4(__byte_perm(w_lo, w_hi, 0x7531), 0x01010101);
-#endif
-            sumi = ggml_cuda_dp4a(s4, get_int_b4(bq8_1_chunk->qs, 4 + t), sumi);
-        }
+        const int s4 = ggml_cuda_tq1_0_pack_digits4(dlo, dhi);
+        const int sumi = ggml_cuda_dp4a(s4, u, 0);
+        sumf += ds8f.x * sumi;
     }
 
-    const float d  = bq->d;
-    const float d8 = __low2float(bq8_1_chunk->ds);
+    // Elements 160..191 (chunk k = 5).
+    {
+        const int p3_5 = (iqs < 4) ? 1 : 3;
+        const int u5 = get_int_b4(bq8_1[5].qs, iqs);
+        const float2 ds8f = __half22float2(bq8_1[5].ds);
+        sumy += ds8f.y;
 
-    return d * d8 * sumi;
-}
+        const int wlo5 = (w_56 & 0x00FF00FF) * p3_5;
+        const int whi5 = ((w_56 >> 8) & 0x00FF00FF) * p3_5;
+        const int dlo5 = (wlo5 & 0x00FF00FF) * 3;
+        const int dhi5 = (whi5 & 0x00FF00FF) * 3;
+        v_lo = dlo5 & 0x00FF00FF;
+        v_hi = dhi5 & 0x00FF00FF;
 
-// Strict variant, selected with -DGGML_CUDA_TQ1_0_NOMUL=ON: no integer multiply anywhere in the
-// dot product. The symbol still comes from the shift/add chain in ggml_cuda_tq1_0_symbol, and the
-// accumulate is branchless -- a per-element if/else diverges the warp on every weight that is not
-// zero, which on a real model costs more than the multiplies it saves. About 14 instructions per
-// element against ~4 for the dp4a path above.
-static __device__ __forceinline__ float vec_dot_tq1_0_q8_1_nomul(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
-    const block_tq1_0 * bq = (const block_tq1_0 *) vbq + kbx;
-
-    const block_q8_1 * bq8_1_chunk = bq8_1 + iqs;
-
-    int sumi = 0;
-
-#pragma unroll
-    for (int j = 0; j < 32; ++j) {
-        const int s   = ggml_cuda_tq1_0_symbol(bq, 32*iqs + j); // {-1, 0, +1}
-        const int a   = bq8_1_chunk->qs[j];
-        const int neg = s >> 31;        // all ones where the weight is -1
-        const int pos = (-s) >> 31;     // all ones where the weight is +1
-
-        sumi += (a & pos) - (a & neg);  // +a, -a or nothing: add/subtract/skip, no branch
+        const int s4 = ggml_cuda_tq1_0_pack_digits4(dlo5, dhi5);
+        const int sumi = ggml_cuda_dp4a(s4, u5, 0);
+        sumf += ds8f.x * sumi;
     }
 
-    const float d  = bq->d;
-    const float d8 = __low2float(bq8_1_chunk->ds);
+    // Elements 192..223 (chunk k = 6): advance trit position by +2.
+    {
+        const int u6 = get_int_b4(bq8_1[6].qs, iqs);
+        const float2 ds8f = __half22float2(bq8_1[6].ds);
+        sumy += ds8f.y;
 
-    return d * d8 * sumi;
+        const int v_lo6 = v_lo * 3;
+        const int v_hi6 = v_hi * 3;
+        const int dlo6 = (v_lo6 & 0x00FF00FF) * 3;
+        const int dhi6 = (v_hi6 & 0x00FF00FF) * 3;
+
+        const int s4 = ggml_cuda_tq1_0_pack_digits4(dlo6, dhi6);
+        const int sumi = ggml_cuda_dp4a(s4, u6, 0);
+        sumf += ds8f.x * sumi;
+    }
+
+    // Elements 224..255 (chunk k = 7): qs[32..47]*81 for iqs < 4, qh[0..3]*{1,3,9,27} for iqs >= 4.
+    {
+        static constexpr int p3_7_table[8] = {81, 81, 81, 81, 1, 3, 9, 27};
+        const int u7 = get_int_b4(bq8_1[7].qs, iqs);
+        const float2 ds8f = __half22float2(bq8_1[7].ds);
+        sumy += ds8f.y;
+
+        const int s4 = ggml_cuda_tq1_0_digits4(w_7, p3_7_table[iqs]);
+        const int sumi = ggml_cuda_dp4a(s4, u7, 0);
+        sumf += ds8f.x * sumi;
+    }
+
+    // All 8 threads accumulate all 8 chunks of y, so divide y bias by 8.
+    return (float) bq->d * (sumf - 0.125f * sumy);
 }
 
-// One 32-element chunk (iqs = 0..7) of a tq2_0 block against one block_q8_1 of activations.
-//
-// With e = 128*c + 32*l + m (see ggml_cuda_tq2_0_digit in common.cuh) the chunk iqs covers
-// c = iqs/4, l = iqs%4 and all 32 values of m, i.e. the 32 CONTIGUOUS bytes
-// qs[32*(iqs/4) .. 32*(iqs/4)+31] at one single bit-pair position. Eight 4-byte words, one shift,
-// one mask, one dp4a each: nothing is dequantized to float, the accumulator stays an integer for
-// the whole chunk and the two scales are multiplied once, at the end of the chunk.
-//
-// Weight words are read with get_int_b2, never get_int_b4: block_tq2_0 is 66 bytes, so odd
-// numbered blocks are only 2-byte aligned and a 4-byte load would fault (same reason as
-// block_tq1_0 at 54 bytes). block_q8_1 is 36 bytes with qs at offset 4, so the activation words
-// are 4-byte aligned and do use get_int_b4.
 static __device__ __forceinline__ float vec_dot_tq2_0_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
+    const int c    = iqs >> 2;
+    const int lane = iqs & 3;
+    const int j    = 2 * iqs;
+    const block_q8_1 * bq8_half = bq8_1 + 4 * c;
+
+    const int odd = kbx & 1;
     const block_tq2_0 * bq = (const block_tq2_0 *) vbq + kbx;
+    const uint32_t * p = (const uint32_t *)((const char *) bq->qs - 2 * odd);
 
-    const block_q8_1 * bq8_1_chunk = bq8_1 + iqs;
+    const uint32_t p0 = p[j + 0];
+    const uint32_t p1 = p[j + 1];
+    const uint32_t p2 = odd ? p[j + 2] : 0u;
 
-    const int shift = 2*(iqs & 3);   // bit pair position l of the whole chunk
-    const int woff  = 8*(iqs >> 2);  // get_int_b2 word index of the first of the 8 words
+#if defined(GGML_USE_MUSA)
+    const int my_w0 = odd ? (int) ((p0 >> 16) | (p1 << 16)) : (int) p0;
+    const int my_w1 = odd ? (int) ((p1 >> 16) | (p2 << 16)) : (int) p1;
+#else
+    const int my_w0 = (int) __funnelshift_r(p0, p1, 16 * odd);
+    const int my_w1 = (int) __funnelshift_r(p1, p2, 16 * odd);
+#endif // defined(GGML_USE_MUSA)
 
-    int sumi = 0;
+    float sumf = 0.0f;
+    float sumy = 0.0f;
 
 #pragma unroll
-    for (int j = 0; j < 8; ++j) {
-        const int s4 = ggml_cuda_tq2_0_symbols4(get_int_b2(bq->qs, woff + j), shift);
-        sumi = ggml_cuda_dp4a(s4, get_int_b4(bq8_1_chunk->qs, j), sumi);
+    for (int l = 0; l < 4; ++l) {
+        const int u0 = get_int_b4(bq8_half[l].qs, 2 * lane + 0);
+        const int u1 = get_int_b4(bq8_half[l].qs, 2 * lane + 1);
+        const float2 ds8f = __half22float2(bq8_half[l].ds);
+        sumy += ds8f.y;
+
+        const int d4_a = (my_w0 >> (2 * l)) & 0x03030303;
+        const int d4_b = (my_w1 >> (2 * l)) & 0x03030303;
+        int sumi = ggml_cuda_dp4a(d4_a, u0, 0);
+        sumi     = ggml_cuda_dp4a(d4_b, u1, sumi);
+        sumf    += ds8f.x * sumi;
     }
 
-    const float d  = bq->d;
-    const float d8 = __low2float(bq8_1_chunk->ds);
-
-    return d * d8 * sumi;
-}
-
-// Strict variant, selected with -DGGML_CUDA_TQ2_0_NOMUL=ON: no integer multiply anywhere in the
-// dot product, not even dp4a. The weight of one element is digit - 1 = 2*b1 + b0 - 1 with
-// (b1, b0) the two stored bits, so its contribution is (b1 ? 2a : 0) + (b0 ? a : 0) - a: two
-// masked adds, one shift and one subtract per element. The trailing -a is what keeps digit 3
-// (weight +2) correct, so this is exact for all four levels too. Branchless on purpose - a
-// per-element if/else diverges the warp on every non-zero weight, which on a real model costs more
-// than the multiplies it saves.
-static __device__ __forceinline__ float vec_dot_tq2_0_q8_1_nomul(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-
-    const block_tq2_0 * bq = (const block_tq2_0 *) vbq + kbx;
-
-    const block_q8_1 * bq8_1_chunk = bq8_1 + iqs;
-
-    const int shift = 2*(iqs & 3);
-    const int woff  = 8*(iqs >> 2);
-
-    int sumi = 0;
-
-#pragma unroll
-    for (int j = 0; j < 8; ++j) {
-        const int w4 = get_int_b2(bq->qs, woff + j) >> shift;
-
-#pragma unroll
-        for (int t = 0; t < 4; ++t) {
-            const int dig = (w4 >> (8*t)) & 3;
-            const int a   = bq8_1_chunk->qs[4*j + t];
-            const int m1  = -(dig & 1);        // all ones where the low bit is set  -> +a
-            const int m2  = -((dig >> 1) & 1); // all ones where the high bit is set -> +2a
-
-            sumi += ((a & m2) << 1) + (a & m1) - a;
-        }
-    }
-
-    const float d  = bq->d;
-    const float d8 = __low2float(bq8_1_chunk->ds);
-
-    return d * d8 * sumi;
+    // 4 lanes share each 4-block half of y, so divide y bias by 4.
+    return (float) bq->d * (sumf - 0.25f * sumy);
 }
 
 static __device__ __forceinline__ float vec_dot_q4_0_q8_1(

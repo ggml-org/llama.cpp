@@ -41,16 +41,8 @@ static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) 
     switch (type) {
         case GGML_TYPE_Q1_0:    return vec_dot_q1_0_q8_1;
         case GGML_TYPE_Q2_0:    return vec_dot_q2_0_q8_1;
-#ifdef GGML_CUDA_TQ1_0_NOMUL
-        case GGML_TYPE_TQ1_0:   return vec_dot_tq1_0_q8_1_nomul;
-#else
         case GGML_TYPE_TQ1_0:   return vec_dot_tq1_0_q8_1;
-#endif
-#ifdef GGML_CUDA_TQ2_0_NOMUL
-        case GGML_TYPE_TQ2_0:   return vec_dot_tq2_0_q8_1_nomul;
-#else
         case GGML_TYPE_TQ2_0:   return vec_dot_tq2_0_q8_1;
-#endif
         case GGML_TYPE_Q4_0:    return vec_dot_q4_0_q8_1;
         case GGML_TYPE_Q4_1:    return vec_dot_q4_1_q8_1;
         case GGML_TYPE_Q5_0:    return vec_dot_q5_0_q8_1;
@@ -555,6 +547,7 @@ static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_d
                 case GGML_TYPE_Q4_K:
                 case GGML_TYPE_Q5_K:
                 case GGML_TYPE_Q6_K:
+                case GGML_TYPE_TQ1_0:
                     return 2;
                 default:
                     return 4;
@@ -606,6 +599,8 @@ static constexpr __host__ __device__ bool mmvq_two_rows_ncols1(ggml_type type) {
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_IQ1_S:
         case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_TQ1_0:
+        case GGML_TYPE_TQ2_0:
             return true;
         default:
             return false;
@@ -622,7 +617,10 @@ static constexpr __host__ __device__ int calc_rows_per_block(ggml_type type, int
                 if (table_id == MMVQ_PARAMETERS_GB10) {
                     return type == GGML_TYPE_IQ2_S || type == GGML_TYPE_IQ3_S ? 2 : 1;
                 }
-                return table_id == MMVQ_PARAMETERS_GENERIC && mmvq_two_rows_ncols1(type) ? 2 : 1;
+                if (table_id == MMVQ_PARAMETERS_TURING && (type == GGML_TYPE_TQ1_0 || type == GGML_TYPE_TQ2_0)) {
+                    return 4;
+                }
+                return (table_id == MMVQ_PARAMETERS_GENERIC || table_id == MMVQ_PARAMETERS_TURING) && mmvq_two_rows_ncols1(type) ? 2 : 1;
             case 2:
             case 3:
             case 4:
@@ -791,12 +789,13 @@ static __global__ void mul_mat_vec_q(
         for (int j = 0; j < ncols_dst; ++j) {
 #pragma unroll
             for (int i = 0; i < rows_per_cuda_block; ++i) {
+                const int row_i = (rows_per_cuda_block > 1 && uint32_t(row0 + i) >= stride_col_dst) ? 0 : i;
                 tmp[j][i] += vec_dot_q_cuda(
-                    vx, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
+                    vx, &y[j*stride_col_y + kby], kbx_offset + row_i*stride_row_x + kbx, kqs);
                 if constexpr (has_fusion) {
                     if (use_gate) {
                         tmp_gate[j][i] += vec_dot_q_cuda(
-                            vgate, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
+                            vgate, &y[j*stride_col_y + kby], kbx_offset + row_i*stride_row_x + kbx, kqs);
                     }
                 }
             }
