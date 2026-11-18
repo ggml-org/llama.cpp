@@ -248,6 +248,47 @@ struct clip_graph_chatterbox : clip_graph_chatterbox_base {
     ggml_cgraph * build_vocoder(int n_mel, int n_stft);
 };
 
+struct clip_graph_kokoro : clip_graph {
+    enum stage_type {
+        STAGE_TEXT, // tokens -> text encoder CNN
+        STAGE_F0N,  // shared LSTM output -> F0 and energy curves
+        STAGE_DEC,  // aligned features + source STFT -> STFT coefficients
+    };
+    static constexpr int n_style = 128; // a voice row is the decoder style, then the predictor style
+
+    stage_type stage;
+    int n_tok    = 0;
+    int n_frames = 0;
+    int n_har    = 0;
+    clip_graph_kokoro(clip_subcontext * ctx, const clip_image_f32 & img, stage_type stage, int n_tok, int n_frames, int n_har)
+        : clip_graph(ctx, img), stage(stage), n_tok(n_tok), n_frames(n_frames), n_har(n_har) {}
+    ggml_cgraph * build() override;
+
+    // host side, between the graphs
+    // bert [n_tok, n_embd], text_cnn [n_tok, 512], style is the predictor style
+    // fills shared and asr as [n_frames, 512], returns n_frames
+    static int prosody(const clip_model & model, const float * bert, int n_embd, const float * text_cnn, int n_tok,
+                       const float * style, float speed, std::vector<float> & shared, std::vector<float> & asr);
+    // fills har as [n_har, 22], returns n_har
+    static int har_source(const clip_model & model, const std::vector<float> & f0, std::mt19937 & rng, std::vector<float> & har);
+    static void istft(const std::vector<float> & spec, std::vector<float> & audio);
+
+  private:
+    ggml_tensor * tensor(const std::string & name) const;
+    bool          has_tensor(const std::string & name) const;
+    ggml_tensor * conv(const std::string & name, ggml_tensor * x, int stride, int pad, int dil) const;
+    ggml_tensor * adain(const std::string & name, ggml_tensor * x, ggml_tensor * style) const;
+    ggml_tensor * snake(const std::string & name, ggml_tensor * x) const;
+    ggml_tensor * interleave(ggml_tensor * a, ggml_tensor * b) const;
+    ggml_tensor * adain_resblk(const std::string & name, ggml_tensor * x, ggml_tensor * style, bool upsample) const;
+    ggml_tensor * gen_resblock(const std::string & name, ggml_tensor * x, ggml_tensor * style) const;
+    ggml_tensor * input(const char * name, ggml_type type, int64_t ne0, int64_t ne1) const;
+    ggml_cgraph * output(const char * name, ggml_tensor * t) const;
+    ggml_cgraph * build_text();
+    ggml_cgraph * build_f0n();
+    ggml_cgraph * build_dec();
+};
+
 struct clip_graph_lfm3a : clip_graph {
     clip_graph_lfm3a(clip_subcontext * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
@@ -375,9 +416,24 @@ struct clip_graph_qwen3tts_spkenc : clip_graph {
     ggml_tensor * attentive_stats_pool(ggml_tensor * x) const;
 };
 
-// the code predictor and the codec of Qwen3-TTS, the building blocks of the Fish S2 and Drama 3 graphs
-// (Qwen3-TTS itself runs on native graphs, see llama_model_clip)
-struct clip_graph_qwen3tts_gen {
+// the code predictor and the codec of Qwen3-TTS, the building blocks of the Fish S2 and Drama 3 graphs; as a graph
+// of the engine, the reference encoder only (Qwen3-TTS generates on native graphs, see llama_model_clip)
+struct clip_graph_qwen3tts_gen : clip_graph {
+    clip_graph_qwen3tts_gen(clip_subcontext * ctx, const clip_image_f32 & img, clip_subctx_gen_process gen_process)
+        : clip_graph(ctx, img), gen_process(gen_process) {}
+    ggml_cgraph * build() override;
+
+    // CLIP_SUBCTX_GEN_PROCESS_TOKENIZE: reference clip -> codes and their talker input rows
+    ggml_cgraph * build_ref_encoder();
+    ggml_tensor * nearest_code(ggml_tensor * x, ggml_tensor * codebook) const;
+
+    // reference encoder transformer, see encoder_config in speech_tokenizer/config.json
+    static constexpr int   ref_enc_n_head     = 8;
+    static constexpr float ref_enc_eps        = 1e-5f;
+    static constexpr float ref_enc_rope_theta = 10000.0f;
+
+    clip_subctx_gen_process gen_process;
+
     //
     // code_gen: backbone hidden state + sampled code0 -> 16 RVQ codes
     // MTP-style code predictor, one token per codebook
@@ -464,6 +520,11 @@ struct clip_graph_pockettts_seanet : clip_graph {
     clip_graph_pockettts_seanet(const clip_graph & parent) : clip_graph(parent) {}
     ggml_cgraph * build() override { GGML_ABORT("call encode()/decode() instead"); }
 
+    // qwen3tts reference codes: the output is quantized, so the im2col is F32 (the kernels must be F32 too)
+    bool f32_im2col = false;
+    // qwen3tts reference codes: pad_replicate also repeats the last frame on the right, like MimiConv1d
+    bool pad_replicate_end = false;
+
     // per-call streaming state, keyed by slot name (see list_pockettts_state_slots)
     std::map<std::string, ggml_tensor *> state_in;
     mutable std::vector<std::pair<std::string, ggml_tensor *>> state_out;
@@ -482,11 +543,22 @@ struct clip_graph_pockettts_seanet : clip_graph {
 };
 
 // mimi encoder + speaker_proj: reference waveform -> voice conditioning rows
+// the qwen3tts reference encoder reuses encode() with its own transformer options
 struct clip_graph_pockettts_spkenc : clip_graph {
     clip_graph_pockettts_spkenc(clip_subcontext * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    clip_graph_pockettts_spkenc(const clip_graph & parent) : clip_graph(parent) {}
     ggml_cgraph * build() override;
 
+    int         tfm_n_head     = n_head;
+    float       tfm_eps        = eps;
+    float       tfm_rope_theta = hparams.rope_theta;
+    int         tfm_rope_type  = GGML_ROPE_TYPE_NORMAL;
+    ffn_op_type tfm_ffn_type   = FFN_GELU;
+
     ggml_tensor * tfm_layer_forward(ggml_tensor * cur, const clip_layer & layer, ggml_tensor * inp_pos, ggml_tensor * kq_mask, int il) const;
+
+    // waveform [n_samples, 1] -> [n_frames, C], at the frame rate after model.downsample_w
+    ggml_tensor * encode(const clip_graph_pockettts_seanet & seanet, ggml_tensor * x, const std::vector<clip_layer> & layers);
 };
 
 //
@@ -618,15 +690,26 @@ struct clip_graph_zonos3_gen : clip_graph {
 
 std::vector<c2w_state_slot> list_zonos3_gen_state_slots(const clip_hparams & hparams, const clip_model & model);
 
+// graphs that decode with a clip_snake_vae (yue2, minimax_music3), see snake-vae.cpp
+struct clip_graph_snake_vae : clip_graph {
+    using clip_graph::clip_graph;
+
+    // x: [T, C]
+    ggml_tensor * snake(ggml_tensor * x, const clip_snake_vae::snake & s) const;
+    ggml_tensor * conv1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int dilation) const;
+    // x: [T, n_latent] -> [T * ratio, n_out]
+    ggml_tensor * build_snake_vae(ggml_tensor * x, const clip_snake_vae & vae) const;
+};
+
 //
 // YuE2 generation, the NAR transformer itself runs on a llama_context, see clip_gen_flow_yue2():
 // LATENT_IN  = latent rows -> backbone embd rows
 // LATENT_OUT = backbone hidden rows -> velocity rows
 // GEN_WAV    = Oobleck VAE decoder, latent rows -> interleaved stereo PCM
 //
-struct clip_graph_yue2_gen : clip_graph {
+struct clip_graph_yue2_gen : clip_graph_snake_vae {
     clip_graph_yue2_gen(clip_subcontext * ctx, const clip_image_f32 & img, clip_subctx_gen_process gen_process, int n_rows)
-        : clip_graph(ctx, img), gen_process(gen_process), n_rows(n_rows) {}
+        : clip_graph_snake_vae(ctx, img), gen_process(gen_process), n_rows(n_rows) {}
     ggml_cgraph * build() override;
 
     static constexpr int   n_latent   = 64;
@@ -640,9 +723,94 @@ struct clip_graph_yue2_gen : clip_graph {
 
     clip_subctx_gen_process gen_process;
     int n_rows;
+};
 
-    ggml_tensor * snake(ggml_tensor * x, const clip_yue2::snake & s) const;
-    ggml_tensor * conv1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int dilation) const;
+//
+// MiniMax Music 3 generation, see clip_gen_wav_music3() for the flow-matching loop:
+// GEN_CODE  = depth decoder of one frame: backbone hidden rows (cond, then uncond with guidance) + semantic code -> the 8 codes, the next backbone input and the condition row (mix of the 8 hidden states of the frame)
+// FLOW_COND = condition rows of a window -> DiT condition, resampled to the latent rate
+// FLOW_STEP = one DiT pass, cond and uncond rows as a batch of 2
+// GEN_WAV   = DAC decoder, latent rows -> interleaved stereo PCM
+//
+struct clip_graph_music3_gen : clip_graph_snake_vae {
+    clip_graph_music3_gen(clip_subcontext * ctx, const clip_image_f32 & img, clip_subctx_gen_process gen_process,
+                          int n_rows, int n_out, float cfg_scale, float temp)
+        : clip_graph_snake_vae(ctx, img), gen_process(gen_process), n_rows(n_rows), n_out(n_out), cfg_scale(cfg_scale), temp(temp) {}
+    ggml_cgraph * build() override;
+
+    static constexpr int   n_latent   = 128;  // two channels of 64
+    static constexpr int   n_channels = 2;
+    static constexpr int   vae_ratio  = 512;  // output samples per latent frame
+    static constexpr int   dit_d_head = 64;
+    static constexpr int   dit_n_rot  = 32;   // partial rotary
+    static constexpr float dit_theta  = 10000.0f;
+    static constexpr float dit_eps    = 1e-5f;
+    static constexpr int   top_k      = 50;
+
+    // sampling and flow matching of the reference (encoders.py, denoise.py)
+    static constexpr float depth_cfg  = 1.5f;
+    static constexpr float dit_cfg    = 1.7f;
+    static constexpr int   flow_steps = 30;
+    static constexpr int   n_overlap  = 172; // latent frames shared by neighboring windows
+
+    clip_subctx_gen_process gen_process;
+    int   n_rows; // GEN_CODE: backbone rows, FLOW_COND: frames, FLOW_STEP and GEN_WAV: latent frames
+    int   n_out;  // FLOW_COND: latent frames
+    float cfg_scale;
+    float temp;
+
+    static int64_t latent_frames(int64_t n_frames);
+
+    ggml_cgraph * build_depth();
+    ggml_cgraph * build_cond();
+    ggml_cgraph * build_dit();
+    ggml_cgraph * build_vocoder();
+};
+
+// tiny-voca: small graphs around the stacks, the stacks run on libllama (see clip_gen_wav_tiny_voca())
+// LATENT_IN:  token states [n_embd, n_rows] -> duration outputs [2, n_rows]
+// LATENT_OUT: acoustic states [n_embd, n_rows] -> source-filter params [n_voc, n_rows]
+struct clip_graph_tiny_voca : clip_graph {
+    clip_graph_tiny_voca(clip_subcontext * ctx, const clip_image_f32 & img, clip_subctx_gen_process gen_process, int n_rows)
+        : clip_graph(ctx, img), gen_process(gen_process), n_rows(n_rows) {}
+    ggml_cgraph * build() override;
+
+    static constexpr int   n_prosody_layer  = 2;
+    static constexpr int   n_acoustic_layer = 5;
+    static constexpr int   n_max_frames     = 3000;
+    static constexpr int   hop              = 256;  // samples per frame
+    static constexpr int   n_cep_causal     = 80;
+    static constexpr int   n_cep_anti       = 16;
+    static constexpr int   n_noise_cep      = 32;
+    static constexpr int   harm_fft         = 512;
+    static constexpr int   harm_hop         = 128;
+    static constexpr int   harm_steps       = hop / harm_hop;
+    static constexpr int   noise_fft        = 256;
+    static constexpr int   noise_hop        = 64;
+    static constexpr int   noise_steps      = hop / noise_hop;
+    static constexpr int   n_voc            = n_cep_causal + n_cep_anti + harm_steps + n_noise_cep + noise_steps;
+    static constexpr float rope_theta       = 10000.0f;
+    static constexpr float sample_rate      = 24000.0f;
+    static constexpr float harmonic_limit   = 0.47f;  // highest harmonic, relative to the sample rate
+    static constexpr float f0_ref           = 200.0f; // Hz, log F0 is predicted relative to it
+    static constexpr float f0_min           = 50.0f;
+    static constexpr float f0_max           = 600.0f;
+    static constexpr float max_dur          = 400.0f; // frames per token before the speed
+
+    clip_subctx_gen_process gen_process;
+    int n_rows;
+
+    // host: frame params [n_frames, n_voc] and F0 [n_frames] in Hz -> waveform [n_frames * hop]
+    static void synth(const std::vector<float> & voc, const std::vector<float> & f0, std::mt19937 & rng, std::vector<float> & audio);
+
+    // unknown-word model: letters (a-z and ') -> CMUdict phonemes separated by spaces, other characters are skipped
+    static constexpr int n_g2p_slot   = 2;  // positions per letter
+    static constexpr int n_g2p_letter = 27;
+    static constexpr int n_g2p_symbol = 69;
+    static std::string g2p(const clip_tiny_voca & tv, const std::string & word);
+
+  private:
+    ggml_tensor * conv3(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b) const;
 };
 
 struct clip_graph_soprano : clip_graph {

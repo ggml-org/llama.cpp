@@ -10,6 +10,7 @@
 
 #include "llama.h"
 
+#include <cstring>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -415,6 +416,7 @@ struct clip_bitmap {
     bool is_video = false;
     bool is_voice = false;
     std::shared_ptr<const clip_gen_ref> gen_ref;
+    std::string transcript; // of an audio clip, for the reference codes of Qwen3-TTS
 
     bool is_placeholder() const { return data.empty(); }
     bool is_video_frame() const { return is_video && !is_audio; }
@@ -432,6 +434,7 @@ struct clip_decoder_pos {
 struct clip_layout_config {
     const clip_model * v = nullptr; // vision tower, nullptr if none
     const clip_model * a = nullptr; // audio tower, nullptr if none
+    const clip_model * gen_a = nullptr; // gen tower: the reference encoder of Qwen3-TTS, nullptr if none
 
     const llama_vocab * vocab = nullptr;
     clip_pos_type pos_type = CLIP_POS_TYPE_NORMAL;
@@ -865,6 +868,11 @@ struct clip_tokenizer {
             // sanity check
             GGML_ASSERT(cfg.audio_preproc != nullptr);
 
+            // qwen3tts: a clip with a transcript also gives the reference codes, see clip_qwen3tts_ref_encode()
+            clip_image_f32 ref_wav;
+            bool with_ref_codes = cfg.a->proj_type == PROJECTOR_TYPE_QWEN3TTS_SPKENC &&
+                                  cfg.gen_a && cfg.gen_a->has_ref_encoder() && !bitmap->transcript.empty();
+
             // preprocess audio
             auto source = std::make_shared<clip_audio_preproc_out>();
             {
@@ -889,6 +897,19 @@ struct clip_tokenizer {
                 if (!cfg.audio_preproc) {
                     LOG_ERR("%s: this model takes audio input only via clip_audio_stream\n", __func__);
                     return 2;
+                }
+                if (with_ref_codes) {
+                    // a cut clip no longer matches its transcript, so a long clip gives no codes at all
+                    const size_t sample_rate = (size_t) cfg.gen_a->hparams.audio_sample_rate;
+                    const size_t max_samples = (size_t) clip_hparams::qwen3tts_max_ref_seconds * sample_rate;
+                    if (n_samples > max_samples) {
+                        LOG_WRN("%s: speaker reference is %.1f s, longer than %d s, the reference codes are skipped\n", __func__,
+                                (double) n_samples / sample_rate, clip_hparams::qwen3tts_max_ref_seconds);
+                        with_ref_codes = false;
+                    } else {
+                        ref_wav.set_size({(int) n_samples, 1}, false, true);
+                        ref_wav.cpy_buf(std::vector<float>(samples, samples + n_samples));
+                    }
                 }
                 *source = cfg.audio_preproc->preprocess(samples, n_samples);
                 if (source->entries.empty()) {
@@ -931,6 +952,17 @@ struct clip_tokenizer {
                 clip_image_f32_batch batch_f32;
                 batch_f32.is_audio = true;
                 batch_f32.entries.push_back(std::move(mel_f32));
+
+                // the reference waveform is a second entry, its frames follow the speaker row
+                if (with_ref_codes && i == 0) {
+                    const auto & gen_hparams = cfg.gen_a->hparams;
+                    int64_t samples_per_frame = gen_hparams.mimi_downsample;
+                    for (int32_t ratio : gen_hparams.seanet_ratios) {
+                        samples_per_frame *= ratio;
+                    }
+                    n_tokens += (ref_wav.nx() + samples_per_frame - 1) / samples_per_frame;
+                    batch_f32.entries.push_back(std::move(ref_wav));
+                }
 
                 clip_audio_tokens_ptr audio_tokens(new clip_audio_tokens);
                 audio_tokens->n_tokens = n_tokens;

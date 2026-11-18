@@ -17,7 +17,7 @@ static const int   KOKORO_N_FFT    = 20;
 static const int   KOKORO_HOP      = 5;
 static const float KOKORO_SR       = 24000.0f;
 
-ggml_tensor * mtmd_graph_kokoro::tensor(const std::string & name) const {
+ggml_tensor * clip_graph_kokoro::tensor(const std::string & name) const {
     const auto it = model.cbx_tensors.find(name);
     if (it == model.cbx_tensors.end() || !it->second) {
         throw std::runtime_error("kokoro: missing tensor " + name);
@@ -25,12 +25,12 @@ ggml_tensor * mtmd_graph_kokoro::tensor(const std::string & name) const {
     return it->second;
 }
 
-bool mtmd_graph_kokoro::has_tensor(const std::string & name) const {
+bool clip_graph_kokoro::has_tensor(const std::string & name) const {
     return model.cbx_tensors.find(name) != model.cbx_tensors.end();
 }
 
 // x [T, IC] -> [T_out, OC], with the bias if the module has one
-ggml_tensor * mtmd_graph_kokoro::conv(const std::string & name, ggml_tensor * x, int stride, int pad, int dil) const {
+ggml_tensor * clip_graph_kokoro::conv(const std::string & name, ggml_tensor * x, int stride, int pad, int dil) const {
     ggml_tensor * y = ggml_conv_1d(ctx0, tensor(name + ".weight"), x, stride, pad, dil);
     if (has_tensor(name + ".bias")) {
         ggml_tensor * b = tensor(name + ".bias");
@@ -40,7 +40,7 @@ ggml_tensor * mtmd_graph_kokoro::conv(const std::string & name, ggml_tensor * x,
 }
 
 // AdaIN1d: instance norm over time, then scale and shift from the style
-ggml_tensor * mtmd_graph_kokoro::adain(const std::string & name, ggml_tensor * x, ggml_tensor * style) const {
+ggml_tensor * clip_graph_kokoro::adain(const std::string & name, ggml_tensor * x, ggml_tensor * style) const {
     const int64_t n_ch = x->ne[1];
     ggml_tensor * h = ggml_add(ctx0, ggml_mul_mat(ctx0, tensor(name + ".fc.weight"), style), tensor(name + ".fc.bias"));
     ggml_tensor * gamma = ggml_reshape_2d(ctx0, ggml_view_1d(ctx0, h, n_ch, 0), 1, n_ch);
@@ -50,7 +50,7 @@ ggml_tensor * mtmd_graph_kokoro::adain(const std::string & name, ggml_tensor * x
 }
 
 // x + sin^2(alpha x) / alpha, alpha per channel
-ggml_tensor * mtmd_graph_kokoro::snake(const std::string & name, ggml_tensor * x) const {
+ggml_tensor * clip_graph_kokoro::snake(const std::string & name, ggml_tensor * x) const {
     ggml_tensor * alpha = tensor(name);
     alpha = ggml_reshape_2d(ctx0, alpha, 1, alpha->ne[0]);
     ggml_tensor * sx = ggml_sin(ctx0, ggml_mul(ctx0, x, alpha));
@@ -59,7 +59,7 @@ ggml_tensor * mtmd_graph_kokoro::snake(const std::string & name, ggml_tensor * x
 }
 
 // a [T, C] and b [T, C] -> [2T, C] with a on the even steps
-ggml_tensor * mtmd_graph_kokoro::interleave(ggml_tensor * a, ggml_tensor * b) const {
+ggml_tensor * clip_graph_kokoro::interleave(ggml_tensor * a, ggml_tensor * b) const {
     const int64_t n_t = a->ne[0], n_ch = a->ne[1];
     ggml_tensor * ab = ggml_concat(ctx0, ggml_reshape_3d(ctx0, ggml_cont(ctx0, a), 1, n_t, n_ch),
                                          ggml_reshape_3d(ctx0, ggml_cont(ctx0, b), 1, n_t, n_ch), 0);
@@ -67,7 +67,7 @@ ggml_tensor * mtmd_graph_kokoro::interleave(ggml_tensor * a, ggml_tensor * b) co
 }
 
 // AdainResBlk1d, upsample doubles the length
-ggml_tensor * mtmd_graph_kokoro::adain_resblk(const std::string & name, ggml_tensor * x, ggml_tensor * style, bool upsample) const {
+ggml_tensor * clip_graph_kokoro::adain_resblk(const std::string & name, ggml_tensor * x, ggml_tensor * style, bool upsample) const {
     const int64_t n_t = x->ne[0], n_ch = x->ne[1];
 
     ggml_tensor * r = adain(name + ".norm1", x, style);
@@ -99,7 +99,7 @@ ggml_tensor * mtmd_graph_kokoro::adain_resblk(const std::string & name, ggml_ten
 }
 
 // AdaINResBlock1 of the generator: three units with dilations 1/3/5 on convs1
-ggml_tensor * mtmd_graph_kokoro::gen_resblock(const std::string & name, ggml_tensor * x, ggml_tensor * style) const {
+ggml_tensor * clip_graph_kokoro::gen_resblock(const std::string & name, ggml_tensor * x, ggml_tensor * style) const {
     static const int dil[3] = {1, 3, 5};
     for (int j = 0; j < 3; j++) {
         const std::string js = std::to_string(j);
@@ -115,14 +115,14 @@ ggml_tensor * mtmd_graph_kokoro::gen_resblock(const std::string & name, ggml_ten
     return x;
 }
 
-ggml_tensor * mtmd_graph_kokoro::input(const char * name, ggml_type type, int64_t ne0, int64_t ne1) const {
+ggml_tensor * clip_graph_kokoro::input(const char * name, ggml_type type, int64_t ne0, int64_t ne1) const {
     ggml_tensor * t = ggml_new_tensor_2d(ctx0, type, ne0, ne1);
     ggml_set_name(t, name);
     ggml_set_input(t);
     return t;
 }
 
-ggml_cgraph * mtmd_graph_kokoro::output(const char * name, ggml_tensor * t) const {
+ggml_cgraph * clip_graph_kokoro::output(const char * name, ggml_tensor * t) const {
     ggml_set_name(t, name);
     ggml_set_output(t);
     ggml_build_forward_expand(gf, t);
@@ -130,7 +130,7 @@ ggml_cgraph * mtmd_graph_kokoro::output(const char * name, ggml_tensor * t) cons
 }
 
 // tokens -> text encoder CNN output [C, n_tok]
-ggml_cgraph * mtmd_graph_kokoro::build_text() {
+ggml_cgraph * clip_graph_kokoro::build_text() {
     const std::string p = "a.gen.text.";
     ggml_tensor * tokens = input("inp_tokens", GGML_TYPE_I32, n_tok, 1);
     tokens = ggml_reshape_1d(ctx0, tokens, n_tok);
@@ -149,7 +149,7 @@ ggml_cgraph * mtmd_graph_kokoro::build_text() {
 }
 
 // shared LSTM output [C, n_frames] -> F0 and energy curves, 2 steps per frame
-ggml_cgraph * mtmd_graph_kokoro::build_f0n() {
+ggml_cgraph * clip_graph_kokoro::build_f0n() {
     const std::string p = "a.gen.pred.";
     ggml_tensor * inp   = input("inp_x", GGML_TYPE_F32, KOKORO_N_HIDDEN, n_frames);
     ggml_tensor * style = input("inp_style", GGML_TYPE_F32, n_style, 1);
@@ -171,7 +171,7 @@ ggml_cgraph * mtmd_graph_kokoro::build_f0n() {
 }
 
 // aligned text features, F0, energy and the source STFT -> conv_post output [n_fft + 2, n_har]
-ggml_cgraph * mtmd_graph_kokoro::build_dec() {
+ggml_cgraph * clip_graph_kokoro::build_dec() {
     const std::string p = "a.gen.dec.";
     ggml_tensor * asr   = input("inp_asr", GGML_TYPE_F32, KOKORO_N_HIDDEN, n_frames);
     ggml_tensor * f0    = input("inp_f0", GGML_TYPE_F32, 2 * n_frames, 1);
@@ -237,7 +237,7 @@ ggml_cgraph * mtmd_graph_kokoro::build_dec() {
     return output("out_spec", ggml_cont(ctx0, ggml_transpose(ctx0, x)));
 }
 
-ggml_cgraph * mtmd_graph_kokoro::build() {
+ggml_cgraph * clip_graph_kokoro::build() {
     switch (stage) {
         case STAGE_TEXT: return build_text();
         case STAGE_F0N:  return build_f0n();
@@ -250,7 +250,7 @@ ggml_cgraph * mtmd_graph_kokoro::build() {
 // host side
 //
 
-static std::vector<float> kokoro_read(const mtmd_model & model, const std::string & name, size_t n_expect) {
+static std::vector<float> kokoro_read(const clip_model & model, const std::string & name, size_t n_expect) {
     std::vector<float> v(n_expect);
     if (model.cbx_read_tensor(name.c_str(), v.data(), v.size()) != n_expect) {
         throw std::runtime_error("kokoro: unexpected tensor " + name);
@@ -285,7 +285,7 @@ static void kokoro_matvec(const float * w, const float * x, int n_out, int n_in,
 }
 
 // bidirectional single-layer LSTM (torch layout, gates i f g o): x [n_t, n_in] -> y [n_t, 2 * n_h]
-static void kokoro_lstm(const mtmd_model & model, const std::string & name, const std::vector<float> & x, int n_t, int n_in,
+static void kokoro_lstm(const clip_model & model, const std::string & name, const std::vector<float> & x, int n_t, int n_in,
                         std::vector<float> & y) {
     const int n_h = KOKORO_N_HIDDEN / 2;
     y.assign((size_t) n_t * 2 * n_h, 0.0f);
@@ -326,7 +326,7 @@ static std::vector<float> kokoro_align(const std::vector<float> & x, const std::
     return y;
 }
 
-int mtmd_graph_kokoro::prosody(const mtmd_model & model, const float * bert, int n_embd, const float * text_cnn, int n_tok,
+int clip_graph_kokoro::prosody(const clip_model & model, const float * bert, int n_embd, const float * text_cnn, int n_tok,
                                const float * style, float speed, std::vector<float> & shared, std::vector<float> & asr) {
     const int n_h   = KOKORO_N_HIDDEN;
     const int n_cat = n_h + n_style;
@@ -347,9 +347,9 @@ int mtmd_graph_kokoro::prosody(const mtmd_model & model, const float * bert, int
     // DurationEncoder: LSTM, AdaLayerNorm, style again
     std::vector<float> y;
     std::vector<float> gamma_beta(2 * n_h);
-    for (int il = 0; model.cbx_tensors.count(mtmd_format("a.gen.pred.text_encoder.lstms.%d.weight_ih_l0", 2 * il)); il++) {
-        kokoro_lstm(model, mtmd_format("a.gen.pred.text_encoder.lstms.%d", 2 * il), x, n_tok, n_cat, y);
-        const std::string norm = mtmd_format("a.gen.pred.text_encoder.lstms.%d.fc", 2 * il + 1);
+    for (int il = 0; model.cbx_tensors.count(clip_format("a.gen.pred.text_encoder.lstms.%d.weight_ih_l0", 2 * il)); il++) {
+        kokoro_lstm(model, clip_format("a.gen.pred.text_encoder.lstms.%d", 2 * il), x, n_tok, n_cat, y);
+        const std::string norm = clip_format("a.gen.pred.text_encoder.lstms.%d.fc", 2 * il + 1);
         const auto fc_w = kokoro_read(model, norm + ".weight", (size_t) 2 * n_h * n_style);
         const auto fc_b = kokoro_read(model, norm + ".bias", (size_t) 2 * n_h);
         kokoro_matvec(fc_w.data(), style, 2 * n_h, n_style, gamma_beta.data());
@@ -401,7 +401,7 @@ int mtmd_graph_kokoro::prosody(const mtmd_model & model, const float * bert, int
 }
 
 // hn-nsf source: f0 [2 * n_frames] -> harmonic source, then its STFT as [n_har, 22] rows of magnitudes and phases
-int mtmd_graph_kokoro::har_source(const mtmd_model & model, const std::vector<float> & f0, std::mt19937 & rng, std::vector<float> & har) {
+int clip_graph_kokoro::har_source(const clip_model & model, const std::vector<float> & f0, std::mt19937 & rng, std::vector<float> & har) {
     const int n_f0 = (int) f0.size();
     const int64_t n_wav = (int64_t) n_f0 * KOKORO_UPS;
     const auto lin_w = kokoro_read(model, "a.gen.dec.generator.m_source.l_linear.weight", KOKORO_N_HARM);
@@ -474,7 +474,7 @@ int mtmd_graph_kokoro::har_source(const mtmd_model & model, const std::vector<fl
 }
 
 // conv_post rows [n_frames, 22] -> waveform: magnitude exp(x), phase sin(x), hann overlap-add
-void mtmd_graph_kokoro::istft(const std::vector<float> & spec, std::vector<float> & audio) {
+void clip_graph_kokoro::istft(const std::vector<float> & spec, std::vector<float> & audio) {
     const int n_bins   = KOKORO_N_FFT / 2 + 1;
     const int n_frames = (int) (spec.size() / (2 * n_bins));
     const int64_t n_out = (int64_t) (n_frames - 1) * KOKORO_HOP;

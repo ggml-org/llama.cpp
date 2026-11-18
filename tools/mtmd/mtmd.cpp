@@ -175,6 +175,7 @@ struct mtmd_bitmap {
     bool is_voice  = false;
     bool mergeable = false; // [QWEN_VIDEO] set only on frames of the same video
     bool is_video  = false; // see mtmd_bitmap_set_is_video()
+    std::string transcript; // see mtmd_bitmap_set_transcript()
 
     // a voice: the encoded media of libllama
     std::shared_ptr<llama_media> lmedia;
@@ -1498,7 +1499,7 @@ struct mtmd_tokenizer {
                 return 2;
             }
             const float * pcm = b0->is_placeholder() ? nullptr : (const float *) b0->get_ro_buf().data();
-            res = llama_media_layout_add_audio(lay, pcm, b0->nx, b0->id.c_str());
+            res = llama_media_layout_add_audio(lay, pcm, b0->nx, b0->id.c_str(), b0->transcript.empty() ? nullptr : b0->transcript.c_str());
         } else {
             for (const auto * bmp : bitmaps) {
                 if (bmp->nx <= 0 || bmp->ny <= 0) {
@@ -1951,6 +1952,10 @@ void mtmd_bitmap_set_mergeable(mtmd_bitmap * bitmap, bool mergeable) {
 
 void mtmd_bitmap_set_is_video(mtmd_bitmap * bitmap, bool is_video) {
     bitmap->is_video = is_video;
+}
+
+void mtmd_bitmap_set_transcript(mtmd_bitmap * bitmap, const char * transcript) {
+    bitmap->transcript = transcript ? transcript : "";
 }
 
 mtmd_bitmap * mtmd_bitmap_init_lazy(const mtmd_context * ctx,
@@ -2433,6 +2438,9 @@ int64_t mtmd_audio_stream_get_n_rows_flushed(const mtmd_audio_stream * s) {
 mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
     const llama_gen_info li = llama_model_gen_info(ctx->model.get());
     mtmd_gen_audio_info info{};
+    // the two enums list the pipelines in the same order
+    static_assert((int) MTMD_GEN_AUDIO_TYPE_FISH_S2   == (int) LLAMA_GEN_AUDIO_TYPE_FISH_S2 &&
+                  (int) MTMD_GEN_AUDIO_TYPE_TINY_VOCA == (int) LLAMA_GEN_AUDIO_TYPE_TINY_VOCA, "gen audio types out of sync");
     info.type          = (mtmd_gen_audio_type) li.type;
     info.sample_rate   = li.sample_rate;
     info.n_channels    = li.n_channels;
@@ -2447,6 +2455,10 @@ size_t mtmd_gen_audio_read_tensor(mtmd_context * ctx, const char * name, float *
 
 const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_t idx) {
     return llama_model_gen_voice_name(ctx->model.get(), idx);
+}
+
+int32_t mtmd_gen_audio_g2p(const mtmd_context * ctx, const char * word, char * buf, size_t buf_size) {
+    return ctx ? llama_model_gen_g2p(ctx->model.get(), word, buf, buf_size) : 0;
 }
 
 mtmd_bitmap * mtmd_gen_audio_get_voice(const mtmd_context * ctx, const char * name) {
@@ -2475,6 +2487,8 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
     inp.penalty_repeat = li.penalty_repeat;
     inp.penalty_last_n = li.penalty_last_n;
     inp.n_steps        = li.n_steps;
+    inp.speed          = li.speed;
+    inp.cfg_scale      = li.cfg_scale;
     return inp;
 }
 
@@ -2609,6 +2623,11 @@ struct mtmd_gen_state {
     llama_sampler_ptr   lm_smpl;
     mtmd_code_sampler * code_smpl = nullptr;
 
+    // native graphs (Qwen3-TTS): the reference codes of mtmd_gen_state_set_ref(), the first codec call decodes the
+    // end of them before its own codes, so the speech continues from the reference
+    std::vector<int32_t> ref_codes;
+    bool ref_decoded = false;
+
     ~mtmd_gen_state() {
         if (!life || seq < 0) {
             return;
@@ -2711,6 +2730,7 @@ void mtmd_gen_state_reset(mtmd_gen_state * state) {
     }
     // the codec slots of the native graphs, the decoder state of the engine
     llama_gen_reset(state->ctx->gen_native ? state->bank->gen_wav_ctx.get() : state->bank->gen_ctx.get(), state->seq);
+    state->ref_decoded = false;
 }
 
 int32_t mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state) {
@@ -2720,6 +2740,18 @@ int32_t mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state) {
         return 1;
     }
     std::lock_guard<std::mutex> lock(ctx->compute_mutex);
+    if (ctx->gen_native) {
+        // Qwen3-TTS: the codec continues from the reference codes of the last encode, see mtmd_gen_wav_native()
+        const size_t n = ctx->last_ref.m ? llama_media_get_ref_codes(ctx->last_ref.m, nullptr, 0) : 0;
+        if (state->seq < 0 || n == 0) {
+            LOG_ERR("%s: the last encode produced no reference codes\n", __func__);
+            return 1;
+        }
+        state->ref_codes.resize(n);
+        llama_media_get_ref_codes(ctx->last_ref.m, state->ref_codes.data(), n);
+        state->ref_decoded = false;
+        return 0;
+    }
     llama_context * gctx = state->bank->gen_ctx.get();
     if (state->seq < 0 || !gctx || !ctx->last_ref.m || llama_gen_set_ref(gctx, state->seq, ctx->last_ref.m) != 0) {
         LOG_ERR("%s: the last encode produced no reference data\n", __func__);
@@ -2779,27 +2811,36 @@ static int32_t mtmd_gen_wav_native(mtmd_context * ctx, mtmd_gen_state * state, c
         LOG_ERR("%s: too many frames\n", __func__);
         return 1;
     }
-    int32_t n_frames = (int32_t) (inp->n_codes / n_cb);
-    const int32_t spf      = llama_n_embd_out(wctx);
+    const int32_t n_win = 72; // the frames of a codec window
+    const int32_t spf   = llama_n_embd_out(wctx);
+
+    // the first call after mtmd_gen_state_set_ref() puts the end of the reference before its codes, so the speech
+    // continues from it; the reference only fills the free part of this window
+    std::vector<llama_token> codes(inp->codes, inp->codes + inp->n_codes);
+    int32_t n_ref_used = 0;
+    if (!state->ref_codes.empty() && !state->ref_decoded) {
+        state->ref_decoded = true;
+        const int64_t n_in = (int64_t) codes.size() / n_cb;
+        n_ref_used = (int32_t) std::min<int64_t>((int64_t) state->ref_codes.size() / n_cb, n_win > n_in ? n_win - n_in : 0);
+        codes.insert(codes.begin(), state->ref_codes.end() - (std::ptrdiff_t) n_ref_used * n_cb, state->ref_codes.end());
+    }
+    int32_t n_frames = (int32_t) (codes.size() / n_cb);
 
     // a short last window is padded to a full one, as the mtmd engine does, then trimmed: the graph shape
     // decides the CPU matmul kernels, so this keeps the PCM bit-identical (libllama takes any frame count)
-    std::vector<llama_token> padded;
     const int32_t n_real = n_frames;
-    const llama_token * codes_src = inp->codes;
-    if (n_frames < 72) {
-        padded.assign((size_t) 72 * n_cb, 0);
-        std::copy(inp->codes, inp->codes + inp->n_codes, padded.begin());
-        codes_src = padded.data();
-        n_frames = 72;
+    if (n_frames < n_win) {
+        codes.resize((size_t) n_win * n_cb, 0);
+        n_frames = n_win;
     }
+    const llama_token * codes_src = codes.data();
 
     llama_batch_ext * batch = llama_batch_ext_init(wctx);
 
     // every frame is checked before a window runs: a bad code must not leave the earlier windows in the codec state
     for (int32_t f = 0; f < n_real; ++f) {
         llama_batch_ext_clear(batch);
-        if (llama_batch_ext_add_codes(batch, state->seq, inp->codes + (size_t) f * n_cb, n_cb) < 0) {
+        if (llama_batch_ext_add_codes(batch, state->seq, codes_src + (size_t) f * n_cb, n_cb) < 0) {
             llama_batch_ext_free(batch);
             LOG_ERR("%s: frame %d: invalid codes\n", __func__, f);
             return 1;
@@ -2827,6 +2868,8 @@ static int32_t mtmd_gen_wav_native(mtmd_context * ctx, mtmd_gen_state * state, c
         }
     }
     llama_batch_ext_free(batch);
+    // the audio of the reference frames was spoken already
+    state->out_audio.erase(state->out_audio.begin(), state->out_audio.begin() + (std::ptrdiff_t) n_ref_used * spf);
 
     out->audio     = state->out_audio.data();
     out->n_samples = state->out_audio.size();
@@ -2860,6 +2903,8 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
     li.backbone_state_size = inp->backbone_state_size;
     li.backbone_n_past     = inp->backbone_n_past;
     li.n_steps             = inp->n_steps;
+    li.speed               = inp->speed;
+    li.cfg_scale           = inp->cfg_scale;
 
     llama_batch_ext * batch = llama_batch_ext_init(lctx);
     const int32_t res = llama_batch_ext_add_gen(batch, state->seq, &li) < 0 ? -1 : llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch);

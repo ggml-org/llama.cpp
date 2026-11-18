@@ -3,14 +3,14 @@
 #include <cmath>
 
 // latent frames of a window of n_frames, see MiniMaxMusic3ConditionEncoder of the reference
-int64_t mtmd_graph_music3_gen::latent_frames(int64_t n_frames) {
+int64_t clip_graph_music3_gen::latent_frames(int64_t n_frames) {
     const double n = (double) n_frames * 44100.0 / 24000.0 * 960.0 / 512.0;
     return std::max<int64_t>(1, (int64_t) n);
 }
 
 // one frame of the depth decoder (RVQDepthDecoder): row 0 is the backbone hidden, row p > 0 the embedding of code p - 1
 // each step reruns the 4 layers over the rows so far (at most 8, no KV cache), like the reference
-ggml_cgraph * mtmd_graph_music3_gen::build_depth() {
+ggml_cgraph * clip_graph_music3_gen::build_depth() {
     const int64_t n_cb  = model.gen_code_head_w->ne[2]; // residual codebooks
     const int64_t n_voc = model.gen_code_head_w->ne[1];
     const int64_t B     = n_rows; // cond, then uncond with guidance
@@ -27,7 +27,7 @@ ggml_cgraph * mtmd_graph_music3_gen::build_depth() {
     ggml_set_name(inp_rand, "inp_rand");
     ggml_set_input(inp_rand);
 
-    mtmd_graph_qwen3tts_gen::code_gen cg(*this, top_k, 1.0f);
+    clip_graph_qwen3tts_gen::code_gen cg(*this, top_k, 1.0f);
 
     // [n_embd, 1, B], the codes are the same in all rows
     auto project = [&](ggml_tensor * x) {
@@ -49,7 +49,7 @@ ggml_cgraph * mtmd_graph_music3_gen::build_depth() {
         ggml_tensor * ones = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_pos, n_pos), 1.0f);
         build_vit_opts opts;
         opts.attn_mask = ggml_log(ctx0, ggml_tri(ctx0, ones, GGML_TRI_TYPE_LOWER_DIAG)); // 0 = keep, -inf = masked
-        if (flash_attn_type == MTMD_FLASH_ATTN_TYPE_ENABLED) {
+        if (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
             opts.attn_mask = ggml_cast(ctx0, opts.attn_mask, GGML_TYPE_F16);
         }
         ggml_tensor * pos = ggml_view_2d(ctx0, model.position_embeddings, n_embd, n_pos, model.position_embeddings->nb[1], 0);
@@ -102,7 +102,7 @@ ggml_cgraph * mtmd_graph_music3_gen::build_depth() {
 }
 
 // frame rows [n_embd, n_rows] -> conv k = 3 -> nearest resampling to n_out latent frames
-ggml_cgraph * mtmd_graph_music3_gen::build_cond() {
+ggml_cgraph * clip_graph_music3_gen::build_cond() {
     const auto & m = model.music3;
 
     ggml_tensor * inp = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_rows);
@@ -125,7 +125,7 @@ ggml_cgraph * mtmd_graph_music3_gen::build_cond() {
 
 // one velocity pass of the DiT over a window, the cond and uncond (zero condition) inputs as a batch of 2
 // the input rows are [latent, zeros, condition], the time embedding is prepended as one extra token
-ggml_cgraph * mtmd_graph_music3_gen::build_dit() {
+ggml_cgraph * clip_graph_music3_gen::build_dit() {
     const auto & m = model.music3;
     const int64_t n_in    = m.pre_w->ne[0];
     const int64_t n_dit   = m.proj_in_w->ne[1];
@@ -192,7 +192,7 @@ ggml_cgraph * mtmd_graph_music3_gen::build_dit() {
 }
 
 // the two channels are decoded as two mono streams of n_latent / 2 channels, then tanh
-ggml_cgraph * mtmd_graph_music3_gen::build_vocoder() {
+ggml_cgraph * clip_graph_music3_gen::build_vocoder() {
     ggml_tensor * inp = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_latent, n_rows);
     ggml_set_name(inp, "inp_feats");
     ggml_set_input(inp);
@@ -213,12 +213,12 @@ ggml_cgraph * mtmd_graph_music3_gen::build_vocoder() {
     return gf;
 }
 
-ggml_cgraph * mtmd_graph_music3_gen::build() {
+ggml_cgraph * clip_graph_music3_gen::build() {
     switch (gen_process) {
-        case MTMD_SUBCTX_GEN_PROCESS_GEN_CODE:  return build_depth();
-        case MTMD_SUBCTX_GEN_PROCESS_FLOW_COND: return build_cond();
-        case MTMD_SUBCTX_GEN_PROCESS_FLOW_STEP: return build_dit();
-        case MTMD_SUBCTX_GEN_PROCESS_GEN_WAV:   return build_vocoder();
+        case CLIP_SUBCTX_GEN_PROCESS_GEN_CODE:  return build_depth();
+        case CLIP_SUBCTX_GEN_PROCESS_FLOW_COND: return build_cond();
+        case CLIP_SUBCTX_GEN_PROCESS_FLOW_STEP: return build_dit();
+        case CLIP_SUBCTX_GEN_PROCESS_GEN_WAV:   return build_vocoder();
         default: GGML_ABORT("minimax_music3: unsupported gen process");
     }
 }

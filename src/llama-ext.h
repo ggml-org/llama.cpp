@@ -262,7 +262,9 @@ LLAMA_API int32_t llama_media_layout_add_image (struct llama_media_layout * lay,
 LLAMA_API int32_t llama_media_layout_add_frames(struct llama_media_layout * lay, uint32_t nx, uint32_t ny,
                                                 const uint8_t * const * rgb, int32_t n_frames, bool is_video, const char * id);
 // mono PCM at llama_media_proc_sample_rate()
-LLAMA_API int32_t llama_media_layout_add_audio (struct llama_media_layout * lay, const float * pcm, size_t n_samples, const char * id);
+// transcript: optional, of a speaker clip, for the reference codes of Qwen3-TTS (cloning that continues the clip)
+LLAMA_API int32_t llama_media_layout_add_audio (struct llama_media_layout * lay, const float * pcm, size_t n_samples, const char * id,
+                                                const char * transcript);
 
 // an audio track cut in pieces that go into the prompt one by one, each in its own place (the soundtrack of a video,
 // each piece after its frames, LLAMA_MEDIA_VIDEO_TEMPLATE_LFM3_OMNI only: returns 1 for other models); it is encoded
@@ -322,7 +324,10 @@ enum llama_gen_audio_type {
     LLAMA_GEN_AUDIO_TYPE_DRAMA3,
     LLAMA_GEN_AUDIO_TYPE_ZONOS3,
     LLAMA_GEN_AUDIO_TYPE_YUE2,
+    LLAMA_GEN_AUDIO_TYPE_MINIMAX_MUSIC3,
     LLAMA_GEN_AUDIO_TYPE_FISH_S2,
+    LLAMA_GEN_AUDIO_TYPE_KOKORO,
+    LLAMA_GEN_AUDIO_TYPE_TINY_VOCA,
 };
 
 struct llama_gen_info {
@@ -353,18 +358,24 @@ struct llama_gen_inp {
     // LLAMA_GEN_STAGE_WAV: codes (discrete) or feats (continuous), depending on the pipeline
     // lfm3a CODE also takes codes: the codes revealed so far, -1 for a masked codebook
     // zonos3 WAV: -1 for a residual code not known yet
+    // kokoro, tiny-voca WAV take both: the phoneme tokens, then the voice row(s) and the backbone state of each token
     const int32_t * codes;
     size_t          n_codes;
     const float   * feats;
     size_t          n_feats;
+    float           speed; // kokoro, tiny-voca: speaking speed, > 0 (default 1)
 
     // yue2 CODE: n_codes is the frame count; the backbone state of the backbone_n_past positions
     const uint8_t * backbone_state;
     size_t          backbone_state_size;
     int32_t         backbone_n_past;
 
-    // flow-matching CODE: steps of the ODE solver, <= 0 = model default
+    // flow matching: steps of the ODE solver, <= 0 = model default (yue2 CODE, minimax_music3 WAV)
     int32_t n_steps;
+
+    // minimax_music3 CODE: feats holds the backbone hidden rows, cond then uncond with guidance; the guidance scale
+    // of the residual codes, <= 0 = model default
+    float cfg_scale;
 };
 
 // owned by the context, valid until its next llama_process()
@@ -390,6 +401,13 @@ LLAMA_API struct llama_gen_inp  llama_gen_inp_default(const struct llama_model *
 LLAMA_API size_t        llama_model_gen_read_tensor(const struct llama_model * model, const char * name, float * out, size_t n_max);
 // the idx-th predefined voice, idx 0 is the default; nullptr out of range
 LLAMA_API const char *  llama_model_gen_voice_name (const struct llama_model * model, int32_t idx);
+// pronunciation of a word by the letter-to-sound model of the gen tower (tiny-voca: CMUdict phonemes separated by
+// spaces); returns the length written to buf (NUL terminated), 0 without a model or a pronunciation, -1 if buf is too
+// small; runs no graph
+LLAMA_API int32_t       llama_model_gen_g2p        (const struct llama_model * model, const char * word, char * buf, size_t buf_size);
+// the reference codes of an encoded speaker clip with a transcript (Qwen3-TTS), frame-major: returns their count,
+// copies up to n_max into out (may be null)
+LLAMA_API size_t        llama_media_get_ref_codes  (const struct llama_media * m, int32_t * out, size_t n_max);
 // a predefined voice as an encoded AUDIO media (backbone rows and the gen-side reference), matched case-insensitively;
 // a voice the chat template names (lfm3a) has no rows
 LLAMA_API struct llama_media * llama_media_init_voice(const struct llama_model * model, const char * name);

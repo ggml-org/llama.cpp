@@ -142,6 +142,7 @@ struct llama_media_proc * llama_media_proc_init(
             proc->cfg->audio_preproc->mel_config.sched       = proc->cpu->sched;
             proc->cfg->audio_preproc->mel_config.sched_mutex = &proc->cpu->mutex;
         }
+        proc->cfg->gen_a = clip->engine_gen();
         const int64_t n_embd = proc->cfg->n_embd_out();
         if (model_dec && n_embd != (int64_t) model_dec->hparams.n_embd_inp()) {
             LLAMA_LOG_ERROR("%s: the mmproj outputs rows of %" PRId64 ", the decoder takes %u\n"
@@ -388,7 +389,8 @@ int32_t llama_media_layout_add_frames(struct llama_media_layout * lay, uint32_t 
     return llama_media_layout_add_bitmaps(lay, bitmaps);
 }
 
-int32_t llama_media_layout_add_audio(struct llama_media_layout * lay, const float * pcm, size_t n_samples, const char * id) {
+int32_t llama_media_layout_add_audio(struct llama_media_layout * lay, const float * pcm, size_t n_samples, const char * id,
+        const char * transcript) {
     if (n_samples == 0) {
         return 2;
     }
@@ -397,6 +399,7 @@ int32_t llama_media_layout_add_audio(struct llama_media_layout * lay, const floa
     b.ny       = 1;
     b.id       = id ? id : "";
     b.is_audio = true;
+    b.transcript = transcript ? transcript : "";
     if (pcm) {
         b.data.assign((const uint8_t *) pcm, (const uint8_t *) (pcm + n_samples));
     }
@@ -765,6 +768,25 @@ size_t llama_model_gen_read_tensor(const struct llama_model * model, const char 
 const char * llama_model_gen_voice_name(const struct llama_model * model, int32_t idx) {
     llama_gen_query q(model);
     return q.ok() ? clip_gen_audio_voice_name(&q.host, idx) : nullptr;
+}
+
+int32_t llama_model_gen_g2p(const struct llama_model * model, const char * word, char * buf, size_t buf_size) {
+    const auto * clip = as_clip(model);
+    if (clip == nullptr || clip->engine_gen() == nullptr || word == nullptr || buf == nullptr || buf_size == 0) {
+        return 0;
+    }
+    return clip_gen_audio_g2p(*clip->engine_gen(), word, buf, buf_size);
+}
+
+size_t llama_media_get_ref_codes(const struct llama_media * m, int32_t * out, size_t n_max) {
+    if (m == nullptr || !m->gen_ref) {
+        return 0;
+    }
+    const auto & codes = m->gen_ref->tokens;
+    if (out) {
+        std::copy_n(codes.begin(), std::min(n_max, codes.size()), out);
+    }
+    return codes.size();
 }
 
 struct llama_media * llama_media_init_voice(const struct llama_model * model, const char * name) {

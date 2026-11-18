@@ -307,6 +307,8 @@ private:
     // the media input of the reserved graph (a tower of a clip model), see sched_reserve()
     const struct llama_media_input * reserve_media_inp = nullptr;
     std::unique_ptr<llama_model, void (*)(llama_model *)> clip_yue2_nar { nullptr, llama_model_free };
+    std::unique_ptr<llama_model, void (*)(llama_model *)> clip_tiny_voca_prosody  { nullptr, llama_model_free };
+    std::unique_ptr<llama_model, void (*)(llama_model *)> clip_tiny_voca_acoustic { nullptr, llama_model_free };
 
     //
     // output

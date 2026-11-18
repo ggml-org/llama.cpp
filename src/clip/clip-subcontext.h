@@ -53,8 +53,10 @@ enum clip_subctx_gen_process {
     CLIP_SUBCTX_GEN_PROCESS_TTS,        // full utterance of codes to raw PCM audio
     CLIP_SUBCTX_GEN_PROCESS_TTS_VOCODE, // internal: mel + source stft to istft input
     CLIP_SUBCTX_GEN_PROCESS_TOKENIZE,   // raw PCM audio to semantic speech tokens
-    CLIP_SUBCTX_GEN_PROCESS_LATENT_IN,  // internal: flow latent rows to backbone embd rows
-    CLIP_SUBCTX_GEN_PROCESS_LATENT_OUT, // internal: backbone hidden rows to flow velocity rows
+    CLIP_SUBCTX_GEN_PROCESS_LATENT_IN,  // internal: flow latent rows to backbone embd rows (tiny-voca: token states to durations)
+    CLIP_SUBCTX_GEN_PROCESS_LATENT_OUT, // internal: backbone hidden rows to flow velocity rows (tiny-voca: to source-filter params)
+    CLIP_SUBCTX_GEN_PROCESS_FLOW_COND,  // internal: frame rows to flow condition rows
+    CLIP_SUBCTX_GEN_PROCESS_FLOW_STEP,  // internal: one velocity pass of the flow transformer
 };
 
 // persistent state of a causal audio encoder, for streaming input (one per stream)
@@ -96,6 +98,22 @@ struct clip_subctx_gen_state {
     }
 };
 
+// kokoro: inputs and outputs of one graph stage, see clip_graph_kokoro
+struct clip_subctx_kokoro_io {
+    int stage    = 0;
+    int n_tok    = 0;
+    int n_frames = 0;
+    int n_har    = 0;
+    const std::vector<int32_t> * tokens = nullptr; // STAGE_TEXT
+    const std::vector<float> *   x      = nullptr; // STAGE_F0N: shared LSTM output, STAGE_DEC: aligned text features
+    const std::vector<float> *   style  = nullptr; // predictor or decoder half of the voice row
+    const std::vector<float> *   f0     = nullptr; // STAGE_DEC
+    const std::vector<float> *   en     = nullptr;
+    const std::vector<float> *   har    = nullptr;
+    std::vector<float> * out0 = nullptr; // text features, F0, or STFT coefficients
+    std::vector<float> * out1 = nullptr; // STAGE_F0N: energy
+};
+
 struct clip_subctx_encode_params {
     int n_threads = 1;
     const clip_image_f32_batch * imgs = nullptr;
@@ -111,6 +129,8 @@ struct clip_subctx_encode_params {
     std::vector<int32_t> * out_codes = nullptr; // this frame's 16 sampled codes
     std::vector<float> * out_feats = nullptr; // continuous counterpart of out_codes
     float   temp = 0.0f;                      // sampling temperature, noise scale for flow-matching decoders
+    float   cfg_scale = 1.0f;                 // classifier-free guidance, 1.0 = off
+    float   flow_t = 0.0f;                    // FLOW_STEP: flow-matching time, 0 = noise
     bool * out_is_eos = nullptr;
 
     // TOKENIZE: speech embedding rows of the produced codes
@@ -127,6 +147,10 @@ struct clip_subctx_encode_params {
     int vocode_n_mel  = 0;
     int vocode_n_stft = 0;
     std::vector<float> * out_spec = nullptr;
+
+    // kokoro: set by encode_kokoro() for each of its graph stages
+    const clip_subctx_kokoro_io * kokoro = nullptr;
+    float speed = 1.0f; // kokoro: the predicted durations are divided by it
 
     // audio gen: state of one sequence, encode() updates it in place
     struct clip_subctx_gen_state * gen_state = nullptr;
@@ -181,4 +205,7 @@ struct clip_subcontext {
     // the batch the compute buffers are reserved for
     // placeholder: shapes only, for building a graph that is not computed (reservation)
     clip_image_f32_batch get_dummy_batch(bool placeholder = false) const;
+
+    // kokoro GEN_WAV: codes are the phoneme tokens, feats the voice row followed by the backbone state of each token
+    bool encode_kokoro(clip_subctx_encode_params * params);
 };

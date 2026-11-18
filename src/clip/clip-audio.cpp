@@ -270,6 +270,14 @@ static void ifft(const clip_audio_cache & cache, float * in, int N, float * out)
     fft_impl<true, false>(cache, in, N, out);
 }
 
+void clip_audio_fft(const clip_audio_cache & cache, float * in, int N, float * out) {
+    fft(cache, in, N, out);
+}
+
+void clip_audio_ifft(const clip_audio_cache & cache, float * in, int N, float * out) {
+    ifft(cache, in, N, out);
+}
+
 static void clip_audio_fill_entries(std::vector<clip_audio_mel> & mels, bool shape_only, std::vector<clip_image_f32> & entries) {
     entries.clear();
     for (auto & mel : mels) {

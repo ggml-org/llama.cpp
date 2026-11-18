@@ -20,6 +20,7 @@
 #include "clip/clip-media.h"
 #include "clip/clip-subcontext.h"
 #include "clip/clip-graph.h"
+#include "clip/models/models.h"
 #include "clip/clip-gen.h"
 #include "clip/clip-gen-memory.h"
 
@@ -2219,6 +2220,29 @@ int llama_context::encode_media_engine(llama_media & m) {
             const size_t off = (size_t) at.row_begin * n_row_embd;
             out.assign(track.embd.begin() + off, track.embd.begin() + off + (size_t) at.n_tokens * n_row_embd);
         } else {
+            if (cm->proj_type == PROJECTOR_TYPE_QWEN3TTS_SPKENC && at.batch_f32.entries.size() == 2) {
+                // the speaker row, then one talker input row per reference frame; the codes are the gen-side reference
+                // the decoder continues from (llama_media_get_ref_codes())
+                clip_image_f32_batch mel;
+                mel.is_audio = true;
+                mel.entries.push_back(at.batch_f32.entries[0]);
+                std::vector<float> speaker((size_t) n_embd);
+                if (!encode(mel, at.source.get(), at.source_idx, speaker)) {
+                    return -3;
+                }
+                clip_gen_ref ref;
+                std::vector<float> rows;
+                if (clip_qwen3tts_ref_codes(&clip_gen_host(), at.batch_f32.entries[1], ref.tokens, rows) != 0 ||
+                        rows.size() != (size_t) (at.n_tokens - 1) * n_embd) {
+                    LLAMA_LOG_ERROR("%s: %zu reference rows, expected %u\n", __func__, rows.size() / n_embd, at.n_tokens - 1);
+                    return -3;
+                }
+                speaker.insert(speaker.end(), rows.begin(), rows.end());
+                m.gen_ref = std::make_shared<const clip_gen_ref>(std::move(ref));
+                m.n_embd  = n_embd;
+                m.rows    = std::move(speaker);
+                return 0;
+            }
             if (cm->proj_type == PROJECTOR_TYPE_CHATTERBOX_SPKENC) {
                 // the reference encode also yields the gen-side conditioning of the speaker
                 clip_gen_ctx & host = clip_gen_host();
@@ -2255,6 +2279,15 @@ clip_gen_ctx & llama_context::clip_gen_host() {
                 clip_gen->yue2_nar        = clip_yue2_nar.get();
                 clip_gen->yue2_flash_attn = cparams.auto_fa_user ? LLAMA_FLASH_ATTN_TYPE_AUTO
                                           : cparams.flash_attn   ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
+            }
+            if (g->proj_type == PROJECTOR_TYPE_TINY_VOCA && !clip.path.empty()) {
+                using tv = clip_graph_tiny_voca;
+                clip_tiny_voca_prosody .reset(clip_tiny_voca_stack_load(clip.path.c_str(), model.dev_output(), g->hparams, "a.gen.prosody.",  tv::n_prosody_layer));
+                clip_tiny_voca_acoustic.reset(clip_tiny_voca_stack_load(clip.path.c_str(), model.dev_output(), g->hparams, "a.gen.acoustic.", tv::n_acoustic_layer));
+                clip_gen->tiny_voca_prosody    = clip_tiny_voca_prosody.get();
+                clip_gen->tiny_voca_acoustic   = clip_tiny_voca_acoustic.get();
+                clip_gen->tiny_voca_flash_attn = cparams.auto_fa_user ? LLAMA_FLASH_ATTN_TYPE_AUTO
+                                               : cparams.flash_attn   ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
             }
         }
         if (const clip_model * a = clip.engine_audio()) {

@@ -7,10 +7,10 @@
 #include "../src/clip/clip-audio.h"
 #include "../src/clip/clip-subcontext.h"
 #include "../src/clip/clip-image.h"
+#include "../src/clip/models/models.h"
 #endif // TEST_CLIP_INTERNALS
 #include "mtmd-helper.h"
 #include "mtmd-internal.h"
-#include "models/models.h"
 
 #include "chat-tts-norm.h"
 #include "jinja/lexer.h"
@@ -1199,6 +1199,7 @@ MAKE_TEST(test_kokoro_tts_template) {
     }
 }
 
+#ifdef TEST_CLIP_INTERNALS
 // every frame is the constant 0.25 (only the DC bin, of magnitude n_fft * 0.25)
 // the overlap-add of hann windows at a quarter hop sums to 2, their squares to 1.5: the output is 0.25 * 2 / 1.5
 MAKE_TEST(test_kokoro_istft) {
@@ -1212,7 +1213,7 @@ MAKE_TEST(test_kokoro_istft) {
         }
     }
     std::vector<float> audio;
-    mtmd_graph_kokoro::istft(spec, audio);
+    clip_graph_kokoro::istft(spec, audio);
     t.assert_equal("samples", (size_t) (n_frames - 1) * hop, audio.size());
     // the first and last hop are covered by fewer frames
     float max_err = 0.0f;
@@ -1221,6 +1222,7 @@ MAKE_TEST(test_kokoro_istft) {
     }
     t.assert_true("constant signal, max error " + std::to_string(max_err), max_err < 1e-4f);
 }
+#endif // TEST_CLIP_INTERNALS
 
 //
 // main

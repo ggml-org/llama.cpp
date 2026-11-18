@@ -1,5 +1,5 @@
 #include "models.h"
-#include "../mtmd-audio.h"
+#include "../clip-audio.h"
 
 #include <algorithm>
 #include <cctype>
@@ -8,7 +8,7 @@
 #include <string>
 
 // same-length conv with 3 taps; x: [T, IC], w: [3, IC, OC], returns [T, OC]
-ggml_tensor * mtmd_graph_tiny_voca::conv3(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b) const {
+ggml_tensor * clip_graph_tiny_voca::conv3(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b) const {
     ggml_tensor * col = ggml_im2col(ctx0, w, x, 1, 0, 1, 0, 1, 0, false, GGML_TYPE_F32);
     ggml_tensor * y = ggml_mul_mat(ctx0,
             ggml_reshape_2d(ctx0, col, col->ne[0], col->ne[1] * col->ne[2]),
@@ -16,7 +16,7 @@ ggml_tensor * mtmd_graph_tiny_voca::conv3(ggml_tensor * x, ggml_tensor * w, ggml
     return ggml_add(ctx0, y, ggml_reshape_2d(ctx0, b, 1, b->ne[0]));
 }
 
-ggml_cgraph * mtmd_graph_tiny_voca::build() {
+ggml_cgraph * clip_graph_tiny_voca::build() {
     const auto & tv = model.tiny_voca;
 
     ggml_tensor * inp = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_rows);
@@ -24,7 +24,7 @@ ggml_cgraph * mtmd_graph_tiny_voca::build() {
     ggml_set_input(inp);
 
     ggml_tensor * cur;
-    if (gen_process == MTMD_SUBCTX_GEN_PROCESS_LATENT_IN) {
+    if (gen_process == CLIP_SUBCTX_GEN_PROCESS_LATENT_IN) {
         // duration predictor: (conv, gelu, layer norm) x 2, then a linear layer
         cur = ggml_cont(ctx0, ggml_transpose(ctx0, inp));
         cur = conv3(cur, tv.dur_conv1_w, tv.dur_conv1_b);
@@ -35,7 +35,7 @@ ggml_cgraph * mtmd_graph_tiny_voca::build() {
         cur = build_norm(cur, tv.dur_norm2_w, tv.dur_norm2_b, NORM_TYPE_NORMAL, eps, -1);
         cur = ggml_add(ctx0, build_mm(tv.dur_out_w, cur), tv.dur_out_b);
     } else {
-        GGML_ASSERT(gen_process == MTMD_SUBCTX_GEN_PROCESS_LATENT_OUT);
+        GGML_ASSERT(gen_process == CLIP_SUBCTX_GEN_PROCESS_LATENT_OUT);
         ggml_tensor * h = ggml_add(ctx0, build_mm(tv.harm_w,  inp), tv.harm_b);
         ggml_tensor * n = ggml_add(ctx0, build_mm(tv.noise_w, inp), tv.noise_b);
         cur = ggml_concat(ctx0, h, n, 0);
@@ -52,7 +52,7 @@ ggml_cgraph * mtmd_graph_tiny_voca::build() {
 
 // band-limited pulse train with unit power, F0 given per frame and interpolated in the log domain
 static void tiny_voca_pulse_train(const std::vector<float> & f0, std::vector<float> & out) {
-    using g = mtmd_graph_tiny_voca;
+    using g = clip_graph_tiny_voca;
     const int64_t n_frames = (int64_t) f0.size();
     std::vector<double> knots(n_frames + 1);
     for (int64_t i = 0; i < n_frames; i++) {
@@ -87,7 +87,7 @@ static void tiny_voca_filter(const std::vector<float> & src, int n_fft, int hop,
     const int64_t n_stft = 1 + n_pad / hop;        // frames, center = true
     const int64_t n_full = n_pad + n_fft;          // with the center padding
 
-    mtmd_audio_cache cache;
+    clip_audio_cache cache;
     cache.fill_sin_cos_table(n_fft);
     cache.fill_hann_window(n_fft, true);
     const float * win = cache.hann_window.data();
@@ -103,7 +103,7 @@ static void tiny_voca_filter(const std::vector<float> & src, int n_fft, int hop,
         std::fill(cbuf.begin(), cbuf.end(), 0.0f);
         cep(j, cbuf.data());
         std::copy(cbuf.begin(), cbuf.end(), rin.begin());
-        mtmd_audio_fft(cache, rin.data(), n_fft, rout.data());
+        clip_audio_fft(cache, rin.data(), n_fft, rout.data());
         for (int k = 0; k < n_bins; k++) {
             const float mag = std::exp(std::clamp(rout[2 * k], -14.0f, 6.0f));
             resp[2 * k + 0] = mag * std::cos(rout[2 * k + 1]);
@@ -115,7 +115,7 @@ static void tiny_voca_filter(const std::vector<float> & src, int n_fft, int hop,
         for (int i = 0; i < n_fft; i++) {
             fin[i] = seg[i] * win[i];
         }
-        mtmd_audio_fft(cache, fin.data(), n_fft, fout.data());
+        clip_audio_fft(cache, fin.data(), n_fft, fout.data());
 
         // filtered spectrum, mirrored for the complex inverse FFT; irfft ignores the imaginary parts of DC and Nyquist
         for (int k = 0; k < n_bins; k++) {
@@ -128,7 +128,7 @@ static void tiny_voca_filter(const std::vector<float> & src, int n_fft, int hop,
             rin[2 * (n_fft - k) + 0] =  rin[2 * k + 0];
             rin[2 * (n_fft - k) + 1] = -rin[2 * k + 1];
         }
-        mtmd_audio_ifft(cache, rin.data(), n_fft, rout.data());
+        clip_audio_ifft(cache, rin.data(), n_fft, rout.data());
 
         float * o = ola.data() + j * hop;
         float * e = env.data() + j * hop;
@@ -145,7 +145,7 @@ static void tiny_voca_filter(const std::vector<float> & src, int n_fft, int hop,
     }
 }
 
-void mtmd_graph_tiny_voca::synth(const std::vector<float> & voc, const std::vector<float> & f0, std::mt19937 & rng, std::vector<float> & audio) {
+void clip_graph_tiny_voca::synth(const std::vector<float> & voc, const std::vector<float> & f0, std::mt19937 & rng, std::vector<float> & audio) {
     const int64_t n_frames = (int64_t) f0.size();
     GGML_ASSERT(n_frames > 0 && voc.size() == (size_t) (n_frames * n_voc));
 
@@ -196,7 +196,7 @@ void mtmd_graph_tiny_voca::synth(const std::vector<float> & voc, const std::vect
 //
 
 static const char * const tiny_voca_g2p_letters = "abcdefghijklmnopqrstuvwxyz'";
-static const char * const tiny_voca_g2p_symbols[mtmd_graph_tiny_voca::n_g2p_symbol] = {
+static const char * const tiny_voca_g2p_symbols[clip_graph_tiny_voca::n_g2p_symbol] = {
     "AA0", "AA1", "AA2", "AE0", "AE1", "AE2", "AH0", "AH1", "AH2", "AO0", "AO1", "AO2", "AW0", "AW1", "AW2", "AY0", "AY1", "AY2",
     "B", "CH", "D", "DH", "EH0", "EH1", "EH2", "ER0", "ER1", "ER2", "EY0", "EY1", "EY2", "F", "G", "HH",
     "IH0", "IH1", "IH2", "IY0", "IY1", "IY2", "JH", "K", "L", "M", "N", "NG", "OW0", "OW1", "OW2", "OY0", "OY1", "OY2",
@@ -206,7 +206,7 @@ static const char * const tiny_voca_g2p_symbols[mtmd_graph_tiny_voca::n_g2p_symb
 // one direction of a GRU layer over x [n, n_in] -> y [n, n_hidden], written at column offset of rows of width stride
 // the products are summed in double and rounded once, as close as can be to the reference (numpy, float32): two
 // symbols are sometimes almost as likely, and the order of a float32 sum would decide between them
-static void tiny_voca_gru(const mtmd_tiny_voca::g2p_gru & g, const std::vector<float> & x, int64_t n, int64_t n_in, int64_t n_hidden,
+static void tiny_voca_gru(const clip_tiny_voca::g2p_gru & g, const std::vector<float> & x, int64_t n, int64_t n_in, int64_t n_hidden,
         bool reverse, std::vector<float> & y, int64_t offset, int64_t stride) {
     const int64_t h3 = 3 * n_hidden;
     std::vector<float> inp((size_t) (n * h3));
@@ -243,7 +243,7 @@ static void tiny_voca_gru(const mtmd_tiny_voca::g2p_gru & g, const std::vector<f
     }
 }
 
-std::string mtmd_graph_tiny_voca::g2p(const mtmd_tiny_voca & tv, const std::string & word) {
+std::string clip_graph_tiny_voca::g2p(const clip_tiny_voca & tv, const std::string & word) {
     const int64_t w = tv.g2p_n_width;
     const int64_t h = tv.g2p_n_hidden;
     if (w == 0 || tv.g2p_layers.empty()) {

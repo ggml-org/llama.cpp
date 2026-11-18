@@ -26,6 +26,11 @@ struct clip_gen_ctx {
     llama_model * yue2_nar = nullptr;
     llama_flash_attn_type yue2_flash_attn = LLAMA_FLASH_ATTN_TYPE_AUTO;
 
+    // tiny-voca: the frame stacks, run on llama_contexts of their own, see clip_gen_wav_tiny_voca()
+    llama_model * tiny_voca_prosody  = nullptr;
+    llama_model * tiny_voca_acoustic = nullptr;
+    llama_flash_attn_type tiny_voca_flash_attn = LLAMA_FLASH_ATTN_TYPE_AUTO;
+
     int64_t n_embd_out() const {
         return ctx_a ? ctx_a->model.n_mmproj_embd() : ctx_gen_a->model.n_mmproj_embd();
     }
@@ -47,5 +52,12 @@ const char *     clip_gen_audio_voice_name(const clip_gen_ctx * ctx, int32_t idx
 // chatterbox: the reference encode of a speaker clip, sets ctx->gen_ref
 int32_t          clip_cbx_ref_encode(clip_gen_ctx * ctx, const clip_audio_tokens * audio_tokens, std::vector<float> & out_embd);
 
-// yue2: the NAR layers of the mmproj as a llama_model, nullptr on failure
+// qwen3tts: the reference codes of a speaker clip (frame-major) and one talker input row per reference frame
+int32_t          clip_qwen3tts_ref_codes(clip_gen_ctx * ctx, const clip_image_f32 & wav, std::vector<int32_t> & codes, std::vector<float> & rows);
+
+// pronunciation of a word by the letter-to-sound model of the gen tower, see llama_model_gen_g2p()
+int32_t          clip_gen_audio_g2p(const clip_model & model, const char * word, char * buf, size_t buf_size);
+
+// the stages of the mmproj that are libllama text models (yue2 NAR, tiny-voca frame stacks), nullptr on failure
 llama_model *    clip_yue2_nar_load(const char * fname, ggml_backend_dev_t device, const clip_hparams & hparams);
+llama_model *    clip_tiny_voca_stack_load(const char * fname, ggml_backend_dev_t device, const clip_hparams & hparams, const char * prefix, int n_layer);

@@ -34,8 +34,16 @@ ggml_cgraph * clip_graph_muse_glimmer::build() {
     ggml_tensor * sp_mask = build_inp_attn_mask(n_tok, n_tok);
 
     // patchify via build_inp (conv2d over raw pixels) + bilinear-resized learned pos-emb
+    // pos-emb grid is resized with height and width swapped, to match the trainer reference
+    const int n_per_side = (int) std::sqrt(model.position_embeddings->ne[1]);
+    ggml_tensor * pos_embd = ggml_reshape_3d(ctx0, model.position_embeddings, n_embd, n_per_side, n_per_side);
+    pos_embd = ggml_permute(ctx0, pos_embd, 2, 0, 1, 3);
+    pos_embd = ggml_interpolate(ctx0, pos_embd, n_patches_y, n_patches_x, n_embd, 1, GGML_SCALE_MODE_BILINEAR);
+    pos_embd = ggml_permute(ctx0, pos_embd, 1, 2, 0, 3);
+    pos_embd = ggml_cont_2d(ctx0, pos_embd, n_embd, n_tok);
+
     ggml_tensor * x = build_inp();                                                     // [n_embd, n_tok, 1]
-    x = ggml_add(ctx0, x, resize_position_embeddings(GGML_SCALE_MODE_BILINEAR));
+    x = ggml_add(ctx0, x, pos_embd);
     cb(x, "after_posemb", -1);
 
     // group patches into pgrid x pgrid windows (sparse attention order)

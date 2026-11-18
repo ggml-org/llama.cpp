@@ -2,7 +2,7 @@
 
 // SnakeBeta, alpha and beta folded at conversion: x + beta * sin(alpha * x)^2
 // x: [T, C], alpha/beta: [C]
-ggml_tensor * mtmd_graph_snake_vae::snake(ggml_tensor * x, const mtmd_snake_vae::snake & s) const {
+ggml_tensor * clip_graph_snake_vae::snake(ggml_tensor * x, const clip_snake_vae::snake & s) const {
     ggml_tensor * a = ggml_reshape_2d(ctx0, s.alpha, 1, s.alpha->ne[0]);
     ggml_tensor * b = ggml_reshape_2d(ctx0, s.beta,  1, s.beta->ne[0]);
 
@@ -16,7 +16,7 @@ ggml_tensor * mtmd_graph_snake_vae::snake(ggml_tensor * x, const mtmd_snake_vae:
 
 // same-length conv, stride 1; x: [T, IC], w: [K, IC, OC], returns [T, OC]
 // im2col in F32: the reference decoders run in FP32
-ggml_tensor * mtmd_graph_snake_vae::conv1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int dilation) const {
+ggml_tensor * clip_graph_snake_vae::conv1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int dilation) const {
     const int pad = (int) (w->ne[0] - 1) / 2 * dilation;
     ggml_tensor * col = ggml_im2col(ctx0, w, x, 1, 0, pad, 0, dilation, 0, false, GGML_TYPE_F32); // [1, T, IC * K]
     ggml_tensor * y = ggml_mul_mat(ctx0,
@@ -28,7 +28,7 @@ ggml_tensor * mtmd_graph_snake_vae::conv1d(ggml_tensor * x, ggml_tensor * w, ggm
     return y;
 }
 
-ggml_tensor * mtmd_graph_snake_vae::build_snake_vae(ggml_tensor * x, const mtmd_snake_vae & vae) const {
+ggml_tensor * clip_graph_snake_vae::build_snake_vae(ggml_tensor * x, const clip_snake_vae & vae) const {
     static constexpr int dilations[3] = { 1, 3, 9 };
 
     if (vae.in_proj_w) {

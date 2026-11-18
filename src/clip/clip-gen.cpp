@@ -17,27 +17,39 @@ static bool cbx_is_mtl(const clip_model & model) {
     return clip_cbx_is_mtl(model);
 }
 
-struct yue2_nar_source {
+// a stage of the mmproj that is a libllama text model: its layers are stored under a prefix, with the libllama names
+// libllama loads them from a synthetic GGUF: gdst holds the arch hparams, the tensor data is read from the mmproj file
+struct clip_owned_llama_source {
     std::ifstream f;
     std::map<std::string, std::pair<size_t, size_t>> tensors; // name in the synthetic model -> offset and size in the mmproj
 };
 
-static void yue2_nar_set_tensor_data(ggml_tensor * t, void * user_data) {
-    auto * src = (yue2_nar_source *) user_data;
+static void clip_owned_llama_set_tensor_data(ggml_tensor * t, void * user_data) {
+    auto * src = (clip_owned_llama_source *) user_data;
     std::vector<uint8_t> buf(ggml_nbytes(t), 0);
     const std::string name = t->name;
     auto it = src->tensors.find(name);
     if (it != src->tensors.end()) {
         if (it->second.second != buf.size()) {
-            throw std::runtime_error(clip_format("yue2: unexpected size of %s", t->name));
+            throw std::runtime_error(clip_format("unexpected size of %s", t->name));
         }
         src->f.seekg((std::streamoff) it->second.first, std::ios::beg);
         if (!src->f.read((char *) buf.data(), (std::streamsize) buf.size())) {
-            throw std::runtime_error(clip_format("yue2: failed to read %s", t->name));
+            throw std::runtime_error(clip_format("failed to read %s", t->name));
         }
     } else {
         // optional tensors that libllama creates by itself, give them neutral values (scale = 1, dense_2 = identity, others = 0)
-        GGML_ASSERT(t->type == GGML_TYPE_F32);
+        // any other missing tensor is an error: a weight left at 0 gives wrong output without any error
+        // (e.g. a model built from metadata has separate q, k, v and no fused qkv)
+        auto ends_with = [&](const char * suffix) {
+            const size_t n = strlen(suffix);
+            return name.size() >= n && name.compare(name.size() - n, n, suffix) == 0;
+        };
+        const bool optional = ends_with("scale") || ends_with(".bias") || name == "dense_2.weight" ||
+                              name == "token_embd.weight" || name == "output.weight"; // inputs are embedding rows, outputs are hidden states
+        if (!optional || t->type != GGML_TYPE_F32) {
+            throw std::runtime_error(clip_format("tensor %s is missing from the mmproj", t->name));
+        }
         float * w = (float *) buf.data();
         if (name.size() >= 5 && name.compare(name.size() - 5, 5, "scale") == 0) {
             std::fill(w, w + ggml_nelements(t), 1.0f);
@@ -51,15 +63,52 @@ static void yue2_nar_set_tensor_data(ggml_tensor * t, void * user_data) {
     ggml_backend_tensor_set(t, buf.data(), 0, buf.size());
 }
 
-llama_model * clip_yue2_nar_load(const char * fname, ggml_backend_dev_t device, const clip_hparams & hparams) {
+// the layers are the tensors "<prefix>blk.*" and "<prefix>output_norm.*" of the mmproj, n_tensors receives their count
+static llama_model * clip_owned_llama_load(const char * fname, ggml_backend_dev_t device, gguf_context * gdst, const std::string & prefix, size_t & n_tensors) {
     ggml_context * meta = nullptr;
     gguf_init_params gparams = { /*no_alloc =*/ true, /*ctx =*/ &meta };
     gguf_context_ptr gsrc(gguf_init_from_file(fname, gparams));
     ggml_context_ptr meta_ptr(meta);
     if (!gsrc) {
-        throw std::runtime_error(clip_format("yue2: failed to read %s", fname));
+        throw std::runtime_error(clip_format("failed to read %s", fname));
     }
 
+    clip_owned_llama_source src;
+    for (int64_t i = 0; i < gguf_get_n_tensors(gsrc.get()); i++) {
+        const std::string name = gguf_get_tensor_name(gsrc.get(), i);
+        if (name.rfind(prefix + "blk.", 0) != 0 && name.rfind(prefix + "output_norm.", 0) != 0) {
+            continue;
+        }
+        // the synthetic model only takes the type from here, the shapes come from the hparams
+        ggml_tensor t = *ggml_get_tensor(meta, name.c_str());
+        ggml_set_name(&t, name.substr(prefix.size()).c_str());
+        gguf_add_tensor(gdst, &t);
+        src.tensors[t.name] = { gguf_get_data_offset(gsrc.get()) + gguf_get_tensor_offset(gsrc.get(), i), ggml_nbytes(&t) };
+    }
+    n_tensors = src.tensors.size();
+    src.f = open_ifstream_binary(fname);
+    if (!src.f) {
+        throw std::runtime_error(clip_format("failed to open %s", fname));
+    }
+
+    llama_model_params mparams = llama_model_default_params();
+    std::vector<ggml_backend_dev_t> devs;
+    if (device && ggml_backend_dev_type(device) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+        devs = { device, nullptr };
+        mparams.devices      = devs.data();
+        mparams.n_gpu_layers = -1;
+    } else {
+        mparams.n_gpu_layers = 0;
+    }
+    llama_model * model = llama_model_init_from_user(gdst, clip_owned_llama_set_tensor_data, &src, mparams);
+    if (!model) {
+        throw std::runtime_error(clip_format("failed to load the layers under %s", prefix.c_str()));
+    }
+    return model;
+}
+
+// yue2: the NAR layers are a qwen3 text model
+llama_model * clip_yue2_nar_load(const char * fname, ggml_backend_dev_t device, const clip_hparams & hparams) {
     const llm_arch arch = LLM_ARCH_QWEN3;
     gguf_context_ptr gdst(gguf_init_empty());
     auto key = [&](llm_kv kv) { return llama_arch_kv_name(arch, kv); };
@@ -75,39 +124,38 @@ llama_model * clip_yue2_nar_load(const char * fname, ggml_backend_dev_t device, 
     gguf_set_val_f32(gdst.get(), key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS).c_str(),   hparams.eps);
     gguf_set_val_f32(gdst.get(), key(LLM_KV_ROPE_FREQ_BASE).c_str(),                clip_graph_yue2_gen::rope_theta);
 
-    yue2_nar_source src;
-    const std::string prefix = "a.gen.nar.";
-    for (int64_t i = 0; i < gguf_get_n_tensors(gsrc.get()); i++) {
-        const std::string name = gguf_get_tensor_name(gsrc.get(), i);
-        if (name.rfind(prefix + "blk.", 0) != 0 && name != prefix + "output_norm.weight") {
-            continue;
-        }
-        // the synthetic model only takes the type from here, the shapes come from the hparams
-        ggml_tensor t = *ggml_get_tensor(meta, name.c_str());
-        ggml_set_name(&t, name.substr(prefix.size()).c_str());
-        gguf_add_tensor(gdst.get(), &t);
-        src.tensors[t.name] = { gguf_get_data_offset(gsrc.get()) + gguf_get_tensor_offset(gsrc.get(), i), ggml_nbytes(&t) };
-    }
-    if (src.tensors.size() != (size_t) hparams.n_layer * 11 + 1) {
+    size_t n_tensors = 0;
+    llama_model * model = clip_owned_llama_load(fname, device, gdst.get(), "a.gen.nar.", n_tensors);
+    if (n_tensors != (size_t) hparams.n_layer * 11 + 1) {
+        llama_model_free(model);
         throw std::runtime_error("yue2: unexpected NAR tensors in the mmproj");
     }
-    src.f = open_ifstream_binary(fname);
-    if (!src.f) {
-        throw std::runtime_error(clip_format("yue2: failed to open %s", fname));
-    }
+    return model;
+}
 
-    llama_model_params mparams = llama_model_default_params();
-    std::vector<ggml_backend_dev_t> devs;
-    if (device && ggml_backend_dev_type(device) != GGML_BACKEND_DEVICE_TYPE_CPU) {
-        devs = { device, nullptr };
-        mparams.devices      = devs.data();
-        mparams.n_gpu_layers = -1;
-    } else {
-        mparams.n_gpu_layers = 0;
-    }
-    llama_model * model = llama_model_init_from_user(gdst.get(), yue2_nar_set_tensor_data, &src, mparams);
-    if (!model) {
-        throw std::runtime_error("yue2: failed to load the NAR layers");
+// tiny-voca: the prosody and acoustic stacks, same arch as the text model
+llama_model * clip_tiny_voca_stack_load(const char * fname, ggml_backend_dev_t device, const clip_hparams & hparams, const char * prefix, int n_layer) {
+    const llm_arch arch = LLM_ARCH_TINY_VOCA;
+    gguf_context_ptr gdst(gguf_init_empty());
+    auto key = [&](llm_kv kv) { return llama_arch_kv_name(arch, kv); };
+    gguf_set_val_str(gdst.get(), key(LLM_KV_GENERAL_ARCHITECTURE).c_str(), llama_arch_name(arch));
+    gguf_set_val_str(gdst.get(), key(LLM_KV_TOKENIZER_MODEL).c_str(),       "none");
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_VOCAB_SIZE).c_str(),                    1);
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_CONTEXT_LENGTH).c_str(),                clip_graph_tiny_voca::n_max_frames);
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_EMBEDDING_LENGTH).c_str(),              hparams.n_embd);
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_FEED_FORWARD_LENGTH).c_str(),           hparams.n_ff);
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_BLOCK_COUNT).c_str(),                   n_layer);
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_ATTENTION_HEAD_COUNT).c_str(),          hparams.n_head);
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_ATTENTION_HEAD_COUNT_KV).c_str(),       hparams.n_head);
+    gguf_set_val_f32(gdst.get(), key(LLM_KV_ATTENTION_LAYERNORM_EPS).c_str(),       hparams.eps);
+    gguf_set_val_f32(gdst.get(), key(LLM_KV_ROPE_FREQ_BASE).c_str(),                clip_graph_tiny_voca::rope_theta);
+    gguf_set_val_bool(gdst.get(), key(LLM_KV_ATTENTION_CAUSAL).c_str(),             false);
+
+    size_t n_tensors = 0;
+    llama_model * model = clip_owned_llama_load(fname, device, gdst.get(), prefix, n_tensors);
+    if (n_tensors != (size_t) n_layer * 18 + 2) {
+        llama_model_free(model);
+        throw std::runtime_error(clip_format("tiny_voca: unexpected tensors under %s in the mmproj", prefix));
     }
     return model;
 }
@@ -157,15 +205,40 @@ llama_gen_info clip_gen_audio_get_info(const clip_gen_ctx * ctx) {
             info.sample_rate = 48000;
             info.n_channels  = clip_graph_yue2_gen::n_channels;
             break;
+        case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
+            info.type = LLAMA_GEN_AUDIO_TYPE_MINIMAX_MUSIC3;
+            info.sample_rate = 44100;
+            info.n_channels  = clip_graph_music3_gen::n_channels;
+            break;
         case PROJECTOR_TYPE_FISH_S2_GEN:
             info.type = LLAMA_GEN_AUDIO_TYPE_FISH_S2;
             info.sample_rate = 44100;
+            break;
+        case PROJECTOR_TYPE_KOKORO:
+            info.type = LLAMA_GEN_AUDIO_TYPE_KOKORO;
+            info.sample_rate = 24000;
+            break;
+        case PROJECTOR_TYPE_TINY_VOCA:
+            info.type = LLAMA_GEN_AUDIO_TYPE_TINY_VOCA;
+            info.sample_rate = 24000;
             break;
         default:
             info.type = LLAMA_GEN_AUDIO_TYPE_NONE;
             break;
     }
     return info;
+}
+
+int32_t clip_gen_audio_g2p(const clip_model & model, const char * word, char * buf, size_t buf_size) {
+    std::string out;
+    if (model.proj_type == PROJECTOR_TYPE_TINY_VOCA) {
+        out = clip_graph_tiny_voca::g2p(model.tiny_voca, word);
+    }
+    if (out.size() + 1 > buf_size) {
+        return -1;
+    }
+    memcpy(buf, out.c_str(), out.size() + 1);
+    return (int32_t) out.size();
 }
 
 size_t clip_gen_audio_read_tensor(clip_gen_ctx * ctx, const char * name, float * out, size_t n_max) {
@@ -464,6 +537,29 @@ static int32_t cbx_ref_cond(clip_gen_ctx * ctx, const clip_image_f32 & ve_mel,
 }
 
 // talker conditioning rows go to out_embd, the flow decoder reference to ctx->gen_ref
+// qwen3tts: the reference codes of a speaker clip and one talker input row per reference frame, see the tokenizer
+int32_t clip_qwen3tts_ref_codes(clip_gen_ctx * ctx, const clip_image_f32 & wav, std::vector<int32_t> & codes, std::vector<float> & rows) {
+    if (!ctx->ctx_gen_a || !ctx->ctx_gen_a->model.has_ref_encoder()) {
+        LOG_ERR("%s: the gen tower has no reference encoder\n", __func__);
+        return 1;
+    }
+    clip_image_f32_batch batch;
+    batch.is_audio = true;
+    batch.entries.push_back(wav);
+
+    clip_subctx_encode_params params;
+    params.imgs          = &batch;
+    params.n_threads     = ctx->n_threads;
+    params.gen_process   = CLIP_SUBCTX_GEN_PROCESS_TOKENIZE;
+    params.out_codes     = &codes;
+    params.out_code_embd = &rows;
+    if (!ctx->ctx_gen_a->encode(&params)) {
+        LOG_ERR("%s: encode failed (reference codes)\n", __func__);
+        return 1;
+    }
+    return 0;
+}
+
 int32_t clip_cbx_ref_encode(clip_gen_ctx * ctx, const clip_audio_tokens * audio_tokens, std::vector<float> & out_embd) {
     if (!ctx->ctx_gen_a) {
         LOG_ERR("%s: reference encoding needs the audio generation context\n", __func__);
@@ -543,7 +639,8 @@ const char * clip_gen_audio_voice_name(const clip_gen_ctx * ctx, int32_t idx) {
 
 llama_gen_inp clip_gen_inp_default(const clip_gen_ctx * ctx) {
     llama_gen_inp inp{};
-    inp.type = LLAMA_GEN_STAGE_CODE;
+    inp.type  = LLAMA_GEN_STAGE_CODE;
+    inp.speed = 1.0f;
     if (!ctx->ctx_gen_a) {
         return inp;
     }
@@ -562,7 +659,15 @@ llama_gen_inp clip_gen_inp_default(const clip_gen_ctx * ctx) {
             inp.temp  = 0.3f;
             break;
         case PROJECTOR_TYPE_SOPRANO:
+        case PROJECTOR_TYPE_KOKORO:
+        case PROJECTOR_TYPE_TINY_VOCA:
             inp.type = LLAMA_GEN_STAGE_WAV;
+            break;
+        case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
+            // top-k 50 is fixed in the graph, like the reference
+            inp.top_k = 50;
+            inp.top_p = 1.0f;
+            inp.temp  = 1.0f;
             break;
         case PROJECTOR_TYPE_DRAMA3_GEN:
             // codebook heads, same as the reference (sglang-omni fishaudio_drama3)
@@ -612,6 +717,10 @@ struct clip_gen_state {
     // zonos3: the iSTFT head runs on the host
     std::unique_ptr<clip_audio_zonos3_synth> zonos3_synth;
 
+    // minimax_music3: tail of the previous window, the next one starts from it, see clip_gen_wav_music3()
+    std::vector<float> flow_prev_latent;
+    std::vector<float> flow_prev_cond;
+
 
     ~clip_gen_state() {
         delete gen_state;
@@ -648,6 +757,8 @@ void clip_gen_state_reset(clip_gen_state * state) {
         state->istft = std::make_unique<clip_audio_streaming_istft>(hparams->audio_n_fft, hparams->audio_hop_len);
     }
     state->zonos3_synth.reset();
+    state->flow_prev_latent.clear();
+    state->flow_prev_cond.clear();
 }
 
 // zonos3 GEN_WAV: n_codes == 0 flushes and resets the state
@@ -765,8 +876,8 @@ static int32_t clip_gen_wav_lfm3a(clip_gen_ctx * ctx, clip_gen_state * state, co
     return 0;
 }
 
-// yue2: one pass of an mtmd graph, rows in -> rows out (PCM for GEN_WAV)
-static bool yue2_encode(clip_gen_ctx * ctx, clip_gen_state * state, clip_subctx_gen_process proc, const std::vector<float> & in, std::vector<float> & out) {
+// one pass of a graph of the gen tower, rows in -> rows out (PCM for GEN_WAV), used by yue2 and tiny-voca
+static bool gen_encode_rows(clip_gen_ctx * ctx, clip_gen_state * state, clip_subctx_gen_process proc, const std::vector<float> & in, std::vector<float> & out) {
     clip_image_f32 dummy;
     dummy.set_size({1, 1}, false, true);
     dummy.cpy_buf(std::vector<float>(1, 0.0f));
@@ -891,7 +1002,7 @@ static int32_t clip_gen_flow_yue2(clip_gen_ctx * ctx, clip_gen_state * state, co
     std::vector<float> embd, hidden, vel;
     auto velocity = [&](const std::vector<float> & x, double t, std::vector<float> & v) -> bool {
         std::copy(x.begin(), x.end(), x_rows.begin() + g::n_latent); // the start and end rows stay 0
-        if (!yue2_encode(ctx, state, CLIP_SUBCTX_GEN_PROCESS_LATENT_IN, x_rows, embd)) {
+        if (!gen_encode_rows(ctx, state, CLIP_SUBCTX_GEN_PROCESS_LATENT_IN, x_rows, embd)) {
             return false;
         }
         const std::vector<float> temb = time_embd(t);
@@ -917,7 +1028,7 @@ static int32_t clip_gen_flow_yue2(clip_gen_ctx * ctx, clip_gen_state * state, co
         const float * h = llama_get_embeddings(lctx.get());
         hidden.assign(h, h + n_rows * n_embd);
         llama_memory_seq_rm(mem, 0, (llama_pos) n_past, -1);
-        if (!yue2_encode(ctx, state, CLIP_SUBCTX_GEN_PROCESS_LATENT_OUT, hidden, vel)) {
+        if (!gen_encode_rows(ctx, state, CLIP_SUBCTX_GEN_PROCESS_LATENT_OUT, hidden, vel)) {
             return false;
         }
         v.assign(vel.begin() + g::n_latent, vel.end() - g::n_latent);
@@ -956,6 +1067,160 @@ static int32_t clip_gen_flow_yue2(clip_gen_ctx * ctx, clip_gen_state * state, co
     return 0;
 }
 
+// tiny-voca: one pass of a frame stack, embedding rows in -> hidden rows out
+static bool tiny_voca_stack(clip_gen_ctx * ctx, llama_model * model, const std::vector<float> & in, std::vector<float> & out) {
+    const int64_t n_embd = llama_model_n_embd(model);
+    const int32_t n_rows = (int32_t) (in.size() / n_embd);
+
+    llama_context_params cparams = llama_context_default_params();
+    cparams.n_ctx           = (uint32_t) n_rows;
+    cparams.n_batch         = (uint32_t) n_rows;
+    cparams.n_ubatch        = (uint32_t) n_rows; // non-causal, all rows must be in one ubatch
+    cparams.n_seq_max       = 1;
+    cparams.n_threads       = ctx->n_threads;
+    cparams.n_threads_batch = ctx->n_threads;
+    cparams.embeddings      = true;
+    cparams.pooling_type    = LLAMA_POOLING_TYPE_NONE;
+    cparams.attention_type  = LLAMA_ATTENTION_TYPE_NON_CAUSAL;
+    cparams.flash_attn_type = ctx->tiny_voca_flash_attn;
+    cparams.no_perf         = true;
+    llama_context_ptr lctx(llama_init_from_model(model, cparams));
+    if (!lctx) {
+        LOG_ERR("%s: failed to create the context of a frame stack\n", __func__);
+        return false;
+    }
+
+    llama_batch_ext_ptr batch(llama_batch_ext_init(lctx.get()));
+    for (int32_t i = 0; i < n_rows; i++) {
+        const llama_embd row = { in.data() + (size_t) i * n_embd, 1, (size_t) n_embd };
+        const llama_pos  p   = i;
+        const int32_t    idx = llama_batch_ext_add_embd(batch.get(), 0, row);
+        if (idx < 0) {
+            LOG_ERR("%s: failed to add a row to the batch (error %d)\n", __func__, idx);
+            return false;
+        }
+        llama_batch_ext_set_pos(batch.get(), idx, &p);
+        llama_batch_ext_set_output_embd(batch.get(), idx, true);
+    }
+    if (llama_process(lctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
+        LOG_ERR("%s: frame stack decode failed\n", __func__);
+        return false;
+    }
+    const float * h = llama_get_embeddings(lctx.get());
+    out.assign(h, h + (size_t) n_rows * n_embd);
+    return true;
+}
+
+// tiny-voca GEN_WAV: phoneme tokens + encoder states -> waveform, see TinyVoca.synthesize() in the reference (model.py)
+// codes: the tokens; feats: the voice row (encoder half, frame half), then the encoder state of each token
+static int32_t clip_gen_wav_tiny_voca(clip_gen_ctx * ctx, clip_gen_state * state, const llama_gen_inp * inp, llama_gen_out * out) {
+    using g = clip_graph_tiny_voca;
+    const auto &  tv     = ctx->ctx_gen_a->model.tiny_voca;
+    const int64_t n_embd = ctx->ctx_gen_a->model.hparams.n_embd;
+    const int64_t n_tok  = (int64_t) inp->n_codes;
+
+    if (inp->type != LLAMA_GEN_STAGE_WAV || !inp->codes || n_tok == 0 || !inp->feats ||
+            inp->n_feats != (size_t) ((2 + n_tok) * n_embd)) {
+        LOG_ERR("%s: tiny_voca requires the phoneme tokens, the voice row and the encoder state of each token\n", __func__);
+        return 1;
+    }
+    if (!std::isfinite(inp->speed) || inp->speed < 0.25f || inp->speed > 4.0f) {
+        LOG_ERR("%s: speed must be between 0.25 and 4\n", __func__);
+        return 1;
+    }
+    for (int64_t i = 0; i < n_tok; i++) {
+        if (inp->codes[i] < 0 || inp->codes[i] >= (int32_t) tv.token_class.size()) {
+            LOG_ERR("%s: token out of range (%d)\n", __func__, inp->codes[i]);
+            return 1;
+        }
+    }
+    const float * frame_voice = inp->feats + n_embd;
+    const std::vector<float> hidden(inp->feats + 2 * n_embd, inp->feats + inp->n_feats);
+
+    std::vector<float> dur_out;
+    if (!gen_encode_rows(ctx, state, CLIP_SUBCTX_GEN_PROCESS_LATENT_IN, hidden, dur_out) || dur_out.size() != (size_t) (2 * n_tok)) {
+        LOG_ERR("%s: duration predictor failed\n", __func__);
+        return 1;
+    }
+
+    // frames per token: a phone lasts at least one frame, a pause token only when its presence logit is > 0
+    std::vector<int64_t> dur(n_tok);
+    int64_t n_frames = 0;
+    for (int64_t i = 0; i < n_tok; i++) {
+        const float  o0     = std::clamp(dur_out[2 * i], 0.0f, std::log1p(g::max_dur));
+        const double frames = std::max(1.0, std::nearbyint((double) std::expm1(o0) / inp->speed));
+        const bool   phone  = tv.token_class[inp->codes[i]] > 0.0f;
+        dur[i] = phone || dur_out[2 * i + 1] > 0.0f ? (int64_t) frames : 0;
+        n_frames += dur[i];
+    }
+    if (n_frames < 1 || n_frames > g::n_max_frames) {
+        LOG_ERR("%s: the utterance has %lld frames, it must have 1 to %d, split the text\n", __func__, (long long) n_frames, g::n_max_frames);
+        return 1;
+    }
+
+    // token states repeated by their duration, plus the position inside the token and the frame voice
+    std::vector<float>   x((size_t) (n_frames * n_embd));
+    std::vector<int64_t> owner(n_frames);
+    for (int64_t i = 0, f = 0; i < n_tok; i++) {
+        for (int64_t o = 0; o < dur[i]; o++, f++) {
+            const float rel  = ((float) o + 0.5f) / (float) dur[i];
+            const float feat[3] = { rel, 1.0f - rel, std::log1p((float) dur[i]) / 4.0f };
+            float * row = x.data() + f * n_embd;
+            for (int64_t c = 0; c < n_embd; c++) {
+                const float * w = tv.frame_pos_w.data() + c * 3;
+                row[c] = hidden[i * n_embd + c] + tv.frame_pos_b[c] + w[0] * feat[0] + w[1] * feat[1] + w[2] * feat[2] + frame_voice[c];
+            }
+            owner[f] = i;
+        }
+    }
+
+    std::vector<float> h_pro;
+    if (!tiny_voca_stack(ctx, ctx->tiny_voca_prosody, x, h_pro)) {
+        return 1;
+    }
+
+    // pitch, voicing and energy; the frames of a vowel are always voiced
+    std::vector<float> f0(n_frames);
+    for (int64_t f = 0; f < n_frames; f++) {
+        float p[3];
+        const float * h = h_pro.data() + f * n_embd;
+        for (int k = 0; k < 3; k++) {
+            const float * w = tv.prosody_head_w.data() + k * n_embd;
+            float acc = tv.prosody_head_b[k];
+            for (int64_t c = 0; c < n_embd; c++) {
+                acc += w[c] * h[c];
+            }
+            p[k] = acc;
+        }
+        if (tv.token_class[inp->codes[owner[f]]] == 2.0f) {
+            p[1] = std::max(p[1], 2.0f);
+        }
+        f0[f] = std::clamp(g::f0_ref * std::exp(p[0]), g::f0_min, g::f0_max);
+
+        // the acoustic stack is conditioned on the clamped pitch and energy and the hard voicing decision
+        const float cond[3] = { std::clamp(p[0], -2.0f, 1.5f), p[1] > 0.0f ? 1.0f : 0.0f, std::clamp(p[2], -4.5f, 3.0f) };
+        float * row = x.data() + f * n_embd;
+        for (int64_t c = 0; c < n_embd; c++) {
+            const float * w = tv.prosody_proj_w.data() + c * 3;
+            row[c] = h[c] + tv.prosody_proj_b[c] + w[0] * cond[0] + w[1] * cond[1] + w[2] * cond[2];
+        }
+    }
+
+    std::vector<float> h_ac, voc;
+    if (!tiny_voca_stack(ctx, ctx->tiny_voca_acoustic, x, h_ac)) {
+        return 1;
+    }
+    if (!gen_encode_rows(ctx, state, CLIP_SUBCTX_GEN_PROCESS_LATENT_OUT, h_ac, voc) || voc.size() != (size_t) (n_frames * g::n_voc)) {
+        LOG_ERR("%s: source-filter heads failed\n", __func__);
+        return 1;
+    }
+
+    g::synth(voc, f0, state->gen_state->rng, state->out_audio);
+    out->audio     = state->out_audio.data();
+    out->n_samples = state->out_audio.size();
+    return 0;
+}
+
 // yue2 GEN_WAV: latents -> interleaved stereo PCM in one VAE pass, the caller splits a long song into tiles
 static int32_t clip_gen_wav_yue2(clip_gen_ctx * ctx, clip_gen_state * state, const llama_gen_inp * inp, llama_gen_out * out) {
     using g = clip_graph_yue2_gen;
@@ -965,7 +1230,7 @@ static int32_t clip_gen_wav_yue2(clip_gen_ctx * ctx, clip_gen_state * state, con
     }
     const std::vector<float> feats(inp->feats, inp->feats + inp->n_feats);
     auto & audio = state->out_audio;
-    if (!yue2_encode(ctx, state, CLIP_SUBCTX_GEN_PROCESS_GEN_WAV, feats, audio)) {
+    if (!gen_encode_rows(ctx, state, CLIP_SUBCTX_GEN_PROCESS_GEN_WAV, feats, audio)) {
         LOG_ERR("%s: encode failed (vae)\n", __func__);
         return 1;
     }
@@ -975,6 +1240,154 @@ static int32_t clip_gen_wav_yue2(clip_gen_ctx * ctx, clip_gen_state * state, con
 
     out->audio     = audio.data();
     out->n_samples = audio.size();
+    return 0;
+}
+
+// minimax_music3: one pass of an mtmd graph on rows of floats
+static bool music3_encode(clip_gen_ctx * ctx, clip_gen_state * state, clip_subctx_encode_params & params, const std::vector<float> & in) {
+    clip_image_f32 dummy;
+    dummy.set_size({1, 1}, false, true);
+    dummy.cpy_buf(std::vector<float>(1, 0.0f));
+    clip_image_f32_batch batch;
+    batch.is_audio = true;
+    batch.entries.push_back(std::move(dummy));
+
+    params.imgs      = &batch;
+    params.n_threads = ctx->n_threads;
+    params.feats     = &in;
+    params.gen_state = state->gen_state;
+    return ctx->ctx_gen_a->encode(&params);
+}
+
+// minimax_music3 GEN_CODE: the depth decoder of one frame, see _generate_depth_codes() of the reference (encoders.py)
+static int32_t clip_gen_code_music3(clip_gen_ctx * ctx, clip_gen_state * state, const llama_gen_inp * inp, llama_gen_out * out) {
+    using g = clip_graph_music3_gen;
+    const size_t n_embd = (size_t) ctx->ctx_gen_a->model.n_mmproj_embd();
+    if (!inp->feats || (inp->n_feats != n_embd && inp->n_feats != 2 * n_embd)) {
+        LOG_ERR("%s: minimax_music3 needs 1 or 2 backbone hidden rows\n", __func__);
+        return 1;
+    }
+    const std::vector<float> rows(inp->feats, inp->feats + inp->n_feats);
+
+    std::vector<float> out_embd(n_embd);
+    clip_subctx_encode_params params;
+    params.gen_process = CLIP_SUBCTX_GEN_PROCESS_GEN_CODE;
+    params.out_embd    = &out_embd;
+    params.out_codes   = &state->out_codes;
+    params.out_feats   = &state->out_feats;
+    params.code0       = inp->code0;
+    params.cfg_scale   = inp->cfg_scale > 0.0f ? inp->cfg_scale : g::depth_cfg;
+    params.temp        = inp->temp;
+    if (!music3_encode(ctx, state, params, rows)) {
+        LOG_ERR("%s: encode failed (depth decoder)\n", __func__);
+        return 1;
+    }
+    state->out_embd = std::move(out_embd);
+
+    out->embd    = state->out_embd.data();
+    out->codes   = state->out_codes.data();
+    out->n_codes = state->out_codes.size();
+    out->feats   = state->out_feats.data();
+    out->n_feats = state->out_feats.size();
+    return 0;
+}
+
+// minimax_music3 GEN_WAV: condition rows of one window -> flow matching -> vocoder, see denoise.py of the reference
+// a window starts from the tail of the previous one, kept in the state
+static int32_t clip_gen_wav_music3(clip_gen_ctx * ctx, clip_gen_state * state, const llama_gen_inp * inp, llama_gen_out * out) {
+    using g = clip_graph_music3_gen;
+    const auto & m = ctx->ctx_gen_a->model.music3;
+    const size_t n_embd = (size_t) ctx->ctx_gen_a->model.hparams.n_embd;
+    const size_t n_cond = (size_t) m.cond_w->ne[2];
+    const size_t n_in   = (size_t) m.pre_w->ne[0]; // [latent, zeros, condition]
+    const size_t n_lc   = g::n_latent;
+    if (!inp->feats || inp->n_feats == 0 || inp->n_feats % n_embd != 0) {
+        LOG_ERR("%s: minimax_music3 needs whole condition rows\n", __func__);
+        return 1;
+    }
+    const std::vector<float> rows(inp->feats, inp->feats + inp->n_feats);
+
+    std::vector<float> cond;
+    {
+        clip_subctx_encode_params params;
+        params.gen_process = CLIP_SUBCTX_GEN_PROCESS_FLOW_COND;
+        params.out_feats   = &cond;
+        if (!music3_encode(ctx, state, params, rows)) {
+            LOG_ERR("%s: encode failed (condition)\n", __func__);
+            return 1;
+        }
+    }
+    const size_t n_lat = cond.size() / n_cond;
+
+    // the overlap takes the condition of the previous window, its latents are blended toward the previous ones
+    auto & prev_lat  = state->flow_prev_latent;
+    auto & prev_cond = state->flow_prev_cond;
+    const size_t n_ov = std::min(prev_lat.size() / n_lc, n_lat);
+    std::copy(prev_cond.begin(), prev_cond.begin() + n_ov * n_cond, cond.begin());
+
+    std::normal_distribution<float> dist(0.0f, 1.0f);
+    std::vector<float> x(n_lat * n_lc);
+    for (auto & v : x) {
+        v = dist(state->gen_state->rng);
+    }
+    const std::vector<float> noise_ov(x.begin(), x.begin() + n_ov * n_lc);
+
+    // batch 0 is conditioned, batch 1 has a zero condition
+    std::vector<float> dit_in(2 * n_lat * n_in, 0.0f);
+    for (size_t i = 0; i < n_lat; i++) {
+        std::copy(cond.begin() + i * n_cond, cond.begin() + (i + 1) * n_cond, dit_in.begin() + i * n_in + 2 * n_lc);
+    }
+
+    // FlowMatchEulerDiscreteScheduler with invert_sigmas: t = 1 - linspace(1, 1 / n, n), then 1
+    const int n_steps = inp->n_steps > 0 ? inp->n_steps : g::flow_steps;
+    std::vector<float> ts(n_steps + 1, 1.0f);
+    for (int i = 0; i < n_steps; i++) {
+        const double sigma = n_steps > 1 ? 1.0 + i * (1.0 / n_steps - 1.0) / (n_steps - 1) : 1.0;
+        ts[i] = 1.0f - (float) sigma;
+    }
+
+    std::vector<float> vel;
+    for (int i = 0; i < n_steps; i++) {
+        const float t = ts[i];
+        for (size_t j = 0; j < n_ov * n_lc; j++) {
+            x[j] = (1.0f - (1.0f - 1e-6f) * t) * noise_ov[j] + t * prev_lat[j];
+        }
+        for (size_t b = 0; b < 2; b++) {
+            for (size_t r = 0; r < n_lat; r++) {
+                std::copy(x.begin() + r * n_lc, x.begin() + (r + 1) * n_lc, dit_in.begin() + (b * n_lat + r) * n_in);
+            }
+        }
+        clip_subctx_encode_params params;
+        params.gen_process = CLIP_SUBCTX_GEN_PROCESS_FLOW_STEP;
+        params.flow_t      = t;
+        params.cfg_scale   = g::dit_cfg;
+        params.out_feats   = &vel;
+        if (!music3_encode(ctx, state, params, dit_in) || vel.size() != x.size()) {
+            LOG_ERR("%s: encode failed (flow step %d)\n", __func__, i);
+            return 1;
+        }
+        const float dt = ts[i + 1] - ts[i];
+        for (size_t j = 0; j < x.size(); j++) {
+            x[j] += dt * vel[j];
+        }
+    }
+    std::copy(prev_lat.begin(), prev_lat.begin() + n_ov * n_lc, x.begin());
+
+    // the next window starts from latent frames [L - 2 * n_overlap, L - n_overlap) of this one
+    const size_t s0 = n_lat > 2 * (size_t) g::n_overlap ? n_lat - 2 * g::n_overlap : 0;
+    const size_t s1 = n_lat > (size_t) g::n_overlap ? n_lat - g::n_overlap : 0;
+    prev_lat.assign(x.begin() + s0 * n_lc, x.begin() + s1 * n_lc);
+    prev_cond.assign(cond.begin() + s0 * n_cond, cond.begin() + s1 * n_cond);
+
+    clip_subctx_encode_params params;
+    params.gen_process = CLIP_SUBCTX_GEN_PROCESS_GEN_WAV;
+    params.out_audio   = &state->out_audio;
+    if (!music3_encode(ctx, state, params, x)) {
+        LOG_ERR("%s: encode failed (vocoder)\n", __func__);
+        return 1;
+    }
+    out->audio     = state->out_audio.data();
+    out->n_samples = state->out_audio.size();
     return 0;
 }
 
@@ -1009,12 +1422,61 @@ static int32_t clip_gen_audio_process_impl(clip_gen_ctx * ctx, clip_gen_state * 
                                                            : clip_gen_wav_yue2(ctx, state, inp, out);
     }
 
+    if (sctx->model.proj_type == PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN) {
+        return inp->type == LLAMA_GEN_STAGE_CODE ? clip_gen_code_music3(ctx, state, inp, out)
+                                                 : clip_gen_wav_music3(ctx, state, inp, out);
+    }
+
+    if (sctx->model.proj_type == PROJECTOR_TYPE_TINY_VOCA) {
+        return clip_gen_wav_tiny_voca(ctx, state, inp, out);
+    }
+
     if (sctx->model.proj_type == PROJECTOR_TYPE_SOPRANO) {
         const size_t n_embd = (size_t) sctx->model.n_mmproj_embd();
         if (inp->type != LLAMA_GEN_STAGE_WAV || !inp->feats || inp->n_feats < 2 * n_embd || inp->n_feats % n_embd != 0 || inp->codes) {
             LOG_ERR("%s: soprano requires at least 2 frames of features, without codes\n", __func__);
             return 1;
         }
+    }
+
+    if (sctx->model.proj_type == PROJECTOR_TYPE_KOKORO) {
+        if (inp->type != LLAMA_GEN_STAGE_WAV || !inp->codes || inp->n_codes == 0 || !inp->feats || inp->n_feats == 0) {
+            LOG_ERR("%s: kokoro requires the phoneme tokens and their features\n", __func__);
+            return 1;
+        }
+        if (!std::isfinite(inp->speed) || inp->speed <= 0.0f) {
+            LOG_ERR("%s: speed must be > 0\n", __func__);
+            return 1;
+        }
+        const std::vector<int32_t> in_codes(inp->codes, inp->codes + inp->n_codes);
+        const std::vector<float>   in_feats(inp->feats, inp->feats + inp->n_feats);
+
+        // the batch entry is unused, present to satisfy the encode interface
+        clip_image_f32 dummy;
+        dummy.set_size({1, 1}, false, true);
+        dummy.cpy_buf(std::vector<float>(1, 0.0f));
+        clip_image_f32_batch batch;
+        batch.is_audio = true;
+        batch.entries.push_back(std::move(dummy));
+
+        clip_subctx_encode_params params;
+        params.imgs        = &batch;
+        params.n_threads   = ctx->n_threads;
+        params.gen_process = CLIP_SUBCTX_GEN_PROCESS_GEN_WAV;
+        params.codes       = &in_codes;
+        params.feats       = &in_feats;
+        params.speed       = inp->speed;
+        params.out_audio   = &state->out_audio;
+        params.gen_state   = state->gen_state;
+
+        if (!sctx->encode(&params)) {
+            LOG_ERR("%s: encode failed (gen_wav)\n", __func__);
+            return 1;
+        }
+
+        out->audio     = state->out_audio.data();
+        out->n_samples = state->out_audio.size();
+        return 0;
     }
 
     if (inp->type == LLAMA_GEN_STAGE_WAV && sctx->model.proj_type == PROJECTOR_TYPE_LFM3A_GEN) {

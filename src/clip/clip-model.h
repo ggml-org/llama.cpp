@@ -216,6 +216,8 @@ struct clip_hparams {
 
     // pocket-tts
     static constexpr int32_t pockettts_max_spk_seconds = 30;
+    // qwen3tts: the reference encoder mask is dense, so cost is quadratic in the clip
+    static constexpr int32_t qwen3tts_max_ref_seconds = 30;
     // fish_s2: the codec encoder runs at 44.1 kHz, memory grows with the clip
     static constexpr int32_t fish_s2_max_spk_seconds = 30;
     int32_t seanet_n_stage    = 0;
@@ -946,12 +948,56 @@ struct clip_zonos3_wav {
     int64_t rs_kernel_len = 0;
 };
 
-// yue2: projections of the flow-matching NAR (a.gen.nar.*) and the Oobleck VAE decoder (a.gen.vae.*)
-// the NAR transformer layers are loaded by libllama, see clip_yue2_nar_load()
-struct clip_yue2 {
+// tiny-voca: duration predictor and source-filter heads (graphs), the small linear layers between the stacks (host)
+// the prosody and acoustic stacks are loaded by libllama, see clip_owned_llama_load()
+struct clip_tiny_voca {
+    ggml_tensor * dur_conv1_w = nullptr; // [3, n_embd, n_pred]
+    ggml_tensor * dur_conv1_b = nullptr;
+    ggml_tensor * dur_norm1_w = nullptr;
+    ggml_tensor * dur_norm1_b = nullptr;
+    ggml_tensor * dur_conv2_w = nullptr; // [3, n_pred, n_pred]
+    ggml_tensor * dur_conv2_b = nullptr;
+    ggml_tensor * dur_norm2_w = nullptr;
+    ggml_tensor * dur_norm2_b = nullptr;
+    ggml_tensor * dur_out_w   = nullptr; // [n_pred, 2]: log(1 + frames), pause logit
+    ggml_tensor * dur_out_b   = nullptr;
+    ggml_tensor * harm_w      = nullptr; // [n_embd, n_cep_causal + n_cep_anti + harm_steps]
+    ggml_tensor * harm_b      = nullptr;
+    ggml_tensor * noise_w     = nullptr; // [n_embd, n_noise_cep + noise_steps]
+    ggml_tensor * noise_b     = nullptr;
+
+    // read on the host, row-major as in the reference
+    std::vector<float> token_class;    // [n_vocab]: 0 = pause, 1 = consonant, 2 = vowel
+    std::vector<float> frame_pos_w;    // [n_embd, 3]
+    std::vector<float> frame_pos_b;    // [n_embd]
+    std::vector<float> prosody_head_w; // [3, n_embd]: log(F0 / 200 Hz), voiced logit, energy
+    std::vector<float> prosody_head_b;
+    std::vector<float> prosody_proj_w; // [n_embd, 3]
+    std::vector<float> prosody_proj_b;
+
+    // unknown-word model of the phonemizer, run on the host by clip_gen_audio_g2p(): letters -> CMUdict phonemes
+    // embedding (each letter takes n_slot positions), bidirectional GRU layers, CTC output read greedily
+    struct g2p_gru {
+        std::vector<float> w_ih; // [3 * n_hidden, n_in]: reset, update, new
+        std::vector<float> w_hh; // [3 * n_hidden, n_hidden]
+        std::vector<float> b_ih;
+        std::vector<float> b_hh;
+    };
+    std::vector<float> g2p_embd;     // [n_letter + 1, n_width], row 0 unused
+    std::vector<float> g2p_slot;     // [n_slot, n_width]
+    std::vector<g2p_gru> g2p_layers; // forward, reverse, for each layer
+    std::vector<float> g2p_out_w;    // [n_symbol + 1, 2 * n_hidden], output 0 is the CTC blank
+    std::vector<float> g2p_out_b;
+    int64_t g2p_n_width  = 0;
+    int64_t g2p_n_hidden = 0;
+};
+
+// snake-activated conv decoder of the DAC / Oobleck family (a.gen.vae.*): yue2 VAE, minimax_music3 vocoder
+struct clip_snake_vae {
+    // x + beta * sin(alpha * x)^2, alpha and beta folded at conversion
     struct snake {
-        ggml_tensor * alpha = nullptr; // exp(alpha)
-        ggml_tensor * beta  = nullptr; // 1 / (exp(beta) + eps)
+        ggml_tensor * alpha = nullptr;
+        ggml_tensor * beta  = nullptr;
     };
     struct res_unit {
         snake         act1;
@@ -968,6 +1014,31 @@ struct clip_yue2 {
         std::vector<res_unit> res;
     };
 
+    ggml_tensor * in_proj_w = nullptr; // optional k = 1 conv before conv_in
+    ggml_tensor * in_proj_b = nullptr;
+    ggml_tensor * in_w      = nullptr;
+    ggml_tensor * in_b      = nullptr;
+    std::vector<block> blocks;
+    snake         post;
+    ggml_tensor * out_w     = nullptr;
+    ggml_tensor * out_b     = nullptr; // optional
+
+    // output samples per latent frame
+    int64_t ratio() const {
+        int64_t r = 1;
+        for (const auto & blk : blocks) {
+            r *= blk.up_w->ne[0] / 2;
+        }
+        return r;
+    }
+    int64_t n_latent() const {
+        return (in_proj_w ? in_proj_w : in_w)->ne[1];
+    }
+};
+
+// yue2: projections of the flow-matching NAR (a.gen.nar.*), the VAE is clip_model::snake_vae
+// the NAR transformer layers are loaded by libllama, see clip_yue2_nar_load()
+struct clip_yue2 {
     ggml_tensor * inp_w = nullptr; // latent -> backbone embd
     ggml_tensor * inp_b = nullptr;
     ggml_tensor * out_w = nullptr; // backbone hidden -> velocity
@@ -978,12 +1049,25 @@ struct clip_yue2 {
     std::vector<float> time0_b;
     std::vector<float> time2_w; // [n_embd, n_embd]
     std::vector<float> time2_b;
+};
 
-    ggml_tensor * vae_in_w = nullptr;
-    ggml_tensor * vae_in_b = nullptr;
-    std::vector<block> vae;
-    snake         vae_post;
-    ggml_tensor * vae_out_w = nullptr;
+// minimax_music3: condition encoder (a.gen.cond.*) and flow-matching DiT (a.gen.flow.*)
+// the depth decoder is the generic a.gen.code.* layers, the vocoder is clip_model::snake_vae
+struct clip_music3 {
+    ggml_tensor * cond_layer_w = nullptr; // mix of the hidden states of a frame, softmax and scale folded in
+    ggml_tensor * cond_w       = nullptr; // k = 3 conv
+    ggml_tensor * cond_b       = nullptr;
+
+    ggml_tensor * time_freq  = nullptr; // random Fourier features, 2 * pi folded in
+    ggml_tensor * time_in_w  = nullptr;
+    ggml_tensor * time_in_b  = nullptr;
+    ggml_tensor * time_out_w = nullptr;
+    ggml_tensor * time_out_b = nullptr;
+    ggml_tensor * pre_w      = nullptr; // k = 1 conv over [latent, zeros, cond], residual
+    ggml_tensor * proj_in_w  = nullptr;
+    ggml_tensor * proj_out_w = nullptr;
+    ggml_tensor * post_w     = nullptr; // k = 1 conv, residual
+    std::vector<clip_layer> dit;
 };
 
 struct clip_vocos {
@@ -1262,11 +1346,25 @@ struct clip_model {
     ggml_tensor * gen_code_head_norm_w = nullptr; // per-codebook norm before the tied head, merged 2D
     ggml_tensor * gen_code_mask_embd   = nullptr;
 
+    // qwen3tts reference encoder: reference clip -> RVQ codes, uses seanet and downsample_w too
+    std::vector<clip_layer> ref_enc_layers;
+    ggml_tensor * ref_quant_first_in_w = nullptr;
+    ggml_tensor * ref_quant_first_cb   = nullptr;
+    ggml_tensor * ref_quant_rest_in_w  = nullptr;
+    ggml_tensor * ref_quant_rest_cb    = nullptr; // acoustic codebooks, merged 3D
+
+    bool has_ref_encoder() const {
+        return ref_quant_rest_cb != nullptr;
+    }
+
     // qwen3tts code2wav: RVQ codes -> raw PCM
     clip_code2wav c2w;
     std::vector<clip_drama3_layer> drama3_layers;
     clip_zonos3_wav zonos3;
     clip_yue2 yue2;
+    clip_music3 music3;
+    clip_snake_vae snake_vae; // yue2, minimax_music3
+    clip_tiny_voca tiny_voca;
 
     // pocket-tts: SEANet stack, shared by the encoder (speaker path) and the decoder (gen path)
     clip_seanet seanet;
