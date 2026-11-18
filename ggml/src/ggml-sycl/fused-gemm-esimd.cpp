@@ -1049,8 +1049,7 @@ static bool grouped_gemm_esimd_weights_ok(const char * w, const size_t expert_st
 
 // 0 off, 1 on (default), 2 on with the joint_matrix kernel's K-split order reproduced (bit-identical output)
 static int ggml_sycl_grouped_gemm_esimd_mode() {
-    static const int mode = ggml_sycl_get_env("GGML_SYCL_MMID_ESIMD", 1);
-    return mode;
+    return g_ggml_sycl_mmid_esimd;
 }
 
 bool ggml_sycl_grouped_gemm_esimd_enabled() {
