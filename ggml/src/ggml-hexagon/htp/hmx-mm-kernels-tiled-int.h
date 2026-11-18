@@ -1663,7 +1663,7 @@ typedef void (*int_act_gathered_fn_t)(
         uint8_t * restrict vtcm_act_dst,
         float * restrict vtcm_act_scales,
         const void * restrict src,
-        uint8_t * restrict thread_act,
+        uint8_t * restrict act_spad,
         uint32_t start_row,
         uint32_t row_start,
         uint32_t row_end,
@@ -1687,7 +1687,7 @@ static __attribute__((noinline)) void transfer_activation_chunk_##SFX##_gathered
         uint8_t * restrict vtcm_act_dst,                                                                              \
         float * restrict vtcm_act_scales,                                                                             \
         const void * restrict src,                                                                                    \
-        uint8_t * restrict thread_act,                                                                                \
+        uint8_t * restrict act_spad,                                                                                  \
         uint32_t start_row,                                                                                           \
         uint32_t row_start,                                                                                           \
         uint32_t row_end,                                                                                             \
@@ -1714,10 +1714,10 @@ static __attribute__((noinline)) void transfer_activation_chunk_##SFX##_gathered
             const struct mmid_row_mapping mapping = matrix_rows[(size_t) cur_a * mapping_stride + start_row + r + s]; \
             const uint32_t i11 = (ne11 > 1) ? fastmodulo(mapping.i1, ne11, ne11_div) : 0u;                            \
             const uint8_t * src_row = (const uint8_t *) src + (size_t) i11 * nb11 + (size_t) mapping.i2 * nb12;       \
-            copy_gathered_act_row_to_vtcm(thread_act + (size_t) s * row_bytes, src_row, valid_bytes);                 \
+            copy_gathered_act_row_to_vtcm(act_spad + (size_t) s * row_bytes, src_row, valid_bytes);                   \
         }                                                                                                             \
         quantize_act_step_rows_##SFX(                                                                                 \
-            vtcm_act_dst, vtcm_act_scales, thread_act, row_bytes,                                                     \
+            vtcm_act_dst, vtcm_act_scales, act_spad, row_bytes,                                                       \
             r, valid_rows, mc_pad, n_k_tiles, k_group, n_groups, k_valid);                                            \
     }                                                                                                                 \
 }

@@ -2003,9 +2003,9 @@ static bool htp_kparams_solve_sum_rows(
         max_block = (std::min)(max_block, 512u);
         max_block = (std::max)(max_block, 1u);
 
-        const size_t per_thread_budget = vtcm_size / (2 * n_hvx);
-        uint32_t block = (per_thread_budget > 128)
-            ? (uint32_t) ((per_thread_budget - 128) / (src0_row_size_aligned + dst_elem_size))
+        const size_t per_hvx_budget = vtcm_size / (2 * n_hvx);
+        uint32_t block = (per_hvx_budget > 128)
+            ? (uint32_t) ((per_hvx_budget - 128) / (src0_row_size_aligned + dst_elem_size))
             : 1u;
         block = (std::min)(block, max_block);
         block = (std::max)(block, 1u);

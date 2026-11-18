@@ -146,7 +146,7 @@ struct htp_mm_context {
     uint32_t vtcm_act_stride;
     uint32_t vtcm_act_raw_stride;
 
-    // Cached thread offsets/sizes
+    // Cached per-HVX VTCM sizes
     uint32_t vtcm_src0_size_per_hvx;
     uint32_t vtcm_act_size_per_hvx;
     uint32_t vtcm_dst_size_per_hvx;
@@ -1083,7 +1083,7 @@ static void hvx_mm_2d_flat(const htp_thread_t * th, unsigned int nth, unsigned i
     const size_t src0_stride = mmctx->vtcm_src0_stride;
     const size_t act_stride = mmctx->vtcm_act_stride;
 
-    // Per-thread VTCMs for all tensors
+    // Per-HVX VTCMs for all tensors
     uint8_t * restrict vtcm_dst_ptr  = mmctx->vtcm_dst  + mmctx->vtcm_dst_size_per_hvx  * ith;
     uint8_t * restrict vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_hvx * ith;
     uint8_t * restrict act_data      = mmctx->vtcm_act;
@@ -1182,7 +1182,7 @@ static void hvx_mv_2d_flat(const htp_thread_t * th, unsigned int nth, unsigned i
     const size_t src0_stride = mmctx->vtcm_src0_stride;
     const size_t act_stride  = mmctx->vtcm_act_stride;
 
-    // Per-thread VTCMs for all tensors
+    // Per-HVX VTCMs for all tensors
     uint8_t * vtcm_dst_ptr  = mmctx->vtcm_dst  + mmctx->vtcm_dst_size_per_hvx  * ith;
     uint8_t * vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_hvx * ith;
     uint8_t * act_data      = mmctx->vtcm_act;
@@ -1456,7 +1456,7 @@ static void hvx_mm_id_tiled(const htp_thread_t * th, unsigned int nth, unsigned 
 
     const size_t act_stride = mmctx->vtcm_act_stride;
 
-    // Per-thread VTCMs for all tensors
+    // Per-HVX VTCMs for all tensors
     uint8_t * restrict vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_hvx * ith;
     uint8_t * restrict act_data = mmctx->vtcm_act;
 
@@ -1541,7 +1541,7 @@ static void hvx_mv_id_tiled(const htp_thread_t * th, unsigned int nth, unsigned 
     const uint32_t n_aids = src2->ne[0];  // num activated experts
     const uint32_t n_ids  = ne02;         // num experts
 
-    // Per-thread VTCMs for all tensors
+    // Per-HVX VTCMs for all tensors
     uint8_t * restrict vtcm_src0_ptr = mmctx->vtcm_src0 + mmctx->vtcm_src0_size_per_hvx * ith;
     uint8_t * restrict act_data = mmctx->vtcm_act;
 
@@ -2191,7 +2191,7 @@ static void transfer_activation_chunk_to_fp16_dma_pipelined_col_chunk(
         uint32_t k_chunk_valid,
         uint32_t c_first,
         uint32_t c_len,
-        uint8_t *thread_act,
+        uint8_t *act_spad,
         uint32_t act_elem_size,
         struct htp_thread_trace *tr,
         uint32_t dma_step_rows,
@@ -2211,7 +2211,7 @@ static void transfer_activation_chunk_to_fp16_dma_pipelined_col_chunk(
     // Push step 0
     if (n_steps > 0 && n_rows > 0) {
         uint32_t nrows_to_fetch = hex_smin(n_rows, R);
-        dma_queue_push(dma_q, dma_make_data(thread_act, act_dma_addr + src_col_offset),
+        dma_queue_push(dma_q, dma_make_data(act_spad, act_dma_addr + src_col_offset),
                        row_bytes, src_row_bytes, width_bytes, nrows_to_fetch);
     }
     // Push step 1
@@ -2219,14 +2219,14 @@ static void transfer_activation_chunk_to_fp16_dma_pipelined_col_chunk(
         uint32_t next_r = R * 1;
         if (next_r < n_rows) {
             uint32_t nrows_to_fetch = hex_smin(n_rows - next_r, R);
-            uint8_t *next_buf = thread_act + 1 * R * row_bytes;
+            uint8_t *next_buf = act_spad + 1 * R * row_bytes;
             dma_queue_push(dma_q, dma_make_data(next_buf, act_dma_addr + (size_t) next_r * src_row_bytes + src_col_offset),
                            row_bytes, src_row_bytes, width_bytes, nrows_to_fetch);
         }
     }
     for (uint32_t s = 0; s < n_steps; ++s) {
         uint32_t r = s << dma_step_rows_shift;
-        uint8_t *curr_buf = thread_act;
+        uint8_t *curr_buf = act_spad;
 
         if (r < n_rows) {
             curr_buf = (uint8_t *) dma_queue_pop(dma_q).dst;
@@ -2299,12 +2299,12 @@ static void transfer_activation_chunk_col_chunk_worker_fn(const htp_thread_t * t
 
     __fp16 *dst = st->dst;
 
-    size_t thread_scratch_bytes = hex_align_down(fastdiv(st->vtcm_f32_act_bytes, &st->n_hvx_div), 128);
-    uint8_t *thread_act = (uint8_t *)st->vtcm_f32_act + i * thread_scratch_bytes;
+    size_t scratch_bytes_per_hvx = hex_align_down(fastdiv(st->vtcm_f32_act_bytes, &st->n_hvx_div), 128);
+    uint8_t *act_spad = (uint8_t *)st->vtcm_f32_act + i * scratch_bytes_per_hvx;
 
     transfer_activation_chunk_to_fp16_dma_pipelined_col_chunk(
         th->dma_q, dst, st->act_dma_addr, st->n_rows, st->k_block, st->k_stride, k_chunk_valid,
-        c_first, c_len, thread_act, st->act_elem_size, tr, st->dma_step_rows, st->dma_step_rows_shift
+        c_first, c_len, act_spad, st->act_elem_size, tr, st->dma_step_rows, st->dma_step_rows_shift
     );
 }
 
@@ -2316,7 +2316,7 @@ static void transfer_activation_chunk_to_fp16_dma_pipelined(
         uint32_t k_block,
         uint32_t k_stride,
         uint32_t k_valid,
-        uint8_t *thread_act,
+        uint8_t *act_spad,
         uint32_t act_elem_size,
         struct htp_thread_trace *tr,
         uint32_t dma_step_rows,
@@ -2335,7 +2335,7 @@ static void transfer_activation_chunk_to_fp16_dma_pipelined(
     // Push step 0
     if (n_steps > 0 && n_rows > 0) {
         uint32_t nrows_to_fetch = hex_smin(n_rows, R);
-        dma_queue_push(dma_q, dma_make_data(thread_act, act_dma_addr),
+        dma_queue_push(dma_q, dma_make_data(act_spad, act_dma_addr),
                        row_bytes, src_row_bytes, width_bytes, nrows_to_fetch);
     }
     // Push step 1 (if valid)
@@ -2343,14 +2343,14 @@ static void transfer_activation_chunk_to_fp16_dma_pipelined(
         uint32_t next_r = R * 1;
         if (next_r < n_rows) {
             uint32_t nrows_to_fetch = hex_smin(n_rows - next_r, R);
-            uint8_t *next_buf = thread_act + 1 * R * row_bytes;
+            uint8_t *next_buf = act_spad + 1 * R * row_bytes;
             dma_queue_push(dma_q, dma_make_data(next_buf, act_dma_addr + (size_t) next_r * src_row_bytes),
                            row_bytes, src_row_bytes, width_bytes, nrows_to_fetch);
         }
     }
     for (uint32_t s = 0; s < n_steps; ++s) {
         uint32_t r = s << dma_step_rows_shift;
-        uint8_t *curr_buf = thread_act;
+        uint8_t *curr_buf = act_spad;
 
         if (r < n_rows) {
             curr_buf = (uint8_t *) dma_queue_pop(dma_q).dst;
@@ -2403,9 +2403,9 @@ static void transfer_activation_chunk_worker_fn(const htp_thread_t * th, unsigne
         __fp16      *dst = st->dst + chunk_idx * st->k_block;
         const dma_addr_t act_dma_addr = st->act_dma_addr + (size_t) chunk_idx * st->k_stride * st->act_elem_size;
 
-        uint8_t *thread_act = (uint8_t *) st->vtcm_f32_act + i * st->vtcm_f32_act_bytes_per_hvx;
+        uint8_t *act_spad = (uint8_t *) st->vtcm_f32_act + i * st->vtcm_f32_act_bytes_per_hvx;
         transfer_activation_chunk_to_fp16_dma_pipelined(
-            th->dma_q, dst, act_dma_addr, chunk_size, st->k_block, st->k_stride, st->k_valid, thread_act, st->act_elem_size, tr, st->dma_step_rows, st->dma_step_rows_shift
+            th->dma_q, dst, act_dma_addr, chunk_size, st->k_block, st->k_stride, st->k_valid, act_spad, st->act_elem_size, tr, st->dma_step_rows, st->dma_step_rows_shift
         );
     }
 }
@@ -2739,9 +2739,9 @@ static void transfer_activation_chunk_threaded(const struct activation_transfer_
         uint32_t dma_step_rows = 2;
         uint32_t dma_step_rows_shift = 1;
         if (vtcm_f32_act_bytes > 0) {
-            size_t thread_scratch_bytes = hex_align_down(fastdiv(vtcm_f32_act_bytes, act_hvx_div), 128);
-            size_t thread_scratch_elements = thread_scratch_bytes / act_elem_size;
-            size_t dma_step_rows_max = fastdiv(thread_scratch_elements / 2, k_div);
+            size_t scratch_bytes_per_hvx = hex_align_down(fastdiv(vtcm_f32_act_bytes, act_hvx_div), 128);
+            size_t scratch_elems_per_hvx = scratch_bytes_per_hvx / act_elem_size;
+            size_t dma_step_rows_max = fastdiv(scratch_elems_per_hvx / 2, k_div);
             if (dma_step_rows_max >= 4) {
                 dma_step_rows = 4;
                 dma_step_rows_shift = 2;
@@ -2789,8 +2789,8 @@ static void transfer_activation_chunk_threaded(const struct activation_transfer_
     uint32_t dma_step_rows = 2;
     uint32_t dma_step_rows_shift = 1;
     if (state.vtcm_f32_act_bytes_per_hvx > 0) {
-        size_t thread_scratch_elements = state.vtcm_f32_act_bytes_per_hvx / act_elem_size;
-        size_t dma_step_rows_max = fastdiv(thread_scratch_elements / 2, k_div);
+        size_t scratch_elems_per_hvx = state.vtcm_f32_act_bytes_per_hvx / act_elem_size;
+        size_t dma_step_rows_max = fastdiv(scratch_elems_per_hvx / 2, k_div);
         if (dma_step_rows_max >= 4) {
             dma_step_rows = 4;
             dma_step_rows_shift = 2;
@@ -2886,8 +2886,8 @@ typedef void (*int_act_dma_pipelined_fn_t)(
         uint32_t k_valid,
         uint32_t k_group,
         uint32_t n_groups,
-        uint8_t * thread_act,
-        size_t thread_scratch_bytes,
+        uint8_t * act_spad,
+        size_t scratch_bytes_per_hvx,
         struct htp_thread_trace * tr);
 
 typedef struct {
@@ -2908,71 +2908,71 @@ typedef struct {
     size_t                     vtcm_f32_act_bytes_per_hvx;
 } int_activation_transfer_task_state_t;
 
-#define DEFINE_TRANSFER_ACT_CHUNK_DMA_PIPELINED(SFX, ACT_T, STEP_ROWS)                                          \
-static void transfer_activation_chunk_##SFX##_dma_pipelined(                                                    \
-        dma_queue * dma_q,                                                                                      \
-        uint8_t * restrict vtcm_act_dst,                                                                        \
-        float * restrict vtcm_act_scales,                                                                       \
-        dma_addr_t act_dma_addr,                                                                                \
-        uint32_t row_start,                                                                                     \
-        uint32_t row_end,                                                                                       \
-        uint32_t n_rows,                                                                                        \
-        uint32_t mc_pad,                                                                                        \
-        uint32_t k_block,                                                                                       \
-        uint32_t k_stride,                                                                                      \
-        uint32_t k_valid,                                                                                       \
-        uint32_t k_group,                                                                                       \
-        uint32_t n_groups,                                                                                      \
-        uint8_t * thread_act,                                                                                   \
-        size_t thread_scratch_bytes,                                                                            \
-        struct htp_thread_trace * tr) {                                                                         \
-    const uint32_t step_rows     = (STEP_ROWS);                                                                 \
-    const size_t   row_bytes     = (size_t) k_block * sizeof(ACT_T);                                            \
-    const size_t   src_row_bytes = (size_t) k_stride * sizeof(ACT_T);                                           \
-    const size_t   width_bytes   = (size_t) k_valid * sizeof(ACT_T);                                            \
-    const bool     double_buf    = (thread_scratch_bytes >= 2 * step_rows * row_bytes);                         \
-    const uint32_t n_k_tiles     = k_block >> 5;                                                                \
-    if (double_buf) {                                                                                           \
-        if (row_start < row_end && row_start < n_rows) {                                                        \
-            uint32_t nrows_to_fetch = hex_smin(n_rows - row_start, step_rows);                                  \
-            dma_queue_push(dma_q, dma_make_data(thread_act, act_dma_addr + (size_t) row_start * src_row_bytes), \
-                           row_bytes, src_row_bytes, width_bytes, nrows_to_fetch);                              \
-        }                                                                                                       \
-        if (row_start + step_rows < row_end && row_start + step_rows < n_rows) {                                \
-            uint32_t next_r = row_start + step_rows;                                                            \
-            uint32_t nrows_to_fetch = hex_smin(n_rows - next_r, step_rows);                                     \
-            uint8_t * next_buf = thread_act + step_rows * row_bytes;                                            \
-            dma_queue_push(dma_q, dma_make_data(next_buf, act_dma_addr + (size_t) next_r * src_row_bytes),      \
-                           row_bytes, src_row_bytes, width_bytes, nrows_to_fetch);                              \
-        }                                                                                                       \
-    }                                                                                                           \
-    for (uint32_t r = row_start; r < row_end; r += step_rows) {                                                 \
-        uint8_t * curr_buf = thread_act;                                                                        \
-        if (r < n_rows) {                                                                                       \
-            if (double_buf) {                                                                                   \
-                curr_buf = (uint8_t *) dma_queue_pop(dma_q).dst;                                                \
-            } else {                                                                                            \
-                uint32_t nrows_to_fetch = hex_smin(n_rows - r, step_rows);                                      \
-                dma_queue_push(dma_q, dma_make_data(thread_act, act_dma_addr + (size_t) r * src_row_bytes),     \
-                               row_bytes, src_row_bytes, width_bytes, nrows_to_fetch);                          \
-                curr_buf = (uint8_t *) dma_queue_pop(dma_q).dst;                                                \
-            }                                                                                                   \
-        }                                                                                                       \
-        const uint32_t valid_rows = (r < n_rows) ? hex_smin(n_rows - r, step_rows) : 0u;                        \
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, r);                                                \
-        quantize_act_step_rows_##SFX(                                                                           \
-            vtcm_act_dst, vtcm_act_scales, curr_buf, row_bytes,                                                 \
-            r, valid_rows, mc_pad, n_k_tiles, k_group, n_groups, k_valid);                                      \
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, r);                                                 \
-        if (double_buf) {                                                                                       \
-            uint32_t next_r = r + 2 * step_rows;                                                                \
-            if (next_r < row_end && next_r < n_rows) {                                                          \
-                uint32_t nrows_to_fetch = hex_smin(n_rows - next_r, step_rows);                                 \
-                dma_queue_push(dma_q, dma_make_data(curr_buf, act_dma_addr + (size_t) next_r * src_row_bytes),  \
-                               row_bytes, src_row_bytes, width_bytes, nrows_to_fetch);                          \
-            }                                                                                                   \
-        }                                                                                                       \
-    }                                                                                                           \
+#define DEFINE_TRANSFER_ACT_CHUNK_DMA_PIPELINED(SFX, ACT_T, STEP_ROWS)                                         \
+static void transfer_activation_chunk_##SFX##_dma_pipelined(                                                   \
+        dma_queue * dma_q,                                                                                     \
+        uint8_t * restrict vtcm_act_dst,                                                                       \
+        float * restrict vtcm_act_scales,                                                                      \
+        dma_addr_t act_dma_addr,                                                                               \
+        uint32_t row_start,                                                                                    \
+        uint32_t row_end,                                                                                      \
+        uint32_t n_rows,                                                                                       \
+        uint32_t mc_pad,                                                                                       \
+        uint32_t k_block,                                                                                      \
+        uint32_t k_stride,                                                                                     \
+        uint32_t k_valid,                                                                                      \
+        uint32_t k_group,                                                                                      \
+        uint32_t n_groups,                                                                                     \
+        uint8_t * act_spad,                                                                                    \
+        size_t scratch_bytes_per_hvx,                                                                          \
+        struct htp_thread_trace * tr) {                                                                        \
+    const uint32_t step_rows     = (STEP_ROWS);                                                                \
+    const size_t   row_bytes     = (size_t) k_block * sizeof(ACT_T);                                           \
+    const size_t   src_row_bytes = (size_t) k_stride * sizeof(ACT_T);                                          \
+    const size_t   width_bytes   = (size_t) k_valid * sizeof(ACT_T);                                           \
+    const bool     double_buf    = (scratch_bytes_per_hvx >= 2 * step_rows * row_bytes);                       \
+    const uint32_t n_k_tiles     = k_block >> 5;                                                               \
+    if (double_buf) {                                                                                          \
+        if (row_start < row_end && row_start < n_rows) {                                                       \
+            uint32_t nrows_to_fetch = hex_smin(n_rows - row_start, step_rows);                                 \
+            dma_queue_push(dma_q, dma_make_data(act_spad, act_dma_addr + (size_t) row_start * src_row_bytes),  \
+                           row_bytes, src_row_bytes, width_bytes, nrows_to_fetch);                             \
+        }                                                                                                      \
+        if (row_start + step_rows < row_end && row_start + step_rows < n_rows) {                               \
+            uint32_t next_r = row_start + step_rows;                                                           \
+            uint32_t nrows_to_fetch = hex_smin(n_rows - next_r, step_rows);                                    \
+            uint8_t * next_buf = act_spad + step_rows * row_bytes;                                             \
+            dma_queue_push(dma_q, dma_make_data(next_buf, act_dma_addr + (size_t) next_r * src_row_bytes),     \
+                           row_bytes, src_row_bytes, width_bytes, nrows_to_fetch);                             \
+        }                                                                                                      \
+    }                                                                                                          \
+    for (uint32_t r = row_start; r < row_end; r += step_rows) {                                                \
+        uint8_t * curr_buf = act_spad;                                                                         \
+        if (r < n_rows) {                                                                                      \
+            if (double_buf) {                                                                                  \
+                curr_buf = (uint8_t *) dma_queue_pop(dma_q).dst;                                               \
+            } else {                                                                                           \
+                uint32_t nrows_to_fetch = hex_smin(n_rows - r, step_rows);                                     \
+                dma_queue_push(dma_q, dma_make_data(act_spad, act_dma_addr + (size_t) r * src_row_bytes),      \
+                               row_bytes, src_row_bytes, width_bytes, nrows_to_fetch);                         \
+                curr_buf = (uint8_t *) dma_queue_pop(dma_q).dst;                                               \
+            }                                                                                                  \
+        }                                                                                                      \
+        const uint32_t valid_rows = (r < n_rows) ? hex_smin(n_rows - r, step_rows) : 0u;                       \
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, r);                                               \
+        quantize_act_step_rows_##SFX(                                                                          \
+            vtcm_act_dst, vtcm_act_scales, curr_buf, row_bytes,                                                \
+            r, valid_rows, mc_pad, n_k_tiles, k_group, n_groups, k_valid);                                     \
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, r);                                                \
+        if (double_buf) {                                                                                      \
+            uint32_t next_r = r + 2 * step_rows;                                                               \
+            if (next_r < row_end && next_r < n_rows) {                                                         \
+                uint32_t nrows_to_fetch = hex_smin(n_rows - next_r, step_rows);                                \
+                dma_queue_push(dma_q, dma_make_data(curr_buf, act_dma_addr + (size_t) next_r * src_row_bytes), \
+                               row_bytes, src_row_bytes, width_bytes, nrows_to_fetch);                         \
+            }                                                                                                  \
+        }                                                                                                      \
+    }                                                                                                          \
 }
 
 DEFINE_TRANSFER_ACT_CHUNK_DMA_PIPELINED(f16_w8a8,  __fp16, 4u)
@@ -3000,12 +3000,12 @@ static void transfer_activation_chunk_int_worker_fn(const htp_thread_t * th, uns
             break;
         }
         uint32_t row_end   = hex_smin(row_start + st->n_rows_per_task, st->mc_pad);
-        uint8_t * thread_act = (uint8_t *) st->vtcm_f32_act + i * st->vtcm_f32_act_bytes_per_hvx;
+        uint8_t * act_spad = (uint8_t *) st->vtcm_f32_act + i * st->vtcm_f32_act_bytes_per_hvx;
         st->dma_pipelined_fn(
             th->dma_q, st->vtcm_act_dst, st->vtcm_act_scales, st->act_dma_addr,
             row_start, row_end, st->n_rows, st->mc_pad,
             st->k_block, st->k_stride, st->k_valid, st->k_group, st->n_groups,
-            thread_act, st->vtcm_f32_act_bytes_per_hvx, tr);
+            act_spad, st->vtcm_f32_act_bytes_per_hvx, tr);
     }
 }
 
@@ -3244,11 +3244,11 @@ static void transfer_activation_chunk_int_gathered_worker_fn(const htp_thread_t 
     if (row_start >= st->mc_pad) {
         return;
     }
-    uint8_t * thread_act = (uint8_t *) st->vtcm_f32_act + i * st->vtcm_f32_act_bytes_per_hvx;
+    uint8_t * act_spad = (uint8_t *) st->vtcm_f32_act + i * st->vtcm_f32_act_bytes_per_hvx;
 
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, row_start);
     st->gathered_fn(
-        st->vtcm_act_dst, st->vtcm_act_scales, st->src, thread_act,
+        st->vtcm_act_dst, st->vtcm_act_scales, st->src, act_spad,
         st->start_row, row_start, st->mc_pad, row_stride, st->n_rows, st->mc_pad,
         st->k_block, st->k_valid, st->k_group, st->n_groups,
         st->matrix_rows, st->cur_a, st->mapping_stride,

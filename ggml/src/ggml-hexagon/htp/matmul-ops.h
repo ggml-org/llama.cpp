@@ -99,9 +99,9 @@ struct htp_mm_kernel_params {
     uint8_t  kernel_type;        // enum htp_mm_kernel_type
     uint8_t  pipeline;           // 1 = pipelined execution, 0 = standard
     uint8_t  n_hmx;              // 1 = use HMX, 0 = use HVX
-    uint8_t  n_hvx;              // Number of threads to spawn
+    uint8_t  n_hvx;              // Number of HVX threads
 
-    uint8_t  n_act_hvx;          // Number of threads for activation preparation
+    uint8_t  n_act_hvx;          // Number of HVX for activation preparation
     uint8_t  n_prefetch;         // Prefetch lookahead buffers/rows in VTCM
     uint8_t  n_weights;          // Number of weights for fused NX
     uint8_t  reserved0;

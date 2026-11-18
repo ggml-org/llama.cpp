@@ -137,7 +137,7 @@ static void htp_collapse_dims(struct ggml_tensor ** tensors, size_t n_tensors, s
         }
     }
 
-    // nrows too small to saturate threads: split ne0 into k rows (k divides ne0)
+    // nrows too small to saturate HVX units: split ne0 into k rows (k divides ne0)
     const size_t   row_size_curr = (size_t) t0->ne[0] * elem_size;
     const uint32_t nrows         = (uint32_t) (t0->ne[1] * t0->ne[2] * t0->ne[3]);
     rows_contig = true;
