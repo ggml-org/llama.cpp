@@ -2907,11 +2907,11 @@ static void ggml_compute_forward_gelu_back_f32(
     const ggml_tensor * grad = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
-    assert(ggml_is_contiguous_1(grad));
-    assert(ggml_is_contiguous_1(src1));
-    assert(ggml_is_contiguous_1(dst));
-    assert(ggml_are_same_shape(src1, dst));
-    assert(ggml_are_same_shape(src1, grad));
+    GGML_ASSERT(ggml_is_contiguous_1(grad));
+    GGML_ASSERT(ggml_is_contiguous_1(src1));
+    GGML_ASSERT(ggml_is_contiguous_1(dst));
+    GGML_ASSERT(ggml_are_same_shape(src1, dst));
+    GGML_ASSERT(ggml_are_same_shape(src1, grad));
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -2938,11 +2938,11 @@ static void ggml_compute_forward_gelu_back_f16(
     const ggml_tensor * grad = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
-    assert(ggml_is_contiguous_1(grad));
-    assert(ggml_is_contiguous_1(src1));
-    assert(ggml_is_contiguous_1(dst));
-    assert(ggml_are_same_shape(src1, dst));
-    assert(ggml_are_same_shape(src1, grad));
+    GGML_ASSERT(ggml_is_contiguous_1(grad));
+    GGML_ASSERT(ggml_is_contiguous_1(src1));
+    GGML_ASSERT(ggml_is_contiguous_1(dst));
+    GGML_ASSERT(ggml_are_same_shape(src1, dst));
+    GGML_ASSERT(ggml_are_same_shape(src1, grad));
 
     const int ith = params->ith;
     const int nth = params->nth;
