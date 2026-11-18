@@ -130,6 +130,7 @@ struct realtime_conversation {
     std::string                    type = "realtime";
     std::string                    instructions;
     std::string                    language; // transcription
+    std::string                    prompt;   // transcription
     std::string                    out_language;
     std::string                    out_voice;
     mtmd_helper_gen_audio_out_mode out_mode          = MTMD_HELPER_GEN_AUDIO_OUT_AUTO;
@@ -201,7 +202,11 @@ struct realtime_conversation {
     json session_json() const {
         json audio_in = {{"format", {{"type", "audio/pcm"}, {"rate", input_rate}}}, {"turn_detection", nullptr}};
         if (type == "transcription") {
-            audio_in["transcription"] = {{"model", deps.meta.model_name}, {"language", language.empty() ? json(nullptr) : json(language)}};
+            audio_in["transcription"] = {
+                {"model",    deps.meta.model_name},
+                {"language", language.empty() ? json(nullptr) : json(language)},
+                {"prompt",   prompt},
+            };
             return {
                 {"id",     id},
                 {"object", "realtime.transcription_session"},
@@ -342,12 +347,28 @@ struct realtime_conversation {
     // conversation
     //
 
+    // the transcription instruction, built the same way as /v1/audio/transcriptions
+    std::string asr_user_text(const common_chat_prompt_preset & preset) const {
+        std::string text = prompt.empty() || preset.has_context ? preset.user : prompt;
+        if (!language.empty() && !preset.has_language) {
+            text += string_format(" (language: %s)", language.c_str());
+        }
+        return text;
+    }
+
     // the header of a user turn goes in before its first audio or text
     bool ensure_turn() {
         if (turn_open) {
             return true;
         }
-        const std::string header = n_turns == 0 ? first_header : next_header + user_header;
+        std::string header = n_turns == 0 ? first_header : next_header + user_header;
+        if (type == "transcription") {
+            // most models take the instruction before the audio, the others get it in on_commit
+            const auto preset = common_chat_get_asr_prompt(deps.meta.chat_params.tmpls.get(), language, 0.0, prompt);
+            if (!preset.media_first) {
+                header += asr_user_text(preset);
+            }
+        }
         if (!control(SERVER_CONTROL_ACTION_TEXT_APPEND, header)) {
             return false;
         }
@@ -440,11 +461,11 @@ struct realtime_conversation {
         }
         // some models (VibeVoice-ASR) take an instruction after the audio, with its length
         const auto * tmpls = deps.meta.chat_params.tmpls.get();
-        common_chat_prompt_preset preset = common_chat_get_asr_prompt(tmpls, language);
+        common_chat_prompt_preset preset = common_chat_get_asr_prompt(tmpls, language, 0.0, prompt);
         if (preset.needs_audio_length) {
-            preset = common_chat_get_asr_prompt(tmpls, language, (double) n_audio / mtmd_get_audio_sample_rate(deps.mctx));
+            preset = common_chat_get_asr_prompt(tmpls, language, (double) n_audio / mtmd_get_audio_sample_rate(deps.mctx), prompt);
         }
-        const std::string after_audio = preset.media_first ? preset.user : "";
+        const std::string after_audio = preset.media_first ? asr_user_text(preset) : "";
 
         server_control_response response;
         response.n_predict = max_output_tokens;
@@ -682,6 +703,7 @@ struct realtime_conversation {
         }
         if (in.contains("transcription") && in["transcription"].is_object()) {
             language = json_value(in["transcription"], "language", language);
+            prompt   = json_value(in["transcription"], "prompt",   prompt);
         }
         const json out = audio.value("output", json::object());
         if (out.contains("voice") || out.contains("language")) {
@@ -1032,24 +1054,20 @@ bool server_realtime_slot::decode(const llama_token * tokens, const float * rows
     if (n_past + n >= n_ctx) {
         return fail("the conversation does not fit in the context", ERROR_TYPE_EXCEED_CONTEXT_SIZE);
     }
-    for (int32_t i0 = 0; i0 < n; i0 += n_batch) {
-        const int32_t n_cur = std::min(n_batch, n - i0);
-        llama_batch b = llama_batch_init(n_cur, rows ? n_embd : 0, 1);
-        for (int32_t i = 0; i < n_cur; i++) {
-            if (rows) {
-                memcpy(b.embd + (size_t) i * n_embd, rows + (size_t) (i0 + i) * n_embd, n_embd * sizeof(float));
-            } else {
-                b.token[i] = tokens[i0 + i];
-            }
-            b.pos[i]       = n_past + i0 + i;
-            b.n_seq_id[i]  = 1;
-            b.seq_id[i][0] = seq_id;
-            b.logits[i]    = logits_last && i0 + i == n - 1;
+    common_batch batch(ctx);
+    for (int32_t i = 0; i < n; i++) {
+        const llama_pos pos    = n_past + i;
+        const bool      output = logits_last && i == n - 1;
+        if (rows) {
+            const llama_embd e = { rows + (size_t) i * n_embd, 1, (size_t) n_embd };
+            batch.add_embd(e, &pos, seq_id, output);
+        } else {
+            batch.add(tokens[i], pos, seq_id, output);
         }
-        b.n_tokens = n_cur;
-        const int ret = llama_decode(ctx, b);
-        llama_batch_free(b);
-        if (ret != 0) {
+    }
+    for (int32_t i = 0; i < n; i += n_batch) {
+        const int32_t n_cur = std::min(n_batch, n - i);
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get_sub_batch(i, n_cur)) != 0) {
             return fail("failed to decode the conversation");
         }
     }

@@ -184,10 +184,10 @@ void main() {
 
         if (op_on_b) {
             data_d[get_doffset() + dst_idx(i00, i01, i02, i03)] =
-                D_TYPE(FLOAT_TYPE(OP(float(data_b[get_boffset() + src1_idx(i00, i01, i02, i03)]))) * FLOAT_TYPE(data_a[get_aoffset() + src0_idx(i00, i01, i02, i03)]));
+                FLOAT_TO_D(OP(B_TO_FLOAT(data_b[get_boffset() + src1_idx(i00, i01, i02, i03)])) * A_TO_FLOAT(data_a[get_aoffset() + src0_idx(i00, i01, i02, i03)]));
         } else {
             data_d[get_doffset() + dst_idx(i00, i01, i02, i03)] =
-                D_TYPE(FLOAT_TYPE(OP(float(data_a[get_aoffset() + src0_idx(i00, i01, i02, i03)]))) * FLOAT_TYPE(data_b[get_boffset() + src1_idx(i00, i01, i02, i03)]));
+                FLOAT_TO_D(OP(A_TO_FLOAT(data_a[get_aoffset() + src0_idx(i00, i01, i02, i03)])) * B_TO_FLOAT(data_b[get_boffset() + src1_idx(i00, i01, i02, i03)]));
         }
 
         idx += num_threads;
@@ -200,6 +200,6 @@ void main() {
     const uint a_idx = get_aoffset() + src0_idx(idx);
     const uint d_idx = get_doffset() + dst_idx(idx);
 
-    data_d[d_idx] = D_TYPE(OP(float(data_a[a_idx])));
+    data_d[d_idx] = FLOAT_TO_D(OP(A_TO_FLOAT(data_a[a_idx])));
 #endif
 }

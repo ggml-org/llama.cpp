@@ -283,7 +283,11 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "Qwen3NextForCausalLM": "qwen",
     "Qwen3OmniMoeForConditionalGeneration": "qwen3vl",
     "PocketTTSModel": "pockettts",
+    "KokoroModel": "kokoro",
+    "TinyVocaModel": "tiny_voca",
     "Zonos3Model": "zonos3",
+    "YuE2ForCausalLM": "yue2",
+    "MiniMaxMusic3ForConditionalGeneration": "minimax_music3",
     "Qwen3TTSForConditionalGeneration": "qwen3tts",
     "Qwen3VLForConditionalGeneration": "qwen3vl",
     "Qwen3VLMoeForConditionalGeneration": "qwen3vl",
@@ -336,6 +340,8 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "XverseForCausalLM": "xverse",
     "YoutuForCausalLM": "deepseek",
     "YoutuVLForConditionalGeneration": "deepseek",
+    "ZayaForCausalLM": "zaya1",
+    "fish_qwen3_omni": "fish_s2",
     "modeling_grove_moe.GroveMoeForCausalLM": "grovemoe",
     "modeling_sarvam_moe.SarvamMoEForCausalLM": "bailingmoe",
 }
@@ -360,6 +366,8 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "Exaone4_5_ForConditionalGeneration": "exaone",
     "FishOmniModel": "drama3",
     "Zonos3Model": "zonos3",
+    "YuE2ForCausalLM": "yue2",
+    "MiniMaxMusic3ForConditionalGeneration": "minimax_music3",
     "Gemma3ForConditionalGeneration": "gemma",
     "Gemma3nForConditionalGeneration": "gemma",
     "Gemma4ForConditionalGeneration": "gemma",
@@ -418,6 +426,8 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "Qwen3ASRForConditionalGeneration": "qwen3vl",
     "Qwen3OmniMoeForConditionalGeneration": "qwen3vl",
     "PocketTTSModel": "pockettts",
+    "KokoroModel": "kokoro",
+    "TinyVocaModel": "tiny_voca",
     "SopranoModel": "soprano",
     "Qwen3TTSForConditionalGeneration": "qwen3tts",
     "Qwen3VLForConditionalGeneration": "qwen3vl",
@@ -438,6 +448,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "VoxtralForConditionalGeneration": "ultravox",
     "VoxtralRealtimeForConditionalGeneration": "ultravox",
     "YoutuVLForConditionalGeneration": "youtuvl",
+    "fish_qwen3_omni": "fish_s2",
 }
 
 

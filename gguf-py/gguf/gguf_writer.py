@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -884,6 +885,9 @@ class GGUFWriter:
     def add_router_logit_softcapping(self, value: float) -> None:
         self.add_float32(Keys.LLM.ROUTER_LOGIT_SOFTCAPPING.format(arch=self.arch), value)
 
+    def add_router_hidden_size(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.ROUTER_HIDDEN_SIZE.format(arch=self.arch), value)
+
     def add_final_logit_softcapping(self, value: float) -> None:
         self.add_float32(Keys.LLM.FINAL_LOGIT_SOFTCAPPING.format(arch=self.arch), value)
 
@@ -1457,6 +1461,15 @@ class GGUFWriter:
             value = template_default
 
         self.add_string(Keys.Tokenizer.CHAT_TEMPLATE, value)
+
+    def add_tts_dicts(self, dicts: Mapping[str, Mapping[str, Any]]) -> None:
+        # dictionaries for tts_dict(): keys sorted by their bytes, values as JSON
+        self.add_array(Keys.Tokenizer.TTS_DICTS, list(dicts))
+        for name, value in dicts.items():
+            keys = sorted(value, key=lambda k: k.encode("utf-8"))
+            self.add_array(Keys.Tokenizer.TTS_DICT_KEYS_N.format(name=name), keys)
+            self.add_array(Keys.Tokenizer.TTS_DICT_VALUES_N.format(name=name),
+                           [json.dumps(value[k], ensure_ascii=False, separators=(",", ":")) for k in keys])
 
     def add_suppress_tokens(self, tokens: Sequence[int]) -> None:
         self.add_array(Keys.Tokenizer.SUPPRESS_TOKENS, tokens)

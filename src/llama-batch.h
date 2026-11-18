@@ -61,6 +61,7 @@ struct llama_ubatch {
     int8_t       *  output;     // [n_tokens]         | i   | -
     int8_t       *  type;       // [n_tokens]         | i   | -     (mixed ubatch only, 0 - token, 1 - embd)
     int32_t      *  decision_order; // [n_tokens], NULL if no entry has one, see llama_batch_ext_set_decision_order()
+    int32_t      *  decision_group; // [n_tokens], NULL if no entry has one, see llama_batch_ext_set_decision_group()
 
     struct data_t {
         std::vector<llama_token>    token;
@@ -77,6 +78,7 @@ struct llama_ubatch {
         std::vector<int8_t>         type;
         std::vector<int32_t>        batch_idxs;  // original batch index for each token
         std::vector<int32_t>        decision_order;
+        std::vector<int32_t>        decision_group;
 
         std::vector<llama_seq_id> seq_id_data;
     };
@@ -121,6 +123,7 @@ struct llama_batch_ext {
         int32_t      state_row = -1; // row of ctx_state_src's h_nextn device buffer used as state, -1 if none
         bool         output = false; // TODO: have dedicated output flags
         int32_t      decision_order = 0; // see llama_batch_ext_set_decision_order()
+        int32_t      decision_group = 0; // see llama_batch_ext_set_decision_group()
         std::unordered_set<llama_seq_id> seq_ids;
         std::array<llama_pos, GGML_MROPE_SECTIONS> pos = {0, 0, 0, 0};
     };
@@ -155,6 +158,7 @@ struct llama_batch_ext {
     bool set_token_pos(int32_t idx, const llama_pos * pos_in);
     bool set_output(int32_t idx, bool output_last);
     bool set_decision_order(int32_t idx, int32_t order);
+    bool set_decision_group(int32_t idx, int32_t group);
 };
 
 // a helper for sanitizing, fulfilling and splitting a batch
@@ -241,6 +245,7 @@ private:
     std::vector<int32_t>        seq_idx;
     std::vector<int8_t>         output;
     std::vector<int32_t>        decision_order; // empty if no entry has one
+    std::vector<int32_t>        decision_group; // empty if no entry has one
 
     using pos_set_t = std::set<llama_pos>;
     using seq_cpl_t = std::vector<bool>;

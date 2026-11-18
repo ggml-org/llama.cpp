@@ -116,7 +116,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
 #ifdef MASK
     // mask offset
-    let mask_global_offset = params.offset_mask + batch_idx * params.stride_mask3 + q_row_start * params.seq_len_kv;
+    let mask_global_offset = params.offset_mask + (batch_idx % params.mask_ne3) * params.stride_mask3 + (head_idx % params.mask_ne2) * params.stride_mask2 + q_row_start * params.seq_len_kv;
 #endif
 
     // note that the output is permuted, the layout is [head_dim_v, n_heads, seq_len_q, batch_size]

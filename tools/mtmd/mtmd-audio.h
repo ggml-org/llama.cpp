@@ -52,6 +52,11 @@ struct mtmd_audio_cache {
     );
 };
 
+// FFT of N real samples -> N complex values (interleaved), in needs 2 * N floats and out 8 * N floats (scratch)
+void mtmd_audio_fft(const mtmd_audio_cache & cache, float * in, int N, float * out);
+// inverse FFT of N complex values (interleaved), scaled by 1 / N; in and out need 8 * N floats (scratch)
+void mtmd_audio_ifft(const mtmd_audio_cache & cache, float * in, int N, float * out);
+
 // compute one log10-mel frame from n_fft windowed samples, cache must be initialized for n_fft
 void mtmd_audio_log_mel_frame(const mtmd_audio_cache & cache, const float * samples, int n_fft, int n_mel, float * out);
 
@@ -126,6 +131,12 @@ struct mtmd_audio_preprocessor_whisper : mtmd_audio_preprocessor {
 struct mtmd_audio_preprocessor_muse_spark_audio : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_muse_spark_audio(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     void initialize() override {}
+    bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
+};
+
+// fish_s2 speaker reference: same as muse spark (raw waveform, whole frames), truncated to fish_s2_max_spk_seconds
+struct mtmd_audio_preprocessor_fish_s2 : mtmd_audio_preprocessor_muse_spark_audio {
+    using mtmd_audio_preprocessor_muse_spark_audio::mtmd_audio_preprocessor_muse_spark_audio;
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 };
 

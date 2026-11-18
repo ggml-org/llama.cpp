@@ -107,7 +107,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
 #ifdef MASK
     // mask offset
-    let mask_global_offset = params.offset_mask + batch_idx * params.stride_mask3 + q_row_start * params.seq_len_kv;
+    let mask_global_offset = params.offset_mask + (batch_idx % params.mask_ne3) * params.stride_mask3 + (head_idx % params.mask_ne2) * params.stride_mask2 + q_row_start * params.seq_len_kv;
 #endif
 
     let head = f32(head_idx);
@@ -128,8 +128,9 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 #ifdef BLK
         let q_blk = q_row_start;
         let kv_blk = kv_tile / KV_TILE;
-        let blk_batch = select(0u, batch_idx, params.stride_mask3 > 0u);
-        let blk_idx = params.blk_base + (blk_batch * params.blk_nblk1 + q_blk) * params.blk_nblk0 + kv_blk;
+        let blk_batch = batch_idx % params.mask_ne3;
+        let blk_head = head_idx % params.mask_ne2;
+        let blk_idx = params.blk_base + ((blk_batch * params.mask_ne2 + blk_head) * params.blk_nblk1 + q_blk) * params.blk_nblk0 + kv_blk;
         let blk_state_local = blk[blk_idx];
 #else
         let blk_state_local = 1u;

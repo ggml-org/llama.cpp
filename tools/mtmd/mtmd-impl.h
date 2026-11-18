@@ -252,6 +252,12 @@
 #define TN_A_ASP_ATTN  "a.asp_attn.%s"
 #define TN_A_ASP_TDNN  "a.asp_tdnn.%s"
 
+// qwen3tts reference encoder, the transformer blocks use the generic names with the "a.gen.enc.tfm" prefix
+#define TN_A_GEN_ENC_QUANT_FIRST_IN  "a.gen.enc.quant.first.in_proj.%s"
+#define TN_A_GEN_ENC_QUANT_FIRST_CB  "a.gen.enc.quant.first.codebook.%s"
+#define TN_A_GEN_ENC_QUANT_REST_IN   "a.gen.enc.quant.rest.in_proj.%s"
+#define TN_A_GEN_ENC_QUANT_REST_CB   "a.gen.enc.quant.rest.codebook.%s"
+
 // qwen3tts code_predictor
 #define TN_A_GEN_CODE_PROJ_IN  "a.gen.code.proj_in.%s"
 #define TN_A_GEN_CODE_EMBD     "a.gen.code.embd.%s"
@@ -270,6 +276,31 @@
 #define TN_A_GEN_CODE_EH_PROJ      "a.gen.code.blk.%d.eh_proj.%s"
 #define TN_A_GEN_CODE_BLK_EMBD     "a.gen.code.blk.%d.embd.%s"
 #define TN_A_GEN_CODE_BLK_OUT_NORM "a.gen.code.blk.%d.out_norm.%s"
+
+// fish_s2: fast AR input embedding, shared by all codebooks
+#define TN_A_GEN_CODE_TOK_EMBD "a.gen.code.tok_embd.%s"
+
+// fish_s2 codec encoder, the transformer layers use the generic a.blk.* names
+#define TN_A_CODEC_ENC_ENTRY      "a.codec.enc.entry.%s"
+#define TN_A_CODEC_ENC_SNAKE      "a.codec.enc.blk.%d.snake.%s"
+#define TN_A_CODEC_ENC_CONV       "a.codec.enc.blk.%d.conv.%s"
+#define TN_A_CODEC_ENC_RES_ACT1   "a.codec.enc.blk.%d.res.%d.act1.%s"
+#define TN_A_CODEC_ENC_RES_CONV1  "a.codec.enc.blk.%d.res.%d.conv1.%s"
+#define TN_A_CODEC_ENC_RES_ACT2   "a.codec.enc.blk.%d.res.%d.act2.%s"
+#define TN_A_CODEC_ENC_RES_CONV2  "a.codec.enc.blk.%d.res.%d.conv2.%s"
+#define TN_A_CODEC_ENC_POST_SNAKE "a.codec.enc.post_snake.%s"
+#define TN_A_CODEC_ENC_POST_CONV  "a.codec.enc.post_conv.%s"
+#define TN_A_CODEC_DOWN_CONV      "a.codec.down.blk.%d.conv.%s"
+#define TN_A_CODEC_DOWN_DWCONV    "a.codec.down.blk.%d.dwconv.%s"
+#define TN_A_CODEC_DOWN_NORM      "a.codec.down.blk.%d.norm.%s"
+#define TN_A_CODEC_DOWN_PW1       "a.codec.down.blk.%d.pw1.%s"
+#define TN_A_CODEC_DOWN_PW2       "a.codec.down.blk.%d.pw2.%s"
+#define TN_A_CODEC_DOWN_GAMMA     "a.codec.down.blk.%d.gamma"
+#define TN_A_CODEC_PRE_NORM       "a.codec.pre_norm.%s"
+#define TN_A_CODEC_VQ_FIRST_IN    "a.codec.vq.first.in_proj.%s"
+#define TN_A_CODEC_VQ_FIRST_CB    "a.codec.vq.first.codebook.%s"
+#define TN_A_CODEC_VQ_REST_IN     "a.codec.vq.rest.in_proj.%s"
+#define TN_A_CODEC_VQ_REST_CB     "a.codec.vq.rest.codebook.%s"
 
 // qwen3tts code2wav (RVQ codes -> raw PCM)
 // pre_transformer layers use the generic TN_ATTN_*/TN_FFN_*/TN_LN_*/TN_LS_* macros, prefix "a.gen.wav.tfm"
@@ -584,10 +615,16 @@ enum projector_type {
     PROJECTOR_TYPE_POCKETTTS_SPKENC,
     PROJECTOR_TYPE_POCKETTTS_GEN,
     PROJECTOR_TYPE_SOPRANO,
+    PROJECTOR_TYPE_KOKORO,
+    PROJECTOR_TYPE_TINY_VOCA,
     PROJECTOR_TYPE_LFM3A_GEN,
     PROJECTOR_TYPE_DRAMA3_GEN,
     PROJECTOR_TYPE_ZONOS3_GEN,
     PROJECTOR_TYPE_ZONOS3_SPKENC,
+    PROJECTOR_TYPE_YUE2_GEN,
+    PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN,
+    PROJECTOR_TYPE_FISH_S2_GEN,
+    PROJECTOR_TYPE_FISH_S2_SPKENC,
     PROJECTOR_TYPE_MUSE_GLIMMER,
     PROJECTOR_TYPE_SENSENOVA_U1,
     PROJECTOR_TYPE_COHERE2V,
@@ -676,10 +713,16 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_POCKETTTS_SPKENC,  "pockettts_spkenc"},
     { PROJECTOR_TYPE_POCKETTTS_GEN,     "pockettts_gen"},
     { PROJECTOR_TYPE_SOPRANO,           "soprano"},
+    { PROJECTOR_TYPE_KOKORO,            "kokoro"},
+    { PROJECTOR_TYPE_TINY_VOCA,         "tiny_voca"},
     { PROJECTOR_TYPE_LFM3A_GEN,         "lfm3a_gen"},
     { PROJECTOR_TYPE_DRAMA3_GEN,        "drama3_gen"},
     { PROJECTOR_TYPE_ZONOS3_GEN,        "zonos3_gen"},
     { PROJECTOR_TYPE_ZONOS3_SPKENC,     "zonos3_spkenc"},
+    { PROJECTOR_TYPE_YUE2_GEN,          "yue2_gen"},
+    { PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN, "minimax_music3_gen"},
+    { PROJECTOR_TYPE_FISH_S2_GEN,       "fish_s2_gen"},
+    { PROJECTOR_TYPE_FISH_S2_SPKENC,    "fish_s2_spkenc"},
     { PROJECTOR_TYPE_MUSE_GLIMMER,      "muse-glimmer"},
     { PROJECTOR_TYPE_SENSENOVA_U1,      "sensenova_u1"},
     { PROJECTOR_TYPE_COHERE2V,          "cohere2v"},

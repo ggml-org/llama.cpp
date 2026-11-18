@@ -389,6 +389,7 @@ bool mtmd_subcontext::encode_batch(int n_threads, const mtmd_image_f32_batch * i
 static std::vector<c2w_state_slot> list_gen_state_slots(const mtmd_hparams & hparams, const mtmd_model & model) {
     switch (model.proj_type) {
         case PROJECTOR_TYPE_QWEN3TTS_GEN:  return list_c2w_state_slots(hparams, model);
+        case PROJECTOR_TYPE_FISH_S2_GEN:   return list_c2w_state_slots(hparams, model);
         case PROJECTOR_TYPE_DRAMA3_GEN:    return list_drama3_state_slots(hparams, model);
         case PROJECTOR_TYPE_POCKETTTS_GEN: return list_pockettts_state_slots(hparams, model);
         case PROJECTOR_TYPE_LFM3A_GEN:     return list_lfm3a_gen_state_slots(hparams, model);
@@ -520,6 +521,87 @@ mtmd_subctx_enc_state * mtmd_subcontext::enc_state_init(int32_t n_frames_max) {
     return st.release();
 }
 
+bool mtmd_subcontext::encode_kokoro(mtmd_subctx_encode_params * params) {
+    const int n_embd  = model.n_mmproj_embd();
+    const int n_style = mtmd_graph_kokoro::n_style;
+    if (params->gen_process != MTMD_SUBCTX_GEN_PROCESS_GEN_WAV || !params->codes || !params->feats || !params->gen_state || !params->out_audio) {
+        LOG_ERR("%s: kokoro takes the phoneme tokens and their backbone states\n", __func__);
+        return false;
+    }
+    const auto & tokens = *params->codes;
+    const auto & feats  = *params->feats;
+    const int n_tok = (int) tokens.size();
+    if (n_tok < 2 || feats.size() != (size_t) 2 * n_style + (size_t) n_tok * n_embd) {
+        LOG_ERR("%s: expected a voice row of %d values, then %d values for each of the %d tokens\n", __func__, 2 * n_style, n_embd, n_tok);
+        return false;
+    }
+    const int64_t n_vocab = model.cbx_tensors.at("a.gen.text.embedding.weight")->ne[1];
+    for (int32_t t : tokens) {
+        if (t < 0 || t >= n_vocab) {
+            LOG_ERR("%s: phoneme token out of range (%d, vocabulary size %lld)\n", __func__, t, (long long) n_vocab);
+            return false;
+        }
+    }
+    const std::vector<float> style_dec(feats.begin(), feats.begin() + n_style);
+    const std::vector<float> style_pred(feats.begin() + n_style, feats.begin() + 2 * n_style);
+    const float * bert = feats.data() + 2 * n_style;
+
+    auto run = [&](mtmd_subctx_kokoro_io & io) {
+        mtmd_subctx_encode_params p = *params;
+        p.kokoro    = &io;
+        p.out_audio = nullptr;
+        return encode(&p);
+    };
+
+    std::vector<float> text_cnn;
+    {
+        mtmd_subctx_kokoro_io io;
+        io.stage  = mtmd_graph_kokoro::STAGE_TEXT;
+        io.n_tok  = n_tok;
+        io.tokens = &tokens;
+        io.out0   = &text_cnn;
+        if (!run(io)) {
+            return false;
+        }
+    }
+
+    std::vector<float> shared, asr;
+    const int n_frames = mtmd_graph_kokoro::prosody(model, bert, n_embd, text_cnn.data(), n_tok, style_pred.data(), params->speed, shared, asr);
+
+    std::vector<float> f0, en;
+    {
+        mtmd_subctx_kokoro_io io;
+        io.stage    = mtmd_graph_kokoro::STAGE_F0N;
+        io.n_frames = n_frames;
+        io.x        = &shared;
+        io.style    = &style_pred;
+        io.out0     = &f0;
+        io.out1     = &en;
+        if (!run(io)) {
+            return false;
+        }
+    }
+
+    std::vector<float> har, spec;
+    {
+        mtmd_subctx_kokoro_io io;
+        io.stage    = mtmd_graph_kokoro::STAGE_DEC;
+        io.n_frames = n_frames;
+        io.n_har    = mtmd_graph_kokoro::har_source(model, f0, params->gen_state->rng, har);
+        io.x        = &asr;
+        io.style    = &style_dec;
+        io.f0       = &f0;
+        io.en       = &en;
+        io.har      = &har;
+        io.out0     = &spec;
+        if (!run(io)) {
+            return false;
+        }
+    }
+    mtmd_graph_kokoro::istft(spec, *params->out_audio);
+    return true;
+}
+
 bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
     const mtmd_image_f32_batch & imgs = *params->imgs;
     int n_batch_cur = imgs.entries.size();
@@ -533,6 +615,10 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
     // if buffers are not allocated, we need to do a warmup run to allocate them
     if (!is_allocated) {
         warmup(*params->imgs);
+    }
+
+    if (model.proj_type == PROJECTOR_TYPE_KOKORO && !params->kokoro) {
+        return encode_kokoro(params);
     }
 
     const bool needs_gen_state = params->gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_CODE ||
@@ -674,9 +760,9 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         set_input_attn_mask(mask);
     };
 
-    // rope positions and attention mask of the mimi transformers (pocket-tts).
+    // rope positions and attention mask of the mimi encoder transformer (pocket-tts, qwen3tts reference encoder).
     // the mask is causal with a sliding window, see _build_attention_mask() in the reference
-    auto set_pockettts_tfm_inputs = [&]() {
+    auto set_mimi_tfm_inputs = [&](int64_t max_samples) {
         const int64_t n_pos = ggml_nelements(get_inp_tensor("inp_pos"));
         GGML_ASSERT(n_pos > 0);
         std::vector<int32_t> positions((size_t) n_pos);
@@ -685,9 +771,13 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         }
         set_input_i32("inp_pos", positions);
 
-        // the preprocessor truncates the waveform to keep this mask bounded
-        const int64_t max_pos = (int64_t) mtmd_hparams::pockettts_max_spk_seconds * hparams.audio_sample_rate / 120;
-        GGML_ASSERT(n_pos <= max_pos && "pocket-tts speaker reference too long for a dense mask");
+        // the caller truncates the waveform to keep this mask bounded
+        int64_t hop = 1;
+        for (int32_t ratio : hparams.seanet_ratios) {
+            hop *= ratio;
+        }
+        const int64_t max_pos = (max_samples + hop - 1) / hop;
+        GGML_ASSERT(n_pos <= max_pos && "speaker reference too long for a dense mask");
 
         const int64_t context = hparams.mimi_tfm_context;
         std::vector<float> mask((size_t) n_pos * n_pos, -INFINITY);
@@ -1482,7 +1572,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
             } break;
         case PROJECTOR_TYPE_POCKETTTS_SPKENC:
             {
-                set_pockettts_tfm_inputs();
+                set_mimi_tfm_inputs((int64_t) mtmd_hparams::pockettts_max_spk_seconds * hparams.audio_sample_rate);
             } break;
         case PROJECTOR_TYPE_POCKETTTS_GEN:
             {
@@ -1505,8 +1595,67 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                 }
             } break;
         case PROJECTOR_TYPE_SOPRANO:
+        case PROJECTOR_TYPE_YUE2_GEN:
+        case PROJECTOR_TYPE_TINY_VOCA:
             {
                 set_input_f32("inp_feats", *params->feats);
+            } break;
+        case PROJECTOR_TYPE_KOKORO:
+            {
+                const auto * io = params->kokoro;
+                GGML_ASSERT(io);
+                switch (io->stage) {
+                    case mtmd_graph_kokoro::STAGE_TEXT:
+                        {
+                            std::vector<int32_t> tokens = *io->tokens;
+                            set_input_i32("inp_tokens", tokens);
+                        } break;
+                    case mtmd_graph_kokoro::STAGE_F0N:
+                        set_input_f32("inp_x",     *io->x);
+                        set_input_f32("inp_style", *io->style);
+                        break;
+                    case mtmd_graph_kokoro::STAGE_DEC:
+                        set_input_f32("inp_asr",   *io->x);
+                        set_input_f32("inp_style", *io->style);
+                        set_input_f32("inp_f0",    *io->f0);
+                        set_input_f32("inp_n",     *io->en);
+                        set_input_f32("inp_har",   *io->har);
+                        break;
+                }
+            } break;
+        case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
+            {
+                set_input_f32("inp_feats", *params->feats);
+                if (params->gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_CODE) {
+                    if (params->code0 < 0 || (int64_t) params->code0 >= model.gen_code_out_embd_w->ne[1]) {
+                        LOG_ERR("%s: code0 out of range (%d, vocab %lld)\n", __func__, params->code0, (long long) model.gen_code_out_embd_w->ne[1]);
+                        return false;
+                    }
+                    std::vector<int32_t> code0 = { params->code0 };
+                    set_input_i32("inp_code0", code0);
+                    // greedy (temp <= 0) has no random input
+                    if (ggml_graph_get_tensor(gf, "inp_rand") != nullptr) {
+                        std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+                        std::vector<float> r(model.gen_code_head_w->ne[2]);
+                        for (auto & v : r) {
+                            v = dist(params->gen_state->rng);
+                        }
+                        set_input_f32("inp_rand", r);
+                    }
+                } else if (params->gen_process == MTMD_SUBCTX_GEN_PROCESS_FLOW_COND) {
+                    // F.interpolate(mode="nearest") of the reference
+                    ggml_tensor * t = get_inp_tensor("inp_idx");
+                    const int64_t n_in  = (int64_t) params->feats->size() / model.hparams.n_embd;
+                    const int64_t n_out = t->ne[0];
+                    const float   scale = (float) n_in / (float) n_out;
+                    std::vector<int32_t> idx(n_out);
+                    for (int64_t i = 0; i < n_out; i++) {
+                        idx[i] = (int32_t) std::min<int64_t>((int64_t) floorf((float) i * scale), n_in - 1);
+                    }
+                    set_input_i32("inp_idx", idx);
+                } else if (params->gen_process == MTMD_SUBCTX_GEN_PROCESS_FLOW_STEP) {
+                    set_input_f32("inp_t", { params->flow_t });
+                }
             } break;
         case PROJECTOR_TYPE_GEMMA4V:
         case PROJECTOR_TYPE_GEMMA4UV:
@@ -1680,6 +1829,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
         case PROJECTOR_TYPE_ZONOS3_SPKENC:
+        case PROJECTOR_TYPE_FISH_S2_SPKENC:
             {
                 // do nothing
             } break;
@@ -1789,6 +1939,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                 }
             } break;
         case PROJECTOR_TYPE_DRAMA3_GEN:
+        case PROJECTOR_TYPE_FISH_S2_GEN:
             {
                 const int64_t n_cb      = model.gen_code_embd_w->ne[2];
                 const int64_t n_vocab   = model.gen_code_embd_w->ne[1];
@@ -1807,6 +1958,13 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                     }
                     set_input_i32("inp_codes", codes);
                     set_gen_state_in();
+                } else if (model.proj_type == PROJECTOR_TYPE_FISH_S2_GEN) {
+                    if (params->code0 < 0 || params->code0 >= n_vocab) {
+                        LOG_ERR("%s: code0 out of range (%d, vocab %lld)\n", __func__, params->code0, (long long) n_vocab);
+                        return false;
+                    }
+                    std::vector<int32_t> code0 = { params->code0 };
+                    set_input_i32("inp_code0", code0);
                 } else {
                     // code0 < 0: next row is text (prompt), the tower only fills its KV
                     // codes: input frame codes for a speech row, empty for a text row
@@ -1842,6 +2000,10 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
             } break;
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
             {
+                if (params->gen_process == MTMD_SUBCTX_GEN_PROCESS_TOKENIZE) {
+                    set_mimi_tfm_inputs((int64_t) mtmd_hparams::qwen3tts_max_ref_seconds * hparams.audio_sample_rate);
+                    break;
+                }
                 if (params->gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_WAV) {
                     GGML_ASSERT(params->codes != nullptr);
 
@@ -2348,6 +2510,22 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         return false;
     }
 
+    if (model.proj_type == PROJECTOR_TYPE_KOKORO) {
+        const auto * io = params->kokoro;
+        auto read = [&](const char * name, std::vector<float> * out) {
+            ggml_tensor * t = ggml_graph_get_tensor(gf, name);
+            GGML_ASSERT(t != nullptr && out != nullptr);
+            out->resize(ggml_nelements(t));
+            ggml_backend_tensor_get(t, out->data(), 0, ggml_nbytes(t));
+        };
+        switch (io->stage) {
+            case mtmd_graph_kokoro::STAGE_TEXT: read("out_text", io->out0); break;
+            case mtmd_graph_kokoro::STAGE_F0N:  read("out_f0", io->out0); read("out_n", io->out1); break;
+            case mtmd_graph_kokoro::STAGE_DEC:  read("out_spec", io->out0); break;
+        }
+        return true;
+    }
+
     if (embeddings != nullptr) {
         // sanity check (assuming that all images in batch have the same number of tokens, so we only check the first one)
         const int n_tokens_out = embeddings->ne[1];
@@ -2377,6 +2555,35 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
     //
     // for audio gen models
     //
+
+    if (model.proj_type == PROJECTOR_TYPE_QWEN3TTS_GEN && params->gen_process == MTMD_SUBCTX_GEN_PROCESS_TOKENIZE) {
+        GGML_ASSERT(params->out_codes && params->out_code_embd);
+
+        // frame-major codes, the layout of GEN_WAV's input
+        std::vector<std::vector<int32_t>> groups;
+        for (int g = 0; ; g++) {
+            ggml_tensor * t = ggml_graph_get_tensor(gf, ("out_ref_code_" + std::to_string(g)).c_str());
+            if (!t) {
+                break;
+            }
+            groups.emplace_back((size_t) ggml_nelements(t));
+            ggml_backend_tensor_get(t, groups.back().data(), 0, ggml_nbytes(t));
+        }
+        GGML_ASSERT(!groups.empty());
+        const size_t n_frames = groups[0].size();
+        params->out_codes->resize(n_frames * groups.size());
+        for (size_t f = 0; f < n_frames; f++) {
+            for (size_t g = 0; g < groups.size(); g++) {
+                (*params->out_codes)[f * groups.size() + g] = groups[g][f];
+            }
+        }
+
+        ggml_tensor * rows = ggml_graph_get_tensor(gf, "out_ref_rows");
+        GGML_ASSERT(rows && rows->type == GGML_TYPE_F32 && (size_t) rows->ne[1] == n_frames);
+        params->out_code_embd->resize((size_t) ggml_nelements(rows));
+        ggml_backend_tensor_get(rows, params->out_code_embd->data(), 0, ggml_nbytes(rows));
+        return true;
+    }
 
     if (model.proj_type == PROJECTOR_TYPE_CHATTERBOX && params->gen_process == MTMD_SUBCTX_GEN_PROCESS_TOKENIZE) {
         ggml_tensor * fsq = ggml_graph_get_tensor(gf, "out_fsq");
@@ -2622,8 +2829,9 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
             mtmd_graph_soprano::decode_spectrum(model, spectrum, out_audio);
         }
 
-        // drop the tail audio that comes from the code-0 rear padding, drama3 has no padding
-        if (model.proj_type != PROJECTOR_TYPE_DRAMA3_GEN) {
+        // drop the tail audio that comes from the code-0 rear padding, drama3, fish_s2, yue2 and minimax_music3 have no padding
+        if (model.proj_type != PROJECTOR_TYPE_DRAMA3_GEN && model.proj_type != PROJECTOR_TYPE_FISH_S2_GEN && model.proj_type != PROJECTOR_TYPE_YUE2_GEN &&
+                model.proj_type != PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN) {
             const int64_t n_codes    = params->codes ? model.gen_code_head_w->ne[2] + 1 : 0;
             const int64_t n_frames_w = hparams.wav_tfm_swa;
             const int64_t n_frames   = params->codes ? (int64_t) params->codes->size() / n_codes : n_frames_w;

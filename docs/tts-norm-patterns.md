@@ -7,6 +7,10 @@ Jinja has no regex support, and exposing `std::regex` / Python `re` would not he
 - `tts_norm_scan(text, rules)`: split text into matched and unmatched segments
 - `tts_norm_sub(text, pattern, repl)`: replace every match
 
+A third function, `tts_dict(name, key)`, gives the template access to dictionaries stored in the model (e.g. a pronunciation lexicon).
+
+A fourth one, `tts_g2p(word)`, gives the pronunciation of a word by the letter-to-sound model of the mmproj, when the caller provides one (see below).
+
 Implementations:
 - C++: [common/chat-tts-norm.cpp](../common/chat-tts-norm.cpp), injected into task templates by `common_chat_template_render()` in [common/chat.cpp](../common/chat.cpp). They are not available to chat templates.
 - Python reference: [scripts/chat_tts_norm.py](../scripts/chat_tts_norm.py), for use with `jinja2` (`env.globals["tts_norm_scan"] = chat_tts_norm.tts_norm_scan`)
@@ -68,6 +72,33 @@ Replaces every match of `pattern`, with the same scanning rules as `tts_norm_sca
 | `%%` | a literal `%` |
 
 Any other `%` sequence in `repl`, or a reference to a group that does not exist, is an error.
+
+### `tts_dict(name, key)`
+
+Looks up `key` in the dictionary `name` of the model and returns its value, or `none` if the key is missing. An unknown dictionary name is an error. A model can ship any number of dictionaries, for example a pronunciation lexicon per language:
+
+```jinja
+{%- set e = tts_dict('lexicon_en', word) -%}
+{%- if e is none -%}{{ spell(word) }}
+{%- elif e is mapping -%}{{ e[tag] if tag in e else e.DEFAULT }}
+{%- else -%}{{ e }}
+{%- endif -%}
+```
+
+The lookup is exact: no case folding and no normalization, do them in the template.
+
+The GGUF lists the names of the dictionaries in `tokenizer.tts_dicts`. Each one is stored as two arrays of strings of the same length: `tokenizer.tts_dict.<name>.keys`, sorted by the UTF-8 bytes of the key, and `tokenizer.tts_dict.<name>.values`. A value is a JSON document (string, number, list, object, ...) and is returned decoded. `GGUFWriter.add_tts_dicts(dicts)` writes all of this.
+
+### `tts_g2p(word)`
+
+Pronunciation of `word` by a letter-to-sound model, as phonemes separated by spaces, in the notation of the model (e.g. CMUdict with stress digits for tiny-voca), or `none`. The template converts it to the symbols of the model. It is `none` when the model has no letter-to-sound model, or when the caller gives none: `common_chat_get_tts_prompt()` takes it as an optional callback, `llama-tts` and `llama-server` pass `mtmd_gen_audio_g2p()`. A template must keep working without it, e.g. by spelling the word.
+
+```jinja
+{%- set g = tts_g2p(word) -%}
+{%- if g is none -%}{{ spell(word) }}{%- else -%}{{ from_cmudict(word, g.split(' ')) }}{%- endif -%}
+```
+
+There is no Python reference for it: a test passes its own function (`env.globals["tts_g2p"]`).
 
 ## Pattern syntax
 
