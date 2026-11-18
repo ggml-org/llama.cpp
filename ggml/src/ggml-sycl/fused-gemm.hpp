@@ -40,6 +40,7 @@ template <int SG> static constexpr bool fg_built() {
 }
 
 static constexpr int GGML_SYCL_FG_BN = 32;
+static constexpr int FG_KSPLIT = 4;
 static constexpr int64_t GGML_SYCL_MMID_SCHED_MAX_EXPERTS = 4096;
 
 // Shape and type gates for the kernels below. Device capability is separate: it needs a queue to ask.

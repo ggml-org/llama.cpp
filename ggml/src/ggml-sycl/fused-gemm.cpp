@@ -18,7 +18,6 @@ namespace mx = sycl::ext::oneapi::experimental::matrix;
 // superblock into steps of this width. The sub-groups of a work-group each walk their own K range
 // and are summed at the end.
 static constexpr int FG_BK     = QK4_NL;
-static constexpr int FG_KSPLIT = 4;
 
 // Element traits of one joint_matrix operand type. The A stage and the B pack compute in f32 and
 // convert once, in registers, when they write the element, so any type costs the same one pass.

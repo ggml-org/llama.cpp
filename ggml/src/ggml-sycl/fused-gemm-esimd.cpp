@@ -25,7 +25,7 @@
 // whether 2D block loads exist. Xe2 and Xe-HPC: 16 wide, 32 rows, 2D loads. Xe-HPG (Arc A, ARL-H):
 // 8 wide, no 2D block messages, and 256 registers of 32 bytes, half of Xe2's file, so 16 rows: its
 // 32-row accumulators alone would take half the registers.
-static constexpr int GGML_SYCL_GROUPED_GEMM_KSPLIT = 4;   // FG_KSPLIT of the joint_matrix kernel
+static constexpr int GGML_SYCL_GROUPED_GEMM_KSPLIT = FG_KSPLIT;
 static constexpr int GGML_SYCL_GROUPED_GEMM_BN     = GGML_SYCL_FG_BN;
 static constexpr int GROUPED_GEMM_MR               = 32;  // rows of one thread on Xe2: one 2D load covers them
 static constexpr int GROUPED_GEMM_RC               = 8;   // rows of one dpas
