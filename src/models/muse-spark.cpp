@@ -15,6 +15,7 @@ void llama_model_muse_spark::load_arch_hparams(llama_model_loader & ml) {
 
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
     ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
+    hparams.rope_pattern = hparams.is_swa_impl;
 
     switch (hparams.n_layer()) {
         case 62: type = LLM_TYPE_816B_A42B; break;
@@ -75,7 +76,7 @@ void llama_model_muse_spark::load_arch_tensors(llama_model_loader &) {
     }
 }
 
-llama_model_muse_spark::graph::graph(const llama_model & model, const llm_graph_params & params)
+llama_model_muse_spark::graph::graph(const llm_graph_params & params)
     : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -96,13 +97,7 @@ llama_model_muse_spark::graph::graph(const llama_model & model, const llm_graph_
     for (int il = 0; il < n_layer; ++il) {
         res->t_layer_inp[il] = inpL;
 
-        const float freq_base_l  = model.get_rope_freq_base (cparams, il);
-        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
-
         ggml_tensor * inpSA = inpL;
-
-        // RoPE runs on the SWA layers, NoPE on the global ones.
-        const bool use_rope = hparams.is_swa(il);
 
         cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
@@ -120,19 +115,11 @@ llama_model_muse_spark::graph::graph(const llama_model & model, const llm_graph_
             cb(Qcur, "Qcur_normed", il);
             cb(Kcur, "Kcur_normed", il);
 
-            if (use_rope) {
-                Qcur = ggml_rope_ext(
-                        ctx0, Qcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                        ext_factor, attn_factor, beta_fast, beta_slow);
-                cb(Qcur, "Qcur_rope", il);
+            Qcur = build_rope(Qcur, inp_pos, il);
+            cb(Qcur, "Qcur_rope", il);
 
-                Kcur = ggml_rope_ext(
-                        ctx0, Kcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                        ext_factor, attn_factor, beta_fast, beta_slow);
-                cb(Kcur, "Kcur_rope", il);
-            }
+            Kcur = build_rope(Kcur, inp_pos, il);
+            cb(Kcur, "Kcur_rope", il);
 
             cur = build_attn(inp_attn,
                     NULL, NULL, NULL,
@@ -234,5 +221,5 @@ llama_model_muse_spark::graph::graph(const llama_model & model, const llm_graph_
 }
 
 std::unique_ptr<llm_graph_context> llama_model_muse_spark::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }

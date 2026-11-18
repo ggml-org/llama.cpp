@@ -20,8 +20,8 @@ bool ggml_zdnn_supports_flash_attn_ext(const ggml_backend_zdnn_device_context * 
     memcpy(&max_bias,      (const float *) op->op_params + 1, sizeof(float));
     memcpy(&logit_softcap, (const float *) op->op_params + 2, sizeof(float));
 
-    // sinks, alibi, softcap and sparse k/v sets are not implemented
-    if (op->src[4] != nullptr || max_bias != 0.0f || logit_softcap != 0.0f || ggml_get_op_params_i32(op, 4) != 0) {
+    // sinks, alibi, softcap, sparse k/v sets and k/v row lists are not implemented
+    if (op->src[4] != nullptr || op->src[5] != nullptr || max_bias != 0.0f || logit_softcap != 0.0f || ggml_get_op_params_i32(op, 4) != 0) {
         return false;
     }
 
@@ -245,11 +245,5 @@ void ggml_zdnn_flash_attn_ext(ggml_backend_zdnn_context * ctx, ggml_tensor * dst
         for (int64_t h = 0; h < n_head; h++) {
             memcpy((char *) dst->data + h*dst->nb[1] + iq*dst->nb[2], o_host + (h*n_q + iq)*d_v, d_v*sizeof(float));
         }
-    }
-
-    // the result is written to dst->data directly, so the dst ztensor is stale
-    ggml_backend_zdnn_buffer * dst_extra = (ggml_backend_zdnn_buffer *) dst->extra;
-    if (dst_extra != nullptr) {
-        dst_extra->ztensor.is_transformed = false;
     }
 }

@@ -98,8 +98,8 @@ def test_server_slots():
 def test_load_split_model():
     global server
     server.offline = False
-    server.model_hf_repo = "ggml-org/models"
-    server.model_hf_file = "tinyllamas/split/stories15M-q8_0-00001-of-00003.gguf"
+    server.model_hf_repo = "ggml-org-dev/stories15M"
+    server.model_hf_file = "split/stories15M-q8_0-00001-of-00003.gguf"
     server.model_alias = "tinyllama-split"
     server.start()
     res = server.make_request("POST", "/completion", data={

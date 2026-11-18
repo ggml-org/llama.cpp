@@ -61,32 +61,33 @@ struct set_rows_context {
     uint8_t * vtcm_base;
     uint32_t task_start;
     uint32_t tasks;
-    uint32_t tasks_per_thread;
+    uint32_t tasks_per_hvx;
 };
 
 #define SET_ROWS_THREAD_DMA_FN(TYPE_NAME, IDX_TYPE, COMPUTE_EXPR)                                                \
-static void set_rows_thread_dma_##TYPE_NAME##_##IDX_TYPE(unsigned int nth, unsigned int ith, void *data) {       \
+static void set_rows_thread_dma_##TYPE_NAME##_##IDX_TYPE(const htp_thread_t * th, unsigned int nth,              \
+                                                         unsigned int ith, void *data) {                         \
     struct set_rows_context * srctx = (struct set_rows_context *)data;                                           \
     struct htp_ops_context * octx = srctx->octx;                                                                 \
     const struct htp_set_rows_kernel_params * kparams = srctx->kparams;                                          \
     set_rows_preamble;                                                                                           \
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];                                                       \
-    const uint32_t dr  = srctx->tasks_per_thread;                                                                \
+    struct htp_thread_trace * tr = th->trace;                                                                    \
+    const uint32_t dr  = srctx->tasks_per_hvx;                                                                   \
     const uint32_t ir0 = srctx->task_start + dr * ith;                                                           \
     if (ir0 >= srctx->task_start + srctx->tasks) {                                                               \
         return;                                                                                                  \
     }                                                                                                            \
     const uint32_t ir1 = MIN(ir0 + dr, srctx->task_start + srctx->tasks);                                        \
-    dma_queue * dma_q = octx->ctx->dma[ith];                                                                     \
+    dma_queue * dma_q = th->dma_q;                                                                               \
     const struct htp_set_rows_vtcm_layout * vtcm_layout = &srctx->vtcm_layout;                                   \
     uint8_t * vtcm_src0 = VTCM_LAYOUT_PTR(uint8_t, srctx->vtcm_base, vtcm_layout->off_src0) +                    \
-                          ith * vtcm_layout->src0_bytes_per_thread;                                              \
+                          ith * vtcm_layout->src0_bytes_per_hvx;                                                 \
     uint8_t * vtcm_dst  = VTCM_LAYOUT_PTR(uint8_t, srctx->vtcm_base, vtcm_layout->off_dst) +                     \
-                          ith * vtcm_layout->dst_bytes_per_thread;                                               \
+                          ith * vtcm_layout->dst_bytes_per_hvx;                                                  \
     const uint32_t src0_row_size = ne00 * sizeof(float);                                                         \
     const uint32_t dst_row_size  = htp_tensor_get_row_size(octx->dst->type, ne00);                               \
-    const uint32_t nrows_per_thread = ir1 - ir0;                                                                 \
-    const uint32_t total_steps = ne03 * ne02 * nrows_per_thread;                                                 \
+    const uint32_t nrows_per_hvx = ir1 - ir0;                                                                    \
+    const uint32_t total_steps = ne03 * ne02 * nrows_per_hvx;                                                    \
     uint32_t pi_step = 0;                                                                                        \
     uint32_t pi02 = 0;                                                                                           \
     uint32_t pi03 = 0;                                                                                           \
@@ -102,7 +103,7 @@ static void set_rows_thread_dma_##TYPE_NAME##_##IDX_TYPE(unsigned int nth, unsig
                                      src0_data),                                                                 \
                        vtcm_layout->src0_spad_half_size, src0_row_size, src0_row_size, 1);                       \
         pi_step++;                                                                                               \
-        if (pi_step == nrows_per_thread) {                                                                       \
+        if (pi_step == nrows_per_hvx) {                                                                          \
             pi_step = 0;                                                                                         \
             pi02++;                                                                                              \
             if (pi02 == ne02) {                                                                                  \
@@ -147,7 +148,7 @@ static void set_rows_thread_dma_##TYPE_NAME##_##IDX_TYPE(unsigned int nth, unsig
                            dma_make_data(src_spad, psrc0_data),                                                  \
                            vtcm_layout->src0_spad_half_size, src0_row_size, src0_row_size, 1);                   \
             pi_step++;                                                                                           \
-            if (pi_step == nrows_per_thread) {                                                                   \
+            if (pi_step == nrows_per_hvx) {                                                                      \
                 pi_step = 0;                                                                                     \
                 pi02++;                                                                                          \
                 if (pi02 == ne02) {                                                                              \
@@ -157,7 +158,7 @@ static void set_rows_thread_dma_##TYPE_NAME##_##IDX_TYPE(unsigned int nth, unsig
             }                                                                                                    \
         }                                                                                                        \
         ci_step++;                                                                                               \
-        if (ci_step == nrows_per_thread) {                                                                       \
+        if (ci_step == nrows_per_hvx) {                                                                          \
             ci_step = 0;                                                                                         \
             ci02++;                                                                                              \
             ci11_base++;                                                                                         \
@@ -211,11 +212,11 @@ int op_set_rows(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    if (!htp_ops_context_set_n_threads(octx, (uint32_t) kparams->n_threads)) {
+    if (!htp_ops_context_set_n_hvx(octx, (uint32_t) kparams->n_hvx)) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
-    const uint32_t n_threads = octx->n_threads;
+    const uint32_t n_hvx = octx->n_hvx;
 
     // l2fetch the src1 (indices) tensor in the main thread
     hex_l2fetch_block((const void *)octx->src[1]->data, octx->src[1]->ne[3] * octx->src[1]->nb[3]);
@@ -225,9 +226,9 @@ int op_set_rows(struct htp_ops_context * octx) {
     srctx.kparams = kparams;
     srctx.task_start = task_start;
     srctx.tasks = tasks;
-    srctx.tasks_per_thread = fastdiv(tasks + n_threads - 1, &octx->n_threads_div);
+    srctx.tasks_per_hvx = fastdiv(tasks + n_hvx - 1, &octx->n_hvx_div);
 
-    htp_set_rows_vtcm_layout_build(&srctx.vtcm_layout, octx->dst->type, ne00, n_threads);
+    htp_set_rows_vtcm_layout_build(&srctx.vtcm_layout, octx->dst->type, ne00, n_hvx);
     srctx.vtcm_base = (uint8_t *)octx->ctx->vtcm_base;
 
     work_queue_func_t q_func = NULL;
@@ -240,15 +241,15 @@ int op_set_rows(struct htp_ops_context * octx) {
         default:            return HTP_STATUS_NO_SUPPORT;
     }
 
-    FARF(HIGH, "set-rows: (%ux%ux%ux%u) x (%ux%ux%ux%u) -> (%ux%ux%ux%u) : src0-vtcm-size %zu dst-vtcm-size %zu n-threads %d\n",
+    FARF(HIGH, "set-rows: (%ux%ux%ux%u) x (%ux%ux%ux%u) -> (%ux%ux%ux%u) : src0-vtcm-size %zu dst-vtcm-size %zu n-hvx %d\n",
          octx->src[0]->ne[0], octx->src[0]->ne[1], octx->src[0]->ne[2], octx->src[0]->ne[3],
          octx->src[1]->ne[0], octx->src[1]->ne[1], octx->src[1]->ne[2], octx->src[1]->ne[3],
          octx->dst->ne[0], octx->dst->ne[1], octx->dst->ne[2], octx->dst->ne[3],
-         srctx.vtcm_layout.src0_bytes_per_thread * n_threads,
-         srctx.vtcm_layout.dst_bytes_per_thread  * n_threads,
-         n_threads);
+         srctx.vtcm_layout.src0_bytes_per_hvx * n_hvx,
+         srctx.vtcm_layout.dst_bytes_per_hvx  * n_hvx,
+         n_hvx);
 
-    work_queue_run(octx->ctx->work_queue, q_func, &srctx, n_threads);
+    work_queue_run(octx->ctx->hvx_queue, q_func, &srctx, n_hvx);
 
     return HTP_STATUS_OK;
 }

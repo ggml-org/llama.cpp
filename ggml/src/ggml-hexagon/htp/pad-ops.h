@@ -19,31 +19,31 @@ struct htp_pad_vtcm_layout {
     size_t off_dst;
     size_t src_row_size_aligned;
     size_t dst_row_size_aligned;
-    size_t src0_bytes_per_thread;
-    size_t dst_bytes_per_thread;
+    size_t src0_bytes_per_hvx;
+    size_t dst_bytes_per_hvx;
 };
 
 static inline void htp_pad_vtcm_layout_build(
     struct htp_pad_vtcm_layout * L,
     size_t                       src_row_size,
     size_t                       dst_row_size,
-    uint32_t                     n_threads
+    uint32_t                     n_hvx
 ) {
     L->src_row_size_aligned  = hex_round_up(src_row_size, 128);
     L->dst_row_size_aligned  = hex_round_up(dst_row_size, 128);
-    L->src0_bytes_per_thread = 2 * L->src_row_size_aligned;
-    L->dst_bytes_per_thread  = 2 * L->dst_row_size_aligned;
+    L->src0_bytes_per_hvx    = 2 * L->src_row_size_aligned;
+    L->dst_bytes_per_hvx     = 2 * L->dst_row_size_aligned;
 
     size_t off = 0;
-    VTCM_LAYOUT_ALLOC(off, off_src0, L->src0_bytes_per_thread * n_threads);
-    VTCM_LAYOUT_ALLOC(off, off_dst,  L->dst_bytes_per_thread * n_threads);
+    VTCM_LAYOUT_ALLOC(off, off_src0, L->src0_bytes_per_hvx * n_hvx);
+    VTCM_LAYOUT_ALLOC(off, off_dst,  L->dst_bytes_per_hvx * n_hvx);
 
     L->total_bytes = off;
 }
 
 struct htp_pad_kernel_params {
     uint8_t  kernel_type;
-    uint32_t n_threads;
+    uint32_t n_hvx;
     uint32_t total_rows;
     uint32_t use_dma;
     uint32_t elem_size;

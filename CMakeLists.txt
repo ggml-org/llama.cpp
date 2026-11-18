@@ -3,8 +3,8 @@ project("llama.cpp" C CXX)
 include(CheckIncludeFileCXX)
 
 ### llama.cpp version
-set(LLAMA_VERSION_MAJOR 0)
-set(LLAMA_VERSION_MINOR 8)
+set(LLAMA_VERSION_MAJOR 1)
+set(LLAMA_VERSION_MINOR 0)
 set(LLAMA_VERSION_PATCH 0)
 set(LLAMA_VERSION_BASE "${LLAMA_VERSION_MAJOR}.${LLAMA_VERSION_MINOR}.${LLAMA_VERSION_PATCH}")
 
@@ -134,7 +134,7 @@ option(LLAMA_BUILD_TOOLS     "llama: build tools"                               
 option(LLAMA_BUILD_EXAMPLES  "llama: build examples"                                                             ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_SERVER    "llama: build server example"                                                       ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_APP       "llama: build the unified binary"                                                   ${LLAMA_STANDALONE})
-option(LLAMA_BUILD_UI        "llama: build the embedded Web UI for server"                                       OFF)
+option(LLAMA_BUILD_UI        "llama: build Llama Chat, the embedded chat app, for server"                         OFF)
 option(LLAMA_USE_PREBUILT_UI "llama: use prebuilt UI from HF Bucket when available" ON)
 option(LLAMA_CONNECT         "llama: include the llama-connect tool (downloads a prebuilt binary)"               OFF)
 

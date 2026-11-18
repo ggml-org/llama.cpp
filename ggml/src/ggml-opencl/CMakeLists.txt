@@ -67,16 +67,18 @@ set(GGML_OPENCL_KERNELS
     argmax
     argsort
     top_k
+    top_k_mask
     lightning_indexer
     tri
     fill
+    arange
     fwht
     clamp
     cpy
     cvt
-    diag_mask_inf
     diag
     div
+    dsv4_hc
     gelu
     get_rows
     glu
@@ -130,6 +132,9 @@ set(GGML_OPENCL_KERNELS
     gemm_noshuffle_iq3_xxs_f32
     gemm_noshuffle_iq3_xxs_q8_1_dp4a
     gemv_noshuffle_iq3_xxs_f32
+    gemm_noshuffle_iq4_xs_f32
+    gemm_noshuffle_iq4_xs_q8_1_dp4a
+    gemv_noshuffle_iq4_xs_f32
     gemm_noshuffle_q3_k_q8_1_dp4a
     gemv_noshuffle_q3_k_f32
     mul_mv_q2_k_f32
@@ -164,6 +169,10 @@ set(GGML_OPENCL_KERNELS
     mul_mv_iq3_s_f32
     mul_mv_iq3_s_f32_flat
     mul_mm_iq3_s_f32_l4_lm
+    iq4_xs_grid
+    mul_mv_iq4_xs_f32
+    mul_mv_iq4_xs_f32_flat
+    mul_mm_iq4_xs_f32_l4_lm
     mul_mv_q3_k_f32_flat
     mul_mm_q3_k_f32_l4_lm
     mul_mv_q2_k_f32_flat
@@ -185,6 +194,8 @@ set(GGML_OPENCL_KERNELS
     mul_mv_mxfp4_f32
     mul_mv_mxfp4_f32_flat
     mul_mv_id_q4_0_f32_8x_flat
+    mul_mv_id_f32_f32
+    mul_mm_id_f32_f32
     mul_mv_id_q8_0_f32
     mul_mv_id_q8_0_f32_flat
     mul_mv_id_mxfp4_f32
@@ -310,11 +321,14 @@ set(GGML_OPENCL_KERNELS
     repeat
     mul_mat_f16_f32
     mul_mm_f16_f32_kq_kqv
+    mul_mm_f16_f32_kq_p8
+    mul_mm_q8_f32_kqv
     conv2d
     conv2d_f16_f32
     conv2_dw
     flash_attn_repack
     flash_attn_pre_f16
+    flash_attn_pv_direct
     flash_attn_f32_f16
     flash_attn_f32_q8_0
     flash_attn_f32_q4_0

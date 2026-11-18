@@ -1,0 +1,44 @@
+<!--
+	The Storybook's front page (Introduction): what this package is, what's in it so far and how it keeps in step with
+	Llama UI in llama.cpp. Set in the Editorial, like the Storybook it is taken from.
+-->
+
+<p class="kicker">Llama UI · package</p>
+
+# Introduction
+
+<p class="lead"><strong>@ggml-org/llama-ui</strong> is Llama UI as a package: the tokens, fonts, surfaces and components of Llama Chat, for llama.app first and the Llama apps after.</p>
+
+## Where it comes from
+
+The package lives in llama.cpp, in `ui/lib/ui`, and Llama Chat, in `ui/apps/chat`, is built on it: its tokens, fonts and base components come from here. The stories of everything the package holds live here, next to it, and run as its tests. Llama Chat's Storybook shows the same stories under **Llama UI**, next to Llama Chat's own; the **Brand** and the **Communications** have their own Storybook, in llama-brand.
+
+The tokens, the fonts and the base components are changed here, and Llama Chat takes them as they are. What both still keep a copy of, the Model UI among them, flows one way for now, from `ui/apps/chat` to here.
+
+## What's in it
+
+- **Foundations:** the primitive, semantic and component tokens, the type, corner, icon and control-height roles, the matte surfaces and elevations, and Llama Sans and Llama Mono.
+- **Components:** the 29 base components Llama Chat is built from, Alert to Tooltip, grouped as actions, forms, display, overlays and navigation.
+- **App components:** the small parts an app on the library shares: ActionIcon, SearchInput and SyntaxHighlightedCode.
+- **Model UI:** how a model is shown in Llama Chat and on llama.app: its name and badges, capability icons, maker's avatar and quant chips, under **Models**. They take model data in and report what the user did out.
+
+## Using it
+
+Import the theme right after Tailwind, then the components:
+
+```css
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import '@ggml-org/llama-ui/theme.css';
+```
+
+```svelte
+<script lang="ts">
+	import { Badge, Button } from '@ggml-org/llama-ui';
+</script>
+
+<Button variant="secondary">View on Hugging Face</Button>
+<Badge variant="success">Downloaded</Badge>
+```
+
+Use the toolbar to switch between light and dark, and between the Paper and Matte light surfaces.

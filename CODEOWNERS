@@ -87,6 +87,7 @@
 /src/llama-graph.*                      @CISC
 /src/llama-model.*                      @CISC
 /src/llama-vocab.*                      @CISC
+/src/llama-moe-cache.*                  @am17an
 /src/models/                            @ggml-org/llama-models
 /tests/                                 @ggerganov
 /tests/test-chat.*                      @pwilkin
@@ -101,7 +102,7 @@
 /tools/rpc/                             @ggml-org/ggml-rpc
 /tools/server/*                         @ggml-org/llama-server # no subdir
 /tools/server/tests/                    @ggml-org/llama-server
-/tools/ui/                              @ggml-org/llama-ui
+/ui/                                       @ggml-org/llama-ui
 /tools/tokenize/                        @ggerganov
 /tools/tts/                             @ggerganov
 /vendor/                                @ggerganov

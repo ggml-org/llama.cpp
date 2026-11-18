@@ -22,11 +22,24 @@ Identify what actually changed and which area checklists below apply. Run `git d
 - `ggml/` (any backend, op, or `ggml.h`) -> **ggml / backend**
 - `include/llama.h` and other public headers -> **Public API**
 - `tools/server/` -> **Server**
-- `tools/ui/` (or the legacy `tools/server/webui/`) -> **WebUI**
+- `ui/apps/chat/` (or the legacy `tools/ui/`, `tools/server/webui/`) -> **Llama Chat**
 - `tests/`, `tools/server/tests/`, or any other added/changed test -> **Tests**
 - anything else, plus all of the above -> **General** (always runs)
 
-Always run the **Scope and quick-reject gate**, the **Security review**, and the **General** checklist. Run each area checklist whose paths were touched. Additionally, if the diff introduces a new component, subsystem, or piece of infrastructure (a new file/class/module, a new abstraction, or hand-rolled machinery), run the **Approach and design** review. Tell the user which checklists you're running and why.
+Some areas have a developer README that documents internals and conventions the review must enforce. If the diff touches one of these areas, read the matching file into context before reviewing (required, not optional):
+
+- `tools/server/` -> [tools/server/README-dev.md](../../tools/server/README-dev.md)
+- `tools/mtmd/` -> [tools/mtmd/README-dev.md](../../tools/mtmd/README-dev.md)
+
+Always run the **Prior review context** step, the **Scope and quick-reject gate**, the **Security review**, and the **General** checklist. Run each area checklist whose paths were touched. Additionally, if the diff introduces a new component, subsystem, or piece of infrastructure (a new file/class/module, a new abstraction, or hand-rolled machinery), run the **Approach and design** review. Tell the user which checklists you're running and why.
+
+## Prior review context (always)
+
+Maintainers tend to repeat the same comments on the same parts of the code. Before reviewing, find out what they said last time so this diff doesn't repeat a mistake that was already flagged.
+
+- For each touched file (or the hot spots in a large diff), find recent PRs that changed the same code: `git log --oneline -n 20 -- <file>` (merged PR numbers appear as `(#NNNNN)` in the subject), and `git blame -L <start>,<end> master -- <file>` for the exact lines being changed. For in-flight work, `gh pr list --state all --search "<file or symbol>"`.
+- Read the reviewer feedback on the most relevant few: `gh pr view <n> --comments` for the conversation and `gh api repos/ggml-org/llama.cpp/pulls/<n>/comments` for inline review comments.
+- Note recurring reviewer requests and frequently-occurring mistakes for this area (e.g. a helper that should be reused, a naming or layering rule, a backend that keeps getting broken, a test that is always asked for), then check the current diff against each one. Report a match as a finding and cite the earlier PR so the user can read the original context.
 
 ## Scope and quick-reject gate (always)
 
@@ -85,6 +98,7 @@ See the `add-new-model` skill and `docs/development/HOWTO-add-model.md` for the 
 - Hparams that the model can't run correctly without must be mandatory (hard-error if missing), not read with a silent default fallback. Only genuinely-optional-across-configs values get a fallback accessor.
 - New/optional weight tensors (scales, etc.) must route through `build_lora_mm` and the existing helpers, matching convention - don't leave raw matmuls copied from another arch.
 - Don't hack RoPE with a custom sin/cos implementation. If `ggml_rope_ext` genuinely can't express it, that's an issue for discussion, not a PR.
+- In `src/models/`, apply RoPE with `build_rope(cur, pos, il)`, not a direct `ggml_rope_ext`/`ggml_rope_multi` call (see #31683). Per-layer differences go in a `get_rope_params` override: the KV-cache K-shift reads the same params, so a direct call lets the graph and the shift drift apart. The remaining direct calls (deepseek4/41, dflash, sensenova-u1) are not a pattern to copy.
 - Test the quantized-KV path (`-ctk`/`-ctv q8_0`), not just default f16 - new speculative/attention features silently break there.
 - Preserve existing explanatory comments about model-specific quirks when copying code; note the provenance ("copied from X, with Y added").
 - Remove dead code/branches left over from adapting a reference implementation.
@@ -118,9 +132,9 @@ Public API changes carry a higher bar than internal ones (`CONTRIBUTING.md`). Re
 - Security: don't trust client-supplied headers (e.g. `X-Forwarded-For`) or add footguns; things like IP allowlisting belong at a reverse proxy unless there's a trusted-proxy design.
 - Wire new behavior into the existing request/response and checkpoint paths correctly; watch for resource leaks across requests.
 
-## WebUI (`tools/ui/`)
+## Llama Chat (`ui/apps/chat/`)
 
-These apply only to changes under `tools/ui/` (formerly `tools/server/webui/`) - the SvelteKit + Svelte 5 frontend. They are frontend conventions, not repo-wide ones, so do not apply them to C++ or other tool code.
+These apply only to changes under `ui/apps/chat/` (formerly `tools/ui/`, `tools/server/webui/`) - the SvelteKit + Svelte 5 frontend. They are frontend conventions, not repo-wide ones, so do not apply them to C++ or other tool code.
 
 The dominant review theme in this area is placement: most accepted nits are about putting a value, function, or piece of logic in the layer where it belongs.
 
@@ -191,7 +205,7 @@ Adjacent data-shape rule: empty string is not a valid "unset" initial state - us
 - Sanitize anything rendered from model or remote data: the rehype/`{@html}` pipeline, SVG content, and URLs (use the `$lib/utils` URL sanitizer rather than ad-hoc checks or a third-party lib for trivial cases).
 - Proxy headers and agent/tool filesystem access are security boundaries - scope enforcement (e.g. browse-root sandboxing) must be validated end-to-end, not just in the UI; loop in server reviewers for the C++ side.
 
-### PR hygiene specific to `tools/ui`
+### PR hygiene specific to `ui/apps/chat`
 
 - Build artifacts are not committed - the UI is built by CI (`.github/workflows/ui-build.yml`) and downloaded/bundled at release time. `npm run build` must still succeed locally; a red UI build job is blocking.
 - `npm run lint && npm run check` (and `npm run format`) must pass; a failing Storybook test is blocking.

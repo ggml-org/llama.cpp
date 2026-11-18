@@ -49,6 +49,36 @@ static __global__ void pool1d_nchw_kernel(
     o_ptr[cur_ow] = res;
 }
 
+// a window covering the whole row gives one output per row: reduce it with a block instead of one thread
+template <ggml_op_pool op>
+static __global__ void pool1d_row_kernel(const int iw, const float * src, float * dst) {
+    static_assert(op == GGML_OP_POOL_MAX || op == GGML_OP_POOL_AVG, "unsupported pool op");
+
+    const float * row = src + (int64_t) blockIdx.x*iw;
+
+    float res = op == GGML_OP_POOL_MAX ? -FLT_MAX : 0.0f;
+    for (int i = threadIdx.x; i < iw; i += blockDim.x) {
+        res = op == GGML_OP_POOL_MAX ? max(res, row[i]) : res + row[i];
+    }
+
+    __shared__ float buf[WARP_SIZE];
+    res = block_reduce<op == GGML_OP_POOL_MAX ? block_reduce_method::MAX : block_reduce_method::SUM>(res, buf);
+
+    if (threadIdx.x == 0) {
+        dst[blockIdx.x] = op == GGML_OP_POOL_MAX ? res : res/iw;
+    }
+}
+
+static void pool1d_row_f32_cuda(const int iw, const int64_t nr, const float * src, float * dst, const enum ggml_op_pool op, cudaStream_t stream) {
+    const int nsm = ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
+    const dim3 block_dims(nr/nsm < 2 ? 512 : (iw < 1024 ? 32 : 128));
+    if (op == GGML_OP_POOL_MAX) {
+        pool1d_row_kernel<GGML_OP_POOL_MAX><<<nr, block_dims, 0, stream>>>(iw, src, dst);
+    } else {
+        pool1d_row_kernel<GGML_OP_POOL_AVG><<<nr, block_dims, 0, stream>>>(iw, src, dst);
+    }
+}
+
 static void pool1d_nchw_kernel_f32_f32_cuda(
         const int iw, const int ow,
         const int kw, const int sw, const int pw,
@@ -78,6 +108,12 @@ void ggml_cuda_op_pool1d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t IW = src0->ne[0];
     const int64_t OW = dst->ne[0];
     const int64_t nr = ggml_nrows(src0);
+
+    // short rows: one thread per row is faster
+    if (OW == 1 && p0 == 0 && k0 == IW && IW >= CUDA_POOL1D_ROW_MIN_IW && (op == GGML_OP_POOL_MAX || op == GGML_OP_POOL_AVG)) {
+        pool1d_row_f32_cuda(IW, nr, src0_d, dst_d, op, stream);
+        return;
+    }
 
     const int parallel_elements = (int)(nr * OW);
 
