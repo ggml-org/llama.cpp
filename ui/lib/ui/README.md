@@ -49,7 +49,10 @@ Next: llama.app's model page.
 
 The constants, enums and code helpers the components use are entry points too, for an app that shows the same things:
 `@ggml-org/llama-ui/constants` (the shared classes and code-block constants), `@ggml-org/llama-ui/enums` (`ColorMode`,
-`TooltipSide`, `BooleanString`) and `@ggml-org/llama-ui/code` (`highlightCode`, `trimCodePadding`). The model data
+`TooltipSide`, `BooleanString`) and `@ggml-org/llama-ui/code` (`highlightCode`, `trimCodePadding`, `loadHighlighter`,
+`isHighlighterLoaded`). highlight.js loads on the first `highlightCode` call, so it stays out of an app's first load:
+until then `highlightCode` returns the code escaped as plain text, and a `$derived` or `$effect` that called it runs
+again once it has loaded. Await `loadHighlighter()` where highlighted output is needed at once. The model data
 (constants, enums, formatters and types) comes with the Model UI at `@ggml-org/llama-ui/models`.
 
 ## How the apps in this repo use it

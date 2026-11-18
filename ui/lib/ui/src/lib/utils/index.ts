@@ -1,1 +1,6 @@
-export { highlightCode, trimCodePadding } from './code';
+export {
+  highlightCode,
+  isHighlighterLoaded,
+  loadHighlighter,
+  trimCodePadding,
+} from "./code";

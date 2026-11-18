@@ -1,26 +1,45 @@
 // highlightCode and its helpers, from ui/apps/chat's utils/code.ts (only what SyntaxHighlightedCode uses)
 import { CODE_BLOCK } from "../constants";
-import hljs from "highlight.js/lib/core";
-import bash from "highlight.js/lib/languages/bash";
-import { all as languages } from "lowlight";
+import type { HLJSApi } from "highlight.js";
+import { createSubscriber } from "svelte/reactivity";
 
-// reuse lowlight's language modules: the full `highlight.js` entry bundles a second, CommonJS copy of every language
-for (const [name, language] of Object.entries(languages)) hljs.registerLanguage(name, language);
+let hljs: HLJSApi | undefined;
+let loading: Promise<void> | undefined;
+const loadListeners = new Set<() => void>();
 
-// highlight.js's bash marks strings, variables and keywords but leaves a command's name and its flags plain, so a
-// command (`curl -H … -d …`) reads as one colour. Mark them too: the name as a built-in, the flags as attributes.
-hljs.registerLanguage("bash", (api) => {
-  const base = bash(api);
+// lets a $derived or $effect that called highlightCode before highlight.js loaded run again once it has
+const subscribeToLoad = createSubscriber((update) => {
+  loadListeners.add(update);
 
-  return {
-    ...base,
-    contains: [
-      { match: CODE_BLOCK.SHELL_COMMAND_REGEX, scope: "built_in" },
-      { match: CODE_BLOCK.SHELL_FLAG_REGEX, scope: "attr" },
-      ...(base.contains ?? []),
-    ],
-  };
+  return () => loadListeners.delete(update);
 });
+
+/** Whether highlight.js has loaded, so highlightCode returns highlighted HTML rather than escaped plain text. */
+export function isHighlighterLoaded(): boolean {
+  return hljs !== undefined;
+}
+
+/**
+ * Loads highlight.js and its languages (once). highlightCode starts this itself; await it where highlighted output
+ * is needed right away, as in tests or a server render.
+ */
+export function loadHighlighter(): Promise<void> {
+  loading ??= import("./highlighter").then(
+    (module) => {
+      hljs = module.createHighlighter();
+
+      for (const update of [...loadListeners]) update();
+    },
+    (error) => {
+      // let a later call try again
+      loading = undefined;
+
+      throw error;
+    },
+  );
+
+  return loading;
+}
 
 /**
  * Strips empty lines (whitespace-only) from the start and end of code, so hljs emits no phantom row before or after
@@ -42,13 +61,25 @@ function escapeCode(code: string): string {
 const HIGHLIGHT_CACHE_MAX_SIZE = 64;
 const highlightCache = new Map<string, string>();
 
-/** Highlights code with highlight.js in the given language, auto-detecting one it doesn't know. */
+/**
+ * Highlights code with highlight.js in the given language, auto-detecting one it doesn't know.
+ *
+ * highlight.js loads on the first call: until it has, this returns the code escaped as plain text, and a Svelte
+ * $derived or $effect that called it runs again once it has loaded. Await loadHighlighter() first to skip that.
+ */
 export function highlightCode(
   code: string,
   language: string,
   autoDetect = true,
 ): string {
   if (!code) return "";
+
+  if (!hljs) {
+    subscribeToLoad();
+    loadHighlighter().catch(() => {});
+
+    return escapeCode(trimCodePadding(code));
+  }
 
   const cacheKey = `${language}:${autoDetect}:${code}`;
   const cached = highlightCache.get(cacheKey);

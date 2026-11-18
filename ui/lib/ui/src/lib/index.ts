@@ -7,7 +7,7 @@ export { SearchInput } from './components/app/forms/index.js';
 export { Logo } from './components/app/misc/index.js';
 export { FILTER_TOGGLE_ITEM_CLASS, FILTER_TRIGGER_CLASS, PANEL_CLOSE_MOBILE_CLASS } from './constants/index.js';
 export { ColorMode, TooltipSide } from './enums/index.js';
-export { highlightCode } from './utils/index.js';
+export { highlightCode, isHighlighterLoaded, loadHighlighter } from './utils/index.js';
 export * as Alert from './components/ui/alert/index.js';
 export * as AlertDialog from './components/ui/alert-dialog/index.js';
 export { Badge, badgeVariants, type BadgeVariant } from './components/ui/badge/index.js';

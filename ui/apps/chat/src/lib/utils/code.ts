@@ -1,6 +1,11 @@
 import { CODE_BLOCK, NEWLINE } from '#lib/constants/index.ts';
 
-export { highlightCode, trimCodePadding } from '@ggml-org/llama-ui/code';
+export {
+	highlightCode,
+	isHighlighterLoaded,
+	loadHighlighter,
+	trimCodePadding
+} from '@ggml-org/llama-ui/code';
 
 export interface IncompleteCodeBlock {
 	language: string;
