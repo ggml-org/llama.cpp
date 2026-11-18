@@ -228,6 +228,9 @@ class TensorNameMap:
         MODEL_TENSOR.LILICORR_ANCHOR_OUT_HEAD: (
             "model.lilicorr.anchor_out_head",
         ),
+        MODEL_TENSOR.RES_SCALE_IN: (
+            "model.input_hidden_states",  # zaya1
+        ),
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
@@ -2973,6 +2976,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_DOWNSAMPLE_CONV: (
             "encoder.down_sample_layer.0", # mimo-audio-tokenizer
+            "audio_encoder_proj.temporal", # higgs-audio
         ),
 
         MODEL_TENSOR.A_ENC_DOWNSAMPLE_NORM: (
@@ -3026,6 +3030,7 @@ class TensorNameMap:
             "mlp.model.{bid}", # lfm3a
             "audio_tower.proj{bid}", # qwen3omni
             "sound_projection.linear{bid}", # parakeet (linear1, linear2)
+            "audio_encoder_proj.linear{bid}", # higgs-audio (linear1, linear2)
         ),
 
         MODEL_TENSOR.A_MMPROJ_FC: (
@@ -3348,6 +3353,22 @@ class TensorNameMap:
 
     # architecture-specific block mappings
     arch_block_mappings_cfg: dict[MODEL_ARCH, dict[MODEL_TENSOR, tuple[str, ...]]] = {
+        MODEL_ARCH.ZAYA1: {
+            MODEL_TENSOR.ATTN_Q:        ("model.layers.{bid}.self_attn.qkv_proj.q_proj",),
+            MODEL_TENSOR.ATTN_K:        ("model.layers.{bid}.self_attn.qkv_proj.k_proj",),
+            # the converter joins v_proj_delayed onto v_proj_current, attn_v holds both kv heads
+            MODEL_TENSOR.ATTN_V:        ("model.layers.{bid}.self_attn.qkv_proj.v_proj_current",),
+            MODEL_TENSOR.SSM_CONV1D:    ("model.layers.{bid}.self_attn.qkv_proj.conv_qk_depthwise",),
+            MODEL_TENSOR.CCA_CONV_GRP:  ("model.layers.{bid}.self_attn.qkv_proj.conv_qk_grouped",),
+            MODEL_TENSOR.CCA_TEMP:      ("model.layers.{bid}.self_attn.qk_norm.temp",),
+            MODEL_TENSOR.FFN_GATE_INP:  ("model.layers.{bid}.mlp.gate.down_proj",),
+            MODEL_TENSOR.FFN_EXP_PROBS_B: ("model.layers.{bid}.mlp.gate.balancing_biases",),
+            MODEL_TENSOR.ROUTER_EDA:    ("model.layers.{bid}.mlp.gate.router_states_scale",),
+            MODEL_TENSOR.ROUTER_NORM:   ("model.layers.{bid}.mlp.gate.router_mlp.norm",),
+            MODEL_TENSOR.ROUTER_FC1:    ("model.layers.{bid}.mlp.gate.router_mlp.fc1",),
+            MODEL_TENSOR.ROUTER_FC2:    ("model.layers.{bid}.mlp.gate.router_mlp.fc2",),
+            MODEL_TENSOR.ROUTER_OUT:    ("model.layers.{bid}.mlp.gate.router_mlp.out_proj",),
+        },
         MODEL_ARCH.ARCTIC: {
             MODEL_TENSOR.FFN_NORM: (
                 "model.layers.{bid}.residual_layernorm",

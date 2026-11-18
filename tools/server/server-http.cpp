@@ -481,7 +481,7 @@ bool server_http_context::init_listener(const common_params & params) {
     };
 
     //
-    // Web UI setup
+    // Llama Chat setup
     //
 
     // Use new `params.ui` field (backed by old `params.webui` for compat)
@@ -564,9 +564,10 @@ bool server_http_context::init_listener(const common_params & params) {
             srv->Get(params.api_prefix + "/index.html", serve_asset_cached("index.html", true, cache_revalidate));
 
             // All remaining assets registered directly from the embedded asset table.
-            // PWA revalidation files (sw.js, manifest, version.json) use no-cache;
+            // PWA revalidation files (service workers, manifest, version.json) use no-cache;
             // everything else is immutable.
             static const std::unordered_set<std::string> no_cache_names = {
+                "service-worker.js",
                 "sw.js",
                 "manifest.webmanifest",
                 "_app/version.json",
@@ -588,9 +589,10 @@ bool server_http_context::init_listener(const common_params & params) {
     }
 
     // a browser that used the built-in UI keeps its service worker, so it shows the old UI even after the UI is replaced or disabled
-    // answer the worker's update check with a worker that removes itself; a sw.js in public_path is served first
+    // answer the worker's update check with a worker that removes itself; a worker file in public_path is served first
+    // sw.js is the worker path of older UI builds, service-worker.js the current one
     if (!params.ui || !params.public_path.empty()) {
-        srv->Get(params.api_prefix + "/sw.js", [](const httplib::Request &, httplib::Response & res) {
+        const auto serve_sw_remove = [](const httplib::Request &, httplib::Response & res) {
             static constexpr const char * sw_remove_js = R"(
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil((async () => {
@@ -601,7 +603,9 @@ self.addEventListener('activate', (e) => e.waitUntil((async () => {
 )";
             res.set_header("Cache-Control", "no-cache");
             res.set_content(sw_remove_js, "application/javascript");
-        });
+        };
+        srv->Get(params.api_prefix + "/sw.js", serve_sw_remove);
+        srv->Get(params.api_prefix + "/service-worker.js", serve_sw_remove);
     }
     return true;
 }
