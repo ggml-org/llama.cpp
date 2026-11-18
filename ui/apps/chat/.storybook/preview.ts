@@ -2,7 +2,8 @@ import '../src/app.css';
 import { MEDIA_QUERIES } from '#lib/constants/pwa.constants.ts';
 import { SurfaceTheme } from '#lib/enums/ui.enums.ts';
 import { applySurfaceTheme } from '#lib/utils/css.ts';
-import './docs.css';
+// the docs pages' styles, shared with the library's Storybook
+import '../../../lib/ui/.storybook/docs.css';
 import { applyColorScheme } from './color-scheme';
 import ModeWatcherDecorator from './decorators/ModeWatcherDecorator.svelte';
 import TooltipProviderDecorator from './decorators/TooltipProviderDecorator.svelte';
