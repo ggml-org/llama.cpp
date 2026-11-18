@@ -13830,6 +13830,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_flash_attn_ext_kv_rows(256, 8, 2, 4096, 1280, nb, n_slices));
         }
     }
+    // decode: one token per slice, non-f16 K/V take the vec kernel
+    for (ggml_type type_KV : {GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
+        for (int64_t n_slices : {1, 3, 8}) {
+            test_cases.emplace_back(new test_flash_attn_ext_kv_rows(256, 2, 12, 8192, 2304, 1, n_slices, type_KV));
+            test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 4, 4, 5000, 512, 2, n_slices, type_KV));
+        }
+    }
 
     // flash attention with an indexed bias (Inkling 2 relative-position bias)
     for (bool kv_rows : {false, true}) {
