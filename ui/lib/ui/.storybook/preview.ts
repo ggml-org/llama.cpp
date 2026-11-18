@@ -42,9 +42,10 @@ const preview: Preview = {
 		},
 
 		a11y: {
-			// 'todo' - show a11y violations in the test UI only
-			// 'error' - fail CI on a11y violations
-			// 'off' - skip a11y checks entirely
+			// 'todo' shows violations in the Accessibility panel and the test UI without failing a test; 'error' would
+			// fail CI on them. Not yet 'error': about half the stories fail it, most on colour contrast (the muted
+			// foreground on the light surfaces, below 4.5:1) and nested interactive controls, which need design changes
+			// rather than story fixes. Switch once those are settled
 			test: 'todo'
 		}
 	},
