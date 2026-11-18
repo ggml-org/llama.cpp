@@ -5,13 +5,13 @@
  * No reactive state; consumed by toolsStore.
  */
 
-import { base } from '$app/paths';
-import { API_TOOLS, HEADERS, HOME_TILDE, SEARCH } from '$lib/constants';
-import { BuiltInTool, GlobSearchType, ToolResponseField } from '$lib/enums';
-import type { GlobEntry, ServerToolInfo, ToolExecutionResult } from '$lib/types';
-import { apiFetch, buildCaseInsensitiveGlob, joinPath, lastPathSegment } from '$lib/utils';
-import { getJsonHeaders } from '$lib/utils/api-headers';
-import { parseSseJsonStream, type SseJsonEvent } from '$lib/utils/sse';
+import { API_TOOLS, HEADERS, HOME_TILDE, SEARCH } from '#lib/constants/index.ts';
+import { BuiltInTool, GlobSearchType, ToolResponseField } from '#lib/enums/index.ts';
+import type { GlobEntry, ServerToolInfo, ToolExecutionResult } from '#lib/types/index.ts';
+import { getJsonHeaders } from '#lib/utils/api-headers.ts';
+import { withBase } from '#lib/utils/base-path.ts';
+import { apiFetch, buildCaseInsensitiveGlob, joinPath, lastPathSegment } from '#lib/utils/index.ts';
+import { parseSseJsonStream, type SseJsonEvent } from '#lib/utils/sse.ts';
 
 export class ToolsService {
 	/**
@@ -137,7 +137,7 @@ export class ToolsService {
 
 		if (cwd) headers[HEADERS.X_TOOL_CWD_HEADER] = cwd;
 
-		const response = await fetch(`${base}${API_TOOLS.EXECUTE}`, {
+		const response = await fetch(withBase(API_TOOLS.EXECUTE), {
 			body: JSON.stringify({ params, stream: true, tool: toolName }),
 			headers,
 			method: 'POST',

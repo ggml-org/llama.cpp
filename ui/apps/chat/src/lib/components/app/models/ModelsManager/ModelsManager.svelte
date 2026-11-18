@@ -10,11 +10,15 @@
 		type ModelsTableGroup,
 		splitHiddenQuants
 	} from './utils';
-	import { LOCAL_BACKEND_ID, type ModalityKey, MODELS_TABLE_GROUP_LABELS } from '$lib/constants';
-	import { ModelCapability, ModelsTableGroupKind } from '$lib/enums';
-	import { modelsStore, uiStore } from '$lib/stores';
-	import type { ModelOption } from '$lib/types/models';
-	import { filterModelOptions } from '$lib/utils';
+	import {
+		LOCAL_BACKEND_ID,
+		type ModalityKey,
+		MODELS_TABLE_GROUP_LABELS
+	} from '#lib/constants/index.ts';
+	import { ModelCapability, ModelsTableGroupKind } from '#lib/enums/index.ts';
+	import { modelsStore, uiStore } from '#lib/stores/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
+	import { filterModelOptions } from '#lib/utils/index.ts';
 	import type { Snippet } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 

@@ -1,8 +1,8 @@
 <script lang="ts">
-	import ModelsManager from '$lib/components/app/models/ModelsManager/ModelsManager.svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { APP_NAME, DISCOVER_ICON } from '$lib/constants';
-	import { modelsStore, uiStore } from '$lib/stores';
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import ModelsManager from '#lib/components/app/models/ModelsManager/ModelsManager.svelte';
+	import { APP_NAME, DISCOVER_ICON } from '#lib/constants/index.ts';
+	import { modelsStore, uiStore } from '#lib/stores/index.ts';
 	import { onMount } from 'svelte';
 
 	// a direct load lands here before any chat has listed the models, and the root
@@ -42,7 +42,7 @@
 				size="sm"
 				variant="tertiary"
 			>
-				<DISCOVER_ICON class="h-3.5 w-3.5" />
+				<DISCOVER_ICON class="size-icon-md" />
 
 				Discover Models
 			</Button>

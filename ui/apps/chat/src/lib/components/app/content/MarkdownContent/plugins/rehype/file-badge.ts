@@ -1,7 +1,7 @@
 /**
  * Rehype plugin that rewrites `file://` markdown anchors into the inline
  * mention chip, sharing the class string with the ChatFormInputRich
- * tokenizer via `$lib/constants`.
+ * tokenizer via `#lib/constants/index.ts`.
  *
  * The chip is presentational: `file://` navigation is blocked from
  * http(s) pages, so the anchor becomes a plain `<span>` (no link role,
@@ -15,9 +15,13 @@ import {
 	MENTION_BADGE_SVG_ATTRIBUTES,
 	PATH_SEPARATOR,
 	SETTINGS_KEYS
-} from '$lib/constants';
-import { settingsStore, toolsStore } from '$lib/stores';
-import { decodeFileLinkPath, getMentionBadgeIconPaths, getMentionBadgeLabel } from '$lib/utils';
+} from '#lib/constants/index.ts';
+import { settingsStore, toolsStore } from '#lib/stores/index.ts';
+import {
+	decodeFileLinkPath,
+	getMentionBadgeIconPaths,
+	getMentionBadgeLabel
+} from '#lib/utils/index.ts';
 import type { Element, Root } from 'hast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';

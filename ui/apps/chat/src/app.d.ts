@@ -1,9 +1,7 @@
 // See https://svelte.dev/docs/kit/types#app.d.ts
 // for information about these interfaces
 
-import 'vite-plugin-pwa/pwa-assets';
-import 'vite-plugin-pwa/svelte';
-import { ModelModality, ServerModelStatus, ServerRole } from '$lib/enums';
+import { ModelModality, ServerModelStatus, ServerRole } from '#lib/enums/index.ts';
 // Import chat types from dedicated module
 import type {
 	// API types
@@ -57,7 +55,7 @@ import type {
 	SettingsConfigType,
 	SettingsConfigValue,
 	SettingsFieldConfig
-} from '$lib/types';
+} from '#lib/types/index.ts';
 
 declare global {
 	// namespace App {

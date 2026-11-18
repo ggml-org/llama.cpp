@@ -1,5 +1,5 @@
-import { DiffLineKind } from '$lib/enums';
-import { computeLineDiff, type DiffLine, renderUnifiedDiff } from '$lib/utils';
+import { DiffLineKind } from '#lib/enums/index.ts';
+import { computeLineDiff, type DiffLine, renderUnifiedDiff } from '#lib/utils/index.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('computeLineDiff', () => {

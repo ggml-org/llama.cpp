@@ -881,6 +881,8 @@ struct llama_model {
     struct ggml_tensor * altup_proj           = nullptr;
     struct ggml_tensor * altup_unembd_proj    = nullptr;
     struct ggml_tensor * per_layer_tok_embd   = nullptr;
+    struct ggml_tensor * per_layer_tok_embd_s = nullptr; // optional scalar scale of an FP8 table
+    float per_layer_tok_embd_scale            = 1.0f;    // value of per_layer_tok_embd_s, read after load
 
     // limite value embeddings
     struct ggml_tensor * value_embd = nullptr;
@@ -955,6 +957,9 @@ struct llama_model {
 
     // gguf metadata
     std::unordered_map<std::string, std::string> gguf_kv;
+
+    // the gguf metadata string arrays kept after load, see load_hparams()
+    std::unordered_map<std::string, std::vector<std::string>> gguf_kv_arr;
 
     // list of devices used in this model
     std::vector<llama_device> devices;

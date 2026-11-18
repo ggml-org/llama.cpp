@@ -11,16 +11,15 @@
 		ChatFormMcpResourcesList,
 		ChatFormPickers,
 		DialogMcpResourcesBrowser
-	} from '$lib/components/app';
+	} from '#lib/components/app/index.ts';
 	import {
 		CHAT_FORM_SINGLE_ROW_MAX_TEXT_PX,
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
 		ICON_CLASS_DEFAULT,
 		INITIAL_FILE_SIZE,
-		INPUT_CLASSES,
 		PROMPT_CONTENT_SEPARATOR,
 		SETTING_CONFIG_DEFAULT
-	} from '$lib/constants';
+	} from '#lib/constants/index.ts';
 	import {
 		ContentPartType,
 		FileExtensionText,
@@ -28,9 +27,9 @@
 		MimeTypeText,
 		SpecialFileType,
 		ToolSource
-	} from '$lib/enums';
-	import { useChatFormExpansion } from '$lib/hooks/use-chat-form-expansion.svelte';
-	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
+	} from '#lib/enums/index.ts';
+	import { useChatFormExpansion } from '#lib/hooks/use-chat-form-expansion.svelte.ts';
+	import { useChatFormPickers } from '#lib/hooks/use-chat-form-pickers.svelte.ts';
 	import {
 		chatStore,
 		conversationsStore,
@@ -41,14 +40,22 @@
 		settingsStore,
 		toolsStore,
 		uiStore
-	} from '$lib/stores';
+	} from '#lib/stores/index.ts';
 	import type {
 		FileMentionEntry,
 		GetPromptResult,
 		MCPPromptInfo,
 		MCPResourceInfo,
 		PromptMessage
-	} from '$lib/types';
+	} from '#lib/types/index.ts';
+	import {
+		AudioRecorder,
+		convertToWav,
+		createAudioFile,
+		describeMicrophoneError,
+		isAudioRecordingSupported,
+		microphoneUnavailableReason
+	} from '#lib/utils/browser-only.ts';
 	import {
 		buildMentionInsertion,
 		findCommandToken,
@@ -57,15 +64,7 @@
 		isIMEComposing,
 		parseClipboardContent,
 		uuid
-	} from '$lib/utils';
-	import {
-		AudioRecorder,
-		convertToWav,
-		createAudioFile,
-		describeMicrophoneError,
-		isAudioRecordingSupported,
-		microphoneUnavailableReason
-	} from '$lib/utils/browser-only';
+	} from '#lib/utils/index.ts';
 	import { onMount, untrack } from 'svelte';
 	import type { ClassValue } from 'svelte/elements';
 	import { toast } from 'svelte-sonner';
@@ -678,9 +677,10 @@
 	<div
 		bind:this={cardEl}
 		class={[
-			INPUT_CLASSES,
-			'backdrop-blur-md group/chat-form relative flex shrink flex-col overflow-hidden transition-[min-height,padding,border-radius,border-color,background-color] duration-400 ease-[var(--chat-form-resize-ease,cubic-bezier(0.3,1.12,0.5,1))] motion-reduce:transition-none',
-			isSingleRow ? 'rounded-(--chat-form-single-row-radius)' : 'rounded-4xl md:rounded-3xl',
+			'chat-form-surface group/chat-form relative flex shrink flex-col overflow-hidden outline-none transition-[min-height,padding,border-radius,border-color,background-color] duration-400 ease-[var(--chat-form-resize-ease,cubic-bezier(0.3,1.12,0.5,1))] motion-reduce:transition-none',
+			isSingleRow
+				? 'rounded-(--chat-form-single-row-radius)'
+				: 'rounded-(--chat-form-radius-compact) md:rounded-(--chat-form-radius)',
 			// on a phone the sheet's animation moves it (see useChatFormExpansion): only its
 			// border, hidden on the sheet, fades back in after
 			'max-md:transition-[border-color] max-md:duration-200',

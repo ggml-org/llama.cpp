@@ -1,23 +1,23 @@
 <script lang="ts">
 	import { classify, draftBadgeOf, sortDraftKinds } from './download-options.utils';
 	import ModelsDiscoverDetailsDownloadOptionsRow from './ModelsDiscoverDetailsDownloadOptionsRow.svelte';
-	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import * as Select from '$lib/components/ui/select';
+	import { Checkbox } from '@ggml-org/llama-ui/ui/checkbox';
+	import * as Select from '@ggml-org/llama-ui/ui/select';
+	import { DialogConfirmDownload } from '#lib/components/app/dialogs/index.ts';
 	import {
 		ModelDownloadConfirmAction,
 		ModelDraftSidecar,
 		ModelSelectableFileKind
-	} from '$lib/enums';
-	import { HuggingFaceService, ModelsService } from '$lib/services';
-	import { modelsStore } from '$lib/stores';
+	} from '#lib/enums/index.ts';
+	import { HuggingFaceService, ModelsService } from '#lib/services/index.ts';
+	import { modelsStore } from '#lib/stores/index.ts';
 	import type {
 		ModelBitDepthRow,
 		ModelCompanionDraft,
 		ModelDownloadEntryState,
 		ModelSelectableFile
-	} from '$lib/types';
-	import { directoryOf, isServerSidecarFile } from '$lib/utils';
+	} from '#lib/types/index.ts';
+	import { directoryOf, isServerSidecarFile } from '#lib/utils/index.ts';
 
 	interface Props {
 		/** Full HuggingFace repo id, e.g. `ggml-org/gemma-3-4b-it-GGUF`. */
@@ -186,7 +186,7 @@
 </script>
 
 {#if bitDepthRows.length}
-	<section class="rounded-3xl border border-border/30 bg-muted/60 shadow-sm dark:border-border/20">
+	<section class="rounded-3xl bg-muted/60 elevated-control">
 		<!-- One chip per main quant, each an independent download action. The draft
 			 of that quant rides with it and badges the chip; the server picks its file,
 			 the way -hf does. -->

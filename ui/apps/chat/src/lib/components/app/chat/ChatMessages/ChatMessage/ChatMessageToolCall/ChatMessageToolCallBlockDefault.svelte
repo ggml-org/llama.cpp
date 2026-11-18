@@ -5,17 +5,17 @@
 
 	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { Loader2 } from '@lucide/svelte';
-	import { MarkdownContent, SyntaxHighlightedCode } from '$lib/components/app';
-	import { MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
-	import { AttachmentType, FileTypeText, MimeTypeAudio, ToolResultKind } from '$lib/enums';
-	import type { AgenticSection, DatabaseMessageExtra, ToolResultLine } from '$lib/types';
+	import { MarkdownContent, SyntaxHighlightedCode } from '#lib/components/app/index.ts';
+	import { MAX_HEIGHT_CODE_BLOCK } from '#lib/constants/index.ts';
+	import { AttachmentType, FileTypeText, MimeTypeAudio, ToolResultKind } from '#lib/enums/index.ts';
+	import type { AgenticSection, DatabaseMessageExtra, ToolResultLine } from '#lib/types/index.ts';
+	import { createBase64DataUrl } from '#lib/utils/data-url.ts';
 	import {
 		classifyToolResult,
 		formatJsonPretty,
 		getToolUi,
 		parseToolResultWithMedia
-	} from '$lib/utils';
-	import { createBase64DataUrl } from '$lib/utils/data-url';
+	} from '#lib/utils/index.ts';
 
 	interface Props {
 		section: AgenticSection;
@@ -41,7 +41,7 @@
 				<span>Input</span>
 
 				{#if ctx.isStreaming}
-					<Loader2 class="h-3 w-3 animate-spin" />
+					<Loader2 class="size-icon-xs animate-spin" />
 				{/if}
 			</div>
 
@@ -86,7 +86,7 @@
 				<span>Output</span>
 
 				{#if ctx.isPending}
-					<Loader2 class="h-3 w-3 animate-spin" />
+					<Loader2 class="size-icon-xs animate-spin" />
 				{/if}
 			</div>
 

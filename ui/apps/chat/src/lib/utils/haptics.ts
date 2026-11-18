@@ -1,4 +1,4 @@
-import { HAPTIC_TAP_MS, MEDIA_QUERIES } from '$lib/constants';
+import { HAPTIC_TAP_MS, MEDIA_QUERIES } from '#lib/constants/index.ts';
 
 /**
  * A light tap of the phone's haptic engine, the confirmation a native app gives by feel.

@@ -9,29 +9,4 @@
  * device-specific budgets are deliberately ignored - callers present the
  * requirement and let the user judge.
  */
-import {
-	MB_PER_GB,
-	MEM_TIERS,
-	MIB_BYTES,
-	QUANT_WEIGHT,
-	RAM_BUDGET_RATIO,
-	RAM_OVERHEAD_MB
-} from '$lib/constants';
-
-/**
- * Smallest memory tier (GB) that can run a model of the given file size,
- * or null if nothing fits even the largest tier.
- */
-export function minMemoryTierGb(sizeBytes: number): number | null {
-	if (!sizeBytes) return null;
-
-	const weightMb = (sizeBytes / MIB_BYTES) * QUANT_WEIGHT;
-
-	for (const tier of MEM_TIERS) {
-		const budgetMb = tier * MB_PER_GB * RAM_BUDGET_RATIO - RAM_OVERHEAD_MB;
-
-		if (weightMb <= budgetMb) return tier;
-	}
-
-	return null;
-}
+export { minMemoryTierGb } from '@ggml-org/llama-ui/models';

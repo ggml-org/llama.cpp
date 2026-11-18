@@ -1,18 +1,18 @@
 <script lang="ts">
+	import * as HoverCard from '@ggml-org/llama-ui/ui/hover-card';
 	import { Globe, Loader2 } from '@lucide/svelte';
-	import { CollapsibleContentBlock } from '$lib/components/app';
-	import * as HoverCard from '$lib/components/ui/hover-card';
-	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '$lib/constants';
-	import { AgenticSectionType } from '$lib/enums';
-	import { mcpStore } from '$lib/stores';
-	import type { AgenticSection, SearchResult } from '$lib/types';
+	import { CollapsibleContentBlock } from '#lib/components/app/index.ts';
+	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '#lib/constants/index.ts';
+	import { AgenticSectionType } from '#lib/enums/index.ts';
+	import { mcpStore } from '#lib/stores/index.ts';
+	import type { AgenticSection, SearchResult } from '#lib/types/index.ts';
 	import {
 		buildProxiedIconUrl,
 		extractSearchQuery,
 		extractSearchResults,
 		faviconForUrl,
 		sanitizeExternalUrl
-	} from '$lib/utils';
+	} from '#lib/utils/index.ts';
 
 	interface Props {
 		section: AgenticSection;
@@ -97,12 +97,12 @@
 				{#if faviconUrl}
 					<img
 						alt=""
-						class="h-3 w-3 shrink-0 rounded-sm"
+						class="size-3 shrink-0 rounded-sm"
 						onerror={hideBrokenIcon}
 						src={faviconUrl}
 					/>
 				{:else}
-					<Globe class="text-muted-foreground/70 h-3 w-3 shrink-0" />
+					<Globe class="text-muted-foreground/70 size-icon-xs shrink-0" />
 				{/if}
 
 				<span class="truncate font-medium text-foreground/80">{result.title}</span>
@@ -163,7 +163,7 @@
 		</div>
 	{:else if showSpinner}
 		<div class="text-muted-foreground/70 flex items-center gap-2 py-1 text-xs italic">
-			<Loader2 class="h-3 w-3 animate-spin" />
+			<Loader2 class="size-icon-xs animate-spin" />
 
 			<span>Searching...</span>
 		</div>

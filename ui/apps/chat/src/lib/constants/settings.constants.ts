@@ -8,7 +8,9 @@ import { FILE_GLOB_SEARCH_PICKERS } from './working-directory.constants';
 import {
 	Code,
 	Database,
+	File,
 	Funnel,
+	GlassWater,
 	ListRestart,
 	Monitor,
 	Moon,
@@ -16,16 +18,16 @@ import {
 	SlidersVertical,
 	Sun
 } from '@lucide/svelte';
-import { SyncableParameterType } from '$lib/enums';
-import { SettingsFieldType } from '$lib/enums/settings.enums';
-import { ColorMode } from '$lib/enums/ui.enums';
+import { SurfaceTheme, SyncableParameterType } from '#lib/enums/index.ts';
+import { SettingsFieldType } from '#lib/enums/settings.enums.ts';
+import { ColorMode } from '#lib/enums/ui.enums.ts';
 import type {
 	SettingsConfigValue,
 	SettingsEntry,
 	SettingsFieldConfig,
 	SettingsSection,
 	SettingsSectionEntry
-} from '$lib/types';
+} from '#lib/types/index.ts';
 
 /** Settings sections — slug is the routing identity, title is the display label. */
 export const SETTINGS_SECTIONS = {
@@ -76,6 +78,17 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.SELECT
 			},
 			{
+				defaultValue: SurfaceTheme.PAPER,
+				help: 'Choose how the light theme draws its surfaces: Paper puts white panels, fields and buttons on a faint grey page; Matte puts grey glass on a white page. Dark mode is the same for both.',
+				key: SETTINGS_KEYS.SURFACE_THEME,
+				label: 'Light surfaces',
+				options: [
+					{ icon: File, label: 'Paper', value: SurfaceTheme.PAPER },
+					{ icon: GlassWater, label: 'Matte', value: SurfaceTheme.MATTE }
+				],
+				type: SettingsFieldType.SELECT
+			},
+			{
 				defaultValue: '',
 				help: `Set the API Key if you are using <code> ${CLI_FLAGS.API_KEY} </code> option for the server.`,
 				isPrivate: true,
@@ -113,7 +126,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
-				defaultValue: true,
+				defaultValue: false,
 				help: 'Render the markdown in the message input as you write it: every line but the one you are on shows as it will look in the conversation. When disabled, the input shows the plain markdown text.',
 				key: SETTINGS_KEYS.LIVE_MARKDOWN_PREVIEW,
 				label: 'Live markdown preview in the message input',
@@ -307,7 +320,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
-				defaultValue: true,
+				defaultValue: false,
 				help: 'Show open chats as browser-style tabs above the conversation, one per open chat. When disabled, only one chat is shown at a time.',
 				key: SETTINGS_KEYS.CONVERSATION_TABS,
 				label: 'Conversation tabs',

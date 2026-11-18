@@ -15,7 +15,7 @@
  *        └── message 5 (assistant)
  */
 
-import { MessageRole } from '$lib/enums';
+import { MessageRole } from '#lib/enums/index.ts';
 
 /**
  * Finds a message by its ID in the given messages array.

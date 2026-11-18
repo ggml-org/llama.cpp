@@ -5,7 +5,7 @@ import {
 	getRequestMethod,
 	getRequestUrl,
 	summarizeRequestBody
-} from '$lib/utils/request-helpers';
+} from '#lib/utils/request-helpers.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('getRequestUrl', () => {

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ChatFormPickerList, ChatFormPickerListItem } from '$lib/components/app/chat';
+	import { ChatFormPickerList, ChatFormPickerListItem } from '#lib/components/app/chat/index.ts';
 
 	interface Item {
 		id: string;

@@ -2,12 +2,12 @@
 	import { parseWriteFileMeta, parseWriteFileTitleMeta } from './parsers/write-file';
 	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { XCircle } from '@lucide/svelte';
-	import { SyntaxHighlightedCode } from '$lib/components/app';
-	import { MAX_HEIGHT_CODE_BLOCK, RESULT_STAT_SEPARATOR } from '$lib/constants';
-	import { FileTypeText } from '$lib/enums';
-	import { toolsStore } from '$lib/stores';
-	import type { AgenticSection } from '$lib/types';
-	import { abbreviateHome, formatJsonPretty } from '$lib/utils';
+	import { SyntaxHighlightedCode } from '#lib/components/app/index.ts';
+	import { MAX_HEIGHT_CODE_BLOCK, RESULT_STAT_SEPARATOR } from '#lib/constants/index.ts';
+	import { FileTypeText } from '#lib/enums/index.ts';
+	import { toolsStore } from '#lib/stores/index.ts';
+	import type { AgenticSection } from '#lib/types/index.ts';
+	import { abbreviateHome, formatJsonPretty } from '#lib/utils/index.ts';
 
 	interface Props {
 		section: AgenticSection;
@@ -46,9 +46,9 @@
 	{#snippet children(_meta, ctx)}
 		{#if writeFileBody?.errorMessage}
 			<div
-				class="flex items-start gap-2 rounded bg-red-500/10 p-2 text-xs text-red-600 italic dark:text-red-400"
+				class="flex items-start gap-2 rounded bg-surface-danger p-2 text-xs text-fg-danger italic"
 			>
-				<XCircle class="mt-0.5 h-3 w-3 shrink-0" />
+				<XCircle class="mt-0.5 size-icon-xs shrink-0" />
 
 				<span>{writeFileBody.errorMessage}</span>
 			</div>

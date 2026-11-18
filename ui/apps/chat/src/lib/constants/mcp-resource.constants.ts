@@ -1,4 +1,4 @@
-import { MimeTypeAudio, MimeTypeImage } from '$lib/enums';
+import { MimeTypeAudio, MimeTypeImage } from '#lib/enums/index.ts';
 
 // File extension patterns for resource type detection
 export const IMAGE_FILE_EXTENSION_REGEX = /\.(png|jpg|jpeg|gif|svg|webp)$/i;

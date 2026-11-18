@@ -1,4 +1,4 @@
-import { debounce } from '$lib/utils/debounce';
+import { debounce } from '#lib/utils/debounce.ts';
 
 /**
  * Shared debounced async-search machinery for the chat-form pickers:

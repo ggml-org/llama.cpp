@@ -1,6 +1,6 @@
-import { MessageRole } from '$lib/enums';
-import type { DatabaseMessage } from '$lib/types/database';
-import { deriveAgenticSections } from '$lib/utils/agentic';
+import { MessageRole } from '#lib/enums/index.ts';
+import type { DatabaseMessage } from '#lib/types/database.js';
+import { deriveAgenticSections } from '#lib/utils/agentic.ts';
 import { describe, expect, it } from 'vitest';
 
 function makeAssistant(overrides: Partial<DatabaseMessage> = {}): DatabaseMessage {

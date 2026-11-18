@@ -632,6 +632,17 @@ extern "C" {
     // Get metadata value as a string by index
     LLAMA_API int32_t llama_model_meta_val_str_by_index(const struct llama_model * model, int32_t i, char * buf, size_t buf_size);
 
+    // GGUF metadata arrays of strings
+    // currently, only these keys are support:
+    // - tokenizer.tts_dicts
+    // - tokenizer.tts_dict.*
+
+    // Get the number of elements, or -1 if there is no such array
+    LLAMA_API int32_t llama_model_meta_arr_n(const struct llama_model * model, const char * key);
+
+    // Get element i, owned by the model; nullptr if not found
+    LLAMA_API const char * llama_model_meta_arr_str(const struct llama_model * model, const char * key, int32_t i);
+
     // Get a string describing the model type
     LLAMA_API int32_t llama_model_desc(const struct llama_model * model, char * buf, size_t buf_size);
 

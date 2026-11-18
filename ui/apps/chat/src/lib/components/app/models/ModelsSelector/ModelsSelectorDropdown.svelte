@@ -1,5 +1,7 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
+	import * as DropdownMenu from '@ggml-org/llama-ui/ui/dropdown-menu';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { ChevronDown, Loader2 } from '@lucide/svelte';
 	import {
 		DropdownMenuSearchable,
@@ -7,17 +9,15 @@
 		ModelsSelectorList,
 		ModelsSelectorOption,
 		ModelsSelectorTriggerIcon
-	} from '$lib/components/app';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { MODEL_ICON } from '$lib/constants';
-	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
-	import type { UseModelsSelectorReturn } from '$lib/hooks/use-models-selector.svelte';
-	import { ModelsService } from '$lib/services/models.service';
-	import { modelsStore, uiStore } from '$lib/stores';
-	import type { ModelOption, ModelSidecarBadge } from '$lib/types/models';
-	import type { ModelItem } from '$lib/utils';
-	import { modelLoadFraction, repoOf } from '$lib/utils';
+	} from '#lib/components/app/index.ts';
+	import { MODEL_ICON } from '#lib/constants/index.ts';
+	import { KeyboardKey, ServerModelStatus } from '#lib/enums/index.ts';
+	import type { UseModelsSelectorReturn } from '#lib/hooks/use-models-selector.svelte.ts';
+	import { ModelsService } from '#lib/services/models.service.ts';
+	import { modelsStore, uiStore } from '#lib/stores/index.ts';
+	import type { ModelOption, ModelSidecarBadge } from '#lib/types/models.js';
+	import type { ModelItem } from '#lib/utils/index.ts';
+	import { modelLoadFraction, repoOf } from '#lib/utils/index.ts';
 
 	interface Props {
 		/** The selector state this shell renders; the owner derives it once. */
@@ -97,7 +97,7 @@
 </script>
 
 {#snippet selectorTriggerInner()}
-	<ModelsSelectorTriggerIcon class="mr-0.375 size-3.5 shrink-0" option={selectedOption} />
+	<ModelsSelectorTriggerIcon class="mr-0.375 size-icon-sm shrink-0" option={selectedOption} />
 
 	<span class="flex min-w-0 items-center gap-0.5">
 		{#if selectedOption}
@@ -154,9 +154,9 @@
 				<DropdownMenu.Trigger
 					{...props}
 					class={[
-						`relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 max-md:h-8 max-md:px-2.25 max-md:py-1.25 max-md:text-[13px] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
+						`relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-xs shadow-(--chat-form-key-shadow) transition hover:bg-muted-foreground/20 max-md:h-8 max-md:px-2.25 max-md:py-1.25 max-md:text-[13px] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 						!ms.isCurrentModelInCache
-							? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
+							? 'border-line-danger-soft bg-surface-danger !text-fg-danger hover:bg-surface-danger/80'
 							: 'text-foreground',
 						open && 'text-foreground',
 						'max-w-[min(calc(100vw-4rem) md:max-w-[min(calc(100cqw-9rem),25rem)]'
@@ -208,7 +208,7 @@
 			{#snippet footer()}
 				<DropdownMenu.Group class="px-2">
 					<DropdownMenu.Item class="gap-2" onSelect={handleManageModels}>
-						<MODEL_ICON class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+						<MODEL_ICON class="size-icon-md shrink-0 text-muted-foreground" />
 
 						Manage models
 					</DropdownMenu.Item>
@@ -225,7 +225,7 @@
 			<button
 				aria-disabled="true"
 				aria-selected="true"
-				class="flex w-full cursor-not-allowed items-center bg-red-400/10 p-2 text-left text-sm text-red-400"
+				class="flex w-full cursor-not-allowed items-center bg-surface-danger p-2 text-left text-sm text-fg-danger"
 				disabled
 				role="option"
 				type="button"

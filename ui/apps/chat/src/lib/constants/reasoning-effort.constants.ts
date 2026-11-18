@@ -1,5 +1,5 @@
-import { ReasoningEffort } from '$lib/enums';
-import type { ReasoningEffortLevel } from '$lib/types';
+import { ReasoningEffort } from '#lib/enums/index.ts';
+import type { ReasoningEffortLevel } from '#lib/types/index.ts';
 
 /**
  * Reasoning effort UI labels.

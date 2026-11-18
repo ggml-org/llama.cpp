@@ -1,14 +1,9 @@
-export enum ColorMode {
-	DARK = 'dark',
-	LIGHT = 'light',
-	SYSTEM = 'system'
-}
+export { ColorMode, TooltipSide } from '@ggml-org/llama-ui/enums';
 
-export enum TooltipSide {
-	BOTTOM = 'bottom',
-	LEFT = 'left',
-	RIGHT = 'right',
-	TOP = 'top'
+/** The light surface theme: Paper (white panels on a faint grey page) or Matte (grey glass on white). */
+export enum SurfaceTheme {
+	MATTE = 'matte',
+	PAPER = 'paper'
 }
 
 /**

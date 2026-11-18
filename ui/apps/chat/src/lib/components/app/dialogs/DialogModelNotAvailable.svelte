@@ -1,9 +1,9 @@
 <script lang="ts">
+	import * as AlertDialog from '@ggml-org/llama-ui/ui/alert-dialog';
 	import { AlertTriangle, ArrowRight } from '@lucide/svelte';
+	import { ICON_CLASS_DEFAULT, URL_PARAMS } from '#lib/constants/index.ts';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { ICON_CLASS_DEFAULT, URL_PARAMS } from '$lib/constants';
 
 	interface Props {
 		open: boolean;
@@ -21,7 +21,7 @@
 
 	function handleSelectModel(model: string) {
 		// Build URL with selected model, preserving other params
-		const url = new URL(page.url);
+		const url = new URL(page.url.href);
 
 		url.searchParams.set(URL_PARAMS.MODEL, model);
 
@@ -34,7 +34,7 @@
 	<AlertDialog.Content class="max-w-lg">
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
-				<AlertTriangle class="h-5 w-5 text-amber-500" />
+				<AlertTriangle class="size-icon-lg text-amber-500" />
 				Model Not Available
 			</AlertDialog.Title>
 

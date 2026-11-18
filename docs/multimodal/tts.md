@@ -14,6 +14,9 @@ Supported models:
 - [ZONOS3](#zonos3)
 - [Fish Audio S2 Pro](#fish-audio-s2-pro)
 - [YuE2](#yue2) (songs)
+- [MiniMax Music 3](#minimax-music-3) (songs)
+- [Kokoro](#kokoro)
+- [tiny-voca](#tiny-voca)
 
 The sections below list the params supported by each model, with `llama-tts` examples. In `llama-server`, the same options are set with `--tts-lang` and `--tts-voice`, or per request (see the [`/tts` endpoint](../../tools/server/README.md#post-tts-generate-speech-audio-from-text)).
 
@@ -22,6 +25,7 @@ The sections below list the params supported by each model, with `llama-tts` exa
 Available params:
 - `--tts-lang` can be `zh`, `en`, `de`, `it`, `pt`, `es`, `ja`, `ko`, `fr`, `ru` (default: `en`)
 - `--tts-speaker-file` should point to a speaker reference audio file (wav, mp3)
+- `--tts-speaker-text` is the transcript of the speaker file. With it, the speech continues from the reference codes (the "ICL" mode of the reference), which clones the voice more closely. It needs a clip of 30 s or less and an mmproj converted with the speech tokenizer encoder, otherwise it falls back to the speaker embedding only
 
 Example usage:
 
@@ -30,6 +34,16 @@ llama-tts -hf ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF \
     -p "Hello world" \
     --tts-lang english \
     --tts-speaker-file speaker.mp3 \
+    --output out.wav
+```
+
+Voice cloning with the transcript of the reference:
+
+```sh
+llama-tts -hf ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF \
+    -p "Hello world" \
+    --tts-speaker-file speaker.wav \
+    --tts-speaker-text "The words spoken in speaker.wav." \
     --output out.wav
 ```
 
@@ -306,3 +320,150 @@ python convert_hf_to_gguf.py YuE2-3B --mmproj --outfile mmproj-yue2-3b.gguf
 ```
 
 The mmproj holds the NAR transformer layers (loaded with libllama as a Qwen3 text model, in the `--outtype` type), and the latent projections and the VAE decoder, always in F32.
+
+## MiniMax Music 3
+
+[MiniMaxAI/MiniMax-Music3](https://huggingface.co/MiniMaxAI/MiniMax-Music3) generates songs (vocals and accompaniment) from a music description and lyrics, as 44.1 kHz stereo. For each 40 ms frame, the backbone (a Qwen3 text model) samples the semantic code and the RVQ depth decoder the 7 other codes; the hidden states of both go to a flow-matching DiT, then a DAC decoder makes the audio. Both use the settings of the reference (the diffusers pipeline).
+
+The prompt has the same format as YuE2, the description goes under `[Tags]`:
+
+```
+[Tags]
+Genre: acoustic pop. BPM: 96. Key: C major. Vocals: soft female lead. Arrangement: fingerpicked guitar and soft piano.
+[Lyrics]
+[verse]
+Morning light filtering through the pine
+[chorus]
+Softly the world begins to breathe
+```
+
+Available params:
+- The description and the lyrics are cleaned up like the reference: markdown is removed, a line that starts with structure tags (e.g. `[Verse]`) keeps only the tags
+- The generation stops at the end-of-audio token or at the limit of the reference (9000 frames, 6 minutes); `-n` sets a lower limit in frames (25 per second)
+- `--temp` changes the temperature of the codes (default 1.0); `--top-k` and `--top-p` are not used, the codes are sampled with top-k 50 like the reference
+- The codes are sampled with classifier-free guidance, scale 1.5 like the reference; `llama-server` takes `cfg_scale` to change it (1.0 disables it). The uncond prompt runs as a second sequence that shares the context, so a song needs about 2 x (prompt tokens + frames) positions: the default context (10240) holds about 3 minutes with a short description, use a larger `-c` (e.g. 20480) for longer songs
+- The flow matching runs 30 Euler steps like the reference; `llama-server` takes `flow_steps` to change it
+- The audio is made in windows of 200 frames (8 s) every 100 frames, like the reference: a window is processed during the generation once the frame after it exists, so with streaming the audio arrives in steps of about 4 s
+
+Example usage:
+
+```sh
+llama-tts -m minimax-music3.gguf \
+    -mm mmproj-minimax-music3.gguf \
+    -f song.txt \
+    --output song.wav
+```
+
+**Note for GGUF conversion:**
+
+The conversion reads the diffusers layout of the repository, the `qwen_7B` directory and the `.pth` files are not needed:
+
+```sh
+hf download MiniMaxAI/MiniMax-Music3 --local-dir MiniMax-Music3 --exclude "qwen_7B/*" --exclude "*.pth"
+python convert_hf_to_gguf.py MiniMax-Music3 --outfile minimax-music3.gguf
+python convert_hf_to_gguf.py MiniMax-Music3 --mmproj --outfile mmproj-minimax-music3.gguf
+```
+
+The mmproj holds the depth decoder and the DiT layers (in the `--outtype` type), and the condition encoder, the small DiT projections and the DAC decoder, always in F32.
+
+## Kokoro
+
+Available params:
+- `--tts-voice` selects one of the voices shipped with the weights (default: `af_heart`); `llama-tts` lists them when the name is unknown. The first letter of a voice is its language: `a` American English, `b` British English, `e` Spanish, `f` French, `h` Hindi, `i` Italian, `p` Brazilian Portuguese, `j` Japanese, `z` Mandarin
+- `--tts-lang` can be `en-us` or `en-gb`; when it is not given, the voices named `b*` speak British English and those named `a*` American English
+- Note: `--tts-speaker-file` is not supported, the model has no voice cloning
+- Note: sampling params are not used, the model is not autoregressive. `--seed` only changes the noise of the vocoder source
+- `speed` (`llama-server` only) changes the speaking rate, e.g. `1.5`; `loudness` is not supported
+
+Example usage:
+
+```sh
+llama-tts -m kokoro.gguf \
+    -mm mmproj-kokoro.gguf \
+    -p "Hello world" \
+    --tts-voice am_michael \
+    --output out.wav
+```
+
+The model speaks phonemes. Only English has a text to phonemes step (the model's `tts` chat template, with the pronunciation dictionary stored in the model):
+- the pronunciation of a word missing from the dictionary (mostly rare names) is predicted from its spelling, by a model that the converter learns from the dictionary. The reference uses espeak-ng for these words; the prediction is about as accurate, but it is not the same, so such a word can sound different from the reference
+- a text longer than 510 phonemes is split at sentence ends and spoken segment by segment
+
+**Other languages, or your own phonemes:**
+
+The prompt of a voice of another language must already be phonemes, in the symbols of the model (see `vocab` in its `config.json`). Run the text to phonemes step in your own code, for example with [espeak-ng](https://github.com/espeak-ng/espeak-ng), which the reference uses for Spanish, French, Hindi, Italian and Brazilian Portuguese:
+
+```sh
+PHONEMES=$(echo "El gobierno anunció nuevas medidas." | espeak-ng -q --ipa -v es --stdin | tr '\n' ' ')
+llama-tts -m kokoro.gguf \
+    -mm mmproj-kokoro.gguf \
+    -p "$PHONEMES" \
+    --tts-voice ef_dora \
+    --output out.wav
+```
+
+Notes:
+- espeak-ng drops the punctuation, which the model uses for pauses: phonemize the text between the marks and put them back for better prosody
+- the reference also replaces a few sounds by single symbols (e.g. `tʃ` by `ʧ`), see `espeak.py` of [misaki](https://github.com/hexgrad/misaki)
+- with `llama-server`, send `"raw_prompt": true` to pass phonemes with any voice, including the English ones
+
+**Note for GGUF conversion:**
+
+Download `config.json`, `kokoro-v1_0.pth` and the `voices/*.pt` files you want from [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), every voice in the directory is stored in the mmproj:
+
+```sh
+python convert_hf_to_gguf.py path/to/Kokoro-82M --outfile kokoro.gguf
+python convert_hf_to_gguf.py path/to/Kokoro-82M --mmproj --outfile mmproj-kokoro.gguf
+```
+
+The pronunciation dictionary and the part-of-speech tagger of the `tts` template come from the `misaki` and `nltk` python packages. The converter also learns the spelling-to-sound model for unknown words from that dictionary, which adds about 15 seconds:
+
+```sh
+pip install misaki nltk
+python -m nltk.downloader averaged_perceptron_tagger_eng
+```
+
+Without them the converter writes no `tts` template, and the prompt must be a phoneme string (as produced by misaki).
+
+## tiny-voca
+
+[tiny-voca](https://huggingface.co/n4ze3m/tiny-voca): a 4.5M-parameter English TTS model. A phoneme encoder (the text model), then a duration predictor, two frame transformers and a source-filter synthesizer (in the mmproj).
+
+Available params:
+- `--tts-voice` can be `M2` (default) or `F2`
+- Note: `--tts-speaker-file` is not supported, the model has no voice cloning
+- Note: sampling params are not used, the model is not autoregressive. `--seed` only changes the noise of the synthesizer
+- `speed` (`llama-server` only) changes the speaking rate, from `0.25` to `4`; `loudness` is not supported
+
+Example usage:
+
+```sh
+llama-tts -m tiny-voca.gguf \
+    -mm mmproj-tiny-voca.gguf \
+    -p "Hello! The meeting moved to 3:30 pm." \
+    --tts-voice F2 \
+    --output out.wav
+```
+
+The model speaks phonemes. The text to phonemes step is the model's `tts` chat template, a port of [dizione](https://github.com/n4ze3m/dizione) (the reference one), with its pronunciation dictionary and tables stored in the model:
+- the choice of a pronunciation for each word: exceptions and names, the dictionary, function words and their sentence stress, words spelled alike and read differently ("I read it yesterday", "to read"), hyphenated words, capitals read letter by letter, mixed case ("iPhone"), stretched words ("soooo"), accents, chat spellings ("lol", "btw")
+- a word missing from the dictionary is built from a known word when it can be (endings, prefixes, compounds), else it goes through the unknown-word model of dizione (stored in the mmproj) and its conversion rules
+- a pronunciation can be given in the text, in CMUdict notation or as phonemes: `Say {HH AH0 L OW1} to Samir{s ə m ˈɪɹ}`
+- the text rules are ported too: numbers, money, times, dates, telephone numbers, versions, codes, units, fractions, ranges, math signs and comparisons, web addresses and file names, abbreviations, chat spellings
+
+With `llama-server`, send `"raw_prompt": true` to pass phonemes directly, in the format printed by dizione: symbols separated by spaces, `<sp>` between words, a stress mark (`ˈ` or `ˌ`) before a stressed vowel, e.g. `h ə l ˈoʊ <sp> w ˈɜː l d .`
+
+Each sentence is spoken as one utterance. The template splits the text as the reference does (before a capital or a figure, not after a title or an initial), ends each sentence with `<eos>`, and adds a full stop when the text ends without a mark. Phonemes without `<eos>` are cut after each `.`, `?`, `!` or `…`, and a sentence without a final mark gets a full stop.
+
+**Note for GGUF conversion:**
+
+Convert the root of the repository (it needs `config.json`, `tiny-voca.pt` and `phonemizer/lexicon.tsv`). The other tables of the `tts` template come from the `dizione` python package; without it the converter writes no `tts` template, and the prompt must be phonemes:
+
+```sh
+pip install git+https://github.com/n4ze3m/dizione
+```
+
+```sh
+python convert_hf_to_gguf.py path/to/tiny-voca --outfile tiny-voca.gguf
+python convert_hf_to_gguf.py path/to/tiny-voca --mmproj --outfile mmproj-tiny-voca.gguf
+```

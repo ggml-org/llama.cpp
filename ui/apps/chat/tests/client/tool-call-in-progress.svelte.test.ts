@@ -7,11 +7,11 @@
 // finished calls open and wins on its own. A manual toggle always overrides the
 // default, in both directions.
 
-import ChatMessageAgenticContent from '$lib/components/app/chat/ChatMessages/ChatMessageAgenticContent.svelte';
-import { COLLAPSIBLE_TRANSITION_MS, SETTINGS_KEYS } from '$lib/constants';
-import { MessageRole, MessageType } from '$lib/enums';
-import { settingsStore } from '$lib/stores';
-import type { DatabaseMessage } from '$lib/types';
+import ChatMessageAgenticContent from '#lib/components/app/chat/ChatMessages/ChatMessageAgenticContent.svelte';
+import { COLLAPSIBLE_TRANSITION_MS, SETTINGS_KEYS } from '#lib/constants/index.ts';
+import { MessageRole, MessageType } from '#lib/enums/index.ts';
+import { settingsStore } from '#lib/stores/index.ts';
+import type { DatabaseMessage } from '#lib/types/index.ts';
 import { tick } from 'svelte';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { userEvent } from 'vitest/browser';

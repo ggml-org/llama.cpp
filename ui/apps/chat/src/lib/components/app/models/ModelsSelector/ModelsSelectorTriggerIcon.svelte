@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ModelAvatar from '../ModelAvatar.svelte';
-	import { MODEL_ICON } from '$lib/constants';
-	import type { ModelOption } from '$lib/types/models';
+	import { MODEL_ICON } from '#lib/constants/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
 
 	interface Props {
 		class?: string;
@@ -9,7 +9,7 @@
 		option?: ModelOption | null;
 	}
 
-	let { class: className = 'h-3.5 w-3.5', option }: Props = $props();
+	let { class: className = 'size-icon-sm', option }: Props = $props();
 </script>
 
 {#if option}

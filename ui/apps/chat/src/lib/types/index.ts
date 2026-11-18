@@ -1,6 +1,6 @@
 /**
  * Unified exports for all type definitions
- * Import types from '$lib/types' for cleaner imports
+ * Import types from '#lib/types/index.ts' for cleaner imports
  */
 
 // API types

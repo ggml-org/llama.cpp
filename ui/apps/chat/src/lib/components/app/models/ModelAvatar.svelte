@@ -1,10 +1,10 @@
 <script lang="ts">
 	import ModelOrgAvatar from './ModelOrgAvatar.svelte';
-	import { HF_BASE_MODEL_TAG_REGEX, SETTINGS_KEYS } from '$lib/constants';
-	import { HuggingFaceService, ModelsService } from '$lib/services';
-	import { settingsStore } from '$lib/stores';
-	import type { ModelOption } from '$lib/types/models';
-	import { nearViewport, orgOf } from '$lib/utils';
+	import { HF_BASE_MODEL_TAG_REGEX, SETTINGS_KEYS } from '#lib/constants/index.ts';
+	import { HuggingFaceService, ModelsService } from '#lib/services/index.ts';
+	import { settingsStore } from '#lib/stores/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
+	import { nearViewport, orgOf } from '#lib/utils/index.ts';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
@@ -31,7 +31,7 @@
 		fallback,
 		option,
 		quantPositionClass = '-bottom-1 -right-1',
-		quantSize = 'h-3 w-3',
+		quantSize = 'size-3',
 		showBaseModelAvatar,
 		showQuantBadge = true,
 		showRepoOrgAvatar,
@@ -89,7 +89,7 @@
 
 {#if orgName && hubEnabled}
 	<span
-		use:nearViewport={() => (isNearViewport = true)}
+		{@attach nearViewport(() => (isNearViewport = true))}
 		class={['inline-flex shrink-0', className]}
 	>
 		<ModelOrgAvatar

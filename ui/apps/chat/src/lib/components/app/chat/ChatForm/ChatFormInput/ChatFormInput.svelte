@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { fileMentionWidgets } from './mention-badge-widget';
 	import { EditorView } from '@codemirror/view';
-	import { MarkdownEditor } from '$lib/components/app';
-	import { SETTINGS_KEYS } from '$lib/constants';
-	import { deviceStore } from '$lib/stores';
-	import { settingsStore } from '$lib/stores/settings/index.svelte';
-	import { toolsStore } from '$lib/stores/tools.svelte';
+	import { MarkdownEditor } from '#lib/components/app/index.ts';
+	import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+	import { deviceStore } from '#lib/stores/index.ts';
+	import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
+	import { toolsStore } from '#lib/stores/tools.svelte.ts';
 	import { onMount } from 'svelte';
 	import type { ClassValue } from 'svelte/elements';
 
@@ -41,7 +41,7 @@
 	let editor: MarkdownEditor | undefined = $state();
 	let box: HTMLDivElement | undefined = $state();
 
-	let livePreview = $derived(settingsStore.config[SETTINGS_KEYS.LIVE_MARKDOWN_PREVIEW] !== false);
+	let livePreview = $derived(settingsStore.config[SETTINGS_KEYS.LIVE_MARKDOWN_PREVIEW] === true);
 
 	// Rendered mention badges label paths by these, so the blocks render again on a change
 	let renderKey = $derived(
@@ -76,6 +76,13 @@
 
 				return event.defaultPrevented;
 			}
+		}),
+		// CodeMirror turns spellcheck, autocorrect and autocapitalize off for code; the
+		// message input is prose, so it gets a textarea's defaults back
+		EditorView.contentAttributes.of({
+			autocapitalize: 'on',
+			autocorrect: 'on',
+			spellcheck: 'true'
 		})
 	];
 

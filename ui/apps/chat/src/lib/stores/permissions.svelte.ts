@@ -6,8 +6,8 @@
  * tool without prompting.
  */
 
-import { browser } from '$app/environment';
-import { ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY } from '$lib/constants';
+import { ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY } from '#lib/constants/index.ts';
+import { browser } from '$app/env';
 import { SvelteSet } from 'svelte/reactivity';
 
 class PermissionsStore {

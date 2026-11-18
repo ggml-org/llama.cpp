@@ -1,4 +1,4 @@
-import { FileMentionEntryType } from '$lib/enums';
+import { FileMentionEntryType } from '#lib/enums/index.ts';
 import {
 	buildMentionInsertion,
 	containsFileMentionLink,
@@ -9,7 +9,7 @@ import {
 	getMentionBadgeLabel,
 	MENTION_BADGE_FILE_ICON_PATHS,
 	MENTION_BADGE_FOLDER_ICON_PATHS
-} from '$lib/utils';
+} from '#lib/utils/index.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('encodeFileLinkPath', () => {

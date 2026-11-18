@@ -1,11 +1,11 @@
 <script lang="ts">
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { BookOpenText, Clock, Gauge, Layers, Sparkles, WholeWord, Wrench } from '@lucide/svelte';
-	import { ChatMessageStatisticsBadge } from '$lib/components/app';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { DEFAULT_PERFORMANCE_TIME, MS_PER_SECOND } from '$lib/constants';
-	import { ChatMessageStatisticsMode, ChatMessageStatsView } from '$lib/enums';
-	import type { ChatMessageAgenticTimings } from '$lib/types/chat';
-	import { formatPerformanceTime } from '$lib/utils';
+	import { ChatMessageStatisticsBadge } from '#lib/components/app/index.ts';
+	import { DEFAULT_PERFORMANCE_TIME, MS_PER_SECOND } from '#lib/constants/index.ts';
+	import { ChatMessageStatisticsMode, ChatMessageStatsView } from '#lib/enums/index.ts';
+	import type { ChatMessageAgenticTimings } from '#lib/types/chat.js';
+	import { formatPerformanceTime } from '#lib/utils/index.ts';
 	import type { Component } from 'svelte';
 
 	interface Props {
@@ -145,17 +145,17 @@
 			{#snippet child({ props })}
 				<button
 					{...props}
-					class="inline-flex h-5 w-5 items-center justify-center rounded-sm transition-colors {activeView ===
+					class="inline-flex size-5 items-center justify-center rounded-sm transition-colors {activeView ===
 					opts.view
-						? 'bg-background text-foreground shadow-sm'
+						? 'bg-(--tabs-background-active) text-(--tabs-text-active) shadow-(--tabs-shadow-active)'
 						: opts.disabled
 							? 'cursor-not-allowed opacity-40'
-							: 'hover:text-foreground'}"
+							: 'hover:text-(--tabs-text-active)'}"
 					disabled={opts.disabled}
 					onclick={() => !opts.disabled && (activeView = opts.view)}
 					type="button"
 				>
-					<IconComponent class="h-3 w-3" />
+					<IconComponent class="size-icon-xs" />
 
 					<span class="sr-only">{opts.label}</span>
 				</button>
@@ -170,7 +170,9 @@
 
 <div class="inline-flex items-center text-xs text-muted-foreground">
 	{#if isSwitchable}
-		<div class="inline-flex items-center rounded-sm bg-muted-foreground/15 p-0.5">
+		<div
+			class="inline-flex items-center gap-0.5 rounded-md bg-(--tabs-track) p-0.5 shadow-(--tabs-track-shadow)"
+		>
 			{#if hasPromptStats || isLive}
 				{@render viewButton({
 					icon: BookOpenText,

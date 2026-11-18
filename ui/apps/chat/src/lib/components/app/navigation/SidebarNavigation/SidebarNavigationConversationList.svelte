@@ -6,23 +6,27 @@
 	import SidebarNavigationSelectionBar from './SidebarNavigationSelectionBar.svelte';
 	import SidebarNavigationShowMore from './SidebarNavigationShowMore.svelte';
 	import { FolderPlus, MoreHorizontal, Pin } from '@lucide/svelte';
-	import { CollapsibleRegion, ContextMenuActions, DropdownMenuActions } from '$lib/components/app';
+	import {
+		CollapsibleRegion,
+		ContextMenuActions,
+		DropdownMenuActions
+	} from '#lib/components/app/index.ts';
 	import {
 		SIDEBAR_ROW_SLIDE_MS,
 		SIDEBAR_SECTION_IDS,
 		SIDEBAR_SECTION_PREVIEW_COUNT,
 		SIDEBAR_SHOW_MORE_ROW_CLASS
-	} from '$lib/constants';
-	import { SidebarSectionKind } from '$lib/enums';
+	} from '#lib/constants/index.ts';
+	import { SidebarSectionKind } from '#lib/enums/index.ts';
 	import {
 		conversationsStore,
 		deviceStore,
 		groupsStore,
 		sidebarDragStore,
 		uiStore
-	} from '$lib/stores';
-	import type { MenuAction } from '$lib/types';
-	import { buildConversationTree } from '$lib/utils';
+	} from '#lib/stores/index.ts';
+	import type { MenuAction } from '#lib/types/index.ts';
+	import { buildConversationTree } from '#lib/utils/index.ts';
 	import { flip } from 'svelte/animate';
 	import { slide } from 'svelte/transition';
 

@@ -1,4 +1,4 @@
-import { MessageRole } from '$lib/enums';
+import { MessageRole } from '#lib/enums/index.ts';
 import { describe, expect, it } from 'vitest';
 
 /**

@@ -3,8 +3,6 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'path';
 import type { Plugin } from 'vite';
 
-let processed = false;
-
 const OUTPUT_DIR = process.env.LLAMA_UI_OUT_DIR ?? BUILD_CONFIG.OUTPUT_DIR;
 
 function rewrite(path: string, pairs: [string, string][]): void {
@@ -31,35 +29,25 @@ function rewrite(path: string, pairs: [string, string][]): void {
  * SvelteKit bakes root absolute /_app/ paths into the SPA fallback because paths.relative
  * does not apply to a depth agnostic fallback page. Rewriting to ./_app/ lets a plain
  * recursive copy of the output into /any/subdir/ resolve assets against the document URL.
- * Runs after adapter-static writes index.html and the PWA plugin writes sw.js, deferred the
- * same way as buildInfoPlugin so the emitted files exist.
+ * Runs after adapter-static writes index.html.
  */
 export function relativizeBasePlugin(): Plugin {
 	return {
 		apply: 'build',
-		closeBundle() {
-			setTimeout(() => {
+		buildApp: {
+			// post order runs after the SvelteKit adapter has written the output
+			async handler() {
 				try {
-					if (processed) return;
-
-					processed = true;
-
 					const outDir = resolve(OUTPUT_DIR);
 
 					// index.html: modulepreload, stylesheet and bootstrap import reference "/_app/
 					rewrite(resolve(outDir, 'index.html'), [['"/_app/', '"./_app/']]);
-
-					// sw.js: the only absolute entries are the navigate fallback precache key and handler
-					rewrite(resolve(outDir, 'sw.js'), [
-						['{url:"/"', '{url:"./"'],
-						['createHandlerBoundToURL("/"', 'createHandlerBoundToURL("./"']
-					]);
-
-					console.log('Relativized base refs in index.html and sw.js');
+					console.log('Relativized base refs in index.html');
 				} catch (error) {
 					console.error('Failed to relativize base refs:', error);
 				}
-			}, 100);
+			},
+			order: 'post'
 		},
 		name: 'llamacpp:relativize-base'
 	};

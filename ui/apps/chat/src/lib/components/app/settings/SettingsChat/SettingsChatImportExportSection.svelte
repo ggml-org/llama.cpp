@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { Button, type ButtonVariant } from '$lib/components/ui/button';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { Button, type ButtonVariant } from '@ggml-org/llama-ui/ui/button';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 	import type { Component } from 'svelte';
 
 	let {

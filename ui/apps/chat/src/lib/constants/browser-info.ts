@@ -1,6 +1,6 @@
 import { CLI_FLAGS } from './cli-flags.constants';
-import { BuiltInTool, JsonSchemaType, ToolCallType } from '$lib/enums';
-import type { OpenAIToolDefinition } from '$lib/types';
+import { BuiltInTool, JsonSchemaType, ToolCallType } from '#lib/enums/index.ts';
+import type { OpenAIToolDefinition } from '#lib/types/index.ts';
 
 // get_info is served by the server, but the browser falls back to this
 // implementation when the server does not provide it - same wire name.

@@ -3,7 +3,13 @@
  * the bit-depth buckets, and the standalone command builder.
  */
 
-import { ModelDraftSidecar } from '$lib/enums';
+import { ModelDraftSidecar } from '#lib/enums/index.ts';
+
+export {
+	BIT_DEPTH_LABEL_SUFFIX,
+	OTHER_BIT_DEPTH,
+	OTHER_BIT_DEPTH_LABEL
+} from '@ggml-org/llama-ui/models';
 
 /**
  * `--spec-type` value for each draft sidecar.
@@ -14,14 +20,6 @@ export const SPEC_TYPE: Record<ModelDraftSidecar, string> = {
 	[ModelDraftSidecar.EAGLE3]: 'draft-eagle3',
 	[ModelDraftSidecar.MTP]: 'draft-mtp'
 };
-
-/** Bit-depth bucket for files that carry no quant token; rendered as "Other". */
-export const OTHER_BIT_DEPTH = 99;
-
-export const OTHER_BIT_DEPTH_LABEL = 'Other';
-
-/** Suffix appended after a bit-depth number to label a row, e.g. `4-bit`. */
-export const BIT_DEPTH_LABEL_SUFFIX = '-bit';
 
 /**
  * Fixed tokens of the standalone `llama serve` command preview, so the command

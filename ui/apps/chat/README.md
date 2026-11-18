@@ -209,7 +209,7 @@ ui/apps/chat/        →  build  →  build/ui/apps/chat/dist/
 ### SvelteKit Configuration
 
 ```javascript
-// svelte.config.js
+// vite.config.ts - options passed to sveltekit({ ... })
 adapter: adapter({
   pages: '../../../build/ui/apps/chat/dist',      // Output directory
   assets: '../../../build/ui/apps/chat/dist',     // Static assets
@@ -339,7 +339,7 @@ flowchart TB
 
 #### Components (`src/lib/components/`)
 
-Components are organized in `app/` (application-specific) and `ui/` (shadcn-svelte primitives).
+Application components live in `app/`. The base components (the shadcn-svelte primitives: button, dialog, tooltip…), the design tokens, the fonts and the surfaces are Llama UI's, in [`ui/lib/ui`](../../lib/ui/README.md): the app imports them as `@ggml-org/llama-ui/ui/<name>` and compiles them from source as part of its own build, with no install or build of the library (see `scripts/llama-ui.js`).
 
 **Chat Components** (`app/chat/`):
 
@@ -363,7 +363,7 @@ Components are organized in `app/` (application-specific) and `ui/` (shadcn-svel
 | `DialogConfirmation`           | Generic confirmation for destructive actions             |
 | `DialogConversationRename`     | Edit conversation title                                  |
 
-**Server/Model Components** (`app/server/`, `app/models/`):
+**Server/Model Components** (`app/servers/`, `app/models/`):
 
 | Component                           | Responsibility                                                                                                |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------- |
@@ -688,14 +688,14 @@ llama-server serves the UI with `Cross-Origin-Embedder-Policy: require-corp` and
 
 The sidebar stacks four surfaces, outermost first:
 
-| Layer | Example                            | Corners                            |
-| ----- | ---------------------------------- | ---------------------------------- |
-| Page  | the body background                | none                               |
-| Panel | the sidebar                        | `rounded-2xl`                      |
-| Group | the sidebar's footer, inset in it  | `rounded-(--surface-group-radius)` |
-| Row   | Models, MCP or Settings in a group | `rounded-(--surface-row-radius)`   |
+| Layer | Example                            | Corners                          |
+| ----- | ---------------------------------- | -------------------------------- |
+| Page  | the body background                | none                             |
+| Panel | the sidebar                        | `rounded-2xl`                    |
+| Group | the sidebar's footer, inset in it  | `inset-group-surface`            |
+| Row   | Models, MCP or Settings in a group | `rounded-(--surface-row-radius)` |
 
-A row keeps its corners concentric with its group's: its radius is the group's less the padding between their edges, so the curves run parallel instead of pinching at the corners. `app.css` holds the three tokens (`--surface-group-radius`, `--surface-group-padding` and the derived `--surface-row-radius`); change the group's radius or padding there and the rows follow. A group pads its rows with `p-(--surface-group-padding)`. `SidebarNavigationActions` rounds every row from the token, so the actions at the top of the sidebar (New chat, Search) match the footer's rows; a phone sizes its rows for a thumb instead. A selected row is raised and edged (`bg-background`, `shadow-sm`, `ring-1`), where a hovered one is only tinted, so the two never look alike. The group's hairline border is left out of the sum. `tests/client/nested-surfaces.svelte.test.ts` checks the rule on the rendered footer.
+A row keeps its corners concentric with its group's: its radius is the group's less the padding between their edges, so the curves run parallel instead of pinching at the corners. `app.css` holds the three tokens (`--surface-group-radius`, which follows the design system's `--inset-group-radius`, `--surface-group-padding` and the derived `--surface-row-radius`); change the group's radius or padding and the rows follow. A group pads its rows with `p-(--surface-group-padding)`. `SidebarNavigationActions` rounds every row from the token, so the actions at the top of the sidebar (New chat, Search) match the footer's rows; a phone sizes its rows for a thumb instead. A selected row takes `selected-row-surface`, the group's edge and shade around a tint, where a hovered one is only tinted, so the two never look alike. The group's hairline border is left out of the sum. `tests/client/nested-surfaces.svelte.test.ts` checks the rule on the rendered footer.
 
 ---
 
@@ -748,7 +748,7 @@ npm run check         # TypeScript type checking
 ui/apps/chat/
 ├── src/
 │   ├── lib/
-│   │   ├── components/   # UI components (app/, ui/)
+│   │   ├── components/   # Application components (base ones come from ui/lib/ui)
 │   │   ├── hooks/        # Svelte hooks
 │   │   ├── stores/       # State management
 │   │   ├── services/     # API and database services

@@ -1,13 +1,13 @@
 <script lang="ts">
 	import MenuActionsList from './MenuActionsList.svelte';
-	import { KeyboardShortcutInfo } from '$lib/components/app';
-	import * as Drawer from '$lib/components/ui/drawer';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import { Separator } from '$lib/components/ui/separator';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { MenuKind } from '$lib/enums';
-	import { deviceStore } from '$lib/stores';
-	import type { MenuAction } from '$lib/types';
+	import * as Drawer from '@ggml-org/llama-ui/ui/drawer';
+	import * as DropdownMenu from '@ggml-org/llama-ui/ui/dropdown-menu';
+	import { Separator } from '@ggml-org/llama-ui/ui/separator';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
+	import { KeyboardShortcutInfo } from '#lib/components/app/index.ts';
+	import { MenuKind } from '#lib/enums/index.ts';
+	import { deviceStore } from '#lib/stores/index.ts';
+	import type { MenuAction } from '#lib/types/index.ts';
 	import type { Component } from 'svelte';
 
 	interface Props {
@@ -82,7 +82,7 @@
 						onclick={(event) => runAction(action, event)}
 						type="button"
 					>
-						{@render iconComponent(action.icon, 'h-4 w-4 shrink-0')}
+						{@render iconComponent(action.icon, 'size-icon-md shrink-0')}
 
 						<span class="flex flex-1 flex-col">
 							{action.label}

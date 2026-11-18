@@ -7,9 +7,9 @@ import {
 	SIDEBAR_REVEAL_RATIO,
 	SIDEBAR_REVEAL_SLOP_PX,
 	SIDEBAR_REVEAL_SWIPE_PX
-} from '$lib/constants';
-import { deviceStore, uiStore } from '$lib/stores';
-import { hapticTap, remToPx } from '$lib/utils';
+} from '#lib/constants/index.ts';
+import { deviceStore, uiStore } from '#lib/stores/index.ts';
+import { hapticTap, remToPx } from '#lib/utils/index.ts';
 import { untrack } from 'svelte';
 import { quartOut } from 'svelte/easing';
 import { Tween } from 'svelte/motion';

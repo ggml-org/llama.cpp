@@ -8,10 +8,10 @@
 		GIGABYTE_LABEL,
 		OTHER_BIT_DEPTH,
 		OTHER_BIT_DEPTH_LABEL
-	} from '$lib/constants';
-	import type { ModelDraftSidecar } from '$lib/enums';
-	import type { ModelQuantChip } from '$lib/types';
-	import { minMemoryTierGb } from '$lib/utils';
+	} from '#lib/constants/index.ts';
+	import type { ModelDraftSidecar } from '#lib/enums/index.ts';
+	import type { ModelQuantChip } from '#lib/types/index.ts';
+	import { minMemoryTierGb } from '#lib/utils/index.ts';
 	import { cubicOut } from 'svelte/easing';
 	import { slide } from 'svelte/transition';
 
@@ -87,7 +87,7 @@
 				{/if}
 
 				<ChevronDown
-					class="h-3 w-3 shrink-0 transition-transform duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] {commandOpen
+					class="size-icon-xs shrink-0 transition-transform duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] {commandOpen
 						? 'rotate-180'
 						: ''}"
 				/>

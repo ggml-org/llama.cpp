@@ -1,13 +1,16 @@
 <script lang="ts">
+	import { Input } from '@ggml-org/llama-ui/ui/input';
 	import { Plus, Trash2 } from '@lucide/svelte';
-	import { Input } from '$lib/components/ui/input';
-	import { KEY_VALUE_PAIR_KEY_MAX_LENGTH, KEY_VALUE_PAIR_VALUE_MAX_LENGTH } from '$lib/constants';
-	import type { KeyValuePair } from '$lib/types';
+	import {
+		KEY_VALUE_PAIR_KEY_MAX_LENGTH,
+		KEY_VALUE_PAIR_VALUE_MAX_LENGTH
+	} from '#lib/constants/index.ts';
+	import type { KeyValuePair } from '#lib/types/index.ts';
 	import {
 		autoResizeTextarea,
 		sanitizeKeyValuePairKey,
 		sanitizeKeyValuePairValue
-	} from '$lib/utils';
+	} from '#lib/utils/index.ts';
 	import { tick } from 'svelte';
 
 	interface Props {
@@ -117,7 +120,7 @@
 			onclick={addPair}
 			type="button"
 		>
-			<Plus class="h-3 w-3" />
+			<Plus class="size-icon-xs" />
 			{addButtonLabel}
 		</button>
 	</div>
@@ -138,7 +141,7 @@
 					/>
 
 					<textarea
-						use:autoResizeTextarea
+						{@attach autoResizeTextarea}
 						class="flex-1 resize-none rounded-md border border-input bg-transparent px-3 py-2 text-base leading-5 md:text-sm placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
 						maxlength={KEY_VALUE_PAIR_VALUE_MAX_LENGTH}
 						onblur={(e) => trimPairValue(index, e.currentTarget.value)}
@@ -157,7 +160,7 @@
 						onclick={() => removePair(index)}
 						type="button"
 					>
-						<Trash2 class="h-3.5 w-3.5" />
+						<Trash2 class="size-icon-sm" />
 					</button>
 				</div>
 			{/each}

@@ -7,8 +7,9 @@
 		gaugeTriggerLeave,
 		gaugeTriggerPointerDown
 	} from './gauge-popup.svelte';
-	import { useContextGauge } from '$lib/hooks/use-context-gauge.svelte';
-	import { chatStore, conversationsStore, deviceStore } from '$lib/stores';
+	import GlassKey from '#lib/components/app/actions/GlassKey.svelte';
+	import { useContextGauge } from '#lib/hooks/use-context-gauge.svelte.ts';
+	import { chatStore, conversationsStore, deviceStore } from '#lib/stores/index.ts';
 	import { untrack } from 'svelte';
 
 	interface Props {
@@ -50,22 +51,38 @@
 	});
 </script>
 
-<div
-	aria-label="Context usage"
-	class={['flex cursor-default items-center justify-center', className]}
-	data-context-gauge-trigger
-	onclick={gaugeTriggerClick}
-	onkeydown={gaugeTriggerKeydown}
-	onpointerdown={gaugeTriggerPointerDown}
-	onpointerenter={gaugeTriggerEnter}
-	onpointerleave={gaugeTriggerLeave}
-	role="button"
-	tabindex="0"
->
-	<!-- a phone gets the larger dial: the trigger is a touch target there -->
-	<ContextGaugeDial
-		level={gauge.colorLevel}
-		percent={gauge.contextPercent}
-		size={corner ? 'key' : deviceStore.isMobile ? 'md' : 'sm'}
-	/>
-</div>
+{#snippet dial(size: 'sm' | 'md' | 'key')}
+	<ContextGaugeDial level={gauge.colorLevel} percent={gauge.contextPercent} {size} />
+{/snippet}
+
+{#if corner}
+	<!-- a phone's corner key, the same glass key as the menu key across from it -->
+	<GlassKey
+		class={className}
+		data-context-gauge-trigger
+		label="Context usage"
+		onclick={gaugeTriggerClick}
+		onkeydown={gaugeTriggerKeydown}
+		onpointerdown={gaugeTriggerPointerDown}
+		onpointerenter={gaugeTriggerEnter}
+		onpointerleave={gaugeTriggerLeave}
+	>
+		{@render dial('key')}
+	</GlassKey>
+{:else}
+	<div
+		aria-label="Context usage"
+		class={['flex cursor-default items-center justify-center', className]}
+		data-context-gauge-trigger
+		onclick={gaugeTriggerClick}
+		onkeydown={gaugeTriggerKeydown}
+		onpointerdown={gaugeTriggerPointerDown}
+		onpointerenter={gaugeTriggerEnter}
+		onpointerleave={gaugeTriggerLeave}
+		role="button"
+		tabindex="0"
+	>
+		<!-- a phone gets the larger dial: the trigger is a touch target there -->
+		{@render dial(deviceStore.isMobile ? 'md' : 'sm')}
+	</div>
+{/if}

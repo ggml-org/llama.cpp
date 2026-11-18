@@ -1,18 +1,23 @@
 <script lang="ts">
 	import ChatFormCurrentWorkingDirectoryChip from './ChatFormCurrentWorkingDirectoryChip.svelte';
 	import ChatFormCurrentWorkingDirectoryResultsList from './ChatFormCurrentWorkingDirectoryResultsList.svelte';
+	import { SearchInput } from '@ggml-org/llama-ui/app/forms';
+	import * as Drawer from '@ggml-org/llama-ui/ui/drawer';
+	import * as Popover from '@ggml-org/llama-ui/ui/popover';
 	import { FolderOpen, X } from '@lucide/svelte';
-	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
-	import * as Drawer from '$lib/components/ui/drawer';
-	import * as Popover from '$lib/components/ui/popover';
-	import { DEFAULT_MOBILE_BREAKPOINT, HOME_TILDE, SEARCH, UI_DATA_ATTRS } from '$lib/constants';
-	import { BuiltInTool, GlobSearchType, KeyboardKey, ToolSource } from '$lib/enums';
-	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
-	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
-	import { useScrollActiveRow } from '$lib/hooks/use-scroll-active-row.svelte';
-	import { ToolsService } from '$lib/services/tools.service';
-	import { conversationsStore, deviceStore, toolsStore } from '$lib/stores';
-	import { abbreviateHome, runGlobSearchWithChildren } from '$lib/utils';
+	import {
+		DEFAULT_MOBILE_BREAKPOINT,
+		HOME_TILDE,
+		SEARCH,
+		UI_DATA_ATTRS
+	} from '#lib/constants/index.ts';
+	import { BuiltInTool, GlobSearchType, KeyboardKey, ToolSource } from '#lib/enums/index.ts';
+	import { useDebouncedSearch } from '#lib/hooks/use-debounced-search.svelte.ts';
+	import { usePickerNavigation } from '#lib/hooks/use-picker-navigation.svelte.ts';
+	import { useScrollActiveRow } from '#lib/hooks/use-scroll-active-row.svelte.ts';
+	import { ToolsService } from '#lib/services/tools.service.ts';
+	import { conversationsStore, deviceStore, toolsStore } from '#lib/stores/index.ts';
+	import { abbreviateHome, runGlobSearchWithChildren } from '#lib/utils/index.ts';
 
 	// Microtask delay so the popover's focus scope tears down first.
 	const FOCUS_DELAY_MS = 0;

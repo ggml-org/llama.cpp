@@ -472,6 +472,7 @@ class ApertusModel(LlamaModel):
     "Apertus1p5ForConditionalGeneration",
     "Apertus1p5TextForCausalLM",
 )
+@ModelBase.example("swiss-ai/Apertus-v1.5-8B", "swiss-ai/Apertus-v1.5-70B")
 class Apertus1p5Model(ApertusModel):
     model_arch = gguf.MODEL_ARCH.APERTUS
 
@@ -498,6 +499,7 @@ class Apertus1p5Model(ApertusModel):
 
 
 @ModelBase.register("Apertus1p5ForConditionalGeneration")
+@ModelBase.example("swiss-ai/Apertus-v1.5-8B", "swiss-ai/Apertus-v1.5-70B")
 class Apertus1p5MmprojModel(MmprojModel):
     has_vision_encoder = True
     has_audio_encoder = True

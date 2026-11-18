@@ -60,6 +60,8 @@ OutputVector translate_rope(const NodeContext & context) {
         if (context.get_input_size() == 3) {
             cache_key += "_ff_" + context.get_input_names()[2];
         }
+        // Not every ROPE takes inp_pos: gemma-4 rotates its KV-shared layers at the positions of the output rows only
+        cache_key += "_pos_" + context.get_input_names()[1];
         if (context.has_input(cache_key + "_cos")) {
             cos_theta_node = context.get_input(cache_key + "_cos");
             sin_theta_node = context.get_input(cache_key + "_sin");

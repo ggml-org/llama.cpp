@@ -1,8 +1,8 @@
 <script lang="ts">
+	import * as AlertDialog from '@ggml-org/llama-ui/ui/alert-dialog';
+	import { Checkbox } from '@ggml-org/llama-ui/ui/checkbox';
+	import { Label } from '@ggml-org/llama-ui/ui/label';
 	import { Shield, ShieldOff } from '@lucide/svelte';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import Label from '$lib/components/ui/label/label.svelte';
 
 	let {
 		includeSensitiveData = $bindable(false),
@@ -28,9 +28,9 @@
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
 				{#if includeSensitiveData}
-					<ShieldOff class="h-5 w-5 text-destructive" />
+					<ShieldOff class="size-icon-lg text-destructive" />
 				{:else}
-					<Shield class="h-5 w-5 text-destructive" />
+					<Shield class="size-icon-lg text-destructive" />
 				{/if}
 				Export Settings
 			</AlertDialog.Title>
@@ -69,10 +69,7 @@
 		<AlertDialog.Footer>
 			<AlertDialog.Cancel onclick={onCancel}>Cancel</AlertDialog.Cancel>
 
-			<AlertDialog.Action
-				class="bg-destructive text-white hover:bg-destructive/80"
-				onclick={onConfirm}
-			>
+			<AlertDialog.Action onclick={onConfirm} variant="destructive">
 				{#if includeSensitiveData}
 					Export Anyway
 				{:else}

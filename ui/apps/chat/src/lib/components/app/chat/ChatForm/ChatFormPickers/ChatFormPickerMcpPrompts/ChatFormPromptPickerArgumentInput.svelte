@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { Input } from '$lib/components/ui/input';
-	import { Label } from '$lib/components/ui/label';
-	import type { MCPPromptInfo } from '$lib/types';
+	import { Input } from '@ggml-org/llama-ui/ui/input';
+	import { Label } from '@ggml-org/llama-ui/ui/label';
+	import type { MCPPromptInfo } from '#lib/types/index.ts';
 	import { fly } from 'svelte/transition';
 
 	type PromptArgument = NonNullable<MCPPromptInfo['arguments']>[number];
@@ -66,7 +66,7 @@
 	{#if isAutocompleteActive && suggestions.length > 0}
 		<div
 			transition:fly={{ duration: 100, y: -5 }}
-			class="absolute top-full right-0 left-0 z-10 mt-1 max-h-32 overflow-y-auto rounded-lg border border-border/50 bg-background shadow-lg"
+			class="absolute top-full right-0 left-0 z-10 mt-1 max-h-32 overflow-y-auto rounded-lg border matte-float"
 		>
 			{#each suggestions as suggestion, i (suggestion)}
 				<button

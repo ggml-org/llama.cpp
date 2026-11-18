@@ -2,8 +2,7 @@
 	import ChatTabsItem from './ChatTabsItem.svelte';
 	import ChatTabsNewChatButton from './ChatTabsNewChatButton.svelte';
 	import { ArrowRightToLine, ListX, Square, SquarePen, X } from '@lucide/svelte';
-	import { page } from '$app/state';
-	import { ContextMenuActions, ScrollCarousel } from '$lib/components/app';
+	import { ContextMenuActions, ScrollCarousel } from '#lib/components/app/index.ts';
 	import {
 		CHAT_TABS_MAX_WIDTH,
 		NEW_CHAT_LABEL,
@@ -11,11 +10,12 @@
 		SHORTCUT_CLOSE_TAB,
 		UI_DATA_ATTRS,
 		UNNAMED_CHAT_LABEL
-	} from '$lib/constants';
-	import { useScrollCarousel } from '$lib/hooks/use-scroll-carousel.svelte';
-	import { chatStore, conversationsStore, tabsStore, uiStore } from '$lib/stores';
-	import type { MenuAction } from '$lib/types';
-	import { resolveTabView } from '$lib/utils';
+	} from '#lib/constants/index.ts';
+	import { useScrollCarousel } from '#lib/hooks/use-scroll-carousel.svelte.ts';
+	import { chatStore, conversationsStore, tabsStore, uiStore } from '#lib/stores/index.ts';
+	import type { MenuAction } from '#lib/types/index.ts';
+	import { resolveTabView } from '#lib/utils/index.ts';
+	import { page } from '$app/state';
 	import { tick } from 'svelte';
 
 	const carousel = useScrollCarousel();

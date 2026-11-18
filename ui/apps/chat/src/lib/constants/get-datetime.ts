@@ -1,5 +1,5 @@
-import { BuiltInTool, JsonSchemaType, ToolCallType } from '$lib/enums';
-import type { OpenAIToolDefinition } from '$lib/types';
+import { BuiltInTool, JsonSchemaType, ToolCallType } from '#lib/enums/index.ts';
+import type { OpenAIToolDefinition } from '#lib/types/index.ts';
 
 export const GET_DATETIME_TOOL_NAME = BuiltInTool.BROWSER_GET_DATETIME;
 

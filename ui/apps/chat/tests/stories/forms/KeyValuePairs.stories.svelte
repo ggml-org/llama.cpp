@@ -1,0 +1,47 @@
+<script lang="ts" module>
+	import { defineMeta } from '@storybook/addon-svelte-csf';
+	import { KeyValuePairs } from '#lib/components/app/index.ts';
+	import type { KeyValuePair } from '#lib/types/index.ts';
+	import StateGallery from '$llama-ui-stories/helpers/StateGallery.svelte';
+	import StateGalleryItem from '$llama-ui-stories/helpers/StateGalleryItem.svelte';
+
+	// the editable key and value list, as used for MCP server headers
+	const { Story } = defineMeta({
+		component: KeyValuePairs,
+		parameters: {
+			layout: 'centered'
+		},
+		title: 'Llama Chat/Forms/KeyValuePairs'
+	});
+</script>
+
+<script lang="ts">
+	let pairs = $state<KeyValuePair[]>([
+		{ key: 'Authorization', value: 'Bearer sk-local' },
+		{ key: 'X-Workspace', value: 'research' }
+	]);
+	let emptyPairs = $state<KeyValuePair[]>([]);
+</script>
+
+<Story asChild name="Default">
+	<StateGallery columns={2} minItemWidth="20rem">
+		<StateGalleryItem label="With pairs">
+			<KeyValuePairs
+				addButtonLabel="Add header"
+				onPairsChange={(next) => (pairs = next)}
+				{pairs}
+				sectionLabel="Headers"
+			/>
+		</StateGalleryItem>
+
+		<StateGalleryItem label="Empty">
+			<KeyValuePairs
+				addButtonLabel="Add header"
+				emptyMessage="No headers configured."
+				onPairsChange={(next) => (emptyPairs = next)}
+				pairs={emptyPairs}
+				sectionLabel="Headers"
+			/>
+		</StateGalleryItem>
+	</StateGallery>
+</Story>

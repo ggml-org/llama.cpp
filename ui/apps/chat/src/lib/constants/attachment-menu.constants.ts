@@ -1,6 +1,10 @@
-import { FILE_TYPE_ICONS } from '$lib/constants';
-import { AttachmentAction, AttachmentItemEnabledWhen, AttachmentMenuItemId } from '$lib/enums';
-import type { AttachmentMenuItem } from '$lib/types';
+import { FILE_TYPE_ICONS } from '#lib/constants/index.ts';
+import {
+	AttachmentAction,
+	AttachmentItemEnabledWhen,
+	AttachmentMenuItemId
+} from '#lib/enums/index.ts';
+import type { AttachmentMenuItem } from '#lib/types/index.ts';
 
 /**
  * File attachment menu items shown in both the desktop dropdown and mobile sheet.

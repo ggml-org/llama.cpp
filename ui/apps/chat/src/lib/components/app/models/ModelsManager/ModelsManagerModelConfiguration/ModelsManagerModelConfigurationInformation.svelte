@@ -1,16 +1,16 @@
 <script lang="ts">
+	import { Badge } from '@ggml-org/llama-ui/ui/badge';
 	import {
 		ActionIconCopyToClipboard,
 		BadgesModality,
 		CollapsibleSection
-	} from '$lib/components/app';
-	import { Badge } from '$lib/components/ui/badge';
-	import { HuggingFaceService } from '$lib/services';
-	import { modelsStore } from '$lib/stores';
-	import type { ApiLlamaCppServerProps } from '$lib/types/api';
-	import type { HfModelDetailInfo } from '$lib/types/huggingface';
-	import type { ModelOption } from '$lib/types/models';
-	import { formatFileSize, formatNumber, formatParameters } from '$lib/utils/formatters';
+	} from '#lib/components/app/index.ts';
+	import { HuggingFaceService } from '#lib/services/index.ts';
+	import { modelsStore } from '#lib/stores/index.ts';
+	import type { ApiLlamaCppServerProps } from '#lib/types/api.js';
+	import type { HfModelDetailInfo } from '#lib/types/huggingface.js';
+	import type { ModelOption } from '#lib/types/models.js';
+	import { formatFileSize, formatNumber, formatParameters } from '#lib/utils/formatters.ts';
 
 	interface Props {
 		/** Hub details, when the Hub is enabled and the server reports none. */

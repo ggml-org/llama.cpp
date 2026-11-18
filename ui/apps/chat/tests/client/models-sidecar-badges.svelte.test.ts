@@ -3,9 +3,9 @@
 // the kinds every cached model of the repo has on disk, which do not. The row shows
 // each kind once, and two quants of one repo keep their own drafts apart.
 
-import { ModelAuxSidecar, ModelDraftSidecar, ServerModelStatus } from '$lib/enums';
-import { modelsStore } from '$lib/stores';
-import type { ApiModelDataEntry } from '$lib/types/api';
+import { ModelAuxSidecar, ModelDraftSidecar, ServerModelStatus } from '#lib/enums/index.ts';
+import { modelsStore } from '#lib/stores/index.ts';
+import type { ApiModelDataEntry } from '#lib/types/api.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 const REPO = 'ggml-org/Qwen3.8-Flash-Next-GGUF';

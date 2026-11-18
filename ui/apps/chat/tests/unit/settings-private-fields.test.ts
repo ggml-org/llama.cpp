@@ -1,4 +1,4 @@
-import { SETTINGS_CHAT_SECTIONS, SETTINGS_KEYS } from '$lib/constants';
+import { SETTINGS_CHAT_SECTIONS, SETTINGS_KEYS } from '#lib/constants/index.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('checkApiKeyField', () => {

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
-	import { ActionIcon } from '$lib/components/app';
-	import { getChatMessageActionsContext } from '$lib/contexts';
+	import { ActionIcon } from '#lib/components/app/index.ts';
+	import { getChatMessageActionsContext } from '#lib/contexts/index.ts';
 
 	interface Props {
 		class?: string;
@@ -30,7 +30,7 @@
 		role="navigation"
 	>
 		<ActionIcon
-			class="h-5 w-5 p-0 {!hasPrevious ? '!cursor-not-allowed opacity-30' : ''}"
+			class="size-icon-lg p-0 {!hasPrevious ? '!cursor-not-allowed opacity-30' : ''}"
 			disabled={!hasPrevious}
 			icon={ChevronLeft}
 			onclick={() => messageActions.navigateToSibling(previousSiblingId!)}
@@ -42,7 +42,7 @@
 		</span>
 
 		<ActionIcon
-			class="h-5 w-5 p-0 {!hasNext ? 'opacity-30' : ''}"
+			class="size-icon-lg p-0 {!hasNext ? 'opacity-30' : ''}"
 			disabled={!hasNext}
 			icon={ChevronRight}
 			onclick={() => messageActions.navigateToSibling(nextSiblingId!)}

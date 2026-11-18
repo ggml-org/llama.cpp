@@ -1,11 +1,14 @@
 <script lang="ts">
 	import { parseReadMediaMeta } from './parsers/read-media';
 	import ToolCallBlock from './ToolCallBlock.svelte';
-	import { ATTACHMENT_SAVED_REGEX } from '$lib/constants/agentic.constants';
-	import { AttachmentType, MimeTypeAudio } from '$lib/enums';
-	import type { DatabaseMessageExtraAudioFile, DatabaseMessageExtraImageFile } from '$lib/types';
-	import type { AgenticSection } from '$lib/types';
-	import { createBase64DataUrl } from '$lib/utils/data-url';
+	import { ATTACHMENT_SAVED_REGEX } from '#lib/constants/agentic.constants.ts';
+	import { AttachmentType, MimeTypeAudio } from '#lib/enums/index.ts';
+	import type {
+		DatabaseMessageExtraAudioFile,
+		DatabaseMessageExtraImageFile
+	} from '#lib/types/index.ts';
+	import type { AgenticSection } from '#lib/types/index.ts';
+	import { createBase64DataUrl } from '#lib/utils/data-url.ts';
 
 	interface Props {
 		section: AgenticSection;
@@ -72,7 +75,7 @@
 				<div class="mt-2">
 					<img
 						alt={readMediaMeta?.fileName ?? 'media'}
-						class="max-h-[60vh] max-w-full rounded-lg object-contain shadow-lg"
+						class="max-h-[60vh] max-w-full rounded-lg object-contain shadow-(--elevation-raised)"
 						loading="lazy"
 						src={mediaAttachment.base64Url}
 					/>

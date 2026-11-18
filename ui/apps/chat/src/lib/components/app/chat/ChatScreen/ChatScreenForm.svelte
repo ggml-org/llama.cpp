@@ -1,11 +1,11 @@
 <script lang="ts">
+	import { ChatForm } from '#lib/components/app/index.ts';
+	import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+	import { useDraftMessages } from '#lib/hooks/use-draft-messages.svelte.ts';
+	import { deviceStore, settingsStore } from '#lib/stores/index.ts';
+	import { hapticTap } from '#lib/utils/index.ts';
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ChatForm } from '$lib/components/app';
-	import { SETTINGS_KEYS } from '$lib/constants';
-	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
-	import { deviceStore, settingsStore } from '$lib/stores';
-	import { hapticTap } from '$lib/utils';
 	import { onMount, tick } from 'svelte';
 
 	interface Props {

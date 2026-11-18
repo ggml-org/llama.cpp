@@ -1,8 +1,8 @@
 // Every message and editor loads the highlight theme as it mounts; swapping the style
 // element restyles the whole page, so it only happens when the mode changes.
 
-import { UI_DATA_ATTRS } from '$lib/constants';
-import { loadHighlightTheme } from '$lib/utils';
+import { UI_DATA_ATTRS } from '#lib/constants/index.ts';
+import { loadHighlightTheme } from '#lib/utils/index.ts';
 import { describe, expect, it } from 'vitest';
 
 const themes = () => document.querySelectorAll(`style[${UI_DATA_ATTRS.HIGHLIGHT_THEME_PREVIEW}]`);

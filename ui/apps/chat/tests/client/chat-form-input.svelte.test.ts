@@ -1,12 +1,12 @@
-// Guards the chat form input contract: a live-preview markdown editor whose value
-// stays the exact markdown source, with mention links shown as badges while their
-// block is edited and every block rendered once the editor loses focus. The form's
+// Guards the chat form input contract: a markdown editor whose value stays the exact
+// markdown source, with mention links shown as badges while their block is edited and,
+// with the live preview setting on, every block rendered once the editor loses focus. The form's
 // key and paste handlers run first and win when they handle the event.
 
 import { EditorView } from '@codemirror/view';
-import ChatFormInput from '$lib/components/app/chat/ChatForm/ChatFormInput/ChatFormInput.svelte';
-import { SETTINGS_KEYS } from '$lib/constants';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
+import ChatFormInput from '#lib/components/app/chat/ChatForm/ChatFormInput/ChatFormInput.svelte';
+import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
 import { tick } from 'svelte';
 import { describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
@@ -80,20 +80,24 @@ describe('ChatFormInput', () => {
 		expect(editor.state.doc.toString()).toBe('a ');
 	});
 
-	it('renders every block like a chat message once blurred', async () => {
-		const screen = render(ChatFormInput, { value: '# Title\n\nSome **bold** text' });
-		const editor = editorIn(screen.container);
+	it('renders every block like a chat message once blurred, with the live preview on', async () => {
+		settingsStore.updateConfig(SETTINGS_KEYS.LIVE_MARKDOWN_PREVIEW, true);
 
-		editor.contentDOM.blur();
-		await vi.waitFor(() => {
-			expect(screen.container.querySelector('.cm-md-block h1')?.textContent).toBe('Title');
-			expect(screen.container.querySelector('.cm-md-block strong')?.textContent).toBe('bold');
-		});
+		try {
+			const screen = render(ChatFormInput, { value: '# Title\n\nSome **bold** text' });
+			const editor = editorIn(screen.container);
+
+			editor.contentDOM.blur();
+			await vi.waitFor(() => {
+				expect(screen.container.querySelector('.cm-md-block h1')?.textContent).toBe('Title');
+				expect(screen.container.querySelector('.cm-md-block strong')?.textContent).toBe('bold');
+			});
+		} finally {
+			settingsStore.updateConfig(SETTINGS_KEYS.LIVE_MARKDOWN_PREVIEW, false);
+		}
 	});
 
-	it('shows the plain markdown, with mention badges, while the live preview setting is off', async () => {
-		settingsStore.updateConfig(SETTINGS_KEYS.LIVE_MARKDOWN_PREVIEW, false);
-
+	it('shows the plain markdown, with mention badges, by default', async () => {
 		try {
 			const screen = render(ChatFormInput, { value: `# Title\n\nsee ${MENTION}` });
 			const editor = editorIn(screen.container);
@@ -114,8 +118,17 @@ describe('ChatFormInput', () => {
 				expect(screen.container.querySelector('.cm-md-block h1')?.textContent).toBe('Title')
 			);
 		} finally {
-			settingsStore.updateConfig(SETTINGS_KEYS.LIVE_MARKDOWN_PREVIEW, true);
+			settingsStore.updateConfig(SETTINGS_KEYS.LIVE_MARKDOWN_PREVIEW, false);
 		}
+	});
+
+	it('spellchecks, autocorrects and autocapitalizes like a textarea', () => {
+		const screen = render(ChatFormInput, { value: '' });
+		const content = editorIn(screen.container).contentDOM;
+
+		expect(content.getAttribute('spellcheck')).toBe('true');
+		expect(content.getAttribute('autocorrect')).toBe('on');
+		expect(content.getAttribute('autocapitalize')).toBe('on');
 	});
 
 	it('lets the form handle a key first and keeps it from the editor', async () => {

@@ -90,7 +90,7 @@ export {
 	ServerModelSource,
 	ServerModelStatus,
 	ServerModelsSseEventType
-} from './server.enums';
+} from './llama-server.enums';
 
 export { ParameterSource, SyncableParameterType, SettingsFieldType } from './settings.enums';
 
@@ -103,6 +103,7 @@ export {
 	ScrollCarouselVariant,
 	SidebarAction,
 	SidebarSectionKind,
+	SurfaceTheme,
 	TooltipSide,
 	UrlProtocol
 } from './ui.enums';

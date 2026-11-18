@@ -11,7 +11,7 @@
 </script>
 
 <script lang="ts">
-	import '$lib/styles/katex-custom.scss';
+	import '#lib/styles/katex-custom.scss';
 	import MarkdownSurface from '../MarkdownContent/MarkdownSurface.svelte';
 	import {
 		markdownLivePreview,
@@ -39,9 +39,9 @@
 	} from '@codemirror/state';
 	import { keymap, placeholder as placeholderExt } from '@codemirror/view';
 	import { tags } from '@lezer/highlight';
-	import { DialogCodePreview, DialogMermaidPreview } from '$lib/components/app';
-	import { ColorMode } from '$lib/enums';
-	import { loadHighlightTheme } from '$lib/utils';
+	import { DialogCodePreview, DialogMermaidPreview } from '#lib/components/app/index.ts';
+	import { ColorMode } from '#lib/enums/index.ts';
+	import { loadHighlightTheme } from '#lib/utils/index.ts';
 	import { mode } from 'mode-watcher';
 	import { onDestroy, onMount, untrack } from 'svelte';
 
@@ -358,7 +358,7 @@
 
 	div :global(.cm-placeholder) {
 		color: var(--muted-foreground);
-		text-shadow: none;
+		text-shadow: var(--text-shadow-engraved);
 	}
 
 	/* The markdown img styles must not reach the editor's invisible caret helpers */
