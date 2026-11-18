@@ -5,15 +5,24 @@
 
 import { MimeTypeApplication, MimeTypeImage } from '#lib/enums/index.ts';
 import { browser } from '$app/env';
-import * as pdfjs from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 type TextContent = {
 	items: Array<{ str: string }>;
 };
 
-// the worker is its own file, so the app loads it only when it opens a PDF
-if (browser) pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+let pdfjsModule: Promise<typeof import('pdfjs-dist')> | undefined;
+
+// pdf.js and its worker are files of their own, so the app loads them only when it opens a PDF
+function loadPdfjs(): Promise<typeof import('pdfjs-dist')> {
+	pdfjsModule ??= import('pdfjs-dist').then((pdfjs) => {
+		pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+
+		return pdfjs;
+	});
+
+	return pdfjsModule;
+}
 
 /**
  * Convert a File object to ArrayBuffer for PDF.js processing
@@ -49,7 +58,7 @@ export async function convertPDFToText(file: File): Promise<string> {
 	}
 
 	try {
-		const buffer = await getFileAsBuffer(file);
+		const [pdfjs, buffer] = await Promise.all([loadPdfjs(), getFileAsBuffer(file)]);
 		const pdf = await pdfjs.getDocument({ data: buffer }).promise;
 		const numPages = pdf.numPages;
 		const textContentPromises: Promise<TextContent>[] = [];
@@ -87,7 +96,7 @@ export async function convertPDFToImage(file: File, scale: number = 1.5): Promis
 	}
 
 	try {
-		const buffer = await getFileAsBuffer(file);
+		const [pdfjs, buffer] = await Promise.all([loadPdfjs(), getFileAsBuffer(file)]);
 		const doc = await pdfjs.getDocument({ data: buffer }).promise;
 		const pages: Promise<string>[] = [];
 

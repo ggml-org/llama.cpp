@@ -13,6 +13,7 @@ import { rehypeEnhanceMermaidBlocks } from './plugins/rehype/enhance-mermaid-blo
 import { rehypeEnhanceSvgBlocks } from './plugins/rehype/enhance-svg-blocks';
 import { rehypeEnhanceTables } from './plugins/rehype/enhance-tables';
 import { rehypeFileBadge } from './plugins/rehype/file-badge';
+import { rehypeLazyKatex } from './plugins/rehype/lazy-katex';
 import { rehypeMermaidPre } from './plugins/rehype/mermaid-pre';
 import { rehypeRtlSupport } from './plugins/rehype/rehype-rtl-support';
 import { rehypeResolveAttachmentImages } from './plugins/rehype/resolve-attachment-images';
@@ -25,7 +26,6 @@ import type { Root as HastRoot } from 'hast';
 import { all as lowlightAll } from 'lowlight';
 import type { Root as MdastRoot } from 'mdast';
 import rehypeHighlight from 'rehype-highlight';
-import rehypeKatex from 'rehype-katex';
 import rehypeStringify from 'rehype-stringify';
 import { remark } from 'remark';
 import remarkBreaks from 'remark-breaks';
@@ -71,7 +71,7 @@ function buildPipeline({
 	proc = proc.use(remarkRehype, allowHtml ? { allowDangerousHtml: true } : undefined);
 
 	if (!disableMath) {
-		proc = proc.use(rehypeKatex); // Render math using KaTeX
+		proc = proc.use(rehypeLazyKatex); // Render math using KaTeX, loaded on the first message with math
 	}
 
 	const pipeline = proc
