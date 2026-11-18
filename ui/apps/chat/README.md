@@ -832,22 +832,22 @@ ui/apps/chat/
 
 Two packages go out with the same version: `@ggml-org/llama-chat`, which carries the app and the CLI, and `llama-chat` (in `alias/`), which depends on it and only forwards to its CLI so that `npx llama-chat` works. A unit test (`tests/unit/cli.test.ts`) fails when their versions drift apart.
 
+The version is set by hand and CI publishes it, as for `@ggml-org/llama-ui` (see [Releases](../../README.md#releases)). To release, bump the version in the PR that should ship it:
+
 ```bash
 cd ui/apps/chat
 npm version <version> --no-git-tag-version
 # then set the same version, and the same @ggml-org/llama-chat dependency, in alias/package.json
-npm run build
-npm pack --dry-run
-npm publish --otp <code>
-cd alias && npm publish --otp <code>
 ```
 
-Build right before packing: the package carries whatever is in `dist`. This folder's `.npmrc` sets `ignore-scripts`, so npm runs no lifecycle script such as `prepack` that could build it for you. Check that `npm pack --dry-run` lists `dist/index.html` and about 77 files. Source maps stay out of the package.
+Once that reaches `master`, [`ui-chat-publish.yml`](../../../.github/workflows/ui-chat-publish.yml) builds `dist`, checks that the package holds `dist/index.html` and no source maps, and publishes both packages with npm trusted publishing. A version npm already has publishes nothing, and a PR that changes the packages gets a dry run.
 
-To try a package before publishing it:
+To try a package before it is published:
 
 ```bash
 npm run build
 npm pack
 npx ./ggml-org-llama-chat-<version>.tgz --server http://127.0.0.1:8080
 ```
+
+Build right before packing: the package carries whatever is in `dist`, and this folder's `.npmrc` sets `ignore-scripts`, so npm runs no lifecycle script such as `prepack` that could build it for you.
