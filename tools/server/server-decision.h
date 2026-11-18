@@ -124,6 +124,18 @@ struct server_decision_context {
             const mtmd_helper_init_opt & init_opt,
             server_task & task) const;
 
+    // lfm3-d1: max questions per prompt, 0 if each question has its own prompt
+    size_t set_size(const std::vector<server_decision_question> & questions) const;
+
+    // set the prompt of these questions packed after their state, the result has the scores of all their options
+    void fill_task_set(
+            const json & state,
+            const std::vector<server_decision_question> & questions,
+            const std::vector<raw_buffer> & files,
+            mtmd_context * mctx,
+            const mtmd_helper_init_opt & init_opt,
+            server_task & task) const;
+
     // scores: the raw model outputs of each variant
     json format_answer(const server_decision_question & question, const std::vector<std::vector<float>> & scores, bool has_media = false) const;
 
