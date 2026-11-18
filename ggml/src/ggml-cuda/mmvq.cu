@@ -620,7 +620,7 @@ static constexpr __host__ __device__ int calc_rows_per_block(ggml_type type, int
                 if (table_id == MMVQ_PARAMETERS_TURING && (type == GGML_TYPE_TQ1_0 || type == GGML_TYPE_TQ2_0)) {
                     return 4;
                 }
-                return (table_id == MMVQ_PARAMETERS_GENERIC || table_id == MMVQ_PARAMETERS_TURING) && mmvq_two_rows_ncols1(type) ? 2 : 1;
+                return table_id == MMVQ_PARAMETERS_GENERIC && mmvq_two_rows_ncols1(type) ? 2 : 1;
             case 2:
             case 3:
             case 4:
@@ -789,13 +789,15 @@ static __global__ void mul_mat_vec_q(
         for (int j = 0; j < ncols_dst; ++j) {
 #pragma unroll
             for (int i = 0; i < rows_per_cuda_block; ++i) {
-                const int row_i = (rows_per_cuda_block > 1 && uint32_t(row0 + i) >= stride_col_dst) ? 0 : i;
+                if (rows_per_cuda_block > 1 && uint32_t(row0 + i) >= stride_col_dst) {
+                    continue;
+                }
                 tmp[j][i] += vec_dot_q_cuda(
-                    vx, &y[j*stride_col_y + kby], kbx_offset + row_i*stride_row_x + kbx, kqs);
+                    vx, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
                 if constexpr (has_fusion) {
                     if (use_gate) {
                         tmp_gate[j][i] += vec_dot_q_cuda(
-                            vgate, &y[j*stride_col_y + kby], kbx_offset + row_i*stride_row_x + kbx, kqs);
+                            vgate, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
                     }
                 }
             }
