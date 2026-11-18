@@ -1235,26 +1235,63 @@ static inline HVX_Vector q2_k_int_scale(HVX_Vector v_isum, HVX_Vector v_msum, HV
     return hvx_vec_mul_f32_f32(v_t, v_da32);
 }
 
-static __attribute__((noinline)) void hvx_tiled_store_row(void * restrict s, uint32_t valid_rows, HVX_Vector v_sum,
-                                                          const void * restrict sz, uint32_t dst_elem_size, uint32_t bias_elem_size) {
-    if (sz) {
-        HVX_Vector v_sz = (bias_elem_size == sizeof(__fp16))
-            ? Q6_V_lo_W(hvx_vec_f16_to_f32(hvx_vmemu(sz)))
-            : hvx_vmemu(sz);
-        v_sum = hvx_vec_add_f32_f32(v_sum, v_sz);
-    }
-    if (dst_elem_size == sizeof(__fp16)) {
-        const HVX_Vector max_f16 = hvx_vec_splat_f32(65504.0f);
-        const HVX_Vector min_f16 = hvx_vec_splat_f32(-65504.0f);
-        v_sum = Q6_Vsf_vmax_VsfVsf(min_f16, Q6_Vsf_vmin_VsfVsf(max_f16, v_sum));
-        HVX_Vector v_f16 = hvx_vec_f32_to_f16(v_sum, Q6_V_vzero());
-        hvx_vec_store_u(s, valid_rows * sizeof(__fp16), v_f16);
-    } else {
-        hvx_vec_store_u(s, valid_rows * sizeof(float), v_sum);
-    }
+typedef void (*hvx_tiled_store_row_fn_t)(void * restrict s, uint32_t valid_rows, HVX_Vector v_sum, const void * restrict sz);
+
+static __attribute__((noinline)) void hvx_tiled_store_row_f32_none(void * restrict s, uint32_t valid_rows, HVX_Vector v_sum, const void * restrict sz) {
+    (void) sz;
+    hvx_vec_store_u(s, valid_rows * sizeof(float), v_sum);
 }
 
-static void tiled_vec_dot_q1_0_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static __attribute__((noinline)) void hvx_tiled_store_row_f32_f32(void * restrict s, uint32_t valid_rows, HVX_Vector v_sum, const void * restrict sz) {
+    v_sum = hvx_vec_add_f32_f32(v_sum, hvx_vmemu(sz));
+    hvx_vec_store_u(s, valid_rows * sizeof(float), v_sum);
+}
+
+static __attribute__((noinline)) void hvx_tiled_store_row_f32_f16(void * restrict s, uint32_t valid_rows, HVX_Vector v_sum, const void * restrict sz) {
+    HVX_Vector v_sz = Q6_V_lo_W(hvx_vec_f16_to_f32(hvx_vmemu(sz)));
+    v_sum = hvx_vec_add_f32_f32(v_sum, v_sz);
+    hvx_vec_store_u(s, valid_rows * sizeof(float), v_sum);
+}
+
+static __attribute__((noinline)) void hvx_tiled_store_row_f16_none(void * restrict s, uint32_t valid_rows, HVX_Vector v_sum, const void * restrict sz) {
+    (void) sz;
+    const HVX_Vector max_f16 = hvx_vec_splat_f32(65504.0f);
+    const HVX_Vector min_f16 = hvx_vec_splat_f32(-65504.0f);
+    v_sum = Q6_Vsf_vmax_VsfVsf(min_f16, Q6_Vsf_vmin_VsfVsf(max_f16, v_sum));
+    hvx_vec_store_u(s, valid_rows * sizeof(__fp16), hvx_vec_f32_to_f16(v_sum, Q6_V_vzero()));
+}
+
+static __attribute__((noinline)) void hvx_tiled_store_row_f16_f32(void * restrict s, uint32_t valid_rows, HVX_Vector v_sum, const void * restrict sz) {
+    v_sum = hvx_vec_add_f32_f32(v_sum, hvx_vmemu(sz));
+    const HVX_Vector max_f16 = hvx_vec_splat_f32(65504.0f);
+    const HVX_Vector min_f16 = hvx_vec_splat_f32(-65504.0f);
+    v_sum = Q6_Vsf_vmax_VsfVsf(min_f16, Q6_Vsf_vmin_VsfVsf(max_f16, v_sum));
+    hvx_vec_store_u(s, valid_rows * sizeof(__fp16), hvx_vec_f32_to_f16(v_sum, Q6_V_vzero()));
+}
+
+static __attribute__((noinline)) void hvx_tiled_store_row_f16_f16(void * restrict s, uint32_t valid_rows, HVX_Vector v_sum, const void * restrict sz) {
+    HVX_Vector v_sz = Q6_V_lo_W(hvx_vec_f16_to_f32(hvx_vmemu(sz)));
+    v_sum = hvx_vec_add_f32_f32(v_sum, v_sz);
+    const HVX_Vector max_f16 = hvx_vec_splat_f32(65504.0f);
+    const HVX_Vector min_f16 = hvx_vec_splat_f32(-65504.0f);
+    v_sum = Q6_Vsf_vmax_VsfVsf(min_f16, Q6_Vsf_vmin_VsfVsf(max_f16, v_sum));
+    hvx_vec_store_u(s, valid_rows * sizeof(__fp16), hvx_vec_f32_to_f16(v_sum, Q6_V_vzero()));
+}
+
+static inline hvx_tiled_store_row_fn_t resolve_hvx_tiled_store_row_fn(uint32_t dst_elem_size, bool has_bias, uint32_t bias_elem_size) {
+    const bool dst_f16  = (dst_elem_size == sizeof(__fp16));
+    const bool bias_f16 = (bias_elem_size == sizeof(__fp16));
+    if (dst_f16) {
+        return !has_bias ? hvx_tiled_store_row_f16_none
+                         : (bias_f16 ? hvx_tiled_store_row_f16_f16
+                                     : hvx_tiled_store_row_f16_f32);
+    }
+    return !has_bias ? hvx_tiled_store_row_f32_none
+                     : (bias_f16 ? hvx_tiled_store_row_f32_f16
+                                 : hvx_tiled_store_row_f32_f32);
+}
+
+static void tiled_vec_dot_q1_0_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
 
@@ -1281,10 +1318,10 @@ static void tiled_vec_dot_q1_0_32x1(const uint32_t n, void * restrict s, const v
     }
 
     HVX_Vector v_sum_float = Q6_Vsf_equals_Vqf32(v_sum_qf);
-    hvx_tiled_store_row(s, valid_rows, v_sum_float, sz, dst_elem_size, bias_elem_size);
+    store_row(s, valid_rows, v_sum_float, sz);
 }
 
-static void tiled_vec_dot_q1_0_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_q1_0_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y0_q = vy0;
     const uint8_t * restrict y1_q = vy1;
@@ -1321,11 +1358,11 @@ static void tiled_vec_dot_q1_0_32x2(const uint32_t n, void * restrict s0, void *
 
     HVX_Vector v_sum_float_c0 = Q6_Vsf_equals_Vqf32(v_sum_qf_c0);
     HVX_Vector v_sum_float_c1 = Q6_Vsf_equals_Vqf32(v_sum_qf_c1);
-    hvx_tiled_store_row(s0, valid_rows, v_sum_float_c0, sz0, dst_elem_size, bias_elem_size);
-    hvx_tiled_store_row(s1, valid_rows, v_sum_float_c1, sz1, dst_elem_size, bias_elem_size);
+    store_row(s0, valid_rows, v_sum_float_c0, sz0);
+    store_row(s1, valid_rows, v_sum_float_c1, sz1);
 }
 
-static void tiled_vec_dot_q4_0_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_q4_0_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
 
@@ -1348,10 +1385,10 @@ static void tiled_vec_dot_q4_0_32x1(const uint32_t n, void * restrict s, const v
         v_sum_float = hvx_vec_add_f32_f32(v_sum_float, v_sum_scaled);
     }
 
-    hvx_tiled_store_row(s, valid_rows, v_sum_float, sz, dst_elem_size, bias_elem_size);
+    store_row(s, valid_rows, v_sum_float, sz);
 }
 
-static void tiled_vec_dot_q4_0_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_q4_0_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y0_q = vy0;
     const uint8_t * restrict y1_q = vy1;
@@ -1387,11 +1424,11 @@ static void tiled_vec_dot_q4_0_32x2(const uint32_t n, void * restrict s0, void *
         v_sum_float_c1 = hvx_vec_add_f32_f32(v_sum_float_c1, v_sum_scaled_c1);
     }
 
-    hvx_tiled_store_row(s0, valid_rows, v_sum_float_c0, sz0, dst_elem_size, bias_elem_size);
-    hvx_tiled_store_row(s1, valid_rows, v_sum_float_c1, sz1, dst_elem_size, bias_elem_size);
+    store_row(s0, valid_rows, v_sum_float_c0, sz0);
+    store_row(s1, valid_rows, v_sum_float_c1, sz1);
 }
 
-static void tiled_vec_dot_q4_1_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_q4_1_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
 
@@ -1422,10 +1459,10 @@ static void tiled_vec_dot_q4_1_32x1(const uint32_t n, void * restrict s, const v
         v_sum_float = hvx_vec_add_f32_f32(v_sum_float, v_sum_scaled);
     }
 
-    hvx_tiled_store_row(s, valid_rows, v_sum_float, sz, dst_elem_size, bias_elem_size);
+    store_row(s, valid_rows, v_sum_float, sz);
 }
 
-static void tiled_vec_dot_q4_1_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_q4_1_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y0_q = vy0;
     const uint8_t * restrict y1_q = vy1;
@@ -1471,11 +1508,11 @@ static void tiled_vec_dot_q4_1_32x2(const uint32_t n, void * restrict s0, void *
         v_sum_float_c1 = hvx_vec_add_f32_f32(v_sum_float_c1, v_sum_scaled_c1);
     }
 
-    hvx_tiled_store_row(s0, valid_rows, v_sum_float_c0, sz0, dst_elem_size, bias_elem_size);
-    hvx_tiled_store_row(s1, valid_rows, v_sum_float_c1, sz1, dst_elem_size, bias_elem_size);
+    store_row(s0, valid_rows, v_sum_float_c0, sz0);
+    store_row(s1, valid_rows, v_sum_float_c1, sz1);
 }
 
-static void tiled_vec_dot_q8_0_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_q8_0_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
 
@@ -1497,10 +1534,10 @@ static void tiled_vec_dot_q8_0_32x1(const uint32_t n, void * restrict s, const v
         v_sum_float = hvx_vec_add_f32_f32(v_sum_float, v_sum_scaled);
     }
 
-    hvx_tiled_store_row(s, valid_rows, v_sum_float, sz, dst_elem_size, bias_elem_size);
+    store_row(s, valid_rows, v_sum_float, sz);
 }
 
-static void tiled_vec_dot_q8_0_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_q8_0_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y0_q = vy0;
     const uint8_t * restrict y1_q = vy1;
@@ -1535,11 +1572,11 @@ static void tiled_vec_dot_q8_0_32x2(const uint32_t n, void * restrict s0, void *
         v_sum_float_c1 = hvx_vec_add_f32_f32(v_sum_float_c1, v_sum_scaled_c1);
     }
 
-    hvx_tiled_store_row(s0, valid_rows, v_sum_float_c0, sz0, dst_elem_size, bias_elem_size);
-    hvx_tiled_store_row(s1, valid_rows, v_sum_float_c1, sz1, dst_elem_size, bias_elem_size);
+    store_row(s0, valid_rows, v_sum_float_c0, sz0);
+    store_row(s1, valid_rows, v_sum_float_c1, sz1);
 }
 
-static void tiled_vec_dot_q5_0_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_q5_0_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
 
@@ -1561,10 +1598,10 @@ static void tiled_vec_dot_q5_0_32x1(const uint32_t n, void * restrict s, const v
         v_sum_float = hvx_vec_add_f32_f32(v_sum_float, v_sum_scaled);
     }
 
-    hvx_tiled_store_row(s, valid_rows, v_sum_float, sz, dst_elem_size, bias_elem_size);
+    store_row(s, valid_rows, v_sum_float, sz);
 }
 
-static void tiled_vec_dot_q5_0_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_q5_0_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y0_q = vy0;
     const uint8_t * restrict y1_q = vy1;
@@ -1599,11 +1636,11 @@ static void tiled_vec_dot_q5_0_32x2(const uint32_t n, void * restrict s0, void *
         v_sum_float_c1 = hvx_vec_add_f32_f32(v_sum_float_c1, v_sum_scaled_c1);
     }
 
-    hvx_tiled_store_row(s0, valid_rows, v_sum_float_c0, sz0, dst_elem_size, bias_elem_size);
-    hvx_tiled_store_row(s1, valid_rows, v_sum_float_c1, sz1, dst_elem_size, bias_elem_size);
+    store_row(s0, valid_rows, v_sum_float_c0, sz0);
+    store_row(s1, valid_rows, v_sum_float_c1, sz1);
 }
 
-static void tiled_vec_dot_q5_k_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_q5_k_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
 
@@ -1634,10 +1671,10 @@ static void tiled_vec_dot_q5_k_32x1(const uint32_t n, void * restrict s, const v
         v_sum_float = hvx_vec_add_f32_f32(v_sum_float, v_sum_scaled);
     }
 
-    hvx_tiled_store_row(s, valid_rows, v_sum_float, sz, dst_elem_size, bias_elem_size);
+    store_row(s, valid_rows, v_sum_float, sz);
 }
 
-static void tiled_vec_dot_q5_k_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_q5_k_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y0_q = vy0;
     const uint8_t * restrict y1_q = vy1;
@@ -1683,11 +1720,11 @@ static void tiled_vec_dot_q5_k_32x2(const uint32_t n, void * restrict s0, void *
         v_sum_float_c1 = hvx_vec_add_f32_f32(v_sum_float_c1, v_sum_scaled_c1);
     }
 
-    hvx_tiled_store_row(s0, valid_rows, v_sum_float_c0, sz0, dst_elem_size, bias_elem_size);
-    hvx_tiled_store_row(s1, valid_rows, v_sum_float_c1, sz1, dst_elem_size, bias_elem_size);
+    store_row(s0, valid_rows, v_sum_float_c0, sz0);
+    store_row(s1, valid_rows, v_sum_float_c1, sz1);
 }
 
-static void tiled_vec_dot_q6_k_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_q6_k_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
 
@@ -1703,10 +1740,10 @@ static void tiled_vec_dot_q6_k_32x1(const uint32_t n, void * restrict s, const v
         v_sum_float = hvx_vec_add_f32_f32(v_sum_float, scale_q6_k_32x1(v_sums, vptr[6], v_act[8]));
     }
 
-    hvx_tiled_store_row(s, valid_rows, v_sum_float, sz, dst_elem_size, bias_elem_size);
+    store_row(s, valid_rows, v_sum_float, sz);
 }
 
-static void tiled_vec_dot_q6_k_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_q6_k_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y0_q = vy0;
     const uint8_t * restrict y1_q = vy1;
@@ -1728,11 +1765,11 @@ static void tiled_vec_dot_q6_k_32x2(const uint32_t n, void * restrict s0, void *
         v_sum_float_c1 = hvx_vec_add_f32_f32(v_sum_float_c1, scale_q6_k_32x1(v_sums1, vptr[6], v_act1[8]));
     }
 
-    hvx_tiled_store_row(s0, valid_rows, v_sum_float_c0, sz0, dst_elem_size, bias_elem_size);
-    hvx_tiled_store_row(s1, valid_rows, v_sum_float_c1, sz1, dst_elem_size, bias_elem_size);
+    store_row(s0, valid_rows, v_sum_float_c0, sz0);
+    store_row(s1, valid_rows, v_sum_float_c1, sz1);
 }
 
-static void tiled_vec_dot_q3_k_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_q3_k_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
 
@@ -1747,10 +1784,10 @@ static void tiled_vec_dot_q3_k_32x1(const uint32_t n, void * restrict s, const v
         v_sum_float = hvx_vec_add_f32_f32(v_sum_float, scale_q6_k_32x1(v_sums, vptr[3], v_act[8]));
     }
 
-    hvx_tiled_store_row(s, valid_rows, v_sum_float, sz, dst_elem_size, bias_elem_size);
+    store_row(s, valid_rows, v_sum_float, sz);
 }
 
-static void tiled_vec_dot_q3_k_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_q3_k_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y0_q = vy0;
     const uint8_t * restrict y1_q = vy1;
@@ -1771,11 +1808,11 @@ static void tiled_vec_dot_q3_k_32x2(const uint32_t n, void * restrict s0, void *
         v_sum_float_c1 = hvx_vec_add_f32_f32(v_sum_float_c1, scale_q6_k_32x1(v_sums1, vptr[3], v_act1[8]));
     }
 
-    hvx_tiled_store_row(s0, valid_rows, v_sum_float_c0, sz0, dst_elem_size, bias_elem_size);
-    hvx_tiled_store_row(s1, valid_rows, v_sum_float_c1, sz1, dst_elem_size, bias_elem_size);
+    store_row(s0, valid_rows, v_sum_float_c0, sz0);
+    store_row(s1, valid_rows, v_sum_float_c1, sz1);
 }
 
-static void tiled_vec_dot_q2_k_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_q2_k_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
 
@@ -1800,10 +1837,10 @@ static void tiled_vec_dot_q2_k_32x1(const uint32_t n, void * restrict s, const v
         v_sum_float = hvx_vec_add_f32_f32(v_sum_float, q2_k_int_scale(v_isum, v_msum, v_d, v_m, v_act_sb[8]));
     }
 
-    hvx_tiled_store_row(s, valid_rows, v_sum_float, sz, dst_elem_size, bias_elem_size);
+    store_row(s, valid_rows, v_sum_float, sz);
 }
 
-static void tiled_vec_dot_q2_k_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_q2_k_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y0_q = vy0;
     const uint8_t * restrict y1_q = vy1;
@@ -1839,12 +1876,12 @@ static void tiled_vec_dot_q2_k_32x2(const uint32_t n, void * restrict s0, void *
         v_sum_float_c1 = hvx_vec_add_f32_f32(v_sum_float_c1, q2_k_int_scale(v_isum1, v_msum1, v_d, v_m, v_act1_sb[8]));
     }
 
-    hvx_tiled_store_row(s0, valid_rows, v_sum_float_c0, sz0, dst_elem_size, bias_elem_size);
-    hvx_tiled_store_row(s1, valid_rows, v_sum_float_c1, sz1, dst_elem_size, bias_elem_size);
+    store_row(s0, valid_rows, v_sum_float_c0, sz0);
+    store_row(s1, valid_rows, v_sum_float_c1, sz1);
 }
 
 // One Q2_0 weight tile covers 64 k: act tiles 2 * kt and 2 * kt + 1, each 32 k wide (Q8_1)
-static void tiled_vec_dot_q2_0_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_q2_0_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
 
@@ -1871,10 +1908,10 @@ static void tiled_vec_dot_q2_0_32x1(const uint32_t n, void * restrict s, const v
         v_sum_float = hvx_vec_add_f32_f32(v_sum_float, hvx_vec_mul_f32_f32(Q6_Vsf_equals_Vqf32(v_tile_qf), v_dw_sf));
     }
 
-    hvx_tiled_store_row(s, valid_rows, v_sum_float, sz, dst_elem_size, bias_elem_size);
+    store_row(s, valid_rows, v_sum_float, sz);
 }
 
-static void tiled_vec_dot_q2_0_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_q2_0_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y0_q = vy0;
     const uint8_t * restrict y1_q = vy1;
@@ -1914,11 +1951,11 @@ static void tiled_vec_dot_q2_0_32x2(const uint32_t n, void * restrict s0, void *
         v_sum_float_c1 = hvx_vec_add_f32_f32(v_sum_float_c1, hvx_vec_mul_f32_f32(Q6_Vsf_equals_Vqf32(v_tile_qf_c1), v_dw_sf));
     }
 
-    hvx_tiled_store_row(s0, valid_rows, v_sum_float_c0, sz0, dst_elem_size, bias_elem_size);
-    hvx_tiled_store_row(s1, valid_rows, v_sum_float_c1, sz1, dst_elem_size, bias_elem_size);
+    store_row(s0, valid_rows, v_sum_float_c0, sz0);
+    store_row(s1, valid_rows, v_sum_float_c1, sz1);
 }
 
-static void tiled_vec_dot_iq4nl_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_iq4nl_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
 
@@ -1942,10 +1979,10 @@ static void tiled_vec_dot_iq4nl_32x1(const uint32_t n, void * restrict s, const 
         v_sum_float = hvx_vec_add_f32_f32(v_sum_float, v_sum_scaled);
     }
 
-    hvx_tiled_store_row(s, valid_rows, v_sum_float, sz, dst_elem_size, bias_elem_size);
+    store_row(s, valid_rows, v_sum_float, sz);
 }
 
-static void tiled_vec_dot_iq4nl_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_iq4nl_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y0_q = vy0;
     const uint8_t * restrict y1_q = vy1;
@@ -1982,8 +2019,8 @@ static void tiled_vec_dot_iq4nl_32x2(const uint32_t n, void * restrict s0, void 
         v_sum_float_c1 = hvx_vec_add_f32_f32(v_sum_float_c1, v_sum_scaled_c1);
     }
 
-    hvx_tiled_store_row(s0, valid_rows, v_sum_float_c0, sz0, dst_elem_size, bias_elem_size);
-    hvx_tiled_store_row(s1, valid_rows, v_sum_float_c1, sz1, dst_elem_size, bias_elem_size);
+    store_row(s0, valid_rows, v_sum_float_c0, sz0);
+    store_row(s1, valid_rows, v_sum_float_c1, sz1);
 }
 
 #define IQ2XXS_GROUPS          4           // 8-element grid entries per tile row
@@ -2094,7 +2131,7 @@ static inline HVX_Vector iq2xxs_load_d(const uint8_t * restrict sb) {
     return hvx_vec_mul_f32_f32(Q6_V_lo_W(hvx_vec_f16_to_f32(iq2xxs_gather_d(sb))), hvx_vec_splat_f32(IQ2XXS_D_SCALE));
 }
 
-static void tiled_vec_dot_iq2xxs_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_iq2xxs_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
     const uint32_t padded = htp_tensor_get_tile_padded_size(HTP_TYPE_IQ2_XXS);
@@ -2129,10 +2166,10 @@ static void tiled_vec_dot_iq2xxs_32x1(const uint32_t n, void * restrict s, const
         }
     }
 
-    hvx_tiled_store_row(s, valid_rows, v_sum_float, sz, dst_elem_size, bias_elem_size);
+    store_row(s, valid_rows, v_sum_float, sz);
 }
 
-static void tiled_vec_dot_iq2xxs_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_iq2xxs_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y0_q = vy0;
     const uint8_t * restrict y1_q = vy1;
@@ -2176,11 +2213,11 @@ static void tiled_vec_dot_iq2xxs_32x2(const uint32_t n, void * restrict s0, void
         }
     }
 
-    hvx_tiled_store_row(s0, valid_rows, v_sum_float_c0, sz0, dst_elem_size, bias_elem_size);
-    hvx_tiled_store_row(s1, valid_rows, v_sum_float_c1, sz1, dst_elem_size, bias_elem_size);
+    store_row(s0, valid_rows, v_sum_float_c0, sz0);
+    store_row(s1, valid_rows, v_sum_float_c1, sz1);
 }
 
-static void tiled_vec_dot_mxfp4_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_mxfp4_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
 
@@ -2215,10 +2252,10 @@ static void tiled_vec_dot_mxfp4_32x1(const uint32_t n, void * restrict s, const 
 
     v_sum_float = hvx_vec_mul_f32_f32(v_sum_float, hvx_vec_splat_f32(0.5f));
 
-    hvx_tiled_store_row(s, valid_rows, v_sum_float, sz, dst_elem_size, bias_elem_size);
+    store_row(s, valid_rows, v_sum_float, sz);
 }
 
-static void tiled_vec_dot_mxfp4_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_mxfp4_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y0_q = vy0;
     const uint8_t * restrict y1_q = vy1;
@@ -2270,8 +2307,8 @@ static void tiled_vec_dot_mxfp4_32x2(const uint32_t n, void * restrict s0, void 
     v_sum_float_c0 = hvx_vec_mul_f32_f32(v_sum_float_c0, hvx_vec_splat_f32(0.5f));
     v_sum_float_c1 = hvx_vec_mul_f32_f32(v_sum_float_c1, hvx_vec_splat_f32(0.5f));
 
-    hvx_tiled_store_row(s0, valid_rows, v_sum_float_c0, sz0, dst_elem_size, bias_elem_size);
-    hvx_tiled_store_row(s1, valid_rows, v_sum_float_c1, sz1, dst_elem_size, bias_elem_size);
+    store_row(s0, valid_rows, v_sum_float_c0, sz0);
+    store_row(s1, valid_rows, v_sum_float_c1, sz1);
 }
 
 #define NVFP4_SCALE_OFF        512         // UE4M3 scales after the 32 rows x 16 B of quants
@@ -2342,7 +2379,7 @@ static inline HVX_VectorPair accum_nvfp4_group_32x2(const HVX_Vector * restrict 
     return Q6_W_vcombine_VV(v_sum1, v_sum0);
 }
 
-static void tiled_vec_dot_nvfp4_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_nvfp4_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y_q = vy;
     const uint32_t padded = htp_tensor_get_tile_padded_size(HTP_TYPE_NVFP4);
@@ -2373,10 +2410,10 @@ static void tiled_vec_dot_nvfp4_32x1(const uint32_t n, void * restrict s, const 
 
     v_sum_float = hvx_vec_mul_f32_f32(v_sum_float, hvx_vec_splat_f32(0.5f));
 
-    hvx_tiled_store_row(s, valid_rows, v_sum_float, sz, dst_elem_size, bias_elem_size);
+    store_row(s, valid_rows, v_sum_float, sz);
 }
 
-static void tiled_vec_dot_nvfp4_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_nvfp4_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, hvx_tiled_store_row_fn_t store_row) {
     const uint8_t * restrict tile_ptr = vx;
     const uint8_t * restrict y0_q = vy0;
     const uint8_t * restrict y1_q = vy1;
@@ -2415,11 +2452,11 @@ static void tiled_vec_dot_nvfp4_32x2(const uint32_t n, void * restrict s0, void 
     v_sum_float_c0 = hvx_vec_mul_f32_f32(v_sum_float_c0, hvx_vec_splat_f32(0.5f));
     v_sum_float_c1 = hvx_vec_mul_f32_f32(v_sum_float_c1, hvx_vec_splat_f32(0.5f));
 
-    hvx_tiled_store_row(s0, valid_rows, v_sum_float_c0, sz0, dst_elem_size, bias_elem_size);
-    hvx_tiled_store_row(s1, valid_rows, v_sum_float_c1, sz1, dst_elem_size, bias_elem_size);
+    store_row(s0, valid_rows, v_sum_float_c0, sz0);
+    store_row(s1, valid_rows, v_sum_float_c1, sz1);
 }
 
-static void tiled_vec_dot_f16_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_f16_32x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t valid_rows, const void * restrict sz, hvx_tiled_store_row_fn_t store_row) {
     const HVX_Vector * restrict vptr  = (const HVX_Vector *) vx;
     const HVX_Vector * restrict v_act = (const HVX_Vector *) vy;
     const uint32_t n_vecs = ((n + 31) / 32) * 16;
@@ -2433,10 +2470,10 @@ static void tiled_vec_dot_f16_32x1(const uint32_t n, void * restrict s, const vo
 
     HVX_Vector v_sum = hvx_vec_add_f32_f32(Q6_V_lo_W(acc), Q6_V_hi_W(acc));
 
-    hvx_tiled_store_row(s, valid_rows, v_sum, sz, dst_elem_size, bias_elem_size);
+    store_row(s, valid_rows, v_sum, sz);
 }
 
-static void tiled_vec_dot_f16_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, uint32_t dst_elem_size, uint32_t bias_elem_size) {
+static void tiled_vec_dot_f16_32x2(const uint32_t n, void * restrict s0, void * restrict s1, const void * restrict vx, const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows, const void * restrict sz0, const void * restrict sz1, hvx_tiled_store_row_fn_t store_row) {
     const HVX_Vector * restrict vptr   = (const HVX_Vector *) vx;
     const HVX_Vector * restrict v_act0 = (const HVX_Vector *) vy0;
     const HVX_Vector * restrict v_act1 = (const HVX_Vector *) vy1;
@@ -2455,8 +2492,8 @@ static void tiled_vec_dot_f16_32x2(const uint32_t n, void * restrict s0, void * 
     HVX_Vector v_sum0 = hvx_vec_add_f32_f32(Q6_V_lo_W(acc0), Q6_V_hi_W(acc0));
     HVX_Vector v_sum1 = hvx_vec_add_f32_f32(Q6_V_lo_W(acc1), Q6_V_hi_W(acc1));
 
-    hvx_tiled_store_row(s0, valid_rows, v_sum0, sz0, dst_elem_size, bias_elem_size);
-    hvx_tiled_store_row(s1, valid_rows, v_sum1, sz1, dst_elem_size, bias_elem_size);
+    store_row(s0, valid_rows, v_sum0, sz0);
+    store_row(s1, valid_rows, v_sum1, sz1);
 }
 
 

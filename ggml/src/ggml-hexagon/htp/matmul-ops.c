@@ -79,79 +79,6 @@ static bool htp_matmul_has_extended_weight(const struct htp_ops_context * octx, 
     return false;
 }
 
-struct htp_mm_context {
-    const char * type;
-    struct htp_ops_context * octx;
-    const struct htp_tensor * act;
-
-    void (*vec_dot_1x1)(const uint32_t n, void * restrict s0,
-         const void * restrict vx0,
-         const void * restrict vy0, uint32_t dst_elem_size);
-
-    void (*vec_dot_2x1)(const uint32_t n, void * restrict s0,
-         const void * restrict vx0, const void * restrict vx1,
-         const void * restrict vy0, uint32_t dst_elem_size);
-
-    void (*vec_dot_2x2)(const uint32_t n, void * restrict s0, void * restrict s1,
-         const void * restrict vx0, const void * restrict vx1,
-         const void * restrict vy0, const void * restrict vy1, uint32_t dst_elem_size);
-
-    void (*vec_dot_32x1)(const uint32_t n, void * restrict s,
-         const void * restrict vx,
-         const void * restrict vy, uint32_t valid_rows,
-         const void * restrict sz, uint32_t dst_elem_size, uint32_t bias_elem_size);
-
-    void (*vec_dot_32x2)(const uint32_t n, void * restrict s0, void * restrict s1,
-         const void * restrict vx,
-         const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows,
-         const void * restrict sz0, const void * restrict sz1, uint32_t dst_elem_size, uint32_t bias_elem_size);
-
-    // Precomputed values
-    uint32_t src0_nrows_per_hvx;
-    uint32_t src0_row_start;
-    uint32_t src0_row_end;
-    uint32_t src0_row_size_padded;
-    uint32_t act_nrows;
-    uint32_t cur_m_start;
-    uint32_t cur_m_rows;
-
-    struct fastdiv_values mm_div_ne12_ne1;
-    struct fastdiv_values mm_div_ne1;
-    struct fastdiv_values mm_div_r2;
-    struct fastdiv_values mm_div_r3;
-    struct fastdiv_values mm_div_ne11;
-
-    // Precomputed block-parallel quantization values
-    uint32_t          quant_ib_first[HTP_MAX_NHVX];
-    uint32_t          quant_ib_last[HTP_MAX_NHVX];
-    uint32_t          quant_r[HTP_MAX_NHVX];
-    uint32_t          quant_c[HTP_MAX_NHVX];
-    uint32_t          n_quant_tasks;
-    uint32_t          n_quant_rows_per_hvx;
-
-    // Fields for scattered mapping & HMX support in MUL_MAT_ID
-    const uint32_t * matrix_row_counts;
-    const struct mmid_row_mapping * matrix_rows;
-    uint32_t mapping_stride;
-
-    // Dynamic VTCM pointers allocated sequentially
-    uint8_t * vtcm_src0;
-    uint8_t * vtcm_act;
-    uint8_t * vtcm_bias;
-    uint8_t * vtcm_dst;
-    uint8_t * vtcm_act_raw;
-
-    // Cached strides
-    uint32_t vtcm_src0_stride;
-    uint32_t vtcm_act_stride;
-    uint32_t vtcm_act_raw_stride;
-
-    // Cached per-HVX VTCM sizes
-    uint32_t vtcm_src0_size_per_hvx;
-    uint32_t vtcm_act_size_per_hvx;
-    uint32_t vtcm_dst_size_per_hvx;
-};
-
 static int htp_mm_init_context(
     struct htp_ops_context * octx,
     const struct htp_mm_kernel_params * kparams
@@ -270,6 +197,83 @@ static inline void hvx_mm_iq2xxs_lut_init(uint8_t * restrict base, const struct 
 #include "hmx-mm-kernels-tiled-fp.h"
 #include "hmx-mm-kernels-tiled-int.h"
 
+struct htp_mm_context {
+    const char * type;
+    struct htp_ops_context * octx;
+    const struct htp_tensor * act;
+
+    void (*vec_dot_1x1)(const uint32_t n, void * restrict s0,
+         const void * restrict vx0,
+         const void * restrict vy0, hvx_flat_store_1x1_fn_t store_1x1);
+
+    void (*vec_dot_2x1)(const uint32_t n, void * restrict s0,
+         const void * restrict vx0, const void * restrict vx1,
+         const void * restrict vy0, hvx_flat_store_2x1_fn_t store_2x1);
+
+    void (*vec_dot_2x2)(const uint32_t n, void * restrict s0, void * restrict s1,
+         const void * restrict vx0, const void * restrict vx1,
+         const void * restrict vy0, const void * restrict vy1, hvx_flat_store_2x1_fn_t store_2x1);
+
+    void (*vec_dot_32x1)(const uint32_t n, void * restrict s,
+         const void * restrict vx,
+         const void * restrict vy, uint32_t valid_rows,
+         const void * restrict sz, hvx_tiled_store_row_fn_t store_row);
+
+    void (*vec_dot_32x2)(const uint32_t n, void * restrict s0, void * restrict s1,
+         const void * restrict vx,
+         const void * restrict vy0, const void * restrict vy1, uint32_t valid_rows,
+         const void * restrict sz0, const void * restrict sz1, hvx_tiled_store_row_fn_t store_row);
+
+    hvx_tiled_store_row_fn_t store_row;
+    hvx_flat_store_1x1_fn_t  flat_store_1x1;
+    hvx_flat_store_2x1_fn_t  flat_store_2x1;
+
+    // Precomputed values
+    uint32_t src0_nrows_per_hvx;
+    uint32_t src0_row_start;
+    uint32_t src0_row_end;
+    uint32_t src0_row_size_padded;
+    uint32_t act_nrows;
+    uint32_t cur_m_start;
+    uint32_t cur_m_rows;
+
+    struct fastdiv_values mm_div_ne12_ne1;
+    struct fastdiv_values mm_div_ne1;
+    struct fastdiv_values mm_div_r2;
+    struct fastdiv_values mm_div_r3;
+    struct fastdiv_values mm_div_ne11;
+
+    // Precomputed block-parallel quantization values
+    uint32_t          quant_ib_first[HTP_MAX_NHVX];
+    uint32_t          quant_ib_last[HTP_MAX_NHVX];
+    uint32_t          quant_r[HTP_MAX_NHVX];
+    uint32_t          quant_c[HTP_MAX_NHVX];
+    uint32_t          n_quant_tasks;
+    uint32_t          n_quant_rows_per_hvx;
+
+    // Fields for scattered mapping & HMX support in MUL_MAT_ID
+    const uint32_t * matrix_row_counts;
+    const struct mmid_row_mapping * matrix_rows;
+    uint32_t mapping_stride;
+
+    // Dynamic VTCM pointers allocated sequentially
+    uint8_t * vtcm_src0;
+    uint8_t * vtcm_act;
+    uint8_t * vtcm_bias;
+    uint8_t * vtcm_dst;
+    uint8_t * vtcm_act_raw;
+
+    // Cached strides
+    uint32_t vtcm_src0_stride;
+    uint32_t vtcm_act_stride;
+    uint32_t vtcm_act_raw_stride;
+
+    // Cached per-HVX VTCM sizes
+    uint32_t vtcm_src0_size_per_hvx;
+    uint32_t vtcm_act_size_per_hvx;
+    uint32_t vtcm_dst_size_per_hvx;
+};
+
 static void hvx_mm_2d_tiled(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     htp_matmul_preamble;
 
@@ -327,6 +331,7 @@ static void hvx_mm_2d_tiled(const htp_thread_t * th, unsigned int nth, unsigned 
         valid_rows = MIN(32, MAX(0, valid_rows));
         const size_t ct_dst_off  = (size_t) ct * 32 * dst_elem_size;
         const size_t ct_bias_off = (size_t) ct * 32 * bias_elem_size;
+        const uint8_t * bias_base = bias ? ((const uint8_t *) bias->data + (size_t) cur_m_start * bias_stride + ct_bias_off) : NULL;
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ct);
         uint32_t ir1 = 0;
@@ -336,24 +341,17 @@ static void hvx_mm_2d_tiled(const htp_thread_t * th, unsigned int nth, unsigned 
             void * dst_ptr0 = (uint8_t *) dst->data + (size_t) (cur_m_start + ir1+0) * dst_row_size + ct_dst_off;
             void * dst_ptr1 = (uint8_t *) dst->data + (size_t) (cur_m_start + ir1+1) * dst_row_size + ct_dst_off;
 
-            const void * bias_ptr0 = NULL;
-            const void * bias_ptr1 = NULL;
-            if (bias) {
-                bias_ptr0 = (const uint8_t *) bias->data + (size_t) (cur_m_start + ir1+0) * bias_stride + ct_bias_off;
-                bias_ptr1 = (const uint8_t *) bias->data + (size_t) (cur_m_start + ir1+1) * bias_stride + ct_bias_off;
-            }
-            mmctx->vec_dot_32x2(ne10, dst_ptr0, dst_ptr1, w_tile, act_col0, act_col1, valid_rows, bias_ptr0, bias_ptr1, dst_elem_size, bias_elem_size);
+            const void * bias_ptr0 = bias_base + (size_t) (ir1+0) * bias_stride;
+            const void * bias_ptr1 = bias_base + (size_t) (ir1+1) * bias_stride;
+            mmctx->vec_dot_32x2(ne10, dst_ptr0, dst_ptr1, w_tile, act_col0, act_col1, valid_rows, bias_ptr0, bias_ptr1, mmctx->store_row);
         }
 
         for (; ir1 < act_nrows; ++ir1) {
             const uint8_t * restrict act_col = (const uint8_t *) (act_data + ir1 * act_stride);
             void * dst_ptr = (uint8_t *) dst->data + (size_t) (cur_m_start + ir1) * dst_row_size + ct_dst_off;
 
-            const void * bias_ptr = NULL;
-            if (bias) {
-                bias_ptr = (const uint8_t *) bias->data + (size_t) (cur_m_start + ir1) * bias_stride + ct_bias_off;
-            }
-            mmctx->vec_dot_32x1(ne10, dst_ptr, w_tile, act_col, valid_rows, bias_ptr, dst_elem_size, bias_elem_size);
+            const void * bias_ptr = bias_base + (size_t) ir1 * bias_stride;
+            mmctx->vec_dot_32x1(ne10, dst_ptr, w_tile, act_col, valid_rows, bias_ptr, mmctx->store_row);
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);
 
@@ -435,7 +433,7 @@ static void hvx_mv_2d_tiled(const htp_thread_t * th, unsigned int nth, unsigned 
         valid_rows = MIN(32, MAX(0, valid_rows));
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ct);
-        mmctx->vec_dot_32x1(ne10, dst_ptr, w_tile, act_col, valid_rows, NULL, sizeof(float), sizeof(float));
+        mmctx->vec_dot_32x1(ne10, dst_ptr, w_tile, act_col, valid_rows, NULL, hvx_tiled_store_row_f32_none);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);
 
         if (push_ct < ct_end) {
@@ -448,14 +446,13 @@ static void hvx_mv_2d_tiled(const htp_thread_t * th, unsigned int nth, unsigned 
     int copy_cnt = (int)MIN(src0_end_row, ne0) - (int)src0_start_row;
     if (copy_cnt > 0) {
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ct_end);
+        const hvx_tiled_store_row_fn_t store_row = mmctx->store_row;
         uint8_t * dst_out = (uint8_t *) dst->data + (size_t) src0_start_row * dst_elem_size;
         const uint8_t * bias_in = bias ? (mmctx->vtcm_bias + (size_t) src0_start_row * bias_elem_size) : NULL;
         for (int c = 0; c < copy_cnt; c += 32) {
             const uint32_t valid_c = (uint32_t) MIN(32, copy_cnt - c);
             HVX_Vector v_sum = *(const HVX_UVector *) (tmp + c);
-            hvx_tiled_store_row(dst_out + (size_t) c * dst_elem_size, valid_c, v_sum,
-                                bias_in ? (bias_in + (size_t) c * bias_elem_size) : NULL,
-                                dst_elem_size, bias_elem_size);
+            store_row(dst_out + (size_t) c * dst_elem_size, valid_c, v_sum, bias_in + (size_t) c * bias_elem_size);
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct_end);
     }
@@ -491,6 +488,7 @@ static void hvx_mm_nx_2d_tiled(const htp_thread_t * th, unsigned int nth, unsign
         const uint32_t ne01 = src_w->ne[1];
         const size_t dst_row_size = dst->nb[1];
         const uint32_t dst_elem_size = (dst->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
+        const hvx_tiled_store_row_fn_t store_row = resolve_hvx_tiled_store_row_fn(dst_elem_size, false, sizeof(float));
         const dma_addr_t src_w_row = src_w->data;
 
         const uint32_t n_k_tiles_w = ne00 / htp_tensor_get_tile_k(src_w->type);
@@ -540,13 +538,13 @@ static void hvx_mm_nx_2d_tiled(const htp_thread_t * th, unsigned int nth, unsign
                 void * dst_ptr0 = (uint8_t *) dst->data + (size_t) (ir1+0) * dst_row_size + ct_dst_off;
                 void * dst_ptr1 = (uint8_t *) dst->data + (size_t) (ir1+1) * dst_row_size + ct_dst_off;
 
-                mmctx->vec_dot_32x2(ne10, dst_ptr0, dst_ptr1, w_tile, act_col0, act_col1, valid_rows, NULL, NULL, dst_elem_size, sizeof(float));
+                mmctx->vec_dot_32x2(ne10, dst_ptr0, dst_ptr1, w_tile, act_col0, act_col1, valid_rows, NULL, NULL, store_row);
             }
 
             for (; ir1 < act_nrows; ++ir1) {
                 const uint8_t * restrict act_col = (const uint8_t *) (act_data + ir1 * act_stride);
                 void * dst_ptr = (uint8_t *) dst->data + (size_t) ir1 * dst_row_size + ct_dst_off;
-                mmctx->vec_dot_32x1(ne10, dst_ptr, w_tile, act_col, valid_rows, NULL, dst_elem_size, sizeof(float));
+                mmctx->vec_dot_32x1(ne10, dst_ptr, w_tile, act_col, valid_rows, NULL, store_row);
             }
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);
 
@@ -589,21 +587,12 @@ static void hvx_mm_transfer_act_dma(
         dma_queue_pop(dma_q);
     } else {
         const uint32_t ne12_ne1 = act->ne[2] * act->ne[1];
-        const bool use_fastdiv = kparams->div_ne12_ne1.mp != 0;
         for (uint32_t ir = 0; ir < m_rows; ++ir) {
             const uint32_t ir1 = m_start + ir;
-            uint32_t i11, i12, i13;
-            if (use_fastdiv) {
-                i13 = fastdiv(ir1, &kparams->div_ne12_ne1);
-                const uint32_t rem = ir1 - i13 * ne12_ne1;
-                i12 = fastdiv(rem, &kparams->div_ne1);
-                i11 = rem - i12 * act->ne[1];
-            } else {
-                i13 = ne12_ne1 ? ir1 / ne12_ne1 : 0;
-                const uint32_t rem = ir1 - i13 * ne12_ne1;
-                i12 = act->ne[1] ? rem / act->ne[1] : 0;
-                i11 = rem - i12 * act->ne[1];
-            }
+            const uint32_t i13 = fastdiv(ir1, &kparams->div_ne12_ne1);
+            const uint32_t rem = ir1 - i13 * ne12_ne1;
+            const uint32_t i12 = fastdiv(rem, &kparams->div_ne1);
+            const uint32_t i11 = rem - i12 * act->ne[1];
             const dma_addr_t row_src = act_base + (i11 * act->nb[1] +
                                                    i12 * act->nb[2] +
                                                    i13 * act->nb[3]);
@@ -1027,12 +1016,12 @@ static void hvx_mm_4d_tiled(const htp_thread_t * th, unsigned int nth, unsigned 
                     const uint8_t * restrict act_col1 = (const uint8_t *) (act_data + (chunk_m_offset + ir1 + 1) * act_stride);
                     void * dst_ptr0 = dst_batch_base + (size_t) (dst_m_offset + ir1 + 0) * dst_row_size + ct_dst_off;
                     void * dst_ptr1 = dst_batch_base + (size_t) (dst_m_offset + ir1 + 1) * dst_row_size + ct_dst_off;
-                    mmctx->vec_dot_32x2(ne10, dst_ptr0, dst_ptr1, w_tile, act_col0, act_col1, valid_rows, NULL, NULL, dst_elem_size, sizeof(float));
+                    mmctx->vec_dot_32x2(ne10, dst_ptr0, dst_ptr1, w_tile, act_col0, act_col1, valid_rows, NULL, NULL, mmctx->store_row);
                 }
                 for (; ir1 < batch_nrows; ++ir1) {
                     const uint8_t * restrict act_col = (const uint8_t *) (act_data + (chunk_m_offset + ir1) * act_stride);
                     void * dst_ptr = dst_batch_base + (size_t) (dst_m_offset + ir1) * dst_row_size + ct_dst_off;
-                    mmctx->vec_dot_32x1(ne10, dst_ptr, w_tile, act_col, valid_rows, NULL, dst_elem_size, sizeof(float));
+                    mmctx->vec_dot_32x1(ne10, dst_ptr, w_tile, act_col, valid_rows, NULL, mmctx->store_row);
                 }
             }
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);
@@ -1112,14 +1101,14 @@ static void hvx_mm_2d_flat(const htp_thread_t * th, unsigned int nth, unsigned i
             const uint8_t * restrict act_col1 = (const uint8_t *) (act_data + (ir1+1) * act_stride);
             void * dst_ptr0 = (uint8_t *) dst->data + (size_t) (cur_m_start + ir1+0) * dst_row_size + ir0_dst_off;
             void * dst_ptr1 = (uint8_t *) dst->data + (size_t) (cur_m_start + ir1+1) * dst_row_size + ir0_dst_off;
-            mmctx->vec_dot_2x2(ne00, dst_ptr0, dst_ptr1, ss0, ss0 + src0_stride, act_col0, act_col1, dst_elem_size);
+            mmctx->vec_dot_2x2(ne00, dst_ptr0, dst_ptr1, ss0, ss0 + src0_stride, act_col0, act_col1, mmctx->flat_store_2x1);
         }
 
         // Handle remaining act rows (fallback to 2x1)
         for (; ir1 < act_nrows; ++ir1) {
             const uint8_t * restrict act_col = (const uint8_t *) (act_data + ir1 * act_stride);
             void * dst_ptr = (uint8_t *) dst->data + (size_t) (cur_m_start + ir1) * dst_row_size + ir0_dst_off;
-            mmctx->vec_dot_2x1(ne00, dst_ptr, ss0, ss0 + src0_stride, act_col, dst_elem_size);
+            mmctx->vec_dot_2x1(ne00, dst_ptr, ss0, ss0 + src0_stride, act_col, mmctx->flat_store_2x1);
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
 
@@ -1146,7 +1135,7 @@ static void hvx_mm_2d_flat(const htp_thread_t * th, unsigned int nth, unsigned i
         for (uint32_t ir1 = 0; ir1 < act_nrows; ++ir1) {
             const uint8_t * restrict act_col = (const uint8_t *) (act_data + ir1 * act_stride);
             void * dst_ptr = (uint8_t *) dst->data + (size_t) (cur_m_start + ir1) * dst_row_size + ir0_dst_off;
-            mmctx->vec_dot_1x1(ne00, dst_ptr, ss0, act_col, dst_elem_size);
+            mmctx->vec_dot_1x1(ne00, dst_ptr, ss0, act_col, mmctx->flat_store_1x1);
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
     }
@@ -1222,7 +1211,7 @@ static void hvx_mv_2d_flat(const htp_thread_t * th, unsigned int nth, unsigned i
     for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
         const uint8_t * ss0 = (void *) dma_queue_pop(dma_q).dst;
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
-        mmctx->vec_dot_2x1(ne00, &tmp[ir0 - src0_start_row], ss0, ss0 + src0_stride, act_col, sizeof(float));
+        mmctx->vec_dot_2x1(ne00, &tmp[ir0 - src0_start_row], ss0, ss0 + src0_stride, act_col, hvx_flat_store_2x1_f32);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
 
         // Prefetch next (n + vtcm_nrows) row
@@ -1242,21 +1231,20 @@ static void hvx_mv_2d_flat(const htp_thread_t * th, unsigned int nth, unsigned i
                        src0_stride, src0_row_size, src0_row_size, 1);
         const uint8_t * ss0 = (void *) dma_queue_pop(dma_q).dst;
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
-        mmctx->vec_dot_1x1(ne00, &tmp[ir0 - src0_start_row], ss0, act_col, sizeof(float));
+        mmctx->vec_dot_1x1(ne00, &tmp[ir0 - src0_start_row], ss0, act_col, hvx_flat_store_1x1_f32);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
     }
 
     int copy_cnt = src0_end_row - src0_start_row;
     if (copy_cnt > 0) {
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, src0_end_row);
+        const hvx_tiled_store_row_fn_t store_row = mmctx->store_row;
         uint8_t * dst_out = (uint8_t *) dst->data + (size_t) src0_start_row * dst_elem_size;
         const uint8_t * bias_in = bias ? (mmctx->vtcm_bias + (size_t) src0_start_row * bias_elem_size) : NULL;
         for (int c = 0; c < copy_cnt; c += 32) {
             const uint32_t valid_c = (uint32_t) MIN(32, copy_cnt - c);
             HVX_Vector v_sum = *(const HVX_UVector *) (tmp + c);
-            hvx_tiled_store_row(dst_out + (size_t) c * dst_elem_size, valid_c, v_sum,
-                                bias_in ? (bias_in + (size_t) c * bias_elem_size) : NULL,
-                                dst_elem_size, bias_elem_size);
+            store_row(dst_out + (size_t) c * dst_elem_size, valid_c, v_sum, bias_in + (size_t) c * bias_elem_size);
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, src0_end_row);
     }
@@ -1354,12 +1342,12 @@ static void hvx_mm_4d_flat(const htp_thread_t * th, unsigned int nth, unsigned i
                     const uint8_t * restrict act_col1 = (const uint8_t *) (act_data + (chunk_m_offset + ir1 + 1) * act_stride);
                     void * dst_ptr0 = dst_batch_base + (size_t) (dst_m_offset + ir1 + 0) * dst_row_size + ir0_dst_off;
                     void * dst_ptr1 = dst_batch_base + (size_t) (dst_m_offset + ir1 + 1) * dst_row_size + ir0_dst_off;
-                    mmctx->vec_dot_2x2(ne00, dst_ptr0, dst_ptr1, ss0, ss0 + src0_stride, act_col0, act_col1, dst_elem_size);
+                    mmctx->vec_dot_2x2(ne00, dst_ptr0, dst_ptr1, ss0, ss0 + src0_stride, act_col0, act_col1, mmctx->flat_store_2x1);
                 }
                 for (; ir1 < batch_nrows; ++ir1) {
                     const uint8_t * restrict act_col = (const uint8_t *) (act_data + (chunk_m_offset + ir1) * act_stride);
                     void * dst_ptr = dst_batch_base + (size_t) (dst_m_offset + ir1) * dst_row_size + ir0_dst_off;
-                    mmctx->vec_dot_2x1(ne00, dst_ptr, ss0, ss0 + src0_stride, act_col, dst_elem_size);
+                    mmctx->vec_dot_2x1(ne00, dst_ptr, ss0, ss0 + src0_stride, act_col, mmctx->flat_store_2x1);
                 }
             }
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
@@ -1398,7 +1386,7 @@ static void hvx_mm_4d_flat(const htp_thread_t * th, unsigned int nth, unsigned i
                 for (uint32_t ir1 = 0; ir1 < batch_nrows; ++ir1) {
                     const uint8_t * restrict act_col = (const uint8_t *) (act_data + (chunk_m_offset + ir1) * act_stride);
                     void * dst_ptr = dst_batch_base + (size_t) (dst_m_offset + ir1) * dst_row_size + ir0_dst_off;
-                    mmctx->vec_dot_1x1(ne00, dst_ptr, ss0, act_col, dst_elem_size);
+                    mmctx->vec_dot_1x1(ne00, dst_ptr, ss0, act_col, mmctx->flat_store_1x1);
                 }
             }
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir0);
@@ -1489,7 +1477,7 @@ static void hvx_mm_id_tiled(const htp_thread_t * th, unsigned int nth, unsigned 
                 const uint8_t * restrict act_col = (const uint8_t *) (act_data + (ir1 + rm2 * ne11 + 0) * act_stride);
                 uint8_t * restrict dst_row = (uint8_t *) dst->data + (rm1 * nb1 + rm2 * nb2);
 
-                mmctx->vec_dot_32x1(ne10, dst_row + (size_t) ct * 32 * dst_elem_size, w_tile, act_col, valid_rows, NULL, dst_elem_size, sizeof(float));
+                mmctx->vec_dot_32x1(ne10, dst_row + (size_t) ct * 32 * dst_elem_size, w_tile, act_col, valid_rows, NULL, mmctx->store_row);
             }
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);
 
@@ -1567,7 +1555,7 @@ static void hvx_mv_id_tiled(const htp_thread_t * th, unsigned int nth, unsigned 
             valid_rows = MIN(32, MAX(0, valid_rows));
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ct);
-            mmctx->vec_dot_32x1(ne10, dst_row + (size_t) ct * 32 * dst_elem_size, w_tile, act_col, valid_rows, NULL, dst_elem_size, sizeof(float));
+            mmctx->vec_dot_32x1(ne10, dst_row + (size_t) ct * 32 * dst_elem_size, w_tile, act_col, valid_rows, NULL, mmctx->store_row);
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);
 
             if (push_ct < ct_end) {
@@ -1612,6 +1600,7 @@ static void hvx_mv_id_nx_tiled(const htp_thread_t * th, unsigned int nth, unsign
             dma_queue * dma_q = th->dma_q;
 
             const uint32_t dst_elem_size = (dst->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
+            const hvx_tiled_store_row_fn_t store_row = resolve_hvx_tiled_store_row_fn(dst_elem_size, false, sizeof(float));
             const uint32_t ne01 = src_w->ne[1];
             uint32_t start_row = 0;
             uint32_t end_row   = ne01;
@@ -1657,7 +1646,7 @@ static void hvx_mv_id_nx_tiled(const htp_thread_t * th, unsigned int nth, unsign
                 valid_rows = MIN(32, MAX(0, valid_rows));
 
                 htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ct);
-                mmctx->vec_dot_32x1(act->ne[0], dst_row + (size_t) ct * 32 * dst_elem_size, w_tile, act_col, valid_rows, NULL, dst_elem_size, sizeof(float));
+                mmctx->vec_dot_32x1(act->ne[0], dst_row + (size_t) ct * 32 * dst_elem_size, w_tile, act_col, valid_rows, NULL, store_row);
                 htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);
 
                 if (push_ct < ct_end) {
@@ -1706,6 +1695,7 @@ static void hvx_mm_id_nx_tiled(const htp_thread_t * th, unsigned int nth, unsign
             dma_queue * dma_q = th->dma_q;
 
             const uint32_t dst_elem_size = (dst->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
+            const hvx_tiled_store_row_fn_t store_row = resolve_hvx_tiled_store_row_fn(dst_elem_size, false, sizeof(float));
             const uint32_t ne01 = src_w->ne[1];
             uint32_t start_row = 0;
             uint32_t end_row   = ne01;
@@ -1758,7 +1748,7 @@ static void hvx_mm_id_nx_tiled(const htp_thread_t * th, unsigned int nth, unsign
                     const uint8_t * restrict act_col = (const uint8_t *) (act_data + (ir1 + rm2 * act->ne[1]) * act_stride);
                     uint8_t * restrict dst_row = (uint8_t *) dst->data + (rm1 * dst->nb[1] + rm2 * dst->nb[2]);
 
-                    mmctx->vec_dot_32x1(act->ne[0], dst_row + (size_t) ct * 32 * dst_elem_size, w_tile, act_col, valid_rows, NULL, dst_elem_size, sizeof(float));
+                    mmctx->vec_dot_32x1(act->ne[0], dst_row + (size_t) ct * 32 * dst_elem_size, w_tile, act_col, valid_rows, NULL, store_row);
                 }
                 htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);
 
@@ -1876,8 +1866,9 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
     uint32_t src0_row_start = 0;
     uint32_t src0_row_end   = src0_nrows;
 
-    const size_t act_elem_size = (act->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
-    const size_t dst_elem_size = (dst->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
+    const size_t act_elem_size  = (act->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
+    const size_t dst_elem_size  = (dst->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
+    const size_t bias_elem_size = (bias && bias->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
 
     if (octx->ctx->mdev.count > 1) {
         const uint32_t chunk_elems = (dst->type == HTP_TYPE_F16) ? 64 : 32;
@@ -1922,6 +1913,10 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
     } else {
         matmul_job_func = is_tiled ? hvx_mv_2d_tiled : hvx_mv_2d_flat;
     }
+
+    mmctx->store_row      = resolve_hvx_tiled_store_row_fn(dst_elem_size, bias != NULL && !is_batched, bias_elem_size);
+    mmctx->flat_store_1x1 = resolve_hvx_flat_store_1x1_fn(dst_elem_size);
+    mmctx->flat_store_2x1 = resolve_hvx_flat_store_2x1_fn(dst_elem_size);
 
     bool need_quant = true;
 
@@ -2630,9 +2625,7 @@ static void transfer_output_chunk_threaded(struct htp_ops_context *octx, void *d
                                            size_t dst_elem_size, size_t bias_elem_size) {
     if (n_rows <= 0) return;
 
-    const hmx_fp16_output_col_chunk_fn_t col_chunk_fn = (dst_elem_size == sizeof(__fp16))
-        ? transfer_output_chunk_fp16_to_fp16_col_chunk
-        : transfer_output_chunk_fp16_to_fp32_col_chunk;
+    const hmx_fp16_output_col_chunk_fn_t col_chunk_fn = resolve_fp16_output_col_chunk_fn(dst_elem_size, bias, bias_elem_size);
 
     const int n_hvx = (int) octx->n_hvx;
     uint32_t n_blocks = hmx_ceil_div((uint32_t) n_cols, 32);
@@ -5741,8 +5734,8 @@ int op_matmul_id(struct htp_ops_context * octx) {
     } else {
         uint32_t src0_row_start = 0;
         uint32_t src0_row_end   = src0_nrows;
+        const uint32_t dst_elem_size = (dst->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
         if (octx->ctx->mdev.count > 1) {
-            const uint32_t dst_elem_size = (dst->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
             const bool can_split = htp_tensor_can_row_partition(dst, dst_elem_size);
             const uint32_t chunk_elems = (dst->type == HTP_TYPE_F16) ? 64 : 32;
             const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(src0_nrows, can_split ? chunk_elems : 0, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
@@ -5763,6 +5756,8 @@ int op_matmul_id(struct htp_ops_context * octx) {
 
         mmctx->src0_nrows_per_hvx = fastdiv(nrows + octx->n_hvx - 1, &octx->n_hvx_div);
         mmctx->src0_nrows_per_hvx = hex_round_up(mmctx->src0_nrows_per_hvx, 32);
+
+        mmctx->store_row = resolve_hvx_tiled_store_row_fn(dst_elem_size, false, sizeof(float));
 
         if (hvx_mm_init_tiled_vec_dot(mmctx, src0->type) == 0) {
             s = hvx_mm_matmul_id(octx, mmctx, act_nrows > 1 ? hvx_mm_id_tiled : hvx_mv_id_tiled);

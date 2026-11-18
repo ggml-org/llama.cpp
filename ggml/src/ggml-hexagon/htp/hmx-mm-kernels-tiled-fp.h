@@ -1403,191 +1403,200 @@ static inline HVX_Vector hmx_add_bias_to_f16_tail_f32(HVX_Vector v_f16, const vo
 #define HMX_FP16_ADD_BIAS_F16_TAIL_F16(v_out, row_ptr, c, vc)  hmx_add_bias_to_f16_tail_f16((v_out), (row_ptr), (c), (vc))
 #define HMX_FP16_ADD_BIAS_F16_TAIL_F32(v_out, row_ptr, c, vc)  hmx_add_bias_to_f16_tail_f32((v_out), (row_ptr), (c), (vc))
 
-#define HMX_FP16_TO_FP32_COL_LOOP(ADD_BIAS)                                                         \
-    do {                                                                                            \
-        _Pragma("unroll(4)")                                                                        \
-        for (size_t c = 0; c < limit_c_aligned; c += HTP_MM_HMX_TILE_N_COLS) {                      \
-            const size_t c0    = c / HTP_MM_HMX_TILE_N_COLS;                                        \
-            const __fp16 *tile = row_base + c0 * HTP_MM_HMX_TILE_N_ELMS;                            \
-            HVX_Vector v = ((const HVX_Vector *) tile)[r1];                                         \
-            HVX_VectorPair vp = Q6_Wqf32_vmpy_VhfVhf(v, one);                                       \
-            HVX_Vector v_out0 = ADD_BIAS(Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp)), bias_row0, c);         \
-            hvx_vmemu(output_row_base + c + 0) = v_out0;                                            \
-            if (r + 1 < n_rows) {                                                                   \
-                HVX_Vector v_out1 = ADD_BIAS(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp)), bias_row1, c);     \
-                hvx_vmemu(output_row_base + c + dst_stride) = v_out1;                               \
-            }                                                                                       \
-        }                                                                                           \
-        if (limit_c_aligned < limit_c) {                                                            \
-            size_t c = limit_c_aligned;                                                             \
-            size_t valid_c = limit_c - c;                                                           \
-            const size_t c0 = c / HTP_MM_HMX_TILE_N_COLS;                                           \
-            const __fp16 *tile = row_base + c0 * HTP_MM_HMX_TILE_N_ELMS;                            \
-            HVX_Vector v = ((const HVX_Vector *) tile)[r1];                                         \
-            HVX_VectorPair vp = Q6_Wqf32_vmpy_VhfVhf(v, one);                                       \
-            HVX_Vector v_out0 = ADD_BIAS(Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp)), bias_row0, c);         \
-            hvx_vec_store_u(output_row_base + c, valid_c * sizeof(float), v_out0);                  \
-            if (r + 1 < n_rows) {                                                                   \
-                HVX_Vector v_out1 = ADD_BIAS(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp)), bias_row1, c);     \
-                hvx_vec_store_u(output_row_base + c + dst_stride, valid_c * sizeof(float), v_out1); \
-            }                                                                                       \
-        }                                                                                           \
+#define HMX_FP16_TO_FP32_COL_LOOP(ADD_BIAS)                                                              \
+    do {                                                                                                 \
+        if (dst_aligned_nt && has_row1) {                                                                \
+            _Pragma("unroll(4)")                                                                         \
+            for (size_t c = 0; c < limit_c_aligned; c += HTP_MM_HMX_TILE_N_COLS) {                       \
+                const size_t c0    = c / HTP_MM_HMX_TILE_N_COLS;                                         \
+                const __fp16 *tile = row_base + c0 * HTP_MM_HMX_TILE_N_ELMS;                             \
+                HVX_Vector v = ((const HVX_Vector *) tile)[r1];                                          \
+                HVX_VectorPair vp = Q6_Wqf32_vmpy_VhfVhf(v, one);                                        \
+                HVX_Vector v_out0 = ADD_BIAS(Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp)), bias_row0, c);          \
+                HVX_Vector v_out1 = ADD_BIAS(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp)), bias_row1, c);          \
+                hvx_vmem_store_nt(output_row_base + c, v_out0);                                          \
+                hvx_vmem_store_nt(output_row_base + c + dst_stride, v_out1);                             \
+            }                                                                                            \
+        } else if (dst_aligned_nt) {                                                                     \
+            _Pragma("unroll(4)")                                                                         \
+            for (size_t c = 0; c < limit_c_aligned; c += HTP_MM_HMX_TILE_N_COLS) {                       \
+                const size_t c0    = c / HTP_MM_HMX_TILE_N_COLS;                                         \
+                const __fp16 *tile = row_base + c0 * HTP_MM_HMX_TILE_N_ELMS;                             \
+                HVX_Vector v = ((const HVX_Vector *) tile)[r1];                                          \
+                HVX_VectorPair vp = Q6_Wqf32_vmpy_VhfVhf(v, one);                                        \
+                HVX_Vector v_out0 = ADD_BIAS(Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp)), bias_row0, c);          \
+                hvx_vmem_store_nt(output_row_base + c, v_out0);                                          \
+            }                                                                                            \
+        } else {                                                                                         \
+            _Pragma("unroll(4)")                                                                         \
+            for (size_t c = 0; c < limit_c_aligned; c += HTP_MM_HMX_TILE_N_COLS) {                       \
+                const size_t c0    = c / HTP_MM_HMX_TILE_N_COLS;                                         \
+                const __fp16 *tile = row_base + c0 * HTP_MM_HMX_TILE_N_ELMS;                             \
+                HVX_Vector v = ((const HVX_Vector *) tile)[r1];                                          \
+                HVX_VectorPair vp = Q6_Wqf32_vmpy_VhfVhf(v, one);                                        \
+                HVX_Vector v_out0 = ADD_BIAS(Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp)), bias_row0, c);          \
+                hvx_vmemu(output_row_base + c) = v_out0;                                                 \
+                if (has_row1) {                                                                          \
+                    HVX_Vector v_out1 = ADD_BIAS(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp)), bias_row1, c);      \
+                    hvx_vmemu(output_row_base + c + dst_stride) = v_out1;                                \
+                }                                                                                        \
+            }                                                                                            \
+        }                                                                                                \
+        if (limit_c_aligned < limit_c) {                                                                 \
+            size_t c = limit_c_aligned;                                                                  \
+            size_t valid_c = limit_c - c;                                                                \
+            const size_t c0 = c / HTP_MM_HMX_TILE_N_COLS;                                                \
+            const __fp16 *tile = row_base + c0 * HTP_MM_HMX_TILE_N_ELMS;                                 \
+            HVX_Vector v = ((const HVX_Vector *) tile)[r1];                                              \
+            HVX_VectorPair vp = Q6_Wqf32_vmpy_VhfVhf(v, one);                                            \
+            HVX_Vector v_out0 = ADD_BIAS(Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp)), bias_row0, c);              \
+            hvx_vec_store_u(output_row_base + c, valid_c * sizeof(float), v_out0);                       \
+            if (has_row1) {                                                                              \
+                HVX_Vector v_out1 = ADD_BIAS(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp)), bias_row1, c);          \
+                hvx_vec_store_u(output_row_base + c + dst_stride, valid_c * sizeof(float), v_out1);      \
+            }                                                                                            \
+        }                                                                                                \
     } while (0)
 
-static void transfer_output_chunk_fp16_to_fp32_col_chunk(
-    void *restrict dst_void,
-    const void *restrict bias,
-    const __fp16 *restrict vtcm_src,
-    uint32_t start_row,
-    uint32_t n_rows,
-    uint32_t c_len,
-    uint32_t total_n_cols,
-    uint32_t dst_stride,
-    uint32_t bias_stride,
-    uint32_t dst_cols,
-    size_t bias_elem_size
-) {
-    float *restrict dst = (float *) dst_void;
-    const size_t tile_row_stride = hmx_ceil_div(total_n_cols, HTP_MM_HMX_TILE_N_COLS) * HTP_MM_HMX_TILE_N_ELMS;
-
-    const HVX_Vector one = hvx_vec_splat_f16(1.0);
-
-    const size_t limit_c         = hex_smin(c_len, dst_cols);
-    const size_t limit_c_aligned = (limit_c & ~31);
-
-    for (size_t r = 0; r < n_rows; r += 2) {
-        const size_t r_idx0 = start_row + r + 0;
-        const size_t r0 = r_idx0 / HTP_MM_HMX_TILE_N_ROWS;
-        const size_t r1 = (r_idx0 % HTP_MM_HMX_TILE_N_ROWS) / 2;
-        const __fp16 *row_base = vtcm_src + r0 * tile_row_stride;
-        float *output_row_base = dst + r * dst_stride;
-        const uint8_t *bias_row0 = bias ? ((const uint8_t *) bias + r * bias_stride * bias_elem_size) : NULL;
-        const uint8_t *bias_row1 = bias ? (bias_row0 + bias_stride * bias_elem_size) : NULL;
-
-        if (!bias_row0) {
-            HMX_FP16_TO_FP32_COL_LOOP(HMX_FP16_ADD_BIAS_F32_NONE);
-        } else if (bias_elem_size == sizeof(__fp16)) {
-            HMX_FP16_TO_FP32_COL_LOOP(HMX_FP16_ADD_BIAS_F32_F16);
-        } else {
-            HMX_FP16_TO_FP32_COL_LOOP(HMX_FP16_ADD_BIAS_F32_F32);
-        }
-    }
+#define DEFINE_FP16_TO_FP32_COL_CHUNK(SFX, ADD_BIAS)                                                     \
+static __attribute__((noinline)) void transfer_output_chunk_fp16_to_fp32_col_chunk_##SFX(                \
+    void * restrict dst_void,                                                                            \
+    const void * restrict bias,                                                                          \
+    const __fp16 * restrict vtcm_src,                                                                    \
+    uint32_t start_row,                                                                                  \
+    uint32_t n_rows,                                                                                     \
+    uint32_t c_len,                                                                                      \
+    uint32_t total_n_cols,                                                                               \
+    uint32_t dst_stride,                                                                                 \
+    uint32_t bias_stride,                                                                                \
+    uint32_t dst_cols,                                                                                   \
+    size_t bias_elem_size                                                                                \
+) {                                                                                                      \
+    float * restrict dst           = (float *) dst_void;                                                 \
+    const size_t tile_row_stride   = hmx_ceil_div(total_n_cols,                                          \
+                                                  HTP_MM_HMX_TILE_N_COLS) * HTP_MM_HMX_TILE_N_ELMS;      \
+    const HVX_Vector one           = hvx_vec_splat_f16(1.0);                                             \
+    const size_t limit_c           = hex_smin(c_len, dst_cols);                                          \
+    const size_t limit_c_aligned   = (limit_c & ~31u);                                                   \
+    const bool   dst_aligned_nt    =                                                                     \
+            ((((uintptr_t) dst | ((size_t) dst_stride * sizeof(float))) & 127u) == 0);                   \
+    const size_t bias_row_bytes    = (size_t) bias_stride * bias_elem_size;                              \
+    for (size_t r = 0; r < n_rows; r += 2) {                                                             \
+        const size_t r_idx0        = start_row + r;                                                      \
+        const size_t r0            = r_idx0 / HTP_MM_HMX_TILE_N_ROWS;                                    \
+        const size_t r1            = (r_idx0 % HTP_MM_HMX_TILE_N_ROWS) / 2;                              \
+        const __fp16 *row_base     = vtcm_src + r0 * tile_row_stride;                                    \
+        float *output_row_base     = dst + r * dst_stride;                                               \
+        const uint8_t *bias_row0   = (const uint8_t *) bias + r * bias_row_bytes;                        \
+        const uint8_t *bias_row1   = bias_row0 + bias_row_bytes;                                         \
+        const bool has_row1        = (r + 1 < n_rows);                                                   \
+        HMX_FP16_TO_FP32_COL_LOOP(ADD_BIAS);                                                             \
+    }                                                                                                    \
 }
 
-static inline void transfer_output_chunk_fp16_to_fp32(
-    float *restrict dst,
-    const void *restrict bias,
-    const __fp16 *restrict vtcm_src,
-    uint32_t start_row,
-    uint32_t n_rows,
-    uint32_t n_cols,
-    uint32_t dst_stride,
-    uint32_t bias_stride,
-    uint32_t dst_cols,
-    size_t bias_elem_size
-) {
-    transfer_output_chunk_fp16_to_fp32_col_chunk(
-        dst, bias, vtcm_src, start_row, n_rows, n_cols, n_cols, dst_stride, bias_stride, dst_cols, bias_elem_size
-    );
-}
+DEFINE_FP16_TO_FP32_COL_CHUNK(none, HMX_FP16_ADD_BIAS_F32_NONE)
+DEFINE_FP16_TO_FP32_COL_CHUNK(f16,  HMX_FP16_ADD_BIAS_F32_F16)
+DEFINE_FP16_TO_FP32_COL_CHUNK(f32,  HMX_FP16_ADD_BIAS_F32_F32)
 
-#define HMX_FP16_TO_FP16_COL_LOOP(ADD_BIAS_64, ADD_BIAS_TAIL)                                        \
-    do {                                                                                             \
-        for (size_t c = 0; c < limit_c_aligned64; c += 64) {                                         \
-            const size_t c0 = c / HTP_MM_HMX_TILE_N_COLS;                                            \
-            const __fp16 *tile0 = row_base + (c0 + 0) * HTP_MM_HMX_TILE_N_ELMS;                      \
-            const __fp16 *tile1 = row_base + (c0 + 1) * HTP_MM_HMX_TILE_N_ELMS;                      \
-            HVX_Vector v_t0 = ((const HVX_Vector *) tile0)[r1];                                      \
-            HVX_Vector v_t1 = ((const HVX_Vector *) tile1)[r1];                                      \
-            HVX_VectorPair vp = Q6_W_vdeal_VVR(v_t1, v_t0, -2);                                      \
-            HVX_Vector v_out0 = ADD_BIAS_64(Q6_V_lo_W(vp), bias_row0, c);                            \
-            if (dst_aligned_nt) {                                                                    \
-                hvx_vmem_store_nt(output_row_base + c, v_out0);                                      \
-            } else {                                                                                 \
-                hvx_vmemu(output_row_base + c) = v_out0;                                             \
-            }                                                                                        \
-            if (r + 1 < n_rows) {                                                                    \
-                HVX_Vector v_out1 = ADD_BIAS_64(Q6_V_hi_W(vp), bias_row1, c);                        \
-                if (dst_aligned_nt) {                                                                \
-                    hvx_vmem_store_nt(output_row_base + dst_stride + c, v_out1);                     \
-                } else {                                                                             \
-                    hvx_vmemu(output_row_base + dst_stride + c) = v_out1;                            \
-                }                                                                                    \
-            }                                                                                        \
-        }                                                                                            \
-        if (limit_c_aligned64 < limit_c) {                                                           \
-            const size_t c       = limit_c_aligned64;                                                \
-            const size_t valid_c = limit_c - c;                                                      \
-            const size_t c0      = c / HTP_MM_HMX_TILE_N_COLS;                                       \
-            const __fp16 *tile0  = row_base + (c0 + 0) * HTP_MM_HMX_TILE_N_ELMS;                     \
-            HVX_Vector v_t0 = ((const HVX_Vector *) tile0)[r1];                                      \
-            HVX_Vector v_t1 = (valid_c > 32)                                                         \
-                ? ((const HVX_Vector *) (row_base + (c0 + 1) * HTP_MM_HMX_TILE_N_ELMS))[r1]          \
-                : Q6_V_vzero();                                                                      \
-            HVX_VectorPair vp = Q6_W_vdeal_VVR(v_t1, v_t0, -2);                                      \
-            HVX_Vector v_out0 = ADD_BIAS_TAIL(Q6_V_lo_W(vp), bias_row0, c, valid_c);                 \
-            hvx_vec_store_u(output_row_base + c, valid_c * sizeof(__fp16), v_out0);                  \
-            if (r + 1 < n_rows) {                                                                    \
-                HVX_Vector v_out1 = ADD_BIAS_TAIL(Q6_V_hi_W(vp), bias_row1, c, valid_c);             \
-                hvx_vec_store_u(output_row_base + dst_stride + c, valid_c * sizeof(__fp16), v_out1); \
-            }                                                                                        \
-        }                                                                                            \
+#define HMX_FP16_TO_FP16_COL_LOOP(ADD_BIAS_64, ADD_BIAS_TAIL)                                            \
+    do {                                                                                                 \
+        if (dst_aligned_nt && has_row1) {                                                                \
+            for (size_t c = 0; c < limit_c_aligned64; c += 64) {                                         \
+                const size_t c0     = c / HTP_MM_HMX_TILE_N_COLS;                                        \
+                const __fp16 *tile0 = row_base + (c0 + 0) * HTP_MM_HMX_TILE_N_ELMS;                      \
+                const __fp16 *tile1 = row_base + (c0 + 1) * HTP_MM_HMX_TILE_N_ELMS;                      \
+                HVX_Vector v_t0     = ((const HVX_Vector *) tile0)[r1];                                  \
+                HVX_Vector v_t1     = ((const HVX_Vector *) tile1)[r1];                                  \
+                HVX_VectorPair vp   = Q6_W_vdeal_VVR(v_t1, v_t0, -2);                                    \
+                HVX_Vector v_out0   = ADD_BIAS_64(Q6_V_lo_W(vp), bias_row0, c);                          \
+                HVX_Vector v_out1   = ADD_BIAS_64(Q6_V_hi_W(vp), bias_row1, c);                          \
+                hvx_vmem_store_nt(output_row_base + c, v_out0);                                          \
+                hvx_vmem_store_nt(output_row_base + dst_stride + c, v_out1);                             \
+            }                                                                                            \
+        } else if (dst_aligned_nt) {                                                                     \
+            for (size_t c = 0; c < limit_c_aligned64; c += 64) {                                         \
+                const size_t c0     = c / HTP_MM_HMX_TILE_N_COLS;                                        \
+                const __fp16 *tile0 = row_base + (c0 + 0) * HTP_MM_HMX_TILE_N_ELMS;                      \
+                const __fp16 *tile1 = row_base + (c0 + 1) * HTP_MM_HMX_TILE_N_ELMS;                      \
+                HVX_Vector v_t0     = ((const HVX_Vector *) tile0)[r1];                                  \
+                HVX_Vector v_t1     = ((const HVX_Vector *) tile1)[r1];                                  \
+                HVX_VectorPair vp   = Q6_W_vdeal_VVR(v_t1, v_t0, -2);                                    \
+                HVX_Vector v_out0   = ADD_BIAS_64(Q6_V_lo_W(vp), bias_row0, c);                          \
+                hvx_vmem_store_nt(output_row_base + c, v_out0);                                          \
+            }                                                                                            \
+        } else {                                                                                         \
+            for (size_t c = 0; c < limit_c_aligned64; c += 64) {                                         \
+                const size_t c0     = c / HTP_MM_HMX_TILE_N_COLS;                                        \
+                const __fp16 *tile0 = row_base + (c0 + 0) * HTP_MM_HMX_TILE_N_ELMS;                      \
+                const __fp16 *tile1 = row_base + (c0 + 1) * HTP_MM_HMX_TILE_N_ELMS;                      \
+                HVX_Vector v_t0     = ((const HVX_Vector *) tile0)[r1];                                  \
+                HVX_Vector v_t1     = ((const HVX_Vector *) tile1)[r1];                                  \
+                HVX_VectorPair vp   = Q6_W_vdeal_VVR(v_t1, v_t0, -2);                                    \
+                HVX_Vector v_out0   = ADD_BIAS_64(Q6_V_lo_W(vp), bias_row0, c);                          \
+                hvx_vmemu(output_row_base + c) = v_out0;                                                 \
+                if (has_row1) {                                                                          \
+                    HVX_Vector v_out1 = ADD_BIAS_64(Q6_V_hi_W(vp), bias_row1, c);                        \
+                    hvx_vmemu(output_row_base + dst_stride + c) = v_out1;                                \
+                }                                                                                        \
+            }                                                                                            \
+        }                                                                                                \
+        if (limit_c_aligned64 < limit_c) {                                                               \
+            const size_t c       = limit_c_aligned64;                                                    \
+            const size_t valid_c = limit_c - c;                                                          \
+            const size_t c0      = c / HTP_MM_HMX_TILE_N_COLS;                                           \
+            const __fp16 *tile0  = row_base + (c0 + 0) * HTP_MM_HMX_TILE_N_ELMS;                         \
+            HVX_Vector v_t0 = ((const HVX_Vector *) tile0)[r1];                                          \
+            HVX_Vector v_t1 = (valid_c > 32)                                                             \
+                ? ((const HVX_Vector *) (row_base + (c0 + 1) * HTP_MM_HMX_TILE_N_ELMS))[r1]              \
+                : Q6_V_vzero();                                                                          \
+            HVX_VectorPair vp = Q6_W_vdeal_VVR(v_t1, v_t0, -2);                                          \
+            HVX_Vector v_out0 = ADD_BIAS_TAIL(Q6_V_lo_W(vp), bias_row0, c, valid_c);                     \
+            hvx_vec_store_u(output_row_base + c, valid_c * sizeof(__fp16), v_out0);                      \
+            if (has_row1) {                                                                              \
+                HVX_Vector v_out1 = ADD_BIAS_TAIL(Q6_V_hi_W(vp), bias_row1, c, valid_c);                 \
+                hvx_vec_store_u(output_row_base + dst_stride + c, valid_c * sizeof(__fp16), v_out1);     \
+            }                                                                                            \
+        }                                                                                                \
     } while (0)
 
-static void transfer_output_chunk_fp16_to_fp16_col_chunk(
-    void *restrict dst_void,
-    const void *restrict bias,
-    const __fp16 *restrict vtcm_src,
-    uint32_t start_row,
-    uint32_t n_rows,
-    uint32_t c_len,
-    uint32_t total_n_cols,
-    uint32_t dst_stride,
-    uint32_t bias_stride,
-    uint32_t dst_cols,
-    size_t bias_elem_size
-) {
-    __fp16 *restrict dst           = (__fp16 *) dst_void;
-    const size_t tile_row_stride   = hmx_ceil_div(total_n_cols, HTP_MM_HMX_TILE_N_COLS) * HTP_MM_HMX_TILE_N_ELMS;
-    const size_t limit_c           = hex_smin(c_len, dst_cols);
-    const size_t limit_c_aligned64 = (limit_c & ~63u);
-    const bool   dst_aligned_nt    = ((((uintptr_t) dst | ((size_t) dst_stride * sizeof(__fp16))) & 127u) == 0);
-
-    for (size_t r = 0; r < n_rows; r += 2) {
-        const size_t r_idx0 = start_row + r;
-        const size_t r0 = r_idx0 / HTP_MM_HMX_TILE_N_ROWS;
-        const size_t r1 = (r_idx0 % HTP_MM_HMX_TILE_N_ROWS) / 2;
-        const __fp16 *row_base = vtcm_src + r0 * tile_row_stride;
-        __fp16 *output_row_base = dst + r * dst_stride;
-        const uint8_t *bias_row0 = bias ? ((const uint8_t *) bias + r * bias_stride * bias_elem_size) : NULL;
-        const uint8_t *bias_row1 = bias ? (bias_row0 + bias_stride * bias_elem_size) : NULL;
-
-        if (!bias_row0) {
-            HMX_FP16_TO_FP16_COL_LOOP(HMX_FP16_ADD_BIAS_F16_64_NONE, HMX_FP16_ADD_BIAS_F16_TAIL_NONE);
-        } else if (bias_elem_size == sizeof(__fp16)) {
-            HMX_FP16_TO_FP16_COL_LOOP(HMX_FP16_ADD_BIAS_F16_64_F16, HMX_FP16_ADD_BIAS_F16_TAIL_F16);
-        } else {
-            HMX_FP16_TO_FP16_COL_LOOP(HMX_FP16_ADD_BIAS_F16_64_F32, HMX_FP16_ADD_BIAS_F16_TAIL_F32);
-        }
-    }
+#define DEFINE_FP16_TO_FP16_COL_CHUNK(SFX, ADD_BIAS_64, ADD_BIAS_TAIL)                                   \
+static __attribute__((noinline)) void transfer_output_chunk_fp16_to_fp16_col_chunk_##SFX(                \
+    void * restrict dst_void,                                                                            \
+    const void * restrict bias,                                                                          \
+    const __fp16 * restrict vtcm_src,                                                                    \
+    uint32_t start_row,                                                                                  \
+    uint32_t n_rows,                                                                                     \
+    uint32_t c_len,                                                                                      \
+    uint32_t total_n_cols,                                                                               \
+    uint32_t dst_stride,                                                                                 \
+    uint32_t bias_stride,                                                                                \
+    uint32_t dst_cols,                                                                                   \
+    size_t bias_elem_size                                                                                \
+) {                                                                                                      \
+    __fp16 * restrict dst          = (__fp16 *) dst_void;                                                \
+    const size_t tile_row_stride   = hmx_ceil_div(total_n_cols,                                          \
+                                                  HTP_MM_HMX_TILE_N_COLS) * HTP_MM_HMX_TILE_N_ELMS;      \
+    const size_t limit_c           = hex_smin(c_len, dst_cols);                                          \
+    const size_t limit_c_aligned64 = (limit_c & ~63u);                                                   \
+    const bool   dst_aligned_nt    =                                                                     \
+            ((((uintptr_t) dst | ((size_t) dst_stride * sizeof(__fp16))) & 127u) == 0);                  \
+    const size_t bias_row_bytes    = (size_t) bias_stride * bias_elem_size;                              \
+    for (size_t r = 0; r < n_rows; r += 2) {                                                             \
+        const size_t r_idx0        = start_row + r;                                                      \
+        const size_t r0            = r_idx0 / HTP_MM_HMX_TILE_N_ROWS;                                    \
+        const size_t r1            = (r_idx0 % HTP_MM_HMX_TILE_N_ROWS) / 2;                              \
+        const __fp16 *row_base     = vtcm_src + r0 * tile_row_stride;                                    \
+        __fp16 *output_row_base    = dst + r * dst_stride;                                               \
+        const uint8_t *bias_row0   = (const uint8_t *) bias + r * bias_row_bytes;                        \
+        const uint8_t *bias_row1   = bias_row0 + bias_row_bytes;                                         \
+        const bool has_row1        = (r + 1 < n_rows);                                                   \
+        HMX_FP16_TO_FP16_COL_LOOP(ADD_BIAS_64, ADD_BIAS_TAIL);                                           \
+    }                                                                                                    \
 }
 
-static inline void transfer_output_chunk_fp16_to_fp16(
-    __fp16 *restrict dst,
-    const void *restrict bias,
-    const __fp16 *restrict vtcm_src,
-    uint32_t start_row,
-    uint32_t n_rows,
-    uint32_t n_cols,
-    uint32_t dst_stride,
-    uint32_t bias_stride,
-    uint32_t dst_cols,
-    size_t bias_elem_size
-) {
-    transfer_output_chunk_fp16_to_fp16_col_chunk(
-        dst, bias, vtcm_src, start_row, n_rows, n_cols, n_cols, dst_stride, bias_stride, dst_cols, bias_elem_size
-    );
-}
+DEFINE_FP16_TO_FP16_COL_CHUNK(none, HMX_FP16_ADD_BIAS_F16_64_NONE, HMX_FP16_ADD_BIAS_F16_TAIL_NONE)
+DEFINE_FP16_TO_FP16_COL_CHUNK(f16,  HMX_FP16_ADD_BIAS_F16_64_F16,  HMX_FP16_ADD_BIAS_F16_TAIL_F16)
+DEFINE_FP16_TO_FP16_COL_CHUNK(f32,  HMX_FP16_ADD_BIAS_F16_64_F32,  HMX_FP16_ADD_BIAS_F16_TAIL_F32)
 
 typedef void (*hmx_fp16_output_col_chunk_fn_t)(
     void * restrict dst,
@@ -1602,6 +1611,23 @@ typedef void (*hmx_fp16_output_col_chunk_fn_t)(
     uint32_t dst_cols,
     size_t bias_elem_size
 );
+
+static inline hmx_fp16_output_col_chunk_fn_t resolve_fp16_output_col_chunk_fn(
+    size_t dst_elem_size,
+    const void * bias,
+    size_t bias_elem_size
+) {
+    const bool dst_f16  = (dst_elem_size == sizeof(__fp16));
+    const bool bias_f16 = (bias_elem_size == sizeof(__fp16));
+    if (dst_f16) {
+        return !bias ? transfer_output_chunk_fp16_to_fp16_col_chunk_none
+                     : (bias_f16 ? transfer_output_chunk_fp16_to_fp16_col_chunk_f16
+                                 : transfer_output_chunk_fp16_to_fp16_col_chunk_f32);
+    }
+    return !bias ? transfer_output_chunk_fp16_to_fp32_col_chunk_none
+                 : (bias_f16 ? transfer_output_chunk_fp16_to_fp32_col_chunk_f16
+                             : transfer_output_chunk_fp16_to_fp32_col_chunk_f32);
+}
 
 typedef struct {
     hmx_fp16_output_col_chunk_fn_t col_chunk_fn;
@@ -2399,22 +2425,29 @@ static void transfer_output_chunk_fp16_to_fp32_scattered(
         struct mmid_row_mapping mapping0 = matrix_rows[cur_a * mapping_stride + r_idx0];
         float *output_row0 = (float *) ((uint8_t *) dst + mapping0.i1 * dst_nb1 + mapping0.i2 * dst_nb2);
 
-        float *output_row1 = NULL;
         if (r_idx1 < cne1) {
             struct mmid_row_mapping mapping1 = matrix_rows[cur_a * mapping_stride + r_idx1];
-            output_row1 = (float *) ((uint8_t *) dst + mapping1.i1 * dst_nb1 + mapping1.i2 * dst_nb2);
-        }
+            float *output_row1 = (float *) ((uint8_t *) dst + mapping1.i1 * dst_nb1 + mapping1.i2 * dst_nb2);
 
-        #pragma unroll(4)
-        for (size_t c = 0; c < (size_t)n_cols; c += HTP_MM_HMX_TILE_N_COLS) {
-            const size_t c0 = c / HTP_MM_HMX_TILE_N_COLS;
-            const __fp16 *tile = row_base + c0 * HTP_MM_HMX_TILE_N_ELMS;
-            HVX_Vector v = ((const HVX_Vector *) tile)[r1];
-            HVX_VectorPair vp = Q6_Wqf32_vmpy_VhfVhf(v, one);
+            #pragma unroll(4)
+            for (size_t c = 0; c < (size_t)n_cols; c += HTP_MM_HMX_TILE_N_COLS) {
+                const size_t c0 = c / HTP_MM_HMX_TILE_N_COLS;
+                const __fp16 *tile = row_base + c0 * HTP_MM_HMX_TILE_N_ELMS;
+                HVX_Vector v = ((const HVX_Vector *) tile)[r1];
+                HVX_VectorPair vp = Q6_Wqf32_vmpy_VhfVhf(v, one);
 
-            hvx_vmemu(output_row0 + c) = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp));
-            if (output_row1) {
+                hvx_vmemu(output_row0 + c) = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp));
                 hvx_vmemu(output_row1 + c) = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(vp));
+            }
+        } else {
+            #pragma unroll(4)
+            for (size_t c = 0; c < (size_t)n_cols; c += HTP_MM_HMX_TILE_N_COLS) {
+                const size_t c0 = c / HTP_MM_HMX_TILE_N_COLS;
+                const __fp16 *tile = row_base + c0 * HTP_MM_HMX_TILE_N_ELMS;
+                HVX_Vector v = ((const HVX_Vector *) tile)[r1];
+                HVX_VectorPair vp = Q6_Wqf32_vmpy_VhfVhf(v, one);
+
+                hvx_vmemu(output_row0 + c) = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(vp));
             }
         }
     }
@@ -2458,18 +2491,30 @@ static void transfer_output_chunk_fp16_to_fp16_scattered(
         }
 
         size_t c = 0;
-        #pragma unroll(2)
-        for (; c < n_cols_aligned64; c += 64) {
-            const size_t c0 = c / HTP_MM_HMX_TILE_N_COLS;
-            const __fp16 *tile0 = row_base + c0 * HTP_MM_HMX_TILE_N_ELMS;
-            const __fp16 *tile1 = row_base + (c0 + 1) * HTP_MM_HMX_TILE_N_ELMS;
-            HVX_Vector v_t0 = ((const HVX_Vector *) tile0)[r1];
-            HVX_Vector v_t1 = ((const HVX_Vector *) tile1)[r1];
-            HVX_VectorPair vp = Q6_W_vdeal_VVR(v_t1, v_t0, -2);
+        if (output_row1) {
+            #pragma unroll(2)
+            for (; c < n_cols_aligned64; c += 64) {
+                const size_t c0 = c / HTP_MM_HMX_TILE_N_COLS;
+                const __fp16 *tile0 = row_base + c0 * HTP_MM_HMX_TILE_N_ELMS;
+                const __fp16 *tile1 = row_base + (c0 + 1) * HTP_MM_HMX_TILE_N_ELMS;
+                HVX_Vector v_t0 = ((const HVX_Vector *) tile0)[r1];
+                HVX_Vector v_t1 = ((const HVX_Vector *) tile1)[r1];
+                HVX_VectorPair vp = Q6_W_vdeal_VVR(v_t1, v_t0, -2);
 
-            hvx_vmemu(output_row0 + c) = Q6_V_lo_W(vp);
-            if (output_row1) {
+                hvx_vmemu(output_row0 + c) = Q6_V_lo_W(vp);
                 hvx_vmemu(output_row1 + c) = Q6_V_hi_W(vp);
+            }
+        } else {
+            #pragma unroll(2)
+            for (; c < n_cols_aligned64; c += 64) {
+                const size_t c0 = c / HTP_MM_HMX_TILE_N_COLS;
+                const __fp16 *tile0 = row_base + c0 * HTP_MM_HMX_TILE_N_ELMS;
+                const __fp16 *tile1 = row_base + (c0 + 1) * HTP_MM_HMX_TILE_N_ELMS;
+                HVX_Vector v_t0 = ((const HVX_Vector *) tile0)[r1];
+                HVX_Vector v_t1 = ((const HVX_Vector *) tile1)[r1];
+                HVX_VectorPair vp = Q6_W_vdeal_VVR(v_t1, v_t0, -2);
+
+                hvx_vmemu(output_row0 + c) = Q6_V_lo_W(vp);
             }
         }
 

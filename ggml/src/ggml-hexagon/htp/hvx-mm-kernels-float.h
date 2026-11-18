@@ -92,28 +92,39 @@ static inline void quantize_f16_f32_kernel(
 
 // Float dot product kernels (HVX)
 
-static inline void hvx_flat_store_1x1(void * restrict s, HVX_Vector rsum, uint32_t dst_elem_size) {
-    HVX_Vector v_sum = hvx_vec_reduce_sum_f32(rsum);
-    if (dst_elem_size == sizeof(__fp16)) {
-        const HVX_Vector max_f16 = hvx_vec_splat_f32(65504.0f);
-        const HVX_Vector min_f16 = hvx_vec_splat_f32(-65504.0f);
-        v_sum = Q6_Vsf_vmax_VsfVsf(min_f16, Q6_Vsf_vmin_VsfVsf(max_f16, v_sum));
-        hvx_vec_store_u(s, 2, hvx_vec_f32_to_f16(v_sum, Q6_V_vzero()));
-    } else {
-        hvx_vec_store_u(s, 4, v_sum);
-    }
+typedef void (*hvx_flat_store_1x1_fn_t)(void * restrict s, HVX_Vector rsum);
+typedef void (*hvx_flat_store_2x1_fn_t)(void * restrict s, HVX_Vector rsum0, HVX_Vector rsum1);
+
+static __attribute__((noinline)) void hvx_flat_store_1x1_f32(void * restrict s, HVX_Vector rsum) {
+    hvx_vec_store_u(s, 4, hvx_vec_reduce_sum_f32(rsum));
 }
 
-static inline void hvx_flat_store_2x1(void * restrict s, HVX_Vector rsum0, HVX_Vector rsum1, uint32_t dst_elem_size) {
+static __attribute__((noinline)) void hvx_flat_store_1x1_f16(void * restrict s, HVX_Vector rsum) {
+    HVX_Vector v_sum = hvx_vec_reduce_sum_f32(rsum);
+    const HVX_Vector max_f16 = hvx_vec_splat_f32(65504.0f);
+    const HVX_Vector min_f16 = hvx_vec_splat_f32(-65504.0f);
+    v_sum = Q6_Vsf_vmax_VsfVsf(min_f16, Q6_Vsf_vmin_VsfVsf(max_f16, v_sum));
+    hvx_vec_store_u(s, 2, hvx_vec_f32_to_f16(v_sum, Q6_V_vzero()));
+}
+
+static __attribute__((noinline)) void hvx_flat_store_2x1_f32(void * restrict s, HVX_Vector rsum0, HVX_Vector rsum1) {
+    hvx_vec_store_u(s, 8, hvx_vec_reduce_sum_f32x2(rsum0, rsum1));
+}
+
+static __attribute__((noinline)) void hvx_flat_store_2x1_f16(void * restrict s, HVX_Vector rsum0, HVX_Vector rsum1) {
     HVX_Vector v_sum = hvx_vec_reduce_sum_f32x2(rsum0, rsum1);
-    if (dst_elem_size == sizeof(__fp16)) {
-        const HVX_Vector max_f16 = hvx_vec_splat_f32(65504.0f);
-        const HVX_Vector min_f16 = hvx_vec_splat_f32(-65504.0f);
-        v_sum = Q6_Vsf_vmax_VsfVsf(min_f16, Q6_Vsf_vmin_VsfVsf(max_f16, v_sum));
-        hvx_vec_store_u(s, 4, hvx_vec_f32_to_f16(v_sum, Q6_V_vzero()));
-    } else {
-        hvx_vec_store_u(s, 8, v_sum);
-    }
+    const HVX_Vector max_f16 = hvx_vec_splat_f32(65504.0f);
+    const HVX_Vector min_f16 = hvx_vec_splat_f32(-65504.0f);
+    v_sum = Q6_Vsf_vmax_VsfVsf(min_f16, Q6_Vsf_vmin_VsfVsf(max_f16, v_sum));
+    hvx_vec_store_u(s, 4, hvx_vec_f32_to_f16(v_sum, Q6_V_vzero()));
+}
+
+static inline hvx_flat_store_1x1_fn_t resolve_hvx_flat_store_1x1_fn(uint32_t dst_elem_size) {
+    return (dst_elem_size == sizeof(__fp16)) ? hvx_flat_store_1x1_f16 : hvx_flat_store_1x1_f32;
+}
+
+static inline hvx_flat_store_2x1_fn_t resolve_hvx_flat_store_2x1_fn(uint32_t dst_elem_size) {
+    return (dst_elem_size == sizeof(__fp16)) ? hvx_flat_store_2x1_f16 : hvx_flat_store_2x1_f32;
 }
 
 #if __HVX_ARCH__ < 79
@@ -124,7 +135,7 @@ static inline void hvx_flat_store_2x1(void * restrict s, HVX_Vector rsum0, HVX_V
 #define HVX_OP_MUL_F32(a, b) Q6_Vsf_vmpy_VsfVsf(a, b)
 #endif
 
-static inline void flat_vec_dot_f32_f32_aa_1x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t dst_elem_size) {
+static inline void flat_vec_dot_f32_f32_aa_1x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, hvx_flat_store_1x1_fn_t store_1x1) {
     const HVX_Vector * restrict x = (const HVX_Vector *) vx;
     const HVX_Vector * restrict y = (const HVX_Vector *) vy;
 
@@ -149,12 +160,12 @@ static inline void flat_vec_dot_f32_f32_aa_1x1(const uint32_t n, void * restrict
         rsum = HVX_OP_ADD_F32(rsum, prod);
     }
 
-    hvx_flat_store_1x1(s, rsum, dst_elem_size);
+    store_1x1(s, rsum);
 }
 
 static inline void flat_vec_dot_f32_f32_aa_2x1(const uint32_t n, void * restrict s0,
                                 const void * restrict vx0, const void * restrict vx1,
-                                const void * restrict vy0, uint32_t dst_elem_size) {
+                                const void * restrict vy0, hvx_flat_store_2x1_fn_t store_2x1) {
     const HVX_Vector * restrict x0 = (const HVX_Vector *) vx0;
     const HVX_Vector * restrict x1 = (const HVX_Vector *) vx1;
     const HVX_Vector * restrict y  = (const HVX_Vector *) vy0;
@@ -187,12 +198,12 @@ static inline void flat_vec_dot_f32_f32_aa_2x1(const uint32_t n, void * restrict
         rsum1 = HVX_OP_ADD_F32(rsum1, prod1);
     }
 
-    hvx_flat_store_2x1(s0, rsum0, rsum1, dst_elem_size);
+    store_2x1(s0, rsum0, rsum1);
 }
 
 static inline void flat_vec_dot_f32_f32_aa_2x2(const uint32_t n, void * restrict s0, void * restrict s1,
                                 const void * restrict vx0, const void * restrict vx1,
-                                const void * restrict vy0, const void * restrict vy1, uint32_t dst_elem_size) {
+                                const void * restrict vy0, const void * restrict vy1, hvx_flat_store_2x1_fn_t store_2x1) {
     const HVX_Vector * restrict x0 = (const HVX_Vector *) vx0;
     const HVX_Vector * restrict x1 = (const HVX_Vector *) vx1;
     const HVX_Vector * restrict y0 = (const HVX_Vector *) vy0;
@@ -235,11 +246,11 @@ static inline void flat_vec_dot_f32_f32_aa_2x2(const uint32_t n, void * restrict
         r1_c1_sum = HVX_OP_ADD_F32(r1_c1_sum, HVX_OP_MUL_F32(r1_sf, c1_sf));
     }
 
-    hvx_flat_store_2x1(s0, r0_c0_sum, r1_c0_sum, dst_elem_size);
-    hvx_flat_store_2x1(s1, r0_c1_sum, r1_c1_sum, dst_elem_size);
+    store_2x1(s0, r0_c0_sum, r1_c0_sum);
+    store_2x1(s1, r0_c1_sum, r1_c1_sum);
 }
 
-static inline void flat_vec_dot_bf16_f32_aa_1x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t dst_elem_size) {
+static inline void flat_vec_dot_bf16_f32_aa_1x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, hvx_flat_store_1x1_fn_t store_1x1) {
     const HVX_Vector * restrict x = (const HVX_Vector *) vx;
     const HVX_Vector * restrict y = (const HVX_Vector *) vy;
 
@@ -283,12 +294,12 @@ static inline void flat_vec_dot_bf16_f32_aa_1x1(const uint32_t n, void * restric
     }
 
     HVX_Vector rsum = HVX_OP_ADD_F32(rsum0, rsum1);
-    hvx_flat_store_1x1(s, rsum, dst_elem_size);
+    store_1x1(s, rsum);
 }
 
 static inline void flat_vec_dot_bf16_f32_aa_2x1(const uint32_t n, void * restrict s0,
                                 const void * restrict vx0, const void * restrict vx1,
-                                const void * restrict vy0, uint32_t dst_elem_size) {
+                                const void * restrict vy0, hvx_flat_store_2x1_fn_t store_2x1) {
     const HVX_Vector * restrict x0 = (const HVX_Vector *) vx0;
     const HVX_Vector * restrict x1 = (const HVX_Vector *) vx1;
     const HVX_Vector * restrict y  = (const HVX_Vector *) vy0;
@@ -344,12 +355,12 @@ static inline void flat_vec_dot_bf16_f32_aa_2x1(const uint32_t n, void * restric
         }
     }
 
-    hvx_flat_store_2x1(s0, rsum0, rsum1, dst_elem_size);
+    store_2x1(s0, rsum0, rsum1);
 }
 
 static inline void flat_vec_dot_bf16_f32_aa_2x2(const uint32_t n, void * restrict s0, void * restrict s1,
                                 const void * restrict vx0, const void * restrict vx1,
-                                const void * restrict vy0, const void * restrict vy1, uint32_t dst_elem_size) {
+                                const void * restrict vy0, const void * restrict vy1, hvx_flat_store_2x1_fn_t store_2x1) {
     const HVX_Vector * restrict x0 = (const HVX_Vector *) vx0;
     const HVX_Vector * restrict x1 = (const HVX_Vector *) vx1;
     const HVX_Vector * restrict y0 = (const HVX_Vector *) vy0;
@@ -424,14 +435,14 @@ static inline void flat_vec_dot_bf16_f32_aa_2x2(const uint32_t n, void * restric
         }
     }
 
-    hvx_flat_store_2x1(s0, r0_c0_sum, r1_c0_sum, dst_elem_size);
-    hvx_flat_store_2x1(s1, r0_c1_sum, r1_c1_sum, dst_elem_size);
+    store_2x1(s0, r0_c0_sum, r1_c0_sum);
+    store_2x1(s1, r0_c1_sum, r1_c1_sum);
 }
 
 #undef HVX_OP_ADD_F32
 #undef HVX_OP_MUL_F32
 
-static inline void flat_vec_dot_f16_f16_aa_1x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, uint32_t dst_elem_size) {
+static inline void flat_vec_dot_f16_f16_aa_1x1(const uint32_t n, void * restrict s, const void * restrict vx, const void * restrict vy, hvx_flat_store_1x1_fn_t store_1x1) {
     const HVX_Vector * restrict x = (const HVX_Vector *) vx;
     const HVX_Vector * restrict y = (const HVX_Vector *) vy;
 
@@ -455,12 +466,12 @@ static inline void flat_vec_dot_f16_f16_aa_1x1(const uint32_t n, void * restrict
     }
 
     HVX_Vector rsum = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(rsum_p), Q6_V_hi_W(rsum_p)));
-    hvx_flat_store_1x1(s, rsum, dst_elem_size);
+    store_1x1(s, rsum);
 }
 
 static inline void flat_vec_dot_f16_f16_aa_2x1(const uint32_t n, void * restrict s0,
                                 const void * restrict vx0, const void * restrict vx1,
-                                const void * restrict vy0, uint32_t dst_elem_size) {
+                                const void * restrict vy0, hvx_flat_store_2x1_fn_t store_2x1) {
     const HVX_Vector * restrict x0 = (const HVX_Vector *) vx0;
     const HVX_Vector * restrict x1 = (const HVX_Vector *) vx1;
     const HVX_Vector * restrict y  = (const HVX_Vector *) vy0;
@@ -491,12 +502,12 @@ static inline void flat_vec_dot_f16_f16_aa_2x1(const uint32_t n, void * restrict
 
     HVX_Vector rsum0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(rsum0_p), Q6_V_hi_W(rsum0_p)));
     HVX_Vector rsum1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(rsum1_p), Q6_V_hi_W(rsum1_p)));
-    hvx_flat_store_2x1(s0, rsum0, rsum1, dst_elem_size);
+    store_2x1(s0, rsum0, rsum1);
 }
 
 static inline void flat_vec_dot_f16_f16_aa_2x2(const uint32_t n, void * restrict s0, void * restrict s1,
                                 const void * restrict vx0, const void * restrict vx1,
-                                const void * restrict vy0, const void * restrict vy1, uint32_t dst_elem_size) {
+                                const void * restrict vy0, const void * restrict vy1, hvx_flat_store_2x1_fn_t store_2x1) {
     const HVX_Vector * restrict x0 = (const HVX_Vector *) vx0;
     const HVX_Vector * restrict x1 = (const HVX_Vector *) vx1;
     const HVX_Vector * restrict y0 = (const HVX_Vector *) vy0;
@@ -546,11 +557,106 @@ static inline void flat_vec_dot_f16_f16_aa_2x2(const uint32_t n, void * restrict
     HVX_Vector r1_c0_sum = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(r1_c0_sum_p), Q6_V_hi_W(r1_c0_sum_p)));
     HVX_Vector r1_c1_sum = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(r1_c1_sum_p), Q6_V_hi_W(r1_c1_sum_p)));
 
-    hvx_flat_store_2x1(s0, r0_c0_sum, r1_c0_sum, dst_elem_size);
-    hvx_flat_store_2x1(s1, r0_c1_sum, r1_c1_sum, dst_elem_size);
+    store_2x1(s0, r0_c0_sum, r1_c0_sum);
+    store_2x1(s1, r0_c1_sum, r1_c1_sum);
 }
 
+typedef void (*hvx_tensor_add_row_fn_t)(void * restrict dst_ptr, const void * restrict bias_ptr, uint32_t n);
 
+static __attribute__((noinline)) void hvx_tensor_add_row_f32_f32(void * restrict dst_ptr, const void * restrict bias_ptr, uint32_t n) {
+    float * restrict       d = (float *) dst_ptr;
+    const float * restrict b = (const float *) bias_ptr;
+    uint32_t c = 0;
+    for (; c + 32 <= n; c += 32) {
+        hvx_vmemu(d + c) = hvx_vec_add_f32_f32(hvx_vmemu(d + c), hvx_vmemu(b + c));
+    }
+    if (c < n) {
+        const uint32_t rem = n - c;
+        HVX_Vector v_sum = hvx_vec_add_f32_f32(hvx_vmemu(d + c), hvx_vmemu(b + c));
+        hvx_vec_store_u(d + c, rem * sizeof(float), v_sum);
+    }
+}
+
+static __attribute__((noinline)) void hvx_tensor_add_row_f32_f16(void * restrict dst_ptr, const void * restrict bias_ptr, uint32_t n) {
+    float * restrict        d = (float *) dst_ptr;
+    const __fp16 * restrict b = (const __fp16 *) bias_ptr;
+    uint32_t c = 0;
+    for (; c + 64 <= n; c += 64) {
+        HVX_VectorPair vp_b = hvx_vec_f16_to_f32(hvx_vmemu(b + c));
+        hvx_vmemu(d + c +  0) = hvx_vec_add_f32_f32(hvx_vmemu(d + c +  0), Q6_V_lo_W(vp_b));
+        hvx_vmemu(d + c + 32) = hvx_vec_add_f32_f32(hvx_vmemu(d + c + 32), Q6_V_hi_W(vp_b));
+    }
+    if (c + 32 <= n) {
+        HVX_Vector v_b = Q6_V_lo_W(hvx_vec_f16_to_f32(hvx_vmemu(b + c)));
+        hvx_vmemu(d + c) = hvx_vec_add_f32_f32(hvx_vmemu(d + c), v_b);
+        c += 32;
+    }
+    if (c < n) {
+        const uint32_t rem = n - c;
+        HVX_Vector v_b = Q6_V_lo_W(hvx_vec_f16_to_f32(hvx_vmemu(b + c)));
+        HVX_Vector v_sum = hvx_vec_add_f32_f32(hvx_vmemu(d + c), v_b);
+        hvx_vec_store_u(d + c, rem * sizeof(float), v_sum);
+    }
+}
+
+static __attribute__((noinline)) void hvx_tensor_add_row_f16_f32(void * restrict dst_ptr, const void * restrict bias_ptr, uint32_t n) {
+    __fp16 * restrict      d = (__fp16 *) dst_ptr;
+    const float * restrict b = (const float *) bias_ptr;
+    const HVX_Vector max_f16 = hvx_vec_splat_f32(65504.0f);
+    const HVX_Vector min_f16 = hvx_vec_splat_f32(-65504.0f);
+    uint32_t c = 0;
+    for (; c + 64 <= n; c += 64) {
+        HVX_VectorPair vp_d = hvx_vec_f16_to_f32(hvx_vmemu(d + c));
+        HVX_Vector v0 = hvx_vec_add_f32_f32(Q6_V_lo_W(vp_d), hvx_vmemu(b + c +  0));
+        HVX_Vector v1 = hvx_vec_add_f32_f32(Q6_V_hi_W(vp_d), hvx_vmemu(b + c + 32));
+        v0 = Q6_Vsf_vmax_VsfVsf(min_f16, Q6_Vsf_vmin_VsfVsf(max_f16, v0));
+        v1 = Q6_Vsf_vmax_VsfVsf(min_f16, Q6_Vsf_vmin_VsfVsf(max_f16, v1));
+        hvx_vmemu(d + c) = hvx_vec_f32_to_f16(v0, v1);
+    }
+    if (c < n) {
+        const uint32_t rem = n - c;
+        HVX_VectorPair vp_d = hvx_vec_f16_to_f32(hvx_vmemu(d + c));
+        HVX_Vector v0 = hvx_vec_add_f32_f32(Q6_V_lo_W(vp_d), hvx_vmemu(b + c));
+        HVX_Vector v1 = (rem > 32) ? hvx_vec_add_f32_f32(Q6_V_hi_W(vp_d), hvx_vmemu(b + c + 32)) : Q6_V_vzero();
+        v0 = Q6_Vsf_vmax_VsfVsf(min_f16, Q6_Vsf_vmin_VsfVsf(max_f16, v0));
+        v1 = Q6_Vsf_vmax_VsfVsf(min_f16, Q6_Vsf_vmin_VsfVsf(max_f16, v1));
+        hvx_vec_store_u(d + c, rem * sizeof(__fp16), hvx_vec_f32_to_f16(v0, v1));
+    }
+}
+
+static __attribute__((noinline)) void hvx_tensor_add_row_f16_f16(void * restrict dst_ptr, const void * restrict bias_ptr, uint32_t n) {
+    __fp16 * restrict        d = (__fp16 *) dst_ptr;
+    const __fp16 * restrict  b = (const __fp16 *) bias_ptr;
+    const HVX_Vector max_f16 = hvx_vec_splat_f32(65504.0f);
+    const HVX_Vector min_f16 = hvx_vec_splat_f32(-65504.0f);
+    uint32_t c = 0;
+    for (; c + 64 <= n; c += 64) {
+        HVX_VectorPair vp_d = hvx_vec_f16_to_f32(hvx_vmemu(d + c));
+        HVX_VectorPair vp_b = hvx_vec_f16_to_f32(hvx_vmemu(b + c));
+        HVX_Vector v0 = hvx_vec_add_f32_f32(Q6_V_lo_W(vp_d), Q6_V_lo_W(vp_b));
+        HVX_Vector v1 = hvx_vec_add_f32_f32(Q6_V_hi_W(vp_d), Q6_V_hi_W(vp_b));
+        v0 = Q6_Vsf_vmax_VsfVsf(min_f16, Q6_Vsf_vmin_VsfVsf(max_f16, v0));
+        v1 = Q6_Vsf_vmax_VsfVsf(min_f16, Q6_Vsf_vmin_VsfVsf(max_f16, v1));
+        hvx_vmemu(d + c) = hvx_vec_f32_to_f16(v0, v1);
+    }
+    if (c < n) {
+        const uint32_t rem = n - c;
+        HVX_VectorPair vp_d = hvx_vec_f16_to_f32(hvx_vmemu(d + c));
+        HVX_VectorPair vp_b = hvx_vec_f16_to_f32(hvx_vmemu(b + c));
+        HVX_Vector v0 = hvx_vec_add_f32_f32(Q6_V_lo_W(vp_d), Q6_V_lo_W(vp_b));
+        HVX_Vector v1 = (rem > 32) ? hvx_vec_add_f32_f32(Q6_V_hi_W(vp_d), Q6_V_hi_W(vp_b)) : Q6_V_vzero();
+        v0 = Q6_Vsf_vmax_VsfVsf(min_f16, Q6_Vsf_vmin_VsfVsf(max_f16, v0));
+        v1 = Q6_Vsf_vmax_VsfVsf(min_f16, Q6_Vsf_vmin_VsfVsf(max_f16, v1));
+        hvx_vec_store_u(d + c, rem * sizeof(__fp16), hvx_vec_f32_to_f16(v0, v1));
+    }
+}
+
+static inline hvx_tensor_add_row_fn_t resolve_hvx_tensor_add_row_fn(uint32_t dst_elem_size, uint32_t bias_elem_size) {
+    if (dst_elem_size == sizeof(__fp16)) {
+        return (bias_elem_size == sizeof(__fp16)) ? hvx_tensor_add_row_f16_f16 : hvx_tensor_add_row_f16_f32;
+    }
+    return (bias_elem_size == sizeof(__fp16)) ? hvx_tensor_add_row_f32_f16 : hvx_tensor_add_row_f32_f32;
+}
 
 static inline void hvx_tensor_add_f32_grid(
     const struct htp_tensor * restrict dst,
@@ -566,57 +672,30 @@ static inline void hvx_tensor_add_f32_grid(
     const uint32_t nb1 = dst->nb[1];
     const uint32_t dst_elem_size  = (dst->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
     const uint32_t bias_elem_size = (bias->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
+    const hvx_tensor_add_row_fn_t add_row_fn = resolve_hvx_tensor_add_row_fn(dst_elem_size, bias_elem_size);
+    const uint32_t n_cols = end_col - start_col;
+    const size_t dst_col_off  = (size_t) start_col * dst_elem_size;
+    const size_t bias_col_off = (size_t) start_col * bias_elem_size;
 
     const uint32_t ne11 = dst->ne[1];
     const uint32_t ne12 = dst->ne[2];
     const uint32_t ne11_12 = ne11 * ne12;
 
-    const bool is_broadcast1 = (bias->ne[1] == 1);
-    const bool is_broadcast2 = (bias->ne[2] == 1);
-    const bool is_broadcast3 = (bias->ne[3] == 1);
-
-    const HVX_Vector max_f16 = hvx_vec_splat_f32(65504.0f);
-    const HVX_Vector min_f16 = hvx_vec_splat_f32(-65504.0f);
+    const size_t bias_nb1 = (bias->ne[1] == 1) ? 0 : bias->nb[1];
+    const size_t bias_nb2 = (bias->ne[2] == 1) ? 0 : bias->nb[2];
+    const size_t bias_nb3 = (bias->ne[3] == 1) ? 0 : bias->nb[3];
 
     for (uint32_t r = start_row; r < end_row; r++) {
         uint32_t i13 = fastdiv(r, div_ne11_12);
         uint32_t i12 = fastdiv(r - i13 * ne11_12, div_ne11);
         uint32_t i11 = r - i13 * ne11_12 - i12 * ne11;
 
-        uint8_t * dst_row = (uint8_t *) dst->data +
-                            (size_t) i11 * nb1 + (size_t) i12 * dst->nb[2] + (size_t) i13 * dst->nb[3];
+        uint8_t * dst_ptr = (uint8_t *) dst->data +
+                            (size_t) i11 * nb1 + (size_t) i12 * dst->nb[2] + (size_t) i13 * dst->nb[3] + dst_col_off;
+        const uint8_t * bias_ptr = (const uint8_t *) bias->data +
+                                   (size_t) i11 * bias_nb1 + (size_t) i12 * bias_nb2 + (size_t) i13 * bias_nb3 + bias_col_off;
 
-        uint32_t i23 = is_broadcast3 ? 0 : i13;
-        uint32_t i22 = is_broadcast2 ? 0 : i12;
-        uint32_t i21 = is_broadcast1 ? 0 : i11;
-
-        const uint8_t * bias_row = (const uint8_t *) bias->data +
-                                   (size_t) i21 * bias->nb[1] + (size_t) i22 * bias->nb[2] + (size_t) i23 * bias->nb[3];
-
-        uint8_t * dst_ptr = dst_row + (size_t) start_col * dst_elem_size;
-        const uint8_t * bias_ptr = bias_row + (size_t) start_col * bias_elem_size;
-        int remaining = end_col - start_col;
-        while (remaining > 0) {
-            uint32_t count = (remaining >= 32) ? 32 : (uint32_t) remaining;
-            HVX_Vector v_out = (dst_elem_size == sizeof(__fp16))
-                ? Q6_V_lo_W(hvx_vec_f16_to_f32(hvx_vmemu(dst_ptr)))
-                : hvx_vmemu(dst_ptr);
-            HVX_Vector v_z = (bias_elem_size == sizeof(__fp16))
-                ? Q6_V_lo_W(hvx_vec_f16_to_f32(hvx_vmemu(bias_ptr)))
-                : hvx_vmemu(bias_ptr);
-            HVX_Vector v_sum = hvx_vec_add_f32_f32(v_out, v_z);
-            if (dst_elem_size == sizeof(__fp16)) {
-                v_sum = Q6_Vsf_vmax_VsfVsf(min_f16, Q6_Vsf_vmin_VsfVsf(max_f16, v_sum));
-                hvx_vec_store_u(dst_ptr, count * sizeof(__fp16), hvx_vec_f32_to_f16(v_sum, Q6_V_vzero()));
-            } else if (count == 32) {
-                hvx_vmemu(dst_ptr) = v_sum;
-            } else {
-                hvx_vec_store_u(dst_ptr, count * sizeof(float), v_sum);
-            }
-            dst_ptr += count * dst_elem_size;
-            bias_ptr += count * bias_elem_size;
-            remaining -= (int) count;
-        }
+        add_row_fn(dst_ptr, bias_ptr, n_cols);
     }
 }
 
