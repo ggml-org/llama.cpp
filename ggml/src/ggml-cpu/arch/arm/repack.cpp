@@ -67,9 +67,7 @@ static inline int8x16_t ggml_q1_0_unpack_pair(uint8_t bits0, uint8_t bits1) {
 #endif
 
 #if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
-// Scalar decode of Q4_K/Q5_K 6-bit scales and mins for 8 interleaved columns into byte arrays.
-// Kept scalar on purpose: the integer pipes are idle in these kernels, and the consumer uses
-// extending loads (ld1b -> s32) so the widening happens in the load pipe, not the vector pipes.
+// Helper for decoding scales and mins of Q4_K and Q5_K block formats, to utilise the scalar  pipelines 
 static inline void decode_q_Kx8_6bit_scales_scalar(const uint8_t * GGML_RESTRICT scales_in,
                                                    uint8_t * GGML_RESTRICT       out_mins,
                                                    uint8_t * GGML_RESTRICT       out_scales) {
@@ -86,13 +84,13 @@ static inline void decode_q_Kx8_6bit_scales_scalar(const uint8_t * GGML_RESTRICT
     memcpy(out_scales, scales, 8);
 }
 
-// Widening load: 4 (or VL/32) f16 values -> f32 lanes
+// Widening operation
 static inline svfloat32_t load_f16_as_f32_sve(const __fp16 * p, svbool_t pg32) {
     const svuint32_t bits = svld1uh_u32(pg32, (const uint16_t *) p);
     return svcvt_f32_f16_x(pg32, svreinterpret_f16_u32(bits));
 }
 
-// Broadcast 8 int8 values to every 64-bit lane
+// Duplicating operation
 static inline svint8_t load_dup_q8x8_sve(const int8_t * p) {
     uint64_t bits;
     memcpy(&bits, p, sizeof(bits));
@@ -866,7 +864,7 @@ void ggml_gemv_q4_K_8x8_q8_K(int                        n,
         const block_q8_K * GGML_RESTRICT q8_ptr = (const block_q8_K *) vy;
         const int vl_words = (int) svcntw();
 
-        if (vl_words == 4) {  // 128-bit SVE: 1x8 tile = 2 x 4 f32
+        if (vl_words == 4) {  // 128-bit SVE
             const svbool_t  pg8  = svptrue_b8();
             const svbool_t  pg16 = svptrue_b16();
             const svbool_t  pg32 = svptrue_b32();
@@ -890,8 +888,6 @@ void ggml_gemv_q4_K_8x8_q8_K(int                        n,
                     const svfloat32_t sb_min_0   = svmul_f32_x(pg32, q4_dmin_0, q8_d);
                     const svfloat32_t sb_min_1   = svmul_f32_x(pg32, q4_dmin_1, q8_d);
 
-                    // Integer accumulators for the whole superblock; converted to f32 once per block
-                    // instead of once per subblock. Max |value| ~ 15*127*32*63*8 = 3.1e7, fits in int32.
                     svint32_t acc_i_0    = svdup_n_s32(0);  // cols 0-3
                     svint32_t acc_i_1    = svdup_n_s32(0);  // cols 4-7
                     svint32_t bias_acc_0 = svdup_n_s32(0);
@@ -907,8 +903,6 @@ void ggml_gemv_q4_K_8x8_q8_K(int                        n,
                     }
 
                     for (int sb = 0; sb < QK_K / 64; sb++) {
-                        // Scalar decode to bytes; the extending loads widen u8 -> s32 in the load pipe,
-                        // so no unpack ops are spent on the (saturated) vector pipes
                         uint8_t q4sb_min_0[8], q4sb_min_1[8], q4sb_scale_0[8], q4sb_scale_1[8];
                         decode_q_Kx8_6bit_scales_scalar(q4_ptr[b].scales + sb * 24,      q4sb_min_0, q4sb_scale_0);
                         decode_q_Kx8_6bit_scales_scalar(q4_ptr[b].scales + sb * 24 + 12, q4sb_min_1, q4sb_scale_1);
@@ -989,10 +983,9 @@ void ggml_gemv_q4_K_8x8_q8_K(int                        n,
                     const svfloat32_t sb_scale = svmul_f32_x(pg32, q4_d, q8_d);
                     const svfloat32_t sb_min   = svmul_f32_x(pg32, q4_dmin, q8_d);
 
-                    svint32_t acc_i    = svdup_n_s32(0);  // int32 superblock accumulator (see 128-bit path)
+                    svint32_t acc_i    = svdup_n_s32(0);
                     svint32_t bias_acc = svdup_n_s32(0);
 
-                    // All 16 bsums in one register; self-fold to 8 per-subblock sums
                     int16_t bsums_arr[8];
                     {
                         const svint16_t bsums16 = svld1_s16(pg16, q8_ptr[b].bsums);
