@@ -1511,27 +1511,27 @@ static bool htp_kparams_solve_unary_impl(
 
     kparams->n_hvx = n_hvx;
 
-    const bool has_weight   = (op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD);
-    const bool has_src2     = (op == HTP_OP_RMS_NORM_MUL_ADD);
-    const bool is_row_bcast = has_weight && (src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1);
-    bool broadcast_weight   = false;
+    const bool has_src1_mul = (op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD);
+    const bool has_src2_add = (op == HTP_OP_RMS_NORM_MUL_ADD);
+    const bool is_row_bcast = has_src1_mul && (src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1);
+    bool broadcast_src1     = false;
     if (op == HTP_OP_RMS_NORM_MUL) {
         const bool is_dim1_bcast = (src1->ne[1] == src0->ne[1] && src1->ne[2] == 1 && src1->ne[3] == 1 && (src0->ne[2] > 1 || src0->ne[3] > 1));
         if (!is_row_bcast && !is_dim1_bcast && !ggml_are_same_shape(src0, src1)) {
             return false;
         }
-        broadcast_weight = is_row_bcast || is_dim1_bcast;
+        broadcast_src1 = is_row_bcast || is_dim1_bcast;
     } else if (op == HTP_OP_RMS_NORM_MUL_ADD) {
         if (!is_row_bcast && !(src1->ne[1] == src0->ne[1] && src1->ne[2] == 1 && src1->ne[3] == 1)) {
             return false;
         }
-        broadcast_weight = true;
+        broadcast_src1 = true;
     }
-    const uint32_t weight_nrows = broadcast_weight ? (uint32_t) src1->ne[1] : 0;
-    kparams->broadcast_weight   = broadcast_weight;
+    const uint32_t src1_nrows = broadcast_src1 ? (uint32_t) src1->ne[1] : 0;
+    kparams->broadcast_src1   = broadcast_src1;
 
-    const bool     src0_contig        = ggml_is_contiguous_1(src0) && (!has_src2 || ggml_is_contiguous_1(src2));
-    const bool     src1_contig        = (has_weight && !broadcast_weight) ? ggml_is_contiguous_1(src1) : true;
+    const bool     src0_contig        = ggml_is_contiguous_1(src0) && (!has_src2_add || ggml_is_contiguous_1(src2));
+    const bool     src1_contig        = (has_src1_mul && !broadcast_src1) ? ggml_is_contiguous_1(src1) : true;
     const uint32_t src0_nrows_per_hvx = (src0_nrows + n_hvx - 1) / n_hvx;
     const uint32_t min_block_rows     = (uint32_t) (std::max<size_t>(1, 2048 / dst_data_row_size));
     uint32_t       max_block          = (src0_contig && src1_contig) ? src0_nrows : (uint32_t) src0->ne[1];
@@ -1542,16 +1542,16 @@ static bool htp_kparams_solve_unary_impl(
     kparams->src0_contig = src0_contig ? 1 : 0;
     kparams->src1_contig = src1_contig ? 1 : 0;
 
-    const size_t src1_elem_size = has_weight ? ggml_type_size(src1->type) : sizeof(float);
-    const size_t src2_elem_size = has_src2   ? ggml_type_size(src2->type) : sizeof(float);
+    const size_t src1_elem_size = has_src1_mul ? ggml_type_size(src1->type) : sizeof(float);
+    const size_t src2_elem_size = has_src2_add ? ggml_type_size(src2->type) : sizeof(float);
 
     struct htp_unary_vtcm_layout L;
     uint32_t col_tile            = 0;
     uint32_t vtcm_row_per_hvx    = 0;
 
     htp_unary_solve_layout(&L, op, src0->ne[0], dst->ne[0],
-                           has_weight ? src1->ne[0] : 0,
-                           max_block, broadcast_weight, weight_nrows, n_hvx, vtcm_size,
+                           has_src1_mul ? src1->ne[0] : 0,
+                           max_block, broadcast_src1, src1_nrows, n_hvx, vtcm_size,
                            src0_elem_size, dst_elem_size, src1_elem_size, src2_elem_size,
                            &col_tile, &vtcm_row_per_hvx);
 
