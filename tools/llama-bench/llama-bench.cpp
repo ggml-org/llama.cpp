@@ -2379,6 +2379,18 @@ int llama_bench(int argc, char ** argv) {
         }
 
         llama_context * ctx = llama_init_from_model(lmodel, cparams);
+
+        // a model without memory reads a prompt in one ubatch
+        const int n_tokens_max = std::max(inst.n_prompt, inst.n_depth);
+        const bool resize = ctx != NULL && !llama_get_memory(ctx) && (int) llama_n_ubatch(ctx) < n_tokens_max;
+        if (resize) {
+            fprintf(stderr, "%s: the model has no memory, setting n_batch = n_ubatch = %d\n", __func__, n_tokens_max);
+            llama_free(ctx);
+            cparams.n_batch  = n_tokens_max;
+            cparams.n_ubatch = n_tokens_max;
+            ctx = llama_init_from_model(lmodel, cparams);
+        }
+
         if (ctx == NULL) {
             fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
             llama_model_free(lmodel);
@@ -2386,6 +2398,10 @@ int llama_bench(int argc, char ** argv) {
         }
 
         test t(inst, lmodel, ctx);
+        if (resize) {
+            t.n_batch  = n_tokens_max;
+            t.n_ubatch = n_tokens_max;
+        }
 
         llama_memory_clear(llama_get_memory(ctx), false);
 
