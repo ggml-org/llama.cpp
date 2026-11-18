@@ -67,6 +67,27 @@ shows in the app at once and the app keeps no copy of a component or a token. Fo
 
 ## Development
 
-- `npm run dev`: a small SvelteKit check page (`src/routes`)
+- `npm run storybook`: the package's Storybook, with a story for everything it holds; the stories run as tests in
+  `npm test`, and Llama Chat's Storybook (in `ui/apps/chat`) shows them under Llama UI
+- `npm run dev`: Storybook and a small SvelteKit check page (`src/routes`)
 - `npm run check`: svelte-check
 - `npm run prepack`: build the library into `dist/` and run publint
+- `node scripts/npm-version-check.mjs`: what the release workflow would make of this folder, against the real registry
+
+## Releases
+
+The package is published from here by
+[`ui-lib-publish.yml`](../../../.github/workflows/ui-lib-publish.yml), which runs when a commit reaches `master` with
+`ui/lib/ui` in it. The version in `package.json` is the release: land a bump together with the change that should ship
+and the workflow type-checks, builds, lints and publishes that version to npm, with a provenance attestation. A library
+change that carries no bump publishes nothing and leaves a warning on the run.
+
+- `npm version <patch|minor> --no-git-tag-version` and commit: it moves `package.json` and both version fields of the
+  lockfile together.
+- Below `1.0`: a breaking change bumps the minor, a feature bumps the patch.
+- A version with a prerelease suffix (`0.5.0-beta.1`) publishes under the `next` tag, so `latest` stays a stable build.
+- Publishing needs no token in the repo: the job trades its OIDC identity for one, so the only place to look when a
+  publish is refused is the package's trusted-publisher settings on npm. A publisher names a workflow that must already
+  exist under `.github/workflows`, so it is added after this workflow lands, and it allows staged publishing until
+  `npm publish` is permitted for it. Provenance is generated without asking, and only on a GitHub-hosted runner: a
+  self-hosted one cannot publish this way.
