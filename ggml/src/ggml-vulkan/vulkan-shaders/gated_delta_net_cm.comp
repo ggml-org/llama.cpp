@@ -9,14 +9,10 @@
 #extension GL_KHR_shader_subgroup_arithmetic : enable
 #extension GL_KHR_shader_subgroup_shuffle : enable
 #extension GL_KHR_cooperative_matrix : enable
-#ifdef COOPMAT2
-#extension GL_NV_cooperative_matrix2 : enable
-#else
 #extension GL_EXT_cooperative_matrix_maintenance1 : enable
-#endif
 
 // Chunked gated-delta-net prefill (non-KDA, S_v == D == 128, K == 1), port of CUDA PR 29353.
-// State in register tiles, mirrored per value pass ([D x VH]) for the projections.
+// State in register tiles, mirrored ([D x V]) for the projections.
 // bf16 hi/lo 3x products for ~fp32 accuracy.
 #define OPD bfloat16_t
 
@@ -27,9 +23,6 @@
 #ifndef V
 #define V  64          // value columns per workgroup block (V=128 = whole head)
 #endif
-#ifndef VH
-#define VH V           // value columns per pass
-#endif
 #define NSUB 16        // subgroups per workgroup
 layout(constant_id = 0) const uint WGS = NSUB * 32;   // NSUB * subgroup size
 #define KT 16          // K-tile width for deep (K=D) matmuls (bf16 cm: m16n16k16 only)
@@ -37,19 +30,11 @@ layout(constant_id = 0) const uint WGS = NSUB * 32;   // NSUB * subgroup size
 #define LDP (D + PAD)
 
 // GMEM_MIRROR: state mirror in a gmem scratch buffer (too big for shared)
-// MERGE_QSKS runs qs=Q@S and ks=K@S on one subgroup (halves state reads) - a win on
-// the memory/issue-bound coopmat1 (RDNA) path. The coopmat2 (NVIDIA) path is mma-
-// product-bound, so it splits them across subgroups to keep the mma chain short.
-#if !defined(COOPMAT2)
-#define MERGE_QSKS
-#endif
 
 #define STATE_TILES ((D / TM) * (V / TN))
 #define PER_WARP    (STATE_TILES / NSUB)
 #define VT          (V / TN)   // value tiles
 #define CT          (C / TN)   // C-column tiles (gram/pmat halves)
-#define NH          (V / VH)   // value passes per chunk
-#define VTH         (VH / TN)  // value tiles per pass
 const uint NQK = C * D / WGS;
 
 #define TILE_R(ti) (((ti) / VT) * TM)
@@ -85,10 +70,10 @@ layout(binding = 7) coherent  buffer MirrorBuf { OPD data_mirror[]; };
 shared OPD sh_qh[C * LDP], sh_ql[C * LDP];   // q*scale hi/lo (D padded)
 shared OPD sh_kh[C * LDP], sh_kl[C * LDP];   // k hi/lo (D padded)
 #ifndef GMEM_MIRROR
-shared OPD sh_sh[LDP * VH], sh_sl[LDP * VH];   // state mirror [D x VH] column-major (D padded)
+shared OPD sh_sh[LDP * V], sh_sl[LDP * V];   // state mirror [D x V] column-major (D padded)
 #endif
-shared OPD sh_dh[C * VH], sh_dl[C * VH];   // delta (pre-inv) / delta2 [C x VH] row-major
-shared OPD sh_soh[C * VH], sh_sol[C * VH]; // solved [C x VH] row-major
+shared OPD sh_dh[C * V], sh_dl[C * V];   // delta (pre-inv) / delta2 [C x V] row-major
+shared OPD sh_soh[C * V], sh_sol[C * V]; // solved [C x V] row-major
 shared OPD sh_ph[C * C], sh_pl[C * C];   // decayed P
 shared OPD sh_ih[C * C], sh_il[C * C];   // (I + L)^-1
 shared float sh_lower[C * C];            // strictly-lower decayed L
@@ -102,11 +87,6 @@ shared float sh_prefix[C], sh_beta[C], sh_ep[C], sh_carry[C];
 #define ROW  gl_CooperativeMatrixLayoutRowMajor
 #define COL  gl_CooperativeMatrixLayoutColumnMajor
 
-#ifdef COOPMAT2
-#define coopMatPerElement coopMatPerElementNV
-#else
-#define coopMatPerElement coopMatPerElementEXT
-#endif
 
 // 3x bf16 product accumulated into acc (hi/lo split for ~fp32 accuracy).
 #define PRODUCT(acc, ah, al, bh, bl) \
@@ -133,8 +113,8 @@ void split(const float x, out OPD h, out OPD l) {
 #else
 #define STORE_MIRROR(m, off) SPLIT_STORE(m, sh_sh, off, sh_sl, off, LDP, COL)
 #endif
-#define STORE_DELTA(m, off)  SPLIT_STORE(m, sh_dh, off, sh_dl, off, VH, ROW)
-#define STORE_SOLVED(m, off) SPLIT_STORE(m, sh_soh, off, sh_sol, off, VH, ROW)
+#define STORE_DELTA(m, off)  SPLIT_STORE(m, sh_dh, off, sh_dl, off, V, ROW)
+#define STORE_SOLVED(m, off) SPLIT_STORE(m, sh_soh, off, sh_sol, off, V, ROW)
 #else
 // split per element
 #ifdef GMEM_MIRROR
@@ -143,30 +123,30 @@ float SplitColS(const in uint32_t r, const in uint32_t c, const in float elem, c
     split(elem, data_mirror[idx], data_mirror[idx + LDP * V]);
     return elem;
 }
-#define STORE_MIRROR(m, off) coopMatPerElement(m, m, SplitColS, mir_h + off)
+#define STORE_MIRROR(m, off) coopMatPerElementEXT(m, m, SplitColS, mir_h + off)
 #else
 float SplitColS(const in uint32_t r, const in uint32_t c, const in float elem, const in uint32_t off) {
     const uint idx = off + c * LDP + r;
     split(elem, sh_sh[idx], sh_sl[idx]);
     return elem;
 }
-#define STORE_MIRROR(m, off) coopMatPerElement(m, m, SplitColS, off)
+#define STORE_MIRROR(m, off) coopMatPerElementEXT(m, m, SplitColS, off)
 #endif
 
 float SplitRowD(const in uint32_t r, const in uint32_t c, const in float elem, const in uint32_t off) {
-    const uint idx = off + r * VH + c;
+    const uint idx = off + r * V + c;
     split(elem, sh_dh[idx], sh_dl[idx]);
     return elem;
 }
 
 float SplitRowSO(const in uint32_t r, const in uint32_t c, const in float elem, const in uint32_t off) {
-    const uint idx = off + r * VH + c;
+    const uint idx = off + r * V + c;
     split(elem, sh_soh[idx], sh_sol[idx]);
     return elem;
 }
 
-#define STORE_DELTA(m, off)  coopMatPerElement(m, m, SplitRowD, off)
-#define STORE_SOLVED(m, off) coopMatPerElement(m, m, SplitRowSO, off)
+#define STORE_DELTA(m, off)  coopMatPerElementEXT(m, m, SplitRowD, off)
+#define STORE_SOLVED(m, off) coopMatPerElementEXT(m, m, SplitRowSO, off)
 #endif
 
 #ifdef GMEM_MIRROR
@@ -278,9 +258,9 @@ void gram_pmat(const uint sg) {
         PRODUCT(x, ah, al, bh, bl);
     }
     if (gram) {
-        coopMatPerElement(x, x, StoreLower, c_o);
+        coopMatPerElementEXT(x, x, StoreLower, c_o);
     } else {
-        coopMatPerElement(x, x, StorePmat, c_o);
+        coopMatPerElementEXT(x, x, StorePmat, c_o);
     }
 }
 
@@ -334,9 +314,6 @@ void main() {
         coopMatLoad(state[j], data_state, state_base + (v0 + TILE_C(ti)) * D + TILE_R(ti), D, COL);
     }
 
-    // value pass owning this subgroup's state tiles
-    const uint sg_pass = (sg % VT) / VTH;
-
     float qreg[NQK], kreg[NQK], greg, breg;
     prefetch(0u, iq1, iq3, seq_id, head_id, qreg, kreg, greg, breg);
 
@@ -360,159 +337,101 @@ void main() {
             split(kreg[j], sh_kh[pi], sh_kl[pi]);
         }
 
-        float cdecay;
-#if NH > 1
-        barrier();
+        [[unroll]] for (uint j = 0; j < PER_WARP; j++) {
+            const uint ti = sg + j * NSUB;
+            STORE_MIRROR(state[j], TILE_C(ti) * LDP + TILE_R(ti));
+        }
+        MIRROR_BARRIER();
+
         prefetch(t0 + C, iq1, iq3, seq_id, head_id, qreg, kreg, greg, breg);
-        cdecay = carry_decay(valid);
+        const float cdecay = carry_decay(valid);
+
+        // qs -> base_r and ks -> delta on sg2..2+VT-1
+        coopmat<float, SG, C, TN, MACC> base_r = coopmat<float, SG, C, TN, MACC>(0);
         if (sg < 2 * CT) {
             gram_pmat(sg);
+        } else if (sg - 2 * CT < VT) {
+            const uint c_o = (sg - 2 * CT) * TN;
+            const uint v_base = seq_id * p.sv3 + head_id * p.sv1 + v0 + c_o + t0 * p.sv2;
+            coopmat<float, SG, C, TN, MACC> vmat = coopmat<float, SG, C, TN, MACC>(0);
+            coopMatPerElementEXT(vmat, vmat, LoadV, v_base, p.sv2, valid);
+            coopmat<float, SG, C, TN, MACC> qs = coopmat<float, SG, C, TN, MACC>(0);
+            coopmat<float, SG, C, TN, MACC> ks = coopmat<float, SG, C, TN, MACC>(0);
+            [[unroll]] for (uint kk = 0; kk < D; kk += KT) {
+                coopmat<OPD, SG, C, KT, MUA> qh, ql, kh, kl;
+                coopMatLoad(qh, sh_qh, kk, LDP, ROW);
+                coopMatLoad(ql, sh_ql, kk, LDP, ROW);
+                coopMatLoad(kh, sh_kh, kk, LDP, ROW);
+                coopMatLoad(kl, sh_kl, kk, LDP, ROW);
+                coopmat<OPD, SG, KT, TN, MUB> sbh, sbl;
+                LOAD_S(sbh, sbl, c_o * LDP + kk);
+                PRODUCT(qs, qh, ql, sbh, sbl);
+                PRODUCT(ks, kh, kl, sbh, sbl);
+            }
+            coopMatPerElementEXT(base_r, qs, ApplyExpPrefix);
+            coopmat<float, SG, C, TN, MACC> delta;
+            coopMatPerElementEXT(delta, ks, ComputeDeltaV, vmat);
+            STORE_DELTA(delta, c_o);
         }
         barrier();
+
         invert(sg);
-#endif
-        [[unroll]] for (uint hv = 0; hv < NH; hv++) {
-            const uint voff = hv * VH;
+        barrier();
 
-            if (sg_pass == hv) {
-                [[unroll]] for (uint j = 0; j < PER_WARP; j++) {
-                    const uint ti = sg + j * NSUB;
-                    STORE_MIRROR(state[j], (TILE_C(ti) - voff) * LDP + TILE_R(ti));
-                }
-            }
-            MIRROR_BARRIER();
-
-#if NH == 1
-            prefetch(t0 + C, iq1, iq3, seq_id, head_id, qreg, kreg, greg, breg);
-            cdecay = carry_decay(valid);
-#endif
-
-            // qs -> base_r on sg2..2+VTH-1; ks -> delta on the same (MERGE_QSKS) or remaining subgroups
-            coopmat<float, SG, C, TN, MACC> base_r = coopmat<float, SG, C, TN, MACC>(0);
-            if (sg < 2 * CT) {
-#if NH == 1
-                gram_pmat(sg);
-#endif
-            } else if (sg - 2 * CT < VTH) {
-                const uint c_o = (sg - 2 * CT) * TN;
-#ifdef MERGE_QSKS
-                const uint v_base = seq_id * p.sv3 + head_id * p.sv1 + v0 + voff + c_o + t0 * p.sv2;
-                coopmat<float, SG, C, TN, MACC> vmat = coopmat<float, SG, C, TN, MACC>(0);
-                coopMatPerElement(vmat, vmat, LoadV, v_base, p.sv2, valid);
-                coopmat<float, SG, C, TN, MACC> qs = coopmat<float, SG, C, TN, MACC>(0);
-                coopmat<float, SG, C, TN, MACC> ks = coopmat<float, SG, C, TN, MACC>(0);
-                [[unroll]] for (uint kk = 0; kk < D; kk += KT) {
-                    coopmat<OPD, SG, C, KT, MUA> qh, ql, kh, kl;
-                    coopMatLoad(qh, sh_qh, kk, LDP, ROW);
-                    coopMatLoad(ql, sh_ql, kk, LDP, ROW);
-                    coopMatLoad(kh, sh_kh, kk, LDP, ROW);
-                    coopMatLoad(kl, sh_kl, kk, LDP, ROW);
-                    coopmat<OPD, SG, KT, TN, MUB> sbh, sbl;
-                    LOAD_S(sbh, sbl, c_o * LDP + kk);
-                    PRODUCT(qs, qh, ql, sbh, sbl);
-                    PRODUCT(ks, kh, kl, sbh, sbl);
-                }
-                coopMatPerElement(base_r, qs, ApplyExpPrefix);
-                coopmat<float, SG, C, TN, MACC> delta;
-                coopMatPerElement(delta, ks, ComputeDeltaV, vmat);
-                STORE_DELTA(delta, c_o);
-#else
-                coopmat<float, SG, C, TN, MACC> qs = coopmat<float, SG, C, TN, MACC>(0);
-                [[unroll]] for (uint kk = 0; kk < D; kk += KT) {
-                    coopmat<OPD, SG, C, KT, MUA> qh, ql;
-                    coopMatLoad(qh, sh_qh, kk, LDP, ROW);
-                    coopMatLoad(ql, sh_ql, kk, LDP, ROW);
-                    coopmat<OPD, SG, KT, TN, MUB> sbh, sbl;
-                    LOAD_S(sbh, sbl, c_o * LDP + kk);
-                    PRODUCT(qs, qh, ql, sbh, sbl);
-                }
-                coopMatPerElement(base_r, qs, ApplyExpPrefix);
-            } else {
-                const uint ks_nsg = NSUB - (2 * CT + VTH);
-                for (uint ti = sg - (2 * CT + VTH); ti < VTH; ti += ks_nsg) {
-                    const uint c_o = ti * TN;
-                    const uint v_base = seq_id * p.sv3 + head_id * p.sv1 + v0 + voff + c_o + t0 * p.sv2;
-                    coopmat<float, SG, C, TN, MACC> vmat = coopmat<float, SG, C, TN, MACC>(0);
-                    coopMatPerElement(vmat, vmat, LoadV, v_base, p.sv2, valid);
-                    coopmat<float, SG, C, TN, MACC> ks = coopmat<float, SG, C, TN, MACC>(0);
-                    [[unroll]] for (uint kk = 0; kk < D; kk += KT) {
-                        coopmat<OPD, SG, C, KT, MUA> kh, kl;
-                        coopMatLoad(kh, sh_kh, kk, LDP, ROW);
-                        coopMatLoad(kl, sh_kl, kk, LDP, ROW);
-                        coopmat<OPD, SG, KT, TN, MUB> sbh, sbl;
-                        LOAD_S(sbh, sbl, c_o * LDP + kk);
-                        PRODUCT(ks, kh, kl, sbh, sbl);
-                    }
-                    coopmat<float, SG, C, TN, MACC> delta;
-                    coopMatPerElement(delta, ks, ComputeDeltaV, vmat);
-                    STORE_DELTA(delta, c_o);
-                }
-#endif
-            }
-            barrier();
-
-#if NH == 1
-            invert(sg);
-            barrier();
-#endif
-
-            // solved = (I+L)^-1 @ delta  (sg0..VTH-1)
-            if (sg < VTH) {
-                const uint c_o = sg * TN;
-                coopmat<float, SG, C, TN, MACC> solved = coopmat<float, SG, C, TN, MACC>(0);
-                coopmat<OPD, SG, C, C, MUA> ih, il;
-                coopMatLoad(ih, sh_ih, 0, C, ROW);
-                coopMatLoad(il, sh_il, 0, C, ROW);
-                coopmat<OPD, SG, C, TN, MUB> dh, dl;
-                coopMatLoad(dh, sh_dh, c_o, VH, ROW);
-                coopMatLoad(dl, sh_dl, c_o, VH, ROW);
-                PRODUCT(solved, ih, il, dh, dl);
-                STORE_SOLVED(solved, c_o);
-            }
-            barrier();
-
-            // out = base + P@solved  (sg2..2+VTH-1)
-            if (sg >= 2 * CT && sg - 2 * CT < VTH) {
-                const uint c_o = (sg - 2 * CT) * TN;
-                coopmat<float, SG, C, TN, MACC> O = base_r;
-                coopmat<OPD, SG, C, C, MUA> ph, pl;
-                coopMatLoad(ph, sh_ph, 0, C, ROW);
-                coopMatLoad(pl, sh_pl, 0, C, ROW);
-                coopmat<OPD, SG, C, TN, MUB> svh, svl;
-                coopMatLoad(svh, sh_soh, c_o, VH, ROW);
-                coopMatLoad(svl, sh_sol, c_o, VH, ROW);
-                PRODUCT(O, ph, pl, svh, svl);
-                const uint out_base = (seq_id * p.n_tokens * p.H + head_id) * D + v0 + voff + c_o + t0 * (D * p.H);
-                coopMatPerElement(O, O, StoreOut, out_base, valid);
-            }
-            // delta2 = solved * carry -> sh_dh/dl (all threads)
-            for (uint i = tid; i < C * VH; i += WGS) {
-                const float sv = float(sh_soh[i]) + float(sh_sol[i]);
-                split(sv * sh_carry[i / VH], sh_dh[i], sh_dl[i]);
-            }
-            barrier();
-
-            // state = cdecay*state + K^T @ delta2 for this pass's register tiles
-            if (sg_pass == hv) {
-                [[unroll]] for (uint j = 0; j < PER_WARP; j++) {
-                    const uint ti = sg + j * NSUB;
-                    coopmat<OPD, SG, TM, C, MUA> kth, ktl;
-                    coopMatLoad(kth, sh_kh, TILE_R(ti), LDP, COL);
-                    coopMatLoad(ktl, sh_kl, TILE_R(ti), LDP, COL);
-                    coopmat<OPD, SG, C, TN, MUB> dh, dl;
-                    coopMatLoad(dh, sh_dh, TILE_C(ti) - voff, VH, ROW);
-                    coopMatLoad(dl, sh_dl, TILE_C(ti) - voff, VH, ROW);
-                    state[j] = state[j] * cdecay;
-                    PRODUCT(state[j], kth, ktl, dh, dl);
-                }
-            }
-            // no end-of-pass barrier: covered by the next mirror or chunk-top barrier
+        // solved = (I+L)^-1 @ delta  (sg0..VT-1)
+        if (sg < VT) {
+            const uint c_o = sg * TN;
+            coopmat<float, SG, C, TN, MACC> solved = coopmat<float, SG, C, TN, MACC>(0);
+            coopmat<OPD, SG, C, C, MUA> ih, il;
+            coopMatLoad(ih, sh_ih, 0, C, ROW);
+            coopMatLoad(il, sh_il, 0, C, ROW);
+            coopmat<OPD, SG, C, TN, MUB> dh, dl;
+            coopMatLoad(dh, sh_dh, c_o, V, ROW);
+            coopMatLoad(dl, sh_dl, c_o, V, ROW);
+            PRODUCT(solved, ih, il, dh, dl);
+            STORE_SOLVED(solved, c_o);
         }
+        barrier();
+
+        // out = base + P@solved  (sg2..2+VT-1)
+        if (sg >= 2 * CT && sg - 2 * CT < VT) {
+            const uint c_o = (sg - 2 * CT) * TN;
+            coopmat<float, SG, C, TN, MACC> O = base_r;
+            coopmat<OPD, SG, C, C, MUA> ph, pl;
+            coopMatLoad(ph, sh_ph, 0, C, ROW);
+            coopMatLoad(pl, sh_pl, 0, C, ROW);
+            coopmat<OPD, SG, C, TN, MUB> svh, svl;
+            coopMatLoad(svh, sh_soh, c_o, V, ROW);
+            coopMatLoad(svl, sh_sol, c_o, V, ROW);
+            PRODUCT(O, ph, pl, svh, svl);
+            const uint out_base = (seq_id * p.n_tokens * p.H + head_id) * D + v0 + c_o + t0 * (D * p.H);
+            coopMatPerElementEXT(O, O, StoreOut, out_base, valid);
+        }
+        // delta2 = solved * carry -> sh_dh/dl (all threads)
+        for (uint i = tid; i < C * V; i += WGS) {
+            const float sv = float(sh_soh[i]) + float(sh_sol[i]);
+            split(sv * sh_carry[i / V], sh_dh[i], sh_dl[i]);
+        }
+        barrier();
+
+        // state = cdecay*state + K^T @ delta2
+        [[unroll]] for (uint j = 0; j < PER_WARP; j++) {
+            const uint ti = sg + j * NSUB;
+            coopmat<OPD, SG, TM, C, MUA> kth, ktl;
+            coopMatLoad(kth, sh_kh, TILE_R(ti), LDP, COL);
+            coopMatLoad(ktl, sh_kl, TILE_R(ti), LDP, COL);
+            coopmat<OPD, SG, C, TN, MUB> dh, dl;
+            coopMatLoad(dh, sh_dh, TILE_C(ti), V, ROW);
+            coopMatLoad(dl, sh_dl, TILE_C(ti), V, ROW);
+            state[j] = state[j] * cdecay;
+            PRODUCT(state[j], kth, ktl, dh, dl);
+        }
+        // no end-of-chunk barrier: covered by the chunk-top barrier
     }
 
     [[unroll]] for (uint j = 0; j < PER_WARP; j++) {
         const uint ti = sg + j * NSUB;
-        coopMatPerElement(state[j], state[j], StoreState,
+        coopMatPerElementEXT(state[j], state[j], StoreState,
                             p.s_off + state_base + (v0 + TILE_C(ti)) * D + TILE_R(ti));
     }
 }

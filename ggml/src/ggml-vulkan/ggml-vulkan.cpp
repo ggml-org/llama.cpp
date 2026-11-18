@@ -11199,8 +11199,7 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
         }
     }
 
-    const uint32_t cm_V     = use_cm2 ? GGML_VK_GDN_CM2_V : (use_v128 ? 128u : (use_v32 ? 32u : GGML_VK_GDN_CM_V));
-    const bool     cm_gmem  = use_v128 && !ctx->device->coopmat2;
+    const uint32_t cm_V = use_cm2 ? GGML_VK_GDN_CM2_V : (use_v128 ? 128u : (use_v32 ? 32u : GGML_VK_GDN_CM_V));
 
     vk_pipeline pipeline = use_v128
         ? ctx->device->pipeline_gated_delta_net_cm_v128
@@ -11218,7 +11217,7 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
     }
 
     vk_subbuffer mirror_buf{};
-    if (cm_gmem) {
+    if (use_v128) {
         const uint32_t LDP = GGML_VK_GDN_CM_LDP;
         const uint32_t blocks = (S_v / cm_V) * n_seqs * H;
         const size_t scratch_size = (size_t)blocks * LDP * cm_V * 2u * sizeof(uint16_t);
@@ -11260,7 +11259,7 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
         K
     };
 
-    if (cm_gmem) {
+    if (use_v128) {
         ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
             {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5], dst_buf, mirror_buf},
             pc, std::array<uint32_t, 3>{ S_v / cm_V, n_seqs, H });
