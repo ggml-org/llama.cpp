@@ -522,7 +522,7 @@ struct llama_file::impl {
                         alignment = 1;
                         init_fp("rb");
                         seek(read_offset, SEEK_SET);
-                        read_raw_unsafe(ptr, len);
+                        read_raw_unsafe(static_cast<char *>(ptr) + bytes_read, to_read);
                         return;
                     }
                     throw std::runtime_error(format("read error: %s", strerror(errno)));
