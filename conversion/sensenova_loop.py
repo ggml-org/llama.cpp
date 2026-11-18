@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import re
-from typing import TYPE_CHECKING, Iterable
+from typing import TYPE_CHECKING, Callable, Iterable
 
 from .base import ModelBase, gguf
 from .qwen import Qwen3_5TextModel
@@ -52,6 +52,12 @@ class SenseNovaLoopModel(Qwen3_5TextModel):
         self.block_count = len(self.plan) + n_mtp
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
         self.hparams = {**hp, "num_hidden_layers": len(self.plan), "layer_types": [layer_types[p] for p in self.plan]}
+
+    def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
+        tensors = super().index_tensors(remote_hf_model_id)
+        if remote_hf_model_id is None and not self.no_mtp and self.opt_num_mtp_layers == 0 and (self.dir_model / "mtp.safetensors").is_file():
+            tensors.update(self.index_local_tensors("mtp"))
+        return tensors
 
     @classmethod
     def filter_tensors(cls, item):

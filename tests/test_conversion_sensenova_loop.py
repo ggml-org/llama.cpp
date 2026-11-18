@@ -104,30 +104,46 @@ class TestSenseNovaLoopConversion(unittest.TestCase):
         }
         common = {"token_embd.weight", "output_norm.weight", "output.weight"}
         draft = {"blk.6.nextn.eh_proj.weight", "blk.6.nextn.enorm.weight", "blk.6.nextn.hnorm.weight", "blk.6.nextn.shared_head_norm.weight", "blk.6.attn_q.weight"}
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory)
-            (path / "config.json").write_text(json.dumps(hp))
+        for layout in ("embedded", "indexed", "standalone"):
+            with self.subTest(layout=layout), tempfile.TemporaryDirectory() as directory:
+                self.check_mtp_export_modes(Path(directory), hp, tensors, common, draft, layout)
+
+    def check_mtp_export_modes(self, path, hp, tensors, common, draft, layout):
+        (path / "config.json").write_text(json.dumps(hp))
+        main = {name: tensor for name, tensor in tensors.items() if not name.startswith("mtp.")}
+        mtp = {name: tensor for name, tensor in tensors.items() if name.startswith("mtp.")}
+        if layout == "embedded":
             save_file(tensors, str(path / "model.safetensors"))
-            for no_mtp, mtp_only in ((False, False), (True, False), (False, True)):
-                with self.subTest(no_mtp=no_mtp, mtp_only=mtp_only), patch.object(SenseNovaLoopModel, "no_mtp", no_mtp), patch.object(SenseNovaLoopModel, "mtp_only", mtp_only):
-                    model = SenseNovaLoopModel(path, gguf.LlamaFileType.MOSTLY_BF16, path / "out.gguf", hparams=copy.deepcopy(hp))
-                    model.set_gguf_parameters()
-                    model.prepare_tensors()
-                    kv = model.gguf_writer.kv_data[0]
-                    self.assertEqual(kv["sensenova_loop.block_count"].value, 6 if no_mtp else 7)
-                    self.assertEqual(kv["sensenova_loop.attention.recurrent_layers"].value, [True, False, True, False, True, True] + ([] if no_mtp else [False]))
-                    result = model.gguf_writer.tensors[0]
-                    expected = common | (set() if mtp_only else {"blk.5.attn_norm.weight"}) | (set() if no_mtp else draft)
-                    self.assertEqual(set(result), expected)
-                    if not no_mtp:
-                        self.assertEqual(kv["sensenova_loop.nextn_predict_layers"].value, 1)
-                        np.testing.assert_array_equal(gguf.LazyNumpyTensor.to_eager(result["blk.6.nextn.hnorm.weight"].tensor), np.ones(8))
-                    else:
-                        self.assertNotIn("sensenova_loop.nextn_predict_layers", kv)
-            for count in (0, 2, -1, True):
-                invalid = {**hp, "mtp_num_hidden_layers": count}
-                with self.subTest(mtp_layers=count), patch.object(SenseNovaLoopModel, "mtp_only", True), self.assertRaises(ValueError):
-                    SenseNovaLoopModel(path, gguf.LlamaFileType.MOSTLY_BF16, path / "invalid.gguf", hparams=invalid)
+            # An indexed head takes precedence over a stale sidecar.
+            save_file({name: tensor + 3 for name, tensor in mtp.items()}, str(path / "mtp.safetensors"))
+            weight_map = {name: "model.safetensors" for name in tensors}
+        else:
+            save_file(main, str(path / "model.safetensors"))
+            save_file(mtp, str(path / "mtp.safetensors"))
+            weight_map = {name: "model.safetensors" for name in main}
+            if layout == "indexed":
+                weight_map.update({name: "mtp.safetensors" for name in mtp})
+        (path / "model.safetensors.index.json").write_text(json.dumps({"weight_map": weight_map}))
+        for no_mtp, mtp_only in ((False, False), (True, False), (False, True)):
+            with self.subTest(no_mtp=no_mtp, mtp_only=mtp_only), patch.object(SenseNovaLoopModel, "no_mtp", no_mtp), patch.object(SenseNovaLoopModel, "mtp_only", mtp_only):
+                model = SenseNovaLoopModel(path, gguf.LlamaFileType.MOSTLY_BF16, path / "out.gguf", hparams=copy.deepcopy(hp))
+                model.set_gguf_parameters()
+                model.prepare_tensors()
+                kv = model.gguf_writer.kv_data[0]
+                self.assertEqual(kv["sensenova_loop.block_count"].value, 6 if no_mtp else 7)
+                self.assertEqual(kv["sensenova_loop.attention.recurrent_layers"].value, [True, False, True, False, True, True] + ([] if no_mtp else [False]))
+                result = model.gguf_writer.tensors[0]
+                expected = common | (set() if mtp_only else {"blk.5.attn_norm.weight"}) | (set() if no_mtp else draft)
+                self.assertEqual(set(result), expected)
+                if not no_mtp:
+                    self.assertEqual(kv["sensenova_loop.nextn_predict_layers"].value, 1)
+                    np.testing.assert_array_equal(gguf.LazyNumpyTensor.to_eager(result["blk.6.nextn.hnorm.weight"].tensor), np.ones(8))
+                else:
+                    self.assertNotIn("sensenova_loop.nextn_predict_layers", kv)
+        for count in (0, 2, -1, True):
+            invalid = {**hp, "mtp_num_hidden_layers": count}
+            with self.subTest(mtp_layers=count), patch.object(SenseNovaLoopModel, "mtp_only", True), self.assertRaises(ValueError):
+                SenseNovaLoopModel(path, gguf.LlamaFileType.MOSTLY_BF16, path / "invalid.gguf", hparams=invalid)
 
     def test_vision_pixel_limits(self):
         hp = {
