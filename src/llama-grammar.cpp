@@ -516,6 +516,7 @@ const char * llama_grammar_parser::parse_sequence(
         }
 
         uint32_t last_rec_rule_id = 0;
+        GGML_ASSERT(max_times >= min_times);
         auto n_opt = no_max ? 1 : max_times - min_times;
 
         llama_grammar_rule rec_rule(prev_rule);
