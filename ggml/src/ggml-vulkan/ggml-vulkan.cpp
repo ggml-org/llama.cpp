@@ -4432,6 +4432,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             spec_constants_cpy.push_back(conv2d_csh_store); \
             spec_constants_cpy.push_back(conv2d_WM); \
             spec_constants_cpy.push_back(conv2d_WN); \
+            spec_constants_cpy.push_back(state.split_k); \
             ggml_vk_create_pipeline( \
                 device, c.second, #name #type_suffix, \
                 name##type_suffix##spv_suffix##_len, name##type_suffix##spv_suffix##_data, "main", 3, \
@@ -9664,7 +9665,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     }
 }
 
-static vk_conv_shapes ggml_vk_conv_select_shape(ggml_backend_vk_context * ctx, uint32_t K, uint32_t NPQ) {
+static vk_conv_shapes ggml_vk_conv_base_shape(ggml_backend_vk_context * ctx, uint32_t K, uint32_t NPQ) {
     auto n_tiles = [&](vk_conv_shapes s) {
         return CEIL_DIV(K, vk_conv_block_sizes[s].K)
             * CEIL_DIV(NPQ, vk_conv_block_sizes[s].NPQ);
@@ -9696,43 +9697,78 @@ static vk_conv_shapes ggml_vk_conv_select_shape(ggml_backend_vk_context * ctx, u
     }
 }
 
-static vk_conv_shapes ggml_vk_conv3d_select_shape(ggml_backend_vk_context * ctx, const ggml_tensor * kernel, const ggml_tensor * dst, uint32_t & split_k) {
+// Picks the conv2d_mm/conv3d_mm tile. With coopmat2, a layer with too few
+// tiles keeps a large tile and uses split-K instead of a small one.
+static vk_conv_shapes ggml_vk_conv_select_shape(ggml_backend_vk_context * ctx, const ggml_tensor * kernel, const ggml_tensor * dst, uint32_t & split_k) {
     split_k = 1;
-    const uint32_t K = ggml_get_op_params_i32(dst, 11);
-    const uint32_t NPQ = ggml_get_op_params_i32(dst, 10) * dst->ne[0] * dst->ne[1] * dst->ne[2];
-    const vk_conv_shapes fallback = ggml_vk_conv_select_shape(ctx, K, NPQ);
+    const bool is_3d = dst->op == GGML_OP_CONV_3D;
+    uint32_t K, NPQ;
+    uint64_t crs;
+    if (is_3d) {
+        K   = ggml_get_op_params_i32(dst, 11);
+        NPQ = ggml_get_op_params_i32(dst, 10) * dst->ne[0] * dst->ne[1] * dst->ne[2];
+        crs = (uint64_t)ggml_get_op_params_i32(dst, 9) * kernel->ne[0] * kernel->ne[1] * kernel->ne[2];
+    } else {
+        K   = (uint32_t)dst->ne[2];
+        NPQ = (uint32_t)(dst->ne[3] * dst->ne[1] * dst->ne[0]);
+        crs = (uint64_t)kernel->ne[0] * kernel->ne[1] * kernel->ne[2];
+    }
+    const vk_conv_shapes fallback = ggml_vk_conv_base_shape(ctx, K, NPQ);
     const uint32_t shader_core_count = ctx->device->shader_core_count;
+    if (!ctx->device->coopmat2 || shader_core_count == 0 || K == 0 || NPQ == 0) {
+        return fallback;
+    }
+    auto n_tiles = [&](vk_conv_shapes s) {
+        return (uint64_t)CEIL_DIV(K, vk_conv_block_sizes[s].K) * CEIL_DIV(NPQ, vk_conv_block_sizes[s].NPQ);
+    };
+    const auto & limits = ctx->device->properties.limits;
     // Slowdowns were observed on DGX Spark with drivers older than R615.
     const bool driver_supported = ctx->device->driver_id != vk::DriverId::eNvidiaProprietary ||
                                   (ctx->device->properties.driverVersion >> 22) >= 615;
-    if (!ctx->device->coopmat2 || shader_core_count == 0 || K == 0 || NPQ == 0 || !driver_supported) {
-        return fallback;
-    }
-    const auto & block = vk_conv_block_sizes[CONV_SHAPE_256x128];
-    const auto & limits = ctx->device->properties.limits;
     // Use the largest cm2 padding and include the dummy Csh[8].
+    const auto & large = vk_conv_block_sizes[CONV_SHAPE_256x128];
     const uint32_t pad = 8, csh_elems = 8;
-    const uint32_t shmem = (block.K * (block.CRS + pad) + block.CRS * (block.NPQ + pad) + csh_elems) * sizeof(uint16_t);
-    if (shmem > limits.maxComputeSharedMemorySize) {
+    const uint32_t shmem = (large.K * (large.CRS + pad) + large.CRS * (large.NPQ + pad) + csh_elems) * sizeof(uint16_t);
+    const bool large_ok = driver_supported && shmem <= limits.maxComputeSharedMemorySize;
+
+    vk_conv_shapes shape;
+    if (is_3d) {
+        if (!large_ok) {
+            return fallback;
+        }
+        shape = CONV_SHAPE_256x128;
+        // Keep full channel tiles when the grid already fills the GPU.
+        if (n_tiles(shape) >= shader_core_count) {
+            return K % vk_conv_block_sizes[shape].K == 0 ? shape : fallback;
+        }
+        static const bool disable_split_k = getenv("GGML_VK_DISABLE_CONV3D_SPLIT_K") != nullptr;
+        // Do not use a tile with more than half its output channels padded.
+        if (disable_split_k || K < vk_conv_block_sizes[shape].K / 2) {
+            return fallback;
+        }
+    } else {
+        static const bool disable_split_k = getenv("GGML_VK_DISABLE_CONV2D_SPLIT_K") != nullptr;
+        // Only layers that would get a small tile change.
+        if (dst->op != GGML_OP_CONV_2D || disable_split_k || K <= 64 || fallback == CONV_SHAPE_128x128) {
+            return fallback;
+        }
+        shape = K % 256 == 0 && large_ok ? CONV_SHAPE_256x128 : CONV_SHAPE_128x128;
+        // Keep full channel tiles when the grid already fills the GPU.
+        if (n_tiles(shape) >= shader_core_count) {
+            return K % vk_conv_block_sizes[shape].K == 0 ? shape : fallback;
+        }
+    }
+
+    if (!ggml_is_contiguous(dst) || get_misalign_bytes(ctx, dst) != 0) {
         return fallback;
     }
+    const auto & block = vk_conv_block_sizes[shape];
     const uint32_t channel_tiles = CEIL_DIV(K, block.K);
-    const uint64_t n_tiles = (uint64_t)channel_tiles * CEIL_DIV(NPQ, block.NPQ);
-    // Keep full channel tiles when the grid already fills the GPU.
-    if (n_tiles >= shader_core_count) {
-        return K % block.K == 0 ? CONV_SHAPE_256x128 : fallback;
-    }
-    static const bool disable_split_k = getenv("GGML_VK_DISABLE_CONV3D_SPLIT_K") != nullptr;
-    // Do not use a tile with more than half its output channels padded.
-    if (disable_split_k || K < block.K / 2 || !ggml_is_contiguous(dst) || get_misalign_bytes(ctx, dst) != 0) {
-        return fallback;
-    }
     // Use power-of-two splits to give each core at least one workgroup.
     uint64_t splits = 1;
-    while (n_tiles * splits < shader_core_count) {
+    while (n_tiles(shape) * splits < shader_core_count) {
         splits *= 2;
     }
-    const uint64_t crs = (uint64_t)ggml_get_op_params_i32(dst, 9) * kernel->ne[0] * kernel->ne[1] * kernel->ne[2];
     const uint64_t operand_bytes = block.K * ggml_type_size(kernel->type) + block.NPQ * sizeof(float);
     const uint64_t scratch_bytes = 2 * sizeof(float) * block.K * block.NPQ;
     // Do not add more scratch bytes than the estimated operand load bytes.
@@ -9747,7 +9783,7 @@ static vk_conv_shapes ggml_vk_conv3d_select_shape(ggml_backend_vk_context * ctx,
         return fallback;
     }
     split_k = (uint32_t)splits;
-    return CONV_SHAPE_256x128;
+    return shape;
 }
 
 static vk_pipeline ggml_vk_rms_norm_pipeline(const std::array<vk_pipeline, 3> & pipelines, int64_t ncols) {
@@ -10303,7 +10339,8 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             uint32_t K = dst->ne[2]; // Cout
             uint32_t NPQ = dst->ne[3] * dst->ne[1] * dst->ne[0]; // N * OH * OW
-            vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, K, NPQ);
+            uint32_t split_k;
+            vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, src0, dst, split_k);
 
             bool transpose = dst->op == GGML_OP_CONV_TRANSPOSE_2D;
             uint32_t KW = (uint32_t)src0->ne[0];
@@ -10325,7 +10362,7 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
                                       (CRS % BS_CRS == 0) &&
                                       (NPQ % BS_NPQ == 0)) ? 1u : 0u;
 
-            vk_conv2d_pipeline_state conv2d_pipeline_state(s0, s1, p0, p1, d0, d1, KW, KH, aligned);
+            vk_conv2d_pipeline_state conv2d_pipeline_state(s0, s1, p0, p1, d0, d1, KW, KH, aligned, split_k);
 
             std::map<vk_conv2d_pipeline_state, vk_pipeline> *pipelines = nullptr;
             if (op == GGML_OP_CONV_2D) {
@@ -10379,7 +10416,7 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             const uint32_t N  = (uint32_t)ggml_get_op_params_i32(dst, 10);
             const uint32_t NPQ = N * dst->ne[2] * dst->ne[1] * dst->ne[0];
             uint32_t split_k;
-            const vk_conv_shapes shape = ggml_vk_conv3d_select_shape(ctx, src0, dst, split_k);
+            const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, src0, dst, split_k);
 
             const uint32_t KW = (uint32_t)src0->ne[0];
             const uint32_t KH = (uint32_t)src0->ne[1];
@@ -10677,10 +10714,12 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_CONV_TRANSPOSE_2D:
         if constexpr (std::is_same_v<PC, vk_op_conv2d_push_constants>) {
             const uint32_t NPQ = pc.N * pc.OH * pc.OW;
-            const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, pc.Cout, NPQ);
-            const uint32_t NPQ_blocks = CEIL_DIV(NPQ, vk_conv_block_sizes[shape].NPQ);
+            const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, src0, dst, split_k);
+            const auto & block = vk_conv_block_sizes[shape];
+            const uint32_t NPQ_blocks = CEIL_DIV(NPQ, block.NPQ);
+            const uint32_t channel_groups = split_k > 1 ? CEIL_DIV(pc.Cout, block.K) * block.K * split_k : pc.Cout;
 
-            elements = { pc.Cout, NPQ_blocks, 1 };
+            elements = { channel_groups, NPQ_blocks, 1 };
             if (elements[1] > 512) {
                 elements[2] = CEIL_DIV(elements[1], 512);
                 elements[1] = 512;
@@ -10692,7 +10731,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_CONV_3D:
         if constexpr (std::is_same_v<PC, vk_op_conv3d_push_constants>) {
             const uint32_t NPQ = pc.N * pc.OD * pc.OH * pc.OW;
-            const vk_conv_shapes shape = ggml_vk_conv3d_select_shape(ctx, src0, dst, split_k);
+            const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, src0, dst, split_k);
             const auto & block = vk_conv_block_sizes[shape];
             const uint32_t NPQ_blocks = CEIL_DIV(NPQ, block.NPQ);
             const uint32_t channel_groups = split_k > 1 ? CEIL_DIV(pc.OC, block.K) * block.K * split_k : pc.OC;
@@ -10828,7 +10867,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         break;
     }
 
-    if constexpr (std::is_same_v<PC, vk_op_conv3d_push_constants>) {
+    if constexpr (std::is_same_v<PC, vk_op_conv3d_push_constants> || std::is_same_v<PC, vk_op_conv2d_push_constants>) {
         if (split_k > 1) {
             const uint32_t ne = (uint32_t)ggml_nelements(dst);
             const size_t scratch_size = ggml_nbytes(dst) * split_k;

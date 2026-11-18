@@ -473,16 +473,18 @@ struct vk_xe_fa_pipeline_state {
 };
 
 struct vk_conv2d_pipeline_state {
-    vk_conv2d_pipeline_state(uint32_t s0, uint32_t s1, uint32_t p0, uint32_t p1, uint32_t d0, uint32_t d1, uint32_t KW, uint32_t KH, uint32_t aligned)
-        : s0(s0), s1(s1), p0(p0), p1(p1), d0(d0), d1(d1), KW(KW), KH(KH), aligned(aligned) {}
+    vk_conv2d_pipeline_state(uint32_t s0, uint32_t s1, uint32_t p0, uint32_t p1, uint32_t d0, uint32_t d1, uint32_t KW, uint32_t KH, uint32_t aligned, uint32_t split_k)
+        : s0(s0), s1(s1), p0(p0), p1(p1), d0(d0), d1(d1), KW(KW), KH(KH), aligned(aligned), split_k(split_k) {}
 
     uint32_t s0, s1, p0, p1, d0, d1, KW, KH;
     // when set, shader can skip K/CRS/NPQ bounds checks and address clamps
     uint32_t aligned;
+    // number of workgroups the CRS loop is split across (1 = no split)
+    uint32_t split_k;
 
     bool operator<(const vk_conv2d_pipeline_state &b) const {
-        return std::tie(s0, s1, p0, p1, d0, d1, KW, KH, aligned) <
-               std::tie(b.s0, b.s1, b.p0, b.p1, b.d0, b.d1, b.KW, b.KH, b.aligned);
+        return std::tie(s0, s1, p0, p1, d0, d1, KW, KH, aligned, split_k) <
+               std::tie(b.s0, b.s1, b.p0, b.p1, b.d0, b.d1, b.KW, b.KH, b.aligned, b.split_k);
     }
 };
 

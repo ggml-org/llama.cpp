@@ -124,6 +124,9 @@ const bool stride_in_bounds = (s0 == 1) && (s1 == 1);
 const bool stride_in_bounds = true;
 #endif
 
+// Number of workgroups the CRS loop is split across (1 = no split).
+layout(constant_id = 19) const uint split_k        = 1;
+
 uint32_t       tid     = gl_LocalInvocationID.x;
 const uint32_t WG_SIZE = gl_WorkGroupSize.x;
 
@@ -185,8 +188,14 @@ R,S=KH,KW
 P,Q=OH,OW
 */
 
-uint32_t B_idx_K   = gl_WorkGroupID.x;
-uint32_t B_idx_NPQ = gl_WorkGroupID.y + gl_WorkGroupID.z * 512;
+// With split_k > 1, each workgroup runs one contiguous part of the CRS loop
+// and writes its partial sums to its own copy of the output, and a reduce pass
+// adds the copies up. Neighboring workgroups take different channel tiles of
+// the same split, so they read the same inputs at about the same time.
+uint32_t B_idx_K     = split_k > 1 ? gl_WorkGroupID.x % splitWork(K, BS_K) : gl_WorkGroupID.x;
+uint32_t B_idx_split = split_k > 1 ? gl_WorkGroupID.x / splitWork(K, BS_K) : 0;
+uint32_t B_idx_NPQ   = gl_WorkGroupID.y + gl_WorkGroupID.z * 512;
+uint32_t split_offset = B_idx_split * K * NPQ;
 
 uint32_t T_y = tid / NT_NPQ;
 uint32_t T_x = tid % NT_NPQ;
@@ -205,7 +214,7 @@ const uint32_t BrpWg = WG_SIZE / BS_NPQ;
 // Stores one element of the result. The tile's position is passed in because
 // reading globals here is slow with current drivers.
 ACC_TYPE perElemOpStore(const in uint32_t r, const in uint32_t c, const in ACC_TYPE elem,
-                        const in uint32_t K_base, const in uint32_t NPQ_base)
+                        const in uint32_t K_base, const in uint32_t NPQ_base, const in uint32_t split_base)
 {
     uint32_t K_idx   = K_base + r;
     uint32_t NPQ_idx = NPQ_base + c;
@@ -214,7 +223,7 @@ ACC_TYPE perElemOpStore(const in uint32_t r, const in uint32_t c, const in ACC_T
     uint32_t OW_idx  = NPQ_idx - N_idx * p.OH * p.OW - OH_idx * p.OW;
     uint32_t dst_idx = OW_idx + OH_idx * p.nb1 + K_idx * p.nb2 + N_idx * p.nb3;
     if (aligned != 0 || (K_idx < p.Cout && NPQ_idx < p.N * p.OH * p.OW)) {
-        dst_data[dst_idx + p.dst_offset] = D_TYPE(elem);
+        dst_data[dst_idx + p.dst_offset + split_base] = D_TYPE(elem);
     }
     return elem;
 }
@@ -244,7 +253,11 @@ void main() {
     }
 #endif
     /* Advance block in CRS dim */
-    [[dont_unroll]] for (uint32_t B_idx_CRS = 0; B_idx_CRS < NB_CRS; B_idx_CRS++) {
+    const uint32_t crs_count = NB_CRS / split_k;
+    const uint32_t crs_extra = NB_CRS % split_k;
+    const uint32_t crs_begin = B_idx_split * crs_count + min(B_idx_split, crs_extra);
+    const uint32_t crs_end   = crs_begin + crs_count + uint32_t(B_idx_split < crs_extra);
+    [[dont_unroll]] for (uint32_t B_idx_CRS = crs_begin; B_idx_CRS < crs_end; B_idx_CRS++) {
         uint32_t CRS_idx_a;
         uint32_t Cin_idx_a;
         uint32_t KH_idx_a;
@@ -452,13 +465,13 @@ void main() {
             uint32_t OW_idx  = NPQ_idx - N_idx * p.OH * p.OW - OH_idx * p.OW;
             uint32_t dst_idx = OW_idx + OH_idx * p.nb1 + K_idx * p.nb2 + N_idx * p.nb3;
             if (aligned != 0 || (K_idx < K && NPQ_idx < NPQ)) {
-                dst_data[dst_idx + p.dst_offset] = D_TYPE(Csh[k_local * Csh_stride + npq_thread]);
+                dst_data[dst_idx + p.dst_offset + split_offset] = D_TYPE(Csh[k_local * Csh_stride + npq_thread]);
             }
         }
     }
 #ifdef COOPMAT2
     else {
-        coopMatPerElementNV(matC, matC, perElemOpStore, B_idx_K * BS_K, B_idx_NPQ * BS_NPQ);
+        coopMatPerElementNV(matC, matC, perElemOpStore, B_idx_K * BS_K, B_idx_NPQ * BS_NPQ, split_offset);
     }
 #endif
 #else
@@ -472,7 +485,7 @@ void main() {
                 uint32_t OW_idx  = NPQ_idx - N_idx * p.OH * p.OW - OH_idx * p.OW;
                 uint32_t dst_idx = OW_idx + OH_idx * p.nb1 + K_idx * p.nb2 + N_idx * p.nb3;
                 if (aligned != 0 || (K_idx < K && NPQ_idx < NPQ)) {
-                    dst_data[dst_idx + p.dst_offset] = regC[T_ly][T_lx];
+                    dst_data[dst_idx + p.dst_offset + split_offset] = regC[T_ly][T_lx];
                 }
             }
         }
