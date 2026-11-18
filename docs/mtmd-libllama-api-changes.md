@@ -10,7 +10,7 @@ Branch `mtmd-in-libllama`, rebased on master `61f182fcd` (first written on `e8fb
 | `src/llama-ext.h` (staging, C++) | media, streaming and generation API, see below (26 -> 91 `LLAMA_API` declarations) | new exported symbols only |
 | `tools/mtmd/mtmd.h` | one new function (`mtmd_input_chunk_get_llama_media`); the others keep their signatures | new exported symbol only |
 | `tools/mtmd/mtmd-helper.h` | none | none |
-| serialized chunks (`mtmd_input_chunk_save`) | format version 7: counts, ids and the decoder positions of image rows; versions 2 to 6 still load | none for readers; buffers written by this build need it or a later one |
+| serialized chunks (`mtmd_input_chunk_save`) | none: master's format (version 5), written and read by libllama; versions 2 to 5 load as on master | none |
 | GGUF | none (mmproj files load as they are) | - |
 | internal structs (`llama_ubatch`, `llama_batch_ext`, `llama_batch_allocr`, `llama_model`, `llama_model_loader`, `LLM_TN_IMPL`, `llm_graph_*`) | new fields and values | internal, not part of any ABI |
 
@@ -27,9 +27,9 @@ No existing libllama function changed its signature or meaning. No public struct
 | `mtmd.cpp`: per-projector markers, tokenizer media logic, chunk structs, decoder positions | `src/clip/clip-media.{h,cpp}`, behind `llama_media_layout_*` |
 | `mtmd.cpp`: realtime audio input | `src/clip/clip-stream.{h,cpp}`, behind `llama_audio_stream_*` |
 | `mtmd.cpp`: audio generation pipelines, chatterbox reference encode, YuE2 NAR loader | `src/clip/clip-gen.{h,cpp}`, behind `llama_batch_ext_add_gen` on GEN contexts |
-| `mtmd.cpp` (6.1k lines) | `mtmd.cpp` (2.9k lines): marker parsing, lazy media, chunk API, forwarders |
+| `mtmd.cpp` (6.2k lines) | `mtmd.cpp` (2.1k lines): marker parsing, lazy media, chunk handles over `llama_media`, forwarders |
 
-All engine names were renamed `mtmd_` -> `clip_` and `MTMD_` -> `CLIP_`. The copy scripts are kept with the branch's notes; the code of the families is otherwise unchanged.
+All engine names were renamed `mtmd_` -> `clip_` and `MTMD_` -> `CLIP_`. The copy scripts are kept with the branch's notes. The code of the families is otherwise unchanged, with three exceptions: the engine graphs of the projectors that have native graphs are gone (Gemma 3, Qwen2/2.5/3-VL, the gen steps of Qwen3-TTS), the Qwen3-TTS code predictor and codec helpers became a standalone struct (`clip_tts_blocks`), and six unused debug helpers (image dumps, tensor printing) were removed.
 
 ## `src/llama-ext.h` (staging API)
 
@@ -65,6 +65,7 @@ The user limits of the image token count are kv overrides of the mmproj model, `
 | `llama_media_get_type`, `_n_tokens`, `_n_pos`, `_is_atomic`, `_get_id`, `_is_placeholder`, `_is_encoded`, `_ref`, `_free`, `_release_rows`, `_get_rows` | refcounted, thread-safe to reference |
 | `llama_media_get_row_pos(m, pos_0, row, pos, n_pos)` | TRANSITIONAL: decoder positions for callers that still decode host rows with `llama_batch_ext_add_embd` |
 | `llama_media_get_grid(m, nx, ny)` | the token grid the engine records for an image, for mtmd's deprecated `mtmd_image_tokens_get_nx/ny` |
+| `llama_media_chunk_save(tokens, n_tokens, media, out)`, `llama_media_chunk_load(buf, size, tokens, &media)`, `llama_media_init_placeholder(media)` | mtmd's chunk format (version 5, as on master) for text tokens or one media; a loaded media is a placeholder: its counts, positions and id without pixels or rows. `llama_media_init_placeholder` makes the same placeholder from a live media (`mtmd_input_chunk_get_placeholder`) |
 | `llama_batch_ext_add_media(batch, seq_id, media, row0, n_rows, pos_0)` | ENCODER batch: queues the media for `llama_process(ENCODE)`; decoder batch: adds the rows with their positions and span bounds |
 
 A media is a chunk of the clip engine (`clip_image_tokens` / `clip_audio_tokens`) plus its encoded rows. `encode_media` runs consecutive images of equal geometry in one graph when the tower takes a batch, as `mtmd_batch` did.
@@ -116,9 +117,10 @@ Behaviour of libmtmd:
 |---|---|
 | `LLM_TN_IMPL`, `llm_tensor` | `LLM_TENSOR_NAMED` and `LLM_TN_IMPL::named(arch, name)`: a tensor whose name is taken from the file (output device, MUL_MAT probe, ADD for `.bias`); `is_bias()` |
 | `llama_model_loader` | `read_tensor_host(name, dst, size)` for the small tensors the engine keeps on the host (mel filters, voices); `fname`; string-key getters for `bool`, `int32_t`, arrays |
+| `llama_model` | a clip model loads its hparams through the arch (they live under `clip.<tower>.*`); virtual `ctx_n_embd_out`, `ctx_n_embd_state` (row widths per context type), `graph_max_nodes_hint`, `media_bidirectional`; the memory of a clip context comes from `llama_model_clip::create_clip_memory` |
 | `llama_model_clip` (`src/models/clip.cpp`, `clip-engine.cpp`, `clip-qwen3tts.cpp`) | holds the engine's models of every modality; the native graphs of Gemma 3, Qwen2/2.5/3-VL and Qwen3-TTS read the weights and hparams of the engine's models, whose graphs of these projectors are gone; `graph_engine` builds the moved graphs (and the native Qwen3-TTS gen steps) inside `llm_graph_context` and registers their flash-attention nodes for the auto-detection |
 | `llama_context` | `encode_media`, `encode_media_engine(_group)`, `clip_exec` (one engine graph through `process_ubatch`), `clip_sub` (engine runtime per tower), `gen_engine`; a clip context reserves its graph once (it does not depend on the ubatch) and skips the DeepSeek V4 probes; `llama_cparams::auto_fa_user` |
-| `llm_graph_context::build_pooling` | a clip graph without an embedding output (a codec stage) skips pooling |
+| `llm_graph_context` | `build_pooling`: a clip graph without an embedding output (a codec stage) skips pooling; `LLM_FFN_GELU_QUICK` for the vision towers |
 | `llama_ubatch` / `llama_batch_ext` / `llama_batch_allocr` | media, spans and gen entries; span-aware splitting |
 | `llama_kv_cache::set_input_attn_mask` | a query inside a bidirectional span sees the later keys of its span |
 | `llama_memory_clip_gen` | per-sequence state of the gen pipelines |
@@ -214,6 +216,8 @@ The net growth is the native graphs of Gemma 3 and Qwen-VL, which replaced the e
 | ZONOS3-Mini, llama-tts wall time | 2.21-2.63 s | 1.91-1.95 s |
 | LFM3-Omni 2B, llama-tts wall time | 3.12-3.24 s | 3.02-3.18 s |
 
+This series predates the trim; the latest run is in "After the trim".
+
 Equal within noise, after the removal of the moved graphs (native graphs marked); the machine was busier than in the earlier series, both builds alike. Earlier series on a quiet machine: the video runs spread with the machine, both builds slowing down in the same runs (quiet runs 1168-1219 ms master, 1175-1204 ms branch, chunk by chunk the same); two 9.5 s Chatterbox-turbo runs of the branch did not repeat in 4 more runs of each build, with the same timings inside the process (generation 2.01 s, vocoder 1.29-1.34 s). On CPU the machine was shared with another job (load average 7 to 10); a recheck of 4 cases, 5 interleaved runs with 8 threads, gave the branch's best run within 1 % of master's or below it (Gemma 3 image 6566 -> 6084 ms, Voxtral audio 2703 -> 2734 ms, Qwen3-VL video 11824 -> 10611 ms, LFM3-Omni video 6433 -> 5399 ms) and medians within 9 %, which is the noise of that load.
 
 Text only (`llama-bench -m gemma-3-4b-it-Q8_0 -lm dio -ngl 99 -fa 1 -p 1024 -n 128 -d 0,40000 -ub 1024,2048,4096 -b 4096`, master then branch):
@@ -237,13 +241,16 @@ All within 2.5 %, below the 3 % noise floor of this machine; the text path does 
 
 ### Initialization (`mtmd_init_from_file` with warmup, best of 3)
 
+Measured before the trim.
+
+
 CPU: the branch is faster for all 30 mmprojs, 6x to 15x (SmolVLM 53 -> 8 ms, Gemma 3 190 -> 14 ms, Qwen2.5-VL 292 -> 25 ms, Qwen3.5 54 -> 4 ms, Gemma 4 216 -> 34 ms, Qwen2.5-Omni 513 -> 49 ms). The weights are mapped instead of read, and an encoder context reserves its graph once, on a placeholder warmup batch. After the removal of the moved graphs, on a CPU loaded by another job, the native-graph models stayed 9 to 13x faster than master (Gemma 3 374 -> 40 ms, Qwen2.5-VL 600 -> 52 ms, Qwen2.5-Omni 1055 -> 104 ms). GPU, after the removal: faster for 29 of 30, equal for SmolVLM2 (49 ms) (Gemma 3 192 -> 152 ms, Qwen2.5-VL 321 -> 299 ms, Qwen3.5 64 -> 52 ms, Qwen2.5-Omni 546 -> 480 ms).
 
 ### Memory
 
-`mtmd_get_memory_usage` (CPU) equals master for 33 of 37 mmprojs, Qwen2-VL (1,537 MiB) and Qwen2.5-VL (1,846 MiB) included. Gemma 3 estimates 12 MiB lower (921 vs 933 MiB). Qwen3-TTS estimates 5 MiB higher (1,512 vs 1,507 MiB; 1,675 vs 1,670 MiB with the reference encoder): the GEN context reserves the codec graph and the speaker encoder separately, 873.9 MiB of compute buffer where master's combined graph took 868.7 MiB. The three files with both a vision and an audio tower (Qwen2.5-Omni, Gemma 4, LFM3-Omni) estimate 2 to 6 MiB lower: the branch's estimate is its compute buffers plus its weights, which equal master's at runtime (Gemma 4: 143.65 MiB compute, 945.5 MiB weights in both builds); master's estimate is above its own runtime buffers.
+The Qwen3-TTS estimates were measured after the trim, the others before it. `mtmd_get_memory_usage` (CPU) equals master for 33 of 37 mmprojs, Qwen2-VL (1,537 MiB) and Qwen2.5-VL (1,846 MiB) included. Gemma 3 estimates 12 MiB lower (921 vs 933 MiB). Qwen3-TTS estimates 5 MiB higher (1,512 vs 1,507 MiB; 1,675 vs 1,670 MiB with the reference encoder): the GEN context reserves the codec graph and the speaker encoder separately, 873.9 MiB of compute buffer where master's combined graph took 868.7 MiB. The three files with both a vision and an audio tower (Qwen2.5-Omni, Gemma 4, LFM3-Omni) estimate 2 to 6 MiB lower: the branch's estimate is its compute buffers plus its weights, which equal master's at runtime (Gemma 4: 143.65 MiB compute, 945.5 MiB weights in both builds); master's estimate is above its own runtime buffers.
 
-Peak RSS of `llama-mtmd-cli` (CPU, Gemma 4 E4B): image +5 MB (8,424 vs 8,429 MB), audio +22 MB (8,528 vs 8,551 MB, two runs each), 0.1 to 0.3 %. After `mtmd_init_from_file` the branch is 4 MB lower; the difference comes during encode: about 5 MB is the compute buffer of the log-mel's CPU scheduler (master ran it on the encoder's scheduler, whose buffers already fit it), the rest host copies of the input and the output copy of the encoded rows next to the rows the media keeps. Qwen3-TTS (`llama-tts`, CPU): +30 MB (8,587 vs 8,617 MB, 0.35 %), WAV identical, 10 % faster (11.1 vs 12.3 s wall).
+Peak RSS of `llama-mtmd-cli` (CPU, Gemma 4 E4B): image +5 MB (8,424 vs 8,429 MB), audio +22 MB (8,528 vs 8,551 MB, two runs each), 0.1 to 0.3 %. After `mtmd_init_from_file` the branch is 4 MB lower; the difference comes during encode: about 5 MB is the compute buffer of the log-mel's CPU scheduler (master ran it on the encoder's scheduler, whose buffers already fit it), the rest host copies of the input and the output copy of the encoded rows next to the rows the media keeps. Qwen3-TTS (`llama-tts`, CPU), measured before the trim on the old native path (separate code predictor and codec contexts): +30 MB (8,587 vs 8,617 MB, 0.35 %), WAV identical, 10 % faster (11.1 vs 12.3 s wall); not measured again on the common gen path.
 
 ## Known limitations
 
@@ -252,3 +259,4 @@ Peak RSS of `llama-mtmd-cli` (CPU, Gemma 4 E4B): image +5 MB (8,424 vs 8,429 MB)
 - Encoded rows go through host memory.
 - Generation contexts process one gen entry at a time; streams of one proc are serialized.
 - Peak RSS is 5 to 22 MB above master during media encode (see Memory).
+- Fish S2, Drama 3, Minimax-Music3, Pocket TTS, YuE2 and the LFM3-Audio stream are untested (no small GGUF).
