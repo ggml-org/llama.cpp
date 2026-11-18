@@ -2353,9 +2353,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                         decode_source->decode = window_model;
                         decode_c_params.attention_size = decode_window;
                     }
-                    // GGML_OPENVINO_NPU_KEEP_PREFILL_MODELS keeps the pair: its requests are already released above,
-                    // and a later prompt at its size finds it in the shared cache instead of compiling again.
-                    if (shared_cache->backend_count == 1 && !ggml_openvino_npu_keep_prefill_models_enabled()) {
+                    if (shared_cache->backend_count == 1) {
                         shared_cache->graphs.erase(source_it);
                     }
                 }
