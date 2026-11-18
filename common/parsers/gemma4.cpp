@@ -303,7 +303,8 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
     data.format            = COMMON_CHAT_FORMAT_PEG_GEMMA4;
     data.supports_thinking  = true;
     data.thinking_start_tag = "<|channel>thought";
-    data.thinking_end_tags  = {"<channel|>"};
+    // a tool call may start before the thought channel is closed; <channel|> stays first, the budget sampler forces it
+    data.thinking_end_tags  = {"<channel|>", "<|tool_call>"};
 
     data.preserved_tokens = {
         "<|channel>",
@@ -334,9 +335,10 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
         auto start = p.rule("start", p.optional(p.literal("<|turn>model\n")));
 
         if (extract_reasoning) {
-            p.rule("thought", p.literal("<|channel>thought") + p.space() + p.reasoning(p.until("<channel|>")) + p.literal("<channel|>"));
+            // the model may start a tool call before closing the thought channel
+            p.rule("thought", p.literal("<|channel>thought") + p.space() + p.reasoning(p.until_one_of({"<channel|>", "<|tool_call>"})) + (p.literal("<channel|>") | p.peek(p.literal("<|tool_call>"))));
         } else {
-            p.rule("thought", p.content(p.literal("<|channel>thought") + p.space() + p.until("<channel|>") + p.literal("<channel|>")));
+            p.rule("thought", p.content(p.literal("<|channel>thought") + p.space() + p.until_one_of({"<channel|>", "<|tool_call>"}) + (p.literal("<channel|>") | p.peek(p.literal("<|tool_call>")))));
         }
 
         auto consume_empty_channels = p.gbnf(p.zero_or_more(p.literal("<|channel>") + p.negate(p.literal("thought"))), "");

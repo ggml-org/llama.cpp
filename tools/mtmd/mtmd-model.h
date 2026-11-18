@@ -160,7 +160,7 @@ struct mtmd_hparams {
     int32_t audio_proj_downsample_rate = 0;
     int32_t audio_proj_head_count      = 0;
 
-    // audio pyramid (muse-spark): widths, folded samples and blocks per stage
+    // audio pyramid (muse-spark, vibevoice): widths, folded samples (vibevoice: conv strides) and blocks per stage
     std::vector<int32_t> audio_hidden_sizes;
     std::vector<int32_t> audio_patch_sizes;
     std::vector<int32_t> audio_depths;
@@ -173,6 +173,9 @@ struct mtmd_hparams {
         }
         return (int32_t) n;
     }
+
+    // vibevoice: leading samples of a chunk that only feed the causal convs, at least their receptive field
+    int32_t audio_n_ctx = 0;
 
     // audio-to-mel preprocessor params
     int32_t audio_chunk_len   = -1; // in seconds
@@ -200,6 +203,7 @@ struct mtmd_hparams {
 
     // name of the weight variant, some pipelines tune themselves on it
     std::string gen_model_variant;
+    std::string gen_default_voice;
 
     // sampling defaults of the generated audio: greedy, no top-k, no repetition penalty
     float   gen_temp           = 0.0f;
@@ -209,6 +213,10 @@ struct mtmd_hparams {
 
     // pocket-tts
     static constexpr int32_t pockettts_max_spk_seconds = 30;
+    // qwen3tts: the reference encoder mask is dense, so cost is quadratic in the clip
+    static constexpr int32_t qwen3tts_max_ref_seconds = 30;
+    // fish_s2: the codec encoder runs at 44.1 kHz, memory grows with the clip
+    static constexpr int32_t fish_s2_max_spk_seconds = 30;
     int32_t seanet_n_stage    = 0;
     std::vector<int32_t> seanet_ratios; // encoder order (reversed compared to the config)
     int32_t mimi_downsample   = 0;      // encoder frame rate / model frame rate
@@ -527,6 +535,14 @@ struct mtmd_seanet {
     std::vector<stage> stages;
 };
 
+// vibevoice-asr: causal conv pyramid over the raw waveform
+// stage = strided conv -> ConvNeXt blocks (RMS norm, depthwise conv, layer scale, then RMS norm, MLP, layer scale)
+struct mtmd_cnx_encoder {
+    std::vector<ggml_tensor *> conv_w; // stem, one downsample conv per stage, head
+    std::vector<ggml_tensor *> conv_b;
+    std::vector<mtmd_layer>    blocks; // ln_1, conv (depthwise), ls_1, ln_2, ffn_up, ffn_down, ls_2
+};
+
 // pocket-tts flow-matching decoder (SimpleMLPAdaLN)
 struct mtmd_flow_net {
     // AdaLN res block: in_ln -> modulate -> Linear -> SiLU -> Linear, gated residual
@@ -609,6 +625,12 @@ struct mtmd_code2wav {
     ggml_tensor * quant_rest_in_w   = nullptr; // acoustic RVQ
     ggml_tensor * quant_rest_out_w  = nullptr;
     ggml_tensor * quant_rest_cb_w   = nullptr; // codebooks, merged 3D [15, vocab, dim]
+
+    // fish_s2 codec encoder: in_proj bias and l2-normalized codebooks for the nearest-entry search
+    ggml_tensor * quant_first_in_b      = nullptr;
+    ggml_tensor * quant_rest_in_b       = nullptr;
+    ggml_tensor * quant_first_cb_norm_w = nullptr;
+    ggml_tensor * quant_rest_cb_norm_w  = nullptr;
 
     ggml_tensor * pre_conv_w = nullptr;
     ggml_tensor * pre_conv_b = nullptr;
@@ -869,6 +891,182 @@ struct mtmd_drama3_layer {
     ggml_tensor * out_norm_w = nullptr;
 };
 
+// zonos3 ZAC codec decoder (a.gen.wav.*)
+struct mtmd_zonos3_wav {
+    struct convnext {
+        ggml_tensor * dw_w   = nullptr; // [K, C]
+        ggml_tensor * dw_b   = nullptr;
+        ggml_tensor * norm_w = nullptr;
+        ggml_tensor * norm_b = nullptr;
+        ggml_tensor * pw1_w  = nullptr;
+        ggml_tensor * pw1_b  = nullptr;
+        ggml_tensor * pw2_w  = nullptr;
+        ggml_tensor * pw2_b  = nullptr;
+    };
+    struct layer {
+        ggml_tensor * norm1_w    = nullptr;
+        ggml_tensor * norm1_b    = nullptr;
+        ggml_tensor * qkv_w      = nullptr;
+        ggml_tensor * wo_w       = nullptr;
+        ggml_tensor * attn_scale = nullptr;
+        ggml_tensor * norm2_w    = nullptr;
+        ggml_tensor * norm2_b    = nullptr;
+        ggml_tensor * ffn1_w     = nullptr;
+        ggml_tensor * ffn2_w     = nullptr;
+        ggml_tensor * ffn_scale  = nullptr;
+    };
+    struct stage {
+        ggml_tensor * in_w  = nullptr;
+        ggml_tensor * out_w = nullptr; // nullptr in the last stage
+        std::vector<layer> layers;
+    };
+
+    ggml_tensor * sem_table = nullptr; // folded through its out_proj
+    ggml_tensor * sem_bias  = nullptr;
+    std::vector<convnext> sem;
+    ggml_tensor * sem_out_w = nullptr;
+    ggml_tensor * sem_out_b = nullptr;
+    ggml_tensor * res_table = nullptr; // merged
+    ggml_tensor * res_bias  = nullptr; // [latent, n_codebooks - 1]
+
+    std::vector<stage> stages;
+
+    std::vector<convnext> head;
+    ggml_tensor * head_norm_w = nullptr;
+    ggml_tensor * head_norm_b = nullptr;
+    ggml_tensor * head_out_w  = nullptr; // both iSTFT branches
+    ggml_tensor * head_out_b  = nullptr;
+
+    // read on the host
+    std::vector<float> mixer;    // [2, fir_kernel]
+    std::vector<float> resample; // [rs_new, rs_kernel_len]
+    int64_t fir_kernel    = 0;
+    int64_t rs_new        = 0;
+    int64_t rs_kernel_len = 0;
+};
+
+// tiny-voca: duration predictor and source-filter heads (graphs), the small linear layers between the stacks (host)
+// the prosody and acoustic stacks are loaded by libllama, see mtmd_owned_llama_load()
+struct mtmd_tiny_voca {
+    ggml_tensor * dur_conv1_w = nullptr; // [3, n_embd, n_pred]
+    ggml_tensor * dur_conv1_b = nullptr;
+    ggml_tensor * dur_norm1_w = nullptr;
+    ggml_tensor * dur_norm1_b = nullptr;
+    ggml_tensor * dur_conv2_w = nullptr; // [3, n_pred, n_pred]
+    ggml_tensor * dur_conv2_b = nullptr;
+    ggml_tensor * dur_norm2_w = nullptr;
+    ggml_tensor * dur_norm2_b = nullptr;
+    ggml_tensor * dur_out_w   = nullptr; // [n_pred, 2]: log(1 + frames), pause logit
+    ggml_tensor * dur_out_b   = nullptr;
+    ggml_tensor * harm_w      = nullptr; // [n_embd, n_cep_causal + n_cep_anti + harm_steps]
+    ggml_tensor * harm_b      = nullptr;
+    ggml_tensor * noise_w     = nullptr; // [n_embd, n_noise_cep + noise_steps]
+    ggml_tensor * noise_b     = nullptr;
+
+    // read on the host, row-major as in the reference
+    std::vector<float> token_class;    // [n_vocab]: 0 = pause, 1 = consonant, 2 = vowel
+    std::vector<float> frame_pos_w;    // [n_embd, 3]
+    std::vector<float> frame_pos_b;    // [n_embd]
+    std::vector<float> prosody_head_w; // [3, n_embd]: log(F0 / 200 Hz), voiced logit, energy
+    std::vector<float> prosody_head_b;
+    std::vector<float> prosody_proj_w; // [n_embd, 3]
+    std::vector<float> prosody_proj_b;
+
+    // unknown-word model of the phonemizer, run on the host by mtmd_gen_audio_g2p(): letters -> CMUdict phonemes
+    // embedding (each letter takes n_slot positions), bidirectional GRU layers, CTC output read greedily
+    struct g2p_gru {
+        std::vector<float> w_ih; // [3 * n_hidden, n_in]: reset, update, new
+        std::vector<float> w_hh; // [3 * n_hidden, n_hidden]
+        std::vector<float> b_ih;
+        std::vector<float> b_hh;
+    };
+    std::vector<float> g2p_embd;     // [n_letter + 1, n_width], row 0 unused
+    std::vector<float> g2p_slot;     // [n_slot, n_width]
+    std::vector<g2p_gru> g2p_layers; // forward, reverse, for each layer
+    std::vector<float> g2p_out_w;    // [n_symbol + 1, 2 * n_hidden], output 0 is the CTC blank
+    std::vector<float> g2p_out_b;
+    int64_t g2p_n_width  = 0;
+    int64_t g2p_n_hidden = 0;
+};
+
+// snake-activated conv decoder of the DAC / Oobleck family (a.gen.vae.*): yue2 VAE, minimax_music3 vocoder
+struct mtmd_snake_vae {
+    // x + beta * sin(alpha * x)^2, alpha and beta folded at conversion
+    struct snake {
+        ggml_tensor * alpha = nullptr;
+        ggml_tensor * beta  = nullptr;
+    };
+    struct res_unit {
+        snake         act1;
+        ggml_tensor * conv1_w = nullptr; // k = 7, dilated
+        ggml_tensor * conv1_b = nullptr;
+        snake         act2;
+        ggml_tensor * conv2_w = nullptr; // k = 1
+        ggml_tensor * conv2_b = nullptr;
+    };
+    struct block {
+        snake         act;
+        ggml_tensor * up_w = nullptr; // ConvTranspose1d, k = 2 * stride
+        ggml_tensor * up_b = nullptr;
+        std::vector<res_unit> res;
+    };
+
+    ggml_tensor * in_proj_w = nullptr; // optional k = 1 conv before conv_in
+    ggml_tensor * in_proj_b = nullptr;
+    ggml_tensor * in_w      = nullptr;
+    ggml_tensor * in_b      = nullptr;
+    std::vector<block> blocks;
+    snake         post;
+    ggml_tensor * out_w     = nullptr;
+    ggml_tensor * out_b     = nullptr; // optional
+
+    // output samples per latent frame
+    int64_t ratio() const {
+        int64_t r = 1;
+        for (const auto & blk : blocks) {
+            r *= blk.up_w->ne[0] / 2;
+        }
+        return r;
+    }
+    int64_t n_latent() const {
+        return (in_proj_w ? in_proj_w : in_w)->ne[1];
+    }
+};
+
+// yue2: projections of the flow-matching NAR (a.gen.nar.*), the VAE is mtmd_model::snake_vae
+// the NAR transformer layers are loaded by libllama, see mtmd_yue2_nar_load()
+struct mtmd_yue2 {
+    ggml_tensor * inp_w = nullptr; // latent -> backbone embd
+    ggml_tensor * inp_b = nullptr;
+    ggml_tensor * out_w = nullptr; // backbone hidden -> velocity
+    ggml_tensor * out_b = nullptr;
+
+    // time embedder MLP, read on the host
+    std::vector<float> time0_w; // [256, n_embd]
+    std::vector<float> time0_b;
+    std::vector<float> time2_w; // [n_embd, n_embd]
+    std::vector<float> time2_b;
+};
+
+// minimax_music3: condition encoder (a.gen.cond.*) and flow-matching DiT (a.gen.flow.*)
+// the depth decoder is the generic a.gen.code.* layers, the vocoder is mtmd_model::snake_vae
+struct mtmd_music3 {
+    ggml_tensor * cond_layer_w = nullptr; // mix of the hidden states of a frame, softmax and scale folded in
+    ggml_tensor * cond_w       = nullptr; // k = 3 conv
+    ggml_tensor * cond_b       = nullptr;
+
+    ggml_tensor * time_freq  = nullptr; // random Fourier features, 2 * pi folded in
+    ggml_tensor * time_in_w  = nullptr;
+    ggml_tensor * time_in_b  = nullptr;
+    ggml_tensor * time_out_w = nullptr;
+    ggml_tensor * time_out_b = nullptr;
+    ggml_tensor * pre_w      = nullptr; // k = 1 conv over [latent, zeros, cond], residual
+    ggml_tensor * proj_in_w  = nullptr;
+    ggml_tensor * proj_out_w = nullptr;
+    ggml_tensor * post_w     = nullptr; // k = 1 conv, residual
+    std::vector<mtmd_layer> dit;
+};
+
 struct mtmd_vocos {
     ggml_tensor * input_w        = nullptr;
     ggml_tensor * input_b        = nullptr;
@@ -898,6 +1096,7 @@ struct mtmd_model {
 
     // embeddings
     ggml_tensor * class_embedding = nullptr;
+    ggml_tensor * class_position_embedding = nullptr;
     ggml_tensor * patch_embeddings_0 = nullptr;
     ggml_tensor * patch_embeddings_1 = nullptr;  // additional patch kernel; interpretation is model-specific (Qwen2VL, Nemotron Omni)
     ggml_tensor * patch_bias = nullptr;
@@ -1104,7 +1303,9 @@ struct mtmd_model {
     ggml_tensor * mm_norm_mid_w = nullptr;
 
     // mimo-audio-tokenizer: post-transformer downsample + RVQ codebook
-    ggml_tensor * downsample_conv_w = nullptr; // no bias
+    // higgs-audio: depthwise downsample conv of the projector
+    ggml_tensor * downsample_conv_w = nullptr;
+    ggml_tensor * downsample_conv_b = nullptr; // higgs-audio only
     ggml_tensor * downsample_norm_w = nullptr;
     ggml_tensor * downsample_norm_b = nullptr;
     ggml_tensor * rvq_codebook = nullptr; // merged 3D [n_q, max_bins, dim]
@@ -1139,17 +1340,37 @@ struct mtmd_model {
     ggml_tensor * gen_code_head_w     = nullptr; // per-codebook output head, merged 3D
     ggml_tensor * gen_code_out_embd_w = nullptr; // codebook-0 embedding, fed back into the talker
     ggml_tensor * gen_code_norm_w     = nullptr; // final norm
+    ggml_tensor * gen_code_tok_embd_w = nullptr; // fish_s2: input embedding shared by all codebooks
 
     // lfm3a depthformer (MaskGIT)
     ggml_tensor * gen_code_head_norm_w = nullptr; // per-codebook norm before the tied head, merged 2D
     ggml_tensor * gen_code_mask_embd   = nullptr;
 
+    // qwen3tts reference encoder: reference clip -> RVQ codes, uses seanet and downsample_w too
+    std::vector<mtmd_layer> ref_enc_layers;
+    ggml_tensor * ref_quant_first_in_w = nullptr;
+    ggml_tensor * ref_quant_first_cb   = nullptr;
+    ggml_tensor * ref_quant_rest_in_w  = nullptr;
+    ggml_tensor * ref_quant_rest_cb    = nullptr; // acoustic codebooks, merged 3D
+
+    bool has_ref_encoder() const {
+        return ref_quant_rest_cb != nullptr;
+    }
+
     // qwen3tts code2wav: RVQ codes -> raw PCM
     mtmd_code2wav c2w;
     std::vector<mtmd_drama3_layer> drama3_layers;
+    mtmd_zonos3_wav zonos3;
+    mtmd_yue2 yue2;
+    mtmd_music3 music3;
+    mtmd_snake_vae snake_vae; // yue2, minimax_music3
+    mtmd_tiny_voca tiny_voca;
 
     // pocket-tts: SEANet stack, shared by the encoder (speaker path) and the decoder (gen path)
     mtmd_seanet seanet;
+
+    // vibevoice-asr: acoustic and semantic encoders
+    mtmd_cnx_encoder cnx_enc[2];
 
     // pocket-tts: voice latent -> backbone embd (speaker path)
     ggml_tensor * spk_proj_w      = nullptr;
@@ -1171,6 +1392,7 @@ struct mtmd_model {
 
     // chatterbox tensors read on the host, see cbx_read_tensor()
     std::map<std::string, ggml_tensor *> cbx_tensors;
+    std::map<std::string, ggml_tensor *> zonos3_spk; // a.spk.*
     // predefined voices, no rows if the voice is named in the prompt (lfm3a)
     std::map<std::string, mtmd_gen_voice> gen_voices;
 
@@ -1274,6 +1496,7 @@ struct mtmd_model {
 
     bool audio_has_avgpool() const {
         return proj_type == PROJECTOR_TYPE_QWEN2A
+            || proj_type == PROJECTOR_TYPE_HIGGS_AUDIO
             || proj_type == PROJECTOR_TYPE_VOXTRAL
             || proj_type == PROJECTOR_TYPE_MUSIC_FLAMINGO;
     }

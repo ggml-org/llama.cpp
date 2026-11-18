@@ -270,12 +270,14 @@ struct vk_matmul_pipeline_pair {
     vk_pipeline unaligned;
     vk_pipeline aligned;
     uint32_t align;
+    uint32_t narrow_n_max = 0;
 };
 
 struct vk_tile_config {
     std::vector<uint32_t> warptile;
     std::array<uint32_t, 3> wg_denoms;
     uint32_t align;
+    uint32_t narrow_n_max = 0;
 };
 
 using matmul_tile_selector_t = std::function<uint32_t(
@@ -464,15 +466,15 @@ struct vk_conv2d_pipeline_state {
 
 struct vk_conv3d_pipeline_state {
     vk_conv3d_pipeline_state(uint32_t s0, uint32_t s1, uint32_t s2, uint32_t p0, uint32_t p1, uint32_t p2,
-                             uint32_t d0, uint32_t d1, uint32_t d2, uint32_t KW, uint32_t KH, uint32_t KD, uint32_t aligned)
-        : s0(s0), s1(s1), s2(s2), p0(p0), p1(p1), p2(p2), d0(d0), d1(d1), d2(d2), KW(KW), KH(KH), KD(KD), aligned(aligned) {}
+                             uint32_t d0, uint32_t d1, uint32_t d2, uint32_t KW, uint32_t KH, uint32_t KD, uint32_t aligned, uint32_t split_k)
+        : s0(s0), s1(s1), s2(s2), p0(p0), p1(p1), p2(p2), d0(d0), d1(d1), d2(d2), KW(KW), KH(KH), KD(KD), aligned(aligned), split_k(split_k) {}
 
     uint32_t s0, s1, s2, p0, p1, p2, d0, d1, d2, KW, KH, KD;
-    uint32_t aligned;
+    uint32_t aligned, split_k;
 
     bool operator<(const vk_conv3d_pipeline_state &b) const {
-        return std::tie(s0, s1, s2, p0, p1, p2, d0, d1, d2, KW, KH, KD, aligned) <
-               std::tie(b.s0, b.s1, b.s2, b.p0, b.p1, b.p2, b.d0, b.d1, b.d2, b.KW, b.KH, b.KD, b.aligned);
+        return std::tie(s0, s1, s2, p0, p1, p2, d0, d1, d2, KW, KH, KD, aligned, split_k) <
+               std::tie(b.s0, b.s1, b.s2, b.p0, b.p1, b.p2, b.d0, b.d1, b.d2, b.KW, b.KH, b.KD, b.aligned, b.split_k);
     }
 };
 
@@ -1049,6 +1051,7 @@ struct vk_device_struct {
     bool allow_sysmem_fallback;
     bool disable_graph_optimize;
     bool xe_fa_support {};
+    bool disable_narrow_mul_mat;
 
     std::unique_ptr<vk_memory_logger> memory_logger;
 
@@ -1237,6 +1240,7 @@ inline std::mutex vk_memory_logger::log_mutex;
 
 class vk_perf_logger {
   public:
+    explicit vk_perf_logger(const vk_device & device) : device(device) {}
     void print_timings(bool force = false);
 
 
@@ -1271,6 +1275,7 @@ class vk_perf_logger {
     }
 
   private:
+    vk_device device;
     std::map<std::string, std::vector<uint64_t>> timings;
     std::map<std::string, std::vector<uint64_t>> flops;
     uint32_t print_count {};
@@ -1422,13 +1427,16 @@ struct vk_fa_tuning_params {
     uint32_t row_split;
     bool shmem_staging;
     bool disable_subgroups;
+    bool q_in_regs;
+    bool flip;
+    bool flip_direct;
     uint32_t limit_occupancy_shmem;
 
     void print() const {
         std::cerr << "path=" << path << " workgroup_size=" << workgroup_size << " subgroup_size=" << subgroup_size <<
                      " block_rows=" << block_rows << " block_cols=" << block_cols << " d_split=" << d_split <<
                      " row_split=" << row_split << " shmem_staging=" << shmem_staging << " disable_subgroups=" << disable_subgroups <<
-                     " limit_occupancy_shmem=" << limit_occupancy_shmem << std::endl;
+                     " q_in_regs=" << q_in_regs << " flip=" << flip << " flip_direct=" << flip_direct << " limit_occupancy_shmem=" << limit_occupancy_shmem << std::endl;
     }
 };
 

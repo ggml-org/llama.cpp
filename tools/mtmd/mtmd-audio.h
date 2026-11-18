@@ -14,6 +14,7 @@ struct mtmd_audio_mel {
     int64_t n_len;
     int64_t n_len_org;
     int64_t n_mel;
+    int64_t n_ctx = 0; // see mtmd_image_f32::audio_n_ctx
 
     std::vector<float> data;
 };
@@ -50,6 +51,11 @@ struct mtmd_audio_cache {
                                     bool  use_htk          = false
     );
 };
+
+// FFT of N real samples -> N complex values (interleaved), in needs 2 * N floats and out 8 * N floats (scratch)
+void mtmd_audio_fft(const mtmd_audio_cache & cache, float * in, int N, float * out);
+// inverse FFT of N complex values (interleaved), scaled by 1 / N; in and out need 8 * N floats (scratch)
+void mtmd_audio_ifft(const mtmd_audio_cache & cache, float * in, int N, float * out);
 
 // compute one log10-mel frame from n_fft windowed samples, cache must be initialized for n_fft
 void mtmd_audio_log_mel_frame(const mtmd_audio_cache & cache, const float * samples, int n_fft, int n_mel, float * out);
@@ -114,6 +120,7 @@ struct mtmd_audio_preprocessor {
 
 struct mtmd_audio_preprocessor_whisper : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_whisper(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
+    mtmd_audio_preprocessor_whisper(const mtmd_hparams & hparams, ggml_backend_sched_t sched) : mtmd_audio_preprocessor(hparams, sched) {}
     void initialize() override;
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 
@@ -123,6 +130,23 @@ struct mtmd_audio_preprocessor_whisper : mtmd_audio_preprocessor {
 
 struct mtmd_audio_preprocessor_muse_spark_audio : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_muse_spark_audio(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
+    void initialize() override {}
+    bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
+};
+
+// fish_s2 speaker reference: same as muse spark (raw waveform, whole frames), truncated to fish_s2_max_spk_seconds
+struct mtmd_audio_preprocessor_fish_s2 : mtmd_audio_preprocessor_muse_spark_audio {
+    using mtmd_audio_preprocessor_muse_spark_audio::mtmd_audio_preprocessor_muse_spark_audio;
+    bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
+};
+
+// vibevoice: gain to -25 dBFS RMS, without clipping the peak
+// the RMS is floored at -50 dBFS, so that silence or noise alone is not boosted to full scale
+double mtmd_audio_vibevoice_gain(double sum_sq, int64_t n_samples, double peak);
+
+// raw 24 kHz waveform, cut in chunks that carry their causal context, see mtmd_hparams::audio_n_ctx
+struct mtmd_audio_preprocessor_vibevoice_asr : mtmd_audio_preprocessor {
+    mtmd_audio_preprocessor_vibevoice_asr(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     void initialize() override {}
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 };
@@ -197,6 +221,12 @@ struct mtmd_audio_preprocessor_dots3note : mtmd_audio_preprocessor {
     mtmd_audio_cache cache;
 };
 
+// same per-chunk log-mel as dots3note, with 4s chunks
+struct mtmd_audio_preprocessor_higgs_audio : mtmd_audio_preprocessor_dots3note {
+    mtmd_audio_preprocessor_higgs_audio(const mtmd_model * model) : mtmd_audio_preprocessor_dots3note(model) {}
+    bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
+};
+
 struct mtmd_audio_preprocessor_mimo_audio : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_mimo_audio(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     void initialize() override;
@@ -242,6 +272,16 @@ struct mtmd_audio_preprocessor_chatterbox_ref : mtmd_audio_preprocessor {
     mtmd_audio_cache ve_cache;     // entry 4
 };
 
+// zonos3 speaker encoder front-end: kaldi fbank with a hamming window [80 x n_frames] (mel major)
+struct mtmd_audio_preprocessor_zonos3_spk : mtmd_audio_preprocessor {
+    mtmd_audio_preprocessor_zonos3_spk(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
+    void initialize() override;
+    bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
+
+  private:
+    mtmd_audio_cache cache;
+};
+
 struct mtmd_audio_preprocessor_parakeet : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_parakeet(const mtmd_model * model) : mtmd_audio_preprocessor(model) { }
     void initialize() override;
@@ -258,6 +298,51 @@ struct mtmd_audio_preprocessor_parakeet : mtmd_audio_preprocessor {
 struct mtmd_audio_preprocessor_nemotron_transcribe : mtmd_audio_preprocessor_parakeet {
     mtmd_audio_preprocessor_nemotron_transcribe(const mtmd_model * model) : mtmd_audio_preprocessor_parakeet(model) { }
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
+};
+
+//
+// zonos3 iSTFT head, streaming: 2 iSTFT branches, FIR mixer, 44160 -> 44100 Hz resampler
+// ported from the reference ggml runtime (zac.cpp)
+//
+struct mtmd_audio_zonos3_synth {
+    // mixer [2, fir_kernel], resample [rs_new, rs_orig + 2 * width]
+    mtmd_audio_zonos3_synth(const std::vector<float> & mixer, const std::vector<float> & resample,
+                            int n_fft0, int n_fft1, int hop, int rs_orig, int rs_new);
+
+    // spec: n_cols frames of [log magnitude, phase] of each branch
+    void push(const float * spec, int64_t n_cols, std::vector<float> & out);
+    void flush(std::vector<float> & out);
+
+  private:
+    struct branch {
+        int n_fft;
+        mtmd_audio_cache   cache;
+        std::vector<float> ola, env; // from ola_base on
+        int64_t ola_base = 0;
+        std::vector<float> mix_in;   // from mix_base on
+        int64_t mix_avail = 0;
+        std::vector<float> ifft_in, ifft_out;
+    };
+
+    void ola_finalize(branch & b, int64_t pf);
+    void mix_emit(std::vector<float> & out);
+    void resample(bool flush, std::vector<float> & out);
+
+    branch br[2];
+    std::vector<float> mixer;
+    int     fir_kernel;
+    int     hop;
+    int64_t n_frames = 0;
+    int64_t mix_base = 0;
+    int64_t mix_next = 0;
+    bool    done     = false;
+
+    std::vector<float> rs_kernel;
+    int     rs_orig, rs_new, rs_width;
+    std::vector<float> rs_buf; // from rs_base on
+    int64_t rs_base  = 0;
+    int64_t rs_in    = 0;
+    int64_t rs_block = 0;
 };
 
 //
