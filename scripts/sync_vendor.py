@@ -5,7 +5,7 @@ import os
 import sys
 import subprocess
 
-HTTPLIB_VERSION = "refs/tags/v0.66.0"
+HTTPLIB_VERSION = "refs/tags/v0.67.0"
 JSON_VERSION    = "v3.12.0"
 
 # stb has no release tag, so we pin a commit (stb_image v2.32)
