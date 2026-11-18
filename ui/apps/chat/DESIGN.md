@@ -758,7 +758,8 @@ This file is the how, written for agents first. Its principles, as rules to appl
 - **Recognisable, easy to change.** Keep the character in the icon, the type and one
   accent, so an app built on Llama UI can restyle it through component tokens alone.
 - **Design lives in code.** The CSS is the source of truth; prefer what is generated or
-  derived over hand-tuned values, and record the reason next to the value.
+  derived over hand-tuned values, and record the reason next to the value. Content pages are
+  Markdown with Svelte components in them, as `.svx` (see `AGENTS.md`).
 - **Reuse before adding.** An existing role before a new token, an existing component before
   a new one.
 
@@ -778,7 +779,8 @@ Design tokens come in three tiers, each in its own file under `ui/lib/ui/src/lib
    them as `bg-(--button-primary-background)` and similar.
 
 The front matter of this file mirrors those three files. When they disagree, the CSS wins
-and this file should be updated to match.
+and this file should be updated to match. Storybook shows every tier under **Llama UI ›
+Foundations › Colors**.
 
 Light mode is the base. A semantic token whose dark value differs has a `-dark` twin here,
 and components list a `-dark` entry wherever their colours change. Translucent component
@@ -808,7 +810,8 @@ cinder, the accent orange; never from the status colours, and never red.
 Light mode has two surface themes, which share everything else (the palette, buttons, fields,
 badges, shadows and dark mode): **Paper**, the default, sets white panels, fields and keys on a
 faint grey page (`neutral-25`); **Matte** sets grey glass on a white page. Matte is the
-`theme-matte` class on `<html>`, chosen with the Light surfaces setting (Settings → General), and only its surface tokens differ: `surface-page`,
+`theme-matte` class on `<html>`, chosen with the Light surfaces setting (Settings → General) or
+the Surface switch in Storybook's toolbar, and only its surface tokens differ: `surface-page`,
 `surface-glass`, `surface-code`, `field-background` and `float-panel-background-modal`.
 
 - **Surfaces:** `surface-page` for the page, `surface-muted` for quiet panels,
@@ -916,7 +919,8 @@ layout: solid behind the status bar and the row of corner controls under it, fad
 instead of colliding with the clock or the chat's header. A route needs no fade of its own;
 what covers the whole screen, like the expanded chat form, hides it, and it fades out as the
 page slides aside for the sidebar. Check
-pinned content with the insets simulated, since they are 0 in a desktop browser.
+pinned content with the insets simulated (the Safe areas page in
+Storybook does this), since they are 0 in a desktop browser.
 
 ## Elevation & Depth
 

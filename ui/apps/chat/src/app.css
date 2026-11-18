@@ -1,7 +1,9 @@
 @import 'tailwindcss';
 @source '.';
-/* stories may use classes the app does not, so tailwind scans them too */
+/* stories may use classes the app does not, so tailwind scans them too: the app's and Llama UI's,
+   which this Storybook shows as well */
 @source '../tests/stories';
+@source '../../../lib/ui/tests/stories';
 @plugin '@tailwindcss/forms';
 @plugin '@tailwindcss/typography';
 @import 'tw-animate-css';
