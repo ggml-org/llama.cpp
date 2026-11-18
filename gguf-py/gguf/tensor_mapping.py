@@ -538,6 +538,66 @@ class TensorNameMap:
             "model.layers.{bid}.attention_input.query",  # inkling2
         ),
 
+        MODEL_TENSOR.LOOP_Q_CTRL_DOWN: (
+            "model.layers.{bid}.q_controller.down_proj",       # inkling2_loop
+            "model.layers.{bid}.controllers.attn.down_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_Q_CTRL_GAIN: (
+            "model.layers.{bid}.q_controller.gain_proj",       # inkling2_loop
+            "model.layers.{bid}.controllers.attn.gain_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_Q_CTRL_FORGET: (
+            "model.layers.{bid}.q_controller.forget_proj",       # inkling2_loop
+            "model.layers.{bid}.controllers.attn.forget_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_K_CTRL_DOWN: (
+            "model.layers.{bid}.k_controller.down_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.k.down_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_K_CTRL_GAIN: (
+            "model.layers.{bid}.k_controller.gain_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.k.gain_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_K_CTRL_FORGET: (
+            "model.layers.{bid}.k_controller.forget_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.k.forget_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_V_CTRL_DOWN: (
+            "model.layers.{bid}.v_controller.down_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.v.down_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_V_CTRL_GAIN: (
+            "model.layers.{bid}.v_controller.gain_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.v.gain_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_V_CTRL_FORGET: (
+            "model.layers.{bid}.v_controller.forget_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.v.forget_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_FFN_CTRL_DOWN: (
+            "model.layers.{bid}.mlp_controller.down_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.mlp.down_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_FFN_CTRL_GAIN: (
+            "model.layers.{bid}.mlp_controller.gain_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.mlp.gain_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_FFN_CTRL_FORGET: (
+            "model.layers.{bid}.mlp_controller.forget_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.mlp.forget_weight",  # inkling2_loop
+        ),
+
         # Feed-forward norm
         MODEL_TENSOR.FFN_NORM: (
             "layers.{bid}.moe_connection.norm",                              # metis16

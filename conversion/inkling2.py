@@ -69,7 +69,7 @@ def _is_inkling2(dir_model: Path) -> bool:
     if not (dir_model / "config.json").is_file():
         return False
     with open(dir_model / "config.json", encoding="utf-8") as f:
-        return json.load(f).get("model_type") in ("inkling2", "inkling2_text")
+        return json.load(f).get("model_type") in ("inkling2", "inkling2_text", "inkling2_loop", "inkling2_loop_text")
 
 
 @ModelBase.register_hparams_loader(_is_inkling2)
@@ -79,12 +79,21 @@ def _load_inkling2_hparams(dir_model: Path):
         return json.load(f)
 
 
-@ModelBase.register("Inkling2ForConditionalGeneration", "Inkling2ForCausalLM")
+@ModelBase.register("Inkling2ForConditionalGeneration", "Inkling2ForCausalLM", "Inkling2LoopForConditionalGeneration", "Inkling2LoopForCausalLM")
 @ModelBase.example("thinkingmachines/Inkling-2-Small")
 class Inkling2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.INKLING2
 
+    # both names are the raw checkpoint and the transformers names
+    _loop_query_names = ("model.middle_cycle_cross_pass_queries", "model.cross_pass_messages.queries")
+    _loop_kv_query_names = ("model.middle_cycle_cross_pass_kv_queries", "model.cross_pass_messages.kv_queries")
+
     def __init__(self, dir_model: Path, *args, **kwargs):
+        hparams = kwargs.get("hparams") or ModelBase.load_hparams(dir_model, is_mistral_format=False)
+        self.loop: dict | None = hparams.get("text_config", hparams).get("loop_config")
+        self._loop_queries: dict[str, Tensor] = {}
+        if self.loop is not None:
+            self.model_arch = gguf.MODEL_ARCH.INKLING2_LOOP
         self._expert_quant: dict[str, dict] = {}
         self._packed_experts: dict[str, gguf.LazyChunkedTensor] = {}
         quant_path = dir_model / "hf_quant_config.json"
@@ -112,6 +121,12 @@ class Inkling2Model(TextModel):
         if len(types) != self.block_count or set(types) - {"hybrid", "hybrid_sliding"}:
             raise ValueError("Inkling2: invalid layer_types")
         self.is_swa = [t == "hybrid_sliding" for t in types]
+        if self.loop is not None:
+            if set(self.loop) != {"core_start", "core_end", "num_passes", "gate_rank"}:
+                raise ValueError(f"Inkling2: unsupported loop_config keys {sorted(self.loop)}")
+            start, end, block = self.loop["core_start"], self.loop["core_end"], hp["n_layers_per_attn_res_block"]
+            if not 0 < start < end <= self.block_count or start % block or end % block or self.loop["num_passes"] < 2:
+                raise ValueError(f"Inkling2: invalid loop_config {self.loop}")
 
     def dequant_model(self):
         for name in list(self.model_tensors):
@@ -241,13 +256,34 @@ class Inkling2Model(TextModel):
         w.add_relative_clip(hp["rel_l2_clip_threshold"])
         w.add_log_scale_floor(hp["log_scaling_n_floor"])
         w.add_log_scale_alpha(hp["log_scaling_alpha"])
+        if self.loop is not None:
+            w.add_loop_core_start(self.loop["core_start"])
+            w.add_loop_core_end(self.loop["core_end"])
+            w.add_loop_num_passes(self.loop["num_passes"])
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
         if new_name.endswith(("_conv.weight", "_clip.weight", "_res_query.weight", "attn_rel_bias.weight")):
             return gguf.GGMLQuantizationType.F32
+        # the reference does not quantize the loop tensors
+        if new_name.endswith(("loop_msg_query.weight", "_ctrl_down.weight", "_ctrl_gain.weight", "_ctrl_forget.weight")):
+            return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name in self._loop_query_names + self._loop_kv_query_names:
+            assert self.loop is not None
+            self._loop_queries["kv" if name in self._loop_kv_query_names else "q"] = data_torch
+            if len(self._loop_queries) < 2:
+                return
+            q, kv = self._loop_queries["q"], self._loop_queries["kv"]
+            start = self.loop["core_start"]
+            if q.shape[0] != 2 * (self.loop["core_end"] - start) or kv.shape != q.shape:
+                raise ValueError(f"Inkling2: cross-pass queries {tuple(q.shape)} and {tuple(kv.shape)} do not match the loop core")
+            # core layer start + i mixes the q, k, v and mlp messages with these queries
+            for i in range(q.shape[0] // 2):
+                query = torch.stack([q[2 * i], kv[2 * i], kv[2 * i + 1], q[2 * i + 1]])
+                yield self.format_tensor_name(gguf.MODEL_TENSOR.LOOP_MSG_QUERY, start + i, ".weight"), query
+            return
         if name in self._packed_experts:
             target = name.replace(".w13_weight", ".gate_up_proj").replace(".w2_weight", ".down_proj")
             yield self.map_tensor_name(target, try_suffixes=()) + ".weight", cast("Tensor", self._packed_experts[name])
@@ -274,7 +310,7 @@ class Inkling2Model(TextModel):
             yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Inkling2ForConditionalGeneration")
+@ModelBase.register("Inkling2ForConditionalGeneration", "Inkling2LoopForConditionalGeneration")
 class Inkling2VisionModel(MmprojModel):
     def get_vision_config(self):
         config = self.global_config.get("vision_config")
