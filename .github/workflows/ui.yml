@@ -93,6 +93,11 @@ jobs:
         run: npm run lint
         working-directory: ui/apps/chat
 
+      - name: Check DESIGN.md is current with the tokens
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
+        run: npm run check:design
+        working-directory: ui/apps/chat
+
       - name: Install Playwright browsers
         id: playwright
         if: ${{ always() && steps.setup.conclusion == 'success' }}
