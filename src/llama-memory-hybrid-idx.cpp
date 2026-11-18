@@ -38,7 +38,8 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
                             /* layer filters */
     const layer_filter_cb & filter_attn,
     const layer_filter_cb & filter_recr,
-    const layer_filter_cb & filter_idx) :
+    const layer_filter_cb & filter_idx,
+                     bool   idx_rope) :
     llama_memory_hybrid(
         model,
         no_alloc,
@@ -56,7 +57,8 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
 
         // the cached indexer keys are raw, rotation happens after pooling at read time, so a
         // K-shift must not rotate them while the stream copies in the same update still apply
-        hparams_idx.rope_type = LLAMA_ROPE_TYPE_NONE;
+        // with idx_rope they are cached with RoPE applied, and a K-shift rotates them like the attention keys
+        hparams_idx.rope_type = idx_rope ? LLAMA_ROPE_TYPE_NEOX : LLAMA_ROPE_TYPE_NONE;
 
         // fool llama_kv_cache into thinking this is a MLA cache, so it won't cache V tensors
         hparams_idx.n_embd_head_k_mla_impl = model.hparams.indexer_head_size;
@@ -67,7 +69,7 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
         return new llama_kv_cache(
             model, no_alloc, hparams_idx, type_k, type_v, v_trans, offload, unified,
             kv_size, n_seq_max, n_swa, swa_type,
-            nullptr, filter_idx, nullptr, nullptr, "idx_");
+            nullptr, filter_idx, nullptr, nullptr, "idx_", idx_rope);
     }()) {}
 
 llama_memory_context_ptr llama_memory_hybrid_idx::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) {

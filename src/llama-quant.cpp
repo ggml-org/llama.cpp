@@ -314,6 +314,10 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // do not quantize norm tensors
     quantize &= name.find("_norm.weight") == std::string::npos;
 
+    // nor the low-rank projections of gated norms
+    quantize &= name.find("norm_gate_up.weight")   == std::string::npos;
+    quantize &= name.find("norm_gate_down.weight") == std::string::npos;
+
     quantize &= params->quantize_output_tensor || name != "output.weight";
 
     // do not quantize expert gating tensors

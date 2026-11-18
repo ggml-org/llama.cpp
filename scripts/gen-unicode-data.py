@@ -68,9 +68,6 @@ def unicode_data_iter():
         cpt_lower = int(line[-2] or "0", base=16)
         assert cpt_lower < MAX_CODEPOINTS
 
-        cpt_upper = int(line[-3] or "0", base=16)
-        assert cpt_upper < MAX_CODEPOINTS
-
         categ = line[2].strip()
         assert len(categ) == 2
 
@@ -79,14 +76,14 @@ def unicode_data_iter():
 
         name = line[1]
         if name.endswith(", First>"):
-            prev = (cpt, cpt_lower, cpt_upper, categ, bidir)
+            prev = (cpt, cpt_lower, categ, bidir)
             continue
         if name.endswith(", Last>"):
-            assert prev[1:] == (0, 0, categ, bidir)
+            assert prev[1:] == (0, categ, bidir)
             for c in range(prev[0], cpt):
-                yield (c, cpt_lower, cpt_upper, categ, bidir)
+                yield (c, cpt_lower, categ, bidir)
 
-        yield (cpt, cpt_lower, cpt_upper, categ, bidir)
+        yield (cpt, cpt_lower, categ, bidir)
 
 
 # see definition in unicode.h
@@ -98,6 +95,9 @@ CODEPOINT_FLAG_MARK        = 0x0010  # \p{M}
 CODEPOINT_FLAG_PUNCTUATION = 0x0020  # \p{P}
 CODEPOINT_FLAG_SYMBOL      = 0x0040  # \p{S}
 CODEPOINT_FLAG_CONTROL     = 0x0080  # \p{C}
+CODEPOINT_FLAG_LOWERCASE   = 0x0200  # \p{Ll}
+CODEPOINT_FLAG_UPPERCASE   = 0x0400  # \p{Lu}
+CODEPOINT_FLAG_TITLECASE   = 0x1000  # \p{Lt}
 
 UNICODE_CATEGORY_TO_FLAG = {
     "Cn": CODEPOINT_FLAG_UNDEFINED,    # Undefined
@@ -105,11 +105,11 @@ UNICODE_CATEGORY_TO_FLAG = {
     "Cf": CODEPOINT_FLAG_CONTROL,      # Format
     "Co": CODEPOINT_FLAG_CONTROL,      # Private Use
     "Cs": CODEPOINT_FLAG_CONTROL,      # Surrrogate
-    "Ll": CODEPOINT_FLAG_LETTER,       # Lowercase Letter
+    "Ll": CODEPOINT_FLAG_LETTER | CODEPOINT_FLAG_LOWERCASE,  # Lowercase Letter
     "Lm": CODEPOINT_FLAG_LETTER,       # Modifier Letter
     "Lo": CODEPOINT_FLAG_LETTER,       # Other Letter
-    "Lt": CODEPOINT_FLAG_LETTER,       # Titlecase Letter
-    "Lu": CODEPOINT_FLAG_LETTER,       # Uppercase Letter
+    "Lt": CODEPOINT_FLAG_LETTER | CODEPOINT_FLAG_TITLECASE,  # Titlecase Letter
+    "Lu": CODEPOINT_FLAG_LETTER | CODEPOINT_FLAG_UPPERCASE,  # Uppercase Letter
     "L&": CODEPOINT_FLAG_LETTER,       # Cased Letter
     "Mc": CODEPOINT_FLAG_MARK,         # Spacing Mark
     "Me": CODEPOINT_FLAG_MARK,         # Enclosing Mark
@@ -137,10 +137,9 @@ UNICODE_CATEGORY_TO_FLAG = {
 codepoint_flags = array.array('H', [CODEPOINT_FLAG_UNDEFINED]) * MAX_CODEPOINTS
 table_whitespace = []
 table_lowercase = []
-table_uppercase = []
 table_nfd = []
 
-for (cpt, cpt_lower, cpt_upper, categ, bidir) in unicode_data_iter():
+for (cpt, cpt_lower, categ, bidir) in unicode_data_iter():
     # convert codepoint to unicode character
     char = chr(cpt)
 
@@ -150,10 +149,6 @@ for (cpt, cpt_lower, cpt_upper, categ, bidir) in unicode_data_iter():
     # lowercase conversion
     if cpt_lower:
         table_lowercase.append((cpt, cpt_lower))
-
-    # uppercase conversion
-    if cpt_upper:
-        table_uppercase.append((cpt, cpt_upper))
 
     # NFD normalization
     norm = ord(unicodedata.normalize('NFD', char)[0])
@@ -170,7 +165,6 @@ table_whitespace.extend([0x0020, 0x0085, 0x00A0, 0x1680, 0x2028, 0x2029, 0x202F,
 # sort by codepoint
 table_whitespace.sort()
 table_lowercase.sort()
-table_uppercase.sort()
 table_nfd.sort()
 
 
@@ -206,7 +200,7 @@ out("""\
 #include <unordered_set>
 """)
 
-out("const std::vector<std::pair<uint32_t, uint16_t>> unicode_ranges_flags = {  // start, flags // last=next_start-1")
+out("const std::initializer_list<std::pair<uint32_t, uint16_t>> unicode_ranges_flags = {  // start, flags // last=next_start-1")
 for codepoint, flags in ranges_flags:
     out("{0x%06X, 0x%04X}," % (codepoint, flags))
 out("};\n")
@@ -216,17 +210,12 @@ for codepoint in table_whitespace:
     out("0x%06X," % codepoint)
 out("};\n")
 
-out("const std::unordered_map<uint32_t, uint32_t> unicode_map_lowercase = {")
+out("const std::initializer_list<std::pair<uint32_t, uint32_t>> unicode_map_lowercase = {")
 for tuple_lw in table_lowercase:
     out("{0x%06X, 0x%06X}," % tuple_lw)
 out("};\n")
 
-out("const std::unordered_map<uint32_t, uint32_t> unicode_map_uppercase = {")
-for tuple_up in table_uppercase:
-    out("{0x%06X, 0x%06X}," % tuple_up)
-out("};\n")
-
-out("const std::vector<range_nfd> unicode_ranges_nfd = {  // start, last, nfd")
+out("const std::initializer_list<range_nfd> unicode_ranges_nfd = {  // start, last, nfd")
 for triple in ranges_nfd:
     out("{0x%06X, 0x%06X, 0x%06X}," % triple)
 out("};\n")

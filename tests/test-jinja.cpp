@@ -1457,6 +1457,57 @@ static void test_macros(testing & t) {
         "Hello, John Smith,Hi, Jane Doe"
     );
 
+    test_template(t, "macro with kwarg after a skipped default",
+        "{% macro emit(x, sep=', ', end='.') %}{{ x }}{{ sep }}{{ end }}{% endmacro %}{{ emit('a', end='!') }}|{{ emit(x='b', end='?') }}|{{ emit('c', sep='-') }}",
+        json::object(),
+        "a, !|b, ?|c-."
+    );
+
+    test_template(t, "macro default sees the parameters before it",
+        "{% set x = 'outer' %}{% macro m(x, a=x, b=True) %}{{ x }},{{ a }},{{ b }}{% endmacro %}{{ m('inner', b=False) }}|{{ m('inner') }}|{{ m(x='kw', b=False) }}",
+        json::object(),
+        "inner,inner,False|inner,inner,True|kw,kw,False"
+    );
+
+    test_template(t, "macro default sees a later passed argument",
+        "{% set b = 'outer' %}{% macro m(a=b, b='fallback') %}{{ a }},{{ b }}{% endmacro %}{{ m(b='inner') }}|{{ m() }}",
+        json::object(),
+        "inner,inner|,fallback"
+    );
+
+    test_template(t, "macro with an undefined argument",
+        "{% macro m(x, a='d') %}{{ a is defined }}{% endmacro %}{{ m(1, nope) }}|{{ m(1, a=nope) }}|{{ m(1) }}",
+        json::object(),
+        "False|False|True"
+    );
+
+    test_template(t, "macro with a missing argument",
+        "{% macro m(a, b='x') %}{{ a is defined }},{{ b }}{% endmacro %}{% macro n(a, b=a) %}{{ a is defined }},{{ b is defined }}{% endmacro %}{% macro r(range) %}{{ range is defined }}{% endmacro %}{{ m(b='B') }}|{{ m() }}|{{ m(1) }}|{{ n() }}|{{ n(2) }}|{{ r() }}",
+        json::object(),
+        "False,B|False,x|True,x|False,False|True,True|False"
+    );
+
+    if (!g_python_mode) {
+        // jinja2 rejects this call, the engine keeps the positional value
+        test_template(t, "macro with an undefined keyword for a positional parameter",
+            "{% macro m(a) %}{{ a }}{% endmacro %}{{ m(1, a=nope) }}",
+            json::object(),
+            "1"
+        );
+    }
+
+    test_template(t, "macro with a keyword argument before unpacked args",
+        "{% macro m(a='x', b='y') %}{{ a }},{{ b }}{% endmacro %}{{ m(b='B', *['A']) }}|{{ m(*['A'], b='B') }}|{{ m(b='B') }}",
+        json::object(),
+        "A,B|A,B|x,B"
+    );
+
+    test_template(t, "call block default sees a later passed argument",
+        "{% set b = 'outer' %}{% macro m() %}{{ caller(b='x') }}|{{ caller() }}|{{ caller(nope) }}{% endmacro %}{% call(a=b, b='fb') m() %}{{ a }},{{ b }},{{ a is defined }}{% endcall %}",
+        json::object(),
+        "x,x,True|,fb,False|,fb,False"
+    );
+
     test_template(t, "macro with unpacked args",
         "{% macro add(a, b, c=0) %}{{ a + b + c }}{% endmacro %}{{ add(*[1, 2]) }},{{ add(1, **{'b': 2, 'c': 3}) }},{{ add(*xs, **kw) }}",
         {{"xs", json::array({1, 2})}, {"kw", {{"c", 5}}}},

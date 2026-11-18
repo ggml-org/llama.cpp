@@ -39,7 +39,9 @@ public:
     const layer_filter_cb & filter_attn,
     const layer_filter_cb & filter_recr,
                             /* the indexer cache exists only if this is given */
-    const layer_filter_cb & filter_idx);
+    const layer_filter_cb & filter_idx,
+                            /* the cached indexer keys carry RoPE, a K-shift has to rotate them */
+                     bool   idx_rope = false);
 
     // Defined out of line because kpool_layout is incomplete here.
     ~llama_memory_hybrid_idx();

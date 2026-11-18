@@ -172,6 +172,7 @@ endif ()
 # llama_context state tests: KV and recurrent state save, load, copy, rollback
 set(LLAMA_CONTEXT_TEST_SRC
     test-llama-context.cpp
+    llama-context/cases-gigachat4.cpp
     llama-context/cases-kv.cpp
     llama-context/cases-rs.cpp
     llama-context/test-case.cpp
@@ -299,6 +300,12 @@ llama_test_cmd(python3
     LABEL "python behavior"
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
     ARGS -m unittest discover -s tests -p test_conversion_fp8.py -v
+)
+llama_test_cmd(python3
+    NAME test-conversion-gigachat4
+    LABEL "python behavior"
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    ARGS -m unittest discover -s tests -p test_conversion_gigachat4.py -v
 )
 llama_test_cmd(python3
     NAME test-kv-cache-scales

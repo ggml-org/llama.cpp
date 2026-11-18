@@ -474,6 +474,7 @@ class DeepseekV32Model(DeepseekV2Model):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK32
     skip_mtp = False
     supports_mtp_export = True
+    mtp_shared_tensors: tuple[str, ...] = ("model.embed_tokens.weight", "model.norm.weight", "lm_head.weight")
     _n_main_layers: int | None = None
 
     def __init__(self, *args, **kwargs):
@@ -503,9 +504,7 @@ class DeepseekV32Model(DeepseekV2Model):
             return None
         # --mtp: keep ONLY NextN-block tensors plus the shared embeddings/
         # norm/lm_head (so the resulting GGUF carries just the draft head).
-        if cls.mtp_only and not is_mtp and name not in (
-            "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
-        ):
+        if cls.mtp_only and not is_mtp and name not in cls.mtp_shared_tensors:
             return None
 
         return name, gen

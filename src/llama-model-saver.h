@@ -25,7 +25,11 @@ struct llama_model_saver {
     void add_kv(enum llm_kv key, char value); // needed to make the template below compile
 
     template <typename Container>
-    void add_kv(enum llm_kv key, const Container & value, bool per_layer = false);
+    void add_kv(enum llm_kv key, const Container & value);
+
+    // the values of the first n_layer layers, a single value if they are all the same
+    template <typename Container>
+    void add_kv_per_layer(enum llm_kv key, const Container & value, uint32_t n_layer);
 
     void add_kv(enum llm_kv key, const std::vector<std::string> & value);
 

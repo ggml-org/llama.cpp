@@ -80,6 +80,24 @@ class ModelType(IntEnum):
     MMPROJ = 2
 
 
+def split_gdn_qkvz(data_torch: Tensor, hidden_size: int, head_k_dim: int, head_v_dim: int,
+                   num_k_heads: int, num_v_heads: int) -> tuple[Tensor, Tensor]:
+    # original order:  [q, k, v, z] * head_count
+    # corrected order: [q * head_count, k * head_count, v * head_count, z * head_count]
+    value_group_dim = num_v_heads // num_k_heads * head_v_dim
+    split_sizes = [head_k_dim, head_k_dim, value_group_dim, value_group_dim]
+    data_torch = data_torch.permute(1, 0).contiguous()
+    data_torch = data_torch.view(hidden_size, num_k_heads, sum(split_sizes))
+    q, k, v, z = torch.split(data_torch, split_sizes, dim=-1)
+    q = q.contiguous().view(hidden_size, -1)
+    k = k.contiguous().view(hidden_size, -1)
+    v = v.contiguous().view(hidden_size, -1)
+    z = z.contiguous().view(hidden_size, -1)
+    qkv = torch.cat([q, k, v], dim=-1).permute(1, 0).contiguous()
+    z = z.permute(1, 0).contiguous()
+    return qkv, z
+
+
 class ModelBase:
     _model_classes: dict[ModelType, dict[str, type[ModelBase]]] = {
         ModelType.TEXT: {},
@@ -2061,13 +2079,16 @@ class TextModel(ModelBase):
 
         return seems_special
 
+    def get_tokenizer(self):
+        from transformers import AutoTokenizer
+        return AutoTokenizer.from_pretrained(self.dir_model)
+
     # used for GPT-2 BPE and WordPiece vocabs
     def get_vocab_base(self) -> tuple[list[str], list[int], str]:
         tokens: list[str] = []
         toktypes: list[int] = []
 
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        tokenizer = self.get_tokenizer()
         assert tokenizer is not None
         vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))
         assert max(tokenizer.vocab.values()) < vocab_size

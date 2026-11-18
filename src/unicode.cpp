@@ -139,14 +139,6 @@ static std::vector<unicode_cpt_flags> unicode_cpt_flags_array() {
         cpt_flags[cpt].is_whitespace = true;
     }
 
-    for (auto p : unicode_map_lowercase) {
-        cpt_flags[p.second].is_lowercase = true;
-    }
-
-    for (auto p : unicode_map_uppercase) {
-        cpt_flags[p.second].is_uppercase = true;
-    }
-
     for (auto &range : unicode_ranges_nfd) {  // start, last, nfd
         cpt_flags[range.nfd].is_nfd = true;
     }
@@ -352,7 +344,8 @@ static std::vector<size_t> unicode_regex_split_custom_gpt2(const std::string & t
 }
 
 // LLAMA3 system regex: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"
-static std::vector<size_t> unicode_regex_split_custom_llama3(const std::string & text, const std::vector<size_t> & offsets) {
+// o200k regex (tiktoken): "[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+"
+static std::vector<size_t> unicode_regex_split_custom_llama3(const std::string & text, const std::vector<size_t> & offsets, bool o200k = false) {
     std::vector<size_t> bpe_offsets; // store the offset of each word
     bpe_offsets.reserve(offsets.size()); // Reserve memory for the approximate size
 
@@ -391,30 +384,79 @@ static std::vector<size_t> unicode_regex_split_custom_llama3(const std::string &
             return len;
         };
 
+        auto contraction_end = [&] (size_t pos) {
+            if (_get_cpt(pos) == '\'' && pos + 1 < offset_end) {
+                uint32_t next = unicode_tolower(_get_cpt(pos + 1));
+                if (next == 's' || next == 't' || next == 'm' || next == 'd' || (o200k && next == 0x017F)) {
+                    return pos + 2;
+                }
+                if (pos + 2 < offset_end) {
+                    uint32_t last = unicode_tolower(_get_cpt(pos + 2));
+                    if ((next == 'r' && last == 'e') || (next == 'v' && last == 'e') || (next == 'l' && last == 'l')) {
+                        return pos + 3;
+                    }
+                }
+            }
+            return pos;
+        };
+
+        auto is_upper_class = [&] (size_t pos) {
+            const auto flags = _get_flags(pos);
+            return (flags.is_letter && !flags.is_lowercase) || flags.is_accent_mark;
+        };
+        auto is_lower_class = [&] (size_t pos) {
+            const auto flags = _get_flags(pos);
+            return (flags.is_letter && !flags.is_uppercase && !flags.is_titlecase) || flags.is_accent_mark;
+        };
+
         for (size_t pos = offset_ini; pos < offset_end; /*pos++*/ ) {
             const uint32_t cpt = _get_cpt(pos);
             const auto flags = _get_flags(pos);
 
             // regex: (?i:'s|'t|'re|'ve|'m|'ll|'d) // case insensitive
-            if (cpt == '\'' && pos+1 < offset_end) {
-                uint32_t cpt_next = unicode_tolower(_get_cpt(pos+1));
-                if (cpt_next == 's' || cpt_next == 't' || cpt_next == 'm' || cpt_next == 'd') {
-                    pos += _add_token(pos+2);
+            if (!o200k) {
+                const size_t end = contraction_end(pos);
+                if (end != pos) {
+                    pos = end;
+                    _add_token(pos);
                     continue;
                 }
-                if (pos+2 < offset_end) {
-                    uint32_t cpt_next_next = unicode_tolower(_get_cpt(pos+2));
-                    if ((cpt_next == 'r' && cpt_next_next == 'e') ||
-                        (cpt_next == 'v' && cpt_next_next == 'e') ||
-                        (cpt_next == 'l' && cpt_next_next == 'l')) {
-                        pos += _add_token(pos+3);
-                        continue;
+            }
+
+            if (o200k) {
+                size_t word = pos;
+                if (cpt != '\r' && cpt != '\n' && !flags.is_letter && !flags.is_number) {
+                    ++word;
+                }
+                size_t end = word;
+                size_t last_lower = pos;
+                while (is_upper_class(end)) {
+                    if (is_lower_class(end)) {
+                        last_lower = end + 1;
                     }
+                    ++end;
+                }
+                if (is_lower_class(end)) {
+                    while (is_lower_class(end)) {
+                        ++end;
+                    }
+                } else if (last_lower > word) {
+                    // backtrack the upper run to satisfy the first alternative
+                    end = last_lower;
+                } else if (flags.is_accent_mark) {
+                    // backtrack the optional prefix before trying the second alternative
+                    end = pos + 1;
+                    word = pos;
+                }
+                if (end > word) {
+                    pos = contraction_end(end);
+                    _add_token(pos);
+                    continue;
                 }
             }
 
             // regex: [^\r\n\p{L}\p{N}]?\p{L}+
-            if (!(cpt == '\r' || cpt == '\n' || flags.is_number)) {
+            if (!o200k && !(cpt == '\r' || cpt == '\n' || flags.is_number)) {
                 if (flags.is_letter || _get_flags(pos+1).is_letter) {  // one or more letters
                     pos++;
                     while (_get_flags(pos).is_letter) {
@@ -446,7 +488,7 @@ static std::vector<size_t> unicode_regex_split_custom_llama3(const std::string &
                     flags2 = _get_flags(++pos);
                 }
                 uint32_t cpt2 = _get_cpt(pos);
-                while (cpt2 == '\r' || cpt2 == '\n') {
+                while (cpt2 == '\r' || cpt2 == '\n' || (o200k && cpt2 == '/')) {
                     cpt2 = _get_cpt(++pos);
                 }
                 _add_token(pos);
@@ -1221,6 +1263,8 @@ static std::vector<size_t> unicode_regex_split_custom(const std::string & text, 
 
     if (regex_expr == "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)") {
         bpe_offsets = unicode_regex_split_custom_gpt2(text, offsets);
+    } else if (regex_expr == "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+") {
+        bpe_offsets = unicode_regex_split_custom_llama3(text, offsets, true);
     } else if (
             regex_expr == "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+" ||
             regex_expr == "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+") {

@@ -134,6 +134,7 @@ enum llm_type {
     LLM_TYPE_31B_A3_5B,
     LLM_TYPE_32B_A9B, // Granite4 Hybrid
     LLM_TYPE_35B_A3B, // Qwen3.5
+    LLM_TYPE_37B_A4B, // GigaChat4
     LLM_TYPE_48B_A3B, // Kimi Linear
     LLM_TYPE_75B_A9B, // Nemotron 3 Puzzle
     LLM_TYPE_80B_A3B, // Qwen3 Next
@@ -155,6 +156,7 @@ enum llm_type {
     LLM_TYPE_355B_A32B, // GLM-4.5
     LLM_TYPE_397B_A17B, // Qwen3.5
     LLM_TYPE_685B_A37B, // DeepSeek V3.2
+    LLM_TYPE_708B_A41B, // GigaChat4
     LLM_TYPE_744B_A40B, // GLM-5
     LLM_TYPE_2_8T_A50B, // Kimi-K3
     LLM_TYPE_320B_A18B, // GLM-5.3-Flash
@@ -232,11 +234,17 @@ struct llama_layer_nextn {
     struct ggml_tensor * eh_proj_in_s          = nullptr;
     struct ggml_tensor * embed_tokens          = nullptr;
     struct ggml_tensor * enorm                 = nullptr;
+    struct ggml_tensor * enorm_gate_up         = nullptr;
+    struct ggml_tensor * enorm_gate_down       = nullptr;
     struct ggml_tensor * hnorm                 = nullptr;
+    struct ggml_tensor * hnorm_gate_up         = nullptr;
+    struct ggml_tensor * hnorm_gate_down       = nullptr;
     struct ggml_tensor * shared_head_head      = nullptr;
     struct ggml_tensor * shared_head_head_s    = nullptr;
     struct ggml_tensor * shared_head_head_in_s = nullptr;
     struct ggml_tensor * shared_head_norm      = nullptr;
+    struct ggml_tensor * shared_head_norm_gate_up   = nullptr;
+    struct ggml_tensor * shared_head_norm_gate_down = nullptr;
 
     // qwen4exp: the MTP block collapses its hyper-connection streams with its own mixer
     struct ggml_tensor * hc_head_norm          = nullptr;
@@ -265,6 +273,8 @@ struct llama_layer_switch_lora {
 struct llama_layer {
     // normalization
     struct ggml_tensor * attn_norm       = nullptr;
+    struct ggml_tensor * attn_norm_gate_up   = nullptr;
+    struct ggml_tensor * attn_norm_gate_down = nullptr;
     struct ggml_tensor * attn_norm_b     = nullptr;
     struct ggml_tensor * attn_norm_2     = nullptr;
     struct ggml_tensor * attn_norm_2_b   = nullptr;
@@ -275,9 +285,15 @@ struct llama_layer {
     struct ggml_tensor * attn_out_norm   = nullptr;
     struct ggml_tensor * attn_out_norm_b = nullptr;
     struct ggml_tensor * attn_q_a_norm   = nullptr;
+    struct ggml_tensor * attn_q_a_norm_gate_up   = nullptr;
+    struct ggml_tensor * attn_q_a_norm_gate_down = nullptr;
     struct ggml_tensor * attn_kv_a_norm  = nullptr;
+    struct ggml_tensor * attn_kv_a_norm_gate_up   = nullptr;
+    struct ggml_tensor * attn_kv_a_norm_gate_down = nullptr;
     struct ggml_tensor * attn_sub_norm   = nullptr;
     struct ggml_tensor * attn_post_norm  = nullptr;
+    struct ggml_tensor * attn_post_norm_gate_up   = nullptr;
+    struct ggml_tensor * attn_post_norm_gate_down = nullptr;
     struct ggml_tensor * ffn_sub_norm    = nullptr;
     struct ggml_tensor * attn_norm_cross = nullptr;
     struct ggml_tensor * attn_norm_enc   = nullptr;
@@ -327,8 +343,12 @@ struct llama_layer {
 
     // normalization
     struct ggml_tensor * ffn_norm         = nullptr;
+    struct ggml_tensor * ffn_norm_gate_up   = nullptr;
+    struct ggml_tensor * ffn_norm_gate_down = nullptr;
     struct ggml_tensor * ffn_norm_b       = nullptr;
     struct ggml_tensor * ffn_post_norm    = nullptr;
+    struct ggml_tensor * ffn_post_norm_gate_up   = nullptr;
+    struct ggml_tensor * ffn_post_norm_gate_down = nullptr;
     struct ggml_tensor * ffn_post_norm_1  = nullptr; // gemma4
     struct ggml_tensor * ffn_post_norm_2  = nullptr; // gemma4
     struct ggml_tensor * ffn_pre_norm_2   = nullptr; // gemma4
@@ -814,6 +834,8 @@ struct llama_model {
     struct ggml_tensor * tok_norm_b = nullptr;
 
     struct ggml_tensor * output_norm     = nullptr;
+    struct ggml_tensor * output_norm_gate_up   = nullptr;
+    struct ggml_tensor * output_norm_gate_down = nullptr;
     struct ggml_tensor * output_res_score = nullptr; // kimi-k3: final cross-layer residual mix
     struct ggml_tensor * output_res_query = nullptr; // inkling2: query of the final attention-residual mix
     struct ggml_tensor * output_norm_b   = nullptr;
