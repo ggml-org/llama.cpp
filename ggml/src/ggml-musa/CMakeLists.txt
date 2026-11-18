@@ -33,8 +33,6 @@ if (MUSAToolkit_FOUND)
     list(APPEND GGML_HEADERS_MUSA "../ggml-musa/mudnn.cuh")
 
     file(GLOB   GGML_SOURCES_MUSA "../ggml-cuda/*.cu")
-    file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-tile*.cu")
-    list(APPEND GGML_SOURCES_MUSA ${SRCS})
     file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-mma*.cu")
     list(APPEND GGML_SOURCES_MUSA ${SRCS})
     file(GLOB   SRCS "../ggml-cuda/template-instances/mmq*.cu")
@@ -46,7 +44,7 @@ if (MUSAToolkit_FOUND)
         add_compile_definitions(GGML_MUSA_MUDNN_COPY)
     endif()
 
-    ggml_cuda_fattn_vec_instances(${CMAKE_CURRENT_SOURCE_DIR}/../ggml-cuda SRCS)
+    ggml_cuda_fattn_instances(${CMAKE_CURRENT_SOURCE_DIR}/../ggml-cuda SRCS)
     list(APPEND GGML_SOURCES_MUSA ${SRCS})
 
     set_source_files_properties(${GGML_SOURCES_MUSA} PROPERTIES LANGUAGE CXX)
