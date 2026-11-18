@@ -1119,6 +1119,10 @@ static int32_t clip_gen_wav_tiny_voca(clip_gen_ctx * ctx, clip_gen_state * state
     const int64_t n_embd = ctx->ctx_gen_a->model.hparams.n_embd;
     const int64_t n_tok  = (int64_t) inp->n_codes;
 
+    if (!ctx->tiny_voca_prosody || !ctx->tiny_voca_acoustic) {
+        LOG_ERR("%s: the frame stacks of tiny_voca are not loaded\n", __func__);
+        return 1;
+    }
     if (inp->type != LLAMA_GEN_STAGE_WAV || !inp->codes || n_tok == 0 || !inp->feats ||
             inp->n_feats != (size_t) ((2 + n_tok) * n_embd)) {
         LOG_ERR("%s: tiny_voca requires the phoneme tokens, the voice row and the encoder state of each token\n", __func__);

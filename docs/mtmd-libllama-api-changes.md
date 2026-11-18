@@ -1,14 +1,14 @@
 # API and ABI changes of mtmd-in-libllama
 
-Branch `mtmd-in-libllama`, based on master `e8fbcad85`. mtmd's engine (model loader, graphs of every family, image and audio preprocessing, the layout of media in the prompt, realtime audio input, the audio generation pipelines) now lives in libllama, under `src/clip/`. libmtmd keeps its public API and becomes a client of `src/llama-ext.h`. This file lists every API, ABI, behaviour and format change, so a reviewer can judge the cost of the approach.
+Branch `mtmd-in-libllama`, rebased on master `61f182fcd` (first written on `e8fbcad85`; the mtmd changes of master in between, Kokoro, tiny-voca, Minimax-Music3 and the Qwen3-TTS reference mode, are ported into the moved engine). mtmd's engine (model loader, graphs of every family, image and audio preprocessing, the layout of media in the prompt, realtime audio input, the audio generation pipelines) now lives in libllama, under `src/clip/`. libmtmd keeps its public API and becomes a client of `src/llama-ext.h`. This file lists every API, ABI, behaviour and format change, so a reviewer can judge the cost of the approach.
 
 ## Summary
 
 | Surface | Change | ABI effect |
 |---|---|---|
 | `include/llama.h` | none | none |
-| `src/llama-ext.h` (staging, C++) | media, streaming and generation API, see below (26 -> 89 `LLAMA_API` declarations) | new exported symbols only |
-| `tools/mtmd/mtmd.h` | one new function (`mtmd_input_chunk_get_llama_media`); the other 86 keep their signatures | new exported symbol only |
+| `src/llama-ext.h` (staging, C++) | media, streaming and generation API, see below (26 -> 91 `LLAMA_API` declarations) | new exported symbols only |
+| `tools/mtmd/mtmd.h` | one new function (`mtmd_input_chunk_get_llama_media`); the others keep their signatures | new exported symbol only |
 | `tools/mtmd/mtmd-helper.h` | none | none |
 | serialized chunks (`mtmd_input_chunk_save`) | format version 7: counts, ids and the decoder positions of image rows; versions 2 to 6 still load | none for readers; buffers written by this build need it or a later one |
 | GGUF | none (mmproj files load as they are) | - |
@@ -52,7 +52,7 @@ An mmproj (`general.architecture = clip`) model needs a media context type, and 
 | `llama_media_proc_default_params`, `llama_media_proc_init(ctx_enc, model_dec, params)`, `_free`, `_has`, `_sample_rate`, `_n_frame_merge` | the proc holds the per-projector layout of the clip engine (markers, separators, preprocessors); `model_dec` may be null for the queries only |
 | `llama_media_proc_video_frame_size`, `llama_media_proc_video_markers`, `llama_media_proc_video_template` (`enum llama_media_video_template`) | what mtmd's video helper needs from the model: frame size, the text around a video, how frames are sampled and marked (default, Qwen3-VL, LFM3, LFM3-Omni) |
 | `llama_model_media_n_tokens_max(model, type, &atomic)` | the largest span of one media and whether the decoder takes it in one ubatch (server check of `n_ubatch`) |
-| `llama_media_layout_init(proc, pos_0)`, `_free`, `_add_tokens`, `_add_image`, `_add_frames`, `_add_audio`, `_n_pieces`, `_get_tokens`, `_get_media` | one layout per prompt; the moved tokenizer turns one media into pieces (tokens and media spans), as mtmd did |
+| `llama_media_layout_init(proc, pos_0)`, `_free`, `_add_tokens`, `_add_image`, `_add_frames`, `_add_audio`, `_n_pieces`, `_get_tokens`, `_get_media` | one layout per prompt; the moved tokenizer turns one media into pieces (tokens and media spans), as mtmd did; `_add_audio` takes the transcript of a speaker clip (`mtmd_bitmap_set_transcript`) |
 | `llama_media_layout_begin_track(lay, pcm, n_samples, n_pieces)`, `llama_media_layout_add_track_piece(lay, id)` | an audio track cut in pieces that sit in different places of the prompt (the soundtrack of an LFM3-Omni video, a piece after each group of frames): encoded once as one clip, each piece takes its rows; LFM3-Omni only; a piece without PCM makes the track's media placeholders |
 | `llama_media_debug_encode`, `llama_media_debug_preprocess` | for `llama-mtmd-debug` (model ports), unstable |
 
@@ -65,6 +65,7 @@ The user limits of the image token count are kv overrides of the mmproj model, `
 | `llama_media_get_type`, `_n_tokens`, `_n_pos`, `_is_atomic`, `_get_id`, `_is_placeholder`, `_is_encoded`, `_ref`, `_free`, `_release_rows`, `_get_rows` | refcounted, thread-safe to reference |
 | `llama_media_get_row_pos(m, pos_0, row, pos, n_pos)` | TRANSITIONAL: decoder positions for callers that still decode host rows with `llama_batch_ext_add_embd` |
 | `llama_media_get_grid(m, nx, ny)` | the token grid the engine records for an image, for mtmd's deprecated `mtmd_image_tokens_get_nx/ny` |
+| `llama_media_get_ref_codes(m, out, n_max)` | the reference codes of an encoded Qwen3-TTS speaker clip with a transcript, for the codec to continue from |
 | `llama_batch_ext_add_media(batch, seq_id, media, row0, n_rows, pos_0)` | ENCODER batch: queues the media for `llama_process(ENCODE)`; decoder batch: adds the rows with their positions and span bounds |
 
 A media is a chunk of the clip engine (`clip_image_tokens` / `clip_audio_tokens`) plus its encoded rows. `encode_media` runs consecutive images of equal geometry in one graph when the tower takes a batch, as `mtmd_batch` did.
@@ -82,7 +83,7 @@ A media is a chunk of the clip engine (`clip_image_tokens` / `clip_audio_tokens`
 |---|---|
 | `llama_get_sampled_tokens_ith`, `llama_batch_ext_add_codes` | native graphs (Qwen3-TTS): K codes per output row sampled in the graph by the sequence's sampler chain, which must run on the backend as a whole and is applied once per codebook in one graph (`llama_set_sampler` refuses a chain with a host-only sampler or the penalties sampler before it touches the chain, and context creation fails with such a chain in `llama_context_params::samplers`; a sampler that declines in its `backend_init` leaves the chain initialized; a backend sampler that leaves candidates is mapped back to codes). A media context keeps its embedding output (`llama_set_embeddings(ctx, false)` is ignored with a warning), and a codec or code predictor call takes at most `n_batch` entries; frames of codes into the codec, each frame checked against the codebooks when it is added |
 | `llama_gen_info`, `llama_gen_audio_type`, `llama_gen_stage`, `llama_gen_inp`, `llama_gen_out` | the types of `mtmd_gen_*` |
-| `llama_model_gen_info`, `llama_gen_inp_default`, `llama_model_gen_read_tensor`, `llama_model_gen_voice_name` | model queries |
+| `llama_model_gen_info`, `llama_gen_inp_default`, `llama_model_gen_read_tensor`, `llama_model_gen_voice_name`, `llama_model_gen_g2p` | model queries; `llama_model_gen_g2p` is the letter-to-sound model of tiny-voca for the `tts_g2p()` of its chat template |
 | `llama_media_init_voice(model, name)` | a predefined voice as an encoded AUDIO media with its gen-side reference; the voices of lfm3a are names for the chat template and have no rows |
 | `llama_batch_ext_add_gen(batch, seq_id, inp)`, `llama_get_gen_out_ith(ctx, i, out)` | one step of one sequence; `llama_process(DECODE)` runs it on a GEN_CODE / GEN_WAV context; both stages run in one context |
 | `llama_gen_set_seed(ctx, seq_id, seed)`, `llama_gen_set_ref(ctx, seq_id, media)`, `llama_gen_reset(ctx, seq_id)` | the RNG of a sequence; the speaker reference from an encoded media (chatterbox reference encode, predefined voice); a new utterance that keeps both (`llama_memory_seq_rm` of the whole sequence drops them); on a Qwen3-TTS codec context the reset clears the codec slots |
@@ -147,17 +148,30 @@ Gemma 3, Qwen2-VL, Qwen2.5-VL, Qwen3-VL, Qwen3.5, the Qwen2.5-Omni vision tower 
 
 On GPU, the native Qwen3-TTS code predictor builds the RoPE position and the mask of a position once for all its layers, as the engine did: from the second layer on, the RMS norm, the norm weight and the RoPE of Q are neighbours and HIP fuses them as it did for the engine, which keeps the WAV byte-identical (with `GGML_CUDA_DISABLE_FUSION=1` both master and the branch give another WAV, the same one).
 
-Not tested, no small GGUF available: Pocket TTS, Drama 3, Fish S2, YuE2, the LFM3-Audio stream. Their code moved unchanged.
+Not tested, no small GGUF available: Pocket TTS, Drama 3, Fish S2, YuE2, Minimax-Music3 (its checkpoint is 29 GB), the LFM3-Audio stream. Their code moved unchanged, Minimax-Music3 ported from master as it is there.
 
-Tests: `test-mtmd-impl` (19 cases) and `test-mtmd-c-api` pass; on Windows `test-mtmd-impl` runs the 5 cases outside the engine internals only (libllama exports only `LLAMA_API` there), checked on Linux by compiling without the internals and resolving every symbol from libmtmd, ggml and libc.
+Tests: `test-mtmd-impl` (21 cases) and `test-mtmd-c-api` pass; on Windows `test-mtmd-impl` runs the 6 cases outside the engine internals only (libllama exports only `LLAMA_API` there), checked on Linux by compiling without the internals and resolving every symbol from libmtmd, ggml and libc.
+
+### After the rebase on `61f182fcd`
+
+The branch against a build of master `61f182fcd`, same flags, on CPU and GPU:
+
+| Area | Result |
+|---|---|
+| 30 models of the table above | text identical; encoder rows bit-exact for 28; Qwen3-ASR and Higgs STT: master dumps the last chunk only, bit-exact with the last chunk of the branch's dump |
+| LFM3-Omni 2B video with its soundtrack | text identical (the two row dumps hold different media) |
+| Chunk files of the 30 models | counts, positions and token grids identical: live, saved by master (version 5), saved by the branch (version 7), placeholders |
+| Generation | Qwen3-TTS (with and without the transcript of the speaker clip), Soprano, Chatterbox, Chatterbox-turbo, ZONOS3-Mini, LFM3-Omni, Kokoro, tiny-voca: WAV byte-identical, greedy on CPU and GPU, sampled on CPU (top-k 50 sampling is not reproducible run to run on GPU, master included) |
+| Realtime audio input | Gemma 4, Higgs STT, Voxtral Realtime, VibeVoice-ASR: rows bit-exact, tokens identical |
+| GPU timing (3 interleaved runs) | equal within noise for the 14 cases of the speed table, Kokoro (0.74-0.77 s), tiny-voca (0.47 s) and the Qwen3-TTS reference mode (23.3-24.8 s, as master) |
 
 ### Code size
 
-| | master `e8fbcad85` | branch |
+| | master `61f182fcd` | branch |
 |---|---|---|
-| `tools/mtmd` (C/C++) | 42,956 lines | 10,979 lines (`mtmd.cpp` 6,101 -> 2,903) |
-| `src` | 120,647 lines | 158,712 lines: `src/clip` 32,920, the rest +5,145 (native graphs of 3 families, media and gen plumbing, slot memories) |
-| `src` + `tools/mtmd` | 163,603 | 169,691 (+6,088) |
+| `tools/mtmd` (C/C++) | 46,603 lines | 12,170 lines (`mtmd.cpp` 6,221 -> 2,948) |
+| `src` | 121,056 lines | 161,701 lines: `src/clip` 35,392, the rest +5,253 (native graphs of 3 families, media and gen plumbing, slot memories) |
+| `src` + `tools/mtmd` | 167,659 | 173,871 (+6,212) |
 
 The net growth is the native graphs (Gemma 3, Qwen-VL, Qwen3-TTS), which replaced the engine's graphs of these projectors, and the bridge (`clip-engine.cpp`, `llama-media.cpp`, `clip-gen-memory.cpp`).
 
@@ -166,8 +180,8 @@ The net growth is the native graphs (Gemma 3, Qwen-VL, Qwen3-TTS), which replace
 | Header | master | branch |
 |---|---|---|
 | `include/llama.h` | unchanged | unchanged |
-| `src/llama-ext.h` (`LLAMA_API` declarations) | 26 | 89 |
-| `tools/mtmd/mtmd.h` (`MTMD_API`) | 86 | 87 |
+| `src/llama-ext.h` (`LLAMA_API` declarations) | 26 | 91 |
+| `tools/mtmd/mtmd.h` (`MTMD_API`) | 88 | 89 |
 | `tools/mtmd/mtmd-helper.h` (`MTMD_API`) | 36 | 36 |
 
 ### Speed (GPU, master build vs branch build, 3 runs each, interleaved)
