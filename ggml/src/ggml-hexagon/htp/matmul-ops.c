@@ -70,15 +70,6 @@ typedef struct {
     struct fastdiv_values div_n_k_tiles;
 } hmx_mm_batched_params_t;
 
-static bool htp_matmul_has_extended_weight(const struct htp_ops_context * octx, uint32_t n_weights) {
-    for (uint32_t i = 0; i < n_weights; ++i) {
-        if (htp_tensor_is_extended(octx->src[i])) {
-            return true;
-        }
-    }
-    return false;
-}
-
 static int htp_mm_init_context(
     struct htp_ops_context * octx,
     const struct htp_mm_kernel_params * kparams
