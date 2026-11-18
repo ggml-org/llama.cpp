@@ -188,7 +188,7 @@
 		</Button>
 	{/if}
 
-	{#if shouldShowRecordBeside}
+	{#if shouldShowRecordBeside && !showStop}
 		<ChatFormActionRecord
 			action={voice?.action}
 			{disabled}
@@ -228,6 +228,19 @@
 			{disabled}
 			showErrorState={showModelSelector && hasModelSelected && !isSelectedModelInCache}
 			tooltipLabel={submitTooltip}
+		/>
+	{/if}
+
+	<!-- while a reply streams, the microphone is the last button, filled like stop -->
+	{#if shouldShowRecordBeside && showStop}
+		<ChatFormActionRecord
+			action={voice?.action}
+			{disabled}
+			filled
+			hint={voice?.hint}
+			{micWarning}
+			{onMicClick}
+			secondary
 		/>
 	{/if}
 </div>

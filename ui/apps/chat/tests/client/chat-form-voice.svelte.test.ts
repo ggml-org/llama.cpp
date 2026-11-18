@@ -97,7 +97,7 @@ describe('the microphone', () => {
 		expect(state.value).toContain('Hello');
 	});
 
-	it('stays beside the stop button while a reply streams', async () => {
+	it('stays after the stop button while a reply streams, looking like it', async () => {
 		seed(true, VoiceInputMode.DICTATION);
 
 		const { recorder, screen } = await renderForm({ isLoading: true });
@@ -107,6 +107,14 @@ describe('the microphone', () => {
 		const mic = screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last();
 
 		await expect.element(mic).toBeEnabled();
+
+		// the last button of the row, filled like the stop button before it
+		const stop = screen.getByRole('button', { exact: true, name: 'Stop' }).element();
+		const micButton = mic.element();
+
+		expect(stop.compareDocumentPosition(micButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(micButton.getAttribute('data-variant')).toBe(stop.getAttribute('data-variant'));
+
 		await mic.click();
 		await expect.poll(() => recorder.status).toBe('recording');
 	});

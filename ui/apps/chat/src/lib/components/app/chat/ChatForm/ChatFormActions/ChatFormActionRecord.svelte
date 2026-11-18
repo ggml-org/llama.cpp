@@ -19,6 +19,8 @@
 		unavailableReason?: string | null;
 		/** A quieter button, beside the main one (stop or send). */
 		secondary?: boolean;
+		/** With `secondary`: filled like the stop button it stands beside, not bare. */
+		filled?: boolean;
 		onMicClick?: () => void;
 	}
 
@@ -26,6 +28,7 @@
 		action = VOICE_MODE_MESSAGE.voiceMessage,
 		class: className = '',
 		disabled = false,
+		filled = false,
 		hint = null,
 		isLoading = false,
 		isRecording = false,
@@ -85,7 +88,13 @@
 				onclick={handleClick}
 				onpointerdown={handlePointerDown}
 				type="button"
-				variant={isRecording || showWarning || secondary ? 'ghost' : 'default'}
+				variant={isRecording || showWarning
+					? 'ghost'
+					: secondary
+						? filled
+							? 'secondary'
+							: 'ghost'
+						: 'default'}
 			>
 				<span class="sr-only"
 					>{isRecording
