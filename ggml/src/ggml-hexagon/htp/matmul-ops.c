@@ -335,23 +335,41 @@ static void hvx_mm_2d_tiled(const htp_thread_t * th, unsigned int nth, unsigned 
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ct);
         uint32_t ir1 = 0;
-        for (; ir1 + 1 < act_nrows; ir1 += 2) {
-            const uint8_t * restrict act_col0 = (const uint8_t *) (act_data + (ir1+0) * act_stride);
-            const uint8_t * restrict act_col1 = (const uint8_t *) (act_data + (ir1+1) * act_stride);
-            void * dst_ptr0 = (uint8_t *) dst->data + (size_t) (cur_m_start + ir1+0) * dst_row_size + ct_dst_off;
-            void * dst_ptr1 = (uint8_t *) dst->data + (size_t) (cur_m_start + ir1+1) * dst_row_size + ct_dst_off;
+        if (bias_base) {
+            for (; ir1 + 1 < act_nrows; ir1 += 2) {
+                const uint8_t * restrict act_col0 = (const uint8_t *) (act_data + (ir1+0) * act_stride);
+                const uint8_t * restrict act_col1 = (const uint8_t *) (act_data + (ir1+1) * act_stride);
+                void * dst_ptr0 = (uint8_t *) dst->data + (size_t) (cur_m_start + ir1+0) * dst_row_size + ct_dst_off;
+                void * dst_ptr1 = (uint8_t *) dst->data + (size_t) (cur_m_start + ir1+1) * dst_row_size + ct_dst_off;
 
-            const void * bias_ptr0 = bias_base + (size_t) (ir1+0) * bias_stride;
-            const void * bias_ptr1 = bias_base + (size_t) (ir1+1) * bias_stride;
-            mmctx->vec_dot_32x2(ne10, dst_ptr0, dst_ptr1, w_tile, act_col0, act_col1, valid_rows, bias_ptr0, bias_ptr1, mmctx->store_row);
-        }
+                const void * bias_ptr0 = bias_base + (size_t) (ir1+0) * bias_stride;
+                const void * bias_ptr1 = bias_base + (size_t) (ir1+1) * bias_stride;
+                mmctx->vec_dot_32x2(ne10, dst_ptr0, dst_ptr1, w_tile, act_col0, act_col1, valid_rows, bias_ptr0, bias_ptr1, mmctx->store_row);
+            }
 
-        for (; ir1 < act_nrows; ++ir1) {
-            const uint8_t * restrict act_col = (const uint8_t *) (act_data + ir1 * act_stride);
-            void * dst_ptr = (uint8_t *) dst->data + (size_t) (cur_m_start + ir1) * dst_row_size + ct_dst_off;
+            for (; ir1 < act_nrows; ++ir1) {
+                const uint8_t * restrict act_col = (const uint8_t *) (act_data + ir1 * act_stride);
+                void * dst_ptr = (uint8_t *) dst->data + (size_t) (cur_m_start + ir1) * dst_row_size + ct_dst_off;
 
-            const void * bias_ptr = bias_base + (size_t) ir1 * bias_stride;
-            mmctx->vec_dot_32x1(ne10, dst_ptr, w_tile, act_col, valid_rows, bias_ptr, mmctx->store_row);
+                const void * bias_ptr = bias_base + (size_t) ir1 * bias_stride;
+                mmctx->vec_dot_32x1(ne10, dst_ptr, w_tile, act_col, valid_rows, bias_ptr, mmctx->store_row);
+            }
+        } else {
+            for (; ir1 + 1 < act_nrows; ir1 += 2) {
+                const uint8_t * restrict act_col0 = (const uint8_t *) (act_data + (ir1+0) * act_stride);
+                const uint8_t * restrict act_col1 = (const uint8_t *) (act_data + (ir1+1) * act_stride);
+                void * dst_ptr0 = (uint8_t *) dst->data + (size_t) (cur_m_start + ir1+0) * dst_row_size + ct_dst_off;
+                void * dst_ptr1 = (uint8_t *) dst->data + (size_t) (cur_m_start + ir1+1) * dst_row_size + ct_dst_off;
+
+                mmctx->vec_dot_32x2(ne10, dst_ptr0, dst_ptr1, w_tile, act_col0, act_col1, valid_rows, NULL, NULL, mmctx->store_row);
+            }
+
+            for (; ir1 < act_nrows; ++ir1) {
+                const uint8_t * restrict act_col = (const uint8_t *) (act_data + ir1 * act_stride);
+                void * dst_ptr = (uint8_t *) dst->data + (size_t) (cur_m_start + ir1) * dst_row_size + ct_dst_off;
+
+                mmctx->vec_dot_32x1(ne10, dst_ptr, w_tile, act_col, valid_rows, NULL, mmctx->store_row);
+            }
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct);
 
@@ -449,10 +467,18 @@ static void hvx_mv_2d_tiled(const htp_thread_t * th, unsigned int nth, unsigned 
         const hvx_tiled_store_row_fn_t store_row = mmctx->store_row;
         uint8_t * dst_out = (uint8_t *) dst->data + (size_t) src0_start_row * dst_elem_size;
         const uint8_t * bias_in = bias ? (mmctx->vtcm_bias + (size_t) src0_start_row * bias_elem_size) : NULL;
-        for (int c = 0; c < copy_cnt; c += 32) {
-            const uint32_t valid_c = (uint32_t) MIN(32, copy_cnt - c);
-            HVX_Vector v_sum = *(const HVX_UVector *) (tmp + c);
-            store_row(dst_out + (size_t) c * dst_elem_size, valid_c, v_sum, bias_in + (size_t) c * bias_elem_size);
+        if (bias_in) {
+            for (int c = 0; c < copy_cnt; c += 32) {
+                const uint32_t valid_c = (uint32_t) MIN(32, copy_cnt - c);
+                HVX_Vector v_sum = *(const HVX_UVector *) (tmp + c);
+                store_row(dst_out + (size_t) c * dst_elem_size, valid_c, v_sum, bias_in + (size_t) c * bias_elem_size);
+            }
+        } else {
+            for (int c = 0; c < copy_cnt; c += 32) {
+                const uint32_t valid_c = (uint32_t) MIN(32, copy_cnt - c);
+                HVX_Vector v_sum = *(const HVX_UVector *) (tmp + c);
+                store_row(dst_out + (size_t) c * dst_elem_size, valid_c, v_sum, NULL);
+            }
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ct_end);
     }
@@ -1241,10 +1267,18 @@ static void hvx_mv_2d_flat(const htp_thread_t * th, unsigned int nth, unsigned i
         const hvx_tiled_store_row_fn_t store_row = mmctx->store_row;
         uint8_t * dst_out = (uint8_t *) dst->data + (size_t) src0_start_row * dst_elem_size;
         const uint8_t * bias_in = bias ? (mmctx->vtcm_bias + (size_t) src0_start_row * bias_elem_size) : NULL;
-        for (int c = 0; c < copy_cnt; c += 32) {
-            const uint32_t valid_c = (uint32_t) MIN(32, copy_cnt - c);
-            HVX_Vector v_sum = *(const HVX_UVector *) (tmp + c);
-            store_row(dst_out + (size_t) c * dst_elem_size, valid_c, v_sum, bias_in + (size_t) c * bias_elem_size);
+        if (bias_in) {
+            for (int c = 0; c < copy_cnt; c += 32) {
+                const uint32_t valid_c = (uint32_t) MIN(32, copy_cnt - c);
+                HVX_Vector v_sum = *(const HVX_UVector *) (tmp + c);
+                store_row(dst_out + (size_t) c * dst_elem_size, valid_c, v_sum, bias_in + (size_t) c * bias_elem_size);
+            }
+        } else {
+            for (int c = 0; c < copy_cnt; c += 32) {
+                const uint32_t valid_c = (uint32_t) MIN(32, copy_cnt - c);
+                HVX_Vector v_sum = *(const HVX_UVector *) (tmp + c);
+                store_row(dst_out + (size_t) c * dst_elem_size, valid_c, v_sum, NULL);
+            }
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, src0_end_row);
     }

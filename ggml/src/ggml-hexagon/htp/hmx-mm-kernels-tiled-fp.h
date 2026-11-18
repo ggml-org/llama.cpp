@@ -1403,6 +1403,14 @@ static inline HVX_Vector hmx_add_bias_to_f16_tail_f32(HVX_Vector v_f16, const vo
 #define HMX_FP16_ADD_BIAS_F16_TAIL_F16(v_out, row_ptr, c, vc)  hmx_add_bias_to_f16_tail_f16((v_out), (row_ptr), (c), (vc))
 #define HMX_FP16_ADD_BIAS_F16_TAIL_F32(v_out, row_ptr, c, vc)  hmx_add_bias_to_f16_tail_f32((v_out), (row_ptr), (c), (vc))
 
+#define HMX_FP16_BIAS_ROW0_none(bias, off) NULL
+#define HMX_FP16_BIAS_ROW0_f16(bias, off)  ((const uint8_t *) (bias) + (off))
+#define HMX_FP16_BIAS_ROW0_f32(bias, off)  ((const uint8_t *) (bias) + (off))
+
+#define HMX_FP16_BIAS_ROW1_none(row0, rb)  NULL
+#define HMX_FP16_BIAS_ROW1_f16(row0, rb)   ((row0) + (rb))
+#define HMX_FP16_BIAS_ROW1_f32(row0, rb)   ((row0) + (rb))
+
 #define HMX_FP16_TO_FP32_COL_LOOP(ADD_BIAS)                                                              \
     do {                                                                                                 \
         if (dst_aligned_nt && has_row1) {                                                                \
@@ -1487,8 +1495,8 @@ static __attribute__((noinline)) void transfer_output_chunk_fp16_to_fp32_col_chu
         const size_t r1            = (r_idx0 % HTP_MM_HMX_TILE_N_ROWS) / 2;                              \
         const __fp16 *row_base     = vtcm_src + r0 * tile_row_stride;                                    \
         float *output_row_base     = dst + r * dst_stride;                                               \
-        const uint8_t *bias_row0   = (const uint8_t *) bias + r * bias_row_bytes;                        \
-        const uint8_t *bias_row1   = bias_row0 + bias_row_bytes;                                         \
+        const uint8_t *bias_row0   = HMX_FP16_BIAS_ROW0_##SFX(bias, r * bias_row_bytes);                 \
+        const uint8_t *bias_row1   = HMX_FP16_BIAS_ROW1_##SFX(bias_row0, bias_row_bytes);                \
         const bool has_row1        = (r + 1 < n_rows);                                                   \
         HMX_FP16_TO_FP32_COL_LOOP(ADD_BIAS);                                                             \
     }                                                                                                    \
@@ -1587,8 +1595,8 @@ static __attribute__((noinline)) void transfer_output_chunk_fp16_to_fp16_col_chu
         const size_t r1            = (r_idx0 % HTP_MM_HMX_TILE_N_ROWS) / 2;                              \
         const __fp16 *row_base     = vtcm_src + r0 * tile_row_stride;                                    \
         __fp16 *output_row_base    = dst + r * dst_stride;                                               \
-        const uint8_t *bias_row0   = (const uint8_t *) bias + r * bias_row_bytes;                        \
-        const uint8_t *bias_row1   = bias_row0 + bias_row_bytes;                                         \
+        const uint8_t *bias_row0   = HMX_FP16_BIAS_ROW0_##SFX(bias, r * bias_row_bytes);                 \
+        const uint8_t *bias_row1   = HMX_FP16_BIAS_ROW1_##SFX(bias_row0, bias_row_bytes);                \
         const bool has_row1        = (r + 1 < n_rows);                                                   \
         HMX_FP16_TO_FP16_COL_LOOP(ADD_BIAS_64, ADD_BIAS_TAIL);                                           \
     }                                                                                                    \

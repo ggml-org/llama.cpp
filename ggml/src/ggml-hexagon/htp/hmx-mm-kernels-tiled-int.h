@@ -1889,6 +1889,10 @@ static inline uint32_t (*stage_act_scales_to_l1d(
 #define HMX_INT_FIN_ROW_F32(acc_qf, row_idx, bias_base, bias_rb, c) \
     Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf((acc_qf), hmx_load_bias_f32_32_f32((bias_base) + (row_idx) * (bias_rb), (c))))
 
+#define HMX_INT_BIAS_ROW_none(bias, off) NULL
+#define HMX_INT_BIAS_ROW_f16(bias, off)  ((const uint8_t *) (bias) + (off))
+#define HMX_INT_BIAS_ROW_f32(bias, off)  ((const uint8_t *) (bias) + (off))
+
 #define DEFINE_W8A8_EVAL_TILE_QUAD(SFX, FIN_ROW)                                                                                            \
 static inline void w8a8_sm_eval_tile_quad_1g_##SFX(                                                                                         \
         const uint8_t * restrict tile_base,                                                                                                 \
@@ -2283,7 +2287,7 @@ static __attribute__((noinline)) void transfer_output_chunk_w8a8_sm_to_##DST_SFX
                 const uint8_t * tile_base = vtcm_src + r0 * row_tile_stride + c0_first * 2 * HTP_MM_HMX_TILE_SIZE + rg * 128; \
                 const float *   dw_base   = vtcm_weight_scales + c0_first * 32;                                               \
                 DST_T *         out_row0  = dst + r * dst_stride;                                                             \
-                const uint8_t * bias_row0 = (const uint8_t *) bias + r * bias_row_bytes;                                      \
+                const uint8_t * bias_row0 = HMX_INT_BIAS_ROW_##SFX(bias, r * bias_row_bytes);                                 \
                 STEP_1G(SFX)                                                                                                  \
             }                                                                                                                 \
             r_base = r_end;                                                                                                   \
@@ -2304,7 +2308,7 @@ static __attribute__((noinline)) void transfer_output_chunk_w8a8_sm_to_##DST_SFX
             const size_t rg     = (r_idx0 & 63u) >> 2;                                                                        \
             const size_t lane   = r_idx0 & 31u;                                                                               \
             DST_T *         out_row_base  = dst + r * dst_stride;                                                             \
-            const uint8_t * bias_row_base = (const uint8_t *) bias + r * bias_row_bytes;                                      \
+            const uint8_t * bias_row_base = HMX_INT_BIAS_ROW_##SFX(bias, r * bias_row_bytes);                                 \
             STEP_NG(SFX)                                                                                                      \
         }                                                                                                                     \
         r_base = r_end;                                                                                                       \
@@ -2482,7 +2486,7 @@ static __attribute__((noinline)) void transfer_output_chunk_w8a16_sm_to_##DST_SF
                 const uint16_t * tile_base     = vtcm_src + r0 * row_tile_stride + c0_first * HTP_MM_HMX_TILE_N_ELMS + r1 * 64; \
                 const float *    dw_base       = vtcm_weight_scales + c0_first * 32;                                            \
                 DST_T *          out_row_base  = dst + r * dst_stride;                                                          \
-                const uint8_t *  bias_row_base = (const uint8_t *) bias + r * bias_row_bytes;                                   \
+                const uint8_t *  bias_row_base = HMX_INT_BIAS_ROW_##SFX(bias, r * bias_row_bytes);                              \
                 const bool       has_row1      = (r + 1 < n_rows);                                                              \
                 STEP_1G(SFX)                                                                                                    \
             }                                                                                                                   \
@@ -2502,7 +2506,7 @@ static __attribute__((noinline)) void transfer_output_chunk_w8a16_sm_to_##DST_SF
             const size_t lane = (start_row + r) & 31u;                                                                          \
             const size_t r1   = lane >> 1;                                                                                      \
             DST_T *         out_row_base  = dst + r * dst_stride;                                                               \
-            const uint8_t * bias_row_base = (const uint8_t *) bias + r * bias_row_bytes;                                        \
+            const uint8_t * bias_row_base = HMX_INT_BIAS_ROW_##SFX(bias, r * bias_row_bytes);                                   \
             const bool      has_row1      = (r + 1 < n_rows);                                                                   \
             STEP_NG(SFX)                                                                                                        \
         }                                                                                                                       \
