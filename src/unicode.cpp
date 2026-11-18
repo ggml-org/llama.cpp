@@ -1233,6 +1233,86 @@ static std::vector<size_t> unicode_regex_split_custom_digits(const std::string &
     return bpe_offsets;
 }
 
+// \p{N}: each digit is its own chunk
+// shared by spark2_5, deepseek-coder, mellum2, viking, chameleon, soprano, youtu, tekken, bailingmoe, ufakzeka, exaone-moe
+static std::vector<size_t> unicode_regex_split_custom_digit(const std::string & text, const std::vector<size_t> & offsets) {
+    std::vector<size_t> bpe_offsets;
+    bpe_offsets.reserve(offsets.size());
+
+    const auto cpts = unicode_cpts_from_utf8(text);
+
+    size_t start = 0;
+    for (auto offset : offsets) {
+        const size_t offset_ini = start;
+        const size_t offset_end = start + offset;
+        assert(offset_end <= cpts.size());
+        start = offset_end;
+
+        size_t prev_end = offset_ini;
+        auto _add_token = [&] (const size_t end) {
+            assert(prev_end <= end && end <= offset_end);
+            if (end > prev_end) {
+                bpe_offsets.push_back(end - prev_end);
+            }
+            prev_end = end;
+        };
+
+        size_t pos = offset_ini;
+        while (pos < offset_end) {
+            if (unicode_cpt_flags_from_cpt(cpts[pos]).is_number) {
+                _add_token(pos);
+                _add_token(pos + 1);
+            }
+            pos++;
+        }
+        _add_token(offset_end);
+    }
+
+    return bpe_offsets;
+}
+
+// \p{N}+: whole digit runs
+// shared by deepseek-llm, superbpe, minicpm5
+static std::vector<size_t> unicode_regex_split_custom_digit_run(const std::string & text, const std::vector<size_t> & offsets) {
+    std::vector<size_t> bpe_offsets;
+    bpe_offsets.reserve(offsets.size());
+
+    const auto cpts = unicode_cpts_from_utf8(text);
+
+    size_t start = 0;
+    for (auto offset : offsets) {
+        const size_t offset_ini = start;
+        const size_t offset_end = start + offset;
+        assert(offset_end <= cpts.size());
+        start = offset_end;
+
+        size_t prev_end = offset_ini;
+        auto _add_token = [&] (const size_t end) {
+            assert(prev_end <= end && end <= offset_end);
+            if (end > prev_end) {
+                bpe_offsets.push_back(end - prev_end);
+            }
+            prev_end = end;
+        };
+
+        size_t pos = offset_ini;
+        while (pos < offset_end) {
+            if (!unicode_cpt_flags_from_cpt(cpts[pos]).is_number) {
+                pos++;
+                continue;
+            }
+            _add_token(pos);
+            while (pos < offset_end && unicode_cpt_flags_from_cpt(cpts[pos]).is_number) {
+                pos++;
+            }
+            _add_token(pos);
+        }
+        _add_token(offset_end);
+    }
+
+    return bpe_offsets;
+}
+
 // CJK runs: Hiragana, Katakana and CJK unified ideographs ranges; same shared pre-tokenizers as digits
 static std::vector<size_t> unicode_regex_split_custom_cjk(const std::string & text, const std::vector<size_t> & offsets) {
     std::vector<size_t> bpe_offsets;
@@ -1552,6 +1632,10 @@ static std::vector<size_t> unicode_regex_split_custom(const std::string & text, 
         bpe_offsets = unicode_regex_split_custom_newlines(text, offsets);
     } else if (regex_expr == "\\p{N}{1,3}") {
         bpe_offsets = unicode_regex_split_custom_digits(text, offsets);
+    } else if (regex_expr == "\\p{N}") {
+        bpe_offsets = unicode_regex_split_custom_digit(text, offsets);
+    } else if (regex_expr == "\\p{N}+") {
+        bpe_offsets = unicode_regex_split_custom_digit_run(text, offsets);
     } else if (regex_expr == "[一-龥぀-ゟ゠-ヿ]+") {
         bpe_offsets = unicode_regex_split_custom_cjk(text, offsets);
     } else if (regex_expr == "[가-힣ㄱ-\u318E]+|[！…“”‘’—：；，、-〿︰-\uFE4F]+|[ㄅ-\u312F]+|[一-龥぀-ゟ゠-ヿ]+") {
