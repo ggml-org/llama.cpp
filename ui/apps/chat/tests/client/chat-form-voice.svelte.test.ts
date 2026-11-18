@@ -134,7 +134,7 @@ describe('the microphone', () => {
 });
 
 describe('recording', () => {
-	it('asks for the raw microphone, and for noise suppression only when it is switched on', async () => {
+	it('asks for the raw microphone, and for the processing that is switched on', async () => {
 		seed(true, VoiceInputMode.DICTATION);
 
 		const raw = await renderForm();
@@ -145,14 +145,17 @@ describe('recording', () => {
 		raw.screen.unmount();
 		restore?.();
 
-		seed(true, VoiceInputMode.DICTATION, { [SETTINGS_KEYS.VOICE_NOISE_SUPPRESSION]: true });
+		seed(true, VoiceInputMode.DICTATION, {
+			[SETTINGS_KEYS.VOICE_ECHO_CANCELLATION]: true,
+			[SETTINGS_KEYS.VOICE_NOISE_SUPPRESSION]: true
+		});
 
 		const filtered = await renderForm();
 
 		await filtered.screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
 		await expect.poll(() => filtered.recorder.status).toBe('recording');
-		expect(filtered.recorder.options?.capture).toMatchObject({
-			constraints: { noiseSuppression: true }
+		expect(filtered.recorder.options?.capture).toEqual({
+			constraints: { echoCancellation: true, noiseSuppression: true }
 		});
 	});
 

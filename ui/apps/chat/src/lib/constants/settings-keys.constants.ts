@@ -88,7 +88,9 @@ export const SETTINGS_KEYS = {
 	// General
 	USE_HUGGING_FACE_HUB: 'useHuggingFaceHub',
 	// Voice
+	VOICE_AUTO_GAIN: 'voiceAutoGain',
 	VOICE_COLLAPSE_TRANSCRIPTS: 'voiceCollapseTranscripts',
+	VOICE_ECHO_CANCELLATION: 'voiceEchoCancellation',
 	VOICE_INPUT_MODE: 'voiceInputMode',
 	VOICE_MICROPHONE: 'voiceMicrophone',
 	VOICE_NOISE_SUPPRESSION: 'voiceNoiseSuppression',

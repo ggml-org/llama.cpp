@@ -221,7 +221,12 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		const { context, realtime } = serverContext();
 		const language = String(config[SETTINGS_KEYS.VOICE_TRANSCRIPTION_LANGUAGE] ?? '').trim();
 		const microphone = String(config[SETTINGS_KEYS.VOICE_MICROPHONE] ?? VOICE_MICROPHONE_AUTO);
-		const noiseSuppression = config[SETTINGS_KEYS.VOICE_NOISE_SUPPRESSION] === true;
+		// each one is laid over the raw-signal constraints only when it is switched on
+		const processing: MediaTrackConstraints = {
+			...(config[SETTINGS_KEYS.VOICE_NOISE_SUPPRESSION] === true ? { noiseSuppression: true } : {}),
+			...(config[SETTINGS_KEYS.VOICE_ECHO_CANCELLATION] === true ? { echoCancellation: true } : {}),
+			...(config[SETTINGS_KEYS.VOICE_AUTO_GAIN] === true ? { autoGainControl: true } : {})
+		};
 		const transcribe =
 			mode === VoiceMode.DICTATION || config[SETTINGS_KEYS.VOICE_TRANSCRIBE_MESSAGES] !== false;
 
@@ -247,8 +252,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 			await recorder.start({
 				capture: {
 					...(deviceId ? { deviceId } : {}),
-					// over the raw-signal constraints; echo cancellation and auto gain stay off
-					...(noiseSuppression ? { constraints: { noiseSuppression: true } } : {})
+					...(Object.keys(processing).length > 0 ? { constraints: processing } : {})
 				},
 				// a voice message's text reaches the message only once the user made it editable
 				onText: (text) => writeDictation(text),

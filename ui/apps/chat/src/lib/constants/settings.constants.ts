@@ -460,9 +460,23 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: false,
-				help: 'Let the browser filter background noise out of what the microphone records. Off, the model gets the raw signal, which speech models take well. Echo cancellation and automatic gain stay off either way, as they interrupt other sound and fade the first words in.',
+				help: 'Let the browser filter background noise out of what the microphone records. Off, the model gets the raw signal, which speech models take well.',
 				key: SETTINGS_KEYS.VOICE_NOISE_SUPPRESSION,
 				label: 'Noise suppression',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
+				help: 'Let the browser remove what your speakers play from the recording. It makes the system treat a recording as a call, which can lower or pause music and other sound while you record.',
+				key: SETTINGS_KEYS.VOICE_ECHO_CANCELLATION,
+				label: 'Echo cancellation',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
+				help: 'Let the browser even out how loud you sound. It fades the microphone in, so the first words of a recording can come out quiet.',
+				key: SETTINGS_KEYS.VOICE_AUTO_GAIN,
+				label: 'Automatic gain',
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
