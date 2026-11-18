@@ -74,13 +74,41 @@ llama-server -m Qwen3-4B.gguf -md Qwen3-4B-DFlash.gguf \
 
 `--spec-draft-n-max` is clamped to the draft model's trained block size.
 
+DFlash2, DSpark and LiliCorr drafts are DFlash backbones with a head on the block, and the head is read from the draft model.
+`draft-dflash` runs each of them with the driver of its head.
+The other spec types must match the head of the draft model: `draft-dspark` needs the Markov head, `draft-dflash2` the candidate selector and `draft-lilicorr` the candidate scorer. On a mismatch, speculative decoding is not initialized.
+Without `--spec-type`, the type is detected from the draft model.
+
 See:
 
 - #22105
 
+### DFlash2 (`draft-dflash2`)
+
+[DFlash2](https://inco.ai/blog/dflash2/) adds a local convolution to the DFlash layers and a _candidate selector_ on the block.
+
+DFlash2 drafts convert like DFlash drafts, with `--target-model-dir`:
+
+```bash
+python convert_hf_to_gguf.py <dflash2-draft-dir> \
+    --target-model-dir <target-model-dir> --outtype bf16 --outfile DFlash2.gguf
+
+llama-server -m target.gguf -md DFlash2.gguf \
+    --spec-type draft-dflash2 --spec-draft-n-max 7 -fa on --jinja
+```
+
+`--spec-draft-p-min P` truncates the draft at the first step whose selector probability falls below `P`.
+
+With `--spec-draft-sampling probabilistic`, the draft samples the path at the request's temperature
+and the target verifies it by rejection sampling.
+
+See:
+
+- #27816, #30663
+
 ### DSpark (`draft-dspark`)
 
-DSpark extends DFlash with a semi-autoregressive _Markov head_: the draft still emits a whole
+[DSpark](https://arxiv.org/pdf/2607.05147) extends DFlash with a semi-autoregressive _Markov head_: the draft still emits a whole
 block per forward pass, but each block position's logits are biased by a low-rank term keyed on
 the previous token, chained in-graph across the block. This keeps drafting at one decode per
 block while recovering some of the left-to-right signal that pure block diffusion loses.
@@ -114,6 +142,26 @@ convert the same way.
 See:
 
 - #25173
+
+### LiliCorr (`draft-lilicorr`)
+
+[LiliCorr](https://arxiv.org/pdf/2608.20530) puts a _candidate scorer_ on the DFlash block: a small transformer over the top-k candidates
+of each block position, conditioned on the target's hidden state at the last position, scores the paths through the block like the DFlash2 selector.
+
+LiliCorr drafts (`LiLiCorrDraftModel`) convert with `--target-model-dir`:
+
+```bash
+python convert_hf_to_gguf.py <lilicorr-draft-dir> \
+    --target-model-dir <target-model-dir> --outtype bf16 --outfile LiliCorr.gguf
+
+llama-server -m target.gguf -md LiliCorr.gguf --spec-type draft-lilicorr -fa on --jinja
+```
+
+`--spec-draft-p-min P` truncates the draft at the first step whose scorer probability falls below `P`.
+
+See:
+
+- #30506
 
 ### n-gram Cache (`ngram-cache`)
 
@@ -225,7 +273,7 @@ Use exactly one of these options:
 ### General Speculative Parameters
 
 ```
---spec-type [none|draft-simple|draft-eagle3|draft-dflash|draft-dspark|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
+--spec-type [none|draft-simple|draft-eagle3|draft-dflash|draft-dflash2|draft-dspark|draft-lilicorr|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
                                         comma-separated list of types of speculative decoding to use
                                         (default: none)
                                         (env: LLAMA_ARG_SPEC_TYPE)
@@ -368,8 +416,10 @@ Specifies a comma-separated list of speculative decoding types to use.
 | `none` | No speculative decoding (default) |
 | `draft-simple` | Use a simple draft model for speculation |
 | `draft-eagle3` | Use an EAGLE-3 draft model that reads the target's hidden states |
-| `draft-dflash` | Use a DFlash block-diffusion draft model that emits a block per step |
+| `draft-dflash` | Use a DFlash block-diffusion draft model that emits a block per step (also DFlash2, DSpark and LiliCorr drafts, resolved from the model) |
+| `draft-dflash2` | Use a DFlash2 draft model (DFlash + local convolution + candidate selector) |
 | `draft-dspark` | Use a DSpark draft model (DFlash backbone + semi-autoregressive Markov head) |
+| `draft-lilicorr` | Use a LiliCorr draft model (DFlash + candidate scorer conditioned on the target's hidden state) |
 | `draft-mtp` | Use Multi Token Prediction (MTP) heads from the main model |
 | `ngram-cache` | Use n-gram cache lookup |
 | `ngram-simple` | Use simple n-gram pattern matching |

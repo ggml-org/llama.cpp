@@ -33,15 +33,15 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist/
+          path: ui/apps/chat/dist/
           run-id: ${{ inputs.run_id }}
           github-token: ${{ github.token }}
 
       - name: Create distribution archive
         run: |
-          tar -czf dist.tar.gz -C tools/ui/dist .
+          tar -czf dist.tar.gz -C ui/apps/chat/dist .
           sha256sum dist.tar.gz > dist.tar.gz.sha256
-          mv dist.tar.gz dist.tar.gz.sha256 tools/ui/dist/
+          mv dist.tar.gz dist.tar.gz.sha256 ui/apps/chat/dist/
 
       - name: Install Hugging Face Hub CLI
         run: pip install -U huggingface_hub
@@ -52,12 +52,12 @@ jobs:
       - name: Sync built files to Hugging Face bucket (version tag)
         run: |
           # Upload the built files to the Hugging Face bucket under the release version
-          hf buckets sync tools/ui/dist hf://buckets/ggml-org/${{ env.HF_BUCKET_NAME }}/${{ inputs.version_tag }} --delete --quiet
+          hf buckets sync ui/apps/chat/dist hf://buckets/ggml-org/${{ env.HF_BUCKET_NAME }}/${{ inputs.version_tag }} --delete --quiet
 
       - name: Sync built files to Hugging Face bucket (latest)
         run: |
           # Also upload to the 'latest' directory for fallback downloads
-          hf buckets sync tools/ui/dist hf://buckets/ggml-org/${{ env.HF_BUCKET_NAME }}/latest --delete --quiet
+          hf buckets sync ui/apps/chat/dist hf://buckets/ggml-org/${{ env.HF_BUCKET_NAME }}/latest --delete --quiet
 
       - name: Verify upload
         run: |
