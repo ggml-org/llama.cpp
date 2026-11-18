@@ -480,11 +480,15 @@ enum mtmd_gen_audio_type {
     MTMD_GEN_AUDIO_TYPE_LFM3A,
     MTMD_GEN_AUDIO_TYPE_CHATTERBOX,
     MTMD_GEN_AUDIO_TYPE_DRAMA3,
+    MTMD_GEN_AUDIO_TYPE_ZONOS3,
+    MTMD_GEN_AUDIO_TYPE_YUE2,
+    MTMD_GEN_AUDIO_TYPE_FISH_S2,
 };
 
 struct mtmd_gen_audio_info {
     enum mtmd_gen_audio_type type;
     int32_t sample_rate; // in Hz, for example 24000 for qwen3tts
+    int32_t n_channels;  // 1 = mono, 2 = stereo (mtmd_gen_out::audio is interleaved)
     const char * model_variant; // name of the weight variant, can be nullptr if not applicable
     int32_t n_voices; // predefined voices, see mtmd_gen_audio_voice_name()
 };
@@ -493,7 +497,7 @@ MTMD_API struct mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context *
 
 // read a named tensor of the gen audio model as F32, returns the element count (0 if not found), out may be null to query the size
 MTMD_API size_t mtmd_gen_audio_read_tensor(mtmd_context * ctx, const char * name, float * out, size_t n_max);
-// name of the idx-th predefined voice, nullptr when idx is out of range
+// name of the idx-th predefined voice, nullptr when idx is out of range; idx 0 is the default voice
 MTMD_API const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_t idx);
 
 // predefined voice with this name as a voice bitmap, to pass as speaker reference
@@ -507,6 +511,7 @@ enum mtmd_gen_process_type {
                                     // for qwen3tts, this is code2wav
                                     // for pocket-tts, this is mimi decoder
                                     // for lfm3a, this is the codec decoder + ISTFT, n_codes == 0 flushes the tail
+                                    // for yue2, this is one VAE pass, the caller splits a long song into tiles
 };
 
 struct mtmd_gen_inp {
@@ -524,10 +529,20 @@ struct mtmd_gen_inp {
     // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
     // pass either codes (discrete) or feats (continuous), depending on the pipeline
     // lfm3a GEN_CODE also takes codes: the codes revealed so far, -1 for a masked codebook
+    // zonos3 GEN_WAV: -1 for a residual code not known yet, the frame is decoded without it
     int32_t * codes;
     size_t    n_codes;
     const float * feats;
     size_t        n_feats;
+
+    // yue2 GEN_CODE: n_codes is the frame count, codes is not read (the backbone state holds them)
+    // backbone_state: llama_state_seq_get_data() of the backbone_n_past positions (prompt, codes, end token)
+    const uint8_t * backbone_state;
+    size_t          backbone_state_size;
+    int32_t         backbone_n_past;
+
+    // flow-matching GEN_CODE: steps of the ODE solver, <= 0 = model default (yue2: 32)
+    int32_t n_steps;
 };
 
 struct mtmd_gen_out {
@@ -544,7 +559,7 @@ struct mtmd_gen_out {
 
     // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
     const float * audio;
-    size_t        n_samples;
+    size_t        n_samples; // total over all channels
 };
 
 struct mtmd_gen_state_params {

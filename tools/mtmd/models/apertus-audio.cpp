@@ -49,8 +49,7 @@ static ggml_tensor * apertus_audio_conv_1d(
     const int64_t padding_left = padding_total - padding_total / 2;
     const int64_t max_padding = std::max(padding_left, padding_right);
 
-    // PyTorch reflect padding requires every pad to be shorter than the input.
-    // WavTokenizer appends zeros before reflection for short waveforms and then removes the suffix.
+    // WavTokenizer pads short waveforms with zeros so reflection stays within the input, then removes the suffix.
     int64_t temporary_padding = 0;
     if (length <= max_padding) {
         temporary_padding = max_padding - length + 1;
@@ -71,8 +70,7 @@ static ggml_tensor * apertus_audio_conv_1d(
         cur = ggml_cont(ctx0, cur);
     }
 
-    // The official WavTokenizer keeps the encoder in F32.
-    // ggml_conv_1d uses F16 im2col for F32 weights and can change sensitive codebook IDs.
+    // Keep im2col in F32: the F16 path can change codebook IDs.
     cur = apertus_audio_conv_1d_f32(ctx0, conv.w, cur, stride, dilation);
     return apertus_audio_add_channel_bias(ctx0, cur, conv.b);
 }

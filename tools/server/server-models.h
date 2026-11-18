@@ -444,7 +444,8 @@ struct server_http_proxy : server_http_res {
                       const std::map<std::string, uploaded_file> & files,
                       const std::function<bool()> should_stop,
                       int32_t timeout_read,
-                      int32_t timeout_write
+                      int32_t timeout_write,
+                      const std::string & resolved_addr = "" // if set: connect to this address only, do not follow redirects
                       );
     ~server_http_proxy() {
         if (cleanup_pipes) {

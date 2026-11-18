@@ -9,7 +9,7 @@
 
 // TODO: untested on avx512
 // These are in units of GGML_F32_EPR
-#if defined(__AVX512F__) || defined (__ARM_NEON__)
+#if defined(__AVX512F__) || defined(__ARM_NEON)
     static constexpr int GEMM_RM = 4;
     static constexpr int GEMM_RN = 4; // 16+4+1 = 25/32
 #elif defined(__AVX2__) || defined(__AVX__)

@@ -60,7 +60,7 @@ Implementation: [`htp-repack.cpp`](../../../ggml/src/ggml-hexagon/htp-repack.cpp
 ### Tile Dimensions and Grid Layout
 
 Each tile represents a submatrix of `N_rows = 32` rows and `K_cols` columns:
-- Standard types (`Q4_0`, `Q4_1`, `Q8_0`, `IQ4_NL`, `MXFP4`, and K-quants): `K_cols = 32` (`HTP_TENSOR_TILE_N_COLS = 32`).
+- Standard types (`Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `IQ4_NL`, `MXFP4`, and K-quants): `K_cols = 32` (`HTP_TENSOR_TILE_N_COLS = 32`).
 - `Q2_0`: `K_cols = 64` (`HTP_TENSOR_TILE_K_Q2_0 = 64`).
 - `Q1_0`: `K_cols = 128` (`HTP_TENSOR_TILE_K_Q1_0 = 128`).
 
@@ -117,11 +117,29 @@ Block-32 formats use a tile size of 32 rows x 32 columns (`K_cols = 32`):
     Kernel converts E8M0 bias to IEEE FP16 bias via `vh = clamp(e - 112, 0, 30) << 10` to form a power-of-two FP16 scale.
     Each 4-bit FP4 nibble is unpacked via `mxfp4_to_fp16_lut` and multiplied by this scale.
 
+- **NVFP4** (576 bytes per tile, `HTP_TENSOR_TILE_SIZE_NVFP4`, lossless tiling with same size as `block_nvfp4`):
+  - A 64-element block spans 2 consecutive k-tiles; k-tile `h` holds sub-blocks `2h` and `2h+1`.
+  - **Quants** (bytes 0..511): same nibble transposition as `Q4_0`, holding E2M1 values in element order
+    (within a 16-element sub-block, `qs` byte `j` holds elements `j` and `j+8`).
+  - **Scales** (bytes 512..575): UE4M3 bytes, `tile[512 + 32*u + row]` for sub-block `u = 0..1` of the k-tile.
+  - The per-tensor F32 scale is not part of the tile.
+
 - **Q4_1** (640 bytes per tile, `HTP_TENSOR_TILE_SIZE_Q4_1`):
   - **Quants** (bytes 0..511, 512 bytes):
     Same 4-bit nibble transposition and storage layout as `Q4_0`.
   - **Scales** (bytes 512..639, 128 bytes):
     32 pairs of FP16 values (`ggml_half`): `scale[2 * row + 0] = d` (scale) and `scale[2 * row + 1] = m` (min) for each row `row = 0..31`.
+
+- **Q5_0** (704 bytes per tile, `HTP_TENSOR_TILE_SIZE_Q5_0`):
+  - **Quants** (bytes 0..511): same 4-bit nibble transposition and storage layout as `Q4_0`, holding the low 4 bits.
+  - **5th-bit plane** (bytes 512..639): byte `32*c + row` (`c = 0..3`) holds a flag for `k = 2*(4i + c)` at bit `2i` and for `k = 2*(4i + c) + 1` at bit `2i + 1`, for `i = 0..3`. The flag is set when the 5th bit of the quant is clear.
+  - **Scales** (bytes 640..703, 64 bytes): 32 FP16 values, storing scale `d` for each row `row = 0..31`.
+  - **Dequantization**: `0xF0` is OR-ed into the nibble where the flag is set, giving the signed value `q - 16` (-16..15), scaled by `d`.
+
+- **Q5_1** (768 bytes per tile, `HTP_TENSOR_TILE_SIZE_Q5_1`, same layout as the Q5_K tile):
+  - **Quants** (bytes 0..511) and **scales** (bytes 512..639): same as `Q4_1`, holding the low 4 bits and `(d, m)` pairs.
+  - **5th-bit plane** (bytes 640..767): same as `Q5_K`; a bit is set when the 5th bit of the quant is set.
+  - Uses the `Q5_K` HVX/HMX kernels (Q8_1 activations with block sums).
 
 ### Q1_0 Format (1-Bit Quantization)
 
@@ -180,6 +198,10 @@ Byte ordering: `Q2_K`, `Q3_K`, and `Q6_K` use `vrmpy` byte order within each 128
   - `bytes   0..255` (vec 0..1): unsigned 2-bit quants; vec `m` holds groups `4m..4m+3` at bit offsets 0, 2, 4, 6.
   - `bytes 256..319`: raw `scales[]` bytes (`min << 4 | sc`): `[0..31]` for k 0..15, `[32..63]` for k 16..31.
   - `bytes 320..335`: 8 FP16 in tile `j` (0..7) of super-block: `d` (`j < 4`) or `-dmin` (`j >= 4`) for rows `8*(j%4)..8*(j%4)+7`.
+
+- **IQ2_XXS** (264 bytes per tile, `HTP_TENSOR_TILE_SIZE_IQ2_XXS`, lossless tiling with same size as `block_iq2_xxs`):
+  - `bytes   0..255`: `qs[4*kt .. 4*kt+3]` (grid indices, signs and scales of one 32-element group) of row `r` at `8*r`.
+  - `bytes 256..263`: 4 FP16 `d` in tile `j` (0..7) of super-block: rows `4*j..4*j+3`.
 
 - **Q3_K** (512 bytes per tile, `HTP_TENSOR_TILE_SIZE_Q3_K`):
   - `bytes   0..255` (vec 0..1): low 2 bits; vec `m` holds groups `4m..4m+3` at bit offsets 0, 2, 4, 6.

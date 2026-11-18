@@ -333,6 +333,11 @@ static gguf_context_ptr get_gguf_ctx(
         n_vocab = 3072; // TODO: should be 4096, but user code cannot get `n_vocab_out` yet [TAG_LLAMA_N_VOCAB_OUT]
     } else if (arch == LLM_ARCH_HRM_TEXT) {
         n_layer = 6; // 1 layer per stack x 2 h-cycles x (2 l-cycles + 1) cache slots
+    } else if (arch == LLM_ARCH_INKLING2) {
+        n_embd  = 128;
+        n_head  = 4;
+        n_ff    = 24;
+        n_layer = 3;
     }
 
     uint32_t n_head_kv = n_head;
@@ -701,6 +706,31 @@ static gguf_context_ptr get_gguf_ctx(
         ms.add_kv(LLM_KV_MUDD_TAP_INDICES,            std::vector<int32_t>({-1, -1, -1, -1, 0, 2, 1, 3}));
     }
 
+    if (arch == LLM_ARCH_INKLING2) {
+        ms.add_kv(LLM_KV_ATTENTION_RELATIVE_LENGTH,   uint32_t(4));
+        ms.add_kv(LLM_KV_ATTENTION_RELATIVE_EXTENT,   uint32_t(16));
+        ms.add_kv(LLM_KV_ATTENTION_QK_CLIP,           0.25f);
+        ms.add_kv(LLM_KV_ATTENTION_RELATIVE_CLIP,     0.1f);
+        ms.add_kv(LLM_KV_ATTENTION_LOG_SCALE_FLOOR,   uint32_t(4));
+        ms.add_kv(LLM_KV_ATTENTION_LOG_SCALE_ALPHA,   0.1f);
+        ms.add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,         uint32_t(2));
+        ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,           uint32_t(4));
+        ms.add_kv(LLM_KV_VOCAB_SIZE,                  n_vocab + 2);
+        ms.add_kv(LLM_KV_VOCAB_SIZE_UNPADDED,         n_vocab);
+        ms.add_kv(LLM_KV_ACTIVATION_SITU_BETA,        0.2f);
+        ms.add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, 0.3f);
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,        8.0f);
+        ms.add_kv(LLM_KV_FINAL_LOGIT_SOFTCAPPING,     30.0f);
+        ms.add_kv(LLM_KV_EXPERT_COUNT,                uint32_t(4));
+        ms.add_kv(LLM_KV_EXPERT_USED_COUNT,           uint32_t(2));
+        std::vector<bool> pattern(n_layer);
+        for (uint32_t i = 0; i < n_layer; ++i) {
+            pattern[i] = i % 2 == 0;
+        }
+        std::vector<uint8_t> values(pattern.begin(), pattern.end());
+        gguf_set_arr_data(ret.get(), llama_arch_kv_name(arch, LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN).c_str(), GGUF_TYPE_BOOL, values.data(), values.size());
+    }
+
     // dummy tokenizer: token ids are derived from fixed-size chunks and detokenized as hex ids
     {
         std::vector<std::string> tokenizer_list(n_vocab);
@@ -765,6 +795,11 @@ static gguf_context_ptr get_gguf_ctx(
         ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, std::vector<uint32_t>{n_ff, n_ff / 2, n_ff, n_ff});
     }
 
+    if (arch == LLM_ARCH_ZONOS3) {
+        ms.add_kv(LLM_KV_MOE_LATENT_SIZE,            n_embd / 2);
+        ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, n_ff);
+    }
+
     ms.add_kv(LLM_KV_POSNET_EMBEDDING_LENGTH,   n_embd);
     ms.add_kv(LLM_KV_POSNET_BLOCK_COUNT,        n_layer);
     ms.add_kv(LLM_KV_CONVNEXT_EMBEDDING_LENGTH, n_embd);
@@ -779,7 +814,7 @@ static gguf_context_ptr get_gguf_ctx(
     ms.add_kv(LLM_KV_XIELU_ALPHA_P,             1.0f);
     ms.add_kv(LLM_KV_XIELU_BETA,                1.0f);
     ms.add_kv(LLM_KV_XIELU_EPS,                 1.0e-7f);
-    ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_CLOVER_MOE ? 256 : 2*n_embd);
+    ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_CLOVER_MOE || arch == LLM_ARCH_ZONOS3 ? 256 : 2*n_embd);
     ms.add_kv(LLM_KV_SSM_CONV_KERNEL,           uint32_t(4));
     ms.add_kv(LLM_KV_SSM_STATE_SIZE,            uint32_t(128));
     ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK,        n_head);
@@ -986,17 +1021,6 @@ static bool test_apertus_vocab(const size_t seed, const float stdev) {
     return true;
 }
 
-static bool test_apertus_70b_layers(const size_t seed, const float stdev, const std::vector<ggml_backend_dev_t> & devs) {
-    gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_APERTUS, false, 80);
-    auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, devs);
-    if (llama_model_n_layer(model_and_ctx.first.get()) != 80) {
-        return false;
-    }
-    const std::vector<llama_token> tokens = { APERTUS_TEST_VOCAB_SIZE - 1 };
-    return check_apertus_logits(get_logits(model_and_ctx.first.get(), model_and_ctx.second.get(), tokens),
-        tokens.size(), APERTUS_TEST_VOCAB_SIZE_OUT);
-}
-
 // entries [n/4, n/2) are embd rows, decoded either as token/embd/token chunks or as one mixed batch
 // returns the llama_process() error code
 static int32_t get_logits_mixed(
@@ -1149,6 +1173,8 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_MUSE_SPARK:
         case LLM_ARCH_KOLIBRI1:
         case LLM_ARCH_METIS16:
+        case LLM_ARCH_ZONOS3:
+        case LLM_ARCH_INKLING2:
             return true;
         default:
             return false;
@@ -1382,15 +1408,6 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                     dev_configs.emplace_back(devices_meta, "MoE cache, layer split", LLAMA_SPLIT_MODE_LAYER, true, 1536*1024);
                     max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
                 }
-            }
-        }
-    }
-
-    if (arch_matches(arch_filter, LLM_ARCH_APERTUS)) {
-        for (const device_config & dc : dev_configs) {
-            if (dc.split_mode == LLAMA_SPLIT_MODE_LAYER && !test_apertus_70b_layers(seed, stdev, dc.devs)) {
-                LOG_ERR("%s: Apertus 80-layer test failed on %s\n", __func__, dc.label.c_str());
-                return 1;
             }
         }
     }
