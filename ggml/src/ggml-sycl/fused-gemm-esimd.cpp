@@ -1054,7 +1054,7 @@ static int ggml_sycl_grouped_gemm_esimd_mode() {
 
 bool ggml_sycl_grouped_gemm_esimd_enabled() {
 #if defined(GGML_SYCL_SUPPORT_XMX)
-    return ggml_sycl_grouped_gemm_esimd_mode() != 0;
+    return g_ggml_sycl_enable_esimd && ggml_sycl_grouped_gemm_esimd_mode() != 0;
 #else
     return false;
 #endif
