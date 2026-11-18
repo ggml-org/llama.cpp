@@ -221,6 +221,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		const { context, realtime } = serverContext();
 		const language = String(config[SETTINGS_KEYS.VOICE_TRANSCRIPTION_LANGUAGE] ?? '').trim();
 		const microphone = String(config[SETTINGS_KEYS.VOICE_MICROPHONE] ?? VOICE_MICROPHONE_AUTO);
+		const noiseSuppression = config[SETTINGS_KEYS.VOICE_NOISE_SUPPRESSION] === true;
 		const transcribe =
 			mode === VoiceMode.DICTATION || config[SETTINGS_KEYS.VOICE_TRANSCRIBE_MESSAGES] !== false;
 
@@ -244,7 +245,11 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 			const deviceId = await resolveMicrophone(microphone);
 
 			await recorder.start({
-				capture: deviceId ? { deviceId } : undefined,
+				capture: {
+					...(deviceId ? { deviceId } : {}),
+					// over the raw-signal constraints; echo cancellation and auto gain stay off
+					...(noiseSuppression ? { constraints: { noiseSuppression: true } } : {})
+				},
 				// a voice message's text reaches the message only once the user made it editable
 				onText: (text) => writeDictation(text),
 				realtime,

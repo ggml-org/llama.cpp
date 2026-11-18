@@ -22,9 +22,14 @@ afterEach(() => {
 	restore = undefined;
 });
 
-function seed(audio: boolean, inputMode: VoiceInputMode = VoiceInputMode.AUTO) {
+function seed(
+	audio: boolean,
+	inputMode: VoiceInputMode = VoiceInputMode.AUTO,
+	config: Record<string, unknown> = {}
+) {
 	restore = seedStores({
 		config: {
+			...config,
 			autoMicOnEmpty: true,
 			[SETTINGS_KEYS.VOICE_INPUT_MODE]: inputMode,
 			[SETTINGS_KEYS.VOICE_TRANSCRIBE_MESSAGES]: true
@@ -129,6 +134,28 @@ describe('the microphone', () => {
 });
 
 describe('recording', () => {
+	it('asks for the raw microphone, and for noise suppression only when it is switched on', async () => {
+		seed(true, VoiceInputMode.DICTATION);
+
+		const raw = await renderForm();
+
+		await raw.screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
+		await expect.poll(() => raw.recorder.status).toBe('recording');
+		expect(raw.recorder.options?.capture).not.toHaveProperty('constraints');
+		raw.screen.unmount();
+		restore?.();
+
+		seed(true, VoiceInputMode.DICTATION, { [SETTINGS_KEYS.VOICE_NOISE_SUPPRESSION]: true });
+
+		const filtered = await renderForm();
+
+		await filtered.screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
+		await expect.poll(() => filtered.recorder.status).toBe('recording');
+		expect(filtered.recorder.options?.capture).toMatchObject({
+			constraints: { noiseSuppression: true }
+		});
+	});
+
 	it('shows the live waveform with cancel and stop, and Escape drops it', async () => {
 		seed(true);
 

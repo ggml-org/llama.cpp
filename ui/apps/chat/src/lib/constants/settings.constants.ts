@@ -459,6 +459,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
+				defaultValue: false,
+				help: 'Let the browser filter background noise out of what the microphone records. Off, the model gets the raw signal, which speech models take well. Echo cancellation and automatic gain stay off either way, as they interrupt other sound and fade the first words in.',
+				key: SETTINGS_KEYS.VOICE_NOISE_SUPPRESSION,
+				label: 'Noise suppression',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
 				defaultValue: '',
 				help: 'The language you speak, as a two-letter code such as en or de, passed to the transcription. Leave it empty to let the model tell.',
 				key: SETTINGS_KEYS.VOICE_TRANSCRIPTION_LANGUAGE,
