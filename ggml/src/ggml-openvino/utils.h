@@ -1,10 +1,12 @@
 #include "ggml-decoder.h"
 #include "ggml-impl.h"
 #include "ggml-openvino-extra.h"
+#include "model-cache.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <openvino/runtime/core.hpp>
@@ -18,20 +20,28 @@
 // Cache key for a translated/compiled graph. Node count plus the two end node names identify a
 // graph during inference, where the same few graphs repeat for the whole session. The list of
 // external input names below tells those apart more precisely, but it walks every node and every
-// src slot, so it is built only when GGML_OPENVINO_FULL_GRAPH_KEY is set. Op tests run many small
-// graphs that can share a node count and end names, and need the full key.
+// src slot, so it is built only when GGML_OPENVINO_FULL_GRAPH_KEY is set. Sampler row names are
+// always included to distinguish sampler configurations, even when active subsets share the packed input. Op tests run
+// many small graphs that can share a node count and end names, and need the full key.
 struct graph_key {
     int n_nodes;
     int n_leaves;
     std::string first_node_name;
     std::string last_node_name;
-    // Each entry: "<node_idx>:<src_idx>:<op_type>"
+    // External source descriptors "<src_name>:<src_idx>:<op_type>" and sampler row Parameter names.
     std::vector<std::string> input_srcs;
 
     graph_key(const ggml_cgraph * cgraph, bool include_inputs = false) : n_nodes(cgraph->n_nodes), n_leaves(cgraph->n_leafs) {
         if (n_nodes > 0) {
             first_node_name = cgraph->nodes[0]->name;
             last_node_name = cgraph->nodes[n_nodes - 1]->name;
+        }
+
+        for (int i = 0; i < n_nodes; ++i) {
+            const auto * node = cgraph->nodes[i];
+            if (GgmlOvDecoder::is_sampling_view(node)) {
+                input_srcs.push_back("sampling_row_" + std::string(node->name) + "#n" + std::to_string(i));
+            }
         }
 
         static const bool full_key = ggml_openvino_getenv_int("GGML_OPENVINO_FULL_GRAPH_KEY") != 0;
@@ -52,9 +62,8 @@ struct graph_key {
                 if (src == nullptr || src->buffer == nullptr || node_set.count(src) || src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
                     continue;
                 }
-
-                input_srcs.push_back(std::to_string(node_idx) + ":" + std::to_string(src_idx) + ":" +
-                    GgmlOvDecoder::compute_op_type(node));
+                input_srcs.push_back(GgmlOvDecoder::get_tensor_name(cgraph, src) + ":" + std::to_string(src_idx) +
+                                          ":" + GgmlOvDecoder::compute_op_type(node));
             }
         }
     }
@@ -86,6 +95,13 @@ struct decoder_runtime_ctx {
 
     std::shared_ptr<std::mutex> mutex;
     std::shared_ptr<GgmlOvDecoder> ptr;
+    // Attention sizes the cached prefill model was built with; decode calls overwrite the decoder's.
+    int prefill_attention_size = -1;
+    int prefill_attention_size_swa = -1;
+    // KV window of the decode model in the compiled pair (GGML_OPENVINO_NPU_BLOB_PREBUILD).
+    int decode_attention_size = -1;
+    std::string shared_key;
+    std::map<int, std::shared_ptr<ov::InferRequest>> decode_window_requests;
 };
 
 struct ov_compiled_graph {
@@ -93,6 +109,22 @@ struct ov_compiled_graph {
     ov::CompiledModel prefill;
     std::vector<std::string> input_names;
     std::vector<std::string> output_names;
+    std::vector<std::string> prefill_input_names;
+    std::vector<std::string> prefill_output_names;
+    // Extra decode models for other KV windows, built on first use with the pair's settings.
+    int decode_attention_size = -1;
+    std::map<int, ov::CompiledModel> decode_windows;
+    ov::AnyMap decode_config;
+    uint64_t cache_base_extra = 0;
+    bool self_contained = false;
+    bool decode_unfold = false;
+    // GGML_OPENVINO_NPU_WEIGHTLESS_BANK: the pair's weights file, and its layout when the pair was compiled in
+    // this process (window models then resolve the shared weights through the same file).
+    bool weightless_bank = false;
+    std::string weights_path;
+    std::shared_ptr<ggml_openvino_weights_layout> weights_layout;
+    // Compute params the pair's decode model was built with; window models derive from them.
+    ComputeParams decode_c_params;
 };
 
 // Only compilation and cache publication use this mutex. Requests, decoders and
@@ -117,6 +149,8 @@ struct ov_runtime_context {
     std::unordered_map<graph_key, std::shared_ptr<ov::InferRequest>, graph_key_hash> infer_request_cache_prefill;
     std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_input_names_cache;
     std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_output_names_cache;
+    std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_input_names_cache_prefill;
+    std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_output_names_cache_prefill;
     size_t stateful_kv_size;
     std::map<std::string, std::string> kv_state_input_name_map;
     // compute-only copies of graphs that carry unselected ggml_build_forward_select() branches
@@ -134,6 +168,8 @@ struct ov_runtime_context {
         infer_request_cache_prefill.clear();
         ov_input_names_cache.clear();
         ov_output_names_cache.clear();
+        ov_input_names_cache_prefill.clear();
+        ov_output_names_cache_prefill.clear();
         kv_state_input_name_map.clear();
         stateful_kv_size = 0;
     }
@@ -145,6 +181,9 @@ struct ov_runtime_context {
 };
 
 enum ggml_status ov_graph_compute(struct ggml_cgraph * cgraph, ggml_backend_t backend);
+
+// Releases the cached blobs this process imported (GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR).
+void ov_clear_imported_blobs();
 
 size_t checksum(const void * data, size_t size);
 

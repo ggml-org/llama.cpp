@@ -16,6 +16,26 @@ namespace op {
 OutputVector translate_view(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
 
+    if (context.get_op_case() == 3) {
+        auto row = context.get_input("sampling_row_" + context.get_name());
+        auto selected = std::make_shared<ov::op::v8::Gather>(context.get_input(0), row,
+            ov::op::v0::Constant::create(ov::element::i64, {}, {2}));
+        auto shape = ov::op::v0::Constant::create(ov::element::i64, {4},
+            std::vector<int64_t>{1, 1, 1, context.get_output_shape()[3].get_length()});
+        return rename_outputs_with_suffix({std::make_shared<ov::op::v1::Reshape>(selected, shape, false)}, context.get_name());
+    }
+
+    if (context.get_op_case() == 4) {
+        auto input = context.get_input(0);
+        auto active = std::make_shared<ov::op::v8::Slice>(input,
+            ov::op::v0::Constant::create(ov::element::i64, {1}, {0}),
+            context.get_input("s_copy_active_slot_len"),
+            ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
+            ov::op::v0::Constant::create(ov::element::i64, {1},
+                {input.get_partial_shape().rank().get_length() - 2}));
+        return rename_outputs_with_suffix({active}, context.get_name());
+    }
+
     if (context.get_op_case() == 1) {
         // Static-mode identity pass-through for VIEWs over a GATED_DELTA_NET combined output or
         // the conv_input CONCAT; the consuming op (CPY/RMS_NORM) does its own runtime-correct
