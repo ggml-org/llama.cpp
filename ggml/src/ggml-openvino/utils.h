@@ -42,6 +42,11 @@ struct graph_key {
             if (GgmlOvDecoder::is_sampling_view(node)) {
                 input_srcs.push_back("sampling_row_" + std::string(node->name) + "#n" + std::to_string(i));
             }
+            // The output set is part of the model (one Result per output). Enabling outputs on an existing graph,
+            // e.g. llama_set_embeddings_layer_inp() for a DFlash/DSpark drafter, changes only the flags.
+            if (node->flags & GGML_TENSOR_FLAG_OUTPUT) {
+                input_srcs.push_back("output_" + std::string(node->name) + "#n" + std::to_string(i));
+            }
         }
 
         static const bool full_key = ggml_openvino_getenv_int("GGML_OPENVINO_FULL_GRAPH_KEY") != 0;

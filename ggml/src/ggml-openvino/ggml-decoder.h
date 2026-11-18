@@ -477,6 +477,21 @@ public:
         return tensor->op == GGML_OP_GET_ROWS && op->op == GGML_OP_RMS_NORM;
     }
 
+    // Raw float input [n_embd, n_tokens]: DFlash/DSpark/EAGLE3 features into fc, or raw embd batch / EAGLE3 g-embd into RMS_NORM
+    // MUL_MAT needs a weight leaf as src[0], so inp_mean (src[0] is computed) does not match
+    static bool is_inp_embd_leaf(const ggml_tensor * tensor, const ggml_tensor * op) {
+        if (tensor->op != GGML_OP_NONE || !(tensor->flags & GGML_TENSOR_FLAG_INPUT) || tensor->type != GGML_TYPE_F32) {
+            return false;
+        }
+        if (op->op == GGML_OP_MUL_MAT) {
+            return op->src[1] == tensor && op->src[0] != nullptr && op->src[0]->op == GGML_OP_NONE;
+        }
+        return op->op == GGML_OP_RMS_NORM && op->src[0] == tensor;
+    }
+
+    // true if any node of the current graph uses tensor as a raw embd input (see is_inp_embd_leaf)
+    bool has_inp_embd_leaf_use(const ggml_tensor * tensor) const;
+
     static bool is_activation_input(const ggml_tensor * tensor, const ggml_tensor * op) {
         if (tensor == nullptr || op == nullptr || tensor->type != GGML_TYPE_F32 || tensor->ne[2] != 1 ||
             tensor->ne[3] != 1 || (tensor->buffer != nullptr && tensor->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS)) {
@@ -600,6 +615,21 @@ public:
     // build_conv_state_store writes overlapping [history, window, channel, seq] windows into newest-first rollback planes.
     // Match this layout separately from general SET_ROWS.
     static bool is_conv_state_snapshot_writeback(const ggml_tensor * node);
+
+    // SET_ROWS into a column range of each row of a plain 2-D buffer, e.g. build_layer_inp_dev(): every enabled layer
+    // input goes to view_2d(layer_inp_dev, n_embd, n_batch, nb1, col * n_embd * elem) at the batch rows of the ubatch.
+    // The buffer sits in a regular device buffer, so is_kvcache() matches it: check this first
+    inline static bool is_column_set_rows(const ggml_tensor * node) {
+        if (node == nullptr || node->op != GGML_OP_SET_ROWS || node->src[2] == nullptr ||
+            node->src[2]->op != GGML_OP_VIEW) {
+            return false;
+        }
+        const ggml_tensor * dst = node->src[2];
+        const ggml_tensor * buf = dst->view_src;
+        return buf != nullptr && buf->op == GGML_OP_NONE && !is_recurrent_cache(buf) && buf->ne[2] == 1 &&
+               buf->ne[3] == 1 && dst->ne[2] == 1 && dst->ne[3] == 1 && dst->ne[0] < buf->ne[0] &&
+               dst->nb[0] == buf->nb[0] && dst->nb[1] == buf->nb[1] && dst->ne[1] == buf->ne[1];
+    }
 
     // SET_ROWS into a KV cache, directly or through the [1, n] reshape of the transposed V cache with `-fa off`.
     // Other SET_ROWS write rows of a compute tensor, e.g. the MoE expert-group mask

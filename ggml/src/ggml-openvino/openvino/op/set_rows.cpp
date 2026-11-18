@@ -90,11 +90,70 @@ static OutputVector translate_conv_snapshots(const NodeContext & context) {
     return rename_outputs_with_suffix({result}, name);
 }
 
+// SET_ROWS into a column range of a plain 2-D buffer (see GgmlOvDecoder::is_column_set_rows). The result is the
+// whole buffer: the indexed rows get the new columns, the other columns and rows keep their values, so the next
+// write into another column range of the same buffer reads this one.
+static OutputVector translate_column_set_rows(const NodeContext & context) {
+    using namespace ov::op;
+    auto i64_const = [](const std::vector<int64_t> & values) {
+        return v0::Constant::create(ov::element::i64, {values.size()}, values);
+    };
+
+    const auto view_shape = context.get_view_input_ggml_shape(2, 0);  // [1, 1, rows, width]
+    FRONT_END_OP_CONVERSION_CHECK(view_shape.size() == 4, "SET_ROWS column write needs a 4-D destination view");
+    const int64_t width = (int64_t) view_shape[3];
+
+    auto base = context.get_input(2);
+    const auto base_shape = base.get_partial_shape();
+    FRONT_END_OP_CONVERSION_CHECK(base_shape.rank().is_static() && base_shape[base_shape.size() - 1].is_static(),
+                                  "SET_ROWS column write needs a static buffer row size");
+    const int64_t row_size = base_shape[base_shape.size() - 1].get_length();
+    const size_t elem_size = context.get_output_type().size();
+    const int64_t col_begin = (int64_t) (context.get_view_input_offset(2, 0) / elem_size) % row_size;
+    const int64_t col_end = col_begin + width;
+    FRONT_END_OP_CONVERSION_CHECK(col_end <= row_size, "SET_ROWS column range is out of bounds");
+
+    Output<Node> data = std::make_shared<v1::Reshape>(process_view_input_new(context, 0), i64_const({1, 1, -1, width}),
+                                                      false);
+    if (data.get_element_type() != context.get_output_type()) {
+        data = std::make_shared<v0::Convert>(data, context.get_output_type());
+    }
+    Output<Node> rows = std::make_shared<v1::Reshape>(process_view_input_new(context, 1), i64_const({-1}), false);
+    if (rows.get_element_type() != ov::element::i64) {
+        rows = std::make_shared<v0::Convert>(rows, ov::element::i64);
+    }
+
+    auto axis = v0::Constant::create(ov::element::i64, {}, {2});
+    auto buffer = std::make_shared<v1::Reshape>(base, i64_const({1, 1, -1, row_size}), false);
+    Output<Node> updates = data;
+    if (width < row_size) {
+        auto existing = std::make_shared<v8::Gather>(buffer, rows, axis);
+        auto col_axis = i64_const({3});
+        OutputVector parts;
+        if (col_begin > 0) {
+            parts.push_back(std::make_shared<v8::Slice>(existing, i64_const({0}), i64_const({col_begin}),
+                                                        i64_const({1}), col_axis));
+        }
+        parts.push_back(data);
+        if (col_end < row_size) {
+            parts.push_back(std::make_shared<v8::Slice>(existing, i64_const({col_end}), i64_const({row_size}),
+                                                        i64_const({1}), col_axis));
+        }
+        updates = std::make_shared<v0::Concat>(parts, 3);
+    }
+    auto updated = std::make_shared<v3::ScatterUpdate>(buffer, rows, updates, axis);
+    auto res = std::make_shared<v1::Reshape>(updated, std::make_shared<v3::ShapeOf>(base, ov::element::i64), false);
+    return rename_outputs_with_suffix({res}, context.get_name());
+}
+
 OutputVector translate_set_rows(const NodeContext & context) {
     num_inputs_check(context, 3, 3);
 
     if (context.get_op_case() == 3) {
         return translate_conv_snapshots(context);
+    }
+    if (context.get_op_case() == 4) {
+        return translate_column_set_rows(context);
     }
 
     auto data = process_view_input_new(context, 0);
