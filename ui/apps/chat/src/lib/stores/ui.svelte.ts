@@ -17,6 +17,7 @@ import {
 	SIDEBAR_SECTION_ORDER_LOCALSTORAGE_KEY,
 	SIDEBAR_WIDTH_LOCALSTORAGE_KEY
 } from '#lib/constants/index.ts';
+import { SidebarAction } from '#lib/enums/index.ts';
 import { deviceStore } from '#lib/stores/device.svelte.ts';
 import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
 import type { Group } from '#lib/types/groups.js';
@@ -114,9 +115,27 @@ class UiStore {
 		return Boolean(settingsStore.getConfig(SETTINGS_KEYS.ENABLE_DISCOVER_MODELS));
 	}
 
+	/**
+	 * Whether MCP shows in the sidebar. Off by default: most people have never heard of MCP,
+	 * so it waits behind its setting. Hiding it only hides the entry point: servers already
+	 * added keep working.
+	 */
+	get isMcpShown(): boolean {
+		return Boolean(settingsStore.getConfig(SETTINGS_KEYS.SHOW_MCP));
+	}
+
 	/** Whether the model details drawer is open. */
 	get isModelDetailsOpen(): boolean {
 		return this.modelDetailsFocus !== null;
+	}
+
+	/**
+	 * Whether the models manager has its entry points: Models in the sidebar, "Manage models"
+	 * in the selector, its shortcut. Off by default, for the same reason as MCP: the selector
+	 * already picks and loads models. The page itself stays reachable by its URL.
+	 */
+	get isModelsManagerShown(): boolean {
+		return Boolean(settingsStore.getConfig(SETTINGS_KEYS.SHOW_MODELS_MANAGER));
 	}
 
 	/** Whether the models manager route is the current page. */
@@ -166,6 +185,15 @@ class UiStore {
 		if (this.collapsedSidebarSections.has(id)) this.toggleSidebarSection(id);
 	}
 
+	/** Whether a sidebar action shows: Models and MCP wait behind their settings. */
+	isSidebarActionShown(action: SidebarAction | undefined): boolean {
+		if (action === SidebarAction.MANAGE_MODELS) return this.isModelsManagerShown;
+
+		if (action === SidebarAction.MCP) return this.isMcpShown;
+
+		return true;
+	}
+
 	isSidebarSectionExpanded(id: string): boolean {
 		return this.expandedSidebarSections.has(id);
 	}
@@ -197,9 +225,9 @@ class UiStore {
 		this.discoverModelsOpen = true;
 	}
 
-	/** Navigate to the models manager. */
+	/** Navigate to the models manager; a no-op while it is hidden. */
 	openModelsManager(): void {
-		if (this.isModelsPageOpen) return;
+		if (!this.isModelsManagerShown || this.isModelsPageOpen) return;
 
 		void goto(ROUTES.MODELS);
 	}

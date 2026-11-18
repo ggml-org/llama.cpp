@@ -149,7 +149,14 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: false,
-				help: 'Show the Discover Models sidebar action to browse and download HuggingFace GGUF models. Turns the Hugging Face Hub API on while it is enabled. Only available in router mode.',
+				help: 'Show Models in the sidebar and "Manage models" in the model selector, to see, load and configure the models on the server.',
+				key: SETTINGS_KEYS.SHOW_MODELS_MANAGER,
+				label: 'Show Models',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
+				help: 'Show Discover Models on the Models page, to browse and download HuggingFace GGUF models. Turns Models and the Hugging Face Hub API on while it is enabled. Only available in router mode.',
 				key: SETTINGS_KEYS.ENABLE_DISCOVER_MODELS,
 				label: 'Enable Discover Models',
 				type: SettingsFieldType.CHECKBOX
@@ -159,6 +166,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Fetch model display data (avatars, context length, chat template) and everything in the Discover Models view from the Hugging Face Hub API. Locked on while Discover Models is enabled; can be turned on alone for just the display data.',
 				key: SETTINGS_KEYS.USE_HUGGING_FACE_HUB,
 				label: 'Use the Hugging Face Hub API',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
+				help: 'Show MCP in the sidebar, to add and manage MCP servers. Servers already added keep working while it is hidden.',
+				key: SETTINGS_KEYS.SHOW_MCP,
+				label: 'Show MCP',
 				type: SettingsFieldType.CHECKBOX
 			},
 			{

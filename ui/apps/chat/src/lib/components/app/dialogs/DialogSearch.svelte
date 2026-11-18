@@ -11,7 +11,7 @@
 	} from '#lib/constants/index.ts';
 	import { KeyboardKey, SidebarAction } from '#lib/enums/index.ts';
 	import { RouterService } from '#lib/services/router.service.ts';
-	import { conversationsStore, deviceStore } from '#lib/stores/index.ts';
+	import { conversationsStore, deviceStore, uiStore } from '#lib/stores/index.ts';
 	import { formatRelativeTime, isIMEComposing } from '#lib/utils/index.ts';
 	import { goto } from '$app/navigation';
 	import type { Component } from 'svelte';
@@ -71,13 +71,14 @@
 	);
 
 	const actionEntries = $derived.by((): SearchEntry[] =>
-		// every sidebar action but Search itself, which is what opened this dialog, and the models
-		// manager on a phone, which picks its models in the selector
+		// every sidebar action the sidebar shows but Search itself, which is what opened this
+		// dialog, and the models manager on a phone, which picks its models in the selector
 		[...SIDEBAR_ACTIONS_ITEMS, ...SIDEBAR_FOOTER_ITEMS]
 			.filter(
 				(item) =>
 					item.action &&
 					item.action !== SidebarAction.SEARCH &&
+					uiStore.isSidebarActionShown(item.action) &&
 					(item.action !== SidebarAction.MANAGE_MODELS || !deviceStore.isMobile)
 			)
 			.map((item) => ({

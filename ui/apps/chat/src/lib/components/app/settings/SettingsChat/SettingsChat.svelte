@@ -97,6 +97,10 @@
 		// unchecking it turns the hub back off, so the checkbox never lies
 		if (key === SETTINGS_KEYS.ENABLE_DISCOVER_MODELS) {
 			localConfig[SETTINGS_KEYS.USE_HUGGING_FACE_HUB] = value === true;
+
+			// it opens from the Models page, so checking it shows Models too; unchecking it
+			// leaves Models as it is, since Models is useful without it
+			if (value === true) localConfig[SETTINGS_KEYS.SHOW_MODELS_MANAGER] = true;
 		}
 	}
 

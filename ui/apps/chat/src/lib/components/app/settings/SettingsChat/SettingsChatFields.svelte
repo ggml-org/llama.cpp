@@ -27,11 +27,15 @@
 
 	let { fields, localConfig, onConfigChange, onThemeChange }: Props = $props();
 
-	// discover needs the hub metadata reads, so its checkbox is read-only while discover is on
-	let hubLocked = $derived(Boolean(localConfig[SETTINGS_KEYS.ENABLE_DISCOVER_MODELS]));
+	// discover needs the hub metadata reads, and opens from the Models page, so both checkboxes
+	// are read-only while discover is on
+	let discoverOn = $derived(Boolean(localConfig[SETTINGS_KEYS.ENABLE_DISCOVER_MODELS]));
 
 	function isLockedField(key: string): boolean {
-		return hubLocked && key === SETTINGS_KEYS.USE_HUGGING_FACE_HUB;
+		return (
+			discoverOn &&
+			(key === SETTINGS_KEYS.USE_HUGGING_FACE_HUB || key === SETTINGS_KEYS.SHOW_MODELS_MANAGER)
+		);
 	}
 
 	let currentModelParams = $derived.by(() => {

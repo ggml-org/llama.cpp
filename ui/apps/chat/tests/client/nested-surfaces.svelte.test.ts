@@ -6,7 +6,12 @@
 import '../../src/app.css';
 import SidebarNavigationActions from '#lib/components/app/navigation/SidebarNavigation/SidebarNavigationActions.svelte';
 import SidebarNavigationFooter from '#lib/components/app/navigation/SidebarNavigation/SidebarNavigationFooter.svelte';
-import { SIDEBAR_ACTIONS_ITEMS, SIDEBAR_FOOTER_ITEMS } from '#lib/constants/index.ts';
+import {
+	SETTINGS_KEYS,
+	SIDEBAR_ACTIONS_ITEMS,
+	SIDEBAR_FOOTER_ITEMS
+} from '#lib/constants/index.ts';
+import { settingsStore } from '#lib/stores/index.ts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
@@ -32,6 +37,10 @@ describe('nested surfaces', () => {
 	// the footer is a desktop's and a tablet's: a phone lists its items with the sidebar's actions
 	beforeEach(async () => {
 		await page.viewport(1280, 900);
+
+		// Models and MCP wait behind their settings: show them, so every footer row is measured
+		settingsStore.updateConfig(SETTINGS_KEYS.SHOW_MODELS_MANAGER, true);
+		settingsStore.updateConfig(SETTINGS_KEYS.SHOW_MCP, true);
 	});
 
 	it('round the footer group from its tokens', async () => {
