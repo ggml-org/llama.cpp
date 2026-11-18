@@ -125,7 +125,7 @@
 		"bits-ui": "2.18.1",
 		"clsx": "^2.1.1",
 		"highlight.js": "^11.11.1",
-		"@ggml-org/llama-brand": "https://codeload.github.com/ggml-org/llama-brand/tar.gz/f05540643c1ca2a18d732ed6491c839686da9a3a",
+		"@ggml-org/llama-brand": "0.1.0",
 		"tailwind-merge": "^3.7.0",
 		"tailwind-variants": "^3.3.1",
 		"vaul-svelte": "1.0.0-next.7"
