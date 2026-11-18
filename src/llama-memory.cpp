@@ -131,6 +131,15 @@ struct llama_memory_tensors_writer : public llama_io_write_i {
     }
 };
 
+std::vector<ggml_backend_buffer_t> llama_memory_get_buffers(const llama_memory_t mem) {
+    std::set<ggml_backend_buffer_t> buffers;
+    for (ggml_tensor * tensor : llama_memory_get_tensors(mem)) {
+        buffers.insert(tensor->buffer);
+    }
+
+    return std::vector<ggml_backend_buffer_t>(buffers.begin(), buffers.end());
+}
+
 std::vector<ggml_tensor *> llama_memory_get_tensors(const llama_memory_t mem) {
     if (mem == nullptr) {
         return {};
@@ -141,13 +150,4 @@ std::vector<ggml_tensor *> llama_memory_get_tensors(const llama_memory_t mem) {
     mem->state_write(writer);
 
     return std::vector<ggml_tensor *>(writer.tensors.begin(), writer.tensors.end());
-}
-
-std::vector<ggml_backend_buffer_t> llama_memory_get_buffers(const llama_memory_t mem) {
-    std::set<ggml_backend_buffer_t> buffers;
-    for (ggml_tensor * tensor : llama_memory_get_tensors(mem)) {
-        buffers.insert(tensor->buffer);
-    }
-
-    return std::vector<ggml_backend_buffer_t>(buffers.begin(), buffers.end());
 }
