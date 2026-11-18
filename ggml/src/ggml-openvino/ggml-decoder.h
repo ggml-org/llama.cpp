@@ -361,6 +361,7 @@ public:
     void add_extra_inputs();
 
     void update_io(ggml_cgraph * cgraph);
+    // True if the captured node/src pointers are exactly those of `cgraph`.
     bool is_bound_to(const ggml_cgraph * cgraph) const;
 
     static bool is_inp_tok(const ggml_tensor * tensor, const ggml_tensor * op) {
