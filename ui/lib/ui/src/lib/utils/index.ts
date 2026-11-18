@@ -1,6 +1,8 @@
 export {
+  getLoadedHighlightLanguages,
   highlightCode,
-  isHighlighterLoaded,
-  loadHighlighter,
+  isHighlightLanguageLoaded,
+  loadHighlightLanguages,
+  resolveHighlightLanguage,
   trimCodePadding,
 } from "./code";

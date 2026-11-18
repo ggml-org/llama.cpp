@@ -1,12 +1,12 @@
 import {
 	highlightCode,
-	loadHighlighter,
+	loadHighlightLanguages,
 	splitGluedClosingCodeFences,
 	trimCodePadding
 } from '#lib/utils/code.ts';
 import { beforeAll, describe, expect, it } from 'vitest';
 
-beforeAll(() => loadHighlighter());
+beforeAll(() => loadHighlightLanguages());
 
 describe('trimCodePadding', () => {
 	it('removes a single leading newline', () => {

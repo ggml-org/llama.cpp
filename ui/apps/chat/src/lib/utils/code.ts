@@ -1,9 +1,11 @@
 import { CODE_BLOCK, NEWLINE } from '#lib/constants/index.ts';
 
 export {
+	getLoadedHighlightLanguages,
 	highlightCode,
-	isHighlighterLoaded,
-	loadHighlighter,
+	isHighlightLanguageLoaded,
+	loadHighlightLanguages,
+	resolveHighlightLanguage,
 	trimCodePadding
 } from '@ggml-org/llama-ui/code';
 

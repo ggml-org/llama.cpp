@@ -33,8 +33,8 @@ export {
 // Code
 export {
 	highlightCode,
-	isHighlighterLoaded,
-	loadHighlighter,
+	isHighlightLanguageLoaded,
+	loadHighlightLanguages,
 	detectIncompleteCodeBlock,
 	splitGluedClosingCodeFences,
 	trimCodePadding,
