@@ -281,10 +281,15 @@ static __global__ void flash_attn_ext_vec(
         // Calculate KQ tile and keep track of new maximum KQ values:
         float KQ_reg[ncols]; // KQ in registers.
 
-        float KQ_max_new[ncols];
+        // Each thread keeps one KQ row of the tile, row tid. Load the mask value for that row ahead of the K loads and
+        // apply softcap, mask and max after the dot products, so there are no branches or mask loads between the K loads:
+        float KQ_mask[ncols];
 #pragma unroll
         for (int j = 0; j < ncols; ++j) {
-            KQ_max_new[j] = KQ_max[j];
+            KQ_mask[j] = 0.0f;
+            if (mask && (ncols == 1 || ic0 + j < int(ne01.z))) {
+                KQ_mask[j] = slope*__half2float(maskh[j*ne11 + tid]);
+            }
         }
 
 #pragma unroll
@@ -296,26 +301,26 @@ static __global__ void flash_attn_ext_vec(
                 float sum = vec_dot_KQ(K + i_KQ*nb11, Q_reg[j], Q_i32[j], Q_ds[j]);
                 sum = warp_reduce_sum<nthreads_KQ>(sum);
 
-                if (use_logit_softcap) {
-                    sum = logit_softcap*tanhf(sum);
-                }
-
-                if (mask && (ncols == 1 || ic0 + j < int(ne01.z))) {
-                    sum += slope*__half2float(maskh[j*ne11 + i_KQ]);
-                }
-
-                KQ_max_new[j] = fmaxf(KQ_max_new[j], sum + FATTN_KQ_MAX_OFFSET);
-
                 if ((nthreads_KQ == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads_KQ) == uint32_t(i_KQ_0)) {
                     KQ_reg[j] = sum;
                 }
             }
         }
 
+        float KQ_max_new[ncols];
+#pragma unroll
+        for (int j = 0; j < ncols; ++j) {
+            if (use_logit_softcap) {
+                KQ_reg[j] = logit_softcap*tanhf(KQ_reg[j]);
+            }
+            KQ_reg[j] += KQ_mask[j];
+            KQ_max_new[j] = fmaxf(KQ_max[j], KQ_reg[j] + FATTN_KQ_MAX_OFFSET);
+        }
+
 #pragma unroll
         for (int j = 0; j < ncols; ++j) {
 #pragma unroll
-            for (int offset = nthreads_KQ; offset < WARP_SIZE; offset <<= 1) {
+            for (int offset = 1; offset < WARP_SIZE; offset <<= 1) {
                 KQ_max_new[j] = fmaxf(KQ_max_new[j], ggml_cuda_shfl_xor(KQ_max_new[j], offset, WARP_SIZE));
             }
             const float KQ_max_scale = expf(KQ_max[j] - KQ_max_new[j]);
