@@ -1,3 +1,5 @@
+#pragma once
+
 #include "common.cuh"
 #include "fattn-common.cuh"
 
@@ -6,6 +8,10 @@
 
 // TODO optimize kernel parameters for FP16 NVIDIA (P100)
 // TODO optimize kernel parameters for head sizes 40, 72, 80, 96, 112
+
+static constexpr __host__ __device__ bool ggml_cuda_fattn_tile_may_use(const bool has_turing_mma) {
+    return !has_turing_mma;
+}
 
 // The ROCm compiler cannot handle templating in __launch_bounds__.
 // As a workaround, define a macro to package the kernel parameters as uint32_t:
@@ -826,7 +832,13 @@ static __global__ void flash_attn_tile(
 
     // Skip unused kernel variants for faster compilation:
 
-    if ((use_logit_softcap && !(DV == 128 || DV == 256 || DV == 512))) {
+#ifdef TURING_MMA_AVAILABLE
+    constexpr bool has_turing_mma = true;
+#else
+    constexpr bool has_turing_mma = false;
+#endif // TURING_MMA_AVAILABLE
+
+    if (!ggml_cuda_fattn_tile_may_use(has_turing_mma) || (use_logit_softcap && !(DV == 128 || DV == 256 || DV == 512))) {
         GGML_UNUSED_VARS(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
             max_bias, m0, m1, n_head_log2, logit_softcap,
             ne00, ne01, ne02, ne03,

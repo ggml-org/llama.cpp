@@ -116,6 +116,7 @@ if (CUDAToolkit_FOUND)
     list(APPEND GGML_HEADERS_CUDA "../../include/ggml-cuda.h")
 
     file(GLOB   GGML_SOURCES_CUDA "*.cu")
+
     file(GLOB   SRCS "template-instances/fattn-tile*.cu")
     list(APPEND GGML_SOURCES_CUDA ${SRCS})
     file(GLOB   SRCS "template-instances/fattn-mma*.cu")
@@ -132,6 +133,22 @@ if (CUDAToolkit_FOUND)
                              ${GGML_HEADERS_CUDA}
                              ${GGML_SOURCES_CUDA}
                             )
+
+    option(GGML_CUDA_UNITY_BUILD "Use unity builds for CUDA sources" "${CMAKE_UNITY_BUILD}")
+    set_target_properties(ggml-cuda PROPERTIES UNITY_BUILD "${GGML_CUDA_UNITY_BUILD}")
+    if (GGML_CUDA_UNITY_BUILD)
+        if (CMAKE_VERSION VERSION_LESS "3.31")
+            message(FATAL_ERROR "CUDA unity builds require CMake 3.31 or newer")
+        endif()
+
+        set(GGML_CUDA_UNITY_SKIP ggml-cuda.cu conv2d-dw.cu mmvq.cu mmvf.cu binbcast.cu argsort.cu sum.cu ssm-scan.cu top-k.cu mean.cu getrows.cu cumsum.cu)
+        foreach(SRC IN LISTS GGML_SOURCES_CUDA)
+            get_filename_component(SRC_NAME "${SRC}" NAME)
+            if (SRC MATCHES "/template-instances/" OR SRC_NAME IN_LIST GGML_CUDA_UNITY_SKIP)
+                set_source_files_properties("${SRC}" PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+            endif()
+        endforeach()
+    endif()
 
     if (GGML_CUDA_GRAPHS)
         add_compile_definitions(GGML_CUDA_USE_GRAPHS)
