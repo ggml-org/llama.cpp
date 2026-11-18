@@ -26,7 +26,7 @@ const clip_model * llama_model_clip::engine_for_ctx(enum llama_context_type type
     if (type == LLAMA_CONTEXT_TYPE_ENCODER) {
         return engine_vision() ? engine_vision() : engine_audio();
     }
-    if (type == LLAMA_CONTEXT_TYPE_GEN_CODE || type == LLAMA_CONTEXT_TYPE_GEN_WAV) {
+    if (type == LLAMA_CONTEXT_TYPE_GEN_CODE) {
         return engine_gen();
     }
     return nullptr;
@@ -37,8 +37,8 @@ bool llama_model_clip::engine_flash_attn(const clip_model & m, const llama_cpara
 }
 
 uint32_t llama_model_clip::graph_max_nodes_hint() const {
-    // native graphs: vision towers are wide (mtmd used 8192), the code predictor unrolls 15 steps with a sampler chain each
-    uint32_t res = vhp.has_vision ? 8192 : 32768;
+    // native vision graphs are wide (mtmd used 8192)
+    uint32_t res = 8192;
     for (const clip_model * m : { engine_vision(), engine_audio(), engine_gen() }) {
         if (m) {
             res = std::max(res, (uint32_t) m->max_nodes);
@@ -155,7 +155,13 @@ struct llama_model_clip::graph_engine : public llm_graph_context {
         sub->gf   = gf;
 
         ggml_cgraph * g = nullptr;
-        if (req) {
+        // the gen steps of Qwen3-TTS run on its native graphs, reserved with the codec (the larger one)
+        const bool gen_step = req == nullptr || req->gen_process == CLIP_SUBCTX_GEN_PROCESS_GEN_CODE || req->gen_process == CLIP_SUBCTX_GEN_PROCESS_GEN_WAV;
+        if (clip.native_gen && gen_step && &sub->model == clip.engine_gen()) {
+            clip_subctx_encode_params wav;
+            wav.gen_process = CLIP_SUBCTX_GEN_PROCESS_GEN_WAV;
+            g = llama_model_clip_build_qwen3tts_gen(ctx0, gf, sub->model, sub->flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED, req ? *req : wav);
+        } else if (req) {
             g = sub->build(req);
         } else {
             const clip_image_f32_batch batch = sub->get_dummy_batch(true);

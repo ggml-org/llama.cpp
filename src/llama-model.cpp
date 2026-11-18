@@ -3715,11 +3715,6 @@ const char * llama_model_decision_label(const struct llama_model * model, uint32
     return nullptr;
 }
 
-uint32_t llama_model::ctx_n_vocab(enum llama_context_type type) const {
-    GGML_UNUSED(type);
-    return vocab.n_tokens();
-}
-
 uint32_t llama_model::ctx_n_embd_state(enum llama_context_type type) const {
     return (uint32_t) llama_batch_ext_select_n_embd_state(type, hparams);
 }

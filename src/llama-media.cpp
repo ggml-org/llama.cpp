@@ -28,10 +28,7 @@ bool llama_model_has_context_type(const struct llama_model * model, enum llama_c
             return clip->engine_vision() != nullptr || clip->engine_audio() != nullptr;
         }
         if (type == LLAMA_CONTEXT_TYPE_GEN_CODE) {
-            return clip->native_gen || clip->engine_gen() != nullptr;
-        }
-        if (type == LLAMA_CONTEXT_TYPE_GEN_WAV) {
-            return (clip->native_gen && clip->c2w.dac_entry_w != nullptr) || (!clip->native_gen && clip->engine_gen() != nullptr);
+            return clip->engine_gen() != nullptr;
         }
         return false;
     }
@@ -678,24 +675,6 @@ int32_t llama_batch_ext_add_media(struct llama_batch_ext * batch, llama_seq_id s
     return first;
 }
 
-int32_t llama_batch_ext_add_codes(struct llama_batch_ext * batch, llama_seq_id seq_id, const llama_token * codes, int32_t n_codes) {
-    if (n_codes <= 0 || codes == nullptr) {
-        return -2;
-    }
-    // checked here too, so that a caller can validate a whole request before running any part of it
-    if (const auto * clip = as_clip(batch->model); clip && !clip->c2w_codes_valid(codes, n_codes)) {
-        return -3;
-    }
-    const int32_t idx = batch->add_token(seq_id);
-    if (idx < 0) {
-        return idx;
-    }
-    batch->tokens[idx].codes_off = (int32_t) batch->codes.size();
-    batch->tokens[idx].n_codes   = n_codes;
-    batch->codes.insert(batch->codes.end(), codes, codes + n_codes);
-    return idx;
-}
-
 //
 // realtime audio input
 //
@@ -847,17 +826,6 @@ int32_t llama_model_gen_g2p(const struct llama_model * model, const char * word,
     return clip_gen_audio_g2p(*clip->engine_gen(), word, buf, buf_size);
 }
 
-size_t llama_media_get_ref_codes(const struct llama_media * m, int32_t * out, size_t n_max) {
-    if (m == nullptr || !m->gen_ref) {
-        return 0;
-    }
-    const auto & codes = m->gen_ref->tokens;
-    if (out) {
-        std::copy_n(codes.begin(), std::min(n_max, codes.size()), out);
-    }
-    return codes.size();
-}
-
 struct llama_media * llama_media_init_voice(const struct llama_model * model, const char * name) {
     const auto * clip = as_clip(model);
     if (clip == nullptr || clip->engine_gen() == nullptr || name == nullptr) {
@@ -894,7 +862,7 @@ struct llama_media * llama_media_init_voice(const struct llama_model * model, co
 }
 
 int32_t llama_batch_ext_add_gen(struct llama_batch_ext * batch, llama_seq_id seq_id, const struct llama_gen_inp * inp) {
-    if (batch->ctx_type != LLAMA_CONTEXT_TYPE_GEN_CODE && batch->ctx_type != LLAMA_CONTEXT_TYPE_GEN_WAV) {
+    if (batch->ctx_type != LLAMA_CONTEXT_TYPE_GEN_CODE) {
         return -6;
     }
     if (seq_id < 0 || seq_id >= batch->n_seq_max) {

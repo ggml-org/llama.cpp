@@ -27,7 +27,9 @@ ggml_cgraph * clip_graph_music3_gen::build_depth() {
     ggml_set_name(inp_rand, "inp_rand");
     ggml_set_input(inp_rand);
 
-    clip_graph_qwen3tts_gen::code_gen cg(*this, top_k, 1.0f);
+    clip_tts_blocks cg(*this);
+    cg.top_k = top_k;
+    cg.top_p = 1.0f;
 
     // [n_embd, 1, B], the codes are the same in all rows
     auto project = [&](ggml_tensor * x) {

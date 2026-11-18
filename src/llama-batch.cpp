@@ -373,8 +373,6 @@ bool llama_batch_allocr::init(
             /*.decision_order =*/ decision_order.empty() ? nullptr : decision_order.data(),
             /*.span         =*/ span_vec.empty() ? nullptr : span_vec.data(),
             /*.media        =*/ nullptr,
-            /*.codes        =*/ nullptr,
-            /*.n_codes      =*/ 0,
             /*.data         =*/ {},
         };
 
@@ -603,8 +601,6 @@ llama_ubatch llama_batch_allocr::ubatch_reserve(uint32_t n_seq_tokens, uint32_t 
         /*.decision_order =*/ nullptr,
         /*.span         =*/ nullptr,
         /*.media        =*/ nullptr,
-        /*.codes        =*/ nullptr,
-        /*.n_codes      =*/ 0,
         /*.data         =*/ std::move(udata),
     };
 
@@ -1108,8 +1104,6 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
         /*.decision_order =*/ udata->decision_order.empty() ? nullptr : udata->decision_order.data(),
         /*.span         =*/ udata->span.empty() ? nullptr : udata->span.data(),
         /*.media        =*/ nullptr,
-        /*.codes        =*/ nullptr,
-        /*.n_codes      =*/ 0,
         /*.data         =*/ std::move(udata),
     };
 
@@ -1297,7 +1291,7 @@ llama_batch_ext::llama_batch_ext(llama_context * ctx) :
         n_embd_state(llama_get_model(ctx)->ctx_n_embd_state(ctx->get_cparams().ctx_type)),
         n_seq_max(llama_n_seq_max(ctx)),
         mem(llama_get_memory(ctx)),
-        n_vocab((llama_token) llama_get_model(ctx)->ctx_n_vocab(ctx->get_cparams().ctx_type)),
+        n_vocab(llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx)))),
         n_pos_per_embd(llama_get_model(ctx)->hparams.n_pos_per_embd()),
         model(llama_get_model(ctx)),
         ctx_type(ctx->get_cparams().ctx_type) {
@@ -1332,7 +1326,6 @@ void llama_batch_ext::clear() {
     embd  .clear();
     state .clear();
     n_embd = 0;
-    codes.clear();
     gen.clear();
     for (auto * m : media) {
         llama_media_free(m);

@@ -1021,8 +1021,7 @@ struct llama_model {
     // minimum graph size the arch needs, 0 = the default estimate from the tensor count
     virtual uint32_t graph_max_nodes_hint() const { return 0; }
 
-    // input widths of a batch for a context of this type (token ids < n_vocab, state rows of n_embd_state)
-    virtual uint32_t ctx_n_vocab(enum llama_context_type type) const;
+    // widths of the output rows and of the batch state rows of a context of this type
     virtual uint32_t ctx_n_embd_out(enum llama_context_type type) const { GGML_UNUSED(type); return hparams.n_embd_out(); }
     virtual uint32_t ctx_n_embd_state(enum llama_context_type type) const;
 

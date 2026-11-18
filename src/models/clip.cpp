@@ -3,10 +3,9 @@
 #include "llama-impl.h"
 #include "llama-media.h"
 #include "llama-vocab.h"
+#include "../clip/clip-gen-memory.h"
 
 #include "../clip/clip-model.h"
-
-#include "gguf.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -25,90 +24,34 @@ static llama_clip_projector clip_projector_native(const clip_model * m) {
     }
 }
 
-// mmproj files store sizes as u32 (most) or i32 (some converters), accept both
-static bool clip_get_i32(llama_model_loader & ml, const char * key, int32_t & out, bool required = true) {
-    const int kid = gguf_find_key(ml.metadata, key);
-    if (kid < 0) {
-        if (required) {
-            throw std::runtime_error(format("clip: key not found: %s", key));
-        }
-        return false;
-    }
-    switch (gguf_get_kv_type(ml.metadata, kid)) {
-        case GGUF_TYPE_UINT32: out = (int32_t) gguf_get_val_u32(ml.metadata, kid); return true;
-        case GGUF_TYPE_INT32:  out = gguf_get_val_i32(ml.metadata, kid);           return true;
-        default: throw std::runtime_error(format("clip: key %s is not an integer", key));
-    }
-}
-
 void llama_model_clip::load_vocab(llama_model_loader &) {
     // an mmproj has no vocabulary
 }
 
-// the audio generation tower becomes the main tower of a file without a vision tower
-// other audio-only files are not ported yet; llama-quantize still opens them
-static const char * CKEY_HAS_GEN     = "clip.has_gen_audio_encoder";
-static const char * CKEY_GEN_PROJ    = "clip.gen.audio.projector_type";
-
-void llama_model_clip::load_gen_hparams(llama_model_loader & ml) {
-    ml.get_key(std::string(CKEY_HAS_GEN), ghp.has_gen, false);
-    if (!ghp.has_gen) {
-        return;
-    }
-    ml.get_key(std::string(CKEY_GEN_PROJ), ghp.proj_name, false);
-    ghp.proj = engine_gen() && engine_gen()->proj_type == PROJECTOR_TYPE_QWEN3TTS_GEN ? LLAMA_CLIP_PROJ_QWEN3TTS_GEN : LLAMA_CLIP_PROJ_UNKNOWN;
-    if (ghp.proj == LLAMA_CLIP_PROJ_UNKNOWN) {
-        return;
-    }
-
-    const LLM_KV kv(LLM_ARCH_CLIP, nullptr, "clip.gen.audio");
-
-    uint32_t n_ff      = 0;
-    uint32_t n_head    = 0;
-    uint32_t n_head_kv = 0;
-
-    ml.get_key(kv(LLM_KV_EMBEDDING_LENGTH),        hparams.n_embd);
-    ml.get_key(kv(LLM_KV_BLOCK_COUNT),             hparams.n_layer_all);
-    ml.get_key(kv(LLM_KV_FEED_FORWARD_LENGTH),     n_ff);
-    ml.get_key(kv(LLM_KV_ATTENTION_HEAD_COUNT),    n_head);
-    ml.get_key(kv(LLM_KV_ATTENTION_LAYERNORM_EPS), hparams.f_norm_rms_eps);
-    n_head_kv = n_head;
-    ml.get_key(kv(LLM_KV_ATTENTION_HEAD_COUNT_KV), n_head_kv, false);
-    clip_get_i32(ml, "clip.gen.audio.projection_dim", ghp.n_embd_in);
-
-    GGML_ASSERT(hparams.n_layer_all > 0 && hparams.n_layer_all <= LLAMA_MAX_LAYERS);
-
-    hparams.f_norm_eps = hparams.f_norm_rms_eps;
-    std::fill(hparams.n_head_arr.begin(),    hparams.n_head_arr.end(),    0);
-    std::fill(hparams.n_head_kv_arr.begin(), hparams.n_head_kv_arr.end(), 0);
-    std::fill(hparams.n_ff_arr.begin(),      hparams.n_ff_arr.end(),      0);
-    std::fill(hparams.n_head_arr.begin(),    hparams.n_head_arr.begin()    + hparams.n_layer_all, n_head);
-    std::fill(hparams.n_head_kv_arr.begin(), hparams.n_head_kv_arr.begin() + hparams.n_layer_all, n_head_kv);
-    std::fill(hparams.n_ff_arr.begin(),      hparams.n_ff_arr.begin()      + hparams.n_layer_all, n_ff);
-
-    // the head dim is not n_embd / n_head, the tensors give it (see load_arch_tensors)
-    hparams.n_rot_full = 0;
-
-    // the feedback embedding goes back to the backbone
-    hparams.n_embd_out_impl = ghp.n_embd_in;
-}
-
-uint32_t llama_model_clip::ctx_n_vocab(enum llama_context_type type) const {
-    if (type == LLAMA_CONTEXT_TYPE_GEN_CODE && gc_out_embd) {
-        return (uint32_t) gc_out_embd->ne[1];
-    }
-    return 0;
-}
-
+// the gen tower (backbone hidden state of a gen step) and the outputs of a context of each type
 uint32_t llama_model_clip::ctx_n_embd_state(enum llama_context_type type) const {
-    if (type != LLAMA_CONTEXT_TYPE_GEN_CODE && type != LLAMA_CONTEXT_TYPE_GEN_WAV) {
-        return 0;
+    return type == LLAMA_CONTEXT_TYPE_GEN_CODE && engine_gen() ? (uint32_t) engine_gen()->n_mmproj_embd() : 0;
+}
+
+uint32_t llama_model_clip::ctx_n_embd_out(enum llama_context_type type) const {
+    if (type == LLAMA_CONTEXT_TYPE_GEN_CODE && engine_gen()) {
+        return (uint32_t) engine_gen()->n_mmproj_embd(); // the feedback row of a gen step
     }
-    if (!native_gen) {
-        // the backbone hidden state of a gen step
-        return engine_gen() ? (uint32_t) engine_gen()->n_mmproj_embd() : 0;
+    if (type == LLAMA_CONTEXT_TYPE_ENCODER && !native_v) {
+        if (const clip_model * m = engine_for_ctx(type)) {
+            return (uint32_t) m->n_mmproj_embd();
+        }
     }
-    return type == LLAMA_CONTEXT_TYPE_GEN_CODE ? (uint32_t) ghp.n_embd_in : 0;
+    return hparams.n_embd_out();
+}
+
+// the gen pipelines keep their per-sequence state on the host side of the context
+llama_memory_i * llama_model_clip::create_clip_memory(const llama_memory_params & params, const llama_cparams & cparams) const {
+    GGML_UNUSED(params);
+    if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE && engine_gen() != nullptr) {
+        return new llama_memory_clip_gen();
+    }
+    return nullptr;
 }
 
 void llama_model_clip::load_arch_hparams(llama_model_loader & ml) {
@@ -119,23 +62,19 @@ void llama_model_clip::load_arch_hparams(llama_model_loader & ml) {
     engine = std::make_unique<clip_models>(clip_model_load_hparams(ml));
     path   = ml.fname;
 
-    // Gemma 3, Qwen2/2.5/3-VL and Qwen3-TTS (gen tower) run on their native graphs (libllama helpers), the other
-    // towers on the graphs of the clip engine; the engine loads the weights and the hparams of every tower and
-    // still lays out and preprocesses every media
+    // Gemma 3, Qwen2/2.5/3-VL and the gen steps of Qwen3-TTS run on their native graphs, the other towers on the
+    // graphs of the clip engine; the engine loads the weights and the hparams of every tower, lays out and
+    // preprocesses every media and runs the gen pipelines
     vhp.has_vision = engine_vision() != nullptr;
     vhp.proj       = clip_projector_native(engine_vision());
+    native_gen     = engine_gen() != nullptr && engine_gen()->proj_type == PROJECTOR_TYPE_QWEN3TTS_GEN;
 
     if (!vhp.has_vision) {
-        load_gen_hparams(ml);
-        native_gen = ghp.has_gen && ghp.proj == LLAMA_CLIP_PROJ_QWEN3TTS_GEN;
-        if (!native_gen) {
-            ghp = {};
-            const clip_model * main = engine_audio() ? engine_audio() : engine_gen();
-            if (main == nullptr) {
-                throw std::runtime_error("clip: the file has no tower");
-            }
-            load_engine_hparams(*main);
+        const clip_model * main = engine_audio() ? engine_audio() : engine_gen();
+        if (main == nullptr) {
+            throw std::runtime_error("clip: the file has no tower");
         }
+        load_engine_hparams(*main);
         return;
     }
 
@@ -144,62 +83,10 @@ void llama_model_clip::load_arch_hparams(llama_model_loader & ml) {
 }
 
 void llama_model_clip::load_arch_tensors(llama_model_loader & ml) {
-    if (native_gen) {
-        load_gen_tensors(ml);
-    }
-    // after the native weights, which the engine shares
     load_engine_tensors(ml);
     if (native_v) {
         hparams.n_embd_out_impl = (uint32_t) engine_vision()->n_mmproj_embd(); // from the projector tensors
     }
-}
-
-void llama_model_clip::load_gen_tensors(llama_model_loader & ml) {
-    LLAMA_LOAD_LOCALS;
-
-    auto create_as_file = [&](const LLM_TN_IMPL & tname, int flags) -> ggml_tensor * {
-        const std::string name = tname.str();
-        const ggml_tensor * meta = ml.get_tensor_meta(name.c_str());
-        if (meta == nullptr) {
-            if (flags & TENSOR_NOT_REQUIRED) {
-                return nullptr;
-            }
-            throw std::runtime_error(format("clip: missing tensor '%s'", name.c_str()));
-        }
-        switch (ggml_n_dims(meta)) {
-            case 1:  return create_tensor(tname, {meta->ne[0]}, flags);
-            case 2:  return create_tensor(tname, {meta->ne[0], meta->ne[1]}, flags);
-            default: return create_tensor(tname, {meta->ne[0], meta->ne[1], meta->ne[2]}, flags);
-        }
-    };
-
-    for (int il = 0; il < n_layer; ++il) {
-        auto & layer = layers[il];
-        layer.attn_norm   = create_tensor (tn(LLM_TENSOR_A_GEN_CODE_INPUT_NORM,     "weight", il), {n_embd}, 0);
-        layer.wq          = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_ATTN_Q,         "weight", il), 0);
-        layer.wk          = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_ATTN_K,         "weight", il), 0);
-        layer.wv          = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_ATTN_V,         "weight", il), 0);
-        layer.wo          = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_ATTN_O,         "weight", il), 0);
-        layer.attn_q_norm = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_ATTN_Q_NORM,    "weight", il), TENSOR_NOT_REQUIRED);
-        layer.attn_k_norm = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_ATTN_K_NORM,    "weight", il), TENSOR_NOT_REQUIRED);
-        layer.ffn_norm    = create_tensor (tn(LLM_TENSOR_A_GEN_CODE_POST_ATTN_NORM, "weight", il), {n_embd}, 0);
-        layer.ffn_gate    = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_FFN_GATE,       "weight", il), 0);
-        layer.ffn_up      = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_FFN_UP,         "weight", il), 0);
-        layer.ffn_down    = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_FFN_DOWN,       "weight", il), 0);
-    }
-
-    gc_head      = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_HEAD,        "weight"), 0);
-    gc_embd      = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_EMBD,        "weight"), 0);
-    gc_out_embd  = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_OUT_EMBD,    "weight"), 0);
-    gc_norm      = create_tensor (tn(LLM_TENSOR_A_GEN_CODE_OUTPUT_NORM, "weight"), {n_embd}, 0);
-    gc_proj_in   = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_PROJ_IN,     "weight"), TENSOR_NOT_REQUIRED);
-    gc_proj_in_b = create_as_file(tn(LLM_TENSOR_A_GEN_CODE_PROJ_IN,     "bias"),   TENSOR_NOT_REQUIRED);
-
-    const int64_t head_dim = layers[0].wq->ne[1] / n_head;
-    hparams.n_embd_head_k_full = (uint32_t) head_dim;
-    hparams.n_embd_head_v_full = (uint32_t) head_dim;
-
-    llama_model_clip_load_c2w(*this, create_as_file, TENSOR_NOT_REQUIRED);
 }
 
 //
@@ -706,267 +593,14 @@ struct llama_model_clip::graph_qwen3vl : public llama_model_clip::graph_vit {
     }
 };
 
-// Qwen3-TTS code predictor: backbone hidden state + code0 -> 16 codes and the feedback embedding
-// the 15 autoregressive steps are unrolled in one graph, with a k/v scratch that lives in the graph (no llama_memory)
-// codes are sampled by the sequence's sampler chain (llama_set_sampler), greedy without one
-class llm_graph_input_gen_code : public llm_graph_input_i {
-public:
-    void set_input(const llama_ubatch * ubatch) override {
-        GGML_ASSERT(ubatch->token && ubatch->embd_state);
-        ggml_backend_tensor_set(code0, ubatch->token, 0, sizeof(int32_t));
-        ggml_backend_tensor_set(h, ubatch->embd_state, 0, ggml_nbytes(h));
-    }
-
-    ggml_tensor * code0 = nullptr; // I32 [1]
-    ggml_tensor * h     = nullptr; // F32 [n_embd_in]
-};
-
-struct llama_model_clip::graph_qwen3tts_code : public llm_graph_context {
-    const llama_model_clip & clip;
-
-    llama_sampler * smpl = nullptr;
-
-    graph_qwen3tts_code(const llama_model_clip & clip, const llm_graph_params & params) : llm_graph_context(params), clip(clip) {
-        const int64_t n_embd_in  = clip.ghp.n_embd_in;
-        const int64_t n_acoustic = clip.gc_head->ne[2];
-        const int64_t n_codes    = n_acoustic + 1;
-        const int64_t n_kv_pad   = n_codes;
-        const int64_t d_head     = hparams.n_embd_head_k();
-
-        auto inp = std::make_unique<llm_graph_input_gen_code>();
-        inp->code0 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
-        inp->h     = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_embd_in);
-        ggml_set_input(inp->code0);
-        ggml_set_input(inp->h);
-        ggml_tensor * code0 = inp->code0;
-        ggml_tensor * h     = inp->h;
-        res->add_input(std::move(inp));
-
-        // the sampler of the sequence of this frame, also used for every codebook
-        {
-            const llama_seq_id seq = ubatch.n_tokens > 0 ? ubatch.seq_id[0][0] : 0;
-            const auto it = samplers.find(seq);
-            if (it != samplers.end()) {
-                smpl = it->second;
-                if (smpl->iface->backend_reset) {
-                    smpl->iface->backend_reset(smpl);
-                }
-                res->add_input(std::make_unique<llm_graph_input_sampling>(samplers));
-            }
-        }
-
-        std::vector<ggml_tensor *> k_cache(n_layer);
-        std::vector<ggml_tensor *> v_cache(n_layer);
-        for (int il = 0; il < n_layer; il++) {
-            k_cache[il] = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, d_head * n_head_kv, n_kv_pad), 0.0f);
-            v_cache[il] = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, d_head * n_head_kv, n_kv_pad), 0.0f);
-        }
-
-        ggml_tensor * code0_embd = ggml_get_rows(ctx0, clip.gc_out_embd, code0);
-        code0_embd = ggml_reshape_1d(ctx0, code0_embd, code0_embd->ne[0]);
-
-        ggml_tensor * codes = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_codes);
-        codes = cache_set(codes, 0, code0);
-
-        // position 0: the hidden state seeds the cache
-        {
-            ggml_tensor * cur = project_in(h);
-            ggml_tensor * kq_mask = causal_mask_row(n_kv_pad, 0);
-            ggml_tensor * inp_pos = const_i32(k_cache[0], 0.0f);
-            for (int il = 0; il < n_layer; il++) {
-                cur = layer_forward(cur, il, 0, inp_pos, kq_mask, k_cache[il], v_cache[il]);
-            }
-        }
-
-        // positions 1..n_acoustic: embed the previous code, sample the next one
-        ggml_tensor * cur_in = code0_embd;
-        for (int64_t g = 0; g < n_acoustic; g++) {
-            const int pos = (int) g + 1;
-            if (g > 0) {
-                ggml_tensor * code_prev = ggml_view_1d(ctx0, codes, 1, (size_t) g * codes->nb[1]);
-                cur_in = codebook_embd(g - 1, code_prev);
-            }
-            ggml_tensor * cur = project_in(cur_in);
-            // the position and the mask are shared by the layers, as in the clip engine: from the second layer on,
-            // the norm and the rope of Q sit next to each other and the backends fuse them the same way
-            ggml_tensor * kq_mask = causal_mask_row(n_kv_pad, pos);
-            ggml_tensor * inp_pos = const_i32(k_cache[0], (float) pos);
-            for (int il = 0; il < n_layer; il++) {
-                cur = layer_forward(cur, il, pos, inp_pos, kq_mask, k_cache[il], v_cache[il]);
-            }
-            cur = ggml_rms_norm(ctx0, cur, hparams.f_norm_rms_eps);
-            cur = ggml_mul(ctx0, cur, clip.gc_norm);
-
-            ggml_tensor * head_g = ggml_view_2d(ctx0, clip.gc_head, clip.gc_head->ne[0], clip.gc_head->ne[1],
-                                                clip.gc_head->nb[1], (size_t) g * clip.gc_head->nb[2]);
-            ggml_tensor * logits = ggml_mul_mat(ctx0, head_g, cur);
-            cb(logits, "code_logits", (int) g);
-
-            codes = cache_set(codes, pos, sample(logits));
-        }
-
-        // feedback embedding: sum of the 16 codebook rows
-        ggml_tensor * out_embd = code0_embd;
-        for (int64_t g = 1; g <= n_acoustic; g++) {
-            ggml_tensor * code_g = ggml_view_1d(ctx0, codes, 1, (size_t) g * codes->nb[1]);
-            out_embd = ggml_add(ctx0, out_embd, codebook_embd(g - 1, code_g));
-        }
-        out_embd = ggml_reshape_2d(ctx0, out_embd, out_embd->ne[0], 1);
-
-        ggml_tensor * out_codes = ggml_cont(ctx0, codes);
-
-        cb(out_embd,  "result_embd",  -1);
-        cb(out_codes, "result_codes", -1);
-        ggml_set_output(out_embd);
-        ggml_set_output(out_codes);
-        res->t_embd  = out_embd;
-        res->t_codes = out_codes;
-        ggml_build_forward_expand(gf, out_codes);
-        ggml_build_forward_expand(gf, out_embd);
-    }
-
-    // logits [n_vocab, 1] -> I32 [1]
-    ggml_tensor * sample(ggml_tensor * logits) {
-        logits = ggml_reshape_1d(ctx0, logits, ggml_nelements(logits));
-        ggml_tensor * candidates = nullptr;
-        if (smpl) {
-            llama_sampler_data data = { logits, nullptr, nullptr, nullptr };
-            smpl->iface->backend_apply(smpl, ctx0, gf, &data);
-            if (data.sampled) {
-                return data.sampled;
-            }
-            if (data.logits) {
-                logits = data.logits;
-            }
-            candidates = data.candidates; // a chain that stopped early: the logits are those of these codes
-        }
-        ggml_tensor * idx = ggml_argmax(ctx0, ggml_reshape_2d(ctx0, logits, logits->ne[0], 1));
-        if (candidates) {
-            idx = ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, candidates, 1, ggml_nelements(candidates)), idx);
-            idx = ggml_reshape_1d(ctx0, idx, 1);
-        }
-        return idx;
-    }
-
-    ggml_tensor * codebook_embd(int64_t book, ggml_tensor * code) {
-        ggml_tensor * table = ggml_view_2d(ctx0, clip.gc_embd, clip.gc_embd->ne[0], clip.gc_embd->ne[1],
-                                           clip.gc_embd->nb[1], (size_t) book * clip.gc_embd->nb[2]);
-        ggml_tensor * e = ggml_get_rows(ctx0, table, code);
-        return ggml_reshape_1d(ctx0, e, e->ne[0]);
-    }
-
-    ggml_tensor * project_in(ggml_tensor * cur) {
-        if (!clip.gc_proj_in) {
-            return cur;
-        }
-        cur = ggml_mul_mat(ctx0, clip.gc_proj_in, cur);
-        if (clip.gc_proj_in_b) {
-            cur = ggml_add(ctx0, cur, clip.gc_proj_in_b);
-        }
-        return cur;
-    }
-
-    // a const I32 [1] without a host upload
-    ggml_tensor * const_i32(ggml_tensor * anchor, float value) {
-        ggml_tensor * v = ggml_view_1d(ctx0, anchor, 1, 0);
-        if (v->type != GGML_TYPE_F32) {
-            v = ggml_cast(ctx0, v, GGML_TYPE_F32);
-        }
-        return ggml_cast(ctx0, ggml_scale_bias(ctx0, v, 0.0f, value), GGML_TYPE_I32);
-    }
-
-    // a copy of cache with row row_idx replaced by value
-    ggml_tensor * cache_set(ggml_tensor * cache, int row_idx, ggml_tensor * value) {
-        const int64_t n_row   = cache->ne[0];
-        const int64_t n_cache = cache->ne[1];
-        ggml_tensor * ext = ggml_concat(ctx0, cache, ggml_reshape_2d(ctx0, value, n_row, 1), 1);
-        ggml_tensor * idx = const_i32(cache, (float) n_cache);
-        if (row_idx > 0) {
-            idx = ggml_concat(ctx0, ggml_cast(ctx0, ggml_arange(ctx0, 0.0f, (float) row_idx, 1.0f), GGML_TYPE_I32), idx, 0);
-        }
-        if (row_idx < n_cache - 1) {
-            idx = ggml_concat(ctx0, idx, ggml_cast(ctx0, ggml_arange(ctx0, (float) (row_idx + 1), (float) n_cache, 1.0f), GGML_TYPE_I32), 0);
-        }
-        return ggml_get_rows(ctx0, ext, idx);
-    }
-
-    // causal mask row of a query at pos over the n_kv_pad cache rows
-    ggml_tensor * causal_mask_row(int64_t n_kv_pad, int pos) {
-        ggml_tensor * ones = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv_pad, n_kv_pad), 1.0f);
-        ggml_tensor * keep = ggml_tri(ctx0, ones, GGML_TRI_TYPE_LOWER_DIAG);
-        ggml_tensor * row  = ggml_view_1d(ctx0, keep, n_kv_pad, (size_t) pos * keep->nb[1]);
-        ggml_tensor * mask = ggml_reshape_2d(ctx0, ggml_log(ctx0, row), n_kv_pad, 1);
-        if (cparams.flash_attn) {
-            mask = ggml_cast(ctx0, mask, GGML_TYPE_F16);
-        }
-        return mask;
-    }
-
-    ggml_tensor * layer_forward(ggml_tensor * cur, int il, int pos, ggml_tensor * inp_pos, ggml_tensor * kq_mask,
-                                ggml_tensor *& k_cache, ggml_tensor *& v_cache) {
-        const auto & layer = model.layers[il];
-        const int64_t d_head   = hparams.n_embd_head_k();
-        const int64_t n_kv_pad = k_cache->ne[1];
-        const float   kq_scale = 1.0f / sqrtf((float) d_head);
-
-        ggml_tensor * x = ggml_rms_norm(ctx0, cur, hparams.f_norm_rms_eps);
-        x = ggml_mul(ctx0, x, layer.attn_norm);
-
-        ggml_tensor * q = ggml_reshape_3d(ctx0, ggml_mul_mat(ctx0, layer.wq, x), d_head, n_head,    1);
-        ggml_tensor * k = ggml_reshape_3d(ctx0, ggml_mul_mat(ctx0, layer.wk, x), d_head, n_head_kv, 1);
-        ggml_tensor * v = ggml_mul_mat(ctx0, layer.wv, x);
-
-        if (layer.attn_q_norm) {
-            q = ggml_mul(ctx0, ggml_rms_norm(ctx0, q, hparams.f_norm_rms_eps), layer.attn_q_norm);
-            k = ggml_mul(ctx0, ggml_rms_norm(ctx0, k, hparams.f_norm_rms_eps), layer.attn_k_norm);
-        }
-
-        q = ggml_rope_ext(ctx0, q, inp_pos, nullptr, (int) d_head, GGML_ROPE_TYPE_NEOX, 0, clip.ghp.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-        k = ggml_rope_ext(ctx0, k, inp_pos, nullptr, (int) d_head, GGML_ROPE_TYPE_NEOX, 0, clip.ghp.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-
-        k_cache = cache_set(k_cache, pos, ggml_reshape_1d(ctx0, k, d_head * n_head_kv));
-        v_cache = cache_set(v_cache, pos, v);
-
-        ggml_tensor * kc = ggml_reshape_3d(ctx0, k_cache, d_head, n_head_kv, n_kv_pad);
-        ggml_tensor * vc = ggml_reshape_3d(ctx0, v_cache, d_head, n_head_kv, n_kv_pad);
-
-        // Q, K and V enter the graph before the attention, as in the clip engine (same node order, same fusions)
-        ggml_build_forward_order(gf, q);
-        ggml_build_forward_order(gf, kc);
-        ggml_build_forward_order(gf, vc);
-
-        ggml_tensor * attn = build_attn_mha(q, kc, vc, nullptr, kq_mask, nullptr, nullptr, nullptr, 0, kq_scale, il);
-        attn = ggml_mul_mat(ctx0, layer.wo, attn);
-
-        cur = ggml_add(ctx0, cur, attn);
-
-        ggml_tensor * x2 = ggml_rms_norm(ctx0, cur, hparams.f_norm_rms_eps);
-        x2 = ggml_mul(ctx0, x2, layer.ffn_norm);
-
-        ggml_tensor * gate = ggml_mul_mat(ctx0, layer.ffn_gate, x2);
-        ggml_tensor * up   = ggml_mul_mat(ctx0, layer.ffn_up,   x2);
-        ggml_tensor * down = ggml_mul_mat(ctx0, layer.ffn_down, ggml_swiglu_split(ctx0, gate, up));
-
-        return ggml_add(ctx0, cur, down);
-    }
-};
-
 std::unique_ptr<llm_graph_context> llama_model_clip::build_arch_graph(const llm_graph_params & params) const {
     const llama_media_input * mi = params.ubatch.media;
     const auto ctx_type = params.cparams.ctx_type;
 
-    const bool native = (ctx_type == LLAMA_CONTEXT_TYPE_ENCODER && native_v) ||
-                        (ctx_type != LLAMA_CONTEXT_TYPE_ENCODER && native_gen);
-    // a media of an engine tower (encode or reservation of a tower other than the main one) carries its runtime
-    if ((mi && mi->clip_sub) || !native) {
+    // a media of an engine tower (encode or reservation of a tower other than the main one) carries its runtime,
+    // as a gen step (the native Qwen3-TTS graphs are built there, see graph_engine)
+    if ((mi && mi->clip_sub) || ctx_type != LLAMA_CONTEXT_TYPE_ENCODER || !native_v) {
         return llama_model_clip_build_engine_graph(*this, params);
-    }
-
-    if (native_gen) {
-        if (params.cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_WAV) {
-            return llama_model_clip_build_wav_graph(*this, params);
-        }
-        return std::make_unique<graph_qwen3tts_code>(*this, params);
     }
     switch (vhp.proj) {
         case LLAMA_CLIP_PROJ_GEMMA3:

@@ -1423,7 +1423,6 @@ void llm_graph_result::reset() {
     t_logits      = nullptr;
     t_embd        = nullptr;
     t_embd_pooled = nullptr;
-    t_codes       = nullptr;
     t_h_nextn     = nullptr;
 
     t_layer_inp.resize(LLAMA_MAX_LAYERS + 1);

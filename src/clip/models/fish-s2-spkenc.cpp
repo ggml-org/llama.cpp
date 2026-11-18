@@ -62,7 +62,7 @@ ggml_cgraph * clip_graph_fish_s2_spkenc::build() {
     ggml_tensor * x = ggml_reshape_2d(ctx0, inp_raw, 1, inp_raw->ne[0]);
 
     // windowed causal transformer on a cold start: zero state, positions from 0
-    clip_graph_qwen3tts_gen::code2wav dec(*this);
+    clip_tts_blocks dec(*this);
     auto zero_state = [&](const std::string & name, int64_t n0, int64_t n1) {
         dec.state_in[name] = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n0, n1), 0.0f);
     };

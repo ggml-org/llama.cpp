@@ -709,7 +709,9 @@ struct clip_gen_state {
     std::vector<float>   out_audio; // decoded PCM samples for the current frame (GEN_WAV)
 
     // voice reference for GEN_WAV, from a speaker clip or a predefined voice (chatterbox)
+    // qwen3tts: the reference codes, decoded with the first GEN_WAV call so the speech continues from them
     clip_gen_ref ref;
+    bool ref_decoded = false;
 
     // lfm3a: the codec graph yields STFT frames, the ISTFT runs on the host
     std::unique_ptr<clip_audio_streaming_istft> istft;
@@ -752,6 +754,7 @@ void clip_gen_state_free(clip_gen_state * state) {
 
 void clip_gen_state_reset(clip_gen_state * state) {
     state->gen_state->reset();
+    state->ref_decoded = false;
     if (state->istft) {
         const auto * hparams = &state->sctx->model.hparams;
         state->istft = std::make_unique<clip_audio_streaming_istft>(hparams->audio_n_fft, hparams->audio_hop_len);
@@ -1405,6 +1408,76 @@ int32_t clip_gen_state_set_ref(clip_gen_ctx * ctx, clip_gen_state * state) {
         return 1;
     }
     state->ref = ctx->gen_ref;
+    state->ref_decoded = false;
+    return 0;
+}
+
+// qwen3tts GEN_WAV: windows of wav_tfm_swa frames, a short one is rear-padded (see clip_subcontext::set_inputs())
+// the first call after clip_gen_state_set_ref() puts the end of the reference before its codes, so the speech
+// continues from it; a window shorter than wav_tfm_swa carries a wrong state, so the reference only fills the free
+// part of the first one
+static int32_t clip_gen_wav_qwen3tts(clip_gen_ctx * ctx, clip_gen_state * state, const llama_gen_inp * inp, llama_gen_out * out) {
+    clip_subcontext * sctx = ctx->ctx_gen_a;
+    const auto & model = sctx->model;
+    const size_t n_cb  = (size_t) model.gen_code_head_w->ne[2] + 1;
+    const size_t n_win = (size_t) model.hparams.wav_tfm_swa;
+    if (!inp->codes || inp->n_codes == 0 || inp->n_codes % n_cb != 0) {
+        LOG_ERR("%s: whole frames of %zu codes required\n", __func__, n_cb);
+        return 1;
+    }
+    // every code is checked before a window runs: a bad code must not leave the earlier windows in the codec state
+    for (size_t i = 0; i < inp->n_codes; ++i) {
+        const int64_t vocab = i % n_cb == 0 ? model.c2w.quant_first_cb_w->ne[1] : model.c2w.quant_rest_cb_w->ne[1];
+        if (inp->codes[i] < 0 || inp->codes[i] >= vocab) {
+            LOG_ERR("%s: frame %zu: code %d out of range\n", __func__, i / n_cb, inp->codes[i]);
+            return 1;
+        }
+    }
+
+    std::vector<int32_t> codes(inp->codes, inp->codes + inp->n_codes);
+    size_t n_ref_used = 0;
+    if (!state->ref.tokens.empty() && !state->ref_decoded) {
+        state->ref_decoded = true;
+        const size_t n_in = codes.size() / n_cb;
+        n_ref_used = std::min(state->ref.tokens.size() / n_cb, n_win > n_in ? n_win - n_in : 0);
+        codes.insert(codes.begin(), state->ref.tokens.end() - (std::ptrdiff_t) (n_ref_used * n_cb), state->ref.tokens.end());
+    }
+
+    // gen_wav has no hidden-state input, the batch entry is an unused placeholder
+    clip_image_f32 dummy;
+    dummy.set_size({1, 1}, false, true);
+    dummy.cpy_buf(std::vector<float>(1, 0.0f));
+    clip_image_f32_batch batch;
+    batch.is_audio = true;
+    batch.entries.push_back(std::move(dummy));
+
+    std::vector<int32_t> win;
+    std::vector<float>   audio;
+
+    clip_subctx_encode_params params;
+    params.imgs        = &batch;
+    params.n_threads   = ctx->n_threads;
+    params.gen_process = CLIP_SUBCTX_GEN_PROCESS_GEN_WAV;
+    params.codes       = &win;
+    params.out_audio   = &audio;
+    params.gen_state   = state->gen_state;
+
+    state->out_audio.clear();
+    for (size_t i0 = 0; i0 < codes.size(); i0 += n_win * n_cb) {
+        win.assign(codes.begin() + i0, codes.begin() + std::min(codes.size(), i0 + n_win * n_cb));
+        if (!sctx->encode(&params)) {
+            LOG_ERR("%s: encode failed (code2wav)\n", __func__);
+            return 1;
+        }
+        state->out_audio.insert(state->out_audio.end(), audio.begin(), audio.end());
+    }
+
+    // the audio of the reference frames was spoken already
+    const size_t hop = state->out_audio.size() / (codes.size() / n_cb);
+    state->out_audio.erase(state->out_audio.begin(), state->out_audio.begin() + (std::ptrdiff_t) (n_ref_used * hop));
+
+    out->audio     = state->out_audio.data();
+    out->n_samples = state->out_audio.size();
     return 0;
 }
 
@@ -1548,6 +1621,9 @@ static int32_t clip_gen_audio_process_impl(clip_gen_ctx * ctx, clip_gen_state * 
     }
 
     // LLAMA_GEN_STAGE_WAV
+    if (sctx->model.proj_type == PROJECTOR_TYPE_QWEN3TTS_GEN) {
+        return clip_gen_wav_qwen3tts(ctx, state, inp, out);
+    }
     if (sctx->model.proj_type == PROJECTOR_TYPE_CHATTERBOX) {
         if (!inp->codes || inp->n_codes == 0) {
             LOG_ERR("%s: codes required for gen_wav\n", __func__);

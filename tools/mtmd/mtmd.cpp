@@ -12,7 +12,6 @@
 
 #include <algorithm>
 #include <array>
-#include <random>
 #include <cctype>
 #include <climits>
 #include <cmath>
@@ -446,7 +445,7 @@ static llama_context * mtmd_init_encoder(llama_model * model, const mtmd_context
     return llama_init_from_model(model, cp);
 }
 
-// the GEN context of the moved pipelines, shared by the gen states (one sequence each)
+// the GEN context of the generation tower, shared by the gen states (one sequence each)
 static llama_context_params mtmd_gen_ctx_params(const mtmd_context_params & ctx_params, uint32_t n_seq_max) {
     llama_context_params cp = llama_context_default_params();
     cp.ctx_type          = LLAMA_CONTEXT_TYPE_GEN_CODE;
@@ -463,33 +462,6 @@ static llama_context_params mtmd_gen_ctx_params(const mtmd_context_params & ctx_
     return cp;
 }
 
-// Qwen3-TTS generates on native graphs: a code predictor context (codes sampled in the graph by the sampler of
-// the sequence) and a codec context; the other generation towers run on one GEN context of the engine
-// (llama_batch_ext_add_gen). Either way, a gen state is one sequence of the shared contexts
-static bool mtmd_gen_is_native(const llama_model * model) {
-    return llama_model_gen_info(model).type == LLAMA_GEN_AUDIO_TYPE_QWEN3TTS;
-}
-
-static llama_context_params mtmd_native_gen_ctx_params(const mtmd_context_params & ctx_params, enum llama_context_type type, uint32_t n_seq_max) {
-    llama_context_params cp = llama_context_default_params();
-    cp.ctx_type          = type;
-    cp.n_ctx             = 256 * n_seq_max; // no KV: the smallest context of a sequence
-    cp.n_batch           = n_seq_max;       // one output per sequence; the graph takes one frame whatever the ubatch
-    cp.n_ubatch          = n_seq_max;
-    cp.n_seq_max         = n_seq_max;
-    cp.n_threads         = ctx_params.n_threads;
-    cp.n_threads_batch   = ctx_params.n_threads;
-    cp.flash_attn_type   = ctx_params.flash_attn_type;
-    cp.cb_eval           = ctx_params.cb_eval;
-    cp.cb_eval_user_data = ctx_params.cb_eval_user_data;
-    cp.no_perf           = true;
-    if (type == LLAMA_CONTEXT_TYPE_GEN_WAV) {
-        cp.n_batch  = 72; // one call decodes up to a window of frames
-        cp.n_ubatch = 72;
-    }
-    return cp;
-}
-
 //
 // mtmd_context
 //
@@ -501,12 +473,10 @@ struct mtmd_ctx_life {
     bool alive = true;
 };
 
-// a set of GEN contexts, a sequence per gen state (as mtmd shared one scheduler): the engine runs both stages on
-// gen_ctx, the native graphs on gen_code_ctx and gen_wav_ctx; a context adds a set when all its sequences are taken
+// a GEN context, a sequence per gen state (as mtmd shared one scheduler); a context adds one when all the sequences
+// of the others are taken
 struct mtmd_gen_bank {
     llama_context_ptr gen_ctx;
-    llama_context_ptr gen_code_ctx;
-    llama_context_ptr gen_wav_ctx;
     std::vector<bool> used;
 };
 
@@ -525,9 +495,6 @@ struct mtmd_context {
     std::mutex & compute_mutex = life->mutex;
 
     mtmd_encode_out out; // output of mtmd_encode*
-
-    // gen stages: native graphs (Qwen3-TTS) or the engine (llama_batch_ext_add_gen), see mtmd_gen_is_native()
-    bool gen_native = false;
 
     // the GEN contexts: [0] made with the context (it encodes the references), the others as gen states need them
     static constexpr uint32_t n_gen_seq_max = 64; // sequences of a bank
@@ -594,16 +561,13 @@ struct mtmd_context {
         model.reset(m, llama_model_free);
 
         if (info.has_gen_audio) {
-            gen_native = mtmd_gen_is_native(m);
             auto bank = make_gen_bank();
             if (!bank) {
                 throw std::runtime_error("failed to create the gen contexts");
             }
             gen_banks.push_back(std::move(bank));
-            // the GEN contexts also encode the references: one set of compute buffers; the codec context of the
-            // native graphs fits the speaker tower
-            const mtmd_gen_bank & b0 = *gen_banks[0];
-            enc = !gen_native ? b0.gen_ctx.get() : info.has_audio || info.has_vision ? b0.gen_wav_ctx.get() : nullptr;
+            // the GEN context also encodes the references: one set of compute buffers
+            enc = gen_banks[0]->gen_ctx.get();
         } else if (llama_model_has_context_type(m, LLAMA_CONTEXT_TYPE_ENCODER)) {
             ctx_enc.reset(mtmd_init_encoder(m, ctx_params));
             if (!ctx_enc) {
@@ -630,21 +594,12 @@ struct mtmd_context {
         llama_media_proc_free(proc);
     }
 
-    // a set of GEN contexts, nullptr on failure
+    // a GEN context, nullptr on failure
     std::unique_ptr<mtmd_gen_bank> make_gen_bank() const {
         auto b = std::make_unique<mtmd_gen_bank>();
-        llama_model * m = model.get();
-        if (gen_native) {
-            b->gen_code_ctx.reset(llama_init_from_model(m, mtmd_native_gen_ctx_params(gen_cparams, LLAMA_CONTEXT_TYPE_GEN_CODE, n_gen_seq_max)));
-            b->gen_wav_ctx .reset(llama_init_from_model(m, mtmd_native_gen_ctx_params(gen_cparams, LLAMA_CONTEXT_TYPE_GEN_WAV,  n_gen_seq_max)));
-            if (!b->gen_code_ctx || !b->gen_wav_ctx) {
-                return nullptr;
-            }
-        } else {
-            b->gen_ctx.reset(llama_init_from_model(m, mtmd_gen_ctx_params(gen_cparams, n_gen_seq_max)));
-            if (!b->gen_ctx) {
-                return nullptr;
-            }
+        b->gen_ctx.reset(llama_init_from_model(model.get(), mtmd_gen_ctx_params(gen_cparams, n_gen_seq_max)));
+        if (!b->gen_ctx) {
+            return nullptr;
         }
         b->used.assign(n_gen_seq_max, false);
         return b;
@@ -1745,15 +1700,10 @@ mtmd_memory_usage mtmd_get_memory_usage(const char * mmproj_fname, struct mtmd_c
         mtmd_memory_usage res;
         res.image_max_tokens = -1;
         res.use_non_causal   = false;
-        // the contexts mtmd_init_from_file() creates: the gen context of the engine, or the code predictor and codec
-        // contexts of the native graphs, or the encoder context; the weights count once
+        // the contexts mtmd_init_from_file() creates: the gen context, or the encoder context; the weights count once
         std::vector<llama_context_ptr> ctxs;
-        if (info.has_gen_audio && !mtmd_gen_is_native(model.get())) {
+        if (info.has_gen_audio) {
             ctxs.emplace_back(llama_init_from_model(model.get(), mtmd_gen_ctx_params(ctx_params, mtmd_context::n_gen_seq_max)));
-        } else if (info.has_gen_audio) {
-            for (auto type : { LLAMA_CONTEXT_TYPE_GEN_WAV, LLAMA_CONTEXT_TYPE_GEN_CODE }) {
-                ctxs.emplace_back(llama_init_from_model(model.get(), mtmd_native_gen_ctx_params(ctx_params, type, mtmd_context::n_gen_seq_max)));
-            }
         } else if (llama_model_has_context_type(model.get(), LLAMA_CONTEXT_TYPE_ENCODER)) {
             ctxs.emplace_back(mtmd_init_encoder(model.get(), ctx_params));
         }
@@ -1993,121 +1943,6 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
     return inp;
 }
 
-// the sampling of the Qwen3-TTS code predictor, inside its graph (a backend sampler): top-k, top-p over the
-// candidates, then one uniform draw per codebook from the RNG of the gen state; the algorithm and the draws of the
-// clip engine, so a seed gives the codes it gave
-struct mtmd_code_sampler {
-    int32_t top_k = 50;
-    float   top_p = 1.0f;
-    std::mt19937 rng;
-    std::vector<ggml_tensor *> rand_inp; // the draws of the graph being built, one per codebook, in order
-};
-
-static ggml_tensor * mtmd_code_sampler_build(ggml_context * ctx0, const mtmd_code_sampler & s, ggml_tensor * logits, ggml_tensor * inp_rand) {
-    logits = ggml_reshape_1d(ctx0, logits, ggml_nelements(logits));
-    const int64_t n_vocab = logits->ne[0];
-
-    auto sort_by = [ctx0](ggml_tensor * a, ggml_tensor * idx) {
-        ggml_tensor * a2d = ggml_reshape_2d(ctx0, a, 1, a->ne[0]);
-        return ggml_reshape_1d(ctx0, ggml_get_rows(ctx0, a2d, idx), idx->ne[0]);
-    };
-
-    ggml_tensor * cur        = logits;
-    ggml_tensor * candidates = nullptr; // maps a row back to its code
-
-    if (s.top_k > 0 && s.top_k < n_vocab) {
-        ggml_tensor * idx = ggml_top_k(ctx0, cur, s.top_k);
-        candidates = idx;
-        cur        = sort_by(cur, idx);
-    }
-
-    if (s.top_p < 1.0f) {
-        ggml_tensor * sorted_idx    = ggml_argsort(ctx0, cur, GGML_SORT_ORDER_DESC);
-        ggml_tensor * sorted_logits = sort_by(cur, sorted_idx);
-        candidates = candidates ? sort_by(candidates, sorted_idx) : sorted_idx;
-
-        ggml_tensor * probs = ggml_soft_max(ctx0, sorted_logits);
-        ggml_tensor * cdf   = ggml_cumsum(ctx0, probs);
-
-        // keep the codes up to the one where the cdf crosses top_p, that one included
-        ggml_tensor * keep_mask = ggml_step(ctx0, ggml_scale_bias(ctx0, cdf, -1.0f, s.top_p));
-        ggml_tensor * idxf      = ggml_clamp(ctx0, ggml_sum(ctx0, keep_mask), 0.0f, (float) keep_mask->ne[0] - 1);
-        ggml_tensor * ones      = ggml_scale_bias(ctx0, idxf, 0.0f, 1.0f);
-
-        ggml_tensor * keep_mask_2d = ggml_reshape_2d(ctx0, keep_mask, 1, keep_mask->ne[0]);
-        keep_mask_2d = ggml_set_rows(ctx0, keep_mask_2d, ones, ggml_cast(ctx0, idxf, GGML_TYPE_I32));
-        keep_mask    = ggml_reshape_1d(ctx0, keep_mask_2d, keep_mask->ne[0]);
-
-        cur = ggml_add(ctx0, sorted_logits, ggml_log(ctx0, keep_mask)); // log(1) = 0 keeps, log(0) = -inf drops
-    }
-
-    // the code where the cdf crosses the draw
-    ggml_tensor * cumsum     = ggml_cumsum(ctx0, ggml_soft_max(ctx0, cur));
-    ggml_tensor * cross_mask = ggml_step(ctx0, ggml_sub(ctx0, cumsum, inp_rand));
-    // a cdf that rounds to at most the draw crosses nowhere: the last code, as the backend dist sampler does
-    ggml_tensor * idxf       = ggml_scale_bias(ctx0, ggml_sum(ctx0, cross_mask), -1.0f, (float) cross_mask->ne[0]);
-    ggml_tensor * idx        = ggml_cast(ctx0, ggml_clamp(ctx0, idxf, 0.0f, (float) cross_mask->ne[0] - 1), GGML_TYPE_I32);
-
-    if (candidates) {
-        idx = ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, candidates, 1, candidates->ne[0]), idx);
-    }
-    return idx;
-}
-
-static const char * mtmd_code_sampler_name(const llama_sampler * /*smpl*/) {
-    return "mtmd-code";
-}
-
-// the codes are only sampled in the graph
-static void mtmd_code_sampler_apply(llama_sampler * /*smpl*/, llama_token_data_array * /*cur_p*/) {
-    GGML_ABORT("the code sampler runs in the graph of the code predictor only");
-}
-
-static void mtmd_code_sampler_free(llama_sampler * smpl) {
-    delete (mtmd_code_sampler *) smpl->ctx;
-}
-
-static bool mtmd_code_sampler_backend_init(llama_sampler * /*smpl*/, ggml_backend_buffer_type_t /*buft*/, uint32_t /*n_outputs_max_per_seq*/) {
-    return true;
-}
-
-static void mtmd_code_sampler_backend_apply(llama_sampler * smpl, ggml_context * ctx0, ggml_cgraph * /*gf*/, llama_sampler_data * data) {
-    auto * s = (mtmd_code_sampler *) smpl->ctx;
-    ggml_tensor * inp_rand = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
-    ggml_format_name(inp_rand, "code_rand_%zu", s->rand_inp.size());
-    ggml_set_input(inp_rand);
-    s->rand_inp.push_back(inp_rand);
-    data->sampled = mtmd_code_sampler_build(ctx0, *s, data->logits, inp_rand);
-}
-
-static void mtmd_code_sampler_backend_set_input(llama_sampler * smpl) {
-    auto * s = (mtmd_code_sampler *) smpl->ctx;
-    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-    for (ggml_tensor * t : s->rand_inp) {
-        const float v = dist(s->rng);
-        ggml_backend_tensor_set(t, &v, 0, sizeof(v));
-    }
-}
-
-static void mtmd_code_sampler_backend_reset(llama_sampler * smpl) {
-    ((mtmd_code_sampler *) smpl->ctx)->rand_inp.clear();
-}
-
-static llama_sampler_i mtmd_code_sampler_i = {
-    /* .name              = */ mtmd_code_sampler_name,
-    /* .accept            = */ nullptr,
-    /* .apply             = */ mtmd_code_sampler_apply,
-    /* .reset             = */ nullptr,
-    /* .clone             = */ nullptr,
-    /* .free              = */ mtmd_code_sampler_free,
-    /* .backend_init      = */ mtmd_code_sampler_backend_init,
-    /* .backend_accept    = */ nullptr,
-    /* .backend_apply     = */ mtmd_code_sampler_backend_apply,
-    /* .backend_set_input = */ mtmd_code_sampler_backend_set_input,
-    /* .backend_reset     = */ mtmd_code_sampler_backend_reset,
-    /* .copy_state        = */ nullptr,
-};
-
 struct mtmd_gen_state {
     mtmd_context  * ctx  = nullptr;
     mtmd_gen_bank * bank = nullptr; // the GEN contexts of ctx holding the sequence
@@ -2119,16 +1954,6 @@ struct mtmd_gen_state {
     std::vector<float>   out_embd;  // next-step hidden state fed back to backbone (GEN_CODE)
     std::vector<float>   out_audio; // decoded PCM samples for the current frame (GEN_WAV)
 
-    // native graphs (Qwen3-TTS): the sampler of the sequence in the code predictor context (a chain holding
-    // code_smpl), its RNG and parameters live as long as the state
-    llama_sampler_ptr   lm_smpl;
-    mtmd_code_sampler * code_smpl = nullptr;
-
-    // native graphs (Qwen3-TTS): the reference codes of mtmd_gen_state_set_ref(), the first codec call decodes the
-    // end of them before its own codes, so the speech continues from the reference
-    std::vector<int32_t> ref_codes;
-    bool ref_decoded = false;
-
     ~mtmd_gen_state() {
         if (!life || seq < 0) {
             return;
@@ -2137,13 +1962,8 @@ struct mtmd_gen_state {
         if (!life->alive) {
             return; // the sequences went with the context
         }
-        // the per-sequence state of the GEN contexts (decoder slots, RNG) and the sampler
-        if (ctx->gen_native) {
-            llama_memory_seq_rm(llama_get_memory(bank->gen_wav_ctx.get()), seq, -1, -1);
-            llama_set_sampler(bank->gen_code_ctx.get(), seq, nullptr);
-        } else {
-            llama_memory_seq_rm(llama_get_memory(bank->gen_ctx.get()), seq, -1, -1);
-        }
+        // the per-sequence state of the GEN context (decoder slots, RNG, reference)
+        llama_memory_seq_rm(llama_get_memory(bank->gen_ctx.get()), seq, -1, -1);
         bank->used[seq] = false;
         // a set added for a peak of states goes with its last state; the first one encodes the references
         auto & banks = ctx->gen_banks;
@@ -2193,21 +2013,7 @@ mtmd_gen_state * mtmd_gen_state_init(mtmd_context * ctx, mtmd_gen_state_params p
         bank = ctx->gen_banks.back().get();
         seq  = 0;
     }
-    if (ctx->gen_native) {
-        auto * cs = new mtmd_code_sampler;
-        cs->rng.seed(params.seed == UINT32_MAX ? std::random_device{}() : params.seed);
-        llama_sampler * chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
-        llama_sampler_chain_add(chain, llama_sampler_init(&mtmd_code_sampler_i, cs));
-        if (!llama_set_sampler(bank->gen_code_ctx.get(), seq, chain)) {
-            llama_sampler_free(chain);
-            LOG_ERR("%s: the code predictor context does not take the code sampler\n", __func__);
-            return nullptr;
-        }
-        st->lm_smpl.reset(chain);
-        st->code_smpl = cs;
-    } else {
-        llama_gen_set_seed(bank->gen_ctx.get(), seq, params.seed);
-    }
+    llama_gen_set_seed(bank->gen_ctx.get(), seq, params.seed);
     bank->used[seq] = true;
     st->ctx  = ctx;
     st->bank = bank;
@@ -2229,9 +2035,7 @@ void mtmd_gen_state_reset(mtmd_gen_state * state) {
     if (!state->life->alive) {
         return;
     }
-    // the codec slots of the native graphs, the decoder state of the engine
-    llama_gen_reset(state->ctx->gen_native ? state->bank->gen_wav_ctx.get() : state->bank->gen_ctx.get(), state->seq);
-    state->ref_decoded = false;
+    llama_gen_reset(state->bank->gen_ctx.get(), state->seq);
 }
 
 int32_t mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state) {
@@ -2241,18 +2045,6 @@ int32_t mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state) {
         return 1;
     }
     std::lock_guard<std::mutex> lock(ctx->compute_mutex);
-    if (ctx->gen_native) {
-        // Qwen3-TTS: the codec continues from the reference codes of the last encode, see mtmd_gen_wav_native()
-        const size_t n = ctx->last_ref.m ? llama_media_get_ref_codes(ctx->last_ref.m, nullptr, 0) : 0;
-        if (state->seq < 0 || n == 0) {
-            LOG_ERR("%s: the last encode produced no reference codes\n", __func__);
-            return 1;
-        }
-        state->ref_codes.resize(n);
-        llama_media_get_ref_codes(ctx->last_ref.m, state->ref_codes.data(), n);
-        state->ref_decoded = false;
-        return 0;
-    }
     llama_context * gctx = state->bank->gen_ctx.get();
     if (state->seq < 0 || !gctx || !ctx->last_ref.m || llama_gen_set_ref(gctx, state->seq, ctx->last_ref.m) != 0) {
         LOG_ERR("%s: the last encode produced no reference data\n", __func__);
@@ -2261,131 +2053,10 @@ int32_t mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state) {
     return 0;
 }
 
-// the code predictor of the native graphs (Qwen3-TTS): one frame of the sequence, codes sampled in the graph
-static int32_t mtmd_gen_code_native(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
-    llama_context * lctx = state->bank->gen_code_ctx.get();
-    GGML_ASSERT(state->code_smpl != nullptr);
-    const int32_t n_embd = llama_model_n_embd_out(ctx->model.get());
-
-    // the parameters of this call, read when the graph is built; temperature is ignored, as by the clip engine
-    state->code_smpl->top_k = inp->top_k;
-    state->code_smpl->top_p = inp->top_p;
-
-    std::vector<float> h(n_embd, 0.0f);
-    if (inp->embd) {
-        std::copy(inp->embd, inp->embd + n_embd, h.begin());
-    }
-
-    llama_batch_ext * batch = llama_batch_ext_init(lctx);
-    const int32_t idx = llama_batch_ext_add_token(batch, state->seq, inp->code0);
-    bool ok = idx >= 0 && llama_batch_ext_set_embd_state(batch, idx, { h.data(), 1, (size_t) n_embd });
-    ok = ok && llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch) == 0;
-    llama_batch_ext_free(batch);
-    if (!ok) {
-        LOG_ERR("%s: the code predictor failed\n", __func__);
-        return 1;
-    }
-
-    const int32_t n_codes = llama_get_sampled_tokens_ith(lctx, 0, nullptr, 0);
-    state->out_codes.resize(n_codes);
-    llama_get_sampled_tokens_ith(lctx, 0, state->out_codes.data(), n_codes);
-    const float * embd = llama_get_embeddings_ith(lctx, 0);
-    state->out_embd.assign(embd, embd + n_embd);
-    state->out_feats.clear();
-
-    out->embd    = state->out_embd.data();
-    out->codes   = state->out_codes.data();
-    out->n_codes = state->out_codes.size();
-    return 0;
-}
-
-// the codec of the native graphs (Qwen3-TTS): frames of the sequence
-static int32_t mtmd_gen_wav_native(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
-    GGML_UNUSED(ctx);
-    llama_context * wctx = state->bank->gen_wav_ctx.get();
-    const int32_t n_cb = 16;
-    if (!inp->codes || inp->n_codes == 0 || inp->n_codes % n_cb != 0) {
-        LOG_ERR("%s: codes required for gen_wav\n", __func__);
-        return 1;
-    }
-    if (inp->n_codes / n_cb > (size_t) INT32_MAX) {
-        LOG_ERR("%s: too many frames\n", __func__);
-        return 1;
-    }
-    const int32_t n_win = 72; // the frames of a codec window
-    const int32_t spf   = llama_n_embd_out(wctx);
-
-    // the first call after mtmd_gen_state_set_ref() puts the end of the reference before its codes, so the speech
-    // continues from it; the reference only fills the free part of this window
-    std::vector<llama_token> codes(inp->codes, inp->codes + inp->n_codes);
-    int32_t n_ref_used = 0;
-    if (!state->ref_codes.empty() && !state->ref_decoded) {
-        state->ref_decoded = true;
-        const int64_t n_in = (int64_t) codes.size() / n_cb;
-        n_ref_used = (int32_t) std::min<int64_t>((int64_t) state->ref_codes.size() / n_cb, n_win > n_in ? n_win - n_in : 0);
-        codes.insert(codes.begin(), state->ref_codes.end() - (std::ptrdiff_t) n_ref_used * n_cb, state->ref_codes.end());
-    }
-    int32_t n_frames = (int32_t) (codes.size() / n_cb);
-
-    // a short last window is padded to a full one, as the mtmd engine does, then trimmed: the graph shape
-    // decides the CPU matmul kernels, so this keeps the PCM bit-identical (libllama takes any frame count)
-    const int32_t n_real = n_frames;
-    if (n_frames < n_win) {
-        codes.resize((size_t) n_win * n_cb, 0);
-        n_frames = n_win;
-    }
-    const llama_token * codes_src = codes.data();
-
-    llama_batch_ext * batch = llama_batch_ext_init(wctx);
-
-    // every frame is checked before a window runs: a bad code must not leave the earlier windows in the codec state
-    for (int32_t f = 0; f < n_real; ++f) {
-        llama_batch_ext_clear(batch);
-        if (llama_batch_ext_add_codes(batch, state->seq, codes_src + (size_t) f * n_cb, n_cb) < 0) {
-            llama_batch_ext_free(batch);
-            LOG_ERR("%s: frame %d: invalid codes\n", __func__, f);
-            return 1;
-        }
-    }
-
-    state->out_audio.clear();
-    for (int64_t f0 = 0; f0 < n_frames; f0 += llama_n_batch(wctx)) {
-        const int32_t n = (int32_t) std::min<int64_t>(llama_n_batch(wctx), n_frames - f0);
-        llama_batch_ext_clear(batch);
-        for (int32_t f = 0; f < n; ++f) {
-            if (llama_batch_ext_add_codes(batch, state->seq, codes_src + (size_t) (f0 + f) * n_cb, n_cb) < 0) {
-                llama_batch_ext_free(batch);
-                return 1;
-            }
-        }
-        if (llama_process(wctx, LLAMA_PROCESS_TYPE_DECODE, batch) != 0) {
-            llama_batch_ext_free(batch);
-            LOG_ERR("%s: libllama code2wav failed\n", __func__);
-            return 1;
-        }
-        for (int32_t f = 0; f < n && f0 + f < n_real; ++f) {
-            const float * pcm = llama_get_embeddings_ith(wctx, f);
-            state->out_audio.insert(state->out_audio.end(), pcm, pcm + spf);
-        }
-    }
-    llama_batch_ext_free(batch);
-    // the audio of the reference frames was spoken already
-    state->out_audio.erase(state->out_audio.begin(), state->out_audio.begin() + (std::ptrdiff_t) n_ref_used * spf);
-
-    out->audio     = state->out_audio.data();
-    out->n_samples = state->out_audio.size();
-    return 0;
-}
-
 static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
     *out = {};
 
     std::lock_guard<std::mutex> lock(ctx->compute_mutex);
-    if (ctx->gen_native) {
-        return inp->type == MTMD_GEN_PROCESS_TYPE_GEN_CODE ? mtmd_gen_code_native(ctx, state, inp, out)
-                                                           : mtmd_gen_wav_native(ctx, state, inp, out);
-    }
-
     llama_context * lctx = state->bank->gen_ctx.get();
     llama_gen_inp li{};
     li.type                = inp->type == MTMD_GEN_PROCESS_TYPE_GEN_WAV ? LLAMA_GEN_STAGE_WAV : LLAMA_GEN_STAGE_CODE;

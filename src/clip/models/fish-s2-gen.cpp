@@ -20,7 +20,9 @@ ggml_cgraph * clip_graph_fish_s2_gen::build_fast_ar() {
     ggml_set_name(inp_code0, "inp_code0");
     ggml_set_input(inp_code0);
 
-    clip_graph_qwen3tts_gen::code_gen cg(*this, top_k, top_p);
+    clip_tts_blocks cg(*this);
+    cg.top_k = top_k;
+    cg.top_p = top_p;
 
     std::vector<ggml_tensor *> k_cache(n_layer), v_cache(n_layer);
     for (int il = 0; il < n_layer; il++) {

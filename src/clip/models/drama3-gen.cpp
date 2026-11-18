@@ -141,7 +141,9 @@ ggml_cgraph * clip_graph_drama3_gen::build_tower() {
     ggml_tensor * extra  = ggml_cont(ctx0, ggml_transpose(ctx0, ggml_get_rows(ctx0, cb_all, inp_extra)));
     extra = ggml_mul(ctx0, ggml_reshape_2d(ctx0, ggml_sum_rows(ctx0, extra), n_embd_cb, 1), extra_on);
 
-    clip_graph_qwen3tts_gen::code_gen cg(*this, top_k, top_p);
+    clip_tts_blocks cg(*this);
+    cg.top_k = top_k;
+    cg.top_p = top_p;
     ggml_tensor * out_codes = cg.cache_set(ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 1, n_cb), 0, inp_code0);
 
     ggml_tensor * code = inp_code0;
@@ -191,7 +193,7 @@ ggml_cgraph * clip_graph_drama3_gen::build_codec() {
     ggml_set_name(inp_codes, "inp_codes");
     ggml_set_input(inp_codes);
 
-    clip_graph_qwen3tts_gen::code2wav dec(*this);
+    clip_tts_blocks dec(*this);
     dec.gelu_erf = true;
     for (const auto & slot : list_c2w_state_slots(hparams, model)) {
         ggml_tensor * t = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, slot.ne0, slot.ne1);

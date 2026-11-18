@@ -7,7 +7,6 @@
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-memory.h"
-#include "llama-memory-slots.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-moe-cache.h"
@@ -125,7 +124,7 @@ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
     if (ctx_type == LLAMA_CONTEXT_TYPE_ENCODER) {
         return LLM_GRAPH_TYPE_ENCODER;
     }
-    if (ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE || ctx_type == LLAMA_CONTEXT_TYPE_GEN_WAV) {
+    if (ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE) {
         return LLM_GRAPH_TYPE_DECODER;
     }
     switch (ctx_type) {
@@ -336,8 +335,7 @@ llama_context::llama_context(
         cparams.causal_attn = params.attention_type == LLAMA_ATTENTION_TYPE_CAUSAL;
     }
 
-    if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_ENCODER || cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE ||
-        cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_WAV) {
+    if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_ENCODER || cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE) {
         // media encoders output one embedding row per media token, with full attention inside a media
         cparams.embeddings   = true;
         cparams.causal_attn  = false;
@@ -385,12 +383,6 @@ llama_context::llama_context(
     // before the reserve passes run later in this function. This avoids a later
     // re-reserve when graph nodes change.
     if (params.samplers != nullptr && params.n_samplers > 0) {
-        // the code predictor checks every chain before it initializes any: a refused context leaves them unused
-        for (size_t i = 0; clip_native_code() && i < params.n_samplers; ++i) {
-            if (!clip_code_chain_ok(params.samplers[i].sampler)) {
-                throw std::runtime_error("the code predictor takes only sampler chains that run on the backend");
-            }
-        }
         for (size_t i = 0; i < params.n_samplers; ++i) {
             const auto & config = params.samplers[i];
 
@@ -402,9 +394,6 @@ llama_context::llama_context(
                 const int n_samplers = llama_sampler_chain_n(config.sampler);
 
                 LLAMA_LOG_INFO("%s: setting backend sampler for seq_id %d (n = %d)\n", __func__, config.seq_id, n_samplers);
-            } else if (clip_native_code()) {
-                // the code predictor has no host sampling to fall back to
-                throw std::runtime_error("the code predictor takes only sampler chains that run on the backend");
             }
         }
     }
@@ -937,8 +926,8 @@ void llama_context::sched_reserve() {
     }
 
     // clip models: a context runs every encoder tower of the file (a GEN context too, for the references of its
-    // pipeline), the buffers fit the largest graph; the native code predictor (Qwen3-TTS) encodes nothing
-    if (model.arch == LLM_ARCH_CLIP && !clip_native_code()) {
+    // pipeline), the buffers fit the largest graph
+    if (model.arch == LLM_ARCH_CLIP) {
         const auto & clip = static_cast<const llama_model_clip &>(model);
         const clip_model * main_tower = clip.engine_for_ctx(cparams.ctx_type);
         for (const clip_model * tower : { clip.engine_vision(), clip.engine_audio() }) {
@@ -1472,8 +1461,7 @@ void llama_context::set_embeddings(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
     // the contexts of an mmproj output their rows as embeddings
-    if (!value && (cparams.ctx_type == LLAMA_CONTEXT_TYPE_ENCODER || cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE ||
-                   cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_WAV)) {
+    if (!value && (cparams.ctx_type == LLAMA_CONTEXT_TYPE_ENCODER || cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE)) {
         LLAMA_LOG_WARN("%s: a media context keeps its embedding output\n", __func__);
         return;
     }
@@ -1800,23 +1788,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
     if (sampler && can_offload) {
         auto * buft = ggml_backend_dev_buffer_type(model.dev_output());
 
-        // the native code predictor (Qwen3-TTS) draws every code inside its graph, with no host step after it:
-        // a chain that stops at a host-only sampler would silently fall back to argmax. A sampler without the
-        // backend API is refused before the chain is initialized, so that the caller can still use it
-        const bool whole_chain = clip_native_code() && strcmp(llama_sampler_name(sampler), "chain") == 0;
-        if (whole_chain && !clip_code_chain_ok(sampler)) {
-            LLAMA_LOG_ERROR("%s: seq_id = %d: every sampler of the chain must run on the backend in the code predictor\n", __func__, seq_id);
-            return false;
-        }
-
         sampler->iface->backend_init(sampler, buft, cparams.n_outputs_max_per_seq);
-
-        // a sampler can still decline in its backend_init(): the chain is then initialized and cannot be reused
-        const auto * chain = whole_chain ? (const llama_sampler_chain *) sampler->ctx : nullptr;
-        if (chain && !std::all_of(chain->samplers.begin(), chain->samplers.end(), [](const auto & s) { return s.is_backend; })) {
-            LLAMA_LOG_ERROR("%s: seq_id = %d: a sampler of the chain declined the backend in the code predictor\n", __func__, seq_id);
-            return false;
-        }
 
         sampling.samplers[seq_id] = sampler;
 
@@ -2015,28 +1987,9 @@ static llama_ubatch llama_media_ubatch(uint32_t n_rows, const llama_media_input 
         /*.decision_order =*/ nullptr,
         /*.span         =*/ nullptr,
         /*.media        =*/ media,
-        /*.codes        =*/ nullptr,
-        /*.n_codes      =*/ 0,
         /*.data         =*/ udata,
     };
     return ubatch;
-}
-
-bool llama_context::clip_native_code() const {
-    return model.arch == LLM_ARCH_CLIP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE &&
-           static_cast<const llama_model_clip &>(model).native_gen;
-}
-
-// the code predictor applies the chain once per codebook, in one graph: every sampler must have the backend API,
-// and the penalties sampler, which keeps the inputs of one application only, cannot be used
-bool llama_context::clip_code_chain_ok(const llama_sampler * sampler) const {
-    if (sampler == nullptr || strcmp(llama_sampler_name(sampler), "chain") != 0) {
-        return sampler != nullptr && sampler->iface->backend_init && sampler->iface->backend_apply;
-    }
-    const auto * chain = (const llama_sampler_chain *) sampler->ctx;
-    return std::all_of(chain->samplers.begin(), chain->samplers.end(), [](const auto & s) {
-        return s.ptr->iface->backend_init && s.ptr->iface->backend_apply && strcmp(llama_sampler_name(s.ptr), "penalties") != 0;
-    });
 }
 
 clip_subcontext * llama_context::clip_sub(const clip_model & m) {
@@ -2222,7 +2175,7 @@ int llama_context::encode_media_engine(llama_media & m) {
         } else {
             if (cm->proj_type == PROJECTOR_TYPE_QWEN3TTS_SPKENC && at.batch_f32.entries.size() == 2) {
                 // the speaker row, then one talker input row per reference frame; the codes are the gen-side reference
-                // the decoder continues from (llama_media_get_ref_codes())
+                // the decoder continues from (llama_gen_set_ref())
                 clip_image_f32_batch mel;
                 mel.is_audio = true;
                 mel.entries.push_back(at.batch_f32.entries[0]);
@@ -2698,253 +2651,6 @@ static bool needs_raw_logits(const llama_ubatch & ubatch, const std::map<llama_s
     return false; // all sequences use backend sampling
 }
 
-int llama_context::gen_code(const llama_batch_ext & batch_inp) {
-    if (batch_inp.tokens.empty()) {
-        LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
-        return -1;
-    }
-
-    if (t_compute_start_us == 0) {
-        t_compute_start_us = ggml_time_us();
-    }
-
-    sched_reserve();
-
-    const int32_t n_entries = (int32_t) batch_inp.tokens.size();
-    // a batch of another context (or of a llama_batch) is checked against this one: entries, state width, codes
-    const uint32_t n_vocab_ctx = model.ctx_n_vocab(cparams.ctx_type);
-    if ((uint32_t) n_entries > cparams.n_batch || batch_inp.n_embd_state != model.ctx_n_embd_state(cparams.ctx_type)) {
-        LLAMA_LOG_ERROR("%s: %d entries of state width %zu, the context takes up to %u of width %u\n", __func__,
-                n_entries, batch_inp.n_embd_state, cparams.n_batch, model.ctx_n_embd_state(cparams.ctx_type));
-        return -1;
-    }
-    if (output_reserve(n_entries) < (uint32_t) n_entries) {
-        LLAMA_LOG_ERROR("%s: could not reserve space for %d outputs\n", __func__, n_entries);
-        return -2;
-    }
-
-    const size_t   n_embd_state = batch_inp.n_embd_state;
-    const uint32_t n_embd_out   = n_embd_out_ctx();
-
-    gen_codes.clear();
-    n_gen_codes = 0;
-
-    // one entry per ubatch: the graph runs one frame of one sequence
-    for (int32_t i = 0; i < n_entries; ++i) {
-        const auto & tok = batch_inp.tokens[i];
-        if (tok.id == LLAMA_TOKEN_NULL || !tok.has_state || tok.seq_ids.size() != 1) {
-            LLAMA_LOG_ERROR("%s: entry %d needs a token, a state embedding and one sequence\n", __func__, i);
-            return -1;
-        }
-        const llama_seq_id seq = *tok.seq_ids.begin();
-        // a batch built by llama_batch_ext_from_batch() carries the raw ids of a llama_batch
-        if (seq < 0 || (uint32_t) seq >= cparams.n_seq_max || tok.id < 0 || (n_vocab_ctx > 0 && (uint32_t) tok.id >= n_vocab_ctx)) {
-            LLAMA_LOG_ERROR("%s: entry %d: invalid sequence %d or token %d\n", __func__, i, seq, tok.id);
-            return -1;
-        }
-
-        auto udata = std::make_shared<llama_ubatch::data_t>();
-        udata->token     = { tok.id };
-        udata->embd_state.assign(batch_inp.state.begin() + tok.state_off, batch_inp.state.begin() + tok.state_off + n_embd_state);
-        udata->pos       = { 0 };
-        udata->n_seq_id  = { 1 };
-        udata->seq_id_data = { seq };
-        udata->seq_id    = { udata->seq_id_data.data() };
-        udata->seq_id_unq = { seq };
-        udata->seq_idx   .assign(LLAMA_MAX_SEQ, -1);
-        udata->seq_idx[seq] = 0;
-        udata->output    = { 1 };
-
-        llama_ubatch ubatch {
-            /*.b_equal_seqs =*/ true,
-            /*.n_tokens     =*/ 1,
-            /*.n_seq_tokens =*/ 1,
-            /*.n_seqs       =*/ 1,
-            /*.n_seqs_unq   =*/ 1,
-            /*.n_pos        =*/ 1,
-            /*.token        =*/ udata->token.data(),
-            /*.embd         =*/ nullptr,
-            /*.embd_state   =*/ udata->embd_state.data(),
-            /*.embd_row     =*/ nullptr,
-            /*.pos          =*/ udata->pos.data(),
-            /*.n_seq_id     =*/ udata->n_seq_id.data(),
-            /*.seq_id       =*/ udata->seq_id.data(),
-            /*.seq_id_unq   =*/ udata->seq_id_unq.data(),
-            /*.seq_idx      =*/ udata->seq_idx.data(),
-            /*.output       =*/ udata->output.data(),
-            /*.type         =*/ nullptr,
-            /*.decision_order =*/ nullptr,
-            /*.span         =*/ nullptr,
-            /*.media        =*/ nullptr,
-            /*.codes        =*/ nullptr,
-            /*.n_codes      =*/ 0,
-            /*.data         =*/ udata,
-        };
-
-        n_queued_tokens += 1;
-        n_outputs = 1;
-
-        ggml_status status;
-        const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, nullptr, status);
-        if (!res) {
-            switch (status) {
-                case GGML_STATUS_ABORTED:      return  2;
-                case GGML_STATUS_ALLOC_FAILED: return -2;
-                case GGML_STATUS_FAILED:       return -3;
-                case GGML_STATUS_SUCCESS:      GGML_ABORT("should not happen");
-            }
-        }
-
-        synchronize();
-
-        ggml_tensor * t_embd  = res->get_embd();
-        ggml_tensor * t_codes = res->t_codes;
-        GGML_ASSERT(t_embd && t_codes && t_embd->ne[0] == (int64_t) n_embd_out);
-
-        ggml_backend_tensor_get(t_embd, embd.data + (size_t) i * n_embd_out, 0, n_embd_out * sizeof(float));
-        output_ids[i] = i;
-
-        n_gen_codes = (int32_t) ggml_nelements(t_codes);
-        const size_t off = gen_codes.size();
-        gen_codes.resize(off + n_gen_codes);
-        ggml_backend_tensor_get(t_codes, gen_codes.data() + off, 0, n_gen_codes * sizeof(int32_t));
-    }
-
-    n_outputs = n_entries;
-
-    return 0;
-}
-
-int32_t llama_context::get_sampled_tokens_ith(int32_t i, llama_token * out, int32_t n_max) const {
-    if (i < 0 || n_gen_codes == 0 || (size_t) (i + 1) * n_gen_codes > gen_codes.size()) {
-        return 0;
-    }
-    if (out) {
-        std::copy_n(gen_codes.begin() + (size_t) i * n_gen_codes, std::min(n_max, n_gen_codes), out);
-    }
-    return n_gen_codes;
-}
-
-int llama_context::gen_wav(const llama_batch_ext & batch_inp) {
-    const int32_t n_frames = (int32_t) batch_inp.tokens.size();
-    if (n_frames == 0) {
-        LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
-        return -1;
-    }
-    if (!memory) {
-        LLAMA_LOG_ERROR("%s: the context has no decoder state memory\n", __func__);
-        return -1;
-    }
-
-    const auto & tok0 = batch_inp.tokens[0];
-    if (tok0.seq_ids.size() != 1 || tok0.n_codes <= 0) {
-        LLAMA_LOG_ERROR("%s: entries need codes and one sequence\n", __func__);
-        return -1;
-    }
-    const llama_seq_id seq     = *tok0.seq_ids.begin();
-    const int32_t      n_codes = tok0.n_codes;
-    if (seq < 0 || (uint32_t) seq >= cparams.n_seq_max || (uint32_t) n_frames > cparams.n_batch) {
-        LLAMA_LOG_ERROR("%s: sequence %d, %d frames: the context takes up to %u frames\n", __func__, seq, n_frames, cparams.n_batch);
-        return -1;
-    }
-
-    if (t_compute_start_us == 0) {
-        t_compute_start_us = ggml_time_us();
-    }
-
-    sched_reserve();
-
-    if (output_reserve(n_frames) < (uint32_t) n_frames) {
-        LLAMA_LOG_ERROR("%s: could not reserve space for %d outputs\n", __func__, n_frames);
-        return -2;
-    }
-
-    auto udata = std::make_shared<llama_ubatch::data_t>();
-    udata->token     .resize(n_frames * n_codes);
-    udata->pos       .resize(n_frames);
-    udata->n_seq_id  .assign(n_frames, 1);
-    udata->seq_id_data.assign(n_frames, seq);
-    udata->seq_id    .resize(n_frames);
-    udata->seq_id_unq = { seq };
-    udata->seq_idx   .assign(LLAMA_MAX_SEQ, -1);
-    udata->seq_idx[seq] = 0;
-    udata->output    .assign(n_frames, 1);
-    for (int32_t i = 0; i < n_frames; ++i) {
-        const auto & tok = batch_inp.tokens[i];
-        if (tok.n_codes != n_codes || tok.seq_ids.size() != 1 || *tok.seq_ids.begin() != seq) {
-            LLAMA_LOG_ERROR("%s: all entries need %d codes and the same sequence\n", __func__, n_codes);
-            return -1;
-        }
-        if (model.arch == LLM_ARCH_CLIP &&
-                !static_cast<const llama_model_clip &>(model).c2w_codes_valid(batch_inp.codes.data() + tok.codes_off, n_codes)) {
-            LLAMA_LOG_ERROR("%s: frame %d: %d codes expected, each inside its codebook\n", __func__, i, n_codes);
-            return -1;
-        }
-        std::copy_n(batch_inp.codes.begin() + tok.codes_off, n_codes, udata->token.begin() + (size_t) i * n_codes);
-        udata->pos[i]    = i;
-        udata->seq_id[i] = udata->seq_id_data.data() + i;
-    }
-
-    llama_ubatch ubatch {
-        /*.b_equal_seqs =*/ true,
-        /*.n_tokens     =*/ (uint32_t) n_frames,
-        /*.n_seq_tokens =*/ (uint32_t) n_frames,
-        /*.n_seqs       =*/ 1,
-        /*.n_seqs_unq   =*/ 1,
-        /*.n_pos        =*/ 1,
-        /*.token        =*/ nullptr,
-        /*.embd         =*/ nullptr,
-        /*.embd_state   =*/ nullptr,
-        /*.embd_row     =*/ nullptr,
-        /*.pos          =*/ udata->pos.data(),
-        /*.n_seq_id     =*/ udata->n_seq_id.data(),
-        /*.seq_id       =*/ udata->seq_id.data(),
-        /*.seq_id_unq   =*/ udata->seq_id_unq.data(),
-        /*.seq_idx      =*/ udata->seq_idx.data(),
-        /*.output       =*/ udata->output.data(),
-        /*.type         =*/ nullptr,
-        /*.decision_order =*/ nullptr,
-        /*.span         =*/ nullptr,
-        /*.media        =*/ nullptr,
-        /*.codes        =*/ udata->token.data(),
-        /*.n_codes      =*/ (uint32_t) n_codes,
-        /*.data         =*/ udata,
-    };
-
-    n_queued_tokens += n_frames;
-    n_outputs = n_frames;
-
-    auto mctx = memory->init_full();
-
-    ggml_status status;
-    const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
-    if (!res) {
-        switch (status) {
-            case GGML_STATUS_ABORTED:      return  2;
-            case GGML_STATUS_ALLOC_FAILED: return -2;
-            case GGML_STATUS_FAILED:       return -3;
-            case GGML_STATUS_SUCCESS:      GGML_ABORT("should not happen");
-        }
-    }
-
-    synchronize();
-
-    // the frames went through the state slots of the sequence: its positions, see llama_memory_seq_pos_max()
-    if (auto * slots = dynamic_cast<llama_memory_slots *>(memory.get())) {
-        slots->advance(seq, n_frames);
-    }
-
-    const uint32_t n_embd = n_embd_out_ctx();
-    ggml_tensor * t_embd = res->get_embd();
-    GGML_ASSERT(t_embd && ggml_nelements(t_embd) == (int64_t) n_embd * n_frames);
-    ggml_backend_tensor_get(t_embd, embd.data, 0, (size_t) n_embd * n_frames * sizeof(float));
-    for (int32_t i = 0; i < n_frames; ++i) {
-        output_ids[i] = i;
-    }
-
-    return 0;
-}
-
 uint32_t llama_context::n_embd_out_ctx() const {
     return model.ctx_n_embd_out(cparams.ctx_type);
 }
@@ -2954,10 +2660,8 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         return gen_engine(batch_inp);
     }
     if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE) {
-        return gen_code(batch_inp);
-    }
-    if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_WAV) {
-        return gen_wav(batch_inp);
+        LLAMA_LOG_ERROR("%s: a GEN context takes gen steps, see llama_batch_ext_add_gen()\n", __func__);
+        return -1;
     }
 
     if (!memory) {
@@ -5412,8 +5116,7 @@ llama_context * llama_init_from_model(
     }
 
     {
-        const bool media_ctx = params.ctx_type == LLAMA_CONTEXT_TYPE_ENCODER || params.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE ||
-                               params.ctx_type == LLAMA_CONTEXT_TYPE_GEN_WAV;
+        const bool media_ctx = params.ctx_type == LLAMA_CONTEXT_TYPE_ENCODER || params.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE;
         if ((model->arch == LLM_ARCH_CLIP) != media_ctx) {
             LLAMA_LOG_ERROR("%s: mmproj models need an ENCODER or GEN_CODE context, and those contexts need an mmproj model\n", __func__);
             return nullptr;
@@ -6030,10 +5733,6 @@ llama_context * llama_get_ctx_other(struct llama_context * ctx) {
     return ctx->get_cparams().ctx_other;
 }
 
-int32_t llama_get_sampled_tokens_ith(struct llama_context * ctx, int32_t i, llama_token * out, int32_t n_max) {
-    return ctx->get_sampled_tokens_ith(i, out, n_max);
-}
-
 int32_t llama_n_embd_out(const struct llama_context * ctx) {
     return (int32_t) ctx->n_embd_out_ctx();
 }
@@ -6069,8 +5768,6 @@ void llama_gen_set_seed(llama_context * ctx, llama_seq_id seq_id, uint32_t seed)
 void llama_gen_reset(llama_context * ctx, llama_seq_id seq_id) {
     if (auto * mem = dynamic_cast<llama_memory_clip_gen *>(llama_get_memory(ctx))) {
         mem->reset(seq_id);
-    } else if (auto * slots = dynamic_cast<llama_memory_slots *>(llama_get_memory(ctx))) {
-        slots->seq_rm(seq_id, -1, -1); // the codec of the native graphs: its slots are the decoder state
     }
 }
 

@@ -67,10 +67,6 @@ struct llama_ubatch {
     // encoder ubatch of a media model: the media to encode, n_tokens = its output rows
     const struct llama_media_input * media;
 
-    // audio generation: n_codes codes per row, [n_codes*n_tokens] row-major, NULL if none
-    const int32_t * codes;
-    uint32_t        n_codes;
-
     struct data_t {
         std::vector<llama_token>    token;
         std::vector<float>          embd;
@@ -133,8 +129,6 @@ struct llama_batch_ext {
         int32_t      decision_order = 0; // see llama_batch_ext_set_decision_order()
         llama_pos    span_lo = -1; // bidirectional span of the entry (positions), -1 if none
         llama_pos    span_hi = -1;
-        int32_t      codes_off = -1; // offset of the entry's codes in the codes array, -1 if none
-        int32_t      n_codes   = 0;
         std::unordered_set<llama_seq_id> seq_ids;
         std::array<llama_pos, GGML_MROPE_SECTIONS> pos = {0, 0, 0, 0};
     };
@@ -148,9 +142,6 @@ struct llama_batch_ext {
 
     // ENCODER context: media to encode, one reference each
     std::vector<struct llama_media *> media;
-
-    // codes of the entries added with llama_batch_ext_add_codes()
-    std::vector<int32_t> codes;
 
     // GEN contexts of the clip engine: the steps added with llama_batch_ext_add_gen(), inp points into the vectors
     struct gen_entry {

@@ -182,14 +182,10 @@ struct llama_context {
     // the engine runtime of one tower of a clip model, created on first use
     clip_subcontext * clip_sub(const clip_model & m);
 
-    // the code predictor of the native graphs (Qwen3-TTS): codes sampled in the graph by the sequence's sampler
-    bool clip_native_code() const;
-    bool clip_code_chain_ok(const llama_sampler * sampler) const;
-
     // runs one engine graph: built by the clip model, inputs set, computed, outputs read back into req
     bool clip_exec(clip_subcontext & sub, clip_subctx_encode_params * req);
 
-    // GEN context of a clip model without native graphs: one gen step per entry, see llama_batch_ext_add_gen()
+    // GEN context of a clip model: one gen step per entry, see llama_batch_ext_add_gen()
     int gen_engine(const llama_batch_ext & batch_inp);
 
     // the gen pipelines of the clip engine see the towers of this context through it, created on first use
@@ -209,15 +205,8 @@ struct llama_context {
     void set_compute_threads(bool batched);
 
 
-    // GEN_CODE context: one frame per entry, codes sampled in the graph
-    int gen_code(const llama_batch_ext & batch_inp);
-
-    // GEN_WAV context: consecutive frames of one sequence, PCM rows out, state in the context memory
-    int gen_wav(const llama_batch_ext & batch_inp);
-
     // width of the output embedding rows of this context
     uint32_t n_embd_out_ctx() const;
-    int32_t get_sampled_tokens_ith(int32_t i, llama_token * out, int32_t n_max) const;
     int decode(const llama_batch_ext & batch_inp);
 
     // compat version
@@ -525,9 +514,6 @@ private:
 
     llm_graph_result * gf_res_prev_active = nullptr;
 
-    // codes of the last GEN_CODE decode, n_gen_codes per output row
-    std::vector<llama_token> gen_codes;
-    int32_t                  n_gen_codes = 0;
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;

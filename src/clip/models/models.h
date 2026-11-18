@@ -434,82 +434,93 @@ struct clip_graph_qwen3tts_gen : clip_graph {
 
     clip_subctx_gen_process gen_process;
 
-    //
-    // code_gen: backbone hidden state + sampled code0 -> 16 RVQ codes
-    // MTP-style code predictor, one token per codebook
-    //
-    struct code_gen : clip_graph {
-        code_gen(const clip_graph & parent, int top_k, float top_p)
-            : clip_graph(parent), top_k(top_k), top_p(top_p) {}
-        ggml_cgraph * build() override { GGML_ABORT("call prefill()/step() instead"); }
+};
 
-        int   top_k;
-        float top_p;
+// the blocks of the Qwen3-TTS code predictor and codec, on the weights of a clip_model: the native Qwen3-TTS
+// graphs of libllama and the Fish S2, Drama 3 and Minimax-Music3 graphs of the engine build on them
+struct clip_tts_blocks {
+    ggml_context * ctx0;
+    ggml_cgraph  * gf;
+    const clip_model   & model;
+    const clip_hparams & hparams;
+    const clip_flash_attn_type flash_attn_type;
 
-        ggml_tensor * cache_set(ggml_tensor * cache, int row_idx, ggml_tensor * value) const;
-        ggml_tensor * do_sampling(ggml_tensor * logits, ggml_tensor * inp_rand) const;
+    clip_tts_blocks(ggml_context * ctx0, ggml_cgraph * gf, const clip_model & model, bool flash_attn)
+        : ctx0(ctx0), gf(gf), model(model), hparams(model.hparams),
+          flash_attn_type(flash_attn ? CLIP_FLASH_ATTN_TYPE_ENABLED : CLIP_FLASH_ATTN_TYPE_DISABLED) {}
+    explicit clip_tts_blocks(const clip_graph & g)
+        : clip_tts_blocks(g.ctx0, g.gf, g.model, g.flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {}
 
-        ggml_tensor * const_i32(ggml_tensor * anchor, float value) const;
-        ggml_tensor * causal_mask_row(int64_t n_kv_pad, int pos) const;
-        ggml_tensor * project_in(ggml_tensor * cur) const;
-
-        ggml_tensor * layer_forward(
-                ggml_tensor * cur,
-                const clip_layer & layer,
-                ggml_tensor * inp_pos,
-                ggml_tensor * kq_mask,
-                ggml_tensor *& k_cache_layer,
-                ggml_tensor *& v_cache_layer,
-                int64_t n_kv_pad,
-                int pos,
-                int il) const;
-
-        void prefill(
-                std::vector<ggml_tensor *> & k_cache,
-                std::vector<ggml_tensor *> & v_cache,
-                ggml_tensor *& out_code_cache,
-                ggml_tensor * h_state,
-                ggml_tensor * code0_embd,
-                ggml_tensor * inp_rand) const;
-
-        ggml_tensor * step(
-                std::vector<ggml_tensor *> & k_cache,
-                std::vector<ggml_tensor *> & v_cache,
-                ggml_tensor * out_code_cache,
-                ggml_tensor * inp_rand,
-                int step_idx) const;
-    };
+    void          cb(ggml_tensor * cur, const char * name, int il) const;
+    // attention, then the output projection, as clip_graph::build_attn()
+    ggml_tensor * build_attn(ggml_tensor * wo, ggml_tensor * wo_b, ggml_tensor * q_cur, ggml_tensor * k_cur,
+                             ggml_tensor * v_cur, ggml_tensor * kq_mask, float kq_scale, int il) const;
 
     //
-    // code2wav: RVQ codes -> raw PCM (quantizer + pre_conv + pre_transformer + upsample + DAC).
+    // code predictor: backbone hidden state + sampled code0 -> 16 RVQ codes, one token per codebook
     //
-    struct code2wav : clip_graph {
-        code2wav(const clip_graph & parent) : clip_graph(parent) {}
-        ggml_cgraph * build() override { GGML_ABORT("call decode() instead"); }
+    int   top_k = 50;
+    float top_p = 1.0f;
 
-        // state_in: previous call's persisted state, by slot name (see list_c2w_state_slots())
-        std::map<std::string, ggml_tensor *> state_in;
-        // state_out: this call's state to persist, added to the graph outputs by build()
-        mutable std::vector<std::pair<std::string, ggml_tensor *>> state_out;
+    ggml_tensor * cache_set(ggml_tensor * cache, int row_idx, ggml_tensor * value) const;
+    ggml_tensor * do_sampling(ggml_tensor * logits, ggml_tensor * inp_rand) const;
 
-        // stateful conv ops: read/update their state via state_in/state_out[state_name]
-        ggml_tensor * causal_conv1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int dilation, const std::string & state_name) const;
-        ggml_tensor * causal_conv1d_dw(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, const std::string & state_name) const;
-        ggml_tensor * causal_conv_transpose1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride, const std::string & state_name) const;
-        ggml_tensor * snake(ggml_tensor * x, ggml_tensor * alpha, ggml_tensor * beta) const;
+    ggml_tensor * const_i32(ggml_tensor * anchor, float value) const;
+    ggml_tensor * causal_mask_row(int64_t n_kv_pad, int pos) const;
+    ggml_tensor * project_in(ggml_tensor * cur) const;
 
-        ggml_tensor * quant_decode(ggml_tensor * inp_codes) const;
-        // window <= 0 uses hparams.wav_tfm_swa
-        ggml_tensor * tfm_layer_forward(ggml_tensor * cur, const clip_layer & layer, int il, int64_t window = 0) const;
-        ggml_tensor * convnext_block(ggml_tensor * x, const clip_code2wav::upsample_block & blk, const std::string & state_prefix) const;
-        ggml_tensor * dac_res_unit(ggml_tensor * x, const clip_code2wav::dac_res & res, int dilation, const std::string & state_name) const;
+    ggml_tensor * layer_forward(
+            ggml_tensor * cur,
+            const clip_layer & layer,
+            ggml_tensor * inp_pos,
+            ggml_tensor * kq_mask,
+            ggml_tensor *& k_cache_layer,
+            ggml_tensor *& v_cache_layer,
+            int64_t n_kv_pad,
+            int pos,
+            int il) const;
 
-        // drama3: erf GELU in ConvNeXt, not the tanh approximation
-        bool gelu_erf = false;
+    void prefill(
+            std::vector<ggml_tensor *> & k_cache,
+            std::vector<ggml_tensor *> & v_cache,
+            ggml_tensor *& out_code_cache,
+            ggml_tensor * h_state,
+            ggml_tensor * code0_embd,
+            ggml_tensor * inp_rand) const;
 
-        // inp_codes [1, n_codes] I32 -> this frame's audio samples [n_samples] F32, clamped to [-1, 1]
-        ggml_tensor * decode(ggml_tensor * inp_codes) const;
-    };
+    ggml_tensor * step(
+            std::vector<ggml_tensor *> & k_cache,
+            std::vector<ggml_tensor *> & v_cache,
+            ggml_tensor * out_code_cache,
+            ggml_tensor * inp_rand,
+            int step_idx) const;
+
+    //
+    // codec: RVQ codes -> raw PCM (quantizer + pre_conv + pre_transformer + upsample + DAC)
+    //
+
+    // state_in: previous call's persisted state, by slot name (see list_c2w_state_slots())
+    std::map<std::string, ggml_tensor *> state_in;
+    // state_out: this call's state to persist, by slot name; the caller makes them graph outputs
+    mutable std::vector<std::pair<std::string, ggml_tensor *>> state_out;
+
+    // stateful conv ops: read/update their state via state_in/state_out[state_name]
+    ggml_tensor * causal_conv1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int dilation, const std::string & state_name) const;
+    ggml_tensor * causal_conv1d_dw(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, const std::string & state_name) const;
+    ggml_tensor * causal_conv_transpose1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride, const std::string & state_name) const;
+    ggml_tensor * snake(ggml_tensor * x, ggml_tensor * alpha, ggml_tensor * beta) const;
+
+    ggml_tensor * quant_decode(ggml_tensor * inp_codes) const;
+    // window <= 0 uses hparams.wav_tfm_swa
+    ggml_tensor * tfm_layer_forward(ggml_tensor * cur, const clip_layer & layer, int il, int64_t window = 0) const;
+    ggml_tensor * convnext_block(ggml_tensor * x, const clip_code2wav::upsample_block & blk, const std::string & state_prefix) const;
+    ggml_tensor * dac_res_unit(ggml_tensor * x, const clip_code2wav::dac_res & res, int dilation, const std::string & state_name) const;
+
+    // drama3: erf GELU in ConvNeXt, not the tanh approximation
+    bool gelu_erf = false;
+
+    // inp_codes [1, n_codes] I32 -> this frame's audio samples [n_samples] F32, clamped to [-1, 1]
+    ggml_tensor * decode(ggml_tensor * inp_codes) const;
 };
 
 //
