@@ -107,6 +107,7 @@ struct llama_hparams {
     struct llama_hparams_convnext convnext;
 
     uint32_t n_shortconv_l_cache  = 0;
+    uint32_t n_sconv_channels     = 0;
 
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_arr;
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
@@ -136,6 +137,8 @@ struct llama_hparams {
     float    expert_group_scale   = 0.05f;
     float    expert_weights_scale = 0.0f;
     bool     expert_weights_norm  = false;
+    float    expert_weights_norm_eps = 0.0f; // > 0: weights / (sum + eps), else the sum is clamped
+    bool     expert_router_f32    = false;   // compute the router logits in F32
     uint32_t expert_gating_func   = LLAMA_EXPERT_GATING_FUNC_TYPE_NONE;
     uint32_t moe_every_n_layers   = 0;
     uint32_t moe_latent_size      = 0;
@@ -218,6 +221,12 @@ struct llama_hparams {
     uint32_t n_embd_head_kda = 0;
     bool     kda_safe_gate = false;
 
+    // for ZAYA1 CCA layers: q + k channels in the conv state
+    uint32_t n_cca_qk = 0;
+
+    // for ZAYA1: width of the router MLP
+    uint32_t n_router_hidden = 0;
+
     // kimi-k3
     uint32_t n_expert_latent      = 0;      // routed_expert_hidden_size (0 = experts run at n_embd)
     uint32_t attn_res_block_size  = 0;      // 0 = no cross-layer attention residuals
@@ -244,6 +253,16 @@ struct llama_hparams {
     uint32_t n_mudd_ff   = 0;
     uint32_t n_mudd_taps = 0;
     std::array<int32_t, LLAMA_MAX_LAYERS> mudd_tap_idx; // [n_layer][n_mudd_taps], -1 = no mixing
+
+    // inkling2
+    uint32_t n_relative        = 0;
+    uint32_t n_relative_extent = 0;
+    uint32_t n_vocab_unpadded  = 0;
+    uint32_t n_vocab_padded    = 0;
+    uint32_t n_log_scale_floor = 0;
+    float    f_log_scale_alpha = 0.0f;
+    float    f_qk_clip         = 0.0f;
+    float    f_relative_clip   = 0.0f;
 
     bool ssm_dt_b_c_rms = false;
 

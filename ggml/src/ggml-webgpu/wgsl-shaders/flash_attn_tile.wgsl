@@ -65,7 +65,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     let row_active = subgroup_id < Q_TILE && global_q_row < params.seq_len_q;
 
 #ifdef MASK
-    let mask_global_offset = params.offset_mask + batch_idx * params.stride_mask3 + q_row_start * params.seq_len_kv;
+    let mask_global_offset = params.offset_mask + (batch_idx % params.mask_ne3) * params.stride_mask3 + (head_idx % params.mask_ne2) * params.stride_mask2 + q_row_start * params.seq_len_kv;
 #endif
 
     let dst_global_offset = dst_batch_offset + q_row_start * dst2_stride + head_idx * HEAD_DIM_V;

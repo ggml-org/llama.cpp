@@ -3,6 +3,7 @@
 
 #include <numeric>
 #include <string>
+#include <vector>
 
 static void init_model(llama_model & model, uint32_t n_layer) {
     model.hparams = {};
@@ -16,6 +17,11 @@ static void init_model(llama_model & model, uint32_t n_layer) {
 }
 
 int main() {
+    for (int bit = 0; bit < 64; ++bit) {
+        GGML_ASSERT(ctz64(uint64_t{1} << bit) == bit);
+        GGML_ASSERT(ctz64(UINT64_MAX << bit) == bit);
+    }
+
     llama_backend_init();
 
     {
@@ -98,6 +104,75 @@ int main() {
                 GGML_ASSERT(shared.get_v_scale(1) == nullptr);
             }
         }
+    }
+
+    // seq_rm removes [p0, p1) of one sequence, a negative bound is open
+    {
+        std::unique_ptr<llama_model> model(llama_model_create(LLM_ARCH_LLAMA, llama_model_default_params()));
+        init_model(*model, 1);
+
+        llama_kv_cache kv(*model, false, model->hparams, GGML_TYPE_F16, GGML_TYPE_F16,
+                false, false, true, 32, 2, 0, LLAMA_SWA_TYPE_NONE, nullptr, nullptr, nullptr, nullptr);
+
+        // returns the first cell that takes the tokens
+        auto add = [&](llama_seq_id seq_id, llama_pos p0, uint32_t n) {
+            std::vector<llama_token>    token(n, 1);
+            std::vector<llama_pos>      pos(n);
+            std::vector<int32_t>        n_seq_id(n, 1);
+            std::vector<llama_seq_id *> seq_ids(n, &seq_id);
+            std::iota(pos.begin(), pos.end(), p0);
+
+            llama_ubatch ubatch = {};
+            ubatch.n_tokens     = n;
+            ubatch.n_seq_tokens = n;
+            ubatch.n_seqs       = 1;
+            ubatch.n_seqs_unq   = 1;
+            ubatch.n_pos        = 1;
+            ubatch.token        = token.data();
+            ubatch.pos          = pos.data();
+            ubatch.n_seq_id     = n_seq_id.data();
+            ubatch.seq_id       = seq_ids.data();
+            ubatch.seq_id_unq   = &seq_id;
+
+            const auto sinfo = kv.find_slot(ubatch, false);
+            GGML_ASSERT(!sinfo.empty());
+            kv.apply_ubatch(sinfo, ubatch);
+
+            return sinfo.head();
+        };
+
+        GGML_ASSERT(add(0, 0, 8) == 0);
+        GGML_ASSERT(add(1, 0, 4) == 8);
+
+        // the tail of sequence 0, the other sequence keeps its cells
+        GGML_ASSERT(kv.seq_rm(0, 5, -1));
+        GGML_ASSERT(kv.seq_pos_min(0) == 0 && kv.seq_pos_max(0) == 4);
+        GGML_ASSERT(kv.seq_pos_min(1) == 0 && kv.seq_pos_max(1) == 3);
+
+        // the next tokens go to the lowest freed cell
+        GGML_ASSERT(add(0, 5, 2) == 5);
+
+        // p1 is not part of the range
+        GGML_ASSERT(kv.seq_rm(0, -1, 2));
+        GGML_ASSERT(kv.seq_pos_min(0) == 2 && kv.seq_pos_max(0) == 6);
+        GGML_ASSERT(kv.seq_rm(0, 6, 6));
+        GGML_ASSERT(kv.seq_pos_max(0) == 6);
+
+        // freed cells are taken in cell order, so a higher position can sit in a lower cell
+        GGML_ASSERT(add(0, 7, 3) == 0);
+        GGML_ASSERT(kv.seq_rm(0, 6, -1));
+        GGML_ASSERT(add(0, 6, 1) == 0);
+
+        // a cell shared with another sequence stays for that sequence
+        kv.seq_cp(0, 1, 5, -1);
+        GGML_ASSERT(kv.seq_rm(0, 5, -1));
+        GGML_ASSERT(kv.seq_pos_max(0) == 4 && kv.seq_pos_max(1) == 6);
+
+        // every cell of a repeated position is removed
+        add(0, 5, 1);
+        add(0, 5, 1);
+        GGML_ASSERT(kv.seq_rm(0, 5, 6));
+        GGML_ASSERT(kv.seq_pos_max(0) == 4);
     }
 
     llama_backend_free();

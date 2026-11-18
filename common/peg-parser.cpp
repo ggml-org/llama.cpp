@@ -1003,9 +1003,9 @@ std::string common_peg_arena::dump_impl(common_peg_parser_id                    
         } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
             return "Ref(" + p.name + ")";
         } else if constexpr (std::is_same_v<T, common_peg_tag_parser>) {
-            return "Tag(" + p.tag + ", " + dump(p.child) + ")";
+            return "Tag(" + p.tag + ", " + dump_impl(p.child, visited) + ")";
         } else if constexpr (std::is_same_v<T, common_peg_atomic_parser>) {
-            return "Atomic(" + dump(p.child) + ")";
+            return "Atomic(" + dump_impl(p.child, visited) + ")";
         } else {
             return "Unknown";
         }

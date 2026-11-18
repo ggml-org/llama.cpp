@@ -112,9 +112,9 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_memory_bufs::memory_breakdown
     return ret;
 }
 
-// collects the buffers of the tensors that a state write visits, without keeping the data
-struct llama_memory_buffers_writer : public llama_io_write_i {
-    std::set<ggml_backend_buffer_t> buffers;
+// collects the tensors that a state write visits, without keeping the data
+struct llama_memory_tensors_writer : public llama_io_write_i {
+    std::set<ggml_tensor *> tensors;
     size_t size = 0;
 
     void write(const void *, size_t n) override {
@@ -122,7 +122,7 @@ struct llama_memory_buffers_writer : public llama_io_write_i {
     }
 
     void write_tensor(ggml_tensor * tensor, size_t, size_t n) override {
-        buffers.insert(tensor->buffer);
+        tensors.insert(tensor);
         size += n;
     }
 
@@ -132,13 +132,22 @@ struct llama_memory_buffers_writer : public llama_io_write_i {
 };
 
 std::vector<ggml_backend_buffer_t> llama_memory_get_buffers(const llama_memory_t mem) {
+    std::set<ggml_backend_buffer_t> buffers;
+    for (ggml_tensor * tensor : llama_memory_get_tensors(mem)) {
+        buffers.insert(tensor->buffer);
+    }
+
+    return std::vector<ggml_backend_buffer_t>(buffers.begin(), buffers.end());
+}
+
+std::vector<ggml_tensor *> llama_memory_get_tensors(const llama_memory_t mem) {
     if (mem == nullptr) {
         return {};
     }
 
-    llama_memory_buffers_writer writer;
+    llama_memory_tensors_writer writer;
 
     mem->state_write(writer);
 
-    return std::vector<ggml_backend_buffer_t>(writer.buffers.begin(), writer.buffers.end());
+    return std::vector<ggml_tensor *>(writer.tensors.begin(), writer.tensors.end());
 }

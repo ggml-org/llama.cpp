@@ -184,6 +184,7 @@ int op_repeat(struct htp_ops_context * octx);
 int op_argsort(struct htp_ops_context * octx);
 int op_top_k(struct htp_ops_context * octx);
 int op_ssm_conv(struct htp_ops_context * octx);
+int op_ssm_scan(struct htp_ops_context * octx);
 int op_cumsum(struct htp_ops_context * octx);
 int op_top_k_mask(struct htp_ops_context * octx);
 int op_fill(struct htp_ops_context * octx);
@@ -200,6 +201,7 @@ int op_pool_2d(struct htp_ops_context * octx);
 int op_pool_1d(struct htp_ops_context * octx);
 int op_allreduce(struct htp_ops_context * octx);
 int op_roll(struct htp_ops_context * octx);
+int op_timestep_embedding(struct htp_ops_context * octx);
 int op_upscale(struct htp_ops_context * octx);
 int op_lightning_indexer(struct htp_ops_context * octx);
 

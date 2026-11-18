@@ -88,6 +88,110 @@ std::string Result::read_all() {
 
 } // namespace stream
 
+namespace detail {
+
+SSEParser::SSEParser(EventHandler on_event, IdHandler on_id,
+                            RetryHandler on_retry, size_t max_event_length)
+    : on_event_(std::move(on_event)), on_id_(std::move(on_id)),
+      on_retry_(std::move(on_retry)), max_event_length_(max_event_length) {}
+
+bool SSEParser::parse(const char *buf, size_t n) {
+  // What is left in the buffer has no line ending
+  auto search_pos = buffer_.size();
+  buffer_.append(buf, n);
+
+  // A line ends with \r\n, \n or \r per the SSE spec
+  size_t line_start = 0;
+  size_t eol_pos;
+
+  while ((eol_pos = buffer_.find_first_of("\r\n", search_pos)) !=
+         std::string::npos) {
+    auto line = buffer_.substr(line_start, eol_pos - line_start);
+    line_start = eol_pos + 1;
+    search_pos = line_start;
+
+    // The \n of a \r\n may arrive in a later chunk than its \r
+    auto is_lf_of_crlf = after_cr_ && line.empty() && buffer_[eol_pos] == '\n';
+    after_cr_ = buffer_[eol_pos] == '\r';
+    if (is_lf_of_crlf) { continue; }
+
+    // A UTF-8 BOM at the start of the stream is ignored per the SSE spec
+    if (first_line_) {
+      first_line_ = false;
+      if (line.compare(0, 3, "\xEF\xBB\xBF") == 0) { line.erase(0, 3); }
+    }
+
+    parse_line(line);
+  }
+
+  // Keep unprocessed data in buffer
+  buffer_.erase(0, line_start);
+
+  return max_event_length_ == 0 ||
+         buffer_.size() + msg_.data.size() <= max_event_length_;
+}
+
+void SSEParser::parse_line(const std::string &line) {
+  // Blank line signals end of event
+  if (line.empty()) {
+    // The id counts for Last-Event-ID even for an event that has no data. An
+    // empty id clears it.
+    if (has_id_ && on_id_) { on_id_(msg_.id); }
+
+    // An event without a data field is not dispatched
+    if (has_data_ && on_event_) { on_event_(msg_); }
+
+    msg_.clear();
+    has_data_ = false;
+    has_id_ = false;
+    return;
+  }
+
+  // Lines starting with ':' are comments (ignored)
+  if (line[0] == ':') { return; }
+
+  // Find the colon separator
+  auto colon_pos = line.find(':');
+  auto field = line.substr(0, colon_pos);
+  std::string value;
+
+  // Value starts after colon, skip optional single space
+  if (colon_pos != std::string::npos && colon_pos + 1 < line.size()) {
+    auto value_start = colon_pos + 1;
+    if (line[value_start] == ' ') { value_start++; }
+    value = line.substr(value_start);
+  }
+
+  // Handle known fields
+  if (field == "event") {
+    // An empty event type is dispatched as "message" per the SSE spec
+    msg_.event = value.empty() ? std::string("message") : std::move(value);
+  } else if (field == "data") {
+    // Multiple data lines are concatenated with newlines
+    if (has_data_) { msg_.data += "\n"; }
+    msg_.data += value;
+    has_data_ = true;
+  } else if (field == "id") {
+    // An id that cannot be sent back as Last-Event-ID is ignored. Empty id is
+    // valid (clears the last event ID)
+    if (fields::is_field_value(value)) {
+      msg_.id = value;
+      has_id_ = true;
+    }
+  } else if (field == "retry") {
+    // Parse retry interval in milliseconds
+    // Per the SSE spec, a value that is not all ASCII digits is ignored.
+    if (is_numeric(value)) {
+      int v = 0;
+      auto res = from_chars(value.data(), value.data() + value.size(), v);
+      if (res.ec == std::errc{} && on_retry_) { on_retry_(v); }
+    }
+  }
+  // Unknown fields are ignored per SSE spec
+}
+
+} // namespace detail
+
 namespace sse {
 
 // SSEMessage implementations
@@ -169,58 +273,6 @@ void SSEClient::stop() {
   if (async_thread_.joinable()) { async_thread_.join(); }
 }
 
-bool SSEClient::parse_sse_line(const std::string &line, SSEMessage &msg,
-                                      int &retry_ms, bool &has_data,
-                                      bool &has_id) {
-  // Blank line signals end of event
-  if (line.empty()) { return true; }
-
-  // Lines starting with ':' are comments (ignored)
-  if (line[0] == ':') { return false; }
-
-  // Find the colon separator
-  auto colon_pos = line.find(':');
-  auto field = line.substr(0, colon_pos);
-  std::string value;
-
-  // Value starts after colon, skip optional single space
-  if (colon_pos != std::string::npos && colon_pos + 1 < line.size()) {
-    auto value_start = colon_pos + 1;
-    if (line[value_start] == ' ') { value_start++; }
-    value = line.substr(value_start);
-  }
-
-  // Handle known fields
-  if (field == "event") {
-    // An empty event type is dispatched as "message" per the SSE spec
-    msg.event = value.empty() ? std::string("message") : std::move(value);
-  } else if (field == "data") {
-    // Multiple data lines are concatenated with newlines
-    if (has_data) { msg.data += "\n"; }
-    msg.data += value;
-    has_data = true;
-  } else if (field == "id") {
-    // An id that cannot be sent back as Last-Event-ID is ignored. Empty id is
-    // valid (clears the last event ID)
-    if (detail::fields::is_field_value(value)) {
-      msg.id = value;
-      has_id = true;
-    }
-  } else if (field == "retry") {
-    // Parse retry interval in milliseconds
-    // Per the SSE spec, a value that is not all ASCII digits is ignored.
-    if (detail::is_numeric(value)) {
-      int v = 0;
-      auto res =
-          detail::from_chars(value.data(), value.data() + value.size(), v);
-      if (res.ec == std::errc{}) { retry_ms = v; }
-    }
-  }
-  // Unknown fields are ignored per SSE spec
-
-  return false;
-}
-
 void SSEClient::run_event_loop() {
   auto reconnect_count = 0;
 
@@ -281,72 +333,17 @@ void SSEClient::run_event_loop() {
     if (on_open_) { on_open_(); }
 
     // Event receiving loop
-    std::string buffer;
-    SSEMessage current_msg;
-    auto has_data = false;
-    auto has_id = false;
-    auto first_line = true;
-    auto after_cr = false;
+    detail::SSEParser parser(
+        [this](const SSEMessage &msg) { dispatch_event(msg); },
+        [this](const std::string &id) {
+          std::lock_guard<std::mutex> lock(last_event_id_mutex_);
+          last_event_id_ = id;
+        },
+        [this](int retry_ms) { reconnect_interval_ms_ = retry_ms; });
     auto event_too_long = false;
 
     while (running_.load() && result.next()) {
-      // What is left in the buffer has no line ending
-      auto search_pos = buffer.size();
-      buffer.append(result.data(), result.size());
-
-      // Process complete lines in the buffer. A line ends with \r\n, \n or \r
-      // per the SSE spec
-      size_t line_start = 0;
-      size_t eol_pos;
-
-      while ((eol_pos = buffer.find_first_of("\r\n", search_pos)) !=
-             std::string::npos) {
-        auto line = buffer.substr(line_start, eol_pos - line_start);
-        line_start = eol_pos + 1;
-        search_pos = line_start;
-
-        // The \n of a \r\n may arrive in a later chunk than its \r
-        auto is_lf_of_crlf =
-            after_cr && line.empty() && buffer[eol_pos] == '\n';
-        after_cr = buffer[eol_pos] == '\r';
-        if (is_lf_of_crlf) { continue; }
-
-        // A UTF-8 BOM at the start of the stream is ignored per the SSE spec
-        if (first_line) {
-          first_line = false;
-          if (line.compare(0, 3, "\xEF\xBB\xBF") == 0) { line.erase(0, 3); }
-        }
-
-        // Parse the line and check if event is complete
-        auto event_complete = parse_sse_line(
-            line, current_msg, reconnect_interval_ms_, has_data, has_id);
-
-        if (event_complete) {
-          // Update last_event_id for reconnection, even for an event that
-          // has no data. An empty id clears it.
-          if (has_id) {
-            std::lock_guard<std::mutex> lock(last_event_id_mutex_);
-            last_event_id_ = current_msg.id;
-          }
-
-          // An event without a data field is not dispatched
-          if (has_data) { dispatch_event(current_msg); }
-
-          // Reset the message for the next event either way
-          current_msg.clear();
-          has_data = false;
-          has_id = false;
-        }
-      }
-
-      // Keep unprocessed data in buffer
-      buffer.erase(0, line_start);
-
-      // Neither an event nor a line still waiting for its end may grow
-      // without bound. 0 means no limit.
-      if (CPPHTTPLIB_SSE_MAX_EVENT_LENGTH > 0 &&
-          buffer.size() + current_msg.data.size() >
-              CPPHTTPLIB_SSE_MAX_EVENT_LENGTH) {
+      if (!parser.parse(result.data(), result.size())) {
         if (on_error_) { on_error_(Error::ExceedMaxPayloadSize); }
         event_too_long = true;
         break;
@@ -443,9 +440,10 @@ bool set_sni(session_t session, const char *hostname, bool verify_hostname);
 TlsError connect(session_t session);
 TlsError accept(session_t session);
 
-// Handshake with timeout (blocking until timeout)
+// Handshake with timeout (blocking until timeout, or until interrupted)
 bool connect_nonblocking(session_t session, socket_t sock, time_t timeout_sec,
-                         time_t timeout_usec, TlsError *err);
+                         time_t timeout_usec, TlsError *err,
+                         const std::function<bool()> &interrupted = nullptr);
 bool accept_nonblocking(session_t session, socket_t sock, time_t timeout_sec,
                         time_t timeout_usec, TlsError *err);
 
@@ -1147,9 +1145,35 @@ bool is_valid_path(const std::string &path) {
 
 bool canonicalize_path(const char *path, std::string &resolved) {
 #if defined(_WIN32)
-  char buf[_MAX_PATH];
-  if (_fullpath(buf, path, _MAX_PATH) == nullptr) { return false; }
-  resolved = buf;
+  // Resolve junctions and symlinks, as realpath() does
+  auto wpath = u8string_to_wstring(path);
+  if (wpath.empty()) { return false; }
+
+  CREATEFILE2_EXTENDED_PARAMETERS params{};
+  params.dwSize = sizeof(params);
+  params.dwFileFlags = FILE_FLAG_BACKUP_SEMANTICS; // Needed to open a directory
+  auto h = ::CreateFile2(wpath.c_str(), 0,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         OPEN_EXISTING, &params);
+  if (h == INVALID_HANDLE_VALUE) { return false; }
+  auto guard = scope_exit([&]() { ::CloseHandle(h); });
+
+  std::wstring wbuf(MAX_PATH, L'\0');
+  auto len = ::GetFinalPathNameByHandleW(
+      h, &wbuf[0], static_cast<DWORD>(wbuf.size()), FILE_NAME_NORMALIZED);
+  if (len >= wbuf.size()) {
+    wbuf.resize(len);
+    len = ::GetFinalPathNameByHandleW(
+        h, &wbuf[0], static_cast<DWORD>(wbuf.size()), FILE_NAME_NORMALIZED);
+  }
+  if (len == 0 || len >= wbuf.size()) { return false; }
+
+  auto n = ::WideCharToMultiByte(CP_UTF8, 0, wbuf.data(), static_cast<int>(len),
+                                 nullptr, 0, nullptr, nullptr);
+  if (n <= 0) { return false; }
+  resolved.assign(static_cast<size_t>(n), '\0');
+  ::WideCharToMultiByte(CP_UTF8, 0, wbuf.data(), static_cast<int>(len),
+                        &resolved[0], n, nullptr, nullptr);
 #elif defined(PATH_MAX)
   char buf[PATH_MAX];
   if (realpath(path, buf) == nullptr) { return false; }
@@ -1882,39 +1906,41 @@ ssize_t select_write(socket_t sock, time_t sec, time_t usec) {
   return select_impl(sock, POLLOUT, sec, usec);
 }
 
-// The point sec and usec from now, for select_until(). A negative sec never
-// comes, as a negative timeout waits forever in select_impl().
+// The point sec and usec from now, for select_until(). A negative sec, or one
+// past what the clock reaches, never comes.
 std::chrono::steady_clock::time_point deadline_after(time_t sec,
                                                             time_t usec) {
-  if (sec < 0) { return (std::chrono::steady_clock::time_point::max)(); }
-  return std::chrono::steady_clock::now() + std::chrono::seconds(sec) +
-         std::chrono::microseconds(usec);
+  auto now = std::chrono::steady_clock::now();
+  auto never = (std::chrono::steady_clock::time_point::max)();
+  if (sec < 0 ||
+      sec >= std::chrono::duration_cast<std::chrono::seconds>(never - now)
+                 .count()) {
+    return never;
+  }
+  return now + std::chrono::seconds(sec) + std::chrono::microseconds(usec);
 }
 
 // Waits only for the time left until deadline, so that all the waits of one
-// TLS handshake come out of a single timeout.
-ssize_t select_until(socket_t sock, short events,
-                            std::chrono::steady_clock::time_point deadline) {
-  if (deadline == (std::chrono::steady_clock::time_point::max)()) {
-    return select_impl(sock, events, -1, 0);
-  }
-  auto left = std::chrono::duration_cast<std::chrono::microseconds>(
-                  deadline - std::chrono::steady_clock::now())
-                  .count();
-  if (left <= 0) { return 0; }
-  return select_impl(sock, events, static_cast<time_t>(left / 1000000),
-                     static_cast<time_t>(left % 1000000));
-}
-
-// select_read(), but waits in slices and gives up once interrupted() returns
-// true. A local shutdown() would not wake the wait on Windows.
+// TLS handshake come out of a single timeout. With interrupted, it waits in
+// slices and gives up once interrupted() returns true, as a local shutdown()
+// would not wake the wait on Windows.
 ssize_t
-select_read_interruptible(socket_t sock, time_t sec, time_t usec,
-                          const std::function<bool()> &interrupted) {
-  if (!interrupted) { return select_read(sock, sec, usec); }
+select_until(socket_t sock, short events,
+             std::chrono::steady_clock::time_point deadline,
+             const std::function<bool()> &interrupted = nullptr) {
+  if (!interrupted) {
+    if (deadline == (std::chrono::steady_clock::time_point::max)()) {
+      return select_impl(sock, events, -1, 0);
+    }
+    auto left = std::chrono::duration_cast<std::chrono::microseconds>(
+                    deadline - std::chrono::steady_clock::now())
+                    .count();
+    if (left <= 0) { return 0; }
+    return select_impl(sock, events, static_cast<time_t>(left / 1000000),
+                       static_cast<time_t>(left % 1000000));
+  }
 
   const auto slice = std::chrono::microseconds(100000);
-  auto deadline = deadline_after(sec, usec);
   while (!interrupted()) {
     auto left = std::chrono::duration_cast<std::chrono::microseconds>(
         deadline - std::chrono::steady_clock::now());
@@ -1924,36 +1950,46 @@ select_read_interruptible(socket_t sock, time_t sec, time_t usec,
     auto wait_usec = last ? (std::max)((left.count() + 999) / 1000 * 1000,
                                        static_cast<decltype(left.count())>(0))
                           : slice.count();
-    auto ret = select_impl(sock, POLLIN, 0, static_cast<time_t>(wait_usec));
+    auto ret = select_impl(sock, events, 0, static_cast<time_t>(wait_usec));
     if (ret != 0 || last) { return ret; }
   }
   return 0;
 }
 
-Error wait_until_socket_is_ready(socket_t sock, time_t sec,
-                                        time_t usec) {
-  struct pollfd pfd_read;
-  pfd_read.fd = sock;
-  pfd_read.events = POLLIN | POLLOUT;
-  pfd_read.revents = 0;
+// select_impl(), but waits in slices and gives up once interrupted() returns
+// true
+ssize_t select_interruptible(socket_t sock, short events, time_t sec,
+                                    time_t usec,
+                                    const std::function<bool()> &interrupted) {
+  if (!interrupted) { return select_impl(sock, events, sec, usec); }
+  return select_until(sock, events, deadline_after(sec, usec), interrupted);
+}
 
-  auto timeout = static_cast<int>(sec * 1000 + usec / 1000);
+ssize_t
+select_read_interruptible(socket_t sock, time_t sec, time_t usec,
+                          const std::function<bool()> &interrupted) {
+  return select_interruptible(sock, POLLIN, sec, usec, interrupted);
+}
 
-  auto poll_res =
-      handle_EINTR([&]() { return poll_wrapper(&pfd_read, 1, timeout); });
-
-  if (poll_res == 0) { return Error::ConnectionTimeout; }
-
-  if (poll_res > 0 && pfd_read.revents & (POLLIN | POLLOUT)) {
-    auto error = 0;
-    socklen_t len = sizeof(error);
-    auto res = getsockopt(sock, SOL_SOCKET, SO_ERROR,
-                          reinterpret_cast<char *>(&error), &len);
-    auto successful = res >= 0 && !error;
-    return successful ? Error::Success : Error::Connection;
+// Waits for a connect in progress, which ends as Error::Canceled once
+// interrupted() returns true
+Error
+wait_until_socket_is_ready(socket_t sock, time_t sec, time_t usec,
+                           const std::function<bool()> &interrupted = nullptr) {
+  auto ret =
+      select_interruptible(sock, POLLIN | POLLOUT, sec, usec, interrupted);
+  if (ret == 0) {
+    return interrupted && interrupted() ? Error::Canceled
+                                        : Error::ConnectionTimeout;
   }
+  if (ret < 0) { return Error::Connection; }
 
-  return Error::Connection;
+  // A failed connect reports its error here, whatever events poll() returned
+  auto error = 0;
+  socklen_t len = sizeof(error);
+  auto res = getsockopt(sock, SOL_SOCKET, SO_ERROR,
+                        reinterpret_cast<char *>(&error), &len);
+  return res >= 0 && !error ? Error::Success : Error::Connection;
 }
 
 bool is_socket_alive(socket_t sock) {
@@ -2770,13 +2806,15 @@ std::string if2ip(int address_family, const std::string &ifn) {
 }
 #endif
 
-socket_t create_client_socket(
-    const std::string &host, const std::string &ip, int port,
-    int address_family, bool tcp_nodelay, bool ipv6_v6only,
-    SocketOptions socket_options, time_t connection_timeout_sec,
-    time_t connection_timeout_usec, time_t read_timeout_sec,
-    time_t read_timeout_usec, time_t write_timeout_sec,
-    time_t write_timeout_usec, const std::string &intf, Error &error) {
+socket_t
+create_client_socket(const std::string &host, const std::string &ip, int port,
+                     int address_family, bool tcp_nodelay, bool ipv6_v6only,
+                     SocketOptions socket_options,
+                     time_t connection_timeout_sec,
+                     time_t connection_timeout_usec, time_t read_timeout_sec,
+                     time_t read_timeout_usec, time_t write_timeout_sec,
+                     time_t write_timeout_usec, const std::string &intf,
+                     Error &error, const std::function<bool()> &interrupted) {
   auto sock = create_socket(
       host, ip, port, address_family, 0, tcp_nodelay, ipv6_v6only,
       std::move(socket_options),
@@ -2802,10 +2840,13 @@ socket_t create_client_socket(
             error = Error::Connection;
             return false;
           }
-          error = wait_until_socket_is_ready(sock2, connection_timeout_sec,
-                                             connection_timeout_usec);
+          error =
+              wait_until_socket_is_ready(sock2, connection_timeout_sec,
+                                         connection_timeout_usec, interrupted);
           if (error != Error::Success) {
-            if (error == Error::ConnectionTimeout) { quit = true; }
+            if (error == Error::ConnectionTimeout || error == Error::Canceled) {
+              quit = true;
+            }
             return false;
           }
         }
@@ -5946,6 +5987,7 @@ public:
   socket_t socket() const override;
   time_t duration() const override;
   void set_read_timeout(time_t sec, time_t usec = 0) override;
+  void set_max_timeout(time_t msec) override;
   void set_read_interrupt(std::function<bool()> interrupted) override;
 
 private:
@@ -5953,14 +5995,13 @@ private:
 
   socket_t sock_;
   tls::session_t session_;
-  // WebSocket::close() shortens the read timeout from the closing thread
-  // while the receive thread is inside wait_readable(), so these two are read
-  // and written concurrently. The write timeouts are never mutated.
+  // May change while another thread is in wait_readable(); write timeouts don't
   std::atomic<time_t> read_timeout_sec_;
   std::atomic<time_t> read_timeout_usec_;
   time_t write_timeout_sec_;
   time_t write_timeout_usec_;
-  const std::chrono::time_point<std::chrono::steady_clock> start_time_;
+  std::atomic<time_t> max_timeout_msec_{0};
+  std::atomic<std::chrono::steady_clock::rep> start_time_;
   std::function<bool()> read_interrupted_;
 };
 
@@ -6475,6 +6516,8 @@ struct ClientTlsSessionOptions {
   // certificate verification.
   bool server_hostname_verification = true;
   std::function<SSLVerifierResponse(tls::session_t)> session_verifier;
+  // When set, ends the handshake as a timeout does once it returns true
+  std::function<bool()> interrupted;
   // When non-null, guards session creation against concurrent use of the
   // context. A WebSocketClient is not safe to use from several threads to
   // begin with, so it passes nothing.
@@ -6574,8 +6617,8 @@ bool setup_client_tls_session(
   }
 
   TlsError tls_err;
-  if (!connect_nonblocking(session, sock, timeout_sec, timeout_usec,
-                           &tls_err)) {
+  if (!connect_nonblocking(session, sock, timeout_sec, timeout_usec, &tls_err,
+                           options.interrupted)) {
     return fail_tls(tls_err.code, tls_err.backend_code);
   }
 
@@ -8590,7 +8633,7 @@ WebSocketSSLStream::WebSocketSSLStream(socket_t sock,
       read_timeout_usec_(read_timeout_usec),
       write_timeout_sec_(write_timeout_sec),
       write_timeout_usec_(write_timeout_usec),
-      start_time_(std::chrono::steady_clock::now()) {
+      start_time_(std::chrono::steady_clock::now().time_since_epoch().count()) {
   // The receive and send paths run on different threads, so each TLS call is
   // driven in non-blocking mode and readiness is awaited with select()
   // outside the session lock. Set the socket non-blocking once here; it is
@@ -8609,7 +8652,18 @@ bool WebSocketSSLStream::is_readable() const {
 }
 
 bool WebSocketSSLStream::wait_readable() const {
-  return select_read_interruptible(sock_, read_timeout_sec_, read_timeout_usec_,
+  auto max_timeout_msec = max_timeout_msec_.load();
+  if (max_timeout_msec <= 0) {
+    return select_read_interruptible(sock_, read_timeout_sec_,
+                                     read_timeout_usec_, read_interrupted_) > 0;
+  }
+
+  time_t read_timeout_sec;
+  time_t read_timeout_usec;
+  calc_actual_timeout(max_timeout_msec, duration(), read_timeout_sec_,
+                      read_timeout_usec_, read_timeout_sec, read_timeout_usec);
+
+  return select_read_interruptible(sock_, read_timeout_sec, read_timeout_usec,
                                    read_interrupted_) > 0;
 }
 
@@ -8699,10 +8753,18 @@ void WebSocketSSLStream::get_local_ip_and_port(std::string &ip,
 socket_t WebSocketSSLStream::socket() const { return sock_; }
 
 time_t WebSocketSSLStream::duration() const {
+  auto start = std::chrono::steady_clock::time_point(
+      std::chrono::steady_clock::duration(start_time_.load()));
   return static_cast<time_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::steady_clock::now() - start_time_)
+          std::chrono::steady_clock::now() - start)
           .count());
+}
+
+// Start time first: a reader that sees the new bound also sees its start
+void WebSocketSSLStream::set_max_timeout(time_t msec) {
+  start_time_ = std::chrono::steady_clock::now().time_since_epoch().count();
+  max_timeout_msec_ = msec;
 }
 
 void WebSocketSSLStream::set_read_timeout(time_t sec, time_t usec) {
@@ -9343,9 +9405,7 @@ bool
 Server::write_content_with_provider(Stream &strm, const Request &req,
                                     Response &res, const std::string &boundary,
                                     const std::string &content_type) {
-  auto is_shutting_down = [this]() {
-    return this->svr_sock_ == INVALID_SOCKET;
-  };
+  auto is_shutting_down = [this]() { return is_stopping(); };
 
   if (res.content_length_ > 0) {
     if (!detail::is_partial_content(req, res)) {
@@ -10515,6 +10575,7 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
 
       connection_closed = true;
       if (websocket_upgraded) { *websocket_upgraded = true; }
+      auto stopping = [this] { return is_stopping(); };
 
 #ifdef CPPHTTPLIB_SSL_ENABLED
       if (req.ssl) {
@@ -10528,7 +10589,7 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
             write_timeout_sec_, write_timeout_usec_));
         ws::WebSocket ws(std::move(ws_strm), req, true,
                          websocket_ping_interval_sec_,
-                         websocket_max_missed_pongs_);
+                         websocket_max_missed_pongs_, stopping);
         ws_route->handler(req, ws);
         return true;
       }
@@ -10536,7 +10597,7 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
       // Use WebSocket-specific read timeout instead of HTTP timeout
       strm.set_read_timeout(CPPHTTPLIB_WEBSOCKET_SERVER_READ_TIMEOUT_SECOND, 0);
       ws::WebSocket ws(strm, req, true, websocket_ping_interval_sec_,
-                       websocket_max_missed_pongs_);
+                       websocket_max_missed_pongs_, stopping);
       ws_route->handler(req, ws);
       return true;
     }
@@ -10734,7 +10795,8 @@ socket_t ClientImpl::create_client_socket(Error &error) const {
         proxy_host_, std::string(), proxy_port_, address_family_, tcp_nodelay_,
         ipv6_v6only_, socket_options_, connection_timeout_sec_,
         connection_timeout_usec_, read_timeout_sec_, read_timeout_usec_,
-        write_timeout_sec_, write_timeout_usec_, interface_, error);
+        write_timeout_sec_, write_timeout_usec_, interface_, error,
+        stop_interrupt());
   }
 
   // Check is custom IP or hostname specified for host_
@@ -10746,7 +10808,7 @@ socket_t ClientImpl::create_client_socket(Error &error) const {
       connect_host, ip, port_, address_family_, tcp_nodelay_, ipv6_v6only_,
       socket_options_, connection_timeout_sec_, connection_timeout_usec_,
       read_timeout_sec_, read_timeout_usec_, write_timeout_sec_,
-      write_timeout_usec_, interface_, error);
+      write_timeout_usec_, interface_, error, stop_interrupt());
 }
 
 bool ClientImpl::create_and_connect_socket(Socket &socket,
@@ -10811,14 +10873,8 @@ void ClientImpl::disconnect(bool gracefully) {
 bool ClientImpl::socket_reusable() {
   if (!socket_.is_open()) { return false; }
 
-  auto is_alive = detail::is_socket_alive(socket_.sock);
-#ifdef CPPHTTPLIB_SSL_ENABLED
-  if (is_alive && is_ssl() && tls::is_peer_closed(socket_.ssl, socket_.sock)) {
-    is_alive = false;
-  }
-#endif
-  if (!is_alive) {
-    // Peer seems gone — non-graceful shutdown to avoid SIGPIPE.
+  // RFC 9112 9.2: data with no request outstanding is not a response
+  if (detail::select_read(socket_.sock, 0, 0) != 0) {
     disconnect(/*gracefully=*/false);
     return false;
   }
@@ -10828,6 +10884,33 @@ bool ClientImpl::socket_reusable() {
     return false;
   }
   return true;
+}
+
+bool ClientImpl::prepare_socket(
+    std::unique_lock<std::mutex> &guard,
+    std::chrono::time_point<std::chrono::steady_clock> start_time,
+    Response &res, bool &success, Error &error) {
+  auto opened = true;
+  if (!socket_reusable()) {
+    Socket socket;
+    guard.unlock();
+    opened = ensure_socket_connection(socket, error);
+    if (opened) {
+      opened = setup_proxy_connection(socket, start_time, res, success, error);
+    } else {
+      success = false;
+    }
+    guard.lock();
+    socket_ = socket;
+  }
+
+  if (stop_requested_) {
+    disconnect(/*gracefully=*/false);
+    error = Error::Canceled;
+    success = false;
+    return false;
+  }
+  return opened;
 }
 
 bool ClientImpl::read_response_line(Stream &strm, const Request &req,
@@ -10874,7 +10957,10 @@ bool ClientImpl::send(Request &req, Response &res, Error &error) {
   // the call the caller made reports a failure, once, with its request.
   auto outermost = send_depth_++ == 0;
   auto se = detail::scope_exit([&] { send_depth_--; });
-  if (outermost) { error = Error::Success; }
+  if (outermost) {
+    error = Error::Success;
+    stop_requested_ = false;
+  }
 
   auto ret = send_(req, res, error);
   if (error == Error::SSLPeerCouldBeClosed_) {
@@ -10900,26 +10986,16 @@ bool ClientImpl::send_(Request &req, Response &res, Error &error) {
 #endif
 
   {
-    std::lock_guard<std::mutex> guard(socket_mutex_);
+    std::unique_lock<std::mutex> guard(socket_mutex_);
 
     // Set this to false immediately - if it ever gets set to true by the end
     // of the request, we know another thread instructed us to close the
     // socket.
     socket_should_be_closed_when_request_is_done_ = false;
 
-    // A redirect or a retry sent inside a request keeps its stop()
-    if (socket_requests_in_flight_ == 0) { stop_requested_ = false; }
-
-    if (!socket_reusable()) {
-      if (!ensure_socket_connection(socket_, error)) { return false; }
-
-      {
-        auto success = true;
-        if (!setup_proxy_connection(socket_, req.start_time_, res, success,
-                                    error)) {
-          return success;
-        }
-      }
+    auto success = true;
+    if (!prepare_socket(guard, req.start_time_, res, success, error)) {
+      return success;
     }
 
     // Mark the current socket as being in use so that it cannot be closed by
@@ -10957,7 +11033,7 @@ bool ClientImpl::send_(Request &req, Response &res, Error &error) {
   });
 
   ret = process_socket(socket_, req.start_time_, [&](Stream &strm) {
-    strm.set_read_interrupt([this] { return stop_requested_.load(); });
+    strm.set_read_interrupt(stop_interrupt());
     return handle_request(strm, req, res, close_connection, error);
   });
 
@@ -11072,23 +11148,16 @@ ClientImpl::StreamHandle ClientImpl::open_stream_(Request &req) {
   handle.connection_ = detail::make_unique<ClientConnection>();
 
   {
-    std::lock_guard<std::mutex> guard(socket_mutex_);
+    // A request in flight uses socket_ without holding socket_mutex_
+    std::lock_guard<std::recursive_mutex> request_mutex_guard(request_mutex_);
+    if (send_depth_ == 0) { stop_requested_ = false; }
+    std::unique_lock<std::mutex> guard(socket_mutex_);
 
-    if (!socket_reusable()) {
-      if (!ensure_socket_connection(socket_, handle.error)) {
-        handle.response.reset();
-        return handle;
-      }
-
-      {
-        auto success = true;
-        auto start_time = std::chrono::steady_clock::now();
-        if (!setup_proxy_connection(socket_, start_time, *handle.response,
-                                    success, handle.error)) {
-          if (!success) { handle.response.reset(); }
-          return handle;
-        }
-      }
+    auto success = true;
+    if (!prepare_socket(guard, std::chrono::steady_clock::now(),
+                        *handle.response, success, handle.error)) {
+      if (!success) { handle.response.reset(); }
+      return handle;
     }
 
     transfer_socket_ownership_to_handle(handle);
@@ -11113,6 +11182,11 @@ ClientImpl::StreamHandle ClientImpl::open_stream_(Request &req) {
   handle.stream_ = handle.socket_stream_.get();
 
   auto &strm = *handle.stream_;
+
+  // Only for the head, as the handle may outlive this client
+  strm.set_read_interrupt(stop_interrupt());
+  auto release_interrupt =
+      detail::scope_exit([&] { strm.set_read_interrupt(nullptr); });
 
   // After connecting, as for a buffered request
   add_credential_headers(req);
@@ -11467,9 +11541,10 @@ bool ClientImpl::handle_request(Stream &strm, Request &req,
     // to do these things to the socket if another thread is using the socket.
     std::lock_guard<std::mutex> guard(socket_mutex_);
     // Also when the request asked for it (e.g. a body that was never sent,
-    // or "Connection: close"), so that a redirect or an auth retry below does
-    // not reuse the socket.
+    // or "Connection: close") or bytes follow the response (RFC 9112 9.2), so
+    // that a redirect or an auth retry below does not reuse the socket.
     if (socket_should_be_closed_when_request_is_done_ || close_connection ||
+        strm.is_readable() ||
         detail::has_header_token(res.headers, "Connection", "close") ||
         (res.version == "HTTP/1.0" && res.reason != "Connection established")) {
       disconnect(/*gracefully=*/true);
@@ -11974,6 +12049,11 @@ ClientImpl::send_with_content_provider_and_receiver(
                        nullptr, nullptr);
 
   if (enc.second) { req.set_header("Content-Encoding", enc.second); }
+
+  // A compressed or chunked body is framed by the library, not the caller
+  if (enc.second || content_provider_without_length) {
+    req.headers.erase("Content-Length");
+  }
 
   if (enc.first && !content_provider_without_length) {
     auto &compressor = enc.first;
@@ -13182,6 +13262,8 @@ Result ClientImpl::Options(const std::string &path,
 void ClientImpl::stop() {
   std::lock_guard<std::mutex> guard(socket_mutex_);
 
+  stop_requested_ = true;
+
   // If there is anything ongoing right now, the ONLY thread-safe thing we can
   // do is to shutdown_socket, so that threads using this socket suddenly
   // discover they can't read/write any more and error out. Everything else
@@ -13189,9 +13271,6 @@ void ClientImpl::stop() {
   // are not thread-safe.
   if (socket_requests_in_flight_ > 0) {
     shutdown_socket(socket_);
-    // shutdown() does not wake a read waiting in WSAPoll on Windows, so the
-    // request's reads also give up once they see this flag.
-    stop_requested_ = true;
 
     // Aside from that, we set a flag for the socket to be closed when we're
     // done.
@@ -14173,8 +14252,12 @@ bool SSLServer::process_and_close_socket(socket_t sock) {
   auto cleanup = detail::scope_exit([&] {
     if (handshake_done) { shutdown(session, !websocket_upgraded && ret); }
     free_session(session);
-    detail::shutdown_socket(sock);
-    detail::close_socket(sock);
+    if (handshake_done) {
+      detail::drain_and_close_socket(sock);
+    } else {
+      detail::shutdown_socket(sock);
+      detail::close_socket(sock);
+    }
   });
 
   // Perform TLS accept handshake with timeout
@@ -14335,6 +14418,8 @@ bool SSLClient::setup_proxy_connection(
   }
 
   if (!initialize_ssl(socket, error)) {
+    shutdown_socket(socket);
+    close_socket(socket);
     success = false;
     return false;
   }
@@ -14342,8 +14427,7 @@ bool SSLClient::setup_proxy_connection(
   return true;
 }
 
-// Assumes that socket_mutex_ is locked and that there are no requests in
-// flight
+// Assumes that socket is a connection being opened, which no other thread uses
 bool SSLClient::connect_with_proxy(
     Socket &socket,
     std::chrono::time_point<std::chrono::steady_clock> start_time,
@@ -14358,6 +14442,7 @@ bool SSLClient::connect_with_proxy(
           socket.sock, read_timeout_sec_, read_timeout_usec_,
           write_timeout_sec_, write_timeout_usec_, max_timeout_msec_,
           start_time, [&](Stream &strm) {
+            strm.set_read_interrupt(stop_interrupt());
             Request req2;
             req2.method = "CONNECT";
             req2.path = connect_target;
@@ -14398,6 +14483,7 @@ bool SSLClient::connect_with_proxy(
                 socket.sock, read_timeout_sec_, read_timeout_usec_,
                 write_timeout_sec_, write_timeout_usec_, max_timeout_msec_,
                 start_time, [&](Stream &strm) {
+                  strm.set_read_interrupt(stop_interrupt());
                   Request req3;
                   req3.method = "CONNECT";
                   req3.path = connect_target;
@@ -14592,6 +14678,7 @@ bool SSLClient::initialize_ssl(Socket &socket, Error &error) {
   detail::ClientTlsSessionOptions options;
   options.server_hostname_verification = server_hostname_verification_;
   options.session_verifier = session_verifier_;
+  options.interrupted = stop_interrupt();
   options.ctx_mutex = &ctx_mutex_;
 #ifdef CPPHTTPLIB_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE
   // Skip Schannel when a custom CA cert is specified, as the Windows
@@ -15538,7 +15625,8 @@ TlsError accept(session_t session) {
 
 bool connect_nonblocking(session_t session, socket_t sock,
                                 time_t timeout_sec, time_t timeout_usec,
-                                TlsError *err) {
+                                TlsError *err,
+                                const std::function<bool()> &interrupted) {
   if (!session) {
     if (err) { err->code = ErrorCode::Fatal; }
     return false;
@@ -15563,10 +15651,14 @@ bool connect_nonblocking(session_t session, socket_t sock,
     auto ssl_err = SSL_get_error(ssl, res);
     switch (ssl_err) {
     case SSL_ERROR_WANT_READ:
-      if (detail::select_until(sock, POLLIN, deadline) > 0) { continue; }
+      if (detail::select_until(sock, POLLIN, deadline, interrupted) > 0) {
+        continue;
+      }
       break;
     case SSL_ERROR_WANT_WRITE:
-      if (detail::select_until(sock, POLLOUT, deadline) > 0) { continue; }
+      if (detail::select_until(sock, POLLOUT, deadline, interrupted) > 0) {
+        continue;
+      }
       break;
     default: break;
     }
@@ -16893,7 +16985,8 @@ TlsError accept(session_t session) {
 
 bool connect_nonblocking(session_t session, socket_t sock,
                                 time_t timeout_sec, time_t timeout_usec,
-                                TlsError *err) {
+                                TlsError *err,
+                                const std::function<bool()> &interrupted) {
   if (!session) {
     if (err) { err->code = ErrorCode::Fatal; }
     return false;
@@ -16912,9 +17005,13 @@ bool connect_nonblocking(session_t session, socket_t sock,
     // Non-fatal TLS 1.3 ticket; retry immediately.
     if (impl::mbedtls_is_session_ticket(ret)) { continue; }
     if (ret == MBEDTLS_ERR_SSL_WANT_READ) {
-      if (detail::select_until(sock, POLLIN, deadline) > 0) { continue; }
+      if (detail::select_until(sock, POLLIN, deadline, interrupted) > 0) {
+        continue;
+      }
     } else if (ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
-      if (detail::select_until(sock, POLLOUT, deadline) > 0) { continue; }
+      if (detail::select_until(sock, POLLOUT, deadline, interrupted) > 0) {
+        continue;
+      }
     }
 
     // TlsError or timeout
@@ -18066,7 +18163,8 @@ TlsError accept(session_t session) {
 
 bool connect_nonblocking(session_t session, socket_t sock,
                                 time_t timeout_sec, time_t timeout_usec,
-                                TlsError *err) {
+                                TlsError *err,
+                                const std::function<bool()> &interrupted) {
   if (!session) {
     if (err) { err->code = ErrorCode::Fatal; }
     return false;
@@ -18084,9 +18182,13 @@ bool connect_nonblocking(session_t session, socket_t sock,
   while ((ret = wolfSSL_connect(wsession->ssl)) != SSL_SUCCESS) {
     int ssl_error = wolfSSL_get_error(wsession->ssl, ret);
     if (ssl_error == SSL_ERROR_WANT_READ) {
-      if (detail::select_until(sock, POLLIN, deadline) > 0) { continue; }
+      if (detail::select_until(sock, POLLIN, deadline, interrupted) > 0) {
+        continue;
+      }
     } else if (ssl_error == SSL_ERROR_WANT_WRITE) {
-      if (detail::select_until(sock, POLLOUT, deadline) > 0) { continue; }
+      if (detail::select_until(sock, POLLOUT, deadline, interrupted) > 0) {
+        continue;
+      }
     }
 
     // Error or timeout
@@ -18751,6 +18853,13 @@ ReadResult WebSocket::read(std::string &msg) {
   };
 
   std::unique_lock<std::mutex> read_lock(read_mutex_);
+  // A server going down closes the connection rather than wait on it: its
+  // listen() waits for this handler to return.
+  auto going_away = [&]() -> ReadResult {
+    read_lock.unlock();
+    close(CloseStatus::GoingAway, "server stopping");
+    return Fail;
+  };
   while (!closed_) {
     Opcode opcode;
     std::string payload;
@@ -18759,6 +18868,7 @@ ReadResult WebSocket::read(std::string &msg) {
     impl::FrameRead r =
         impl::read_websocket_frame(strm_, opcode, payload, fin, is_server_,
                                    CPPHTTPLIB_WEBSOCKET_MAX_PAYLOAD_LENGTH);
+    if (r != impl::FrameRead::Ok && server_stopping()) { return going_away(); }
     // A timeout landed on a frame boundary of an open connection: it is
     // untouched and still usable, so hand control back without closing it.
     // That is only useful to a caller who asked for the timeout; the
@@ -18782,6 +18892,10 @@ ReadResult WebSocket::read(std::string &msg) {
       // Handle fragmentation
       if (!fin) {
         while (true) {
+          // A close() from another thread ends the message being assembled,
+          // as it ends the loop over frames above: a peer that keeps sending
+          // fragments never lets a read reach a wait
+          if (closed_) { return Fail; }
           Opcode cont_opcode;
           std::string cont_payload;
           bool cont_fin;
@@ -18800,6 +18914,7 @@ ReadResult WebSocket::read(std::string &msg) {
           if (impl::read_websocket_frame(strm_, cont_opcode, cont_payload,
                                          cont_fin, is_server_,
                                          max_len) != impl::FrameRead::Ok) {
+            if (server_stopping()) { return going_away(); }
             closed_ = true;
             return Fail;
           }
@@ -18877,14 +18992,19 @@ void WebSocket::close(CloseStatus status, const std::string &reason) {
   std::unique_lock<std::mutex> read_lock(read_mutex_, std::try_to_lock);
   if (!read_lock.owns_lock()) { return; }
 
-  // Use a short timeout to avoid hanging if the peer doesn't respond.
+  // A max timeout turns a negative (unbounded) read timeout into 0
   strm_.set_read_timeout(CPPHTTPLIB_WEBSOCKET_CLOSE_TIMEOUT_SECOND, 0);
+  strm_.set_max_timeout(CPPHTTPLIB_WEBSOCKET_CLOSE_TIMEOUT_SECOND * 1000);
+  // The max timeout cuts a trickled frame short, the deadline a frame flood
+  auto deadline =
+      detail::deadline_after(CPPHTTPLIB_WEBSOCKET_CLOSE_TIMEOUT_SECOND, 0);
 
   Opcode op;
   std::string resp;
   bool fin;
-  while (impl::read_websocket_frame(strm_, op, resp, fin, is_server_, 125) ==
-         impl::FrameRead::Ok) {
+  while (std::chrono::steady_clock::now() < deadline &&
+         impl::read_websocket_frame(strm_, op, resp, fin, is_server_, 125) ==
+             impl::FrameRead::Ok) {
     if (op == Opcode::Close) { break; }
   }
 }
@@ -18900,12 +19020,17 @@ WebSocket::~WebSocket() {
   strm_.set_read_interrupt(nullptr);
 }
 
+// A pong timeout ends a read() blocked on the silent peer, and so does the
+// server stopping: its listen() waits for every handler to return.
+void WebSocket::interrupt_reads() {
+  auto watches_pongs = ping_interval_sec_ > 0 && max_missed_pongs_ > 0;
+  if (!watches_pongs && !server_stopping_) { return; }
+  strm_.set_read_interrupt(
+      [this] { return pong_timed_out_.load() || server_stopping(); });
+}
+
 void WebSocket::start_heartbeat() {
   if (ping_interval_sec_ <= 0) { return; }
-  // A pong timeout ends a read() blocked on the silent peer
-  if (max_missed_pongs_ > 0) {
-    strm_.set_read_interrupt([this] { return pong_timed_out_.load(); });
-  }
   ping_thread_ = std::thread([this]() {
     std::unique_lock<std::mutex> lock(ping_mutex_);
     // The predicate keeps a spurious wakeup from sending a ping early

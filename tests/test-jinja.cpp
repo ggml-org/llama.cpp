@@ -2,6 +2,10 @@
 #include <iostream>
 #include <random>
 #include <cstdlib>
+#include <future>
+#include <array>
+#include <fstream>
+#include <iterator>
 
 #include "chat-tts-norm.h"
 #include "json.h"
@@ -41,8 +45,29 @@ static void test_caps(testing & t);
 static void test_string_parts(testing & t);
 static void test_fuzzing(testing & t);
 static void test_tts_norm_patterns(testing & t);
+static void test_tts_dict(testing & t);
+static void test_tts_template_zonos3(testing & t);
+static void test_tts_template_music3(testing & t);
+
+static void test_shared_render(testing & t);
 
 static bool g_python_mode = false;
+
+// dictionaries given to tts_dict() in tests
+static std::shared_ptr<const common_tts_dicts> test_tts_dicts() {
+    static const auto dicts = std::make_shared<const common_tts_dicts>(common_tts_dicts{
+        {"lex", {
+            {"", "Zed", "big", "hello", "list", "null", "read", "w1", "w2", "zoo", "\xc3\xa9t\xc3\xa9", "\xe6\x97\xa5"},
+            {"\"empty\"", "\"z3d\"", "123456789012345678901234567890", "\"h@loU\"", "[1,2,null]", "null",
+             "{\"DEFAULT\":\"rid\",\"VBD\":\"rEd\"}", "{\"a\":1.5,\"b\":-2}", "{\"a\":0.25}", "\"zu\"", "\"ete\"", "\"ni\""},
+        }},
+        {"other", {{"hello"}, {"\"bonjour\""}}},
+        {"empty", {}},
+        // values that must be rejected: nested deeper than the engine allows, and not JSON
+        {"bad", {{"deep", "json"}, {std::string(200, '[') + std::string(200, ']'), "{not json"}}},
+    });
+    return dicts;
+}
 
 int main(int argc, char *argv[]) {
     testing t(std::cout);
@@ -78,7 +103,11 @@ int main(int argc, char *argv[]) {
     t.test("array methods", test_array_methods);
     t.test("object methods", test_object_methods);
     t.test("tts norm patterns", test_tts_norm_patterns);
+    t.test("tts dict", test_tts_dict);
+    t.test("tts template zonos3", test_tts_template_zonos3);
+    t.test("tts template music3", test_tts_template_music3);
     if (!g_python_mode) {
+        t.test("shared render", test_shared_render);
         t.test("hasher", test_hasher);
         t.test("stats", test_stats);
         t.test("caps", test_caps);
@@ -87,6 +116,45 @@ int main(int argc, char *argv[]) {
     }
 
     return t.summary();
+}
+
+static void test_shared_render(testing & t) {
+    t.test("shared AST with stats and input marking", [](testing & t) {
+        const std::string source = "{% macro emit(x) %}{{ x }}{% endmacro %}{% for i in range(2) %}{{ emit(prefix) }}{{ i }}{% endfor %}{% filter upper %}{{ body }}{% endfilter %}|{{ 'literal' is string }}|{{ obj.value }}";
+        const auto program = jinja::parse_from_tokens(jinja::lexer().tokenize(source));
+        std::vector<std::future<bool>> workers;
+        for (int worker = 0; worker < 8; ++worker) {
+            workers.push_back(std::async(std::launch::async, [&, worker] {
+                const auto prefix = "p" + std::to_string(worker);
+                for (int i = 0; i < 25; ++i) {
+                    jinja::context ctx(source);
+                    ctx.is_get_stats = i % 2 != 0;
+                    const json input = {
+                        { "prefix", prefix },
+                        { "body", "hi" },
+                        { "obj", { { "value", "V" } } }
+                    };
+                    jinja::global_from_json(ctx, input, true);
+                    const auto result = jinja::runtime::gather_string_parts(jinja::runtime(ctx).execute(program));
+                    if (result->as_string().str() != prefix + "0" + prefix + "1HI|True|V") {
+                        return false;
+                    }
+                    if (ctx.get_val("obj")->at("value")->stats.used != ctx.is_get_stats) {
+                        return false;
+                    }
+                    if (result->val_str.parts.empty() || !result->val_str.parts.front().is_input ||
+                        !result->val_str.parts.back().is_input) {
+                        return false;
+                    }
+                }
+                return true;
+            }));
+        }
+        for (auto & worker : workers) {
+            t.assert_true("request-local state", worker.get());
+        }
+    });
+
 }
 
 static void test_whitespace_control(testing & t) {
@@ -502,6 +570,13 @@ static void test_expressions(testing & t) {
         "c"
     );
 
+    test_template(t, "array index boundaries",
+        "{% for items in arrays %}{% for i in indices %}{{ items[i] | default('_') }}|{% endfor %};{% endfor %}",
+        {{"arrays", json::array({json::array({"a", "b", "c"}), json::array()})},
+         {"indices", json::array({INT64_MIN, -4, -3, -1, 0, 2, 3, INT64_MAX})}},
+        "_|_|a|c|a|c|_|_|;_|_|_|_|_|_|_|_|;"
+    );
+
     test_template(t, "array bool access",
         "{{ items[true] }}",
         {{"items", json::array({"a", "b", "c"})}},
@@ -575,6 +650,14 @@ static void test_expressions(testing & t) {
         "('c', 'b', 'a')"
     );
 
+    test_template(t, "multipart string comparison and access",
+        "{% set left = a + 'bc' %}{% set right = 'ab' + c %}{{ left == right }}|"
+        "{{ left[0] }}{{ left[1] }}{{ left[2] }}|{{ right[1:3] }}|"
+        "{{ left[3] is undefined }}|{{ empty[0] is undefined }}",
+        {{"a", "a"}, {"c", "c"}, {"empty", ""}},
+        "True|abc|bc|True|True"
+    );
+
     test_template(t, "string slice negative step",
         "{{ 'abcdef'[::-2] }}",
         json::object(),
@@ -597,6 +680,42 @@ static void test_expressions(testing & t) {
         "{{ (a + b) * c }}",
         {{"a", 2}, {"b", 3}, {"c", 4}},
         "20"
+    );
+
+    test_template(t, "floor division",
+        "{{ 7 // 2 }},{{ -7 // 2 }},{{ 7 // -2 }},{{ 7.5 // 2 }},{{ a // b }}",
+        {{"a", 10}, {"b", 3}},
+        "3,-4,-4,3.0,3"
+    );
+
+    test_template(t, "string comparison",
+        "{{ 'b' > 'a' }},{{ 'VBD' > 'VB' }},{{ 'a' <= 'a' }},{{ 'Z' < 'a' }},{{ 'ab' >= 'b' }}",
+        json::object(),
+        "True,True,True,True,False"
+    );
+
+    test_template(t, "unary minus after keyword",
+        "{{ 1 if false else -1 }},{{ not -1 }},{{ x and -2 }},{{ -3 if x }}",
+        {{"x", true}},
+        "-1,False,-2,-3"
+    );
+
+    test_template(t, "unary minus after elif",
+        "{% if false %}a{% elif -1 < 0 %}b{% endif %}",
+        json::object(),
+        "b"
+    );
+
+    test_template(t, "unary and binary sign",
+        "{{ -x }},{{ - 1 }},{{ --x }},{{ 1 - -x }},{{ 1 -1 }},{{ x -1 }},{{ [x, -1][-1] }},{{ +x }},{{ -x|abs }}",
+        {{"x", 3}},
+        "-3,-1,3,4,0,2,-1,3,3"
+    );
+
+    test_template(t, "binary minus after keyword attribute",
+        "{{ a.else - 1 }}",
+        {{"a", {{"else", 3}}}},
+        "2"
     );
 
     test_template(t, "string concat ~",
@@ -632,6 +751,31 @@ static void test_expressions(testing & t) {
     test_template_error(t, "too deeply nested parentheses",
         "{{ " + std::string(1000, '(') + "1" + std::string(1000, ')') + " }}",
         "template is nested more than 128 levels deep"
+    );
+
+    test_template_error(t, "undefined hint: missing object key (attr)",
+        "{% set m = {'a': 1} %}{{ m.missing_key() }}",
+        "Callee is not a function: got Undefined (hint: 'missing_key')"
+    );
+
+    test_template_error(t, "undefined hint: missing object key (subscript)",
+        "{% set m = {'a': 1} %}{{ m['missing_key']() }}",
+        "Callee is not a function: got Undefined (hint: 'missing_key')"
+    );
+
+    test_template_error(t, "undefined hint: unknown array attribute",
+        "{% set a = [1] %}{{ a.missing_key() }}",
+        "Callee is not a function: got Undefined (hint: 'missing_key')"
+    );
+
+    test_template_error(t, "undefined hint: unknown string attribute",
+        "{% set s = 'x' %}{{ s.missing_key() }}",
+        "Callee is not a function: got Undefined (hint: 'missing_key')"
+    );
+
+    test_template_error(t, "undefined hint: unknown int attribute",
+        "{% set n = 1 %}{{ n.missing_key() }}",
+        "Callee is not a function: got Undefined (hint: 'missing_key')"
     );
 }
 
@@ -1008,6 +1152,12 @@ static void test_filters(testing & t) {
         "{\"a\": 1, \"b\": 2}"
     );
 
+    test_template(t, "tojson sort_keys=true nested with separators",
+        "{{ data|tojson(sort_keys=true, separators=(',',':')) }}",
+        {{"data", {{"name", "f"}, {"args", {{"z", 1}, {"a", json::array({json{{"y", 2}, {"b", 3}}})}}}}}},
+        "{\"args\":{\"a\":[{\"b\":3,\"y\":2}],\"z\":1},\"name\":\"f\"}"
+    );
+
     test_template(t, "tojson",
         "{{ data|tojson }}",
         {{"data", {{"a", 1}, {"b", json::array({1, 2})}}}},
@@ -1345,6 +1495,15 @@ static void test_macros(testing & t) {
         "a+b"
     );
 
+    test_template(t, "caller saved and called after its scope ended",
+        "{% set ns = namespace(f=none) %}"
+        "{% macro keep() %}{% set ns.f = caller %}{% endmacro %}"
+        "{% macro outer(p) %}{% call keep() %}[{{ p }}]{% endcall %}{% endmacro %}"
+        "{{ outer('a') }}{{ outer('b') }}{{ ns.f() }}{{ ns.f() }}",
+        json::object(),
+        "[b][b]"
+    );
+
     test_template(t, "macro with caller",
         "\
 {%- macro nest_dict(o, i, ff='') %}\n\
@@ -1438,6 +1597,17 @@ static void test_tests(testing & t) {
         "{{ 'yes' if x is divisibleby(2) }}",
         {{"x", 2}},
         "yes"
+    );
+
+    test_template(t, "is divisibleby -1 with INT64_MIN",
+        "{{ x is divisibleby(-1) }}",
+        {{"x", INT64_MIN}},
+        "True"
+    );
+
+    test_template_error(t, "is divisibleby zero",
+        "{{ 10 is divisibleby(0) }}",
+        "divisibleby: division by zero"
     );
 
     test_template(t, "is eq",
@@ -2096,6 +2266,12 @@ static void test_array_methods(testing & t) {
         "6"
     );
 
+    test_template(t, "array|sum",
+        "{{ [1, 2.5, 3]|sum }},{{ [1, 2]|sum(start=10) }},{{ items|sum(attribute='w') }},{{ []|sum }}",
+        {{"items", json::array({{{"w", 1}}, {{"w", 2}}})}},
+        "6.5,13,3,0"
+    );
+
     test_template(t, "array|min",
         "{{ [tool_calls_count, tool_sep_count]|min }}",
         {{"tool_calls_count", 2}, {"tool_sep_count", 1}},
@@ -2730,6 +2906,27 @@ static void test_string_parts(testing & t) {
         return runtime.gather_string_parts(runtime.execute(ast))->as_string();
     };
 
+    t.test("comparison across part boundaries", [](testing & t) {
+        jinja::string left, right;
+        left.parts = {{true, "a"}, {false, "bc"}};
+        right.parts = {{false, "ab"}, {true, "c"}};
+        t.assert_true("equal text with different partitions", left.equals(right) && right.equals(left));
+
+        right.parts = {{false, ""}, {false, "ab"}, {true, ""}, {true, "c"}, {false, ""}};
+        t.assert_true("empty parts do not change equality", left.equals(right) && right.equals(left));
+        t.assert_true("different bytes are unequal", !left.equals(jinja::string("abd")));
+        t.assert_true("prefixes are unequal", !left.equals(jinja::string("ab")) && !jinja::string("ab").equals(left));
+
+        jinja::string empty;
+        empty.parts = {{true, ""}, {false, ""}};
+        t.assert_true("empty partitions equal an empty string", empty.equals(jinja::string()) && jinja::string().equals(empty));
+
+        auto object = jinja::mk_val<jinja::value_object>();
+        object->insert(jinja::mk_val<jinja::value_string>(left), jinja::mk_val<jinja::value_int>(7));
+        const auto found = object->find(jinja::mk_val<jinja::value_string>(right));
+        t.assert_true("object keys ignore partition boundaries", found && found->as_int() == 7);
+    });
+
     t.test("merge joins only the neighbours with the same type", [](testing & t) {
         // "AB" comes from the input and merges, "-" comes from the template and must not
         jinja::string res = render("{{ val.a }}{{ val.b }}-{{ val.c }}",
@@ -2864,6 +3061,210 @@ static void test_tts_norm_patterns(testing & t) {
     }
 }
 
+// tts_dict(name, key): dictionaries of the model, see docs/tts-norm-patterns.md
+// only available to task templates, like tts_norm_scan(); the dictionaries of test_tts_dicts() stand for the ones of a model
+static void test_tts_dict(testing & t) {
+    test_template(t, "tts_dict is defined for task templates",
+        "{{ tts_dict is defined }}",
+        json::object(), "True", true);
+
+    test_template(t, "tts_dict returns the decoded JSON value",
+        "{{ tts_dict('lex', 'hello') }}|{{ tts_dict('lex', 'read').VBD }}|{{ tts_dict('lex', 'read') is mapping }}|{{ tts_dict('lex', 'list')[1] + 1 }}",
+        json::object(), "h@loU|rEd|True|3", true);
+
+    test_template(t, "tts_dict returns none for a missing key",
+        "{{ tts_dict('lex', 'nope') is none }}|{{ tts_dict('lex', 'hell') is none }}|{{ tts_dict('lex', 'hello!') is none }}|{{ tts_dict('lex', 'Hello') is none }}",
+        json::object(), "True|True|True|True", true);
+
+    test_template(t, "tts_dict first, last, empty and non-ASCII keys",
+        "{{ tts_dict('lex', '') }}|{{ tts_dict('lex', 'Zed') }}|{{ tts_dict('lex', 'zoo') }}|{{ tts_dict('lex', '\xc3\xa9t\xc3\xa9') }}|{{ tts_dict('lex', '\xe6\x97\xa5') }}",
+        json::object(), "empty|z3d|zu|ete|ni", true);
+
+    test_template(t, "tts_dict null value is none, like a missing key",
+        "{{ tts_dict('lex', 'null') is none }}",
+        json::object(), "True", true);
+
+    test_template(t, "tts_dict number outside the int64 range",
+        "{{ tts_dict('lex', 'big') > 9000000000000000000 }}|{{ tts_dict('lex', 'big') is number }}",
+        json::object(), "True|True", true);
+
+    test_template(t, "tts_dict selects the dictionary by name",
+        "{{ tts_dict('other', 'hello') }}|{{ tts_dict('other', 'zoo') is none }}|{{ tts_dict('empty', 'hello') is none }}",
+        json::object(), "bonjour|True|True", true);
+
+    test_template(t, "tts_dict perceptron-style score",
+        "{%- set ws = [tts_dict('lex', 'w1'), tts_dict('lex', 'w2')] -%}"
+        "{{ ws | map(attribute='a', default=0.0) | sum }}|{{ ws | map(attribute='b', default=0.0) | sum }}",
+        json::object(), "1.75|-2.0", true);
+
+    if (!g_python_mode) {
+        test_template_error(t, "error: unknown dictionary",      "{{ tts_dict('nope', 'a') }}", "unknown dictionary 'nope'", true);
+        test_template_error(t, "error: key must be a string",    "{{ tts_dict('lex', 1) }}",    "expected value of type", true);
+        test_template_error(t, "error: missing argument",        "{{ tts_dict('lex') }}",       "expected between 2 and 2 arguments", true);
+        test_template_error(t, "error: value is not JSON",       "{{ tts_dict('bad', 'json') }}", "parse error", true);
+        test_template_error(t, "error: value nested too deep",   "{{ tts_dict('bad', 'deep') }}", "levels deep", true);
+
+        t.test("a key without a value is an error", [](testing & t) {
+            std::string value;
+            bool thrown = false;
+            try {
+                common_tts_dict_find(common_tts_dict{{"a", "m"}, {"1"}}, "m", value);
+            } catch (const std::exception &) {
+                thrown = true;
+            }
+            t.assert_true("throws", thrown);
+            t.assert_true("the first key still has its value", common_tts_dict_find(common_tts_dict{{"a", "m"}, {"1"}}, "a", value) && value == "1");
+        });
+
+        t.test("every key of a large dictionary is found", [](testing & t) {
+            common_tts_dict dict;
+            for (int i = 0; i < 1000; i++) {
+                char key[16];
+                snprintf(key, sizeof(key), "k%04d", i);
+                dict.keys.push_back(key);
+                dict.values.push_back(std::to_string(i));
+            }
+            bool ok = true;
+            std::string value;
+            for (int i = 0; i < 1000; i++) {
+                ok = ok && common_tts_dict_find(dict, dict.keys[i], value) && value == std::to_string(i);
+            }
+            ok = ok && !common_tts_dict_find(dict, "k", value) && !common_tts_dict_find(dict, "k10000", value) && !common_tts_dict_find(dict, "a", value);
+            t.assert_true("all found, none extra", ok);
+        });
+
+        // the GGUF is not trusted: with keys in any order, a hit must be an entry of the dictionary
+        t.test("random keys in any order", [](testing & t) {
+            static const char raw[] = "ab\t\n\xff\"{";
+            const std::string alphabet(raw, sizeof(raw) - 1);
+            std::mt19937 rng(42);
+            auto random_str = [&](size_t max_len) {
+                std::string res(rng() % (max_len + 1), '\0');
+                for (auto & c : res) {
+                    c = alphabet[rng() % alphabet.size()];
+                }
+                return res;
+            };
+            bool ok = true;
+            for (int i = 0; i < 20000; i++) {
+                common_tts_dict dict;
+                const size_t n = rng() % 8;
+                for (size_t j = 0; j < n; j++) {
+                    dict.keys.push_back(random_str(2));
+                    dict.values.push_back(std::to_string(j));
+                }
+                const std::string key = random_str(2);
+                std::string value;
+                if (common_tts_dict_find(dict, key, value)) {
+                    bool found = false;
+                    for (size_t j = 0; j < n; j++) {
+                        found = found || (dict.keys[j] == key && dict.values[j] == value);
+                    }
+                    ok = ok && found;
+                }
+            }
+            t.assert_true("every hit is an entry of the dictionary", ok);
+        });
+    }
+}
+
+// the ZONOS3 "tts" template spells out numbers in en, fr, de, es, it, pt, ja and zh, other languages pass through
+static void test_tts_template_zonos3(testing & t) {
+    std::string path = __FILE__;
+    const size_t pos = path.find_last_of("/\\");
+    path = (pos == std::string::npos ? std::string(".") : path.substr(0, pos)) + "/../models/templates/Zyphra-ZONOS3-Mini-tts.jinja";
+    std::ifstream fs(path, std::ios_base::binary);
+    if (!t.assert_true("template file is readable: " + path, fs.is_open())) {
+        return;
+    }
+    const std::string tmpl((std::istreambuf_iterator<char>(fs)), std::istreambuf_iterator<char>());
+
+    const std::vector<std::array<std::string, 3>> cases = {
+        { "en", "I have 3 cats and 21 dogs.",                "I have three cats and twenty-one dogs." },
+        { "en", "1,234,567 people, 1,2345 and 12345",        "one million two hundred thirty-four thousand five hundred sixty-seven people, one,two thousand three hundred forty-five and twelve thousand three hundred forty-five" },
+        { "en", "$1, $0.99, $5.32 and $2.5 billion",         "one dollar, ninety-nine cents, five dollars and thirty-two cents and two point five billion dollars" },
+        { "en", "\xe2\x82\xac" "20 and \xc2\xa3" "3.50",     "twenty euros and three pounds and fifty pence" },
+        { "en", "3.5% then 10%",                             "three point five percent then ten percent" },
+        { "en", "1st, 22nd, 103rd, 12th",                    "first, twenty-second, one hundred third, twelfth" },
+        { "en", "in 1990, since 1905, by 2005, in 2000, from 1900, the 1990s, 1234 people",
+                "in nineteen ninety, since nineteen oh five, by two thousand five, in two thousand, from nineteen hundred, the nineteen nineties, one thousand two hundred thirty-four people" },
+        { "en", "at 3:30, 10:05 or 7:00, not 25:00",         "at three thirty, ten oh five or seven o'clock, not twenty-five:zero zero" },
+        { "en", "pi is 3.14, it hit -5 today, range 10-20",  "pi is three point one four, it hit minus five today, range ten-twenty" },
+        { "en", "agent 007 ran 5km with an mp3",             "agent zero zero seven ran five km with an mp three" },
+        { "en", "caf\xc3\xa9 42.",                           "caf\xc3\xa9 forty-two." },
+        { "",   "no language 42",                            "no language forty-two" },
+        { "en", "no digits here",                            "no digits here" },
+        { "ko", "3\xea\xb0\x9c",                                 "3\xea\xb0\x9c" },
+        // other languages
+        { "fr_fr", "J'ai 21 chats, 71 chiens, 80 oiseaux et 91 souris.",
+                   "J'ai vingt et un chats, soixante et onze chiens, quatre-vingts oiseaux et quatre-vingt-onze souris." },
+        { "fr", "200 ans, 2 345 678 habitants et 80 000 euros.",
+                "deux cents ans, deux millions trois cent quarante-cinq mille six cent soixante-dix-huit habitants et quatre-vingt mille euros." },
+        { "fr", "Ça coûte 5,32 €, hausse de 12,05 %.",
+                "Ça coûte cinq euros et trente-deux centimes, hausse de douze virgule zéro cinq pour cent." },
+        { "fr", "Le 1er mai, la 1re fois, le 21e siècle, à 15h30, à 1h ou à 21:05, -5 degrés.",
+                "Le premier mai, la première fois, le vingt et unième siècle, à quinze heures trente, à une heure ou à vingt et une heures cinq, moins cinq degrés." },
+        { "de", "21 Katzen, 101 Hunde, 1.234 Bücher, 1.000.000 Einwohner, im Jahr 1990.",
+                "einundzwanzig Katzen, einhunderteins Hunde, eintausendzweihundertvierunddreißig Bücher, eine Million Einwohner, im Jahr neunzehnhundertneunzig." },
+        { "fr", "2 000 000 €, 3 000 000 $ et 2 500 000 €.",
+                "deux millions d'euros, trois millions de dollars et deux millions cinq cent mille euros." },
+        { "es", "2.000.000 € y 1.000.000 $.", "dos millones de euros y un millón de dólares." },
+        { "de", "Im Jahr 1990 waren 1500 Leute da.", "Im Jahr neunzehnhundertneunzig waren eintausendfünfhundert Leute da." },
+        { "de", "5,32 € oder 1 €, plus 3,5 % um 15:30 Uhr, am 3.10.2024.",
+                "fünf Euro und zweiunddreißig Cent oder ein Euro, plus drei Komma fünf Prozent um fünfzehn Uhr dreißig, am drei zehn zweitausendvierundzwanzig." },
+        { "es", "100, 101, 21.000 personas, 2.500.000 habitantes, 21 €, a las 1:00, el 3.º y la 2ª vez.",
+                "cien, ciento uno, veintiún mil personas, dos millones quinientos mil habitantes, veintiún euros, a las una en punto, el tercero y la segunda vez." },
+        { "it", "21, 23, 28, 180, 3.003, 1.000.000 di euro, 5,32 €, all'1:00, l'11º e il 23º.",
+                "ventuno, ventitré, ventotto, centottanta, tremilatré, un milione di euro, cinque euro e trentadue centesimi, all'una, l'undicesimo e il ventitreesimo." },
+        { "pt_br", "101, 1.200, 1.234, R$ 5,32, às 2:00, o 1º e a 2ª vez.",
+                   "cento e um, mil e duzentos, mil duzentos e trinta e quatro, cinco reais e trinta e dois centavos, às duas horas, o primeiro e a segunda vez." },
+        { "ja", "3個、1000円、10000人、123456789人、1.5キロ、30%、$5、午後3:30、-5度、2024年。",
+                "三個、千円、一万人、一億二千三百四十五万六千七百八十九人、一点五キロ、三十パーセント、五ドル、午後三時三十分、マイナス五度、二千二十四年。" },
+        { "cmn", "10005人，115人，2000人，20000人，316，2:30，2002年，-5度，3.5%，$23。",
+                 "一万零五人，一百一十五人，两千人，两万人，三百一十六，两点三十分，二零零二年，负五度，百分之三点五，二十三美元。" },
+    };
+    for (const auto & c : cases) {
+        // same variables as common_chat_get_tts_prompt()
+        const json vars = {
+            {"messages", json::array({{{"role", "user"}, {"content", c[1]}}})},
+            {"language", c[0]},
+            {"voice",    ""},
+        };
+        test_template(t, c[0] + ": " + c[1], tmpl, vars, c[2], true);
+    }
+}
+
+// the MiniMax Music 3 "tts" template: caption and lyrics cleanup of the diffusers pipeline (encoders.py), then the special-token prompt
+static void test_tts_template_music3(testing & t) {
+    std::string path = __FILE__;
+    const size_t pos = path.find_last_of("/\\");
+    path = (pos == std::string::npos ? std::string(".") : path.substr(0, pos)) + "/../models/templates/MiniMaxAI-MiniMax-Music3-tts.jinja";
+    std::ifstream fs(path, std::ios_base::binary);
+    if (!t.assert_true("template file is readable: " + path, fs.is_open())) {
+        return;
+    }
+    const std::string tmpl((std::istreambuf_iterator<char>(fs)), std::istreambuf_iterator<char>());
+
+    const std::vector<std::array<std::string, 2>> cases = {
+        { "[Tags]\nGenre: acoustic pop. BPM: 96.\nVocals: soft female lead.\n[Lyrics]\n[verse]\nMorning light\n[chorus]\nSoftly",
+          "<|im_start|><|caption_start|>Genre: acoustic pop. BPM: 96.\nVocals: soft female lead.<|caption_end|><|lyrics_start|>[start]\n[verse]\nMorning light\n[chorus]\nSoftly<|lyrics_end|><|im_end|><|audio_start|>" },
+        // markdown, <|key value|> tags, inline and lowercased section tags
+        { "[Tags]\n# Global Metadata\n- **bpm** is 92. *key* is E\n   ### h3 title\n---\n\n\n\xe2\x80\xa2 dot item\n    indented four\n<|genre  Blues Rock|> and <|solo|>\n**a **b** c**\n"
+          "[Lyrics]\n[Verse] I'm learning how\n  [Pre-Chorus] [Bass Quartet]  text dropped\nline one [Chorus] line two ^ next",
+          "<|im_start|><|caption_start|>Global Metadata\nbpm is 92. key is E\nh3 title\ndot item\nindented four\ngenre is Blues Rock and solo\na b c<|caption_end|>"
+          "<|lyrics_start|>[start]\n[verse]\n[pre-chorus]\n[bass quartet]\nline one\n[chorus]\nline two\nnext<|lyrics_end|><|im_end|><|audio_start|>" },
+    };
+    for (const auto & c : cases) {
+        // same variables as common_chat_get_tts_prompt()
+        const json vars = {
+            {"messages", json::array({{{"role", "user"}, {"content", c[0]}}})},
+            {"language", ""},
+            {"voice",    ""},
+        };
+        test_template(t, c[0], tmpl, vars, c[1], true);
+    }
+}
+
 static void test_template_error(testing & t, const std::string & name, const std::string & tmpl, const std::string & expect, bool tts_norm) {
     t.test(name, [&tmpl, &expect, tts_norm](testing & t) {
         std::string error;
@@ -2872,7 +3273,7 @@ static void test_template_error(testing & t, const std::string & name, const std
             jinja::program ast = jinja::parse_from_tokens(lexer.tokenize(tmpl));
             jinja::context ctx(tmpl);
             if (tts_norm) {
-                common_chat_tts_norm_add_builtins(ctx);
+                common_chat_tts_norm_add_builtins(ctx, test_tts_dicts());
             }
             jinja::runtime runtime(ctx);
             runtime.gather_string_parts(runtime.execute(ast));
@@ -2892,7 +3293,7 @@ static void test_template_cpp(testing & t, const std::string & name, const std::
 
         jinja::context ctx(tmpl);
         if (tts_norm) {
-            common_chat_tts_norm_add_builtins(ctx);
+            common_chat_tts_norm_add_builtins(ctx, test_tts_dicts());
         }
         jinja::global_from_json(ctx, vars, true);
 
@@ -2953,6 +3354,7 @@ if merged_input.get("tts_norm_ref"):
     spec.loader.exec_module(chat_tts_norm)
     env.globals["tts_norm_scan"] = chat_tts_norm.tts_norm_scan
     env.globals["tts_norm_sub"] = chat_tts_norm.tts_norm_sub
+    env.globals["tts_dict"] = chat_tts_norm.make_tts_dict(merged_input["tts_dicts"])
 
 template = env.from_string(tmpl)
 result = template.render(**vars_json)
@@ -2974,6 +3376,10 @@ static void test_template_py(testing & t, const std::string & name, const std::s
         merged["vars"] = vars;
         if (tts_norm) {
             merged["tts_norm_ref"] = tts_norm_ref_path();
+            merged["tts_dicts"]    = json::object();
+            for (const auto & d : *test_tts_dicts()) {
+                merged["tts_dicts"][d.first] = {{"keys", d.second.keys}, {"values", d.second.values}};
+            }
         }
 
 #ifdef _WIN32
