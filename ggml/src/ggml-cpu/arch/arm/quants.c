@@ -35,7 +35,9 @@
 
 // precomputed tables for expanding 8bits to 8 bytes:
 static const uint64_t table_b2b_0[1 << 8] = { B8(00, 10) }; // ( b) << 4
+#if !defined(__ARM_FEATURE_SVE)
 static const uint64_t table_b2b_1[1 << 8] = { B8(10, 00) }; // (!b) << 4
+#endif
 #endif
 
 void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
@@ -927,7 +929,7 @@ static inline svbool_t load_as_svbool(const uint8_t * p, uint64_t vector_length)
         svbool_t r;
         __asm__("ldr %0, %1"
                 : "=Upa"(r)
-                : "Q"(*(const char (*)[32]) p));
+                : "Q"(*(const struct { char bytes[32]; } *) p));
         return r;
     }
 #endif
