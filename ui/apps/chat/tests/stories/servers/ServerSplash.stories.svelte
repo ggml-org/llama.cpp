@@ -1,9 +1,9 @@
 <script lang="ts" module>
-	import StateGallery from '../helpers/StateGallery.svelte';
-	import StateGalleryItem from '../helpers/StateGalleryItem.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ServerErrorSplash from '#lib/components/app/servers/ServerErrorSplash.svelte';
 	import ServerLoadingSplash from '#lib/components/app/servers/ServerLoadingSplash.svelte';
+	import StateGallery from '$llama-ui-stories/helpers/StateGallery.svelte';
+	import StateGalleryItem from '$llama-ui-stories/helpers/StateGalleryItem.svelte';
 
 	// the loading and error splashes are the two screens shown before the app connects
 	const { Story } = defineMeta({

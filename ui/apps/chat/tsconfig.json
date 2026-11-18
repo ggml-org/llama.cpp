@@ -15,6 +15,7 @@
 			"@ggml-org/llama-ui/fonts.css": ["../../lib/ui/src/lib/styles/fonts.css"],
 			"@ggml-org/llama-ui/surfaces.css": ["../../lib/ui/src/lib/styles/surfaces.css"],
 			"@ggml-org/llama-ui": ["../../lib/ui/src/lib/index.ts"],
+			"$llama-ui-stories/*": ["../../lib/ui/tests/stories/*"],
 			"@internationalized/date": ["./node_modules/@internationalized/date"],
 			"@internationalized/date/*": ["./node_modules/@internationalized/date/*"],
 			"@lucide/svelte": ["./node_modules/@lucide/svelte"],
@@ -58,6 +59,7 @@
 		"tests/**/*.ts",
 		"tests/**/*.svelte",
 		".storybook/**/*.ts",
+		"../../lib/ui/tests/stories/svx.d.ts",
 		".storybook/**/*.svelte"
 	],
 	"exclude": ["src/lib/services/sandbox-worker.js", "src/lib/vendors/**", "src/service-worker"]

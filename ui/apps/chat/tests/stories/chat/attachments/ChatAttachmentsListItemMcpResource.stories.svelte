@@ -1,6 +1,4 @@
 <script lang="ts" module>
-	import StateGallery from '../../helpers/StateGallery.svelte';
-	import StateGalleryItem from '../../helpers/StateGalleryItem.svelte';
 	import {
 		mcpResourceAttachment,
 		mcpResourceImageAttachment,
@@ -8,6 +6,8 @@
 	} from '../screen/fixtures';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatAttachmentsListItemMcpResource from '#lib/components/app/chat/ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItemMcpResource.svelte';
+	import StateGallery from '$llama-ui-stories/helpers/StateGallery.svelte';
+	import StateGalleryItem from '$llama-ui-stories/helpers/StateGalleryItem.svelte';
 
 	const { Story } = defineMeta({
 		component: ChatAttachmentsListItemMcpResource,
