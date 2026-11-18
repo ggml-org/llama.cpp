@@ -778,7 +778,7 @@ class MODEL_ARCH(IntEnum):
     KOLIBRI1         = auto()
     LIMITE           = auto()
     INKLING2         = auto()
-    DOMYN_EDGE        = auto()
+    DOMYN_EDGE       = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -1779,7 +1779,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.KOLIBRI1:         "kolibri1",
     MODEL_ARCH.LIMITE:           "limite",
     MODEL_ARCH.INKLING2:         "inkling2",
-    MODEL_ARCH.DOMYN_EDGE:        "domynedge"
+    MODEL_ARCH.DOMYN_EDGE:       "domynedge",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -7087,7 +7087,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_POST_CONV,
         MODEL_TENSOR.FFN_RES_QUERY,
     ],
-        MODEL_ARCH.DOMYN_EDGE: [
+    MODEL_ARCH.DOMYN_EDGE: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.ATTN_Q,
         MODEL_TENSOR.ATTN_K,
@@ -7102,7 +7102,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP,
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.OUTPUT_NORM,
-    ]
+    ],
 }
 
 # tensors that will not be serialized

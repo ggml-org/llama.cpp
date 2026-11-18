@@ -99,7 +99,7 @@ class LibLlamaModel:
 
     def tokenize(self, text: str, add_special: bool = False, parse_special: bool = False) -> list[int]:
         encoded_text: bytes = text.encode("utf-8")
-        num = self.lib.llama_tokenize(self.model, encoded_text, len(encoded_text), self.token_ids, len(self.token_ids), add_special, parse_special)
+        num = self.lib.llama_tokenize(self.vocab, encoded_text, len(encoded_text), self.token_ids, len(self.token_ids), add_special, parse_special)
         while num < 0 and len(self.token_ids) < (16 << 20):
             self.token_ids = self.ffi.new("llama_token[]", -2 * num)
             num = self.lib.llama_tokenize(self.vocab, encoded_text, len(encoded_text), self.token_ids, len(self.token_ids), add_special, parse_special)
@@ -110,7 +110,7 @@ class LibLlamaModel:
             self.token_ids = self.ffi.new("llama_token[]", 2 * len(ids))
         for i, id in enumerate(ids):
             self.token_ids[i] = id
-        num = self.lib.llama_detokenize(self.model, self.token_ids, len(ids), self.text_buff, len(self.text_buff), remove_special, unparse_special)
+        num = self.lib.llama_detokenize(self.vocab, self.token_ids, len(ids), self.text_buff, len(self.text_buff), remove_special, unparse_special)
         while num < 0 and len(self.text_buff) < (16 << 20):
             self.text_buff = self.ffi.new("uint8_t[]", -2 * num)
             num = self.lib.llama_detokenize(self.vocab, self.token_ids, len(ids), self.text_buff, len(self.text_buff), remove_special, unparse_special)

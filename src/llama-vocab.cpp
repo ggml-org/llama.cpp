@@ -392,7 +392,6 @@ struct llm_tokenizer_bpe : llm_tokenizer {
             case LLAMA_VOCAB_PRE_TYPE_QWEN2:
             case LLAMA_VOCAB_PRE_TYPE_HUNYUAN:
             case LLAMA_VOCAB_PRE_TYPE_SOLAR_OPEN:
-            case LLAMA_VOCAB_PRE_TYPE_DOMYN_EDGE:
                 regex_exprs = {
                     // original regex from tokenizer.json
                     // "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
@@ -2567,7 +2566,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     tokenizer_pre == "qwen2" ||
                     tokenizer_pre == "deepseek-r1-qwen" ||
                     tokenizer_pre == "kormo" ||
-                    tokenizer_pre == "f2llmv2") {
+                    tokenizer_pre == "f2llmv2" ||
+                    tokenizer_pre == "domyn-edge") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_QWEN2;
                 clean_spaces = false;
             } else if (
@@ -2658,10 +2658,6 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 tokenizer_pre == "domyn-small") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_DOMYN_SMALL;
                 escape_whitespaces = true;
-            } else if (
-                tokenizer_pre == "domyn-edge") {
-                pre_type = LLAMA_VOCAB_PRE_TYPE_DOMYN_EDGE;
-                clean_spaces = false;
             } else if (
                 tokenizer_pre == "megrez") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_QWEN2;

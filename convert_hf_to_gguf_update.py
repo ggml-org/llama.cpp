@@ -168,7 +168,7 @@ models = [
     {"name": "mmbert",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/jhu-clsp/mmBERT-base", },
     {"name": "k2-horizon",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/IFM/K2-Horizon-36B", },
     {"name": "inkling2",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/thinkingmachines/Inkling-2-Small", },
-    {"name": "domyn-edge", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/domyn/Domyn-Edge-Teacher-IF", }
+    {"name": "domyn-edge",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/domyn/Domyn-Edge-Teacher-IF", },
 ]
 
 # some models are known to be broken upstream, so we will skip them as exceptions
@@ -242,6 +242,7 @@ def download_model(model):
 
     if os.path.isdir(repo):
         # If repo is a path on the file system, copy the directory
+        os.makedirs(f"models/tokenizers/{name}", exist_ok=True)
         for file in files:
             src_path = os.path.join(repo, file)
             dst_path = f"models/tokenizers/{name}/{file}"

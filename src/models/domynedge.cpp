@@ -3,21 +3,24 @@
 void llama_model_domynedge::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
+    // required: the base loader defaults it to n_rot_full if the key is not found
+    ml.get_key(LLM_KV_ROPE_DIMENSION_COUNT_SWA, hparams.n_rot_swa);
+    // RoPE cannot rotate more dims than the SWA head has: CPU aborts, GPU backends read past the row
+    if (hparams.n_rot_swa > hparams.n_embd_head_k_swa) {
+        throw std::runtime_error(format("invalid n_rot_swa: %u, max %u", hparams.n_rot_swa, hparams.n_embd_head_k_swa));
+    }
 
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
 
     ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
     ml.get_arr(LLM_KV_ATTENTION_ROPE_PATTERN,           hparams.rope_pattern);
 
-    // SWA layers have a smaller head dim; the base loader defaults n_rot_swa = n_rot_full,
-    // but here they differ, so we override.
-    hparams.n_rot_swa = hparams.n_embd_head_k_swa;
-
+    // only for print_info / saver; get_rope_params uses cparams
     hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
     hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
 
     switch (hparams.n_layer()) {
-        case 36: type = LLM_TYPE_3B; break;
+        case 36: type = LLM_TYPE_4B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }
 }
@@ -27,8 +30,9 @@ void llama_model_domynedge::load_arch_tensors(llama_model_loader &) {
 
     tok_embd    = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}, 0);
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
-    // tied embeddings: output weight is shared with tok_embd
     output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+
+    // if output is NULL, init from the input tok embed
     if (output == NULL) {
         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
     }
@@ -42,9 +46,8 @@ void llama_model_domynedge::load_arch_tensors(llama_model_loader &) {
         layer.attn_norm      = create_tensor(tn(LLM_TENSOR_ATTN_NORM,      "weight", i), {n_embd}, 0);
         layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, 0);
 
-        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_i * n_head}, 0);
-        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k_i}, 0);
-        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v_i}, 0);
+        const int64_t n_embd_q_i = n_embd_head_i * n_head;
+        create_tensor_qkv(layer, i, n_embd, n_embd_q_i, n_embd_k_i, n_embd_v_i, 0);
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_i * n_head, n_embd}, 0);
 
         // K-norm has a learnable weight; Q-norm does not
@@ -59,7 +62,17 @@ void llama_model_domynedge::load_arch_tensors(llama_model_loader &) {
     }
 }
 
-llama_model_domynedge::graph::graph(const llama_model & model, const llm_graph_params & params)
+llama_rope_params llama_model_domynedge::get_rope_params(const llama_cparams & cparams, int il) const {
+    auto res = llama_model::get_rope_params(cparams, il);
+
+    // the SWA layers use the global base and scale
+    res.freq_base  = cparams.rope_freq_base;
+    res.freq_scale = cparams.rope_freq_scale;
+
+    return res;
+}
+
+llama_model_domynedge::graph::graph(const llm_graph_params & params)
     : llm_graph_context(params) {
     ggml_tensor * cur;
     ggml_tensor * inpL    = build_inp_embd(model.tok_embd);
@@ -74,7 +87,6 @@ llama_model_domynedge::graph::graph(const llama_model & model, const llm_graph_p
         const int64_t n_embd_head  = hparams.n_embd_head_k(il);
         const int64_t n_head_il    = hparams.n_head(il);
         const int64_t n_head_kv_il = hparams.n_head_kv(il);
-        const int     n_rot_il     = hparams.n_rot(il);
         const float   kq_scale     = 1.0f / sqrtf((float)n_embd_head);
 
         ggml_tensor * residual = inpL;
@@ -83,32 +95,22 @@ llama_model_domynedge::graph::graph(const llama_model & model, const llm_graph_p
         cur = build_norm(inpL, layer.attn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
 
-        // Q, K, V projections
         auto [Qcur, Kcur, Vcur] = build_qkv(layer, cur, n_embd_head, n_head_il, n_head_kv_il, il);
 
         // Q-norm: RMSNorm without learnable weight (elementwise_affine=False)
-        Qcur = ggml_rms_norm(ctx0, Qcur, hparams.f_norm_rms_eps);
+        Qcur = build_norm(Qcur, NULL, NULL, LLM_NORM_RMS, il);
         cb(Qcur, "Qcur_normed", il);
 
         // K-norm: RMSNorm with learnable weight
         Kcur = build_norm(Kcur, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
         cb(Kcur, "Kcur_normed", il);
 
-        // RoPE only on SWA layers; dense (nope) layers skip positional encoding
-        if (hparams.has_rope(il)) {
-            const float freq_base_l  = model.get_rope_freq_base (cparams, il);
-            const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
+        // build_rope already applies RoPE only if the current layer is a RoPE layer
+        Qcur = build_rope(Qcur, inp_pos, il);
+        cb(Qcur, "Qcur_rope", il);
 
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
-                    n_rot_il, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                    ext_factor, attn_factor, beta_fast, beta_slow);
-            cb(Qcur, "Qcur_rope", il);
-                        
-            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
-                    n_rot_il, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                    ext_factor, attn_factor, beta_fast, beta_slow);
-            cb(Kcur, "Kcur_rope", il);
-        }
+        Kcur = build_rope(Kcur, inp_pos, il);
+        cb(Kcur, "Kcur_rope", il);
 
         cur = build_attn(inp_attn,
                 layer.wo, NULL, layer.wo_s,
@@ -158,5 +160,5 @@ llama_model_domynedge::graph::graph(const llama_model & model, const llm_graph_p
 }
 
 std::unique_ptr<llm_graph_context> llama_model_domynedge::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }

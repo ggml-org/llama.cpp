@@ -929,7 +929,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.mlp.dense_4h_to_h",                 # chatglm
             "model.layers.h.{bid}.mlp.c_proj",                        # exaone
             "model.layers.{bid}.feed_forward.down_proj",              # llama4 jamba granite-hybrid
-            "model.layers.{bid}.feedforward.down_proj",                # domynedge
+            "model.layers.{bid}.feedforward.down_proj",               # domynedge
             "transformer_encoder.{bid}.ffn.w3",                       # neobert
             "model.layers.{bid}.block_sparse_moe.down",               # smallthinker
             "model.transformer.blocks.{bid}.ff_out",                  # llada
@@ -1004,7 +1004,7 @@ class TensorNameMap:
             "layers.{bid}.self_attn.k_norm",                                  # qwen3-embedding
             "model.layers.{bid}.self_attn.k_rope_only_layernorm",             # dots3note
             "model.layers.{bid}.attention.key_layernorm",                     # apertus
-            "model.layers.{bid}.attention.k_norm",                            # domyn-edge
+            "model.layers.{bid}.attention.k_norm",                            # domynedge
         ),
 
         MODEL_TENSOR.ROPE_FREQS: (
