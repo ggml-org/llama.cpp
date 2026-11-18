@@ -4959,23 +4959,17 @@ int ggml_metal_op_im2col(ggml_metal_op_t ctx, int idx) {
     return 1;
 }
 
-// number of reduction splits of the conv_2d matmul kernel: few output tiles with a long reduction
-// leave most of the GPU idle, so the reduction is split until there are enough threadgroups
+// number of reduction splits of the conv_2d matmul kernels
+// A small output with a long reduction leaves the GPU idle, so the reduction is split until there are about 1M partial sums.
 static int ggml_metal_op_conv_2d_nsplit(const ggml_tensor * op, int32_t * nk) {
-    const int64_t K   = op->src[0]->ne[0]*op->src[0]->ne[1]*op->src[0]->ne[2];
-    const int64_t OC  = op->src[0]->ne[3];
-    const int64_t NP  = op->ne[0]*op->ne[1]*op->ne[3];
-    const int64_t nr0 = OC <= 32 ? 32 : 64;
-    const int64_t nr1 = 2048/nr0;
-
-    const int64_t tiles  = ((NP + nr1 - 1)/nr1)*((OC + nr0 - 1)/nr0);
+    const int64_t K      = op->src[0]->ne[0]*op->src[0]->ne[1]*op->src[0]->ne[2];
     const int64_t nsteps = (K + 31)/32;
+    const int64_t ne     = ggml_nelements(op);
 
-    // at least 2 reduction steps per split, at most 32 splits
-    int64_t nsplit = std::min<int64_t>({ (512 + tiles - 1)/tiles, nsteps/2, 32 });
-    nsplit = std::max<int64_t>(nsplit, 1);
+    // at least 3 reduction steps of 32 per split, at most 32 splits
+    const int64_t nsplit = std::max<int64_t>(1, std::min<int64_t>({ (1024*1024 + ne - 1)/ne, nsteps/3, 32 }));
+    const int64_t steps  = (nsteps + nsplit - 1)/nsplit;
 
-    const int64_t steps = (nsteps + nsplit - 1)/nsplit;
     if (nk) {
         *nk = (int32_t) (steps*32);
     }
@@ -5050,6 +5044,9 @@ int ggml_metal_op_conv_2d(ggml_metal_op_t ctx, int idx) {
     const ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx->dev);
 
     if (props_dev->has_simdgroup_mm) {
+        // the matmul kernels walk the patches with 32-bit byte offsets inside an image
+        GGML_ASSERT(nb13 <= UINT32_MAX);
+
         auto pipeline = ggml_metal_library_get_pipeline_conv_2d_mm(lib, op);
 
         const int nr0 = pipeline.nr0;

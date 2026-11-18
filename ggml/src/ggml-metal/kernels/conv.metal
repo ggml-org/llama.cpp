@@ -282,7 +282,6 @@ kernel void kernel_conv_2d_mm(
         device       char * dst,
         threadgroup  char * shmem [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
-        uint3   tgpg[[threadgroups_per_grid]],
         ushort  tiitg[[thread_index_in_threadgroup]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
@@ -313,8 +312,14 @@ kernel void kernel_conv_2d_mm(
     const short lb_n = 8*sgitg + tiisg%8;
     const short lb_k = 8*(tiisg/8);
 
+    // the patches are walked with 32-bit byte offsets inside the image, the host checks that an image fits
+    const uint nb10 = args.nb10;
+    const uint nb11 = args.nb11;
+    const uint nb12 = args.nb12;
+
     int  ix0[NPL];
     int  iy0[NPL];
+    uint off0[NPL];
     bool ip_ok[NPL];
 
     device const char * srcb[NPL];
@@ -328,6 +333,8 @@ kernel void kernel_conv_2d_mm(
 
         ix0[t] = iow*args.s0 - args.p0;
         iy0[t] = ioh*args.s1 - args.p1;
+
+        off0[t] = iy0[t]*nb11 + ix0[t]*nb10;
 
         ip_ok[t] = ip < NP;
 
@@ -369,7 +376,11 @@ kernel void kernel_conv_2d_mm(
 
             int kw = kk % args.KW;
             int kh = (kk / args.KW) % args.KH;
-            int ic = kk / (args.KW*args.KH);
+            int dx = kw*args.d0;
+            int dy = kh*args.d1;
+
+            // byte offset of the reduction index kk, relative to the patch origin
+            uint offk = (kk / (args.KW*args.KH))*nb12 + dy*nb11 + dx*nb10;
 
             FOR_UNROLL (short i = 0; i < 8; i++) {
                 const short k = lb_k + i;
@@ -377,12 +388,12 @@ kernel void kernel_conv_2d_mm(
                 FOR_UNROLL (short t = 0; t < NPL; t++) {
                     const short n = 32*t + lb_n;
 
-                    const int ix = ix0[t] + kw*args.d0;
-                    const int iy = iy0[t] + kh*args.d1;
+                    const int ix = ix0[t] + dx;
+                    const int iy = iy0[t] + dy;
 
                     half v = 0;
-                    if (ip_ok[t] && kk < k_end && ix >= 0 && ix < args.IW && iy >= 0 && iy < args.IH) {
-                        v = *(device const float *)(srcb[t] + ic*args.nb12 + iy*args.nb11 + ix*args.nb10);
+                    if (ip_ok[t] && kk < k_end && (uint) ix < (uint) args.IW && (uint) iy < (uint) args.IH) {
+                        v = *(device const float *)(srcb[t] + (off0[t] + offk));
                     }
 
                     const short ib = NKB*(n/8) + k/8;
@@ -391,11 +402,17 @@ kernel void kernel_conv_2d_mm(
                 }
 
                 kk++;
+                dx   += args.d0;
+                offk += args.d0*nb10;
                 if (++kw == args.KW) {
-                    kw = 0;
+                    kw    = 0;
+                    dx    = 0;
+                    dy   += args.d1;
+                    offk += args.d1*nb11 - args.KW*args.d0*nb10;
                     if (++kh == args.KH) {
-                        kh = 0;
-                        ic++;
+                        kh    = 0;
+                        dy    = 0;
+                        offk += nb12 - args.KH*args.d1*nb11;
                     }
                 }
             }
@@ -441,8 +458,8 @@ kernel void kernel_conv_2d_mm(
     const int oh = (p / args.OW) % args.OH;
     const int n  = p / (args.OW*args.OH);
 
-    // with several splits, dst is the partial sum buffer of this split, laid out like a contiguous output
-    device char * dstp = dst + n*args.nb3 + oh*args.nb1 + ow*args.nb0 + (uint64_t) tgpig.z*(tgpg.z > 1 ? args.N*args.nb3 : 0);
+    // with several splits, dst is the partial sum buffer, one contiguous output per split
+    device char * dstp = dst + (uint64_t) tgpig.z*args.N*args.nb3 + n*args.nb3 + oh*args.nb1 + ow*args.nb0;
 
     for (short j = 0; j < NR0*NR1/NTH; j++) {
         const short row = tiitg/NR1 + (NTH/NR1)*j;
@@ -455,9 +472,9 @@ kernel void kernel_conv_2d_mm(
 }
 
 #ifdef GGML_METAL_HAS_TENSOR
-// conv_2d as a matmul on the tensor cores: the patches of NRA output positions are gathered into threadgroup memory
-// as the left operand, the kernel rows are read from device memory as the right operand, like kernel_mul_mm
-// one threadgroup computes NRA positions of one image times NRB output channels, over the reduction range of its split
+// conv_2d as a matmul on the tensor cores, like kernel_mul_mm
+// The patches of NRA output positions are gathered into threadgroup memory, the kernel rows are read from device memory.
+// One threadgroup computes NRA positions of one image times NRB output channels, over the reduction range of its split.
 template <typename TK>
 kernel void kernel_conv_2d_mm_tensor(
         constant ggml_metal_kargs_conv_2d & args,
@@ -501,6 +518,13 @@ kernel void kernel_conv_2d_mm_tensor(
 
     device const char * srcb = src + img*args.nb13;
 
+    // the patch is walked with 32-bit byte offsets inside the image, the host checks that an image fits
+    const uint nb10 = args.nb10;
+    const uint nb11 = args.nb11;
+    const uint nb12 = args.nb12;
+
+    const uint off0 = iy0*nb11 + ix0*nb10;
+
     device TK * ptrB = (device TK *) weights;
     const int strideB = args.nb03/sizeof(TK);
 
@@ -515,28 +539,41 @@ kernel void kernel_conv_2d_mm_tensor(
     auto cT  = mm.get_destination_cooperative_tensor<decltype(tB0), decltype(tA0), float>();
 
     for (int k0 = k_begin; k0 < k_end; k0 += NK) {
-        // gather KPT patch values of this position, walking the reduction index incrementally
-        int kk = k0 + kc;
-        int kw = kk % args.KW;
-        int kh = (kk / args.KW) % args.KH;
-        int ic = kk / (args.KW*args.KH);
+        // the reduction indices past k_end are beyond the extent given to the matmul, they are not gathered
+        if (k0 + kc < k_end) {
+            // gather KPT patch values of this position, walking the reduction index incrementally
+            int kk = k0 + kc;
+            int kw = kk % args.KW;
+            int kh = (kk / args.KW) % args.KH;
+            int dx = kw*args.d0;
+            int dy = kh*args.d1;
 
-        FOR_UNROLL (short i = 0; i < KPT; i++) {
-            const int ix = ix0 + kw*args.d0;
-            const int iy = iy0 + kh*args.d1;
+            // byte offset of the reduction index kk, relative to the patch origin
+            uint offk = (kk / (args.KW*args.KH))*nb12 + dy*nb11 + dx*nb10;
 
-            half v = 0;
-            if (pok && kk < k_end && ix >= 0 && ix < args.IW && iy >= 0 && iy < args.IH) {
-                v = *(device const float *)(srcb + ic*args.nb12 + iy*args.nb11 + ix*args.nb10);
-            }
-            sa[row*NK + kc + i] = v;
+            FOR_UNROLL (short i = 0; i < KPT; i++) {
+                const int ix = ix0 + dx;
+                const int iy = iy0 + dy;
 
-            kk++;
-            if (++kw == args.KW) {
-                kw = 0;
-                if (++kh == args.KH) {
-                    kh = 0;
-                    ic++;
+                half v = 0;
+                if (pok && kk < k_end && (uint) ix < (uint) args.IW && (uint) iy < (uint) args.IH) {
+                    v = *(device const float *)(srcb + (off0 + offk));
+                }
+                sa[row*NK + kc + i] = v;
+
+                kk++;
+                dx   += args.d0;
+                offk += args.d0*nb10;
+                if (++kw == args.KW) {
+                    kw    = 0;
+                    dx    = 0;
+                    dy   += args.d1;
+                    offk += args.d1*nb11 - args.KW*args.d0*nb10;
+                    if (++kh == args.KH) {
+                        kh    = 0;
+                        dy    = 0;
+                        offk += nb12 - args.KH*args.d1*nb11;
+                    }
                 }
             }
         }
@@ -554,11 +591,11 @@ kernel void kernel_conv_2d_mm_tensor(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
-    // dst holds [OHW, OC] per image, with several splits it is the partial sum buffer of this split
+    // dst holds [OHW, OC] per image, with several splits it is the partial sum buffer, one contiguous output per split
     const int tileM = min(NRA, OHW - ra);
     const int tileN = min(NRB, args.OC - rb);
 
-    device float * dstTile = (device float *) (dst + img*args.nb3 + (uint64_t) split*(nsplit > 1 ? args.N*args.nb3 : 0)) + (uint64_t) rb*OHW + ra;
+    device float * dstTile = (device float *) (dst + (uint64_t) split*args.N*args.nb3 + img*args.nb3) + (uint64_t) rb*OHW + ra;
 
     auto tD = tensor(dstTile, dextents<int32_t, 2>(tileM, tileN), array<int, 2>({1, OHW}));
     cT.store(tD);
