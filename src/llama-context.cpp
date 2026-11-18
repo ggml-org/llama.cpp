@@ -384,7 +384,9 @@ llama_context::llama_context(
 
         const char * LLAMA_KV_ROWS_DISABLE = getenv("LLAMA_KV_ROWS_DISABLE");
         if (!LLAMA_KV_ROWS_DISABLE) {
-            cparams.auto_fkvr = cparams.kv_unified;
+            // a unified cache attends to the cells of each sequence only
+            // the k-pool (QSA) selection attends through row lists whenever the cache has a single stream
+            cparams.auto_fkvr = cparams.kv_unified || (hparams.indexer_kpool > 0 && cparams.n_seq_max == 1);
         } else {
             LLAMA_LOG_INFO("%s: LLAMA_KV_ROWS_DISABLE set, disabling kv_rows\n", __func__);
             cparams.auto_fkvr = false;

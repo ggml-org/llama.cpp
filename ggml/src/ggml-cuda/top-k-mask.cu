@@ -139,3 +139,266 @@ void ggml_cuda_op_top_k_mask(ggml_backend_cuda_context & ctx, ggml_tensor * dst)
             GGML_ABORT("unsupported type");
     }
 }
+
+// one thread per list entry, blockIdx.x is the row: the cell of a live pick or an extra cell, else -1
+template <typename T>
+static __global__ void top_k_rows_kernel(
+        const int32_t * top_k, const float * score, const int32_t * blocks, const int32_t * extra, T * dst,
+        const int64_t n_res, const int64_t ne1, const int64_t ne2, const int32_t n_kv,
+        const int64_t n_top, const int64_t n_pick, const int64_t n_blk, const int64_t n_extra,
+        const int64_t sd1, const int64_t sd2, const int64_t sd3,
+        const int64_t sk0, const int64_t sk1, const int64_t sk2, const int64_t sk3,
+        const int64_t ss0, const int64_t ss1, const int64_t ss2, const int64_t ss3,
+        const int64_t sb0, const int64_t sb1,
+        const int64_t se0, const int64_t se1, const int64_t se2, const int64_t se3) {
+    ggml_cuda_pdl_lc();
+
+    const int64_t ir = blockIdx.x;
+    const int64_t i1 = ir % ne1;
+    const int64_t i2 = (ir / ne1) % ne2;
+    const int64_t i3 = ir / (ne1*ne2);
+
+    T             * dst_row   = dst   + i1*sd1 + i2*sd2 + i3*sd3;
+    const int32_t * top_k_row = top_k + i1*sk1 + i2*sk2 + i3*sk3;
+
+    ggml_cuda_pdl_sync();
+
+    const int64_t e = int64_t(blockIdx.y)*blockDim.x + threadIdx.x;
+    if (e < n_res) {
+        int32_t c = -1;
+        if (e < n_top*n_blk) {
+            const int32_t p = top_k_row[(e / n_blk)*sk0];
+            bool live = p >= 0 && p < n_pick;
+            if (live && score) {
+                live = score[p*ss0 + i1*ss1 + i2*ss2 + i3*ss3] > -INFINITY;
+            }
+            if (live) {
+                c = blocks ? blocks[(e % n_blk)*sb0 + p*sb1] : p;
+            }
+        } else if (e < n_top*n_blk + n_extra) {
+            c = extra[(e - n_top*n_blk)*se0 + i1*se1 + i2*se2 + i3*se3];
+        }
+        if (c < 0 || c >= n_kv) {
+            c = -1;
+        }
+
+        if constexpr (std::is_same_v<T, int32_t>) {
+            dst_row[e] = c;
+        } else {
+            dst_row[e] = ggml_cuda_cast<T>(c >= 0 ? 0.0f : -INFINITY);
+        }
+    }
+}
+
+// one block per group of n_group rows: mark the rows in which each pick is live, then list the marked picks in pick order
+// the rows past ne1 that complete the last group have no picks and no extra cells
+template <typename T, int block_size>
+static __global__ void top_k_rows_grouped_kernel(
+        const int32_t * top_k, const float * score, const int32_t * blocks, const int32_t * extra, T * dst, uint32_t * rows_of_all,
+        const int64_t n_res, const int64_t ne1, const int64_t n_grp1, const int64_t ne2, const int32_t n_kv, const int n_group,
+        const int64_t n_top, const int64_t n_pick, const int64_t n_blk, const int64_t n_extra,
+        const int64_t sd1, const int64_t sd2, const int64_t sd3,
+        const int64_t sk0, const int64_t sk1, const int64_t sk2, const int64_t sk3,
+        const int64_t ss0, const int64_t ss1, const int64_t ss2, const int64_t ss3,
+        const int64_t sb0, const int64_t sb1,
+        const int64_t se0, const int64_t se1, const int64_t se2, const int64_t se3) {
+    ggml_cuda_pdl_lc();
+
+    const int64_t ig = blockIdx.x;
+    const int64_t g  = ig % n_grp1;
+    const int64_t i2 = (ig / n_grp1) % ne2;
+    const int64_t i3 = ig / (n_grp1*ne2);
+
+    uint32_t * rows_of = rows_of_all + ig*n_pick;
+
+    // the list stores the cell once, the mask stores each row's visibility of it
+    auto emit = [&](const int64_t e, int32_t c, const uint32_t rows) {
+        c = c >= 0 && c < n_kv ? c : -1;
+        if constexpr (std::is_same_v<T, int32_t>) {
+            dst[g*sd1 + i2*sd2 + i3*sd3 + e] = c;
+        } else {
+            for (int j = 0; j < n_group; ++j) {
+                dst[(g*n_group + j)*sd1 + i2*sd2 + i3*sd3 + e] = ggml_cuda_cast<T>(c >= 0 && ((rows >> j) & 1) ? 0.0f : -INFINITY);
+            }
+        }
+    };
+
+    ggml_cuda_pdl_sync();
+
+    for (int64_t p = threadIdx.x; p < n_pick; p += block_size) {
+        rows_of[p] = 0;
+    }
+    __syncthreads();
+
+    for (int64_t k = threadIdx.x; k < n_group*n_top; k += block_size) {
+        const int     j  = k / n_top;
+        const int64_t i1 = g*n_group + j;
+        if (i1 >= ne1) {
+            break;
+        }
+        const int32_t p  = top_k[(k % n_top)*sk0 + i1*sk1 + i2*sk2 + i3*sk3];
+        if (p < 0 || p >= n_pick) {
+            continue;
+        }
+        if (score && !(score[p*ss0 + i1*ss1 + i2*ss2 + i3*ss3] > -INFINITY)) {
+            continue;
+        }
+        atomicOr(rows_of + p, 1u << j);
+    }
+    __syncthreads();
+
+    // compact the marked picks: block-wide exclusive count per chunk of block_size picks
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    constexpr int n_warps   = block_size / warp_size;
+    using lane_mask_t = std::conditional_t<warp_size == 64, uint64_t, uint32_t>;
+    constexpr uint64_t ballot_mask = ~(lane_mask_t) 0;
+    const auto popc = [](const lane_mask_t mask) {
+        if constexpr (warp_size == 64) {
+            return __popcll(mask);
+        } else {
+            return __popc(mask);
+        }
+    };
+    __shared__ int warp_count[n_warps];
+    const int lane = threadIdx.x % warp_size;
+    const int warp = threadIdx.x / warp_size;
+
+    int64_t n_listed = 0;
+    for (int64_t p0 = 0; p0 < n_pick; p0 += block_size) {
+        const int64_t  p    = p0 + threadIdx.x;
+        const uint32_t rows = p < n_pick ? rows_of[p] : 0;
+
+        const lane_mask_t ballot = (lane_mask_t) ggml_cuda_ballot(rows != 0, ballot_mask);
+        if (lane == 0) {
+            warp_count[warp] = popc(ballot);
+        }
+        __syncthreads();
+        int before = 0;
+        int total  = 0;
+        for (int w = 0; w < n_warps; ++w) {
+            before += w < warp ? warp_count[w] : 0;
+            total  += warp_count[w];
+        }
+        __syncthreads();
+
+        if (rows != 0) {
+            const int64_t e0 = (n_listed + before + popc(ballot & (((lane_mask_t) 1 << lane) - 1)))*n_blk;
+            for (int64_t i = 0; i < n_blk; ++i) {
+                emit(e0 + i, blocks ? blocks[i*sb0 + p*sb1] : (int32_t) p, rows);
+            }
+        }
+        n_listed += total;
+    }
+
+    // each row's own extra cells, then the padding
+    const int64_t e_extra = n_listed*n_blk;
+    for (int64_t k = threadIdx.x; k < n_group*n_extra; k += block_size) {
+        const int     j  = k / n_extra;
+        const int64_t i1 = g*n_group + j;
+        emit(e_extra + k, i1 < ne1 ? extra[(k % n_extra)*se0 + i1*se1 + i2*se2 + i3*se3] : -1, 1u << j);
+    }
+    for (int64_t e = e_extra + n_group*n_extra + threadIdx.x; e < n_res; e += block_size) {
+        emit(e, -1, 0);
+    }
+}
+
+template <typename T>
+static void top_k_rows_grouped_cuda(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * top_k  = dst->src[0];
+    const ggml_tensor * score  = dst->src[1];
+    const ggml_tensor * blocks = dst->src[2];
+    const ggml_tensor * extra  = dst->src[3];
+
+    const int32_t n_kv    = ggml_get_op_params_i32(dst, 0);
+    const int     n_group = ggml_get_op_params_i32(dst, 1);
+    const int64_t n_res   = dst->ne[0];
+    const int64_t n_pick  = blocks ? blocks->ne[1] : score ? score->ne[0] : n_kv;
+    const int64_t n_grp1  = (top_k->ne[1] + n_group - 1)/n_group;
+    const int64_t n_groups = n_grp1*top_k->ne[2]*top_k->ne[3];
+
+    GGML_ASSERT(dst->nb[0] == sizeof(T));
+    GGML_ASSERT(n_groups <= INT_MAX);
+
+    ggml_cuda_pool_alloc<uint32_t> rows_of(ctx.pool(), n_groups*n_pick);
+
+    const size_t si = sizeof(int32_t);
+    const size_t sf = sizeof(float);
+
+    const dim3 block_dims(CUDA_TOP_K_MASK_BLOCK_SIZE, 1, 1);
+    const dim3 grid_dims(n_groups, 1, 1);
+    const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(grid_dims, block_dims, 0, ctx.stream());
+
+    ggml_cuda_kernel_launch(top_k_rows_grouped_kernel<T, CUDA_TOP_K_MASK_BLOCK_SIZE>, launch_params,
+            (const int32_t *) top_k->data,
+            score  ? (const float   *) score->data  : nullptr,
+            blocks ? (const int32_t *) blocks->data : nullptr,
+            extra  ? (const int32_t *) extra->data  : nullptr,
+            (T *) dst->data, rows_of.get(),
+            n_res, top_k->ne[1], n_grp1, top_k->ne[2], n_kv, n_group,
+            top_k->ne[0], n_pick, blocks ? blocks->ne[0] : 1, extra ? extra->ne[0] : 0,
+            dst->nb[1]/sizeof(T), dst->nb[2]/sizeof(T), dst->nb[3]/sizeof(T),
+            top_k->nb[0]/si, top_k->nb[1]/si, top_k->nb[2]/si, top_k->nb[3]/si,
+            score  ? score->nb[0]/sf  : 0, score ? score->nb[1]/sf : 0, score ? score->nb[2]/sf : 0, score ? score->nb[3]/sf : 0,
+            blocks ? blocks->nb[0]/si : 0, blocks ? blocks->nb[1]/si : 0,
+            extra  ? extra->nb[0]/si  : 0, extra ? extra->nb[1]/si : 0, extra ? extra->nb[2]/si : 0, extra ? extra->nb[3]/si : 0);
+}
+
+template <typename T>
+static void top_k_rows_cuda(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * top_k  = dst->src[0];
+    const ggml_tensor * score  = dst->src[1];
+    const ggml_tensor * blocks = dst->src[2];
+    const ggml_tensor * extra  = dst->src[3];
+
+    if (ggml_get_op_params_i32(dst, 1) > 1) {
+        top_k_rows_grouped_cuda<T>(ctx, dst);
+        return;
+    }
+
+    const int32_t n_kv  = ggml_get_op_params_i32(dst, 0);
+    const int64_t n_res = dst->ne[0];
+
+    GGML_ASSERT(dst->nb[0] == sizeof(T));
+
+    const int64_t n_pick = blocks ? blocks->ne[1] : score ? score->ne[0] : n_kv;
+
+    const size_t si = sizeof(int32_t);
+    const size_t sf = sizeof(float);
+
+    const int block_size = 256;
+
+    GGML_ASSERT((n_res + block_size - 1)/block_size <= 65535);
+    const dim3 block_dims(block_size, 1, 1);
+    const dim3 grid_dims(ggml_nrows(dst), (n_res + block_size - 1)/block_size, 1);
+    const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(grid_dims, block_dims, 0, ctx.stream());
+
+    ggml_cuda_kernel_launch(top_k_rows_kernel<T>, launch_params,
+            (const int32_t *) top_k->data,
+            score  ? (const float   *) score->data  : nullptr,
+            blocks ? (const int32_t *) blocks->data : nullptr,
+            extra  ? (const int32_t *) extra->data  : nullptr,
+            (T *) dst->data,
+            n_res, dst->ne[1], dst->ne[2], n_kv,
+            top_k->ne[0], n_pick, blocks ? blocks->ne[0] : 1, extra ? extra->ne[0] : 0,
+            dst->nb[1]/sizeof(T), dst->nb[2]/sizeof(T), dst->nb[3]/sizeof(T),
+            top_k->nb[0]/si, top_k->nb[1]/si, top_k->nb[2]/si, top_k->nb[3]/si,
+            score  ? score->nb[0]/sf  : 0, score ? score->nb[1]/sf : 0, score ? score->nb[2]/sf : 0, score ? score->nb[3]/sf : 0,
+            blocks ? blocks->nb[0]/si : 0, blocks ? blocks->nb[1]/si : 0,
+            extra  ? extra->nb[0]/si  : 0, extra ? extra->nb[1]/si : 0, extra ? extra->nb[2]/si : 0, extra ? extra->nb[3]/si : 0);
+}
+
+void ggml_cuda_op_top_k_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    switch (dst->type) {
+        case GGML_TYPE_I32:
+            top_k_rows_cuda<int32_t>(ctx, dst);
+            break;
+        case GGML_TYPE_F16:
+            top_k_rows_cuda<half>(ctx, dst);
+            break;
+        case GGML_TYPE_F32:
+            top_k_rows_cuda<float>(ctx, dst);
+            break;
+        default:
+            GGML_ABORT("unsupported type");
+    }
+}

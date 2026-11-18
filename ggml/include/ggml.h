@@ -415,6 +415,7 @@ extern "C" {
         GGML_OP_DSV4_HC_PRE,
         GGML_OP_DSV4_HC_POST,
         GGML_OP_TOP_K_MASK,
+        GGML_OP_TOP_K_ROWS,
 
         GGML_OP_UNARY,
 
@@ -2559,6 +2560,34 @@ extern "C" {
             struct ggml_tensor  * score,
             struct ggml_tensor  * blocks,
             struct ggml_tensor  * extra);
+
+    // the cells that ggml_top_k_mask keeps as one list per group of n_group rows, for ggml_flash_attn_ext_rows
+    //
+    // top_k, score, blocks, extra: as in ggml_top_k_mask
+    // n_group == 1:
+    //   res: [n_res, ne1, ne2, ne3] i32: the cells of the live picks (n_blk per pick), then the extra cells, then padding
+    //        entries of dead picks, cells out of [0, n_kv) and the padding are -1
+    //        f16 or f32: the matching mask, 0 for a listed cell and -inf for a -1 entry
+    // n_group > 1, rows i1 = g*n_group + j form group g, n_grp1 = ceil(ne1/n_group) groups:
+    //   res: i32 [n_res, n_grp1, ne2, ne3]: the cells of the picks that are live in any row of the group, in pick order,
+    //        then the extra cells of each row of the group, then padding
+    //        f16 or f32 [n_res, n_grp1*n_group, ne2, ne3]: the mask of each row over its group's list,
+    //        0 where the entry is a cell of a live pick of the row or one of its own extra cells, else -inf
+    //        the rows past ne1 that complete the last group are -inf
+    //   n_res >= min(n_pick, n_group*n_top)*n_blk + n_group*n_extra
+    //
+    // a cell that is listed twice is attended twice, the picks and the extra cells of a row must not overlap
+    //
+    GGML_API struct ggml_tensor * ggml_top_k_rows(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * top_k,
+            struct ggml_tensor  * score,
+            struct ggml_tensor  * blocks,
+            struct ggml_tensor  * extra,
+            int64_t               n_kv,
+            int64_t               n_res,
+            int64_t               n_group,
+            enum ggml_type        type);
 
     // custom operators
 
