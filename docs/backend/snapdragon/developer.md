@@ -307,6 +307,12 @@ Writing high-performance operators for Hexagon requires following specific guide
 - **Distinction**: `octx->src[N]` pointers *can* be NULL by design and must be checked when optional.
   Examples include attention masks, optional bias or weights in fused kernels, and frequency factors.
 
+### Prefer Early Dispatch and Specialized Micro-Kernels
+
+- Avoid peppering micro-kernels, row or tile compute loops, or DMA worker loops with runtime checks for operand types, optional inputs, broadcast modes, or layout variants.
+- Resolve execution variants early during operator setup (`op_*` / `execute_op_*`) via function pointers or dispatch tables so each micro-kernel and inner loop handles a single clean path that the compiler can unroll and software-pipeline without extra branch or register pressure.
+- Prefer clean standalone specialized functions; use macros only to avoid genuine code duplication across type or mode instantiations.
+
 ### `supports_op` Independence from Buffer and Repack State
 
 - `supports_op` (and op-specific checkers such as `supported_mul_mat()`, `supported_get_rows()`) runs during GGML graph scheduling **before** buffers are allocated and before tensor data is populated.
