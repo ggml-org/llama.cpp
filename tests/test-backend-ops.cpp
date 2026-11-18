@@ -5738,6 +5738,25 @@ struct test_mul_mat_w4a8 : public test_mul_mat {
     }
 };
 
+// FP4 W4A4 path requested by the graph (GGML_PREC_Q4 on src1)
+struct test_mul_mat_w4a4_req : public test_mul_mat {
+    test_mul_mat_w4a4_req(ggml_type type_a, int64_t m, int64_t n, int64_t k)
+        : test_mul_mat(type_a, GGML_TYPE_F32, m, n, k, {1, 1}, {1, 1}) {}
+    ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
+        ggml_tensor * out = test_mul_mat::build_graph(ctx, ctx_weights);
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->op == GGML_OP_MUL_MAT) {
+                ggml_prec_set_src(t, GGML_PREC_Q4, 1);
+            }
+        }
+        return out;
+    }
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_W4A4_REQ";
+    }
+};
+
 // src1 GGML_PREC_BF16: the implementation may keep src1 in F32 or BF16, but must not convert it down to F16,
 // which cannot hold the src1 values that the BF16 range allows
 struct test_mul_mat_prec_src1_bf16 : public test_mul_mat {
@@ -12072,6 +12091,26 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // CUDA few-row MMQ for MUL_MAT_ID: strided experts, more than 32 experts
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32,  16, 4, true,  72, 13, 2048, 80));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32, 128, 8, false, 72, 16, 2048));
+    // CUDA few-row MMQ for NVFP4: default src1 precision, 8-bit src1 (GGML_PREC_Q8) and 4-bit src1 (GGML_PREC_Q4), K at the gate edges (2048 = 8 units, 2304 = 9 units) and not a multiple of 256 (4160)
+    for (int64_t k : {4608, 2304}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4, GGML_TYPE_F32, 1000,  8, k, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4, GGML_TYPE_F32, 6170, 13, k, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4, GGML_TYPE_F32, 1000, 21, k, {1, 1}, {1, 1}));
+    }
+    for (int64_t n : {2, 5, 8, 13, 21, 24}) {
+        test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 1000, n, 4608));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4, GGML_TYPE_F32, 1000, n, 2048, {1, 1}, {1, 1}));
+    }
+    for (int64_t n : {2, 8, 13}) {
+        test_cases.emplace_back(new test_mul_mat_w4a4_req(GGML_TYPE_NVFP4, 1000, n, 4608));
+    }
+    test_cases.emplace_back(new test_mul_mat_w4a4_req(GGML_TYPE_NVFP4, 6170, 8, 4608));
+    test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 6170, 13, 4608));
+    test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 1000, 21, 2304));
+    test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 1000,  8, 4160));
+    test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32,   64, 13, 4608, {3, 2}, {2, 2}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4, GGML_TYPE_F32, 63, 5, 4608, {3, 2}, {2, 2}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4, GGML_TYPE_F32, 6170, 13, 4608, {1, 1}, {1, 1}, {0, 1, 2, 3}, 0, 1, false, 0, 0, 0, true));
 
 #if 0
     {
@@ -13445,6 +13484,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K,   GGML_GLU_OP_SWIGLU,         9,   128, 2048, false, 1, 1, false, false, true, false, { 1, 1 }));
     // on DGX Spark also the expert gate and up matmuls at 8 tokens, instead of the fused MMVQ path
     test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K,   GGML_GLU_OP_SWIGLU,         8,   128, 2048, true, 16, 4, true));
+    // NVFP4 gate and up with weight scales at 2-24 tokens: few-row MMQ, where enabled, takes each matmul with the MUL by its scale
+    for (int64_t m : {2, 8, 13, 24}) {
+        test_cases.emplace_back(new test_mul_mat_fusion     (GGML_TYPE_NVFP4, GGML_GLU_OP_SWIGLU, m, 1000, 4096, false, 1, 1, false, false, true, true, { 1, 1 }));
+        test_cases.emplace_back(new test_mul_mat_fusion_w4a8(GGML_TYPE_NVFP4, GGML_GLU_OP_SWIGLU, m, 1000, 4096, false, 1, 1, false, false, true, true, { 1, 1 }));
+    }
+    test_cases.emplace_back(new test_mul_mat_fusion     (GGML_TYPE_NVFP4, GGML_GLU_OP_SWIGLU, 8, 64, 4096, false, 1, 1, false, false, true, true, { 3, 2 }));
+    test_cases.emplace_back(new test_mul_mat_fusion_w4a8(GGML_TYPE_NVFP4, GGML_GLU_OP_SWIGLU, 8, 64, 4096, false, 1, 1, false, false, true, true, { 3, 2 }));
 
     for (auto gate : {GATING_FUNC_SOFTMAX, GATING_FUNC_SIGMOID, GATING_FUNC_SOFTMAX_WEIGHT, GATING_FUNC_SQRT_SOFTPLUS}) {
         for (bool with_norm : {false, true}) {
