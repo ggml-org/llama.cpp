@@ -6106,6 +6106,9 @@ void server_routes::init_routes() {
     // audio is PCM16 mono at the model sample rate, sent as base64 in input_audio_buffer.append events
     // input_audio_buffer.commit with "final": true ends the input, closing the socket also ends it
     this->ws_realtime = [this](const server_http_req & req, server_http_context::ws_conn & conn) {
+        // make sure sleep state is handled by create_response()
+        auto res = create_response();
+
         auto send_event = [&conn](json ev) {
             ev["event_id"] = "event_" + random_string();
             conn.send(safe_json_to_str(ev));
@@ -6150,7 +6153,6 @@ void server_routes::init_routes() {
             }}}},
         };
 
-        auto res = create_response();
         auto & rd = res->rd;
         {
             server_task task(SERVER_TASK_TYPE_TRANSCRIBE_RT);

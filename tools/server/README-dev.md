@@ -323,6 +323,8 @@ Call stack on waking up:
 
 Endpoints created with `create_response(true)` (`/health`, `/props`, `/models`, `/metrics`) skip `wait_until_no_sleep`, so they answer from the cached responses instead of waking the server.
 
+IMPORTANT: any handler that touches the model or contexts (`ctx_server.mctx`, `ctx_server.vocab`, etc.) must call `create_response()` before that access, and keep the returned object alive until it is done with them. While sleeping, these pointers are freed, so using them before waking up leads to a crash. The returned object also holds an inflight count (released in its destructor) that prevents the server from going back to sleep. This applies to every route type, not only HTTP routes: for example, the `/v1/realtime` websocket handler calls `create_response()` first and holds it for the whole session.
+
 ### Notable Related PRs
 
 - Initial server implementation: https://github.com/ggml-org/llama.cpp/pull/1443
