@@ -207,6 +207,14 @@ option(GGML_CUDA_FA                         "ggml: compile ggml FlashAttention C
 option(GGML_CUDA_FA_ALL_QUANTS              "ggml: compile all quants for FlashAttention"     OFF)
 set   (GGML_CUDA_FA_QUANTS "q4_0-q4_0;q8_0-q8_0;f16-f16;bf16-bf16;f8_e4m3-f8_e4m3" CACHE STRING
                                             "ggml: FlashAttention K-V type combinations to compile, \"all\" or a list such as \"q8_0-q8_0;q8_0-q4_0\"")
+# The default is fixed the first time this directory is configured. Turning GGML_HIP on later keeps the cached value.
+if (GGML_HIP)
+    set(GGML_CUDA_FA_TILE_NATIVE_KV_DEFAULT "q4_0-q4_0;q8_0-q8_0")
+else()
+    set(GGML_CUDA_FA_TILE_NATIVE_KV_DEFAULT "")
+endif()
+set(GGML_CUDA_FA_TILE_NATIVE_KV "${GGML_CUDA_FA_TILE_NATIVE_KV_DEFAULT}" CACHE STRING
+                                            "ggml: K/V type pairs compiled for the tile FA kernel, empty to disable. A cached value is kept if GGML_HIP is enabled later in this build directory")
 option(GGML_CUDA_GRAPHS                     "ggml: use CUDA graphs (llama.cpp only)"          ${GGML_CUDA_GRAPHS_DEFAULT})
 option(GGML_CUDA_NCCL                       "ggml: use NVIDIA Collective Comm. Library"       ON)
 set   (GGML_CUDA_COMPRESSION_MODE "size" CACHE STRING
