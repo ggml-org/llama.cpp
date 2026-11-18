@@ -98,6 +98,13 @@ int main() {
         { "ABCdef's tail",     { "ABCdef's", " tail" } },
         { "1234567",           { "123", "456", "7" } },
         { "你好world",          { "你好", "world" } },
+        { "it'ſ",              { "it", "'ſ" } },
+        { "123don't",          { "123", "don't" } },
+        { "123don'",           { "123", "don", "'" } },
+        { "hi .\n",            { "hi", " .\n" } },
+        { "a\x01 b",           { "a", "\x01", " b" } },
+        { "a  ",               { "a", "  " } },
+        { "a1b22c333",         { "a", "1", "b", "22", "c", "333" } },
     };
     // run on a worker thread: musl gives pthreads a small stack, where the std::regex fallback overflows
     bool flint_success = true;

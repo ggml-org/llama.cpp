@@ -1187,9 +1187,9 @@ static std::vector<size_t> unicode_regex_split_custom_afmoe(const std::string & 
     return bpe_offsets;
 }
 
-// flint pre-tokenizer, part 1: \p{N}{1,3}
-// digit runs in groups of 3 from the left, other text stays one chunk
-static std::vector<size_t> unicode_regex_split_custom_flint_digits(const std::string & text, const std::vector<size_t> & offsets) {
+// \p{N}{1,3}: digit runs in groups of 3 from the left, other text stays one chunk
+// shared by the flint, deepseek3, hunyuan-dense, joyai, hy-v4, spark2_5 and youtu pre-tokenizers
+static std::vector<size_t> unicode_regex_split_custom_digits(const std::string & text, const std::vector<size_t> & offsets) {
     std::vector<size_t> bpe_offsets;
     bpe_offsets.reserve(offsets.size());
 
@@ -1233,8 +1233,8 @@ static std::vector<size_t> unicode_regex_split_custom_flint_digits(const std::st
     return bpe_offsets;
 }
 
-// flint pre-tokenizer, part 2: [一-龥぀-ゟ゠-ヿ]+
-static std::vector<size_t> unicode_regex_split_custom_flint_cjk(const std::string & text, const std::vector<size_t> & offsets) {
+// CJK runs: Hiragana, Katakana and CJK unified ideographs ranges; same shared pre-tokenizers as digits
+static std::vector<size_t> unicode_regex_split_custom_cjk(const std::string & text, const std::vector<size_t> & offsets) {
     std::vector<size_t> bpe_offsets;
     bpe_offsets.reserve(offsets.size());
 
@@ -1270,6 +1270,72 @@ static std::vector<size_t> unicode_regex_split_custom_flint_cjk(const std::strin
             }
             _add_token(pos);
             while (pos < offset_end && is_cjk(cpts[pos])) {
+                pos++;
+            }
+            _add_token(pos);
+        }
+        _add_token(offset_end);
+    }
+
+    return bpe_offsets;
+}
+
+// youtu first pattern: runs of Hangul, fullwidth punctuation, Bopomofo or CJK, one alternative per run
+static std::vector<size_t> unicode_regex_split_custom_youtu(const std::string & text, const std::vector<size_t> & offsets) {
+    std::vector<size_t> bpe_offsets;
+    bpe_offsets.reserve(offsets.size());
+
+    const auto cpts = unicode_cpts_from_utf8(text);
+
+    const auto class_of = [] (uint32_t cpt) -> int {
+        // the fallback remaps non-ASCII whitespace before matching, so it never hits these classes
+        if (unicode_cpt_flags_from_cpt(cpt).is_whitespace) {
+            return 0;
+        }
+        if ((cpt >= 0xAC00 && cpt <= 0xD7A3) || (cpt >= 0x3131 && cpt <= 0x318E)) {
+            return 1;
+        }
+        if (cpt == 0xFF01 || cpt == 0x2026 || cpt == 0x201C || cpt == 0x201D ||
+            cpt == 0x2018 || cpt == 0x2019 || cpt == 0x2014 || cpt == 0xFF1A ||
+            cpt == 0xFF1B || cpt == 0xFF0C ||
+            (cpt >= 0x3000 && cpt <= 0x303F) || (cpt >= 0xFE30 && cpt <= 0xFE4F)) {
+            return 2;
+        }
+        if (cpt >= 0x3105 && cpt <= 0x312F) {
+            return 3;
+        }
+        if ((cpt >= 0x4E00 && cpt <= 0x9FA5) || (cpt >= 0x3040 && cpt <= 0x309F) ||
+            (cpt >= 0x30A0 && cpt <= 0x30FF)) {
+            return 4;
+        }
+        return 0;
+    };
+
+    size_t start = 0;
+    for (auto offset : offsets) {
+        const size_t offset_ini = start;
+        const size_t offset_end = start + offset;
+        assert(offset_end <= cpts.size());
+        start = offset_end;
+
+        size_t prev_end = offset_ini;
+        auto _add_token = [&] (const size_t end) {
+            assert(prev_end <= end && end <= offset_end);
+            if (end > prev_end) {
+                bpe_offsets.push_back(end - prev_end);
+            }
+            prev_end = end;
+        };
+
+        size_t pos = offset_ini;
+        while (pos < offset_end) {
+            const int cls = class_of(cpts[pos]);
+            if (cls == 0) {
+                pos++;
+                continue;
+            }
+            _add_token(pos);
+            while (pos < offset_end && class_of(cpts[pos]) == cls) {
                 pos++;
             }
             _add_token(pos);
@@ -1330,14 +1396,17 @@ static std::vector<size_t> unicode_regex_split_custom_flint_words(const std::str
             if (end == pos) {
                 return pos;
             }
-            // optional contraction suffix
+            // optional contraction suffix; the regex classes are ASCII-only, so no case folding
             if (_get_cpt(end) == '\'' && end + 1 < offset_end) {
-                const uint32_t c1 = unicode_tolower(_get_cpt(end + 1));
-                if (c1 == 's' || c1 == 't' || c1 == 'm' || c1 == 'd') {
+                const uint32_t c1 = _get_cpt(end + 1);
+                if (c1 == 's' || c1 == 'S' || c1 == 't' || c1 == 'T' || c1 == 'm' || c1 == 'M' || c1 == 'd' || c1 == 'D') {
                     end += 2;
                 } else if (end + 2 < offset_end) {
-                    const uint32_t c2 = unicode_tolower(_get_cpt(end + 2));
-                    if ((c1 == 'r' && c2 == 'e') || (c1 == 'v' && c2 == 'e') || (c1 == 'l' && c2 == 'l')) {
+                    const uint32_t c2 = _get_cpt(end + 2);
+                    const bool re = (c1 == 'r' || c1 == 'R') && (c2 == 'e' || c2 == 'E');
+                    const bool ve = (c1 == 'v' || c1 == 'V') && (c2 == 'e' || c2 == 'E');
+                    const bool ll = (c1 == 'l' || c1 == 'L') && (c2 == 'l' || c2 == 'L');
+                    if (re || ve || ll) {
                         end += 3;
                     }
                 }
@@ -1482,9 +1551,11 @@ static std::vector<size_t> unicode_regex_split_custom(const std::string & text, 
     } else if (regex_expr == "[^\\n]+|[\\n]+") {
         bpe_offsets = unicode_regex_split_custom_newlines(text, offsets);
     } else if (regex_expr == "\\p{N}{1,3}") {
-        bpe_offsets = unicode_regex_split_custom_flint_digits(text, offsets);
+        bpe_offsets = unicode_regex_split_custom_digits(text, offsets);
     } else if (regex_expr == "[一-龥぀-ゟ゠-ヿ]+") {
-        bpe_offsets = unicode_regex_split_custom_flint_cjk(text, offsets);
+        bpe_offsets = unicode_regex_split_custom_cjk(text, offsets);
+    } else if (regex_expr == "[가-힣ㄱ-\u318E]+|[！…“”‘’—：；，、-〿︰-\uFE4F]+|[ㄅ-\u312F]+|[一-龥぀-ゟ゠-ヿ]+") {
+        bpe_offsets = unicode_regex_split_custom_youtu(text, offsets);
     } else if (regex_expr == "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?| ?[\\p{P}\\p{S}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+") {
         bpe_offsets = unicode_regex_split_custom_flint_words(text, offsets);
     } else if (regex_expr == "\\d{1,3}(?=(?:\\d{3})*\\b)") {
