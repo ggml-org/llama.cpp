@@ -67,7 +67,7 @@ void llama_model_inkling2::load_arch_tensors(llama_model_loader &) {
     output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, hparams.n_vocab_padded}, 0);
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
     output_res_query = create_tensor(tn(LLM_TENSOR_OUTPUT_RES_QUERY, "weight"), {n_embd}, 0);
-    for (int i = 0; i < n_layer; ++i) {
+    for (int i = 0; i < n_layer_phys(); ++i) {
         auto & l = layers[i];
         const int64_t nh = hparams.n_head(i);
         const int64_t nk = hparams.n_head_kv(i);

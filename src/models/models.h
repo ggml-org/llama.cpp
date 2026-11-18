@@ -2476,6 +2476,9 @@ struct llama_model_inkling2 : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
+    // the layers stored in the file
+    virtual int n_layer_phys() const { return hparams.n_layer(); }
+
     struct graph : public llm_graph_context {
         graph(const llm_graph_params & params);
         ggml_tensor * mix(const std::vector<ggml_tensor *> & blocks, ggml_tensor * cur, ggml_tensor * query);
@@ -2484,6 +2487,35 @@ struct llama_model_inkling2 : public llama_model_base {
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+// the cache slots after the physical layers repeat the core [core_start, core_end) for each later pass
+struct llama_model_inkling2_loop : public llama_model_inkling2 {
+    llama_model_inkling2_loop(const struct llama_model_params & params) : llama_model_inkling2(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    int n_layer_phys() const override { return n_phys; }
+    int layer_phys(int il) const;
+
+    int      n_phys     = 0;
+    uint32_t core_start = 0;
+    uint32_t core_end   = 0;
+    uint32_t n_passes   = 0;
+    uint32_t gate_rank  = 0;
+
+    // message controllers of the q, k, v and ffn inputs of a core layer
+    enum { LOOP_CTRL_Q, LOOP_CTRL_K, LOOP_CTRL_V, LOOP_CTRL_FFN, LOOP_CTRL_COUNT };
+
+    struct loop_layer {
+        ggml_tensor * msg_query = nullptr;
+        ggml_tensor * ctrl_down[LOOP_CTRL_COUNT]   = {};
+        ggml_tensor * ctrl_gain[LOOP_CTRL_COUNT]   = {};
+        ggml_tensor * ctrl_forget[LOOP_CTRL_COUNT] = {};
+    };
+
+    // indexed by physical layer - core_start
+    std::vector<loop_layer> loop_layers;
 };
 
 struct llama_model_lfm2 : public llama_model_base {
