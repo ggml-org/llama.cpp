@@ -608,22 +608,29 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
     const int64_t n_kv     = self_attn_mask.raw->ne[0];
     const int64_t n_tokens = ubatch->n_tokens;
 
-    const auto fill_mask = [&](auto * data, int64_t ne, int n_swa, llama_swa_type swa_type, bool causal) {
+    const auto fill_mask = [&](auto * data, int64_t ne, int n_swa, llama_swa_type swa_type, bool causal, const int32_t * group) {
         using T = std::remove_reference_t<decltype(*data)>;
         std::fill(data, data + ne, llama_cast<T>(-INFINITY));
 
         for (int i1 = 0; i1 < n_tokens; ++i1) {
             const llama_seq_id s1 = ubatch->seq_id[i1][0];
             const llama_pos    p1 = ubatch->pos[i1];
+            const int32_t      g1 = group ? group[i1] : 0;
 
             const uint64_t idst = i1*n_kv;
 
             for (int i0 = 0; i0 < n_tokens; ++i0) {
                 const llama_seq_id s0 = ubatch->seq_id[i0][0];
                 const llama_pos p0    = ubatch->pos[i0];
+                const int32_t   g0    = group ? group[i0] : 0;
 
                 // mask different sequences
                 if (s0 != s1) {
+                    continue;
+                }
+
+                // mask other questions, see llama_batch_ext_set_decision_group()
+                if (g0 != 0 && g1 != 0 && g0 != g1) {
                     continue;
                 }
 
@@ -653,18 +660,18 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
     GGML_ASSERT(self_attn_mask.raw);
     GGML_ASSERT(ggml_backend_buffer_is_host(self_attn_mask.raw->buffer));
     if (self_attn_mask.raw->type == GGML_TYPE_F16) {
-        fill_mask((ggml_fp16_t *) self_attn_mask.raw->data, ggml_nelements(self_attn_mask.raw), 0, LLAMA_SWA_TYPE_NONE, causal);
+        fill_mask((ggml_fp16_t *) self_attn_mask.raw->data, ggml_nelements(self_attn_mask.raw), 0, LLAMA_SWA_TYPE_NONE, causal, ubatch->decision_group);
     } else {
-        fill_mask((float       *) self_attn_mask.raw->data, ggml_nelements(self_attn_mask.raw), 0, LLAMA_SWA_TYPE_NONE, causal);
+        fill_mask((float       *) self_attn_mask.raw->data, ggml_nelements(self_attn_mask.raw), 0, LLAMA_SWA_TYPE_NONE, causal, ubatch->decision_group);
     }
 
     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
         GGML_ASSERT(self_attn_mask_swa.raw);
         GGML_ASSERT(ggml_backend_buffer_is_host(self_attn_mask_swa.raw->buffer));
         if (self_attn_mask_swa.raw->type == GGML_TYPE_F16) {
-            fill_mask((ggml_fp16_t *) self_attn_mask_swa.raw->data, ggml_nelements(self_attn_mask_swa.raw), hparams.n_swa, hparams.swa_type, causal_swa);
+            fill_mask((ggml_fp16_t *) self_attn_mask_swa.raw->data, ggml_nelements(self_attn_mask_swa.raw), hparams.n_swa, hparams.swa_type, causal_swa, nullptr);
         } else {
-            fill_mask((float       *) self_attn_mask_swa.raw->data, ggml_nelements(self_attn_mask_swa.raw), hparams.n_swa, hparams.swa_type, causal_swa);
+            fill_mask((float       *) self_attn_mask_swa.raw->data, ggml_nelements(self_attn_mask_swa.raw), hparams.n_swa, hparams.swa_type, causal_swa, nullptr);
         }
     }
 }
