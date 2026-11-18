@@ -156,11 +156,11 @@ bool ggml_cuda_flash_attn_ext_tile_shall_use_sparse(const int cc, const ggml_ten
             return false;
         }
 
-        if (DKQ == 72  && DV == 72)  return n_kv >= 32768;
+        if (DKQ == 72  && DV == 72)  return n_kv >= 8192;
         if (DKQ == 80  && DV == 80)  return n_kv >= 16384;
         if (DKQ == 96  && DV == 96)  return n_kv >= 16384;
         if (DKQ == 112 && DV == 112) return n_kv >= 16384;
-        if (DKQ == 128 && DV == 128) return n_kv >= 32768;
+        if (DKQ == 128 && DV == 128) return n_kv >= 8192;
         if (DKQ == 192 && DV == 128) return n_kv >= 16384;
         if (DKQ == 256 && DV == 256) return n_kv >= (gqa_ratio == 2 ? 32768 : 4096);
         if (DKQ == 320 && DV == 256) return n_kv >= 65536 && gqa_ratio >= 64;
