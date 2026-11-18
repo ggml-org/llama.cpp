@@ -137,54 +137,49 @@ void ggml_cuda_flash_attn_ext_compact_mask(
 }
 
 #ifdef GGML_USE_HIP
-struct ggml_cuda_fattn_tile_sparse_config {
-    int64_t min_kv;
-    int min_gqa;
-};
-
-static constexpr ggml_cuda_fattn_tile_sparse_config ggml_cuda_fattn_tile_get_sparse_config_gcn(
-        const int DKQ, const int DV, const int gqa_ratio) {
-    if (DKQ == 72  && DV == 72)  return {32768, 1};
-    if (DKQ == 80  && DV == 80)  return {16384, 1};
-    if (DKQ == 96  && DV == 96)  return {16384, 1};
-    if (DKQ == 112 && DV == 112) return {16384, 1};
-    if (DKQ == 128 && DV == 128) return {32768, 1};
-    if (DKQ == 192 && DV == 128) return {16384, 1};
-    if (DKQ == 256 && DV == 256) return {gqa_ratio == 2 ? 32768 : 4096, 1};
-    if (DKQ == 320 && DV == 256) return {65536, 64};
-    if (DKQ == 512 && DV == 512) return {16384, 16};
-    if (DKQ == 576 && DV == 512) return {32768, 32};
-
-    return {0, 0}; // Unsupported geometry.
-}
-
 bool ggml_cuda_flash_attn_ext_tile_shall_use_sparse(const int cc, const ggml_tensor * dst, const int DKQ, const int DV) {
-    // TODO: Add sparse selection policies for other AMD architectures.
-    if (!GGML_CUDA_CC_IS_GCN(cc)) {
-        return false;
-    }
-
     const ggml_tensor * Q    = dst->src[0];
     const ggml_tensor * K    = dst->src[1];
     const ggml_tensor * mask = dst->src[3];
+
     const int n_kv_max = ggml_get_op_params_i32(dst, 4);
+    const int64_t n_kv = K->ne[1];
 
     float max_bias = 0.0f;
     memcpy(&max_bias, (const float *) dst->op_params + 1, sizeof(float));
 
-    if (!mask || mask->ne[0] != K->ne[1] ||
-        mask->ne[1] < Q->ne[1] || mask->ne[2] != 1 || dst->src[5] || n_kv_max <= 0 || max_bias != 0.0f) {
+    if (!mask || mask->ne[0] != n_kv || mask->ne[1] < Q->ne[1] ||
+        mask->ne[2] != 1 || dst->src[5] || n_kv_max <= 0 || max_bias != 0.0f) {
         return false;
     }
 
-    // Sparse compaction is not beneficial when the selected positions exceed 25% of the KV cache.
-    if (n_kv_max > K->ne[1]/4) {
+    if (GGML_CUDA_CC_IS_GCN(cc)) {
+        // Sparse compaction is not beneficial when the selected positions exceed 25% of the KV cache.
+        if (n_kv_max > n_kv/4) {
+            return false;
+        }
+
+        const int gqa_ratio = Q->ne[2] / K->ne[2];
+
+        if (gqa_ratio < 1) {
+            return false;
+        }
+
+        if (DKQ == 72  && DV == 72)  return n_kv >= 32768;
+        if (DKQ == 80  && DV == 80)  return n_kv >= 16384;
+        if (DKQ == 96  && DV == 96)  return n_kv >= 16384;
+        if (DKQ == 112 && DV == 112) return n_kv >= 16384;
+        if (DKQ == 128 && DV == 128) return n_kv >= 32768;
+        if (DKQ == 192 && DV == 128) return n_kv >= 16384;
+        if (DKQ == 256 && DV == 256) return n_kv >= (gqa_ratio == 2 ? 32768 : 4096);
+        if (DKQ == 320 && DV == 256) return n_kv >= 65536 && gqa_ratio >= 64;
+        if (DKQ == 512 && DV == 512) return n_kv >= 16384 && gqa_ratio >= 16;
+        if (DKQ == 576 && DV == 512) return n_kv >= 32768 && gqa_ratio >= 32;
+
+        return false;
+    } else {
         return false;
     }
-
-    const int gqa_ratio = Q->ne[2] / K->ne[2];
-    const auto config = ggml_cuda_fattn_tile_get_sparse_config_gcn(DKQ, DV, gqa_ratio);
-    return config.min_kv > 0 && K->ne[1] >= config.min_kv && gqa_ratio >= config.min_gqa;
 }
 #endif // GGML_USE_HIP
 
