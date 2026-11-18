@@ -13,28 +13,6 @@
 #include <cstring>
 #include <stdexcept>
 
-// mmproj GGUFs keep the "clip" name for compatibility with existing files
-// keys of the vision tower are "clip.vision.<llama key>", see LLM_KV prefix
-
-static const char * CKEY_HAS_VISION    = "clip.has_vision_encoder";
-static const char * CKEY_PROJ_TYPE     = "clip.projector_type";
-static const char * CKEY_V_PROJ_TYPE   = "clip.vision.projector_type";
-static const char * CKEY_USE_GELU      = "clip.use_gelu";
-static const char * CKEY_USE_SILU      = "clip.use_silu";
-static const char * CKEY_IMAGE_SIZE    = "clip.vision.image_size";
-static const char * CKEY_PATCH_SIZE    = "clip.vision.patch_size";
-static const char * CKEY_IMAGE_MEAN    = "clip.vision.image_mean";
-static const char * CKEY_IMAGE_STD     = "clip.vision.image_std";
-static const char * CKEY_HEAD_DIM      = "clip.vision.attention.head_dim";
-static const char * CKEY_PROJ_DIM      = "clip.vision.projection_dim";
-static const char * CKEY_SCALE_FACTOR  = "clip.vision.projector.scale_factor";
-static const char * CKEY_SPATIAL_MERGE = "clip.vision.spatial_merge_size";
-static const char * CKEY_MIN_PIXELS    = "clip.vision.image_min_pixels";
-static const char * CKEY_MAX_PIXELS    = "clip.vision.image_max_pixels";
-static const char * CKEY_WA_PATTERN    = "clip.vision.n_wa_pattern";
-static const char * CKEY_WINDOW_SIZE   = "clip.vision.window_size";
-static const char * CKEY_DEEPSTACK     = "clip.vision.is_deepstack_layers";
-
 // the vision projectors with native graphs, from the projector the engine resolved (e.g. the vision tower of a
 // legacy "qwen2.5o" file is Qwen2.5-VL)
 static llama_clip_projector clip_projector_native(const clip_model * m) {
@@ -142,15 +120,10 @@ void llama_model_clip::load_arch_hparams(llama_model_loader & ml) {
     path   = ml.fname;
 
     // Gemma 3, Qwen2/2.5/3-VL and Qwen3-TTS (gen tower) run on their native graphs (libllama helpers), the other
-    // towers on the graphs of the clip engine; the engine still lays out and preprocesses every media
-    ml.get_key(std::string(CKEY_HAS_VISION), vhp.has_vision, false);
-
-    std::string proj;
-    if (!ml.get_key(std::string(CKEY_V_PROJ_TYPE), proj, false)) {
-        ml.get_key(std::string(CKEY_PROJ_TYPE), proj, false);
-    }
-    vhp.proj_name = proj;
-    vhp.proj      = clip_projector_native(engine_vision());
+    // towers on the graphs of the clip engine; the engine loads the weights and the hparams of every tower and
+    // still lays out and preprocesses every media
+    vhp.has_vision = engine_vision() != nullptr;
+    vhp.proj       = clip_projector_native(engine_vision());
 
     if (!vhp.has_vision) {
         load_gen_hparams(ml);
@@ -167,247 +140,18 @@ void llama_model_clip::load_arch_hparams(llama_model_loader & ml) {
     }
 
     native_v = vhp.proj != LLAMA_CLIP_PROJ_UNKNOWN;
-    if (!native_v) {
-        GGML_ASSERT(engine_vision() != nullptr);
-        load_engine_hparams(*engine_vision());
-        return;
-    }
-
-    const LLM_KV kv(LLM_ARCH_CLIP, nullptr, "clip.vision");
-
-    uint32_t n_ff      = 0;
-    uint32_t n_head    = 0;
-    uint32_t n_head_kv = 0;
-
-    ml.get_key(kv(LLM_KV_EMBEDDING_LENGTH),       hparams.n_embd);
-    ml.get_key(kv(LLM_KV_BLOCK_COUNT),            hparams.n_layer_all);
-    ml.get_key(kv(LLM_KV_FEED_FORWARD_LENGTH),    n_ff);
-    ml.get_key(kv(LLM_KV_ATTENTION_HEAD_COUNT),   n_head);
-    ml.get_key(kv(LLM_KV_ATTENTION_LAYERNORM_EPS), hparams.f_norm_eps);
-
-    n_head_kv = n_head;
-    ml.get_key(kv(LLM_KV_ATTENTION_HEAD_COUNT_KV), n_head_kv, false);
-
-    GGML_ASSERT(hparams.n_layer_all > 0 && hparams.n_layer_all <= LLAMA_MAX_LAYERS);
-    GGML_ASSERT(n_head > 0);
-
-    hparams.f_norm_rms_eps = hparams.f_norm_eps;
-
-    std::fill(hparams.n_head_arr.begin(),    hparams.n_head_arr.end(),    0);
-    std::fill(hparams.n_head_kv_arr.begin(), hparams.n_head_kv_arr.end(), 0);
-    std::fill(hparams.n_ff_arr.begin(),      hparams.n_ff_arr.end(),      0);
-    std::fill(hparams.n_head_arr.begin(),    hparams.n_head_arr.begin()    + hparams.n_layer_all, n_head);
-    std::fill(hparams.n_head_kv_arr.begin(), hparams.n_head_kv_arr.begin() + hparams.n_layer_all, n_head_kv);
-    std::fill(hparams.n_ff_arr.begin(),      hparams.n_ff_arr.begin()      + hparams.n_layer_all, n_ff);
-
-    uint32_t head_dim = hparams.n_embd / n_head;
-    ml.get_key(std::string(CKEY_HEAD_DIM), head_dim, false);
-    hparams.n_embd_head_k_full = head_dim;
-    hparams.n_embd_head_v_full = head_dim;
-    hparams.n_rot_full         = 0;
-
-    clip_get_i32(ml, CKEY_IMAGE_SIZE, vhp.image_size);
-    clip_get_i32(ml, CKEY_PATCH_SIZE, vhp.patch_size);
-    clip_get_i32(ml, CKEY_PROJ_DIM, vhp.n_embd_out, false);
-
-    {
-        std::vector<float> mean;
-        std::vector<float> std;
-        ml.get_arr(std::string(CKEY_IMAGE_MEAN), mean, false);
-        ml.get_arr(std::string(CKEY_IMAGE_STD),  std,  false);
-        if (mean.size() < 3 || std.size() < 3) {
-            throw std::runtime_error("clip: image_mean/image_std must have 3 elements");
-        }
-        for (int i = 0; i < 3; ++i) {
-            vhp.image_mean[i] = mean[i];
-            vhp.image_std[i]  = std[i];
-        }
-    }
-
-    {
-        bool use_gelu = false;
-        bool use_silu = false;
-        ml.get_key(std::string(CKEY_USE_GELU), use_gelu, false);
-        ml.get_key(std::string(CKEY_USE_SILU), use_silu, false);
-        vhp.ffn_op = use_gelu ? LLM_FFN_GELU : use_silu ? LLM_FFN_SILU : LLM_FFN_GELU_QUICK;
-    }
-
-    switch (vhp.proj) {
-        case LLAMA_CLIP_PROJ_GEMMA3:
-            {
-                vhp.n_merge = 4;
-                clip_get_i32(ml, CKEY_SCALE_FACTOR, vhp.n_merge, false);
-            } break;
-        case LLAMA_CLIP_PROJ_QWEN2VL:
-        case LLAMA_CLIP_PROJ_QWEN25VL:
-        case LLAMA_CLIP_PROJ_QWEN3VL:
-            {
-                vhp.n_merge = 2;
-                clip_get_i32(ml, CKEY_SPATIAL_MERGE, vhp.n_merge, false);
-                if (vhp.n_merge != 2) {
-                    throw std::runtime_error("clip: Qwen-VL needs spatial_merge_size = 2");
-                }
-                vhp.n_temporal_merge = 2;
-                // defaults of the HF processor: 8 to 4096 tokens, the file can override them
-                const int32_t patch_area = vhp.patch_size * vhp.patch_size * vhp.n_merge * vhp.n_merge;
-                vhp.image_min_pixels = 8    * patch_area;
-                vhp.image_max_pixels = 4096 * patch_area;
-                clip_get_i32(ml, CKEY_MIN_PIXELS, vhp.file_min_pixels, false);
-                clip_get_i32(ml, CKEY_MAX_PIXELS, vhp.file_max_pixels, false);
-                if (vhp.proj == LLAMA_CLIP_PROJ_QWEN25VL) {
-                    clip_get_i32(ml, CKEY_WA_PATTERN, vhp.n_wa_pattern);
-                    clip_get_i32(ml, CKEY_WINDOW_SIZE, vhp.attn_window, false);
-                }
-                if (vhp.proj == LLAMA_CLIP_PROJ_QWEN3VL) {
-                    // bool array, not covered by the loader getters
-                    const int kid = gguf_find_key(ml.metadata, CKEY_DEEPSTACK);
-                    if (kid >= 0 && gguf_get_kv_type(ml.metadata, kid) == GGUF_TYPE_ARRAY &&
-                            gguf_get_arr_type(ml.metadata, kid) == GGUF_TYPE_BOOL) {
-                        const auto * ds = (const int8_t *) gguf_get_arr_data(ml.metadata, kid);
-                        for (size_t i = 0; i < gguf_get_arr_n(ml.metadata, kid); ++i) {
-                            if (ds[i]) {
-                                vhp.deepstack_layers.push_back((int32_t) i);
-                            }
-                        }
-                    }
-                }
-            } break;
-        case LLAMA_CLIP_PROJ_UNKNOWN:
-        case LLAMA_CLIP_PROJ_QWEN3TTS_GEN: // not a vision tower
-            break;
-    }
+    load_engine_hparams(*engine_vision());
 }
 
 void llama_model_clip::load_arch_tensors(llama_model_loader & ml) {
     if (native_gen) {
         load_gen_tensors(ml);
     }
-    if (native_v) {
-        load_vision_tensors(ml);
-    }
     // after the native weights, which the engine shares
     load_engine_tensors(ml);
-}
-
-void llama_model_clip::load_vision_tensors(llama_model_loader & ml) {
-    LLAMA_LOAD_LOCALS;
-
-    // shape from the file: legacy layouts and projector shapes that do not follow from hparams
-    auto create_as_file = [&](const LLM_TN_IMPL & tname, int flags) -> ggml_tensor * {
-        const std::string name = tname.str();
-        const ggml_tensor * meta = ml.get_tensor_meta(name.c_str());
-        if (meta == nullptr) {
-            if (flags & TENSOR_NOT_REQUIRED) {
-                return nullptr;
-            }
-            throw std::runtime_error(format("clip: missing tensor '%s'", name.c_str()));
-        }
-        switch (ggml_n_dims(meta)) {
-            case 1:  return create_tensor(tname, {meta->ne[0]}, flags);
-            case 2:  return create_tensor(tname, {meta->ne[0], meta->ne[1]}, flags);
-            case 3:  return create_tensor(tname, {meta->ne[0], meta->ne[1], meta->ne[2]}, flags);
-            default: return create_tensor(tname, {meta->ne[0], meta->ne[1], meta->ne[2], meta->ne[3]}, flags);
-        }
-    };
-
-    const int64_t n_embd_q = n_embd_head_k * n_head;
-
-    // stem
-    v_patch_embd   = create_as_file(tn(LLM_TENSOR_V_ENC_EMBD_PATCH, "weight"),   0);
-    v_patch_embd_1 = create_as_file(tn(LLM_TENSOR_V_ENC_EMBD_PATCH, "weight.1"), TENSOR_NOT_REQUIRED);
-    v_patch_bias   = create_tensor (tn(LLM_TENSOR_V_ENC_EMBD_PATCH, "bias"), {n_embd}, TENSOR_NOT_REQUIRED);
-    v_pos_embd     = create_as_file(tn(LLM_TENSOR_V_ENC_EMBD_POS,   "weight"),   TENSOR_NOT_REQUIRED);
-    v_pre_ln_w     = create_tensor (tn(LLM_TENSOR_V_PRE_NORM,  "weight"), {n_embd}, TENSOR_NOT_REQUIRED);
-    v_pre_ln_b     = create_tensor (tn(LLM_TENSOR_V_PRE_NORM,  "bias"),   {n_embd}, TENSOR_NOT_REQUIRED);
-    v_post_ln_w    = create_tensor (tn(LLM_TENSOR_V_POST_NORM, "weight"), {n_embd}, TENSOR_NOT_REQUIRED);
-    v_post_ln_b    = create_tensor (tn(LLM_TENSOR_V_POST_NORM, "bias"),   {n_embd}, TENSOR_NOT_REQUIRED);
-
-    // ffn up/down were swapped by old conversion scripts for these projectors
-    const bool ffn_maybe_swapped =
-        vhp.proj == LLAMA_CLIP_PROJ_GEMMA3   ||
-        vhp.proj == LLAMA_CLIP_PROJ_QWEN2VL  ||
-        vhp.proj == LLAMA_CLIP_PROJ_QWEN25VL;
-
-    for (int il = 0; il < n_layer; ++il) {
-        auto & layer = layers[il];
-
-        layer.attn_norm   = create_tensor(tn(LLM_TENSOR_V_ENC_INPUT_NORM, "weight", il), {n_embd}, 0);
-        layer.attn_norm_b = create_tensor(tn(LLM_TENSOR_V_ENC_INPUT_NORM, "bias",   il), {n_embd}, TENSOR_NOT_REQUIRED);
-
-        layer.wqkv = create_tensor(tn(LLM_TENSOR_V_ENC_ATTN_QKV, "weight", il), {n_embd, 3*n_embd_q}, TENSOR_NOT_REQUIRED);
-        if (layer.wqkv) {
-            layer.wqkv_b = create_tensor(tn(LLM_TENSOR_V_ENC_ATTN_QKV, "bias", il), {3*n_embd_q}, TENSOR_NOT_REQUIRED);
-        } else {
-            layer.wq   = create_tensor(tn(LLM_TENSOR_V_ENC_ATTN_Q, "weight", il), {n_embd, n_embd_q}, 0);
-            layer.wk   = create_tensor(tn(LLM_TENSOR_V_ENC_ATTN_K, "weight", il), {n_embd, n_embd_k_gqa}, 0);
-            layer.wv   = create_tensor(tn(LLM_TENSOR_V_ENC_ATTN_V, "weight", il), {n_embd, n_embd_v_gqa}, 0);
-            layer.wq_b = create_tensor(tn(LLM_TENSOR_V_ENC_ATTN_Q, "bias",   il), {n_embd_q},     TENSOR_NOT_REQUIRED);
-            layer.wk_b = create_tensor(tn(LLM_TENSOR_V_ENC_ATTN_K, "bias",   il), {n_embd_k_gqa}, TENSOR_NOT_REQUIRED);
-            layer.wv_b = create_tensor(tn(LLM_TENSOR_V_ENC_ATTN_V, "bias",   il), {n_embd_v_gqa}, TENSOR_NOT_REQUIRED);
-        }
-        layer.attn_q_norm = create_as_file(tn(LLM_TENSOR_V_ENC_ATTN_Q_NORM, "weight", il), TENSOR_NOT_REQUIRED);
-        layer.attn_k_norm = create_as_file(tn(LLM_TENSOR_V_ENC_ATTN_K_NORM, "weight", il), TENSOR_NOT_REQUIRED);
-
-        layer.wo   = create_tensor(tn(LLM_TENSOR_V_ENC_ATTN_O, "weight", il), {n_embd_q, n_embd}, 0);
-        layer.wo_b = create_tensor(tn(LLM_TENSOR_V_ENC_ATTN_O, "bias",   il), {n_embd}, TENSOR_NOT_REQUIRED);
-
-        layer.ffn_norm   = create_tensor(tn(LLM_TENSOR_V_ENC_POST_ATTN_NORM, "weight", il), {n_embd}, 0);
-        layer.ffn_norm_b = create_tensor(tn(LLM_TENSOR_V_ENC_POST_ATTN_NORM, "bias",   il), {n_embd}, TENSOR_NOT_REQUIRED);
-
-        layer.ffn_up     = create_as_file(tn(LLM_TENSOR_V_ENC_FFN_UP,   "weight", il), 0);
-        layer.ffn_up_b   = create_as_file(tn(LLM_TENSOR_V_ENC_FFN_UP,   "bias",   il), TENSOR_NOT_REQUIRED);
-        layer.ffn_gate   = create_as_file(tn(LLM_TENSOR_V_ENC_FFN_GATE, "weight", il), TENSOR_NOT_REQUIRED);
-        layer.ffn_gate_b = create_as_file(tn(LLM_TENSOR_V_ENC_FFN_GATE, "bias",   il), TENSOR_NOT_REQUIRED);
-        layer.ffn_down   = create_as_file(tn(LLM_TENSOR_V_ENC_FFN_DOWN, "weight", il), 0);
-        layer.ffn_down_b = create_as_file(tn(LLM_TENSOR_V_ENC_FFN_DOWN, "bias",   il), TENSOR_NOT_REQUIRED);
-
-        if (ffn_maybe_swapped && layer.ffn_down->ne[0] == n_embd) {
-            std::swap(layer.ffn_up,   layer.ffn_down);
-            std::swap(layer.ffn_up_b, layer.ffn_down_b);
-            if (il == 0) {
-                LLAMA_LOG_WARN("%s: ffn up/down are swapped in this file\n", __func__);
-            }
-        }
+    if (native_v) {
+        hparams.n_embd_out_impl = (uint32_t) engine_vision()->n_mmproj_embd(); // from the projector tensors
     }
-
-    switch (vhp.proj) {
-        case LLAMA_CLIP_PROJ_GEMMA3:
-            {
-                mm_inp_proj      = create_as_file(tn(LLM_TENSOR_V_MM_INP_PROJ, "weight"), 0);
-                mm_soft_emb_norm = create_tensor (tn(LLM_TENSOR_V_MM_SOFT_EMB_NORM, "weight"), {n_embd}, 0);
-                vhp.n_embd_out   = mm_inp_proj->ne[0];
-            } break;
-        case LLAMA_CLIP_PROJ_QWEN2VL:
-        case LLAMA_CLIP_PROJ_QWEN25VL:
-        case LLAMA_CLIP_PROJ_QWEN3VL:
-            {
-                mm_0_w = create_as_file(tn(LLM_TENSOR_V_MMPROJ, "weight", 0), 0);
-                mm_0_b = create_as_file(tn(LLM_TENSOR_V_MMPROJ, "bias",   0), TENSOR_NOT_REQUIRED);
-                mm_2_w = create_as_file(tn(LLM_TENSOR_V_MMPROJ, "weight", 2), 0);
-                mm_2_b = create_as_file(tn(LLM_TENSOR_V_MMPROJ, "bias",   2), TENSOR_NOT_REQUIRED);
-                vhp.n_embd_out = mm_2_w->ne[1];
-
-                if (vhp.proj == LLAMA_CLIP_PROJ_QWEN3VL) {
-                    deepstack.resize(n_layer);
-                    for (int32_t il : vhp.deepstack_layers) {
-                        auto & ds = deepstack[il];
-                        ds.norm_w = create_as_file(tn(LLM_TENSOR_V_DS_NORM, "weight", il), 0);
-                        ds.norm_b = create_as_file(tn(LLM_TENSOR_V_DS_NORM, "bias",   il), 0);
-                        ds.fc1_w  = create_as_file(tn(LLM_TENSOR_V_DS_FC1,  "weight", il), 0);
-                        ds.fc1_b  = create_as_file(tn(LLM_TENSOR_V_DS_FC1,  "bias",   il), 0);
-                        ds.fc2_w  = create_as_file(tn(LLM_TENSOR_V_DS_FC2,  "weight", il), 0);
-                        ds.fc2_b  = create_as_file(tn(LLM_TENSOR_V_DS_FC2,  "bias",   il), 0);
-                    }
-                    // deepstack rows are concatenated after the main row
-                    vhp.n_embd_out *= 1 + (int32_t) vhp.deepstack_layers.size();
-                }
-            } break;
-        case LLAMA_CLIP_PROJ_UNKNOWN:
-        case LLAMA_CLIP_PROJ_QWEN3TTS_GEN: // not a vision tower
-            GGML_ABORT("unreachable");
-    }
-
-    hparams.n_embd_out_impl = vhp.n_embd_out;
 }
 
 void llama_model_clip::load_gen_tensors(llama_model_loader & ml) {
@@ -520,6 +264,7 @@ llama_media_input llama_model_clip::reserve_media(uint32_t n_rows_max) const {
 
 struct llama_model_clip::graph_vit : public llm_graph_context {
     const llama_model_clip & clip;
+    const clip_model & cm; // the weights and hparams of the engine's vision tower
 
     llama_media_input media_reserve;
 
@@ -535,9 +280,10 @@ struct llama_model_clip::graph_vit : public llm_graph_context {
     graph_vit(const llama_model_clip & clip, const llm_graph_params & params) :
         llm_graph_context(params),
         clip(clip),
+        cm(*clip.engine_vision()),
         media_reserve(params.ubatch.media ? llama_media_input() : clip.reserve_media(params.cparams.n_ubatch)),
         media(params.ubatch.media ? *params.ubatch.media : media_reserve),
-        patch_size (clip.vhp.patch_size),
+        patch_size (cm.hparams.patch_size),
         n_patches_x(media.nx / patch_size),
         n_patches_y(media.ny / patch_size),
         n_patches  (n_patches_x * n_patches_y) {
@@ -550,14 +296,23 @@ struct llama_model_clip::graph_vit : public llm_graph_context {
 
     // conv patch embedding: [n_embd, n_patches]
     ggml_tensor * build_inp_patches() {
-        ggml_tensor * cur = ggml_conv_2d(ctx0, clip.v_patch_embd, inp_media->inp_raw, patch_size, patch_size, 0, 0, 1, 1);
+        ggml_tensor * cur = ggml_conv_2d(ctx0, cm.patch_embeddings_0, inp_media->inp_raw, patch_size, patch_size, 0, 0, 1, 1);
         cur = ggml_reshape_2d(ctx0, cur, n_patches, n_embd);
         cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
-        if (clip.v_patch_bias) {
-            cur = ggml_add(ctx0, cur, clip.v_patch_bias);
+        if (cm.patch_bias) {
+            cur = ggml_add(ctx0, cur, cm.patch_bias);
         }
         cb(cur, "inp_patches", -1);
         return cur;
+    }
+
+    llm_ffn_op_type ffn_op() const {
+        switch (cm.hparams.ffn_op) {
+            case FFN_SILU:       return LLM_FFN_SILU;
+            case FFN_GELU_QUICK: return LLM_FFN_GELU_QUICK;
+            case FFN_GELU_ERF:   return LLM_FFN_GELU_ERF;
+            default:             return LLM_FFN_GELU;
+        }
     }
 
     // ViT on libllama's helpers; inp is [n_embd, n_pos]
@@ -577,46 +332,46 @@ struct llama_model_clip::graph_vit : public llm_graph_context {
             inpL = ggml_add(ctx0, inpL, pos_embd);
             cb(inpL, "pos_embd", -1);
         }
-        if (clip.v_pre_ln_w) {
-            inpL = build_norm(inpL, clip.v_pre_ln_w, clip.v_pre_ln_b, norm_t, -1);
+        if (cm.pre_ln_w) {
+            inpL = build_norm(inpL, cm.pre_ln_w, cm.pre_ln_b, norm_t, -1);
             cb(inpL, "pre_ln", -1);
         }
 
         for (int il = 0; il < n_layer; ++il) {
-            const auto & layer = model.layers[il];
+            const clip_layer & layer = cm.layers[il];
 
-            ggml_tensor * cur = build_norm(inpL, layer.attn_norm, layer.attn_norm_b, norm_t, il);
+            ggml_tensor * cur = build_norm(inpL, layer.ln_1_w, layer.ln_1_b, norm_t, il);
             cb(cur, "attn_norm", il);
 
             ggml_tensor * Qcur;
             ggml_tensor * Kcur;
             ggml_tensor * Vcur;
-            if (layer.wqkv) {
-                ggml_tensor * qkv = build_lora_mm(layer.wqkv, cur);
-                if (layer.wqkv_b) {
-                    qkv = ggml_add(ctx0, qkv, layer.wqkv_b);
+            if (layer.qkv_w) {
+                ggml_tensor * qkv = build_lora_mm(layer.qkv_w, cur);
+                if (layer.qkv_b) {
+                    qkv = ggml_add(ctx0, qkv, layer.qkv_b);
                 }
                 const size_t es = ggml_element_size(qkv);
                 Qcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head,    n_pos, n_embd_head*es, qkv->nb[1], 0);
                 Kcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head_kv, n_pos, n_embd_head*es, qkv->nb[1], n_embd_head*n_head*es);
                 Vcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head_kv, n_pos, n_embd_head*es, qkv->nb[1], n_embd_head*(n_head + n_head_kv)*es);
             } else {
-                Qcur = build_lora_mm(layer.wq, cur);
-                Kcur = build_lora_mm(layer.wk, cur);
-                Vcur = build_lora_mm(layer.wv, cur);
-                if (layer.wq_b) { Qcur = ggml_add(ctx0, Qcur, layer.wq_b); }
-                if (layer.wk_b) { Kcur = ggml_add(ctx0, Kcur, layer.wk_b); }
-                if (layer.wv_b) { Vcur = ggml_add(ctx0, Vcur, layer.wv_b); }
+                Qcur = build_lora_mm(layer.q_w, cur);
+                Kcur = build_lora_mm(layer.k_w, cur);
+                Vcur = build_lora_mm(layer.v_w, cur);
+                if (layer.q_b) { Qcur = ggml_add(ctx0, Qcur, layer.q_b); }
+                if (layer.k_b) { Kcur = ggml_add(ctx0, Kcur, layer.k_b); }
+                if (layer.v_b) { Vcur = ggml_add(ctx0, Vcur, layer.v_b); }
                 Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_pos);
                 Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_pos);
                 Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_pos);
             }
 
-            if (layer.attn_q_norm) {
-                Qcur = build_norm(Qcur, layer.attn_q_norm, nullptr, norm_t, il);
+            if (layer.q_norm) {
+                Qcur = build_norm(Qcur, layer.q_norm, nullptr, norm_t, il);
             }
-            if (layer.attn_k_norm) {
-                Kcur = build_norm(Kcur, layer.attn_k_norm, nullptr, norm_t, il);
+            if (layer.k_norm) {
+                Kcur = build_norm(Kcur, layer.k_norm, nullptr, norm_t, il);
             }
 
             if (add_pos) {
@@ -637,24 +392,24 @@ struct llama_model_clip::graph_vit : public llm_graph_context {
             ggml_build_forward_order(gf, Vcur);
 
             cur = build_attn_mha(Qcur, Kcur, Vcur, nullptr, mask, nullptr, nullptr, nullptr, 0, kq_scale, il);
-            cur = build_lora_mm(layer.wo, cur);
-            if (layer.wo_b) {
-                cur = ggml_add(ctx0, cur, layer.wo_b);
+            cur = build_lora_mm(layer.o_w, cur);
+            if (layer.o_b) {
+                cur = ggml_add(ctx0, cur, layer.o_b);
             }
             cb(cur, "attn_out", il);
 
             cur = ggml_add(ctx0, cur, inpL);
             inpL = cur;
 
-            cur = build_norm(cur, layer.ffn_norm, layer.ffn_norm_b, norm_t, il);
+            cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, norm_t, il);
             cb(cur, "ffn_inp_normed", il);
 
             cur = build_ffn(cur,
-                    layer.ffn_up,   layer.ffn_up_b,   nullptr,
-                    layer.ffn_gate, layer.ffn_gate_b, nullptr,
-                    layer.ffn_down, layer.ffn_down_b, nullptr,
+                    layer.ff_up_w,   layer.ff_up_b,   nullptr,
+                    layer.ff_gate_w, layer.ff_gate_b, nullptr,
+                    layer.ff_down_w, layer.ff_down_b, nullptr,
                     nullptr,
-                    clip.vhp.ffn_op, LLM_FFN_PAR, il);
+                    ffn_op(), LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
 
             cur = ggml_add(ctx0, cur, inpL);
@@ -667,8 +422,8 @@ struct llama_model_clip::graph_vit : public llm_graph_context {
             inpL = cur;
         }
 
-        if (clip.v_post_ln_w) {
-            inpL = build_norm(inpL, clip.v_post_ln_w, clip.v_post_ln_b, norm_t, -1);
+        if (cm.post_ln_w) {
+            inpL = build_norm(inpL, cm.post_ln_w, cm.post_ln_b, norm_t, -1);
             cb(inpL, "post_ln", -1);
         }
 
@@ -687,10 +442,10 @@ struct llama_model_clip::graph_gemma3 : public llama_model_clip::graph_vit {
     graph_gemma3(const llama_model_clip & clip, const llm_graph_params & params) : graph_vit(clip, params) {
         ggml_tensor * cur = build_inp_patches();
 
-        cur = build_vit(cur, n_patches, LLM_NORM, clip.v_pos_embd);
+        cur = build_vit(cur, n_patches, LLM_NORM, cm.position_embeddings);
 
         GGML_ASSERT(n_patches_x == n_patches_y);
-        const int k = clip.vhp.n_merge;
+        const int k = cm.hparams.n_merge;
 
         cur = ggml_transpose(ctx0, cur);
         cur = ggml_cont_4d(ctx0, cur, n_patches_x, n_patches_y, n_embd, 1);
@@ -699,9 +454,9 @@ struct llama_model_clip::graph_gemma3 : public llama_model_clip::graph_vit {
         cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
 
         cur = ggml_rms_norm(ctx0, cur, hparams.f_norm_eps);
-        cur = ggml_mul(ctx0, cur, clip.mm_soft_emb_norm);
+        cur = ggml_mul(ctx0, cur, cm.mm_soft_emb_norm_w);
 
-        cur = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, clip.mm_inp_proj)), cur);
+        cur = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, cm.mm_input_proj_w)), cur);
         cur = ggml_reshape_2d(ctx0, cur, cur->ne[0], cur->ne[1] * cur->ne[2]);
 
         finish(cur);
@@ -709,9 +464,9 @@ struct llama_model_clip::graph_gemma3 : public llama_model_clip::graph_vit {
 };
 
 // Qwen-VL: patch embedding of one frame or a merged frame pair, rows in 2x2 merge order, [n_embd, n_patches]
-static ggml_tensor * clip_qwen_patches(ggml_context * ctx0, const llama_model_clip & clip, ggml_tensor * raw,
+static ggml_tensor * clip_qwen_patches(ggml_context * ctx0, const clip_model & cm, ggml_tensor * raw,
         const llama_media_input & media, int64_t n_embd, int64_t px, int64_t py) {
-    const int p = clip.vhp.patch_size;
+    const int p = cm.hparams.patch_size;
     ggml_tensor * f0 = raw;
     ggml_tensor * f1 = raw;
     if (media.n_frames == 2) {
@@ -721,8 +476,8 @@ static ggml_tensor * clip_qwen_patches(ggml_context * ctx0, const llama_model_cl
         f1 = ggml_view_3d(ctx0, raw, media.nx, media.ny, 3, nb1, nb2, nb2 * 3);
     }
     ggml_tensor * inp = ggml_add(ctx0,
-            ggml_conv_2d(ctx0, clip.v_patch_embd,   f0, p, p, 0, 0, 1, 1),
-            ggml_conv_2d(ctx0, clip.v_patch_embd_1, f1, p, p, 0, 0, 1, 1));
+            ggml_conv_2d(ctx0, cm.patch_embeddings_0,   f0, p, p, 0, 0, 1, 1),
+            ggml_conv_2d(ctx0, cm.patch_embeddings_1, f1, p, p, 0, 0, 1, 1));
 
     inp = ggml_permute(ctx0, inp, 1, 2, 0, 3); // [w, h, c, b] -> [c, w, h, b]
     inp = ggml_cont_4d(ctx0, inp, n_embd * 2, px / 2, py, 1);
@@ -797,11 +552,11 @@ static void clip_qwen_windows(int px, int py, int patch_size, int attn_window,
 struct llama_model_clip::graph_qwen2vl : public llama_model_clip::graph_vit {
     graph_qwen2vl(const llama_model_clip & clip, const llm_graph_params & params) : graph_vit(clip, params) {
         const bool    is_25  = clip.vhp.proj == LLAMA_CLIP_PROJ_QWEN25VL;
-        const bool    use_wa = is_25 && clip.vhp.n_wa_pattern > 0;
+        const bool    use_wa = is_25 && cm.hparams.n_wa_pattern > 0;
         const int64_t n_pos  = n_patches;
         const int64_t d_head = hparams.n_embd_head_k();
 
-        ggml_tensor * cur = clip_qwen_patches(ctx0, clip, inp_media->inp_raw, media, n_embd, n_patches_x, n_patches_y);
+        ggml_tensor * cur = clip_qwen_patches(ctx0, cm, inp_media->inp_raw, media, n_embd, n_patches_x, n_patches_y);
 
         ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos * 4);
         ggml_set_input(positions);
@@ -824,8 +579,8 @@ struct llama_model_clip::graph_qwen2vl : public llama_model_clip::graph_vit {
             cur = ggml_reshape_2d(ctx0, cur, n_embd, n_pos);
         }
 
-        const int     patch_size  = clip.vhp.patch_size;
-        const int     attn_window = clip.vhp.attn_window;
+        const int     patch_size  = cm.hparams.patch_size;
+        const int     attn_window = (cm.hparams.attn_window_size > 0 ? cm.hparams.attn_window_size : 112);
         inp_media->extra.push_back([=](const llama_media_input & m) {
             const int px = m.nx / patch_size;
             const int py = m.ny / patch_size;
@@ -853,7 +608,7 @@ struct llama_model_clip::graph_qwen2vl : public llama_model_clip::graph_vit {
         auto add_pos = [&](ggml_tensor * x, int) {
             return ggml_rope_multi(ctx0, x, positions, nullptr, d_head/2, sections, GGML_ROPE_TYPE_VISION, 32768, 10000, 1, 0, 1, 32, 1);
         };
-        const int n_wa_pattern = clip.vhp.n_wa_pattern;
+        const int n_wa_pattern = cm.hparams.n_wa_pattern;
         auto get_mask = [&](int il) -> ggml_tensor * {
             const bool full = !use_wa || (il + 1) % n_wa_pattern == 0;
             return full ? nullptr : win_mask;
@@ -863,9 +618,9 @@ struct llama_model_clip::graph_qwen2vl : public llama_model_clip::graph_vit {
 
         cur = ggml_reshape_2d(ctx0, cur, n_embd * 4, n_pos / 4);
         cur = build_ffn(cur,
-                clip.mm_0_w, clip.mm_0_b, nullptr,
+                cm.mm_0_w, cm.mm_0_b, nullptr,
                 nullptr, nullptr, nullptr,
-                clip.mm_2_w, clip.mm_2_b, nullptr,
+                cm.mm_1_w, cm.mm_1_b, nullptr,
                 nullptr, LLM_FFN_GELU, LLM_FFN_SEQ, -1);
 
         if (use_wa) {
@@ -881,12 +636,12 @@ struct llama_model_clip::graph_qwen3vl : public llama_model_clip::graph_vit {
         const int64_t n_pos  = n_patches;
         const int64_t d_head = hparams.n_embd_head_k();
 
-        ggml_tensor * cur = clip_qwen_patches(ctx0, clip, inp_media->inp_raw, media, n_embd, n_patches_x, n_patches_y);
-        cur = ggml_add(ctx0, cur, clip.v_patch_bias);
+        ggml_tensor * cur = clip_qwen_patches(ctx0, cm, inp_media->inp_raw, media, n_embd, n_patches_x, n_patches_y);
+        cur = ggml_add(ctx0, cur, cm.patch_bias);
 
         // learned position embedding, resized to the patch grid and put in merge order
         {
-            ggml_tensor * pe = clip.v_pos_embd;
+            ggml_tensor * pe = cm.position_embeddings;
             const int n_side = (int) std::sqrt((double) pe->ne[1]);
             if (n_patches_x != n_side || n_patches_y != n_side) {
                 pe = ggml_reshape_3d(ctx0, pe, n_embd, n_side, n_side);
@@ -906,7 +661,7 @@ struct llama_model_clip::graph_qwen3vl : public llama_model_clip::graph_vit {
         ggml_set_input(positions);
         cb(positions, "positions", -1);
 
-        const int patch_size = clip.vhp.patch_size;
+        const int patch_size = cm.hparams.patch_size;
         inp_media->extra.push_back([=](const llama_media_input & m) {
             std::vector<int32_t> pos;
             clip_qwen_positions(pos, m.nx / patch_size, m.ny / patch_size, nullptr);
@@ -920,16 +675,16 @@ struct llama_model_clip::graph_qwen3vl : public llama_model_clip::graph_vit {
 
         ggml_tensor * deepstack = nullptr;
         auto layer_out = [&](ggml_tensor * x, int il) {
-            const auto & ds = clip.deepstack.empty() ? deepstack_layer() : clip.deepstack[il];
-            if (ds.fc1_w == nullptr) {
+            const clip_layer & ds = cm.layers[il];
+            if (ds.deepstack_fc1_w == nullptr) {
                 return;
             }
             ggml_tensor * feat = ggml_reshape_2d(ctx0, x, n_embd * 4, n_pos / 4);
-            feat = build_norm(feat, ds.norm_w, ds.norm_b, LLM_NORM, il);
+            feat = build_norm(feat, ds.deepstack_norm_w, ds.deepstack_norm_b, LLM_NORM, il);
             feat = build_ffn(feat,
-                    ds.fc1_w, ds.fc1_b, nullptr,
+                    ds.deepstack_fc1_w, ds.deepstack_fc1_b, nullptr,
                     nullptr, nullptr, nullptr,
-                    ds.fc2_w, ds.fc2_b, nullptr,
+                    ds.deepstack_fc2_w, ds.deepstack_fc2_b, nullptr,
                     nullptr, LLM_FFN_GELU, LLM_FFN_SEQ, il);
             deepstack = deepstack ? ggml_concat(ctx0, deepstack, feat, 0) : feat;
         };
@@ -938,9 +693,9 @@ struct llama_model_clip::graph_qwen3vl : public llama_model_clip::graph_vit {
 
         cur = ggml_reshape_2d(ctx0, cur, n_embd * 4, n_pos / 4);
         cur = build_ffn(cur,
-                clip.mm_0_w, clip.mm_0_b, nullptr,
+                cm.mm_0_w, cm.mm_0_b, nullptr,
                 nullptr, nullptr, nullptr,
-                clip.mm_2_w, clip.mm_2_b, nullptr,
+                cm.mm_1_w, cm.mm_1_b, nullptr,
                 nullptr, LLM_FFN_GELU, LLM_FFN_SEQ, -1);
 
         if (deepstack) {
@@ -1222,7 +977,7 @@ std::unique_ptr<llm_graph_context> llama_model_clip::build_arch_graph(const llm_
         case LLAMA_CLIP_PROJ_QWEN3VL:
             return std::make_unique<graph_qwen3vl>(*this, params);
         default:
-            GGML_ABORT("clip: no graph for projector type '%s'", vhp.proj_name.c_str());
+            GGML_ABORT("clip: no native graph for projector type %d", (int) vhp.proj);
     }
 }
 

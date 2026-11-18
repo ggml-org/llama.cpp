@@ -437,37 +437,10 @@ struct llama_model_clip : public llama_model_base {
 
     struct graph_engine;
 
-    // vision tower hparams that have no place in llama_hparams
+    // the vision tower: its native graph, if any (the weights and the hparams are the engine's)
     struct vision_hparams {
         bool has_vision = false;
-
         llama_clip_projector proj = LLAMA_CLIP_PROJ_UNKNOWN;
-        std::string          proj_name;
-
-        int32_t image_size = 0;
-        int32_t patch_size = 0;
-        int32_t n_merge    = 1; // spatial merge (or pooling kernel) per side
-        int32_t n_embd_out = 0; // projector output width, = decoder input width
-
-        float image_mean[3] = { 0.0f, 0.0f, 0.0f };
-        float image_std [3] = { 1.0f, 1.0f, 1.0f };
-
-        llm_ffn_op_type ffn_op = LLM_FFN_GELU;
-
-        // dynamic resolution limits, 0 = fixed size
-        int32_t image_min_pixels = 0;
-        int32_t image_max_pixels = 0;
-
-        int32_t n_temporal_merge = 1;
-
-        int32_t n_wa_pattern = 0;   // window-attention towers: every n_wa_pattern-th layer has full attention
-        int32_t attn_window  = 112; // window size in pixels
-
-        // limits read from the file, 0 = model default
-        int32_t file_min_pixels = 0;
-        int32_t file_max_pixels = 0;
-
-        std::vector<int32_t> deepstack_layers;
     } vhp;
 
     // audio generation tower, loaded as the main tower when the file has no vision tower
@@ -544,40 +517,12 @@ struct llama_model_clip : public llama_model_base {
 
     llama_memory_i * create_clip_memory(const llama_memory_params & params, const llama_cparams & cparams) const;
 
-    // vision stem and projector
-    ggml_tensor * v_patch_embd   = nullptr;
-    ggml_tensor * v_patch_embd_1 = nullptr; // second temporal kernel (qwen-vl)
-    ggml_tensor * v_patch_bias   = nullptr;
-    ggml_tensor * v_pos_embd     = nullptr;
-    ggml_tensor * v_pre_ln_w     = nullptr;
-    ggml_tensor * v_pre_ln_b     = nullptr;
-    ggml_tensor * v_post_ln_w    = nullptr;
-    ggml_tensor * v_post_ln_b    = nullptr;
-
-    ggml_tensor * mm_inp_proj      = nullptr;
-    ggml_tensor * mm_soft_emb_norm = nullptr;
-    ggml_tensor * mm_0_w = nullptr;
-    ggml_tensor * mm_0_b = nullptr;
-    ggml_tensor * mm_2_w = nullptr;
-    ggml_tensor * mm_2_b = nullptr;
-
-    struct deepstack_layer {
-        ggml_tensor * norm_w = nullptr;
-        ggml_tensor * norm_b = nullptr;
-        ggml_tensor * fc1_w  = nullptr;
-        ggml_tensor * fc1_b  = nullptr;
-        ggml_tensor * fc2_w  = nullptr;
-        ggml_tensor * fc2_b  = nullptr;
-    };
-    std::vector<deepstack_layer> deepstack; // indexed by vision layer, empty entries for normal layers
-
     void load_vocab(llama_model_loader & ml) override;
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
     void load_gen_hparams(llama_model_loader & ml);
     void load_gen_tensors(llama_model_loader & ml);
-    void load_vision_tensors(llama_model_loader & ml);
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 

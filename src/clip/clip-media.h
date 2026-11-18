@@ -10,6 +10,7 @@
 
 #include "llama.h"
 
+#include <algorithm>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -156,7 +157,7 @@ struct clip_image_tokens {
     std::pair<uint32_t, uint32_t> canvas_tile_grid(size_t k) const {
         const auto & ref = batch_f32.entries.back();
         const auto & e   = batch_f32.entries[k];
-        return { (uint32_t) e.nx() * nx / ref.nx(), (uint32_t) e.ny() * ny / ref.ny() };
+        return { (uint32_t) ((uint64_t) e.nx() * nx / (uint64_t) ref.nx()), (uint32_t) ((uint64_t) e.ny() * ny / (uint64_t) ref.ny()) };
     }
 
     bool can_batch_with(const clip_image_tokens & other) {
@@ -198,6 +199,40 @@ struct clip_image_tokens {
         n_temporal_merge = ser.read<uint32_t>();
         id = ser.read<std::string>();
         batch_f32.deserialize(ser);
+        validate();
+    }
+
+    // a loaded layout must give its counts and positions without wrapping or dividing by zero; a save holds the
+    // geometry only, so no real image or video comes near the limit
+    void validate() {
+        const auto & entries = batch_f32.entries;
+        // early version-3 files numbered the canvas type 3, later ones gave 3 to SenseNova-U1 without a new version;
+        // only canvas tiles carry MiniCPM-V separators
+        if (pos == CLIP_POS_TYPE_SENSENOVA_U1 &&
+                std::any_of(entries.begin(), entries.end(), [](const clip_image_f32 & e) { return e.suffix_type != CLIP_SUFFIX_NONE; })) {
+            pos = CLIP_POS_TYPE_CANVAS;
+        }
+        const uint64_t n_max = 1u << 22;
+        uint64_t n = 0;
+        if (pos == CLIP_POS_TYPE_HUNYUANVL) {
+            n = ((uint64_t) nx + 1) * ny + 2;
+        } else if (pos == CLIP_POS_TYPE_CANVAS) {
+            if (entries.empty() || entries.back().nx() <= 0 || entries.back().ny() <= 0 ||
+                    (entries.size() > 1 && (entries[0].anyres.grid_x <= 0 || entries[0].anyres.grid_y <= 0))) {
+                throw std::runtime_error("invalid canvas chunk");
+            }
+            for (size_t k = 0; k < entries.size() && n <= n_max; ++k) {
+                const uint64_t gw = (uint64_t) std::max(entries[k].nx(), 0) * nx / entries.back().nx();
+                const uint64_t gh = (uint64_t) std::max(entries[k].ny(), 0) * ny / entries.back().ny();
+                n += gw > n_max || gh > n_max ? n_max + 1 : gw * gh + clip_suffix_rows(entries[k].suffix_type).size();
+            }
+        } else {
+            n = (uint64_t) nx * ny;
+            n = n <= n_max ? n * std::max<uint64_t>(entries.size(), 1) : n;
+        }
+        if (n > n_max || nx > n_max || ny > n_max || (pos != CLIP_POS_TYPE_NORMAL && nx == 0)) {
+            throw std::runtime_error("invalid image geometry");
+        }
     }
 };
 using clip_image_tokens_ptr = std::unique_ptr<clip_image_tokens>;
@@ -387,6 +422,11 @@ struct clip_input_chunk {
         }
         if (type == CLIP_INPUT_CHUNK_TYPE_AUDIO && !tokens_audio) {
             throw std::runtime_error("type is AUDIO but tokens_audio is missing");
+        }
+        // a chunk carries the payload of its type only, as every writer made it
+        if ((type != CLIP_INPUT_CHUNK_TYPE_IMAGE && tokens_image) || (type != CLIP_INPUT_CHUNK_TYPE_AUDIO && tokens_audio) ||
+                (type != CLIP_INPUT_CHUNK_TYPE_TEXT && !tokens_text.empty())) {
+            throw std::runtime_error("the payload does not match the chunk type");
         }
     }
 };

@@ -86,82 +86,6 @@ static std::string mtmd_format(const char * fmt, ...) {
 }
 
 //
-// serialization of chunks (counts and ids, the media data is not kept)
-//
-
-// remember to bump this if the serialization format changes
-// 6: counts and ids; 7: and the decoder positions of image rows
-#define MTMD_SERIALIZATION_VERSION 7
-
-// oldest compat version that can be loaded (2 to 5: the format of the old engine, read for their counts)
-#define MTMD_SERIALIZATION_VERSION_MIN 2
-
-struct mtmd_serialization {
-    uint64_t version = MTMD_SERIALIZATION_VERSION;
-    std::vector<char> data;
-    size_t read_pos = 0;
-
-    explicit mtmd_serialization(uint64_t version) : version(version) {
-        write(version);
-    }
-
-    mtmd_serialization(uint64_t version, const char * buf, size_t len) {
-        data.assign(buf, buf + len);
-        const uint64_t ver_in = read<uint64_t>();
-        if (ver_in < MTMD_SERIALIZATION_VERSION_MIN || ver_in > version) {
-            throw std::runtime_error("version mismatch");
-        }
-        this->version = ver_in;
-    }
-
-    template <typename T>
-    void write(T value) {
-        static_assert(std::is_trivially_copyable<T>::value && !std::is_same<T, bool>::value,
-            "T must be trivially copyable and not bool");
-        const char * p = reinterpret_cast<const char *>(&value);
-        data.insert(data.end(), p, p + sizeof(T));
-    }
-
-    template <typename T>
-    T read() {
-        static_assert(std::is_trivially_copyable<T>::value && !std::is_same<T, bool>::value,
-            "T must be trivially copyable and not bool");
-        if (read_pos + sizeof(T) > data.size()) {
-            throw std::runtime_error("read OOB");
-        }
-        T value;
-        std::memcpy(&value, data.data() + read_pos, sizeof(T));
-        read_pos += sizeof(T);
-        return value;
-    }
-};
-
-template <>
-void mtmd_serialization::write<bool>(bool value) {
-    write<uint8_t>(value ? 1 : 0);
-}
-template <>
-bool mtmd_serialization::read<bool>() {
-    return read<uint8_t>() != 0;
-}
-
-template <>
-void mtmd_serialization::write<std::string>(std::string value) {
-    write<uint64_t>(value.size());
-    data.insert(data.end(), value.begin(), value.end());
-}
-template <>
-std::string mtmd_serialization::read<std::string>() {
-    const uint64_t len = read<uint64_t>();
-    if (read_pos + len > data.size()) {
-        throw std::runtime_error("read_string OOB");
-    }
-    std::string str(data.data() + read_pos, len);
-    read_pos += len;
-    return str;
-}
-
-//
 // bitmaps
 //
 
@@ -266,377 +190,42 @@ struct mtmd_lmedia_ref {
     }
 };
 
-// versions 2 to 5 of the format, written by the old engine: the counts follow from the geometry of the entries
-// (MiniCPM-V 4.7 canvas separators, HunyuanVL row newlines, Qwen-VL temporal merge), as the old engine computed them
-struct mtmd_legacy_entry {
-    int32_t nx = 0;
-    int32_t ny = 0;
-    int32_t suffix_type = 0;
-    int32_t grid_x = 0; // anyres grid of the image (version 3 and later)
-    int32_t grid_y = 0;
-};
+// an image or audio chunk: a handle of its libllama media, which keeps the layout (a placeholder once saved and
+// loaded, or made by mtmd_input_chunk_get_placeholder())
+struct mtmd_media_tokens {
+    mtmd_lmedia_ref lmedia;
 
-static std::vector<mtmd_legacy_entry> mtmd_legacy_read_batch(mtmd_serialization & ser) {
-    ser.read<bool>(); // is_audio
-    const uint64_t n = ser.read<uint64_t>();
-    if (n > (ser.data.size() - ser.read_pos) / 10) {
-        throw std::runtime_error("entries count exceeds buffer size");
-    }
-    std::vector<mtmd_legacy_entry> entries(n);
-    for (auto & e : entries) {
-        ser.read<bool>();    // add_viewsep
-        ser.read<bool>();    // add_newline
-        ser.read<int32_t>(); // lead_pad
-        if (ser.version >= 3) {
-            e.suffix_type = ser.read<int32_t>();
-            if (e.suffix_type < 0 || e.suffix_type > 5) {
-                throw std::runtime_error("invalid suffix type");
-            }
-            e.grid_x = ser.read<int32_t>();
-            e.grid_y = ser.read<int32_t>();
-            ser.read<int32_t>(); // anyres orig_nx
-            ser.read<int32_t>(); // anyres orig_ny
-        }
-        e.nx = ser.read<int32_t>();
-        e.ny = ser.read<int32_t>();
-        if (ser.version >= 5) {
-            ser.read<int32_t>(); // audio_n_ctx
-        }
-    }
-    return entries;
-}
-
-// separator rows after a MiniCPM-V 4.7 tile: </image>, </image><slice>, </slice><slice>, </slice>\n<slice>, </slice>
-static size_t mtmd_legacy_suffix_rows(int32_t suffix_type) {
-    static const size_t rows[] = { 0, 1, 2, 2, 3, 1 };
-    return rows[suffix_type];
-}
-
-// the position types of the old engine
-enum mtmd_legacy_pos { MTMD_LEGACY_POS_NORMAL, MTMD_LEGACY_POS_MROPE, MTMD_LEGACY_POS_HUNYUANVL, MTMD_LEGACY_POS_SENSENOVA_U1, MTMD_LEGACY_POS_CANVAS };
-
-// the decoder position [t, y, x, z] of row i of an image of the old engine at pos_0, as its getter computed it
-struct mtmd_legacy_layout {
-    mtmd_legacy_pos pos = MTMD_LEGACY_POS_NORMAL;
-    uint32_t nx = 0;
-    uint32_t ny = 0;
-    uint32_t n_tok = 0;
-    uint32_t image_idx = 0;
-    std::vector<mtmd_legacy_entry> entries;
-
-    // canvas, set by the loader: the first row of each tile (then the row count), and the position of each tile
-    // after the origin (each tile before it took one, its separators one each)
-    std::vector<uint32_t> tile_row0;
-    std::vector<uint32_t> tile_t0;
-
-    // MiniCPM-V 4.7 canvas: the token grid of tile k, scaled from its pixel size (checked to fit by the loader)
-    std::pair<uint64_t, uint64_t> tile_grid(size_t k) const {
-        const auto & ref = entries.back();
-        return { (uint64_t) entries[k].nx * nx / (uint64_t) ref.nx, (uint64_t) entries[k].ny * ny / (uint64_t) ref.ny };
-    }
-
-    static uint32_t canvas_scale(uint32_t coord, uint32_t grid, uint64_t canvas) {
-        if (grid <= 1 || canvas <= 1) {
-            return 0;
-        }
-        const double v = (double) coord * (double) (canvas - 1) / (double) (grid - 1);
-        return (uint32_t) std::min({ std::nearbyint(v), (double) (canvas - 1), (double) UINT32_MAX });
-    }
-
-    std::array<llama_pos, 4> row_pos(llama_pos pos_0, uint32_t i) const {
-        const llama_pos seq = pos_0 + (llama_pos) i;
-        switch (pos) {
-            case MTMD_LEGACY_POS_MROPE:
-                return { pos_0, pos_0 + (llama_pos) (i / nx), pos_0 + (llama_pos) (i % nx), 0 };
-            case MTMD_LEGACY_POS_SENSENOVA_U1:
-                return { pos_0, (llama_pos) (i / nx), (llama_pos) (i % nx), 0 };
-            case MTMD_LEGACY_POS_HUNYUANVL:
-                {
-                    if (i == 0 || i == n_tok - 1) {
-                        return { seq, seq, seq, seq }; // BOI, EOI
-                    }
-                    const uint32_t offset = i - 1;
-                    return { seq, (llama_pos) (offset % (nx + 1)), (llama_pos) (offset / (nx + 1)), (llama_pos) image_idx };
-                }
-            case MTMD_LEGACY_POS_CANVAS:
-                {
-                    const bool tiled = entries[0].grid_x > 0 && entries[0].grid_y > 0;
-                    const uint64_t canvas_w = tiled ? (uint64_t) entries[0].grid_x * nx : nx;
-                    const uint64_t canvas_h = tiled ? (uint64_t) entries[0].grid_y * ny : ny;
-                    const llama_pos base = pos_0 - 1;
-                    // the tile of row i: its rows, then its separators, which take a position each
-                    const size_t k = std::upper_bound(tile_row0.begin(), tile_row0.end(), i) - tile_row0.begin() - 1;
-                    if (k >= entries.size()) {
-                        throw std::runtime_error("canvas row out of range");
-                    }
-                    const llama_pos tp = pos_0 + (llama_pos) tile_t0[k];
-                    const auto [gw64, gh64] = tile_grid(k);
-                    const uint32_t gw = (uint32_t) gw64;
-                    const uint32_t gh = (uint32_t) gh64;
-                    i -= tile_row0[k];
-                    if (i >= gw * gh) {
-                        const llama_pos p = tp + 1 + (llama_pos) (i - gw * gh);
-                        return { p, p, p, p };
-                    }
-                    const uint32_t row = i / gw;
-                    const uint32_t col = i % gw;
-                    uint32_t h;
-                    uint32_t w;
-                    if (k == 0) {
-                        h = canvas_scale(row, gh, canvas_h);
-                        w = canvas_scale(col, gw, canvas_w);
-                    } else {
-                        const uint32_t s = k - 1;
-                        h = (s / entries[0].grid_x) * ny + row;
-                        w = (s % entries[0].grid_x) * nx + col;
-                    }
-                    return { tp, base + (llama_pos) h, base + (llama_pos) w, base };
-                }
-            case MTMD_LEGACY_POS_NORMAL:
-            default:
-                return { seq, seq, seq, seq };
-        }
-    }
-};
-
-struct mtmd_image_tokens {
-    uint32_t  nx    = 0; // token grid in x (M-RoPE decoders), or the token count
-    uint32_t  ny    = 0; // token grid in y, 1 for the other decoders
-    uint32_t  n_tok = 0; // rows
-    llama_pos n_pos = 0; // positions the span advances
-    std::string id;      // optional user-defined ID, useful for KV cache tracking
-
-    mtmd_lmedia_ref lmedia; // nullptr once loaded from a buffer: counts and positions only
-
-    // the decoder positions of a chunk without media, if known:
-    // loaded from versions 2 to 5, the layout of the old engine, computed on demand
-    std::shared_ptr<const mtmd_legacy_layout> legacy;
-    // else (version 7, or a placeholder): row i at pos_0 is pos_base[4i + d] + pos_0 if bit d of pos_shift[i] is
-    // set, else pos_base[4i + d]
-    std::vector<llama_pos> pos_base;
-    std::vector<uint8_t>   pos_shift;
-
-    uint32_t n_tokens() const { return n_tok; }
+    uint32_t  n_tokens() const { return llama_media_n_tokens(lmedia.m); }
+    llama_pos n_pos()    const { return llama_media_n_pos(lmedia.m); }
+    const char * id()    const { return llama_media_get_id(lmedia.m); }
 
     bool is_placeholder() const {
-        return lmedia.m == nullptr || llama_media_is_placeholder(lmedia.m);
+        return llama_media_is_placeholder(lmedia.m);
+    }
+};
+
+struct mtmd_image_tokens : mtmd_media_tokens {
+    // the token grid of the engine (M-RoPE decoders), else the token count by 1
+    std::pair<uint32_t, uint32_t> grid() const {
+        uint32_t nx = 0;
+        uint32_t ny = 0;
+        if (!llama_media_get_grid(lmedia.m, &nx, &ny)) {
+            return { n_tokens(), 1 };
+        }
+        return { nx, ny };
     }
 
     // [t, y, x, z] of row i at pos_0
     std::array<llama_pos, 4> row_pos(llama_pos pos_0, uint32_t i) const {
         std::array<llama_pos, 4> p;
         p.fill(pos_0 + (llama_pos) i);
-        if (lmedia.m) {
-            llama_media_get_row_pos(lmedia.m, pos_0, i, p.data(), 4);
-        } else if (legacy) {
-            p = legacy->row_pos(pos_0, i);
-        } else if ((size_t) i < pos_shift.size()) {
-            for (int d = 0; d < 4; ++d) {
-                p[d] = pos_base[4 * (size_t) i + d] + ((pos_shift[i] >> d) & 1 ? pos_0 : 0);
-            }
-        }
+        llama_media_get_row_pos(lmedia.m, pos_0, i, p.data(), 4);
         return p;
-    }
-
-    bool has_positions() const {
-        return lmedia.m || legacy || !pos_shift.empty();
-    }
-
-    // row i as a base and a mask of the dimensions that move with pos_0: every layout is affine in pos_0 with a
-    // slope of 0 or 1 per dimension
-    std::pair<std::array<llama_pos, 4>, uint8_t> row_pos_affine(uint32_t i) const {
-        const auto p0 = row_pos(0, i);
-        const auto p1 = row_pos(1, i);
-        uint8_t shift = 0;
-        for (int d = 0; d < 4; ++d) {
-            if (p1[d] != p0[d]) {
-                shift |= 1 << d;
-            }
-        }
-        return { p0, shift };
-    }
-
-    // a table of the current positions, which then outlive the media
-    void keep_positions() {
-        if (!lmedia.m || !pos_shift.empty()) {
-            return;
-        }
-        pos_base.resize((size_t) n_tok * 4);
-        pos_shift.resize(n_tok);
-        for (uint32_t i = 0; i < n_tok; ++i) {
-            const auto [p, shift] = row_pos_affine(i);
-            std::copy(p.begin(), p.end(), pos_base.begin() + 4 * (size_t) i);
-            pos_shift[i] = shift;
-        }
-    }
-
-    void serialize(mtmd_serialization & ser) const {
-        ser.write(nx);
-        ser.write(ny);
-        ser.write(n_tok);
-        ser.write((int32_t) n_pos);
-        ser.write(id);
-        // version 7: the positions of every row
-        const uint32_t n = has_positions() ? n_tok : 0;
-        ser.write(n);
-        for (uint32_t i = 0; i < n; ++i) {
-            const auto [p, shift] = row_pos_affine(i);
-            for (int d = 0; d < 4; ++d) {
-                ser.write((int32_t) p[d]);
-            }
-            ser.write(shift);
-        }
-    }
-    void deserialize(mtmd_serialization & ser) {
-        lmedia.reset();
-        legacy.reset();
-        pos_base.clear();
-        pos_shift.clear();
-        if (ser.version < 6) {
-            deserialize_legacy(ser);
-            return;
-        }
-        nx    = ser.read<uint32_t>();
-        ny    = ser.read<uint32_t>();
-        n_tok = ser.read<uint32_t>();
-        n_pos = ser.read<int32_t>();
-        id    = ser.read<std::string>();
-        if (ser.version >= 7) {
-            const uint32_t n = ser.read<uint32_t>();
-            if (n != 0 && n != n_tok) {
-                throw std::runtime_error("invalid position count");
-            }
-            if (n > (ser.data.size() - ser.read_pos) / 17) {
-                throw std::runtime_error("positions exceed buffer size");
-            }
-            pos_base.resize((size_t) n * 4);
-            pos_shift.resize(n);
-            for (uint32_t i = 0; i < n; ++i) {
-                for (int d = 0; d < 4; ++d) {
-                    pos_base[4 * (size_t) i + d] = ser.read<int32_t>();
-                }
-                pos_shift[i] = ser.read<uint8_t>();
-            }
-        }
-    }
-
-    void deserialize_legacy(mtmd_serialization & ser) {
-        auto lay_ptr = std::make_shared<mtmd_legacy_layout>();
-        mtmd_legacy_layout & lay = *lay_ptr;
-        nx = ser.read<uint32_t>();
-        ny = ser.read<uint32_t>();
-        const uint32_t pos = ser.read<uint32_t>();
-        if (pos > MTMD_LEGACY_POS_CANVAS) {
-            throw std::runtime_error("invalid pos type");
-        }
-        lay.image_idx = ser.read<uint32_t>();
-        const uint32_t n_temporal_merge = ser.read<uint32_t>();
-        id = ser.read<std::string>();
-        lay.entries = mtmd_legacy_read_batch(ser);
-        lay.nx = nx;
-        lay.ny = ny;
-        const auto & entries = lay.entries;
-
-        // early version-3 files numbered the canvas type 3, later ones gave 3 to SenseNova-U1 without a new
-        // version; only canvas tiles carry MiniCPM-V separators
-        lay.pos = (mtmd_legacy_pos) pos;
-        if (lay.pos == MTMD_LEGACY_POS_SENSENOVA_U1 &&
-                std::any_of(entries.begin(), entries.end(), [](const mtmd_legacy_entry & e) { return e.suffix_type != 0; })) {
-            lay.pos = MTMD_LEGACY_POS_CANVAS;
-        }
-
-        // the counts of a malformed chunk must not wrap, and a save writes 17 bytes per row: no real image or
-        // video chunk comes near 4M rows
-        const uint64_t n_max = 1u << 22;
-        uint64_t n = 0;
-        if (lay.pos == MTMD_LEGACY_POS_HUNYUANVL) {
-            n = ((uint64_t) nx + 1) * ny + 2;
-        } else if (lay.pos == MTMD_LEGACY_POS_CANVAS) {
-            if (entries.empty() || entries.back().nx <= 0 || entries.back().ny <= 0) {
-                throw std::runtime_error("invalid canvas chunk");
-            }
-            // the slices sit on the anyres grid of the overview
-            if (entries.size() > 1 && (entries[0].grid_x <= 0 || entries[0].grid_y <= 0)) {
-                throw std::runtime_error("invalid canvas grid");
-            }
-            for (size_t k = 0; k < entries.size() && n <= n_max; ++k) {
-                if (entries[k].nx < 0 || entries[k].ny < 0) {
-                    throw std::runtime_error("invalid canvas tile");
-                }
-                const auto [gw, gh] = lay.tile_grid(k);
-                if (gw > n_max || gh > n_max) {
-                    throw std::runtime_error("invalid canvas tile");
-                }
-                lay.tile_row0.push_back((uint32_t) n);
-                lay.tile_t0.push_back((uint32_t) (k == 0 ? 0 : lay.tile_t0.back() + 1 + mtmd_legacy_suffix_rows(entries[k - 1].suffix_type)));
-                n += gw * gh + mtmd_legacy_suffix_rows(entries[k].suffix_type);
-            }
-            lay.tile_row0.push_back((uint32_t) std::min(n, n_max + 1));
-        } else {
-            uint64_t nz = entries.size();
-            if (n_temporal_merge > 1) {
-                nz = (nz + n_temporal_merge - 1) / n_temporal_merge;
-            }
-            n = (uint64_t) nx * ny;
-            n = n <= n_max ? n * nz : n;
-        }
-        if (n > n_max) {
-            throw std::runtime_error("image chunk too large");
-        }
-        n_tok = (uint32_t) n;
-        if (lay.pos == MTMD_LEGACY_POS_MROPE && std::max(nx, ny) > n_max) {
-            throw std::runtime_error("invalid image grid");
-        }
-        switch (lay.pos) {
-            case MTMD_LEGACY_POS_MROPE:        n_pos = std::max(nx, ny); break;
-            case MTMD_LEGACY_POS_SENSENOVA_U1: n_pos = 1;                break;
-            case MTMD_LEGACY_POS_CANVAS:
-                n_pos = 0;
-                for (const auto & e : entries) {
-                    n_pos += 1 + (llama_pos) mtmd_legacy_suffix_rows(e.suffix_type);
-                }
-                break;
-            default:                           n_pos = n_tok;            break;
-        }
-
-        if ((lay.pos == MTMD_LEGACY_POS_MROPE || lay.pos == MTMD_LEGACY_POS_SENSENOVA_U1 || lay.pos == MTMD_LEGACY_POS_HUNYUANVL) && nx == 0) {
-            throw std::runtime_error("invalid image grid");
-        }
-        lay.n_tok = n_tok;
-        legacy = std::move(lay_ptr);
     }
 };
 using mtmd_image_tokens_ptr = std::unique_ptr<mtmd_image_tokens>;
 
-struct mtmd_audio_tokens {
-    uint32_t n_tokens = 0; // number of tokens
-    std::string id;        // optional user-defined ID, useful for KV cache tracking
-
-    mtmd_lmedia_ref lmedia; // nullptr once loaded from a buffer: counts only
-
-    bool is_placeholder() const {
-        return lmedia.m == nullptr || llama_media_is_placeholder(lmedia.m);
-    }
-
-    void serialize(mtmd_serialization & ser) const {
-        ser.write(n_tokens);
-        ser.write(id);
-    }
-    void deserialize(mtmd_serialization & ser) {
-        lmedia.reset();
-        n_tokens = ser.read<uint32_t>();
-        id       = ser.read<std::string>();
-        if (ser.version < 6) {
-            // the old engine kept the mel entries and, from version 4, a slice of a soundtrack
-            mtmd_legacy_read_batch(ser);
-            if (ser.version >= 4 && ser.read<bool>()) {
-                ser.read<uint32_t>(); // row_begin
-                ser.read<uint32_t>(); // n_tokens of the track
-                mtmd_legacy_read_batch(ser);
-            }
-        }
-    }
-};
+struct mtmd_audio_tokens : mtmd_media_tokens {};
 using mtmd_audio_tokens_ptr = std::unique_ptr<mtmd_audio_tokens>;
 
 struct mtmd_input_chunk {
@@ -656,67 +245,19 @@ struct mtmd_input_chunk {
     }
 
     bool is_placeholder() const {
-        if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
-            return tokens_image && tokens_image->is_placeholder();
-        } else if (type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
-            return tokens_audio && tokens_audio->is_placeholder();
-        }
-        return false;
+        return lmedia() && llama_media_is_placeholder(lmedia());
     }
 
-    void serialize(mtmd_serialization & ser) const {
-        ser.write((uint32_t) type);
-        ser.write<uint64_t>(tokens_text.size());
-        for (llama_token tok : tokens_text) {
-            ser.write((int32_t) tok);
+    // a chunk of a media (image or audio, from the media), a new reference is taken
+    static mtmd_input_chunk of_media(llama_media * m) {
+        if (llama_media_get_type(m) == LLAMA_MEDIA_TYPE_AUDIO) {
+            auto t = std::make_unique<mtmd_audio_tokens>();
+            t->lmedia = mtmd_lmedia_ref(m);
+            return { MTMD_INPUT_CHUNK_TYPE_AUDIO, {}, nullptr, std::move(t) };
         }
-        ser.write(tokens_image != nullptr);
-        if (tokens_image) {
-            tokens_image->serialize(ser);
-        }
-        ser.write(tokens_audio != nullptr);
-        if (tokens_audio) {
-            tokens_audio->serialize(ser);
-        }
-    }
-    void deserialize(mtmd_serialization & ser) {
-        const uint32_t type_raw = ser.read<uint32_t>();
-        if (type_raw >= MTMD_INPUT_CHUNK_TYPE_COUNT) {
-            throw std::runtime_error("invalid chunk type");
-        }
-        type = (mtmd_input_chunk_type) type_raw;
-
-        const uint64_t n_tokens_text = ser.read<uint64_t>();
-        // reject before resize() so a tiny corrupted buffer can't force a huge allocation
-        if (n_tokens_text > (ser.data.size() - ser.read_pos) / sizeof(int32_t)) {
-            throw std::runtime_error("tokens_text length exceeds buffer size");
-        }
-        tokens_text.resize(n_tokens_text);
-        for (uint64_t i = 0; i < n_tokens_text; i++) {
-            tokens_text[i] = (llama_token) ser.read<int32_t>();
-        }
-
-        tokens_image.reset();
-        if (ser.read<bool>()) {
-            tokens_image = std::make_unique<mtmd_image_tokens>();
-            tokens_image->deserialize(ser);
-        }
-        tokens_audio.reset();
-        if (ser.read<bool>()) {
-            tokens_audio = std::make_unique<mtmd_audio_tokens>();
-            tokens_audio->deserialize(ser);
-        }
-        if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE && !tokens_image) {
-            throw std::runtime_error("type is IMAGE but tokens_image is missing");
-        }
-        if (type == MTMD_INPUT_CHUNK_TYPE_AUDIO && !tokens_audio) {
-            throw std::runtime_error("type is AUDIO but tokens_audio is missing");
-        }
-        // a chunk carries the payload of its type only, as every writer made it
-        if ((type != MTMD_INPUT_CHUNK_TYPE_IMAGE && tokens_image) || (type != MTMD_INPUT_CHUNK_TYPE_AUDIO && tokens_audio) ||
-                (type != MTMD_INPUT_CHUNK_TYPE_TEXT && !tokens_text.empty())) {
-            throw std::runtime_error("the payload does not match the chunk type");
-        }
+        auto t = std::make_unique<mtmd_image_tokens>();
+        t->lmedia = mtmd_lmedia_ref(m);
+        return { MTMD_INPUT_CHUNK_TYPE_IMAGE, {}, std::move(t), nullptr };
     }
 };
 
@@ -1415,38 +956,9 @@ struct mtmd_tokenizer {
         }
     }
 
-    // a media chunk of a libllama media
-    void add_media_chunk(llama_media * m, const std::string & id) {
-        if (llama_media_get_type(m) == LLAMA_MEDIA_TYPE_AUDIO) {
-            mtmd_audio_tokens_ptr audio_tokens(new mtmd_audio_tokens);
-            audio_tokens->n_tokens = llama_media_n_tokens(m);
-            audio_tokens->id       = id;
-            audio_tokens->lmedia   = mtmd_lmedia_ref(m);
-            cur.entries.emplace_back(mtmd_input_chunk{
-                MTMD_INPUT_CHUNK_TYPE_AUDIO,
-                {}, // text tokens
-                nullptr, // image tokens
-                std::move(audio_tokens),
-            });
-            return;
-        }
-
-        mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
-        image_tokens->id     = id;
-        image_tokens->n_tok  = llama_media_n_tokens(m);
-        image_tokens->n_pos  = llama_media_n_pos(m);
-        image_tokens->lmedia = mtmd_lmedia_ref(m);
-        // the token grid as the clip engine counts it, for the deprecated getters and the saved chunk
-        if (!ctx->use_mrope || !llama_media_get_grid(m, &image_tokens->nx, &image_tokens->ny)) {
-            image_tokens->nx = image_tokens->n_tok;
-            image_tokens->ny = 1;
-        }
-        cur.entries.emplace_back(mtmd_input_chunk{
-            MTMD_INPUT_CHUNK_TYPE_IMAGE,
-            {}, // text tokens
-            std::move(image_tokens),
-            nullptr, // audio tokens
-        });
+    // a media chunk of a libllama media (the chunk takes the reference)
+    void add_media_chunk(llama_media * m) {
+        cur.entries.emplace_back(mtmd_input_chunk::of_media(m));
     }
 
     int32_t add_media(std::vector<const mtmd_bitmap *> & bitmaps) {
@@ -1460,7 +972,7 @@ struct mtmd_tokenizer {
                 LOG_ERR("%s: error: the voice \"%s\" holds no embeddings\n", __func__, b0->id.c_str());
                 return 2;
             }
-            add_media_chunk(llama_media_ref(b0->lmedia.get()), b0->id);
+            add_media_chunk(llama_media_ref(b0->lmedia.get()));
             return 0;
         }
 
@@ -1540,7 +1052,7 @@ struct mtmd_tokenizer {
             if (i + 1 == n_before) {
                 continue; // a media laid out before
             }
-            add_media_chunk(llama_media_layout_get_media(lay, i), b0->id);
+            add_media_chunk(llama_media_layout_get_media(lay, i));
         }
 
         return 0;
@@ -1815,7 +1327,8 @@ float * mtmd_batch_get_output_embd(mtmd_batch * batch, const mtmd_input_chunk * 
 //
 
 bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk * chunk) {
-    if (chunk && chunk->lmedia()) {
+    // a loaded chunk has no model behind its media: the model answers
+    if (chunk && chunk->lmedia() && !chunk->is_placeholder()) {
         return llama_media_is_atomic(chunk->lmedia());
     }
     const auto type = chunk && chunk->type == MTMD_INPUT_CHUNK_TYPE_AUDIO ? LLAMA_MEDIA_TYPE_AUDIO : LLAMA_MEDIA_TYPE_IMAGE;
@@ -2021,7 +1534,7 @@ size_t mtmd_input_chunk_get_n_tokens(const mtmd_input_chunk * chunk) {
     switch (chunk->type) {
         case MTMD_INPUT_CHUNK_TYPE_TEXT:  return chunk->tokens_text.size();
         case MTMD_INPUT_CHUNK_TYPE_IMAGE: return chunk->tokens_image->n_tokens();
-        case MTMD_INPUT_CHUNK_TYPE_AUDIO: return chunk->tokens_audio->n_tokens;
+        case MTMD_INPUT_CHUNK_TYPE_AUDIO: return chunk->tokens_audio->n_tokens();
         default: GGML_ABORT("invalid chunk type");
     }
 }
@@ -2029,19 +1542,14 @@ size_t mtmd_input_chunk_get_n_tokens(const mtmd_input_chunk * chunk) {
 llama_pos mtmd_input_chunk_get_n_pos(const mtmd_input_chunk * chunk) {
     switch (chunk->type) {
         case MTMD_INPUT_CHUNK_TYPE_TEXT:  return chunk->tokens_text.size();
-        case MTMD_INPUT_CHUNK_TYPE_IMAGE: return chunk->tokens_image->n_pos;
-        case MTMD_INPUT_CHUNK_TYPE_AUDIO: return chunk->tokens_audio->n_tokens;
+        case MTMD_INPUT_CHUNK_TYPE_IMAGE: return chunk->tokens_image->n_pos();
+        case MTMD_INPUT_CHUNK_TYPE_AUDIO: return chunk->tokens_audio->n_tokens();
         default: GGML_ABORT("invalid chunk type");
     }
 }
 
 const char * mtmd_input_chunk_get_id(const mtmd_input_chunk * chunk) {
-    if (chunk->type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
-        return chunk->tokens_image->id.c_str();
-    } else if (chunk->type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
-        return chunk->tokens_audio->id.c_str();
-    }
-    return nullptr;
+    return chunk->lmedia() ? llama_media_get_id(chunk->lmedia()) : nullptr;
 }
 
 struct llama_media * mtmd_input_chunk_get_llama_media(const mtmd_input_chunk * chunk) {
@@ -2068,34 +1576,19 @@ void mtmd_input_chunk_free(mtmd_input_chunk * chunk) {
     delete chunk;
 }
 
-// returns 0 on success
-static int32_t mtmd_input_chunk_save_impl(const mtmd_input_chunk * chunk, std::vector<char> & out_buf) {
-    try {
-        mtmd_serialization ser(MTMD_SERIALIZATION_VERSION);
-        chunk->serialize(ser);
-        out_buf = std::move(ser.data);
-        return 0;
-    } catch (const std::exception & e) {
-        LOG_ERR("%s: %s\n", __func__, e.what());
-        return -1;
-    }
-}
-
+// the chunk keeps the layout of its media, without the pixels or the rows
 mtmd_input_chunk * mtmd_input_chunk_get_placeholder(const mtmd_input_chunk * chunk) {
-    mtmd_input_chunk * copy = mtmd_input_chunk_copy(chunk);
-    if (copy->tokens_image) {
-        copy->tokens_image->keep_positions(); // a saved placeholder keeps the row positions of the image
-        copy->tokens_image->lmedia.reset();
+    if (!chunk->lmedia()) {
+        return mtmd_input_chunk_copy(chunk);
     }
-    if (copy->tokens_audio) {
-        copy->tokens_audio->lmedia.reset();
-    }
-    return copy;
+    llama_media * p = llama_media_init_placeholder(chunk->lmedia());
+    return p ? new mtmd_input_chunk(mtmd_input_chunk::of_media(p)) : nullptr;
 }
 
+// the format of master (version 5), see llama_media_chunk_save()
 int32_t mtmd_input_chunk_save(const mtmd_input_chunk * chunk, char * out_buf, size_t out_len, size_t * expected_out_len) {
     std::vector<char> buf;
-    if (mtmd_input_chunk_save_impl(chunk, buf) != 0) {
+    if (!llama_media_chunk_save(chunk->tokens_text.data(), chunk->tokens_text.size(), chunk->lmedia(), buf)) {
         return -1;
     }
     if (expected_out_len) {
@@ -2112,15 +1605,15 @@ int32_t mtmd_input_chunk_save(const mtmd_input_chunk * chunk, char * out_buf, si
 }
 
 mtmd_input_chunk * mtmd_input_chunk_load(const char * buf, size_t len) {
-    try {
-        mtmd_serialization ser(MTMD_SERIALIZATION_VERSION, buf, len);
-        mtmd::input_chunk_ptr chunk(new mtmd_input_chunk{MTMD_INPUT_CHUNK_TYPE_TEXT, {}, nullptr, nullptr});
-        chunk->deserialize(ser);
-        return chunk.release();
-    } catch (const std::exception & e) {
-        LOG_ERR("%s: %s\n", __func__, e.what());
+    std::vector<llama_token> tokens;
+    llama_media * m = nullptr;
+    if (!llama_media_chunk_load(buf, len, tokens, &m)) {
         return nullptr;
     }
+    if (m) {
+        return new mtmd_input_chunk(mtmd_input_chunk::of_media(m));
+    }
+    return new mtmd_input_chunk{MTMD_INPUT_CHUNK_TYPE_TEXT, std::move(tokens), nullptr, nullptr};
 }
 
 size_t mtmd_image_tokens_get_n_tokens(const mtmd_image_tokens * image_tokens) {
@@ -2128,11 +1621,11 @@ size_t mtmd_image_tokens_get_n_tokens(const mtmd_image_tokens * image_tokens) {
 }
 
 size_t mtmd_image_tokens_get_nx(const mtmd_image_tokens * image_tokens) {
-    return image_tokens->nx;
+    return image_tokens->grid().first;
 }
 
 size_t mtmd_image_tokens_get_ny(const mtmd_image_tokens * image_tokens) {
-    return image_tokens->ny;
+    return image_tokens->grid().second;
 }
 
 mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * image_tokens, llama_pos pos_0, size_t i) {
@@ -2146,11 +1639,11 @@ mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * ima
 }
 
 const char * mtmd_image_tokens_get_id(const mtmd_image_tokens * image_tokens) {
-    return image_tokens->id.c_str();
+    return image_tokens->id();
 }
 
 llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
-    return image_tokens->n_pos;
+    return image_tokens->n_pos();
 }
 
 // test function
@@ -2170,19 +1663,27 @@ mtmd_input_chunks * mtmd_test_create_input_chunks() {
         nullptr, // audio tokens
     });
 
-    // create an image chunk, a placeholder of 16 frames of 4 x 4 tokens
-    mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
-    image_tokens->nx    = 4;
-    image_tokens->ny    = 4;
-    image_tokens->n_tok = 256;
-    image_tokens->n_pos = 256;
-    image_tokens->id    = "image_1";
-    chunks->entries.emplace_back(mtmd_input_chunk{
-        MTMD_INPUT_CHUNK_TYPE_IMAGE,
-        {}, // text tokens
-        std::move(image_tokens),
-        nullptr, // audio tokens
-    });
+    // create an image chunk, a placeholder of 16 frames of 4 x 4 tokens, in the saved format of a chunk
+    std::vector<char> buf;
+    auto put = [&buf](const void * p, size_t n) { buf.insert(buf.end(), (const char *) p, (const char *) p + n); };
+    auto u8  = [&put](uint8_t v)  { put(&v, sizeof(v)); };
+    auto u32 = [&put](uint32_t v) { put(&v, sizeof(v)); };
+    auto u64 = [&put](uint64_t v) { put(&v, sizeof(v)); };
+    u64(5); u32(MTMD_INPUT_CHUNK_TYPE_IMAGE); u64(0);
+    u8(1); u32(4); u32(4); u32(0); u32(0); u32(1); u64(7); put("image_1", 7);
+    u8(0); u64(16);
+    for (int i = 0; i < 16; ++i) {
+        const int32_t entry[9] = { 0, 0, 0, 0, 0, 0, 4, 4, 0 }; // lead_pad, suffix, grid, original size, size, n_ctx
+        u8(0); u8(0); put(entry, sizeof(entry));
+    }
+    u8(0);
+    mtmd_input_chunk * image = mtmd_input_chunk_load(buf.data(), buf.size());
+    if (!image) {
+        mtmd_input_chunks_free(chunks);
+        return nullptr;
+    }
+    chunks->entries.push_back(std::move(*image));
+    delete image;
 
     return chunks;
 }

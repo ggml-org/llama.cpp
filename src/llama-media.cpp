@@ -283,6 +283,85 @@ int32_t llama_media_layout_add_tokens(struct llama_media_layout * lay, const lla
     return 0;
 }
 
+// a media of an image or audio chunk of the clip engine, its layout
+static llama_media * llama_media_from_chunk(clip_input_chunk && c) {
+    auto * m = new llama_media;
+    m->placeholder = c.is_placeholder();
+    m->n_tokens    = (uint32_t) c.n_tokens_total();
+    if (c.type == CLIP_INPUT_CHUNK_TYPE_IMAGE) {
+        m->inp.type = LLAMA_MEDIA_TYPE_IMAGE;
+        m->id       = c.tokens_image->id;
+        m->n_pos    = clip_image_tokens_get_n_pos(c.tokens_image.get());
+        m->img      = std::move(c.tokens_image);
+    } else {
+        m->inp.type = LLAMA_MEDIA_TYPE_AUDIO;
+        m->id       = c.tokens_audio->id;
+        m->n_pos    = (llama_pos) c.tokens_audio->n_tokens;
+        m->aud      = std::move(c.tokens_audio);
+    }
+    return m;
+}
+
+bool llama_media_chunk_save(const llama_token * tokens, size_t n_tokens, const struct llama_media * m, std::vector<char> & out) {
+    if (m && !m->img && !m->aud) {
+        LLAMA_LOG_ERROR("%s: the media has no layout\n", __func__);
+        return false;
+    }
+    try {
+        clip_serialization ser(CLIP_SERIALIZATION_VERSION);
+        ser.write((uint32_t) (m == nullptr ? CLIP_INPUT_CHUNK_TYPE_TEXT : m->img ? CLIP_INPUT_CHUNK_TYPE_IMAGE : CLIP_INPUT_CHUNK_TYPE_AUDIO));
+        ser.write<uint64_t>(m ? 0 : n_tokens);
+        for (size_t i = 0; m == nullptr && i < n_tokens; ++i) {
+            ser.write((int32_t) tokens[i]);
+        }
+        ser.write(m && m->img);
+        if (m && m->img) {
+            m->img->serialize(ser);
+        }
+        ser.write(m && !m->img && m->aud);
+        if (m && !m->img && m->aud) {
+            m->aud->serialize(ser);
+        }
+        out = std::move(ser.data);
+        return true;
+    } catch (const std::exception & e) {
+        LLAMA_LOG_ERROR("%s: %s\n", __func__, e.what());
+        return false;
+    }
+}
+
+bool llama_media_chunk_load(const char * buf, size_t size, std::vector<llama_token> & tokens, struct llama_media ** m) {
+    *m = nullptr;
+    tokens.clear();
+    try {
+        clip_serialization ser(CLIP_SERIALIZATION_VERSION, buf, size);
+        clip_input_chunk c;
+        c.deserialize(ser);
+        if (c.type == CLIP_INPUT_CHUNK_TYPE_TEXT) {
+            tokens = std::move(c.tokens_text);
+            return true;
+        }
+        *m = llama_media_from_chunk(std::move(c));
+        (*m)->placeholder = true;
+        return true;
+    } catch (const std::exception & e) {
+        LLAMA_LOG_ERROR("%s: %s\n", __func__, e.what());
+        return false;
+    }
+}
+
+struct llama_media * llama_media_init_placeholder(const struct llama_media * m) {
+    std::vector<char> buf;
+    std::vector<llama_token> tokens;
+    llama_media * p = nullptr;
+    if (m == nullptr || !llama_media_chunk_save(nullptr, 0, m, buf) || !llama_media_chunk_load(buf.data(), buf.size(), tokens, &p) || !p) {
+        return nullptr;
+    }
+    p->model_enc     = m->model_enc;
+    p->bidirectional = m->bidirectional;
+    return p;
+}
+
 // runs one step of the clip tokenizer, appends the chunks it yields as pieces
 template <typename F>
 static int32_t llama_media_layout_run(struct llama_media_layout * lay, F && step) {
@@ -312,21 +391,11 @@ static int32_t llama_media_layout_run(struct llama_media_layout * lay, F && step
             continue;
         }
 
-        auto * m = new llama_media;
+        const bool is_audio = c.type == CLIP_INPUT_CHUNK_TYPE_AUDIO;
+        auto * m = llama_media_from_chunk(std::move(c));
         m->model_enc     = proc.model_enc;
-        m->placeholder   = c.is_placeholder();
-        m->n_tokens      = (uint32_t) c.n_tokens_total();
-        m->bidirectional = cfg.decode_use_non_causal(c.type == CLIP_INPUT_CHUNK_TYPE_AUDIO);
-        if (c.type == CLIP_INPUT_CHUNK_TYPE_IMAGE) {
-            m->inp.type = LLAMA_MEDIA_TYPE_IMAGE;
-            m->id       = c.tokens_image->id;
-            m->n_pos    = clip_image_tokens_get_n_pos(c.tokens_image.get());
-            m->img      = std::move(c.tokens_image);
-        } else {
-            m->inp.type = LLAMA_MEDIA_TYPE_AUDIO;
-            m->id       = c.tokens_audio->id;
-            m->n_pos    = (llama_pos) c.tokens_audio->n_tokens;
-            m->aud      = std::move(c.tokens_audio);
+        m->bidirectional = cfg.decode_use_non_causal(is_audio);
+        if (is_audio) {
             m->aud_preproc = cfg.audio_preproc;
             m->aud_cpu     = proc.cpu;
         }

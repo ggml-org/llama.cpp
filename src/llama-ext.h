@@ -445,6 +445,14 @@ LLAMA_API int64_t               llama_media_get_rows      (const struct llama_me
 LLAMA_API bool                  llama_media_get_row_pos   (const struct llama_media * m, llama_pos pos_0, uint32_t row, llama_pos * pos, uint32_t n_pos);
 // the token grid of an image as the clip engine counts it (M-RoPE: tokens per row and rows; else n_tokens x 1); false otherwise
 LLAMA_API bool                  llama_media_get_grid      (const struct llama_media * m, uint32_t * nx, uint32_t * ny);
+// a placeholder with the layout of m (new reference): the counts, positions and id, without pixels or rows
+LLAMA_API struct llama_media *  llama_media_init_placeholder(const struct llama_media * m);
+// the chunk format of mtmd (version 5, as on master, versions 2 to 5 load): text tokens, or one media by its layout
+// save: m = nullptr for text; load: *m = nullptr for text, else a placeholder media (new reference)
+LLAMA_API bool                  llama_media_chunk_save    (const llama_token * tokens, size_t n_tokens, const struct llama_media * m,
+                                                           std::vector<char> & out);
+LLAMA_API bool                  llama_media_chunk_load    (const char * buf, size_t size, std::vector<llama_token> & tokens,
+                                                           struct llama_media ** m);
 
 // meaning depends on the context type of the batch:
 // context of an mmproj (ENCODER, GEN): queue the media for encoding (row0, n_rows and pos_0 are ignored); llama_process(ENCODE) writes the rows into the media

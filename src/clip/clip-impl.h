@@ -1098,20 +1098,6 @@ static void string_replace_all(std::string & s, const std::string & search, cons
     s = std::move(builder);
 }
 
-// split string by a `std::string delim` instead of `char delim`
-static std::vector<std::string> string_split_str(std::string s, const std::string & delimiter) {
-    std::vector<std::string> tokens;
-    size_t pos = 0;
-    std::string token;
-    while ((pos = s.find(delimiter)) != std::string::npos) {
-        token = s.substr(0, pos);
-        tokens.push_back(token);
-        s.erase(0, pos + delimiter.length());
-    }
-    tokens.push_back(s);
-    return tokens;
-}
-
 // remove when moving to c++20
 inline bool string_starts_with(std::string_view str, std::string_view prefix) {
     return str.size() >= prefix.size() &&
@@ -1186,64 +1172,4 @@ static std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i) {
 //
 // debugging
 //
-
-static void print_tensor_shape(ggml_tensor * t) {
-    printf("%s.shape = [", t->name);
-    for (int i = 0; i < ggml_n_dims(t); ++i) {
-        printf("%" PRId64, t->ne[i]);
-        if (i < ggml_n_dims(t) - 1) {
-            printf(", ");
-        }
-    }
-    printf("]\n");
-}
-
-static void print_tensor_data(ggml_tensor * t, uint8_t * data, int64_t n) {
-    ggml_type type = t->type;
-    int64_t * ne = t->ne;
-    size_t * nb = t->nb;
-    for (int64_t i3 = 0; i3 < ne[3]; i3++) {
-        printf("%s.data: [\n", t->name);
-        for (int64_t i2 = 0; i2 < ne[2]; i2++) {
-            if (i2 == n && ne[2] > 2*n) {
-                printf("     ..., \n");
-                i2 = ne[2] - n;
-            }
-            printf("     [\n");
-            for (int64_t i1 = 0; i1 < ne[1]; i1++) {
-                if (i1 == n && ne[1] > 2*n) {
-                    printf("      ..., \n");
-                    i1 = ne[1] - n;
-                }
-                printf("      [");
-                for (int64_t i0 = 0; i0 < ne[0]; i0++) {
-                    if (i0 == n && ne[0] > 2*n) {
-                        printf("..., ");
-                        i0 = ne[0] - n;
-                    }
-                    size_t i = i3 * nb[3] + i2 * nb[2] + i1 * nb[1] + i0 * nb[0];
-                    float v;
-                    if (type == GGML_TYPE_F16) {
-                        v = ggml_fp16_to_fp32(*(ggml_fp16_t *) &data[i]);
-                    } else if (type == GGML_TYPE_F32) {
-                        v = *(float *) &data[i];
-                    } else if (type == GGML_TYPE_I32) {
-                        v = (float) *(int32_t *) &data[i];
-                    } else if (type == GGML_TYPE_I16) {
-                        v = (float) *(int16_t *) &data[i];
-                    } else if (type == GGML_TYPE_I8) {
-                        v = (float) *(int8_t *) &data[i];
-                    } else {
-                        GGML_ABORT("fatal error");
-                    }
-                    printf("%8.4f", v);
-                    if (i0 < ne[0] - 1) printf(", ");
-                }
-                printf("],\n");
-            }
-            printf("     ],\n");
-        }
-        printf("    ]\n");
-    }
-}
 
