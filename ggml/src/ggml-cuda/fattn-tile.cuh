@@ -420,7 +420,7 @@ static __device__ __forceinline__ void flash_attn_tile_load_tile(
                     const int i_KV_offset = use_sparse && (!oob_check || i < i_sup) ? sparse_indices[k_VKQ_0 + i] - k_VKQ_0 : i;
                     ggml_cuda_memcpy_1<cpy_nb>(
                         tile_KV + i*(J/2 + J_padding) + j,
-                        !oob_check || i < i_sup ? KV + i_KV_offset*stride_KV + j : zero);
+                        !oob_check || i < i_sup ? KV + (use_sparse ? int64_t(i_KV_offset)*stride_KV : i_KV_offset*stride_KV) + j : zero);
                 }
             }
         }
@@ -471,7 +471,7 @@ static __device__ __forceinline__ void flash_attn_tile_load_tile(
                     const int i_KV_offset = use_sparse && (!oob_check || i < i_sup) ? sparse_indices[k_VKQ_0 + i] - k_VKQ_0 : i;
                     __align__(16) half2 tmp_h2[cpy_ne/2];
                     ggml_cuda_memcpy_1<sizeof(tmp_h2)>(
-                        tmp_h2, !oob_check || i < i_sup ? KV + i_KV_offset*stride_KV + j : zero);
+                        tmp_h2, !oob_check || i < i_sup ? KV + (use_sparse ? int64_t(i_KV_offset)*stride_KV : i_KV_offset*stride_KV) + j : zero);
 
                     __align__(16) float2 tmp_f2[cpy_ne/2];
 #pragma unroll
@@ -842,6 +842,13 @@ static __global__ void flash_attn_tile(
 
     // Skip unused kernel variants for faster compilation:
 
+#ifndef GCN
+    if constexpr (use_sparse) {
+        NO_DEVICE_CODE;
+        return;
+    }
+#endif // GCN
+
     if ((use_logit_softcap && !(DV == 128 || DV == 256 || DV == 512))) {
         GGML_UNUSED_VARS(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
             max_bias, m0, m1, n_head_log2, logit_softcap,
@@ -970,8 +977,8 @@ static __global__ void flash_attn_tile(
 
     // Main loop over KV cache:
     // Sparse KV_max stores ne11 indices per list, followed by one count per list.
-    const int list = use_sparse ? (sequence % ne33)*(int)gridDim.x + blockIdx.x : 0;
-    const int * sparse_indices = use_sparse ? KV_max + int64_t(list)*ne11 : nullptr;
+    const int64_t list = use_sparse ? int64_t(sequence % ne33)*gridDim.x + blockIdx.x : 0;
+    const int * sparse_indices = use_sparse ? KV_max + list*ne11 : nullptr;
     const int k_VKQ_max = use_sparse ? KV_max[int64_t(gridDim.x)*ne33*ne11 + list] :
         KV_max ? KV_max[sequence*gridDim.x + blockIdx.x] : ne11;
     if (ncols2 == 1 || use_sparse) {
