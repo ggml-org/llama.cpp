@@ -260,33 +260,6 @@ static int ggml_cuda_parse_id(const char * devName) {
 }
 #endif // defined(GGML_USE_HIP)
 
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-static bool ggml_cuda_should_use_fp32_acc(const cudaDeviceProp & prop, const int cc, const bool nvml_initialized,
-                                        decltype(&nvmlDeviceGetHandleByPciBusId_v2) get_device,
-                                        decltype(&nvmlDeviceGetBrand) get_brand) {
-    if (cc == GGML_CUDA_CC_GB10) {
-        return true;
-    }
-    if (!fast_bf16_hardware_available(cc) || !nvml_initialized) {
-        return false;
-    }
-
-    // CUDA and NVML device indices can differ, e.g. with CUDA_VISIBLE_DEVICES.
-    char pci_bus_id[32];
-    snprintf(pci_bus_id, sizeof(pci_bus_id), "%04x:%02x:%02x.0",
-             (unsigned int) prop.pciDomainID, (unsigned int) prop.pciBusID, (unsigned int) prop.pciDeviceID);
-    nvmlDevice_t device = nullptr;
-    nvmlBrandType_t brand = NVML_BRAND_UNKNOWN;
-    bool prefer_fp32_acc = false;
-    if (get_device(pci_bus_id, &device) == NVML_SUCCESS && get_brand(device, &brand) == NVML_SUCCESS) {
-        prefer_fp32_acc = brand == NVML_BRAND_QUADRO ||
-                          brand == NVML_BRAND_QUADRO_RTX ||
-                          brand == NVML_BRAND_NVIDIA_RTX;
-    }
-    return prefer_fp32_acc;
-}
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-
 static ggml_cuda_device_info ggml_cuda_init() {
     ggml_cuda_device_info info = {};
 
@@ -374,6 +347,29 @@ static ggml_cuda_device_info ggml_cuda_init() {
     const auto get_device = reinterpret_cast<decltype(&nvmlDeviceGetHandleByPciBusId_v2)>(get_symbol("nvmlDeviceGetHandleByPciBusId_v2"));
     const auto get_brand = reinterpret_cast<decltype(&nvmlDeviceGetBrand)>(get_symbol("nvmlDeviceGetBrand"));
     const bool nvml_initialized = init && shutdown && get_device && get_brand && init() == NVML_SUCCESS;
+
+    const auto should_use_fp32_acc = [&](const cudaDeviceProp & prop, const int cc) {
+        if (cc == GGML_CUDA_CC_GB10) {
+            return true;
+        }
+        if (!fast_bf16_hardware_available(cc) || !nvml_initialized) {
+            return false;
+        }
+
+        // CUDA and NVML device indices can differ, e.g. with CUDA_VISIBLE_DEVICES.
+        char pci_bus_id[32];
+        snprintf(pci_bus_id, sizeof(pci_bus_id), "%04x:%02x:%02x.0",
+                 (unsigned int) prop.pciDomainID, (unsigned int) prop.pciBusID, (unsigned int) prop.pciDeviceID);
+        nvmlDevice_t device = nullptr;
+        nvmlBrandType_t brand = NVML_BRAND_UNKNOWN;
+        bool prefer_fp32_acc = false;
+        if (get_device(pci_bus_id, &device) == NVML_SUCCESS && get_brand(device, &brand) == NVML_SUCCESS) {
+            prefer_fp32_acc = brand == NVML_BRAND_QUADRO ||
+                              brand == NVML_BRAND_QUADRO_RTX ||
+                              brand == NVML_BRAND_NVIDIA_RTX;
+        }
+        return prefer_fp32_acc;
+    };
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
     std::vector<std::pair<int, std::string>> turing_devices_without_mma;
@@ -447,7 +443,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
         info.devices[id].cc = 100*prop.major + 10*prop.minor;
         if (info.devices[id].virtual_index == 0) {
-            info.devices[id].prefer_fp32_acc = ggml_cuda_should_use_fp32_acc(prop, info.devices[id].cc, nvml_initialized, get_device, get_brand);
+            info.devices[id].prefer_fp32_acc = should_use_fp32_acc(prop, info.devices[id].cc);
         } else {
             info.devices[id].prefer_fp32_acc = info.devices[physical_id].prefer_fp32_acc;
         }
