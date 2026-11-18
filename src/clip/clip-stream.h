@@ -31,6 +31,8 @@ struct clip_stream_ctx {
 struct clip_audio_stream;
 
 bool               clip_support_audio_stream(const clip_stream_ctx * ctx);
+// whether a tower of this projector streams, without its runtime
+bool               clip_support_audio_stream_proj(projector_type proj);
 clip_audio_stream * clip_audio_stream_init(clip_stream_ctx * ctx, llama_audio_stream_params params);
 void               clip_audio_stream_free (clip_audio_stream * stream);
 int32_t            clip_audio_stream_push (clip_audio_stream * stream, const float * samples, size_t n_samples);

@@ -384,6 +384,12 @@ llama_context::llama_context(
     // before the reserve passes run later in this function. This avoids a later
     // re-reserve when graph nodes change.
     if (params.samplers != nullptr && params.n_samplers > 0) {
+        // the code predictor checks every chain before it initializes any: a refused context leaves them unused
+        for (size_t i = 0; clip_native_code() && i < params.n_samplers; ++i) {
+            if (!clip_code_chain_ok(params.samplers[i].sampler)) {
+                throw std::runtime_error("the code predictor takes only sampler chains that run on the backend");
+            }
+        }
         for (size_t i = 0; i < params.n_samplers; ++i) {
             const auto & config = params.samplers[i];
 
@@ -1464,6 +1470,13 @@ void llama_context::set_abort_callback(bool (*abort_callback)(void * data), void
 void llama_context::set_embeddings(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
+    // the contexts of an mmproj output their rows as embeddings
+    if (!value && (cparams.ctx_type == LLAMA_CONTEXT_TYPE_ENCODER || cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE ||
+                   cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_WAV)) {
+        LLAMA_LOG_WARN("%s: a media context keeps its embedding output\n", __func__);
+        return;
+    }
+
     // the toggle changes the graph shape (pooled: logits only; pooling NONE: the reserve graph outputs all tokens,
     // which crashed ggml_gallocr on the first /completion), so re-reserve on every toggle
     if (cparams.embeddings != value) {
@@ -1790,18 +1803,16 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
         // a chain that stops at a host-only sampler would silently fall back to argmax. A sampler without the
         // backend API is refused before the chain is initialized, so that the caller can still use it
         const bool whole_chain = clip_native_code() && strcmp(llama_sampler_name(sampler), "chain") == 0;
-        auto all_backend = [&](auto && pred) {
-            const auto * chain = (const llama_sampler_chain *) sampler->ctx;
-            return std::all_of(chain->samplers.begin(), chain->samplers.end(), pred);
-        };
-        if (whole_chain && !all_backend([](const auto & s) { return s.ptr->iface->backend_init && s.ptr->iface->backend_apply; })) {
+        if (whole_chain && !clip_code_chain_ok(sampler)) {
             LLAMA_LOG_ERROR("%s: seq_id = %d: every sampler of the chain must run on the backend in the code predictor\n", __func__, seq_id);
             return false;
         }
 
         sampler->iface->backend_init(sampler, buft, cparams.n_outputs_max_per_seq);
 
-        if (whole_chain && !all_backend([](const auto & s) { return s.is_backend; })) {
+        // a sampler can still decline in its backend_init(): the chain is then initialized and cannot be reused
+        const auto * chain = whole_chain ? (const llama_sampler_chain *) sampler->ctx : nullptr;
+        if (chain && !std::all_of(chain->samplers.begin(), chain->samplers.end(), [](const auto & s) { return s.is_backend; })) {
             LLAMA_LOG_ERROR("%s: seq_id = %d: a sampler of the chain declined the backend in the code predictor\n", __func__, seq_id);
             return false;
         }
@@ -2013,6 +2024,18 @@ static llama_ubatch llama_media_ubatch(uint32_t n_rows, const llama_media_input 
 bool llama_context::clip_native_code() const {
     return model.arch == LLM_ARCH_CLIP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE &&
            static_cast<const llama_model_clip &>(model).native_gen;
+}
+
+// the code predictor applies the chain once per codebook, in one graph: every sampler must have the backend API,
+// and the penalties sampler, which keeps the inputs of one application only, cannot be used
+bool llama_context::clip_code_chain_ok(const llama_sampler * sampler) const {
+    if (sampler == nullptr || strcmp(llama_sampler_name(sampler), "chain") != 0) {
+        return sampler != nullptr && sampler->iface->backend_init && sampler->iface->backend_apply;
+    }
+    const auto * chain = (const llama_sampler_chain *) sampler->ctx;
+    return std::all_of(chain->samplers.begin(), chain->samplers.end(), [](const auto & s) {
+        return s.ptr->iface->backend_init && s.ptr->iface->backend_apply && strcmp(llama_sampler_name(s.ptr), "penalties") != 0;
+    });
 }
 
 clip_subcontext * llama_context::clip_sub(const clip_model & m) {
@@ -2655,6 +2678,13 @@ int llama_context::gen_code(const llama_batch_ext & batch_inp) {
     sched_reserve();
 
     const int32_t n_entries = (int32_t) batch_inp.tokens.size();
+    // a batch of another context (or of a llama_batch) is checked against this one: entries, state width, codes
+    const uint32_t n_vocab_ctx = model.ctx_n_vocab(cparams.ctx_type);
+    if ((uint32_t) n_entries > cparams.n_batch || batch_inp.n_embd_state != model.ctx_n_embd_state(cparams.ctx_type)) {
+        LLAMA_LOG_ERROR("%s: %d entries of state width %zu, the context takes up to %u of width %u\n", __func__,
+                n_entries, batch_inp.n_embd_state, cparams.n_batch, model.ctx_n_embd_state(cparams.ctx_type));
+        return -1;
+    }
     if (output_reserve(n_entries) < (uint32_t) n_entries) {
         LLAMA_LOG_ERROR("%s: could not reserve space for %d outputs\n", __func__, n_entries);
         return -2;
@@ -2675,7 +2705,7 @@ int llama_context::gen_code(const llama_batch_ext & batch_inp) {
         }
         const llama_seq_id seq = *tok.seq_ids.begin();
         // a batch built by llama_batch_ext_from_batch() carries the raw ids of a llama_batch
-        if (seq < 0 || (uint32_t) seq >= cparams.n_seq_max || tok.id < 0 || (batch_inp.n_vocab > 0 && tok.id >= batch_inp.n_vocab)) {
+        if (seq < 0 || (uint32_t) seq >= cparams.n_seq_max || tok.id < 0 || (n_vocab_ctx > 0 && (uint32_t) tok.id >= n_vocab_ctx)) {
             LLAMA_LOG_ERROR("%s: entry %d: invalid sequence %d or token %d\n", __func__, i, seq, tok.id);
             return -1;
         }
@@ -2780,8 +2810,8 @@ int llama_context::gen_wav(const llama_batch_ext & batch_inp) {
     }
     const llama_seq_id seq     = *tok0.seq_ids.begin();
     const int32_t      n_codes = tok0.n_codes;
-    if (seq < 0 || (uint32_t) seq >= cparams.n_seq_max) {
-        LLAMA_LOG_ERROR("%s: invalid sequence %d\n", __func__, seq);
+    if (seq < 0 || (uint32_t) seq >= cparams.n_seq_max || (uint32_t) n_frames > cparams.n_batch) {
+        LLAMA_LOG_ERROR("%s: sequence %d, %d frames: the context takes up to %u frames\n", __func__, seq, n_frames, cparams.n_batch);
         return -1;
     }
 

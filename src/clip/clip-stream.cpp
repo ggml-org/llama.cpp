@@ -200,13 +200,13 @@ struct clip_audio_stream_vibevoice_asr : clip_audio_stream {
     bool    encode(int64_t n);
 };
 
-bool clip_support_audio_stream(const clip_stream_ctx * ctx) {
-    if (!ctx->ctx_a || !ctx->text_model) {
-        return false;
-    }
-    const projector_type proj = ctx->ctx_a->model.proj_type;
+bool clip_support_audio_stream_proj(projector_type proj) {
     return proj == PROJECTOR_TYPE_VOXTRAL_RT || proj == PROJECTOR_TYPE_LFM3A || proj == PROJECTOR_TYPE_GEMMA4A ||
            proj == PROJECTOR_TYPE_HIGGS_AUDIO || proj == PROJECTOR_TYPE_VIBEVOICE_ASR;
+}
+
+bool clip_support_audio_stream(const clip_stream_ctx * ctx) {
+    return ctx->ctx_a && ctx->text_model && clip_support_audio_stream_proj(ctx->ctx_a->model.proj_type);
 }
 
 llama_audio_stream_params llama_audio_stream_default_params(void) {

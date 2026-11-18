@@ -654,9 +654,11 @@ static bool llama_audio_stream_host(const llama_media_proc * proc, clip_stream_c
     return true;
 }
 
+// asks the model only: the runtime of the tower is built by the first stream (its build logs, and a log callback
+// may ask this again)
 bool llama_media_proc_has_audio_stream(const struct llama_media_proc * proc) {
-    clip_stream_ctx host;
-    return llama_audio_stream_host(proc, host) && clip_support_audio_stream(&host);
+    const auto * clip = as_clip(proc->model_enc);
+    return clip && clip->engine_audio() && proc->model_dec && clip_support_audio_stream_proj(clip->engine_audio()->proj_type);
 }
 
 struct llama_audio_stream * llama_audio_stream_init(const struct llama_media_proc * proc, struct llama_audio_stream_params params) {

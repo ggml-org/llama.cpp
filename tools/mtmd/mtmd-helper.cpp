@@ -151,6 +151,14 @@ int32_t mtmd_helper_decode_image_chunk(
         return -1;
     }
 
+    // rows of the media are read at the decoder's width: a decoder other than the one of the processor cannot take them
+    if (const llama_media * lm = mtmd_input_chunk_get_llama_media(chunk);
+            lm && llama_media_is_encoded(lm) && llama_media_get_rows(lm, 0, 0, nullptr) != llama_model_n_embd_inp(llama_get_model(lctx))) {
+        LOG_ERR("failed to decode chunk: its rows are %lld wide, the decoder takes %d\n",
+                (long long) llama_media_get_rows(lm, 0, 0, nullptr), llama_model_n_embd_inp(llama_get_model(lctx)));
+        return -1;
+    }
+
     // libllama engine: the media rows carry their positions and attention span, no causal toggle
     if (llama_media * lmedia = mtmd_input_chunk_get_llama_media(chunk);
             lmedia && callback == nullptr && llama_media_is_encoded(lmedia) &&
@@ -186,9 +194,15 @@ int32_t mtmd_helper_decode_image_chunk(
     int n_pos_per_embd = mtmd_decode_use_mrope(ctx) ? 4 : 1;
 
     int32_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk);
-    // the rows of an atomic media attend to each other: one call, as on the media path
-    if (const llama_media * lm = mtmd_input_chunk_get_llama_media(chunk); lm && llama_media_is_atomic(lm)) {
-        n_batch = std::max(n_batch, n_tokens);
+    // the rows of an atomic media (a saved chunk too) attend to each other: one call, as on the media path, which
+    // the decoder takes only whole
+    if (mtmd_decode_use_non_causal(ctx, chunk)) {
+        if (n_tokens > (int32_t) llama_n_batch(lctx) || n_tokens > (int32_t) llama_n_ubatch(lctx)) {
+            LOG_ERR("failed to decode %s: its %d rows attend to each other, the context needs n_batch and n_ubatch >= %d\n",
+                    name, n_tokens, n_tokens);
+            return 1;
+        }
+        n_batch = n_tokens;
     }
     int32_t i_batch = 0;
     int32_t n_img_batches = (n_tokens + n_batch - 1) / n_batch;
