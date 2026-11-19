@@ -264,7 +264,14 @@ struct mtmd_graph_kokoro : mtmd_graph {
         STAGE_F0N,  // shared LSTM output -> F0 and energy curves
         STAGE_DEC,  // aligned features + source STFT -> STFT coefficients
     };
-    static constexpr int n_style = 128; // a voice row is the decoder style, then the predictor style
+    // sizes of the weights; Kokoro has one decoder style, Inflect has one for the trunk and one for the generator
+    struct sizes {
+        int n_hidden;      // text and prosody features
+        int n_style_pred;  // prosody predictor
+        int n_style_gen;   // generator of the decoder
+        int n_style_trunk; // blocks of the decoder before the generator
+    };
+    static sizes get_sizes(const mtmd_model & model);
 
     stage_type stage;
     int n_tok    = 0;
@@ -275,8 +282,8 @@ struct mtmd_graph_kokoro : mtmd_graph {
     ggml_cgraph * build() override;
 
     // host side, between the graphs
-    // bert [n_tok, n_embd], text_cnn [n_tok, 512], style is the predictor style
-    // fills shared and asr as [n_frames, 512], returns n_frames
+    // bert [n_tok, n_embd], text_cnn [n_tok, n_hidden], style is the predictor style
+    // fills shared and asr as [n_frames, n_hidden], returns n_frames
     static int prosody(const mtmd_model & model, const float * bert, int n_embd, const float * text_cnn, int n_tok,
                        const float * style, float speed, std::vector<float> & shared, std::vector<float> & asr);
     // fills har as [n_har, 22], returns n_har

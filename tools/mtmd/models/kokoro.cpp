@@ -10,7 +10,6 @@
 // One utterance runs the 3 graphs of stage_type. The LSTMs, the alignment, the harmonic source and the ISTFT run on the host in between
 // The graphs keep activations as [T, C], the layout of the conv ops
 
-static const int   KOKORO_N_HIDDEN = 512;
 static const int   KOKORO_N_HARM   = 9;     // fundamental + 8 overtones
 static const int   KOKORO_UPS      = 300;   // samples per F0 step: upsample rates 10 * 6, times the ISTFT hop
 static const int   KOKORO_N_FFT    = 20;
@@ -27,6 +26,29 @@ ggml_tensor * mtmd_graph_kokoro::tensor(const std::string & name) const {
 
 bool mtmd_graph_kokoro::has_tensor(const std::string & name) const {
     return model.cbx_tensors.find(name) != model.cbx_tensors.end();
+}
+
+mtmd_graph_kokoro::sizes mtmd_graph_kokoro::get_sizes(const mtmd_model & model) {
+    auto dim = [&](const char * name, int axis) {
+        const auto it = model.cbx_tensors.find(name);
+        if (it == model.cbx_tensors.end() || !it->second) {
+            throw std::runtime_error(std::string("kokoro: missing tensor ") + name);
+        }
+        const int64_t n = it->second->ne[axis];
+        if (n < 1 || n > 4096) {
+            throw std::runtime_error(std::string("kokoro: unexpected shape of ") + name);
+        }
+        return (int) n;
+    };
+    sizes sz;
+    sz.n_hidden      = dim("a.gen.bert_enc.weight", 1);
+    sz.n_style_pred  = dim("a.gen.pred.F0.0.norm1.fc.weight", 0);
+    sz.n_style_gen   = dim("a.gen.dec.generator.resblocks.0.adain1.0.fc.weight", 0);
+    sz.n_style_trunk = dim("a.gen.dec.encode.norm1.fc.weight", 0);
+    if (sz.n_hidden % 2 != 0) {
+        throw std::runtime_error("kokoro: the hidden size must be even");
+    }
+    return sz;
 }
 
 // x [T, IC] -> [T_out, OC], with the bias if the module has one
@@ -46,6 +68,11 @@ ggml_tensor * mtmd_graph_kokoro::adain(const std::string & name, ggml_tensor * x
     ggml_tensor * gamma = ggml_reshape_2d(ctx0, ggml_view_1d(ctx0, h, n_ch, 0), 1, n_ch);
     ggml_tensor * beta  = ggml_reshape_2d(ctx0, ggml_view_1d(ctx0, h, n_ch, n_ch * ggml_element_size(h)), 1, n_ch);
     ggml_tensor * xn = ggml_norm(ctx0, x, 1e-5f);
+    // Kokoro has no trained scale and shift on the instance norm
+    if (has_tensor(name + ".norm.weight")) {
+        xn = ggml_mul(ctx0, xn, ggml_reshape_2d(ctx0, tensor(name + ".norm.weight"), 1, n_ch));
+        xn = ggml_add(ctx0, xn, ggml_reshape_2d(ctx0, tensor(name + ".norm.bias"), 1, n_ch));
+    }
     return ggml_add(ctx0, ggml_add(ctx0, xn, ggml_mul(ctx0, xn, gamma)), beta);
 }
 
@@ -151,9 +178,10 @@ ggml_cgraph * mtmd_graph_kokoro::build_text() {
 // shared LSTM output [C, n_frames] -> F0 and energy curves, 2 steps per frame
 ggml_cgraph * mtmd_graph_kokoro::build_f0n() {
     const std::string p = "a.gen.pred.";
-    ggml_tensor * inp   = input("inp_x", GGML_TYPE_F32, KOKORO_N_HIDDEN, n_frames);
-    ggml_tensor * style = input("inp_style", GGML_TYPE_F32, n_style, 1);
-    style = ggml_reshape_1d(ctx0, style, n_style);
+    const sizes sz = get_sizes(model);
+    ggml_tensor * inp   = input("inp_x", GGML_TYPE_F32, sz.n_hidden, n_frames);
+    ggml_tensor * style = input("inp_style", GGML_TYPE_F32, sz.n_style_pred, 1);
+    style = ggml_reshape_1d(ctx0, style, sz.n_style_pred);
     ggml_tensor * x = ggml_cont(ctx0, ggml_transpose(ctx0, inp));
 
     for (const char * curve : {"F0", "N"}) {
@@ -173,12 +201,23 @@ ggml_cgraph * mtmd_graph_kokoro::build_f0n() {
 // aligned text features, F0, energy and the source STFT -> conv_post output [n_fft + 2, n_har]
 ggml_cgraph * mtmd_graph_kokoro::build_dec() {
     const std::string p = "a.gen.dec.";
-    ggml_tensor * asr   = input("inp_asr", GGML_TYPE_F32, KOKORO_N_HIDDEN, n_frames);
+    const sizes sz = get_sizes(model);
+    ggml_tensor * asr   = input("inp_asr", GGML_TYPE_F32, sz.n_hidden, n_frames);
     ggml_tensor * f0    = input("inp_f0", GGML_TYPE_F32, 2 * n_frames, 1);
     ggml_tensor * en    = input("inp_n", GGML_TYPE_F32, 2 * n_frames, 1);
     ggml_tensor * har   = input("inp_har", GGML_TYPE_F32, KOKORO_N_FFT + 2, n_har);
-    ggml_tensor * style = input("inp_style", GGML_TYPE_F32, n_style, 1);
-    style = ggml_reshape_1d(ctx0, style, n_style);
+    ggml_tensor * style = input("inp_style", GGML_TYPE_F32, sz.n_style_gen, 1);
+    ggml_tensor * style_trunk = input("inp_style_trunk", GGML_TYPE_F32, sz.n_style_trunk, 1);
+    style = ggml_reshape_1d(ctx0, style, sz.n_style_gen);
+    style_trunk = ggml_reshape_1d(ctx0, style_trunk, sz.n_style_trunk);
+
+    // Inflect: MLP from the text features to the decoder width. The reference applies it before the alignment, the result is the same
+    if (has_tensor("a.gen.text.asr_proj.0.weight")) {
+        const std::string q = "a.gen.text.asr_proj.";
+        asr = ggml_add(ctx0, ggml_mul_mat(ctx0, tensor(q + "0.weight"), asr), tensor(q + "0.bias"));
+        asr = ggml_gelu_erf(ctx0, asr);
+        asr = ggml_add(ctx0, ggml_mul_mat(ctx0, tensor(q + "2.weight"), asr), tensor(q + "2.bias"));
+    }
     asr = ggml_cont(ctx0, ggml_transpose(ctx0, asr));
     har = ggml_cont(ctx0, ggml_transpose(ctx0, har));
 
@@ -186,13 +225,17 @@ ggml_cgraph * mtmd_graph_kokoro::build_dec() {
     en = conv(p + "N_conv",  en, 2, 1, 1);
 
     ggml_tensor * x = ggml_concat(ctx0, ggml_concat(ctx0, asr, f0, 1), en, 1);
-    x = adain_resblk(p + "encode", x, style, false);
+    x = adain_resblk(p + "encode", x, style_trunk, false);
 
     ggml_tensor * asr_res = conv(p + "asr_res.0", asr, 1, 0, 1);
     for (int i = 0; has_tensor(p + "decode." + std::to_string(i) + ".conv1.weight"); i++) {
         const std::string q = p + "decode." + std::to_string(i);
         x = ggml_concat(ctx0, ggml_concat(ctx0, ggml_concat(ctx0, x, asr_res, 1), f0, 1), en, 1);
-        x = adain_resblk(q, x, style, has_tensor(q + ".pool.weight"));
+        x = adain_resblk(q, x, style_trunk, has_tensor(q + ".pool.weight"));
+    }
+    // Inflect: the trunk is narrower than the generator input
+    if (has_tensor(p + "proj.weight")) {
+        x = conv(p + "proj", x, 1, 0, 1);
     }
 
     const std::string g = p + "generator.";
@@ -285,9 +328,8 @@ static void kokoro_matvec(const float * w, const float * x, int n_out, int n_in,
 }
 
 // bidirectional single-layer LSTM (torch layout, gates i f g o): x [n_t, n_in] -> y [n_t, 2 * n_h]
-static void kokoro_lstm(const mtmd_model & model, const std::string & name, const std::vector<float> & x, int n_t, int n_in,
+static void kokoro_lstm(const mtmd_model & model, const std::string & name, const std::vector<float> & x, int n_t, int n_in, int n_h,
                         std::vector<float> & y) {
-    const int n_h = KOKORO_N_HIDDEN / 2;
     y.assign((size_t) n_t * 2 * n_h, 0.0f);
     std::vector<float> gi(4 * n_h), gh(4 * n_h), h(n_h), c(n_h);
     for (int dir = 0; dir < 2; dir++) {
@@ -328,8 +370,10 @@ static std::vector<float> kokoro_align(const std::vector<float> & x, const std::
 
 int mtmd_graph_kokoro::prosody(const mtmd_model & model, const float * bert, int n_embd, const float * text_cnn, int n_tok,
                                const float * style, float speed, std::vector<float> & shared, std::vector<float> & asr) {
-    const int n_h   = KOKORO_N_HIDDEN;
-    const int n_cat = n_h + n_style;
+    const sizes sz  = get_sizes(model);
+    const int n_h     = sz.n_hidden;
+    const int n_style = sz.n_style_pred;
+    const int n_cat   = n_h + n_style;
 
     // bert_encoder, then each row is followed by the style
     const auto enc_w = kokoro_read(model, "a.gen.bert_enc.weight", (size_t) n_h * n_embd);
@@ -348,7 +392,7 @@ int mtmd_graph_kokoro::prosody(const mtmd_model & model, const float * bert, int
     std::vector<float> y;
     std::vector<float> gamma_beta(2 * n_h);
     for (int il = 0; model.cbx_tensors.count(mtmd_format("a.gen.pred.text_encoder.lstms.%d.weight_ih_l0", 2 * il)); il++) {
-        kokoro_lstm(model, mtmd_format("a.gen.pred.text_encoder.lstms.%d", 2 * il), x, n_tok, n_cat, y);
+        kokoro_lstm(model, mtmd_format("a.gen.pred.text_encoder.lstms.%d", 2 * il), x, n_tok, n_cat, n_h / 2, y);
         const std::string norm = mtmd_format("a.gen.pred.text_encoder.lstms.%d.fc", 2 * il + 1);
         const auto fc_w = kokoro_read(model, norm + ".weight", (size_t) 2 * n_h * n_style);
         const auto fc_b = kokoro_read(model, norm + ".bias", (size_t) 2 * n_h);
@@ -373,7 +417,7 @@ int mtmd_graph_kokoro::prosody(const mtmd_model & model, const float * bert, int
     }
 
     // durations: frames per token
-    kokoro_lstm(model, "a.gen.pred.lstm", x, n_tok, n_cat, y);
+    kokoro_lstm(model, "a.gen.pred.lstm", x, n_tok, n_cat, n_h / 2, y);
     const ggml_tensor * proj = model.cbx_tensors.at("a.gen.pred.duration_proj.linear_layer.weight");
     const int n_bins = (int) proj->ne[1];
     const auto proj_w = kokoro_read(model, "a.gen.pred.duration_proj.linear_layer.weight", (size_t) n_bins * n_h);
@@ -392,10 +436,10 @@ int mtmd_graph_kokoro::prosody(const mtmd_model & model, const float * bert, int
         n_frames += dur[t];
     }
 
-    kokoro_lstm(model, "a.gen.pred.shared", kokoro_align(x, dur, n_cat), n_frames, n_cat, shared);
+    kokoro_lstm(model, "a.gen.pred.shared", kokoro_align(x, dur, n_cat), n_frames, n_cat, n_h / 2, shared);
 
     // text encoder: its LSTM runs on the CNN output
-    kokoro_lstm(model, "a.gen.text.lstm", std::vector<float>(text_cnn, text_cnn + (size_t) n_tok * n_h), n_tok, n_h, y);
+    kokoro_lstm(model, "a.gen.text.lstm", std::vector<float>(text_cnn, text_cnn + (size_t) n_tok * n_h), n_tok, n_h, n_h / 2, y);
     asr = kokoro_align(y, dur, n_h);
     return n_frames;
 }
