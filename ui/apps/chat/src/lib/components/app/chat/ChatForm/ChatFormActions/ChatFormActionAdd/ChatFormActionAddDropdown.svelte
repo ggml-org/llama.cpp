@@ -15,6 +15,7 @@
 	import { getChatFormActionsContext } from '#lib/contexts/index.ts';
 	import { AttachmentAction, AttachmentItemEnabledWhen } from '#lib/enums/index.ts';
 	import { useAttachmentMenu } from '#lib/hooks/use-attachment-menu.svelte.ts';
+	import { serverStore } from '#lib/stores';
 
 	interface Props {
 		class?: string;
@@ -133,6 +134,7 @@
 
 			<DropdownMenu.Item
 				class="flex cursor-pointer items-center gap-2"
+				disabled={Boolean(serverStore.props?.system_prompt)}
 				onclick={() => {
 					suppressCloseAutoFocus = true;
 					chatFormActions.onSystemPromptClick?.();
