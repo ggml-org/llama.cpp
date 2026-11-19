@@ -19,6 +19,7 @@
 		VOICE_TRANSCRIPTION_MODEL_AUTO
 	} from '#lib/constants/index.ts';
 	import { modelsStore, serverStore } from '#lib/stores/index.ts';
+	import { isTranscriptionOnlyModel } from '#lib/utils/voice-mode.ts';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -54,6 +55,22 @@
 		}
 
 		return [{ label: AUTO_LABEL, value: VOICE_TRANSCRIPTION_MODEL_AUTO }, ...list];
+	});
+
+	// speech-to-text models first: they are made for dictation, the chat models that hear can do it too
+	let optionGroups = $derived.by(() => {
+		const models = options.filter((option) => option.value !== VOICE_TRANSCRIPTION_MODEL_AUTO);
+
+		return [
+			{
+				heading: 'Speech to text',
+				items: models.filter((option) => isTranscriptionOnlyModel(option.value))
+			},
+			{
+				heading: 'Chat models with audio input',
+				items: models.filter((option) => !isTranscriptionOnlyModel(option.value))
+			}
+		].filter((group) => group.items.length > 0);
 	});
 
 	let selectedLabel = $derived(
@@ -155,8 +172,18 @@
 				<Select.Trigger class="w-full" id={KEY}>{selectedLabel}</Select.Trigger>
 
 				<Select.Content>
-					{#each options as option (option.value)}
-						<Select.Item label={option.label} value={option.value}>{option.label}</Select.Item>
+					<Select.Item label={AUTO_LABEL} value={VOICE_TRANSCRIPTION_MODEL_AUTO}>
+						{AUTO_LABEL}
+					</Select.Item>
+
+					{#each optionGroups as group (group.heading)}
+						<Select.Group>
+							<Select.GroupHeading>{group.heading}</Select.GroupHeading>
+
+							{#each group.items as option (option.value)}
+								<Select.Item label={option.label} value={option.value}>{option.label}</Select.Item>
+							{/each}
+						</Select.Group>
 					{/each}
 				</Select.Content>
 			</Select.Root>

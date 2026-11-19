@@ -1,8 +1,9 @@
 import {
 	VOICE_MODE_MESSAGE,
-	VOICE_TRANSCRIPTION_MODEL_AUTO
+	VOICE_TRANSCRIPTION_MODEL_AUTO,
+	VOICE_TRANSCRIPTION_ONLY_PATTERN
 } from '#lib/constants/voice.constants.ts';
-import { VoiceInputMode, VoiceMode } from '#lib/enums/index.ts';
+import { VoiceInputMode, VoiceMode, VoiceModelRole } from '#lib/enums/index.ts';
 
 export interface VoiceModeInput {
 	/** The Voice input setting. */
@@ -85,4 +86,54 @@ export function voiceModeLabel(resolution: VoiceModeResolution): string {
 		default:
 			return resolution.reason;
 	}
+}
+
+/** Whether a model is a speech-to-text one, by its name: for dictation, not for chat. */
+export function isTranscriptionOnlyModel(modelId: string): boolean {
+	return VOICE_TRANSCRIPTION_ONLY_PATTERN.test(modelId);
+}
+
+export interface DictationModelInput {
+	isRouter: boolean;
+	/** The Transcription model setting; VOICE_TRANSCRIPTION_MODEL_AUTO picks one. */
+	transcriptionModel: string;
+	transcriptionModelHasAudio: boolean;
+	/** Router mode: a loaded model with audio input, which Automatic falls back to. */
+	loadedAudioModel?: string | null;
+	/** Single-model mode: the server's model, and whether it hears. */
+	singleModel?: string | null;
+	singleModelHasAudio?: boolean;
+}
+
+/**
+ * The model that transcribes dictation for chat models that cannot hear, as
+ * resolveVoiceMode() picks it, or null when none can: the chosen transcription model, or on
+ * Automatic a loaded model with audio input; a single-model server's model when it hears.
+ */
+export function dictationModelFor(input: DictationModelInput): string | null {
+	if (!input.isRouter) return input.singleModelHasAudio ? (input.singleModel ?? null) : null;
+
+	const chosen = input.transcriptionModel.trim();
+
+	if (chosen !== VOICE_TRANSCRIPTION_MODEL_AUTO) {
+		return input.transcriptionModelHasAudio ? chosen : null;
+	}
+
+	return input.loadedAudioModel ?? null;
+}
+
+/**
+ * A model's part in voice input: the one that dictates, a speech-to-text model, a chat
+ * model that hears, or none (it cannot hear).
+ */
+export function voiceModelRole(
+	modelId: string,
+	hasAudio: boolean,
+	dictationModel: string | null
+): VoiceModelRole | null {
+	if (dictationModel && modelId === dictationModel) return VoiceModelRole.DICTATION;
+
+	if (!hasAudio) return null;
+
+	return isTranscriptionOnlyModel(modelId) ? VoiceModelRole.TRANSCRIPTION : VoiceModelRole.VOICE;
 }

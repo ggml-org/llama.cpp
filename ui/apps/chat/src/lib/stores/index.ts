@@ -61,7 +61,8 @@ export { permissionsStore } from './permissions.svelte';
 // TOOLS
 export { toolsStore } from './tools.svelte';
 
-// VOICE (transcripts of voice messages on their way)
+// VOICE (which model does what, and transcripts of voice messages on their way)
+export { voiceStore } from './voice.svelte';
 export { voiceTranscriptsStore } from './voice-transcripts.svelte';
 
 // ENVIRONMENT / META

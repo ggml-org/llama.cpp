@@ -29,3 +29,30 @@ export const VOICE_CLIP_NAME_PREFIX = 'voice-';
  * model with audio input that is already loaded, so dictating loads nothing.
  */
 export const VOICE_TRANSCRIPTION_MODEL_AUTO = '';
+
+/**
+ * Names of speech-to-text models, which write down what is said and are not meant to chat
+ * (Qwen3-ASR, Whisper, Parakeet...). The server tells them apart by their chat template and
+ * does not say so, so the app goes by the name.
+ */
+export const VOICE_TRANSCRIPTION_ONLY_PATTERN =
+	/(^|[^a-z0-9])(asr|whisper|parakeet|canary|moonshine|sensevoice|stt)([^a-z0-9]|$)/i;
+
+/** How the model picker and the Models manager name a model's part in voice input. */
+export const VOICE_MODEL_ROLE_LABEL = {
+	dictation: 'Dictation',
+	transcription: 'Speech to text',
+	voice: 'Voice'
+} as const;
+
+/** What each part means, in the badge's tooltip. */
+export const VOICE_MODEL_ROLE_DESCRIPTION = {
+	dictationAuto:
+		'Transcribes your dictation with chat models that cannot hear. Picked automatically, as a loaded model with audio input; choose one in Settings > Voice.',
+	dictationChosen:
+		'Transcribes your dictation with chat models that cannot hear, as chosen in Settings > Voice.',
+	transcription:
+		'A speech-to-text model: it writes down what is said, for dictation, and is not meant to chat.',
+	voice:
+		'Hears audio: as the chat model it gets your voice messages, and it can also transcribe dictation.'
+} as const;

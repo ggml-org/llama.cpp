@@ -15,3 +15,13 @@ export enum VoiceMode {
 	/** The clip is attached and sent as audio, with a transcript to read. */
 	VOICE_MESSAGE = 'voice-message'
 }
+
+/** A model's part in voice input, as the model picker and the Models manager show it. */
+export enum VoiceModelRole {
+	/** The model that transcribes dictation for chat models that cannot hear */
+	DICTATION = 'dictation',
+	/** A speech-to-text model: for dictation, not for chat */
+	TRANSCRIPTION = 'transcription',
+	/** A chat model with audio input: it gets voice messages */
+	VOICE = 'voice'
+}

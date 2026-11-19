@@ -25,17 +25,17 @@ import {
 	VOICE_MODE_MESSAGE,
 	VOICE_SEPARATE_MODEL_HINT_LOCALSTORAGE_KEY
 } from '#lib/constants/index.ts';
-import { MimeTypeAudio, VoiceInputMode, VoiceMode } from '#lib/enums/index.ts';
+import { MimeTypeAudio, VoiceMode } from '#lib/enums/index.ts';
 import { VoiceService } from '#lib/services/voice.service.ts';
 import {
-	modelsStore,
 	serverStore,
 	settingsStore,
+	voiceStore,
 	voiceTranscriptsStore
 } from '#lib/stores/index.ts';
 import type { ChatUploadedFile } from '#lib/types/index.ts';
 import { uuid } from '#lib/utils/index.ts';
-import { resolveVoiceMode, voiceModeLabel } from '#lib/utils/voice-mode.ts';
+import { voiceModeLabel } from '#lib/utils/voice-mode.ts';
 import { onDestroy } from 'svelte';
 import { toast } from 'svelte-sonner';
 
@@ -99,44 +99,10 @@ function readAsDataUrl(blob: Blob): Promise<string> {
 export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 	const config = $derived(settingsStore.config);
 	const isRouter = $derived(serverStore.isRouterMode);
-	const chatModel = $derived(modelsStore.activeModelId);
-	const transcriptionSetting = $derived(
-		String(config[SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL] ?? '')
-	);
-	const hasAudio = (model: string | null) => {
-		void modelsStore.props.cacheVersion;
-
-		return model ? modelsStore.props.modelSupportsAudio(model) : false;
-	};
-	// what Automatic transcribes with when the chat model can't hear: one already loaded
-	const loadedAudioModel = $derived.by(() => {
-		void modelsStore.props.cacheVersion;
-
-		if (!isRouter) return null;
-
-		return (
-			modelsStore.models.find(
-				(option) => hasAudio(option.model) && modelsStore.isModelLoaded(option.model)
-			)?.model ?? null
-		);
-	});
-	const resolution = $derived(
-		resolveVoiceMode({
-			chatModel,
-			chatModelHasAudio: hasAudio(chatModel),
-			isRouter,
-			loadedAudioModel: loadedAudioModel,
-			setting: String(config[SETTINGS_KEYS.VOICE_INPUT_MODE] ?? VoiceInputMode.AUTO),
-			transcriptionModel: transcriptionSetting,
-			transcriptionModelHasAudio: hasAudio(transcriptionSetting || null)
-		})
-	);
+	// what the microphone does for the conversation's model, shared with the model lists
+	const resolution = $derived(voiceStore.resolution);
 	// a router with a model that hears keeps the button, so it can say where to pick it
-	const anyAudioModel = $derived.by(() => {
-		void modelsStore.props.cacheVersion;
-
-		return isRouter && modelsStore.models.some((option) => hasAudio(option.model));
-	});
+	const anyAudioModel = $derived(voiceStore.anyAudioModel);
 
 	let hintSeen = $state(readHintSeen());
 	let state = $state<ChatFormVoiceState>('idle');

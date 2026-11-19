@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { Heart, HeartOff, Info } from '@lucide/svelte';
+	import { Heart, HeartOff, Info, Mic } from '@lucide/svelte';
 	import { ActionIcon } from '#lib/components/app/index.ts';
-	import { modelsStore, uiStore } from '#lib/stores/index.ts';
+	import { VoiceModelRole } from '#lib/enums/index.ts';
+	import { modelsStore, serverStore, uiStore, voiceStore } from '#lib/stores/index.ts';
 	import type { ModelOption } from '#lib/types/models.js';
 
 	interface Props {
@@ -14,6 +15,13 @@
 	let { isFav, option, revealOnHover = true }: Props = $props();
 
 	// the favorite heart stays visible, so the reveal applies to the other icons
+	// a router model that hears, other than the one that dictates, can be made the one
+	let canDictate = $derived.by(() => {
+		const role = voiceStore.roleOf(option.model);
+
+		return serverStore.isRouterMode && role !== null && role !== VoiceModelRole.DICTATION;
+	});
+
 	const revealClass =
 		'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100';
 </script>
@@ -24,6 +32,19 @@
 	onkeydown={(event) => event.stopPropagation()}
 	role="presentation"
 >
+	{#if canDictate}
+		<span class={revealOnHover ? revealClass : ''}>
+			<ActionIcon
+				class="size-icon-lg hover:text-foreground"
+				icon={Mic}
+				iconSize="size-icon-md"
+				onclick={() => voiceStore.useForDictation(option.model)}
+				tooltip="Use for dictation"
+				tooltipAsTitle
+			/>
+		</span>
+	{/if}
+
 	<span class={revealOnHover ? revealClass : ''}>
 		<ActionIcon
 			class="size-icon-lg hover:text-foreground"

@@ -1,5 +1,6 @@
 // Guards what the microphone does for a conversation's model: a voice message for a model
-// that hears, dictation otherwise, and why it can't when no model can transcribe.
+// that hears, dictation otherwise, and why it can't when no model can transcribe; and each
+// model's part in voice input, as the model lists show it.
 
 import {
 	SETTING_CONFIG_DEFAULT,
@@ -9,8 +10,15 @@ import {
 	VOICE_MODE_MESSAGE,
 	VOICE_TRANSCRIPTION_MODEL_AUTO
 } from '#lib/constants/index.ts';
-import { SettingsFieldType, VoiceInputMode, VoiceMode } from '#lib/enums/index.ts';
-import { resolveVoiceMode, type VoiceModeInput, voiceModeLabel } from '#lib/utils/voice-mode.ts';
+import { SettingsFieldType, VoiceInputMode, VoiceMode, VoiceModelRole } from '#lib/enums/index.ts';
+import {
+	dictationModelFor,
+	isTranscriptionOnlyModel,
+	resolveVoiceMode,
+	type VoiceModeInput,
+	voiceModeLabel,
+	voiceModelRole
+} from '#lib/utils/voice-mode.ts';
 import { describe, expect, it } from 'vitest';
 
 const base: VoiceModeInput = {
@@ -163,5 +171,67 @@ describe('voice settings', () => {
 			SETTINGS_KEYS.VOICE_TRANSCRIPTION_LANGUAGE
 		]);
 		expect(section?.fields?.[0].type).toBe(SettingsFieldType.SELECT);
+	});
+});
+
+describe('isTranscriptionOnlyModel', () => {
+	it('knows speech-to-text models by name', () => {
+		expect(isTranscriptionOnlyModel('ggml-org/Qwen3-ASR-0.6B-GGUF:Q8_0')).toBe(true);
+		expect(isTranscriptionOnlyModel('ggerganov/whisper-large-v3')).toBe(true);
+		expect(isTranscriptionOnlyModel('nvidia/parakeet-tdt-0.6b')).toBe(true);
+	});
+
+	it('leaves chat models with audio input alone, even with the letters inside a word', () => {
+		expect(isTranscriptionOnlyModel('ggml-org/LFM3-Omni-2B-GGUF:Q8_0')).toBe(false);
+		expect(isTranscriptionOnlyModel('google/gemma-3n-E4B')).toBe(false);
+		expect(isTranscriptionOnlyModel('org/Lasr-chat')).toBe(false);
+	});
+});
+
+describe('dictationModelFor', () => {
+	const router = { isRouter: true, transcriptionModelHasAudio: true };
+
+	it('is the chosen transcription model when it hears', () => {
+		expect(dictationModelFor({ ...router, transcriptionModel: 'asr' })).toBe('asr');
+		expect(
+			dictationModelFor({ ...router, transcriptionModel: 'asr', transcriptionModelHasAudio: false })
+		).toBeNull();
+	});
+
+	it('is a loaded model with audio input on Automatic, none when nothing hears', () => {
+		expect(
+			dictationModelFor({
+				...router,
+				loadedAudioModel: 'omni',
+				transcriptionModel: VOICE_TRANSCRIPTION_MODEL_AUTO
+			})
+		).toBe('omni');
+		expect(
+			dictationModelFor({ ...router, transcriptionModel: VOICE_TRANSCRIPTION_MODEL_AUTO })
+		).toBeNull();
+	});
+
+	it("is a single-model server's model when it hears", () => {
+		const single = { isRouter: false, transcriptionModel: '', transcriptionModelHasAudio: false };
+
+		expect(dictationModelFor({ ...single, singleModel: 'omni', singleModelHasAudio: true })).toBe(
+			'omni'
+		);
+		expect(
+			dictationModelFor({ ...single, singleModel: 'text', singleModelHasAudio: false })
+		).toBeNull();
+	});
+});
+
+describe('voiceModelRole', () => {
+	it('marks the model that dictates, whatever else it is', () => {
+		expect(voiceModelRole('qwen3-asr', true, 'qwen3-asr')).toBe(VoiceModelRole.DICTATION);
+		expect(voiceModelRole('omni', true, 'omni')).toBe(VoiceModelRole.DICTATION);
+	});
+
+	it('tells speech-to-text models from chat models that hear, and leaves the rest out', () => {
+		expect(voiceModelRole('org/Qwen3-ASR', true, 'omni')).toBe(VoiceModelRole.TRANSCRIPTION);
+		expect(voiceModelRole('omni', true, null)).toBe(VoiceModelRole.VOICE);
+		expect(voiceModelRole('text-only', false, null)).toBeNull();
 	});
 });

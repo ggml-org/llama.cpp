@@ -4,6 +4,7 @@
 	import ModelContext from '../ModelContext.svelte';
 	import ModelDraftSubline from '../ModelDraftSubline.svelte';
 	import ModelId from '../ModelId.svelte';
+	import ModelVoiceRole from '../ModelVoiceRole.svelte';
 	import ModelsManagerStatusCell from './ModelsManagerStatusCell.svelte';
 	import { modelRowActions } from './row-actions';
 	import { configuredContext, downloadProgressFor, isRowControlClick } from './utils';
@@ -100,6 +101,8 @@
 						tags={option.tags}
 						title={option.model}
 					/>
+
+					<ModelVoiceRole model={option.model} />
 
 					<!-- a phone has no width for the modality icons, the id needs it more -->
 					<ModelCapabilities hideModalities={deviceStore.isMobile} {option} />
