@@ -1287,6 +1287,11 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         const bool is_matmul_scale  = is_matmul && tn.suffix != nullptr &&
             (strcmp(tn.suffix, "scale") == 0 || strcmp(tn.suffix, "input_scale") == 0);
 
+        if ((flags & TENSOR_NO_SCALE) && ggml_needs_scale(t_meta->type)) {
+            throw std::runtime_error(format("tensor '%s' takes no weight scale, so type %s is not supported; re-convert the model",
+                tn.str().c_str(), ggml_type_name(t_meta->type)));
+        }
+
         // the scale is a source of the matmul, so it goes where the weight is
         if (is_matmul_scale) {
             const auto it = matmul_weight_bufts.find(LLM_TN_IMPL(tn.arch, tn.tensor, "weight", tn.bid, tn.xid).str());
@@ -1529,6 +1534,29 @@ struct ggml_tensor * llama_model_loader::create_tensor(
 }
 
 void llama_model_loader::done_getting_tensors(bool partial) const {
+    std::unordered_set<std::string> created;
+    for (const auto & it : ctx_map) {
+        for (ggml_tensor * t = ggml_get_first_tensor(it.second.get()); t; t = ggml_get_next_tensor(it.second.get(), t)) {
+            created.insert(ggml_get_name(t));
+        }
+    }
+    for (const auto & it : ctx_map) {
+        for (ggml_tensor * t = ggml_get_first_tensor(it.second.get()); t; t = ggml_get_next_tensor(it.second.get(), t)) {
+            if (!ggml_needs_scale(t->type)) {
+                continue;
+            }
+            std::string scale_name = ggml_get_name(t);
+            if (scale_name.size() > 7 && scale_name.compare(scale_name.size() - 7, 7, ".weight") == 0) {
+                scale_name.resize(scale_name.size() - 7);
+            }
+            scale_name += ".scale";
+            if (!created.count(scale_name)) {
+                throw std::runtime_error(format("tensor '%s' of type %s requires a weight scale, but '%s' is missing or not used by this architecture; re-convert the model",
+                    ggml_get_name(t), ggml_type_name(t->type), scale_name.c_str()));
+            }
+        }
+    }
+
     if (n_created > n_tensors) {
         throw std::runtime_error(format("%s: too many tensors created; expected %d, got %d", __func__, n_tensors, n_created));
     }

@@ -83,7 +83,7 @@ llama_model_kokoro::graph::graph(const llm_graph_params & params) : llm_graph_co
     inpL = build_norm(inpL, model.tok_norm, model.tok_norm_b, LLM_NORM, 0);
     cb(inpL, "inp_norm", 0);
 
-    inpL = ggml_add(ctx0, ggml_mul_mat(ctx0, model.tok_embd_proj, inpL), model.tok_embd_proj_b);
+    inpL = ggml_add(ctx0, build_lora_mm(model.tok_embd_proj, inpL), model.tok_embd_proj_b);
     cb(inpL, "inp_proj", 0);
 
     auto * inp_attn = build_attn_inp_no_cache();
