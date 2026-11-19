@@ -125,7 +125,7 @@ ggml_cgraph * mtmd_graph_fish_s2_spkenc::build() {
         ggml_tensor * in_b = ggml_view_1d(ctx0, c2w.quant_rest_in_b, c2w.quant_rest_in_b->ne[0], (size_t) (g - 1) * c2w.quant_rest_in_b->nb[1]);
         idx[g] = vq(page(c2w.quant_rest_in_w, g - 1), in_b, page(c2w.quant_rest_cb_norm_w, g - 1), page(c2w.quant_rest_cb_w, g - 1));
     }
-    // the codes of the clip, read back as the gen-side reference (drama3 feeds them to its codebook tower)
+    // codes of the clip, read back as the gen-side reference
     for (int64_t g = 0; g < n_cb; g++) {
         ggml_set_name(idx[g], ("out_ref_code_" + std::to_string(g)).c_str());
         ggml_set_output(idx[g]);

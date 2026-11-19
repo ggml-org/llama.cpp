@@ -2629,8 +2629,7 @@ static bool mtmd_audio_batch_encode(mtmd_context * ctx, const mtmd_image_f32_bat
     return ctx->ctx_a->encode_batch(ctx->n_threads, &batch, out_embd);
 }
 
-// fish_s2_spkenc: one backbone row per reference frame, the codes of the frames go to ctx->gen_ref
-// drama3 runs its codebook tower over them, see mtmd_gen_state_get_ref_codes()
+// fish_s2_spkenc: one backbone row per reference frame, the codes go to ctx->gen_ref, see mtmd_gen_state_set_ref()
 static int32_t mtmd_fish_s2_ref_encode(mtmd_context * ctx, const mtmd_audio_tokens * audio_tokens, std::vector<float> & out_embd) {
     mtmd_image_f32_batch batch = audio_tokens->batch_f32.clone();
     if (audio_tokens->source) {

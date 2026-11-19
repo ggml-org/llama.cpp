@@ -2762,10 +2762,9 @@ public:
         out_type = inp->out_type;
         stream   = inp->stream;
 
-        // voice cloning: the codec encoder gives the backbone rows and, as the gen-side reference, the codes of the clip
+        // voice cloning: backbone rows from the codec encoder, the codes of the clip go to the gen state
         std::vector<float> ref_rows;
         if (inp->speaker_ref && !mtmd_bitmap_is_voice(inp->speaker_ref) && !mtmd_support_audio(mctx)) {
-            // mmproj converted before voice cloning support: keep the old behavior
             LOG_WRN("mtmd_helper_gen_audio: mmproj has no speaker encoder (re-convert it for voice cloning), the speaker file is ignored\n");
         } else if (inp->speaker_ref) {
             if (!encode_speaker(inp->speaker_ref, ref_rows) || !init_gen_state(inp->seed) ||
@@ -3016,7 +3015,7 @@ protected:
         return !prompt_codes.empty() && prompt_codes[(size_t) row * n_cb] >= 0;
     }
 
-    // reference-bracket-v1 with one reference, as the reference does (vLLM-Omni fish_omni/prompt.py):
+    // reference-bracket-v1 with one reference, see vLLM-Omni fish_omni/prompt.py
     // system: instruction, "\n\n[Reference 1]\nText: <transcript>\nSpeech: " then one row per frame of the clip
     bool build_reference_prompt(std::string text, std::string ref_text, std::vector<float> && ref_rows) {
         size_t n_codes = 0;
@@ -3026,8 +3025,7 @@ protected:
             LOG_ERR("mtmd_helper_gen_audio: the speaker encoder gave no codes for the clip\n");
             return false;
         }
-        // the speaker tag follows "Text: " directly; without one, speaker 0
-        // an untagged target speaks as the reference speaker, otherwise the clone has no effect
+        // the speaker tag follows "Text: " directly (default speaker 0), an untagged target reuses it
         std::string tag = "<|speaker:0|>";
         const size_t lead = speaker_tag_pos(ref_text);
         if (lead == std::string::npos) {
