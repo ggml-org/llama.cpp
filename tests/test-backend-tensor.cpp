@@ -325,14 +325,16 @@ static bool test_buft(ggml_backend_buffer_type_t buft) {
 // Mock buffer type
 //
 // Ad-hoc host-backed buffer type used to exercise the dispatch logic in
-// ggml_backend_tensor_{set,get,copy}_n without relying on real backend hooks.
+// ggml_backend_tensor_{set,get,copy}_n and ggml_backend_tensor_memset without relying on real backend hooks.
 //
 
 struct mock_config {
+    bool memset;
     bool set_n;
     bool get_n;
     bool cpy_n;
     bool cpy_n_result;
+    int  set_calls;
     int  set_n_calls;
     int  get_n_calls;
     int  cpy_n_calls;
@@ -341,10 +343,12 @@ struct mock_config {
 static mock_config g_mock = {};
 
 static void mock_config_reset(bool set_n, bool get_n, bool cpy_n, bool cpy_n_result) {
+    g_mock.memset = true;
     g_mock.set_n = set_n;
     g_mock.get_n = get_n;
     g_mock.cpy_n = cpy_n;
     g_mock.cpy_n_result = cpy_n_result;
+    g_mock.set_calls = 0;
     g_mock.set_n_calls = 0;
     g_mock.get_n_calls = 0;
     g_mock.cpy_n_calls = 0;
@@ -365,6 +369,7 @@ static void mock_buffer_memset_tensor(ggml_backend_buffer_t buffer, struct ggml_
 }
 
 static void mock_buffer_set_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    g_mock.set_calls++;
     memcpy((char *) tensor->data + offset, data, size);
 
     GGML_UNUSED(buffer);
@@ -434,7 +439,7 @@ static ggml_backend_buffer_t mock_buft_alloc_buffer(ggml_backend_buffer_type_t b
         /* .free_buffer     = */ mock_buffer_free_buffer,
         /* .get_base        = */ mock_buffer_get_base,
         /* .init_tensor     = */ NULL,
-        /* .memset_tensor   = */ mock_buffer_memset_tensor,
+        /* .memset_tensor   = */ NULL,
         /* .set_tensor      = */ mock_buffer_set_tensor,
         /* .get_tensor      = */ mock_buffer_get_tensor,
         /* .set_tensor_2d   = */ NULL,
@@ -446,6 +451,7 @@ static ggml_backend_buffer_t mock_buft_alloc_buffer(ggml_backend_buffer_type_t b
         /* .get_tensor_n    = */ NULL,
         /* .cpy_tensor_n    = */ NULL,
     };
+    if (g_mock.memset) iface.memset_tensor = mock_buffer_memset_tensor;
     if (g_mock.set_n) iface.set_tensor_n = mock_buffer_set_tensor_n;
     if (g_mock.get_n) iface.get_tensor_n = mock_buffer_get_tensor_n;
     if (g_mock.cpy_n) iface.cpy_tensor_n = mock_buffer_cpy_tensor_n;
@@ -633,8 +639,50 @@ static bool test_mock_grouping() {
     return true;
 }
 
+// verify that memset writes the value with set_tensor when the buffer has no memset_tensor
+static bool test_mock_memset(bool with_hook) {
+    mock_config_reset(false, false, false, true);
+    g_mock.memset = with_hook;
+
+    ggml_init_params params = {};
+    params.mem_size = ggml_tensor_overhead()*8;
+    params.no_alloc = true;
+
+    ggml_context_ptr ctx(ggml_init(params));
+    if (!ctx) {
+        return false;
+    }
+
+    // larger than one fallback chunk, so that the write takes more than one set_tensor call
+    std::vector<ggml_tensor *> tensors;
+    ggml_backend_buffer_ptr buf = alloc_tensors(ctx.get(), mock_buft(), { 300*1024 }, tensors);
+    if (!buf) {
+        return false;
+    }
+
+    const size_t n_bytes = ggml_nbytes(tensors[0]);
+    const size_t offset  = 3;
+    const size_t size    = n_bytes - 2*offset;
+
+    std::vector<uint8_t> expected(n_bytes, 0), out(n_bytes, 0);
+    memset(expected.data() + offset, 0xA5, size);
+
+    ggml_backend_tensor_set(tensors[0], out.data(), 0, n_bytes);
+
+    g_mock.set_calls = 0;
+    ggml_backend_tensor_memset(tensors[0], 0xA5, offset, size);
+    ggml_backend_tensor_get(tensors[0], out.data(), 0, n_bytes);
+
+    // the hook writes without set_tensor, the fallback with one set_tensor call per chunk
+    const bool used_expected_path = with_hook ? g_mock.set_calls == 0 : g_mock.set_calls > 1;
+
+    return used_expected_path && out == expected;
+}
+
 static bool test_mock() {
     return
+        test_mock_memset(true)     &&
+        test_mock_memset(false)    &&
         test_mock_set_get_n(true)  &&
         test_mock_set_get_n(false) &&
         test_mock_copy_n(true)     &&
