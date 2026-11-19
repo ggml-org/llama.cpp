@@ -2472,7 +2472,13 @@ struct llama_model_inkling : public llama_model_base {
 
     struct graph : public llm_graph_context {
         graph(const llm_graph_params & params);
-        ggml_tensor * convolve(ggml_tensor * cur, ggml_tensor * weight, ggml_tensor * state, ggml_tensor * history, llm_graph_input_rs * inp, int64_t offset);
+        ggml_tensor * convolve(
+                ggml_tensor * cur,
+                ggml_tensor * weight,
+                ggml_tensor * state,
+                ggml_tensor * history,
+                llm_graph_input_rs * inp,
+                int64_t offset);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
