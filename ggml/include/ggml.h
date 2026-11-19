@@ -1316,12 +1316,6 @@ extern "C" {
 
     // indirect matrix multiplication
     // an id of -1 skips the slot and zeroes the matching row of the result
-    //
-    // [TAG_MUL_MAT_ID_DUPLICATE_ID]
-    // note: this op has undefined behaviour if a given `a` is referenced more than once for a given `b`
-    //       (i.e. duplicate experts per token are not guaranteed to be supported in all backends)
-    // TODO: add backend support: https://github.com/ggml-org/llama.cpp/pull/29998#issuecomment-6153742533
-    // the CPU backend skips negative ids, their rows of the result are zero
     GGML_API struct ggml_tensor * ggml_mul_mat_id(
             struct ggml_context * ctx,
             struct ggml_tensor  * as,
