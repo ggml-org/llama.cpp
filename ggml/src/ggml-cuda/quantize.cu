@@ -131,10 +131,11 @@ __device__ __forceinline__ uint8_t compute_e8m0_scale(float amax) {
 }
 
 #if defined(BLACKWELL_MMA_AVAILABLE)
-// Quantizes 16 values times inv_col_scale to E2M1 with the UE4M3 scale of the lowest squared error of 5 candidates, returns the scale code.
+// Quantizes 16 values divided by col_scale to E2M1 with the UE4M3 scale of the lowest squared error of 5 candidates, returns the scale code.
 // q0 and q1 get the 8 bytes of block_nvfp4: byte i holds the values i and i + 8 in its low and high nibble.
 static __device__ __forceinline__ uint8_t quantize_nvfp4_subblock(
-        const float (&vals)[QK_NVFP4_SUB], const float inv_col_scale, uint32_t & q0, uint32_t & q1) {
+        const float (&vals)[QK_NVFP4_SUB], const float col_scale, uint32_t & q0, uint32_t & q1) {
+    const float inv_col_scale = col_scale > 0.0f ? 1.0f / col_scale : 0.0f;
     q0 = 0;
     q1 = 0;
 
@@ -319,7 +320,6 @@ static __global__ void quantize_mmq_nvfp4(
         const int sub = (i0_base % QK_FP4_MMQ) / QK_NVFP4_SUB;
 
         const float row_scale = warp_amax[0];
-        const float inv_col_scale = row_scale > 0.0f ? 1.0f / row_scale : 0.0f;
 
         float vals[QK_NVFP4_SUB];
         if constexpr (use_aligned_float8) {
@@ -340,7 +340,7 @@ static __global__ void quantize_mmq_nvfp4(
 
         uint32_t q0;
         uint32_t q1;
-        const uint8_t fp8_code = quantize_nvfp4_subblock(vals, inv_col_scale, q0, q1);
+        const uint8_t fp8_code = quantize_nvfp4_subblock(vals, row_scale, q0, q1);
 
         if constexpr (scatter) {
 #pragma unroll
@@ -827,8 +827,6 @@ void quantize_mmq_few_q8_1_cuda(
     }
 }
 
-static constexpr int QUANTIZE_FEW_NVFP4_BLOCK_SIZE = 128;
-
 // Each thread quantizes one sub-block of 16 values like quantize_mmq_nvfp4, columns beyond ne1 are zero.
 // A CUDA block takes a chunk of the sub-blocks of one column, so each CUDA block first reads the whole column for the column scale.
 static __global__ void quantize_mmq_few_nvfp4(
@@ -849,27 +847,20 @@ static __global__ void quantize_mmq_few_nvfp4(
 
     float amax = 0.0f;
     if (col < ne1) {
-        for (int64_t i0 = 4*threadIdx.x; i0 < ne00; i0 += 4*QUANTIZE_FEW_NVFP4_BLOCK_SIZE) {
+        for (int64_t i0 = 4*threadIdx.x; i0 < ne00; i0 += 4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ) {
             const float4 v = *(const float4 *) (x_row + i0);
             amax = fmaxf(amax, fmaxf(fmaxf(fabsf(v.x), fabsf(v.y)), fmaxf(fabsf(v.z), fabsf(v.w))));
         }
     }
-    __shared__ float amax_warp[QUANTIZE_FEW_NVFP4_BLOCK_SIZE/WARP_SIZE];
-    amax = warp_reduce_max<WARP_SIZE>(amax);
-    if (threadIdx.x % WARP_SIZE == 0) {
-        amax_warp[threadIdx.x / WARP_SIZE] = amax;
-    }
-    __syncthreads();
-    amax = threadIdx.x % WARP_SIZE < QUANTIZE_FEW_NVFP4_BLOCK_SIZE/WARP_SIZE ? amax_warp[threadIdx.x % WARP_SIZE] : 0.0f;
-    amax = warp_reduce_max<WARP_SIZE>(amax);
+    __shared__ float amax_warp[CUDA_QUANTIZE_BLOCK_SIZE_MMQ/WARP_SIZE];
+    amax = block_reduce<block_reduce_method::MAX, CUDA_QUANTIZE_BLOCK_SIZE_MMQ>(amax, amax_warp);
 
-    const float col_scale     = amax / (6.0f * 448.0f);
-    const float inv_col_scale = col_scale > 0.0f ? 1.0f / col_scale : 0.0f;
+    const float col_scale = amax / (6.0f * 448.0f);
     if (blockIdx.y == 0 && threadIdx.x == 0) {
         y_scale[blockIdx.z*gridDim.x + col] = col_scale;
     }
 
-    const int64_t isb = int64_t(blockIdx.y)*QUANTIZE_FEW_NVFP4_BLOCK_SIZE + threadIdx.x;
+    const int64_t isb = int64_t(blockIdx.y)*CUDA_QUANTIZE_BLOCK_SIZE_MMQ + threadIdx.x;
     if (isb >= ne00/QK_NVFP4_SUB) {
         return;
     }
@@ -887,7 +878,7 @@ static __global__ void quantize_mmq_few_nvfp4(
     }
 
     uint32_t q[2];
-    const uint8_t code = quantize_nvfp4_subblock(vals, inv_col_scale, q[0], q[1]);
+    const uint8_t code = quantize_nvfp4_subblock(vals, col_scale, q[0], q[1]);
 
     const int64_t kb  = isb / (QK_NVFP4/QK_NVFP4_SUB); // block of 64 values
     const int     sub = isb % (QK_NVFP4/QK_NVFP4_SUB);
@@ -912,8 +903,8 @@ void quantize_mmq_few_nvfp4_cuda(
     GGML_ASSERT(ne00 % QK_K == 0);
 
     const int64_t nsub = ne00 / QK_NVFP4_SUB;
-    const dim3 num_blocks(GGML_PAD(ne1, MMQ_FEW_NCOLS), (nsub + QUANTIZE_FEW_NVFP4_BLOCK_SIZE - 1) / QUANTIZE_FEW_NVFP4_BLOCK_SIZE, ne2*ne3);
-    const dim3 block_size(QUANTIZE_FEW_NVFP4_BLOCK_SIZE, 1, 1);
+    const dim3 num_blocks(GGML_PAD(ne1, MMQ_FEW_NCOLS), (nsub + CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1) / CUDA_QUANTIZE_BLOCK_SIZE_MMQ, ne2*ne3);
+    const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE_MMQ, 1, 1);
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(num_blocks, block_size, 0, stream);
     ggml_cuda_kernel_launch(quantize_mmq_few_nvfp4, launch_params, x, vy, y_scale, ne00, s01, s02, s03, (int) ne1, (int) ne2);
 }

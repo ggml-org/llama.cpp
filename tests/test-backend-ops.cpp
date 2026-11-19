@@ -5716,44 +5716,28 @@ struct test_mul_mat_hadamard : public test_mul_mat {
     }
 };
 
-// FP4 W4A8 path (GGML_PREC_Q8 on src1 disallows 4-bit activations)
+// FP4 W4A8 path (GGML_PREC_Q8 on src1 disallows 4-bit activations), or with prec = GGML_PREC_Q4 the W4A4 path requested by the graph
 struct test_mul_mat_w4a8 : public test_mul_mat {
+    const ggml_prec prec;
+
     test_mul_mat_w4a8(ggml_type type_a = GGML_TYPE_NVFP4, ggml_type type_b = GGML_TYPE_F32,
             int64_t m = 32, int64_t n = 32, int64_t k = 256,
             std::array<int64_t, 2> bs = {1, 1},
-            std::array<int64_t, 2> nr = {1, 1})
-        : test_mul_mat(type_a, type_b, m, n, k, bs, nr) {}
+            std::array<int64_t, 2> nr = {1, 1},
+            ggml_prec prec = GGML_PREC_Q8)
+        : test_mul_mat(type_a, type_b, m, n, k, bs, nr), prec(prec) {}
     ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
         ggml_tensor * out = test_mul_mat::build_graph(ctx, ctx_weights);
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (t->op == GGML_OP_MUL_MAT) {
-                ggml_prec_set_src(t, GGML_PREC_Q8, 1);
+                ggml_prec_set_src(t, prec, 1);
             }
         }
         return out;
     }
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
-        return "MUL_MAT_W4A8";
-    }
-};
-
-// FP4 W4A4 path requested by the graph (GGML_PREC_Q4 on src1)
-struct test_mul_mat_w4a4_req : public test_mul_mat {
-    test_mul_mat_w4a4_req(ggml_type type_a, int64_t m, int64_t n, int64_t k)
-        : test_mul_mat(type_a, GGML_TYPE_F32, m, n, k, {1, 1}, {1, 1}) {}
-    ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
-        ggml_tensor * out = test_mul_mat::build_graph(ctx, ctx_weights);
-        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-            if (t->op == GGML_OP_MUL_MAT) {
-                ggml_prec_set_src(t, GGML_PREC_Q4, 1);
-            }
-        }
-        return out;
-    }
-    std::string op_desc(ggml_tensor * t) override {
-        GGML_UNUSED(t);
-        return "MUL_MAT_W4A4_REQ";
+        return prec == GGML_PREC_Q4 ? "MUL_MAT_W4A4_REQ" : "MUL_MAT_W4A8";
     }
 };
 
@@ -8089,6 +8073,31 @@ struct test_mul_mat_pos : public test_mul_mat {
             } else {
                 init_tensor_uniform(t);
             }
+        }
+    }
+};
+
+// mul_mat with the src1 rows scaled by 1, 5 and 9: with a src1 scale per row (FP4 W4A4) the scale of a wrong row changes the result
+struct test_mul_mat_rows_scaled : public test_mul_mat {
+    using test_mul_mat::test_mul_mat;
+
+    std::string vars() override {
+        return test_mul_mat::vars() + ",src1_rows=x1/x5/x9";
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t);
+            if (std::string(ggml_get_name(t)) != "b") {
+                continue;
+            }
+            GGML_ASSERT(t->type == GGML_TYPE_F32 && ggml_is_contiguous(t));
+            std::vector<float> data(ggml_nelements(t));
+            ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
+            for (size_t i = 0; i < data.size(); ++i) {
+                data[i] *= 1.0f + 4.0f*((int64_t) i / t->ne[0] % 3);
+            }
+            ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
         }
     }
 };
@@ -12065,7 +12074,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
     // CUDA few-row MMQ: 1-3 column groups, 32-row tiles (6170 rows), K = 18 units (uneven over the warps) and 9 units (one unit per ring stage)
     for (ggml_type type_a : {GGML_TYPE_Q8_0, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K,
-                             GGML_TYPE_IQ3_S, GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_XS}) {
+                             GGML_TYPE_IQ3_S, GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_XS, GGML_TYPE_NVFP4}) {
         for (int64_t k : {4608, 2304}) {
             test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1000,  8, k, {1, 1}, {1, 1}));
             test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 6170, 13, k, {1, 1}, {1, 1}));
@@ -12091,25 +12100,20 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // CUDA few-row MMQ for MUL_MAT_ID: strided experts, more than 32 experts
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32,  16, 4, true,  72, 13, 2048, 80));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32, 128, 8, false, 72, 16, 2048));
-    // CUDA few-row MMQ for NVFP4: default src1 precision, 8-bit src1 (GGML_PREC_Q8) and 4-bit src1 (GGML_PREC_Q4), K at the gate edges (2048 = 8 units, 2304 = 9 units) and not a multiple of 256 (4160)
-    for (int64_t k : {4608, 2304}) {
-        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4, GGML_TYPE_F32, 1000,  8, k, {1, 1}, {1, 1}));
-        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4, GGML_TYPE_F32, 6170, 13, k, {1, 1}, {1, 1}));
-        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4, GGML_TYPE_F32, 1000, 21, k, {1, 1}, {1, 1}));
-    }
-    for (int64_t n : {2, 5, 8, 13, 21, 24}) {
+    // CUDA few-row MMQ for NVFP4 (also in the loop above): 8-bit src1 (GGML_PREC_Q8) from 7 tokens (DGX Spark: 9), 4-bit src1 by default from 9 tokens and with GGML_PREC_Q4 from 6 (DGX Spark: 8), K = 8 units and not a multiple of 256
+    for (int64_t n : {7, 8, 9, 21, 24}) {
         test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 1000, n, 4608));
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4, GGML_TYPE_F32, 1000, n, 2048, {1, 1}, {1, 1}));
     }
-    for (int64_t n : {2, 8, 13}) {
-        test_cases.emplace_back(new test_mul_mat_w4a4_req(GGML_TYPE_NVFP4, 1000, n, 4608));
+    for (int64_t n : {6, 8}) {
+        test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 1000, n, 4608, {1, 1}, {1, 1}, GGML_PREC_Q4));
     }
-    test_cases.emplace_back(new test_mul_mat_w4a4_req(GGML_TYPE_NVFP4, 6170, 8, 4608));
     test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 6170, 13, 4608));
     test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 1000, 21, 2304));
     test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 1000,  8, 4160));
     test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32,   64, 13, 4608, {3, 2}, {2, 2}));
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4, GGML_TYPE_F32, 63, 5, 4608, {3, 2}, {2, 2}));
+    // 4-bit src1 with broadcast: src1 rows of different magnitudes, so a wrong row or channel of the src1 scales changes the result
+    test_cases.emplace_back(new test_mul_mat_rows_scaled(GGML_TYPE_NVFP4, GGML_TYPE_F32, 63, 13, 4608, {3, 2}, {2, 2}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4, GGML_TYPE_F32, 6170, 13, 4608, {1, 1}, {1, 1}, {0, 1, 2, 3}, 0, 1, false, 0, 0, 0, true));
 
 #if 0
@@ -13465,9 +13469,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_NVFP4,  GGML_GLU_OP_SWIGLU,       150,  2560, 256, true, 16, 4, false, false, false, true));
     test_cases.emplace_back(new test_mul_mat_fusion_w4a8(GGML_TYPE_NVFP4, GGML_GLU_OP_SWIGLU,    150,  2560, 256, false, 1, 1, false, false, false, true, { 1, 1 }));
     test_cases.emplace_back(new test_mul_mat_fusion_w4a8(GGML_TYPE_NVFP4, GGML_GLU_OP_SWIGLU,    150,  2560, 256, true, 16, 8, false, false, false, true));
-    // Few columns and tiles with a long K: split-K through the stream-k fixup, the scale is applied to the partial sums
-    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_NVFP4,  GGML_GLU_OP_SWIGLU,        11,    64, 2048, false, 1, 1, false, false, false, true, { 1, 1 }));
-    test_cases.emplace_back(new test_mul_mat_fusion_w4a8(GGML_TYPE_NVFP4, GGML_GLU_OP_SWIGLU,    11,    64, 2048, false, 1, 1, false, false, false, true, { 1, 1 }));
+    // Few columns (more than few-row MMQ takes) and tiles with a long K: split-K through the stream-k fixup, the scale is applied to the partial sums
+    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_NVFP4,  GGML_GLU_OP_SWIGLU,        32,    64, 2048, false, 1, 1, false, false, false, true, { 1, 1 }));
+    test_cases.emplace_back(new test_mul_mat_fusion_w4a8(GGML_TYPE_NVFP4, GGML_GLU_OP_SWIGLU,    32,    64, 2048, false, 1, 1, false, false, false, true, { 1, 1 }));
     test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K,   GGML_GLU_OP_SWIGLU,       150,  2560, 256, false, 1, 1, false, false, false, true, { 1, 1 }));
     test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K,   GGML_GLU_OP_SWIGLU,       150,  2560, 256, true, 16, 8, false, false, false, true));
     // The same with experts (~1280 tiles each): 17 tokens with broadcast input (one MMA tile per warp), 2048 tokens without (two, several column tiles per expert).
@@ -13484,13 +13488,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K,   GGML_GLU_OP_SWIGLU,         9,   128, 2048, false, 1, 1, false, false, true, false, { 1, 1 }));
     // on DGX Spark also the expert gate and up matmuls at 8 tokens, instead of the fused MMVQ path
     test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K,   GGML_GLU_OP_SWIGLU,         8,   128, 2048, true, 16, 4, true));
-    // NVFP4 gate and up with weight scales at 2-24 tokens: few-row MMQ, where enabled, takes each matmul with the MUL by its scale
-    for (int64_t m : {2, 8, 13, 24}) {
+    // NVFP4 gate and up with weight scales at 8-24 tokens: few-row MMQ, where enabled, takes each matmul with the MUL by its scale
+    for (int64_t m : {8, 13, 24}) {
         test_cases.emplace_back(new test_mul_mat_fusion     (GGML_TYPE_NVFP4, GGML_GLU_OP_SWIGLU, m, 1000, 4096, false, 1, 1, false, false, true, true, { 1, 1 }));
         test_cases.emplace_back(new test_mul_mat_fusion_w4a8(GGML_TYPE_NVFP4, GGML_GLU_OP_SWIGLU, m, 1000, 4096, false, 1, 1, false, false, true, true, { 1, 1 }));
     }
-    test_cases.emplace_back(new test_mul_mat_fusion     (GGML_TYPE_NVFP4, GGML_GLU_OP_SWIGLU, 8, 64, 4096, false, 1, 1, false, false, true, true, { 3, 2 }));
-    test_cases.emplace_back(new test_mul_mat_fusion_w4a8(GGML_TYPE_NVFP4, GGML_GLU_OP_SWIGLU, 8, 64, 4096, false, 1, 1, false, false, true, true, { 3, 2 }));
+    test_cases.emplace_back(new test_mul_mat_fusion     (GGML_TYPE_NVFP4, GGML_GLU_OP_SWIGLU, 13, 64, 4096, false, 1, 1, false, false, true, true, { 3, 2 }));
+    test_cases.emplace_back(new test_mul_mat_fusion_w4a8(GGML_TYPE_NVFP4, GGML_GLU_OP_SWIGLU, 13, 64, 4096, false, 1, 1, false, false, true, true, { 3, 2 }));
+    // 8-bit src1 with 32-row tiles and the weight scale
+    test_cases.emplace_back(new test_mul_mat_fusion_w4a8(GGML_TYPE_NVFP4, GGML_GLU_OP_SWIGLU, 13, 6170, 4096, false, 1, 1, false, false, false, true, { 1, 1 }));
 
     for (auto gate : {GATING_FUNC_SOFTMAX, GATING_FUNC_SIGMOID, GATING_FUNC_SOFTMAX_WEIGHT, GATING_FUNC_SQRT_SOFTPLUS}) {
         for (bool with_norm : {false, true}) {
