@@ -3892,8 +3892,10 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_BAILINGMOE3:
             // VL files carry mrope sections; text-only files keep NORM rope
             return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_MROPE : LLAMA_ROPE_TYPE_NORM;
-        // HY_V4 rotates consecutive pairs, matching the reference implementation
+        // HY_V4 rotates consecutive pairs, matching the reference implementation.
+        // VL files carry rope sections and NeoX ordered rope rows (see conversion/hy_v4.py).
         case LLM_ARCH_HY_V4:
+            return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_IMROPE : LLAMA_ROPE_TYPE_NORM;
         case LLM_ARCH_HY_V4_FLASH:
             return LLAMA_ROPE_TYPE_NORM;
 
