@@ -660,6 +660,19 @@ class LlamaHfVocab(Vocab):
 
         self.fname_tokenizer = fname_tokenizer
 
+        # llama.cpp's SPM tokenizer merges the pair whose result has the highest
+        # score. To reproduce the BPE merge order, score each token by the
+        # negative rank of the first merge that produces it.
+        self.merge_ranks: dict[str, int] = {}
+        for rank, merge in enumerate(tokenizer_model.get('merges', [])):
+            left, right = merge.split(' ', 1) if isinstance(merge, str) else merge
+            self.merge_ranks.setdefault(left + right, rank)
+        # tokens that no merge produces (base symbols, specials) are never preferred
+        self.unmerged_score = -float(max(self.merge_ranks.values()) + 1) if self.merge_ranks else -1000.0
+        self.reverse_vocab = {
+            id: encoded_tok for encoded_tok, id in self.tokenizer.get_vocab().items()
+        }
+
     def hf_tokens(self) -> Iterable[tuple[bytes, float, gguf.TokenType]]:
         assert self.tokenizer is not None
         reverse_vocab = {
@@ -688,9 +701,10 @@ class LlamaHfVocab(Vocab):
         return gguf.TokenType.CONTROL if token_id in special_ids else gguf.TokenType.NORMAL
 
     def get_token_score(self, token_id: int) -> float:
-        # Placeholder for actual logic to determine the token's score
-        # This needs to be implemented based on specific requirements
-        return -1000.0  # Default score
+        rank = self.merge_ranks.get(self.reverse_vocab.get(token_id, ''))
+        if rank is not None:
+            return -float(rank)
+        return self.unmerged_score
 
     def added_tokens(self) -> Iterable[tuple[bytes, float, gguf.TokenType]]:
         for text in self.added_tokens_list:
