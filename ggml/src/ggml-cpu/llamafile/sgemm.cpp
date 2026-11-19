@@ -1515,7 +1515,8 @@ class tinyBLAS_QK_VXE {
                 load(x, v_x);
 
                 // scale and minimum of the 16 groups, 8 groups per vector
-                int16x8_t v_scalel, v_scaleh, v_minl, v_minh;
+                int16x8_t v_scalel, v_scaleh;
+                int16x8_t v_minl, v_minh;
                 load_scale(x, v_scalel, v_scaleh, v_minl, v_minh);
 
                 int16x8_t v_scale[n_group];
@@ -1549,9 +1550,11 @@ class tinyBLAS_QK_VXE {
 
                     for (int32_t j = 0; j < RN; ++j) {
                         const block_q8_K & y = B[ldb * (jj + j) + l];
+
                         const int16_t * y_bsums = y.bsums;
                         const int16x8_t v_bsumsl = vec_xl(0, y_bsums);
                         const int16x8_t v_bsumsh = vec_xl(0, y_bsums + n_group / 2);
+
                         const int32x4_t v_minsl = vec_meadd(v_bsumsl, v_minl, vec_mulo(v_bsumsl, v_minl));
                         const int32x4_t v_minsh = vec_meadd(v_bsumsh, v_minh, vec_mulo(v_bsumsh, v_minh));
                         v_sum[j] = vec_madd(vec_float(v_minsl + v_minsh), vec_splats(-x_dmin * y.d), v_sum[j]);
@@ -1577,66 +1580,88 @@ class tinyBLAS_QK_VXE {
     template <typename T> static float dmin(const T &) { return 0.0f; }
 
     static void load(const block_q2_K & x, int8x16_t * v_x) {
-        const uint8x16_t v_m = vec_splats((uint8_t)0x03);
+        const uint8x16_t v_mask = vec_splats((uint8_t)0x03);
         const uint8_t * x_qs = x.qs;
 
         for (int32_t g = 0; g < n_group; ++g) {
-            const uint8x16_t v_qs = vec_xl(0, x_qs + 16 * (2 * (g / 8) + g % 2));
-            v_x[g] = (int8x16_t)vec_and(vec_sr(v_qs, 2 * (g % 8 / 2)), v_m);
+            const int32_t qs_offset = 16 * (2 * (g / 8) + g % 2);
+            const int32_t qs_shift  = 2 * (g % 8 / 2);
+
+            const uint8x16_t v_qs = vec_xl(0, x_qs + qs_offset);
+            v_x[g] = (int8x16_t)vec_and(vec_sr(v_qs, qs_shift), v_mask);
         }
     }
 
     static void load(const block_q3_K & x, int8x16_t * v_x) {
-        const uint8x16_t v_m = vec_splats((uint8_t)0x03);
-        const uint8x16_t v_1 = vec_splats((uint8_t)0x01);
+        const uint8x16_t v_mask = vec_splats((uint8_t)0x03);
+        const uint8x16_t v_one = vec_splats((uint8_t)0x01);
+
         const uint8_t * x_qs = x.qs;
         const uint8_t * x_hmask = x.hmask;
 
         for (int32_t g = 0; g < n_group; ++g) {
-            const uint8x16_t v_qs = vec_xl(0, x_qs + 16 * (2 * (g / 8) + g % 2));
-            const uint8x16_t v_hmask = vec_xl(0, x_hmask + 16 * (g % 2));
-            const uint8x16_t v_lo = vec_and(vec_sr(v_qs, 2 * (g % 8 / 2)), v_m);
-            const uint8x16_t v_hi = vec_sl(vec_and(vec_sr(v_hmask, g / 2), v_1), 2);
+            const int32_t qs_offset    = 16 * (2 * (g / 8) + g % 2);
+            const int32_t qs_shift     = 2 * (g % 8 / 2);
+            const int32_t hmask_offset = 16 * (g % 2);
+            const int32_t hmask_shift  = g / 2;
+
+            const uint8x16_t v_qs = vec_xl(0, x_qs + qs_offset);
+            const uint8x16_t v_hmask = vec_xl(0, x_hmask + hmask_offset);
+            const uint8x16_t v_lo = vec_and(vec_sr(v_qs, qs_shift), v_mask);
+            const uint8x16_t v_hi = vec_sl(vec_and(vec_sr(v_hmask, hmask_shift), v_one), 2);
             v_x[g] = (int8x16_t)vec_or(v_lo, v_hi) - vec_splats((int8_t)4);
         }
     }
 
     static void load(const block_q4_K & x, int8x16_t * v_x) {
-        const uint8x16_t v_m = vec_splats((uint8_t)0x0F);
+        const uint8x16_t v_mask = vec_splats((uint8_t)0x0F);
         const uint8_t * x_qs = x.qs;
 
         for (int32_t g = 0; g < n_group; ++g) {
-            const uint8x16_t v_qs = vec_xl(0, x_qs + 16 * (2 * (g / 4) + g % 2));
-            v_x[g] = (int8x16_t)(g % 4 < 2 ? vec_and(v_qs, v_m) : vec_sr(v_qs, 4));
+            const int32_t qs_offset = 16 * (2 * (g / 4) + g % 2);
+            const bool    qs_low    = g % 4 < 2;
+
+            const uint8x16_t v_qs = vec_xl(0, x_qs + qs_offset);
+            v_x[g] = (int8x16_t)(qs_low ? vec_and(v_qs, v_mask) : vec_sr(v_qs, 4));
         }
     }
 
     static void load(const block_q5_K & x, int8x16_t * v_x) {
-        const uint8x16_t v_m = vec_splats((uint8_t)0x0F);
-        const uint8x16_t v_1 = vec_splats((uint8_t)0x01);
+        const uint8x16_t v_mask = vec_splats((uint8_t)0x0F);
+        const uint8x16_t v_one = vec_splats((uint8_t)0x01);
         const uint8_t * x_qs = x.qs;
         const uint8_t * x_qh = x.qh;
 
         for (int32_t g = 0; g < n_group; ++g) {
-            const uint8x16_t v_qs = vec_xl(0, x_qs + 16 * (2 * (g / 4) + g % 2));
-            const uint8x16_t v_qh = vec_xl(0, x_qh + 16 * (g % 2));
-            const uint8x16_t v_lo = g % 4 < 2 ? vec_and(v_qs, v_m) : vec_sr(v_qs, 4);
-            const uint8x16_t v_hi = vec_sl(vec_and(vec_sr(v_qh, g / 2), v_1), 4);
+            const int32_t qs_offset = 16 * (2 * (g / 4) + g % 2);
+            const bool    qs_low    = g % 4 < 2;
+            const int32_t qh_offset = 16 * (g % 2);
+            const int32_t qh_shift  = g / 2;
+
+            const uint8x16_t v_qs = vec_xl(0, x_qs + qs_offset);
+            const uint8x16_t v_qh = vec_xl(0, x_qh + qh_offset);
+            const uint8x16_t v_lo = qs_low ? vec_and(v_qs, v_mask) : vec_sr(v_qs, 4);
+            const uint8x16_t v_hi = vec_sl(vec_and(vec_sr(v_qh, qh_shift), v_one), 4);
             v_x[g] = (int8x16_t)vec_or(v_lo, v_hi);
         }
     }
 
     static void load(const block_q6_K & x, int8x16_t * v_x) {
-        const uint8x16_t v_m4 = vec_splats((uint8_t)0x0F);
-        const uint8x16_t v_m2 = vec_splats((uint8_t)0x03);
+        const uint8x16_t v_mask4 = vec_splats((uint8_t)0x0F);
+        const uint8x16_t v_mask2 = vec_splats((uint8_t)0x03);
         const uint8_t * x_ql = x.ql;
         const uint8_t * x_qh = x.qh;
 
         for (int32_t g = 0; g < n_group; ++g) {
-            const uint8x16_t v_ql = vec_xl(0, x_ql + 16 * (4 * (g / 8) + 2 * (g % 4 / 2) + g % 2));
-            const uint8x16_t v_qh = vec_xl(0, x_qh + 16 * (2 * (g / 8) + g % 2));
-            const uint8x16_t v_lo = g % 8 < 4 ? vec_and(v_ql, v_m4) : vec_sr(v_ql, 4);
-            const uint8x16_t v_hi = vec_sl(vec_and(vec_sr(v_qh, 2 * (g % 8 / 2)), v_m2), 4);
+            const int32_t ql_offset = 16 * (4 * (g / 8) + 2 * (g % 4 / 2) + g % 2);
+            const bool    ql_low    = g % 8 < 4;
+            const int32_t qh_offset = 16 * (2 * (g / 8) + g % 2);
+            const int32_t qh_shift  = 2 * (g % 8 / 2);
+
+            const uint8x16_t v_ql = vec_xl(0, x_ql + ql_offset);
+            const uint8x16_t v_qh = vec_xl(0, x_qh + qh_offset);
+            const uint8x16_t v_lo = ql_low ? vec_and(v_ql, v_mask4) : vec_sr(v_ql, 4);
+            const uint8x16_t v_hi = vec_sl(vec_and(vec_sr(v_qh, qh_shift), v_mask2), 4);
             v_x[g] = (int8x16_t)vec_or(v_lo, v_hi) - vec_splats((int8_t)32);
         }
     }
