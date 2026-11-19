@@ -22,6 +22,10 @@
 		/** With `secondary`: filled like the stop button it stands beside, not bare. */
 		filled?: boolean;
 		onMicClick?: () => void;
+		/** A mouse or the focus came to the button: a press may follow, the microphone can open. */
+		onPrepare?: () => void;
+		/** It left again without a press. */
+		onPrepareEnd?: () => void;
 	}
 
 	let {
@@ -34,6 +38,8 @@
 		isRecording = false,
 		micWarning = null,
 		onMicClick,
+		onPrepare,
+		onPrepareEnd,
 		secondary = false,
 		unavailableReason = null
 	}: Props = $props();
@@ -53,6 +59,15 @@
 
 		pressedAt = performance.now();
 		onMicClick?.();
+	}
+
+	// a touch presses at once, so only a mouse, a pen or the keyboard come ahead of the press
+	function handlePointerEnter(event: PointerEvent) {
+		if (event.pointerType !== 'touch' && !isRecording) onPrepare?.();
+	}
+
+	function handlePointerLeave(event: PointerEvent) {
+		if (event.pointerType !== 'touch') onPrepareEnd?.();
 	}
 
 	function handleClick() {
@@ -85,8 +100,12 @@
 						? 'bg-surface-warning text-fg-warning hover:bg-surface-warning'
 						: ''}"
 				disabled={disabled || isLoading || !!unavailableReason}
+				onblur={() => onPrepareEnd?.()}
 				onclick={handleClick}
+				onfocus={() => !isRecording && onPrepare?.()}
 				onpointerdown={handlePointerDown}
+				onpointerenter={handlePointerEnter}
+				onpointerleave={handlePointerLeave}
 				type="button"
 				variant={isRecording || showWarning
 					? 'ghost'

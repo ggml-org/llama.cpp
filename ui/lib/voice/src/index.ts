@@ -46,6 +46,8 @@ export {
 export {
 	listMicrophones,
 	type Microphone,
+	microphoneAllowed,
+	microphoneRequest,
 	pickMicrophone,
 	resolveMicrophone,
 	VOICE_MICROPHONE_AUTO,
@@ -64,3 +66,4 @@ export {
 export { transcribeClip } from './transcribe.js';
 export type * from './types.js';
 export { encodeWav } from './wav.js';
+export { MicrophoneWarmup } from './warm-microphone.js';

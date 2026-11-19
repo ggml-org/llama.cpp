@@ -13,6 +13,7 @@ import {
 import { VoiceCaptureError } from './errors.js';
 import { normalizeSpeech, SpeechGain } from './gain.js';
 import { LevelHistory, rms, rmsToLevel } from './levels.js';
+import { microphoneRequest } from './microphone.js';
 import { concatPcm16, createResampler, floatToPcm16, type Resampler } from './pcm.js';
 import { createPcmTap, type PcmTap } from './pcm-tap.js';
 import { computePeaks } from './peaks.js';
@@ -71,6 +72,8 @@ export class VoiceCapture {
 	private pcmListeners = new Set<VoicePcmListener>();
 	private readonly peaksCount: number;
 	private quiet = false;
+	// recorded time from which the speech has stayed too quiet, null while it is not
+	private quietSinceMs: number | null = null;
 	private quietListeners = new Set<VoiceQuietListener>();
 	private recordedSamples = 0;
 
@@ -157,6 +160,7 @@ export class VoiceCapture {
 		this.recordedSamples = 0;
 		this.history.reset();
 		this.gain = new SpeechGain(VOICE_GAIN.MAX, this.sampleRate);
+		this.quietSinceMs = null;
 		this.setQuiet(false);
 
 		let stream: MediaStream | null = this.options.stream ?? null;
@@ -173,15 +177,7 @@ export class VoiceCapture {
 			// resumed now, while the click still allows it: the microphone may take a while
 			if (context.state === 'suspended') context.resume().catch(() => {});
 
-			const deviceId = this.options.deviceId;
-
-			stream ??= await navigator.mediaDevices.getUserMedia({
-				audio: {
-					...VOICE_MICROPHONE_CONSTRAINTS,
-					...(deviceId ? { deviceId } : {}),
-					...this.options.constraints
-				}
-			});
+			stream ??= await navigator.mediaDevices.getUserMedia(microphoneRequest(this.options));
 			timing.mark('microphone');
 			timing.note(
 				checkProcessing(stream, { ...VOICE_MICROPHONE_CONSTRAINTS, ...this.options.constraints })
@@ -283,7 +279,7 @@ export class VoiceCapture {
 		this.partial = [];
 		this.chunks.push(chunk);
 		this.recordedSamples += chunk.length;
-		this.setQuiet(this.gain?.tooQuiet ?? false);
+		this.followQuiet(this.gain?.tooQuiet ?? false);
 
 		const sent = boost && streamed !== samples ? floatToPcm16(streamed) : chunk;
 
@@ -302,6 +298,26 @@ export class VoiceCapture {
 
 			if (this.partial.length === this.chunkSamples) this.flushPartial();
 		}
+	}
+
+	/**
+	 * Tells that the speech is too quiet only once it has stayed so for a while: the first
+	 * words can be quiet while the microphone settles, and a warning that comes and goes
+	 * helps nobody. It clears at once.
+	 */
+	private followQuiet(quiet: boolean): void {
+		if (!quiet) {
+			this.quietSinceMs = null;
+			this.setQuiet(false);
+
+			return;
+		}
+
+		const recordedMs = (this.recordedSamples / this.sampleRate) * 1000;
+
+		this.quietSinceMs ??= recordedMs;
+
+		if (recordedMs - this.quietSinceMs >= VOICE_GAIN.QUIET_HOLD_MS) this.setQuiet(true);
 	}
 
 	private setQuiet(quiet: boolean): void {

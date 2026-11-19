@@ -1,6 +1,7 @@
 import {
 	resolveMicrophone,
 	VOICE_MICROPHONE_AUTO,
+	type VoiceCaptureOptions,
 	type VoiceServerContext,
 	type VoiceSessionOptions
 } from '@ggml-org/llama-voice';
@@ -24,8 +25,14 @@ export interface VoiceSessionRequest {
 	constraints?: MediaTrackConstraints;
 }
 
-/** The session options voice features share: where to capture from, and how to transcribe. */
-export type VoiceSessionWiring = Pick<VoiceSessionOptions, 'capture' | 'realtime' | 'transcribe'>;
+/**
+ * The session options voice features share: where to capture from, and how to transcribe.
+ * The capture is always plain options, so a feature can also open a VoiceCapture of its own
+ * with them.
+ */
+export type VoiceSessionWiring = Pick<VoiceSessionOptions, 'realtime' | 'transcribe'> & {
+	capture: VoiceCaptureOptions;
+};
 
 /**
  * **VoiceService** - How the voice engine (@ggml-org/llama-voice) reaches this app's server and settings

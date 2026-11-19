@@ -14,6 +14,7 @@
 import {
 	createDictation,
 	describeMicrophoneError,
+	MicrophoneWarmup,
 	VoiceCaptureError,
 	type VoiceRecorderStatus,
 	type VoiceSessionOptions,
@@ -115,6 +116,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 	// bumped by cancel, so a recording still starting or stopping is dropped
 	let generation = 0;
 
+	const warmup = new MicrophoneWarmup();
 	const dictation = createDictation({
 		getCaretOffset: options.getCaretOffset,
 		getValue: options.getValue,
@@ -160,13 +162,37 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		options.setCaretOffset(dictation.end);
 	}
 
+	/** The session options of a recording started now: the settings, the server and the mode. */
+	function wiringFor(mode: VoiceMode, model: string | null) {
+		const transcribe =
+			mode === VoiceMode.DICTATION || config[SETTINGS_KEYS.VOICE_TRANSCRIBE_MESSAGES] !== false;
+
+		return VoiceService.sessionOptions(config, { isRouter, model, transcribe });
+	}
+
+	/**
+	 * Opens the microphone while the pointer or the focus is on its button, if the page may
+	 * already use it: by the click it has settled, so the first words are not quiet, and the
+	 * recording starts at once. Let go shortly after the pointer leaves (unprepare).
+	 */
+	async function prepare() {
+		if (!recorder || state !== 'idle' || resolution.mode === VoiceMode.UNAVAILABLE) return;
+
+		const wiring = await wiringFor(resolution.mode, resolution.transcriptionModel);
+
+		// a press that came meanwhile asked for its own microphone
+		if (state === 'idle') warmup.open(wiring.capture);
+	}
+
+	function unprepare() {
+		warmup.release();
+	}
+
 	async function start() {
 		if (!recorder || state !== 'idle' || resolution.mode === VoiceMode.UNAVAILABLE) return;
 
 		const mode = resolution.mode;
 		const model = resolution.transcriptionModel;
-		const transcribe =
-			mode === VoiceMode.DICTATION || config[SETTINGS_KEYS.VOICE_TRANSCRIBE_MESSAGES] !== false;
 
 		if (resolution.mode === VoiceMode.DICTATION && resolution.separateModel && !hintSeen) {
 			hintSeen = true;
@@ -181,10 +207,13 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		const run = ++generation;
 
 		try {
-			const wiring = await VoiceService.sessionOptions(config, { isRouter, model, transcribe });
+			const wiring = await wiringFor(mode, model);
+			// the microphone the hover opened, when it is open for the same options
+			const stream = await warmup.take(wiring.capture);
 
 			await recorder.start({
 				...wiring,
+				capture: { ...wiring.capture, ...(stream ? { stream } : {}) },
 				// a voice message's text reaches the message only once the user made it editable
 				onText: (text) => dictation.write(text)
 			});
@@ -286,6 +315,8 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 	}
 
 	onDestroy(() => {
+		warmup.drop();
+
 		if (state !== 'idle') cancel();
 	});
 
@@ -328,6 +359,8 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		get mode() {
 			return state === 'idle' ? resolution.mode : recordingMode;
 		},
+		/** The pointer or the focus is on the microphone button: see prepare(). */
+		prepare,
 		/** The recording's speech is too quiet even at the highest gain: the form says so. */
 		get quiet() {
 			return state === 'recording' && (recorder?.quiet ?? false);
@@ -350,6 +383,8 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		stop,
 		get unavailableReason() {
 			return unavailableReason;
-		}
+		},
+		/** The pointer or the focus left the microphone button without a press. */
+		unprepare
 	};
 }

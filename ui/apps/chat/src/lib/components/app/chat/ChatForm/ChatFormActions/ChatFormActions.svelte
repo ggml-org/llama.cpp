@@ -40,6 +40,10 @@
 			hint: string | null;
 			show: boolean;
 			unavailableReason: string | null;
+			/** The pointer or the focus came to the microphone button, a press may follow */
+			prepare?: () => void;
+			/** It left without a press */
+			unprepare?: () => void;
 		};
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
@@ -213,6 +217,8 @@
 			hint={voice?.hint}
 			{micWarning}
 			{onMicClick}
+			onPrepare={voice?.prepare}
+			onPrepareEnd={voice?.unprepare}
 			secondary
 			unavailableReason={voice?.unavailableReason}
 		/>
@@ -250,6 +256,8 @@
 			hint={voice?.hint}
 			{micWarning}
 			{onMicClick}
+			onPrepare={voice?.prepare}
+			onPrepareEnd={voice?.unprepare}
 			secondary
 		/>
 	{/if}

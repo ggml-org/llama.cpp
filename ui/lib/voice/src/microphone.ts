@@ -6,6 +6,8 @@
  * other value is a device id from enumerateDevices().
  */
 
+import { VOICE_MICROPHONE_CONSTRAINTS } from './constants.js';
+
 export const VOICE_MICROPHONE_AUTO = 'auto';
 export const VOICE_MICROPHONE_DEFAULT = 'default';
 
@@ -69,5 +71,38 @@ export async function resolveMicrophone(choice: string): Promise<string | undefi
 		return pickMicrophone(await navigator.mediaDevices.enumerateDevices(), choice);
 	} catch {
 		return undefined;
+	}
+}
+
+/**
+ * What a recording asks the browser for: the raw signal (VOICE_MICROPHONE_CONSTRAINTS)
+ * with the caller's processing on top, from `deviceId` when one is picked. The same
+ * options always give the same request, so a microphone opened ahead (MicrophoneWarmup)
+ * can be told apart from one the recording would ask for differently.
+ */
+export function microphoneRequest(options: {
+	constraints?: MediaTrackConstraints;
+	deviceId?: string;
+}): MediaStreamConstraints {
+	return {
+		audio: {
+			...VOICE_MICROPHONE_CONSTRAINTS,
+			...(options.deviceId ? { deviceId: options.deviceId } : {}),
+			...options.constraints
+		}
+	};
+}
+
+/**
+ * Whether the page may use the microphone without asking: access was granted before.
+ * False where the browser can't tell (no Permissions API, or no `microphone` name in it).
+ */
+export async function microphoneAllowed(): Promise<boolean> {
+	try {
+		const status = await navigator.permissions?.query({ name: 'microphone' as PermissionName });
+
+		return status?.state === 'granted';
+	} catch {
+		return false;
 	}
 }

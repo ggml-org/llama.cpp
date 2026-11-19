@@ -872,8 +872,10 @@
 						voice={{
 							action: voice.label,
 							hint: voice.hint,
+							prepare: () => void voice.prepare(),
 							show: voice.showButton,
-							unavailableReason: voice.unavailableReason
+							unavailableReason: voice.unavailableReason,
+							unprepare: voice.unprepare
 						}}
 						workingDirectory={cwd}
 					/>

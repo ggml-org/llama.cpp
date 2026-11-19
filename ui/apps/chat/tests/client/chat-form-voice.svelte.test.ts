@@ -11,7 +11,7 @@ import { ServerRole, VoiceInputMode } from '#lib/enums/index.ts';
 import { voiceTranscriptsStore } from '#lib/stores/index.ts';
 import { parseFilesToMessageExtras } from '#lib/utils/browser-only.ts';
 import { tick } from 'svelte';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 
@@ -156,6 +156,60 @@ describe('the microphone', () => {
 		await expect.element(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
 		expect(screen.container.innerHTML).not.toContain(VOICE_MODE_MESSAGE.voiceMessage);
 		expect(screen.container.innerHTML).not.toContain(VOICE_MODE_MESSAGE.dictate);
+	});
+});
+
+describe('a pointer on the microphone', () => {
+	/** Lets the page use the microphone without asking, with a live stream as the device. */
+	function grantMicrophone() {
+		const context = new AudioContext();
+		const stream = context.createMediaStreamDestination().stream;
+		const query = vi
+			.spyOn(navigator.permissions, 'query')
+			.mockResolvedValue({ state: 'granted' } as PermissionStatus);
+		const getUserMedia = vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockResolvedValue(stream);
+		const previous = restore;
+
+		restore = () => {
+			previous?.();
+			query.mockRestore();
+			getUserMedia.mockRestore();
+			void context.close();
+		};
+
+		return { getUserMedia, stream };
+	}
+
+	it('opens the microphone ahead of the press, and the recording takes it', async () => {
+		seed(true);
+
+		const { getUserMedia, stream } = grantMicrophone();
+		const { recorder, screen } = await renderForm();
+		const mic = screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last();
+
+		await mic.hover();
+		await expect.poll(() => getUserMedia.mock.calls.length).toBe(1);
+
+		await mic.click();
+		await expect.poll(() => recorder.status).toBe('recording');
+		expect((recorder.options?.capture as { stream?: MediaStream }).stream).toBe(stream);
+		// handed over, not asked for again
+		expect(getUserMedia).toHaveBeenCalledOnce();
+	});
+
+	it('lets the microphone go when the pointer leaves without a press', async () => {
+		seed(true);
+
+		const { getUserMedia, stream } = grantMicrophone();
+		const { screen } = await renderForm();
+
+		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last().hover();
+		await expect.poll(() => getUserMedia.mock.calls.length).toBe(1);
+
+		await userEvent.unhover(
+			screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last()
+		);
+		await expect.poll(() => stream.getAudioTracks()[0].readyState, { timeout: 4000 }).toBe('ended');
 	});
 });
 

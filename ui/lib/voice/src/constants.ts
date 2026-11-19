@@ -147,6 +147,8 @@ export const VOICE_GAIN = {
 	FRAME_MS: 20,
 	/** The soft limiter's knee: louder samples bend towards full scale */
 	KNEE: 0.8,
+	/** How long speech must stay too quiet before the recording says so, as the microphone may settle */
+	QUIET_HOLD_MS: 2000,
 	/** The most it is raised: 8x, +18 dB, so a far-off voice does not bring the room up with it */
 	MAX: 8,
 	/** How much of the way to its target the streaming gain rises per speech block */
@@ -158,3 +160,9 @@ export const VOICE_GAIN = {
 	/** Speech below this even at the highest gain (about -32 dBFS) reads as too quiet */
 	TOO_QUIET_RMS: 0.025
 } as const;
+
+/**
+ * How long a microphone opened ahead of a recording (MicrophoneWarmup) stays open once
+ * the pointer leaves the button, in case it comes back to press it.
+ */
+export const VOICE_WARMUP_RELEASE_MS = 1500;
