@@ -190,24 +190,32 @@ ggml_tensor * llama_model_inkling2::graph::convolve(ggml_tensor * cur, ggml_tens
     return ggml_scale(ctx0, ggml_add(ctx0, cur, out), 1.0f/sqrtf((dynamic ? 2 : 1)*kernel + 1));
 }
 
-llama_model_inkling2::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
+ggml_tensor * llama_model_inkling2::graph::control(ggml_tensor * cur, ggml_tensor * message, const loop_layer & loop, int ctrl) {
+    auto * gate = ggml_concat(ctx0, ggml_rms_norm(ctx0, cur, 1e-6f), ggml_rms_norm(ctx0, message, 1e-6f), 0);
+    gate = build_lora_mm(loop.ctrl_down[ctrl], gate);
+    auto * gain = ggml_tanh(ctx0, build_lora_mm(loop.ctrl_gain[ctrl], gate));
+    auto * forget = ggml_tanh(ctx0, build_lora_mm(loop.ctrl_forget[ctrl], gate));
+    // (1 - forget)*cur + gain*message
+    return ggml_add(ctx0, ggml_sub(ctx0, cur, ggml_mul(ctx0, forget, cur)), ggml_mul(ctx0, gain, message));
+}
+
+ggml_tensor * llama_model_inkling2::graph::build_inputs() {
     auto * inp = build_inp_mem_hybrid_iswa();
-    auto * attn = inp->get_attn();
-    auto * recr = inp->get_recr();
+    attn = inp->get_attn();
+    recr = inp->get_recr();
     auto * positions = build_inp_pos();
-    auto * out_ids = build_inp_out_ids();
+    out_ids = build_inp_out_ids();
     auto rel = std::make_unique<llm_graph_input_inkling2_pos>();
     rel->cache[0] = attn->mctx->get_base();
     rel->cache[1] = attn->mctx->get_swa();
     rel->extent[0] = hparams.n_relative_extent;
     rel->extent[1] = hparams.n_swa;
-    ggml_tensor * distances[2];
     for (int i = 0; i < 2; ++i) {
         distances[i] = rel->distance[i] = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, rel->cache[i]->get_n_kv(), n_tokens);
         ggml_set_input(distances[i]);
     }
     res->add_input(std::move(rel));
-    auto * tau = ggml_scale_bias(ctx0, ggml_cast(ctx0, positions, GGML_TYPE_F32), 1.0f, 1.0f);
+    tau = ggml_scale_bias(ctx0, ggml_cast(ctx0, positions, GGML_TYPE_F32), 1.0f, 1.0f);
     tau = ggml_log(ctx0, ggml_clamp(ctx0, ggml_scale(ctx0, tau, 1.0f/hparams.n_log_scale_floor), 1.0f, INFINITY));
     tau = ggml_reshape_3d(ctx0, ggml_scale_bias(ctx0, tau, hparams.f_log_scale_alpha, 1.0f), 1, 1, n_tokens);
     auto * cur = build_inp_embd(model.tok_embd);
@@ -215,90 +223,113 @@ llama_model_inkling2::graph::graph(const llm_graph_params & params) : llm_graph_
     if (ubatch.token) {
         cur = build_norm(cur, model.tok_norm, nullptr, LLM_NORM_RMS, -1);
     }
-    std::vector<ggml_tensor *> blocks;
-    for (int il = 0; il < n_layer; ++il) {
-        const auto & l = model.layers[il];
-        const bool swa = hparams.is_swa(il);
-        const int64_t nh = hparams.n_head(il);
-        const int64_t nk = hparams.n_head_kv(il);
-        const int64_t hd = hparams.n_embd_head_k(il);
-        const int64_t kv = nk*hd;
-        auto * state = recr->mctx->get_r_l(il);
-        auto * history = build_rs(recr, state, hparams.n_embd_r(), ubatch.n_seqs);
-        history = ggml_reshape_3d(ctx0, history, hparams.n_shortconv_l_cache - 1, hparams.n_sconv_channels, ubatch.n_seqs);
-        auto * residual = cur;
-        ggml_tensor * inputs[3] = {cur, cur, cur};
-        if (l.attn_res_query) {
-            auto * mixed = mix(blocks, cur, l.attn_res_query);
-            for (int j = 0; j < 3; ++j) {
-                inputs[j] = ggml_cont(ctx0, ggml_view_2d(ctx0, mixed, n_embd, n_tokens, mixed->nb[2], (swa ? 0 : j)*mixed->nb[1]));
-            }
+    return cur;
+}
+
+ggml_tensor * llama_model_inkling2::graph::build_layer(int il, int ip, ggml_tensor * cur, std::vector<ggml_tensor *> & blocks,
+        ggml_tensor * messages, const loop_layer * loop) {
+    GGML_ASSERT(!messages == !loop);
+    auto message = [&](int ctrl) {
+        return ggml_cont(ctx0, ggml_view_2d(ctx0, messages, n_embd, n_tokens, messages->nb[2], ctrl*messages->nb[1]));
+    };
+    const auto & l = model.layers[il];
+    const bool swa = hparams.is_swa(il);
+    const int64_t nh = hparams.n_head(il);
+    const int64_t nk = hparams.n_head_kv(il);
+    const int64_t hd = hparams.n_embd_head_k(il);
+    const int64_t kv = nk*hd;
+    auto * state = recr->mctx->get_r_l(il);
+    auto * history = build_rs(recr, state, hparams.n_embd_r(), ubatch.n_seqs);
+    history = ggml_reshape_3d(ctx0, history, hparams.n_shortconv_l_cache - 1, hparams.n_sconv_channels, ubatch.n_seqs);
+    auto * residual = cur;
+    ggml_tensor * inputs[3] = {cur, cur, cur};
+    if (l.attn_res_query) {
+        auto * mixed = mix(blocks, cur, l.attn_res_query);
+        for (int j = 0; j < 3; ++j) {
+            inputs[j] = ggml_cont(ctx0, ggml_view_2d(ctx0, mixed, n_embd, n_tokens, mixed->nb[2], (swa ? 0 : j)*mixed->nb[1]));
         }
-        if (swa) {
-            inputs[0] = build_norm(inputs[0], l.attn_norm, nullptr, LLM_NORM_RMS, il);
-            inputs[1] = inputs[2] = inputs[0];
-        } else {
-            inputs[0] = build_norm(inputs[0], l.attn_q_inp_norm, nullptr, LLM_NORM_RMS, il);
-            inputs[1] = build_norm(inputs[1], l.attn_k_inp_norm, nullptr, LLM_NORM_RMS, il);
-            inputs[2] = build_norm(inputs[2], l.attn_v_inp_norm, nullptr, LLM_NORM_RMS, il);
-        }
-        auto * q = build_lora_mm(l.wq, inputs[0]);
-        auto * k = convolve(build_lora_mm(l.wk, inputs[1]), l.attn_k_conv,
-                swa ? nullptr : build_lora_mm(l.attn_k_conv_proj, inputs[1]), state, history, recr, 0);
-        auto * v = convolve(build_lora_mm(l.wv, inputs[2]), l.attn_v_conv,
-                swa ? nullptr : build_lora_mm(l.attn_v_conv_proj, inputs[2]), state, history, recr, kv);
-        auto * r = build_lora_mm(l.attn_rel, inputs[0]);
-        q = clip(ggml_reshape_3d(ctx0, q, hd, nh, n_tokens), l.attn_q_clip, hparams.f_qk_clip);
-        k = clip(ggml_reshape_3d(ctx0, k, hd, nk, n_tokens), nullptr, hparams.f_qk_clip);
-        v = ggml_rms_norm(ctx0, ggml_reshape_3d(ctx0, v, hd, nk, n_tokens), hparams.f_norm_rms_eps);
-        r = clip(ggml_reshape_3d(ctx0, r, hparams.n_relative, nh, n_tokens), l.attn_rel_clip, hparams.f_relative_clip);
-        if (!swa) {
-            q = ggml_mul(ctx0, q, tau);
-            r = ggml_mul(ctx0, r, tau);
-        }
-        auto * mask = swa ? attn->self_attn_mask_swa.raw : attn->self_attn_mask.raw;
-        const int64_t streams = mask->ne[3];
-        const int64_t n_kv = distances[swa]->ne[0];
-        auto * sinks = build_lora_mm(l.attn_sink_proj, inputs[0]);
-        // project r on the bias table first, then gather by distance: only the gathered bias is n_kv x n_tokens x nh
-        auto * table = ggml_mul_mat(ctx0, ggml_pad(ctx0, l.attn_rel_bias, 0, 1, 0, 0), r);
-        if (cparams.flash_attn) {
-            // exp(s - t)/(1 + sum(exp(s - t))) = exp(s)/(exp(t) + sum(exp(s))).
-            table = ggml_sub(ctx0, table, ggml_reshape_3d(ctx0, sinks, 1, nh, n_tokens));
-        } else {
-            // build_attn scales the bias along with QK; FA adds the mask after scaling QK.
-            table = ggml_scale(ctx0, table, sqrtf(hd));
-        }
-        table = ggml_cont(ctx0, ggml_permute(ctx0, table, 1, 0, 2, 3));
-        auto * bias = ggml_get_rows(ctx0, table, distances[swa]);
-        bias = ggml_cont(ctx0, ggml_permute(ctx0, ggml_reshape_4d(ctx0, bias, nh, n_kv, n_tokens/streams, streams), 2, 0, 1, 3));
-        ggml_tensor * fa_mask = nullptr;
-        if (cparams.flash_attn) {
-            fa_mask = ggml_cast(ctx0, ggml_add(ctx0, bias, ggml_cast(ctx0, mask, GGML_TYPE_F32)), GGML_TYPE_F16);
-            sinks = ggml_fill(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, nh), 0.0f);
-            bias = nullptr;
-        } else {
-            sinks = ggml_reshape_4d(ctx0, ggml_cont(ctx0, ggml_permute(ctx0,
-                    ggml_reshape_3d(ctx0, sinks, nh, n_tokens/streams, streams), 1, 0, 2, 3)), 1, n_tokens/streams, nh, streams);
-        }
-        cur = build_attn(attn, nullptr, nullptr, nullptr, q, k, v, bias, sinks, nullptr, 1.0f/sqrtf(hd), il, fa_mask);
-        cur = ggml_mul(ctx0, cur, ggml_sigmoid(ctx0, build_lora_mm(l.wqkv_gate, inputs[0])));
-        cur = convolve(build_lora_mm(l.wo, cur), l.attn_post_conv, nullptr, state, history, recr, 2*kv);
-        if (il % hparams.attn_res_block_size == 0) {
-            blocks.push_back(residual);
-        } else {
-            cur = ggml_add(ctx0, residual, cur);
-        }
-        residual = cur;
-        cur = ggml_reshape_2d(ctx0, mix(blocks, cur, l.ffn_res_query), n_embd, n_tokens);
-        cur = build_norm(cur, l.ffn_norm, nullptr, LLM_NORM_RMS, il);
-        cur = build_moe_ffn(cur, l.ffn_gate_inp, nullptr, nullptr, l.ffn_down_exps, l.ffn_exp_probs_b,
-                hparams.n_expert, hparams.n_expert_used(il), LLM_FFN_SITU, true, hparams.expert_weights_scale,
-                LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID, il, nullptr, l.ffn_gate_up_exps);
-        cur = convolve(cur, l.ffn_post_conv, nullptr, state, history, recr, 2*kv + n_embd);
-        cur = ggml_add(ctx0, residual, cur);
-        cb(cur, "l_out", il);
     }
+    if (messages) {
+        // the messages make the q, k and v inputs of a sliding layer differ
+        for (int j = 0; j < 3; ++j) {
+            inputs[j] = control(inputs[j], message(LOOP_CTRL_Q + j), *loop, LOOP_CTRL_Q + j);
+        }
+    }
+    if (swa && messages) {
+        for (int j = 0; j < 3; ++j) {
+            inputs[j] = build_norm(inputs[j], l.attn_norm, nullptr, LLM_NORM_RMS, il);
+        }
+    } else if (swa) {
+        inputs[0] = build_norm(inputs[0], l.attn_norm, nullptr, LLM_NORM_RMS, il);
+        inputs[1] = inputs[2] = inputs[0];
+    } else {
+        inputs[0] = build_norm(inputs[0], l.attn_q_inp_norm, nullptr, LLM_NORM_RMS, il);
+        inputs[1] = build_norm(inputs[1], l.attn_k_inp_norm, nullptr, LLM_NORM_RMS, il);
+        inputs[2] = build_norm(inputs[2], l.attn_v_inp_norm, nullptr, LLM_NORM_RMS, il);
+    }
+    auto * q = build_lora_mm(l.wq, inputs[0]);
+    auto * k = convolve(build_lora_mm(l.wk, inputs[1]), l.attn_k_conv,
+            swa ? nullptr : build_lora_mm(l.attn_k_conv_proj, inputs[1]), state, history, recr, 0);
+    auto * v = convolve(build_lora_mm(l.wv, inputs[2]), l.attn_v_conv,
+            swa ? nullptr : build_lora_mm(l.attn_v_conv_proj, inputs[2]), state, history, recr, kv);
+    auto * r = build_lora_mm(l.attn_rel, inputs[0]);
+    q = clip(ggml_reshape_3d(ctx0, q, hd, nh, n_tokens), l.attn_q_clip, hparams.f_qk_clip);
+    k = clip(ggml_reshape_3d(ctx0, k, hd, nk, n_tokens), nullptr, hparams.f_qk_clip);
+    v = ggml_rms_norm(ctx0, ggml_reshape_3d(ctx0, v, hd, nk, n_tokens), hparams.f_norm_rms_eps);
+    r = clip(ggml_reshape_3d(ctx0, r, hparams.n_relative, nh, n_tokens), l.attn_rel_clip, hparams.f_relative_clip);
+    if (!swa) {
+        q = ggml_mul(ctx0, q, tau);
+        r = ggml_mul(ctx0, r, tau);
+    }
+    auto * mask = swa ? attn->self_attn_mask_swa.raw : attn->self_attn_mask.raw;
+    const int64_t streams = mask->ne[3];
+    const int64_t n_kv = distances[swa]->ne[0];
+    auto * sinks = build_lora_mm(l.attn_sink_proj, inputs[0]);
+    // project r on the bias table first, then gather by distance: only the gathered bias is n_kv x n_tokens x nh
+    auto * table = ggml_mul_mat(ctx0, ggml_pad(ctx0, l.attn_rel_bias, 0, 1, 0, 0), r);
+    if (cparams.flash_attn) {
+        // exp(s - t)/(1 + sum(exp(s - t))) = exp(s)/(exp(t) + sum(exp(s))).
+        table = ggml_sub(ctx0, table, ggml_reshape_3d(ctx0, sinks, 1, nh, n_tokens));
+    } else {
+        // build_attn scales the bias along with QK; FA adds the mask after scaling QK.
+        table = ggml_scale(ctx0, table, sqrtf(hd));
+    }
+    table = ggml_cont(ctx0, ggml_permute(ctx0, table, 1, 0, 2, 3));
+    auto * bias = ggml_get_rows(ctx0, table, distances[swa]);
+    bias = ggml_cont(ctx0, ggml_permute(ctx0, ggml_reshape_4d(ctx0, bias, nh, n_kv, n_tokens/streams, streams), 2, 0, 1, 3));
+    ggml_tensor * fa_mask = nullptr;
+    if (cparams.flash_attn) {
+        fa_mask = ggml_cast(ctx0, ggml_add(ctx0, bias, ggml_cast(ctx0, mask, GGML_TYPE_F32)), GGML_TYPE_F16);
+        sinks = ggml_fill(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, nh), 0.0f);
+        bias = nullptr;
+    } else {
+        sinks = ggml_reshape_4d(ctx0, ggml_cont(ctx0, ggml_permute(ctx0,
+                ggml_reshape_3d(ctx0, sinks, nh, n_tokens/streams, streams), 1, 0, 2, 3)), 1, n_tokens/streams, nh, streams);
+    }
+    cur = build_attn(attn, nullptr, nullptr, nullptr, q, k, v, bias, sinks, nullptr, 1.0f/sqrtf(hd), il, fa_mask);
+    cur = ggml_mul(ctx0, cur, ggml_sigmoid(ctx0, build_lora_mm(l.wqkv_gate, inputs[0])));
+    cur = convolve(build_lora_mm(l.wo, cur), l.attn_post_conv, nullptr, state, history, recr, 2*kv);
+    if (ip % hparams.attn_res_block_size == 0) {
+        blocks.push_back(residual);
+    } else {
+        cur = ggml_add(ctx0, residual, cur);
+    }
+    residual = cur;
+    cur = ggml_reshape_2d(ctx0, mix(blocks, cur, l.ffn_res_query), n_embd, n_tokens);
+    if (messages) {
+        cur = control(cur, message(LOOP_CTRL_FFN), *loop, LOOP_CTRL_FFN);
+    }
+    cur = build_norm(cur, l.ffn_norm, nullptr, LLM_NORM_RMS, il);
+    cur = build_moe_ffn(cur, l.ffn_gate_inp, nullptr, nullptr, l.ffn_down_exps, l.ffn_exp_probs_b,
+            hparams.n_expert, hparams.n_expert_used(il), LLM_FFN_SITU, true, hparams.expert_weights_scale,
+            LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID, il, nullptr, l.ffn_gate_up_exps);
+    cur = convolve(cur, l.ffn_post_conv, nullptr, state, history, recr, 2*kv + n_embd);
+    cur = ggml_add(ctx0, residual, cur);
+    cb(cur, "l_out", il);
+    return cur;
+}
+
+void llama_model_inkling2::graph::build_output(ggml_tensor * cur, const std::vector<ggml_tensor *> & blocks) {
     cur = ggml_reshape_2d(ctx0, mix(blocks, cur, model.output_res_query), n_embd, n_tokens);
     cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
     if (out_ids) {
@@ -312,4 +343,13 @@ llama_model_inkling2::graph::graph(const llm_graph_params & params) : llm_graph_
     cur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, hparams.n_vocab_unpadded, cur->ne[1], cur->nb[1], 0));
     res->t_logits = cur;
     cb(cur, "result_output", -1);
+}
+
+llama_model_inkling2::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
+    auto * cur = build_inputs();
+    std::vector<ggml_tensor *> blocks;
+    for (int il = 0; il < n_layer; ++il) {
+        cur = build_layer(il, il, cur, blocks);
+    }
+    build_output(cur, blocks);
 }
