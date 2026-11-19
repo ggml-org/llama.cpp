@@ -2,7 +2,7 @@
 	The chat form's actions row while it records: Llama UI's VoiceRecordingBar with the form's labels and its
 	microphone button as the stop button. A voice message's text, when the model streams it, runs under the waveform;
 	dictated text goes into the message instead. After a dictation that streamed nothing, it waits for the text in
-	place of the waveform. Speech that stays too quiet even boosted gets a line under the waveform saying so.
+	place of the waveform. Speech that stays too quiet even boosted is said inside the row, with the advice in a tooltip above it, so the form does not jump.
 -->
 <script lang="ts">
 	import { VoiceRecordingBar } from '@ggml-org/llama-ui/voice';
@@ -18,7 +18,7 @@
 		/** Text streaming while a voice message is recorded. */
 		liveCaption?: string;
 		mode: VoiceMode;
-		/** The speech is too quiet even at the highest gain: says so under the waveform. */
+		/** The speech is too quiet even at the highest gain: the row says so, without changing its height. */
 		quiet?: boolean;
 		state: ChatFormVoiceState;
 		onCancel: () => void;

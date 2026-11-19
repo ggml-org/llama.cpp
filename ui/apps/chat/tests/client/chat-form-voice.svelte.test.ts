@@ -258,7 +258,7 @@ describe('recording', () => {
 		expect(plain.recorder.options?.capture).toMatchObject({ boost: false });
 	});
 
-	it('says when the microphone is too quiet, and stops saying it once it is not', async () => {
+	it('says when the microphone is too quiet without moving the form, and stops once it is not', async () => {
 		seed(true);
 
 		const { recorder, screen } = await renderForm();
@@ -268,7 +268,13 @@ describe('recording', () => {
 		expect(screen.container.innerHTML).not.toContain(VOICE_MODE_MESSAGE.tooQuiet);
 
 		recorder.setQuiet(true);
-		await expect.element(screen.getByText(VOICE_MODE_MESSAGE.tooQuiet)).toBeInTheDocument();
+		// inside the recording row, so the form keeps its height: read out, and shown above it
+		await expect
+			.element(screen.getByRole('status').filter({ hasText: VOICE_MODE_MESSAGE.tooQuiet }))
+			.toBeInTheDocument();
+		await expect
+			.poll(() => document.querySelector('[data-slot="tooltip-content"]')?.textContent ?? '')
+			.toContain(VOICE_MODE_MESSAGE.tooQuiet);
 
 		recorder.setQuiet(false);
 		await expect

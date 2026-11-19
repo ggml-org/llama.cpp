@@ -1,8 +1,10 @@
 <!--
 	The row shown while a recording is under way: cancel, the live waveform and the time, the app's stop button, and
 	an optional send, which stops and sends in one go. While the recording is `waiting` (its text is still on the way)
-	a spinner takes the waveform's place. Under the row: a `warning` (e.g. the speech is too quiet) and the `caption`,
-	text that streams in while someone speaks.
+	a spinner takes the waveform's place. A `warning` (e.g. the speech is too quiet) stays inside the row, so nothing
+	around it moves: the waveform turns the warning colour, an icon sits by the time, and the text opens above the row
+	in a tooltip for a few seconds, then again on hover or focus. Under the row: the `caption`, text that streams in
+	while someone speaks.
 	It takes everything in and reports cancel and send; recording, and what stopping does, stay in the app, which
 	passes its stop button as the `stop` snippet. The default labels are English; an app passes its own through `labels`.
 -->
@@ -23,11 +25,12 @@
 </script>
 
 <script lang="ts">
-	import { ArrowUp, LoaderCircle, X } from '@lucide/svelte';
+	import { ArrowUp, LoaderCircle, TriangleAlert, X } from '@lucide/svelte';
 	import type { Snippet } from 'svelte';
 	import { ICON_CLASS_DEFAULT } from '../../constants/css-classes.constants';
 	import { formatClipTime } from '../../voice/waveform';
 	import { Button } from '../ui/button';
+	import * as Tooltip from '../ui/tooltip';
 	import { cn } from '../ui/utils';
 	import VoiceSpokenText from './VoiceSpokenText.svelte';
 	import VoiceWaveformLive from './VoiceWaveformLive.svelte';
@@ -74,8 +77,27 @@
 		waiting: 'Transcribing...'
 	};
 
+	/** How long a new warning stays open above the row before it waits for hover or focus. */
+	const WARNING_SHOWN_MS = 6000;
+
 	let text = $derived({ ...DEFAULT_LABELS, ...labels });
 	let recording = $derived(status === 'recording');
+	let warningOpen = $state(false);
+
+	// a warning that appears opens by itself, as nobody hovers an icon they have not seen yet
+	$effect(() => {
+		if (!warning) {
+			warningOpen = false;
+
+			return;
+		}
+
+		warningOpen = true;
+
+		const timer = setTimeout(() => (warningOpen = false), WARNING_SHOWN_MS);
+
+		return () => clearTimeout(timer);
+	});
 </script>
 
 <div class={cn('flex w-full min-w-0 flex-col gap-1', className)} data-slot="voice-recording-bar">
@@ -100,7 +122,37 @@
 				{text.waiting}
 			</div>
 		{:else}
-			<VoiceWaveformLive active={recording} class="flex-1 px-1" {label} {levels} />
+			<VoiceWaveformLive
+				active={recording}
+				class={cn('flex-1 px-1', warning && 'text-fg-warning')}
+				{label}
+				{levels}
+			/>
+
+			{#if warning}
+				<Tooltip.Root bind:open={warningOpen}>
+					<Tooltip.Trigger>
+						{#snippet child({ props })}
+							<button
+								{...props}
+								aria-label={warning}
+								class="flex size-5 shrink-0 items-center justify-center rounded-full text-fg-warning"
+								data-slot="voice-recording-bar-warning"
+								type="button"
+							>
+								<TriangleAlert aria-hidden="true" class="size-icon-sm" />
+							</button>
+						{/snippet}
+					</Tooltip.Trigger>
+
+					<Tooltip.Content class="max-w-64" side="top">
+						<p>{warning}</p>
+					</Tooltip.Content>
+				</Tooltip.Root>
+
+				<!-- read out when it appears; the tooltip is for the eye -->
+				<span class="sr-only" role="status">{warning}</span>
+			{/if}
 
 			<!-- the timer starts with the first audio: until then, what is said is not recorded yet -->
 			{#if status === 'starting'}
@@ -128,15 +180,6 @@
 		{/if}
 	</div>
 
-	{#if warning}
-		<p
-			class="px-10 text-caption text-fg-warning max-md:px-11"
-			data-slot="voice-recording-bar-warning"
-			role="status"
-		>
-			{warning}
-		</p>
-	{/if}
 
 	{#if caption}
 		<p
