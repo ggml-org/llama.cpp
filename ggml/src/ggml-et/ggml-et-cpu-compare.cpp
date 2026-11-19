@@ -217,6 +217,7 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx *          ct
                                                  n_dims, mode, n_ctx_orig, freq_base, freq_scale, ext_factor,
                                                  attn_factor, beta_fast, beta_slow);
                 }
+                ggml_rope_set_truncate(ctx->cpu_dst, ggml_rope_get_truncate(node));
             }
             break;
         case GGML_OP_RMS_NORM:
