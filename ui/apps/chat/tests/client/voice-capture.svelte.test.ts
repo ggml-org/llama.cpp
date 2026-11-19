@@ -3,8 +3,7 @@
 // levels move, the PCM worklet loads from its Blob URL and streams chunks, stop() returns
 // a WAV clip with a plausible duration and peaks, and every path stops the tracks.
 
-import { MICROPHONE_UNAVAILABLE_MESSAGE } from '#lib/constants/index.ts';
-import { VoiceCapture, VoiceCaptureError } from '#lib/voice/index.ts';
+import { VOICE_MICROPHONE_MESSAGE, VoiceCapture, VoiceCaptureError } from '#lib/voice/index.ts';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 
@@ -174,7 +173,7 @@ describe('VoiceCapture', () => {
 			audio: { autoGainControl: false, echoCancellation: false, noiseSuppression: false }
 		});
 		expect(error).toBeInstanceOf(VoiceCaptureError);
-		expect(error.message).toBe(MICROPHONE_UNAVAILABLE_MESSAGE.denied);
+		expect(error.message).toBe(VOICE_MICROPHONE_MESSAGE.denied);
 		expect(capture.state).toBe('idle');
 	});
 });

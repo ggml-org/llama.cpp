@@ -1,4 +1,4 @@
-import { MimeTypeAudio } from '#lib/enums/index.ts';
+import { VOICE_WAV_MIME } from './constants';
 
 const WAV_HEADER_BYTES = 44;
 
@@ -32,5 +32,5 @@ export function encodeWav(samples: Int16Array, sampleRate: number): Blob {
 		view.setInt16(WAV_HEADER_BYTES + i * 2, samples[i], true);
 	}
 
-	return new Blob([buffer], { type: MimeTypeAudio.WAV });
+	return new Blob([buffer], { type: VOICE_WAV_MIME });
 }

@@ -54,7 +54,6 @@
 		MCPResourceInfo,
 		PromptMessage
 	} from '#lib/types/index.ts';
-	import { microphoneUnavailableReason } from '#lib/utils/browser-only.ts';
 	import {
 		buildMentionInsertion,
 		findCommandToken,
@@ -64,7 +63,11 @@
 		parseClipboardContent,
 		uuid
 	} from '#lib/utils/index.ts';
-	import { VoiceRecorder, warmUpVoiceCapture } from '#lib/voice/index.ts';
+	import {
+		microphoneUnavailableReason,
+		VoiceRecorder,
+		warmUpVoiceCapture
+	} from '#lib/voice/index.ts';
 	import { onMount, tick, untrack } from 'svelte';
 	import type { ClassValue } from 'svelte/elements';
 	import { toast } from 'svelte-sonner';

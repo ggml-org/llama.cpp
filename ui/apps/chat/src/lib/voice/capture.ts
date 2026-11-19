@@ -15,6 +15,7 @@ import { LevelHistory, rms, rmsToLevel } from './levels';
 import { concatPcm16, createResampler, floatToPcm16, type Resampler } from './pcm';
 import { createPcmTap, type PcmTap } from './pcm-tap';
 import { computePeaks } from './peaks';
+import { describeMicrophoneError } from './support';
 import type {
 	VoiceCaptureOptions,
 	VoiceCaptureState,
@@ -24,7 +25,6 @@ import type {
 	VoiceQuietListener
 } from './types';
 import { encodeWav } from './wav';
-import { describeMicrophoneError } from '#lib/utils/audio-recording.ts';
 
 /** Graph and device handles of a running capture, released together. */
 interface CaptureGraph {

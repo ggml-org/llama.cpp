@@ -46,7 +46,6 @@ export * from './mcp-form.constants';
 export * from './mcp-resource.constants';
 export * from './mention-badge.constants';
 export * from './message-export.constants';
-export * from './microphone.constants';
 export * from './path-display.constants';
 export * from './model-id.constants';
 export * from './model-loading.constants';

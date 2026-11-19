@@ -25,12 +25,12 @@ import {
 } from '#lib/stores/index.ts';
 import type { ChatUploadedFile } from '#lib/types/index.ts';
 import { getAuthHeaders } from '#lib/utils/api-headers.ts';
-import { describeMicrophoneError } from '#lib/utils/audio-recording.ts';
 import { withBase } from '#lib/utils/base-path.ts';
 import { DictationSpan } from '#lib/utils/dictation-span.ts';
 import { uuid } from '#lib/utils/index.ts';
 import { resolveVoiceMode, voiceModeLabel } from '#lib/utils/voice-mode.ts';
 import {
+	describeMicrophoneError,
 	resolveMicrophone,
 	VOICE_MICROPHONE_AUTO,
 	VoiceCaptureError,

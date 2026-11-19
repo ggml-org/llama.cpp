@@ -44,6 +44,11 @@ export {
 export { computePeaks, computePeaksFromAudio, decodeAudio, mixToMono } from './peaks';
 export { RealtimeTranscriber, realtimeUrl } from './realtime';
 export { startVoiceSession } from './session';
+export {
+	describeMicrophoneError,
+	isVoiceCaptureSupported,
+	microphoneUnavailableReason
+} from './support';
 export { transcribeClip } from './transcribe';
 export type * from './types';
 export { VoiceRecorder, type VoiceRecorderStatus } from './voice-recorder.svelte';

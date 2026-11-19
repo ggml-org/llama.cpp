@@ -3,6 +3,20 @@
  * folder can move into its own package without pulling the app's constants along.
  */
 
+/** Type of the recorded clips: 16-bit PCM WAV, what speech encoders and `input_audio` take. */
+export const VOICE_WAV_MIME = 'audio/wav';
+
+/** Why the microphone can't record, as the app's microphone button and toasts tell the user. */
+export const VOICE_MICROPHONE_MESSAGE = {
+	busy: 'The microphone is in use by another app.',
+	denied: "Microphone access was denied. Allow it in the browser's site settings to record.",
+	failed: "The microphone couldn't start.",
+	insecure:
+		'The microphone only works over HTTPS or on localhost. Open this page over HTTPS to record.',
+	notFound: 'No microphone was found.',
+	unsupported: "This browser can't record audio."
+} as const;
+
 /** Rate of the PCM chunks and of the recorded WAV, what speech encoders expect. */
 export const VOICE_SAMPLE_RATE = 16_000;
 
