@@ -2398,6 +2398,10 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             }
         } else {
             auto decode_c_params = c_params;
+            // A decode step outputs its one token. llama-perplexity asks for many outputs in the prefill graph; the
+            // decode model of the pair keeps one (decode_signature below), or its last layer would gather more rows
+            // than the graph has tokens.
+            decode_c_params.output_len = 1;
             if (ggml_openvino_kv_slice_enabled()) {
                 decode_c_params.attention_size = m_params.ctx_per_seq;
                 decode_c_params.attention_size_swa = m_params.ctx_per_seq_swa;
