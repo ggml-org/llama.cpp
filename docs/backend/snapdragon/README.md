@@ -309,7 +309,7 @@ on 4 physical NPUs, or `--devices 'HTP0[0-1:0],HTP1[0-1:1]'` on 2 physical NPUs 
 By default, the Hexagon backend is tuned for higher NPU throughput and lower memory bandwidth while preserving strong
 end-to-end accuracy across typical models. Specifically, batched matrix multiplications default to `W8A8` integer HMX
 (`--hex-mm-select 4`), which dynamically quantizes activations into 8-bit (`uint8` x `int8`) blocks with a 2048-element
-`K`-group scale (`--hex-hmx-kgroup 2048`, automatically stepping up to 16-bit `W8A16` when `M <= 32` and HVX when `M = 1`),
+`K`-group scale (`--hex-hmx-kgroup 2048`, using HVX when `M <= 4`),
 and internal `FP32` activation tensors within each HTP subgraph are automatically lowered in-place to `FP16`
 (`--hex-oplower 2`). If a particular model or workload exhibits accuracy degradation (for example due to large activation
 outliers or `FP16` residual overflow), try stepping down to higher-precision configurations in the following order:
@@ -426,9 +426,9 @@ outliers or `FP16` residual overflow), try stepping down to higher-precision con
 
   - `0`: Disabled (falls back to CPU or GPU)
   - `1`: HVX vector kernels only
-  - `2`: FP16 HMX matrix engine (`M > 1`) with HVX decode (`M = 1`)
-  - `3`: INT HMX `W8A16` (`uint16` activations x `int8` weights) with HVX decode when `M = 1`
-  - `4`: INT HMX `W8A8` (`uint8` activations x `int8` weights) with automatic `W8A16` selection when `M <= 32` and HVX decode when `M = 1` (default; automatically defaults to 2 on multi-session v73 hardware unless overridden)
+  - `2`: FP16 HMX matrix engine (`M > 4`) with HVX decode (`M <= 4`)
+  - `3`: INT HMX `W8A16` (`uint16` activations x `int8` weights) with HVX decode (`M <= 4`)
+  - `4`: INT HMX `W8A8` (`uint8` activations x `int8` weights) with HVX decode (`M <= 4`) (default; automatically defaults to 2 on multi-session v73 hardware unless overridden)
 
 - `GGML_HEXAGON_HMX_KGROUP=N`
   Overrides the INT HMX K-dimension superblock group size (default: `2048`, configurable via `--hex-hmx-kgroup` in `run.py`):

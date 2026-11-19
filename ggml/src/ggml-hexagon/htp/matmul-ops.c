@@ -5172,11 +5172,6 @@ static int hmx_mm_op_matmul_id(
         }
         if (m_start >= m_end || m_start >= cne1) continue;
 
-        int32_t eff_kernel_type = kparams->kernel_type;
-        if (eff_kernel_type == HTP_MM_KERNEL_HMX_W8A8_2D && (hex_smin(cne1, m_end) - m_start) <= 32) {
-            eff_kernel_type = HTP_MM_KERNEL_HMX_W8A16_2D;
-        }
-
         int ret = hmx_mm_id_2d_f32(octx, octx->ctx->dma[0], (void *) dst->data, (const void *) act->data,
                                    act_elem_size, dst_elem_size,
                                    src0->data + cur_a * nb02,
@@ -5189,7 +5184,7 @@ static int hmx_mm_op_matmul_id(
                                    kparams->tile_size, kparams->aligned_tile_size,
                                    matrix_rows, cur_a, mmctx->mapping_stride,
                                    m_start, m_end,
-                                   eff_kernel_type, (uint32_t) kparams->hmx_kgroup);
+                                   kparams->kernel_type, (uint32_t) kparams->hmx_kgroup);
         if (ret != 0) {
             FARF(ERROR, "HMX matmul failed for expert %u, error %d\n", cur_a, ret);
             return HTP_STATUS_NO_SUPPORT;
@@ -5343,12 +5338,7 @@ static int hmx_mm_op_matmul_id_nx(
         }
         if (m_start >= m_end || m_start >= cne1) continue;
 
-        int32_t eff_kernel_type = kparams->kernel_type;
-        if (eff_kernel_type == HTP_MM_KERNEL_HMX_W8A8_2D && (hex_smin(cne1, m_end) - m_start) <= 32) {
-            eff_kernel_type = HTP_MM_KERNEL_HMX_W8A16_2D;
-        }
-
-        if (htp_mm_kernel_is_hmx_int(eff_kernel_type)) {
+        if (htp_mm_kernel_is_hmx_int(kparams->kernel_type)) {
             const struct htp_tensor * restrict dst0 = octx->dsts[0];
             bool same_shape = true;
             void *     dst_ptrs[HTP_OP_MAX_OUTPUTS];
@@ -5375,7 +5365,7 @@ static int hmx_mm_op_matmul_id_nx(
                     (int) src0->nb[1], (int) src0->type,
                     kparams->tile_size, kparams->aligned_tile_size,
                     matrix_rows, cur_a, mmctx->mapping_stride,
-                    m_start, m_end, eff_kernel_type, (uint32_t) kparams->hmx_kgroup);
+                    m_start, m_end, kparams->kernel_type, (uint32_t) kparams->hmx_kgroup);
                 if (ret != 0) {
                     FARF(ERROR, "HMX matmul ID NX failed for expert %u, error %d\n", cur_a, ret);
                     return HTP_STATUS_NO_SUPPORT;
@@ -5402,7 +5392,7 @@ static int hmx_mm_op_matmul_id_nx(
                                        kparams->tile_size, kparams->aligned_tile_size,
                                        matrix_rows, cur_a, mmctx->mapping_stride,
                                        m_start, m_end,
-                                       eff_kernel_type, (uint32_t) kparams->hmx_kgroup);
+                                       kparams->kernel_type, (uint32_t) kparams->hmx_kgroup);
             if (ret != 0) {
                 FARF(ERROR, "HMX matmul ID NX failed for expert %u weight %u, error %d\n", cur_a, p, ret);
                 return HTP_STATUS_NO_SUPPORT;
