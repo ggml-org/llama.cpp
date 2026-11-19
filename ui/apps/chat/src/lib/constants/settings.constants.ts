@@ -6,6 +6,7 @@ import { SETTINGS_KEYS } from './settings-keys.constants';
 import { TITLE_GENERATION } from './title-generation.constants';
 import { VOICE_TRANSCRIPTION_MODEL_AUTO } from './voice.constants';
 import { FILE_GLOB_SEARCH_PICKERS } from './working-directory.constants';
+import { VOICE_MICROPHONE_AUTO } from '@ggml-org/llama-voice';
 import AudioLines from '@lucide/svelte/icons/audio-lines';
 import Code from '@lucide/svelte/icons/code';
 import Database from '@lucide/svelte/icons/database';
@@ -30,7 +31,6 @@ import type {
 	SettingsSection,
 	SettingsSectionEntry
 } from '#lib/types/index.ts';
-import { VOICE_MICROPHONE_AUTO } from '#lib/voice/microphone.ts';
 
 /** Settings sections — slug is the routing identity, title is the display label. */
 export const SETTINGS_SECTIONS = {

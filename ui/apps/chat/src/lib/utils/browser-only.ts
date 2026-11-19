@@ -6,7 +6,7 @@
  * only in client-side code or components that are not server-rendered.
  */
 
-// Audio file utilities (Web Audio decoding); microphone support lives in #lib/voice
+// Audio file utilities (Web Audio decoding); microphone support lives in @ggml-org/llama-voice
 export { convertToWav, createAudioFile } from './audio-recording';
 
 // PDF processing utilities (pdfjs-dist with DOMMatrix)

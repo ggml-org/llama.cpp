@@ -6,6 +6,12 @@
 <script lang="ts">
 	import { Label } from '@ggml-org/llama-ui/ui/label';
 	import * as Select from '@ggml-org/llama-ui/ui/select';
+	import {
+		listMicrophones,
+		type Microphone,
+		VOICE_MICROPHONE_AUTO,
+		VOICE_MICROPHONE_DEFAULT
+	} from '@ggml-org/llama-voice';
 	import { SettingsChatFields } from '#lib/components/app/settings/index.ts';
 	import {
 		SETTING_CONFIG_INFO,
@@ -13,12 +19,6 @@
 		VOICE_TRANSCRIPTION_MODEL_AUTO
 	} from '#lib/constants/index.ts';
 	import { modelsStore, serverStore } from '#lib/stores/index.ts';
-	import {
-		listMicrophones,
-		type Microphone,
-		VOICE_MICROPHONE_AUTO,
-		VOICE_MICROPHONE_DEFAULT
-	} from '#lib/voice/index.ts';
 	import { onMount } from 'svelte';
 
 	interface Props {

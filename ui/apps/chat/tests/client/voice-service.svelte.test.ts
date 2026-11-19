@@ -4,11 +4,11 @@
 // socket off, since a browser websocket can not send it.
 
 import { seedStores } from '../stories/chat/form/fixtures';
+import { VOICE_MICROPHONE_DEFAULT } from '@ggml-org/llama-voice';
 import { SETTINGS_KEYS } from '#lib/constants/index.ts';
 import { SETTING_CONFIG_DEFAULT } from '#lib/constants/settings.constants.ts';
 import { VoiceService } from '#lib/services/voice.service.ts';
 import type { SettingsConfigType } from '#lib/types/index.ts';
-import { VOICE_MICROPHONE_DEFAULT } from '#lib/voice/index.ts';
 import { afterEach, describe, expect, it } from 'vitest';
 
 let restore: (() => void) | undefined;

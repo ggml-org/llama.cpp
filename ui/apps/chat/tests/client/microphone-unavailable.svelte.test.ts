@@ -4,12 +4,12 @@
 // while staying tappable, so a tap on a phone, which shows no tooltip, can explain it.
 
 import ChatFormActionRecordWrapper from './components/ChatFormActionRecordWrapper.svelte';
-import { VOICE_MODE_MESSAGE } from '#lib/constants/index.ts';
 import {
 	describeMicrophoneError,
 	microphoneUnavailableReason,
 	VOICE_MICROPHONE_MESSAGE
-} from '#lib/voice/index.ts';
+} from '@ggml-org/llama-voice';
+import { VOICE_MODE_MESSAGE } from '#lib/constants/index.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 

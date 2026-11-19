@@ -1,9 +1,9 @@
-import type { VoiceRecorderLike } from '#lib/hooks/use-chat-form-voice.svelte.ts';
 import type {
 	VoiceRecorderStatus,
 	VoiceSessionOptions,
 	VoiceSessionResult
-} from '#lib/voice/index.ts';
+} from '@ggml-org/llama-voice';
+import type { VoiceRecorderLike } from '#lib/hooks/use-chat-form-voice.svelte.ts';
 
 /** A transcript the test resolves when it wants. */
 export function deferred<T>() {

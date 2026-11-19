@@ -1,13 +1,13 @@
-import { SETTINGS_KEYS } from '#lib/constants/index.ts';
-import type { SettingsConfigType } from '#lib/types/index.ts';
-import { getAuthHeaders } from '#lib/utils/api-headers.ts';
-import { withBase } from '#lib/utils/base-path.ts';
 import {
 	resolveMicrophone,
 	VOICE_MICROPHONE_AUTO,
 	type VoiceServerContext,
 	type VoiceSessionOptions
-} from '#lib/voice/index.ts';
+} from '@ggml-org/llama-voice';
+import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+import type { SettingsConfigType } from '#lib/types/index.ts';
+import { getAuthHeaders } from '#lib/utils/api-headers.ts';
+import { withBase } from '#lib/utils/base-path.ts';
 
 /** What a feature asks of the voice wiring, besides the settings. */
 export interface VoiceSessionRequest {
@@ -28,7 +28,7 @@ export interface VoiceSessionRequest {
 export type VoiceSessionWiring = Pick<VoiceSessionOptions, 'capture' | 'realtime' | 'transcribe'>;
 
 /**
- * **VoiceService** - How the voice engine (#lib/voice) reaches this app's server and settings
+ * **VoiceService** - How the voice engine (@ggml-org/llama-voice) reaches this app's server and settings
  *
  * The engine imports no app code: it is handed a VoiceServerContext and plain capture
  * options. This builds both from the active server and the Voice settings, once for every

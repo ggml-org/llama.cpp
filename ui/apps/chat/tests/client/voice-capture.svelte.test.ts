@@ -3,7 +3,7 @@
 // levels move, the PCM worklet loads from its Blob URL and streams chunks, stop() returns
 // a WAV clip with a plausible duration and peaks, and every path stops the tracks.
 
-import { VOICE_MICROPHONE_MESSAGE, VoiceCapture, VoiceCaptureError } from '#lib/voice/index.ts';
+import { VOICE_MICROPHONE_MESSAGE, VoiceCapture, VoiceCaptureError } from '@ggml-org/llama-voice';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 

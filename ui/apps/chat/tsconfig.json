@@ -16,6 +16,8 @@
 			"@ggml-org/llama-ui/fonts.css": ["../../lib/ui/src/lib/styles/fonts.css"],
 			"@ggml-org/llama-ui/surfaces.css": ["../../lib/ui/src/lib/styles/surfaces.css"],
 			"@ggml-org/llama-ui": ["../../lib/ui/src/lib/index.ts"],
+			"@ggml-org/llama-voice": ["../../lib/voice/src/index.ts"],
+			"@ggml-org/llama-voice/svelte": ["../../lib/voice/src/svelte/index.ts"],
 			"$llama-ui-stories/*": ["../../lib/ui/tests/stories/*"],
 			"@internationalized/date": ["./node_modules/@internationalized/date"],
 			"@internationalized/date/*": ["./node_modules/@internationalized/date/*"],

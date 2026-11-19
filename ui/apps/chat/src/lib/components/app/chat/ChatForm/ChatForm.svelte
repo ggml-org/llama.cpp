@@ -1,5 +1,7 @@
 <script lang="ts">
 	import ContextGaugePopup from './ChatFormContextGauge/ContextGaugePopup.svelte';
+	import { microphoneUnavailableReason, warmUpVoiceCapture } from '@ggml-org/llama-voice';
+	import { VoiceRecorder } from '@ggml-org/llama-voice/svelte';
 	import { Maximize, Minimize } from '@lucide/svelte';
 	import {
 		ActionIcon,
@@ -63,8 +65,6 @@
 		parseClipboardContent,
 		uuid
 	} from '#lib/utils/index.ts';
-	import { microphoneUnavailableReason, warmUpVoiceCapture } from '#lib/voice/index.ts';
-	import { VoiceRecorder } from '#lib/voice/svelte/index.ts';
 	import { onMount, tick, untrack } from 'svelte';
 	import type { ClassValue } from 'svelte/elements';
 	import { toast } from 'svelte-sonner';

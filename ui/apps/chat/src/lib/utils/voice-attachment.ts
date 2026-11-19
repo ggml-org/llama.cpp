@@ -1,6 +1,6 @@
+import { computePeaksFromAudio } from '@ggml-org/llama-voice';
 import { AttachmentType } from '#lib/enums/index.ts';
 import type { ChatAttachmentDisplayItem, DatabaseMessageExtraAudioFile } from '#lib/types/index.ts';
-import { computePeaksFromAudio } from '#lib/voice/index.ts';
 
 // peaks of clips stored without them, kept for the session only
 const peaksCache = new Map<string, Promise<number[]>>();

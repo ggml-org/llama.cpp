@@ -1,12 +1,12 @@
 // Guards which microphone a recording uses: the system default, unless that is a
 // Bluetooth headset and a built-in microphone exists, or the one picked in Settings.
 
-import { SETTING_CONFIG_DEFAULT, SETTINGS_KEYS } from '#lib/constants/index.ts';
 import {
 	pickMicrophone,
 	VOICE_MICROPHONE_AUTO,
 	VOICE_MICROPHONE_DEFAULT
-} from '#lib/voice/index.ts';
+} from '@ggml-org/llama-voice';
+import { SETTING_CONFIG_DEFAULT, SETTINGS_KEYS } from '#lib/constants/index.ts';
 import { describe, expect, it } from 'vitest';
 
 const input = (deviceId: string, label: string) => ({

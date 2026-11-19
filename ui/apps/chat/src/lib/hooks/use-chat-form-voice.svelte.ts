@@ -12,6 +12,14 @@
  */
 
 import {
+	createDictation,
+	describeMicrophoneError,
+	VoiceCaptureError,
+	type VoiceRecorderStatus,
+	type VoiceSessionOptions,
+	type VoiceSessionResult
+} from '@ggml-org/llama-voice';
+import {
 	SETTINGS_KEYS,
 	VOICE_CLIP_NAME_PREFIX,
 	VOICE_MODE_MESSAGE,
@@ -26,16 +34,8 @@ import {
 	voiceTranscriptsStore
 } from '#lib/stores/index.ts';
 import type { ChatUploadedFile } from '#lib/types/index.ts';
-import { createDictation } from '#lib/utils/dictation.ts';
 import { uuid } from '#lib/utils/index.ts';
 import { resolveVoiceMode, voiceModeLabel } from '#lib/utils/voice-mode.ts';
-import {
-	describeMicrophoneError,
-	VoiceCaptureError,
-	type VoiceRecorderStatus,
-	type VoiceSessionOptions,
-	type VoiceSessionResult
-} from '#lib/voice/index.ts';
 import { onDestroy } from 'svelte';
 import { toast } from 'svelte-sonner';
 
