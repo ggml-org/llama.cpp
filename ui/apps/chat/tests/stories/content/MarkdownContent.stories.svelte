@@ -36,5 +36,14 @@
 
 		await expect(error?.textContent).toContain('line 2');
 		await expect(error?.closest('pre')).toBeVisible();
+
+		// `click ... href` must not turn a node into a live link, as under Mermaid's strict mode
+		const flowchart = canvasElement.querySelector('pre.mermaid svg.pele');
+
+		await expect(flowchart?.textContent).toContain('llama-server');
+		await expect(canvasElement.querySelector('pre.mermaid a')).toBeNull();
+		await expect(
+			canvasElement.querySelector('pre.mermaid [href], pre.mermaid [*|href]')
+		).toBeNull();
 	}}
 />
