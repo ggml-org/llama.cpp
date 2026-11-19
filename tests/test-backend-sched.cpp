@@ -222,7 +222,7 @@ static test_result run_and_check(ggml_backend_sched_t sched, const helper_graph 
     // ggml_backend_sched_set_tensor_backend does not validate the op, an unsupported one would abort inside the backend
     for (size_t i = 0; i < g.nodes.size(); i++) {
         ggml_backend_t backend = backends[g.backend_id[i]];
-        if (!backend_implements_op(backend, g.nodes[i])) {
+        if (!backend_supports_op(backend, g.nodes[i])) {
             return skip("%s does not support %s", ggml_backend_name(backend), ggml_op_name(g.nodes[i]->op));
         }
     }
