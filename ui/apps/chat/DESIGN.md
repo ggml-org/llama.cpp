@@ -742,6 +742,38 @@ components:
     size: '8px'
 ---
 
+## In short
+
+The rules most changes need. The sections below hold the detail and the reasons, and they
+win where this list is too short. Before adding a token, a size or a component, use what is
+here; if something really is missing, add it here first.
+
+- **Components:** take base components from Llama UI (`@ggml-org/llama-ui/ui/<name>`); do not
+  build a new one when an existing one fits. Style them through their variants
+  (`variant="outline"`, `size="sm"`), not by overriding classes.
+- **Colour:** greys build the UI; colour is for meaning only (status, destructive actions,
+  focus). Use the semantic tokens: `bg-surface-*` for surfaces, `text-fg-default` and
+  `text-fg-muted` for text, `border-line-*` for lines, `fill-*`, `surface-*` and `fg-*` of
+  `success`, `warning`, `danger` and `info` for status. No Tailwind palette classes, no hex.
+- **Type:** Llama Sans, and Llama Mono for code, through roles: `text-body` (16px) for chat
+  messages and the chat input, `text-body-sm` (14px) for most text, `text-label` (14px, medium)
+  for buttons and labels, `text-label-sm` and `text-caption` (12px) for badges and hints,
+  `text-title` (18px) and `text-heading` (24px) for the rare heading.
+- **Shape:** `rounded-control` (8px) for controls, fields and badges, `rounded-panel` (10px)
+  for menus and dialogs, `rounded-card` (14px), `rounded-container` (16px) and
+  `rounded-surface` (24px) for the larger surfaces, `rounded-full` for pills, avatars and lamps.
+- **Sizes:** Tailwind's 4px spacing scale. Icons are Lucide, `size-icon-md` (16px), or
+  `size-icon-sm` (14px) in compact controls. Controls are `h-control-sm`, `h-control-md` or
+  `h-control-lg` (32, 36, 40px).
+- **Surfaces:** one surface utility per element (`card-surface`, `matte-float`, `matte-key`,
+  `matte-well`), never raw `shadow-*`, `border-*` and `backdrop-blur-*` combinations.
+- **Tokens:** read a semantic token directly. A component token is only for a value the
+  component decides itself.
+- **No arbitrary values** (`text-[11px]`, `rounded-[1.125rem]`, `p-[7px]`): pick the nearest
+  from the scale.
+- **Phones:** every dialog is full screen; only alerts stay small and centred.
+- **The conversation is the loudest thing on screen;** everything around it stays quiet.
+
 ## Overview
 
 **Llama UI** is the design system and component library this file describes. **Llama Chat**,
