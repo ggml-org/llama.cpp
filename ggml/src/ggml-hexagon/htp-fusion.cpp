@@ -286,8 +286,7 @@ static bool fuse_mul_mat_nx(const ggml_hexagon_session * sess, htp_opnode & prev
         w0->ne[2] != 1 || w0->ne[3] != 1 || w_in->ne[2] != 1 || w_in->ne[3] != 1 ||
         ggml_hexagon_tensor_is_tiled(w_in) != ggml_hexagon_tensor_is_tiled(w0) ||
         orig_kparams->n_hmx != cur_kparams->n_hmx ||
-        orig_kparams->kernel_type != cur_kparams->kernel_type ||
-        orig_kparams->hmx_kgroup != cur_kparams->hmx_kgroup) {
+        orig_kparams->kernel_type != cur_kparams->kernel_type) {
         return false;
     }
 

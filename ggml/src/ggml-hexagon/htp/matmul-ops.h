@@ -21,6 +21,8 @@ extern "C" {
 #define HTP_MM_HMX_MIN_NROWS          4
 #define HTP_MM_HMX_WEIGHT_B_TILE_SIZE 1024
 #define HTP_MM_HMX_BIAS_BANK_SIZE     256
+#define HTP_MM_HMX_W8A8_KGROUP        2048u
+#define HTP_MM_HMX_W8A8_KGROUP_TILES  64u
 
 #define HTP_MM_WEIGHT_TILE_K_Q2_0             64
 #define HTP_MM_WEIGHT_TILE_SIZE_Q2_0          HTP_TENSOR_TILE_SIZE_Q2_0
@@ -50,8 +52,6 @@ enum htp_mm_kernel_type {
     HTP_MM_KERNEL_HMX_BATCHED,
     HTP_MM_KERNEL_HMX_W8A8_2D,
     HTP_MM_KERNEL_HMX_W8A8_BATCHED,
-    HTP_MM_KERNEL_HMX_W8A16_2D,
-    HTP_MM_KERNEL_HMX_W8A16_BATCHED,
 
     // HVX floating-point paths
     HTP_MM_KERNEL_HVX_F16_F16_VTCM,
@@ -67,20 +67,16 @@ static inline bool htp_mm_kernel_is_hmx_w8a8(int32_t kt) {
     return kt == HTP_MM_KERNEL_HMX_W8A8_2D || kt == HTP_MM_KERNEL_HMX_W8A8_BATCHED;
 }
 
-static inline bool htp_mm_kernel_is_hmx_w8a16(int32_t kt) {
-    return kt == HTP_MM_KERNEL_HMX_W8A16_2D || kt == HTP_MM_KERNEL_HMX_W8A16_BATCHED;
-}
-
 static inline bool htp_mm_kernel_is_hmx_int(int32_t kt) {
-    return htp_mm_kernel_is_hmx_w8a8(kt) || htp_mm_kernel_is_hmx_w8a16(kt);
+    return htp_mm_kernel_is_hmx_w8a8(kt);
 }
 
 static inline bool htp_mm_kernel_is_hmx_2d(int32_t kt) {
-    return kt == HTP_MM_KERNEL_HMX_2D || kt == HTP_MM_KERNEL_HMX_W8A8_2D || kt == HTP_MM_KERNEL_HMX_W8A16_2D;
+    return kt == HTP_MM_KERNEL_HMX_2D || kt == HTP_MM_KERNEL_HMX_W8A8_2D;
 }
 
 static inline bool htp_mm_kernel_is_hmx_batched(int32_t kt) {
-    return kt == HTP_MM_KERNEL_HMX_BATCHED || kt == HTP_MM_KERNEL_HMX_W8A8_BATCHED || kt == HTP_MM_KERNEL_HMX_W8A16_BATCHED;
+    return kt == HTP_MM_KERNEL_HMX_BATCHED || kt == HTP_MM_KERNEL_HMX_W8A8_BATCHED;
 }
 
 static inline bool htp_is_int_hmx_weight_type(int wtype) {
@@ -113,7 +109,6 @@ struct htp_mm_kernel_params {
     int32_t  act_row_size;       // Row size for activation scratchpad
     int32_t  vtcm_size;          // Total required scratchpad size in VTCM
     int32_t  vtcm_bias_size;     // bias scratchpad size in VTCM (fused only)
-    int32_t  hmx_kgroup;         // K superblock size for INT HMX kernels (0 for FP16)
     int32_t  hmx_n_groups;       // Number of K superblocks for INT HMX kernels (1 for FP16)
 
     // Precomputed division values
@@ -269,7 +264,7 @@ static inline bool htp_mm_hmx_pipeline(uint32_t m) {
 }
 
 static inline void htp_mm_hmx_get_2d_chunk_costs_ex(
-    int kernel_type, int wtype, uint32_t k, bool pipeline, uint32_t aligned_tile_size, uint32_t k_group,
+    int kernel_type, int wtype, uint32_t k, bool pipeline, uint32_t aligned_tile_size,
     size_t * size_per_n_out, size_t * size_per_m_out, size_t * size_per_mn_out
 ) {
     const bool is_quant = (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32 && wtype != HTP_TYPE_BF16);
@@ -278,15 +273,11 @@ static inline void htp_mm_hmx_get_2d_chunk_costs_ex(
     const size_t qweight_row_stride = is_quant ? (size_t)(n_weight_tiles * aligned_tile_size) / 32 : 0;
 
     if (htp_mm_kernel_is_hmx_int(kernel_type)) {
-        const bool is_w8a8 = htp_mm_kernel_is_hmx_w8a8(kernel_type);
-        const uint32_t eff_kgroup = (k_group > 0 && k_group < k) ? k_group : k;
-        const size_t n_groups = (k + eff_kgroup - 1) / eff_kgroup;
-        const size_t w_unpacked_per_n = (size_t) k * sizeof(uint8_t) +
-                                        n_groups * (is_w8a8 ? 20 : 12);
-        const size_t act_elem_bytes = is_w8a8 ? sizeof(uint8_t) : sizeof(uint16_t);
+        const size_t n_groups = (k + HTP_MM_HMX_W8A8_KGROUP - 1u) / HTP_MM_HMX_W8A8_KGROUP;
+        const size_t w_unpacked_per_n = (size_t) k * sizeof(uint8_t) + n_groups * 20;
 
         *size_per_n_out  = (pipeline ? 2 : 1) * ((is_quant ? qweight_row_stride : row_stride) + w_unpacked_per_n);
-        *size_per_m_out  = (size_t) k * act_elem_bytes + n_groups * sizeof(float);
+        *size_per_m_out  = (size_t) k * sizeof(uint8_t) + n_groups * sizeof(float);
         *size_per_mn_out = (pipeline ? 2 : 1) * n_groups * sizeof(uint16_t);
         return;
     }
@@ -302,7 +293,7 @@ static inline void htp_mm_hmx_get_2d_chunk_costs(
     int wtype, uint32_t k, bool pipeline, uint32_t aligned_tile_size,
     size_t * size_per_n_out, size_t * size_per_m_out, size_t * size_per_mn_out
 ) {
-    htp_mm_hmx_get_2d_chunk_costs_ex(HTP_MM_KERNEL_HMX_2D, wtype, k, pipeline, aligned_tile_size, 0,
+    htp_mm_hmx_get_2d_chunk_costs_ex(HTP_MM_KERNEL_HMX_2D, wtype, k, pipeline, aligned_tile_size,
                                      size_per_n_out, size_per_m_out, size_per_mn_out);
 }
 
@@ -389,8 +380,7 @@ static inline void htp_mm_hmx_vtcm_layout_build_ex(
     bool pipeline,
     uint32_t act_hvx,
     uint32_t aligned_tile_size,
-    size_t bias_size,
-    uint32_t k_group
+    size_t bias_size
 ) {
     size_t off = 0;
     L->lut_bytes            = 0;
@@ -446,13 +436,13 @@ static inline void htp_mm_hmx_vtcm_layout_build_ex(
 
         off = off_group_a + hex_smax(group_b_size, group_c_size);
     } else {
-        // HTP_MM_KERNEL_HMX_2D / W8A8 / W8A16
+        // HTP_MM_KERNEL_HMX_2D / W8A8
         const bool is_int_hmx = htp_mm_kernel_is_hmx_int(kernel_type);
         const bool is_quant = (wtype != HTP_TYPE_F16 && wtype != HTP_TYPE_F32 && wtype != HTP_TYPE_BF16);
         const size_t row_stride = htp_tensor_get_row_size(wtype, k);
         const uint32_t n_weight_tiles = k / htp_tensor_get_tile_k(wtype);
 
-        const uint32_t dma_act_mult = htp_mm_kernel_is_hmx_w8a8(kernel_type) ? 8u : HTP_MM_DMA_ACT_MULTIPLIER;
+        const uint32_t dma_act_mult = is_int_hmx ? 8u : HTP_MM_DMA_ACT_MULTIPLIER;
         const size_t min_f32_size = hex_align_up((size_t) act_hvx * dma_act_mult * k * sizeof(float), 128);
         const size_t weight_area_size = is_quant
             ? hex_align_up((nc / 32) * n_weight_tiles * aligned_tile_size, HTP_MM_HMX_TILE_SIZE)
@@ -464,19 +454,16 @@ static inline void htp_mm_hmx_vtcm_layout_build_ex(
         size_t scratch0_size    = 0;
 
         if (is_int_hmx) {
-            const bool is_w8a8        = htp_mm_kernel_is_hmx_w8a8(kernel_type);
-            const uint32_t eff_kgroup = (k_group > 0 && k_group < k) ? k_group : k;
-            const size_t n_groups     = (k + eff_kgroup - 1) / eff_kgroup;
-            const size_t mc_pad       = hex_align_up(mc, is_w8a8 ? 64 : 32);
-            const size_t nc_pad       = hex_align_up(nc, 32);
-            const size_t act_elem_sz  = is_w8a8 ? sizeof(uint8_t) : sizeof(uint16_t);
+            const size_t n_groups = (k + HTP_MM_HMX_W8A8_KGROUP - 1u) / HTP_MM_HMX_W8A8_KGROUP;
+            const size_t mc_pad   = hex_align_up(mc, 64);
+            const size_t nc_pad   = hex_align_up(nc, 32);
 
-            act_area_size    = hex_align_up(mc_pad * k * act_elem_sz, HTP_MM_HMX_TILE_SIZE);
+            act_area_size    = hex_align_up(mc_pad * k * sizeof(uint8_t), HTP_MM_HMX_TILE_SIZE);
             act_scales_size  = hex_align_up(n_groups * mc_pad * sizeof(float), HTP_MM_HMX_TILE_SIZE);
             output_area_size = hex_align_up(n_groups * mc_pad * nc_pad * sizeof(uint16_t), HTP_MM_HMX_TILE_SIZE);
 
             const size_t w_tiles_bytes  = hex_align_up(nc_pad * k * sizeof(uint8_t), 256);
-            const size_t w_bias_bytes   = hex_align_up((nc_pad / 32) * n_groups * (is_w8a8 ? 512 : 256), 256);
+            const size_t w_bias_bytes   = hex_align_up((nc_pad / 32) * n_groups * 512, 256);
             const size_t w_scales_bytes = hex_align_up(nc_pad * n_groups * sizeof(float), 256);
 
             L->weight_tiles_bytes   = w_tiles_bytes;
@@ -550,7 +537,7 @@ static inline void htp_mm_hmx_vtcm_layout_build(
     uint32_t aligned_tile_size,
     size_t bias_size
 ) {
-    htp_mm_hmx_vtcm_layout_build_ex(L, kernel_type, wtype, k, mc, nc, group_size, pipeline, act_hvx, aligned_tile_size, bias_size, 0);
+    htp_mm_hmx_vtcm_layout_build_ex(L, kernel_type, wtype, k, mc, nc, group_size, pipeline, act_hvx, aligned_tile_size, bias_size);
 }
 
 static inline void htp_mm_hvx_vtcm_layout_build(
@@ -771,17 +758,17 @@ static inline bool htp_mm_hvx_solve_vtcm_params(
 }
 
 static inline size_t htp_mm_hmx_get_2d_vtcm_size_ex(
-    int kernel_type, int wtype, uint32_t k, size_t mc, size_t nc, bool pipeline, uint32_t act_hvx, uint32_t aligned_tile_size, size_t bias_size, uint32_t k_group
+    int kernel_type, int wtype, uint32_t k, size_t mc, size_t nc, bool pipeline, uint32_t act_hvx, uint32_t aligned_tile_size, size_t bias_size
 ) {
     struct htp_mm_hmx_vtcm_layout L;
-    htp_mm_hmx_vtcm_layout_build_ex(&L, kernel_type, wtype, k, mc, nc, 1, pipeline, act_hvx, aligned_tile_size, bias_size, k_group);
+    htp_mm_hmx_vtcm_layout_build_ex(&L, kernel_type, wtype, k, mc, nc, 1, pipeline, act_hvx, aligned_tile_size, bias_size);
     return L.total_bytes;
 }
 
 static inline size_t htp_mm_hmx_get_2d_vtcm_size(
     int wtype, uint32_t k, size_t mc, size_t nc, bool pipeline, uint32_t act_hvx, uint32_t aligned_tile_size, size_t bias_size
 ) {
-    return htp_mm_hmx_get_2d_vtcm_size_ex(HTP_MM_KERNEL_HMX_2D, wtype, k, mc, nc, pipeline, act_hvx, aligned_tile_size, bias_size, 0);
+    return htp_mm_hmx_get_2d_vtcm_size_ex(HTP_MM_KERNEL_HMX_2D, wtype, k, mc, nc, pipeline, act_hvx, aligned_tile_size, bias_size);
 }
 
 static inline size_t htp_mm_hmx_get_batched_vtcm_size(
@@ -869,14 +856,12 @@ static inline bool htp_mm_int_hmx_solve_2d_params(
     uint32_t aligned_tile_size,
     size_t bias_size,
     size_t vtcm_budget,
-    uint32_t k_group,
     size_t * m_chunk_out,
     size_t * n_chunk_out,
     int * act_hvx_out,
     size_t * vtcm_size_out
 ) {
-    const bool is_w8a8 = htp_mm_kernel_is_hmx_w8a8(kernel_type);
-    const size_t m_align = is_w8a8 ? 64u : 32u;
+    const size_t m_align = 64u;
     const size_t n_total = hex_align_up((size_t) ne01_padded, HTP_MM_HMX_TILE_N_COLS);
     const size_t m_target = is_matmul_id ? hex_align_up((size_t) m_id_rows, m_align)
                                          : hex_align_up((size_t) ne11_padded, m_align);
@@ -886,7 +871,7 @@ static inline bool htp_mm_int_hmx_solve_2d_params(
     }
 
     size_t per_n_approx = 0, per_m_approx = 0, per_mn_approx = 0;
-    htp_mm_hmx_get_2d_chunk_costs_ex(kernel_type, wtype, k, pipeline, aligned_tile_size, k_group,
+    htp_mm_hmx_get_2d_chunk_costs_ex(kernel_type, wtype, k, pipeline, aligned_tile_size,
                                      &per_n_approx, &per_m_approx, &per_mn_approx);
     const size_t base_overhead = htp_mm_hmx_get_2d_overhead(wtype, pipeline, is_matmul_id) +
                                  HTP_MM_HMX_TILE_SIZE + (pipeline ? 2u : 1u) * 768u +
@@ -939,7 +924,7 @@ static inline bool htp_mm_int_hmx_solve_2d_params(
             mc = hex_smin(mc, m_target);
             while (mc >= m_align) {
                 size_t exact = htp_mm_hmx_get_2d_vtcm_size_ex(
-                    kernel_type, wtype, k, mc, nc, pipeline, layout_act_hvx, aligned_tile_size, bias_size, k_group);
+                    kernel_type, wtype, k, mc, nc, pipeline, layout_act_hvx, aligned_tile_size, bias_size);
                 if (exact <= vtcm_budget) {
                     const size_t mblocks = (m_rows + mc - 1u) / mc;
                     size_t mc_tight = (mblocks > 1u)
@@ -947,7 +932,7 @@ static inline bool htp_mm_int_hmx_solve_2d_params(
                         : mc;
                     if (mc_tight != mc) {
                         size_t exact_tight = htp_mm_hmx_get_2d_vtcm_size_ex(
-                            kernel_type, wtype, k, mc_tight, nc, pipeline, layout_act_hvx, aligned_tile_size, bias_size, k_group);
+                            kernel_type, wtype, k, mc_tight, nc, pipeline, layout_act_hvx, aligned_tile_size, bias_size);
                         if (exact_tight <= vtcm_budget) {
                             mc    = mc_tight;
                             exact = exact_tight;
@@ -1011,7 +996,6 @@ static inline bool htp_mm_hmx_solve_2d_params_ex(
     uint32_t aligned_tile_size,
     size_t bias_size,
     size_t vtcm_budget,
-    uint32_t k_group,
     size_t * m_chunk_out,
     size_t * n_chunk_out,
     int * act_hvx_out,
@@ -1020,7 +1004,7 @@ static inline bool htp_mm_hmx_solve_2d_params_ex(
     if (htp_mm_kernel_is_hmx_int(kernel_type)) {
         return htp_mm_int_hmx_solve_2d_params(
             kernel_type, wtype, k, m_id_rows, ne01_padded, ne11_padded, m_for_cost,
-            n_hvx, pipeline, is_matmul_id, aligned_tile_size, bias_size, vtcm_budget, k_group,
+            n_hvx, pipeline, is_matmul_id, aligned_tile_size, bias_size, vtcm_budget,
             m_chunk_out, n_chunk_out, act_hvx_out, vtcm_size_out);
     }
 
@@ -1030,15 +1014,14 @@ static inline bool htp_mm_hmx_solve_2d_params_ex(
     size_t best_n_chunk = 0;
     size_t best_vtcm_size = 0;
 
-    const bool is_w8a8 = htp_mm_kernel_is_hmx_w8a8(kernel_type);
-    const size_t m_align = is_w8a8 ? 64 : 32;
+    const size_t m_align = 32;
     const size_t m_for_chunks = is_matmul_id ? hex_align_up(m_id_rows, m_align) : hex_align_up(ne11_padded, m_align);
 
     int act_hvx = n_hvx;
     while (act_hvx >= 1) {
         size_t simple_2d_overhead = htp_mm_hmx_get_2d_overhead(wtype, pipeline, is_matmul_id) + (bias_size > 0 ? hex_align_up(bias_size, HTP_MM_HMX_TILE_SIZE) : 0);
         size_t simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn;
-        htp_mm_hmx_get_2d_chunk_costs_ex(kernel_type, wtype, k, pipeline, aligned_tile_size, k_group,
+        htp_mm_hmx_get_2d_chunk_costs_ex(kernel_type, wtype, k, pipeline, aligned_tile_size,
                                          &simple_2d_size_per_n, &simple_2d_size_per_m, &simple_2d_size_per_mn);
 
         size_t m_chunk_candidate = 0;
@@ -1048,7 +1031,7 @@ static inline bool htp_mm_hmx_solve_2d_params_ex(
         if (htp_mm_hmx_compute_chunks(vtcm_budget, simple_2d_overhead, simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn, m_for_chunks, ne01_padded, m_align,
                                (size_t) ne01_padded * HTP_MM_HMX_COST_W_DEQUANT, (size_t) m_for_cost * HTP_MM_HMX_COST_A_CONVERT,
                                &m_chunk_candidate, &n_chunk_candidate, &vtcm_size_candidate) == 0) {
-            size_t exact_size = htp_mm_hmx_get_2d_vtcm_size_ex(kernel_type, wtype, k, m_chunk_candidate, n_chunk_candidate, pipeline, is_matmul_id ? 0 : act_hvx, aligned_tile_size, bias_size, k_group);
+            size_t exact_size = htp_mm_hmx_get_2d_vtcm_size_ex(kernel_type, wtype, k, m_chunk_candidate, n_chunk_candidate, pipeline, is_matmul_id ? 0 : act_hvx, aligned_tile_size, bias_size);
             if (exact_size <= vtcm_budget) {
                 size_t mblocks = ((size_t) m_for_cost + m_chunk_candidate - 1) / m_chunk_candidate;
                 if (mblocks < best_mblocks || (mblocks == best_mblocks && act_hvx > best_act_hvx)) {
@@ -1097,7 +1080,7 @@ static inline bool htp_mm_hmx_solve_2d_params(
 ) {
     return htp_mm_hmx_solve_2d_params_ex(HTP_MM_KERNEL_HMX_2D, wtype, k, m_id_rows, ne01_padded, ne11_padded, m_for_cost,
                                          n_hvx, pipeline, is_matmul_id, aligned_tile_size, bias_size, vtcm_budget,
-                                         0, m_chunk_out, n_chunk_out, act_hvx_out, vtcm_size_out);
+                                         m_chunk_out, n_chunk_out, act_hvx_out, vtcm_size_out);
 }
 
 #ifdef __cplusplus

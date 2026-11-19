@@ -683,33 +683,12 @@ static bool htp_kparams_solve_hmx_mm(
     bool use_grouped = false;
     int act_hvx_selected = 0;
 
-    const uint8_t fp16_kernel_type = (is_batched && !is_matmul_id) ? HTP_MM_KERNEL_HMX_BATCHED : HTP_MM_KERNEL_HMX_2D;
-    uint8_t       kernel_type      = fp16_kernel_type;
-    uint32_t      k_group          = 0;
-    const uint32_t min_kgroup = (wtype == GGML_TYPE_IQ2_XXS || wtype == GGML_TYPE_Q2_K) ? 256u : 128u;
-    if (is_tiled && htp_is_int_hmx_weight_type((int) wtype) && (opt_mm_select == 3 || opt_mm_select == 4) &&
-        ne00_padded >= (int) min_kgroup && (ne00_padded % min_kgroup) == 0) {
-        const bool use_w8a16      = (opt_mm_select == 3);
-        const uint32_t def_kgroup = 2048u;
-        uint32_t target_kgroup    = (opt_hmx_kgroup > 0) ? (uint32_t) hex_round_up(std::min(opt_hmx_kgroup, 4096), min_kgroup)
-                                                         : def_kgroup;
-        target_kgroup = std::min(target_kgroup, std::min((uint32_t) ne00_padded, 4096u));
-        for (uint32_t g = (target_kgroup / min_kgroup) * min_kgroup; g >= min_kgroup; g -= min_kgroup) {
-            if (((uint32_t) ne00_padded % g) == 0) {
-                k_group = g;
-                break;
-            }
-            if (g == min_kgroup) {
-                break;
-            }
-        }
-        if (k_group > 0) {
-            if (!use_w8a16) {
-                kernel_type = (is_batched && !is_matmul_id) ? HTP_MM_KERNEL_HMX_W8A8_BATCHED : HTP_MM_KERNEL_HMX_W8A8_2D;
-            } else {
-                kernel_type = (is_batched && !is_matmul_id) ? HTP_MM_KERNEL_HMX_W8A16_BATCHED : HTP_MM_KERNEL_HMX_W8A16_2D;
-            }
-        }
+    const uint8_t  fp16_kernel_type = (is_batched && !is_matmul_id) ? HTP_MM_KERNEL_HMX_BATCHED : HTP_MM_KERNEL_HMX_2D;
+    uint8_t        kernel_type      = fp16_kernel_type;
+    const uint32_t min_k            = (wtype == GGML_TYPE_IQ2_XXS || wtype == GGML_TYPE_Q2_K) ? 256u : 128u;
+    if (is_tiled && htp_is_int_hmx_weight_type((int) wtype) && opt_mm_select == 3 &&
+        ne00_padded >= (int) min_k && (ne00_padded % min_k) == 0) {
+        kernel_type = (is_batched && !is_matmul_id) ? HTP_MM_KERNEL_HMX_W8A8_BATCHED : HTP_MM_KERNEL_HMX_W8A8_2D;
     }
 
     if (is_batched_val && wtype == GGML_TYPE_F16 && !is_tiled && group_size > 1 && !bias_batched) {
@@ -730,11 +709,10 @@ static bool htp_kparams_solve_hmx_mm(
             m_id_rows = hex_round_up(std::max(m_per_expert, 32), 32);
         }
         const uint32_t cost_m = is_matmul_id ? (uint32_t) m_id_rows : (uint32_t) m_for_solver;
-        if (!htp_mm_hmx_solve_2d_params_ex(kernel_type, wtype, ne00_padded, m_id_rows, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, is_matmul_id, aligned_tile_size, bias_size, vtcm_budget, k_group, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
+        if (!htp_mm_hmx_solve_2d_params_ex(kernel_type, wtype, ne00_padded, m_id_rows, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, is_matmul_id, aligned_tile_size, bias_size, vtcm_budget, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
             if (htp_mm_kernel_is_hmx_int(kernel_type)) {
                 kernel_type = fp16_kernel_type;
-                k_group     = 0;
-                if (!htp_mm_hmx_solve_2d_params_ex(kernel_type, wtype, ne00_padded, m_id_rows, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, is_matmul_id, aligned_tile_size, bias_size, vtcm_budget, 0, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
+                if (!htp_mm_hmx_solve_2d_params_ex(kernel_type, wtype, ne00_padded, m_id_rows, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, is_matmul_id, aligned_tile_size, bias_size, vtcm_budget, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
                     return false;
                 }
             } else {
@@ -743,11 +721,12 @@ static bool htp_kparams_solve_hmx_mm(
         }
     }
 
-    const uint32_t hmx_n_groups = (k_group > 0) ? ((uint32_t) ne00_padded / k_group) : 1u;
+    const uint32_t hmx_n_groups = htp_mm_kernel_is_hmx_int(kernel_type)
+                                ? (((uint32_t) ne00_padded + HTP_MM_HMX_W8A8_KGROUP - 1u) / HTP_MM_HMX_W8A8_KGROUP)
+                                : 1u;
     const uint32_t n_k_tiles    = std::max(1, ne00_padded / 32);
 
     kparams->n_hmx              = 1;
-    kparams->hmx_kgroup         = (int32_t) k_group;
     kparams->hmx_n_groups       = (int32_t) hmx_n_groups;
     kparams->pipeline           = pipeline ? 1 : 0;
     kparams->m_chunk            = m_chunk;

@@ -308,14 +308,14 @@ on 4 physical NPUs, or `--devices 'HTP0[0-1:0],HTP1[0-1:1]'` on 2 physical NPUs 
 
 By default, the Hexagon backend is tuned for higher NPU throughput and lower memory bandwidth while preserving strong
 end-to-end accuracy across typical models. Specifically, batched matrix multiplications default to `W8A8` integer HMX
-(`--hex-mm-select 4`), which dynamically quantizes activations into 8-bit (`uint8` x `int8`) blocks with a 2048-element
-`K`-group scale (`--hex-hmx-kgroup 2048`, using HVX when `M <= 4`),
+(`--hex-mm-select 3`), which dynamically quantizes activations into 8-bit (`uint8` x `int8`) blocks with a 2048-element
+`K`-group scale (using HVX when `M <= 4`),
 and internal `FP32` activation tensors within each HTP subgraph are automatically lowered in-place to `FP16`
 (`--hex-oplower 2`). If a particular model or workload exhibits accuracy degradation (for example due to large activation
 outliers or `FP16` residual overflow), try stepping down to higher-precision configurations in the following order:
 
-1. `--hex-mm-select 4 --hex-oplower 2` (default): `W8A8` INT HMX + full internal `FP16` lowering
-2. `--hex-mm-select 4 --hex-oplower 0`: `W8A8` INT HMX + `FP32` intermediate activations (or `--hex-oplower 1` to keep only the cross-layer residual spine in `FP32`)
+1. `--hex-mm-select 3 --hex-oplower 2` (default): `W8A8` INT HMX + full internal `FP16` lowering
+2. `--hex-mm-select 3 --hex-oplower 0`: `W8A8` INT HMX + `FP32` intermediate activations (or `--hex-oplower 1` to keep only the cross-layer residual spine in `FP32`)
 3. `--hex-mm-select 2 --hex-oplower 2`: `FP16` HMX + full internal `FP16` lowering
 4. `--hex-mm-select 2 --hex-oplower 0`: `FP16` HMX + `FP32` intermediate activations
 
@@ -427,11 +427,4 @@ outliers or `FP16` residual overflow), try stepping down to higher-precision con
   - `0`: Disabled (falls back to CPU or GPU)
   - `1`: HVX vector kernels only
   - `2`: FP16 HMX matrix engine (`M > 4`) with HVX decode (`M <= 4`)
-  - `3`: INT HMX `W8A16` (`uint16` activations x `int8` weights) with HVX decode (`M <= 4`)
-  - `4`: INT HMX `W8A8` (`uint8` activations x `int8` weights) with HVX decode (`M <= 4`) (default; automatically defaults to 2 on multi-session v73 hardware unless overridden)
-
-- `GGML_HEXAGON_HMX_KGROUP=N`
-  Overrides the INT HMX K-dimension superblock group size (default: `2048`, configurable via `--hex-hmx-kgroup` in `run.py`):
-
-  - `0`: Automatic mode (also selects automatic default `2048`)
-  - `128..4096`: Explicit superblock size (default `2048`; rounded up to a multiple of `128`, or `256` for `IQ2_XXS` / `Q2_K`, and clamped to the largest divisor of `K`)
+  - `3`: INT HMX `W8A8` (`uint8` activations x `int8` weights) with HVX decode (`M <= 4`) (default; automatically defaults to 2 on multi-session v73 hardware unless overridden)

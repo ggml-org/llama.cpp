@@ -151,9 +151,7 @@ static std::string format_kernel_params(const htp_opnode & node) {
         const auto * kparams = node.kparams<htp_mm_kernel_params>();
         int32_t type = kparams->kernel_type;
         if (htp_mm_kernel_is_hmx_w8a8(type)) {
-            snprintf(str, max_size, "hmx-w8a8 kgrp %d nhvx %u vtcm %u", (int) kparams->hmx_kgroup, (unsigned int) kparams->n_hvx, (unsigned int) kparams->vtcm_size);
-        } else if (htp_mm_kernel_is_hmx_w8a16(type)) {
-            snprintf(str, max_size, "hmx-w8a16 kgrp %d nhvx %u vtcm %u", (int) kparams->hmx_kgroup, (unsigned int) kparams->n_hvx, (unsigned int) kparams->vtcm_size);
+            snprintf(str, max_size, "hmx-w8a8 nhvx %u vtcm %u", (unsigned int) kparams->n_hvx, (unsigned int) kparams->vtcm_size);
         } else {
             const char * path = "unknown";
             if (type == HTP_MM_KERNEL_HMX_2D || type == HTP_MM_KERNEL_HMX_BATCHED) {
