@@ -366,8 +366,6 @@ endif()
 
 llama_build(test-backend-ops.cpp LINK ggml Threads::Threads)
 
-llama_build_and_test(test-backend-tensor.cpp LINK ggml)
-
 if (BUILD_SHARED_LIBS)
     llama_build_and_test(test-llama-mmap.cpp ${PROJECT_SOURCE_DIR}/src/llama-impl.cpp ${PROJECT_SOURCE_DIR}/src/llama-mmap.cpp LABEL behavior)
     target_compile_definitions(test-llama-mmap PRIVATE LLAMA_BUILD)
@@ -428,11 +426,10 @@ add_executable(${TEST_TARGET} test-c.c)
 target_link_libraries(${TEST_TARGET} PRIVATE llama)
 
 if (NOT LLAMA_USE_SYSTEM_GGML)
-    # Needs non-public ggml-impl.h
+    # Need non-public ggml{,-backend}-impl.h
     llama_build_and_test(test-gguf.cpp  LABEL behavior  LINK ggml)
-
-    # Needs non-public ggml{,-backend}-impl.h
     llama_build_and_test(test-alloc.cpp  LABEL "behavior backend"  LINK ggml)
+    llama_build_and_test(test-backend-tensor.cpp LINK ggml)
 endif()
 
 llama_build(test-export-graph-ops.cpp)
