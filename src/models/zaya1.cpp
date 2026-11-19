@@ -233,7 +233,7 @@ ggml_tensor * llama_model_zaya1::graph::build_cca_block(const llama_model & mode
     cb(Vcur, "cca_v", il);
 
     return build_attn(inp->get_attn(),
-            layer.wo, NULL, layer.wo_s,
+            layer.wo, NULL,
             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf((float) n_embd_head), il);
 }
 
