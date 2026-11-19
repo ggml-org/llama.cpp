@@ -1766,6 +1766,9 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
             !GgmlOvDecoder::is_conv_state_snapshot_writeback(op)) {
             return {false, "GET_ROWS/SET_ROWS with ne[3] != 1 (ne[3]=" + std::to_string(op->ne[3]) + ") is not supported"};
         }
+        if (op->op == GGML_OP_SET_ROWS && op->src[0]->type == GGML_TYPE_BF16) {
+            return {false, "SET_ROWS with BF16 src0 is not supported"};
+        }
         if (op->ne[0] == 256 && (op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q5_K ||
                                  op->src[0]->type == GGML_TYPE_Q4_1 || op->src[0]->type == GGML_TYPE_Q5_1)) {
             // These are all f16-arithmetic dequant rounding errors that intermittently exceed the
@@ -2034,6 +2037,9 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
     case GGML_OP_ROPE: {
         if (op->view_src != nullptr && !ggml_is_contiguous(op->src[0])) {
             return {false, "ROPE on VIEW / non-contiguous input is not supported"};
+        }
+        if (op->type == GGML_TYPE_BF16) {
+            return {false, "ROPE with BF16 type is not supported"};
         }
         break;
     }
