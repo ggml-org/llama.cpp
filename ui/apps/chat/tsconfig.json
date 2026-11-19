@@ -28,6 +28,8 @@
 			"highlight.js/*": ["./node_modules/highlight.js/*"],
 			"@ggml-org/llama-brand": ["./node_modules/@ggml-org/llama-brand"],
 			"@ggml-org/llama-brand/*": ["./node_modules/@ggml-org/llama-brand/*"],
+			"lowlight": ["./node_modules/lowlight"],
+			"lowlight/*": ["./node_modules/lowlight/*"],
 			"mode-watcher": ["./node_modules/mode-watcher"],
 			"mode-watcher/*": ["./node_modules/mode-watcher/*"],
 			"svelte": ["./node_modules/svelte"],
