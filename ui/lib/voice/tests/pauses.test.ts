@@ -1,7 +1,7 @@
 // Guards where a recording is cut into pieces to transcribe while it goes on: at pauses
 // after speech, judged against the room's noise, and at the latest after a long stretch.
 
-import { PauseDetector } from '../src/index.js';
+import { PauseDetector } from '../src/pauses.js';
 import { describe, expect, it } from 'vitest';
 
 const INTERVAL = 50;

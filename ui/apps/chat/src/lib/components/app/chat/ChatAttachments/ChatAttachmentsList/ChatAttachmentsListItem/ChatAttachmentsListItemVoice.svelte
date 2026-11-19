@@ -5,15 +5,10 @@
 	stored without peaks (an older message, an uploaded file) gets them computed from its audio.
 -->
 <script lang="ts">
-	import {
-		spokenLength,
-		VoiceTranscriptReveal,
-		type VoiceTranscriptStatus,
-		VoiceWaveform
-	} from '@ggml-org/llama-ui/voice';
+	import { spokenLength, VoiceTranscriptReveal, VoiceWaveform } from '@ggml-org/llama-ui/voice';
 	import { X } from '@lucide/svelte';
 	import { ActionIcon } from '#lib/components/app/index.ts';
-	import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+	import { SETTINGS_KEYS, VOICE_MESSAGE_LABEL } from '#lib/constants/index.ts';
 	import { settingsStore, voiceTranscriptsStore } from '#lib/stores/index.ts';
 	import type { ChatAttachmentDisplayItem } from '#lib/types/index.ts';
 	import { audioUrl, lazyPeaks, voiceAttachmentSource } from '#lib/utils/voice-attachment.ts';
@@ -33,20 +28,10 @@
 	let src = $state<string | undefined>();
 
 	let peaks = $derived(source.peaks ?? computedPeaks ?? []);
-	let pending = $derived(voiceTranscriptsStore.get(source.name));
-	let transcript = $derived(
-		source.transcript ?? (pending?.status === 'done' ? pending.transcript : undefined)
-	);
-	let status = $derived<VoiceTranscriptStatus>(
-		transcript !== undefined
-			? 'done'
-			: pending?.status === 'transcribing'
-				? 'transcribing'
-				: pending?.status === 'error'
-					? 'error'
-					: 'idle'
-	);
-	let label = $derived(source.voice ? 'Voice message' : source.name);
+	let shown = $derived(voiceTranscriptsStore.shown(source.name, source.transcript));
+	let transcript = $derived(shown.transcript);
+	let status = $derived(shown.status);
+	let label = $derived(source.voice ? VOICE_MESSAGE_LABEL : source.name);
 	// the transcript lights up word by word as the clip plays, and stays lit
 	let playbackMs = $state<number | null>(null);
 	let spoken = $derived(

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Music } from '@lucide/svelte';
+	import { VOICE_MESSAGE_LABEL } from '#lib/constants/index.ts';
 	import { voiceTranscriptsStore } from '#lib/stores/index.ts';
 	import type { ChatAttachmentDisplayItem } from '#lib/types/index.ts';
 	import { voiceAttachmentSource } from '#lib/utils/voice-attachment.ts';
@@ -13,12 +14,9 @@
 
 	let source = $derived(currentItem ? voiceAttachmentSource(currentItem) : null);
 	// a voice message's transcript, from the message or still on its way
-	let transcript = $derived(
-		source ? (source.transcript ?? voiceTranscriptsStore.transcriptOf(source.name)) : undefined
-	);
-	let transcribing = $derived(
-		!!source && !transcript && voiceTranscriptsStore.get(source.name)?.status === 'transcribing'
-	);
+	let shown = $derived(source ? voiceTranscriptsStore.shown(source.name, source.transcript) : null);
+	let transcript = $derived(shown?.transcript);
+	let transcribing = $derived(shown?.status === 'transcribing');
 </script>
 
 <div class="flex flex-1 items-center justify-center p-8">
@@ -34,7 +32,7 @@
 		{/if}
 
 		<p class="text-sm text-white/50">
-			{source?.voice ? 'Voice message' : currentItem?.name || 'Audio'}
+			{source?.voice ? VOICE_MESSAGE_LABEL : currentItem?.name || 'Audio'}
 		</p>
 
 		{#if transcript}

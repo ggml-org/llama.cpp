@@ -2,13 +2,9 @@
 // final transcript comes from it; when the model cannot stream, the session falls back
 // to one HTTP transcription of the clip without telling the user anything went wrong.
 
-import {
-	startVoiceSession,
-	type VoiceCapture,
-	type VoiceClip,
-	type VoicePcmListener,
-	type VoiceServerContext
-} from '../src/index.js';
+import { type VoiceCapture } from '../src/capture.js';
+import { startVoiceSession } from '../src/session.js';
+import { type VoiceClip, type VoicePcmListener, type VoiceServerContext } from '../src/types.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 class FakeWebSocket {

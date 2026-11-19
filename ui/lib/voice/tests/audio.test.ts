@@ -1,19 +1,17 @@
 // Guards the voice engine's audio math: PCM16 conversion, the streaming resampler,
 // the WAV the server accepts (16-bit PCM mono header fields), peaks and levels.
 
+import { LevelHistory, rms, rmsToLevel } from '../src/levels.js';
 import {
 	base64ToBytes,
-	computePeaks,
 	concatPcm16,
 	createResampler,
-	encodeWav,
 	floatToPcm16,
-	LevelHistory,
 	pcm16ToBase64,
-	pcm16ToFloat,
-	rms,
-	rmsToLevel
-} from '../src/index.js';
+	pcm16ToFloat
+} from '../src/pcm.js';
+import { computePeaks } from '../src/peaks.js';
+import { encodeWav } from '../src/wav.js';
 import { describe, expect, it } from 'vitest';
 
 function sine(rate: number, seconds: number, frequency: number, amplitude = 0.5): Float32Array {

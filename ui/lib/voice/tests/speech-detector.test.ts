@@ -2,13 +2,9 @@
 // drops at once and creeps back up, above an absolute minimum, with a stricter threshold
 // for a listener that asks for one.
 
-import {
-	isSpeechLevel,
-	levelToDb,
-	rmsToDb,
-	SpeechDetector,
-	VOICE_SPEECH
-} from '../src/index.js';
+import { VOICE_SPEECH } from '../src/constants.js';
+import { levelToDb, rmsToDb } from '../src/levels.js';
+import { isSpeechLevel, SpeechDetector } from '../src/speech-detector.js';
 import { describe, expect, it } from 'vitest';
 
 /** Pushes `ms` of one level in 50 ms steps; true if the last one was speech. */

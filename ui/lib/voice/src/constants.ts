@@ -1,7 +1,4 @@
-/**
- * Voice engine defaults. Kept next to the engine (not in `#lib/constants/index.ts`) so the
- * folder can move into its own package without pulling the app's constants along.
- */
+/** Voice engine defaults. */
 
 /** Type of the recorded clips: 16-bit PCM WAV, what speech encoders and `input_audio` take. */
 export const VOICE_WAV_MIME = 'audio/wav';

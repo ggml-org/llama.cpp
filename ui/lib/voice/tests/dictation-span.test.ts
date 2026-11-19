@@ -1,7 +1,7 @@
 // Guards how dictation writes into the message: at the caret, replacing only its own text
 // as the transcript grows, and keeping what the user typed around it.
 
-import { DictationSpan } from '../src/index.js';
+import { DictationSpan } from '../src/dictation-span.js';
 import { describe, expect, it } from 'vitest';
 
 describe('DictationSpan', () => {

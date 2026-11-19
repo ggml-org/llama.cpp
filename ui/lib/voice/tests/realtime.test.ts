@@ -2,14 +2,10 @@
 // protocol (tools/server/README.md): the URL, the session flow, deltas and completed
 // events, the final commit, the "does not support" error, refused sockets and timeouts.
 
-import {
-	base64ToBytes,
-	RealtimeError,
-	RealtimeTranscriber,
-	RealtimeUnsupportedError,
-	realtimeUrl,
-	type VoiceServerContext
-} from '../src/index.js';
+import { RealtimeError, RealtimeUnsupportedError } from '../src/errors.js';
+import { base64ToBytes } from '../src/pcm.js';
+import { RealtimeTranscriber, realtimeUrl } from '../src/realtime.js';
+import { type VoiceServerContext } from '../src/types.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 class FakeWebSocket {
@@ -216,6 +212,22 @@ describe('RealtimeTranscriber', () => {
 		completed('Fine.');
 
 		await expect(finished).resolves.toBe('Hello there. How are you? Fine.');
+	});
+
+	it('goes on with the next piece after one the server failed', async () => {
+		const onError = vi.fn();
+		const transcriber = new RealtimeTranscriber(context, { onError, sampleRate: 16_000 });
+		const connected = transcriber.connect();
+
+		socket().emit(sessionCreated('realtime'));
+		await connected;
+		transcriber.append(Int16Array.from([1]));
+		transcriber.commitSegment();
+		socket().emit({ error: { message: 'decode failed' }, type: 'error' });
+
+		expect(onError).toHaveBeenCalledOnce();
+		transcriber.append(Int16Array.from([2]));
+		expect(transcriber.canCommitSegment).toBe(true);
 	});
 
 	it('ends without a final commit when every piece was committed already', async () => {

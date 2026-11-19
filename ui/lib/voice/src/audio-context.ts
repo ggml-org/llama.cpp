@@ -13,6 +13,9 @@ import { loadPcmTapModule } from './pcm-tap.js';
 
 let shared: AudioContext | null = null;
 let modulesReady: Promise<void> | null = null;
+// captures using the shared context: it idles once the last one lets go, not before, as a
+// capture still letting go may overlap the next one's start
+let holders = 0;
 
 function createContext(): AudioContext {
 	try {
@@ -23,10 +26,10 @@ function createContext(): AudioContext {
 	}
 }
 
-/** The shared context, made on first use, with the PCM tap's worklet loading. */
-export function captureContext(): { context: AudioContext; ready: Promise<void> } {
+function sharedContext(): { context: AudioContext; ready: Promise<void> } {
 	if (!shared || shared.state === 'closed') {
 		shared = createContext();
+		holders = 0;
 		modulesReady = loadPcmTapModule(shared).catch((error) => {
 			// the tap falls back to a ScriptProcessor
 			console.warn('AudioWorklet unavailable, using ScriptProcessor:', error);
@@ -34,6 +37,18 @@ export function captureContext(): { context: AudioContext; ready: Promise<void> 
 	}
 
 	return { context: shared, ready: modulesReady ?? Promise.resolve() };
+}
+
+/**
+ * The shared context for a capture, made on first use, with the PCM tap's worklet loading.
+ * The capture hands it back with idleCaptureContext.
+ */
+export function captureContext(): { context: AudioContext; ready: Promise<void> } {
+	const handle = sharedContext();
+
+	holders++;
+
+	return handle;
 }
 
 /**
@@ -45,13 +60,13 @@ export function warmUpVoiceCapture(): void {
 	if (typeof AudioContext === 'undefined') return;
 
 	try {
-		void captureContext().ready;
+		void sharedContext().ready;
 	} catch {
 		// no audio here: the recording reports it when it starts
 	}
 }
 
-/** Lets the context idle between recordings, so it renders nothing. */
+/** Hands back a capture's context: it idles between recordings, so it renders nothing. */
 export function idleCaptureContext(context: AudioContext): void {
 	if (context !== shared) {
 		if (context.state !== 'closed') context.close().catch(() => {});
@@ -59,5 +74,7 @@ export function idleCaptureContext(context: AudioContext): void {
 		return;
 	}
 
-	if (context.state === 'running') context.suspend().catch(() => {});
+	holders = Math.max(0, holders - 1);
+
+	if (holders === 0 && context.state === 'running') context.suspend().catch(() => {});
 }

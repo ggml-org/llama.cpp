@@ -1,5 +1,5 @@
-import { computePeaksFromAudio } from '@ggml-org/llama-voice';
-import { AttachmentType } from '#lib/enums/index.ts';
+import { base64ToBytes, computePeaksFromAudio } from '@ggml-org/llama-voice';
+import { AttachmentType, MimeTypeAudio } from '#lib/enums/index.ts';
 import type { ChatAttachmentDisplayItem, DatabaseMessageExtraAudioFile } from '#lib/types/index.ts';
 
 // peaks of clips stored without them, kept for the session only
@@ -61,22 +61,18 @@ export function audioUrl(
 
 	if (typeof audio !== 'string') return { revoke: true, url: URL.createObjectURL(audio) };
 
-	let binary: string;
+	let bytes: Uint8Array<ArrayBuffer>;
 
 	try {
-		binary = atob(audio);
+		bytes = base64ToBytes(audio);
 	} catch {
 		// not base64: nothing to play
 		return null;
 	}
 
-	const bytes = new Uint8Array(binary.length);
-
-	for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-
 	return {
 		revoke: true,
-		url: URL.createObjectURL(new Blob([bytes], { type: mimeType || 'audio/wav' }))
+		url: URL.createObjectURL(new Blob([bytes], { type: mimeType || MimeTypeAudio.WAV }))
 	};
 }
 

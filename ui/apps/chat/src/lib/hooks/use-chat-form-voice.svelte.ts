@@ -57,7 +57,7 @@ export interface VoiceRecorderLike {
 export type ChatFormVoiceState = 'idle' | 'starting' | 'recording' | 'transcribing';
 
 interface UseChatFormVoiceOptions {
-	getRecorder: () => VoiceRecorderLike | undefined;
+	recorder: VoiceRecorderLike;
 	getValue: () => string;
 	/** Writes the message as dictation changes it; not a user edit. */
 	setValue: (value: string) => void;
@@ -115,6 +115,8 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 	let dictationVersion = $state(0);
 	// bumped by cancel, so a recording still starting or stopping is dropped
 	let generation = 0;
+	// the pointer or the focus is on the microphone button, see prepare
+	let preparing = false;
 
 	const warmup = new MicrophoneWarmup();
 	const dictation = createDictation({
@@ -126,7 +128,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		setCaretOffset: options.setCaretOffset,
 		setValue: options.setValue
 	});
-	const recorder = $derived(options.getRecorder());
+	const recorder = options.recorder;
 	const unavailableReason = $derived(
 		resolution.mode === VoiceMode.UNAVAILABLE ? resolution.reason : null
 	);
@@ -178,13 +180,16 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 	async function prepare() {
 		if (!recorder || state !== 'idle' || resolution.mode === VoiceMode.UNAVAILABLE) return;
 
+		preparing = true;
+
 		const wiring = await wiringFor(resolution.mode, resolution.transcriptionModel);
 
-		// a press that came meanwhile asked for its own microphone
-		if (state === 'idle') warmup.open(wiring.capture);
+		// the pointer may have left meanwhile, and a press asks for its own microphone
+		if (preparing && state === 'idle') warmup.open(wiring.capture);
 	}
 
 	function unprepare() {
+		preparing = false;
 		warmup.release();
 	}
 
@@ -194,7 +199,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		const mode = resolution.mode;
 		const model = resolution.transcriptionModel;
 
-		if (resolution.mode === VoiceMode.DICTATION && resolution.separateModel && !hintSeen) {
+		if (hint) {
 			hintSeen = true;
 			writeHintSeen();
 		}
@@ -210,6 +215,13 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 			const wiring = await wiringFor(mode, model);
 			// the microphone the hover opened, when it is open for the same options
 			const stream = await warmup.take(wiring.capture);
+
+			// cancelled while the microphone opened
+			if (run !== generation) {
+				for (const track of stream?.getTracks() ?? []) track.stop();
+
+				return;
+			}
 
 			await recorder.start({
 				...wiring,
@@ -232,6 +244,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 			return;
 		}
 
+		// cancelled meanwhile: the recorder dropped its own session
 		if (run !== generation) return;
 
 		options.onMicError(null);
@@ -253,6 +266,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 			result = await recorder.stop();
 		} catch (error) {
 			console.error('Failed to stop the recording:', error);
+			dictation.cancel();
 			state = 'idle';
 
 			return;
@@ -315,6 +329,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 	}
 
 	onDestroy(() => {
+		preparing = false;
 		warmup.drop();
 
 		if (state !== 'idle') cancel();

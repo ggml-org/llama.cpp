@@ -24,6 +24,9 @@ export const VOICE_SEPARATE_MODEL_HINT_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.v
 /** Name prefix of a voice message's WAV file; the rest makes it unique per recording. */
 export const VOICE_CLIP_NAME_PREFIX = 'voice-';
 
+/** What a voice message attachment is called, in place of its file name. */
+export const VOICE_MESSAGE_LABEL = 'Voice message';
+
 /**
  * The Transcription model setting's Automatic choice: the chat model when it hears, else a
  * model with audio input that is already loaded, so dictating loads nothing.

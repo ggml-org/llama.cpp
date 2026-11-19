@@ -5,18 +5,15 @@ import {
 } from '#lib/constants/voice.constants.ts';
 import { VoiceInputMode, VoiceMode, VoiceModelRole } from '#lib/enums/index.ts';
 
-export interface VoiceModeInput {
+export interface VoiceModeInput extends Omit<
+	DictationModelInput,
+	'singleModel' | 'singleModelHasAudio'
+> {
 	/** The Voice input setting. */
 	setting: VoiceInputMode | string;
 	/** The conversation's effective model, null when none is picked. */
 	chatModel: string | null;
 	chatModelHasAudio: boolean;
-	isRouter: boolean;
-	/** The Transcription model setting; VOICE_TRANSCRIPTION_MODEL_AUTO picks one. */
-	transcriptionModel: string;
-	transcriptionModelHasAudio: boolean;
-	/** Router mode: a loaded model with audio input, which Automatic falls back to. */
-	loadedAudioModel?: string | null;
 }
 
 export type VoiceModeResolution =
@@ -54,22 +51,16 @@ export function resolveVoiceMode(input: VoiceModeInput): VoiceModeResolution {
 	// a single-model server has no other model to transcribe with
 	if (!isRouter) return { mode: VoiceMode.UNAVAILABLE, reason: VOICE_MODE_MESSAGE.unavailable };
 
-	const chosen = input.transcriptionModel.trim();
+	const transcriptionModel = dictationModelFor(input);
 
-	if (chosen !== VOICE_TRANSCRIPTION_MODEL_AUTO) {
-		if (input.transcriptionModelHasAudio) {
-			return {
-				mode: VoiceMode.DICTATION,
-				separateModel: chosen !== chatModel,
-				transcriptionModel: chosen
-			};
-		}
-	} else if (input.loadedAudioModel) {
-		// already loaded, so transcribing swaps no model in or out
+	if (transcriptionModel) {
 		return {
 			mode: VoiceMode.DICTATION,
-			separateModel: false,
-			transcriptionModel: input.loadedAudioModel
+			// on Automatic it is already loaded, so transcribing swaps no model in or out
+			separateModel:
+				input.transcriptionModel.trim() !== VOICE_TRANSCRIPTION_MODEL_AUTO &&
+				transcriptionModel !== chatModel,
+			transcriptionModel
 		};
 	}
 

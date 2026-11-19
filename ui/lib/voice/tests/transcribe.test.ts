@@ -1,11 +1,9 @@
 // Guards the HTTP transcription client: the multipart request
 // /v1/audio/transcriptions expects, auth headers, and the server's error messages.
 
-import {
-	transcribeClip,
-	type VoiceServerContext,
-	VoiceTranscriptionError
-} from '../src/index.js';
+import { VoiceTranscriptionError } from '../src/errors.js';
+import { transcribeClip } from '../src/transcribe.js';
+import { type VoiceServerContext } from '../src/types.js';
 import { describe, expect, it, vi } from 'vitest';
 
 function contextWith(fetchImpl: typeof fetch): VoiceServerContext {

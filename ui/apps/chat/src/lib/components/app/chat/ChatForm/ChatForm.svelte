@@ -197,9 +197,9 @@
 			onUploadedFilesChange?.(uploadedFiles);
 		},
 		getCaretOffset: () => inputRef?.getCaretOffset() ?? value.length,
-		getRecorder: () => recorder,
 		getValue: () => value,
 		onMicError: (message) => (micError = message),
+		recorder,
 		// on a phone placing the caret would open the keyboard
 		setCaretOffset: (offset) => {
 			if (!deviceStore.isMobile) inputRef?.setCaretOffset(offset);
@@ -665,10 +665,7 @@
 	async function handleStopAndSend() {
 		await voice.stop();
 		await tick();
-
-		if (!canSubmit || disabled || hasLoadingAttachments) return;
-
-		onSubmit?.();
+		await submit();
 	}
 
 	// Escape drops a recording, wherever the focus is

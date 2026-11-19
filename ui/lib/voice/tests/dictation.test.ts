@@ -2,7 +2,7 @@
 // caret, the user's typing around it stays, the whole recording's text replaces the live
 // text when it comes, and a cancel or a voice message takes the text back out.
 
-import { createDictation } from '../src/index.js';
+import { createDictation } from '../src/dictation.js';
 import { describe, expect, it, vi } from 'vitest';
 
 /** A text field: its value and caret, and a dictation writing into it. */

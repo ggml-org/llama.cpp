@@ -7,7 +7,15 @@
 
 export { warmUpVoiceCapture } from './audio-context.js';
 export { VoiceCapture } from './capture.js';
-export * from './constants.js';
+export {
+	VOICE_LEVELS_INTERVAL_MS,
+	VOICE_LEVELS_LENGTH,
+	VOICE_MICROPHONE_CONSTRAINTS,
+	VOICE_MICROPHONE_MESSAGE,
+	VOICE_PEAKS_COUNT,
+	VOICE_SAMPLE_RATE,
+	VOICE_WAV_MIME
+} from './constants.js';
 export {
 	type BeginDictationOptions,
 	createDictation,
@@ -23,41 +31,23 @@ export {
 	VoiceCaptureError,
 	VoiceTranscriptionError
 } from './errors.js';
-export {
-	isTooQuiet,
-	measureSpeech,
-	normalizeSpeech,
-	softLimit,
-	SpeechGain,
-	speechGainFor,
-	type SpeechGainResult
-} from './gain.js';
-export { LevelHistory, levelToDb, rms, rmsToDb, rmsToLevel } from './levels.js';
-export {
-	base64ToBytes,
-	bytesToBase64,
-	concatPcm16,
-	createResampler,
-	floatToPcm16,
-	pcm16ToBase64,
-	pcm16ToFloat,
-	type Resampler
-} from './pcm.js';
+export { SpeechGain } from './gain.js';
+export { levelToDb } from './levels.js';
 export {
 	listMicrophones,
 	type Microphone,
-	microphoneAllowed,
 	microphoneRequest,
 	pickMicrophone,
 	resolveMicrophone,
 	VOICE_MICROPHONE_AUTO,
 	VOICE_MICROPHONE_DEFAULT
 } from './microphone.js';
-export { computePeaks, computePeaksFromAudio, decodeAudio, mixToMono } from './peaks.js';
-export { RealtimeTranscriber, realtimeUrl } from './realtime.js';
 export { PauseDetector, type PauseDetectorOptions } from './pauses.js';
+export { base64ToBytes } from './pcm.js';
+export { computePeaks, computePeaksFromAudio } from './peaks.js';
+export { RealtimeTranscriber } from './realtime.js';
 export { startVoiceSession } from './session.js';
-export { isSpeechLevel, SpeechDetector, type SpeechDetectorOptions } from './speech-detector.js';
+export { SpeechDetector, type SpeechDetectorOptions } from './speech-detector.js';
 export {
 	describeMicrophoneError,
 	isVoiceCaptureSupported,

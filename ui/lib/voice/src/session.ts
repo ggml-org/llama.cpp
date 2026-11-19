@@ -1,5 +1,5 @@
 import { VoiceCapture } from './capture.js';
-import { VOICE_LEVELS_INTERVAL_MS, VOICE_PIECE, VOICE_RETRANSCRIBE_MAX_MS } from './constants.js';
+import { VOICE_PIECE, VOICE_RETRANSCRIBE_MAX_MS } from './constants.js';
 import { RealtimeUnsupportedError } from './errors.js';
 import { HttpPieceTranscriber } from './http-pieces.js';
 import { PauseDetector } from './pauses.js';
@@ -48,7 +48,7 @@ export async function startVoiceSession(options: VoiceSessionOptions = {}): Prom
 	// cuts the recording at the speaker's pauses: short ones, so the text keeps up with them
 	const cutAtPauses = (cut: () => boolean) => {
 		const pauses = new PauseDetector({
-			intervalMs: capture.levelsIntervalMs ?? VOICE_LEVELS_INTERVAL_MS,
+			intervalMs: capture.levelsIntervalMs,
 			maxSegmentMs: VOICE_PIECE.MAX_MS,
 			minSpeechMs: VOICE_PIECE.MIN_SPEECH_MS,
 			pauseMs: VOICE_PIECE.PAUSE_MS

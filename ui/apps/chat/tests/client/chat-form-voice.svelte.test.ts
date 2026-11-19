@@ -211,6 +211,28 @@ describe('a pointer on the microphone', () => {
 		);
 		await expect.poll(() => stream.getAudioTracks()[0].readyState, { timeout: 4000 }).toBe('ended');
 	});
+
+	it('lets the microphone go when the recording is cancelled while it opens', async () => {
+		seed(true);
+
+		const { getUserMedia, stream } = grantMicrophone();
+		const opening = deferred<MediaStream>();
+
+		getUserMedia.mockReturnValueOnce(opening.promise);
+
+		const { recorder, screen } = await renderForm();
+		const mic = screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last();
+
+		await mic.hover();
+		await expect.poll(() => getUserMedia.mock.calls.length).toBe(1);
+		await mic.click();
+		await userEvent.keyboard('{Escape}');
+
+		opening.resolve(stream);
+
+		await expect.poll(() => stream.getAudioTracks()[0].readyState).toBe('ended');
+		expect(recorder.status).toBe('idle');
+	});
 });
 
 describe('while a reply streams', () => {

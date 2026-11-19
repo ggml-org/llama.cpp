@@ -1,9 +1,6 @@
 import type { VoiceCapture } from './capture.js';
 
-/**
- * Voice engine types. Kept next to the engine so the folder can move into its own
- * package; the app re-exports nothing from here and imports `#lib/voice/index.ts` directly.
- */
+/** Voice engine types. */
 
 /** A finished recording, ready to send and to draw. */
 export interface VoiceClip {

@@ -2,17 +2,16 @@
 // only raises and stops at its cap, loud peaks bend instead of clipping, and speech that
 // stays quiet even at the cap is told.
 
+import { VOICE_GAIN } from '../src/constants.js';
 import {
-	floatToPcm16,
 	isTooQuiet,
 	measureSpeech,
 	normalizeSpeech,
-	pcm16ToFloat,
 	softLimit,
 	SpeechGain,
-	speechGainFor,
-	VOICE_GAIN
-} from '../src/index.js';
+	speechGainFor
+} from '../src/gain.js';
+import { floatToPcm16, pcm16ToFloat } from '../src/pcm.js';
 import { describe, expect, it } from 'vitest';
 
 const RATE = 16_000;

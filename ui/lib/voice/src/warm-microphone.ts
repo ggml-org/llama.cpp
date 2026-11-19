@@ -1,5 +1,5 @@
 import { VOICE_WARMUP_RELEASE_MS } from './constants.js';
-import { microphoneAllowed, microphoneRequest } from './microphone.js';
+import { microphoneAllowed, microphoneRequest, stopStream } from './microphone.js';
 import type { VoiceCaptureOptions } from './types.js';
 
 type MicrophoneOptions = Pick<VoiceCaptureOptions, 'constraints' | 'deviceId'>;
@@ -7,10 +7,6 @@ type MicrophoneOptions = Pick<VoiceCaptureOptions, 'constraints' | 'deviceId'>;
 interface Warm {
 	key: string;
 	stream: Promise<MediaStream | null>;
-}
-
-function stopStream(stream: MediaStream | null): void {
-	for (const track of stream?.getTracks() ?? []) track.stop();
 }
 
 /**

@@ -1,3 +1,4 @@
+import { concatPcm16 } from './pcm.js';
 import { joinPieces } from './realtime.js';
 import { encodeWav } from './wav.js';
 
@@ -59,14 +60,7 @@ export class HttpPieceTranscriber {
 	cut(): void {
 		if (!this.canCut) return;
 
-		const samples = new Int16Array(this.length);
-
-		let offset = 0;
-
-		for (const chunk of this.chunks) {
-			samples.set(chunk, offset);
-			offset += chunk.length;
-		}
+		const samples = concatPcm16(this.chunks);
 
 		this.chunks = [];
 		this.length = 0;

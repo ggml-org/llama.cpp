@@ -8,6 +8,7 @@
  * gets it written into its stored attachment afterwards. Kept in memory only.
  */
 
+import type { VoiceTranscriptStatus } from '@ggml-org/llama-ui/voice';
 import { AttachmentType } from '#lib/enums/index.ts';
 import { DatabaseService } from '#lib/services/database.service.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
@@ -57,7 +58,7 @@ class VoiceTranscriptsStore {
 	private entries = new SvelteMap<string, VoiceTranscriptState>();
 	private recordedAt = new Map<string, number>();
 
-	/** Drops a clip removed from the form before it was sent. */
+	/** Drops a clip removed from the form before it was sent, or whose message has its transcript. */
 	forget(name: string): void {
 		this.entries.delete(name);
 		this.recordedAt.delete(name);
@@ -74,6 +75,15 @@ class VoiceTranscriptsStore {
 		this.edited.add(name);
 		this.recordedAt.set(name, this.recordedAt.get(name) ?? Date.now());
 		this.entries.set(name, { status: 'done', transcript });
+	}
+
+	/** A clip's transcript as it is shown: the one stored with it, else the one on its way. */
+	shown(name: string, stored?: string): { status: VoiceTranscriptStatus; transcript?: string } {
+		const transcript = stored ?? this.transcriptOf(name);
+
+		if (transcript !== undefined) return { status: 'done', transcript };
+
+		return { status: this.entries.get(name)?.status ?? 'idle' };
 	}
 
 	/** Follows a clip's transcript, and writes it into the message it went out with. */
@@ -111,7 +121,8 @@ class VoiceTranscriptsStore {
 		for (const delay of [0, ...APPLY_RETRY_DELAYS_MS]) {
 			if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
 
-			if (await this.writeTranscript(name, transcript)) return;
+			// in its message now, which shows it from there
+			if (await this.writeTranscript(name, transcript)) return this.forget(name);
 		}
 		// not sent (still in the form, or dropped): a send reads it from here
 	}

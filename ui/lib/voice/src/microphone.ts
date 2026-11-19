@@ -74,6 +74,11 @@ export async function resolveMicrophone(choice: string): Promise<string | undefi
 	}
 }
 
+/** Lets go of a microphone: its tracks stop, and the browser's recording indicator goes. */
+export function stopStream(stream: MediaStream | null | undefined): void {
+	for (const track of stream?.getTracks() ?? []) track.stop();
+}
+
 /**
  * What a recording asks the browser for: the raw signal (VOICE_MICROPHONE_CONSTRAINTS)
  * with the caller's processing on top, from `deviceId` when one is picked. The same

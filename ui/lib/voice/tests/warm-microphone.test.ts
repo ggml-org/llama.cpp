@@ -1,7 +1,9 @@
 // Guards opening the microphone ahead of a recording: only when the page may already use
 // it, handed over to a recording with the same options, and let go otherwise.
 
-import { MicrophoneWarmup, microphoneRequest, VOICE_MICROPHONE_CONSTRAINTS } from '../src/index.js';
+import { VOICE_MICROPHONE_CONSTRAINTS } from '../src/constants.js';
+import { microphoneRequest } from '../src/microphone.js';
+import { MicrophoneWarmup } from '../src/warm-microphone.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 interface FakeTrack {
@@ -45,11 +47,11 @@ afterEach(() => {
 describe('microphoneRequest', () => {
 	it('asks for the raw signal, the caller’s processing on top, from the picked device', () => {
 		expect(microphoneRequest({})).toEqual({ audio: VOICE_MICROPHONE_CONSTRAINTS });
-		expect(
-			microphoneRequest({ constraints: { echoCancellation: true }, deviceId: 'usb' })
-		).toEqual({
-			audio: { ...VOICE_MICROPHONE_CONSTRAINTS, deviceId: 'usb', echoCancellation: true }
-		});
+		expect(microphoneRequest({ constraints: { echoCancellation: true }, deviceId: 'usb' })).toEqual(
+			{
+				audio: { ...VOICE_MICROPHONE_CONSTRAINTS, deviceId: 'usb', echoCancellation: true }
+			}
+		);
 	});
 });
 

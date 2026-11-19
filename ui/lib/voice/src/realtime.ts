@@ -320,6 +320,13 @@ export class RealtimeTranscriber {
 
 		const error = new RealtimeError(message);
 
+		// a piece that failed gets no transcript: commit the next one, and let a finish go on
+		if (this.inFlight > 0) {
+			this.inFlight = 0;
+
+			for (const wake of this.idleWaiters.splice(0)) wake();
+		}
+
 		this.options.onError?.(error);
 
 		if (this.state === 'finishing') this.fail(error);

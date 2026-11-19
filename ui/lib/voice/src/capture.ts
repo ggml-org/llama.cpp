@@ -6,14 +6,13 @@ import {
 	VOICE_GAIN,
 	VOICE_LEVELS_INTERVAL_MS,
 	VOICE_LEVELS_LENGTH,
-	VOICE_MICROPHONE_CONSTRAINTS,
 	VOICE_PEAKS_COUNT,
 	VOICE_SAMPLE_RATE
 } from './constants.js';
 import { VoiceCaptureError } from './errors.js';
 import { normalizeSpeech, SpeechGain } from './gain.js';
 import { LevelHistory, rms, rmsToLevel } from './levels.js';
-import { microphoneRequest } from './microphone.js';
+import { microphoneRequest, stopStream } from './microphone.js';
 import { concatPcm16, createResampler, floatToPcm16, type Resampler } from './pcm.js';
 import { createPcmTap, type PcmTap } from './pcm-tap.js';
 import { computePeaks } from './peaks.js';
@@ -177,11 +176,11 @@ export class VoiceCapture {
 			// resumed now, while the click still allows it: the microphone may take a while
 			if (context.state === 'suspended') context.resume().catch(() => {});
 
-			stream ??= await navigator.mediaDevices.getUserMedia(microphoneRequest(this.options));
+			const request = microphoneRequest(this.options);
+
+			stream ??= await navigator.mediaDevices.getUserMedia(request);
 			timing.mark('microphone');
-			timing.note(
-				checkProcessing(stream, { ...VOICE_MICROPHONE_CONSTRAINTS, ...this.options.constraints })
-			);
+			timing.note(checkProcessing(stream, request.audio as MediaTrackConstraints));
 
 			if (dropped()) throw new DOMException('Voice capture cancelled', 'AbortError');
 
@@ -393,7 +392,7 @@ export class VoiceCapture {
 }
 
 function releaseDevice(stream: MediaStream | null, context: AudioContext | null): void {
-	for (const track of stream?.getTracks() ?? []) track.stop();
+	stopStream(stream);
 
 	if (context) idleCaptureContext(context);
 }
