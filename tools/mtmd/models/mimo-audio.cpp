@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_mimo_audio::build() {
+ggml_cgraph * mtmd_graph_mimo_audio::build() {
     ggml_tensor * inp = build_inp_raw(1); // [n_frames, n_mel, 1]
 
     ggml_tensor * cur = ggml_conv_1d_ph(ctx0, model.conv1d_1_w, inp, 1, 1);
@@ -43,7 +43,7 @@ ggml_cgraph * clip_graph_mimo_audio::build() {
         }
     };
 
-    auto add_pos = [&](ggml_tensor * x, const clip_layer &) {
+    auto add_pos = [&](ggml_tensor * x, const mtmd_layer &) {
         return ggml_rope_ext(ctx0, x, inp_pos, nullptr, d_head,
                              GGML_ROPE_TYPE_NEOX, 0, hparams.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
     };

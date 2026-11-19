@@ -443,7 +443,8 @@ if __name__ == '__main__':
                     # the invocation string includes the "<|start_of_turn|>"
                     # token, but the adapters themselves were trained to
                     # activate _after_ that first token, so we drop it here.
-                    alora_invocation_tokens = tokenizer(invocation_string)["input_ids"][1:]  # ty: ignore[call-non-callable]
+                    assert tokenizer is not None
+                    alora_invocation_tokens = tokenizer(invocation_string)["input_ids"][1:]
                 if alora_invocation_tokens:
                     logger.debug("GGUF KV: %s = %s", gguf.Keys.Adapter.ALORA_INVOCATION_TOKENS, alora_invocation_tokens)
                     self.gguf_writer.add_key_value(

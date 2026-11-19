@@ -50,7 +50,7 @@ env:
 
 jobs:
   ubuntu-webgpu:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
 
     steps:
       - name: Clone
@@ -84,7 +84,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
         with:
-          key: webgpu-ubuntu-24.04-arm-wasm
+          key: webgpu-ubuntu-26.04-arm-wasm
           folder: llama.cpp
           hf_bucket: ggml-org/cache
 
@@ -107,7 +107,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
         with:
-          key: webgpu-ubuntu-24.04-arm-wasm
+          key: webgpu-ubuntu-26.04-arm-wasm
           folder: llama.cpp
           evict-old-files: 1d
           hf_bucket: ggml-org/cache

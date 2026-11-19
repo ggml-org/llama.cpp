@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_lfm3vl::build() {
+ggml_cgraph * mtmd_graph_lfm3vl::build() {
     GGML_ASSERT(model.patch_embeddings_0 != nullptr);
     GGML_ASSERT(model.lfm3vl_embedding_norm_w != nullptr);
     GGML_ASSERT(model.class_embedding == nullptr);

@@ -193,7 +193,10 @@ void llama_model_saver::add_kv_from_model() {
     // add_kv(LLM_KV_GENERAL_SOURCE_URL,                ???);
     // add_kv(LLM_KV_GENERAL_SOURCE_HF_REPO,            ???);
 
-    add_kv(LLM_KV_VOCAB_SIZE,                        vocab.n_tokens());
+    add_kv(LLM_KV_VOCAB_SIZE,                        hparams.n_vocab_padded ? hparams.n_vocab_padded : vocab.n_tokens());
+    if (hparams.n_vocab_unpadded > 0) {
+        add_kv(LLM_KV_VOCAB_SIZE_UNPADDED,           hparams.n_vocab_unpadded);
+    }
     add_kv(LLM_KV_CONTEXT_LENGTH,                    hparams.n_ctx_train);
     add_kv(LLM_KV_EMBEDDING_LENGTH,                  hparams.n_embd);
     if (hparams.n_embd_out_impl > 0) {
@@ -210,6 +213,8 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_MOE_LATENT_SIZE,                   hparams.moe_latent_size);
     add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
     add_kv(LLM_KV_EXPERT_CHUNK_FEED_FORWARD_LENGTH,  hparams.n_ff_chexp);
+    add_kv(LLM_KV_SWIGLU_CLAMP, std::vector<float>(
+            hparams.swiglu_clamp.begin(), hparams.swiglu_clamp.begin() + hparams.n_layer_all));
     add_kv(LLM_KV_SWIGLU_CLAMP_EXP, std::vector<float>(
             hparams.swiglu_clamp_exp.begin(), hparams.swiglu_clamp_exp.begin() + hparams.n_layer_all));
     add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, std::vector<float>(
@@ -236,6 +241,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_DECODER_BLOCK_COUNT,               hparams.dec_n_layer);
     add_kv(LLM_KV_ATTN_LOGIT_SOFTCAPPING,            hparams.f_attn_logit_softcapping);
     add_kv(LLM_KV_ROUTER_LOGIT_SOFTCAPPING,          hparams.f_router_logit_softcapping);
+    add_kv(LLM_KV_ROUTER_HIDDEN_SIZE,                hparams.n_router_hidden);
     add_kv(LLM_KV_FINAL_LOGIT_SOFTCAPPING,           hparams.f_final_logit_softcapping);
     add_kv(LLM_KV_SWIN_NORM,                         hparams.swin_norm);
     add_kv(LLM_KV_RESCALE_EVERY_N_LAYERS,            hparams.rescale_every_n_layers);
@@ -325,11 +331,19 @@ void llama_model_saver::add_kv_from_model() {
         }
     }
     add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS,        hparams.is_recr_impl, true);
+    if (hparams.n_relative > 0) {
+        add_kv(LLM_KV_ATTENTION_RELATIVE_LENGTH,     hparams.n_relative);
+        add_kv(LLM_KV_ATTENTION_RELATIVE_EXTENT,     hparams.n_relative_extent);
+        add_kv(LLM_KV_ATTENTION_QK_CLIP,             hparams.f_qk_clip);
+        add_kv(LLM_KV_ATTENTION_RELATIVE_CLIP,       hparams.f_relative_clip);
+        add_kv(LLM_KV_ATTENTION_LOG_SCALE_FLOOR,     hparams.n_log_scale_floor);
+        add_kv(LLM_KV_ATTENTION_LOG_SCALE_ALPHA,     hparams.f_log_scale_alpha);
+    }
     add_kv(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,      hparams.dsv4_o_group_count);
     add_kv(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,        hparams.dsv4_o_lora_rank);
     add_kv(LLM_KV_ATTENTION_PASS_LORA_RANK,          hparams.metis_pass_lora_rank);
     add_kv(LLM_KV_ATTENTION_COMPRESS_ROPE_FREQ_BASE, hparams.dsv4_compress_rope_base);
-    if (model->arch == LLM_ARCH_DEEPSEEK4 || hparams.dsv4_hc_mult > 0) {
+    if (model->arch == LLM_ARCH_DEEPSEEK4 || (hparams.dsv4_hc_mult > 0 && model->arch != LLM_ARCH_XING4_0)) {
         // the loader requires one compress ratio per layer, including nextn layers
         const std::vector<uint32_t> compress_ratios(
                 hparams.dsv4_compress_ratios.begin(), hparams.dsv4_compress_ratios.begin() + hparams.n_layer_all);
@@ -519,6 +533,7 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->output_s);
     add_tensor(model->output_in_s);
     add_tensor(model->output_res_score);
+    add_tensor(model->output_res_query);
     add_tensor(model->nextn_proj_pre);
     add_tensor(model->nextn_proj_post);
     add_tensor(model->cls);
@@ -557,12 +572,15 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->hc_head_base);
     add_tensor(model->hc_head_scale);
     add_tensor(model->per_layer_tok_embd);
+    add_tensor(model->per_layer_tok_embd_s);
     add_tensor(model->per_layer_model_proj);
     add_tensor(model->per_layer_proj_norm);
     add_tensor(model->value_embd);
     add_tensor(model->hc_head_norm);
     add_tensor(model->hc_head_down);
     add_tensor(model->hc_head_up);
+    add_tensor(model->res_scale_in);
+    add_tensor(model->res_scale_in_b);
 
     // looped architectures alias physical tensors across cache slots; save each
     // tensor once. a different tensor with an existing name still asserts below

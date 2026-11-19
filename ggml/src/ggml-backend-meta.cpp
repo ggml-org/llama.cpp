@@ -939,7 +939,6 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             case GGML_OP_ADD_ID: {
                 split_state = handle_bin_bcast(src_ss);
             } break;
-            case GGML_OP_ADD1:
             case GGML_OP_ACC: {
                 split_state = handle_generic(src_ss, /*scalar_only =*/ true);
             } break;
@@ -1020,9 +1019,7 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             case GGML_OP_SET_ROWS: {
                 split_state = handle_set_rows(src_ss);
             } break;
-            case GGML_OP_DIAG:
-            case GGML_OP_DIAG_MASK_INF:
-            case GGML_OP_DIAG_MASK_ZERO: {
+            case GGML_OP_DIAG: {
                 split_state = handle_generic(src_ss, /*scalar_only =*/ true);
             } break;
             case GGML_OP_SOFT_MAX:
@@ -1808,13 +1805,14 @@ static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer_n(ggml_b
     const size_t n_simple_bufts = ggml_backend_meta_buft_n_bufts(buft);
 
     constexpr size_t compute_headroom = 16; // Maximum number of views per statically allocated tensor that can be created between evals.
+    constexpr size_t compute_headroom_min = 256; // A buffer with few tensors can still get many views, e.g. a KV cache shared by many layers.
     const ggml_init_params params_static = {
         /*.mem_size   =*/ n_tensors * ggml_tensor_overhead(),
         /*.mem_buffer =*/ nullptr,
         /*.no_alloc   =*/ true,
     };
     const ggml_init_params params_compute = {
-        /*.mem_size   =*/ compute_headroom * n_tensors * ggml_tensor_overhead(),
+        /*.mem_size   =*/ std::max(compute_headroom * n_tensors, compute_headroom_min) * ggml_tensor_overhead(),
         /*.mem_buffer =*/ nullptr,
         /*.no_alloc   =*/ true,
     };

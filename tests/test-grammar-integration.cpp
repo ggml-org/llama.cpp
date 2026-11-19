@@ -193,6 +193,19 @@ static void test_schema(const std::string & test_desc, const std::string & schem
 }
 
 static void test_simple_grammar() {
+    test_grammar(
+        "left factor leading empty suffix",
+        "root ::= \"ab\" | \"abc\" | \"abd\" | \"abe\"",
+        {"ab", "abc", "abd", "abe"}, {"", "a", "abb", "abcc"});
+    test_grammar(
+        "left factor middle empty suffix",
+        "root ::= \"abc\" | \"ab\" | \"abd\" | \"abe\"",
+        {"ab", "abc", "abd", "abe"}, {"", "a", "abb", "abcc"});
+    test_grammar(
+        "left factor recursive references",
+        "root ::= \"ok\" | choice\nchoice ::= a | b | c | d\na ::= \"x\" a\nb ::= \"x\" b\nc ::= \"x\" c\nd ::= \"x\" d",
+        {"ok"}, {"", "x", "xx", "okx"});
+
     test_schema(
         "min 0",
         R"""({
@@ -623,6 +636,19 @@ static void test_special_chars() {
             "🔵🟠abc🟠🔵"
         }
     );
+
+    test_grammar(
+        "skip left factoring inside character classes",
+        "root ::= [ab] \"x\" | [ac] \"x\" | [ad] \"x\" | [ae] \"x\"",
+        {"ax", "bx", "cx", "dx", "ex"}, {"", "a", "fx", "axx"});
+    test_grammar(
+        "skip left factoring inside character ranges",
+        "root ::= [a-b] \"x\" | [a-c] \"x\" | [a-d] \"x\" | [a-e] \"x\"",
+        {"ax", "bx", "cx", "dx", "ex"}, {"", "a", "fx", "axx"});
+    test_grammar(
+        "left factor referenced character alternatives",
+        "root ::= a | b | c | d\na ::= \"p\" [a] \"x\"\nb ::= \"p\" [ab] \"x\"\nc ::= \"p\" [ac] \"x\"\nd ::= \"p\" [ad] \"x\"",
+        {"pax", "pbx", "pcx", "pdx"}, {"", "px", "pex", "paxx"});
 }
 
 static void test_quantifiers() {

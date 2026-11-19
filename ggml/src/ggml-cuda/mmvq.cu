@@ -9,7 +9,7 @@
 // only enabled on DGX Spark, where it is a gain on every type below. On the higher-bandwidth parts the kernel
 // has little exposed latency left to hide and the extra requests cost more than they save.
 // For perf data, see https://github.com/ggml-org/llama.cpp/pull/26705#issuecomment-5569335031
-#if __CUDA_ARCH__ == GGML_CUDA_CC_DGX_SPARK
+#if __CUDA_ARCH__ == GGML_CUDA_CC_GB10
 // returns true only for those quants that benefit from prefetch and false otherwise
 static constexpr __host__ __device__ bool mmvq_should_prefetch(ggml_type type) {
     switch (type) {
@@ -28,10 +28,6 @@ static constexpr __host__ __device__ bool mmvq_should_prefetch(ggml_type type) {
         default:
             return false;
     }
-}
-
-static __device__ __forceinline__ void mmvq_prefetch_l2(const void * p) {
-    asm volatile("prefetch.global.L2 [%0];" :: "l"(p));
 }
 #endif
 
@@ -114,7 +110,7 @@ static constexpr __device__ mmvq_parameter_table_id get_device_table_id() {
     return MMVQ_PARAMETERS_GCN;
 #elif __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA && __CUDA_ARCH__ < GGML_CUDA_CC_AMPERE
     return MMVQ_PARAMETERS_TURING;
-#elif __CUDA_ARCH__ == GGML_CUDA_CC_DGX_SPARK
+#elif __CUDA_ARCH__ == GGML_CUDA_CC_GB10
     return MMVQ_PARAMETERS_GB10;
 #else
     return MMVQ_PARAMETERS_GENERIC;
@@ -137,7 +133,7 @@ static __host__ mmvq_parameter_table_id get_device_table_id(int cc) {
     if (GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA && ggml_cuda_highest_compiled_arch(cc) < GGML_CUDA_CC_AMPERE) {
         return MMVQ_PARAMETERS_TURING;
     }
-    if (GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) == GGML_CUDA_CC_DGX_SPARK) {
+    if (GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) == GGML_CUDA_CC_GB10) {
         return MMVQ_PARAMETERS_GB10;
     }
     return MMVQ_PARAMETERS_GENERIC;
@@ -285,6 +281,7 @@ static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_rdna4(ggml_type
 int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
     // NVIDIA: P100, Volta, Ada Lovelace, and Blackwell always use MMVQ for MUL_MAT_ID.
     if (GGML_CUDA_CC_IS_NVIDIA(cc)) {
+        cc = ggml_cuda_highest_compiled_arch(cc);
         if (cc == GGML_CUDA_CC_PASCAL || cc == GGML_CUDA_CC_VOLTA || cc >= GGML_CUDA_CC_ADA_LOVELACE) {
             return MMVQ_MAX_BATCH_SIZE;
         }
@@ -345,7 +342,7 @@ bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11) {
                 return ne11 <= MMVQ_MAX_BATCH_SIZE;
         }
     }
-    if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc == GGML_CUDA_CC_DGX_SPARK) {
+    if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc == GGML_CUDA_CC_GB10) {
         switch (type) { // tuned on DGX Spark GB10
             case GGML_TYPE_Q2_K:
                 return ne11 <= 6;
@@ -377,6 +374,14 @@ bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11) {
                 return ne11 <= 6;
             case GGML_TYPE_Q6_K:
                 return ne11 <= 7;
+            default:
+                return ne11 <= MMVQ_MAX_BATCH_SIZE;
+        }
+    }
+    if (GGML_CUDA_CC_IS_RDNA3_5(cc)) {
+        switch (type) { // tuned on Radeon 8060S (gfx1151)
+            case GGML_TYPE_Q8_0:
+                return ne11 <= 6;
             default:
                 return ne11 <= MMVQ_MAX_BATCH_SIZE;
         }
@@ -746,7 +751,7 @@ static __global__ void mul_mat_vec_q(
         // x block quant index when casting the quants to int
         const int kqs = vdr * (tid % (qi/vdr));
 
-#if __CUDA_ARCH__ == GGML_CUDA_CC_DGX_SPARK
+#if __CUDA_ARCH__ == GGML_CUDA_CC_GB10
         // start the next iterations' weight loads early
         if constexpr (mmvq_should_prefetch(type)) {
             // loop iterations, not blocks; q3_K and q6_K keep the distance in blocks they had with vdr 1
@@ -756,10 +761,10 @@ static __global__ void mul_mat_vec_q(
 #pragma unroll
                 for (int i = 0; i < rows_per_cuda_block; ++i) {
                     const size_t off = (size_t)(kbx_offset + i*stride_row_x + kbx_pf) * ggml_cuda_type_traits<type>::bs;
-                    mmvq_prefetch_l2((const char *) vx + off);
+                    ggml_cuda_prefetch_l2((const char *) vx + off);
                     if constexpr (has_fusion) {
                         if (use_gate) {
-                            mmvq_prefetch_l2((const char *) vgate + off);
+                            ggml_cuda_prefetch_l2((const char *) vgate + off);
                         }
                     }
                 }
@@ -1554,7 +1559,7 @@ void ggml_cuda_mul_mat_vec_q(
         const int64_t s11 = src1->nb[1] / ts_src1;
         const int64_t s12 = src1->nb[2] / ts_src1;
         const int64_t s13 = src1->nb[3] / ts_src1;
-        quantize_row_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
+        quantize_row_q8_1_cuda(src1_d, src1_q8_1.get(), ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
     }
 
     const int64_t s01 = src0->nb[1] / ts_src0;

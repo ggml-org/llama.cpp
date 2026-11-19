@@ -1,12 +1,15 @@
 #include "testing.h"
 
+#include "../tools/server/server-chat.h"
 #include "../tools/server/server-common.h"
 #include "../tools/server/server-decision.h"
 #include "../tools/server/server-schema.h"
+#include "../tools/server/server-slot-sched.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <regex>
 #include <string>
 #include <thread>
@@ -154,6 +157,82 @@ static void test_server_tokens_clone(testing & t) {
     t.assert_true("get_text_tokens", cl.get_text_tokens() == llama_tokens({1, 2, 3, 4}));
 }
 
+static void test_server_tokens_prefix_hashes(testing & t) {
+    const size_t n_blk = server_tokens::hash_block_size;
+
+    auto make_tokens = [](size_t n) {
+        llama_tokens res(n);
+        for (size_t i = 0; i < n; i++) {
+            res[i] = 100 + (llama_token) i;
+        }
+        return res;
+    };
+
+    {
+        server_tokens a(make_tokens(3 * n_blk + 10), false);
+        t.assert_equal("full blocks only", (size_t) 3, a.get_prefix_hashes().size());
+        t.assert_equal("same tokens", 3 * n_blk, a.get_common_prefix_lower(a.clone().get_prefix_hashes()));
+        t.assert_equal("no hashes",   (size_t) 0, a.get_common_prefix_lower({}));
+
+        // the exact value is 2 * n_blk + 5
+        llama_tokens toks = make_tokens(3 * n_blk + 10);
+        toks[2 * n_blk + 5] = 7;
+        server_tokens b(toks, false);
+        t.assert_equal("diverge in block 2", 2 * n_blk, a.get_common_prefix_lower(b.get_prefix_hashes()));
+        t.assert_equal("exact, diverge in block 2", 2 * n_blk + 5, a.get_common_prefix(b));
+        t.assert_equal("exact, same tokens",        3 * n_blk + 10, a.get_common_prefix(a.clone()));
+        t.assert_equal("b is shorter",       1 * n_blk, a.get_common_prefix_lower(server_tokens(make_tokens(n_blk + 3), false).get_prefix_hashes()));
+
+        toks[0] = 7;
+        t.assert_equal("diverge in block 0", (size_t) 0, a.get_common_prefix_lower(server_tokens(toks, false).get_prefix_hashes()));
+    }
+
+    {
+        server_tokens a(make_tokens(3 * n_blk), false);
+        const auto hashes = a.get_prefix_hashes();
+
+        server_tokens b = a.clone();
+        b.set_token(n_blk + 1, 7);
+        t.assert_equal("set_token", n_blk, b.get_common_prefix_lower(hashes));
+
+        b = a.clone();
+        b.keep_first(n_blk + 1);
+        for (size_t i = n_blk + 1; i < 3 * n_blk; i++) {
+            b.push_back(7);
+        }
+        t.assert_equal("keep_first + push_back", n_blk, b.get_common_prefix_lower(hashes));
+
+        b.clear();
+        t.assert_equal("clear", (size_t) 0, b.get_prefix_hashes().size());
+    }
+
+    {
+        // the image chunk starts in block 0 and ends in a later block
+        mtmd::input_chunks chunks(mtmd_test_create_input_chunks());
+        const mtmd_input_chunk * image = chunks[1];
+        const size_t n_image = mtmd_input_chunk_get_n_tokens(image);
+        const size_t i_image = n_blk - 4;
+
+        auto make_mtmd = [&](bool with_image, llama_token last) {
+            server_tokens res(make_tokens(i_image), true);
+            if (with_image) {
+                res.push_back(image);
+            }
+            while (res.size() < i_image + n_image) {
+                res.push_back(5);
+            }
+            res.push_back(last);
+            return res;
+        };
+
+        server_tokens a = make_mtmd(true, 1);
+        t.assert_true("image is longer than a block", n_image > n_blk);
+        t.assert_equal("exact value", i_image + n_image, a.get_common_prefix(make_mtmd(true, 2)));
+        t.assert_equal("block ends inside the image", i_image, a.get_common_prefix_lower(make_mtmd(true, 2).get_prefix_hashes()));
+        t.assert_equal("text in place of the image",  (size_t) 0, a.get_common_prefix_lower(make_mtmd(false, 1).get_prefix_hashes()));
+    }
+}
+
 static void test_server_tokens(testing & t) {
     t.test("basic",         test_server_tokens_basic);
     t.test("pos",           test_server_tokens_pos);
@@ -161,6 +240,7 @@ static void test_server_tokens(testing & t) {
     t.test("common_prefix", test_server_tokens_common_prefix);
     t.test("serialize",     test_server_tokens_serialize);
     t.test("clone",         test_server_tokens_clone);
+    t.test("prefix_hashes", test_server_tokens_prefix_hashes);
 }
 
 //
@@ -251,6 +331,82 @@ static void test_json_helpers(testing & t) {
     });
 }
 
+//
+// server_prompt
+//
+
+static void test_server_prompt_reuse(testing & t) {
+    // 110 text tokens, the position of a token is its index
+    auto make_prompt = [](std::vector<std::array<llama_pos, 2>> checkpoints) {
+        llama_tokens toks(110);
+        for (size_t i = 0; i < toks.size(); i++) {
+            toks[i] = 100 + (llama_token) i;
+        }
+
+        server_prompt res;
+        res.tokens = server_tokens(toks, false);
+        for (const auto & range : checkpoints) {
+            auto ckpt = std::make_shared<common_prompt_checkpoint>();
+            ckpt->pos_min  = range[0];
+            ckpt->pos_max  = range[1];
+            ckpt->n_tokens = range[1] + 1;
+            res.checkpoints.push_back(std::move(ckpt));
+        }
+        return res;
+    };
+
+    t.test("recurrent", [&](testing & t) {
+        // a recurrent state holds one position: the live state is at 109, n_swa is 0
+        const auto prompt = make_prompt({{95, 95}, {99, 99}, {105, 105}});
+        const llama_pos pos_min = 109;
+
+        auto res = prompt.get_reuse(110, true, 0, pos_min);
+        t.assert_true("new tokens after the prompt, no checkpoint", res.ckpt == nullptr);
+        t.assert_equal("new tokens after the prompt, n_past", 110, res.n_past);
+
+        res = prompt.get_reuse(110, false, 0, pos_min);
+        t.assert_true("same prompt, last checkpoint", res.ckpt && res.ckpt->pos_max == 105);
+        t.assert_equal("same prompt, n_past", 106, res.n_past);
+        t.assert_equal("same prompt, pos_next", 106, res.pos_next);
+
+        // the closest checkpoint before the new tokens is used, the one after them is not
+        res = prompt.get_reuse(104, true, 0, pos_min);
+        t.assert_true("cut at 104, checkpoint", res.ckpt && res.ckpt->pos_max == 99);
+        t.assert_equal("cut at 104, n_past", 100, res.n_past);
+        t.assert_equal("cut at 104, pos_next", 100, res.pos_next);
+
+        // the state at 99 already holds the token at 99, it cannot be used to process it again
+        res = prompt.get_reuse(99, true, 0, pos_min);
+        t.assert_true("cut at 99, checkpoint", res.ckpt && res.ckpt->pos_max == 95);
+        t.assert_equal("cut at 99, n_past", 96, res.n_past);
+
+        res = prompt.get_reuse(50, true, 0, pos_min);
+        t.assert_true("cut at 50, no checkpoint", res.ckpt == nullptr);
+        t.assert_equal("cut at 50, n_past", 0, res.n_past);
+        t.assert_equal("cut at 50, pos_next", 0, res.pos_next);
+    });
+
+    t.test("swa", [&](testing & t) {
+        // n_swa is 8: the live state starts at 102, the checkpoint holds the positions 92 to 99
+        const auto prompt = make_prompt({{92, 99}});
+        const llama_pos pos_min = 102;
+
+        auto res = prompt.get_reuse(110, true, 8, pos_min);
+        t.assert_true("new tokens after the prompt, no checkpoint", res.ckpt == nullptr);
+        t.assert_equal("new tokens after the prompt, n_past", 110, res.n_past);
+
+        // the token at 104 needs the positions 97 to 103, the live state starts too late for a cut at 104
+        res = prompt.get_reuse(104, true, 8, pos_min);
+        t.assert_true("cut at 104, checkpoint", res.ckpt != nullptr);
+        t.assert_equal("cut at 104, n_past", 99, res.n_past);
+        t.assert_equal("cut at 104, pos_next", 99, res.pos_next);
+
+        res = prompt.get_reuse(95, true, 8, pos_min);
+        t.assert_true("cut at 95, no checkpoint", res.ckpt == nullptr);
+        t.assert_equal("cut at 95, n_past", 0, res.n_past);
+    });
+}
+
 static void test_lora_helpers(testing & t) {
     // only pointer identity is used, never dereferenced
     auto * p0 = reinterpret_cast<llama_adapter_lora *>(0x10);
@@ -283,6 +439,13 @@ static void test_lora_helpers(testing & t) {
         t.assert_true("diff scale",   !are_lora_equal({make(p0, 1.0f)}, {make(p0, 0.5f)}));
         t.assert_true("diff ptr",     !are_lora_equal({make(p0, 1.0f)}, {make(p1, 1.0f)}));
         t.assert_true("diff size",    !are_lora_equal({make(p0, 1.0f)}, {}));
+    });
+
+    t.test("lora_should_clear_cache", [&](testing & t) {
+        // the adapter pointer is only read when the configs differ
+        t.assert_true("both empty", !lora_should_clear_cache({}, {}));
+        t.assert_true("same",       !lora_should_clear_cache({make(p0, 1.0f)}, {make(p0, 1.0f)}));
+        t.assert_true("to no lora", lora_should_clear_cache({make(p0, 0.0f)}, {}));
     });
 
     t.test("lora_get_enabled_ids", [&](testing & t) {
@@ -639,6 +802,41 @@ static void test_dry_sequence_breakers(testing & t) {
     }
 }
 
+static void test_stop_strings(testing & t) {
+    common_params params_base;
+
+    const auto eval = [&](const json & data) {
+        return server_schema::eval_llama_cmpl_schema(nullptr, params_base, {}, data);
+    };
+
+    {
+        json data;
+        data["stop"] = "";
+        t.assert_true("empty string is ignored", eval(data).antiprompt.empty());
+    }
+
+    {
+        json data;
+        data["stop"] = json::array({""});
+        t.assert_true("empty string in array is ignored", eval(data).antiprompt.empty());
+    }
+
+    {
+        json data;
+        data["stop"] = json::array({"", "zzz"});
+        const std::vector<std::string> expected = {"zzz"};
+        t.assert_true("only non-empty strings are kept", eval(data).antiprompt == expected);
+    }
+
+    {
+        params_base.antiprompt = {"User:"};
+        json data;
+        data["stop"] = json::array({""});
+        const std::vector<std::string> expected = {"User:"};
+        t.assert_true("falls back to CLI defaults", eval(data).antiprompt == expected);
+    }
+}
+
 //
 // glob_match
 //
@@ -665,6 +863,79 @@ static void test_glob_match(testing & t) {
     });
 }
 
+//
+// OpenAI speech API
+//
+
+static void test_speech_convert(testing & t) {
+    const json base = {{"model", "tts"}, {"input", "Hello"}, {"voice", "alba"}};
+
+    auto with = [&](const char * key, const json & value) {
+        json body = base;
+        body[key] = value;
+        return body;
+    };
+    auto rejected = [&](const char * key, const json & value) {
+        try {
+            convert_speech_to_tts(with(key, value));
+        } catch (const std::invalid_argument &) {
+            return true;
+        }
+        return false;
+    };
+
+    // defaults
+    json out = convert_speech_to_tts(base);
+    t.assert_equal("input kept",        std::string("Hello"), out.at("input").get<std::string>());
+    t.assert_equal("voice kept",        std::string("alba"),  out.at("voice").get<std::string>());
+    t.assert_equal("default format",    std::string("wav"),   out.at("response_format").get<std::string>());
+    t.assert_true ("no stream",         !out.contains("stream"));
+
+    // response_format
+    out = convert_speech_to_tts(with("response_format", "wav"));
+    t.assert_equal("wav",               std::string("wav"),   out.at("response_format").get<std::string>());
+    out = convert_speech_to_tts(with("response_format", "pcm"));
+    t.assert_equal("pcm is 16-bit",     std::string("pcm16"), out.at("response_format").get<std::string>());
+    for (const char * format : {"mp3", "opus", "aac", "flac", "pcm16"}) {
+        t.assert_true(std::string("rejects ") + format, rejected("response_format", format));
+    }
+
+    // custom voice
+    out = convert_speech_to_tts(with("voice", json{{"id", "voice_1234"}}));
+    t.assert_equal("voice object",      std::string("voice_1234"), out.at("voice").get<std::string>());
+
+    // stream_format
+    out = convert_speech_to_tts(with("stream_format", "audio"));
+    t.assert_true ("audio streams",     out.at("stream").get<bool>());
+    t.assert_true ("rejects sse",       rejected("stream_format", "sse"));
+
+    // speed is forwarded, the model decides whether it is supported
+    out = convert_speech_to_tts(with("speed", 1.5));
+    t.assert_equal("speed forwarded",   1.5, out.at("speed").get<double>());
+
+    // instructions are ignored
+    t.assert_true ("instructions",      !rejected("instructions", "whisper"));
+}
+
+static void test_pcm_f32_to_s16(testing & t) {
+    auto sample = [](const std::string & bytes, size_t i) {
+        int16_t v;
+        memcpy(&v, bytes.data() + i * sizeof(v), sizeof(v));
+        return (int) v;
+    };
+
+    const std::vector<float> samples = {0.0f, 1.0f, -1.0f, 0.5f, 2.0f, -2.0f};
+    const std::string bytes = pcm_f32_to_s16(samples.data(), samples.size());
+    t.assert_equal("size",           (size_t) 12, bytes.size());
+    t.assert_equal("zero",           0,      sample(bytes, 0));
+    t.assert_equal("max",            32767,  sample(bytes, 1));
+    t.assert_equal("min",            -32767, sample(bytes, 2));
+    t.assert_equal("rounds",         16384,  sample(bytes, 3));
+    t.assert_equal("clamps above",   32767,  sample(bytes, 4));
+    t.assert_equal("clamps below",   -32767, sample(bytes, 5));
+    t.assert_true ("empty",          pcm_f32_to_s16(nullptr, 0).empty());
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -682,6 +953,7 @@ int main(int argc, char ** argv) {
     t.test("sse",           test_sse);
     t.test("json_helpers",  test_json_helpers);
     t.test("lora_helpers",  test_lora_helpers);
+    t.test("server_prompt_reuse", test_server_prompt_reuse);
     t.test("server_pipe",   test_server_pipe);
     t.test("decision_escape", test_decision_escape);
     t.test("rerank_template", test_rerank_template);
@@ -690,6 +962,9 @@ int main(int argc, char ** argv) {
     t.test("decision_depth",  test_decision_depth);
     t.test("glob_match",      test_glob_match);
     t.test("dry_sequence_breakers", test_dry_sequence_breakers);
+    t.test("stop_strings",    test_stop_strings);
+    t.test("speech_convert",  test_speech_convert);
+    t.test("pcm_f32_to_s16",  test_pcm_f32_to_s16);
 
     return t.summary();
 }

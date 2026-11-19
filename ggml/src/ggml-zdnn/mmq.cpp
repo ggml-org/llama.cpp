@@ -188,7 +188,6 @@ void ggml_zdnn_mul_mat_q(
     GGML_ASSERT(inputs->type == GGML_TYPE_F32);
 
     ggml_backend_zdnn_buffer * weights_extra = (ggml_backend_zdnn_buffer *)weights->extra;
-    ggml_backend_zdnn_buffer * output_extra  = (ggml_backend_zdnn_buffer *)output->extra;
 
     // weights read straight into a host buffer skip set_tensor, so transform them on first use
     if (!weights_extra->ztensor.is_transformed) {
@@ -202,13 +201,11 @@ void ggml_zdnn_mul_mat_q(
         GGML_ASSERT(weights_extra->pre_tfm_desc.dim1 == weights->ne[1] && "weights_extra->pre_tfm_desc.dim1 must match weights->ne[1]");
 
         ggml_zdnn_mul_mat_q_grouped(ctx, n_threads, inputs, weights_extra, output);
-
-        // the result is written to output->data directly, so the output ztensor is stale
-        output_extra->ztensor.is_transformed = false;
         return;
     }
 
-    ggml_backend_zdnn_buffer * bias_extra = (ggml_backend_zdnn_buffer *)output_extra->extra;
+    ggml_backend_zdnn_buffer * output_extra = (ggml_backend_zdnn_buffer *)output->extra;
+    ggml_backend_zdnn_buffer * bias_extra   = (ggml_backend_zdnn_buffer *)output_extra->extra;
 
     GGML_ASSERT(weights_extra->pre_tfm_desc.dim2 == weights->ne[0] && "weights_extra->pre_tfm_desc.dim2 must match weights->ne[0]");
     GGML_ASSERT(weights_extra->pre_tfm_desc.dim1 == weights->ne[1] && "weights_extra->pre_tfm_desc.dim1 must match weights->ne[1]");
@@ -270,9 +267,6 @@ void ggml_zdnn_mul_mat_q(
             ZDNN_CHECK(zdnn_transform_origtensor(&stack_ztensor, partial[s]));
         }
     });
-
-    // the result is written to output->data directly, so the output ztensor is stale
-    output_extra->ztensor.is_transformed = false;
 
     const float * weights_scales = weights_extra->scales.data();
     ggml_zdnn_parallel_for(n_threads, ne1, [&](int64_t i1_start, int64_t i1_end) {

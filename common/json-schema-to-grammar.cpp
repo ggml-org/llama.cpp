@@ -860,6 +860,7 @@ public:
         std::unordered_set<std::string> required;
         std::vector<std::pair<std::string, const common_chat_schema *>> properties;
         std::map<std::string, size_t> enum_values;
+        std::vector<const common_chat_schema *> leaves;
         std::function<void(const common_chat_schema &, bool, int)> add_component = [&](const common_chat_schema & comp, bool is_required, int depth) {
             if (depth >= COMMON_RECURSIVE_LIMIT) {
                 throw std::invalid_argument("JSON schema is nested more than " + std::to_string(COMMON_RECURSIVE_LIMIT) + " levels deep");
@@ -879,6 +880,10 @@ public:
                 for (const auto & v : as<common_chat_schema_enum>(comp).values) {
                     enum_values[_generate_constant_rule(v)] += 1;
                 }
+            } else if (is_required && comp.kind() != common_chat_schema::KIND_ANY) {
+                // Direct non-structural children are used for merging. anyOf alternatives are not merged.
+                // Empty schemas are skipped.
+                leaves.push_back(&comp);
             }
         };
         for (const auto & child : schema.children) {
@@ -899,6 +904,38 @@ public:
             }
             if (!enum_intersection.empty()) {
                 return _add_rule(rule_name, "(" + string_join(enum_intersection, " | ") + ")");
+            }
+        }
+
+        if (properties.empty() && !leaves.empty()) {
+            if (leaves.size() == 1) {
+                return visit(*leaves[0], name);
+            }
+            bool all_numeric = true;
+            bool any_integer = false;
+            int64_t lo = std::numeric_limits<int64_t>::min();
+            int64_t hi = std::numeric_limits<int64_t>::max();
+            for (const auto * leaf : leaves) {
+                if (leaf->kind() == common_chat_schema::KIND_INTEGER) {
+                    const auto & i = as<common_chat_schema_integer>(*leaf);
+                    any_integer = true;
+                    lo = std::max(lo, i.minimum);
+                    hi = std::min(hi, i.maximum);
+                } else if (leaf->kind() != common_chat_schema::KIND_NUMBER) {
+                    all_numeric = false;
+                }
+            }
+            if (all_numeric) {
+                if (lo > hi) {
+                    throw std::invalid_argument("allOf has an empty numeric range");
+                }
+                if (any_integer) {
+                    common_chat_schema_integer merged;
+                    merged.minimum = lo;
+                    merged.maximum = hi;
+                    return visit(merged, name);
+                }
+                return visit(*leaves[0], name);
             }
         }
         return _add_rule(rule_name, _build_object_rule(properties, required, name, nullptr));

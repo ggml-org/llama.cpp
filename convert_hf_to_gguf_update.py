@@ -167,6 +167,7 @@ models = [
     {"name": "ufakzeka",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/ufakai/ufakzeka-1", },
     {"name": "mmbert",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/jhu-clsp/mmBERT-base", },
     {"name": "k2-horizon",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/IFM/K2-Horizon-36B", },
+    {"name": "inkling2",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/thinkingmachines/Inkling-2-Small", },
 ]
 
 # some models are known to be broken upstream, so we will skip them as exceptions
@@ -325,7 +326,8 @@ for model in [*pre_computed_hashes, *all_models]:
         except Exception as e:
             raise OSError(f"Error loading tokenizer for model {name}.") from e
 
-        chktok = tokenizer.encode(CHK_TXT)  # ty: ignore[unresolved-attribute]
+        assert tokenizer is not None
+        chktok = tokenizer.encode(CHK_TXT)
         chkhsh = sha256(str(chktok).encode()).hexdigest()
 
         logger.info(f"model: {name}")
@@ -486,6 +488,7 @@ for model in models:
         logger.error(f"Failed to load tokenizer for model {name}. Error: {e}")
         continue  # Skip this model and continue with the next one in the loop
 
+    assert tokenizer is not None
     if not os.path.exists(f"models/ggml-vocab-{name}.gguf"):
         logger.info(f"Skip vocab files for model {name}, no GGUF file found")
         continue
@@ -497,7 +500,7 @@ for model in models:
 
     with open(f"models/ggml-vocab-{name}.gguf.out", "w") as f:
         for text in tests:
-            res = tokenizer.encode(text, add_special_tokens=False)  # ty: ignore[unresolved-attribute]
+            res = tokenizer.encode(text, add_special_tokens=False)
             for r in res:
                 f.write(f" {r}")
             f.write("\n")

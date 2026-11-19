@@ -80,7 +80,7 @@ class LibLlamaModel:
             raise RuntimeError("error: failed to load model '%s'" % path_model)
         if isinstance(cparams, dict):
             cparams = libllama.context_default_params(**cparams)
-        self.ctx = self.lib.llama_new_context_with_model(self.model, cparams)
+        self.ctx = self.lib.llama_init_from_model(self.model, cparams)
         if not self.ctx:
             raise RuntimeError("error: failed to create context for model '%s'" % path_model)
         n_tokens_max = self.lib.llama_n_ctx(self.ctx)

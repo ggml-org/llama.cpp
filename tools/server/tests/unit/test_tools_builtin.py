@@ -53,15 +53,16 @@ def test_tools_builtin_grep_search():
     assert "Total matches: 1" in text
 
 
-def test_tools_builtin_read_file():
+def test_tools_builtin_read_file(tmp_path):
     global server
     server.start()
 
-    this_file = os.path.join(PROJECT_ROOT, "tools", "server", "tests", "unit", "test_tools_builtin.py")
-    res = call_tool("read_file", {"path": this_file})
-    text = res["plain_text_response"]
-    assert GREP_MARKER in text
-    assert "def test_tools_builtin_read_file" in text
+    # a file of its own keeps the test below the read limit, unlike this file which grows with every test
+    path = str(tmp_path / "read.txt")
+    with open(path, "w", newline="\n") as f:
+        f.write("line1\nline2\nline3\n")
+    res = call_tool("read_file", {"path": path})
+    assert res["plain_text_response"] == "line1\nline2\nline3\n"
 
 
 def test_tools_builtin_write_then_edit_file(tmp_path):
@@ -128,27 +129,21 @@ def test_tools_builtin_exec_shell_command_stream():
     assert "[exit code: 0]" in chunks
 
 
-def test_tools_builtin_cwd_header():
+def test_tools_builtin_cwd_header(tmp_path):
     global server
     server.start()
 
-    cwd_dir = os.path.join(PROJECT_ROOT, "tools", "server", "tests", "unit")
-    headers = {"x-tool-cwd": cwd_dir}
+    headers = {"x-tool-cwd": str(tmp_path)}
 
-    res = call_tool("read_file", {"path": "test_tools_builtin.py"}, headers=headers)
-    assert GREP_MARKER in res["plain_text_response"]
+    (tmp_path / "cwd.txt").write_text("cwd-content")
+    res = call_tool("read_file", {"path": "cwd.txt"}, headers=headers)
+    assert "cwd-content" in res["plain_text_response"]
 
     # exec_shell_command should also run with that directory as its working directory:
-    # writing to a relative filename must land inside cwd_dir
+    # writing to a relative filename must land inside it
     marker_name = "llama_cpp_test_tools_builtin_cwd_marker.txt"
-    marker_path = os.path.join(cwd_dir, marker_name)
-    try:
-        command = f"echo hello > {marker_name}"
-        call_tool("exec_shell_command", {"command": command}, headers=headers)
-        assert os.path.exists(marker_path)
-    finally:
-        if os.path.exists(marker_path):
-            os.remove(marker_path)
+    call_tool("exec_shell_command", {"command": f"echo hello > {marker_name}"}, headers=headers)
+    assert (tmp_path / marker_name).exists()
 
 
 def _container_engine_unavailable_reason(engine: str) -> str | None:
@@ -204,6 +199,21 @@ def test_tools_builtin_runtime_header(container_engine: str, container_id: str):
 
     exec_res = call_tool("exec_shell_command", {"command": "cat test.log"}, headers=headers)
     assert "hello container" in exec_res["plain_text_response"]
+
+
+def test_tools_builtin_runtime_header_refused_with_configured_runtime(container_engine: str, container_id: str):
+    global server
+    server.server_tools_runtime = f"{container_engine}-container:{container_id}"
+    server.start()
+
+    res = call_tool("exec_shell_command", {"command": "echo sandboxed"})
+    assert "sandboxed" in res["plain_text_response"]
+
+    for runtime in ["ssh:user@internal-host", f"{container_engine}-container:other", server.server_tools_runtime]:
+        res = server.make_request("POST", "/tools",
+                                  data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
+                                  headers={"x-tool-runtime": runtime})
+        assert res.status_code == 403, res.body
 
 
 def test_tools_builtin_runtime_header_unknown_scheme():
