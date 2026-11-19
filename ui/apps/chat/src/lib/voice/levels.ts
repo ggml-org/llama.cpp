@@ -11,6 +11,19 @@ export function rms(samples: Float32Array): number {
 	return Math.sqrt(sum / samples.length);
 }
 
+/** Quieter than anything a microphone gives, for a block of digital silence. */
+const SILENCE_DB = -120;
+
+/** RMS to dBFS, digital silence as SILENCE_DB rather than -Infinity. */
+export function rmsToDb(value: number): number {
+	return value > 0 ? Math.max(SILENCE_DB, 20 * Math.log10(value)) : SILENCE_DB;
+}
+
+/** A 0..1 level (see rmsToLevel) back to dBFS; 0 reads as the floor. */
+export function levelToDb(level: number, floorDb = VOICE_LEVELS_FLOOR_DB): number {
+	return (1 - Math.max(0, Math.min(1, level))) * floorDb;
+}
+
 /**
  * RMS to a 0..1 level that follows loudness as heard: decibels mapped linearly from
  * the floor (0) to full scale (1), so quiet speech still moves the waveform.

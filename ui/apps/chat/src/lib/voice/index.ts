@@ -22,7 +22,7 @@ export {
 	speechGainFor,
 	type SpeechGainResult
 } from './gain';
-export { LevelHistory, rms, rmsToLevel } from './levels';
+export { LevelHistory, levelToDb, rms, rmsToDb, rmsToLevel } from './levels';
 export {
 	base64ToBytes,
 	bytesToBase64,
@@ -43,7 +43,9 @@ export {
 } from './microphone';
 export { computePeaks, computePeaksFromAudio, decodeAudio, mixToMono } from './peaks';
 export { RealtimeTranscriber, realtimeUrl } from './realtime';
+export { PauseDetector, type PauseDetectorOptions } from './pauses';
 export { startVoiceSession } from './session';
+export { isSpeechLevel, SpeechDetector, type SpeechDetectorOptions } from './speech-detector';
 export {
 	describeMicrophoneError,
 	isVoiceCaptureSupported,

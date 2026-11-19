@@ -1,9 +1,11 @@
-import { VOICE_GAIN } from './constants';
+import { VOICE_GAIN, VOICE_SAMPLE_RATE } from './constants';
+import { rms, rmsToDb } from './levels';
 import { floatToPcm16, pcm16ToFloat } from './pcm';
+import { isSpeechLevel, SpeechDetector } from './speech-detector';
 
 /**
  * Speech gain: brings a quiet microphone up to a level transcription models hear well.
- * Only speech is measured, never the room's silence, so a pause does not pump the gain
+ * Only speech is measured, never the room's silence (see SpeechDetector), so a pause does not pump the gain
  * up; the gain only ever raises the input (up to VOICE_GAIN.MAX), never lowers it, and
  * a soft limiter keeps the raised peaks from clipping.
  *
@@ -54,22 +56,16 @@ function frameLevels(samples: Float32Array, frameLength: number): number[] {
 	const levels: number[] = [];
 
 	for (let start = 0; start < samples.length; start += frameLength) {
-		const end = Math.min(samples.length, start + frameLength);
-
-		let sum = 0;
-
-		for (let i = start; i < end; i++) sum += samples[i] * samples[i];
-
-		levels.push(Math.sqrt(sum / Math.max(1, end - start)));
+		levels.push(rms(samples.subarray(start, Math.min(samples.length, start + frameLength))));
 	}
 
 	return levels;
 }
 
 /**
- * The loudness of the speech in a recording: frames clearly above its noise floor (its
- * quietest tenth) and above the absolute floor count as speech; their RMS together.
- * 0 when nothing in it is speech.
+ * The loudness of the speech in a recording: frames that are speech against its noise
+ * floor (its quietest tenth, see isSpeechLevel); their RMS together. 0 when nothing in it
+ * is speech.
  */
 export function measureSpeech(samples: Float32Array, sampleRate: number): number {
 	const levels = frameLevels(
@@ -80,14 +76,13 @@ export function measureSpeech(samples: Float32Array, sampleRate: number): number
 	if (levels.length === 0) return 0;
 
 	const sorted = [...levels].sort((a, b) => a - b);
-	const floor = sorted[Math.floor((sorted.length - 1) * 0.1)];
-	const threshold = Math.max(VOICE_GAIN.MIN_SPEECH_RMS, floor * VOICE_GAIN.SPEECH_ABOVE_FLOOR);
+	const floorDb = rmsToDb(sorted[Math.floor((sorted.length - 1) * 0.1)]);
 
 	let power = 0;
 	let count = 0;
 
 	for (const level of levels) {
-		if (level <= threshold) continue;
+		if (!isSpeechLevel(rmsToDb(level), floorDb)) continue;
 
 		power += level * level;
 		count++;
@@ -115,8 +110,8 @@ export function normalizeSpeech(
 }
 
 /**
- * Speech gain that follows the input as it streams. Each block is measured against a
- * noise floor that follows the room; a block of speech moves the speech level, and the
+ * Speech gain that follows the input as it streams. A SpeechDetector tells which blocks
+ * are speech; a block of speech moves the speech level, and the
  * gain heads for what that level needs: it falls at once when speech gets louder, so
  * nothing clips, and rises over a few blocks when it gets quieter. Silence holds the
  * gain where it is.
@@ -125,7 +120,7 @@ export class SpeechGain {
 	/** The gain applied to the last block. */
 	gain = 1;
 
-	private floor = Infinity;
+	private readonly detector = new SpeechDetector();
 	private speech = 0;
 
 	/** Whether the speech heard so far stays quiet even at the highest gain. */
@@ -133,7 +128,11 @@ export class SpeechGain {
 		return isTooQuiet(this.speech);
 	}
 
-	constructor(private readonly max: number = VOICE_GAIN.MAX) {}
+	/** `sampleRate` of the blocks, to follow the room at the same pace whatever their length. */
+	constructor(
+		private readonly max: number = VOICE_GAIN.MAX,
+		private readonly sampleRate: number = VOICE_SAMPLE_RATE
+	) {}
 
 	/**
 	 * Measures `block` and returns it raised by the gain, ramped from the previous block's
@@ -142,20 +141,8 @@ export class SpeechGain {
 	process(block: Float32Array, apply = true): Float32Array {
 		if (block.length === 0) return block;
 
-		let sum = 0;
-
-		for (let i = 0; i < block.length; i++) sum += block[i] * block[i];
-
-		const level = Math.sqrt(sum / block.length);
-
-		// the floor drops to any quieter block at once, and creeps back up through louder ones
-		this.floor = Math.min(
-			level,
-			this.floor === Infinity ? level : this.floor * VOICE_GAIN.FLOOR_RISE
-		);
-
-		const isSpeech =
-			level > VOICE_GAIN.MIN_SPEECH_RMS && level > this.floor * VOICE_GAIN.SPEECH_ABOVE_FLOOR;
+		const level = rms(block);
+		const isSpeech = this.detector.push(rmsToDb(level), (block.length / this.sampleRate) * 1000);
 		const previous = this.gain;
 
 		if (isSpeech) {

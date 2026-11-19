@@ -1,8 +1,11 @@
+import { levelToDb } from './levels';
+import { SpeechDetector } from './speech-detector';
+
 /**
  * Finds the pauses in speech from the live input levels (0..1, see rmsToLevel), so a
  * recording can be transcribed piece by piece while it goes on, cut where the speaker
- * breathes rather than inside a word. Levels are judged against the room's noise
- * floor, which it follows, so a quiet or a loud microphone both work.
+ * breathes rather than inside a word. A SpeechDetector tells speech, and quiet, from the
+ * room's noise.
  */
 export interface PauseDetectorOptions {
 	/** Time between two levels, as the capture sends them */
@@ -19,16 +22,11 @@ export interface PauseDetectorOptions {
 	maxSegmentMs?: number;
 }
 
-/** How far above the noise floor a level is speech, and below which it is quiet. */
-const SPEECH_ABOVE_FLOOR = 0.15;
-const QUIET_ABOVE_FLOOR = 0.08;
-/** How fast the floor rises back after it dropped to a quieter level, per level. */
-const FLOOR_RISE = 0.002;
 /** How far past its longest length a piece waits for a quiet moment before it is cut anyway. */
 const OVERTIME = 1.5;
 
 export class PauseDetector {
-	private floor = 1;
+	private readonly detector = new SpeechDetector();
 	private readonly intervalMs: number;
 	private readonly maxSegmentMs: number;
 	private readonly minSpeechMs: number;
@@ -51,10 +49,10 @@ export class PauseDetector {
 
 	/** Takes the newest level; true when this is a place to cut the recording. */
 	push(level: number): boolean {
-		this.floor = Math.min(level, this.floor + FLOOR_RISE);
-		this.segmentMs += this.intervalMs;
+		const db = levelToDb(level);
+		const loud = this.detector.push(db, this.intervalMs);
 
-		const loud = level > this.floor + SPEECH_ABOVE_FLOOR;
+		this.segmentMs += this.intervalMs;
 
 		if (loud) {
 			this.speechMs += this.intervalMs;
@@ -70,7 +68,7 @@ export class PauseDetector {
 			return true;
 		}
 
-		if (loud || level > this.floor + QUIET_ABOVE_FLOOR) return false;
+		if (loud || !this.detector.isQuiet(db)) return false;
 
 		this.quietMs += this.intervalMs;
 

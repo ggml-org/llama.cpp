@@ -3,6 +3,7 @@ import {
 	VOICE_ANALYSER_FFT_SIZE,
 	VOICE_CHUNK_MS,
 	VOICE_FIRST_AUDIO_TIMEOUT_MS,
+	VOICE_GAIN,
 	VOICE_LEVELS_INTERVAL_MS,
 	VOICE_LEVELS_LENGTH,
 	VOICE_MICROPHONE_CONSTRAINTS,
@@ -155,7 +156,7 @@ export class VoiceCapture {
 		this.partial = [];
 		this.recordedSamples = 0;
 		this.history.reset();
-		this.gain = new SpeechGain();
+		this.gain = new SpeechGain(VOICE_GAIN.MAX, this.sampleRate);
 		this.setQuiet(false);
 
 		let stream: MediaStream | null = this.options.stream ?? null;
