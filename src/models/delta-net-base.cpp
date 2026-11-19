@@ -76,6 +76,61 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
     return conv_input;
 }
 
+std::tuple<ggml_tensor *, ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_recurrent_qkv(
+        ggml_tensor * conv,
+        float         eps_norm,
+        int           il) {
+    const int64_t n_seqs       = ubatch.n_seqs;
+    const int64_t n_seq_tokens = ubatch.n_seq_tokens;
+    const int64_t head_k_dim   = hparams.ssm_d_state;
+    const int64_t num_k_heads  = hparams.ssm_n_group;
+    const int64_t num_v_heads  = hparams.ssm_dt_rank;
+    const int64_t head_v_dim   = hparams.ssm_d_inner / num_v_heads;
+
+    const int64_t key_dim = head_k_dim * num_k_heads;
+    const int64_t qkv_dim = 2 * key_dim + head_v_dim * num_v_heads;
+    const int64_t nb1_qkv = ggml_row_size(conv->type, qkv_dim);
+
+    ggml_tensor * q = ggml_view_4d(ctx0, conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
+            ggml_row_size(conv->type, head_k_dim), nb1_qkv, nb1_qkv * n_seq_tokens, 0);
+    ggml_tensor * k = ggml_view_4d(ctx0, conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
+            ggml_row_size(conv->type, head_k_dim), nb1_qkv, nb1_qkv * n_seq_tokens,
+            ggml_row_size(conv->type, key_dim));
+    ggml_tensor * v = ggml_view_4d(ctx0, conv, head_v_dim, num_v_heads, n_seq_tokens, n_seqs,
+            ggml_row_size(conv->type, head_v_dim), nb1_qkv, nb1_qkv * n_seq_tokens,
+            ggml_row_size(conv->type, 2 * key_dim));
+
+    cb(q, "q_conv", il);
+    cb(k, "k_conv", il);
+    cb(v, "v_conv", il);
+
+    q = build_gdn_l2_norm(ctx0, q, eps_norm);
+    k = build_gdn_l2_norm(ctx0, k, eps_norm);
+
+    // if head keys and value keys are different, repeat to force tensors into matching shapes
+    // TODO: avoid repeats for fused GDN, needs broadcast configuration for GDN op [TAG_GGML_GDN_BCAST]
+    if (num_k_heads != num_v_heads) {
+        GGML_ASSERT(num_v_heads % num_k_heads == 0);
+        const int64_t repeat_factor = num_v_heads / num_k_heads;
+
+        // repeat interleave: reshape to (repeat part, 1, remaining part...), do repeat, then reshape back
+        ggml_tensor * q_reshaped = ggml_reshape_4d(ctx0, q,
+                head_k_dim, 1, num_k_heads, n_seq_tokens * n_seqs);
+        ggml_tensor * k_reshaped = ggml_reshape_4d(ctx0, k,
+                head_k_dim, 1, num_k_heads, n_seq_tokens * n_seqs);
+
+        ggml_tensor * q_repeated = ggml_repeat_4d(ctx0, q_reshaped,
+                head_k_dim, repeat_factor, num_k_heads, n_seq_tokens * n_seqs);
+        ggml_tensor * k_repeated = ggml_repeat_4d(ctx0, k_reshaped,
+                head_k_dim, repeat_factor, num_k_heads, n_seq_tokens * n_seqs);
+
+        q = ggml_reshape_4d(ctx0, q_repeated, head_k_dim, num_v_heads, n_seq_tokens, n_seqs);
+        k = ggml_reshape_4d(ctx0, k_repeated, head_k_dim, num_v_heads, n_seq_tokens, n_seqs);
+    }
+
+    return {q, k, v};
+}
+
 ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
         llm_graph_input_rs * inp,
         ggml_tensor *        ssm_states_all,

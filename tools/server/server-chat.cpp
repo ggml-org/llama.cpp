@@ -449,6 +449,7 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
             json converted_content = json::array();
             json tool_results = json::array();
             std::string reasoning_content;
+            bool has_reasoning_content = false;
             bool has_tool_calls = false;
 
             for (const auto & block : content) {
@@ -457,6 +458,7 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
                 if (type == "text") {
                     converted_content.push_back(block);
                 } else if (type == "thinking") {
+                    has_reasoning_content = true;
                     reasoning_content += json_value(block, "thinking", std::string());
                 } else if (type == "image") {
                     json source = json_value(block, "source", json::object());
@@ -571,17 +573,17 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
                 }
             }
 
-            if (!converted_content.empty() || has_tool_calls || !reasoning_content.empty()) {
+            if (!converted_content.empty() || has_tool_calls || has_reasoning_content) {
                 json new_msg = {{"role", role}};
                 if (!converted_content.empty()) {
                     new_msg["content"] = converted_content;
-                } else if (has_tool_calls || !reasoning_content.empty()) {
+                } else if (has_tool_calls || has_reasoning_content) {
                     new_msg["content"] = "";
                 }
                 if (!tool_calls.empty()) {
                     new_msg["tool_calls"] = tool_calls;
                 }
-                if (!reasoning_content.empty()) {
+                if (has_reasoning_content) {
                     new_msg["reasoning_content"] = reasoning_content;
                 }
                 oai_messages.push_back(new_msg);
@@ -689,7 +691,7 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
 
 json server_chat_msg_diff_to_json_oaicompat(const common_chat_msg_diff & diff) {
     json delta = json::object();
-    if (!diff.reasoning_content_delta.empty()) {
+    if (diff.has_reasoning_content()) {
         delta["reasoning_content"] = diff.reasoning_content_delta;
     }
     if (!diff.content_delta.empty()) {
