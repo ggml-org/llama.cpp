@@ -804,7 +804,6 @@ class llm_graph_result;
 struct llm_graph_params {
     const llama_model * model = nullptr;
 
-    llama_hparams hparams;
     llama_cparams cparams;
 
     llama_ubatch ubatch; // note: intentionally make a copy
@@ -819,10 +818,6 @@ struct llm_graph_params {
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
     const llama_moe_cache        * moe_cache;
-
-    const llama_prec_policy * prec_policy = nullptr;
-
-    const llama_hadamard * hdmd = nullptr;
 
     ggml_tensor * layer_inp_dev = nullptr; // own layer input device buffer (write)
     ggml_tensor * layer_inp_src = nullptr; // ctx_other's layer input device buffer (read)
@@ -1056,6 +1051,8 @@ struct llm_graph_context {
     const llama_cparams & cparams;
     const llama_ubatch  & ubatch;
 
+    const llama_prec_policy & prec_policy;
+
     const int64_t n_embd;
     const int64_t n_layer;
     const int64_t n_layer_nextn;
@@ -1095,8 +1092,6 @@ struct llm_graph_context {
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
     const llama_moe_cache        * moe_cache;
-
-    const llama_prec_policy * prec_policy;
 
     const llama_hadamard * hdmd;
 
