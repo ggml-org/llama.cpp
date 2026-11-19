@@ -3,8 +3,9 @@
  *
  * Resolves what the microphone does for the conversation's model (a voice message,
  * dictation, or nothing, see resolveVoiceMode) and runs a recording: live levels and
- * elapsed time, dictated text written into the message at the caret as it streams, and
- * on stop either a voice message attachment, whose transcript follows, or the text.
+ * elapsed time, and on stop either a voice message attachment, whose transcript follows,
+ * or the dictated text. Writing the text into the message is createDictation()'s; this
+ * adds what is the chat form's own around it.
  * A voice message's live text shows as the empty message box's placeholder; focusing
  * the box makes it editable text there until the recording stops, when it goes with
  * the clip (edited, as its transcript).
@@ -25,7 +26,7 @@ import {
 	voiceTranscriptsStore
 } from '#lib/stores/index.ts';
 import type { ChatUploadedFile } from '#lib/types/index.ts';
-import { DictationSpan } from '#lib/utils/dictation-span.ts';
+import { createDictation } from '#lib/utils/dictation.ts';
 import { uuid } from '#lib/utils/index.ts';
 import { resolveVoiceMode, voiceModeLabel } from '#lib/utils/voice-mode.ts';
 import {
@@ -143,14 +144,20 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 	// the mode of the recording under way, fixed when it starts
 	let recordingMode = $state<VoiceMode>(VoiceMode.UNAVAILABLE);
 	let ticker: ReturnType<typeof setInterval> | undefined;
-	// state: a voice message's text leaves the placeholder once it is in the message
-	let span = $state<DictationSpan | null>(null);
-	// the pass over the whole recording that follows live text, while it is still out
-	let refining = $state<Promise<void> | null>(null);
-	let lastValue = '';
-	// bumped by cancel, so a transcript still on its way is dropped
+	// bumped when the dictation changes, so the getters that read it follow
+	let dictationVersion = $state(0);
+	// bumped by cancel, so a recording still starting or stopping is dropped
 	let generation = 0;
 
+	const dictation = createDictation({
+		getCaretOffset: options.getCaretOffset,
+		getValue: options.getValue,
+		onChange: () => dictationVersion++,
+		onError: (error) =>
+			toast.error(error instanceof Error ? error.message : 'Transcription failed'),
+		setCaretOffset: options.setCaretOffset,
+		setValue: options.setValue
+	});
 	const recorder = $derived(options.getRecorder());
 	const unavailableReason = $derived(
 		resolution.mode === VoiceMode.UNAVAILABLE ? resolution.reason : null
@@ -173,29 +180,18 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		ticker = undefined;
 	}
 
-	function writeDictation(text: string) {
-		if (!span) return;
-
-		const next = span.apply(options.getValue(), text);
-
-		lastValue = next;
-		options.setValue(next);
-	}
-
 	/**
 	 * A voice message's live text moves from the placeholder into the message, as text the
 	 * user can edit, and what is said next follows it there.
 	 */
 	function adoptLiveText() {
-		if (recordingMode !== VoiceMode.VOICE_MESSAGE || span) return;
+		if (recordingMode !== VoiceMode.VOICE_MESSAGE || dictation.active) return;
 
 		if (state !== 'starting' && state !== 'recording') return;
 
-		lastValue = options.getValue();
-		span = new DictationSpan(lastValue, lastValue.length);
-		span.keepsEdits = true;
-		writeDictation(recorder?.liveText ?? '');
-		options.setCaretOffset(span.end);
+		dictation.begin({ at: options.getValue().length, keepsEdits: true });
+		dictation.write(recorder?.liveText ?? '');
+		options.setCaretOffset(dictation.end);
 	}
 
 	async function start() {
@@ -213,12 +209,8 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 
 		recordingMode = mode;
 		state = 'starting';
-		span = null;
 
-		if (mode === VoiceMode.DICTATION) {
-			lastValue = options.getValue();
-			span = new DictationSpan(lastValue, options.getCaretOffset());
-		}
+		if (mode === VoiceMode.DICTATION) dictation.begin();
 
 		const run = ++generation;
 
@@ -228,13 +220,13 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 			await recorder.start({
 				...wiring,
 				// a voice message's text reaches the message only once the user made it editable
-				onText: (text) => writeDictation(text)
+				onText: (text) => dictation.write(text)
 			});
 		} catch (error) {
 			if (run !== generation) return;
 
 			state = 'idle';
-			span = null;
+			dictation.cancel();
 
 			const message =
 				error instanceof VoiceCaptureError ? error.message : describeMicrophoneError(error);
@@ -274,35 +266,21 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		if (run !== generation) return;
 
 		if (mode === VoiceMode.VOICE_MESSAGE) {
-			const edited = takeLiveText();
+			// the clip carries the text from here: what the user edited is its transcript
+			const taken = dictation.take();
 
 			state = 'idle';
-			await attachVoiceMessage(result, edited);
+			await attachVoiceMessage(result, taken?.userEdited ? taken.text : null);
 
 			return;
 		}
 
-		await finishDictation(result, run);
-	}
+		// with live text the message already shows it and can be edited, while the whole
+		// recording is transcribed once more to refine it; otherwise wait for the text
+		state = result.transcript && !result.liveText ? 'transcribing' : 'idle';
+		await dictation.finish(result);
 
-	/**
-	 * Takes a voice message's text back out of the message once it stops: the clip carries
-	 * it. Returns the text when the user edited it, which then is the clip's transcript.
-	 */
-	function takeLiveText(): string | null {
-		const taken = span;
-
-		span = null;
-
-		if (!taken || taken.isEmpty) return null;
-
-		const previous = options.getValue();
-		const text = taken.text(previous).trim();
-
-		lastValue = taken.remove(previous);
-		options.setValue(lastValue);
-
-		return taken.userEdited ? text : null;
+		if (run === generation) state = 'idle';
 	}
 
 	async function attachVoiceMessage(
@@ -327,70 +305,18 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		});
 	}
 
-	async function finishDictation({ liveText, transcript }: VoiceSessionResult, run: number) {
-		const dictated = span;
-
-		if (!transcript || !dictated) {
-			state = 'idle';
-
-			return;
-		}
-
-		// with live text the message already shows it and can be edited, while the whole
-		// recording is transcribed once more to refine it; otherwise wait for the text
-		if (!liveText) state = 'transcribing';
-		else state = 'idle';
-
-		const refined = (async () => {
-			try {
-				const text = await transcript;
-
-				if (run !== generation) return;
-
-				if (text.trim() || !liveText) writeDictation(text);
-			} catch (error) {
-				if (run !== generation) return;
-
-				toast.error(error instanceof Error ? error.message : 'Transcription failed');
-			}
-		})();
-
-		if (liveText) refining = refined;
-
-		await refined;
-
-		if (refining === refined) refining = null;
-
-		if (run !== generation) return;
-
-		state = 'idle';
-		span = null;
-
-		if (!dictated.isEmpty) options.setCaretOffset(dictated.end);
-	}
-
 	/** Drops the recording and any text it dictated. */
 	function cancel() {
 		generation++;
 		stopTicker();
 		recorder?.cancel();
-
-		if (span) {
-			const next = span.remove(options.getValue());
-
-			options.setValue(next);
-			span = null;
-		}
-
+		dictation.cancel();
 		state = 'idle';
 	}
 
 	/** Follows an edit the user typed while dictation writes into the message. */
 	function handleUserInput() {
-		const next = options.getValue();
-
-		span?.edited(lastValue, next);
-		lastValue = next;
+		dictation.edited();
 	}
 
 	onDestroy(() => {
@@ -413,7 +339,9 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		},
 		/** The dictated text shown is still being refined by a pass over the whole recording. */
 		get isRefining() {
-			return refining !== null;
+			void dictationVersion;
+
+			return dictation.refining;
 		},
 		/** What the microphone button says it will do. */
 		get label() {
@@ -424,8 +352,12 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		},
 		/** Text streaming while a voice message is recorded, shown under the waveform. */
 		get liveCaption() {
+			void dictationVersion;
+
 			// once made editable, the text is in the message instead
-			return recordingMode === VoiceMode.VOICE_MESSAGE && !span ? (recorder?.liveText ?? '') : '';
+			return recordingMode === VoiceMode.VOICE_MESSAGE && !dictation.active
+				? (recorder?.liveText ?? '')
+				: '';
 		},
 		get mode() {
 			return state === 'idle' ? resolution.mode : recordingMode;
@@ -439,7 +371,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		},
 		/** Resolves once the text in the message is final, at once when nothing is refining it. */
 		settled(): Promise<void> {
-			return refining ?? Promise.resolve();
+			return dictation.settled();
 		},
 		/** Whether the form shows a microphone button at all. */
 		get showButton() {
