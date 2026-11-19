@@ -1,7 +1,5 @@
 name: CI (self-hosted OpenVINO backend)
 
-# GPU tests: run only for OpenVINO backend changes. build-openvino.yml builds and runs the CPU tests
-# (Linux and Windows) for every source change pushed to master.
 on:
   workflow_dispatch: # allows manual triggering
   push:
@@ -9,13 +7,24 @@ on:
       - master
     paths: [
       '.github/workflows/ci-self-hosted-openvino.yml',
-      'ggml/src/ggml-openvino/**'
+      'ci/run.sh',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp'
     ]
 
   pull_request:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/ci-self-hosted-openvino.yml',
+      'ci/run.sh',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      'ggml/src/*',
+      'ggml/src/ggml-cpu/**',
       'ggml/src/ggml-openvino/**'
     ]
 
