@@ -624,7 +624,7 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
 #   if defined(__wasm_relaxed_simd__)
         v128_t dp = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v1l, v0lf, wasm_i32x4_splat(0));
         dp = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v1h, v0hf, dp);
-        
+
         sumv = wasm_f32x4_add(sumv, wasm_f32x4_mul(wasm_f32x4_convert_i32x4(dp),
                     wasm_f32x4_splat(GGML_CPU_FP16_TO_FP32(x0->d) * GGML_CPU_FP16_TO_FP32(y0->d))));
 #   else
@@ -833,7 +833,7 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                     wasm_i16x8_extend_high_i8x16(q8_1),
                     wasm_i16x8_extend_high_i8x16(q2_bits_1)
                 );
-               
+
                 v128_t p_sum0 = wasm_i32x4_add(p0, p1);
                 v128_t p_sum1 = wasm_i32x4_add(p2, p3);
 #   endif
