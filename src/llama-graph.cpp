@@ -1362,39 +1362,79 @@ bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params)
 }
 
 void llm_graph_input_mem_hybrid_iswa_rel::set_input(const llama_ubatch * ubatch) {
-    llm_graph_input_mem_hybrid_iswa::set_input(ubatch);
-
     const auto * attn_ctx = mctx->get_attn();
 
-    // the distances may not be allocated if there are no layers of that kind
+    // base tensors may not be allocated if there are no non-SWA attention layers
+    if (inp_attn->self_k_idxs && inp_attn->self_k_idxs->buffer) {
+        attn_ctx->get_base()->set_input_k_idxs(inp_attn->self_k_idxs, ubatch);
+        attn_ctx->get_base()->set_input_v_idxs(inp_attn->self_v_idxs, ubatch);
+    }
+
+    if (inp_attn->self_attn_mask.raw && inp_attn->self_attn_mask.raw->buffer) {
+        attn_ctx->get_base()->set_input_attn_mask(inp_attn->self_attn_mask, ubatch, cparams.causal_attn);
+    }
+
     if (self_rel_pos->buffer) {
         attn_ctx->get_base()->set_input_relative_pos(self_rel_pos, ubatch, extent);
+    }
+
+    // swa tensors may not be allocated if there are no SWA attention layers
+    if (inp_attn->self_k_idxs_swa && inp_attn->self_k_idxs_swa->buffer) {
+        attn_ctx->get_swa()->set_input_k_idxs(inp_attn->self_k_idxs_swa, ubatch);
+        attn_ctx->get_swa()->set_input_v_idxs(inp_attn->self_v_idxs_swa, ubatch);
+    }
+
+    if (inp_attn->self_attn_mask_swa.raw && inp_attn->self_attn_mask_swa.raw->buffer) {
+        attn_ctx->get_swa()->set_input_attn_mask(inp_attn->self_attn_mask_swa, ubatch, cparams.causal_attn);
     }
 
     if (self_rel_pos_swa->buffer) {
         attn_ctx->get_swa()->set_input_relative_pos(self_rel_pos_swa, ubatch, extent_swa);
     }
+
+    const int64_t n_rs = mctx->get_recr()->get_n_rs();
+
+    if (inp_rs->s_copy) {
+        GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->s_copy->buffer));
+        int32_t * data = (int32_t *) inp_rs->s_copy->data;
+
+        // assuming copy destinations ALWAYS happen ONLY on the cells between head and head+n
+        for (uint32_t i = 0; i < n_rs; ++i) {
+            data[i] = mctx->get_recr()->s_copy(i);
+        }
+    }
 }
 
 bool llm_graph_input_mem_hybrid_iswa_rel::can_reuse(const llm_graph_params & params) {
-    mctx = static_cast<const llama_memory_hybrid_iswa_context *>(params.mctx);
+    const auto * mctx = static_cast<const llama_memory_hybrid_iswa_context *>(params.mctx);
 
-    const auto * attn_ctx = mctx->get_attn();
+    this->mctx = mctx;
 
     bool res = true;
 
-    // the parent checks the masks for the kv_rows layout, these are always dense
+    const auto * attn_ctx = mctx->get_attn();
+
+    // the masks are always dense, see build_inp_mem_hybrid_iswa_rel()
+
+    // base tensors may not be allocated if there are no non-SWA attention layers
     if (inp_attn->self_k_idxs && inp_attn->self_k_idxs->buffer) {
         res &= inp_attn->self_k_idxs->ne[0] == params.ubatch.n_tokens;
     }
 
     res &= can_reuse_kq_mask(inp_attn->self_attn_mask.raw, attn_ctx->get_base(), params.ubatch, params.cparams);
 
+    res &= self_rel_pos->ne[0] == attn_ctx->get_base()->get_n_kv();
+    res &= self_rel_pos->ne[1] == params.ubatch.n_tokens;
+
+    // swa tensors may not be allocated if there are no SWA attention layers
     if (inp_attn->self_k_idxs_swa && inp_attn->self_k_idxs_swa->buffer) {
         res &= inp_attn->self_k_idxs_swa->ne[0] == params.ubatch.n_tokens;
     }
 
     res &= can_reuse_kq_mask(inp_attn->self_attn_mask_swa.raw, attn_ctx->get_swa(), params.ubatch, params.cparams);
+
+    res &= self_rel_pos_swa->ne[0] == attn_ctx->get_swa()->get_n_kv();
+    res &= self_rel_pos_swa->ne[1] == params.ubatch.n_tokens;
 
     res &= inp_rs->s_copy->ne[0] == mctx->get_recr()->get_n_rs();
 
@@ -1402,12 +1442,6 @@ bool llm_graph_input_mem_hybrid_iswa_rel::can_reuse(const llm_graph_params & par
 
     res &= inp_rs->head == mctx->get_recr()->get_head();
     res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
-
-    res &= self_rel_pos->ne[0] == attn_ctx->get_base()->get_n_kv();
-    res &= self_rel_pos->ne[1] == params.ubatch.n_tokens;
-
-    res &= self_rel_pos_swa->ne[0] == attn_ctx->get_swa()->get_n_kv();
-    res &= self_rel_pos_swa->ne[1] == params.ubatch.n_tokens;
 
     return res;
 }
