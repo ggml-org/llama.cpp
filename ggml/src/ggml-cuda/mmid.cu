@@ -24,6 +24,51 @@ template <int n> struct mm_ids_pow2 { static constexpr int value = 2*mm_ids_pow2
 template <>      struct mm_ids_pow2<1> { static constexpr int value = 1; };
 template <>      struct mm_ids_pow2<0> { static constexpr int value = 1; };
 
+// The last block of mm_ids_helper places the slots with id -1 behind the columns of all experts.
+// Their ids stay valid indices for the quantization of src1, and the tiles over them are empty,
+// so no matrix multiplication reads or writes them.
+template <int warp_size>
+static __device__ void mm_ids_helper_skipped(
+        const int32_t * __restrict__ ids,
+        int32_t * __restrict__ ids_src1, int32_t * __restrict__ ids_dst, ggml_cuda_mm_id_tile_spec * __restrict__ tile_spec,
+        const int n_tokens, const int n_expert_used, const int nchannels_y, const int tile_width,
+        const int si1, const int sis1, const bool write_inverse) {
+    const int n_slots = n_tokens*n_expert_used;
+    int n_skipped = 0;
+
+    for (int s0 = 0; s0 < n_slots; s0 += warp_size) {
+        const int s   = s0 + threadIdx.x;
+        const int it  = s / n_expert_used;
+        const int iex = s - it*n_expert_used;
+        const int skipped = s < n_slots && ids[it*si1 + iex] < 0;
+
+        int scan = skipped; // inclusive prefix sum over the warp
+#pragma unroll
+        for (int offset = 1; offset < warp_size; offset *= 2) {
+            const int tmp = __shfl_up_sync(0xFFFFFFFF, scan, offset, warp_size);
+            if (threadIdx.x >= static_cast<unsigned int>(offset)) {
+                scan += tmp;
+            }
+        }
+
+        if (skipped) {
+            const int col = n_slots - 1 - (n_skipped + scan - 1);
+            ids_dst[col] = s;
+            if (write_inverse) {
+                ids_src1[s] = col;
+            } else {
+                ids_src1[col] = it*sis1 + iex % nchannels_y;
+            }
+        }
+        n_skipped += __shfl_sync(0xFFFFFFFF, scan, warp_size - 1, warp_size);
+    }
+
+    const int n_valid = n_slots - n_skipped;
+    for (int jt = (n_valid + tile_width - 1)/tile_width + threadIdx.x; jt < (n_slots + tile_width - 1)/tile_width; jt += warp_size) {
+        tile_spec[jt] = {0, 0, 0, /*padding =*/ 0};
+    }
+}
+
 // Helper function for mul_mat_id, converts ids to a more convenient format.
 // ids_src1 describes how to permute the flattened column indices of src1 in order to get a compact src1 tensor sorted by expert.
 // ids_dst describes the same mapping but for the dst tensor.
@@ -41,6 +86,12 @@ static __global__ void mm_ids_helper(
     const int n_expert_used = n_expert_used_template == 0 ? n_expert_used_var : n_expert_used_template;
     const int expert = blockIdx.x;
 
+    if (expert == int(gridDim.x) - 1) {
+        mm_ids_helper_skipped<warp_size>(ids, ids_src1, ids_dst, tile_spec,
+            n_tokens, n_expert_used, nchannels_y, tile_width.z, si1, sis1, write_inverse);
+        return;
+    }
+
     extern __shared__ char data_mm_ids_helper[];
     mm_ids_helper_store * store = (mm_ids_helper_store *) data_mm_ids_helper;
 
@@ -53,7 +104,7 @@ static __global__ void mm_ids_helper(
             int iex_used = -1; // The index at which the expert is used, if any.
             for (int iex = threadIdx.x; iex < n_expert_used; iex += warp_size) {
                 const int expert_used = ids[it*si1 + iex];
-                nex_prev += expert_used < expert;
+                nex_prev += uint32_t(expert_used) < uint32_t(expert); // id -1 is no expert
                 if (expert_used == expert) {
                     iex_used = iex;
                 }
@@ -79,7 +130,7 @@ static __global__ void mm_ids_helper(
             const int expert_used = (neu_padded == n_expert_used || iex < n_expert_used) && it < n_tokens ?
                 ids[it*si1 + iex] : INT_MAX;
             const int iex_used = expert_used == expert ? iex : -1;
-            nex_prev += expert_used < expert;
+            nex_prev += uint32_t(expert_used) < uint32_t(expert);
 
             // Whether the threads at this token position have used the expert:
             const int it_compact_add_self = warp_reduce_any<neu_padded>(iex_used != -1);
@@ -155,7 +206,7 @@ static void launch_mm_ids_helper(
 
     const uint3 tile_width_fd = init_fastdiv_values(tile_width);
 
-    const dim3 num_blocks(n_experts, 1, 1);
+    const dim3 num_blocks(n_experts + 1, 1, 1); // the last block handles the slots with id -1
     const dim3 block_size(warp_size, 1, 1);
     const size_t nbytes_shared = n_tokens*sizeof(mm_ids_helper_store);
     GGML_ASSERT(nbytes_shared <= smpbo);
@@ -202,4 +253,27 @@ void ggml_cuda_launch_mm_ids_helper(
                 n_experts, n_tokens, n_expert_used, nchannels_y, tile_width, si1, sis1, write_inverse, stream);
             break;
     }
+}
+
+static __global__ void mm_ids_zero_skipped(
+        const int32_t * __restrict__ ids, float * __restrict__ dst, const int nrows,
+        const int64_t si0, const int64_t si1, const int64_t s1, const int64_t s2) {
+    const int64_t it  = blockIdx.x;
+    const int64_t iex = blockIdx.y;
+
+    if (ids[it*si1 + iex*si0] >= 0) {
+        return;
+    }
+
+    float * dst_row = dst + it*s2 + iex*s1;
+    for (int i = threadIdx.x; i < nrows; i += blockDim.x) {
+        dst_row[i] = 0.0f;
+    }
+}
+
+void ggml_cuda_mm_ids_zero_skipped(
+        const int32_t * ids, float * dst, const int n_tokens, const int n_expert_used, const int nrows,
+        const int64_t si0, const int64_t si1, const int64_t s1, const int64_t s2, cudaStream_t stream) {
+    const dim3 num_blocks(n_tokens, n_expert_used, 1);
+    mm_ids_zero_skipped<<<num_blocks, 256, 0, stream>>>(ids, dst, nrows, si0, si1, s1, s2);
 }

@@ -61,6 +61,14 @@ static __global__ void mul_mat_vec_f(
         dst += token_idx*stride_col_dst;
     }
 
+    // id -1 skips the slot: its dst row is zero
+    if (ids && channel_x < 0) {
+        if (tid < ncols_dst) {
+            dst[tid*stride_col_dst + row] = 0.0f;
+        }
+        return;
+    }
+
     bool use_gate = false;
     bool use_bias = false;
     bool use_gate_bias = false;
