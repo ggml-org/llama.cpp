@@ -1048,8 +1048,8 @@ static __device__ __forceinline__ uint32_t fastdiv(uint32_t n, const uint3 fastd
     // fastdiv_values.z is unused and optimized away by the compiler.
     // Compute high 32 bits of n * mp
     const uint32_t hi = __umulhi(n, fastdiv_values.x);
-    // add n, apply bit shift
-    return (hi + n) >> fastdiv_values.y;
+    // Preserve the carry in the sum; the shift can also be 32.
+    return uint32_t((uint64_t(hi) + n) >> fastdiv_values.y);
 }
 
 static __device__ __forceinline__ uint32_t fastmodulo(uint32_t n, const uint3 fastdiv_values) {
