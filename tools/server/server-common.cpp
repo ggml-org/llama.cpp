@@ -6,9 +6,14 @@
 #include "mtmd-helper.h"
 #include "chat.h"
 #include "base64.hpp"
+#include "hash/hash.h"
 
 #include "server-common.h"
 
+#include <cpp-httplib/httplib.h>
+
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <random>
 #include <sstream>
@@ -201,6 +206,19 @@ const char * get_media_marker() {
 }
 
 //
+// audio utils
+//
+
+std::string pcm_f32_to_s16(const float * samples, size_t n) {
+    std::string bytes(n * sizeof(int16_t), '\0');
+    for (size_t i = 0; i < n; i++) {
+        const int16_t v = (int16_t) std::lround(std::max(-1.0f, std::min(1.0f, samples[i])) * 32767.0f);
+        memcpy(&bytes[2 * i], &v, sizeof(v));
+    }
+    return bytes;
+}
+
+//
 // model output modalities
 //
 
@@ -288,10 +306,9 @@ bool lora_should_clear_cache(
         const std::vector<common_adapter_lora_info> & current,
         const std::vector<common_adapter_lora_info> & next) {
 
-    // This should always be called after determining that the two sets are
-    // _not_ equal. This assert is therefore some slightly wasted work and
-    // should be safe to remove as long as this method is called correctly.
-    GGML_ASSERT(!are_lora_equal(current, next));
+    if (are_lora_equal(current, next)) {
+        return false;
+    }
 
     return (
         !(lora_get_enabled_ids(current).empty() || lora_all_alora(current)) ||
@@ -508,6 +525,7 @@ server_tokens::server_tokens(mtmd::input_chunks & mtmd_chunks, bool has_mtmd) : 
 }
 
 server_tokens::server_tokens(const llama_tokens & tokens, bool has_mtmd) : has_mtmd(has_mtmd), tokens(tokens) {
+    update_hashes();
 }
 
 llama_pos server_tokens::pos_next(int64_t n_tokens) const {
@@ -624,6 +642,7 @@ void server_tokens::push_back(llama_token tok) {
         throw std::runtime_error("Invalid token");
     }
     tokens.emplace_back(tok);
+    update_hashes();
 }
 
 void server_tokens::push_back(const mtmd_input_chunk * chunk) {
@@ -637,6 +656,7 @@ void server_tokens::push_back(const mtmd_input_chunk * chunk) {
         }
         mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_copy(chunk));
         map_idx_to_media[start_idx] = std::move(new_chunk);
+        update_hashes();
     } else if (type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
         size_t n_tokens;
         const auto * text_tokens = mtmd_input_chunk_get_tokens_text(chunk, &n_tokens);
@@ -660,6 +680,7 @@ void server_tokens::push_back_placeholder(const mtmd_input_chunk * chunk) {
             tokens.emplace_back(LLAMA_TOKEN_NULL);
         }
         map_idx_to_media[start_idx] = std::move(new_chunk);
+        update_hashes();
     } else {
         push_back(chunk);
     }
@@ -684,6 +705,7 @@ void server_tokens::push_back(server_tokens & tokens) {
 
 void server_tokens::insert(const llama_tokens & inp_tokens) {
     tokens.insert(tokens.end(), inp_tokens.begin(), inp_tokens.end());
+    update_hashes();
 }
 
 const llama_tokens & server_tokens::get_tokens() const {
@@ -751,6 +773,10 @@ server_tokens server_tokens::deserialize(const llama_tokens & packed, bool has_m
         result.map_idx_to_media[start_idx] = std::move(chunk);
     }
 
+    // the hashes from the constructor do not include the media chunks
+    result.hashes.clear();
+    result.update_hashes();
+
     if (reader.remaining() >= sizeof(llama_token)) {
         throw std::runtime_error("Trailing data in server tokens state");
     }
@@ -772,6 +798,7 @@ llama_tokens server_tokens::get_text_tokens() const {
 void server_tokens::set_token(llama_pos pos, llama_token id) {
     GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
     tokens[pos] = id;
+    hashes.resize(std::min(hashes.size(), (size_t) pos / hash_block_size));
 }
 
 void server_tokens::keep_first(size_t n) {
@@ -805,6 +832,7 @@ void server_tokens::keep_first(size_t n) {
         }
     }
     tokens.resize(n);
+    hashes.resize(std::min(hashes.size(), n / hash_block_size));
 }
 
 std::string server_tokens::detokenize(const llama_context * ctx, bool special) const {
@@ -821,8 +849,11 @@ std::string server_tokens::detokenize(const llama_context * ctx, bool special) c
 size_t server_tokens::get_common_prefix(const server_tokens & b) const {
     const size_t max_idx = std::min(tokens.size(), b.tokens.size());
 
+    // the blocks with equal hashes are not compared again
+    const size_t min_idx = get_common_prefix_lower(b.get_prefix_hashes());
+
     if (!has_mtmd) {
-        for (size_t i = 0; i < max_idx; ++i) {
+        for (size_t i = min_idx; i < max_idx; ++i) {
             if (tokens[i] == b.tokens[i]) {
                 continue;
             }
@@ -833,7 +864,7 @@ size_t server_tokens::get_common_prefix(const server_tokens & b) const {
         return max_idx;
     }
 
-    for (size_t i = 0; i < max_idx; ++i) {
+    for (size_t i = min_idx; i < max_idx; ++i) {
         const llama_token ai =   tokens[i];
         const llama_token bi = b.tokens[i];
 
@@ -866,6 +897,66 @@ size_t server_tokens::get_common_prefix(const server_tokens & b) const {
     }
 
     return max_idx; // all tokens are equal
+}
+
+void server_tokens::update_hashes() {
+    const size_t n_blocks = tokens.size() / hash_block_size;
+
+    std::string buf;
+    const auto append = [&buf](const void * data, size_t len) {
+        buf.append((const char *) data, len);
+    };
+
+    for (size_t k = hashes.size(); k < n_blocks; k++) {
+        const size_t i_begin = k * hash_block_size;
+        const size_t i_end   = i_begin + hash_block_size;
+
+        // the previous hash comes first, zeros for the first block
+        const prefix_hash prev = k > 0 ? hashes[k - 1] : prefix_hash{};
+
+        buf.clear();
+        append(prev.data(), prev.size());
+        append(tokens.data() + i_begin, hash_block_size * sizeof(llama_token));
+
+        // a media chunk is hashed in the block of its first token, it can span over many blocks
+        for (auto it = map_idx_to_media.lower_bound(i_begin); it != map_idx_to_media.end() && it->first < i_end; ++it) {
+            const std::string_view id = mtmd_input_chunk_get_id(it->second.get());
+            const uint64_t fields[]   = { it->first, mtmd_input_chunk_get_n_tokens(it->second.get()), id.size() };
+            append(fields, sizeof(fields));
+            append(id.data(), id.size());
+        }
+
+        hashes.push_back(hash_sha256(buf.data(), buf.size()));
+    }
+}
+
+size_t server_tokens::get_common_prefix_lower(const std::vector<prefix_hash> & b_hashes) const {
+    const auto & a_hashes = hashes;
+
+    // a hash covers all the tokens before it, so the equal entries come first
+    size_t lo = 0;
+    size_t hi = std::min(a_hashes.size(), b_hashes.size());
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo) / 2;
+        if (a_hashes[mid] == b_hashes[mid]) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+
+    size_t n = lo * hash_block_size;
+
+    // do not cut a media chunk, go back to its start
+    auto it = map_idx_to_media.upper_bound(n);
+    if (it != map_idx_to_media.begin()) {
+        --it;
+        if (it->first < n && n < it->first + mtmd_input_chunk_get_n_tokens(it->second.get())) {
+            n = it->first;
+        }
+    }
+
+    return n;
 }
 
 common_chat_msg_spans server_tokens::find_message_spans(const common_chat_msg_delimiters & delims) const {
@@ -916,6 +1007,7 @@ server_tokens server_tokens::clone() const {
     server_tokens res;
     res.has_mtmd = has_mtmd;
     res.tokens   = tokens;
+    res.hashes   = hashes;
     for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ++it) {
         size_t idx = it->first;
         const mtmd::input_chunk_ptr & chunk = it->second;
@@ -1200,10 +1292,55 @@ json oaicompat_completion_params_parse(const json & body) {
 // - file:// for local files (only allowed if media_path is set)
 // - data: for base64 encoded data with uri scheme (e.g. data:image/png;base64,...)
 // - raw base64 encoded data
+static bool ipv4_is_public(const unsigned char * b) {
+    return !(b[0] == 0 || b[0] == 10 || b[0] == 127 || b[0] >= 224 // this network, private, loopback, multicast, reserved
+        || (b[0] == 100 && (b[1] & 0xc0) == 64)                    // 100.64.0.0/10 CGNAT
+        || (b[0] == 169 && b[1] == 254)                            // link-local, cloud metadata
+        || (b[0] == 172 && (b[1] & 0xf0) == 16)                    // 172.16.0.0/12
+        || (b[0] == 192 && b[1] == 168)                            // 192.168.0.0/16
+        || (b[0] == 192 && b[1] == 0 && b[2] == 0)                 // 192.0.0.0/24
+        || (b[0] == 198 && (b[1] & 0xfe) == 18));                  // 198.18.0.0/15
+}
+
+bool server_addr_is_public(const std::string & addr) {
+    unsigned char b[16];
+    if (inet_pton(AF_INET, addr.c_str(), b) == 1) {
+        return ipv4_is_public(b);
+    }
+    if (inet_pton(AF_INET6, addr.c_str(), b) != 1) {
+        return false; // e.g. scoped address "fe80::1%eth0"
+    }
+    static const unsigned char v4_mapped[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
+    static const unsigned char nat64[12]     = {0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0};
+    static const unsigned char zero[12]      = {};
+    if (memcmp(b, v4_mapped, 12) == 0 || memcmp(b, nat64, 12) == 0) {
+        return ipv4_is_public(b + 12);
+    }
+    return memcmp(b, zero, 12) != 0                 // ::/96: unspecified, loopback, IPv4-compatible
+        && (b[0] & 0xfe) != 0xfc                    // fc00::/7 unique local
+        && !(b[0] == 0xfe && (b[1] & 0x80) == 0x80) // fe80::/10 link-local, fec0::/10 site-local
+        && b[0] != 0xff;                            // multicast
+}
+
+std::string server_resolve_public_addr(const std::string & host, bool allow_private) {
+    std::vector<std::string> addrs;
+    httplib::hosted_at(host, addrs);
+    if (addrs.empty()) {
+        throw std::invalid_argument("cannot resolve host: " + host);
+    }
+    for (const auto & addr : addrs) {
+        if (!allow_private && !server_addr_is_public(addr)) {
+            throw std::invalid_argument("host is not a public address: " + host);
+        }
+    }
+    return addrs[0];
+}
+
 void handle_media(
         std::vector<raw_buffer> & out_files,
         const std::string & url,
-        const std::string & media_path) {
+        const std::string & media_path,
+        bool allow_private_urls) {
     if (!media_path.empty()) {
         // should already be enforced by arg.cpp, but checking just in case
         GGML_ASSERT(media_path.back() == DIRECTORY_SEPARATOR);
@@ -1215,6 +1352,9 @@ void handle_media(
         common_remote_params params;
         params.max_size = 1024 * 1024 * 10; // 10MB
         params.timeout  = 10; // seconds
+        params.resolve_host = [allow_private_urls](const std::string & host) {
+            return server_resolve_public_addr(host, allow_private_urls);
+        };
         SRV_INF("downloading image from '%s'\n", url.c_str());
         auto res = common_remote_get_content(url, params);
         if (200 <= res.first && res.first < 300) {
@@ -1281,7 +1421,7 @@ static void oaicompat_content_load_media(json & content, const server_chat_param
 
             json image_url = json_value(p, "image_url", json::object());
             std::string url = json_value(image_url, "url", std::string());
-            handle_media(out_files, url, opt.media_path);
+            handle_media(out_files, url, opt.media_path, opt.media_allow_private_urls);
 
             p["type"] = "media_marker";
             p["text"] = get_media_marker();
@@ -1296,7 +1436,7 @@ static void oaicompat_content_load_media(json & content, const server_chat_param
             json input_audio = json_value(p, "input_audio", json::object());
             std::string url  = json_value(input_audio, "data",
                                     json_value(input_audio, "url", std::string()));
-            handle_media(out_files, url, opt.media_path);
+            handle_media(out_files, url, opt.media_path, opt.media_allow_private_urls);
 
             p["type"] = "media_marker";
             p["text"] = get_media_marker();
@@ -1311,7 +1451,7 @@ static void oaicompat_content_load_media(json & content, const server_chat_param
             json input_video = json_value(p, type, json::object());
             std::string url  = json_value(input_video, "data",
                                     json_value(input_video, "url", std::string()));
-            handle_media(out_files, url, opt.media_path);
+            handle_media(out_files, url, opt.media_path, opt.media_allow_private_urls);
 
             p["type"] = "media_marker";
             p["text"] = get_media_marker();
@@ -1390,10 +1530,14 @@ json oaicompat_chat_params_parse(
                 json_schema = json_value(response_format, "schema", json::object());
             }
         } else if (response_type == "json_schema") {
-            auto schema_wrapper = json_value(response_format, "json_schema", json::object());
-            json_schema = json_value(schema_wrapper, "schema", json::object());
+            if (response_format.contains("json_schema")) {
+                auto schema_wrapper = json_value(response_format, "json_schema", json::object());
+                json_schema = json_value(schema_wrapper, "schema", json::object());
+            } else {
+                json_schema = json_value(response_format, "schema", json::object());
+            }
         } else if (!response_type.empty() && response_type != "text") {
-            throw std::invalid_argument("response_format type must be one of \"text\" or \"json_object\", but got: " + response_type);
+            throw std::invalid_argument("response_format type must be one of \"text\", \"json_object\" or \"json_schema\", but got: " + response_type);
         }
     }
 
@@ -1501,6 +1645,11 @@ json oaicompat_chat_params_parse(
             inputs.enable_thinking = false;
             inputs.chat_template_kwargs.erase("reasoning_effort");
         } else if (!reasoning_effort.empty()) {
+            const auto rejected = caps.at("reasoning_effort_rejected").get<std::vector<std::string>>();
+            if (std::find(rejected.begin(), rejected.end(), reasoning_effort) != rejected.end()) {
+                const auto levels = caps.at("reasoning_effort_levels").get<std::vector<std::string>>();
+                throw std::invalid_argument("reasoning_effort \"" + reasoning_effort + "\" is not supported by the chat template, supported levels: " + string_join(levels, ", "));
+            }
             inputs.chat_template_kwargs["reasoning_effort"] = json(reasoning_effort).dump();
         }
     }

@@ -158,6 +158,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_NVFP4         = 39, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q1_0          = 40, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q2_0          = 41, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_F8_E4M3       = 42, // except 1d tensors
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };
@@ -227,6 +228,15 @@ extern "C" {
         LLAMA_CONTEXT_TYPE_MTP     = 1,
     };
 
+    // the head on the block of a DFlash draft model
+    enum llama_dflash_variant {
+        LLAMA_DFLASH_VARIANT_NONE     = -1, // not a DFlash draft model
+        LLAMA_DFLASH_VARIANT_DFLASH   = 0,
+        LLAMA_DFLASH_VARIANT_DFLASH2  = 1,
+        LLAMA_DFLASH_VARIANT_DSPARK   = 2,
+        LLAMA_DFLASH_VARIANT_LILICORR = 3,
+    };
+
     // TODO: simplify (https://github.com/ggml-org/llama.cpp/pull/9294#pullrequestreview-2286561979)
     typedef struct llama_token_data {
         llama_token id; // token id
@@ -261,6 +271,7 @@ extern "C" {
     //               - if not:        only the last token is output
     //            )
     //
+    // [DEPRECATED] use llama_batch_ext instead
     typedef struct llama_batch {
         int32_t n_tokens;
 
@@ -269,7 +280,7 @@ extern "C" {
         llama_pos    *  pos;
         int32_t      *  n_seq_id;
         llama_seq_id ** seq_id;
-        int8_t       *  logits;   // TODO: rename this to "output"
+        int8_t       *  logits;
     } llama_batch;
 
     enum llama_model_kv_override_type {
@@ -388,7 +399,6 @@ extern "C" {
         float    yarn_beta_fast;   // YaRN low correction dim
         float    yarn_beta_slow;   // YaRN high correction dim
         uint32_t yarn_orig_ctx;    // YaRN original context size
-        float    defrag_thold;     // [DEPRECATED] defragment the KV cache if holes/size > thold, <= 0 disabled (default)
 
         ggml_backend_sched_eval_callback cb_eval;
         void * cb_eval_user_data;
@@ -396,7 +406,8 @@ extern "C" {
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
 
-        size_t moe_cache_size; // device cache in bytes for the experts kept in host memory, split among the devices like the layers, 0 = disabled [EXPERIMENTAL]
+        size_t moe_cache_size;      // device cache in bytes for the experts kept in host memory, split among the devices like the layers, 0 = disabled [EXPERIMENTAL]
+        float  moe_cache_cpu_share; // share of the MoE cache misses computed on the CPU instead of uploaded, 0 = all uploaded [EXPERIMENTAL]
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
@@ -514,11 +525,6 @@ extern "C" {
                                    void * set_tensor_data_ud, // userdata for function
               struct llama_model_params   params);
 
-    DEPRECATED(LLAMA_API struct llama_model * llama_load_model_from_file(
-                             const char * path_model,
-              struct llama_model_params   params),
-            "use llama_model_load_from_file instead");
-
     // Load a model from a file
     // If the file is split into multiple parts, the file name must follow this pattern: <name>-%05d-of-%05d.gguf
     // If the split file name does not follow this pattern, use llama_model_load_from_splits
@@ -544,19 +550,11 @@ extern "C" {
             const struct llama_model * model,
                         const char * path_model);
 
-    DEPRECATED(LLAMA_API void llama_free_model(struct llama_model * model),
-            "use llama_model_free instead");
-
     LLAMA_API void llama_model_free(struct llama_model * model);
 
     LLAMA_API struct llama_context * llama_init_from_model(
                      struct llama_model * model,
             struct llama_context_params   params);
-
-    DEPRECATED(LLAMA_API struct llama_context * llama_new_context_with_model(
-                     struct llama_model * model,
-            struct llama_context_params   params),
-            "use llama_init_from_model instead");
 
     // Frees all allocated memory
     LLAMA_API void llama_free(struct llama_context * ctx);
@@ -581,13 +579,6 @@ extern "C" {
     LLAMA_API uint32_t llama_n_ubatch   (const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_seq_max  (const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_rs_seq   (const struct llama_context * ctx);
-
-    DEPRECATED(LLAMA_API int32_t llama_n_ctx_train(const struct llama_model * model), "use llama_model_n_ctx_train instead");
-    DEPRECATED(LLAMA_API int32_t llama_n_embd     (const struct llama_model * model), "use llama_model_n_embd instead");
-    DEPRECATED(LLAMA_API int32_t llama_n_layer    (const struct llama_model * model), "use llama_model_n_layer instead");
-    DEPRECATED(LLAMA_API int32_t llama_n_head     (const struct llama_model * model), "use llama_model_n_head instead");
-
-    DEPRECATED(LLAMA_API int32_t llama_n_vocab    (const struct llama_vocab * vocab), "use llama_vocab_n_tokens instead");
 
     LLAMA_API const struct llama_model * llama_get_model   (const struct llama_context * ctx);
     LLAMA_API           llama_memory_t   llama_get_memory  (const struct llama_context * ctx);
@@ -641,6 +632,17 @@ extern "C" {
     // Get metadata value as a string by index
     LLAMA_API int32_t llama_model_meta_val_str_by_index(const struct llama_model * model, int32_t i, char * buf, size_t buf_size);
 
+    // GGUF metadata arrays of strings
+    // currently, only these keys are support:
+    // - tokenizer.tts_dicts
+    // - tokenizer.tts_dict.*
+
+    // Get the number of elements, or -1 if there is no such array
+    LLAMA_API int32_t llama_model_meta_arr_n(const struct llama_model * model, const char * key);
+
+    // Get element i, owned by the model; nullptr if not found
+    LLAMA_API const char * llama_model_meta_arr_str(const struct llama_model * model, const char * key, int32_t i);
+
     // Get a string describing the model type
     LLAMA_API int32_t llama_model_desc(const struct llama_model * model, char * buf, size_t buf_size);
 
@@ -681,6 +683,22 @@ extern "C" {
             const char * fname_inp,
             const char * fname_out,
             const llama_model_quantize_params * params);
+
+    //
+    // NextN / speculative draft model queries
+    //
+
+    // the DFlash variant the model loader picked from the head of the draft
+    LLAMA_API enum llama_dflash_variant llama_model_dflash_variant(const struct llama_model * model);
+
+    // DFlash2 selector: number of candidate tokens the draft keeps per block position from its logits
+    // (the packed lattice also holds the top_k x top_k pairwise transition scores); 0 if the model has no selector head
+    LLAMA_API int32_t llama_model_dflash_selector_top_k(const struct llama_model * model);
+
+    // returns pointer to the target-model layer indices
+    LLAMA_API const int32_t * llama_model_target_layer_ids  (const struct llama_model * model);
+    // returns the number of extracted layers from target model
+    LLAMA_API uint32_t        llama_model_target_layer_ids_n(const struct llama_model * model);
 
     //
     // Adapters
@@ -828,8 +846,6 @@ extern "C" {
     // (logits, embedding and memory)
     // Only use when saving the state, not when restoring it, otherwise the size may be too small.
     LLAMA_API size_t llama_state_get_size(struct llama_context * ctx);
-    LLAMA_API DEPRECATED(size_t llama_get_state_size(struct llama_context * ctx),
-        "use llama_state_get_size instead");
 
     // Copies the state to the specified destination address.
     // Destination needs to have allocated enough memory.
@@ -838,10 +854,6 @@ extern "C" {
             struct llama_context * ctx,
                          uint8_t * dst,
                           size_t   size);
-    LLAMA_API DEPRECATED(size_t llama_copy_state_data(
-            struct llama_context * ctx,
-                         uint8_t * dst),
-        "use llama_state_get_data instead");
 
     // Set the state reading from the specified address
     // Returns the number of bytes read
@@ -849,10 +861,6 @@ extern "C" {
             struct llama_context * ctx,
                    const uint8_t * src,
                           size_t   size);
-    LLAMA_API DEPRECATED(size_t llama_set_state_data(
-            struct llama_context * ctx,
-                   const uint8_t * src),
-        "use llama_state_set_data instead");
 
     // Save/load session file
     LLAMA_API bool llama_state_load_file(
@@ -861,25 +869,12 @@ extern "C" {
                      llama_token * tokens_out,
                           size_t   n_token_capacity,
                           size_t * n_token_count_out);
-    LLAMA_API DEPRECATED(bool llama_load_session_file(
-            struct llama_context * ctx,
-                      const char * path_session,
-                     llama_token * tokens_out,
-                          size_t   n_token_capacity,
-                          size_t * n_token_count_out),
-        "use llama_state_load_file instead");
 
     LLAMA_API bool llama_state_save_file(
             struct llama_context * ctx,
                       const char * path_session,
                const llama_token * tokens,
                           size_t   n_token_count);
-    LLAMA_API DEPRECATED(bool llama_save_session_file(
-            struct llama_context * ctx,
-                      const char * path_session,
-               const llama_token * tokens,
-                          size_t   n_token_count),
-        "use llama_state_save_file instead");
 
     // Get the exact size needed to copy the state of a single sequence
     LLAMA_API size_t llama_state_seq_get_size(
@@ -962,9 +957,10 @@ extern "C" {
     //
     // NOTE: this is a helper function to facilitate transition to the new batch API - avoid using it
     //
-    LLAMA_API struct llama_batch llama_batch_get_one(
+    DEPRECATED(LLAMA_API struct llama_batch llama_batch_get_one(
                   llama_token * tokens,
-                      int32_t   n_tokens);
+                      int32_t   n_tokens),
+            "use llama_batch_ext_init and llama_batch_ext_add_token instead");
 
     // Allocates a batch of tokens on the heap that can hold a maximum of n_tokens
     // Each token can be assigned up to n_seq_max sequence ids
@@ -973,13 +969,15 @@ extern "C" {
     // Otherwise, llama_batch.token will be allocated to store n_tokens llama_token
     // The rest of the llama_batch members are allocated with size n_tokens
     // All members are left uninitialized
-    LLAMA_API struct llama_batch llama_batch_init(
+    DEPRECATED(LLAMA_API struct llama_batch llama_batch_init(
             int32_t n_tokens,
             int32_t embd,
-            int32_t n_seq_max);
+            int32_t n_seq_max),
+            "use llama_batch_ext_init instead");
 
     // Frees a batch of tokens allocated with llama_batch_init()
-    LLAMA_API void llama_batch_free(struct llama_batch batch);
+    DEPRECATED(LLAMA_API void llama_batch_free(struct llama_batch batch),
+            "use llama_batch_ext_free instead");
 
     // Process a batch of tokens.
     // In contrast to llama_decode() - this call does not use KV cache.
@@ -987,9 +985,10 @@ extern "C" {
     // Can store the encoder output internally for later use by the decoder's cross-attention layers.
     //   0 - success
     // < 0 - error. the memory state is restored to the state before this call
-    LLAMA_API int32_t llama_encode(
+    DEPRECATED(LLAMA_API int32_t llama_encode(
             struct llama_context * ctx,
-              struct llama_batch   batch);
+              struct llama_batch   batch),
+            "use llama_process with LLAMA_PROCESS_TYPE_ENCODE instead");
 
     // Process a batch of tokens.
     // Requires the context to have a memory.
@@ -1003,9 +1002,10 @@ extern "C" {
     //    2 - aborted     (processed ubatches will remain in the context's memory)
     //   -1 - invalid input batch
     // < -1 - fatal error (processed ubatches will remain in the context's memory)
-    LLAMA_API int32_t llama_decode(
+    DEPRECATED(LLAMA_API int32_t llama_decode(
             struct llama_context * ctx,
-              struct llama_batch   batch);
+              struct llama_batch   batch),
+            "use llama_process with LLAMA_PROCESS_TYPE_DECODE instead");
 
     //
     // Extended batch API
@@ -1063,6 +1063,15 @@ extern "C" {
                                                int32_t   idx,
                                      struct llama_embd   embd);
 
+    // Add an entry whose embedding is row `row` of the layer input device buffer of ctx_other.
+    // All entries of the batch must be of this kind. Positions are set with llama_batch_ext_set_pos(), n_pos_per_embd of them.
+    // Returns the batch index (>= 0), or the llama_batch_ext_add() error codes.
+    LLAMA_API int32_t llama_batch_ext_add_embd_row(struct llama_batch_ext * batch, llama_seq_id seq_id, int32_t row);
+
+    // The state of entry idx is row `row` of the h_nextn device buffer of the context set with llama_set_ctx_state_src().
+    // All entries of a batch have a state row, or none.
+    LLAMA_API bool llama_batch_ext_set_embd_state_row(struct llama_batch_ext * batch, int32_t idx, int32_t row);
+
     // Set if output embeddings should be available for the token at index idx in the batch
     // Note: for now, this is equivalent to setting the output logits
     LLAMA_API bool llama_batch_ext_set_output_embd(
@@ -1116,14 +1125,6 @@ extern "C" {
     // Returns whether the context is currently using causal attention
     LLAMA_API bool llama_get_causal_attn(const struct llama_context * ctx);
 
-    // Set whether the model is in warmup mode or not
-    // If true, all model tensors are activated during llama_decode() to load and cache their weights.
-    //
-    // note: using this can cause extra graph reallocations because it changes the graph topology with MoE models,
-    //       so it is generally not recommended to use in practice. will be removed in the future
-    DEPRECATED(LLAMA_API void llama_set_warmup(struct llama_context * ctx, bool warmup),
-            "user code should do warmup runs manually [TAG_LLAMA_GRAPH_NO_WARMUP]");
-
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
 
@@ -1167,6 +1168,57 @@ extern "C" {
     // when pooling_type == LLAMA_POOLING_TYPE_RANK, returns float[n_cls_out] with the rank(s) of the sequence
     // otherwise: float[n_embd] (1-dimensional)
     LLAMA_API float * llama_get_embeddings_seq(struct llama_context * ctx, llama_seq_id seq_id);
+
+    //
+    // NextN / speculative decoding API
+    //
+
+    // Set whether the context outputs nextn embeddings or not
+    // If masked == true,  output the embeddings only for the tokens with batch.logits != 0
+    // If masked == false, output the embeddings for all tokens in the batch regardless of batch.logits
+    LLAMA_API void llama_set_embeddings_nextn(struct llama_context * ctx, bool value, bool masked);
+
+    // Select which appended NextN block the DECODER_MTP graph runs (offset past
+    // the trunk: il = n_layer() + offset). Used by the speculative NextN driver to
+    // chain multiple trained NextN heads. Default 0 (first head).
+    LLAMA_API void llama_set_nextn_layer_offset(struct llama_context * ctx, int32_t offset);
+
+    // Get all nextn embeddings, mirroring llama_get_embeddings()
+    LLAMA_API float * llama_get_embeddings_nextn(struct llama_context * ctx);
+
+    // Get the nextn embeddings for the ith token, mirroring llama_get_embeddings_ith()
+    LLAMA_API float * llama_get_embeddings_nextn_ith(struct llama_context * ctx, int32_t i);
+
+    // Set whether the context outputs the input embeddings of a specific layer
+    LLAMA_API void llama_set_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid, bool value);
+
+    // Get the input embeddings of a specific layer, mirroring llama_get_embeddings()
+    LLAMA_API float * llama_get_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid);
+
+    // Write the enabled layer inputs to a device buffer [n_layer_inp*n_embd, n_batch] instead of host memory.
+    // Row r holds the token at batch index r, layers in ascending layer id order.
+    LLAMA_API void llama_set_embeddings_layer_inp_dev(struct llama_context * ctx, bool value);
+
+    // Whether decode accepts entries added with llama_batch_ext_add_embd_row()
+    // (needs a DFlash/DSpark decoder context whose ctx_other has a layer input device buffer).
+    LLAMA_API bool llama_supports_embd_row(const struct llama_context * ctx);
+
+    // Write the unmasked h_nextn rows (see llama_set_embeddings_nextn) of each decode to a device buffer
+    // [n_embd_out, n_batch + n_seq_max] instead of host memory: row r < n_batch is the token at batch index r of the last decode,
+    // row n_batch + s is free for the caller, e.g. for seq s (see llama_set_embeddings_nextn_rows()).
+    // Returns false if the buffer cannot be used, the rows are then extracted to host memory.
+    LLAMA_API bool llama_set_embeddings_nextn_dev(struct llama_context * ctx, bool value);
+
+    // Copy rows of the h_nextn device buffer to or from host memory, ordered after the last decode and its readers
+    LLAMA_API bool llama_get_embeddings_nextn_rows(struct llama_context * ctx, int64_t row0, int64_t n_rows, float * out);
+    LLAMA_API bool llama_set_embeddings_nextn_rows(struct llama_context * ctx, int64_t row0, int64_t n_rows, const float * data);
+
+    // Read the state rows of batches (see llama_batch_ext_set_embd_state_row()) from the h_nextn device buffer of ctx_src.
+    // Returns whether decode accepts batches with state rows.
+    LLAMA_API bool llama_set_ctx_state_src(struct llama_context * ctx, struct llama_context * ctx_src);
+
+    // The paired context (llama_context_params::ctx_other), e.g. the target context of a draft context; may be nullptr
+    LLAMA_API struct llama_context * llama_get_ctx_other(struct llama_context * ctx);
 
     //
     // backend sampling API [EXPERIMENTAL]
@@ -1235,31 +1287,6 @@ extern "C" {
     LLAMA_API llama_token llama_vocab_fim_pad(const struct llama_vocab * vocab);
     LLAMA_API llama_token llama_vocab_fim_rep(const struct llama_vocab * vocab);
     LLAMA_API llama_token llama_vocab_fim_sep(const struct llama_vocab * vocab);
-
-    DEPRECATED(LLAMA_API const char * llama_token_get_text(const struct llama_vocab * vocab, llama_token token), "use llama_vocab_get_text instead");
-    DEPRECATED(LLAMA_API float llama_token_get_score(const struct llama_vocab * vocab, llama_token token), "use llama_vocab_get_score instead");
-    DEPRECATED(LLAMA_API enum llama_token_attr llama_token_get_attr(const struct llama_vocab * vocab, llama_token token), "use llama_vocab_get_attr instead");
-    DEPRECATED(LLAMA_API bool llama_token_is_eog(const struct llama_vocab * vocab, llama_token token), "use llama_vocab_is_eog instead");
-    DEPRECATED(LLAMA_API bool llama_token_is_control(const struct llama_vocab * vocab, llama_token token), "use llama_vocab_is_control instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_bos(const struct llama_vocab * vocab), "use llama_vocab_bos instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_eos(const struct llama_vocab * vocab), "use llama_vocab_eos instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_eot(const struct llama_vocab * vocab), "use llama_vocab_eot instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_cls(const struct llama_vocab * vocab), "use llama_vocab_cls instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_sep(const struct llama_vocab * vocab), "use llama_vocab_sep instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_nl (const struct llama_vocab * vocab), "use llama_vocab_nl instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_pad(const struct llama_vocab * vocab), "use llama_vocab_pad instead");
-    DEPRECATED(LLAMA_API bool llama_add_bos_token(const struct llama_vocab * vocab), "use llama_vocab_get_add_bos instead");
-    DEPRECATED(LLAMA_API bool llama_add_eos_token(const struct llama_vocab * vocab), "use llama_vocab_get_add_eos instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_fim_pre(const struct llama_vocab * vocab), "use llama_vocab_fim_pre instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_fim_suf(const struct llama_vocab * vocab), "use llama_vocab_fim_suf instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_fim_mid(const struct llama_vocab * vocab), "use llama_vocab_fim_mid instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_fim_pad(const struct llama_vocab * vocab), "use llama_vocab_fim_pad instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_fim_rep(const struct llama_vocab * vocab), "use llama_vocab_fim_rep instead");
-    DEPRECATED(LLAMA_API llama_token llama_token_fim_sep(const struct llama_vocab * vocab), "use llama_vocab_fim_sep instead");
-
-    // CLS is equivalent to BOS
-    DEPRECATED(LLAMA_API llama_token llama_vocab_cls(const struct llama_vocab * vocab), // classification
-            "use llama_vocab_bos instead");
 
     //
     // Tokenization
@@ -1531,17 +1558,6 @@ extern "C" {
             const struct llama_vocab * vocab,
                           const char * grammar_str,
                           const char * grammar_root);
-
-    DEPRECATED(LLAMA_API struct llama_sampler * llama_sampler_init_grammar_lazy(
-            const struct llama_vocab * vocab,
-                          const char * grammar_str,
-                          const char * grammar_root,
-                         const char ** trigger_words,
-                                size_t num_trigger_words,
-                   const llama_token * trigger_tokens,
-                                size_t num_trigger_tokens),
-        "use llama_sampler_init_grammar_lazy_patterns instead");
-
 
     /// @details Lazy grammar sampler, introduced in https://github.com/ggml-org/llama.cpp/pull/9639
     /// @param trigger_patterns A list of patterns that will trigger the grammar sampler. Pattern will be matched from the start of the generation output, and grammar sampler will be fed content starting from its first match group.

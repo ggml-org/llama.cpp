@@ -153,7 +153,7 @@ struct mtmd_cli_context {
     }
 
     void init_vision_context(common_params & params) {
-        const char * clip_path = params.mmproj.path.c_str();
+        const char * mmproj_path = params.mmproj.path.c_str();
         mtmd_context_params mparams = mtmd_context_params_default();
         mparams.use_gpu          = params.mmproj_use_gpu;
         mparams.device           = params.mmproj_device;
@@ -166,7 +166,7 @@ struct mtmd_cli_context {
         {
             // non-causal models need the whole image in one ubatch
             const int n_ubatch = llama_n_ubatch(lctx);
-            auto mem = mtmd_get_memory_usage(clip_path, mparams);
+            auto mem = mtmd_get_memory_usage(mmproj_path, mparams);
             if (mem.use_non_causal && mem.image_max_tokens > n_ubatch) {
                 LOG_WRN("%s: cap image_max_tokens (original=%d) to n_ubatch (%d) because model needs non-causal attention on image\n", __func__, mem.image_max_tokens, n_ubatch);
                 LOG_WRN("%s: increase n_ubatch (-ub) to increase vision token budget\n", __func__);
@@ -178,9 +178,9 @@ struct mtmd_cli_context {
             mparams.cb_eval_user_data = &cb_data;
             mparams.cb_eval = common_debug_cb_eval;
         }
-        ctx_vision.reset(mtmd_init_from_file(clip_path, model, mparams));
+        ctx_vision.reset(mtmd_init_from_file(mmproj_path, model, mparams));
         if (!ctx_vision.get()) {
-            LOG_ERR("Failed to load vision model from %s\n", clip_path);
+            LOG_ERR("Failed to load vision model from %s\n", mmproj_path);
             exit(1);
         }
 

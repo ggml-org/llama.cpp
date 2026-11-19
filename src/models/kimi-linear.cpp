@@ -167,7 +167,7 @@ void llama_model_kimi_linear::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_kimi_linear::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // Causal Conv1d function for Q,K,V
@@ -231,8 +231,8 @@ static ggml_tensor * causal_conv1d(ggml_cgraph * gf, ggml_context * ctx0, ggml_t
     return ggml_reshape_4d(ctx0, Xcur, head_dim, n_head, n_seq_tokens, n_seqs);
 }
 
-llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph_params & params) :
-    llm_build_delta_net_base(params), model(model) {
+llama_model_kimi_linear::graph::graph(const llm_graph_params & params) :
+    llm_build_delta_net_base(params) {
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
@@ -348,8 +348,7 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
             Qcur = build_gdn_l2_norm(ctx0, Qcur, eps_norm);
             Kcur = build_gdn_l2_norm(ctx0, Kcur, eps_norm);
 
-            // Choose between build_delta_net_chunking and build_delta_net_recurrent based on n_tokens
-            auto attn_out = build_delta_net(Qcur, Kcur, Vcur, g1, beta, state, il);
+            auto attn_out = build_delta_net(Qcur, Kcur, Vcur, g1, beta, state);
 
             ggml_tensor * output = ggml_cont(ctx0, attn_out.first);
             ggml_tensor * new_state = attn_out.second;

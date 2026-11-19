@@ -5,7 +5,7 @@
 layout (push_constant) uniform parameter
 {
     uint n_cols;
-    uint ne01, ne02;
+    uint ne01, ne02, ne03;
     uint nb01, nb02, nb03;
     uint nb11, nb12, nb13;
     float weight;

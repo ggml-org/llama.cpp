@@ -11,6 +11,7 @@
 #include <cctype>
 
 #include "server-http.h"
+#include "server-common.h"
 
 static std::string proxy_header_to_lower(std::string header) {
     std::transform(header.begin(), header.end(), header.begin(), [](unsigned char c) {
@@ -68,8 +69,19 @@ static server_http_res_ptr proxy_request(const server_http_req & req, std::strin
             req.files,
             req.should_stop,
             600, // timeout_read (default to 10 minutes)
-            600  // timeout_write (default to 10 minutes)
+            600, // timeout_write (default to 10 minutes)
+            // test-only escape hatch
+            server_resolve_public_addr(parsed_url.host, !common_get_env("LLAMA_SERVER_DEBUG_PROXY_ALLOW_PRIVATE").empty())
             );
+
+    // route redirects back through the proxy, so each hop is checked
+    if (proxy->status >= 300 && proxy->status < 400) {
+        for (auto & [key, value] : proxy->headers) {
+            if (proxy_header_to_lower(key) == "location") {
+                value = "?url=" + httplib::encode_uri_component(common_http_resolve_location(target_url, value));
+            }
+        }
+    }
 
     return proxy;
 }

@@ -23,6 +23,9 @@ struct ModelExtraInputInfo {
     Shape shape;
     int64_t value;
     bool is_parameter;
+    // when set, the value is read from dimension shape_axis of this model input instead of a Parameter
+    std::string shape_source;
+    int64_t shape_axis = -1;
 };
 
 class GgmlDecoder : public DecoderBase {
@@ -120,6 +123,8 @@ public:
     virtual bool is_static() const = 0;
 
     virtual bool is_stateful() const = 0;
+
+    virtual bool is_prefill() const = 0;
 
     virtual bool is_splited_model() const = 0;
 

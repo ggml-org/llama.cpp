@@ -116,22 +116,14 @@ LLAMA_API ggml_backend_dev_t llama_model_get_device(const struct llama_model * m
 
 LLAMA_API llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx);
 
+LLAMA_API std::vector<ggml_tensor *> llama_memory_get_tensors(const llama_memory_t mem);
+
 // the backend buffers that a state write of this memory would touch - empty caches report none
 LLAMA_API std::vector<ggml_backend_buffer_t> llama_memory_get_buffers(const llama_memory_t mem);
 
 // Turn the KV cache attention rotation on or off for the contexts created from this model.
 // Useful for testing purposes.
 LLAMA_API void llama_model_set_attn_rot(struct llama_model * model, bool value);
-
-// Set whether the context outputs nextn embeddings or not
-// If masked == true,  output the embeddings only for the tokens with batch.logits != 0
-// If masked == false, output the embeddings for all tokens in the batch regardless of batch.logits
-LLAMA_API void llama_set_embeddings_nextn(struct llama_context * ctx, bool value, bool masked);
-
-// Select which appended NextN block the DECODER_MTP graph runs (offset past
-// the trunk: il = n_layer() + offset). Used by the speculative NextN driver to
-// chain multiple trained NextN heads. Default 0 (first head).
-LLAMA_API void llama_set_nextn_layer_offset(struct llama_context * ctx, int32_t offset);
 
 // Marks the entries that a decision head (clef, vllm-decision2) reads, the default is 0
 // See https://github.com/ggml-org/llama.cpp/pull/29831 for details
@@ -147,35 +139,16 @@ enum llama_decision_order {
 // The embeddings output has one value per entry: row i is the score of option i
 LLAMA_API bool llama_batch_ext_set_decision_order(struct llama_batch_ext * batch, int32_t idx, enum llama_decision_order order);
 
+// Questions packed after a shared state in one sequence, contexts without memory only
+// 0 (default) is the state, k > 0 the k-th question; full attention layers hide other questions from a question
+LLAMA_API bool llama_batch_ext_set_decision_group(struct llama_batch_ext * batch, int32_t idx, int32_t group);
+
 // Label of option i of a decision model ("<arch>.decision.labels"), nullptr past the last one
 LLAMA_API const char * llama_model_decision_label(const struct llama_model * model, uint32_t i);
-
-// mirrors:
-// LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
-LLAMA_API float * llama_get_embeddings_nextn(struct llama_context * ctx);
-
-// LLAMA_API float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i);
-LLAMA_API float * llama_get_embeddings_nextn_ith(struct llama_context * ctx, int32_t i);
-
-// Set whether the context outputs the input embeddings of a specific layer
-LLAMA_API void llama_set_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid, bool value);
-
-// mirrors:
-// LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
-LLAMA_API float * llama_get_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid);
-
-LLAMA_API llama_context * llama_get_ctx_other(struct llama_context * ctx);
 
 //
 // model/context data extraction
 //
-
-LLAMA_API int32_t llama_model_dflash_selector_top_k(const struct llama_model * model);
-
-// returns pointer to the target-model layer indices
-LLAMA_API const int32_t * llama_model_target_layer_ids  (const struct llama_model * model);
-// returns the number of extracted layers from target model
-LLAMA_API uint32_t        llama_model_target_layer_ids_n(const struct llama_model * model);
 
 // retrieves the whole token embedding matrix in F32 format (n_embd * n_vocab)
 // returns total number of elements or 0 on error
@@ -189,3 +162,6 @@ LLAMA_API uint32_t llama_model_get_tok_embd_rows(const struct llama_model * mode
 
 // realtime models: number of tokens the output lags behind the audio input, used by mtmd; 0 if not applicable
 LLAMA_API uint32_t llama_model_n_tokens_delay(const struct llama_model * model);
+
+// each sequence is paired with an unconditional one at n_seq_max / 2 + seq_id, in a unified KV cache
+LLAMA_API bool llama_model_classifier_free_guidance(const struct llama_model * model);

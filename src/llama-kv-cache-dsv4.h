@@ -155,7 +155,10 @@ public:
 
     uint32_t get_n_rs_seq() const;
     const std::vector<uint32_t> & get_rs_idx() const;
-    void reset_rs_idx_for_ubatches(const std::vector<llama_ubatch> & ubatches);
+    void update_rs_for_ubatches(const std::vector<llama_ubatch> & ubatches);
+
+    // copy the sources into their mirrors after a state read
+    void refill_comp_mirrors();
 
 private:
     llama_hparams hparams_raw;
@@ -168,11 +171,17 @@ private:
 
     std::vector<uint32_t> rs_idx;
 
+    // [n_seq_max] largest rollback whose snapshot the last ubatch of the seq wrote: snapshot d is
+    // exact for d <= n tokens of the seq in that ubatch (d == n is the state before the ubatch)
+    std::vector<uint32_t> rs_max;
+
     // [n_layer] storage layer -> layer whose rows it holds (itself, or the source of a mirror)
     std::vector<int32_t> comp_il_src;
 
     // [n_layer] layer -> layer whose compressed-KV storage it reads (itself, its V4.1 kv source or a mirror), -1 = none
     std::vector<int32_t> comp_read;
+
+    bool comp_mirrors_stale = false;
 
     std::unique_ptr<llama_kv_cache_iswa> kv_raw;
     std::unique_ptr<llama_kv_cache>      kv_csa;
@@ -219,11 +228,10 @@ public:
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const;
 
     ggml_tensor * build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
-    ggml_tensor * build_input_k_rot(ggml_context * ctx) const;
+    std::vector<ggml_tensor *> get_k_rot() const;
 
     void set_input_k_idxs(ggml_tensor * dst) const;
-    void set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
-    void set_input_k_rot(ggml_tensor * dst) const;
+    void set_input_attn_mask(const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const;
 
     // token history of the raw (window) cells, for host-side n-gram hashing (deepseek41 Engram)
     void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
@@ -266,8 +274,7 @@ public:
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const;
 
-    ggml_tensor * build_input_k_rot(ggml_context * ctx) const;
-    void set_input_k_rot(ggml_tensor * dst) const;
+    std::vector<ggml_tensor *> get_k_rot() const;
 
 private:
     llama_kv_cache * kv;
@@ -420,5 +427,5 @@ private:
 
     const llama_memory_status status;
 
-    const llama_kv_cache_dsv4 * kv = nullptr;
+    llama_kv_cache_dsv4 * kv = nullptr;
 };

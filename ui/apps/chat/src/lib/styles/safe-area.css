@@ -1,0 +1,46 @@
+/*
+ * Safe areas. The page runs under the status bar and over the home indicator
+ * (viewport-fit=cover), which an installed iPhone app always shows, so anything
+ * pinned to a screen edge keeps clear of them with these utilities instead of
+ * hand-written calc()s. Each adds the edge's inset (--safe-area-top or
+ * --safe-area-bottom, 0 where there is none) to an optional spacing step:
+ *
+ *   pt-safe       padding-top: the top inset
+ *   pt-safe-3     padding-top: 0.75rem + the top inset
+ *   pb-safe-2     padding-bottom: 0.5rem + the bottom inset
+ *   top-safe-2.5  top: 0.625rem + the top inset, for an absolutely placed control
+ *
+ * They take variants like any utility, e.g. max-md:pt-safe-12.
+ */
+
+@utility pt-safe {
+	padding-top: var(--safe-area-top);
+}
+
+@utility pt-safe-* {
+	padding-top: calc(--spacing(--value(number)) + var(--safe-area-top));
+}
+
+@utility pb-safe {
+	padding-bottom: var(--safe-area-bottom);
+}
+
+@utility pb-safe-* {
+	padding-bottom: calc(--spacing(--value(number)) + var(--safe-area-bottom));
+}
+
+@utility top-safe {
+	top: var(--safe-area-top);
+}
+
+@utility top-safe-* {
+	top: calc(--spacing(--value(number)) + var(--safe-area-top));
+}
+
+@utility bottom-safe {
+	bottom: var(--safe-area-bottom);
+}
+
+@utility bottom-safe-* {
+	bottom: calc(--spacing(--value(number)) + var(--safe-area-bottom));
+}

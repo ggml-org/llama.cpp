@@ -106,6 +106,7 @@ def main():
     parser.add_argument("--no-docker", action="store_true", help="Build natively on the host instead of in a docker container")
     parser.add_argument("--preset", help="Override the CMake preset to use")
     parser.add_argument("--debug", action="store_true", help="Build in debug mode (uses -debug presets instead of -release)")
+    parser.add_argument("--hex-debug", "--hexagon-debug", action="store_true", help="Enable Hexagon HTP debug output (sets GGML_HEXAGON_HTP_DEBUG=ON)")
     parser.add_argument("--hex-only", "--hexagon-only", action="store_true", help="Only build and push ggml-hexagon and libggml-htp libraries")
     parser.add_argument("--hex-arch", choices=["v73", "v75", "v79", "v81", "v85", "73", "75", "79", "81", "85"], help="Specific Hexagon DSP architecture to build with --hex-only (default: all)")
 
@@ -197,13 +198,15 @@ def main():
         else:
             hex_targets = ["ggml-hexagon", "htp-v73", "htp-v75", "htp-v79", "htp-v81", "htp-v85"]
 
+    hex_debug_arg = f"-DGGML_HEXAGON_HTP_DEBUG={'ON' if args.hex_debug else 'OFF'}"
+
     if args.no_docker:
         # Native/local host build
         logger.info("Running native/local CMake build...")
         install_prefix = os.path.join(repo_root, install_dir, "llama.cpp")
 
         # Configure
-        configure_cmd = ["cmake", f"--preset={preset}", "-B", build_dir]
+        configure_cmd = ["cmake", f"--preset={preset}", hex_debug_arg, "-B", build_dir]
         logger.info(f"+ {' '.join(configure_cmd)}")
         res = subprocess.run(configure_cmd, cwd=repo_root)
         if res.returncode != 0:
@@ -238,7 +241,7 @@ def main():
 
         target_args = f"--target {' '.join(hex_targets)} " if args.hex_only else ""
         build_sh_cmd = (
-            f"cmake --preset {preset} -B /workspace/{build_dir} && "
+            f"cmake --preset {preset} {hex_debug_arg} -B /workspace/{build_dir} && "
             f"cmake --build /workspace/{build_dir} {target_args}-j {jobs} && "
             f"cmake --install /workspace/{build_dir} --prefix {install_prefix_container}"
         )
@@ -260,6 +263,17 @@ def main():
         if res.returncode != 0:
             logger.error("Docker-based build failed.")
             sys.exit(res.returncode)
+
+    install_lib_dir = os.path.join(repo_root, install_dir, "llama.cpp", "lib")
+    if os.path.isdir(install_lib_dir):
+        if args.hex_debug:
+            farf_src = os.path.join(repo_root, "scripts", "snapdragon", "adb", "llama-cli.farf")
+            farf_apps = ["llama-server", "llama-cli", "llama-completion", "test-backend-ops", "test-llama-archs"]
+            for app in farf_apps:
+                shutil.copyfile(farf_src, os.path.join(install_lib_dir, f"{app}.farf"))
+        else:
+            for f in glob.glob(os.path.join(install_lib_dir, "*.farf")):
+                os.remove(f)
 
     logger.info("\nBuild and installation completed successfully!")
 
@@ -286,6 +300,9 @@ def main():
             else:
                 hex_libs += glob.glob(os.path.join(lib_dir, "libggml-htp*"))
 
+            if args.hex_debug:
+                hex_libs += glob.glob(os.path.join(lib_dir, "*.farf"))
+
             if not hex_libs:
                 logger.error(f"Error: no hexagon libraries found in {lib_dir} to push.")
                 sys.exit(1)
@@ -307,6 +324,10 @@ def main():
                 if res.returncode != 0:
                     logger.error("ADB mkdir failed.")
                     sys.exit(res.returncode)
+                if not args.hex_debug:
+                    rm_farf_cmd = adb_cmd + ["shell", f"rm -f {shlex.quote(target_lib_dir)}/*.farf"]
+                    logger.info(f"+ {' '.join(rm_farf_cmd)}")
+                    subprocess.run(rm_farf_cmd)
                 for lib in hex_libs:
                     push_cmd = adb_cmd + ["push", lib, f"{target_lib_dir}/"]
                     logger.info(f"+ {' '.join(push_cmd)}")
@@ -383,6 +404,10 @@ def main():
             if args.hex_only:
                 logger.info(f"\nDeploying Hexagon libraries to Linux device {ssh_host} via SCP...")
                 target_lib_dir = f"{target_dir}/lib"
+                if not args.hex_debug:
+                    rm_farf_cmd = ["ssh", ssh_host, f"rm -f {target_lib_dir}/*.farf"]
+                    logger.info(f"+ {' '.join(rm_farf_cmd)}")
+                    subprocess.run(rm_farf_cmd)
                 deploy_cmd = ["scp"] + hex_libs + [f"{ssh_host}:{target_lib_dir}/"]
                 logger.info(f"+ {' '.join(deploy_cmd)}")
                 res = subprocess.run(deploy_cmd)

@@ -1451,6 +1451,72 @@ void server_decision_context::fill_task_d1omni(
 //
 
 // given to the template: text between the pieces of the prompt, and at the start of the span of a question or of an option
+// lfm3-d1 packs the questions of a state as d1 attention.py pack_set does
+static const std::string D1_HEAD   = "<|startoftext|><|im_start|>user\n";
+static const std::string D1_HEADER = "QUESTION:\n";
+
+size_t server_decision_context::set_size(const std::vector<server_decision_question> & questions) const {
+    if (!is_lfm3_d1()) {
+        return 0;
+    }
+    // TODO: pack spoken questions
+    for (const auto & question : questions) {
+        if (decision_is_spoken(question.instructions)) {
+            return 0;
+        }
+    }
+    return COMMON_DECISION_LFM3_D1_SET_SIZE;
+}
+
+void server_decision_context::fill_task_set(
+        const json & state,
+        const std::vector<server_decision_question> & questions,
+        const std::vector<raw_buffer> & files,
+        mtmd_context * mctx,
+        const mtmd_helper_init_opt & init_opt,
+        server_task & task) const {
+    GGML_ASSERT(!questions.empty());
+
+    std::string head = D1_HEAD;
+    for (size_t i = 0; i < files.size(); i++) {
+        head += get_media_marker();
+    }
+    auto suffix = [&](const server_decision_question & question) {
+        const std::string lone = render(json(), questions, question, 0, files.size());
+        if (!string_starts_with(lone, head)) {
+            throw std::runtime_error("unexpected layout of the decision prompt");
+        }
+        return lone.substr(head.size());
+    };
+
+    // the first question is its lone prompt
+    fill_task(state, questions, questions[0], 0, files, mctx, init_opt, task);
+    const size_t n_first = common_tokenize(vocab, suffix(questions[0]), false, true).size();
+    if (n_first >= task.tokens.size()) {
+        throw std::runtime_error("unexpected layout of the decision prompt");
+    }
+    task.decision.group.assign(task.tokens.size(), 0);
+    std::fill(task.decision.group.end() - n_first, task.decision.group.end(), 1);
+    task.decision.label_pos.assign(task.decision.label_groups.size(), task.tokens.size() - 1);
+
+    for (size_t k = 1; k < questions.size(); k++) {
+        const std::string text = (state.is_null() ? "" : D1_HEADER) + suffix(questions[k]);
+        for (const llama_token token : common_tokenize(vocab, text, false, true)) {
+            task.tokens.push_back(token);
+            task.decision.group.push_back(k + 1);
+        }
+
+        std::vector<std::string>  texts;
+        std::vector<llama_tokens> groups;
+        d1_labels(questions[k], texts, groups);
+        for (const auto & group : groups) {
+            task.decision.labels.insert(task.decision.labels.end(), group.begin(), group.end());
+            task.decision.label_groups.push_back(group.size());
+            task.decision.label_pos.push_back(task.tokens.size() - 1);
+        }
+    }
+}
+
 static const std::string CLEF_MARKER        = "<<clef:";
 static const std::string CLEF_SEP           = "<<clef:sep>>";
 static const std::string CLEF_MARK_QUESTION = "<<clef:question>>";
@@ -1762,7 +1828,7 @@ std::vector<server_task> server_decision_group_tasks(std::vector<server_task> &&
         size_t n_shared = parent.tokens.size() - 1;
         for (size_t j = i + 1; j < end; j++) {
             n_shared = std::min(n_shared, parent.tokens.get_common_prefix(tasks[j].tokens));
-            n_shared = std::min(n_shared, tasks[j].tokens.size() - 1);
+            n_shared = std::min({n_shared, tasks[j].tokens.size() - 1, (size_t) parent.decision.pos_first(), (size_t) tasks[j].decision.pos_first()});
         }
 
         if (end - i < 2 || n_shared == 0) {

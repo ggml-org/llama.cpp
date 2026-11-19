@@ -70,11 +70,21 @@ void llama_model_flint::load_arch_tensors(llama_model_loader &) {
     }
 }
 
-std::unique_ptr<llm_graph_context> llama_model_flint::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+llama_rope_params llama_model_flint::get_rope_params(const llama_cparams & cparams, int il) const {
+    auto res = llama_model::get_rope_params(cparams, il);
+
+    // the SWA layers use the global base and scale
+    res.freq_base  = cparams.rope_freq_base;
+    res.freq_scale = cparams.rope_freq_scale;
+
+    return res;
 }
 
-llama_model_flint::graph::graph(const llama_model & model, const llm_graph_params & params) :
+std::unique_ptr<llm_graph_context> llama_model_flint::build_arch_graph(const llm_graph_params & params) const {
+    return std::make_unique<graph>(params);
+}
+
+llama_model_flint::graph::graph(const llm_graph_params & params) :
     llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
@@ -109,12 +119,8 @@ llama_model_flint::graph::graph(const llama_model & model, const llm_graph_param
 
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
             Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
-            if (hparams.has_rope(il)) {
-                Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig,
-                        freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-                Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig,
-                        freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-            }
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);

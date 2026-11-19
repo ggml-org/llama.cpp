@@ -62,6 +62,7 @@ def engram_compressed_token_map(tokenizer_dir: Path) -> tuple[list[int], int]:
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir)
+    assert tokenizer is not None
     sentinel = "\ue000"
     normalizer = normalizers.Sequence([
         normalizers.NFKC(),
@@ -80,6 +81,7 @@ def engram_compressed_token_map(tokenizer_dir: Path) -> tuple[list[int], int]:
         text = backend.decode([token_id], skip_special_tokens=False)
         if "\ufffd" in text:
             key = backend.id_to_token(token_id)
+            assert key is not None
         else:
             normalized = normalizer.normalize_str(text)
             key = normalized if normalized else text
@@ -458,7 +460,7 @@ class DeepseekV41VisionModel(DeepseekV4FlashVisionModel):
         self.gguf_writer.add_vision_use_silu(True)
         self.gguf_writer.add_vision_projector_scale_factor(self.hparams_vision["downsample_ratio"])
         self.gguf_writer.add_vision_min_pixels(self.hparams_vision["min_pixels"])
-        # hardcoded in clip.cpp (PROJECTOR_TYPE_DEEPSEEK41V); add GGUF keys if a later model differs
+        # hardcoded in tools/mtmd (PROJECTOR_TYPE_DEEPSEEK41V); add GGUF keys if a later model differs
         assert self.hparams_vision["max_image_tokens"] == 1024, self.hparams_vision["max_image_tokens"]
         assert self.hparams_vision["max_wh_ratio"] is None, self.hparams_vision["max_wh_ratio"]
         assert self.hparams_vision["rope_theta"] == 10000, self.hparams_vision["rope_theta"]

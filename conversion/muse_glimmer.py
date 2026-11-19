@@ -37,7 +37,8 @@ class MuseGlimmerModel(TextModel):
 
         from transformers import AutoTokenizer
         tok = AutoTokenizer.from_pretrained(self.dir_model)
-        eot_id = tok.convert_tokens_to_ids("<|eot|>")  # ty: ignore[unresolved-attribute]
+        assert tok is not None
+        eot_id = tok.convert_tokens_to_ids("<|eot|>")
         if isinstance(eot_id, int) and eot_id >= 0:
             self.gguf_writer.add_eot_token_id(eot_id)
 
@@ -152,7 +153,7 @@ class MuseGlimmerAssistantModel(TextModel):
             target_arch = json.load(f)["architectures"][0]
         target_cls = get_model_class(target_arch)
         if target_cls is not type(self):
-            target_cls.set_vocab(self)  # ty: ignore[unresolved-attribute]
+            target_cls.set_vocab(self)  # ty: ignore[missing-attribute]
         else:
             super().set_vocab()
 

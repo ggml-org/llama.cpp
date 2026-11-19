@@ -311,6 +311,44 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
         chatcmpl_body.erase("reasoning");
     }
 
+    if (response_body.contains("text")) {
+        const json & text = response_body.at("text");
+        if (!text.is_object()) {
+            throw std::invalid_argument("'text' must be an object");
+        }
+
+        chatcmpl_body.erase("text");
+        if (text.contains("format")) {
+            const json & format = text.at("format");
+            if (!format.is_object()) {
+                throw std::invalid_argument("'text.format' must be an object");
+            }
+
+            const std::string type = json_value(format, "type", std::string());
+            if (type == "json_schema") {
+                chatcmpl_body["response_format"] = {
+                    {"type", "json_schema"},
+                    {"json_schema", format},
+                };
+                chatcmpl_body["response_format"]["json_schema"].erase("type");
+            } else if (type == "json_object" || type == "text") {
+                chatcmpl_body["response_format"] = format;
+            } else if (!type.empty()) {
+                throw std::invalid_argument("'text.format.type' must be one of 'text', 'json_object', or 'json_schema'");
+            }
+        }
+    }
+
+    // llama.cpp params (e.g. seed, min_p) go under extra_params and are merged into the converted body
+    if (response_body.contains("extra_params")) {
+        chatcmpl_body.erase("extra_params");
+        if (response_body.at("extra_params").is_object()) {
+            for (const auto & [key, value] : response_body.at("extra_params").items()) {
+                chatcmpl_body[key] = value;
+            }
+        }
+    }
+
     return chatcmpl_body;
 }
 
@@ -621,6 +659,15 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
         }
     }
 
+    // Handle Anthropic-specific output_config param
+    if (body.contains("output_config")) {
+        json output_config = json_value(body, "output_config", json::object());
+        std::string effort = json_value(output_config, "effort", std::string());
+        if (!effort.empty()) {
+            oai_body["reasoning_effort"] = effort;
+        }
+    }
+
     // Handle Anthropic-specific metadata param
     if (body.contains("metadata")) {
         json metadata = json_value(body, "metadata", json::object());
@@ -692,14 +739,22 @@ json convert_transcriptions_to_chatcmpl(
     if (response_format != "json") {
         throw std::invalid_argument("Only 'json' response_format is supported for transcription");
     }
-    const common_chat_prompt_preset preset = common_chat_get_asr_prompt(tmpls, language);
-    if (prompt.empty()) {
+    common_chat_prompt_preset preset = common_chat_get_asr_prompt(tmpls, language, 0.0, prompt);
+    if (preset.needs_audio_length) {
+        mtmd_helper_media_meta meta;
+        if (mtmd_helper_get_media_meta(out_files[0].data(), out_files[0].size(), mtmd_helper_init_opt_default(), &meta) != 0 ||
+                meta.type != MTMD_HELPER_MEDIA_TYPE_AUDIO || meta.duration < 0) {
+            throw std::invalid_argument("the input file is not a supported audio file");
+        }
+        preset = common_chat_get_asr_prompt(tmpls, language, meta.duration, prompt);
+    }
+    if (prompt.empty() || preset.has_context) {
         prompt = preset.user;
     }
     if (!language.empty() && !preset.has_language) {
         prompt += string_format(" (language: %s)", language.c_str());
     }
-    prompt += get_media_marker();
+    prompt = preset.media_first ? get_media_marker() + prompt : prompt + get_media_marker();
 
     json messages = json::array();
     if (!preset.system.empty()) {
@@ -725,6 +780,38 @@ json convert_transcriptions_to_chatcmpl(
     }
 
     return chatcmpl_body;
+}
+
+json convert_speech_to_tts(const json & inp_body) {
+    json tts_body = inp_body; // copy all fields
+
+    // a custom voice is given as {"id": "..."}
+    if (inp_body.contains("voice") && inp_body.at("voice").is_object()) {
+        tts_body["voice"] = json_value(inp_body.at("voice"), "id", std::string());
+    }
+
+    // the default of the OpenAI API is mp3, we have no encoder for it
+    const std::string response_format = json_value(inp_body, "response_format", std::string("wav"));
+    if (response_format == "pcm") {
+        tts_body["response_format"] = "pcm16"; // "pcm" is float32 in /tts
+    } else if (response_format == "wav") {
+        tts_body["response_format"] = "wav";
+    } else {
+        throw std::invalid_argument("Only 'wav' and 'pcm' response_format are supported for speech");
+    }
+
+    const std::string stream_format = json_value(inp_body, "stream_format", std::string());
+    if (stream_format == "audio") {
+        tts_body["stream"] = true;
+    } else if (!stream_format.empty()) {
+        throw std::invalid_argument("Only 'audio' stream_format is supported for speech");
+    }
+
+    if (!json_value(inp_body, "instructions", std::string()).empty()) {
+        SRV_WRN("%s", "'instructions' is not supported for speech and is ignored\n");
+    }
+
+    return tts_body;
 }
 
 llama_tokens server_chat_get_asr_prompt(const llama_model * model) {

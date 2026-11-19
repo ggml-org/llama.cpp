@@ -201,6 +201,88 @@ __kernel void kernel_gemv_noshuffle_q8_0_f32_splitk(
     }
 }
 
+// Multi-column (n_cols in [2..4]) variant of the decode GEMV below, for the spec/MTP
+// verify batch: each block's weights are loaded once and reused across the columns.
+// Per column the operand order matches the decode GEMV.
+#define MC_COL_Q8_0(ts, c) \
+    { if (slid < 4) { regB.s0123 = read_imagef(src1, (c)*COL_STRIDE     + slid*2 + k*8); \
+                      regB.s4567 = read_imagef(src1, (c)*COL_STRIDE + 1 + slid*2 + k*8); } \
+      dequantizeBlockAccum_ns_sgbroadcast_1(ts, regA, scale, regB); }
+#ifdef ADRENO_GPU
+REQD_SUBGROUP_SIZE_64
+#endif
+__kernel void kernel_gemv_noshuffle_q8_0_f32_mc(
+        __read_only  image1d_buffer_t src0_q,  // quantized A
+        global half  * src0_d,                 // A scales
+        __read_only  image1d_buffer_t src1,    // B, n_cols columns of K
+        global float * dst,                    // C, column-major [M x n_cols]
+        ulong offsetd,
+        int ne00,                              // K
+        int ne01,                              // M
+        int n_cols)
+{
+    uint groupId = get_local_id(1);
+    uint gid     = get_global_id(0);
+    ushort slid  = get_sub_group_local_id();
+
+    uint K = ne00;
+    uint M = ne01;
+
+    uint LINE_STRIDE_A  = M;
+    // Keep tail lanes active for subgroup ops, but read a valid weight row.
+    uint gid_s = min(gid, LINE_STRIDE_A - 1);
+    uint BLOCK_STRIDE_A = 8 * M;
+    uint COL_STRIDE     = K / 4;   // float4 pixels per activation column
+
+    __private uint8  regA;
+    __private float8 regB;
+
+    __private float ts0 = 0.0f;
+    __private float ts1 = 0.0f;
+    __private float ts2 = 0.0f;
+    __private float ts3 = 0.0f;
+
+    #pragma unroll 1
+    for (uint k = groupId; k < (K / QK8_0); k += N_SIMDGROUP) {
+        float scale = convert_float(src0_d[gid_s + k * LINE_STRIDE_A]);
+
+        regA.s0 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 0)).x;
+        regA.s1 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 1)).x;
+        regA.s2 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 2)).x;
+        regA.s3 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 3)).x;
+        regA.s4 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 4)).x;
+        regA.s5 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 5)).x;
+        regA.s6 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 6)).x;
+        regA.s7 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 7)).x;
+
+        MC_COL_Q8_0(ts0, 0);
+        MC_COL_Q8_0(ts1, 1);
+        if (n_cols > 2) MC_COL_Q8_0(ts2, 2);
+        if (n_cols > 3) MC_COL_Q8_0(ts3, 3);
+    }
+
+    // reduction in local memory, assumes #wave=4
+    __local float4 reduceLM[SIMDGROUP_WIDTH * 3];
+    float4 acc = (float4)(ts0, ts1, ts2, ts3);
+    if (groupId == 1) reduceLM[SIMDGROUP_WIDTH * 0 + slid] = acc;
+    if (groupId == 2) reduceLM[SIMDGROUP_WIDTH * 1 + slid] = acc;
+    if (groupId == 3) reduceLM[SIMDGROUP_WIDTH * 2 + slid] = acc;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    if (groupId == 0) {
+        acc += reduceLM[SIMDGROUP_WIDTH * 0 + slid];
+        acc += reduceLM[SIMDGROUP_WIDTH * 1 + slid];
+        acc += reduceLM[SIMDGROUP_WIDTH * 2 + slid];
+        dst = (global float*)((global char*)dst + offsetd);
+        if (gid < M) {
+            dst[0 * M + gid] = acc.s0;
+            dst[1 * M + gid] = acc.s1;
+            if (n_cols > 2) dst[2 * M + gid] = acc.s2;
+            if (n_cols > 3) dst[3 * M + gid] = acc.s3;
+        }
+    }
+}
+#undef MC_COL_Q8_0
+
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif

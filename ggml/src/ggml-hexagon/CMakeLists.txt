@@ -33,10 +33,11 @@ add_library(htp_iface OBJECT
 set_target_properties(htp_iface PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(htp_iface PUBLIC
     ${HEXAGON_SDK_ROOT}/incs
-    ${HEXAGON_SDK_ROOT}/incs/stddef
     ${HEXAGON_SDK_ROOT}/utils/examples
     ${CMAKE_CURRENT_SOURCE_DIR}/htp
     ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(htp_iface PRIVATE
+    ${HEXAGON_SDK_ROOT}/incs/stddef)
 
 build_idl(htp/htp_iface.idl htp_iface)
 
@@ -65,8 +66,14 @@ ggml_add_backend_library(${TARGET_NAME}
     libdl.h
     ../../include/ggml-hexagon.h)
 
+if (WIN32)
+    # some clang-cl drivers do not predefine ARM64 macros for winnt.h
+    target_compile_definitions(${TARGET_NAME} PRIVATE _M_ARM64=1 _ARM64_=1)
+endif()
+
 target_link_libraries(${TARGET_NAME} PRIVATE htp_iface)
 target_include_directories(${TARGET_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/htp ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(${TARGET_NAME} SYSTEM PRIVATE ${HEXAGON_SDK_ROOT}/incs/stddef)
 
 # Build HTP skels
 set(HTP_SKELS)

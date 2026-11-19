@@ -181,11 +181,11 @@ class LFM3VLVisionMixin(MmprojModel):
 
     def _set_lfm3vl_gguf_parameters(self):
         assert self.hparams_vision is not None
-        # clip.cpp hardcodes the GELU projector and its input norm eps
+        # mtmd hardcodes the GELU projector and its input norm eps
         if (self.global_config["projector_hidden_act"] != "gelu" or not self.global_config["projector_bias"]
                 or self.global_config["projector_layer_norm_eps"] != 1e-6):
             raise ValueError("unsupported projector_hidden_act / projector_bias / projector_layer_norm_eps")
-        # clip.cpp hardcodes the vision rope base, the RGB patchifier and the 3x3 spatial conv
+        # mtmd hardcodes the vision rope base, the RGB patchifier and the 3x3 spatial conv
         if (self.hparams_vision["rope_parameters"]["rope_theta"] != 1e6 or self.hparams_vision["in_channels"] != 3
                 or self.hparams_vision["conv_kernel_size"] != 3):
             raise ValueError("unsupported vision rope_theta / in_channels / conv_kernel_size")
@@ -347,7 +347,7 @@ class LFM3AudioMmprojModel(MmprojModel):
         "feed_forward.w3":       gguf.MODEL_TENSOR.A_GEN_WAV_TFM_FFN_UP,
         "feed_forward.w2":       gguf.MODEL_TENSOR.A_GEN_WAV_TFM_FFN_DOWN,
     }
-    # the codec graph in clip.cpp hardcodes the liquid-codec FSQ front end and decoder shape, conversion fails on a mismatch
+    # the codec graph in mtmd hardcodes the liquid-codec FSQ front end and decoder shape, conversion fails on a mismatch
     _codec = {
         "model_type": "liquid_codec", "fsq_levels": [8, 7, 6, 6], "n_q": 12, "quantizer_dim": 256,
         "encoder_dim": 512, "stft_n_fft": 1280, "stft_hop_length": 320, "stft_win_length": 1280, "stft_frame_stack": 6,
@@ -405,7 +405,7 @@ class LFM3AudioMmprojModel(MmprojModel):
             if fe[k] != v:
                 raise ValueError(f"unsupported feature_extractor.{k}={fe[k]!r}, expected {v!r}")
 
-        # clip.cpp hardcodes the encoder rope base
+        # mtmd hardcodes the encoder rope base
         if self.hparams_audio["rope_parameters"]["rope_theta"] != 1e6:
             raise ValueError("unsupported audio encoder rope_theta")
 
@@ -420,7 +420,7 @@ class LFM3AudioMmprojModel(MmprojModel):
         if not self._audio_output:
             return
 
-        # audio generation: depthformer hparams, the codec ones are constant and live in clip.cpp
+        # audio generation: depthformer hparams, the codec ones are constant and live in mtmd
         gen = self.get_generation_config()
         for k, v in self._generation.items():
             if gen[k] != v:
@@ -453,9 +453,6 @@ class LFM3AudioMmprojModel(MmprojModel):
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         if new_name.startswith("a.conv1d.") or "conv_dw" in new_name or new_name.startswith("a.gen.wav.quant."):
             return gguf.GGMLQuantizationType.F32
-        # the codec decoder is small and its log-magnitude/phase output does not survive quantization
-        if new_name.startswith("a.gen.wav."):
-            return gguf.GGMLQuantizationType.F16
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:

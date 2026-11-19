@@ -2,7 +2,7 @@
 
 #include "test-log.h"
 
-#include "../../src/llama-ext.h" // llama_memory_get_buffers
+#include "../../src/llama-ext.h" // llama_memory_get_buffers, llama_memory_get_tensors, llama_arch_from_string
 
 #include "common.h"
 
@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <regex>
 #include <stdexcept>
 
 const double NMSE_THRESHOLD = 1e-5;
@@ -297,6 +298,13 @@ bool corrupt_state(std::vector<uint8_t> & data) {
 // context
 //
 
+// the recurrent state tensors: the conv and ssm rows of llama_memory_recurrent and the DeepSeek V4 compressor state
+static bool is_state_tensor(const ggml_tensor * tensor) {
+    static const std::regex re_state("^cache_(r|s|ple_r)_l[0-9]+$|_state_");
+
+    return std::regex_search(tensor->name, re_state);
+}
+
 // fill the buffers of the cache before a restore - a restore that reads cells it never wrote
 // then produces garbage instead of silently passing
 llama_context_ptr init_ctx(llama_model * model, llama_context_params cparams, uint8_t fill) {
@@ -313,11 +321,29 @@ llama_context_ptr init_ctx(llama_model * model, llama_context_params cparams, ui
     llama_synchronize(ctx.get());
 
     const auto buffers = llama_memory_get_buffers(llama_get_memory(ctx.get()));
+    const auto tensors = llama_memory_get_tensors(llama_get_memory(ctx.get()));
     llama_memory_clear(llama_get_memory(ctx.get()), true);
     if (buffers.empty()) {
         TLOG_ERR("%s: no cache buffers found\n", __func__);
         return nullptr;
     }
+
+    // the KV cache only masks the free cells, so NaN there would corrupt the output
+    if (fill == 0xff) {
+        size_t n_state = 0;
+        for (ggml_tensor * tensor : tensors) {
+            if (is_state_tensor(tensor)) {
+                ggml_backend_tensor_memset(tensor, fill, 0, ggml_nbytes(tensor));
+                n_state++;
+            }
+        }
+        if (n_state == 0) {
+            TLOG_ERR("%s: no state tensors found\n", __func__);
+            return nullptr;
+        }
+        return ctx;
+    }
+
     for (auto * buffer : buffers) {
         ggml_backend_buffer_clear(buffer, fill);
     }
@@ -368,10 +394,11 @@ llama_sampler_ptr make_dist_sampler(uint32_t seed) {
 }
 
 bool arch_reserves_single_seq(const llama_model * model) {
-    char arch_str[64] = {};
-    llama_model_meta_val_str(model, "general.architecture", arch_str, sizeof(arch_str));
+    char arch_name[64] = {};
+    llama_model_meta_val_str(model, "general.architecture", arch_name, sizeof(arch_name));
+    const llm_arch arch = llama_arch_from_string(arch_name);
 
-    return strcmp(arch_str, "kimi-linear") == 0 || strcmp(arch_str, "minimax-01") == 0;
+    return arch == LLM_ARCH_KIMI_LINEAR || arch == LLM_ARCH_MINIMAX_01;
 }
 
 //
