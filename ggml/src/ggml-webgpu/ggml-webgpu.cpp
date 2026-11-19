@@ -963,6 +963,46 @@ static webgpu_encoded_op ggml_webgpu_pad(webgpu_context & ctx, ggml_tensor * src
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x, wg_y);
 }
 
+static webgpu_encoded_op ggml_webgpu_pool2d(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
+    ggml_webgpu_shader_lib_context shader_lib_ctx = {};
+    shader_lib_ctx.src0                           = src;
+    shader_lib_ctx.dst                            = dst;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+
+    webgpu_pipeline pipeline = ctx->shader_lib->get_pool2d_pipeline(shader_lib_ctx);
+
+    auto * decisions = static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context.get());
+
+    const uint32_t ne = (uint32_t) ggml_nelements(dst);
+
+    std::vector<uint32_t> params = {
+        ne,
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type)),
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
+        (uint32_t) src->ne[0],
+        (uint32_t) src->ne[1],
+        (uint32_t) dst->ne[0],
+        (uint32_t) dst->ne[1],
+        (uint32_t) ggml_get_op_params_i32(dst, 1),  // k0
+        (uint32_t) ggml_get_op_params_i32(dst, 2),  // k1
+        (uint32_t) ggml_get_op_params_i32(dst, 3),  // s0
+        (uint32_t) ggml_get_op_params_i32(dst, 4),  // s1
+        (uint32_t) ggml_get_op_params_i32(dst, 5),  // p0
+        (uint32_t) ggml_get_op_params_i32(dst, 6),  // p1
+    };
+
+    std::vector<wgpu::BindGroupEntry> entries = {
+        ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src),
+        ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, dst),
+    };
+
+    uint32_t wg_x;
+    uint32_t wg_y;
+    uint32_t total_wg = CEIL_DIV(ne, decisions->wg_size);
+    compute_2d_workgroups(total_wg, ctx->global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension, wg_x, wg_y);
+    return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x, wg_y);
+}
+
 static webgpu_encoded_op ggml_webgpu_solve_tri(webgpu_context & ctx,
                                                ggml_tensor *    src0,
                                                ggml_tensor *    src1,
@@ -2108,6 +2148,7 @@ static ggml_webgpu_flash_attn_op ggml_webgpu_flash_attn_prepare(webgpu_context &
         op.has_mask ? (uint32_t) (mask->nb[3] / ggml_type_size(mask->type)) : 0,  // stride of mask dim 3
         op.has_mask ? (uint32_t) (mask->nb[2] / ggml_type_size(mask->type)) : 0,  // stride of mask dim 2
         op.has_mask ? (uint32_t) mask->ne[2] : 1u,  // mask heads, broadcast over the Q heads
+        op.has_mask ? (uint32_t) mask->ne[3] : 1u,  // mask batches, broadcast over the Q batches
         (uint32_t) (Q->ne[2] / K->ne[2]),           // repeat factor for K/V in dim 2 (MHA/MQA/GQA)
         ggml_webgpu_u32_from_f32(scale),            // scale (possibly adjusted for logit softcap)
         ggml_webgpu_u32_from_f32(max_bias),
@@ -2217,7 +2258,7 @@ static webgpu_encoded_op ggml_webgpu_flash_attn_vec(webgpu_context &          ct
         const uint32_t stride_mask3 = (uint32_t) (mask->nb[3] / ggml_type_size(mask->type));
         const uint32_t stride_mask2 = (uint32_t) (mask->nb[2] / ggml_type_size(mask->type));
         const uint32_t mask_ne2     = (uint32_t) mask->ne[2];
-        blk_batch_count             = (stride_mask3 > 0 ? (uint32_t) Q->ne[3] : 1u) * mask_ne2;
+        blk_batch_count             = (uint32_t) (mask->ne[3] * mask_ne2);
         const uint64_t blk_elems    = (uint64_t) blk_nblk0 * blk_nblk1 * blk_batch_count;
         blk_size_bytes              = ROUNDUP_POW2(blk_elems * sizeof(uint32_t), WEBGPU_STORAGE_BUF_BINDING_MULT);
         const ggml_webgpu_shader_lib_context blk_shader_ctx = op.shader_lib_ctx;
@@ -3671,6 +3712,8 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_encode(webgpu_context ctx,
             }
         case GGML_OP_ARANGE:
             return ggml_webgpu_arange(ctx, node);
+        case GGML_OP_POOL_2D:
+            return ggml_webgpu_pool2d(ctx, src0, node);
         case GGML_OP_ROLL:
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_PAD:
@@ -4451,12 +4494,10 @@ static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer
                         res += WEBGPU_STORAGE_BUF_BINDING_MULT + align;
                     }
                     if (mask != nullptr) {
-                        const uint32_t blk_nblk0    = CEIL_DIV((uint32_t) K->ne[1], kv_tile);
-                        const uint32_t blk_nblk1    = (uint32_t) n_q;
-                        const uint32_t stride_mask3 = (uint32_t) (mask->nb[3] / ggml_type_size(mask->type));
-                        const uint32_t blk_batch_count =
-                            (stride_mask3 > 0 ? (uint32_t) Q->ne[3] : 1u) * (uint32_t) mask->ne[2];
-                        const uint64_t blk_elems = (uint64_t) blk_nblk0 * blk_nblk1 * blk_batch_count;
+                        const uint32_t blk_nblk0       = CEIL_DIV((uint32_t) K->ne[1], kv_tile);
+                        const uint32_t blk_nblk1       = (uint32_t) n_q;
+                        const uint32_t blk_batch_count = (uint32_t) Q->ne[3] * (uint32_t) mask->ne[2];
+                        const uint64_t blk_elems       = (uint64_t) blk_nblk0 * blk_nblk1 * blk_batch_count;
                         const size_t   blk_size_bytes =
                             ROUNDUP_POW2(blk_elems * sizeof(uint32_t), WEBGPU_STORAGE_BUF_BINDING_MULT);
                         res += blk_size_bytes + align;
@@ -5222,6 +5263,9 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             break;
         case GGML_OP_ARANGE:
             supports_op = op->type == GGML_TYPE_F32 && ggml_is_contiguous(op);
+            break;
+        case GGML_OP_POOL_2D:
+            supports_op = op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32 && ggml_is_contiguous(src0);
             break;
         case GGML_OP_PAD_REFLECT_1D:
             supports_op = op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32;

@@ -2019,7 +2019,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 };
             }
         case GGML_OP_DIAG:
-            return true;
+            return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_OPT_STEP_ADAMW:
         case GGML_OP_OPT_STEP_SGD:
             return has_simdgroup_reduction;
@@ -2375,7 +2375,7 @@ void ggml_metal_buffer_memset_tensor(ggml_metal_buffer_t buf, struct ggml_tensor
             id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
             [encoder fillBuffer:bid_dst.metal
-                          range:NSMakeRange(bid_dst.offs, bid_dst.offs + size)
+                          range:NSMakeRange(bid_dst.offs, size)
                           value:value];
 
             [encoder endEncoding];

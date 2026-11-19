@@ -1,8 +1,44 @@
 {
 	"name": "@ggml-org/llama-chat",
-	"private": true,
-	"version": "1.0.0",
+	"version": "0.1.0",
+	"description": "Llama Chat, the chat app for llama.cpp. Run it with npx @ggml-org/llama-chat against any llama-server.",
+	"keywords": [
+		"llama.cpp",
+		"llama-server",
+		"llm",
+		"chat",
+		"local-ai"
+	],
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/ggml-org/llama.cpp.git",
+		"directory": "ui/apps/chat"
+	},
+	"homepage": "https://github.com/ggml-org/llama.cpp/tree/master/ui/apps/chat#readme",
+	"bugs": "https://github.com/ggml-org/llama.cpp/issues",
 	"type": "module",
+	"bin": {
+		"llama-chat": "bin/cli.js"
+	},
+	"exports": {
+		"./cli": "./bin/cli.js",
+		"./server": "./cli/server.js",
+		"./dist/*": "./dist/*",
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"bin",
+		"cli",
+		"dist",
+		"!dist/**/*.map"
+	],
+	"engines": {
+		"node": ">=20"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
 	"scripts": {
 		"build": "npm run build-pwa-assets && vite build",
 		"build-pwa-assets": "pwa-assets-generator --root . --config pwa-assets.config.ts && pwa-assets-generator --root . --config pwa-assets-dark.config.ts && node scripts/make-icons-circular.js",
@@ -11,6 +47,8 @@
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"check:design": "node scripts/design-md.js --check",
+		"design:tokens": "node scripts/design-md.js",
 		"reset": "rm -rf .svelte-kit node_modules",
 		"format": "eslint --fix . && prettier --write .",
 		"format:files": "sh -c 'eslint --fix \"$@\" && prettier --write \"$@\"' sh",
@@ -30,7 +68,8 @@
 		"test:ui": "vitest --project=ui",
 		"storybook": "svelte-kit sync && storybook dev -p 6006",
 		"build-storybook": "svelte-kit sync && storybook build",
-		"cleanup": "rm -rf .svelte-kit build node_modules test-results dist dev-dist debug-storybook.log static/pwa-*.png static/maskable-icon-*.png static/apple-touch-icon-*.png static/apple-splash-*.png static/favicon*.ico"
+		"cleanup": "rm -rf .svelte-kit build node_modules test-results dist dev-dist debug-storybook.log static/pwa-*.png static/maskable-icon-*.png static/apple-touch-icon-*.png static/apple-splash-*.png static/favicon*.ico",
+		"start": "node bin/cli.js"
 	},
 	"devDependencies": {
 		"@chromatic-com/storybook": "5.5.1",
@@ -71,19 +110,19 @@
 		"dompurify": "3.4.17",
 		"eslint": "10.14.0",
 		"eslint-config-prettier": "10.1.8",
-		"eslint-plugin-perfectionist": "^5.10.1",
-		"eslint-plugin-simple-import-sort": "^14.0.0",
+		"eslint-plugin-perfectionist": "5.13.0",
+		"eslint-plugin-simple-import-sort": "14.0.0",
 		"eslint-plugin-storybook": "10.6.6",
 		"eslint-plugin-svelte": "3.24.1",
 		"fflate": "0.8.3",
 		"globals": "16.5.0",
 		"highlight.js": "11.11.1",
 		"http-server": "14.1.1",
-		"@ggml-org/llama-brand": "https://codeload.github.com/ggml-org/llama-brand/tar.gz/f05540643c1ca2a18d732ed6491c839686da9a3a",
+		"@ggml-org/llama-brand": "0.1.0",
 		"mdsvex": "0.12.7",
-		"mermaid": "11.17.2",
 		"mode-watcher": "1.1.0",
 		"pdfjs-dist": "5.4.54",
+		"pele": "1.13.0",
 		"playwright": "1.56.1",
 		"prettier": "3.8.3",
 		"prettier-plugin-svelte": "4.1.0",

@@ -348,6 +348,12 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
         quantize &= name.find("attn_rel_bias.weight") == std::string::npos;
     }
 
+    // zaya1: the top-1 router and the grouped conv kernels stay F32
+    if (arch == LLM_ARCH_ZAYA1) {
+        quantize &= name.find("ffn_router_")  == std::string::npos;
+        quantize &= name.find("cca_conv_grp") == std::string::npos;
+    }
+
     // do not quantize positional embeddings and token types (BERT)
     quantize &= name != LLM_TN(arch)(LLM_TENSOR_POS_EMBD,    "weight");
     quantize &= name != LLM_TN(arch)(LLM_TENSOR_TOKEN_TYPES, "weight");
@@ -1260,7 +1266,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         GGML_ASSERT(ctx_outs[cur_split] && "Find uninitialized gguf_context");
         std::string fname = fname_out;
         if (params->keep_split) {
-            std::vector<char> split_path(llama_path_max(), 0);
+            std::vector<char> split_path(fname_out.size() + sizeof("-00000-of-00000.gguf"), 0);
             llama_split_path(split_path.data(), split_path.size(), fname_out.c_str(), cur_split, n_split);
             fname = std::string(split_path.data());
         }

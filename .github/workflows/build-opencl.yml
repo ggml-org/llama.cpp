@@ -61,6 +61,11 @@ jobs:
         run: |
           choco install ninja
 
+      - name: Install LLVM
+        run: |
+          choco install llvm --version=22.1.8
+          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+
       - name: Install OpenCL Headers and Libs
         id: install_opencl
         run: |

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Decides whether this library is a version npm does not have yet, for
-// .github/workflows/ui-lib-publish.yml. It reads package.json next to its own folder, so it
-// runs from anywhere.
+// Decides whether a package is a version npm does not have yet, for
+// .github/workflows/ui-lib-publish.yml and ui-chat-publish.yml. It reads the package.json in the
+// folder given as its argument, or this library's own without one, so it runs from anywhere.
 //
 // The version in package.json is the release: this takes it, asks the registry what it holds,
 // and says whether to publish, under which dist-tag, and why not when not. The version already
@@ -12,10 +12,15 @@
 // registry could not be read: the workflow decides between warning and failing.
 
 import { readFileSync, appendFileSync } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const REGISTRY = process.env.NPM_REGISTRY_URL ?? 'https://registry.npmjs.org';
 
-const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
+const pkgDir = process.argv[2] ? resolve(process.argv[2]) : fileURLToPath(new URL('..', import.meta.url));
+const pkgPath = relative(REPO_ROOT, join(pkgDir, 'package.json'));
+const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'));
 const { name, version } = pkg;
 
 if (!name || !version) {
@@ -53,7 +58,7 @@ let note = `${name}@${version} is not on npm${latest ? `, which holds ${latest}`
 if (publishedHere) {
 	verdict = 'published';
 	shouldPublish = false;
-	note = `${name}@${version} is already on npm. Bump the version in ui/lib/ui/package.json to release these changes.`;
+	note = `${name}@${version} is already on npm. Bump the version in ${pkgPath} to release these changes.`;
 } else if (latest && compare(version, latest) < 0) {
 	// covers the prerelease of an already-released core: 0.4.0-beta.1 behind 0.4.0
 	verdict = 'stale';

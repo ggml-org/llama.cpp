@@ -7,6 +7,7 @@
 #include <CL/cl.h>
 
 #include <cstdlib>
+#include <map>
 #include <memory>
 #include <openvino/core/node.hpp>
 #include <openvino/runtime/remote_context.hpp>
@@ -22,14 +23,14 @@ enum class ExtraQuantType { F16, Q4_0_C, Q8_1_C, Q4_0_128, Q4_0_64, Q8_0_C, Q8_0
 
 ov::Core & ov_singleton_core();
 
-// Get the remote context for the current device (returns empty optional for CPU)
-std::optional<ov::RemoteContext> ggml_openvino_get_remote_context();
+// Get the remote context for the device (returns empty optional for CPU)
+std::optional<ov::RemoteContext> ggml_openvino_get_remote_context(const std::string & device);
 
 // Get the compile config for the current device
 const ov::AnyMap & ggml_openvino_get_compile_config();
 
-// Get the OpenCL command queue for GPU operations (returns nullptr for CPU/NPU)
-cl_command_queue ggml_openvino_get_cl_queue();
+// Get the OpenCL command queue of the device for GPU operations (returns nullptr for CPU/NPU)
+cl_command_queue ggml_openvino_get_cl_queue(const std::string & device);
 
 // Intel USM extension function type
 typedef cl_int(CL_API_CALL * clEnqueueMemFillINTEL_fn)(cl_command_queue queue,
@@ -61,16 +62,21 @@ clEnqueueMemcpyINTEL_fn ggml_openvino_get_clEnqueueMemcpyINTEL();
 // =====================================================
 // Initialized once during backend init from GGML_OPENVINO_DEVICE env var
 
+struct ggml_openvino_gpu_context {
+    ov::RemoteContext remote_context;
+    cl_command_queue cl_queue = nullptr;
+    size_t max_alloc_size = SIZE_MAX;
+};
+
 struct ggml_openvino_device_config {
     std::string device_name = "CPU";
     std::vector<std::string> available_devices;
+    std::vector<std::string> selected_devices;
     bool is_npu = false;
     bool initialized = false;
-    std::optional<ov::RemoteContext> remote_context;
-    size_t max_alloc_size = SIZE_MAX;
+    std::map<std::string, ggml_openvino_gpu_context> gpu_contexts;
     ov::AnyMap compile_config;
     std::unordered_map<std::string, std::string> environment_variables;
-    cl_command_queue cl_queue = nullptr;
     clEnqueueMemFillINTEL_fn cl_mem_fill_fn = nullptr;
     clEnqueueMemcpyINTEL_fn cl_mem_cpy_fn = nullptr;
 
@@ -88,7 +94,10 @@ void ggml_openvino_init_device_config();
 const std::string & ggml_openvino_get_device_name();
 
 // Get all available physical OpenVINO devices
-std::vector<std::string> ggml_openvino_get_available_devices();
+const std::vector<std::string> & ggml_openvino_get_available_devices();
+
+// Check if the device is in GGML_OPENVINO_DEVICE
+bool ggml_openvino_is_selected_device(const std::string & device);
 
 // Human-readable device name, e.g. "Intel(R) AI Boost (NPU 4000)"; the device id if unavailable
 std::string ggml_openvino_get_device_description(const std::string & device_name);
@@ -96,18 +105,26 @@ std::string ggml_openvino_get_device_description(const std::string & device_name
 // Environment variable accessors. All GGML_OPENVINO_* env vars are read once
 // during backend init and cached on the device config; consumers must go
 // through these helpers (never call ::getenv directly) so behavior stays
-// consistent and centralized.
+// consistent and centralized. A variable must be in the table in
+// ggml-openvino-extra.cpp, which gives its type: backend init stops on a value
+// that does not fit the type (e.g. "1x" for a number, "on" for a toggle).
 //
 // Use ggml_openvino_getenv_str() for string / path values
 // (e.g. GGML_OPENVINO_DEVICE, GGML_OPENVINO_CACHE_DIR). The optional
 // default_value is returned when the var is unset or empty.
 //
 // Use ggml_openvino_getenv_int() for boolean toggles and integer settings.
-// It returns std::atoi(value) when set, otherwise default_value. For
-// boolean use, `if (ggml_openvino_getenv_int(name))` is true iff the value
-// is a non-zero integer (so "0" disables, "1" enables).
+// A toggle is cached as 1 (a positive value) or 0 (zero or a negative value),
+// so `if (ggml_openvino_getenv_int(name))` is true iff it is on.
 const char * ggml_openvino_getenv_str(const char * var, const char * default_value = nullptr);
+// Returns default_value when the variable is unset or empty.
 int ggml_openvino_getenv_int(const char * var, int default_value = 0);
+
+// Apply plugin properties given as "KEY=VALUE,KEY=VALUE" (GGML_OPENVINO_NPU_CONFIG, GGML_OPENVINO_GPU_CONFIG,
+// GGML_OPENVINO_CPU_CONFIG) to a compile config. They override what the config already holds.
+void ggml_openvino_apply_config_overrides(ov::AnyMap & config, const char * spec, const char * device);
+// The plugin properties the environment sets for the selected device, as "GGML_OPENVINO_GPU_CONFIG=..."; empty if none.
+std::string ggml_openvino_config_overrides_in_use();
 
 // Memory optimization toggles. GGML_OPENVINO_MEMORY_OPTIMIZE is an umbrella
 // switch; the fine-grained env vars still override it when explicitly set.
@@ -117,11 +134,105 @@ bool ggml_openvino_release_weights_enabled();
 // Check if running on NPU
 bool ggml_openvino_is_npu();
 
+// KV-cache slicing: bind the KV cache, and size the KQ masks, at the attended length instead of the full context.
+// One mechanism, two modes:
+//   dynamic graphs (CPU/GPU): the KV input is a view over the cache; the graph is not recompiled.
+//   static graphs (NPU, or any device with GGML_OPENVINO_FORCE_STATIC): the prefill graph is compiled at the aligned
+//   attended length and recompiled when it changes; decode keeps the full context.
+// On by default for all devices; GGML_OPENVINO_KV_SLICE=0 turns it off.
+bool ggml_openvino_kv_slice_enabled();
+
+// On by default: back NPU buffers with Level Zero host memory; GGML_OPENVINO_NPU_L0_HOST_TENSORS=0 turns it off.
+bool ggml_openvino_npu_l0_host_tensors_enabled();
+
+// On by default: build the static prefill mask directly in the input tensor; GGML_OPENVINO_NPU_FAST_MASK=0 turns it off.
+bool ggml_openvino_npu_fast_mask_enabled();
+
+// NPU-only opt-in performance toggles (all default off). Centralized here so each
+// env-var name lives in one place; see docs/backend/OPENVINO.md for semantics.
+bool ggml_openvino_npu_hfa_prefill_enabled();
+bool ggml_openvino_npu_decode_unfold_enabled();
+bool ggml_openvino_npu_parallel_compile_enabled();
+
+// GGML_OPENVINO_NPU_BLOB_PREBUILD (default 1): static NPU graphs attend a KV window of 1024*2^k rows (clamped to ctx)
+// instead of the whole ctx, with one decode model per window, all built/imported with the prefill/decode pair;
+// with head-major KV the prefill models of every window are also exported and preloaded.
+// Returns the window base (1024), 0 = off (GGML_OPENVINO_NPU_BLOB_PREBUILD=0).
+int ggml_openvino_npu_decode_bucket();
+
+// Rows a static prefill attends with GGML_OPENVINO_KV_SLICE: the attended length rounded up to a power of two,
+// clamped to ctx.
+int ggml_openvino_static_kv_window(int rows, int ctx);
+
+// On-demand NPU KV cache (GGML_OPENVINO_NPU_KV_ON_DEMAND): the ggml KV buffer stays non-resident and the
+// NPU binds per-tensor L0 storage that grows (base*2^k rows, base = decode bucket or 1024) with the rows in use.
+bool ggml_openvino_npu_kv_on_demand_enabled();
+// On-demand KV with BLOB_PREBUILD and KV_SLICE: K storage is [heads][rows][head_size] and V storage is
+// [heads][head_size][rows] (head-major with heads * head_size channels); every static graph binds the whole storage
+// as [1, heads, rows, head_size] / [1, heads, head_size, rows], and attention uses V^T.
+bool ggml_openvino_npu_kv_head_major_enabled();
+
+// NPU blob cache modes that keep the raw GGUF weights and skip requantization on a warm hit:
+// GGML_OPENVINO_SELF_CONTAINED_BLOB (weights embedded in each blob) or
+// GGML_OPENVINO_NPU_WEIGHTLESS_BANK (weightless blobs plus one shared weights file).
+bool ggml_openvino_npu_raw_weight_cache_enabled();
+bool ggml_openvino_npu_weightless_bank_enabled();
+void ggml_openvino_kv_storage_register(void * data, size_t row_bytes, size_t rows);
+void ggml_openvino_kv_storage_unregister(const void * base, size_t size);
+// Storage address backing ggml address `ptr` with at least `bytes` valid (grown if needed);
+// nullptr if `ptr` is not inside an on-demand KV tensor.
+void * ggml_openvino_kv_storage(const void * ptr, size_t bytes);
+// Grows the storage of the on-demand KV tensor at `data` to at least `rows` rows (head-major when heads > 0);
+// true if existing storage moved.
+bool ggml_openvino_kv_storage_reserve(const void * data, size_t rows, size_t heads = 0);
+// Rows currently backed by storage for the on-demand KV tensor at `data` (0 if none).
+size_t ggml_openvino_kv_storage_capacity(const void * data);
+enum ggml_openvino_kv_copy_op { GGML_OPENVINO_KV_READ, GGML_OPENVINO_KV_WRITE, GGML_OPENVINO_KV_FILL };
+// Host access by ggml address in the ggml row layout (FILL uses *host as the byte value); false if not on-demand KV.
+bool ggml_openvino_kv_storage_copy(const void * ptr, void * host, size_t size, ggml_openvino_kv_copy_op op);
+// Writes rows [dst_row, dst_row + n) of head-major storage of the KV tensor at `data` from `src`, laid out as
+// [heads][src_stride] entries of (row_bytes / heads) bytes, starting at entry src_col of every head.
+// False if `data` is not head-major on-demand KV.
+bool ggml_openvino_kv_storage_write_rows(const void * data, const void * src, size_t src_stride, size_t src_col,
+                                         size_t dst_row, size_t n);
+void ggml_openvino_kv_storage_clear(const void * base, size_t size, uint8_t value);
+
 // Check if running on a GPU (GPU, GPU.0, GPU.1, ...)
 bool ggml_openvino_is_gpu();
 
+// Read n_seq_active and attention_size(_swa) from the KQ mask shape (off with GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK=1)
+bool ggml_openvino_shape_from_mask_enabled();
+
+// GDN q pre-scale for eligible graphs on the NPU static path. On by default;
+// GGML_OPENVINO_GDN_Q_SCALE=0 (or a negative or non-numeric value) turns it off.
+bool ggml_openvino_gdn_prescale_enabled();
+
+// GDN q pre-scale factor (NPU static path, keeps the tiny GDN output above the
+// f16 subnormal range). Defaults to 64.0f and is clamped to a minimum of
+// 64.0f. Only consulted when ggml_openvino_gdn_prescale_enabled() is true.
+float ggml_openvino_gdn_q_scale();
+
+// Keep the GDN state in the OV op layout [B, H_v, key_dim, value_dim], skipping two transposes per layer.
+// Only the OpenVINO backend may then read the state. NPU only, enabled when GGML_OPENVINO_GDN_NATIVE_STATE is a positive integer.
+bool ggml_openvino_gdn_native_state_enabled();
+
+// True when the device is an NPU with DEVICE_ARCHITECTURE 4000 (Lunar Lake).
+bool ggml_openvino_npu_is_4000();
+
+// Translate GATED_DELTA_NET into a MatMul decomposition instead of the GatedDeltaNet op: chunked for multi-token
+// graphs (prefill), one step for single-token graphs (decode).
+// The NPU4000 GDN prefill kernel drives the DPU from SHAVE, which the LNL firmware does not support. On Linux the
+// decode kernel loses the device too (ZE_RESULT_ERROR_DEVICE_LOST).
+// Default: on for NPU4000 only. GGML_OPENVINO_GDN_DECOMPOSE=0 turns it off, a positive integer forces it on.
+// Snapshot (MTP) graphs still use the op.
+bool ggml_openvino_gdn_decompose_enabled();
+
+// Tokens per chunk of the decomposed GATED_DELTA_NET: GGML_OPENVINO_GDN_DECOMPOSE_CHUNK,
+// a power of 2 in [2, 128], default 16.
+int ggml_openvino_gdn_decompose_chunk();
+
 // Largest single memory object the device can allocate, SIZE_MAX when there is no known limit
-size_t ggml_openvino_max_alloc_size();
+size_t ggml_openvino_max_alloc_size(const std::string & device);
 
 // Host weight-buffer release (GGML_OPENVINO_RELEASE_WEIGHTS, GPU only).
 // register: record a host weight buffer (idempotent per data pointer).
@@ -133,6 +244,11 @@ bool ggml_openvino_weight_buffers_released();
 
 // Get requantization type for a tensor type (returns nullopt if no requant needed)
 std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor * tensor, bool no_requant = false);
+
+// True if an asymmetric weight keeps an exact f16 zero point instead of a rounded integer one.
+// Always true for MoE expert weights (llama.cpp's *_exps / *_chexps tensors). Other weights need
+// GGML_OPENVINO_EXACT_ZERO_POINT.
+bool ggml_openvino_use_exact_zero_point(const ggml_tensor * tensor);
 
 // =====================================================
 // OpenVINO Tensor Extra Types
@@ -180,10 +296,12 @@ struct ggml_openvino_quantized_weight_extra : public ggml_openvino_extra_base {
 // Extra data for KV cache / compute tensors - stores ov::Tensor for infer_request
 struct ggml_openvino_tensor_extra : public ggml_openvino_extra_base {
     std::shared_ptr<ov::Tensor> tensor;  // For direct use with infer_request
+    const void * data;                   // tensor->data that `tensor` wraps
 
-    explicit ggml_openvino_tensor_extra(std::shared_ptr<ov::Tensor> t) :
+    ggml_openvino_tensor_extra(std::shared_ptr<ov::Tensor> t, const void * data) :
         ggml_openvino_extra_base(Type::TENSOR),
-        tensor(std::move(t)) {}
+        tensor(std::move(t)),
+        data(data) {}
 };
 
 // =====================================================
@@ -212,7 +330,9 @@ struct ggml_openvino_extracted_layout {
 // Calculate the buffer layout for extracted quantized data
 ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_tensor * tensor, bool use_bias = false);
 
-ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor * tensor, bool is_remote);
+ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor * tensor,
+                                                               bool is_remote,
+                                                               const std::string & device);
 
 // Check if a tensor's buffer uses remote (device) memory (e.g. GPU USM)
 bool ggml_openvino_buffer_is_remote(const ggml_tensor * tensor);

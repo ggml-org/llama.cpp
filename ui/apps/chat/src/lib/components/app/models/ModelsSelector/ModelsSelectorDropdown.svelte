@@ -194,6 +194,7 @@
 	>
 		<DropdownMenuSearchable
 			emptyMessage={ms.emptyMessage}
+			footer={uiStore.isModelsManagerShown ? manageModelsFooter : undefined}
 			isEmpty={ms.isEmpty && ms.isCurrentModelInCache}
 			onSearchChange={(v) => ms.setSearchTerm(v)}
 			{onSearchKeyDown}
@@ -204,19 +205,20 @@
 			<!-- Option list; the search header sticks to the top and the actions
 		     footer to the bottom of the content scrollport. -->
 			{@render pickerContent('px-1.5')}
-
-			{#snippet footer()}
-				<DropdownMenu.Group class="px-2">
-					<DropdownMenu.Item class="gap-2" onSelect={handleManageModels}>
-						<MODEL_ICON class="size-icon-md shrink-0 text-muted-foreground" />
-
-						Manage models
-					</DropdownMenu.Item>
-				</DropdownMenu.Group>
-			{/snippet}
 		</DropdownMenuSearchable>
 	</DropdownMenu.Content>
 </DropdownMenu.Root>
+
+<!-- the way into the full manager, so it hides with the manager's other entry points -->
+{#snippet manageModelsFooter()}
+	<DropdownMenu.Group class="px-2">
+		<DropdownMenu.Item class="gap-2" onSelect={handleManageModels}>
+			<MODEL_ICON class="size-icon-md shrink-0 text-muted-foreground" />
+
+			Manage models
+		</DropdownMenu.Item>
+	</DropdownMenu.Group>
+{/snippet}
 
 {#snippet pickerContent(listClass: string)}
 	<div class={['models-list', listClass]}>

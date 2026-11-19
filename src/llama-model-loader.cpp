@@ -84,7 +84,7 @@ const char * llama_ftype_name(llama_ftype ftype) {
 static std::vector<std::string> llama_get_list_splits(const std::string & path, const int idx, const int n_split) {
     std::vector<std::string> paths;
     std::string split_prefix;
-    std::vector<char> buf(llama_path_max(), 0);
+    std::vector<char> buf(path.size() + 1, 0);
 
     {
         int ret = llama_split_prefix(buf.data(), buf.size(), path.c_str(), idx, n_split);
@@ -610,7 +610,7 @@ llama_model_loader::llama_model_loader(
                 throw std::runtime_error(format("illegal split file idx: %d (file: %s), model must be loaded with the first split", idx, fname.c_str()));
             }
 
-            std::vector<char> prefix(llama_path_max(), 0);
+            std::vector<char> prefix(fname.size() + 1, 0);
             if (paths.empty() || llama_split_prefix(prefix.data(), prefix.size(), fname.c_str(), idx, n_split)) {
                 auto backbone = llama_get_list_splits(fname, idx, n_split);
                 auto file_name = [](const std::string & path) {

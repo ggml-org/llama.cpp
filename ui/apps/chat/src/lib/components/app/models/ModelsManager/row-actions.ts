@@ -1,4 +1,9 @@
-import { Compass, Eye, EyeOff, Heart, HeartOff, Trash2 } from '@lucide/svelte';
+import Compass from '@lucide/svelte/icons/compass';
+import Eye from '@lucide/svelte/icons/eye';
+import EyeOff from '@lucide/svelte/icons/eye-off';
+import Heart from '@lucide/svelte/icons/heart';
+import HeartOff from '@lucide/svelte/icons/heart-off';
+import Trash2 from '@lucide/svelte/icons/trash-2';
 import { MODEL_DOWNLOAD_ICONS } from '#lib/constants/index.ts';
 import { ModelRowDownloadState } from '#lib/enums/index.ts';
 import { modelsStore, uiStore } from '#lib/stores/index.ts';
