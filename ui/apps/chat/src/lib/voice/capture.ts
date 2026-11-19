@@ -10,6 +10,7 @@ import {
 	VOICE_SAMPLE_RATE
 } from './constants';
 import { VoiceCaptureError } from './errors';
+import { normalizeSpeech, SpeechGain } from './gain';
 import { LevelHistory, rms, rmsToLevel } from './levels';
 import { concatPcm16, createResampler, floatToPcm16, type Resampler } from './pcm';
 import { createPcmTap, type PcmTap } from './pcm-tap';
@@ -19,7 +20,8 @@ import type {
 	VoiceCaptureState,
 	VoiceClip,
 	VoiceLevelsListener,
-	VoicePcmListener
+	VoicePcmListener,
+	VoiceQuietListener
 } from './types';
 import { encodeWav } from './wav';
 import { describeMicrophoneError } from '#lib/utils/audio-recording.ts';
@@ -37,7 +39,9 @@ interface CaptureGraph {
 /**
  * Microphone capture for voice input. One `start()` gives, at once: a live level
  * history for the waveform, PCM16 mono chunks for streaming, and the recording,
- * returned by `stop()` as a WAV clip with its peaks. `start()` resolves once audio
+ * returned by `stop()` as a WAV clip with its peaks. With `boost`, quiet speech is
+ * raised (gain.ts): the chunks as they stream, the clip in one pass when it stops.
+ * Whether the speech is too quiet even so is told either way (onQuiet). `start()` resolves once audio
  * flows, so what is said after it is in the clip. Every path (stop, cancel, a failed
  * start, the page going away) releases the tracks and the nodes; the page's shared
  * AudioContext is suspended for the next recording (see audio-context.ts).
@@ -53,6 +57,7 @@ export class VoiceCapture {
 	// resolves the wait of start() for the first audio
 	private firstAudio: (() => void) | null = null;
 	private frame: number | null = null;
+	private gain: SpeechGain | null = null;
 
 	// bumped by every start, stop and cancel, so a start still awaiting the microphone can tell it was dropped
 	private generation = 0;
@@ -64,6 +69,8 @@ export class VoiceCapture {
 	private partial: number[] = [];
 	private pcmListeners = new Set<VoicePcmListener>();
 	private readonly peaksCount: number;
+	private quiet = false;
+	private quietListeners = new Set<VoiceQuietListener>();
 	private recordedSamples = 0;
 
 	private resampler: Resampler | null = null;
@@ -80,6 +87,11 @@ export class VoiceCapture {
 
 	get state(): VoiceCaptureState {
 		return this.currentState;
+	}
+
+	/** Whether the speech heard so far stays quiet even at the highest gain. */
+	get tooQuiet(): boolean {
+		return this.quiet;
 	}
 
 	/** Drops the capture, including one still asking for the microphone. */
@@ -119,6 +131,13 @@ export class VoiceCapture {
 		return () => this.pcmListeners.delete(listener);
 	}
 
+	/** Listens to whether the speech is too quiet, told when it changes; returns the unsubscribe function. */
+	onQuiet(listener: VoiceQuietListener): () => void {
+		this.quietListeners.add(listener);
+
+		return () => this.quietListeners.delete(listener);
+	}
+
 	/**
 	 * Asks for the microphone and starts capturing.
 	 * @throws VoiceCaptureError with a message for the user when the microphone does not start
@@ -136,6 +155,8 @@ export class VoiceCapture {
 		this.partial = [];
 		this.recordedSamples = 0;
 		this.history.reset();
+		this.gain = new SpeechGain();
+		this.setQuiet(false);
 
 		let stream: MediaStream | null = this.options.stream ?? null;
 		let context: AudioContext | null = null;
@@ -232,7 +253,11 @@ export class VoiceCapture {
 		this.flushPartial();
 		this.teardown();
 
-		const samples = concatPcm16(this.chunks);
+		const recorded = concatPcm16(this.chunks);
+		// the whole recording at once: its first words get the gain the later ones set
+		const samples = this.options.boost
+			? normalizeSpeech(recorded, this.sampleRate).samples
+			: recorded;
 
 		this.chunks = [];
 		this.currentState = 'stopped';
@@ -248,13 +273,20 @@ export class VoiceCapture {
 	private flushPartial(): void {
 		if (this.partial.length === 0) return;
 
-		const chunk = floatToPcm16(Float32Array.from(this.partial));
+		const samples = Float32Array.from(this.partial);
+		// the recording keeps the raw signal: stop() raises it as a whole
+		const chunk = floatToPcm16(samples);
+		const boost = this.options.boost === true;
+		const streamed = this.gain?.process(samples, boost) ?? samples;
 
 		this.partial = [];
 		this.chunks.push(chunk);
 		this.recordedSamples += chunk.length;
+		this.setQuiet(this.gain?.tooQuiet ?? false);
 
-		for (const listener of this.pcmListeners) listener(chunk);
+		const sent = boost && streamed !== samples ? floatToPcm16(streamed) : chunk;
+
+		for (const listener of this.pcmListeners) listener(sent);
 	}
 
 	private handleBlock(block: Float32Array): void {
@@ -269,6 +301,14 @@ export class VoiceCapture {
 
 			if (this.partial.length === this.chunkSamples) this.flushPartial();
 		}
+	}
+
+	private setQuiet(quiet: boolean): void {
+		if (quiet === this.quiet) return;
+
+		this.quiet = quiet;
+
+		for (const listener of this.quietListeners) listener(quiet);
 	}
 
 	private teardown(): void {

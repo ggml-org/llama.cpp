@@ -21,6 +21,9 @@ export type VoiceLevelsListener = (levels: readonly number[]) => void;
 /** Called with each PCM16 mono chunk at the capture rate. */
 export type VoicePcmListener = (chunk: Int16Array) => void;
 
+/** Called when the speech starts or stops being too quiet even at the highest gain. */
+export type VoiceQuietListener = (quiet: boolean) => void;
+
 export interface VoiceCaptureOptions {
 	/** Rate of the PCM chunks and of the clip (default 16000) */
 	sampleRate?: number;
@@ -38,6 +41,8 @@ export interface VoiceCaptureOptions {
 	deviceId?: string;
 	/** Use this stream instead of asking for the microphone; the capture stops its tracks too */
 	stream?: MediaStream;
+	/** Raise quiet speech (gain.ts): the streamed chunks as they go, the clip as a whole */
+	boost?: boolean;
 }
 
 export type VoiceCaptureState = 'idle' | 'starting' | 'recording' | 'stopped';
@@ -101,6 +106,8 @@ export interface VoiceSessionOptions {
 		autoload?: boolean;
 	};
 	onLevels?: VoiceLevelsListener;
+	/** Whether the speech is too quiet even at the highest gain, when that changes */
+	onQuiet?: VoiceQuietListener;
 	/** Live text while speaking, only when the realtime socket streams it */
 	onText?: (text: string) => void;
 	/** Once known: true when text streams while speaking, false when it comes after recording */

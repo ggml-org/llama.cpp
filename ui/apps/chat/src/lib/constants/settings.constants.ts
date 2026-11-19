@@ -459,6 +459,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
+				defaultValue: true,
+				help: 'Raise quiet speech to a level the model hears well, up to eight times louder, so a quiet microphone or a voice from afar is still understood. Only speech is measured, never the silence around it, and loud speech is left as it is.',
+				key: SETTINGS_KEYS.VOICE_BOOST,
+				label: 'Boost quiet speech',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
 				defaultValue: false,
 				help: 'Let the browser filter background noise out of what the microphone records. Off, the model gets the raw signal, which speech models take well.',
 				key: SETTINGS_KEYS.VOICE_NOISE_SUPPRESSION,

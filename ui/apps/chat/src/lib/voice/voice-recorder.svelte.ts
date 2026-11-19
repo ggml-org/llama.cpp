@@ -5,8 +5,8 @@ import type { VoiceSession, VoiceSessionOptions, VoiceSessionResult } from './ty
 export type VoiceRecorderStatus = 'idle' | 'starting' | 'recording' | 'stopping';
 
 /**
- * Reactive voice session for components: `levels`, `liveText`, `live` and `status`
- * are runes that follow the running session.
+ * Reactive voice session for components: `levels`, `liveText`, `live`, `quiet` and
+ * `status` are runes that follow the running session.
  */
 export class VoiceRecorder {
 	/** Level history for the live waveform, 0..1, newest last */
@@ -15,6 +15,8 @@ export class VoiceRecorder {
 	live = $state(false);
 	/** Text the realtime socket streamed so far */
 	liveText = $state('');
+	/** True while the speech is too quiet even at the highest gain */
+	quiet = $state(false);
 	status = $state<VoiceRecorderStatus>('idle');
 
 	// bumped by cancel(), so a start still waiting for the microphone drops its session
@@ -45,6 +47,7 @@ export class VoiceRecorder {
 		this.levels = new Array(length).fill(0);
 		this.liveText = '';
 		this.live = false;
+		this.quiet = false;
 		this.status = 'starting';
 
 		const generation = ++this.generation;
@@ -55,6 +58,10 @@ export class VoiceRecorder {
 				onLevels: (levels) => {
 					this.levels = levels as number[];
 					options.onLevels?.(levels);
+				},
+				onQuiet: (quiet) => {
+					this.quiet = quiet;
+					options.onQuiet?.(quiet);
 				},
 				onRealtime: (live) => {
 					this.live = live;

@@ -841,6 +841,7 @@
 						onCancel={voice.cancel}
 						onSend={isLoading && !hasVoiceText ? undefined : () => void handleStopAndSend()}
 						onStop={() => void voice.stop()}
+						quiet={voice.quiet}
 						state={voice.state}
 					/>
 				{/if}

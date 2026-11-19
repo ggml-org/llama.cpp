@@ -47,6 +47,8 @@ export interface VoiceRecorderLike {
 	readonly levels: number[];
 	readonly live: boolean;
 	readonly liveText: string;
+	/** The speech stays quiet even at the highest gain; a recorder that cannot tell leaves it out */
+	readonly quiet?: boolean;
 	readonly status: VoiceRecorderStatus;
 	start(options?: VoiceSessionOptions): Promise<void>;
 	stop(): Promise<VoiceSessionResult>;
@@ -253,6 +255,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 
 			await recorder.start({
 				capture: {
+					boost: config[SETTINGS_KEYS.VOICE_BOOST] !== false,
 					...(deviceId ? { deviceId } : {}),
 					...(Object.keys(processing).length > 0 ? { constraints: processing } : {})
 				},
@@ -466,6 +469,10 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		},
 		get mode() {
 			return state === 'idle' ? resolution.mode : recordingMode;
+		},
+		/** The recording's speech is too quiet even at the highest gain: the form says so. */
+		get quiet() {
+			return state === 'recording' && (recorder?.quiet ?? false);
 		},
 		get resolution() {
 			return resolution;

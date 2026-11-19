@@ -108,3 +108,30 @@ export const VOICE_REALTIME_TIMEOUTS = {
 	/** Final commit until the last completed event */
 	FINISH_MS: 20_000
 } as const;
+
+/**
+ * Speech gain (gain.ts): how a quiet microphone is brought up for transcription. Levels
+ * are RMS of samples in -1..1.
+ */
+export const VOICE_GAIN = {
+	/** How fast the streaming floor creeps back up per block */
+	FLOOR_RISE: 1.02,
+	/** Frames a finished recording is measured in */
+	FRAME_MS: 20,
+	/** The soft limiter's knee: louder samples bend towards full scale */
+	KNEE: 0.8,
+	/** The most it is raised: 8x, +18 dB, so a far-off voice does not bring the room up with it */
+	MAX: 8,
+	/** Quieter than this (about -54 dBFS) is never speech, whatever the room */
+	MIN_SPEECH_RMS: 0.002,
+	/** How much of the way to its target the streaming gain rises per speech block */
+	RISE: 0.3,
+	/** How far above the noise floor a level is speech: 10 dB */
+	SPEECH_ABOVE_FLOOR: 3.16,
+	/** How much of each new speech block the streaming speech level takes in */
+	SPEECH_FOLLOW: 0.2,
+	/** Speech is raised towards this level, about -20 dBFS */
+	TARGET_RMS: 0.1,
+	/** Speech below this even at the highest gain (about -32 dBFS) reads as too quiet */
+	TOO_QUIET_RMS: 0.025
+} as const;

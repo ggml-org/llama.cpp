@@ -53,8 +53,9 @@ export class FakeVoiceRecorder implements VoiceRecorderLike {
 	levels = $state.raw<number[]>(new Array(48).fill(0));
 	live = $state(false);
 	liveText = $state('');
-
 	options: VoiceSessionOptions | undefined;
+
+	quiet = $state(false);
 	startError: Error | null = null;
 	status = $state<VoiceRecorderStatus>('idle');
 	transcript: Promise<string> | null = null;
@@ -74,6 +75,12 @@ export class FakeVoiceRecorder implements VoiceRecorderLike {
 	setLevels(levels: number[]): void {
 		this.levels = levels;
 		this.options?.onLevels?.(levels);
+	}
+
+	/** The speech turning too quiet, or loud enough again, as the capture would tell. */
+	setQuiet(quiet: boolean): void {
+		this.quiet = quiet;
+		this.options?.onQuiet?.(quiet);
 	}
 
 	async start(options: VoiceSessionOptions = {}): Promise<void> {

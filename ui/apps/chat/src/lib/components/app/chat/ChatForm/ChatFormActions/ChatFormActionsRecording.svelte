@@ -2,7 +2,8 @@
 	The chat form's actions row while it records: cancel, the live waveform and the time, stop, and send, which stops
 	and sends what was recorded in one go. A voice message's
 	text, when the model streams it, runs under the waveform; dictated text goes into the message instead. After a
-	dictation that streamed nothing, it waits for the text in place of the waveform.
+	dictation that streamed nothing, it waits for the text in place of the waveform. Speech that stays too quiet even
+	boosted gets a line under the waveform saying so.
 -->
 <script lang="ts">
 	import { Button } from '@ggml-org/llama-ui/ui/button';
@@ -20,6 +21,8 @@
 		/** Text streaming while a voice message is recorded. */
 		liveCaption?: string;
 		mode: VoiceMode;
+		/** The speech is too quiet even at the highest gain: says so under the waveform. */
+		quiet?: boolean;
 		state: ChatFormVoiceState;
 		onCancel: () => void;
 		onStop: () => void;
@@ -36,6 +39,7 @@
 		onCancel,
 		onSend,
 		onStop,
+		quiet = false,
 		state
 	}: Props = $props();
 </script>
@@ -103,6 +107,16 @@
 			</Button>
 		{/if}
 	</div>
+
+	{#if quiet}
+		<p
+			class="px-10 text-caption text-fg-warning max-md:px-11"
+			data-slot="chat-form-recording-quiet"
+			role="status"
+		>
+			{VOICE_MODE_MESSAGE.tooQuiet}
+		</p>
+	{/if}
 
 	{#if liveCaption}
 		<p

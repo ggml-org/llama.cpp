@@ -23,6 +23,8 @@ export async function startVoiceSession(options: VoiceSessionOptions = {}): Prom
 
 	if (options.onLevels) unsubscribers.push(capture.onLevels(options.onLevels));
 
+	if (options.onQuiet) unsubscribers.push(capture.onQuiet(options.onQuiet));
+
 	try {
 		await capture.start();
 	} catch (error) {

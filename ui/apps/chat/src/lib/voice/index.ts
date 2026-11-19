@@ -13,6 +13,15 @@ export {
 	VoiceCaptureError,
 	VoiceTranscriptionError
 } from './errors';
+export {
+	isTooQuiet,
+	measureSpeech,
+	normalizeSpeech,
+	softLimit,
+	SpeechGain,
+	speechGainFor,
+	type SpeechGainResult
+} from './gain';
 export { LevelHistory, rms, rmsToLevel } from './levels';
 export {
 	base64ToBytes,

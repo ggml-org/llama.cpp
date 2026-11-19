@@ -10,6 +10,8 @@ export const VOICE_MODE_MESSAGE = {
 	separateModelHint:
 		'The transcription model is loaded on the server alongside the chat model, which a server that keeps one model at a time unloads.',
 	starting: 'Starting...',
+	tooQuiet:
+		'Your microphone sounds quiet. Move closer, or turn its input level up in your system settings.',
 	transcribing: 'Transcribing...',
 	unavailable:
 		'No model with audio input is available. In router mode, load one or pick a transcription model in Settings > Voice.',

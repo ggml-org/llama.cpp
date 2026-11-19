@@ -233,8 +233,47 @@ describe('recording', () => {
 		await filtered.screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
 		await expect.poll(() => filtered.recorder.status).toBe('recording');
 		expect(filtered.recorder.options?.capture).toEqual({
+			boost: true,
 			constraints: { echoCancellation: true, noiseSuppression: true }
 		});
+	});
+
+	it('boosts quiet speech unless the setting is off', async () => {
+		seed(true, VoiceInputMode.DICTATION);
+
+		const boosted = await renderForm();
+
+		await boosted.screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
+		await expect.poll(() => boosted.recorder.status).toBe('recording');
+		expect(boosted.recorder.options?.capture).toMatchObject({ boost: true });
+		boosted.screen.unmount();
+		restore?.();
+
+		seed(true, VoiceInputMode.DICTATION, { [SETTINGS_KEYS.VOICE_BOOST]: false });
+
+		const plain = await renderForm();
+
+		await plain.screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
+		await expect.poll(() => plain.recorder.status).toBe('recording');
+		expect(plain.recorder.options?.capture).toMatchObject({ boost: false });
+	});
+
+	it('says when the microphone is too quiet, and stops saying it once it is not', async () => {
+		seed(true);
+
+		const { recorder, screen } = await renderForm();
+
+		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last().click();
+		await expect.poll(() => recorder.status).toBe('recording');
+		expect(screen.container.innerHTML).not.toContain(VOICE_MODE_MESSAGE.tooQuiet);
+
+		recorder.setQuiet(true);
+		await expect.element(screen.getByText(VOICE_MODE_MESSAGE.tooQuiet)).toBeInTheDocument();
+
+		recorder.setQuiet(false);
+		await expect
+			.poll(() => screen.container.querySelector('[data-slot="chat-form-recording-quiet"]'))
+			.toBeNull();
 	});
 
 	it('shows the live waveform with cancel and stop, and Escape drops it', async () => {
