@@ -9657,6 +9657,33 @@ struct test_fill : public test_case {
     }
 };
 
+// GGML_OP_SLEEP (for scheduler testing only)
+struct test_sleep : public test_case {
+    const ggml_type              type;
+    const std::array<int64_t, 4> ne;
+    const int32_t                us;
+
+    std::string vars() override { return VARS_TO_STR3(type, ne, us); }
+
+    // the op only delays, the output aliases the input and must match it exactly
+    double max_nmse_err() override { return 0.0; }
+
+    test_sleep(int32_t us = 100, ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = { 10, 10, 4, 3 })
+        : type(type), ne(ne), us(us) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_sleep(ctx, a, us);
+
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 // GGML_OP_SOLVE_TRI
 struct test_solve_tri : public test_case {
     const ggml_type              type;
@@ -11917,6 +11944,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // > 2^31-element dst (8.9 GB), about 45 GB peak memory. Too large to be enabled by default.
     // kernel_mul_mm dst offset of the last batch is past INT32_MAX: rows 0-31 use full tiles, rows 32-39 use edge tiles.
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 1048576, 40, 64, {1, 1}, {53, 1}));
+    // CUDA mul_mat_q: > 2^31-element dst (8.9 GB), the dst offset of column tiles starting past column 8648 does not fit in 32 bits
+    // (same shape class as a 248k-vocab output head with a 16k ubatch of outputs)
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 248320, 8960, 32, {1, 1}, {1, 1}));
 
     // kernel_mul_mm_id: the index of tokens 32768-33791 does not fit in 16 bits (about 0.3 GB peak memory).
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F32, GGML_TYPE_F32, 4, 2, false, 64, 33792, 64));
@@ -12262,6 +12292,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 576, 512, 576, {1,1}, {1,1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 1, 2048, 8192, {1,  1}, {1, 1}));
+
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F16, 128, 128,  4352, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32,  64, 192, 17664, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 128, 128, 4096, {1, 1}, {2, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 128, 256, 4096, {1, 1}, {1, 1}));
+
     for (ggml_type type_a : all_types) {
         test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1, 64, 256, {1,  1}, {1, 1}));
     }
@@ -12986,6 +13022,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_fill(2.0f, GGML_TYPE_F16, { 303, 207, 11, 3 }));
     test_cases.emplace_back(new test_fill(-152.0f, GGML_TYPE_F16, { 800, 600, 4, 4 }));
     test_cases.emplace_back(new test_fill(3.5f, GGML_TYPE_F16, { 2048, 512, 2, 2 }));
+
+    test_cases.emplace_back(new test_sleep(0));
+    test_cases.emplace_back(new test_sleep(10, GGML_TYPE_F16, { 128, 4, 2, 2 }));
+    test_cases.emplace_back(new test_sleep(10, GGML_TYPE_F32, { 128, 4, 2, 2 }));
 
     for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16}) {
         test_cases.emplace_back(new test_diag(type));

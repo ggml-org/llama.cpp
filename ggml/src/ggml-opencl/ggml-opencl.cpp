@@ -23277,8 +23277,31 @@ static void ggml_cl_flash_attn_decompose_kq_p8(
     const int64_t kqv_m = pad_up(dv, 64);
     const int64_t tile_n = pad_up(n_q_chunk, 32);
 
-    // Pad the int8 row pitch by one cache line, as in the P8 KQV kernel.
-    const int kv_pitch = (int) n_kv + 64;
+    static const int64_t kv_pitch_round = [] {
+        const char * e = getenv("GGML_OPENCL_FA_KV_PITCH_ROUND");
+        const int64_t v = (e && e[0]) ? strtoll(e, nullptr, 10) : 32768;
+        return v > 0 && v <= INT_MAX && (v & (v - 1)) == 0 ? v : (int64_t) 0;
+    }();
+    static const int64_t kv_pitch_round_min = [] {
+        const char * e = getenv("GGML_OPENCL_FA_KV_PITCH_ROUND_MIN");
+        return (e && e[0]) ? strtoll(e, nullptr, 10) : (int64_t) 16384;
+    }();
+    static const int64_t kv_pitch_round_max_dv = [] {
+        const char * e = getenv("GGML_OPENCL_FA_KV_PITCH_ROUND_MAX_DV");
+        return (e && e[0]) ? strtoll(e, nullptr, 10) : (int64_t) 256;
+    }();
+
+    // Round long P and V^T rows to reduce cache conflicts, then add one cache line.
+    int64_t kv_pitch_value = n_kv + 64;
+    if (kv_pitch_round > 0 && n_kv > kv_pitch_round_min && dv <= kv_pitch_round_max_dv) {
+        const int64_t rounded_pitch = pad_up(n_kv, kv_pitch_round) + 64;
+        if (rounded_pitch <= INT_MAX &&
+            (size_t) rounded_pitch <= SIZE_MAX / n_q_chunk / n_head &&
+            (size_t) rounded_pitch <= SIZE_MAX / dv / n_head_kv) {
+            kv_pitch_value = rounded_pitch;
+        }
+    }
+    const int kv_pitch = (int) kv_pitch_value;
     const size_t nblk = (size_t) kv_pitch / 32;
 
     backend_ctx->prealloc_fa_pq.allocate(backend_ctx->context, (size_t) kv_pitch * n_q_chunk * n_head);

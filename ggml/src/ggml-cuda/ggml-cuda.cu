@@ -10,7 +10,7 @@
 #include "ggml-cuda/arange.cuh"
 #include "ggml-cuda/argmax.cuh"
 #include "ggml-cuda/argsort.cuh"
-#include "ggml-cuda/batch-get.cuh"
+#include "ggml-cuda/batch-copy.cuh"
 #include "ggml-cuda/binbcast.cuh"
 #include "ggml-cuda/clamp.cuh"
 #include "ggml-cuda/col2im-1d.cuh"
@@ -48,6 +48,7 @@
 #include "ggml-cuda/rope.cuh"
 #include "ggml-cuda/roll.cuh"
 #include "ggml-cuda/scale.cuh"
+#include "ggml-cuda/sleep.cuh"
 #include "ggml-cuda/snake.cuh"
 #include "ggml-cuda/softcap.cuh"
 #include "ggml-cuda/softmax.cuh"
@@ -1115,6 +1116,11 @@ static void ggml_backend_cuda_buffer_set_tensor_n(ggml_backend_buffer_t buffer, 
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
     ggml_cuda_set_device(ctx->device);
+
+    if (!ggml_cuda_pinned_memory_disabled() &&
+            ggml_cuda_set_tensor_n(ctx->device, tensors, data, offsets, sizes, n_tensors)) {
+        return;
+    }
 
     for (size_t i = 0; i < n_tensors; i++) {
         if (sizes[i] == 0) {
@@ -3144,6 +3150,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_FILL:
             ggml_cuda_op_fill(ctx, dst);
+            break;
+        case GGML_OP_SLEEP:
+            ggml_cuda_op_sleep(ctx, dst);
             break;
         case GGML_OP_LIGHTNING_INDEXER:
             ggml_cuda_lightning_indexer(ctx, dst);
@@ -6809,6 +6818,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             return ggml_cuda_lightning_indexer_supported(dev_ctx->device, op);
         case GGML_OP_TOP_K_MASK:
             return op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32;
+        case GGML_OP_SLEEP:
+#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+            return false;
+#else
+            return true;
+#endif // defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
 
         default:
             return false;

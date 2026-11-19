@@ -948,6 +948,7 @@ void process_shaders() {
     string_to_spv("acc_f32", "acc.comp", {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
 
     string_to_spv("split_k_reduce", "mul_mat_split_k_reduce.comp", {});
+    string_to_spv("stream_k_fixup", "mul_mat_stream_k_fixup.comp", {});
     string_to_spv("fa_split_k_reduce", "flash_attn_split_k_reduce.comp", {});
 
     string_to_spv("fa_mask_opt", "flash_attn_mask_opt.comp", {});
@@ -1027,6 +1028,7 @@ void process_shaders() {
     string_to_spv("arange_f32",     "arange.comp",      {{"A_TYPE", "float"},       {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
     string_to_spv("fill_f32",       "fill.comp",        {{"D_TYPE", "float"},       {"FLOAT_TYPE", "float"}});
     string_to_spv("fill_f16",       "fill.comp",        {{"D_TYPE", "float16_t"},   {"FLOAT_TYPE", "float"}});
+    string_to_spv("sleep",          "sleep.comp",       {});
 
     string_to_spv("silu_back_f32",  "silu_back.comp",   {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}});
 
