@@ -316,13 +316,13 @@
 
 	.exec-wd {
 		font-family: var(--font-mono);
-		color: var(--muted-foreground);
+		color: var(--fg-muted);
 		margin-right: var(--exec-wd-margin);
 	}
 
 	.exec-prompt {
 		font-family: var(--font-mono);
-		color: var(--muted-foreground);
+		color: var(--fg-muted);
 		opacity: 0.55;
 		margin-right: var(--exec-wd-margin);
 	}
@@ -333,7 +333,7 @@
 		height: 1.05em;
 		margin-left: 0.15rem;
 		vertical-align: text-bottom;
-		background: var(--foreground);
+		background: var(--fg-default);
 		animation: exec-cursor-blink 1.1s steps(1) infinite;
 	}
 

@@ -12,10 +12,10 @@
 	   the light glass, with the sidebar's own ambient edge and a faint shade under it, so it
 	   reads as part of the panel rather than a button or a field */
 	--inset-group-background: color-mix(in oklch, var(--surface-raised) 55%, transparent);
-	--inset-group-shadow: 0 2px 8px -4px var(--black-a8);
+	--inset-group-shadow: 0 2px 8px -4px rgb(0 0 0 / calc(0.08 * var(--elevation-strength)));
 	/* a step rounder than a card, so the rows inside it (its radius less its padding, see the
 	   nested surfaces in Llama Chat's app.css) keep soft corners */
-	--inset-group-radius: var(--length-16);
+	--inset-group-radius: 1rem;
 
 	/* selected row: the page a sidebar row opens is on. A tint of the text colour, under hover's,
 	   with the inset group's edge and shade so it reads as picked out rather than hovered */
@@ -82,8 +82,6 @@
 	--button-secondary-background: var(--surface-glass);
 	/* a raised fill would be darker than the dark glass: a faint tint of the text colour instead */
 	--inset-group-background: color-mix(in oklch, var(--fg-default) 3%, transparent);
-	--inset-group-shadow: 0 2px 8px -4px var(--black-a40);
-	--selected-row-background: color-mix(in oklch, var(--fg-default) 5%, transparent);
 	--button-secondary-background-hover: var(--surface-muted);
 	--button-tertiary-background: var(--action-quiet);
 	--button-tertiary-background-hover: var(--action-quiet-hover);
@@ -111,11 +109,13 @@
 	--action-card-border: var(--white-a18);
 }
 
-/* the user bubble is a card with an even, fainter edge, no inner ring and a barely noticeable shadow */
+/* the user bubble is a card with an even, fainter edge, no inner ring and a barely noticeable shadow. Unlayered, so
+   it overrides what the card's surface utility sets */
 .chat-message-user-bubble {
 	--glass-shadow: var(--elevation-faint);
 	/* no inner highlight ring: the bubble is a flat tint with its hairline edge */
 	--glass-highlight: transparent;
-	--glass-edge-side: var(--edge-faint);
-	--glass-edge-mid: var(--edge-faint);
+	--glass-edge: var(--edge-ambient);
+	/* even all round: no fade towards the middle */
+	--edge-mid: var(--edge-side);
 }

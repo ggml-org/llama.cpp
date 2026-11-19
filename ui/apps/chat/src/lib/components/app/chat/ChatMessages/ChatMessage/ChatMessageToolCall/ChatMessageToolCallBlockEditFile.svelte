@@ -119,13 +119,13 @@
 		overflow: auto;
 		border-radius: 0.75rem;
 		border-width: 1px;
-		border-color: color-mix(in oklch, var(--border) 30%, transparent);
-		background: var(--code-background);
+		border-color: color-mix(in oklch, var(--line-default) 30%, transparent);
+		background: var(--surface-code);
 		box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
 	}
 
 	:global(.dark) .diff-block {
-		border-color: color-mix(in oklch, var(--border) 20%, transparent);
+		border-color: color-mix(in oklch, var(--line-default) 20%, transparent);
 	}
 
 	/* Each row is a 4-column grid: old-line#, marker, new-line#, text.
@@ -144,13 +144,13 @@
 		text-align: right;
 		padding-right: 0.5rem;
 		user-select: none;
-		color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+		color: color-mix(in oklch, var(--fg-muted) 70%, transparent);
 		font-variant-numeric: tabular-nums;
 	}
 
 	.diff-marker {
 		text-align: center;
-		color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+		color: color-mix(in oklch, var(--fg-muted) 70%, transparent);
 		user-select: none;
 	}
 

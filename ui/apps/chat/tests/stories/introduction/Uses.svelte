@@ -33,7 +33,7 @@
 <div class="uses">
 	{#each uses as use (use.name)}
 		<section class="use card-surface rounded-card">
-			<span class="glyph rounded-control bg-surface-lifted elevated-control">
+			<span class="glyph rounded-control bg-(--surface-lifted) elevated-control">
 				<use.icon aria-hidden="true" size={18} />
 			</span>
 

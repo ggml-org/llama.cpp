@@ -702,7 +702,7 @@
 				'max-md:pt-safe',
 				// no rim, ring or visible border along the screen's edges; the border stays
 				// transparent so nothing inside shifts by its width
-				'max-md:[--glass-edge-side:transparent] max-md:[--glass-edge-mid:transparent] max-md:[--glass-edge-side-focus:transparent] max-md:[--glass-edge-mid-focus:transparent] max-md:[--glass-highlight:transparent]',
+				'max-md:[--glass-edge:transparent] max-md:[--glass-edge-focus:transparent] max-md:[--glass-highlight:transparent]',
 				'max-md:border-transparent max-md:focus-within:border-transparent max-md:dark:border-transparent max-md:dark:focus-within:border-transparent',
 				EXPANDED_SHEET_FILL
 			],

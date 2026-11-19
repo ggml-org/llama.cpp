@@ -26,7 +26,7 @@
 				<div class="p-4">
 					<div
 						style:box-shadow="var(--{level.name})"
-						class="h-20 rounded-card bg-surface-raised"
+						class="h-20 rounded-card bg-card"
 					></div>
 				</div>
 			</StateGalleryItem>

@@ -26,7 +26,7 @@
 	<StateGallery columns={4}>
 		{#each radii as radius (radius.name)}
 			<StateGalleryItem label={radius.name} note={radius.note}>
-				<div class="h-24 border border-line-default bg-surface-muted {radius.name}"></div>
+				<div class="h-24 border border-border bg-muted {radius.name}"></div>
 			</StateGalleryItem>
 		{/each}
 	</StateGallery>

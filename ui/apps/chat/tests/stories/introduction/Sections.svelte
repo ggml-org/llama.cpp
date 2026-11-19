@@ -25,7 +25,7 @@
 	{#each sections as section (section.name)}
 		<li class="section">
 			<span
-				class={['glyph rounded-control bg-surface-lifted elevated-control', { here: section.here }]}
+				class={['glyph rounded-control bg-(--surface-lifted) elevated-control', { here: section.here }]}
 			>
 				{#if section.icon}
 					<section.icon aria-hidden="true" size={16} />

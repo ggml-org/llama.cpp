@@ -46,7 +46,7 @@
 		onToggle?.();
 	}}
 	{open}
-	style="background: var(--code-background); border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);"
+	style="background: var(--surface-code); border: 1px solid color-mix(in oklch, var(--line-default) 30%, transparent);"
 >
 	<Collapsible.Trigger
 		class={cn(

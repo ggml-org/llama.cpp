@@ -12,7 +12,7 @@ const mergeConfig = {
 		},
 		theme: {
 			radius: ['control', 'panel', 'card', 'container', 'surface', 'surface-lg'],
-			text: ['body', 'body-sm', 'label', 'label-sm', 'caption', 'title', 'heading']
+			text: ['body', 'body-sm', 'label', 'label-sm', 'caption', 'caption-sm', 'title', 'heading']
 		}
 	}
 };

@@ -48,7 +48,7 @@
 		<h3 class="mono">llama.cpp</h3>
 
 		<div class="parts">
-			<div class="part rounded-panel bg-surface-lifted elevated-control">
+			<div class="part rounded-panel bg-(--surface-lifted) elevated-control">
 				<span class="part-name">The engine</span>
 
 				<span class="part-note"
@@ -56,7 +56,7 @@
 				>
 			</div>
 
-			<div class="part rounded-panel bg-surface-lifted elevated-control">
+			<div class="part rounded-panel bg-(--surface-lifted) elevated-control">
 				<span class="part-name">Llama UI <span class="arrow">→</span> Llama Chat</span>
 
 				<span class="part-note"
@@ -78,7 +78,7 @@
 			<span class="repo">&#xE002;The native Llama apps</span>
 		</header>
 
-		<div class="app rounded-panel bg-surface-lifted elevated-control">
+		<div class="app rounded-panel bg-(--surface-lifted) elevated-control">
 			<h3>Llama for Mac</h3>
 
 			<span class="repo">&#xE002;ggml-org/Llama-macOS</span>
@@ -86,7 +86,7 @@
 			<span class="part-note">A menu bar app, in Swift</span>
 		</div>
 
-		<div class="app rounded-panel bg-surface-lifted elevated-control">
+		<div class="app rounded-panel bg-(--surface-lifted) elevated-control">
 			<h3>Llama for Windows</h3>
 
 			<span class="repo">&#xE002;ggml-org/Llama-Windows</span>

@@ -33,15 +33,15 @@
 				<div class="flex flex-col gap-1">
 					<span class={role.name}>The quick brown llama runs locally</span>
 
-					<span class="text-caption text-fg-muted">{role.use}</span>
+					<span class="text-caption text-muted-foreground">{role.use}</span>
 				</div>
 			</div>
 		{/each}
 
 		<div class="grid grid-cols-[9rem_1fr] items-baseline gap-6">
-			<span class="font-mono text-[11px] text-muted-foreground">text-fg-muted</span>
+			<span class="font-mono text-[11px] text-muted-foreground">text-muted-foreground</span>
 
-			<span class="text-body-sm text-fg-muted">Secondary text and hints</span>
+			<span class="text-body-sm text-muted-foreground">Secondary text and hints</span>
 		</div>
 
 		<div class="grid grid-cols-[9rem_1fr] items-baseline gap-6">
@@ -53,7 +53,7 @@
 		<div class="grid grid-cols-[9rem_1fr] items-baseline gap-6">
 			<span class="font-mono text-[11px] text-muted-foreground">engraved</span>
 
-			<span class="text-body text-fg-muted engraved">Ask anything...</span>
+			<span class="text-body text-muted-foreground engraved">Ask anything...</span>
 		</div>
 	</div>
 </Story>

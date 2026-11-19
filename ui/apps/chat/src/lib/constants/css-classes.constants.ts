@@ -28,7 +28,7 @@ export const TAB_SURFACE_IDLE_CLASS =
 /** A round matte glass key (see GlassKey): white glass over the page, a faint hairline, and
  *  matte-key's blur and saturation with its small shadow, so what scrolls under it softens. */
 export const GLASS_KEY_CLASS =
-	'matte-key flex shrink-0 cursor-pointer items-center justify-center rounded-full border border-border/20 bg-surface-glass text-accent-foreground outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50';
+	'matte-key flex shrink-0 cursor-pointer items-center justify-center rounded-full border border-border/20 bg-(--surface-glass) text-accent-foreground outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50';
 
 /** Tab surface of the open tab. */
 export const TAB_SURFACE_ACTIVE_CLASS =

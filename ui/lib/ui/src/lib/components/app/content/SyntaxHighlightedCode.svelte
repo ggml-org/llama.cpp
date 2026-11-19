@@ -131,7 +131,7 @@
 	bind:this={scrollEl}
 	class="code-preview-wrapper min-w-0 max-w-full overflow-auto rounded-xl border shadow-[0_1px_2px_0_rgb(0_0_0_/_0.05)] {className}"
 	onscroll={handleScrollEvent}
-	style="border-color: color-mix(in oklch, var(--border) 30%, transparent); background: var(--code-background); max-height: {maxHeight}; {maxWidth
+	style="border-color: color-mix(in oklch, var(--line-default) 30%, transparent); background: var(--surface-code); max-height: {maxHeight}; {maxWidth
 		? `max-width: ${maxWidth};`
 		: ''}"
 >
@@ -159,6 +159,6 @@
 	}
 
 	:global(.dark) .code-preview-wrapper {
-		border-color: color-mix(in oklch, var(--border) 20%, transparent);
+		border-color: color-mix(in oklch, var(--line-default) 20%, transparent);
 	}
 </style>

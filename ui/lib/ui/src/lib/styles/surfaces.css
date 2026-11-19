@@ -5,10 +5,11 @@
  * another one does not inherit its slots.
  */
 
-/* Frosted panel: flat fill, faint inner rim, hairline border shaded darker at the sides. */
+/* Frosted panel: flat fill, faint inner rim, hairline border shaded darker at the sides: the middle of each edge is
+   the side's shade at two thirds. */
 @utility matte-glass {
-	--edge-side: var(--glass-edge-side, var(--edge-rest-side));
-	--edge-mid: var(--glass-edge-mid, var(--edge-rest-mid));
+	--edge-side: var(--glass-edge, var(--edge-rest));
+	--edge-mid: color-mix(in oklch, var(--edge-side) 67%, transparent);
 	background-color: var(--glass-background, var(--surface-glass));
 	backdrop-filter: blur(var(--blur-surface)) saturate(1.5);
 	box-shadow:
@@ -41,18 +42,15 @@
 	}
 
 	&:focus-within {
-		--edge-side: var(--glass-edge-side-focus, var(--edge-focus-side));
-		--edge-mid: var(--glass-edge-mid-focus, var(--edge-focus-mid));
+		--edge-side: var(--glass-edge-focus, var(--edge-focus));
 	}
 }
 
 @utility chat-form-surface {
 	@apply matte-glass;
 	--glass-background: var(--surface-glass);
-	--glass-edge-side: var(--edge-rest-side);
-	--glass-edge-mid: var(--edge-rest-mid);
-	--glass-edge-side-focus: var(--edge-focus-side);
-	--glass-edge-mid-focus: var(--edge-focus-mid);
+	--glass-edge: var(--edge-rest);
+	--glass-edge-focus: var(--edge-focus);
 	--glass-highlight: var(--highlight-inner);
 	--glass-shadow: var(--elevation-soft);
 	color: var(--fg-default);
@@ -61,8 +59,7 @@
 @utility card-surface {
 	@apply matte-glass;
 	--glass-background: var(--surface-glass);
-	--glass-edge-side: var(--edge-rest-side);
-	--glass-edge-mid: var(--edge-rest-mid);
+	--glass-edge: var(--edge-rest);
 	--glass-highlight: var(--highlight-inner);
 	--glass-shadow: var(--elevation-surface);
 	color: var(--fg-default);
@@ -72,10 +69,8 @@
 @utility sidebar-surface {
 	@apply matte-glass;
 	--glass-background: var(--sidebar-background);
-	--glass-edge-side: var(--edge-ambient-side);
-	--glass-edge-mid: var(--edge-ambient-mid);
-	--glass-edge-side-focus: var(--edge-ambient-side);
-	--glass-edge-mid-focus: var(--edge-ambient-mid);
+	--glass-edge: var(--edge-ambient);
+	--glass-edge-focus: var(--edge-ambient);
 	--glass-highlight: transparent;
 	--glass-shadow: var(--elevation-surface);
 }
@@ -86,19 +81,19 @@
 @utility elevated-control {
 	box-shadow:
 		var(--elevation-control),
-		0 0 0 var(--elevation-ring-width) var(--elevation-ring);
+		0 0 0 1px var(--elevation-ring);
 }
 
 @utility elevated-surface {
 	box-shadow:
 		var(--elevation-surface),
-		0 0 0 var(--elevation-ring-width) var(--elevation-ring);
+		0 0 0 1px var(--elevation-ring);
 }
 
 @utility elevated-raised {
 	box-shadow:
 		var(--elevation-raised),
-		0 0 0 var(--elevation-ring-width) var(--elevation-ring);
+		0 0 0 1px var(--elevation-ring);
 }
 
 /* rows grouped inside a glass panel; the edge stays the same while focus is inside. It sits on
@@ -108,10 +103,8 @@
 	@apply matte-glass;
 	backdrop-filter: none;
 	--glass-background: var(--inset-group-background);
-	--glass-edge-side: var(--edge-ambient-side);
-	--glass-edge-mid: var(--edge-ambient-mid);
-	--glass-edge-side-focus: var(--edge-ambient-side);
-	--glass-edge-mid-focus: var(--edge-ambient-mid);
+	--glass-edge: var(--edge-ambient);
+	--glass-edge-focus: var(--edge-ambient);
 	--glass-highlight: transparent;
 	--glass-shadow: var(--inset-group-shadow);
 	border-radius: var(--inset-group-radius);
@@ -123,10 +116,8 @@
 	@apply matte-glass;
 	backdrop-filter: none;
 	--glass-background: var(--selected-row-background);
-	--glass-edge-side: var(--edge-ambient-side);
-	--glass-edge-mid: var(--edge-ambient-mid);
-	--glass-edge-side-focus: var(--edge-ambient-side);
-	--glass-edge-mid-focus: var(--edge-ambient-mid);
+	--glass-edge: var(--edge-ambient);
+	--glass-edge-focus: var(--edge-ambient);
 	--glass-highlight: transparent;
 	--glass-shadow: var(--inset-group-shadow);
 }
@@ -141,7 +132,7 @@
 	backdrop-filter: blur(var(--blur-surface)) saturate(1.5);
 	box-shadow:
 		var(--elevation-raised),
-		0 0 0 var(--elevation-ring-width) var(--edge-raised);
+		0 0 0 1px var(--edge-raised);
 }
 
 /* Dialogs float over the page colour rather than the raised one. */
@@ -160,7 +151,7 @@
 
 /* Soft top-down sheen over a surface's own fill, e.g. the user message bubble and the soft badges. */
 @utility matte-sheen {
-	background-image: linear-gradient(to bottom, var(--sheen-start), var(--sheen-end));
+	background-image: linear-gradient(to bottom, var(--sheen-start), transparent);
 }
 
 /* The fainter sheen for a solid fill (solid badges): barely lighter at the top. */
@@ -188,8 +179,11 @@
 }
 
 /* Lit colored control (record, error send): a near-flat fill barely lighter at the top, an even hairline a step
-   lighter, the glyph pressed in a little; no glow. Set the color with orb-danger, orb-warning or orb-success. */
+   lighter, the glyph pressed in a little; no glow. Set the color with orb-danger, orb-warning or orb-success: the rim
+   and the glyph are mixed from it, the rim towards white and the glyph towards black. */
 @utility matte-orb {
+	--orb-rim: color-mix(in oklab, var(--orb), white 30%);
+	--orb-glyph: color-mix(in oklab, var(--orb), black 30%);
 	background-image: linear-gradient(
 		to bottom,
 		color-mix(in oklab, var(--orb), white 6%),
@@ -229,25 +223,19 @@
 		color-mix(in oklab, var(--orb), white 12%),
 		var(--orb)
 	);
-	box-shadow: inset 0 0 0 0.5px color-mix(in oklab, var(--orb-glyph) 50%, transparent);
+	box-shadow: inset 0 0 0 0.5px color-mix(in oklab, color-mix(in oklab, var(--orb), black 30%) 50%, transparent);
 }
 
 @utility orb-danger {
 	--orb: var(--fill-danger);
-	--orb-rim: var(--status-danger-rim);
-	--orb-glyph: var(--status-danger-glyph);
 }
 
 @utility orb-warning {
 	--orb: var(--fill-warning);
-	--orb-rim: var(--status-warning-rim);
-	--orb-glyph: var(--status-warning-glyph);
 }
 
 @utility orb-success {
 	--orb: var(--fill-success);
-	--orb-rim: var(--status-success-rim);
-	--orb-glyph: var(--status-success-glyph);
 }
 
 /* Letters pressed into a matte surface. */

@@ -37,7 +37,7 @@
 
 	<section class="principle card-surface rounded-card">
 		<div class="picture">
-			<div class="pick rounded-panel bg-surface-lifted elevated-control">
+			<div class="pick rounded-panel bg-(--surface-lifted) elevated-control">
 				<Badge>Recommended</Badge>
 
 				<span class="pick-note">Reads, sees and hears</span>
