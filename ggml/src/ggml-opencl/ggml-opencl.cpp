@@ -1498,6 +1498,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_pack_b_f16_coopmat              = nullptr;
     cl_kernel kernel_gemm_noshuffle_q4_0_f32_coopmat = nullptr;
     cl_kernel kernel_gemm_noshuffle_q5_0_f32_coopmat = nullptr;
+    cl_kernel kernel_gemm_noshuffle_q8_0_f32_coopmat = nullptr;
     cl_kernel kernel_gemm_coopk_q4_0_q8_1_dp4a_c4 = nullptr;
     cl_kernel kernel_gemm_coopk_q4_0_q8_1_dp4a_c2 = nullptr;
     int       nsg_coopk_dp4a_q4_0  = 8;
@@ -2039,6 +2040,23 @@ static void load_cl_kernels_coopmat(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), opts, false);
         if (prog) {
             CL_CHECK((backend_ctx->kernel_gemm_noshuffle_q5_0_f32_coopmat = clCreateKernel(prog, "kernel_gemm_noshuffle_q5_0_f32_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+
+    // gemm_noshuffle_q8_0_f32_coopmat
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_noshuffle_q8_0_f32_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_noshuffle_q8_0_f32_coopmat.cl");
+#endif
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->kernel_gemm_noshuffle_q8_0_f32_coopmat = clCreateKernel(prog, "kernel_gemm_noshuffle_q8_0_f32_coopmat", &err), err));
             CL_CHECK(clReleaseProgram(prog));
             GGML_LOG_CONT(".");
         }
@@ -27450,6 +27468,11 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
     int M = ne01;
     int N = ne1;
     int K = ne00;
+
+    if (ggml_cl_mul_mat_coopmat(backend_ctx, backend_ctx->kernel_gemm_noshuffle_q8_0_f32_coopmat,
+            { extra0_q8_0->q, extra0_q8_0->d }, src1, dst, K, M, N)) {
+        return;
+    }
 
     // Multi-column verify GEMV for ne1 2..4, reuses the ne1 == 1 image setup.
     // Default on for X2E, GGML_OPENCL_Q8_0_MC=0/1 forces it.
