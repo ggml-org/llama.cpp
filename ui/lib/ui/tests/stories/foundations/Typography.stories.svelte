@@ -11,6 +11,7 @@
 	});
 
 	const roles = [
+		{ name: 'text-display', spec: '30/36 600', use: 'the biggest headline: a greeting, a splash' },
 		{ name: 'text-heading', spec: '24/32 600', use: 'rare page headings' },
 		{ name: 'text-title', spec: '18/28 600', use: 'dialog and section titles' },
 		{ name: 'text-body', spec: '16/24', use: 'chat messages and the chat input' },

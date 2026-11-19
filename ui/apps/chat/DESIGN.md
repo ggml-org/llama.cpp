@@ -224,6 +224,11 @@ typography:
     fontSize: 1.5rem
     fontWeight: 600
     lineHeight: 2rem
+  display:
+    fontFamily: 'Llama Sans'
+    fontSize: 1.875rem
+    fontWeight: 600
+    lineHeight: 2.25rem
   code:
     fontFamily: 'Llama Mono'
     fontSize: 0.875rem
@@ -711,7 +716,7 @@ here; if something really is missing, add it here first.
   messages and the chat input, `text-body-sm` (14px) for most text, `text-label` (14px, medium)
   for buttons and labels, `text-label-sm` and `text-caption` (12px) for badges and hints,
   `text-caption-sm` (10px) for tags and counts, `text-title` (18px) and `text-heading` (24px)
-  for the rare heading. Never Tailwind's own sizes (`text-sm`, `text-xs`) or a size in
+  for the rare heading, `text-display` (30px) for the biggest headline. Never Tailwind's own sizes (`text-sm`, `text-xs`) or a size in
   brackets.
 - **Shape:** `rounded-control` (8px) for controls, fields and badges, `rounded-panel` (10px)
   for menus and dialogs, `rounded-card` (14px), `rounded-container` (16px) and
@@ -892,7 +897,8 @@ its coding ligatures included, in one cell, so code and numbers line up in colum
 - `label-sm` (12/16, 500): badges and compact labels.
 - `caption` (12/16): tooltips, hints and metadata.
 - `caption-sm` (10/14): the smallest text, for tags, compact badges and counts.
-- `title` (18/28, 600) and `heading` (24/32, 600): rare headings; there is no display size.
+- `title` (18/28, 600) and `heading` (24/32, 600): rare headings.
+- `display` (30/36, 600): the biggest headline, such as the greeting on a new chat.
 
 Body and caption text takes the weight around it, regular unless a parent says otherwise; add
 a weight class for anything else (`text-body-sm font-semibold`). The roles are the whole

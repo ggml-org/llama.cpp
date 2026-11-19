@@ -13,7 +13,7 @@ const mergeConfig = {
 		theme: {
 			ease: ['out-quint', 'sheet'],
 			radius: ['control', 'panel', 'card', 'container', 'surface', 'surface-lg'],
-			text: ['body', 'body-sm', 'label', 'label-sm', 'caption', 'caption-sm', 'title', 'heading']
+			text: ['body', 'body-sm', 'label', 'label-sm', 'caption', 'caption-sm', 'title', 'heading', 'display']
 		}
 	}
 };

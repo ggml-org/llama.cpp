@@ -60,9 +60,9 @@
 	]}
 >
 	<div style:transition-delay="{CHAT_GREETING_ENTER_DELAY_MS}ms" class={enterClass}>
-		<h1 class="mb-2 text-heading tracking-tight">Hello there</h1>
+		<h1 class="mb-2 text-heading tracking-tight md:text-display">Hello there</h1>
 
-		<p class="text-body text-muted-foreground">
+		<p class="text-muted-foreground md:text-title md:font-normal">
 			{serverStore.props?.modalities?.audio ? 'Record audio, type a message ' : 'Type a message'} or upload
 			files to get started
 		</p>

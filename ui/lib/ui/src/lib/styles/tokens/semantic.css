@@ -227,7 +227,7 @@
 @theme inline {
 	/* type roles: text-body, text-label-sm, ... set size and line height. Labels, the title and the heading set
 	   their weight too; body and caption text takes the weight around it, regular unless a parent says otherwise.
-	   Sizes are 10, 12, 14, 16, 18 and 24px; a line height is written as Tailwind writes its own, the line in rem
+	   Sizes are 10, 12, 14, 16, 18, 24 and 30px; a line height is written as Tailwind writes its own, the line in rem
 	   over the size, so text nested in a role keeps the same proportion */
 	--text-body: 1rem;
 	--text-body--line-height: calc(1.5 / 1);
@@ -250,6 +250,10 @@
 	--text-heading: 1.5rem;
 	--text-heading--line-height: calc(2 / 1.5);
 	--text-heading--font-weight: 600;
+	/* the biggest headline: a greeting, a splash */
+	--text-display: 1.875rem;
+	--text-display--line-height: calc(2.25 / 1.875);
+	--text-display--font-weight: 600;
 
 	/* motion: ease-out-quint for what enters or answers a press, quick off the mark and settling softly; ease-sheet
 	   for a sheet or a page that slides, the curve iOS moves its own with */
