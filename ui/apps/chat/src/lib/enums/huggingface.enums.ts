@@ -33,3 +33,9 @@ export enum HfEntryType {
 	DIRECTORY = 'directory',
 	FILE = 'file'
 }
+
+/** How much of a conversation a share to Hugging Face uploads. */
+export enum TraceShareScope {
+	ALL = 'all',
+	UP_TO_MESSAGE = 'up-to-message'
+}

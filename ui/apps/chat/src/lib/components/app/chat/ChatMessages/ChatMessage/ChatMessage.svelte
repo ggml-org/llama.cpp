@@ -21,7 +21,7 @@
 		MessageType
 	} from '#lib/enums/index.ts';
 	import { DatabaseService } from '#lib/services/database.service.ts';
-	import { chatStore, conversationsStore, deviceStore } from '#lib/stores/index.ts';
+	import { chatStore, conversationsStore, deviceStore, uiStore } from '#lib/stores/index.ts';
 	import type {
 		ChatMessageActions,
 		ChatMessageDeletionInfo,
@@ -197,6 +197,7 @@
 		setShowForkDialog: (show: boolean) => {
 			showForkDialog = show;
 		},
+		share: handleShare,
 		get showDeleteDialog() {
 			return showDeleteDialog;
 		},
@@ -337,6 +338,14 @@
 
 	function handleForkConversation(options: { name: string; includeAttachments: boolean }) {
 		chatActions.forkConversation(message, options);
+	}
+
+	// an agentic turn renders as one message, so a share from it ends after its last step
+	function handleShare() {
+		uiStore.openConversationShare({
+			conversationId: message.convId,
+			messageId: toolMessages.at(-1)?.id ?? message.id
+		});
 	}
 
 	function handleNavigateToSibling(siblingId: string) {

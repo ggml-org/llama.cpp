@@ -56,7 +56,7 @@ export {
 	SpecialFileType
 } from './files.enums';
 
-export { HfEntryType, HfModelSort, SidecarForm } from './huggingface.enums';
+export { HfEntryType, HfModelSort, SidecarForm, TraceShareScope } from './huggingface.enums';
 
 export {
 	MCPConnectionPhase,
