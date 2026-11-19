@@ -344,7 +344,7 @@
 {:else if ms.isMultiModel}
 	{#if isMobile}
 		<button
-			class="relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-xs shadow-(--chat-form-key-shadow) transition hover:bg-muted-foreground/20 max-md:gap-1.5 max-md:h-7 max-md:px-2.25 max-md:py-1 max-md:text-[13px] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground"
+			class="relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-xs shadow-(--elevation-key) transition hover:bg-muted-foreground/20 max-md:gap-1.5 max-md:h-7 max-md:px-2.25 max-md:py-1 max-md:text-[13px] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground"
 			disabled={disabled || ms.updating}
 			onclick={() => ms.handleOpenChange(true)}
 			style="max-width: min(calc(100vw-4rem), 32rem)"
@@ -383,7 +383,7 @@
 	<!-- a phone has no manager: the single model still gets the drawer, so its
 	     load control, actions and information stay reachable -->
 	<button
-		class="relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-xs shadow-(--chat-form-key-shadow) transition hover:bg-muted-foreground/20 max-md:gap-1.5 max-md:h-7 max-md:px-2.25 max-md:py-1 max-md:text-[13px] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground"
+		class="relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-xs shadow-(--elevation-key) transition hover:bg-muted-foreground/20 max-md:gap-1.5 max-md:h-7 max-md:px-2.25 max-md:py-1 max-md:text-[13px] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground"
 		disabled={disabled || ms.updating}
 		onclick={() => ms.handleOpenChange(true)}
 		style="max-width: min(calc(100vw-4rem), 32rem)"
@@ -415,7 +415,7 @@
 				<button
 					{...props}
 					class={[
-						`inline-flex items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-(--chat-form-key-shadow) transition focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
+						`inline-flex items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-(--elevation-key) transition focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 						uiStore.isModelsManagerShown
 							? 'cursor-pointer hover:bg-muted-foreground/20'
 							: 'cursor-default',

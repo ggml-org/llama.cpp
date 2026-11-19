@@ -14,9 +14,8 @@
 	const levels = [
 		{ name: 'elevation-inset', note: 'fields, recessed' },
 		{ name: 'elevation-control', note: 'buttons and tabs' },
-		{ name: 'elevation-surface', note: 'chat form, cards, sidebar' },
-		{ name: 'elevation-raised', note: 'menus, popovers, dialogs' },
-		{ name: 'elevation-tooltip', note: 'tooltips' }
+		{ name: 'elevation-surface', note: 'chat form, cards, sidebar, tooltips' },
+		{ name: 'elevation-raised', note: 'menus, popovers, dialogs' }
 	];
 </script>
 

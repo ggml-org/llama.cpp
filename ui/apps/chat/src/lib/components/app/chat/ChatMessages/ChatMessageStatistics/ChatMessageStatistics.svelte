@@ -147,10 +147,10 @@
 					{...props}
 					class="inline-flex size-5 items-center justify-center rounded-sm transition-colors {activeView ===
 					opts.view
-						? 'bg-(--tabs-background-active) text-(--tabs-text-active) shadow-(--tabs-shadow-active)'
+						? 'bg-(--surface-lifted) text-(--fg-default) shadow-(--elevation-control)'
 						: opts.disabled
 							? 'cursor-not-allowed opacity-40'
-							: 'hover:text-(--tabs-text-active)'}"
+							: 'hover:text-(--fg-default)'}"
 					disabled={opts.disabled}
 					onclick={() => !opts.disabled && (activeView = opts.view)}
 					type="button"
@@ -171,7 +171,7 @@
 <div class="inline-flex items-center text-xs text-muted-foreground">
 	{#if isSwitchable}
 		<div
-			class="inline-flex items-center gap-0.5 rounded-md bg-(--tabs-track) p-0.5 shadow-(--tabs-track-shadow)"
+			class="inline-flex items-center gap-0.5 rounded-md bg-(--surface-muted) p-0.5 shadow-(--elevation-inset)"
 		>
 			{#if hasPromptStats || isLive}
 				{@render viewButton({

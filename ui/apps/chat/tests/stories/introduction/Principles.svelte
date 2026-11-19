@@ -87,7 +87,7 @@
 
 			<span aria-hidden="true">↓</span>
 
-			<code>--button-primary-background</code>
+			<code>--button-primary-edge</code>
 		</div>
 
 		<h3>Design lives in code</h3>

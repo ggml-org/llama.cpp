@@ -680,7 +680,7 @@
 			'chat-form-surface group/chat-form relative flex shrink flex-col overflow-hidden outline-none transition-[min-height,padding,border-radius,border-color,background-color] duration-400 ease-[var(--chat-form-resize-ease,cubic-bezier(0.3,1.12,0.5,1))] motion-reduce:transition-none',
 			isSingleRow
 				? 'rounded-(--chat-form-single-row-radius)'
-				: 'rounded-(--chat-form-radius-compact) md:rounded-(--chat-form-radius)',
+				: 'rounded-surface-lg md:rounded-surface',
 			// on a phone the sheet's animation moves it (see useChatFormExpansion): only its
 			// border, hidden on the sheet, fades back in after
 			'max-md:transition-[border-color] max-md:duration-200',

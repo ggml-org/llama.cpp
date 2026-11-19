@@ -21,17 +21,17 @@
 			},
 			variant: {
 				default:
-					'matte-key-solid [--key-edge:var(--button-primary-edge)] bg-(--button-primary-background) text-(--button-primary-text) hover:bg-(--button-primary-background-hover)',
+					'matte-key-solid [--key-edge:var(--button-primary-edge)] bg-(--action-primary) text-(--fg-on-action) hover:bg-(--action-primary-hover)',
 				destructive:
-					'matte-key-solid [--key-edge:var(--button-danger-edge)] [--key-sheen-solid:var(--button-danger-sheen)] bg-(--button-danger-background) hover:bg-(--button-danger-background-hover) focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 text-(--button-danger-text)!',
+					'matte-key-solid [--key-edge:var(--button-danger-edge)] [--key-sheen-solid:var(--button-danger-sheen)] bg-(--action-danger) hover:bg-(--action-danger-hover) focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 text-(--fg-on-danger)!',
 				ghost:
-					'hover:text-(--button-text) hover:bg-(--button-ghost-background-hover) hover:shadow-(--button-shadow) backdrop-blur-sm',
+					'hover:text-(--fg-default) hover:bg-(--action-ghost-hover) hover:shadow-(--button-shadow) backdrop-blur-sm',
 				outline:
-					'matte-key bg-(--button-outline-background) hover:text-(--button-text) hover:bg-(--button-ghost-background-hover) border border-(--button-outline-border)',
+					'matte-key bg-(--field-background) hover:text-(--fg-default) hover:bg-(--action-ghost-hover) border border-(--line-control)',
 				secondary:
-					'matte-key bg-(--button-secondary-background) border border-(--button-secondary-border) text-(--button-text) hover:bg-(--button-secondary-background-hover)',
+					'matte-key bg-(--button-secondary-background) border border-(--button-secondary-border) text-(--fg-default) hover:bg-(--button-secondary-background-hover)',
 				tertiary:
-					'matte-key bg-(--button-tertiary-background) border border-(--button-tertiary-border) text-(--button-text) hover:bg-(--button-tertiary-background-hover)'
+					'matte-key bg-(--button-tertiary-background) border border-(--button-tertiary-border) text-(--fg-default) hover:bg-(--button-tertiary-background-hover)'
 			}
 		}
 	});

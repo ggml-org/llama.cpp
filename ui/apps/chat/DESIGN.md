@@ -45,16 +45,13 @@ colors:
   cool-gray-400: 'oklch(0.81 0.01 250)'
   red-400: 'oklch(0.69 0.2 27)'
   red-450: 'oklch(0.635 0.229 28)'
-  red-500: 'oklch(0.6 0.235 27)'
   red-550: 'oklch(0.588 0.236 28)'
   red-600: 'oklch(0.55 0.22 27)'
   red-800: 'oklch(0.43 0.17 27)'
   yellow-300: 'oklch(0.9 0.14 84)'
-  yellow-400: 'oklch(0.85 0.17 84)'
   yellow-800: 'oklch(0.5 0.1 84)'
   green-400: 'oklch(0.81 0.16 148)'
   green-450: 'oklch(0.756 0.197 147)'
-  green-500: 'oklch(0.73 0.2 148)'
   green-550: 'oklch(0.669 0.197 147)'
   green-650: 'oklch(0.52 0.17 147)'
   green-800: 'oklch(0.45 0.14 148)'
@@ -63,10 +60,8 @@ colors:
   amber-650: 'oklch(0.547 0.116 74)'
   blue-400: 'oklch(0.7 0.163 255)'
   blue-450: 'oklch(0.67 0.173 256)'
-  blue-500: 'oklch(0.62 0.15 255)'
   blue-550: 'oklch(0.587 0.177 256)'
   blue-650: 'oklch(0.535 0.177 256)'
-  blue-800: 'oklch(0.42 0.11 255)'
   white-a2: 'oklch(1 0 0 / 0.02)'
   white-a4: 'oklch(1 0 0 / 0.04)'
   white-a6: 'oklch(1 0 0 / 0.06)'
@@ -75,7 +70,6 @@ colors:
   white-a18: 'oklch(1 0 0 / 0.18)'
   white-a20: 'oklch(1 0 0 / 0.2)'
   white-a30: 'oklch(1 0 0 / 0.3)'
-  white-a40: 'oklch(1 0 0 / 0.4)'
   white-a50: 'oklch(1 0 0 / 0.5)'
   white-a85: 'oklch(1 0 0 / 0.85)'
   black-a3: 'oklch(0 0 0 / 0.03)'
@@ -83,15 +77,10 @@ colors:
   black-a5: 'oklch(0 0 0 / 0.05)'
   black-a6: 'oklch(0 0 0 / 0.06)'
   black-a8: 'oklch(0 0 0 / 0.08)'
-  black-a10: 'oklch(0 0 0 / 0.1)'
   black-a12: 'oklch(0 0 0 / 0.12)'
-  black-a18: 'oklch(0 0 0 / 0.18)'
-  black-a25: 'oklch(0 0 0 / 0.25)'
   black-a30: 'oklch(0 0 0 / 0.3)'
-  black-a35: 'oklch(0 0 0 / 0.35)'
   black-a40: 'oklch(0 0 0 / 0.4)'
   black-a55: 'oklch(0 0 0 / 0.55)'
-  black-a60: 'oklch(0 0 0 / 0.6)'
   surface-page: '{colors.neutral-25}'
   surface-muted: '{colors.neutral-100}'
   surface-emphasis: '{colors.neutral-150}'
@@ -103,6 +92,7 @@ colors:
   surface-code: '{colors.neutral-100}'
   surface-overlay: '{colors.black-a40}'
   fg-default: '{colors.neutral-950}'
+  fg-soft: 'color-mix(in oklch, {colors.fg-default} 70%, transparent)'
   fg-muted: '{colors.neutral-500}'
   fg-on-action: '{colors.neutral-50}'
   fg-on-danger: '{colors.neutral-0}'
@@ -145,18 +135,12 @@ colors:
   action-ghost-hover: 'oklch(0.556 0 0 / 0.1)'
   field-background: '{colors.neutral-0}'
   field-shade: '{colors.black-a6}'
-  status-danger: '{colors.fill-danger}'
   status-danger-rim: '{colors.red-400}'
   status-danger-glyph: '{colors.red-800}'
-  status-warning: '{colors.fill-warning}'
   status-warning-rim: '{colors.yellow-300}'
   status-warning-glyph: '{colors.yellow-800}'
-  status-success: '{colors.fill-success}'
   status-success-rim: '{colors.green-400}'
   status-success-glyph: '{colors.green-800}'
-  status-info: '{colors.fill-info}'
-  status-info-rim: '{colors.blue-400}'
-  status-info-glyph: '{colors.blue-800}'
   highlight-inner: '{colors.white-a50}'
   highlight-inverse: '{colors.white-a12}'
   sheen-start: '{colors.white-a20}'
@@ -180,6 +164,7 @@ colors:
   surface-glass-dark: 'oklch(0.269 0 0 / 0.75)'
   surface-code-dark: '{colors.neutral-900}'
   fg-default-dark: '{colors.neutral-50}'
+  fg-soft-dark: 'color-mix(in oklch, {colors.fg-default-dark} 70%, transparent)'
   fg-muted-dark: '{colors.neutral-400}'
   fg-on-action-dark: '{colors.neutral-900}'
   fg-code-dark: '{colors.neutral-300}'
@@ -221,10 +206,6 @@ colors:
   action-ghost-hover-dark: 'oklch(0.708 0 0 / 0.1)'
   field-background-dark: '{colors.white-a9}'
   field-shade-dark: '{colors.black-a30}'
-  status-danger-dark: '{colors.fill-danger-dark}'
-  status-warning-dark: '{colors.fill-warning-dark}'
-  status-success-dark: '{colors.fill-success-dark}'
-  status-info-dark: '{colors.fill-info-dark}'
   highlight-inner-dark: '{colors.white-a4}'
   sheen-start-dark: '{colors.white-a2}'
   elevation-ring-dark: '{colors.white-a18}'
@@ -745,17 +726,17 @@ components:
   status-lamp-success-rim:
     backgroundColor: '{colors.status-success-rim}'
   status-lamp-danger:
-    backgroundColor: '{colors.status-danger}'
+    backgroundColor: '{colors.fill-danger}'
     textColor: '{colors.status-danger-glyph}'
     rounded: '{rounded.full}'
     size: '8px'
   status-lamp-warning:
-    backgroundColor: '{colors.status-warning}'
+    backgroundColor: '{colors.fill-warning}'
     textColor: '{colors.status-warning-glyph}'
     rounded: '{rounded.full}'
     size: '8px'
   status-lamp-success:
-    backgroundColor: '{colors.status-success}'
+    backgroundColor: '{colors.fill-success}'
     textColor: '{colors.status-success-glyph}'
     rounded: '{rounded.full}'
     size: '8px'
@@ -793,7 +774,7 @@ This file is the how, written for agents first. Its principles, as rules to appl
 - **Colour has one job.** Greys build everything; status colours show status and nothing else;
   art colours and cinder are for artwork and the odd brand detail, never for the UI's controls.
 - **Recognisable, easy to change.** Keep the character in the icon, the type and one
-  accent, so an app built on Llama UI can restyle it through component tokens alone.
+  accent, so an app built on Llama UI can restyle it through semantic and component tokens alone.
 - **Design lives in code.** The CSS is the source of truth; prefer what is generated or
   derived over hand-tuned values, and record the reason next to the value. Content pages are
   Markdown with Svelte components in them, as `.svx` (see `AGENTS.md`).
@@ -803,17 +784,18 @@ This file is the how, written for agents first. Its principles, as rules to appl
 Design tokens come in three tiers, each in its own file under `ui/lib/ui/src/lib/styles/tokens/`:
 
 1. **Primitives** (`primitives.css`): raw values named by what they are, such as
-   `neutral-900`, `cool-gray-200`, `red-500`, `white-a30`, `font-size-14` or `length-24`.
+   `neutral-900`, `cool-gray-200`, `red-550`, `white-a30`, `font-size-14` or `length-24`.
    Only semantic tokens point at them.
 2. **Semantic tokens** (`semantic.css`): named by purpose, such as `surface-glass`,
-   `fg-muted`, `line-field`, `edge-focus-side`, `action-primary` or `status-warning`. They
+   `fg-muted`, `line-field`, `edge-focus-side`, `action-primary` or `fill-warning`. They
    point at primitives and are the only tier that changes between light and dark. The type,
    corner, icon size and control height roles live here too and are Tailwind utilities:
    `text-label`, `rounded-control`, `size-icon-md`, `h-control-md`.
-3. **Component tokens** (`components.css`): one group per component, named
-   `[component]-[variant]-[property]-[state]`, such as `chat-form-edge-side-focus` or
-   `button-secondary-background-hover`. They point at semantic tokens, and components read
-   them as `bg-(--button-primary-background)` and similar.
+3. **Component tokens** (`components.css`): only what a component decides itself, named
+   `[component]-[variant]-[property]-[state]`, such as `button-secondary-background-hover` or
+   `float-panel-background-modal`: a value no semantic token has, or one that only this
+   component changes between themes. A component that takes a semantic token as it is reads
+   the semantic token, as `bg-(--action-primary)` and similar, and gets no alias here.
 
 The front matter's `colors`, `typography` and `rounded` are generated from the primitives, the
 semantic tokens and the font stacks by `npm run design:tokens` in `ui/apps/chat`, and CI fails
@@ -860,7 +842,8 @@ the Surface switch in Storybook's toolbar, and only its surface tokens differ: `
   `surface-raised` for menus and dialogs, `surface-lifted` for a selection raised on a
   recessed track, `surface-pressed` for a key pressed in, `surface-glass` for the translucent matte fill, `surface-code` for code and
   `surface-overlay` behind dialogs.
-- **Foreground:** `fg-default` and `fg-muted` for text and icons, `fg-on-action` and
+- **Foreground:** `fg-default` and `fg-muted` for text and icons, `fg-soft` (the text colour
+  at 70%) for the label of an option that is not the picked one, `fg-on-action` and
   `fg-on-danger` on filled buttons, `fg-code` for code, `fg-danger` for errors,
   `fg-success` for confirmations such as a copied check, `fg-warning` for cautions and
   `fg-info` for neutral notices.
@@ -880,9 +863,9 @@ the Surface switch in Storybook's toolbar, and only its surface tokens differ: `
   `surface-info` are soft tints of each status fill for alerts and soft badges, with
   `line-*-soft` hairlines to match. They are mixed in oklab so the hue holds over the page.
   Soft status badges are pills with a small dot in the status fill before the label.
-- **Status:** `status-danger`, `status-warning`, `status-success` and `status-info` are the
-  lamp fills for error or stopped, loading or warning, ready or connected, and informational. They take the status
-  fills, and each has a lighter `-rim` and a darker `-glyph`. Known gap: the glyph on the red lamp
+- **Status:** `fill-danger`, `fill-warning`, `fill-success` and `fill-info` are the
+  lamp fills for error or stopped, loading or warning, ready or connected, and informational. A lamp adds
+  a lighter rim and a darker glyph (`status-danger-rim`, `status-danger-glyph` and so on; none for info). Known gap: the glyph on the red lamp
   reaches only about 2:1 and on the green lamp about 3.2:1, below WCAG AA, so the lamp colour
   must never be the only signal; pair it with a label or tooltip.
 
@@ -978,8 +961,8 @@ matches the role of the surface instead of combining raw shadows.
 - **`matte-float`** and **`matte-float-modal`:** menus, popovers, select lists, hover cards
   and drawers, and dialogs over the page colour. An 86% opaque panel with blur, a faint edge,
   a rim and a deeper shadow. The edge is a hairline ring baked into the shadow as its last
-  layer (`float-panel-edge`). The panel's 1px border is its rim, the inner highlight
-  (`float-panel-highlight`) right inside the ring; an inset shadow for the rim would sit inside
+  layer (`edge-raised`). The panel's 1px border is its rim, the inner highlight
+  (`highlight-inner`) right inside the ring; an inset shadow for the rim would sit inside
   the border instead, and the 1px between the two would draw a double edge. In light mode
   dialogs are solid white instead: over the dimmed page a translucent white turns grey.
 - **`matte-key`:** buttons, selects, toggles and tabs. The matte finish: on top of the
@@ -991,7 +974,7 @@ matches the role of the surface instead of combining raw shadows.
   (`--key-sheen-solid`), the same blur, and an even 1px hairline in a shade of the fill drawn
   inside the button (`--key-edge`), so the width does not change. The danger key stays matte
   glass rather than metal: its sheen is almost none (`--button-danger-sheen`), and in dark mode
-  it is a frosted, translucent red (`red-500` at 58%) whose edge is a soft tint of the red, never
+  it is a frosted, translucent red (`fill-danger` at 58%) whose edge is a soft tint of the red, never
   a lighter rim.
 - **`elevated-control`**, **`elevated-surface`** and **`elevated-raised`:** cards, floating
   bars and thumbnails. An elevation token with a hairline ring baked in as its last layer, so
@@ -1007,7 +990,7 @@ matches the role of the surface instead of combining raw shadows.
   an even hairline, with no glow.
 
 The elevation tokens are `elevation-surface`, `elevation-control`, `elevation-raised`,
-`elevation-inset` and `elevation-tooltip`. The drop shadows are smooth stacks: a few soft
+`elevation-inset` and `elevation-pressed`; a tooltip takes `elevation-surface`. The drop shadows are smooth stacks: a few soft
 layers instead of one hard one, the closest the darkest and smallest, each further layer about
 twice the offset and blur and fainter, the far ones pulled in with a negative spread, so the
 shadow fades out instead of ending in a visible edge. They stay as close as upstream's
@@ -1015,8 +998,8 @@ Tailwind shadows: `elevation-surface` reaches about 20px, like `shadow-lg`, `ele
 about 38px, like `shadow-xl`, and `elevation-control` is three tight layers reaching no further
 than 4px, so buttons and other controls sit close to the page. Two softer steps sit below them: `elevation-soft` for the chat form,
 which floats only a little, and `elevation-faint` for the user message bubble, which barely
-lifts. The keys inside the chat form, the add key and the model selector, take `elevation-key`
-(`--chat-form-key-shadow`): a 0.5px hairline all round and a 1px drop, since the control elevation's soft
+lifts. The keys inside the chat form, the add key and the model selector, take `elevation-key`:
+a 0.5px hairline all round and a 1px drop, since the control elevation's soft
 spread blends into the white form; in dark it is the control elevation. Dark mode deepens the same stacks. Tailwind's own `shadow-xs` to `shadow-2xl` are
 built the same way (`tokens/semantic.css`), each reaching about as far as Tailwind's default for
 it. Every
@@ -1071,15 +1054,15 @@ icon buttons in the chat form are fully round.
 - **Toggles:** the same corners, type, heights, padding and icon size as buttons, with
   square `icon-sm`, `icon` and `icon-lg` sizes for icon-only toggles. `default` has no fill
   until hovered; `outline` borrows the outline button. Pressed toggles take
-  `toggle-background-on`.
+  `surface-selected`.
 - **Button groups:** joined buttons share one shadow, drawn by the group, and one border at
   each seam. A group separator replaces the seam border. Filled buttons draw a seam in their
   own text colour (`button-primary-seam`, `button-danger-seam`) instead.
 - **Selection on a track:** a choice that moves along a track is a recessed track with the
   selection raised on it, never a row of outlined buttons. The track is `surface-muted` with
   the inset shade (`elevation-inset`); the selection is a `surface-lifted` chip with
-  `elevation-control`, and unselected options are softened text with no fill. Tabs use the
-  same track for their list, with the active tab raised (`tabs-*`); a `line` variant
+  `elevation-control`, and unselected options are softened text (`fg-soft`) with no fill. Tabs use the
+  same track for their list, with the active tab raised; a `line` variant
   underlines the active tab instead. The chip or underline slides between tabs in 300ms on a
   plain ease-out, with a stretch of at most 5% along the move that is gone by the time it
   lands; with reduced motion it jumps instead. The switch is the same track with a raised
@@ -1168,8 +1151,8 @@ icon buttons in the chat form are fully round.
   lifting the surface.
 - Do use the status colours only for status. Buttons keep their neutral colours, and the
   submit button stays black in light mode and white in dark mode.
-- Do read component tokens in components, semantic tokens in shared styles, and primitives
-  only in semantic tokens.
+- Do read a semantic token directly wherever a component takes it as it is. Add a component
+  token only for a value the component decides itself, never as an alias of a semantic token.
 - Do add a new colour as a primitive first, then give it a semantic name before any
   component uses it.
 - Do give motion a job: show where something went or what changed, like a selection sliding

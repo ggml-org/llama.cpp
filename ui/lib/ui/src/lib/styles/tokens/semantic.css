@@ -22,6 +22,8 @@
 
 	/* foreground: text and icons */
 	--fg-default: var(--neutral-950);
+	/* the label of an option that is not the picked one: a tab, a key of a toggle group */
+	--fg-soft: color-mix(in oklch, var(--fg-default) 70%, transparent);
 	--fg-muted: var(--neutral-500);
 	--fg-on-action: var(--neutral-50);
 	--fg-on-danger: var(--neutral-0);
@@ -77,19 +79,13 @@
 	--field-background: var(--neutral-0);
 	--field-shade: var(--black-a6);
 
-	/* status lamps: the status fill, a lighter rim and a darker glyph */
-	--status-danger: var(--fill-danger);
+	/* status lamps: around the status fill, a lighter rim and a darker glyph */
 	--status-danger-rim: var(--red-400);
 	--status-danger-glyph: var(--red-800);
-	--status-warning: var(--fill-warning);
 	--status-warning-rim: var(--yellow-300);
 	--status-warning-glyph: var(--yellow-800);
-	--status-success: var(--fill-success);
 	--status-success-rim: var(--green-400);
 	--status-success-glyph: var(--green-800);
-	--status-info: var(--fill-info);
-	--status-info-rim: var(--blue-400);
-	--status-info-glyph: var(--blue-800);
 
 	/* light effects */
 	--highlight-inner: var(--white-a50);
@@ -119,7 +115,6 @@
 	--elevation-faint: 0 2px 4px rgb(0 0 0 / 0.025), 0 0.5px 1.5px rgb(0 0 0 / 0.03);
 	--elevation-inset: inset 0 1px 2px var(--field-shade);
 	--elevation-pressed: inset 0 1px 2px var(--black-a12);
-	--elevation-tooltip: var(--elevation-surface);
 	/* the hairline an elevated surface carries as the last layer of its shadow (elevated-*, matte-float), so its edge
 	   melts into the shadow instead of sitting beside it as a border that reads washed out */
 	--elevation-ring: var(--black-a5);
@@ -148,6 +143,7 @@
 	--surface-code: var(--neutral-900);
 
 	--fg-default: var(--neutral-50);
+	--fg-soft: color-mix(in oklch, var(--fg-default) 70%, transparent);
 	--fg-muted: var(--neutral-400);
 	--fg-on-action: var(--neutral-900);
 	--fg-code: var(--neutral-300);
@@ -162,7 +158,7 @@
 	--line-focus: var(--neutral-500);
 	--line-danger: var(--fill-danger);
 
-	/* the status fills, and the mixes and lamps again, from the dark fills */
+	/* the status fills, and the mixes again, from the dark fills */
 	--fill-success: var(--green-450);
 	--fill-warning: var(--amber-250);
 	--fill-danger: var(--red-450);
@@ -175,10 +171,6 @@
 	--line-warning-soft: color-mix(in oklab, var(--fill-warning) 38%, var(--line-default));
 	--line-danger-soft: color-mix(in oklab, var(--fill-danger) 38%, var(--line-default));
 	--line-info-soft: color-mix(in oklab, var(--fill-info) 38%, var(--line-default));
-	--status-danger: var(--fill-danger);
-	--status-warning: var(--fill-warning);
-	--status-success: var(--fill-success);
-	--status-info: var(--fill-info);
 
 	--edge-rest-side: var(--white-a6);
 	--edge-rest-mid: var(--white-a4);
@@ -322,8 +314,4 @@
 	--border-color-line-warning-soft: var(--line-warning-soft);
 	--border-color-line-danger-soft: var(--line-danger-soft);
 	--border-color-line-info-soft: var(--line-info-soft);
-	--color-status-danger: var(--status-danger);
-	--color-status-warning: var(--status-warning);
-	--color-status-success: var(--status-success);
-	--color-status-info: var(--status-info);
 }
