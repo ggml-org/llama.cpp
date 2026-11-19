@@ -507,7 +507,7 @@ struct mtmd_graph_qwen3tts_gen : mtmd_graph {
 
         // stateful conv ops: read/update their state via state_in/state_out[state_name]
         ggml_tensor * causal_conv1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int dilation, const std::string & state_name) const;
-        ggml_tensor * causal_conv1d_dw(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, const std::string & state_name) const;
+        ggml_tensor * causal_conv1d_dw(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, const std::string & state_name, int dilation = 1) const;
         ggml_tensor * causal_conv_transpose1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride, const std::string & state_name) const;
         ggml_tensor * snake(ggml_tensor * x, ggml_tensor * alpha, ggml_tensor * beta) const;
 
@@ -778,6 +778,66 @@ struct mtmd_graph_music3_gen : mtmd_graph_snake_vae {
     ggml_cgraph * build_cond();
     ggml_cgraph * build_dit();
     ggml_cgraph * build_vocoder();
+};
+
+//
+// VoxCPM2 generation, the residual LM runs on a llama_context of the gen state, see mtmd_gen_code_voxcpm2():
+// RES_INP   = backbone row -> FSQ'd hidden state, residual LM input row, stop score
+// GEN_CODE  = LocDiT flow matching with CFG-Zero* -> next patch, then LocEnc -> next backbone input row
+// LATENT_IN = LocEnc, latent patches -> backbone input rows (voice reference)
+// GEN_WAV   = causal AudioVAE decoder, latent patches -> PCM
+//
+struct mtmd_graph_voxcpm2_gen : mtmd_graph {
+    mtmd_graph_voxcpm2_gen(mtmd_subcontext * ctx, const mtmd_image_f32 & img, mtmd_subctx_gen_process gen_process,
+                           int n_rows, bool audio_row, int n_steps, float cfg_scale)
+        : mtmd_graph(ctx, img), gen_process(gen_process), n_rows(n_rows), audio_row(audio_row), n_steps(n_steps), cfg_scale(cfg_scale) {}
+    ggml_cgraph * build() override;
+
+    static constexpr int   n_latent        = 64;     // feat_dim
+    static constexpr int   n_patch         = 4;      // latents per backbone row
+    static constexpr int   n_dit_tok       = 3 + 2 * n_patch; // lm, res, time, cond patch, noisy patch
+    static constexpr int   head_dim        = 128;    // kv_channels
+    static constexpr float rope_theta      = 10000.0f;
+    static constexpr int   rope_n_ctx_orig = 32768;
+    static constexpr float fsq_scale       = 9.0f;
+    static constexpr int   n_steps_default = 10;     // inference_timesteps
+    static constexpr int   n_steps_max     = 32;
+    static constexpr float cfg_default     = 2.0f;   // cfg_value
+    static constexpr int   n_ctx_res       = 8192;   // residual LM positions of one sequence, max_length of the reference
+    static constexpr int   dec_ratio       = 1920;   // decoder samples per latent
+    static constexpr int   res_dilations[3] = { 1, 3, 9 };
+
+    // t of the Euler steps with sway sampling, n_steps + 1 values from 1 to 0
+    static std::vector<float> t_span(int n_steps);
+    // SinusoidalPosEmb(t * 1000) of the steps, [n_embd, n_steps]
+    static std::vector<float> time_embd(int n_steps, int n_embd);
+
+    mtmd_subctx_gen_process gen_process;
+    int   n_rows;
+    bool  audio_row;
+    int   n_steps;
+    float cfg_scale;
+
+    // bidirectional MiniCPM layers, x: [n_embd, n_tok, n_seq]
+    ggml_tensor * tfm(ggml_tensor * x, const std::vector<mtmd_layer> & layers, ggml_tensor * norm_w, ggml_tensor * pos) const;
+    // [n_latent, n_patch * n] -> [n_text_embd, n]
+    ggml_tensor * loc_enc(ggml_tensor * latents, int n) const;
+    ggml_tensor * inp_pos(const char * name, int n) const;
+    void build_res_inp();
+    void build_flow();
+    void build_latent_in();
+    void build_dec();
+};
+
+std::vector<c2w_state_slot> list_voxcpm2_state_slots(const mtmd_hparams & hparams, const mtmd_model & model);
+
+// AudioVAE encoder: raw waveform -> latent patches, LocEnc then runs on the gen model (LATENT_IN)
+struct mtmd_graph_voxcpm2_spkenc : mtmd_graph {
+    mtmd_graph_voxcpm2_spkenc(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+
+    // x: [T, IC], causal: pad zeros on the left
+    ggml_tensor * conv(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride, int dilation, int pad, bool depthwise) const;
 };
 
 // tiny-voca: small graphs around the stacks, the stacks run on libllama (see mtmd_gen_wav_tiny_voca())

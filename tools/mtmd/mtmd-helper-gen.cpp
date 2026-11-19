@@ -4914,6 +4914,433 @@ private:
     bool   wav_header_sent = false;
 };
 
+// VoxCPM2: the backbone emits no token, mtmd turns each hidden state into a patch of AudioVAE latents
+// every backbone row also goes through the residual LM inside mtmd, see mtmd_gen_code_voxcpm2()
+class voxcpm2_gen_audio_pipeline : public mtmd_gen_audio_pipeline {
+public:
+    using mtmd_gen_audio_pipeline::mtmd_gen_audio_pipeline;
+
+    // step_gen() stops at the limit of the reference, which depends on the text
+    int32_t max_frames() const override { return 0; }
+    bool supports_cfg() const override { return true; }
+    bool supports_flow_steps() const override { return true; }
+
+    void reset() override {
+        seq_id = 0;
+        pos = 0;
+        rows.clear();
+        voice.clear();
+        prompt_pos = 0;
+        n_frames = 0;
+        max_len = 0;
+        h_state_buf.clear();
+        embd_in.clear();
+        latents.clear();
+        n_decoded = 0;
+        gen_state.reset();
+        audio_pcm.clear();
+        out_buf.clear();
+        pcm_sent = 0;
+        wav_header_sent = false;
+    }
+
+    int32_t set_input(const mtmd_helper_gen_audio_inp * inp) override {
+        reset();
+        seq_id     = inp->seq_id;
+        out_type   = inp->out_type;
+        stream     = inp->stream;
+        temp       = inp->temp;
+        cfg_scale  = inp->cfg_scale;
+        flow_steps = inp->flow_steps;
+        if (flow_steps != 0 && (flow_steps < 2 || flow_steps > 32)) {
+            LOG_ERR("mtmd_helper_gen_audio: voxcpm2 needs flow_steps in [2, 32] (0 = model default)\n");
+            return 2;
+        }
+        if (inp->speaker_ref_text) {
+            LOG_WRN("mtmd_helper_gen_audio: voxcpm2 clones the voice without its transcript, the speaker text is ignored\n");
+        }
+        if (!ensure_cache()) {
+            return 1;
+        }
+
+        // re.sub(r"\s+", " ", text) as in VoxCPM._generate() of core.py, a leading or trailing space is kept
+        std::string text;
+        bool space = false;
+        for (char c : std::string(inp->prompt, inp->prompt_len)) {
+            const bool is_space = std::isspace((unsigned char) c);
+            if (!is_space || !space) {
+                text += is_space ? ' ' : c;
+            }
+            space = is_space;
+        }
+        std::vector<llama_token> ids = tokenize(text);
+        if (ids.empty()) {
+            LOG_ERR("mtmd_helper_gen_audio: empty prompt\n");
+            return 1;
+        }
+        // retry_badcase_ratio_threshold * text length + 10, capped by max_len of the reference
+        max_len = std::min((int) ids.size() * 6 + 10, 4096);
+
+        // [<|audio_prompt_start|>, voice rows, <|audio_prompt_end|>,] text, <|audio_start|>
+        if (inp->speaker_ref) {
+            if (!encode_speaker(inp->speaker_ref, voice)) {
+                return 1;
+            }
+            rows.push_back({ tok_ref_start, -1 });
+            for (int i = 0; i < (int) (voice.size() / n_embd); i++) {
+                rows.push_back({ LLAMA_TOKEN_NULL, i });
+            }
+            rows.push_back({ tok_ref_end, -1 });
+        }
+        for (llama_token t : ids) {
+            rows.push_back({ t, -1 });
+        }
+        rows.push_back({ tok_audio_start, -1 });
+
+        // the residual LM reads the prompt rows, then one row per frame after the first
+        max_len = std::min(max_len, n_ctx_res + 1 - (int) rows.size());
+        if (max_len <= 0) {
+            LOG_ERR("mtmd_helper_gen_audio: the prompt is too long for the residual LM (%d rows)\n", n_ctx_res);
+            return 1;
+        }
+        if (rows.size() + (size_t) max_len >= llama_n_ctx_seq(lctx)) {
+            LOG_WRN("mtmd_helper_gen_audio: the context may be too small for the prompt and %d frames\n", max_len);
+        }
+        if (!llama_memory_seq_rm(llama_get_memory(lctx), seq_id, 0, -1)) {
+            LOG_ERR("mtmd_helper_gen_audio: cannot reset the sequence\n");
+            return 1;
+        }
+        return init_gen_state(inp->seed) ? 0 : 1;
+    }
+
+    // the residual LM reads every prompt row but the last, which makes the first frame
+    int32_t step_prompt(int32_t n_batch) override {
+        GGML_ASSERT(n_batch > 0);
+        const int n_prompt = (int) rows.size();
+        if (prompt_pos >= n_prompt) {
+            return 0;
+        }
+        // a batch is either text tokens or voice rows; small batches, every row outputs its hidden state
+        const bool is_voice = rows[prompt_pos].voice >= 0;
+        int n = 0;
+        while (n < std::min(n_batch, 64) && prompt_pos + n < n_prompt && (rows[prompt_pos + n].voice >= 0) == is_voice) {
+            n++;
+        }
+
+        if (is_voice) {
+            decode_embd_batch batch(voice.data() + (size_t) rows[prompt_pos].voice * n_embd, n, 1, n_embd);
+            batch.set_position_normal(pos, seq_id);
+            std::fill(batch.logits.begin(), batch.logits.end(), 1);
+            if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.render(lctx, 0, n)) != 0) {
+                LOG_ERR("mtmd_helper_gen_audio: prompt decode failed\n");
+                return -1;
+            }
+        } else {
+            std::vector<llama_token> toks(n);
+            for (int i = 0; i < n; i++) {
+                toks[i] = rows[prompt_pos + i].tok;
+            }
+            llama_batch_ext_ptr batch(llama_batch_ext_init(lctx));
+            if (!batch_set_tokens(batch.get(), toks.data(), n, pos, seq_id)) {
+                return -1;
+            }
+            for (int i = 0; i < n; i++) {
+                llama_batch_ext_set_output_logits(batch.get(), i, true);
+            }
+            if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
+                LOG_ERR("mtmd_helper_gen_audio: prompt decode failed\n");
+                return -1;
+            }
+        }
+
+        // the rows go to the residual LM together, the first frame comes from the last prompt row
+        const bool last = prompt_pos + n == n_prompt;
+        const int  n_res = last ? n - 1 : n;
+        std::vector<float> h_rows((size_t) n_res * n_embd);
+        for (int i = 0; i < n_res; i++) {
+            const float * h = llama_get_embeddings_ith(lctx, i);
+            std::copy(h, h + n_embd, h_rows.begin() + (size_t) i * n_embd);
+        }
+        if (last) {
+            const float * h = llama_get_embeddings_ith(lctx, n - 1);
+            h_state_buf.assign(h, h + n_embd);
+        }
+        const float * x = is_voice ? voice.data() + (size_t) rows[prompt_pos].voice * n_embd : nullptr;
+        if (n_res > 0 && !run_row(h_rows.data(), x, -1, nullptr, n_res)) {
+            return -1;
+        }
+        pos        += n;
+        prompt_pos += n;
+        return n_prompt - prompt_pos;
+    }
+
+    // the hidden state of the caller is not read, the server may decode other sequences in between
+    int32_t step_gen(llama_token sampled, const float * h_state_in, const float ** h_state_out, bool * out_stop) override {
+        GGML_UNUSED(sampled);
+        GGML_UNUSED(h_state_in);
+        *h_state_out = nullptr;
+        *out_stop    = false;
+        if (n_frames >= max_len || (uint32_t) pos >= llama_n_ctx_seq(lctx)) {
+            *out_stop = true;
+            return 0;
+        }
+
+        mtmd_gen_out out{};
+        if (!run_row(h_state_buf.data(), embd_in.empty() ? nullptr : embd_in.data(), 0, &out)) {
+            return 1;
+        }
+        latents.insert(latents.end(), out.feats, out.feats + out.n_feats);
+        n_frames++;
+        *h_state_out = h_state_buf.data();
+
+        // the frame of the stopping step is kept, see the loop of VoxCPM2Model._inference()
+        if ((out.is_eos && n_frames > min_len + 1) || n_frames >= max_len) {
+            *out_stop = true;
+            return 0;
+        }
+
+        embd_in.assign(out.embd, out.embd + n_embd);
+        decode_embd_batch batch(embd_in.data(), 1, 1, n_embd);
+        batch.set_position_normal(pos, seq_id);
+        batch.logits[0] = 1;
+        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.render(lctx, 0, 1)) != 0) {
+            LOG_ERR("mtmd_helper_gen_audio: decode failed\n");
+            return 1;
+        }
+        pos++;
+        const float * h = llama_get_embeddings_ith(lctx, -1);
+        h_state_buf.assign(h, h + n_embd);
+
+        if (stream && latents.size() / n_frame - n_decoded >= stream_frames) {
+            return decode_wav() ? 0 : 1;
+        }
+        return 0;
+    }
+
+    int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples) override {
+        *out_sample_rate = info.sample_rate;
+
+        if (!stream) {
+            if (flush() != 0) {
+                return 1;
+            }
+            if (out_n_samples) {
+                *out_n_samples = (int64_t) audio_pcm.size();
+            }
+            if (out_type == MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM) {
+                *out_data     = (const char *) audio_pcm.data();
+                *out_data_len = audio_pcm.size() * sizeof(float);
+                return 0;
+            }
+            out_buf.clear();
+            if (!write_wav16(out_buf, audio_pcm, info.sample_rate)) {
+                LOG_ERR("mtmd_helper_gen_audio: output too large for WAV\n");
+                return 1;
+            }
+            *out_data     = out_buf.data();
+            *out_data_len = out_buf.size();
+            return 0;
+        }
+
+        // streaming: only the audio since the previous call
+        const size_t n_new = audio_pcm.size() - pcm_sent;
+        if (out_n_samples) {
+            *out_n_samples = (int64_t) n_new;
+        }
+        if (out_type == MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM) {
+            *out_data     = (const char *) (audio_pcm.data() + pcm_sent);
+            *out_data_len = n_new * sizeof(float);
+            pcm_sent = audio_pcm.size();
+            return 0;
+        }
+        out_buf.clear();
+        if (!wav_header_sent) {
+            write_wav16_header(out_buf, UINT32_MAX, info.sample_rate);
+            wav_header_sent = true;
+        }
+        append_wav16_pcm(out_buf, audio_pcm.data() + pcm_sent, n_new);
+        pcm_sent = audio_pcm.size();
+        *out_data     = out_buf.data();
+        *out_data_len = out_buf.size();
+        return 0;
+    }
+
+    int32_t flush() override {
+        return decode_wav() ? 0 : 1;
+    }
+
+private:
+    struct prompt_row {
+        llama_token tok;   // text row
+        int         voice; // row of the voice reference, -1 for a text row
+    };
+
+    bool ensure_cache() {
+        if (cache_ready) {
+            return true;
+        }
+        tok_audio_start = find_special_token(vocab, "<|audio_start|>");
+        tok_ref_start   = find_special_token(vocab, "<|audio_prompt_start|>");
+        tok_ref_end     = find_special_token(vocab, "<|audio_prompt_end|>");
+        if (tok_audio_start == LLAMA_TOKEN_NULL || tok_ref_start == LLAMA_TOKEN_NULL || tok_ref_end == LLAMA_TOKEN_NULL) {
+            LOG_ERR("mtmd_helper_gen_audio: missing voxcpm2 audio tokens in vocab\n");
+            return false;
+        }
+
+        // multi-character CJK tokens are split into single characters, see mask_multichar_chinese_tokens()
+        // a token is split when its text without the SPM space (U+2581) is a CJK token of the vocab, each char maps to its plain token
+        const std::string spm_space = "\xe2\x96\x81";
+        const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+        std::unordered_map<std::string, llama_token> pieces;
+        for (llama_token id = 0; id < n_vocab; id++) {
+            pieces.emplace(llama_vocab_get_text(vocab, id), id);
+        }
+        for (llama_token id = 0; id < n_vocab; id++) {
+            std::string clean = llama_vocab_get_text(vocab, id);
+            for (size_t i; (i = clean.find(spm_space)) != std::string::npos;) {
+                clean.erase(i, spm_space.size());
+            }
+            if (clean.size() < 6 || !is_cjk(clean) || pieces.find(clean) == pieces.end()) {
+                continue;
+            }
+            std::vector<llama_token> ids;
+            for (size_t i = 0; i < clean.size(); i += 3) {
+                auto it = pieces.find(clean.substr(i, 3));
+                if (it == pieces.end()) {
+                    break;
+                }
+                ids.push_back(it->second);
+            }
+            if (ids.size() * 3 == clean.size()) {
+                split_cjk.emplace(id, std::move(ids));
+            }
+        }
+        cache_ready = true;
+        return true;
+    }
+
+    // chars of U+4E00..U+9FFF only, each is 3 bytes in UTF-8
+    static bool is_cjk(const std::string & s) {
+        if (s.empty() || s.size() % 3 != 0) {
+            return false;
+        }
+        for (size_t i = 0; i < s.size(); i += 3) {
+            const auto b0 = (unsigned char) s[i];
+            const auto b1 = (unsigned char) s[i + 1];
+            const auto b2 = (unsigned char) s[i + 2];
+            if ((b0 & 0xF0) != 0xE0 || (b1 & 0xC0) != 0x80 || (b2 & 0xC0) != 0x80) {
+                return false;
+            }
+            const uint32_t cp = ((b0 & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F);
+            if (cp < 0x4E00 || cp > 0x9FFF) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // no BOS, special tokens in the text are plain text, like tokenize() of the reference
+    std::vector<llama_token> tokenize(const std::string & text) const {
+        std::vector<llama_token> ids(text.size() + 16);
+        const int32_t n = llama_tokenize(vocab, text.c_str(), (int32_t) text.size(), ids.data(), (int32_t) ids.size(), false, false);
+        if (n < 0) {
+            LOG_ERR("mtmd_helper_gen_audio: tokenization failed\n");
+            return {};
+        }
+        std::vector<llama_token> out;
+        for (int32_t i = 0; i < n; i++) {
+            auto it = split_cjk.find(ids[i]);
+            if (it != split_cjk.end()) {
+                out.insert(out.end(), it->second.begin(), it->second.end());
+            } else {
+                out.push_back(ids[i]);
+            }
+        }
+        return out;
+    }
+
+    // backbone rows through mtmd: code0 < 0 for n_rows prompt rows, else one row and the next frame goes to out
+    bool run_row(const float * h, const float * x, int32_t code0, mtmd_gen_out * out = nullptr, int n_rows = 1) {
+        mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
+        inp.type    = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
+        inp.code0   = code0;
+        inp.embd    = const_cast<float *>(h);
+        inp.feats   = x;
+        inp.n_feats = x ? (size_t) n_rows * n_embd : 0;
+        inp.n_codes = (size_t) n_rows;
+        if (temp >= 0.0f) {
+            inp.temp = temp;
+        }
+        if (flow_steps > 0) {
+            inp.n_steps = flow_steps;
+        }
+        if (cfg_scale > 0.0f) {
+            inp.cfg_scale = cfg_scale;
+        }
+        mtmd_gen_out tmp{};
+        if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, out ? out : &tmp) != 0) {
+            LOG_ERR("mtmd_helper_gen_audio: voxcpm2 gen_code failed\n");
+            return false;
+        }
+        return true;
+    }
+
+    // the AudioVAE decoder is causal and keeps its state, so the latents can be decoded in pieces
+    bool decode_wav() {
+        const size_t n_total = latents.size() / n_frame;
+        while (n_decoded < n_total) {
+            const size_t n = std::min(n_total - n_decoded, (size_t) 16);
+            mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
+            inp.type    = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
+            inp.feats   = latents.data() + n_decoded * n_frame;
+            inp.n_feats = n * n_frame;
+            mtmd_gen_out out{};
+            if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
+                LOG_ERR("mtmd_helper_gen_audio: AudioVAE decode failed\n");
+                return false;
+            }
+            audio_pcm.insert(audio_pcm.end(), out.audio, out.audio + out.n_samples);
+            n_decoded += n;
+        }
+        return true;
+    }
+
+    static constexpr int    min_len       = 2;      // min_len of the reference
+    static constexpr size_t n_frame       = 64 * 4; // latents of one frame, n_latent * n_patch
+    static constexpr size_t stream_frames = 2;      // frames per decoder call when streaming (0.32 s)
+    static constexpr int    n_ctx_res     = 8192;   // rows of the residual LM, see mtmd_graph_voxcpm2_gen::n_ctx_res
+
+    llama_token tok_audio_start = LLAMA_TOKEN_NULL;
+    llama_token tok_ref_start   = LLAMA_TOKEN_NULL;
+    llama_token tok_ref_end     = LLAMA_TOKEN_NULL;
+    std::unordered_map<llama_token, std::vector<llama_token>> split_cjk;
+    bool cache_ready = false;
+
+    float   temp       = -1.0f;
+    float   cfg_scale  = 0.0f;
+    int32_t flow_steps = 0;
+
+    llama_seq_id seq_id = 0;
+    llama_pos    pos    = 0;
+    std::vector<prompt_row> rows;
+    std::vector<float>      voice;      // backbone rows of the voice reference
+    int prompt_pos = 0;
+    int n_frames   = 0;
+    int max_len    = 0;
+
+    std::vector<float> h_state_buf; // hidden state of the last backbone row
+    std::vector<float> embd_in;     // input row of the last backbone row, empty for the text row
+    std::vector<float> latents;     // frame-major
+    size_t n_decoded = 0;           // frames already through the decoder
+
+    std::vector<float> audio_pcm;
+    mtmd_helper_gen_audio_outtype out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
+    std::vector<char> out_buf;
+    bool   stream          = false;
+    size_t pcm_sent        = 0; // samples already returned by get_output()
+    bool   wav_header_sent = false;
+};
+
 static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lctx, mtmd_context * mctx) {
     switch (mtmd_gen_audio_get_info(mctx).type) {
         case MTMD_GEN_AUDIO_TYPE_QWEN3TTS:
@@ -4940,6 +5367,8 @@ static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lc
             return std::unique_ptr<mtmd_gen_audio_pipeline>(new music3_gen_audio_pipeline(lctx, mctx));
         case MTMD_GEN_AUDIO_TYPE_FISH_S2:
             return std::unique_ptr<mtmd_gen_audio_pipeline>(new fish_s2_gen_audio_pipeline(lctx, mctx));
+        case MTMD_GEN_AUDIO_TYPE_VOXCPM2:
+            return std::unique_ptr<mtmd_gen_audio_pipeline>(new voxcpm2_gen_audio_pipeline(lctx, mctx));
         default:
             return nullptr;
     }

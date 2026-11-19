@@ -394,6 +394,7 @@ static std::vector<c2w_state_slot> list_gen_state_slots(const mtmd_hparams & hpa
         case PROJECTOR_TYPE_POCKETTTS_GEN: return list_pockettts_state_slots(hparams, model);
         case PROJECTOR_TYPE_LFM3A_GEN:     return list_lfm3a_gen_state_slots(hparams, model);
         case PROJECTOR_TYPE_ZONOS3_GEN:    return list_zonos3_gen_state_slots(hparams, model);
+        case PROJECTOR_TYPE_VOXCPM2_GEN:   return list_voxcpm2_state_slots(hparams, model);
         default:                           return {};
     }
 }
@@ -1600,6 +1601,44 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
             {
                 set_input_f32("inp_feats", *params->feats);
             } break;
+        case PROJECTOR_TYPE_VOXCPM2_GEN:
+            {
+                auto set_positions = [&](const char * name) {
+                    std::vector<int32_t> pos(ggml_nelements(get_inp_tensor(name)));
+                    for (size_t i = 0; i < pos.size(); i++) {
+                        pos[i] = (int32_t) i;
+                    }
+                    set_input_i32(name, pos);
+                };
+                if (params->gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_CODE) {
+                    // feats: the patch of the previous frame
+                    set_input_f32("inp_cond", *params->feats);
+                    // flow matching starts from gaussian noise, std = temp
+                    ggml_tensor * t = get_inp_tensor("inp_noise");
+                    std::vector<float> noise(ggml_nelements(t), 0.0f);
+                    if (params->temp > 0.0f) {
+                        std::normal_distribution<float> dist(0.0f, params->temp);
+                        for (auto & v : noise) {
+                            v = dist(params->gen_state->rng);
+                        }
+                    }
+                    set_input_f32("inp_noise", noise);
+                    const int n_steps = (int) (ggml_nelements(get_inp_tensor("inp_temb")) / hparams.n_embd);
+                    set_input_f32("inp_temb", mtmd_graph_voxcpm2_gen::time_embd(n_steps, hparams.n_embd));
+                    set_positions("inp_pos_dit");
+                    set_positions("inp_pos_enc");
+                } else if (params->gen_process == MTMD_SUBCTX_GEN_PROCESS_RES_INP) {
+                    if (params->feats) {
+                        set_input_f32("inp_feats", *params->feats);
+                    }
+                } else if (params->gen_process == MTMD_SUBCTX_GEN_PROCESS_LATENT_IN) {
+                    set_input_f32("inp_feats", *params->feats);
+                    set_positions("inp_pos_enc");
+                } else if (params->gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_WAV) {
+                    set_input_f32("inp_feats", *params->feats);
+                    set_gen_state_in();
+                }
+            } break;
         case PROJECTOR_TYPE_KOKORO:
             {
                 const auto * io = params->kokoro;
@@ -1830,6 +1869,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
         case PROJECTOR_TYPE_ZONOS3_SPKENC:
         case PROJECTOR_TYPE_FISH_S2_SPKENC:
+        case PROJECTOR_TYPE_VOXCPM2_SPKENC:
             {
                 // do nothing
             } break;

@@ -17,6 +17,7 @@ Supported models:
 - [MiniMax Music 3](#minimax-music-3) (songs)
 - [Kokoro](#kokoro)
 - [tiny-voca](#tiny-voca)
+- [VoxCPM2](#voxcpm2)
 
 The sections below list the params supported by each model, with `llama-tts` examples. In `llama-server`, the same options are set with `--tts-lang` and `--tts-voice`, or per request (see the [`/tts` endpoint](../../tools/server/README.md#post-tts-generate-speech-audio-from-text)).
 
@@ -466,4 +467,46 @@ pip install git+https://github.com/n4ze3m/dizione
 ```sh
 python convert_hf_to_gguf.py path/to/tiny-voca --outfile tiny-voca.gguf
 python convert_hf_to_gguf.py path/to/tiny-voca --mmproj --outfile mmproj-tiny-voca.gguf
+```
+
+## VoxCPM2
+
+[VoxCPM2](https://huggingface.co/openbmb/VoxCPM2): a MiniCPM4 backbone (2B) makes one hidden state per frame, without an audio token. The mmproj turns it into a patch of 4 continuous latents: FSQ, an 8-layer residual LM (run with libllama, one context per sequence), then the LocDiT flow matching. The causal AudioVAE decodes the latents to 48 kHz audio.
+
+Available params:
+- The language is the one of the text, `--tts-lang` is not used. A voice description in parentheses at the start of the text designs the voice, for example `(A young woman, gentle and warm)Hello!`
+- Voice cloning: `--tts-speaker-file` with the reference clip (resampled to 16 kHz, truncated to the first 30 s). `--tts-speaker-text` is not used, the transcript of the clip is not needed
+- `--temp` scales the noise of the flow matching (default 1.0), `--top-k` and `--top-p` are not used
+- The flow matching uses 10 Euler steps and classifier-free guidance with scale 2.0, like the reference. `llama-server` takes `flow_steps` (2 to 32) and `cfg_scale` to change them
+- Each frame is 4 latents, 7680 samples (160 ms). Generation stops on the stop head of the model, at least 4 frames, at most 6 frames per text token + 10 (the limit of the reference)
+- Not supported yet: the continuation mode of the reference (prompt audio with its transcript)
+- Not supported yet: the bad case retry of the reference (`retry_badcase`, a new seed when the audio reaches 6 frames per text token). Short prompts may then run long and repeat some words, try another seed
+
+Example usage:
+
+```sh
+llama-tts -m VoxCPM2.gguf \
+    -mm mmproj-VoxCPM2.gguf \
+    -p "(A calm male narrator)The quick brown fox jumps over the lazy dog." \
+    --output out.wav
+```
+
+Voice cloning:
+
+```sh
+llama-tts -m VoxCPM2.gguf \
+    -mm mmproj-VoxCPM2.gguf \
+    --tts-speaker-file reference.wav \
+    -p "Hello, this is a cloned voice." \
+    --output out.wav
+```
+
+**Note for GGUF conversion:**
+
+The mmproj holds LocEnc, LocDiT and the residual LM layers (loaded with libllama as a Granite text model with RoPE off) in the `--outtype` type, and the AudioVAE (`audiovae.pth`, encoder for voice cloning, decoder for the audio) always in F32:
+
+```sh
+hf download openbmb/VoxCPM2 --local-dir VoxCPM2
+python convert_hf_to_gguf.py VoxCPM2 --outfile VoxCPM2.gguf
+python convert_hf_to_gguf.py VoxCPM2 --mmproj --outfile mmproj-VoxCPM2.gguf
 ```
