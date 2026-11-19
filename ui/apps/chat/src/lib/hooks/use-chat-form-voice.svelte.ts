@@ -17,6 +17,7 @@ import {
 	VOICE_SEPARATE_MODEL_HINT_LOCALSTORAGE_KEY
 } from '#lib/constants/index.ts';
 import { MimeTypeAudio, VoiceInputMode, VoiceMode } from '#lib/enums/index.ts';
+import { VoiceService } from '#lib/services/voice.service.ts';
 import {
 	modelsStore,
 	serverStore,
@@ -24,18 +25,13 @@ import {
 	voiceTranscriptsStore
 } from '#lib/stores/index.ts';
 import type { ChatUploadedFile } from '#lib/types/index.ts';
-import { getAuthHeaders } from '#lib/utils/api-headers.ts';
-import { withBase } from '#lib/utils/base-path.ts';
 import { DictationSpan } from '#lib/utils/dictation-span.ts';
 import { uuid } from '#lib/utils/index.ts';
 import { resolveVoiceMode, voiceModeLabel } from '#lib/utils/voice-mode.ts';
 import {
 	describeMicrophoneError,
-	resolveMicrophone,
-	VOICE_MICROPHONE_AUTO,
 	VoiceCaptureError,
 	type VoiceRecorderStatus,
-	type VoiceServerContext,
 	type VoiceSessionOptions,
 	type VoiceSessionResult
 } from '#lib/voice/index.ts';
@@ -97,21 +93,6 @@ function readAsDataUrl(blob: Blob): Promise<string> {
 		reader.onerror = () => reject(reader.error);
 		reader.readAsDataURL(blob);
 	});
-}
-
-/** The microphone's server: its routes, its auth, and whether a websocket reaches it. */
-function serverContext(): { context: VoiceServerContext; realtime: boolean } {
-	const headers = getAuthHeaders();
-	// a browser websocket can not send the API key
-	const hasAuth = Object.keys(headers).some((key) => key.toLowerCase() === 'authorization');
-
-	return {
-		context: {
-			getHeaders: () => getAuthHeaders(),
-			resolveUrl: (path) => withBase(path.replace(/^\./, ''))
-		},
-		realtime: !hasAuth
-	};
 }
 
 export function useChatFormVoice(options: UseChatFormVoiceOptions) {
@@ -222,15 +203,6 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 
 		const mode = resolution.mode;
 		const model = resolution.transcriptionModel;
-		const { context, realtime } = serverContext();
-		const language = String(config[SETTINGS_KEYS.VOICE_TRANSCRIPTION_LANGUAGE] ?? '').trim();
-		const microphone = String(config[SETTINGS_KEYS.VOICE_MICROPHONE] ?? VOICE_MICROPHONE_AUTO);
-		// each one is laid over the raw-signal constraints only when it is switched on
-		const processing: MediaTrackConstraints = {
-			...(config[SETTINGS_KEYS.VOICE_NOISE_SUPPRESSION] === true ? { noiseSuppression: true } : {}),
-			...(config[SETTINGS_KEYS.VOICE_ECHO_CANCELLATION] === true ? { echoCancellation: true } : {}),
-			...(config[SETTINGS_KEYS.VOICE_AUTO_GAIN] === true ? { autoGainControl: true } : {})
-		};
 		const transcribe =
 			mode === VoiceMode.DICTATION || config[SETTINGS_KEYS.VOICE_TRANSCRIBE_MESSAGES] !== false;
 
@@ -251,24 +223,12 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		const run = ++generation;
 
 		try {
-			const deviceId = await resolveMicrophone(microphone);
+			const wiring = await VoiceService.sessionOptions(config, { isRouter, model, transcribe });
 
 			await recorder.start({
-				capture: {
-					boost: config[SETTINGS_KEYS.VOICE_BOOST] !== false,
-					...(deviceId ? { deviceId } : {}),
-					...(Object.keys(processing).length > 0 ? { constraints: processing } : {})
-				},
+				...wiring,
 				// a voice message's text reaches the message only once the user made it editable
-				onText: (text) => writeDictation(text),
-				realtime,
-				transcribe: transcribe
-					? {
-							context,
-							language: language || undefined,
-							model: isRouter && model ? model : undefined
-						}
-					: undefined
+				onText: (text) => writeDictation(text)
 			});
 		} catch (error) {
 			if (run !== generation) return;
