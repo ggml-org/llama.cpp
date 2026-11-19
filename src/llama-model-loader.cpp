@@ -1321,13 +1321,6 @@ struct ggml_tensor * llama_model_loader::create_tensor(
             }
         }
 
-        if (is_lazy) {
-            if (is_matmul_weight) {
-                matmul_weight_bufts[tn.str()] = lazy_read::buft();
-            }
-            return lazy_read::buft();
-        }
-
         const ggml_tensor * scale_meta = nullptr;
         ggml_tensor user_scale_meta = {};
         if (!(flags & TENSOR_NO_SCALE) && (op == GGML_OP_MUL_MAT || op == GGML_OP_MUL_MAT_ID)) {
@@ -1341,6 +1334,17 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                     scale_meta = &user_scale_meta;
                 }
             }
+            if (!scale_meta && ggml_needs_scale(t_meta->type)) {
+                throw std::runtime_error(format("tensor '%s' of type %s requires a weight scale, but '%s' is missing; re-convert the model",
+                    tn.str().c_str(), ggml_type_name(t_meta->type), scale_name.c_str()));
+            }
+        }
+
+        if (is_lazy) {
+            if (is_matmul_weight) {
+                matmul_weight_bufts[tn.str()] = lazy_read::buft();
+            }
+            return lazy_read::buft();
         }
 
         // select the buffer type for this tensor
