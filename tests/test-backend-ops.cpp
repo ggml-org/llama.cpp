@@ -10624,8 +10624,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::vector<std::unique_ptr<test_case>> test_cases;
     std::default_random_engine rng(0);
 
-    test_cases.emplace_back(new test_cpy(GGML_TYPE_F16, GGML_TYPE_F32, {1024, 65537, 1, 1}));
-
     // unary ops
     // TODO: add GGML_UNARY_OP_SOFTPLUS test that is sensitive to using `log1p(exp(x))` vs `log(exp(x) + 1)`
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16}) {
@@ -11404,7 +11402,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F16, GGML_TYPE_F16, {128, 2, 3, 1}, {128, 2, 3, 1}, {0, 0, 0, 0}, {0, 0, 0, 0}, false, {128, 4, 3, 1})); // strided dst
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {64, 16, 1, 1}, {1, 64, 16, 1}, {1, 2, 0, 3}, {0, 0, 0, 0}, false, {32, 64, 16, 1})); // permuted src, strided dst
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F16, GGML_TYPE_F16, {64, 16, 1, 1}, {1, 64, 16, 1}, {1, 2, 0, 3}, {0, 0, 0, 0}, false, {32, 64, 16, 1})); // permuted src, strided dst
-
+    test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {2, 2, 524281, 1}, {-1,-1,-1,-1}, {1, 0, 2, 3}));
     // CPY - different src/dst shapes (reshaping via CPY)
     // Use permutations of {3, 5, 7, 32}. Total elements: 3*5*7*32 = 3360.
     // Each src permutation is tested against canonical sorted and reverse dst (skip self).
