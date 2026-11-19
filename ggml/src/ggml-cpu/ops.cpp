@@ -2238,6 +2238,19 @@ void ggml_compute_forward_fill(const ggml_compute_params * params, ggml_tensor *
     }
 }
 
+// ggml_compute_forward_sleep
+
+void ggml_compute_forward_sleep(const ggml_compute_params * params, ggml_tensor * dst) {
+    if (params->ith != 0) {
+        return;
+    }
+
+    // same clock as ggml_time_us() callers; on macOS steady_clock is CLOCK_MONOTONIC_RAW, which can run faster
+    const int64_t t_end = ggml_time_us() + ggml_get_op_params_i32(dst, 0);
+
+    while (ggml_time_us() < t_end) {}
+}
+
 // ggml_compute_tri
 
 template <typename T>
