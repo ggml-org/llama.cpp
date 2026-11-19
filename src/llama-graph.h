@@ -762,7 +762,7 @@ public:
 // hybrid iswa memory with a per-head attention bias that depends on the distance from the query to the cell (Inkling)
 // the KQ masks are always dense (rows == nullptr) and are filled from the same cells as the distances, so that the bias
 // gathered by distance lines up with the mask
-class llm_graph_input_mem_hybrid_iswa_rel : public llm_graph_input_mem_hybrid_iswa {
+class llm_graph_input_mem_hybrid_iswa_rel : public llm_graph_input_i {
 public:
     llm_graph_input_mem_hybrid_iswa_rel(
             const llama_cparams & cparams,
@@ -771,14 +771,23 @@ public:
             const llama_memory_hybrid_iswa_context *     mctx,
             uint32_t extent,
             uint32_t extent_swa) :
-        llm_graph_input_mem_hybrid_iswa(cparams, std::move(inp_attn), std::move(inp_rs), mctx),
+        inp_attn(std::move(inp_attn)),
+        inp_rs(std::move(inp_rs)),
         extent(extent),
-        extent_swa(extent_swa) { }
-    ~llm_graph_input_mem_hybrid_iswa_rel() = default;
+        extent_swa(extent_swa),
+        cparams(cparams),
+        mctx(mctx) { }
+    virtual ~llm_graph_input_mem_hybrid_iswa_rel() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
 
     bool can_reuse(const llm_graph_params & params) override;
+
+    std::unique_ptr<llm_graph_input_attn_kv_iswa> inp_attn;
+    std::unique_ptr<llm_graph_input_rs>          inp_rs;
+
+    llm_graph_input_attn_kv_iswa * get_attn() const { return inp_attn.get(); }
+    llm_graph_input_rs           * get_recr() const { return inp_rs.get(); }
 
     // distance from the token to the cell, extent for the empty, future and more distant cells
     ggml_tensor * self_rel_pos     = nullptr; // I32 [n_kv,     n_batch]
@@ -786,6 +795,10 @@ public:
 
     const uint32_t extent;
     const uint32_t extent_swa;
+
+    const llama_cparams cparams;
+
+    const llama_memory_hybrid_iswa_context * mctx;
 };
 
 class llm_graph_input_sampling : public llm_graph_input_i {
