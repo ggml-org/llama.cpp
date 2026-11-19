@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <cfloat>
-#include <chrono>
 #include <cmath>
 
 // ggml_compute_forward_dup
@@ -2246,9 +2245,10 @@ void ggml_compute_forward_sleep(const ggml_compute_params * params, ggml_tensor 
         return;
     }
 
-    const auto t_end = std::chrono::steady_clock::now() + std::chrono::microseconds(ggml_get_op_params_i32(dst, 0));
+    // same clock as ggml_time_us() callers; on macOS steady_clock is CLOCK_MONOTONIC_RAW, which can run faster
+    const int64_t t_end = ggml_time_us() + ggml_get_op_params_i32(dst, 0);
 
-    while (std::chrono::steady_clock::now() < t_end) {}
+    while (ggml_time_us() < t_end) {}
 }
 
 // ggml_compute_tri
