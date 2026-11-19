@@ -115,8 +115,13 @@ float op_expm1(float x) {
     return exp(x) - 1.0f;
 }
 
+float op_log1p(float x) {
+    float u = 1.0f + x;
+    return (u == 1.0f) ? x : log(u) * x / (u - 1.0f);
+}
+
 float op_softplus(float x) {
-    return (x > 20.0f) ? x : log(1.0f + exp(x));
+    return (x > 20.0f) ? x : op_log1p(exp(x));
 }
 
 float op_gelu_erf(float a) {
