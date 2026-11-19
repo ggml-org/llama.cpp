@@ -71,6 +71,24 @@ describe('the microphone', () => {
 			.toBeEnabled();
 	});
 
+	it('stands before the send button on an empty message, a quieter button than it', async () => {
+		seed(true);
+
+		const { screen } = await renderForm();
+		// the send button keeps its place, waiting for a message
+		const send = screen.getByRole('button', { exact: true, name: 'Send' });
+
+		await expect.element(send).toBeDisabled();
+
+		const mic = screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last();
+
+		await expect.element(mic).toBeEnabled();
+		expect(mic.element().getAttribute('data-variant')).toBe('tertiary');
+		expect(
+			mic.element().compareDocumentPosition(send.element()) & Node.DOCUMENT_POSITION_FOLLOWING
+		).toBeTruthy();
+	});
+
 	it('dictates when the user always dictates', async () => {
 		seed(true, VoiceInputMode.DICTATION);
 

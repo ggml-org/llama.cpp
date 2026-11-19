@@ -96,15 +96,17 @@
 	let hasAudioAttachments = $derived(
 		uploadedFiles.some((file) => getFileTypeCategory(file.type) === FileTypeCategory.AUDIO)
 	);
-	let shouldShowRecordButton = $derived(
-		!!voice?.show && !canSend && !hasAudioAttachments && currentConfig.autoMicOnEmpty
-	);
-	// while a reply streams or the message has text, the microphone stays at hand beside the
-	// stop or send button, so more can be dictated without clearing the message first
+	// the microphone sits beside the send or stop button: on an empty message when the setting
+	// asks for it (disabled, saying why, when no model can take a recording), and while a reply
+	// streams or the message has text, so more can be dictated without clearing it first
 	let showStop = $derived(isLoading && !canSend);
-	let shouldShowRecordBeside = $derived(
-		!!voice?.show && !voice.unavailableReason && !hasAudioAttachments && (showStop || canSend)
-	);
+	let showRecord = $derived.by(() => {
+		if (!voice?.show || hasAudioAttachments) return false;
+
+		if (showStop || canSend) return !voice.unavailableReason;
+
+		return currentConfig.autoMicOnEmpty;
+	});
 
 	let selectorModelRef: ModelsSelector | undefined = $state(undefined);
 
@@ -210,7 +212,7 @@
 		</Button>
 	{/if}
 
-	{#if shouldShowRecordBeside && !showStop}
+	{#if showRecord && !showStop}
 		<ChatFormActionRecord
 			action={voice?.action}
 			{disabled}
@@ -218,6 +220,7 @@
 			{micWarning}
 			{onMicClick}
 			secondary
+			unavailableReason={voice?.unavailableReason}
 		/>
 	{/if}
 
@@ -234,16 +237,6 @@
 				class="size-icon-md fill-muted-foreground stroke-muted-foreground group-hover:fill-destructive group-hover:stroke-destructive hover:fill-destructive hover:stroke-destructive"
 			/>
 		</Button>
-	{:else if shouldShowRecordButton}
-		<ChatFormActionRecord
-			action={voice?.action}
-			{disabled}
-			hint={voice?.hint}
-			{isLoading}
-			{micWarning}
-			{onMicClick}
-			unavailableReason={voice?.unavailableReason}
-		/>
 	{:else}
 		<ChatFormActionSubmit
 			canSend={canSend && (showModelSelector ? hasModelSelected && isSelectedModelInCache : true)}
@@ -255,7 +248,7 @@
 	{/if}
 
 	<!-- while a reply streams, the microphone is the last button, filled like stop -->
-	{#if shouldShowRecordBeside && showStop}
+	{#if showRecord && showStop}
 		<ChatFormActionRecord
 			action={voice?.action}
 			{disabled}
