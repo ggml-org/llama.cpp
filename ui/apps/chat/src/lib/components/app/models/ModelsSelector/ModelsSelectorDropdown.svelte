@@ -188,7 +188,7 @@
 	<!-- the details drawer opens over the menu: the menu stays open under its backdrop -->
 	<DropdownMenu.Content
 		align="end"
-		class="w-full md:min-w-80 md:w-md max-w-[calc(100vw-2rem)] p-0! max-h-[min(40rem,calc(var(--bits-dropdown-menu-content-available-height)-1rem))]"
+		class="flex w-full flex-col overflow-hidden md:min-w-80 md:w-md max-w-[calc(100vw-2rem)] p-0! max-h-[min(40rem,calc(var(--bits-dropdown-menu-content-available-height)-1rem))]"
 		data-under-details={uiStore.isModelDetailsOpen || undefined}
 		onCloseAutoFocus={(event) => {
 			// bits-ui re-mounts the focus scope when the drawer opens or closes, so this runs with the menu still open; trigger focus would show its tooltip
@@ -209,11 +209,12 @@
 			onSearchChange={(v) => ms.setSearchTerm(v)}
 			{onSearchKeyDown}
 			placeholder="Search models..."
+			scrollport
 			searchClass="bg-transparent"
 			searchValue={ms.searchTerm}
 		>
-			<!-- Option list; the search header sticks to the top and the actions
-		     footer to the bottom of the content scrollport. -->
+			<!-- Option list; the search header sticks to the top of the list's scrollport, and
+		     the footer stays under it. -->
 			{@render pickerContent('px-1.5')}
 		</DropdownMenuSearchable>
 	</DropdownMenu.Content>
