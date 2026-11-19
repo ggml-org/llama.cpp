@@ -2629,6 +2629,37 @@ static bool mtmd_audio_batch_encode(mtmd_context * ctx, const mtmd_image_f32_bat
     return ctx->ctx_a->encode_batch(ctx->n_threads, &batch, out_embd);
 }
 
+// fish_s2_spkenc: one backbone row per reference frame, the codes of the frames go to ctx->gen_ref
+// drama3 runs its codebook tower over them, see mtmd_gen_state_get_ref_codes()
+static int32_t mtmd_fish_s2_ref_encode(mtmd_context * ctx, const mtmd_audio_tokens * audio_tokens, std::vector<float> & out_embd) {
+    mtmd_image_f32_batch batch = audio_tokens->batch_f32.clone();
+    if (audio_tokens->source) {
+        if (!ctx->audio_preproc->compute(*audio_tokens->source)) {
+            LOG_ERR("%s: unable to compute the mel\n", __func__);
+            return 1;
+        }
+        GGML_ASSERT(audio_tokens->source_idx < audio_tokens->source->entries.size());
+        batch.entries[0] = audio_tokens->source->entries[audio_tokens->source_idx];
+    }
+    std::vector<int32_t> codes;
+    out_embd.resize((size_t) audio_tokens->n_tokens * ctx->n_embd_out());
+
+    mtmd_subctx_encode_params params;
+    params.imgs      = &batch;
+    params.n_threads = ctx->n_threads;
+    params.out_embd  = &out_embd;
+    params.out_codes = &codes;
+    if (!ctx->ctx_a->encode(&params)) {
+        return 1;
+    }
+    if (codes.empty() || codes.size() % audio_tokens->n_tokens != 0) {
+        LOG_ERR("%s: %zu reference codes for %u frames\n", __func__, codes.size(), audio_tokens->n_tokens);
+        return 1;
+    }
+    ctx->gen_ref.tokens = std::move(codes);
+    return 0;
+}
+
 // qwen3tts: the speaker row, then one talker input row per reference frame
 // the reference codes go to ctx->gen_ref, so GEN_WAV continues from them, see mtmd_gen_state_set_ref()
 static int32_t mtmd_qwen3tts_ref_encode(mtmd_context * ctx, const mtmd_audio_tokens * audio_tokens, std::vector<float> & out_embd) {
@@ -2730,6 +2761,9 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
         }
         if (ctx->ctx_a->model.proj_type == PROJECTOR_TYPE_VOXCPM2_SPKENC) {
             return voxcpm2_ref_encode(ctx, chunk->tokens_audio.get(), out_embd);
+        }
+        if (ctx->ctx_a->model.proj_type == PROJECTOR_TYPE_FISH_S2_SPKENC) {
+            return mtmd_fish_s2_ref_encode(ctx, chunk->tokens_audio.get(), out_embd);
         }
         if (ctx->ctx_a->model.proj_type == PROJECTOR_TYPE_QWEN3TTS_SPKENC && chunk->tokens_audio->batch_f32.entries.size() == 2) {
             return mtmd_qwen3tts_ref_encode(ctx, chunk->tokens_audio.get(), out_embd);
@@ -4211,6 +4245,13 @@ int32_t mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state) {
     state->ref = ctx->gen_ref;
     state->ref_decoded = false;
     return 0;
+}
+
+const int32_t * mtmd_gen_state_get_ref_codes(const mtmd_gen_state * state, size_t * n_codes) {
+    if (n_codes) {
+        *n_codes = state ? state->ref.tokens.size() : 0;
+    }
+    return state && !state->ref.tokens.empty() ? state->ref.tokens.data() : nullptr;
 }
 
 static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
