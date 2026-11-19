@@ -955,9 +955,8 @@ class TestQwen4ExpPleScale(unittest.TestCase):
                     self.assertEqual(dtype, gguf.GGMLQuantizationType.F32)
                     np.testing.assert_array_equal(data, [0.25])
 
-        result = self.convert(scaled=False)
-        self.assertEqual(set(result), {self.TABLE})
-        np.testing.assert_array_equal(result[self.TABLE][1], raw)
+        with self.assertRaisesRegex(ValueError, "source weight scale is missing"):
+            self.convert(scaled=False)
 
     def test_scale_is_folded_into_other_types(self):
         values = torch.cat(self.SHARDS).numpy()
@@ -966,13 +965,14 @@ class TestQwen4ExpPleScale(unittest.TestCase):
             ({"ftype": gguf.LlamaFileType.MOSTLY_F16}, gguf.GGMLQuantizationType.F16),
             ({"fp8_as_q8": True}, gguf.GGMLQuantizationType.F16),
         ):
-            for scaled in (False, True):
-                with self.subTest(scaled=scaled, **kwargs):
-                    result = self.convert(scaled=scaled, **kwargs)
-                    self.assertEqual(set(result), {self.TABLE})
-                    dtype, data = result[self.TABLE]
-                    self.assertEqual(dtype, qtype)
-                    np.testing.assert_array_equal(data, values * (0.25 if scaled else 1.))
+            with self.subTest(**kwargs):
+                result = self.convert(**kwargs)
+                self.assertEqual(set(result), {self.TABLE})
+                dtype, data = result[self.TABLE]
+                self.assertEqual(dtype, qtype)
+                np.testing.assert_array_equal(data, values * 0.25)
+                with self.assertRaisesRegex(ValueError, "source weight scale is missing"):
+                    self.convert(scaled=False, **kwargs)
 
 
 if __name__ == "__main__":

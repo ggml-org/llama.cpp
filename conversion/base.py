@@ -753,6 +753,8 @@ class ModelBase:
             scale_size = prod(scale.shape)
             is_channel_scale = 1 <= scale.ndim <= weight.ndim and scale.shape[0] == weight.shape[0] and all(size == 1 for size in scale.shape[1:])
             if unsupported_layout or (scale_size != 1 and not is_channel_scale):
+                if quant_config.get("quant_method") in ("modelopt", "modelopt_mixed") and scale_name.endswith("_scale_inv"):
+                    continue
                 if self._is_nvfp4_compressed_tensors(quant_config.get("quant_method"), quant_config.get("format"), quant_config.get("config_groups") or {}):
                     continue
                 raise ValueError(
@@ -1499,14 +1501,17 @@ class ModelBase:
         self._has_ple |= is_ple
         return is_ple if self.ple_only else not is_ple
 
+    def _has_fp8_source_scale(self, name: str) -> bool:
+        scale_names = (name + "_scale", name + "_scale_inv", name.removesuffix("weight") + "qscale_weight")
+        return any(scale_name in self.model_tensors for scale_name in scale_names)
+
     def prepare_tensors(self):
         for name, load in self.model_tensors.items():
             if not name.endswith(".weight"):
                 continue
             if load().dtype not in (torch.float8_e4m3fn, torch.float8_e5m2):
                 continue
-            scale_names = (name + "_scale", name + "_scale_inv", name.removesuffix("weight") + "qscale_weight")
-            if not any(scale_name in self.model_tensors for scale_name in scale_names):
+            if not self._has_fp8_source_scale(name):
                 raise ValueError(f"Cannot convert FP8 weight {name!r}: source weight scale is missing")
 
         # detect NVFP4 quantization (ModelOpt and Compressed-tensors formats)
@@ -1727,6 +1732,9 @@ class ModelBase:
         tensor_names = {name for shard in self.gguf_writer.tensors for name in shard}
         for shard in self.gguf_writer.tensors:
             for name, tensor in shard.items():
+                # a PLE-only file holds just the table, its scale stays in the backbone
+                if self.ple_only and self._include_ple_tensor(name):
+                    continue
                 # Keep in sync with needs_scale in ggml.c.
                 if tensor.dtype in (gguf.GGMLQuantizationType.F8_E4M3, gguf.GGMLQuantizationType.NVFP4):
                     scale_name = name.removesuffix(".weight") + ".scale"
