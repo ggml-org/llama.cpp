@@ -100,6 +100,12 @@ The OpenCL backend has the following CMake options that control the behavior of 
 | `GGML_OPENCL_USE_ADRENO_KERNELS`     | `ON`           | Use kernels optimized for Adreno.         |
 | `GGML_OPENCL_USE_ADRENO_BIN_KERNELS` | `OFF`          | Allow using binary kernel lib for Adreno. |
 
+## Decomposed Flash Attention
+
+The P8 path rounds scratch row pitches for P and transposed V up to a multiple of 32 KiB before adding the existing 64-byte padding. This reduces cache conflicts when the KV length exceeds 16384 and the V head size is at most 256. Larger V heads keep the previous layout. The extra scratch space is less than 32 KiB per row at the default granule.
+
+`GGML_OPENCL_FA_KV_PITCH_ROUND` sets the rounding granule in bytes to a positive power of two; `0` restores the previous layout. `GGML_OPENCL_FA_KV_PITCH_ROUND_MIN` sets the KV-length threshold (default `16384`), and `GGML_OPENCL_FA_KV_PITCH_ROUND_MAX_DV` sets the largest V head size to round (default `256`). These settings do not change the existing attention dispatch conditions.
+
 ## Program Binary Cache
 
 Compiled `cl_program` binaries are cached on disk, so subsequent runs skip the expensive
