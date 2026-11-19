@@ -5280,7 +5280,7 @@ struct ggml_tensor * ggml_tri(
     struct ggml_context * ctx,
     struct ggml_tensor  * a,
     enum ggml_tri_type    type) {
-    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(a->type == GGML_TYPE_F32 || a->type == GGML_TYPE_F16 || a->type == GGML_TYPE_BF16);
 
     GGML_ASSERT(ggml_is_contiguous(a));
     GGML_ASSERT(a->ne[0] == a->ne[1]);

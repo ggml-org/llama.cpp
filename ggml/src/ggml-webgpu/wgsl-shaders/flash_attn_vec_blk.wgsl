@@ -45,8 +45,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     let q_start = q_blk;
     let k_start = kv_blk * KV_TILE;
 
-    let mask_batch = select(0u, batch_idx, params.stride_mask3 > 0u);
-    let mask_batch_base = params.offset_mask + mask_batch * params.stride_mask3 + mask_head * params.stride_mask2;
+    let mask_batch_base = params.offset_mask + batch_idx * params.stride_mask3 + mask_head * params.stride_mask2;
 
     // We keep min/max to classify:
     //  - fully masked (max <= MASK_MIN)

@@ -1,7 +1,9 @@
 @import 'tailwindcss';
 @source '.';
-/* stories may use classes the app does not, so tailwind scans them too */
+/* stories may use classes the app does not, so tailwind scans them too: the app's and Llama UI's,
+   which this Storybook shows as well */
 @source '../tests/stories';
+@source '../../../lib/ui/tests/stories';
 @plugin '@tailwindcss/forms';
 @plugin '@tailwindcss/typography';
 @import 'tw-animate-css';
@@ -354,8 +356,22 @@
 	}
 }
 
-.mermaidTooltip {
-	display: none !important;
+/*
+ * Mermaid diagrams are drawn by Pele, which reads its colors from these. They sit on :root
+ * so the svg also inherits them inside the preview dialog's shadow root, and follow the theme.
+ */
+:root {
+	--pele-bg: var(--code-background);
+	--pele-fg: var(--code-foreground);
+	--pele-muted: var(--muted-foreground);
+	--pele-line: var(--muted-foreground);
+	--pele-surface: var(--background);
+	--pele-surface-alt: var(--muted);
+	--pele-border: var(--border);
+	--pele-accent: var(--primary);
+	--pele-critical: var(--destructive);
+	--pele-error: var(--destructive);
+	--pele-radius: calc(var(--radius) - 4px);
 }
 
 /*

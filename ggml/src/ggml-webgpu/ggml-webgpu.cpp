@@ -2106,6 +2106,7 @@ static ggml_webgpu_flash_attn_op ggml_webgpu_flash_attn_prepare(webgpu_context &
         op.has_mask ? (uint32_t) (mask->nb[3] / ggml_type_size(mask->type)) : 0,  // stride of mask dim 3
         op.has_mask ? (uint32_t) (mask->nb[2] / ggml_type_size(mask->type)) : 0,  // stride of mask dim 2
         op.has_mask ? (uint32_t) mask->ne[2] : 1u,  // mask heads, broadcast over the Q heads
+        op.has_mask ? (uint32_t) mask->ne[3] : 1u,  // mask batches, broadcast over the Q batches
         (uint32_t) (Q->ne[2] / K->ne[2]),           // repeat factor for K/V in dim 2 (MHA/MQA/GQA)
         ggml_webgpu_u32_from_f32(scale),            // scale (possibly adjusted for logit softcap)
         ggml_webgpu_u32_from_f32(max_bias),
@@ -2215,7 +2216,7 @@ static webgpu_encoded_op ggml_webgpu_flash_attn_vec(webgpu_context &          ct
         const uint32_t stride_mask3 = (uint32_t) (mask->nb[3] / ggml_type_size(mask->type));
         const uint32_t stride_mask2 = (uint32_t) (mask->nb[2] / ggml_type_size(mask->type));
         const uint32_t mask_ne2     = (uint32_t) mask->ne[2];
-        blk_batch_count             = (stride_mask3 > 0 ? (uint32_t) Q->ne[3] : 1u) * mask_ne2;
+        blk_batch_count             = (uint32_t) (mask->ne[3] * mask_ne2);
         const uint64_t blk_elems    = (uint64_t) blk_nblk0 * blk_nblk1 * blk_batch_count;
         blk_size_bytes              = ROUNDUP_POW2(blk_elems * sizeof(uint32_t), WEBGPU_STORAGE_BUF_BINDING_MULT);
         const ggml_webgpu_shader_lib_context blk_shader_ctx = op.shader_lib_ctx;
@@ -4448,12 +4449,10 @@ static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer
                         res += WEBGPU_STORAGE_BUF_BINDING_MULT + align;
                     }
                     if (mask != nullptr) {
-                        const uint32_t blk_nblk0    = CEIL_DIV((uint32_t) K->ne[1], kv_tile);
-                        const uint32_t blk_nblk1    = (uint32_t) n_q;
-                        const uint32_t stride_mask3 = (uint32_t) (mask->nb[3] / ggml_type_size(mask->type));
-                        const uint32_t blk_batch_count =
-                            (stride_mask3 > 0 ? (uint32_t) Q->ne[3] : 1u) * (uint32_t) mask->ne[2];
-                        const uint64_t blk_elems = (uint64_t) blk_nblk0 * blk_nblk1 * blk_batch_count;
+                        const uint32_t blk_nblk0       = CEIL_DIV((uint32_t) K->ne[1], kv_tile);
+                        const uint32_t blk_nblk1       = (uint32_t) n_q;
+                        const uint32_t blk_batch_count = (uint32_t) Q->ne[3] * (uint32_t) mask->ne[2];
+                        const uint64_t blk_elems       = (uint64_t) blk_nblk0 * blk_nblk1 * blk_batch_count;
                         const size_t   blk_size_bytes =
                             ROUNDUP_POW2(blk_elems * sizeof(uint32_t), WEBGPU_STORAGE_BUF_BINDING_MULT);
                         res += blk_size_bytes + align;

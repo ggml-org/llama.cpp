@@ -89,6 +89,10 @@
 	--button-ghost-background-hover: var(--action-ghost-hover);
 	--button-outline-background: var(--field-background);
 	--button-outline-border: var(--line-control);
+	/* the line between the two halves of a split button; dark mode makes it stronger than the keys' rim */
+	--button-group-separator: var(--line-control);
+	/* the action card (a tool permission or continue request in the chat) */
+	--action-card-border: var(--line-default);
 	--button-text: var(--fg-default);
 	--button-shadow: var(--elevation-control);
 	/* the matte finish: a fill barely lighter at the top; solid fills also get an even hairline in a shade of the fill.
@@ -201,6 +205,10 @@
 	--button-primary-edge: color-mix(in oklab, var(--button-primary-background), black 10%);
 	--button-danger-sheen: transparent;
 	--button-danger-edge: color-mix(in oklch, var(--line-danger) 40%, transparent);
+	/* the keys' rim is white 12% over a white 9% fill, so a divider of the same shade vanishes between them */
+	--button-group-separator: var(--white-a20);
+	/* lighter than the fields' white 30%, yet still the strongest edge resting on the page: the focused chat form's */
+	--action-card-border: var(--white-a18);
 }
 
 /* the user bubble is a card with an even, fainter edge, no inner ring and a barely noticeable shadow */

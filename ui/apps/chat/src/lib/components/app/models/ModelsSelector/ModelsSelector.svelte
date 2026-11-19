@@ -388,7 +388,8 @@
 	</ModelsSelectorDrawer>
 {:else}
 	<!-- a lone llama.cpp server has nothing to choose from: the trigger opens the
-	     manager instead, so the button is its own affordance -->
+	     manager instead, so the button is its own affordance. With the manager hidden
+	     there is nothing to open, so it is only a label: no pointer, hover or focus -->
 	<Tooltip.Root>
 		<Tooltip.Trigger>
 			<!-- prevent another nested button element -->
@@ -396,7 +397,10 @@
 				<button
 					{...props}
 					class={[
-						`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-(--chat-form-key-shadow) transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
+						`inline-flex items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-(--chat-form-key-shadow) transition focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
+						uiStore.isModelsManagerShown
+							? 'cursor-pointer hover:bg-muted-foreground/20'
+							: 'cursor-default',
 						!ms.isCurrentModelInCache
 							? 'bg-surface-danger text-fg-danger! hover:bg-surface-danger/80 hover:text-fg-danger'
 							: forceForegroundText
@@ -405,8 +409,9 @@
 						isOpen && 'text-foreground'
 					]}
 					disabled={disabled || ms.updating}
-					onclick={() => ms.handleOpenChange(true)}
+					onclick={uiStore.isModelsManagerShown ? () => ms.handleOpenChange(true) : undefined}
 					style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
+					tabindex={uiStore.isModelsManagerShown ? undefined : -1}
 				>
 					<ModelsSelectorTriggerIcon
 						class="mr-0.375 size-icon-sm shrink-0"

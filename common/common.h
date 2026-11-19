@@ -1002,6 +1002,9 @@ enum common_decision_type {
     COMMON_DECISION_TYPE_UNKNOWN, // a decision model of a type that is not supported
 };
 
+// lfm3-d1: max questions packed in one prompt
+#define COMMON_DECISION_LFM3_D1_SET_SIZE 16
+
 common_decision_type common_get_decision_type(const struct llama_model * model);
 
 // metadata of a GGUF file, read without loading the model
@@ -1117,6 +1120,7 @@ struct common_batch {
         llama_embd   state; // non-owning view of the data passed to set_embd_state(), data == NULL if none
         std::vector<llama_seq_id> seq_ids_extra; // see add_seq()
         int32_t      decision_order = 0; // see llama_batch_ext_set_decision_order()
+        int32_t      decision_group = 0; // see llama_batch_ext_set_decision_group()
         int32_t      embd_row = -1; // see add_embd_row(), -1 if none
         int32_t      state_row = -1; // see set_embd_state_row(), -1 if none
     };

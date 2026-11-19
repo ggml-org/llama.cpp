@@ -67,7 +67,9 @@ shows in the app at once and the app keeps no copy of a component or a token. Fo
 
 ## Development
 
-- `npm run dev`: a small SvelteKit check page (`src/routes`)
+- `npm run storybook`: the package's Storybook, with a story for everything it holds; the stories run as tests in
+  `npm test`, and Llama Chat's Storybook (in `ui/apps/chat`) shows them under Llama UI
+- `npm run dev`: Storybook and a small SvelteKit check page (`src/routes`)
 - `npm run check`: svelte-check
 - `npm run prepack`: build the library into `dist/` and run publint
 - `node scripts/npm-version-check.mjs`: what the release workflow would make of this folder, against the real registry

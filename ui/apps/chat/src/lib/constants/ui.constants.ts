@@ -6,7 +6,9 @@ import {
 	SHORTCUT_SETTINGS
 } from './keyboard-shortcuts.constants';
 import { MCP_SERVERS_ROUTE_ID, MODELS_ROUTE_ID, SETTINGS_ROUTE_ID } from './routes.constants';
-import { Search, Settings, SquarePen } from '@lucide/svelte';
+import Search from '@lucide/svelte/icons/search';
+import Settings from '@lucide/svelte/icons/settings';
+import SquarePen from '@lucide/svelte/icons/square-pen';
 import McpLogo from '#lib/components/app/mcp/McpLogo.svelte';
 import { SidebarAction, ToolSource } from '#lib/enums/index.ts';
 import type { DesktopIconStripItem } from '#lib/types/index.ts';

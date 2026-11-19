@@ -5,10 +5,14 @@ description: >-
   Llama UI, the design system and components of Llama Chat, the chat client llama-server
   bundles. Neutral and quiet: frosted matte surfaces with faint
   blue-grey hairlines, near-flat fills, and status colours for success, warning, error and info. Tokens come in
-  three tiers: primitives, semantic tokens (with a "-dark" twin where dark mode differs)
-  and components. Generated from ui/lib/ui/src/lib/styles/tokens/*.css.
+  three tiers: primitives, semantic tokens (with a "-dark" twin where dark mode differs and a
+  "-matte" twin where the Matte light theme does) and components. The colors, typography and
+  rounded sections are generated from ui/lib/ui/src/lib/styles by `npm run design:tokens` in
+  ui/apps/chat; spacing, components and the prose are kept in sync with the CSS by hand.
 colors:
   primary: '{colors.action-primary}'
+  brand-ink: '#111111'
+  brand-light: '#fafafa'
   neutral-0: 'oklch(1 0 0)'
   neutral-25: 'oklch(0.988 0 0)'
   neutral-50: 'oklch(0.985 0 0)'
@@ -18,28 +22,30 @@ colors:
   neutral-300: 'oklch(0.87 0 0)'
   neutral-400: 'oklch(0.708 0 0)'
   neutral-500: 'oklch(0.556 0 0)'
+  neutral-600: 'oklch(0.439 0 0)'
+  neutral-700: 'oklch(0.371 0 0)'
   neutral-750: 'oklch(0.29 0 0)'
   neutral-800: 'oklch(0.269 0 0)'
   neutral-900: 'oklch(0.205 0 0)'
   neutral-925: 'oklch(0.16 0 0)'
   neutral-950: 'oklch(0.145 0 0)'
-  cool-gray-50: 'oklch(0.958 0.002 250)'
-  cool-gray-100: 'oklch(0.938 0.004 250)'
-  cool-gray-200: 'oklch(0.91 0.005 250)'
-  cool-gray-300: 'oklch(0.86 0.007 250)'
-  cool-gray-400: 'oklch(0.81 0.01 250)'
-  art-day-sky: 'oklch(0.78 0.075 245)'
-  art-night-sky: 'oklch(0.33 0.07 256)'
-  art-cinder: 'oklch(0.68 0.18 46)'
-  art-cinder-light: 'oklch(0.85 0.065 46)'
   sand-50: 'oklch(0.965 0.01 80)'
   sand-100: 'oklch(0.936 0.015 81)'
   sand-200: 'oklch(0.89 0.02 80)'
   sand-400: 'oklch(0.72 0.025 76)'
   sand-900: 'oklch(0.272 0.013 72)'
+  art-day-sky: 'oklch(0.78 0.075 245)'
+  art-night-sky: 'oklch(0.33 0.07 256)'
+  art-cinder: 'oklch(0.68 0.18 46)'
+  art-cinder-light: 'oklch(0.85 0.065 46)'
+  cool-gray-50: 'oklch(0.958 0.002 250)'
+  cool-gray-100: 'oklch(0.938 0.004 250)'
+  cool-gray-200: 'oklch(0.91 0.005 250)'
+  cool-gray-300: 'oklch(0.86 0.007 250)'
+  cool-gray-400: 'oklch(0.81 0.01 250)'
   red-400: 'oklch(0.69 0.2 27)'
-  red-500: 'oklch(0.6 0.235 27)'
   red-450: 'oklch(0.635 0.229 28)'
+  red-500: 'oklch(0.6 0.235 27)'
   red-550: 'oklch(0.588 0.236 28)'
   red-600: 'oklch(0.55 0.22 27)'
   red-800: 'oklch(0.43 0.17 27)'
@@ -69,19 +75,32 @@ colors:
   white-a18: 'oklch(1 0 0 / 0.18)'
   white-a20: 'oklch(1 0 0 / 0.2)'
   white-a30: 'oklch(1 0 0 / 0.3)'
+  white-a40: 'oklch(1 0 0 / 0.4)'
   white-a50: 'oklch(1 0 0 / 0.5)'
+  white-a85: 'oklch(1 0 0 / 0.85)'
+  black-a3: 'oklch(0 0 0 / 0.03)'
+  black-a4: 'oklch(0 0 0 / 0.04)'
+  black-a5: 'oklch(0 0 0 / 0.05)'
   black-a6: 'oklch(0 0 0 / 0.06)'
+  black-a8: 'oklch(0 0 0 / 0.08)'
+  black-a10: 'oklch(0 0 0 / 0.1)'
+  black-a12: 'oklch(0 0 0 / 0.12)'
+  black-a18: 'oklch(0 0 0 / 0.18)'
+  black-a25: 'oklch(0 0 0 / 0.25)'
   black-a30: 'oklch(0 0 0 / 0.3)'
+  black-a35: 'oklch(0 0 0 / 0.35)'
   black-a40: 'oklch(0 0 0 / 0.4)'
-  surface-page: '{colors.neutral-0}'
+  black-a55: 'oklch(0 0 0 / 0.55)'
+  black-a60: 'oklch(0 0 0 / 0.6)'
+  surface-page: '{colors.neutral-25}'
   surface-muted: '{colors.neutral-100}'
   surface-emphasis: '{colors.neutral-150}'
   surface-selected: '{colors.neutral-150}'
   surface-raised: '{colors.neutral-0}'
   surface-lifted: '{colors.neutral-0}'
   surface-pressed: '{colors.neutral-0}'
-  surface-glass: 'oklch(0.97 0 0 / 0.6)'
-  surface-code: '{colors.neutral-50}'
+  surface-glass: 'oklch(1 0 0 / 0.8)'
+  surface-code: '{colors.neutral-100}'
   surface-overlay: '{colors.black-a40}'
   fg-default: '{colors.neutral-950}'
   fg-muted: '{colors.neutral-500}'
@@ -124,7 +143,7 @@ colors:
   action-quiet: 'oklch(0.97 0 0 / 0.3)'
   action-quiet-hover: '{colors.neutral-100}'
   action-ghost-hover: 'oklch(0.556 0 0 / 0.1)'
-  field-background: 'oklch(1 0 0)'
+  field-background: '{colors.neutral-0}'
   field-shade: '{colors.black-a6}'
   status-danger: '{colors.fill-danger}'
   status-danger-rim: '{colors.red-400}'
@@ -142,6 +161,15 @@ colors:
   highlight-inverse: '{colors.white-a12}'
   sheen-start: '{colors.white-a20}'
   sheen-end: 'transparent'
+  elevation-ring: '{colors.black-a5}'
+  surface-page-matte: '{colors.neutral-0}'
+  surface-glass-matte: 'oklch(0.97 0 0 / 0.6)'
+  surface-code-matte: '{colors.neutral-50}'
+  surface-success-matte: 'color-mix(in oklab, {colors.fill-success} 11%, {colors.surface-page-matte})'
+  surface-warning-matte: 'color-mix(in oklab, {colors.fill-warning} 11%, {colors.surface-page-matte})'
+  surface-danger-matte: 'color-mix(in oklab, {colors.fill-danger} 11%, {colors.surface-page-matte})'
+  surface-info-matte: 'color-mix(in oklab, {colors.fill-info} 11%, {colors.surface-page-matte})'
+  field-background-matte: '{colors.surface-page-matte}'
   surface-page-dark: '{colors.neutral-925}'
   surface-muted-dark: '{colors.neutral-800}'
   surface-emphasis-dark: '{colors.neutral-750}'
@@ -193,46 +221,51 @@ colors:
   action-ghost-hover-dark: 'oklch(0.708 0 0 / 0.1)'
   field-background-dark: '{colors.white-a9}'
   field-shade-dark: '{colors.black-a30}'
+  status-danger-dark: '{colors.fill-danger-dark}'
+  status-warning-dark: '{colors.fill-warning-dark}'
+  status-success-dark: '{colors.fill-success-dark}'
+  status-info-dark: '{colors.fill-info-dark}'
   highlight-inner-dark: '{colors.white-a4}'
   sheen-start-dark: '{colors.white-a2}'
+  elevation-ring-dark: '{colors.white-a18}'
 typography:
-  heading:
-    fontFamily: system-ui
-    fontSize: 1.5rem
-    fontWeight: 600
-    lineHeight: 2rem
-  title:
-    fontFamily: system-ui
-    fontSize: 1.125rem
-    fontWeight: 600
-    lineHeight: 1.75rem
   body:
-    fontFamily: system-ui
+    fontFamily: 'Llama Sans'
     fontSize: 1rem
     fontWeight: 400
     lineHeight: 1.5rem
   body-sm:
-    fontFamily: system-ui
+    fontFamily: 'Llama Sans'
     fontSize: 0.875rem
     fontWeight: 400
     lineHeight: 1.25rem
   label:
-    fontFamily: system-ui
+    fontFamily: 'Llama Sans'
     fontSize: 0.875rem
     fontWeight: 500
     lineHeight: 1.25rem
   label-sm:
-    fontFamily: system-ui
+    fontFamily: 'Llama Sans'
     fontSize: 0.75rem
     fontWeight: 500
     lineHeight: 1rem
   caption:
-    fontFamily: system-ui
+    fontFamily: 'Llama Sans'
     fontSize: 0.75rem
     fontWeight: 400
     lineHeight: 1rem
+  title:
+    fontFamily: 'Llama Sans'
+    fontSize: 1.125rem
+    fontWeight: 600
+    lineHeight: 1.75rem
+  heading:
+    fontFamily: 'Llama Sans'
+    fontSize: 1.5rem
+    fontWeight: 600
+    lineHeight: 2rem
   code:
-    fontFamily: Llama Mono
+    fontFamily: 'Llama Mono'
     fontSize: 0.875rem
     fontWeight: 400
     lineHeight: 1.25rem
@@ -336,6 +369,10 @@ components:
     backgroundColor: '{colors.edge-raised}'
   floating-panel-edge-dark:
     backgroundColor: '{colors.edge-raised-dark}'
+  floating-panel-rim:
+    backgroundColor: '{colors.highlight-inner}'
+  floating-panel-rim-dark:
+    backgroundColor: '{colors.highlight-inner-dark}'
   dialog:
     backgroundColor: '#ffffff'
     textColor: '{colors.fg-default}'
@@ -758,7 +795,8 @@ This file is the how, written for agents first. Its principles, as rules to appl
 - **Recognisable, easy to change.** Keep the character in the icon, the type and one
   accent, so an app built on Llama UI can restyle it through component tokens alone.
 - **Design lives in code.** The CSS is the source of truth; prefer what is generated or
-  derived over hand-tuned values, and record the reason next to the value.
+  derived over hand-tuned values, and record the reason next to the value. Content pages are
+  Markdown with Svelte components in them, as `.svx` (see `AGENTS.md`).
 - **Reuse before adding.** An existing role before a new token, an existing component before
   a new one.
 
@@ -777,11 +815,16 @@ Design tokens come in three tiers, each in its own file under `ui/lib/ui/src/lib
    `button-secondary-background-hover`. They point at semantic tokens, and components read
    them as `bg-(--button-primary-background)` and similar.
 
-The front matter of this file mirrors those three files. When they disagree, the CSS wins
-and this file should be updated to match.
+The front matter's `colors`, `typography` and `rounded` are generated from the primitives, the
+semantic tokens and the font stacks by `npm run design:tokens` in `ui/apps/chat`, and CI fails
+when they are out of date (`npm run check:design`): change the CSS and run it, never edit them
+here. The `spacing` and `components` sections and the prose are written by hand; when they
+disagree with the CSS, the CSS wins and this file is updated to match. Storybook shows every
+tier under **Llama UI › Foundations › Colors**.
 
-Light mode is the base. A semantic token whose dark value differs has a `-dark` twin here,
-and components list a `-dark` entry wherever their colours change. Translucent component
+Paper light mode is the base. A semantic token that resolves differently in dark mode has a
+`-dark` twin here, and one that resolves differently in Matte a `-matte` twin; components list
+a `-dark` entry wherever their colours change. Translucent component
 fills are given as they render over the page, so contrast checks see the real colour.
 
 ## Colors
@@ -808,7 +851,8 @@ cinder, the accent orange; never from the status colours, and never red.
 Light mode has two surface themes, which share everything else (the palette, buttons, fields,
 badges, shadows and dark mode): **Paper**, the default, sets white panels, fields and keys on a
 faint grey page (`neutral-25`); **Matte** sets grey glass on a white page. Matte is the
-`theme-matte` class on `<html>`, chosen with the Light surfaces setting (Settings → General), and only its surface tokens differ: `surface-page`,
+`theme-matte` class on `<html>`, chosen with the Light surfaces setting (Settings → General) or
+the Surface switch in Storybook's toolbar, and only its surface tokens differ: `surface-page`,
 `surface-glass`, `surface-code`, `field-background` and `float-panel-background-modal`.
 
 - **Surfaces:** `surface-page` for the page, `surface-muted` for quiet panels,
@@ -916,7 +960,8 @@ layout: solid behind the status bar and the row of corner controls under it, fad
 instead of colliding with the clock or the chat's header. A route needs no fade of its own;
 what covers the whole screen, like the expanded chat form, hides it, and it fades out as the
 page slides aside for the sidebar. Check
-pinned content with the insets simulated, since they are 0 in a desktop browser.
+pinned content with the insets simulated (the Safe areas page in
+Storybook does this), since they are 0 in a desktop browser.
 
 ## Elevation & Depth
 
@@ -931,10 +976,12 @@ matches the role of the surface instead of combining raw shadows.
   `inset-group-surface` point those slots at one component's tokens, so each component needs
   a single class.
 - **`matte-float`** and **`matte-float-modal`:** menus, popovers, select lists, hover cards
-  and drawers, and dialogs over the page colour. An 86% opaque panel with blur, a faint edge
-  and a deeper shadow. The edge is a hairline ring baked into the shadow as its last layer,
-  never a border next to a shadow, which would read as a double edge; the panel's border stays transparent so its size does not change. In light mode dialogs are solid white instead: over the dimmed page a
-  translucent white turns grey.
+  and drawers, and dialogs over the page colour. An 86% opaque panel with blur, a faint edge,
+  a rim and a deeper shadow. The edge is a hairline ring baked into the shadow as its last
+  layer (`float-panel-edge`). The panel's 1px border is its rim, the inner highlight
+  (`float-panel-highlight`) right inside the ring; an inset shadow for the rim would sit inside
+  the border instead, and the 1px between the two would draw a double edge. In light mode
+  dialogs are solid white instead: over the dimmed page a translucent white turns grey.
 - **`matte-key`:** buttons, selects, toggles and tabs. The matte finish: on top of the
   button's own fill it adds a light blur, a fill barely lighter at the top (`--key-sheen`, 12% white in light mode, 2% in dark)
   and a small drop shadow. It never changes the button colour and draws no rim of its own: every

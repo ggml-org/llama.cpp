@@ -17,6 +17,8 @@
 #define N_ARGMAX_NPART_MAX 256
 #define N_ARGMAX_CHUNK 4096
 
+#define N_SG_CONV_2D 4
+
 // kernel parameters for mat-vec threadgroups
 //
 // N_R0: number of src0 rows to process per simdgroup
@@ -752,7 +754,13 @@ typedef struct {
     int32_t  p1;
     int32_t  d0;
     int32_t  d1;
+    int32_t  nk;    // reduction length per split
 } ggml_metal_kargs_conv_2d;
+
+typedef struct {
+    int32_t  ne;     // output elements
+    int32_t  nsplit;
+} ggml_metal_kargs_conv_2d_reduce;
 
 typedef struct {
     uint64_t nb00;  // kernel strides
