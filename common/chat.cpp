@@ -2040,12 +2040,10 @@ common_json common_chat_templates_get_caps(const common_chat_templates * chat_te
     GGML_ASSERT(chat_templates != nullptr);
     GGML_ASSERT(chat_templates->template_default != nullptr);
     // take the more expressive template when available
-    const auto & tmpl = chat_templates->template_tool_use != nullptr ? *chat_templates->template_tool_use
-                                                                      : *chat_templates->template_default;
-    const auto & caps = tmpl.caps;
+    const auto & caps = chat_templates->template_tool_use != nullptr ? chat_templates->template_tool_use->caps
+                                                                      : chat_templates->template_default->caps;
     common_json result = caps.to_map();
     result["reasoning_effort_levels"] = caps.reasoning_effort_levels;
-    result["supports_tool_choice_allowed"] = tmpl.params_init == nullptr;
     result["reasoning_effort_rejected"] = caps.reasoning_effort_rejected;
     return result;
 }

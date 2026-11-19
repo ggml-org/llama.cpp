@@ -212,8 +212,7 @@ common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_cont
             format.per_call_start, format.per_call_end, inputs.tools, inputs.parallel_tool_calls,
             inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED, name_field, args_field, format.tools_array_wrapped,
             format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order, format.openai_wrapper_trigger, inputs.tool_choice);
-        tools_parser = p.trigger_rule("tool-calls", inputs.tool_choice.allowed.empty() || inputs.parallel_tool_calls ?
-            p.one_or_more(single_tool_parser + p.space()) : single_tool_parser + p.space());
+        tools_parser = p.trigger_rule("tool-calls", p.one_or_more(single_tool_parser + p.space()));
     } else {
         tools_parser = p.standard_json_tools(
             format.section_start, format.section_end, inputs.tools, inputs.parallel_tool_calls,

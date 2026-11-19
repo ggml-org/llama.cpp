@@ -1593,9 +1593,6 @@ json oaicompat_chat_params_parse(
             throw std::invalid_argument("tool_choice function name must match exactly one supplied tool: " + name);
         }
     }
-    if (inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && !inputs.tool_choice.allowed.empty() && !caps.at("supports_tool_choice_allowed").get<bool>()) {
-        throw std::invalid_argument("Restricted tool_choice is not yet supported by this model-specific parser");
-    }
     inputs.json_schema            = json_schema.is_null() ? "" : json_schema.dump();
     inputs.grammar                = grammar;
     inputs.use_jinja              = opt.use_jinja;
