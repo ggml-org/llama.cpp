@@ -307,13 +307,12 @@ class TestFP8Conversion(unittest.TestCase):
                         if scale is not None:
                             tensors[scale_name] = torch.tensor([scale])
                         kwargs = {"eager": eager, "hparams_override": {"quantization_config": config}}
-                        if scale == 0.25:
+                        if scale is None:
+                            with self.assertRaisesRegex(ValueError, "source weight scale is missing"):
+                                self.convert(Qwen2MoeModel, tensors, **kwargs)
+                        else:
                             result = self.convert(Qwen2MoeModel, tensors, **kwargs)
                             np.testing.assert_array_equal(result["blk.0.attn_q.scale"][1], [scale])
-                        else:
-                            error = "source weight scale is missing" if scale is None else "required scale tensor .* is missing"
-                            with self.assertRaisesRegex(ValueError, error):
-                                self.convert(Qwen2MoeModel, tensors, **kwargs)
 
     def test_output_type_override(self):
         name = "model.layers.0.self_attn.q_proj.weight"
@@ -544,13 +543,15 @@ class TestFP8Conversion(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "source weight scale is missing"):
                         self.convert(Qwen2MoeModel, tensors, fp8_as_q8=True, eager=eager)
 
-    def test_nvfp4_rejects_omitted_unit_scales(self):
+    def test_nvfp4_writes_unit_scales(self):
         for experts in (False, True):
             with self.subTest(experts=experts):
                 names = ["model.layers.0.self_attn.q_proj.weight"]
+                targets = ["blk.0.attn_q"]
                 if experts:
                     names = [f"model.layers.0.mlp.experts.{expert}.{proj}_proj.weight"
                              for expert in range(2) for proj in ("gate", "up", "down")]
+                    targets = [f"blk.0.ffn_{proj}_exps" for proj in ("gate", "up", "down")]
                 tensors = {}
                 for name in names:
                     tensors[name] = torch.zeros((2, 32), dtype=torch.uint8)
@@ -559,8 +560,11 @@ class TestFP8Conversion(unittest.TestCase):
                     self.convert(Qwen2MoeModel, tensors, eager=True, scan_nvfp4=True)
                 for name in names:
                     tensors[name + "_scale_2"] = torch.tensor([1.0])
-                with self.assertRaisesRegex(ValueError, "required scale tensor .* is missing"):
-                    self.convert(Qwen2MoeModel, tensors, eager=True, scan_nvfp4=True)
+                    tensors[name.removesuffix("weight") + "input_scale"] = torch.tensor([1.0])
+                result = self.convert(Qwen2MoeModel, tensors, eager=True, scan_nvfp4=True)
+                for target in targets:
+                    np.testing.assert_array_equal(result[target + ".scale"][1], [1.0, 1.0] if experts else [1.0])
+                    self.assertNotIn(target + ".input_scale", result)
 
     def test_nvfp4_requires_block_scale(self):
         name = "model.layers.0.self_attn.q_proj.weight"
@@ -568,17 +572,20 @@ class TestFP8Conversion(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "source block scale .* is missing"):
             self.convert(Qwen2MoeModel, tensors, hparams_override={"quantization_config": {"quant_method": "modelopt", "quant_algo": "NVFP4"}})
 
-    def test_fp8_rejects_expert_unit_scales(self):
+    def test_fp8_writes_expert_unit_scales(self):
         tensors = {}
         for expert in range(2):
             for proj in ("gate", "up", "down"):
                 name = f"model.layers.0.mlp.experts.{expert}.{proj}_proj.weight"
                 tensors[name] = torch.ones((4, 4)).to(torch.float8_e4m3fn)
                 tensors[name + "_scale"] = torch.tensor([1.0])
+                tensors[name.removesuffix("weight") + "input_scale"] = torch.tensor([1.0])
         for eager in (False, True):
             with self.subTest(eager=eager):
-                with self.assertRaisesRegex(ValueError, "required scale tensor .* is missing"):
-                    self.convert(Qwen2MoeModel, tensors, eager=eager, check_lazy=not eager)
+                result = self.convert(Qwen2MoeModel, tensors, eager=eager, check_lazy=not eager)
+                for proj in ("gate", "up", "down"):
+                    np.testing.assert_array_equal(result[f"blk.0.ffn_{proj}_exps.scale"][1], [1.0, 1.0])
+                    self.assertNotIn(f"blk.0.ffn_{proj}_exps.input_scale", result)
 
 
 class TestInkling2PackedConversion(unittest.TestCase):

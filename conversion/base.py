@@ -333,13 +333,13 @@ class ModelBase:
         return scale.numel() <= 1 and abs(float(scale.float().sum()) - 1.0) < 1e-6
 
     def _write_scale_tensor(self, scale_name: str, scale: Tensor):
-        if not self._scale_is_trivial(scale):
+        if not scale_name.endswith(".input_scale") or not self._scale_is_trivial(scale):
             scale_f32 = scale.float().numpy().flatten()
             logger.info(f"  + {scale_name} (per-tensor scale, shape [{scale_f32.size}])")
             self.gguf_writer.add_tensor(scale_name, scale_f32)
 
     def _write_scales_tensor(self, scale_name: str, scales: list[float]):
-        if not np.allclose(scales, 1.0, atol=1e-6):
+        if not scale_name.endswith(".input_scale") or not np.allclose(scales, 1.0, atol=1e-6):
             scale_vals = np.array(scales, dtype=np.float32)
             logger.info(f"  + {scale_name} (per-expert scale, shape [{len(scales)}])")
             self.gguf_writer.add_tensor(scale_name, scale_vals)
@@ -868,7 +868,7 @@ class ModelBase:
                     scale = np.stack(arrays, axis=0)
             else:
                 scale = values.astype(np.float32)
-            if not np.allclose(scale, 1.0, atol=1e-6):
+            if not name.endswith(".input_scale") or not np.allclose(scale, 1.0, atol=1e-6):
                 logger.info(f"  + {name} (FP8 scale, shape {list(scale.shape)})")
                 self.gguf_writer.add_tensor(name, scale)
 
