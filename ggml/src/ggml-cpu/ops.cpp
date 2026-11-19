@@ -5531,7 +5531,7 @@ static void ggml_compute_forward_set_rows_impl(
     assert(ne0  == nc);
     assert(ne2  == ne02);
     assert(ne3  == ne03);
-    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16);
     assert(ne02 % ne11 == 0);
     assert(ne03 % ne12 == 0);
 
@@ -5578,6 +5578,20 @@ static void ggml_compute_forward_set_rows_impl(
                         from_float(wdata,
                                 ((char *) dst->data + i1*nb1 + i02*nb2 + i03*nb3), nc);
                     }
+                } else if constexpr (std::is_same_v<src_t, ggml_bf16_t>) {
+                    if (dst->type == GGML_TYPE_BF16) {
+                        memcpy(
+                                            ((char *)  dst->data + i1*nb1  + i02*nb2  + i03*nb3),
+                                            ((char *) src0->data +  i*nb01 + i02*nb02 + i03*nb03),
+                                            rs);
+                    } else {
+                        float * wdata = (float *) params->wdata + (nc + CACHE_LINE_SIZE_F32) * ith;
+                        ggml_bf16_to_fp32_row(
+                                (const ggml_bf16_t *) ((char *) src0->data + i*nb01 + i02*nb02 + i03*nb03),
+                                wdata, nc);
+                        from_float(wdata,
+                                ((char *) dst->data + i1*nb1 + i02*nb2 + i03*nb3), nc);
+                    }
                 } else {
                     GGML_ABORT("src0->type = %d (%s) not supported", src0->type, ggml_type_name(src0->type));
                 }
@@ -5610,6 +5624,16 @@ void ggml_compute_forward_set_rows(
                     ggml_compute_forward_set_rows_impl<ggml_fp16_t, int64_t>(params, dst);
                 } else if (src1->type == GGML_TYPE_I32) {
                     ggml_compute_forward_set_rows_impl<ggml_fp16_t, int32_t>(params, dst);
+                } else {
+                    GGML_ABORT("src1->type = %d (%s) not supported", src1->type, ggml_type_name(src1->type));
+                }
+            } break;
+        case GGML_TYPE_BF16:
+            {
+                if (src1->type == GGML_TYPE_I64) {
+                    ggml_compute_forward_set_rows_impl<ggml_bf16_t, int64_t>(params, dst);
+                } else if (src1->type == GGML_TYPE_I32) {
+                    ggml_compute_forward_set_rows_impl<ggml_bf16_t, int32_t>(params, dst);
                 } else {
                     GGML_ABORT("src1->type = %d (%s) not supported", src1->type, ggml_type_name(src1->type));
                 }
@@ -6302,7 +6326,7 @@ static void rotate_pairs(const int64_t n, const int64_t n_offset, const float * 
   }
 }
 
-template<typename T> //float or ggml_fp16_t
+template<typename T> //float, ggml_fp16_t or ggml_bf16_t
 static void ggml_compute_forward_rope_flt(
         const ggml_compute_params * params,
         ggml_tensor * dst,
@@ -6312,7 +6336,7 @@ static void ggml_compute_forward_rope_flt(
     const ggml_tensor * src1 = dst->src[1];
     const ggml_tensor * src2 = dst->src[2];
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16);
     GGML_ASSERT(src1->type == GGML_TYPE_I32);
 
     float freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow;
@@ -6472,6 +6496,10 @@ void ggml_compute_forward_rope(
             {
                 ggml_compute_forward_rope_flt<ggml_fp16_t>(params, dst, true);
             } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_rope_flt<ggml_bf16_t>(params, dst, true);
+            } break;
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_rope_flt<float>(params, dst, true);
@@ -6495,6 +6523,10 @@ void ggml_compute_forward_rope_back(
         case GGML_TYPE_F16:
             {
                 ggml_compute_forward_rope_flt<ggml_fp16_t>(params, dst, false);
+            } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_rope_flt<ggml_bf16_t>(params, dst, false);
             } break;
         case GGML_TYPE_F32:
             {
