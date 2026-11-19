@@ -999,6 +999,9 @@ class GGUFWriter:
     def add_loop_gate_rank(self, value: int) -> None:
         self.add_uint32(Keys.Loop.GATE_RANK.format(arch=self.arch), value)
 
+    def add_loop_variable_passes(self, value: bool) -> None:
+        self.add_bool(Keys.Loop.VARIABLE_PASSES.format(arch=self.arch), value)
+
     def add_metis_pass_count(self, value: int) -> None:
         self.add_uint32(Keys.Metis.PASS_COUNT.format(arch=self.arch), value)
 

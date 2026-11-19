@@ -290,10 +290,12 @@ class Inkling2LoopModel(Inkling2Model):
         super().__init__(*args, **kwargs)
         self._queries: dict[str, Tensor] = {}
         self.loop = self.hparams["loop_config"]
-        if set(self.loop) != {"core_start", "core_end", "num_passes", "gate_rank"}:
+        if set(self.loop) != {"core_start", "core_end", "num_passes", "gate_rank", "is_varloop"}:
             raise ValueError(f"Inkling2Loop: unsupported loop_config keys {sorted(self.loop)}")
         start, end, block = self.loop["core_start"], self.loop["core_end"], self.hparams["n_layers_per_attn_res_block"]
-        if not 0 < start < end <= self.block_count or start % block or end % block or self.loop["num_passes"] < 2 or self.loop["gate_rank"] < 1:
+        # a fixed loop needs at least 2 passes, a variable loop at least 1
+        min_passes = 1 if self.loop["is_varloop"] else 2
+        if not 0 < start < end <= self.block_count or start % block or end % block or self.loop["num_passes"] < min_passes or self.loop["gate_rank"] < 1:
             raise ValueError(f"Inkling2Loop: invalid loop_config {self.loop}")
 
     def set_gguf_parameters(self):
@@ -302,6 +304,7 @@ class Inkling2LoopModel(Inkling2Model):
         self.gguf_writer.add_loop_core_end(self.loop["core_end"])
         self.gguf_writer.add_loop_num_passes(self.loop["num_passes"])
         self.gguf_writer.add_loop_gate_rank(self.loop["gate_rank"])
+        self.gguf_writer.add_loop_variable_passes(self.loop["is_varloop"])
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
         # the reference does not quantize the loop tensors

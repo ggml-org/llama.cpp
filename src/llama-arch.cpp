@@ -287,6 +287,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_LOOP_CORE_END,                     "%s.loop.core_end"                     },
     { LLM_KV_LOOP_NUM_PASSES,                   "%s.loop.num_passes"                   },
     { LLM_KV_LOOP_GATE_RANK,                    "%s.loop.gate_rank"                    },
+    { LLM_KV_LOOP_VARIABLE_PASSES,              "%s.loop.variable_passes"              },
     { LLM_KV_METIS_PASS_COUNT,                  "%s.metis.pass_count"                  },
     { LLM_KV_METIS_MEMORY_LENGTH,               "%s.metis.memory_length"               },
     { LLM_KV_METIS_ROUTE_LENGTH,                "%s.metis.route_length"                },
