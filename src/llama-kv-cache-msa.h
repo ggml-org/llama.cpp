@@ -70,6 +70,7 @@ public:
     uint32_t       get_n_seq_max() const { return n_seq_max; }
     uint32_t       get_n_swa()    const { return n_swa; }
     llama_swa_type get_swa_type() const { return swa_type; }
+    uint32_t       get_kv_size()  const { return kv_base->get_size(); }
 
 private:
     // keep the indexer KV cache hparams instance here as llama_kv_cache stores only a reference
@@ -127,6 +128,7 @@ public:
     // max position currently present in the cache plus one, padded MSA blocks are defined over token positions
     // so the block-selection tensors are sized by this value rather than by the number of cells
     uint32_t get_n_pos() const;
+    void set_input_blk_cells(ggml_tensor * dst, const llama_ubatch * ubatch, int32_t blk) const;
 
     // position <-> cell translation maps, populated from the base cache cells
     // the model graph relates cache contents to token positions only through these per ubatch inputs
@@ -148,4 +150,5 @@ private:
     const llama_memory_context_ptr ctx_idx;
 
     const llama_memory_status status;
+    bool is_full = false;
 };
