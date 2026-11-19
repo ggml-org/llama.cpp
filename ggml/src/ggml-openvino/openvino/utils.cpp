@@ -724,7 +724,8 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
 
     // Lambda function to process a single view operation
     auto process_single_view =
-        [](ov::Output<ov::Node> current, size_t view_offset, const std::vector<size_t> & view_stride,
+        [is_static = context.is_static()](
+           ov::Output<ov::Node> current, size_t view_offset, const std::vector<size_t> & view_stride,
            const ov::Shape & view_ggml_shape, const ov::PartialShape & view_ov_shape, const std::string & view_name,
            size_t view_src_offset, const std::vector<size_t> & view_src_stride, const ov::Shape & view_src_ggml_shape,
            const ov::PartialShape & view_src_ov_shape, const std::string & view_src_name) -> ov::Output<ov::Node> {
@@ -849,7 +850,12 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                             ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
                             ov::op::v0::Constant::create(ov::element::i64, {1}, {slice_dim - axis_shift}));
 
-                        if (view_ov_shape.is_static()) {
+                        // In a static graph a rank-preserving slice (diff_dims has one entry) already has the view
+                        // shape. Skip the Reshape: its target bakes the static chunk size into the token axis, which
+                        // is wrong after the output-ids GET_ROWS of the last layer (1 token in the prefill graph).
+                        const bool rank_kept = is_static && current_rank.is_static() &&
+                                               static_cast<size_t>(current_rank.get_length()) == ndims;
+                        if (view_ov_shape.is_static() && !rank_kept) {
                             auto reshaped = std::make_shared<ov::op::v1::Reshape>(
                                 sliced,
                                 ov::op::v0::Constant::create(ov::element::i64, {ndims}, view_ov_shape.to_shape()),
