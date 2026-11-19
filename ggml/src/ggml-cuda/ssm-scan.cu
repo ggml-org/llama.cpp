@@ -8,6 +8,7 @@ using namespace cub;
 #endif // USE_CUB
 
 #include "ssm-scan.cuh"
+#include "../ggml-ssm-round.h"
 
 
 // Minimum number of tokens to use SSD (State Space Duality) matmul path instead of scan path.
@@ -915,8 +916,30 @@ static void ggml_cuda_op_ssm_scan_impl(ggml_backend_cuda_context & ctx, ggml_ten
     }
 }
 
+static __global__ void ssm_round_states(float * states, const int32_t * pos, int64_t width, int64_t n_seq,
+                                        int64_t n_tok, int64_t count, uint32_t seed, uint32_t layer) {
+    const int64_t i = (int64_t)blockIdx.x*blockDim.x + threadIdx.x;
+    if (i >= count) {
+        return;
+    }
+    const int64_t row = i / width;
+    const int64_t token = (row % n_seq)*n_tok + n_tok - 1 - row/n_seq;
+    const uint16_t h = ggml_ssm_round_f16(__float_as_uint(states[i]), seed, layer, pos[token], i % width);
+    states[i] = __half2float(__ushort_as_half(h));
+}
+
 void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_ssm_scan_impl(ctx, dst, nullptr);
+    if (const ggml_tensor * pos = dst->src[7]) {
+        const ggml_tensor * s = dst->src[0];
+        const ggml_tensor * x = dst->src[1];
+        const int64_t width = s->ne[0]*s->ne[1]*s->ne[2];
+        const int64_t n_written = std::min<int64_t>(ggml_get_op_params_i32(dst, 0), x->ne[2]);
+        const int64_t count = width*x->ne[3]*n_written;
+        float * states = (float *) dst->data + ggml_nelements(x);
+        ssm_round_states<<<(count+255)/256, 256, 0, ctx.stream()>>>(states, (const int32_t *)pos->data, width,
+                x->ne[3], x->ne[2], count, ggml_get_op_params_i32(dst, 1), ggml_get_op_params_i32(dst, 2));
+    }
 }
 
 void ggml_cuda_op_ssm_scan_fused_cache(ggml_backend_cuda_context & ctx, ggml_tensor * dst,

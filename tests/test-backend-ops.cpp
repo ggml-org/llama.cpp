@@ -4992,6 +4992,58 @@ struct test_ssm_scan : public test_case {
     }
 };
 
+struct test_ssm_scan_sr : public test_ssm_scan {
+    using test_ssm_scan::test_ssm_scan;
+
+    std::string op_desc(ggml_tensor *) override {
+        return "SSM_SCAN_SR";
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * out = test_ssm_scan::build_graph(ctx);
+        ggml_tensor * pos = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_seq_tokens, n_seqs);
+        ggml_ssm_scan_set_stochastic_rounding(out, pos, /*seed=*/17, /*layer=*/3);
+        return out;
+    }
+};
+
+struct test_ssm_scan_sr_distribution : public test_ssm_scan_sr {
+    test_ssm_scan_sr_distribution() : test_ssm_scan_sr(GGML_TYPE_F16, 128, 32, 2, 1, 1, 1) {}
+
+    std::string op_desc(ggml_tensor *) override { return "SSM_SCAN_SR_DISTRIBUTION"; }
+    bool run_whole_graph() override { return true; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * scan = test_ssm_scan_sr::build_graph(ctx);
+        ggml_set_name(scan, "scan");
+        ggml_tensor * state = ggml_view_1d(ctx, scan, ggml_nelements(scan->src[0]), ggml_nbytes(scan->src[1]));
+        return ggml_cast(ctx, state, GGML_TYPE_F16);
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_ssm_scan::initialize_tensors(ctx);
+        ggml_tensor * scan = ggml_get_tensor(ctx, "scan");
+        // s = 1, x = 1/131072, softplus(dt) = 32, A = 0, B = 1: state is 1 + 1/4096.
+        const float values[] = { 1.0f, 1.0f/131072, 32.0f, 0.0f, 1.0f };
+        for (int i = 0; i < 5; ++i) {
+            init_tensor_uniform(scan->src[i], values[i], values[i]);
+        }
+    }
+
+    double err(const float * a, const float * b, size_t n) override {
+        const float upper = 1.0f + 1.0f/1024;
+        size_t n_upper = 0;
+        for (size_t i = 0; i < n; ++i) {
+            if (a[i] != b[i] || (a[i] != 1.0f && a[i] != upper)) {
+                return 1.0;
+            }
+            n_upper += a[i] == upper;
+        }
+        // A quarter of an FP16 step above 1 should round up about 25% of the time.
+        return std::abs(double(n_upper)/n - 0.25) < 0.03 ? 0.0 : 1.0;
+    }
+};
+
 struct test_ssm_scan_rollback : public test_case {
     const ggml_type type;
 
@@ -11811,6 +11863,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F16, d_state, 64, 8, 2, 8, 3, false, 3));
     }
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F16, 128, 64, 8, 2, 300, 2, false, 1, true));
+    test_cases.emplace_back(new test_ssm_scan_sr(GGML_TYPE_F16, 128, 64, 8, 2,   1, 2));
+    test_cases.emplace_back(new test_ssm_scan_sr(GGML_TYPE_F16,  96, 64, 8, 2,   8, 2, false, 3));
+    test_cases.emplace_back(new test_ssm_scan_sr(GGML_TYPE_F16, 128, 64, 8, 2, 300, 2, false, 1, true));
+    test_cases.emplace_back(new test_ssm_scan_sr_distribution());
     test_cases.emplace_back(new test_ssm_scan_cache_fusion(GGML_TYPE_F16,  64, 64, 8, 2, 1, 1, 4, true));
     test_cases.emplace_back(new test_ssm_scan_cache_fusion(GGML_TYPE_F16, 128, 64, 8, 2, 1, 1, 4, true));
     test_cases.emplace_back(new test_ssm_scan_cache_fusion(GGML_TYPE_F16, 128, 64, 8, 2, 4, 1, 4, true));

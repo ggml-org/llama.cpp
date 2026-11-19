@@ -5693,6 +5693,17 @@ struct ggml_tensor * ggml_ssm_scan(
     return result;
 }
 
+void ggml_ssm_scan_set_stochastic_rounding(struct ggml_tensor * scan, struct ggml_tensor * positions,
+                                          uint32_t seed, uint32_t layer) {
+    GGML_ASSERT(scan->op == GGML_OP_SSM_SCAN && scan->src[0]->type == GGML_TYPE_F16);
+    GGML_ASSERT(scan->src[3]->ne[0] == 1);
+    GGML_ASSERT(positions->type == GGML_TYPE_I32 && ggml_is_contiguous(positions) && ggml_is_matrix(positions));
+    GGML_ASSERT(positions->ne[0] == scan->src[1]->ne[2] && positions->ne[1] == scan->src[1]->ne[3]);
+    scan->src[7] = positions;
+    ggml_set_op_params_i32(scan, 1, (int32_t) seed);
+    ggml_set_op_params_i32(scan, 2, (int32_t) layer);
+}
+
 // ggml_win_part
 
 struct ggml_tensor * ggml_win_part(

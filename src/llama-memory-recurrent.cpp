@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -43,8 +44,21 @@ llama_memory_recurrent::llama_memory_recurrent(
             type_s = GGML_TYPE_F32;
         } else if (strcmp(cache_type, "f16") == 0) {
             type_s = GGML_TYPE_F16;
+        } else if (strcmp(cache_type, "f16-sr") == 0) {
+            type_s = GGML_TYPE_F16;
+            ssm_sr_seed = 0;
+            if (const char * value = getenv("LLAMA_SSM_SR_SEED")) {
+                char * end;
+                errno = 0;
+                const auto seed = std::strtoull(value, &end, 10);
+                if (*value < '0' || *value > '9' || *end || errno || seed > UINT32_MAX) {
+                    throw std::runtime_error("LLAMA_SSM_SR_SEED must be an unsigned 32-bit integer");
+                }
+                ssm_sr_seed = seed;
+            }
+            LLAMA_LOG_INFO("%s: stochastic rounding for FP16 SSM state (seed %u)\n", __func__, (uint32_t) ssm_sr_seed);
         } else {
-            throw std::runtime_error("LLAMA_SSM_CACHE_TYPE must be f32 or f16");
+            throw std::runtime_error("LLAMA_SSM_CACHE_TYPE must be f32, f16 or f16-sr");
         }
     }
 

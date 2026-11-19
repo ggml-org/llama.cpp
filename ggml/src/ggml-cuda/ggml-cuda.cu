@@ -3639,7 +3639,7 @@ static int ggml_cuda_try_ssm_scan_cache_fusion(
         const ggml_cgraph * cgraph, int node_idx, ggml_cuda_ssm_scan_fused_cache & fused_state_cpy) {
     const ggml_tensor * ssm = cgraph->nodes[node_idx];
     // the kernel skips the snapshot tail, so the scan output must not be a graph output
-    if (ssm->op != GGML_OP_SSM_SCAN || ssm->type != GGML_TYPE_F32 || (ssm->flags & GGML_TENSOR_FLAG_OUTPUT)) {
+    if (ssm->op != GGML_OP_SSM_SCAN || ssm->type != GGML_TYPE_F32 || ssm->src[7] || (ssm->flags & GGML_TENSOR_FLAG_OUTPUT)) {
         return 0;
     }
 

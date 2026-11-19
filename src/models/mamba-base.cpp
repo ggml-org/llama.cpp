@@ -247,7 +247,21 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
             // TODO: use semistructured matrices to implement state-space duality
             // => {d_inner, n_seq_tokens, n_seqs} and {d_state, d_inner, n_seqs}
             // K > 1 asks the backend to return rollback snapshots in addition to the final state.
-            return ggml_ssm_scan(ctx, ssm, x, dt, A, B, C, ids, K);
+            ggml_tensor * scan = ggml_ssm_scan(ctx, ssm, x, dt, A, B, C, ids, K);
+            const int64_t seed = mctx_cur->get_ssm_sr_seed();
+            if (seed >= 0) {
+                if (!inp->s_round_pos) {
+                    // Use the same logical position as recurrent memory, including for multimodal inputs.
+                    auto pos = std::make_unique<llm_graph_input_pos>(1, LLAMA_ROPE_SECTION_ORDER_TYXZ);
+                    pos->pos = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n_seq_tokens*n_seqs);
+                    ggml_set_input(pos->pos);
+                    cb(pos->pos, "ssm_round_pos", -1);
+                    inp->s_round_pos = ggml_reshape_2d(ctx, pos->pos, n_seq_tokens, n_seqs);
+                    res->add_input(std::move(pos));
+                }
+                ggml_ssm_scan_set_stochastic_rounding(scan, inp->s_round_pos, (uint32_t)seed, il);
+            }
+            return scan;
         };
 
         ggml_tensor * y_ssm = build_rs(inp, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);

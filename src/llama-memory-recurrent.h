@@ -73,6 +73,7 @@ public:
 
     // number of recurrent-state snapshots per seq for rollback; tensors are widened to (1 + n_rs_seq) groups
     uint32_t n_rs_seq = 0;
+    int64_t ssm_sr_seed = -1; // negative selects ordinary cache rounding
 
     // per-seq rollback index
     std::vector<uint32_t> rs_idx;
@@ -177,6 +178,7 @@ public:
     //
 
     uint32_t get_n_rs() const;
+    int64_t get_ssm_sr_seed() const { return mem->ssm_sr_seed; }
     uint32_t get_head() const;
     int32_t  get_rs_z() const;
     uint32_t get_size() const;

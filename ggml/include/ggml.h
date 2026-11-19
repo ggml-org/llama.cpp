@@ -2308,6 +2308,14 @@ extern "C" {
             struct ggml_tensor  * ids,
             int64_t               K);
 
+    // Round written Mamba-2 FP16 cache snapshots; leave scan outputs and intermediate recurrence in FP32.
+    // positions is contiguous I32 [n_seq_tokens, n_seqs]. Set before adding scan to a graph.
+    GGML_API void ggml_ssm_scan_set_stochastic_rounding(
+            struct ggml_tensor * scan,
+            struct ggml_tensor * positions,
+            uint32_t             seed,
+            uint32_t             layer);
+
     // partition into non-overlapping windows with padding if needed
     // example:
     // a:   768   64   64    1

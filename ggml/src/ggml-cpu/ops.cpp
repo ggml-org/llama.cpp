@@ -2,6 +2,7 @@
 
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
+#include "ggml-ssm-round.h"
 #include "binary-ops.h"
 #include "simd-gemm.h"
 #include "ggml.h"
@@ -10192,6 +10193,19 @@ static void ggml_compute_forward_ssm_scan_f32(
             }
             // use the output as the source when it's not the first token-wise iteration
             s0 = s;
+        }
+        if (dst->src[7]) {
+            const auto * pos = (const int32_t *) dst->src[7]->data;
+            const uint32_t seed  = (uint32_t) ggml_get_op_params_i32(dst, 1);
+            const uint32_t layer = (uint32_t) ggml_get_op_params_i32(dst, 2);
+            for (int64_t slot = 0; slot < std::min(K, nt); ++slot) {
+                float * row = (float *) ((char *) dst->data + s_off + (slot*ns + i3)*state_seq_bytes);
+                for (int64_t i = ih0*nr*nc; i < ih1*nr*nc; ++i) {
+                    uint32_t bits;
+                    memcpy(&bits, row + i, sizeof(bits));
+                    row[i] = GGML_CPU_FP16_TO_FP32(ggml_ssm_round_f16(bits, seed, layer, pos[i3*nt + nt-1-slot], i));
+                }
+            }
         }
     }
 }
