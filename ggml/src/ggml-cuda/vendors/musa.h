@@ -70,6 +70,9 @@ typedef uint32_t ggml_cuda_thread_mask_t;
 #define cudaGetDeviceProperties musaGetDeviceProperties
 #define cudaGetErrorString musaGetErrorString
 #define cudaGetLastError musaGetLastError
+#define cudaHostAllocMapped musaHostAllocMapped
+#define cudaHostAllocPortable musaHostAllocPortable
+#define cudaHostGetDevicePointer musaHostGetDevicePointer
 #define cudaHostRegister musaHostRegister
 #define cudaHostRegisterPortable musaHostRegisterPortable
 #define cudaHostRegisterReadOnly musaHostRegisterReadOnly
