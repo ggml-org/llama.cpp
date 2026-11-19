@@ -763,6 +763,8 @@ void ggml_backend_tensor_memset(struct ggml_tensor * tensor, uint8_t value, size
     GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
 
     if (buf->iface.memset_tensor == NULL) {
+        GGML_ASSERT(buf->iface.set_tensor != NULL && "memset not implemented by backend buffer");
+
         // fallback: write the value in chunks with set_tensor
         const std::vector<uint8_t> chunk(std::min(size, (size_t) 1024*1024), value);
         for (size_t chunk_offset = 0; chunk_offset < size; chunk_offset += chunk.size()) {
