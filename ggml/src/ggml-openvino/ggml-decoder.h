@@ -593,11 +593,11 @@ public:
 
     bool is_direct_gdn_view(const ggml_tensor * node) const;
 
-    inline static bool is_cache(const ggml_tensor * tensor, const ggml_tensor * op) {
+    static bool is_cache(const ggml_tensor * tensor, const ggml_tensor * op) {
         return is_recurrent_cache(tensor) || is_kvcache(tensor, op);
     }
 
-    inline static bool is_kvcache(const ggml_tensor * tensor, const ggml_tensor * op) {
+    static bool is_kvcache(const ggml_tensor * tensor, const ggml_tensor * op) {
         if (tensor == nullptr || is_recurrent_cache(tensor)) {
             return false;
         }
@@ -605,7 +605,7 @@ public:
                (op != nullptr && op->op == GGML_OP_SET_ROWS && op->src[2] == tensor);
     }
 
-    inline static bool is_conv_state_writeback(const ggml_tensor * node) {
+    static bool is_conv_state_writeback(const ggml_tensor * node) {
         return node->op == GGML_OP_CPY && node->view_src != nullptr && is_recurrent_cache(node->view_src) &&
                node->src[0] != nullptr && node->src[0]->op == GGML_OP_VIEW && node->src[0]->src[0] != nullptr &&
                node->src[0]->src[0]->op == GGML_OP_CONCAT && node->src[1] != nullptr &&
@@ -614,7 +614,7 @@ public:
 
     // The final-state writeback of SSM_SCAN (K == 1): the state tail of the packed [y | state]
     // output copied into a slot block of the recurrent cache.
-    inline static bool is_ssm_state_writeback(const ggml_tensor * node) {
+    static bool is_ssm_state_writeback(const ggml_tensor * node) {
         if (!(node != nullptr && node->op == GGML_OP_CPY && node->view_src != nullptr && node->src[0] != nullptr &&
               node->src[0]->op == GGML_OP_VIEW && node->src[0]->src[0] != nullptr &&
               node->src[0]->src[0]->op == GGML_OP_SSM_SCAN && node->src[0]->src[0]->op_params[0] == 1 &&
@@ -645,7 +645,7 @@ public:
     // SET_ROWS into a column range of each row of a plain 2-D buffer, e.g. build_layer_inp_dev(): every enabled layer
     // input goes to view_2d(layer_inp_dev, n_embd, n_batch, nb1, col * n_embd * elem) at the batch rows of the ubatch.
     // The buffer sits in a regular device buffer, so is_kvcache() matches it: check this first
-    inline static bool is_column_set_rows(const ggml_tensor * node) {
+    static bool is_column_set_rows(const ggml_tensor * node) {
         if (node == nullptr || node->op != GGML_OP_SET_ROWS || node->src[2] == nullptr ||
             node->src[2]->op != GGML_OP_VIEW) {
             return false;
@@ -659,14 +659,14 @@ public:
 
     // SET_ROWS into a KV cache, directly or through the [1, n] reshape of the transposed V cache with `-fa off`.
     // Other SET_ROWS write rows of a compute tensor, e.g. the MoE expert-group mask
-    inline static bool is_kvcache_write(const ggml_tensor * node) {
+    static bool is_kvcache_write(const ggml_tensor * node) {
         const ggml_tensor * dst = node->src[2];
         return dst != nullptr && is_kvcache(dst->view_src != nullptr ? dst->view_src : dst, nullptr);
     }
 
     // GET_ROWS batched over ggml dims 2 and 3, e.g. the MoE expert-group scores
     // ggml_get_rows(ggml_reshape_4d(groups, 1, n_exp_per_group, n_groups, n_tokens), top_groups)
-    inline static bool is_get_rows_batched_4d(const ggml_tensor * node) {
+    static bool is_get_rows_batched_4d(const ggml_tensor * node) {
         return node->op == GGML_OP_GET_ROWS && !ggml_is_quantized(node->src[0]->type) &&
                node->src[1]->ne[1] == node->src[0]->ne[2] && node->src[1]->ne[2] == node->src[0]->ne[3] &&
                node->src[1]->ne[3] == 1;

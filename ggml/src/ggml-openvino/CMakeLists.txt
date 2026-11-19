@@ -11,8 +11,6 @@ ggml_add_backend_library(ggml-openvino
     ${GGML_HEADERS_OPENVINO}
 )
 
-set_source_files_properties(${GGML_SOURCES_OPENVINO} PROPERTIES LANGUAGE CXX)
-
 target_link_libraries(ggml-openvino PRIVATE openvino::runtime openvino::threading OpenCL::OpenCL)
 
 # the OpenVINO RTTI macros take one argument and leave __VA_ARGS__ empty, which -Wpedantic reports
@@ -37,7 +35,6 @@ endif()
 # Released runtimes retain the ordinary cache translators.
 include(CheckCXXSourceCompiles)
 unset(GGML_OPENVINO_HAS_CACHE_UPDATE CACHE)
-unset(GGML_OPENVINO_HAS_SELECTIVE_SSM CACHE)
 set(CMAKE_REQUIRED_LIBRARIES openvino::runtime)
 set(CMAKE_REQUIRED_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/openvino/op")
 check_cxx_source_compiles("#include <recurrent_cache_update.hpp>
@@ -46,16 +43,8 @@ int main() {
     auto gdn = std::make_shared<ov::op::internal::RecurrentGatedDeltaNetUpdate>(ov::OutputVector{});
 }"
     GGML_OPENVINO_HAS_CACHE_UPDATE)
-check_cxx_source_compiles("#include <selective_ssm.hpp>
-int main() {
-    auto ssm = std::make_shared<ov::op::internal::SelectiveSSM>(ov::OutputVector{});
-}"
-    GGML_OPENVINO_HAS_SELECTIVE_SSM)
 unset(CMAKE_REQUIRED_LIBRARIES)
 unset(CMAKE_REQUIRED_INCLUDES)
 if(GGML_OPENVINO_HAS_CACHE_UPDATE)
     target_compile_definitions(ggml-openvino PRIVATE GGML_OPENVINO_HAS_CACHE_UPDATE=1)
-endif()
-if(GGML_OPENVINO_HAS_SELECTIVE_SSM)
-    target_compile_definitions(ggml-openvino PRIVATE GGML_OPENVINO_HAS_SELECTIVE_SSM=1)
 endif()

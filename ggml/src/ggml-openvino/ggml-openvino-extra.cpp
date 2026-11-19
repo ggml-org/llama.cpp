@@ -616,6 +616,10 @@ bool ggml_openvino_is_npu() {
     return ggml_openvino_get_device_config().is_npu;
 }
 
+bool ggml_openvino_is_static() {
+    return ggml_openvino_is_npu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC");
+}
+
 bool ggml_openvino_is_gpu() {
     return has_prefix(ggml_openvino_get_device_name(), "GPU");
 }

@@ -3,19 +3,17 @@
 //
 // Adapted from OpenVINO's GGUF frontend (src/frontends/gguf/src/op/ssm_scan.cpp).
 
-#ifdef GGML_OPENVINO_HAS_SELECTIVE_SSM
+#include "../node_context.h"
+#include "../op_table.h"
+#include "../utils.h"
+#include "selective_ssm.hpp"
 
-#    include "../node_context.h"
-#    include "../op_table.h"
-#    include "../utils.h"
-#    include "selective_ssm.hpp"
-
-#    include <openvino/op/concat.hpp>
-#    include <openvino/op/constant.hpp>
-#    include <openvino/op/gather.hpp>
-#    include <openvino/op/reshape.hpp>
-#    include <openvino/op/shape_of.hpp>
-#    include <openvino/op/softplus.hpp>
+#include <openvino/op/concat.hpp>
+#include <openvino/op/constant.hpp>
+#include <openvino/op/gather.hpp>
+#include <openvino/op/reshape.hpp>
+#include <openvino/op/shape_of.hpp>
+#include <openvino/op/softplus.hpp>
 
 namespace ov {
 namespace frontend {
@@ -63,4 +61,3 @@ OutputVector translate_ssm_scan(const NodeContext & context) {
 }  // namespace frontend
 }  // namespace ov
 
-#endif  // GGML_OPENVINO_HAS_SELECTIVE_SSM

@@ -49,9 +49,7 @@ GGML_OP_CONVERTER(translate_flash_attn_ext);
 GGML_OP_CONVERTER(translate_clamp);
 GGML_OP_CONVERTER(translate_pad);
 GGML_OP_CONVERTER(translate_ssm_conv);
-#ifdef GGML_OPENVINO_HAS_SELECTIVE_SSM
 GGML_OP_CONVERTER(translate_ssm_scan);
-#endif
 GGML_OP_CONVERTER(translate_gated_delta_net);
 #ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
 OutputVector translate_recurrent_gated_delta_net(const NodeContext & context, const OutputVector & cache_inputs);

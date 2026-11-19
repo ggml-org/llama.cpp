@@ -667,14 +667,16 @@ ov::Tensor convert_ggml_input_to_ov(const std::shared_ptr<GgmlOvDecoder> & ggml_
         ov::Shape shape = GgmlOvDecoder::get_shape(ggml_tensor);
         shape.back() = padded_cols;
         ov::Tensor padded(GgmlOvDecoder::get_ov_type(ggml_tensor), shape);
-        if (ggml_tensor->type == GGML_TYPE_F16) {
-            auto data = pad_input<ggml_fp16_t>((const ggml_fp16_t *) ggml_tensor->data, rows, cols, rows, padded_cols,
-                                               GGML_FP32_TO_FP16(-INFINITY));
+        auto pad = [&](auto fill) {
+            using T = decltype(fill);
+            auto data = pad_input<T>((const T *) ggml_tensor->data, rows, cols, rows, padded_cols, fill);
             std::memcpy(padded.data(), data.data(), padded.get_byte_size());
+        };
+        if (ggml_tensor->type == GGML_TYPE_F16) {
+            pad(GGML_FP32_TO_FP16(-INFINITY));
         } else {
             GGML_ASSERT(ggml_tensor->type == GGML_TYPE_F32);
-            auto data = pad_input<float>((const float *) ggml_tensor->data, rows, cols, rows, padded_cols, -INFINITY);
-            std::memcpy(padded.data(), data.data(), padded.get_byte_size());
+            pad(-INFINITY);
         }
         return padded;
     }
@@ -3221,7 +3223,7 @@ enum ggml_status ov_graph_compute(ggml_cgraph * cgraph, ggml_backend_t backend) 
             GgmlOvDecoder::dump_cgraph(cgraph, filename);
         }
 
-        const auto is_static = ggml_openvino_is_npu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC");
+        const auto is_static = ggml_openvino_is_static();
 
         GGML_ASSERT(ctx->runtime_context != nullptr);
         std::shared_ptr<ov_runtime_context> r_ctx = std::static_pointer_cast<ov_runtime_context>(ctx->runtime_context);

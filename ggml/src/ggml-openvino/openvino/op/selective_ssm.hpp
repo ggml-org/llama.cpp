@@ -4,7 +4,6 @@
 // Local mirror of OpenVINO's ov::op::internal::SelectiveSSM declaration
 // (src/core/dev_api/openvino/op/selective_ssm.hpp). The implementation comes from the linked
 // OpenVINO runtime; the class layout must stay in sync with the runtime's declaration.
-// Only runtimes that provide the op compile this in (see GGML_OPENVINO_HAS_SELECTIVE_SSM).
 #pragma once
 
 #include "openvino/op/op.hpp"
@@ -16,7 +15,7 @@ namespace ov::op::internal {
 /// B and C are grouped and shared across heads: head h reads group h / (num_heads / num_groups).
 class OPENVINO_API SelectiveSSM : public ov::op::Op {
 public:
-    OPENVINO_OP("SelectiveSSM");
+    OPENVINO_OP("SelectiveSSM")
 
     SelectiveSSM() = default;
     /// \param A (Negative) log-decay rates per head [num_heads].

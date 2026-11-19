@@ -197,8 +197,7 @@ void ggml_openvino_model_cache_init() {
         }
         return;
     }
-    if (cache_only && (ggml_openvino_is_npu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC") ||
-                       ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_CACHE") ||
+    if (cache_only && (ggml_openvino_is_static() || ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_CACHE") ||
                        ggml_openvino_getenv_int("GGML_OPENVINO_ENABLE_FALLBACK"))) {
         GGML_ABORT("ggml-openvino: cache-only mode requires dynamic CPU/GPU execution with caching and without fallback");
     }

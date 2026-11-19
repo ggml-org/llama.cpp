@@ -1509,7 +1509,7 @@ static bool has_strides_on_element_grid(const ggml_tensor * t) {
 // process_view_input_new resolves it as a Slice of the source's innermost axis plus a Reshape.
 // Keep in sync with the matching branch there; dynamic execution only.
 static bool is_row_span_view(const ggml_tensor * t) {
-    if (ggml_openvino_is_npu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC") || is_stateful_enabled()) {
+    if (ggml_openvino_is_static() || is_stateful_enabled()) {
         return false;
     }
     const ggml_tensor * src = t->op == GGML_OP_VIEW ? t->src[0] : nullptr;
@@ -1759,8 +1759,7 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
     }
     case GGML_OP_GET_ROWS:
     case GGML_OP_SET_ROWS: {
-        if (GgmlOvDecoder::is_conv_state_snapshot_writeback(op) &&
-            (ggml_openvino_is_npu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC"))) {
+        if (GgmlOvDecoder::is_conv_state_snapshot_writeback(op) && ggml_openvino_is_static()) {
             return {false, "convolution snapshots require dynamic execution"};
         }
         if (op->ne[3] != 1 && !GgmlOvDecoder::is_get_rows_batched_4d(op) &&
@@ -2066,7 +2065,7 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
             reason = "GATED_DELTA_NET with kda (per-key-dimension gating) is not supported";
         }
         else if (op->op_params[0] > 1) {
-            if (ggml_openvino_is_npu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC")) {
+            if (ggml_openvino_is_static()) {
                 reason = "GATED_DELTA_NET snapshots require dynamic execution";
             }
         }
@@ -2093,7 +2092,7 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         if (op->op_params[0] > 1) {
             return {false, "SSM_SCAN with rollback snapshots (K > 1) is not supported"};
         }
-        if (ggml_openvino_is_npu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC")) {
+        if (ggml_openvino_is_static()) {
             return {false, "SSM_SCAN requires dynamic execution"};
         }
         break;
