@@ -60,7 +60,7 @@ void llama_model_zaya1::load_arch_tensors(llama_model_loader &) {
 
         layer.ssm_conv1d   = create_tensor(tn(LLM_TENSOR_SSM_CONV1D,   "weight", i), {d_conv, n_qk}, 0);
         layer.ssm_conv1d_b = create_tensor(tn(LLM_TENSOR_SSM_CONV1D,   "bias",   i), {n_qk}, 0);
-        z.cca_conv_grp     = create_tensor(tn(LLM_TENSOR_CCA_CONV_GRP, "weight", i), {n_embd_head, n_embd_head, n_group, d_conv}, 0);
+        z.cca_conv_grp     = create_tensor(tn(LLM_TENSOR_CCA_CONV_GRP, "weight", i), {n_embd_head, n_embd_head, n_group, d_conv}, TENSOR_NO_SCALE);
         z.cca_conv_grp_b   = create_tensor(tn(LLM_TENSOR_CCA_CONV_GRP, "bias",   i), {n_qk}, 0);
         z.cca_temp         = create_tensor(tn(LLM_TENSOR_CCA_TEMP,     "weight", i), {n_head_kv}, 0);
 
