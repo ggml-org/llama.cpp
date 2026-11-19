@@ -2652,7 +2652,8 @@ static int32_t mtmd_fish_s2_ref_encode(mtmd_context * ctx, const mtmd_audio_toke
     if (!ctx->ctx_a->encode(&params)) {
         return 1;
     }
-    if (codes.empty() || codes.size() % audio_tokens->n_tokens != 0) {
+    const size_t n_cb = ctx->ctx_a->model.gen_code_embd_w->ne[2];
+    if (codes.size() != (size_t) audio_tokens->n_tokens * n_cb) {
         LOG_ERR("%s: %zu reference codes for %u frames\n", __func__, codes.size(), audio_tokens->n_tokens);
         return 1;
     }

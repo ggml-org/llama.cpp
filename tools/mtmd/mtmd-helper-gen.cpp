@@ -2764,7 +2764,10 @@ public:
 
         // voice cloning: the codec encoder gives the backbone rows and, as the gen-side reference, the codes of the clip
         std::vector<float> ref_rows;
-        if (inp->speaker_ref) {
+        if (inp->speaker_ref && !mtmd_bitmap_is_voice(inp->speaker_ref) && !mtmd_support_audio(mctx)) {
+            // mmproj converted before voice cloning support: keep the old behavior
+            LOG_WRN("mtmd_helper_gen_audio: mmproj has no speaker encoder (re-convert it for voice cloning), the speaker file is ignored\n");
+        } else if (inp->speaker_ref) {
             if (!encode_speaker(inp->speaker_ref, ref_rows) || !init_gen_state(inp->seed) ||
                     mtmd_gen_state_set_ref(mctx, gen_state.get()) != 0) {
                 return 1;
@@ -3024,10 +3027,17 @@ protected:
             return false;
         }
         // the speaker tag follows "Text: " directly; without one, speaker 0
+        // an untagged target speaks as the reference speaker, otherwise the clone has no effect
+        std::string tag = "<|speaker:0|>";
         const size_t lead = speaker_tag_pos(ref_text);
-        ref_text = lead == std::string::npos ? "<|speaker:0|> " + ref_text : ref_text.substr(lead);
+        if (lead == std::string::npos) {
+            ref_text = tag + " " + ref_text;
+        } else {
+            ref_text = ref_text.substr(lead);
+            tag = ref_text.substr(0, ref_text.find("|>") + 2);
+        }
         if (speaker_tag_pos(text) == std::string::npos) {
-            text = "<|speaker:0|> " + text;
+            text = tag + " " + text;
         }
 
         std::vector<llama_token> head, tail;
