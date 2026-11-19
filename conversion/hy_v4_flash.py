@@ -7,19 +7,19 @@ from typing import Iterable
 import numpy as np
 import torch
 
-from .base import ModelBase, gguf, logger
+from .base import LazyTorchTensor, ModelBase, gguf, logger
 from .hy_v4 import HYV4Model
 
 # the reference derives the hash multipliers from the Engram seed, the 1-based layer id and the compressed vocab size
 ENGRAM_SEED_STRIDE = 10007
 
 
-@ModelBase.register("HYV4NextForCausalLM", "HYV4NextVLForConditionalGeneration")
+@ModelBase.register("HYV4FlashForCausalLM", "HYV4FlashForConditionalGeneration")
 @ModelBase.example("tencent/Hy4-Flash")
 class HYV4FlashModel(HYV4Model):
     """hy_v4 with sparse and sliding-window MLA layers, sandwich norms, latent routed experts, Engram and a k-pool indexer.
 
-    The MTP draft block is exported as one extra sparse layer. The vision tower is not converted.
+    The MTP draft block is exported as one extra sparse layer. The vision tower and the dfly draft layers are not converted.
     """
 
     model_arch = gguf.MODEL_ARCH.HY_V4_FLASH
@@ -28,8 +28,14 @@ class HYV4FlashModel(HYV4Model):
     skip_mtp = False
 
     # dropped subsystems, see the class docstring
-    DROP_PREFIXES = ("vit.",)
+    DROP_PREFIXES = ("vit.", "model.dfly_layers.")
     DROP_SUBSTRINGS = ()
+
+    # the released config renamed sparse_attention, both name the same layer type
+    SPARSE_TYPES = ("sparse_attention", "deepseek_sparse_attention")
+
+    # the released checkpoints ship the token map as a tensor instead of engram_vocab_map.npz
+    ENGRAM_LOOKUP_TABLE = "lookup_table"
 
     # compressed_indexer tail -> the tensor the graph reads it as
     INDEXER_MAP = {
@@ -72,16 +78,18 @@ class HYV4FlashModel(HYV4Model):
         n_layer = self.hparams["num_hidden_layers"]
         if not layer_types or len(layer_types) < n_layer:
             raise ValueError("HY_V4_FLASH needs a layer_types entry per layer")
-        unknown = set(layer_types[:n_layer]) - {"sparse_attention", "sliding_attention"}
+        unknown = set(layer_types[:n_layer]) - set(self.SPARSE_TYPES) - {"sliding_attention"}
         if unknown:
             raise ValueError(f"HY_V4_FLASH unknown layer_types values: {sorted(unknown)}")
-        self._layer_types_cache = list(layer_types[:n_layer])
+        # the released config renamed the sparse layers, normalize so the rest reads one name
+        self._layer_types_cache = ["sparse_attention" if t in self.SPARSE_TYPES else t for t in layer_types[:n_layer]]
         return self._layer_types_cache
 
     # Engram: one n-gram hash module per Engram layer, all buckets in one table as in deepseek41
 
     def _engram_enabled(self) -> bool:
-        return bool(self.hparams.get("engram_enable")) and bool(self.hparams.get("engram_layer_ids"))
+        # engram_enable is optional, a False turns Engram off
+        return bool(self.hparams.get("engram_enable", True)) and bool(self.hparams.get("engram_layer_ids"))
 
     def _engram_ids(self) -> list[int]:
         """engram_layer_ids, 1-based and sorted."""
@@ -111,20 +119,39 @@ class HYV4FlashModel(HYV4Model):
             out[i] = [int(p) for g in groups for p in g]
         return out
 
+    def _engram_lookup_names(self) -> list[str]:
+        """The lookup_table tensor of every Engram layer, empty when the checkpoint carries the npz instead."""
+        names = [f"model.layers.{i - 1}.engram_layer.{self.ENGRAM_LOOKUP_TABLE}" for i in self._engram_ids()]
+        present = [n for n in names if n in self.model_tensors]
+        if present and len(present) != len(names):
+            raise ValueError(f"HY_V4_FLASH engram is missing the lookup table of {sorted(set(names) - set(present))}")
+        return present
+
     def _engram_vocab_map(self) -> tuple[list[int], int]:
         """The token -> compressed id map, extended by identity as the reference does, and the compressed vocab size."""
-        path = Path(self.dir_model) / "engram_vocab_map.npz"
-        if not path.is_file():
-            raise FileNotFoundError(f"HY_V4_FLASH engram needs {path}")
-        with np.load(path) as z:
-            table = z["lookup_table"].astype(np.int64)
-            meta = json.loads(bytes(z["metadata"]).decode("utf-8").rstrip("\x00"))
+        names = self._engram_lookup_names()
+        if names:
+            table = LazyTorchTensor.to_eager(self.model_tensors[names[0]]()).numpy().astype(np.int64)
+            for other in names[1:]:
+                if not np.array_equal(LazyTorchTensor.to_eager(self.model_tensors[other]()).numpy().astype(np.int64), table):
+                    raise ValueError(f"HY_V4_FLASH engram lookup table of {other} differs from {names[0]}")
+            # the map is onto a dense id range from 0, so its largest id gives the compressed vocab size
+            compressed = int(table.max()) + 1
+            if int(table.min()) != 0 or len(np.unique(table)) != compressed:
+                raise ValueError("HY_V4_FLASH engram lookup table is not a dense id range from 0, supply engram_vocab_map.npz")
+        else:
+            path = Path(self.dir_model) / "engram_vocab_map.npz"
+            if not path.is_file():
+                raise FileNotFoundError(f"HY_V4_FLASH engram needs a lookup_table tensor or {path}")
+            with np.load(path) as z:
+                table = z["lookup_table"].astype(np.int64)
+                meta = json.loads(bytes(z["metadata"]).decode("utf-8").rstrip("\x00"))
 
-        compressed = int(meta["compressed_vocab_size"])
-        if int(table.max()) + 1 > compressed:
-            raise ValueError("HY_V4_FLASH engram lookup table exceeds its compressed vocab size")
-        if int(meta["engram_seed"]) != int(self.hparams.get("engram_seed", 0)):
-            raise ValueError("HY_V4_FLASH engram seed disagrees between the config and the vocab map")
+            compressed = int(meta["compressed_vocab_size"])
+            if int(table.max()) + 1 > compressed:
+                raise ValueError("HY_V4_FLASH engram lookup table exceeds its compressed vocab size")
+            if int(meta["engram_seed"]) != int(self.hparams.get("engram_seed", 0)):
+                raise ValueError("HY_V4_FLASH engram seed disagrees between the config and the vocab map")
 
         n_vocab = self.hparams["vocab_size"]
         token_map = list(map(int, table))
@@ -200,9 +227,13 @@ class HYV4FlashModel(HYV4Model):
 
     def _rope_for(self, layer_type: str) -> dict:
         params = self.hparams.get("rope_parameters")
-        if not isinstance(params, dict) or layer_type not in params:
+        names = self.SPARSE_TYPES if layer_type == "sparse_attention" else (layer_type,)
+        found = [params[n] for n in names if isinstance(params, dict) and n in params]
+        if not found:
             raise ValueError(f"HY_V4_FLASH needs rope_parameters[{layer_type!r}]")
-        return params[layer_type]
+        if any(f != found[0] for f in found[1:]):
+            raise ValueError(f"HY_V4_FLASH has conflicting rope_parameters for {names}")
+        return found[0]
 
     def set_gguf_parameters(self):
         hparams = self.hparams
@@ -391,8 +422,12 @@ class HYV4FlashModel(HYV4Model):
         hc = self.hparams["hc_mult"]
         n_head = self.hparams["engram_n_head_per_ngram"] * (self.hparams["engram_max_ngram_size"] - 1)
 
-        buf = self._engram_buf.setdefault(bid, {})
         tail = name.split(".engram_layer.", 1)[1]
+        if tail == self.ENGRAM_LOOKUP_TABLE:
+            # the token map, read through _engram_vocab_map() and written as GGUF metadata
+            return
+
+        buf = self._engram_buf.setdefault(bid, {})
         buf[tail] = data_torch
 
         tn = self.format_tensor_name
