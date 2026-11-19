@@ -3228,7 +3228,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                 GGML_ASSERT(hparams.swa_type != LLAMA_SWA_TYPE_NONE);
 
                 if (hparams.indexer_top_k == 0) {
-                    // no indexer, so the sparse layers attend their whole context: a plain iSWA pair is enough
+                    // without an indexer the sparse layers attend their whole context
                     llama_kv_cache_iswa::layer_filter_cb filter = [&](uint32_t il) {
                         return il < hparams.n_layer();
                     };
@@ -3266,8 +3266,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         return il < hparams.n_layer() && !hparams.is_swa(il) && hparams.is_indexer_full(il);
                     };
 
-                    // the draft context holds the MTP block alone, which is a sparse layer and so
-                    // owns an indexer of its own
+                    // the draft context holds the MTP block alone, a sparse layer with its own indexer
                     if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
                         if (hparams.n_layer_nextn == 0) {
                             throw std::runtime_error("hy_v4_flash MTP requires the draft block, convert without --no-mtp");
@@ -3893,10 +3892,8 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_BAILINGMOE3:
             // VL files carry mrope sections; text-only files keep NORM rope
             return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_MROPE : LLAMA_ROPE_TYPE_NORM;
-        // HY_V4 rotates consecutive pairs, matching the reference implementation.
-        // VL files carry rope sections and NeoX ordered rope rows (see conversion/hy_v4.py).
+        // HY_V4 rotates consecutive pairs, matching the reference implementation
         case LLM_ARCH_HY_V4:
-            return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_IMROPE : LLAMA_ROPE_TYPE_NORM;
         case LLM_ARCH_HY_V4_FLASH:
             return LLAMA_ROPE_TYPE_NORM;
 

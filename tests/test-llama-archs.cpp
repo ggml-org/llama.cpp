@@ -392,8 +392,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         std::vector<uint32_t> n_head_per_layer;
         n_head_per_layer.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
-            // hy_v4_flash has no recurrent layer: the odd layers are sliding-window and
-            // carry twice the heads over the same latent geometry
+            // hy_v4_flash: the odd layers are sliding-window, with twice the heads
             n_head_per_layer.push_back(arch == LLM_ARCH_HY_V4_FLASH
                     ? (il % 2 ? 2*n_head : n_head)
                     : (il == 1 ? 0 : n_head));
@@ -601,9 +600,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     // summing to n_rot / 2 (n_rot is 64 in this fixture)
     if (arch == LLM_ARCH_BAILINGMOE3) {
         ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({8, 12, 12, 0}));
-    } else if (arch == LLM_ARCH_HY_V4) {
-        // text-only hy_v4 files carry no sections, keep the normal rope path
-        ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({0, 0, 0, 0}));
     } else {
         ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
     }
@@ -632,11 +628,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,       1.0f);
         ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM,        true);
         ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,         10000.0f);
-        // the sliding window and its il%2 pattern come from the shared blocks above,
-        // which is what the per-layer head count is matched to
-        // the indexer lives on the non-SWA layers, which here are the even ones. The shared
-        // INDEXER_TOP_K above is deliberately huge, so every pool is selected and the result stays
-        // comparable with the full-attention path.
+        // the indexer lives on the non-SWA layers, the even ones here
         {
             std::vector<uint32_t> indexer_types;
             indexer_types.reserve(n_layer);
@@ -648,8 +640,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, uint32_t(2));
         ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, uint32_t(96));
 
-        // one Engram module, on layer 1. The bucket counts are tiny but must stay distinct and
-        // above 1, and their running sum is what the head offsets rebase into.
+        // one Engram module on layer 1, the head offsets are the running sum of the bucket counts
         {
             // the loader reads the bucket ranges as u64 arrays
             const std::vector<uint64_t> primes = {7, 11, 13, 17};
@@ -826,8 +817,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     if (moe) {
         ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, n_ff);
         ms.add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, n_ff / 2);  // distinct from n_ff so a saver key-clobber surfaces on reload
-        // keep the latent width distinct from n_ff_exp, or a transposed routed_down / routed_up
-        // would still load and the orientation would go untested
+        // a latent width distinct from n_ff_exp catches a transposed routed_down / routed_up
         ms.add_kv(LLM_KV_EXPERT_LATENT_LENGTH,       arch == LLM_ARCH_HY_V4_FLASH ? uint32_t(64) : n_ff);
         ms.add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,  uint32_t(2));
         // with more experts than a ubatch uses, the copy of the used experts in host memory skips some of them

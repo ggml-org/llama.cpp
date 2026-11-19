@@ -2111,8 +2111,6 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                 }
             } break;
         case PROJECTOR_TYPE_HUNYUANVL:
-        case PROJECTOR_TYPE_HY_V4_FLASH:
-        case PROJECTOR_TYPE_HY_V4_VL:
             {
                 // Compute the HunyuanVL 2D position embedding on CPU (with the
                 // custom sf=(target+0.1)/n_grid bilinear sampling that the

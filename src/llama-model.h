@@ -635,16 +635,13 @@ struct llama_layer {
     // glm5-next k-pool indexer
     struct ggml_tensor * indexer_kpool_gate = nullptr;
     struct ggml_tensor * indexer_kpool_ape  = nullptr;
-    // hy_v4_flash: the pool runs over a projection of the normed key, and the pooled result is
-    // normed again before it is scored
+    // hy_v4_flash: what the k-pool pools
     struct ggml_tensor * indexer_kpool_value = nullptr;
-    struct ggml_tensor * indexer_kpool_norm  = nullptr;
 
     // deepseek41
     struct ggml_tensor * engram_kv   = nullptr;
     struct ggml_tensor * engram_gate = nullptr; // q_weight*k_weight folded
-    // hy_v4_flash only: biases on engram_kv, the per-head norm of the looked-up rows, and the
-    // scale/offset of the delta the module writes back
+    // hy_v4_flash: engram_kv bias, per-head norm of the looked-up rows, scale and offset of the delta
     struct ggml_tensor * engram_kv_b        = nullptr;
     struct ggml_tensor * engram_lookup_norm = nullptr;
     struct ggml_tensor * engram_pre_gamma   = nullptr;

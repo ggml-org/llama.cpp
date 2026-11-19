@@ -1160,7 +1160,6 @@ class MODEL_TENSOR(IntEnum):
     INDEXER_KPOOL_GATE   = auto()
     INDEXER_KPOOL_APE    = auto()
     INDEXER_KPOOL_VALUE  = auto()
-    INDEXER_KPOOL_NORM   = auto()
     ATTN_V_GATE          = auto() # k2-horizon MoVA router
     ATTN_V_EXP           = auto() # k2-horizon MoVA value experts
     # vision
@@ -2181,7 +2180,6 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.INDEXER_KPOOL_GATE:        "blk.{bid}.indexer_compressor_gate",
     MODEL_TENSOR.INDEXER_KPOOL_APE:         "blk.{bid}.indexer_compressor_ape",
     MODEL_TENSOR.INDEXER_KPOOL_VALUE:       "blk.{bid}.indexer_compressor_value",
-    MODEL_TENSOR.INDEXER_KPOOL_NORM:        "blk.{bid}.indexer_compressor_norm",
     # vision
     MODEL_TENSOR.V_MMPROJ:                  "mm.{bid}",
     MODEL_TENSOR.V_MMPROJ_FC:               "mm.model.fc",
@@ -6156,7 +6154,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.INDEXER_KPOOL_GATE,
         MODEL_TENSOR.INDEXER_KPOOL_APE,
         MODEL_TENSOR.INDEXER_KPOOL_VALUE,
-        MODEL_TENSOR.INDEXER_KPOOL_NORM,
+        MODEL_TENSOR.INDEXER_COMPRESSOR_NORM,
         MODEL_TENSOR.NEXTN_EH_PROJ,
         MODEL_TENSOR.NEXTN_ENORM,
         MODEL_TENSOR.NEXTN_HNORM,
@@ -7626,8 +7624,6 @@ class VisionProjectorType:
     KOKORO = "kokoro" # audio generation: StyleTTS2 prosody predictor + iSTFTNet decoder
     TINY_VOCA = "tiny_voca" # audio generation: duration predictor, frame transformers, source-filter vocoder
     HUNYUANVL      = "hunyuanvl"
-    HY_V4_FLASH    = "hy_v4_flash"
-    HY_V4_VL       = "hy_v4_vl"
     PARAKEET       = "parakeet"  # audio
     MINIMAXM3      = "minimax_m3"
     MINICPMV4_6    = "minicpmv4_6"

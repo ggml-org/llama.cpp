@@ -898,7 +898,6 @@ enum llm_tensor {
     LLM_TENSOR_INDEXER_KPOOL_GATE,   // glm5-next: k-pool gate scores
     LLM_TENSOR_INDEXER_KPOOL_APE,    // glm5-next: k-pool position bias
     LLM_TENSOR_INDEXER_KPOOL_VALUE,  // hy_v4_flash: what the k-pool actually pools
-    LLM_TENSOR_INDEXER_KPOOL_NORM,   // hy_v4_flash: norm of the pooled key
     LLM_TENSOR_FFN_GATE_TID2EID,
     LLM_TENSOR_NEXTN_PROJ_PRE,
     LLM_TENSOR_NEXTN_PROJ_POST,

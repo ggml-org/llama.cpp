@@ -2712,7 +2712,6 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MM_PRE_NORM: (
             "vit.perceive.before_rms", # HunyuanVL
-            "vit.perceive.norm", # hy-v4-flash
         ),
 
         MODEL_TENSOR.V_TOK_IMG_BEGIN: (

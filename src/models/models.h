@@ -2441,9 +2441,7 @@ struct llama_model_hy_v4 : public llama_model_base {
 };
 
 
-// HY_V4_FLASH: hy_v4's iHC + gated MLA + sinks, with a hybrid attention stack (sparse full
-// layers alternating with sliding-window layers, each with its own head count and rope base),
-// sandwich norms and routed experts that run in a latent space.
+// hy_v4 iHC, gated MLA and sinks, with sparse and sliding-window layers, sandwich norms and latent routed experts
 struct llama_model_hy_v4_flash : public llama_model_base {
     llama_model_hy_v4_flash(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
@@ -2453,9 +2451,7 @@ struct llama_model_hy_v4_flash : public llama_model_base {
     // -1 when the layer has no Engram module, else its index among the Engram layers
     int engram_index(int il) const;
 
-    // n-gram hash of module e. Writes one row id per (token, column) into ids, and alongside it the
-    // per-column validity: a short history is padded, as in deepseek41, so only a position with no
-    // n-gram at all (an embedding position) is marked invalid.
+    // n-gram hash of module e: one row id and one validity per (token, column)
     void engram_hash(int e, const llama_ubatch & ubatch, const std::vector<llama_token> & prev,
             std::vector<int32_t> & ids, std::vector<float> & valid) const;
 
@@ -2468,8 +2464,7 @@ struct llama_model_hy_v4_flash : public llama_model_base {
         struct no_build {};
         graph(const llm_graph_params & params, no_build) : llm_graph_context(params) {}
 
-        // iHC, same layout as hy_v4: pre reduces the hc streams to one and returns the per-stream
-        // post gates, post writes the sublayer output back, head collapses before the final norm.
+        // iHC, same layout as hy_v4
         struct hc_pre {
             ggml_tensor * cur;
             ggml_tensor * post;
@@ -2500,8 +2495,7 @@ struct llama_model_hy_v4_flash : public llama_model_base {
                 ggml_tensor * hc_scale,
                 ggml_tensor * hc_base) const;
 
-        // mctx_idx and inp_kpool are null when the file carries no indexer, and the sparse layers
-        // then attend their whole context
+        // mctx_idx and inp_kpool are null without an indexer
         ggml_tensor * build_attention(
                 const llama_model & model,
                 llm_graph_input_attn_k_iswa * inp_attn,
@@ -2517,8 +2511,7 @@ struct llama_model_hy_v4_flash : public llama_model_base {
         ggml_tensor * build_indexer_rope(ggml_tensor * x, ggml_tensor * pos, int64_t n_idx,
                 float freq_base, int il) const;
 
-        // score the pooled keys against the query and keep the best groups, plus the group the
-        // current token sits in
+        // keep the best scored pools plus the current one
         ggml_tensor * build_kpool_select(
                 ggml_tensor * cur,
                 ggml_tensor * qr,
@@ -2535,7 +2528,7 @@ struct llama_model_hy_v4_flash : public llama_model_base {
                 ggml_tensor * cur,
                 int il) const;
 
-        // Engram writes its delta into the hc residual streams before the layer's attention pre-mix
+        // Engram adds its delta to the hc streams before the attention
         ggml_tensor * build_engram(
                 const llama_model & model,
                 ggml_tensor * x,
@@ -2544,8 +2537,7 @@ struct llama_model_hy_v4_flash : public llama_model_base {
                 int il) const;
     };
 
-    // the draft block: one sparse layer fed the next token's embedding and the trunk's final
-    // hidden state, with no hyper-connections of its own
+    // the draft block: one sparse layer without hyper-connections
     struct graph_mtp : public graph {
         graph_mtp(const llama_model & model, const llm_graph_params & params);
     };

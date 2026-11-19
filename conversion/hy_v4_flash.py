@@ -10,36 +10,21 @@ import torch
 from .base import ModelBase, gguf, logger
 from .hy_v4 import HYV4Model
 
-# the hash multipliers are not stored in the checkpoint: the reference derives them from the
-# Engram seed, the 1-based layer id and the compressed vocabulary size
+# the reference derives the hash multipliers from the Engram seed, the 1-based layer id and the compressed vocab size
 ENGRAM_SEED_STRIDE = 10007
 
 
 @ModelBase.register("HYV4NextForCausalLM", "HYV4NextVLForConditionalGeneration")
 @ModelBase.example("tencent/Hy4-Flash")
 class HYV4FlashModel(HYV4Model):
-    """HY_V4_FLASH: hy_v4's iHC + gated MLA + learnable sink with a hybrid attention stack.
+    """hy_v4 with sparse and sliding-window MLA layers, sandwich norms, latent routed experts, Engram and a k-pool indexer.
 
-    The stack mixes "sparse" full-attention layers with sliding-window layers, in the order given
-    by layer_types rather than a fixed alternation. Both are MLA over the same latent geometry and
-    differ only in head count and rope base, so the head count is exported per layer and the window
-    layers get their own rope frequency.
-
-    Added over hy_v4: sandwich norms (after the attention output and after the FFN) and routed
-    experts that run in a latent space reached by routed_expert_down_proj / _up_proj, while the
-    router and the shared expert stay at hidden_size.
-
-    The MTP (nextn) draft block is exported as one extra sparse layer with no hyper-connections of
-    its own; it is fed the next token's embedding and the trunk's final hidden state.
-
-    Dropped: the vision tower, which is converted separately as an mmproj.
+    The MTP draft block is exported as one extra sparse layer. The vision tower is not converted.
     """
 
     model_arch = gguf.MODEL_ARCH.HY_V4_FLASH
 
-    # the draft block is exported, and _engram_modify re-enters the normal path under a block index
-    # past the trunk. DeepseekV2Model.modify_tensors drops exactly that range when skip_mtp is set,
-    # which would silently lose most of the block.
+    # the draft block is exported under block ids past the trunk, which skip_mtp would drop
     skip_mtp = False
 
     # dropped subsystems, see the class docstring
@@ -53,21 +38,21 @@ class HYV4FlashModel(HYV4Model):
         "key_value_projection.weight":   gguf.MODEL_TENSOR.INDEXER_KPOOL_VALUE,
         "key_gate_projection.weight":    gguf.MODEL_TENSOR.INDEXER_KPOOL_GATE,
         "intra_group_ape":               gguf.MODEL_TENSOR.INDEXER_KPOOL_APE,
-        "key_norm.weight":               gguf.MODEL_TENSOR.INDEXER_KPOOL_NORM,
+        "key_norm.weight":               gguf.MODEL_TENSOR.INDEXER_COMPRESSOR_NORM,
         "query_projection.weight":       gguf.MODEL_TENSOR.INDEXER_ATTN_Q_B,
         "head_weight_projection.weight": gguf.MODEL_TENSOR.INDEXER_PROJ,
     }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # the draft block is an extra block as far as tensor naming goes; block_count is what the
-        # loader reads as n_layer_all and it subtracts the nextn count back off
+        # the draft block is an extra block, the loader subtracts the nextn count from block_count
         if not getattr(self, "no_mtp", False):
             self.block_count += self._n_nextn()
             self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
         # Engram weights arrive one at a time but are written fused, so they wait here
         self._engram_buf: dict[int, dict[str, torch.Tensor]] = {}
         self._engram_tables: dict[int, torch.Tensor] = {}
+        self._engram_done: set[str] = set()
 
     @classmethod
     def filter_tensors(cls, item):
@@ -93,16 +78,13 @@ class HYV4FlashModel(HYV4Model):
         self._layer_types_cache = list(layer_types[:n_layer])
         return self._layer_types_cache
 
-    # ---- Engram ------------------------------------------------------------------------------
-    #
-    # Four n-gram hash modules, one per Engram layer. All of their buckets are packed into a single
-    # table, so each module's head offsets are rebased into it, matching deepseek41's layout.
+    # Engram: one n-gram hash module per Engram layer, all buckets in one table as in deepseek41
 
     def _engram_enabled(self) -> bool:
         return bool(self.hparams.get("engram_enable")) and bool(self.hparams.get("engram_layer_ids"))
 
     def _engram_ids(self) -> list[int]:
-        """The config's engram_layer_ids, 1-based, in ascending order."""
+        """engram_layer_ids, 1-based and sorted."""
         ids = sorted(int(i) for i in self.hparams["engram_layer_ids"])
         n_layer = self.hparams["num_hidden_layers"]
         for i in ids:
@@ -112,7 +94,7 @@ class HYV4FlashModel(HYV4Model):
         return ids
 
     def _engram_primes(self) -> dict[int, list[int]]:
-        """Per 1-based layer id, the 16 bucket counts flattened from their [ngram][head] nesting."""
+        """Per 1-based layer id, the flattened [ngram][head] bucket counts."""
         raw = self.hparams.get("engram_layer_head_vocab_sizes") or {}
         n_gram = self.hparams["engram_max_ngram_size"]
         n_head = self.hparams["engram_n_head_per_ngram"]
@@ -130,13 +112,7 @@ class HYV4FlashModel(HYV4Model):
         return out
 
     def _engram_vocab_map(self) -> tuple[list[int], int]:
-        """The token -> compressed id map, extended by identity, and the compressed vocab size.
-
-        The map covers only the source tokenizer, which is shorter than the model's vocabulary. The
-        reference extends it by identity, which puts the trailing reserved ids outside the
-        compressed range; they hash to a row anyway because the hash is taken modulo the bucket
-        count, so they stay in range but are not reachable by any trained token.
-        """
+        """The token -> compressed id map, extended by identity as the reference does, and the compressed vocab size."""
         path = Path(self.dir_model) / "engram_vocab_map.npz"
         if not path.is_file():
             raise FileNotFoundError(f"HY_V4_FLASH engram needs {path}")
@@ -174,8 +150,7 @@ class HYV4FlashModel(HYV4Model):
         if rem:
             raise ValueError("HY_V4_FLASH engram_n_embed_per_ngram is not a multiple of the head count")
 
-        # offsets rebase each module's buckets into the single shared table; row ids are int32, so
-        # the loader rejects a table whose last bucket ends past INT32_MAX
+        # rebase each module's buckets into the shared table, row ids are int32
         offsets: list[int] = []
         multipliers: list[int] = []
         base = 0
@@ -207,13 +182,7 @@ class HYV4FlashModel(HYV4Model):
         return int(self.hparams.get("num_nextn_predict_layers", 0) or 0)
 
     def _layer_type_of(self, bid: int) -> str:
-        """Layer type of any block, including the draft one.
-
-        A draft block defaults to a sparse layer that owns an indexer, which is the shape the
-        checkpoints are exported with, and `mtp_layer_types` overrides it per draft layer. The
-        graph only drives a sparse draft block, so refuse anything else rather than write a file
-        whose head count and rope would silently disagree with it.
-        """
+        """Layer type of any block, draft blocks included. Only sparse draft blocks are supported."""
         n_layer = self.hparams["num_hidden_layers"]
         if bid < n_layer:
             return self._layer_types()[bid]
@@ -243,9 +212,7 @@ class HYV4FlashModel(HYV4Model):
         if not any(is_swa) or all(is_swa):
             raise ValueError("HY_V4_FLASH expects a mix of sparse and sliding attention layers")
 
-        # The graph applies the sandwich post-norms on every layer unconditionally, so refuse a
-        # config that asks for either of them to be skipped: the tensors ship in both cases, so
-        # the file would convert cleanly and then quietly compute something else.
+        # the graph always applies the sandwich post-norms
         if not hparams.get("sandwich_norm", False):
             raise ValueError("HY_V4_FLASH expects sandwich_norm, the graph always applies the post-norms")
         if hparams.get("dsa_skip_attn_post_norm", False):
@@ -253,14 +220,11 @@ class HYV4FlashModel(HYV4Model):
                 "HY_V4_FLASH: dsa_skip_attn_post_norm is not supported - the graph applies "
                 "attn_post_norm on the sparse layers too")
 
-        # the base reads rope_parameters["full_attention"], which this config does not have:
-        # its non-sliding entry is keyed "sparse_attention". Without this the sparse layers
-        # would silently fall back to the default rope base.
+        # the non-sliding rope entry is keyed "sparse_attention", not "full_attention" as the base expects
         sparse_rope = self._rope_for("sparse_attention")
         window_rope = self._rope_for("sliding_attention")
 
-        # hy_v4 warns that it drops the draft block. This model exports it, so keep the key out of
-        # sight for that one call rather than let the warning mislead.
+        # hide the key from hy_v4, which warns that it drops the draft block
         n_nextn = self.hparams.pop("num_nextn_predict_layers", None)
         try:
             super().set_gguf_parameters()
@@ -275,9 +239,8 @@ class HYV4FlashModel(HYV4Model):
         n_head_swa = hparams["swa_num_attention_heads"]
         self.gguf_writer.remove_key(
             gguf.Keys.Attention.HEAD_COUNT.format(arch=self.gguf_writer.arch))
-        # the arrays are read over n_layer_all, so the draft block needs an entry too: it is a
-        # sparse layer, so the global head count and no window
-        is_swa_all = is_swa + [False] * self._n_nextn()
+        # the arrays cover n_layer_all, the draft block is a sparse layer
+        is_swa_all = is_swa + [False] * (0 if getattr(self, "no_mtp", False) else self._n_nextn())
         self.gguf_writer.add_head_count(
             [n_head_swa if swa else n_head for swa in is_swa_all])
 
@@ -294,13 +257,12 @@ class HYV4FlashModel(HYV4Model):
             self.gguf_writer.add_nextn_predict_layers(self._n_nextn())
 
         if self._indexer_enabled():
-            # the base writes head_count / key_length / top_k / types off indexer_is_full(); the
-            # pool size is this model's compress_ratio, and the current partial group is always kept
+            # the pool size is compress_ratio, and the current group is always kept
             ratio = hparams["compressed_indexer_compress_ratio"]
             self.gguf_writer.add_indexer_kpool(ratio)
             self.gguf_writer.add_indexer_kpool_select_tail(True)
 
-            # the reference's own config check: the candidate budget is the group budget expanded
+            # same check as the reference
             group_topk = hparams.get("compressed_indexer_group_topk")
             candidate = hparams.get("compressed_indexer_candidate_topk")
             if group_topk and candidate and group_topk * ratio != candidate:
@@ -311,11 +273,10 @@ class HYV4FlashModel(HYV4Model):
                 raise ValueError(
                     f"HY_V4_FLASH indexer: index_topk {hparams['index_topk']} is not a multiple "
                     f"of compress_ratio {ratio}")
+            is_full = self.indexer_is_full() or []
             logger.info(
-                "HY_V4_FLASH indexer: %d pooled groups of %d, keeping the best %d plus the "
-                "current group (index_topk %d)",
-                sum(self.indexer_is_full()), ratio, hparams["index_topk"] // ratio,
-                hparams["index_topk"])
+                "HY_V4_FLASH indexer: %d pooled groups of %d, keeping the best %d plus the current group (index_topk %d)",
+                sum(is_full), ratio, hparams["index_topk"] // ratio, hparams["index_topk"])
 
         if self._engram_enabled():
             self._engram_set_gguf_parameters()
@@ -341,11 +302,7 @@ class HYV4FlashModel(HYV4Model):
             )
 
     def _check_mla_geometry(self):
-        """The window layers must share the sparse layers' MLA geometry.
-
-        Only the head count may differ: the graph keeps one latent cache for both layer types
-        and reads a single set of MLA dimensions.
-        """
+        """Both layer types must share one MLA geometry, only the head count may differ."""
         hparams = self.hparams
         for sparse_key, window_key in (
             ("qk_nope_head_dim", "swa_qk_nope_head_dim"),
@@ -366,24 +323,14 @@ class HYV4FlashModel(HYV4Model):
         return bool(self.hparams.get("use_dsa")) and bool(self.hparams.get("use_compressed_indexer"))
 
     def indexer_is_full(self) -> list[bool] | None:
-        """Which layers own a k-pool indexer.
-
-        Derived from layer_types, not from indexer_types: the config marks all 42 layers "full",
-        which there means the layer carries an indexer *config*, while only the sparse layers
-        actually hold compressed_indexer weights. llama.cpp's flag means "owns one".
-        """
+        """Which layers own a k-pool indexer: the sparse ones. The config indexer_types marks every layer."""
         if not self._indexer_enabled():
             return None
         n_all = self.hparams["num_hidden_layers"] + self._n_nextn()
         return [self._layer_type_of(i) == "sparse_attention" for i in range(n_all)]
 
     def prepare_tensors(self):
-        """Validate against this model's own indexer, then skip hy_v4's check.
-
-        hy_v4 looks for the lightning indexer's `self_attn.indexer.*`; this model instead carries
-        `self_attn.compressed_indexer.*` on its sparse layers, so the inherited check would reject
-        every file.
-        """
+        """Check the compressed_indexer tensors instead of hy_v4's self_attn.indexer ones."""
         self.hparams["num_key_value_heads"] = self.hparams["num_attention_heads"]
 
         is_full = self.indexer_is_full()
@@ -414,32 +361,30 @@ class HYV4FlashModel(HYV4Model):
         # straight to the grandparent: hy_v4's own validation does not apply here
         super(HYV4Model, self).prepare_tensors()
 
+        if self._engram_enabled():
+            T = gguf.MODEL_TENSOR
+            want = {self.format_tensor_name(T.PER_LAYER_TOKEN_EMBD)}
+            for i in self._engram_ids():
+                for t in (T.ENGRAM_KV, T.ENGRAM_KV_B, T.ENGRAM_GATE, T.ENGRAM_LOOKUP_NORM, T.ENGRAM_HC_SCALE, T.ENGRAM_PRE_GAMMA):
+                    want.add(self.format_tensor_name(t, i - 1))
+            if want - self._engram_done:
+                raise ValueError(f"HY_V4_FLASH: incomplete Engram tensors {sorted(want - self._engram_done)}")
+
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int):
-        # the graph feeds these straight to ggml_add / ggml_mul as the second operand, which has no
-        # f16 kernel. deepseek41 keeps engram_gate f32 for the same reason; all three are tiny.
+        # ggml_add / ggml_mul operands, kept f32 as deepseek41 does for engram_gate
         if new_name.endswith((".engram_gate.weight", ".engram_kv_b.weight", ".engram_hc_scale.weight")):
             return gguf.GGMLQuantizationType.F32
-        # same for the pooled-key position bias, which is a ggml_add operand. glm keeps every
-        # indexer_compressor_ tensor f32; here the norms already fall under the base class's
-        # *_norm.weight rule and the rest are matmul operands, so only the ape needs it.
+        # the pooled-key position bias is a ggml_add operand too
         if new_name.endswith(".indexer_compressor_ape.weight"):
             return gguf.GGMLQuantizationType.F32
-        # The router picks which experts fire, so it stays f32 like every other arch's. The base
-        # class's rule for it matches the tensor name against the *source* layer id, which no
-        # longer agrees with the name once the draft block has been renumbered into the trunk's
-        # range - so without this the draft block's router alone would ship at the source dtype.
+        # the base rule misses the router of the renumbered draft block
         if new_name.endswith((".ffn_gate_inp.weight", ".ffn_gate_inp_shexp.weight")):
             return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def _engram_modify(self, data_torch: torch.Tensor, name: str,
                        bid: int | None) -> Iterable[tuple[str, torch.Tensor]]:
-        """Fuse a layer's Engram weights into the tensors the graph reads.
-
-        The per-hc key projections and the single value projection become one matmul plus one bias,
-        and the two gate norms multiply into one, both matching deepseek41's fused layout. Nothing
-        is emitted until a group is complete, because the fused tensor needs every part.
-        """
+        """Fuse a layer's Engram weights as deepseek41 does, once all parts of a group arrived."""
         if bid is None:
             raise ValueError(f"HY_V4_FLASH: engram tensor without a layer id: {name}")
 
@@ -459,8 +404,7 @@ class HYV4FlashModel(HYV4Model):
         def take(*names):
             return [buf.pop(n) for n in names]
 
-        # the fused matmul: hc key projections then the value projection, which is the order the
-        # graph's views assume
+        # hc key projections then the value projection, the order the graph views assume
         kv_parts = [f"key_projs.{c}.weight" for c in range(hc)] + ["value_proj.weight"]
         if ready(*kv_parts):
             yield tn(T.ENGRAM_KV, bid), torch.cat(take(*kv_parts), dim=0)
@@ -487,8 +431,7 @@ class HYV4FlashModel(HYV4Model):
         if ready("unified_pre_gamma"):
             yield tn(T.ENGRAM_PRE_GAMMA, bid), take("unified_pre_gamma")[0]
 
-        # every module's buckets share one table, concatenated in layer order, so it can only be
-        # written once the last module has arrived
+        # the tables of all modules are concatenated in layer order
         if ready("multi_head_embedding.embedding.weight"):
             self._engram_tables[bid] = take("multi_head_embedding.embedding.weight")[0]
             want = [i - 1 for i in self._engram_ids()]
@@ -520,28 +463,26 @@ class HYV4FlashModel(HYV4Model):
             return
 
         if ".compressed_indexer." in name:
-            # dropped wholesale when the indexer is off, so the GGUF stays loadable as a
-            # full-attention model
+            # dropped when the indexer is off, the sparse layers then attend their whole context
             if not self._indexer_enabled():
                 return
             tail = name.split(".compressed_indexer.", 1)[1]
             key = self.INDEXER_MAP.get(tail)
             if key is None:
                 raise ValueError(f"HY_V4_FLASH: unmapped compressed_indexer tensor {name}")
-            # intra_group_ape is numpy [kpool, head_dim], which gguf writes as ne (head_dim, kpool)
-            # already, so no transpose is needed anywhere here
+            # intra_group_ape [kpool, head_dim] is already ne (head_dim, kpool)
             yield self.format_tensor_name(key, bid), data_torch
             return
 
         if ".engram_layer." in name:
             if not self._engram_enabled():
                 return
-            yield from self._engram_modify(data_torch, name, bid)
+            for new_name, t in self._engram_modify(data_torch, name, bid):
+                self._engram_done.add(new_name)
+                yield new_name, t
             return
 
-        # the base splits kv_b_proj with one global head count; here the sliding-window
-        # layers carry swa_num_attention_heads over the same MLA geometry, so the split
-        # has to read the head count of this layer
+        # split kv_b_proj with the head count of this layer, the base uses a global one
         if name.endswith("kv_b_proj.weight") and bid is not None:
             hparams = self.hparams
             n_head = (hparams["swa_num_attention_heads"]

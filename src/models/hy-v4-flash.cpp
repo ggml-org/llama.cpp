@@ -1,22 +1,16 @@
 #include "models.h"
 
-#include "llama-kv-cache.h"
-#include "llama-kv-cache-iswa.h"
 #include "llama-memory-idx-iswa.h"
 
 #include <cmath>
 
-// HY_V4_FLASH reuses hy_v4's iHC, gated MLA and learnable sink. What it adds:
-// - a hybrid stack: "sparse" full-attention layers and sliding-window layers, with their own
-//   head count and rope base, over one shared MLA latent geometry
-// - sandwich norms after the attention output and after the FFN
-// - routed experts that run at n_expert_latent instead of n_embd
+// hy_v4 iHC, gated MLA and sinks, plus: sparse and sliding-window layers over one MLA geometry,
+// sandwich norms, and routed experts at n_expert_latent instead of n_embd
 
 // a token that cannot be hashed: outside the map, or an embedding (image) position
 static constexpr int64_t HY_V4_FLASH_ENGRAM_DEAD = -1;
 
-// The reference builds every Engram norm as an RMSNorm with eps left unset, which resolves to the
-// fp32 machine epsilon rather than to the model's rms_norm_eps.
+// the reference Engram norms leave eps unset, so they use the fp32 machine epsilon, not rms_norm_eps
 static constexpr float HY_V4_FLASH_ENGRAM_EPS = 1.1920929e-07f;
 
 static size_t hy_v4_flash_elem_offset(const ggml_tensor * t, int64_t i) {
@@ -58,9 +52,7 @@ void llama_model_hy_v4_flash::load_arch_hparams(llama_model_loader & ml) {
     hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
     ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
 
-    // Compressed indexer, optional: present on the sparse layers only. A file without it falls
-    // back to those layers attending their whole context, which is what phase 1 shipped, so the
-    // keys are read only when indexer.top_k says there is an indexer at all.
+    // the indexer is optional, without it the sparse layers attend their whole context
     ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K, hparams.indexer_top_k, false);
     if (hparams.indexer_top_k > 0) {
         ml.get_key(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,        hparams.indexer_n_head);
@@ -69,8 +61,7 @@ void llama_model_hy_v4_flash::load_arch_hparams(llama_model_loader & ml) {
         ml.get_key(LLM_KV_ATTENTION_INDEXER_KPOOL_SELECT_TAIL, hparams.indexer_kpool_select_tail, false);
         ml.get_key_or_arr(LLM_KV_ATTENTION_INDEXER_TYPES, hparams.is_indexer_full_impl, hparams.n_layer(), false);
 
-        // indexer.types is what says which layers own one. Without it nothing does, and a file that
-        // carries the other indexer keys anyway must not select a cache this graph cannot drive.
+        // indexer.types says which layers own an indexer, none means no indexer
         bool any = false;
         for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
             any = any || hparams.is_indexer_full(il);
@@ -112,10 +103,7 @@ void llama_model_hy_v4_flash::load_arch_hparams(llama_model_loader & ml) {
         throw std::runtime_error("hy_v4_flash: no sliding-window layer, expected a hybrid stack");
     }
 
-    // One latent geometry for both layer types: only the head count differs, so the graph keeps a
-    // single latent cache and reads one set of MLA dimensions. dots3note is the arch that varies
-    // these per layer, and a file written for that shape would be read here as if it did not, so
-    // refuse it instead of building mis-sized wk_b / wv_b / wo views.
+    // both layer types share one MLA geometry, only the head count differs
     uint32_t n_embd_head_k_mla_swa = 0;
     uint32_t n_embd_head_v_mla_swa = 0;
     ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA_SWA,   n_embd_head_k_mla_swa, false);
@@ -130,8 +118,7 @@ void llama_model_hy_v4_flash::load_arch_hparams(llama_model_loader & ml) {
                     hparams.n_embd_head_k_mla(), hparams.n_embd_head_v_mla()));
     }
 
-    // MLA is driven as MQA here: one shared latent row per token, so a file claiming more
-    // key/value heads would silently disagree with the cache this graph builds
+    // MLA runs as MQA: one latent row per token
     for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
         if (hparams.n_head_kv(il) != 1) {
             throw std::runtime_error(format(
@@ -140,9 +127,8 @@ void llama_model_hy_v4_flash::load_arch_hparams(llama_model_loader & ml) {
         }
     }
 
-    // Engram, optional: the same n-gram hash tables deepseek41 carries, with one module per Engram
-    // layer. Multipliers, primes and offsets are all stored flat as [module][...] and indexed at
-    // module stride, so their lengths pin down the module count.
+    // Engram is optional: deepseek41 n-gram hash tables, one module per Engram layer
+    // multipliers, primes and offsets are flat [module][...] arrays, so their lengths give the module count
     std::vector<uint32_t> e_layers;
     ml.get_arr(LLM_KV_PLE_LAYERS, e_layers, false);
     if (!e_layers.empty()) {
@@ -175,7 +161,7 @@ void llama_model_hy_v4_flash::load_arch_hparams(llama_model_loader & ml) {
         }
         for (size_t c = 0; c < n_e*n_cols; ++c) {
             // a bucket count of 0 traps in the hash; row ids are int32
-            if (primes[c] < 2 || offsets[c] + primes[c] > (uint64_t) INT32_MAX) {
+            if (primes[c] < 2 || offsets[c] > (uint64_t) INT32_MAX || primes[c] > (uint64_t) INT32_MAX - offsets[c]) {
                 throw std::runtime_error(format("hy_v4_flash engram head %zu: bucket range out of range", c));
             }
             hparams.ple_head_offsets[c]     = (uint32_t) offsets[c];
@@ -216,8 +202,7 @@ void llama_model_hy_v4_flash::load_arch_tensors(llama_model_loader &) {
     const int64_t ple_n_heads = hparams.ple_n_heads;
     const int64_t ple_head_dim = hparams.ple_head_dim;
     if (ple_n_heads > 0) {
-        // every module's buckets live in one table, with the converter rebasing each module's head
-        // offsets into it, so the row count is the end of the last bucket
+        // all modules share one table, so the row count is the end of the last bucket
         int64_t n_rows = 0;
         for (size_t c = 0; c < (size_t) hparams.ple_n_modules*ple_n_heads; ++c) {
             n_rows = std::max(n_rows, (int64_t) hparams.ple_head_offsets[c] + hparams.ple_head_vocab_sizes[c]);
@@ -226,8 +211,7 @@ void llama_model_hy_v4_flash::load_arch_tensors(llama_model_loader &) {
         per_layer_tok_embd = create_tensor(tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight"), {ple_head_dim, n_rows}, TENSOR_READ_LAZY);
     }
 
-    // the MTP block sits after the trunk and is a sparse layer in its own right, minus the
-    // hyper-connections: it is not part of the hc stack the trunk runs
+    // the MTP block is a sparse layer after the trunk, without hyper-connections
     for (int i = 0; i < (int) hparams.n_layer_all; ++i) {
         auto & layer = layers[i];
         const bool is_nextn = i >= n_layer;
@@ -275,19 +259,17 @@ void llama_model_hy_v4_flash::load_arch_tensors(llama_model_loader &) {
 
             layer.indexer_attn_k     = create_tensor(tn(LLM_TENSOR_INDEXER_ATTN_K,      "weight", i), {n_embd, n_idx}, 0);
             layer.indexer_k_norm     = create_tensor(tn(LLM_TENSOR_INDEXER_K_NORM,      "weight", i), {n_idx}, 0);
-            // the pooled quantity is a projection of the normed key, not the key itself, and the
-            // gate that weights the pooling is another one: both square at the indexer width
+            // the pool averages a projection of the normed key, weighted by another projection of it
             layer.indexer_kpool_value = create_tensor(tn(LLM_TENSOR_INDEXER_KPOOL_VALUE, "weight", i), {n_idx, n_idx}, 0);
             layer.indexer_kpool_gate  = create_tensor(tn(LLM_TENSOR_INDEXER_KPOOL_GATE,  "weight", i), {n_idx, n_idx}, 0);
             layer.indexer_kpool_ape   = create_tensor(tn(LLM_TENSOR_INDEXER_KPOOL_APE,   "weight", i), {n_idx, kpool}, 0);
-            layer.indexer_kpool_norm  = create_tensor(tn(LLM_TENSOR_INDEXER_KPOOL_NORM,  "weight", i), {n_idx}, 0);
+            layer.indexer_comp_norm   = create_tensor(tn(LLM_TENSOR_INDEXER_COMPRESSOR_NORM, "weight", i), {n_idx}, 0);
             layer.indexer_attn_q_b   = create_tensor(tn(LLM_TENSOR_INDEXER_ATTN_Q_B,    "weight", i), {q_lora_rank, n_idx*n_idx_head}, 0);
             layer.indexer_proj       = create_tensor(tn(LLM_TENSOR_INDEXER_PROJ,        "weight", i), {n_embd, n_idx_head}, 0);
         }
 
         if (!is_nextn && engram_index(i) >= 0) {
-            // the hc key projections and the single value projection are fused into one matmul, as
-            // deepseek41 does; unlike deepseek41 they carry a bias
+            // hc key projections and the value projection fused into one matmul, as deepseek41, plus a bias
             layer.engram_kv          = create_tensor(tn(LLM_TENSOR_ENGRAM_KV,          "weight", i), {ple_n_heads * ple_head_dim, n_embd * (hc + 1)}, 0);
             layer.engram_kv_b        = create_tensor(tn(LLM_TENSOR_ENGRAM_KV_B,        "weight", i), {n_embd, hc + 1}, 0);
             layer.engram_gate        = create_tensor(tn(LLM_TENSOR_ENGRAM_GATE,        "weight", i), {n_embd, hc}, 0);
@@ -358,10 +340,7 @@ void llama_model_hy_v4_flash::engram_hash(int e, const llama_ubatch & ubatch,
     std::vector<uint64_t> toks(n_gram);
 
     for (int64_t i = 0; i < ubatch.n_tokens; ++i) {
-        // A history shorter than the n-gram is padded, not dropped: the reference shifts the token
-        // window and fills the overhang with the pad id, so a real row is looked up even at the
-        // start of a sequence. Only an embedding (image) position has no n-gram at all, and there
-        // the reference marks every column invalid and masks the whole contribution.
+        // a short history is padded with the pad id, only an embedding position is invalid
         const bool is_embd = !ubatch.token || (ubatch.is_mixed() && ubatch.type[i]);
         int64_t c = is_embd ? HY_V4_FLASH_ENGRAM_DEAD : cid(ubatch.token[i]);
         const bool dead = c == HY_V4_FLASH_ENGRAM_DEAD;
@@ -430,9 +409,7 @@ void llm_graph_input_hy_v4_flash::set_input(const llama_ubatch * ubatch) {
 }
 
 bool llm_graph_input_hy_v4_flash::can_reuse(const llm_graph_params & params) {
-    // The memory context is rebuilt for every batch, so the one captured at graph build time is
-    // dangling by now and set_input would read freed memory. Re-fetch it, exactly as deepseek41
-    // does for its own Engram input.
+    // the memory context is rebuilt for every batch, re-fetch it as deepseek41 does
     mctx = static_cast<const llama_kv_cache_iswa_context *>(params.mctx)->get_base();
 
     bool res = true;
@@ -463,17 +440,14 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_engram(
 
     GGML_ASSERT(rows->ne[0] == head_dim && rows->ne[1] == n_cols && rows->ne[2] == nt);
 
-    // delta 1: each looked-up row is RMS-normed on its own and scaled by its head's weight.
-    // The per-column scale by valid is belt and braces: valid is uniform across a token's columns
-    // (a short history is padded, not invalidated), and the whole-token mask below is what actually
-    // suppresses an embedding position.
+    // unlike deepseek41, each looked-up row is RMS-normed and scaled by its head weight
     ggml_tensor * r = ggml_rms_norm(ctx0, rows, HY_V4_FLASH_ENGRAM_EPS);
     r = ggml_mul(ctx0, r, layer.engram_lookup_norm);
     r = ggml_mul(ctx0, r, ggml_reshape_3d(ctx0, valid, 1, n_cols, nt));
     r = ggml_reshape_2d(ctx0, r, head_dim*n_cols, nt);
     cb(r, "engram_rows_normed", il);
 
-    // delta 2: the fused key/value projection carries a bias
+    // the fused key/value projection has a bias
     ggml_tensor * kv = build_lora_mm(layer.engram_kv, r);
     kv = ggml_add(ctx0, ggml_reshape_3d(ctx0, kv, n_embd, hc + 1, nt), layer.engram_kv_b);
     cb(kv, "engram_kv", il);
@@ -493,17 +467,15 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_engram(
     ggml_tensor * gate = ggml_sigmoid(ctx0, ggml_mul(ctx0, mag, sign));
     cb(gate, "engram_gate", il);
 
-    // delta 3: the delta is the normed value scaled by a learned gamma, not the raw value
+    // the delta is the normed value scaled by a learned gamma
     ggml_tensor * signal = ggml_mul(ctx0, ggml_rms_norm(ctx0, value, HY_V4_FLASH_ENGRAM_EPS), layer.engram_pre_gamma);
-    // delta 4: the per-hc offset is additive and per channel, so it broadcasts over tokens only
+    // the per-hc offset is additive and per channel
     ggml_tensor * scale = ggml_add(ctx0, ggml_repeat_4d(ctx0, gate, n_embd, hc, nt, 1), layer.engram_hc_scale);
     cb(scale, "engram_scale", il);
 
     ggml_tensor * delta = ggml_mul(ctx0, ggml_repeat_4d(ctx0, signal, n_embd, hc, nt, 1), scale);
 
-    // A token with no valid n-gram contributes nothing. Zeroing its columns is not enough: the
-    // projection bias would still put a constant through the value path. This is the first token
-    // of every sequence, and any embedding (image) position.
+    // mask the whole delta of a token without a valid n-gram, as the bias still reaches the value path
     ggml_tensor * any = ggml_sum_rows(ctx0, ggml_reshape_2d(ctx0, valid, n_cols, nt));
     any = ggml_step(ctx0, any);
     delta = ggml_mul(ctx0, delta, ggml_reshape_3d(ctx0, any, 1, 1, nt));
@@ -631,7 +603,7 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_hc_head(
 
 class llama_model_hy_v4_flash::llm_graph_input_kpool : public llm_graph_input_i {
 public:
-    llm_graph_input_kpool(const llama_memory_idx_iswa_context * mctx, uint32_t kpool) : mctx(mctx), kpool(kpool) {}
+    llm_graph_input_kpool(const llama_memory_idx_iswa_context * mctx) : mctx(mctx) {}
     virtual ~llm_graph_input_kpool() = default;
 
     void set_input(const llama_ubatch * ubatch) override {
@@ -663,10 +635,9 @@ public:
     ggml_tensor * sel_mask      = nullptr; // F32     [n_sel, 1, 1, n_tokens]
     ggml_tensor * new_pool_idxs = nullptr; // I32     [kpool*n_new]
     ggml_tensor * new_pool_rep  = nullptr; // I64     [n_new]
-    ggml_tensor * new_pool_pos  = nullptr; // I32     [4*n_new]        first member's position per new pool
+    ggml_tensor * new_pool_pos  = nullptr; // I32     [n_new]          first member's position per new pool
 
     const llama_memory_idx_iswa_context * mctx;
-    const uint32_t kpool;
     uint32_t n_new = 0;
     uint32_t n_sel = 0;
     uint32_t n_kv  = 0;
@@ -678,13 +649,12 @@ llama_model_hy_v4_flash::llm_graph_input_kpool * llama_model_hy_v4_flash::graph:
 
     const uint32_t kpool  = hparams.indexer_kpool;
     const uint32_t n_pool = mctx_idx->get_n_kpool();
-    // a ubatch that completes no pool still builds one dummy entry, so the graph does not change
-    // shape every kpool tokens
+    // at least one (dummy) entry, so the graph shape does not change every kpool tokens
     const uint32_t n_new  = std::max(mctx_idx->get_n_kpool_new(), 1u);
 
     const auto type_mask = cparams.fused_lid ? GGML_TYPE_F16 : GGML_TYPE_F32;
 
-    auto inp = std::make_unique<llm_graph_input_kpool>(mctx_idx, kpool);
+    auto inp = std::make_unique<llm_graph_input_kpool>(mctx_idx);
 
     inp->k_idxs     = mctx_lid->build_input_k_idxs(ctx0, ubatch);
     inp->pool_cells = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pool);
@@ -704,8 +674,7 @@ llama_model_hy_v4_flash::llm_graph_input_kpool * llama_model_hy_v4_flash::graph:
     inp->n_kv = mctx_lid->get_n_kv();
 
     {
-        // The reference keeps group_topk - 1 scored groups and forces the one the current token
-        // sits in, which the tail covers even when that group is complete.
+        // group_topk - 1 scored groups plus the current group, which the tail covers
         const int64_t n_top_pool = std::min<int64_t>(n_pool, hparams.indexer_top_k / kpool - hparams.indexer_kpool_select_tail);
         const int64_t n_sel      = kpool*n_top_pool + (hparams.indexer_kpool_select_tail ? kpool : 0);
         inp->n_sel = (uint32_t) n_sel;
@@ -723,8 +692,7 @@ llama_model_hy_v4_flash::llm_graph_input_kpool * llama_model_hy_v4_flash::graph:
     ggml_set_input(inp->new_pool_idxs);
     inp->new_pool_rep  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I64, n_new);
     ggml_set_input(inp->new_pool_rep);
-    // 4 planes so the vision case can rotate pooled keys with mrope; text uses plane 0
-    inp->new_pool_pos  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 4*n_new);
+    inp->new_pool_pos  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_new);
     ggml_set_input(inp->new_pool_pos);
     ggml_build_forward_expand(gf, inp->new_pool_pos);
 
@@ -763,22 +731,20 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_kpool_select(
     const int64_t n_new      = inp_kpool->n_new;
     const int64_t n_kv       = mctx_lid->get_n_kv();
 
-    // the query comes off the same lora residual the main attention uses, and is rotated at the
-    // token's own position
-    ggml_tensor * iq = ggml_mul_mat(ctx0, layer.indexer_attn_q_b, qr);
+    // the query comes from the q lora residual of the main attention
+    ggml_tensor * iq = build_lora_mm(layer.indexer_attn_q_b, qr);
     iq = ggml_reshape_3d(ctx0, iq, n_idx, n_idx_head, n_tokens);
     iq = build_indexer_rope(iq, inp_pos, n_idx, freq_base, il);
     cb(iq, "indexer_q", il);
 
     // key side: weight-only RMSNorm, unlike glm5-next's LayerNorm with a bias this model lacks
-    ggml_tensor * ik = ggml_mul_mat(ctx0, layer.indexer_attn_k, cur);
+    ggml_tensor * ik = build_lora_mm(layer.indexer_attn_k, cur);
     ik = build_norm(ik, layer.indexer_k_norm, nullptr, LLM_NORM_RMS, il);
     cb(ik, "indexer_k", il);
 
-    // what the pool averages is a projection of the normed key, and the weights come from another
-    // projection of it: glm5-next pools the key itself and gates off the hidden state
-    ggml_tensor * iv = ggml_mul_mat(ctx0, layer.indexer_kpool_value, ik);
-    ggml_tensor * ig = ggml_mul_mat(ctx0, layer.indexer_kpool_gate,  ik);
+    // unlike glm5-next, the value and the gate are projections of the normed key
+    ggml_tensor * iv = build_lora_mm(layer.indexer_kpool_value, ik);
+    ggml_tensor * ig = build_lora_mm(layer.indexer_kpool_gate, ik);
     cb(ig, "indexer_gate", il);
 
     // cache rows hold value | gate | pooled
@@ -809,24 +775,21 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_kpool_select(
     ggml_tensor * pooled_new = ggml_sum_rows(ctx0, ggml_mul(ctx0, probs, pk)); // [1, n_idx, n_new]
     pooled_new = ggml_reshape_2d(ctx0, pooled_new, n_idx, n_new);
 
-    // the pooled key is normed and then rotated at its group's first position, so the score keeps
-    // the same relative geometry as the main attention
-    pooled_new = build_norm(pooled_new, layer.indexer_kpool_norm, nullptr, LLM_NORM_RMS, il);
+    // the pooled key is normed, then rotated at the position of its first member
+    pooled_new = build_norm(pooled_new, layer.indexer_comp_norm, nullptr, LLM_NORM_RMS, il);
     {
-        ggml_tensor * pos = ggml_view_1d(ctx0, inp_kpool->new_pool_pos, n_new, 0);
-        ggml_tensor * p3  = ggml_reshape_3d(ctx0, pooled_new, n_idx, 1, n_new);
-        pooled_new = ggml_reshape_2d(ctx0, build_indexer_rope(p3, pos, n_idx, freq_base, il), n_idx, n_new);
+        ggml_tensor * p3 = ggml_reshape_3d(ctx0, pooled_new, n_idx, 1, n_new);
+        pooled_new = ggml_reshape_2d(ctx0, build_indexer_rope(p3, inp_kpool->new_pool_pos, n_idx, freq_base, il), n_idx, n_new);
     }
     cb(pooled_new, "indexer_pool_k_new", il);
 
-    // write the fresh pooled keys into their rep rows, then read every pool back by cell: the
-    // older ones come from the rows earlier ubatches wrote
+    // write the new pooled keys, then read all pools back, older ones are from earlier ubatches
     ggml_build_forward_expand(gf, kpool_cache.scatter_pooled(pooled_new, inp_kpool->new_pool_rep));
     ggml_tensor * pooled = kpool_cache.gather_pooled(inp_kpool->pool_cells);
     pooled = ggml_reshape_3d(ctx0, pooled, n_idx, 1, n_pool);
     cb(pooled, "indexer_pool_k", il);
 
-    ggml_tensor * weights = ggml_mul_mat(ctx0, layer.indexer_proj, cur);
+    ggml_tensor * weights = build_lora_mm(layer.indexer_proj, cur);
     weights = ggml_scale(ctx0, weights, 1.0f / sqrtf(float(n_idx * n_idx_head)));
     cb(weights, "indexer_weights", il);
 
@@ -851,8 +814,7 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_kpool_select(
     const int64_t n_top_pool = std::min<int64_t>(n_pool, hparams.indexer_top_k / kpool - hparams.indexer_kpool_select_tail);
     ggml_tensor * top_k = ggml_top_k(ctx0, score, n_top_pool); // [n_top_pool, n_tokens], unordered
 
-    // keep the cells of the picked pools and of the current group, -inf elsewhere; every
-    // retained cell is in the token's own sequence, so the kq_mask is not needed on top
+    // keep the cells of the picked pools and of the current group, all in the token's own sequence
     ggml_tensor * tail = hparams.indexer_kpool_select_tail ? inp_kpool->tail_idxs : nullptr;
     GGML_ASSERT(kpool*n_top_pool + (tail ? tail->ne[0] : 0) == (int64_t) inp_kpool->n_sel);
 
@@ -865,12 +827,10 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_kpool_select(
         return sel;
     }
 
-    // Backends without a fused top-k mask scatter the same selection by hand. Everything this arch
-    // changes about the indexer is upstream of score, so from here on it is glm5-next's path.
+    // without the fused top-k mask, build the same selection as glm5-next does
     ggml_tensor * sel_idx = nullptr;
     {
-        // sel_mask marks the first min(nv, n_top_pool) slots as the live pools, so put the picked
-        // set in descending score order to match it (ggml_top_k leaves it unordered)
+        // sel_mask marks the first slots as live, so sort the picked pools by score (top_k is unordered)
         ggml_tensor * sel_score = ggml_get_rows(ctx0,
                 ggml_reshape_3d(ctx0, score, 1, n_pool, n_tokens), top_k); // [1, n_top_pool, n_tokens]
         ggml_tensor * sel_order = ggml_argsort(ctx0,
@@ -909,9 +869,8 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_kpool_select(
     zeros = ggml_repeat_4d(ctx0, zeros, n_sel, n_tokens, 1, 1);
     zeros = ggml_reshape_3d(ctx0, zeros, 1, n_sel, n_tokens);
 
-    // Live slots (visible pools, real tail cells) address disjoint cells, and each dead slot writes
-    // its own dump row n_kv + slot, so a token's scatter indices stay unique:
-    // idx = dump + live*(idx - dump), live = exp(mask).
+    // dead slots write their own dump row n_kv + slot, so the scatter indices stay unique:
+    // idx = dump + live*(idx - dump), live = exp(mask)
     ggml_tensor * live  = ggml_reshape_2d(ctx0, ggml_exp(ctx0, inp_kpool->sel_mask), n_sel, n_tokens);
     ggml_tensor * dump  = ggml_arange(ctx0, (float) n_kv, (float) (n_kv + n_sel), 1.0f);
     ggml_tensor * idx_f = ggml_cast(ctx0, sel_idx, GGML_TYPE_F32);
@@ -947,11 +906,11 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_attention(
     const float kq_scale    = 1.0f / sqrtf(float(n_embd_head_k));
     const float freq_base_l = model.get_rope_freq_base(cparams, il);
 
-    ggml_tensor * qr = ggml_mul_mat(ctx0, layer.wq_a, cur);
+    ggml_tensor * qr = build_lora_mm(layer.wq_a, cur);
     qr = build_norm(qr, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
     cb(qr, "q_resid", il);
 
-    ggml_tensor * q = ggml_mul_mat(ctx0, layer.wq_b, qr);
+    ggml_tensor * q = build_lora_mm(layer.wq_b, qr);
 
     ggml_tensor * q_nope = ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head_l, n_tokens,
             ggml_row_size(q->type, n_embd_head_k), ggml_row_size(q->type, n_embd_head_k) * n_head_l, 0);
@@ -959,7 +918,7 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_attention(
             ggml_row_size(q->type, n_embd_head_k), ggml_row_size(q->type, n_embd_head_k) * n_head_l,
             ggml_row_size(q->type, n_embd_head_qk_nope));
 
-    ggml_tensor * kv_cmpr_pe = ggml_mul_mat(ctx0, layer.wkv_a_mqa, cur);
+    ggml_tensor * kv_cmpr_pe = build_lora_mm(layer.wkv_a_mqa, cur);
     ggml_tensor * kv_cmpr = ggml_view_2d(ctx0, kv_cmpr_pe, kv_lora_rank, n_tokens,
             ggml_row_size(kv_cmpr_pe->type, kv_lora_rank + n_embd_head_qk_rope), 0);
     ggml_tensor * k_pe = ggml_view_3d(ctx0, kv_cmpr_pe, n_embd_head_qk_rope, 1, n_tokens,
@@ -987,8 +946,7 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_attention(
     ggml_tensor * Vcur = kv_cmpr;
 
     ggml_tensor * sel = nullptr;
-    // the draft block is a sparse layer and always owns an indexer, and is_indexer_full() only
-    // covers the trunk
+    // is_indexer_full() only covers the trunk, the draft block always owns an indexer
     if (inp_kpool != nullptr &&
             (il >= (int) hparams.n_layer() || hparams.is_indexer_full(il))) {
         sel = build_kpool_select(cur, qr, inp_pos, freq_base_l, layer, mctx_idx, inp_kpool, il);
@@ -1018,8 +976,7 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_attention(
             Kcur = llama_mul_mat_hadamard(ctx0, Kcur, k_rot);
         }
 
-        // The indexer's selection replaces the kq_mask, so this layer cannot go through build_attn:
-        // write the latent row ourselves, then read the whole cache back and let the mask decide.
+        // the selection replaces the kq_mask, so write the cache here and attend through the selection
         ggml_tensor * k = mctx_base->get_k(ctx0, il);
         ggml_tensor * v = ggml_view_4d(ctx0, k, kv_lora_rank, k->ne[1], k->ne[2], k->ne[3],
                 k->nb[1], k->nb[2], k->nb[3], 0);
@@ -1052,7 +1009,7 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_attention(
     }
     cb(attn, "attn_kqv", il);
 
-    ggml_tensor * gate = ggml_mul_mat(ctx0, layer.wqkv_gate, cur);
+    ggml_tensor * gate = build_lora_mm(layer.wqkv_gate, cur);
     gate = ggml_sigmoid(ctx0, gate);
     attn = ggml_mul(ctx0, attn, gate);
     cb(attn, "attn_gated", il);
@@ -1071,11 +1028,11 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_latent_moe(
     const auto & layer = model.layers[il];
 
     // the router scores the full-width input, the experts take the latent one
-    ggml_tensor * logits = ggml_mul_mat(ctx0, layer.ffn_gate_inp, cur);
+    ggml_tensor * logits = build_lora_mm(layer.ffn_gate_inp, cur);
     cb(logits, "ffn_moe_logits", il);
 
     ggml_tensor * routed_in = layer.ffn_routed_down
-        ? ggml_mul_mat(ctx0, layer.ffn_routed_down, cur)
+        ? build_lora_mm(layer.ffn_routed_down, cur)
         : cur;
 
     ggml_tensor * moe_out = build_moe_ffn(routed_in,
@@ -1093,7 +1050,7 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_latent_moe(
     cb(moe_out, "ffn_moe_out", il);
 
     if (layer.ffn_routed_up) {
-        moe_out = ggml_mul_mat(ctx0, layer.ffn_routed_up, moe_out);
+        moe_out = build_lora_mm(layer.ffn_routed_up, moe_out);
         cb(moe_out, "ffn_moe_up", il);
     }
 
@@ -1126,9 +1083,7 @@ llama_model_hy_v4_flash::graph::graph(const llama_model & model, const llm_graph
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    // Engram gathers go right after the token embeddings so they share the first graph split and
-    // the lazily read table stays on the host. An embedding-only ubatch has no token ids to hash,
-    // which matches the reference skipping Engram at its masked (image) positions.
+    // Engram gathers go right after the token embeddings, so the lazily read table stays on the host
     auto inp_eng = std::make_unique<llm_graph_input_hy_v4_flash>(
             static_cast<const llama_model_hy_v4_flash &>(model), inp_attn->mctx->get_base());
     std::vector<ggml_tensor *> engram_rows;
@@ -1205,8 +1160,7 @@ llama_model_hy_v4_flash::graph::graph(const llama_model & model, const llm_graph
         cb(inpL, "l_out", il);
     }
 
-    // prune to the requested rows once, after every stream is done. Unmasked nextn embeddings want
-    // one row per token, so in that mode the narrowing waits until the state has been captured.
+    // prune the output rows after all streams, or after the nextn state when it needs every row
     if (crop_before_nextn(inp_out_ids)) {
         ggml_tensor * flat = ggml_reshape_2d(ctx0, inpL, n_embd * hc, n_tokens);
         flat = ggml_get_rows(ctx0, flat, inp_out_ids);
@@ -1218,8 +1172,7 @@ llama_model_hy_v4_flash::graph::graph(const llama_model & model, const llm_graph
 
     cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
 
-    // the draft block consumes this exact state through its hnorm, so expose it for the caller to
-    // hand back via llama_batch_ext_set_embd_state()
+    // the draft block reads this state through its hnorm
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
@@ -1257,9 +1210,7 @@ llama_model_hy_v4_flash::graph_mtp::graph_mtp(const llama_model & model, const l
     ggml_tensor * inp_pos     = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    // the draft takes the next token's embedding alongside the trunk's final hidden state, which
-    // is the same tensor the trunk's own output head reads: already collapsed over the hc streams
-    // and already passed through output_norm
+    // the draft takes the next token embedding and the trunk's final normed hidden state
     auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd_inp(), n_embd);
 
     inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
@@ -1279,11 +1230,10 @@ llama_model_hy_v4_flash::graph_mtp::graph_mtp(const llama_model & model, const l
     ggml_tensor * cur = ggml_concat(ctx0,
             build_norm(tok_embd, layer.nextn.enorm, nullptr, LLM_NORM_RMS, il),
             build_norm(prev_h,   layer.nextn.hnorm, nullptr, LLM_NORM_RMS, il), 0);
-    cur = ggml_mul_mat(ctx0, layer.nextn.eh_proj, cur);
+    cur = build_lora_mm(layer.nextn.eh_proj, cur);
     cb(cur, "mtp_eh_proj", il);
 
-    // from here it is an ordinary sparse layer, except that the residual is the plain hidden state
-    // rather than one of the trunk's hc streams
+    // an ordinary sparse layer, with a plain residual instead of the hc streams
     ggml_tensor * residual = cur;
     cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
     cur = build_attention(model, inp_attn, cur, inp_pos, mctx_idx, inp_kpool, il);
@@ -1313,6 +1263,4 @@ llama_model_hy_v4_flash::graph_mtp::graph_mtp(const llama_model & model, const l
     cb(cur, "mtp_result_output", -1);
 
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
