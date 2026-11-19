@@ -1094,8 +1094,8 @@ static int ggml_cuda_mmq_few_min_ncols(const ggml_type type, const int cc, const
 bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, const ggml_tensor * dst, const int cc) {
     const int64_t   ncols          = ids ? ids->ne[1] : src1->ne[1];
     const ggml_prec prec_requested = ggml_prec_get_src(dst, 1);
-    // NVFP4: src1 precisions that MMQ does not take (e.g. F16) stay with MMVQ and MMQ, like without few-row
-    if (src0->type == GGML_TYPE_NVFP4 && prec_requested != GGML_PREC_UNDEFINED && prec_requested != GGML_PREC_Q8 && prec_requested != GGML_PREC_Q4) {
+    // NVFP4: src1 precisions that MMQ does not take (e.g. F16 without GGML_CUDA_MMQ_PREC) stay with MMVQ and MMQ, like without few-row
+    if (src0->type == GGML_TYPE_NVFP4 && !ggml_cuda_mmq_prec_src1_supported(prec_requested)) {
         return false;
     }
     const bool fp4       = !ids && mmq_few_use_fp4(src0->type, prec_requested, ncols, cc);
