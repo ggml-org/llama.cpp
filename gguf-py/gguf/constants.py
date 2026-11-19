@@ -345,6 +345,7 @@ class Keys:
         HEAD_DIM         = "{arch}.kda.head_dim"
         SAFE_GATE        = "{arch}.kda.safe_gate"
         GATE_LOWER_BOUND = "{arch}.kda.gate_lower_bound"
+        GATE_RANK        = "{arch}.kda.gate_rank"
 
     class WKV:
         HEAD_SIZE = "{arch}.wkv.head_size"
@@ -778,6 +779,7 @@ class MODEL_ARCH(IntEnum):
     KOLIBRI1         = auto()
     LIMITE           = auto()
     INKLING2         = auto()
+    BERRYLM          = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -969,6 +971,7 @@ class MODEL_TENSOR(IntEnum):
     FFN_RESID_SCALE      = auto() # limite
     MUDD_DOWN            = auto() # limite
     MUDD_UP              = auto() # limite
+    ATTN_RES_GATE        = auto() # BerryLM (gated block AttnRes, tanh(gate) scalar)
     TIME_MIX_W0          = auto()
     TIME_MIX_W1          = auto()
     TIME_MIX_W2          = auto()
@@ -1778,6 +1781,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.KOLIBRI1:         "kolibri1",
     MODEL_ARCH.LIMITE:           "limite",
     MODEL_ARCH.INKLING2:         "inkling2",
+    MODEL_ARCH.BERRYLM:          "berrylm",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -1967,6 +1971,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.FFN_RESID_SCALE:           "blk.{bid}.ffn_resid_scale",      # limite
     MODEL_TENSOR.MUDD_DOWN:                 "blk.{bid}.mudd_down",            # limite
     MODEL_TENSOR.MUDD_UP:                   "blk.{bid}.mudd_up",              # limite
+    MODEL_TENSOR.ATTN_RES_GATE:             "blk.{bid}.attn_res_gate",        # BerryLM
     MODEL_TENSOR.TIME_MIX_W0:               "blk.{bid}.time_mix_w0",
     MODEL_TENSOR.TIME_MIX_W1:               "blk.{bid}.time_mix_w1",
     MODEL_TENSOR.TIME_MIX_W2:               "blk.{bid}.time_mix_w2",
@@ -7085,6 +7090,40 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_POST_CONV,
         MODEL_TENSOR.FFN_RES_QUERY,
     ],
+    MODEL_ARCH.BERRYLM: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_RES_SCORE,
+        MODEL_TENSOR.ATTN_RES_GATE,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_F_A,
+        MODEL_TENSOR.SSM_F_B,
+        MODEL_TENSOR.SSM_BETA,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.SSM_OUT,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_GATE_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_INP_SHEXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+    ],
 }
 
 # tensors that will not be serialized
@@ -7540,6 +7579,7 @@ KEY_SSM_DT_B_C_RMS     = Keys.SSM.DT_B_C_RMS
 KEY_KDA_HEAD_DIM         = Keys.KDA.HEAD_DIM
 KEY_KDA_SAFE_GATE        = Keys.KDA.SAFE_GATE
 KEY_KDA_GATE_LOWER_BOUND = Keys.KDA.GATE_LOWER_BOUND
+KEY_KDA_GATE_RANK        = Keys.KDA.GATE_RANK
 
 # tokenization
 KEY_TOKENIZER_MODEL      = Keys.Tokenizer.MODEL

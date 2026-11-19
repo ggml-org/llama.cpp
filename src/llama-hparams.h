@@ -220,6 +220,7 @@ struct llama_hparams {
     // for Kimi Linear KDA
     uint32_t n_embd_head_kda = 0;
     bool     kda_safe_gate = false;
+    uint32_t kda_gate_rank = 0; // low-rank gate projection size
 
     // for ZAYA1 CCA layers: q + k channels in the conv state
     uint32_t n_cca_qk = 0;

@@ -188,6 +188,7 @@ enum llm_arch {
     LLM_ARCH_LIMITE,
     LLM_ARCH_RICURSIVE,
     LLM_ARCH_INKLING2,
+    LLM_ARCH_BERRYLM,
     LLM_ARCH_UNKNOWN,
 };
 
@@ -420,6 +421,7 @@ enum llm_kv {
     LLM_KV_KDA_HEAD_DIM,
     LLM_KV_KDA_SAFE_GATE,
     LLM_KV_KDA_GATE_LOWER_BOUND,
+    LLM_KV_KDA_GATE_RANK,
 
     LLM_KV_WKV_HEAD_SIZE,
 
@@ -703,6 +705,7 @@ enum llm_tensor {
     LLM_TENSOR_FFN_RESID_SCALE,     // limite: residual scale (ffn)
     LLM_TENSOR_MUDD_DOWN,           // limite: dense connection mixer
     LLM_TENSOR_MUDD_UP,             // limite: dense connection mixer
+    LLM_TENSOR_ATTN_RES_GATE,       // berrylm: tanh(gate) of the gated block AttnRes
     LLM_TENSOR_TIME_MIX_W0,
     LLM_TENSOR_TIME_MIX_W1,
     LLM_TENSOR_TIME_MIX_W2,

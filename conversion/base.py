@@ -2470,6 +2470,9 @@ class TextModel(ModelBase):
         if chkhsh == "5635e1c8d621dff7b4825f41f2f97b6ceb39bcf2d5c541db28577080d6efd5e5":
             # ref: https://huggingface.co/thinkingmachines/Inkling-2-Small
             res = "inkling2"
+        if chkhsh == "be659a753f130c3661652b5aca6a6aaefdfbdf9aa6e9b76b24ed84befff64389":
+            # ref: https://huggingface.co/rwb-ai/BerryLM-OS
+            res = "berrylm"
 
         if res is None:
             logger.warning("\n")
