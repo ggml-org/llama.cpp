@@ -1,8 +1,11 @@
-import { VOICE_LEVELS_LENGTH } from './constants';
-import { startVoiceSession } from './session';
-import type { VoiceSession, VoiceSessionOptions, VoiceSessionResult } from './types';
-
-export type VoiceRecorderStatus = 'idle' | 'starting' | 'recording' | 'stopping';
+import { VOICE_LEVELS_LENGTH } from '../constants';
+import { startVoiceSession } from '../session';
+import type {
+	VoiceRecorderStatus,
+	VoiceSession,
+	VoiceSessionOptions,
+	VoiceSessionResult
+} from '../types';
 
 /**
  * Reactive voice session for components: `levels`, `liveText`, `live`, `quiet` and

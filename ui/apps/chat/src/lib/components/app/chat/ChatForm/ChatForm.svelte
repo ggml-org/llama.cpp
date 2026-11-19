@@ -63,11 +63,8 @@
 		parseClipboardContent,
 		uuid
 	} from '#lib/utils/index.ts';
-	import {
-		microphoneUnavailableReason,
-		VoiceRecorder,
-		warmUpVoiceCapture
-	} from '#lib/voice/index.ts';
+	import { microphoneUnavailableReason, warmUpVoiceCapture } from '#lib/voice/index.ts';
+	import { VoiceRecorder } from '#lib/voice/svelte/index.ts';
 	import { onMount, tick, untrack } from 'svelte';
 	import type { ClassValue } from 'svelte/elements';
 	import { toast } from 'svelte-sonner';

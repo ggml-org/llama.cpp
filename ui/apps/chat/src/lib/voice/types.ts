@@ -132,3 +132,6 @@ export interface VoiceSession {
 	/** Drops the recording and closes everything */
 	cancel(): void;
 }
+
+/** Where a VoiceRecorder (voice/svelte) is. */
+export type VoiceRecorderStatus = 'idle' | 'starting' | 'recording' | 'stopping';

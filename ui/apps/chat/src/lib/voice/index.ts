@@ -2,6 +2,7 @@
  * Voice engine: microphone capture with live levels and PCM streaming, clip peaks,
  * and transcription over HTTP or llama-server's realtime socket. It imports no app
  * stores or components; the app passes in how to reach a server (VoiceServerContext).
+ * Plain TypeScript: the Svelte adapters (VoiceRecorder) are in ./svelte.
  */
 
 export { warmUpVoiceCapture } from './audio-context';
@@ -53,5 +54,4 @@ export {
 } from './support';
 export { transcribeClip } from './transcribe';
 export type * from './types';
-export { VoiceRecorder, type VoiceRecorderStatus } from './voice-recorder.svelte';
 export { encodeWav } from './wav';
