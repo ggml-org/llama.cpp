@@ -60,7 +60,7 @@ void llama_model_zaya1::load_arch_tensors(llama_model_loader &) {
 
         layer.ssm_conv1d   = create_tensor(tn(LLM_TENSOR_SSM_CONV1D,   "weight", i), {d_conv, n_qk}, 0);
         layer.ssm_conv1d_b = create_tensor(tn(LLM_TENSOR_SSM_CONV1D,   "bias",   i), {n_qk}, 0);
-        z.cca_conv_grp     = create_tensor(tn(LLM_TENSOR_CCA_CONV_GRP, "weight", i), {n_embd_head, n_embd_head, n_group, d_conv}, 0);
+        z.cca_conv_grp     = create_tensor(tn(LLM_TENSOR_CCA_CONV_GRP, "weight", i), {n_embd_head, n_embd_head, n_group, d_conv}, TENSOR_NO_SCALE);
         z.cca_conv_grp_b   = create_tensor(tn(LLM_TENSOR_CCA_CONV_GRP, "bias",   i), {n_qk}, 0);
         z.cca_temp         = create_tensor(tn(LLM_TENSOR_CCA_TEMP,     "weight", i), {n_head_kv}, 0);
 
@@ -233,7 +233,7 @@ ggml_tensor * llama_model_zaya1::graph::build_cca_block(const llama_model & mode
     cb(Vcur, "cca_v", il);
 
     return build_attn(inp->get_attn(),
-            layer.wo, NULL, layer.wo_s,
+            layer.wo, NULL,
             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf((float) n_embd_head), il);
 }
 
@@ -277,9 +277,6 @@ ggml_tensor * llama_model_zaya1::graph::build_router_moe(const llama_model & mod
             il,
             logits,
             layer.ffn_gate_up_exps,
-            nullptr,
-            nullptr,
-            nullptr,
             expert);
 
     return ggml_mul(ctx0, moe, keep);

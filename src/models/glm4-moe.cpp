@@ -181,7 +181,7 @@ llama_model_glm4_moe::graph_mtp::graph_mtp(const llm_graph_params & params)
     ggml_tensor * concat = ggml_concat(ctx0, e_norm, h_norm, 0);
     cb(concat, "mtp_concat", il);
 
-    ggml_tensor * cur = build_lora_mm(layer.nextn.eh_proj, concat, layer.nextn.eh_proj_s);
+    ggml_tensor * cur = build_lora_mm(layer.nextn.eh_proj, concat);
     cb(cur, "mtp_eh_proj", il);
 
     ggml_tensor * inpSA = cur;
@@ -209,7 +209,7 @@ llama_model_glm4_moe::graph_mtp::graph_mtp(const llm_graph_params & params)
     cb(Vcur, "mtp_Vcur", il);
 
     cur = build_attn(inp_attn,
-            layer.wo, nullptr, layer.wo_s,
+            layer.wo, nullptr,
             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
             1.0f / sqrtf(float(n_embd_head)), il);
     cb(cur, "mtp_attn_out", il);
@@ -234,9 +234,9 @@ llama_model_glm4_moe::graph_mtp::graph_mtp(const llm_graph_params & params)
     cb(routed_out, "mtp_ffn_moe_out", il);
 
     ggml_tensor * shared_out = build_ffn(cur,
-            layer.ffn_up_shexp,   nullptr, nullptr,
-            layer.ffn_gate_shexp, nullptr, nullptr,
-            layer.ffn_down_shexp, nullptr, nullptr,
+            layer.ffn_up_shexp,   nullptr,
+            layer.ffn_gate_shexp, nullptr,
+            layer.ffn_down_shexp, nullptr,
             nullptr,
             LLM_FFN_SILU, LLM_FFN_PAR, il);
     cb(shared_out, "mtp_ffn_shexp_out", il);
@@ -264,12 +264,9 @@ llama_model_glm4_moe::graph_mtp::graph_mtp(const llm_graph_params & params)
     ggml_tensor * head_w = layer.nextn.shared_head_head
             ? layer.nextn.shared_head_head
             : model.output;
-    ggml_tensor * head_s = layer.nextn.shared_head_head
-            ? layer.nextn.shared_head_head_s
-            : model.output_s;
     GGML_ASSERT(head_w && "GLM4_MOE MTP: missing LM head (nextn.shared_head_head or model.output)");
 
-    cur = build_lora_mm(head_w, cur, head_s);
+    cur = build_lora_mm(head_w, cur);
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;
@@ -330,7 +327,7 @@ llama_model_glm4_moe::graph::graph(const llm_graph_params & params) : llm_graph_
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, NULL, model.layers[il].wo_s,
+                    model.layers[il].wo, NULL,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
         }
         if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
@@ -348,9 +345,9 @@ llama_model_glm4_moe::graph::graph(const llm_graph_params & params) : llm_graph_
         if (static_cast<uint32_t>(il) < hparams.n_layer_dense_lead) {
             // Dense FFN layer
             cur = build_ffn(cur,
-                    model.layers[il].ffn_up,   NULL, NULL,
-                    model.layers[il].ffn_gate, NULL, NULL,
-                    model.layers[il].ffn_down, NULL, NULL,
+                    model.layers[il].ffn_up,   NULL,
+                    model.layers[il].ffn_gate, NULL,
+                    model.layers[il].ffn_down, NULL,
                     NULL,
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
@@ -371,9 +368,9 @@ llama_model_glm4_moe::graph::graph(const llm_graph_params & params) : llm_graph_
 
             // Process shared expert on original input
             ggml_tensor * shared_out = build_ffn(cur,
-                    model.layers[il].ffn_up_shexp,   NULL, NULL,
-                    model.layers[il].ffn_gate_shexp, NULL, NULL,
-                    model.layers[il].ffn_down_shexp, NULL, NULL,
+                    model.layers[il].ffn_up_shexp,   NULL,
+                    model.layers[il].ffn_gate_shexp, NULL,
+                    model.layers[il].ffn_down_shexp, NULL,
                     NULL,
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(shared_out, "ffn_shexp_out", il);
@@ -404,7 +401,7 @@ llama_model_glm4_moe::graph::graph(const llm_graph_params & params) : llm_graph_
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

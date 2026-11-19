@@ -153,7 +153,7 @@ llama_model_zonos3::graph::graph(const llm_graph_params & params) :
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 }
@@ -210,7 +210,7 @@ ggml_tensor * llama_model_zonos3::graph::build_layer_attn(
     cb(Vcur, "Vcur", il);
 
     cur = build_attn(inp,
-            nullptr, nullptr, nullptr,
+            nullptr, nullptr,
             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
     cb(cur, "attn_pregate", il);
 
@@ -219,7 +219,7 @@ ggml_tensor * llama_model_zonos3::graph::build_layer_attn(
     cur = ggml_reshape_2d(ctx0, cur, n_embd_head * n_head, n_tokens);
     cb(cur, "attn_gated", il);
 
-    return build_lora_mm(layer.wo, cur, layer.wo_s);
+    return build_lora_mm(layer.wo, cur);
 }
 
 // copied from qwen35 build_layer_attn_linear, with the reference L2 norm eps
@@ -243,19 +243,19 @@ ggml_tensor * llama_model_zonos3::graph::build_layer_gdn(
     GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
     GGML_ASSERT(num_k_heads == num_v_heads);
 
-    ggml_tensor * qkv_mixed = build_lora_mm(layer.wqkv, cur, layer.wqkv_s);
+    ggml_tensor * qkv_mixed = build_lora_mm(layer.wqkv, cur);
     qkv_mixed = ggml_reshape_3d(ctx0, qkv_mixed, qkv_mixed->ne[0], n_seq_tokens, n_seqs);
     cb(qkv_mixed, "linear_attn_qkv_mixed", il);
 
-    ggml_tensor * z = build_lora_mm(layer.wqkv_gate, cur, layer.wqkv_gate_s);
+    ggml_tensor * z = build_lora_mm(layer.wqkv_gate, cur);
     cb(z, "z", il);
 
-    ggml_tensor * beta = build_lora_mm(layer.ssm_beta, cur, layer.ssm_beta_s);
+    ggml_tensor * beta = build_lora_mm(layer.ssm_beta, cur);
     beta = ggml_reshape_4d(ctx0, beta, 1, num_v_heads, n_seq_tokens, n_seqs);
     beta = ggml_sigmoid(ctx0, beta);
     cb(beta, "beta_sigmoid", il);
 
-    ggml_tensor * alpha = build_lora_mm(layer.ssm_alpha, cur, layer.ssm_alpha_s);
+    ggml_tensor * alpha = build_lora_mm(layer.ssm_alpha, cur);
     alpha = ggml_reshape_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
 
     ggml_tensor * alpha_softplus = ggml_softplus(ctx0, ggml_add(ctx0, alpha, layer.ssm_dt));
@@ -307,7 +307,7 @@ ggml_tensor * llama_model_zonos3::graph::build_layer_gdn(
     output = ggml_reshape_2d(ctx0, output, head_v_dim * num_v_heads, n_seq_tokens * n_seqs);
     cb(output, "linear_attn_gated", il);
 
-    return build_lora_mm(layer.ssm_out, output, layer.ssm_out_s);
+    return build_lora_mm(layer.ssm_out, output);
 }
 
 ggml_tensor * llama_model_zonos3::graph::build_layer_ffn(ggml_tensor * cur, int il) {
@@ -315,9 +315,9 @@ ggml_tensor * llama_model_zonos3::graph::build_layer_ffn(ggml_tensor * cur, int 
 
     if (layer.ffn_gate_inp == nullptr) {
         cur = build_ffn(cur,
-                layer.ffn_up,   nullptr, layer.ffn_up_s,
-                layer.ffn_gate, nullptr, layer.ffn_gate_s,
-                layer.ffn_down, nullptr, layer.ffn_down_s,
+                layer.ffn_up,   nullptr,
+                layer.ffn_gate, nullptr,
+                layer.ffn_down, nullptr,
                 nullptr,
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);

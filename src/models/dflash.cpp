@@ -108,8 +108,6 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     }
 
     fc              = create_tensor(tn(LLM_TENSOR_FC,              "weight"), { n_embd_inp, n_embd }, 0);
-    fc_s            = create_tensor(tn(LLM_TENSOR_FC,              "scale"),  { 1 }, TENSOR_NOT_REQUIRED);
-    fc_in_s         = create_tensor(tn(LLM_TENSOR_FC,              "input_scale"), { 1 }, TENSOR_NOT_REQUIRED);
     output_norm_enc = create_tensor(tn(LLM_TENSOR_ENC_OUTPUT_NORM, "weight"), { n_embd }, 0); // encoder hidden_norm (after fc)
     output_norm     = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM,    "weight"), { n_embd }, 0); // decoder final norm
 
@@ -177,7 +175,7 @@ template <>
 llama_model_dflash::graph<true>::graph(const llm_graph_params & params) : llm_graph_context(params) {
     ggml_tensor * cur = build_inp_embd_enc();
 
-    cur = build_lora_mm(model.fc, cur, model.fc_s);
+    cur = build_lora_mm(model.fc, cur);
     cb(cur, "fc_out", -1);
 
     cur = build_norm(cur, model.output_norm_enc, NULL, LLM_NORM_RMS, -1);
@@ -217,7 +215,7 @@ ggml_tensor * llama_model_dflash::build_inject_inp(llm_graph_context & g, const 
 
     g.res->add_input(std::move(inp));
 
-    ggml_tensor * inp_g = g.build_lora_mm(model.fc, inp_target, model.fc_s);
+    ggml_tensor * inp_g = g.build_lora_mm(model.fc, inp_target);
     return g.build_norm(inp_g, model.output_norm_enc, nullptr, LLM_NORM_RMS, -1);
 }
 
@@ -233,16 +231,16 @@ ggml_tensor * llama_model_dflash::get_tok_embd(const llm_graph_context & g, cons
     return model_other->tok_embd;
 }
 
-// lm_head and its scale from the target model (shared via ctx_other) when the draft has none
-std::pair<ggml_tensor *, ggml_tensor *> llama_model_dflash::get_lm_head(const llm_graph_context & g, const llama_model & model) {
+// lm_head from the target model (shared via ctx_other) when the draft has none
+ggml_tensor * llama_model_dflash::get_lm_head(const llm_graph_context & g, const llama_model & model) {
     if (model.output) {
-        return { model.output, model.output_s };
+        return model.output;
     }
     GGML_ASSERT(g.cparams.ctx_other != nullptr);
     const auto * model_other = llama_get_model(g.cparams.ctx_other);
 
     GGML_ASSERT(model_other->output != nullptr && "DFlash draft requires the target model's output projection");
-    return { model_other->output, model_other->output_s };
+    return model_other->output;
 }
 
 // DFlash decoder, dual-mode by batch type:
@@ -289,9 +287,9 @@ ggml_tensor * llama_model_dflash::graph_base::build_inject() {
     for (int il = 0; il < n_layer; ++il) {
         const auto & layer = model.layers[il];
 
-        ggml_tensor * Kcur = build_lora_mm(layer.wk, inp_g, layer.wk_s);
+        ggml_tensor * Kcur = build_lora_mm(layer.wk, inp_g);
         const bool shared_kv = layer.wv == nullptr;
-        ggml_tensor * Vcur = shared_kv ? Kcur : build_lora_mm(layer.wv, inp_g, layer.wv_s);
+        ggml_tensor * Vcur = shared_kv ? Kcur : build_lora_mm(layer.wv, inp_g);
 
         Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
         Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
@@ -375,10 +373,10 @@ ggml_tensor * llama_model_dflash::graph_base::build_layers(ggml_tensor * inp_tok
             cb(noise_norm, "attn_conv_in", il);
         }
 
-        ggml_tensor * Qcur = build_lora_mm(layer.wq, noise_norm, layer.wq_s);
-        ggml_tensor * Kcur = build_lora_mm(layer.wk, noise_norm, layer.wk_s);
+        ggml_tensor * Qcur = build_lora_mm(layer.wq, noise_norm);
+        ggml_tensor * Kcur = build_lora_mm(layer.wk, noise_norm);
         const bool shared_kv = layer.wv == nullptr;
-        ggml_tensor * Vcur = shared_kv ? Kcur : build_lora_mm(layer.wv, noise_norm, layer.wv_s);
+        ggml_tensor * Vcur = shared_kv ? Kcur : build_lora_mm(layer.wv, noise_norm);
 
         Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
         Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
@@ -398,8 +396,8 @@ ggml_tensor * llama_model_dflash::graph_base::build_layers(ggml_tensor * inp_tok
 
         // cache-aware, non-causal attention
         ggml_tensor * cur = use_iswa
-            ? build_attn(inp_attn_iswa, layer.wo, NULL, layer.wo_s, Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr, kq_scale, il)
-            : build_attn(inp_attn,      layer.wo, NULL, layer.wo_s, Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr, kq_scale, il);
+            ? build_attn(inp_attn_iswa, layer.wo, NULL, Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr, kq_scale, il)
+            : build_attn(inp_attn,      layer.wo, NULL, Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr, kq_scale, il);
 
         if (hparams.f_attn_value_scale != 0.0f) {
             cur = ggml_scale(ctx0, cur, hparams.f_attn_value_scale);
@@ -430,9 +428,9 @@ ggml_tensor * llama_model_dflash::graph_base::build_layers(ggml_tensor * inp_tok
         }
 
         cur = build_ffn(cur,
-                layer.ffn_up,   NULL, layer.ffn_up_s,
-                layer.ffn_gate, NULL, layer.ffn_gate_s,
-                layer.ffn_down, NULL, layer.ffn_down_s,
+                layer.ffn_up,   NULL,
+                layer.ffn_gate, NULL,
+                layer.ffn_down, NULL,
                 NULL,
                 hparams.llm_ffn_op, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
@@ -465,8 +463,8 @@ ggml_tensor * llama_model_dflash::graph_base::build_layers(ggml_tensor * inp_tok
 }
 
 ggml_tensor * llama_model_dflash::graph_base::build_logits(ggml_tensor * cur) {
-    const auto [output, output_s] = get_lm_head(*this, model);
-    cur = build_lora_mm(output, cur, output_s);
+    auto * output = get_lm_head(*this, model);
+    cur = build_lora_mm(output, cur);
 
     // DFlash2 feeds these logits to the selector, so they need the target's output
     // transforms; DFlash1 and DSpark read them through the sampler instead
