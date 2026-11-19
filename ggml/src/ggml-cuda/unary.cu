@@ -320,8 +320,47 @@ static __global__ void unary_gated_op_kernel(const T * x, const T * g, T * dst, 
     dst[i] = ggml_cuda_cast<T>(op(ggml_cuda_cast<float>(x[j0])) * ggml_cuda_cast<float>(g[j1]));
 }
 
+template <float (*op)(float)>
+static __global__ void unary_gated_vec4(const float4 * x, const float4 * g, float4 * dst,
+        uint32_t k, uint3 n, int64_t o0, int64_t o1) {
+    ggml_cuda_pdl_lc();
+    const uint32_t i = blockDim.x*blockIdx.x + threadIdx.x;
+    if (i >= k) {
+        return;
+    }
+    const uint2 rc = fast_div_modulo(i, n);
+    const int64_t j0 = int64_t(rc.x)*o0 + rc.y;
+    const int64_t j1 = o0 == o1 ? j0 : int64_t(rc.x)*o1 + rc.y;
+    ggml_cuda_pdl_sync();
+    const float4 a = x[j0];
+    const float4 b = g[j1];
+    dst[i] = make_float4(op(a.x)*b.x, op(a.y)*b.y, op(a.z)*b.z, op(a.w)*b.w);
+}
+
+template <float (*op)(float)>
+static bool unary_gated_vec4_cuda(const float * x, const float * g, float * dst,
+        int64_t k, int64_t n, int64_t o0, int64_t o1, cudaStream_t stream) {
+    const auto & device = ggml_cuda_info().devices[ggml_cuda_get_device()];
+    if (k <= 0 || k > INT_MAX || n <= 0 || n > INT_MAX ||
+            k % 4 != 0 || n % 4 != 0 || o0 % 4 != 0 || o1 % 4 != 0 ||
+            (uintptr_t) x % 16 != 0 || (uintptr_t) g % 16 != 0 || (uintptr_t) dst % 16 != 0 ||
+            k/(4*CUDA_GLU_BLOCK_SIZE) < 4*device.nsm) {
+        return false;
+    }
+    const dim3 blocks((k/4 + CUDA_GLU_BLOCK_SIZE - 1)/CUDA_GLU_BLOCK_SIZE);
+    const ggml_cuda_kernel_launch_params params(blocks, CUDA_GLU_BLOCK_SIZE, 0, stream);
+    ggml_cuda_kernel_launch(unary_gated_vec4<op>, params, (const float4 *) x, (const float4 *) g,
+            (float4 *) dst, (uint32_t) (k/4), init_fastdiv_values(n/4), o0/4, o1/4);
+    return true;
+}
+
 template <float (*op)(float), typename T>
 static void unary_gated_cuda(const T * x, const T * g, T * dst, const int64_t k, const int64_t n, const int64_t o0, const int64_t o1, cudaStream_t stream) {
+    if constexpr (std::is_same_v<T, float>) {
+        if (unary_gated_vec4_cuda<op>(x, g, dst, k, n, o0, o1, stream)) {
+            return;
+        }
+    }
     const int64_t num_blocks = (k + CUDA_GLU_BLOCK_SIZE - 1) / CUDA_GLU_BLOCK_SIZE;
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params((dim3)num_blocks, CUDA_GLU_BLOCK_SIZE, 0, stream);
     ggml_cuda_kernel_launch(unary_gated_op_kernel<op, T>, launch_params, x, g, dst, k, n, o0, o1);

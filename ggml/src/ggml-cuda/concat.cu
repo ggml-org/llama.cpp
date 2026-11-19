@@ -140,6 +140,34 @@ static __global__ void __launch_bounds__(CUDA_CONCAT_BLOCK_SIZE)
 }
 
 template <typename T>
+static __global__ void concat_transpose(const char * src0, const char * src1, T * dst,
+        int64_t split, int64_t ncols, int64_t nrows, int64_t nbatches,
+        int64_t s00, int64_t s01, int64_t s02, int64_t s10, int64_t s11, int64_t s12) {
+    __shared__ T tile[32][33];
+    ggml_cuda_pdl_sync();
+    for (int64_t batch = blockIdx.z; batch < nbatches; batch += gridDim.z) {
+        const int64_t col = (int64_t) blockIdx.x * 32 + threadIdx.y;
+        const int64_t row = (int64_t) blockIdx.y * 32 + threadIdx.x;
+        for (int j = 0; j < 32; j += 8) {
+            if (row < nrows && col + j < ncols) {
+                const char * p = col + j < split ? src0 + batch*s02 + (col + j)*s00 + row*s01
+                                                 : src1 + batch*s12 + (col + j - split)*s10 + row*s11;
+                tile[threadIdx.y + j][threadIdx.x] = *(const T *) p;
+            }
+        }
+        __syncthreads();
+        const int64_t out_col = (int64_t) blockIdx.x * 32 + threadIdx.x;
+        const int64_t out_row = (int64_t) blockIdx.y * 32 + threadIdx.y;
+        for (int j = 0; j < 32; j += 8) {
+            if (out_col < ncols && out_row + j < nrows) {
+                dst[(batch*nrows + out_row + j)*ncols + out_col] = tile[threadIdx.x][threadIdx.y + j];
+            }
+        }
+        __syncthreads();
+    }
+}
+
+template <typename T>
 static void concat_cuda(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, int dim, cudaStream_t stream) {
     if (dim != 3 && ggml_is_contiguous_to_3(src0) && ggml_is_contiguous_to_3(src1)) {
         const T * src0_d = (const T *) src0->data;
@@ -160,6 +188,15 @@ static void concat_cuda(const ggml_tensor * src0, const ggml_tensor * src1, ggml
 
         CUDA_CHECK(cudaMemcpyAsync((char *) dst->data,         src0->data, size0, cudaMemcpyDeviceToDevice, stream));
         CUDA_CHECK(cudaMemcpyAsync((char *) dst->data + size0, src1->data, size1, cudaMemcpyDeviceToDevice, stream));
+    } else if (dim == 0 && dst->ne[3] == 1 && dst->ne[0] <= int64_t(32)*INT_MAX &&
+            dst->ne[1] <= 32*65535 && src1->ne[0] >= 32 &&
+            src0->nb[0] == sizeof(T) && src1->nb[1] == sizeof(T) && ggml_is_contiguous(dst)) {
+        const dim3 blocks((dst->ne[0] + 31)/32, (dst->ne[1] + 31)/32, std::min<int64_t>(dst->ne[2], 65535));
+        const ggml_cuda_kernel_launch_params params(blocks, dim3(32, 8), 0, stream);
+        ggml_cuda_kernel_launch(concat_transpose<T>, params,
+                (const char *) src0->data, (const char *) src1->data, (T *) dst->data,
+                src0->ne[0], dst->ne[0], dst->ne[1], dst->ne[2],
+                src0->nb[0], src0->nb[1], src0->nb[2], src1->nb[0], src1->nb[1], src1->nb[2]);
     } else {
         GGML_ASSERT(!ggml_is_quantized(src0->type));
 

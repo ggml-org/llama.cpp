@@ -16804,8 +16804,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                         return false;
                     }
                 }
-                // hc is hardcoded to 4 in the shaders. ggml only constrains it
-                // to 4 for COMB, so PRE/POST have to be checked here.
+                // hc is hardcoded to 4 in the shaders.
                 if (op->op == GGML_OP_DSV4_HC_PRE && op->src[0]->ne[1] != 4) {
                     return false;
                 }
@@ -16813,7 +16812,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     return false;
                 }
                 if (op->op == GGML_OP_DSV4_HC_COMB) {
-                    return device->pipeline_dsv4_hc_comb_f32 != nullptr;
+                    return op->ne[0] == 4 && device->pipeline_dsv4_hc_comb_f32 != nullptr;
                 }
                 return true;
             }

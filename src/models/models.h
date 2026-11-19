@@ -2764,11 +2764,13 @@ struct llama_model_sensenova_loop : public llama_model_qwen35 {
 
         struct routing {
             ggml_tensor * input;
-            ggml_tensor * post[2];
-            ggml_tensor * mix[4];
+            ggml_tensor * post;
+            ggml_tensor * mix;
         };
 
-        routing build_route(ggml_tensor * a, ggml_tensor * b, ggml_tensor * weight, ggml_tensor * bias, int il);
+        ggml_tensor * mhc_scale = nullptr;
+
+        routing build_route(ggml_tensor * residual, ggml_tensor * weight, ggml_tensor * bias, int il);
         static void build_sinkhorn(ggml_context * ctx, ggml_tensor * mix[4], uint32_t iterations) {
             ggml_tensor * d0 = ggml_sub(ctx, mix[0], mix[1]);
             ggml_tensor * d1 = ggml_sub(ctx, mix[2], mix[3]);
@@ -2805,7 +2807,7 @@ struct llama_model_sensenova_loop : public llama_model_qwen35 {
             mix[2] = ggml_sigmoid(ctx, ggml_neg(ctx, a));
             mix[3] = ggml_sigmoid(ctx, ggml_neg(ctx, b));
         }
-        void build_merge(ggml_tensor * & a, ggml_tensor * & b, ggml_tensor * branch, const routing & route);
+        ggml_tensor * build_merge(ggml_tensor * residual, ggml_tensor * branch, const routing & route, int il);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;

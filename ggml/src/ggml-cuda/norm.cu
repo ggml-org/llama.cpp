@@ -1,5 +1,6 @@
 #include "norm.cuh"
 #include "convert.cuh"
+#include "unary.cuh"
 #include <cstdint>
 
 template <int block_size, bool do_multiply = false, bool do_add = false>
@@ -164,7 +165,7 @@ static __global__ void rms_norm_f32(const T *     x,
 
     // grid.y and grid.z are clamped to the CUDA limit, iterate over the excess channels/samples
     for (int sample = blockIdx.z; sample < nsamples; sample += gridDim.z) {
-        for (int channel = blockIdx.y; channel < nchannels; channel += gridDim.y) {
+        for (int channel = blockIdx.y*blockDim.y + threadIdx.y; channel < nchannels; channel += gridDim.y*blockDim.y) {
             const T * xc   = x   + sample*stride_sample + channel*stride_channel + row*stride_row;
             T       * dstc = dst + ((sample*nchannels + channel)*nrows + row)*ncols;
 
@@ -267,6 +268,53 @@ static __global__ void rms_norm_f32(const T *     x,
             }
         }
     }
+}
+
+static __global__ void rms_norm_gate_f32(
+        const float4 * x, const float4 * weights, const float4 * gate, float4 * dst,
+        int ncols, int nrows, int nchannels, int nsamples,
+        int64_t sx1, int64_t sx2, int64_t sx3, int64_t sg1, int64_t sg2, int64_t sg3, float eps) {
+    ggml_cuda_pdl_lc();
+    const int row = blockIdx.x*blockDim.y + threadIdx.y;
+    if (row >= nrows) {
+        return;
+    }
+    const int col = threadIdx.x;
+    ggml_cuda_pdl_sync();
+    for (int sample = blockIdx.z; sample < nsamples; sample += gridDim.z) {
+        for (int channel = blockIdx.y; channel < nchannels; channel += gridDim.y) {
+            float4 v = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+            float sum = 0.0f;
+            if (col < ncols/4) {
+                v = x[sample*sx3 + channel*sx2 + row*sx1 + col];
+                sum += v.x*v.x + v.y*v.y + v.z*v.z + v.w*v.w;
+            }
+            sum = block_reduce<block_reduce_method::SUM, 32>(sum, (float *) nullptr);
+            const float scale = rsqrtf(sum/ncols + eps);
+            if (col < ncols/4) {
+                const float4 w = weights[col];
+                const float4 g = gate[sample*sg3 + channel*sg2 + row*sg1 + col];
+                dst[((sample*nchannels + channel)*nrows + row)*(ncols/4) + col] = make_float4(
+                    __fmul_rn(__fmul_rn(__fmul_rn(scale, v.x), w.x), ggml_cuda_op_silu_single(g.x)),
+                    __fmul_rn(__fmul_rn(__fmul_rn(scale, v.y), w.y), ggml_cuda_op_silu_single(g.y)),
+                    __fmul_rn(__fmul_rn(__fmul_rn(scale, v.z), w.z), ggml_cuda_op_silu_single(g.z)),
+                    __fmul_rn(__fmul_rn(__fmul_rn(scale, v.w), w.w), ggml_cuda_op_silu_single(g.w)));
+            }
+        }
+    }
+}
+
+void ggml_cuda_op_rms_norm_gate(ggml_backend_cuda_context & ctx, ggml_tensor * norm,
+        const ggml_tensor * weights, const ggml_tensor * gate, ggml_tensor * dst) {
+    const ggml_tensor * x = norm->src[0];
+    const int rows = 4;
+    const dim3 blocks((x->ne[1] + rows - 1)/rows, std::min<int64_t>(x->ne[2], 65535), std::min<int64_t>(x->ne[3], 65535));
+    const ggml_cuda_kernel_launch_params params(blocks, dim3(32, rows), 0, ctx.stream());
+    ggml_cuda_kernel_launch(rms_norm_gate_f32, params,
+            (const float4 *) x->data, (const float4 *) weights->data, (const float4 *) gate->data, (float4 *) dst->data,
+            x->ne[0], x->ne[1], x->ne[2], x->ne[3],
+            x->nb[1]/sizeof(float4), x->nb[2]/sizeof(float4), x->nb[3]/sizeof(float4),
+            gate->nb[1]/sizeof(float4), gate->nb[2]/sizeof(float4), gate->nb[3]/sizeof(float4), ggml_get_op_params_f32(norm, 0));
 }
 
 template <int block_size>
@@ -442,8 +490,10 @@ static void group_norm_f32_cuda(
 
 #define RMS_NORM_LAUNCH(BLOCK_SIZE, VPT, VEC) \
     do { \
-        const dim3 block_dims(BLOCK_SIZE, 1, 1); \
-        const ggml_cuda_kernel_launch_params launch_params{ blocks_num, block_dims, block_dims.x > WARP_SIZE ? 32 * sizeof(float) : 0, stream }; \
+        const int channels_per_block = BLOCK_SIZE == 32 && nchannels >= 4 && ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size == 32 ? 4 : 1; \
+        const dim3 block_dims(BLOCK_SIZE, channels_per_block, 1); \
+        const dim3 grid_dims(blocks_num.x, (blocks_num.y + channels_per_block - 1)/channels_per_block, blocks_num.z); \
+        const ggml_cuda_kernel_launch_params launch_params{ grid_dims, block_dims, block_dims.x > WARP_SIZE ? 32 * sizeof(float) : 0, stream }; \
         ggml_cuda_kernel_launch(rms_norm_f32<T, BLOCK_SIZE, VPT, VEC, do_multiply, do_add, do_scale, T_add>, launch_params, \
             x, dst, ncols, nchannels, nsamples, stride_row, stride_channel, stride_sample, eps, \
             mul, mul_stride_row, mul_stride_channel, mul_stride_sample, \
