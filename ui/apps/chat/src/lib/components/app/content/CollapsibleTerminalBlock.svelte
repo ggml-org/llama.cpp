@@ -68,7 +68,7 @@
 
 			<span
 				class={cn(
-					'min-w-0 overflow-x-auto text-sm font-medium',
+					'min-w-0 overflow-x-auto text-body-sm font-medium',
 					shimmerTitle ? 'shimmer-text' : 'text-foreground/80'
 				)}
 			>
@@ -80,7 +80,7 @@
 			</span>
 
 			{#if subtitle}
-				<span class="text-xs italic text-muted-foreground/70">{subtitle}</span>
+				<span class="text-caption italic text-muted-foreground/70">{subtitle}</span>
 			{/if}
 		</div>
 

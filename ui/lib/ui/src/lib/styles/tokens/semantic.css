@@ -251,6 +251,11 @@
 	--text-heading--line-height: calc(2 / 1.5);
 	--text-heading--font-weight: 600;
 
+	/* motion: ease-out-quint for what enters or answers a press, quick off the mark and settling softly; ease-sheet
+	   for a sheet or a page that slides, the curve iOS moves its own with */
+	--ease-out-quint: cubic-bezier(0.23, 1, 0.32, 1);
+	--ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
+
 	/* icon sizes: size-icon-xs ... size-icon-lg (12, 14, 16 and 20px) */
 	--size-icon-xs: 0.75rem;
 	--size-icon-sm: 0.875rem;

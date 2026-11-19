@@ -45,7 +45,7 @@
 				</span>
 
 				{#if editFileMeta?.errorMessage}
-					<span class="shrink-0 text-xs italic text-muted-foreground/70">(failed)</span>
+					<span class="shrink-0 text-caption italic text-muted-foreground/70">(failed)</span>
 				{/if}
 			</span>
 		</span>
@@ -54,7 +54,7 @@
 	{#snippet children(_meta, ctx)}
 		{#if editFileBody?.errorMessage}
 			<div
-				class="flex items-start gap-2 rounded bg-surface-danger p-2 text-xs text-fg-danger italic"
+				class="flex items-start gap-2 rounded bg-surface-danger p-2 text-caption text-fg-danger italic"
 			>
 				<XCircle class="mt-0.5 size-icon-xs shrink-0" />
 
@@ -63,7 +63,7 @@
 		{:else if editFileBody?.edits.length}
 			{#each editDiffs as diffLines, ei (ei)}
 				<div class={ei === 0 ? '' : 'mt-3'}>
-					<div class="mb-1.5 text-xs text-muted-foreground/70 italic">
+					<div class="mb-1.5 text-caption text-muted-foreground/70 italic">
 						Edit {ei + 1}&nbsp;of&nbsp;{editFileBody.edits.length}
 					</div>
 
@@ -85,7 +85,7 @@
 				</div>
 			{/each}
 
-			<div class="mt-1.5 text-xs text-muted-foreground/70 italic">
+			<div class="mt-1.5 text-caption text-muted-foreground/70 italic">
 				{#if editFileBody.resultMessage}
 					{editFileBody.resultMessage}{editFileBody.editsApplied != null
 						? RESULT_STAT_SEPARATOR
@@ -105,11 +105,13 @@
 				streaming={ctx.isCodeStreaming}
 			/>
 		{:else if ctx.isStreaming}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
+			<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">
 				Receiving arguments...
 			</div>
 		{:else}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">No edits</div>
+			<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">
+				No edits
+			</div>
 		{/if}
 	{/snippet}
 </ToolCallBlock>

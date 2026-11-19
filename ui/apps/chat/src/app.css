@@ -252,7 +252,8 @@
 		background: linear-gradient(
 			to top,
 			var(--surface-page) var(--safe-area-bottom),
-			color-mix(in srgb, var(--surface-page) 60%, transparent) calc(var(--safe-area-bottom) + 1.5rem),
+			color-mix(in srgb, var(--surface-page) 60%, transparent)
+				calc(var(--safe-area-bottom) + 1.5rem),
 			transparent 100%
 		);
 	}
@@ -329,12 +330,7 @@
 	}
 
 	.shimmer-text {
-		background: linear-gradient(
-			90deg,
-			var(--fg-muted),
-			var(--fg-default),
-			var(--fg-muted)
-		);
+		background: linear-gradient(90deg, var(--fg-muted), var(--fg-default), var(--fg-muted));
 		background-size: 200% 100%;
 		background-clip: text;
 		-webkit-background-clip: text;

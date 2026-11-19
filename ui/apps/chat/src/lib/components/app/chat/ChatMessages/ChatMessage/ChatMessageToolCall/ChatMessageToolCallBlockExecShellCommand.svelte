@@ -248,18 +248,18 @@
 
 	{#snippet children(_meta, ctx)}
 		{#if (ctx.isPending && !commandStreaming) || (isLive && !section.toolResult)}
-			<div class="flex items-start gap-2 text-xs text-muted-foreground/70">
+			<div class="flex items-start gap-2 text-caption text-muted-foreground/70">
 				<Loader2 class="size-icon-xs animate-spin" />
 				Executing command...
 			</div>
 		{:else if ctx.isInterrupted}
-			<div class="flex items-start gap-2 text-xs text-muted-foreground/70 italic">
+			<div class="flex items-start gap-2 text-caption text-muted-foreground/70 italic">
 				<CircleStop class="mt-0.5 h-3 w-3 shrink-0" />
 
 				<span>Command interrupted before it returned output</span>
 			</div>
 		{:else if execShellError}
-			<div class="flex items-start gap-2 text-xs text-fg-danger italic">
+			<div class="flex items-start gap-2 text-caption text-fg-danger italic">
 				<XCircle class="mt-0.5 size-icon-xs shrink-0" />
 
 				<span>{execShellError}</span>
@@ -271,7 +271,7 @@
 				onscroll={handleScrollEvent}
 			>
 				{#each outputLines as line, i (i)}
-					<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{line.text}</div>
+					<div class="font-mono text-caption leading-relaxed whitespace-pre-wrap">{line.text}</div>
 
 					{#if line.media?.type === AttachmentType.IMAGE}
 						<img

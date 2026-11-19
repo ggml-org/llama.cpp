@@ -43,7 +43,7 @@
 							class="flex w-20 items-center justify-center rounded-control border border-border bg-muted {height.name}"
 						></div>
 
-						<span class="font-mono text-[11px] text-muted-foreground">{height.name}</span>
+						<span class="font-mono text-caption text-muted-foreground">{height.name}</span>
 
 						<span class="text-caption text-muted-foreground">{height.note}</span>
 					</div>
@@ -57,7 +57,7 @@
 					<div class="flex flex-col items-center gap-2">
 						<Settings class={icon.name} />
 
-						<span class="font-mono text-[11px] text-muted-foreground">{icon.name}</span>
+						<span class="font-mono text-caption text-muted-foreground">{icon.name}</span>
 
 						<span class="text-caption text-muted-foreground">{icon.note}</span>
 					</div>
@@ -69,7 +69,7 @@
 			<div class="flex flex-col gap-2">
 				{#each spacing as step (step.name)}
 					<div class="flex items-center gap-3">
-						<span class="w-8 font-mono text-[11px] text-muted-foreground">{step.name}</span>
+						<span class="w-8 font-mono text-caption text-muted-foreground">{step.name}</span>
 
 						<div style:width="{step.px}px" class="h-3 rounded-sm bg-muted-foreground/40"></div>
 

@@ -38,23 +38,15 @@ colors:
   art-night-sky: 'oklch(0.33 0.07 256)'
   art-cinder: 'oklch(0.68 0.18 46)'
   art-cinder-light: 'oklch(0.85 0.065 46)'
-  cool-gray-50: 'oklch(0.958 0.002 250)'
   cool-gray-100: 'oklch(0.938 0.004 250)'
   cool-gray-200: 'oklch(0.91 0.005 250)'
-  cool-gray-300: 'oklch(0.86 0.007 250)'
   cool-gray-400: 'oklch(0.81 0.01 250)'
-  red-400: 'oklch(0.69 0.2 27)'
   red-450: 'oklch(0.635 0.229 28)'
   red-550: 'oklch(0.588 0.236 28)'
   red-600: 'oklch(0.55 0.22 27)'
-  red-800: 'oklch(0.43 0.17 27)'
-  yellow-300: 'oklch(0.9 0.14 84)'
-  yellow-800: 'oklch(0.5 0.1 84)'
-  green-400: 'oklch(0.81 0.16 148)'
   green-450: 'oklch(0.756 0.197 147)'
   green-550: 'oklch(0.669 0.197 147)'
   green-650: 'oklch(0.52 0.17 147)'
-  green-800: 'oklch(0.45 0.14 148)'
   amber-250: 'oklch(0.842 0.165 84)'
   amber-400: 'oklch(0.752 0.157 78)'
   amber-650: 'oklch(0.547 0.116 74)'
@@ -78,7 +70,6 @@ colors:
   black-a6: 'oklch(0 0 0 / 0.06)'
   black-a8: 'oklch(0 0 0 / 0.08)'
   black-a12: 'oklch(0 0 0 / 0.12)'
-  black-a30: 'oklch(0 0 0 / 0.3)'
   black-a40: 'oklch(0 0 0 / 0.4)'
   black-a55: 'oklch(0 0 0 / 0.55)'
   surface-page: '{colors.neutral-25}'
@@ -118,33 +109,21 @@ colors:
   line-warning-soft: 'color-mix(in oklab, {colors.fill-warning} 34%, {colors.line-default})'
   line-danger-soft: 'color-mix(in oklab, {colors.fill-danger} 34%, {colors.line-default})'
   line-info-soft: 'color-mix(in oklab, {colors.fill-info} 34%, {colors.line-default})'
-  edge-rest-side: '{colors.cool-gray-200}'
-  edge-rest-mid: '{colors.cool-gray-100}'
-  edge-focus-side: '{colors.cool-gray-400}'
-  edge-focus-mid: '{colors.cool-gray-300}'
-  edge-ambient-side: '{colors.cool-gray-100}'
-  edge-ambient-mid: '{colors.cool-gray-50}'
-  edge-faint: '{colors.cool-gray-100}'
+  edge-rest: '{colors.cool-gray-200}'
+  edge-focus: '{colors.cool-gray-400}'
+  edge-ambient: '{colors.cool-gray-100}'
   edge-raised: '{colors.cool-gray-200}'
   action-primary: '{colors.neutral-900}'
-  action-primary-hover: 'oklch(0.205 0 0 / 0.9)'
+  action-primary-hover: 'color-mix(in oklch, {colors.action-primary} 90%, transparent)'
   action-danger: '{colors.fill-danger}'
-  action-danger-hover: 'color-mix(in oklch, {colors.fill-danger} 90%, transparent)'
+  action-danger-hover: 'color-mix(in oklch, {colors.action-danger} 90%, transparent)'
   action-quiet: 'oklch(0.97 0 0 / 0.3)'
   action-quiet-hover: '{colors.neutral-100}'
   action-ghost-hover: 'oklch(0.556 0 0 / 0.1)'
   field-background: '{colors.neutral-0}'
-  field-shade: '{colors.black-a6}'
-  status-danger-rim: '{colors.red-400}'
-  status-danger-glyph: '{colors.red-800}'
-  status-warning-rim: '{colors.yellow-300}'
-  status-warning-glyph: '{colors.yellow-800}'
-  status-success-rim: '{colors.green-400}'
-  status-success-glyph: '{colors.green-800}'
   highlight-inner: '{colors.white-a50}'
   highlight-inverse: '{colors.white-a12}'
   sheen-start: '{colors.white-a20}'
-  sheen-end: 'transparent'
   elevation-ring: '{colors.black-a5}'
   surface-page-matte: '{colors.neutral-0}'
   surface-glass-matte: 'oklch(0.97 0 0 / 0.6)'
@@ -189,23 +168,18 @@ colors:
   line-warning-soft-dark: 'color-mix(in oklab, {colors.fill-warning-dark} 38%, {colors.line-default-dark})'
   line-danger-soft-dark: 'color-mix(in oklab, {colors.fill-danger-dark} 38%, {colors.line-default-dark})'
   line-info-soft-dark: 'color-mix(in oklab, {colors.fill-info-dark} 38%, {colors.line-default-dark})'
-  edge-rest-side-dark: '{colors.white-a6}'
-  edge-rest-mid-dark: '{colors.white-a4}'
-  edge-focus-side-dark: '{colors.white-a18}'
-  edge-focus-mid-dark: '{colors.white-a12}'
-  edge-ambient-side-dark: '{colors.white-a4}'
-  edge-ambient-mid-dark: '{colors.white-a2}'
-  edge-faint-dark: '{colors.white-a4}'
+  edge-rest-dark: '{colors.white-a6}'
+  edge-focus-dark: '{colors.white-a18}'
+  edge-ambient-dark: '{colors.white-a4}'
   edge-raised-dark: '{colors.white-a9}'
   action-primary-dark: '{colors.neutral-200}'
-  action-primary-hover-dark: 'oklch(0.922 0 0 / 0.9)'
+  action-primary-hover-dark: 'color-mix(in oklch, {colors.action-primary-dark} 90%, transparent)'
   action-danger-dark: 'color-mix(in oklch, {colors.fill-danger-dark} 58%, transparent)'
   action-danger-hover-dark: 'color-mix(in oklch, {colors.fill-danger-dark} 68%, transparent)'
   action-quiet-dark: 'oklch(0.708 0 0 / 0.15)'
   action-quiet-hover-dark: 'oklch(0.708 0 0 / 0.25)'
   action-ghost-hover-dark: 'oklch(0.708 0 0 / 0.1)'
   field-background-dark: '{colors.white-a9}'
-  field-shade-dark: '{colors.black-a30}'
   highlight-inner-dark: '{colors.white-a4}'
   sheen-start-dark: '{colors.white-a2}'
   elevation-ring-dark: '{colors.white-a18}'
@@ -235,6 +209,11 @@ typography:
     fontSize: 0.75rem
     fontWeight: 400
     lineHeight: 1rem
+  caption-sm:
+    fontFamily: 'Llama Sans'
+    fontSize: 0.625rem
+    fontWeight: 400
+    lineHeight: 0.875rem
   title:
     fontFamily: 'Llama Sans'
     fontSize: 1.125rem
@@ -279,13 +258,13 @@ components:
   chat-form-placeholder-dark:
     textColor: '{colors.fg-muted-dark}'
   chat-form-edge:
-    backgroundColor: '{colors.edge-rest-side}'
+    backgroundColor: '{colors.edge-rest}'
   chat-form-edge-dark:
-    backgroundColor: '{colors.edge-rest-side-dark}'
+    backgroundColor: '{colors.edge-rest-dark}'
   chat-form-edge-focus:
-    backgroundColor: '{colors.edge-focus-side}'
+    backgroundColor: '{colors.edge-focus}'
   chat-form-edge-focus-dark:
-    backgroundColor: '{colors.edge-focus-side-dark}'
+    backgroundColor: '{colors.edge-focus-dark}'
   card:
     backgroundColor: '#f9f9f9'
     textColor: '{colors.fg-default}'
@@ -295,9 +274,9 @@ components:
     backgroundColor: '#202020'
     textColor: '{colors.fg-default-dark}'
   card-edge:
-    backgroundColor: '{colors.edge-rest-side}'
+    backgroundColor: '{colors.edge-rest}'
   card-edge-dark:
-    backgroundColor: '{colors.edge-rest-side-dark}'
+    backgroundColor: '{colors.edge-rest-dark}'
   sidebar:
     backgroundColor: '#f9f9f9'
     textColor: '{colors.fg-default}'
@@ -306,9 +285,9 @@ components:
     backgroundColor: '#1c1c1c'
     textColor: '{colors.fg-default-dark}'
   sidebar-edge:
-    backgroundColor: '{colors.edge-ambient-side}'
+    backgroundColor: '{colors.edge-ambient}'
   sidebar-edge-dark:
-    backgroundColor: '{colors.edge-ambient-side-dark}'
+    backgroundColor: '{colors.edge-ambient-dark}'
   inset-group:
     backgroundColor: 'oklch(1 0 0 / 0.85)'
     textColor: '{colors.fg-default}'
@@ -317,9 +296,9 @@ components:
     backgroundColor: 'oklch(0.985 0 0 / 0.03)'
     textColor: '{colors.fg-default-dark}'
   inset-group-edge:
-    backgroundColor: '{colors.edge-ambient-side}'
+    backgroundColor: '{colors.edge-ambient}'
   inset-group-edge-dark:
-    backgroundColor: '{colors.edge-ambient-side-dark}'
+    backgroundColor: '{colors.edge-ambient-dark}'
   selected-row:
     backgroundColor: 'oklch(0.145 0 0 / 0.05)'
     textColor: '{colors.fg-default}'
@@ -329,15 +308,15 @@ components:
   user-bubble:
     backgroundColor: '#f3f3f3'
     textColor: '{colors.fg-default}'
-    rounded: '{rounded.surface}'
+    rounded: '{rounded.container}'
     typography: '{typography.body}'
   user-bubble-dark:
     backgroundColor: '#181818'
     textColor: '{colors.fg-default-dark}'
   user-bubble-edge:
-    backgroundColor: '{colors.edge-faint}'
+    backgroundColor: '{colors.edge-ambient}'
   user-bubble-edge-dark:
-    backgroundColor: '{colors.edge-faint-dark}'
+    backgroundColor: '{colors.edge-ambient-dark}'
   floating-panel:
     backgroundColor: '#ffffff'
     textColor: '{colors.fg-default}'
@@ -689,22 +668,6 @@ components:
   page-dark:
     backgroundColor: '{colors.surface-page-dark}'
     textColor: '{colors.fg-default-dark}'
-  chat-form-edge-mid:
-    backgroundColor: '{colors.edge-rest-mid}'
-  chat-form-edge-mid-dark:
-    backgroundColor: '{colors.edge-rest-mid-dark}'
-  chat-form-edge-mid-focus:
-    backgroundColor: '{colors.edge-focus-mid}'
-  chat-form-edge-mid-focus-dark:
-    backgroundColor: '{colors.edge-focus-mid-dark}'
-  sidebar-edge-mid:
-    backgroundColor: '{colors.edge-ambient-mid}'
-  sidebar-edge-mid-dark:
-    backgroundColor: '{colors.edge-ambient-mid-dark}'
-  inset-group-edge-mid:
-    backgroundColor: '{colors.edge-ambient-mid}'
-  inset-group-edge-mid-dark:
-    backgroundColor: '{colors.edge-ambient-mid-dark}'
   glass-highlight:
     backgroundColor: '{colors.highlight-inner}'
   glass-highlight-dark:
@@ -715,29 +678,16 @@ components:
     backgroundColor: '{colors.sheen-start}'
   user-bubble-sheen-dark:
     backgroundColor: '{colors.sheen-start-dark}'
-  field-shade:
-    backgroundColor: '{colors.field-shade}'
-  field-shade-dark:
-    backgroundColor: '{colors.field-shade-dark}'
-  status-lamp-danger-rim:
-    backgroundColor: '{colors.status-danger-rim}'
-  status-lamp-warning-rim:
-    backgroundColor: '{colors.status-warning-rim}'
-  status-lamp-success-rim:
-    backgroundColor: '{colors.status-success-rim}'
   status-lamp-danger:
     backgroundColor: '{colors.fill-danger}'
-    textColor: '{colors.status-danger-glyph}'
     rounded: '{rounded.full}'
     size: '8px'
   status-lamp-warning:
     backgroundColor: '{colors.fill-warning}'
-    textColor: '{colors.status-warning-glyph}'
     rounded: '{rounded.full}'
     size: '8px'
   status-lamp-success:
     backgroundColor: '{colors.fill-success}'
-    textColor: '{colors.status-success-glyph}'
     rounded: '{rounded.full}'
     size: '8px'
 ---
@@ -752,13 +702,17 @@ here; if something really is missing, add it here first.
   build a new one when an existing one fits. Style them through their variants
   (`variant="outline"`, `size="sm"`), not by overriding classes.
 - **Colour:** greys build the UI; colour is for meaning only (status, destructive actions,
-  focus). Use the semantic tokens: `bg-surface-*` for surfaces, `text-fg-default` and
-  `text-fg-muted` for text, `border-line-*` for lines, `fill-*`, `surface-*` and `fg-*` of
-  `success`, `warning`, `danger` and `info` for status. No Tailwind palette classes, no hex.
+  focus). Neutral colours go by shadcn's utility names (`bg-background`, `bg-muted`, `bg-card`,
+  `text-foreground`, `text-muted-foreground`, `border-border`), status by `bg-surface-*`,
+  `bg-fill-*`, `text-fg-*` and `border-line-*-soft` of `success`, `warning`, `danger` and
+  `info`, and any other semantic token as `bg-(--surface-lifted)`. In CSS, read the semantic
+  token (`var(--surface-page)`). No Tailwind palette classes, no hex.
 - **Type:** Llama Sans, and Llama Mono for code, through roles: `text-body` (16px) for chat
   messages and the chat input, `text-body-sm` (14px) for most text, `text-label` (14px, medium)
   for buttons and labels, `text-label-sm` and `text-caption` (12px) for badges and hints,
-  `text-title` (18px) and `text-heading` (24px) for the rare heading.
+  `text-caption-sm` (10px) for tags and counts, `text-title` (18px) and `text-heading` (24px)
+  for the rare heading. Never Tailwind's own sizes (`text-sm`, `text-xs`) or a size in
+  brackets.
 - **Shape:** `rounded-control` (8px) for controls, fields and badges, `rounded-panel` (10px)
   for menus and dialogs, `rounded-card` (14px), `rounded-container` (16px) and
   `rounded-surface` (24px) for the larger surfaces, `rounded-full` for pills, avatars and lamps.
@@ -768,9 +722,13 @@ here; if something really is missing, add it here first.
 - **Surfaces:** one surface utility per element (`card-surface`, `matte-float`, `matte-key`,
   `matte-well`), never raw `shadow-*`, `border-*` and `backdrop-blur-*` combinations.
 - **Tokens:** read a semantic token directly. A component token is only for a value the
-  component decides itself.
-- **No arbitrary values** (`text-[11px]`, `rounded-[1.125rem]`, `p-[7px]`): pick the nearest
-  from the scale.
+  component decides itself. A value that follows from another token is mixed from it, not
+  picked again.
+- **No arbitrary values** (`text-[11px]`, `rounded-[1.125rem]`, `p-[7px]`, `z-[20]`): pick the
+  nearest from the scale (`z-20`, `max-w-4/5`, `min-w-32`). Brackets are for what no scale can
+  hold: a `calc()`, a grid template, a list of transition properties.
+- **Motion:** `ease-out-quint` for what enters or answers a press, `ease-sheet` for a sheet
+  or a page that slides.
 - **Phones:** every dialog is full screen; only alerts stay small and centred.
 - **The conversation is the loudest thing on screen;** everything around it stays quiet.
 
@@ -815,14 +773,29 @@ This file is the how, written for agents first. Its principles, as rules to appl
 
 Design tokens come in three tiers, each in its own file under `ui/lib/ui/src/lib/styles/tokens/`:
 
-1. **Primitives** (`primitives.css`): raw values named by what they are, such as
-   `neutral-900`, `cool-gray-200`, `red-550`, `white-a30`, `font-size-14` or `length-24`.
-   Only semantic tokens point at them.
+1. **Primitives** (`primitives.css`): raw colours named by what they are, such as
+   `neutral-900`, `cool-gray-200`, `red-550` or `white-a30`. Only semantic tokens point at
+   them. Sizes are not primitives: a role holds its own value, and spacing is Tailwind's 4px
+   grid.
 2. **Semantic tokens** (`semantic.css`): named by purpose, such as `surface-glass`,
-   `fg-muted`, `line-field`, `edge-focus-side`, `action-primary` or `fill-warning`. They
-   point at primitives and are the only tier that changes between light and dark. The type,
-   corner, icon size and control height roles live here too and are Tailwind utilities:
-   `text-label`, `rounded-control`, `size-icon-md`, `h-control-md`.
+   `fg-muted`, `line-field`, `edge-focus`, `action-primary` or `fill-warning`, and the only
+   tier that changes between light and dark. Each is either a pick, which names a primitive
+   per theme, or a derivation, which is mixed from another semantic token by a fixed rule and
+   so follows it through every theme with a single declaration:
+   - soft text is the text colour at 70% (`fg-soft`);
+   - a hover fill is the fill at 90% (`action-primary-hover`);
+   - a status surface is its fill mixed into the page, and a status line its fill mixed into
+     the default line, by a share the theme sets (11% and 34% in light, 16% and 38% in dark);
+   - a dark shadow is the light one, `elevation-strength` (1 in light, 5 in dark) times as
+     dense;
+   - the middle of a matte edge is its side at two thirds, and a lamp's rim and glyph are
+     its fill mixed 30% towards white and towards black (both in `surfaces.css`).
+
+   The type, corner, icon size and control height roles live here too and are Tailwind
+   utilities: `text-label`, `rounded-control`, `size-icon-md`, `h-control-md`. shadcn's
+   colour names (`background`, `muted-foreground`, `border` ...) exist as Tailwind utilities
+   only, each mapped to a semantic token in `theme.css`.
+
 3. **Component tokens** (`components.css`): only what a component decides itself, named
    `[component]-[variant]-[property]-[state]`, such as `button-secondary-background-hover` or
    `float-panel-background-modal`: a value no semantic token has, or one that only this
@@ -881,10 +854,11 @@ the Surface switch in Storybook's toolbar, and only its surface tokens differ: `
   `fg-info` for neutral notices.
 - **Lines:** `line-default` for dividers, `line-control` for outlined controls (soft in dark
   mode), `line-field` for inputs, `line-focus` for focus and `line-danger` for invalid fields.
-- **Edges:** the hairlines of matte surfaces, darker at the sides than in the middle.
-  `edge-rest-*` at rest, `edge-focus-*` when focus is inside, `edge-ambient-*` for large
-  quiet containers whose edge never changes, `edge-faint` for the user bubble and
-  `edge-raised` for floating panels.
+- **Edges:** the hairlines of matte surfaces, darker at the sides than in the middle (the
+  token is the side; the surface fades it to two thirds in the middle). `edge-rest` at rest,
+  `edge-focus` when focus is inside, `edge-ambient` for large quiet containers whose edge
+  never changes and, kept even all round, for the user bubble, and `edge-raised` for floating
+  panels.
 - **Actions:** `action-primary` (near black in light mode, near white in dark mode) and its
   hover, `action-danger` and its hover, and `action-ghost-hover`.
 - **Status fills:** `fill-success`, `fill-warning`, `fill-danger` and `fill-info` are each
@@ -897,7 +871,7 @@ the Surface switch in Storybook's toolbar, and only its surface tokens differ: `
   Soft status badges are pills with a small dot in the status fill before the label.
 - **Status:** `fill-danger`, `fill-warning`, `fill-success` and `fill-info` are the
   lamp fills for error or stopped, loading or warning, ready or connected, and informational. A lamp adds
-  a lighter rim and a darker glyph (`status-danger-rim`, `status-danger-glyph` and so on; none for info). Known gap: the glyph on the red lamp
+  a lighter rim and a darker glyph, both mixed from its fill. Known gap: the glyph on the red lamp
   reaches only about 2:1 and on the green lamp about 3.2:1, below WCAG AA, so the lamp colour
   must never be the only signal; pair it with a label or tooltip.
 
@@ -910,14 +884,20 @@ is one variable font with an optical size axis: the browser sets it from the fon
 looser Small one, with a blend in between. Nothing needs choosing per element; pin a point only to
 show it, with `font-variation-settings: 'opsz' 16` or `36`. Its line box is 1.25 at every size, centred on the
 cap height; large headings set `line-height: 1.15` themselves. Llama Mono keeps every character,
-its coding ligatures included, in one cell, so code and numbers line up in columns. Type is set through roles that fix size, line height and weight together:
+its coding ligatures included, in one cell, so code and numbers line up in columns. Type is set through roles that fix size and line height together, and for labels and headings the weight too:
 
-- `body` (16/24, 400): chat messages and the chat input.
-- `body-sm` (14/20, 400): most text, fields and lists.
+- `body` (16/24): chat messages and the chat input.
+- `body-sm` (14/20): most text, fields and lists.
 - `label` (14/20, 500): buttons and field labels.
 - `label-sm` (12/16, 500): badges and compact labels.
-- `caption` (12/16, 400): tooltips, hints and metadata.
+- `caption` (12/16): tooltips, hints and metadata.
+- `caption-sm` (10/14): the smallest text, for tags, compact badges and counts.
 - `title` (18/28, 600) and `heading` (24/32, 600): rare headings; there is no display size.
+
+Body and caption text takes the weight around it, regular unless a parent says otherwise; add
+a weight class for anything else (`text-body-sm font-semibold`). The roles are the whole
+scale: no `text-sm` or `text-xs`, and no size in brackets. On a phone a row that needs larger
+text takes the next role up (`text-body-sm max-md:text-body`).
 
 When a component lets callers override the size, keep an explicit weight class next to the
 role (`text-label font-medium`) so a size override does not drop the weight. Placeholders
@@ -1011,7 +991,7 @@ matches the role of the surface instead of combining raw shadows.
 - **`elevated-control`**, **`elevated-surface`** and **`elevated-raised`:** cards, floating
   bars and thumbnails. An elevation token with a hairline ring baked in as its last layer, so
   the edge melts into the shadow and the shadow deepens in dark mode. The ring is
-  `--elevation-ring` (black 5%, white 18% in dark) at `--elevation-ring-width` (1px). They
+  `--elevation-ring` (black 5%, white 18% in dark), 1px wide. They
   replace a border plus a shadow; never add a border to them.
 - **`matte-well`:** inputs, textareas and checkboxes. A shallow inset shade so
   fields read as recessed.
@@ -1042,7 +1022,7 @@ with a 2px blur.
 
 Corners are soft and consistent, set through roles: `control` (8px) for buttons, fields and
 badges, `panel` (10px) for menus and dialogs, `card` (14px) for cards, `container` (16px) for
-the sidebar, and `surface` (24px) for the chat form and message bubbles, rising to
+the sidebar and message bubbles, and `surface` (24px) for the chat form, rising to
 `surface-lg` (32px) for the chat form on small screens. Status lamps, avatars and the round
 icon buttons in the chat form are fully round.
 
@@ -1110,7 +1090,7 @@ icon buttons in the chat form are fully round.
 - **Chat form:** one `chat-form-surface` holding the input, attachments and actions. Its fill
   is the muted grey at 60% in light mode and 75% in dark mode.
 - **User message bubble:** the primary colour at 5% with `matte-sheen` and the very faint
-  `edge-faint` hairline, so it separates from the page without a visible border.
+  `edge-ambient` hairline, so it separates from the page without a visible border.
 - **Sidebar:** `sidebar-surface`, the muted fill at 60% with no inner highlight and the
   ambient edge. On small screens it keeps a plain `shadow-md` instead.
 - **Inset groups:** `inset-group-surface` gathers rows inside a glass panel, like the

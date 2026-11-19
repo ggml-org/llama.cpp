@@ -286,9 +286,10 @@
 				size="size-6"
 			/>
 
-			<span class="truncate text-sm font-medium">{family.label}</span>
+			<span class="truncate text-label">{family.label}</span>
 
-			<span class="shrink-0 text-sm whitespace-nowrap text-muted-foreground">{countLabel}</span>
+			<span class="shrink-0 text-body-sm whitespace-nowrap text-muted-foreground">{countLabel}</span
+			>
 		</span>
 
 		<!-- the context and status columns stay empty here: the fold control is this
@@ -326,7 +327,7 @@
 })}
 	<div class="px-2 max-md:px-3">
 		<button
-			class="w-full cursor-pointer rounded-md px-2 py-2 text-left text-xs text-muted-foreground transition hover:bg-muted/40"
+			class="w-full cursor-pointer rounded-md px-2 py-2 text-left text-caption text-muted-foreground transition hover:bg-muted/40"
 			onclick={onMore}
 			type="button"
 		>
@@ -352,7 +353,7 @@
 	/>
 
 	<div
-		class="{MODEL_ROW_GRID_CLASS} shrink-0 border-b border-border/30 px-2 pb-2 text-xs font-medium text-muted-foreground max-md:px-3 dark:border-border/20"
+		class="{MODEL_ROW_GRID_CLASS} shrink-0 border-b border-border/30 px-2 pb-2 text-label-sm text-muted-foreground max-md:px-3 dark:border-border/20"
 	>
 		<span>{@render sortHeader(ModelsTableSortKey.NAME, 'Model')}</span>
 
@@ -390,7 +391,7 @@
 					label={group.label}
 					persistKey={group.key}
 					revealChevronOnHover
-					sectionHeaderClass="m-0 rounded-lg px-2 py-2 text-[13px] font-semibold text-foreground/85 select-none transition-colors hover:bg-muted max-md:px-3"
+					sectionHeaderClass="m-0 rounded-lg px-2 py-2 text-body-sm font-semibold text-foreground/85 select-none transition-colors hover:bg-muted max-md:px-3"
 					sticky
 					stickyClass="sticky z-10 bg-muted/70 backdrop-blur-lg"
 				>

@@ -105,12 +105,12 @@
 		{#if isDownload}
 			<!-- nothing is on disk yet, so the pane keeps to the download itself -->
 			<div class="space-y-2 py-1">
-				<div class="flex items-baseline justify-between gap-3 text-sm">
+				<div class="flex items-baseline justify-between gap-3 text-body-sm">
 					<span class="text-muted-foreground">
 						{isDownloadPaused ? 'Paused at' : 'Downloaded'}
 					</span>
 
-					<span class="font-mono text-xs tabular-nums text-muted-foreground">
+					<span class="font-mono text-caption tabular-nums text-muted-foreground">
 						{#if downloadPercent !== null}
 							{HuggingFaceService.formatFileSize(downloadProgress?.downloadedBytes ?? 0)}
 							/
@@ -151,7 +151,7 @@
 
 					<!-- a phone has no hover, so the reason sits under the button -->
 					{#if deviceStore.isMobile}
-						<p class="px-3 pt-1 text-xs text-muted-foreground">{removeBlockedReason}</p>
+						<p class="px-3 pt-1 text-caption text-muted-foreground">{removeBlockedReason}</p>
 					{/if}
 				{:else}
 					{@render deleteButton()}

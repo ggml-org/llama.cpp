@@ -16,7 +16,7 @@
 
 	// one source, so the chip matches the draft badge of a quant chip
 	const SIDECAR_BADGE_CLASS =
-		'rounded-md bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase';
+		'rounded-md bg-primary px-1 py-0.5 text-caption-sm font-semibold tracking-wide text-primary-foreground uppercase';
 
 	let tooltipText = $derived(`Add the ${companion.kind} draft for ${repoWithTag}`);
 
@@ -36,7 +36,7 @@
 			<button
 				{...props}
 				aria-label={tooltipText}
-				class="group relative inline-flex h-auto cursor-pointer items-center gap-1 rounded-md border border-dashed border-border/60 px-2 py-1 text-left font-mono text-xs shadow-(--elevation-control) transition-[background-color,border-color,transform] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] hover:bg-muted-foreground/10 hover:border-border active:scale-[0.97] dark:border-border/40 dark:hover:bg-muted-foreground/15"
+				class="group relative inline-flex h-auto cursor-pointer items-center gap-1 rounded-md border border-dashed border-border/60 px-2 py-1 text-left font-mono text-caption shadow-(--elevation-control) transition-[background-color,border-color,transform] duration-200 ease-out-quint hover:bg-muted-foreground/10 hover:border-border active:scale-97 dark:border-border/40 dark:hover:bg-muted-foreground/15"
 				onclick={addDraft}
 				type="button"
 			>

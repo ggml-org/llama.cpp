@@ -25,7 +25,7 @@
 							class="h-14 rounded-control border border-border"
 						></div>
 
-						<figcaption class="flex flex-col gap-0.5 font-mono text-[11px] leading-4">
+						<figcaption class="flex flex-col gap-0.5 font-mono text-caption leading-4">
 							<span class="text-foreground">--{token.name}</span>
 
 							{#if showReference}

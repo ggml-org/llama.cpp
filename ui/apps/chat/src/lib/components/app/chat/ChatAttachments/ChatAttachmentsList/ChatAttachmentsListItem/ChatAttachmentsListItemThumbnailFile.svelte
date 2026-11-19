@@ -80,7 +80,7 @@
 {#snippet textPreview(content: string)}
 	<div class="relative">
 		<div
-			class="font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-muted-foreground {!readonly
+			class="font-mono text-caption leading-relaxed break-words whitespace-pre-wrap text-muted-foreground {!readonly
 				? 'max-h-3rem line-height-1.2'
 				: ''}"
 		>
@@ -107,7 +107,7 @@
 
 {#snippet fileIcon()}
 	<div
-		class="flex size-8 items-center justify-center rounded bg-primary/10 text-xs font-medium text-primary"
+		class="flex size-8 items-center justify-center rounded bg-primary/10 text-label-sm text-primary"
 	>
 		{#if isAudio}
 			<Music class="{ICON_CLASS_DEFAULT} text-white/70" />
@@ -121,7 +121,7 @@
 
 {#snippet info(text: string | undefined)}
 	{#if text}
-		<span class="text-xs text-muted-foreground">{text}</span>
+		<span class="text-caption text-muted-foreground">{text}</span>
 	{/if}
 {/snippet}
 
@@ -142,7 +142,7 @@
 			{#if readonly}
 				<div class="flex items-start gap-3">
 					<div class="flex min-w-0 flex-1 flex-col items-start text-left">
-						<span class="w-full truncate text-sm font-medium text-foreground">{name}</span>
+						<span class="w-full truncate text-label text-foreground">{name}</span>
 
 						{@render info(pdfProcessingMode || (size ? formatFileSize(size) : undefined))}
 
@@ -152,7 +152,7 @@
 					</div>
 				</div>
 			{:else}
-				<span class="mb-3 block truncate text-sm font-medium text-foreground">{name}</span>
+				<span class="mb-3 block truncate text-label text-foreground">{name}</span>
 
 				{#if textContent}
 					{@render textPreview(textContent)}
@@ -170,7 +170,7 @@
 
 		<div class="flex flex-col items-start gap-0.5">
 			<span
-				class="max-w-24 truncate text-sm font-medium text-foreground {readonly
+				class="max-w-24 truncate text-label text-foreground {readonly
 					? ''
 					: 'group-hover:pr-6'} md:max-w-32"
 			>

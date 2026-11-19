@@ -40,7 +40,7 @@
 				{/snippet}
 			</Tooltip.Trigger>
 
-			<Tooltip.Content class="z-[999999] max-w-64" side="left">
+			<Tooltip.Content class="z-999999 max-w-64" side="left">
 				<p>{action.tooltip}</p>
 			</Tooltip.Content>
 		</Tooltip.Root>

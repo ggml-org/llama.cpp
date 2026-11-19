@@ -168,7 +168,7 @@
 	</Tooltip.Root>
 {/snippet}
 
-<div class="inline-flex items-center text-xs text-muted-foreground">
+<div class="inline-flex items-center text-caption text-muted-foreground">
 	{#if isSwitchable}
 		<div
 			class="inline-flex items-center gap-0.5 rounded-md bg-(--surface-muted) p-0.5 shadow-(--elevation-inset)"

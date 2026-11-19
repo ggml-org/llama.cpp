@@ -93,7 +93,7 @@
 <div class="space-y-4">
 	<SearchInput bind:value={searchQuery} placeholder="Search conversations..." />
 
-	<div class="flex items-center justify-between text-sm text-muted-foreground">
+	<div class="flex items-center justify-between text-body-sm text-muted-foreground">
 		<span>
 			{selectedIds.size} of {conversations.length} selected
 			{#if searchQuery}
@@ -115,16 +115,16 @@
 							/>
 						</th>
 
-						<th class="p-3 text-left text-sm font-medium">Conversation Name</th>
+						<th class="p-3 text-left text-label">Conversation Name</th>
 
-						<th class="w-32 p-3 text-left text-sm font-medium">Messages</th>
+						<th class="w-32 p-3 text-left text-label">Messages</th>
 					</tr>
 				</thead>
 
 				<tbody>
 					{#if filteredConversations.length === 0}
 						<tr>
-							<td class="p-8 text-center text-sm text-muted-foreground" colspan="3">
+							<td class="p-8 text-center text-body-sm text-muted-foreground" colspan="3">
 								{#if searchQuery}
 									No conversations found matching "{searchQuery}"
 								{:else}
@@ -154,13 +154,13 @@
 									/>
 								</td>
 
-								<td class="p-3 text-sm">
+								<td class="p-3 text-body-sm">
 									<div class="max-w-68 truncate" title={conv.name || 'Untitled conversation'}>
 										{conv.name || 'Untitled conversation'}
 									</div>
 								</td>
 
-								<td class="p-3 text-sm text-muted-foreground">
+								<td class="p-3 text-body-sm text-muted-foreground">
 									{messageCountMap.get(conv.id) ?? 0}
 								</td>
 							</tr>

@@ -26,7 +26,7 @@
 
 	{#if footer}
 		<div
-			class="flex flex-wrap items-center justify-start gap-x-1.5 gap-y-1 border-t border-border/50 px-4 py-2.5 text-xs text-muted-foreground dark:border-border/35"
+			class="flex flex-wrap items-center justify-start gap-x-1.5 gap-y-1 border-t border-border/50 px-4 py-2.5 text-caption text-muted-foreground dark:border-border/35"
 		>
 			{@render footer()}
 		</div>

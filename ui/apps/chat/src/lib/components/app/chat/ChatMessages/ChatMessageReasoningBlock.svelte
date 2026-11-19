@@ -142,7 +142,7 @@
 			<MarkdownContent {attachments} class="text-muted-foreground" content={section.content} />
 		{:else}
 			<div
-				class="text-[13px] leading-relaxed wrap-break-word whitespace-pre-wrap text-muted-foreground"
+				class="text-body-sm leading-relaxed wrap-break-word whitespace-pre-wrap text-muted-foreground"
 			>
 				{section.content}
 			</div>

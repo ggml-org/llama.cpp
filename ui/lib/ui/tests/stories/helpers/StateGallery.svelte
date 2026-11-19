@@ -38,7 +38,7 @@
 
 <section style:width="min({width}, calc(100vw - 2rem))" class="p-4">
 	{#if title}
-		<h2 class="mb-4 text-sm font-medium text-muted-foreground">{title}</h2>
+		<h2 class="mb-4 text-label text-muted-foreground">{title}</h2>
 	{/if}
 
 	<!-- a query container, so a cell can take the gallery's whole width (StateGalleryItem's `full`) -->

@@ -55,7 +55,7 @@
 			<Checkbox bind:checked={includeSensitiveData} id="include-sensitive" />
 
 			<Label
-				class="text-sm leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+				class="text-body-sm leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
 				for="include-sensitive"
 			>
 				{#if includeSensitiveData}
