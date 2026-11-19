@@ -93,6 +93,7 @@ int    opt_profile    = 0; // profiling mode (0-disabled, 1-basic, 2-pmu)
 bool   opt_hostbuf    = true;
 bool   opt_dma64      = false;
 int    opt_power_mode = HTP_POWER_MODE_BURST; // DCVS/HMX power profile requested at session start
+int    opt_hmx_mhz    = 0;                    // HMX clock override in MHz (0 = use the power profile)
 
 static const std::pair<const char *, int> htp_power_mode_names[] = {
     { "low_power_saver",            HTP_POWER_MODE_LOW_POWER_SAVER },
@@ -2372,13 +2373,16 @@ void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) n
 
     // Start dspqueue/opbatch processing
     err = htp_iface_start(this->handle, this->session_id, this->queue_id, this->n_hvx, opt_nhmx, opt_vtcm_size, this->max_vmem,
-                          (uint32_t) opt_power_mode);
+                          (uint32_t) opt_power_mode | ((uint32_t) opt_hmx_mhz << HTP_POWER_HMX_MHZ_SHIFT));
     if (err != 0) {
         GGML_LOG_ERROR("ggml-hex: %s failed to start session: 0x%08x\n", this->c_name(), (unsigned) err);
         throw std::runtime_error("ggml-hex: iface start failed (see log for details)");
     }
     this->valid_iface = true;
     GGML_LOG_INFO("ggml-hex: %s power mode: %s\n", this->c_name(), htp_power_mode_to_str(opt_power_mode));
+    if (opt_hmx_mhz) {
+        GGML_LOG_INFO("ggml-hex: %s hmx clock override: %d MHz\n", this->c_name(), opt_hmx_mhz);
+    }
 
     if (opt_profile) {
         htp_iface_pmu_conf pmu_conf{};
@@ -3558,6 +3562,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_hostbuf  = getenv("GGML_HEXAGON_HOSTBUF");
     const char * str_dma64    = getenv("GGML_HEXAGON_DMA64");
     const char * str_power_mode = getenv("GGML_HEXAGON_POWER_MODE");
+    const char * str_hmx_mhz    = getenv("GGML_HEXAGON_HMX_MHZ");
 
     // Init Arch first since it affects other defaults
     if (!str_arch) {
@@ -3607,6 +3612,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
             opt_power_mode = m;
         }
     }
+    opt_hmx_mhz   = str_hmx_mhz  ? std::clamp(atoi(str_hmx_mhz), 0, 0xffff) : 0;
     opt_nhvx      = str_nhvx     ? strtoul(str_nhvx, NULL, 0)             : opt_nhvx;
     opt_nhmx      = str_nhmx     ? atoi(str_nhmx)                         : opt_nhmx;
     opt_vtcm_size = str_vtcm_size ? parse_size(str_vtcm_size)                 : opt_vtcm_size;

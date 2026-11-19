@@ -362,6 +362,12 @@ on 4 physical NPUs, or `--devices 'HTP0[0-1:0],HTP1[0-1:1]'` on 2 physical NPUs 
       `./scripts/snapdragon/run.py --hex-power-mode sustained_high_performance ...`
 
 
+- `GGML_HEXAGON_HMX_MHZ=0`
+  Pins the HMX clock to the given frequency in MHz (e.g. `768` or `1036` to emulate a lower-clocked part).
+  Only the HMX vote changes; the rest of the power mode is kept. `0` (default) uses the power mode's HMX corners.
+  The DSP log shows the core / HMX clocks read back before and after the vote and at session stop.
+
+
 - `GGML_HEXAGON_VERBOSE=1`
   Enables verbose logging of Ops from the backend. Example output:
 

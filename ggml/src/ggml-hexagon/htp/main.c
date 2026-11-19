@@ -442,11 +442,34 @@ static const struct htp_power_profile htp_power_profiles[HTP_POWER_MODE_COUNT] =
 
 #undef HTP_POWER_PROFILE_ENTRY
 
+// Current core and HMX clocks in MHz (0 if the query fails).
+static void htp_log_clocks(const char * tag) {
+    HAP_power_response_t r;
+    uint32_t core_mhz = 0, hmx_mhz = 0;
+    memset(&r, 0, sizeof(r));
+    r.type = HAP_power_get_clk_Freq;
+    if (HAP_power_get(NULL, &r) == AEE_SUCCESS) {
+        core_mhz = r.clkFreqHz / 1000000;
+    }
+#if __HVX_ARCH__ >= 75
+    memset(&r, 0, sizeof(r));
+    r.type = HAP_power_get_hmx_core_clk_Freq;
+    if (HAP_power_get(NULL, &r) == AEE_SUCCESS) {
+        hmx_mhz = r.clkFreqHz / 1000000;
+    }
+#endif
+    FARF(ALWAYS, "clocks %s: core %u MHz hmx %u MHz", tag, (unsigned) core_mhz, (unsigned) hmx_mhz);
+}
+
 AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp_queue_id, uint32_t n_hvx, uint32_t n_hmx, uint64_t vtcm_size, uint64_t max_vmem, uint32_t power_mode) {
     struct htp_handle * h = (struct htp_handle *) handle;
     if (!h) {
         return AEE_EBADPARM;
     }
+
+    // Upper bits carry an optional HMX clock override in MHz (see HTP_POWER_HMX_MHZ_SHIFT).
+    const uint32_t hmx_mhz = power_mode >> HTP_POWER_HMX_MHZ_SHIFT;
+    power_mode &= HTP_POWER_MODE_MASK;
 
     if (power_mode >= HTP_POWER_MODE_COUNT) {
         FARF(ERROR, "invalid power-mode %u, falling back to burst", (unsigned) power_mode);
@@ -459,6 +482,9 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
          (unsigned) pwr->core_min_corner, (unsigned) pwr->core_max_corner, (unsigned) pwr->core_target_corner,
          (int) pwr->sleep_disable,
          (unsigned) pwr->hmx_min_corner, (unsigned) pwr->hmx_max_corner, (unsigned) pwr->hmx_target_corner);
+    if (hmx_mhz) {
+        FARF(ALWAYS, "hmx clock override %u MHz", (unsigned) hmx_mhz);
+    }
 
     if (h->ctx) {
         FARF(ERROR, "Queue already open");
@@ -634,10 +660,17 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
         request.hmx_v2.set_power     = TRUE;
         request.hmx_v2.power_up      = TRUE;
         request.hmx_v2.set_clock     = TRUE;
-        request.hmx_v2.target_corner = pwr->hmx_target_corner;
-        request.hmx_v2.min_corner    = pwr->hmx_min_corner;
-        request.hmx_v2.max_corner    = pwr->hmx_max_corner;
         request.hmx_v2.perf_mode     = pwr->hmx_perf_mode;
+        if (hmx_mhz) {
+            // freq_mhz votes require target_corner = pick_default = 0
+            request.hmx_v2.freq_mhz       = hmx_mhz;
+            request.hmx_v2.floor_freq_mhz = hmx_mhz;
+        } else {
+            request.hmx_v2.target_corner = pwr->hmx_target_corner;
+            request.hmx_v2.min_corner    = pwr->hmx_min_corner;
+            request.hmx_v2.max_corner    = pwr->hmx_max_corner;
+        }
+        htp_log_clocks("before hmx vote");
         FARF(ALWAYS, "Setting HMX clock\n");
         err = HAP_power_set((void *) ctx, &request);
         if (err != AEE_SUCCESS) {
@@ -645,6 +678,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
             htp_iface_stop(handle);
             return err;
         }
+        htp_log_clocks("after hmx vote");
     }
 #else
     {
@@ -761,6 +795,10 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
         ctx->ddr_spad_base = NULL;
         ctx->ddr_spad_size = 0;
     }
+
+    // Drop this session's DCVS / HVX / HMX votes so the clocks do not stay pinned after exit.
+    htp_log_clocks("at stop");
+    HAP_power_destroy((void *) ctx);
 
     free(ctx);
     h->ctx = NULL;

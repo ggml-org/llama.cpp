@@ -238,6 +238,10 @@ enum htp_power_mode {
     HTP_POWER_MODE_COUNT
 };
 
+// htp_iface_start power_mode word: bits 0-7 mode, bits 16-31 optional HMX clock in MHz (0 = profile corners).
+#define HTP_POWER_MODE_MASK     0xffu
+#define HTP_POWER_HMX_MHZ_SHIFT 16
+
 enum htp_trace_event_id {
     HTP_TRACE_EVT_DMA                 = 0,
     HTP_TRACE_EVT_L2FLUSH             = 1,
