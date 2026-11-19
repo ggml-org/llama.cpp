@@ -1,6 +1,6 @@
 #include "models.h"
 
-void llama_model_domynedge::load_arch_hparams(llama_model_loader & ml) {
+void llama_model_domyn_edge::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
     // required: the base loader defaults it to n_rot_full if the key is not found
@@ -25,7 +25,7 @@ void llama_model_domynedge::load_arch_hparams(llama_model_loader & ml) {
     }
 }
 
-void llama_model_domynedge::load_arch_tensors(llama_model_loader &) {
+void llama_model_domyn_edge::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
 
     tok_embd    = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}, 0);
@@ -62,7 +62,7 @@ void llama_model_domynedge::load_arch_tensors(llama_model_loader &) {
     }
 }
 
-llama_rope_params llama_model_domynedge::get_rope_params(const llama_cparams & cparams, int il) const {
+llama_rope_params llama_model_domyn_edge::get_rope_params(const llama_cparams & cparams, int il) const {
     auto res = llama_model::get_rope_params(cparams, il);
 
     // the SWA layers use the global base and scale
@@ -72,7 +72,7 @@ llama_rope_params llama_model_domynedge::get_rope_params(const llama_cparams & c
     return res;
 }
 
-llama_model_domynedge::graph::graph(const llm_graph_params & params)
+llama_model_domyn_edge::graph::graph(const llm_graph_params & params)
     : llm_graph_context(params) {
     ggml_tensor * cur;
     ggml_tensor * inpL    = build_inp_embd(model.tok_embd);
@@ -159,6 +159,6 @@ llama_model_domynedge::graph::graph(const llm_graph_params & params)
     res->t_logits = cur;
 }
 
-std::unique_ptr<llm_graph_context> llama_model_domynedge::build_arch_graph(const llm_graph_params & params) const {
+std::unique_ptr<llm_graph_context> llama_model_domyn_edge::build_arch_graph(const llm_graph_params & params) const {
     return std::make_unique<graph>(params);
 }

@@ -395,7 +395,7 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
         case LLM_ARCH_KOLIBRI1:
             return new llama_model_kolibri1(params);
         case LLM_ARCH_DOMYN_EDGE:
-            return new llama_model_domynedge(params);
+            return new llama_model_domyn_edge(params);
         default:
             throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
     }
