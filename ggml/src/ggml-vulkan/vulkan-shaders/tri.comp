@@ -36,6 +36,6 @@ void main() {
     if (pass) {
         data_d[get_doffset() + dst_idx(idx)] = D_TYPE(data_a[get_aoffset() + src0_idx(idx)]);
     } else {
-        data_d[get_doffset() + dst_idx(idx)] = D_TYPE(0);
+        data_d[get_doffset() + dst_idx(idx)] = D_TYPE(0.0);
     }
 }
