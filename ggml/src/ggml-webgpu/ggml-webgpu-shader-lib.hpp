@@ -1272,7 +1272,7 @@ class ggml_webgpu_shader_lib {
     std::unordered_map<int, webgpu_pipeline> arange_pipelines;              // key is fixed, no variants yet
     std::unordered_map<int, webgpu_pipeline> count_equal_pipelines;         // key is src_overlap
     std::unordered_map<int, webgpu_pipeline> timestep_embedding_pipelines;  // key is fixed, no variants yet
-    std::unordered_map<int, webgpu_pipeline> pool2d_pipelines;         // key is ggml_op_pool
+    std::unordered_map<int, webgpu_pipeline> pool2d_pipelines;              // key is ggml_op_pool
     std::unordered_map<ggml_webgpu_row_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_row_norm_pipeline_key_hash>
         row_norm_pipelines;                                                 // op/inplace
 
