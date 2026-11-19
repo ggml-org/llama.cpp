@@ -4,48 +4,92 @@
 
 // note: the json dependency is only for defining input in a convenient way
 // we can remove it in the future when we figure out a better way to define inputs using jinja::value
-#include <nlohmann/json.hpp>
+#include "json.h"
 
+#include <algorithm>
 #include <functional>
+#include <optional>
 #include <sstream>
 
 #define FILENAME "jinja-caps"
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 namespace jinja {
 
 using caps_json_fn = std::function<json()>;
-using caps_analyze_fn = std::function<void(bool, value &, value &)>;
+using caps_ctx_fn = std::function<void(context &)>;
+using caps_analyze_fn = std::function<void(context &, bool, value &, value &, const std::string &)>;
+
+void caps_apply_preserve_reasoning(jinja::context & ctx, bool enabled) {
+    ctx.set_val("preserve_thinking",         mk_val<value_bool>(enabled));
+    ctx.set_val("clear_thinking",            mk_val<value_bool>(!enabled));
+    ctx.set_val("truncate_history_thinking", mk_val<value_bool>(!enabled));
+    ctx.set_val("drop_thinking",             mk_val<value_bool>(!enabled));
+}
+
+void caps_apply_reasoning_effort(jinja::context & ctx, const std::string & effort) {
+    value var = mk_val<value_string>(effort); // bind to the same value for stats
+    ctx.set_val("reasoning_effort",   var);
+    ctx.set_val("reasoning_strength", var);
+}
 
 static void caps_try_execute(jinja::program & prog,
                              const caps_json_fn & messages_fn,
+                             const caps_ctx_fn & ctx_fn,
                              const caps_json_fn & tools_fn,
                              const caps_analyze_fn & analyze_fn) {
-    context ctx;
-    ctx.is_get_stats = true;
-    jinja::global_from_json(ctx, json{
-        {"messages", messages_fn()},
-        {"tools", tools_fn()},
-        {"bos_token", ""},
-        {"eos_token", ""},
-        {"add_generation_prompt", true}
-    }, true);
+    json msgs = messages_fn();
+    for (int attempt = 0; attempt < 2; attempt++) {
+        context ctx;
+        ctx.is_get_stats = true;
+        jinja::global_from_json(ctx, json{
+            {"messages", msgs},
+            {"tools", tools_fn ? tools_fn() : json::array()},
+            {"bos_token", ""},
+            {"eos_token", ""},
+            {"add_generation_prompt", true}
+        }, true);
 
-    auto messages = ctx.get_val("messages");
-    auto tools = ctx.get_val("tools");
+        if (ctx_fn) {
+            ctx_fn(ctx);
+        }
 
-    bool success = false;
-    try {
-        jinja::runtime runtime(ctx);
-        runtime.execute(prog);
-        success = true;
-    } catch (const std::exception & e) {
-        JJ_DEBUG("Exception during execution: %s", e.what());
-        // ignore exceptions during capability analysis
+        auto messages = ctx.get_val("messages");
+        auto tools = ctx.get_val("tools");
+
+        bool success = false;
+        std::string result;
+        try {
+            jinja::runtime runtime(ctx);
+            auto results = runtime.execute(prog);
+            auto parts = jinja::runtime::gather_string_parts(results);
+            result = parts->as_string().str();
+            success = true;
+        } catch (const std::exception & e) {
+            JJ_DEBUG("Exception during execution: %s", e.what());
+            result = "";
+            // ignore exceptions during capability analysis
+        }
+
+        // some templates require a thinking field on every assistant turn (e.g. K2 Horizon):
+        // retry once with an empty reasoning_content on the assistant turns that lack one
+        if (!success && attempt == 0) {
+            bool added = false;
+            for (auto & msg : msgs) {
+                if (msg.is_object() && msg.value("role", "") == "assistant" && !msg.contains("reasoning_content")) {
+                    msg["reasoning_content"] = "";
+                    added = true;
+                }
+            }
+            if (added) {
+                continue;
+            }
+        }
+
+        analyze_fn(ctx, success, messages, tools, result);
+        return;
     }
-
-    analyze_fn(success, messages, tools);
 }
 
 // for debugging only
@@ -70,6 +114,8 @@ std::map<std::string, bool> caps::to_map() const {
         {"supports_parallel_tool_calls", supports_parallel_tool_calls},
         {"supports_system_role", supports_system_role},
         {"supports_preserve_reasoning", supports_preserve_reasoning},
+        {"supports_reasoning_effort", supports_reasoning_effort},
+        {"supports_object_arguments", supports_object_arguments},
     };
 }
 
@@ -90,6 +136,11 @@ caps caps_get(jinja::program & prog) {
         return v->stats.ops.find(op_name) != v->stats.ops.end();
     };
 
+    JJ_DEBUG("%s\n", ">>> Running capability check: typed content");
+
+    bool checks_for_string = false;
+    static const std::string content_marker = "STRING_MARKER";
+
     // case: typed content support
     caps_try_execute(
         prog,
@@ -98,28 +149,66 @@ caps caps_get(jinja::program & prog) {
             return json::array({
                 {
                     {"role", "user"},
-                    {"content", "content"}
+                    {"content", content_marker}
                 }
             });
         },
-        [&]() {
-            // tools
-            return json{nullptr};
-        },
-        [&](bool success, value & messages, value &) {
+        nullptr, // ctx_fn
+        nullptr, // tools_fn
+        [&](context &, bool success, value & messages, value &, const std::string & rendered) {
             auto & content = messages->at(0)->at("content");
             caps_print_stats(content, "messages[0].content");
-            if (has_op(content, "selectattr") || has_op(content, "array_access")) {
+            if (has_op(content, "test_is_string")) {
+                // checked if content is string
+                checks_for_string = true;
+            }
+            bool used_as_array = has_op(content, "selectattr") || has_op(content, "array_access");
+            if (used_as_array) {
                 // accessed as an array
                 result.supports_typed_content = true;
             }
             if (!success) {
                 // failed to execute with content as string
                 result.supports_string_content = false;
+            } else if (used_as_array && rendered.find(content_marker) == std::string::npos) {
+                // edge case: string may be accessed for checking, but does not appear in the output
+                result.supports_string_content = false;
             }
         }
     );
 
+    if (checks_for_string) {
+        caps_try_execute(
+            prog,
+            [&]() {
+                // messages
+                return json::array({
+                    {
+                        {"role", "user"},
+                        {"content", json::array({
+                            {
+                                {"type", "text"},
+                                {"text", content_marker}
+                            }
+                        })}
+                    }
+                });
+            },
+            nullptr, // ctx_fn
+            nullptr, // tools_fn
+            [&](context &, bool success, value & messages, value &, const std::string &) {
+                auto & content = messages->at(0)->at("content");
+                caps_print_stats(content, "messages[0].content");
+                bool used_as_array = has_op(content, "selectattr") || has_op(content, "array_access");
+                if (used_as_array && success) {
+                    // accessed as an array
+                    result.supports_typed_content = true;
+                }
+            }
+        );
+    }
+
+    JJ_DEBUG("%s\n", ">>> Running capability check: system prompt");
 
     // case: system prompt support
     caps_try_execute(
@@ -137,11 +226,9 @@ caps caps_get(jinja::program & prog) {
                 },
             });
         },
-        [&]() {
-            // tools
-            return json::array();
-        },
-        [&](bool, value & messages, value &) {
+        nullptr, // ctx_fn
+        nullptr, // tools_fn
+        [&](context &, bool, value & messages, value &, const std::string &) {
             auto & content = messages->at(0)->at("content");
             caps_print_stats(content, "messages[0].content");
             if (!content->stats.used) {
@@ -150,7 +237,9 @@ caps caps_get(jinja::program & prog) {
         }
     );
 
-    // case: tools support
+    JJ_DEBUG("%s\n", ">>> Running capability check: single tool with object arguments support");
+
+    // case: tools support: single call with object arguments
     caps_try_execute(
         prog,
         [&]() {
@@ -162,23 +251,13 @@ caps caps_get(jinja::program & prog) {
                 },
                 {
                     {"role", "assistant"},
-                    {"content", "Assistant message"},
+                    {"content", ""}, // Some templates expect content to be empty with tool calls
                     {"tool_calls", json::array({
                         {
-                            {"id", "call1"},
+                            {"id", "call00001"},
                             {"type", "function"},
                             {"function", {
                                 {"name", "tool1"},
-                                {"arguments", {
-                                    {"arg", "value"}
-                                }}
-                            }}
-                        },
-                        {
-                            {"id", "call2"},
-                            {"type", "function"},
-                            {"function", {
-                                {"name", "tool2"},
                                 {"arguments", {
                                     {"arg", "value"}
                                 }}
@@ -187,11 +266,21 @@ caps caps_get(jinja::program & prog) {
                     })}
                 },
                 {
+                    {"role", "tool"},
+                    {"content", "Tool response"},
+                    {"tool_call_id", "call00001"}
+                },
+                {
+                    {"role", "assistant"},
+                    {"content", "The tool response was 'tool response'"}
+                },
+                {
                     {"role", "user"},
                     {"content", "User message"},
                 },
             });
         },
+        nullptr, // ctx_fn
         [&]() {
             // tools
             return json::array({
@@ -199,7 +288,7 @@ caps caps_get(jinja::program & prog) {
                     {"name", "tool"},
                     {"type", "function"},
                     {"function", {
-                        {"name", "tool"},
+                        {"name", "tool1"},
                         {"description", "Tool description"},
                         {"parameters", {
                             {"type", "object"},
@@ -215,15 +304,14 @@ caps caps_get(jinja::program & prog) {
                 },
             });
         },
-        [&](bool success, value & messages, value & tools) {
+        [&](context &, bool success, value & messages, value & tools, const std::string &) {
             if (!success) {
-                result.supports_tool_calls = false;
-                result.supports_tools = false;
-                return;
+                return; // Nothing can be inferred
             }
 
             auto & tool_name = tools->at(0)->at("function")->at("name");
             caps_print_stats(tool_name, "tools[0].function.name");
+            caps_print_stats(tools, "tools");
             if (!tool_name->stats.used) {
                 result.supports_tools = false;
             }
@@ -232,7 +320,193 @@ caps caps_get(jinja::program & prog) {
             caps_print_stats(tool_calls, "messages[1].tool_calls");
             if (!tool_calls->stats.used) {
                 result.supports_tool_calls = false;
+                return;
             }
+
+            auto & tool_arg = tool_calls->at(0)->at("function")->at("arguments")->at("arg");
+            caps_print_stats(tool_arg, "messages[1].tool_calls[0].function.arguments.arg");
+            if (tool_arg->stats.used) {
+                result.supports_object_arguments = true;
+            }
+        }
+    );
+
+    if (!result.supports_object_arguments) {
+        JJ_DEBUG("%s\n", ">>> Running capability check: single tool with string arguments support");
+
+        // case: tools support: single call with string arguments
+        caps_try_execute(
+            prog,
+            [&]() {
+                // messages
+                return json::array({
+                    {
+                        {"role", "user"},
+                        {"content", "User message"},
+                    },
+                    {
+                        {"role", "assistant"},
+                        {"content", ""}, // Some templates expect content to be empty with tool calls
+                        {"tool_calls", json::array({
+                            {
+                                {"id", "call00001"},
+                                {"type", "function"},
+                                {"function", {
+                                    {"name", "tool1"},
+                                    {"arguments", R"({"arg": "value"})"}
+                                }}
+                            }
+                        })}
+                    },
+                    {
+                        {"role", "tool"},
+                        {"content", "Tool response"},
+                        {"tool_call_id", "call00001"}
+                    },
+                    {
+                        {"role", "assistant"},
+                        {"content", "The tool response was 'tool response'"}
+                    },
+                    {
+                        {"role", "user"},
+                        {"content", "User message"},
+                    },
+                });
+            },
+            nullptr, // ctx_fn
+            [&]() {
+                // tools
+                return json::array({
+                    {
+                        {"name", "tool"},
+                        {"type", "function"},
+                        {"function", {
+                            {"name", "tool1"},
+                            {"description", "Tool description"},
+                            {"parameters", {
+                                {"type", "object"},
+                                {"properties", {
+                                    {"arg", {
+                                        {"type", "string"},
+                                        {"description", "Arg description"},
+                                    }},
+                                }},
+                                {"required", json::array({ "arg" })},
+                            }},
+                        }},
+                    },
+                });
+            },
+            [&](context &, bool success, value & messages, value & tools, const std::string &) {
+                if (!success) {
+                    result.supports_tool_calls = false;
+                    result.supports_tools = false;
+                    return;
+                }
+
+                auto & tool_name = tools->at(0)->at("function")->at("name");
+                caps_print_stats(tool_name, "tools[0].function.name");
+                caps_print_stats(tools, "tools");
+                if (!tool_name->stats.used) {
+                    result.supports_tools = false;
+                }
+
+                auto & tool_calls = messages->at(1)->at("tool_calls");
+                caps_print_stats(tool_calls, "messages[1].tool_calls");
+                if (!tool_calls->stats.used) {
+                    result.supports_tool_calls = false;
+                    return;
+                }
+            }
+        );
+    }
+
+    JJ_DEBUG("%s\n", ">>> Running capability check: parallel tool support");
+
+    // case: tools support: parallel calls
+    caps_try_execute(
+        prog,
+        [&]() {
+            json args = json(R"({"arg": "value"})");
+            if (result.supports_object_arguments) {
+                args = json{{"arg", "value"}};
+            }
+
+            // messages
+            return json::array({
+                {
+                    {"role", "user"},
+                    {"content", "User message"},
+                },
+                {
+                    {"role", "assistant"},
+                    {"content", ""}, // Some templates expect content to be empty with tool calls
+                    {"tool_calls", json::array({
+                        {
+                            {"id", "call00001"},
+                            {"type", "function"},
+                            {"function", {
+                                {"name", "tool1"},
+                                {"arguments", args}
+                            }}
+                        },
+                        {
+                            {"id", "call00002"},
+                            {"type", "function"},
+                            {"function", {
+                                {"name", "tool1"},
+                                {"arguments", args}
+                            }}
+                        }
+                    })}
+                },
+                {
+                    {"role", "tool"},
+                    {"content", "Tool response"},
+                    {"tool_call_id", "call00001"}
+                },
+                {
+                    {"role", "assistant"},
+                    {"content", "The tool response was 'tool response'"}
+                },
+                {
+                    {"role", "user"},
+                    {"content", "User message"},
+                },
+            });
+        },
+        nullptr, // ctx_fn
+        [&]() {
+            // tools
+            return json::array({
+                {
+                    {"name", "tool"},
+                    {"type", "function"},
+                    {"function", {
+                        {"name", "tool1"},
+                        {"description", "Tool description"},
+                        {"parameters", {
+                            {"type", "object"},
+                            {"properties", {
+                                {"arg", {
+                                    {"type", "string"},
+                                    {"description", "Arg description"},
+                                }},
+                            }},
+                            {"required", json::array({ "arg" })},
+                        }},
+                    }},
+                },
+            });
+        },
+        [&](context &, bool success, value & messages, value &, const std::string &) {
+            if (!success) {
+                result.supports_parallel_tool_calls = false;
+                return;
+            }
+
+            auto & tool_calls = messages->at(1)->at("tool_calls");
+            caps_print_stats(tool_calls, "messages[1].tool_calls");
 
             // check for second tool call usage
             auto & tool_call_1 = tool_calls->at(1)->at("function");
@@ -243,12 +517,25 @@ caps caps_get(jinja::program & prog) {
         }
     );
 
+    JJ_DEBUG("%s\n", ">>> Running capability check: preserve reasoning");
+
     // case: preserve reasoning content in chat history
+    const std::string reasoning_placeholder = "<REASONING_CONTENT_PLACEHOLDER>";
     caps_try_execute(
         prog,
         [&]() {
             // messages
             return json::array({
+                {
+                    {"role", "user"},
+                    {"content", "User message"}
+                },
+                {
+                    {"role", "assistant"},
+                    {"content", "Assistant message"},
+                    // check of reasoning_content deeper in the history, not just the last assistant message
+                    {"reasoning_content", reasoning_placeholder}
+                },
                 {
                     {"role", "user"},
                     {"content", "User message"}
@@ -264,18 +551,106 @@ caps caps_get(jinja::program & prog) {
                 },
             });
         },
-        [&]() {
-            // tools
-            return json::array();
+        [&](context & ctx) {
+            ctx.set_val("enable_thinking", mk_val<value_bool>(true));
+            caps_apply_preserve_reasoning(ctx, true);
         },
-        [&](bool, value & messages, value &) {
-            auto & content = messages->at(1)->at("reasoning_content");
-            caps_print_stats(content, "messages[1].reasoning_content");
-            if (content->stats.used) {
+        nullptr, // tools_fn
+        [&](context &, bool, value &, value &, const std::string & output) {
+            // note: we cannot use stats here because the reasoning_content may be used for "if" condition test, but not actually outputted in the final result
+            if (output.find(reasoning_placeholder) != std::string::npos) {
                 result.supports_preserve_reasoning = true;
             }
         }
     );
+
+    JJ_DEBUG("%s\n", ">>> Running capability check: reasoning effort");
+
+    // case: reasoning effort level
+    caps_try_execute(
+        prog,
+        [&]() {
+            // messages
+            return json::array({
+                {
+                    {"role", "user"},
+                    {"content", "User message"}
+                },
+            });
+        },
+        [&](context & ctx) {
+            ctx.set_val("enable_thinking", mk_val<value_bool>(true));
+            caps_apply_reasoning_effort(ctx, "low");
+        },
+        nullptr, // tools_fn
+        [&](context & ctx, bool, value &, value &, const std::string &) {
+            value effort = ctx.get_val("reasoning_effort");
+            caps_print_stats(effort, "reasoning_effort");
+            result.supports_reasoning_effort = effort->stats.used;
+        }
+    );
+
+    if (result.supports_reasoning_effort) {
+        JJ_DEBUG("%s\n", ">>> Running capability check: reasoning effort levels");
+
+        static const std::vector<std::string> candidates = { "minimal", "low", "medium", "high", "xhigh", "max" };
+
+        // renders a single user turn with the given effort, nothing when the template raises
+        const auto render = [&](const std::string & effort) {
+            std::optional<std::string> rendered;
+            caps_try_execute(
+                prog,
+                [&]() {
+                    // messages
+                    return json::array({
+                        {
+                            {"role", "user"},
+                            {"content", "User message"}
+                        },
+                    });
+                },
+                [&](context & ctx) {
+                    ctx.set_val("enable_thinking", mk_val<value_bool>(true));
+                    caps_apply_reasoning_effort(ctx, effort);
+                },
+                nullptr, // tools_fn
+                [&](context &, bool success, value &, value &, const std::string & output) {
+                    if (success) {
+                        rendered = output;
+                    }
+                }
+            );
+            return rendered;
+        };
+
+        // an unknown level shows the render of the template fallback, a level that renders the same is not honored
+        // levels sharing a render are aliases and the highest one is kept
+        const auto unknown = render("REASONING_EFFORT_UNKNOWN");
+        std::vector<std::string> renders;
+        std::vector<std::string> rejected;
+        for (const auto & level : candidates) {
+            const auto rendered = render(level);
+            if (!rendered) {
+                rejected.push_back(level);
+                continue;
+            }
+            if (rendered == unknown) {
+                continue;
+            }
+            const auto it = std::find(renders.begin(), renders.end(), *rendered);
+            if (it != renders.end()) {
+                result.reasoning_effort_levels[it - renders.begin()] = level;
+            } else {
+                renders.push_back(*rendered);
+                result.reasoning_effort_levels.push_back(level);
+            }
+        }
+
+        // a template that renders no level fails the probe for another reason, so its failures say nothing about the levels
+        if (!result.reasoning_effort_levels.empty()) {
+            result.reasoning_effort_rejected = rejected;
+        }
+    }
 
     JJ_DEBUG("%s\n", result.to_string().c_str());
 

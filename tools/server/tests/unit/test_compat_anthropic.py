@@ -11,7 +11,7 @@ server: ServerProcess
 def get_test_image_base64() -> str:
     """Get a test image in base64 format"""
     # Use the same test image as test_vision_api.py
-    IMG_URL = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/11_truck.png"
+    IMG_URL = "https://huggingface.co/ggml-org-dev/tinygemma3-GGUF/resolve/main/test/11_truck.png"
     response = requests.get(IMG_URL)
     response.raise_for_status()
     return base64.b64encode(response.content).decode("utf-8")
@@ -21,7 +21,6 @@ def create_server():
     global server
     server = ServerPreset.tinyllama2()
     server.model_alias = "tinyllama-2-anthropic"
-    server.server_port = 8082
     server.n_slots = 1
     server.n_ctx = 8192
     server.n_batch = 2048
@@ -34,7 +33,6 @@ def vision_server():
     server = ServerPreset.tinygemma3()
     server.offline = False  # Allow downloading the model
     server.model_alias = "tinygemma3-anthropic"
-    server.server_port = 8083  # Different port to avoid conflicts
     server.n_slots = 1
     return server
 
@@ -63,8 +61,10 @@ def test_anthropic_messages_basic():
     assert "text" in res.body["content"][0], "Text content block missing 'text' field"
     assert res.body["stop_reason"] in ["end_turn", "max_tokens"], f"Invalid stop_reason: {res.body.get('stop_reason')}"
     assert "usage" in res.body, "Missing 'usage' field"
+    assert "cache_read_input_tokens" in res.body["usage"], "Missing usage.cache_read_input_tokens"
     assert "input_tokens" in res.body["usage"], "Missing usage.input_tokens"
     assert "output_tokens" in res.body["usage"], "Missing usage.output_tokens"
+    assert isinstance(res.body["usage"]["cache_read_input_tokens"], int), "cache_read_input_tokens should be integer"
     assert isinstance(res.body["usage"]["input_tokens"], int), "input_tokens should be integer"
     assert isinstance(res.body["usage"]["output_tokens"], int), "output_tokens should be integer"
     assert res.body["usage"]["output_tokens"] > 0, "Should have generated some tokens"
@@ -400,6 +400,65 @@ def test_anthropic_tool_result_with_text():
     assert len(res.body["content"]) > 0
 
 
+def test_anthropic_tool_result_with_image():
+    """Test tool result containing mixed text and image blocks
+
+    Verifies that image blocks inside Anthropic tool_result content are
+    properly converted to OpenAI image_url format rather than being
+    silently dropped. With a non-multimodal model, the converted image
+    triggers a clear error message instead of being ignored.
+    """
+    server.jinja = True
+    server.start()
+
+    # Small 1x1 red PNG image in base64 (same as vision tests)
+    red_pixel_png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+
+    res = server.make_request("POST", "/v1/messages", data={
+        "model": "test",
+        "max_tokens": 100,
+        "messages": [
+            {"role": "user", "content": "What is in this image?"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "tool_1",
+                        "name": "read",
+                        "input": {"file": "test.png"}
+                    }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool_1",
+                        "content": [
+                            {"type": "text", "text": "File: test.png"},
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": red_pixel_png
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    })
+
+    # Without the fix, image block would cause "unsupported content[].type"
+    # With the fix, image is converted to image_url but tinyllama doesn't support images
+    assert res.status_code == 500
+    assert "image input is not supported" in res.body.get("error", {}).get("message", "").lower()
+
+
 def test_anthropic_tool_result_error():
     """Test tool result with error flag"""
     server.jinja = True
@@ -437,6 +496,54 @@ def test_anthropic_tool_result_error():
 
     assert res.status_code == 200
     assert res.body["type"] == "message"
+
+
+def test_anthropic_tool_reference():
+    """Anthropic defer_loading and tool_reference convert to their OpenAI forms (behaviour: test_tool_call.py)"""
+    server.jinja = True
+    server.chat_template_file = '../../../models/templates/LFM3.jinja'
+    server.start()
+
+    search = {"name": "tool_search", "description": "Search for available tools by keyword",
+              "parameters": {"type": "object", "properties": {"query": {"type": "string"}}}}
+    purchase = {"name": "markItemPurchased", "description": "Mark an item as purchased",
+                "parameters": {"type": "object", "properties": {"id": {"type": "string"}}}}
+
+    anthropic = server.make_request("POST", "/v1/messages/count_tokens", data={
+        "model": "test",
+        "tools": [
+            {"name": t["name"], "description": t["description"], "input_schema": t["parameters"], **extra}
+            for t, extra in ((search, {}), (purchase, {"defer_loading": True}))
+        ],
+        "messages": [
+            {"role": "user", "content": "Mark item abc as purchased"},
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "call_1", "name": "tool_search", "input": {"query": "purchase"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "call_1",
+                 "content": [{"type": "tool_reference", "tool_name": "markItemPurchased"}]},
+            ]},
+        ],
+    })
+    oai = server.make_request("POST", "/chat/completions/input_tokens", data={
+        "tools": [
+            {"type": "function", "function": search},
+            {"type": "function", "function": {**purchase, "defer_loading": True}},
+        ],
+        "messages": [
+            {"role": "user", "content": "Mark item abc as purchased"},
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "call_1", "type": "function",
+                 "function": {"name": "tool_search", "arguments": "{\"query\": \"purchase\"}"}},
+            ]},
+            {"role": "tool", "tool_call_id": "call_1",
+             "content": [{"type": "tool_reference", "name": "markItemPurchased"}]},
+        ],
+    })
+    assert anthropic.status_code == 200, anthropic.body
+    assert oai.status_code == 200, oai.body
+    assert anthropic.body["input_tokens"] == oai.body["input_tokens"]
 
 
 def test_anthropic_tool_streaming():
@@ -744,6 +851,32 @@ def test_anthropic_thinking():
     assert res.body["type"] == "message"
 
 
+def test_anthropic_output_config_effort():
+    """output_config.effort must reach the chat template, same as chat_template_kwargs.reasoning_effort"""
+    global server
+    server.jinja = True
+    server.chat_template_file = '../../../models/templates/openai-gpt-oss-120b.jinja'
+    server.start()
+    effort = "low"
+
+    def count_tokens(extra):
+        res = server.make_request("POST", "/v1/messages/count_tokens", data={
+            "model": "test",
+            "messages": [{"role": "user", "content": "Hello"}],
+            **extra,
+        })
+        assert res.status_code == 200, res.body
+        return res.body["input_tokens"]
+
+    n_default = count_tokens({})
+    n_kwargs = count_tokens({"chat_template_kwargs": {"reasoning_effort": effort}})
+    n_output_config = count_tokens({"thinking": {"type": "adaptive"}, "output_config": {"effort": effort}})
+
+    # the template renders "Reasoning: medium" by default, so the effort must change the prompt
+    assert n_kwargs != n_default
+    assert n_output_config == n_kwargs
+
+
 def test_anthropic_metadata():
     """Test metadata parameter"""
     server.start()
@@ -809,6 +942,139 @@ def test_anthropic_vs_openai_different_response_format():
 
 # Extended thinking tests with reasoning models
 
+# The next two tests cover the input path (conversation history):
+# Client sends thinking blocks -> convert_anthropic_to_oai -> reasoning_content -> template
+
+def test_anthropic_thinking_history_in_count_tokens():
+    """Test that interleaved thinking blocks in conversation history are not dropped during conversion."""
+    global server
+    server.jinja = True
+    server.chat_template_file = '../../../models/templates/Qwen-Qwen3-0.6B.jinja'
+    server.start()
+
+    tool = {
+        "name": "list_files",
+        "description": "List files",
+        "input_schema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"]
+        }
+    }
+
+    messages_without_thinking = [
+        {"role": "user", "content": "Fix the bug"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "call_1", "name": "list_files", "input": {"path": "."}}
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "call_1", "content": "main.py"}
+            ]
+        },
+    ]
+
+    messages_with_thinking = [
+        {"role": "user", "content": "Fix the bug"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "I should check the project structure first to understand the codebase layout."},
+                {"type": "tool_use", "id": "call_1", "name": "list_files", "input": {"path": "."}}
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "call_1", "content": "main.py"}
+            ]
+        },
+    ]
+
+    res_without = server.make_request("POST", "/v1/messages/count_tokens", data={
+        "model": "test",
+        "messages": messages_without_thinking,
+        "tools": [tool],
+    })
+    assert res_without.status_code == 200, f"Expected 200: {res_without.body}"
+
+    res_with = server.make_request("POST", "/v1/messages/count_tokens", data={
+        "model": "test",
+        "messages": messages_with_thinking,
+        "tools": [tool],
+    })
+    assert res_with.status_code == 200, f"Expected 200: {res_with.body}"
+
+    # Thinking blocks should increase the token count
+    assert res_with.body["input_tokens"] > res_without.body["input_tokens"], \
+        f"Expected more tokens with thinking ({res_with.body['input_tokens']}) than without ({res_without.body['input_tokens']})"
+
+
+def test_anthropic_thinking_history_in_template():
+    """Test that reasoning_content from converted interleaved thinking blocks renders in the prompt."""
+    global server
+    server.jinja = True
+    server.chat_template_file = '../../../models/templates/Qwen-Qwen3-0.6B.jinja'
+    server.start()
+
+    reasoning_1 = "I should check the project structure first."
+    reasoning_2 = "Now I need to read the main file."
+
+    res = server.make_request("POST", "/apply-template", data={
+        "messages": [
+            {"role": "user", "content": "Fix the bug in main.py"},
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": reasoning_1,
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "list_files", "arguments": "{\"path\": \".\"}"}
+                }]
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "main.py\nutils.py"},
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": reasoning_2,
+                "tool_calls": [{
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{\"path\": \"main.py\"}"}
+                }]
+            },
+            {"role": "tool", "tool_call_id": "call_2", "content": "print('hello')"},
+        ],
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "list_files",
+                "description": "List files",
+                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+            }
+        }, {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a file",
+                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+            }
+        }],
+    })
+    assert res.status_code == 200, f"Expected 200, got {res.status_code}: {res.body}"
+    prompt = res.body["prompt"]
+
+    # Both reasoning_content values should be rendered in <think> tags
+    assert reasoning_1 in prompt, f"Expected first reasoning text in prompt: {prompt}"
+    assert reasoning_2 in prompt, f"Expected second reasoning text in prompt: {prompt}"
+    assert prompt.count("<think>") >= 2, f"Expected at least 2 <think> blocks in prompt: {prompt}"
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("stream", [False, True])
 def test_anthropic_thinking_with_reasoning_model(stream):
@@ -821,7 +1087,6 @@ def test_anthropic_thinking_with_reasoning_model(stream):
     server.jinja = True
     server.n_ctx = 8192
     server.n_predict = 1024
-    server.server_port = 8084
     server.start(timeout_seconds=600)  # large model needs time to download
 
     if stream:

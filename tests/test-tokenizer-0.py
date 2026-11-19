@@ -12,6 +12,7 @@ dir_tokenizer = args.dir_tokenizer
 fname_tok = args.fname_tok
 
 tokenizer = AutoTokenizer.from_pretrained(dir_tokenizer)
+assert tokenizer is not None
 
 print('tokenizing file: ', fname_tok) # noqa: NP100
 fname_out = fname_tok + '.tok'

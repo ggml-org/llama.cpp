@@ -47,11 +47,20 @@ const T * cast_stmt(const statement_ptr & ptr) {
 // not thread-safe
 void enable_debug(bool enable);
 
+// for visiting AST nodes
+// function signature: void(bool is_leaf, const statement * node, pair of <label, children>)
+using visitor_pair = std::pair<std::string, std::vector<const statement *>>;
+using visitor_fn = std::function<void(bool, const statement *, std::vector<visitor_pair>)>;
+
 struct context {
     std::shared_ptr<std::string> src; // for debugging; use shared_ptr to avoid copying on scope creation
     std::time_t current_time; // for functions that need current time
 
     bool is_get_stats = false; // whether to collect stats
+
+    int macro_depth = 0;
+
+    visitor_fn visitor;
 
     // src is optional, used for error reporting
     context(std::string src = "") : src(std::make_shared<std::string>(std::move(src))) {
@@ -67,20 +76,48 @@ struct context {
     }
     ~context() = default;
 
-    context(const context & parent) : context() {
-        // inherit variables (for example, when entering a new scope)
-        auto & pvar = parent.env->as_ordered_object();
-        for (const auto & pair : pvar) {
-            set_val(pair.first, pair.second);
+    context(const context & parent) :
+        src(parent.src),
+        current_time(parent.current_time),
+        is_get_stats(parent.is_get_stats),
+        macro_depth(parent.macro_depth),
+        // child scope: own variables only, lookups fall back to the parent (which must outlive this scope)
+        parent(&parent),
+        env(mk_val<value_object>()) {
+        env->has_builtins = false;
+    }
+
+    context(context &&) = default;
+
+    // copy with all visible variables flattened in, for a scope that can outlive its parents (caller() of a call block)
+    context snapshot() const {
+        std::vector<const context *> chain;
+        for (const context * c = this; c; c = c->parent) {
+            chain.push_back(c);
         }
-        current_time = parent.current_time;
-        is_get_stats = parent.is_get_stats;
-        src = parent.src;
+        context res(*this);
+        res.parent = nullptr;
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+            for (const auto & kv : (*it)->env->as_ordered_object()) {
+                res.env->insert(kv.first, kv.second);
+            }
+        }
+        return res;
+    }
+
+    // returns nullptr if not found
+    value find_val(const value & key) {
+        for (const context * c = this; c; c = c->parent) {
+            if (value v = c->env->find(key)) {
+                return v;
+            }
+        }
+        return nullptr;
     }
 
     value get_val(const std::string & name) {
-        value default_val = mk_val<value_undefined>(name);
-        return env->at(name, default_val);
+        auto result = find_val(mk_val<value_string>(name));
+        return result ? result : mk_val<value_undefined>(name);
     }
 
     void set_val(const std::string & name, const value & val) {
@@ -96,20 +133,44 @@ struct context {
     }
 
 private:
+    const context * parent = nullptr;
     value_object env;
 };
 
+// values cached in the AST are shared across renders, but stats mutate values, so stats mode gets a fresh copy
+template<typename T>
+value cached_val(const context & ctx, const value & cached) {
+    return ctx.is_get_stats ? mk_val<T>(*cast_val<T>(cached)) : cached;
+}
+
+// utils for visiting AST nodes
+static std::vector<const statement *> stmts_to_ptr(const statements & stmts) {
+    std::vector<const statement *> children;
+    for (const auto & stmt : stmts) {
+        children.push_back(stmt.get());
+    }
+    return children;
+}
+
 /**
  * Base class for all nodes in the AST.
+ * The AST is shared between threads, so visit and execute must be const.
  */
 struct statement {
     size_t pos; // position in source, for debugging
     virtual ~statement() = default;
     virtual std::string type() const { return "Statement"; }
+    virtual void visit(context & ctx) const { ctx.visitor(true, this, {}); }
+
     // execute_impl must be overridden by derived classes
-    virtual value execute_impl(context &) { throw std::runtime_error("cannot exec " + type()); }
+    virtual value execute_impl(context &) const { throw_exec_error(); }
     // execute is the public method to execute a statement with error handling
-    value execute(context &);
+    value execute(context &) const;
+
+private:
+    [[noreturn]] void throw_exec_error() const {
+        throw std::runtime_error("cannot exec " + type());
+    }
 };
 
 // Type Checking Utilities
@@ -143,7 +204,7 @@ struct program : public statement {
     program() = default;
     explicit program(statements && body) : body(std::move(body)) {}
     std::string type() const override { return "Program"; }
-    value execute_impl(context &) override {
+    [[noreturn]] value execute_impl(context &) const override {
         throw std::runtime_error("Cannot execute program directly, use jinja::runtime instead");
     }
 };
@@ -159,7 +220,14 @@ struct if_statement : public statement {
     }
 
     std::string type() const override { return "If"; }
-    value execute_impl(context & ctx) override;
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"test", {test.get()}},
+            {"body", stmts_to_ptr(body)},
+            {"alternate", stmts_to_ptr(alternate)}
+        });
+    }
 };
 
 struct identifier;
@@ -183,7 +251,15 @@ struct for_statement : public statement {
     }
 
     std::string type() const override { return "For"; }
-    value execute_impl(context & ctx) override;
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"loopvar", {loopvar.get()}},
+            {"iterable", {iterable.get()}},
+            {"body", stmts_to_ptr(body)},
+            {"default_block", stmts_to_ptr(default_block)}
+        });
+    }
 };
 
 struct break_statement : public statement {
@@ -195,7 +271,7 @@ struct break_statement : public statement {
         }
     };
 
-    value execute_impl(context &) override {
+    [[noreturn]] value execute_impl(context &) const override {
         throw break_statement::signal();
     }
 };
@@ -209,7 +285,7 @@ struct continue_statement : public statement {
         }
     };
 
-    value execute_impl(context &) override {
+    [[noreturn]] value execute_impl(context &) const override {
         throw continue_statement::signal();
     }
 };
@@ -217,7 +293,7 @@ struct continue_statement : public statement {
 // do nothing
 struct noop_statement : public statement {
     std::string type() const override { return "Noop"; }
-    value execute_impl(context &) override {
+    value execute_impl(context &) const override {
         return mk_val<value_undefined>();
     }
 };
@@ -234,7 +310,14 @@ struct set_statement : public statement {
     }
 
     std::string type() const override { return "Set"; }
-    value execute_impl(context & ctx) override;
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"assignee", {assignee.get()}},
+            {"value", {val.get()}},
+            {"body", stmts_to_ptr(body)}
+        });
+    }
 };
 
 struct macro_statement : public statement {
@@ -249,32 +332,50 @@ struct macro_statement : public statement {
     }
 
     std::string type() const override { return "Macro"; }
-    value execute_impl(context & ctx) override;
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"name", {name.get()}},
+            {"args", stmts_to_ptr(args)},
+            {"body", stmts_to_ptr(body)}
+        });
+    }
 };
 
 struct comment_statement : public statement {
     std::string val;
     explicit comment_statement(const std::string & v) : val(v) {}
     std::string type() const override { return "Comment"; }
-    value execute_impl(context &) override {
+    value execute_impl(context &) const override {
         return mk_val<value_undefined>();
     }
 };
 
 // Expressions
 
+// Represents an omitted expression in a computed member, e.g. `a[]`.
+struct blank_expression : public expression {
+    std::string type() const override { return "BlankExpression"; }
+    value execute_impl(context &) const override {
+        return mk_val<value_undefined>();
+    }
+};
+
 struct member_expression : public expression {
     statement_ptr object;
     statement_ptr property;
     bool computed; // true if obj[expr] and false if obj.prop
 
-    member_expression(statement_ptr && object, statement_ptr && property, bool computed)
-        : object(std::move(object)), property(std::move(property)), computed(computed) {
-        chk_type<expression>(this->object);
-        chk_type<expression>(this->property);
-    }
+    value static_property; // set if property is an identifier, see cached_val()
+    member_expression(statement_ptr && object, statement_ptr && property, bool computed);
     std::string type() const override { return "MemberExpression"; }
-    value execute_impl(context & ctx) override;
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"object", {object.get()}},
+            {"property", {property.get()}}
+        });
+    }
 };
 
 struct call_expression : public expression {
@@ -287,7 +388,13 @@ struct call_expression : public expression {
         for (const auto& arg : this->args) chk_type<expression>(arg);
     }
     std::string type() const override { return "CallExpression"; }
-    value execute_impl(context & ctx) override;
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"callee", {callee.get()}},
+            {"args", stmts_to_ptr(args)}
+        });
+    }
 };
 
 /**
@@ -295,37 +402,41 @@ struct call_expression : public expression {
  */
 struct identifier : public expression {
     std::string val;
-    explicit identifier(const std::string & val) : val(val) {}
+    const value key; // lookup key, safe to share across renders as lookups do not touch stats
+    explicit identifier(const std::string & val) : val(val), key(mk_val<value_string>(val)) {}
     std::string type() const override { return "Identifier"; }
-    value execute_impl(context & ctx) override;
+    value execute_impl(context & ctx) const override;
 };
 
 // Literals
 
 struct integer_literal : public expression {
     int64_t val;
-    explicit integer_literal(int64_t val) : val(val) {}
+    const value constant; // see cached_val()
+    explicit integer_literal(int64_t val) : val(val), constant(mk_val<value_int>(val)) {}
     std::string type() const override { return "IntegerLiteral"; }
-    value execute_impl(context &) override {
-        return mk_val<value_int>(val);
+    value execute_impl(context & ctx) const override {
+        return cached_val<value_int>(ctx, constant);
     }
 };
 
 struct float_literal : public expression {
     double val;
-    explicit float_literal(double val) : val(val) {}
+    const value constant; // see cached_val()
+    explicit float_literal(double val) : val(val), constant(mk_val<value_float>(val)) {}
     std::string type() const override { return "FloatLiteral"; }
-    value execute_impl(context &) override {
-        return mk_val<value_float>(val);
+    value execute_impl(context & ctx) const override {
+        return cached_val<value_float>(ctx, constant);
     }
 };
 
 struct string_literal : public expression {
     std::string val;
-    explicit string_literal(const std::string & val) : val(val) {}
+    const value constant; // see cached_val()
+    explicit string_literal(const std::string & val) : val(val), constant(mk_val<value_string>(val)) {}
     std::string type() const override { return "StringLiteral"; }
-    value execute_impl(context &) override {
-        return mk_val<value_string>(val);
+    value execute_impl(context & ctx) const override {
+        return cached_val<value_string>(ctx, constant);
     }
 };
 
@@ -335,7 +446,7 @@ struct array_literal : public expression {
         for (const auto& item : this->val) chk_type<expression>(item);
     }
     std::string type() const override { return "ArrayLiteral"; }
-    value execute_impl(context & ctx) override {
+    value execute_impl(context & ctx) const override {
         auto arr = mk_val<value_array>();
         for (const auto & item_stmt : val) {
             arr->push_back(item_stmt->execute(ctx));
@@ -350,7 +461,7 @@ struct tuple_literal : public expression {
         for (const auto& item : this->val) chk_type<expression>(item);
     }
     std::string type() const override { return "TupleLiteral"; }
-    value execute_impl(context & ctx) override {
+    value execute_impl(context & ctx) const override {
         auto arr = mk_val<value_array>();
         for (const auto & item_stmt : val) {
             arr->push_back(item_stmt->execute(ctx));
@@ -369,7 +480,7 @@ struct object_literal : public expression {
         }
     }
     std::string type() const override { return "ObjectLiteral"; }
-    value execute_impl(context & ctx) override;
+    value execute_impl(context & ctx) const override;
 };
 
 // Complex Expressions
@@ -390,7 +501,35 @@ struct binary_expression : public expression {
         chk_type<expression>(this->right);
     }
     std::string type() const override { return "BinaryExpression"; }
-    value execute_impl(context & ctx) override;
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"left", {left.get()}},
+            {"right", {right.get()}}
+        });
+    }
+};
+
+/**
+ * Two or more comparisons in a row, e.g. `a < b <= c`
+ * It is the same as `a < b and b <= c`, but each operand is executed only one time.
+ */
+struct comparison_chain_expression : public expression {
+    statements operands;
+    std::vector<token> ops;
+
+    comparison_chain_expression(statements && operands, std::vector<token> && ops)
+        : operands(std::move(operands)), ops(std::move(ops)) {
+        assert(this->operands.size() == this->ops.size() + 1);
+        for (const auto & operand : this->operands) chk_type<expression>(operand);
+    }
+    std::string type() const override { return "ComparisonChainExpression"; }
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"operands", stmts_to_ptr(operands)}
+        });
+    }
 };
 
 /**
@@ -398,10 +537,7 @@ struct binary_expression : public expression {
  * Operator precedence: https://github.com/pallets/jinja/issues/379#issuecomment-168076202
  */
 struct filter_expression : public expression {
-    // either an expression or a value is allowed
     statement_ptr operand;
-    value_string val; // will be set by filter_statement
-
     statement_ptr filter;
 
     filter_expression(statement_ptr && operand, statement_ptr && filter)
@@ -410,13 +546,14 @@ struct filter_expression : public expression {
         chk_type<identifier, call_expression>(this->filter);
     }
 
-    filter_expression(value_string && val, statement_ptr && filter)
-        : val(std::move(val)), filter(std::move(filter)) {
-        chk_type<identifier, call_expression>(this->filter);
-    }
-
     std::string type() const override { return "FilterExpression"; }
-    value execute_impl(context & ctx) override;
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"operand", {operand.get()}},
+            {"filter", {filter.get()}}
+        });
+    }
 };
 
 struct filter_statement : public statement {
@@ -428,7 +565,13 @@ struct filter_statement : public statement {
         chk_type<identifier, call_expression>(this->filter);
     }
     std::string type() const override { return "FilterStatement"; }
-    value execute_impl(context & ctx) override;
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"filter", {filter.get()}},
+            {"body", stmts_to_ptr(body)}
+        });
+    }
 };
 
 /**
@@ -447,12 +590,18 @@ struct select_expression : public expression {
         chk_type<expression>(this->test);
     }
     std::string type() const override { return "SelectExpression"; }
-    value execute_impl(context & ctx) override {
+    value execute_impl(context & ctx) const override {
         auto predicate = test->execute_impl(ctx);
         if (!predicate->as_bool()) {
             return mk_val<value_undefined>();
         }
         return lhs->execute_impl(ctx);
+    }
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"lhs", {lhs.get()}},
+            {"test", {test.get()}}
+        });
     }
 };
 
@@ -471,7 +620,13 @@ struct test_expression : public expression {
         chk_type<identifier, call_expression>(this->test);
     }
     std::string type() const override { return "TestExpression"; }
-    value execute_impl(context & ctx) override;
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"operand", {operand.get()}},
+            {"test", {test.get()}}
+        });
+    }
 };
 
 /**
@@ -486,7 +641,12 @@ struct unary_expression : public expression {
         chk_type<expression>(this->argument);
     }
     std::string type() const override { return "UnaryExpression"; }
-    value execute_impl(context & ctx) override;
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"argument", {argument.get()}}
+        });
+    }
 };
 
 struct slice_expression : public expression {
@@ -501,8 +661,15 @@ struct slice_expression : public expression {
         chk_type<expression>(this->step_expr);
     }
     std::string type() const override { return "SliceExpression"; }
-    value execute_impl(context &) override {
+    [[noreturn]] value execute_impl(context &) const override {
         throw std::runtime_error("must be handled by MemberExpression");
+    }
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"start_expr", {start_expr.get()}},
+            {"stop_expr", {stop_expr.get()}},
+            {"step_expr", {step_expr.get()}}
+        });
     }
 };
 
@@ -516,15 +683,28 @@ struct keyword_argument_expression : public expression {
         chk_type<expression>(this->val);
     }
     std::string type() const override { return "KeywordArgumentExpression"; }
-    value execute_impl(context & ctx) override;
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"key", {key.get()}},
+            {"val", {val.get()}}
+        });
+    }
 };
 
 struct spread_expression : public expression {
     statement_ptr argument;
-    explicit spread_expression(statement_ptr && argument) : argument(std::move(argument)) {
+    bool is_kwargs;
+    spread_expression(statement_ptr && argument, bool is_kwargs)
+        : argument(std::move(argument)), is_kwargs(is_kwargs) {
         chk_type<expression>(this->argument);
     }
     std::string type() const override { return "SpreadExpression"; }
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"argument", {argument.get()}}
+        });
+    }
 };
 
 struct call_statement : public statement {
@@ -538,6 +718,14 @@ struct call_statement : public statement {
         for (const auto & arg : this->caller_args) chk_type<expression>(arg);
     }
     std::string type() const override { return "CallStatement"; }
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"call", {call.get()}},
+            {"caller_args", stmts_to_ptr(caller_args)},
+            {"body", stmts_to_ptr(body)}
+        });
+    }
 };
 
 struct ternary_expression : public expression {
@@ -552,13 +740,20 @@ struct ternary_expression : public expression {
         chk_type<expression>(this->false_expr);
     }
     std::string type() const override { return "Ternary"; }
-    value execute_impl(context & ctx) override {
+    value execute_impl(context & ctx) const override {
         value cond_val = condition->execute(ctx);
         if (cond_val->as_bool()) {
             return true_expr->execute(ctx);
         } else {
             return false_expr->execute(ctx);
         }
+    }
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"condition", {condition.get()}},
+            {"true_expr", {true_expr.get()}},
+            {"false_expr", {false_expr.get()}}
+        });
     }
 };
 
@@ -581,7 +776,7 @@ struct rethrown_exception : public std::exception {
 
 //////////////////////
 
-static void gather_string_parts_recursive(const value & val, value_string & parts) {
+static void gather_string_parts_recursive(const value & val, value_string & parts, int depth = 0) {
     // TODO: probably allow print value_none as "None" string? currently this breaks some templates
     if (is_val<value_string>(val)) {
         const auto & str_val = cast_val<value_string>(val)->val_str;
@@ -589,10 +784,12 @@ static void gather_string_parts_recursive(const value & val, value_string & part
     } else if (is_val<value_int>(val) || is_val<value_float>(val) || is_val<value_bool>(val)) {
         std::string str_val = val->as_string().str();
         parts->val_str.append(str_val);
+    } else if (is_val<value_array>(val) && depth >= JINJA_RECURSIVE_LIMIT) {
+        throw std::runtime_error("value is nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
     } else if (is_val<value_array>(val)) {
-        auto items = cast_val<value_array>(val)->as_array();
+        const auto & items = cast_val<value_array>(val)->as_array();
         for (const auto & item : items) {
-            gather_string_parts_recursive(item, parts);
+            gather_string_parts_recursive(item, parts, depth + 1);
         }
     }
 }
@@ -623,16 +820,26 @@ struct runtime {
         gather_string_parts_recursive(val, parts);
         // join consecutive parts with the same type
         auto & p = parts->val_str.parts;
-        for (size_t i = 1; i < p.size(); ) {
-            if (p[i].is_input == p[i - 1].is_input) {
-                p[i - 1].val += p[i].val;
-                p.erase(p.begin() + i);
+        if (p.empty()) {
+            return parts;
+        }
+        size_t w = 0;
+        for (size_t r = 1; r < p.size(); r++) {
+            if (p[w].is_input == p[r].is_input) {
+                p[w].val += p[r].val;
             } else {
-                i++;
+                w++;
+                if (w != r) {
+                    // the guard is needed, self-move leaves the string in an unspecified state
+                    p[w] = std::move(p[r]);
+                }
             }
         }
+        p.resize(w + 1);
         return parts;
     }
+
+    static std::string debug_dump_program(const program & prog, const std::string & src);
 };
 
 } // namespace jinja

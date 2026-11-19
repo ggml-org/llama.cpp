@@ -4,7 +4,9 @@
 
 #include <condition_variable>
 #include <deque>
+#include <exception>
 #include <mutex>
+#include <thread>
 #include <vector>
 #include <unordered_set>
 
@@ -17,20 +19,37 @@ private:
     bool sleeping = false;
     bool req_stop_sleeping = false;
     int64_t time_last_task = 0;
+    int n_inflight = 0; // requests that keep the server awake, see wait_until_no_sleep()
 
     // queues
     std::deque<server_task> queue_tasks;
     std::deque<server_task> queue_tasks_deferred;
+    // tasks declined while yielding, put back in queue_tasks once the yield is done
+    // note: kept as a member so that cleanup_pending_task() can also reach them
+    std::deque<server_task> queue_tasks_unhandled;
 
     std::mutex mutex_tasks;
     std::condition_variable condition_tasks;
 
+    // used by yield_to_queue, all fields are guarded by mutex_tasks
+    struct worker_t {
+        std::thread             thread;
+        std::condition_variable cv;        // the worker sleeps on this until a yield starts
+        std::exception_ptr      exception; // exception thrown while processing tasks, if any
+        bool stop     = false;
+        bool busy     = false; // set by yield_to_queue(), cleared by the worker once it is done processing tasks
+        bool yielding = false; // work() is still running on the start_loop() thread
+    };
+    worker_t worker;
+
     // callback functions
-    std::function<void(server_task &&)> callback_new_task;
-    std::function<void(void)>           callback_update_slots;
-    std::function<void(bool)>           callback_sleeping_state;
+    std::function<bool(server_task &&, bool)> callback_new_task;
+    std::function<void(void)>                 callback_update_slots;
+    std::vector<std::function<void(bool)>>    callback_sleeping_state;
 
 public:
+    ~server_queue() { worker_stop(); }
+
     // Add a new task to the end of the queue
     int post(server_task && task, bool front = false);
 
@@ -49,7 +68,11 @@ public:
 
     // if sleeping, request exiting sleep state and wait until it is done
     // returns immediately if not sleeping
+    // the server then stays awake until the caller calls release_inflight()
     void wait_until_no_sleep();
+
+    // let the server sleep again once the caller no longer uses the server state
+    void release_inflight();
 
     bool is_sleeping() {
         std::unique_lock<std::mutex> lock(mutex_tasks);
@@ -68,12 +91,22 @@ public:
      *
      * Sleeping procedure (disabled if idle_sleep_ms < 0):
      * - If there is no task after idle_sleep_ms, enter sleeping state
+     *   note: metrics tasks are processed as usual, but do not reset the idle timer
      * - Call callback_sleeping_state(true)
      * - Wait until req_stop_sleeping is set to true
      * - Call callback_sleeping_state(false)
      * - Exit sleeping state
      */
     void start_loop(int64_t idle_sleep_ms = -1);
+
+    // while waiting for work() to finish, run process_new_tasks on the worker thread
+    // returns once work() is done (may throw exceptions)
+    // must be called from start_loop() thread (ideally inside callback_update_slots)
+    // use case: return metrics while encode/decode is running
+    // ref: https://github.com/ggml-org/llama.cpp/pull/27041
+    //
+    // tasks declined by callback_new_task are put back in the queue once this returns
+    void yield_to_queue(std::function<void()> && work);
 
     // for metrics
     size_t queue_tasks_deferred_size() {
@@ -86,7 +119,11 @@ public:
     //
 
     // Register function to process a new task
-    void on_new_task(std::function<void(server_task &&)> callback) {
+    // the second argument tells whether the queue is currently yielding (see yield_to_queue)
+    // only then may the callback return false to decline the task, and it must leave it
+    // untouched, so that it can be put back in the queue later
+    // note: while yielding, the callback runs on worker thread, not main thread
+    void on_new_task(std::function<bool(server_task &&, bool)> callback) {
         callback_new_task = std::move(callback);
     }
 
@@ -95,15 +132,26 @@ public:
         callback_update_slots = std::move(callback);
     }
 
-    // Register callback for sleeping state change
-    // note: when entering sleeping state, the callback is called AFTER sleeping is set to true
-    //       when leaving sleeping state, the callback is called BEFORE sleeping is set to false
+    // Register callback for sleeping state change; multiple callbacks are allowed
+    // for example: register order cb0, cb1, cb2
+    // entering sleep: queue.sleeping = true --> cb0(true) --> cb1(true) --> cb2(true)
+    // leaving sleep: cb2(false) --> cb1(false) --> cb0(false) --> queue.sleeping = false
+    // note: caller will hold mutex_tasks while calling the callbacks
     void on_sleeping_state(std::function<void(bool)> callback) {
-        callback_sleeping_state = std::move(callback);
+        callback_sleeping_state.push_back(std::move(callback));
     }
 
 private:
     void cleanup_pending_task(int id_target);
+
+    // process all pending tasks in the queue
+    // returns true if the queue is terminated, false if there is no more task to process
+    // while yielding, declined tasks are moved to queue_tasks_unhandled
+    bool process_new_tasks(bool is_yielding);
+
+    // for worker_t
+    void worker_loop();
+    void worker_stop();
 };
 
 // struct for managing server responses
@@ -146,11 +194,15 @@ public:
     // Send a new result to a waiting id_task
     void send(server_task_result_ptr && result);
 
+    // broadcast a new result to all waiting tasks
+    // (used by router mode)
+    void broadcast(server_task_result_ptr && result);
+
     // terminate the waiting loop
     void terminate();
 };
 
-// utility class to make working with server_queue and server_response easier
+// RAII wrapper to make working with server_queue and server_response easier
 // it provides a generator-like API for server responses
 // support pooling connection state and aggregating multiple results
 struct server_response_reader {
@@ -178,7 +230,7 @@ struct server_response_reader {
 
     // if front = true, the task will be posted to the front of the queue (high priority)
     void post_task(server_task && task, bool front = false);
-    void post_tasks(std::vector<server_task> && tasks, bool front = false);
+    void post_tasks(std::vector<server_task> && tasks, const common_chat_session & session = {}, bool front = false);
     bool has_next() const;
 
     // return nullptr if should_stop() is true before receiving a result

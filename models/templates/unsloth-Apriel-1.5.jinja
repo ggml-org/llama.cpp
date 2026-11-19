@@ -86,22 +86,22 @@ Prior to generating the function calls, you should generate the reasoning for wh
             {%- set add_tool_id = false -%}
         {%- endif -%}
         {{- '<|assistant|>\n' -}}
-        {%- if message['content'] is not none and message['content']|length > 0 -%}
+        {%- if message['content'] is defined and message['content'] is not none and message['content']|length > 0 -%}
             {%- if message['content'] is not string and message['content'][0]['text'] is not none %}
                 {{- message['content'][0]['text'] }}
             {%- else %}
                 {{- message['content'] -}}
             {%- endif -%}
-        {%- elif message['chosen'] is not none and message['chosen']|length > 0 -%}
+        {%- elif message['chosen'] is defined and message['chosen'] is not none and message['chosen']|length > 0 -%}
             {{- message['chosen'][0] -}}
         {%- endif -%}
         {%- if add_thoughts and 'thought' in message and message['thought'] is not none -%}
             {{- '<thinking>' + message['thought'] + '</thinking>' -}}
         {%- endif -%}
-        {%- if message['tool_calls'] is not none and message['tool_calls']|length > 0 -%}
+        {%- if message['tool_calls'] is defined and message['tool_calls'] is not none and message['tool_calls']|length > 0 -%}
             {{- '\n<tool_calls>[' -}}
             {%- for tool_call in message["tool_calls"] -%}
-                {{- '{"name": "' + tool_call['function']['name'] + '", "arguments": ' + tool_call['function']['arguments']|string -}}
+                {{- '{"name": "' + tool_call['function']['name'] + '", "arguments": ' + tool_call['function']['arguments']|tojson -}}
                 {%- if add_tool_id == true -%}
                     {{- ', "id": "' + tool_call['id'] + '"' -}}
                 {%- endif -%}

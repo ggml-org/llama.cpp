@@ -19,7 +19,7 @@ struct virgl_apir_callbacks {
 };
 
 extern "C" {
-ApirLoadLibraryReturnCode apir_backend_initialize(uint32_t virgl_ctx_id, struct virgl_apir_callbacks *virgl_cbs);
+ApirLoadLibraryReturnCode apir_backend_initialize(uint32_t virgl_ctx_id, struct virgl_apir_callbacks * virgl_cbs);
 void                      apir_backend_deinit(uint32_t virgl_ctx_id);
 uint32_t                  apir_backend_dispatcher(uint32_t               virgl_ctx_id,
                                                   virgl_apir_callbacks * virgl_cbs,

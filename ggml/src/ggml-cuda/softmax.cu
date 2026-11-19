@@ -46,7 +46,7 @@ struct soft_max_params {
 };
 
 // When ncols_template == 0 the bounds for the loops in this function are not known and can't be unrolled.
-// As we want to keep pragma unroll for all other cases we supress the clang transformation warning here.
+// As we want to keep pragma unroll for all other cases we suppress the clang transformation warning here.
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wpass-failed"
@@ -116,6 +116,11 @@ static __global__ void soft_max_f32(
         vals[col] = val;
     }
 
+    if (block_size > WARP_SIZE) {
+        // sync is needed as we reuse buf_iw across block_reduce invocations, see #26385
+        // for block_size <= WARP_SIZE, block_reduce does not access buf_iw
+        __syncthreads();
+    }
     // find the sum of exps in the block
     tmp = block_reduce<block_reduce_method::SUM, block_size_template>(tmp, buf_iw);
 
@@ -137,109 +142,172 @@ static __global__ void soft_max_f32(
     }
 }
 
-// TODO: Template to allow keeping ncols in registers if they fit
+template <int n_elem_per_thread = 0>
 static __device__ void soft_max_f32_parallelize_cols_single_row(const float * __restrict__ x,
                                                                 float * __restrict__ dst,
                                                                 float * __restrict__ tmp_maxs,
                                                                 float * __restrict__ tmp_sums,
+                                                                float * shared_vals_max,
+                                                                float * shared_vals_sum,
                                                                 const soft_max_params p) {
     namespace cg = cooperative_groups;
 
     const cg::grid_group g = cg::this_grid();
 
-    const int tid               = threadIdx.x;
-    const int col_start         = blockIdx.x * blockDim.x + tid;
-    const int n_elem_per_thread = 4;
+    const int tid       = threadIdx.x;
+    const int col_start = blockIdx.x * blockDim.x + tid;
+    const int step_size = gridDim.x * blockDim.x;
 
-    float     local_vals[n_elem_per_thread] = { -INFINITY, -INFINITY, -INFINITY, -INFINITY };
-    float     local_max                     = -INFINITY;
-    const int step_size                     = gridDim.x * blockDim.x;
-    __shared__ float shared_vals[32];
+    if constexpr (n_elem_per_thread > 0) {
+        float local_vals[n_elem_per_thread];
+        float local_max = -INFINITY;
 
-    // Compute thread-local max
-    for (int col = col_start; col < p.ncols;) {
 #pragma unroll
         for (int i = 0; i < n_elem_per_thread; i++) {
-            const int idx = col + i * step_size;
+            const int idx = col_start + i * step_size;
             local_vals[i] = idx < p.ncols ? x[idx] : -INFINITY;
+            local_max     = fmaxf(local_max, local_vals[i]);
         }
+
+        local_max = block_reduce<block_reduce_method::MAX>(local_max, shared_vals_max);
+
+        if (tid == 0) {
+            tmp_maxs[blockIdx.x] = local_max;
+        }
+        g.sync();
+
+        assert(gridDim.x < blockDim.x);
+        if (tid < gridDim.x) {
+            local_max = tmp_maxs[tid];
+        } else {
+            local_max = -INFINITY;
+        }
+        local_max = block_reduce<block_reduce_method::MAX>(local_max, shared_vals_max);
+
+        float tmp_expf = 0.0f;
 #pragma unroll
         for (int i = 0; i < n_elem_per_thread; i++) {
-            local_max = fmaxf(local_max, local_vals[i]);
-        }
-        col += step_size * n_elem_per_thread;
-    }
-
-    // Compute CTA-level max
-    local_max = block_reduce<block_reduce_method::MAX>(local_max, shared_vals);
-
-    // Store CTA-level max to GMEM
-    if (tid == 0) {
-        tmp_maxs[blockIdx.x] = local_max;
-    }
-    g.sync();
-
-    // Compute compute global max from CTA-level maxs
-    assert(gridDim.x < blockDim.x);  // currently we only support this case
-    if (tid < gridDim.x) {
-        local_max = tmp_maxs[tid];
-    } else {
-        local_max = -INFINITY;
-    }
-    local_max = block_reduce<block_reduce_method::MAX>(local_max, shared_vals);
-
-    // Compute softmax dividends, accumulate divisor
-    float tmp_expf = 0.0f;
-    for (int col = col_start; col < p.ncols;) {
-#pragma unroll
-        for (int i = 0; i < n_elem_per_thread; i++) {
-            const int idx = col + i * step_size;
-            local_vals[i] = idx < p.ncols ? x[idx] : -INFINITY;
-        }
-#pragma unroll
-        for (int i = 0; i < n_elem_per_thread; i++) {
-            const int idx = col + i * step_size;
+            const int idx = col_start + i * step_size;
             if (idx < p.ncols) {
                 const float tmp = expf(local_vals[i] - local_max);
-                tmp_expf += tmp;
-                dst[idx] = tmp;
+                local_vals[i]   = tmp;
+                tmp_expf       += tmp;
             }
         }
-        col += step_size * n_elem_per_thread;
-    }
 
-    // Reduce divisor within CTA
-    tmp_expf = block_reduce<block_reduce_method::SUM>(tmp_expf, shared_vals);
+        tmp_expf = block_reduce<block_reduce_method::SUM>(tmp_expf, shared_vals_sum);
 
-    // Store CTA-level sum to GMEM
-    if (tid == 0) {
-        tmp_sums[blockIdx.x] = tmp_expf;
-    }
-    g.sync();
-
-    // Compute global sum from CTA-level sums
-    if (tid < gridDim.x) {
-        tmp_expf = tmp_sums[tid];
-    } else {
-        tmp_expf = 0.0f;
-    }
-    tmp_expf = block_reduce<block_reduce_method::SUM>(tmp_expf, shared_vals);
-
-    // Divide dividend by global sum + store data
-    for (int col = col_start; col < p.ncols;) {
-#pragma unroll
-        for (int i = 0; i < n_elem_per_thread; i++) {
-            const int idx = col + i * step_size;
-            local_vals[i] = idx < p.ncols ? dst[idx] : -INFINITY;
+        if (tid == 0) {
+            tmp_sums[blockIdx.x] = tmp_expf;
         }
+        g.sync();
+
+        if (tid < gridDim.x) {
+            tmp_expf = tmp_sums[tid];
+        } else {
+            tmp_expf = 0.0f;
+        }
+        tmp_expf = block_reduce<block_reduce_method::SUM>(tmp_expf, shared_vals_sum);
+
+        const float inv_sum = 1.0f / tmp_expf;
+
 #pragma unroll
         for (int i = 0; i < n_elem_per_thread; i++) {
-            const int idx = col + i * step_size;
+            const int idx = col_start + i * step_size;
             if (idx < p.ncols) {
-                dst[idx] = local_vals[i] / tmp_expf;
+                dst[idx] = local_vals[i] * inv_sum;
             }
         }
-        col += step_size * n_elem_per_thread;
+    } else {
+        const int n_elem = 4;
+        float local_vals[n_elem] = { -INFINITY, -INFINITY, -INFINITY, -INFINITY };
+        float local_max          = -INFINITY;
+
+        // Compute thread-local max
+        for (int col = col_start; col < p.ncols;) {
+#pragma unroll
+            for (int i = 0; i < n_elem; i++) {
+                const int idx = col + i * step_size;
+                local_vals[i] = idx < p.ncols ? x[idx] : -INFINITY;
+            }
+#pragma unroll
+            for (int i = 0; i < n_elem; i++) {
+                local_max = fmaxf(local_max, local_vals[i]);
+            }
+            col += step_size * n_elem;
+        }
+
+        // Compute CTA-level max
+        local_max = block_reduce<block_reduce_method::MAX>(local_max, shared_vals_max);
+
+        // Store CTA-level max to GMEM
+        if (tid == 0) {
+            tmp_maxs[blockIdx.x] = local_max;
+        }
+        g.sync();
+
+        // Compute compute global max from CTA-level maxs
+        assert(gridDim.x < blockDim.x);  // currently we only support this case
+        if (tid < gridDim.x) {
+            local_max = tmp_maxs[tid];
+        } else {
+            local_max = -INFINITY;
+        }
+        local_max = block_reduce<block_reduce_method::MAX>(local_max, shared_vals_max);
+
+        // Compute softmax dividends, accumulate divisor
+        float tmp_expf = 0.0f;
+        for (int col = col_start; col < p.ncols;) {
+#pragma unroll
+            for (int i = 0; i < n_elem; i++) {
+                const int idx = col + i * step_size;
+                local_vals[i] = idx < p.ncols ? x[idx] : -INFINITY;
+            }
+#pragma unroll
+            for (int i = 0; i < n_elem; i++) {
+                const int idx = col + i * step_size;
+                if (idx < p.ncols) {
+                    const float tmp = expf(local_vals[i] - local_max);
+                    tmp_expf += tmp;
+                    dst[idx] = tmp;
+                }
+            }
+            col += step_size * n_elem;
+        }
+
+        // Reduce divisor within CTA
+        tmp_expf = block_reduce<block_reduce_method::SUM>(tmp_expf, shared_vals_sum);
+
+        // Store CTA-level sum to GMEM
+        if (tid == 0) {
+            tmp_sums[blockIdx.x] = tmp_expf;
+        }
+        g.sync();
+
+        // Compute global sum from CTA-level sums
+        if (tid < gridDim.x) {
+            tmp_expf = tmp_sums[tid];
+        } else {
+            tmp_expf = 0.0f;
+        }
+        tmp_expf = block_reduce<block_reduce_method::SUM>(tmp_expf, shared_vals_sum);
+
+        // Divide dividend by global sum + store data
+        for (int col = col_start; col < p.ncols;) {
+#pragma unroll
+            for (int i = 0; i < n_elem; i++) {
+                const int idx = col + i * step_size;
+                local_vals[i] = idx < p.ncols ? dst[idx] : -INFINITY;
+            }
+#pragma unroll
+            for (int i = 0; i < n_elem; i++) {
+                const int idx = col + i * step_size;
+                if (idx < p.ncols) {
+                    dst[idx] = local_vals[i] / tmp_expf;
+                }
+            }
+            col += step_size * n_elem;
+        }
     }
 }
 
@@ -299,6 +367,7 @@ static void launch_soft_max_kernels(const float * x, const T * mask, const float
     soft_max_f32<true, 0, 0><<<block_nums, block_dims, nbytes_shared, stream>>>(x, mask, sinks, dst, p);
 }
 
+template <int n_elem_per_thread = 0>
 __launch_bounds__(8*WARP_SIZE, 1) static __global__ void soft_max_f32_parallelize_cols(const float * __restrict__ x,
                                                      float * __restrict__ dst,
                                                      float * __restrict__ tmp_maxs,
@@ -310,9 +379,11 @@ __launch_bounds__(8*WARP_SIZE, 1) static __global__ void soft_max_f32_paralleliz
 // https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/device-callable-apis.html#grid-synchronization
 // https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/device-callable-apis.html#class-cluster-group
 {
+    __shared__ float shared_vals[2][32];
+
     for (int rowx = 0; rowx < p.ne01 * p.ne02 * p.ne03; rowx++) {
-        soft_max_f32_parallelize_cols_single_row(x + int64_t(rowx) * p.ncols, dst + int64_t(rowx) * p.ncols, tmp_maxs,
-                                                 tmp_sums, p);
+        soft_max_f32_parallelize_cols_single_row<n_elem_per_thread>(x + int64_t(rowx) * p.ncols, dst + int64_t(rowx) * p.ncols, tmp_maxs,
+                                                                    tmp_sums, shared_vals[0], shared_vals[1], p);
     }
 }
 
@@ -352,7 +423,28 @@ static void soft_max_f32_cuda(const float *                                x,
 
             void * kernel_args[] = { (void *) &x, (void *) &dst, (void *) &tmp_maxs_alloc.ptr,
                                      (void *) &tmp_sums_alloc.ptr, (void *) const_cast<soft_max_params *>(&params) };
-            CUDA_CHECK(cudaLaunchCooperativeKernel((void *) soft_max_f32_parallelize_cols,
+
+            const int total_threads   = ggml_cuda_info().devices[id].nsm * (WARP_SIZE * 8);
+            const int required_n_elem = (params.ncols + total_threads - 1) / total_threads;
+
+            void * kernel_fn = nullptr;
+            if (required_n_elem <= 1) {
+                kernel_fn = (void *) soft_max_f32_parallelize_cols<1>;
+            } else if (required_n_elem <= 2) {
+                kernel_fn = (void *) soft_max_f32_parallelize_cols<2>;
+            } else if (required_n_elem <= 4) {
+                kernel_fn = (void *) soft_max_f32_parallelize_cols<4>;
+            } else if (required_n_elem <= 8) {
+                kernel_fn = (void *) soft_max_f32_parallelize_cols<8>;
+            } else if (required_n_elem <= 16) {
+                kernel_fn = (void *) soft_max_f32_parallelize_cols<16>;
+            } else if (required_n_elem <= 32) {
+                kernel_fn = (void *) soft_max_f32_parallelize_cols<32>;
+            } else {
+                kernel_fn = (void *) soft_max_f32_parallelize_cols<0>;
+            }
+
+            CUDA_CHECK(cudaLaunchCooperativeKernel(kernel_fn,
                                                    dim3(ggml_cuda_info().devices[id].nsm, 1, 1),
                                                    dim3(WARP_SIZE * 8, 1, 1), kernel_args, 0, stream));
         } else {

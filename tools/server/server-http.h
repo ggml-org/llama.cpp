@@ -3,8 +3,12 @@
 #include <atomic>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <thread>
+#include <vector>
+#include <cstdint>
+#include <unordered_map>
 
 struct common_params;
 
@@ -20,11 +24,13 @@ struct server_http_res {
     std::string data;
     std::map<std::string, std::string> headers;
 
-    // TODO: move this to a virtual function once we have proper polymorphism support
     std::function<bool(std::string &)> next = nullptr;
     bool is_stream() const {
         return next != nullptr;
     }
+
+    // fired before req and res are destroyed
+    virtual void on_complete() {}
 
     virtual ~server_http_res() = default;
 };
@@ -32,12 +38,21 @@ struct server_http_res {
 // unique pointer, used by set_chunked_content_provider
 // httplib requires the stream provider to be stored in heap
 using server_http_res_ptr = std::unique_ptr<server_http_res>;
+using raw_buffer = std::vector<uint8_t>;
+
+struct uploaded_file {
+    raw_buffer data;
+    std::string filename;
+    std::string content_type;
+};
 
 struct server_http_req {
     std::map<std::string, std::string> params; // path_params + query_params
-    std::map<std::string, std::string> headers; // reserved for future use
-    std::string path; // reserved for future use
+    std::map<std::string, std::string> headers; // used by MCP proxy
+    std::string path;
+    std::string query_string; // query parameters string (e.g. "action=save")
     std::string body;
+    std::map<std::string, uploaded_file> files; // used for file uploads (form data)
     const std::function<bool()> & should_stop;
 
     std::string get_param(const std::string & key, const std::string & def = "") const {
@@ -53,12 +68,29 @@ struct server_http_context {
     class Impl;
     std::unique_ptr<Impl> pimpl;
 
-    std::thread thread; // server thread
     std::atomic<bool> is_ready = false;
 
+    // note: the handler should never throw exceptions
+    using handler_t = std::function<server_http_res_ptr(const server_http_req & req)>;
+    mutable std::unordered_map<std::string, handler_t> handlers;
+
+    // websocket connection, see ws()
+    struct ws_conn {
+        // blocking read, returns 1 for a text message, 2 for a binary message, 0 when the connection is closed
+        virtual int  read(std::string & msg) = 0;
+        // thread-safe, can be called while another thread is in read()
+        virtual bool send(const std::string & msg) = 0;
+        virtual bool send_binary(const std::string & msg) = 0;
+        virtual bool is_open() const = 0;
+        virtual void close() = 0;
+        virtual ~ws_conn() = default;
+    };
+    // the handler runs on its own HTTP thread for the whole lifetime of the connection
+    using ws_handler_t = std::function<void(const server_http_req & req, ws_conn & conn)>;
+
     std::string path_prefix;
-    std::string hostname;
-    int port;
+    int port    = 9931;
+    bool is_ssl = false;
 
     server_http_context();
     ~server_http_context();
@@ -66,13 +98,20 @@ struct server_http_context {
     bool init(const common_params & params);
     bool start();
     void stop() const;
-
-    // note: the handler should never throw exceptions
-    using handler_t = std::function<server_http_res_ptr(const server_http_req & req)>;
+    void join();
 
     void get(const std::string & path, const handler_t & handler) const;
     void post(const std::string & path, const handler_t & handler) const;
+    void del(const std::string & path, const handler_t & handler) const;
+    void ws(const std::string & path, const ws_handler_t & handler) const;
+
+    // Register the Google Cloud Platform (Vertex AI) compat (AIP_PREDICT_ROUTE env var, or /predict)
+    // Must be called AFTER all other API routes are registered
+    void register_gcp_compat() const;
 
     // for debugging
-    std::string listening_address;
+    std::vector<std::string> listening_addresses;
+
+private:
+    bool init_listener(const common_params & params);
 };

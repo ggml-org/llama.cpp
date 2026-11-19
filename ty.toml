@@ -1,0 +1,24 @@
+[environment]
+extra-paths = ["./gguf-py", "./examples/model-conversion/scripts", "./tools/server/tests", "./scripts/snapdragon/qdc/tests"]
+python-version = "3.10"
+
+[rules]
+deprecated = "warn"
+
+[src]
+exclude = [
+    "./tools/mtmd/legacy-models/**",
+]
+
+[[overrides]]
+include = [
+    "./tools/server/tests/**",
+    "./scripts/snapdragon/qdc/**",
+    "./tools/mtmd/tests/**",
+]
+
+[overrides.rules]
+unresolved-reference = "ignore"
+import-not-found = "ignore"
+missing-attribute = "ignore"
+missing-union-attribute = "ignore"

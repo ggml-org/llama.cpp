@@ -96,17 +96,17 @@ extern "C" {
 HTPDRV_API int htpdrv_init(void);
 
 /**
- * get_domain API: get domain struct from domain value.
+ * htpdrv_get_domain API: get domain struct from domain value.
  *
  * @param[in]  domain value of a domain
  * @return     Returns domain struct of the domain if it is supported or else
  *             returns NULL.
  *
  */
-HTPDRV_API domain * get_domain(int domain_id);
+HTPDRV_API domain * htpdrv_get_domain(int domain_id);
 
 /**
- * get_hex_arch_ver API: query the Hexagon processor architecture version information
+ * htpdrv_get_arch API: query the Hexagon processor architecture version information
  *
  * @param[in]   domain_id value of a domain
  * @param[out]  Arch version (73, 75, ...)
@@ -114,8 +114,16 @@ HTPDRV_API domain * get_domain(int domain_id);
  *              non-zero if error, return value points to the error.
  *
  */
-HTPDRV_API int get_hex_arch_ver(int domain, int * arch);
+HTPDRV_API int htpdrv_get_arch(int domain, int * arch);
+
+HTPDRV_API int remote_system_request(system_req_payload * req);
 
 #ifdef __cplusplus
 }
+
+#include <string>
+
+std::string htp_lib_dir();
+int         htpdrv_set_dsp_search_path(int domain_id, const std::string & path, const char * dev_name = nullptr);
+void        htpdrv_set_dsp_env_path(const std::string & path, const char * dev_name = nullptr);
 #endif

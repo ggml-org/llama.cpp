@@ -16,6 +16,7 @@ Function calling is supported for all models (see https://github.com/ggml-org/ll
   - Firefunction v2
   - Command R7B
   - DeepSeek R1 (WIP / seems reluctant to call any tools?)
+  - GPT-OSS (Harmony), LLM-jp-4.1 (Harmony dialect)
 
 - Generic tool call is supported when the template isn't recognized by native format handlers (you'll see `Chat format: Generic` in the logs).
   - Use `--chat-template-file` to override the template when appropriate (see examples below)
@@ -281,7 +282,7 @@ This table can be generated with:
 
 # Usage - need tool-aware Jinja template
 
-First, start a server with any model, but make sure it has a tools-enabled template: you can verify this by inspecting the `chat_template` or `chat_template_tool_use` properties in `http://localhost:8080/props`).
+First, start a server with any model, but make sure it has a tools-enabled template: you can verify this by inspecting the `chat_template` or `chat_template_tool_use` properties in `http://localhost:9931/props`).
 
 Here are some models known to work (w/ chat template override when needed):
 
@@ -291,6 +292,7 @@ Here are some models known to work (w/ chat template override when needed):
 llama-server --jinja -fa -hf bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M
 llama-server --jinja -fa -hf bartowski/Mistral-Nemo-Instruct-2407-GGUF:Q6_K_L
 llama-server --jinja -fa -hf bartowski/Llama-3.3-70B-Instruct-GGUF:Q4_K_M
+llama-server --jinja -fa -hf ibm-granite/granite-4.1-3b-GGUF:Q4_K_M
 
 # Native support for DeepSeek R1 works best w/ our template override (official template is buggy, although we do work around it)
 
@@ -334,7 +336,7 @@ To get the official template from original HuggingFace repos, you can use [scrip
 Test in CLI (or with any library / software that can use OpenAI-compatible API backends):
 
 ```bash
-curl http://localhost:8080/v1/chat/completions -d '{
+curl http://localhost:9931/v1/chat/completions -d '{
     "model": "gpt-3.5-turbo",
     "tools": [
         {
@@ -364,7 +366,7 @@ curl http://localhost:8080/v1/chat/completions -d '{
 }'
 
 
-curl http://localhost:8080/v1/chat/completions -d '{
+curl http://localhost:9931/v1/chat/completions -d '{
     "model": "gpt-3.5-turbo",
     "messages": [
         {"role": "system", "content": "You are a chatbot that uses tools/functions. Dont overthink things."},

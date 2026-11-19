@@ -16,21 +16,47 @@
 #include <cstddef>
 #include <fstream>
 #include <iostream>
+#include <limits>
+#include <optional>
 #include <string>
+#include <type_traits>
+#include <unordered_map>
 
+#include "base.hpp"
 #include "dpct/helper.hpp"
+#include "ggml.h"
+#include "ggml-impl.h"
 #include "ggml-sycl.h"
 #include "presets.hpp"
+#include "type.hpp"
 #include "sycl_hw.hpp"
+#include "memtrace.hpp"
 
+namespace syclexp = sycl::ext::oneapi::experimental;
+
+#if defined(__INTEL_LLVM_COMPILER) && __has_include(<sycl/ext/oneapi/bfloat16.hpp>)
+    #include <sycl/ext/oneapi/bfloat16.hpp>
+    #ifndef GGML_SYCL_HAS_BF16
+        #define GGML_SYCL_HAS_BF16
+    #endif
+#endif
+
+#if defined(__INTEL_LLVM_COMPILER)
+    #define GGML_SYCL_DMMV_HAS_ESIMD
+#endif
 
 #if GGML_SYCL_DNNL
 #include "dnnl.hpp"
 #include "dnnl_sycl.hpp"
+#include "oneapi/dnnl/dnnl_graph.hpp"
 #endif
 
 #define GGML_COMMON_DECL_SYCL
 #define GGML_COMMON_IMPL_SYCL
+#define SYCL_FLASH_ATTN //remove it to disable FLASH_ATTENTION in building.
+#define SYCL_FAST_FP16  //don't change. remove it will break fattn-tile.hpp building
+#define GGML_SYCL_FA_ALL_QUANTS //define it to enable all quantization types in flash attention. undefine it to only support F16, Q4_0 and Q8_0 in flash attention.
+
 /* suppress warning spam */
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wnested-anon-types"
@@ -43,23 +69,87 @@ void ggml_sycl_host_free(void* ptr);
 
 
 extern int g_ggml_sycl_debug;
-extern int g_ggml_sycl_disable_optimize;
+extern int g_ggml_sycl_enable_optimize;
+extern int g_ggml_sycl_enable_fusion;
+extern int g_ggml_sycl_enable_esimd;
+extern int g_ggml_sycl_mmvq_wide;
+extern int g_ggml_sycl_enable_xmx_esimd;
+extern int g_ggml_sycl_xmx_max_cols;
+extern int g_ggml_sycl_xmx_glu_max_cols;
 extern int g_ggml_sycl_prioritize_dmmv;
 
-#if defined(__clang__) && __has_builtin(__builtin_expect)
-// Hint the optimizer to pipeline the more likely following instruction in branches
-#    define LIKELY(expr)   __builtin_expect(expr, true)
-#    define UNLIKELY(expr) __builtin_expect(expr, false)
-#else
-#    define LIKELY(expr)   (expr)
-#    define UNLIKELY(expr) (expr)
-#endif
+// Which quantized weight formats may take the XMX dequant-GEMM paths. A bitmask rather than one
+// flag per path, so a format can be enabled or measured on its own and adding a format is one bit.
+enum ggml_sycl_xmx_gather_type {
+    GGML_SYCL_XMX_GATHER_IQ4_NL   = 1 << 0,
+    GGML_SYCL_XMX_GATHER_IQ3_S    = 1 << 1,
+    GGML_SYCL_XMX_GATHER_IQ4_XS   = 1 << 2,
+    GGML_SYCL_XMX_GATHER_IQ3_XXS  = 1 << 3,
+    GGML_SYCL_XMX_GATHER_IQ2_XXS  = 1 << 4,
+    GGML_SYCL_XMX_GATHER_IQ2_XS   = 1 << 5,
+    GGML_SYCL_XMX_GATHER_IQ2_S    = 1 << 6,
+    GGML_SYCL_XMX_GATHER_IQ1_S    = 1 << 7,
+    GGML_SYCL_XMX_GATHER_IQ1_M    = 1 << 8,
+    GGML_SYCL_XMX_GATHER_Q8_0     = 1 << 9,
+    GGML_SYCL_XMX_GATHER_Q4_K     = 1 << 10,
+    GGML_SYCL_XMX_GATHER_Q5_K     = 1 << 11,
+    GGML_SYCL_XMX_GATHER_Q6_K     = 1 << 12,
+    GGML_SYCL_XMX_GATHER_Q2_K     = 1 << 13,
+    GGML_SYCL_XMX_GATHER_Q3_K     = 1 << 14,
+};
+static constexpr int GGML_SYCL_XMX_GATHER_TYPES_DEFAULT = ~0;
+extern int g_ggml_sycl_xmx_gather_types;
 
-#define GGML_SYCL_DEBUG(...)              \
-    do {                                  \
-        if (UNLIKELY(g_ggml_sycl_debug))  \
-            fprintf(stderr, __VA_ARGS__); \
-    } while (0)
+enum ggml_sycl_mmid_sched_bit {
+    GGML_SYCL_MMID_SCHED_DEVICE    = 1 << 0,
+    GGML_SYCL_MMID_SCHED_UNBOUNDED = 1 << 1,
+};
+extern int g_ggml_sycl_mmid_sched;
+// Which joint_matrix combinations the XMX dequant-GEMM paths may use, one bit each (see fused-gemm.cpp).
+// GGML_SYCL_DYNAMIC_PRECISION picks the operand type, this mask the combinations of that type.
+static constexpr int GGML_SYCL_XMX_GATHER_SHAPES_DEFAULT = 0xff;
+extern int g_ggml_sycl_xmx_gather_shapes;
+
+// GGML_SYCL_DYNAMIC_PRECISION: operand type of the XMX dequant-GEMM paths. F32 turns them off and
+// keeps the library GEMM in f32. A src1 precision request of an op [TAG_GGML_PREC] is always met.
+enum ggml_sycl_dynamic_precision {
+    GGML_SYCL_DYNAMIC_PRECISION_F16,
+    GGML_SYCL_DYNAMIC_PRECISION_BF16,
+    GGML_SYCL_DYNAMIC_PRECISION_TF32,
+    GGML_SYCL_DYNAMIC_PRECISION_F32,
+};
+#ifdef GGML_SYCL_F16
+static constexpr int GGML_SYCL_DYNAMIC_PRECISION_DEFAULT = GGML_SYCL_DYNAMIC_PRECISION_F16;
+#else
+static constexpr int GGML_SYCL_DYNAMIC_PRECISION_DEFAULT = GGML_SYCL_DYNAMIC_PRECISION_F32;
+#endif
+extern int g_ggml_sycl_dynamic_precision;
+// GGML_SYCL_DYNAMIC_REQUIRED_PRECISION: the XMX type an F32 src1 request may run on instead of f32
+// (TF32, or BF16 which also allows tf32). F32 (default): none. F16: src1 requests are ignored.
+extern int g_ggml_sycl_dynamic_required_precision;
+
+// [TAG_GGML_PREC] src1 precision request of the MUL_MAT/MUL_MAT_ID op dst
+static inline int32_t ggml_sycl_src1_prec(const ggml_tensor * dst) {
+    return g_ggml_sycl_dynamic_required_precision == GGML_SYCL_DYNAMIC_PRECISION_F16 ? GGML_PREC_UNDEFINED :
+                                                                                       ggml_prec_get_src(dst, 1);
+}
+
+// [TAG_GGML_PREC] the library GEMM and dmmv may convert src1 of the MUL_MAT/MUL_MAT_ID op dst to f16
+static inline bool ggml_sycl_src1_f16_ok(const ggml_tensor * dst) {
+    const int32_t src1_prec = ggml_sycl_src1_prec(dst);
+    return g_ggml_sycl_dynamic_precision != GGML_SYCL_DYNAMIC_PRECISION_F32 &&
+           (src1_prec == GGML_PREC_UNDEFINED || src1_prec >= GGML_PREC_F16);
+}
+extern int g_ggml_sycl_enable_flash_attention;
+extern int g_ggml_sycl_dev2dev_memcpy;
+extern int g_ggml_sycl_fa_onednn;
+extern int g_ggml_sycl_fa_onednn_max_kv;
+extern int g_ggml_sycl_enable_mkl_fa;
+extern int g_ggml_sycl_fa_dpas;
+extern int g_ggml_sycl_memtrace;
+extern int g_ggml_sycl_memtrace_step;
+extern int g_ggml_sycl_graph_eviction_timeout;
+
 
 #define CHECK_TRY_ERROR(expr)                                            \
   [&]() {                                                                \
@@ -76,18 +166,12 @@ extern int g_ggml_sycl_prioritize_dmmv;
 
 
 #define __SYCL_ARCH__ DPCT_COMPATIBILITY_TEMP
-#define VER_4VEC 610 // todo for hardward optimize.
-#define VER_GEN9 700 // todo for hardward optimize.
-#define VER_GEN12 1000000 // todo for hardward optimize.
-#define VER_GEN13 (VER_GEN12 + 1030) // todo for hardward optimize.
+#define VER_4VEC 610 // todo for hardware optimize.
+#define VER_GEN9 700 // todo for hardware optimize.
+#define VER_GEN12 1000000 // todo for hardware optimize.
+#define VER_GEN13 (VER_GEN12 + 1030) // todo for hardware optimize.
 
 #define GGML_SYCL_MAX_NODES 8192 // TODO: adapt to hardwares
-
-// define for XMX in Intel GPU
-// TODO: currently, it's not used for XMX really.
-#if !defined(GGML_SYCL_FORCE_MMQ)
-    #define SYCL_USE_XMX
-#endif
 
 // max batch size to use MMQ kernels when tensor cores are available
 #define MMQ_MAX_BATCH_SIZE 32
@@ -106,6 +190,12 @@ enum ggml_sycl_backend_gpu_mode {
   SYCL_UNSET_GPU_MODE = -1,
   SYCL_SINGLE_GPU_MODE = 0,
   SYCL_MUL_GPU_MODE
+};
+
+enum ggml_sycl_dev2dev_memcpy_mode {
+  DEV2DEV_MEMCPY_SYCL = 0,
+  DEV2DEV_MEMCPY_L0 = 1,
+  DEV2DEV_MEMCPY_FORWARD = 2
 };
 
 static_assert(sizeof(sycl::half) == sizeof(ggml_fp16_t), "wrong fp16 size");
@@ -149,6 +239,41 @@ typedef sycl::float2 dfloat2;
 
 #define MMVQ_MAX_BATCH_SIZE  8
 
+#if defined(GGML_SYCL_SUPPORT_XMX) && defined(__INTEL_LLVM_COMPILER) && __has_include(<sycl/ext/intel/esimd/xmx/dpas.hpp>)
+#    define GGML_SYCL_MMVQ_HAS_XMX
+#endif // GGML_SYCL_SUPPORT_XMX && __INTEL_LLVM_COMPILER
+
+// default of the most columns the XMX mul_mat_vec_q handles (GGML_SYCL_XMX_MAX_COLS), wider batches use other kernels
+#define GGML_SYCL_XMX_MAX_COLS_DEFAULT 80
+
+// most columns the fused gate and up XMX kernel is built for, GGML_SYCL_XMX_GLU_MAX_COLS can only lower this limit
+#define GGML_SYCL_XMX_GLU_MAX_COLS 16
+
+static inline bool ggml_sycl_xmx_supports_type(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q8_0:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// the DPAS shapes and 2D block loads used by the XMX kernel are those of Xe2
+static inline bool ggml_sycl_xmx_supports_arch(gpu_arch arch) {
+    return arch == gpu_arch::intel_gpu_bmg_g21 || arch == gpu_arch::intel_gpu_bmg_g31 ||
+           arch == gpu_arch::intel_gpu_lnl_m;
+}
+
+// fewest columns for which the XMX kernel is faster than the other kernels
+static inline int ggml_sycl_xmx_min_cols(ggml_type type) {
+    return type == GGML_TYPE_Q2_K || type == GGML_TYPE_Q3_K || type == GGML_TYPE_Q4_K ? 1 : 2;
+}
+
 static int g_all_sycl_device_count = -1;
 static bool g_ggml_backend_sycl_buffer_type_initialized = false;
 
@@ -168,19 +293,25 @@ static size_t g_scratch_offset = 0;
   (void)bad_arch; // suppress unused function warning
 }
 
+// thread-local copy of dpct's per-thread selected device, -1 until first read.
+// Select devices only through ggml_sycl_set_device so the copy stays in sync.
+extern thread_local int g_sycl_current_device_id;
+
 int get_current_device_id();
 
-inline dpct::err0 ggml_sycl_set_device(const int device) try {
-  int current_device_id;
-  SYCL_CHECK(CHECK_TRY_ERROR(current_device_id = get_current_device_id()));
+inline int ggml_sycl_get_device() {
+    return get_current_device_id();
+}
 
-  // GGML_SYCL_DEBUG("ggml_sycl_set_device device_id=%d,
-  // current_device_id=%d\n", device, current_device);
-  if (device == current_device_id) {
+inline dpct::err0 ggml_sycl_set_device(const int device) try {
+  if (device == g_sycl_current_device_id) {
     return 0;
   }
-
-  return CHECK_TRY_ERROR(dpct::select_device(device));
+  const dpct::err0 err = CHECK_TRY_ERROR(dpct::select_device(device));
+  if (err == dpct::success) {
+    g_sycl_current_device_id = device;
+  }
+  return err;
 } catch (sycl::exception const& exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
             << ", line:" << __LINE__ << std::endl;
@@ -191,22 +322,36 @@ inline dpct::err0 ggml_sycl_set_device(const int device) try {
 //////////////////////
 struct optimize_feature {
     bool reorder=false;
+    bool onednn_optimized_gemm=false;
 };
 
 struct sycl_device_info {
-    int     cc;                 // compute capability
+    bool active; //the device is activated/used in application.
+    int cc;  // compute capability
     int nsm; // number of streaming multiprocessors (CUDA) maps to the maximum
              // number of compute units on a SYCL device.
     // size_t  smpb;               // max. shared memory per block
     size_t  smpbo;              // max. shared memory per block (with opt-in)
+    int warp_size;     // WARP_SIZE(16)|WARP_32_SIZE(32)|WARP_16_SIZE(16). For Intel GPU, 16 is better in most cases. Some OP support 32 only.
+    int max_wg_per_cu; // max work groups per compute unit - refer to
+                       // cudaOccupancyMaxActiveBlocksPerMultiprocessor
     bool    vmm;                // virtual memory support
+    bool    l0_device_type_valid;
+    bool    l0_discrete_gpu;    // Level Zero backend and not an integrated GPU
+    size_t  vmm_granularity;    // granularity of virtual memory
     size_t  total_vram;
-    //sycl_hw_info hw_info;     \\ device id and aarch, currently not used
+    sycl_hw_info hw_info;
     optimize_feature opt_feature;
+    bool    usm_system_support; // support for USM system allocations
+#ifdef GGML_SYCL_GRAPH
+    bool    graph_support;        // command graphs can be recorded and replayed
+    bool    graph_update_support; // a finalized command graph can be updated
+#endif
 };
 
 
 struct ggml_sycl_device_info {
+    int active_device_count; //the number of active devices in the application
     int device_count;
 
     sycl_device_info devices[GGML_SYCL_MAX_DEVICES] = {};
@@ -214,9 +359,17 @@ struct ggml_sycl_device_info {
     std::array<float, GGML_SYCL_MAX_DEVICES> default_tensor_split = {};
 
     int max_work_group_sizes[GGML_SYCL_MAX_DEVICES] = {0};
+
+    bool ext_oneapi_level_zero = true; // sycl::backend::ext_oneapi_level_zero used by all enumerated GPU devices
 };
 
-const ggml_sycl_device_info & ggml_sycl_info();
+ggml_sycl_device_info & ggml_sycl_info();
+
+static inline bool ggml_sycl_xmx_enabled(int device) {
+    return g_ggml_sycl_enable_xmx_esimd && ggml_sycl_xmx_supports_arch(ggml_sycl_info().devices[device].hw_info.arch);
+}
+
+static constexpr size_t SYCL_BUFFER_ALIGNMENT = 128;
 
 struct ggml_sycl_pool {
     virtual ~ggml_sycl_pool() = default;
@@ -286,9 +439,64 @@ struct ggml_tensor_extra_gpu {
   optimize_feature optimized_feature;
 };
 
+extern int g_ggml_sycl_use_level_zero_api;
+extern int g_ggml_sycl_bmg_vram_check;
+bool sycl_get_mem_info(int device, size_t * free, size_t * total);
+void * ggml_sycl_malloc_device(size_t size, sycl::queue &q,
+                               ggml_sycl_mem_type type = GGML_SYCL_MEM_DIRECT);
+void ggml_sycl_free_device(void *ptr, sycl::queue &q);
+
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams={});
 
+struct mmid_row_mapping {
+    int32_t i1;
+    int32_t i2;
+};
+
+struct ggml_sycl_grouped_gemm_tile {
+    int32_t expert;
+    int32_t n0;
+    int32_t n1;
+};
+
 namespace sycl_ex = sycl::ext::oneapi::experimental;
+
+#ifdef GGML_SYCL_GRAPH
+struct ggml_sycl_graph {
+    // src data/ne/nb are kept next to the node copy: the scheduler can hand back the same src
+    // pointer with different contents or shape, see https://github.com/ggml-org/llama.cpp/pull/21736
+    struct node_properties {
+        ggml_tensor node;
+        void *      node_src_data_ptrs[GGML_MAX_SRC];
+        int64_t     node_src_ne[GGML_MAX_SRC][GGML_MAX_DIMS];
+        size_t      node_src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
+    };
+
+    std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
+    std::vector<node_properties> node_props;
+    bool     warmup_complete = false;
+    uint64_t uid             = 0;
+    int64_t  last_used_time  = 0;
+
+    // result of check_graph_compatibility() and the uid it was made for
+    bool     compatible     = false;
+    uint64_t compatible_uid = 0;
+};
+
+static_assert(std::is_trivial<ggml_sycl_graph::node_properties>::value, "node_properties must be trivial");
+#endif
+
+#if GGML_SYCL_DNNL
+struct sdpa_partition {
+    dnnl::graph::compiled_partition          cp;
+    std::vector<dnnl::graph::logical_tensor> ins;
+    dnnl::graph::logical_tensor              out;
+    size_t id_q = 0, id_k = 0, id_v = 0, id_scale = 0, id_mask = 0;
+    bool   has_mask = false;
+    bool   ok = false;
+};
+#endif
+
 struct ggml_backend_sycl_context {
     int device;
     std::string name;
@@ -357,31 +565,17 @@ struct ggml_backend_sycl_context {
     dnnl::stream stream_dnnl() {
         return stream_dnnl(device, 0);
     }
-    dnnl::memory get_scratchpad_mem(const dnnl::memory::desc & scratchpad_md,
-                                    const dnnl::engine & eng, const queue_ptr q) {
-        ggml_sycl_pool_alloc<uint8_t> * pool;
-        auto it = scratchpad_map.find(q);
-        if (it == scratchpad_map.end()) {
-            scratchpad_map[q] = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(this->pool());
-            pool = scratchpad_map[q].get();
-        } else {
-            pool = it->second.get();
-        }
 
-        size_t scratchpad_size = scratchpad_md.get_size();
-        if (scratchpad_size > pool->actual_size) {
-            pool->realloc(scratchpad_size);
-        }
-        void * mem_ptr = pool->get();
-        return dnnl::memory(scratchpad_md, eng, mem_ptr);
-    }
+    std::unordered_map<std::string, sdpa_partition> sdpa_partitions;
 #endif
 
     // pool
     std::unique_ptr<ggml_sycl_pool> pools[GGML_SYCL_MAX_DEVICES];
-    std::unordered_map<sycl::queue *, std::unique_ptr<ggml_sycl_pool_alloc<uint8_t>>> scratchpad_map;
 
     std::unique_ptr<ggml_sycl_pool> host_pools[GGML_SYCL_MAX_DEVICES];
+
+    std::vector<mmid_row_mapping> mmid_row_mapping_host;
+    std::vector<ggml_sycl_grouped_gemm_tile> mmid_tile_schedule_host;
 
     static std::unique_ptr<ggml_sycl_pool> new_pool_for_device(queue_ptr qptr, int device);
 
@@ -399,7 +593,36 @@ struct ggml_backend_sycl_context {
     }
 
 #ifdef GGML_SYCL_GRAPH
-    std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
+    // Map from first node pointer to graph - allows multiple graphs per context when the
+    // computation is split across CPU/GPU (e.g. with --n-cpu-moe)
+    std::unordered_map<const void *, std::unique_ptr<ggml_sycl_graph>> sycl_graphs;
+
+    int64_t last_graph_eviction_sweep = 0;
+    std::optional<bool> graph_compatible;
+
+    ggml_sycl_graph * sycl_graph(const void * first_node_ptr) {
+        const int64_t time_now = ggml_time_us();
+        const int64_t eviction_timeout_us = g_ggml_sycl_graph_eviction_timeout * 1'000'000LL;
+
+        // sweep every half the eviction timeout, evicting graphs unused for >= the eviction timeout
+        if (time_now - last_graph_eviction_sweep >= eviction_timeout_us / 2) {
+            last_graph_eviction_sweep = time_now;
+            for (auto it = sycl_graphs.begin(); it != sycl_graphs.end(); ) {
+                if (time_now - it->second->last_used_time >= eviction_timeout_us) {
+                    it = sycl_graphs.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+
+        auto it = sycl_graphs.find(first_node_ptr);
+        if (it == sycl_graphs.end()) {
+            it = sycl_graphs.emplace(first_node_ptr, std::make_unique<ggml_sycl_graph>()).first;
+        }
+        it->second->last_used_time = time_now;
+        return it->second.get();
+    }
 #endif
 
     ggml_sycl_pool & host_pool(int device) {
@@ -435,13 +658,15 @@ warp_reduce_sum(sycl::float2 a, const sycl::nd_item<3>& item_ct1) {
     return a;
 }
 
-template <int width = WARP_SIZE>
+/* use WARP_SIZE or WARP_32_SIZE*/
+template <int width>
 static __dpct_inline__ int warp_reduce_sum(int x) {
   return sycl::reduce_over_group(
       sycl::ext::oneapi::this_work_item::get_sub_group(), x, sycl::plus<>());
 }
 
-template <int width = WARP_SIZE>
+/* use WARP_SIZE or WARP_32_SIZE*/
+template <int width>
 static __dpct_inline__ float warp_reduce_sum(float x) {
 #pragma unroll
   for (int offset = width / 2; offset > 0; offset >>= 1) {
@@ -451,7 +676,19 @@ static __dpct_inline__ float warp_reduce_sum(float x) {
   return x;
 }
 
-template <int width = WARP_SIZE>
+/* use WARP_SIZE or WARP_32_SIZE*/
+template <int width>
+static __dpct_inline__ float warp_reduce_sum(float x, const sycl::nd_item<3>& item_ct1) {
+#pragma unroll
+  for (int offset = width / 2; offset > 0; offset >>= 1) {
+    x += dpct::permute_sub_group_by_xor(
+        item_ct1.get_sub_group(), x, offset);
+  }
+  return x;
+}
+
+/* use WARP_SIZE or WARP_32_SIZE*/
+template <int width>
 static __dpct_inline__ sycl::float2 warp_reduce_sum(sycl::float2 a) {
 #pragma unroll
   for (int offset = width / 2; offset > 0; offset >>= 1) {
@@ -465,7 +702,8 @@ static __dpct_inline__ sycl::float2 warp_reduce_sum(sycl::float2 a) {
   return a;
 }
 
-template <int width = WARP_SIZE>
+/* use WARP_SIZE or WARP_32_SIZE*/
+template <int width>
 static __dpct_inline__ sycl::half2 warp_reduce_sum(sycl::half2 a) {
 #pragma unroll
   for (int offset = width / 2; offset > 0; offset >>= 1) {
@@ -481,7 +719,52 @@ static constexpr int ggml_sycl_get_physical_warp_size() {
   return WARP_SIZE;
 }
 
-template <int width = WARP_SIZE>
+/* use WARP_SIZE or WARP_32_SIZE*/
+template <int width>
+static __dpct_inline__ int warp_reduce_all(int x) {
+    if (width == ggml_sycl_get_physical_warp_size()) {
+        return sycl::all_of_group(
+            sycl::ext::oneapi::this_work_item::get_sub_group(),
+            (~0xffffffff &
+             (0x1 << sycl::ext::oneapi::this_work_item::get_sub_group()
+                         .get_local_linear_id())) ||
+                x);
+    } else {
+#pragma unroll
+        for (int offset = width / 2; offset > 0; offset >>= 1) {
+            x = dpct::permute_sub_group_by_xor(
+                    sycl::ext::oneapi::this_work_item::get_sub_group(), x,
+                    offset, width) &&
+                x;
+        }
+        return x;
+    }
+}
+
+/* use WARP_SIZE or WARP_32_SIZE*/
+template <int width>
+static __dpct_inline__ int warp_reduce_any(int x) {
+    if (width == ggml_sycl_get_physical_warp_size()) {
+        return sycl::any_of_group(
+            sycl::ext::oneapi::this_work_item::get_sub_group(),
+            (0xffffffff &
+             (0x1 << sycl::ext::oneapi::this_work_item::get_sub_group()
+                         .get_local_linear_id())) &&
+                x);
+    } else {
+#pragma unroll
+        for (int offset = width / 2; offset > 0; offset >>= 1) {
+            x = dpct::permute_sub_group_by_xor(
+                    sycl::ext::oneapi::this_work_item::get_sub_group(), x,
+                    offset, width) ||
+                x;
+        }
+        return x;
+    }
+}
+
+/* use WARP_SIZE or WARP_32_SIZE*/
+template <int width>
 static __dpct_inline__ float warp_reduce_max(float x) {
 #pragma unroll
   for (int offset = width / 2; offset > 0; offset >>= 1) {
@@ -534,6 +817,16 @@ constexpr size_t ceil_div(const size_t m, const size_t n) {
 }
 
 bool gpu_has_xmx(sycl::device &dev);
+
+#if GGML_SYCL_DNNL
+// oneDNN builds JIT kernels only for some GPU architectures. On the rest it falls back to
+// reference kernels, which are much slower than the SYCL kernels here.
+inline bool ggml_sycl_dnnl_has_optimized_gemm(int device) {
+    return ggml_sycl_info().devices[device].opt_feature.onednn_optimized_gemm;
+}
+#endif
+
+int ggml_sycl_get_env(const char *env_name, int default_val);
 
 template <int N, class T> std::string debug_get_array_str(const std::string & prefix, const T array[N]) {
     if (LIKELY(!g_ggml_sycl_debug)) {
@@ -617,8 +910,11 @@ static __dpct_inline__ float get_alibi_slope(const float    max_bias,
     return dpct::pow(base, exph);
 }
 
-static const sycl::uint3 init_fastdiv_values(uint32_t d) {
-    GGML_ASSERT(d != 0);
+static const sycl::uint3 init_fastdiv_values(uint64_t d_64) {
+    GGML_ASSERT(d_64 != 0);
+    GGML_ASSERT(d_64 <= std::numeric_limits<uint32_t>::max());
+
+    const uint32_t d = (uint32_t) d_64;
 
     uint32_t L = 0;
     while (L < 32 && (uint32_t{ 1 } << L) < d) {
@@ -629,12 +925,59 @@ static const sycl::uint3 init_fastdiv_values(uint32_t d) {
     return sycl::uint3(mp, L, d);
 }
 
+// Maximum number of bytes that can be copied in a single instruction.
+// Set by test result.
+static constexpr int ggml_sycl_get_max_cpy_bytes() {
+    return 16;
+}
+
+// Aligned memory transfers of 8/16 bytes can be faster than 2 transfers with 4 bytes.
+template <int nbytes, int alignment = 0>
+static __dpct_inline__ void ggml_sycl_memcpy_1(void * dst, const void * src) {
+    if constexpr (alignment != 0) {
+        static_assert(nbytes % alignment == 0, "bad alignment");
+    }
+    constexpr int nb_per_cpy = alignment == 0 ? nbytes : alignment;
+
+#pragma unroll
+    for (int i = 0; i < nbytes/nb_per_cpy; ++i) {
+        if constexpr (nb_per_cpy == 1) {
+            ((char *) dst)[i] = ((const char *) src)[i];
+        } else if constexpr (nb_per_cpy == 2) {
+            ((short *) dst)[i] = ((const short *) src)[i];
+        } else if constexpr (nb_per_cpy == 4) {
+            ((int *) dst)[i] = ((const int *) src)[i];
+        } else if constexpr (nb_per_cpy == 8) {
+            ((sycl::int2 *) dst)[i] = ((const sycl::int2 *) src)[i];
+        } else if constexpr (nb_per_cpy == 16) {
+            ((sycl::int4 *) dst)[i] = ((const sycl::int4 *) src)[i];
+        } else {
+            static_assert(nbytes == 0 && nbytes == -1, "bad nbytes");
+        }
+    }
+}
+template <typename T>
+sycl::half2 __dpct_inline__ make_half2( T x, T y) {
+    sycl::half2 res(static_cast<sycl::half>(x),static_cast<sycl::half>(y));
+    return res;
+}
 
 static __dpct_inline__ uint32_t fastdiv(uint32_t n, const sycl::uint3 fastdiv_values) {
     const uint32_t hi = sycl::mul_hi<unsigned>(n, fastdiv_values.x());
     return (hi + n) >> fastdiv_values.y();
 }
 
+
+template <typename T>
+sycl::float2 __dpct_inline__ make_float2( T x, T y) {
+    sycl::float2 res(static_cast<float>(x),static_cast<float>(y));
+    return res;
+}
+
+sycl::float2 __dpct_inline__ __half22float2(sycl::half2 &H) {
+    sycl::float2 float2_value(static_cast<float>(H.x()), static_cast<float>(H.y()));
+    return float2_value;
+}
 
 static __dpct_inline__ sycl::uint2 fast_div_modulo(uint32_t n, const sycl::uint3 fastdiv_values) {
     const uint32_t div_val = fastdiv(n, fastdiv_values);
@@ -659,5 +1002,205 @@ static __dpct_inline__ float ggml_sycl_e8m0_to_fp32(uint8_t x) {
     return result;
 }
 
+sycl::float2 __dpct_inline__ __half22float2(const sycl::half2 &H) {
+    sycl::float2 float2_value(static_cast<float>(H.x()), static_cast<float>(H.y()));
+    return float2_value;
+}
+
+float __dpct_inline__ __half2float(sycl::half H) {
+    return static_cast<float>(H);
+}
+
+static __dpct_inline__ void ggml_sycl_mad(float & acc, const float v, const float u) {
+    acc += v*u;
+}
+
+static __dpct_inline__ void ggml_sycl_mad(float & acc, const sycl::float2 v, const sycl::float2 u) {
+    acc += v.x() * u.x();
+    acc += v.y() * u.y();
+}
+
+static __dpct_inline__ void ggml_sycl_mad(float & acc, const sycl::half2 v, const sycl::half2 u) {
+#ifdef GGML_SYCL_F16
+    const sycl::float2 tmp = (v * u).template convert<float, sycl::rounding_mode::automatic>();
+    acc += tmp.x() + tmp.y();
+#else
+    const sycl::float2 tmpv = __half22float2(v);
+    const sycl::float2 tmpu = __half22float2(u);
+    acc += tmpv.x() * tmpu.x();
+    acc += tmpv.y() * tmpu.y();
+#endif // GGML_SYCL_F16
+}
+
+static __dpct_inline__ void ggml_sycl_mad(sycl::half2 & acc, const sycl::half2 v, const sycl::half2 u) {
+#ifdef GGML_SYCL_F16
+    acc += v*u;
+#else
+    const sycl::float2 tmpv = __half22float2(v);
+    const sycl::float2 tmpu = __half22float2(u);
+    sycl::float2 tmpacc = __half22float2(acc);
+    // tmpacc.x += tmpv.x() * tmpu.x();
+    // tmpacc.y += tmpv.y() * tmpu.y();
+    sycl::float2 tmp1(tmpacc.x() + tmpv.x() * tmpu.x(), tmpacc.y() + tmpv.y() * tmpu.y());
+    acc = make_half2(tmp1.x(), tmp1.y());
+#endif // GGML_SYCL_F16
+}
+
+template <int n>
+struct ggml_sycl_unroll {
+    template <typename Func, typename... Args>
+    void operator()(const Func & f, Args... args) const {
+        f(n - 1, args...);
+        ggml_sycl_unroll<n - 1>{}(f, args...);
+    }
+};
+
+template <>
+struct ggml_sycl_unroll<1> {
+    template <typename Func, typename... Args>
+    void operator()(const Func & f, Args... args) const {
+        f(0, args...);
+    }
+};
+
+static __dpct_inline__ sycl::half2 ggml_sycl_hmax2(const sycl::half2 a, const sycl::half2 b) {
+    sycl::half2 ret;
+    reinterpret_cast<sycl::half &>(ret.x()) =
+        sycl::vec<float, 1>(sycl::fmax(a[0], b[0])).convert<sycl::half, sycl::rounding_mode::automatic>()[0];
+    reinterpret_cast<sycl::half &>(ret.y()) =
+        sycl::vec<float, 1>(sycl::fmax(a[1], b[1])).convert<sycl::half, sycl::rounding_mode::automatic>()[0];
+    return ret;
+}
+
+static __dpct_inline__ sycl::half ggml_sycl_hmax(const sycl::half a, const sycl::half b) {
+    return sycl::vec<float, 1>(
+               sycl::fmax(sycl::vec<sycl::half, 1>(a).convert<float, sycl::rounding_mode::automatic>()[0],
+                          sycl::vec<sycl::half, 1>(b).convert<float, sycl::rounding_mode::automatic>()[0]))
+        .convert<sycl::half, sycl::rounding_mode::automatic>()[0];
+}
+
+static __dpct_inline__ uint32_t __hgt2_mask(const sycl::half2 a, const sycl::half2 b) {
+    const uint32_t mask_low  = 0x0000FFFF * (float(a[0]) > float(b[0]));
+    const uint32_t mask_high = 0xFFFF0000 * (float(a[1]) > float(b[1]));
+    return mask_low | mask_high;
+}
+
+static __dpct_inline__ uint32_t fastmodulo(uint32_t n, const sycl::uint3 fastdiv_values) {
+    // expects  fastdiv_values to contain <mp, L, divisor> in <x, y, z> (see init_fastdiv_values)
+    return n - fastdiv(n, fastdiv_values) * fastdiv_values.z();
+}
+
+static bool fast_fp16_available(const int cc) {
+    GGML_UNUSED(cc);
+    return true;   //Intel GPUs always support FP16.
+}
+
+enum class block_reduce_method {
+    MAX,
+    SUM,
+};
+
+template<block_reduce_method method_t, typename T, int warp_size>
+struct block_reduce_policy;
+
+template <typename T, typename... Ts>
+inline constexpr bool is_any = (std::is_same_v<T, Ts> || ...);
+
+template<typename...>
+inline constexpr bool ggml_sycl_dependent_false_v = false;
+
+#define WARP_32_SIZE 32
+
+template <typename T, int warp_size> struct block_reduce_policy<block_reduce_method::SUM, T, warp_size> {
+    static T reduce(T val) {
+        if constexpr (is_any<T, float, sycl::float2, sycl::half2, int>) {
+            return warp_reduce_sum<warp_size>(val);
+        } else {
+            static_assert(ggml_sycl_dependent_false_v<T>, "Unsupported type for block reduce sum");
+        }
+    }
+
+    static T sentinel() {
+        if constexpr (std::is_same_v<T, float>) {
+            return 0.0f;
+        } else if constexpr (std::is_same_v<T, sycl::float2>) {
+            return sycl::float2(0.0f, 0.0f);
+        } else if constexpr (std::is_same_v<T, sycl::half2>) {
+            return sycl::half2(0.0f, 0.0f);
+        } else if constexpr (std::is_same_v<T, int>) {
+            return 0;
+        } else {
+            static_assert(ggml_sycl_dependent_false_v<T>, "Unsupported type for block reduce sum");
+        }
+    }
+};
+
+template <typename T, int warp_size> struct block_reduce_policy<block_reduce_method::MAX, T, warp_size> {
+    static T reduce(T val) {
+        if constexpr (is_any<T, float, sycl::half2>) {
+            return warp_reduce_max<warp_size>(val);
+        } else {
+            static_assert(ggml_sycl_dependent_false_v<T>, "Unsupported type for block reduce max");
+        }
+    }
+
+    static T sentinel() {
+        if constexpr (std::is_same_v<T, float>) {
+            return -INFINITY;
+        } else if constexpr (std::is_same_v<T, sycl::half2>) {
+            return sycl::half2(-INFINITY, -INFINITY);
+        } else {
+            static_assert(ggml_sycl_dependent_false_v<T>, "Unsupported type for block reduce max");
+        }
+    }
+};
+
+
+template <block_reduce_method reduce_method_t, int warp_size, typename T>
+static T block_reduce(T val, T * shared_vals, int block_size_template) {
+    auto item_ct1                 = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
+    val                           = block_reduce_policy<reduce_method_t, T,warp_size>::reduce(val);
+    const int block_size = block_size_template == 0 ? item_ct1.get_local_range(2) : block_size_template;
+    const int nthreads = item_ct1.get_local_range(2);
+    const int nwarps = nthreads / WARP_SIZE;
+
+    if (block_size > warp_size) {
+        assert((block_size <= 1024) && (block_size % warp_size) == 0);
+        const int warp_id = item_ct1.get_local_id(2) / warp_size;
+        const int lane_id = item_ct1.get_local_id(2) % warp_size;
+        if (lane_id == 0) {
+            shared_vals[warp_id] = val;
+        }
+        item_ct1.barrier(sycl::access::fence_space::local_space);
+
+        size_t nreduce = nwarps / WARP_SIZE;
+        float tmp = 0.f;
+        if (lane_id < (static_cast<int>(block_size) / warp_size)) {
+            for (size_t i = 0; i < nreduce; i += 1)
+            {
+                tmp += shared_vals[lane_id + i * WARP_SIZE];
+            }
+        }
+        return block_reduce_policy<reduce_method_t, T, warp_size>::reduce(tmp);
+    }
+    return val;
+}
+
+static __dpct_inline__ float ggml_sycl_ue4m3_to_fp32(uint8_t x) {
+    // UE4M3 is unsigned: 4 exp bits (bias 7), 3 mantissa bits, no sign, no NaN.
+    // exp == 0xF is a valid exponent (256-448 range), not NaN.
+    if (x == 0 || x == 0x7F) {
+        return 0.0f;
+    }
+    const int exp = (x >> 3) & 0xF;
+    const int man = x & 0x7;
+    float raw;
+    if (exp == 0) {
+        raw = man * (1.0f / 8.0f) * sycl::pow(2.0f, -6.0f);
+    } else {
+        raw = (1.0f + man / 8.0f) * sycl::pow(2.0f, (float) exp - 7.0f);
+    }
+    return raw * 0.5f;
+}
 
 #endif // GGML_SYCL_COMMON_HPP

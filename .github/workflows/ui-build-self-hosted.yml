@@ -1,0 +1,42 @@
+name: UI Build (self-hosted)
+
+on:
+  workflow_call:
+
+cache-mode: none
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  build:
+    runs-on: [self-hosted, fast]
+    env:
+      BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          # cache: "npm"
+          # cache-dependency-path: "ui/apps/chat/package-lock.json"
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ui/apps/chat
+
+      - name: Build application
+        run: npm run build
+        working-directory: ui/apps/chat
+
+      - name: Upload built UI
+        uses: actions/upload-artifact@v6
+        with:
+          name: llama-ui.zip
+          path: ui/apps/chat/dist/
+          retention-days: 1

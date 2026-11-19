@@ -10,6 +10,8 @@ body:
         This issue template is intended for miscellaneous bugs that don't fit into any other category.
         If you encountered the issue while using an external UI (e.g. ollama),
         please reproduce your issue using one of the examples/binaries in this repository.
+
+        Please fill out this template yourself, copypasting language model outputs is [strictly prohibited](https://github.com/ggml-org/llama.cpp/blob/master/CONTRIBUTING.md#ai-usage-policy).
   - type: textarea
     id: version
     attributes:
@@ -86,8 +88,8 @@ body:
       description: >
           If applicable, please copy and paste any relevant log output, including any generated text.
           If you are encountering problems specifically with the `llama_params_fit` module, always upload `--verbose` logs as well.
-          For very long logs (thousands of lines), please upload them as files instead.
-          On Linux you can redirect console output into a file by appending ` > llama.log 2>&1` to your command.
+          For very long logs (thousands of lines), please upload them as files instead; the `--log-file` CLI argument can be used for this purpose.
+          On Linux you can alternatively redirect the console output of any command into a file by appending ` > llama.log 2>&1` to your command.
       value: |
         <details>
         <summary>Logs</summary>

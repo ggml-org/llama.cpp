@@ -19,6 +19,8 @@ def parse_arguments():
     parser.add_argument("--prompt-file", "-f", help="Optional prompt file", required=False)
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose debug output")
     parser.add_argument("--device", "-d", help="Device to use (cpu, cuda, mps, auto)", default="auto")
+    parser.add_argument("--add-bos", action=argparse.BooleanOptionalAction, default=None,
+                        help="Override BOS token setting (default: use model's own setting)")
     return parser.parse_args()
 
 def load_model_and_tokenizer(model_path, device="auto"):
@@ -42,11 +44,15 @@ def load_model_and_tokenizer(model_path, device="auto"):
         config = config.text_config
         multimodal = True
 
-    print("Vocab size:       ", config.vocab_size)
-    print("Hidden size:      ", config.hidden_size)
-    print("Number of layers: ", config.num_hidden_layers)
-    print("BOS token id:     ", config.bos_token_id)
-    print("EOS token id:     ", config.eos_token_id)
+    def print_if_exists(label, obj, attr, default="N/A"):
+        val = getattr(obj, attr) if hasattr(obj, attr) else default
+        print(f"{label}", val)
+
+    print_if_exists("Vocab size:       ", config, "vocab_size")
+    print_if_exists("Hidden size:      ", config, "hidden_size")
+    print_if_exists("Number of layers: ", config, "num_hidden_layers")
+    print_if_exists("BOS token id:     ", config, "bos_token_id")
+    print_if_exists("EOS token id:     ", config, "eos_token_id")
 
     unreleased_model_name = os.getenv("UNRELEASED_MODEL_NAME")
     if unreleased_model_name:
@@ -114,6 +120,9 @@ def main():
 
 
     model, tokenizer, config = load_model_and_tokenizer(model_path, args.device)
+
+    if args.add_bos is not None and hasattr(tokenizer, "add_bos_token"):
+        tokenizer.add_bos_token = args.add_bos
 
     if args.verbose:
         enable_torch_debugging(model)

@@ -25,7 +25,7 @@ def get_prompts_text(dataset_name: str, n_prompts: int) -> Optional[list[str]]:
     ret = []
     if dataset_name.lower() == "mmlu":
         logger.info("Loading MMLU dataset...")
-        ret = datasets.load_dataset("cais/mmlu", "all")["test"]["question"]  # type: ignore
+        ret = datasets.load_dataset("cais/mmlu", "all")["test"]["question"]
     else:
         return None
     if n_prompts >= 0:
@@ -54,8 +54,8 @@ def get_server(path_server: str, path_log: Optional[str]) -> dict:
         logger.info("LLAMA_ARG_HOST not explicitly set, using 127.0.0.1")
         os.environ["LLAMA_ARG_HOST"] = "127.0.0.1"
     if os.environ.get("LLAMA_ARG_PORT") is None:
-        logger.info("LLAMA_ARG_PORT not explicitly set, using 8080")
-        os.environ["LLAMA_ARG_PORT"] = "8080"
+        logger.info("LLAMA_ARG_PORT not explicitly set, using 9931")
+        os.environ["LLAMA_ARG_PORT"] = "9931"
     hostname: Optional[str] = os.environ.get("LLAMA_ARG_HOST")
     port: Optional[str] = os.environ.get("LLAMA_ARG_PORT")
     assert hostname is not None
@@ -189,6 +189,7 @@ def benchmark(
 
         data: list[dict] = []
 
+        assert isinstance(prompts, list)
         for i, p in enumerate(prompts):
             if seed_offset >= 0:
                 random.seed(3 * (seed_offset + 1000 * i) + 1)
@@ -263,7 +264,7 @@ def benchmark(
 
     bin_max = np.ceil(token_t_last) + 1
     plt.figure()
-    plt.hist(token_t, np.arange(0, bin_max))
+    plt.hist(token_t, np.linspace(0, bin_max, bin_max, endpoint=False).tolist())
     plt.xlim(0, bin_max + 1)
     plt.title(name or "")
     plt.xlabel("Time [s]")
@@ -292,6 +293,6 @@ if __name__ == "__main__":
         "--n_predict_min", type=int, default=1024,
         help="Min. number of tokens to predict per prompt (supported for synthetic prompts only)")
     parser.add_argument("--seed_offset", type=int, default=0, help="Offset for determining the seeds for pseudorandom prompt/generation lengths. "
-                        "Corelations between seeds can occur when set >= 1000. Negative values mean no seed.")
+                        "Correlations between seeds can occur when set >= 1000. Negative values mean no seed.")
     args = parser.parse_args()
     benchmark(**vars(args))

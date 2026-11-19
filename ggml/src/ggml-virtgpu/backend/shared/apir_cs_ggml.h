@@ -1,11 +1,10 @@
-#include "ggml-impl.h"
 #include "apir_cs.h"
 #include "apir_cs_rpc.h"
+#include "ggml-impl.h"
 
 // ggml_buffer_to_apir_host_handle(ggml_backend_buffer_t buffer);
 
-static inline void apir_encode_ggml_buffer_host_handle(apir_encoder *                    enc,
-                                                       const apir_buffer_host_handle_t * handle);
+static inline void apir_encode_ggml_buffer_host_handle(apir_encoder * enc, const apir_buffer_host_handle_t * handle);
 
 static inline ggml_backend_buffer_t apir_decode_ggml_buffer(apir_decoder * dec);
 
@@ -22,8 +21,7 @@ static inline apir_rpc_tensor * apir_decode_apir_rpc_tensor_inplace(apir_decoder
     return (apir_rpc_tensor *) (uintptr_t) apir_decoder_use_inplace(dec, apir_rpc_tensor_size);
 }
 
-static inline apir_rpc_tensor * apir_decode_apir_rpc_tensor_array_inplace(apir_decoder * dec,
-                                                                          uint32_t       n_tensors) {
+static inline apir_rpc_tensor * apir_decode_apir_rpc_tensor_array_inplace(apir_decoder * dec, uint32_t n_tensors) {
     size_t apir_rpc_tensor_size = sizeof(apir_rpc_tensor) * n_tensors;
 
     return (apir_rpc_tensor *) (uintptr_t) apir_decoder_use_inplace(dec, apir_rpc_tensor_size);
@@ -45,9 +43,9 @@ static inline const ggml_tensor * apir_decode_ggml_tensor(apir_decoder * dec) {
     }
 
     ggml_init_params params{
-        /*.mem_size   =*/ ggml_tensor_overhead(),
-        /*.mem_buffer =*/ NULL,
-        /*.no_alloc   =*/ true,
+        /*.mem_size   =*/ggml_tensor_overhead(),
+        /*.mem_buffer =*/NULL,
+        /*.no_alloc   =*/true,
     };
 
     ggml_context * ctx = ggml_init(params);
@@ -104,6 +102,19 @@ static inline ggml_backend_buffer_t apir_decode_ggml_buffer(apir_decoder * dec) 
     size_t                buffer_ptr_size = sizeof(buffer);
 
     apir_decoder_read(dec, buffer_ptr_size, &buffer, buffer_ptr_size);
+
+    // SECURITY: Validate buffer handle against tracked buffers to prevent
+    // guest VM from providing arbitrary host memory addresses
+    if (buffer) {
+        extern std::unordered_set<ggml_backend_buffer_t> backend_buffers;
+        if (backend_buffers.find(buffer) == backend_buffers.end()) {
+            GGML_LOG_WARN("ggml-virtgpu-backend: %s: Invalid buffer handle from guest: %p\n", __func__,
+                          (void *) buffer);
+            // Set fatal flag to prevent further processing with invalid handle
+            apir_decoder_set_fatal(dec);
+            return NULL;
+        }
+    }
 
     return buffer;
 }

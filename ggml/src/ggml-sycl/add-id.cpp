@@ -26,6 +26,15 @@ static void add_id_kernel(
   float* dst_row = (float*)((char*)dst + i1 * nb1 + i2 * nb2);
   const float* src0_row =
       (const float*)((const char*)src0 + i1 * nb01 + i2 * nb02);
+
+  if (i11 == -1) { // skipped slot, add nothing
+    for (int64_t i0 = item_ct1.get_local_id(2); i0 < ne0;
+         i0 += item_ct1.get_local_range(2)) {
+      dst_row[i0] = src0_row[i0];
+    }
+    return;
+  }
+
   const float* src1_row = (const float*)((const char*)src1 + i11 * nb11);
 
   for (int64_t i0 = item_ct1.get_local_id(2); i0 < ne0;
@@ -55,7 +64,11 @@ void ggml_sycl_add_id(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
   const int32_t* src2_d = (const int32_t*)src2->data;
   float* dst_d = (float*)dst->data;
 
-  int threads = std::min((int)ne00, 768);  // cols
+  const unsigned int max_work_group_size = ggml_sycl_info().max_work_group_sizes[ctx.device];
+  GGML_ASSERT(max_work_group_size % (WARP_SIZE * WARP_SIZE) == 0);
+
+  int threads = std::min((unsigned int)ne00, max_work_group_size);  // cols
+
   ctx.stream()->parallel_for(
       sycl::nd_range<3>(
           sycl::range<3>(1, ne02, ne01) * sycl::range<3>(1, 1, threads),

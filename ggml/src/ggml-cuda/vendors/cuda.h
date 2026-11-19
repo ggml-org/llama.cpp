@@ -3,12 +3,21 @@
 #include <cuda_runtime.h>
 #include <cuda.h>
 #include <cublas_v2.h>
+#include <cublasLt.h>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
+#include <cstdint>
 
-#if CUDART_VERSION >= 12050
+typedef uint32_t ggml_cuda_thread_mask_t;
+
+#ifdef GGML_USE_NCCL
+#include <nccl.h>
+#endif // GGML_USE_NCCL
+
+#if CUDART_VERSION >= 11080
 #include <cuda_fp8.h>
-#endif // CUDART_VERSION >= 12050
+#define FP8_AVAILABLE
+#endif // CUDART_VERSION >= 11080
 
 #if CUDART_VERSION >= 12080
 #include <cuda_fp4.h>

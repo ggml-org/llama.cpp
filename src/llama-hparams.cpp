@@ -7,19 +7,39 @@
 
 void llama_hparams::set_swa_pattern(uint32_t n_pattern, bool dense_first) {
     if (dense_first) {
-        for (uint32_t il = 0; il < n_layer; ++il) {
-            swa_layers[il] = n_pattern == 0 || (il % n_pattern != 0);
+        for (uint32_t il = 0; il < n_layer(); ++il) {
+            is_swa_impl[il] = n_pattern == 0 || (il % n_pattern != 0);
         }
     } else {
-        for (uint32_t il = 0; il < n_layer; ++il) {
-            swa_layers[il] = n_pattern == 0 || (il % n_pattern < (n_pattern - 1));
+        for (uint32_t il = 0; il < n_layer(); ++il) {
+            is_swa_impl[il] = n_pattern == 0 || (il % n_pattern < (n_pattern - 1));
         }
+    }
+
+    for (uint32_t il = n_layer(); il < n_layer_all; ++il) {
+        is_swa_impl[il] = false;
+    }
+}
+
+void llama_hparams::set_recr_pattern(uint32_t n_pattern, bool dense_first) {
+    if (dense_first) {
+        for (uint32_t il = 0; il < n_layer(); ++il) {
+            is_recr_impl[il] = n_pattern == 0 || (il % n_pattern != 0);
+        }
+    } else {
+        for (uint32_t il = 0; il < n_layer(); ++il) {
+            is_recr_impl[il] = n_pattern == 0 || (il % n_pattern < (n_pattern - 1));
+        }
+    }
+
+    for (uint32_t il = n_layer(); il < n_layer_all; ++il) {
+        is_recr_impl[il] = false;
     }
 }
 
 bool llama_hparams::is_swa_any() const {
-    for (uint32_t il = 0; il < n_layer; ++il) {
-        if (swa_layers[il]) {
+    for (uint32_t il = 0; il < n_layer_all; ++il) {
+        if (is_swa_impl[il]) {
             return true;
         }
     }
@@ -28,7 +48,7 @@ bool llama_hparams::is_swa_any() const {
 }
 
 uint32_t llama_hparams::n_head(uint32_t il) const {
-    if (il < n_layer) {
+    if (il < n_layer_all) {
         return n_head_arr[il];
     }
 
@@ -36,7 +56,7 @@ uint32_t llama_hparams::n_head(uint32_t il) const {
 }
 
 uint32_t llama_hparams::n_head_kv(uint32_t il) const {
-    if (il < n_layer) {
+    if (il < n_layer_all) {
         return n_head_kv_arr[il];
     }
 
@@ -44,11 +64,36 @@ uint32_t llama_hparams::n_head_kv(uint32_t il) const {
 }
 
 uint32_t llama_hparams::n_ff(uint32_t il) const {
-    if (il < n_layer) {
+    if (il < n_layer_all) {
         return n_ff_arr[il];
     }
 
     GGML_ABORT("fatal error");
+}
+
+uint32_t llama_hparams::n_ff_exp(uint32_t il) const {
+    if (il < n_layer_all) {
+        return n_ff_exp_arr[il];
+    }
+
+    GGML_ABORT("fatal error");
+}
+
+uint32_t llama_hparams::n_expert_used(uint32_t il) const {
+    if (il < n_layer_all) {
+        return n_expert_used_arr[il];
+    }
+
+    GGML_ABORT("fatal error");
+}
+
+uint32_t llama_hparams::n_expert_used_max() const {
+    uint32_t val = 0;
+    for (uint32_t il = 0; il < n_layer_all; ++il) {
+        val = std::max(val, n_expert_used(il));
+    }
+
+    return val;
 }
 
 uint32_t llama_hparams::n_gqa(uint32_t il) const {
@@ -62,7 +107,19 @@ uint32_t llama_hparams::n_gqa(uint32_t il) const {
     return n_head/n_head_kv;
 }
 
+uint32_t llama_hparams::n_rot(uint32_t il) const {
+    if (il < n_layer_all) {
+        return is_swa(il) ? n_rot_swa : n_rot_full;
+    }
+
+    GGML_ABORT("fatal error");
+}
+
 uint32_t llama_hparams::n_embd_inp() const {
+    if (n_embd_inp_impl > 0) {
+        return n_embd_inp_impl;
+    }
+
     uint32_t n_embd_inp = n_embd;
 
     if (n_deepstack_layers > 0) {
@@ -72,25 +129,45 @@ uint32_t llama_hparams::n_embd_inp() const {
     return n_embd_inp;
 }
 
+uint32_t llama_hparams::n_embd_inp_enc() const {
+    return n_embd_inp_enc_impl > 0 ? n_embd_inp_enc_impl : n_embd_inp();
+}
+
 uint32_t llama_hparams::n_embd_out() const {
     return n_embd_out_impl > 0 ? n_embd_out_impl : n_embd;
+}
+
+uint32_t llama_hparams::n_embd_head_k(uint32_t il) const {
+    if (il < n_layer_all) {
+        return is_swa(il) ? n_embd_head_k_swa : n_embd_head_k_full;
+    }
+
+    GGML_ABORT("fatal error");
+}
+
+uint32_t llama_hparams::n_embd_head_v(uint32_t il) const {
+    if (il < n_layer_all) {
+        return is_swa(il) ? n_embd_head_v_swa : n_embd_head_v_full;
+    }
+
+    GGML_ABORT("fatal error");
 }
 
 uint32_t llama_hparams::n_embd_k_gqa(uint32_t il) const {
     const uint32_t n_head_kv = this->n_head_kv(il);
 
-    return n_embd_head_k * n_head_kv;
+    return n_embd_head_k(il) * n_head_kv;
 }
 
 uint32_t llama_hparams::n_embd_v_gqa(uint32_t il) const {
     const uint32_t n_head_kv = this->n_head_kv(il);
 
-    return n_embd_head_v * n_head_kv;
+    return n_embd_head_v(il) * n_head_kv;
 }
 
 bool llama_hparams::is_n_embd_k_gqa_variable() const {
     const uint32_t val = n_embd_k_gqa();
-    for (uint32_t il = 0; il < n_layer; ++il) {
+    for (uint32_t il = 0; il < n_layer_all; ++il) {
         if (val != n_embd_k_gqa(il)) {
             return true;
         }
@@ -101,7 +178,7 @@ bool llama_hparams::is_n_embd_k_gqa_variable() const {
 
 bool llama_hparams::is_n_embd_v_gqa_variable() const {
     const uint32_t val = n_embd_v_gqa();
-    for (uint32_t il = 0; il < n_layer; ++il) {
+    for (uint32_t il = 0; il < n_layer_all; ++il) {
         if (val != n_embd_v_gqa(il)) {
             return true;
         }
@@ -112,7 +189,7 @@ bool llama_hparams::is_n_embd_v_gqa_variable() const {
 
 uint32_t llama_hparams::n_embd_k_gqa_max() const {
     uint32_t val = n_embd_k_gqa();
-    for (uint32_t il = 0; il < n_layer; ++il) {
+    for (uint32_t il = 0; il < n_layer_all; ++il) {
         val = std::max(val, n_embd_k_gqa(il));
     }
 
@@ -121,7 +198,7 @@ uint32_t llama_hparams::n_embd_k_gqa_max() const {
 
 uint32_t llama_hparams::n_embd_v_gqa_max() const {
     uint32_t val = n_embd_v_gqa();
-    for (uint32_t il = 0; il < n_layer; ++il) {
+    for (uint32_t il = 0; il < n_layer_all; ++il) {
         val = std::max(val, n_embd_v_gqa(il));
     }
 
@@ -134,9 +211,19 @@ uint32_t llama_hparams::n_embd_r() const {
         return token_shift_count * n_embd;
     }
 
+    if (n_sconv_channels != 0) {
+        // for Inkling2 models, checked before LFM2 as they set n_shortconv_l_cache too
+        return n_sconv_channels * (n_shortconv_l_cache - 1);
+    }
+
     if (n_shortconv_l_cache != 0) {
         // for LFM2 models
         return n_embd * (n_shortconv_l_cache - 1);
+    }
+
+    if (n_cca_qk != 0) {
+        // for ZAYA1 CCA layers: depthwise + grouped conv, each with d_conv - 1 columns of history
+        return 2 * (ssm_d_conv - 1) * n_cca_qk;
     }
 
     if (n_embd_head_kda != 0) {
@@ -149,13 +236,22 @@ uint32_t llama_hparams::n_embd_r() const {
     // TODO: maybe support other convolution strides than 1
     // NOTE: since the first column of the conv_state is shifted out each time, it's not actually needed
     // Corresponds to Mamba's conv_states size
-    return (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * (ssm_d_inner + 2*ssm_n_group*ssm_d_state);
+    const uint32_t n_conv = (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * (ssm_d_inner + 2*ssm_n_group*ssm_d_state);
+
+    // PLE conv history needs its own row: Meta splits cache_r_l by head, so a history packed behind the first is unaddressable
+    // it lives in cache_ple_r_l instead, mirrored like the rest of the PLE module
+    return n_conv;
 }
 
 uint32_t llama_hparams::n_embd_s() const {
     if (wkv_head_size != 0) {
         // corresponds to RWKV's wkv_states size
         return n_embd * wkv_head_size;
+    }
+
+    if (n_cca_qk != 0) {
+        // for ZAYA CCA layers: the delayed value of the previous token
+        return n_embd_v_gqa() / 2;
     }
 
     if (n_embd_head_kda != 0) {
@@ -165,28 +261,53 @@ uint32_t llama_hparams::n_embd_s() const {
         return n_embd_head_kda * n_embd_head_kda * n_head();  // 128 * 128 * 32 = 524288
     }
 
+    if (n_embd_head_la != 0) {
+        // for MiniMax-Text-01 linear attention layers
+        // Full recurrent state: head_dim * head_dim * n_head
+        // tensor shape for linear attention: [head_dim, head_dim, n_head]
+        return n_embd_head_la * n_embd_head_la * n_head();  // 128 * 128 * 64 = 1048576
+    }
+
     // corresponds to Mamba's ssm_states size
     return ssm_d_state * ssm_d_inner;
 }
 
-bool llama_hparams::is_recurrent(uint32_t il) const {
-    if (il < n_layer) {
-        return recurrent_layer_arr[il];
+bool llama_hparams::is_recr(uint32_t il) const {
+    if (il < n_layer_all) {
+        return is_recr_impl[il];
     }
 
-    GGML_ABORT("%s: il (%u) out of bounds (n_layer: %u)\n", __func__, il, n_layer);
+    GGML_ABORT("%s: il (%u) out of bounds (n_layer_all: %u)\n", __func__, il, n_layer_all);
+}
+
+uint32_t llama_hparams::ple_conv_state() const {
+    if (ple_n_heads == 0 || ple_conv_kernel == 0) {
+        return 0;
+    }
+
+    // dilation equals the n-gram size, matching the reference module
+    return (ple_conv_kernel - 1) * ple_ngram_size * dsv4_hc_mult * n_embd;
+}
+
+bool llama_hparams::is_ple(uint32_t il) const {
+    if (il < n_layer_all) {
+        return is_ple_impl[il];
+    }
+
+    GGML_ABORT("%s: il (%u) out of bounds (n_layer_all: %u)\n", __func__, il, n_layer_all);
 }
 
 uint32_t llama_hparams::n_pos_per_embd() const {
-    return rope_type == LLAMA_ROPE_TYPE_MROPE || rope_type == LLAMA_ROPE_TYPE_IMROPE ? 4 : 1;
+    return (rope_type == LLAMA_ROPE_TYPE_MROPE || rope_type == LLAMA_ROPE_TYPE_IMROPE)
+            ? GGML_MROPE_SECTIONS : 1;
 }
 
 bool llama_hparams::is_swa(uint32_t il) const {
-    if (il < n_layer) {
-        return swa_layers[il];
+    if (il < n_layer_all) {
+        return is_swa_impl[il];
     }
 
-    GGML_ABORT("fatal error");
+    GGML_ABORT("%s: il (%u) out of bounds (n_layer_all: %u)\n", __func__, il, n_layer_all);
 }
 
 bool llama_hparams::is_mla() const {
@@ -196,37 +317,50 @@ bool llama_hparams::is_mla() const {
     return n_embd_head_k_mla_impl != 0 && n_embd_head_v_mla_impl != 0;
 }
 
+bool llama_hparams::is_indexer_full(uint32_t il) const {
+    if (il < n_layer()) {
+        return is_indexer_full_impl[il];
+    }
+
+    GGML_ABORT("%s: il (%u) out of bounds (n_layer: %u)\n", __func__, il, n_layer());
+}
+
 uint32_t llama_hparams::n_embd_head_k_mla() const {
-    return is_mla() ? n_embd_head_k_mla_impl : n_embd_head_k;
+    return is_mla() ? n_embd_head_k_mla_impl : n_embd_head_k();
 }
 
 uint32_t llama_hparams::n_embd_head_v_mla() const {
-    return is_mla() ? n_embd_head_v_mla_impl : n_embd_head_v;
+    return is_mla() ? n_embd_head_v_mla_impl : n_embd_head_v();
 }
 
 bool llama_hparams::has_kv(uint32_t il) const {
-    if (n_layer_kv_from_start >= 0) {
-        if (il < (uint32_t) n_layer_kv_from_start) {
-            return true;
-        }
+    return kv_source(il) == il;
+}
 
+uint32_t llama_hparams::kv_source(uint32_t il) const {
+    if (il < n_layer_all) {
+        return kv_source_impl[il];
+    }
+
+    GGML_ABORT("%s: il (%u) out of bounds (n_layer_all: %u)\n", __func__, il, n_layer_all);
+}
+
+bool llama_hparams::has_rope(uint32_t il) const {
+    // the router layer stores adapter routing signal, not positional info,
+    // so it must not be RoPE-shifted
+    if (router_layer >= 0 && (int32_t) il == router_layer) {
         return false;
     }
 
-    // by default, all layers have kv
-    return true;
-}
-
-uint32_t llama_hparams::n_layer_kv() const {
-    uint32_t res = 0;
-
-    for (uint32_t il = 0; il < n_layer; ++il) {
-        if (has_kv(il)) {
-            res++;
-        }
+    if (il < n_layer_all) {
+        return rope_pattern[il] != 0;
     }
 
-    return res;
+    GGML_ABORT("%s: il (%u) out of bounds (n_layer_all: %u)\n", __func__, il, n_layer_all);
+}
+
+uint32_t llama_hparams::n_layer() const {
+    return n_layer_all - n_layer_nextn;
 }
 
 bool llama_hparams::use_mrope() const {

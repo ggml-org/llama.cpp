@@ -30,6 +30,8 @@ extern "C" {
 
 void ggml_print_backtrace(void);
 
+uint64_t ggml_graph_next_uid(void);
+
 #ifndef MIN
 #    define MIN(a, b) ((a) < (b) ? (a) : (b))
 #endif
@@ -98,9 +100,20 @@ static bool ggml_op_is_empty(enum ggml_op op) {
     }
 }
 
+static inline bool ggml_impl_is_view(const struct ggml_tensor * t) {
+    return t->view_src != NULL;
+}
+
 static inline float ggml_compute_softplus_f32(float input) {
     return (input > 20.0f) ? input : logf(1 + expf(input));
 }
+
+// compute correction dims for YaRN RoPE scaling
+GGML_API void ggml_rope_yarn_corr_dims(
+    int n_dims, int n_ctx_orig, float freq_base, float beta_fast, float beta_slow, bool truncate, float dims[2]);
+
+GGML_API bool ggml_rope_get_truncate(const struct ggml_tensor * a);
+
 //
 // logging
 //
@@ -154,6 +167,18 @@ static float ggml_get_op_params_f32(const struct ggml_tensor * tensor, uint32_t 
     return ((const float *)(tensor->op_params))[i];
 }
 
+// [TAG_GGML_PREC]
+// - GGML_OP_MUL_MAT
+//   0 - acc
+//   1 - hint
+//   2 - src0 precision
+//   3 - src1 precision
+//
+// - GGML_OP_MUL_MAT_ID
+//   0 - acc
+//   1 - hint
+//   2 - src0 precision
+//   3 - src1 precision
 static void ggml_set_op_params_i32(struct ggml_tensor * tensor, uint32_t i, int32_t value) {
     assert(i < GGML_MAX_OP_PARAMS / sizeof(int32_t));
     ((int32_t *)(tensor->op_params))[i] = value;
@@ -334,6 +359,10 @@ struct ggml_cgraph {
     struct ggml_hash_set visited_hash_set;
 
     enum ggml_cgraph_eval_order order;
+
+    // an optional identifier that can be utilized to recognize same graphs if two non-zero values match
+    // a value of 0 means it is not set and should be ignored
+    uint64_t uid;
 };
 
 // returns a slice of cgraph with nodes [i0, i1)
@@ -486,6 +515,121 @@ static inline float ggml_e8m0_to_fp32_half(uint8_t x) {
 
 #define GGML_E8M0_TO_FP32(x) ggml_e8m0_to_fp32(x)
 #define GGML_E8M0_TO_FP32_HALF(x) ggml_e8m0_to_fp32_half(x)
+
+// UE4M3: unsigned, 4 exp bits (bias=7), 3 mantissa bits
+// Returns value * 0.5 to match kvalues_mxfp4 convention (kvalues = 2 * E2M1_float)
+static inline float ggml_ue4m3_to_fp32(uint8_t x) {
+    // TODO: reject invalid unsigned E4M3 scales instead of decoding NaN as zero or ignoring the sign bit.
+    if (x == 0 || x == 0x7F) {
+        return 0.0f;
+    }
+    int   exp = (x >> 3) & 0xF;
+    int   man = x & 0x7;
+    float raw;
+    if (exp == 0) {
+        raw = ldexpf((float) man, -9);
+    } else {
+        raw = ldexpf(1.0f + (float) man / 8.0f, exp - 7);
+    }
+    return raw * 0.5f;
+}
+
+static inline uint8_t ggml_fp32_to_ue4m3(float x) {
+    // TODO: use ties-to-even rounding, allow subnormal carry, and preserve finite values with exponent field 15.
+    if (!(x > 0.0f)) {
+        return 0;
+    }
+    if (x > 448.0f) {
+        x = 448.0f;
+    }
+    uint32_t bits;
+    memcpy(&bits, &x, 4);
+    int fp32_exp  = ((bits >> 23) & 0xFF) - 127;
+    int fp32_man  = (bits >> 20) & 0x7;
+    int ue4m3_exp = fp32_exp + 7;
+    if (ue4m3_exp <= 0) {
+        // subnormal: value = man * 2^-9, man = round(x * 2^9)
+        int man = (int) (x * 512.0f + 0.5f);
+        if (man > 7) {
+            man = 7;
+        }
+        if (man < 1) {
+            return 0;
+        }
+        return (uint8_t) man;
+    }
+    if (ue4m3_exp >= 15) {
+        return 0x7E;
+    }
+    int round_bit = (bits >> 19) & 1;
+    int ue4m3_man = fp32_man + round_bit;
+    if (ue4m3_man > 7) {
+        ue4m3_man = 0;
+        ue4m3_exp++;
+        if (ue4m3_exp >= 15) {
+            return 0x7E;
+        }
+    }
+    return (uint8_t) ((ue4m3_exp << 3) | ue4m3_man);
+}
+
+static inline float ggml_f8_e4m3_to_fp32(uint8_t x) {
+    const uint8_t ax = x & 0x7F;
+    if (ax == 0x7F) {
+        // OCP FP8 defines both 0x7F and 0xFF as NaN; the sign need not be preserved.
+        return NAN;
+    }
+
+    const uint32_t exp = (ax >> 3) & 0xF;
+    const uint32_t man = ax & 0x7;
+    // OCP FP8 rev. 1.1, section 5.1: subnormal magnitude = M * 2^-9; normal magnitude = (1 + M / 8) * 2^(E - 7).
+    // a normal value maps to fp32 exponent E + 120 and the top 3 mantissa bits
+    const float value = exp == 0
+        ? (float) man * (1.0f / 512.0f)
+        : fp32_from_bits(((exp + 120) << 23) | (man << 20));
+    // set the sign bit without a branch, the sign of real data is random
+    return fp32_from_bits(fp32_to_bits(value) | ((uint32_t) (x & 0x80) << 24));
+}
+
+static inline int ggml_round_to_nearest_even(float x) {
+    const int value = (int) floorf(x);
+    const float fraction = x - value;
+    return fraction > 0.5f || (fraction == 0.5f && (value & 1)) ? value + 1 : value;
+}
+
+// Supports saturating conversion only; infinities and overflow clamp to +/-448.
+static inline uint8_t ggml_fp32_to_f8_e4m3(float x) {
+    const uint8_t sign = signbit(x) ? 0x80 : 0;
+    x = fabsf(x);
+
+    if (isnan(x)) {
+        // OCP FP8 leaves NaN sign handling to the implementation; use canonical 0x7F.
+        return 0x7F;
+    }
+    if (x == 0.0f) {
+        return sign;
+    }
+    if (isinf(x) || x >= 448.0f) {
+        return sign | 0x7E;
+    }
+    if (x < 0.015625f) {
+        // OCP FP8 rev. 1.1, section 5.1: subnormal magnitude = M * 2^(1 - bias - m) = M / 512.
+        return sign | (uint8_t) ggml_round_to_nearest_even(x * 512.0f);
+    }
+
+    int exp;
+    const float mantissa = frexpf(x, &exp) * 2.0f;
+    int encoded_exp = exp + 6;
+    int encoded_man = ggml_round_to_nearest_even((mantissa - 1.0f) * 8.0f);
+    if (encoded_man == 8) {
+        encoded_man = 0;
+        encoded_exp++;
+    }
+    if (encoded_exp > 15 || (encoded_exp == 15 && encoded_man > 6)) {
+        return sign | 0x7E;
+    }
+    return sign | (uint8_t) (encoded_exp << 3) | (uint8_t) encoded_man;
+}
 
 /**
  * Converts brain16 to float32.
@@ -714,6 +858,5 @@ inline bool ggml_check_edges(const struct ggml_cgraph *                cgraph,
 
 // expose GGUF internals for test code
 GGML_API size_t gguf_type_size(enum gguf_type type);
-GGML_API struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_params params);
 GGML_API void gguf_write_to_buf(const struct gguf_context * ctx, std::vector<int8_t> & buf, bool only_meta);
 #endif // __cplusplus

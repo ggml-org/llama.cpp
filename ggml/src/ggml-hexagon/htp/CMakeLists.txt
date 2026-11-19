@@ -17,29 +17,60 @@ set(HTP_LIB ggml-htp-${DSP_VERSION})
 add_library(${HTP_LIB} SHARED
     main.c
     htp_iface_skel.c
-    worker-pool.c
-    hex-dma.c
+    work-queue.c
+    dma-queue.c
+    hmx-queue.c
+    htp-dcache.c
     matmul-ops.c
+    flash-attn-ops.c
+    gated-delta-net-ops.c
     binary-ops.c
     unary-ops.c
     sum-rows-ops.c
     softmax-ops.c
-    act-ops.c
+    glu-ops.c
     rope-ops.c
-    flash-attn-ops.c
     set-rows-ops.c
     get-rows-ops.c
     cpy-ops.c
+    gather-rows.c
+    repeat-ops.c
+    ssm-conv.c
+    ssm-scan-ops.c
+    cumsum-ops.c
+    top-k-mask-ops.c
+    fill-ops.c
+    timestep-ops.c
+    concat-ops.c
+    diag-ops.c
+    solve-tri-ops.c
+    pad-ops.c
     argsort-ops.c
+    im2col-ops.c
+    conv2d-ops.c
+    roll-ops.c
+    pool-ops.c
+    upscale-ops.c
+    allreduce-ops.c
+    dsv4-hc-ops.c
+    lightning-indexer-ops.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE
     $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,HTP_DEBUG=1,NDEBUG=1>
-    $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,FARF_HIGH=1,>
-    FP32_QUANTIZE_GROUP_SIZE=${GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE})
+    $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,FARF_HIGH=1,>)
 
 build_idl(htp_iface.idl ${HTP_LIB})
 
 set_target_properties(${HTP_LIB} PROPERTIES EXPORT_COMPILE_COMMANDS ON)
+
+if (NOT Python3_EXECUTABLE)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+endif()
+
+add_custom_command(TARGET ${HTP_LIB} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E echo "Adding SWIV section $<TARGET_FILE_NAME:${HTP_LIB}>"
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/htp-swiv.py -i $<TARGET_FILE:${HTP_LIB}> -o $<TARGET_FILE:${HTP_LIB}>
+    VERBATIM)
 
 install(TARGETS ${HTP_LIB})

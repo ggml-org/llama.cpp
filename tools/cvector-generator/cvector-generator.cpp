@@ -2,10 +2,13 @@
 #include "gguf.h"
 
 #include "arg.h"
+#include "build-info.h"
 #include "common.h"
 #include "llama.h"
 #include "pca.hpp"
 #include "mean.hpp"
+
+#include <clocale>
 
 #ifdef GGML_USE_CUDA
 #include "ggml-cuda.h"
@@ -108,7 +111,7 @@ struct callback_data {
             auto diff_filtered = filter_nonzero_rows(v_pos[il]);
             v_diff_filtered.push_back(diff_filtered);
         }
-        return v_diff_filtered; // for convinient, we return the result std::vector
+        return v_diff_filtered; // for convenient, we return the result std::vector
     }
 
     // delete zero rows from a given 2D tensor
@@ -343,7 +346,8 @@ static bool cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
 
 static bool get_hidden_layers(llama_context * ctx, std::vector<llama_token> & tokens) {
     llama_memory_clear(llama_get_memory(ctx), true);
-    if (llama_decode(ctx, llama_batch_get_one(tokens.data(), tokens.size()))) {
+    common_batch batch = common_batch_get_one(ctx, tokens);
+    if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
         fprintf(stderr, "%s : failed to eval\n", __func__);
         return false;
     }
@@ -392,9 +396,13 @@ static int prepare_entries(common_params & params, train_context & ctx_train) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
 
     params.out_file = "control_vector.gguf";
+
+    common_init();
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_CVECTOR_GENERATOR, print_usage)) {
         return 1;
@@ -414,7 +422,7 @@ int main(int argc, char ** argv) {
     params.cb_eval_user_data = &cb_data;
     params.warmup = false;
 
-    print_build_info();
+    llama_print_build_info(llama_version());
     llama_backend_init();
     llama_numa_init(params.numa);
 

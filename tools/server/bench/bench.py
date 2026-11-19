@@ -28,7 +28,7 @@ def main(args_in: list[str] | None = None) -> None:
     parser.add_argument("--branch", type=str, help="Branch name", default="detached")
     parser.add_argument("--commit", type=str, help="Commit name", default="dirty")
     parser.add_argument("--host", type=str, help="Server listen host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, help="Server listen host", default="8080")
+    parser.add_argument("--port", type=int, help="Server listen host", default="9931")
     parser.add_argument("--model-path-prefix", type=str, help="Prefix where to store the model files", default="models")
     parser.add_argument("--n-prompts", type=int,
                         help="SERVER_BENCH_N_PROMPTS: total prompts to randomly select in the benchmark", required=True)
@@ -40,6 +40,7 @@ def main(args_in: list[str] | None = None) -> None:
                         required=True)
     parser.add_argument("--hf-repo", type=str, help="Hugging Face model repository", required=True)
     parser.add_argument("--hf-file", type=str, help="Hugging Face model file", required=True)
+    parser.add_argument("--offline", action="store_true", default=False, help="Offline mode: forces use of cache, prevents network access")
     parser.add_argument("-ngl", "--n-gpu-layers", type=int, help="layers to the GPU for computation", required=True)
     parser.add_argument("--ctx-size", type=int, help="Set the size of the prompt context", required=True)
     parser.add_argument("--parallel", type=int, help="Set the number of slots for process requests", required=True)
@@ -268,6 +269,8 @@ def start_server_background(args):
     ]
     server_args.extend(['--hf-repo', args.hf_repo])
     server_args.extend(['--hf-file', args.hf_file])
+    if args.offline:
+        server_args.append('--offline')
     server_args.extend(['--n-gpu-layers', args.n_gpu_layers])
     server_args.extend(['--ctx-size', args.ctx_size])
     server_args.extend(['--parallel', args.parallel])
@@ -285,7 +288,7 @@ def start_server_background(args):
     }
     server_process = subprocess.Popen(
         args,
-        **pkwargs)  # pyright: ignore[reportArgumentType, reportCallIssue]
+        **pkwargs)  # pyright: ignore[reportArgumentType, reportCallIssue] # ty: ignore[no-matching-overload]
 
     def server_log(in_stream, out_stream):
         for line in iter(in_stream.readline, b''):

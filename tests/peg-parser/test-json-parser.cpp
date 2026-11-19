@@ -46,7 +46,7 @@ void test_json_parser(testing &t) {
         auto json = build_peg_parser([](common_peg_parser_builder & p) { return p.json(); });
 
         std::string    input = R"({"name": "test", "value": )";
-        common_peg_parse_context ctx(input, true);
+        common_peg_parse_context ctx(input, COMMON_PEG_PARSE_FLAG_LENIENT);
 
         auto result = json.parse(ctx);
 
@@ -58,7 +58,7 @@ void test_json_parser(testing &t) {
         auto json = build_peg_parser([](common_peg_parser_builder & p) { return p.json(); });
 
         std::string    input = R"([1, 2, 3, )";
-        common_peg_parse_context ctx(input, true);
+        common_peg_parse_context ctx(input, COMMON_PEG_PARSE_FLAG_LENIENT);
 
         auto result = json.parse(ctx);
 
@@ -70,11 +70,35 @@ void test_json_parser(testing &t) {
         auto json = build_peg_parser([](common_peg_parser_builder & p) { return p.json(); });
 
         std::string    input = R"({"data": {"nested": )";
-        common_peg_parse_context ctx(input, true);
+        common_peg_parse_context ctx(input, COMMON_PEG_PARSE_FLAG_LENIENT);
 
         auto result = json.parse(ctx);
 
         t.assert_equal("result_is_need_more_input", true, result.need_more_input());
+    });
+
+    // Test need_more_input() parsing - incomplete escape sequence in a string value
+    t.test("need_more_input() parsing - incomplete escape sequence", [](testing &t) {
+        auto json = build_peg_parser([](common_peg_parser_builder & p) { return p.json(); });
+
+        std::vector<std::string> inputs {
+            R"({"text": "hello\)",     // dangling backslash
+            R"({"text": "hello\u)",    // incomplete unicode escape sequence
+            R"({"text": "hello\u00)",
+        };
+
+        for (const auto & input : inputs) {
+            t.test(input, [&](testing &t) {
+                common_peg_parse_context ctx(input, COMMON_PEG_PARSE_FLAG_LENIENT);
+
+                auto result = json.parse(ctx);
+
+                t.assert_equal("result_is_need_more_input", true, result.need_more_input());
+
+                // the incomplete escape sequence is not part of the partial value
+                t.assert_equal("result_end", input.find('\\'), result.end);
+            });
+        }
     });
 
     t.test("object member", [](testing &t) {
@@ -84,7 +108,7 @@ void test_json_parser(testing &t) {
 
         t.test("success", [&](testing &t) {
             std::string input = R"("name": "bob")";
-            common_peg_parse_context ctx(input, false);
+            common_peg_parse_context ctx(input);
 
             auto result = parser.parse(ctx);
             t.assert_true("success", result.success());
@@ -92,7 +116,7 @@ void test_json_parser(testing &t) {
 
         t.test("partial", [&](testing &t) {
             std::string input = R"("name": "bo)";
-            common_peg_parse_context ctx(input, true);
+            common_peg_parse_context ctx(input, COMMON_PEG_PARSE_FLAG_LENIENT);
 
             auto result = parser.parse(ctx);
             t.assert_true("need more input", result.need_more_input());
@@ -100,10 +124,29 @@ void test_json_parser(testing &t) {
 
         t.test("failed", [&](testing &t) {
             std::string input = R"([])";
-            common_peg_parse_context ctx(input, false);
+            common_peg_parse_context ctx(input);
 
             auto result = parser.parse(ctx);
             t.assert_true("fail", result.fail());
         });
+    });
+
+    // json-value is entered once per level
+    t.test("deep JSON", [](testing &t) {
+        auto json = build_peg_parser([](common_peg_parser_builder & p) { return p.json(); });
+
+        const auto parse = [&](size_t depth) {
+            std::string input = std::string(depth, '[') + std::string(depth, ']');
+            common_peg_parse_context ctx(input);
+            try {
+                return json.parse(ctx).success() ? std::string() : std::string("fail");
+            } catch (const common_peg_recursion_error & e) {
+                return std::string(e.what());
+            }
+        };
+
+        t.assert_equal("64 levels", std::string(), parse(64));
+        t.assert_true("65 levels", parse(65).find("nested more than 64 levels deep") != std::string::npos);
+        t.assert_true("100000 levels", parse(100000).find("nested more than 64 levels deep") != std::string::npos);
     });
 }

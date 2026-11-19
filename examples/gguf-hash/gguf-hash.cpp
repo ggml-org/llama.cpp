@@ -1,13 +1,14 @@
 #include "ggml.h"
 #include "gguf.h"
 
-#include <cstdlib>   /* abort() */
+#include <algorithm>
+#include <clocale>
 #include <cstddef>
 #include <cstdio>
-#include <string>
-#include <stdexcept>
-#include <algorithm>
+#include <cstdlib>   /* abort() */
 #include <cstring>
+#include <stdexcept>
+#include <string>
 
 #include <sstream>
 #include <fstream>
@@ -16,13 +17,16 @@
 extern "C" {
 #endif
 
-#include "xxhash/xxhash.h"
-#include "sha1/sha1.h"
-#include "sha256/sha256.h"
+#include "hash/xxhash/xxhash.h"
+#include "hash/sha256/sha256.h"
 
 #ifdef __cplusplus
 }
 #endif
+
+// sha1 is compiled as C++ and lives in a namespace, see scripts/sync_vendor.py
+#include "hash/sha1/sha1.h"
+using namespace vendor_hash;
 
 
 // uuid.uuid5(uuid.NAMESPACE_URL, 'en.wikipedia.org/wiki/Llama.cpp')
@@ -626,6 +630,8 @@ static hash_exit_code_t gguf_hash(const hash_params & hash_params) {
 }
 
 int main(int argc, const char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     hash_params params;
     manifest_check_params manifest_check;
     hash_params_parse(argc, argv, params);

@@ -3,6 +3,7 @@
 #include "log.h"
 #include "llama.h"
 
+#include <clocale>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -14,17 +15,20 @@
 #endif
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
     params.escape = false;
+
+    common_init();
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_FINETUNE)) {
         return 1;
     }
 
-    if (params.use_mmap) {
-        LOG_INF("%s: force disabling memory mapping because it would result in-read-only pointers to the weights\n",
-                __func__);
-        params.use_mmap = false;
+    if (params.load_mode != LLAMA_LOAD_MODE_NONE) {
+        LOG_INF("%s: forcing load_mode = none to enable writable pointers to the weights\n", __func__);
+        params.load_mode = LLAMA_LOAD_MODE_NONE;
     }
     if (params.cache_type_k != GGML_TYPE_F32) {
         LOG_INF("%s: force changing k cache type to f32 due to a lack of f16 support for OUT_PROD\n", __func__);
@@ -35,7 +39,6 @@ int main(int argc, char ** argv) {
         params.cache_type_v = GGML_TYPE_F32;
     }
 
-    common_init();
     llama_backend_init();
     llama_numa_init(params.numa);
     // load the model and apply lora adapter, if any

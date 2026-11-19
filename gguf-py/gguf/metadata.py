@@ -83,7 +83,7 @@ class Metadata:
             metadata.sampling_xtc_threshold   = gen_config.get("xtc_threshold",   metadata.sampling_xtc_threshold)
             metadata.sampling_temp            = gen_config.get("temperature",     metadata.sampling_temp)
             metadata.sampling_penalty_last_n  = gen_config.get("penalty_last_n",  metadata.sampling_penalty_last_n)
-            metadata.sampling_penalty_repeat  = gen_config.get("penalty_repeat",  metadata.sampling_penalty_repeat)
+            metadata.sampling_penalty_repeat  = gen_config.get("penalty_repeat",  gen_config.get("repetition_penalty", metadata.sampling_penalty_repeat))
             metadata.sampling_mirostat        = gen_config.get("mirostat",        metadata.sampling_mirostat)
             metadata.sampling_mirostat_tau    = gen_config.get("mirostat_tau",    metadata.sampling_mirostat_tau)
             metadata.sampling_mirostat_eta    = gen_config.get("mirostat_eta",    metadata.sampling_mirostat_eta)
@@ -186,7 +186,7 @@ class Metadata:
         # Quick hack to fix the Norway problem
         # https://hitchdev.com/strictyaml/why/implicit-typing-removed/
         yaml_content = yaml_content.replace("- no\n", "- \"no\"\n")
-        # yaml should use 2 spaces insted of tab
+        # yaml should use 2 spaces instead of tab
         # this issue has came up with the Qwen/Qwen3-235B-A22B-Instruct-2507 model card
         #    (I've also sent a pr tp fix the modelcard too)
         yaml_content = yaml_content.replace("\t", "  ")

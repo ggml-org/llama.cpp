@@ -6,12 +6,94 @@
 #include "mtmd-helper.h"
 #include "chat.h"
 #include "base64.hpp"
+#include "hash/hash.h"
 
 #include "server-common.h"
 
+#include <cpp-httplib/httplib.h>
+
+#include <algorithm>
+#include <cmath>
+#include <filesystem>
 #include <random>
 #include <sstream>
 #include <fstream>
+#include <limits>
+#include <cstring>
+#include <type_traits>
+#include <atomic>
+#include <chrono>
+#include <iostream>
+#include <thread>
+
+#ifdef _WIN32
+// windows.h defines min and max as macros, which breaks std::min and std::max
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#   define NOMINMAX
+#endif
+#include <windows.h>
+#include <io.h>
+#else
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <unistd.h>
+#endif
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#   define NOMINMAX
+#endif
+#include <windows.h>
+#elif defined(__APPLE__) && defined(__MACH__)
+#include <mach-o/dyld.h>
+#include <limits.h>
+#else
+#include <unistd.h>
+#endif
+
+std::filesystem::path get_server_exec_path() {
+#if defined(_WIN32)
+    wchar_t buf[32768] = { 0 };  // Large buffer to handle long paths
+    DWORD len = GetModuleFileNameW(nullptr, buf, _countof(buf));
+    if (len == 0 || len >= _countof(buf)) {
+        throw std::runtime_error("GetModuleFileNameW failed or path too long");
+    }
+    return std::filesystem::path(buf);
+#elif defined(__APPLE__) && defined(__MACH__)
+    char small_path[PATH_MAX];
+    uint32_t size = sizeof(small_path);
+
+    if (_NSGetExecutablePath(small_path, &size) == 0) {
+        // resolve any symlinks to get absolute path
+        try {
+            return std::filesystem::canonical(std::filesystem::path(small_path));
+        } catch (...) {
+            return std::filesystem::path(small_path);
+        }
+    } else {
+        // buffer was too small, allocate required size and call again
+        std::vector<char> buf(size);
+        if (_NSGetExecutablePath(buf.data(), &size) == 0) {
+            try {
+                return std::filesystem::canonical(std::filesystem::path(buf.data()));
+            } catch (...) {
+                return std::filesystem::path(buf.data());
+            }
+        }
+        throw std::runtime_error("_NSGetExecutablePath failed after buffer resize");
+    }
+#else
+    char path[FILENAME_MAX];
+    ssize_t count = readlink("/proc/self/exe", path, FILENAME_MAX);
+    if (count <= 0) {
+        throw std::runtime_error("failed to resolve /proc/self/exe");
+    }
+    return std::filesystem::path(std::string(path, count));
+#endif
+}
 
 json format_error_response(const std::string & message, const enum error_type type) {
     std::string type_str;
@@ -58,6 +140,33 @@ json format_error_response(const std::string & message, const enum error_type ty
 }
 
 //
+// server_slot_stats
+//
+
+json server_slot_stats::to_json() const {
+    json base = {
+        {"cache_n",                n_prompt_cached},
+
+        {"prompt_n",               n_prompt_processed},
+        {"prompt_ms",              t_prompt_ms()},
+        {"prompt_per_token_ms",    t_prompt_per_token_ms()},
+        {"prompt_per_second",      n_prompt_tps()},
+
+        {"predicted_n",            n_gen},
+        {"predicted_ms",           t_gen_ms()},
+        {"predicted_per_token_ms", t_gen_per_token_ms()},
+        {"predicted_per_second",   n_gen_tps()},
+    };
+
+    if (n_draft_tokens > 0) {
+        base["draft_n"]          = n_draft_tokens;
+        base["draft_n_accepted"] = n_draft_accepted;
+    }
+
+    return base;
+}
+
+//
 // random string / id
 //
 
@@ -84,6 +193,98 @@ std::string gen_tool_call_id() {
     return random_string();
 }
 
+const char * get_media_marker() {
+    static const std::string marker = []() {
+        // allow user to pin a reproducible marker via env var
+        const char * env = getenv("LLAMA_MEDIA_MARKER");
+        if (env && env[0] != '\0') {
+            return std::string(env);
+        }
+        return std::string("<__media_") + random_string() + "__>";
+    }();
+    return marker.c_str();
+}
+
+//
+// audio utils
+//
+
+std::string pcm_f32_to_s16(const float * samples, size_t n) {
+    std::string bytes(n * sizeof(int16_t), '\0');
+    for (size_t i = 0; i < n; i++) {
+        const int16_t v = (int16_t) std::lround(std::max(-1.0f, std::min(1.0f, samples[i])) * 32767.0f);
+        memcpy(&bytes[2 * i], &v, sizeof(v));
+    }
+    return bytes;
+}
+
+//
+// model output modalities
+//
+
+std::vector<std::string> server_model_output_modalities(common_decision_type decision_type, bool has_cap_chat, bool has_cap_tts) {
+    std::vector<std::string> out;
+    switch (decision_type) {
+        case COMMON_DECISION_TYPE_OPENJEV:
+        case COMMON_DECISION_TYPE_LEV:
+        case COMMON_DECISION_TYPE_KEV:
+        case COMMON_DECISION_TYPE_NIMBLE:
+        case COMMON_DECISION_TYPE_LAYA:
+        case COMMON_DECISION_TYPE_CLEF:
+        case COMMON_DECISION_TYPE_PPLX_DECIDER:
+        case COMMON_DECISION_TYPE_VLLM_DECISION2:
+        case COMMON_DECISION_TYPE_VLLM_D3:
+        case COMMON_DECISION_TYPE_LFM2_D1:
+        case COMMON_DECISION_TYPE_LFM2_D1_OMNI:
+        case COMMON_DECISION_TYPE_H2O_LIGHTNING:
+        case COMMON_DECISION_TYPE_MINICPM_OCR_JEV:
+        case COMMON_DECISION_TYPE_LFM3_D1:
+        case COMMON_DECISION_TYPE_LFM3_D1_OMNI:
+            out = {"decisions"};
+            break;
+        case COMMON_DECISION_TYPE_GRANITE_SWITCH:
+            out = {"text", "decisions"};
+            break;
+        default:
+            // a tts-only model cannot generate text
+            if (has_cap_chat || !has_cap_tts) {
+                // fallback when there is no decision type or the metadata is bad
+                out = {"text"};
+            }
+            break;
+    }
+    if (has_cap_tts) {
+        out.push_back("audio");
+    }
+    return out;
+}
+
+std::vector<std::string> server_model_output_modalities(const llama_model * model, bool has_cap_chat, bool has_cap_tts) {
+    return server_model_output_modalities(common_get_decision_type(model), has_cap_chat, has_cap_tts);
+}
+
+json server_model_architecture_json(
+        bool inp_image,
+        bool inp_audio,
+        bool inp_video,
+        const std::vector<std::string> & output_modalities) {
+    std::vector<std::string> input_modalities = {"text"};
+    if (inp_image) {
+        input_modalities.push_back("image");
+    }
+    if (inp_audio) {
+        input_modalities.push_back("audio");
+    }
+    if (inp_video) {
+        input_modalities.push_back("video");
+    }
+
+    return {
+        {"input_modalities",  input_modalities},
+        {"output_modalities", output_modalities},
+    };
+}
+
 //
 // lora utils
 //
@@ -105,10 +306,9 @@ bool lora_should_clear_cache(
         const std::vector<common_adapter_lora_info> & current,
         const std::vector<common_adapter_lora_info> & next) {
 
-    // This should always be called after determining that the two sets are
-    // _not_ equal. This assert is therefore some slightly wasted work and
-    // should be safe to remove as long as this method is called correctly.
-    GGML_ASSERT(!are_lora_equal(current, next));
+    if (are_lora_equal(current, next)) {
+        return false;
+    }
 
     return (
         !(lora_get_enabled_ids(current).empty() || lora_all_alora(current)) ||
@@ -222,6 +422,102 @@ static inline raw_buffer base64_decode(const std::string & encoded_string) {
 // server_tokens implementation
 //
 
+namespace {
+
+constexpr uint32_t SERVER_TOKENS_STATE_VERSION = 1;
+
+uint32_t server_tokens_state_u32(size_t value) {
+    if (value > std::numeric_limits<uint32_t>::max()) {
+        throw std::runtime_error("Server tokens state is too large");
+    }
+    return value;
+}
+
+class server_tokens_state_writer {
+public:
+    template <typename T>
+    void write(T value) {
+        static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+        const auto * ptr = reinterpret_cast<const char *>(&value);
+        data.insert(data.end(), ptr, ptr + sizeof(value));
+    }
+
+    template <typename T>
+    void write(const std::vector<T> & values) {
+        static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+        write(server_tokens_state_u32(values.size()));
+        if (values.empty()) {
+            return;
+        }
+        const auto * ptr = reinterpret_cast<const char *>(values.data());
+        data.insert(data.end(), ptr, ptr + values.size() * sizeof(T));
+    }
+
+    void write_media_chunk(const mtmd_input_chunk * chunk) {
+        size_t chunk_size = 0;
+        if (mtmd_input_chunk_save(chunk, nullptr, 0, &chunk_size) != 0 || chunk_size == 0) {
+            throw std::runtime_error("Cannot serialize media chunk in server tokens");
+        }
+        std::vector<char> chunk_data(server_tokens_state_u32(chunk_size));
+        if (mtmd_input_chunk_save(chunk, chunk_data.data(), chunk_data.size(), nullptr) != 0) {
+            throw std::runtime_error("Cannot serialize media chunk in server tokens");
+        }
+        write(chunk_data);
+    }
+
+    std::vector<char> take() {
+        data.resize((data.size() + sizeof(llama_token) - 1) / sizeof(llama_token) * sizeof(llama_token), 0);
+        return std::move(data);
+    }
+
+private:
+    std::vector<char> data;
+};
+
+class server_tokens_state_reader {
+public:
+    server_tokens_state_reader(const char * data, size_t size) : data(data), size(size) {}
+
+    template <typename T>
+    T read() {
+        static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+        if (size - pos < sizeof(T)) {
+            throw std::runtime_error("Unexpected end of server tokens state");
+        }
+        T value;
+        std::memcpy(&value, data + pos, sizeof(value));
+        pos += sizeof(value);
+        return value;
+    }
+
+    template <typename T>
+    std::vector<T> read_vector() {
+        static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+        const uint32_t n_values = read<uint32_t>();
+        // reject before resizing, so that a small corrupted payload cannot request a huge allocation
+        if (n_values > remaining() / sizeof(T)) {
+            throw std::runtime_error("Unexpected end of server tokens state");
+        }
+        std::vector<T> values(n_values);
+        if (n_values > 0) {
+            std::memcpy(values.data(), data + pos, values.size() * sizeof(T));
+            pos += values.size() * sizeof(T);
+        }
+        return values;
+    }
+
+    size_t remaining() const {
+        return size - pos;
+    }
+
+private:
+    const char * data;
+    size_t size;
+    size_t pos = 0;
+};
+
+} // namespace
+
 server_tokens::server_tokens(mtmd::input_chunks & mtmd_chunks, bool has_mtmd) : has_mtmd(has_mtmd) {
     for (size_t i = 0; i < mtmd_chunks.size(); ++i) {
         push_back(mtmd_chunks[i]);
@@ -229,21 +525,80 @@ server_tokens::server_tokens(mtmd::input_chunks & mtmd_chunks, bool has_mtmd) : 
 }
 
 server_tokens::server_tokens(const llama_tokens & tokens, bool has_mtmd) : has_mtmd(has_mtmd), tokens(tokens) {
+    update_hashes();
 }
 
-llama_pos server_tokens::pos_next() const {
+llama_pos server_tokens::pos_next(int64_t n_tokens) const {
     if (!has_mtmd) {
-        return tokens.size();
+        if (n_tokens < 0) {
+            return tokens.size();
+        }
+
+        return n_tokens;
     }
 
-    llama_pos res = tokens.size();
+    if (n_tokens < 0) {
+        llama_pos res = tokens.size();
 
-    for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ++it) {
-        const auto & chunk = it->second;
-        res += mtmd_input_chunk_get_n_pos(chunk.get()) - mtmd_input_chunk_get_n_tokens(chunk.get());
+        for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ++it) {
+            const auto & chunk = it->second;
+            res += mtmd_input_chunk_get_n_pos(chunk.get()) - mtmd_input_chunk_get_n_tokens(chunk.get());
+        }
+
+        return res;
     }
 
-    return res;
+    int64_t idx = 0;
+    llama_pos pos = 0;
+
+    GGML_ASSERT(n_tokens <= (int64_t)tokens.size());
+
+    while (idx < n_tokens) {
+        const auto media_it = map_idx_to_media.find(idx);
+        if (media_it != map_idx_to_media.end()) {
+            const auto & chunk = media_it->second;
+            const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
+            const size_t n_tok = mtmd_input_chunk_get_n_tokens(chunk.get());
+
+            pos += n_pos;
+            idx += n_tok;
+        } else {
+            pos++;
+            idx++;
+        }
+    }
+
+    return pos;
+}
+
+size_t server_tokens::size_up_to_pos(llama_pos max_pos) const {
+    if (!has_mtmd) {
+        return std::min((size_t)max_pos, tokens.size());
+    }
+
+    size_t idx = 0;
+    llama_pos pos = 0;
+
+    while (idx < tokens.size()) {
+        const auto media_it = map_idx_to_media.find(idx);
+        if (media_it != map_idx_to_media.end()) {
+            const auto & chunk = media_it->second;
+            const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
+            const size_t n_tok = mtmd_input_chunk_get_n_tokens(chunk.get());
+
+            pos += n_pos;
+            idx += n_tok;
+        } else {
+            pos++;
+            idx++;
+        }
+
+        if (pos >= max_pos) {
+            break;
+        }
+    }
+
+    return idx;
 }
 
 std::string server_tokens::str() const {
@@ -274,11 +629,20 @@ const mtmd::input_chunk_ptr & server_tokens::find_chunk(size_t idx) const {
     throw std::runtime_error("Chunk not found");
 }
 
+std::pair<const mtmd::input_chunk_ptr *, size_t> server_tokens::find_next_media_chunk(size_t idx) const {
+    auto it = map_idx_to_media.upper_bound(idx);
+    if (it != map_idx_to_media.end()) {
+        return { &it->second, it->first };
+    }
+    return { nullptr, 0 };
+}
+
 void server_tokens::push_back(llama_token tok) {
     if (tok == LLAMA_TOKEN_NULL) {
         throw std::runtime_error("Invalid token");
     }
     tokens.emplace_back(tok);
+    update_hashes();
 }
 
 void server_tokens::push_back(const mtmd_input_chunk * chunk) {
@@ -292,6 +656,7 @@ void server_tokens::push_back(const mtmd_input_chunk * chunk) {
         }
         mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_copy(chunk));
         map_idx_to_media[start_idx] = std::move(new_chunk);
+        update_hashes();
     } else if (type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
         size_t n_tokens;
         const auto * text_tokens = mtmd_input_chunk_get_tokens_text(chunk, &n_tokens);
@@ -300,6 +665,24 @@ void server_tokens::push_back(const mtmd_input_chunk * chunk) {
         }
     } else {
         GGML_ABORT("Invalid chunk type");
+    }
+}
+
+void server_tokens::push_back_placeholder(const mtmd_input_chunk * chunk) {
+    auto type = mtmd_input_chunk_get_type(chunk);
+    if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE || type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
+        GGML_ASSERT(has_mtmd);
+        mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_get_placeholder(chunk));
+        GGML_ASSERT(new_chunk != nullptr && "failed to create placeholder chunk");
+        const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk);
+        size_t start_idx = tokens.size();
+        for (size_t i = 0; i < n_tokens; ++i) {
+            tokens.emplace_back(LLAMA_TOKEN_NULL);
+        }
+        map_idx_to_media[start_idx] = std::move(new_chunk);
+        update_hashes();
+    } else {
+        push_back(chunk);
     }
 }
 
@@ -321,18 +704,101 @@ void server_tokens::push_back(server_tokens & tokens) {
 }
 
 void server_tokens::insert(const llama_tokens & inp_tokens) {
-    GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
     tokens.insert(tokens.end(), inp_tokens.begin(), inp_tokens.end());
+    update_hashes();
 }
 
-const llama_tokens & server_tokens::get_text_tokens() const {
-    GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
+const llama_tokens & server_tokens::get_tokens() const {
+    GGML_ASSERT(!has_mtmd);
     return tokens;
+}
+
+std::vector<char> server_tokens::serialize() const {
+    static_assert(sizeof(llama_token) == sizeof(uint32_t), "unexpected llama_token size");
+
+    server_tokens_state_writer writer;
+    writer.write((llama_token) LLAMA_TOKEN_NULL);
+    writer.write(SERVER_TOKENS_STATE_VERSION);
+    writer.write(tokens);
+
+    std::vector<uint32_t> media_keys;
+    media_keys.reserve(map_idx_to_media.size());
+    for (const auto & item : map_idx_to_media) {
+        media_keys.push_back(server_tokens_state_u32(item.first));
+    }
+    writer.write(media_keys);
+
+    for (const auto & item : map_idx_to_media) {
+        writer.write_media_chunk(item.second.get());
+    }
+
+    return writer.take();
+}
+
+server_tokens server_tokens::deserialize(const llama_tokens & packed, bool has_mtmd) {
+    static_assert(sizeof(llama_token) == sizeof(uint32_t), "unexpected llama_token size");
+
+    if (packed.empty() || packed[0] != LLAMA_TOKEN_NULL) {
+        // plain token list, as written by older versions
+        return server_tokens(packed, has_mtmd);
+    }
+
+    server_tokens_state_reader reader(reinterpret_cast<const char *>(packed.data()), packed.size() * sizeof(llama_token));
+    reader.read<llama_token>(); // format marker
+    if (reader.read<uint32_t>() != SERVER_TOKENS_STATE_VERSION) {
+        throw std::runtime_error("Unsupported server tokens state version");
+    }
+
+    const llama_tokens tokens = reader.read_vector<llama_token>();
+
+    // the media start indices, followed by the media chunks in the same order
+    const std::vector<uint32_t> media_keys = reader.read_vector<uint32_t>();
+    if (!media_keys.empty() && !has_mtmd) {
+        throw std::runtime_error("Cannot restore media tokens without an mmproj");
+    }
+
+    server_tokens result(tokens, has_mtmd);
+
+    for (const uint32_t key : media_keys) {
+        const size_t start_idx = key;
+        const std::vector<char> chunk_data = reader.read_vector<char>();
+        if (chunk_data.empty()) {
+            throw std::runtime_error("Cannot load media chunk from server tokens state");
+        }
+
+        mtmd::input_chunk_ptr chunk(mtmd_input_chunk_load(chunk_data.data(), chunk_data.size()));
+        if (!chunk) {
+            throw std::runtime_error("Cannot load media chunk from server tokens state");
+        }
+        result.map_idx_to_media[start_idx] = std::move(chunk);
+    }
+
+    // the hashes from the constructor do not include the media chunks
+    result.hashes.clear();
+    result.update_hashes();
+
+    if (reader.remaining() >= sizeof(llama_token)) {
+        throw std::runtime_error("Trailing data in server tokens state");
+    }
+
+    return result;
+}
+
+llama_tokens server_tokens::get_text_tokens() const {
+    llama_tokens res;
+    res.reserve(tokens.size());
+    for (llama_token t : tokens) {
+        if (t != LLAMA_TOKEN_NULL) {
+            res.push_back(t);
+        }
+    }
+    return res;
 }
 
 void server_tokens::set_token(llama_pos pos, llama_token id) {
     GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
     tokens[pos] = id;
+    hashes.resize(std::min(hashes.size(), (size_t) pos / hash_block_size));
 }
 
 void server_tokens::keep_first(size_t n) {
@@ -352,7 +818,7 @@ void server_tokens::keep_first(size_t n) {
             // note that the case where we keep a full image at the end is allowed:
             //   tokens[n - 1] == LLAMA_TOKEN_NULL && tokens[n] != LLAMA_TOKEN_NULL
             if (tokens[n - 1] == LLAMA_TOKEN_NULL && tokens[n] == LLAMA_TOKEN_NULL) {
-                find_chunk(n - 1); // will throw an error if the token is not begin-of-chunk
+                find_chunk(n); // will throw an error if the cut is not at a chunk boundary
             }
         }
         // remove all image chunks that are not used anymore
@@ -366,6 +832,7 @@ void server_tokens::keep_first(size_t n) {
         }
     }
     tokens.resize(n);
+    hashes.resize(std::min(hashes.size(), n / hash_block_size));
 }
 
 std::string server_tokens::detokenize(const llama_context * ctx, bool special) const {
@@ -382,8 +849,11 @@ std::string server_tokens::detokenize(const llama_context * ctx, bool special) c
 size_t server_tokens::get_common_prefix(const server_tokens & b) const {
     const size_t max_idx = std::min(tokens.size(), b.tokens.size());
 
+    // the blocks with equal hashes are not compared again
+    const size_t min_idx = get_common_prefix_lower(b.get_prefix_hashes());
+
     if (!has_mtmd) {
-        for (size_t i = 0; i < max_idx; ++i) {
+        for (size_t i = min_idx; i < max_idx; ++i) {
             if (tokens[i] == b.tokens[i]) {
                 continue;
             }
@@ -394,7 +864,7 @@ size_t server_tokens::get_common_prefix(const server_tokens & b) const {
         return max_idx;
     }
 
-    for (size_t i = 0; i < max_idx; ++i) {
+    for (size_t i = min_idx; i < max_idx; ++i) {
         const llama_token ai =   tokens[i];
         const llama_token bi = b.tokens[i];
 
@@ -429,18 +899,100 @@ size_t server_tokens::get_common_prefix(const server_tokens & b) const {
     return max_idx; // all tokens are equal
 }
 
+void server_tokens::update_hashes() {
+    const size_t n_blocks = tokens.size() / hash_block_size;
+
+    std::string buf;
+    const auto append = [&buf](const void * data, size_t len) {
+        buf.append((const char *) data, len);
+    };
+
+    for (size_t k = hashes.size(); k < n_blocks; k++) {
+        const size_t i_begin = k * hash_block_size;
+        const size_t i_end   = i_begin + hash_block_size;
+
+        // the previous hash comes first, zeros for the first block
+        const prefix_hash prev = k > 0 ? hashes[k - 1] : prefix_hash{};
+
+        buf.clear();
+        append(prev.data(), prev.size());
+        append(tokens.data() + i_begin, hash_block_size * sizeof(llama_token));
+
+        // a media chunk is hashed in the block of its first token, it can span over many blocks
+        for (auto it = map_idx_to_media.lower_bound(i_begin); it != map_idx_to_media.end() && it->first < i_end; ++it) {
+            const std::string_view id = mtmd_input_chunk_get_id(it->second.get());
+            const uint64_t fields[]   = { it->first, mtmd_input_chunk_get_n_tokens(it->second.get()), id.size() };
+            append(fields, sizeof(fields));
+            append(id.data(), id.size());
+        }
+
+        hashes.push_back(hash_sha256(buf.data(), buf.size()));
+    }
+}
+
+size_t server_tokens::get_common_prefix_lower(const std::vector<prefix_hash> & b_hashes) const {
+    const auto & a_hashes = hashes;
+
+    // a hash covers all the tokens before it, so the equal entries come first
+    size_t lo = 0;
+    size_t hi = std::min(a_hashes.size(), b_hashes.size());
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo) / 2;
+        if (a_hashes[mid] == b_hashes[mid]) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+
+    size_t n = lo * hash_block_size;
+
+    // do not cut a media chunk, go back to its start
+    auto it = map_idx_to_media.upper_bound(n);
+    if (it != map_idx_to_media.begin()) {
+        --it;
+        if (it->first < n && n < it->first + mtmd_input_chunk_get_n_tokens(it->second.get())) {
+            n = it->first;
+        }
+    }
+
+    return n;
+}
+
+common_chat_msg_spans server_tokens::find_message_spans(const common_chat_msg_delimiters & delims) const {
+    std::map<size_t, size_t> skips;
+    for (const auto & it : map_idx_to_media) {
+        skips[it.first] = mtmd_input_chunk_get_n_tokens(it.second.get());
+    }
+    return delims.split(tokens, skips);
+}
+
 bool server_tokens::validate(const struct llama_context * ctx) const {
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
     const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+    size_t n_media = 0;
 
     for (size_t i = 0; i < tokens.size(); ++i) {
         const auto & t = tokens[i];
         if (t == LLAMA_TOKEN_NULL) {
             try {
                 const auto & chunk = find_chunk(i);
-                size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk.get());
-                i += n_tokens - 1; // will be +1 by the for loop
+                if (mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+                    return false;
+                }
+                const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk.get());
+                const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
+                if (n_tokens == 0 || n_pos <= 0 || n_tokens > tokens.size() - i) {
+                    return false;
+                }
+                for (size_t j = i; j < i + n_tokens; ++j) {
+                    if (tokens[j] != LLAMA_TOKEN_NULL) {
+                        return false;
+                    }
+                }
+                ++n_media;
+                i += n_tokens - 1;
             } catch (const std::exception & e) {
                 return false;
             }
@@ -448,44 +1000,14 @@ bool server_tokens::validate(const struct llama_context * ctx) const {
             return false;
         }
     }
-    return true;
-}
-
-int32_t server_tokens::process_chunk(
-            llama_context * ctx,
-            mtmd_context * mctx,
-            size_t idx,
-            llama_pos pos,
-            int32_t seq_id,
-            size_t & n_tokens_out) const {
-    const auto & chunk = find_chunk(idx);
-    const char * name = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE
-                        ? "image" : "audio";
-    SRV_INF("processing %s...\n", name);
-    int32_t n_batch = llama_n_batch(ctx);
-    int64_t t0 = ggml_time_ms();
-    llama_pos new_n_past; // unused for now
-    int32_t result = mtmd_helper_eval_chunk_single(mctx, ctx,
-        chunk.get(),
-        pos,
-        seq_id,
-        n_batch,
-        true, // logits last
-        &new_n_past);
-    SRV_INF("%s processed in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
-    if (result != 0) {
-        LOG_ERR("mtmd_helper_eval failed with status %d", result);
-        n_tokens_out = 0;
-        return result;
-    }
-    n_tokens_out = mtmd_input_chunk_get_n_tokens(chunk.get());
-    return 0;
+    return n_media == map_idx_to_media.size();
 }
 
 server_tokens server_tokens::clone() const {
     server_tokens res;
     res.has_mtmd = has_mtmd;
     res.tokens   = tokens;
+    res.hashes   = hashes;
     for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ++it) {
         size_t idx = it->first;
         const mtmd::input_chunk_ptr & chunk = it->second;
@@ -621,35 +1143,31 @@ size_t validate_utf8(const std::string& text) {
     return len;
 }
 
-// Computes FNV-1a hash of the data
-static std::string fnv_hash(const uint8_t * data, size_t len) {
-    const uint64_t fnv_prime = 0x100000001b3ULL;
-    uint64_t hash = 0xcbf29ce484222325ULL;
-
-    for (size_t i = 0; i < len; ++i) {
-        hash ^= data[i];
-        hash *= fnv_prime;
-    }
-    return std::to_string(hash);
-}
-
-server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files) {
+server_tokens process_mtmd_prompt(
+        mtmd_context * mctx,
+        const std::string & prompt,
+        const std::vector<raw_buffer> & files,
+        const mtmd_helper_init_opt & init_opt,
+        bool is_placeholder) {
+    // these will be freed upon going out of scope
     mtmd::bitmaps bitmaps;
+    std::vector<mtmd_helper::video_ptr> videos;
     for (auto & file : files) {
-        mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size()));
-        if (!bmp.ptr) {
+        auto out = mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size(), is_placeholder, init_opt);
+        if (!out.bitmap) {
             throw std::runtime_error("Failed to load image or audio file");
         }
-        // calculate bitmap hash (for KV caching)
-        std::string hash = fnv_hash(bmp.data(), bmp.n_bytes());
-        bmp.set_id(hash.c_str());
-        bitmaps.entries.push_back(std::move(bmp));
+        bitmaps.entries.emplace_back(out.bitmap);
+        if (out.video_ctx) {
+            videos.emplace_back(out.video_ctx);
+        }
     }
     // process prompt
     std::vector<server_tokens> inputs;
     // multimodal
     mtmd_input_text inp_txt = {
-        prompt.c_str(),
+        prompt.data(),
+        prompt.size(),
         /* add_special */   true,
         /* parse_special */ true,
     };
@@ -668,7 +1186,7 @@ server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::
 }
 
 /**
- * break the input "prompt" object into multiple prompt if needed, then tokenize them
+ * tokenize a single input "prompt" object
  * use tokenize_input_prompts() if the input could be an array.
  * this supports these cases:
  * - "prompt": "string"
@@ -676,7 +1194,7 @@ server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::
  * - "prompt": [12, 34, "string", 56, 78]
  * - "prompt": { "prompt_string": "string", "multimodal_data": [ "base64" ] }
  */
-static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special) {
+server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special, const mtmd_helper_init_opt & init_opt) {
     constexpr char JSON_STRING_PROMPT_KEY[] = "prompt_string";
     constexpr char JSON_MTMD_DATA_KEY[] = "multimodal_data";
     const bool has_mtmd = mctx != nullptr;
@@ -699,29 +1217,29 @@ static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_co
             for (const auto & entry : json_prompt.at(JSON_MTMD_DATA_KEY)) {
                 files.push_back(base64_decode(entry));
             }
-            return process_mtmd_prompt(mctx, json_prompt.at(JSON_STRING_PROMPT_KEY), files);
+            return process_mtmd_prompt(mctx, json_prompt.at(JSON_STRING_PROMPT_KEY), files, init_opt);
         } else {
             // Not multimodal, but contains a subobject.
             llama_tokens tmp = tokenize_mixed(vocab, json_prompt.at(JSON_STRING_PROMPT_KEY), add_special, parse_special);
             return server_tokens(tmp, false);
         }
    } else {
-       throw std::runtime_error("\"prompt\" elements must be a string, a list of tokens, a JSON object containing a prompt string, or a list of mixed strings & tokens.");
+       throw std::invalid_argument("\"prompt\" elements must be a string, a list of tokens, a JSON object containing a prompt string, or a list of mixed strings & tokens.");
    }
 }
 
-std::vector<server_tokens> tokenize_input_prompts(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special) {
+std::vector<server_tokens> tokenize_input_prompts(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special, const mtmd_helper_init_opt & init_opt) {
     std::vector<server_tokens> result;
     if (json_prompt.is_array() && !json_is_array_and_contains_numbers(json_prompt)) {
         result.reserve(json_prompt.size());
         for (const auto & p : json_prompt) {
-            result.push_back(tokenize_input_subprompt(vocab, mctx, p,add_special, parse_special));
+            result.push_back(tokenize_input_subprompt(vocab, mctx, p, add_special, parse_special, init_opt));
         }
     } else {
-        result.push_back(tokenize_input_subprompt(vocab, mctx, json_prompt, add_special, parse_special));
+        result.push_back(tokenize_input_subprompt(vocab, mctx, json_prompt, add_special, parse_special, init_opt));
     }
     if (result.empty()) {
-        throw std::runtime_error("\"prompt\" must not be empty");
+        throw std::invalid_argument("\"prompt\" must not be empty");
     }
     return result;
 }
@@ -769,18 +1287,74 @@ json oaicompat_completion_params_parse(const json & body) {
     return llama_params;
 }
 
-// media_path always end with '/', see arg.cpp
-static void handle_media(
+// url can be
+// - http(s):// for remote files
+// - file:// for local files (only allowed if media_path is set)
+// - data: for base64 encoded data with uri scheme (e.g. data:image/png;base64,...)
+// - raw base64 encoded data
+static bool ipv4_is_public(const unsigned char * b) {
+    return !(b[0] == 0 || b[0] == 10 || b[0] == 127 || b[0] >= 224 // this network, private, loopback, multicast, reserved
+        || (b[0] == 100 && (b[1] & 0xc0) == 64)                    // 100.64.0.0/10 CGNAT
+        || (b[0] == 169 && b[1] == 254)                            // link-local, cloud metadata
+        || (b[0] == 172 && (b[1] & 0xf0) == 16)                    // 172.16.0.0/12
+        || (b[0] == 192 && b[1] == 168)                            // 192.168.0.0/16
+        || (b[0] == 192 && b[1] == 0 && b[2] == 0)                 // 192.0.0.0/24
+        || (b[0] == 198 && (b[1] & 0xfe) == 18));                  // 198.18.0.0/15
+}
+
+bool server_addr_is_public(const std::string & addr) {
+    unsigned char b[16];
+    if (inet_pton(AF_INET, addr.c_str(), b) == 1) {
+        return ipv4_is_public(b);
+    }
+    if (inet_pton(AF_INET6, addr.c_str(), b) != 1) {
+        return false; // e.g. scoped address "fe80::1%eth0"
+    }
+    static const unsigned char v4_mapped[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
+    static const unsigned char nat64[12]     = {0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0};
+    static const unsigned char zero[12]      = {};
+    if (memcmp(b, v4_mapped, 12) == 0 || memcmp(b, nat64, 12) == 0) {
+        return ipv4_is_public(b + 12);
+    }
+    return memcmp(b, zero, 12) != 0                 // ::/96: unspecified, loopback, IPv4-compatible
+        && (b[0] & 0xfe) != 0xfc                    // fc00::/7 unique local
+        && !(b[0] == 0xfe && (b[1] & 0x80) == 0x80) // fe80::/10 link-local, fec0::/10 site-local
+        && b[0] != 0xff;                            // multicast
+}
+
+std::string server_resolve_public_addr(const std::string & host, bool allow_private) {
+    std::vector<std::string> addrs;
+    httplib::hosted_at(host, addrs);
+    if (addrs.empty()) {
+        throw std::invalid_argument("cannot resolve host: " + host);
+    }
+    for (const auto & addr : addrs) {
+        if (!allow_private && !server_addr_is_public(addr)) {
+            throw std::invalid_argument("host is not a public address: " + host);
+        }
+    }
+    return addrs[0];
+}
+
+void handle_media(
         std::vector<raw_buffer> & out_files,
-        json & media_obj,
-        const std::string & media_path) {
-    std::string url = json_value(media_obj, "url", std::string());
+        const std::string & url,
+        const std::string & media_path,
+        bool allow_private_urls) {
+    if (!media_path.empty()) {
+        // should already be enforced by arg.cpp, but checking just in case
+        GGML_ASSERT(media_path.back() == DIRECTORY_SEPARATOR);
+    }
+
     if (string_starts_with(url, "http")) {
         // download remote image
         // TODO @ngxson : maybe make these params configurable
         common_remote_params params;
         params.max_size = 1024 * 1024 * 10; // 10MB
         params.timeout  = 10; // seconds
+        params.resolve_host = [allow_private_urls](const std::string & host) {
+            return server_resolve_public_addr(host, allow_private_urls);
+        };
         SRV_INF("downloading image from '%s'\n", url.c_str());
         auto res = common_remote_get_content(url, params);
         if (200 <= res.first && res.first < 300) {
@@ -810,28 +1384,113 @@ static void handle_media(
         data.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         out_files.push_back(data);
 
-    } else {
-        // try to decode base64 image
+    } else if (string_starts_with(url, "data:")) {
+        // try to decode base64 image, video, or audio
         std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
         if (parts.size() != 2) {
-            throw std::runtime_error("Invalid url value");
-        } else if (!string_starts_with(parts[0], "data:image/")) {
-            throw std::runtime_error("Invalid url format: " + parts[0]);
+            throw std::invalid_argument("Invalid uri-encoded base64 value");
+        } else if (!string_starts_with(parts[0], "data:image/")
+                && !string_starts_with(parts[0], "data:video/")
+                && !string_starts_with(parts[0], "data:audio/")) {
+            throw std::invalid_argument("Invalid uri format: " + parts[0]);
         } else if (!string_ends_with(parts[0], "base64")) {
-            throw std::runtime_error("url must be base64 encoded");
+            throw std::invalid_argument("uri must be base64 encoded");
         } else {
             auto base64_data = parts[1];
             auto decoded_data = base64_decode(base64_data);
             out_files.push_back(decoded_data);
         }
+
+    } else {
+        // try as raw base64 string
+        auto decoded_data = base64_decode(url);
+        if (decoded_data.empty()) {
+            throw std::runtime_error("Invalid base64 value");
+        }
+        out_files.push_back(decoded_data);
     }
+}
+// load media files from an OAI content array, then replace each media part with a media marker text part
+static void oaicompat_content_load_media(json & content, const server_chat_params & opt, std::vector<raw_buffer> & out_files) {
+    for (auto & p : content) {
+        std::string type = json_value(p, "type", std::string());
+        if (type == "image_url") {
+            if (!opt.allow_image) {
+                throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+            }
+
+            json image_url = json_value(p, "image_url", json::object());
+            std::string url = json_value(image_url, "url", std::string());
+            handle_media(out_files, url, opt.media_path, opt.media_allow_private_urls);
+
+            p["type"] = "media_marker";
+            p["text"] = get_media_marker();
+            p.erase("image_url");
+
+        } else if (type == "input_audio") {
+            if (!opt.allow_audio) {
+                throw std::runtime_error("audio input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+            }
+
+            // note: don't need to validate "format", it's redundant
+            json input_audio = json_value(p, "input_audio", json::object());
+            std::string url  = json_value(input_audio, "data",
+                                    json_value(input_audio, "url", std::string()));
+            handle_media(out_files, url, opt.media_path, opt.media_allow_private_urls);
+
+            p["type"] = "media_marker";
+            p["text"] = get_media_marker();
+            p.erase("input_audio");
+
+        } else if (type == "input_video" || type == "video_url") {
+            if (!opt.allow_video) {
+                throw std::runtime_error("video input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+            }
+
+            // accept the OpenAI-style "video_url" key as an alias of "input_video"
+            json input_video = json_value(p, type, json::object());
+            std::string url  = json_value(input_video, "data",
+                                    json_value(input_video, "url", std::string()));
+            handle_media(out_files, url, opt.media_path, opt.media_allow_private_urls);
+
+            p["type"] = "media_marker";
+            p["text"] = get_media_marker();
+            p.erase("input_video");
+            p.erase("video_url");
+
+        } else if (type != "text" && type != "tool_reference") {
+            throw std::invalid_argument("unsupported content[].type");
+        }
+    }
+}
+
+server_tokens tokenize_oai_content_array(const llama_vocab * vocab, mtmd_context * mctx, const server_chat_params & opt, json content, bool add_special, bool parse_special, const mtmd_helper_init_opt & init_opt) {
+    if (!content.is_array()) {
+        throw std::invalid_argument("\"content\" must be an array");
+    }
+
+    std::vector<raw_buffer> files;
+    oaicompat_content_load_media(content, opt, files);
+
+    std::string prompt;
+    for (const auto & p : content) {
+        prompt += json_value(p, "text", std::string());
+    }
+
+    if (files.empty()) {
+        return server_tokens(common_tokenize(vocab, prompt, add_special, parse_special), false);
+    }
+
+    return process_mtmd_prompt(mctx, prompt, files, init_opt);
 }
 
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
+    const llama_vocab * vocab,
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
-    std::vector<raw_buffer> & out_files)
+    std::vector<raw_buffer> & out_files,
+    common_chat_session & out_session)
 {
     json llama_params;
 
@@ -867,13 +1526,24 @@ json oaicompat_chat_params_parse(
         json response_format      = json_value(body, "response_format", json::object());
         std::string response_type = json_value(response_format, "type", std::string());
         if (response_type == "json_object") {
-            json_schema = json_value(response_format, "schema", json::object());
+            if (response_format.contains("schema") || json_schema.empty()) {
+                json_schema = json_value(response_format, "schema", json::object());
+            }
         } else if (response_type == "json_schema") {
-            auto schema_wrapper = json_value(response_format, "json_schema", json::object());
-            json_schema = json_value(schema_wrapper, "schema", json::object());
+            if (response_format.contains("json_schema")) {
+                auto schema_wrapper = json_value(response_format, "json_schema", json::object());
+                json_schema = json_value(schema_wrapper, "schema", json::object());
+            } else {
+                json_schema = json_value(response_format, "schema", json::object());
+            }
         } else if (!response_type.empty() && response_type != "text") {
-            throw std::invalid_argument("response_format type must be one of \"text\" or \"json_object\", but got: " + response_type);
+            throw std::invalid_argument("response_format type must be one of \"text\", \"json_object\" or \"json_schema\", but got: " + response_type);
         }
+    }
+
+    // an absent or empty schema means any object
+    if (json_schema.is_object() && json_schema.empty()) {
+        json_schema["type"] = "object";
     }
 
     // get input files
@@ -906,68 +1576,49 @@ json oaicompat_chat_params_parse(
             throw std::invalid_argument("Expected 'content' to be a string or an array");
         }
 
-        for (auto & p : content) {
-            std::string type      = json_value(p, "type", std::string());
-            if (type == "image_url") {
-                if (!opt.allow_image) {
-                    throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
-                }
-
-                json image_url = json_value(p, "image_url", json::object());
-                handle_media(out_files, image_url, opt.media_path);
-
-                // replace this chunk with a marker
-                p["type"] = "text";
-                p["text"] = mtmd_default_marker();
-                p.erase("image_url");
-
-            } else if (type == "input_audio") {
-                if (!opt.allow_audio) {
-                    throw std::runtime_error("audio input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
-                }
-
-                json input_audio   = json_value(p, "input_audio", json::object());
-                std::string data   = json_value(input_audio, "data", std::string());
-                std::string format = json_value(input_audio, "format", std::string());
-                // while we also support flac, we don't allow it here so we matches the OAI spec
-                if (format != "wav" && format != "mp3") {
-                    throw std::invalid_argument("input_audio.format must be either 'wav' or 'mp3'");
-                }
-                auto decoded_data = base64_decode(data); // expected to be base64 encoded
-                out_files.push_back(decoded_data);
-
-                // TODO: add audio_url support by reusing handle_media()
-
-                // replace this chunk with a marker
-                p["type"] = "text";
-                p["text"] = mtmd_default_marker();
-                p.erase("input_audio");
-
-            } else if (type != "text") {
-                throw std::invalid_argument("unsupported content[].type");
-            }
-        }
+        oaicompat_content_load_media(content, opt, out_files);
     }
 
+    auto caps = common_chat_templates_get_caps(opt.tmpls.get());
+
     common_chat_templates_inputs inputs;
-    inputs.messages              = common_chat_msgs_parse_oaicompat(messages);
-    inputs.tools                 = common_chat_tools_parse_oaicompat(tools);
-    inputs.tool_choice           = common_chat_tool_choice_parse_oaicompat(tool_choice);
-    inputs.json_schema           = json_schema.is_null() ? "" : json_schema.dump();
-    inputs.grammar               = grammar;
-    inputs.use_jinja             = opt.use_jinja;
-    inputs.parallel_tool_calls   = json_value(body, "parallel_tool_calls", false);
-    inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
-    inputs.reasoning_format      = opt.reasoning_format;
+    inputs.messages               = common_chat_msgs_parse_oaicompat(messages);
+    inputs.tools                  = common_chat_tools_parse_oaicompat(tools);
+    inputs.tool_choice            = common_chat_tool_choice_parse_oaicompat(tool_choice);
+    inputs.json_schema            = json_schema.is_null() ? "" : json_schema.dump();
+    inputs.grammar                = grammar;
+    inputs.use_jinja              = opt.use_jinja;
+    inputs.parallel_tool_calls    = json_value(body, "parallel_tool_calls", caps.at("supports_parallel_tool_calls").get<bool>());
+    inputs.add_generation_prompt  = json_value(body, "add_generation_prompt", true);
+    inputs.continue_final_message = body.contains("continue_final_message") ?
+        common_chat_continuation_parse(body.at("continue_final_message")) :
+        COMMON_CHAT_CONTINUATION_NONE;
+    if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_NONE && opt.prefill_assistant
+        && !inputs.messages.empty() && inputs.messages.back().role == "assistant") {
+        if (inputs.messages.size() >= 2 && inputs.messages[inputs.messages.size() - 2].role == "assistant") {
+            throw std::invalid_argument("Cannot have 2 or more assistant messages at the end of the list.");
+        }
+        inputs.continue_final_message = COMMON_CHAT_CONTINUATION_AUTO;
+        inputs.add_generation_prompt  = false;
+    }
+    if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE && inputs.add_generation_prompt) {
+        throw std::invalid_argument("Cannot set both add_generation_prompt and continue_final_message to true.");
+    }
+    if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE
+        && !inputs.messages.empty()
+        && inputs.messages.back().role == "assistant"
+        && !inputs.messages.back().tool_calls.empty()) {
+        throw std::invalid_argument("Cannot continue an assistant message that contains tool calls.");
+    }
+    inputs.reasoning_format = opt.reasoning_format;
     if (body.contains("reasoning_format")) {
         inputs.reasoning_format = common_reasoning_format_from_name(body.at("reasoning_format").get<std::string>());
     }
-    inputs.enable_thinking       = opt.enable_thinking;
+    inputs.enable_thinking = opt.enable_thinking;
     if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
         if (body.contains("grammar")) {
             throw std::invalid_argument("Cannot use custom grammar constraints with tools.");
         }
-        llama_params["parse_tool_calls"] = true;
     }
 
     // merge the template args provided from command line with the args provided in the user request
@@ -987,62 +1638,46 @@ json oaicompat_chat_params_parse(
         throw std::invalid_argument("invalid type for \"enable_thinking\" (expected boolean, got string)");
     }
 
-    // if the assistant message appears at the end of list, we do not add end-of-turn token
-    // for ex. this can be useful to modify the reasoning process in reasoning models
-    bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant" && opt.prefill_assistant;
-    common_chat_msg last_message;
-    if (prefill_assistant_message) {
-        last_message = inputs.messages.back();
-        inputs.messages.pop_back();
-
-        /* sanity check, max one assistant message at the end of the list */
-        if (!inputs.messages.empty() && inputs.messages.back().role == "assistant"){
-            throw std::invalid_argument("Cannot have 2 or more assistant messages at the end of the list.");
+    // Parse the OAI "reasoning_effort" field; "none" disables reasoning.
+    if (body.contains("reasoning_effort")) {
+        auto reasoning_effort = json_value(body, "reasoning_effort", std::string(""));
+        if (reasoning_effort == "none") {
+            inputs.enable_thinking = false;
+            inputs.chat_template_kwargs.erase("reasoning_effort");
+        } else if (!reasoning_effort.empty()) {
+            const auto rejected = caps.at("reasoning_effort_rejected").get<std::vector<std::string>>();
+            if (std::find(rejected.begin(), rejected.end(), reasoning_effort) != rejected.end()) {
+                const auto levels = caps.at("reasoning_effort_levels").get<std::vector<std::string>>();
+                throw std::invalid_argument("reasoning_effort \"" + reasoning_effort + "\" is not supported by the chat template, supported levels: " + string_join(levels, ", "));
+            }
+            inputs.chat_template_kwargs["reasoning_effort"] = json(reasoning_effort).dump();
         }
-
-        /* TODO: test this properly */
-        inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
-
-        if ( inputs.enable_thinking ) {
-            throw std::invalid_argument("Assistant response prefill is incompatible with enable_thinking.");
-        }
-
-        inputs.add_generation_prompt = true;
     }
+
+    inputs.force_pure_content = opt.force_pure_content;
 
     // Apply chat template to the list of messages
-    auto chat_params = common_chat_templates_apply(opt.tmpls.get(), inputs);
+    common_chat_session_params session_params;
+    session_params.echo = json_value(body, "echo", false);
+    out_session = common_chat_session(opt.tmpls.get(), vocab, inputs, session_params);
 
-    /* Append assistant prefilled message */
-    if (prefill_assistant_message) {
-        if (!last_message.content_parts.empty()) {
-            for (auto & p : last_message.content_parts) {
-                chat_params.prompt += p.text;
-            }
-        } else {
-            chat_params.prompt += last_message.content;
+    llama_params["prompt"] = out_session.prompt().str();
+
+    // Reasoning budget: pass parameters through to sampling layer
+    {
+        int reasoning_budget = json_value(body, "reasoning_budget_tokens",
+                               json_value(body, "thinking_budget_tokens", -1));
+        if (reasoning_budget == -1) {
+            reasoning_budget = opt.reasoning_budget;
         }
-    }
 
-    llama_params["chat_format"]      = static_cast<int>(chat_params.format);
-    llama_params["prompt"]           = chat_params.prompt;
-    if (!chat_params.grammar.empty()) {
-        llama_params["grammar"] = chat_params.grammar;
-    }
-    llama_params["grammar_lazy"]     = chat_params.grammar_lazy;
-    auto grammar_triggers = json::array();
-    for (const auto & trigger : chat_params.grammar_triggers) {
-        server_grammar_trigger ct(trigger);
-        grammar_triggers.push_back(ct.to_json());
-    }
-    llama_params["grammar_triggers"] = grammar_triggers;
-    llama_params["preserved_tokens"] = chat_params.preserved_tokens;
-    llama_params["thinking_forced_open"]     = chat_params.thinking_forced_open;
-    for (const auto & stop : chat_params.additional_stops) {
-        llama_params["stop"].push_back(stop);
-    }
-    if (!chat_params.parser.empty()) {
-        llama_params["chat_parser"] = chat_params.parser;
+        if (!out_session.thinking_end_tags().empty()) {
+            llama_params["reasoning_budget_tokens"] = reasoning_budget;
+            llama_params["reasoning_budget_start_tag"] = out_session.thinking_start_tag();
+            llama_params["reasoning_budget_end_tags"] = out_session.thinking_end_tags();
+            llama_params["reasoning_budget_message"] = json_value(body, "reasoning_budget_message", opt.reasoning_budget_message);
+            llama_params["reasoning_control"] = json_value(body, "reasoning_control", false);
+        }
     }
 
     // Handle "logprobs" field
@@ -1066,500 +1701,16 @@ json oaicompat_chat_params_parse(
         }
     }
 
+    // the session owns these, the server applies them with server_task::apply_chat_session()
+    for (const char * key : { "grammar_lazy", "grammar_triggers", "preserved_tokens" }) {
+        llama_params.erase(key);
+    }
+    if (!out_session.grammar().empty()) {
+        llama_params.erase("grammar");
+        llama_params.erase("json_schema");
+    }
+
     return llama_params;
-}
-
-json convert_responses_to_chatcmpl(const json & response_body) {
-    if (!response_body.contains("input")) {
-        throw std::invalid_argument("'input' is required");
-    }
-    if (!json_value(response_body, "previous_response_id", std::string{}).empty()) {
-        throw std::invalid_argument("llama.cpp does not support 'previous_response_id'.");
-    }
-
-    const json input_value = response_body.at("input");
-    json chatcmpl_body = response_body;
-    chatcmpl_body.erase("input");
-    std::vector<json> chatcmpl_messages;
-
-    if (response_body.contains("instructions")) {
-        chatcmpl_messages.push_back({
-            {"role",    "system"},
-            {"content", json_value(response_body, "instructions", std::string())},
-        });
-        chatcmpl_body.erase("instructions");
-    }
-
-    if (input_value.is_string()) {
-        // #responses_create-input-text_input
-        chatcmpl_messages.push_back({
-            {"role",    "user"},
-            {"content", input_value},
-        });
-    } else if (input_value.is_array()) {
-        // #responses_create-input-input_item_list
-
-        static auto exists_and_is_array = [](const json & j, const char * key) -> bool {
-            return j.contains(key) && j.at(key).is_array();
-        };
-        static auto exists_and_is_string = [](const json & j, const char * key) -> bool {
-            return j.contains(key) && j.at(key).is_string();
-        };
-
-        for (json item : input_value) {
-            if (exists_and_is_string(item, "content")) {
-                // #responses_create-input-input_item_list-input_message-content-text_input
-                // Only "Input message" contains item["content"]::string
-                // After converting item["content"]::string to item["content"]::array,
-                // we can treat "Input message" as sum of "Item-Input message" and "Item-Output message"
-                item["content"] = json::array({
-                    json {
-                        {"text", item.at("content")},
-                        {"type", "input_text"}
-                    }
-                });
-            }
-
-            if (exists_and_is_array(item, "content") &&
-                exists_and_is_string(item, "role") &&
-                (item.at("role") == "user" ||
-                    item.at("role") == "system" ||
-                    item.at("role") == "developer")
-            ) {
-                // #responses_create-input-input_item_list-item-input_message
-                std::vector<json> chatcmpl_content;
-
-                for (const json & input_item : item.at("content")) {
-                    const std::string type = json_value(input_item, "type", std::string());
-
-                    if (type == "input_text") {
-                        if (!input_item.contains("text")) {
-                            throw std::invalid_argument("'Input text' requires 'text'");
-                        }
-                        chatcmpl_content.push_back({
-                            {"text", input_item.at("text")},
-                            {"type", "text"},
-                        });
-                    } else if (type == "input_image") {
-                        // While `detail` is marked as required,
-                        // it has default value("auto") and can be omitted.
-
-                        if (!input_item.contains("image_url")) {
-                            throw std::invalid_argument("'image_url' is required");
-                        }
-                        chatcmpl_content.push_back({
-                            {"image_url", json {
-                                {"url", input_item.at("image_url")}
-                            }},
-                            {"type", "image_url"},
-                        });
-                    } else if (type == "input_file") {
-                        throw std::invalid_argument("'input_file' is not supported by llamacpp at this moment");
-                        // if (input_item.contains("file_url")) {
-                        //     // chat completion API does not support file_url
-                        //     throw std::invalid_argument("'file_url' is not supported");
-                        // }
-                        // if (!input_item.contains("file_data") || !input_item.contains("filename")) {
-                        //     throw std::invalid_argument("Both 'file_data' and 'filename' are required");
-                        // }
-                        // chatcmpl_content.push_back({
-                        //     {"file", json {
-                        //         {"file_data", input_item.at("file_data")},
-                        //         {"filename",  input_item.at("filename")},
-                        //     }},
-                        //     {"type", "file"},
-                        // });
-                    } else {
-                        throw std::invalid_argument("'type' must be one of 'input_text', 'input_image', or 'input_file'");
-                    }
-                }
-
-                if (item.contains("type")) {
-                    item.erase("type");
-                }
-                if (item.contains("status")) {
-                    item.erase("status");
-                }
-                item["content"] = chatcmpl_content;
-
-                chatcmpl_messages.push_back(item);
-            } else if (exists_and_is_array(item, "content") &&
-                exists_and_is_string(item, "role") &&
-                item.at("role") == "assistant" &&
-                // exists_and_is_string(item, "status") &&
-                // (item.at("status") == "in_progress" ||
-                //     item.at("status") == "completed" ||
-                //     item.at("status") == "incomplete") &&
-                // item["status"] not sent by codex-cli
-                exists_and_is_string(item, "type") &&
-                item.at("type") == "message"
-            ) {
-                // #responses_create-input-input_item_list-item-output_message
-                std::vector<json> chatcmpl_content;
-
-                for (const auto & output_text : item.at("content")) {
-                    const std::string type = json_value(output_text, "type", std::string());
-                    if (type != "output_text") {
-                        throw std::invalid_argument("'type' must be 'output_text'");
-                    }
-                    if (!exists_and_is_string(output_text, "text")) {
-                        throw std::invalid_argument("'Output text' requires 'text'");
-                    }
-                    // Ignore annotations and logprobs for now
-                    chatcmpl_content.push_back({
-                        {"text", output_text.at("text")},
-                        {"type", "text"},
-                    });
-                }
-
-                item.erase("status");
-                item.erase("type");
-                item["content"] = chatcmpl_content;
-                chatcmpl_messages.push_back(item);
-            } else if (exists_and_is_string(item, "arguments") &&
-                exists_and_is_string(item, "call_id") &&
-                exists_and_is_string(item, "name") &&
-                exists_and_is_string(item, "type") &&
-                item.at("type") == "function_call"
-            ) {
-                // #responses_create-input-input_item_list-item-function_tool_call
-                json msg = json {
-                    {"role", "assistant"},
-                    {"tool_calls", json::array({ json {
-                        {"function", json {
-                            {"arguments", item.at("arguments")},
-                            {"name",      item.at("name")},
-                        }},
-                        {"id",   item.at("call_id")},
-                        {"type", "function"},
-                    }})},
-                };
-
-                if (!chatcmpl_messages.empty() && chatcmpl_messages.back().contains("reasoning_content")) {
-                    // Move reasoning content from dummy message to tool call message
-                    msg["reasoning_content"] = chatcmpl_messages.back().at("reasoning_content");
-                    chatcmpl_messages.pop_back();
-                }
-                chatcmpl_messages.push_back(msg);
-            } else if (exists_and_is_string(item, "call_id") &&
-                (exists_and_is_string(item, "output") || exists_and_is_array(item, "output")) &&
-                exists_and_is_string(item, "type") &&
-                item.at("type") == "function_call_output"
-            ) {
-                // #responses_create-input-input_item_list-item-function_tool_call_output
-                if (item.at("output").is_string()) {
-                    chatcmpl_messages.push_back(json {
-                        {"content",      item.at("output")},
-                        {"role",         "tool"},
-                        {"tool_call_id", item.at("call_id")},
-                    });
-                } else {
-                    json chatcmpl_outputs = item.at("output");
-                    for (json & chatcmpl_output : chatcmpl_outputs) {
-                        if (!chatcmpl_output.contains("type") || chatcmpl_output.at("type") != "input_text") {
-                            throw std::invalid_argument("Output of tool call should be 'Input text'");
-                        }
-                        chatcmpl_output["type"] = "text";
-                    }
-                    chatcmpl_messages.push_back(json {
-                        {"content",      chatcmpl_outputs},
-                        {"role",         "tool"},
-                        {"tool_call_id", item.at("call_id")},
-                    });
-                }
-            } else if (// exists_and_is_string(item, "id") &&
-                // item["id"] not sent by codex-cli
-                exists_and_is_array(item, "summary") &&
-                exists_and_is_string(item, "type") &&
-                item.at("type") == "reasoning") {
-                // #responses_create-input-input_item_list-item-reasoning
-
-                if (!exists_and_is_array(item, "content")) {
-                    throw std::invalid_argument("item['content'] is not an array");
-                }
-                if (item.at("content").empty()) {
-                    throw std::invalid_argument("item['content'] is empty");
-                }
-                if (!exists_and_is_string(item.at("content")[0], "text")) {
-                    throw std::invalid_argument("item['content']['text'] is not a string");
-                }
-
-                // Pack reasoning content in dummy message
-                chatcmpl_messages.push_back(json {
-                    {"role", "assistant"},
-                    {"content", json::array()},
-                    {"reasoning_content", item.at("content")[0].at("text")},
-                });
-            } else {
-                throw std::invalid_argument("Cannot determine type of 'item'");
-            }
-        }
-    } else {
-        throw std::invalid_argument("'input' must be a string or array of objects");
-    }
-
-    // Remove unused dummy message which contains
-    // reasoning content not followed by tool call
-    chatcmpl_messages.erase(std::remove_if(
-        chatcmpl_messages.begin(),
-        chatcmpl_messages.end(),
-        [](const json & x){ return x.contains("role") &&
-            x.at("role") == "assistant" &&
-            x.contains("content") &&
-            x.at("content") == json::array() &&
-            x.contains("reasoning_content");
-        }),
-        chatcmpl_messages.end()
-    );
-
-    chatcmpl_body["messages"] = chatcmpl_messages;
-
-    if (response_body.contains("tools")) {
-        if (!response_body.at("tools").is_array()) {
-            throw std::invalid_argument("'tools' must be an array of objects");
-        }
-        std::vector<json> chatcmpl_tools;
-        for (json resp_tool : response_body.at("tools")) {
-            json chatcmpl_tool;
-
-            if (json_value(resp_tool, "type", std::string()) != "function") {
-                throw std::invalid_argument("'type' of tool must be 'function'");
-            }
-            resp_tool.erase("type");
-            chatcmpl_tool["type"] = "function";
-
-            if (!resp_tool.contains("strict")) {
-                resp_tool["strict"] = true;
-            }
-            chatcmpl_tool["function"] = resp_tool;
-            chatcmpl_tools.push_back(chatcmpl_tool);
-        }
-        chatcmpl_body.erase("tools");
-        chatcmpl_body["tools"] = chatcmpl_tools;
-    }
-
-    if (response_body.contains("max_output_tokens")) {
-        chatcmpl_body.erase("max_output_tokens");
-        chatcmpl_body["max_tokens"] = response_body["max_output_tokens"];
-    }
-
-    return chatcmpl_body;
-}
-
-json convert_anthropic_to_oai(const json & body) {
-    json oai_body;
-
-    // Convert system prompt
-    json oai_messages = json::array();
-    auto system_param = json_value(body, "system", json());
-    if (!system_param.is_null()) {
-        std::string system_content;
-
-        if (system_param.is_string()) {
-            system_content = system_param.get<std::string>();
-        } else if (system_param.is_array()) {
-            for (const auto & block : system_param) {
-                if (json_value(block, "type", std::string()) == "text") {
-                    system_content += json_value(block, "text", std::string());
-                }
-            }
-        }
-
-        oai_messages.push_back({
-            {"role", "system"},
-            {"content", system_content}
-        });
-    }
-
-    // Convert messages
-    if (!body.contains("messages")) {
-        throw std::runtime_error("'messages' is required");
-    }
-    const json & messages = body.at("messages");
-    if (messages.is_array()) {
-        for (const auto & msg : messages) {
-            std::string role = json_value(msg, "role", std::string());
-
-            if (!msg.contains("content")) {
-                if (role == "assistant") {
-                    continue;
-                }
-                oai_messages.push_back(msg);
-                continue;
-            }
-
-            const json & content = msg.at("content");
-
-            if (content.is_string()) {
-                oai_messages.push_back(msg);
-                continue;
-            }
-
-            if (!content.is_array()) {
-                oai_messages.push_back(msg);
-                continue;
-            }
-
-            json tool_calls = json::array();
-            json converted_content = json::array();
-            json tool_results = json::array();
-            bool has_tool_calls = false;
-
-            for (const auto & block : content) {
-                std::string type = json_value(block, "type", std::string());
-
-                if (type == "text") {
-                    converted_content.push_back(block);
-                } else if (type == "image") {
-                    json source = json_value(block, "source", json::object());
-                    std::string source_type = json_value(source, "type", std::string());
-
-                    if (source_type == "base64") {
-                        std::string media_type = json_value(source, "media_type", std::string("image/jpeg"));
-                        std::string data = json_value(source, "data", std::string());
-                        std::ostringstream ss;
-                        ss << "data:" << media_type << ";base64," << data;
-
-                        converted_content.push_back({
-                            {"type", "image_url"},
-                            {"image_url", {
-                                {"url", ss.str()}
-                            }}
-                        });
-                    } else if (source_type == "url") {
-                        std::string url = json_value(source, "url", std::string());
-                        converted_content.push_back({
-                            {"type", "image_url"},
-                            {"image_url", {
-                                {"url", url}
-                            }}
-                        });
-                    }
-                } else if (type == "tool_use") {
-                    tool_calls.push_back({
-                        {"id", json_value(block, "id", std::string())},
-                        {"type", "function"},
-                        {"function", {
-                            {"name", json_value(block, "name", std::string())},
-                            {"arguments", json_value(block, "input", json::object()).dump()}
-                        }}
-                    });
-                    has_tool_calls = true;
-                } else if (type == "tool_result") {
-                    std::string tool_use_id = json_value(block, "tool_use_id", std::string());
-
-                    auto result_content = json_value(block, "content", json());
-                    std::string result_text;
-                    if (result_content.is_string()) {
-                        result_text = result_content.get<std::string>();
-                    } else if (result_content.is_array()) {
-                        for (const auto & c : result_content) {
-                            if (json_value(c, "type", std::string()) == "text") {
-                                result_text += json_value(c, "text", std::string());
-                            }
-                        }
-                    }
-
-                    tool_results.push_back({
-                        {"role", "tool"},
-                        {"tool_call_id", tool_use_id},
-                        {"content", result_text}
-                    });
-                }
-            }
-
-            if (!converted_content.empty() || has_tool_calls) {
-                json new_msg = {{"role", role}};
-                if (!converted_content.empty()) {
-                    new_msg["content"] = converted_content;
-                } else if (has_tool_calls) {
-                    new_msg["content"] = "";
-                }
-                if (!tool_calls.empty()) {
-                    new_msg["tool_calls"] = tool_calls;
-                }
-                oai_messages.push_back(new_msg);
-            }
-
-            for (const auto & tool_msg : tool_results) {
-                oai_messages.push_back(tool_msg);
-            }
-        }
-    }
-
-    oai_body["messages"] = oai_messages;
-
-    // Convert tools
-    if (body.contains("tools")) {
-        const json & tools = body.at("tools");
-        if (tools.is_array()) {
-            json oai_tools = json::array();
-            for (const auto & tool : tools) {
-                oai_tools.push_back({
-                    {"type", "function"},
-                    {"function", {
-                        {"name", json_value(tool, "name", std::string())},
-                        {"description", json_value(tool, "description", std::string())},
-                        {"parameters", tool.contains("input_schema") ? tool.at("input_schema") : json::object()}
-                    }}
-                });
-            }
-            oai_body["tools"] = oai_tools;
-        }
-    }
-
-    // Convert tool_choice
-    if (body.contains("tool_choice")) {
-        const json & tc = body.at("tool_choice");
-        if (tc.is_object()) {
-            std::string type = json_value(tc, "type", std::string());
-            if (type == "auto") {
-                oai_body["tool_choice"] = "auto";
-            } else if (type == "any" || type == "tool") {
-                oai_body["tool_choice"] = "required";
-            }
-        }
-    }
-
-    // Convert stop_sequences to stop
-    if (body.contains("stop_sequences")) {
-        oai_body["stop"] = body.at("stop_sequences");
-    }
-
-    // Handle max_tokens (required in Anthropic, but we're permissive)
-    if (body.contains("max_tokens")) {
-        oai_body["max_tokens"] = body.at("max_tokens");
-    } else {
-        oai_body["max_tokens"] = 4096;
-    }
-
-    // Pass through common params
-    for (const auto & key : {"temperature", "top_p", "top_k", "stream"}) {
-        if (body.contains(key)) {
-            oai_body[key] = body.at(key);
-        }
-    }
-
-    // Handle Anthropic-specific thinking param
-    if (body.contains("thinking")) {
-        json thinking = json_value(body, "thinking", json::object());
-        std::string thinking_type = json_value(thinking, "type", std::string());
-        if (thinking_type == "enabled") {
-            int budget_tokens = json_value(thinking, "budget_tokens", 10000);
-            oai_body["thinking_budget_tokens"] = budget_tokens;
-        }
-    }
-
-    // Handle Anthropic-specific metadata param
-    if (body.contains("metadata")) {
-        json metadata = json_value(body, "metadata", json::object());
-        std::string user_id = json_value(metadata, "user_id", std::string());
-        if (!user_id.empty()) {
-            oai_body["__metadata_user_id"] = user_id;
-        }
-    }
-
-    return oai_body;
 }
 
 json format_embeddings_response_oaicompat(
@@ -1659,7 +1810,7 @@ json format_response_rerank(
 // other utils
 //
 
-std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx) {
+std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx, size_t n_top) {
     std::vector<llama_token_data> cur;
 
     const auto * logits = llama_get_logits_ith(ctx, idx);
@@ -1678,28 +1829,41 @@ std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int i
         }
     }
 
-    // sort tokens by logits
-    std::sort(cur.begin(), cur.end(), [](const llama_token_data & a, const llama_token_data & b) {
-        return a.logit > b.logit;
-    });
+    // sort tokens by logits (partial: only the leading `n_top` need ordering)
+    if (n_top > cur.size()) {
+        n_top = cur.size();
+    }
+    if (n_top > 0) {
+        std::partial_sort(cur.begin(), cur.begin() + n_top, cur.end(),
+            [](const llama_token_data & a, const llama_token_data & b) {
+                return a.logit > b.logit;
+            });
+    }
 
     // apply softmax
-    float max_l = cur[0].logit;
+    float max_l = -std::numeric_limits<float>::infinity();
+    if (n_top > 0) {
+        max_l = cur[0].logit; // partial_sort guarantees the absolute maximum is at index 0
+    } else {
+        for (const auto & t : cur) {
+            max_l = std::max(max_l, t.logit);
+        }
+    }
     float cum_sum = 0.0f;
-    for (size_t i = 0; i < cur.size(); ++i) {
-        float p = expf(cur[i].logit - max_l);
-        cur[i].p = p;
+    for (auto & t : cur) {
+        float p = expf(t.logit - max_l);
+        t.p = p;
         cum_sum += p;
     }
-    for (size_t i = 0; i < cur.size(); ++i) {
-        cur[i].p /= cum_sum;
+    for (auto & t : cur) {
+        t.p /= cum_sum;
     }
 
     return cur;
 }
 
 std::string safe_json_to_str(const json & data) {
-    return data.dump(-1, ' ', false, json::error_handler_t::replace);
+    return data.dump_safe();
 }
 
 // TODO: reuse llama_detokenize
@@ -1935,26 +2099,76 @@ llama_tokens format_prompt_infill(
     return embd_inp;
 }
 
+std::string format_rerank_template(
+        const std::string & tmpl,
+        const std::string & query,
+        const std::string & doc) {
+    std::string prompt;
+    prompt.reserve(tmpl.size());
+    for (size_t pos = 0; pos < tmpl.size();) {
+        if (tmpl.compare(pos, 7, "{query}") == 0) {
+            prompt += query;
+            pos += 7;
+        } else if (tmpl.compare(pos, 10, "{document}") == 0) {
+            prompt += doc;
+            pos += 10;
+        } else {
+            prompt += tmpl[pos++];
+        }
+    }
+    return prompt;
+}
+
 server_tokens format_prompt_rerank(
         const struct llama_model * model,
         const struct llama_vocab * vocab,
         mtmd_context * mctx,
         const std::string & query,
-        const std::string & doc) {
+        const std::string & doc,
+        const std::vector<raw_buffer> & query_files,
+        const std::vector<raw_buffer> & doc_files,
+        const mtmd_helper_init_opt & init_opt) {
     server_tokens result = {};
+
+    // media must be spliced through the mtmd pipeline
+    if ((!query_files.empty() || !doc_files.empty()) && mctx == nullptr) {
+        throw std::invalid_argument("multimodal rerank input requires --mmproj");
+    }
 
     const char * rerank_prompt = llama_model_chat_template(model, "rerank");
 
     if (rerank_prompt != nullptr) {
-        std::string prompt = rerank_prompt;
-        string_replace_all(prompt, "{query}"   , query);
-        string_replace_all(prompt, "{document}", doc  );
-        server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true);
-        result.push_back(tokens);
+        // multimodal: append one media marker per image (arrays already flattened by caller)
+        std::string q = query;
+        for (size_t i = 0; i < query_files.size(); i++) {
+            q += get_media_marker();
+        }
+        std::string d = doc;
+        for (size_t i = 0; i < doc_files.size(); i++) {
+            d += get_media_marker();
+        }
+
+        std::string prompt = format_rerank_template(rerank_prompt, q, d);
+
+        if (query_files.empty() && doc_files.empty()) {
+            server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true, init_opt);
+            result.push_back(tokens);
+        } else {
+            // process_mtmd_prompt returns a complete mtmd server_tokens; return it directly
+            // (push_back into a non-mtmd result would hit the NULL placeholder tokens)
+            std::vector<raw_buffer> files;
+            files.insert(files.end(), query_files.begin(), query_files.end());
+            files.insert(files.end(), doc_files.begin(),   doc_files.end());
+            return process_mtmd_prompt(mctx, prompt, files, init_opt);
+        }
     } else {
+        if (!query_files.empty() || !doc_files.empty()) {
+            throw std::invalid_argument("multimodal rerank input requires a model with a rerank chat template");
+        }
+
         // Get EOS token - use SEP token as fallback if EOS is not available
-        server_tokens query_tokens = tokenize_input_subprompt(vocab, mctx, query, false, false);
-        server_tokens doc_tokens   = tokenize_input_subprompt(vocab, mctx, doc,   false, false);
+        server_tokens query_tokens = tokenize_input_subprompt(vocab, mctx, query, false, false, init_opt);
+        server_tokens doc_tokens   = tokenize_input_subprompt(vocab, mctx, doc,   false, false, init_opt);
         llama_token eos_token = llama_vocab_eos(vocab);
         if (eos_token == LLAMA_TOKEN_NULL) {
             eos_token = llama_vocab_sep(vocab);
@@ -1977,4 +2191,237 @@ server_tokens format_prompt_rerank(
     }
 
     return result;
+}
+
+//
+// server_subproc
+//
+
+FILE * server_reserve_stdout() {
+    fflush(stdout);
+    // the reserved stream is not inherited, grandchildren get stdout and stderr of their own
+#ifdef _WIN32
+    int fd = _dup(_fileno(stdout));
+    GGML_ASSERT(fd >= 0);
+    SetHandleInformation((HANDLE) _get_osfhandle(fd), HANDLE_FLAG_INHERIT, 0);
+    _dup2(_fileno(stderr), _fileno(stdout));
+    SetStdHandle(STD_OUTPUT_HANDLE, GetStdHandle(STD_ERROR_HANDLE));
+    FILE * f = _fdopen(fd, "w");
+#else
+    int fd = fcntl(fileno(stdout), F_DUPFD_CLOEXEC, 0);
+    GGML_ASSERT(fd >= 0);
+    dup2(fileno(stderr), fileno(stdout));
+    FILE * f = fdopen(fd, "w");
+#endif
+    GGML_ASSERT(f);
+    return f;
+}
+
+bool server_subproc::has_output() {
+    FILE * files[SERVER_SUBPROC_STREAMS] = { sproc.stdout_file(), sproc.stderr_file() };
+    for (int i = 0; i < SERVER_SUBPROC_STREAMS; i++) {
+        if (out_handles[i] >= 0) {
+            continue;
+        }
+        if (!files[i]) {
+            return false;
+        }
+#ifdef _WIN32
+        HANDLE h = (HANDLE) _get_osfhandle(_fileno(files[i]));
+        if (h == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+        out_handles[i] = (intptr_t) h;
+#else
+        int fd = fileno(files[i]);
+        if (fd < 0) {
+            return false;
+        }
+        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+        out_handles[i] = fd;
+#endif
+    }
+    return true;
+}
+
+bool server_subproc::output_closed() const {
+    return out_closed[SERVER_SUBPROC_STDOUT] && out_closed[SERVER_SUBPROC_STDERR];
+}
+
+int server_subproc::read_output(server_subproc_stream stream, char * buf, size_t len) {
+    if (out_closed[stream]) {
+        return -1;
+    }
+    if (!has_output()) {
+        out_closed[stream] = true;
+        return -1;
+    }
+#ifdef _WIN32
+    HANDLE h     = (HANDLE) out_handles[stream];
+    DWORD  avail = 0;
+    if (!PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL)) {
+        out_closed[stream] = true; // pipe broken, child gone
+        return -1;
+    }
+    if (avail == 0) {
+        return 0;
+    }
+    DWORD to_read = avail < (DWORD) len ? avail : (DWORD) len;
+    DWORD got     = 0;
+    if (!ReadFile(h, buf, to_read, &got, NULL) || got == 0) {
+        out_closed[stream] = true;
+        return -1;
+    }
+    return (int) got;
+#else
+    while (true) {
+        ssize_t r = read((int) out_handles[stream], buf, len);
+        if (r > 0) {
+            return (int) r;
+        }
+        if (r < 0 && errno == EINTR) {
+            continue;
+        }
+        if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            return 0;
+        }
+        out_closed[stream] = true; // EOF or error
+        return -1;
+    }
+#endif
+}
+
+server_subproc::waiter::waiter() {
+#ifndef _WIN32
+    int fds[2];
+    GGML_ASSERT(pipe(fds) == 0);
+    for (int fd : fds) {
+        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+    }
+    wake_fd[0] = fds[0];
+    wake_fd[1] = fds[1];
+#endif
+}
+
+server_subproc::waiter::~waiter() {
+#ifndef _WIN32
+    close((int) wake_fd[0]);
+    close((int) wake_fd[1]);
+#endif
+}
+
+void server_subproc::waiter::wake() {
+#ifndef _WIN32
+    char c = 1;
+    (void) !write((int) wake_fd[1], &c, 1);
+#endif
+}
+
+void server_subproc::waiter::wait(const std::vector<server_subproc *> & procs, std::vector<bool> & ready, int64_t timeout_ms) {
+    ready.assign(procs.size(), false);
+#ifdef _WIN32
+    // no waitable wait exists for anonymous pipes, so poll them in 50 ms steps
+    bool any = false;
+    for (size_t i = 0; i < procs.size(); i++) {
+        server_subproc * p = procs[i];
+        ready[i] = !p->has_output();
+        for (int s = 0; s < SERVER_SUBPROC_STREAMS && !ready[i]; s++) {
+            DWORD avail = 0;
+            if (!p->out_closed[s] && (!PeekNamedPipe((HANDLE) p->out_handles[s], NULL, 0, NULL, &avail, NULL) || avail > 0)) {
+                ready[i] = true; // data or broken pipe, read_output() tells which
+            }
+        }
+        any = any || ready[i];
+    }
+    if (!any) {
+        int64_t step = timeout_ms < 0 ? 50 : std::min<int64_t>(timeout_ms, 50);
+        std::this_thread::sleep_for(std::chrono::milliseconds(step));
+    }
+#else
+    std::vector<pollfd> pfds;
+    pfds.reserve(procs.size() * SERVER_SUBPROC_STREAMS + 1);
+    pfds.push_back({ (int) wake_fd[0], POLLIN, 0 });
+    for (auto * p : procs) {
+        const bool open = p->has_output();
+        for (int s = 0; s < SERVER_SUBPROC_STREAMS; s++) {
+            pfds.push_back({ open && !p->out_closed[s] ? (int) p->out_handles[s] : -1, POLLIN, 0 }); // poll() skips negative fds
+        }
+    }
+    int timeout = timeout_ms < 0 ? -1 : (int) std::min<int64_t>(timeout_ms, std::numeric_limits<int>::max());
+    int r = poll(pfds.data(), pfds.size(), timeout);
+    if (r < 0 && errno != EINTR) {
+        LOG_ERR("%s: poll() failed: %s\n", __func__, strerror(errno));
+    }
+    if (pfds[0].revents) {
+        char buf[64];
+        while (read((int) wake_fd[0], buf, sizeof(buf)) > 0) {}
+    }
+    for (size_t i = 0; i < procs.size(); i++) {
+        ready[i] = !procs[i]->has_output();
+        for (int s = 0; s < SERVER_SUBPROC_STREAMS; s++) {
+            ready[i] = ready[i] || pfds[1 + i * SERVER_SUBPROC_STREAMS + s].revents != 0;
+        }
+    }
+#endif
+}
+
+//
+// server_role
+//
+
+server_role::server_role() {
+    if (is_managed_by_router()) {
+        cmd_out = server_reserve_stdout();
+    }
+}
+
+server_role::~server_role() {
+    if (cmd_out) {
+        fclose(cmd_out);
+    }
+}
+
+bool server_role::is_managed_by_router() {
+    return std::getenv(SERVER_ENV_ROUTER_PORT) != nullptr;
+}
+
+server_role_type server_role::get_role() {
+    const char * role = std::getenv(SERVER_ENV_CHILD_ROLE);
+    return server_role_type_from_str(role ? role : "");
+}
+
+std::thread server_role::setup(const std::function<void(int)> & shutdown_handler) {
+    // setup thread for monitoring stdin
+    return std::thread([shutdown_handler]() {
+        // wait for EOF on stdin
+        SRV_INF("%s", "child server monitoring thread started, waiting for EOF on stdin...\n");
+        bool eof = false;
+        while (true) {
+            std::string line;
+            if (!std::getline(std::cin, line)) {
+                // EOF detected, that means the router server is unexpectedly exit or killed
+                eof = true;
+                break;
+            }
+            if (line.find(CMD_ROUTER_TO_CHILD_EXIT) != std::string::npos) {
+                SRV_INF("%s", "exit command received, exiting...\n");
+                shutdown_handler(0);
+                break;
+            }
+        }
+        if (eof) {
+            SRV_INF("%s", "EOF on stdin detected, forcing shutdown...\n");
+            exit(1);
+        }
+    });
+}
+
+void server_role::notify_to_router(const std::string & state, const json & payload) {
+    json data = {
+        {"state", state},
+        {"payload", payload},
+    };
+    std::lock_guard<std::mutex> lk(mtx_stdout);
+    fprintf(cmd_out, "%s%s\n", CMD_CHILD_TO_ROUTER_STATE, safe_json_to_str(data).c_str());
+    fflush(cmd_out);
 }

@@ -10,6 +10,8 @@
 
 build*/
 
+ui/apps/chat/node_modules/
+
 models/*
 
 /llama-cli

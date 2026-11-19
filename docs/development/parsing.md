@@ -22,18 +22,19 @@ Below is a contrived example demonstrating how to use the PEG parser to parse
 output from a model that emits arguments as JSON.
 
 ```cpp
-auto parser = build_chat_peg_native_parser([&](common_chat_peg_native_builder & p) {
+auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
     // Build a choice of all available tools
     auto tool_choice = p.choice();
-    for (const auto & tool : tools) {
+    for (size_t i = 0; i < tools.size(); i++) {
+        const auto & tool = tools[i];
         const auto & function = tool.at("function");
         std::string name = function.at("name");
-        const auto & schema = function.at("parameters");
+        const auto   schema = common_chat_tool_parameters(function);
 
         auto tool_name = p.json_member("name", "\"" + p.literal(name) + "\"");
-        auto tool_args = p.json_member("arguments", p.schema(p.json(), "tool-" + name + "-schema", schema));
+        auto tool_args = p.json_member("arguments", p.schema(p.json(), "tool-" + std::to_string(i) + "-schema", schema));
 
-        tool_choice |= p.rule("tool-" + name, "{" << tool_name << "," << tool_args << "}");
+        tool_choice |= p.rule("tool-" + std::to_string(i), "{" << tool_name << "," << tool_args << "}");
     }
 
     // Define the tool call structure: <tool_call>[{tool}]</tool_call>
@@ -108,6 +109,7 @@ For a more complete example, see `test_example_native()` in
 - **`rule(name, p, trigger)`** - Creates a named rule and returns a reference
 - **`trigger_rule(name, p)`** - Creates a trigger rule (entry point for lazy grammar generation)
 - **`schema(p, name, schema, raw)`** - Wraps parser with JSON schema metadata for grammar generation
+- **`schema(p, name, doc, node, raw)`** - Same, for a node of a `common_chat_schema_document` built earlier, e.g. one tool parameter
 
 ### AST Control
 
@@ -121,9 +123,6 @@ some exceptions.
 
 ```cpp
 data.grammar = build_grammar([&](const common_grammar_builder & builder) {
-    foreach_function(params.tools, [&](const json & fn) {
-        builder.resolve_refs(fn.at("parameters"));
-    });
     parser.build_grammar(builder, data.grammar_lazy);
 });
 ```
@@ -151,7 +150,8 @@ implementation to generate the grammar instead of the underlying parser.
 
 The `raw` option emits a grammar suitable for a raw string instead of a JSON
 string. In other words, it won't be wrapped in quotes or require escaping
-quotes. It should only be used when `type == "string"`.
+quotes. It only takes effect when the schema may be a string, as reported by
+`common_chat_schema::may_be_string()`, otherwise the JSON grammar is used.
 
 The downside is that it can potentially lead to ambiguous grammars. For
 example, if a user provides the pattern `^.*$`, the following grammar may be
@@ -212,7 +212,7 @@ mapper.from_ast(ctx.ast, result);
 
 ### Native
 
-The `common_chat_peg_native_builder` builds a `native` parser suitable for
+The `common_chat_peg_builder` builds a `native` parser suitable for
 models that emit tool arguments as a direct JSON object.
 
 - **`reasoning(p)`** - Tag node for `reasoning_content`
@@ -225,7 +225,7 @@ models that emit tool arguments as a direct JSON object.
 - **`tool_args(p)`** - Tag the tool arguments
 
 ```cpp
-build_chat_peg_native_parser([&](common_chat_peg_native_parser & p) {
+build_chat_peg_parser([&](common_chat_peg_builder & p) {
     auto get_weather_tool = p.tool(p.sequence({
         p.tool_open(p.literal("{")),
         p.json_member("name", "\"" + p.tool_name(p.literal("get_weather")) + "\""),
@@ -246,7 +246,7 @@ build_chat_peg_native_parser([&](common_chat_peg_native_parser & p) {
 
 ### Constructed
 
-The `common_chat_peg_constructed_builder` builds a `constructed` parser
+The `common_chat_peg_builder` builds a `constructed` parser
 suitable for models that emit tool arguments as separate entities, such as XML
 tags.
 
@@ -264,7 +264,7 @@ tags.
 - **`tool_arg_json_value(p)`** - Tag JSON value for the argument
 
 ```cpp
-build_chat_peg_constructed_parser([&](common_chat_peg_constructed_builder & p) {
+build_chat_peg_parser([&](common_chat_peg_builder & p) {
     auto location_arg = p.tool_arg(
         p.tool_arg_open("<parameter name=\"" + p.tool_arg_name(p.literal("location")) + "\">"),
         p.tool_arg_string_value(p.until("</parameter>")),

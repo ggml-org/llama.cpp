@@ -7,16 +7,20 @@
 #include "../src/unicode.h"
 #include "../src/llama-grammar.h"
 
-#include <nlohmann/json.hpp>
+#include "json.h"
 
 #include <cassert>
 #include <string>
 #include <vector>
 
-using json = nlohmann::ordered_json;
+using json = common_json;
+
+static llama_grammar * build_grammar_with_root(const std::string & grammar_str, const char * grammar_root) {
+    return llama_grammar_init_impl(nullptr, grammar_str.c_str(), grammar_root, false, nullptr, 0, nullptr, 0);
+}
 
 static llama_grammar * build_grammar(const std::string & grammar_str) {
-    return llama_grammar_init_impl(nullptr, grammar_str.c_str(), "root", false, nullptr, 0, nullptr, 0);
+    return build_grammar_with_root(grammar_str, "root");
 }
 
 static bool test_build_grammar_fails(const std::string & grammar_str) {
@@ -189,6 +193,19 @@ static void test_schema(const std::string & test_desc, const std::string & schem
 }
 
 static void test_simple_grammar() {
+    test_grammar(
+        "left factor leading empty suffix",
+        "root ::= \"ab\" | \"abc\" | \"abd\" | \"abe\"",
+        {"ab", "abc", "abd", "abe"}, {"", "a", "abb", "abcc"});
+    test_grammar(
+        "left factor middle empty suffix",
+        "root ::= \"abc\" | \"ab\" | \"abd\" | \"abe\"",
+        {"ab", "abc", "abd", "abe"}, {"", "a", "abb", "abcc"});
+    test_grammar(
+        "left factor recursive references",
+        "root ::= \"ok\" | choice\nchoice ::= a | b | c | d\na ::= \"x\" a\nb ::= \"x\" b\nc ::= \"x\" c\nd ::= \"x\" d",
+        {"ok"}, {"", "x", "xx", "okx"});
+
     test_schema(
         "min 0",
         R"""({
@@ -619,6 +636,19 @@ static void test_special_chars() {
             "🔵🟠abc🟠🔵"
         }
     );
+
+    test_grammar(
+        "skip left factoring inside character classes",
+        "root ::= [ab] \"x\" | [ac] \"x\" | [ad] \"x\" | [ae] \"x\"",
+        {"ax", "bx", "cx", "dx", "ex"}, {"", "a", "fx", "axx"});
+    test_grammar(
+        "skip left factoring inside character ranges",
+        "root ::= [a-b] \"x\" | [a-c] \"x\" | [a-d] \"x\" | [a-e] \"x\"",
+        {"ax", "bx", "cx", "dx", "ex"}, {"", "a", "fx", "axx"});
+    test_grammar(
+        "left factor referenced character alternatives",
+        "root ::= a | b | c | d\na ::= \"p\" [a] \"x\"\nb ::= \"p\" [ab] \"x\"\nc ::= \"p\" [ac] \"x\"\nd ::= \"p\" [ad] \"x\"",
+        {"pax", "pbx", "pcx", "pdx"}, {"", "px", "pex", "paxx"});
 }
 
 static void test_quantifiers() {
@@ -784,6 +814,24 @@ static void test_quantifiers() {
             "0xFF 0x12 0xAB 0x00 0x00 0x00",
         }
     );
+    test_grammar(
+        "segfault",
+        // Grammar
+        R"""(
+            root ::= ( [x]* )*
+        )""",
+        // Passing strings
+        {
+            "",
+            "x",
+            "xx"
+        },
+        // Failing strings
+        {
+            "y",
+            "yy"
+        }
+    );
 }
 
 static void test_failure_missing_root() {
@@ -857,6 +905,48 @@ static void test_failure_left_recursion() {
         empty ::= "blah" | )""";
     assert(test_build_grammar_fails(hardest_str));
 
+    const auto chain = [](int n) {
+        std::string s = "root ::= r0\n";
+        for (int i = 0; i < n; i++) {
+            s += "r" + std::to_string(i) + " ::= r" + std::to_string(i + 1) + "\n";
+        }
+        return s + "r" + std::to_string(n) + " ::= \"a\"\n";
+    };
+    llama_grammar * grammar = build_grammar(chain(100));
+    assert(grammar != nullptr);
+    llama_grammar_free_impl(grammar);
+    assert(test_build_grammar_fails(chain(1000)));
+
+    fprintf(stderr, "  ✅︎ Passed\n");
+}
+
+static void test_failure_missing_root_symbol() {
+    fprintf(stderr, "⚫ Testing missing root symbol:\n");
+
+    const std::string grammar_str = R"""(
+        root ::= "foobar"
+    )""";
+
+    llama_grammar * failure_result = build_grammar_with_root(grammar_str, "nonexistent");
+    assert(failure_result == nullptr);
+
+    fprintf(stderr, "  ✅︎ Passed\n");
+}
+
+static void test_custom_root_symbol_check() {
+    fprintf(stderr, "⚫ Testing custom root symbol check:\n");
+
+    const std::string custom_root_grammar_str = R"""(
+        foobar ::= "foobar"
+    )""";
+
+    llama_grammar * failure_result = build_grammar_with_root(custom_root_grammar_str, "root");
+    assert(failure_result == nullptr);
+
+    llama_grammar * success_result = build_grammar_with_root(custom_root_grammar_str, "foobar");
+    assert(success_result != nullptr);
+    llama_grammar_free_impl(success_result);
+
     fprintf(stderr, "  ✅︎ Passed\n");
 }
 
@@ -866,7 +956,7 @@ static void test_json_schema() {
     // Otherwise, this test structure is the same.
 
     test_schema(
-        "empty schema (object)",
+        "empty schema (any value)",
         // Schema
         R"""(
             {}
@@ -875,14 +965,16 @@ static void test_json_schema() {
         {
             R"""({})""",
             R"""({"foo": "bar"})""",
-        },
-        // Failing strings
-        {
-            "",
             "[]",
             "null",
             R"""("")""",
             "true",
+        },
+        // Failing strings
+        {
+            "",
+            R"""({"foo"})""",
+            "foo",
         }
     );
 
@@ -1422,6 +1514,25 @@ static void test_json_schema() {
             // R"""({"productId": 1, "productName": "A green door", "price": 12.50, "tags": ["home", "green", "home"]})""",
         }
     );
+
+    // the deepest schema of json_schema_to_grammar must give a valid grammar
+    std::string deep_schema;
+    for (int i = 0; i < 127; i++) {
+        deep_schema += R"({"type": "array", "items": )";
+    }
+    deep_schema += R"({"type": "string"})" + std::string(127, '}');
+    test_schema(
+        "127 nested arrays",
+        deep_schema,
+        // Passing strings
+        {
+            std::string(127, '[') + R"("a")" + std::string(127, ']'),
+        },
+        // Failing strings
+        {
+            std::string(126, '[') + R"("a")" + std::string(126, ']'),
+        }
+    );
 }
 
 int main() {
@@ -1433,6 +1544,8 @@ int main() {
     test_failure_missing_root();
     test_failure_missing_reference();
     test_failure_left_recursion();
+    test_failure_missing_root_symbol();
+    test_custom_root_symbol_check();
     test_json_schema();
     fprintf(stdout, "All tests passed.\n");
     return 0;

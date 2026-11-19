@@ -5,14 +5,16 @@
 #include "common.h"
 #include "log.h"
 
+#include <algorithm>
+#include <cassert>
+#include <cinttypes>
+#include <climits>
+#include <clocale>
+#include <cstdarg>
+#include <cstring>
+#include <ctime>
 #include <unordered_map>
 #include <vector>
-#include <cassert>
-#include <climits>
-#include <cstring>
-#include <cstdarg>
-#include <cinttypes>
-#include <ctime>
 #include <random>
 #include <stdexcept>
 #include <sstream>
@@ -547,19 +549,33 @@ static void load_vocab(const char * filename, const Config * config, struct my_l
 
         const int token_idx = gguf_find_key(ctx, KV_TOKENIZER_LIST);
         GGML_ASSERT(token_idx >= 0);
-
-        const int score_idx = gguf_find_key(ctx, KV_TOKENIZER_SCORES);
-        GGML_ASSERT(score_idx >= 0);
-        const float * scores = (const float * ) gguf_get_arr_data(ctx, score_idx);
-
-        const int toktype_idx = gguf_find_key(ctx, KV_TOKENIZER_TOKEN_TYPE);
-        GGML_ASSERT(toktype_idx >= 0);
-        const int * toktypes = (const int * ) gguf_get_arr_data(ctx, toktype_idx);
+        if (gguf_get_kv_type(ctx, token_idx) != GGUF_TYPE_ARRAY ||
+            gguf_get_arr_type(ctx, token_idx) != GGUF_TYPE_STRING) {
+            die_fmt("invalid gguf type for %s", KV_TOKENIZER_LIST);
+        }
 
         const uint32_t n_vocab = gguf_get_arr_n(ctx, token_idx);
         if (n_vocab != static_cast<uint32_t>(config->vocab_size)) {
             die_fmt("vocab size mismatch: (gguf) %u != (llama2c) %d", n_vocab, config->vocab_size);
         }
+
+        const int score_idx = gguf_find_key(ctx, KV_TOKENIZER_SCORES);
+        GGML_ASSERT(score_idx >= 0);
+        if (gguf_get_kv_type(ctx, score_idx) != GGUF_TYPE_ARRAY ||
+            gguf_get_arr_type(ctx, score_idx) != GGUF_TYPE_FLOAT32 ||
+            gguf_get_arr_n(ctx, score_idx) < n_vocab) {
+            die_fmt("invalid gguf type or size for %s", KV_TOKENIZER_SCORES);
+        }
+        const float * scores = (const float * ) gguf_get_arr_data(ctx, score_idx);
+
+        const int toktype_idx = gguf_find_key(ctx, KV_TOKENIZER_TOKEN_TYPE);
+        GGML_ASSERT(toktype_idx >= 0);
+        if (gguf_get_kv_type(ctx, toktype_idx) != GGUF_TYPE_ARRAY ||
+            gguf_get_arr_type(ctx, toktype_idx) != GGUF_TYPE_INT32 ||
+            gguf_get_arr_n(ctx, toktype_idx) < n_vocab) {
+            die_fmt("invalid gguf type or size for %s", KV_TOKENIZER_TOKEN_TYPE);
+        }
+        const int * toktypes = (const int * ) gguf_get_arr_data(ctx, toktype_idx);
 
         vocab->id_to_token.resize(n_vocab);
 
@@ -874,6 +890,8 @@ static std::string basename(const std::string &path) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_init();
 
     struct train_params params = get_default_train_params();

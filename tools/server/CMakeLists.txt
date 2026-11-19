@@ -5,14 +5,30 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 set(TARGET server-context)
 
 add_library(${TARGET} STATIC
+    server-chat.cpp
+    server-chat.h
     server-task.cpp
     server-task.h
     server-queue.cpp
     server-queue.h
     server-common.cpp
     server-common.h
+    server-decision.cpp
+    server-decision.h
     server-context.cpp
     server-context.h
+    server-realtime.cpp
+    server-realtime.h
+    server-stream.cpp
+    server-stream.h
+    server-tools.cpp
+    server-tools.h
+    server-mcp.cpp
+    server-mcp.h
+    server-schema.cpp
+    server-schema.h
+    server-slot-sched.cpp
+    server-slot-sched.h
 )
 
 if (BUILD_SHARED_LIBS)
@@ -20,51 +36,43 @@ if (BUILD_SHARED_LIBS)
 endif()
 
 target_include_directories(${TARGET} PRIVATE ../mtmd)
-target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
-target_link_libraries(${TARGET} PUBLIC common mtmd ${CMAKE_THREAD_LIBS_INIT})
+target_include_directories(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR})
+target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(${TARGET} PRIVATE vendor::hash)
 
+# llama-server-impl: server logic, reusable by app
+
+set(TARGET llama-server-impl)
+
+add_library(${TARGET}
+    server.cpp
+    server-connect.cpp
+    server-connect.h
+    server-http.cpp
+    server-http.h
+    server-models.cpp
+    server-models.h
+    server-models-sched.cpp
+    server-models-sched.h
+)
+set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+
+target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(${TARGET} PRIVATE ../mtmd ${PROJECT_SOURCE_DIR})
+target_link_libraries(${TARGET} PUBLIC server-context llama-ui cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
+
+add_dependencies(${TARGET} llama-ui-assets)
+
+if(LLAMA_TOOLS_INSTALL)
+    install(TARGETS ${TARGET} LIBRARY)
+endif()
 
 # llama-server executable
 
 set(TARGET llama-server)
 
-if (NOT LLAMA_HTTPLIB)
-    message(FATAL_ERROR "LLAMA_HTTPLIB is OFF, cannot build llama-server. Hint: to skip building server, set -DLLAMA_BUILD_SERVER=OFF")
-endif()
-
-set(TARGET_SRCS
-    server.cpp
-    server-http.cpp
-    server-http.h
-    server-models.cpp
-    server-models.h
-)
-set(PUBLIC_ASSETS
-    index.html.gz
-    loading.html
-)
-
-foreach(asset ${PUBLIC_ASSETS})
-    set(input "${CMAKE_CURRENT_SOURCE_DIR}/public/${asset}")
-    set(output "${CMAKE_CURRENT_BINARY_DIR}/${asset}.hpp")
-    list(APPEND TARGET_SRCS ${output})
-    add_custom_command(
-        DEPENDS "${input}"
-        OUTPUT "${output}"
-        COMMAND "${CMAKE_COMMAND}" "-DINPUT=${input}" "-DOUTPUT=${output}" -P "${PROJECT_SOURCE_DIR}/scripts/xxd.cmake"
-    )
-    set_source_files_properties(${output} PROPERTIES GENERATED TRUE)
-endforeach()
-
-add_executable(${TARGET} ${TARGET_SRCS})
+add_executable(${TARGET} main.cpp)
 install(TARGETS ${TARGET} RUNTIME)
 
-target_include_directories(${TARGET} PRIVATE ../mtmd)
-target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
-target_link_libraries(${TARGET} PRIVATE server-context PUBLIC common cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
-
-if (WIN32)
-    TARGET_LINK_LIBRARIES(${TARGET} PRIVATE ws2_32)
-endif()
-
+target_link_libraries(${TARGET} PRIVATE llama-server-impl)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)

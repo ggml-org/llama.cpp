@@ -28,6 +28,7 @@ def quant_shape_from_byte_shape(shape: Sequence[int], quant_type: GGMLQuantizati
 # This is faster than np.vectorize and np.apply_along_axis because it works on more than one row at a time
 def _apply_over_grouped_rows(func: Callable[[np.ndarray], np.ndarray], arr: np.ndarray, otype: DTypeLike, oshape: tuple[int, ...]) -> np.ndarray:
     rows = arr.reshape((-1, arr.shape[-1]))
+    assert len(rows.shape)
     osize = 1
     for dim in oshape:
         osize *= dim
@@ -41,7 +42,8 @@ def _apply_over_grouped_rows(func: Callable[[np.ndarray], np.ndarray], arr: np.n
 # round away from zero
 # ref: https://stackoverflow.com/a/59143326/22827863
 def np_roundf(n: np.ndarray) -> np.ndarray:
-    a = abs(n)
+    # np.abs, not abs(): numpy < 2.3 on Python 3.14 can write abs() in place into n when the caller passes a temporary (numpy/numpy#28681), dropping the sign
+    a = np.abs(n)
     floored = np.floor(a)
     b = floored + np.floor(2 * (a - floored))
     return np.sign(n) * b
@@ -91,11 +93,11 @@ class __Quant(ABC):
     def __init_subclass__(cls, qtype: GGMLQuantizationType) -> None:
         cls.qtype = qtype
         cls.block_size, cls.type_size = GGML_QUANT_SIZES[qtype]
-        cls.__quantize_lazy = LazyNumpyTensor._wrap_fn(
+        cls.__quantize_lazy: Any = LazyNumpyTensor._wrap_fn(
             cls.__quantize_array,
             meta_noop=(np.uint8, cls.__shape_to_bytes)
         )
-        cls.__dequantize_lazy = LazyNumpyTensor._wrap_fn(
+        cls.__dequantize_lazy: Any = LazyNumpyTensor._wrap_fn(
             cls.__dequantize_array,
             meta_noop=(np.float32, cls.__shape_from_bytes)
         )
@@ -653,6 +655,59 @@ class TQ2_0(__Quant, qtype=GGMLQuantizationType.TQ2_0):
         return (d * qs.astype(np.float32))
 
 
+class Q1_0(__Quant, qtype=GGMLQuantizationType.Q1_0):
+    @classmethod
+    def quantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        # sequential sum like the C reference, np.sum uses pairwise summation and can round differently
+        d = np.cumsum(abs(blocks), axis=-1, dtype=np.float32)[..., -1:] / np.float32(cls.block_size)
+        qs = np.packbits(blocks >= 0, axis=-1, bitorder="little")
+
+        d = d.astype(np.float16).view(np.uint8)
+
+        return np.concatenate([d, qs], axis=-1)
+
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        d, qs = np.hsplit(blocks, [2])
+
+        d = d.view(np.float16).astype(np.float32)
+
+        qs = np.unpackbits(qs, axis=-1, bitorder="little")
+
+        return np.where(qs != 0, d, -d)
+
+
+class Q2_0(__Quant, qtype=GGMLQuantizationType.Q2_0):
+    @classmethod
+    def quantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        n_blocks = blocks.shape[0]
+
+        d = abs(blocks).max(axis=-1, keepdims=True)
+        with np.errstate(divide="ignore"):
+            id = np.where(d == 0, 0, 1 / d)
+        qs = (np_roundf(blocks * id) + 1).clip(0, 3).astype(np.uint8)
+
+        qs = qs.reshape((n_blocks, -1, 4)) << np.array([0, 2, 4, 6], dtype=np.uint8)
+        qs = qs[..., 0] | qs[..., 1] | qs[..., 2] | qs[..., 3]
+
+        d = d.astype(np.float16).view(np.uint8)
+
+        return np.concatenate([d, qs], axis=-1)
+
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        n_blocks = blocks.shape[0]
+
+        d, qs = np.hsplit(blocks, [2])
+
+        d = d.view(np.float16).astype(np.float32)
+
+        qs = qs.reshape((n_blocks, -1, 1)) >> np.array([0, 2, 4, 6], dtype=np.uint8)
+        qs = (qs & 0x03).reshape((n_blocks, -1)).astype(np.int8) - np.int8(1)
+
+        return (d * qs.astype(np.float32))
+
+
 class MXFP4(__Quant, qtype=GGMLQuantizationType.MXFP4):
     # e2m1 values (doubled)
     # ref: https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
@@ -702,6 +757,82 @@ class MXFP4(__Quant, qtype=GGMLQuantizationType.MXFP4):
         qs = np.take_along_axis(kvalues, qs, axis=-1).reshape((n_blocks, cls.block_size))
 
         return (d * qs.astype(np.float32))
+
+
+class NVFP4(__Quant, qtype=GGMLQuantizationType.NVFP4):
+    # E2M1 values doubled (kvalues_mxfp4 convention)
+    kvalues = (0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12)
+
+    @staticmethod
+    def ue4m3_to_fp32(x: np.ndarray) -> np.ndarray:
+        """Decode unsigned E4M3 (bias=7) to float, with 0.5 factor for kvalues convention."""
+        exp = (x >> 3).astype(np.int32) & 0xF
+        man = (x & 0x7).astype(np.float32)
+        raw = np.where(
+            exp == 0,
+            man * 2**-9,
+            (1.0 + man / 8.0) * (2.0 ** (exp.astype(np.float32) - 7)))
+        return np.where((x == 0) | (x == 0x7F), 0.0, raw * 0.5)
+
+    @staticmethod
+    def fp32_to_ue4m3(x: np.ndarray) -> np.ndarray:
+        """Vectorized float32 to unsigned E4M3, matching ggml_fp32_to_ue4m3 in C."""
+        x = np.clip(x, 0.0, 448.0).astype(np.float32)
+        bits = x.view(np.uint32)
+        fp32_exp = ((bits >> 23) & 0xFF).astype(np.int32) - 127
+        fp32_man = ((bits >> 20) & 0x7).astype(np.int32)
+        ue4m3_exp = fp32_exp + 7
+
+        # Subnormal
+        sub_man = np.clip((x * 512.0 + 0.5).astype(np.int32), 0, 7)
+        sub_result = np.where(sub_man >= 1, sub_man, 0).astype(np.uint8)
+
+        # Normal with rounding
+        round_bit = ((bits >> 19) & 1).astype(np.int32)
+        man = fp32_man + round_bit
+        exp = ue4m3_exp.copy()
+        overflow = man > 7
+        man = np.where(overflow, 0, man)
+        exp = np.where(overflow, exp + 1, exp)
+        normal_result = np.where(exp >= 15, np.uint8(0x7E), ((exp << 3) | man).astype(np.uint8))
+
+        return np.where(x <= 0.0, np.uint8(0),
+                        np.where(ue4m3_exp <= 0, sub_result,
+                        np.where(ue4m3_exp >= 15, np.uint8(0x7E), normal_result)))
+
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        n_super = blocks.shape[0]
+
+        d_bytes, qs = np.hsplit(blocks, [4])
+        d = cls.ue4m3_to_fp32(d_bytes).reshape(n_super, 4, 1)  # (n_super, 4, 1)
+
+        qs = qs.reshape(n_super, 4, 8)
+        lo = (qs & np.uint8(0x0F)).view(np.int8)
+        hi = (qs >> np.uint8(4)).view(np.int8)
+        vals = np.concatenate([lo, hi], axis=-1)  # (n_super, 4, 16)
+
+        kvalues = np.array(cls.kvalues, dtype=np.int8).reshape(1, 1, 16)
+        vals = np.take_along_axis(kvalues, vals, axis=-1)
+
+        return (d * vals.astype(np.float32)).reshape(n_super, 64)
+
+
+class F8_E4M3(__Quant, qtype=GGMLQuantizationType.F8_E4M3):
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        bits = blocks.astype(np.uint8)
+        sign = np.where(bits & 0x80, np.float32(-1.0), np.float32(1.0))
+        magnitude = bits & 0x7F
+        exponent = magnitude >> 3
+        mantissa = magnitude & 0x07
+        values = np.where(
+            exponent == 0,
+            np.ldexp(mantissa.astype(np.float32), -9),
+            np.ldexp(1.0 + mantissa.astype(np.float32) / 8.0, exponent.astype(np.int32) - 7),
+        )
+        values = np.where(magnitude == 0x7F, np.nan, sign * values)
+        return values.astype(np.float32, copy=False)
 
 
 class IQ2_XXS(__Quant, qtype=GGMLQuantizationType.IQ2_XXS):

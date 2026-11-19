@@ -58,7 +58,7 @@ void test_unicode(testing &t) {
             std::string test_name = "case " + std::to_string(i) + ": " + hex_dump(tc.input);
 
             t.test(test_name, [&](testing &t) {
-                common_peg_parse_context ctx(tc.input, true);
+                common_peg_parse_context ctx(tc.input, COMMON_PEG_PARSE_FLAG_LENIENT);
                 auto result = parser.parse(ctx);
 
                 // Assert result type matches
@@ -101,7 +101,7 @@ void test_unicode(testing &t) {
                 std::string test_name = "case " + std::to_string(i) + ": " + hex_dump(tc.input);
 
                 t.test(test_name, [&](testing &t) {
-                    common_peg_parse_context ctx(tc.input, true);
+                    common_peg_parse_context ctx(tc.input, COMMON_PEG_PARSE_FLAG_LENIENT);
                     auto result = parser.parse(ctx);
 
                     // Assert result type matches
@@ -142,7 +142,7 @@ void test_unicode(testing &t) {
                 std::string test_name = "case " + std::to_string(i) + ": " + hex_dump(tc.input);
 
                 t.test(test_name, [&](testing &t) {
-                    common_peg_parse_context ctx(tc.input, true);
+                    common_peg_parse_context ctx(tc.input, COMMON_PEG_PARSE_FLAG_LENIENT);
                     auto result = parser.parse(ctx);
 
                     // Assert result type matches
@@ -187,7 +187,7 @@ void test_unicode(testing &t) {
                 std::string test_name = "case " + std::to_string(i) + ": " + hex_dump(tc.input);
 
                 t.test(test_name, [&](testing &t) {
-                    common_peg_parse_context ctx(tc.input, true);
+                    common_peg_parse_context ctx(tc.input, COMMON_PEG_PARSE_FLAG_LENIENT);
                     auto result = parser.parse(ctx);
 
                     // Assert result type matches
@@ -225,7 +225,7 @@ void test_unicode(testing &t) {
                 std::string test_name = "case " + std::to_string(i) + ": " + hex_dump(tc.input);
 
                 t.test(test_name, [&](testing &t) {
-                    common_peg_parse_context ctx(tc.input, false);
+                    common_peg_parse_context ctx(tc.input);
                     auto result = parser.parse(ctx);
 
                     assert_result_equal(t, tc.expected_result, result.type);
@@ -259,7 +259,7 @@ void test_unicode(testing &t) {
                 std::string test_name = "case " + std::to_string(i) + ": " + hex_dump(tc.input);
 
                 t.test(test_name, [&](testing &t) {
-                    common_peg_parse_context ctx(tc.input, true);
+                    common_peg_parse_context ctx(tc.input, COMMON_PEG_PARSE_FLAG_LENIENT);
                     auto result = parser.parse(ctx);
 
                     assert_result_equal(t, tc.expected_result, result.type);
@@ -273,19 +273,35 @@ void test_unicode(testing &t) {
         });
 
         t.test("malformed UTF-8", [](testing &t) {
-            std::vector<test_case> test_cases {
+            struct passthrough_case {
+                std::string input;
+                std::string expected_text;
+                std::string expected_sanitized;
+            };
+
+            std::vector<passthrough_case> test_cases {
                 // Invalid UTF-8 bytes
-                {std::string("Hello\xFF\xFE"), "", COMMON_PEG_PARSE_RESULT_FAIL},
+                {std::string("Hello\xFF\xFE</tag>"), std::string("Hello\xFF\xFE"), "Hello\xEF\xBF\xBD\xEF\xBF\xBD"},
 
                 // Continuation byte without lead byte
-                {std::string("Hello\x80World"), "", COMMON_PEG_PARSE_RESULT_FAIL},
+                {std::string("Hello\x80World</tag>"), std::string("Hello\x80World"), "Hello\xEF\xBF\xBDWorld"},
 
-                // Invalid continuation byte
-                {std::string("\xC3\x28"), "", COMMON_PEG_PARSE_RESULT_FAIL},
+                // Invalid continuation byte, the lead byte is dropped and '(' survives
+                {std::string("\xC3\x28</tag>"), std::string("\xC3\x28"), "\xEF\xBF\xBD("},
+
+                // Two good bytes of a 3-byte sequence then a bad third byte, the prefix is replaced once and the third byte is kept
+                {std::string("\xE4\xB8" "A</tag>"), std::string("\xE4\xB8" "A"), "\xEF\xBF\xBD" "A"},
+                {std::string("\xE4\xB8</tag>"), std::string("\xE4\xB8"), "\xEF\xBF\xBD"},
+
+                // Truncated sequence in a complete input, the leftover prefix is replaced once
+                {std::string("Hello\xE4\xB8"), std::string("Hello\xE4\xB8"), "Hello\xEF\xBF\xBD"},
+
+                // Valid multi-byte content around the bad byte is left alone
+                {std::string("\xE4\xBD\xA0\xFF\xE5\xA5\xBD</tag>"), std::string("\xE4\xBD\xA0\xFF\xE5\xA5\xBD"), "\xE4\xBD\xA0\xEF\xBF\xBD\xE5\xA5\xBD"},
             };
 
             auto parser = build_peg_parser([](common_peg_parser_builder& p) {
-                return p.until("</tag>");
+                return p.tag("body", p.until("</tag>")) + p.optional(p.literal("</tag>"));
             });
 
             for (size_t i = 0; i < test_cases.size(); i++) {
@@ -293,12 +309,30 @@ void test_unicode(testing &t) {
                 std::string test_name = "case " + std::to_string(i) + ": " + hex_dump(tc.input);
 
                 t.test(test_name, [&](testing &t) {
-                    common_peg_parse_context ctx(tc.input, false);
+                    common_peg_parse_context ctx(tc.input);
                     auto result = parser.parse(ctx);
 
-                    assert_result_equal(t, tc.expected_result, result.type);
+                    assert_result_equal(t, COMMON_PEG_PARSE_RESULT_SUCCESS, result.type);
+                    const auto & node = ctx.ast.get(result.nodes[0]);
+                    t.assert_equal("raw text", tc.expected_text, std::string(node.text));
+                    t.assert_equal("sanitized text", tc.expected_sanitized, node.sanitized_text());
                 });
             }
+        });
+
+        t.test("malformed UTF-8 rescanned by backtracking", [](testing &t) {
+            // The failed alternative and the lookahead scan the same bad byte, it must only be recorded once
+            auto parser = build_peg_parser([](common_peg_parser_builder& p) {
+                return (p.until("<a>") + p.literal("<a>")) | (p.peek(p.until("<b>")) + p.until("<b>") + p.literal("<b>"));
+            });
+
+            std::string input("x\xFFy<b>");
+            common_peg_parse_context ctx(input);
+            auto result = parser.parse(ctx);
+
+            assert_result_equal(t, COMMON_PEG_PARSE_RESULT_SUCCESS, result.type);
+            t.assert_equal("invalid count", 1u, result.invalid_utf8.size());
+            t.assert_equal("invalid offset", 1u, result.invalid_utf8[0].pos);
         });
     });
 
@@ -327,10 +361,10 @@ void test_unicode(testing &t) {
 
                 t.test(test_name, [&](testing &t) {
                     auto parser = build_peg_parser([](common_peg_parser_builder& p) {
-                        return p.sequence({p.json_string_content(), p.literal("\"")});
+                        return p.sequence({p.string_content('"'), p.literal("\"")});
                     });
 
-                    common_peg_parse_context ctx(tc.input, false);
+                    common_peg_parse_context ctx(tc.input);
                     auto result = parser.parse(ctx);
 
                     assert_result_equal(t, tc.expected_result, result.type);
@@ -364,10 +398,10 @@ void test_unicode(testing &t) {
 
                 t.test(test_name, [&](testing &t) {
                     auto parser = build_peg_parser([](common_peg_parser_builder& p) {
-                        return p.json_string_content();
+                        return p.string_content('"');
                     });
 
-                    common_peg_parse_context ctx(tc.input, true);
+                    common_peg_parse_context ctx(tc.input, COMMON_PEG_PARSE_FLAG_LENIENT);
                     auto result = parser.parse(ctx);
 
                     assert_result_equal(t, tc.expected_result, result.type);
@@ -390,9 +424,6 @@ void test_unicode(testing &t) {
 
                 // Invalid continuation byte
                 {std::string("\xC3\x28"), "", COMMON_PEG_PARSE_RESULT_FAIL},
-
-                // Overlong encoding (security issue)
-                {std::string("\xC0\x80"), "", COMMON_PEG_PARSE_RESULT_FAIL},
             };
 
             for (size_t i = 0; i < test_cases.size(); i++) {
@@ -401,10 +432,10 @@ void test_unicode(testing &t) {
 
                 t.test(test_name, [&](testing &t) {
                     auto parser = build_peg_parser([](common_peg_parser_builder& p) {
-                        return p.json_string_content();
+                        return p.string_content('"');
                     });
 
-                    common_peg_parse_context ctx(tc.input, false);
+                    common_peg_parse_context ctx(tc.input);
                     auto result = parser.parse(ctx);
 
                     assert_result_equal(t, tc.expected_result, result.type);
@@ -430,10 +461,10 @@ void test_unicode(testing &t) {
 
                 t.test(test_name, [&](testing &t) {
                     auto parser = build_peg_parser([](common_peg_parser_builder& p) {
-                        return p.sequence({p.json_string_content(), p.literal("\"")});
+                        return p.sequence({p.string_content('"'), p.literal("\"")});
                     });
 
-                    common_peg_parse_context ctx(tc.input, false);
+                    common_peg_parse_context ctx(tc.input);
                     auto result = parser.parse(ctx);
 
                     assert_result_equal(t, tc.expected_result, result.type);

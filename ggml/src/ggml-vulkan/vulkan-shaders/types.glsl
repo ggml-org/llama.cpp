@@ -7,6 +7,11 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 #extension GL_EXT_shader_16bit_storage : require
 
+#ifdef USE_OCP_FP4
+#extension GL_EXT_float_e2m1 : require
+#extension GL_EXT_float_e4m3 : require
+#endif
+
 #if defined(DATA_A_F32)
 #define QUANT_K 1
 #define QUANT_R 1
@@ -18,6 +23,7 @@
 #else
 #define A_TYPE float
 #endif
+#define A_TYPE_PACKED64 vec2
 #endif
 
 #if defined(DATA_A_F16)
@@ -31,6 +37,7 @@
 #else
 #define A_TYPE float16_t
 #endif
+#define A_TYPE_PACKED32 f16vec2
 #endif
 
 #if defined(DATA_A_BF16)
@@ -44,6 +51,7 @@
 #else
 #define A_TYPE uint16_t
 #endif
+#define A_TYPE_PACKED32 uint32_t
 #endif
 
 #define QUANT_K_Q4_0 32
@@ -188,6 +196,46 @@ struct block_q8_0_packed16
 #define DATA_A_QUANT_LEGACY
 #endif
 
+#define QUANT_K_Q1_0 128
+#define QUANT_R_Q1_0 1
+
+struct block_q1_0
+{
+    float16_t d;
+    uint8_t qs[QUANT_K_Q1_0 / 8];
+};
+
+#if defined(DATA_A_Q1_0)
+#define QUANT_K QUANT_K_Q1_0
+#define QUANT_R QUANT_R_Q1_0
+#define QUANT_AUXF 1
+#define A_TYPE block_q1_0
+#endif
+
+#define QUANT_K_Q2_0 64
+#define QUANT_R_Q2_0 1
+
+struct block_q2_0
+{
+    float16_t d;
+    uint8_t qs[QUANT_K_Q2_0 / 4];
+};
+
+struct block_q2_0_packed16
+{
+    float16_t d;
+    uint16_t qs[QUANT_K_Q2_0 / 8];
+};
+
+#if defined(DATA_A_Q2_0)
+#define QUANT_K QUANT_K_Q2_0
+#define QUANT_R QUANT_R_Q2_0
+#define QUANT_AUXF 1
+#define A_TYPE block_q2_0
+#define A_TYPE_PACKED16 block_q2_0_packed16
+#define DATA_A_QUANT_LEGACY
+#endif
+
 #define QUANT_K_Q8_1 32
 #define QUANT_R_Q8_1 1
 
@@ -253,6 +301,65 @@ struct block_q2_K_packed32
 #define A_TYPE_PACKED16 block_q2_K_packed16
 #define A_TYPE_PACKED32 block_q2_K_packed32
 #define SCALES_PER_32 2
+#define DATA_A_QUANT_K
+#endif
+
+#define QUANT_K_TQ1_0 256
+
+// TQ1_0: base-3 packed trits, 5 per byte in `qs` (48B) and 4 in `qh` (4B).
+struct block_tq1_0
+{
+    uint8_t qs[(QUANT_K_TQ1_0 - 4 * QUANT_K_TQ1_0 / 64) / 5];
+    uint8_t qh[QUANT_K_TQ1_0 / 64];
+    float16_t d;
+};
+
+// Element e in [0,255] -> its packed byte (0..47 qs, 48..51 qh) and digit.
+uint tq1_0_byte_of(uint e) {
+    return e < 160u ? (e % 32u)
+         : e < 240u ? 32u + ((e - 160u) % 16u)
+         : 48u + ((e - 240u) % 4u);
+}
+uint tq1_0_digit_of(uint e) {
+    return e < 160u ? (e / 32u)
+         : e < 240u ? ((e - 160u) / 16u)
+         : ((e - 240u) / 4u);
+}
+// The 8-bit truncation below is part of the format, not an optimisation:
+// the C reference does `uint8_t q = qs[..] * pow3[n]`.
+uint tq1_0_trit(uint qbyte, uint t) {
+    const uint POW3_PACKED = (1u << 28) | (3u << 21) | (9u << 14) | (27u << 7) | 81u;
+    return ((((qbyte * ((POW3_PACKED >> (7u * (4u - t))) & 0x7Fu)) & 255u) * 3u) >> 8);
+}
+
+#if defined(DATA_A_TQ1_0)
+#define QUANT_K QUANT_K_TQ1_0
+#define QUANT_R 1
+#define A_TYPE block_tq1_0
+#define DATA_A_QUANT_K
+#endif
+
+#define QUANT_K_TQ2_0 256
+
+// ternary (BitNet): 2-bit codes, w = (q - 1) * d; qs layout matches q2_K's
+// two 32-byte groups with four bit-levels per byte
+struct block_tq2_0
+{
+    uint8_t qs[QUANT_K_TQ2_0/4];
+    float16_t d;
+};
+
+struct block_tq2_0_packed16
+{
+    uint16_t qs[QUANT_K_TQ2_0/4/2];
+    float16_t d;
+};
+
+#if defined(DATA_A_TQ2_0)
+#define QUANT_K QUANT_K_TQ2_0
+#define QUANT_R 1
+#define A_TYPE block_tq2_0
+#define A_TYPE_PACKED16 block_tq2_0_packed16
 #define DATA_A_QUANT_K
 #endif
 
@@ -580,9 +687,10 @@ const uint[1024] iq1s_grid_const = {
     0x55dd55df, 0x55d555d7, 0x5503550c, 0x557f5501, 0x5577557d, 0x55405575, 0x555d555f, 0x55555557
 };
 
+#if defined(NEEDS_IQ1S_GRID_GPU)
 // Same content as iq1s_grid_const except each 2-bit value is expanded to 4-bit
 // and has 1 added to it (allows packed values to be extracted with & 0x0F0F0F0F
-// and 0xF0F0F0F0).
+// and 0xF0F0F0F0). This is only used by the q8_1/int-dot vector path.
 const uint32_t[2048] iq1s_grid_gpu_const = {
     0x00000000, 0x00000002, 0x00000101, 0x00000200, 0x00000202, 0x00010001, 0x00010101, 0x00020000,
     0x00020002, 0x00020200, 0x00020202, 0x01000101, 0x01010001, 0x01010100, 0x01010102, 0x01020101,
@@ -841,10 +949,14 @@ const uint32_t[2048] iq1s_grid_gpu_const = {
     0x20222020, 0x20222022, 0x20222220, 0x20222222, 0x21212021, 0x21212120, 0x21212122, 0x22202020,
     0x22202022, 0x22202220, 0x22202222, 0x22212121, 0x22222020, 0x22222022, 0x22222220, 0x22222222,
 };
+#endif
 
 shared uint16_t iq1s_grid[2048];
+#if defined(NEEDS_IQ1S_GRID_GPU)
 shared uint32_t iq1s_grid_gpu[2048];
+#endif
 
+#if defined(DATA_A_IQ1_S) || defined(DATA_A_IQ1_M)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
@@ -857,14 +969,27 @@ void init_iq_shmem(uvec3 wgsize)
             iq1s_grid[2*idx+1] = g.y;
         }
     }
+#if defined(NEEDS_IQ1S_GRID_GPU)
     [[unroll]] for (uint i = 0; i < iq1s_grid_gpu_const.length(); i += wgsize.x) {
         uint idx = i + gl_LocalInvocationIndex.x;
         if (iq1s_grid_gpu_const.length() % wgsize.x == 0 || idx < iq1s_grid_gpu_const.length()) {
             iq1s_grid_gpu[idx] = iq1s_grid_gpu_const[idx];
         }
     }
+#endif
     barrier();
 }
+#endif
+#endif
+
+#if defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S)
+#if defined(DATA_A_IQ2_S)
+shared uvec2 iq2s_grid[1024];
+#elif defined(DATA_A_IQ2_XS)
+shared uvec2 iq2xs_grid[512];
+#else
+shared uvec2 iq2xxs_grid[256];
+#endif
 #endif
 
 #define QUANT_K_IQ2_XXS 256
@@ -951,8 +1076,7 @@ const uvec2[256] iq2xxs_grid_const = {
     uvec2(0x08080808, 0x2b2b082b), uvec2(0x08192b08, 0x2b2b1908), uvec2(0x19190808, 0x2b2b2b08), uvec2(0x08081908, 0x2b2b2b19)
 };
 
-shared uvec2 iq2xxs_grid[256];
-
+#if defined(DATA_A_IQ2_XXS)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
@@ -964,11 +1088,14 @@ void init_iq_shmem(uvec3 wgsize)
     }
     barrier();
 }
+#endif
 
+#if defined(DATA_A_IQ2_XXS)
 #define QUANT_K QUANT_K_IQ2_XXS
 #define QUANT_R QUANT_R_IQ2_XXS
 #define A_TYPE block_iq2_xxs
 #define A_TYPE_PACKED16 block_iq2_xxs_packed16
+#endif
 #endif
 
 #define QUANT_K_IQ2_XS 256
@@ -1121,8 +1248,7 @@ const uvec2 iq2xs_grid_const[512] = {
     uvec2(0x082b2b08, 0x2b2b2b2b), uvec2(0x082b2b2b, 0x2b2b2b2b), uvec2(0x2b190819, 0x2b2b2b2b), uvec2(0x2b2b2b2b, 0x2b2b2b2b),
 };
 
-shared uvec2 iq2xs_grid[512];
-
+#if defined(DATA_A_IQ2_XS)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
@@ -1134,11 +1260,14 @@ void init_iq_shmem(uvec3 wgsize)
     }
     barrier();
 }
+#endif
 
+#if defined(DATA_A_IQ2_XS)
 #define QUANT_K QUANT_K_IQ2_XS
 #define QUANT_R QUANT_R_IQ2_XS
 #define A_TYPE block_iq2_xs
 #define A_TYPE_PACKED16 block_iq2_xs_packed16
+#endif
 #endif
 
 #define QUANT_K_IQ2_S 256
@@ -1421,8 +1550,7 @@ const uvec2 iq2s_grid_const[1024] = {
     uvec2(0x082b082b, 0x2b2b2b2b), uvec2(0x082b2b08, 0x2b2b2b2b), uvec2(0x2b082b08, 0x2b2b2b2b), uvec2(0x2b2b2b2b, 0x2b2b2b2b)
 };
 
-shared uvec2 iq2s_grid[1024];
-
+#if defined(DATA_A_IQ2_S)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
@@ -1434,11 +1562,22 @@ void init_iq_shmem(uvec3 wgsize)
     }
     barrier();
 }
+#endif
 
+#if defined(DATA_A_IQ2_S)
 #define QUANT_K QUANT_K_IQ2_S
 #define QUANT_R QUANT_R_IQ2_S
 #define A_TYPE block_iq2_s
 #define A_TYPE_PACKED16 block_iq2_s_packed16
+#endif
+#endif
+
+#if defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S)
+#if defined(DATA_A_IQ3_S)
+shared uint32_t iq3s_grid[512];
+#else
+shared uint32_t iq3xxs_grid[256];
+#endif
 #endif
 
 #define QUANT_K_IQ3_XXS 256
@@ -1493,8 +1632,7 @@ const uint32_t iq3xxs_grid_const[256] = {
     0x3e1c1c1c, 0x3e1c3404, 0x3e24140c, 0x3e24240c, 0x3e2c0404, 0x3e2c0414, 0x3e2c1424, 0x3e341c04,
 };
 
-shared uint32_t iq3xxs_grid[256];
-
+#if defined(DATA_A_IQ3_XXS)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
@@ -1506,11 +1644,14 @@ void init_iq_shmem(uvec3 wgsize)
     }
     barrier();
 }
+#endif
 
+#if defined(DATA_A_IQ3_XXS)
 #define QUANT_K QUANT_K_IQ3_XXS
 #define QUANT_R QUANT_R_IQ3_XXS
 #define A_TYPE block_iq3_xxs
 #define A_TYPE_PACKED16 block_iq3_xxs_packed16
+#endif
 #endif
 
 #define QUANT_K_IQ3_S 256
@@ -1603,8 +1744,7 @@ const uint32_t iq3s_grid_const[512] = {
     0x0f090307, 0x0f090501, 0x0f090b01, 0x0f0b0505, 0x0f0b0905, 0x0f0d0105, 0x0f0d0703, 0x0f0f0101,
 };
 
-shared uint32_t iq3s_grid[512];
-
+#if defined(DATA_A_IQ3_S)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
@@ -1616,11 +1756,14 @@ void init_iq_shmem(uvec3 wgsize)
     }
     barrier();
 }
+#endif
 
+#if defined(DATA_A_IQ3_S)
 #define QUANT_K QUANT_K_IQ3_S
 #define QUANT_R QUANT_R_IQ3_S
 #define A_TYPE block_iq3_s
 #define A_TYPE_PACKED16 block_iq3_s_packed16
+#endif
 #endif
 
 #define QUANT_K_IQ4_XS 256
@@ -1676,6 +1819,7 @@ struct block_iq4_nl_packed16
 #if defined(DATA_A_IQ4_NL)
 #define QUANT_K QUANT_K_IQ4_NL
 #define QUANT_R QUANT_R_IQ4_NL
+#define QUANT_AUXF 1
 #define A_TYPE block_iq4_nl
 #define A_TYPE_PACKED16 block_iq4_nl_packed16
 #endif
@@ -1696,33 +1840,106 @@ struct block_mxfp4
 #define A_TYPE block_mxfp4
 #endif
 
+#define QUANT_K_NVFP4 64
+#define QUANT_R_NVFP4 1
+
+struct block_nvfp4
+{
+    uint8_t d[QUANT_K_NVFP4 / 16];
+    uint8_t qs[QUANT_K_NVFP4 / 2];
+};
+
+struct block_nvfp4_packed16
+{
+    uint16_t d[QUANT_K_NVFP4 / 16 / 2];
+    uint16_t qs[QUANT_K_NVFP4 / 2 / 2];
+};
+
+struct block_nvfp4_packed32
+{
+    uint32_t d[QUANT_K_NVFP4 / 16 / 4];
+    uint32_t qs[QUANT_K_NVFP4 / 2 / 4];
+};
+
+#if defined(DATA_A_NVFP4)
+#define QUANT_K QUANT_K_NVFP4
+#define QUANT_R QUANT_R_NVFP4
+#define QUANT_AUXF 1
+#define A_TYPE block_nvfp4
+#define A_TYPE_PACKED16 block_nvfp4_packed16
+#define A_TYPE_PACKED32 block_nvfp4_packed32
+#endif
+
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
 const int8_t kvalues_iq4nl_const[16] = {
     int8_t(-127), int8_t(-104), int8_t(-83), int8_t(-65), int8_t(-49), int8_t(-35), int8_t(-22), int8_t(-10),
     int8_t(1), int8_t(13), int8_t(25), int8_t(38), int8_t(53), int8_t(69), int8_t(89), int8_t(113)
 };
 
+#ifdef KVALUES_IQ4NL_I8
+shared int8_t kvalues_iq4nl[16];
+#else
 shared FLOAT_TYPE kvalues_iq4nl[16];
+#endif
 
+#if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
     // copy the table into shared memory and sync
     for (uint i = gl_LocalInvocationIndex.x; i < kvalues_iq4nl.length(); i += wgsize.x) {
+#ifdef KVALUES_IQ4NL_I8
+        kvalues_iq4nl[i] = kvalues_iq4nl_const[i];
+#else
         kvalues_iq4nl[i] = FLOAT_TYPE(kvalues_iq4nl_const[i]);
+#endif
     }
     barrier();
 }
+
+#ifdef KVALUES_IQ4NL_I8
+i32vec2 iq4nl_to_i8x8(uint32_t vui) {
+    const u8vec4 i0 = unpack8( vui       & 0x0F0F0F0F);
+    const u8vec4 i1 = unpack8((vui >> 4) & 0x0F0F0F0F);
+
+    return i32vec2(
+        pack32(i8vec4(kvalues_iq4nl[i0.x], kvalues_iq4nl[i0.y], kvalues_iq4nl[i0.z], kvalues_iq4nl[i0.w])),
+        pack32(i8vec4(kvalues_iq4nl[i1.x], kvalues_iq4nl[i1.y], kvalues_iq4nl[i1.z], kvalues_iq4nl[i1.w])));
+}
+#endif
+#endif
 #endif
 
-#if defined(DATA_A_MXFP4)
+#if defined(DATA_A_MXFP4) || defined(DATA_A_NVFP4)
+#if !defined(USE_OCP_FP4)
 const int8_t kvalues_mxfp4_const[16] = {
     int8_t(0), int8_t(1), int8_t(2), int8_t(3), int8_t(4), int8_t(6), int8_t(8), int8_t(12),
     int8_t(0), int8_t(-1), int8_t(-2), int8_t(-3), int8_t(-4), int8_t(-6), int8_t(-8), int8_t(-12),
 };
 
 shared int8_t kvalues_mxfp4[16];
+#endif
 
+#if defined(DATA_A_NVFP4) && !defined(USE_OCP_FP4)
+// Cover all scale bytes accepted by ggml_validate_row_data.
+// ue4m3_to_fp32_build() masks the exponent and mantissa, but checks the full byte for 0 and 0x7F.
+shared float ue4m3_fp32_lut[256];
+
+float ue4m3_to_fp32_build(uint u) {
+    if (u == 0u || u == 127u) {
+        return 0.0;
+    }
+    const uint exp = (u >> 3) & 15u;
+    const uint man = u & 7u;
+    if (exp == 0u) {
+        return float(man) * (1.0 / 512.0);
+    }
+    const uint bits = (exp + 120u) << 23 | (man << 20);
+    return uintBitsToFloat(bits);
+}
+#endif
+
+#if (defined(DATA_A_MXFP4) || defined(DATA_A_NVFP4)) && !defined(USE_OCP_FP4)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
@@ -1730,8 +1947,14 @@ void init_iq_shmem(uvec3 wgsize)
     for (uint i = gl_LocalInvocationIndex.x; i < kvalues_mxfp4.length(); i += wgsize.x) {
         kvalues_mxfp4[i] = kvalues_mxfp4_const[i];
     }
+#if defined(DATA_A_NVFP4)
+    for (uint i = gl_LocalInvocationIndex.x; i < 256u; i += wgsize.x) {
+        ue4m3_fp32_lut[i] = ue4m3_to_fp32_build(i);
+    }
+#endif
     barrier();
 }
+#endif
 #endif
 
 // returns the bfloat value in the low 16b.
@@ -1753,6 +1976,27 @@ vec4 bf16_to_fp32(uvec4 u)
     return vec4(bf16_to_fp32(u.x), bf16_to_fp32(u.y), bf16_to_fp32(u.z), bf16_to_fp32(u.w));
 }
 
+#if defined(DATA_A_BF16)
+#define A_TO_FLOAT(x) bf16_to_fp32(uint32_t(x))
+#else
+#define A_TO_FLOAT(x) float(x)
+#endif
+#if defined(DATA_B_BF16)
+#define B_TO_FLOAT(x) bf16_to_fp32(uint32_t(x))
+#else
+#define B_TO_FLOAT(x) float(x)
+#endif
+#if defined(DATA_C_BF16)
+#define C_TO_FLOAT(x) bf16_to_fp32(uint32_t(x))
+#else
+#define C_TO_FLOAT(x) float(x)
+#endif
+#if defined(DATA_D_BF16)
+#define FLOAT_TO_D(x) D_TYPE(fp32_to_bf16(x))
+#else
+#define FLOAT_TO_D(x) D_TYPE(x)
+#endif
+
 float e8m0_to_fp32(uint8_t x) {
     uint32_t bits;
 
@@ -1765,6 +2009,25 @@ float e8m0_to_fp32(uint8_t x) {
 
     return uintBitsToFloat(bits);
 }
+
+#if defined(DATA_A_NVFP4)
+#if defined(USE_OCP_FP4)
+floate4m3_t ue4m3_from_bits(uint8_t x) {
+    if (x == uint8_t(0x7F)) {
+        return floate4m3_t(0.0);
+    }
+    return uintBitsToFloate4m3EXT(x);
+}
+#endif
+
+float ue4m3_to_fp32(uint8_t x) {
+#if defined(USE_OCP_FP4)
+    return float(ue4m3_from_bits(x));
+#else
+    return ue4m3_fp32_lut[uint(x)];
+#endif
+}
+#endif
 
 #if BDA
 

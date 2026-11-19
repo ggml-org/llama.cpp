@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_youtuvl::build() {
+ggml_cgraph * mtmd_graph_youtuvl::build() {
     GGML_ASSERT(model.class_embedding == nullptr);
     const int batch_size       = 1;
     const bool use_window_attn = !hparams.wa_layer_indexes.empty();
@@ -43,7 +43,7 @@ ggml_cgraph * clip_graph_youtuvl::build() {
             ctx0, inp,
             3*patch_size* patch_size,  Hm * Wm * m * m, 1);
     }
-    inp = ggml_mul_mat(ctx0, model.patch_embeddings_0, inp);
+    inp = build_mm(model.patch_embeddings_0, inp);
 
     if (model.patch_bias) {
         inp = ggml_add(ctx0, inp, model.patch_bias);
@@ -69,14 +69,7 @@ ggml_cgraph * clip_graph_youtuvl::build() {
         ggml_set_name(inv_window_idx, "inv_window_idx");
         ggml_set_input(inv_window_idx);
         // mask for window attention
-        window_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_pos, n_pos);
-        ggml_set_name(window_mask, "window_mask");
-        ggml_set_input(window_mask);
-
-        // if flash attn is used, we need to pad the mask and cast to f16
-        if (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
-            window_mask = ggml_cast(ctx0, window_mask, GGML_TYPE_F16);
-        }
+        window_mask = build_inp_attn_mask(n_pos, n_pos);
 
         // inpL shape: [n_embd, n_patches_x * n_patches_y, batch_size]
         GGML_ASSERT(batch_size == 1);
@@ -97,11 +90,11 @@ ggml_cgraph * clip_graph_youtuvl::build() {
         // self-attention
         {
             ggml_tensor * Qcur = ggml_add(ctx0,
-                ggml_mul_mat(ctx0, layer.q_w, cur), layer.q_b);
+                build_mm(layer.q_w, cur), layer.q_b);
             ggml_tensor * Kcur = ggml_add(ctx0,
-                ggml_mul_mat(ctx0, layer.k_w, cur), layer.k_b);
+                build_mm(layer.k_w, cur), layer.k_b);
             ggml_tensor * Vcur = ggml_add(ctx0,
-                ggml_mul_mat(ctx0, layer.v_w, cur), layer.v_b);
+                build_mm(layer.v_w, cur), layer.v_b);
 
             Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_patches);
             Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_patches);

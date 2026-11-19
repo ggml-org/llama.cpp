@@ -97,15 +97,17 @@ uint32_t    unicode_cpt_from_utf8(const std::string & utf8, size_t & offset);
 std::vector<uint32_t> unicode_cpts_from_utf8(const std::string & utf8);
 
 std::vector<uint32_t> unicode_cpts_normalize_nfd(const std::vector<uint32_t> & cpts);
+std::vector<uint32_t> unicode_cpts_normalize_nfc(const std::vector<uint32_t> & cpts);
 
 unicode_cpt_flags unicode_cpt_flags_from_cpt (uint32_t cpt);
 unicode_cpt_flags unicode_cpt_flags_from_utf8(const std::string & utf8);
 
 std::string unicode_byte_to_utf8(uint8_t byte);
 uint8_t     unicode_utf8_to_byte(const std::string & utf8);
+uint8_t     unicode_cpt_to_byte (uint32_t cpt);
 
 uint32_t unicode_tolower(uint32_t cpt);
 
 bool unicode_cpt_is_han(uint32_t cpt);
 
-std::vector<std::string> unicode_regex_split(const std::string & text, const std::vector<std::string> & regex_exprs);
+std::vector<std::string> unicode_regex_split(const std::string & text, const std::vector<std::string> & regex_exprs, bool byte_encode = true);

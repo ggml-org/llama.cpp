@@ -4,6 +4,7 @@
 
 #include <string>
 #include <map>
+#include <vector>
 
 namespace jinja {
 
@@ -12,11 +13,24 @@ struct caps {
     bool supports_tool_calls = true;
     bool supports_system_role = true;
     bool supports_parallel_tool_calls = true;
-    bool supports_preserve_reasoning = false; // support assistant message with reasoning_content
+
+    // supports preserve reasoning trace in the full history, not just the last assistant message
+    bool supports_preserve_reasoning = false;
+
+    // supports reasoning effort levels
+    bool supports_reasoning_effort = false;
+
+    // reasoning effort levels the template renders distinctly, from lowest to highest
+    std::vector<std::string> reasoning_effort_levels;
+
+    // reasoning effort levels the template raises on
+    std::vector<std::string> reasoning_effort_rejected;
 
     // one of the 2 content capabilities must be true
     bool supports_string_content = true;
     bool supports_typed_content = false;
+
+    bool supports_object_arguments = false;
 
     // for reporting on server
     std::map<std::string, bool> to_map() const;
@@ -26,5 +40,8 @@ struct caps {
 };
 
 caps caps_get(jinja::program & prog);
+
+void caps_apply_preserve_reasoning(jinja::context & ctx, bool enabled);
+void caps_apply_reasoning_effort(jinja::context & ctx, const std::string & effort);
 
 } // namespace jinja

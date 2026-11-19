@@ -17,8 +17,8 @@ ggml_status apir_backend_graph_compute(virtgpu * gpu, ggml_cgraph * cgraph) {
     size_t               cgraph_size = apir_serialize_ggml_cgraph(cgraph, cgraph_data);
 
     virtgpu_shmem   temp_shmem;  // Local storage for large buffers
-    virtgpu_shmem * shmem = &temp_shmem;
-    bool using_shared_shmem = false;
+    virtgpu_shmem * shmem              = &temp_shmem;
+    bool            using_shared_shmem = false;
 
     if (cgraph_size <= gpu->data_shmem.mmap_size) {
         // Lock mutex before using shared data_shmem buffer
@@ -26,7 +26,7 @@ ggml_status apir_backend_graph_compute(virtgpu * gpu, ggml_cgraph * cgraph) {
             GGML_ABORT(GGML_VIRTGPU "%s: Failed to lock data_shmem mutex", __func__);
         }
         using_shared_shmem = true;
-        shmem = &gpu->data_shmem;
+        shmem              = &gpu->data_shmem;
     } else if (virtgpu_shmem_create(gpu, cgraph_size, shmem)) {
         GGML_ABORT(GGML_VIRTGPU "%s: Couldn't allocate the guest-host shared buffer", __func__);
     }

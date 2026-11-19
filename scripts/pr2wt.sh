@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# intialize a new worktree from a PR number:
+# initialize a new worktree from a PR number:
 #
 # - creates a new remote using the fork's clone URL
 # - creates a local branch tracking the remote branch
@@ -48,7 +48,11 @@ echo "org/repo: $org_repo"
 
 meta=$(curl -sSLf -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$org_repo/pulls/$PR")
 
-url_remote=$(echo "$meta" | jq -r '.head.repo.clone_url')
+if [[ $url_origin =~ ^git@ ]]; then
+    url_remote=$(echo "$meta" | jq -r '.head.repo.ssh_url')
+else
+    url_remote=$(echo "$meta" | jq -r '.head.repo.clone_url')
+fi
 head_ref=$(echo "$meta" | jq -r '.head.ref')
 
 echo "url:      $url_remote"
@@ -73,6 +77,7 @@ wt_path=$(cd ../$dir-pr-$PR && pwd)
 echo "git worktree created in $wt_path"
 
 cd $wt_path
+
 git branch --set-upstream-to=pr/$PR/$head_ref
 git pull   --ff-only || {
     echo "error: failed to pull pr/$PR"

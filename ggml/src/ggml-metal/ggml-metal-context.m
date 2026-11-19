@@ -6,6 +6,7 @@
 #import "ggml-metal-impl.h"
 #import "ggml-metal-common.h"
 #import "ggml-metal-ops.h"
+#import "ggml-metal-fusion.h"
 
 #import <Foundation/Foundation.h>
 
@@ -29,34 +30,32 @@ struct ggml_metal {
     ggml_metal_device_t  dev;
     ggml_metal_library_t lib;
 
-    ggml_metal_event_t ev_cpy; // for async copies
+    ggml_metal_event_t ev_cpy;  // for async copies
+    ggml_metal_event_t ev_sync; // destination completion signal
 
     dispatch_queue_t d_queue;
 
     // additional, inference-time compiled pipelines
     ggml_metal_pipelines_t pipelines_ext;
 
-    bool use_fusion;
     bool use_concurrency;
     bool use_graph_optimize;
 
     int debug_graph;
-    int debug_fusion;
 
-    // how many times a given op was fused
-    uint64_t fuse_cnt[GGML_OP_COUNT];
+    struct ggml_metal_fusion_info * finfo;
 
     // capture state
-    bool capture_next_compute;
+    int capture_compute;
     bool capture_started;
 
     id<MTLCaptureScope> capture_scope;
 
     // command buffer state
     int n_cb;           // number of extra threads used to submit the command buffers
-    int n_nodes_0;      // number of nodes submitted by the main thread
-    int n_nodes_1;      // remaining number of nodes submitted by the n_cb threads
-    int n_nodes_per_cb;
+
+    // first node of each extra command buffer, then the end of the graph
+    int cb_start[GGML_METAL_MAX_COMMAND_BUFFERS + 1];
 
     struct ggml_cgraph * gf;
 
@@ -69,108 +68,128 @@ struct ggml_metal {
     // extra command buffers for things like getting, setting and copying tensors
     NSMutableArray * cmd_bufs_ext;
 
+    // buffers to release after async Metal operations complete
+    // if Metal released them, it would do so on a Metal-internal thread without an autorelease pool, which could cause leaks
+    NSMutableArray * buf_refs;
+
     // the last command buffer queued into the Metal queue with operations relevant to the current Metal backend
     id<MTLCommandBuffer> cmd_buf_last;
 
     // abort ggml_metal_graph_compute if callback returns true
     ggml_abort_callback abort_callback;
     void *              abort_callback_data;
+
+    // error state - set when a command buffer fails during synchronize
+    // once set, graph_compute will return GGML_STATUS_FAILED until the backend is recreated
+    bool has_error;
 };
 
 ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
     GGML_LOG_INFO("%s: allocating\n", __func__);
 
+    @autoreleasepool {
 #if TARGET_OS_OSX && !GGML_METAL_NDEBUG
-    // Show all the Metal device instances in the system
-    NSArray * devices = MTLCopyAllDevices();
-    for (id<MTLDevice> device in devices) {
-        GGML_LOG_INFO("%s: found device: %s\n", __func__, [[device name] UTF8String]);
-    }
-    [devices release]; // since it was created by a *Copy* C method
+        // Show all the Metal device instances in the system
+        NSArray * devices = MTLCopyAllDevices();
+        for (id<MTLDevice> device in devices) {
+            GGML_LOG_INFO("%s: found device: %s\n", __func__, [[device name] UTF8String]);
+        }
+        [devices release]; // since it was created by a *Copy* C method
 #endif
 
-    // init context
-    ggml_metal_t res = calloc(1, sizeof(struct ggml_metal));
+        // init context
+        ggml_metal_t res = calloc(1, sizeof(struct ggml_metal));
 
-    id<MTLDevice> device = ggml_metal_device_get_obj(dev);
+        id<MTLDevice> device = ggml_metal_device_get_obj(dev);
 
-    GGML_LOG_INFO("%s: picking default device: %s\n", __func__, [[device name] UTF8String]);
+        GGML_LOG_INFO("%s: picking default device: %s\n", __func__, [[device name] UTF8String]);
 
-    // TODO: would it be better to have one queue for the backend and one queue for the device?
-    //       the graph encoders and async ops would use the backend queue while the sync ops would use the device queue?
-    //res->queue = [device newCommandQueue]; [TAG_QUEUE_PER_BACKEND]
-    id<MTLCommandQueue> queue = ggml_metal_device_get_queue(dev);
-    if (queue == nil) {
-        GGML_LOG_ERROR("%s: error: failed to create command queue\n", __func__);
-        return NULL;
-    }
-
-    res->dev = dev;
-    res->lib = ggml_metal_device_get_library(dev);
-    if (res->lib == NULL) {
-        GGML_LOG_WARN("%s: the device does not have a precompiled Metal library - this is unexpected\n", __func__);
-        GGML_LOG_WARN("%s: will try to compile it on the fly\n", __func__);
-
-        res->lib = ggml_metal_library_init(dev);
-        if (res->lib == NULL) {
-            GGML_LOG_ERROR("%s: error: failed to initialize the Metal library\n", __func__);
-
+        // TODO: would it be better to have one queue for the backend and one queue for the device?
+        //       the graph encoders and async ops would use the backend queue while the sync ops would use the device queue?
+        //res->queue = [device newCommandQueue]; [TAG_QUEUE_PER_BACKEND]
+        id<MTLCommandQueue> queue = ggml_metal_device_get_queue(dev);
+        if (queue == nil) {
+            GGML_LOG_ERROR("%s: error: failed to create command queue\n", __func__);
             free(res);
-
             return NULL;
         }
+
+        res->dev = dev;
+        res->lib = ggml_metal_device_get_library(dev);
+        if (res->lib == NULL) {
+            GGML_LOG_WARN("%s: the device does not have a precompiled Metal library - this is unexpected\n", __func__);
+            GGML_LOG_WARN("%s: will try to compile it on the fly\n", __func__);
+
+            res->lib = ggml_metal_library_init(dev);
+            if (res->lib == NULL) {
+                GGML_LOG_ERROR("%s: error: failed to initialize the Metal library\n", __func__);
+
+                free(res);
+
+                return NULL;
+            }
+        }
+
+        res->ev_cpy  = ggml_metal_device_event_init(dev);
+        res->ev_sync = ggml_metal_device_event_init(dev);
+
+        const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(dev);
+
+        snprintf(res->name, sizeof(res->name), "%s", props_dev->name);
+
+        res->d_queue = dispatch_queue_create("ggml-metal", DISPATCH_QUEUE_CONCURRENT);
+
+        res->use_concurrency = getenv("GGML_METAL_CONCURRENCY_DISABLE") == nil;
+
+        {
+            const char * val = getenv("GGML_METAL_GRAPH_DEBUG");
+            res->debug_graph = val ? atoi(val) : 0;
+        }
+
+        res->use_graph_optimize = true;
+
+        if (getenv("GGML_METAL_GRAPH_OPTIMIZE_DISABLE") != NULL) {
+            res->use_graph_optimize = false;
+        }
+
+        res->finfo = ggml_metal_device_get_fusion_info(dev);
+        if (ggml_metal_fusion_info_stats(res->finfo)) {
+            ggml_metal_fusion_info_labels_init(res->finfo);
+            res->n_cb = 0;
+        }
+
+        GGML_LOG_INFO("%s: use fusion         = %s\n", __func__, ggml_metal_fusion_info_enabled(res->finfo) ? "true" : "false");
+        GGML_LOG_INFO("%s: use concurrency    = %s\n", __func__, res->use_concurrency    ? "true" : "false");
+        GGML_LOG_INFO("%s: use graph optimize = %s\n", __func__, res->use_graph_optimize ? "true" : "false");
+
+        res->capture_compute = 0;
+        res->capture_started = false;
+        res->capture_scope = nil;
+
+        {
+            const char * val = getenv("GGML_METAL_CAPTURE_COMPUTE");
+            if (val) {
+                res->capture_compute = atoi(val);
+            }
+        }
+
+        res->has_error = false;
+
+        res->gf = nil;
+        res->encode_async = nil;
+        for (int i = 0; i < GGML_METAL_MAX_COMMAND_BUFFERS; ++i) {
+            res->cmd_bufs[i].obj = nil;
+        }
+
+        res->cmd_bufs_ext = [[NSMutableArray alloc] init];
+        res->buf_refs     = [[NSMutableArray alloc] init];
+
+        res->cmd_buf_last = nil;
+
+        res->pipelines_ext = ggml_metal_pipelines_init();
+
+        return res;
     }
-
-    res->ev_cpy = ggml_metal_device_event_init(dev);
-
-    const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(dev);
-
-    snprintf(res->name, sizeof(res->name), "%s", props_dev->name);
-
-    res->d_queue = dispatch_queue_create("ggml-metal", DISPATCH_QUEUE_CONCURRENT);
-
-    res->use_fusion      = getenv("GGML_METAL_FUSION_DISABLE") == nil;
-    res->use_concurrency = getenv("GGML_METAL_CONCURRENCY_DISABLE") == nil;
-
-    {
-        const char * val = getenv("GGML_METAL_GRAPH_DEBUG");
-        res->debug_graph = val ? atoi(val) : 0;
-    }
-
-    {
-        const char * val = getenv("GGML_METAL_FUSION_DEBUG");
-        res->debug_fusion = val ? atoi(val) : 0;
-    }
-
-    res->use_graph_optimize = true;
-
-    if (getenv("GGML_METAL_GRAPH_OPTIMIZE_DISABLE") != NULL) {
-        res->use_graph_optimize = false;
-    }
-
-    memset(res->fuse_cnt, 0, sizeof(res->fuse_cnt));
-
-    GGML_LOG_INFO("%s: use fusion         = %s\n", __func__, res->use_fusion         ? "true" : "false");
-    GGML_LOG_INFO("%s: use concurrency    = %s\n", __func__, res->use_concurrency    ? "true" : "false");
-    GGML_LOG_INFO("%s: use graph optimize = %s\n", __func__, res->use_graph_optimize ? "true" : "false");
-
-    res->capture_next_compute = false;
-    res->capture_started = false;
-    res->capture_scope = nil;
-
-    res->gf = nil;
-    res->encode_async = nil;
-    for (int i = 0; i < GGML_METAL_MAX_COMMAND_BUFFERS; ++i) {
-        res->cmd_bufs[i].obj = nil;
-    }
-
-    res->cmd_bufs_ext = [[NSMutableArray alloc] init];
-
-    res->cmd_buf_last = nil;
-
-    res->pipelines_ext = ggml_metal_pipelines_init();
-
-    return res;
 }
 
 void ggml_metal_free(ggml_metal_t ctx) {
@@ -191,20 +210,28 @@ void ggml_metal_free(ggml_metal_t ctx) {
     [ctx->cmd_bufs_ext removeAllObjects];
     [ctx->cmd_bufs_ext release];
 
+    @autoreleasepool {
+        [ctx->buf_refs removeAllObjects];
+        [ctx->buf_refs release];
+    }
+
     if (ctx->pipelines_ext) {
         ggml_metal_pipelines_free(ctx->pipelines_ext);
         ctx->pipelines_ext = nil;
     }
 
-    if (ctx->debug_fusion > 0) {
+    if (ggml_metal_fusion_info_debug(ctx->finfo) > 0) {
         GGML_LOG_DEBUG("%s: fusion stats:\n", __func__);
-        for (int i = 0; i < GGML_OP_COUNT; i++) {
-            if (ctx->fuse_cnt[i] == 0) {
+
+        const int n_fusions = ggml_metal_fusion_info_n_fusions(ctx->finfo);
+        for (int i = 0; i < n_fusions; i++) {
+            const uint64_t count = ggml_metal_fusion_info_count(ctx->finfo, i);
+            if (count == 0) {
                 continue;
             }
 
             // note: cannot use ggml_log here
-            GGML_LOG_DEBUG("%s: - %s: %" PRIu64 "\n", __func__, ggml_op_name((enum ggml_op) i), ctx->fuse_cnt[i]);
+            GGML_LOG_DEBUG("%s: - %s: %" PRIu64 "\n", __func__, ggml_metal_fusion_info_label(ctx->finfo, i), count);
         }
     }
 
@@ -215,6 +242,7 @@ void ggml_metal_free(ggml_metal_t ctx) {
     dispatch_release(ctx->d_queue);
 
     ggml_metal_device_event_free(ctx->dev, ctx->ev_cpy);
+    ggml_metal_device_event_free(ctx->dev, ctx->ev_sync);
 
     free(ctx);
 }
@@ -246,7 +274,8 @@ void ggml_metal_synchronize(ggml_metal_t ctx) {
                 if (status == MTLCommandBufferStatusError) {
                     GGML_LOG_ERROR("error: %s\n", [[cmd_buf error].localizedDescription UTF8String]);
                 }
-                GGML_ABORT("fatal error");
+                ctx->has_error = true;
+                return;
             }
         }
     }
@@ -262,13 +291,25 @@ void ggml_metal_synchronize(ggml_metal_t ctx) {
                 if (status == MTLCommandBufferStatusError) {
                     GGML_LOG_ERROR("error: %s\n", [[cmd_buf error].localizedDescription UTF8String]);
                 }
-                GGML_ABORT("fatal error");
+
+                // release this and all remaining command buffers before returning
+                for (size_t j = i; j < ctx->cmd_bufs_ext.count; ++j) {
+                    [ctx->cmd_bufs_ext[j] release];
+                }
+                [ctx->cmd_bufs_ext removeAllObjects];
+
+                ctx->has_error = true;
+                return;
             }
 
             [cmd_buf release];
         }
 
         [ctx->cmd_bufs_ext removeAllObjects];
+    }
+
+    @autoreleasepool {
+        [ctx->buf_refs removeAllObjects];
     }
 }
 
@@ -313,6 +354,8 @@ void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor, 
 
         [encoder endEncoding];
         [cmd_buf commit];
+
+        [ctx->buf_refs addObject:buf_src];
         [buf_src release];
 
         // do not wait here for completion
@@ -357,6 +400,8 @@ void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * te
 
         [encoder endEncoding];
         [cmd_buf commit];
+
+        [ctx->buf_refs addObject:buf_dst];
         [buf_dst release];
 
         // do not wait here for completion
@@ -379,10 +424,23 @@ bool ggml_metal_cpy_tensor_async(ggml_metal_t ctx_src, ggml_metal_t ctx_dst, con
             return false;
         }
 
+        id<MTLCommandQueue> dst_queue = ggml_metal_device_get_queue(ctx_dst->dev);
+        id<MTLCommandBuffer> sync_cmd_buf = [dst_queue commandBuffer];
+
+        ggml_metal_event_encode_signal(ctx_dst->ev_sync, sync_cmd_buf);
+
+        [sync_cmd_buf commit];
+
+        [ctx_dst->cmd_bufs_ext addObject:sync_cmd_buf];
+        ctx_dst->cmd_buf_last = sync_cmd_buf;
+
+        [sync_cmd_buf retain];
+
         // queue the copy operation into the Metal context
         // this will be queued at the end, after any currently ongoing GPU operations
         id<MTLCommandQueue> queue = ggml_metal_device_get_queue(ctx_src->dev);
         id<MTLCommandBuffer> cmd_buf = [queue commandBuffer];
+        ggml_metal_event_encode_wait(ctx_dst->ev_sync, cmd_buf);
         id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
         [encoder copyFromBuffer:bid_src.metal
@@ -414,6 +472,15 @@ bool ggml_metal_cpy_tensor_async(ggml_metal_t ctx_src, ggml_metal_t ctx_dst, con
 }
 
 enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph * gf) {
+    if (ctx->has_error) {
+        GGML_LOG_ERROR("%s: backend is in error state from a previous command buffer failure - recreate the backend to recover\n", __func__);
+        return GGML_STATUS_FAILED;
+    }
+
+    if (gf->n_nodes == 0) {
+        return GGML_STATUS_SUCCESS;
+    }
+
     // number of nodes encoded by the main thread (empirically determined)
     const int n_main = MAX(64, 0.1*gf->n_nodes);
 
@@ -424,7 +491,7 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
     ggml_metal_device_rsets_keep_alive(ctx->dev);
 
     // submit the ggml compute graph to the GPU by creating command buffers and encoding the ops in them
-    // the first n_nodes_0 are encoded and submitted for processing directly by the calling thread
+    // the first n_main nodes are encoded and submitted for processing directly by the calling thread
     // while these nodes are processing, we start n_cb threads to enqueue the rest of the nodes
     // each thread creates it's own command buffer and enqueues the ops in parallel
     //
@@ -433,15 +500,30 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
     @autoreleasepool {
         ctx->gf = gf;
 
-        ctx->n_nodes_0 = MIN(n_main, gf->n_nodes);
-        ctx->n_nodes_1 = gf->n_nodes - ctx->n_nodes_0;
+        // the main thread encodes [0, cb_start[0]) and the extra command buffer i encodes [cb_start[i], cb_start[i + 1])
+        // a fusion cannot span two command buffers, so each boundary moves to the end of the fusable group it falls
+        // into and the encoders fuse the same nodes as with a single command buffer
+        {
+            const int n_rest   = gf->n_nodes - MIN(n_main, gf->n_nodes);
+            const int n_per_cb = n_cb > 0 ? (n_rest + n_cb - 1) / n_cb : 0;
 
-        ctx->n_nodes_per_cb = (ctx->n_nodes_1 + ctx->n_cb - 1) / ctx->n_cb;
+            int i = 0;
+            for (int cb_idx = 0; cb_idx < n_cb; ++cb_idx) {
+                const int target = MIN(n_main + cb_idx*n_per_cb, gf->n_nodes);
+                while (i < target) {
+                    i += ggml_metal_fusion_max(gf, i);
+                }
+                ctx->cb_start[cb_idx] = MIN(i, gf->n_nodes);
+            }
+            ctx->cb_start[n_cb] = gf->n_nodes;
+        }
 
-        const bool use_capture = ctx->capture_next_compute;
+        if (ctx->capture_compute >= 0) {
+            ctx->capture_compute--;
+        }
+
+        const bool use_capture = ctx->capture_compute == 0;
         if (use_capture) {
-            ctx->capture_next_compute = false;
-
             // make sure all previous computations have finished before starting the capture
             if (ctx->cmd_buf_last) {
                 [ctx->cmd_buf_last waitUntilCompleted];
@@ -449,6 +531,10 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
             }
 
             if (!ctx->capture_started) {
+                NSString * path = [NSString stringWithFormat:@"/tmp/perf-metal-%d.gputrace", getpid()];
+
+                GGML_LOG_WARN("%s: capturing graph in %s\n", __func__, [path UTF8String]);
+
                 // create capture scope
                 id<MTLDevice> device = ggml_metal_device_get_obj(ctx->dev);
                 ctx->capture_scope = [[MTLCaptureManager sharedCaptureManager] newCaptureScopeWithDevice:device];
@@ -456,11 +542,17 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
                 MTLCaptureDescriptor * descriptor = [MTLCaptureDescriptor new];
                 descriptor.captureObject = ctx->capture_scope;
                 descriptor.destination = MTLCaptureDestinationGPUTraceDocument;
-                descriptor.outputURL = [NSURL fileURLWithPath:[NSString stringWithFormat:@"/tmp/perf-metal.gputrace"]];
+                descriptor.outputURL = [NSURL fileURLWithPath:path];
 
                 NSError * error = nil;
-                if (![[MTLCaptureManager sharedCaptureManager] startCaptureWithDescriptor:descriptor error:&error]) {
-                    GGML_LOG_ERROR("%s: error: unable to start capture '%s'\n", __func__, [[error localizedDescription] UTF8String]);
+                const bool ok = [[MTLCaptureManager sharedCaptureManager] startCaptureWithDescriptor:descriptor error:&error];
+
+                [descriptor release];
+
+                if (!ok) {
+                    GGML_LOG_ERROR("%s: error: unable to start capture '%s' (did you set METAL_CAPTURE_ENABLED=1 ?)\n", __func__, [[error localizedDescription] UTF8String]);
+                    [ctx->capture_scope release];
+                    ctx->capture_scope = nil;
                 } else {
                     [ctx->capture_scope beginScope];
                     ctx->capture_started = true;
@@ -519,7 +611,9 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
 
         // enter here only when capturing in order to wait for all computation to finish
         // otherwise, we leave the graph to compute asynchronously
-        if (!use_capture && ctx->capture_started) {
+        if (use_capture && ctx->capture_started) {
+            enum ggml_status res = GGML_STATUS_SUCCESS;
+
             // wait for completion and check status of each command buffer
             // needed to detect if the device ran out-of-memory for example (#1881)
             {
@@ -533,11 +627,11 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
                         GGML_LOG_INFO("error: %s\n", [[cmd_buf error].localizedDescription UTF8String]);
                     }
 
-                    return GGML_STATUS_FAILED;
+                    res = GGML_STATUS_FAILED;
                 }
             }
 
-            for (int i = 0; i < n_cb; ++i) {
+            for (int i = 0; i < n_cb && res == GGML_STATUS_SUCCESS; ++i) {
                 id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[i].obj;
                 [cmd_buf waitUntilCompleted];
 
@@ -547,8 +641,8 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
                     if (status == MTLCommandBufferStatusError) {
                         GGML_LOG_INFO("error: %s\n", [[cmd_buf error].localizedDescription UTF8String]);
                     }
-
-                    return GGML_STATUS_FAILED;
+                    res = GGML_STATUS_FAILED;
+                    break;
                 }
 
                 id<MTLCommandBuffer> next_buffer = (i + 1 < n_cb ? ctx->cmd_bufs[i + 1].obj : nil);
@@ -563,7 +657,8 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
 
                 if (ctx->abort_callback && ctx->abort_callback(ctx->abort_callback_data)) {
                     GGML_LOG_INFO("%s: command buffer %d aborted", __func__, i);
-                    return GGML_STATUS_ABORTED;
+                    res = GGML_STATUS_ABORTED;
+                    break;
                 }
 
                 [next_buffer commit];
@@ -571,6 +666,15 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
 
             [ctx->capture_scope endScope];
             [[MTLCaptureManager sharedCaptureManager] stopCapture];
+
+            [ctx->capture_scope release];
+            ctx->capture_scope = nil;
+
+            ctx->capture_started = false;
+
+            if (res != GGML_STATUS_SUCCESS) {
+                return res;
+            }
         }
     }
 
@@ -624,6 +728,12 @@ ggml_metal_event_t ggml_metal_get_ev_cpy(ggml_metal_t ctx) {
 }
 
 void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
+    // when fusion stats are collected the graph must be encoded by a single thread so the
+    // counters are race-free; override whatever the caller requested
+    if (ggml_metal_fusion_info_stats(ctx->finfo)) {
+        n_cb = 0;
+    }
+
     if (ctx->n_cb != n_cb) {
         ctx->n_cb = MIN(n_cb, GGML_METAL_MAX_COMMAND_BUFFERS);
 
@@ -640,17 +750,12 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
         const int cb_idx = iter;
         const int n_cb_l = ctx->n_cb;
 
-        const int n_nodes_0 = ctx->n_nodes_0;
-        const int n_nodes_1 = ctx->n_nodes_1;
-
-        const int n_nodes_per_cb = ctx->n_nodes_per_cb;
-
         int idx_start = 0;
-        int idx_end   = n_nodes_0;
+        int idx_end   = ctx->cb_start[0];
 
         if (cb_idx < n_cb_l) {
-            idx_start = n_nodes_0 + (                                         (cb_idx + 0) * n_nodes_per_cb);
-            idx_end   = n_nodes_0 + (MIN((cb_idx == n_cb_l - 1) ? n_nodes_1 : (cb_idx + 1) * n_nodes_per_cb, n_nodes_1));
+            idx_start = ctx->cb_start[cb_idx];
+            idx_end   = ctx->cb_start[cb_idx + 1];
         }
 
         id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[cb_idx].obj;
@@ -659,13 +764,12 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
             ctx->dev,
             cmd_buf,
             ctx->gf,
+            ctx->finfo,
             idx_start,
             idx_end,
-            ctx->use_fusion,
             ctx->use_concurrency,
-            ctx->capture_next_compute,
-            ctx->debug_graph,
-            ctx->debug_fusion);
+            ctx->capture_compute == 0,
+            ctx->debug_graph);
 
         for (int idx = 0; idx < ggml_metal_op_n_nodes(ctx_op); ++idx) {
             const int res = ggml_metal_op_encode(ctx_op, idx);
@@ -698,5 +802,5 @@ bool ggml_metal_supports_family(ggml_metal_t ctx, int family) {
 }
 
 void ggml_metal_capture_next_compute(ggml_metal_t ctx) {
-    ctx->capture_next_compute = true;
+    ctx->capture_compute = 1;
 }

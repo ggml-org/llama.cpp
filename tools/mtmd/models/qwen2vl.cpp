@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_qwen2vl::build() {
+ggml_cgraph * mtmd_graph_qwen2vl::build() {
     GGML_ASSERT(model.patch_bias == nullptr);
     GGML_ASSERT(model.class_embedding == nullptr);
 
@@ -16,17 +16,10 @@ ggml_cgraph * clip_graph_qwen2vl::build() {
 
     int mrope_sections[4] = {d_head/4, d_head/4, d_head/4, d_head/4};
 
-    ggml_tensor * inp_raw = build_inp_raw();
-    ggml_tensor * inp = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
-
-    GGML_ASSERT(img.nx % (patch_size * 2) == 0);
-    GGML_ASSERT(img.ny % (patch_size * 2) == 0);
+    ggml_tensor * inp = build_inp_temporal_merge();
 
     // second conv dimension
     {
-        auto inp_1 = ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
-        inp = ggml_add(ctx0, inp, inp_1);
-
         inp = ggml_permute(ctx0, inp, 1, 2, 0, 3);  // [w, h, c, b] -> [c, w, h, b]
         inp = ggml_cont_4d(
             ctx0, inp,
@@ -60,14 +53,7 @@ ggml_cgraph * clip_graph_qwen2vl::build() {
         ggml_set_name(inv_window_idx, "inv_window_idx");
         ggml_set_input(inv_window_idx);
         // mask for window attention
-        window_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_pos, n_pos);
-        ggml_set_name(window_mask, "window_mask");
-        ggml_set_input(window_mask);
-
-        // if flash attn is used, we need to pad the mask and cast to f16
-        if (flash_attn_type == CLIP_FLASH_ATTN_TYPE_ENABLED) {
-            window_mask = ggml_cast(ctx0, window_mask, GGML_TYPE_F16);
-        }
+        window_mask = build_inp_attn_mask(n_pos, n_pos);
 
         // inpL shape: [n_embd, n_patches_x * n_patches_y, batch_size]
         GGML_ASSERT(batch_size == 1);
@@ -90,11 +76,11 @@ ggml_cgraph * clip_graph_qwen2vl::build() {
         // self-attention
         {
             ggml_tensor * Qcur = ggml_add(ctx0,
-                ggml_mul_mat(ctx0, layer.q_w, cur), layer.q_b);
+                build_mm(layer.q_w, cur), layer.q_b);
             ggml_tensor * Kcur = ggml_add(ctx0,
-                ggml_mul_mat(ctx0, layer.k_w, cur), layer.k_b);
+                build_mm(layer.k_w, cur), layer.k_b);
             ggml_tensor * Vcur = ggml_add(ctx0,
-                ggml_mul_mat(ctx0, layer.v_w, cur), layer.v_b);
+                build_mm(layer.v_w, cur), layer.v_b);
 
             Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_patches);
             Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_patches);

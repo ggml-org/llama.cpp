@@ -6,6 +6,7 @@
 #include "llama.h"
 #include "chat.h"
 
+#include <clocale>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -32,12 +33,8 @@
 #endif
 
 static llama_context           ** g_ctx;
-static llama_model             ** g_model;
 static common_sampler          ** g_smpl;
 static common_params            * g_params;
-static std::vector<llama_token> * g_input_tokens;
-static std::ostringstream       * g_output_ss;
-static std::vector<llama_token> * g_output_tokens;
 static bool is_interacting  = false;
 static bool need_insert_eot = false;
 
@@ -83,15 +80,20 @@ static void sigint_handler(int signo) {
 }
 #endif
 
-int main(int argc, char ** argv) {
+// satisfies -Wmissing-declarations
+int llama_completion(int argc, char ** argv);
+
+int llama_completion(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
     g_params = &params;
+
+    common_init();
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMPLETION, print_usage)) {
         return 1;
     }
-
-    common_init();
 
     auto & sparams = params.sampling;
 
@@ -130,7 +132,6 @@ int main(int argc, char ** argv) {
     llama_context * ctx = nullptr;
     common_sampler * smpl = nullptr;
 
-    g_model = &model;
     g_ctx = &ctx;
     g_smpl = &smpl;
 
@@ -158,47 +159,6 @@ int main(int argc, char ** argv) {
 
     // start measuring performance timings from here
     llama_perf_context_reset(ctx);
-
-    LOG_INF("%s: llama threadpool init, n_threads = %d\n", __func__, (int) params.cpuparams.n_threads);
-
-    auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-    if (!cpu_dev) {
-        LOG_ERR("%s: no CPU backend found\n", __func__);
-        return 1;
-    }
-    auto * reg = ggml_backend_dev_backend_reg(cpu_dev);
-    auto * ggml_threadpool_new_fn = (decltype(ggml_threadpool_new) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_new");
-    auto * ggml_threadpool_free_fn = (decltype(ggml_threadpool_free) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_free");
-
-    struct ggml_threadpool_params tpp_batch =
-            ggml_threadpool_params_from_cpu_params(params.cpuparams_batch);
-    struct ggml_threadpool_params tpp =
-            ggml_threadpool_params_from_cpu_params(params.cpuparams);
-
-    if (!set_process_priority(params.cpuparams.priority)) {
-        LOG_ERR("%s: error: failed to set process priority\n", __func__);
-        return 1;
-    }
-
-    struct ggml_threadpool * threadpool_batch = NULL;
-    if (!ggml_threadpool_params_match(&tpp, &tpp_batch)) {
-        threadpool_batch = ggml_threadpool_new_fn(&tpp_batch);
-        if (!threadpool_batch) {
-            LOG_ERR("%s: batch threadpool create failed : n_threads %d\n", __func__, tpp_batch.n_threads);
-            return 1;
-        }
-
-        // start the non-batch threadpool in the paused state
-        tpp.paused = true;
-    }
-
-    struct ggml_threadpool * threadpool = ggml_threadpool_new_fn(&tpp);
-    if (!threadpool) {
-        LOG_ERR("%s: threadpool create failed : n_threads %d\n", __func__, tpp.n_threads);
-        return 1;
-    }
-
-    llama_attach_threadpool(ctx, threadpool, threadpool_batch);
 
     const int n_ctx_train = llama_model_n_ctx_train(model);
     const int n_ctx = llama_n_ctx(ctx);
@@ -305,8 +265,9 @@ int main(int argc, char ** argv) {
                 inputs.use_jinja = g_params->use_jinja;
                 inputs.messages = chat_msgs;
                 inputs.add_generation_prompt = !params.prompt.empty();
+                inputs.force_pure_content = params.force_pure_content_parser;
 
-                prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
+                prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt.str();
             }
         } else {
             // otherwise use the prompt as is
@@ -366,17 +327,11 @@ int main(int argc, char ** argv) {
                         __func__, n_match, embd_inp.size());
             }
 
-            if (session_tokens.size() == n_match) {
-                // [TAG_CONTEXT_STATE_LOGITS]
-                // in this case, we are going to reuse the logits from the session
-                // if we ever decide to remove the logits from the session, we need to handle this somehow
-                // ref: https://github.com/ggml-org/llama.cpp/pull/18862#issuecomment-3756330941
-            }
-
             // remove any "future" tokens that we might have inherited from the previous session
             if (session_tokens.size() > n_match) {
-                if (!llama_memory_seq_rm(mem, -1, n_match, -1)) {
-                    LOG_WRN("%s: unable to resuse common prefix (for example, when the memory is recurrent)\n", __func__);
+                llama_pos pos = n_match > 0 ? (llama_pos)(n_match - 1) : 0;
+                if (!llama_memory_seq_rm(mem, -1, pos, -1)) {
+                    LOG_WRN("%s: unable to reuse common prefix (for example, when the memory is recurrent)\n", __func__);
                     llama_memory_clear(mem, true);
                     session_tokens.clear();
                     n_match = 0;
@@ -387,6 +342,17 @@ int main(int argc, char ** argv) {
         }
 
         session_do_save = !path_session.empty() && n_match < embd_inp.size() && !params.prompt_cache_ro;
+
+        // Logits are not stored as part of the session state so we need to
+        // "replay" the last token to get logits for sampling.
+        if (!session_tokens.empty() && n_match > 0 && n_match == session_tokens.size()) {
+            if (!common_replay_last_token(ctx, session_tokens.back(), n_match - 1)) {
+                return 1;
+            }
+
+            session_do_save = false;
+            LOG_INF("%s: replayed last token from session\n", __func__);
+        }
     }
 
     // number of tokens to keep when resetting context
@@ -537,9 +503,9 @@ int main(int argc, char ** argv) {
     int n_consumed         = 0;
     int n_session_consumed = 0;
 
-    std::vector<int>   input_tokens;  g_input_tokens  = &input_tokens;
-    std::vector<int>   output_tokens; g_output_tokens = &output_tokens;
-    std::ostringstream output_ss;     g_output_ss     = &output_ss;
+    std::vector<int>   input_tokens;
+    std::vector<int>   output_tokens;
+    std::ostringstream output_ss;
     std::ostringstream assistant_ss; // for storing current assistant message, used in conversation mode
 
     // the first thing we will do is to output the prompt, so set color accordingly
@@ -559,10 +525,9 @@ int main(int argc, char ** argv) {
     }
 
     if (llama_model_has_encoder(model)) {
-        int enc_input_size = embd_inp.size();
-        llama_token * enc_input_buf = embd_inp.data();
+        common_batch batch = common_batch_get_one(ctx, embd_inp);
 
-        if (llama_encode(ctx, llama_batch_get_one(enc_input_buf, enc_input_size))) {
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_ENCODE, batch.get())) {
             LOG_ERR("%s : failed to eval\n", __func__);
             return 1;
         }
@@ -675,40 +640,29 @@ int main(int argc, char ** argv) {
             }
 
             if (!embd.empty()) {
-                int n_eval = (int) embd.size();
-                LOG_DBG("eval: %s\n", string_from(ctx, embd).c_str());
-
-                GGML_ASSERT(n_eval <= params.n_batch);
-                if (llama_decode(ctx, llama_batch_get_one(embd.data(), n_eval))) {
-                    LOG_ERR("%s : failed to eval\n", __func__);
+                const bool is_last_batch = (n_consumed >= (int) embd_inp.size());
+                const bool save_now = session_do_save && is_last_batch;
+                session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
+                if (!common_prompt_batch_decode(ctx, session_tokens, embd.size(), n_past, params.n_batch, path_session, save_now)) {
                     return 1;
                 }
-
-                n_past += n_eval;
+                n_session_consumed += embd.size();
+                if (save_now) {
+                    session_do_save = false;
+                }
 
                 LOG_DBG("n_past = %d\n", n_past);
+
                 // Display total tokens alongside total time
                 if (params.n_print > 0 && n_past % params.n_print == 0) {
                     LOG_DBG("\n\033[31mTokens consumed so far = %d / %d \033[0m\n", n_past, n_ctx);
                 }
-            }
-
-            if (!embd.empty() && !path_session.empty()) {
-                session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
-                n_session_consumed = session_tokens.size();
             }
         }
 
         embd.clear();
 
         if ((int) embd_inp.size() <= n_consumed && !is_interacting) {
-            // optionally save the session on first sample (for faster prompt loading next time)
-            if (session_do_save) {
-                session_do_save = false;
-                llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
-
-                LOG_DBG("saved session to %s\n", path_session.c_str());
-            }
 
             const llama_token id = common_sampler_sample(smpl, ctx, -1);
 
@@ -986,16 +940,16 @@ int main(int argc, char ** argv) {
 
     if (!path_session.empty() && params.prompt_cache_all && !params.prompt_cache_ro) {
         LOG("\n%s: saving final output to session file '%s'\n", __func__, path_session.c_str());
+        session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
         llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
+        LOG_INF("saved final session to %s, n_tokens = %zu\n", path_session.data(), session_tokens.size());
+
     }
 
     LOG("\n\n");
     common_perf_print(ctx, smpl);
 
     llama_backend_free();
-
-    ggml_threadpool_free_fn(threadpool);
-    ggml_threadpool_free_fn(threadpool_batch);
 
     return 0;
 }

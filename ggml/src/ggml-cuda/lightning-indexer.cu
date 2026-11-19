@@ -1,0 +1,720 @@
+#include "common.cuh"
+#include "lightning-indexer.cuh"
+#include "fattn-common.cuh"
+#include "convert.cuh"
+#include "mma.cuh"
+
+// tokens scored per block by the tile kernel
+#define LIGHTNING_INDEXER_TILE_TOKENS 8
+
+// heads whose queries the tile kernel stages per pass, MUSA arch 21 caps static shared memory
+// at 28 KB and the queries of four heads do not fit there next to the key tile
+#if defined(GGML_USE_MUSA) && defined(__MUSA_ARCH__) && __MUSA_ARCH__ < 220
+#define LIGHTNING_INDEXER_TILE_HEADS_PER_PASS 2
+#else
+#define LIGHTNING_INDEXER_TILE_HEADS_PER_PASS 4
+#endif
+
+
+template <int WARPS_PER_BLOCK, int K_VECS_PER_BLOCK, int64_t N_EMBD, int64_t N_HEAD, ggml_type TYPE_K>
+static __global__ void lightning_indexer_kernel_mma(
+        const float * Q, const char * K, const float * W, const half * M, float * dst,
+        int64_t n_stream, int64_t n_batch, int64_t n_kv,
+        size_t nb1, size_t nb2, size_t nb3,
+        size_t nbq1, size_t nbq2, size_t nbq3,
+        size_t nbk1, size_t nbk2, size_t nbk3,
+        size_t nbw1, size_t nbw2, size_t nbw3,
+        size_t nbm1, size_t nbm2, size_t nbm3,
+        int64_t nem3
+    ) {
+    constexpr int MMA_DIM = 16;
+    constexpr int WAVE_SIZE = ggml_cuda_get_physical_warp_size();
+    constexpr int THREADS_PER_BLOCK = WARPS_PER_BLOCK * WAVE_SIZE;
+    constexpr int N_EMBD_PADDED = N_EMBD + 8;
+    constexpr int K_VECS_PADDED = K_VECS_PER_BLOCK + 8;
+    constexpr int HEAD_CHUNK    = MMA_DIM;
+    constexpr int N_HEAD_CHUNKS = N_HEAD / HEAD_CHUNK;
+    constexpr int N_KV_TILES    = K_VECS_PER_BLOCK / MMA_DIM;
+    constexpr int N_EMBD_TILES  = N_EMBD / MMA_DIM;
+
+    static_assert(N_HEAD           % MMA_DIM == 0, "N_HEAD must be a multiple of 16");
+    static_assert(N_EMBD           % MMA_DIM == 0, "N_EMBD must be a multiple of 16");
+    static_assert(K_VECS_PER_BLOCK % MMA_DIM == 0, "K_VECS_PER_BLOCK must be a multiple of 16");
+
+#if defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
+    using tile_qk = ggml_cuda_mma::tile<MMA_DIM, MMA_DIM, float, ggml_cuda_mma::DATA_LAYOUT_J_MAJOR>;
+#else
+    using tile_qk = ggml_cuda_mma::tile<MMA_DIM, MMA_DIM, float>;
+#endif
+
+    const int i_batch  = blockIdx.y;
+    const int i_stream = blockIdx.z;
+    const int i_warp   = threadIdx.y;
+    const int i_lane   = threadIdx.x;
+    const int tid      = i_warp * WAVE_SIZE + i_lane;
+
+    const int start_kv = blockIdx.x * K_VECS_PER_BLOCK;
+
+    const char  * q_base = (const char  *)                 Q + i_batch*nbq2 + i_stream*nbq3;
+    const float * w_base = (const float *) ((const char *) W + i_batch*nbw1 + i_stream*nbw3);
+
+    __shared__ float w_shared[N_HEAD];
+    __shared__ half  q_shared[2][HEAD_CHUNK][N_EMBD_PADDED];
+    __shared__ half  k_shared[K_VECS_PER_BLOCK][N_EMBD_PADDED];
+    __shared__ float qk_chunk[HEAD_CHUNK][K_VECS_PADDED];
+    __shared__ float score_shared[K_VECS_PER_BLOCK];
+
+    for (int i = tid; i < N_HEAD; i += THREADS_PER_BLOCK) {
+        w_shared[i] = w_base[i];
+    }
+    for (int i = tid; i < K_VECS_PER_BLOCK; i += THREADS_PER_BLOCK) {
+        score_shared[i] = 0.0f;
+    }
+
+    constexpr int N_K_VEC = K_VECS_PER_BLOCK * (N_EMBD / 4);
+    if constexpr (TYPE_K == GGML_TYPE_F16) {
+        for (int i = tid; i < N_K_VEC; i += THREADS_PER_BLOCK) {
+            const int i_k_vec = i / (N_EMBD / 4);
+            const int i_embd4 = i % (N_EMBD / 4);
+            const int i_kv    = start_kv + i_k_vec;
+            if (i_kv < n_kv) {
+                const int2 * k_ptr = (const int2 *) ((const char *) K + i_kv*nbk2 + i_stream*nbk3);
+                *(int2 *) &k_shared[i_k_vec][i_embd4*4] = k_ptr[i_embd4];
+            } else {
+                *(int2 *) &k_shared[i_k_vec][i_embd4*4] = make_int2(0, 0);
+            }
+        }
+    } else {
+        constexpr dequantize_V_t dequantize_k = get_dequantize_V<TYPE_K, half, 4>();
+        for (int i = tid; i < N_K_VEC; i += THREADS_PER_BLOCK) {
+            const int i_k_vec = i / (N_EMBD / 4);
+            const int i_embd4 = i % (N_EMBD / 4);
+            const int i_kv    = start_kv + i_k_vec;
+            if (i_kv < n_kv) {
+                const void * k_ptr = (const void *) ((const char *) K + i_kv*nbk2 + i_stream*nbk3);
+                dequantize_k(k_ptr, &k_shared[i_k_vec][i_embd4*4], i_embd4*4);
+            } else {
+                *(int2 *) &k_shared[i_k_vec][i_embd4*4] = make_int2(0, 0);
+            }
+        }
+    }
+
+    constexpr int N_Q_CHUNK_VEC = HEAD_CHUNK * (N_EMBD / 4);
+    constexpr int N_Q_NEXT = (N_Q_CHUNK_VEC + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+
+    for (int i = tid; i < N_Q_CHUNK_VEC; i += THREADS_PER_BLOCK) {
+        const int i_head  = i / (N_EMBD / 4);
+        const int i_embd4 = i % (N_EMBD / 4);
+        const float4 q = *(const float4 *) (q_base + i_head*nbq1 + i_embd4*sizeof(float4));
+        const half2 qh[2] = {make_half2(q.x, q.y), make_half2(q.z, q.w)};
+        ggml_cuda_memcpy_1<sizeof(qh)>(&q_shared[0][i_head][i_embd4*4], qh);
+    }
+
+    __syncthreads();
+
+    constexpr ggml_cuda_mma::data_layout input_layout = ggml_cuda_mma::get_input_data_layout();
+
+    for (int hc = 0; hc < N_HEAD_CHUNKS; ++hc) {
+        const int buf  = hc & 1;
+        const int nbuf = (hc + 1) & 1;
+        const bool has_next = (hc + 1) < N_HEAD_CHUNKS;
+
+        float4 q_next[N_Q_NEXT];
+        if (has_next) {
+#pragma unroll
+            for (int i = tid, j = 0; i < N_Q_CHUNK_VEC; i += THREADS_PER_BLOCK, ++j) {
+                const int i_head  = (hc + 1) * HEAD_CHUNK + i / (N_EMBD / 4);
+                const int i_embd4 =                         i % (N_EMBD / 4);
+                q_next[j] = *(const float4 *) (q_base + i_head*nbq1 + i_embd4*sizeof(float4));
+            }
+        }
+
+        for (int kt = i_warp; kt < N_KV_TILES; kt += WARPS_PER_BLOCK) {
+            tile_qk Dqk;
+#pragma unroll
+            for (int et = 0; et < N_EMBD_TILES; ++et) {
+                ggml_cuda_mma::tile<MMA_DIM, MMA_DIM/2, half2, input_layout> Aq;
+                ggml_cuda_mma::tile<MMA_DIM, MMA_DIM/2, half2, input_layout> Bk;
+                ggml_cuda_mma::load_generic(Aq, (const half2 *) &q_shared[buf][0][et*MMA_DIM], N_EMBD_PADDED/2);
+                ggml_cuda_mma::load_generic(Bk, (const half2 *) &k_shared[kt*MMA_DIM][et*MMA_DIM], N_EMBD_PADDED/2);
+                ggml_cuda_mma::mma(Dqk, Aq, Bk);
+            }
+#pragma unroll
+            for (int l = 0; l < Dqk.ne; ++l) {
+                const int head_local = Dqk.get_i(l);
+                const int kv_local   = kt*MMA_DIM + Dqk.get_j(l);
+                qk_chunk[head_local][kv_local] = Dqk.x[l];
+            }
+        }
+
+        __syncthreads();
+
+        if (has_next) {
+#pragma unroll
+            for (int i = tid, j = 0; i < N_Q_CHUNK_VEC; i += THREADS_PER_BLOCK, ++j) {
+                const int i_head  = i / (N_EMBD / 4);
+                const int i_embd4 = i % (N_EMBD / 4);
+                const half2 qh[2] = {make_half2(q_next[j].x, q_next[j].y), make_half2(q_next[j].z, q_next[j].w)};
+                ggml_cuda_memcpy_1<sizeof(qh)>(&q_shared[nbuf][i_head][i_embd4*4], qh);
+            }
+        }
+
+        for (int kv = tid; kv < K_VECS_PER_BLOCK; kv += THREADS_PER_BLOCK) {
+            float s = 0.0f;
+#pragma unroll
+            for (int h = 0; h < HEAD_CHUNK; ++h) {
+                const float qk = qk_chunk[h][kv];
+                s += (qk > 0.0f ? qk : 0.0f) * w_shared[hc*HEAD_CHUNK + h];
+            }
+            score_shared[kv] += s;
+        }
+
+        __syncthreads();
+    }
+
+    for (int i_kv_local = tid; i_kv_local < K_VECS_PER_BLOCK; i_kv_local += THREADS_PER_BLOCK) {
+        const int i_kv = start_kv + i_kv_local;
+        if (i_kv < n_kv) {
+            const half  * m_base   = (const half *) ((const char *) M + i_batch*nbm1 + (i_stream%nem3)*nbm3);
+            float       * dst_base = (float *) ((char *) dst + i_batch*nb1 + i_stream*nb3);
+            dst_base[i_kv] = score_shared[i_kv_local] + __half2float(m_base[i_kv]);
+        }
+    }
+}
+
+// TODO there is one ugly assumption used in this kernel - that WARP_SIZE is equal to 32
+// thanks to that one warp operating on float4 processes whole indexer K/Q vectors
+// 32 * 4 = 128 (N_EMBD)
+
+template <int WARPS_PER_BLOCK, int K_VECS_PER_BLOCK, int64_t N_EMBD, int64_t N_HEAD, ggml_type TYPE_K>
+static __global__ void lightning_indexer_kernel_vec(
+        const float * Q, const char * K, const float * W, const half * M, float * dst,
+        int64_t n_stream, int64_t n_batch, int64_t n_kv,
+        size_t nb1, size_t nb2, size_t nb3,
+        size_t nbq1, size_t nbq2, size_t nbq3,
+        size_t nbk1, size_t nbk2, size_t nbk3,
+        size_t nbw1, size_t nbw2, size_t nbw3,
+        size_t nbm1, size_t nbm2, size_t nbm3,
+        int64_t nem3
+    ) {
+
+    constexpr int K_VECS_PER_WARP = K_VECS_PER_BLOCK / WARPS_PER_BLOCK;
+    constexpr int THREADS_PER_BLOCK = WARPS_PER_BLOCK * WARP_SIZE;
+
+    const int i_batch  = blockIdx.y;
+    const int i_stream = blockIdx.z;
+    const int i_warp   = threadIdx.y;
+    const int i_lane   = threadIdx.x;
+    const int tid      = i_warp * WARP_SIZE + i_lane;
+
+    // each warp processes K_VECS_PER_WARP K vectors
+    const int start_kv_block = blockIdx.x * K_VECS_PER_BLOCK;
+    const int start_kv = start_kv_block + i_warp * K_VECS_PER_WARP;
+
+    const char  * q_base = (const char  *)                 Q + i_batch*nbq2 + i_stream*nbq3;
+    const float * w_base = (const float *) ((const char *) W + i_batch*nbw1 + i_stream*nbw3);
+
+    // phase 1 - load (and dequantize if needed) K to registers
+
+    float4 k_reg_f[K_VECS_PER_WARP];
+
+    if constexpr (TYPE_K == GGML_TYPE_F32) {
+        // direct copy of float4
+#pragma unroll
+        for (int k = 0; k < K_VECS_PER_WARP; ++k) {
+            int i_kv = start_kv + k;
+            if (i_kv < n_kv) {
+                const float4 * k_base = (const float4 *) ((const char *) K + i_kv*nbk2 + i_stream*nbk3);
+                k_reg_f[k] = k_base[i_lane];
+            } else {
+                k_reg_f[k] = make_float4(0, 0, 0, 0);
+            }
+        }
+    } else {
+        // dequantize remaining types to float
+        constexpr dequantize_V_t dequantize_k = get_dequantize_V<TYPE_K, float, 4>();
+#pragma unroll
+        for (int k = 0; k < K_VECS_PER_WARP; ++k) {
+            int i_kv = start_kv + k;
+            if (i_kv < n_kv) {
+                const void * k_base = (const void *) ((const char *) K + i_kv*nbk2 + i_stream*nbk3);
+                dequantize_k(k_base, &k_reg_f[k], i_lane * 4);
+            } else {
+                k_reg_f[k] = make_float4(0, 0, 0, 0);
+            }
+        }
+    }
+
+    float score_k[K_VECS_PER_WARP] = { 0.0f };
+
+    // load weights and Q only for N_HEAD_INNER heads at once to reduce shared memory usage
+    constexpr int N_HEAD_INNER = N_HEAD / 4;
+
+    for (int i_head_0 = 0; i_head_0 < N_HEAD; i_head_0 += N_HEAD_INNER) {
+        // phase 2 - load weights and Q to shared memory
+
+        __shared__ float  w_shared[N_HEAD_INNER];
+        __shared__ float4 q_shared_f[N_HEAD_INNER][N_EMBD / 4];
+
+        if (tid < N_HEAD_INNER) {
+            w_shared[tid] = w_base[i_head_0 + tid];
+        }
+
+        constexpr int n_q = N_HEAD_INNER * (N_EMBD / 4);
+#pragma unroll
+        for (int i_q = tid; i_q < n_q; i_q += THREADS_PER_BLOCK) {
+            const int i_head_inner = i_q / (N_EMBD / 4);
+            const int i_head = i_head_0 + i_head_inner;
+            const int i_embd = i_q % (N_EMBD / 4);
+            q_shared_f[i_head_inner][i_embd] = *(const float4 *) (q_base + i_head*nbq1 + i_embd*sizeof(float4));
+        }
+
+        __syncthreads();
+
+        // phase 3 - calculate lightning indexer scores
+
+        for (int i_head_inner = 0; i_head_inner < N_HEAD_INNER; ++i_head_inner) {
+            const float w_val = w_shared[i_head_inner];
+            float qk[K_VECS_PER_WARP] = { 0.0f };
+
+            // dot product of floats
+            const float4 q_vec = q_shared_f[i_head_inner][i_lane];
+
+#pragma unroll
+            for (int k = 0; k < K_VECS_PER_WARP; ++k) {
+                ggml_cuda_mad(qk[k], q_vec.x, k_reg_f[k].x);
+                ggml_cuda_mad(qk[k], q_vec.y, k_reg_f[k].y);
+                ggml_cuda_mad(qk[k], q_vec.z, k_reg_f[k].z);
+                ggml_cuda_mad(qk[k], q_vec.w, k_reg_f[k].w);
+            }
+
+#pragma unroll
+            for (int k = 0; k < K_VECS_PER_WARP; ++k) {
+                float sum = warp_reduce_sum(qk[k]);
+
+                // ReLU, weight
+                if (i_lane == 0) {
+                    sum = (sum > 0.0f) ? sum : 0.0f;
+                    score_k[k] += sum * w_val;
+                }
+            }
+        }
+
+        __syncthreads();
+    }
+
+    // phase 4 - store outputs to shared memory
+
+    __shared__ float dst_shared[K_VECS_PER_BLOCK];
+
+    if (i_lane == 0) {
+#pragma unroll
+        for (int k = 0; k < K_VECS_PER_WARP; ++k) {
+            dst_shared[i_warp * K_VECS_PER_WARP + k] = score_k[k];
+        }
+    }
+
+    __syncthreads();
+
+    // phase 5 - write from shared memory to VRAM in coalesced manner
+
+    if (tid < K_VECS_PER_BLOCK) {
+        int i_kv = start_kv_block + tid;
+        if (i_kv < n_kv) {
+            const half * m_base = (const half *) ((const char *) M + i_batch*nbm1 + (i_stream%nem3)*nbm3);
+            float * dst_base = (float *) ((char *) dst + i_batch*nb1 + i_stream*nb3);
+            dst_base[i_kv] = dst_shared[tid] + __half2float(m_base[i_kv]);
+        }
+    }
+}
+
+// one block scores a tile of K_VECS_PER_BLOCK keys against TOKENS_PER_BLOCK tokens: the keys are
+// staged in half precision and the queries of every head in float, each thread owns KEYS_PER_THREAD
+// keys for one token, a warp shares its token so the query reads are broadcasts, and every key
+// element is widened once for all heads, so no dot product needs a cross thread reduction
+template <int WARPS_PER_BLOCK, int K_VECS_PER_BLOCK, int64_t N_EMBD, int64_t N_HEAD, ggml_type TYPE_K>
+static __global__ void lightning_indexer_kernel_tile(
+        const float * Q, const char * K, const float * W, const half * M, float * dst,
+        int64_t n_stream, int64_t n_batch, int64_t n_kv,
+        size_t nb1, size_t nb2, size_t nb3,
+        size_t nbq1, size_t nbq2, size_t nbq3,
+        size_t nbk1, size_t nbk2, size_t nbk3,
+        size_t nbw1, size_t nbw2, size_t nbw3,
+        size_t nbm1, size_t nbm2, size_t nbm3,
+        int64_t nem3
+    ) {
+
+    constexpr int THREADS_PER_BLOCK = WARPS_PER_BLOCK * WARP_SIZE;
+    constexpr int TOKENS_PER_BLOCK  = LIGHTNING_INDEXER_TILE_TOKENS;
+    constexpr int KEY_LANES         = THREADS_PER_BLOCK / TOKENS_PER_BLOCK;
+    constexpr int KEYS_PER_THREAD   = K_VECS_PER_BLOCK / KEY_LANES;
+    constexpr int N_EMBD_H2         = N_EMBD / 2;
+    constexpr int HEADS_PER_PASS    = N_HEAD < LIGHTNING_INDEXER_TILE_HEADS_PER_PASS ? N_HEAD : LIGHTNING_INDEXER_TILE_HEADS_PER_PASS;
+
+    static_assert(THREADS_PER_BLOCK % TOKENS_PER_BLOCK == 0, "threads must cover the token tile");
+    static_assert(K_VECS_PER_BLOCK % KEY_LANES == 0, "key lanes must cover the key tile");
+    static_assert(N_HEAD % HEADS_PER_PASS == 0, "head passes must cover the heads");
+
+    const int tid         = threadIdx.y * WARP_SIZE + threadIdx.x;
+    const int start_kv    = blockIdx.x * K_VECS_PER_BLOCK;
+    const int start_batch = blockIdx.y * TOKENS_PER_BLOCK;
+    const int i_stream    = blockIdx.z;
+
+    // the row padding keeps the keys of consecutive threads in distinct banks
+    __shared__ half2 k_shared[K_VECS_PER_BLOCK][N_EMBD_H2 + 1];
+    __shared__ float2 q_shared[HEADS_PER_PASS][TOKENS_PER_BLOCK][N_EMBD_H2];
+    __shared__ float w_shared[N_HEAD][TOKENS_PER_BLOCK];
+
+    // phase 1 - stage the key tile four elements at a time, rows past n_kv are zero
+
+#pragma unroll
+    for (int i = tid; i < K_VECS_PER_BLOCK * (N_EMBD / 4); i += THREADS_PER_BLOCK) {
+        const int r  = i / (N_EMBD / 4);
+        const int c4 = i % (N_EMBD / 4);
+
+        half2 lo = make_half2(0.0f, 0.0f);
+        half2 hi = lo;
+        if (start_kv + r < n_kv) {
+            const char * k_row = K + (start_kv + r)*nbk2 + i_stream*nbk3;
+            if constexpr (TYPE_K == GGML_TYPE_F16) {
+                lo = ((const half2 *) k_row)[2*c4 + 0];
+                hi = ((const half2 *) k_row)[2*c4 + 1];
+            } else {
+                float4 v;
+                if constexpr (TYPE_K == GGML_TYPE_F32) {
+                    v = ((const float4 *) k_row)[c4];
+                } else {
+                    constexpr dequantize_V_t dequantize_k = get_dequantize_V<TYPE_K, float, 4>();
+                    dequantize_k(k_row, &v, c4 * 4);
+                }
+                lo = make_half2(v.x, v.y);
+                hi = make_half2(v.z, v.w);
+            }
+        }
+
+        k_shared[r][2*c4 + 0] = lo;
+        k_shared[r][2*c4 + 1] = hi;
+    }
+
+    // phase 2 - stage the weights of every head, tokens past n_batch are zero
+
+    if (tid < N_HEAD * TOKENS_PER_BLOCK) {
+        const int h = tid / TOKENS_PER_BLOCK;
+        const int r = tid % TOKENS_PER_BLOCK;
+        w_shared[h][r] = start_batch + r < n_batch ?
+            ((const float *) ((const char *) W + (start_batch + r)*nbw1 + i_stream*nbw3))[h] : 0.0f;
+    }
+
+    const int kl = tid % KEY_LANES;
+    const int tl = tid / KEY_LANES;
+
+    float qk[N_HEAD][KEYS_PER_THREAD] = { { 0.0f } };
+
+#pragma unroll
+    for (int h0 = 0; h0 < N_HEAD; h0 += HEADS_PER_PASS) {
+        // the previous pass is fully consumed before its queries are replaced
+        if (h0 > 0) {
+            __syncthreads();
+        }
+
+        // phase 3 - stage the queries of the heads of this pass, tokens past n_batch are zero
+
+#pragma unroll
+        for (int i = tid; i < HEADS_PER_PASS * TOKENS_PER_BLOCK * (N_EMBD / 4); i += THREADS_PER_BLOCK) {
+            const int h  = i / (TOKENS_PER_BLOCK * (N_EMBD / 4));
+            const int r  = i / (N_EMBD / 4) % TOKENS_PER_BLOCK;
+            const int c4 = i % (N_EMBD / 4);
+
+            float4 v = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+            if (start_batch + r < n_batch) {
+                v = *(const float4 *) ((const char *) Q + (h0 + h)*nbq1 + (start_batch + r)*nbq2 + i_stream*nbq3 + c4*sizeof(float4));
+            }
+
+            q_shared[h][r][2*c4 + 0] = make_float2(v.x, v.y);
+            q_shared[h][r][2*c4 + 1] = make_float2(v.z, v.w);
+        }
+
+        __syncthreads();
+
+        // phase 4 - float products of the widened keys for the heads of this pass
+
+#pragma unroll 8
+        for (int c = 0; c < N_EMBD_H2; ++c) {
+            float2 k_val[KEYS_PER_THREAD];
+#pragma unroll
+            for (int j = 0; j < KEYS_PER_THREAD; ++j) {
+                k_val[j] = __half22float2(k_shared[kl + j*KEY_LANES][c]);
+            }
+#pragma unroll
+            for (int h = 0; h < HEADS_PER_PASS; ++h) {
+                const float2 q_val = q_shared[h][tl][c];
+#pragma unroll
+                for (int j = 0; j < KEYS_PER_THREAD; ++j) {
+                    qk[h0 + h][j] = fmaf(k_val[j].x, q_val.x, qk[h0 + h][j]);
+                    qk[h0 + h][j] = fmaf(k_val[j].y, q_val.y, qk[h0 + h][j]);
+                }
+            }
+        }
+    }
+
+    // phase 5 - ReLU, weight, add the mask and write, consecutive threads write consecutive keys
+
+    float score[KEYS_PER_THREAD] = { 0.0f };
+
+#pragma unroll
+    for (int h = 0; h < N_HEAD; ++h) {
+#pragma unroll
+        for (int j = 0; j < KEYS_PER_THREAD; ++j) {
+            score[j] += fmaxf(qk[h][j], 0.0f) * w_shared[h][tl];
+        }
+    }
+
+    const int i_batch = start_batch + tl;
+    if (i_batch >= n_batch) {
+        return;
+    }
+
+    const half * m_base = (const half *) ((const char *) M + i_batch*nbm1 + (i_stream%nem3)*nbm3);
+    float * dst_base = (float *) ((char *) dst + i_batch*nb1 + i_stream*nb3);
+
+#pragma unroll
+    for (int j = 0; j < KEYS_PER_THREAD; ++j) {
+        const int i_kv = start_kv + kl + j*KEY_LANES;
+        if (i_kv < n_kv) {
+            dst_base[i_kv] = score[j] + __half2float(m_base[i_kv]);
+        }
+    }
+}
+
+#define LIGHTNING_INDEXER_CASE(lightning_indexer_kernel, n_embd, n_head, K, type_K)         \
+    if (K->type == (type_K)) {                                                              \
+        lightning_indexer_kernel<WARPS_PER_BLOCK, K_VECS_PER_BLOCK, n_embd, n_head, type_K> \
+            <<<grid, block, 0, ctx.stream()>>>(                                             \
+            q_d, k_d, w_d, m_d, dst_d,                                                      \
+            n_stream, n_batch, n_kv,                                                        \
+            nb1, nb2, nb3,                                                                  \
+            nbq1, nbq2, nbq3,                                                               \
+            nbk1, nbk2, nbk3,                                                               \
+            nbw1, nbw2, nbw3,                                                               \
+            nbm1, nbm2, nbm3,                                                               \
+            nem3                                                                            \
+        );                                                                                  \
+    } else
+
+void ggml_cuda_lightning_indexer(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * q = dst->src[0];
+    const ggml_tensor * k = dst->src[1];
+    const ggml_tensor * w = dst->src[2]; // weights
+    const ggml_tensor * m = dst->src[3]; // mask
+
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(  q->type == GGML_TYPE_F32);
+    GGML_ASSERT(  w->type == GGML_TYPE_F32);
+    GGML_ASSERT(  m->type == GGML_TYPE_F16);
+
+    GGML_TENSOR_LOCALS(int64_t, neq,  q, ne)
+    GGML_TENSOR_LOCALS(size_t,  nbq,  q, nb)
+    GGML_TENSOR_LOCALS(int64_t, nek,  k, ne)
+    GGML_TENSOR_LOCALS(size_t,  nbk,  k, nb)
+    GGML_TENSOR_LOCALS(int64_t, new,  w, ne)
+    GGML_TENSOR_LOCALS(size_t,  nbw,  w, nb)
+    GGML_TENSOR_LOCALS(int64_t, nem,  m, ne)
+    GGML_TENSOR_LOCALS(size_t,  nbm,  m, nb)
+    GGML_TENSOR_LOCALS(int64_t, ne, dst, ne)
+    GGML_TENSOR_LOCALS(size_t,  nb, dst, nb)
+
+    // input tensor rows must be contiguous
+    GGML_ASSERT(nbq0 == ggml_type_size(q->type));
+    GGML_ASSERT(nbk0 == ggml_type_size(k->type));
+    GGML_ASSERT(nbw0 == ggml_type_size(w->type));
+    GGML_ASSERT(nbm0 == ggml_type_size(m->type));
+
+    // dst cannot be transposed or permuted
+    GGML_ASSERT(nb0 == sizeof(float));
+    GGML_ASSERT(nb0 <= nb1);
+    GGML_ASSERT(nb1 <= nb2);
+    GGML_ASSERT(nb2 <= nb3);
+
+    const int n_embd   = q->ne[0];
+    const int n_head   = q->ne[1];
+    const int n_batch  = q->ne[2];
+    const int n_stream = q->ne[3];
+    const int n_kv     = k->ne[2];
+
+    const float *   q_d = (const float *)   q->data;
+    const char  *   k_d = (const char  *)   k->data;
+    const float *   w_d = (const float *)   w->data;
+    const half  *   m_d = (const half  *)   m->data;
+    float       * dst_d = (      float *) dst->data;
+
+    const int device = ggml_cuda_get_device();
+    const int cc     = ggml_cuda_info().devices[device].cc;
+
+    if (n_embd == 128 && n_head == 64) {
+        if ((turing_mma_available(cc) || amd_mfma_available(cc) || amd_wmma_available(cc)) && k->type != GGML_TYPE_F32 && k->type != GGML_TYPE_BF16) {
+            constexpr int K_VECS_PER_BLOCK = 32;
+            constexpr int WARPS_PER_BLOCK  = 4;
+
+            dim3 block(ggml_cuda_info().devices[device].warp_size, WARPS_PER_BLOCK);
+            int num_kv_blocks = (n_kv + (K_VECS_PER_BLOCK) - 1) / (K_VECS_PER_BLOCK);
+            dim3 grid(num_kv_blocks, n_batch, n_stream);
+
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_mma, 128, 64, k, GGML_TYPE_F16)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_mma, 128, 64, k, GGML_TYPE_Q4_0)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_mma, 128, 64, k, GGML_TYPE_Q4_1)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_mma, 128, 64, k, GGML_TYPE_Q5_0)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_mma, 128, 64, k, GGML_TYPE_Q5_1)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_mma, 128, 64, k, GGML_TYPE_Q8_0)
+            GGML_ABORT("fatal error");
+        } else {
+            // use vector kernel
+            constexpr int K_VECS_PER_WARP = 8;
+            constexpr int WARPS_PER_BLOCK = 8;
+            constexpr int K_VECS_PER_BLOCK = K_VECS_PER_WARP * WARPS_PER_BLOCK;
+
+            dim3 block(32, WARPS_PER_BLOCK);
+            int num_kv_blocks = (n_kv + (K_VECS_PER_BLOCK) - 1) / (K_VECS_PER_BLOCK);
+            dim3 grid(num_kv_blocks, n_batch, n_stream);
+
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 64, k, GGML_TYPE_F16)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 64, k, GGML_TYPE_Q4_0)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 64, k, GGML_TYPE_Q4_1)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 64, k, GGML_TYPE_Q5_0)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 64, k, GGML_TYPE_Q5_1)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 64, k, GGML_TYPE_Q8_0)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 64, k, GGML_TYPE_BF16)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 64, k, GGML_TYPE_F32)
+            GGML_ABORT("fatal error");
+        }
+    } else if (n_embd == 128 && n_head == 32) {
+        if ((turing_mma_available(cc) || amd_mfma_available(cc) || amd_wmma_available(cc)) && k->type != GGML_TYPE_F32 && k->type != GGML_TYPE_BF16) {
+            constexpr int K_VECS_PER_BLOCK = 32;
+            constexpr int WARPS_PER_BLOCK  = 4;
+
+            dim3 block(ggml_cuda_info().devices[device].warp_size, WARPS_PER_BLOCK);
+            int num_kv_blocks = (n_kv + (K_VECS_PER_BLOCK) - 1) / (K_VECS_PER_BLOCK);
+            dim3 grid(num_kv_blocks, n_batch, n_stream);
+
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_mma, 128, 32, k, GGML_TYPE_F16)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_mma, 128, 32, k, GGML_TYPE_Q4_0)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_mma, 128, 32, k, GGML_TYPE_Q4_1)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_mma, 128, 32, k, GGML_TYPE_Q5_0)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_mma, 128, 32, k, GGML_TYPE_Q5_1)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_mma, 128, 32, k, GGML_TYPE_Q8_0)
+            GGML_ABORT("fatal error");
+        } else {
+            // use vector kernel
+            constexpr int K_VECS_PER_WARP = 8;
+            constexpr int WARPS_PER_BLOCK = 8;
+            constexpr int K_VECS_PER_BLOCK = K_VECS_PER_WARP * WARPS_PER_BLOCK;
+
+            dim3 block(32, WARPS_PER_BLOCK);
+            int num_kv_blocks = (n_kv + (K_VECS_PER_BLOCK) - 1) / (K_VECS_PER_BLOCK);
+            dim3 grid(num_kv_blocks, n_batch, n_stream);
+
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 32, k, GGML_TYPE_F16)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 32, k, GGML_TYPE_Q4_0)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 32, k, GGML_TYPE_Q4_1)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 32, k, GGML_TYPE_Q5_0)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 32, k, GGML_TYPE_Q5_1)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 32, k, GGML_TYPE_Q8_0)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 32, k, GGML_TYPE_BF16)
+            LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 32, k, GGML_TYPE_F32)
+            GGML_ABORT("fatal error");
+        }
+    } else if (n_embd == 128 && n_head == 4 && n_batch >= LIGHTNING_INDEXER_TILE_TOKENS) {
+        // too few heads for a wmma tile, the tile kernel shares the keys across the tokens
+        constexpr int WARPS_PER_BLOCK = 8;
+        constexpr int K_VECS_PER_BLOCK = 64;
+
+        dim3 block(32, WARPS_PER_BLOCK);
+        int num_kv_blocks = (n_kv + (K_VECS_PER_BLOCK) - 1) / (K_VECS_PER_BLOCK);
+        int num_batch_blocks = (n_batch + LIGHTNING_INDEXER_TILE_TOKENS - 1) / LIGHTNING_INDEXER_TILE_TOKENS;
+        dim3 grid(num_kv_blocks, num_batch_blocks, n_stream);
+
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, 4, k, GGML_TYPE_F16)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, 4, k, GGML_TYPE_Q4_0)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, 4, k, GGML_TYPE_Q4_1)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, 4, k, GGML_TYPE_Q5_0)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, 4, k, GGML_TYPE_Q5_1)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, 4, k, GGML_TYPE_Q8_0)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, 4, k, GGML_TYPE_BF16)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_tile, 128, 4, k, GGML_TYPE_F32)
+        GGML_ABORT("fatal error");
+    } else if (n_embd == 128 && n_head == 4) {
+        // a batch smaller than a token tile, use vector kernel
+        constexpr int K_VECS_PER_WARP = 8;
+        constexpr int WARPS_PER_BLOCK = 8;
+        constexpr int K_VECS_PER_BLOCK = K_VECS_PER_WARP * WARPS_PER_BLOCK;
+
+        dim3 block(32, WARPS_PER_BLOCK);
+        int num_kv_blocks = (n_kv + (K_VECS_PER_BLOCK) - 1) / (K_VECS_PER_BLOCK);
+        dim3 grid(num_kv_blocks, n_batch, n_stream);
+
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 4, k, GGML_TYPE_F16)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 4, k, GGML_TYPE_Q4_0)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 4, k, GGML_TYPE_Q4_1)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 4, k, GGML_TYPE_Q5_0)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 4, k, GGML_TYPE_Q5_1)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 4, k, GGML_TYPE_Q8_0)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 4, k, GGML_TYPE_BF16)
+        LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 4, k, GGML_TYPE_F32)
+        GGML_ABORT("fatal error");
+    } else {
+        GGML_ABORT("fatal error");
+    }
+}
+
+bool ggml_cuda_lightning_indexer_supported(int device, const ggml_tensor * dst) {
+    GGML_UNUSED(device);
+
+    const ggml_tensor * q = dst->src[0];
+    const ggml_tensor * k = dst->src[1];
+    const ggml_tensor * w = dst->src[2]; // weights
+    const ggml_tensor * m = dst->src[3]; // mask
+
+    GGML_TENSOR_LOCALS(int64_t, neq,  q, ne)
+    GGML_TENSOR_LOCALS(size_t,  nbq,  q, nb)
+    GGML_TENSOR_LOCALS(int64_t, nek,  k, ne)
+    GGML_TENSOR_LOCALS(size_t,  nbk,  k, nb)
+    GGML_TENSOR_LOCALS(int64_t, new,  w, ne)
+    GGML_TENSOR_LOCALS(size_t,  nbw,  w, nb)
+    GGML_TENSOR_LOCALS(int64_t, nem,  m, ne)
+    GGML_TENSOR_LOCALS(size_t,  nbm,  m, nb)
+    GGML_TENSOR_LOCALS(int64_t, ne, dst, ne)
+    GGML_TENSOR_LOCALS(size_t,  nb, dst, nb)
+
+    if (neq0 != 128) {
+        return false;
+    }
+
+    if (neq1 != 64 && neq1 != 32 && neq1 != 4) {
+        return false;
+    }
+
+    // alignment checks
+    for (const ggml_tensor * t : {q, k}) {
+        if (ggml_is_quantized(t->type)) {
+            continue;
+        }
+        for (size_t i = 1; i < GGML_MAX_DIMS; ++i) {
+            if (t->nb[i] % 16 != 0) {
+                return false;
+            }
+        }
+    }
+
+    switch(k->type) {
+        case GGML_TYPE_F32:
+        case GGML_TYPE_BF16:
+        case GGML_TYPE_F16:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q4_0:
+            return true;
+        default:
+            return false;
+    }
+}

@@ -22,6 +22,7 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from gguf.constants import (
+    GGML_MAX_DIMS,
     GGML_QUANT_SIZES,
     GGUF_DEFAULT_ALIGNMENT,
     GGUF_MAGIC,
@@ -30,6 +31,10 @@ from gguf.constants import (
     GGUFValueType,
     GGUFEndian,
 )
+
+# limits mirroring ggml/src/gguf.cpp (not part of gguf.h)
+GGUF_MAX_STRING_LENGTH  = 1024 * 1024 * 1024
+GGUF_MAX_ARRAY_ELEMENTS = 1024 * 1024 * 1024
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +171,10 @@ class GGUFReader:
         offs += self._push_field(ReaderField(offs, 'GGUF.tensor_count', [temp_counts[:1]], [0], [GGUFValueType.UINT64]))
         offs += self._push_field(ReaderField(offs, 'GGUF.kv_count', [temp_counts[1:]], [0], [GGUFValueType.UINT64]))
         tensor_count, kv_count = temp_counts
+        if tensor_count > GGUF_MAX_ARRAY_ELEMENTS:
+            raise ValueError(f'Tensor count {tensor_count} exceeds maximum {GGUF_MAX_ARRAY_ELEMENTS}')
+        if kv_count > GGUF_MAX_ARRAY_ELEMENTS:
+            raise ValueError(f'KV count {kv_count} exceeds maximum {GGUF_MAX_ARRAY_ELEMENTS}')
         offs = self._build_fields(offs, kv_count)
 
         # Build Tensor Info Fields
@@ -175,9 +184,12 @@ class GGUFReader:
             if new_align.types != [GGUFValueType.UINT32]:
                 raise ValueError('Bad type for general.alignment field')
             self.alignment = new_align.parts[-1][0]
+            # Ensure alignment is a non-zero power of two
+            if self.alignment == 0 or (self.alignment & (self.alignment - 1)) != 0:
+                raise ValueError('Invalid alignment: must be a non-zero power of two')
         padding = offs % self.alignment
         if padding != 0:
-            offs += self.alignment - padding
+            offs += int(self.alignment - padding)
         self.data_offset = offs
         self._build_tensors(offs, tensors_fields)
 
@@ -202,17 +214,21 @@ class GGUFReader:
 
     def _push_field(self, field: ReaderField, skip_sum: bool = False) -> int:
         if field.name in self.fields:
-            # TODO: add option to generate error on duplicate keys
-            # raise KeyError(f'Duplicate {field.name} already in list at offset {field.offset}')
+            # TODO: add option to make this a warning and accept duplicate keys like below
+            raise KeyError(f'Duplicate {field.name} already in list at offset {field.offset}')
 
-            logger.warning(f'Duplicate key {field.name} at offset {field.offset}')
-            self.fields[field.name + '_{}'.format(field.offset)] = field
+            # logger.warning(f'Duplicate key {field.name} at offset {field.offset}')
+            # self.fields[field.name + '_{}'.format(field.offset)] = field
         else:
             self.fields[field.name] = field
         return 0 if skip_sum else sum(int(part.nbytes) for part in field.parts)
 
     def _get_str(self, offset: int) -> tuple[npt.NDArray[np.uint64], npt.NDArray[np.uint8]]:
         slen = self._get(offset, np.uint64)
+        if int(slen[0]) > GGUF_MAX_STRING_LENGTH:
+            raise ValueError(f'String length {int(slen[0])} exceeds maximum {GGUF_MAX_STRING_LENGTH}')
+        if offset + 8 + int(slen[0]) > self.data.nbytes:
+            raise ValueError(f'String length {int(slen[0])} exceeds remaining file size {self.data.nbytes - offset - 8}')
         return slen, self._get(offset + 8, np.uint8, slen[0])
 
     def _get_field_parts(
@@ -237,6 +253,8 @@ class GGUFReader:
             raw_itype = self._get(offs, np.uint32)
             offs += int(raw_itype.nbytes)
             alen = self._get(offs, np.uint64)
+            if int(alen[0]) > GGUF_MAX_ARRAY_ELEMENTS:
+                raise ValueError(f'Array length {int(alen[0])} exceeds maximum {GGUF_MAX_ARRAY_ELEMENTS}')
             offs += int(alen.nbytes)
             aparts: list[npt.NDArray[Any]] = [raw_itype, alen]
             data_idxs: list[int] = []
@@ -263,6 +281,8 @@ class GGUFReader:
         # Get Tensor Dimensions Count
         n_dims = self._get(offs, np.uint32)
         offs += int(n_dims.nbytes)
+        if n_dims[0] > GGML_MAX_DIMS:
+            raise ValueError(f'Tensor dimensions count {n_dims[0]} exceeds GGML_MAX_DIMS ({GGML_MAX_DIMS})')
 
         # Get Tensor Dimension Array
         dims = self._get(offs, np.uint64, n_dims[0])
@@ -323,11 +343,16 @@ class GGUFReader:
                 raise ValueError(f'Found duplicated tensor with name {tensor_name}')
             tensor_names.add(tensor_name)
             ggml_type = GGMLQuantizationType(raw_dtype[0])
-            n_elems = int(np.prod(dims))
+            # use Python ints: np.prod on uint64 wraps silently on overflow
+            n_elems = 1
+            for dim in dims.tolist():
+                n_elems *= int(dim)
             np_dims = tuple(reversed(dims.tolist()))
             block_size, type_size = GGML_QUANT_SIZES[ggml_type]
             n_bytes = n_elems * type_size // block_size
-            data_offs = int(start_offs + offset_tensor[0])
+            data_offs = start_offs + int(offset_tensor[0])
+            if data_offs + n_bytes > self.data.nbytes:
+                raise ValueError(f'Tensor {tensor_name} data exceeds file size {self.data.nbytes}')
             item_type: npt.DTypeLike
             if ggml_type == GGMLQuantizationType.F16:
                 item_count = n_elems

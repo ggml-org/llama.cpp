@@ -83,6 +83,10 @@ def test_embedding_multiple_with_fa():
         (["string1", [12, 34, 56]], True),
         ([[12, 34, 56], [12, 34, 56]], True),
         ([[12, 34, 56], [12, "string", 34, 56]], True),
+        # object entries
+        ({"prompt_string": "string"}, False),
+        ({"content": [{"type": "text", "text": "string"}]}, False),
+        (["string1", {"prompt_string": "string2"}, {"content": [{"type": "text", "text": "string3"}]}], True),
     ]
 )
 def test_embedding_mixed_input(input, is_multi_prompt: bool):
@@ -99,6 +103,74 @@ def test_embedding_mixed_input(input, is_multi_prompt: bool):
     else:
         assert 'embedding' in data[0]
         assert len(data[0]['embedding']) > 1
+
+
+def test_embedding_content_text_same_as_string():
+    global server
+    server.pooling = 'last'
+    server.start()
+    res = server.make_request("POST", "/v1/embeddings", data={
+        "input": [
+            "hello world",
+            {"content": [{"type": "text", "text": "hello "}, {"type": "text", "text": "world"}]},
+        ],
+    })
+    assert res.status_code == 200
+    data = res.body['data']
+    assert data[0]['embedding'] == data[1]['embedding']
+
+
+@pytest.mark.parametrize(
+    "input",
+    [
+        [],
+        {"content": "string"},
+        {"content": [{"type": "unknown"}]},
+        # model is not multimodal
+        {"content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]},
+        {"content": [{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}]},
+        {"content": [{"type": "input_video", "input_video": {"url": "data:video/mp4;base64,AAAA"}}]},
+    ]
+)
+def test_embedding_invalid_input(input):
+    global server
+    server.start()
+    res = server.make_request("POST", "/v1/embeddings", data={"input": input})
+    assert res.status_code != 200
+
+
+def test_embedding_pooling_mean():
+    global server
+    server.pooling = 'mean'
+    server.start()
+    res = server.make_request("POST", "/v1/embeddings", data={
+        "input": "I believe the meaning of life is",
+    })
+    assert res.status_code == 200
+    assert len(res.body['data']) == 1
+    assert 'embedding' in res.body['data'][0]
+    assert len(res.body['data'][0]['embedding']) > 1
+
+    # make sure embedding vector is normalized
+    assert abs(sum([x ** 2 for x in res.body['data'][0]['embedding']]) - 1) < EPSILON
+
+
+def test_embedding_pooling_mean_multiple():
+    global server
+    server.pooling = 'mean'
+    server.start()
+    res = server.make_request("POST", "/v1/embeddings", data={
+        "input": [
+            "I believe the meaning of life is",
+            "Write a joke about AI",
+            "This is a test",
+        ],
+    })
+    assert res.status_code == 200
+    assert len(res.body['data']) == 3
+    for d in res.body['data']:
+        assert 'embedding' in d
+        assert len(d['embedding']) > 1
 
 
 def test_embedding_pooling_none():
@@ -255,3 +327,21 @@ def test_embedding_openai_library_base64():
     # make sure the decoded data is the same as the original
     for x, y in zip(floats, vec0):
         assert abs(x - y) < EPSILON
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"input": []},
+        {"input": True},
+        {"input": "hello", "encoding_format": 1},
+    ]
+)
+def test_embedding_invalid_request(data):
+    global server
+    server.pooling = 'last'
+    server.start()
+    res = server.make_request("POST", "/v1/embeddings", data=data)
+    assert res.status_code == 400
+    assert "error" in res.body
+    assert res.body["error"]["type"] == "invalid_request_error"

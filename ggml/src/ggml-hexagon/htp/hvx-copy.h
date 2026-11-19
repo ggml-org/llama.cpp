@@ -7,7 +7,8 @@
 
 #include "hvx-base.h"
 
-#define hvx_splat_loop_body(dst_type, vec_store)                 \
+#define hvx_splat_pragma(x) _Pragma(#x)
+#define hvx_splat_loop_body(dst_type, vec_store, unroll_cnt)     \
     do {                                                         \
         dst_type * restrict vdst = (dst_type *) dst;             \
                                                                  \
@@ -16,7 +17,7 @@
                                                                  \
         uint32_t i = 0;                                          \
                                                                  \
-        _Pragma("unroll(4)")                                     \
+        hvx_splat_pragma(unroll(unroll_cnt))                     \
         for (; i < nvec; i++) {                                  \
             vdst[i] = src;                                       \
         }                                                        \
@@ -25,29 +26,45 @@
         }                                                        \
     } while(0)
 
-static inline void hvx_splat_a(uint8_t * restrict dst, HVX_Vector src, uint32_t n, uint32_t elem_size) {
+static inline void hvx_splat_a(void * restrict dst, HVX_Vector src, uint32_t n, uint32_t elem_size) {
     assert((unsigned long) dst % 128 == 0);
-    hvx_splat_loop_body(HVX_Vector, hvx_vec_store_a);
+    hvx_splat_loop_body(HVX_Vector, hvx_vec_store_a, 4);
 }
 
-static inline void hvx_splat_u(uint8_t * restrict dst, HVX_Vector src, uint32_t n, uint32_t elem_size) {
-    hvx_splat_loop_body(HVX_UVector, hvx_vec_store_u);
+static inline void hvx_splat_u(void * restrict dst, HVX_Vector src, uint32_t n, uint32_t elem_size) {
+    hvx_splat_loop_body(HVX_UVector, hvx_vec_store_u, 4);
 }
 
-static inline void hvx_splat_f32_a(uint8_t * restrict dst, float v, uint32_t n) {
+static inline void hvx_splat_f32_a(void * restrict dst, float v, uint32_t n) {
     hvx_splat_a(dst,  hvx_vec_splat_f32(v), n, sizeof(float));
 }
 
-static inline void hvx_splat_f32_u(uint8_t * restrict dst, float v, uint32_t n) {
+static inline void hvx_splat_f32_u(void * restrict dst, float v, uint32_t n) {
     hvx_splat_u(dst,  hvx_vec_splat_f32(v), n, sizeof(float));
 }
 
-static inline void hvx_splat_f16_a(uint8_t * restrict dst, float v, uint32_t n) {
+static inline void hvx_splat_f16_a(void * restrict dst, _Float16 v, uint32_t n) {
+    hvx_splat_a(dst,  hvx_vec_splat_f16(v), n, sizeof(__fp16));
+}
+
+static inline void hvx_splat_f16_u(void * restrict dst, _Float16 v, uint32_t n) {
     hvx_splat_u(dst,  hvx_vec_splat_f16(v), n, sizeof(__fp16));
 }
 
-static inline void hvx_splat_f16_u(uint8_t * restrict dst, float v, uint32_t n) {
-    hvx_splat_u(dst,  hvx_vec_splat_f16(v), n, sizeof(__fp16));
+static inline void hvx_splat_u16_a(void * restrict dst, uint16_t v, uint32_t n) {
+    hvx_splat_a(dst,  Q6_Vh_vsplat_R(v), n, sizeof(uint16_t));
+}
+
+static inline void hvx_splat_u16_u(void * restrict dst, uint16_t v, uint32_t n) {
+    hvx_splat_u(dst,  Q6_Vh_vsplat_R(v), n, sizeof(uint16_t));
+}
+
+static inline void hvx_splat_u8_a(void * restrict dst, uint8_t v, uint32_t n) {
+    hvx_splat_a(dst,  Q6_Vb_vsplat_R(v), n, 1);
+}
+
+static inline void hvx_splat_u8_u(void * restrict dst, uint8_t v, uint32_t n) {
+    hvx_splat_u(dst,  Q6_Vb_vsplat_R(v), n, 1);
 }
 
 #define hvx_copy_loop_body(dst_type, src_type, vec_store)            \
@@ -89,42 +106,42 @@ static inline void hvx_copy_uu(uint8_t * restrict dst, const uint8_t * restrict 
     hvx_copy_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u);
 }
 
-// copy n fp16 elements : source and destination are aligned to HVX Vector (128)
+// copy n fp16 elements : destination and source are aligned to HVX Vector (128)
 static inline void hvx_copy_f16_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
     hvx_copy_aa(dst, src, n, sizeof(__fp16));
 }
 
-// copy n fp16 elements : source is aligned, destination is potentially unaligned
+// copy n fp16 elements : destination is aligned, source is unaligned
 static inline void hvx_copy_f16_au(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
     hvx_copy_au(dst, src, n, sizeof(__fp16));
 }
 
-// copy n fp16 elements : source is aligned, destination is potentially unaligned
+// copy n fp16 elements : destination is unaligned, source is aligned
 static inline void hvx_copy_f16_ua(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
     hvx_copy_ua(dst, src, n, sizeof(__fp16));
 }
 
-// copy n fp16 elements : source is aligned, destination is potentially unaligned
+// copy n fp16 elements : destination and source are unaligned
 static inline void hvx_copy_f16_uu(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
     hvx_copy_uu(dst, src, n, sizeof(__fp16));
 }
 
-// copy n fp32 elements : source and destination are aligned to HVX Vector (128)
+// copy n fp32 elements : destination and source are aligned to HVX Vector (128)
 static inline void hvx_copy_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
     hvx_copy_aa(dst, src, n, sizeof(float));
 }
 
-// copy n fp32 elements : source is aligned, destination is unaligned
-static inline void hvx_copy_f32_ua(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
-    hvx_copy_ua(dst, src, n, sizeof(float));
-}
-
-// copy n fp32 elements : source is unaligned, destination is aligned
+// copy n fp32 elements : destination is aligned, source is unaligned
 static inline void hvx_copy_f32_au(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
     hvx_copy_au(dst, src, n, sizeof(float));
 }
 
-// copy n fp32 elements : source is unaligned, destination unaligned
+// copy n fp32 elements : destination is unaligned, source is aligned
+static inline void hvx_copy_f32_ua(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    hvx_copy_ua(dst, src, n, sizeof(float));
+}
+
+// copy n fp32 elements : destination and source are unaligned
 static inline void hvx_copy_f32_uu(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
     hvx_copy_uu(dst, src, n, sizeof(float));
 }
@@ -153,26 +170,26 @@ static inline void hvx_copy_f32_uu(uint8_t * restrict dst, const uint8_t * restr
         }                                                                           \
     } while(0)
 
-// copy/convert n fp32 elements into n fp16 elements : source is aligned, destination is aligned
+// copy/convert n fp32 elements into n fp16 elements : destination and source are aligned
 static inline void hvx_copy_f16_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
     assert((unsigned long) dst % 128 == 0);
     assert((unsigned long) src % 128 == 0);
     hvx_copy_f16_f32_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a);
 }
 
-// copy/convert n fp32 elements into n fp16 elements : source is unaligned, destination is aligned
+// copy/convert n fp32 elements into n fp16 elements : destination is aligned, source is unaligned
 static inline void hvx_copy_f16_f32_au(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
     assert((unsigned long) dst % 128 == 0);
     hvx_copy_f16_f32_loop_body(HVX_Vector, HVX_UVector, hvx_vec_store_a);
 }
 
-// copy/convert n fp32 elements into n fp16 elements : source is aligned, destination is unaligned
+// copy/convert n fp32 elements into n fp16 elements : destination is unaligned, source is aligned
 static inline void hvx_copy_f16_f32_ua(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
     assert((unsigned long) src % 128 == 0);
     hvx_copy_f16_f32_loop_body(HVX_UVector, HVX_Vector, hvx_vec_store_u);
 }
 
-// copy/convert n fp32 elements into n fp16 elements : source is unaligned, destination is unaligned
+// copy/convert n fp32 elements into n fp16 elements : destination and source are unaligned
 static inline void hvx_copy_f16_f32_uu(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
     hvx_copy_f16_f32_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u);
 }
@@ -218,28 +235,98 @@ static inline void hvx_copy_f16_f32_uu(uint8_t * restrict dst, const uint8_t * r
         }                                                                           \
     } while(0)
 
-// copy/convert n fp16 elements into n fp32 elements : source is aligned, destination is aligned
+// copy/convert n fp16 elements into n fp32 elements : destination and source are aligned
 static inline void hvx_copy_f32_f16_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
     assert((unsigned long) dst % 128 == 0);
     assert((unsigned long) src % 128 == 0);
     hvx_copy_f32_f16_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a);
 }
 
-// copy/convert n fp16 elements into n fp32 elements : source is unaligned, destination is aligned
+// copy/convert n fp16 elements into n fp32 elements : destination is aligned, source is unaligned
 static inline void hvx_copy_f32_f16_au(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
     assert((unsigned long) dst % 128 == 0);
     hvx_copy_f32_f16_loop_body(HVX_Vector, HVX_UVector, hvx_vec_store_a);
 }
 
-// copy/convert n fp16 elements into n fp32 elements : source is aligned, destination is unaligned
+// copy/convert n fp16 elements into n fp32 elements : destination is unaligned, source is aligned
 static inline void hvx_copy_f32_f16_ua(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
     assert((unsigned long) src % 128 == 0);
     hvx_copy_f32_f16_loop_body(HVX_UVector, HVX_Vector, hvx_vec_store_u);
 }
 
-// copy/convert n fp16 elements into n fp32 elements : source is unaligned, destination is unaligned
+// copy/convert n fp16 elements into n fp32 elements : destination and source are unaligned
 static inline void hvx_copy_f32_f16_uu(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
     hvx_copy_f32_f16_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u);
+}
+
+//// fp32 -> int32
+
+#define hvx_copy_i32_f32_loop_body(dst_type, src_type, vec_store) \
+    do {                                                          \
+        dst_type * restrict vdst = (dst_type *) dst;              \
+        src_type * restrict vsrc = (src_type *) src;              \
+                                                                  \
+        const uint32_t elem_size = sizeof(int32_t);               \
+        const uint32_t epv  = 128 / elem_size;                    \
+        const uint32_t nvec = n / epv;                            \
+        const uint32_t nloe = n % epv;                            \
+                                                                  \
+        uint32_t i = 0;                                           \
+        _Pragma("unroll(4)")                                      \
+        for (; i < nvec; i++) {                                   \
+            vdst[i] = Q6_Vw_equals_Vsf(vsrc[i]);                  \
+        }                                                         \
+        if (nloe) {                                               \
+            HVX_Vector v = Q6_Vw_equals_Vsf(vsrc[i]);             \
+            vec_store((void *) &vdst[i], nloe * elem_size, v);    \
+        }                                                         \
+    } while(0)
+
+// copy/convert n fp32 elements into n int32 elements : destination and source are aligned
+static inline void hvx_copy_i32_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+    hvx_copy_i32_f32_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a);
+}
+
+// copy/convert n fp32 elements into n int32 elements : destination and source are unaligned
+static inline void hvx_copy_i32_f32_uu(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    hvx_copy_i32_f32_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u);
+}
+
+//// int32 -> fp32
+
+#define hvx_copy_f32_i32_loop_body(dst_type, src_type, vec_store) \
+    do {                                                          \
+        dst_type * restrict vdst = (dst_type *) dst;              \
+        src_type * restrict vsrc = (src_type *) src;              \
+                                                                  \
+        const uint32_t elem_size = sizeof(float);                 \
+        const uint32_t epv  = 128 / elem_size;                    \
+        const uint32_t nvec = n / epv;                            \
+        const uint32_t nloe = n % epv;                            \
+                                                                  \
+        uint32_t i = 0;                                           \
+        _Pragma("unroll(4)")                                      \
+        for (; i < nvec; i++) {                                   \
+            vdst[i] = Q6_Vsf_equals_Vw(vsrc[i]);                  \
+        }                                                         \
+        if (nloe) {                                               \
+            HVX_Vector v = Q6_Vsf_equals_Vw(vsrc[i]);             \
+            vec_store((void *) &vdst[i], nloe * elem_size, v);    \
+        }                                                         \
+    } while(0)
+
+// copy/convert n int32 elements into n fp32 elements : destination and source are aligned
+static inline void hvx_copy_f32_i32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+    hvx_copy_f32_i32_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a);
+}
+
+// copy/convert n int32 elements into n fp32 elements : destination and source are unaligned
+static inline void hvx_copy_f32_i32_uu(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    hvx_copy_f32_i32_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u);
 }
 
 #endif // HVX_COPY_H

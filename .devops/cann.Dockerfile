@@ -4,12 +4,32 @@
 
 # Define the CANN base image for easier version updates later
 ARG CHIP_TYPE=910b
-ARG CANN_BASE_IMAGE=quay.io/ascend/cann:8.3.rc2-${CHIP_TYPE}-openeuler24.03-py3.11
+ARG CANN_BASE_IMAGE=quay.io/ascend/cann:8.5.0-${CHIP_TYPE}-openeuler24.03-py3.11
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
 
 # ==============================================================================
 # BUILD STAGE
 # Compile all binary files and libraries
 # ==============================================================================
+ARG NODE_VERSION=24
+
+FROM docker.io/node:$NODE_VERSION AS web
+
+ARG APP_VERSION
+
+WORKDIR /app/ui/apps/chat
+
+COPY ui/apps/chat/package.json ui/apps/chat/package-lock.json ./
+RUN npm ci
+
+COPY ui/apps/chat/ ./
+# the app compiles Llama UI from its source next to it
+COPY ui/lib/ui/package.json /app/ui/lib/ui/package.json
+COPY ui/lib/ui/src/lib/ /app/ui/lib/ui/src/lib/
+RUN LLAMA_BUILD_NUMBER="$APP_VERSION" npm run build
+
 FROM ${CANN_BASE_IMAGE} AS build
 
 # -- Install build dependencies --
@@ -22,6 +42,8 @@ WORKDIR /app
 
 # -- Copy project files --
 COPY . .
+
+COPY --from=web /app/ui/apps/chat/dist ui/apps/chat/dist
 
 # -- Set CANN environment variables (required for compilation) --
 # Using ENV instead of `source` allows environment variables to persist across the entire image layer
@@ -55,6 +77,7 @@ RUN mkdir -p /app/lib && \
 RUN mkdir -p /app/full && \
     cp build/bin/* /app/full/ && \
     cp *.py /app/full/ && \
+    cp -r conversion /app/full/ && \
     cp -r gguf-py /app/full/ && \
     cp -r requirements /app/full/ && \
     cp requirements.txt /app/full/
@@ -66,6 +89,19 @@ RUN mkdir -p /app/full && \
 # Create a minimal base image with CANN runtime and common libraries
 # ==============================================================================
 FROM ${CANN_BASE_IMAGE} AS base
+
+ARG BUILD_DATE=N/A
+ARG APP_VERSION=N/A
+ARG APP_REVISION=N/A
+ARG IMAGE_URL=https://github.com/ggml-org/llama.cpp
+ARG IMAGE_SOURCE=https://github.com/ggml-org/llama.cpp
+LABEL org.opencontainers.image.created=$BUILD_DATE \
+      org.opencontainers.image.version=$APP_VERSION \
+      org.opencontainers.image.revision=$APP_REVISION \
+      org.opencontainers.image.title="llama.cpp" \
+      org.opencontainers.image.description="LLM inference in C/C++" \
+      org.opencontainers.image.url=$IMAGE_URL \
+      org.opencontainers.image.source=$IMAGE_SOURCE
 
 # -- Install runtime dependencies --
 RUN yum install -y libgomp curl && \
@@ -112,7 +148,7 @@ ENTRYPOINT ["/app/tools.sh"]
 # ==============================================================================
 FROM base AS light
 
-COPY --from=build /app/full/llama-cli /app/full/llama-completion /app
+COPY --from=build /app/full/llama /app/full/llama-cli /app/full/llama-completion /app/
 
 ENTRYPOINT [ "/app/llama-cli" ]
 
@@ -122,8 +158,9 @@ ENTRYPOINT [ "/app/llama-cli" ]
 FROM base AS server
 
 ENV LLAMA_ARG_HOST=0.0.0.0
+ENV LLAMA_ARG_PORT=8080
 
-COPY --from=build /app/full/llama-server /app
+COPY --from=build /app/full/llama /app/full/llama-server /app/
 
 HEALTHCHECK --interval=5m CMD [ "curl", "-f", "http://localhost:8080/health" ]
 

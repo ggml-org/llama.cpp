@@ -9,7 +9,7 @@ uint rope_a_coord(const uint i0, const uint i01, const uint i02, const uint i03,
     // Per-row offset in shared memory
     const uint ix = i0;
 #else
-    const uint ix = i03*p.nb03 + i02*p.nb02 + i01*p.nb01 + i0;
+    const uint ix = p.a_offset + i03*p.nb03 + i02*p.nb02 + i01*p.nb01 + i0;
 #endif
     return ix;
 }
@@ -48,20 +48,23 @@ void rope_norm(const uint i0, const uint i1, const uint i2, const uint i3, rope_
         idst = i1*p.nb11 + i0;
         idst += rope_data_i[i2].x * p.set_rows_stride;
     }
+    idst += p.d_offset;
 
-    if (i0 >= p.n_dims) {
+    if (i0 < p.n_offs || i0 >= p.n_offs + p.n_dims) {
         rope_data_d[idst + 0] = ROPE_D_TYPE(rope_data_a[ix + 0]);
         rope_data_d[idst + 1] = ROPE_D_TYPE(rope_data_a[ix + 1]);
 
         return;
     }
 
-    const float theta_base = rope_data_pos[i2] * pow(p.theta_scale, i0/2.0f);
+    const uint iw = i0 - p.n_offs; // relative idx
 
-    const float freq_factor = p.has_ff != 0 ? rope_data_ff[i0/2] : 1.0f;
+    const float theta_base = rope_data_pos[i2] * pow(p.theta_scale, iw/2.0f);
+
+    const float freq_factor = p.has_ff != 0 ? rope_data_ff[iw/2] : 1.0f;
 
     float cos_theta, sin_theta;
-    rope_yarn(theta_base / freq_factor, i0, cos_theta, sin_theta, p);
+    rope_yarn(theta_base / freq_factor, iw, cos_theta, sin_theta, p);
 
     const float x0 = float(rope_data_a[ix + 0]);
     const float x1 = float(rope_data_a[ix + 1]);
@@ -84,26 +87,30 @@ void rope_neox(const uint i0, const uint i1, const uint i2, const uint i3, rope_
         idst = i1*p.nb11 + i0/2;
         idst += rope_data_i[i2].x * p.set_rows_stride;
     }
+    idst += p.d_offset;
 
-    if (i0 >= p.n_dims) {
+    if (i0 < p.n_offs || i0 >= p.n_offs + p.n_dims) {
         rope_data_d[idst + i0/2 + 0] = ROPE_D_TYPE(rope_data_a[ix + i0/2 + 0]);
         rope_data_d[idst + i0/2 + 1] = ROPE_D_TYPE(rope_data_a[ix + i0/2 + 1]);
 
         return;
     }
 
-    const float theta_base = rope_data_pos[i2] * pow(p.theta_scale, i0/2.0f);
+    const uint iw = i0 - p.n_offs; // relative idx
 
-    const float freq_factor = p.has_ff != 0 ? rope_data_ff[i0/2] : 1.0f;
+    const float theta_base = rope_data_pos[i2] * pow(p.theta_scale, iw/2.0f);
+
+    const float freq_factor = p.has_ff != 0 ? rope_data_ff[iw/2] : 1.0f;
 
     float cos_theta, sin_theta;
-    rope_yarn(theta_base / freq_factor, i0, cos_theta, sin_theta, p);
+    rope_yarn(theta_base / freq_factor, iw, cos_theta, sin_theta, p);
 
-    const float x0 = float(rope_data_a[ix + 0]);
-    const float x1 = float(rope_data_a[ix + p.n_dims/2]);
+    // idst/ix point at channel i0/2; the first channel of the rotated pair is p.n_offs + iw/2 = i0/2 + p.n_offs/2
+    const float x0 = float(rope_data_a[ix + p.n_offs/2 + 0]);
+    const float x1 = float(rope_data_a[ix + p.n_offs/2 + p.n_dims/2]);
 
-    rope_data_d[idst + 0]          = ROPE_D_TYPE(x0*cos_theta - x1*sin_theta);
-    rope_data_d[idst + p.n_dims/2] = ROPE_D_TYPE(x0*sin_theta + x1*cos_theta);
+    rope_data_d[idst + p.n_offs/2 + 0]          = ROPE_D_TYPE(x0*cos_theta - x1*sin_theta);
+    rope_data_d[idst + p.n_offs/2 + p.n_dims/2] = ROPE_D_TYPE(x0*sin_theta + x1*cos_theta);
 }
 
 
@@ -121,54 +128,58 @@ void rope_multi(const uint i0, const uint i1, const uint i2, const uint i3, rope
         idst = i1*p.nb11 + i0/2;
         idst += rope_data_i[i2].x * p.set_rows_stride;
     }
+    idst += p.d_offset;
 
-    if (i0 >= p.n_dims) {
+    if (i0 < p.n_offs || i0 >= p.n_offs + p.n_dims) {
         rope_data_d[idst + i0/2 + 0] = ROPE_D_TYPE(rope_data_a[ix + i0/2 + 0]);
         rope_data_d[idst + i0/2 + 1] = ROPE_D_TYPE(rope_data_a[ix + i0/2 + 1]);
 
         return;
     }
 
+    const uint iw = i0 - p.n_offs; // relative idx
+
     const int sect_dims = p.sections[0] + p.sections[1] + p.sections[2] + p.sections[3];
     const int sec_w = p.sections[1] + p.sections[0];
-    const uint sector = (i0 / 2) % sect_dims;
+    const uint sector = (iw / 2) % sect_dims;
 
     float theta_base = 0.0;
     if (p.is_imrope != 0) {
         if (sector % 3 == 1 && sector < 3 * p.sections[1]) {
-            theta_base = rope_data_pos[i2 + p.ne02 * 1]*pow(p.theta_scale, i0/2.0f);
+            theta_base = rope_data_pos[i2 + p.ne02 * 1]*pow(p.theta_scale, iw/2.0f);
         } else if (sector % 3 == 2 && sector < 3 * p.sections[2]) {
-            theta_base = rope_data_pos[i2 + p.ne02 * 2]*pow(p.theta_scale, i0/2.0f);
+            theta_base = rope_data_pos[i2 + p.ne02 * 2]*pow(p.theta_scale, iw/2.0f);
         } else if (sector % 3 == 0 && sector < 3 * p.sections[0]) {
-            theta_base = rope_data_pos[i2]*pow(p.theta_scale, i0/2.0f);
+            theta_base = rope_data_pos[i2]*pow(p.theta_scale, iw/2.0f);
         } else {
-            theta_base = rope_data_pos[i2 + p.ne02 * 3]*pow(p.theta_scale, i0/2.0f);
+            theta_base = rope_data_pos[i2 + p.ne02 * 3]*pow(p.theta_scale, iw/2.0f);
         }
     } else {
         if (sector < p.sections[0]) {
-            theta_base = rope_data_pos[i2]*pow(p.theta_scale, i0/2.0f);
+            theta_base = rope_data_pos[i2]*pow(p.theta_scale, iw/2.0f);
         }
         else if (sector >= p.sections[0] && sector < sec_w) {
-            theta_base = rope_data_pos[i2 + p.ne02 * 1]*pow(p.theta_scale, i0/2.0f);
+            theta_base = rope_data_pos[i2 + p.ne02 * 1]*pow(p.theta_scale, iw/2.0f);
         }
         else if (sector >= sec_w && sector < sec_w + p.sections[2]) {
-            theta_base = rope_data_pos[i2 + p.ne02 * 2]*pow(p.theta_scale, i0/2.0f);
+            theta_base = rope_data_pos[i2 + p.ne02 * 2]*pow(p.theta_scale, iw/2.0f);
         }
         else if (sector >= sec_w + p.sections[2]) {
-            theta_base = rope_data_pos[i2 + p.ne02 * 3]*pow(p.theta_scale, i0/2.0f);
+            theta_base = rope_data_pos[i2 + p.ne02 * 3]*pow(p.theta_scale, iw/2.0f);
         }
     }
 
-    const float freq_factor = p.has_ff != 0 ? rope_data_ff[i0/2] : 1.0f;
+    const float freq_factor = p.has_ff != 0 ? rope_data_ff[iw/2] : 1.0f;
 
     float cos_theta, sin_theta;
-    rope_yarn(theta_base / freq_factor, i0, cos_theta, sin_theta, p);
+    rope_yarn(theta_base / freq_factor, iw, cos_theta, sin_theta, p);
 
-    const float x0 = float(rope_data_a[ix + 0]);
-    const float x1 = float(rope_data_a[ix + p.n_dims/2]);
+    // idst/ix point at channel i0/2; the first channel of the rotated pair is p.n_offs + iw/2 = i0/2 + p.n_offs/2
+    const float x0 = float(rope_data_a[ix + p.n_offs/2 + 0]);
+    const float x1 = float(rope_data_a[ix + p.n_offs/2 + p.n_dims/2]);
 
-    rope_data_d[idst + 0]          = ROPE_D_TYPE(x0*cos_theta - x1*sin_theta);
-    rope_data_d[idst + p.n_dims/2] = ROPE_D_TYPE(x0*sin_theta + x1*cos_theta);
+    rope_data_d[idst + p.n_offs/2 + 0]          = ROPE_D_TYPE(x0*cos_theta - x1*sin_theta);
+    rope_data_d[idst + p.n_offs/2 + p.n_dims/2] = ROPE_D_TYPE(x0*sin_theta + x1*cos_theta);
 }
 
 void rope_vision(const uint i0, const uint i1, const uint i2, const uint i3, rope_params p) {
@@ -176,7 +187,7 @@ void rope_vision(const uint i0, const uint i1, const uint i2, const uint i3, rop
         return;
     }
 
-    const uint idst = i0/2 + i1 * p.nb11 + i2 * p.nb12 + i3 * p.nb13;
+    const uint idst = p.d_offset + i0/2 + i1 * p.nb11 + i2 * p.nb12 + i3 * p.nb13;
     const uint ix = rope_a_coord(i0/2, i1, i2, i3, p);
 
     const int sect_dims = p.sections[0] + p.sections[1];

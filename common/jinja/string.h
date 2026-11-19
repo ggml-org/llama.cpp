@@ -39,6 +39,9 @@ struct string {
 
     std::string str() const;
     size_t length() const;
+    bool empty() const;
+    bool equals(const string & other) const;
+    std::optional<char> byte_at(size_t index) const;
     void hash_update(hasher & hash) const noexcept;
     bool all_parts_are_input() const;
     bool is_uppercase() const;
@@ -47,7 +50,7 @@ struct string {
     // mark this string as input if other has ALL parts as input
     void mark_input_based_on(const string & other);
 
-    string append(const string & other);
+    string & append(const string & other);
 
     // in-place transformations
 

@@ -1,0 +1,134 @@
+#include "../op_table.h"
+#include "../utils.h"
+
+#include <array>
+#include <cstdint>
+#include <openvino/op/concat.hpp>
+#include <openvino/op/constant.hpp>
+#include <openvino/op/gather.hpp>
+#include <openvino/op/pad.hpp>
+#include <openvino/op/reshape.hpp>
+#include <openvino/op/shape_of.hpp>
+#include <openvino/op/subtract.hpp>
+#include <utility>
+#include <vector>
+
+namespace ov {
+namespace frontend {
+namespace ggml {
+namespace op {
+
+namespace {
+
+ov::Output<ov::Node> translate_circular_pad(ov::Output<ov::Node> input,
+                                            const std::array<int32_t, 8> & pads,
+                                            const ov::Shape & input_shape,
+                                            bool stateful) {
+    ov::Output<ov::Node> result = std::move(input);
+
+    const std::array<int32_t, 4> pads_begin = {pads[6], pads[4], pads[2], pads[0]};
+    const std::array<int32_t, 4> pads_end = {pads[7], pads[5], pads[3], pads[1]};
+    // Stateful models drop leading dims, so the input can have rank < 4; align pads to the trailing input axes
+    const size_t dropped =
+        stateful && input_shape.size() < pads_begin.size() ? pads_begin.size() - input_shape.size() : 0;
+
+    for (size_t i = 0; i < dropped; ++i) {
+        FRONT_END_CHECK_IMPLEMENTED(pads_begin[i] == 0 && pads_end[i] == 0,
+                                    "Circular PAD cannot pad a dimension dropped from the input rank");
+    }
+
+    for (size_t axis = 0; axis < input_shape.size(); ++axis) {
+        const int64_t input_dim = static_cast<int64_t>(input_shape[axis]);
+        const int64_t pad_begin = pads_begin[dropped + axis];
+        const int64_t pad_end = pads_end[dropped + axis];
+
+        if (pad_begin == 0 && pad_end == 0) {
+            continue;
+        }
+
+        FRONT_END_CHECK_IMPLEMENTED(input_dim > 0, "Circular PAD requires static non-zero input dimensions");
+
+        std::vector<int64_t> indices(static_cast<size_t>(input_dim + pad_begin + pad_end));
+        for (int64_t index = 0; index < static_cast<int64_t>(indices.size()); ++index) {
+            int64_t wrapped = (index - pad_begin) % input_dim;
+            if (wrapped < 0) {
+                wrapped += input_dim;
+            }
+            indices[static_cast<size_t>(index)] = wrapped;
+        }
+
+        auto gather_indices = ov::op::v0::Constant::create(ov::element::i64, {indices.size()}, indices);
+        auto gather_axis = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {axis});
+        result = std::make_shared<ov::op::v8::Gather>(result, gather_indices, gather_axis);
+    }
+
+    return result;
+}
+
+}  // namespace
+
+OutputVector translate_pad(const NodeContext & context) {
+    num_inputs_check(context, 1, 1);
+
+    auto input = process_view_input_new(context, 0);
+    if (context.get_input_shape(0) == context.get_output_shape()) {
+        return rename_outputs_with_suffix({input}, context.get_name());
+    }
+
+    const int32_t * op_params = context.get_output_op_params();
+    FRONT_END_CHECK_IMPLEMENTED(op_params != nullptr, "PAD requires output op params");
+
+    const std::array<int32_t, 8> pads = {op_params[0], op_params[1], op_params[2], op_params[3],
+                                         op_params[4], op_params[5], op_params[6], op_params[7]};
+    const bool circular = op_params[8] != 0;
+
+    if (circular) {
+        auto res = translate_circular_pad(input, pads, context.get_input_shape(0).to_shape(), context.is_stateful());
+        return rename_outputs_with_suffix({res}, context.get_name());
+    }
+
+    std::vector<int64_t> pads_begin = {pads[6], pads[4], pads[2], pads[0]};
+    std::vector<int64_t> pads_end = {pads[7], pads[5], pads[3], pads[1]};
+
+    // Stateful models drop leading dims, so the input can have rank < 4.
+    const auto input_rank = input.get_partial_shape().rank();
+    if (context.is_stateful() && input_rank.is_static() && input_rank.get_length() < 4) {
+        const size_t dropped = 4 - static_cast<size_t>(input_rank.get_length());
+        for (size_t i = 0; i < dropped; ++i) {
+            FRONT_END_OP_CONVERSION_CHECK(pads_begin[i] == 0 && pads_end[i] == 0,
+                                          "PAD: cannot pad a dimension dropped from the input rank");
+        }
+        pads_begin.erase(pads_begin.begin(), pads_begin.begin() + dropped);
+        pads_end.erase(pads_end.begin(), pads_end.begin() + dropped);
+    }
+
+    auto pads_begin_node = ov::op::v0::Constant::create(ov::element::i64, {pads_begin.size()}, pads_begin);
+    ov::Output<ov::Node> pads_end_node = ov::op::v0::Constant::create(ov::element::i64, {pads_end.size()}, pads_end);
+    // No-cache attention pads K and V on the token axis up to the mask width (TAG_NO_CACHE_PAD), which changes with
+    // the token count, so compute the end padding from the mask at run time
+    const int dyn = context.get_op_dynamic_dim();
+    const int axis = dyn >= 0 ? static_cast<int>(pads_end.size()) - 1 - dyn : -1;
+    if (axis >= 0 && pads_end[axis] != 0 && context.has_input("self_kq_mask")) {
+        auto mask = context.get_input("self_kq_mask");
+        auto mask_len = get_dimensions(std::make_shared<ov::op::v3::ShapeOf>(mask),
+                                       {static_cast<int>(mask.get_partial_shape().rank().get_length()) - 1});
+        auto len = get_dimensions(std::make_shared<ov::op::v3::ShapeOf>(input), {axis});
+        auto pad = std::make_shared<ov::op::v1::Subtract>(mask_len, len);
+        ov::OutputVector parts;
+        for (int i = 0; i < static_cast<int>(pads_end.size()); ++i) {
+            parts.push_back(i == axis ? ov::Output<ov::Node>(pad) :
+                                        ov::op::v0::Constant::create(ov::element::i64, {1}, {pads_end[i]})->output(0));
+        }
+        pads_end_node = std::make_shared<ov::op::v0::Concat>(parts, 0);
+    }
+    auto pad_value = ov::op::v0::Constant::create(context.get_input_type(0), ov::Shape{}, {0});
+    auto res =
+        std::make_shared<ov::op::v1::Pad>(input, pads_begin_node, pads_end_node, pad_value, ov::op::PadMode::CONSTANT);
+
+    return rename_outputs_with_suffix({res}, context.get_name());
+}
+
+}  // namespace op
+}  // namespace ggml
+}  // namespace frontend
+}  // namespace ov

@@ -26,17 +26,21 @@ enum handcrafted_file_type {
     HANDCRAFTED_HEADER_EMPTY               = 800,
 
     HANDCRAFTED_KV_BAD_KEY_SIZE            =  10 + offset_has_kv,
+    HANDCRAFTED_KV_EMPTY_KEY               =  15 + offset_has_kv,
     HANDCRAFTED_KV_BAD_TYPE                =  20 + offset_has_kv,
     // HANDCRAFTED_KV_BAD_VALUE_SIZE          =  30 + offset_has_kv, // removed because it can result in allocations > 1 TB (default sanitizer limit)
     HANDCRAFTED_KV_DUPLICATE_KEY           =  40 + offset_has_kv,
     HANDCRAFTED_KV_BAD_ALIGN               =  50 + offset_has_kv,
+    HANDCRAFTED_KV_WRONG_TYPE_ALIGN        =  55 + offset_has_kv,
     HANDCRAFTED_KV_SUCCESS                 = 800 + offset_has_kv,
 
     HANDCRAFTED_TENSORS_BAD_NAME_SIZE      =  10 + offset_has_tensors,
     HANDCRAFTED_TENSORS_BAD_N_DIMS         =  20 + offset_has_tensors,
     HANDCRAFTED_TENSORS_BAD_SHAPE          =  30 + offset_has_tensors,
+    HANDCRAFTED_TENSORS_ZERO_DIM           =  35 + offset_has_tensors,
     HANDCRAFTED_TENSORS_NE_TOO_BIG         =  40 + offset_has_tensors,
     HANDCRAFTED_TENSORS_NBYTES_TOO_BIG     =  45 + offset_has_tensors,
+    HANDCRAFTED_TENSORS_NBYTES_PAD_WRAP    =  46 + offset_has_tensors,
     HANDCRAFTED_TENSORS_BAD_TYPE           =  50 + offset_has_tensors,
     HANDCRAFTED_TENSORS_BAD_OFFSET         =  60 + offset_has_tensors,
     HANDCRAFTED_TENSORS_DUPLICATE_NAME     =  70 + offset_has_tensors,
@@ -48,6 +52,7 @@ enum handcrafted_file_type {
     HANDCRAFTED_DATA_NOT_ENOUGH_DATA       =  10 + offset_has_data,
     HANDCRAFTED_DATA_BAD_ALIGN             =  15 + offset_has_data,
     HANDCRAFTED_DATA_INCONSISTENT_ALIGN    =  20 + offset_has_data,
+    HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW     =  30 + offset_has_data,
     HANDCRAFTED_DATA_SUCCESS               = 800 + offset_has_data,
     HANDCRAFTED_DATA_CUSTOM_ALIGN          = 810 + offset_has_data,
 };
@@ -63,16 +68,20 @@ static std::string handcrafted_file_type_name(const enum handcrafted_file_type h
         case HANDCRAFTED_HEADER_EMPTY:               return "HEADER_EMPTY";
 
         case HANDCRAFTED_KV_BAD_KEY_SIZE:            return "KV_BAD_KEY_SIZE";
+        case HANDCRAFTED_KV_EMPTY_KEY:               return "KV_EMPTY_KEY";
         case HANDCRAFTED_KV_BAD_TYPE:                return "KV_BAD_TYPE";
         case HANDCRAFTED_KV_DUPLICATE_KEY:           return "KV_DUPLICATE_KEY";
         case HANDCRAFTED_KV_BAD_ALIGN:               return "KV_BAD_ALIGN";
+        case HANDCRAFTED_KV_WRONG_TYPE_ALIGN:        return "KV_WRONG_TYPE_ALIGN";
         case HANDCRAFTED_KV_SUCCESS:                 return "KV_RANDOM_KV";
 
         case HANDCRAFTED_TENSORS_BAD_NAME_SIZE:      return "TENSORS_BAD_NAME_SIZE";
         case HANDCRAFTED_TENSORS_BAD_N_DIMS:         return "TENSORS_BAD_N_DIMS";
         case HANDCRAFTED_TENSORS_BAD_SHAPE:          return "TENSORS_BAD_SHAPE";
+        case HANDCRAFTED_TENSORS_ZERO_DIM:           return "TENSORS_ZERO_DIM";
         case HANDCRAFTED_TENSORS_NE_TOO_BIG:         return "TENSORS_NE_TOO_BIG";
         case HANDCRAFTED_TENSORS_NBYTES_TOO_BIG:     return "TENSORS_NBYTES_TOO_BIG";
+        case HANDCRAFTED_TENSORS_NBYTES_PAD_WRAP:    return "TENSORS_NBYTES_PAD_WRAP";
         case HANDCRAFTED_TENSORS_BAD_TYPE:           return "TENSORS_BAD_TYPE";
         case HANDCRAFTED_TENSORS_BAD_OFFSET:         return "TENSORS_BAD_OFFSET";
         case HANDCRAFTED_TENSORS_DUPLICATE_NAME:     return "TENSORS_DUPLICATE_NAME";
@@ -84,6 +93,7 @@ static std::string handcrafted_file_type_name(const enum handcrafted_file_type h
         case HANDCRAFTED_DATA_NOT_ENOUGH_DATA:       return "DATA_NOT_ENOUGH_DATA";
         case HANDCRAFTED_DATA_BAD_ALIGN:             return "DATA_BAD_ALIGN";
         case HANDCRAFTED_DATA_INCONSISTENT_ALIGN:    return "DATA_INCONSISTENT_ALIGN";
+        case HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW:     return "DATA_MEM_SIZE_OVERFLOW";
         case HANDCRAFTED_DATA_SUCCESS:               return "DATA_SUCCESS";
         case HANDCRAFTED_DATA_CUSTOM_ALIGN:          return "DATA_CUSTOM_ALIGN";
     }
@@ -91,6 +101,9 @@ static std::string handcrafted_file_type_name(const enum handcrafted_file_type h
 }
 
 static bool expect_context_not_null(const enum handcrafted_file_type hft) {
+    if (hft == HANDCRAFTED_TENSORS_ZERO_DIM) {
+        return true;
+    }
     if (hft < offset_has_kv) {
         return hft >= HANDCRAFTED_HEADER_EMPTY;
     }
@@ -160,6 +173,42 @@ static void helper_write(FILE * file, const void * data, const size_t nbytes) {
     GGML_ASSERT(fwrite(data, 1, nbytes, file) == nbytes);
 }
 
+static std::vector<uint8_t> read_file_to_buffer(FILE * file) {
+    GGML_ASSERT(file != nullptr);
+    GGML_ASSERT(fseek(file, 0, SEEK_END) == 0);
+
+    const long size = ftell(file);
+    GGML_ASSERT(size >= 0);
+
+    rewind(file);
+
+    std::vector<uint8_t> data(static_cast<size_t>(size));
+    GGML_ASSERT(fread(data.data(), 1, data.size(), file) == data.size());
+
+    rewind(file);
+    return data;
+}
+
+struct callback_reader_data {
+    const uint8_t * data;
+    size_t size;
+};
+
+static size_t read_buffer_callback(void * userdata, void * output, uint64_t offset, size_t len) {
+    GGML_ASSERT(len > 0);
+
+    const callback_reader_data & reader = *static_cast<callback_reader_data *>(userdata);
+
+    if (offset > reader.size || len > reader.size - offset) {
+        return 0;
+    }
+
+    const size_t data_offset = static_cast<size_t>(offset);
+    const size_t nread = std::min(len, reader.size - data_offset);
+    memcpy(static_cast<uint8_t *>(output), reader.data + data_offset, nread);
+    return nread;
+}
+
 static FILE * get_handcrafted_file(const unsigned int seed, const enum handcrafted_file_type hft, const int extra_bytes = 0) {
     FILE * file = tmpfile();
 
@@ -196,6 +245,20 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         tensor_configs = get_tensor_configs(rng);
     }
 
+    if (hft == HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW) {
+        tensor_configs.resize(2);
+
+        tensor_configs[0] = { GGML_TYPE_I8, { 0x7FFFFFFFFFFFFFC0, 1, 1, 1 } };
+        tensor_configs[1] = { GGML_TYPE_I8, { 0x7FFFFFFFFFFFFFC0, 1, 1, 1 } };
+    }
+
+    if (hft == HANDCRAFTED_TENSORS_NBYTES_PAD_WRAP) {
+        tensor_configs.resize(1);
+        // F32 with ne = [4, 2^30-1, 2^30+1, 1] so ggml_nbytes = 2^64 - 16.
+        // this hits the GGML_PAD wrap window: pad wraps to 0.
+        tensor_configs[0] = { GGML_TYPE_F32, { 4, INT64_C(1073741823), INT64_C(1073741825), 1 } };
+    }
+
     if (hft == HANDCRAFTED_HEADER_BAD_N_TENSORS) {
         const uint64_t n_tensors = -1;
         helper_write(file, n_tensors);
@@ -210,9 +273,9 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
     }
     {
         uint64_t n_kv = kv_types.size();
-        if (hft == HANDCRAFTED_KV_BAD_ALIGN      ||
-            hft == HANDCRAFTED_TENSORS_BAD_ALIGN || hft == HANDCRAFTED_TENSORS_CUSTOM_ALIGN ||
-            hft == HANDCRAFTED_DATA_BAD_ALIGN    || hft == HANDCRAFTED_DATA_CUSTOM_ALIGN) {
+        if (hft == HANDCRAFTED_KV_BAD_ALIGN        || hft == HANDCRAFTED_KV_WRONG_TYPE_ALIGN ||
+            hft == HANDCRAFTED_TENSORS_BAD_ALIGN   || hft == HANDCRAFTED_TENSORS_CUSTOM_ALIGN ||
+            hft == HANDCRAFTED_DATA_BAD_ALIGN      || hft == HANDCRAFTED_DATA_CUSTOM_ALIGN) {
 
             n_kv += 1;
         } else if (hft == HANDCRAFTED_HEADER_BAD_N_KV) {
@@ -239,7 +302,9 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         const enum gguf_type type     = gguf_type(hft == HANDCRAFTED_KV_BAD_TYPE ? GGUF_TYPE_COUNT : kv_types[i].first);
         const enum gguf_type type_arr = gguf_type(hft == HANDCRAFTED_KV_BAD_TYPE ? GGUF_TYPE_COUNT : kv_types[i].second);
 
-        const std::string key = "my_key_" + std::to_string((hft == HANDCRAFTED_KV_DUPLICATE_KEY ? i/2 : i));
+        const std::string key = hft == HANDCRAFTED_KV_EMPTY_KEY
+            ? ""
+            : "my_key_" + std::to_string((hft == HANDCRAFTED_KV_DUPLICATE_KEY ? i/2 : i));
 
         if (hft == HANDCRAFTED_KV_BAD_KEY_SIZE) {
             const uint64_t n = -1;
@@ -295,15 +360,17 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         helper_write(file, data, hft == HANDCRAFTED_KV_BAD_TYPE ? 1 : gguf_type_size(type));
     }
 
-    if (hft == HANDCRAFTED_KV_BAD_ALIGN      ||
-        hft == HANDCRAFTED_TENSORS_BAD_ALIGN || hft == HANDCRAFTED_TENSORS_CUSTOM_ALIGN ||
-        hft == HANDCRAFTED_DATA_BAD_ALIGN    || hft == HANDCRAFTED_DATA_CUSTOM_ALIGN) {
+    if (hft == HANDCRAFTED_KV_BAD_ALIGN        || hft == HANDCRAFTED_KV_WRONG_TYPE_ALIGN ||
+        hft == HANDCRAFTED_TENSORS_BAD_ALIGN   || hft == HANDCRAFTED_TENSORS_CUSTOM_ALIGN ||
+        hft == HANDCRAFTED_DATA_BAD_ALIGN      || hft == HANDCRAFTED_DATA_CUSTOM_ALIGN) {
 
         const uint64_t n = strlen(GGUF_KEY_GENERAL_ALIGNMENT);
         helper_write(file, n);
         helper_write(file, GGUF_KEY_GENERAL_ALIGNMENT, n);
 
-        const int32_t type = gguf_type(GGUF_TYPE_UINT32);
+        // HANDCRAFTED_KV_WRONG_TYPE_ALIGN declares general.alignment with a non-UINT32 type,
+        // which the loader must reject cleanly instead of aborting on an assertion
+        const int32_t type = hft == HANDCRAFTED_KV_WRONG_TYPE_ALIGN ? int32_t(GGUF_TYPE_INT32) : int32_t(GGUF_TYPE_UINT32);
         helper_write(file, type);
 
         alignment = expect_context_not_null(hft) ? 1 : 13;
@@ -354,6 +421,9 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
                 break;
             }
         }
+        if (hft == HANDCRAFTED_TENSORS_ZERO_DIM) {
+            n_dims = 2;
+        }
         if (hft == HANDCRAFTED_TENSORS_BAD_N_DIMS) {
             const uint32_t n_dims_bad = GGML_MAX_DIMS + 1;
             helper_write(file, n_dims_bad);
@@ -366,6 +436,9 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
             for (uint32_t j = 0; j < n_dims; ++j) {
                 helper_write(file, bad_dim);
             }
+        } else if (hft == HANDCRAFTED_TENSORS_ZERO_DIM) {
+            const int64_t zero_shape[2] = { shape[0], 0 };
+            helper_write(file, zero_shape, 2*sizeof(int64_t));
         } else if (hft == HANDCRAFTED_TENSORS_NE_TOO_BIG){
             const int64_t big_dim = 4*int64_t(INT32_MAX);
             for (uint32_t j = 0; j < n_dims; ++j) {
@@ -397,7 +470,11 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         for (uint32_t i = 1; i < n_dims; ++i) {
             ne *= shape[i];
         }
-        offset += GGML_PAD(ggml_row_size(type, ne), alignment);
+        if (hft == HANDCRAFTED_TENSORS_ZERO_DIM) {
+            ne = 0;
+        }
+
+        offset += GGML_PAD(ggml_row_size(type, ne), (uint64_t) alignment);
     }
 
     while (ftell(file) % alignment != 0) {
@@ -410,6 +487,9 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         uint64_t nbytes = offset;
         if (hft == HANDCRAFTED_DATA_NOT_ENOUGH_DATA) {
             nbytes -= 1;
+        }
+        if (hft == HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW) {
+            nbytes = 32;
         }
         for (uint64_t i = 0; i < nbytes; ++i) {
             const uint8_t random_byte = i % 256;
@@ -609,6 +689,13 @@ static bool handcrafted_check_tensors(const gguf_context * gguf_ctx, const unsig
             if (gguf_get_tensor_type(gguf_ctx, id) != type) {
                 ok = false;
             }
+
+            const int64_t * ne = gguf_get_tensor_ne(gguf_ctx, id);
+            for (int j = 0; j < GGML_MAX_DIMS; ++j) {
+                if (ne[j] != shape[j]) {
+                    ok = false;
+                }
+            }
         } else {
             ok = false;
             continue;
@@ -683,16 +770,20 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
         HANDCRAFTED_HEADER_EMPTY,
 
         HANDCRAFTED_KV_BAD_KEY_SIZE,
+        HANDCRAFTED_KV_EMPTY_KEY,
         HANDCRAFTED_KV_BAD_TYPE,
         HANDCRAFTED_KV_DUPLICATE_KEY,
         HANDCRAFTED_KV_BAD_ALIGN,
+        HANDCRAFTED_KV_WRONG_TYPE_ALIGN,
         HANDCRAFTED_KV_SUCCESS,
 
         HANDCRAFTED_TENSORS_BAD_NAME_SIZE,
         HANDCRAFTED_TENSORS_BAD_N_DIMS,
         HANDCRAFTED_TENSORS_BAD_SHAPE,
+        HANDCRAFTED_TENSORS_ZERO_DIM,
         HANDCRAFTED_TENSORS_NE_TOO_BIG,
         HANDCRAFTED_TENSORS_NBYTES_TOO_BIG,
+        HANDCRAFTED_TENSORS_NBYTES_PAD_WRAP,
         HANDCRAFTED_TENSORS_BAD_TYPE,
         HANDCRAFTED_TENSORS_BAD_OFFSET,
         HANDCRAFTED_TENSORS_DUPLICATE_NAME,
@@ -704,6 +795,7 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
         HANDCRAFTED_DATA_NOT_ENOUGH_DATA,
         HANDCRAFTED_DATA_BAD_ALIGN,
         HANDCRAFTED_DATA_INCONSISTENT_ALIGN,
+        HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW,
         HANDCRAFTED_DATA_SUCCESS,
         HANDCRAFTED_DATA_CUSTOM_ALIGN,
     };
@@ -728,7 +820,7 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
             /*ctx      =*/ hft >= offset_has_data ? &ctx : nullptr,
         };
 
-        struct gguf_context * gguf_ctx = gguf_init_from_file_impl(file, gguf_params);
+        struct gguf_context * gguf_ctx = gguf_init_from_file_ptr(file, gguf_params);
 
         if (expect_context_not_null(hft)) {
             printf("%s:   - context_not_null: ", __func__);
@@ -778,7 +870,9 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
             ntest++;
         }
 
-        if (expect_context_not_null(hft) && hft >= offset_has_tensors) {
+        // HANDCRAFTED_TENSORS_ZERO_DIM deliberately mangles the tensor shapes to 0 elements,
+        // so only assert that it loads without crashing; skip the exact-geometry comparison.
+        if (expect_context_not_null(hft) && hft >= offset_has_tensors && hft != HANDCRAFTED_TENSORS_ZERO_DIM) {
             printf("%s:   - check_tensors: ", __func__);
             if (handcrafted_check_tensors(gguf_ctx, seed)) {
                 printf("\033[1;32mOK\033[0m\n");
@@ -1081,10 +1175,31 @@ static bool same_tensor_data(const struct ggml_context * orig, const struct ggml
     return ok;
 }
 
-static std::pair<int, int> test_roundtrip(ggml_backend_dev_t dev, const unsigned int seed, const bool only_meta) {
+enum roundtrip_read_mode {
+    ROUNDTRIP_READ_MODE_FILE,
+    ROUNDTRIP_READ_MODE_FILE_OFFSET, // GGUF embedded after some bytes of a bigger file
+    ROUNDTRIP_READ_MODE_BUFFER,
+    ROUNDTRIP_READ_MODE_CALLBACK,
+};
+
+static const char * roundtrip_read_mode_name(const roundtrip_read_mode mode) {
+    switch (mode) {
+        case ROUNDTRIP_READ_MODE_FILE:        return "file";
+        case ROUNDTRIP_READ_MODE_FILE_OFFSET: return "file_offset";
+        case ROUNDTRIP_READ_MODE_BUFFER:      return "buffer";
+        case ROUNDTRIP_READ_MODE_CALLBACK:    return "callback";
+    }
+
+    GGML_ABORT("fatal error");
+}
+
+static std::pair<int, int> test_roundtrip(
+        ggml_backend_dev_t dev, const unsigned int seed, const bool only_meta,
+        const roundtrip_read_mode read_mode) {
     ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
-    printf("%s: device=%s, backend=%s, only_meta=%s\n",
-        __func__, ggml_backend_dev_description(dev), ggml_backend_name(backend), only_meta ? "yes" : "no");
+    printf("%s: device=%s, backend=%s, only_meta=%s, read_mode=%s\n",
+        __func__, ggml_backend_dev_description(dev), ggml_backend_name(backend),
+        only_meta ? "yes" : "no", roundtrip_read_mode_name(read_mode));
 
     int npass = 0;
     int ntest = 0;
@@ -1111,19 +1226,37 @@ static std::pair<int, int> test_roundtrip(ggml_backend_dev_t dev, const unsigned
     GGML_ASSERT(file);
 #endif // _WIN32
 
-    {
-        std::vector<int8_t> buf;
-        gguf_write_to_buf(gguf_ctx_0, buf, only_meta);
-        GGML_ASSERT(fwrite(buf.data(), 1, buf.size(), file) == buf.size());
-        rewind(file);
+    // not a multiple of any alignment, so the data section padding must be relative to the GGUF start
+    const long prefix = read_mode == ROUNDTRIP_READ_MODE_FILE_OFFSET ? 7 : 0;
+    for (long i = 0; i < prefix; ++i) {
+        fputc(0xAB, file);
     }
+
+    gguf_write_to_file_ptr(gguf_ctx_0, file, only_meta);
+    rewind(file);
 
     struct ggml_context * ctx_1 = nullptr;
     struct gguf_init_params gguf_params = {
         /*no_alloc =*/ false,
         /*ctx      =*/ only_meta ? nullptr : &ctx_1,
     };
-    struct gguf_context * gguf_ctx_1 = gguf_init_from_file_impl(file, gguf_params);
+    struct gguf_context * gguf_ctx_1 = nullptr;
+    const std::vector<uint8_t> data = read_mode == ROUNDTRIP_READ_MODE_FILE
+        ? std::vector<uint8_t>()
+        : read_file_to_buffer(file);
+
+    if (read_mode == ROUNDTRIP_READ_MODE_BUFFER) {
+        gguf_ctx_1 = gguf_init_from_buffer(data.data(), data.size(), gguf_params);
+    } else if (read_mode == ROUNDTRIP_READ_MODE_CALLBACK) {
+        callback_reader_data reader = {
+            /*.data = */ data.data(),
+            /*.size = */ data.size(),
+        };
+        gguf_ctx_1 = gguf_init_from_callback(read_buffer_callback, &reader, 4096, 4ull << 30 /* 4GB */, gguf_params);
+    } else {
+        GGML_ASSERT(fseek(file, prefix, SEEK_SET) == 0);
+        gguf_ctx_1 = gguf_init_from_file_ptr(file, gguf_params);
+    }
 
     printf("%s: same_version: ", __func__);
     if (gguf_get_version(gguf_ctx_0) == gguf_get_version(gguf_ctx_1)) {
@@ -1333,7 +1466,22 @@ int main(int argc, char ** argv) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
 
         for (bool only_meta : {true, false}) {
-            std::pair<int, int> result = test_roundtrip(dev, seed, only_meta);
+            std::pair<int, int> result = test_roundtrip(dev, seed, only_meta, ROUNDTRIP_READ_MODE_FILE);
+            npass += result.first;
+            ntest += result.second;
+        }
+        {
+            std::pair<int, int> result = test_roundtrip(dev, seed, /*only_meta=*/false, ROUNDTRIP_READ_MODE_FILE_OFFSET);
+            npass += result.first;
+            ntest += result.second;
+        }
+        {
+            std::pair<int, int> result = test_roundtrip(dev, seed, /*only_meta=*/false, ROUNDTRIP_READ_MODE_BUFFER);
+            npass += result.first;
+            ntest += result.second;
+        }
+        {
+            std::pair<int, int> result = test_roundtrip(dev, seed, /*only_meta=*/false, ROUNDTRIP_READ_MODE_CALLBACK);
             npass += result.first;
             ntest += result.second;
         }

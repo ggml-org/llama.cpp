@@ -1,10 +1,10 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_siglip::build() {
+ggml_cgraph * mtmd_graph_siglip::build() {
     ggml_tensor * inp = build_inp();
 
     ggml_tensor * learned_pos_embd = model.position_embeddings;
-    if (proj_type == PROJECTOR_TYPE_LFM2) {
+    if (proj_type == PROJECTOR_TYPE_LFM2 || proj_type == PROJECTOR_TYPE_D1OMNI_V || proj_type == PROJECTOR_TYPE_PHI4) {
         learned_pos_embd = resize_position_embeddings();
     }
 
@@ -43,9 +43,19 @@ ggml_cgraph * clip_graph_siglip::build() {
         // https://github.com/huggingface/transformers/blob/0a950e0bbe1ed58d5401a6b547af19f15f0c195e/src/transformers/models/idefics3/modeling_idefics3.py#L578
         const int scale_factor = model.hparams.n_merge;
         cur = build_patch_merge_permute(cur, scale_factor);
-        cur = ggml_mul_mat(ctx0, model.projection, cur);
+        cur = build_mm(model.mm_fc_w, cur);
 
-    } else if (proj_type == PROJECTOR_TYPE_LFM2) {
+    } else if (proj_type == PROJECTOR_TYPE_COHERE2V) {
+        // tiles are square, so the pixel shuffle is the same as Idefics3
+        cur = build_patch_merge_permute(cur, model.hparams.n_merge);
+        cur = build_mm(model.mm_1_w, cur);
+        cur = ggml_add(ctx0, cur, model.mm_1_b);
+        // linear_1 output is [x, gate], HF computes silu(gate) * x
+        cur = ggml_swiglu_swapped(ctx0, cur);
+        cur = build_mm(model.mm_2_w, cur);
+        cur = ggml_add(ctx0, cur, model.mm_2_b);
+
+    } else if (proj_type == PROJECTOR_TYPE_LFM2 || proj_type == PROJECTOR_TYPE_D1OMNI_V) {
         // pixel unshuffle block
         const int scale_factor = model.hparams.n_merge;
         cur = build_patch_merge_permute(cur, scale_factor);
@@ -60,11 +70,12 @@ ggml_cgraph * clip_graph_siglip::build() {
             cur = ggml_add(ctx0, cur, model.mm_input_norm_b);
         }
 
+        // d1-omni uses the exact gelu in the projector
         cur = build_ffn(cur,
             model.mm_1_w, model.mm_1_b,
             nullptr, nullptr,
             model.mm_2_w, model.mm_2_b,
-            FFN_GELU,
+            proj_type == PROJECTOR_TYPE_D1OMNI_V ? FFN_GELU_ERF : FFN_GELU,
             -1);
 
     } else if (proj_type == PROJECTOR_TYPE_JANUS_PRO) {
@@ -73,6 +84,14 @@ ggml_cgraph * clip_graph_siglip::build() {
             nullptr, nullptr,
             model.mm_1_w, model.mm_1_b,
             hparams.ffn_op,
+            -1);
+
+    } else if (proj_type == PROJECTOR_TYPE_PHI4) {
+        cur = build_ffn(cur,
+            model.mm_0_w, model.mm_0_b,
+            nullptr, nullptr,
+            model.mm_2_w, model.mm_2_b,
+            FFN_GELU,
             -1);
 
     } else {

@@ -11,33 +11,33 @@ from typing import Any, Callable, Sequence, Mapping, Iterable, Protocol, ClassVa
 try:
     from sentencepiece import SentencePieceProcessor
 except ImportError:
-    SentencePieceProcessor = None
+    SentencePieceProcessor: Any = None
 
 try:
-    from mistral_common.tokens.tokenizers.mistral import MistralTokenizer # pyright: ignore[reportMissingImports]
-    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # pyright: ignore[reportMissingImports]
-    from mistral_common.tokens.tokenizers.utils import ( # pyright: ignore[reportMissingImports]
+    from mistral_common.tokens.tokenizers.mistral import MistralTokenizer # ty: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # ty: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.utils import ( # ty: ignore[import-not-found]
         _filter_valid_tokenizer_files,
     )
-    from mistral_common.tokens.tokenizers.sentencepiece import ( # pyright: ignore[reportMissingImports]
+    from mistral_common.tokens.tokenizers.sentencepiece import ( # ty: ignore[import-not-found]
         SentencePieceTokenizer,
     )
 except ImportError:
     _mistral_common_installed = False
-    MistralTokenizer = None
-    Tekkenizer = None
-    SentencePieceTokenizer = None
-    _filter_valid_tokenizer_files = None
+    MistralTokenizer: Any = None
+    Tekkenizer: Any = None
+    SentencePieceTokenizer: Any = None
+    _filter_valid_tokenizer_files: Any = None
 else:
     _mistral_common_installed = True
 
 try:
-    from mistral_common.tokens.tokenizers.utils import ( # pyright: ignore[reportMissingImports]
+    from mistral_common.tokens.tokenizers.utils import ( # ty: ignore[import-not-found]
         get_one_valid_tokenizer_file,
     )
 except ImportError:
     # We still want the conversion to work with older mistral-common versions.
-    get_one_valid_tokenizer_file = None
+    get_one_valid_tokenizer_file: Any = None
 
 
 import gguf
@@ -52,6 +52,11 @@ class SpecialVocab:
     add_special_token: dict[str, bool]
     special_token_ids: dict[str, int]
     chat_template: str | Sequence[Mapping[str, str]] | None
+    normalizer_nfc: bool | None
+    normalizer_lowercase: bool | None
+    normalizer_strip_accents: bool | None
+    clean_spaces: bool | None
+    metaspace_prepend_scheme: str | None
 
     def __init__(
         self, path: str | os.PathLike[str], load_merges: bool = False,
@@ -64,6 +69,11 @@ class SpecialVocab:
         self.load_merges = load_merges
         self.merges = []
         self.chat_template = None
+        self.normalizer_nfc = None
+        self.normalizer_lowercase = None
+        self.normalizer_strip_accents = None
+        self.clean_spaces = None
+        self.metaspace_prepend_scheme = None
         if special_token_types is not None:
             self.special_token_types = special_token_types
         else:
@@ -102,6 +112,26 @@ class SpecialVocab:
             if not quiet:
                 logger.info(f'Setting chat_template to {self.chat_template}')
             gw.add_chat_template(self.chat_template)
+        if self.normalizer_nfc is not None:
+            if not quiet:
+                logger.info(f'Setting normalizer_nfc to {self.normalizer_nfc}')
+            gw.add_normalizer_nfc(self.normalizer_nfc)
+        if self.normalizer_lowercase is not None:
+            if not quiet:
+                logger.info(f'Setting normalizer_lowercase to {self.normalizer_lowercase}')
+            gw.add_normalizer_lowercase(self.normalizer_lowercase)
+        if self.normalizer_strip_accents is not None:
+            if not quiet:
+                logger.info(f'Setting normalizer_strip_accents to {self.normalizer_strip_accents}')
+            gw.add_normalizer_strip_accents(self.normalizer_strip_accents)
+        if self.clean_spaces is not None:
+            if not quiet:
+                logger.info(f'Setting clean_spaces to {self.clean_spaces}')
+            gw.add_clean_spaces(self.clean_spaces)
+        if self.metaspace_prepend_scheme is not None:
+            if not quiet:
+                logger.info(f'Setting metaspace_prepend_scheme to {self.metaspace_prepend_scheme}')
+            gw.add_metaspace_prepend_scheme(self.metaspace_prepend_scheme)
 
     def _load(self, path: Path) -> None:
         self._try_load_from_tokenizer_json(path)
@@ -146,6 +176,40 @@ class SpecialVocab:
             return
         logger.warning(f'Special token type {typ}, id {tid} out of range, must be under {self.n_vocab} - skipping')
 
+    def _parse_normalizer(self, normalizer: dict) -> None:
+        # ref: https://huggingface.co/docs/tokenizers/api/normalizers
+        #
+        # Extracts normalizer flags from three possible formats:
+        # 1. Standalone:           {"type": "Lowercase"}
+        # 2. BertNormalizer attrs: {"type": "BertNormalizer", ...}
+        # 3. Nested in Sequence:   {"type": "Sequence", "normalizers": [...]}
+
+        normalizer_type = normalizer.get('type')
+        if normalizer_type == 'Lowercase':
+            self.normalizer_lowercase = True
+        elif normalizer_type == 'NFC':
+            self.normalizer_nfc = True
+        elif normalizer_type == 'StripAccents':
+            self.normalizer_strip_accents = True
+        elif normalizer_type == 'BertNormalizer':
+            if 'lowercase' in normalizer:
+                self.normalizer_lowercase = normalizer['lowercase']
+            if 'strip_accents' in normalizer:
+                self.normalizer_strip_accents = normalizer['strip_accents']
+        elif normalizer_type == 'Sequence':
+            for norm in normalizer.get('normalizers', []):
+                self._parse_normalizer(norm)
+
+    def _parse_pre_tokenizer(self, pre_tokenizer: dict) -> None:
+        # ref: https://huggingface.co/docs/tokenizers/api/pre-tokenizers
+        pre_tokenizer_type = pre_tokenizer.get('type')
+        if pre_tokenizer_type == 'Metaspace':
+            if 'prepend_scheme' in pre_tokenizer:
+                self.metaspace_prepend_scheme = pre_tokenizer['prepend_scheme']
+        elif pre_tokenizer_type == 'Sequence':
+            for pre in pre_tokenizer.get('pretokenizers', []):
+                self._parse_pre_tokenizer(pre)
+
     def _try_load_from_tokenizer_json(self, path: Path) -> bool:
         tokenizer = None
         tokenizer_file = path / 'tokenizer.json'
@@ -157,10 +221,12 @@ class SpecialVocab:
                 if isinstance(merges, list) and merges:
                     if isinstance(merges[0], str):
                         self.merges = merges
-                    elif isinstance(merges[0], list) and len(merges[0]) == 2 and isinstance(merges[0][0], str):
+                    elif isinstance(merges[0], list):
                         # New format since transformers 4.45 to support spaces in merges
                         # ref: https://github.com/ggml-org/llama.cpp/issues/9692
                         # TODO: internally store as the new format instead of converting to old
+                        if not all(isinstance(pair, list) and len(pair) == 2 and all(isinstance(s, str) for s in pair) for pair in merges):
+                            raise ValueError("Unknown tokenizer merges format")
                         if any(' ' in s for pair in merges for s in pair):
                             logger.warning(f'Spaces in merges detected, encoding as {chr(ord(" ") + 256)!r}')
                         self.merges = [
@@ -178,6 +244,11 @@ class SpecialVocab:
                         ]
                     else:
                         raise ValueError("Unknown tokenizer merges format")
+            # Parse normalizer configuration (e.g. Lowercase) into metadata
+            if normalizer := tokenizer.get('normalizer'):
+                self._parse_normalizer(normalizer)
+            if pre_tokenizer := tokenizer.get('pre_tokenizer'):
+                self._parse_pre_tokenizer(pre_tokenizer)
             added_tokens = tokenizer.get('added_tokens', {})
         else:
             added_tokens = {}
@@ -197,7 +268,11 @@ class SpecialVocab:
                 tokenizer_config['eos_token'] = special_eos = special_sep
             if post_processor := tokenizer.get('post_processor'):
                 for processor in post_processor.get('processors', [post_processor]):
-                    if processor.get('type') == 'RobertaProcessing':
+                    processor_type = processor.get('type')
+                    if processor_type == 'ByteLevel':
+                        self.add_special_token.setdefault('bos', False)
+                        self.add_special_token.setdefault('eos', False)
+                    elif processor_type == 'RobertaProcessing':
                         self.add_special_token['bos'] = True
                         self.add_special_token['eos'] = True
                         self.add_special_token['sep'] = True
@@ -210,7 +285,7 @@ class SpecialVocab:
                         continue
                     # Crude parsing of TemplateProcessing to determine if BOS/SEP/EOS should be added
                     # Only works with simple templates, **will** get it wrong on unusual sequences
-                    if processor.get('type') == 'TemplateProcessing':
+                    elif processor_type == 'TemplateProcessing':
                         tmpl_single = processor.get('single', [])
                         tmpl_pair = processor.get('pair', [])
                         special_first = None
@@ -219,6 +294,11 @@ class SpecialVocab:
                             if special_first := tmpl_single[0].get('SpecialToken', {}).get('id'):
                                 if not tokenizer_config:
                                     special_bos = special_first
+                                elif special_first not in (special_bos, special_cls):
+                                    if not special_bos:
+                                        tokenizer_config['bos_token'] = special_bos = special_first
+                                    if not special_cls:
+                                        tokenizer_config['cls_token'] = special_cls = special_first
                                 self.add_special_token['bos'] = True if special_first in (special_bos, special_cls) else False
                                 if special_first not in (special_bos, special_cls):
                                     logger.warning(f'Unknown leading special token {special_first!r} in TemplateProcessing<single>')
@@ -272,29 +352,35 @@ class SpecialVocab:
                         continue
         if not tokenizer_config:
             return True
-        chat_template_alt = None
+        chat_template = tokenizer_config.get('chat_template')
         chat_template_json = path / 'chat_template.json'
         chat_template_jinja = path / 'chat_template.jinja'
         if chat_template_jinja.is_file():
             with open(chat_template_jinja, encoding = 'utf-8') as f:
-                chat_template_alt = f.read()
+                chat_template = f.read()
             if additional_templates := list((path / 'additional_chat_templates').glob('*.jinja')):
-                chat_template_alt = [{'name': 'default', 'template': chat_template_alt}]
+                chat_template = [{'name': 'default', 'template': chat_template}]
                 for template_path in additional_templates:
                     with open(template_path, encoding = 'utf-8') as fp:
-                        chat_template_alt.append({'name': template_path.stem, 'template': fp.read()})
+                        chat_template.append({'name': template_path.stem, 'template': fp.read()})
         elif chat_template_json.is_file():
             with open(chat_template_json, encoding = 'utf-8') as f:
-                chat_template_alt = json.load(f).get('chat_template')
-        chat_template = tokenizer_config.get('chat_template', chat_template_alt)
+                chat_template = json.load(f).get('chat_template')
         if chat_template is None or isinstance(chat_template, (str, list)):
             self.chat_template = chat_template
         else:
             logger.warning(f'Bad type for chat_template field in {tokenizer_config_file!r} - ignoring')
+        # decode clean-up of spaces before punctuation (transformers clean_up_tokenization_spaces)
+        clean_spaces = tokenizer_config.get('clean_up_tokenization_spaces')
+        if isinstance(clean_spaces, bool):
+            self.clean_spaces = clean_spaces
         for typ in self.special_token_types:
             add_entry = tokenizer_config.get(f'add_{typ}_token')
             if isinstance(add_entry, bool):
-                self.add_special_token[typ] = add_entry
+                if typ not in self.add_special_token:
+                    self.add_special_token[typ] = add_entry
+                elif self.add_special_token[typ] != add_entry:
+                    logger.warning(f'Mismatch between tokenizer_config add_{typ}_token({add_entry}) and tokenizer post_processor<{typ}>({self.add_special_token[typ]}) - opting for the latter')
             entry = tokenizer_config.get(f'{typ}_token')
             if isinstance(entry, str):
                 tc_content = entry
@@ -543,6 +629,7 @@ class LlamaHfVocab(Vocab):
             cache_dir=base_path,
             local_files_only=True,
         )
+        assert self.tokenizer is not None
         assert self.tokenizer.is_fast  # assume tokenizer.json is used
 
         # Initialize lists and dictionaries for added tokens
@@ -574,6 +661,7 @@ class LlamaHfVocab(Vocab):
         self.fname_tokenizer = fname_tokenizer
 
     def hf_tokens(self) -> Iterable[tuple[bytes, float, gguf.TokenType]]:
+        assert self.tokenizer is not None
         reverse_vocab = {
             id: encoded_tok for encoded_tok, id in self.tokenizer.get_vocab().items()
         }
@@ -616,6 +704,7 @@ class LlamaHfVocab(Vocab):
             yield text.encode("utf-8"), score, toktype
 
     def has_newline_token(self):
+        assert self.tokenizer is not None
         return "<0x0A>" in self.tokenizer.vocab or "\n" in self.tokenizer.vocab
 
     def all_tokens(self) -> Iterable[tuple[bytes, float, gguf.TokenType]]:
@@ -703,7 +792,7 @@ class MistralVocab(Vocab):
 
             tokenizer_file_path = base_path / tokenizer_file
 
-        self.tokenizer = MistralTokenizer.from_file(
+        self.tokenizer: Any = MistralTokenizer.from_file(
             tokenizer_file_path
         ).instruct_tokenizer.tokenizer
         self.tokenizer_type = (
