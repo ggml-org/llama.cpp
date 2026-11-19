@@ -5771,10 +5771,16 @@ struct test_mul_mat_prec_src1_bf16 : public test_mul_mat {
 
 // src1 GGML_PREC_F32: the implementation can not convert src1 or the F32 src0 tiles down to F16 or TF32
 struct test_mul_mat_prec_src1_f32 : public test_mul_mat {
+    const bool bias;
+
     test_mul_mat_prec_src1_f32(ggml_type type_a = GGML_TYPE_F32, int64_t m = 64, int64_t n = 32, int64_t k = 256,
             std::array<int64_t, 2> bs = {1, 1},
-            std::array<int64_t, 2> nr = {1, 1})
-        : test_mul_mat(type_a, GGML_TYPE_F32, m, n, k, bs, nr) {}
+            std::array<int64_t, 2> nr = {1, 1}, bool bias = false)
+        : test_mul_mat(type_a, GGML_TYPE_F32, m, n, k, bs, nr), bias(bias) {}
+    std::string vars() override {
+        return test_mul_mat::vars() + "," + VAR_TO_STR(bias);
+    }
+    bool run_whole_graph() override { return bias; }
     double max_nmse_err() override {
         return 1e-10;
     }
@@ -5783,7 +5789,11 @@ struct test_mul_mat_prec_src1_f32 : public test_mul_mat {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (t->op == GGML_OP_MUL_MAT) {
                 ggml_prec_set_src(t, GGML_PREC_F32, 1);
+                ggml_prec_set_acc(t, GGML_PREC_F32);
             }
+        }
+        if (bias) {
+            out = ggml_add(ctx, out, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, m));
         }
         return out;
     }
@@ -11878,6 +11888,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat_prec_src1_f32(type_a, 128, 512, 512));
         test_cases.emplace_back(new test_mul_mat_prec_src1_f32(type_a,  67,  33, 100));
         test_cases.emplace_back(new test_mul_mat_prec_src1_f32(type_a,  64,  32, 256, {2, 3}, {2, 1}));
+    }
+
+    for (int64_t m : {4, 8}) {
+        for (int64_t n : {1, 4, 32, 512}) {
+            for (bool bias : {false, true}) {
+                test_cases.emplace_back(new test_mul_mat_prec_src1_f32(GGML_TYPE_F32, m, n, 8192, {1, 1}, {1, 1}, bias));
+            }
+        }
     }
 
     // src0 range: an F32 src0 must not be downcast to F16 when src1 requests BF16

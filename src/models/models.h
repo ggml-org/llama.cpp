@@ -2769,6 +2769,42 @@ struct llama_model_sensenova_loop : public llama_model_qwen35 {
         };
 
         routing build_route(ggml_tensor * a, ggml_tensor * b, ggml_tensor * weight, ggml_tensor * bias, int il);
+        static void build_sinkhorn(ggml_context * ctx, ggml_tensor * mix[4], uint32_t iterations) {
+            ggml_tensor * d0 = ggml_sub(ctx, mix[0], mix[1]);
+            ggml_tensor * d1 = ggml_sub(ctx, mix[2], mix[3]);
+            ggml_tensor * a = ggml_sub(ctx, ggml_softplus(ctx, ggml_neg(ctx, d1)), ggml_softplus(ctx, ggml_neg(ctx, d0)));
+            ggml_tensor * b = ggml_sub(ctx, ggml_softplus(ctx, d1), ggml_softplus(ctx, d0));
+
+            if (iterations > 1) {
+                ggml_tensor * hi = ggml_add(ctx, ggml_relu(ctx, a), ggml_relu(ctx, b));
+                ggml_tensor * lo = ggml_neg(ctx, ggml_add(ctx, ggml_relu(ctx, ggml_neg(ctx, a)), ggml_relu(ctx, ggml_neg(ctx, b))));
+                ggml_tensor * range = ggml_sub(ctx, hi, lo);
+                const float log_two = std::log(2.0f);
+                ggml_tensor * power = ggml_scale_bias(ctx, ggml_neg(ctx, ggml_softplus(ctx, ggml_neg(ctx, range))), 1.0f, log_two);
+                ggml_tensor * sum = nullptr;
+
+                // Power the two-stream normalization map without replacing the finite iteration count by its limit.
+                for (uint32_t n = iterations - 1; n; n >>= 1) {
+                    if (n & 1) {
+                        sum = sum ? ggml_sub(ctx,
+                                ggml_add(ctx, sum, ggml_softplus(ctx, ggml_sub(ctx, power, sum))),
+                                ggml_softplus(ctx, ggml_sub(ctx, ggml_add(ctx, sum, power), range))) : power;
+                    }
+                    if (n > 1) {
+                        power = ggml_scale_bias(ctx, ggml_sub(ctx, power,
+                                ggml_softplus(ctx, ggml_sub(ctx, ggml_scale(ctx, power, 2.0f), range))), 1.0f, log_two);
+                    }
+                }
+                ggml_tensor * shift = ggml_sub(ctx, ggml_softplus(ctx, ggml_sub(ctx, sum, hi)), ggml_softplus(ctx, ggml_add(ctx, sum, lo)));
+                a = ggml_add(ctx, a, shift);
+                b = ggml_add(ctx, b, shift);
+            }
+
+            mix[0] = ggml_sigmoid(ctx, a);
+            mix[1] = ggml_sigmoid(ctx, b);
+            mix[2] = ggml_sigmoid(ctx, ggml_neg(ctx, a));
+            mix[3] = ggml_sigmoid(ctx, ggml_neg(ctx, b));
+        }
         void build_merge(ggml_tensor * & a, ggml_tensor * & b, ggml_tensor * branch, const routing & route);
     };
 

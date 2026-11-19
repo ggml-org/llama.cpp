@@ -7,6 +7,7 @@
 #include "llama.h"
 #include "llama-cpp.h"
 #include "../src/llama-ext.h"
+#include "../src/models/models.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -952,6 +953,86 @@ static std::vector<float> get_logits(
     return ret;
 }
 
+static void check_loop_sinkhorn(const size_t seed, const char * target_backend) {
+    std::vector<std::array<float, 4>> values = {
+        {0, 0, 0, 0}, {2, 2, 2, 2}, {-10, 1, 9, -2},
+        {2000, 0, 1000, 0}, {-2000, 0, -1000, 0},
+        {2e6f, 0, 1e6f, 0}, {-2e6f, 0, -1e6f, 0},
+        {-10000, 10000, 10000, -10000},
+        {1e6f, 1e6f + 1, -1e6f, -1e6f + 2},
+    };
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> dist(-32.0f, 32.0f);
+    for (int i = 0; i < 128; ++i) {
+        values.push_back({dist(rng), dist(rng), dist(rng), dist(rng)});
+    }
+
+    for (size_t id = 0; id < ggml_backend_dev_count(); ++id) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(id);
+        const auto type = ggml_backend_dev_type(dev);
+        if ((type != GGML_BACKEND_DEVICE_TYPE_CPU && type != GGML_BACKEND_DEVICE_TYPE_GPU && type != GGML_BACKEND_DEVICE_TYPE_IGPU) ||
+                (target_backend && strcmp(target_backend, ggml_backend_dev_name(dev)) != 0)) {
+            continue;
+        }
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev, nullptr));
+        if (!backend) {
+            throw std::runtime_error("failed to initialize Sinkhorn test backend");
+        }
+        double max_error = 0;
+        for (uint32_t iterations = 1; iterations <= 20; ++iterations) {
+            ggml_context_ptr ctx(ggml_init({2*1024*1024, nullptr, true}));
+            ggml_tensor * logits = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, 8, values.size());
+            ggml_tensor * mix[4];
+            for (int i = 0; i < 4; ++i) {
+                mix[i] = ggml_view_2d(ctx.get(), logits, 1, values.size(), logits->nb[1], (4 + i)*sizeof(float));
+            }
+            llama_model_sensenova_loop::graph::build_sinkhorn(ctx.get(), mix, iterations);
+            ggml_tensor * output = ggml_concat(ctx.get(), ggml_concat(ctx.get(), mix[0], mix[1], 0), ggml_concat(ctx.get(), mix[2], mix[3], 0), 0);
+            ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 256, false);
+            ggml_build_forward_expand(graph, output);
+            ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend.get()));
+            if (!buffer) {
+                throw std::runtime_error("failed to allocate Sinkhorn test tensors");
+            }
+            std::vector<float> data(8*values.size(), 0.0f);
+            for (size_t j = 0; j < values.size(); ++j) {
+                for (int i = 0; i < 4; ++i) {
+                    data[8*j + 4 + i] = values[j][i];
+                }
+            }
+            ggml_backend_tensor_set(logits, data.data(), 0, data.size()*sizeof(float));
+            if (ggml_backend_graph_compute(backend.get(), graph) != GGML_STATUS_SUCCESS) {
+                throw std::runtime_error("failed to evaluate Sinkhorn test graph");
+            }
+            std::vector<float> actual(4*values.size());
+            ggml_backend_tensor_get(output, actual.data(), 0, actual.size()*sizeof(float));
+            for (size_t j = 0; j < values.size(); ++j) {
+                std::array<double, 4> expected = {values[j][0], values[j][1], values[j][2], values[j][3]};
+                auto normalize = [&](int a, int b) {
+                    const double largest = std::max(expected[a], expected[b]);
+                    const double sum = largest + std::log(std::exp(expected[a] - largest) + std::exp(expected[b] - largest));
+                    expected[a] -= sum;
+                    expected[b] -= sum;
+                };
+                for (uint32_t i = 0; i < iterations; ++i) {
+                    normalize(0, 1);
+                    normalize(2, 3);
+                    normalize(0, 2);
+                    normalize(1, 3);
+                }
+                for (int i = 0; i < 4; ++i) {
+                    const double error = std::abs(actual[4*j + i] - std::exp(expected[i]));
+                    if (!std::isfinite(actual[4*j + i]) || error > 2e-5) {
+                        throw std::runtime_error("SenseNova Loop Sinkhorn differs from its finite-iteration reference");
+                    }
+                    max_error = std::max(max_error, error);
+                }
+            }
+        }
+        LOG_INF("%s: %s: finite iterations 1-20 passed, max error %.3g\n", __func__, ggml_backend_dev_name(dev), max_error);
+    }
+}
+
 static void check_loop_mtp(const size_t seed, const float stdev) {
     const llm_arch arch = LLM_ARCH_SENSENOVA_LOOP;
     gguf_context_ptr metadata = get_gguf_ctx(arch, false);
@@ -1479,6 +1560,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
 
         const bool encode = arch == LLM_ARCH_T5 || arch == LLM_ARCH_DREAM || arch == LLM_ARCH_LLADA || arch == LLM_ARCH_LLADA_MOE || arch == LLM_ARCH_RND1;
         if (arch == LLM_ARCH_SENSENOVA_LOOP) {
+            check_loop_sinkhorn(seed, target_backend);
             check_loop_mtp(seed, stdev);
             gguf_context_ptr invalid = get_gguf_ctx(arch, false);
             GGML_ASSERT(gguf_remove_key(invalid.get(), llama_arch_kv_name(arch, LLM_KV_ATTENTION_RECURRENT_LAYERS).c_str()) >= 0);

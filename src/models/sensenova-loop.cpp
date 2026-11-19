@@ -125,21 +125,7 @@ llama_model_sensenova_loop::graph::routing llama_model_sensenova_loop::graph::bu
         for (int i = 0; i < 4; ++i) {
             result.mix[i] = row(4 + i);
         }
-        auto normalize = [&](ggml_tensor * & x, ggml_tensor * & y) {
-            // Two-element log-softmax, without exponentiating the unnormalized logits.
-            ggml_tensor * delta = ggml_sub(ctx0, x, y);
-            x = ggml_neg(ctx0, ggml_softplus(ctx0, ggml_neg(ctx0, delta)));
-            y = ggml_neg(ctx0, ggml_softplus(ctx0, delta));
-        };
-        for (uint32_t i = 0; i < hparams.mhc_iterations; ++i) {
-            normalize(result.mix[0], result.mix[1]);
-            normalize(result.mix[2], result.mix[3]);
-            normalize(result.mix[0], result.mix[2]);
-            normalize(result.mix[1], result.mix[3]);
-        }
-        for (auto & mix : result.mix) {
-            mix = ggml_exp(ctx0, mix);
-        }
+        build_sinkhorn(ctx0, result.mix, hparams.mhc_iterations);
     }
     cb(result.input, "mhc_input", il);
     return result;

@@ -2117,6 +2117,17 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
 }
 
 static void ggml_cuda_mul_mat_cublas(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    if (src0->type == GGML_TYPE_F32 && ggml_prec_get_src(dst, 1) == GGML_PREC_F32) {
+        cublasMath_t math_mode;
+        CUBLAS_CHECK(cublasGetMathMode(ctx.cublas_handle(), &math_mode));
+        CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(), CUBLAS_DEFAULT_MATH));
+        ggml_cuda_mul_mat_cublas_impl<GGML_TYPE_F32>(ctx, src0, src1, dst);
+        CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(), math_mode));
+        return;
+    }
+#endif
+
     const int cc = ggml_cuda_info().devices[ctx.device].cc;
     const ggml_prec prec = ggml_prec_get_acc(dst);
     ggml_type compute_type = src0->type;
@@ -2550,6 +2561,10 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         // The custom vector kernel can be used over batched cuBLAS GEMM.
         // But this is only faster for GPUs without tensor cores or with a thin src0 matrix (particularly KQV in attention)
         ggml_cuda_mul_mat_vec_f(ctx, src0, src1, nullptr, dst);
+        return;
+    }
+    if (ggml_prec_get_src(dst, 1) == GGML_PREC_F32) {
+        ggml_cuda_mul_mat_cublas(ctx, src0, src1, dst);
         return;
     }
     // A transposed vector can still use MMVF (i.e. ne01 == 1)
@@ -6394,7 +6409,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     return false;
                 }
                 const int cc_dev = ggml_cuda_info().devices[dev_ctx->device].cc;
-                const bool f32_src1_ok = GGML_CUDA_CC_IS_NVIDIA(cc_dev) && cc_dev < GGML_CUDA_CC_AMPERE;
+                const bool f32_src1_ok = GGML_CUDA_CC_IS_NVIDIA(cc_dev) && b->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
                 const enum ggml_prec prec_src1 = ggml_prec_get_src(op, 1);
                 const bool fp8_id_mmvf = op->op == GGML_OP_MUL_MAT_ID &&
                     a->type == GGML_TYPE_F8_E4M3 && b->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
