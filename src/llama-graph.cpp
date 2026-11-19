@@ -1802,7 +1802,8 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
           ggml_tensor * ids,
           ggml_tensor * w_s,
           ggml_tensor * slots,
-                 bool   cached) const {
+                 bool   cached,
+       enum ggml_prec   prec_src1) const {
     // as in build_lora_mm: the folded weight reads the transformed input, the LoRA delta reads `cur`
     ggml_tensor * cur_mm = build_hadamard_input(w, cur);
     // the experts in the MoE cache are selected by their slots
@@ -1811,6 +1812,10 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
         ggml_mul_mat_id(ctx0, cached ? moe_cache->get_experts(w) : w, cur_mm, slots);
 
     prec_policy.apply(res);
+
+    if (prec_src1 != GGML_PREC_UNDEFINED) {
+        ggml_prec_set_src(res, prec_src1, 1);
+    }
 
     if (w->type == GGML_TYPE_NVFP4) {
         ggml_prec_set_acc(res, GGML_PREC_BF16);
@@ -2634,15 +2639,26 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         //       ggml_prec_set_src(experts, GGML_PREC_BF16, 1);
         //       the amax op cannot be split across devices, so these architectures are denied -sm tensor [TAG_MOE_AMAX_SCALE]
         //       ref: https://github.com/ggml-org/llama.cpp/pull/30656#issuecomment-6269597922
+        static const bool amax_skip = [] {
+            const bool res = getenv("LLAMA_MOE_AMAX_SKIP") != nullptr;
+            if (res) {
+                LLAMA_LOG_WARN("LLAMA_MOE_AMAX_SKIP is set - the MoE amax rescaling is disabled\n");
+            }
+            return res;
+        }();
+
+        const bool amax_arch = arch == LLM_ARCH_MISTRAL4 || arch == LLM_ARCH_MELLUM || arch == LLM_ARCH_FLINT || arch == LLM_ARCH_LAGUNA;
+
         llm_graph_amax_src1 amax_src1 = { nullptr, nullptr };
 
-        if (arch == LLM_ARCH_MISTRAL4 || arch == LLM_ARCH_MELLUM || arch == LLM_ARCH_FLINT || arch == LLM_ARCH_LAGUNA) {
+        if (amax_arch && !amax_skip) {
             amax_src1 = build_amax_src1_f16(cur);
             cur = amax_src1.res;
         }
 
-        ggml_tensor * experts = build_lora_mm_id(down_exps, cur, ids, down_exps_s, mm_ids, cached); // [n_embd, n_expert_used, n_tokens]
-        //ggml_prec_set_src(experts, GGML_PREC_BF16, 1); // (see TODO above)
+        ggml_tensor * experts = build_lora_mm_id(down_exps, cur, ids, down_exps_s, mm_ids, cached,
+                (amax_arch && amax_skip) ? GGML_PREC_BF16 : GGML_PREC_UNDEFINED); // [n_embd, n_expert_used, n_tokens]
+
         cb(experts, "ffn_moe_down", il);
 
         if (amax_src1.scale_s) {
