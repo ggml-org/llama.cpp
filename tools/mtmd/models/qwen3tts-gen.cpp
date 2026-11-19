@@ -315,18 +315,18 @@ ggml_tensor * mtmd_graph_qwen3tts_gen::code2wav::causal_conv1d(ggml_tensor * x, 
     return y;
 }
 
-// causal depthwise conv1d, stride 1, dilation 1, kernel from w's shape.
+// causal depthwise conv1d, stride 1, kernel from w's shape.
 // x: [T, C]. w: [K, 1, C]. returns [T, C]. see causal_conv1d for the state contract.
-ggml_tensor * mtmd_graph_qwen3tts_gen::code2wav::causal_conv1d_dw(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, const std::string & state_name) const {
+ggml_tensor * mtmd_graph_qwen3tts_gen::code2wav::causal_conv1d_dw(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, const std::string & state_name, int dilation) const {
     const int K   = (int) w->ne[0];
-    const int pad = K - 1;
+    const int pad = (K - 1) * dilation;
 
     ggml_tensor * x_full = x;
     if (pad > 0) {
         ggml_tensor * left = state_in.at(state_name); // [pad, C]
         x_full = ggml_concat(ctx0, left, x, 0);
     }
-    ggml_tensor * y = ggml_conv_1d_dw(ctx0, w, x_full, 1, 0, 1); // [T, C, 1]
+    ggml_tensor * y = ggml_conv_1d_dw(ctx0, w, x_full, 1, 0, dilation); // [T, C, 1]
     y = ggml_reshape_2d(ctx0, y, y->ne[0], y->ne[1]);
     if (b) {
         y = ggml_add(ctx0, y, ggml_reshape_2d(ctx0, b, 1, b->ne[0]));
