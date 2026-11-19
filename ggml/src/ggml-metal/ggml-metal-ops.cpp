@@ -4982,6 +4982,7 @@ size_t ggml_metal_op_conv_2d_extra_tmp(const ggml_tensor * op) {
 
     const int nsplit = ggml_metal_op_conv_2d_nsplit(op, nullptr);
 
+    // partial sums of the reduction splits
     return nsplit > 1 ? nsplit*ggml_nelements(op)*sizeof(float) : 0;
 }
 
