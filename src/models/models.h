@@ -1583,6 +1583,7 @@ struct llama_model_dflash : public llama_model_base {
     struct graph_base : public llm_graph_context {
         int64_t n_embd_head;
         bool    use_iswa;
+        int     sections[4];
 
         ggml_tensor * inp_pos;
 
@@ -1595,6 +1596,7 @@ struct llama_model_dflash : public llama_model_base {
         ggml_tensor * build_inp_tokens();
         ggml_tensor * build_layers(ggml_tensor * inp_tokens);
         ggml_tensor * build_logits(ggml_tensor * cur);
+        ggml_tensor * build_rope(ggml_tensor * cur, ggml_tensor * pos, int il);
     };
 
     struct graph_dflash : public graph_base {

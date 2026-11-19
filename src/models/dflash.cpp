@@ -4,6 +4,23 @@
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
 
+static bool has_spark_tag(const gguf_context * metadata) {
+    const int tags_key = gguf_find_key(metadata, "general.tags");
+    if (tags_key < 0) {
+        return false;
+    }
+    if (gguf_get_kv_type(metadata, tags_key) != GGUF_TYPE_ARRAY ||
+        gguf_get_arr_type(metadata, tags_key) != GGUF_TYPE_STRING) {
+        throw std::runtime_error("general.tags must be a string array");
+    }
+    for (size_t i = 0; i < gguf_get_arr_n(metadata, tags_key); ++i) {
+        if (std::strcmp(gguf_get_arr_str(metadata, tags_key, i), "sparkx2_5") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key(LLM_KV_EMBEDDING_SCALE, hparams.f_embedding_scale, false);
@@ -72,18 +89,17 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         backbone = BACKBONE_MISTRAL_LARGE4;
     } else if (ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false) && hparams.n_swa > 0) {
         // optional interleaved sliding-window attention with per-layer pattern array.
-        if (variant == VARIANT_DSPARK) {
-            if (hparams.n_swa >= INT32_MAX) {
-                throw std::runtime_error("DSpark sliding window is too large to include the anchor");
-            }
-            // Include the anchor after the configured history window.
-            hparams.n_swa += 1;
-        }
+        hparams.is_spark_dspark = variant == VARIANT_DSPARK && has_spark_tag(ml.metadata);
+        // DFlash has a single rope, so the SWA rope == main rope.
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
         ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
         hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
         hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
-        ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+        if (hparams.is_spark_dspark) {
+            // Spark drafts use the history window before the anchor.
+            hparams.n_swa += 1;
+            ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa);
+        }
     }
 
     ml.get_key_or_arr(LLM_KV_ATTENTION_ROPE_PATTERN, hparams.rope_pattern, hparams.n_layer(), false);
@@ -145,10 +161,12 @@ void llama_model_dflash::load_tensors_layers_base() {
         layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), { n_embd, n_embd_v_gqa }, TENSOR_NOT_REQUIRED);
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
 
-        layer.wqkv_gate = create_tensor(tn(LLM_TENSOR_ATTN_GATE, "weight", i), { n_embd, n_head }, TENSOR_NOT_REQUIRED);
-        const int norm_flags = layer.wqkv_gate ? TENSOR_NOT_REQUIRED : 0;
-        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k }, norm_flags);
-        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, norm_flags);
+        if (hparams.is_spark_dspark) {
+            layer.wqkv_gate = create_tensor(tn(LLM_TENSOR_ATTN_GATE, "weight", i), { n_embd, n_head }, 0);
+        } else {
+            layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k }, 0);
+            layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, 0);
+        }
 
         layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), { n_embd }, TENSOR_NOT_REQUIRED);
         layer.ffn_post_norm  = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM,  "weight", i), { n_embd }, TENSOR_NOT_REQUIRED);
@@ -186,7 +204,7 @@ template <>
 llama_model_dflash::graph<true>::graph(const llm_graph_params & params) : llm_graph_context(params) {
     ggml_tensor * cur = build_inp_embd_enc();
 
-    if (model.fc_norm) {
+    if (hparams.is_spark_dspark) {
         cur = ggml_reshape_3d(ctx0, cur, n_embd, model.target_layer_ids.size(), n_tokens);
         cur = build_norm(cur, model.fc_norm, nullptr, LLM_NORM_RMS, -1);
         cur = ggml_reshape_2d(ctx0, cur, model.fc->ne[0], n_tokens);
@@ -231,7 +249,7 @@ ggml_tensor * llama_model_dflash::build_inject_inp(llm_graph_context & g, const 
 
     g.res->add_input(std::move(inp));
 
-    if (model.fc_norm) {
+    if (g.hparams.is_spark_dspark) {
         inp_target = ggml_reshape_3d(g.ctx0, inp_target, g.n_embd, model.target_layer_ids.size(), g.n_tokens);
         inp_target = g.build_norm(inp_target, model.fc_norm, nullptr, LLM_NORM_RMS, -1);
         inp_target = ggml_reshape_2d(g.ctx0, inp_target, n_embd_inp, g.n_tokens);
@@ -281,6 +299,28 @@ llama_model_dflash::graph_base::graph_base(const llm_graph_params & params) : ll
     } else {
         inp_attn = build_attn_inp_kv();
     }
+
+    // drafts for M-RoPE targets use degenerate sections (temporal dim only)
+    std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
+}
+
+ggml_tensor * llama_model_dflash::graph_base::build_rope(ggml_tensor * cur, ggml_tensor * pos, int il) {
+    if (!hparams.has_rope(il)) {
+        return cur;
+    }
+
+    // Spark draft layers all use the draft GGUF's SWA RoPE parameters.
+    const auto rope_dims  = hparams.is_spark_dspark ? hparams.n_rot_swa                : n_rot;
+    const auto rope_base  = hparams.is_spark_dspark ? hparams.rope_freq_base_train_swa  : freq_base;
+    const auto rope_scale = hparams.is_spark_dspark ? hparams.rope_freq_scale_train_swa : freq_scale;
+
+    return rope_type == GGML_ROPE_TYPE_MROPE
+        ? ggml_rope_multi(ctx0, cur, pos, nullptr,
+                rope_dims, sections, rope_type, n_ctx_orig, rope_base, rope_scale,
+                ext_factor, attn_factor, beta_fast, beta_slow)
+        : ggml_rope_ext(ctx0, cur, pos, model.layers[0].rope_freqs,
+                rope_dims, rope_type, n_ctx_orig, rope_base, rope_scale,
+                ext_factor, attn_factor, beta_fast, beta_slow);
 }
 
 // KV cache injection
@@ -298,7 +338,7 @@ ggml_tensor * llama_model_dflash::graph_base::build_inject() {
         Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
         Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-        if (layer.attn_k_norm) {
+        if (!hparams.is_spark_dspark) {
             Kcur = build_norm(Kcur, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
         }
         if (shared_kv) {
@@ -388,10 +428,8 @@ ggml_tensor * llama_model_dflash::graph_base::build_layers(ggml_tensor * inp_tok
         Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
         Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-        if (layer.attn_q_norm) {
+        if (!hparams.is_spark_dspark) {
             Qcur = build_norm(Qcur, layer.attn_q_norm, NULL, LLM_NORM_RMS, il);
-        }
-        if (layer.attn_k_norm) {
             Kcur = build_norm(Kcur, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
         }
         if (shared_kv) {
@@ -405,11 +443,11 @@ ggml_tensor * llama_model_dflash::graph_base::build_layers(ggml_tensor * inp_tok
         cb(Vcur, "Vcur", il);
 
         // cache-aware, non-causal attention
-        ggml_tensor * wo = layer.wqkv_gate ? nullptr : layer.wo;
+        ggml_tensor * wo = hparams.is_spark_dspark ? nullptr : layer.wo;
         ggml_tensor * cur = use_iswa
             ? build_attn(inp_attn_iswa, wo, NULL, layer.wo_s, Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr, kq_scale, il)
             : build_attn(inp_attn,      wo, NULL, layer.wo_s, Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr, kq_scale, il);
-        if (layer.wqkv_gate) {
+        if (hparams.is_spark_dspark) {
             ggml_tensor * gate = ggml_sigmoid(ctx0, build_lora_mm(layer.wqkv_gate, noise_norm));
             cur = ggml_reshape_3d(ctx0, cur, n_embd_head, n_head, n_tokens);
             gate = ggml_reshape_3d(ctx0, gate, 1, n_head, n_tokens);
