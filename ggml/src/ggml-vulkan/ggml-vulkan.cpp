@@ -1788,8 +1788,9 @@ static bool ggml_vk_matmul_int_shmem_support(const vk_device& device, const std:
     const uint32_t mmid_row_ids = mul_mat_id ? (BN * 2u * (uint32_t)sizeof(uint16_t)) : 0u;
 
     // Signed quants declare buf_b_qsum: 2 int32_t per B block with MMQ_SUDOT, a single int32_t without
-    const bool b_sums = src0_type == GGML_TYPE_Q8_0 || src0_type == GGML_TYPE_MXFP4 || src0_type == GGML_TYPE_IQ4_XS ||
-                        src0_type == GGML_TYPE_IQ3_S || src0_type == GGML_TYPE_Q3_K || src0_type == GGML_TYPE_Q6_K;
+    const bool b_sums = src0_type == GGML_TYPE_Q8_0 || src0_type == GGML_TYPE_MXFP4 || src0_type == GGML_TYPE_IQ4_NL ||
+                        src0_type == GGML_TYPE_IQ4_XS || src0_type == GGML_TYPE_IQ3_S || src0_type == GGML_TYPE_Q3_K ||
+                        src0_type == GGML_TYPE_Q6_K;
     const uint32_t qsum_size = !b_sums ? 0u : ggml_vk_mmq_use_sudot(device) ? BN * BK_STEP * 2u * 4u : 4u;
 
     const uint32_t total_size = buf_a_size + buf_b_size + mmid_row_ids + lut_size + qsum_size;

@@ -303,8 +303,8 @@ void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs, const bo
                                             data_a_packed16[ib].qs[iqs * 2 + 1]));
         const i32vec2 qs = iq4nl_to_i8x8(vui);
 
-        buf_a[buf_ib].qs[iqs    ] = qs.x;
-        buf_a[buf_ib].qs[iqs + 4] = qs.y;
+        buf_a[buf_ib].qs[iqs    ] = mmq_a_store(qs.x);
+        buf_a[buf_ib].qs[iqs + 4] = mmq_a_store(qs.y);
 
         if (iqs == 0) {
             buf_a[buf_ib].dm = FLOAT_TYPE(data_a_packed16[ib].d);
@@ -330,7 +330,10 @@ void block_a_to_registers(const uint reg_ib, const uint buf_ib) {
 ACC_TYPE mmq_dot_product(const uint ib_a) {
     int32_t q_sum = 0;
     [[unroll]] for (uint iqs = 0; iqs < 8; iqs++) {
-        q_sum += dotPacked4x8EXT(cache_a[ib_a].qs[iqs], cache_b.qs[iqs]);
+        q_sum += mmq_dot(cache_a[ib_a].qs[iqs], cache_b.qs[iqs]);
+    }
+    if (MMQ_SUDOT) {
+        q_sum -= 128 * (cache_b_qsum[0] + cache_b_qsum[1]);
     }
 
     return ACC_TYPE(float(cache_a[ib_a].dm) * float(cache_b.ds.x) * float(q_sum));
