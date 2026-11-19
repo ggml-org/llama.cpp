@@ -54,7 +54,7 @@ async function renderForm({ isLoading = false } = {}) {
 	// an edit as typing makes it: reported to the form like a keystroke
 	const type = (at: number, text: string) =>
 		editor.dispatch({ changes: { from: at, insert: text }, userEvent: 'input.type' });
-	const recordingRow = () => screen.container.querySelector('[data-slot="chat-form-recording"]');
+	const recordingRow = () => screen.container.querySelector('[data-slot="voice-recording-bar"]');
 
 	return { editor, recorder, recordingRow, screen, state, type };
 }
@@ -272,7 +272,7 @@ describe('recording', () => {
 
 		recorder.setQuiet(false);
 		await expect
-			.poll(() => screen.container.querySelector('[data-slot="chat-form-recording-quiet"]'))
+			.poll(() => screen.container.querySelector('[data-slot="voice-recording-bar-warning"]'))
 			.toBeNull();
 	});
 
