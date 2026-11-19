@@ -746,7 +746,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
     // 192 satisfies % 64 == 0 but has no vec instance (DKQ != DV); force it onto the MMA path.
-    const bool can_use_vector_kernel = Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
     // The MMA kernel and the vector kernel can read K/V through the kv_rows gather list:
     if (kv_rows) {
         if (!GGML_CUDA_CC_IS_NVIDIA(cc) || !turing_mma_available(cc) || !mask || Q->ne[0] == 40 || Q->ne[0] == 72) {
@@ -758,10 +758,13 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         const bool vec_rows_types_ok =
             (ggml_is_quantized(K->type) || K->type == GGML_TYPE_F8_E4M3) &&
             (ggml_is_quantized(V->type) || V->type == GGML_TYPE_F8_E4M3);
+        // vec@512 lives only in this lane: the general route keeps upstream's <=256 cap (Nov 19: a relaxed general cap
+        // diverted head-512 general-lane ops to vec, breaking sha + decode parity with master at dsv41/gemma-4).
+        const bool can_use_vec_rows = Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
         // With the fused switch fully off, select kernels exactly like upstream master (kv_rows -> MMA + f16
         // dequant copy): vec-gather only complements fused, and it loses to that route at deep 128-class caches.
         if (ggml_cuda_fattn_mma_f16_fused_q_switch() != 0 &&
-                cc >= GGML_CUDA_CC_ADA_LOVELACE && can_use_vector_kernel &&
+                cc >= GGML_CUDA_CC_ADA_LOVELACE && can_use_vec_rows &&
                 Q->ne[1] <= 2 &&
                 vec_rows_types_ok &&
                 ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type) != nullptr &&
