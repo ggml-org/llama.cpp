@@ -1,6 +1,6 @@
 #include "fp8.cuh"
 
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11080
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && !defined(GGML_CUDA_NO_FP8) && CUDART_VERSION >= 11080
 
 struct fp8_abs_src {
     const float * x;

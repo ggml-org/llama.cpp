@@ -151,6 +151,10 @@ if (CUDAToolkit_FOUND)
         add_compile_definitions(GGML_CUDA_NO_VMM)
     endif()
 
+    if (NOT GGML_CUDA_FP8)
+        add_compile_definitions(GGML_CUDA_NO_FP8)
+    endif()
+
     if (NOT GGML_CUDA_FA)
         add_compile_definitions(GGML_CUDA_NO_FA)
     endif()
