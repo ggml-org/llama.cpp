@@ -644,6 +644,7 @@ static void mtmd_owned_llama_set_tensor_data(ggml_tensor * t, void * user_data) 
             return name.size() >= n && name.compare(name.size() - n, n, suffix) == 0;
         };
         const bool optional = ends_with("scale") || ends_with(".bias") || name == "dense_2.weight" ||
+                              name == "cls.output.weight" || // Qwen3 reranking head, unused by YuE2 NAR
                               name == "rope_freqs.weight" || // granite, voxcpm2 residual LM
                               name == "token_embd.weight" || name == "output.weight"; // inputs are embedding rows, outputs are hidden states
         if (!optional || t->type != GGML_TYPE_F32) {
