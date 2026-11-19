@@ -42,6 +42,11 @@ struct graph_key {
             if (GgmlOvDecoder::is_sampling_view(node)) {
                 input_srcs.push_back("sampling_row_" + std::string(node->name) + "#n" + std::to_string(i));
             }
+            // The output set is part of the model (one Result per output). Enabling outputs on an existing graph,
+            // e.g. llama_set_embeddings_layer_inp() for a DFlash/DSpark drafter, changes only the flags.
+            if (node->flags & GGML_TENSOR_FLAG_OUTPUT) {
+                input_srcs.push_back("output_" + std::string(node->name) + "#n" + std::to_string(i));
+            }
         }
 
         static const bool full_key = ggml_openvino_getenv_int("GGML_OPENVINO_FULL_GRAPH_KEY") != 0;
@@ -95,9 +100,11 @@ struct decoder_runtime_ctx {
 
     std::shared_ptr<std::mutex> mutex;
     std::shared_ptr<GgmlOvDecoder> ptr;
-    // Attention sizes the cached prefill model was built with; decode calls overwrite the decoder's.
+    // Attention sizes and output count the cached prefill model was built with; decode calls overwrite the
+    // decoder's.
     int prefill_attention_size = -1;
     int prefill_attention_size_swa = -1;
+    int prefill_output_len = -1;
     // KV window of the decode model in the compiled pair (GGML_OPENVINO_NPU_BLOB_PREBUILD).
     int decode_attention_size = -1;
     std::string shared_key;
