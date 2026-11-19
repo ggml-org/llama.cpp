@@ -7,16 +7,16 @@ int llama_model_inkling2_loop::layer_phys(int il) const {
 void llama_model_inkling2_loop::load_arch_hparams(llama_model_loader & ml) {
     llama_model_inkling2::load_arch_hparams(ml);
 
-    ml.get_key(LLM_KV_LOOP_CORE_START,      core_start);
-    ml.get_key(LLM_KV_LOOP_CORE_END,        core_end);
-    ml.get_key(LLM_KV_LOOP_NUM_PASSES,      n_passes);
-    ml.get_key(LLM_KV_LOOP_GATE_RANK,       gate_rank);
-    ml.get_key(LLM_KV_LOOP_VARIABLE_PASSES, variable_passes, false);
+    ml.get_key(LLM_KV_LOOP_START,          core_start);
+    ml.get_key(LLM_KV_LOOP_END,            core_end);
+    ml.get_key(LLM_KV_LOOP_COUNT,          n_passes);
+    ml.get_key(LLM_KV_LOOP_GATE_RANK,      gate_rank);
+    ml.get_key(LLM_KV_LOOP_VARIABLE_COUNT, variable_count, false);
 
     n_phys = hparams.n_layer();
     const uint32_t block = hparams.attn_res_block_size;
     // a fixed loop needs at least 2 passes, a variable loop at least 1
-    if (n_passes < (variable_passes ? 1u : 2u) || !gate_rank || !core_start || core_start >= core_end || core_end > (uint32_t) n_phys ||
+    if (n_passes < (variable_count ? 1u : 2u) || !gate_rank || !core_start || core_start >= core_end || core_end > (uint32_t) n_phys ||
         core_start % block || core_end % block || hparams.n_layer_nextn) {
         throw std::runtime_error(format("inkling2_loop: invalid loop core [%u, %u) with block size %u, %u passes or gate rank %u for %d layers",
                 core_start, core_end, block, n_passes, gate_rank, n_phys));

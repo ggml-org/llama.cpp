@@ -300,11 +300,11 @@ class Inkling2LoopModel(Inkling2Model):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        self.gguf_writer.add_loop_core_start(self.loop["core_start"])
-        self.gguf_writer.add_loop_core_end(self.loop["core_end"])
-        self.gguf_writer.add_loop_num_passes(self.loop["num_passes"])
+        self.gguf_writer.add_loop_start(self.loop["core_start"])
+        self.gguf_writer.add_loop_end(self.loop["core_end"])
+        self.gguf_writer.add_loop_count(self.loop["num_passes"])
         self.gguf_writer.add_loop_gate_rank(self.loop["gate_rank"])
-        self.gguf_writer.add_loop_variable_passes(self.loop["is_varloop"])
+        self.gguf_writer.add_loop_variable_count(self.loop["is_varloop"])
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
         # the reference does not quantize the loop tensors
