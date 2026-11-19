@@ -106,6 +106,8 @@ int g_ggml_sycl_fa_onednn = 1;
 int g_ggml_sycl_fa_onednn_max_kv = 0;
 int g_ggml_sycl_enable_mkl_fa = 1;
 int g_ggml_sycl_fa_dpas = 1;
+int g_ggml_sycl_fa_dpas_fp16_kg = 0;
+int g_ggml_sycl_fa_dpas_q8_0_kg = 8;
 int g_ggml_sycl_memtrace = 0;
 int g_ggml_sycl_memtrace_step = 64;
 int g_ggml_sycl_enable_vmm = 1;
@@ -439,6 +441,19 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_fa_onednn_max_kv = ggml_sycl_get_env("GGML_SYCL_FA_ONEDNN_MAX_KV", 0);
         g_ggml_sycl_enable_mkl_fa = ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
         g_ggml_sycl_fa_dpas = ggml_sycl_get_env("GGML_SYCL_FA_DPAS", 1);
+        g_ggml_sycl_fa_dpas_fp16_kg = ggml_sycl_get_env("GGML_SYCL_FA_DPAS_FP16_KG", 0);
+        if (g_ggml_sycl_fa_dpas_fp16_kg != 4 && g_ggml_sycl_fa_dpas_fp16_kg != 8) {
+            g_ggml_sycl_fa_dpas_fp16_kg = 0; // unsupported values disable the F16 arm
+        }
+        g_ggml_sycl_fa_dpas_q8_0_kg = ggml_sycl_get_env("GGML_SYCL_FA_DPAS_Q8_0_KG", 8);
+        if (g_ggml_sycl_fa_dpas_q8_0_kg != 4 && g_ggml_sycl_fa_dpas_q8_0_kg != 8) {
+            g_ggml_sycl_fa_dpas_q8_0_kg = 8; // unsupported values keep the upstream tiling
+        }
+        if (!g_ggml_sycl_fa_dpas) {
+            // the KG knobs apply only when the DPAS path is active
+            g_ggml_sycl_fa_dpas_fp16_kg = 0;
+            g_ggml_sycl_fa_dpas_q8_0_kg = 0;
+        }
         g_ggml_sycl_memtrace = ggml_sycl_get_env("GGML_SYCL_MEMTRACE", 0);
         g_ggml_sycl_memtrace_step = ggml_sycl_get_env("GGML_SYCL_MEMTRACE_STEP", 64);
         g_ggml_sycl_enable_vmm = ggml_sycl_get_env("GGML_SYCL_ENABLE_VMM", 1);
@@ -559,6 +574,8 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_FA_ONEDNN_MAX_KV: %d\n", g_ggml_sycl_fa_onednn_max_kv);
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_MKL_FA: %d\n", g_ggml_sycl_enable_mkl_fa);
         GGML_LOG_INFO("  GGML_SYCL_FA_DPAS: %d\n", g_ggml_sycl_fa_dpas);
+        GGML_LOG_INFO("  GGML_SYCL_FA_DPAS_FP16_KG: %d\n", g_ggml_sycl_fa_dpas_fp16_kg);
+        GGML_LOG_INFO("  GGML_SYCL_FA_DPAS_Q8_0_KG: %d\n", g_ggml_sycl_fa_dpas_q8_0_kg);
         GGML_LOG_INFO("  GGML_SYCL_MEMTRACE: %d\n", g_ggml_sycl_memtrace);
         GGML_LOG_INFO("  GGML_SYCL_MEMTRACE_STEP: %d\n", g_ggml_sycl_memtrace_step);
 #ifdef SYCL_FLASH_ATTN
