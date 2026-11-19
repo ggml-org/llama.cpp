@@ -721,7 +721,7 @@ class ServerPreset:
         server = ServerProcess()
         server.offline = True # will be downloaded by load_all()
         server.model_hf_file = None
-        server.model_hf_repo = "ggml-org/LFM2-test-ci-80M"
+        server.model_hf_repo = "ggml-org-dev/LFM2-test-ci-80M"
         server.model_alias = "tinylfm2"
         server.n_ctx = 4096
         server.n_batch = 512
