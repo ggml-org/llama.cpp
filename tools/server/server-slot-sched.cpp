@@ -208,6 +208,8 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
     if (it_best != states.end()) {
         SRV_TRC(" - found better prompt with f_keep = %.3f, f_sim = %.3f\n", f_keep_best, f_sim_best);
 
+        const int64_t t_start = ggml_time_us();
+
         {
             auto & data = it_best->data.main;
 
@@ -252,6 +254,8 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
         prompt = std::move(it_best->prompt);
 
         states.erase(it_best);
+
+        SRV_TRC("slot %d: prompt cache restore took %.2f ms\n", id_slot, (ggml_time_us() - t_start) / 1000.0);
     }
 
     return true;
