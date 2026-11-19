@@ -80,7 +80,7 @@ jobs:
         run: |
           mkdir -p hip-metrics-probe
           cd hip-metrics-probe
-          printf '__attribute__((global)) void metrics_probe(float * out) { *out = 1.0f; }\n' > probe.hip
+          printf '%s\n' '#include <hip/hip_runtime.h>' '__global__ void metrics_probe(float * out) { *out = 1.0f; }' > probe.hip
           "$(hipconfig -l)/clang" -x hip --offload-arch=gfx908 -O2 -c probe.hip -o probe.o \
             -Rpass-analysis=kernel-resource-usage --save-temps \
             -Xarch_device -fsave-optimization-record=yaml \
