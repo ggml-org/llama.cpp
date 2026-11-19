@@ -20,8 +20,9 @@ void llama_model_moshi::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
     // the last vocab entries are input-only (e.g. the initial text token), the head has no logits for them
+    // a model built from metadata only has no tensor to read it from
     const ggml_tensor * meta = ml.get_tensor_meta(tn(LLM_TENSOR_OUTPUT, "weight").str().c_str());
-    const int64_t n_vocab_out = meta ? meta->ne[1] : 0;
+    const int64_t n_vocab_out = meta ? meta->ne[1] : n_vocab;
     if (n_vocab_out < 1 || n_vocab_out > n_vocab) {
         throw std::runtime_error(format("tensor 'output.weight' has invalid head size %lld (vocab size %lld)", (long long) n_vocab_out, (long long) n_vocab));
     }

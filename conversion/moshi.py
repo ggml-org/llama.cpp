@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 from .base import ModelBase, MmprojModel, SentencePieceTokenTypes, TextModel, gguf, logger
-from .pockettts import PocketTTSMmprojModel
+from .pockettts import mimi_seanet_tensors, mimi_tfm_tensors
 
 # Moshi family (Kyutai): a backbone over parallel streams (text + generated audio codes + input audio codes),
 # one position per 80 ms frame. Only Hibiki (simultaneous speech translation) is supported for now.
@@ -103,49 +103,51 @@ def _load_hparams(dir_model: Path) -> dict[str, Any]:
     }
 
 
-class _MoshiTensors:
-    # the LM and mimi weights are in two files named by the config, mimi tensors get the "mimi." prefix
-    dir_model: Path
-    hparams: dict[str, Any]
-    index_local_tensors: Callable[[str], dict[str, Callable[[], Tensor]]]
+# the LM and mimi weights are in two files named by the config, mimi tensors get the "mimi." prefix
+def _moshi_config(model: ModelBase) -> dict[str, Any]:
+    config = model.hparams.get("moshi_config")
+    if config is None and isinstance(model, MmprojModel):
+        config = model.global_config["moshi_config"] # the mmproj moves the hparams aside
+    assert config is not None
+    return config
 
-    def _moshi_config(self) -> dict[str, Any]:
-        return self.hparams.get("moshi_config") or self.global_config["moshi_config"]  # type: ignore[attr-defined]
 
-    def index_moshi_tensors(self) -> dict[str, Callable[[], Tensor]]:
-        config = self._moshi_config()
-        tensors = self.index_local_tensors(Path(config["moshi_name"]).stem)
-        for name, gen in self.index_local_tensors(Path(config["mimi_name"]).stem).items():
-            tensors[_MIMI_PREFIX + name] = gen
-        return tensors
+def _index_moshi_tensors(model: ModelBase) -> dict[str, Callable[[], Tensor]]:
+    config = _moshi_config(model)
+    tensors = model.index_local_tensors(Path(config["moshi_name"]).stem)
+    for name, gen in model.index_local_tensors(Path(config["mimi_name"]).stem).items():
+        tensors[_MIMI_PREFIX + name] = gen
+    return tensors
 
-    def low_rank_embd(self, prefix: str) -> Tensor:
-        embd = self.model_tensors[prefix + ".weight"]().float()  # type: ignore[attr-defined]
-        proj = self.model_tensors.get(prefix + ".low_rank.weight")  # type: ignore[attr-defined]
-        return embd @ proj().float().T if proj is not None else embd
 
-    def condition(self, value: str) -> Tensor:
-        # LUT conditioner: output_proj(embed[index of value])
-        lut = self._moshi_config()["conditioners"]["description"]["lut"]
-        prefix = "condition_provider.conditioners.description."
-        embed = self.model_tensors[prefix + "embed.weight"]().float()  # type: ignore[attr-defined]
-        proj  = self.model_tensors[prefix + "output_proj.weight"]().float()  # type: ignore[attr-defined]
-        return embed[lut["possible_values"].index(value)] @ proj.T
+def _low_rank_embd(model: ModelBase, prefix: str) -> Tensor:
+    embd = model.model_tensors[prefix + ".weight"]().float()
+    proj = model.model_tensors.get(prefix + ".low_rank.weight")
+    return embd @ proj().float().T if proj is not None else embd
+
+
+def _condition(model: ModelBase, value: str) -> Tensor:
+    # LUT conditioner: output_proj(embed[index of value])
+    lut = _moshi_config(model)["conditioners"]["description"]["lut"]
+    prefix = "condition_provider.conditioners.description."
+    embed = model.model_tensors[prefix + "embed.weight"]().float()
+    proj  = model.model_tensors[prefix + "output_proj.weight"]().float()
+    return embed[lut["possible_values"].index(value)] @ proj.T
 
 
 @ModelBase.register("MoshiModel")
 @ModelBase.example("kyutai/hibiki-1b-pytorch-bf16", "kyutai/hibiki-2b-pytorch-bf16")
-class MoshiModel(_MoshiTensors, TextModel):
+class MoshiModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MOSHI
 
     def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
         assert remote_hf_model_id is None
-        return self.index_moshi_tensors()
+        return _index_moshi_tensors(self)
 
     def set_vocab(self):
         from sentencepiece import SentencePieceProcessor
 
-        config = self._moshi_config()
+        config = _moshi_config(self)
         sp = SentencePieceProcessor()
         sp.LoadFromFile(str(self.dir_model / config["tokenizer_name"]))
         assert sp.vocab_size() == config["text_card"]
@@ -188,7 +190,7 @@ class MoshiModel(_MoshiTensors, TextModel):
         self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
 
         # sampling of the text tokens, the audio codes are sampled by mtmd
-        gen = self._moshi_config().get("lm_gen_config", {})
+        gen = _moshi_config(self).get("lm_gen_config", {})
         self.gguf_writer.add_sampling_temp(gen.get("temp_text", 0.7))
         self.gguf_writer.add_sampling_top_k(gen.get("top_k_text", 25))
         self.gguf_writer.add_sampling_top_p(1.0)
@@ -198,10 +200,10 @@ class MoshiModel(_MoshiTensors, TextModel):
         T = gguf.MODEL_TENSOR
 
         if name == "text_emb.weight":
-            config = self._moshi_config()
+            config = _moshi_config(self)
             embd = data_torch.float().clone()
             embd[2] = embd[3] # EOS -> PAD, see get_moshi() of the reference
-            embd += self.condition(_COND_VALUE)
+            embd += _condition(self, _COND_VALUE)
             assert embd.shape[0] == config["text_card"] + 1
             # <|text_start|> only opens the stream, with the initial codes of the generated audio
             for k in range(config["dep_q"]):
@@ -244,24 +246,16 @@ class MoshiModel(_MoshiTensors, TextModel):
 
 @ModelBase.register("MoshiModel")
 @ModelBase.example("kyutai/hibiki-1b-pytorch-bf16", "kyutai/hibiki-2b-pytorch-bf16")
-class MoshiMmprojModel(_MoshiTensors, MmprojModel):
+class MoshiMmprojModel(MmprojModel):
     has_audio_encoder = True
     has_vision_encoder = False
 
-    n_seanet_stages = 4
-
-    # the mimi tensors share the layout of pocket-tts
-    _MIMI_TFM_MAP = PocketTTSMmprojModel._MIMI_TFM_MAP
-    _MIMI_TFM_QKV = PocketTTSMmprojModel._MIMI_TFM_QKV
-    _mimi_tfm_tensor = PocketTTSMmprojModel._mimi_tfm_tensor
-    _seanet_tensor = PocketTTSMmprojModel._seanet_tensor
-
     def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
         assert remote_hf_model_id is None
-        return self.index_moshi_tensors()
+        return _index_moshi_tensors(self)
 
     def _n_codebooks(self) -> int:
-        return self._moshi_config()["dep_q"]
+        return _moshi_config(self)["dep_q"]
 
     def set_gguf_parameters(self):
         self.gguf_writer.add_file_type(self.ftype)
@@ -289,7 +283,7 @@ class MoshiMmprojModel(_MoshiTensors, MmprojModel):
         self.gguf_writer.add_gen_audio_block_count(dep["num_hidden_layers"])
         self.gguf_writer.add_gen_audio_head_count(dep["num_attention_heads"])
         self.gguf_writer.add_gen_audio_attention_layernorm_eps(1e-8)
-        self.gguf_writer.add_gen_audio_model_variant(self._moshi_config()["model_type"])
+        self.gguf_writer.add_gen_audio_model_variant(_moshi_config(self)["model_type"])
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         del name, bid, n_dims
@@ -315,13 +309,13 @@ class MoshiMmprojModel(_MoshiTensors, MmprojModel):
             yield (self.format_tensor_name(T.A_GEN_WAV_UPSAMPLE), data_torch)
         elif "_transformer.transformer.layers." in name:
             # pocket-tts names it in_proj.weight
-            yield from self._mimi_tfm_tensor(name.replace(".in_proj_weight", ".in_proj.weight"), data_torch)
+            yield from mimi_tfm_tensors(self, name.replace(".in_proj_weight", ".in_proj.weight"), data_torch)
         elif name.startswith(("mimi.encoder.model.", "mimi.decoder.model.")):
-            yield from self._seanet_tensor(name, data_torch)
+            yield from mimi_seanet_tensors(self, name, data_torch, 4)
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         T = gguf.MODEL_TENSOR
-        config = self._moshi_config()
+        config = _moshi_config(self)
         n_q = self._n_codebooks()
 
         def get(name: str) -> Tensor:
@@ -361,9 +355,9 @@ class MoshiMmprojModel(_MoshiTensors, MmprojModel):
         n_dim = dep["hidden_size"]
         n_in = sum(1 for name in self.model_tensors if name.startswith("depformer_in."))
         yield (self.format_tensor_name(T.A_GEN_CODE_PROJ_IN), stack(f"depformer_in.{i}.weight" for i in range(n_in)))
-        yield (self.format_tensor_name(T.A_GEN_CODE_TOK_EMBD), self.low_rank_embd("depformer_text_emb"))
+        yield (self.format_tensor_name(T.A_GEN_CODE_TOK_EMBD), _low_rank_embd(self, "depformer_text_emb"))
         yield (self.format_tensor_name(T.A_GEN_CODE_EMBD),
-               torch.stack([self.low_rank_embd(f"depformer_emb.{i}") for i in range(n_q - 1)], dim=0))
+               torch.stack([_low_rank_embd(self, f"depformer_emb.{i}") for i in range(n_q - 1)], dim=0))
         yield (self.format_tensor_name(T.A_GEN_CODE_HEAD), stack(f"linears.{k}.weight" for k in range(n_q)))
 
         for il in range(dep["num_hidden_layers"]):
