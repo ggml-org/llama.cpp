@@ -5109,8 +5109,9 @@ static bool can_use_xmx_batch(int device, const ggml_tensor * src0, const ggml_t
 #ifdef GGML_SYCL_MMVQ_HAS_XMX
     const auto * extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
     return ggml_sycl_xmx_enabled(device) && ggml_sycl_xmx_supports_type(src0->type) && extra &&
-           extra->optimized_feature.reorder && src1->ne[1] <= g_ggml_sycl_xmx_max_cols && src1->ne[2] == 1 &&
-           src1->ne[3] == 1;
+           extra->optimized_feature.reorder &&
+           src1->ne[1] >= ggml_sycl_xmx_min_cols(src0->type, ggml_sycl_info().devices[device].hw_info.arch) &&
+           src1->ne[1] <= g_ggml_sycl_xmx_max_cols && src1->ne[2] == 1 && src1->ne[3] == 1;
 #else
     GGML_UNUSED(device);
     GGML_UNUSED(src0);
@@ -5175,7 +5176,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
 
     // check data types and tensor shapes for custom matrix multiplication kernels:
     bool use_dequantize_mul_mat_vec = can_use_dequantize_mul_mat_vec(src0, src1, dst);
-    if (src1->ne[1] == 1 && ggml_sycl_xmx_min_cols(src0->type) == 1 && can_use_xmx_batch(ctx.device, src0, src1)) {
+    if (src1->ne[1] == 1 && ggml_sycl_xmx_min_cols(src0->type, ggml_sycl_info().devices[ctx.device].hw_info.arch) == 1 && can_use_xmx_batch(ctx.device, src0, src1)) {
         use_dequantize_mul_mat_vec = false;
     }
 #ifdef GGML_SYCL_F16
@@ -5381,7 +5382,7 @@ static bool ggml_sycl_mul_mat_glu_fused(ggml_backend_sycl_context & ctx, ggml_cg
     }
 
     // gate and up of one type the XMX kernel handles, it needs the reorder layout like the unfused mmvq path
-    if (wg->type == wu->type && gate->src[1] == act && act->ne[1] >= ggml_sycl_xmx_min_cols(wu->type) &&
+    if (wg->type == wu->type && gate->src[1] == act && act->ne[1] >= ggml_sycl_xmx_min_cols(wu->type, ggml_sycl_info().devices[ctx.device].hw_info.arch) &&
         act->ne[1] <= g_ggml_sycl_xmx_glu_max_cols) {
         opt_for_reorder(&ctx, wu, act, up, mul_mat_algo::MMVQ);
         opt_for_reorder(&ctx, wg, act, gate, mul_mat_algo::MMVQ);

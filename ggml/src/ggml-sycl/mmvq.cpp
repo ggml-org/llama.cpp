@@ -2141,7 +2141,7 @@ static bool ggml_sycl_mul_mat_vec_q_xmx(int                 device,
         !extra->optimized_feature.reorder) {
         return false;
     }
-    if (src1_ncols < ggml_sycl_xmx_min_cols(src0->type) || src1_ncols > g_ggml_sycl_xmx_max_cols) {
+    if (src1_ncols < ggml_sycl_xmx_min_cols(src0->type, ggml_sycl_info().devices[device].hw_info.arch) || src1_ncols > g_ggml_sycl_xmx_max_cols) {
         return false;
     }
 
@@ -2187,7 +2187,7 @@ bool ggml_sycl_mul_mat_vec_q_glu_xmx(int              device,
     if (glu_op != GGML_GLU_OP_SWIGLU && glu_op != GGML_GLU_OP_GEGLU) {
         return false;
     }
-    if (ncols_dst < ggml_sycl_xmx_min_cols(src0_type) || ncols_dst > g_ggml_sycl_xmx_glu_max_cols) {
+    if (ncols_dst < ggml_sycl_xmx_min_cols(src0_type, ggml_sycl_info().devices[device].hw_info.arch) || ncols_dst > g_ggml_sycl_xmx_glu_max_cols) {
         return false;
     }
     if (!ggml_sycl_esimd::xmx_supported(vx, ncols) || !ggml_sycl_esimd::xmx_supported(vgate, ncols) ||

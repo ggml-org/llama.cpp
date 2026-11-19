@@ -270,7 +270,11 @@ static inline bool ggml_sycl_xmx_supports_arch(gpu_arch arch) {
 }
 
 // fewest columns for which the XMX kernel is faster than the other kernels
-static inline int ggml_sycl_xmx_min_cols(ggml_type type) {
+static inline int ggml_sycl_xmx_min_cols(ggml_type type, gpu_arch arch) {
+    // Xe-LPG+ keeps the faster single-column ESIMD path.
+    if (arch == gpu_arch::intel_gpu_arl_h) {
+        return 2;
+    }
     return type == GGML_TYPE_Q2_K || type == GGML_TYPE_Q3_K || type == GGML_TYPE_Q4_K ? 1 : 2;
 }
 
