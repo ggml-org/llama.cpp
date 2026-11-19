@@ -383,9 +383,12 @@ static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_bu
     // GGML_LOG_DEBUG("%s: buffer usage=%d, tensor name=%s\n", __func__, buffer->usage, tensor->name);
     ggml_backend_openvino_buffer_context * ctx = (ggml_backend_openvino_buffer_context *) buffer->context;
 
-    // Put kvcache on device memory for GPU (NPU memory is too small even for kvcache)
-    if (strncmp(tensor->name, "cache_", 6) == 0 && !ctx->is_remote && ggml_openvino_is_gpu() &&
-        !is_stateful_enabled()) {
+    // Put kvcache on device memory for GPU (NPU memory is too small even for kvcache). Same for the speculative
+    // decoding feature buffers (llama_context::layer_inp_dev / h_nextn_dev): every graph reads or writes the whole
+    // buffer, so in host memory the plugin copies it to the device and back on every inference.
+    const bool is_device_state = strncmp(tensor->name, "cache_", 6) == 0 ||
+                                 strcmp(tensor->name, "layer_inp_dev") == 0 || strcmp(tensor->name, "h_nextn_dev") == 0;
+    if (is_device_state && !ctx->is_remote && ggml_openvino_is_gpu() && !is_stateful_enabled()) {
         GGML_ASSERT(ctx->tensor_extras.empty());
         auto device = ctx->device;
         auto size = ctx->size;
