@@ -193,8 +193,7 @@ struct helper_check {
 };
 
 // asks whether the backend implements the op, independent of where the sources of this node currently live.
-// the latter is a limitation of ggml_backend_supports_op() and led to skipped tests in multi-GPU setups.
-static bool backend_implements_op(ggml_backend_t backend, const ggml_tensor * node) {
+static bool backend_supports_op(ggml_backend_t backend, const ggml_tensor * node) {
     ggml_init_params params = {
         /*.mem_size   =*/ GGML_MAX_SRC*ggml_tensor_overhead(),
         /*.mem_buffer =*/ nullptr,
@@ -209,7 +208,7 @@ static bool backend_implements_op(ggml_backend_t backend, const ggml_tensor * no
 
     for (ggml_tensor *& src : probe.src) {
         if (src != nullptr) {
-            src = ggml_new_tensor(ctx.get(), src->type, GGML_MAX_DIMS, src->ne);
+            src = ggml_dup_tensor(ctx.get(), src);
         }
     }
 
