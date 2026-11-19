@@ -2168,6 +2168,7 @@ int ggml_metal_op_solve_tri(ggml_metal_op_t ctx, int idx) {
 
     ggml_metal_library_t lib = ctx->lib;
     ggml_metal_encoder_t enc = ctx->enc;
+    const ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx->dev);
 
     GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
     GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb);
@@ -2204,6 +2205,8 @@ int ggml_metal_op_solve_tri(ggml_metal_op_t ctx, int idx) {
     };
 
     auto pipeline = ggml_metal_library_get_pipeline_solve_tri(lib, op);
+
+    GGML_ASSERT(pipeline.smem <= props_dev->max_theadgroup_memory_size);
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
     ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
