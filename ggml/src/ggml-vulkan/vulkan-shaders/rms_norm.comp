@@ -2,6 +2,7 @@
 
 #include "generic_binary_head.glsl"
 #include "types.glsl"
+#include "rt_kv_dirty.glsl"
 
 #extension GL_EXT_control_flow_attributes : enable
 #if USE_SUBGROUP_ADD
@@ -82,6 +83,11 @@ void rms_norm(uint num_iters) {
             uint32_t d_offset = 0;
 #elif RMS_NORM_SET_ROWS_FUSION
             uint32_t d_offset = data_i[channel].x*p.nb21 + row*ncols + get_doffset();
+#if defined(RT_KV_BINDING)
+            if (tid == 0 && row == 0) {
+                rt_kv_write(data_i[channel].x);
+            }
+#endif
 #else
             uint32_t d_offset = ((samp*nchannels + channel)*nrows + row)*ncols + get_doffset();
 #endif

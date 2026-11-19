@@ -1,0 +1,623 @@
+#version 460
+
+#extension GL_EXT_ray_query : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#ifdef USE_SUBGROUPS
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_ballot : require
+#endif
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+layout(constant_id = 1) const bool APPROXIMATE = false;
+layout(constant_id = 2) const uint UNIT_PHASE = 0;
+layout(constant_id = 3) const uint QUERY_COUNT = 1;
+layout(constant_id = 4) const uint HEAD_SIZE = 1;
+layout(constant_id = 5) const uint BITMAP_WORDS = 1;
+
+const uint STATE_HEADER = (8 + 3 * QUERY_COUNT + 31) / 32 * 32;
+
+layout (binding = 0) readonly buffer Q {float data_q[];};
+layout (binding = 1) readonly buffer K {float16_t data_k[];};
+layout (binding = 2) readonly buffer V {float16_t data_v[];};
+layout (binding = 3) readonly buffer M {float16_t data_m[];};
+layout (binding = 4) buffer S {float data_s[];};
+layout (binding = 5) writeonly buffer I {int data_i[];};
+layout (binding = 6) buffer T {uint data_t[];};
+layout (binding = 7) buffer C {uint data_c[];};
+layout (binding = 8) uniform accelerationStructureEXT pages_as;
+#ifdef UNIT_BOX
+layout (binding = 9) buffer R {uint data_r[];};
+#endif
+
+#include "fa_rt_common.glsl"
+
+shared uint selected_bits[BITMAP_WORDS];
+#ifndef UNIT_BOX
+shared uint query_bits[QUERY_COUNT * BITMAP_WORDS];
+#endif
+shared float queries[QUERY_COUNT * (APPROXIMATE ? 3 : HEAD_SIZE)];
+shared float values_sh[128];
+shared uint counts_sh[128];
+shared uint invalid;
+shared uint ray_count;
+shared uint hit_count;
+shared uint valid_end;
+shared float maximum_v;
+shared float maximum_bound;
+shared float reference;
+shared float selected_mass;
+
+void reduce_values(bool sum) {
+    const uint tid = gl_LocalInvocationIndex;
+    barrier();
+    for (uint offset = gl_WorkGroupSize.x / 2; offset != 0; offset >>= 1) {
+        if (tid < offset) {
+            values_sh[tid] = sum ? values_sh[tid] + values_sh[tid + offset] : max(values_sh[tid], values_sh[tid + offset]);
+        }
+        barrier();
+    }
+}
+
+uint query_state_offset(uint head) {
+    const uint words = (p.pages + 31) / 32;
+    const uint groups = (p.pages + gl_WorkGroupSize.x - 1) / gl_WorkGroupSize.x;
+    return head * (STATE_HEADER + words + 2 * groups);
+}
+
+bool is_page_selected(uint page) {
+    return (selected_bits[page / 32] & (1u << (page % 32))) != 0;
+}
+
+bool keep_page(uint head, uint page, uint window_begin) {
+    const uint base = summary_offset(head, page);
+    return data_s[base] > 0.0 && (page == 0 || (page + 1) * p.page_size > window_begin || data_s[base + 2] <= 1e-12);
+}
+
+bool query_direction(uint query, out vec3 direction) {
+    const uint base = query * (APPROXIMATE ? 3 : HEAD_SIZE);
+    const vec3 projection = vec3(queries[base], queries[base + (APPROXIMATE ? 1 : HEAD_SIZE / 3)], queries[base + (APPROXIMATE ? 2 : 2 * HEAD_SIZE / 3)]);
+    const float magnitude = length(projection);
+    if (!is_finite(magnitude) || magnitude <= 1e-12) {
+        atomicOr(invalid, 1);
+        return false;
+    }
+    direction = projection / magnitude;
+    return true;
+}
+
+float query_error(float q) {
+    return abs(q) * 0.00048828125 + 0.00006103515625;
+}
+
+float scaled_query_error(float q) {
+    const float scaled_q = q * p.scale;
+    // FA paths convert Q to f16 either before or after scaling.
+    return max(abs(p.scale) * query_error(q), query_error(scaled_q) + 2.0 * FLOAT_EPS * abs(scaled_q));
+}
+
+vec2 score_interval(uint query, uint head, uint row) {
+    float score = 0.0;
+    float absolute_sum = 0.0;
+    float conversion_error = 0.0;
+    const uint base = head * p.k_head_stride + row * p.k_stride;
+    for (uint dim = 0; dim < HEAD_SIZE; ++dim) {
+        const float q = queries[query * HEAD_SIZE + dim];
+        const float k = float(data_k[base + dim]);
+        const float product = q * k;
+        score += product;
+        absolute_sum += abs(product);
+        conversion_error += abs(k) * scaled_query_error(q);
+    }
+    score *= p.scale;
+    const float error = conversion_error + abs(p.scale) * 8.0 * FLOAT_EPS * float(HEAD_SIZE) * absolute_sum + 4.0 * FLOAT_EPS * abs(score);
+    return vec2(score - error, score + error);
+}
+
+#ifdef UNIT_BOX
+void update_page(uint head, uint page) {
+    const uint begin = page * p.page_size;
+    const uint end = min(begin + p.page_size, p.KV);
+    const uint words = (p.page_size + 31) / 32;
+    const uint state = 2 + p.pages + (head * p.pages + page) * (1 + words);
+    uvec2 mask = uvec2(0);
+    bool valid_mask = true;
+    for (uint row = begin; row < end; ++row) {
+        const float m = float(data_m[row]);
+        if (m == 0.0) {
+            const uint bit = row - begin;
+            mask[bit / 32] |= 1u << (bit % 32);
+        } else if (!isinf(m) || m > 0.0) {
+            valid_mask = false;
+        }
+    }
+    const uint generation = data_r[2 + page];
+    bool changed = data_r[state] != generation || !valid_mask;
+    for (uint word = 0; word < words; ++word) {
+        changed = changed || data_r[state + 1 + word] != mask[word];
+    }
+    if (!changed) {
+        return;
+    }
+    vec3 center = vec3(0.0);
+    uint count = 0;
+    bool valid = valid_mask;
+    const uint k_base = head * p.k_head_stride;
+    for (uint row = begin; row < end; ++row) {
+        const uint bit = row - begin;
+        if ((mask[bit / 32] & (1u << (bit % 32))) == 0) {
+            continue;
+        }
+        const uint offset = k_base + row * p.k_stride;
+        const vec3 k = key_projection(offset);
+        ++count;
+        if (is_finite(k)) {
+            center += k;
+        } else {
+            valid = false;
+        }
+    }
+    write_summary((head * p.pages + page) * 8, count, 1.0, !valid, center);
+    data_r[state] = generation;
+    for (uint word = 0; word < words; ++word) {
+        data_r[state + 1 + word] = mask[word];
+    }
+}
+#endif
+
+float page_upper(uint query, uint head, uint page) {
+    const uint base = summary_offset(head, page);
+    float score = 0.0;
+    float absolute_sum = 0.0;
+    float conversion_error = 0.0;
+    for (uint dim = 0; dim < HEAD_SIZE; ++dim) {
+        const float q = queries[query * HEAD_SIZE + dim];
+        const float lo = data_s[base + 4 + dim];
+        const float hi = data_s[base + 4 + HEAD_SIZE + dim];
+        const float product = max(q * lo, q * hi);
+        score += product;
+        absolute_sum += max(abs(q * lo), abs(q * hi));
+        conversion_error += max(abs(lo), abs(hi)) * scaled_query_error(q);
+    }
+    score *= p.scale;
+    const float error = conversion_error + abs(p.scale) * 8.0 * FLOAT_EPS * float(HEAD_SIZE) * absolute_sum + 4.0 * FLOAT_EPS * abs(score);
+    return score + error;
+}
+
+float exp_lower(float x) {
+    return x < -80.0 ? 0.0 : exp(x) * (1.0 - 16.0 * FLOAT_EPS);
+}
+
+float exp_upper(float x) {
+    return exp(max(x, -80.0)) * (1.0 + 16.0 * FLOAT_EPS);
+}
+
+void write_result(uint head, bool fallback, float bound) {
+    const uint tid = gl_LocalInvocationIndex;
+    if (UNIT_PHASE == 1) {
+        if (tid == 0) { data_c[query_state_offset(head)] = 0; }
+        return;
+    }
+    const uint blocks = (p.KV + p.block_cols - 1) / p.block_cols;
+    const uint words = (blocks + 15) / 16;
+    const uint base = head * (words + 4);
+    uint retained = 0;
+    for (uint word = tid; word < words; word += gl_WorkGroupSize.x) {
+        uint packed = 0;
+        for (uint bit = 0; bit < 16; ++bit) {
+            const uint block = word * 16 + bit;
+            if (block >= blocks) {
+                break;
+            }
+            uint flags = 0;
+            if (!fallback) {
+                const uint begin = block * p.block_cols;
+                const uint end = min(begin + p.block_cols, p.KV);
+                bool keep = false;
+                uint valid = 0;
+                for (uint page = begin / p.page_size; page * p.page_size < end; ++page) {
+                    keep = keep || is_page_selected(page);
+                    const uint summary = summary_offset(head, page);
+                    valid += uint(data_s[summary]);
+                }
+                // The partial last block still needs the original mask for padding.
+                flags = keep ? (valid == p.block_cols ? 2u : 0u) : 1u;
+                retained += keep ? valid : 0;
+            }
+            packed |= flags << (bit * 2);
+        }
+        data_i[base + 4 + word] = int(packed);
+    }
+    counts_sh[tid] = retained;
+    barrier();
+    for (uint offset = gl_WorkGroupSize.x / 2; offset != 0; offset >>= 1) {
+        if (tid < offset) {
+            counts_sh[tid] += counts_sh[tid + offset];
+        }
+        barrier();
+    }
+    if (!fallback && counts_sh[0] == 0) {
+        fallback = true;
+        for (uint word = tid; word < words; word += gl_WorkGroupSize.x) {
+            data_i[base + 4 + word] = 0;
+        }
+    }
+    if (tid == 0) {
+        const uint count = fallback ? p.KV : counts_sh[0];
+        data_i[base] = int(count);
+        data_i[base + 1] = fallback ? 1 : 0;
+        data_i[base + 2] = floatBitsToInt(bound);
+        data_i[base + 3] = 0;
+        atomicAdd(data_t[0], 1);
+        atomicAdd(data_t[1], p.KV);
+        atomicAdd(data_t[2], count);
+        atomicAdd(data_t[3], fallback ? 1 : 0);
+        atomicAdd(data_t[4], ray_count);
+        atomicAdd(data_t[5], hit_count);
+    }
+}
+
+#ifdef UNIT_BOX
+void query_pages() {
+    const uint head = gl_WorkGroupID.y;
+    const uint group = gl_WorkGroupID.x;
+    const uint tid = gl_LocalInvocationIndex;
+    const uint words = (p.pages + 31) / 32;
+    const uint groups = (p.pages + gl_WorkGroupSize.x - 1) / gl_WorkGroupSize.x;
+    const uint state = query_state_offset(head);
+    const bool valid = data_c[state] != 0;
+    const uint page = group * gl_WorkGroupSize.x + tid;
+    bool keep = false;
+    uint rays = 0;
+    uint hits = 0;
+    if (valid && page < p.pages) {
+        const uint base = summary_offset(head, page);
+        keep = keep_page(head, page, data_c[state + 1]);
+        if (!keep && data_s[base] > 0.0) {
+            const uint tail = base + (p.light_summary != 0 ? 4 : 4 + 2 * HEAD_SIZE);
+            const vec3 origin = -vec3(data_s[tail], data_s[tail + 1], data_s[tail + 2]) / p.padding;
+            for (uint query = 0; query < QUERY_COUNT && !keep; ++query) {
+                const uint q = state + 8 + query * 3;
+                const vec3 direction = vec3(uintBitsToFloat(data_c[q]), uintBitsToFloat(data_c[q + 1]), uintBitsToFloat(data_c[q + 2]));
+                if (all(lessThanEqual(abs(origin + 0.01 * direction), vec3(1.0)))) {
+                    keep = true;
+                    break;
+                }
+                rayQueryEXT ray;
+                rayQueryInitializeEXT(ray, pages_as, gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT, 0xff, origin, 0.01, direction, 2.0);
+                while (rayQueryProceedEXT(ray)) {}
+                keep = rayQueryGetIntersectionTypeEXT(ray, true) != gl_RayQueryCommittedIntersectionNoneEXT;
+                ++rays;
+                hits += keep ? 1 : 0;
+            }
+        }
+    }
+    const uvec4 ballot = subgroupBallot(keep);
+    if (subgroupElect()) {
+        const uint first_word = (group * gl_WorkGroupSize.x + gl_SubgroupID * gl_SubgroupSize) / 32;
+        for (uint i = 0; i < gl_SubgroupSize / 32 && first_word + i < words; ++i) {
+            data_c[state + STATE_HEADER + first_word + i] = ballot[i];
+        }
+    }
+    counts_sh[tid] = rays;
+    values_sh[tid] = float(hits);
+    barrier();
+    for (uint offset = gl_WorkGroupSize.x / 2; offset != 0; offset >>= 1) {
+        if (tid < offset) {
+            counts_sh[tid] += counts_sh[tid + offset];
+            values_sh[tid] += values_sh[tid + offset];
+        }
+        barrier();
+    }
+    if (tid == 0) {
+        data_c[state + STATE_HEADER + words + group] = counts_sh[0];
+        data_c[state + STATE_HEADER + words + groups + group] = uint(values_sh[0]);
+    }
+}
+
+void finalize_pages() {
+    const uint head = gl_WorkGroupID.x;
+    const uint tid = gl_LocalInvocationIndex;
+    const uint words = (p.pages + 31) / 32;
+    const uint groups = (p.pages + gl_WorkGroupSize.x - 1) / gl_WorkGroupSize.x;
+    const uint state = query_state_offset(head);
+    for (uint word = tid; word < words; word += gl_WorkGroupSize.x) {
+        selected_bits[word] = data_c[state + STATE_HEADER + word];
+    }
+    if (tid == 0) {
+        ray_count = 0;
+        hit_count = 0;
+        for (uint group = 0; group < groups; ++group) {
+            ray_count += data_c[state + STATE_HEADER + words + group];
+            hit_count += data_c[state + STATE_HEADER + words + groups + group];
+        }
+    }
+    barrier();
+    write_result(head, data_c[state] == 0 || p.dense_mode != 0, FLOAT_MAX);
+}
+#endif
+
+void main() {
+#ifdef UNIT_BOX
+    if (UNIT_PHASE == 2) { query_pages(); return; }
+    if (UNIT_PHASE == 3) { finalize_pages(); return; }
+#endif
+    const uint head = gl_WorkGroupID.x;
+    const uint tid = gl_LocalInvocationIndex;
+    if (p.dense_mode == 1) {
+        if (tid == 0) {
+            ray_count = 0;
+            hit_count = 0;
+        }
+        barrier();
+        write_result(head, true, FLOAT_MAX);
+        return;
+    }
+
+    if (tid == 0) {
+        invalid = 0;
+        ray_count = 0;
+        hit_count = 0;
+        valid_end = 0;
+        maximum_v = 0.0;
+        maximum_bound = 0.0;
+        if (!is_finite(p.padding) || p.padding <= 0.0 ||
+            (!APPROXIMATE && (!is_finite(p.error_budget) || p.error_budget <= 0.0)) || !is_finite(p.scale) || p.scale <= 0.0) {
+            invalid = 1;
+        }
+    }
+    const uint bitmap_words = (p.pages + 31) / 32;
+    for (uint word = tid; word < bitmap_words; word += gl_WorkGroupSize.x) {
+        selected_bits[word] = 0;
+    }
+#ifndef UNIT_BOX
+    for (uint i = tid; i < QUERY_COUNT * BITMAP_WORDS; i += gl_WorkGroupSize.x) {
+        query_bits[i] = 0;
+    }
+#endif
+    barrier();
+    if (invalid != 0) {
+        write_result(head, true, FLOAT_MAX);
+        return;
+    }
+
+    for (uint pos = tid; pos < QUERY_COUNT * HEAD_SIZE; pos += gl_WorkGroupSize.x) {
+        const uint query = pos / HEAD_SIZE;
+        const uint dim = pos % HEAD_SIZE;
+        const float q = data_q[(head * QUERY_COUNT + query) * p.q_head_stride + dim];
+        if (APPROXIMATE) {
+            if (dim == 0) { queries[query * 3] = q; }
+            if (dim == HEAD_SIZE / 3) { queries[query * 3 + 1] = q; }
+            if (dim == 2 * HEAD_SIZE / 3) { queries[query * 3 + 2] = q; }
+        } else {
+            queries[query * HEAD_SIZE + dim] = q;
+        }
+        if (!is_finite(q) || abs(q) > 65504.0 || !is_finite(q * p.scale) || abs(q * p.scale) > 65504.0) {
+            atomicOr(invalid, 1);
+        }
+    }
+
+    float v_max = 0.0;
+    uint end_valid = 0;
+    for (uint page = tid; page < p.pages; page += gl_WorkGroupSize.x) {
+#ifdef UNIT_BOX
+        if (p.cache_summary != 0) {
+            update_page(head, page);
+        }
+#endif
+        const uint base = summary_offset(head, page);
+        if (data_s[base + 3] != 0.0 || !is_finite(data_s[base + 2])) {
+            atomicOr(invalid, 1);
+        }
+        v_max = max(v_max, data_s[base + 1]);
+        if (data_s[base] > 0.0) {
+            end_valid = max(end_valid, min((page + 1) * p.page_size, p.KV));
+        }
+    }
+    values_sh[tid] = v_max;
+    counts_sh[tid] = end_valid;
+    barrier();
+    for (uint offset = gl_WorkGroupSize.x / 2; offset != 0; offset >>= 1) {
+        if (tid < offset) {
+            values_sh[tid] = max(values_sh[tid], values_sh[tid + offset]);
+            counts_sh[tid] = max(counts_sh[tid], counts_sh[tid + offset]);
+        }
+        barrier();
+    }
+    if (tid == 0) {
+        maximum_v = values_sh[0];
+        if (!is_finite(maximum_v) || maximum_v <= 0.0) {
+            invalid = 1;
+        }
+        if (counts_sh[0] != 0) {
+            const uint begin = (counts_sh[0] - 1) / p.page_size * p.page_size;
+            for (uint row = begin; row < counts_sh[0]; ++row) {
+                if (float(data_m[row]) == 0.0) {
+                    valid_end = row + 1;
+                }
+            }
+        }
+    }
+    barrier();
+    if (invalid != 0) {
+        write_result(head, true, FLOAT_MAX);
+        return;
+    }
+
+    const uint window_begin = valid_end > p.window ? valid_end - p.window : 0;
+#ifdef UNIT_BOX
+    if (tid < QUERY_COUNT) {
+        vec3 direction;
+        if (query_direction(tid, direction)) {
+            direction /= p.padding;
+            queries[tid * 3] = direction.x;
+            queries[tid * 3 + 1] = direction.y;
+            queries[tid * 3 + 2] = direction.z;
+        }
+    }
+    barrier();
+    if (invalid != 0) {
+        write_result(head, true, FLOAT_MAX);
+        return;
+    }
+    const uint state = query_state_offset(head);
+    if (tid == 0) {
+        data_c[state] = 1;
+        data_c[state + 1] = window_begin;
+    }
+    for (uint pos = tid; pos < QUERY_COUNT * 3; pos += gl_WorkGroupSize.x) {
+        data_c[state + 8 + pos] = floatBitsToUint(queries[pos]);
+    }
+    return;
+#else
+#ifdef USE_SUBGROUPS
+    for (uint first = 0; first < p.pages; first += gl_WorkGroupSize.x) {
+        const uint page = first + gl_SubgroupID * gl_SubgroupSize + gl_SubgroupInvocationID;
+        const bool keep = page < p.pages && keep_page(head, page, window_begin);
+        const uvec4 ballot = subgroupBallot(keep);
+        if (subgroupElect()) {
+            const uint first_word = (first + gl_SubgroupID * gl_SubgroupSize) / 32;
+            for (uint i = 0; i < gl_SubgroupSize / 32 && first_word + i < bitmap_words; ++i) {
+                selected_bits[first_word + i] = ballot[i];
+            }
+        }
+    }
+#else
+    for (uint word = tid; word < bitmap_words; word += gl_WorkGroupSize.x) {
+        uint bits = 0;
+        for (uint bit = 0; bit < 32 && word * 32 + bit < p.pages; ++bit) {
+            const uint page = word * 32 + bit;
+            if (keep_page(head, page, window_begin)) {
+                bits |= 1u << bit;
+            }
+        }
+        selected_bits[word] = bits;
+    }
+#endif
+    counts_sh[tid] = 0;
+    barrier();
+
+    if (tid < QUERY_COUNT) {
+        vec3 direction;
+        if (query_direction(tid, direction)) {
+            rayQueryEXT ray;
+            rayQueryInitializeEXT(ray, pages_as, gl_RayFlagsNoOpaqueEXT, 1u << (head % 8), vec3(0.0), 0.01, direction, 2.0);
+            uint hits = 0;
+            while (rayQueryProceedEXT(ray)) {
+                if (rayQueryGetIntersectionInstanceCustomIndexEXT(ray, false) != head) {
+                    continue;
+                }
+                ++hits;
+                const uint page = rayQueryGetIntersectionPrimitiveIndexEXT(ray, false);
+                query_bits[tid * BITMAP_WORDS + page / 32] |= 1u << (page % 32);
+            }
+            counts_sh[tid] = hits + 1;
+        }
+    }
+    barrier();
+    for (uint word = tid; word < bitmap_words; word += gl_WorkGroupSize.x) {
+        uint bits = selected_bits[word];
+        for (uint query = 0; query < QUERY_COUNT; ++query) {
+            bits |= query_bits[query * BITMAP_WORDS + word];
+        }
+        selected_bits[word] = bits;
+    }
+    if (tid == 0) {
+        for (uint query = 0; query < QUERY_COUNT; ++query) {
+            if (counts_sh[query] != 0) {
+                ++ray_count;
+                hit_count += counts_sh[query] - 1;
+            }
+        }
+    }
+    barrier();
+    if (invalid != 0) {
+        write_result(head, true, FLOAT_MAX);
+        return;
+    }
+
+#endif
+
+    if (p.dense_mode == 2) {
+        write_result(head, true, FLOAT_MAX);
+        return;
+    }
+    if (APPROXIMATE) {
+        if (tid == 0) { maximum_bound = FLOAT_MAX; }
+    } else {
+        const float sum_guard = 4.0 * FLOAT_EPS * float((p.KV + gl_WorkGroupSize.x - 1) / gl_WorkGroupSize.x + 8);
+        for (uint query = 0; query < QUERY_COUNT; ++query) {
+            float score_max = -FLOAT_MAX;
+            for (uint row = tid; row < p.KV; row += gl_WorkGroupSize.x) {
+                if (is_page_selected(row / p.page_size) && float(data_m[row]) == 0.0) {
+                    score_max = max(score_max, score_interval(query, head, row).x);
+                }
+            }
+            values_sh[tid] = score_max;
+            reduce_values(false);
+            if (tid == 0) {
+                reference = values_sh[0];
+                if (!is_finite(reference) || reference == -FLOAT_MAX) {
+                    invalid = 1;
+                }
+            }
+            barrier();
+
+            float mass = 0.0;
+            for (uint row = tid; row < p.KV; row += gl_WorkGroupSize.x) {
+                if (is_page_selected(row / p.page_size) && float(data_m[row]) == 0.0) {
+                    mass += exp_lower(score_interval(query, head, row).x - reference);
+                }
+            }
+            values_sh[tid] = mass;
+            reduce_values(true);
+            if (tid == 0) {
+                selected_mass = values_sh[0] * (1.0 - sum_guard);
+            }
+            barrier();
+
+            float skipped_mass = 0.0;
+            for (uint page = tid; page < p.pages; page += gl_WorkGroupSize.x) {
+                const uint base = summary_offset(head, page);
+                if (is_page_selected(page) || data_s[base] == 0.0) {
+                    continue;
+                }
+                if (p.exact_bounds != 0) {
+                    const uint begin = page * p.page_size;
+                    const uint end = min(begin + p.page_size, p.KV);
+                    for (uint row = begin; row < end; ++row) {
+                        if (float(data_m[row]) == 0.0) {
+                            skipped_mass += exp_upper(score_interval(query, head, row).y - reference);
+                        }
+                    }
+                } else {
+                    skipped_mass += data_s[base] * exp_upper(page_upper(query, head, page) - reference);
+                }
+            }
+            values_sh[tid] = skipped_mass;
+            reduce_values(true);
+            if (tid == 0) {
+                const float skipped = values_sh[0] * (1.0 + sum_guard);
+                const float denominator = selected_mass + skipped;
+                const float alpha = min(1.0, skipped / denominator * (1.0 + 32.0 * FLOAT_EPS));
+                const float bound = 2.0 * maximum_v * alpha * (1.0 + 4.0 * FLOAT_EPS);
+                maximum_bound = max(maximum_bound, bound);
+                if (!is_finite(selected_mass) || selected_mass <= 0.0 || !is_finite(skipped) || !is_finite(denominator) || !is_finite(bound) || bound > p.error_budget) {
+                    invalid = 1;
+                }
+            }
+            barrier();
+            if (invalid != 0) {
+                break;
+            }
+        }
+
+    }
+    barrier();
+    if (invalid != 0) {
+        write_result(head, true, maximum_bound);
+        return;
+    }
+
+    write_result(head, false, maximum_bound);
+}

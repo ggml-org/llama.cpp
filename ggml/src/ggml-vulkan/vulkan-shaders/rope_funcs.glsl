@@ -45,6 +45,11 @@ void rope_norm(const uint i0, const uint i1, const uint i2, const uint i3, rope_
     // Fusion optimization: ROPE + VIEW + SET_ROWS.
     // The rope output is viewed as a 1D tensor and offset based on a row index in rope_data_i.
     if (p.set_rows_stride != 0) {
+#if defined(RT_KV_BINDING)
+        if (i0 == 0 && i1 == 0) {
+            rt_kv_write(rope_data_i[i2].x);
+        }
+#endif
         idst = i1*p.nb11 + i0;
         idst += rope_data_i[i2].x * p.set_rows_stride;
     }
@@ -84,6 +89,11 @@ void rope_neox(const uint i0, const uint i1, const uint i2, const uint i3, rope_
     // Fusion optimization: ROPE + VIEW + SET_ROWS.
     // The rope output is viewed as a 1D tensor and offset based on a row index in rope_data_i.
     if (p.set_rows_stride != 0) {
+#if defined(RT_KV_BINDING)
+        if (i0 == 0 && i1 == 0) {
+            rt_kv_write(rope_data_i[i2].x);
+        }
+#endif
         idst = i1*p.nb11 + i0/2;
         idst += rope_data_i[i2].x * p.set_rows_stride;
     }
@@ -125,6 +135,11 @@ void rope_multi(const uint i0, const uint i1, const uint i2, const uint i3, rope
     // Fusion optimization: ROPE + VIEW + SET_ROWS.
     // The rope output is viewed as a 1D tensor and offset based on a row index in rope_data_i.
     if (p.set_rows_stride != 0) {
+#if defined(RT_KV_BINDING)
+        if (i0 == 0 && i1 == 0) {
+            rt_kv_write(rope_data_i[i2].x);
+        }
+#endif
         idst = i1*p.nb11 + i0/2;
         idst += rope_data_i[i2].x * p.set_rows_stride;
     }

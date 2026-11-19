@@ -342,6 +342,9 @@ void main() {
     const uint32_t mo_stride = CEIL_DIV(KV, 16 * Bc);
     // mo_offset will point to the tile starting at row i*Br and col 0
     uint32_t mo_offset = mo_stride * i;
+    if (USE_RT_MASK) {
+        mo_offset = ik2 * (mo_stride + 4) + 4;
+    }
 
     uint32_t m_offset = gqa_iq1*KV * 2 /*sizeof(float16_t)*/;
     if (p.nem2 != 1 || p.nem3 != 1) {

@@ -5,6 +5,12 @@
 #include <mutex>
 #include <shared_mutex>
 
+static void ggml_vk_buffer_rt_kv_changed(const vk_buffer & buffer) {
+    if (buffer->rt_kv_source) {
+        buffer->rt_kv_generation.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 static void * portable_aligned_malloc(size_t align, size_t size) {
 #ifdef _WIN32
     return _aligned_malloc(size, align);
@@ -51,7 +57,7 @@ static std::vector<uint32_t> ggml_vk_find_memory_properties(const vk::PhysicalDe
 }
 
 static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std::initializer_list<vk::MemoryPropertyFlags> & req_flags_list,
-                                       void *import_ptr = nullptr) {
+                                       void *import_ptr = nullptr, vk::BufferUsageFlags extra_usage = {}) {
     VK_LOG_DEBUG("ggml_vk_create_buffer(" << device->name << ", " << size << ", " << to_string(req_flags_list.begin()[0]) << ", " << to_string(req_flags_list.begin()[req_flags_list.size()-1]) << ")");
     if (size > device->max_buffer_size) {
         throw vk::OutOfDeviceMemoryError("Requested buffer size exceeds device buffer size limit");
@@ -65,6 +71,7 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
     }
 
     vk::BufferUsageFlags usage_flags = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst;
+    usage_flags |= extra_usage;
     vk::MemoryAllocateFlags mem_flags {};
     if (device->buffer_device_address) {
         usage_flags |= vk::BufferUsageFlagBits::eShaderDeviceAddress;
@@ -207,9 +214,9 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
     return buf;
 }
 
-vk_buffer ggml_vk_create_buffer_check(vk_device& device, size_t size, vk::MemoryPropertyFlags req_flags, vk::MemoryPropertyFlags fallback_flags) {
+vk_buffer ggml_vk_create_buffer_check(vk_device& device, size_t size, vk::MemoryPropertyFlags req_flags, vk::MemoryPropertyFlags fallback_flags, vk::BufferUsageFlags extra_usage) {
     try {
-        return ggml_vk_create_buffer(device, size, {req_flags, fallback_flags});
+        return ggml_vk_create_buffer(device, size, {req_flags, fallback_flags}, nullptr, extra_usage);
     } catch (const vk::SystemError& e) {
         std::cerr << "ggml_vulkan: Memory allocation of size " << size << " failed." << std::endl;
         std::cerr << "ggml_vulkan: " << e.what() << std::endl;
@@ -432,6 +439,7 @@ static void ggml_vk_submit_sync(vk_device & device, vk_context & subctx) {
 }
 
 static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_context& subctx, vk_buffer& dst, size_t offset, const ggml_tensor * tensor, bool sync_staging = false) {
+    ggml_vk_buffer_rt_kv_changed(dst);
     VK_LOG_DEBUG("ggml_vk_buffer_write_nc_async(" << tensor << ")");
     GGML_ASSERT(!ggml_is_contiguous(tensor));
     // Buffer is already mapped
@@ -529,6 +537,7 @@ static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_cont
 }
 
 bool ggml_vk_buffer_write_2d_async(vk_context subctx, vk_buffer& dst, size_t offset, const void * src, size_t spitch, size_t dpitch, size_t width, size_t height, bool sync_staging) {
+    ggml_vk_buffer_rt_kv_changed(dst);
     VK_LOG_DEBUG("ggml_vk_buffer_write_2d_async(" << width << ", " << height << ")");
     // Check if src is pinned memory
     vk_buffer buf = nullptr;
@@ -602,6 +611,7 @@ bool ggml_vk_buffer_write_async(vk_context subctx, vk_buffer& dst, size_t offset
 }
 
 void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * src, size_t spitch, size_t dpitch, size_t width, size_t height) {
+    ggml_vk_buffer_rt_kv_changed(dst);
     VK_LOG_DEBUG("ggml_vk_buffer_write_2d(" << width << ", " << height << ")");
     // Buffer is already mapped
     if(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) {
@@ -758,6 +768,7 @@ void ggml_vk_buffer_read(vk_buffer& src, size_t offset, void * dst, size_t size)
 }
 
 void ggml_vk_buffer_copy_async(vk_context& ctx, vk_buffer& dst, size_t dst_offset, vk_buffer& src, size_t src_offset, size_t size) {
+    ggml_vk_buffer_rt_kv_changed(dst);
     VK_LOG_DEBUG("ggml_vk_buffer_copy_async(" << size << ")");
     // Make sure both buffers are on same device
     GGML_ASSERT(src->device == dst->device);
@@ -788,6 +799,7 @@ void ggml_vk_buffer_copy(vk_buffer& dst, size_t dst_offset, vk_buffer& src, size
 }
 
 void ggml_vk_buffer_memset_async(vk_context& ctx, vk_buffer& dst, size_t offset, uint32_t c, size_t size) {
+    ggml_vk_buffer_rt_kv_changed(dst);
     VK_LOG_DEBUG("ggml_vk_buffer_memset_async(" << offset << ", " << c << ", " << size << ")");
 
     if (dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible &&
@@ -801,6 +813,7 @@ void ggml_vk_buffer_memset_async(vk_context& ctx, vk_buffer& dst, size_t offset,
 }
 
 void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, size_t size) {
+    ggml_vk_buffer_rt_kv_changed(dst);
     VK_LOG_DEBUG("ggml_vk_buffer_memset(" << offset << ", " << c << ", " << size << ")");
 
     if (dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible &&
@@ -839,6 +852,7 @@ size_t ggml_vk_buffer_write_n_async(vk_context& subctx, const vk_buffer_region *
     size_t i = 0;
     for (; i < n; i++) {
         const vk_buffer_region & r = regions[i];
+        ggml_vk_buffer_rt_kv_changed(r.buf);
 
         vk_buffer pinned = nullptr;
         size_t pinned_offset = 0;
@@ -895,6 +909,7 @@ void ggml_vk_buffer_copy_n_async(vk_context& subctx, const vk_buffer_copy_region
 
     for (size_t i = 0; i < n; i++) {
         const vk_buffer_copy_region & r = regions[i];
+        ggml_vk_buffer_rt_kv_changed(r.dst);
         GGML_ASSERT(r.src->device == r.dst->device);
         subctx->s->buffer->buf.copyBuffer(r.src->buffer, r.dst->buffer, { vk::BufferCopy{ r.src_offset, r.dst_offset, r.size } });
     }
@@ -906,6 +921,7 @@ void ggml_vk_buffer_write_n(const vk_buffer_region * regions, size_t n) {
 
     for (size_t i = 0; i < n; i++) {
         const vk_buffer_region & r = regions[i];
+        ggml_vk_buffer_rt_kv_changed(r.buf);
         if (r.size == 0) {
             continue;
         }

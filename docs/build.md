@@ -433,6 +433,8 @@ On Linux it is possible to use unified memory architecture (UMA) to share main m
 
 ## Vulkan
 
+See [RT Core-assisted KV filtering](backend/vulkan/README.md) for runtime configuration, measurements, and operator checks. It uses the standard Vulkan build below.
+
 ### For Windows Users:
 **w64devkit**
 
