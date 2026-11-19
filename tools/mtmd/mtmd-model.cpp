@@ -3903,8 +3903,8 @@ struct mtmd_model_loader {
                     model.image_newline     = get_tensor(TN_IMAGE_NEWLINE);
                     model.view_seperator    = get_tensor(TN_IMAGE_SEPERATOR, false);
                     // the position embedding is resampled on the host as F32
-                    if (!model.position_embeddings || model.position_embeddings->type != GGML_TYPE_F32) {
-                        throw std::runtime_error(mtmd_format("%s: HunyuanVL requires an F32 %s\n", __func__, mtmd_format(TN_POS_EMBD, prefix).c_str()));
+                    if (!model.position_embeddings || model.position_embeddings->type != GGML_TYPE_F32 || !ggml_is_matrix(model.position_embeddings) || model.position_embeddings->ne[0] != hparams.n_embd) {
+                        throw std::runtime_error(mtmd_format("%s: HunyuanVL requires a 2D F32 %s\n", __func__, mtmd_format(TN_POS_EMBD, prefix).c_str()));
                     }
                 } break;
             case PROJECTOR_TYPE_HY_V4_VL:
@@ -3917,8 +3917,8 @@ struct mtmd_model_loader {
                     model.mm_pre_norm_w     = get_tensor(mtmd_format(TN_MM_PRE_NORM, "weight"));
                     model.image_newline     = get_tensor(TN_IMAGE_NEWLINE);
                     // the position embedding is resampled on the host as F32
-                    if (!model.position_embeddings || model.position_embeddings->type != GGML_TYPE_F32) {
-                        throw std::runtime_error(mtmd_format("%s: hy_v4 requires an F32 %s\n", __func__, mtmd_format(TN_POS_EMBD, prefix).c_str()));
+                    if (!model.position_embeddings || model.position_embeddings->type != GGML_TYPE_F32 || !ggml_is_matrix(model.position_embeddings) || model.position_embeddings->ne[0] != hparams.n_embd) {
+                        throw std::runtime_error(mtmd_format("%s: hy_v4 requires a 2D F32 %s\n", __func__, mtmd_format(TN_POS_EMBD, prefix).c_str()));
                     }
                 } break;
             case PROJECTOR_TYPE_JANUS_PRO:

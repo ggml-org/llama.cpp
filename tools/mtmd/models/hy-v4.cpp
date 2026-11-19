@@ -5,8 +5,7 @@ ggml_cgraph * mtmd_graph_hy_v4::build() {
     const int pw    = n_patches_x;
     const int ph    = n_patches_y;
 
-    // position embedding: a graph input, interpolated on CPU in mtmd_subcontext::encode()
-    // (same name and interpolation as hunyuanvl, see the branch there)
+    // position embedding: a graph input, interpolated on CPU in mtmd_subcontext::encode() (same name and interpolation as hunyuanvl)
     ggml_tensor * pos_embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, ph * pw);
     ggml_set_name(pos_embd, "hunyuanvl_pos_embd");
     ggml_set_input(pos_embd);

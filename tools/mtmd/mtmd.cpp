@@ -1394,8 +1394,10 @@ struct mtmd_context {
                 } break;
             case PROJECTOR_TYPE_HY_V4_VL:
                 {
-                    // image start/end markers ... (image embeddings) ..., written with fullwidth bar and U+2581 like hunyuanvl
-                    // the trailing hash follows the tokenizer revision, so take it from the vocab
+                    // image start/end markers use fullwidth bar and U+2581 like hunyuanvl; the trailing hash follows the tokenizer revision, so take it from the vocab
+                    if (text_model && pos_type != MTMD_POS_TYPE_MROPE) {
+                        throw std::runtime_error("hy_v4_vl needs a text model converted with rope sections (HYV4VLForConditionalGeneration)");
+                    }
                     img_beg = lookup_token_text_prefix("<｜hy_image▁start");
                     img_end = lookup_token_text_prefix("<｜hy_image▁end");
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(models.v.get());
@@ -1627,8 +1629,7 @@ private:
         return LLAMA_TOKEN_NULL;
     }
 
-    // returns the full text of the first token starting with prefix, for vocabularies
-    // where the marker tokens embed a per-revision tokenizer hash (hy-v4)
+    // returns the full text of the first token starting with prefix, for marker tokens that embed a per-revision tokenizer hash (hy-v4)
     std::string lookup_token_text_prefix(const std::string & prefix) {
         if (vocab == nullptr) {
             return "";

@@ -24,8 +24,7 @@ def split_gate_up(weight: torch.Tensor, moe_intermediate_size: int):
 def rope_rows_to_neox(weight: torch.Tensor, head_dim: int, rope_dim: int) -> torch.Tensor:
     """Reorder the rope rows of each head from interleaved pairs to NeoX halves.
 
-    The rope rows are the last rope_dim rows of each head_dim block. The M-RoPE kernels only
-    support NeoX ordering, so this lets the graph use them for the same rotation.
+    The rope rows are the last rope_dim rows of each head_dim block. The M-RoPE kernels only support NeoX ordering, so this lets the graph use them for the same rotation.
     """
     shape = weight.shape
     w = weight.reshape(-1, head_dim, *shape[1:])
@@ -265,9 +264,7 @@ class HYV4Model(DeepseekV2Model):
 class HYV4VLTextModel(HYV4Model):
     """Text tower of the HY_V4 VL model.
 
-    The LLM uses interleaved M-RoPE over GPT-J style pairs. The rope rows are reordered to NeoX
-    halves here, so the graph can run the IMROPE kernel. For text-only positions this is the same
-    rotation as the NORM rope of HYV4Model.
+    The LLM uses interleaved M-RoPE over GPT-J style pairs. The rope rows are reordered to NeoX halves here, so the graph can run the IMROPE kernel. For text-only positions this is the same rotation as the NORM rope of HYV4Model.
     """
 
     model_arch = gguf.MODEL_ARCH.HY_V4
@@ -277,7 +274,10 @@ class HYV4VLTextModel(HYV4Model):
         rope = self.rope_parameters
         if not rope.get("mrope_interleaved", False):
             raise NotImplementedError("HY_V4 VL expects mrope_interleaved = true")
-        self.mrope_section = list(rope["mrope_section"])[:3]
+        section = list(rope["mrope_section"])
+        if len(section) == 4 and section[3] == 0:
+            section = section[:3]
+        self.mrope_section = section
         if len(self.mrope_section) != 3 or 2 * sum(self.mrope_section) != self.hparams["qk_rope_head_dim"]:
             raise ValueError(f"HY_V4 VL mrope_section {self.mrope_section} must sum to qk_rope_head_dim / 2")
 
@@ -330,6 +330,18 @@ class HYV4VLVisionModel(MmprojModel):
         projector_type = vcfg.get("projector_type")
         if projector_type != "rmsnorm_mlp_adapter":
             raise ValueError(f"unsupported projector_type {projector_type!r}")
+        # the graph implements the plain variant only
+        unsupported = {
+            "use_2d_rope": bool(vcfg.get("use_2d_rope", False)),
+            "cat_extra_token": bool(vcfg.get("cat_extra_token", False)),
+            "use_image_newline_token": not vcfg.get("use_image_newline_token", True),
+            "perceive_post_norm": bool(vcfg.get("perceive_post_norm", False)),
+            "hidden_act": vcfg.get("hidden_act", "gelu") != "gelu",
+            "interpolate_mode": vcfg.get("interpolate_mode", "bilinear") != "bilinear",
+        }
+        for key, bad in unsupported.items():
+            if bad:
+                raise NotImplementedError(f"HY_V4 VL vision config {key}={vcfg.get(key)!r} is not supported")
         self.gguf_writer.add_clip_projector_type(self.projector_type)
         self.gguf_writer.add_vision_use_gelu(True)
         # rms_norm_eps is also the LayerNorm eps of the encoder blocks
@@ -340,9 +352,7 @@ class HYV4VLVisionModel(MmprojModel):
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], torch.Tensor]]) -> tuple[str, Callable[[], torch.Tensor]] | None:
-        name, gen = item
-
-        if not name.startswith("vit."):
+        if not item[0].startswith("vit."):
             return None
 
         return super().filter_tensors(item)
