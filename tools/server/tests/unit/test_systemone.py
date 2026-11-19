@@ -348,7 +348,7 @@ def test_systemone_d1_packed():
         assert_answers_close(packed[qid], decide({qid: question})[qid], 0.02)
 
     # 17 questions are 2 sets of at most 16, the last question is alone in its set, so it is the same as a lone question
-    questions = {f"q{i}": {"type": "noul", "instructions": f"Is statement number {i} true?"} for i in range(16)}
+    questions: dict[str, dict] = {f"q{i}": {"type": "noul", "instructions": f"Is statement number {i} true?"} for i in range(16)}
     questions["route"] = TEST_QUESTIONS["route"]
     packed = decide(questions)
     assert list(packed.keys()) == list(questions.keys())
