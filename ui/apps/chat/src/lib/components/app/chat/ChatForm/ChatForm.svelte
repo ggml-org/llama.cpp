@@ -261,6 +261,9 @@
 		voice.isActive && voice.liveCaption && !value.trim() ? voice.liveCaption : null
 	);
 
+	// while a reply streams, sending what is recorded waits for its first words in the form
+	let hasVoiceText = $derived(!!value.trim() || !!voice.liveCaption);
+
 	const EXPANDED_SHEET_FILL = 'max-md:bg-(--chat-form-sheet-fill)';
 
 	let cardEl: HTMLDivElement | undefined = $state();
@@ -663,7 +666,7 @@
 		await voice.stop();
 		await tick();
 
-		if (!canSubmit || disabled || hasLoadingAttachments || isLoading) return;
+		if (!canSubmit || disabled || hasLoadingAttachments) return;
 
 		onSubmit?.();
 	}
@@ -836,7 +839,7 @@
 						liveCaption={voicePlaceholder ? '' : voice.liveCaption}
 						mode={voice.mode}
 						onCancel={voice.cancel}
-						onSend={isLoading ? undefined : () => void handleStopAndSend()}
+						onSend={isLoading && !hasVoiceText ? undefined : () => void handleStopAndSend()}
 						onStop={() => void voice.stop()}
 						state={voice.state}
 					/>
@@ -865,7 +868,6 @@
 							: undefined}
 						{showAddButton}
 						{showModelSelector}
-						{uploadedFiles}
 						voice={{
 							action: voice.label,
 							hint: voice.hint,

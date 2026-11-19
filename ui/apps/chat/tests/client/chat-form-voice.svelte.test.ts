@@ -159,6 +159,58 @@ describe('the microphone', () => {
 	});
 });
 
+describe('while a reply streams', () => {
+	it('offers to send what is dictated as soon as its first words are in the message', async () => {
+		seed(true, VoiceInputMode.DICTATION);
+
+		const { recorder, screen, state } = await renderForm({ isLoading: true });
+
+		recorder.transcript = Promise.resolve('And one more thing');
+		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
+		await expect.poll(() => recorder.status).toBe('recording');
+
+		// nothing said yet: nothing to send
+		expect(screen.container.innerHTML).not.toContain('Stop and send');
+
+		recorder.say('And one more thing');
+		await expect.poll(() => state.value).toBe('And one more thing');
+
+		await screen.getByRole('button', { name: 'Stop and send' }).click();
+		await expect.poll(() => state.sent).toBe(1);
+	});
+
+	it('offers to send a voice message once its live text shows', async () => {
+		seed(true);
+
+		const { recorder, screen } = await renderForm({ isLoading: true });
+
+		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last().click();
+		await expect.poll(() => recorder.status).toBe('recording');
+		expect(screen.container.innerHTML).not.toContain('Stop and send');
+
+		recorder.say('What about tomorrow');
+		await expect.element(screen.getByRole('button', { name: 'Stop and send' })).toBeInTheDocument();
+	});
+
+	it('keeps the microphone beside the send button once a voice message is attached', async () => {
+		seed(true);
+
+		const { recorder, screen, state } = await renderForm({ isLoading: true });
+
+		recorder.transcript = Promise.resolve('What about tomorrow');
+		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last().click();
+		await expect.poll(() => recorder.status).toBe('recording');
+		recorder.say('What about tomorrow');
+		await screen.getByRole('button', { name: 'Stop recording' }).last().click();
+		await expect.poll(() => state.files.length).toBe(1);
+
+		await expect.element(screen.getByRole('button', { exact: true, name: 'Send' })).toBeEnabled();
+		await expect
+			.element(screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last())
+			.toBeEnabled();
+	});
+});
+
 describe('recording', () => {
 	it('asks for the raw microphone, and for the processing that is switched on', async () => {
 		seed(true, VoiceInputMode.DICTATION);
