@@ -47,15 +47,28 @@ jobs:
     runs-on: ubuntu-22.04
     container: rocm/dev-ubuntu-22.04:7.2.1
     steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
       - name: Dependencies
         id: depends
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev python3 python3-venv python3-pip python3-yaml jq
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+
+      # The first parent of the tested merge commit is the exact baseline.
+      - name: Get baseline SHA
+        if: ${{ github.event_name == 'pull_request' }}
+        id: master_sha
+        run: |
+          git rev-parse --verify HEAD^2 > /dev/null
+          baseline_sha=$(git rev-parse HEAD^1)
+          pr_sha=$(git rev-parse HEAD)
+          printf 'sha=%s\npr_sha=%s\n' "$baseline_sha" "$pr_sha" >> "$GITHUB_OUTPUT"
+          printf 'Baseline commit: %s\nPR merge commit: %s\n' "$baseline_sha" "$pr_sha"
 
       - name: Test HIP kernel metrics scripts
         run: python3 -m unittest discover -s scripts/hip -p 'test_gcn_cdna_metrics.py'
@@ -146,13 +159,7 @@ jobs:
           path: hip-baseline-metrics
           key: hip-quality-check-master-yaml-device-${{ github.sha }}
 
-      # On PRs, restore the device optimization records cached from the master tip.
-      # The PR build reuses the same build as the VGPR spill check above.
-      - name: Get master tip SHA
-        if: ${{ github.event_name == 'pull_request' }}
-        id: master_sha
-        run: echo "sha=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
-
+      # Restore the device optimization records for the exact baseline commit.
       - name: Restore master metrics baseline
         if: ${{ github.event_name == 'pull_request' }}
         id: baseline_cache
@@ -161,7 +168,7 @@ jobs:
           path: hip-baseline-metrics
           key: hip-quality-check-master-yaml-device-${{ steps.master_sha.outputs.sha }}
 
-      # Fallback when the master tip has no cached baseline yet.
+      # Fallback when the baseline commit has no cached metrics.
       - name: Checkout baseline (master)
         if: ${{ github.event_name == 'pull_request' && steps.baseline_cache.outputs.cache-hit != 'true' }}
         uses: actions/checkout@v6
@@ -190,6 +197,9 @@ jobs:
       - name: Check kernel resource rules vs master
         if: ${{ github.event_name == 'pull_request' }}
         id: occupancy_check
+        env:
+          BASELINE_SHA: ${{ steps.master_sha.outputs.sha }}
+          PR_SHA: ${{ steps.master_sha.outputs.pr_sha }}
         run: |
           # The PR optimization records come from the VGPR spill check build above, so
           # this step adds no extra build when the baseline cache hits.
@@ -201,6 +211,7 @@ jobs:
           fi
           python3 scripts/hip/gcn-cdna-metrics.py report hip-kernel-metrics-deltas.tsv \
             -o hip-kernel-metrics-report.md
+          sed -i "3i\\- Baseline commit: $BASELINE_SHA\\n- PR merge commit: $PR_SHA" hip-kernel-metrics-report.md
           if [ -n "$check_failed" ]; then
             echo "check_failed=true" >> "$GITHUB_OUTPUT"
           fi
@@ -208,15 +219,31 @@ jobs:
 
       - name: Upload kernel metrics report
         if: ${{ github.event_name == 'pull_request' }}
+        id: metrics_report
         uses: actions/upload-artifact@v7
         with:
           name: hip-kernel-metrics-report
           path: hip-kernel-metrics-report.md
 
+      - name: Publish kernel metrics summary
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          ARTIFACT_URL: ${{ steps.metrics_report.outputs.artifact-url }}
+        run: |
+          {
+            if [ "$(wc -c < hip-kernel-metrics-report.md)" -le 1000000 ]; then
+              cat hip-kernel-metrics-report.md
+            else
+              sed -n -e '/^# /p' -e '/^- Baseline/p' -e '/^- PR/p' -e '/^Kernels compared:/p' -e 's/^## /- /p' hip-kernel-metrics-report.md
+              printf '\nThe full report exceeds the GitHub job summary size limit.\n'
+            fi
+            printf '\n[Download the full kernel metrics report](%s)\n' "$ARTIFACT_URL"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Fail on blocking regressions
         if: ${{ github.event_name == 'pull_request' && steps.occupancy_check.outputs.check_failed == 'true' }}
         run: |
-          echo "Blocking kernel metrics regressions detected, see the hip-kernel-metrics-report artifact"
+          echo "Blocking kernel metrics regressions detected, see the job summary and hip-kernel-metrics-report artifact"
           exit 1
 
       - name: ccache-buckets-save
