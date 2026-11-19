@@ -933,11 +933,11 @@ static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch
                     llama_context * ctx;
                 } cb_data = { slot.spec, slot.ctx_tgt };
 
-                static auto cb = [](llama_batch b, void * user_data) {
+                static auto cb = [](const llama_token * tokens, int32_t n_tokens, llama_pos pos, llama_seq_id seq_id, void * user_data) {
                     const auto * data = static_cast<cb_data_t *>(user_data);
                     common_batch batch(data->ctx);
-                    for (int32_t i = 0; i < b.n_tokens; ++i) {
-                        batch.add(b.token[i], b.pos[i], b.seq_id[i][0], b.logits[i]);
+                    for (int32_t i = 0; i < n_tokens; ++i) {
+                        batch.add(tokens[i], pos + i, seq_id, false);
                     }
                     return common_speculative_process(data->spec, batch) ? 0 : 1;
                 };

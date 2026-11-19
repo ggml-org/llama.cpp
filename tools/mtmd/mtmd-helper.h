@@ -210,6 +210,7 @@ MTMD_API int32_t mtmd_helper_decode_image_chunk(mtmd_context * ctx,
                                                 void * user_data);
 
 // Decode media that an encoder represents as decoder token IDs.
+// The callback receives each successfully decoded sub-batch; its token pointer is only valid during the call.
 MTMD_API int32_t mtmd_helper_decode_tokens_chunk(mtmd_context * ctx,
                                                  struct llama_context * lctx,
                                                  const mtmd_input_chunk * chunk,
@@ -219,7 +220,7 @@ MTMD_API int32_t mtmd_helper_decode_tokens_chunk(mtmd_context * ctx,
                                                  llama_seq_id seq_id,
                                                  int32_t n_batch,
                                                  llama_pos * new_n_past,
-                                                 int32_t (*callback)(struct llama_batch batch, void * user_data),
+                                                 int32_t (*callback)(const llama_token * tokens, int32_t n_tokens, llama_pos pos, llama_seq_id seq_id, void * user_data),
                                                  void * user_data);
 
 //
