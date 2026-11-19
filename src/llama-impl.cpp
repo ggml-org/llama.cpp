@@ -89,7 +89,13 @@ void llama_log_callback_default(ggml_log_level level, const char * text, void * 
 }
 
 void llama_clear_tensor_data(ggml_tensor * t, size_t offset, size_t size) {
-    ggml_backend_tensor_memset(t, 0, offset, size);
+    static const std::vector<uint8_t> zeros(1024*1024, 0);
+
+    // write zeros with set_tensor instead of ggml_backend_tensor_memset(): some memset_tensor hooks
+    // require aligned ranges (Vulkan fillBuffer), and transposed V cells are cleared one element at a time
+    for (size_t ofs = 0; ofs < size; ofs += zeros.size()) {
+        ggml_backend_tensor_set(t, zeros.data(), offset + ofs, std::min(size - ofs, zeros.size()));
+    }
 }
 
 void replace_all(std::string & s, const std::string & search, const std::string & replace) {
