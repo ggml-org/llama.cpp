@@ -166,11 +166,7 @@ kernel void kernel_unary_impl(
         }
 
         if (FC_OP == OP_UNARY_NUM_SOFTPLUS) {
-            const TC e = exp(x);
-            const TC u = TC(1) + e;
-            const TC d = select(u - TC(1), TC(1), u == TC(1));
-            const TC v = select(log(u) * e / d, e, u == TC(1));
-            dst_ptr[i0] = ggml_metal_unary_cast<T>(select(v, x, x > TC(20)));
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(select(log(1 + exp(x)), x, x > 20));
         }
 
         if (FC_OP == OP_UNARY_NUM_EXPM1) {

@@ -4,20 +4,44 @@
 // softplus
 //------------------------------------------------------------------------------
 
+inline float op_log1p(float x) {
+    const float y  = x / (2.0f + x);
+    const float y2 = y * y;
+    float p = 1.0f / 13.0f;
+    p = p * y2 + 1.0f / 11.0f;
+    p = p * y2 + 1.0f / 9.0f;
+    p = p * y2 + 1.0f / 7.0f;
+    p = p * y2 + 1.0f / 5.0f;
+    p = p * y2 + 1.0f / 3.0f;
+    p = p * y2 + 1.0f;
+    const float s = 2.0f * y * p;
+    const float l = log(1.0f + x);
+    const float r = select(l, s, (x >= -0.5f) & (x <= 1.0f));
+    return select(r, x, fabs(x) < 2.5e-38f);
+}
+
+inline float4 op_log1p4(float4 x) {
+    const float4 y  = x / ((float4)(2.0f) + x);
+    const float4 y2 = y * y;
+    float4 p = (float4)(1.0f / 13.0f);
+    p = p * y2 + (float4)(1.0f / 11.0f);
+    p = p * y2 + (float4)(1.0f / 9.0f);
+    p = p * y2 + (float4)(1.0f / 7.0f);
+    p = p * y2 + (float4)(1.0f / 5.0f);
+    p = p * y2 + (float4)(1.0f / 3.0f);
+    p = p * y2 + (float4)(1.0f);
+    const float4 s = (float4)(2.0f) * y * p;
+    const float4 l = log((float4)(1.0f) + x);
+    const float4 r = select(l, s, (x >= (float4)(-0.5f)) & (x <= (float4)(1.0f)));
+    return select(r, x, fabs(x) < (float4)(2.5e-38f));
+}
+
 inline float softplus_f32(float x) {
-    const float e = exp(x);
-    const float u = 1.0f + e;
-    const float d = select(u - 1.0f, 1.0f, u == 1.0f);
-    const float v = select(log(u) * e / d, e, u == 1.0f);
-    return select(v, x, x > 20.0f);
+    return select(op_log1p(exp(x)), x, x > 20.0f);
 }
 
 inline float4 softplus_f32_4(float4 x) {
-    const float4 e = exp(x);
-    const float4 u = (float4)(1.0f) + e;
-    const float4 d = select(u - (float4)(1.0f), (float4)(1.0f), u == (float4)(1.0f));
-    const float4 v = select(log(u) * e / d, e, u == (float4)(1.0f));
-    return select(v, x, x > (float4)(20.0f));
+    return select(op_log1p4(exp(x)), x, x > (float4)(20.0f));
 }
 
 kernel void kernel_softplus_f32(

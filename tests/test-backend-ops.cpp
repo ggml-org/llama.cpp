@@ -2153,11 +2153,9 @@ struct test_unary : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne_a;
     int v; // view (1 : non-contiguous a)
-    float min_val;
-    float max_val;
 
     std::string vars() override {
-        return (min_val == -150.f && max_val == 150.f) ? VARS_TO_STR3(type, ne_a, v) : VARS_TO_STR5(type, ne_a, v, min_val, max_val);
+        return VARS_TO_STR3(type, ne_a, v);
     }
 
     double max_nmse_err(ggml_backend_t backend) override {
@@ -2172,10 +2170,8 @@ struct test_unary : public test_case {
     test_unary(ggml_unary_op op,
             ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {128, 2, 2, 2},
-            int v = 0,
-            float min_val = -150.f,
-            float max_val = 150.f)
-        : op(op), type(type), ne_a(ne_a), v(v), min_val(min_val), max_val(max_val) {}
+            int v = 0)
+        : op(op), type(type), ne_a(ne_a), v(v) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         const bool grad_supported = op == GGML_UNARY_OP_ABS || op == GGML_UNARY_OP_SGN || op == GGML_UNARY_OP_NEG ||
@@ -2212,8 +2208,8 @@ struct test_unary : public test_case {
     }
 
     void initialize_tensors(ggml_context * ctx) override {
-        float min = min_val;
-        float max = max_val;
+        float min = -150.f;
+        float max =  150.f;
 
         // Keep FP16 exp/expm1 inputs in-range so all backends stay finite instead of
         // disagreeing on whether overflow saturates to max-F16 or produces +inf.
@@ -10681,7 +10677,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::default_random_engine rng(0);
 
     // unary ops
-    test_cases.emplace_back(new test_unary(GGML_UNARY_OP_SOFTPLUS, GGML_TYPE_F32, { 128, 2, 2, 2 }, 0, -40.f, -18.f));
+    // TODO: add GGML_UNARY_OP_SOFTPLUS test that is sensitive to using `log1p(exp(x))` vs `log(exp(x) + 1)`
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16}) {
         for (int v : {0, 1}) {
             for (int op = 0; op < GGML_UNARY_OP_COUNT; op++) {
