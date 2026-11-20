@@ -83,7 +83,8 @@ common_chat_params common_chat_params_init_lfm2(const common_chat_template &    
         auto tool_calls = p.rule("tool-calls",
             p.trigger_rule("tool-call",
                 p.literal(TOOL_CALL_START) +
-                p.python_style_tool_calls(inputs.tools, inputs.parallel_tool_calls, /* allow_json_literals = */ true) +
+                p.python_style_tool_calls(inputs.tools, inputs.parallel_tool_calls, /* allow_json_literals = */ true,
+                                          /* allow_undeclared = */ true) +
                 p.literal(TOOL_CALL_END)
             )
         );

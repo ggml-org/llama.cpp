@@ -18,9 +18,12 @@ from .qwen3vl import Qwen3VLVisionModel
 def _is_pplx_decider_checkpoint(dir_model: Path) -> bool:
     if not all((dir_model / name).is_file() for name in ("decision_config.json", "readout.safetensors", "config.json")):
         return False
+    with open(dir_model / "config.json", encoding="utf-8") as f:
+        config = json.load(f)
     with open(dir_model / "decision_config.json", encoding="utf-8") as f:
-        # the same layout with a format_id is a vllm-d3 checkpoint
-        return "format_id" not in json.load(f)
+        decision = json.load(f)
+    # pplx-decider is a Qwen3.5 backbone, and a format_id means vllm-d3
+    return config.get("model_type") in ("qwen3_5", "qwen3_5_text") and "format_id" not in decision
 
 
 @ModelBase.register_hparams_loader(_is_pplx_decider_checkpoint)

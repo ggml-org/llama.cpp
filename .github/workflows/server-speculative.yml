@@ -7,6 +7,40 @@ on:
         description: 'Commit SHA1 to build'
         required: false
         type: string
+      spec_methods:
+        description: 'Speculative methods to test'
+        required: true
+        default: 'compact'
+        type: choice
+        options:
+          - compact
+          - nightly
+          - all
+  push:
+    branches:
+      - master
+    paths: [
+      '.github/workflows/server-speculative.yml',
+      'common/speculative.*',
+      'src/models/dflash*.cpp',
+      'src/models/dspark.cpp',
+      'src/models/eagle3.cpp',
+      'src/models/lilicorr.cpp',
+      'src/models/qwen35.cpp',
+      'tools/server/tests/unit/test_spec_methods.py'
+    ]
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/server-speculative.yml',
+      'common/speculative.*',
+      'src/models/dflash*.cpp',
+      'src/models/dspark.cpp',
+      'src/models/eagle3.cpp',
+      'src/models/lilicorr.cpp',
+      'src/models/qwen35.cpp',
+      'tools/server/tests/unit/test_spec_methods.py'
+    ]
 
 cache-mode: none
 permissions:
@@ -56,8 +90,9 @@ jobs:
 
       - name: Test speculative decoding
         env:
-          SPEC_METHODS: compact
-          SPEC_MODEL_DIR: ${{ vars.SPEC_METHOD_MODEL_DIR || format('{0}/spec-models', runner.temp) }}
+          SPEC_METHODS: ${{ github.event.inputs.spec_methods || 'compact' }}
+          # pull requests from forks do not get repository variables
+          SPEC_MODEL_DIR: ${{ vars.SPEC_METHOD_MODEL_DIR || '/mnt/cache/spec-models' }}
           N_GPU_LAYERS: 99
         run: |
           cd tools/server/tests

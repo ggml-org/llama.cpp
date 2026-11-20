@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <utility>
@@ -11,9 +13,10 @@
 // it is NOT a regex engine: the semantics are defined by llama.cpp (see docs/tts-norm-patterns.md), so that this
 // implementation and the python reference (scripts/chat_tts_norm.py) give the same result for every input
 //
-// two functions are exposed to task templates (e.g. "tts") via common_chat_tts_norm_add_builtins():
+// functions exposed to task templates (e.g. "tts") via common_chat_tts_norm_add_builtins():
 //   tts_norm_scan(text, rules)        -> list of segments {rule, text, groups}
 //   tts_norm_sub(text, pattern, repl) -> string
+//   tts_dict(name, key)               -> value of key in a dictionary of the model, or none
 
 namespace jinja {
 struct context;
@@ -57,6 +60,22 @@ std::vector<common_tts_norm_segment> common_tts_norm_scan(const std::string & te
 // repl references: %0 (whole match), %1..%9 (groups), %% (literal percent)
 std::string common_tts_norm_sub(const std::string & text, const common_tts_norm_pattern & pattern, const std::string & repl);
 
-// add tts_norm_scan() and tts_norm_sub() to the context of a task template
+// a dictionary of the model, e.g. a pronunciation lexicon
+struct common_tts_dict {
+    std::vector<std::string> keys;   // sorted by their bytes
+    std::vector<std::string> values; // the JSON document of each key
+};
+
+using common_tts_dicts = std::map<std::string, common_tts_dict>;
+
+// binary search of key in a dictionary; on success, value is set to the JSON document
+bool common_tts_dict_find(const common_tts_dict & dict, const std::string & key, std::string & value);
+
+// pronunciation of a word by a letter-to-sound model, as phonemes separated by spaces (e.g. CMUdict notation)
+// empty when there is none; the notation is the one of the model, its "tts" template knows it
+using common_tts_g2p = std::function<std::string(const std::string & word)>;
+
+// add tts_norm_scan(), tts_norm_sub(), tts_dict() and tts_g2p() to the context of a task template
 // they are not jinja global builtins on purpose: chat templates are not affected
-void common_chat_tts_norm_add_builtins(jinja::context & ctx);
+void common_chat_tts_norm_add_builtins(jinja::context & ctx, std::shared_ptr<const common_tts_dicts> dicts = nullptr,
+                                       common_tts_g2p g2p = nullptr);

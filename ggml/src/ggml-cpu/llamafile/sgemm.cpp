@@ -1309,14 +1309,12 @@ class tinyBLAS_RVV {
 // QUANT ZERO MATRIX MULTIPLICATION
 
 #if defined(__VXE__) || defined(__VXE2__)
-template <typename TA>
+template <typename TA, typename TB>
 class tinyBLAS_Q0_VXE {
-    static_assert(sizeof(TA::qs) == QK8_0, "VXE weight loads require 32 quantized bytes per block");
-
   public:
     tinyBLAS_Q0_VXE(int64_t k,
                     const TA * A, int64_t lda,
-                    const block_q8_0 * B, int64_t ldb,
+                    const TB * B, int64_t ldb,
                     float * C, int64_t ldc,
                     int32_t ith, int32_t nth)
         : A(A), B(B), C(C), k(k), lda(lda), ldb(ldb), ldc(ldc), ith(ith), nth(nth) {
@@ -1333,44 +1331,54 @@ class tinyBLAS_Q0_VXE {
         for (int64_t job = start; job < end; ++job) {
             const int64_t ii = tile_size * (job % row_tiles);
             const int64_t jj = tile_size * (job / row_tiles);
+
+            float sum_min[tile_size][tile_size] = {};
             float32x4_t v_sum[tile_size][tile_size] = {};
 
             for (int64_t l = 0; l < k; ++l) {
-                int8x16_t v_xl[tile_size], v_xh[tile_size], v_yl[tile_size], v_yh[tile_size];
+                int8x16_t v_xl[tile_size], v_xh[tile_size];
+                int8x16_t v_yl[tile_size], v_yh[tile_size];
+
                 float x_scale[tile_size], y_scale[tile_size];
+                float x_min[tile_size], y_sum[tile_size];
 
                 for (int32_t i = 0; i < tile_size; ++i) {
                     const TA & x = A[lda * (ii + i) + l];
-                    const block_q8_0 & y = B[ldb * (jj + i) + l];
+                    const TB & y = B[ldb * (jj + i) + l];
 
-                    const int8_t * x_qs = x.qs;
-                    const int8_t * y_qs = y.qs;
-                    v_xl[i] = vec_xl(0, x_qs);
-                    v_xh[i] = vec_xl(0, x_qs + QK8_0 / 2);
-                    v_yl[i] = vec_xl(0, y_qs);
-                    v_yh[i] = vec_xl(0, y_qs + QK8_0 / 2);
+                    load(x, v_xl[i], v_xh[i]);
+                    load(y, v_yl[i], v_yh[i]);
+
                     x_scale[i] = unhalf(x.d);
                     y_scale[i] = unhalf(y.d);
+                    x_min[i] = min(x);
+                    y_sum[i] = sum(y);
                 }
 
                 for (int32_t j = 0; j < tile_size; ++j) {
                     for (int32_t i = 0; i < tile_size; ++i) {
-                        const int32x4_t v_dot = dot_s8_wide(v_xl[i], v_yl[j]) + dot_s8_wide(v_xh[i], v_yh[j]);
+                        const int32x4_t v_dot = dot(v_xl[i], v_xh[i], v_yl[j], v_yh[j]);
                         const float32x4_t v_scale = vec_splats(x_scale[i] * y_scale[j]);
                         v_sum[j][i] = vec_madd(vec_float(v_dot), v_scale, v_sum[j][i]);
+                        if (has_min) {
+                            sum_min[j][i] += x_min[i] * y_sum[j];
+                        }
                     }
                 }
             }
 
             for (int32_t j = 0; j < tile_size; ++j) {
                 for (int32_t i = 0; i < tile_size; ++i) {
-                    C[ldc * (jj + j) + ii + i] = hsum(v_sum[j][i]);
+                    C[ldc * (jj + j) + ii + i] = hsum(v_sum[j][i]) + sum_min[j][i];
                 }
             }
         }
     }
 
   private:
+    // Q4_1 and Q5_1 weights have a block minimum, it pairs with the Q8_1 block sum.
+    static constexpr bool has_min = std::is_same<TB, block_q8_1>::value;
+
     static int32x4_t dot_s8_wide(int8x16_t v_x, int8x16_t v_y) {
         const int16x8_t v_even = vec_mule(v_x, v_y);
         const int16x8_t v_odd  = vec_mulo(v_x, v_y);
@@ -1378,8 +1386,362 @@ class tinyBLAS_Q0_VXE {
         return vec_unpackh(v_even) + vec_unpackl(v_even) + vec_unpackh(v_odd) + vec_unpackl(v_odd);
     }
 
+    static int32x4_t dot(int8x16_t v_xl, int8x16_t v_xh, int8x16_t v_yl, int8x16_t v_yh) {
+        // block_q8_0 path
+        if (std::is_same<TA, block_q8_0>::value) {
+            return dot_s8_wide(v_xl, v_yl) + dot_s8_wide(v_xh, v_yh);
+        }
+
+        // block_q8_1 path
+        const int16x8_t v_one = vec_splats((int16_t)1);
+        const int16x8_t v_xy = vec_meadd(v_xl, v_yl, vec_moadd(v_xl, v_yl, vec_meadd(v_xh, v_yh, vec_mulo(v_xh, v_yh))));
+        return vec_meadd(v_xy, v_one, vec_mulo(v_xy, v_one));
+    }
+
+    static void load(const block_q4_0 & x, int8x16_t & v_xl, int8x16_t & v_xh) {
+        const uint8_t * x_qs = x.qs;
+        const uint8x16_t v_x = vec_xl(0, x_qs);
+        v_xl = (int8x16_t)vec_and(v_x, vec_splats((uint8_t)0x0F)) - vec_splats((int8_t)8);
+        v_xh = (int8x16_t)vec_sr(v_x, 4) - vec_splats((int8_t)8);
+    }
+
+    static void load(const block_q4_1 & x, int8x16_t & v_xl, int8x16_t & v_xh) {
+        const uint8_t * x_qs = x.qs;
+        const uint8x16_t v_x = vec_xl(0, x_qs);
+        v_xl = (int8x16_t)vec_and(v_x, vec_splats((uint8_t)0x0F));
+        v_xh = (int8x16_t)vec_sr(v_x, 4);
+    }
+
+    static void load(const block_q5_0 & x, int8x16_t & v_xl, int8x16_t & v_xh) {
+        const uint8_t * x_qs = x.qs;
+        const uint8x16_t v_x = vec_xl(0, x_qs);
+        uint8x16_t v_qhl, v_qhh;
+        load_qh(x.qh, v_qhl, v_qhh);
+        v_xl = (int8x16_t)vec_or(vec_and(v_x, vec_splats((uint8_t)0x0F)), v_qhl) - vec_splats((int8_t)16);
+        v_xh = (int8x16_t)vec_or(vec_sr(v_x, 4), v_qhh) - vec_splats((int8_t)16);
+    }
+
+    static void load(const block_q5_1 & x, int8x16_t & v_xl, int8x16_t & v_xh) {
+        const uint8_t * x_qs = x.qs;
+        const uint8x16_t v_x = vec_xl(0, x_qs);
+        uint8x16_t v_qhl, v_qhh;
+        load_qh(x.qh, v_qhl, v_qhh);
+        v_xl = (int8x16_t)vec_or(vec_and(v_x, vec_splats((uint8_t)0x0F)), v_qhl);
+        v_xh = (int8x16_t)vec_or(vec_sr(v_x, 4), v_qhh);
+    }
+
+    static void load(const block_q8_0 & x, int8x16_t & v_xl, int8x16_t & v_xh) {
+        const int8_t * x_qs = x.qs;
+        v_xl = vec_xl(0, x_qs);
+        v_xh = vec_xl(0, x_qs + QK8_0 / 2);
+    }
+
+    static void load(const block_q8_1 & x, int8x16_t & v_xl, int8x16_t & v_xh) {
+        const int8_t * x_qs = x.qs;
+        v_xl = vec_xl(0, x_qs);
+        v_xh = vec_xl(0, x_qs + QK8_1 / 2);
+    }
+
+    // expand the 32 high bits to one byte each, with value 0 or 16
+    static void load_qh(const uint8_t * qh, uint8x16_t & v_qhl, uint8x16_t & v_qhh) {
+        // qh is a native 32-bit value, on big-endian its lowest bits are in byte 3
+        const uint8x16_t v_bytel = { 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2 };
+        const uint8x16_t v_byteh = { 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0 };
+        const uint8x16_t v_bit   = { 1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128 };
+
+        uint32_t tmp;
+        memcpy(&tmp, qh, sizeof(tmp));
+        const uint8x16_t v_qh = (uint8x16_t)vec_splats(tmp);
+
+        v_qhl = (uint8x16_t)vec_cmpeq(vec_and(vec_perm(v_qh, v_qh, v_bytel), v_bit), v_bit) & vec_splats((uint8_t)16);
+        v_qhh = (uint8x16_t)vec_cmpeq(vec_and(vec_perm(v_qh, v_qh, v_byteh), v_bit), v_bit) & vec_splats((uint8_t)16);
+    }
+
+    static float min(const block_q4_1 & x) { return unhalf(x.m); }
+    static float min(const block_q5_1 & x) { return unhalf(x.m); }
+    template <typename T> static float min(const T &) { return 0.0f; }
+
+    static float sum(const block_q8_0 &  ) { return 0.0f;        }
+    static float sum(const block_q8_1 & y) { return unhalf(y.s); }
+
     const TA * const A;
-    const block_q8_0 * const B;
+    const TB * const B;
+    float * const C;
+    const int64_t k;
+    const int64_t lda;
+    const int64_t ldb;
+    const int64_t ldc;
+    const int32_t ith;
+    const int32_t nth;
+};
+
+template <typename TA>
+class tinyBLAS_QK_VXE {
+  public:
+    tinyBLAS_QK_VXE(int64_t k,
+                    const TA * A, int64_t lda,
+                    const block_q8_K * B, int64_t ldb,
+                    float * C, int64_t ldc,
+                    int32_t ith, int32_t nth)
+        : A(A), B(B), C(C), k(k), lda(lda), ldb(ldb), ldc(ldc), ith(ith), nth(nth) {
+    }
+
+    void matmul(int64_t m, int64_t n) {
+        const int64_t n4 = n / 4 * 4;
+        const int64_t n2 = n / 2 * 2;
+        gemm<4>(m, 0, n4);
+        gemm<2>(m, n4, n2);
+        gemm<1>(m, n2, n);
+    }
+
+  private:
+    // one block of A is loaded once and used for RN columns of B
+    template <int32_t RN>
+    void gemm(int64_t m, int64_t n0, int64_t n) {
+        const int64_t tiles = m * ((n - n0) / RN);
+        const int64_t duty  = (tiles + nth - 1) / nth;
+        const int64_t start = duty * ith;
+        const int64_t end   = MIN(start + duty, tiles);
+
+        for (int64_t job = start; job < end; ++job) {
+            const int64_t ii = job % m;
+            const int64_t jj = n0 + RN * (job / m);
+            float32x4_t v_sum[RN] = {};
+
+            for (int64_t l = 0; l < k; ++l) {
+                const TA & x = A[lda * ii + l];
+
+                int8x16_t v_x[n_group];
+                load(x, v_x);
+
+                // scale and minimum of the 16 groups, 8 groups per vector
+                int16x8_t v_scalel, v_scaleh;
+                int16x8_t v_minl, v_minh;
+                load_scale(x, v_scalel, v_scaleh, v_minl, v_minh);
+
+                int16x8_t v_scale[n_group];
+                for (int32_t g = 0; g < n_group; ++g) {
+                    v_scale[g] = vec_splats((g < n_group / 2 ? v_scalel : v_scaleh)[g % (n_group / 2)]);
+                }
+
+                const int8_t * y_qs[RN];
+                for (int32_t j = 0; j < RN; ++j) {
+                    y_qs[j] = B[ldb * (jj + j) + l].qs;
+                }
+
+                // the columns are in the inner loop, so that their sums do not wait for each other
+                int32x4_t v_dot[RN] = {};
+                for (int32_t g = 0; g < n_group; ++g) {
+                    for (int32_t j = 0; j < RN; ++j) {
+                        const int8x16_t v_y = vec_xl(0, y_qs[j] + 16 * g);
+                        const int16x8_t v_xy = vec_meadd(v_x[g], v_y, vec_mulo(v_x[g], v_y));
+                        v_dot[j] = vec_meadd(v_xy, v_scale[g], vec_moadd(v_xy, v_scale[g], v_dot[j]));
+                    }
+                }
+
+                const float x_d = unhalf(x.d);
+                for (int32_t j = 0; j < RN; ++j) {
+                    const block_q8_K & y = B[ldb * (jj + j) + l];
+                    v_sum[j] = vec_madd(vec_float(v_dot[j]), vec_splats(x_d * y.d), v_sum[j]);
+                }
+
+                if (has_min) {
+                    const float x_dmin = dmin(x);
+
+                    for (int32_t j = 0; j < RN; ++j) {
+                        const block_q8_K & y = B[ldb * (jj + j) + l];
+
+                        const int16_t * y_bsums = y.bsums;
+                        const int16x8_t v_bsumsl = vec_xl(0, y_bsums);
+                        const int16x8_t v_bsumsh = vec_xl(0, y_bsums + n_group / 2);
+
+                        const int32x4_t v_minsl = vec_meadd(v_bsumsl, v_minl, vec_mulo(v_bsumsl, v_minl));
+                        const int32x4_t v_minsh = vec_meadd(v_bsumsh, v_minh, vec_mulo(v_bsumsh, v_minh));
+                        v_sum[j] = vec_madd(vec_float(v_minsl + v_minsh), vec_splats(-x_dmin * y.d), v_sum[j]);
+                    }
+                }
+            }
+
+            for (int32_t j = 0; j < RN; ++j) {
+                C[ldc * (jj + j) + ii] = hsum(v_sum[j]);
+            }
+        }
+    }
+
+    // a block has 16 groups of 16 weights, Q4_K and Q5_K share one scale and minimum per 2 groups
+    static constexpr int32_t n_group = QK_K / 16;
+
+    // Q3_K and Q6_K have no minimum, their weights are loaded as signed values.
+    static constexpr bool has_min = !std::is_same<TA, block_q3_K>::value && !std::is_same<TA, block_q6_K>::value;
+
+    static float dmin(const block_q2_K & x) { return unhalf(x.dmin); }
+    static float dmin(const block_q4_K & x) { return unhalf(x.dmin); }
+    static float dmin(const block_q5_K & x) { return unhalf(x.dmin); }
+    template <typename T> static float dmin(const T &) { return 0.0f; }
+
+    static void load(const block_q2_K & x, int8x16_t * v_x) {
+        const uint8x16_t v_mask = vec_splats((uint8_t)0x03);
+        const uint8_t * x_qs = x.qs;
+
+        for (int32_t g = 0; g < n_group; ++g) {
+            const int32_t qs_offset = 16 * (2 * (g / 8) + g % 2);
+            const int32_t qs_shift  = 2 * (g % 8 / 2);
+
+            const uint8x16_t v_qs = vec_xl(0, x_qs + qs_offset);
+            v_x[g] = (int8x16_t)vec_and(vec_sr(v_qs, qs_shift), v_mask);
+        }
+    }
+
+    static void load(const block_q3_K & x, int8x16_t * v_x) {
+        const uint8x16_t v_mask = vec_splats((uint8_t)0x03);
+        const uint8x16_t v_one = vec_splats((uint8_t)0x01);
+
+        const uint8_t * x_qs = x.qs;
+        const uint8_t * x_hmask = x.hmask;
+
+        for (int32_t g = 0; g < n_group; ++g) {
+            const int32_t qs_offset    = 16 * (2 * (g / 8) + g % 2);
+            const int32_t qs_shift     = 2 * (g % 8 / 2);
+            const int32_t hmask_offset = 16 * (g % 2);
+            const int32_t hmask_shift  = g / 2;
+
+            const uint8x16_t v_qs = vec_xl(0, x_qs + qs_offset);
+            const uint8x16_t v_hmask = vec_xl(0, x_hmask + hmask_offset);
+            const uint8x16_t v_lo = vec_and(vec_sr(v_qs, qs_shift), v_mask);
+            const uint8x16_t v_hi = vec_sl(vec_and(vec_sr(v_hmask, hmask_shift), v_one), 2);
+            v_x[g] = (int8x16_t)vec_or(v_lo, v_hi) - vec_splats((int8_t)4);
+        }
+    }
+
+    static void load(const block_q4_K & x, int8x16_t * v_x) {
+        const uint8x16_t v_mask = vec_splats((uint8_t)0x0F);
+        const uint8_t * x_qs = x.qs;
+
+        for (int32_t g = 0; g < n_group; ++g) {
+            const int32_t qs_offset = 16 * (2 * (g / 4) + g % 2);
+            const bool    qs_low    = g % 4 < 2;
+
+            const uint8x16_t v_qs = vec_xl(0, x_qs + qs_offset);
+            v_x[g] = (int8x16_t)(qs_low ? vec_and(v_qs, v_mask) : vec_sr(v_qs, 4));
+        }
+    }
+
+    static void load(const block_q5_K & x, int8x16_t * v_x) {
+        const uint8x16_t v_mask = vec_splats((uint8_t)0x0F);
+        const uint8x16_t v_one = vec_splats((uint8_t)0x01);
+        const uint8_t * x_qs = x.qs;
+        const uint8_t * x_qh = x.qh;
+
+        for (int32_t g = 0; g < n_group; ++g) {
+            const int32_t qs_offset = 16 * (2 * (g / 4) + g % 2);
+            const bool    qs_low    = g % 4 < 2;
+            const int32_t qh_offset = 16 * (g % 2);
+            const int32_t qh_shift  = g / 2;
+
+            const uint8x16_t v_qs = vec_xl(0, x_qs + qs_offset);
+            const uint8x16_t v_qh = vec_xl(0, x_qh + qh_offset);
+            const uint8x16_t v_lo = qs_low ? vec_and(v_qs, v_mask) : vec_sr(v_qs, 4);
+            const uint8x16_t v_hi = vec_sl(vec_and(vec_sr(v_qh, qh_shift), v_one), 4);
+            v_x[g] = (int8x16_t)vec_or(v_lo, v_hi);
+        }
+    }
+
+    static void load(const block_q6_K & x, int8x16_t * v_x) {
+        const uint8x16_t v_mask4 = vec_splats((uint8_t)0x0F);
+        const uint8x16_t v_mask2 = vec_splats((uint8_t)0x03);
+        const uint8_t * x_ql = x.ql;
+        const uint8_t * x_qh = x.qh;
+
+        for (int32_t g = 0; g < n_group; ++g) {
+            const int32_t ql_offset = 16 * (4 * (g / 8) + 2 * (g % 4 / 2) + g % 2);
+            const bool    ql_low    = g % 8 < 4;
+            const int32_t qh_offset = 16 * (2 * (g / 8) + g % 2);
+            const int32_t qh_shift  = 2 * (g % 8 / 2);
+
+            const uint8x16_t v_ql = vec_xl(0, x_ql + ql_offset);
+            const uint8x16_t v_qh = vec_xl(0, x_qh + qh_offset);
+            const uint8x16_t v_lo = ql_low ? vec_and(v_ql, v_mask4) : vec_sr(v_ql, 4);
+            const uint8x16_t v_hi = vec_sl(vec_and(vec_sr(v_qh, qh_shift), v_mask2), 4);
+            v_x[g] = (int8x16_t)vec_or(v_lo, v_hi) - vec_splats((int8_t)32);
+        }
+    }
+
+    static void load_scale(const block_q2_K & x, int16x8_t & v_scalel, int16x8_t & v_scaleh, int16x8_t & v_minl, int16x8_t & v_minh) {
+        const uint8_t * x_scales = x.scales;
+        const uint8x16_t v_s = vec_xl(0, x_scales);
+        const uint8x16_t v_scale = vec_and(v_s, vec_splats((uint8_t)0x0F));
+        const uint8x16_t v_min = vec_sr(v_s, 4);
+
+        v_scalel = (int16x8_t)vec_unpackh(v_scale);
+        v_scaleh = (int16x8_t)vec_unpackl(v_scale);
+        v_minl = (int16x8_t)vec_unpackh(v_min);
+        v_minh = (int16x8_t)vec_unpackl(v_min);
+    }
+
+    static void load_scale(const block_q3_K & x, int16x8_t & v_scalel, int16x8_t & v_scaleh, int16x8_t & v_minl, int16x8_t & v_minh) {
+        // 6-bit scales: low 4 bits in scales[0..7], high 2 bits in scales[8..11]
+        const uint8x16_t v_lo_byte  = { 4, 5, 6, 7, 8, 9, 10, 11, 4, 5, 6, 7, 8, 9, 10, 11 };
+        const uint8x16_t v_lo_shift = { 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 4, 4, 4, 4, 4, 4 };
+        const uint8x16_t v_hi_byte  = { 12, 13, 14, 15, 12, 13, 14, 15, 12, 13, 14, 15, 12, 13, 14, 15 };
+        const uint8x16_t v_hi_shift = { 0, 0, 0, 0, 2, 2, 2, 2, 4, 4, 4, 4, 6, 6, 6, 6 };
+
+        // the load starts 4 bytes before scales, so that it stays inside the block
+        const uint8_t * x_qs = x.qs;
+        const uint8x16_t v_s = vec_xl(0, x_qs + sizeof(x.qs) - 4);
+        const uint8x16_t v_lo = vec_and(vec_sr(vec_perm(v_s, v_s, v_lo_byte), v_lo_shift), vec_splats((uint8_t)0x0F));
+        const uint8x16_t v_hi = vec_sl(vec_and(vec_sr(vec_perm(v_s, v_s, v_hi_byte), v_hi_shift), vec_splats((uint8_t)0x03)), 4);
+        const int8x16_t v_scale = (int8x16_t)vec_or(v_lo, v_hi) - vec_splats((int8_t)32);
+
+        v_scalel = vec_unpackh(v_scale);
+        v_scaleh = vec_unpackl(v_scale);
+        v_minl = vec_splats((int16_t)0);
+        v_minh = vec_splats((int16_t)0);
+    }
+
+    static void load_scale(const block_q4_K & x, int16x8_t & v_scalel, int16x8_t & v_scaleh, int16x8_t & v_minl, int16x8_t & v_minh) {
+        load_scale_min_k4(x.scales, v_scalel, v_scaleh, v_minl, v_minh);
+    }
+
+    static void load_scale(const block_q5_K & x, int16x8_t & v_scalel, int16x8_t & v_scaleh, int16x8_t & v_minl, int16x8_t & v_minh) {
+        load_scale_min_k4(x.scales, v_scalel, v_scaleh, v_minl, v_minh);
+    }
+
+    static void load_scale(const block_q6_K & x, int16x8_t & v_scalel, int16x8_t & v_scaleh, int16x8_t & v_minl, int16x8_t & v_minh) {
+        const int8_t * x_scales = x.scales;
+        const int8x16_t v_scale = vec_xl(0, x_scales);
+
+        v_scalel = vec_unpackh(v_scale);
+        v_scaleh = vec_unpackl(v_scale);
+        v_minl = vec_splats((int16_t)0);
+        v_minh = vec_splats((int16_t)0);
+    }
+
+    // 8 scales and 8 minimums of 6 bits, same packing as get_scale_min_k4 in ggml-quants.c
+    static void load_scale_min_k4(const uint8_t * q, int16x8_t & v_scalel, int16x8_t & v_scaleh, int16x8_t & v_minl, int16x8_t & v_minh) {
+        // bytes 0..3 and 4..7 have the high 2 bits of scale 4..7 and minimum 4..7, move them to bytes 8..11
+        const uint8x16_t v_hi_scale = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 0, 0, 0, 0 };
+        const uint8x16_t v_hi_min   = { 0, 0, 0, 0, 0, 0, 0, 0, 4, 5, 6, 7, 0, 0, 0, 0 };
+        // each scale and minimum is for 2 groups
+        const uint8x16_t v_group_scale = { 0, 0, 1, 1, 2, 2, 3, 3, 24, 24, 25, 25, 26, 26, 27, 27 };
+        const uint8x16_t v_group_min   = { 4, 4, 5, 5, 6, 6, 7, 7, 24, 24, 25, 25, 26, 26, 27, 27 };
+
+        // the 4 bytes after the 12 scale bytes are in the same block
+        const uint8x16_t v_s = vec_xl(0, q);
+        const uint8x16_t v_lo = vec_and(v_s, vec_splats((uint8_t)0x3F));
+        const uint8x16_t v_hi = vec_sl(vec_sr(v_s, 6), 4);
+        const uint8x16_t v_scale_47 = vec_or(vec_and(v_s, vec_splats((uint8_t)0x0F)), vec_perm(v_hi, v_hi, v_hi_scale));
+        const uint8x16_t v_min_47   = vec_or(vec_sr(v_s, 4), vec_perm(v_hi, v_hi, v_hi_min));
+        const uint8x16_t v_scale = vec_perm(v_lo, v_scale_47, v_group_scale);
+        const uint8x16_t v_min   = vec_perm(v_lo, v_min_47, v_group_min);
+
+        v_scalel = (int16x8_t)vec_unpackh(v_scale);
+        v_scaleh = (int16x8_t)vec_unpackl(v_scale);
+        v_minl = (int16x8_t)vec_unpackh(v_min);
+        v_minh = (int16x8_t)vec_unpackl(v_min);
+    }
+
+    const TA * const A;
+    const block_q8_K * const B;
     float * const C;
     const int64_t k;
     const int64_t lda;
@@ -4262,7 +4624,7 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
         if (m % 2 || n % 2) {
             return false;
         }
-        tinyBLAS_Q0_VXE<block_q8_0> tb{
+        tinyBLAS_Q0_VXE<block_q8_0, block_q8_0> tb{
             k, (const block_q8_0 *)A, lda,
             (const block_q8_0 *)B, ldb,
             (float *)C, ldc,
@@ -4306,6 +4668,17 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
             params->ith, params->nth};
         tb.matmul(m, n);
         return true;
+#elif defined(__VXE__) || defined(__VXE2__)
+        if (m % 2 || n % 2) {
+            return false;
+        }
+        tinyBLAS_Q0_VXE<block_q4_0, block_q8_0> tb{
+            k, (const block_q4_0 *)A, lda,
+            (const block_q8_0 *)B, ldb,
+            (float *)C, ldc,
+            params->ith, params->nth};
+        tb.matmul(m, n);
+        return true;
 #elif defined(__MMA__)
     //TO-DO: Remove this condition once gemv forwarding is enabled.
         if (n < 8 && n != 4)
@@ -4331,6 +4704,142 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
         tinyBLAS_Q0_AVX<block_q5_0, block_q8_0, float> tb{
             k, (const block_q5_0 *)A, lda,
             (const block_q8_0 *)B, ldb,
+            (float *)C, ldc,
+            params->ith, params->nth};
+        tb.matmul(m, n);
+        return true;
+#elif defined(__VXE__) || defined(__VXE2__)
+        if (m % 2 || n % 2) {
+            return false;
+        }
+        tinyBLAS_Q0_VXE<block_q5_0, block_q8_0> tb{
+            k, (const block_q5_0 *)A, lda,
+            (const block_q8_0 *)B, ldb,
+            (float *)C, ldc,
+            params->ith, params->nth};
+        tb.matmul(m, n);
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    case GGML_TYPE_Q4_1: {
+        if (Btype != GGML_TYPE_Q8_1) {
+            return false;
+        }
+#if defined(__VXE__) || defined(__VXE2__)
+        if (m % 2 || n % 2) {
+            return false;
+        }
+        tinyBLAS_Q0_VXE<block_q4_1, block_q8_1> tb{
+            k, (const block_q4_1 *)A, lda,
+            (const block_q8_1 *)B, ldb,
+            (float *)C, ldc,
+            params->ith, params->nth};
+        tb.matmul(m, n);
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    case GGML_TYPE_Q5_1: {
+        if (Btype != GGML_TYPE_Q8_1) {
+            return false;
+        }
+#if defined(__VXE__) || defined(__VXE2__)
+        if (m % 2 || n % 2) {
+            return false;
+        }
+        tinyBLAS_Q0_VXE<block_q5_1, block_q8_1> tb{
+            k, (const block_q5_1 *)A, lda,
+            (const block_q8_1 *)B, ldb,
+            (float *)C, ldc,
+            params->ith, params->nth};
+        tb.matmul(m, n);
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    case GGML_TYPE_Q2_K: {
+        if (Btype != GGML_TYPE_Q8_K) {
+            return false;
+        }
+#if defined(__VXE__) || defined(__VXE2__)
+        tinyBLAS_QK_VXE<block_q2_K> tb{
+            k, (const block_q2_K *)A, lda,
+            (const block_q8_K *)B, ldb,
+            (float *)C, ldc,
+            params->ith, params->nth};
+        tb.matmul(m, n);
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    case GGML_TYPE_Q3_K: {
+        if (Btype != GGML_TYPE_Q8_K) {
+            return false;
+        }
+#if defined(__VXE__) || defined(__VXE2__)
+        tinyBLAS_QK_VXE<block_q3_K> tb{
+            k, (const block_q3_K *)A, lda,
+            (const block_q8_K *)B, ldb,
+            (float *)C, ldc,
+            params->ith, params->nth};
+        tb.matmul(m, n);
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    case GGML_TYPE_Q4_K: {
+        if (Btype != GGML_TYPE_Q8_K) {
+            return false;
+        }
+#if defined(__VXE__) || defined(__VXE2__)
+        tinyBLAS_QK_VXE<block_q4_K> tb{
+            k, (const block_q4_K *)A, lda,
+            (const block_q8_K *)B, ldb,
+            (float *)C, ldc,
+            params->ith, params->nth};
+        tb.matmul(m, n);
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    case GGML_TYPE_Q5_K: {
+        if (Btype != GGML_TYPE_Q8_K) {
+            return false;
+        }
+#if defined(__VXE__) || defined(__VXE2__)
+        tinyBLAS_QK_VXE<block_q5_K> tb{
+            k, (const block_q5_K *)A, lda,
+            (const block_q8_K *)B, ldb,
+            (float *)C, ldc,
+            params->ith, params->nth};
+        tb.matmul(m, n);
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    case GGML_TYPE_Q6_K: {
+        if (Btype != GGML_TYPE_Q8_K) {
+            return false;
+        }
+#if defined(__VXE__) || defined(__VXE2__)
+        tinyBLAS_QK_VXE<block_q6_K> tb{
+            k, (const block_q6_K *)A, lda,
+            (const block_q8_K *)B, ldb,
             (float *)C, ldc,
             params->ith, params->nth};
         tb.matmul(m, n);
