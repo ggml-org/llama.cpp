@@ -103,7 +103,7 @@ def _load_inkling2_hparams(dir_model: Path):
         return json.load(f)
 
 
-@ModelBase.register("Inkling2ForConditionalGeneration", "Inkling2ForCausalLM", "Inkling2LoopForConditionalGeneration")
+@ModelBase.register("Inkling2ForConditionalGeneration", "Inkling2ForCausalLM")
 @ModelBase.example("thinkingmachines/Inkling-2-Small")
 class Inkling2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.INKLING2
@@ -372,7 +372,7 @@ class Inkling2Model(TextModel):
             yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Inkling2ForConditionalGeneration", "Inkling2LoopForConditionalGeneration")
+@ModelBase.register("Inkling2ForConditionalGeneration")
 class Inkling2VisionModel(MmprojModel):
     def get_vision_config(self):
         config = self.global_config.get("vision_config")
@@ -427,3 +427,8 @@ class Inkling2VisionModel(MmprojModel):
         if name.endswith(("position_embedding", ".lambda_1", ".lambda_2", ".gamma")):
             name = name.removesuffix(".gamma") + ".weight"
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+# the looped variant shares the text and vision converters
+ModelBase.register("Inkling2LoopForConditionalGeneration")(Inkling2Model)
+ModelBase.register("Inkling2LoopForConditionalGeneration")(Inkling2VisionModel)
