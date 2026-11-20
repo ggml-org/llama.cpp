@@ -1585,6 +1585,7 @@ class ModelBase:
                     break
 
             for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):
+                bid = next((int(part) for part in new_name.split(".") if part.isdecimal()), None)
                 if (self.ple_only or self.no_ple) and not self._include_ple_tensor(new_name):
                     continue
                 n_dims = len(data_torch.shape)

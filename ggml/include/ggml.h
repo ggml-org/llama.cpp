@@ -2459,7 +2459,6 @@ extern "C" {
     //                         + base[2*hc + dst + hc*src]
     // Softmax over dst, add eps, normalize over src, then repeat normalization
     // over dst followed by src for iterations 1 through n_iter - 1.
-    // Supports hc = 4, or hc = 2 with eps = 0 using stable log-domain normalization.
     GGML_API struct ggml_tensor * ggml_dsv4_hc_comb(
             struct ggml_context * ctx,
             struct ggml_tensor  * mixes,

@@ -261,15 +261,11 @@ class Keys:
         END   = "{arch}.loop.end"
         COUNT = "{arch}.loop.count"
 
-    class MHC:
-        START          = "{arch}.mhc.start"
-        END            = "{arch}.mhc.end"
-        STREAMS        = "{arch}.mhc.streams"
-        ITERATIONS     = "{arch}.mhc.iterations"
-        PRE_SCALE      = "{arch}.mhc.pre_scale"
-        FIXED_IDENTITY = "{arch}.mhc.fixed_identity"
-
     class HyperConnection:
+        START                = "{arch}.hyper_connection.start"
+        END                  = "{arch}.hyper_connection.end"
+        PRE_SCALE            = "{arch}.hyper_connection.pre_scale"
+        FIXED_IDENTITY       = "{arch}.hyper_connection.fixed_identity"
         COUNT                = "{arch}.hyper_connection.count"
         SINKHORN_ITERATIONS  = "{arch}.hyper_connection.sinkhorn_iterations"
         EPSILON              = "{arch}.hyper_connection.epsilon"

@@ -11301,60 +11301,6 @@ void ggml_compute_forward_gated_delta_net(
 
 // ggml_compute_forward_dsv4_hc_comb
 
-static void ggml_dsv4_hc_comb_two(float * comb, int32_t n_iter) {
-    auto softplus = [](float x) { return x > 20.0f ? x : log1pf(expf(x)); };
-    const float d0 = comb[0] - comb[1];
-    const float d1 = comb[2] - comb[3];
-    if (fabsf(d0) > FLT_MAX/8 || fabsf(d1) > FLT_MAX/8) {
-        // Keep finite inputs valid when their differences exceed the F32 range.
-        double logs[] = {comb[0], comb[1], comb[2], comb[3]};
-        for (int32_t n = 0; n < n_iter; ++n) {
-            for (int axis = 0; axis < 2; ++axis) {
-                for (int row = 0; row < 2; ++row) {
-                    const int i = axis == 0 ? 2*row : row;
-                    const int j = i + (axis == 0 ? 1 : 2);
-                    const double diff = logs[i] - logs[j];
-                    const double norm = log1p(exp(-fabs(diff)));
-                    logs[i] = -std::max(-diff, 0.0) - norm;
-                    logs[j] = -std::max( diff, 0.0) - norm;
-                }
-            }
-        }
-        for (int i = 0; i < 4; ++i) {
-            comb[i] = exp(logs[i]);
-        }
-        return;
-    }
-    float a = softplus(-d1) - softplus(-d0);
-    float b = softplus(d1) - softplus(d0);
-    if (n_iter > 1) {
-        const float hi = std::max(a, 0.0f) + std::max(b, 0.0f);
-        const float lo = -(std::max(-a, 0.0f) + std::max(-b, 0.0f));
-        const float range = hi - lo;
-        const float log_two = logf(2.0f);
-        float power = -softplus(-range) + log_two;
-        float sum = 0.0f;
-        bool have_sum = false;
-        // Power the normalization map for the requested finite iteration count.
-        for (uint32_t n = n_iter - 1; n; n >>= 1) {
-            if (n & 1) {
-                sum = have_sum ? (sum + softplus(power - sum)) - softplus((sum + power) - range) : power;
-                have_sum = true;
-            }
-            if (n > 1) {
-                power = (power - softplus(2.0f*power - range)) + log_two;
-            }
-        }
-        const float shift = softplus(sum - hi) - softplus(sum + lo);
-        a += shift;
-        b += shift;
-    }
-    comb[0] = 1.0f / (1.0f + expf(-a));
-    comb[1] = 1.0f / (1.0f + expf(-b));
-    comb[2] = 1.0f / (1.0f + expf( a));
-    comb[3] = 1.0f / (1.0f + expf( b));
-}
-
 static void ggml_dsv4_hc_comb_norm_cols(float * comb, float eps) {
     constexpr int64_t hc = 4;
 
@@ -11399,9 +11345,9 @@ static void ggml_compute_forward_dsv4_hc_comb_f32(
     GGML_ASSERT(base->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
-    const int64_t hc = dst->ne[0];
-    const int64_t comb_offset = 2*hc;
-    const int64_t hc_mix_dim = (2 + hc)*hc;
+    constexpr int64_t hc = 4;
+    constexpr int64_t comb_offset = 2*hc;
+    constexpr int64_t hc_mix_dim = (2 + hc)*hc;
 
     const int64_t n_tokens = mixes->ne[1];
 
@@ -11420,7 +11366,6 @@ static void ggml_compute_forward_dsv4_hc_comb_f32(
     const float eps = ggml_get_op_params_f32(dst, 0);
     const int32_t n_iter = ggml_get_op_params_i32(dst, 1);
     GGML_ASSERT(n_iter > 0);
-    GGML_ASSERT(hc == 4 || (hc == 2 && eps == 0.0f));
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -11432,22 +11377,7 @@ static void ggml_compute_forward_dsv4_hc_comb_f32(
     const float scale_comb = *(const float *) ((const char *) scale->data + 2*nbs0);
 
     for (int64_t it = it0; it < it1; ++it) {
-        float comb[16];
-
-        if (hc == 2) {
-            for (int64_t i = 0; i < 4; ++i) {
-                const float xv = *(const float *) ((const char *) mixes->data + (comb_offset + i)*nbm0 + it*nbm1);
-                const float bv = *(const float *) ((const char *) base->data + (comb_offset + i)*nbb0);
-                comb[i] = xv * scale_comb + bv;
-            }
-            ggml_dsv4_hc_comb_two(comb, n_iter);
-            for (int64_t isrc = 0; isrc < hc; ++isrc) {
-                for (int64_t idst = 0; idst < hc; ++idst) {
-                    *(float *) ((char *) dst->data + idst*nbd0 + isrc*nbd1 + it*nbd2) = comb[idst + hc*isrc];
-                }
-            }
-            continue;
-        }
+        float comb[hc*hc];
 
         for (int64_t isrc = 0; isrc < hc; ++isrc) {
             float max = -INFINITY;
@@ -11563,7 +11493,7 @@ static void ggml_compute_forward_dsv4_hc_pre_f32(
             } else {
                 wv = *(const float *) ((const char *) weights->data + ih*nbw0 + it*nbw1);
             }
-            sum += hc == 2 ? fmaf(xv, wv, 0.0f) : xv * wv;
+            sum += xv * wv;
         }
 
         *(float *) ((char *) dst->data + i0*nbd0 + it*nbd1) = scale * sum;
@@ -11648,21 +11578,6 @@ static void ggml_compute_forward_dsv4_hc_post_f32(
 
         const float xv = *(const float *) ((const char *) x->data    + i0*nbx0 + it*nbx1);
         const float pv = *(const float *) ((const char *) post->data + idst*nbp0 + it*nbp1);
-
-        if (hc == 2) {
-            float mixed;
-            if (comb) {
-                const float a = *(const float *) ((const char *) residual->data + i0*nbr0 + it*nbr2);
-                const float b = *(const float *) ((const char *) residual->data + i0*nbr0 + nbr1 + it*nbr2);
-                const float ca = *(const float *) ((const char *) comb->data + idst*nbc0 + it*nbc2);
-                const float cb = *(const float *) ((const char *) comb->data + idst*nbc0 + nbc1 + it*nbc2);
-                mixed = fmaf(a, ca, 0.0f) + fmaf(b, cb, 0.0f);
-            } else {
-                mixed = *(const float *) ((const char *) residual->data + i0*nbr0 + idst*nbr1 + it*nbr2);
-            }
-            *(float *) ((char *) dst->data + i0*nbd0 + idst*nbd1 + it*nbd2) = mixed + fmaf(xv, pv, 0.0f);
-            continue;
-        }
 
         float sum = xv * pv;
         if (comb) {

@@ -6417,7 +6417,7 @@ struct ggml_tensor * ggml_dsv4_hc_comb(
     }
 
     GGML_ASSERT(hc > 0);
-    GGML_ASSERT(hc == 4 || (hc == 2 && eps == 0.0f));
+    GGML_ASSERT(hc == 4);
     GGML_ASSERT(mixes->ne[2] == 1);
     GGML_ASSERT(mixes->ne[3] == 1);
     GGML_ASSERT(scale->ne[0] >= 3);

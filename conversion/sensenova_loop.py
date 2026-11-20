@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import re
-from typing import TYPE_CHECKING, Callable, Iterable
+from typing import TYPE_CHECKING, Iterable
 
 from .base import ModelBase, gguf
 from .qwen import Qwen3_5TextModel
@@ -53,41 +53,28 @@ class SenseNovaLoopModel(Qwen3_5TextModel):
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
         self.hparams = {**hp, "num_hidden_layers": len(self.plan), "layer_types": [layer_types[p] for p in self.plan]}
 
-    def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
-        tensors = super().index_tensors(remote_hf_model_id)
-        if remote_hf_model_id is None and not self.no_mtp and self.opt_num_mtp_layers == 0 and (self.dir_model / "mtp.safetensors").is_file():
-            tensors.update(self.index_local_tensors("mtp"))
-        return tensors
-
-    @classmethod
-    def filter_tensors(cls, item):
-        name, tensor = item
-        if name.startswith("model.language_model."):
-            name = "model." + name.removeprefix("model.language_model.")
-        return super().filter_tensors((name, tensor))
+    def prepare_tensors(self):
+        if not self.no_mtp and not any(name.startswith(f"model.layers.{len(self.first_visit)}.") for name in self.model_tensors):
+            raise ValueError("MTP weights are missing from the checkpoint index; include them in model.safetensors.index.json or use --no-mtp")
+        super().prepare_tensors()
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
-        arch = self.gguf_writer.arch
-        for key, value in ((gguf.Keys.Loop.START, self.loop["start"]),
-                           (gguf.Keys.Loop.END, self.loop["end"]),
-                           (gguf.Keys.Loop.COUNT, self.loop["eval_count"]),
-                           (gguf.Keys.MHC.START, self.mhc["start"]),
-                           (gguf.Keys.MHC.END, self.mhc["end"]),
-                           (gguf.Keys.MHC.STREAMS, self.mhc["streams"]),
-                           (gguf.Keys.MHC.ITERATIONS, self.mhc["iterations"])):
-            self.gguf_writer.add_uint32(key.format(arch=arch), value)
-        self.gguf_writer.add_bool(gguf.Keys.MHC.FIXED_IDENTITY.format(arch=arch), self.mhc["fixed_identity"])
+        self.gguf_writer.add_loop_start(self.loop["start"])
+        self.gguf_writer.add_loop_end(self.loop["end"])
+        self.gguf_writer.add_loop_count(self.loop["eval_count"])
+        self.gguf_writer.add_hyper_connection_start(self.mhc["start"])
+        self.gguf_writer.add_hyper_connection_end(self.mhc["end"])
+        self.gguf_writer.add_hyper_connection_count(self.mhc["streams"])
+        self.gguf_writer.add_hyper_connection_sinkhorn_iterations(self.mhc["iterations"])
+        self.gguf_writer.add_hyper_connection_fixed_identity(self.mhc["fixed_identity"])
         scale = self.mhc.get("pre_scale", 1.0)
         if not math.isfinite(scale) or scale <= 0:
             raise ValueError("Invalid SenseNova mHC pre_scale")
-        self.gguf_writer.add_float32(gguf.Keys.MHC.PRE_SCALE.format(arch=arch), scale)
+        self.gguf_writer.add_hyper_connection_pre_scale(scale)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith("model.visual."):
-            return
-        name = name.removeprefix("model.language_model.") if name.startswith("model.language_model.") else name
         if not name.startswith(("model.", "lm_head.")):
             name = "model." + name
         if name == "model.loop_gate.logits":
@@ -105,7 +92,7 @@ class SenseNovaLoopModel(Qwen3_5TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        if ".mhc_" in name or ".ssm_conv1d." in new_name:
+        if ".mhc_" in name:
             return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
