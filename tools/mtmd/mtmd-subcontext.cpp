@@ -2008,12 +2008,16 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                 } else {
                     // code0 < 0: next row is text (prompt), the tower only fills its KV
                     // codes: input frame codes for a speech row, empty for a text row
+                    //        then optionally the codes of the next frame (reference rows): teacher forcing, code0 must be its code 0
                     const bool next_speech = params->code0 >= 0;
-                    const bool cur_speech  = params->codes && (int64_t) params->codes->size() == n_cb;
-                    if (params->code0 >= n_vocab) {
-                        LOG_ERR("%s: code0 out of range (%d, vocab %lld)\n", __func__, params->code0, (long long) n_vocab);
+                    const size_t n_given   = params->codes ? params->codes->size() : 0;
+                    const bool forced      = n_given == (size_t) (2 * n_cb);
+                    if (params->code0 >= n_vocab || (n_given != 0 && n_given != (size_t) n_cb && !forced) ||
+                            (forced && params->code0 != (*params->codes)[n_cb])) {
+                        LOG_ERR("%s: invalid tower input (code0 %d, %zu codes)\n", __func__, params->code0, n_given);
                         return false;
                     }
+                    const bool cur_speech  = n_given != 0 && (*params->codes)[0] >= 0;
                     std::vector<int32_t> code0 = { std::max(params->code0, 0) };
                     set_input_i32("inp_code0", code0);
 
@@ -2030,12 +2034,20 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                     std::vector<int32_t> inp_pos = { (int32_t) pos };
                     set_input_i32("inp_pos", inp_pos);
 
-                    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-                    std::vector<float> r(model.gen_code_head_w->ne[2]);
-                    for (auto & v : r) {
-                        v = dist(params->gen_state->rng);
+                    if (forced) {
+                        std::vector<int32_t> force(model.gen_code_head_w->ne[2]);
+                        for (size_t ih = 0; ih < force.size(); ih++) {
+                            force[ih] = std::clamp<int32_t>((*params->codes)[n_cb + 1 + ih], 0, (int32_t) n_vocab - 1);
+                        }
+                        set_input_i32("inp_force", force);
+                    } else {
+                        std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+                        std::vector<float> r(model.gen_code_head_w->ne[2]);
+                        for (auto & v : r) {
+                            v = dist(params->gen_state->rng);
+                        }
+                        set_input_f32("inp_rand", r);
                     }
-                    set_input_f32("inp_rand", r);
                 }
             } break;
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
@@ -2596,10 +2608,8 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
     // for audio gen models
     //
 
-    if (model.proj_type == PROJECTOR_TYPE_QWEN3TTS_GEN && params->gen_process == MTMD_SUBCTX_GEN_PROCESS_TOKENIZE) {
-        GGML_ASSERT(params->out_codes && params->out_code_embd);
-
-        // frame-major codes, the layout of GEN_WAV's input
+    // reference clip codes, one out_ref_code_<g> tensor per codebook, read back frame-major (the layout of GEN_WAV's input)
+    auto read_ref_codes = [&gf](std::vector<int32_t> & out) -> size_t {
         std::vector<std::vector<int32_t>> groups;
         for (int g = 0; ; g++) {
             ggml_tensor * t = ggml_graph_get_tensor(gf, ("out_ref_code_" + std::to_string(g)).c_str());
@@ -2611,12 +2621,23 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         }
         GGML_ASSERT(!groups.empty());
         const size_t n_frames = groups[0].size();
-        params->out_codes->resize(n_frames * groups.size());
+        out.resize(n_frames * groups.size());
         for (size_t f = 0; f < n_frames; f++) {
             for (size_t g = 0; g < groups.size(); g++) {
-                (*params->out_codes)[f * groups.size() + g] = groups[g][f];
+                out[f * groups.size() + g] = groups[g][f];
             }
         }
+        return n_frames;
+    };
+
+    if (model.proj_type == PROJECTOR_TYPE_FISH_S2_SPKENC && params->out_codes) {
+        read_ref_codes(*params->out_codes);
+        return true;
+    }
+
+    if (model.proj_type == PROJECTOR_TYPE_QWEN3TTS_GEN && params->gen_process == MTMD_SUBCTX_GEN_PROCESS_TOKENIZE) {
+        GGML_ASSERT(params->out_codes && params->out_code_embd);
+        const size_t n_frames = read_ref_codes(*params->out_codes);
 
         ggml_tensor * rows = ggml_graph_get_tensor(gf, "out_ref_rows");
         GGML_ASSERT(rows && rows->type == GGML_TYPE_F32 && (size_t) rows->ne[1] == n_frames);

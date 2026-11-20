@@ -625,7 +625,7 @@ struct mtmd_graph_drama3_gen : mtmd_graph {
 
     mtmd_subctx_gen_process gen_process;
     mtmd_subctx_gen_state * gen_state; // nullptr on buffer reserve
-    int   n_frames;             // GEN_WAV only
+    int   n_frames;             // GEN_WAV: frames to decode; GEN_CODE: 2 when the caller gives the codes of the frame (teacher forcing)
     int   top_k;
     float top_p;
     float temp;
