@@ -24,7 +24,7 @@
 	let signInError = $state<string | null>(null);
 	let scope = $state<TraceShareScope>(TraceShareScope.ALL);
 	let dataset = $state('');
-	let isPrivate = $state(true);
+	let isPrivate = $state(false);
 	let includeAttachments = $state(false);
 	let isSharing = $state(false);
 	let shareError = $state<string | null>(null);
@@ -41,6 +41,7 @@
 			signInError = null;
 			scope = messageId ? TraceShareScope.UP_TO_MESSAGE : TraceShareScope.ALL;
 			dataset = huggingFaceStore.suggestedDataset;
+			isPrivate = false;
 			includeAttachments = false;
 			shareError = null;
 			sharedUrl = null;
