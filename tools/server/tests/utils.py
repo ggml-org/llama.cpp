@@ -5,6 +5,10 @@
 
 import subprocess
 import os
+import io
+import math
+import struct
+import wave
 
 TMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp")
 import re
@@ -126,7 +130,7 @@ class ServerProcess:
     no_cache_idle_slots: bool = False
     log_path: str | None = None
     ui_mcp_proxy: bool = False
-    debug_proxy_allow_private: bool = False # test-only: lets the CORS proxy reach local servers
+    ui_mcp_proxy_allow_private_urls: bool = False
     media_allow_private_urls: bool = False
     allow_unauthenticated_tools: bool = False
     backend_sampling: bool = False
@@ -155,8 +159,6 @@ class ServerProcess:
             **os.environ,
             "LLAMA_SERVER_DEBUG_FAKE_TIMING": "1",
         }
-        if self.debug_proxy_allow_private:
-            env["LLAMA_SERVER_DEBUG_PROXY_ALLOW_PRIVATE"] = "1"
         if self.llama_cache is not None:
             env["LLAMA_CACHE"] = self.llama_cache
         elif "LLAMA_CACHE" not in os.environ:
@@ -313,6 +315,8 @@ class ServerProcess:
             server_args.append("--no-cache-idle-slots")
         if self.ui_mcp_proxy:
             server_args.append("--ui-mcp-proxy")
+        if self.ui_mcp_proxy_allow_private_urls:
+            server_args.append("--ui-mcp-proxy-allow-private-urls")
         if self.media_allow_private_urls:
             server_args.append("--media-allow-private-urls")
         if self.allow_unauthenticated_tools:
@@ -727,6 +731,36 @@ class ServerPreset:
         return server
 
     @staticmethod
+    def tinypockettts() -> ServerProcess:
+        # tts only, with voice cloning
+        server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
+        # mmproj is already provided by HF registry API
+        server.model_hf_file = None
+        server.model_hf_repo = "ggml-org-dev/tinyPocketTTS-for-testing-gguf:Q8_0"
+        server.model_alias = "tinypockettts"
+        server.n_ctx = 1024
+        server.n_batch = 512
+        server.n_slots = 1
+        server.seed = 42
+        return server
+
+    @staticmethod
+    def tinyvoxtralrt() -> ServerProcess:
+        # live transcription only, no chat
+        server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
+        # mmproj is already provided by HF registry API
+        server.model_hf_file = None
+        server.model_hf_repo = "ggml-org-dev/tinyVoxtral-Realtime-for-testing-gguf:Q8_0"
+        server.model_alias = "tinyvoxtralrt"
+        server.n_ctx = 1024
+        server.n_batch = 512
+        server.n_slots = 1
+        server.seed = 42
+        return server
+
+    @staticmethod
     def router() -> ServerProcess:
         server = ServerProcess()
         server.offline = True # will be downloaded by load_all()
@@ -832,3 +866,19 @@ def get_lan_ip(server: ServerProcess) -> str | None:
 
 def is_slow_test_allowed():
     return os.environ.get("SLOW_TESTS") == "1" or os.environ.get("SLOW_TESTS") == "ON"
+
+
+def make_pcm16(seconds: float = 1.0, rate: int = 16000, freq: float = 440.0) -> bytes:
+    """ sine tone as raw PCM16 mono samples """
+    n = int(seconds * rate)
+    return struct.pack(f"<{n}h", *(int(0.3 * 32767 * math.sin(2 * math.pi * freq * i / rate)) for i in range(n)))
+
+
+def make_wav(seconds: float = 1.0, rate: int = 16000, freq: float = 440.0) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(make_pcm16(seconds, rate, freq))
+    return buf.getvalue()

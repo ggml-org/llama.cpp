@@ -70,7 +70,7 @@ void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, size_t siz
 vk_buffer ggml_vk_buffer_from_host_ptr(vk_device & device, void * ptr, size_t size);
 
 // pipelines
-uint64_t vk_tensor_offset(const ggml_tensor * tensor);
+size_t vk_tensor_offset(const ggml_tensor * tensor);
 uint32_t get_misalign_bytes(const ggml_backend_vk_context * ctx, const ggml_tensor * t);
 void ggml_vk_wait_for_fence(ggml_backend_vk_context * ctx);
 void ggml_pipeline_request_descriptor_sets(ggml_backend_vk_context *ctx, vk_pipeline& pipeline, uint32_t n);
@@ -101,7 +101,7 @@ void deferred_memset(void * dst, uint32_t val, size_t size, std::vector<vk_stagi
 
 // matmul
 vk_pipeline ggml_vk_get_to_fp16(ggml_backend_vk_context * ctx, ggml_type type);
-void ggml_vk_matmul(ggml_backend_vk_context * ctx, vk_context& subctx, vk_pipeline& pipeline, vk_subbuffer&& a, vk_subbuffer&& b, vk_subbuffer&& d, vk_subbuffer&& split_k_buffer, uint32_t m, uint32_t n, uint32_t k, uint32_t stride_a, uint32_t stride_b, uint32_t stride_d, uint32_t batch_stride_a, uint32_t batch_stride_b, uint32_t batch_stride_d, uint32_t split_k, uint32_t batch, uint32_t ne02, uint32_t ne12, uint32_t broadcast2, uint32_t broadcast3, uint32_t padded_n, uint64_t b_col_bytes, uint64_t d_col_bytes);
+void ggml_vk_matmul(ggml_backend_vk_context * ctx, vk_context& subctx, vk_pipeline& pipeline, vk_subbuffer&& a, vk_subbuffer&& b, vk_subbuffer&& d, vk_subbuffer&& split_k_buffer, uint32_t m, uint32_t n, uint32_t k, uint32_t stride_a, uint32_t stride_b, uint32_t stride_d, uint32_t batch_stride_a, uint32_t batch_stride_b, uint32_t batch_stride_d, uint32_t split_k, uint32_t stream_k_groups, uint32_t batch, uint32_t ne02, uint32_t ne12, uint32_t broadcast2, uint32_t broadcast3, uint32_t padded_n, uint64_t b_col_bytes, uint64_t d_col_bytes);
 bool ggml_vk_dim01_contiguous(const ggml_tensor * tensor);
 vk_pipeline ggml_vk_get_cpy_pipeline(ggml_backend_vk_context * ctx, const ggml_tensor * src, const ggml_tensor * dst, ggml_type to);
 vk_pipeline ggml_vk_get_quantize_pipeline(ggml_backend_vk_context * ctx, ggml_type type);

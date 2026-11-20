@@ -318,6 +318,7 @@ struct common_chat_templates {
     std::unique_ptr<common_chat_template> template_default;  // always set (defaults to chatml)
     std::unique_ptr<common_chat_template> template_tool_use;
     std::unique_ptr<common_chat_template> template_tts;  // the prompt of a text to speak
+    std::shared_ptr<common_tts_dicts> tts_dicts;         // dictionaries of the model for tts_dict(), by name
 };
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice) {
@@ -806,10 +807,11 @@ bool common_chat_templates_was_explicit(const struct common_chat_templates * tmp
 }
 
 // renders a task template (e.g. "tts") with the given variables
-static std::string common_chat_template_render(const common_chat_template & tmpl, const json & vars) {
+static std::string common_chat_template_render(const common_chat_template & tmpl, const json & vars, const std::shared_ptr<common_tts_dicts> & tts_dicts,
+                                               const common_tts_g2p & g2p = nullptr) {
     jinja::context ctx(tmpl.source());
-    // text normalization helpers: tts_norm_scan() and tts_norm_sub(), see docs/tts-norm-patterns.md
-    common_chat_tts_norm_add_builtins(ctx);
+    // text normalization helpers: tts_norm_scan(), tts_norm_sub(), tts_dict() and tts_g2p(), see docs/tts-norm-patterns.md
+    common_chat_tts_norm_add_builtins(ctx, tts_dicts, g2p);
     jinja::global_from_json(ctx, vars, false);
     ctx.set_val("bos_token", jinja::mk_val<jinja::value_string>(tmpl.bos_token()));
     ctx.set_val("eos_token", jinja::mk_val<jinja::value_string>(tmpl.eos_token()));
@@ -885,7 +887,7 @@ common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates
 }
 
 std::string common_chat_get_tts_prompt(const common_chat_templates * chat_templates, const std::string & text,
-                                       const std::string & language, const std::string & voice) {
+                                       const std::string & language, const std::string & voice, const common_tts_g2p & g2p) {
     if (!chat_templates || !chat_templates->template_tts) {
         return "";
     }
@@ -893,7 +895,7 @@ std::string common_chat_get_tts_prompt(const common_chat_templates * chat_templa
         {"messages", json::array({{{"role", "user"}, {"content", text}}})},
         {"language", language},
         {"voice",    voice},
-    });
+    }, chat_templates->tts_dicts, g2p);
 }
 
 std::string common_chat_get_speech_system_prompt(const common_chat_templates * chat_templates,
@@ -1022,6 +1024,25 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
                 tmpls->template_tts = std::make_unique<common_chat_template>(src, token_bos, token_eos);
             } catch (const std::exception & e) {
                 LOG_ERR("%s: failed to parse the tts chat template (ignoring it): %s\n", __func__, e.what());
+            }
+        }
+        // dictionaries for tts_dict(), listed by name in tokenizer.tts_dicts
+        tmpls->tts_dicts = std::make_shared<common_tts_dicts>();
+        for (int32_t i = 0; i < llama_model_meta_arr_n(model, "tokenizer.tts_dicts"); i++) {
+            const std::string name    = llama_model_meta_arr_str(model, "tokenizer.tts_dicts", i);
+            const std::string key     = "tokenizer.tts_dict." + name + ".keys";
+            const std::string val_key = "tokenizer.tts_dict." + name + ".values";
+            const int32_t     n       = llama_model_meta_arr_n(model, key.c_str());
+            if (n < 0 || llama_model_meta_arr_n(model, val_key.c_str()) != n) {
+                LOG_ERR("%s: the tts dictionary '%s' has no value for each of its keys (ignoring it)\n", __func__, name.c_str());
+                continue;
+            }
+            auto & dict = (*tmpls->tts_dicts)[name];
+            dict.keys.reserve(n);
+            dict.values.reserve(n);
+            for (int32_t j = 0; j < n; j++) {
+                dict.keys.emplace_back(llama_model_meta_arr_str(model, key.c_str(), j));
+                dict.values.emplace_back(llama_model_meta_arr_str(model, val_key.c_str(), j));
             }
         }
     }
@@ -1444,6 +1465,12 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const 
         return common_chat_params_init_qwen3_coder;
     }
 
+    // Inkling 1 and 2
+    if (is_inkling_template(src)) {
+        LOG_DBG("Using specialized template: Inkling\n");
+        return common_chat_params_init_inkling;
+    }
+
     return nullptr;
 }
 
@@ -1625,9 +1652,6 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
             if (!end_tag.empty()) {
                 auto_params.thinking_end_tags = {std::move(end_tag)};
             }
-        }
-        if (is_inkling2_template(src)) {
-            common_chat_inkling2_split_media(auto_params.prompt);
         }
         const auto & arena = auto_params.parser;
         LOG_DBG("%s: generated parser:\n%s\n\nparser generation prompt: %s\n", __func__, arena.dump(arena.root()).c_str(), auto_params.generation_prompt.c_str());

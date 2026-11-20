@@ -52,6 +52,11 @@ struct mtmd_audio_cache {
     );
 };
 
+// FFT of N real samples -> N complex values (interleaved), in needs 2 * N floats and out 8 * N floats (scratch)
+void mtmd_audio_fft(const mtmd_audio_cache & cache, float * in, int N, float * out);
+// inverse FFT of N complex values (interleaved), scaled by 1 / N; in and out need 8 * N floats (scratch)
+void mtmd_audio_ifft(const mtmd_audio_cache & cache, float * in, int N, float * out);
+
 // compute one log10-mel frame from n_fft windowed samples, cache must be initialized for n_fft
 void mtmd_audio_log_mel_frame(const mtmd_audio_cache & cache, const float * samples, int n_fft, int n_mel, float * out);
 
@@ -127,6 +132,15 @@ struct mtmd_audio_preprocessor_muse_spark_audio : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_muse_spark_audio(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     void initialize() override {}
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
+};
+
+// speaker reference (fish_s2, voxcpm2): same as muse spark (raw waveform, whole frames), truncated to max_seconds
+struct mtmd_audio_preprocessor_spk_ref : mtmd_audio_preprocessor_muse_spark_audio {
+    mtmd_audio_preprocessor_spk_ref(const mtmd_model * model, int32_t max_seconds)
+        : mtmd_audio_preprocessor_muse_spark_audio(model), max_seconds(max_seconds) {}
+    bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
+
+    const int32_t max_seconds;
 };
 
 // vibevoice: gain to -25 dBFS RMS, without clipping the peak

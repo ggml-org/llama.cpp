@@ -653,6 +653,28 @@ class ModelBase:
                     raise NotImplementedError(f"Quant format {quant_format!r} for method {quant_method!r} is not yet supported")
             elif quant_method in ("modelopt", "modelopt_mixed"):
                 dequant_fp8()
+                # FP8_PB_WO: one scale per block, the block size follows from the two shapes
+                for name in self.model_tensors.keys():
+                    if not name.endswith(".weight_scale_inv"):
+                        continue
+                    weight_name = name.removesuffix("_scale_inv")
+                    if weight_name not in self.model_tensors:
+                        tensors_to_remove.append(name)
+                        continue
+                    w = self.model_tensors[weight_name]
+                    s = self.model_tensors[name]
+                    if w().dtype != torch.float8_e4m3fn:
+                        continue
+                    w_shape, s_shape = w().shape, s().shape
+                    block_size = None
+                    if prod(s_shape) != 1:
+                        if len(s_shape) != len(w_shape) or any(ws % ss for ws, ss in zip(w_shape, s_shape)):
+                            raise ValueError(f"FP8 weight {weight_name!r} {list(w_shape)} is not tiled by its scale {list(s_shape)}")
+                        block_size = [ws // ss for ws, ss in zip(w_shape, s_shape)]
+                    self.model_tensors[weight_name] = lambda w=w, s=s, bs=block_size: dequant_simple(w(), s(), bs)
+                    tensors_to_remove.append(name)
+                    if self._fp8_as_q8:
+                        self._fp8_dequantized.add(weight_name)
             elif quant_method is not None:
                 raise NotImplementedError(f"Quant method is not yet supported: {quant_method!r}")
 
@@ -2448,6 +2470,9 @@ class TextModel(ModelBase):
         if chkhsh == "5635e1c8d621dff7b4825f41f2f97b6ceb39bcf2d5c541db28577080d6efd5e5":
             # ref: https://huggingface.co/thinkingmachines/Inkling-2-Small
             res = "inkling2"
+        if chkhsh == "32d85c31273f8019248f2559fed492d929ea28b17e51d81d3bb36fff23ca72b3":
+            # ref: https://huggingface.co/domyn/Domyn-Edge-Teacher-IF
+            res = "domyn-edge"
 
         if res is None:
             logger.warning("\n")
@@ -3488,6 +3513,9 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # some models (llava_onevision2) only declare the architecture inside text_config
     if arch is None and text_config.get("architectures") is not None:
         arch = text_config["architectures"][0]
+    # some configs only have a model_type (fishaudio/s2-pro)
+    if arch is None:
+        arch = hparams.get("model_type")
     if arch is None:
         raise ValueError("Failed to detect model architecture")
     return arch
