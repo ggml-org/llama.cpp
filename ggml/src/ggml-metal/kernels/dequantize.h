@@ -19,6 +19,27 @@ template <> struct value_type<half4x4>  { typedef half  type; };
 template <> struct value_type<bfloat4x4> { typedef bfloat type; };
 #endif
 
+template <typename T> struct value_type_4x4;
+template <> struct value_type_4x4<float>  { typedef float4x4 type; };
+template <> struct value_type_4x4<half>   { typedef half4x4  type; };
+#if defined(GGML_METAL_HAS_BF16)
+template <> struct value_type_4x4<bfloat> { typedef bfloat4x4 type; };
+#endif
+
+template <typename T> struct value_type_2x4;
+template <> struct value_type_2x4<float>  { typedef float2x4 type; };
+template <> struct value_type_2x4<half>   { typedef half2x4  type; };
+#if defined(GGML_METAL_HAS_BF16)
+template <> struct value_type_2x4<bfloat> { typedef bfloat2x4 type; };
+#endif
+
+template <typename T> struct value_type_8x8;
+template <> struct value_type_8x8<float>  { typedef simdgroup_float8x8 type; };
+template <> struct value_type_8x8<half>   { typedef simdgroup_half8x8  type; };
+#if defined(GGML_METAL_HAS_BF16)
+template <> struct value_type_8x8<bfloat> { typedef simdgroup_bfloat8x8 type; };
+#endif
+
 // NOTE: this is not dequantizing - we are simply fitting the template
 template <typename type4x4>
 void dequantize_f32(device const float4x4 * src, short il, thread type4x4 & reg) {
