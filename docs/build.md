@@ -132,7 +132,10 @@ Full steps, threading notes, and a fallback for older CMake: [AOCL.md](./backend
 
 ### Intel oneMKL
 
-Building through oneAPI compilers will make avx_vnni instruction set available for intel processors that do not support avx512 and avx512_vnni. Please note that this build config **does not support Intel GPU and NPU**. For Intel GPU and NPU support, refer to [OpenVINO](#openvino), [SYCL](#sycl) and [Vulkan](#vulkan) backends.
+Building through oneAPI compilers will make avx_vnni instruction set available for intel processors that do not support avx512 and avx512_vnni.
+> Note: This build config **does not support Intel GPU and NPU**.
+>  - For Intel GPU support, refer to [OpenVINO](#openvino), [SYCL](#sycl) and [Vulkan](#vulkan) backends.
+>  - For Intel NPU support, refer to [OpenVINO](#openvino) backend.
 
 - Using manual oneAPI installation:
   By default, `GGML_BLAS_VENDOR` is set to `Generic`, so if you already sourced intel environment script and assign `-DGGML_BLAS=ON` in cmake, the mkl version of Blas will automatically been selected. Otherwise please install oneAPI and follow the below steps:
