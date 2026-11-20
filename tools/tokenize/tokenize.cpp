@@ -144,6 +144,9 @@ int main(int argc, char ** argv) {
     // load only the vocabulary (no weights), since tokenizing does not need them
     llama_model_params model_params = llama_model_default_params();
     model_params.vocab_only = true;
+    if (!params.kv_overrides.empty()) {
+        model_params.kv_overrides = params.kv_overrides.data();
+    }
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), model_params);
     if (!model) {
         LOG_ERR("error: could not load model from file '%s'.\n", params.model.path.c_str());
