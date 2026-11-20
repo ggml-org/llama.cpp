@@ -331,6 +331,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_head  = 4;
         n_ff    = 24;
         n_layer = 3;
+    } else if (arch == LLM_ARCH_BERRYLM) {
+        n_layer = 10; // cross several AttnRes block boundaries
     }
 
     uint32_t n_head_kv = n_head;
@@ -340,6 +342,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_LIMITE || arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_RICURSIVE ||
             arch == LLM_ARCH_ZAYA1) {
         n_head_kv = 2; // GQA coverage
+    } else if (arch == LLM_ARCH_BERRYLM) {
+        n_head_kv = 1; // MQA coverage
     }
     if (arch == LLM_ARCH_BEAM) {
         n_head    = 4;
@@ -826,6 +830,15 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, 25.0f);
     ms.add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,        -5.0f);
 
+    if (arch == LLM_ARCH_BERRYLM) {
+        const std::vector<uint32_t> recurrent_layers = { 1, 1, 0, 1, 0, 1, 1, 1, 0, 1 };
+        ms.add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS, recurrent_layers);
+        ms.add_kv(LLM_KV_SSM_INNER_SIZE,             uint32_t(256));
+        ms.add_kv(LLM_KV_SSM_GROUP_COUNT,            uint32_t(1));
+        ms.add_kv(LLM_KV_KDA_GATE_RANK,              uint32_t(128));
+        ms.add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,        uint32_t(3)); // cross several block boundaries
+    }
+
     for (uint32_t il = 0; il < n_layer; il++) {
         ggml_tensor t;
         memset(&t, 0, sizeof(ggml_tensor));
@@ -1139,6 +1152,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_METIS16:
         case LLM_ARCH_ZONOS3:
         case LLM_ARCH_INKLING2:
+        case LLM_ARCH_BERRYLM:
             return true;
         default:
             return false;

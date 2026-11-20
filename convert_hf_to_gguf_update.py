@@ -168,6 +168,7 @@ models = [
     {"name": "mmbert",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/jhu-clsp/mmBERT-base", },
     {"name": "k2-horizon",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/IFM/K2-Horizon-36B", },
     {"name": "inkling2",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/thinkingmachines/Inkling-2-Small", },
+    {"name": "berrylm",          "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/rwb-ai/BerryLM-OS", },
 ]
 
 # some models are known to be broken upstream, so we will skip them as exceptions

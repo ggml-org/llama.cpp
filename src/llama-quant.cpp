@@ -371,6 +371,12 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     quantize &= name.find("conv_dw") == std::string::npos;
     quantize &= name.rfind("a.gen.wav.quant.", 0) != 0;
 
+    // BerryLM: the low-rank KDA forget-gate projections are tiny and precision-sensitive
+    if (arch == LLM_ARCH_BERRYLM) {
+        quantize &= name.find("ssm_f_a.weight") == std::string::npos;
+        quantize &= name.find("ssm_f_b.weight") == std::string::npos;
+    }
+
     // do not quantize MiniMax's indexer projection weights, they are tiny
     quantize &= name.find("indexer.k_proj.weight") == std::string::npos;
     quantize &= name.find("indexer.q_proj.weight") == std::string::npos;

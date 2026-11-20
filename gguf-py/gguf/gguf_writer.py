@@ -1366,6 +1366,9 @@ class GGUFWriter:
     def add_lilicorr_logit_scale(self, value: float) -> None:
         self.add_float32(Keys.LiliCorr.LOGIT_SCALE, value)
 
+    def add_kda_gate_rank(self, value: int) -> None:
+        self.add_uint32(Keys.KDA.GATE_RANK.format(arch=self.arch), value)
+
     def add_tokenizer_model(self, model: str) -> None:
         self.add_string(Keys.Tokenizer.MODEL, model)
 
