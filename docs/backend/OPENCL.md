@@ -89,6 +89,10 @@ To allow using the kernel library, add `-DGGML_OPENCL_USE_ADRENO_BIN_KERNELS=ON`
 Then, extract `adreno-opencl-kernels.dll` from the zip file downloaded from the above URL and put it alongside the executables.
 If kernels compatible with the current GPU are found in the library, they will be loaded and used.
 
+CONV_3D can use the library's GMEM programs on supported X2 GPUs with F32 input and F32 or F16 weights. If the DLL is absent, the requested CONV_3D program is missing or cannot be loaded, or the tensor does not meet the GMEM requirements, CONV_3D uses the generic OpenCL kernel.
+
+MUL_MAT can use the library's GMEM programs on supported X2 GPUs with F32, F16 or Q8_0 weights and F32 or F16 activations, subject to the backend's existing type and precision support. Eligible tensors are contiguous, have matching batch dimensions, and have M, N and K of at least 128. Q8_0 weights must use the backend's single-batch structure-of-arrays layout. If the requested program is absent or incompatible, or the tensor does not meet the GMEM requirements, MUL_MAT uses the existing OpenCL matmul path. Set `GGML_OPENCL_DISABLE_MM_GMEM=1` to disable this path.
+
 
 ## CMake Options
 
