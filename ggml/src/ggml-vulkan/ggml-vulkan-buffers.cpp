@@ -4,6 +4,9 @@
 #include <cstdlib>
 #include <mutex>
 #include <shared_mutex>
+#if defined(__x86_64__)
+#include <immintrin.h>
+#endif
 
 static void * portable_aligned_malloc(size_t align, size_t size) {
 #ifdef _WIN32
@@ -410,6 +413,46 @@ static vk_context ggml_vk_begin_sync_ctx(vk_device & device, vk_command_pool & p
     return subctx;
 }
 
+// Regular loads from write-combining host memory run at ~100 MB/s on amdgpu GTT.
+// Non-temporal loads (movntdqa) stream at ~4.8 GB/s (measured on BC-250, gfx1013).
+// ggml-vulkan is not built with -march=native: use a target attribute + runtime check.
+#if defined(__x86_64__)
+__attribute__((target("sse4.1")))
+static void ggml_vk_memcpy_nt(void * dst, const void * src, size_t n) {
+    const uint8_t * s = (const uint8_t *) src;
+    uint8_t * d = (uint8_t *) dst;
+    const size_t head = (16 - ((uintptr_t) s & 15)) & 15;
+    size_t i = head < n ? head : n;
+    memcpy(d, s, i);
+    for (; i + 64 <= n; i += 64) {
+        __m128i a = _mm_stream_load_si128((__m128i *) (s + i));
+        __m128i b = _mm_stream_load_si128((__m128i *) (s + i + 16));
+        __m128i c = _mm_stream_load_si128((__m128i *) (s + i + 32));
+        __m128i e = _mm_stream_load_si128((__m128i *) (s + i + 48));
+        _mm_storeu_si128((__m128i *) (d + i), a);
+        _mm_storeu_si128((__m128i *) (d + i + 16), b);
+        _mm_storeu_si128((__m128i *) (d + i + 32), c);
+        _mm_storeu_si128((__m128i *) (d + i + 48), e);
+    }
+    for (; i + 16 <= n; i += 16) {
+        _mm_storeu_si128((__m128i *) (d + i), _mm_stream_load_si128((__m128i *) (s + i)));
+    }
+    if (i < n) {
+        memcpy(d + i, s + i, n - i);
+    }
+}
+#endif
+
+void ggml_vk_memcpy_from_wc(void * dst, const void * src, size_t n) {
+#if defined(__x86_64__)
+    if (n >= 16 && __builtin_cpu_supports("sse4.1")) {
+        ggml_vk_memcpy_nt(dst, src, n);
+        return;
+    }
+#endif
+    memcpy(dst, src, n);
+}
+
 static void ggml_vk_submit_sync(vk_device & device, vk_context & subctx) {
     ggml_vk_ctx_end(subctx);
 
@@ -427,7 +470,11 @@ static void ggml_vk_submit_sync(vk_device & device, vk_context & subctx) {
     ggml_vk_queue_command_pools_cleanup(device);
 
     for (auto & cpy : subctx->out_memcpys) {
-        memcpy(cpy.dst, cpy.src, cpy.n);
+        if (cpy.wc_src) {
+            ggml_vk_memcpy_from_wc(cpy.dst, cpy.src, cpy.n);
+        } else {
+            memcpy(cpy.dst, cpy.src, cpy.n);
+        }
     }
 }
 
@@ -695,10 +742,12 @@ bool ggml_vk_buffer_read_2d_async(vk_context subctx, vk_buffer& src, size_t offs
     subctx->s->buffer->buf.copyBuffer(src->buffer, staging_buffer->buffer, staging_slices);
 
     if (width == dpitch) {
-        deferred_memcpy(dst, staging_buffer->ptr, staging_size, &subctx->out_memcpys);
+        deferred_memcpy(dst, staging_buffer->ptr, staging_size, &subctx->out_memcpys,
+            !(staging_buffer->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached));
     } else {
         for (size_t i = 0; i < height; i++) {
-            deferred_memcpy((uint8_t *) dst + i * dpitch, (const uint8_t *) staging_buffer->ptr + i * width, width, &subctx->out_memcpys);
+            deferred_memcpy((uint8_t *) dst + i * dpitch, (const uint8_t *) staging_buffer->ptr + i * width, width, &subctx->out_memcpys,
+                !(staging_buffer->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached));
         }
     }
     return true;
@@ -883,7 +932,8 @@ size_t ggml_vk_buffer_read_n_async(vk_context& subctx, const vk_buffer_region * 
         }
 
         subctx->s->buffer->buf.copyBuffer(r.buf->buffer, (*staging)->buffer, { vk::BufferCopy{ r.offset, *staging_offset, r.size } });
-        deferred_memcpy(r.host, (const uint8_t *) (*staging)->ptr + *staging_offset, r.size, &subctx->out_memcpys);
+        deferred_memcpy(r.host, (const uint8_t *) (*staging)->ptr + *staging_offset, r.size, &subctx->out_memcpys,
+            !((*staging)->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached));
         *staging_offset += r.size;
     }
     return i;

@@ -1131,11 +1131,12 @@ typedef std::vector<vk_submission> vk_sequence;
 #define MAT_VEC_FUSION_FLAGS_SCALE1 0x8
 
 struct vk_staging_memcpy {
-    vk_staging_memcpy(void * _dst, const void * _src, size_t _n) : dst(_dst), src(_src), n(_n) {}
+    vk_staging_memcpy(void * _dst, const void * _src, size_t _n, bool _wc_src = false) : dst(_dst), src(_src), n(_n), wc_src(_wc_src) {}
 
     void * dst;
     const void * src;
     size_t n;
+    bool wc_src; // src is uncached (write-combining) host memory
 };
 
 struct vk_staging_memset {

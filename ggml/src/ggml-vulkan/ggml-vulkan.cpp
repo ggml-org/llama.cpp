@@ -6412,11 +6412,11 @@ size_t ggml_vk_align_size(size_t width, size_t align) {
     return CEIL_DIV(width, align) * align;
 }
 
-void deferred_memcpy(void * dst, const void * src, size_t size, std::vector<vk_staging_memcpy>* memcpys) {
+void deferred_memcpy(void * dst, const void * src, size_t size, std::vector<vk_staging_memcpy>* memcpys, bool wc_src) {
     if (memcpys == nullptr) {
         memcpy(dst, src, size);
     } else {
-        memcpys->emplace_back(dst, src, size);
+        memcpys->emplace_back(dst, src, size, wc_src);
     }
 }
 
@@ -13771,7 +13771,11 @@ void ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph
     if (tensor_idx == subctx->exit_tensor_idx) {
         // Do staging buffer copies
         for (auto& cpy : subctx->out_memcpys) {
-            memcpy(cpy.dst, cpy.src, cpy.n);
+            if (cpy.wc_src) {
+                ggml_vk_memcpy_from_wc(cpy.dst, cpy.src, cpy.n);
+            } else {
+                memcpy(cpy.dst, cpy.src, cpy.n);
+            }
         }
         subctx->in_memcpys.clear();
         subctx->out_memcpys.clear();
@@ -14296,10 +14300,12 @@ static void ggml_backend_vk_get_tensor_2d_async(ggml_backend_t backend, const gg
         compute_ctx->s->buffer->buf.copyBuffer(buf->buffer, ctx->sync_staging->buffer, slices);
 
         if (size == stride_data) {
-            deferred_memcpy(data, ctx->sync_staging->ptr, staging_size, &compute_ctx->out_memcpys);
+            deferred_memcpy(data, ctx->sync_staging->ptr, staging_size, &compute_ctx->out_memcpys,
+                !(ctx->sync_staging->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached));
         } else {
             for (size_t i = 0; i < n_copies; i++) {
-                deferred_memcpy((uint8_t *)data + i * stride_data, (const uint8_t *)ctx->sync_staging->ptr + i * size, size, &compute_ctx->out_memcpys);
+                deferred_memcpy((uint8_t *)data + i * stride_data, (const uint8_t *)ctx->sync_staging->ptr + i * size, size, &compute_ctx->out_memcpys,
+                    !(ctx->sync_staging->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached));
             }
         }
         ggml_vk_synchronize(ctx);
@@ -14447,7 +14453,11 @@ void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
 
     if (do_transfer) {
         for (auto& cpy : compute_ctx->out_memcpys) {
-            memcpy(cpy.dst, cpy.src, cpy.n);
+            if (cpy.wc_src) {
+                ggml_vk_memcpy_from_wc(cpy.dst, cpy.src, cpy.n);
+            } else {
+                memcpy(cpy.dst, cpy.src, cpy.n);
+            }
         }
         ctx->compute_ctx.reset();
     }
