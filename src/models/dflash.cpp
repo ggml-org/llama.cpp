@@ -98,7 +98,6 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         if (hparams.is_spark_dspark) {
             // Spark drafts use the history window before the anchor.
             hparams.n_swa += 1;
-            ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa);
         }
     }
 
@@ -309,17 +308,12 @@ ggml_tensor * llama_model_dflash::graph_base::build_rope(ggml_tensor * cur, ggml
         return cur;
     }
 
-    // Spark draft layers all use the draft GGUF's SWA RoPE parameters.
-    const auto rope_dims  = hparams.is_spark_dspark ? hparams.n_rot_swa                : n_rot;
-    const auto rope_base  = hparams.is_spark_dspark ? hparams.rope_freq_base_train_swa  : freq_base;
-    const auto rope_scale = hparams.is_spark_dspark ? hparams.rope_freq_scale_train_swa : freq_scale;
-
     return rope_type == GGML_ROPE_TYPE_MROPE
         ? ggml_rope_multi(ctx0, cur, pos, nullptr,
-                rope_dims, sections, rope_type, n_ctx_orig, rope_base, rope_scale,
+                n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
                 ext_factor, attn_factor, beta_fast, beta_slow)
         : ggml_rope_ext(ctx0, cur, pos, model.layers[0].rope_freqs,
-                rope_dims, rope_type, n_ctx_orig, rope_base, rope_scale,
+                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                 ext_factor, attn_factor, beta_fast, beta_slow);
 }
 
