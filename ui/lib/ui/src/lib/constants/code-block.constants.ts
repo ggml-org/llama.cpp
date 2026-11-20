@@ -8,9 +8,15 @@ export const CODE_BLOCK = {
   /** Matches opening/closing markdown code fences. */
   FENCE_PATTERN: /^```|\n```/g,
   GT_REGEX: />/g,
+  /** Short form of the class prefix that names a code element's language (`lang-ts`). */
+  LANG_CLASS_PREFIX: "lang-",
+  /** Class prefix that names a code element's language (`language-ts`). */
+  LANGUAGE_CLASS_PREFIX: "language-",
   /** Matches the language specifier at the start of a code fence. */
   LANG_PATTERN: /^(\w*)\n?/,
   LT_REGEX: /</g,
+  /** Classes that opt a code element out of highlighting. */
+  NO_HIGHLIGHT_CLASSES: ["no-highlight", "nohighlight"],
   /**
    * A shell command's name: the first word of the code or of a line (unless the line before it ends in a `\` continuation),
    * or the first after `|`, `;`, `&`, `(` or `$(`, but not a shell keyword.
@@ -20,6 +26,8 @@ export const CODE_BLOCK = {
     /(?<=(?:(?<![\s\S])|[^\\\s][ \t]*\n|\n\n|[|;&(][ \t]*|\$\([ \t]*)[ \t]*)(?!(?:if|then|else|elif|fi|for|while|until|do|done|case|esac|function|in|select|time)\b)[A-Za-z_][\w.+-]*(?=[ \t\n;|&)]|$)/,
   /** A shell command's flag: `-x`, `-LsSf` or `--long-name`, after whitespace. */
   SHELL_FLAG_REGEX: /(?<=[ \t])--?[A-Za-z0-9][\w-]*/,
+  /** The highlight.js language that also marks a shell command's name and flags. */
+  SHELL_LANGUAGE: "bash",
 
   // Matches the `text:` prefix that file-type identifiers use to denote a
   // plain-text language (e.g. `text:typescript`). Used by tool-call renderers
@@ -51,6 +59,8 @@ export const CODE_BLOCK_CLASS = {
   ACTIONS: "code-block-actions",
   COPY_BTN: "copy-code-btn",
   HEADER: "code-block-header",
+  /** highlight.js's class on a highlighted code element. */
+  HLJS: "hljs",
   LANGUAGE: "code-language",
   PREVIEW_BTN: "preview-code-btn",
   RELATIVE: "relative",

@@ -7,6 +7,7 @@
  * lowlight's common languages, which would load all at once.
  */
 
+import { CODE_BLOCK, CODE_BLOCK_CLASS } from '#lib/constants/index.ts';
 import {
 	getLoadedHighlightLanguages,
 	loadHighlightLanguages,
@@ -45,11 +46,11 @@ function classLanguage(node: Element): string | false | undefined {
 	for (const item of list) {
 		const value = String(item);
 
-		if (value === 'no-highlight' || value === 'nohighlight') return false;
+		if ((CODE_BLOCK.NO_HIGHLIGHT_CLASSES as readonly string[]).includes(value)) return false;
 
-		if (!name && value.startsWith('lang-')) name = value.slice(5);
-
-		if (!name && value.startsWith('language-')) name = value.slice(9);
+		for (const prefix of [CODE_BLOCK.LANG_CLASS_PREFIX, CODE_BLOCK.LANGUAGE_CLASS_PREFIX]) {
+			if (!name && value.startsWith(prefix)) name = value.slice(prefix.length);
+		}
 	}
 
 	return name;
@@ -92,7 +93,7 @@ function highlightBlocks(target: Lowlight, blocks: CodeBlock[]): void {
 			? node.properties.className
 			: (node.properties.className = []);
 
-		if (!className.includes('hljs')) className.unshift('hljs');
+		if (!className.includes(CODE_BLOCK_CLASS.HLJS)) className.unshift(CODE_BLOCK_CLASS.HLJS);
 
 		if (!name || !registered.has(name)) continue;
 

@@ -92,7 +92,9 @@ function loadLanguage(name: string): Promise<void> {
       languageDefinitions.set(name, module.default);
       core.registerLanguage(
         name,
-        name === "bash" ? withShellCommands(module.default) : module.default,
+        name === CODE_BLOCK.SHELL_LANGUAGE
+          ? withShellCommands(module.default)
+          : module.default,
       );
     });
     // let a later call try again
