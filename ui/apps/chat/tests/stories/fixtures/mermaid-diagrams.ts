@@ -1,4 +1,5 @@
-// Mermaid blocks of several diagram types, and one that can't be drawn
+// Mermaid blocks of several diagram types, and one that can't be drawn. The flowchart's
+// click directives must leave it inert.
 const fence = '```';
 
 export const MERMAID_DIAGRAMS_MD = String.raw`
@@ -12,6 +13,8 @@ flowchart LR
     Q -->|no| W[Queue]
     W --> D
     D -->|SSE tokens| U
+    click S href "https://github.com/ggml-org/llama.cpp" "llama.cpp on GitHub" _blank
+    click D call alert(1)
 ${fence}
 
 The same exchange over time:

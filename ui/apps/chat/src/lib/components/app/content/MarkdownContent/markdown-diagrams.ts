@@ -43,6 +43,13 @@ function diagramWidth(node: HTMLElement): number | undefined {
 	return width > 0 ? width : undefined;
 }
 
+// Pele wraps a node with a `click ... href` directive in a link. Diagrams come from model
+// output, so they stay inert, as they were under Mermaid's strict security level: each link
+// gives way to its children. The preview dialog and the downloaded file copy this svg.
+function unwrapLinks(root: HTMLElement) {
+	for (const link of root.querySelectorAll('a')) link.replaceWith(...link.childNodes);
+}
+
 /**
  * Renders the mermaid diagrams in `container` that haven't been rendered yet, with Pele.
  * Marks nodes immediately to prevent duplicate renders during streaming. Colors come
@@ -77,6 +84,7 @@ export async function renderMermaidDiagrams(container: HTMLElement) {
 			});
 
 			node.innerHTML = svg;
+			unwrapLinks(node);
 		} catch (error) {
 			// the message quotes the diagram source, so it goes in as text
 			const message = document.createElement('div');
