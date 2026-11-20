@@ -3103,6 +3103,7 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
         case GGML_OP_TOP_K:
         case GGML_OP_ADD_ID:
         case GGML_OP_UNARY:
+        case GGML_OP_LEAKY_RELU:
         case GGML_OP_CUMSUM:
         case GGML_OP_FILL:
         case GGML_OP_SET:

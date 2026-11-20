@@ -27,6 +27,7 @@ GGML_OP_CONVERTER(translate_reshape);
 GGML_OP_CONVERTER(translate_rms_norm);
 GGML_OP_CONVERTER(translate_norm);
 GGML_OP_CONVERTER(translate_l2_norm);
+GGML_OP_CONVERTER(translate_leaky_relu);
 GGML_OP_CONVERTER(translate_sum_rows);
 GGML_OP_CONVERTER(translate_sqr);
 GGML_OP_CONVERTER(translate_rope);
