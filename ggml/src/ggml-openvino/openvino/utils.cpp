@@ -331,7 +331,11 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
     // exactly the guarantee needed. Marking Sin/Cos's input covers the whole theta chain back to the
     // Convert of inp_pos. The cost is negligible: theta is a few dozen values per token, against the
     // matmuls that dominate. The rotation itself and everything downstream stay f16.
-    const bool pin_angle = ggml_openvino_getenv_int("GGML_OPENVINO_ROPE_F32_ANGLE", 1) != 0;
+    //
+    // Off by default; GGML_OPENVINO_ROPE_F32_ANGLE=1 turns it on. It changes the RoPE of every model,
+    // it is validated on one model on the GPU only, and on an f32 path the round trip below makes
+    // cos and sin less accurate.
+    const bool pin_angle = ggml_openvino_getenv_int("GGML_OPENVINO_ROPE_F32_ANGLE") != 0;
 
     auto cos_op = std::make_shared<ov::op::v0::Cos>(theta);
     auto sin_op = std::make_shared<ov::op::v0::Sin>(theta);
@@ -370,8 +374,8 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
     // chain from inp_pos through Sin/Cos stays f32, everything downstream is f16, and the transition is
     // a node we control rather than one the pass has to infer.
     //
-    // Declared types are f32 on both sides at build time, so this is a no-op for the frontend and for
-    // the f32 paths; it only becomes a real boundary once ConvertPrecision runs under the f16 hint.
+    // Declared types are f32 on both sides at build time, so the frontend sees no type change. On an
+    // f32 path (the CPU device in test-backend-ops) the two Converts still round cos and sin to f16.
     if (pin_angle) {
         auto pin_boundary = [](Output<Node> x) -> Output<Node> {
             auto down = std::make_shared<ov::op::v0::Convert>(x, ov::element::f16);
