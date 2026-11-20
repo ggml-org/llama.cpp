@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <regex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -937,6 +938,102 @@ static void test_pcm_f32_to_s16(testing & t) {
     t.assert_true ("empty",          pcm_f32_to_s16(nullptr, 0).empty());
 }
 
+static void test_saved_state_buffer(testing & t) {
+    constexpr size_t original_size = 8 * 1024 * 1024;
+    for (const bool use_thp : {false, true}) {
+        common_state_data data;
+        data.resize(original_size, use_thp);
+        memset(data.data(), 0x5a, data.size());
+
+        data.resize(original_size + 4096, use_thp);
+        t.assert_equal("size after growth", original_size + 4096, data.size());
+        t.assert_equal("prefix kept after growth", 0x5a, int(data.data()[original_size - 1]));
+
+        common_state_data moved = std::move(data);
+        moved.resize(17);
+        t.assert_equal("size after shrink", (size_t) 17, moved.size());
+        t.assert_equal("prefix kept after shrink", 0x5a, int(moved.data()[16]));
+
+        moved.resize_for_overwrite(original_size, use_thp);
+        moved.resize_for_overwrite(original_size + 4096, use_thp);
+        memset(moved.data(), 0x73, moved.size());
+        t.assert_equal("size after overwrite", original_size + 4096, moved.size());
+        moved.resize(17);
+        t.assert_equal("written prefix survived shrink", 0x73, int(moved.data()[16]));
+
+        const uint8_t * old = moved.data();
+        try {
+            moved.resize_for_overwrite(SIZE_MAX, use_thp);
+            t.assert_true("oversized allocation rejected", false);
+        } catch (const std::length_error &) {
+            t.assert_true("failed overwrite kept storage", moved.data() == old && moved.size() == 17);
+            t.assert_equal("failed overwrite kept data", 0x73, int(moved.data()[16]));
+        }
+
+        moved.clear();
+        moved.shrink_to_fit();
+        t.assert_true("cleared buffer is empty", moved.empty());
+    }
+}
+
+static void test_prompt_cache_restore_retry(testing & t, const char * model_path) {
+    ggml_backend_load_all();
+    auto mparams = llama_model_default_params();
+    mparams.n_gpu_layers = 0;
+    llama_model_ptr model(llama_model_load_from_file(model_path, mparams));
+    if (!t.assert_true("loaded model", model != nullptr)) {
+        return;
+    }
+    auto cparams = llama_context_default_params();
+    cparams.n_ctx = 128;
+    cparams.n_threads = 2;
+    cparams.n_threads_batch = 2;
+    llama_context_ptr tgt(llama_init_from_model(model.get(), cparams));
+    llama_context_ptr dft(llama_init_from_model(model.get(), cparams));
+    if (!t.assert_true("created contexts", tgt && dft)) {
+        return;
+    }
+
+    const llama_tokens tokens = {1, 2, 3};
+    llama_batch_ext_ptr batch(llama_batch_ext_init(tgt.get()));
+    for (llama_pos pos = 0; pos < (llama_pos) tokens.size(); ++pos) {
+        const int32_t idx = llama_batch_ext_add_token(batch.get(), 0, tokens[pos]);
+        if (!t.assert_true("set token position", idx >= 0 && llama_batch_ext_set_pos(batch.get(), idx, &pos))) {
+            return;
+        }
+    }
+    if (!t.assert_equal("decoded source", 0, llama_process(tgt.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()))) {
+        return;
+    }
+    server_prompt saved, slot;
+    saved.tokens = server_tokens(tokens, false);
+    server_prompt_cache cache(0, 0);
+    const size_t size = llama_state_seq_get_size(tgt.get(), 0);
+    t.assert_true("empty target rejected", cache.alloc(saved, 0, size, false) == nullptr);
+    auto * entry = cache.alloc(saved, size, size, false);
+    if (!t.assert_true("allocated state", entry && size > 0) ||
+        !t.assert_equal("saved target", size, llama_state_seq_get_data(tgt.get(), entry->data.main.data(), size, 0))) {
+        return;
+    }
+
+    memcpy(entry->data.drft.data(), entry->data.main.data(), size);
+    entry->data.drft.data()[0] ^= 1; // fail the draft magic check
+    auto restore = [&] { return cache.load(slot, saved.tokens, {}, tgt.get(), dft.get(), 0); };
+    t.assert_true("draft restore failed", !restore());
+    if (!t.assert_equal("entry retained", size_t(1), cache.states.size()) ||
+        !t.assert_equal("target retained", size, cache.states.front().data.main.size()) ||
+        !t.assert_equal("draft retained", size, cache.states.front().data.drft.size())) {
+        return;
+    }
+
+    entry->data.drft.data()[0] ^= 1;
+    llama_memory_clear(llama_get_memory(tgt.get()), true);
+    t.assert_true("retry restored both models", restore());
+    t.assert_equal("target position", llama_pos(2), llama_memory_seq_pos_max(llama_get_memory(tgt.get()), 0));
+    t.assert_equal("draft position",  llama_pos(2), llama_memory_seq_pos_max(llama_get_memory(dft.get()), 0));
+    t.assert_true("entry consumed", cache.states.empty());
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -955,6 +1052,10 @@ int main(int argc, char ** argv) {
     t.test("json_helpers",  test_json_helpers);
     t.test("lora_helpers",  test_lora_helpers);
     t.test("server_prompt_reuse", test_server_prompt_reuse);
+    t.test("saved_state_buffer", test_saved_state_buffer);
+    if (argc > 2) {
+        t.test("prompt_cache_restore_retry", [&](testing & t) { test_prompt_cache_restore_retry(t, argv[2]); });
+    }
     t.test("server_pipe",   test_server_pipe);
     t.test("decision_escape", test_decision_escape);
     t.test("rerank_template", test_rerank_template);
