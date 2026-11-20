@@ -607,6 +607,23 @@ static void test_buffer_size_zero() {
     GGML_ASSERT(backend_b.context->allocated_total() == 0);
 }
 
+// verify tallocr advances offset safely within buffer bounds
+static void test_tallocr_overflow_guards() {
+    dummy_backend backend = dummy_backend_init(256, /*align*/ 16);
+    ggml_backend_buffer_t buf = ggml_backend_buft_alloc_buffer(&backend.buffer_type, 256);
+    GGML_ASSERT(buf != nullptr);
+
+    struct ggml_tallocr talloc = ggml_tallocr_new(buf);
+    auto [ctx, graph, ctx_ptr] = make_context();
+    ggml_tensor * t = make_input_with_size(ctx, 32);
+
+    enum ggml_status st = ggml_tallocr_alloc(&talloc, t);
+    GGML_ASSERT(st == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(talloc.offset <= ggml_backend_buffer_get_size(buf));
+
+    ggml_backend_buffer_free(buf);
+}
+
 // Test re-using gallocr for a different graph. The new graph has the same
 // total size, but one of the chunks is larger, so reallocation is required.
 static void test_reallocation() {
@@ -1119,6 +1136,7 @@ int main() {
     run("test_prefer_already_allocated_memory", test_prefer_already_allocated_memory);
     run("test_multiple_buffer_types", test_multiple_buffer_types);
     run("test_buffer_size_zero", test_buffer_size_zero);
+    run("test_tallocr_overflow_guards", test_tallocr_overflow_guards);
     run("test_reallocation", test_reallocation);
     run("test_graph_optimize_alloc_dep", test_graph_optimize_alloc_dep);
     run("test_buft_alloc_buffer_n_single_buffer", test_buft_alloc_buffer_n_single_buffer);
