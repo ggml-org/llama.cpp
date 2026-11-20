@@ -5,7 +5,8 @@
 		ModelCapabilities,
 		ModelId,
 		ModelLoadControl,
-		ModelRowActions
+		ModelRowActions,
+		ModelVoiceRole
 	} from '#lib/components/app/index.ts';
 	import { SETTINGS_KEYS } from '#lib/constants/index.ts';
 	import { ServerModelStatus } from '#lib/enums/index.ts';
@@ -88,6 +89,8 @@
 		tags={option.tags}
 		title={option.model}
 	/>
+
+	<ModelVoiceRole model={option.model} />
 
 	{#if showCapabilities}
 		<ModelCapabilities {option} />

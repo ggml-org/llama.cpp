@@ -387,3 +387,15 @@ export { groupModelFamilies, modelFamilyKey, type ModelFamilyGroup } from './mod
 
 // Svelte actions
 export { nearViewport } from './near-viewport';
+
+// Voice: what a recording becomes for the conversation's model
+export {
+	type DictationModelInput,
+	dictationModelFor,
+	isTranscriptionOnlyModel,
+	resolveVoiceMode,
+	voiceModeLabel,
+	type VoiceModeInput,
+	voiceModelRole,
+	type VoiceModeResolution
+} from './voice-mode';

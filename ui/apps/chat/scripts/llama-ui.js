@@ -26,6 +26,7 @@ const LLAMA_UI_EXPORTS = [
 	['@ggml-org/llama-ui/enums', `${source}/enums/index.ts`],
 	['@ggml-org/llama-ui/code', `${source}/utils/index.ts`],
 	['@ggml-org/llama-ui/utils', `${source}/components/ui/utils.ts`],
+	['@ggml-org/llama-ui/voice', `${source}/components/voice/index.ts`],
 	['@ggml-org/llama-ui/styles/*', `${source}/styles/*`],
 	['@ggml-org/llama-ui/theme.css', `${source}/styles/theme.css`],
 	['@ggml-org/llama-ui/tokens.css', `${source}/styles/tokens.css`],

@@ -53,6 +53,8 @@ export { default as ModelLoadControl } from './ModelLoadControl.svelte';
 export { default as ModelOrgAvatar } from './ModelOrgAvatar.svelte';
 export { default as ModelRowActions } from './ModelRowActions.svelte';
 export { default as ModelsSection } from './ModelsSection.svelte';
+/** **ModelVoiceRole** - a model's part in voice input (dictation, speech to text, voice), as a badge. */
+export { default as ModelVoiceRole } from './ModelVoiceRole.svelte';
 
 /** Capability and modality icon row, shared by every model-id surface. */
 export { ModelCapabilityIcons } from '@ggml-org/llama-ui/models';

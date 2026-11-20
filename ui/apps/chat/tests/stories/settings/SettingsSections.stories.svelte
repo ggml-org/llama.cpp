@@ -17,6 +17,8 @@
 
 <Story args={{ initialSection: SETTINGS_SECTIONS.DISPLAY.slug, open: true }} name="Display" />
 
+<Story args={{ initialSection: SETTINGS_SECTIONS.VOICE.slug, open: true }} name="Voice" />
+
 <Story args={{ initialSection: SETTINGS_SECTIONS.TOOLS.slug, open: true }} name="Tools" />
 
 <Story args={{ initialSection: SETTINGS_SECTIONS.AGENTIC.slug, open: true }} name="Agentic" />
