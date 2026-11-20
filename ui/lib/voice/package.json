@@ -41,11 +41,11 @@
     }
   },
   "devDependencies": {
-    "@types/node": "24.13.0",
-    "publint": "^0.3.21",
+    "@types/node": "24.19.2",
+    "publint": "0.3.25",
     "svelte": "5.57.3",
     "typescript": "6.0.3",
-    "vitest": "4.1.12"
+    "vitest": "5.0.5"
   },
   "engines": {
     "node": ">=20"
