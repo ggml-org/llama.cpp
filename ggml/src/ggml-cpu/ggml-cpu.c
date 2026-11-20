@@ -1291,6 +1291,7 @@ void ggml_compute_forward_mul_mat(
     // TODO: a more efficient F16 x F16 path can be used here if ggml_prec_get_src(dst, 1) allows converting src1 to F16
     //       the code needs to be refactored to enable this (src1 is currently converted based on vec_dot_type alone)
 
+    GGML_ASSERT(type_traits_cpu[src0->type].vec_dot != NULL);
     GGML_ASSERT(ne0 == ne01);
     GGML_ASSERT(ne1 == ne11);
     GGML_ASSERT(ne2 == ne12);
