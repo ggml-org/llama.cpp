@@ -587,6 +587,10 @@ struct ggml_opencl_fa_kernels {
     cl_kernel kernel_fa_kqv_direct_f16 = nullptr;
     cl_kernel kernel_fa_kqv_direct_reduce = nullptr;
     cl_kernel kernel_fa_v_transpose_q8 = nullptr;
+    cl_kernel kernel_fa_q8_rows_f16 = nullptr;
+    cl_kernel kernel_fa_q8_rows_f32 = nullptr;
+    cl_kernel kernel_mul_mm_q8_kq_p8 = nullptr;
+    cl_kernel kernel_mul_mm_q8_kq_p8_dk512 = nullptr;
     // generic prefill tile dims (f16 / f32 paths)
     std::map<std::pair<int, int>, int>       bm;
     std::map<std::pair<int, int>, int>       bn;
@@ -792,6 +796,10 @@ struct ggml_backend_opencl_context {
     ggml_cl_buffer prealloc_fa_pd;
     ggml_cl_buffer prealloc_fa_bmax;
     ggml_cl_buffer prealloc_fa_bsum;
+    ggml_cl_buffer prealloc_fa_k8;
+    ggml_cl_buffer prealloc_fa_k8_scale;
+    ggml_cl_buffer prealloc_fa_q8;
+    ggml_cl_buffer prealloc_fa_q8_scale;
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     ggml_cl_buffer prealloc_adreno_xmem_const;
@@ -1025,7 +1033,18 @@ struct ggml_backend_opencl_context {
     }
 
     ~ggml_backend_opencl_context() {
-        for (cl_kernel kernel : {fa.kernel_mul_mm_f16_f32_kq_p8, fa.kernel_mul_mm_q8_f32_kqv, fa.kernel_fa_p8_fixup, fa.kernel_fa_v_transpose_q8, fa.kernel_fa_kqv_direct_f16, fa.kernel_fa_kqv_direct_reduce}) {
+        for (cl_kernel kernel : {
+                fa.kernel_mul_mm_f16_f32_kq_p8,
+                fa.kernel_mul_mm_q8_f32_kqv,
+                fa.kernel_fa_p8_fixup,
+                fa.kernel_fa_v_transpose_q8,
+                fa.kernel_fa_kqv_direct_f16,
+                fa.kernel_fa_kqv_direct_reduce,
+                fa.kernel_fa_q8_rows_f16,
+                fa.kernel_fa_q8_rows_f32,
+                fa.kernel_mul_mm_q8_kq_p8,
+                fa.kernel_mul_mm_q8_kq_p8_dk512
+        }) {
             if (kernel != nullptr) {
                 CL_CHECK(clReleaseKernel(kernel));
             }
@@ -2619,7 +2638,7 @@ cl_program build_program_from_source_ex(
         const char * tag = nullptr, cl_command_queue retry_queue = nullptr);
 cl_program build_program_from_source(
         ggml_backend_opencl_context * backend_ctx, const char * program_buffer,
-        const std::string & compile_opts);
+        const std::string & compile_opts, bool fatal = true);
 cl_program build_program_from_binary(
         cl_context ctx, cl_device_id dev, const char * program_buffer,
         const std::string & compile_opts, size_t bin_size = 0);

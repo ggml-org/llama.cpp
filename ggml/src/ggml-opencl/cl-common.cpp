@@ -67,7 +67,7 @@ cl_program build_program_from_source_ex(cl_context ctx, cl_device_id dev, const 
     return NULL;
 }
 
-cl_program build_program_from_source(ggml_backend_opencl_context * backend_ctx, const char* program_buffer, const std::string &compile_opts) {
+cl_program build_program_from_source(ggml_backend_opencl_context * backend_ctx, const char* program_buffer, const std::string &compile_opts, bool fatal) {
     cl_context   ctx = backend_ctx->context;
     cl_device_id dev = backend_ctx->device;
 
@@ -79,7 +79,7 @@ cl_program build_program_from_source(ggml_backend_opencl_context * backend_ctx, 
         return p_cached;
     }
 
-    cl_program p = build_program_from_source_ex(ctx, dev, program_buffer, compile_opts, /*fatal=*/true);
+    cl_program p = build_program_from_source_ex(ctx, dev, program_buffer, compile_opts, fatal);
 
     // Best-effort save of the freshly-built binary (no-op if cache disabled).
     if (p != nullptr) {
