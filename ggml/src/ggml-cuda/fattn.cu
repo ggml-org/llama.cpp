@@ -274,11 +274,28 @@ bool ggml_cuda_flash_attn_ext_tile_shall_use_sparse(const int cc, const ggml_ten
         return false;
     }
 
-    if (GGML_CUDA_CC_IS_GCN(cc) || GGML_CUDA_CC_IS_CDNA(cc)) {
+    // CDNA and RDNA: the cost of the sparse kernel grows with the number of gathered rows nq*n_kv_max,
+    // the break even depends on the fraction of selected positions n_kv_max/n_kv. Tuned on gfx908 and gfx1201.
+    const int64_t n_gather = Q->ne[1]*int64_t(n_kv_max);
+    if (GGML_CUDA_CC_IS_CDNA(cc)) {
+        if (4*int64_t(n_kv_max) > n_kv) {
+            return 2*n_gather <= n_kv;
+        }
+        return n_gather <= (8*int64_t(n_kv_max) > n_kv ? 4 : 8)*n_kv;
+    }
+    if (GGML_CUDA_CC_IS_RDNA2(cc) || GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
+        if (2*int64_t(n_kv_max) > n_kv) {
+            return false;
+        }
+        if (4*int64_t(n_kv_max) > n_kv) {
+            return n_gather <= n_kv;
+        }
+        return 8*int64_t(n_kv_max) > n_kv ? n_gather <= 2*n_kv : true;
+    }
+
+    if (GGML_CUDA_CC_IS_GCN(cc)) {
         // Sparse compaction is not beneficial when the selected positions exceed 25% of the KV cache.
-        // On CDNA a single 256/256 query still gains at 50%.
-        const bool single_query_256 = GGML_CUDA_CC_IS_CDNA(cc) && DKQ == 256 && DV == 256 && Q->ne[1] == 1;
-        if (n_kv_max > n_kv/(single_query_256 ? 2 : 4)) {
+        if (n_kv_max > n_kv/4) {
             return false;
         }
 
@@ -916,6 +933,13 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_MMA_F16;
     }
 
+#ifdef GGML_USE_HIP
+    // the sparse tile kernel needs ncols2 > 1, it also handles quantized K/V by converting them to f16
+    if (gqa_opt_applies && gqa_ratio % 2 == 0 && ggml_cuda_flash_attn_ext_tile_shall_use_sparse(cc, dst, Q->ne[0], V->ne[0])) {
+        return BEST_FATTN_KERNEL_TILE;
+    }
+#endif // GGML_USE_HIP
+
     // AMD MFMA needs a certain minimum batch size to outscale the tile kernel for large head sizes.
     if (amd_mfma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
         if ((Q->ne[0] <= 64 && Q->ne[1] * gqa_ratio_eff > 8)) {
@@ -937,13 +961,6 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             Q->ne[1] * gqa_ratio_eff > (Q->ne[0] <= 128 ? 8 : 16)) {
         return BEST_FATTN_KERNEL_MMA_F16;
     }
-
-#ifdef GGML_USE_HIP
-    // the sparse tile kernel needs ncols2 > 1, it also handles quantized K/V by converting them to f16
-    if (gqa_opt_applies && gqa_ratio % 2 == 0 && ggml_cuda_flash_attn_ext_tile_shall_use_sparse(cc, dst, Q->ne[0], V->ne[0])) {
-        return BEST_FATTN_KERNEL_TILE;
-    }
-#endif // GGML_USE_HIP
 
     // If there are no tensor cores available, use the generic tile kernel:
     if (can_use_vector_kernel) {

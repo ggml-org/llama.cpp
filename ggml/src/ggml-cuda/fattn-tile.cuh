@@ -416,11 +416,16 @@ static __device__ __forceinline__ void flash_attn_tile_load_tile(
                 for (int j0 = j0_start; j0 < j0_stop; j0 += stride_j) {
                     const int j = j0*cpy_ne + (stride_j == warp_size ? threadIdx.x : threadIdx.x % stride_j)*cpy_ne;
 
-                    const __align__(16) half2 zero[cpy_ne] = {{0.0f, 0.0f}};
-                    const int i_KV_offset = use_sparse && (!oob_check || i < i_sup) ? sparse_indices[k_VKQ_0 + i] - k_VKQ_0 : i;
-                    ggml_cuda_memcpy_1<cpy_nb>(
-                        tile_KV + i*(J/2 + J_padding) + j,
-                        !oob_check || i < i_sup ? KV + (use_sparse ? int64_t(i_KV_offset)*stride_KV : i_KV_offset*stride_KV) + j : zero);
+                    if constexpr (use_sparse) {
+                        // out of bounds rows load the last valid row, their KQ values are masked
+                        const int i_KV = sparse_indices[k_VKQ_0 + (oob_check ? min(i, i_sup - 1) : i)] - k_VKQ_0;
+                        ggml_cuda_memcpy_1<cpy_nb>(tile_KV + i*(J/2 + J_padding) + j, KV + int64_t(i_KV)*stride_KV + j);
+                    } else {
+                        const __align__(16) half2 zero[cpy_ne] = {{0.0f, 0.0f}};
+                        ggml_cuda_memcpy_1<cpy_nb>(
+                            tile_KV + i*(J/2 + J_padding) + j,
+                            !oob_check || i < i_sup ? KV + i*stride_KV + j : zero);
+                    }
                 }
             }
         }
@@ -467,11 +472,16 @@ static __device__ __forceinline__ void flash_attn_tile_load_tile(
                 for (int j0 = j0_start; j0 < j0_stop; j0 += stride_j) {
                     const int j = j0*(cpy_ne/2) + (stride_j == warp_size ? threadIdx.x : threadIdx.x % stride_j)*(cpy_ne/2);
 
-                    const half2 zero[cpy_ne/2] = {{0.0f, 0.0f}};
-                    const int i_KV_offset = use_sparse && (!oob_check || i < i_sup) ? sparse_indices[k_VKQ_0 + i] - k_VKQ_0 : i;
                     __align__(16) half2 tmp_h2[cpy_ne/2];
-                    ggml_cuda_memcpy_1<sizeof(tmp_h2)>(
-                        tmp_h2, !oob_check || i < i_sup ? KV + (use_sparse ? int64_t(i_KV_offset)*stride_KV : i_KV_offset*stride_KV) + j : zero);
+                    if constexpr (use_sparse) {
+                        // out of bounds rows load the last valid row, their KQ values are masked
+                        const int i_KV = sparse_indices[k_VKQ_0 + (oob_check ? min(i, i_sup - 1) : i)] - k_VKQ_0;
+                        ggml_cuda_memcpy_1<sizeof(tmp_h2)>(tmp_h2, KV + int64_t(i_KV)*stride_KV + j);
+                    } else {
+                        const half2 zero[cpy_ne/2] = {{0.0f, 0.0f}};
+                        ggml_cuda_memcpy_1<sizeof(tmp_h2)>(
+                            tmp_h2, !oob_check || i < i_sup ? KV + i*stride_KV + j : zero);
+                    }
 
                     __align__(16) float2 tmp_f2[cpy_ne/2];
 #pragma unroll
@@ -842,12 +852,12 @@ static __global__ void flash_attn_tile(
 
     // Skip unused kernel variants for faster compilation:
 
-#if !defined(GCN) && !defined(CDNA)
+#if !defined(GCN) && !defined(CDNA) && !defined(RDNA2) && !defined(RDNA3) && !defined(RDNA4)
     if constexpr (use_sparse) {
         NO_DEVICE_CODE;
         return;
     }
-#endif // !defined(GCN) && !defined(CDNA)
+#endif // !defined(GCN) && !defined(CDNA) && !defined(RDNA2) && !defined(RDNA3) && !defined(RDNA4)
 
     if ((use_logit_softcap && !(DV == 128 || DV == 256 || DV == 512))) {
         GGML_UNUSED_VARS(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
