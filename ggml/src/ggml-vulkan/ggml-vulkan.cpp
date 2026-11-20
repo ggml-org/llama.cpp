@@ -1,5 +1,7 @@
 #include "ggml-vulkan-common.h"
 
+#include <fstream>
+
 static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& device) {
     vk::PhysicalDeviceProperties props = device.getProperties();
 
@@ -4468,6 +4470,18 @@ static bool ggml_vk_has_rebar(const vk::PhysicalDevice & physical_device) {
 
 static void ggml_vk_device_start_keepalive(vk_device& device);
 
+// kernel driver of a DRM device node, read from sysfs. empty if not found (not Linux)
+static std::string ggml_vk_drm_kernel_driver(int64_t major, int64_t minor) {
+    std::ifstream uevent("/sys/dev/char/" + std::to_string(major) + ":" + std::to_string(minor) + "/device/uevent");
+    std::string line;
+    while (std::getline(uevent, line)) {
+        if (line.rfind("DRIVER=", 0) == 0) {
+            return line.substr(7);
+        }
+    }
+    return "";
+}
+
 vk_device ggml_vk_get_device(size_t idx) {
     VK_LOG_DEBUG("ggml_vk_get_device(" << idx << ")");
 
@@ -4526,6 +4540,7 @@ vk_device ggml_vk_get_device(size_t idx) {
         bool shader_float8_extension = false;
         bool workgroup_memory_explicit_layout_support = false;
         bool shader_clock_support = false;
+        bool physical_device_drm = false;
 
         for (const auto& properties : ext_props) {
             if (strcmp("VK_KHR_maintenance4", properties.extensionName) == 0) {
@@ -4603,6 +4618,8 @@ vk_device ggml_vk_get_device(size_t idx) {
                 internally_sync_support = true;
             } else if (strcmp("VK_EXT_device_fault", properties.extensionName) == 0) {
                 device->device_fault = true;
+            } else if (strcmp("VK_EXT_physical_device_drm", properties.extensionName) == 0) {
+                physical_device_drm = true;
             }
         }
 
@@ -4618,6 +4635,7 @@ vk_device ggml_vk_get_device(size_t idx) {
         vk::PhysicalDeviceSubgroupSizeControlPropertiesEXT subgroup_size_control_props;
         vk::PhysicalDeviceShaderIntegerDotProductPropertiesKHR shader_integer_dot_product_props;
         vk::PhysicalDeviceExternalMemoryHostPropertiesEXT external_memory_host_props;
+        vk::PhysicalDeviceDrmPropertiesEXT drm_props;
 
         props2.pNext = &props3;
         props3.pNext = &subgroup_props;
@@ -4661,11 +4679,19 @@ vk_device ggml_vk_get_device(size_t idx) {
             last_struct->pNext = (VkBaseOutStructure *)&external_memory_host_props;
             last_struct = (VkBaseOutStructure *)&external_memory_host_props;
         }
+        if (physical_device_drm) {
+            last_struct->pNext = (VkBaseOutStructure *)&drm_props;
+            last_struct = (VkBaseOutStructure *)&drm_props;
+        }
 
         device->physical_device.getProperties2(&props2);
         device->properties = props2.properties;
         device->vendor_id = device->properties.vendorID;
         device->driver_id = driver_props.driverID;
+
+        // the i915 kernel driver cancels work that stays in the queue for more than 20 seconds
+        device->limit_pending_work = physical_device_drm && drm_props.hasRender &&
+                                     ggml_vk_drm_kernel_driver(drm_props.renderMajor, drm_props.renderMinor) == "i915";
 
         device->external_memory_host = device->external_memory_host && ggml_vk_external_memory_host_usable(device->driver_id);
 
@@ -5436,8 +5462,6 @@ vk_device ggml_vk_get_device(size_t idx) {
         device->idx = idx;
 
         device->serialize_submissions = getenv("GGML_VK_SERIALIZE_SUBMISSIONS") != nullptr;
-        // the i915 kernel driver cancels work that stays in the queue for more than 20 seconds
-        device->limit_pending_work = device->driver_id == vk::DriverId::eIntelOpenSourceMESA;
 
         device->disable_fusion = getenv("GGML_VK_DISABLE_FUSION") != nullptr;
         device->disable_stream_k = getenv("GGML_VK_DISABLE_STREAM_K") != nullptr;
