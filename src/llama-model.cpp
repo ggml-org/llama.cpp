@@ -1687,8 +1687,30 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     // for decision models
     ml.get_arr(LLM_KV_DECISION_LABELS, decision_labels, false);
 
+    // looped layers: the GGUF has one block per layer visit, the visits of a core layer share its weights
+    ml.get_key(LLM_KV_LOOP_CORE_END, hparams.loop_core_end, false);
+    if (hparams.loop_core_end > 0) {
+        ml.get_key(LLM_KV_LOOP_CORE_START, hparams.loop_core_start);
+        ml.get_key(LLM_KV_NUM_LOOPS,       hparams.loop_n_pass);
+        if (hparams.loop_n_pass < 2 || hparams.loop_core_start >= hparams.loop_core_end ||
+            (uint64_t) hparams.loop_core_end + (uint64_t) (hparams.loop_n_pass - 1)*(hparams.loop_core_end - hparams.loop_core_start) > hparams.n_layer()) {
+            throw std::runtime_error(format("invalid loop layout: core [%u, %u) x %u passes, %u layer visits",
+                hparams.loop_core_start, hparams.loop_core_end, hparams.loop_n_pass, hparams.n_layer()));
+        }
+    }
+
     // per-arch hparams
     load_arch_hparams(ml);
+
+    for (uint32_t il = 0; il < hparams.n_layer() && hparams.loop_n_pass > 1; ++il) {
+        const uint32_t iv = hparams.loop_visit(hparams.loop_layer(il));
+        if (hparams.is_swa(il) != hparams.is_swa(iv) || hparams.is_recr(il) != hparams.is_recr(iv) ||
+            hparams.n_head(il) != hparams.n_head(iv) || hparams.n_head_kv(il) != hparams.n_head_kv(iv) ||
+            hparams.n_ff(il) != hparams.n_ff(iv) || hparams.n_ff_exp(il) != hparams.n_ff_exp(iv) ||
+            hparams.n_expert_used(il) != hparams.n_expert_used(iv)) {
+            throw std::runtime_error(format("layer visit %u differs from the first visit %u of its layer", il, iv));
+        }
+    }
 
     pimpl->n_bytes = ml.n_bytes;
 
@@ -1849,10 +1871,11 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
 
         // generic pass: load optional per-tensor/per-expert ".scale" tensors (e.g. NVFP4 scale2)
         // this avoids having to add scale loading to every architecture
-        for (int i = 0; i < n_layer_all; ++i) {
+        const int n_layer_phys = n_layer_all - (int) hparams.loop_n_extra();
+        for (int i = 0; i < n_layer_phys; ++i) {
             auto & layer = layers[i];
 
-            if (hparams.has_kv(i)) {
+            if (hparams.has_kv(hparams.loop_visit(i))) {
                 layer.k_cache_s = create_tensor(tn(LLM_TENSOR_ATTN_K, "k_scale", i), {1}, TENSOR_NOT_REQUIRED);
                 layer.v_cache_s = create_tensor(tn(LLM_TENSOR_ATTN_V, "v_scale", i), {1}, TENSOR_NOT_REQUIRED);
 
@@ -2002,6 +2025,14 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             }
             if (!layer.nextn.shared_head_head_in_s && layer.nextn.shared_head_head) {
                 layer.nextn.shared_head_head_in_s = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "input_scale", i), {1}, TENSOR_NOT_REQUIRED);
+            }
+        }
+
+        // looped layers: every visit shares the weights of its physical layer
+        for (int il = n_layer_all - 1; il >= 0; --il) {
+            const int ip = (int) hparams.loop_layer(il);
+            if (ip != il) {
+                layers[il] = layers[ip];
             }
         }
         // output scales

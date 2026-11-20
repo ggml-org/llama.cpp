@@ -157,6 +157,9 @@ class Keys:
         FULL_ATTENTION_INTERVAL           = "{arch}.full_attention_interval"
         NUM_LOOPS                         = "{arch}.num_loops"
         SKIP_LOOP_FINAL_NORM              = "{arch}.skip_loop_final_norm"
+        LOOP_CORE_START                   = "{arch}.loop.core_start"
+        LOOP_CORE_END                     = "{arch}.loop.core_end"
+        LOOP_GATE_RANK                    = "{arch}.loop.gate_rank"
         HASH_LAYER_COUNT                  = "{arch}.hash_layer_count"
         ACTIVATION_SPARSITY_SCALE         = "{arch}.activation_sparsity_scale"
         ALTUP_ACTIVE_IDX                  = "{arch}.altup.active_idx"
@@ -810,6 +813,8 @@ class MODEL_TENSOR(IntEnum):
     DENSE_3_OUT          = auto() # embeddinggemma 3_Dense
     OUTPUT_NORM          = auto()
     OUTPUT_RES_QUERY     = auto()
+    LOOP_RES_QUERY       = auto() # inkling2 loop
+    LOOP_KV_RES_QUERY    = auto() # inkling2 loop
     HC_HEAD_FN           = auto()
     HC_HEAD_BASE         = auto()
     HC_HEAD_SCALE        = auto()
@@ -880,6 +885,18 @@ class MODEL_TENSOR(IntEnum):
     MOE_LATENT_UP        = auto() # nemotron 3 super
     FFN_POST_CONV        = auto()
     FFN_RES_QUERY        = auto()
+    LOOP_ATTN_DOWN       = auto() # inkling2 loop
+    LOOP_ATTN_GAIN       = auto()
+    LOOP_ATTN_FORGET     = auto()
+    LOOP_K_DOWN          = auto()
+    LOOP_K_GAIN          = auto()
+    LOOP_K_FORGET        = auto()
+    LOOP_V_DOWN          = auto()
+    LOOP_V_GAIN          = auto()
+    LOOP_V_FORGET        = auto()
+    LOOP_MLP_DOWN        = auto()
+    LOOP_MLP_GAIN        = auto()
+    LOOP_MLP_FORGET      = auto()
     STREAM_EMBD          = auto()
     DEPTH_MEM_STATE_WRITE = auto()
     DEPTH_MEM_META_WRITE = auto()
@@ -1806,6 +1823,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.OUTPUT_NORM:               "output_norm",
     MODEL_TENSOR.OUTPUT:                    "output",
     MODEL_TENSOR.OUTPUT_RES_QUERY:          "output_res_query",
+    MODEL_TENSOR.LOOP_RES_QUERY:            "loop_res_query",
+    MODEL_TENSOR.LOOP_KV_RES_QUERY:         "loop_kv_res_query",
     MODEL_TENSOR.HRM_Z_L_INIT:              "hrm.z_l_init",
     MODEL_TENSOR.DENSE_2_OUT:               "dense_2", # embeddinggemma 2_Dense
     MODEL_TENSOR.DENSE_3_OUT:               "dense_3", # embeddinggemma 2_Dense
@@ -1881,6 +1900,18 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.MOE_LATENT_UP:             "blk.{bid}.ffn_latent_up",        # nemotron 3 super
     MODEL_TENSOR.FFN_POST_CONV:             "blk.{bid}.ffn_post_conv",
     MODEL_TENSOR.FFN_RES_QUERY:             "blk.{bid}.ffn_res_query",
+    MODEL_TENSOR.LOOP_ATTN_DOWN:            "blk.{bid}.loop_attn_down",
+    MODEL_TENSOR.LOOP_ATTN_GAIN:            "blk.{bid}.loop_attn_gain",
+    MODEL_TENSOR.LOOP_ATTN_FORGET:          "blk.{bid}.loop_attn_forget",
+    MODEL_TENSOR.LOOP_K_DOWN:               "blk.{bid}.loop_k_down",
+    MODEL_TENSOR.LOOP_K_GAIN:               "blk.{bid}.loop_k_gain",
+    MODEL_TENSOR.LOOP_K_FORGET:             "blk.{bid}.loop_k_forget",
+    MODEL_TENSOR.LOOP_V_DOWN:               "blk.{bid}.loop_v_down",
+    MODEL_TENSOR.LOOP_V_GAIN:               "blk.{bid}.loop_v_gain",
+    MODEL_TENSOR.LOOP_V_FORGET:             "blk.{bid}.loop_v_forget",
+    MODEL_TENSOR.LOOP_MLP_DOWN:             "blk.{bid}.loop_mlp_down",
+    MODEL_TENSOR.LOOP_MLP_GAIN:             "blk.{bid}.loop_mlp_gain",
+    MODEL_TENSOR.LOOP_MLP_FORGET:           "blk.{bid}.loop_mlp_forget",
     MODEL_TENSOR.STREAM_EMBD:               "stream_embd",
     MODEL_TENSOR.DEPTH_MEM_STATE_WRITE:     "depth_mem_state_write",
     MODEL_TENSOR.DEPTH_MEM_META_WRITE:      "depth_mem_meta_write",
@@ -7086,6 +7117,20 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_POST_CONV,
         MODEL_TENSOR.FFN_RES_QUERY,
+        MODEL_TENSOR.LOOP_RES_QUERY,
+        MODEL_TENSOR.LOOP_KV_RES_QUERY,
+        MODEL_TENSOR.LOOP_ATTN_DOWN,
+        MODEL_TENSOR.LOOP_ATTN_GAIN,
+        MODEL_TENSOR.LOOP_ATTN_FORGET,
+        MODEL_TENSOR.LOOP_K_DOWN,
+        MODEL_TENSOR.LOOP_K_GAIN,
+        MODEL_TENSOR.LOOP_K_FORGET,
+        MODEL_TENSOR.LOOP_V_DOWN,
+        MODEL_TENSOR.LOOP_V_GAIN,
+        MODEL_TENSOR.LOOP_V_FORGET,
+        MODEL_TENSOR.LOOP_MLP_DOWN,
+        MODEL_TENSOR.LOOP_MLP_GAIN,
+        MODEL_TENSOR.LOOP_MLP_FORGET,
     ],
     MODEL_ARCH.DOMYN_EDGE: [
         MODEL_TENSOR.TOKEN_EMBD,

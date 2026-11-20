@@ -502,6 +502,14 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_XIELU_EPS,                         hparams.xielu_eps);
 
     add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,               hparams.attn_res_block_size);
+    if (hparams.loop_n_pass > 1) {
+        add_kv(LLM_KV_NUM_LOOPS,                     hparams.loop_n_pass);
+        add_kv(LLM_KV_LOOP_CORE_START,               hparams.loop_core_start);
+        add_kv(LLM_KV_LOOP_CORE_END,                 hparams.loop_core_end);
+    }
+    if (hparams.loop_gate_rank > 0) {
+        add_kv(LLM_KV_LOOP_GATE_RANK,                hparams.loop_gate_rank);
+    }
     add_kv(LLM_KV_ACTIVATION_SITU_BETA,              hparams.situ_beta);
     add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA,       hparams.situ_linear_beta);
 
@@ -534,6 +542,8 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->output_in_s);
     add_tensor(model->output_res_score);
     add_tensor(model->output_res_query);
+    add_tensor(model->loop_res_query);
+    add_tensor(model->loop_kv_res_query);
     add_tensor(model->nextn_proj_pre);
     add_tensor(model->nextn_proj_post);
     add_tensor(model->cls);

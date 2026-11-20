@@ -2927,6 +2927,11 @@ uint32_t llama_context::graph_max_nodes() const {
         res += llama_sampler_backend_n_nodes(sampler) * cparams.n_outputs_max_per_seq;
     }
 
+    // looped layers reuse their tensors once per pass
+    if (model.hparams.loop_n_pass > 1) {
+        res *= model.hparams.loop_n_pass;
+    }
+
     if (cparams.training) {
         res *= 4;
     }

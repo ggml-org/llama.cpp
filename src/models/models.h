@@ -2496,6 +2496,7 @@ struct llama_model_inkling2 : public llama_model_base {
         graph(const llm_graph_params & params);
         ggml_tensor * mix(const std::vector<ggml_tensor *> & blocks, ggml_tensor * cur, ggml_tensor * query);
         ggml_tensor * clip(ggml_tensor * cur, ggml_tensor * scale, float threshold);
+        ggml_tensor * control(ggml_tensor * cur, ggml_tensor * message, const llama_layer & layer, int module);
         ggml_tensor * convolve(
                 ggml_tensor * cur,
                 ggml_tensor * weight,
