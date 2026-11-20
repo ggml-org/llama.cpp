@@ -396,3 +396,123 @@ __kernel void kernel_gemv_noshuffle_q4_0_f32_mc3(
 #undef MC_COL_Q40
 #undef MC_DQ_HI
 #undef MC_DQ_LO
+
+// ---------------------------------------------------------------------------
+// 4-output-per-work-item variant for the long-vocab lm_head/embed GEMV (o4).
+// Each work item computes 4 consecutive output rows as two 2-row pairs (a, b)
+// that share one activation read per k-block. Port of the q4_K o4 variant to
+// the q4_0 noshuffle layout; per-row accumulation order matches the 2-row
+// base kernel (the 2-row macros are reused unchanged).
+// ---------------------------------------------------------------------------
+#ifdef ADRENO_GPU
+REQD_SUBGROUP_SIZE_64
+#endif
+__kernel void kernel_gemv_noshuffle_q4_0_f32_o4(
+        __read_only  image1d_buffer_t src0_q,
+        global half2  * src0_d,
+        __read_only  image1d_buffer_t src1,
+        global float * dst,
+        ulong offsetd,
+        int ne00,
+        int ne01)
+{
+    uint groupId = get_local_id(1);
+    uint gid     = get_global_id(0);
+    ushort slid  = get_sub_group_local_id();
+
+    uint K = ne00;
+    uint M = ne01;
+
+    uint LINE_STRIDE_A = M / 2;
+    // pairs: a -> rows (4g, 4g+1), b -> rows (4g+2, 4g+3)
+    uint gid_a = 2 * gid;
+    uint gid_b = 2 * gid + 1;
+    // Keep tail lanes active for subgroup ops, but read a valid weight row.
+    uint gid_as = min(gid_a, LINE_STRIDE_A - 1);
+    uint gid_bs = min(gid_b, LINE_STRIDE_A - 1);
+    uint BLOCK_STRIDE_A = N_SIMDGROUP * M;
+
+    __private uint4  regA;
+    __private half2  regS_a;
+    __private half2  regS_b;
+    __private float8 regB;
+
+    __private float2 totalSum_a = (float2)(0.0f);
+    __private float2 totalSum_b = (float2)(0.0f);
+
+    for (uint k = groupId; k < (K / QK4_0); k += N_SIMDGROUP) {
+        regS_a = src0_d[gid_as + k * LINE_STRIDE_A];
+        regS_b = src0_d[gid_bs + k * LINE_STRIDE_A];
+        // activation: load once, reuse for both pairs
+        if (slid < 4) {
+            regB.s0123 = read_imagef(src1, (slid * 2 + k * 8));
+            regB.s4567 = read_imagef(src1, (1 + slid * 2 + k * 8));
+        }
+
+        // pair a (own block so _lo sees the shared_y declared by _hi)
+        {
+            regA.s0 = read_imageui(src0_q, (gid_as + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 0)).x;
+            regA.s1 = read_imageui(src0_q, (gid_as + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 1)).x;
+            regA.s2 = read_imageui(src0_q, (gid_as + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 2)).x;
+            regA.s3 = read_imageui(src0_q, (gid_as + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 3)).x;
+#ifdef VECTOR_SUB_GROUP_BROADCAST
+            dequantizeBlockAccum_ns_sgbroadcast_8_hi(totalSum_a, as_ushort8(regA), regS_a, regB);
+#else
+            dequantizeBlockAccum_ns_sgbroadcast_1_hi(totalSum_a, as_ushort8(regA), regS_a, regB);
+#endif
+            regA.s0 = read_imageui(src0_q, (gid_as + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 4)).x;
+            regA.s1 = read_imageui(src0_q, (gid_as + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 5)).x;
+            regA.s2 = read_imageui(src0_q, (gid_as + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 6)).x;
+            regA.s3 = read_imageui(src0_q, (gid_as + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 7)).x;
+#ifdef VECTOR_SUB_GROUP_BROADCAST
+            dequantizeBlockAccum_ns_sgbroadcast_8_lo(totalSum_a, as_ushort8(regA), regS_a, regB);
+#else
+            dequantizeBlockAccum_ns_sgbroadcast_1_lo(totalSum_a, as_ushort8(regA), regS_a, regB);
+#endif
+        }
+
+        // pair b
+        {
+            regA.s0 = read_imageui(src0_q, (gid_bs + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 0)).x;
+            regA.s1 = read_imageui(src0_q, (gid_bs + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 1)).x;
+            regA.s2 = read_imageui(src0_q, (gid_bs + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 2)).x;
+            regA.s3 = read_imageui(src0_q, (gid_bs + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 3)).x;
+#ifdef VECTOR_SUB_GROUP_BROADCAST
+            dequantizeBlockAccum_ns_sgbroadcast_8_hi(totalSum_b, as_ushort8(regA), regS_b, regB);
+#else
+            dequantizeBlockAccum_ns_sgbroadcast_1_hi(totalSum_b, as_ushort8(regA), regS_b, regB);
+#endif
+            regA.s0 = read_imageui(src0_q, (gid_bs + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 4)).x;
+            regA.s1 = read_imageui(src0_q, (gid_bs + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 5)).x;
+            regA.s2 = read_imageui(src0_q, (gid_bs + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 6)).x;
+            regA.s3 = read_imageui(src0_q, (gid_bs + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 7)).x;
+#ifdef VECTOR_SUB_GROUP_BROADCAST
+            dequantizeBlockAccum_ns_sgbroadcast_8_lo(totalSum_b, as_ushort8(regA), regS_b, regB);
+#else
+            dequantizeBlockAccum_ns_sgbroadcast_1_lo(totalSum_b, as_ushort8(regA), regS_b, regB);
+#endif
+        }
+    }
+
+    // reduce 4 outputs (a.s0, a.s1, b.s0, b.s1) across the 4 subgroups
+    __local float4 reduceLM[SIMDGROUP_WIDTH * 3];
+    float4 acc = (float4)(totalSum_a.s0, totalSum_a.s1, totalSum_b.s0, totalSum_b.s1);
+    if (groupId == 1) { reduceLM[SIMDGROUP_WIDTH * 0 + slid] = acc; }
+    if (groupId == 2) { reduceLM[SIMDGROUP_WIDTH * 1 + slid] = acc; }
+    if (groupId == 3) { reduceLM[SIMDGROUP_WIDTH * 2 + slid] = acc; }
+
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    if (groupId == 0) {
+        acc += reduceLM[SIMDGROUP_WIDTH * 0 + slid];
+        acc += reduceLM[SIMDGROUP_WIDTH * 1 + slid];
+        acc += reduceLM[SIMDGROUP_WIDTH * 2 + slid];
+        dst = (global float*)((global char*)dst + offsetd);
+        // The dispatch rounds ne01/4 up to the subgroup width; never store a
+        // partial tail quad past the last row.
+        if (gid * 4 + 3 < (uint)ne01) {
+            vstore4(acc, 0, &(dst[gid * 4]));
+        }
+    }
+}
+
