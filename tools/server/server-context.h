@@ -12,6 +12,7 @@
 #include <set>
 
 struct server_context_impl; // private implementation
+struct mtmd_helper_video_decoder; // see mtmd-helper.h
 
 struct server_context_meta {
     std::string build_info;
@@ -90,6 +91,10 @@ struct server_context {
 
     // note: must be set before load_model() is called
     void set_state_callback(server_state_callback_t callback);
+
+    // decode video with a custom decoder instead of ffmpeg, the decoder must outlive the server
+    // note: must be set before load_model() is called
+    void set_video_decoder(const mtmd_helper_video_decoder * decoder);
 };
 
 

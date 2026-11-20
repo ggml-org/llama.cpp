@@ -225,7 +225,7 @@ void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t n, size
             ctx, subctx, p, ggml_vk_subbuffer(ctx, d_X), ggml_vk_subbuffer(ctx, d_Y), ggml_vk_subbuffer(ctx, d_D), ggml_vk_subbuffer(ctx, ctx->prealloc_split_k),
             m, n, k,
             k, k, m, k*m, k*n, m*n,
-            split_k, batch, batch, batch, 1, 1, n,
+            split_k, 0, batch, batch, batch, 1, 1, n,
             k * sizeof(Y_TYPE), m * sizeof(float)
         );
     }
@@ -693,7 +693,7 @@ void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m, size_t
                 ctx, subctx, p, { qx_buf, 0, qx_sz }, { qy_buf, 0, qy_sz }, { d_buf, 0, d_sz }, { ctx->prealloc_split_k, 0, ctx->prealloc_size_split_k },
                 m, n, k,
                 k, k, m, k*m, k*n, m*n,
-                split_k, batch, batch, batch, 1, 1, n,
+                split_k, 0, batch, batch, batch, 1, 1, n,
                 (uint64_t)(k / ggml_blck_size(GGML_TYPE_Q8_1)) * ggml_type_size(GGML_TYPE_Q8_1), m * sizeof(float)
             );
         }
@@ -703,7 +703,7 @@ void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m, size_t
                 ctx, subctx, p, { qx_buf, 0, qx_sz }, { y_buf, 0, y_sz }, { d_buf, 0, d_sz }, { ctx->prealloc_split_k, 0, ctx->prealloc_size_split_k },
                 m, n, k,
                 k, k, m, k*m, k*n, m*n,
-                split_k, batch, batch, batch, 1, 1, n,
+                split_k, 0, batch, batch, batch, 1, 1, n,
                 k * sizeof(float), m * sizeof(float)
             );
         }
@@ -1043,6 +1043,8 @@ void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph
         } else if (tensor->op == GGML_OP_FILL) {
             const float value = ggml_get_op_params_f32(tensor, 0);
             tensor_clone = ggml_fill(ggml_ctx, src_clone[0], value);
+        } else if (tensor->op == GGML_OP_SLEEP) {
+            tensor_clone = ggml_sleep(ggml_ctx, src_clone[0], ggml_get_op_params_i32(tensor, 0));
         } else if (tensor->op == GGML_OP_SQR) {
             tensor_clone = ggml_sqr(ggml_ctx, src_clone[0]);
         } else if (tensor->op == GGML_OP_SQRT) {
