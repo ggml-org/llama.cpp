@@ -978,8 +978,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
 
     const bool has_tensor = props_dev->has_tensor;
 
-    const bool prec_bf16 = has_tensor && props_dev->has_bfloat &&
-        ggml_prec_get_src(op, 1) == GGML_PREC_BF16 && tsrc0 == GGML_TYPE_F32 && tsrc1 == GGML_TYPE_F32;
+    const bool prec_bf16 = props_dev->has_bfloat &&
+        ggml_prec_get_src(op, 1) == GGML_PREC_BF16 && tsrc1 == GGML_TYPE_F32 &&
+        (has_tensor ? tsrc0 == GGML_TYPE_F32 : tsrc0 != GGML_TYPE_BF16);
 
     const bool bc_out = has_tensor
         ? (op->ne[0] % NRA != 0 || op->ne[1] % NRB != 0)
@@ -1312,9 +1313,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_id(ggml_m
 
     const ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ggml_metal_library_get_device(lib));
 
-    const bool has_tensor = props_dev->has_tensor;
-
-    const bool prec_bf16 = has_tensor && props_dev->has_bfloat &&
+    const bool prec_bf16 = props_dev->has_bfloat &&
         ggml_prec_get_src(op, 1) == GGML_PREC_BF16 && tsrc1 == GGML_TYPE_F32 &&
         tsrc0 != GGML_TYPE_BF16 && tsrc0 != GGML_TYPE_MXFP4;
 
