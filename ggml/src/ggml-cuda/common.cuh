@@ -512,26 +512,52 @@ struct ggml_cuda_unroll<1> {
     }
 };
 
+template<typename T, int width>
+static __device__ __forceinline__ T warp_reduce_sum_impl(T x) {
+#if defined(GGML_USE_HIP)
+    if constexpr (width <= 64 && width <= ggml_cuda_get_physical_warp_size()) {
+        x += ggml_hip_dpp_move<GGML_HIP_DPP_QUAD_PERM_1032>(x);
+        if constexpr (width >= 4) {
+            x += ggml_hip_dpp_move<GGML_HIP_DPP_QUAD_PERM_2301>(x);
+        }
+        if constexpr (width >= 8) {
+            x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_HALF_MIRROR>(x);
+        }
+        if constexpr (width >= 16) {
+            x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_ROR_8>(x);
+        }
+        if constexpr (width == 64) {
+            x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_BCAST_15>(x);
+            x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_BCAST_31>(x);
+            return ggml_cuda_shfl(x, 63, 64);
+        }
+        if constexpr (width == 32) {
+            return x + ggml_cuda_shfl_xor(x, 16, 32);
+        }
+        return x;
+    } else
+#endif // defined(GGML_USE_HIP)
+    {
+#pragma unroll
+        for (int offset = width/2; offset > 0; offset >>= 1) {
+            x += ggml_cuda_shfl_xor(x, offset, width);
+        }
+        return x;
+    }
+}
+
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_sum(int x) {
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
     return __reduce_add_sync(GGML_CUDA_FULL_THREAD_MASK, x);
 #else
-#pragma unroll
-    for (int offset = width/2; offset > 0; offset >>= 1) {
-        x += ggml_cuda_shfl_xor(x, offset, width);
-    }
-    return x;
+    return warp_reduce_sum_impl<int, width>(x);
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 }
 
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ float warp_reduce_sum(float x) {
-#pragma unroll
-    for (int offset = width/2; offset > 0; offset >>= 1) {
-        x += ggml_cuda_shfl_xor(x, offset, width);
-    }
-    return x;
+    return warp_reduce_sum_impl<float, width>(x);
 }
 
 template<int width = WARP_SIZE>
@@ -585,13 +611,52 @@ static __device__ __forceinline__ int warp_reduce_any(int x) {
     }
 }
 
+// ROCm fails to merge multiple v_max_f32_dpp in one v_max_f32_dpp automatically ==> force it with asm (test with ROCm 7.2.4)
+template<int width>
+static __device__ __forceinline__ float warp_reduce_max_impl(float x) {
+#if defined(GGML_USE_HIP)
+    if constexpr (width >= 2 && width <= 64 && width <= ggml_cuda_get_physical_warp_size()) {
+        if constexpr (width >= 2) {
+            asm("v_nop\n\tv_nop\n\tv_max_f32_dpp %0, %0, %0 quad_perm:[1,0,3,2]" : "+v"(x));
+        }
+        if constexpr (width >= 4) {
+            asm("v_nop\n\tv_nop\n\tv_max_f32_dpp %0, %0, %0 quad_perm:[2,3,0,1]" : "+v"(x));
+        }
+        if constexpr (width == 8) {
+            asm("v_nop\n\tv_nop\n\tv_max_f32_dpp %0, %0, %0 row_half_mirror" : "+v"(x));
+        }
+        if constexpr (width >= 16) {
+            asm(
+                "v_nop\n\tv_nop\n\tv_max_f32_dpp %0, %0, %0 row_ror:8\n\t"
+                "v_nop\n\tv_nop\n\tv_max_f32_dpp %0, %0, %0 row_ror:4"
+                : "+v"(x));
+        }
+        if constexpr (width == 32) {
+            return fmaxf(x, __builtin_bit_cast(float, __builtin_amdgcn_ds_swizzle(__builtin_bit_cast(int, x), 0x401F)));
+        }
+        if constexpr (width == 64) {
+            // Only rows 1 and 3 receive the previous row's maximum, then rows 2 and 3 receive the first half-wave's maximum.
+            asm(
+                "v_nop\n\tv_nop\n\tv_max_f32_dpp %0, %0, %0 row_bcast:15 row_mask:0xa\n\t"
+                "v_nop\n\tv_nop\n\tv_max_f32_dpp %0, %0, %0 row_bcast:31 row_mask:0xc"
+                : "+v"(x));
+            return ggml_cuda_shfl(x, 63, 64);
+        }
+        return x;
+    } else
+#endif // defined(GGML_USE_HIP)
+    {
+#pragma unroll
+        for (int offset = width/2; offset > 0; offset >>= 1) {
+            x = fmaxf(x, ggml_cuda_shfl_xor(x, offset, width));
+        }
+        return x;
+    }
+}
+
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ float warp_reduce_max(float x) {
-#pragma unroll
-    for (int offset = width/2; offset > 0; offset >>= 1) {
-        x = fmaxf(x, ggml_cuda_shfl_xor(x, offset, width));
-    }
-    return x;
+    return warp_reduce_max_impl<width>(x);
 }
 
 template<typename T, int width = WARP_SIZE>
