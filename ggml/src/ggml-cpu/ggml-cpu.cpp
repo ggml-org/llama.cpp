@@ -451,9 +451,11 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
                 op->type != GGML_TYPE_IQ1_S   &&
                 op->type != GGML_TYPE_IQ1_M; // missing type_traits.from_float
         case GGML_OP_MUL_MAT:
-            if (ggml_get_op_params_i32(op, 1) == GGML_HINT_SRC0_IS_HADAMARD) {
-                // the hinted matmul is an FWHT of src1 for every src0 type, which reads F32 or F16 only
-                return src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16;
+            if (ggml_get_op_params_i32(op, 1) == GGML_HINT_SRC0_IS_HADAMARD &&
+                src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) {
+                // the hinted matmul is an FWHT of src1 for every src0 type, which reads F32 or F16 only;
+                // with use_ref it takes the general path instead, so src1 has to pass the check below too
+                return false;
             }
             // F16 in src1 is widened into the F32 work buffer, BF16 is widened or converted to vec_dot_type
             return src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16 ||

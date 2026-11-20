@@ -2300,8 +2300,8 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up,
     return true;
 }
 
-// MUL_MAT_ID with F32/F16/BF16 experts takes MMVF (up to MMVF_MAX_BATCH_SIZE tokens) on AMD, and on NVIDIA for a BF16 src1:
-// NVIDIA takes MMF otherwise, which reads only an F32 src1.
+// MUL_MAT_ID with F32/F16/BF16 experts takes MMVF (up to MMVF_MAX_BATCH_SIZE tokens) on AMD, and on NVIDIA for a BF16 src1,
+// which MMF can not read. On NVIDIA an F32 src1 takes MMF where MMF supports the experts, otherwise the sorted fallback.
 // MMVF reads src0 in pairs of values, so it needs an even number of columns and rows aligned to a pair.
 static bool ggml_cuda_mul_mat_id_use_mmvf_float(const ggml_tensor * src0, const ggml_tensor * src1, const int cc) {
     return (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16) &&
@@ -6430,7 +6430,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 const bool f32_src1_ok = GGML_CUDA_CC_IS_NVIDIA(cc_dev) && cc_dev < GGML_CUDA_CC_AMPERE;
                 const enum ggml_prec prec_src1 = ggml_prec_get_src(op, 1);
                 const bool fp8_id_mmvf = op->op == GGML_OP_MUL_MAT_ID &&
-                    a->type == GGML_TYPE_F8_E4M3 && b->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+                    a->type == GGML_TYPE_F8_E4M3 && (b->type == GGML_TYPE_F32 || b->type == GGML_TYPE_BF16) && op->type == GGML_TYPE_F32 &&
                     ggml_cuda_should_use_mmvf(a, cc_dev, ggml_cuda_info().devices[dev_ctx->device].warp_size, b->ne[2]);
                 if (prec_src1 == GGML_PREC_F32 && !fp8_id_mmvf && (op->op == GGML_OP_MUL_MAT_ID || !f32_src1_ok || a->type != GGML_TYPE_F32)) {
                     return false;
@@ -6446,7 +6446,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                         return false;
                     }
                     if (GGML_CUDA_CC_IS_QY2(cc) && op->op == GGML_OP_MUL_MAT_ID &&
-                            a->type == GGML_TYPE_Q2_K && (b->type == GGML_TYPE_F32 || b->type == GGML_TYPE_BF16)) {
+                            a->type == GGML_TYPE_Q2_K) {
                         return false;
                     }
                 }
