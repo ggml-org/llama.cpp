@@ -24,6 +24,7 @@ static void test_prefix_tool_names(testing & t);
 static void test_tagged_peg_parser(testing & t);
 static void test_permute(testing & t);
 static void test_invalid_utf8(testing & t);
+static void test_generation_prompt_error(testing & t);
 
 int main(int argc, char * argv[]) {
     testing t(std::cout);
@@ -44,8 +45,46 @@ int main(int argc, char * argv[]) {
     t.test("tagged peg parser", test_tagged_peg_parser);
     t.test("permute", test_permute);
     t.test("invalid utf8", test_invalid_utf8);
+    t.test("generation prompt error", test_generation_prompt_error);
 
     return t.summary();
+}
+
+static void test_generation_prompt_error(testing & t) {
+    auto parser = build_chat_peg_parser([](common_chat_peg_builder & p) {
+        return p.literal("prefix") + p.content(p.literal("ok")) + p.end();
+    });
+    common_chat_parser_params params;
+    params.format = COMMON_CHAT_FORMAT_PEG_SIMPLE;
+    params.generation_prompt = common_chat_input("prefix");
+    const common_chat_input bad_input("ok!");
+
+    common_peg_parse_context ctx(params.generation_prompt.text + bad_input.text, COMMON_PEG_PARSE_FLAG_LENIENT);
+    auto result = parser.parse(ctx);
+    t.assert_true("invalid output fails to parse", result.fail());
+    // The error position includes the prefix and is past the end of the original input.
+    t.assert_true("error position exceeds original input size", result.end > bad_input.size());
+
+    bool got_runtime_error = false;
+    bool got_out_of_range = false;
+    std::string error_msg;
+    try {
+        common_chat_peg_parse(parser, bad_input, /*is_partial=*/false, params);
+    } catch (const std::out_of_range & e) {
+        got_out_of_range = true;
+        error_msg = e.what();
+    } catch (const std::runtime_error & e) {
+        got_runtime_error = true;
+        error_msg = e.what();
+    }
+    t.assert_true("throw path does not throw out_of_range", !got_out_of_range);
+    t.assert_true("throw path throws runtime_error", got_runtime_error);
+    t.assert_equal("readable parse error", "The model produced output that does not match the expected peg-simple format", error_msg);
+
+    auto msg = common_chat_peg_parse(parser, common_chat_input("ok"), /*is_partial=*/false, params);
+    t.assert_equal("complete content excludes generation prompt", "ok", msg.content);
+    msg = common_chat_peg_parse(parser, common_chat_input("o"), /*is_partial=*/true, params);
+    t.assert_equal("partial content excludes generation prompt", "o", msg.content);
 }
 
 static json create_tools() {
