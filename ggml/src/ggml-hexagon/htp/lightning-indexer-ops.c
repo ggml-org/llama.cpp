@@ -753,9 +753,15 @@ struct lid_hmx_set {
     uint32_t n_u;
 };
 
+struct lid_hmx_w_slice {
+    const uint8_t * ptr;
+    size_t          base_off;
+};
+
 struct htp_lid_hmx_context;
 
-typedef void (*lid_hmx_q_scg_fn_t)(const struct htp_lid_hmx_context * hctx, uint32_t slot, const struct lid_hmx_set * S, uint32_t c);
+typedef void (*lid_hmx_q_scg_fn_t)(const struct htp_lid_hmx_context * hctx, uint32_t slot, const struct lid_hmx_set * S, uint32_t c,
+                                   struct lid_hmx_w_slice ws);
 typedef void (*lid_hmx_q_tiles_fn_t)(const struct htp_lid_hmx_context * hctx, uint32_t slot, const struct lid_hmx_set * S, uint32_t c,
                                      const uint8_t * qs, uint8_t * qh);
 typedef void (*lid_hmx_prep_k_fn_t)(const struct htp_lid_hmx_context * hctx, __fp16 * restrict k_t, const uint8_t * restrict k_raw,
@@ -1416,7 +1422,8 @@ static inline uint32_t lid_hmx_slot(const struct htp_lid_hmx_context * hctx, uin
 }
 
 // Scales (|w| per channel, f16 in the low half of each word) and G of channel tile c of a Q slot (f32 w)
-static __attribute__((noinline)) void lid_hmx_q_scg_f32(const struct htp_lid_hmx_context * hctx, uint32_t slot, const struct lid_hmx_set * S, uint32_t c) {
+static __attribute__((noinline)) void lid_hmx_q_scg_f32(const struct htp_lid_hmx_context * hctx, uint32_t slot, const struct lid_hmx_set * S, uint32_t c,
+                                                        struct lid_hmx_w_slice ws) {
     const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
     const uint32_t nh = hctx->octx->src[0]->ne[1];
     const uint32_t ch = c * 32;
@@ -1424,7 +1431,7 @@ static __attribute__((noinline)) void lid_hmx_q_scg_f32(const struct htp_lid_hmx
     const uint32_t t  = fastdiv(ch, &hctx->kp->div_n_head);
 
     const HVX_Vector zero   = Q6_V_vzero();
-    const HVX_Vector raw    = *(const HVX_Vector *) (hctx->w + slot * L->size_w + c * 128);
+    const HVX_Vector raw    = *(const HVX_Vector *) (ws.ptr + ((size_t) c * 128 - ws.base_off));
     const HVX_Vector wv     = Q6_V_vmux_QVV(Q6_Q_vsetq2_R(nr * sizeof(float)), raw, zero);
     const HVX_Vector abs_wv = Q6_V_vand_VV(wv, Q6_V_vsplat_R(0x7FFFFFFF));
 
@@ -1441,7 +1448,8 @@ static __attribute__((noinline)) void lid_hmx_q_scg_f32(const struct htp_lid_hmx
 }
 
 // Scales and G of channel tile c of a Q slot (f16 w)
-static __attribute__((noinline)) void lid_hmx_q_scg_f16(const struct htp_lid_hmx_context * hctx, uint32_t slot, const struct lid_hmx_set * S, uint32_t c) {
+static __attribute__((noinline)) void lid_hmx_q_scg_f16(const struct htp_lid_hmx_context * hctx, uint32_t slot, const struct lid_hmx_set * S, uint32_t c,
+                                                        struct lid_hmx_w_slice ws) {
     const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
     const uint32_t nh = hctx->octx->src[0]->ne[1];
     const uint32_t ch = c * 32;
@@ -1449,7 +1457,7 @@ static __attribute__((noinline)) void lid_hmx_q_scg_f16(const struct htp_lid_hmx
     const uint32_t t  = fastdiv(ch, &hctx->kp->div_n_head);
 
     const HVX_Vector zero   = Q6_V_vzero();
-    const HVX_Vector raw    = Q6_V_vror_VR(*(const HVX_Vector *) (hctx->w + slot * L->size_w + (c / 2) * 128), (c & 1) * 64);
+    const HVX_Vector raw    = Q6_V_vror_VR(*(const HVX_Vector *) (ws.ptr + ((size_t) (c / 2) * 128 - ws.base_off)), (c & 1) * 64);
     const HVX_Vector wh     = Q6_V_vmux_QVV(Q6_Q_vsetq2_R(nr * sizeof(__fp16)), raw, zero);
     const HVX_Vector abs_wh = Q6_V_vand_VV(wh, Q6_Vh_vsplat_R(0x7FFF));
 
@@ -1502,13 +1510,14 @@ static __attribute__((noinline)) void lid_hmx_q_tiles_f16(const struct htp_lid_h
     lid_hmx_scatter_q_tiles(hctx, slot, c, nr, (const __fp16 *) qs, hctx->L.size_qs_row / sizeof(__fp16));
 }
 
-static inline uint32_t lid_hmx_find_valid_gc(const struct htp_lid_hmx_context * hctx, uint32_t gc, uint32_t gc1) {
+static inline uint32_t lid_hmx_find_valid_gc(const struct htp_lid_hmx_context * hctx, const struct lid_hmx_set * sets,
+                                             uint32_t gc, uint32_t gc1) {
     const struct fastdiv_values * div_n_ch = &hctx->kp->div_n_ch;
     const uint32_t n_ch = hctx->L.n_ch;
     while (gc < gc1) {
         const uint32_t set = fastdiv(gc, div_n_ch);
         const uint32_t c   = gc - set * n_ch;
-        if (c < hctx->nx_sets[set].n_ch) {
+        if (c < sets[set].n_ch) {
             return gc;
         }
         gc++;
@@ -1516,30 +1525,54 @@ static inline uint32_t lid_hmx_find_valid_gc(const struct htp_lid_hmx_context * 
     return gc1;
 }
 
+// Push w rows of [gc0, gc1) into per-HVX wd, one 2D DMA per overlapped set
+static uint32_t lid_hmx_push_w(const struct htp_lid_hmx_context * hctx, dma_queue * dma_q, uint8_t * wd,
+                               const struct lid_hmx_set * sets, uint32_t gc0, uint32_t gc1,
+                               struct lid_hmx_w_slice w_set[HTP_LID_HMX_MAX_QSETS]) {
+    if (gc0 >= gc1) {
+        return 0;
+    }
+    const struct htp_tensor *     w        = hctx->octx->src[2];
+    const struct fastdiv_values * div_n_ch = &hctx->kp->div_n_ch;
+    const uint32_t                n_ch     = hctx->L.n_ch;
+    const uint32_t                nh       = hctx->octx->src[0]->ne[1];
+    const size_t                  row_b    = hctx->w_row_bytes;
+
+    uint32_t n_dma = 0;
+    size_t   off   = 0;
+    for (uint32_t set = fastdiv(gc0, div_n_ch), set_end = fastdiv(gc1 - 1, div_n_ch); set <= set_end; ++set) {
+        const struct lid_hmx_set S  = sets[set];
+        const uint32_t           c0 = MAX(gc0, set * n_ch) - set * n_ch;
+        const uint32_t           c1 = MIN(MIN(gc1, (set + 1) * n_ch) - set * n_ch, S.n_ch);
+        if (c0 >= c1) {
+            continue;
+        }
+
+        const uint32_t ta       = fastdiv(c0 * 32, &hctx->kp->div_n_head);
+        const uint32_t tb       = fastdiv(MIN(c1 * 32, S.nt * nh) - 1, &hctx->kp->div_n_head) + 1;
+        const size_t   ta_b     = (size_t) ta * row_b;
+        const size_t   base_off = ta_b & ~(size_t) 127;
+        uint8_t *      dst      = wd + off;
+
+        w_set[set].ptr      = dst;
+        w_set[set].base_off = base_off;
+        dma_queue_push(dma_q, dma_make_data(dst + (ta_b & 127), w->data + S.is * w->nb[3] + (S.t0 + ta) * w->nb[1]),
+                       row_b, w->nb[1], row_b, tb - ta);
+        off += hex_round_up((size_t) tb * row_b - base_off, 128);
+        n_dma++;
+    }
+    return n_dma;
+}
+
 static inline uint32_t lid_hmx_q_chunk_push(const struct htp_lid_hmx_context * hctx, dma_queue * dma_q,
-                                            uint8_t * qs, uint32_t qb, uint32_t gc) {
-    const struct htp_ops_context * octx = hctx->octx;
-    const struct htp_tensor *      w    = octx->src[2];
-    const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
-    const uint32_t nh = octx->src[0]->ne[1];
-
-    const uint32_t             set = fastdiv(gc, &hctx->kp->div_n_ch);
-    const uint32_t             c   = gc - set * L->n_ch;
-    const struct lid_hmx_set * S   = &hctx->nx_sets[set];
-
-    const uint32_t slot = lid_hmx_slot(hctx, qb, set);
-    const uint32_t ch   = c * 32;
-    const uint32_t ta   = fastdiv(ch, &hctx->kp->div_n_head);
-    const uint32_t tb   = fastdiv(MIN(ch + 32, S->nt * nh) - 1, &hctx->kp->div_n_head) + 1;
-
-    uint8_t * wd = hctx->w + slot * L->size_w;
-    dma_queue_push(dma_q, dma_make_data(wd + ta * hctx->w_row_bytes, w->data + S->is * w->nb[3] + (S->t0 + ta) * w->nb[1]),
-                   hctx->w_row_bytes, w->nb[1], hctx->w_row_bytes, tb - ta);
-    return 1 + lid_hmx_push_q(hctx, dma_q, qs, S, c);
+                                            uint8_t * qs, uint32_t gc) {
+    const uint32_t set = fastdiv(gc, &hctx->kp->div_n_ch);
+    return lid_hmx_push_q(hctx, dma_q, qs, &hctx->nx_sets[set], gc - set * hctx->L.n_ch);
 }
 
 // Stage g share of the next run's Q prep (the DMA queue of the thread is empty here)
 static __attribute__((noinline)) void lid_hmx_q_chunk(const struct htp_lid_hmx_context * hctx, const htp_thread_t * th, uint32_t ith, uint32_t nth) {
+    (void) nth;
     const struct htp_ops_context * octx = hctx->octx;
     const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
 
@@ -1551,25 +1584,28 @@ static __attribute__((noinline)) void lid_hmx_q_chunk(const struct htp_lid_hmx_c
     const uint32_t gc1    = MIN(gc0 + per, b);
     const uint32_t qb     = hctx->qbuf ^ 1;
 
+    uint32_t gc_cur = lid_hmx_find_valid_gc(hctx, hctx->nx_sets, gc0, gc1);
+    if (gc_cur >= gc1) {
+        return;
+    }
+
     dma_queue * dma_q = th->dma_q;
+    uint8_t *   wd    = hctx->w + ith * L->size_w;
     uint8_t *   qs[2];
     qs[0] = hctx->qs + ith * L->size_qs;
     qs[1] = qs[0] + 32 * L->size_qs_row;
     uint8_t * qh = qs[0] + 2 * 32 * L->size_qs_row;
 
-    uint32_t gc_cur = lid_hmx_find_valid_gc(hctx, gc0, gc1);
-    if (gc_cur >= gc1) {
-        return;
-    }
-
-    const uint32_t gc_next = lid_hmx_find_valid_gc(hctx, gc_cur + 1, gc1);
-    uint32_t gc_prefetch = gc1;
-
+    struct lid_hmx_w_slice w_set[HTP_LID_HMX_MAX_QSETS];
     uint32_t n_dma[2] = {0, 0};
-    n_dma[0] = lid_hmx_q_chunk_push(hctx, dma_q, qs[0], qb, gc_cur);
+    n_dma[0] = lid_hmx_push_w(hctx, dma_q, wd, hctx->nx_sets, gc_cur, gc1, w_set) +
+               lid_hmx_q_chunk_push(hctx, dma_q, qs[0], gc_cur);
+
+    const uint32_t gc_next = lid_hmx_find_valid_gc(hctx, hctx->nx_sets, gc_cur + 1, gc1);
+    uint32_t gc_prefetch = gc1;
     if (gc_next < gc1) {
-        n_dma[1] = lid_hmx_q_chunk_push(hctx, dma_q, qs[1], qb, gc_next);
-        gc_prefetch = lid_hmx_find_valid_gc(hctx, gc_next + 1, gc1);
+        n_dma[1] = lid_hmx_q_chunk_push(hctx, dma_q, qs[1], gc_next);
+        gc_prefetch = lid_hmx_find_valid_gc(hctx, hctx->nx_sets, gc_next + 1, gc1);
     }
 
     uint32_t slot = 0;
@@ -1583,17 +1619,17 @@ static __attribute__((noinline)) void lid_hmx_q_chunk(const struct htp_lid_hmx_c
         const struct lid_hmx_set * S     = &hctx->nx_sets[set];
         const uint32_t             qslot = lid_hmx_slot(hctx, qb, set);
 
-        hctx->q_scg(hctx, qslot, S, c);
+        hctx->q_scg(hctx, qslot, S, c, w_set[set]);
         hctx->q_tiles(hctx, qslot, S, c, qs[slot], qh);
 
         if (gc_prefetch < gc1) {
-            n_dma[slot] = lid_hmx_q_chunk_push(hctx, dma_q, qs[slot], qb, gc_prefetch);
-            gc_prefetch = lid_hmx_find_valid_gc(hctx, gc_prefetch + 1, gc1);
+            n_dma[slot] = lid_hmx_q_chunk_push(hctx, dma_q, qs[slot], gc_prefetch);
+            gc_prefetch = lid_hmx_find_valid_gc(hctx, hctx->nx_sets, gc_prefetch + 1, gc1);
         } else {
             n_dma[slot] = 0;
         }
 
-        gc_cur = lid_hmx_find_valid_gc(hctx, gc_cur + 1, gc1);
+        gc_cur = lid_hmx_find_valid_gc(hctx, hctx->nx_sets, gc_cur + 1, gc1);
         slot ^= 1;
     }
 }
@@ -1603,11 +1639,7 @@ static __attribute__((noinline)) void lid_hmx_q_chunk(const struct htp_lid_hmx_c
 static void lid_hmx_qprep_thread(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct htp_lid_hmx_context *   hctx = (struct htp_lid_hmx_context *) data;
     const struct htp_ops_context * octx = hctx->octx;
-    const struct htp_tensor *      q    = octx->src[0];
-    const struct htp_tensor *      w    = octx->src[2];
     const struct htp_lid_hmx_vtcm_layout * L = &hctx->L;
-
-    const uint32_t nh = q->ne[1];
 
     struct htp_thread_trace * tr    = th->trace;
     dma_queue *               dma_q = th->dma_q;
@@ -1616,32 +1648,16 @@ static void lid_hmx_qprep_thread(const htp_thread_t * th, unsigned int nth, unsi
     const uint32_t per   = fastdiv(n_tot + octx->n_hvx - 1, &octx->n_hvx_div);
     const uint32_t gc0   = MIN(ith * per, n_tot);
     const uint32_t gc1   = MIN(gc0 + per, n_tot);
+    const uint32_t first = lid_hmx_find_valid_gc(hctx, hctx->sets, gc0, gc1);
 
+    uint8_t * wd = hctx->w + ith * L->size_w;
     uint8_t * qs = hctx->qs + ith * L->size_qs;
     uint8_t * qh = qs + 2 * 32 * L->size_qs_row;
 
     // all input DMAs in flight at once: w of the sets, Q of the first channel tile, then K and mask of block 0
-    uint32_t n_dma = 0;
-    uint32_t first = gc1;
+    struct lid_hmx_w_slice        w_set[HTP_LID_HMX_MAX_QSETS];
     const struct fastdiv_values * div_n_ch = &hctx->kp->div_n_ch;
-    for (uint32_t set = fastdiv(gc0, div_n_ch); gc0 < gc1 && set <= fastdiv(gc1 - 1, div_n_ch); ++set) {
-        const struct lid_hmx_set S = hctx->sets[set];
-
-        const uint32_t c0 = MAX(gc0, set * L->n_ch) - set * L->n_ch;
-        const uint32_t c1 = MIN(MIN(gc1, (set + 1) * L->n_ch) - set * L->n_ch, S.n_ch);
-        if (c0 >= c1) {
-            continue;
-        }
-        first = MIN(first, set * L->n_ch + c0);
-
-        const uint32_t ta = fastdiv(c0 * 32, &hctx->kp->div_n_head);
-        const uint32_t tb = fastdiv(MIN(c1 * 32, S.nt * nh) - 1, &hctx->kp->div_n_head) + 1;
-        uint8_t * wd = hctx->w + lid_hmx_slot(hctx, hctx->qbuf, set) * L->size_w;
-        dma_queue_push(dma_q, dma_make_data(wd + ta * hctx->w_row_bytes, w->data + S.is * w->nb[3] + (S.t0 + ta) * w->nb[1]),
-                       hctx->w_row_bytes, w->nb[1], hctx->w_row_bytes, tb - ta);
-        n_dma++;
-    }
-
+    uint32_t n_dma = lid_hmx_push_w(hctx, dma_q, wd, hctx->sets, first, gc1, w_set);
     if (first < gc1) {
         const uint32_t           set = fastdiv(first, div_n_ch);
         const struct lid_hmx_set S   = hctx->sets[set];
@@ -1672,7 +1688,7 @@ static void lid_hmx_qprep_thread(const htp_thread_t * th, unsigned int nth, unsi
 
         // scales and G while the Q rows land
         const uint32_t slot = lid_hmx_slot(hctx, hctx->qbuf, set);
-        hctx->q_scg(hctx, slot, &S, c);
+        hctx->q_scg(hctx, slot, &S, c, w_set[set]);
 
         for (uint32_t i = 0; i < n_q; ++i) {
             dma_queue_pop(dma_q);
