@@ -8103,10 +8103,14 @@ struct test_mul_mat_rows_scaled : public test_mul_mat {
     }
 };
 
-// mul_mat with the default src1 precision and at most 8 columns: CUDA keeps 8-bit src1 there (MMVQ or few-row MMQ W4A8),
-// so the W4A8 tolerance applies also on Blackwell. Checks that the default does not switch to 4-bit src1.
+// mul_mat with the default src1 precision and at most 8 columns: CUDA keeps 8-bit src1 there (MMVQ or few-row MMQ W4A8), so the W4A8 tolerance applies also on Blackwell.
+// Checks that the default does not switch to 4-bit src1.
 struct test_mul_mat_8bit_default : public test_mul_mat {
     using test_mul_mat::test_mul_mat;
+
+    std::string vars() override {
+        return test_mul_mat::vars() + ",src1_prec=default_8bit";
+    }
 
     double max_nmse_err(ggml_backend_t backend) override {
         GGML_UNUSED(backend);
@@ -12132,6 +12136,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // 4-bit src1 with broadcast: src1 rows of different magnitudes, so a wrong row, channel or sample of the src1 scales changes the result
     test_cases.emplace_back(new test_mul_mat_rows_scaled(GGML_TYPE_NVFP4, GGML_TYPE_F32, 63, 13, 4608, {3, 2}, {2, 2}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4, GGML_TYPE_F32, 6170, 13, 4608, {1, 1}, {1, 1}, {0, 1, 2, 3}, 0, 1, false, 0, 0, 0, true));
+    // 4-bit src1 with padded and permuted rows of src0 and src1
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4, GGML_TYPE_F32, 1000, 13, 4608, {1, 1}, {1, 1}, {0, 1, 2, 3}, 5120));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4, GGML_TYPE_F32,   64, 13, 4608, {2, 3}, {1, 1}, {0, 2, 1, 3}));
 
 #if 0
     {

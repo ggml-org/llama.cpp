@@ -1064,14 +1064,17 @@ static int ggml_cuda_mmq_few_min_ncols(const ggml_type type, const int cc, const
     if (has_ids && !mmq_few_id_supported(type)) {
         return 0;
     }
-    // NVFP4: only on RTX 50xx and DGX Spark, where it was measured
-    if (type == GGML_TYPE_NVFP4 && !blackwell_mma_available(cc)) {
-        return 0;
-    }
-    if (cc == GGML_CUDA_CC_GB10) { // tuned on DGX Spark GB10, also for MUL_MAT_ID
-        if (type == GGML_TYPE_NVFP4) {
+    // NVFP4: only on Blackwell (cc 12.x), tuned on RTX 5090 and DGX Spark
+    if (type == GGML_TYPE_NVFP4) {
+        if (!blackwell_mma_available(cc)) {
+            return 0;
+        }
+        if (cc == GGML_CUDA_CC_GB10) {
             return fp4 ? 8 : 9; // 8-bit src1 only gains from 9 columns
         }
+        return fp4 ? 6 : 7;
+    }
+    if (cc == GGML_CUDA_CC_GB10) { // tuned on DGX Spark GB10, also for MUL_MAT_ID
         return type == GGML_TYPE_IQ4_XS || type == GGML_TYPE_IQ4_NL ? 8 : 2;
     }
     if (has_ids) { // after MMVQ, which is faster up to its max. batch size
@@ -1086,7 +1089,6 @@ static int ggml_cuda_mmq_few_min_ncols(const ggml_type type, const int cc, const
         case GGML_TYPE_Q8_0:   return 5;
         case GGML_TYPE_IQ3_S:  return 5;
         case GGML_TYPE_IQ4_XS: return 6;
-        case GGML_TYPE_NVFP4:  return fp4 ? 6 : 7;
         default:               return 0;
     }
 }

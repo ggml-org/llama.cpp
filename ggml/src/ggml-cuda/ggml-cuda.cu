@@ -5140,7 +5140,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                                                ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) &&
                                                src0->view_src;
                 fusion_data.prec_src1 = ggml_prec_get_src(mm_node, 1);
-                // few-row MMQ comes first in ggml_cuda_mul_mat, it applies the scale in its write-back
+                // few-row MMQ takes the same matmuls as in ggml_cuda_mul_mat, it applies the scale in its write-back
                 if (!is_id && !bad_padding_clear && ggml_cuda_should_use_mmq_few(src0, src1, nullptr, mm_node, cc)) {
                     ggml_cuda_mul_mat_q_few(*cuda_ctx, src0, src1, nullptr, out_node, &fusion_data);
                     return n_ops - 1;
