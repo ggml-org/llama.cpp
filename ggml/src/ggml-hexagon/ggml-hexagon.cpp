@@ -2774,7 +2774,7 @@ static std::vector<int> ggml_hexagon_graph_optimize_reorder(const std::vector<no
         }
 
         // that many nodes forward to search for stackable nodes that can reuse VTCM
-        constexpr int N_FORWARD = 64;
+        constexpr int N_FORWARD = 128;
 
         htp_opvec<int, N_FORWARD> stack;
         stack.push_back(i0);
