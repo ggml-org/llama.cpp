@@ -7,7 +7,6 @@
 #include "llama.h"
 #include "llama-cpp.h"
 #include "../src/llama-ext.h"
-#include "../src/models/models.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -248,7 +247,7 @@ struct kv_writer {
     }
 };
 
-static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const uint32_t n_layer_min = 0) {
+static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const uint32_t n_layer_min = 0, const bool mtp = false) {
     gguf_context_ptr ret(gguf_init_empty());
     kv_writer ms(arch, ret.get());
     const uint32_t n_ctx = 256;
@@ -349,7 +348,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_head_kv = 2;
         n_layer   = 4;
     }
-    n_layer = std::max(n_layer, n_layer_min);
+    n_layer = std::max(n_layer, n_layer_min) + (mtp ? 1 : 0);
     const uint32_t n_embd_head = n_embd / n_head;
 
     ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE,      llama_arch_name(arch));
@@ -359,6 +358,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_FEATURES_LENGTH,           n_embd);
     ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer);
     ms.add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT, uint32_t(1));
+    if (mtp) {
+        ms.add_kv(LLM_KV_NEXTN_PREDICT_LAYERS, uint32_t(1));
+    }
 
     if (arch == LLM_ARCH_K2_HORIZON) {
         ms.add_kv(LLM_KV_ROPE_SCALING_YARN_BETA_FAST, 128.0f);
@@ -383,18 +385,18 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_FULL_ATTENTION_INTERVAL, uint32_t(2));
 
     if (arch == LLM_ARCH_SENSENOVA_LOOP) {
-        ms.add_kv(LLM_KV_LOOP_START,         uint32_t(1));
-        ms.add_kv(LLM_KV_LOOP_END,           uint32_t(3));
-        ms.add_kv(LLM_KV_LOOP_COUNT,         uint32_t(2));
-        ms.add_kv(LLM_KV_MHC_START,          uint32_t(1));
-        ms.add_kv(LLM_KV_MHC_END,            uint32_t(3));
-        ms.add_kv(LLM_KV_MHC_STREAMS,        uint32_t(2));
-        ms.add_kv(LLM_KV_MHC_ITERATIONS,     uint32_t(20));
-        ms.add_kv(LLM_KV_MHC_PRE_SCALE,      1.0f);
-        ms.add_kv(LLM_KV_MHC_FIXED_IDENTITY, false);
+        ms.add_kv(LLM_KV_LOOP_START,                           uint32_t(1));
+        ms.add_kv(LLM_KV_LOOP_END,                             uint32_t(3));
+        ms.add_kv(LLM_KV_LOOP_COUNT,                           uint32_t(2));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_START,               uint32_t(1));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_END,                 uint32_t(3));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,               uint32_t(2));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, uint32_t(20));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_PRE_SCALE,           1.0f);
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_FIXED_IDENTITY,      false);
         std::vector<uint32_t> recurrent;
         for (uint32_t il = 0; il < n_layer; ++il) {
-            recurrent.push_back(il % 2 == 0);
+            recurrent.push_back(il < n_layer - (mtp ? 1 : 0) && il % 2 == 0);
         }
         ms.add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS, recurrent);
     }
@@ -875,7 +877,7 @@ static llama_model_ptr get_model(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER,
-        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, bool load_mtp = false) {
+        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const bool mtp = false) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
     model_params.progress_callback = silent_model_load_progress;
@@ -884,7 +886,7 @@ static llama_model_ptr get_model(
     model_params.devices = devs_copy.data();
     model_params.split_mode = split_mode;
     model_params.tensor_buft_overrides = tensor_buft_overrides;
-    model_params.load_mtp = load_mtp;
+    model_params.load_mtp = mtp;
 
     tensor_data_params tensor_params = { seed, stdev };
     llama_model_ptr model(gguf_ctx != nullptr ?
@@ -900,10 +902,13 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
-        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0) {
-    llama_model_ptr model = get_model(gguf_ctx, file, seed, stdev, devs, split_mode, tensor_buft_overrides);
+        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0, const bool mtp = false) {
+    llama_model_ptr model = get_model(gguf_ctx, file, seed, stdev, devs, split_mode, tensor_buft_overrides, mtp);
 
     llama_context_params ctx_params = llama_context_default_params();
+    if (mtp) {
+        ctx_params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+    }
     ctx_params.n_ctx = 0;
     ctx_params.n_threads = 4;
     ctx_params.n_threads_batch = 4;
@@ -924,14 +929,19 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
 }
 
 static std::vector<float> get_logits(
-        llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens, bool encode = false) {
+        llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens, bool encode = false, bool mtp = false) {
     const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
     const uint32_t n_ctx    = llama_n_ctx(lctx);
     const uint32_t n_tokens = tokens.size();
+    const uint32_t n_embd   = llama_model_n_embd(model);
+    std::vector<float> embd_state(mtp ? size_t(n_tokens)*n_embd : 0, 0.1f);
     common_batch batch(lctx);
     GGML_ASSERT(n_tokens <= n_ctx);
     for (uint32_t pos = 0; pos < n_tokens; pos++) {
-        batch.add(tokens[pos], pos, 0, true);
+        const int32_t i = batch.add(tokens[pos], pos, 0, true);
+        if (mtp && !batch.set_embd_state(i, {embd_state.data() + size_t(pos)*n_embd, 1, n_embd})) {
+            throw std::runtime_error("failed to set MTP hidden state");
+        }
     }
     if (encode) {
         if (llama_process(lctx, LLAMA_PROCESS_TYPE_ENCODE, batch.get())) {
@@ -951,233 +961,6 @@ static std::vector<float> get_logits(
         }
     }
     return ret;
-}
-
-static void check_loop_hc_rounding(ggml_backend_t backend) {
-    const int64_t ne = 17;
-    const int64_t nt = 3;
-    ggml_context_ptr ctx(ggml_init({128*1024, nullptr, true}));
-    ggml_tensor * streams = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, ne, 2, nt);
-    ggml_tensor * weights = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, 2, nt);
-    ggml_tensor * branch = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, ne, nt);
-    ggml_tensor * post = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, 2, nt);
-    ggml_tensor * comb = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, 2, 2, nt);
-    ggml_tensor * pre_out = ggml_dsv4_hc_pre(ctx.get(), streams, weights);
-    ggml_tensor * post_out = ggml_dsv4_hc_post(ctx.get(), branch, streams, post, ggml_permute(ctx.get(), comb, 1, 0, 2, 3));
-    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 32, false);
-    ggml_build_forward_expand(graph, pre_out);
-    ggml_build_forward_expand(graph, post_out);
-    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
-    if (!buffer) {
-        throw std::runtime_error("failed to allocate HC rounding test tensors");
-    }
-    std::vector<float> inputs(ne*2*nt), branches(ne*nt), gates(2*nt), posts(2*nt), mixes(4*nt);
-    for (int64_t t = 0; t < nt; ++t) {
-        gates[2*t] = 1.0f;
-        gates[2*t + 1] = 4097.0f;
-        posts[2*t] = 1.0f;
-        posts[2*t + 1] = -1.0f;
-        mixes[4*t] = 1.0f;
-        mixes[4*t + 1] = 4097.0f;
-        mixes[4*t + 2] = 1.0f;
-        mixes[4*t + 3] = -4097.0f;
-        for (int64_t i = 0; i < ne; ++i) {
-            inputs[2*ne*t + i] = -16785408.0f + i;
-            inputs[2*ne*t + ne + i] = 4097.0f;
-            branches[ne*t + i] = 4.0f + t;
-        }
-    }
-    ggml_backend_tensor_set(streams, inputs.data(), 0, inputs.size()*sizeof(float));
-    ggml_backend_tensor_set(weights, gates.data(), 0, gates.size()*sizeof(float));
-    ggml_backend_tensor_set(branch, branches.data(), 0, branches.size()*sizeof(float));
-    ggml_backend_tensor_set(post, posts.data(), 0, posts.size()*sizeof(float));
-    ggml_backend_tensor_set(comb, mixes.data(), 0, mixes.size()*sizeof(float));
-    if (ggml_backend_graph_compute(backend, graph) != GGML_STATUS_SUCCESS) {
-        throw std::runtime_error("failed to evaluate HC rounding test graph");
-    }
-    std::vector<float> pre_actual(ne*nt), post_actual(ne*2*nt);
-    ggml_backend_tensor_get(pre_out, pre_actual.data(), 0, pre_actual.size()*sizeof(float));
-    ggml_backend_tensor_get(post_out, post_actual.data(), 0, post_actual.size()*sizeof(float));
-    auto mul = [](float a, float b) { return float(double(a)*double(b)); };
-    auto add = [](float a, float b) { return float(double(a) + double(b)); };
-    for (int64_t t = 0; t < nt; ++t) {
-        for (int64_t i = 0; i < ne; ++i) {
-            const float a = inputs[2*ne*t + i];
-            const float b = inputs[2*ne*t + ne + i];
-            const float expected = add(mul(a, gates[2*t]), mul(b, gates[2*t + 1]));
-            if (pre_actual[ne*t + i] != expected) {
-                throw std::runtime_error("HC pre does not preserve two-stream pointwise F32 rounding");
-            }
-            for (int64_t s = 0; s < 2; ++s) {
-                const float mixed = add(mul(a, mixes[4*t + 2*s]), mul(b, mixes[4*t + 2*s + 1]));
-                const float expected_post = add(mixed, mul(branches[ne*t + i], posts[2*t + s]));
-                if (post_actual[2*ne*t + ne*s + i] != expected_post) {
-                    throw std::runtime_error("HC post does not preserve two-stream pointwise F32 rounding");
-                }
-            }
-        }
-    }
-    LOG_INF("%s: %s: two-stream pre/post F32 rounding passed\n", __func__, ggml_backend_name(backend));
-}
-
-static void check_loop_sinkhorn(const size_t seed, const char * target_backend, bool fused, bool strided) {
-    std::vector<std::array<float, 4>> values = {
-        {0, 0, 0, 0}, {2, 2, 2, 2}, {-10, 1, 9, -2},
-        {2000, 0, 1000, 0}, {-2000, 0, -1000, 0},
-        {2e6f, 0, 1e6f, 0}, {-2e6f, 0, -1e6f, 0},
-        {-10000, 10000, 10000, -10000},
-        {1e6f, 1e6f + 1, -1e6f, -1e6f + 2},
-    };
-    if (fused) {
-        values.push_back({3e38f, -3e38f, 3e38f, -3e38f});
-        values.push_back({-3e38f, 3e38f, -3e38f, 3e38f});
-        values.push_back({3e38f, -3e38f, -3e38f, 3e38f});
-        values.push_back({3e38f, 0, 0, -3e38f});
-    }
-    std::mt19937 rng(seed);
-    std::uniform_real_distribution<float> dist(-32.0f, 32.0f);
-    for (int i = 0; i < 128; ++i) {
-        values.push_back({dist(rng), dist(rng), dist(rng), dist(rng)});
-    }
-
-    for (size_t id = 0; id < ggml_backend_dev_count(); ++id) {
-        ggml_backend_dev_t dev = ggml_backend_dev_get(id);
-        const auto type = ggml_backend_dev_type(dev);
-        if ((type != GGML_BACKEND_DEVICE_TYPE_CPU && type != GGML_BACKEND_DEVICE_TYPE_GPU && type != GGML_BACKEND_DEVICE_TYPE_IGPU) ||
-                (target_backend && strcmp(target_backend, ggml_backend_dev_name(dev)) != 0)) {
-            continue;
-        }
-        ggml_backend_ptr backend(ggml_backend_dev_init(dev, nullptr));
-        if (!backend) {
-            throw std::runtime_error("failed to initialize Sinkhorn test backend");
-        }
-        double max_error = 0;
-        uint32_t checked = 0;
-        for (uint32_t iterations = 1; iterations <= 20; ++iterations) {
-            ggml_context_ptr ctx(ggml_init({2*1024*1024, nullptr, true}));
-            ggml_tensor * storage = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, strided ? 17 : 8, values.size());
-            ggml_tensor * logits = strided ? ggml_view_2d(ctx.get(), storage, 8, values.size(), storage->nb[1], sizeof(float)) : storage;
-            ggml_tensor * mix[4];
-            for (int i = 0; i < 4; ++i) {
-                mix[i] = ggml_view_2d(ctx.get(), logits, 1, values.size(), logits->nb[1], (4 + i)*sizeof(float));
-            }
-            ggml_tensor * output;
-            ggml_tensor * scale = nullptr;
-            ggml_tensor * base = nullptr;
-            if (fused) {
-                scale = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 3);
-                base = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 8);
-                ggml_tensor * comb = ggml_dsv4_hc_comb(ctx.get(), logits, scale, base, 0.0f, iterations);
-                if (!ggml_backend_supports_op(backend.get(), comb)) {
-                    LOG_INF("%s: %s: two-stream fused Sinkhorn is not supported\n", __func__, ggml_backend_dev_name(dev));
-                    break;
-                }
-                if (iterations == 1 && !strided) {
-                    check_loop_hc_rounding(backend.get());
-                }
-                output = ggml_reshape_2d(ctx.get(), comb, 4, values.size());
-            } else {
-                llama_model_sensenova_loop::graph::build_sinkhorn(ctx.get(), mix, iterations);
-                output = ggml_concat(ctx.get(), ggml_concat(ctx.get(), mix[0], mix[1], 0), ggml_concat(ctx.get(), mix[2], mix[3], 0), 0);
-            }
-            ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), 256, false);
-            ggml_build_forward_expand(graph, output);
-            ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend.get()));
-            if (!buffer) {
-                throw std::runtime_error("failed to allocate Sinkhorn test tensors");
-            }
-            std::vector<float> data(ggml_nelements(storage), 0.0f);
-            for (size_t j = 0; j < values.size(); ++j) {
-                for (int i = 0; i < 4; ++i) {
-                    data[storage->ne[0]*j + (strided ? 1 : 0) + 4 + i] = values[j][i];
-                }
-            }
-            ggml_backend_tensor_set(storage, data.data(), 0, data.size()*sizeof(float));
-            if (fused) {
-                const float scales[] = {1.0f, 1.0f, 1.0f};
-                const float bases[8] = {};
-                ggml_backend_tensor_set(scale, scales, 0, sizeof(scales));
-                ggml_backend_tensor_set(base, bases, 0, sizeof(bases));
-            }
-            if (ggml_backend_graph_compute(backend.get(), graph) != GGML_STATUS_SUCCESS) {
-                throw std::runtime_error("failed to evaluate Sinkhorn test graph");
-            }
-            std::vector<float> actual(4*values.size());
-            ggml_backend_tensor_get(output, actual.data(), 0, actual.size()*sizeof(float));
-            for (size_t j = 0; j < values.size(); ++j) {
-                std::array<double, 4> expected = {values[j][0], values[j][1], values[j][2], values[j][3]};
-                auto normalize = [&](int a, int b) {
-                    const double diff = expected[a] - expected[b];
-                    const double norm = std::log1p(std::exp(-std::abs(diff)));
-                    expected[a] = -std::max(-diff, 0.0) - norm;
-                    expected[b] = -std::max( diff, 0.0) - norm;
-                };
-                for (uint32_t i = 0; i < iterations; ++i) {
-                    normalize(0, 1);
-                    normalize(2, 3);
-                    normalize(0, 2);
-                    normalize(1, 3);
-                }
-                for (int i = 0; i < 4; ++i) {
-                    const double error = std::abs(actual[4*j + i] - std::exp(expected[i]));
-                    if (!std::isfinite(actual[4*j + i]) || error > 2e-5) {
-                        throw std::runtime_error("SenseNova Loop Sinkhorn differs from its finite-iteration reference");
-                    }
-                    max_error = std::max(max_error, error);
-                }
-            }
-            ++checked;
-        }
-        LOG_INF("%s: %s: fused=%d, strided=%d: %u iteration counts passed, max error %.3g\n", __func__, ggml_backend_dev_name(dev), fused, strided, checked, max_error);
-    }
-}
-
-static void check_loop_mtp(const size_t seed, const float stdev) {
-    const llm_arch arch = LLM_ARCH_SENSENOVA_LOOP;
-    gguf_context_ptr metadata = get_gguf_ctx(arch, false);
-    gguf_set_val_u32(metadata.get(), llama_arch_kv_name(arch, LLM_KV_BLOCK_COUNT).c_str(), 7);
-    gguf_set_val_u32(metadata.get(), llama_arch_kv_name(arch, LLM_KV_NEXTN_PREDICT_LAYERS).c_str(), 1);
-    const uint32_t recurrent[] = {1, 0, 1, 0, 1, 0, 0};
-    gguf_set_arr_data(metadata.get(), llama_arch_kv_name(arch, LLM_KV_ATTENTION_RECURRENT_LAYERS).c_str(), GGUF_TYPE_UINT32, recurrent, 7);
-    llama_model_ptr model = get_model(metadata.get(), nullptr, seed, stdev, {}, LLAMA_SPLIT_MODE_LAYER, nullptr, true);
-    llama_context_params params = llama_context_default_params();
-    params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
-    params.n_ctx = 64;
-    params.n_batch = 4;
-    params.n_ubatch = 2;
-    params.n_threads = 2;
-    params.n_threads_batch = 2;
-    llama_context_ptr ctx(llama_init_from_model(model.get(), params));
-    if (!ctx) {
-        throw std::runtime_error("failed to create SenseNova Loop MTP context");
-    }
-    const int32_t n_embd = llama_model_n_embd(model.get());
-    const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model.get()));
-    std::vector<float> hidden(4*n_embd, 0.1f);
-    std::vector<float> expected;
-    for (int32_t chunk : {4, 2}) {
-        llama_memory_clear(llama_get_memory(ctx.get()), true);
-        std::vector<float> logits;
-        for (int32_t start = 0; start < 4; start += chunk) {
-            common_batch batch(ctx.get());
-            for (int32_t i = start; i < start + chunk; ++i) {
-                const int32_t idx = batch.add(i, i, 0, true);
-                GGML_ASSERT(batch.set_embd_state(idx, {hidden.data() + i*n_embd, 1, (size_t) n_embd}));
-            }
-            if (llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
-                throw std::runtime_error("failed to decode SenseNova Loop MTP batch");
-            }
-            for (int32_t i = 0; i < chunk; ++i) {
-                const float * row = llama_get_logits_ith(ctx.get(), i);
-                logits.insert(logits.end(), row, row + n_vocab);
-            }
-        }
-        if (expected.empty()) {
-            expected = std::move(logits);
-        } else if (!(nmse(expected, logits) <= 1e-4)) {
-            throw std::runtime_error("SenseNova Loop MTP chunked decode differs from a full batch");
-        }
-    }
 }
 
 // entries [n/4, n/2) are embd rows, decoded either as token/embd/token chunks or as one mixed batch
@@ -1628,8 +1411,8 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
         max_arch_name_length = std::max(max_arch_name_length, strlen(llama_arch_name(arch)));
     }
 
-    const std::string template_header  = std::string("|%" + std::to_string(max_arch_name_length) + "s|%") + std::to_string(max_device_label_length) + "s|%6s|%15s|%9s|%15s|\n";
-    const std::string template_row_cfg = std::string("|%" + std::to_string(max_arch_name_length) + "s|%") + std::to_string(max_device_label_length) + "s|%6s|";
+    const std::string template_header  = std::string("|%" + std::to_string(max_arch_name_length) + "s|%") + std::to_string(max_device_label_length) + "s|%9s|%15s|%9s|%15s|\n";
+    const std::string template_row_cfg = std::string("|%" + std::to_string(max_arch_name_length) + "s|%") + std::to_string(max_device_label_length) + "s|%9s|";
     const std::string template_row_res = "%15s %10s|%20s|%15s %10s|\n";
 
     bool all_ok = true;
@@ -1645,7 +1428,11 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
     for (size_t i = 0; i < max_device_label_length; i++) {
         LOG("-");
     }
-    LOG("|------|---------------|---------|---------------|\n");
+    LOG("|---------|---------------|---------|---------------|\n");
+    struct model_config {
+        bool moe;
+        bool mtp;
+    };
     for (const llm_arch & arch : llama_arch_all()) {
         if (arch == LLM_ARCH_UNKNOWN) {
             continue;
@@ -1658,35 +1445,20 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
         }
 
         const bool encode = arch == LLM_ARCH_T5 || arch == LLM_ARCH_DREAM || arch == LLM_ARCH_LLADA || arch == LLM_ARCH_LLADA_MOE || arch == LLM_ARCH_RND1;
-        if (arch == LLM_ARCH_SENSENOVA_LOOP) {
-            for (bool fused : {false, true}) {
-                for (bool strided : {false, true}) {
-                    check_loop_sinkhorn(seed, target_backend, fused, strided);
-                }
-            }
-            check_loop_mtp(seed, stdev);
-            gguf_context_ptr invalid = get_gguf_ctx(arch, false);
-            GGML_ASSERT(gguf_remove_key(invalid.get(), llama_arch_kv_name(arch, LLM_KV_ATTENTION_RECURRENT_LAYERS).c_str()) >= 0);
-            gguf_set_val_u32(invalid.get(), llama_arch_kv_name(arch, LLM_KV_FULL_ATTENTION_INTERVAL).c_str(), 0);
-            llama_model_params params = llama_model_default_params();
-            params.n_gpu_layers = 0;
-            tensor_data_params tensor_params = { seed, stdev };
-            ud.verbosity = LOG_LEVEL_OUTPUT;
-            llama_model_ptr rejected(llama_model_init_from_user(invalid.get(), set_tensor_data, &tensor_params, params));
-            ud.verbosity = verbosity;
-            if (rejected) {
-                throw std::runtime_error("SenseNova Loop accepted missing recurrent layers");
-            }
-        }
-        for (bool moe : {false, true}) {
+        for (const model_config config : {model_config{false, false}, {true, false}, {false, true}, {true, true}}) {
+            const bool moe = config.moe;
+            const bool mtp = config.mtp;
             if (moe && !moe_implemented(arch)) {
                 continue;
             }
             if (!moe && moe_mandatory(arch)) {
                 continue;
             }
-            const std::string config_name = moe ? "MoE" : "Dense";
-            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
+            if (mtp && arch != LLM_ARCH_QWEN35 && arch != LLM_ARCH_QWEN35MOE && arch != LLM_ARCH_SENSENOVA_LOOP) {
+                continue;
+            }
+            const std::string config_name = std::string(moe ? "MoE" : "Dense") + (mtp ? "+MTP" : "");
+            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe, 0, mtp);
             if (arch == LLM_ARCH_BAILINGMOE3) {
                 GGML_ASSERT(gguf_remove_key(gguf_ctx.get(), "bailingmoe3.kda.safe_gate") >= 0);
             }
@@ -1715,13 +1487,13 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                 bool test_ok = true;
                 if (!skip) {
                     if (logits_cpu.empty()) {
-                        model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {}, LLAMA_SPLIT_MODE_LAYER, encode);
-                        logits_cpu = get_logits(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens, encode);
+                        model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {}, LLAMA_SPLIT_MODE_LAYER, encode, nullptr, 0, mtp);
+                        logits_cpu = get_logits(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens, encode, mtp);
                     }
                     if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llama_arch_supports_sm_tensor(arch)) {
                         test_executed = true;
-                        model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
-                        logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
+                        model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size, mtp);
+                        logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode, mtp);
                         const double nmse_val = nmse(logits_cpu, logits_dev);
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
                         status_nmse = "\033[1;32mOK\033[0m";
@@ -1732,7 +1504,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
 
                         // chunked decode matches a single batch only with causal attention over a memory
                         llama_context * lctx_dev = model_and_ctx_dev.second.get();
-                        if (!encode && llama_get_memory(lctx_dev) != nullptr) {
+                        if (!encode && !mtp && llama_get_memory(lctx_dev) != nullptr) {
                             std::vector<float> embd_mixed((size_t) llama_model_n_embd_inp(model_and_ctx_dev.first.get())*tokens.size()/4);
                             std::mt19937 gen(seed);
                             std::normal_distribution<float> dis(0.0f, stdev);
@@ -1766,7 +1538,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         }
 
                         // runs after the mixed batch check, as it leaves the context with non-causal attention
-                        if (!encode && !check_causal_attn_toggle(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens)) {
+                        if (!encode && !mtp && !check_causal_attn_toggle(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens)) {
                             if (test_ok) {
                                 status_nmse = "\033[1;31mFAIL\033[0m (toggle)";
                             }
@@ -1797,9 +1569,9 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         GGML_ASSERT(file != nullptr);
 
                         {
-                            auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
+                            auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size, mtp);
                             const std::vector<float> logits_roundtrip = get_logits(
-                                model_and_ctx_roundtrip.first.get(), model_and_ctx_roundtrip.second.get(), tokens, encode);
+                                model_and_ctx_roundtrip.first.get(), model_and_ctx_roundtrip.second.get(), tokens, encode, mtp);
                             status_roundtrip = "\033[1;32mOK\033[0m";
                             GGML_ASSERT(logits_roundtrip.size() == logits_dev.size());
                             for (size_t i = 0; i < logits_roundtrip.size(); i++) {

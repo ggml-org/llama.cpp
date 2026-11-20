@@ -11549,6 +11549,24 @@ static void ggml_compute_forward_dsv4_hc_pre_f32(
     const int64_t ir0 = dr * ith;
     const int64_t ir1 = MIN(ir0 + dr, nr);
 
+    if (hc == 2 && !gated && nbx0 == sizeof(float) && nbd0 == sizeof(float)) {
+        for (int64_t ir = ir0; ir < ir1;) {
+            const int64_t i0 = ir % n_embd;
+            const int64_t it = ir / n_embd;
+            const int64_t count = MIN(n_embd - i0, ir1 - ir);
+            const float * a = (const float *) ((const char *) x->data + i0*nbx0 + it*nbx2);
+            const float * b = (const float *) ((const char *) a + nbx1);
+            float * out = (float *) ((char *) dst->data + i0*nbd0 + it*nbd1);
+            const float wa = *(const float *) ((const char *) weights->data + it*nbw1);
+            const float wb = *(const float *) ((const char *) weights->data + nbw0 + it*nbw1);
+            for (int64_t j = 0; j < count; ++j) {
+                out[j] = scale * ((0.0f + fmaf(a[j], wa, 0.0f)) + fmaf(b[j], wb, 0.0f));
+            }
+            ir += count;
+        }
+        return;
+    }
+
     for (int64_t ir = ir0; ir < ir1; ++ir) {
         const int64_t i0 = ir % n_embd;
         const int64_t it = ir / n_embd;
@@ -11640,6 +11658,34 @@ static void ggml_compute_forward_dsv4_hc_post_f32(
     const int64_t dr  = (nr + nth - 1) / nth;
     const int64_t ir0 = dr * ith;
     const int64_t ir1 = MIN(ir0 + dr, nr);
+
+    if (hc == 2 && nbx0 == sizeof(float) && nbr0 == sizeof(float) && nbd0 == sizeof(float)) {
+        for (int64_t ir = ir0; ir < ir1;) {
+            const int64_t i0 = ir % n_embd;
+            const int64_t idst = (ir / n_embd) % hc;
+            const int64_t it = ir / (n_embd * hc);
+            const int64_t count = MIN(n_embd - i0, ir1 - ir);
+            const float * branch = (const float *) ((const char *) x->data + i0*nbx0 + it*nbx1);
+            const float * a = (const float *) ((const char *) residual->data + i0*nbr0 + it*nbr2);
+            const float * b = (const float *) ((const char *) a + nbr1);
+            float * out = (float *) ((char *) dst->data + i0*nbd0 + idst*nbd1 + it*nbd2);
+            const float p = *(const float *) ((const char *) post->data + idst*nbp0 + it*nbp1);
+            if (comb) {
+                const float ca = *(const float *) ((const char *) comb->data + idst*nbc0 + it*nbc2);
+                const float cb = *(const float *) ((const char *) comb->data + idst*nbc0 + nbc1 + it*nbc2);
+                for (int64_t j = 0; j < count; ++j) {
+                    out[j] = (fmaf(a[j], ca, 0.0f) + fmaf(b[j], cb, 0.0f)) + fmaf(branch[j], p, 0.0f);
+                }
+            } else {
+                const float * r = (const float *) ((const char *) a + idst*nbr1);
+                for (int64_t j = 0; j < count; ++j) {
+                    out[j] = r[j] + fmaf(branch[j], p, 0.0f);
+                }
+            }
+            ir += count;
+        }
+        return;
+    }
 
     for (int64_t ir = ir0; ir < ir1; ++ir) {
         const int64_t i0     = ir % n_embd;

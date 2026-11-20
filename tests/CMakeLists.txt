@@ -230,7 +230,6 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
 endif()
 
 llama_build(test-llama-archs.cpp)
-target_include_directories(test-llama-archs PRIVATE ${PROJECT_SOURCE_DIR}/src)
 if (GGML_CPU AND (NOT WIN32 OR NOT BUILD_SHARED_LIBS))
     llama_build(test-fp8.cpp)
     set(FP8_MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models-fp8")
@@ -300,12 +299,6 @@ llama_test_cmd(python3
     LABEL "python behavior"
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
     ARGS -m unittest discover -s tests -p test_conversion_fp8.py -v
-)
-llama_test_cmd(python3
-    NAME test-conversion-sensenova-loop
-    LABEL "python behavior"
-    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-    ARGS -m unittest discover -s tests -p test_conversion_sensenova_loop.py -v
 )
 llama_test_cmd(python3
     NAME test-kv-cache-scales

@@ -37,6 +37,14 @@ class ForcedF16Model(Qwen2MoeModel):
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
 
+class RemappedLayerModel(Qwen2MoeModel):
+    model_arch = gguf.MODEL_ARCH.QWEN2MOE
+
+    def modify_tensors(self, data_torch, name, bid):
+        for new_name, tensor in super().modify_tensors(data_torch, name, bid):
+            yield new_name.replace("blk.0.", "blk.1."), tensor
+
+
 class OffsetNormModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN2MOE
 
@@ -102,6 +110,15 @@ class TestFP8Conversion(unittest.TestCase):
         if check_lazy:
             self.assertTrue(deferred.intersection(reads))
         return result
+
+    def test_remapped_layer_precision(self):
+        tensor = torch.arange(8, dtype=torch.float32).reshape(2, 4).to(torch.bfloat16)
+        for ftype in (gguf.LlamaFileType.MOSTLY_F16, gguf.LlamaFileType.MOSTLY_BF16, gguf.LlamaFileType.GUESSED):
+            with self.subTest(ftype=ftype):
+                result = self.convert(RemappedLayerModel, {"model.layers.0.mlp.gate.weight": tensor}, ftype=ftype, hparams_override={"num_hidden_layers": 2})
+                dtype, data = result["blk.1.ffn_gate_inp.weight"]
+                self.assertEqual(dtype, gguf.GGMLQuantizationType.F32)
+                np.testing.assert_array_equal(data, tensor.float().numpy())
 
     def test_lazy_fp8_export(self):
         name = "model.layers.0.self_attn.q_proj.weight"

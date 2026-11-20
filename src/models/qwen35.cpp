@@ -327,6 +327,7 @@ ggml_tensor * llama_model_qwen35::graph_base::build_layer_attn(
         ggml_element_size(Qcur_full) * n_embd_head * 2,
         ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head,
         ggml_element_size(Qcur_full) * n_embd_head);
+    gate = ggml_cont_2d(ctx0, gate, n_embd_head * n_head, n_tokens);
     cb(gate, "gate_reshaped", il);
 
     Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
@@ -346,13 +347,11 @@ ggml_tensor * llama_model_qwen35::graph_base::build_layer_attn(
                 nullptr, nullptr, nullptr,
                 Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
     cb(cur, "attn_pregate", il);
-    cur = ggml_reshape_3d(ctx0, cur, n_embd_head, n_head, n_tokens);
 
     ggml_tensor * gate_sigmoid = ggml_sigmoid(ctx0, gate);
     cb(gate_sigmoid, "gate_sigmoid", il);
 
     cur = ggml_mul(ctx0, cur, gate_sigmoid);
-    cur = ggml_reshape_2d(ctx0, cur, n_embd_head * n_head, n_tokens);
     cb(cur, "attn_gated", il);
 
     cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
@@ -611,6 +610,7 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llm_graph_params & params)
             ggml_element_size(Qcur_full) * n_embd_head * 2,
             ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head,
             ggml_element_size(Qcur_full) * n_embd_head);
+    gate = ggml_cont_2d(ctx0, gate, n_embd_head * n_head, n_tokens);
     cb(gate, "mtp_gate", il);
 
     Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
@@ -631,9 +631,7 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llm_graph_params & params)
             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
     cb(cur, "mtp_attn_pregate", il);
 
-    cur = ggml_reshape_3d(ctx0, cur, n_embd_head, n_head, n_tokens);
     cur = ggml_mul(ctx0, cur, ggml_sigmoid(ctx0, gate));
-    cur = ggml_reshape_2d(ctx0, cur, n_embd_head * n_head, n_tokens);
     cur = build_lora_mm(layer.wo, cur, layer.wo_s);
     cb(cur, "mtp_attn_out", il);
 
