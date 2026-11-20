@@ -907,18 +907,12 @@ void llama_context::sched_reserve() {
     {
         // TODO: the worst case graph is not always reached for `n_seqs > 1`
         //       need to implement a more robust mechanism that tries a few different inputs and analyzes the results
-        ggml_cgraph * gf = nullptr;
-        switch (model.arch) {
-            case LLM_ARCH_KIMI_LINEAR:
-            case LLM_ARCH_MINIMAX_01:
-                // [TAG_RESERVE_DIAG_DECAY]
-                // the `inp_diag_decay` tensor size scales with `n_seq_tokens^2` which
-                // makes `n_seqs == 1` use more memory for the compute graph compared to `n_seqs > 1`
-                gf = graph_reserve(n_tokens, 1,      n_outputs_pp, mctx.get(), model.no_alloc());
-                break;
-            default:
-                gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get(), model.no_alloc());
-        };
+        // [TAG_RESERVE_DIAG_DECAY]
+        // tensors like `inp_diag_decay` scale with `n_seq_tokens^2`, which
+        // makes `n_seqs == 1` use more memory for the compute graph compared to `n_seqs > 1`
+        const uint32_t n_seqs_pp = model.reserve_pp_single_seq() ? 1 : n_seqs;
+
+        ggml_cgraph * gf = graph_reserve(n_tokens, n_seqs_pp, n_outputs_pp, mctx.get(), model.no_alloc());
 
         if (!gf) {
             throw std::runtime_error("failed to allocate compute pp buffers");
