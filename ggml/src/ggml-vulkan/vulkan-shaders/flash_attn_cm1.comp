@@ -239,13 +239,12 @@ void main() {
                     uint32_t c = (idx + tid) / (Br / 4);
                     uint32_t r = (idx + tid) % (Br / 4);
                     if (idx + tid < Bc * Br / 4 || idx + gl_WorkGroupSize.x <= Bc * Br / 4) {
-                        uint32_t kcol;
-                        bool kv_active = fa_kv_index(j * Bc + c, kcol);
-                        if (kv_active) {
+                        uint32_t mcol;
+                        if (fa_mask_index(j * Bc + c, mcol)) {
                             f16vec4 m;
                             if (USE_SPARSE) {
                                 // sparse is gqa-gated (m_stride == 0): all four rows share the value
-                                FLOAT_TYPE mv = FLOAT_TYPE(data_m[m_offset + kcol]);
+                                FLOAT_TYPE mv = FLOAT_TYPE(data_m[m_offset + mcol]);
                                 m = f16vec4(mv);
                                 max_mask = max(max_mask, float(mv));
                             } else if (!nem1_bounds_check || i * Br + r * 4 + 3 < p.nem1) {
@@ -342,7 +341,7 @@ void main() {
             if (SHMEM_STAGING == 0) {
             // For quants we always need to dequant into kvsh; for f16/bf16 we can load
             // directly from global memory when alignment / bounds allow it.
-            const bool stage_k = USE_DECODE_K || KV_bounds_check || USE_SPARSE || d * 16 + 16 > HSK;
+            const bool stage_k = USE_DECODE_K || KV_bounds_check || GATHER_KV || d * 16 + 16 > HSK;
             if (stage_k) {
                 barrier();
                 [[unroll]] for (uint32_t idx = 0; idx < Bc * MatBr / 4; idx += gl_WorkGroupSize.x) {
@@ -534,7 +533,7 @@ void main() {
             if (SHMEM_STAGING == 0) {
             // For quants we always preload via kvsh. For f16/bf16 we only preload when
             // alignment / bounds force it (otherwise we coopMatLoad direct from data_vv4).
-            const bool stage_v = USE_DECODE_V || KV_bounds_check || USE_SPARSE;
+            const bool stage_v = USE_DECODE_V || KV_bounds_check || GATHER_KV;
             if (stage_v) {
                 [[unroll]] for (uint32_t i = 0; i < v_loads_per_thread; ++i) {
                     const uint idx = i * gl_WorkGroupSize.x + tid;
@@ -549,7 +548,7 @@ void main() {
                     const uint ib = coord / BLOCK_SIZE_V;
                     const uint iqs = coord % BLOCK_SIZE_V;
 
-                    if (USE_SPARSE ? (kv_active && v_col < HSV) : (!KV_bounds_check || (v_row < KV && v_col < HSV))) {
+                    if (kv_active && v_col < HSV) {
 #if !defined(BFLOAT16)
                         if (USE_DECODE_V) {
                             kvsh[row * vsh_stride + col] = dequantize4(ib, iqs, v_offset, BINDING_IDX_V);
@@ -571,7 +570,7 @@ void main() {
             if (hsv_offset < HSV_pad) {
                 [[unroll]] for (uint32_t bc_chunk = 0; bc_chunk < Bc / MatBc; ++bc_chunk) {
                     if (SHMEM_STAGING == 0) {
-                    if (!USE_DECODE_V && !KV_bounds_check && !USE_SPARSE) {
+                    if (!USE_DECODE_V && !KV_bounds_check && !GATHER_KV) {
                         // F16/BF16 values can be loaded directly from global memory
                         const uint v_tile_row = j * Bc + bc_chunk * MatBc;
                         const uint v_tile_offset = v_offset / 4 + v_tile_row * v_stride / 4 + hsv_offset / 4;

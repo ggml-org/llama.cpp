@@ -134,7 +134,8 @@ void fl_load_k(const uint32_t j, const uint32_t k_offset) {
         if (idx < Bc * HSK_pad / 8) {
             const uint32_t c = idx / (HSK_pad / 8);
             const uint32_t d = idx % (HSK_pad / 8);
-            fl_kr[l] = data_ku[(k_offset + (j * Bc + c) * k_stride) / 8 + d];
+            uint32_t row;
+            fl_kr[l] = fa_kv_index(j * Bc + c, row) ? data_ku[(k_offset + row * k_stride) / 8 + d] : uvec4(0);
         }
     }
 }
@@ -148,7 +149,8 @@ void fl_load_v(const uint32_t j, const uint32_t v_offset) {
             if (FL_VT) {
                 c = (gl_LocalInvocationIndex / (HSV_pad / 8)) * FL_VLD + l;
             }
-            fl_vr[l] = data_vu[(v_offset + (j * Bc + c) * v_stride) / 8 + d];
+            uint32_t row;
+            fl_vr[l] = fa_kv_index(j * Bc + c, row) ? data_vu[(v_offset + row * v_stride) / 8 + d] : uvec4(0);
         }
     }
 }

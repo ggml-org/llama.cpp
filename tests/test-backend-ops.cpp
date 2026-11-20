@@ -10366,11 +10366,12 @@ struct test_flash_attn_ext_kv_rows : public test_case {
     const int64_t nb;       // queries per slice
     const int64_t n_slices;
     const ggml_type type_KV;
+    const bool empty_slice;
 
     std::vector<int32_t> rows;
 
     std::string vars() override {
-        return VARS_TO_STR8(hs, nh, gqa, n_cells, kv, nb, n_slices, type_KV);
+        return VARS_TO_STR9(hs, nh, gqa, n_cells, kv, nb, n_slices, type_KV, empty_slice);
     }
 
     double max_nmse_err() override {
@@ -10378,8 +10379,8 @@ struct test_flash_attn_ext_kv_rows : public test_case {
     }
 
     test_flash_attn_ext_kv_rows(int64_t hs = 256, int64_t nh = 2, int64_t gqa = 8, int64_t n_cells = 2048, int64_t kv = 512,
-                                int64_t nb = 8, int64_t n_slices = 4, ggml_type type_KV = GGML_TYPE_F16)
-        : hs(hs), nh(nh), gqa(gqa), n_cells(n_cells), kv(kv), nb(nb), n_slices(n_slices), type_KV(type_KV) {}
+                                int64_t nb = 8, int64_t n_slices = 4, ggml_type type_KV = GGML_TYPE_F16, bool empty_slice = false)
+        : hs(hs), nh(nh), gqa(gqa), n_cells(n_cells), kv(kv), nb(nb), n_slices(n_slices), type_KV(type_KV), empty_slice(empty_slice) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, hs, nb, nh*gqa, n_slices);
@@ -10413,7 +10414,7 @@ struct test_flash_attn_ext_kv_rows : public test_case {
         // per slice: distinct random cells, the tail of the list is padding
         rows.assign(kv*n_slices, -1);
         std::vector<int32_t> order(n_cells);
-        for (int64_t s = 0; s < n_slices; ++s) {
+        for (int64_t s = 0; s < n_slices - empty_slice; ++s) {
             for (int64_t i = 0; i < n_cells; ++i) {
                 order[i] = i;
             }
@@ -14835,6 +14836,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(128, 128, 1, { 8, 1}, 4096, 4, true, false, 8.0f, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false,  512));
 
     // flash attention over a list of K/V rows per slice (unified KV cache)
+    test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 4, 1, 1000, 257, 3, 2, GGML_TYPE_F16, true));
+    test_cases.emplace_back(new test_flash_attn_ext_kv_rows(64, 2, 1, 1000, 257, 256, 2, GGML_TYPE_F16, true));
+    test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 4, 1, 1000, 256, 8, 2, GGML_TYPE_BF16));
+    test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 4, 1, 1000, 256, 256, 2, GGML_TYPE_BF16));
     for (int64_t nb : {1, 3, 8, 64, 512}) {
         for (int64_t n_slices : {1, 4}) {
             test_cases.emplace_back(new test_flash_attn_ext_kv_rows(256, 2, 8, 4096, 1024, nb, n_slices));

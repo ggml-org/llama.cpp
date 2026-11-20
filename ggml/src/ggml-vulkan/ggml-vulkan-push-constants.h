@@ -120,7 +120,7 @@ struct vk_flash_attn_push_constants {
     uint32_t ne3;
 
     uint32_t neq2;
-    uint32_t neq3;
+    uint32_t n_kv_cache;
     uint32_t nek2;
     uint32_t nek3;
     uint32_t nev2;

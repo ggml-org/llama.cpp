@@ -211,10 +211,9 @@ void main() {
                     uint32_t c = (idx + tid) % Bc;
                     uint32_t r = (idx + tid) / Bc;
                     if (idx + tid < Bc * Br) {
-                        uint32_t kcol;
-                        bool kv_active = fa_kv_index(j * Bc + c, kcol);
-                        if (kv_active && (!nem1_bounds_check || i * Br + r < p.nem1)) {
-                            FLOAT_TYPE m = FLOAT_TYPE(data_m[m_offset + (i * Br + r) * m_stride + kcol]);
+                        uint32_t mcol;
+                        if (fa_mask_index(j * Bc + c, mcol) && (!nem1_bounds_check || i * Br + r < p.nem1)) {
+                            FLOAT_TYPE m = FLOAT_TYPE(data_m[m_offset + (i * Br + r) * m_stride + mcol]);
                             masksh[c * masksh_stride + r] = m;
                             max_mask = max(max_mask, float(m));
                         } else {
