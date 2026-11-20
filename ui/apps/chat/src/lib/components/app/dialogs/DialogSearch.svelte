@@ -470,7 +470,7 @@
 <!-- like every dialog, a phone shows it full screen -->
 <Dialog.Root onOpenChange={handleOpenChange} {open}>
 	<Dialog.Content
-		class="top-[12%] flex h-[min(36rem,76dvh)]! w-full max-w-2xl! translate-y-0 flex-col gap-0 overflow-hidden rounded-xl p-0"
+		class="top-[12%] flex h-[min(36rem,76dvh)]! w-full max-w-2xl! md:w-[calc(100%-2rem)] translate-y-0 flex-col gap-0 overflow-hidden rounded-xl p-0"
 		onOpenAutoFocus={(event) => {
 			event.preventDefault();
 			inputRef?.focus();
