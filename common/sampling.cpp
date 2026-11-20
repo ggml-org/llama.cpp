@@ -203,6 +203,13 @@ struct common_sampler * common_sampler_init(
         throw std::invalid_argument("penalty_present must be finite");
     }
     const llama_vocab * vocab = llama_model_get_vocab(model);
+    if (!common_grammar_value(params.grammar).empty()) {
+        for (const auto & b : params.logit_bias) {
+            if (b.bias == -INFINITY && llama_vocab_is_eog(vocab, b.token)) {
+                throw std::invalid_argument("EOG tokens cannot be banned when a grammar is set");
+            }
+        }
+    }
     llama_sampler_chain_params lparams = llama_sampler_chain_default_params();
 
     lparams.no_perf = params.no_perf;
@@ -255,7 +262,8 @@ struct common_sampler * common_sampler_init(
                     break;
                 }
                 default:
-                    GGML_ASSERT(false && "unknown trigger type");
+                    throw std::runtime_error(
+                        "unknown grammar trigger type: " + std::to_string(trigger.type));
             }
         }
 

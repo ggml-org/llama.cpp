@@ -1,5 +1,7 @@
 #include "models.h"
 
+#include <cinttypes>
+
 // HRM-Text: alternating low/high transformer stacks over the same token stream.
 // Reference: HrmTextModel in transformers, DFM Mimir 1B.
 
@@ -19,8 +21,15 @@ void llama_model_hrm_text::load_arch_hparams(llama_model_loader & ml) {
     GGML_ASSERT(hparams.n_hrm_l_cycles > 0);
 
     // the GGUF block count is the expanded cache-slot count
-    const uint32_t n_slot = hparams.n_hrm_layers_per_stack * hparams.n_hrm_h_cycles * (hparams.n_hrm_l_cycles + 1);
-    GGML_ASSERT(hparams.n_layer() == n_slot);
+    // 64-bit: a 32-bit product can wrap and match n_layer(), then load_arch_tensors() indexes past model.layers
+    const uint64_t n_slot = (uint64_t) hparams.n_hrm_layers_per_stack * hparams.n_hrm_h_cycles * (hparams.n_hrm_l_cycles + 1);
+    if (hparams.n_hrm_layers_per_stack >= hparams.n_layer() || n_slot != hparams.n_layer()) {
+        throw std::runtime_error(format(
+            "hrm: cache-slot count %" PRIu64 " (layers_per_stack %u, h_cycles %u, l_cycles %u) "
+            "does not match block_count %u",
+            n_slot, hparams.n_hrm_layers_per_stack, hparams.n_hrm_h_cycles,
+            hparams.n_hrm_l_cycles, hparams.n_layer()));
+    }
 
     switch (hparams.n_embd) {
         case 1536:

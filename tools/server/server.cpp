@@ -279,11 +279,13 @@ static bool server_setup_features(
         warn_names.push_back("peer-to-peer tunnel (llama-connect, experimental)");
     }
 
-    // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
+    // CORS proxy (EXPERIMENTAL, only used by Llama Chat for MCP)
     if (params.ui_mcp_proxy) {
-        ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_handler_get));
-        ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post));
-        warn_names.push_back("MCP proxy (experimental)");
+        ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_make_handler("GET",  params.ui_mcp_proxy_allow_private_urls)));
+        ctx_http.post("/cors-proxy",      ex_wrapper(proxy_make_handler("POST", params.ui_mcp_proxy_allow_private_urls)));
+        warn_names.push_back(params.ui_mcp_proxy_allow_private_urls
+            ? "MCP proxy (experimental, local and private addresses allowed)"
+            : "MCP proxy (experimental)");
     } else {
         ctx_http.get ("/cors-proxy",      ex_wrapper(res_403));
         ctx_http.post("/cors-proxy",      ex_wrapper(res_403));
