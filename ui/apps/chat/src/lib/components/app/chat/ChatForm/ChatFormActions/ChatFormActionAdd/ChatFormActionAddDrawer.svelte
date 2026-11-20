@@ -8,24 +8,23 @@
 		ChevronRight,
 		File,
 		Folder,
-		Image,
 		MessageSquare,
-		Mic,
-		PencilRuler,
-		Video
+		PencilRuler
 	} from '@lucide/svelte';
 	import {
 		ATTACHMENT_FILE_ITEMS,
 		ATTACHMENT_MENU_TEXT,
 		ATTACHMENT_MODALITY_TEXT,
-		ICON_CLASS_DEFAULT
+		ICON_CLASS_DEFAULT,
+		MODALITY_ICONS
 	} from '#lib/constants/index.ts';
 	import { getChatFormActionsContext } from '#lib/contexts/index.ts';
 	import { AttachmentAction, AttachmentItemEnabledWhen } from '#lib/enums/attachment.enums.ts';
+	import { ModelModality } from '#lib/enums/index.ts';
 	import { useAttachmentMenu } from '#lib/hooks/use-attachment-menu.svelte.ts';
 	import { useToolsPanel } from '#lib/hooks/use-tools-panel.svelte.ts';
 	import type { ToolGroup } from '#lib/types/index.ts';
-	import type { Snippet } from 'svelte';
+	import type { Component, Snippet } from 'svelte';
 
 	interface Props {
 		class?: string;
@@ -54,17 +53,17 @@
 		}
 	);
 
-	const FILE_MODALITY_ICONS: Record<string, { icon: typeof Image; label: string }> = {
+	const FILE_MODALITY_ICONS: Record<string, { icon: Component; label: string }> = {
 		[AttachmentItemEnabledWhen.HAS_AUDIO_MODALITY]: {
-			icon: Mic,
+			icon: MODALITY_ICONS[ModelModality.AUDIO],
 			label: ATTACHMENT_MODALITY_TEXT[AttachmentItemEnabledWhen.HAS_AUDIO_MODALITY]
 		},
 		[AttachmentItemEnabledWhen.HAS_VIDEO_MODALITY]: {
-			icon: Video,
+			icon: MODALITY_ICONS[ModelModality.VIDEO],
 			label: ATTACHMENT_MODALITY_TEXT[AttachmentItemEnabledWhen.HAS_VIDEO_MODALITY]
 		},
 		[AttachmentItemEnabledWhen.HAS_VISION_MODALITY]: {
-			icon: Image,
+			icon: MODALITY_ICONS[ModelModality.VISION],
 			label: ATTACHMENT_MODALITY_TEXT[AttachmentItemEnabledWhen.HAS_VISION_MODALITY]
 		}
 	};

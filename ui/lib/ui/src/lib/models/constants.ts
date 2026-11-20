@@ -2,9 +2,9 @@
 // models-discover-download and model-compatibility).
 import { ModelCapability, ModelModality } from './enums.js';
 import type { ModelModalities } from './types.js';
-import VisionIcon from '@lucide/svelte/icons/eye';
+import VisionIcon from '@lucide/svelte/icons/glasses';
 import ReasoningIcon from '@lucide/svelte/icons/lightbulb';
-import AudioIcon from '@lucide/svelte/icons/mic';
+import AudioIcon from '@lucide/svelte/icons/headphones';
 import VideoIcon from '@lucide/svelte/icons/video';
 import ToolUseIcon from '@lucide/svelte/icons/wrench';
 import type { Component } from 'svelte';
