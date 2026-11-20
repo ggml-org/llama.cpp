@@ -2523,19 +2523,22 @@ static int ggml_cuda_fattn_mma_f16_fused_q_switch() {
 // - Sparse kernels (256/512 at ncols2=8): the gather forces nstages == 1 and rides the same chunk staging, load_tile_q gathering
 //   the tile rows through the indices list; the nstages passed here is the pre-clamp host value, the sparse family only needs
 //   cp.async to exist. Sparse compiles only at ncols1=1.
+// - Dense 128/256 at ncols2 = 2/4 (gqa_ratio 2-4, non-gqa-opt-8 passes): the softcap-free cells, validated for the
+//   per-group tile layout of those passes (mistral-Small gqa=4, gemma-4 local layers gqa=2); 512 and sparse stay at ncols2 = 8.
 static bool ggml_cuda_fattn_mma_f16_fused_q_supported(
         const ggml_tensor * K, const ggml_tensor * V, const int DKQ, const int DV, const int ncols2, const int nstages,
-        const bool use_sparse) {
+        const bool use_sparse, const bool use_logit_softcap) {
     const bool q_K = ggml_cuda_fattn_mma_fused_type_supported(K->type);
     const bool q_V = ggml_cuda_fattn_mma_fused_type_supported(V->type);
     // The launch grid is pinned to the unfused instance's occupancy (occ_kernel in launch_fattn): the fused staging smem changes
     // blocks/SM, and an unpinned grid moves the stream-K seams (partial-combine order) at the sparse-512 cells.
     // The dense arms must stay exclusive with the sparse one: a sparse op's nstages would otherwise satisfy the
     // 256 (>1 host value) or 512 (==1) dense clause and bypass the sparse restriction.
-    const bool fused_mode_ok = ncols2 == 8
-        && (use_sparse
-            ? (nstages > 0 && DKQ == DV && (DKQ == 256 || DKQ == 512))
-            : ((DKQ == 128 && DV == 128 && nstages > 1) || (DKQ == 256 && DV == 256 && nstages > 1) || (DKQ == 512 && DV == 512 && nstages == 1)));
+    const bool fused_mode_ok = use_sparse
+        ? (ncols2 == 8 && nstages > 0 && DKQ == DV && (DKQ == 256 || DKQ == 512))
+        : (DKQ == DV && (DKQ == 512
+            ? (ncols2 == 8 && nstages == 1)
+            : (DKQ == 128 || DKQ == 256) && nstages > 1 && (ncols2 == 8 || !use_logit_softcap))); // nstages > 1 excludes ncols2 = 1
     // Per-side staging alignment (see cp_async_ca_8): 16 B generally; 8 B at DKQ=DV=128 (136/72 B rows).
     auto align_req_of = [](const ggml_type type, const int D) {
         const int rb = (D/32) * ggml_cuda_fattn_mma_fused_block_bytes(ggml_cuda_fattn_mma_fused_type_from_ggml(type));
@@ -2551,7 +2554,8 @@ static bool ggml_cuda_fattn_mma_f16_fused_q_supported(
 }
 // The fused kernel instantiation table (K type x V type; use_sparse picks the dense or sparse gather variant); only cells the
 // gate can fuse instantiate either side (see fused_q_supported). The softcap-free 3x3 table serves the sparse calls (sparse
-// never runs with softcap); the dense cells (128/256/512, ncols2=8) use the 3x3x2 table with the softcap axis.
+// never runs with softcap); the dense cells (128/256/512 at ncols2=8, plus dense softcap-free 128/256 at ncols2=2/4) use the
+// 3x3x2 table with the softcap axis.
 // One table entry: kernel template args fixed by the enclosing pick instantiation, varying only in the per-side fused
 // K/V quant enums (_SC = softcap twin).
 #define FATTN_MMA_FUSED_CASE(KQ, VQ) \
@@ -2706,8 +2710,8 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
     const size_t nbytes_shared_ref = nbytes_shared_total;
     // The fused route is decided after the kernel selection above: fused_q_supported consumes the sparse predicate.
     const bool fused_q = ggml_cuda_fattn_mma_f16_fused_q_switch() != 0 &&
-        ggml_cuda_fattn_ext_use_gqa_opt(Q, K, V, mask, max_bias) && Q->ne[2] / K->ne[2] > 4 &&
-        ggml_cuda_fattn_mma_f16_fused_q_supported(K, V, DKQ, DV, ncols2, nstages, use_sparse);
+        ggml_cuda_fattn_ext_use_gqa_opt(Q, K, V, mask, max_bias) &&
+        ggml_cuda_fattn_mma_f16_fused_q_supported(K, V, DKQ, DV, ncols2, nstages, use_sparse, logit_softcap != 0.0f);
     const int fused_K = fused_q ? ggml_cuda_fattn_mma_fused_type_from_ggml(K->type) : FATTN_MMA_FUSED_NONE;
     const int fused_V = fused_q ? ggml_cuda_fattn_mma_fused_type_from_ggml(V->type) : FATTN_MMA_FUSED_NONE;
     if constexpr ((DKQ == 128 || DKQ == 256 || DKQ == 512) && DV == DKQ && ncols2 == 8) {
@@ -2721,7 +2725,8 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
         }
     }
     if (fused_q) {
-        if constexpr ((DKQ == 128 || DKQ == 256 || DKQ == 512) && DV == DKQ && ncols2 == 8) {
+        if constexpr ((DKQ == 128 || DKQ == 256 || DKQ == 512) && DV == DKQ &&
+                (ncols2 == 8 || (ncols2 > 1 && (DKQ == 128 || DKQ == 256)))) { // mirrors fused_mode_ok's dense scope
             // One linear staging area is reused by the K and V loads in turn, sized by whichever side needs more bytes:
             // the full row at DKQ=DV=256, one chunk (nbatch_K2/V2 values) at 512 and the sparse kernels.
             const size_t nbytes_stage_K = nbatch_fa * (nbatch_K2/16) * ggml_cuda_fattn_mma_fused_block_bytes(fused_K);

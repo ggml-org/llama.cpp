@@ -867,18 +867,22 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 // Per-DKQ half of ggml_cuda_fattn_mma_f16_fused_q_applies, templated so the 128/256/512 routes stay one mirror of the dispatch.
 template <int DKQ>
 static bool ggml_cuda_fattn_mma_f16_fused_q_applies_dkq(
-        const int cc, const ggml_tensor * Q, const ggml_tensor * K, const ggml_tensor * V, const ggml_tensor * dst) {
-    const int ncols1  = ggml_cuda_fattn_ext_mma_f16_get_ncols1<DKQ>(cc, Q->ne[1], 8);
-    const int nstages = ggml_cuda_fattn_mma_get_nstages(DKQ, DKQ, ncols1, 8, cc);
+        const int cc, const ggml_tensor * Q, const ggml_tensor * K, const ggml_tensor * V, const ggml_tensor * dst,
+        const int ncols2, const bool use_logit_softcap) {
+    const int ncols1  = ggml_cuda_fattn_ext_mma_f16_get_ncols1<DKQ>(cc, Q->ne[1], ncols2);
+    const int nstages = ggml_cuda_fattn_mma_get_nstages(DKQ, DKQ, ncols1, ncols2, cc);
     bool use_sparse = false;
     if constexpr (DKQ != 128) { // may_use_sparse has no 128 entries
         // Predict the sparse kernel exactly like the dispatch (the ncols1=1 pre-check, or the case's own runtime check at its
-        // compiled ncols1); the sparse kernel has its own fused gather path, so the flag feeds the gate below, not a disqualification.
-        use_sparse = ggml_cuda_fattn_ext_mma_f16_use_sparse_full_tile<DKQ, DKQ, 8>(cc, dst) ||
-            (ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DKQ, ncols1, 8) &&
-             ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, ncols1, 8));
+        // compiled ncols1); the sparse kernel has its own fused gather path, so the flag feeds the gate below, not a
+        // disqualification. Sparse instances exist only at ncols2 = 8, so the non-gqa-opt-8 passes are dense by definition.
+        if (ncols2 == 8) {
+            use_sparse = ggml_cuda_fattn_ext_mma_f16_use_sparse_full_tile<DKQ, DKQ, 8>(cc, dst) ||
+                (ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DKQ, ncols1, 8) &&
+                 ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, ncols1, 8));
+        }
     }
-    return ggml_cuda_fattn_mma_f16_fused_q_supported(K, V, DKQ, DKQ, 8, nstages, use_sparse);
+    return ggml_cuda_fattn_mma_f16_fused_q_supported(K, V, DKQ, DKQ, ncols2, nstages, use_sparse, use_logit_softcap);
 }
 // Predicts whether ggml_cuda_flash_attn_ext_mma_f16_case will use the fused quantized dequant path,
 // via the same selection helpers as the dispatch chain. Must agree with that function or the f16 scratch region will be sized wrong.
@@ -894,16 +898,21 @@ static bool ggml_cuda_fattn_mma_f16_fused_q_applies(const int cc, const ggml_ten
     }
     float max_bias = 0.0f;
     memcpy(&max_bias, (const float *) dst->op_params + 1, sizeof(float));
+    float logit_softcap = 0.0f;
+    memcpy(&logit_softcap, (const float *) dst->op_params + 2, sizeof(float));
     const int gqa_ratio = Q->ne[2] / K->ne[2];
-    if (!ggml_cuda_fattn_ext_use_gqa_opt(Q, K, V, dst->src[3], max_bias) || gqa_ratio <= 4) {
-        return false; // switch_ncols2 doesn't pick ncols2 == 8
+    const bool use_gqa_opt = ggml_cuda_fattn_ext_use_gqa_opt(Q, K, V, dst->src[3], max_bias);
+    // Mirror of switch_ncols2 (Volta's %-rules can differ but never fuse there: nstages = 0 without cp.async).
+    const int ncols2 = !use_gqa_opt ? 1 : gqa_ratio > 4 ? 8 : gqa_ratio > 2 ? 4 : gqa_ratio > 1 ? 2 : 1;
+    if (ncols2 == 1) {
+        return false; // general route: no fused instance there (its nstages is 0 anyway)
     }
     // The fused route lives in the multi-stage pass at 128/256 and in the single-stage pass (chunk-granular staging) at 512;
     // the sparse kernels fuse at 256/512 (see fused_q_supported).
     switch (Q->ne[0]) {
-        case 128: return ggml_cuda_fattn_mma_f16_fused_q_applies_dkq<128>(cc, Q, K, V, dst);
-        case 256: return ggml_cuda_fattn_mma_f16_fused_q_applies_dkq<256>(cc, Q, K, V, dst);
-        default:  return ggml_cuda_fattn_mma_f16_fused_q_applies_dkq<512>(cc, Q, K, V, dst); // 512, guaranteed by the head-size check above
+        case 128: return ggml_cuda_fattn_mma_f16_fused_q_applies_dkq<128>(cc, Q, K, V, dst, ncols2, logit_softcap != 0.0f);
+        case 256: return ggml_cuda_fattn_mma_f16_fused_q_applies_dkq<256>(cc, Q, K, V, dst, ncols2, logit_softcap != 0.0f);
+        default:  return ggml_cuda_fattn_mma_f16_fused_q_applies_dkq<512>(cc, Q, K, V, dst, ncols2, logit_softcap != 0.0f); // 512, guaranteed by the head-size check above
     }
 }
 
