@@ -23128,8 +23128,17 @@ static void ggml_cl_fa_kq_p8_dispatch(
         CL_CHECK(clSetKernelArg(kernel, a++, sizeof(int), &D_B));
         CL_CHECK(clSetKernelArg(kernel, a++, sizeof(int), &p_pitch));
 
-        const size_t n_tiles = (N + 31) / 32;
-        size_t gws[3] = {64, n_tiles, (size_t)(M / 64) * D_B};
+        // Pack query heads of each KV group into a short batch's tile.
+        static const bool fold_enabled = [] {
+            const char * e = getenv("GGML_OPENCL_FA_KQ_P8_FOLD");
+            return !e || e[0] != '0';
+        }();
+        const int gqa = D_B / D_A;
+        const int fold = fold_enabled && gqa > 1 && N < 32 && gqa <= INT_MAX / N ? gqa : 1;
+        CL_CHECK(clSetKernelArg(kernel, a++, sizeof(int), &fold));
+
+        const size_t n_tiles = ((size_t) N * fold + 31) / 32;
+        size_t gws[3] = {64, n_tiles, (size_t)(M / 64) * (fold > 1 ? D_A : D_B)};
 
         const bool two_tiles = n_tiles % 2 == 0 && backend_ctx->get_kernel_workgroup_size(kernel) >= 128;
         size_t lws[3] = {64, two_tiles ? (size_t) 2 : (size_t) 1, 1};
