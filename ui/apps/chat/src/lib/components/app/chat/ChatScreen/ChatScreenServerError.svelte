@@ -9,7 +9,7 @@
 </script>
 
 {#if hasError || isLoadingModel}
-	<div class="pointer-events-auto mx-auto mb-4 max-w-[48rem] px-1">
+	<div class="pointer-events-auto mx-auto mb-4 max-w-3xl px-1">
 		<Alert.Root variant={isLoadingModel ? 'default' : 'destructive'}>
 			{#if isLoadingModel}
 				<Loader2 class="{ICON_CLASS_DEFAULT} animate-spin" />
@@ -22,7 +22,7 @@
 
 				{#if !isLoadingModel}
 					<button
-						class="flex items-center gap-1.5 rounded-lg bg-destructive/20 px-2 py-1 text-xs font-medium hover:bg-destructive/30 disabled:opacity-50"
+						class="flex items-center gap-1.5 rounded-lg bg-destructive/20 px-2 py-1 text-label-sm hover:bg-destructive/30 disabled:opacity-50"
 						disabled={serverStore.loading}
 						onclick={() => serverStore.fetch()}
 					>

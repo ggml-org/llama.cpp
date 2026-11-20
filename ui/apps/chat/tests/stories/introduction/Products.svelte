@@ -10,7 +10,7 @@
 </script>
 
 <div class="map">
-	<section class="card card-surface rounded-card brand">
+	<section class="card card-surface rounded-xl brand">
 		<header>
 			<span class="repo">&#xE002;ggml-org/llama-brand</span>
 
@@ -40,7 +40,7 @@
 		<span class="label">The icon and the app icons</span>
 	</div>
 
-	<section class="card card-surface rounded-card cpp">
+	<section class="card card-surface rounded-xl cpp">
 		<header>
 			<span class="repo">&#xE002;ggml-org/llama.cpp</span>
 		</header>
@@ -48,7 +48,7 @@
 		<h3 class="mono">llama.cpp</h3>
 
 		<div class="parts">
-			<div class="part rounded-panel bg-surface-lifted elevated-control">
+			<div class="part rounded-lg bg-(--surface-lifted) elevated-control">
 				<span class="part-name">The engine</span>
 
 				<span class="part-note"
@@ -56,7 +56,7 @@
 				>
 			</div>
 
-			<div class="part rounded-panel bg-surface-lifted elevated-control">
+			<div class="part rounded-lg bg-(--surface-lifted) elevated-control">
 				<span class="part-name">Llama UI <span class="arrow">→</span> Llama Chat</span>
 
 				<span class="part-note"
@@ -73,12 +73,12 @@
 		<span class="label">Run <code>llama-server</code> and open Llama Chat</span>
 	</div>
 
-	<section class="card card-surface rounded-card apps">
+	<section class="card card-surface rounded-xl apps">
 		<header>
 			<span class="repo">&#xE002;The native Llama apps</span>
 		</header>
 
-		<div class="app rounded-panel bg-surface-lifted elevated-control">
+		<div class="app rounded-lg bg-(--surface-lifted) elevated-control">
 			<h3>Llama for Mac</h3>
 
 			<span class="repo">&#xE002;ggml-org/Llama-macOS</span>
@@ -86,7 +86,7 @@
 			<span class="part-note">A menu bar app, in Swift</span>
 		</div>
 
-		<div class="app rounded-panel bg-surface-lifted elevated-control">
+		<div class="app rounded-lg bg-(--surface-lifted) elevated-control">
 			<h3>Llama for Windows</h3>
 
 			<span class="repo">&#xE002;ggml-org/Llama-Windows</span>

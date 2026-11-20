@@ -452,6 +452,16 @@ static __device__ __forceinline__ ggml_cuda_thread_mask_t ggml_cuda_ballot(int p
     return __ballot_sync(mask, predicate);
 }
 
+static __device__ __forceinline__ int ggml_cuda_popc(ggml_cuda_thread_mask_t x) {
+    static_assert(sizeof(ggml_cuda_thread_mask_t) == 4 || sizeof(ggml_cuda_thread_mask_t) == 8, "unsupported thread mask type");
+    if constexpr (sizeof(ggml_cuda_thread_mask_t) == 4) {
+        return __popc(x);
+    } else {
+        return __popcll(x);
+    }
+}
+template<typename T> static __device__ __forceinline__ int ggml_cuda_popc(T x) = delete; // Makes implicit type casts result in an error.
+
 static __device__ __forceinline__ int ggml_cuda_all(int predicate, ggml_cuda_thread_mask_t mask = GGML_CUDA_FULL_THREAD_MASK) {
     return __all_sync(mask, predicate);
 }

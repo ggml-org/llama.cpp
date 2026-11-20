@@ -19,7 +19,7 @@
 	style:width={full ? '100cqw' : undefined}
 	class="m-0 flex min-w-0 flex-col gap-2"
 >
-	<figcaption class="flex items-baseline gap-2 text-[11px] font-medium tracking-wide uppercase">
+	<figcaption class="flex items-baseline gap-2 text-label-sm tracking-wide uppercase">
 		<span class="text-muted-foreground">{label}</span>
 
 		{#if note}

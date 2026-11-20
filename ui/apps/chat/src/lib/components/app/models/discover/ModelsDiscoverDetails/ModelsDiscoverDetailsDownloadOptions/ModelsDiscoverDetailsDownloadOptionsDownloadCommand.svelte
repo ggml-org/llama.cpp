@@ -65,7 +65,7 @@
 >
 	<!-- Single line: long commands scroll horizontally instead of wrapping. -->
 	<div
-		class="flex min-w-0 flex-1 items-center gap-x-2 overflow-x-auto py-0.5 font-mono text-xs whitespace-nowrap text-foreground/90"
+		class="flex min-w-0 flex-1 items-center gap-x-2 overflow-x-auto py-0.5 font-mono text-caption whitespace-nowrap text-foreground/90"
 	>
 		<span class="shrink-0">{SERVE_COMMAND.BIN}</span>
 
@@ -105,9 +105,9 @@
 						{SPEC_TYPE[draftKind]}
 					</Select.Trigger>
 
-					<Select.Content class="font-mono text-xs">
+					<Select.Content class="font-mono text-caption">
 						{#each draftKinds as kind (kind)}
-							<Select.Item class="text-xs" label={SPEC_TYPE[kind]} value={kind}>
+							<Select.Item class="text-caption" label={SPEC_TYPE[kind]} value={kind}>
 								{SPEC_TYPE[kind]}
 							</Select.Item>
 						{/each}

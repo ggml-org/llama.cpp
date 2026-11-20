@@ -18,7 +18,7 @@
 </script>
 
 <div class="min-w-0 flex-1">
-	<div class="mb-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+	<div class="mb-0.5 flex items-center gap-1.5 text-caption text-muted-foreground">
 		{#if faviconUrl}
 			<img
 				alt=""
@@ -44,7 +44,7 @@
 	</div>
 
 	{#if description}
-		<p class="mt-0.5 truncate text-sm text-muted-foreground">
+		<p class="mt-0.5 truncate text-body-sm text-muted-foreground">
 			{description}
 		</p>
 	{/if}

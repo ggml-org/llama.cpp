@@ -62,7 +62,7 @@
 		</AlertDialog.Header>
 
 		<form class="space-y-2 pt-2 pb-4" onsubmit={handleSubmit}>
-			<label class="text-sm font-medium text-muted-foreground" for="conversation-rename-input">
+			<label class="text-label text-muted-foreground" for="conversation-rename-input">
 				Conversation title
 			</label>
 

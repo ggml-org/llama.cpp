@@ -37,7 +37,7 @@
 				</span>
 
 				{#if writeFileMeta?.errorMessage}
-					<span class="shrink-0 text-xs italic text-muted-foreground/70">(failed)</span>
+					<span class="shrink-0 text-caption italic text-muted-foreground/70">(failed)</span>
 				{/if}
 			</span>
 		</span>
@@ -46,7 +46,7 @@
 	{#snippet children(_meta, ctx)}
 		{#if writeFileBody?.errorMessage}
 			<div
-				class="flex items-start gap-2 rounded bg-surface-danger p-2 text-xs text-fg-danger italic"
+				class="flex items-start gap-2 rounded bg-surface-danger p-2 text-caption text-fg-danger italic"
 			>
 				<XCircle class="mt-0.5 size-icon-xs shrink-0" />
 
@@ -60,7 +60,7 @@
 				streaming={ctx.isCodeStreaming}
 			/>
 
-			<div class="mt-1.5 text-xs text-muted-foreground/70 italic">
+			<div class="mt-1.5 text-caption text-muted-foreground/70 italic">
 				{#if writeFileBody.resultMessage}
 					{writeFileBody.resultMessage}{writeFileBody.bytesWritten != null
 						? RESULT_STAT_SEPARATOR
@@ -80,11 +80,13 @@
 				streaming={ctx.isCodeStreaming}
 			/>
 		{:else if ctx.isStreaming}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
+			<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">
 				Receiving arguments...
 			</div>
 		{:else}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">No content</div>
+			<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">
+				No content
+			</div>
 		{/if}
 	{/snippet}
 </ToolCallBlock>

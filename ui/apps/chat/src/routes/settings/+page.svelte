@@ -16,13 +16,15 @@
 	class="[--settings-tabs-top:calc(var(--corner-control-top)+3rem)] flex w-full flex-col pt-(--page-top) max-md:pb-safe-4 md:pt-6"
 >
 	<div class="flex min-w-0 flex-col gap-1 px-4 pb-2 md:px-8">
-		<h1 class="text-2xl font-semibold tracking-tight">Settings</h1>
+		<h1 class="text-heading tracking-tight">Settings</h1>
 
-		<p class="text-sm text-muted-foreground">How the app looks, chats and talks to the server.</p>
+		<p class="text-body-sm text-muted-foreground">
+			How the app looks, chats and talks to the server.
+		</p>
 	</div>
 
 	<SettingsChat
-		mobileHeaderClass="top-(--settings-tabs-top) z-[25] data-stuck:before:absolute data-stuck:before:inset-x-0 data-stuck:before:bottom-full data-stuck:before:h-(--settings-tabs-top) data-stuck:before:bg-background"
+		mobileHeaderClass="top-(--settings-tabs-top) z-25 data-stuck:before:absolute data-stuck:before:inset-x-0 data-stuck:before:bottom-full data-stuck:before:h-(--settings-tabs-top) data-stuck:before:bg-background"
 		onClose={() => toast.success('Settings saved')}
 	/>
 </div>

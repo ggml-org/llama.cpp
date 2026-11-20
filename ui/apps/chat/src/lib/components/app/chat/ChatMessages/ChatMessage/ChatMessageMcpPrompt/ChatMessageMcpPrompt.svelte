@@ -29,13 +29,13 @@
 		<ChatMessageEditForm />
 	{:else}
 		<ChatMessageMcpPromptContent
-			class="w-full max-w-[80%]"
+			class="w-full max-w-4/5"
 			prompt={mcpPrompt}
 			variant={McpPromptVariant.MESSAGE}
 		/>
 
 		{#if message.timestamp}
-			<div class="max-w-[80%]">
+			<div class="max-w-4/5">
 				<ChatMessageActionIcons actionsPosition="right" justify="end" />
 			</div>
 		{/if}
