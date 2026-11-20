@@ -16,10 +16,6 @@ on:
         description: "Skip the s390x build target (useful for fast test runs that do not need the IBM Z runner)"
         type: boolean
         default: false
-      skip_musa:
-        description: "Skip the MUSA build target (dl.mthreads.com is intermittently unreachable)"
-        type: boolean
-        default: true
       skip_ref_check:
         description: "Skip the requirement to run from a tag (allows branch refs)"
         type: boolean
@@ -97,7 +93,6 @@ jobs:
         shell: bash
         env:
           SKIP_S390X: ${{ inputs.skip_s390x || 'false' }}
-          SKIP_MUSA: ${{ inputs.skip_musa || 'true' }}
         run: |
           set -euo pipefail
 
@@ -125,10 +120,8 @@ jobs:
             mv build-matrix.json.tmp build-matrix.json
           fi
 
-          if [ "${SKIP_MUSA}" = "true" ]; then
-            jq 'map(select(.tag != "musa"))' build-matrix.json > build-matrix.json.tmp
-            mv build-matrix.json.tmp build-matrix.json
-          fi
+          jq 'map(select(.tag != "musa"))' build-matrix.json > build-matrix.json.tmp
+          mv build-matrix.json.tmp build-matrix.json
 
           BUILD_MATRIX="$(jq -c . build-matrix.json)"
           MERGE_MATRIX="$(jq -c '
