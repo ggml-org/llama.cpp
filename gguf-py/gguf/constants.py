@@ -326,6 +326,13 @@ class Keys:
         L_CYCLES         = "{arch}.hrm.l_cycles"
         PREFIX_LM        = "{arch}.hrm.prefix_lm"
 
+    class Loop:
+        START     = "{arch}.loop.start"
+        END       = "{arch}.loop.end"
+        COUNT     = "{arch}.loop.count"
+        GATE_RANK = "{arch}.loop.gate_rank"
+        VARYING   = "{arch}.loop.varying"
+
     class Metis:
         PASS_COUNT               = "{arch}.metis.pass_count"
         MEMORY_LENGTH            = "{arch}.metis.memory_length"
@@ -778,6 +785,7 @@ class MODEL_ARCH(IntEnum):
     KOLIBRI1         = auto()
     LIMITE           = auto()
     INKLING2         = auto()
+    INKLING2_LOOP    = auto()
     DOMYN_EDGE       = auto()
 
 
@@ -880,6 +888,19 @@ class MODEL_TENSOR(IntEnum):
     MOE_LATENT_UP        = auto() # nemotron 3 super
     FFN_POST_CONV        = auto()
     FFN_RES_QUERY        = auto()
+    LOOP_MSG_QUERY       = auto()
+    LOOP_Q_CTRL_DOWN     = auto()
+    LOOP_Q_CTRL_GAIN     = auto()
+    LOOP_Q_CTRL_FORGET   = auto()
+    LOOP_K_CTRL_DOWN     = auto()
+    LOOP_K_CTRL_GAIN     = auto()
+    LOOP_K_CTRL_FORGET   = auto()
+    LOOP_V_CTRL_DOWN     = auto()
+    LOOP_V_CTRL_GAIN     = auto()
+    LOOP_V_CTRL_FORGET   = auto()
+    LOOP_FFN_CTRL_DOWN   = auto()
+    LOOP_FFN_CTRL_GAIN   = auto()
+    LOOP_FFN_CTRL_FORGET = auto()
     STREAM_EMBD          = auto()
     DEPTH_MEM_STATE_WRITE = auto()
     DEPTH_MEM_META_WRITE = auto()
@@ -1779,6 +1800,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.KOLIBRI1:         "kolibri1",
     MODEL_ARCH.LIMITE:           "limite",
     MODEL_ARCH.INKLING2:         "inkling2",
+    MODEL_ARCH.INKLING2_LOOP:    "inkling2_loop",
     MODEL_ARCH.DOMYN_EDGE:       "domynedge",
 }
 
@@ -1881,6 +1903,19 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.MOE_LATENT_UP:             "blk.{bid}.ffn_latent_up",        # nemotron 3 super
     MODEL_TENSOR.FFN_POST_CONV:             "blk.{bid}.ffn_post_conv",
     MODEL_TENSOR.FFN_RES_QUERY:             "blk.{bid}.ffn_res_query",
+    MODEL_TENSOR.LOOP_MSG_QUERY:            "blk.{bid}.loop_msg_query",
+    MODEL_TENSOR.LOOP_Q_CTRL_DOWN:          "blk.{bid}.loop_q_ctrl_down",
+    MODEL_TENSOR.LOOP_Q_CTRL_GAIN:          "blk.{bid}.loop_q_ctrl_gain",
+    MODEL_TENSOR.LOOP_Q_CTRL_FORGET:        "blk.{bid}.loop_q_ctrl_forget",
+    MODEL_TENSOR.LOOP_K_CTRL_DOWN:          "blk.{bid}.loop_k_ctrl_down",
+    MODEL_TENSOR.LOOP_K_CTRL_GAIN:          "blk.{bid}.loop_k_ctrl_gain",
+    MODEL_TENSOR.LOOP_K_CTRL_FORGET:        "blk.{bid}.loop_k_ctrl_forget",
+    MODEL_TENSOR.LOOP_V_CTRL_DOWN:          "blk.{bid}.loop_v_ctrl_down",
+    MODEL_TENSOR.LOOP_V_CTRL_GAIN:          "blk.{bid}.loop_v_ctrl_gain",
+    MODEL_TENSOR.LOOP_V_CTRL_FORGET:        "blk.{bid}.loop_v_ctrl_forget",
+    MODEL_TENSOR.LOOP_FFN_CTRL_DOWN:        "blk.{bid}.loop_ffn_ctrl_down",
+    MODEL_TENSOR.LOOP_FFN_CTRL_GAIN:        "blk.{bid}.loop_ffn_ctrl_gain",
+    MODEL_TENSOR.LOOP_FFN_CTRL_FORGET:      "blk.{bid}.loop_ffn_ctrl_forget",
     MODEL_TENSOR.STREAM_EMBD:               "stream_embd",
     MODEL_TENSOR.DEPTH_MEM_STATE_WRITE:     "depth_mem_state_write",
     MODEL_TENSOR.DEPTH_MEM_META_WRITE:      "depth_mem_meta_write",
@@ -7086,6 +7121,55 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_POST_CONV,
         MODEL_TENSOR.FFN_RES_QUERY,
+    ],
+    MODEL_ARCH.INKLING2_LOOP: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.TOKEN_EMBD_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT_RES_QUERY,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_REL,
+        MODEL_TENSOR.ATTN_REL_BIAS,
+        MODEL_TENSOR.ATTN_Q_CLIP,
+        MODEL_TENSOR.ATTN_REL_CLIP,
+        MODEL_TENSOR.ATTN_SINK_PROJ,
+        MODEL_TENSOR.ATTN_Q_INP_NORM,
+        MODEL_TENSOR.ATTN_K_INP_NORM,
+        MODEL_TENSOR.ATTN_V_INP_NORM,
+        MODEL_TENSOR.ATTN_K_CONV,
+        MODEL_TENSOR.ATTN_V_CONV,
+        MODEL_TENSOR.ATTN_K_CONV_PROJ,
+        MODEL_TENSOR.ATTN_V_CONV_PROJ,
+        MODEL_TENSOR.ATTN_POST_CONV,
+        MODEL_TENSOR.ATTN_RES_QUERY,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_UP_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_POST_CONV,
+        MODEL_TENSOR.FFN_RES_QUERY,
+        MODEL_TENSOR.LOOP_MSG_QUERY,
+        MODEL_TENSOR.LOOP_Q_CTRL_DOWN,
+        MODEL_TENSOR.LOOP_Q_CTRL_GAIN,
+        MODEL_TENSOR.LOOP_Q_CTRL_FORGET,
+        MODEL_TENSOR.LOOP_K_CTRL_DOWN,
+        MODEL_TENSOR.LOOP_K_CTRL_GAIN,
+        MODEL_TENSOR.LOOP_K_CTRL_FORGET,
+        MODEL_TENSOR.LOOP_V_CTRL_DOWN,
+        MODEL_TENSOR.LOOP_V_CTRL_GAIN,
+        MODEL_TENSOR.LOOP_V_CTRL_FORGET,
+        MODEL_TENSOR.LOOP_FFN_CTRL_DOWN,
+        MODEL_TENSOR.LOOP_FFN_CTRL_GAIN,
+        MODEL_TENSOR.LOOP_FFN_CTRL_FORGET,
     ],
     MODEL_ARCH.DOMYN_EDGE: [
         MODEL_TENSOR.TOKEN_EMBD,
