@@ -737,14 +737,19 @@ struct llama_meta_device_get_split_state_userdata {
 struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const struct ggml_tensor * tensor, void * userdata);
 
 struct llama_prec_policy {
-    // the key is the weight tensor `res->src[0]`, stores the recommended accumulation type of the op (unused for now)
-    // TODO: migrate ad-hoc ggml_prec_set_acc() calls to this container + update apply() to use it
+    // the key is the weight tensor `res->src[0]`, stores the recommended accumulation type of the op
     std::unordered_map<const ggml_tensor *, ggml_prec> prec_acc;
 
     // the key is the weight tensor `res->src[0]`, stores the recommended activation precision type
     std::unordered_map<const ggml_tensor *, ggml_prec> prec_src1;
 
     bool apply(ggml_tensor * res) const;
+
+    void set_acc(const ggml_tensor * w, ggml_prec prec) {
+        if (w) {
+            prec_acc[w] = prec;
+        }
+    }
 
     void load(llama_model_loader & ml, const llama_model & model);
 };

@@ -1406,12 +1406,19 @@ bool llama_prec_policy::apply(ggml_tensor * res) const {
         return false;
     }
 
-    const auto it = prec_src1.find(res->src[0]);
-    if (it == prec_src1.end()) {
-        return false;
+    bool applied = false;
+
+    const auto it_acc = prec_acc.find(res->src[0]);
+    if (it_acc != prec_acc.end()) {
+        applied |= ggml_prec_set_acc(res, it_acc->second);
     }
 
-    return ggml_prec_set_src(res, it->second, 1);
+    const auto it_src1 = prec_src1.find(res->src[0]);
+    if (it_src1 != prec_src1.end()) {
+        applied |= ggml_prec_set_src(res, it_src1->second, 1);
+    }
+
+    return applied;
 }
 
 void llama_prec_policy::load(llama_model_loader & ml, const llama_model & model) {
@@ -2065,6 +2072,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             } else {
                 LLAMA_LOG_DEBUG("%s: '%s' is not a weight scale for '%s', skipping\n", __func__, name.c_str(), w->name);
             }
+        }
+    }
+
+    // the reference computes the router in F32: https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/blob/60d8d70770c6776ff598c94bb586a859a38244f1/inference/model.py#L565
+    if (hparams.expert_gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS || hparams.expert_router_f32) {
+        for (const auto & layer : layers) {
+            prec_policy.set_acc(layer.ffn_gate_inp, GGML_PREC_F32);
         }
     }
 
