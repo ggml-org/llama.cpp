@@ -60,7 +60,6 @@ class MaxwellMoeModel(TextModel):
         self.gguf_writer.add_key_length(hp["attention_head_size"])
         self.gguf_writer.add_value_length(hp["attention_head_size"])
         self.gguf_writer.add_layer_norm_rms_eps(hp["rms_norm_eps"])
-        self.gguf_writer.add_file_type(self.ftype)
         self.gguf_writer.add_vocab_size(hp["vocab_size"])
 
         # MoE
@@ -68,9 +67,8 @@ class MaxwellMoeModel(TextModel):
         self.gguf_writer.add_expert_used_count(hp["num_experts_per_tok"])
         self.gguf_writer.add_expert_feed_forward_length(hp["moe_intermediate_size"])
         self.gguf_writer.add_expert_shared_feed_forward_length(hp["shared_expert_intermediate_size"])
-        n_shared = hp["shared_expert_intermediate_size"] // hp["moe_intermediate_size"]
-        assert n_shared * hp["moe_intermediate_size"] == hp["shared_expert_intermediate_size"], "shared expert size must be a multiple of the routed expert size"
-        self.gguf_writer.add_expert_shared_count(n_shared)
+        # the reference builds one shared expert (modeling_maxwell_moe.py, num_shared_experts = 1)
+        self.gguf_writer.add_expert_shared_count(hp.get("num_shared_experts", 1))
         self.gguf_writer.add_leading_dense_block_count(len(hp["mlp_only_layers"]))
         self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
         # the reference renormalizes the selected sigmoid scores and applies no scale
@@ -167,6 +165,7 @@ class MaxwellMoeModel(TextModel):
             yield (self.format_tensor_name(tn, il), data_torch.to(torch.float32))
             return
         if rest in ("e_proj.weight", "h_proj.weight"):
+            assert self.hparams.get("mtp_num_layers", 1) == 1, "MTP e/h projection fusion assumes one MTP layer"
             if self._mtp_proj is None:
                 self._mtp_proj = {}
             self._mtp_proj[rest] = data_torch
@@ -252,3 +251,7 @@ class MaxwellMoeModel(TextModel):
             left = [n for layer in self._experts for n in layer]
             if left:
                 raise ValueError(f"unprocessed experts: {left[:4]}")
+        if self._alphas is not None:
+            left = [n for layer in self._alphas for n in layer]
+            if left:
+                raise ValueError(f"unprocessed hyper-connection alphas: {left[:4]}")
