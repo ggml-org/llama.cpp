@@ -842,7 +842,7 @@ static inline bool htp_mm_hmx_solve_batched_params(
     return false;
 }
 
-static inline bool htp_mm_int_hmx_solve_2d_params(
+static inline bool htp_mm_hmx_solve_2d_params_ex(
     int kernel_type,
     int wtype,
     uint32_t k,
@@ -861,11 +861,12 @@ static inline bool htp_mm_int_hmx_solve_2d_params(
     int * act_hvx_out,
     size_t * vtcm_size_out
 ) {
-    const size_t m_align = 64u;
-    const size_t n_total = hex_align_up((size_t) ne01_padded, HTP_MM_HMX_TILE_N_COLS);
-    const size_t m_target = is_matmul_id ? hex_align_up((size_t) m_id_rows, m_align)
-                                         : hex_align_up((size_t) ne11_padded, m_align);
-    const size_t m_rows = (m_for_cost > 0) ? (size_t) m_for_cost : m_target;
+    const bool   is_int_hmx = htp_mm_kernel_is_hmx_int(kernel_type);
+    const size_t m_align    = is_int_hmx ? 64u : HTP_MM_HMX_TILE_N_ROWS;
+    const size_t n_total    = hex_align_up((size_t) ne01_padded, HTP_MM_HMX_TILE_N_COLS);
+    const size_t m_target   = is_matmul_id ? hex_align_up((size_t) m_id_rows, m_align)
+                                           : hex_align_up((size_t) ne11_padded, m_align);
+    const size_t m_rows     = (m_for_cost > 0) ? (size_t) m_for_cost : m_target;
     if (m_target == 0 || n_total == 0) {
         return false;
     }
@@ -874,7 +875,7 @@ static inline bool htp_mm_int_hmx_solve_2d_params(
     htp_mm_hmx_get_2d_chunk_costs_ex(kernel_type, wtype, k, pipeline, aligned_tile_size,
                                      &per_n_approx, &per_m_approx, &per_mn_approx);
     const size_t base_overhead = htp_mm_hmx_get_2d_overhead(wtype, pipeline, is_matmul_id) +
-                                 HTP_MM_HMX_TILE_SIZE + (pipeline ? 2u : 1u) * 768u +
+                                 (is_int_hmx ? (HTP_MM_HMX_TILE_SIZE + (pipeline ? 2u : 1u) * 768u) : 0u) +
                                  (bias_size > 0 ? hex_align_up(bias_size, HTP_MM_HMX_TILE_SIZE) : 0u);
     if (vtcm_budget <= base_overhead || per_n_approx == 0 || per_m_approx == 0 || per_mn_approx == 0) {
         return false;
@@ -897,6 +898,10 @@ static inline bool htp_mm_int_hmx_solve_2d_params(
     if (nc_hi < HTP_MM_HMX_TILE_N_COLS) {
         return false;
     }
+    // Avoid 1-tile (64B fp16) column chunks when >=2 tiles fit, preventing partial-cacheline RFO stores in O-PROC
+    const size_t min_nc_pref = (n_total >= 2u * HTP_MM_HMX_TILE_N_COLS && nc_hi >= 2u * HTP_MM_HMX_TILE_N_COLS)
+        ? (2u * HTP_MM_HMX_TILE_N_COLS)
+        : HTP_MM_HMX_TILE_N_COLS;
 
     size_t best_mblocks   = SIZE_MAX;
     size_t best_ncost     = SIZE_MAX;
@@ -906,9 +911,12 @@ static inline bool htp_mm_int_hmx_solve_2d_params(
     size_t best_vtcm_size = 0;
 
     for (int act_hvx = n_hvx; act_hvx >= 1; act_hvx = (act_hvx == 1) ? 0 : (act_hvx / 2)) {
-        const uint32_t layout_act_hvx = (uint32_t) act_hvx;
+        const uint32_t layout_act_hvx = (is_matmul_id && !is_int_hmx) ? 0u : (uint32_t) act_hvx;
 
         for (size_t nc = nc_hi; nc >= HTP_MM_HMX_TILE_N_COLS; nc -= HTP_MM_HMX_TILE_N_COLS) {
+            if (nc < min_nc_pref && best_act_hvx > 0) {
+                break;
+            }
             size_t n_fixed = 0, ncmn = 0, mc_denom = 0;
             if (hex_mul_overflow(nc, per_n_approx, &n_fixed) || n_fixed >= usable) {
                 if (nc == HTP_MM_HMX_TILE_N_COLS) break;
@@ -982,7 +990,7 @@ static inline bool htp_mm_int_hmx_solve_2d_params(
     return false;
 }
 
-static inline bool htp_mm_hmx_solve_2d_params_ex(
+static inline bool htp_mm_int_hmx_solve_2d_params(
     int kernel_type,
     int wtype,
     uint32_t k,
@@ -1001,63 +1009,9 @@ static inline bool htp_mm_hmx_solve_2d_params_ex(
     int * act_hvx_out,
     size_t * vtcm_size_out
 ) {
-    if (htp_mm_kernel_is_hmx_int(kernel_type)) {
-        return htp_mm_int_hmx_solve_2d_params(
-            kernel_type, wtype, k, m_id_rows, ne01_padded, ne11_padded, m_for_cost,
-            n_hvx, pipeline, is_matmul_id, aligned_tile_size, bias_size, vtcm_budget,
-            m_chunk_out, n_chunk_out, act_hvx_out, vtcm_size_out);
-    }
-
-    size_t best_mblocks = SIZE_MAX;
-    int best_act_hvx = 0;
-    size_t best_m_chunk = 0;
-    size_t best_n_chunk = 0;
-    size_t best_vtcm_size = 0;
-
-    const size_t m_align = 32;
-    const size_t m_for_chunks = is_matmul_id ? hex_align_up(m_id_rows, m_align) : hex_align_up(ne11_padded, m_align);
-
-    int act_hvx = n_hvx;
-    while (act_hvx >= 1) {
-        size_t simple_2d_overhead = htp_mm_hmx_get_2d_overhead(wtype, pipeline, is_matmul_id) + (bias_size > 0 ? hex_align_up(bias_size, HTP_MM_HMX_TILE_SIZE) : 0);
-        size_t simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn;
-        htp_mm_hmx_get_2d_chunk_costs_ex(kernel_type, wtype, k, pipeline, aligned_tile_size,
-                                         &simple_2d_size_per_n, &simple_2d_size_per_m, &simple_2d_size_per_mn);
-
-        size_t m_chunk_candidate = 0;
-        size_t n_chunk_candidate = 0;
-        size_t vtcm_size_candidate = 0;
-
-        if (htp_mm_hmx_compute_chunks(vtcm_budget, simple_2d_overhead, simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn, m_for_chunks, ne01_padded, m_align,
-                               (size_t) ne01_padded * HTP_MM_HMX_COST_W_DEQUANT, (size_t) m_for_cost * HTP_MM_HMX_COST_A_CONVERT,
-                               &m_chunk_candidate, &n_chunk_candidate, &vtcm_size_candidate) == 0) {
-            size_t exact_size = htp_mm_hmx_get_2d_vtcm_size_ex(kernel_type, wtype, k, m_chunk_candidate, n_chunk_candidate, pipeline, is_matmul_id ? 0 : act_hvx, aligned_tile_size, bias_size);
-            if (exact_size <= vtcm_budget) {
-                size_t mblocks = ((size_t) m_for_cost + m_chunk_candidate - 1) / m_chunk_candidate;
-                if (mblocks < best_mblocks || (mblocks == best_mblocks && act_hvx > best_act_hvx)) {
-                    best_mblocks = mblocks;
-                    best_act_hvx = act_hvx;
-                    best_m_chunk = m_chunk_candidate;
-                    best_n_chunk = n_chunk_candidate;
-                    best_vtcm_size = exact_size;
-                }
-            }
-        }
-        if (act_hvx == 1) {
-            act_hvx = 0;
-        } else {
-            act_hvx /= 2;
-        }
-    }
-
-    if (best_act_hvx > 0) {
-        *m_chunk_out = best_m_chunk;
-        *n_chunk_out = best_n_chunk;
-        *vtcm_size_out = best_vtcm_size;
-        *act_hvx_out = best_act_hvx;
-        return true;
-    }
-    return false;
+    return htp_mm_hmx_solve_2d_params_ex(kernel_type, wtype, k, m_id_rows, ne01_padded, ne11_padded, m_for_cost,
+                                         n_hvx, pipeline, is_matmul_id, aligned_tile_size, bias_size, vtcm_budget,
+                                         m_chunk_out, n_chunk_out, act_hvx_out, vtcm_size_out);
 }
 
 static inline bool htp_mm_hmx_solve_2d_params(

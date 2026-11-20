@@ -2125,8 +2125,11 @@ static void dequantize_tiled_worker_loop(const htp_thread_t * th, unsigned int n
     struct htp_thread_trace * tr = th->trace;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
     for (unsigned int task_id = i; task_id < (unsigned int) state->n_tasks; task_id += n) {
-        int start = task_id * state->n_tiles_per_task;
-        int end   = hex_smin(start + state->n_tiles_per_task, state->n_tot_tiles);
+        const uint32_t start = task_id * state->n_tiles_per_task;
+        if (start >= state->n_tot_tiles) {
+            break;
+        }
+        const uint32_t end = hex_smin(start + state->n_tiles_per_task, state->n_tot_tiles);
         state->task_fn(state, start, end);
     }
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
@@ -2141,8 +2144,11 @@ static void transfer_output_chunk_worker_fn(const htp_thread_t * th, unsigned in
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, start_chunk_idx);
 
     for (unsigned int task_id = i; task_id < (unsigned int)st->n_tasks; task_id += n) {
-        int    chunk_idx  = task_id * st->n_chunks_per_task;
-        size_t chunk_size = hex_smin(st->n_tot_chunks - chunk_idx, st->n_chunks_per_task);
+        const uint32_t chunk_idx = task_id * st->n_chunks_per_task;
+        if (chunk_idx >= st->n_tot_chunks) {
+            continue;
+        }
+        const uint32_t chunk_size = hex_smin(st->n_tot_chunks - chunk_idx, st->n_chunks_per_task);
 
         void *       dst  = (uint8_t *) st->dst + (size_t) chunk_idx * st->dst_stride * st->dst_elem_size;
         const void * bias = st->bias ? ((const uint8_t *) st->bias + (size_t) chunk_idx * st->bias_stride * st->bias_elem_size) : NULL;
@@ -2561,15 +2567,19 @@ static void dequantize_tiled_weight_chunk_to_fp16_tiles(
 
     assert(k_block % HTP_MM_HMX_TILE_N_COLS == 0);
 
-    const int n_hvx = (int) octx->n_hvx;
-    const size_t n_col_tiles = hmx_ceil_div(n_cols, HTP_MM_HMX_TILE_N_COLS);
+    const int      n_hvx          = (int) octx->n_hvx;
+    const size_t   n_col_tiles    = hmx_ceil_div(n_cols, HTP_MM_HMX_TILE_N_COLS);
     const uint32_t n_weight_tiles = k_block / htp_tensor_get_tile_k(weight_type);
-    const size_t n_tot_tiles = n_col_tiles * n_weight_tiles;
+    const size_t   n_tot_tiles    = n_col_tiles * n_weight_tiles;
+    if (n_tot_tiles == 0) {
+        return;
+    }
 
-    size_t n_tiles_per_task = (n_hvx == 1) ? n_tot_tiles : hmx_ceil_div(n_tot_tiles, n_hvx);
+    const size_t n_tiles_per_task = (n_hvx <= 1) ? n_tot_tiles
+                                  : fastdiv(n_tot_tiles + (uint32_t) n_hvx - 1, &octx->n_hvx_div);
 
     tiled_dequantize_state_t state;
-    state.n_tasks          = (n_tot_tiles + n_tiles_per_task - 1) / n_tiles_per_task;
+    state.n_tasks          = hex_smin((int) n_tot_tiles, n_hvx);
     state.n_tot_tiles      = n_tot_tiles;
     state.n_tiles_per_task = n_tiles_per_task;
     state.dst              = vtcm_dst;
@@ -2587,8 +2597,7 @@ static void dequantize_tiled_weight_chunk_to_fp16_tiles(
     state.tile_size         = kparams->tile_size;
     state.aligned_tile_size = kparams->aligned_tile_size;
 
-    int n_tasks = hex_smin((int) state.n_tasks, n_hvx);
-    work_queue_run(octx->ctx->hvx_queue, dequantize_tiled_worker_loop, &state, n_tasks);
+    work_queue_run(octx->ctx->hvx_queue, dequantize_tiled_worker_loop, &state, (int) state.n_tasks);
 }
 
 typedef struct {
@@ -2647,50 +2656,60 @@ static void transfer_output_chunk_col_chunk_worker_fn(const htp_thread_t * th, u
 static void transfer_output_chunk_threaded(struct htp_ops_context *octx, void *dst, const void *bias, const __fp16 *vtcm_src,
                                            int n_rows, int n_cols, int dst_stride, uint32_t bias_stride, int dst_cols,
                                            size_t dst_elem_size, size_t bias_elem_size) {
-    if (n_rows <= 0) return;
-
-    const hmx_fp16_output_col_chunk_fn_t col_chunk_fn = resolve_fp16_output_col_chunk_fn(dst_elem_size, bias, bias_elem_size);
-
-    const int n_hvx = (int) octx->n_hvx;
-    uint32_t n_blocks = hmx_ceil_div((uint32_t) n_cols, 32);
-    uint32_t n_units  = (dst_elem_size == sizeof(__fp16)) ? hmx_ceil_div(n_blocks, 2) : n_blocks;
-    if (n_hvx > 1 && n_units >= (uint32_t)n_hvx) {
-        output_transfer_col_chunk_state_t col_state;
-        col_state.col_chunk_fn = col_chunk_fn;
-        col_state.dst = dst;
-        col_state.bias = bias;
-        col_state.vtcm_src = vtcm_src;
-        col_state.n_rows = (uint32_t)n_rows;
-        col_state.n_cols = (uint32_t)n_cols;
-        col_state.dst_stride = (uint32_t)dst_stride;
-        col_state.bias_stride = bias_stride;
-        col_state.dst_cols = (uint32_t)dst_cols;
-        col_state.dst_elem_size = dst_elem_size;
-        col_state.bias_elem_size = bias_elem_size;
-        col_state.n_hvx_div = octx->n_hvx_div;
-
-        work_queue_run(octx->ctx->hvx_queue, transfer_output_chunk_col_chunk_worker_fn, &col_state, n_hvx);
+    if (n_rows <= 0 || dst_cols <= 0) {
         return;
     }
 
-    size_t n_tot_chunks      = n_rows;
-    size_t n_chunks_per_task = (n_hvx == 1) ? n_tot_chunks : hmx_ceil_div(n_rows, n_hvx);
-    n_chunks_per_task        = hex_align_up(n_chunks_per_task, 2);
+    const bool dst_aligned_nt = ((((uintptr_t) dst | ((size_t) dst_stride * dst_elem_size)) & 127u) == 0);
+    const hmx_fp16_output_col_chunk_fn_t col_chunk_fn =
+        resolve_fp16_output_col_chunk_fn(dst_elem_size, bias, bias_elem_size, dst_aligned_nt);
 
-    int actual_hvx = hmx_ceil_div(n_rows, n_chunks_per_task);
+    const int      n_hvx            = (int) octx->n_hvx;
+    const uint32_t n_blocks         = hmx_ceil_div((uint32_t) n_cols, 32);
+    const uint32_t n_units          = (dst_elem_size == sizeof(__fp16)) ? hmx_ceil_div(n_blocks, 2) : n_blocks;
+    const bool     prefer_row_chunk = ((uint32_t) n_rows >= (uint32_t) n_hvx * 32u);
+    if (n_hvx > 1 && !prefer_row_chunk && n_units >= (uint32_t) n_hvx) {
+        const uint32_t n_row_pairs = ((uint32_t) n_rows + 1u) >> 1;
+        const uint32_t row_max     = fastdiv(n_row_pairs + (uint32_t) n_hvx - 1u, &octx->n_hvx_div);
+        const uint32_t col_max     = fastdiv(n_units + (uint32_t) n_hvx - 1u, &octx->n_hvx_div);
+        if ((uint64_t) n_units * row_max > (uint64_t) n_row_pairs * col_max) {
+            output_transfer_col_chunk_state_t col_state;
+            col_state.col_chunk_fn   = col_chunk_fn;
+            col_state.dst            = dst;
+            col_state.bias           = bias;
+            col_state.vtcm_src       = vtcm_src;
+            col_state.n_rows         = (uint32_t) n_rows;
+            col_state.n_cols         = (uint32_t) n_cols;
+            col_state.dst_stride     = (uint32_t) dst_stride;
+            col_state.bias_stride    = bias_stride;
+            col_state.dst_cols       = (uint32_t) dst_cols;
+            col_state.dst_elem_size  = dst_elem_size;
+            col_state.bias_elem_size = bias_elem_size;
+            col_state.n_hvx_div      = octx->n_hvx_div;
+
+            work_queue_run(octx->ctx->hvx_queue, transfer_output_chunk_col_chunk_worker_fn, &col_state, n_hvx);
+            return;
+        }
+    }
+
+    const uint32_t chunk_align      = prefer_row_chunk ? 32u : 2u;
+    uint32_t       n_chunks_per_task = (n_hvx <= 1) ? (uint32_t) n_rows
+                                     : fastdiv((uint32_t) n_rows + (uint32_t) n_hvx - 1u, &octx->n_hvx_div);
+    n_chunks_per_task               = hex_align_up(n_chunks_per_task, chunk_align);
+    const int      actual_hvx       = hex_smin(n_hvx, ((int) n_rows + 1) >> 1);
 
     output_transfer_task_state_t state;
     state.col_chunk_fn      = col_chunk_fn;
-    state.n_tasks           = actual_hvx;
-    state.n_tot_chunks      = n_tot_chunks;
+    state.n_tasks           = (uint32_t) actual_hvx;
+    state.n_tot_chunks      = (uint32_t) n_rows;
     state.n_chunks_per_task = n_chunks_per_task;
     state.dst               = dst;
     state.bias              = bias;
     state.vtcm_src          = vtcm_src;
-    state.n_cols            = n_cols;
-    state.dst_stride        = dst_stride;
+    state.n_cols            = (uint32_t) n_cols;
+    state.dst_stride        = (uint32_t) dst_stride;
     state.bias_stride       = bias_stride;
-    state.dst_cols          = dst_cols;
+    state.dst_cols          = (uint32_t) dst_cols;
     state.dst_elem_size     = dst_elem_size;
     state.bias_elem_size    = bias_elem_size;
 
@@ -3145,11 +3164,12 @@ static void transfer_output_chunk_int_threaded(
         return;
     }
 
-    const int      n_hvx  = (int) octx->n_hvx;
-    const uint32_t mc_pad = hex_align_up((uint32_t) n_rows, 64u);
+    const int      n_hvx          = (int) octx->n_hvx;
+    const uint32_t mc_pad         = hex_align_up((uint32_t) n_rows, 64u);
+    const bool     dst_aligned_nt = ((((uintptr_t) dst | ((size_t) dst_stride * dst_elem_size)) & 127u) == 0);
 
     int_output_transfer_state_t state;
-    state.col_chunk_fn       = resolve_int_output_col_chunk_fn((uint32_t) n_groups, dst_elem_size, bias, bias_elem_size);
+    state.col_chunk_fn       = resolve_int_output_col_chunk_fn((uint32_t) n_groups, dst_elem_size, bias, bias_elem_size, dst_aligned_nt);
     state.dst                = dst;
     state.bias               = bias;
     state.vtcm_src           = (const uint8_t *) vtcm_src;
