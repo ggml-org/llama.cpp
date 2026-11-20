@@ -4,6 +4,7 @@
 
 #include "ggml-cpp.h"
 
+#include <cmath>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -50,9 +51,9 @@ struct llama_adapter_lora_weight {
     ggml_tensor * b = nullptr;
 
     // get actual scale based on rank and alpha
-    float get_scale(float alpha, float adapter_scale) const {
+    float get_scale(float alpha, bool use_rslora, float adapter_scale) const {
         const float rank  = (float) b->ne[0];
-        const float scale = alpha ? adapter_scale * alpha / rank : adapter_scale;
+        const float scale = alpha ? adapter_scale * alpha / (use_rslora ? std::sqrt(rank) : rank) : adapter_scale;
         return scale;
     }
 
@@ -70,6 +71,7 @@ struct llama_adapter_lora {
     std::vector<ggml_backend_buffer_ptr> bufs;
 
     float alpha;
+    bool  use_rslora = false;
 
     // gguf metadata
     std::unordered_map<std::string, std::string> gguf_kv;
