@@ -162,6 +162,7 @@ inline void tiled_unpk_tern8(const uint8_t * src, int8_t delta, uint8_t * dst) {
 // (row width buf_stride): buf[i*buf_stride + j] += partial.
 // SUBBLK/HAS_MIN/BIAS are the src0 format constants (see tiled_tile_src0).
 // ACTBIAS (AVX2 only): the activation is pre-biased +128 by tiled_repack_src1,
+// except for the AVX-VNNI path, which uses signed transposed activations.
 // num_k = K-blocks per row: the tile holds num_k slabs at row stride num_k*256
 // (Default case is num_k=1, 256x256 tiles, we go to longer num_k to improve memory bandwidth when num_rows is small)
 template <int SUBBLK, bool HAS_MIN, int BIAS, bool ACTBIAS>
