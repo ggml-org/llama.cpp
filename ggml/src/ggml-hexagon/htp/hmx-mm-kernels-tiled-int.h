@@ -136,11 +136,8 @@ static inline void int_hmx_store_and_accum_pair(
     tile_dst[2 * pair_idx + 0] = v_W0;
     tile_dst[2 * pair_idx + 1] = v_W1;
 
-    HVX_Vector v_pair_sum = Q6_Vw_vrmpyacc_VwVbVb(Q6_Vw_vrmpy_VbVb(v_W0, v_ones_s8), v_W1, v_ones_s8);
-    *v_sum_w              = Q6_Vw_vadd_VwVw(*v_sum_w, v_pair_sum);
-
-    HVX_Vector v_pair_l1 = Q6_Vw_vrmpyacc_VwVubVb(Q6_Vw_vrmpy_VubVb(Q6_Vb_vabs_Vb(v_W0), v_ones_s8), Q6_Vb_vabs_Vb(v_W1), v_ones_s8);
-    *v_l1_w              = Q6_Vw_vadd_VwVw(*v_l1_w, v_pair_l1);
+    *v_sum_w = Q6_Vw_vrmpyacc_VwVbVb(Q6_Vw_vrmpyacc_VwVbVb(*v_sum_w, v_W0, v_ones_s8), v_W1, v_ones_s8);
+    *v_l1_w  = Q6_Vw_vrmpyacc_VwVubVb(Q6_Vw_vrmpyacc_VwVubVb(*v_l1_w, Q6_Vb_vabs_Vb(v_W0), v_ones_s8), Q6_Vb_vabs_Vb(v_W1), v_ones_s8);
 }
 
 static inline void int_hmx_rescale_pair_cp(
@@ -232,26 +229,63 @@ static __attribute__((noinline)) void rescale_##NAME##_weight_superblock_tail(  
         src_base, dst_wt, dst_scales, bias_out, tiles_per_group);                              \
 }
 
+static inline HVX_Vector int_hmx_scan_max_f16_scales(
+        const uint8_t * restrict src_base,
+        size_t tile_stride,
+        size_t scale_offset,
+        uint32_t tiles_per_group) {
+
+    assert(tiles_per_group >= 4 && (tiles_per_group & 3) == 0);
+
+    const HVX_Vector v_abs_mask = Q6_Vh_vsplat_R(0x7fff);
+    HVX_Vector v_max0 = Q6_V_vzero();
+    HVX_Vector v_max1 = Q6_V_vzero();
+    const uint8_t * sc_ptr = src_base + scale_offset;
+    for (uint32_t kt = 0; kt < tiles_per_group; kt += 2) {
+        HVX_Vector v_sc0 = Q6_V_vand_VV(hvx_vmem(sc_ptr), v_abs_mask);
+        HVX_Vector v_sc1 = Q6_V_vand_VV(hvx_vmem(sc_ptr + tile_stride), v_abs_mask);
+        v_max0 = Q6_Vhf_vmax_VhfVhf(v_max0, v_sc0);
+        v_max1 = Q6_Vhf_vmax_VhfVhf(v_max1, v_sc1);
+        sc_ptr += 2 * tile_stride;
+    }
+    return Q6_Vhf_vmax_VhfVhf(v_max0, v_max1);
+}
+
+static inline void rescale_q4_0_tile_step(
+        const uint8_t * restrict tile_src,
+        HVX_Vector * restrict tile_dst,
+        HVX_Vector v_m_b,
+        HVX_Vector mask_f0,
+        HVX_Vector sign_88,
+        HVX_Vector * restrict v_sum_w,
+        HVX_Vector * restrict v_l1_w) {
+
+    #pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        HVX_Vector vq_s        = Q6_V_vxor_VV(hvx_vmem(tile_src + i * 128), sign_88);
+        HVX_Vector v_lo        = Q6_V_vand_VV(Q6_Vh_vasl_VhR(vq_s, 4), mask_f0);
+        HVX_Vector v_hi        = Q6_V_vand_VV(vq_s, mask_f0);
+        HVX_VectorPair vp_shuf = Q6_W_vshuff_VVR(v_hi, v_lo, -1);
+        int_hmx_rescale_pair_cp(Q6_V_lo_W(vp_shuf), Q6_V_hi_W(vp_shuf), v_m_b, tile_dst, i, v_sum_w, v_l1_w);
+    }
+}
+
 // Rescale one (ct, g) superblock of Q4_0 tiles into int8 weight.b tiles,
 // compute sum_w and exact l1_w per output channel, and write the Bias Register bank(s) and D_w_eff.
-static inline void rescale_q4_0_weight_superblock_impl(
+static __attribute__((always_inline)) inline void rescale_q4_0_weight_superblock_impl(
         const uint8_t * restrict src_base,
         uint8_t * restrict dst_wt,
         float * restrict dst_scales,
         HVX_Vector * restrict bias_out,
         uint32_t tiles_per_group) {
 
+    assert(tiles_per_group >= 4 && (tiles_per_group & 3) == 0);
+
     const size_t     tile_stride = htp_tensor_get_tile_padded_size(HTP_TYPE_Q4_0);
     const HVX_Vector mask_f0     = Q6_Vb_vsplat_R(0xF0);
-    const HVX_Vector sign_80     = Q6_Vb_vsplat_R(0x80);
-    const HVX_Vector v_abs_mask  = Q6_Vh_vsplat_R(0x7fff);
+    const HVX_Vector sign_88     = Q6_Vb_vsplat_R(0x88);
 
-    HVX_Vector v_max_sc = Q6_V_vzero();
-    for (uint32_t kt = 0; kt < tiles_per_group; ++kt) {
-        const uint8_t * tile_src = src_base + (size_t) kt * tile_stride;
-        HVX_Vector v_sc = Q6_V_vand_VV(hvx_vmem(tile_src + 512), v_abs_mask);
-        v_max_sc = Q6_Vhf_vmax_VhfVhf(v_max_sc, v_sc);
-    }
+    HVX_Vector v_max_sc = int_hmx_scan_max_f16_scales(src_base, tile_stride, 512, tiles_per_group);
 
     HVX_Vector v_max_sf, v_inv127_qf;
     int_hmx_inv127_from_max_f16(v_max_sc, &v_max_sf, &v_inv127_qf);
@@ -259,38 +293,50 @@ static inline void rescale_q4_0_weight_superblock_impl(
     HVX_Vector v_sum_w = Q6_V_vzero();
     HVX_Vector v_l1_w  = Q6_V_vzero();
 
-    for (uint32_t kt = 0; kt < tiles_per_group; ++kt) {
-        const uint8_t * tile_src = src_base + (size_t) kt * tile_stride;
-        HVX_Vector    * tile_dst = (HVX_Vector *) (dst_wt + (size_t) kt * HTP_MM_HMX_WEIGHT_B_TILE_SIZE);
-        HVX_Vector      v_m_b    = int_hmx_m_b2_from_f16(hvx_vmem(tile_src + 512), v_inv127_qf);
+    const uint8_t * tile_src = src_base;
+    HVX_Vector    * tile_dst = (HVX_Vector *) dst_wt;
+    HVX_Vector      v_m_b    = int_hmx_m_b2_from_f16(hvx_vmem(tile_src + 512), v_inv127_qf);
 
-        for (int i = 0; i < 4; ++i) {
-            HVX_Vector vq   = hvx_vmem(tile_src + i * 128);
-            HVX_Vector v_lo = Q6_V_vxor_VV(Q6_V_vand_VV(Q6_Vh_vasl_VhR(vq, 4), mask_f0), sign_80);
-            HVX_Vector v_hi = Q6_V_vxor_VV(Q6_V_vand_VV(vq, mask_f0), sign_80);
-            HVX_VectorPair vp_shuf = Q6_W_vshuff_VVR(v_hi, v_lo, -1);
-            int_hmx_rescale_pair_cp(Q6_V_lo_W(vp_shuf), Q6_V_hi_W(vp_shuf), v_m_b, tile_dst, i, &v_sum_w, &v_l1_w);
-        }
+    #pragma clang loop pipeline(disable) unroll(disable)
+    for (uint32_t kt = 0; kt + 1 < tiles_per_group; ++kt) {
+        HVX_Vector v_m_next = int_hmx_m_b2_from_f16(hvx_vmem(tile_src + tile_stride + 512), v_inv127_qf);
+        rescale_q4_0_tile_step(tile_src, tile_dst, v_m_b, mask_f0, sign_88, &v_sum_w, &v_l1_w);
+        v_m_b     = v_m_next;
+        tile_src += tile_stride;
+        tile_dst += HTP_MM_HMX_WEIGHT_B_TILE_SIZE / sizeof(HVX_Vector);
     }
+    rescale_q4_0_tile_step(tile_src, tile_dst, v_m_b, mask_f0, sign_88, &v_sum_w, &v_l1_w);
 
     emit_int_hmx_scales_and_bias(v_max_sf, 8.0f / 127.0f, v_sum_w, v_l1_w, dst_scales, bias_out);
 }
 DEFINE_RESCALE_WEIGHT_SUPERBLOCK_ENTRY(q4_0)
 
-static inline void rescale_q8_0_weight_superblock_impl(
+static inline void rescale_q8_0_tile_step(
+        const uint8_t * restrict tile_src,
+        HVX_Vector * restrict tile_dst,
+        HVX_Vector v_m_b,
+        HVX_Vector * restrict v_sum_w,
+        HVX_Vector * restrict v_l1_w) {
+
+    #pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        HVX_Vector vq0 = hvx_vmem(tile_src + (2 * i + 0) * 128);
+        HVX_Vector vq1 = hvx_vmem(tile_src + (2 * i + 1) * 128);
+        int_hmx_rescale_pair_cp(vq0, vq1, v_m_b, tile_dst, i, v_sum_w, v_l1_w);
+    }
+}
+
+static __attribute__((always_inline)) inline void rescale_q8_0_weight_superblock_impl(
         const uint8_t * restrict src_base,
         uint8_t * restrict dst_wt,
         float * restrict dst_scales,
         HVX_Vector * restrict bias_out,
         uint32_t tiles_per_group) {
 
-    const size_t     tile_stride = htp_tensor_get_tile_padded_size(HTP_TYPE_Q8_0);
-    const HVX_Vector v_abs_mask  = Q6_Vh_vsplat_R(0x7fff);
-    HVX_Vector v_max_sc = Q6_V_vzero();
-    for (uint32_t kt = 0; kt < tiles_per_group; ++kt) {
-        const uint8_t * tile_src = src_base + (size_t) kt * tile_stride;
-        v_max_sc = Q6_Vhf_vmax_VhfVhf(v_max_sc, Q6_V_vand_VV(hvx_vmem(tile_src + 1024), v_abs_mask));
-    }
+    assert(tiles_per_group >= 4 && (tiles_per_group & 3) == 0);
+
+    const size_t tile_stride = htp_tensor_get_tile_padded_size(HTP_TYPE_Q8_0);
+    HVX_Vector   v_max_sc    = int_hmx_scan_max_f16_scales(src_base, tile_stride, 1024, tiles_per_group);
 
     HVX_Vector v_max_sf, v_inv127_qf;
     int_hmx_inv127_from_max_f16(v_max_sc, &v_max_sf, &v_inv127_qf);
@@ -298,21 +344,37 @@ static inline void rescale_q8_0_weight_superblock_impl(
     HVX_Vector v_sum_w = Q6_V_vzero();
     HVX_Vector v_l1_w  = Q6_V_vzero();
 
-    for (uint32_t kt = 0; kt < tiles_per_group; ++kt) {
-        const uint8_t * tile_src = src_base + (size_t) kt * tile_stride;
-        HVX_Vector    * tile_dst = (HVX_Vector *) (dst_wt + (size_t) kt * HTP_MM_HMX_WEIGHT_B_TILE_SIZE);
-        HVX_Vector      v_m_b    = int_hmx_m_b2_from_f16(hvx_vmem(tile_src + 1024), v_inv127_qf);
+    const uint8_t * tile_src = src_base;
+    HVX_Vector    * tile_dst = (HVX_Vector *) dst_wt;
+    HVX_Vector      v_m_b    = int_hmx_m_b2_from_f16(hvx_vmem(tile_src + 1024), v_inv127_qf);
 
-        for (int i = 0; i < 4; ++i) {
-            HVX_Vector vq0 = hvx_vmem(tile_src + (2 * i + 0) * 128);
-            HVX_Vector vq1 = hvx_vmem(tile_src + (2 * i + 1) * 128);
-            int_hmx_rescale_pair_cp(vq0, vq1, v_m_b, tile_dst, i, &v_sum_w, &v_l1_w);
-        }
+    #pragma clang loop pipeline(disable) unroll(disable)
+    for (uint32_t kt = 0; kt + 1 < tiles_per_group; ++kt) {
+        HVX_Vector v_m_next = int_hmx_m_b2_from_f16(hvx_vmem(tile_src + tile_stride + 1024), v_inv127_qf);
+        rescale_q8_0_tile_step(tile_src, tile_dst, v_m_b, &v_sum_w, &v_l1_w);
+        v_m_b     = v_m_next;
+        tile_src += tile_stride;
+        tile_dst += HTP_MM_HMX_WEIGHT_B_TILE_SIZE / sizeof(HVX_Vector);
     }
+    rescale_q8_0_tile_step(tile_src, tile_dst, v_m_b, &v_sum_w, &v_l1_w);
 
     emit_int_hmx_scales_and_bias(v_max_sf, 128.0f / 127.0f, v_sum_w, v_l1_w, dst_scales, bias_out);
 }
 DEFINE_RESCALE_WEIGHT_SUPERBLOCK_ENTRY(q8_0)
+
+static inline void rescale_4bit_lut_tile_step(
+        const uint8_t * restrict tile_src,
+        HVX_Vector * restrict tile_dst,
+        HVX_Vector v_lut,
+        HVX_Vector v_m_b,
+        HVX_Vector * restrict v_sum_w,
+        HVX_Vector * restrict v_l1_w) {
+
+    #pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        int_hmx_rescale_4bit_lut_step(hvx_vmem(tile_src + i * 128), v_lut, v_m_b, tile_dst, i, v_sum_w, v_l1_w);
+    }
+}
 
 static inline HVX_Vector int_hmx_mxfp4_e8m0_to_f32(HVX_Vector v_raw) {
     HVX_Vector v_e_h     = Q6_V_lo_W(Q6_Wuh_vunpack_Vub(v_raw));
@@ -321,55 +383,77 @@ static inline HVX_Vector int_hmx_mxfp4_e8m0_to_f32(HVX_Vector v_raw) {
     return Q6_V_vmux_QVV(q_nan, Q6_V_vzero(), Q6_Vw_vasl_VwR(v_e_w, 23));
 }
 
-static inline void rescale_mxfp4_weight_superblock_impl(
+static __attribute__((always_inline)) inline void rescale_mxfp4_weight_superblock_impl(
         const uint8_t * restrict src_base,
         uint8_t * restrict dst_wt,
         float * restrict dst_scales,
         HVX_Vector * restrict bias_out,
         uint32_t tiles_per_group) {
 
+    assert(tiles_per_group >= 4 && (tiles_per_group & 3) == 0);
+
     const size_t     tile_stride = htp_tensor_get_tile_padded_size(HTP_TYPE_MXFP4);
     const HVX_Vector v_lut       = *(const HVX_Vector *) kvalues_mxfp4_x8_lut;
-    HVX_Vector v_max_sf = Q6_V_vzero();
-    for (uint32_t kt = 0; kt < tiles_per_group; ++kt) {
-        const uint8_t * tile_src = src_base + (size_t) kt * tile_stride;
-        v_max_sf = Q6_Vsf_vmax_VsfVsf(v_max_sf, int_hmx_mxfp4_e8m0_to_f32(hvx_vmem(tile_src + 512)));
+    HVX_Vector       v_max0      = Q6_V_vzero();
+    HVX_Vector       v_max1      = Q6_V_vzero();
+    const uint8_t  * sc_ptr      = src_base + 512;
+    for (uint32_t kt = 0; kt < tiles_per_group; kt += 2) {
+        v_max0  = Q6_Vsf_vmax_VsfVsf(v_max0, int_hmx_mxfp4_e8m0_to_f32(hvx_vmem(sc_ptr)));
+        v_max1  = Q6_Vsf_vmax_VsfVsf(v_max1, int_hmx_mxfp4_e8m0_to_f32(hvx_vmem(sc_ptr + tile_stride)));
+        sc_ptr += 2 * tile_stride;
     }
+    HVX_Vector v_max_sf = Q6_Vsf_vmax_VsfVsf(v_max0, v_max1);
 
     HVX_Vector v_inv127_qf = int_hmx_inv127_from_max_f32(v_max_sf);
     HVX_Vector v_sum_w     = Q6_V_vzero();
     HVX_Vector v_l1_w      = Q6_V_vzero();
 
+    #pragma clang loop pipeline(disable) unroll(disable)
     for (uint32_t kt = 0; kt < tiles_per_group; ++kt) {
         const uint8_t * tile_src = src_base + (size_t) kt * tile_stride;
         HVX_Vector    * tile_dst = (HVX_Vector *) (dst_wt + (size_t) kt * HTP_MM_HMX_WEIGHT_B_TILE_SIZE);
         HVX_Vector      v_sc_qf  = hvx_vec_f32_to_qf32(int_hmx_mxfp4_e8m0_to_f32(hvx_vmem(tile_src + 512)));
         HVX_Vector      v_m_b    = int_hmx_m_b2_from_sc_qf(v_sc_qf, v_inv127_qf);
-
-        for (int i = 0; i < 4; ++i) {
-            int_hmx_rescale_4bit_lut_step(hvx_vmem(tile_src + i * 128), v_lut, v_m_b, tile_dst, i, &v_sum_w, &v_l1_w);
-        }
+        rescale_4bit_lut_tile_step(tile_src, tile_dst, v_lut, v_m_b, &v_sum_w, &v_l1_w);
     }
 
     emit_int_hmx_scales_and_bias(v_max_sf, 8.0f / 127.0f, v_sum_w, v_l1_w, dst_scales, bias_out);
 }
 DEFINE_RESCALE_WEIGHT_SUPERBLOCK_ENTRY(mxfp4)
 
-static inline void rescale_q5_0_weight_superblock_impl(
+static inline void rescale_q5_0_tile_step(
+        const uint8_t * restrict tile_src,
+        HVX_Vector * restrict tile_dst,
+        HVX_Vector v_m_b,
+        HVX_Vector mask_78,
+        HVX_Vector * restrict v_sum_w,
+        HVX_Vector * restrict v_l1_w) {
+
+    HVX_Vector v_plane = hvx_vmem(tile_src + 512);
+    #pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        HVX_Vector vq          = hvx_vmem(tile_src + i * 128);
+        HVX_Vector v_lo        = Q6_V_vand_VV(Q6_Vh_vasl_VhR(vq, 3), mask_78);
+        HVX_Vector v_hi        = Q6_V_vand_VV(Q6_Vuh_vlsr_VuhR(vq, 1), mask_78);
+        v_lo                   = Q6_V_vandor_VQR(v_lo, Q6_Q_vand_VR(v_plane, 0x01010101u << (2 * i)),     0x80808080);
+        v_hi                   = Q6_V_vandor_VQR(v_hi, Q6_Q_vand_VR(v_plane, 0x01010101u << (2 * i + 1)), 0x80808080);
+        HVX_VectorPair vp_shuf = Q6_W_vshuff_VVR(v_hi, v_lo, -1);
+        int_hmx_rescale_pair_cp(Q6_V_lo_W(vp_shuf), Q6_V_hi_W(vp_shuf), v_m_b, tile_dst, i, v_sum_w, v_l1_w);
+    }
+}
+
+static __attribute__((always_inline)) inline void rescale_q5_0_weight_superblock_impl(
         const uint8_t * restrict src_base,
         uint8_t * restrict dst_wt,
         float * restrict dst_scales,
         HVX_Vector * restrict bias_out,
         uint32_t tiles_per_group) {
 
+    assert(tiles_per_group >= 4 && (tiles_per_group & 3) == 0);
+
     const size_t     tile_stride = htp_tensor_get_tile_padded_size(HTP_TYPE_Q5_0);
     const HVX_Vector mask_78     = Q6_Vb_vsplat_R(0x78);
-    const HVX_Vector v_abs_mask  = Q6_Vh_vsplat_R(0x7fff);
-    HVX_Vector v_max_sc = Q6_V_vzero();
-    for (uint32_t kt = 0; kt < tiles_per_group; ++kt) {
-        const uint8_t * tile_src = src_base + (size_t) kt * tile_stride;
-        v_max_sc = Q6_Vhf_vmax_VhfVhf(v_max_sc, Q6_V_vand_VV(hvx_vmem(tile_src + 640), v_abs_mask));
-    }
+    HVX_Vector       v_max_sc    = int_hmx_scan_max_f16_scales(src_base, tile_stride, 640, tiles_per_group);
 
     HVX_Vector v_max_sf, v_inv127_qf;
     int_hmx_inv127_from_max_f16(v_max_sc, &v_max_sf, &v_inv127_qf);
@@ -377,42 +461,36 @@ static inline void rescale_q5_0_weight_superblock_impl(
     HVX_Vector v_sum_w = Q6_V_vzero();
     HVX_Vector v_l1_w  = Q6_V_vzero();
 
-    for (uint32_t kt = 0; kt < tiles_per_group; ++kt) {
-        const uint8_t * tile_src = src_base + (size_t) kt * tile_stride;
-        HVX_Vector    * tile_dst = (HVX_Vector *) (dst_wt + (size_t) kt * HTP_MM_HMX_WEIGHT_B_TILE_SIZE);
-        HVX_Vector      v_plane  = hvx_vmem(tile_src + 512);
-        HVX_Vector      v_m_b    = int_hmx_m_b2_from_f16(hvx_vmem(tile_src + 640), v_inv127_qf);
+    const uint8_t * tile_src = src_base;
+    HVX_Vector    * tile_dst = (HVX_Vector *) dst_wt;
+    HVX_Vector      v_m_b    = int_hmx_m_b2_from_f16(hvx_vmem(tile_src + 640), v_inv127_qf);
 
-        for (int i = 0; i < 4; ++i) {
-            HVX_Vector vq   = hvx_vmem(tile_src + i * 128);
-            HVX_Vector v_lo = Q6_V_vand_VV(Q6_Vh_vasl_VhR(vq, 3), mask_78);
-            HVX_Vector v_hi = Q6_V_vand_VV(Q6_Vuh_vlsr_VuhR(vq, 1), mask_78);
-            v_lo            = Q6_V_vandor_VQR(v_lo, Q6_Q_vand_VR(v_plane, 0x01010101u << (2 * i)),     0x80808080);
-            v_hi            = Q6_V_vandor_VQR(v_hi, Q6_Q_vand_VR(v_plane, 0x01010101u << (2 * i + 1)), 0x80808080);
-            HVX_VectorPair vp_shuf = Q6_W_vshuff_VVR(v_hi, v_lo, -1);
-            int_hmx_rescale_pair_cp(Q6_V_lo_W(vp_shuf), Q6_V_hi_W(vp_shuf), v_m_b, tile_dst, i, &v_sum_w, &v_l1_w);
-        }
+    #pragma clang loop pipeline(disable) unroll(disable)
+    for (uint32_t kt = 0; kt + 1 < tiles_per_group; ++kt) {
+        HVX_Vector v_m_next = int_hmx_m_b2_from_f16(hvx_vmem(tile_src + tile_stride + 640), v_inv127_qf);
+        rescale_q5_0_tile_step(tile_src, tile_dst, v_m_b, mask_78, &v_sum_w, &v_l1_w);
+        v_m_b     = v_m_next;
+        tile_src += tile_stride;
+        tile_dst += HTP_MM_HMX_WEIGHT_B_TILE_SIZE / sizeof(HVX_Vector);
     }
+    rescale_q5_0_tile_step(tile_src, tile_dst, v_m_b, mask_78, &v_sum_w, &v_l1_w);
 
     emit_int_hmx_scales_and_bias(v_max_sf, 16.0f / 127.0f, v_sum_w, v_l1_w, dst_scales, bias_out);
 }
 DEFINE_RESCALE_WEIGHT_SUPERBLOCK_ENTRY(q5_0)
 
-static inline void rescale_iq4_nl_weight_superblock_impl(
+static __attribute__((always_inline)) inline void rescale_iq4_nl_weight_superblock_impl(
         const uint8_t * restrict src_base,
         uint8_t * restrict dst_wt,
         float * restrict dst_scales,
         HVX_Vector * restrict bias_out,
         uint32_t tiles_per_group) {
 
+    assert(tiles_per_group >= 4 && (tiles_per_group & 3) == 0);
+
     const size_t     tile_stride = htp_tensor_get_tile_padded_size(HTP_TYPE_IQ4_NL);
-    const HVX_Vector v_abs_mask  = Q6_Vh_vsplat_R(0x7fff);
     const HVX_Vector v_lut       = *(const HVX_Vector *) kvalues_iq4nl_lut;
-    HVX_Vector v_max_sc = Q6_V_vzero();
-    for (uint32_t kt = 0; kt < tiles_per_group; ++kt) {
-        const uint8_t * tile_src = src_base + (size_t) kt * tile_stride;
-        v_max_sc = Q6_Vhf_vmax_VhfVhf(v_max_sc, Q6_V_vand_VV(hvx_vmem(tile_src + 512), v_abs_mask));
-    }
+    HVX_Vector       v_max_sc    = int_hmx_scan_max_f16_scales(src_base, tile_stride, 512, tiles_per_group);
 
     HVX_Vector v_max_sf, v_inv127_qf;
     int_hmx_inv127_from_max_f16(v_max_sc, &v_max_sf, &v_inv127_qf);
@@ -420,15 +498,19 @@ static inline void rescale_iq4_nl_weight_superblock_impl(
     HVX_Vector v_sum_w = Q6_V_vzero();
     HVX_Vector v_l1_w  = Q6_V_vzero();
 
-    for (uint32_t kt = 0; kt < tiles_per_group; ++kt) {
-        const uint8_t * tile_src = src_base + (size_t) kt * tile_stride;
-        HVX_Vector    * tile_dst = (HVX_Vector *) (dst_wt + (size_t) kt * HTP_MM_HMX_WEIGHT_B_TILE_SIZE);
-        HVX_Vector      v_m_b    = int_hmx_m_b2_from_f16(hvx_vmem(tile_src + 512), v_inv127_qf);
+    const uint8_t * tile_src = src_base;
+    HVX_Vector    * tile_dst = (HVX_Vector *) dst_wt;
+    HVX_Vector      v_m_b    = int_hmx_m_b2_from_f16(hvx_vmem(tile_src + 512), v_inv127_qf);
 
-        for (int i = 0; i < 4; ++i) {
-            int_hmx_rescale_4bit_lut_step(hvx_vmem(tile_src + i * 128), v_lut, v_m_b, tile_dst, i, &v_sum_w, &v_l1_w);
-        }
+    #pragma clang loop pipeline(disable) unroll(disable)
+    for (uint32_t kt = 0; kt + 1 < tiles_per_group; ++kt) {
+        HVX_Vector v_m_next = int_hmx_m_b2_from_f16(hvx_vmem(tile_src + tile_stride + 512), v_inv127_qf);
+        rescale_4bit_lut_tile_step(tile_src, tile_dst, v_lut, v_m_b, &v_sum_w, &v_l1_w);
+        v_m_b     = v_m_next;
+        tile_src += tile_stride;
+        tile_dst += HTP_MM_HMX_WEIGHT_B_TILE_SIZE / sizeof(HVX_Vector);
     }
+    rescale_4bit_lut_tile_step(tile_src, tile_dst, v_lut, v_m_b, &v_sum_w, &v_l1_w);
 
     emit_int_hmx_scales_and_bias(v_max_sf, 128.0f / 127.0f, v_sum_w, v_l1_w, dst_scales, bias_out);
 }
