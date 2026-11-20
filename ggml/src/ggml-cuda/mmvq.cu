@@ -531,8 +531,6 @@ static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_d
         return 1;
     }
     if (table_id == MMVQ_PARAMETERS_RDNA1) {
-        // 1 warp/block measured fastest on gfx1010 for ncols_dst == 1 (Q4_K_M tg128 52.3 -> 57.8 t/s with 4),
-        // the other values are the same as in the generic table.
         switch (ncols_dst) {
             case 1:
                 return 1;
