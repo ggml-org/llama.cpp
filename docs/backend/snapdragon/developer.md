@@ -30,6 +30,10 @@ The Hexagon NPU backend takes advantage of Snapdragon unified memory where all D
 The NPU has dedicated tightly-coupled memory called VTCM (Vector Tightly-Coupled Memory). VTCM is used for intermediate data (such as
 dynamically quantized activations) and streaming buffers (chunks of weight and activation tensors fetched via DMA).
 
+Both DDR and VTCM reserve trailing guard space so HVX kernels can issue full-width vector loads (`vmem` / `vmemu`) on tail elements without boundary branches:
+- Shared DDR buffers pad allocations to 4 KB and append a 4 KB guard page.
+- Usable VTCM (`htp_vtcm_usable_size`) reserves `HTP_VTCM_GUARD_SIZE` (128 bytes) at the end of the physical VTCM page.
+
 ## Large model handling
 
 Hexagon NPU sessions have a 32-bit virtual address space window of around 3.5GB.

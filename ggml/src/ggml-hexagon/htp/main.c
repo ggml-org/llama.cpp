@@ -31,6 +31,7 @@
 #include "htp-ctx.h"
 #include "htp-dcache.h"
 #include "htp-ops.h"
+#include "htp-vtcm.h"
 #include "htp_iface.h"
 #include "work-queue.h"
 #include "htp-trace.h"
@@ -348,14 +349,14 @@ static int vtcm_alloc(struct htp_context * ctx, uint64_t size_override) {
     }
 
     void * vtcm_ptr;
-    if (HAP_compute_res_attr_get_vtcm_ptr_v2(&attr, &vtcm_ptr, &vtcm_size) != 0) {
+    if (HAP_compute_res_attr_get_vtcm_ptr_v2(&attr, &vtcm_ptr, &vtcm_size) != 0 || vtcm_size < 2 * HTP_VTCM_GUARD_SIZE) {
         HAP_compute_res_release(rctx);
         FARF(ERROR, "failed to allocate %zu bytes VTCM (new)\n", ctx->vtcm_size);
         return AEE_ENOMEMORY;
     }
 
     ctx->vtcm_base          = (uint8_t *) vtcm_ptr;
-    ctx->vtcm_size          = vtcm_size;
+    ctx->vtcm_size          = htp_vtcm_usable_size(vtcm_size);
     ctx->vtcm_rctx          = rctx;
     atomic_store(&ctx->vtcm_valid, false);
     atomic_store(&ctx->vtcm_needs_release, false);

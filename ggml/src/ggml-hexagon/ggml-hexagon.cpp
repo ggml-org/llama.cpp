@@ -56,6 +56,7 @@
 #include "ggml-quants.h"
 #include "htp-opnode.h"
 #include "htp/htp-ops.h"
+#include "htp/htp-vtcm.h"
 #include "htp_iface.h"
 #include "htp-drv.h"
 #include "htp-repack.h"
@@ -393,7 +394,7 @@ struct ggml_hexagon_session {
 };
 
 const char * htp_session_name(const struct ggml_hexagon_session * sess) { return sess->c_name(); }
-size_t       htp_session_vtcm_size(const struct ggml_hexagon_session * sess) { return sess->vtcm_size; }
+size_t       htp_session_vtcm_size(const struct ggml_hexagon_session * sess) { return htp_vtcm_usable_size(sess->vtcm_size); }
 uint32_t     htp_session_n_hvx(const struct ggml_hexagon_session * sess) { return sess->n_hvx; }
 uint32_t     htp_session_n_hmx(const struct ggml_hexagon_session * sess) { return sess->n_hmx; }
 uint32_t     htp_session_mdev_count(const struct ggml_hexagon_session * sess) { return sess->mdev.count; }
@@ -2341,6 +2342,7 @@ void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) n
             this->n_hmx              = (opt_nhmx != 0) ? 1 : 0;
             this->vtcm_size          = opt_vtcm_size > 0 ? opt_vtcm_size : 8 * 1024 * 1024;
         }
+        GGML_ASSERT(this->n_hvx > 0 && this->vtcm_size >= 2 * HTP_VTCM_GUARD_SIZE);
     }
 
     // Enable FastRPC QoS mode

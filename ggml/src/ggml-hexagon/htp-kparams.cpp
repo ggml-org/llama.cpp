@@ -2237,7 +2237,7 @@ static bool htp_kparams_solve_ssm_conv(
         const uint32_t src1_T_bytes      = hex_round_up(d_conv * d_inner_per_hvx * sizeof(float), 128);
         const uint32_t vtcm_src1_per_hvx = src1_raw_bytes + src1_T_bytes;
 
-        const size_t   vtcm_budget     = (vtcm_size > 0 ? vtcm_size / n_hvx : (1024 * 1024));
+        const size_t   vtcm_budget     = vtcm_size / n_hvx;
         const uint32_t src0_block_T    = hex_round_up(ncs * 32 * sizeof(float), 128);
         const size_t   fixed_bytes     = vtcm_src1_per_hvx + src0_block_T;
         const size_t   avail_for_tiles = vtcm_budget > fixed_bytes ? vtcm_budget - fixed_bytes : (128 * 1024);
@@ -2434,8 +2434,8 @@ static bool htp_kparams_solve_sort(
     const uint32_t total_rows    = src0->ne[1] * src0->ne[2] * src0->ne[3];
     const uint32_t ne00          = src0->ne[0];
     const uint32_t k             = dst->ne[0];
-    const uint32_t n_hvx_max     = htp_session_n_hvx(sess) > 0 ? htp_session_n_hvx(sess) : 4;
-    const size_t   vtcm_budget   = htp_session_vtcm_size(sess) > 0 ? htp_session_vtcm_size(sess) : (8 * 1024 * 1024);
+    const uint32_t n_hvx_max     = htp_session_n_hvx(sess);
+    const size_t   vtcm_budget   = htp_session_vtcm_size(sess);
 
     int32_t order = GGML_SORT_ORDER_DESC;
     if (!is_top_k) {
@@ -2838,12 +2838,11 @@ static bool htp_kparams_solve_concat(
             kparams->n_hvx     = 1;
             kparams->vtcm_size = 0;
         } else {
-            const uint32_t nth    = n_hvx > 0 ? n_hvx : 8;
-            const uint32_t req_vt = nth * 4 * HTP_CONCAT_REG_BLK_BYTES;
-            if (vtcm_size > 0 && req_vt > vtcm_size) {
+            const uint32_t req_vt = n_hvx * 4 * HTP_CONCAT_REG_BLK_BYTES;
+            if (req_vt > vtcm_size) {
                 return false;
             }
-            kparams->n_hvx                   = (uint8_t) nth;
+            kparams->n_hvx                   = (uint8_t) n_hvx;
             kparams->vtcm_size               = req_vt;
             kparams->u.regular.div_ne01      = init_fastdiv_values((uint32_t) src0->ne[1]);
             kparams->u.regular.div_ne02_ne01 = init_fastdiv_values((uint32_t) (src0->ne[1] * src0->ne[2]));
@@ -2862,37 +2861,36 @@ static bool htp_kparams_solve_concat(
         src0_trans_ok && src1_trans_ok && dst->nb[0] == dst_es &&
         (dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16)) {
 
-        const uint32_t nth = n_hvx > 0 ? n_hvx : 8;
         uint32_t req_vtcm = 0;
 
         if (!is_src0_transposed && is_src1_transposed) {
             struct htp_concat_transposed_vtcm_layout layout;
-            htp_concat_transposed_vtcm_layout_build(&layout, (uint32_t) src0->ne[0], (uint32_t) src1->ne[0], src0_es, src1_es, dst_es, nth);
+            htp_concat_transposed_vtcm_layout_build(&layout, (uint32_t) src0->ne[0], (uint32_t) src1->ne[0], src0_es, src1_es, dst_es, n_hvx);
             req_vtcm = layout.total_bytes;
         } else {
             struct htp_concat_transposed_vtcm_layout layout0;
-            htp_concat_transposed_vtcm_layout_build(&layout0, 0, (uint32_t) src0->ne[0], dst_es, src0_es, dst_es, nth);
+            htp_concat_transposed_vtcm_layout_build(&layout0, 0, (uint32_t) src0->ne[0], dst_es, src0_es, dst_es, n_hvx);
             req_vtcm = layout0.total_bytes;
             if (is_src1_transposed) {
                 struct htp_concat_transposed_vtcm_layout layout1;
-                htp_concat_transposed_vtcm_layout_build(&layout1, 0, (uint32_t) src1->ne[0], dst_es, src1_es, dst_es, nth);
+                htp_concat_transposed_vtcm_layout_build(&layout1, 0, (uint32_t) src1->ne[0], dst_es, src1_es, dst_es, n_hvx);
                 if (layout1.total_bytes > req_vtcm) {
                     req_vtcm = layout1.total_bytes;
                 }
             } else if (src1_es != dst_es) {
-                const uint32_t reg_vtcm = nth * 4 * HTP_CONCAT_REG_BLK_BYTES;
+                const uint32_t reg_vtcm = n_hvx * 4 * HTP_CONCAT_REG_BLK_BYTES;
                 if (reg_vtcm > req_vtcm) {
                     req_vtcm = reg_vtcm;
                 }
             }
         }
 
-        if (vtcm_size > 0 && req_vtcm > vtcm_size) {
+        if (req_vtcm > vtcm_size) {
             return false;
         }
 
         kparams->kernel_type          = HTP_CONCAT_KERNEL_TRANSPOSED;
-        kparams->n_hvx                = (uint8_t) nth;
+        kparams->n_hvx                = (uint8_t) n_hvx;
         kparams->vtcm_size            = req_vtcm;
         kparams->u.transposed.div_ne2 = init_fastdiv_values((uint32_t) dst->ne[2]);
         return true;
@@ -3132,7 +3130,7 @@ static bool htp_kparams_solve_cpy(
         }
 
         kparams->kernel_type = HTP_COPY_KERNEL_RESHAPE;
-        kparams->n_hvx       = n_hvx > 0 ? (uint8_t) n_hvx : 4;
+        kparams->n_hvx       = (uint8_t) n_hvx;
         kparams->u.reshape.div_ne0            = init_fastdiv_values((uint32_t) dst->ne[0]);
         kparams->u.reshape.div_ne1_ne0        = init_fastdiv_values((uint32_t) (dst->ne[1] * dst->ne[0]));
         kparams->u.reshape.div_ne2_ne1_ne0    = init_fastdiv_values((uint32_t) (dst->ne[2] * dst->ne[1] * dst->ne[0]));
@@ -3154,17 +3152,16 @@ static bool htp_kparams_solve_cpy(
         return false;
     }
 
-    const uint32_t nth = n_hvx > 0 ? n_hvx : 4;
     struct htp_copy_convert_vtcm_layout layout;
-    htp_copy_convert_solve_layout(&layout, (uint32_t) src0->ne[0], (uint32_t) src0->ne[1], src_type_size, dst_type_size, nth);
+    htp_copy_convert_solve_layout(&layout, (uint32_t) src0->ne[0], (uint32_t) src0->ne[1], src_type_size, dst_type_size, n_hvx);
 
-    if (vtcm_size > 0 && layout.total_bytes > vtcm_size) {
+    if (layout.total_bytes > vtcm_size) {
         return false;
     }
 
     kparams->kernel_type             = HTP_COPY_KERNEL_SAMESHAPE_CONVERT;
     kparams->total_rows              = (uint32_t) (src0->ne[1] * src0->ne[2] * src0->ne[3]);
-    kparams->n_hvx                   = (uint8_t) nth;
+    kparams->n_hvx                   = (uint8_t) n_hvx;
     kparams->vtcm_size               = (uint32_t) layout.total_bytes;
     kparams->u.convert.blk_rows      = layout.blk_rows;
     kparams->u.convert.div_ne01      = init_fastdiv_values((uint32_t) src0->ne[1]);
@@ -3264,9 +3261,9 @@ static bool htp_kparams_solve_im2col(
         is_patchembed = is_patchembed && (s1 == (int32_t) KH && p1 == 0 && d1 == 1);
     }
 
-    const uint32_t max_hvx        = (sess && htp_session_n_hvx(sess) > 0) ? htp_session_n_hvx(sess) : 8;
+    const uint32_t max_hvx        = htp_session_n_hvx(sess);
     const uint32_t n_hvx          = (total_rows < max_hvx) ? total_rows : max_hvx;
-    const uint32_t vtcm_size      = (sess && htp_session_vtcm_size(sess) > 0) ? (uint32_t) htp_session_vtcm_size(sess) : 0;
+    const size_t   vtcm_size      = htp_session_vtcm_size(sess);
     const uint32_t row_size       = (uint32_t) dst->nb[2];
     const uint32_t rows_per_chunk = (row_size > 0) ? (HEX_L2_LINE_SIZE / hex_gcd_u32(row_size, HEX_L2_LINE_SIZE)) : 1;
 
@@ -3281,7 +3278,7 @@ static bool htp_kparams_solve_im2col(
             htp_im2col_vtcm_layout_build(&layout, src_row_bytes, dst_row_bytes, n_hvx,
                                          htp_im2col_scratch_bytes(HTP_IM2COL_KERNEL_PATCHEMBED_DMA, KH, patch_stride));
 
-            if (vtcm_size == 0 || layout.total_bytes <= vtcm_size) {
+            if (layout.total_bytes <= vtcm_size) {
                 kparams->kernel_type          = HTP_IM2COL_KERNEL_PATCHEMBED_DMA;
                 kparams->n_hvx                = (uint8_t) n_hvx;
                 kparams->vtcm_size            = (uint32_t) layout.total_bytes;
@@ -3337,7 +3334,7 @@ static bool htp_kparams_solve_im2col(
         htp_im2col_vtcm_layout_build(&layout, src_row_bytes, dst_row_bytes, blk_threads,
                                      htp_im2col_scratch_bytes(HTP_IM2COL_KERNEL_BLOCKED_DMA, KH, patch_stride));
 
-        if (vtcm_size == 0 || layout.total_bytes <= vtcm_size) {
+        if (layout.total_bytes <= vtcm_size) {
             kparams->kernel_type          = HTP_IM2COL_KERNEL_BLOCKED_DMA;
             kparams->n_hvx                = (uint8_t) blk_threads;
             kparams->vtcm_size            = (uint32_t) layout.total_bytes;
@@ -3450,9 +3447,9 @@ static bool htp_kparams_solve_im2col_3d(
                                 p0 == 0 && p1 == 0 && p2 == 0 &&
                                 d0 == 1 && d1 == 1 && d2 == 1);
 
-    const uint32_t max_hvx        = (sess && htp_session_n_hvx(sess) > 0) ? htp_session_n_hvx(sess) : 8;
+    const uint32_t max_hvx        = htp_session_n_hvx(sess);
     const uint32_t n_hvx          = (total_rows < max_hvx) ? total_rows : max_hvx;
-    const uint32_t vtcm_size      = (sess && htp_session_vtcm_size(sess) > 0) ? (uint32_t) htp_session_vtcm_size(sess) : 0;
+    const size_t   vtcm_size      = htp_session_vtcm_size(sess);
     const uint32_t row_size       = (uint32_t) dst->nb[2];
     const uint32_t rows_per_chunk = (row_size > 0) ? (HEX_L2_LINE_SIZE / hex_gcd_u32(row_size, HEX_L2_LINE_SIZE)) : 1;
 
@@ -3466,7 +3463,7 @@ static bool htp_kparams_solve_im2col_3d(
             struct htp_im2col_vtcm_layout layout;
             htp_im2col_vtcm_layout_build(&layout, src_row_bytes, dst_row_bytes, n_hvx, 256);
 
-            if (vtcm_size == 0 || layout.total_bytes <= vtcm_size) {
+            if (layout.total_bytes <= vtcm_size) {
                 kparams->kernel_type          = HTP_IM2COL_KERNEL_PATCHEMBED_DMA;
                 kparams->n_hvx                = (uint8_t) n_hvx;
                 kparams->vtcm_size            = (uint32_t) layout.total_bytes;
@@ -3516,7 +3513,7 @@ static bool htp_kparams_solve_im2col_3d(
         struct htp_im2col_vtcm_layout layout;
         htp_im2col_vtcm_layout_build(&layout, src_row_bytes, dst_row_bytes, n_hvx, 256);
 
-        if (vtcm_size == 0 || layout.total_bytes <= vtcm_size) {
+        if (layout.total_bytes <= vtcm_size) {
             kparams->kernel_type          = HTP_IM2COL_KERNEL_BLOCKED_DMA;
             kparams->n_hvx                = (uint8_t) n_hvx;
             kparams->vtcm_size            = (uint32_t) layout.total_bytes;
@@ -4747,10 +4744,7 @@ static bool htp_kparams_solve_conv2d_dw(
     const uint32_t pad_rows       = fast_k3x3 ? 4 : 0;
     const uint32_t pad_top_stride = fast_k3x3 ? w : 0;
 
-    const size_t vtcm_budget = (sess && htp_session_vtcm_size(sess) > 0) ? htp_session_vtcm_size(sess) : 0;
-    if (vtcm_budget == 0) {
-        return false;
-    }
+    const size_t vtcm_budget = htp_session_vtcm_size(sess);
 
     const uint32_t w_size = (uint32_t) (kw * kh * c * ggml_type_size(src0->type));
 
