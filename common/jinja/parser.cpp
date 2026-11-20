@@ -482,7 +482,8 @@ private:
     }
 
     statement_ptr parse_unary_expression() {
-        if (is(token::unary_operator)) {
+        // a sign where an operand is expected is unary: -x, 1 + -x, x if c else -1
+        if (is(token::additive_binary_operator) && peek().value != "~") {
             depth_guard guard(*this);
             size_t start_pos = current;
             auto op = next();

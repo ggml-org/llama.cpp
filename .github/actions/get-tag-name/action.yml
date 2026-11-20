@@ -14,7 +14,9 @@ runs:
       run: |
         BUILD_NUMBER="$(git rev-list --count HEAD)"
         SHORT_HASH="$(git rev-parse --short=7 HEAD)"
-        if [[ "${{ env.BRANCH_NAME }}" == "master" || "${{ env.BRANCH_NAME }}" == "b${BUILD_NUMBER}" ]]; then
+        if [[ "$GITHUB_REF_TYPE" == "tag" && "${{ env.BRANCH_NAME }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "name=${{ env.BRANCH_NAME }}" >> $GITHUB_OUTPUT
+        elif [[ "${{ env.BRANCH_NAME }}" == "master" || "${{ env.BRANCH_NAME }}" == "b${BUILD_NUMBER}" ]]; then
           echo "name=b${BUILD_NUMBER}" >> $GITHUB_OUTPUT
         else
           SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
