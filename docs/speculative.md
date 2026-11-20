@@ -153,14 +153,19 @@ Use a draft GGUF trained for the selected MiniCPM5 target checkpoint. The follow
 llama-server -m /path/to/MiniCPM5-15B-A2.5B-BF16.gguf \
     -md /path/to/MiniCPM5-15B-A2.5B-DSpark.gguf \
     --spec-type draft-dspark --spec-draft-n-max 2 --spec-draft-p-min 0 \
+    --min-p 0 \
     -ngl 99 --n-gpu-layers-draft 99 -fa on \
-    -c 2048 -np 1 --jinja \
+    -c 8192 -np 1 --jinja \
     -ctk f16 -ctv f16 -ctkd f16 -ctvd f16
 ```
 
-The target in `-m` may also use Q8_0 or Q4_K_M weights. The four cache-type options keep both target and draft K/V caches in F16.
+The target in `-m` may also use Q8_0 or Q4_K_M weights.
 
-The validated MiniCPM5 setup uses `n_max=2` and `p_min=0`; `n_max=7` has not been tested for this pairing. Setting `p_min=0` disables confidence-head truncation; token acceptance still uses the target verifier.
+- `--min-p 0` disables the target sampler's min-p filter. `--spec-draft-p-min 0` disables DSpark's confidence-based truncation of draft blocks. The target still verifies the draft tokens.
+- With one slot (`-np 1`), `-c 8192` provides an 8,192-token context for the prompt and generated tokens. The short smoke tests used `-c 2048`. Choose the context size for your workload and available memory.
+- `-ctk` and `-ctv` set the target K and V cache types. `-ctkd` and `-ctvd` set the draft K and V cache types. This example uses unquantized F16 K/V for both models. The cache types are independent of weight quantization.
+
+MiniCPM5 DSpark was tested with `--spec-draft-n-max 2`. `--spec-draft-n-max 7` has not been tested for this pairing.
 
 The [MiniCPM5 MoE conversion instructions](models.md#minicpm5-moe) export the target GGUF. Supply the compatible DSpark draft separately in GGUF format.
 
