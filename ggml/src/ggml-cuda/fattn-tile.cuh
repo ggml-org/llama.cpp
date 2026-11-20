@@ -842,12 +842,12 @@ static __global__ void flash_attn_tile(
 
     // Skip unused kernel variants for faster compilation:
 
-#ifndef GCN
+#if !defined(GCN) && !defined(CDNA)
     if constexpr (use_sparse) {
         NO_DEVICE_CODE;
         return;
     }
-#endif // GCN
+#endif // !defined(GCN) && !defined(CDNA)
 
     if ((use_logit_softcap && !(DV == 128 || DV == 256 || DV == 512))) {
         GGML_UNUSED_VARS(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
