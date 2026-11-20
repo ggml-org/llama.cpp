@@ -585,6 +585,10 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
         }},
     };
 
+    if (verbose) {
+        res["__verbose"] = to_json_non_oaicompat();
+    }
+
     return res;
 }
 
@@ -713,6 +717,10 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
         server_sent_events.back().at("data")["timings"] = stats.to_json();
     }
 
+    if (verbose) {
+        server_sent_events.back().at("data")["__verbose"] = to_json_non_oaicompat();
+    }
+
     return server_sent_events;
 }
 
@@ -793,6 +801,10 @@ json server_task_result_cmpl_final::to_json_anthropic() {
             {"output_tokens", n_decoded}
         }}
     };
+
+    if (verbose) {
+        res["__verbose"] = to_json_non_oaicompat();
+    }
 
     return res;
 }
@@ -981,6 +993,10 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
             {"type", "message_stop"}
         }}
     });
+
+    if (verbose) {
+        events.back().at("data")["__verbose"] = to_json_non_oaicompat();
+    }
 
     return events;
 }
