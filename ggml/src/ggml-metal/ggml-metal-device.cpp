@@ -67,7 +67,8 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_base(ggml
 
     const char * op_str = "undefined";
     switch (op) {
-        case GGML_OP_ADD_ID: op_str = "add_id"; break;
+        case GGML_OP_ADD_ID:        op_str = "add_id";        break;
+        case GGML_OP_GET_ROWS_BACK: op_str = "get_rows_back"; break;
         default: GGML_ABORT("fatal error");
     };
 
