@@ -595,16 +595,20 @@ static bool ggml_tiled_matmul_forced(void) {
 // entries' type switch
 
 #if !defined(__AVX512VNNI__) && !defined(__AVX2__) && !defined(__AVX__)
-static bool ggml_tiled_supported(const struct ggml_tensor * src0,
-                                 const struct ggml_tensor * src1) {
-    UNUSED(src0);
-    UNUSED(src1);
+static bool ggml_tiled_supported(const struct ggml_tensor * dst) {
+    UNUSED(dst);
     return false;
 }
 #else
-static bool ggml_tiled_supported(const struct ggml_tensor * src0,
-                                 const struct ggml_tensor * src1) {
+static bool ggml_tiled_supported(const struct ggml_tensor * dst) {
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+
     if (!ggml_tiled_matmul_enabled()) {
+        return false;
+    }
+    // the tiles are written back as F32
+    if (dst->type != GGML_TYPE_F32) {
         return false;
     }
 
@@ -652,7 +656,7 @@ static size_t ggml_tiled_ws_size(void) {
 }
 
 size_t ggml_tiled_wdata_size(int n_tasks, struct ggml_tensor * dst) {
-    if (! ggml_tiled_supported(dst->src[0], dst->src[1])) {
+    if (! ggml_tiled_supported(dst)) {
         return 0; // unsupported, don't allocate
     }
     return 64 + n_tasks * ggml_tiled_ws_size();  // 64 for alignment plus one 512KB slot per thread
@@ -1213,7 +1217,7 @@ bool ggml_compute_forward_mul_mat_tiled(
     if (params->use_ref) {
         return false;
     }
-    if (!ggml_tiled_supported(dst->src[0], dst->src[1])) {
+    if (!ggml_tiled_supported(dst)) {
         return false;
     }
     if (!ggml_tiled_min_batch(dst->src[1]->ne[1])) {
@@ -1234,7 +1238,7 @@ bool ggml_compute_forward_mul_mat_id_tiled(
     if (params->use_ref) {
         return false;
     }
-    if (!ggml_tiled_supported(dst->src[0], dst->src[1])) {
+    if (!ggml_tiled_supported(dst)) {
         return false;
     }
     // profitability is per expert: the rows routed to this expert

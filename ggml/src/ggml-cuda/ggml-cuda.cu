@@ -1413,6 +1413,11 @@ static bool ggml_backend_cuda_comm_allreduce_nccl(
         return true;
     }
 
+    // the reductions below read and write F32, other types take the generic implementation of the meta backend
+    if (tensors[0]->type != GGML_TYPE_F32) {
+        return false;
+    }
+
     const size_t n_backends = comm_ctx->backends.size();
     const size_t n_ranks    = comm_ctx->n_ranks();
 
@@ -1905,6 +1910,11 @@ struct batched_mul_mat_traits<GGML_TYPE_F16> {
     static inline auto convert_nc(ggml_type src_type) { return ggml_get_to_fp16_nc_cuda(src_type); }
 };
 
+// the F16 GEMM writes an F32 output on these GPUs
+static bool ggml_cuda_cublas_f16_prefer_f32_output(const int cc) {
+    return cc == GGML_CUDA_CC_VOLTA || GGML_CUDA_CC_IS_RDNA4(cc) || GGML_CUDA_CC_IS_CDNA(cc);
+}
+
 template<ggml_type compute_type>
 static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     using traits = batched_mul_mat_traits<compute_type>;
@@ -1914,9 +1924,13 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
     GGML_ASSERT(ggml_is_contiguous(dst) ||
         (compute_type == GGML_TYPE_F32 && ggml_is_contiguous_1(dst)));
 
+    // a BF16 dst is written by the BF16 GEMM, or converted from the F16 output of the F16 GEMM, see ggml_cuda_mul_mat_cublas
+    const bool dst_bf16 = dst->type == GGML_TYPE_BF16;
+    GGML_ASSERT(!dst_bf16 || compute_type == GGML_TYPE_BF16 || compute_type == GGML_TYPE_F16);
+
     GGML_TENSOR_BINARY_OP_LOCALS
 
-    const int64_t ldc = nb1 / sizeof(float);
+    const int64_t ldc = nb1 / ggml_type_size(dst->type);
     const int64_t ne_dst = ggml_nelements(dst);
     cudaStream_t main_stream = ctx.stream();
     cublasHandle_t cublas_h = ctx.cublas_handle();
@@ -2009,12 +2023,15 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
     const int cc = ggml_cuda_info().devices[ctx.device].cc;
     bool prefer_f32_output = false;
     if (compute_type == GGML_TYPE_F16) {
-        prefer_f32_output = cc == GGML_CUDA_CC_VOLTA || GGML_CUDA_CC_IS_RDNA4(cc) || GGML_CUDA_CC_IS_CDNA(cc);
+        prefer_f32_output = ggml_cuda_cublas_f16_prefer_f32_output(cc);
     } else if (compute_type == GGML_TYPE_BF16) {
         prefer_f32_output = !GGML_CUDA_CC_IS_RDNA3(cc) && !GGML_CUDA_CC_IS_RDNA4_M(cc) && !GGML_CUDA_CC_IS_CDNA(cc);
     }
 
-    if (prefer_f32_output) {
+    if (dst_bf16 && compute_type == GGML_TYPE_BF16) {
+        dst_ptr = (char *) dst->data;
+    } else if (prefer_f32_output) {
+        GGML_ASSERT(!dst_bf16);
         dst_ptr = (char *) dst_ddf;
         cu_compute_type = batched_mul_mat_traits<GGML_TYPE_F32>::compute_type;
         cu_data_type = batched_mul_mat_traits<GGML_TYPE_F32>::data_type;
@@ -2025,8 +2042,8 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
             dst_ptr = (char *) dst_ddf;  // Direct F32 output
         } else {
             dst_ptr = (char *) dst_temp.alloc(ne_dst);
-            nbd2 /= sizeof(float) / sizeof(cuda_t);
-            nbd3 /= sizeof(float) / sizeof(cuda_t);
+            nbd2 /= ggml_type_size(dst->type) / sizeof(cuda_t);
+            nbd3 /= ggml_type_size(dst->type) / sizeof(cuda_t);
         }
     }
 
@@ -2112,11 +2129,33 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
                 CUBLAS_GEMM_DEFAULT_TENSOR_OP));
     }
 
-    // Convert output back to F32 if needed
-    if (cu_data_type != CUDA_R_32F) {
-        const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(traits::ggml_type_val);
-        to_fp32_cuda(dst_temp.get(), dst_ddf, ne_dst, main_stream);
+    // Convert output back to F32 (or to BF16) if needed
+    if (cu_data_type != CUDA_R_32F && !(dst_bf16 && compute_type == GGML_TYPE_BF16)) {
+        if (dst_bf16) {
+            ggml_get_to_bf16_cuda(traits::ggml_type_val)(dst_temp.get(), (nv_bfloat16 *) dst->data, ne_dst, main_stream);
+        } else {
+            const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(traits::ggml_type_val);
+            to_fp32_cuda(dst_temp.get(), dst_ddf, ne_dst, main_stream);
+        }
     }
+}
+
+// For the matmul routes that write only F32: run the route on an F32 copy of the BF16 dst, then round the result into dst once.
+template <typename mul_mat_t>
+static void ggml_cuda_mul_mat_bf16_via_f32(ggml_backend_cuda_context & ctx, ggml_tensor * dst, const mul_mat_t & mul_mat) {
+    GGML_ASSERT(dst->type == GGML_TYPE_BF16);
+
+    ggml_cuda_pool_alloc<float> dst_f32(ctx.pool(), ggml_nelements(dst));
+    ggml_tensor dst_tmp = *dst;
+    dst_tmp.type  = GGML_TYPE_F32;
+    dst_tmp.data  = dst_f32.get();
+    dst_tmp.nb[0] = sizeof(float);
+    for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+        dst_tmp.nb[i] = dst_tmp.nb[i - 1]*dst_tmp.ne[i - 1];
+    }
+
+    mul_mat(&dst_tmp);
+    ggml_cuda_cpy(ctx, &dst_tmp, dst);
 }
 
 static void ggml_cuda_mul_mat_cublas(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -2160,6 +2199,15 @@ static void ggml_cuda_mul_mat_cublas(ggml_backend_cuda_context & ctx, const ggml
         } else if (env_cpp != "auto") {
             GGML_LOG_WARN("%s: unknown value for GGML_CUDA_CUBLAS_COMPUTE_TYPE: %s", __func__, env_cpp.c_str());
         }
+    }
+
+    // the F32 GEMM (and the F16 GEMM with an F32 output) writes only F32
+    if (dst->type == GGML_TYPE_BF16 && compute_type != GGML_TYPE_BF16 &&
+            (compute_type != GGML_TYPE_F16 || ggml_cuda_cublas_f16_prefer_f32_output(cc))) {
+        ggml_cuda_mul_mat_bf16_via_f32(ctx, dst, [&](ggml_tensor * dst_f32) {
+            ggml_cuda_mul_mat_cublas(ctx, src0, src1, dst_f32);
+        });
+        return;
     }
 
     constexpr size_t max_src0_convert_size = 512ull * 1024 * 1024;
@@ -2216,7 +2264,8 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     const bool bad_padding_clear = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE
         && ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) && src0->view_src;
     // MMVQ, MMQ and MMVF (BF16 and FP8 weights) also read a BF16 src1, MMF only an F32 src1
-    if (bad_padding_clear || (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_BF16) || dst->type != GGML_TYPE_F32) {
+    if (bad_padding_clear || (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_BF16) ||
+            (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_BF16)) {
         ggml_cuda_mul_mat_cublas(ctx, src0, src1, dst);
         return;
     }
@@ -2224,7 +2273,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     const int cc        = ggml_cuda_info().devices[ctx.device].cc;
     const int warp_size = ggml_cuda_info().devices[ctx.device].warp_size;
 
-    if (ggml_cuda_should_use_mmvf(src0, src1->type, cc, warp_size, ne11, /*mul_mat_id =*/ false)) {
+    if (ggml_cuda_should_use_mmvf(src0, src1->type, dst->type, cc, warp_size, ne11, /*mul_mat_id =*/ false)) {
         // The custom vector kernel can be used over batched cuBLAS GEMM.
         // But this is only faster for GPUs without tensor cores or with a thin src0 matrix (particularly KQV in attention)
         ggml_cuda_mul_mat_vec_f(ctx, src0, src1, nullptr, dst);
@@ -2234,7 +2283,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     if (ne01 == 1 && ne11 > MMVF_MAX_BATCH_SIZE && ne2 == 1 && ne3 == 1
             && src0->type == GGML_TYPE_F32
             && ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst)
-            && ggml_cuda_should_use_mmvf(src1, src0->type, cc, warp_size, /*ne11 =*/ 1, /*mul_mat_id =*/ false)) {
+            && ggml_cuda_should_use_mmvf(src1, src0->type, dst->type, cc, warp_size, /*ne11 =*/ 1, /*mul_mat_id =*/ false)) {
         ggml_tensor dst_vec = *dst;
         dst_vec.ne[0] = ne11;
         dst_vec.ne[1] = 1;
@@ -2245,7 +2294,14 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         return;
     }
     if (src1->type == GGML_TYPE_F32 && ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, ne11, /*mul_mat_id =*/ false)) {
-        ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
+        if (dst->type == GGML_TYPE_BF16) {
+            // MMF writes only F32
+            ggml_cuda_mul_mat_bf16_via_f32(ctx, dst, [&](ggml_tensor * dst_f32) {
+                ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst_f32);
+            });
+        } else {
+            ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
+        }
         return;
     }
     // from a per-type number of src1 columns up to 24, few-row MMQ is faster than MMVQ and MMQ
@@ -2275,7 +2331,7 @@ static bool ggml_cuda_mul_mat_id_needs_sync(const ggml_tensor * dst, const int c
     const ggml_tensor * src1 = dst->src[1];
     const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
 
-    if ((src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_BF16) || dst->type != GGML_TYPE_F32) {
+    if ((src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_BF16) || (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_BF16)) {
         return true;
     }
 
@@ -2284,7 +2340,7 @@ static bool ggml_cuda_mul_mat_id_needs_sync(const ggml_tensor * dst, const int c
             if (dst->ne[2] <= get_mmvq_mmid_max_batch(src0->type, cc)) {
                 return false;
             }
-        } else if (ggml_cuda_should_use_mmvf(src0, src1->type, cc, warp_size, dst->ne[2], /*mul_mat_id =*/ true)) {
+        } else if (ggml_cuda_should_use_mmvf(src0, src1->type, dst->type, cc, warp_size, dst->ne[2], /*mul_mat_id =*/ true)) {
             return false;
         }
     }
@@ -2310,7 +2366,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const ggml_tensor * ids  = dst->src[2];
 
     GGML_ASSERT(src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16);
-    GGML_ASSERT(dst->type  == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type  == GGML_TYPE_F32 || dst->type  == GGML_TYPE_BF16);
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -2318,7 +2374,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
 
     // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
-    if ((src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16) && dst->type == GGML_TYPE_F32) {
+    if ((src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16) && (dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_BF16)) {
         // up to 24 tokens few-row MMQ is faster than MMQ, on DGX Spark also faster than MMVQ
         const bool use_mmq_few = ggml_cuda_should_use_mmq_few(src0, src1, ids, cc);
 
@@ -2330,7 +2386,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
                     ggml_cuda_mul_mat_vec_q(ctx, src0, src1, ids, dst);
                     return;
                 }
-            } else if (ggml_cuda_should_use_mmvf(src0, src1->type, cc, warp_size, ne2, /*mul_mat_id =*/ true)) {
+            } else if (ggml_cuda_should_use_mmvf(src0, src1->type, dst->type, cc, warp_size, ne2, /*mul_mat_id =*/ true)) {
                 ggml_cuda_mul_mat_vec_f(ctx, src0, src1, ids, dst);
                 return;
             }
@@ -2347,7 +2403,14 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         }
 
         if (src1->type == GGML_TYPE_F32 && ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, src1->ne[2], /*mul_mat_id=*/true)) {
-            ggml_cuda_mul_mat_f(ctx, src0, src1, ids, dst);
+            if (dst->type == GGML_TYPE_BF16) {
+                // MMF writes only F32
+                ggml_cuda_mul_mat_bf16_via_f32(ctx, dst, [&](ggml_tensor * dst_f32) {
+                    ggml_cuda_mul_mat_f(ctx, src0, src1, ids, dst_f32);
+                });
+            } else {
+                ggml_cuda_mul_mat_f(ctx, src0, src1, ids, dst);
+            }
             return;
         }
     }
@@ -4118,12 +4181,22 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 if (op->op == GGML_OP_MUL_MAT_ID && b->type != GGML_TYPE_F32 && b->type != GGML_TYPE_BF16) {
                     return false;
                 }
+#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+                // the BF16 result paths are not tested on AMD and Moore Threads GPUs
+                if (op->type != GGML_TYPE_F32) {
+                    return false;
+                }
+#endif // defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+                if (op->type != GGML_TYPE_F32 && op->type != GGML_TYPE_BF16) {
+                    return false;
+                }
                 const int cc_dev = ggml_cuda_info().devices[dev_ctx->device].cc;
                 const bool f32_src1_ok = GGML_CUDA_CC_IS_NVIDIA(cc_dev) && cc_dev < GGML_CUDA_CC_AMPERE;
                 const enum ggml_prec prec_src1 = ggml_prec_get_src(op, 1);
                 const bool fp8_id_mmvf = op->op == GGML_OP_MUL_MAT_ID &&
-                    a->type == GGML_TYPE_F8_E4M3 && (b->type == GGML_TYPE_F32 || b->type == GGML_TYPE_BF16) && op->type == GGML_TYPE_F32 &&
-                    ggml_cuda_should_use_mmvf(a, b->type, cc_dev, ggml_cuda_info().devices[dev_ctx->device].warp_size, b->ne[2],
+                    a->type == GGML_TYPE_F8_E4M3 && (b->type == GGML_TYPE_F32 || b->type == GGML_TYPE_BF16) &&
+                    (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_BF16) &&
+                    ggml_cuda_should_use_mmvf(a, b->type, op->type, cc_dev, ggml_cuda_info().devices[dev_ctx->device].warp_size, b->ne[2],
                         /*mul_mat_id =*/ true);
                 if (prec_src1 == GGML_PREC_F32 && !fp8_id_mmvf && (op->op == GGML_OP_MUL_MAT_ID || !f32_src1_ok || a->type != GGML_TYPE_F32)) {
                     return false;
@@ -4526,6 +4599,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_OPT_STEP_ADAMW:
         case GGML_OP_OPT_STEP_SGD:
         case GGML_OP_FILL:
+            // BF16 is needed by the generic reduction of BF16 partial sums in the meta backend (the NCCL path takes F32 only)
+            return op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_BF16;
         case GGML_OP_CUMSUM:
         case GGML_OP_TRI:
             return true;

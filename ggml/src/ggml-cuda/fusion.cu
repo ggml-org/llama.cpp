@@ -125,7 +125,7 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor, cons
     bool use_mul_mat_vec_f =
         (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16 ||
          src0->type == GGML_TYPE_F8_E4M3) &&
-        (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16) && dst->type == GGML_TYPE_F32;
+        (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16) && (dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_BF16);
 
     const int cc        = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
@@ -133,9 +133,10 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor, cons
     // a MUL_MAT_ID with an F32 src1 keeps the MUL_MAT rule here, with a BF16 src1 it takes MMVF where
     // ggml_cuda_mul_mat_id does, since MMF can not read a BF16 src1
     const bool mul_mat_id_rule = is_mul_mat_id && src1->type == GGML_TYPE_BF16;
-    use_mul_mat_vec_f = use_mul_mat_vec_f && ggml_cuda_should_use_mmvf(src0, src1->type, cc, warp_size, ne11, mul_mat_id_rule);
+    use_mul_mat_vec_f = use_mul_mat_vec_f &&
+        ggml_cuda_should_use_mmvf(src0, src1->type, dst->type, cc, warp_size, ne11, mul_mat_id_rule);
 
-    if (gate && !ggml_cuda_should_use_mmvf(gate->src[0], src1->type, cc, warp_size, ne11, mul_mat_id_rule)) {
+    if (gate && !ggml_cuda_should_use_mmvf(gate->src[0], src1->type, dst->type, cc, warp_size, ne11, mul_mat_id_rule)) {
         return false;
     }
 
@@ -163,7 +164,8 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
 
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     bool use_mul_mat_vec_q = ggml_cuda_should_use_mmvq(src0->type, cc, src1->ne[1]) && !bad_padding_clear &&
-                             (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16) && dst->type == GGML_TYPE_F32;
+                             (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16) &&
+                             (dst->type  == GGML_TYPE_F32 || dst->type  == GGML_TYPE_BF16);
 
     // fusion is not universally faster on Pascal
     if (cc < GGML_CUDA_CC_VOLTA) {
@@ -230,7 +232,7 @@ static bool ggml_cuda_match_shared_expert(const ggml_cgraph * graph, int routed_
             !ggml_is_contiguous(shared_gate->src[0]) || !ggml_is_contiguous(routed) || !ggml_is_contiguous(shared)) {
         return false;
     }
-    if (shared_weight->op != GGML_OP_NONE || shared_gate->src[0]->op != GGML_OP_NONE ||
+    if (shared_weight->op != GGML_OP_NONE || shared_gate->src[0]->op != GGML_OP_NONE || routed->type != shared->type ||
             ggml_get_glu_op(routed) != ggml_get_glu_op(shared) ||
             ggml_get_op_params_f32(routed, 3) != ggml_get_op_params_f32(shared, 3)) {
         return false;
@@ -248,7 +250,8 @@ static const ggml_tensor * ggml_cuda_get_mul_mat_scale(const ggml_tensor * scale
     }
 
     const ggml_tensor * scale = scale_lhs_mm ? scale_node->src[1] : scale_node->src[0];
-    if ((mm_node->src[0]->type != GGML_TYPE_NVFP4 && mm_node->src[0]->type != GGML_TYPE_F8_E4M3) || scale_node->type != GGML_TYPE_F32 ||
+    if ((mm_node->src[0]->type != GGML_TYPE_NVFP4 && mm_node->src[0]->type != GGML_TYPE_F8_E4M3) ||
+            (scale_node->type != GGML_TYPE_F32 && scale_node->type != GGML_TYPE_BF16) ||
             scale->type != GGML_TYPE_F32 || !ggml_is_contiguous(scale) || ggml_nelements(scale) != 1 ||
             !ggml_are_same_shape(scale_node, mm_node)) {
         return nullptr;
@@ -269,7 +272,8 @@ static const ggml_tensor * ggml_cuda_get_mul_mat_id_scale(const ggml_tensor * re
     }
 
     const ggml_tensor * scale = reshape->src[0];
-    if ((mm_node->src[0]->type != GGML_TYPE_NVFP4 && mm_node->src[0]->type != GGML_TYPE_F8_E4M3) || scale_node->type != GGML_TYPE_F32 ||
+    if ((mm_node->src[0]->type != GGML_TYPE_NVFP4 && mm_node->src[0]->type != GGML_TYPE_F8_E4M3) ||
+            (scale_node->type != GGML_TYPE_F32 && scale_node->type != GGML_TYPE_BF16) ||
             scale->type != GGML_TYPE_F32 || !ggml_is_contiguous(scale) || ggml_nelements(scale) != mm_node->src[0]->ne[2] ||
             !ggml_are_same_shape(scale_node, mm_node)) {
         return nullptr;
@@ -941,10 +945,12 @@ static bool ggml_cuda_match_moe_weighted_reduction(
         const ggml_cgraph * cgraph,
         int node_idx,
         ggml_cuda_moe_weighted_reduction_match & match) {
+    // the experts, the products, the views and the sums are all F32 or all BF16, the router weights F32
     const ggml_tensor * first = cgraph->nodes[node_idx];
-    if (first->op != GGML_OP_MUL || first->type != GGML_TYPE_F32 || !ggml_is_contiguous(first)) {
+    if (first->op != GGML_OP_MUL || (first->type != GGML_TYPE_F32 && first->type != GGML_TYPE_BF16) || !ggml_is_contiguous(first)) {
         return false;
     }
+    const ggml_type act_type = first->type;
 
     auto split_mul = [](const ggml_tensor * mul, const ggml_tensor *& full, const ggml_tensor *& broadcast) {
         auto is_weights = [mul](const ggml_tensor * tensor) {
@@ -952,7 +958,7 @@ static bool ggml_cuda_match_moe_weighted_reduction(
                 tensor->ne[1] == mul->ne[1] && tensor->ne[2] == mul->ne[2] && tensor->ne[3] == mul->ne[3];
         };
         auto is_experts = [mul](const ggml_tensor * tensor) {
-            return tensor && tensor->type == GGML_TYPE_F32 && ggml_is_contiguous(tensor) &&
+            return tensor && tensor->type == mul->type && ggml_is_contiguous(tensor) &&
                 ggml_are_same_shape(tensor, mul);
         };
 
@@ -985,7 +991,7 @@ static bool ggml_cuda_match_moe_weighted_reduction(
         const ggml_tensor * route  = nullptr;
         const ggml_tensor * raw    = nullptr;
         const ggml_tensor * scale  = nullptr;
-        if (second->op == GGML_OP_MUL && second->type == GGML_TYPE_F32 && ggml_is_contiguous(second) &&
+        if (second->op == GGML_OP_MUL && second->type == act_type && ggml_is_contiguous(second) &&
                 split_mul(second, scaled, route) && scaled == first && split_mul(first, raw, scale)) {
             weighted     = second;
             experts      = raw;
@@ -1026,7 +1032,7 @@ static bool ggml_cuda_match_moe_weighted_reduction(
         if (candidate->op == GGML_OP_VIEW) {
             const int expert = (int) views.size();
             if (expert >= n_expert_used || candidate->src[0] != weighted || candidate->view_src != weighted ||
-                    candidate->type != GGML_TYPE_F32 || candidate->ne[0] != weighted->ne[0] ||
+                    candidate->type != act_type || candidate->ne[0] != weighted->ne[0] ||
                     candidate->ne[1] != n_tokens || candidate->ne[2] != 1 || candidate->ne[3] != 1 ||
                     candidate->nb[0] != weighted->nb[0] || candidate->nb[1] != weighted->nb[2] ||
                     candidate->view_offs != (size_t) expert * weighted->nb[1]) {
@@ -1041,7 +1047,7 @@ static bool ggml_cuda_match_moe_weighted_reduction(
         }
         const ggml_tensor * lhs = n_adds == 0 ? views[0] : previous;
         const ggml_tensor * rhs = views[n_adds + 1];
-        if (candidate->src[0] != lhs || candidate->src[1] != rhs || candidate->type != GGML_TYPE_F32) {
+        if (candidate->src[0] != lhs || candidate->src[1] != rhs || candidate->type != act_type) {
             return false;
         }
         previous = candidate;
@@ -1622,19 +1628,21 @@ int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgrap
     bool fused_mul_mat_vec = false;
     int  fused_node_count  = 0;
 
+    // the fused kernels read an F32 bias, a BF16 MUL_MAT result may be added to a tensor of another type
     auto get_bias_tensor = [](const ggml_tensor * bias_node, const ggml_tensor * mul_node, ggml_op op_bias) -> const ggml_tensor * {
+        const ggml_tensor * bias = nullptr;
         if (op_bias == GGML_OP_ADD) {
             if (bias_node->src[0] == mul_node) {
-                return bias_node->src[1];
+                bias = bias_node->src[1];
+            } else if (bias_node->src[1] == mul_node) {
+                bias = bias_node->src[0];
             }
-            if (bias_node->src[1] == mul_node) {
-                return bias_node->src[0];
-            }
-            return nullptr;
+        } else {
+            GGML_ASSERT(op_bias == GGML_OP_ADD_ID);
+            GGML_ASSERT(bias_node->src[0] == mul_node);
+            bias = bias_node->src[1];
         }
-        GGML_ASSERT(op_bias == GGML_OP_ADD_ID);
-        GGML_ASSERT(bias_node->src[0] == mul_node);
-        return bias_node->src[1];
+        return bias && bias->type == GGML_TYPE_F32 ? bias : nullptr;
     };
 
     // gate + glu + up, with optional scale/bias on both lanes.
@@ -1696,7 +1704,7 @@ int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgrap
 
                 const ggml_tensor * up_bias   = with_bias ? get_bias_tensor(up_out_n, up_scale_n, bias_op) : nullptr;
                 const ggml_tensor * gate_bias = with_bias ? get_bias_tensor(gate_out_n, gate_scale_n, bias_op) : nullptr;
-                if (with_bias && (!ggml_are_same_shape(gate_out_n->src[0], gate_out_n->src[1]) ||
+                if (with_bias && (!up_bias || !gate_bias || !ggml_are_same_shape(gate_out_n->src[0], gate_out_n->src[1]) ||
                         !ggml_are_same_shape(up_out_n->src[0], up_out_n->src[1]))) {
                     continue;
                 }
@@ -1809,6 +1817,9 @@ int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgrap
 
                 const ggml_tensor * up_bias   = with_bias ? get_bias_tensor(up_out_n, up_scale_n, bias_op) : nullptr;
                 const ggml_tensor * gate_bias = with_bias ? get_bias_tensor(gate_out_n, gate_scale_n, bias_op) : nullptr;
+                if (with_bias && (!up_bias || !gate_bias)) {
+                    continue;
+                }
 
                 const ggml_tensor * src0 = up_n->src[0];
                 const ggml_tensor * src1 = up_n->src[1];
@@ -2062,7 +2073,7 @@ int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgrap
             }
 
             if (!with_bias && src0->type == GGML_TYPE_NVFP4 && (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16) &&
-                    mm_node->type == GGML_TYPE_F32) {
+                    (mm_node->type == GGML_TYPE_F32 || mm_node->type == GGML_TYPE_BF16)) {
                 const int cc = ggml_cuda_info().devices[cuda_ctx->device].cc;
                 const bool is_id = op == GGML_OP_MUL_MAT_ID;
                 const int64_t ncols = is_id ? src1->ne[2] : src1->ne[1];
@@ -2131,6 +2142,11 @@ int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgrap
         }
 
         if (bias_op == GGML_OP_ADD && !ggml_are_same_shape(bias_node->src[0], bias_node->src[1])) {
+            continue;
+        }
+
+        // the fused kernels read an F32 bias
+        if (bias_tensor->type != GGML_TYPE_F32) {
             continue;
         }
 

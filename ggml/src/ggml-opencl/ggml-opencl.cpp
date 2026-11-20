@@ -12748,6 +12748,9 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_GROUP_NORM:
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_MUL_MAT:
+            if (op->type != GGML_TYPE_F32) { // the kernels write an F32 result
+                return false;
+            }
             if (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) {
                 return false;
             }
@@ -12863,6 +12866,9 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             }
             return false;
         case GGML_OP_MUL_MAT_ID:
+            if (op->type != GGML_TYPE_F32) { // the kernels write an F32 result
+                return false;
+            }
             if (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_BF16) {
                 return op->src[1]->type == GGML_TYPE_F32 && op->src[2]->type == GGML_TYPE_I32 && op->type == GGML_TYPE_F32 &&
                        op->src[0]->nb[0] == ggml_type_size(op->src[0]->type) && op->src[1]->nb[0] == sizeof(float) &&

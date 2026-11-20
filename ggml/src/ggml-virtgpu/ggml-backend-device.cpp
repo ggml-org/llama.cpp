@@ -38,6 +38,10 @@ static bool ggml_backend_remoting_device_supports_op(ggml_backend_dev_t dev, con
         !ggml_rope_get_truncate(op)) {
         return false;
     }
+    // the host backend is not asked, so keep the matmul results in F32
+    if ((op->op == GGML_OP_MUL_MAT || op->op == GGML_OP_MUL_MAT_ID) && op->type != GGML_TYPE_F32) {
+        return false;
+    }
 #if USE_ALWAYS_TRUE_SUPPORTS_OP == 1
     /* ggml-rpc cheats it like this */
     /* with the current implementation of serialize_tensor, the src/view aren't properly passed */

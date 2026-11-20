@@ -1917,6 +1917,9 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_SOLVE_TRI:
             return has_simdgroup_reduction && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_MUL_MAT:
+            if (op->type != GGML_TYPE_F32) { // the kernels write an F32 result
+                return false;
+            }
             if (!ggml_metal_supports_mul_mat_src1_prec(op, dev->props.has_bfloat)) {
                 return false;
             }
@@ -1930,6 +1933,9 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                     has_simdgroup_reduction, op, true,
                     ggml_metal_op_mul_mat_use_mm(op, has_simdgroup_mm));
         case GGML_OP_MUL_MAT_ID:
+            if (op->type != GGML_TYPE_F32) { // the kernels write an F32 result
+                return false;
+            }
             if (!ggml_metal_supports_mul_mat_src1_prec(op, dev->props.has_bfloat)) {
                 return false;
             }

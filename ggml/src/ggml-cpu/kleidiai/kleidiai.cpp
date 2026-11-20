@@ -1838,7 +1838,7 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
 
             if (op->src[0]->type == GGML_TYPE_Q4_0 || op->src[0]->type == GGML_TYPE_Q8_0 ||
                 op->src[0]->type == GGML_TYPE_Q6_K) {
-                if (op->src[1]->type == GGML_TYPE_F32 &&
+                if (op->src[1]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
                     ggml_ne(op->src[1], 3) == 1) {
                     return true;
                 }

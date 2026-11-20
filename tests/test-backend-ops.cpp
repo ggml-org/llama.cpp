@@ -6312,18 +6312,52 @@ struct test_mul_mat : public test_case {
     }
 };
 
+// MUL_MAT with the result type set by ggml_set_compute_type
+struct test_mul_mat_compute_type : public test_mul_mat {
+    const ggml_type type_dst;
+
+    test_mul_mat_compute_type(ggml_type type_dst, ggml_type type_a, ggml_type type_b, int64_t m, int64_t n, int64_t k,
+            std::array<int64_t, 2> bs = {1, 1}, std::array<int64_t, 2> nr = {1, 1})
+        : test_mul_mat(type_a, type_b, m, n, k, bs, nr), type_dst(type_dst) {}
+
+    std::string vars() override {
+        return test_mul_mat::vars() + "," + VAR_TO_STR(type_dst);
+    }
+
+    using test_mul_mat::build_graph;
+    ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
+        ggml_set_compute_type(ctx, type_dst);
+        ggml_tensor * out = test_mul_mat::build_graph(ctx, ctx_weights);
+        ggml_set_compute_type(ctx, GGML_TYPE_F32);
+        return out;
+    }
+};
+
 // GGML_HINT_SRC0_IS_HADAMARD
 struct test_mul_mat_hadamard : public test_mul_mat {
+    const ggml_type type_dst;
+
     test_mul_mat_hadamard(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
             int64_t m = 32, int64_t n = 32, int64_t k = 32,
             std::array<int64_t, 2> bs = {1, 1},
-            std::array<int64_t, 2> nr = {1, 1})
-        : test_mul_mat(type_a, type_b, m, n, k, bs, nr) {
+            std::array<int64_t, 2> nr = {1, 1},
+            ggml_type type_dst = GGML_TYPE_F32)
+        : test_mul_mat(type_a, type_b, m, n, k, bs, nr), type_dst(type_dst) {
             GGML_ASSERT(type_a == GGML_TYPE_F32);
         }
 
+    std::string vars() override {
+        std::string s = test_mul_mat::vars();
+        if (type_dst != GGML_TYPE_F32) {
+            s += "," + VAR_TO_STR(type_dst);
+        }
+        return s;
+    }
+
     ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
+        ggml_set_compute_type(ctx, type_dst);
         ggml_tensor * out = test_mul_mat::build_graph(ctx, ctx_weights);
+        ggml_set_compute_type(ctx, GGML_TYPE_F32);
         // Find the mul_mat op in the graph and set the hint
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (t->op == GGML_OP_MUL_MAT) {
@@ -6599,6 +6633,26 @@ struct test_mul_mat_id : public test_case {
     }
 };
 
+// MUL_MAT_ID with the result type set by ggml_set_compute_type
+struct test_mul_mat_id_compute_type : public test_mul_mat_id {
+    const ggml_type type_dst;
+
+    test_mul_mat_id_compute_type(ggml_type type_dst, ggml_type type_a, ggml_type type_b, int n_mats, int n_used, bool b,
+            int64_t m, int64_t n, int64_t k)
+        : test_mul_mat_id(type_a, type_b, n_mats, n_used, b, m, n, k), type_dst(type_dst) {}
+
+    std::string vars() override {
+        return test_mul_mat_id::vars() + "," + VAR_TO_STR(type_dst);
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_set_compute_type(ctx, type_dst);
+        ggml_tensor * out = test_mul_mat_id::build_graph(ctx);
+        ggml_set_compute_type(ctx, GGML_TYPE_F32);
+        return out;
+    }
+};
+
 // MUL_MAT_ID with expert ids repeated within a token's row
 struct test_mul_mat_id_dup : public test_mul_mat_id {
     using test_mul_mat_id::test_mul_mat_id;
@@ -6816,12 +6870,19 @@ struct test_mul_mat_id_fusion : public test_case {
 struct test_mul_mat_id_shared : public test_case {
     const ggml_type type;
     const int64_t n;
+    const ggml_type type_dst;
     ggml_tensor * routed = nullptr;
     ggml_tensor * shared = nullptr;
 
-    test_mul_mat_id_shared(ggml_type type, int64_t n) : type(type), n(n) {}
+    test_mul_mat_id_shared(ggml_type type, int64_t n, ggml_type type_dst = GGML_TYPE_F32) : type(type), n(n), type_dst(type_dst) {}
 
-    std::string vars() override { return VARS_TO_STR2(type, n); }
+    std::string vars() override {
+        std::string s = VARS_TO_STR2(type, n);
+        if (type_dst != GGML_TYPE_F32) {
+            s += "," + VAR_TO_STR(type_dst);
+        }
+        return s;
+    }
     std::string op_desc(ggml_tensor *) override { return "MUL_MAT_ID_SHARED"; }
     bool run_whole_graph() override { return true; }
     double max_nmse_err() override { return 5e-4; }
@@ -6836,8 +6897,10 @@ struct test_mul_mat_id_shared : public test_case {
         ggml_tensor * gate = ggml_new_tensor_3d(ctx, type, 512, 128, 8);
         ggml_tensor * shared_up = ggml_new_tensor_2d(ctx, type, 512, 128);
         ggml_tensor * shared_gate = ggml_new_tensor_2d(ctx, type, 512, 128);
+        ggml_set_compute_type(ctx, type_dst);
         routed = ggml_swiglu_split(ctx, ggml_mul_mat_id(ctx, gate, input_ids, ids), ggml_mul_mat_id(ctx, up, input_ids, ids));
         shared = ggml_swiglu_split(ctx, ggml_mul_mat(ctx, shared_gate, input), ggml_mul_mat(ctx, shared_up, input));
+        ggml_set_compute_type(ctx, GGML_TYPE_F32);
         return ggml_add(ctx, routed, ggml_reshape_3d(ctx, shared, 128, 1, n));
     }
 
@@ -8837,16 +8900,22 @@ struct test_moe_reduce : public test_case {
     const bool unaligned_experts;
     const bool with_expert_scale;
     const bool interleaved_views_adds;
+    const ggml_type type; // type of the experts (the MUL_MAT_ID result)
 
     test_moe_reduce(
             int64_t n_embd, int64_t n_expert_used, int64_t n_tokens,
-            bool unaligned_experts = false, bool with_expert_scale = false, bool interleaved_views_adds = false) :
+            bool unaligned_experts = false, bool with_expert_scale = false, bool interleaved_views_adds = false,
+            ggml_type type = GGML_TYPE_F32) :
         n_embd(n_embd), n_expert_used(n_expert_used), n_tokens(n_tokens),
         unaligned_experts(unaligned_experts), with_expert_scale(with_expert_scale),
-        interleaved_views_adds(interleaved_views_adds) {}
+        interleaved_views_adds(interleaved_views_adds), type(type) {}
 
     std::string vars() override {
-        return VARS_TO_STR6(n_embd, n_expert_used, n_tokens, unaligned_experts, with_expert_scale, interleaved_views_adds);
+        std::string s = VARS_TO_STR6(n_embd, n_expert_used, n_tokens, unaligned_experts, with_expert_scale, interleaved_views_adds);
+        if (type != GGML_TYPE_F32) {
+            s += "," + VAR_TO_STR(type);
+        }
+        return s;
     }
 
     std::string op_desc(ggml_tensor * t) override {
@@ -8854,18 +8923,24 @@ struct test_moe_reduce : public test_case {
         return "MOE_REDUCE";
     }
 
+    double max_nmse_err() override {
+        // BF16: the fused CUDA kernel rounds the F32 sum once, the CPU rounds every product and partial sum
+        return type == GGML_TYPE_BF16 ? 1e-4 : test_case::max_nmse_err();
+    }
+
     bool run_whole_graph() override { return true; }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * experts;
         if (unaligned_experts) {
+            const size_t ts = ggml_type_size(type);
             ggml_tensor * storage = ggml_new_tensor_1d(
-                ctx, GGML_TYPE_F32, n_embd * n_expert_used * n_tokens + 1);
+                ctx, type, n_embd * n_expert_used * n_tokens + 1);
             ggml_set_name(storage, "experts_storage");
             experts = ggml_view_3d(ctx, storage, n_embd, n_expert_used, n_tokens,
-                n_embd * sizeof(float), n_embd * n_expert_used * sizeof(float), sizeof(float));
+                n_embd * ts, n_embd * n_expert_used * ts, ts);
         } else {
-            experts = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, n_expert_used, n_tokens);
+            experts = ggml_new_tensor_3d(ctx, type, n_embd, n_expert_used, n_tokens);
         }
         ggml_set_name(experts, "experts");
         ggml_tensor * weights = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, n_expert_used, n_tokens);
@@ -8950,14 +9025,20 @@ struct test_mul_mat_add : public test_case {
     const int64_t n;
     const int64_t k;
     const mul_mat_add_mode mode;
+    const ggml_type type_dst; // type of the mat-mul results
 
-    test_mul_mat_add(ggml_type type_a, int64_t m, int64_t n, int64_t k, mul_mat_add_mode mode = MUL_MAT_ADD_MM_RES)
-        : type_a(type_a), m(m), n(n), k(k), mode(mode) {
+    test_mul_mat_add(ggml_type type_a, int64_t m, int64_t n, int64_t k, mul_mat_add_mode mode = MUL_MAT_ADD_MM_RES,
+            ggml_type type_dst = GGML_TYPE_F32)
+        : type_a(type_a), m(m), n(n), k(k), mode(mode), type_dst(type_dst) {
         GGML_ASSERT(mode != MUL_MAT_ADD_B_INPLACE || m == k);
     }
 
     std::string vars() override {
-        return VARS_TO_STR5(type_a, m, n, k, mode);
+        std::string s = VARS_TO_STR5(type_a, m, n, k, mode);
+        if (type_dst != GGML_TYPE_F32) {
+            s += "," + VAR_TO_STR(type_dst);
+        }
+        return s;
     }
 
     std::string op_desc(ggml_tensor * t) override {
@@ -8976,6 +9057,7 @@ struct test_mul_mat_add : public test_case {
         ggml_tensor * b   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
         ggml_tensor * res = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, m, mode == MUL_MAT_ADD_ROW ? 1 : n);
 
+        ggml_set_compute_type(ctx, type_dst);
         ggml_tensor * mm  = ggml_mul_mat(ctx, a, b);
         ggml_tensor * out = nullptr;
         switch (mode) {
@@ -8991,6 +9073,7 @@ struct test_mul_mat_add : public test_case {
                     out = ggml_add(ctx, mm2, mm);
                 } break;
         }
+        ggml_set_compute_type(ctx, GGML_TYPE_F32);
         ggml_set_name(out, "out");
 
         return out;
@@ -9013,13 +9096,14 @@ struct test_mul_mat_fusion : public test_case {
     std::array<int64_t, 2> batch_dims;
     const bool skip; // set some ids to a negative value (only for use_id)
     const ggml_type type_b; // type of the input
+    const ggml_type type_dst; // type of the mat-mul results
 
     test_mul_mat_fusion(ggml_type type, ggml_glu_op op, int64_t m, int64_t n, int64_t k,
                         bool use_id = false, int n_mats = 1, int n_used = 1, bool b = false, bool with_bias = false, bool with_gate = true,
                         bool with_lane_scale = false, std::array<int64_t, 2> batch_dims = {4, 2}, bool skip = false,
-                        ggml_type type_b = GGML_TYPE_F32)
+                        ggml_type type_b = GGML_TYPE_F32, ggml_type type_dst = GGML_TYPE_F32)
     : type(type), glu_op(op), m(m), n(n), k(k), use_id(use_id), n_mats(n_mats), n_used(n_used), b(b), with_bias(with_bias),
-        with_gate(with_gate), with_lane_scale(with_lane_scale), batch_dims(batch_dims), skip(skip), type_b(type_b) {
+        with_gate(with_gate), with_lane_scale(with_lane_scale), batch_dims(batch_dims), skip(skip), type_b(type_b), type_dst(type_dst) {
         if (use_id) {
             GGML_ASSERT(n_used <= n_mats);
         }
@@ -9029,6 +9113,9 @@ struct test_mul_mat_fusion : public test_case {
         std::string s = VARS_TO_STR14(type, glu_op, m, n, k, use_id, n_mats, n_used, b, with_bias, with_gate, with_lane_scale, batch_dims, skip);
         if (type_b != GGML_TYPE_F32) {
             s += "," + VAR_TO_STR(type_b);
+        }
+        if (type_dst != GGML_TYPE_F32) {
+            s += "," + VAR_TO_STR(type_dst);
         }
         return s;
     }
@@ -9078,6 +9165,13 @@ struct test_mul_mat_fusion : public test_case {
     }
 
     ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
+        ggml_set_compute_type(ctx, type_dst);
+        ggml_tensor * out = build_graph_impl(ctx, ctx_weights);
+        ggml_set_compute_type(ctx, GGML_TYPE_F32);
+        return out;
+    }
+
+    ggml_tensor * build_graph_impl(ggml_context * ctx, ggml_context * ctx_weights) {
         if (!use_id) {
             const int              channels = batch_dims[0];
             const int              samples  = batch_dims[1];
@@ -13408,6 +13502,32 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16,     GGML_TYPE_BF16, 8, 2, false, 256,  4, 1024));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16,      GGML_TYPE_BF16, 8, 2, false, 256, 32, 1024));
 
+    // BF16 result (ggml_set_compute_type): MMVF for BF16 weights (also a transposed vector), MMF, MMVQ, few-row MMQ, MMQ (stream-k fixup, batched and with a partial row tile; native FP4)
+    test_cases.emplace_back(new test_mul_mat_compute_type(GGML_TYPE_BF16, GGML_TYPE_BF16,  GGML_TYPE_BF16, 256,  3, 4096));
+    test_cases.emplace_back(new test_mul_mat_compute_type(GGML_TYPE_BF16, GGML_TYPE_F32,   GGML_TYPE_BF16,   1, 16, 2048));
+    test_cases.emplace_back(new test_mul_mat_compute_type(GGML_TYPE_BF16, GGML_TYPE_F16,   GGML_TYPE_F32,  256,  8, 4096));
+    test_cases.emplace_back(new test_mul_mat_compute_type(GGML_TYPE_BF16, GGML_TYPE_Q4_0,  GGML_TYPE_BF16, 256,  3, 4096));
+    test_cases.emplace_back(new test_mul_mat_compute_type(GGML_TYPE_BF16, GGML_TYPE_Q4_K,  GGML_TYPE_BF16, 256,  8, 4096));
+    test_cases.emplace_back(new test_mul_mat_compute_type(GGML_TYPE_BF16, GGML_TYPE_Q8_0,  GGML_TYPE_BF16, 256, 64, 4096, {2, 3}));
+    test_cases.emplace_back(new test_mul_mat_compute_type(GGML_TYPE_BF16, GGML_TYPE_Q8_0,  GGML_TYPE_BF16, 1000, 64, 4096));
+    test_cases.emplace_back(new test_mul_mat_compute_type(GGML_TYPE_BF16, GGML_TYPE_NVFP4, GGML_TYPE_BF16, 256, 64, 4096));
+    // BF16 result: cuBLAS with BF16 compute (single, strided batched, broadcast batched), with F16 and F32 compute (FP8 cuBLASLt: the fused weight-scale case below)
+    test_cases.emplace_back(new test_mul_mat_compute_type(GGML_TYPE_BF16, GGML_TYPE_BF16,  GGML_TYPE_F32,  256, 64, 1024));
+    test_cases.emplace_back(new test_mul_mat_compute_type(GGML_TYPE_BF16, GGML_TYPE_BF16,  GGML_TYPE_F32,   64, 32,  256, {2, 3}));
+    test_cases.emplace_back(new test_mul_mat_compute_type(GGML_TYPE_BF16, GGML_TYPE_BF16,  GGML_TYPE_F32,   64, 32,  256, {2, 1}, {2, 1}));
+    test_cases.emplace_back(new test_mul_mat_compute_type(GGML_TYPE_BF16, GGML_TYPE_F16,   GGML_TYPE_BF16, 256, 64, 1024));
+    test_cases.emplace_back(new test_mul_mat_compute_type(GGML_TYPE_BF16, GGML_TYPE_F32,   GGML_TYPE_F32,  256, 64, 1024));
+    // BF16 result of a Hadamard-hinted MUL_MAT: the FWHT writes only F32, so the general path runs
+    test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 128, 4, 128, {1, 1}, {1, 1}, GGML_TYPE_BF16));
+    // BF16 result of MUL_MAT_ID: MMVQ (1 and 4 tokens), few-row MMQ, MMQ, MMVF (BF16 experts), MMF and the fallback that sorts src1 by expert
+    test_cases.emplace_back(new test_mul_mat_id_compute_type(GGML_TYPE_BF16, GGML_TYPE_Q4_K, GGML_TYPE_BF16,  8, 2, false, 256,  1, 1024));
+    test_cases.emplace_back(new test_mul_mat_id_compute_type(GGML_TYPE_BF16, GGML_TYPE_Q4_K, GGML_TYPE_BF16,  8, 2, false, 256,  4, 1024));
+    test_cases.emplace_back(new test_mul_mat_id_compute_type(GGML_TYPE_BF16, GGML_TYPE_Q4_K, GGML_TYPE_BF16, 16, 4, false,  72, 13, 2048));
+    test_cases.emplace_back(new test_mul_mat_id_compute_type(GGML_TYPE_BF16, GGML_TYPE_Q4_K, GGML_TYPE_BF16,  8, 2, false, 256, 32, 1024));
+    test_cases.emplace_back(new test_mul_mat_id_compute_type(GGML_TYPE_BF16, GGML_TYPE_BF16, GGML_TYPE_BF16,  8, 2, false, 256,  4, 1024));
+    test_cases.emplace_back(new test_mul_mat_id_compute_type(GGML_TYPE_BF16, GGML_TYPE_F16,  GGML_TYPE_F32,   8, 2, false, 256, 32, 1024));
+    test_cases.emplace_back(new test_mul_mat_id_compute_type(GGML_TYPE_BF16, GGML_TYPE_F16,  GGML_TYPE_BF16,  8, 2, false, 256, 32, 1024));
+
     // token-tile boundary coverage. With n_used == n_mats every token routes to every expert, so
     // each expert receives exactly n rows, with no dependence on the random draw. mul_mm_id is used
     // from 32 tokens up: n = 32, 33, 47, 48, 49 reach it, leaving a last tile of 32, 1, 15, 16 and
@@ -14784,6 +14904,23 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_BF16,   GGML_GLU_OP_SWIGLU,         1,    32,  256, false, 1, 1, false, false, true, false, { 1, 1 }, false, GGML_TYPE_BF16));
     test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_NVFP4,  GGML_GLU_OP_SWIGLU,       150,  6912,  256, false, 1, 1, false, false, true, true,  { 2, 3 }, false, GGML_TYPE_BF16));
     test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_NVFP4,  GGML_GLU_OP_SWIGLU,       150,  2560,  256, false, 1, 1, false, false, false, true, { 1, 1 }, false, GGML_TYPE_BF16));
+    // BF16 result: fused gate/up + GLU on MMVQ (with bias), MMVF and MMQ (NVFP4 with weight scales); NVFP4 weight scale on MMVQ and MMQ, FP8 one on cuBLASLt
+    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K,     GGML_GLU_OP_SWIGLU,   1,   32, 256, false, 1, 1, false, true,  true,  false, { 1, 1 }, false, GGML_TYPE_BF16, GGML_TYPE_BF16));
+    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_BF16,     GGML_GLU_OP_SWIGLU,   1,   32, 256, false, 1, 1, false, false, true,  false, { 1, 1 }, false, GGML_TYPE_BF16, GGML_TYPE_BF16));
+    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_NVFP4,    GGML_GLU_OP_SWIGLU, 150, 6912, 256, false, 1, 1, false, false, true,  true,  { 2, 3 }, false, GGML_TYPE_BF16, GGML_TYPE_BF16));
+    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_NVFP4,    GGML_GLU_OP_SWIGLU,   1, 2560, 256, false, 1, 1, false, false, false, true,  { 1, 1 }, false, GGML_TYPE_BF16, GGML_TYPE_BF16));
+    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_NVFP4,    GGML_GLU_OP_SWIGLU, 150, 2560, 256, false, 1, 1, false, false, false, true,  { 1, 1 }, false, GGML_TYPE_BF16, GGML_TYPE_BF16));
+    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_F8_E4M3,  GGML_GLU_OP_SWIGLU,  16,  256, 256, false, 1, 1, false, false, false, true,  { 1, 1 }, false, GGML_TYPE_BF16, GGML_TYPE_BF16));
+    // BF16 result of MUL_MAT_ID: fused gate/up + GLU on MMVQ, MMVF (BF16 experts) and MMQ (broadcast input)
+    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K,     GGML_GLU_OP_SWIGLU,   1,  256, 256, true, 16, 8, true,  false, true, false, { 1, 1 }, false, GGML_TYPE_BF16, GGML_TYPE_BF16));
+    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_BF16,     GGML_GLU_OP_SWIGLU,   1, 1024, 256, true, 16, 8, false, false, true, false, { 1, 1 }, false, GGML_TYPE_BF16, GGML_TYPE_BF16));
+    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K,     GGML_GLU_OP_SWIGLU,  17, 5120, 256, true, 16, 8, true,  false, true, false, { 4, 2 }, false, GGML_TYPE_BF16, GGML_TYPE_BF16));
+    // BF16 result plus an F32 residual (fused into MMVQ/MMVF) and plus another BF16 result (not fused, the kernels read an F32 bias)
+    test_cases.emplace_back(new test_mul_mat_add(GGML_TYPE_Q4_0, 1000, 1, 1024, MUL_MAT_ADD_MM_RES, GGML_TYPE_BF16));
+    test_cases.emplace_back(new test_mul_mat_add(GGML_TYPE_BF16, 1000, 1, 1024, MUL_MAT_ADD_MM_RES, GGML_TYPE_BF16));
+    test_cases.emplace_back(new test_mul_mat_add(GGML_TYPE_Q4_0, 1000, 1, 1024, MUL_MAT_ADD_MM_MM,  GGML_TYPE_BF16));
+    // BF16 results of the routed and the shared expert, fused into one MMVQ launch
+    test_cases.emplace_back(new test_mul_mat_id_shared(GGML_TYPE_Q4_K, 1, GGML_TYPE_BF16));
 
     for (int64_t n_tok : {1, 4, 16}) {
         test_cases.emplace_back(new test_moe_router_prec_f32(128, 64, n_tok, 8));
@@ -14847,6 +14984,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_moe_reduce(63,   12, 33, true,  true, true));
     test_cases.emplace_back(new test_moe_reduce(2048, 15, 40, false, true));
     test_cases.emplace_back(new test_moe_reduce(2048, 16, 32, false, true));
+    // BF16 experts (a BF16 MUL_MAT_ID result), with and without the expert scale
+    test_cases.emplace_back(new test_moe_reduce(2048, 8, 128, false, false, false, GGML_TYPE_BF16));
+    test_cases.emplace_back(new test_moe_reduce(2048, 8, 128, false, true,  false, GGML_TYPE_BF16));
 
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 1, 1));
     for (bool keep : { true, false }) {

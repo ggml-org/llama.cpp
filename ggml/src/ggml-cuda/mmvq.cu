@@ -888,7 +888,7 @@ static __global__ void mul_mat_vec_q(
         return;
     }
 
-    dst += sample_dst*stride_sample_dst + channel_dst*stride_channel_dst + row0;
+    dst = ggml_cuda_dst_ptr(dst, sample_dst*stride_sample_dst + channel_dst*stride_channel_dst + row0, fusion.dst_bf16);
 
     // sum up partial sums and write back result
 #pragma unroll
@@ -943,7 +943,7 @@ static __global__ void mul_mat_vec_q(
                         }
                     }
                 }
-                dst[j*stride_col_dst + i] = result;
+                ggml_cuda_store_dst(dst, j*stride_col_dst + i, result, fusion.dst_bf16);
             }
         }
     }
@@ -1104,7 +1104,7 @@ static __global__ void mul_mat_vec_q_moe(
                 }
             }
         }
-        dst[channel_dst*stride_channel_dst + token_idx*stride_col_dst + row0 + threadIdx.x] = result;
+        ggml_cuda_store_dst(dst, channel_dst*stride_channel_dst + token_idx*stride_col_dst + row0 + threadIdx.x, result, fusion.dst_bf16);
     }
 
     if constexpr (!has_fusion) {
@@ -1539,7 +1539,7 @@ void ggml_cuda_mul_mat_vec_q(
         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
         const ggml_cuda_mm_fusion_args_host * fusion) {
     GGML_ASSERT(        src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16);
-    GGML_ASSERT(        dst->type  == GGML_TYPE_F32);
+    GGML_ASSERT(        dst->type  == GGML_TYPE_F32 || dst->type  == GGML_TYPE_BF16);
     GGML_ASSERT(!ids || ids->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
 
     GGML_TENSOR_BINARY_OP_LOCALS;
@@ -1558,9 +1558,10 @@ void ggml_cuda_mul_mat_vec_q(
     GGML_ASSERT(!ids || ne12 <= MMVQ_MAX_BATCH_SIZE);
 
     const int32_t *  ids_d = ids ? (const int32_t *)  ids->data : nullptr;
-    float         *  dst_d =       (float         *)  dst->data;
+    float         *  dst_d =       (float         *)  dst->data; // nv_bfloat16 if fusion_local.dst_bf16
 
     ggml_cuda_mm_fusion_args_device fusion_local{};
+    fusion_local.dst_bf16 = dst->type == GGML_TYPE_BF16;
 
     if (fusion) {
         const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
@@ -1579,7 +1580,7 @@ void ggml_cuda_mul_mat_vec_q(
             GGML_ASSERT(ggml_is_contiguous(fusion->shared_up) && ggml_is_contiguous(fusion->shared_gate));
             GGML_ASSERT(fusion->shared_up->ne[0] == ne00 && fusion->shared_up->ne[1] == ne01);
             GGML_ASSERT(fusion->shared_up->nb[1] == nb01 && ggml_is_matrix(fusion->shared_up));
-            GGML_ASSERT(fusion->shared_dst->type == GGML_TYPE_F32 && ggml_is_contiguous(fusion->shared_dst));
+            GGML_ASSERT(fusion->shared_dst->type == dst->type && ggml_is_contiguous(fusion->shared_dst));
             GGML_ASSERT(fusion->shared_dst->ne[0] == ne0 && fusion->shared_dst->ne[1] == ne2);
             fusion_local.shared_up   = fusion->shared_up->data;
             fusion_local.shared_gate = fusion->shared_gate->data;

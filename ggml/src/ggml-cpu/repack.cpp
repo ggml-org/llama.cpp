@@ -5221,7 +5221,7 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
             if (op->src[1]->buffer && !ggml_backend_buft_is_host(op->src[1]->buffer->buft)) {
                 return false;
             }
-            if (op->src[1]->type == GGML_TYPE_F32) {
+            if (op->src[1]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) {
                 return true;
             }
             //if (op->src[1]->type == GGML_TYPE_Q8_0) {
@@ -5237,7 +5237,7 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
             if (op->src[1]->buffer && !ggml_backend_buft_is_host(op->src[1]->buffer->buft)) {
                 return false;
             }
-            if (op->src[1]->type == GGML_TYPE_F32) {
+            if (op->src[1]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) {
                 return true;
             }
             //if (op->src[1]->type == GGML_TYPE_Q8_0) {

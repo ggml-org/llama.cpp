@@ -108,7 +108,7 @@ bool ggml_cuda_mul_mat_fp8(
         const ggml_tensor * weight_scale) {
     const int cc = ggml_cuda_info().devices[ctx.device].cc;
     if (!fp8_mma_hardware_available(cc) || src0->type != GGML_TYPE_F8_E4M3 || (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_BF16) ||
-            dst->type != GGML_TYPE_F32 || !ggml_is_contiguous(dst) || src0->ne[0] % 16 != 0 || src0->ne[1] % 16 != 0 ||
+            (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_BF16) || !ggml_is_contiguous(dst) || src0->ne[0] % 16 != 0 || src0->ne[1] % 16 != 0 ||
             src0->nb[0] != sizeof(uint8_t) || src0->nb[1] != (size_t) src0->ne[0] || src1->nb[0] != ggml_type_size(src1->type) ||
             !ggml_cuda_is_aligned(src0, 16) || !ggml_cuda_is_aligned(dst, 16)) {
         return false;
@@ -176,7 +176,7 @@ bool ggml_cuda_mul_mat_fp8(
 
     CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&a_desc, CUDA_R_8F_E4M3, ne00, ne01, ne00));
     CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&b_desc, CUDA_R_8F_E4M3, ne10, n, ne10));
-    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&d_desc, CUDA_R_32F, ne0, n, ne0));
+    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&d_desc, dst->type == GGML_TYPE_BF16 ? CUDA_R_16BF : CUDA_R_32F, ne0, n, ne0));
     if (batch_count > 1) {
         fp8_set_batch(a_desc, batch_count, stride_a);
         fp8_set_batch(b_desc, batch_count, ne10*n);
@@ -202,7 +202,7 @@ bool ggml_cuda_mul_mat_fp8(
     for (int64_t i3 = 0; i3 < n_calls; ++i3) {
         const char * a = (const char *) src0->data + (i3/r3)*nb03;
         const uint8_t * b = src1_fp8.ptr + i3*ne12*ne11*ne10;
-        float * d = (float *) ((char *) dst->data + i3*dst->nb[3]);
+        void * d = (char *) dst->data + i3*dst->nb[3];
         CUBLAS_CHECK(cublasLtMatmul(ctx.cublaslt_handle(), op_desc, &alpha, a, a_desc, b, b_desc,
             &beta, d, d_desc, d, d_desc, &heuristic.algo, nullptr, 0, stream));
     }

@@ -1212,6 +1212,9 @@ static void ggml_compute_forward_mul_mat_one_chunk(
 
     ggml_vec_dot_t const vec_dot      = type_traits_cpu[type].vec_dot;
     enum ggml_type const vec_dot_type = type_traits_cpu[type].vec_dot_type;
+    // stores a BF16 result, rounded once; an F32 result is stored by ggml_deinterleave_f32
+    ggml_from_float_t const from_float_dst = type_traits_cpu[dst->type].from_float;
+    GGML_ASSERT(dst->type == GGML_TYPE_F32 || num_rows_per_vec_dot == 1);
 
     // broadcast factors
     const int64_t r2 = ne12 / ne02;
@@ -1280,8 +1283,12 @@ static void ggml_compute_forward_mul_mat_one_chunk(
                 }
 
                 const int64_t n = MIN(iir0 + blck_0_split, ir0_end_split) - iir0;
-                float * dst0 = dst_col + iir0;
-                ggml_deinterleave_f32(dst0, dst0 + nr0_split, tmp, n, nb1 / nb0, num_rows_per_vec_dot);
+                if (dst->type == GGML_TYPE_F32) {
+                    float * dst0 = dst_col + iir0;
+                    ggml_deinterleave_f32(dst0, dst0 + nr0_split, tmp, n, nb1 / nb0, num_rows_per_vec_dot);
+                } else {
+                    from_float_dst(tmp, (char *) dst_col + iir0 * nb0, n);
+                }
             }
         }
     }
@@ -1313,8 +1320,9 @@ void ggml_compute_forward_mul_mat(
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
 
+    // the FWHT writes F32 only, a BF16 dst takes the general path
     const int32_t hint = ggml_get_op_params_i32(dst, 1);
-    if (hint == GGML_HINT_SRC0_IS_HADAMARD && !params->use_ref) {
+    if (hint == GGML_HINT_SRC0_IS_HADAMARD && !params->use_ref && dst->type == GGML_TYPE_F32) {
         ggml_compute_forward_fwht(params, dst);
         return;
     }
@@ -1346,7 +1354,8 @@ void ggml_compute_forward_mul_mat(
     GGML_ASSERT(nb10 == ggml_type_size(src1->type));
 
     // dst cannot be transposed or permuted
-    GGML_ASSERT(nb0 == sizeof(float));
+    GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_BF16);
+    GGML_ASSERT(nb0 == ggml_type_size(dst->type));
     GGML_ASSERT(nb0 <= nb1);
     GGML_ASSERT(nb1 <= nb2);
     GGML_ASSERT(nb2 <= nb3);
@@ -1516,6 +1525,10 @@ UseGgmlGemm2:;
         if ((nr0 % 2 != 0) || (ne11 % 2 != 0) || ((ir0_end - ir0_start) % 2 != 0) || ((ir1_end - ir1_start) % 2 != 0)) {
             num_rows_per_vec_dot = 1;
         }
+        // the 2-row (mmla) store de-interleaves F32 values, a BF16 dst is stored one row at a time
+        if (dst->type != GGML_TYPE_F32) {
+            num_rows_per_vec_dot = 1;
+        }
         ggml_compute_forward_mul_mat_one_chunk(params, dst, src0->type, num_rows_per_vec_dot, ir0_start, ir0_end, ir1_start, ir1_end);
 
         if (nth >= nchunk0 * nchunk1) {
@@ -1557,6 +1570,8 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
 
     ggml_vec_dot_t const vec_dot      = type_traits_cpu[type].vec_dot;
     enum ggml_type const vec_dot_type = type_traits_cpu[type].vec_dot_type;
+    // stores the result: F32 is copied, BF16 is rounded once
+    ggml_from_float_t const from_float_dst = type_traits_cpu[dst->type].from_float;
 
     const int64_t blck_0 = 16;
     const int64_t blck_1 = 16;
@@ -1592,7 +1607,7 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
                     vec_dot(ne00, &tmp[ir0 - iir0], 0, src0_cur + ir0*nb01, 0, src1_col, 0, 1);
                 }
 
-                memcpy(&dst_col[iir0], tmp, (MIN(iir0 + blck_0, ir0_end) - iir0)*sizeof(float));
+                from_float_dst(tmp, (char *) dst_col + iir0*nb0, MIN(iir0 + blck_0, ir0_end) - iir0);
             }
         }
     }
@@ -1634,7 +1649,8 @@ static void ggml_compute_forward_mul_mat_id(
     GGML_ASSERT(nb10 == ggml_type_size(src1->type));
 
     // dst cannot be transposed or permuted
-    GGML_ASSERT(nb0 == sizeof(float));
+    GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_BF16);
+    GGML_ASSERT(nb0 == ggml_type_size(dst->type));
     GGML_ASSERT(nb0 <= nb1);
     GGML_ASSERT(nb1 <= nb2);
     GGML_ASSERT(nb2 <= nb3);
@@ -1717,7 +1733,7 @@ static void ggml_compute_forward_mul_mat_id(
                 assert(i02 == -1 || (i02 >= 0 && i02 < n_as));
 
                 if (i02 == -1) {
-                    memset((char *) dst->data + id*nb1 + iid1*nb2, 0, ne0*sizeof(float));
+                    memset((char *) dst->data + id*nb1 + iid1*nb2, 0, ne0*nb0);
                     continue;
                 }
 

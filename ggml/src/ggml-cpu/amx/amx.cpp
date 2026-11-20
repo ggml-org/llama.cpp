@@ -186,7 +186,7 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
         if (src0->ne[0] % alignment) {
             return false;
         }
-        if (src1->type != GGML_TYPE_F32) {
+        if (src1->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F32) {
             return false;
         }
         return true;
