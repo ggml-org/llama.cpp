@@ -245,7 +245,6 @@ static void rms_norm_f32(const float* x, float* dst, const int ncols,
 
     for (int col = tid; col < ncols; col += block_size) {
         if constexpr (do_multiply && pre_add) {
-            // left-to-right (scale*s)*mul matches the unfused rms_norm -> MUL chain exactly
             const float s = x[col * src_stride_col] + add[col];
             if constexpr (store_pre_add) {
                 // same f32 sum the standalone GGML_OP_ADD kernel would write - bit-identical for
