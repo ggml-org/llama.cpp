@@ -381,6 +381,7 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate_exps_s   = nullptr;
     struct ggml_tensor * ffn_down_exps_s   = nullptr;
     struct ggml_tensor * ffn_up_exps_s     = nullptr;
+    struct ggml_tensor * ffn_gate_up_exps_s = nullptr;
 
     // ff MoE latent proj
     struct ggml_tensor * ffn_latent_down = nullptr;
