@@ -49,7 +49,13 @@ Next: llama.app's model page.
 
 The constants, enums and code helpers the components use are entry points too, for an app that shows the same things:
 `@ggml-org/llama-ui/constants` (the shared classes and code-block constants), `@ggml-org/llama-ui/enums` (`ColorMode`,
-`TooltipSide`, `BooleanString`) and `@ggml-org/llama-ui/code` (`highlightCode`, `trimCodePadding`). The model data
+`TooltipSide`, `BooleanString`) and `@ggml-org/llama-ui/code` (`highlightCode`, `trimCodePadding`,
+`loadHighlightLanguages`, `isHighlightLanguageLoaded`, `resolveHighlightLanguage`, `getLoadedHighlightLanguages`).
+highlight.js loads one language at a time, each its own chunk, so none is in an app's first load: until a language
+has loaded, `highlightCode` returns the code escaped as plain text, and a `$derived` or `$effect` that called it runs
+again once it has. A language loads with the ones it embeds (CSS and JavaScript inside HTML); auto-detection picks
+among lowlight's common languages. Await `loadHighlightLanguages([...])` where highlighted output is needed at once.
+`scripts/generate-highlight-languages.mjs` regenerates the language table after a highlight.js or lowlight update. The model data
 (constants, enums, formatters and types) comes with the Model UI at `@ggml-org/llama-ui/models`.
 
 ## How the apps in this repo use it
