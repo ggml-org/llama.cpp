@@ -1499,6 +1499,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_gemm_noshuffle_q4_0_f32_coopmat = nullptr;
     cl_kernel kernel_gemm_noshuffle_q5_0_f32_coopmat = nullptr;
     cl_kernel kernel_gemm_noshuffle_q8_0_f32_coopmat = nullptr;
+    cl_kernel kernel_gemm_noshuffle_q4_k_f32_coopmat = nullptr;
     cl_kernel kernel_gemm_coopk_q4_0_q8_1_dp4a_c4 = nullptr;
     cl_kernel kernel_gemm_coopk_q4_0_q8_1_dp4a_c2 = nullptr;
     int       nsg_coopk_dp4a_q4_0  = 8;
@@ -2057,6 +2058,23 @@ static void load_cl_kernels_coopmat(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), opts, false);
         if (prog) {
             CL_CHECK((backend_ctx->kernel_gemm_noshuffle_q8_0_f32_coopmat = clCreateKernel(prog, "kernel_gemm_noshuffle_q8_0_f32_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+
+    // gemm_noshuffle_q4_k_f32_coopmat
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_noshuffle_q4_k_f32_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_noshuffle_q4_k_f32_coopmat.cl");
+#endif
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->kernel_gemm_noshuffle_q4_k_f32_coopmat = clCreateKernel(prog, "kernel_gemm_noshuffle_q4_k_f32_coopmat", &err), err));
             CL_CHECK(clReleaseProgram(prog));
             GGML_LOG_CONT(".");
         }
@@ -11997,7 +12015,8 @@ inline bool use_q4_k_bin_kernels(const ggml_backend_opencl_context *backend_ctx,
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     if (!backend_ctx->kernel_gemv_noshuffle_q4_k_f32_32b_trans ||
         !(backend_ctx->kernel_gemm_noshuffle_q4_k_f32_32b_trans_ila_a8_bin ||
-          backend_ctx->kernel_gemm_noshuffle_q4_k_f32_32b_trans_ila_a7_bin)) {
+          backend_ctx->kernel_gemm_noshuffle_q4_k_f32_32b_trans_ila_a7_bin ||
+          backend_ctx->kernel_gemm_noshuffle_q4_k_f32_coopmat)) {
         return false;
     }
     // bin kernels require ne2 == 1 and ne3 == 1 for weights
@@ -28454,6 +28473,11 @@ static void ggml_cl_mul_mat_q4_k_f32_adreno(ggml_backend_t backend, const ggml_t
     const bool use_mc3 = q4k_mc3 && (ne1 == 3) && (ne01 < 32768);
 
     const bool use_bin = use_q4_k_bin_kernels(backend_ctx, src0);
+
+    if (use_bin && ggml_cl_mul_mat_coopmat(backend_ctx, backend_ctx->kernel_gemm_noshuffle_q4_k_f32_coopmat,
+            { extra0_q4_k->q, extra0_q4_k->s, extra0_q4_k->d, extra0_q4_k->dm }, src1, dst, K, M, N)) {
+        return;
+    }
 
     if (use_bin) {
         if (use_mc3) {
