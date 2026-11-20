@@ -262,9 +262,9 @@ def benchmark(
     plt.ylabel("Time to first token [ms]")
     plt.savefig("prompt_time.png", dpi=240)
 
-    bin_max = int(np.ceil(token_t_last)) + 1
+    bin_max = np.ceil(token_t_last) + 1
     plt.figure()
-    plt.hist(token_t, np.linspace(0, bin_max, bin_max, endpoint=False).tolist())
+    plt.hist(token_t, np.linspace(0, bin_max, int(bin_max), endpoint=False).tolist())
     plt.xlim(0, bin_max + 1)
     plt.title(name or "")
     plt.xlabel("Time [s]")
