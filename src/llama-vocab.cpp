@@ -454,10 +454,11 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                 break;
             case LLAMA_VOCAB_PRE_TYPE_MAXWELL_MOE:
                 regex_exprs = {
-                    // tokenizer.json uses a split sequence: newline, Han, SEA scripts, then the o200k rule.
-                    // Han and SEA runs already split identically under the o200k rule, so only the newline
-                    // split is added here.
+                    // tokenizer.json split sequence: newline, Han (with optional prefix), SEA scripts, then the o200k rule.
+                    // The Han and SEA stages use custom implementations in unicode.cpp.
                     "\\n",
+                    "[^\\p{L}\\p{N}]?[\\p{Han}]+",
+                    "[\\u0E00-\\u0E7F\\u0E80-\\u0EFF\\u1000-\\u109F\\u1780-\\u17FF]+",
                     // o200k rule from tokenizer.json, with the inline (?i:..) suffixes spelled out
                     "[^\\p{L}\\p{N}]?((?=[\\p{L}\\p{M}])([^a-z]))*((?=[\\p{L}\\p{M}])([^A-Z]))+(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|[^\\p{L}\\p{N}]?((?=[\\p{L}\\p{M}])([^a-z]))+((?=[\\p{L}\\p{M}])([^A-Z]))*(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
