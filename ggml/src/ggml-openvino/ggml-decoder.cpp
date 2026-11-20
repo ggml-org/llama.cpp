@@ -1594,7 +1594,10 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
     else {
         input_shape = ov::PartialShape{get_shape(input)};
     }
-    if (dynamic_dim_index != -1) {
+    // A static graph (NPU) keeps the fixed token count set above; only a split static graph, whose parts are
+    // fed by other backends, marks the dimension dynamic. Without this the token dimension of inp_tokens becomes
+    // dynamic in the NPU graph (and, for example, the GATED_DELTA_NET pad masking fails).
+    if (dynamic_dim_index != -1 && (!m_is_static || m_model_is_splitted)) {
         input_shape[3 - dynamic_dim_index] = -1;
     }
     if (op->op == GGML_OP_SOFT_MAX && op->src[1] != nullptr && op->src[1]->op == GGML_OP_NONE &&
