@@ -38,8 +38,6 @@ env:
 
 jobs:
   ctest:
-    continue-on-error: true
-
     strategy:
       matrix:
         include:
