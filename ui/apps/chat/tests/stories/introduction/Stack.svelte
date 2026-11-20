@@ -5,7 +5,7 @@
 	dashed, dimmed slot for the other apps anyone can build on Llama UI.
 -->
 <div class="stack">
-	<div class="block chat card-surface rounded-card">
+	<div class="block chat card-surface rounded-xl">
 		<span class="n">03</span>
 
 		<h3>Llama Chat</h3>
@@ -13,19 +13,19 @@
 		<p>The app, built from Llama UI</p>
 	</div>
 
-	<div class="block apps rounded-card">
+	<div class="block apps rounded-xl">
 		<h3>Other apps</h3>
 
 		<p>Yours, built on Llama UI</p>
 	</div>
 
-	<div class="block comms card-surface rounded-card">
+	<div class="block comms card-surface rounded-xl">
 		<h3>Communications</h3>
 
 		<p>Posts, store screenshots, link previews and swag, made from the brand and the app</p>
 	</div>
 
-	<div class="block ui card-surface rounded-card">
+	<div class="block ui card-surface rounded-xl">
 		<span class="n">02</span>
 
 		<h3>Llama UI</h3>
@@ -33,7 +33,7 @@
 		<p>The components and their tokens</p>
 	</div>
 
-	<div class="block brand card-surface rounded-card">
+	<div class="block brand card-surface rounded-xl">
 		<span class="n">01</span>
 
 		<!-- the lockup glyph, U+E002: Llama Sans's capital icon with the gap before the name built in -->

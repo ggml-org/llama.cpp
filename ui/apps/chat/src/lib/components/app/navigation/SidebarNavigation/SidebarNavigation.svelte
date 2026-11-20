@@ -568,7 +568,7 @@
 			'h-dvh md:h-[calc(100dvh-1.125rem)]',
 			// phone: it stays put under the page, which slides aside to uncover it
 			isOnMobile && 'bg-(--sidebar-reveal-bg)',
-			'md:rounded-container',
+			'md:rounded-2xl',
 			'flex flex-col justify-between',
 			// desktop only: on a phone the background follows the reveal frame by frame
 			'md:transition-[width,padding,margin,background-color,box-shadow,backdrop-filter] md:duration-200 md:ease-out',

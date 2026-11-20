@@ -22,7 +22,7 @@
 					<figure class="m-0 flex flex-col gap-2">
 						<div
 							style:background-color="var(--{token.name})"
-							class="h-14 rounded-control border border-border"
+							class="h-14 rounded-md border border-border"
 						></div>
 
 						<figcaption class="flex flex-col gap-0.5 font-mono text-caption leading-4">

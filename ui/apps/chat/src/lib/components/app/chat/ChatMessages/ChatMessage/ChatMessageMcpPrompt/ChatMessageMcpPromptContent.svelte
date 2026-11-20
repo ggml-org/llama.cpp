@@ -146,7 +146,7 @@
 
 	{#if loadError}
 		<Card
-			class="relative overflow-hidden rounded-container border border-destructive/50 bg-destructive/10 backdrop-blur-md"
+			class="relative overflow-hidden rounded-2xl border border-destructive/50 bg-destructive/10 backdrop-blur-md"
 		>
 			<div
 				class="overflow-y-auto {paddingClass}"
@@ -157,7 +157,7 @@
 		</Card>
 	{:else if isLoading}
 		<Card
-			class="relative overflow-hidden rounded-container border border-purple-200 bg-purple-500/10 px-1 py-2 backdrop-blur-md dark:border-purple-800 dark:bg-purple-500/20"
+			class="relative overflow-hidden rounded-2xl border border-purple-200 bg-purple-500/10 px-1 py-2 backdrop-blur-md dark:border-purple-800 dark:bg-purple-500/20"
 		>
 			<div
 				class="overflow-y-auto {paddingClass}"
@@ -174,7 +174,7 @@
 		</Card>
 	{:else if hasContent}
 		<Card
-			class="relative overflow-hidden rounded-container border border-purple-200 bg-purple-500/10 py-0 text-foreground backdrop-blur-md dark:border-purple-800 dark:bg-purple-500/20"
+			class="relative overflow-hidden rounded-2xl border border-purple-200 bg-purple-500/10 py-0 text-foreground backdrop-blur-md dark:border-purple-800 dark:bg-purple-500/20"
 		>
 			<div
 				class="overflow-y-auto {paddingClass}"

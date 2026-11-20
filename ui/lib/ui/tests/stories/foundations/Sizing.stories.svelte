@@ -40,7 +40,7 @@
 				{#each heights as height (height.name)}
 					<div class="flex flex-col items-center gap-2">
 						<div
-							class="flex w-20 items-center justify-center rounded-control border border-border bg-muted {height.name}"
+							class="flex w-20 items-center justify-center rounded-md border border-border bg-muted {height.name}"
 						></div>
 
 						<span class="font-mono text-caption text-muted-foreground">{height.name}</span>

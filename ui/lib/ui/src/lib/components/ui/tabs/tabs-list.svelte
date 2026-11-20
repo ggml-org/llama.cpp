@@ -10,7 +10,7 @@
 		},
 		variants: {
 			variant: {
-				default: 'gap-0.5 rounded-panel bg-(--surface-muted) p-0.5 shadow-(--elevation-inset)',
+				default: 'gap-0.5 rounded-lg bg-(--surface-muted) p-0.5 shadow-(--elevation-inset)',
 				line: 'gap-1 bg-transparent'
 			}
 		}
@@ -160,7 +160,7 @@
 			'pointer-events-none absolute top-0 left-0',
 			variant === 'line'
 				? 'rounded-full bg-(--fg-default)'
-				: 'rounded-control bg-(--surface-lifted) shadow-(--elevation-control)',
+				: 'rounded-md bg-(--surface-lifted) shadow-(--elevation-control)',
 			!indicator && 'hidden'
 		)}
 		data-slot="tabs-indicator"

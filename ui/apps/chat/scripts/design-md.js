@@ -38,7 +38,7 @@ const TYPE_ROLE = /^--text-([a-z]+(?:-[a-z]+)*)$/;
 const DEFAULT_WEIGHT = '400';
 // code takes the body-sm role in the mono stack (see `:where(code, pre, kbd, samp)` in theme.css)
 const CODE_ROLE = 'body-sm';
-// Tailwind's own `rounded-full`, for lamps, avatars and round buttons; the other corners are roles in semantic.css
+// Tailwind's own `rounded-full`, for lamps, avatars and round buttons; the other corners are the scale in theme.css
 const ROUNDED_FULL = '9999px';
 // the sections this script owns, in the order they appear in the front matter; the next one is written by hand
 const SECTIONS = ['colors', 'typography', 'rounded'];
@@ -267,11 +267,17 @@ function build() {
 
 	/** @type {[string, string][]} */
 	const rounded = [];
+	// the corner scale is computed from --radius: `calc(var(--radius) + 4px)`, with 1rem as 16px
+	const baseRadius = parseFloat(theme.get(':root')?.get('--radius') ?? '') * 16;
 
-	for (const [name, value] of inline) {
-		const role = /^--radius-([a-z-]+)$/.exec(name)?.[1];
+	for (const [name, value] of theme.get('@theme inline') ?? []) {
+		const step = /^--radius-([a-z0-9]+)$/.exec(name)?.[1];
+		const offset = /^calc\(var\(--radius\) ([+-]) ([\d.]+)px\)$/.exec(value);
 
-		if (role) rounded.push([role, length(value)]);
+		if (!step) continue;
+
+		if (offset) rounded.push([step, `${baseRadius + Number(offset[1] + offset[2])}px`]);
+		else if (value === 'var(--radius)') rounded.push([step, `${baseRadius}px`]);
 	}
 
 	rounded.push(['full', ROUNDED_FULL]);

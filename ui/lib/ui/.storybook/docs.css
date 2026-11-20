@@ -57,7 +57,7 @@
 
 	/* a note that stands out from the running text: a quiet panel with the accent on its edge */
 	& :where(.callout) {
-		@apply my-6 rounded-panel border-l-2 border-(--art-cinder) bg-muted px-5 py-4;
+		@apply my-6 rounded-lg border-l-2 border-(--art-cinder) bg-muted px-5 py-4;
 
 		& > :where(p) {
 			@apply my-0;
@@ -70,11 +70,11 @@
 
 	/* inline code only, with a selector that outranks the code the Markdown block renders */
 	& :not(pre) > code {
-		@apply rounded-control border-0 bg-(--surface-code) px-1 py-0.5 font-mono text-[0.875em] text-(--fg-code);
+		@apply rounded-md border-0 bg-(--surface-code) px-1 py-0.5 font-mono text-[0.875em] text-(--fg-code);
 	}
 
 	& :where(pre) {
-		@apply overflow-x-auto rounded-panel bg-(--surface-code) p-4 text-body-sm;
+		@apply overflow-x-auto rounded-lg bg-(--surface-code) p-4 text-body-sm;
 	}
 
 	& :where(table) {

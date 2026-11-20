@@ -90,9 +90,11 @@
 	--sheen-start: var(--white-a20);
 	--text-shadow-engraved: 0 1px 0 var(--white-a85);
 
-	/* elevation: smooth stacks (a few soft layers rather than one hard one) that reach no further than upstream's
-	   Tailwind shadows do: a surface about 20px, like shadow-lg, a raised one about 38px, like shadow-xl; a control
-	   keeps to three tight layers (nothing past 4px), so buttons sit close to the page. Every layer's density is
+	/* elevation: the only shadows. Smooth stacks, a few soft layers rather than one hard one: the closest the darkest
+	   and smallest, each further layer about twice the offset and blur and fainter, pulled in with a negative spread,
+	   so the shadow fades out the way light does. A surface reaches about 20px and a raised one about 38px; a control
+	   keeps to three tight layers (nothing past 4px), so buttons sit close to the page. Tailwind's own shadow sizes
+	   are not used: they would not follow the theme. Every layer's density is
 	   multiplied by --elevation-strength, which is all a theme sets: 1 in light, 5 in dark, where a shadow has to be
 	   that much denser to read on the page */
 	--elevation-strength: 1;
@@ -121,9 +123,9 @@
 	--elevation-faint:
 		0 2px 4px rgb(0 0 0 / calc(0.025 * var(--elevation-strength))),
 		0 0.5px 1.5px rgb(0 0 0 / calc(0.03 * var(--elevation-strength)));
-	/* the shade inside a recessed field */
+	/* the shade inside a recessed field, and inside a key held down */
 	--elevation-inset: inset 0 1px 2px rgb(0 0 0 / calc(0.06 * var(--elevation-strength)));
-	--elevation-pressed: inset 0 1px 2px var(--black-a12);
+	--elevation-pressed: inset 0 1px 2px rgb(0 0 0 / calc(0.08 * var(--elevation-strength)));
 	/* the hairline an elevated surface carries as the last layer of its shadow (elevated-*, matte-float), so its edge
 	   melts into the shadow instead of sitting beside it as a border that reads washed out */
 	--elevation-ring: var(--black-a5);
@@ -154,10 +156,11 @@
 	--fg-muted: var(--neutral-400);
 	--fg-on-action: var(--neutral-900);
 	--fg-code: var(--neutral-300);
-	--fg-danger: var(--red-450);
-	--fg-success: var(--green-450);
-	--fg-warning: var(--amber-250);
-	--fg-info: var(--blue-400);
+	/* on a dark page the status fills are bright enough to read as text */
+	--fg-danger: var(--fill-danger);
+	--fg-success: var(--fill-success);
+	--fg-warning: var(--fill-warning);
+	--fg-info: var(--fill-info);
 
 	--line-default: var(--white-a30);
 	--line-field: var(--white-a30);
@@ -194,33 +197,9 @@
 	--elevation-strength: 5;
 	/* on a dark surface the hairline of the light key vanishes: the control stack instead */
 	--elevation-key: var(--elevation-control);
-	--elevation-pressed: inset 0 1px 2px var(--black-a40);
 	/* a black hairline vanishes on a dark page; the ring paints on the page behind the surface, so white needs 18% to
 	   stay lighter than a raised surface's own colour */
 	--elevation-ring: var(--white-a18);
-}
-
-/*
- * Tailwind's shadow-{size} scale, smooth: each step is a few soft layers rather than one hard one, the closest the
- * darkest and smallest, each further layer about twice the offset and blur and fainter, the far ones pulled in with a
- * negative spread. Stacked like that, the shadow fades out the way light does instead of ending in a visible blur
- * edge. Each step reaches about as far as Tailwind's default for it, so the shadows stay as close as upstream's:
- * xs about 3px, sm 5px, md 10px, lg 20px, xl 38px, 2xl 64px. The elevation tokens above are built the same way.
- */
-@theme {
-	--shadow-xs: 0 0.5px 1px rgb(0 0 0 / 0.04), 0 1px 2px rgb(0 0 0 / 0.03);
-	--shadow-sm:
-		0 0.5px 1px rgb(0 0 0 / 0.04), 0 1px 2px rgb(0 0 0 / 0.04), 0 2px 4px -1px rgb(0 0 0 / 0.05);
-	--shadow-md:
-		0 1px 2px rgb(0 0 0 / 0.04), 0 2px 4px -1px rgb(0 0 0 / 0.05), 0 4px 8px -2px rgb(0 0 0 / 0.06);
-	--shadow-lg:
-		0 1px 2px rgb(0 0 0 / 0.04), 0 3px 6px -2px rgb(0 0 0 / 0.05), 0 8px 16px -4px rgb(0 0 0 / 0.07);
-	--shadow-xl:
-		0 2px 4px rgb(0 0 0 / 0.04), 0 6px 12px -3px rgb(0 0 0 / 0.06),
-		0 16px 28px -6px rgb(0 0 0 / 0.08);
-	--shadow-2xl:
-		0 4px 8px -2px rgb(0 0 0 / 0.05), 0 12px 24px -6px rgb(0 0 0 / 0.08),
-		0 28px 48px -12px rgb(0 0 0 / 0.14);
 }
 
 /* roles that do not change with the theme, exposed as Tailwind utilities */
@@ -266,16 +245,11 @@
 	--size-icon-md: 1rem;
 	--size-icon-lg: 1.25rem;
 
-	/* control heights (32, 36 and 40px) and corner roles (8, 10, 14, 16, 24 and 32px) */
+	/* control heights (32, 36 and 40px). Corners are Tailwind's rounded-sm ... rounded-4xl, one scale computed from
+	   --radius in theme.css */
 	--height-control-sm: 2rem;
 	--height-control-md: 2.25rem;
 	--height-control-lg: 2.5rem;
-	--radius-control: 0.5rem;
-	--radius-panel: 0.625rem;
-	--radius-card: 0.875rem;
-	--radius-container: 1rem;
-	--radius-surface: 1.5rem;
-	--radius-surface-lg: 2rem;
 
 	/* colours. The neutral roles are reached through shadcn's utility names (bg-background, bg-muted,
 	   text-muted-foreground, border-border: see theme.css) or as bg-(--surface-lifted); only the status roles, which

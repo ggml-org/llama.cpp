@@ -125,7 +125,7 @@
 					type="button"
 				>
 					<Card
-						class="overflow-y-auto rounded-container !border-2 !border-dashed !border-border/50 bg-muted px-3.75 py-1.5 data-[multiline]:py-2.5"
+						class="overflow-y-auto rounded-2xl !border-2 !border-dashed !border-border/50 bg-muted px-3.75 py-1.5 data-[multiline]:py-2.5"
 						data-multiline={isMultiline ? '' : undefined}
 						style="border: 2px dashed hsl(var(--line-default)); max-height: var(--max-message-height); overflow-wrap: anywhere; word-break: break-word;"
 					>

@@ -1,7 +1,8 @@
 /*
  * Tier 3: component tokens. A component has a token here only for what it decides itself: a value no
  * semantic token has, or one that only this component changes between themes. A component that takes a
- * semantic token as it is reads the semantic token, with no alias here.
+ * semantic token as it is reads the semantic token, with no alias here. A value comes from a semantic token
+ * where one fits and from a primitive where none does (the translucent blacks and whites of keys and sheens).
  * Pattern [component]-[variant]-[property]-[state]. Components read them as bg-(--token) and friends.
  */
 :root {
@@ -30,8 +31,6 @@
 	--float-panel-background-modal: var(--surface-raised);
 
 	/* buttons: primary and danger take the action tokens as they are */
-	--button-primary-seam: color-mix(in oklch, var(--fg-on-action) 25%, transparent);
-	--button-danger-seam: color-mix(in oklch, var(--fg-on-danger) 25%, transparent);
 	/* secondary and tertiary in light: a translucent shade of black rather than a white or grey fill, so the key is a
 	   step darker than whatever it sits on -- the off-white page, a white panel (the chat form, a card) or Matte's white
 	   page -- and reads the same on each. Tertiary is the fainter step */

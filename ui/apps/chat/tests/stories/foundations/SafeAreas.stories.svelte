@@ -62,7 +62,7 @@
 
 		<!-- absolute positions ignore the sheet's padding: the control takes its own offset -->
 		<span
-			class="absolute top-safe-2.5 right-2.5 flex size-8 items-center justify-center rounded-full bg-background text-caption shadow-sm"
+			class="absolute top-safe-2.5 right-2.5 flex size-8 items-center justify-center rounded-full bg-background text-caption shadow-(--elevation-control)"
 		>
 			⤡
 		</span>

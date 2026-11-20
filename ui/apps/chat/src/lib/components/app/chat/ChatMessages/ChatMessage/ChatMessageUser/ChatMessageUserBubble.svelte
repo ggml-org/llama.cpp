@@ -65,7 +65,7 @@
 
 {#if content.trim()}
 	<Card
-		class="chat-message-user-bubble max-w-4/5 overflow-y-auto rounded-container matte-sheen border-none bg-(--user-bubble-background) px-3.75 py-1.5 {textColorClass} backdrop-blur-md data-multiline:py-2.5 {cardBgClass}"
+		class="chat-message-user-bubble max-w-4/5 overflow-y-auto rounded-2xl matte-sheen border-none bg-(--user-bubble-background) px-3.75 py-1.5 {textColorClass} backdrop-blur-md data-multiline:py-2.5 {cardBgClass}"
 		data-multiline={isMultiline ? '' : undefined}
 		style="{maxHeightStyle} overflow-wrap: anywhere; word-break: break-word;"
 	>

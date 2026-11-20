@@ -29,7 +29,7 @@
 
 		<StateGalleryItem label="inset-group-surface" note="rows grouped in a glass panel">
 			<!-- shown inside a sidebar-surface, the only place it reads as intended -->
-			<div class="sidebar-surface flex h-28 flex-col justify-end rounded-container p-2">
+			<div class="sidebar-surface flex h-28 flex-col justify-end rounded-2xl p-2">
 				<div class="inset-group-surface flex flex-col gap-1 p-1 text-body-sm">
 					<span class="rounded-md px-2 py-1">Models</span>
 

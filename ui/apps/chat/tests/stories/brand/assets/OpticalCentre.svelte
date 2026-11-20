@@ -249,7 +249,7 @@
 
 				<div class="w-full sm:ml-8 sm:w-[calc((100%-3rem)/3)]">
 					<svg
-						class="block aspect-square w-full overflow-hidden rounded-card border border-border/60"
+						class="block aspect-square w-full overflow-hidden rounded-xl border border-border/60"
 						viewBox="0 0 {placement.size} {placement.size}"
 					>
 						<rect fill="#FAFAFA" height={placement.size} width={placement.size} />

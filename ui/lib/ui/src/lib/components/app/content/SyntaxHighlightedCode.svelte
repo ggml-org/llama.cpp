@@ -129,7 +129,7 @@
 
 <div
 	bind:this={scrollEl}
-	class="code-preview-wrapper min-w-0 max-w-full overflow-auto rounded-xl border shadow-xs {className}"
+	class="code-preview-wrapper min-w-0 max-w-full overflow-auto rounded-xl border shadow-(--elevation-faint) {className}"
 	onscroll={handleScrollEvent}
 	style="border-color: color-mix(in oklch, var(--line-default) 30%, transparent); background: var(--surface-code); max-height: {maxHeight}; {maxWidth
 		? `max-width: ${maxWidth};`

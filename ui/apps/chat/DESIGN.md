@@ -50,7 +50,6 @@ colors:
   amber-250: 'oklch(0.842 0.165 84)'
   amber-400: 'oklch(0.752 0.157 78)'
   amber-650: 'oklch(0.547 0.116 74)'
-  blue-400: 'oklch(0.7 0.163 255)'
   blue-450: 'oklch(0.67 0.173 256)'
   blue-550: 'oklch(0.587 0.177 256)'
   blue-650: 'oklch(0.535 0.177 256)'
@@ -69,7 +68,6 @@ colors:
   black-a5: 'oklch(0 0 0 / 0.05)'
   black-a6: 'oklch(0 0 0 / 0.06)'
   black-a8: 'oklch(0 0 0 / 0.08)'
-  black-a12: 'oklch(0 0 0 / 0.12)'
   black-a40: 'oklch(0 0 0 / 0.4)'
   black-a55: 'oklch(0 0 0 / 0.55)'
   surface-page: '{colors.neutral-25}'
@@ -147,10 +145,10 @@ colors:
   fg-muted-dark: '{colors.neutral-400}'
   fg-on-action-dark: '{colors.neutral-900}'
   fg-code-dark: '{colors.neutral-300}'
-  fg-danger-dark: '{colors.red-450}'
-  fg-success-dark: '{colors.green-450}'
-  fg-warning-dark: '{colors.amber-250}'
-  fg-info-dark: '{colors.blue-400}'
+  fg-danger-dark: '{colors.fill-danger-dark}'
+  fg-success-dark: '{colors.fill-success-dark}'
+  fg-warning-dark: '{colors.fill-warning-dark}'
+  fg-info-dark: '{colors.fill-info-dark}'
   line-default-dark: '{colors.white-a30}'
   line-field-dark: '{colors.white-a30}'
   line-control-dark: '{colors.white-a12}'
@@ -235,12 +233,13 @@ typography:
     fontWeight: 400
     lineHeight: 1.25rem
 rounded:
-  control: 0.5rem
-  panel: 0.625rem
-  card: 0.875rem
-  container: 1rem
-  surface: 1.5rem
-  surface-lg: 2rem
+  sm: 6px
+  md: 8px
+  lg: 10px
+  xl: 14px
+  2xl: 16px
+  3xl: 24px
+  4xl: 32px
   full: 9999px
 spacing:
   xs: 4px
@@ -253,7 +252,7 @@ components:
   chat-form:
     backgroundColor: '#f9f9f9'
     textColor: '{colors.fg-default}'
-    rounded: '{rounded.surface}'
+    rounded: '{rounded.3xl}'
     typography: '{typography.body}'
   chat-form-dark:
     backgroundColor: '#202020'
@@ -273,7 +272,7 @@ components:
   card:
     backgroundColor: '#f9f9f9'
     textColor: '{colors.fg-default}'
-    rounded: '{rounded.card}'
+    rounded: '{rounded.xl}'
     padding: '24px'
   card-dark:
     backgroundColor: '#202020'
@@ -285,7 +284,7 @@ components:
   sidebar:
     backgroundColor: '#f9f9f9'
     textColor: '{colors.fg-default}'
-    rounded: '{rounded.container}'
+    rounded: '{rounded.2xl}'
   sidebar-dark:
     backgroundColor: '#1c1c1c'
     textColor: '{colors.fg-default-dark}'
@@ -296,7 +295,7 @@ components:
   inset-group:
     backgroundColor: 'oklch(1 0 0 / 0.85)'
     textColor: '{colors.fg-default}'
-    rounded: '{rounded.card}'
+    rounded: '{rounded.xl}'
   inset-group-dark:
     backgroundColor: 'oklch(0.985 0 0 / 0.03)'
     textColor: '{colors.fg-default-dark}'
@@ -313,7 +312,7 @@ components:
   user-bubble:
     backgroundColor: '#f3f3f3'
     textColor: '{colors.fg-default}'
-    rounded: '{rounded.container}'
+    rounded: '{rounded.2xl}'
     typography: '{typography.body}'
   user-bubble-dark:
     backgroundColor: '#181818'
@@ -325,7 +324,7 @@ components:
   floating-panel:
     backgroundColor: '#ffffff'
     textColor: '{colors.fg-default}'
-    rounded: '{rounded.panel}'
+    rounded: '{rounded.lg}'
     typography: '{typography.body-sm}'
   floating-panel-dark:
     backgroundColor: '#161616'
@@ -341,14 +340,14 @@ components:
   dialog:
     backgroundColor: '#ffffff'
     textColor: '{colors.fg-default}'
-    rounded: '{rounded.panel}'
+    rounded: '{rounded.lg}'
   dialog-dark:
     backgroundColor: '#0d0d0d'
     textColor: '{colors.fg-default-dark}'
   tooltip:
     backgroundColor: '{colors.action-primary}'
     textColor: '{colors.fg-on-action}'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
     typography: '{typography.caption}'
   tooltip-dark:
     backgroundColor: '{colors.action-primary-dark}'
@@ -356,7 +355,7 @@ components:
   button-primary:
     backgroundColor: '{colors.action-primary}'
     textColor: '{colors.fg-on-action}'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
     typography: '{typography.label}'
     height: '36px'
   button-primary-dark:
@@ -371,7 +370,7 @@ components:
   button-secondary:
     backgroundColor: '#f9f9f9'
     textColor: '{colors.fg-default}'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
     typography: '{typography.label}'
     height: '36px'
   button-secondary-dark:
@@ -390,7 +389,7 @@ components:
   button-tertiary:
     backgroundColor: '#fcfcfc'
     textColor: '{colors.fg-default}'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
     typography: '{typography.label}'
     height: '36px'
   button-tertiary-dark:
@@ -409,7 +408,7 @@ components:
   button-outline:
     backgroundColor: '{colors.field-background}'
     textColor: '{colors.fg-default}'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
     typography: '{typography.label}'
     height: '36px'
   button-outline-dark:
@@ -427,7 +426,7 @@ components:
     textColor: '{colors.fg-default-dark}'
   button-ghost:
     textColor: '{colors.fg-default}'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
     typography: '{typography.label}'
   button-ghost-dark:
     textColor: '{colors.fg-default-dark}'
@@ -440,7 +439,7 @@ components:
   button-destructive:
     backgroundColor: '{colors.action-danger}'
     textColor: '{colors.fg-on-danger}'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
     typography: '{typography.label}'
     height: '36px'
   button-destructive-dark:
@@ -455,7 +454,7 @@ components:
   toggle-on:
     backgroundColor: '{colors.surface-selected}'
     textColor: '{colors.fg-default}'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
     typography: '{typography.label}'
     height: '36px'
   toggle-on-dark:
@@ -470,7 +469,7 @@ components:
   toggle-group:
     backgroundColor: '#f9f9f9'
     textColor: '{colors.fg-default}'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
     typography: '{typography.label}'
     height: '32px'
   toggle-group-dark:
@@ -498,7 +497,7 @@ components:
     textColor: '{colors.fg-default-dark}'
   tabs-list:
     backgroundColor: '{colors.surface-muted}'
-    rounded: '{rounded.panel}'
+    rounded: '{rounded.lg}'
     height: '36px'
     padding: '2px'
   tabs-list-dark:
@@ -506,7 +505,7 @@ components:
   tabs-trigger:
     backgroundColor: '{colors.surface-muted}'
     textColor: 'oklch(0.145 0 0 / 0.7)'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
     typography: '{typography.label}'
   tabs-trigger-dark:
     backgroundColor: '{colors.surface-muted-dark}'
@@ -547,7 +546,7 @@ components:
   input:
     backgroundColor: '{colors.field-background}'
     textColor: '{colors.fg-default}'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
     typography: '{typography.body-sm}'
     height: '36px'
   input-dark:
@@ -572,7 +571,7 @@ components:
   badge-default:
     backgroundColor: '{colors.action-primary}'
     textColor: '{colors.fg-on-action}'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
     typography: '{typography.label-sm}'
     padding: '2px 8px'
   badge-default-dark:
@@ -581,14 +580,14 @@ components:
   badge-secondary:
     backgroundColor: '#dadada'
     textColor: '{colors.fg-default}'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
     typography: '{typography.label-sm}'
   badge-secondary-dark:
     backgroundColor: '#252525'
     textColor: '{colors.fg-default-dark}'
   badge-outline:
     textColor: '{colors.fg-default}'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
     typography: '{typography.label-sm}'
   badge-outline-dark:
     textColor: '{colors.fg-default-dark}'
@@ -599,7 +598,7 @@ components:
   badge-destructive:
     backgroundColor: '{colors.action-danger}'
     textColor: '{colors.fg-on-danger}'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
     typography: '{typography.label-sm}'
   badge-destructive-dark:
     backgroundColor: '#952420'
@@ -607,7 +606,7 @@ components:
   badge-success:
     backgroundColor: '{colors.surface-success}'
     textColor: '{colors.fg-success}'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
     typography: '{typography.label-sm}'
   badge-success-dark:
     backgroundColor: '{colors.surface-success-dark}'
@@ -615,7 +614,7 @@ components:
   badge-warning:
     backgroundColor: '{colors.surface-warning}'
     textColor: '{colors.fg-warning}'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
     typography: '{typography.label-sm}'
   badge-warning-dark:
     backgroundColor: '{colors.surface-warning-dark}'
@@ -623,7 +622,7 @@ components:
   badge-danger:
     backgroundColor: '{colors.surface-danger}'
     textColor: '{colors.fg-danger}'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
     typography: '{typography.label-sm}'
   badge-danger-dark:
     backgroundColor: '{colors.surface-danger-dark}'
@@ -631,7 +630,7 @@ components:
   badge-info:
     backgroundColor: '{colors.surface-info}'
     textColor: '{colors.fg-info}'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
     typography: '{typography.label-sm}'
   badge-info-dark:
     backgroundColor: '{colors.surface-info-dark}'
@@ -639,7 +638,7 @@ components:
   code-block:
     backgroundColor: '{colors.surface-code}'
     textColor: '{colors.fg-code}'
-    rounded: '{rounded.panel}'
+    rounded: '{rounded.lg}'
     typography: '{typography.code}'
   code-block-dark:
     backgroundColor: '{colors.surface-code-dark}'
@@ -649,21 +648,21 @@ components:
   list-row-selected:
     backgroundColor: '{colors.surface-selected}'
     textColor: '{colors.fg-default}'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
   list-row-selected-dark:
     backgroundColor: '{colors.surface-selected-dark}'
     textColor: '{colors.fg-default-dark}'
   panel-muted:
     backgroundColor: '{colors.surface-muted}'
     textColor: '{colors.fg-default}'
-    rounded: '{rounded.panel}'
+    rounded: '{rounded.lg}'
   panel-muted-dark:
     backgroundColor: '{colors.surface-muted-dark}'
     textColor: '{colors.fg-default-dark}'
   chip-emphasis:
     backgroundColor: '{colors.surface-emphasis}'
     textColor: '{colors.fg-default}'
-    rounded: '{rounded.control}'
+    rounded: '{rounded.md}'
   chip-emphasis-dark:
     backgroundColor: '{colors.surface-emphasis-dark}'
     textColor: '{colors.fg-default-dark}'
@@ -718,9 +717,10 @@ here; if something really is missing, add it here first.
   `text-caption-sm` (10px) for tags and counts, `text-title` (18px) and `text-heading` (24px)
   for the rare heading, `text-display` (30px) for the biggest headline. Never Tailwind's own sizes (`text-sm`, `text-xs`) or a size in
   brackets.
-- **Shape:** `rounded-control` (8px) for controls, fields and badges, `rounded-panel` (10px)
-  for menus and dialogs, `rounded-card` (14px), `rounded-container` (16px) and
-  `rounded-surface` (24px) for the larger surfaces, `rounded-full` for pills, avatars and lamps.
+- **Shape:** one corner scale, `rounded-sm` to `rounded-4xl`: `rounded-md` (8px) for controls,
+  fields and badges, `rounded-lg` (10px) for menus and dialogs, `rounded-xl` (14px) for cards,
+  `rounded-2xl` (16px) and `rounded-3xl` (24px) for the larger surfaces, `rounded-full` for
+  pills, avatars and lamps.
 - **Sizes:** Tailwind's 4px spacing scale. Icons are Lucide, `size-icon-md` (16px), or
   `size-icon-sm` (14px) in compact controls. Controls are `h-control-sm`, `h-control-md` or
   `h-control-lg` (32, 36, 40px).
@@ -796,8 +796,9 @@ Design tokens come in three tiers, each in its own file under `ui/lib/ui/src/lib
    - the middle of a matte edge is its side at two thirds, and a lamp's rim and glyph are
      its fill mixed 30% towards white and towards black (both in `surfaces.css`).
 
-   The type, corner, icon size and control height roles live here too and are Tailwind
-   utilities: `text-label`, `rounded-control`, `size-icon-md`, `h-control-md`. shadcn's
+   The type, icon size and control height roles live here too and are Tailwind utilities:
+   `text-label`, `size-icon-md`, `h-control-md`. Corners are Tailwind's own `rounded-sm` to
+   `rounded-4xl`, computed from `--radius` in `theme.css`. shadcn's
    colour names (`background`, `muted-foreground`, `border` ...) exist as Tailwind utilities
    only, each mapped to a semantic token in `theme.css`.
 
@@ -1011,10 +1012,10 @@ The elevation tokens are `elevation-surface`, `elevation-control`, `elevation-ra
 `elevation-inset` and `elevation-pressed`; a tooltip takes `elevation-surface`. The drop shadows are smooth stacks: a few soft
 layers instead of one hard one, the closest the darkest and smallest, each further layer about
 twice the offset and blur and fainter, the far ones pulled in with a negative spread, so the
-shadow fades out instead of ending in a visible edge. They stay as close as upstream's
-Tailwind shadows: `elevation-surface` reaches about 20px, like `shadow-lg`, `elevation-raised`
-about 38px, like `shadow-xl`, and `elevation-control` is three tight layers reaching no further
-than 4px, so buttons and other controls sit close to the page. Two softer steps sit below them: `elevation-soft` for the chat form,
+shadow fades out instead of ending in a visible edge. They are the only shadows: Tailwind's
+own `shadow-sm` to `shadow-2xl` do not follow the theme and are not used. `elevation-surface`
+reaches about 20px, `elevation-raised` about 38px, and `elevation-control` is three tight
+layers reaching no further than 4px, so buttons and other controls sit close to the page. Two softer steps sit below them: `elevation-soft` for the chat form,
 which floats only a little, and `elevation-faint` for the user message bubble, which barely
 lifts. The keys inside the chat form, the add key and the model selector, take `elevation-key`:
 a 0.5px hairline all round and a 1px drop, since the control elevation's soft
@@ -1026,11 +1027,12 @@ with a 2px blur.
 
 ## Shapes
 
-Corners are soft and consistent, set through roles: `control` (8px) for buttons, fields and
-badges, `panel` (10px) for menus and dialogs, `card` (14px) for cards, `container` (16px) for
-the sidebar and message bubbles, and `surface` (24px) for the chat form, rising to
-`surface-lg` (32px) for the chat form on small screens. Status lamps, avatars and the round
-icon buttons in the chat form are fully round.
+Corners are soft and consistent, on one scale that is computed from a single base radius
+(`--radius`, 10px, in `theme.css`), so changing the base moves every corner with it: `sm`
+(6px) for small marks and chips, `md` (8px) for buttons, fields and badges, `lg` (10px) for
+menus and dialogs, `xl` (14px) for cards, `2xl` (16px) for the sidebar and message bubbles,
+and `3xl` (24px) for the chat form, rising to `4xl` (32px) for the chat form on small
+screens. Status lamps, avatars and the round icon buttons in the chat form are fully round.
 
 ## Brand
 
@@ -1075,7 +1077,7 @@ icon buttons in the chat form are fully round.
   `surface-selected`.
 - **Button groups:** joined buttons share one shadow, drawn by the group, and one border at
   each seam. A group separator replaces the seam border. Filled buttons draw a seam in their
-  own text colour (`button-primary-seam`, `button-danger-seam`) instead.
+  own text colour at 25% instead.
 - **Selection on a track:** a choice that moves along a track is a recessed track with the
   selection raised on it, never a row of outlined buttons. The track is `surface-muted` with
   the inset shade (`elevation-inset`); the selection is a `surface-lifted` chip with
