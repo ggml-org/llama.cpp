@@ -18,8 +18,8 @@ Version:        %( date "+%%Y%%m%%d" )
 Release:        1%{?dist}
 Summary:        CPU Inference of LLaMA model in pure C/C++ (no CUDA/OpenCL)
 License:        MIT
-Source0:        https://github.com/ggml-org/llama.cpp/archive/refs/heads/master.tar.gz
-BuildRequires:  coreutils make gcc-c++ git libstdc++-devel
+Source0:        https://github.com/ggml-org/llama.cpp/archive/refs/tags/v0.8.0.tar.gz
+BuildRequires:  coreutils cmake make gcc-c++ git libstdc++-devel openssl-devel
 Requires:       libstdc++
 URL:            https://github.com/ggml-org/llama.cpp
 
@@ -31,17 +31,19 @@ CPU inference for Meta's Lllama2 models using default options.
 Models are not included in this package and must be downloaded separately.
 
 %prep
-%setup -n llama.cpp-master
+%setup -n llama.cpp-0.8.0
 
 %build
-make -j
+# Static libs so the packaged binaries don't need libllama/libggml .so files.
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DLLAMA_BUILD_TESTS=OFF
+cmake --build build -j %{?_smp_build_ncpus} --target llama-cli llama-completion llama-server llama-simple
 
 %install
 mkdir -p %{buildroot}%{_bindir}/
-cp -p llama-cli %{buildroot}%{_bindir}/llama-cli
-cp -p llama-completion %{buildroot}%{_bindir}/llama-completion
-cp -p llama-server %{buildroot}%{_bindir}/llama-server
-cp -p llama-simple %{buildroot}%{_bindir}/llama-simple
+cp -p build/bin/llama-cli %{buildroot}%{_bindir}/llama-cli
+cp -p build/bin/llama-completion %{buildroot}%{_bindir}/llama-completion
+cp -p build/bin/llama-server %{buildroot}%{_bindir}/llama-server
+cp -p build/bin/llama-simple %{buildroot}%{_bindir}/llama-simple
 
 mkdir -p %{buildroot}/usr/lib/systemd/system
 %{__cat} <<EOF  > %{buildroot}/usr/lib/systemd/system/llama.service
@@ -54,7 +56,7 @@ Type=simple
 EnvironmentFile=/etc/sysconfig/llama
 ExecStart=/usr/bin/llama-server $LLAMA_ARGS
 ExecReload=/bin/kill -s HUP $MAINPID
-Restart=never
+Restart=no
 
 [Install]
 WantedBy=default.target
