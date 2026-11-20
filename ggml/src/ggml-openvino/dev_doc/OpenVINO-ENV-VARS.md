@@ -13,8 +13,8 @@ The variables for users, and the rules for values, are in [docs/backend/OPENVINO
 | `GGML_OPENVINO_DEBUG_NODE` | all | String | `not set` | Add the named graph nodes as outputs of the compiled model. Separate several names with commas. |
 | `GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS` | all | Boolean | `0` | Print the tensor address map once. |
 | `GGML_OPENVINO_LOG_UNSUPPORTED_OPS` | all | Boolean | `0` | Log each op that the backend does not support, with the tensor details and the reason. |
-| `GGML_OPENVINO_LOG_SUPPORTS_OP` | all | Integer | `0` | Log what `supports_op` accepts and rejects, on `ov-supports-op:` lines at the WARN level. `1`: one summary at exit, with each op kind, the verdict and the number of calls. Each rejected kind causes a graph split. `2`: also one line for each call, with the tensor name and shape. The first calls happen before the log is set up, so these lines are not complete; use the summary for counts. |
-| `GGML_OPENVINO_DIAG_GRAPH_IO` | all | Boolean | `0` | When `set_input_tensor`, `set_output_tensor` or `infer()` throws, log the graph key (node count, first and last node) and the shapes of the model ports and of the bound tensors, on `ggml-openvino: DIAG` lines at the WARN level. |
+| `GGML_OPENVINO_LOG_SUPPORTS_OP` | all | Integer | `0` | Log what `supports_op` accepts and rejects. `1`: summary at exit. `2`: also each call (the first calls are missing). |
+| `GGML_OPENVINO_DIAG_GRAPH_IO` | all | Boolean | `0` | When binding a tensor or `infer()` throws, log the graph key and the shapes of the model and the bound tensors. |
 | `GGML_OPENVINO_DISABLE_CACHE` | all | Boolean | `0` | Turn the in-process cache of compiled models and decoders off. |
 | `GGML_OPENVINO_FULL_GRAPH_KEY` | all | Boolean | `0` | Add the external inputs of a graph to the key of the in-process cache. By default the key is the node count and the names of the first and last nodes. Use it when two different graphs could share that key. |
 | `GGML_OPENVINO_LOG_SWA_LAYERS` | all | Boolean | `0` | Log the attention extent of each layer and which layers use sliding-window attention, on an `ov-swa:` line at the WARN level. |
@@ -30,6 +30,12 @@ GGML_OPENVINO_DUMP_CGRAPH=1 GGML_OPENVINO_DUMP_IR=1 \
 
 # Log unsupported ops. The lines have the WARN level, which the default log verbosity shows (-lv 2 or higher).
 GGML_OPENVINO_LOG_UNSUPPORTED_OPS=1 ./build/ReleaseOV/bin/llama-cli -m model.gguf -c 512
+
+# What supports_op accepts and rejects: 1 = summary at exit, 2 = also each call
+GGML_OPENVINO_LOG_SUPPORTS_OP=1 ./build/ReleaseOV/bin/llama-completion -m model.gguf -c 512 -n 16 -no-cnv -p "Hello" 2>&1 | grep ov-supports-op
+
+# Graph key and tensor shapes when an inference throws
+GGML_OPENVINO_DIAG_GRAPH_IO=1 ./build/ReleaseOV/bin/llama-completion -m model.gguf -c 512 -n 16 -no-cnv -p "Hello" 2>&1 | grep DIAG
 
 # NPUW dumps. They need an OpenVINO developer build (NPU_PLUGIN_DEVELOPER_BUILD).
 export GGML_OPENVINO_DEVICE=NPU
@@ -76,7 +82,7 @@ These options are off by default. They are not validated for general use: some h
 | `GGML_OPENVINO_GDN_NATIVE_STATE` | NPU | Boolean | `0` | Keep the `GATED_DELTA_NET` state in the layout of the OpenVINO op instead of the GGML layout. Every `GATED_DELTA_NET` must then run on the OpenVINO backend; the load aborts if one would run on the CPU backend. Saved states and `GGML_OPENVINO_DEBUG_NODE` dumps hold the OpenVINO layout. `test-backend-ops` fails with it. |
 | `GGML_OPENVINO_FORCE_STATIC` | CPU, GPU | Boolean | `0` | Run the static-shape path of the NPU on the CPU or the GPU, to separate translation bugs from NPU plugin or driver problems. Cannot be used with `GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY`. |
 | `GGML_OPENVINO_ENABLE_FALLBACK` | all | Boolean | `0` | Detect graphs that the scheduler splits between OpenVINO and another backend, and translate them as partial graphs, without the compiled model cache. By default every graph is treated as a complete model graph. Cannot be used with `GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY`. |
-| `GGML_OPENVINO_ROPE_F32_ANGLE` | GPU | Boolean | `0` | Keep the RoPE angle (position times frequency) in f32 when the plugin computes in f16, and round cos and sin to f16 after it. In f16 the angle is wrong at large positions: at position 6525 the f16 step is 4. Validated on one model on the GPU only. On the CPU device, which computes in f32, it makes cos and sin less accurate, and `test-backend-ops -o ROPE` fails. |
+| `GGML_OPENVINO_ROPE_F32_ANGLE` | GPU | Boolean | `0` | Keep the RoPE angle in f32 under the f16 hint, for long prompts. Validated on one model. On CPU, `test-backend-ops -o ROPE` fails with it. |
 | `GGML_OPENVINO_NATIVE_SOFTPLUS` | all | Boolean | `0` | Translate `SOFTPLUS` to the OpenVINO `SoftPlus` op instead of the default `relu(x) + log(1 + exp(-abs(x)))`. |
 | `GGML_OPENVINO_KV_SCATTER_ELEMENTS` | all | Boolean | `0` | Use `ScatterElementsUpdate` instead of `ScatterUpdate` for single-row KV writes in stateless execution. |
 | `GGML_OPENVINO_ENABLE_KV_4D` | GPU | Boolean | `0` | Bind the KV cache as `[1, ctx, n_heads_kv, head_size]`, so the GPU plugin can update and read it in place. Needs an OpenVINO build newer than 2026.4.1; do not use it with 2026.4.1. |
