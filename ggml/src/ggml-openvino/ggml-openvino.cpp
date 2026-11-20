@@ -1504,6 +1504,38 @@ static bool has_strides_on_element_grid(const ggml_tensor * t) {
     return true;
 }
 
+// A VIEW that regroups one contiguous span of every row of its contiguous source, e.g. the z/x/B/C
+// splits of the fused mamba projections. The strides do not nest on an element grid, but
+// process_view_input_new resolves it as a Slice of the source's innermost axis plus a Reshape.
+// Keep in sync with the matching branch there; dynamic execution only.
+static bool is_row_span_view(const ggml_tensor * t) {
+    if (ggml_openvino_is_static() || is_stateful_enabled()) {
+        return false;
+    }
+    const ggml_tensor * src = t->op == GGML_OP_VIEW ? t->src[0] : nullptr;
+    // a RESHAPE source is fine (the translation reads its value); a chained VIEW is not, because
+    // the view metadata then describes the intermediate view instead of the resolved input
+    if (src == nullptr || src->op == GGML_OP_VIEW || !ggml_is_contiguous(src) || t->type != src->type) {
+        return false;
+    }
+    const size_t es = ggml_type_size(t->type);
+    int d = 0;
+    size_t span = 1;
+    while (d < GGML_MAX_DIMS && t->nb[d] == span * es) {
+        span *= t->ne[d];
+        d++;
+    }
+    if (d < 2) {
+        return false;
+    }
+    for (int s = 1; d < GGML_MAX_DIMS; ++d, ++s) {
+        if (t->ne[d] != src->ne[s] || t->nb[d] != src->nb[s]) {
+            return false;
+        }
+    }
+    return t->view_offs % es == 0 && t->view_offs / es + span <= (size_t) src->ne[0];
+}
+
 static bool has_non_contiguous_view_input(const ggml_tensor * op) {
     for (int i = 0; i < GGML_MAX_SRC; i++) {
         if (op->src[i] == nullptr) {
@@ -1624,7 +1656,7 @@ static bool cpy_output_view_is_supported(const ggml_tensor * op) {
     }
 
     return ggml_nbytes(op) == 0 || ggml_is_contiguous(op) || GgmlOvDecoder::is_conv_state_writeback(op) ||
-           GgmlOvDecoder::is_gdn_snapshot_writeback(op);
+           GgmlOvDecoder::is_gdn_snapshot_writeback(op) || GgmlOvDecoder::is_ssm_state_writeback(op);
 }
 
 static bool mul_mat_id_requires_large_tmp(const ggml_tensor * op) {
@@ -1727,13 +1759,15 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
     }
     case GGML_OP_GET_ROWS:
     case GGML_OP_SET_ROWS: {
-        if (GgmlOvDecoder::is_conv_state_snapshot_writeback(op) &&
-            (ggml_openvino_is_npu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC"))) {
+        if (GgmlOvDecoder::is_conv_state_snapshot_writeback(op) && ggml_openvino_is_static()) {
             return {false, "convolution snapshots require dynamic execution"};
         }
         if (op->ne[3] != 1 && !GgmlOvDecoder::is_get_rows_batched_4d(op) &&
             !GgmlOvDecoder::is_conv_state_snapshot_writeback(op)) {
             return {false, "GET_ROWS/SET_ROWS with ne[3] != 1 (ne[3]=" + std::to_string(op->ne[3]) + ") is not supported"};
+        }
+        if (op->op == GGML_OP_SET_ROWS && op->src[0]->type == GGML_TYPE_BF16) {
+            return {false, "SET_ROWS with BF16 src0 is not supported"};
         }
         if (op->ne[0] == 256 && (op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q5_K ||
                                  op->src[0]->type == GGML_TYPE_Q4_1 || op->src[0]->type == GGML_TYPE_Q5_1)) {
@@ -2004,6 +2038,9 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         if (op->view_src != nullptr && !ggml_is_contiguous(op->src[0])) {
             return {false, "ROPE on VIEW / non-contiguous input is not supported"};
         }
+        if (op->type == GGML_TYPE_BF16) {
+            return {false, "ROPE with BF16 type is not supported"};
+        }
         break;
     }
     case GGML_OP_TRANSPOSE: {
@@ -2034,7 +2071,7 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
             reason = "GATED_DELTA_NET with kda (per-key-dimension gating) is not supported";
         }
         else if (op->op_params[0] > 1) {
-            if (ggml_openvino_is_npu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC")) {
+            if (ggml_openvino_is_static()) {
                 reason = "GATED_DELTA_NET snapshots require dynamic execution";
             }
         }
@@ -2051,6 +2088,19 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         // qwen3next is numerically unstable with OpenVINO SSM_CONV.
         // Keep this op on CPU until the OpenVINO implementation is fixed.
         // return true;
+        break;
+    }
+    case GGML_OP_SSM_SCAN: {
+        // SelectiveSSM implements the Mamba-2 recurrence: scalar decay per head, one final state
+        if (op->src[3]->ne[0] != 1) {
+            return {false, "SSM_SCAN with Mamba-1 state-wise decay is not supported"};
+        }
+        if (op->op_params[0] > 1) {
+            return {false, "SSM_SCAN with rollback snapshots (K > 1) is not supported"};
+        }
+        if (ggml_openvino_is_static()) {
+            return {false, "SSM_SCAN requires dynamic execution"};
+        }
         break;
     }
     case GGML_OP_VIEW: {
@@ -2274,7 +2324,8 @@ static ggml_openvino_op_support ggml_backend_openvino_device_supports_op_impl(gg
         if (supported_types.find(src->type) == supported_types.end()) {
             return {false, "src[" + std::to_string(i) + "] type " + std::string(ggml_type_name(src->type)) + " is not supported"};
         }
-        if (!has_strides_on_element_grid(src) && !(i == 1 && GgmlOvDecoder::is_gdn_snapshot_writeback(op)) &&
+        if (!has_strides_on_element_grid(src) && !is_row_span_view(src) &&
+            !(i == 1 && GgmlOvDecoder::is_gdn_snapshot_writeback(op)) &&
             !(i == 2 && GgmlOvDecoder::is_conv_state_snapshot_writeback(op))) {
             return {false, "src[" + std::to_string(i) + "] strides are not multiples of each other"};
         }

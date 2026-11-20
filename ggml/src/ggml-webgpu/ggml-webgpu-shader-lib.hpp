@@ -1269,9 +1269,11 @@ class ggml_webgpu_shader_lib {
     std::unordered_map<int, webgpu_pipeline> argsort_pipelines;             // key is order
     std::unordered_map<int, webgpu_pipeline> argsort_merge_pipelines;       // key is order
     std::unordered_map<int, webgpu_pipeline> cumsum_pipelines;              // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> col2im_1d_pipelines;           // key is fixed, no variants yet
     std::unordered_map<int, webgpu_pipeline> arange_pipelines;              // key is fixed, no variants yet
     std::unordered_map<int, webgpu_pipeline> count_equal_pipelines;         // key is src_overlap
     std::unordered_map<int, webgpu_pipeline> timestep_embedding_pipelines;  // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> pool2d_pipelines;              // key is ggml_op_pool
     std::unordered_map<ggml_webgpu_row_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_row_norm_pipeline_key_hash>
         row_norm_pipelines;                                                 // op/inplace
 
@@ -2065,6 +2067,51 @@ class ggml_webgpu_shader_lib {
         pipeline.context         = decisions;
         arange_pipelines[1]      = pipeline;
         return arange_pipelines[1];
+    }
+
+    webgpu_pipeline get_pool2d_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        const int key = ggml_get_op_params_i32(context.dst, 0);
+
+        auto it = pool2d_pipelines.find(key);
+        if (it != pool2d_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant = "pool2d";
+        if (key == GGML_OP_POOL_MAX) {
+            defines.push_back("POOL_MAX");
+            variant += "_max";
+        } else {
+            variant += "_avg";
+        }
+
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed           = preprocessor.preprocess(wgsl_pool2d, defines);
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size       = context.max_wg_size;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context         = decisions;
+        pool2d_pipelines[key]    = pipeline;
+        return pool2d_pipelines[key];
+    }
+
+    webgpu_pipeline get_col2im_1d_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        auto it = col2im_1d_pipelines.find(1);
+        if (it != col2im_1d_pipelines.end()) {
+            return it->second;
+        }
+
+        const uint32_t           wg_size   = std::min(256u, context.max_wg_size);
+        std::vector<std::string> defines   = { "WG_SIZE=" + std::to_string(wg_size) };
+        auto                     processed = preprocessor.preprocess(wgsl_col2im_1d, defines);
+        auto                     decisions = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size                 = wg_size;
+        webgpu_pipeline pipeline           = ggml_webgpu_create_pipeline(device, processed, "col2im_1d");
+        pipeline.context                   = decisions;
+        col2im_1d_pipelines[1]             = pipeline;
+        return pipeline;
     }
 
     webgpu_pipeline get_pad_pipeline(const ggml_webgpu_shader_lib_context & context) {

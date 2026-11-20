@@ -134,6 +134,9 @@ bool ggml_openvino_release_weights_enabled();
 // Check if running on NPU
 bool ggml_openvino_is_npu();
 
+// Static graphs: NPU, or any device with GGML_OPENVINO_FORCE_STATIC
+bool ggml_openvino_is_static();
+
 // KV-cache slicing: bind the KV cache, and size the KQ masks, at the attended length instead of the full context.
 // One mechanism, two modes:
 //   dynamic graphs (CPU/GPU): the KV input is a view over the cache; the graph is not recompiled.
