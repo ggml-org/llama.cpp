@@ -898,10 +898,34 @@ static void test_all(const std::string & title, std::function<void(const TestCas
             c-kv ::= "\"c\"" space ":" space string
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             d-kv ::= "\"d\"" space ":" space string
-            d-rest ::= ( "," space c-kv )?
-            root ::= "{" space b-kv "," space a-kv ( "," space ( d-kv d-rest | c-kv ) )? space "}"
+            root ::= "{" space b-kv "," space a-kv ( "," space d-kv )? ( "," space c-kv )? space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
             string ::= "\"" char* "\""
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "optional props before and between required props",
+        R"""({
+            "properties": {
+                "title": {"type": "string"},
+                "name": {"type": "string"},
+                "nickname": {"type": "string"},
+                "city": {"type": "string"}
+            },
+            "required": ["name", "city"],
+            "additionalProperties": false
+        })""",
+        R"""(
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            city-kv ::= "\"city\"" space ":" space string
+            name-kv ::= "\"name\"" space ":" space string
+            nickname-kv ::= "\"nickname\"" space ":" space string
+            root ::= "{" space ( title-kv "," space )? name-kv ( "," space nickname-kv )? "," space city-kv space "}"
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            string ::= "\"" char* "\""
+            title-kv ::= "\"title\"" space ":" space string
         )"""
     });
 
@@ -1002,7 +1026,7 @@ static void test_all(const std::string & title, std::function<void(const TestCas
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
             number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
-            root ::= "{" space a-kv ( "," space ( additional-kv ( "," space additional-kv )* ) )? space "}"
+            root ::= "{" space a-kv ( "," space additional-kv )* space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
             string ::= "\"" char* "\""
         )"""
@@ -1048,13 +1072,12 @@ static void test_all(const std::string & title, std::function<void(const TestCas
             additional-k ::= ["] ( [a] ([l] ([s] ([o] char+ | [^"o] char*) | [^"s] char*) | [n] ([d] char+ | [^"d] char*) | [^"ln] char*) | [^"a] char* )? ["]
             additional-kv ::= additional-k ":" space number
             also-kv ::= "\"also\"" space ":" space number
-            also-rest ::= ( "," space additional-kv )*
             and-kv ::= "\"and\"" space ":" space number
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
             number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
-            root ::= "{" space and-kv ( "," space ( also-kv also-rest | additional-kv ( "," space additional-kv )* ) )? space "}"
+            root ::= "{" space and-kv ( "," space also-kv )? ( "," space additional-kv )* space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -1271,11 +1294,10 @@ static void test_all(const std::string & title, std::function<void(const TestCas
             b-kv ::= "\"b\"" space ":" space number
             c-kv ::= "\"c\"" space ":" space number
             d-kv ::= "\"d\"" space ":" space number
-            d-rest ::= ( "," space c-kv )?
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
             number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
-            root ::= "{" space a-kv "," space b-kv ( "," space ( d-kv d-rest | c-kv ) )? space "}"
+            root ::= "{" space a-kv "," space b-kv ( "," space d-kv )? ( "," space c-kv )? space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
