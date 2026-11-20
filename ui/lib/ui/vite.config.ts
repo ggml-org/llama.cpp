@@ -92,8 +92,7 @@ export default defineConfig({
               },
             ],
           },
-          include: ["src/**/*.svelte.{test,spec}.{js,ts}"],
-          exclude: ["src/lib/server/**"],
+          include: ["tests/client/**/*.svelte.{test,spec}.{js,ts}"],
         },
       },
       {
@@ -101,8 +100,7 @@ export default defineConfig({
         test: {
           name: "server",
           environment: "node",
-          include: ["src/**/*.{test,spec}.{js,ts}", "tests/unit/**/*.{test,spec}.{js,ts}"],
-          exclude: ["src/**/*.svelte.{test,spec}.{js,ts}"],
+          include: ["tests/unit/**/*.{test,spec}.{js,ts}"],
         },
       },
       {
