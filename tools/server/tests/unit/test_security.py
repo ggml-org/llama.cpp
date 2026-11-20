@@ -33,6 +33,19 @@ def test_access_static_assets_without_api_key():
         assert res.status_code == 200, f"Expected 200 for {path}, got {res.status_code}"
 
 
+@pytest.mark.parametrize("method", ["POST", "DELETE"])
+def test_router_model_management_requires_api_key(method: str):
+    """/models is a public GET, but in router mode it also answers POST and
+    DELETE, which add and remove models. Those must still require the key."""
+    global server
+    server = ServerPreset.router()
+    server.api_key = TEST_API_KEY
+    server.start()
+    res = server.make_request(method, "/models", data={})
+    assert res.status_code == 401
+    assert res.body["error"]["type"] == "authentication_error"
+
+
 @pytest.mark.parametrize("api_key", [None, "invalid-key"])
 def test_incorrect_api_key(api_key: str):
     global server
