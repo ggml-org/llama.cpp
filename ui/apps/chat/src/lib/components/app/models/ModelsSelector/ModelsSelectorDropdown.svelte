@@ -1,5 +1,7 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
+	import ModelsSelectorReasoning from './ModelsSelectorReasoning.svelte';
+	import ModelsSelectorReasoningBadge from './ModelsSelectorReasoningBadge.svelte';
 	import * as DropdownMenu from '@ggml-org/llama-ui/ui/dropdown-menu';
 	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { ChevronDown, Loader2 } from '@lucide/svelte';
@@ -33,6 +35,8 @@
 		onManageModels?: () => void;
 		onModelKeyAction?: (modelId: string, unload: boolean) => void;
 		onSearchKeyDown?: (event: KeyboardEvent) => void;
+		/** The chat's reasoning effort in place of the manager entry at the foot. */
+		showReasoning?: boolean;
 	}
 
 	let {
@@ -45,7 +49,8 @@
 		onModelKeyAction,
 		onSearchKeyDown,
 		open = $bindable(false),
-		showOrgName = true
+		showOrgName = true,
+		showReasoning = false
 	}: Props = $props();
 
 	const selectedOption = $derived(ms.getDisplayOption());
@@ -107,6 +112,11 @@
 				hideQuantization
 				modelId={selectedOption.model}
 			/>
+
+			<!-- in the model's column: the trigger is a grid of icon, model and chevron -->
+			{#if showReasoning}
+				<ModelsSelectorReasoningBadge />
+			{/if}
 		{:else}
 			<span class="min-w-0 font-medium">Select model</span>
 		{/if}
@@ -178,7 +188,7 @@
 	<!-- the details drawer opens over the menu: the menu stays open under its backdrop -->
 	<DropdownMenu.Content
 		align="end"
-		class="w-full md:min-w-80 md:w-md max-w-[calc(100vw-2rem)] p-0! max-h-[min(40rem,calc(var(--bits-dropdown-menu-content-available-height)-1rem))]"
+		class="flex w-full flex-col overflow-hidden md:min-w-80 md:w-md max-w-[calc(100vw-2rem)] p-0! max-h-[min(40rem,calc(var(--bits-dropdown-menu-content-available-height)-1rem))]"
 		data-under-details={uiStore.isModelDetailsOpen || undefined}
 		onCloseAutoFocus={(event) => {
 			// bits-ui re-mounts the focus scope when the drawer opens or closes, so this runs with the menu still open; trigger focus would show its tooltip
@@ -194,30 +204,36 @@
 	>
 		<DropdownMenuSearchable
 			emptyMessage={ms.emptyMessage}
-			footer={uiStore.isModelsManagerShown ? manageModelsFooter : undefined}
+			footer={showReasoning || uiStore.isModelsManagerShown ? pickerFooter : undefined}
 			isEmpty={ms.isEmpty && ms.isCurrentModelInCache}
 			onSearchChange={(v) => ms.setSearchTerm(v)}
 			{onSearchKeyDown}
 			placeholder="Search models..."
+			scrollport
 			searchClass="bg-transparent"
 			searchValue={ms.searchTerm}
 		>
-			<!-- Option list; the search header sticks to the top and the actions
-		     footer to the bottom of the content scrollport. -->
+			<!-- Option list; the search header sticks to the top of the list's scrollport, and
+		     the footer stays under it. -->
 			{@render pickerContent('px-1.5')}
 		</DropdownMenuSearchable>
 	</DropdownMenu.Content>
 </DropdownMenu.Root>
 
-<!-- the way into the full manager, so it hides with the manager's other entry points -->
-{#snippet manageModelsFooter()}
-	<DropdownMenu.Group class="px-2">
-		<DropdownMenu.Item class="gap-2" onSelect={handleManageModels}>
-			<MODEL_ICON class="size-icon-md shrink-0 text-muted-foreground" />
+<!-- the reasoning effort when the model has one; otherwise the way into the full manager, which hides with the
+manager's other entry points -->
+{#snippet pickerFooter()}
+	{#if showReasoning}
+		<ModelsSelectorReasoning />
+	{:else}
+		<DropdownMenu.Group class="px-2">
+			<DropdownMenu.Item class="gap-2" onSelect={handleManageModels}>
+				<MODEL_ICON class="size-icon-md shrink-0 text-muted-foreground" />
 
-			Manage models
-		</DropdownMenu.Item>
-	</DropdownMenu.Group>
+				Manage models
+			</DropdownMenu.Item>
+		</DropdownMenu.Group>
+	{/if}
 {/snippet}
 
 {#snippet pickerContent(listClass: string)}

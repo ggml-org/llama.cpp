@@ -18,10 +18,18 @@
 		searchClass?: string;
 		children: Snippet;
 		/**
-		 * Optional sticky footer: it sticks to the bottom of DropdownMenu.Content's own
-		 * scrollport, which must stay the scroll container (overflow-y-auto + max-height).
+		 * Optional footer. By default it sticks to the bottom of the parent's scrollport
+		 * (overflow-y-auto + max-height), see `scrollport`.
 		 */
 		footer?: Snippet;
+		/**
+		 * Scroll the header and the list in a box of their own, with the footer under it
+		 * instead of sticking. For a parent that scales as it opens (a dropdown's zoom-in):
+		 * WebKit pins a bottom-sticky element against the scaled box, so the footer would
+		 * ride up the list until the animation ends. The parent is then a flex column that
+		 * does not scroll itself (flex flex-col overflow-hidden + max-height).
+		 */
+		scrollport?: boolean;
 	}
 
 	let {
@@ -34,6 +42,7 @@
 		onSearchChange,
 		onSearchKeyDown,
 		placeholder = 'Search...',
+		scrollport = false,
 		searchClass = '',
 		searchValue = $bindable('')
 	}: Props = $props();
@@ -42,32 +51,42 @@
 	let stickyHeaderHeight = $state(0);
 </script>
 
-<div
-	bind:clientHeight={stickyHeaderHeight}
-	class={cn('sticky top-0 z-20 bg-popover p-1.5', headerClass)}
->
-	<SearchInput
-		bind:value={searchValue}
-		class={searchClass}
-		onInput={onSearchChange}
-		onKeyDown={onSearchKeyDown}
-		{placeholder}
-	/>
-</div>
-
-<div class={contentClass}>
-	<!-- wrapper carries the sticky offset: bits-ui owns the style of the scrollport -->
-	<div style="--dropdown-sticky-height: {stickyHeaderHeight}px">
-		{@render children()}
-
-		{#if isEmpty}
-			<div class="px-2 py-3 text-center text-sm text-muted-foreground">{emptyMessage}</div>
-		{/if}
+{#snippet body()}
+	<div
+		bind:clientHeight={stickyHeaderHeight}
+		class={cn('sticky top-0 z-20 bg-popover p-1.5', headerClass)}
+	>
+		<SearchInput
+			bind:value={searchValue}
+			class={searchClass}
+			onInput={onSearchChange}
+			onKeyDown={onSearchKeyDown}
+			{placeholder}
+		/>
 	</div>
-</div>
+
+	<div class={contentClass}>
+		<!-- wrapper carries the sticky offset: bits-ui owns the style of the scrollport -->
+		<div style="--dropdown-sticky-height: {stickyHeaderHeight}px">
+			{@render children()}
+
+			{#if isEmpty}
+				<div class="px-2 py-3 text-center text-sm text-muted-foreground">{emptyMessage}</div>
+			{/if}
+		</div>
+	</div>
+{/snippet}
+
+{#if scrollport}
+	<div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
+		{@render body()}
+	</div>
+{:else}
+	{@render body()}
+{/if}
 
 {#if footer}
-	<div class="sticky bottom-0 z-20 bg-popover py-1.5">
+	<div class={['z-20 bg-popover py-1.5', scrollport ? 'shrink-0' : 'sticky bottom-0']}>
 		<div
 			aria-orientation="horizontal"
 			class="h-px bg-border/20 mb-1.5 mx-1.5"

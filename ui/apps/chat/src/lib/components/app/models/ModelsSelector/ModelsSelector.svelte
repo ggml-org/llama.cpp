@@ -1,8 +1,11 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
+	import ModelsSelectorReasoning from './ModelsSelectorReasoning.svelte';
+	import ModelsSelectorReasoningBadge from './ModelsSelectorReasoningBadge.svelte';
 	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { ChevronDown, Loader2 } from '@lucide/svelte';
 	import {
+		ChatFormActionReasoning,
 		ModelId,
 		ModelsSelectorDrawer,
 		ModelsSelectorDropdown,
@@ -34,6 +37,8 @@
 		disabled?: boolean;
 		forceForegroundText?: boolean;
 		onModelChange?: (modelId: string, modelName: string) => Promise<boolean> | boolean | void;
+		/** The chat's reasoning effort at the foot of the picker (the chat form's selector). */
+		showReasoning?: boolean;
 		useGlobalSelection?: boolean;
 	}
 
@@ -42,6 +47,7 @@
 		disabled = false,
 		forceForegroundText = false,
 		onModelChange,
+		showReasoning = false,
 		useGlobalSelection = false
 	}: Props = $props();
 
@@ -229,6 +235,11 @@
 				hideQuantization
 				modelId={selectedOption.model}
 			/>
+
+			<!-- in the model's column: the trigger is a grid of icon, model and chevron -->
+			{#if showReasoning}
+				<ModelsSelectorReasoningBadge />
+			{/if}
 		{:else}
 			<span class="min-w-0 font-medium">Select model</span>
 		{/if}
@@ -266,6 +277,10 @@
 		onSelect={ms.handleSelect}
 		{option}
 	/>
+{/snippet}
+
+{#snippet reasoningFooter()}
+	<ModelsSelectorReasoning variant="list" />
 {/snippet}
 
 {#snippet pickerList(listClass: string)}
@@ -341,6 +356,7 @@
 		<ModelsSelectorDrawer
 			bind:open={isOpen}
 			emptyMessage={ms.emptyMessage}
+			footer={showReasoning ? reasoningFooter : undefined}
 			isEmpty={ms.isEmpty && ms.isCurrentModelInCache}
 			onOpenChange={ms.handleOpenChange}
 			onSearchChange={(v) => ms.setSearchTerm(v)}
@@ -360,6 +376,7 @@
 			onModelKeyAction={(id, unload) => void handleModelKeyAction(id, unload)}
 			onSearchKeyDown={handleSearchKeyDown}
 			{showOrgName}
+			{showReasoning}
 		/>
 	{/if}
 {:else if isMobile}
@@ -378,6 +395,7 @@
 	<ModelsSelectorDrawer
 		bind:open={isOpen}
 		emptyMessage={ms.emptyMessage}
+		footer={showReasoning ? reasoningFooter : undefined}
 		isEmpty={ms.isEmpty && ms.isCurrentModelInCache}
 		onOpenChange={ms.handleOpenChange}
 		onSearchChange={(v) => ms.setSearchTerm(v)}
@@ -434,4 +452,9 @@
 			{/snippet}
 		</Tooltip.Trigger>
 	</Tooltip.Root>
+
+	<!-- a lone model has no picker to hold the reasoning effort: it keeps its own button -->
+	{#if showReasoning}
+		<ChatFormActionReasoning />
+	{/if}
 {/if}
