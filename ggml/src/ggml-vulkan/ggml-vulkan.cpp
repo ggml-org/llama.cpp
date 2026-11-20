@@ -9143,6 +9143,8 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                                 (!ctx->device->coopmat2 || cm2_dequant_kv || rows_compact);
     const bool use_kv_rows = kv_rows && !use_dequant_kv;
     const bool compact_kv = kv_rows && use_dequant_kv;
+    // RDNA4 direct flip is slower on the head-major scratch
+    const bool compact_cell_major = compact_kv && kv_raw_strided && ctx->device->architecture == vk_device_architecture::AMD_RDNA4;
     const ggml_type k_type_eff = (use_dequant_kv && !kv_raw_strided) ? GGML_TYPE_F16 : k->type;
     const ggml_type v_type_eff = (use_dequant_kv && !kv_raw_strided) ? GGML_TYPE_F16 : v->type;
 
@@ -9208,7 +9210,14 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
 
     uint32_t nbk2_eff = (uint32_t)nbk2, nbk3_eff = (uint32_t)nbk3;
     uint32_t nbv2_eff = (uint32_t)nbv2, nbv3_eff = (uint32_t)nbv3;
-    if (use_dequant_kv) {
+    if (compact_cell_major) {
+        k_stride = HSK * (uint32_t)nek2;
+        v_stride = HSV * (uint32_t)nev2;
+        nbk2_eff = HSK * sizeof(ggml_fp16_t);
+        nbk3_eff = (uint32_t)((uint64_t)HSK * KV * nek2 * sizeof(ggml_fp16_t));
+        nbv2_eff = HSV * sizeof(ggml_fp16_t);
+        nbv3_eff = (uint32_t)((uint64_t)HSV * KV * nev2 * sizeof(ggml_fp16_t));
+    } else if (use_dequant_kv) {
         k_stride = HSK;
         v_stride = HSV;
         nbk2_eff = (uint32_t)((uint64_t)HSK * KV * sizeof(ggml_fp16_t));
@@ -9528,9 +9537,11 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                 ggml_vk_sync_buffers(ctx, subctx);
             }
             const uint32_t n_kv_cache = compact_kv ? (uint32_t)nek1 : 0;
-            { const std::vector<uint32_t> pc = { HSK, (uint32_t)nek2, KV, n_kv_cache, (uint32_t)k_nel };
+            // n_cols = 1 keeps the cache's cell-major layout
+            const uint32_t n_cols = compact_cell_major ? 1 : KV;
+            { const std::vector<uint32_t> pc = { HSK, (uint32_t)nek2, n_cols, n_kv_cache, (uint32_t)k_nel };
               ggml_vk_dispatch_pipeline(ctx, subctx, pack_k, { k_buf, k_dst, indices_buf }, pc, { (uint32_t)k_nel, 1, 1 }); }
-            { const std::vector<uint32_t> pc = { HSV, (uint32_t)nev2, KV, n_kv_cache, (uint32_t)v_nel };
+            { const std::vector<uint32_t> pc = { HSV, (uint32_t)nev2, n_cols, n_kv_cache, (uint32_t)v_nel };
               ggml_vk_dispatch_pipeline(ctx, subctx, pack_v, { v_buf, v_dst, indices_buf }, pc, { (uint32_t)v_nel, 1, 1 }); }
         }
         ggml_vk_sync_buffers(ctx, subctx);
