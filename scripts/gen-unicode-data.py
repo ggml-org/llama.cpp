@@ -36,6 +36,18 @@ def normalization_tables():
     out("const std::unordered_map<uint64_t, uint32_t> unicode_composition = {")
     for first, second, cpt in compositions:
         out(f"{{0x{((first << 32) | second):016X}ULL, 0x{cpt:06X}}},")
+    out("};\n")
+    # BERT accent stripping drops only Mn after NFD; \p{M} would also drop Mc and Me
+    ranges_mn: list[list[int]] = []
+    for cpt in range(0x110000):
+        if unicodedata.category(chr(cpt)) == "Mn":
+            if ranges_mn and ranges_mn[-1][1] == cpt - 1:
+                ranges_mn[-1][1] = cpt
+            else:
+                ranges_mn.append([cpt, cpt])
+    out("const std::initializer_list<std::pair<uint32_t, uint32_t>> unicode_ranges_nonspacing_mark = {  // first, last")
+    for first, last in ranges_mn:
+        out(f"{{0x{first:06X}, 0x{last:06X}}},")
     out("};")
 
 

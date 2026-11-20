@@ -876,6 +876,9 @@ struct llm_tokenizer_wpm : llm_tokenizer {
 struct llm_tokenizer_wpm_session {
     llm_tokenizer_wpm_session(const llama_vocab & vocab) : vocab(vocab) {}
 
+    // HF WordPiece default; not stored in GGUF metadata
+    static constexpr size_t max_input_chars_per_word = 100;
+
     void tokenize(const std::string & text, std::vector<llama_token> & output) {
         // normalize and split by whitespace
         std::vector<std::string> words = preprocess(text, vocab.get_normalizer_opts());
@@ -885,6 +888,15 @@ struct llm_tokenizer_wpm_session {
         for (const std::string & word : words) {
             // skip empty words
             if (word.size() == 0) {
+                continue;
+            }
+
+            size_t n_chars = 0;
+            for (size_t i = 0; i < word.size(); i += unicode_len_utf8(word[i])) {
+                ++n_chars;
+            }
+            if (n_chars > max_input_chars_per_word) {
+                output.push_back(vocab.token_unk());
                 continue;
             }
 
@@ -945,7 +957,8 @@ struct llm_tokenizer_wpm_session {
                 continue;
             }
 
-            if (normalizer_opts.strip_accents && flags.is_accent_mark) {
+            // BertNormalizer strips only Mn; spacing marks (Mc) such as Indic vowel signs are kept
+            if (normalizer_opts.strip_accents && flags.is_nonspacing_mark) {
                 continue;
             }
 

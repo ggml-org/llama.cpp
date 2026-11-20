@@ -156,6 +156,12 @@ static std::vector<unicode_cpt_flags> unicode_cpt_flags_array() {
         cpt_flags[range.nfd].is_nfd = true;
     }
 
+    for (auto range : unicode_ranges_nonspacing_mark) {  // first, last
+        for (uint32_t cpt = range.first; cpt <= range.second; ++cpt) {
+            cpt_flags[cpt].is_nonspacing_mark = true;
+        }
+    }
+
     return cpt_flags;
 }
 
@@ -1293,19 +1299,6 @@ std::string unicode_cpt_to_utf8(uint32_t cpt) {
     throw std::invalid_argument("invalid codepoint");
 }
 
-std::vector<uint32_t> unicode_cpts_normalize_nfd(const std::vector<uint32_t> & cpts) {
-    auto comp = [] (const uint32_t cpt, const range_nfd & range) {
-        return cpt < range.first;
-    };
-    std::vector<uint32_t> result(cpts.size());
-    for (size_t i = 0; i < cpts.size(); ++i) {
-        const uint32_t cpt = cpts[i];
-        auto it = std::upper_bound(unicode_ranges_nfd.begin(), unicode_ranges_nfd.end(), cpt, comp) - 1;
-        result[i] = (it->first <= cpt && cpt <= it->last) ? it->nfd : cpt;
-    }
-    return result;
-}
-
 static uint8_t unicode_canonical_class(uint32_t cpt) {
     const auto it = unicode_combining_class.find(cpt);
     return it == unicode_combining_class.end() ? 0 : it->second;
@@ -1349,7 +1342,8 @@ static uint32_t unicode_canonical_compose(uint32_t first, uint32_t second) {
     return it == unicode_composition.end() ? 0 : it->second;
 }
 
-std::vector<uint32_t> unicode_cpts_normalize_nfc(const std::vector<uint32_t> & cpts) {
+// Decompose every codepoint fully, then sort combining marks into canonical order.
+static std::vector<uint32_t> unicode_canonical_decompose_ordered(const std::vector<uint32_t> & cpts) {
     std::vector<uint32_t> decomposed;
     decomposed.reserve(cpts.size());
     std::vector<uint32_t> pending;
@@ -1370,6 +1364,16 @@ std::vector<uint32_t> unicode_cpts_normalize_nfc(const std::vector<uint32_t> & c
             return unicode_canonical_class(a) < unicode_canonical_class(b);
         });
     }
+    return decomposed;
+}
+
+std::vector<uint32_t> unicode_cpts_normalize_nfd(const std::vector<uint32_t> & cpts) {
+    // unicode_ranges_nfd keeps only the first codepoint of a decomposition, so it cannot be used here.
+    return unicode_canonical_decompose_ordered(cpts);
+}
+
+std::vector<uint32_t> unicode_cpts_normalize_nfc(const std::vector<uint32_t> & cpts) {
+    std::vector<uint32_t> decomposed = unicode_canonical_decompose_ordered(cpts);
 
     std::vector<uint32_t> result;
     result.reserve(decomposed.size());
