@@ -39,6 +39,14 @@ describe('resolveVoiceMode', () => {
 		});
 	});
 
+	it('dictates with a speech-to-text model picked for the conversation', () => {
+		expect(resolveVoiceMode({ ...base, chatModel: 'org/VibeVoice-ASR:Q8_0' })).toEqual({
+			mode: VoiceMode.DICTATION,
+			separateModel: false,
+			transcriptionModel: 'org/VibeVoice-ASR:Q8_0'
+		});
+	});
+
 	it('dictates with the chat model when the user always dictates', () => {
 		expect(resolveVoiceMode({ ...base, setting: VoiceInputMode.DICTATION })).toEqual({
 			mode: VoiceMode.DICTATION,

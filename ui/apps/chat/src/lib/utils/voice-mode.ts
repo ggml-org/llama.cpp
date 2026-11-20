@@ -33,14 +33,18 @@ export type VoiceModeResolution =
 
 /**
  * What a recording becomes for the conversation's model. Automatic sends the voice to a
- * model with audio input and dictates otherwise; dictation transcribes with the chat model
- * when it can hear, else (router mode) with the chosen transcription model or, on
- * Automatic, a model with audio input that is already loaded.
+ * chat model with audio input and dictates otherwise, also with a speech-to-text model
+ * picked for the conversation: it writes down what is said and has nothing to answer a
+ * voice message with. Dictation transcribes with the chat model when it can hear, else
+ * (router mode) with the chosen transcription model or, on Automatic, a model with audio
+ * input that is already loaded.
  */
 export function resolveVoiceMode(input: VoiceModeInput): VoiceModeResolution {
 	const { chatModel, chatModelHasAudio, isRouter, setting } = input;
+	const sendsVoice =
+		setting !== VoiceInputMode.DICTATION && !(chatModel && isTranscriptionOnlyModel(chatModel));
 
-	if (setting !== VoiceInputMode.DICTATION && chatModelHasAudio) {
+	if (sendsVoice && chatModelHasAudio) {
 		return { mode: VoiceMode.VOICE_MESSAGE, separateModel: false, transcriptionModel: chatModel };
 	}
 
