@@ -2849,7 +2849,7 @@ static void rescale_int_weight_chunk_to_int8_tiles(
                                     : fastdiv(n_tot_units + (uint32_t) n_hvx - 1, &octx->n_hvx_div);
 
     int_weight_rescale_state_t state;
-    state.rescale_fn        = resolve_int_weight_rescale_fn(weight_type);
+    resolve_int_weight_rescale_fns(weight_type, &state.rescale_2k_fn, &state.rescale_tail_fn);
     state.dst_wt_base       = (uint8_t *) vtcm_weight_buf;
     state.dst_bias_base     = (uint8_t *) vtcm_weight_buf + weight_bias_offset;
     state.dst_scales_base   = (float *) ((uint8_t *) vtcm_weight_buf + weight_scales_offset);
@@ -3149,7 +3149,7 @@ static void transfer_output_chunk_int_threaded(
     const uint32_t mc_pad = hex_align_up((uint32_t) n_rows, 64u);
 
     int_output_transfer_state_t state;
-    state.col_chunk_fn       = resolve_int_output_col_chunk_fn(dst_elem_size, bias, bias_elem_size);
+    state.col_chunk_fn       = resolve_int_output_col_chunk_fn((uint32_t) n_groups, dst_elem_size, bias, bias_elem_size);
     state.dst                = dst;
     state.bias               = bias;
     state.vtcm_src           = (const uint8_t *) vtcm_src;
@@ -3400,7 +3400,7 @@ static void transfer_output_chunk_int_scattered_threaded(
     const uint32_t mc_pad = hex_align_up((uint32_t) n_rows, 64u);
 
     int_output_transfer_scattered_state_t state = {
-        .scattered_fn       = resolve_int_output_scattered_fn(dst_elem_size),
+        .scattered_fn       = resolve_int_output_scattered_fn((uint32_t) n_groups, dst_elem_size),
         .matrix_rows        = matrix_rows,
         .dst                = dst,
         .vtcm_src           = (const uint8_t *) vtcm_src,
