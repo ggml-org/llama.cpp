@@ -92,7 +92,7 @@ void ggml_sycl_roll(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
     int shift3 = params[3];
 
 
-    if ((shift0 | shift1 | shift2 | shift3) == 0) {
+    if ((shift0 | shift1 | shift2 | shift3) == 0 && ggml_is_contiguous(src)) {
         const size_t nb = ggml_nbytes(src);
         queue *q = ctx.stream();
         SYCL_CHECK(CHECK_TRY_ERROR(q->memcpy(dst->data, src->data, nb)));
