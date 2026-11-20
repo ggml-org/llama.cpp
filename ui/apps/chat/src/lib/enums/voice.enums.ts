@@ -24,10 +24,11 @@ export enum VoiceMode {
 	VOICE_MESSAGE = 'voice-message'
 }
 
-/** A model's part in voice input, as the model picker and the Models manager show it. */
+/**
+ * What kind of model with audio input a model is, as the model picker and the Models manager
+ * badge it. Which of them transcribes dictation is told apart from it, by a microphone.
+ */
 export enum VoiceModelRole {
-	/** The model that transcribes dictation for chat models that cannot hear */
-	DICTATION = 'dictation',
 	/** A speech-to-text model: for dictation, not for chat */
 	TRANSCRIPTION = 'transcription',
 	/** A chat model with audio input: it gets voice messages */

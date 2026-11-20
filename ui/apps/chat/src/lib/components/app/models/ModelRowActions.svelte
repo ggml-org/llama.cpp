@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Heart, HeartOff, Info, Mic } from '@lucide/svelte';
 	import { ActionIcon } from '#lib/components/app/index.ts';
-	import { VoiceModelRole } from '#lib/enums/index.ts';
+	import { VOICE_DICTATION_MODEL_LABEL } from '#lib/constants/index.ts';
 	import { modelsStore, serverStore, uiStore, voiceStore } from '#lib/stores/index.ts';
 	import type { ModelOption } from '#lib/types/models.js';
 
@@ -14,12 +14,17 @@
 
 	let { isFav, option, revealOnHover = true }: Props = $props();
 
-	// the favorite heart stays visible, so the reveal applies to the other icons
-	// a router model that hears, other than the one that dictates, can be made the one
-	let canDictate = $derived.by(() => {
-		const role = voiceStore.roleOf(option.model);
+	// the favorite heart and the dictation model's microphone stay visible, so the reveal
+	// applies to the other icons
+	// any router model that hears can be the one that transcribes dictation
+	let canDictate = $derived(serverStore.isRouterMode && voiceStore.roleOf(option.model) !== null);
+	let dictates = $derived(voiceStore.isDictationModel(option.model));
+	let dictationLabel = $derived.by(() => {
+		if (!dictates) return VOICE_DICTATION_MODEL_LABEL.use;
 
-		return serverStore.isRouterMode && role !== null && role !== VoiceModelRole.DICTATION;
+		return voiceStore.dictationIsAutomatic
+			? VOICE_DICTATION_MODEL_LABEL.automatic
+			: VOICE_DICTATION_MODEL_LABEL.chosen;
 	});
 
 	const revealClass =
@@ -32,19 +37,6 @@
 	onkeydown={(event) => event.stopPropagation()}
 	role="presentation"
 >
-	{#if canDictate}
-		<span class={revealOnHover ? revealClass : ''}>
-			<ActionIcon
-				class="size-icon-lg hover:text-foreground"
-				icon={Mic}
-				iconSize="size-icon-md"
-				onclick={() => voiceStore.useForDictation(option.model)}
-				tooltip="Use for dictation"
-				tooltipAsTitle
-			/>
-		</span>
-	{/if}
-
 	<span class={revealOnHover ? revealClass : ''}>
 		<ActionIcon
 			class="size-icon-lg hover:text-foreground"
@@ -55,6 +47,26 @@
 			tooltipAsTitle
 		/>
 	</span>
+
+	{#if canDictate}
+		<!-- like the heart: lit on the model that dictates, among the hover actions on the others -->
+		<span
+			class={!dictates && revealOnHover ? revealClass : ''}
+			data-dictates={dictates || undefined}
+			data-slot="model-dictation-action"
+		>
+			<ActionIcon
+				class={dictates
+					? 'size-icon-lg text-destructive hover:text-destructive'
+					: 'size-icon-lg hover:text-foreground'}
+				icon={Mic}
+				iconSize="size-icon-md"
+				onclick={() => voiceStore.toggleDictation(option.model)}
+				tooltip={dictationLabel}
+				tooltipAsTitle
+			/>
+		</span>
+	{/if}
 
 	{#if isFav}
 		<span class="flex size-5 items-center justify-center">

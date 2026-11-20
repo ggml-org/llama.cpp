@@ -1,7 +1,8 @@
-// Guards how the model picker shows each model's part in voice input: the model that
-// transcribes dictation, a speech-to-text model, a chat model that hears, and nothing for
-// one that can't; and that a loaded model kept only for dictation sits apart from the
-// chat models, under its own heading.
+// Guards how the model picker shows each model's part in voice input: a badge for a
+// speech-to-text model and for a chat model that hears, nothing for one that can't, and a
+// microphone among the row's actions that is lit on the model that transcribes dictation
+// and picks it on any other model that hears; and that a loaded model kept only for
+// dictation sits apart from the chat models, under its own heading.
 
 import ModelsSelectorListWrapper from './components/ModelsSelectorListWrapper.svelte';
 import { SETTINGS_KEYS, VOICE_TRANSCRIPTION_MODEL_AUTO } from '#lib/constants/index.ts';
@@ -84,8 +85,26 @@ function roles(container: HTMLElement): Record<string, string | null> {
 	return out;
 }
 
+/** The microphone action of a model's row, null when the row has none. */
+function microphone(container: HTMLElement, model: string): HTMLElement | null {
+	for (const row of container.querySelectorAll<HTMLElement>('[role="option"]')) {
+		if (row.querySelector(`[title="${model}"]`)) {
+			return row.querySelector<HTMLElement>('[data-slot="model-dictation-action"]');
+		}
+	}
+
+	return null;
+}
+
+/** The models whose microphone is lit, as the ones that transcribe dictation. */
+function dictating(container: HTMLElement): string[] {
+	return [CHAT, OMNI, ASR]
+		.map((entry) => entry.model)
+		.filter((model) => microphone(container, model)?.dataset.dictates !== undefined);
+}
+
 describe('voice roles in the model picker', () => {
-	it('marks the dictation model, a speech-to-text model and a chat model that hears', () => {
+	it('badges a speech-to-text model and a chat model that hears', () => {
 		useTranscriptionModel(OMNI.model);
 
 		const screen = renderList(CHAT.model);
@@ -93,8 +112,36 @@ describe('voice roles in the model picker', () => {
 		expect(roles(screen.container)).toEqual({
 			[ASR.model]: 'transcription',
 			[CHAT.model]: null,
-			[OMNI.model]: 'dictation'
+			[OMNI.model]: 'voice'
 		});
+	});
+
+	it('lights the microphone of the dictation model, and offers it on the others that hear', () => {
+		useTranscriptionModel(OMNI.model);
+
+		const screen = renderList(CHAT.model);
+
+		expect(dictating(screen.container)).toEqual([OMNI.model]);
+		expect(microphone(screen.container, ASR.model)).not.toBeNull();
+		// a model that cannot hear has no microphone
+		expect(microphone(screen.container, CHAT.model)).toBeNull();
+	});
+
+	it('picks the dictation model with a click, and hands it back to Automatic with another', async () => {
+		useTranscriptionModel(OMNI.model);
+
+		const screen = renderList(CHAT.model);
+		const click = (model: string) =>
+			microphone(screen.container, model)!.querySelector('button')!.click();
+
+		click(ASR.model);
+		await expect.poll(() => dictating(screen.container)).toEqual([ASR.model]);
+		expect(settingsStore.config[SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL]).toBe(ASR.model);
+
+		click(ASR.model);
+		await expect
+			.poll(() => settingsStore.config[SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL])
+			.toBe(VOICE_TRANSCRIPTION_MODEL_AUTO);
 	});
 
 	it('lists a loaded model kept for dictation apart from the chat models', () => {
@@ -127,7 +174,7 @@ describe('voice roles in the model picker', () => {
 
 		const screen = renderList(CHAT.model);
 
-		expect(roles(screen.container)[ASR.model]).toBe('dictation');
+		expect(dictating(screen.container)).toEqual([ASR.model]);
 		expect(roles(screen.container)[OMNI.model]).toBe('voice');
 	});
 });

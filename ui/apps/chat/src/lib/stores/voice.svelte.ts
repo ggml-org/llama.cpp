@@ -3,8 +3,9 @@
  *
  * One place for what the microphone does with the conversation's model (a voice message,
  * dictation, or nothing, see resolveVoiceMode) and for the model that transcribes
- * dictation, so the chat form, the model picker and the Models manager agree on it: a
- * model's part (roleOf) is shown as a badge where models are listed.
+ * dictation, so the chat form, the model picker and the Models manager agree on it: where
+ * models are listed, a badge says what kind of hearing model each is (roleOf) and a
+ * microphone which one transcribes dictation (isDictationModel), and picks it.
  */
 
 import { SETTINGS_KEYS, VOICE_TRANSCRIPTION_MODEL_AUTO } from '#lib/constants/index.ts';
@@ -84,9 +85,27 @@ class VoiceStore {
 		return model ? modelsStore.props.modelSupportsAudio(model) : false;
 	}
 
-	/** A model's part in voice input, null when it has none. */
+	/** Whether a model is the one that transcribes dictation for chat models that can't hear. */
+	isDictationModel(model: string): boolean {
+		return this.dictationModel === model;
+	}
+
+	/** What kind of model with audio input a model is, null when it cannot hear. */
 	roleOf(model: string): VoiceModelRole | null {
-		return voiceModelRole(model, this.hasAudio(model), this.dictationModel);
+		return voiceModelRole(model, this.hasAudio(model));
+	}
+
+	/**
+	 * What a click on a model's microphone does: makes it the model that transcribes
+	 * dictation, or, on the one already chosen, hands the choice back to Automatic.
+	 */
+	toggleDictation(model: string): void {
+		const chosen = !this.dictationIsAutomatic && this.transcriptionSetting.trim() === model;
+
+		settingsStore.updateConfig(
+			SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL,
+			chosen ? VOICE_TRANSCRIPTION_MODEL_AUTO : model
+		);
 	}
 
 	/** Makes a model the one that transcribes dictation (Settings > Voice > Transcription model). */

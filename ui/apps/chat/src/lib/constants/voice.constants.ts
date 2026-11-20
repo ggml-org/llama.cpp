@@ -95,19 +95,26 @@ export const VOICE_TRANSCRIPTION_MODEL_AUTO = '';
 export const VOICE_TRANSCRIPTION_ONLY_PATTERN =
 	/(^|[^a-z0-9])(asr|whisper|parakeet|canary|moonshine|sensevoice|stt)([^a-z0-9]|$)/i;
 
-/** How the model picker and the Models manager name a model's part in voice input. */
+/** How the model picker and the Models manager name a kind of model with audio input. */
 export const VOICE_MODEL_ROLE_LABEL = {
-	dictation: 'Dictation',
 	transcription: 'Speech to text',
 	voice: 'Voice'
 } as const;
 
-/** What each part means, in the badge's tooltip. */
+/**
+ * What the microphone on a model's row says: on the model that transcribes dictation for
+ * chat models that cannot hear, whether it was chosen or picked automatically (a loaded
+ * model with audio input), and on any other model that hears, that it can be the one.
+ */
+export const VOICE_DICTATION_MODEL_LABEL = {
+	automatic: 'Transcribes dictation, picked automatically. Click to keep it',
+	chosen: 'Transcribes dictation. Click to pick automatically',
+	current: 'transcribes dictation',
+	use: 'Use for dictation'
+} as const;
+
+/** What each kind means, in the badge's tooltip. */
 export const VOICE_MODEL_ROLE_DESCRIPTION = {
-	dictationAuto:
-		'Transcribes your dictation with chat models that cannot hear. Picked automatically, as a loaded model with audio input; choose one in Settings > Voice.',
-	dictationChosen:
-		'Transcribes your dictation with chat models that cannot hear, as chosen in Settings > Voice.',
 	transcription:
 		'A speech-to-text model: it writes down what is said, for dictation, and is not meant to chat.',
 	voice:

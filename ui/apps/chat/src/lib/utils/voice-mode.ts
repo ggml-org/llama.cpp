@@ -118,16 +118,10 @@ export function dictationModelFor(input: DictationModelInput): string | null {
 }
 
 /**
- * A model's part in voice input: the one that dictates, a speech-to-text model, a chat
- * model that hears, or none (it cannot hear).
+ * What kind of model with audio input a model is: a speech-to-text model, a chat model
+ * that hears, or none (it cannot hear).
  */
-export function voiceModelRole(
-	modelId: string,
-	hasAudio: boolean,
-	dictationModel: string | null
-): VoiceModelRole | null {
-	if (dictationModel && modelId === dictationModel) return VoiceModelRole.DICTATION;
-
+export function voiceModelRole(modelId: string, hasAudio: boolean): VoiceModelRole | null {
 	if (!hasAudio) return null;
 
 	return isTranscriptionOnlyModel(modelId) ? VoiceModelRole.TRANSCRIPTION : VoiceModelRole.VOICE;

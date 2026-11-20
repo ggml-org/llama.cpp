@@ -232,14 +232,9 @@ describe('dictationModelFor', () => {
 });
 
 describe('voiceModelRole', () => {
-	it('marks the model that dictates, whatever else it is', () => {
-		expect(voiceModelRole('qwen3-asr', true, 'qwen3-asr')).toBe(VoiceModelRole.DICTATION);
-		expect(voiceModelRole('omni', true, 'omni')).toBe(VoiceModelRole.DICTATION);
-	});
-
 	it('tells speech-to-text models from chat models that hear, and leaves the rest out', () => {
-		expect(voiceModelRole('org/Qwen3-ASR', true, 'omni')).toBe(VoiceModelRole.TRANSCRIPTION);
-		expect(voiceModelRole('omni', true, null)).toBe(VoiceModelRole.VOICE);
-		expect(voiceModelRole('text-only', false, null)).toBeNull();
+		expect(voiceModelRole('org/Qwen3-ASR', true)).toBe(VoiceModelRole.TRANSCRIPTION);
+		expect(voiceModelRole('omni', true)).toBe(VoiceModelRole.VOICE);
+		expect(voiceModelRole('text-only', false)).toBeNull();
 	});
 });
