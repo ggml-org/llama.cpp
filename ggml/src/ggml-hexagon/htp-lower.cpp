@@ -841,6 +841,15 @@ static bool htp_lower_is_rms_root(
            opcode == HTP_OP_RMS_NORM_MUL_ADD;
 }
 
+static bool htp_lower_is_ssm_conv_root(
+    const std::vector<htp_opnode> & nodes,
+    const std::unordered_map<const ggml_tensor *, size_t> & owner_idx,
+    const ggml_tensor * root
+) {
+    auto it = owner_idx.find(root);
+    return it != owner_idx.end() && nodes[it->second].opcode == HTP_OP_SSM_CONV;
+}
+
 static bool htp_lower_safe_gdn_output(
     const htp_opnode & owner,
     const ggml_tensor * root,
@@ -1075,7 +1084,8 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
 
     auto is_selected_root = [&](const ggml_tensor * r) -> bool {
         if (htp_lower_is_mm_root(nodes, owner_idx, r) || htp_lower_is_fa_root(nodes, owner_idx, r) ||
-            (opt_oplower >= 2 && htp_lower_is_rms_root(nodes, owner_idx, r))) {
+            (opt_oplower >= 2 &&
+             (htp_lower_is_rms_root(nodes, owner_idx, r) || htp_lower_is_ssm_conv_root(nodes, owner_idx, r)))) {
             return true;
         }
         if (opt_oplower >= 1) {
@@ -1164,7 +1174,8 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
                 for (const ggml_tensor * inp : tnode->inputs) {
                     const ggml_tensor * inp_root = inp ? htp_tensor_root(inp) : nullptr;
                     if (inp_root && can_lower(inp_root) &&
-                        (is_selected_root(inp_root) || htp_lower_is_rms_root(nodes, owner_idx, inp_root)) &&
+                        (is_selected_root(inp_root) || htp_lower_is_rms_root(nodes, owner_idx, inp_root) ||
+                         htp_lower_is_ssm_conv_root(nodes, owner_idx, inp_root)) &&
                         apply_root(inp_root)) {
                         expanded = true;
                     }
