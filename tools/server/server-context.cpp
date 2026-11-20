@@ -6488,7 +6488,7 @@ void server_routes::init_routes() {
         }
 
         const json body = json::parse(req.body);
-        const auto questions = decision.parse_questions(body);
+        const auto questions = decision.parse_questions(body, meta->has_inp_audio);
         const size_t set_size = decision.set_size(questions);
 
         std::vector<raw_buffer> files;
