@@ -2603,6 +2603,13 @@ bool rpc_server::comm_allreduce(const rpc_msg_comm_allreduce_req & request) {
         LOG_ERROR("[%s] error deserializing tensor\n", __func__);
         return false;
     }
+    // same requirements as the client side (ggml_backend_rpc_comm_allreduce_tensor): the pairwise
+    // path lays out ggml_nelements() contiguous elements at data and in its scratch, while
+    // deserialize_tensor() only checked the strided ggml_nbytes() range
+    if (t_dst->type != GGML_TYPE_F32 || !ggml_is_contiguous(t_dst)) {
+        LOG_ERROR("[%s] tensor must be a contiguous F32 tensor\n", __func__);
+        return false;
+    }
     if (ggml_nbytes(t_dst) == 0) {
         return true;
     }
