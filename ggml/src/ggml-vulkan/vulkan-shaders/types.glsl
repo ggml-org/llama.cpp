@@ -42,6 +42,17 @@ ivec4 unpack_i8x4(const int32_t w) {
     return ivec4(unpack8(w));
 }
 
+// Every unpack8() and pack32() on 8-bit vectors has to go through the helpers above, or the shader
+// silently breaks on Qualcomm. Make any other use a compile error: unpack8() is not available, and
+// pack32() only accepts 16-bit vectors. Coopmat shaders, which are not used on Qualcomm devices, keep
+// the builtins by defining ALLOW_8BIT_VECTOR_BUILTINS, and so does the hardware FP4 path.
+#if !defined(ALLOW_8BIT_VECTOR_BUILTINS) && !defined(USE_OCP_FP4)
+uint32_t pack32_16bit_only(const u16vec2 v) { return pack32(v); }
+int32_t pack32_16bit_only(const i16vec2 v) { return pack32(v); }
+#define pack32 pack32_16bit_only
+#define unpack8 unpack8_not_allowed_use_unpack_u8x4_or_unpack_i8x4
+#endif
+
 #if defined(DATA_A_F32)
 #define QUANT_K 1
 #define QUANT_R 1
