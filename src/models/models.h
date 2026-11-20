@@ -2610,6 +2610,7 @@ struct llama_model_minimax_01 : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
     uint32_t graph_nodes_per_tensor() const override { return 32; }
+    bool reserve_pp_single_seq() const override { return true; }
 
     struct graph : public llm_graph_context {
         graph(const llm_graph_params & params);
@@ -3246,6 +3247,7 @@ struct llama_model_kimi_linear : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
     uint32_t graph_nodes_per_tensor() const override { return 32; }
+    bool reserve_pp_single_seq() const override { return true; }
 
     struct graph : public llm_build_delta_net_base {
         graph(const llm_graph_params & params);

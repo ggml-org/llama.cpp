@@ -1055,6 +1055,9 @@ struct llama_model {
     // graph size budget: max graph nodes per model tensor
     virtual uint32_t graph_nodes_per_tensor() const { return 8; }
 
+    // reserve the prompt graph with one sequence, its worst case for this model, see [TAG_RESERVE_DIAG_DECAY]
+    virtual bool reserve_pp_single_seq() const { return false; }
+
     ggml_cgraph * build_graph(const llm_graph_params & params) const;
 
     virtual void load_stats  (llama_model_loader & ml) = 0;
