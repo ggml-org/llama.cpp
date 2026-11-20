@@ -414,6 +414,7 @@ def write_trace_packet_to_file(f, packet_bytes):
     # Write as field 1 of top-level Trace message
     f.write(pb_length_delimited(1, packet_bytes))
 
+
 # --- End Protobuf Encoder ---
 
 MERGE_DMA_DEFAULT_DEPTH = 8
