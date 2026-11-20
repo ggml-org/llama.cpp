@@ -10,7 +10,7 @@
 #include "ggml-cuda/arange.cuh"
 #include "ggml-cuda/argmax.cuh"
 #include "ggml-cuda/argsort.cuh"
-#include "ggml-cuda/batch-get.cuh"
+#include "ggml-cuda/batch-copy.cuh"
 #include "ggml-cuda/binbcast.cuh"
 #include "ggml-cuda/clamp.cuh"
 #include "ggml-cuda/col2im-1d.cuh"
@@ -48,6 +48,7 @@
 #include "ggml-cuda/rope.cuh"
 #include "ggml-cuda/roll.cuh"
 #include "ggml-cuda/scale.cuh"
+#include "ggml-cuda/sleep.cuh"
 #include "ggml-cuda/snake.cuh"
 #include "ggml-cuda/softcap.cuh"
 #include "ggml-cuda/softmax.cuh"
@@ -1115,6 +1116,11 @@ static void ggml_backend_cuda_buffer_set_tensor_n(ggml_backend_buffer_t buffer, 
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
     ggml_cuda_set_device(ctx->device);
+
+    if (!ggml_cuda_pinned_memory_disabled() &&
+            ggml_cuda_set_tensor_n(ctx->device, tensors, data, offsets, sizes, n_tensors)) {
+        return;
+    }
 
     for (size_t i = 0; i < n_tensors; i++) {
         if (sizes[i] == 0) {
@@ -2724,7 +2730,8 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
                     ids_from_sorted_host[i12*n_expert_used + iex] = ids_to_sorted_host.size();
                     ids_to_sorted_host.push_back(i12*ne11 + iex % ne11);
                     tokens_per_expert[i02]++;
-                    break;
+                    // TODO: removing the break here was done to make duplicate IDs work but this caused a ~10% performance regression, better solution needed.
+                    // break;
                 }
             }
         }
@@ -3145,6 +3152,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_FILL:
             ggml_cuda_op_fill(ctx, dst);
             break;
+        case GGML_OP_SLEEP:
+            ggml_cuda_op_sleep(ctx, dst);
+            break;
         case GGML_OP_LIGHTNING_INDEXER:
             ggml_cuda_lightning_indexer(ctx, dst);
             break;
@@ -3495,7 +3505,12 @@ static bool ggml_cuda_should_fuse_rope_set_rows(const ggml_tensor * rope,
         return false;
     }
 
-    if (set_rows->type != GGML_TYPE_F32 && set_rows->type != GGML_TYPE_F16) {
+    if (set_rows->type != GGML_TYPE_F32 && set_rows->type != GGML_TYPE_F16 && set_rows->type != GGML_TYPE_BF16) {
+        return false;
+    }
+
+    // BF16 rope fuses into an F16 or BF16 cache, other ropes not into a BF16 cache
+    if (rope->type == GGML_TYPE_BF16 ? set_rows->type == GGML_TYPE_F32 : set_rows->type == GGML_TYPE_BF16) {
         return false;
     }
 
@@ -6501,7 +6516,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                                (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_BF16 || op->type == GGML_TYPE_F8_E4M3 ||
                                op->type == GGML_TYPE_Q4_0 || op->type == GGML_TYPE_Q4_1 || op->type == GGML_TYPE_Q5_0 ||
                                op->type == GGML_TYPE_Q5_1 || op->type == GGML_TYPE_Q8_0 || op->type == GGML_TYPE_IQ4_NL) &&
-                               op->src[0]->type == GGML_TYPE_F32
+                               (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_BF16)
                            ) || (
                                op->type == GGML_TYPE_F16 && op->src[0]->type == GGML_TYPE_F16
                            )
@@ -6722,7 +6737,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             return false;
         case GGML_OP_ROPE:
         case GGML_OP_ROPE_BACK: {
-            return op->src[0]->nb[0] == ggml_type_size(op->src[0]->type) && ggml_is_contiguous_2(op->src[0]);
+            return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_BF16) &&
+                   op->type == op->src[0]->type &&
+                   op->src[0]->nb[0] == ggml_type_size(op->src[0]->type) && ggml_is_contiguous_2(op->src[0]);
         }
         case GGML_OP_IM2COL:
         case GGML_OP_IM2COL_3D:
@@ -6809,6 +6826,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             return ggml_cuda_lightning_indexer_supported(dev_ctx->device, op);
         case GGML_OP_TOP_K_MASK:
             return op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32;
+        case GGML_OP_SLEEP:
+#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+            return false;
+#else
+            return true;
+#endif // defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
 
         default:
             return false;

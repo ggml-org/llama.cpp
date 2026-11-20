@@ -107,7 +107,8 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::sh
     m_naive = true;
     for (int i = 0; i < cgraph->n_nodes; ++i) {
         if ((cgraph->nodes[i]->op == GGML_OP_GATED_DELTA_NET && cgraph->nodes[i]->op_params[0] > 1) ||
-            is_sampling_view(cgraph->nodes[i]) || is_conv_state_snapshot_writeback(cgraph->nodes[i])) {
+            is_sampling_view(cgraph->nodes[i]) || is_conv_state_snapshot_writeback(cgraph->nodes[i]) ||
+            is_ssm_state_writeback(cgraph->nodes[i])) {
             std::tie(m_model_params, m_compute_params) = compute_llm_params(cgraph, false);
             add_extra_inputs();
             break;
@@ -494,6 +495,10 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
             }
         } else if (node->ne[0] == 1 && src->ne[0] * src->ne[1] * src->ne[2] == node->ne[1]) {
             op_case = 3;
+        } else if (node->ne[0] * node->ne[1] == src->ne[0] * src->ne[1] && node->ne[2] == src->ne[2] &&
+                   node->ne[3] == src->ne[3]) {
+            // head regroup, e.g. mamba2's [head_dim, n_head, n_tokens, n_seqs] -> [d_inner/n_group, n_group, n_tokens, n_seqs]
+            op_case = 1;
         } else if (name.find("linear_attn_qkv_mixed") == 0 || name.find("alpha") == 0) {
             op_case = 6;
         } else if (name.find("linear_attn_out") == 0) {
@@ -595,6 +600,10 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
     case GGML_OP_SET_ROWS: {
         if (is_conv_state_snapshot_writeback(node)) {
             op_case = 3;
+            break;
+        }
+        if (is_column_set_rows(node)) {
+            op_case = 4;
             break;
         }
         // `-fa off` writes the V cache transposed, through a [1, n] reshape of the cache: one element per row
@@ -797,6 +806,9 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
                 } else {
                     op_case = 1;
                 }
+            } else if (is_ssm_state_writeback(node)) {
+                op_case = 13;
+                break;
             } else if (GgmlOvDecoder::is_conv_state_writeback(node)) {
                 op_case = 2;
                 break;
@@ -1296,6 +1308,11 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             writeback.snapshot_stride = destination->nb[2] / destination->nb[1];
             compute_params.rs_writebacks[get_tensor_ov_name(cgraph, node)] = writeback;
         }
+        if (is_ssm_state_writeback(node)) {
+            ComputeParams::RsWriteback writeback;
+            writeback.slot_begin = (int64_t) (node->src[1]->view_offs / node->src[1]->nb[1]);
+            compute_params.rs_writebacks[get_tensor_ov_name(cgraph, node)] = writeback;
+        }
         if (is_conv_state_snapshot_writeback(node)) {
             const auto source = node->src[0];
             const auto dest = node->src[2];
@@ -1406,6 +1423,14 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
         compute_params.attention_size =
             ggml_openvino_static_kv_window(compute_params.attention_size, model_params.ctx_per_seq);
     }
+    // The GPU plugin keeps device memory for each KV length it sees, and llama.cpp grows the KV length in steps of
+    // 256. Round it up to a power of two the same way, so that a long context uses a few lengths and not one per
+    // step. The KQ mask input is padded to this length with -inf (convert_ggml_input_to_ov).
+    if (!is_static && ggml_openvino_is_gpu() && !ggml_openvino_getenv_int("GGML_OPENVINO_STATEFUL_EXECUTION") &&
+        !compute_params.mask_name.empty() && compute_params.attention_size > 0 && model_params.ctx_per_seq > 0) {
+        compute_params.attention_size =
+            ggml_openvino_static_kv_window(compute_params.attention_size, model_params.ctx_per_seq);
+    }
     model_params.ctx = model_params.ctx_per_seq * model_params.n_seq;
     return {model_params, compute_params};
 }
@@ -1414,6 +1439,15 @@ void GgmlOvDecoder::validate_cgraph() const {
     if (m_model_params.n_seq > 1 && m_is_static == true) {
         throw std::runtime_error("n_seq > 1 is not supported on NPU. Try setting -np 1.");
     }
+}
+
+bool GgmlOvDecoder::has_inp_embd_leaf_use(const ggml_tensor * tensor) const {
+    for (int i = 0; i < m_cgraph->n_nodes; i++) {
+        if (is_inp_embd_leaf(tensor, m_cgraph->nodes[i])) {
+            return true;
+        }
+    }
+    return false;
 }
 
 ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
@@ -1530,7 +1564,7 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
         // index list has a static length; on CPU/GPU it may change across compiles (defrag).
         input_shape = m_is_static ? ov::PartialShape{get_shape(input)} : ov::PartialShape{1, 1, 1, -1};
 
-    } else if (input != nullptr && op != nullptr && is_inp_emb(input, op)) {
+    } else if (input != nullptr && op != nullptr && (is_inp_emb(input, op) || has_inp_embd_leaf_use(input))) {
         input_shape = ov::PartialShape{get_shape(input)};
         if (!m_is_static) {
             input_shape[2] = -1;
@@ -1914,7 +1948,11 @@ void GgmlOvDecoder::compute_model_outputs() {
             continue;
         }
         const bool inactive_top_k = is_sampling_top_k(cur_node) && !(cur_node->flags & GGML_TENSOR_FLAG_COMPUTE);
-        if ((cur_node->flags & GGML_TENSOR_FLAG_OUTPUT) || inactive_top_k) {
+        auto cur_node_use_count = m_cgraph->use_counts[ggml_hash_find(&m_cgraph->visited_hash_set, cur_node)];
+        // llama flags result_norm in every graph but reads it only with embeddings on, when it has no consumer
+        // and is kept by the rule below.
+        const bool unread_embd = strcmp(cur_node->name, "result_norm") == 0 && cur_node_use_count > 0;
+        if (((cur_node->flags & GGML_TENSOR_FLAG_OUTPUT) && !unread_embd) || inactive_top_k) {
             const auto name = get_tensor_ov_name(m_cgraph, cur_node);
             m_model_outputs[name] = cur_node;
             m_model_output_names.insert(name);
@@ -1925,7 +1963,12 @@ void GgmlOvDecoder::compute_model_outputs() {
             m_model_outputs[name] = cache;
             m_model_output_names.insert(name);
         }
-        auto cur_node_use_count = m_cgraph->use_counts[ggml_hash_find(&m_cgraph->visited_hash_set, cur_node)];
+        if (is_ssm_state_writeback(cur_node)) {
+            auto * cache = cur_node->view_src;
+            const auto name = get_tensor_ov_name(m_cgraph, cache);
+            m_model_outputs[name] = cache;
+            m_model_output_names.insert(name);
+        }
         if (cur_node_use_count == 0) {
             // The output of in-place ops is the view_src tensor, which is updated in place. We should use the view_src name as the output name to make sure it can be correctly matched with the later ops that use the view_src.
             if (cur_node != nullptr && ::is_inplace_op(cur_node) &&
@@ -2641,6 +2684,10 @@ bool GgmlOvDecoder::is_direct_gdn_view(const ggml_tensor * node) const {
 
 std::vector<std::string> GgmlOvDecoder::get_output_names(int node_idx) const {
     auto * node = m_node_info_list[node_idx].node;
+    if (is_ssm_state_writeback(node)) {
+        // the written state block plus the full updated cache (see translate_cpy op_case 13)
+        return {m_node_info_list[node_idx].node_name, get_tensor_ov_name(m_cgraph, node->view_src)};
+    }
     if (node->op == GGML_OP_GATED_DELTA_NET && (!m_model_params.has_rs_rollback || node->op_params[0] > 1)) {
         std::string attn_name;
         std::string state_name;
@@ -2669,6 +2716,10 @@ std::vector<std::string> GgmlOvDecoder::get_output_names(int node_idx) const {
 
 std::string GgmlOvDecoder::get_inplace_op_src(int node_idx) const {
     auto * node = m_node_info_list[node_idx].node;
+    if (is_ssm_state_writeback(node)) {
+        // translate_cpy publishes the updated cache as a second named output
+        return "";
+    }
     // Reset lengths (also in static mode) and dynamic remainder views can become nonempty
     // after compilation. Keep their alias updates in the translated cache chain.
     const bool runtime_recurrent_write = !m_naive && is_recurrent_cache(node->view_src) &&
@@ -2786,7 +2837,7 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                     m_node_dynamic_dims[src] = 0;
                     continue;
                 }
-                if (is_inp_scale_rows(src, node)) {
+                if (is_inp_scale_rows(src, node) || is_inp_embd_leaf(src, node)) {
                     m_node_dynamic_dims[src] = 1;
                     continue;
                 }
@@ -2863,6 +2914,11 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
 
             if (node->src[0]->op == GGML_OP_GATED_DELTA_NET && node->view_offs == 0) {
                 m_node_dynamic_dims[node] = 2;
+                break;
+            }
+            if (node->src[0]->op == GGML_OP_SSM_SCAN) {
+                // y part [head_dim, n_head, n_tokens, n_seqs] at offset 0; the state part is token-independent
+                m_node_dynamic_dims[node] = node->view_offs == 0 ? 2 : -1;
                 break;
             }
             // Use stride-based matching: the stride of a VIEW dimension directly
@@ -3030,6 +3086,10 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
         case GGML_OP_GATED_DELTA_NET:
             m_node_dynamic_dims[node] = 1;
             break;
+        case GGML_OP_SSM_SCAN:
+            // packed 1-D [y | state]; the y part grows with tokens
+            m_node_dynamic_dims[node] = 0;
+            break;
         case GGML_OP_RMS_NORM:
         case GGML_OP_L2_NORM:
         case GGML_OP_NORM:
@@ -3080,12 +3140,15 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
         case GGML_OP_CPY:
         case GGML_OP_SUM:
         case GGML_OP_MEAN:
+        case GGML_OP_ARANGE:
             m_node_dynamic_dims[node] = -1;
             break;
         case GGML_OP_SET_ROWS:
-            // a cache write returns the cache; other rows writes keep the shape of their destination
-            m_node_dynamic_dims[node] = (is_kvcache_write(node) || is_conv_state_snapshot_writeback(node)) ?
-                                           -1 : m_node_dynamic_dims[node->src[2]];
+            // a cache or column write returns its whole buffer; other rows writes keep the shape of their destination
+            m_node_dynamic_dims[node] =
+                (is_kvcache_write(node) || is_conv_state_snapshot_writeback(node) || is_column_set_rows(node)) ?
+                    -1 :
+                    m_node_dynamic_dims[node->src[2]];
             break;
         case GGML_OP_IM2COL: {
             m_node_dynamic_dims[node] = -1;
