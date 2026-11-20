@@ -96,6 +96,10 @@ static bool ggml_et_uberkernel_ensure_slot_capacity(ggml_backend_et_uberkernel_s
     return slot.device_insts != nullptr && slot.device_params != nullptr;
 }
 
+#define ET_TRACE_DECODER_IMPL
+#include <et-trace/decoder.h>
+#include <et-trace/layout.h>
+
 // Get embedded kernel data by name
 static std::vector<std::byte> ggml_et_get_embedded_kernel(const std::string & kernel_name) {
     auto it = ggml_et_embedded_kernels.find(kernel_name);
