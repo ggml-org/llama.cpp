@@ -12,7 +12,7 @@ export const MODELS_TABLE_GROUP_LABELS: Record<ModelsTableGroupKind, string> = {
 
 /**
  * Sticky offset of a group heading under its section header: one section-header
- * row (`py-2` over `text-[13px]` line height) minus the header's bottom border,
+ * row (`py-2` over `text-body-sm` line height) minus the header's bottom border,
  * so the two stacked sticky rows do not show a gap or overlap by a pixel.
  */
 export const MODELS_TABLE_GROUP_STICKY_OFFSET = 'top: calc(2.25rem - 1px)';

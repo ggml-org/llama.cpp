@@ -30,7 +30,7 @@
 
 <span
 	class={[
-		'text-muted-foreground inline-flex items-center gap-1 text-xs group',
+		'text-muted-foreground inline-flex items-center gap-1 text-caption group',
 		directory && 'text-foreground'
 	]}
 >

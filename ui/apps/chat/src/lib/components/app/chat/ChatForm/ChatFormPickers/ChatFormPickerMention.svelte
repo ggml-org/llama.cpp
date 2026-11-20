@@ -258,7 +258,7 @@
 								<Tooltip.Root>
 									<Tooltip.Trigger>
 										{#snippet child({ props })}
-											<span {...props} class="truncate text-sm font-medium">{entry.name}</span>
+											<span {...props} class="truncate text-label">{entry.name}</span>
 										{/snippet}
 									</Tooltip.Trigger>
 
@@ -267,17 +267,17 @@
 									</Tooltip.Content>
 								</Tooltip.Root>
 							{:else}
-								<span class="truncate text-sm font-medium">{entry.name}</span>
+								<span class="truncate text-label">{entry.name}</span>
 							{/if}
 
 							<span
-								class="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-muted-foreground"
+								class="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-caption-sm uppercase tracking-wide text-muted-foreground"
 							>
 								{entry.type}
 							</span>
 						</div>
 
-						<span class="min-w-0 flex-1 truncate font-mono text-left text-xs">
+						<span class="min-w-0 flex-1 truncate font-mono text-left text-caption">
 							<HighlightedMatch query={trimmedQuery} text={abbreviateHome(entry.path, home)} />
 						</span>
 					</div>

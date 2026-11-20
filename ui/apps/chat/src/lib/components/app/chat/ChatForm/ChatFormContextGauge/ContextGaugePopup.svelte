@@ -120,7 +120,7 @@
 			></div>
 		</div>
 
-		<div class="flex justify-between text-xs text-muted-foreground max-md:text-[13px]">
+		<div class="flex justify-between text-caption text-muted-foreground max-md:text-body-sm">
 			<span>
 				<span class={colorLevelTextClass(gauge.colorLevel)}>{gauge.contextPercent}%</span> used
 			</span>
@@ -130,7 +130,7 @@
 			</span>
 		</div>
 	{:else}
-		<div class="text-xs text-muted-foreground">No context info available</div>
+		<div class="text-caption text-muted-foreground">No context info available</div>
 	{/if}
 
 	{#if gauge.hasAnyUsage}
@@ -172,7 +172,7 @@
 {:else if gaugePopup.open}
 	<div
 		bind:this={cardEl}
-		class="absolute z-50 w-64 -translate-x-1/2 rounded-xl border matte-float p-1.5 text-sm"
+		class="absolute z-50 w-64 -translate-x-1/2 rounded-xl border matte-float p-1.5 text-body-sm"
 		onpointerenter={gaugeCardEnter}
 		onpointerleave={gaugeCardLeave}
 		role="status"

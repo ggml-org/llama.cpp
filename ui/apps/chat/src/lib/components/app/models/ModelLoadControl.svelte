@@ -37,7 +37,7 @@
 		{#if showAction && revealOnHover}
 			{#if isFailed}
 				<MODEL_LOAD_ICONS.failed
-					class="size-icon-sm text-status-danger group-hover:hidden [@media(pointer:coarse)]:hidden"
+					class="size-icon-sm text-(--fill-danger) group-hover:hidden [@media(pointer:coarse)]:hidden"
 				/>
 			{:else}
 				<span
@@ -50,7 +50,7 @@
 			{/if}
 		{:else}
 			{#if isFailed}
-				<MODEL_LOAD_ICONS.failed class="size-icon-sm text-status-danger" />
+				<MODEL_LOAD_ICONS.failed class="size-icon-sm text-(--fill-danger)" />
 			{:else}
 				<span
 					class="size-2 rounded-full {isSleeping

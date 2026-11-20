@@ -17,10 +17,10 @@
 <Story asChild name="Default">
 	<ScrollArea class="h-72 w-56 rounded-md border">
 		<div class="p-4">
-			<h4 class="mb-4 text-sm font-medium">Conversations</h4>
+			<h4 class="mb-4 text-label">Conversations</h4>
 
 			{#each chats as chat (chat)}
-				<div class="text-sm">{chat}</div>
+				<div class="text-body-sm">{chat}</div>
 
 				<Separator class="my-2" />
 			{/each}

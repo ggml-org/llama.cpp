@@ -267,7 +267,7 @@
 				<span>MCP Resources</span>
 
 				{#if totalCount > 0}
-					<span class="text-sm font-normal text-muted-foreground">({totalCount})</span>
+					<span class="text-body-sm font-normal text-muted-foreground">({totalCount})</span>
 				{/if}
 			</Dialog.Title>
 
@@ -285,7 +285,7 @@
 			</Dialog.Close>
 		</Dialog.Header>
 
-		<div class="flex h-[500px] min-w-0">
+		<div class="flex h-125 min-w-0">
 			<div class="w-72 shrink-0 overflow-y-auto border-r border-border/30 p-4">
 				<McpResourcesBrowser
 					expandToUri={preSelectedUri}
@@ -303,19 +303,19 @@
 						<div class="mb-3 flex items-center gap-2">
 							<Braces class="{ICON_CLASS_DEFAULT} text-muted-foreground" />
 
-							<span class="text-sm font-medium">
+							<span class="text-label">
 								{selectedTemplate.title || selectedTemplate.name}
 							</span>
 						</div>
 
 						{#if selectedTemplate.description}
-							<p class="mb-4 text-xs text-muted-foreground">
+							<p class="mb-4 text-caption text-muted-foreground">
 								{selectedTemplate.description}
 							</p>
 						{/if}
 
 						<div class="mb-4 rounded-md border border-border/50 bg-muted/30 px-3 py-2">
-							<p class="font-mono text-xs break-all text-muted-foreground">
+							<p class="font-mono text-caption break-all text-muted-foreground">
 								{selectedTemplate.uriTemplate}
 							</p>
 						</div>
@@ -326,7 +326,7 @@
 							</div>
 						{:else if templatePreviewError}
 							<div class="flex flex-1 flex-col items-center justify-center gap-2 text-fg-danger">
-								<span class="text-sm">{templatePreviewError}</span>
+								<span class="text-body-sm">{templatePreviewError}</span>
 
 								<Button
 									onclick={() => {
@@ -370,7 +370,7 @@
 						{/each}
 					</div>
 				{:else}
-					<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
+					<div class="flex h-full items-center justify-center text-body-sm text-muted-foreground">
 						Select a resource to preview
 					</div>
 				{/if}

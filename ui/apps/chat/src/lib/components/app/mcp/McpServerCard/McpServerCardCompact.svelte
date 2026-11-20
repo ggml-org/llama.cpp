@@ -41,5 +41,5 @@
 		<h4 class="min-w-0 flex-1 truncate font-medium">{server.name}</h4>
 	</div>
 
-	<p class="text-xs text-muted-foreground">{server.description}</p>
+	<p class="text-caption text-muted-foreground">{server.description}</p>
 </Card.Root>

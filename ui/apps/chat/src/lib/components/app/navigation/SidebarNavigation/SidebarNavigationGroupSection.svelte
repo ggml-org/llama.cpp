@@ -143,7 +143,7 @@
 			{:else}
 				<li>
 					<button
-						class="w-full rounded-lg px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+						class="w-full rounded-lg px-2 py-1.5 text-left text-caption text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
 						onclick={() => void startChat()}
 						type="button"
 					>

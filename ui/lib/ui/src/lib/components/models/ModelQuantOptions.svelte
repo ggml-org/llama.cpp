@@ -18,7 +18,7 @@
 </script>
 
 <section
-	class="@container rounded-3xl border border-border/30 bg-muted/60 shadow-sm dark:border-border/20 {className}"
+	class="@container rounded-3xl border border-border/30 bg-muted/60 shadow-(--elevation-control) dark:border-border/20 {className}"
 >
 	<div class="flex w-full flex-col divide-y divide-border/50 px-4 pb-1 dark:divide-border/35">
 		{@render children()}
@@ -26,7 +26,7 @@
 
 	{#if footer}
 		<div
-			class="flex flex-wrap items-center justify-start gap-x-1.5 gap-y-1 border-t border-border/50 px-4 py-2.5 text-xs text-muted-foreground dark:border-border/35"
+			class="flex flex-wrap items-center justify-start gap-x-1.5 gap-y-1 border-t border-border/50 px-4 py-2.5 text-caption text-muted-foreground dark:border-border/35"
 		>
 			{@render footer()}
 		</div>
