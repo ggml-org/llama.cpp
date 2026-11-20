@@ -412,16 +412,28 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
 
         sq.strm = unified ? 0 : mem_idx->get_stream(s);
 
-        if (mem_idx_stale[s] == POS_CLEAN && !sq.cells.empty() && !sp.empty() &&
-                sq.pos_min == sp.begin()->first) {
-            for (auto it = sp.upper_bound(sq.cells.back()); it != sp.end(); ++it) {
+        // an append (POS_CLEAN) or an edit after pos_min keeps every cell and pool before the stale position
+        // speculative decoding edits the end of the sequence on each rejected draft, a full rebuild there costs O(n_ctx) per step
+        const llama_pos stale = mem_idx_stale[s];
+        bool keep = !sq.cells.empty() && !sp.empty() && sq.pos_min == sp.begin()->first && stale > sq.pos_min;
+        if (keep) {
+            if (stale != POS_CLEAN) {
+                const auto cut = std::lower_bound(sq.cells.begin(), sq.cells.end(), std::make_pair(stale, uint32_t(0)));
+                sq.cells.erase(cut, sq.cells.end());
+                while (!sq.pools.empty() && sq.pools.back() + kpool > sq.cells.size()) {
+                    sq.pools.pop_back();
+                }
+                sq.j_next = sq.pools.empty() ? 0 : sq.pools.back() + kpool;
+            }
+            auto it = stale == POS_CLEAN ? sp.upper_bound(sq.cells.back()) : sp.lower_bound(std::make_pair(stale, uint32_t(0)));
+            for (; it != sp.end(); ++it) {
                 sq.cells.push_back(*it);
             }
+            keep = sq.cells.size() == sp.size();
         }
 
-        // the appended tail accounts for every cell only if nothing before it was dropped, but an edit can
-        // regroup a sequence without changing its cell count, so a stale sequence must rebuild regardless
-        if (sq.cells.size() != sp.size() || mem_idx_stale[s] != POS_CLEAN) {
+        // a new sequence, an edit at or before pos_min, or cells that do not match: group the whole sequence again
+        if (!keep) {
             sq.cells.assign(sp.begin(), sp.end());
             sq.pools.clear();
             sq.j_next  = 0;

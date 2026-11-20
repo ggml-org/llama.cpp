@@ -37,26 +37,26 @@ jobs:
         with:
           node-version: "24"
           # cache: "npm"
-          # cache-dependency-path: "tools/ui/package-lock.json"
+          # cache-dependency-path: "ui/apps/chat/package-lock.json"
           package-manager-cache: false
 
       - name: Install dependencies
         run: npm ci
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
       - name: Build application
         env:
           LLAMA_BUILD_NUMBER: ${{ steps.version.outputs.ui_version }}
         run: npm run build
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
       - name: Run PWA unit tests (versioned build output)
         run: npx vitest --project=unit --run tests/unit/pwa.spec.ts
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
       - name: Upload built UI
         uses: actions/upload-artifact@v7
         with:
           name: llama-ui.zip
-          path: tools/ui/dist/
+          path: ui/apps/chat/dist/
           retention-days: 1

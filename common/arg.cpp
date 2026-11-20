@@ -912,6 +912,10 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
     }
 
+    if (params.sampling.ignore_eos && !common_grammar_value(params.sampling.grammar).empty()) {
+        throw std::invalid_argument("error: --ignore-eos is not supported with --grammar or --json-schema\n");
+    }
+
     const bool skip_model_download =
         // server will call common_params_handle_models() later, so we skip it here
         ctx_arg.ex == LLAMA_EXAMPLE_SERVER ||
@@ -2829,7 +2833,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             const std::regex regex{ R"([,/]+)" };
             std::sregex_token_iterator it{ arg_next.begin(), arg_next.end(), regex, -1 };
             std::vector<std::string> split_arg{ it, {} };
-            if (split_arg.size() >= llama_max_devices()) {
+            if (split_arg.size() > llama_max_devices()) {
                 throw std::invalid_argument(
                     string_format("got %zu input configs, but system only has %zu devices", split_arg.size(), llama_max_devices())
                 );
@@ -2895,7 +2899,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             const std::regex regex{ R"([,/]+)" };
             std::sregex_token_iterator it{ arg_next.begin(), arg_next.end(), regex, -1 };
             std::vector<std::string> split_arg{ it, {} };
-            if (split_arg.size() >= llama_max_devices()) {
+            if (split_arg.size() > llama_max_devices()) {
                 throw std::invalid_argument(
                     string_format("got %zu input configs, but system only has %zu devices", split_arg.size(), llama_max_devices())
                 );
@@ -3416,12 +3420,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--ui-mcp-proxy", "--webui-mcp-proxy"},
         {"--no-ui-mcp-proxy", "--no-webui-mcp-proxy"},
-        "experimental: whether to enable MCP CORS proxy, for the Web UI to reach public MCP servers without CORS headers; local and private addresses are refused - do not enable in untrusted environments (default: disabled)\n"
+        "experimental: whether to enable MCP CORS proxy, for Llama Chat to reach public MCP servers without CORS headers; local and private addresses are refused unless --ui-mcp-proxy-allow-private-urls is set - do not enable in untrusted environments (default: disabled)\n"
         "note: for security reasons, this will limit --cors-origins to localhost by default",
         [](common_params & params, bool value) {
             params.ui_mcp_proxy = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_MCP_PROXY"));
+    add_opt(common_arg(
+        {"--ui-mcp-proxy-allow-private-urls"},
+        "allow the MCP CORS proxy to reach local or private addresses (e.g. MCP servers on localhost or LAN) - anyone who can reach the proxy can then reach your local network (default: disabled, only public addresses)\n"
+        "note: only has effect with --ui-mcp-proxy",
+        [](common_params & params) {
+            params.ui_mcp_proxy_allow_private_urls = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_MCP_PROXY_ALLOW_PRIVATE_URLS"));
     add_opt(common_arg(
         {"--tools"}, "TOOL1,TOOL2,...",
         "experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)\n"
@@ -3485,7 +3497,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--ui", "--webui"},
         {"--no-ui", "--no-webui"},
-        string_format("whether to enable the Web UI (default: %s)", params.ui ? "enabled" : "disabled"),
+        string_format("whether to enable Llama Chat, the built-in chat app (default: %s)", params.ui ? "enabled" : "disabled"),
         [](common_params & params, bool value) {
             params.ui = value;
         }
@@ -4502,7 +4514,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--tts-lang"}, "FNAME",
         "language (ISO 639-1) for audio generation\n"
-        "see tts/README.md for per-model usage notes",
+        "see docs/multimodal/tts.md for per-model usage notes",
         [](common_params & params, const std::string & value) {
             params.tts_lang = value;
         }
@@ -4510,7 +4522,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--tts-voice"}, "VOICE",
         "voice for audio generation (model-dependent)\n"
-        "see tts/README.md for per-model usage notes",
+        "see docs/multimodal/tts.md for per-model usage notes",
         [](common_params & params, const std::string & value) {
             params.tts_voice = value;
         }
@@ -4520,6 +4532,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "speaker file path for audio generation",
         [](common_params & params, const std::string & value) {
             params.tts_speaker_file = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TTS}));
+    add_opt(common_arg(
+        {"--tts-speaker-text"}, "TEXT",
+        "transcript of --tts-speaker-file, for models that need it to clone the voice\n"
+        "see docs/multimodal/tts.md for per-model usage notes",
+        [](common_params & params, const std::string & value) {
+            params.tts_speaker_text = value;
         }
     ).set_examples({LLAMA_EXAMPLE_TTS}));
 

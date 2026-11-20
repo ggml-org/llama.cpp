@@ -318,6 +318,7 @@ struct common_chat_templates {
     std::unique_ptr<common_chat_template> template_default;  // always set (defaults to chatml)
     std::unique_ptr<common_chat_template> template_tool_use;
     std::unique_ptr<common_chat_template> template_tts;  // the prompt of a text to speak
+    std::shared_ptr<common_tts_dicts> tts_dicts;         // dictionaries of the model for tts_dict(), by name
 };
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice) {
@@ -806,10 +807,11 @@ bool common_chat_templates_was_explicit(const struct common_chat_templates * tmp
 }
 
 // renders a task template (e.g. "tts") with the given variables
-static std::string common_chat_template_render(const common_chat_template & tmpl, const json & vars) {
+static std::string common_chat_template_render(const common_chat_template & tmpl, const json & vars, const std::shared_ptr<common_tts_dicts> & tts_dicts,
+                                               const common_tts_g2p & g2p = nullptr) {
     jinja::context ctx(tmpl.source());
-    // text normalization helpers: tts_norm_scan() and tts_norm_sub(), see docs/tts-norm-patterns.md
-    common_chat_tts_norm_add_builtins(ctx);
+    // text normalization helpers: tts_norm_scan(), tts_norm_sub(), tts_dict() and tts_g2p(), see docs/tts-norm-patterns.md
+    common_chat_tts_norm_add_builtins(ctx, tts_dicts, g2p);
     jinja::global_from_json(ctx, vars, false);
     ctx.set_val("bos_token", jinja::mk_val<jinja::value_string>(tmpl.bos_token()));
     ctx.set_val("eos_token", jinja::mk_val<jinja::value_string>(tmpl.eos_token()));
@@ -825,6 +827,11 @@ static bool is_lfm3_template(const std::string & src) {
 static std::string string_lower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char) std::tolower(c); });
     return s;
+}
+
+// VibeVoice-ASR: default system prompt of the template written by the converter
+static bool is_vibevoice_asr_template(const std::string & src) {
+    return src.find("transcribes audio input into text output in JSON format") != std::string::npos;
 }
 
 // LFM3-Audio: language code -> name
@@ -847,7 +854,8 @@ static std::string lfm3_asr_system_prompt(const std::string & language) {
     return "Perform ASR in " + lfm3_language_name(language) + ".";
 }
 
-common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates, const std::string & language) {
+common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates, const std::string & language,
+                                                     double audio_length, const std::string & context) {
     common_chat_prompt_preset asr_preset;
     asr_preset.system = "";
     asr_preset.user   = "Transcribe audio to text";
@@ -861,6 +869,17 @@ common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates
             asr_preset.system = lfm3_asr_system_prompt(language);
             asr_preset.user   = "";
             asr_preset.has_language = true;
+        } else if (is_vibevoice_asr_template(src)) {
+            // without the audio length the model does not know where the audio ends and loops
+            const char * keys = "transcribe it with these keys: Start time, End time, Speaker ID, Content";
+            if (context.empty()) {
+                asr_preset.user = string_format("\nThis is a %.2f seconds audio, please %s", audio_length, keys);
+            } else {
+                asr_preset.user = string_format("\nThis is a %.2f seconds audio, with extra info: %s\n\nPlease %s", audio_length, context.c_str(), keys);
+                asr_preset.has_context = true;
+            }
+            asr_preset.media_first        = true;
+            asr_preset.needs_audio_length = true;
         }
     }
 
@@ -868,7 +887,7 @@ common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates
 }
 
 std::string common_chat_get_tts_prompt(const common_chat_templates * chat_templates, const std::string & text,
-                                       const std::string & language, const std::string & voice) {
+                                       const std::string & language, const std::string & voice, const common_tts_g2p & g2p) {
     if (!chat_templates || !chat_templates->template_tts) {
         return "";
     }
@@ -876,7 +895,7 @@ std::string common_chat_get_tts_prompt(const common_chat_templates * chat_templa
         {"messages", json::array({{{"role", "user"}, {"content", text}}})},
         {"language", language},
         {"voice",    voice},
-    });
+    }, chat_templates->tts_dicts, g2p);
 }
 
 std::string common_chat_get_speech_system_prompt(const common_chat_templates * chat_templates,
@@ -1005,6 +1024,25 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
                 tmpls->template_tts = std::make_unique<common_chat_template>(src, token_bos, token_eos);
             } catch (const std::exception & e) {
                 LOG_ERR("%s: failed to parse the tts chat template (ignoring it): %s\n", __func__, e.what());
+            }
+        }
+        // dictionaries for tts_dict(), listed by name in tokenizer.tts_dicts
+        tmpls->tts_dicts = std::make_shared<common_tts_dicts>();
+        for (int32_t i = 0; i < llama_model_meta_arr_n(model, "tokenizer.tts_dicts"); i++) {
+            const std::string name    = llama_model_meta_arr_str(model, "tokenizer.tts_dicts", i);
+            const std::string key     = "tokenizer.tts_dict." + name + ".keys";
+            const std::string val_key = "tokenizer.tts_dict." + name + ".values";
+            const int32_t     n       = llama_model_meta_arr_n(model, key.c_str());
+            if (n < 0 || llama_model_meta_arr_n(model, val_key.c_str()) != n) {
+                LOG_ERR("%s: the tts dictionary '%s' has no value for each of its keys (ignoring it)\n", __func__, name.c_str());
+                continue;
+            }
+            auto & dict = (*tmpls->tts_dicts)[name];
+            dict.keys.reserve(n);
+            dict.values.reserve(n);
+            for (int32_t j = 0; j < n; j++) {
+                dict.keys.emplace_back(llama_model_meta_arr_str(model, key.c_str(), j));
+                dict.values.emplace_back(llama_model_meta_arr_str(model, val_key.c_str(), j));
             }
         }
     }
@@ -1425,6 +1463,12 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const 
         src.find("'<tool_call><function=' ~ tool_call.name ~ '>'") == std::string::npos) {
         LOG_DBG("Using specialized template: Qwen3-Coder\n");
         return common_chat_params_init_qwen3_coder;
+    }
+
+    // Inkling 1 and 2
+    if (is_inkling_template(src)) {
+        LOG_DBG("Using specialized template: Inkling\n");
+        return common_chat_params_init_inkling;
     }
 
     return nullptr;
@@ -1959,5 +2003,6 @@ common_json common_chat_templates_get_caps(const common_chat_templates * chat_te
                                                                       : chat_templates->template_default->caps;
     common_json result = caps.to_map();
     result["reasoning_effort_levels"] = caps.reasoning_effort_levels;
+    result["reasoning_effort_rejected"] = caps.reasoning_effort_rejected;
     return result;
 }

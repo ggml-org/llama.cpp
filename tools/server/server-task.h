@@ -209,6 +209,7 @@ struct server_task {
     struct decision {
         std::vector<llama_token> labels;       // logits of these tokens, at the last prompt token
         std::vector<int32_t>     label_groups; // if set, number of labels per output, the output is their max
+        std::vector<int32_t>     label_pos;    // if set, prompt position of each output, else the last token
         std::vector<int32_t>     markers;      // embeddings[column] at these prompt positions
         int32_t                  column = 0;
         // if set, embeddings is [q | k], and the output is instead the scaled dot product of q[pointer] and k[marker]
@@ -237,6 +238,9 @@ struct server_task {
         // the scores are the first n_scores rows of the embeddings
         std::vector<int32_t> order;
         int32_t              n_scores = 0;
+
+        // one value per prompt token, see llama_batch_ext_set_decision_group()
+        std::vector<int32_t> group;
     };
     decision decision;
 
@@ -683,78 +687,6 @@ struct server_task_result_get_lora : server_task_result {
 
 struct server_task_result_apply_lora : server_task_result {
     virtual json to_json() override;
-};
-
-struct server_prompt {
-    server_tokens tokens;
-
-    // a checkpoint does not change after it is created, so the prompt cache shares it with the slot instead of a copy
-    std::list<std::shared_ptr<const common_prompt_checkpoint>> checkpoints;
-
-    void clear() {
-        tokens.clear();
-        checkpoints.clear();
-    }
-
-    int n_tokens() const {
-        return tokens.size();
-    }
-
-    server_prompt clone() const {
-        return server_prompt {
-            tokens.clone(),
-            checkpoints,
-        };
-    }
-};
-
-struct server_prompt_data {
-    common_state_data main;
-    common_state_data drft;
-
-    size_t size() const {
-        return main.size() + drft.size();
-    }
-};
-
-struct server_prompt_cache_state {
-    server_prompt prompt;
-    server_prompt_data data;
-
-    size_t size() const {
-        size_t res = data.size();
-
-        for (const auto & ckpt : prompt.checkpoints) {
-            res += ckpt->size();
-        }
-
-        return res;
-    }
-};
-
-struct server_prompt_cache {
-    server_prompt_cache(int32_t limit_size_mib, size_t limit_tokens) {
-        this->limit_size   = 1024ull*1024ull*(limit_size_mib < 0 ? 0 : limit_size_mib);
-        this->limit_tokens = limit_tokens;
-    }
-
-    std::list<server_prompt_cache_state> states;
-
-    // in bytes, 0 = no limit
-    size_t limit_size = 0;
-
-    // in tokens, 0 = no limit
-    size_t limit_tokens = 0;
-
-    size_t size() const;
-
-    size_t n_tokens() const;
-
-    server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
-
-    bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
-
-    void update();
 };
 
 // used exclusively by router mode

@@ -268,6 +268,21 @@ public:
     const uint32_t n_outputs;
 };
 
+// random expert ids for the MoE GEMMs, for benchmarks only (env: LLAMA_MOE_RANDOM_ROUTING)
+class llm_graph_input_moe_ids : public llm_graph_input_i {
+public:
+    llm_graph_input_moe_ids(int64_t n_expert) : n_expert(n_expert) {}
+    virtual ~llm_graph_input_moe_ids() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    bool can_reuse(const llm_graph_params & params) override;
+
+    ggml_tensor * ids = nullptr; // I32 [n_expert_used_max, n_tokens]
+
+    const int64_t n_expert;
+};
+
 class llm_graph_input_mean : public llm_graph_input_i {
 public:
     llm_graph_input_mean(const llama_cparams & cparams) : cparams(cparams) {}
@@ -759,6 +774,48 @@ public:
     const llama_memory_hybrid_iswa_context * mctx;
 };
 
+// hybrid iswa memory with a per-head attention bias that depends on the distance from the query to the cell (Inkling)
+// the KQ masks are always dense (rows == nullptr) and are filled from the same cells as the distances, so that the bias
+// gathered by distance lines up with the mask
+class llm_graph_input_mem_hybrid_iswa_rel : public llm_graph_input_i {
+public:
+    llm_graph_input_mem_hybrid_iswa_rel(
+            const llama_cparams & cparams,
+            std::unique_ptr<llm_graph_input_attn_kv_iswa> inp_attn,
+            std::unique_ptr<llm_graph_input_rs>          inp_rs,
+            const llama_memory_hybrid_iswa_context *     mctx,
+            uint32_t extent,
+            uint32_t extent_swa) :
+        inp_attn(std::move(inp_attn)),
+        inp_rs(std::move(inp_rs)),
+        extent(extent),
+        extent_swa(extent_swa),
+        cparams(cparams),
+        mctx(mctx) { }
+    virtual ~llm_graph_input_mem_hybrid_iswa_rel() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    bool can_reuse(const llm_graph_params & params) override;
+
+    std::unique_ptr<llm_graph_input_attn_kv_iswa> inp_attn;
+    std::unique_ptr<llm_graph_input_rs>          inp_rs;
+
+    llm_graph_input_attn_kv_iswa * get_attn() const { return inp_attn.get(); }
+    llm_graph_input_rs           * get_recr() const { return inp_rs.get(); }
+
+    // distance from the token to the cell, extent for the empty, future and more distant cells
+    ggml_tensor * self_rel_pos     = nullptr; // I32 [n_kv,     n_batch]
+    ggml_tensor * self_rel_pos_swa = nullptr; // I32 [n_kv_swa, n_batch]
+
+    const uint32_t extent;
+    const uint32_t extent_swa;
+
+    const llama_cparams cparams;
+
+    const llama_memory_hybrid_iswa_context * mctx;
+};
+
 class llm_graph_input_sampling : public llm_graph_input_i {
 public:
     llm_graph_input_sampling(std::map<llama_seq_id, llama_sampler *> samplers) :
@@ -789,7 +846,6 @@ class llm_graph_result;
 struct llm_graph_params {
     const llama_model * model = nullptr;
 
-    llama_hparams hparams;
     llama_cparams cparams;
 
     llama_ubatch ubatch; // note: intentionally make a copy
@@ -804,10 +860,6 @@ struct llm_graph_params {
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
     const llama_moe_cache        * moe_cache;
-
-    const llama_prec_policy * prec_policy = nullptr;
-
-    const llama_hadamard * hdmd = nullptr;
 
     ggml_tensor * layer_inp_dev = nullptr; // own layer input device buffer (write)
     ggml_tensor * layer_inp_src = nullptr; // ctx_other's layer input device buffer (read)
@@ -986,6 +1038,9 @@ public:
 
     std::vector<ggml_tensor *> t_sampling_all;
 
+    // [0] is the LLAMA_MOE_RANDOM_ROUTING input, the rest are views of it
+    std::vector<ggml_tensor *> t_moe_ids;
+
     std::vector<llm_graph_input_ptr> inputs;
     std::vector<llm_graph_fused_node> fused_nodes;
 
@@ -1038,6 +1093,8 @@ struct llm_graph_context {
     const llama_cparams & cparams;
     const llama_ubatch  & ubatch;
 
+    const llama_prec_policy & prec_policy;
+
     const int64_t n_embd;
     const int64_t n_layer;
     const int64_t n_layer_nextn;
@@ -1077,8 +1134,6 @@ struct llm_graph_context {
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
     const llama_moe_cache        * moe_cache;
-
-    const llama_prec_policy * prec_policy;
 
     const llama_hadamard * hdmd;
 
@@ -1266,6 +1321,7 @@ struct llm_graph_context {
     ggml_tensor * build_inp_out_ids() const;
     ggml_tensor * build_inp_mean() const;
     ggml_tensor * build_inp_cls() const;
+    ggml_tensor * build_inp_moe_ids(int64_t n_used, int64_t n_rows) const;
 
     ggml_tensor * build_inp_cross_embd() const;
     ggml_tensor * build_inp_pos_bucket_enc() const;
@@ -1479,6 +1535,25 @@ struct llm_graph_context {
     llm_graph_input_mem_hybrid_k * build_inp_mem_hybrid_k() const;
 
     llm_graph_input_mem_hybrid_iswa * build_inp_mem_hybrid_iswa() const;
+
+    // extent, extent_swa: the distance that the bias tables of the full and the SWA layers stop at
+    llm_graph_input_mem_hybrid_iswa_rel * build_inp_mem_hybrid_iswa_rel(
+            uint32_t extent,
+            uint32_t extent_swa) const;
+
+    // kq_b is added to the KQ mask, after the KQ scale
+    ggml_tensor * build_attn(
+            llm_graph_input_mem_hybrid_iswa_rel * inp,
+            ggml_tensor * wo,
+            ggml_tensor * wo_b,
+            ggml_tensor * wo_s,
+            ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
+            ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
+            ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
+            ggml_tensor * kq_b,  // [n_kv, n_tokens/n_stream, n_head_q, n_stream]
+            ggml_tensor * sinks, // [n_head_q]
+                  float   kq_scale,
+                    int   il) const;
 
     //
     // pooling
