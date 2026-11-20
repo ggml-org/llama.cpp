@@ -13013,6 +13013,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {3000, 384, 4, 1}));
     test_cases.emplace_back(new test_roll());
     test_cases.emplace_back(new test_roll(3, -2, 1, -1, true));
+    test_cases.emplace_back(new test_roll(0, 0, 0, 0, false));
+    test_cases.emplace_back(new test_roll(0, 0, 0, 0, true));
     test_cases.emplace_back(new test_arange());
     test_cases.emplace_back(new test_arange(GGML_TYPE_F32, 3.0f, 3.5f, 1.0f));
     test_cases.emplace_back(new test_arange(GGML_TYPE_F32, -10.0f, 10.0f, 0.3f));
