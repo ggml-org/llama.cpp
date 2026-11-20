@@ -794,6 +794,10 @@ json server_task_result_cmpl_final::to_json_anthropic() {
         }}
     };
 
+    if (stats.is_set()) {
+        res["timings"] = stats.to_json();
+    }
+
     return res;
 }
 
@@ -974,6 +978,10 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
             }}
         }}
     });
+
+    if (stats.is_set()) {
+        events.back().at("data")["timings"] = stats.to_json();
+    }
 
     events.push_back({
         {"event", "message_stop"},
