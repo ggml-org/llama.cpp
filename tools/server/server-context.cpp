@@ -4882,6 +4882,11 @@ private:
 
             GGML_ASSERT(n_draft > 0);
 
+            // the recurrent snapshots are only guaranteed for batches of up to n_rs_seq + 1 tokens, so a longer draft uses its checkpoint
+            const bool use_ckpt_tgt =
+                ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && n_draft > llama_n_rs_seq(ctx_tgt));
+
             // batch indices of the draft tokens, used to get the token probabilities below
             auto spec_i_batch = std::move(slot.spec_i_batch);
 
@@ -4913,11 +4918,6 @@ private:
                 GGML_ASSERT(accepted.size() >= 1);
 
                 const uint32_t n_rollback = slot.spec_draft.size() + 1 - accepted.size();
-
-                // the recurrent snapshots are only guaranteed for batches of up to n_rs_seq + 1 tokens, so a longer draft uses its checkpoint
-                const bool use_ckpt_tgt =
-                    ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
-                    (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && n_draft > llama_n_rs_seq(ctx_tgt));
 
                 // check for partial draft acceptance
                 if (n_rollback > 0) {
@@ -4987,8 +4987,6 @@ private:
             slot.sampled = ids.back(); // last accepted token
             SLT_DBG(slot, "add accepted tokens: sampled=%d, ids.size=%zu, n_draft=%zu\n", slot.sampled, ids.size(), n_draft);
 
-            slot.mem.seq_rm(slot.id, slot.prompt.tokens.pos_next(), -1);
-
             for (size_t i = 0; i < ids.size(); ++i) {
                 completion_token_output result;
 
@@ -5004,6 +5002,12 @@ private:
                 slot.stats.n_gen += 1;
 
                 if (!process_token(result, slot)) {
+                    // without a draft the stop token is not cached, so remove it and the accepted tokens after it
+                    if (!use_ckpt_tgt && ctx_dft_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_FULL && i + 1 < ids.size()) {
+                        slot.prompt.tokens.keep_first(slot.prompt.n_tokens() - (ids.size() - 1 - i));
+                    }
+                    slot.mem.seq_rm(slot.id, slot.prompt.tokens.pos_next(), -1);
+
                     slot.print_timings();
                     send_final_response(slot);
                     slot.release();
@@ -5011,6 +5015,8 @@ private:
                     return;
                 }
             }
+
+            slot.mem.seq_rm(slot.id, slot.prompt.tokens.pos_next(), -1);
 
             slot.print_timings_tg();
 
