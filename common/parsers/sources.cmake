@@ -6,6 +6,7 @@ set(LLAMA_CHAT_PARSERS_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/cohere2moe.cpp
     ${CMAKE_CURRENT_LIST_DIR}/deepseek.cpp
     ${CMAKE_CURRENT_LIST_DIR}/functionary-v3-2.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/flint.cpp
     ${CMAKE_CURRENT_LIST_DIR}/gemma4.cpp
     ${CMAKE_CURRENT_LIST_DIR}/gigachat-v3.cpp
     ${CMAKE_CURRENT_LIST_DIR}/gpt-oss.cpp
