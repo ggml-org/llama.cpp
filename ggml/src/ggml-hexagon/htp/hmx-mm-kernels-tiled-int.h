@@ -235,7 +235,7 @@ static inline HVX_Vector int_hmx_scan_max_f16_scales(
         size_t scale_offset,
         uint32_t tiles_per_group) {
 
-    assert(tiles_per_group >= 4 && (tiles_per_group & 3) == 0);
+    assert(tiles_per_group >= 2 && (tiles_per_group & 1) == 0);
 
     const HVX_Vector v_abs_mask = Q6_Vh_vsplat_R(0x7fff);
     HVX_Vector v_max0 = Q6_V_vzero();
@@ -279,7 +279,7 @@ static __attribute__((always_inline)) inline void rescale_q4_0_weight_superblock
         HVX_Vector * restrict bias_out,
         uint32_t tiles_per_group) {
 
-    assert(tiles_per_group >= 4 && (tiles_per_group & 3) == 0);
+    assert(tiles_per_group >= 2 && (tiles_per_group & 1) == 0);
 
     const size_t     tile_stride = htp_tensor_get_tile_padded_size(HTP_TYPE_Q4_0);
     const HVX_Vector mask_f0     = Q6_Vb_vsplat_R(0xF0);
@@ -333,7 +333,7 @@ static __attribute__((always_inline)) inline void rescale_q8_0_weight_superblock
         HVX_Vector * restrict bias_out,
         uint32_t tiles_per_group) {
 
-    assert(tiles_per_group >= 4 && (tiles_per_group & 3) == 0);
+    assert(tiles_per_group >= 2 && (tiles_per_group & 1) == 0);
 
     const size_t tile_stride = htp_tensor_get_tile_padded_size(HTP_TYPE_Q8_0);
     HVX_Vector   v_max_sc    = int_hmx_scan_max_f16_scales(src_base, tile_stride, 1024, tiles_per_group);
@@ -390,7 +390,7 @@ static __attribute__((always_inline)) inline void rescale_mxfp4_weight_superbloc
         HVX_Vector * restrict bias_out,
         uint32_t tiles_per_group) {
 
-    assert(tiles_per_group >= 4 && (tiles_per_group & 3) == 0);
+    assert(tiles_per_group >= 2 && (tiles_per_group & 1) == 0);
 
     const size_t     tile_stride = htp_tensor_get_tile_padded_size(HTP_TYPE_MXFP4);
     const HVX_Vector v_lut       = *(const HVX_Vector *) kvalues_mxfp4_x8_lut;
@@ -449,7 +449,7 @@ static __attribute__((always_inline)) inline void rescale_q5_0_weight_superblock
         HVX_Vector * restrict bias_out,
         uint32_t tiles_per_group) {
 
-    assert(tiles_per_group >= 4 && (tiles_per_group & 3) == 0);
+    assert(tiles_per_group >= 2 && (tiles_per_group & 1) == 0);
 
     const size_t     tile_stride = htp_tensor_get_tile_padded_size(HTP_TYPE_Q5_0);
     const HVX_Vector mask_78     = Q6_Vb_vsplat_R(0x78);
@@ -486,7 +486,7 @@ static __attribute__((always_inline)) inline void rescale_iq4_nl_weight_superblo
         HVX_Vector * restrict bias_out,
         uint32_t tiles_per_group) {
 
-    assert(tiles_per_group >= 4 && (tiles_per_group & 3) == 0);
+    assert(tiles_per_group >= 2 && (tiles_per_group & 1) == 0);
 
     const size_t     tile_stride = htp_tensor_get_tile_padded_size(HTP_TYPE_IQ4_NL);
     const HVX_Vector v_lut       = *(const HVX_Vector *) kvalues_iq4nl_lut;

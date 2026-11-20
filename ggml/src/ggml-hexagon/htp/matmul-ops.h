@@ -90,6 +90,22 @@ static inline bool htp_is_int_hmx_weight_type(int wtype) {
            wtype == HTP_TYPE_Q5_K    || wtype == HTP_TYPE_Q2_K;
 }
 
+static inline uint32_t htp_int_hmx_min_k(int wtype) {
+    switch (wtype) {
+        case HTP_TYPE_IQ2_XXS:
+        case HTP_TYPE_Q2_K:
+        case HTP_TYPE_Q3_K:
+        case HTP_TYPE_Q4_K:
+        case HTP_TYPE_Q5_K:
+        case HTP_TYPE_Q6_K:
+            return 256u;
+        case HTP_TYPE_Q1_0:
+            return 128u;
+        default:
+            return 64u;
+    }
+}
+
 // Op-specific struct for precomputed matmul params
 struct htp_mm_kernel_params {
     uint8_t  kernel_type;        // enum htp_mm_kernel_type

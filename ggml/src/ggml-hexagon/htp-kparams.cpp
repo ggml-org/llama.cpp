@@ -685,7 +685,7 @@ static bool htp_kparams_solve_hmx_mm(
 
     const uint8_t  fp16_kernel_type = (is_batched && !is_matmul_id) ? HTP_MM_KERNEL_HMX_BATCHED : HTP_MM_KERNEL_HMX_2D;
     uint8_t        kernel_type      = fp16_kernel_type;
-    const uint32_t min_k            = (wtype == GGML_TYPE_IQ2_XXS || wtype == GGML_TYPE_Q2_K) ? 256u : 128u;
+    const uint32_t min_k            = htp_int_hmx_min_k((int) wtype);
     if (is_tiled && htp_is_int_hmx_weight_type((int) wtype) && opt_mm_select == 3 &&
         ne00_padded >= (int) min_k && (ne00_padded % min_k) == 0) {
         kernel_type = (is_batched && !is_matmul_id) ? HTP_MM_KERNEL_HMX_W8A8_BATCHED : HTP_MM_KERNEL_HMX_W8A8_2D;
@@ -1118,17 +1118,19 @@ bool htp_kparams_solve_mmnx(
     }
 
     {
-        const int    act_nrows     = ne11 * ne12 * ne13;
-        const size_t act_row_size  = htp_mm_tiled_act_row_size(wtype, ne10);
-        const size_t act_elem_size = ggml_type_size(act->type);
-        const size_t src0_row_size = src0->nb[1];
+        const int     act_nrows     = ne11 * ne12 * ne13;
+        const int32_t hvx_ktype     = (act_nrows < (int) n_hvx)
+                                    ? HTP_MM_KERNEL_HVX_QUANT_BLOCK : HTP_MM_KERNEL_HVX_QUANT_ROW;
+        const size_t  act_row_size  = htp_mm_tiled_act_row_size(wtype, ne10);
+        const size_t  act_elem_size = ggml_type_size(act->type);
+        const size_t  src0_row_size = src0->nb[1];
 
         const uint32_t max_prefetch = (act_nrows > HTP_MM_HMX_MIN_NROWS) ? 2 : 16;
         uint32_t best_n_prefetch = 2;
         for (uint32_t d = max_prefetch; d >= 2; d /= 2) {
             struct htp_mm_hvx_vtcm_layout L;
             htp_mm_hvx_vtcm_layout_build(
-                &L, HTP_MM_KERNEL_HVX_QUANT_ROW, wtype, ne10, act_nrows, n_hvx,
+                &L, hvx_ktype, wtype, ne10, act_nrows, n_hvx,
                 0, src0_row_size, act_elem_size, 0, d, false, true
             );
             if (L.total_bytes <= vtcm_budget) {
@@ -1139,12 +1141,12 @@ bool htp_kparams_solve_mmnx(
 
         struct htp_mm_hvx_vtcm_layout L;
         htp_mm_hvx_vtcm_layout_build(
-            &L, HTP_MM_KERNEL_HVX_QUANT_ROW, wtype, ne10, act_nrows, n_hvx,
+            &L, hvx_ktype, wtype, ne10, act_nrows, n_hvx,
             0, src0_row_size, act_elem_size, 0, best_n_prefetch, false, true
         );
 
         if (opt_mm_select >= 1 && L.total_bytes <= vtcm_budget) {
-            kparams->kernel_type       = HTP_MM_KERNEL_HVX_QUANT_ROW;
+            kparams->kernel_type       = hvx_ktype;
             kparams->tile_size         = htp_tensor_get_tile_size(wtype);
             kparams->aligned_tile_size = htp_tensor_get_tile_padded_size(wtype);
             kparams->act_row_size      = act_row_size;
@@ -5265,19 +5267,24 @@ bool htp_kparams_solve(
             return false;
         }
         const ggml_tensor * act = tmp.inputs[n_w];
+        const ggml_tensor * w_for_solve   = tmp.inputs[0];
         const ggml_tensor * dst_for_solve = tmp.outputs[0];
         for (size_t i = 0; i < n_w; ++i) {
             if (!htp_matmul_check_types(tmp.inputs[i], act, tmp.outputs[i])) {
                 return false;
             }
+            if (tmp.inputs[i]->ne[1] > w_for_solve->ne[1]) {
+                w_for_solve = tmp.inputs[i];
+            }
             dst_for_solve = htp_mdev_worst_dst(dst_for_solve, tmp.outputs[i]);
         }
-        if (!htp_kparams_solve_mmnx(sess, tmp.inputs[0], act, dst_for_solve, (int32_t) n_w, tmp.kparams<htp_mm_kernel_params>())) {
+        if (!htp_kparams_solve_mmnx(sess, w_for_solve, act, dst_for_solve, (int32_t) n_w, tmp.kparams<htp_mm_kernel_params>())) {
             return false;
         }
         const auto * kp = tmp.kparams<htp_mm_kernel_params>();
         const bool ok = kp->n_hmx ? htp_mm_kernel_is_hmx_2d(kp->kernel_type)
-                                  : (ggml_hexagon_tensor_is_tiled(tmp.inputs[0]) && kp->kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW);
+                                  : (ggml_hexagon_tensor_is_tiled(tmp.inputs[0]) &&
+                                     (kp->kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW || kp->kernel_type == HTP_MM_KERNEL_HVX_QUANT_BLOCK));
         return commit(ok);
     }
     if (tmp.opcode == HTP_OP_MUL_MAT_ID_NX) {

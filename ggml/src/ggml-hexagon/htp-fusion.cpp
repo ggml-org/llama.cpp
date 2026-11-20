@@ -53,7 +53,8 @@ static bool is_supported_mul_mat_nx_kernel(const ggml_tensor * src0, const struc
     if (kparams->n_hmx) {
         return htp_mm_kernel_is_hmx_2d(kparams->kernel_type);
     }
-    return ggml_hexagon_tensor_is_tiled(src0) && (kparams->kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW);
+    return ggml_hexagon_tensor_is_tiled(src0) &&
+           (kparams->kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW || kparams->kernel_type == HTP_MM_KERNEL_HVX_QUANT_BLOCK);
 }
 
 static bool is_supported_mul_mat_id_nx_kernel(const ggml_tensor * src0, const struct htp_mm_kernel_params * kparams) {
@@ -293,19 +294,23 @@ static bool fuse_mul_mat_nx(const ggml_hexagon_session * sess, htp_opnode & prev
     const bool collapse = htp_matmul_can_collapse(w0, x_orig, prev.node) && htp_matmul_can_collapse(w_in, x_in, d_in);
     if ((x_orig->ne[2] > 1 || x_orig->ne[3] > 1) && !collapse) return false;
 
+    const ggml_tensor * prev_w   = prev.inputs[0];
     const ggml_tensor * prev_dst = prev.outputs[0];
-    for (size_t i = 1; i < prev.outputs.size(); ++i) {
+    for (size_t i = 1; i < curr_n; ++i) {
+        if (prev.inputs[i]->ne[1] > prev_w->ne[1]) prev_w = prev.inputs[i];
         prev_dst = htp_mdev_worst_dst(prev_dst, prev.outputs[i]);
     }
+    const ggml_tensor * w_for_solve   = (w_in->ne[1] > prev_w->ne[1]) ? w_in : prev_w;
     const ggml_tensor * dst_for_solve = htp_mdev_worst_dst(prev_dst, d_in);
 
-    if (prev.opcode == HTP_OP_MUL_MAT_NX && htp_mdev_rows_per_chunk(dst_for_solve) == htp_mdev_rows_per_chunk(prev_dst)) {
+    if (prev.opcode == HTP_OP_MUL_MAT_NX && w_for_solve == prev_w &&
+        htp_mdev_rows_per_chunk(dst_for_solve) == htp_mdev_rows_per_chunk(prev_dst)) {
         orig_kparams->n_weights = curr_n + 1;
     } else {
         struct htp_mm_kernel_params kparams;
         const ggml_tensor x_collapsed = collapse ? htp_tensor_collapse_rows(x_orig) : *x_orig;
         const ggml_tensor d_collapsed = collapse ? htp_tensor_collapse_rows(dst_for_solve) : *dst_for_solve;
-        if (!htp_kparams_solve_mmnx(sess, w0, &x_collapsed, &d_collapsed, curr_n + 1, &kparams)) return false;
+        if (!htp_kparams_solve_mmnx(sess, w_for_solve, &x_collapsed, &d_collapsed, curr_n + 1, &kparams)) return false;
         if (!is_supported_mul_mat_nx_kernel(w0, &kparams)) return false;
 
         prev.set_kparams(kparams);
@@ -599,7 +604,8 @@ bool htp_fusion_can_stack(const struct ggml_tensor * a) {
             if (!htp_fusion_enabled(HTP_FUSE_MUL_MAT_NX)) return false;
             if (htp_is_hadamard(a)) return false;
             if (a->src[0]->ne[2] != 1 || a->src[0]->ne[3] != 1) return false;
-            return ggml_is_quantized(a->src[0]->type);
+            return ggml_is_quantized(a->src[0]->type) ||
+                   (a->src[0]->type == GGML_TYPE_F16 && a->src[0]->ne[0] % 32 == 0);
         case GGML_OP_MUL_MAT_ID:
             if (!htp_fusion_enabled(HTP_FUSE_MUL_MAT_ID_NX)) return false;
             return a->src[2] != nullptr && ggml_is_quantized(a->src[0]->type);
