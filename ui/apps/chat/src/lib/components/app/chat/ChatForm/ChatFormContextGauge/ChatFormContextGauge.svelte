@@ -2,20 +2,22 @@
 	import ContextGaugeDial from './ContextGaugeDial.svelte';
 	import ContextGaugePanel from './ContextGaugePanel.svelte';
 	import { gaugePopup, gaugePopupToggle } from './gauge-popup.svelte';
+	import { buttonVariants } from '@ggml-org/llama-ui/ui/button';
 	import * as Popover from '@ggml-org/llama-ui/ui/popover';
+	import { cn } from '@ggml-org/llama-ui/utils';
 	import GlassKey from '#lib/components/app/actions/GlassKey.svelte';
 	import { useContextGauge } from '#lib/hooks/use-context-gauge.svelte.ts';
 	import { chatStore, conversationsStore, deviceStore } from '#lib/stores/index.ts';
 	import { untrack } from 'svelte';
 
 	interface Props {
-		/** Sizes and places the trigger, the inline dial size by default. */
+		/** Sizes and places the trigger. */
 		class?: string;
 		/** Draws the dial as the icon of a phone's corner key, matching the menu key's glyph. */
 		corner?: boolean;
 	}
 
-	let { class: className = 'h-5 w-5 max-md:h-6 max-md:w-6', corner = false }: Props = $props();
+	let { class: className = '', corner = false }: Props = $props();
 
 	const gauge = useContextGauge();
 
@@ -69,7 +71,7 @@
 			aria-expanded={gaugePopup.open}
 			aria-haspopup="dialog"
 			aria-label="Context usage"
-			class={['flex items-center justify-center rounded-full', className]}
+			class={['flex size-6 items-center justify-center rounded-full', className]}
 			onclick={gaugePopupToggle}
 			type="button"
 		>
@@ -81,10 +83,11 @@
 	<Popover.Root bind:open={gaugePopup.open}>
 		<Popover.Trigger
 			aria-label="Context usage"
-			class={[
-				'flex cursor-pointer items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring',
+			class={cn(
+				buttonVariants({ variant: 'ghost' }),
+				'size-7 cursor-pointer rounded-full p-0',
 				className
-			]}
+			)}
 		>
 			{@render dial('sm')}
 		</Popover.Trigger>
