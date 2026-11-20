@@ -315,7 +315,7 @@ llama_kv_cache::llama_kv_cache(
             hparams.n_embd_head_k() % 64 == 0;
 
         // always create Hadamard rotation tensors for lightning indexer keys
-        if (model.indexer_k_rot() && hparams.n_embd_head_k_full == hparams.indexer_head_size) {
+        if (model.lid_k_hdmd() && hparams.n_embd_head_k_full == hparams.indexer_head_size) {
             attn_rot_k = true;
         }
 

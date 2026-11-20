@@ -1055,8 +1055,8 @@ struct llama_model {
     // graph size budget: max graph nodes per model tensor
     virtual uint32_t graph_nodes_per_tensor() const { return 8; }
 
-    // always rotate the lightning indexer keys with a Hadamard transform
-    virtual bool indexer_k_rot() const { return false; }
+    // apply Hadamard transform to the lightning indexer keys
+    virtual bool lid_k_hdmd() const { return false; }
 
     ggml_cgraph * build_graph(const llm_graph_params & params) const;
 
