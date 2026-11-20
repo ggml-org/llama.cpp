@@ -28,6 +28,7 @@ enum handcrafted_file_type {
     HANDCRAFTED_KV_BAD_KEY_SIZE            =  10 + offset_has_kv,
     HANDCRAFTED_KV_EMPTY_KEY               =  15 + offset_has_kv,
     HANDCRAFTED_KV_BAD_TYPE                =  20 + offset_has_kv,
+    HANDCRAFTED_KV_NEGATIVE_TYPE           =  25 + offset_has_kv,
     // HANDCRAFTED_KV_BAD_VALUE_SIZE          =  30 + offset_has_kv, // removed because it can result in allocations > 1 TB (default sanitizer limit)
     HANDCRAFTED_KV_DUPLICATE_KEY           =  40 + offset_has_kv,
     HANDCRAFTED_KV_BAD_ALIGN               =  50 + offset_has_kv,
@@ -42,6 +43,7 @@ enum handcrafted_file_type {
     HANDCRAFTED_TENSORS_NBYTES_TOO_BIG     =  45 + offset_has_tensors,
     HANDCRAFTED_TENSORS_NBYTES_PAD_WRAP    =  46 + offset_has_tensors,
     HANDCRAFTED_TENSORS_BAD_TYPE           =  50 + offset_has_tensors,
+    HANDCRAFTED_TENSORS_NEGATIVE_TYPE      =  55 + offset_has_tensors,
     HANDCRAFTED_TENSORS_BAD_OFFSET         =  60 + offset_has_tensors,
     HANDCRAFTED_TENSORS_DUPLICATE_NAME     =  70 + offset_has_tensors,
     HANDCRAFTED_TENSORS_BAD_ALIGN          =  75 + offset_has_tensors,
@@ -70,6 +72,7 @@ static std::string handcrafted_file_type_name(const enum handcrafted_file_type h
         case HANDCRAFTED_KV_BAD_KEY_SIZE:            return "KV_BAD_KEY_SIZE";
         case HANDCRAFTED_KV_EMPTY_KEY:               return "KV_EMPTY_KEY";
         case HANDCRAFTED_KV_BAD_TYPE:                return "KV_BAD_TYPE";
+        case HANDCRAFTED_KV_NEGATIVE_TYPE:           return "KV_NEGATIVE_TYPE";
         case HANDCRAFTED_KV_DUPLICATE_KEY:           return "KV_DUPLICATE_KEY";
         case HANDCRAFTED_KV_BAD_ALIGN:               return "KV_BAD_ALIGN";
         case HANDCRAFTED_KV_WRONG_TYPE_ALIGN:        return "KV_WRONG_TYPE_ALIGN";
@@ -83,6 +86,7 @@ static std::string handcrafted_file_type_name(const enum handcrafted_file_type h
         case HANDCRAFTED_TENSORS_NBYTES_TOO_BIG:     return "TENSORS_NBYTES_TOO_BIG";
         case HANDCRAFTED_TENSORS_NBYTES_PAD_WRAP:    return "TENSORS_NBYTES_PAD_WRAP";
         case HANDCRAFTED_TENSORS_BAD_TYPE:           return "TENSORS_BAD_TYPE";
+        case HANDCRAFTED_TENSORS_NEGATIVE_TYPE:      return "TENSORS_NEGATIVE_TYPE";
         case HANDCRAFTED_TENSORS_BAD_OFFSET:         return "TENSORS_BAD_OFFSET";
         case HANDCRAFTED_TENSORS_DUPLICATE_NAME:     return "TENSORS_DUPLICATE_NAME";
         case HANDCRAFTED_TENSORS_BAD_ALIGN:          return "TENSORS_BAD_ALIGN";
@@ -157,7 +161,7 @@ static std::vector<std::pair<enum gguf_type, enum gguf_type>> get_kv_types(std::
             continue;
         }
 
-        kv_types.push_back(std::make_pair(type, gguf_type(-1)));
+        kv_types.push_back(std::make_pair(type, GGUF_TYPE_COUNT));
     }
     std::shuffle(kv_types.begin(), kv_types.end(), rng);
 
@@ -299,8 +303,10 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
     }
 
     for (int i = 0; i < int(kv_types.size()); ++i) {
-        const enum gguf_type type     = gguf_type(hft == HANDCRAFTED_KV_BAD_TYPE ? GGUF_TYPE_COUNT : kv_types[i].first);
-        const enum gguf_type type_arr = gguf_type(hft == HANDCRAFTED_KV_BAD_TYPE ? GGUF_TYPE_COUNT : kv_types[i].second);
+        const bool bad_type = hft == HANDCRAFTED_KV_BAD_TYPE || hft == HANDCRAFTED_KV_NEGATIVE_TYPE;
+
+        const enum gguf_type type     = gguf_type(bad_type ? GGUF_TYPE_COUNT : kv_types[i].first);
+        const enum gguf_type type_arr = gguf_type(bad_type ? GGUF_TYPE_COUNT : kv_types[i].second);
 
         const std::string key = hft == HANDCRAFTED_KV_EMPTY_KEY
             ? ""
@@ -316,7 +322,7 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         helper_write(file, key.data(), key.length());
 
         {
-            const int32_t type32 = int32_t(type);
+            const int32_t type32 = hft == HANDCRAFTED_KV_NEGATIVE_TYPE ? -1 : int32_t(type);
             helper_write(file, type32);
         }
 
@@ -357,7 +363,7 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
             continue;
         }
 
-        helper_write(file, data, hft == HANDCRAFTED_KV_BAD_TYPE ? 1 : gguf_type_size(type));
+        helper_write(file, data, bad_type ? 1 : gguf_type_size(type));
     }
 
     if (hft == HANDCRAFTED_KV_BAD_ALIGN        || hft == HANDCRAFTED_KV_WRONG_TYPE_ALIGN ||
@@ -455,7 +461,12 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         }
 
         {
-            const int32_t type32 = hft == HANDCRAFTED_TENSORS_BAD_TYPE ? GGML_TYPE_COUNT : int32_t(type);
+            int32_t type32 = int32_t(type);
+            if (hft == HANDCRAFTED_TENSORS_BAD_TYPE) {
+                type32 = GGML_TYPE_COUNT;
+            } else if (hft == HANDCRAFTED_TENSORS_NEGATIVE_TYPE) {
+                type32 = -1;
+            }
             helper_write(file, type32);
         }
 
@@ -772,6 +783,7 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
         HANDCRAFTED_KV_BAD_KEY_SIZE,
         HANDCRAFTED_KV_EMPTY_KEY,
         HANDCRAFTED_KV_BAD_TYPE,
+        HANDCRAFTED_KV_NEGATIVE_TYPE,
         HANDCRAFTED_KV_DUPLICATE_KEY,
         HANDCRAFTED_KV_BAD_ALIGN,
         HANDCRAFTED_KV_WRONG_TYPE_ALIGN,
@@ -785,6 +797,7 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
         HANDCRAFTED_TENSORS_NBYTES_TOO_BIG,
         HANDCRAFTED_TENSORS_NBYTES_PAD_WRAP,
         HANDCRAFTED_TENSORS_BAD_TYPE,
+        HANDCRAFTED_TENSORS_NEGATIVE_TYPE,
         HANDCRAFTED_TENSORS_BAD_OFFSET,
         HANDCRAFTED_TENSORS_DUPLICATE_NAME,
         HANDCRAFTED_TENSORS_BAD_ALIGN,
