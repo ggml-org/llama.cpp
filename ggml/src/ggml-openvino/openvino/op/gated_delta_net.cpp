@@ -393,9 +393,19 @@ static OutputVector translate_gdn(const NodeContext & context, const OutputVecto
     const int64_t snapshot_count = context.get_output_op_params()[0];
     // const int64_t S_k = q_shape[3];
 
+    // v is usually a VIEW of the fused qkv conv output, [S_v, H_v, T, B] over [conv_dim, T, B], with the heads packed
+    // in each row: a Slice of that row plus the Reshape below. Any other view layout, e.g. heads padded to a wider
+    // row, goes through the generic view resolution, which already returns [B, T, H_v, S_v].
+    const bool v_is_view = context.get_view_input_size(2) > 0;
+    bool v_packed_heads = true;
+    if (v_is_view) {
+        const auto v_stride = context.get_view_input_stride(2, 0);  // OV order: v_stride[3] = nb[0], v_stride[2] = nb[1]
+        v_packed_heads = v_stride.size() == 4 && v_stride[2] == (size_t) S_v * v_stride[3];
+    }
+
     auto q = context.get_input(0);
     auto k = context.get_input(1);
-    auto v = process_view_input(context, 2, H_v * S_v, 3);
+    auto v = v_packed_heads ? process_view_input(context, 2, H_v * S_v, 3) : process_view_input_new(context, 2);
     auto g = context.get_input(3);
     auto beta = context.get_input(4);
     auto state = context.get_input(5);
@@ -424,7 +434,7 @@ static OutputVector translate_gdn(const NodeContext & context, const OutputVecto
         k = std::make_shared<ov::op::v0::Tile>(k, repeats);
     }
 
-    if (context.get_view_input_size(2)) {
+    if (v_is_view && v_packed_heads) {
         // Same as l2_norm case 1
         v = std::make_shared<ov::op::v0::Squeeze>(v, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
         auto v_shape = context.get_input_shape(2).to_shape();
