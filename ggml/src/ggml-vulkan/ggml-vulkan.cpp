@@ -10610,6 +10610,12 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_COL2IM_1D:
         {
             elements = { uint32_t(dst->ne[0]), uint32_t(dst->ne[1]), 1 };
+            const uint32_t groups_x = CEIL_DIV(elements[0], pipeline->wg_denoms[0]);
+            const uint32_t max_groups_x = ctx->device->properties.limits.maxComputeWorkGroupCount[0];
+            if (groups_x > max_groups_x) {
+                elements[2] = CEIL_DIV(groups_x, max_groups_x);
+                elements[0] = CEIL_DIV(groups_x, elements[2]) * pipeline->wg_denoms[0];
+            }
         } break;
     case GGML_OP_POOL_1D:
         {
