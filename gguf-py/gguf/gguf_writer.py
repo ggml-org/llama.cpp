@@ -1029,6 +1029,15 @@ class GGUFWriter:
     def add_skip_loop_final_norm(self, value: bool) -> None:
         self.add_bool(Keys.LLM.SKIP_LOOP_FINAL_NORM.format(arch=self.arch), value)
 
+    def add_loop_core_start(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.LOOP_CORE_START.format(arch=self.arch), value)
+
+    def add_loop_core_end(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.LOOP_CORE_END.format(arch=self.arch), value)
+
+    def add_loop_gate_rank(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.LOOP_GATE_RANK.format(arch=self.arch), value)
+
     def add_interleave_moe_layer_step(self, value: int) -> None:
         self.add_uint32(Keys.LLM.INTERLEAVE_MOE_LAYER_STEP.format(arch=self.arch), value)
 

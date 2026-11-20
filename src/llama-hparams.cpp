@@ -363,6 +363,25 @@ uint32_t llama_hparams::n_layer() const {
     return n_layer_all - n_layer_nextn;
 }
 
+uint32_t llama_hparams::loop_n_extra() const {
+    return loop_n_pass > 1 ? (loop_n_pass - 1)*(loop_core_end - loop_core_start) : 0;
+}
+
+uint32_t llama_hparams::loop_layer(uint32_t il) const {
+    if (loop_n_pass < 2 || il < loop_core_start) {
+        return il;
+    }
+    const uint32_t n_core = loop_core_end - loop_core_start;
+    if (il < loop_core_start + loop_n_pass*n_core) {
+        return loop_core_start + (il - loop_core_start) % n_core;
+    }
+    return il - loop_n_extra();
+}
+
+uint32_t llama_hparams::loop_visit(uint32_t ip) const {
+    return ip < loop_core_end ? ip : ip + loop_n_extra();
+}
+
 bool llama_hparams::use_mrope() const {
     return rope_sections[0] > 0 && rope_sections[1] > 0;
 }

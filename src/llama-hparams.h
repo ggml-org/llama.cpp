@@ -264,6 +264,12 @@ struct llama_hparams {
     float    f_qk_clip         = 0.0f;
     float    f_relative_clip   = 0.0f;
 
+    // looped layers: [loop_core_start, loop_core_end) run loop_n_pass times, each visit is its own layer index
+    uint32_t loop_core_start = 0;
+    uint32_t loop_core_end   = 0;
+    uint32_t loop_n_pass     = 0; // < 2: no loop
+    uint32_t loop_gate_rank  = 0; // inkling2
+
     bool ssm_dt_b_c_rms = false;
 
     float f_clamp_kqv      = 0.0f;
@@ -555,6 +561,11 @@ struct llama_hparams {
 
     // number of effective layers (excludes nextn layers)
     uint32_t n_layer() const;
+
+    // looped layers: visits beyond the physical layers, physical layer of a visit, first visit of a physical layer
+    uint32_t loop_n_extra() const;
+    uint32_t loop_layer(uint32_t il) const;
+    uint32_t loop_visit(uint32_t ip) const;
 
     // note that this function uses different SWA parameters from those in the hparams
     // note: inlined on purpose for performance reasons

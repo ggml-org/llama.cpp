@@ -131,6 +131,14 @@ class TensorNameMap:
             "model.attn_res.output_query",  # inkling2
         ),
 
+        MODEL_TENSOR.LOOP_RES_QUERY: (
+            "model.middle_cycle_cross_pass_queries",  # inkling2 loop
+        ),
+
+        MODEL_TENSOR.LOOP_KV_RES_QUERY: (
+            "model.middle_cycle_cross_pass_kv_queries",  # inkling2 loop
+        ),
+
         # Rope frequencies
         MODEL_TENSOR.ROPE_FREQS: (
             "rope.freqs",  # llama-pth
@@ -809,6 +817,54 @@ class TensorNameMap:
         MODEL_TENSOR.FFN_RES_QUERY: (
             "model.layers.{bid}.mlp_input.query",  # inkling2
             "model.attn_res.mlp_queries.{bid}",    # inkling2
+        ),
+
+        MODEL_TENSOR.LOOP_ATTN_DOWN: (
+            "model.layers.{bid}.controllers.attn.down_weight",  # inkling2 loop
+        ),
+
+        MODEL_TENSOR.LOOP_ATTN_GAIN: (
+            "model.layers.{bid}.controllers.attn.gain_weight",  # inkling2 loop
+        ),
+
+        MODEL_TENSOR.LOOP_ATTN_FORGET: (
+            "model.layers.{bid}.controllers.attn.forget_weight",  # inkling2 loop
+        ),
+
+        MODEL_TENSOR.LOOP_K_DOWN: (
+            "model.layers.{bid}.controllers.k.down_weight",  # inkling2 loop
+        ),
+
+        MODEL_TENSOR.LOOP_K_GAIN: (
+            "model.layers.{bid}.controllers.k.gain_weight",  # inkling2 loop
+        ),
+
+        MODEL_TENSOR.LOOP_K_FORGET: (
+            "model.layers.{bid}.controllers.k.forget_weight",  # inkling2 loop
+        ),
+
+        MODEL_TENSOR.LOOP_V_DOWN: (
+            "model.layers.{bid}.controllers.v.down_weight",  # inkling2 loop
+        ),
+
+        MODEL_TENSOR.LOOP_V_GAIN: (
+            "model.layers.{bid}.controllers.v.gain_weight",  # inkling2 loop
+        ),
+
+        MODEL_TENSOR.LOOP_V_FORGET: (
+            "model.layers.{bid}.controllers.v.forget_weight",  # inkling2 loop
+        ),
+
+        MODEL_TENSOR.LOOP_MLP_DOWN: (
+            "model.layers.{bid}.controllers.mlp.down_weight",  # inkling2 loop
+        ),
+
+        MODEL_TENSOR.LOOP_MLP_GAIN: (
+            "model.layers.{bid}.controllers.mlp.gain_weight",  # inkling2 loop
+        ),
+
+        MODEL_TENSOR.LOOP_MLP_FORGET: (
+            "model.layers.{bid}.controllers.mlp.forget_weight",  # inkling2 loop
         ),
 
         MODEL_TENSOR.STREAM_EMBD: (
