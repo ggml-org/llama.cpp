@@ -3092,33 +3092,34 @@ static bool htp_kparams_solve_cpy(
     const uint32_t mdev_count = htp_session_mdev_count(sess);
     const size_t   vtcm_size  = htp_session_vtcm_size(sess);
 
-    if (sametype) {
-        if (src_is_contiguous && dst_is_contiguous) {
-            kparams->kernel_type = HTP_COPY_KERNEL_1D_CONTIG;
+    if (sametype && src_is_contiguous && dst_is_contiguous) {
+        kparams->kernel_type = HTP_COPY_KERNEL_1D_CONTIG;
+        return true;
+    }
+
+    const uint32_t max_gather_ne0 = 128 / src_type_size;
+    const uint32_t total_rows     = (uint32_t) (src0->ne[1] * src0->ne[2] * src0->ne[3]);
+    if ((src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16) &&
+        (dst->type  == GGML_TYPE_F32 || dst->type  == GGML_TYPE_F16) &&
+        dst_is_contiguous && !src_is_contiguous &&
+        src0->nb[0] == src_type_size && src0->ne[0] <= max_gather_ne0 &&
+        src0->nb[1] >= (size_t) src0->ne[0] * src_type_size &&
+        total_rows > 1 &&
+        htp_gather_rows_tensor_outer_contiguous(src0)) {
+
+        if (htp_gather_rows_solve_layout(&kparams->u.gather,
+                                         (uint32_t) src0->ne[0], (uint32_t) src0->nb[1],
+                                         0, 0, false,
+                                         src_type_size, dst_type_size, total_rows,
+                                         n_hvx, mdev_count, vtcm_size)) {
+            kparams->kernel_type = HTP_COPY_KERNEL_GATHER_ROWS;
+            kparams->n_hvx       = (uint8_t) n_hvx;
+            kparams->vtcm_size   = kparams->u.gather.slice * n_hvx;
             return true;
         }
+    }
 
-        const uint32_t max_gather_ne0 = 128 / src_type_size;
-        const uint32_t total_rows     = (uint32_t) (src0->ne[1] * src0->ne[2] * src0->ne[3]);
-        if ((src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16) &&
-            dst_is_contiguous && !src_is_contiguous &&
-            src0->nb[0] == src_type_size && src0->ne[0] <= max_gather_ne0 &&
-            src0->nb[1] >= (size_t) src0->ne[0] * src_type_size &&
-            total_rows > 1 &&
-            htp_gather_rows_tensor_outer_contiguous(src0)) {
-
-            if (htp_gather_rows_solve_layout(&kparams->u.gather,
-                                             (uint32_t) src0->ne[0], (uint32_t) src0->nb[1],
-                                             0, 0, false,
-                                             src_type_size, total_rows,
-                                             n_hvx, mdev_count, vtcm_size)) {
-                kparams->kernel_type = HTP_COPY_KERNEL_GATHER_ROWS;
-                kparams->n_hvx       = (uint8_t) n_hvx;
-                kparams->vtcm_size   = kparams->u.gather.slice * n_hvx;
-                return true;
-            }
-        }
-
+    if (sametype) {
         if (htp_kparams_solve_cpy_transpose(sess, src0, dst, src_type_size, kparams)) {
             return true;
         }

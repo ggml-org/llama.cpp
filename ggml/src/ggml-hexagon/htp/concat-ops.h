@@ -127,7 +127,7 @@ static inline bool htp_concat_gather_rows_solve_layout(
     uint32_t vtcm_size) {
 
     if (src0_es == dst_es && src1_es == dst_es) {
-        return htp_gather_rows_solve_layout(kparams, na, a_nb1, nb, b_nb1, b_dense, dst_es, total_rows, n_hvx, mdev_count, vtcm_size);
+        return htp_gather_rows_solve_layout(kparams, na, a_nb1, nb, b_nb1, b_dense, dst_es, dst_es, total_rows, n_hvx, mdev_count, vtcm_size);
     }
 
     const uint32_t max_ne0 = 128 / dst_es;
