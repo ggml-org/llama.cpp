@@ -2636,26 +2636,27 @@ struct test_mul_mat_reorder_then_big_batch : public test_case {
     const ggml_type type;
     const int n; // cols of the big batch
     const int m; // rows
+    const int k; // row length
 
     std::string vars() override {
-        return VARS_TO_STR3(type, n, m);
+        return VARS_TO_STR4(type, n, m, k);
     }
 
-    test_mul_mat_reorder_then_big_batch(ggml_type type = GGML_TYPE_IQ3_S, int n = 64, int m = 64)
-        : type(type), n(n), m(m) {}
+    test_mul_mat_reorder_then_big_batch(ggml_type type = GGML_TYPE_IQ3_S, int n = 64, int m = 64, int k = 256)
+        : type(type), n(n), m(m), k(k) {}
 
     double max_nmse_err() override {
         return 5e-4; // same as test_mul_mat
     }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * w = ggml_new_tensor_2d(ctx, type, 1*256, m);
+        ggml_tensor * w = ggml_new_tensor_2d(ctx, type, k, m);
         ggml_set_name(w, "w");
 
-        ggml_tensor * x1 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1*256, 1);
+        ggml_tensor * x1 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, 1);
         ggml_set_name(x1, "x1");
 
-        ggml_tensor * x2 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1*256, n);
+        ggml_tensor * x2 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
         ggml_set_name(x2, "x2");
 
         ggml_tensor * mm1 = ggml_mul_mat(ctx, w, x1);
@@ -12261,6 +12262,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // Execution-size-8 XMX: short K, row tails, exact column tails, and chunk boundaries.
+    for (ggml_type type : {GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0}) {
+        for (int64_t k : {256, 1024}) {
+            for (int64_t n : {1, 8, 9, 16, 17, 33, 40, 47, 64, 65, 80, 81}) {
+                test_cases.emplace_back(new test_mul_mat_reorder_then_big_batch(type, n, 33, k));
+            }
+        }
+        for (int64_t n : {4, 17, 33, 65}) {
+            test_cases.emplace_back(new test_mul_mat_id(type, GGML_TYPE_F32, 4, 4, false, 33, n, 1024));
+        }
+    }
+
     // BF16 matrices of few rows and a long K at small batch sizes (MMVF instead of MMF)
     for (int n : {2, 3, 4, 5, 8}) {
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32,  320, n, 10240, {1, 1}, {1, 1}));
@@ -13507,6 +13520,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (bool b : {false, true}) {
         test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_IQ2_S, GGML_GLU_OP_SWIGLU_CLAMP, 1, 32, 256,
             true, 16, 8, b, false, true, false));
+    }
+
+    // Xe-LPG+ fused DPAS: bounded eight-column tiles and non-multiple-of-16 row tails.
+    for (ggml_type type : {GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0}) {
+        for (ggml_glu_op glu_op : {GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU}) {
+            for (int64_t k : {256, 1024}) {
+                for (int64_t columns : {1, 2, 7, 8, 9, 16}) {
+                    test_cases.emplace_back(new test_mul_mat_fusion(type, glu_op, columns, 33, k,
+                        false, 1, 1, false, false, true, false, {1, 1}));
+                }
+            }
+        }
     }
 
     // Gate and up on the SYCL XMX kernels: rows long enough for 2D block loads, a last tile of 8 rows, and

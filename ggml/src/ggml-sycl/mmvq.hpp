@@ -15,6 +15,12 @@
 
 #include "common.hpp"
 
+#ifdef GGML_SYCL_MMVQ_HAS_XMX
+bool ggml_sycl_mul_mat_vec_q_xmx_arl(ggml_type type, bool short_rows, const void * vx, const void * vgate,
+                                     const char * vy, float * dst, int ncols, int64_t nrows, int64_t ncols_dst,
+                                     int stride_y_bytes, int ldd, int glu_op, dpct::queue_ptr stream);
+#endif
+
 // q5_K multi-column MMVQ shares weights across columns, pairs rows and fuses gate/up in the reorder
 // layout: faster on Xe2 (BMG), so untested archs keep the per-column kernel
 inline bool ggml_sycl_q5_k_mmvq_reuse(int device) {

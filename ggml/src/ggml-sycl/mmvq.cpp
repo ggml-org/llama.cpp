@@ -2084,7 +2084,8 @@ static void ggml_sycl_mul_mat_vec_q_xmx_run(bool            short_rows,
     }
 }
 
-static bool ggml_sycl_mul_mat_vec_q_xmx_type(ggml_type       type,
+static bool ggml_sycl_mul_mat_vec_q_xmx_type(int             device,
+                                             ggml_type       type,
                                              bool            short_rows,
                                              const void *    vx,
                                              const void *    vgate,
@@ -2097,6 +2098,10 @@ static bool ggml_sycl_mul_mat_vec_q_xmx_type(ggml_type       type,
                                              int             ldd,
                                              int             glu_op,
                                              dpct::queue_ptr stream) {
+    if (ggml_sycl_info().devices[device].hw_info.arch == gpu_arch::intel_gpu_arl_h) {
+        return ggml_sycl_mul_mat_vec_q_xmx_arl(type, short_rows, vx, vgate, vy, dst, ne00, nrows, ncols_dst,
+                                              stride_y_bytes, ldd, glu_op, stream);
+    }
 #    define XMX_RUN(TRAITS)                                                                                       \
         ggml_sycl_mul_mat_vec_q_xmx_run<ggml_sycl_esimd::TRAITS>(short_rows, vx, vgate, vy, dst, ne00, nrows,     \
                                                                  ncols_dst, stride_y_bytes, ldd, glu_op, stream); \
@@ -2136,7 +2141,7 @@ static bool ggml_sycl_mul_mat_vec_q_xmx(int                 device,
         !extra->optimized_feature.reorder) {
         return false;
     }
-    if (src1_ncols < ggml_sycl_xmx_min_cols(src0->type) || src1_ncols > g_ggml_sycl_xmx_max_cols) {
+    if (src1_ncols < ggml_sycl_xmx_min_cols(src0->type, ggml_sycl_info().devices[device].hw_info.arch) || src1_ncols > g_ggml_sycl_xmx_max_cols) {
         return false;
     }
 
@@ -2148,7 +2153,7 @@ static bool ggml_sycl_mul_mat_vec_q_xmx(int                 device,
 
     // rows under 64 bytes use the variant without 2D block loads, it is not built for the widest tile
     const bool short_rows = ne00 < 4 * QK_K;
-    if (short_rows && src1_ncols > 8) {
+    if (short_rows && src1_ncols > 8 && ggml_sycl_info().devices[device].hw_info.arch != gpu_arch::intel_gpu_arl_h) {
         return false;
     }
 
@@ -2157,7 +2162,7 @@ static bool ggml_sycl_mul_mat_vec_q_xmx(int                 device,
     if ((uintptr_t) src1_ddq_i % 64 != 0 || stride_y_bytes % 16 != 0) {
         return false;
     }
-    return ggml_sycl_mul_mat_vec_q_xmx_type(src0->type, short_rows, src0_dd_i, nullptr, src1_ddq_i, dst_dd_i, ne00,
+    return ggml_sycl_mul_mat_vec_q_xmx_type(device, src0->type, short_rows, src0_dd_i, nullptr, src1_ddq_i, dst_dd_i, ne00,
                                             row_diff, src1_ncols, stride_y_bytes, ldd, 0, stream);
 }
 #endif // GGML_SYCL_MMVQ_HAS_XMX
@@ -2182,7 +2187,7 @@ bool ggml_sycl_mul_mat_vec_q_glu_xmx(int              device,
     if (glu_op != GGML_GLU_OP_SWIGLU && glu_op != GGML_GLU_OP_GEGLU) {
         return false;
     }
-    if (ncols_dst < ggml_sycl_xmx_min_cols(src0_type) || ncols_dst > g_ggml_sycl_xmx_glu_max_cols) {
+    if (ncols_dst < ggml_sycl_xmx_min_cols(src0_type, ggml_sycl_info().devices[device].hw_info.arch) || ncols_dst > g_ggml_sycl_xmx_glu_max_cols) {
         return false;
     }
     if (!ggml_sycl_esimd::xmx_supported(vx, ncols) || !ggml_sycl_esimd::xmx_supported(vgate, ncols) ||
@@ -2191,10 +2196,10 @@ bool ggml_sycl_mul_mat_vec_q_glu_xmx(int              device,
     }
     // rows under 64 bytes use the variant without 2D block loads, it is not built for the wide tiles
     const bool short_rows = ncols < 4 * QK_K;
-    if (short_rows && ncols_dst > 8) {
+    if (short_rows && ncols_dst > 8 && ggml_sycl_info().devices[device].hw_info.arch != gpu_arch::intel_gpu_arl_h) {
         return false;
     }
-    return ggml_sycl_mul_mat_vec_q_xmx_type(src0_type, short_rows, vx, vgate, (const char *) vy, dst, ncols, nrows,
+    return ggml_sycl_mul_mat_vec_q_xmx_type(device, src0_type, short_rows, vx, vgate, (const char *) vy, dst, ncols, nrows,
                                             ncols_dst, stride_col_y_bytes, stride_col_dst, (int) glu_op, stream);
 #else
     GGML_UNUSED_VARS(device, src0_type, glu_op, vx, vgate, vy, dst, ncols, nrows, ncols_dst, stride_col_y_bytes,

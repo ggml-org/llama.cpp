@@ -789,6 +789,9 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | GGML_SYCL_DEVICE_ARCH | Optional                           | Set the SYCL device architecture. Setting the device architecture can improve the performance. See the table [--offload-arch](https://github.com/intel/llvm/blob/sycl/sycl/doc/design/OffloadDesign.md#--offload-arch) for a list of valid architectures. |
 | GGML_SYCL_F16      | OFF *(default)* \|ON *(optional)*     | Enable FP16 build with SYCL code path. [1.](#sycl-f16-footnote) |
 | GGML_SYCL_SUPPORT_XMX | ON *(default)* \|OFF *(Optional)* | Build the code paths that use XMX (DPAS) instructions. Set OFF for AOT builds targeting iGPUs without XMX, which otherwise fail to compile. |
+| XMX_ENABLE_SLM | OFF *(default)* \|ON | Split Arrow Lake-H ESIMD XMX K reductions across work-items using shared local memory. |
+| XMX_ENABLE_TRANSPOSED_2D_LOADS | OFF *(default)* \|ON | Compile native 2D loads for Arrow Lake-H ESIMD XMX. Devices without 2D block I/O and ineligible layouts use software loads. |
+| XMX_ENABLE_GATHER_TRANSPOSE | ON *(default)* \|OFF | Use LSC gathers for Arrow Lake-H ESIMD XMX weight and scale loads; OFF uses row loads. |
 | GGML_SYCL_GRAPH    | ON *(default)* \|OFF *(Optional)*     | Enable build with [SYCL Graph extension](https://github.com/intel/llvm/blob/sycl/sycl/doc/extensions/experimental/sycl_ext_oneapi_graph.asciidoc). |
 | GGML_SYCL_DNN      | ON *(default)* \|OFF *(Optional)*     | Enable build with oneDNN.                   |
 | GGML_SYCL_HOST_MEM_FALLBACK | ON *(default)* \|OFF *(Optional)* | Allow host memory fallback when device memory is full during quantized weight reorder. Enables inference to continue at reduced speed (reading over PCIe) instead of failing. Requires Linux kernel 6.8+. |
@@ -826,7 +829,7 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | GGML_SYCL_MKL_FA_DIAG | 0 (default) or 1 | Enable output fingerprinting for MKL flash attention. Dumps the first 64 float output values for the first 6 FA calls with n_kv ≥ 1024, labeled with kernel type (MKL/TILE/VEC) for cross-kernel comparison. |
 | GGML_SYCL_ENABLE_FUSION | 0 or 1 (default) | Enable fused-kernel dispatch in graph compute. Unsupported types and layouts fall back to the standalone op kernels. See `ggml_sycl_can_fuse()`. |
 | GGML_SYCL_ENABLE_ESIMD | 0 or 1 (default)| Enable ESIMD kernels when available. |
-| GGML_SYCL_ENABLE_XMX_ESIMD | 0 or 1 (default) | Use the XMX (DPAS) multi-column mat-vec kernels for reordered Q2_K to Q6_K and Q8_0 weights on Xe2 GPUs. Speeds up speculative decoding and short prompt batches. |
+| GGML_SYCL_ENABLE_XMX_ESIMD | 0 or 1 (default) | Use the XMX (DPAS) multi-column mat-vec kernels for reordered Q2_K to Q6_K and Q8_0 weights on Xe2 and Arrow Lake-H GPUs. Arrow Lake-H uses execution-size-8 DPAS with LSC gathers and software activation loads; native 2D block I/O is not required. Speeds up speculative decoding and short prompt batches. |
 | GGML_SYCL_XMX_MAX_COLS | non-negative integer, 80 (default) | Most activation columns (batch size) the `GGML_SYCL_ENABLE_XMX_ESIMD` kernels take; wider batches use the other mat-mul kernels. A larger value keeps XMX for bigger batches (as repeated launches), `0` never uses it. |
 | GGML_SYCL_XMX_GLU_MAX_COLS | 0 to 16, 16 (default) | Most columns the fused gate and up XMX kernel takes; wider batches run gate and up as separate mat-vecs. 16 is the most the kernel is built for, larger values are clamped to 16 and `0` turns the fused kernel off. |
 | GGML_SYCL_XMX_GATHER_TYPES | decimal bitmask, all bits set (default) | Weight formats that may use the XMX dequant-GEMM paths, which dequantize weights straight into the XMX tiles. This speeds up prompt processing of MoE models on GPUs with XMX units (Arc A- and B-series, Arc Pro, Data Center GPU Max), for example pp512 of Qwen3-30B-A3B UD-IQ3_XXS by about 50% on an Arc Pro B60. Bits:<br>* 1: IQ4_NL, 2: IQ3_S, 4: IQ4_XS, 8: IQ3_XXS, 16: IQ2_XXS, 32: IQ2_XS, 64: IQ2_S, 128: IQ1_S, 256: IQ1_M<br>* 512: Q8_0, 1024: Q4_K, 2048: Q5_K, 4096: Q6_K, 8192: Q2_K, 16384: Q3_K (MoE `MUL_MAT_ID` only)<br>Add values to combine them, for example `3` for IQ4_NL and IQ3_S; `0` disables the paths. A set bit does not force the path: batches of more than 64 tokens per expert use the library GEMM unless the device schedule width heuristic is overridden with `GGML_SYCL_MMID_SCHED=3`. Row lengths must be a multiple of 256 (32 for IQ4_NL and Q8_0). |
@@ -853,6 +856,20 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 
    Then benchmark with your preferred tool, such as `llama-bench`.
    For graph activity details (including reuse), set `GGML_SYCL_DEBUG=1` and look for `[SYCL-GRAPH]` messages.
+
+### Arrow Lake-H ESIMD XMX mat-vec
+
+The Arrow Lake-H path in `mmvq-arl.hpp` uses two execution-size-8 INT8 DPAS operations per 16 weight rows. It supports reordered Q2_K, Q3_K, Q4_K, Q5_K, Q6_K and Q8_0 weights, with FP32 accumulation and the existing Q8_1 activation format. Weight and scale loads use LSC gathers; activation loads use bounded block loads. Native 2D block I/O is not required. Xe2 devices keep the implementation in `esimd.hpp`.
+
+Unfused work-groups cover at most 16 activation columns and fused SwiGLU/GeGLU work-groups cover at most eight. Partial tiles clamp activation reads and bound output stores. `XMX_ENABLE_SLM=ON` splits K across work-items using shared local memory. Without SLM, one work-item performs the K reduction. `XMX_ENABLE_GATHER_TRANSPOSE` selects LSC gathers instead of row loads. `XMX_ENABLE_TRANSPOSED_2D_LOADS=ON` includes native 2D loads, selected only when the device advertises support and the layout meets the native requirements; other requests use software loads. These CMake options apply only to the Arrow Lake-H kernel. The compiler uses automatic GRF allocation to avoid register spills. Arrow Lake-H selects this kernel from two activation columns; single-column decode retains the ESIMD mat-vec path. The normal reorder and batch-size dispatch conditions still apply; unsupported cases use the existing kernels. `GGML_SYCL_ENABLE_XMX_ESIMD=0` disables this path for comparison. The first dispatch prints `using Xe-LPG+ XMX ESIMD` with the compiled SLM, gather and native 2D settings; a startup flag alone does not confirm kernel selection.
+
+The backend regression tests include a small-batch call followed by wider calls on the same weights, covering row tails, short rows, column tails and the 64-column launch boundary. For a configured SYCL test build, run:
+
+```sh
+# Replace SYCL0 if the integrated GPU has a different device index.
+./build/bin/test-backend-ops -b SYCL0 -o ADD -p 'type=(q[23456]_[Kk]|q8_0),n=.*m=33,k=(256|1024)'
+./build/bin/test-backend-ops -b SYCL0 -o MUL_MAT_FUSION -p 'n=33,k=(256|1024),use_id=0'
+```
 
 ### Flash-attention kernels
 
