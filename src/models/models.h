@@ -1246,6 +1246,7 @@ struct llama_model_deepseek32 : public llama_model_base {
     llama_model_deepseek32(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
+    bool indexer_k_rot() const override { return true; }
 
     struct graph : public llm_graph_context {
         graph(const llm_graph_params & params);
@@ -1262,6 +1263,7 @@ struct llama_model_dots3note : public llama_model_base {
     llama_model_dots3note(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
+    bool indexer_k_rot() const override { return true; }
 
     struct graph : public llm_graph_context {
         graph(const llm_graph_params & params);
@@ -1285,6 +1287,7 @@ struct llama_model_deepseek4 : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
     uint32_t graph_nodes_per_tensor() const override { return 32; }
+    bool indexer_k_rot() const override { return true; }
 
     struct graph : public llm_graph_context {
         struct no_build {};
@@ -1485,6 +1488,7 @@ struct llama_model_deepseek41 : public llama_model_deepseek4 {
     llama_model_deepseek41(const struct llama_model_params & params) : llama_model_deepseek4(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
+    bool indexer_k_rot() const override { return false; }
 
     // Engram: the hash constants are hparams.ple_* (one module per Engram layer), hashed on the host (ggml has no int64 mul/xor/mod)
     int engram_index(int il) const;
@@ -1543,6 +1547,7 @@ struct llama_model_glm_dsa : public llama_model_base {
     llama_model_glm_dsa(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
+    bool indexer_k_rot() const override { return true; }
 
     struct graph : public llm_graph_context {
         graph(const llm_graph_params & params);
@@ -1677,6 +1682,7 @@ struct llama_model_mistral_large4 : public llama_model_base {
     llama_model_mistral_large4(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
+    bool indexer_k_rot() const override { return true; }
 
     struct graph : public llm_graph_context {
         graph(const llm_graph_params & params);
