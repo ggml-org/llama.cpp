@@ -28,6 +28,51 @@ mkdir -p "$WORK_PATH"
 # Clean up in case of previously failed test
 rm -f $WORK_PATH/ggml-model-split*.gguf $WORK_PATH/ggml-model-merge*.gguf
 
+# 0. Invalid split limits must fail with a clear error instead of crashing
+if out=$($SPLIT --split-max-tensors 0 "$WORK_PATH/dummy.gguf" "$WORK_PATH/dummy" 2>&1); then
+    echo "expected --split-max-tensors 0 to fail"
+    exit 1
+fi
+echo "$out" | grep -q -- "--split-max-tensors must be a positive integer" || {
+    echo "unexpected error for --split-max-tensors 0: $out"
+    exit 1
+}
+echo PASS
+echo
+
+if out=$($SPLIT --split-max-tensors 5x "$WORK_PATH/dummy.gguf" "$WORK_PATH/dummy" 2>&1); then
+    echo "expected --split-max-tensors 5x to fail"
+    exit 1
+fi
+echo "$out" | grep -q -- "--split-max-tensors must be a positive integer" || {
+    echo "unexpected error for --split-max-tensors 5x: $out"
+    exit 1
+}
+echo PASS
+echo
+
+if out=$($SPLIT --split-max-size G "$WORK_PATH/dummy.gguf" "$WORK_PATH/dummy" 2>&1); then
+    echo "expected --split-max-size G to fail"
+    exit 1
+fi
+echo "$out" | grep -q "invalid size value" || {
+    echo "unexpected error for --split-max-size G: $out"
+    exit 1
+}
+echo PASS
+echo
+
+if out=$($SPLIT --split-max-size "" "$WORK_PATH/dummy.gguf" "$WORK_PATH/dummy" 2>&1); then
+    echo "expected --split-max-size \"\" to fail"
+    exit 1
+fi
+echo "$out" | grep -q "invalid size value" || {
+    echo "unexpected error for --split-max-size \"\": $out"
+    exit 1
+}
+echo PASS
+echo
+
 # 1. Get a model
 (
 cd $WORK_PATH
