@@ -14,6 +14,7 @@ import {
 import { RealtimeState, RealtimeUnsupportedReason } from './enums.js';
 import { RealtimeError, RealtimeUnsupportedError } from './errors.js';
 import { pcm16ToBase64 } from './pcm.js';
+import { cleanTranscript } from './transcript.js';
 import type { RealtimeTranscriberOptions, VoiceServerContext } from './types.js';
 
 interface Pending<T> {
@@ -123,9 +124,17 @@ export class RealtimeTranscriber {
 		return this.state === RealtimeState.OPEN;
 	}
 
-	/** The whole transcript so far, live text of the current item included. */
+	/**
+	 * The whole transcript so far, live text of the current item included, without the
+	 * format a model wraps its text in (see cleanTranscript).
+	 */
 	get text(): string {
-		return this.completedText + this.itemText;
+		const item = cleanTranscript(this.itemText);
+
+		// a model's own format carries no spacing between items; plain text streams with its own
+		return item === this.itemText
+			? this.completedText + item
+			: joinPieces(this.completedText, item);
 	}
 
 	/** Streams a PCM16 mono chunk at `options.sampleRate`. */
@@ -315,7 +324,7 @@ export class RealtimeTranscriber {
 	}
 
 	private handleCompleted(transcript: string): void {
-		this.completedText = joinPieces(this.completedText, transcript);
+		this.completedText = joinPieces(this.completedText, cleanTranscript(transcript));
 		this.itemText = '';
 		this.inFlight = Math.max(0, this.inFlight - 1);
 		this.options.onCompleted?.(this.text);

@@ -106,6 +106,27 @@ export const VOICE_REALTIME_EVENTS = {
 	SESSION_UPDATE: 'session.update'
 } as const;
 
+/**
+ * How Qwen3-ASR opens its answer: the language it heard, then the tag its text follows,
+ * e.g. `language French<asr_text>`.
+ */
+export const VOICE_ASR_TEXT_PREFIX_PATTERN = /^\s*(?:language\s+[^<\n]{0,40})?<asr_text>/i;
+
+/** The tag around Qwen3-ASR's text, wherever it stands. */
+export const VOICE_ASR_TEXT_TAG_PATTERN = /<\/?asr_text>/gi;
+
+/**
+ * How VibeVoice-ASR opens its answer: a JSON array of timed segments, or the start of
+ * one while it streams.
+ */
+export const VOICE_SEGMENTS_START_PATTERN = /^\s*\[\s*(?:\{\s*(?:"|$)|$)/;
+
+/** The text of each timed segment, its closing quote missing while the last one streams. */
+export const VOICE_SEGMENTS_CONTENT_PATTERN = /"content"\s*:\s*"((?:[^"\\]|\\.)*)/gi;
+
+/** An escape cut short at the end of a JSON string that is still streaming. */
+export const VOICE_UNFINISHED_ESCAPE_PATTERN = /\\(?:u[0-9a-f]{0,3})?$/i;
+
 /** The session type that transcribes; a conversation session is switched to it. */
 export const VOICE_REALTIME_SESSION_TRANSCRIPTION = 'transcription';
 

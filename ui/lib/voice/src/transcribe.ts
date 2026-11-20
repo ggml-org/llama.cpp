@@ -8,12 +8,13 @@ import {
 	VOICE_TRANSCRIPTION_RESPONSE_FORMAT
 } from './constants.js';
 import { VoiceTranscriptionError } from './errors.js';
+import { cleanTranscript } from './transcript.js';
 import type { TranscribeClipOptions, VoiceServerContext } from './types.js';
 
 /**
  * Transcribes a recorded clip with `POST /v1/audio/transcriptions`: any model with
  * audio input can do it, the server turns it into a chat completion.
- * @returns the transcript, trimmed
+ * @returns the transcript, trimmed and without the model's own format (see cleanTranscript)
  * @throws VoiceTranscriptionError carrying the server's own message
  */
 export async function transcribeClip(
@@ -60,7 +61,7 @@ export async function transcribeClip(
 		throw new VoiceTranscriptionError(VOICE_ERROR_MESSAGE.noTranscript, response.status);
 	}
 
-	return data.text.trim();
+	return cleanTranscript(data.text).trim();
 }
 
 async function readErrorMessage(response: Response): Promise<string> {

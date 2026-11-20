@@ -45,6 +45,21 @@ describe('transcribeClip', () => {
 		expect(form.has('prompt')).toBe(false);
 	});
 
+	it('returns the words alone when the model wraps them in a format of its own', async () => {
+		const answers = [
+			'language French<asr_text>Bonjour.',
+			'[{"Start":0.0,"End":3.1,"Speaker":0,"Content":"Bonjour."}]'
+		];
+
+		for (const answer of answers) {
+			const fetchMock = vi.fn(async () => new Response(JSON.stringify({ text: answer })));
+
+			await expect(
+				transcribeClip(contextWith(fetchMock as typeof fetch), new Blob([]))
+			).resolves.toBe('Bonjour.');
+		}
+	});
+
 	it('leaves the model out for a single-model server', async () => {
 		const fetchMock = vi.fn(
 			async (_url: RequestInfo | URL, _init?: RequestInit) =>

@@ -174,6 +174,39 @@ describe('RealtimeTranscriber', () => {
 		await expect(finished).resolves.toBe('First line.\nSecond line.');
 	});
 
+	it('shows the words alone while a model streams them in a format of its own', async () => {
+		const onDelta = vi.fn();
+		const transcriber = new RealtimeTranscriber(context, { onDelta, sampleRate: 16_000 });
+		const connected = transcriber.connect();
+		const delta = (text: string) =>
+			socket().emit({ delta: text, type: 'conversation.item.input_audio_transcription.delta' });
+		const completed = (transcript: string) =>
+			socket().emit({ transcript, type: 'conversation.item.input_audio_transcription.completed' });
+
+		socket().emit(sessionCreated('realtime'));
+		await connected;
+		transcriber.append(Int16Array.from([1]));
+		transcriber.commitSegment();
+
+		delta('[{"Start":0.0,"End":1.2,"Spe');
+		expect(transcriber.text).toBe('');
+		delta('aker":0,"Content":"Bonjour');
+		expect(onDelta).toHaveBeenLastCalledWith('aker":0,"Content":"Bonjour', 'Bonjour');
+		completed('[{"Start":0.0,"End":1.2,"Speaker":0,"Content":"Bonjour."}]');
+		expect(transcriber.text).toBe('Bonjour.');
+
+		// the next piece follows the first, a space between them
+		transcriber.append(Int16Array.from([2]));
+		transcriber.commitSegment();
+		delta('[{"Start":0.0,"End":0.9,"Speaker":0,"Content":"Ça va');
+		expect(transcriber.text).toBe('Bonjour. Ça va');
+
+		const finished = transcriber.finish({ commitRest: false });
+
+		completed('language French<asr_text>Ça va ?');
+		await expect(finished).resolves.toBe('Bonjour. Ça va ?');
+	});
+
 	it('transcribes a conversation model piece by piece, one at a time', async () => {
 		const transcriber = new RealtimeTranscriber(context, { sampleRate: 16_000 });
 		const connected = transcriber.connect();

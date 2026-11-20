@@ -55,6 +55,7 @@ export {
 	microphoneUnavailableReason
 } from './support.js';
 export { transcribeClip } from './transcribe.js';
+export { cleanTranscript } from './transcript.js';
 export type * from './types.js';
 export { encodeWav } from './wav.js';
 export { MicrophoneWarmup } from './warm-microphone.js';
