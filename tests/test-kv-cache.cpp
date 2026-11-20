@@ -175,6 +175,19 @@ int main() {
         GGML_ASSERT(kv.seq_pos_max(0) == 4);
     }
 
+    // regression test for gh-32424: DeepSeek4 cache with 0 layers (n_embd_head_k_all == 0) must not divide by zero
+    {
+        std::unique_ptr<llama_model> model(llama_model_create(LLM_ARCH_DEEPSEEK4, llama_model_default_params()));
+        init_model(*model, 1);
+        model->hparams.n_embd_head_k_full = 64;
+        model->hparams.n_embd_head_v_full = 64;
+        model->hparams.indexer_head_size  = 64;
+
+        llama_kv_cache kv(*model, false, model->hparams, GGML_TYPE_F16, GGML_TYPE_F16,
+                false, false, true, 32, 1, 0, LLAMA_SWA_TYPE_NONE, nullptr,
+                [](int32_t) { return false; }, nullptr, nullptr);
+    }
+
     llama_backend_free();
     return 0;
 }
