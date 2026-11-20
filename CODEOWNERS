@@ -102,7 +102,7 @@
 /tools/rpc/                             @ggml-org/ggml-rpc
 /tools/server/*                         @ggml-org/llama-server # no subdir
 /tools/server/tests/                    @ggml-org/llama-server
-/tools/ui/                              @ggml-org/llama-ui
+/ui/                                       @ggml-org/llama-ui
 /tools/tokenize/                        @ggerganov
 /tools/tts/                             @ggerganov
 /vendor/                                @ggerganov

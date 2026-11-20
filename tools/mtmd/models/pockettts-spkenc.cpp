@@ -5,44 +5,41 @@
 
 // pre-norm block with layer scale on both residual paths, see mimi_transformer.py
 ggml_tensor * mtmd_graph_pockettts_spkenc::tfm_layer_forward(ggml_tensor * cur, const mtmd_layer & layer, ggml_tensor * inp_pos, ggml_tensor * kq_mask, int il) const {
+    const int64_t n_pos      = cur->ne[1];
+    const int     tfm_d_head = (int) cur->ne[0] / tfm_n_head;
+
     ggml_tensor * inp = cur;
 
-    cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, NORM_TYPE_NORMAL, eps, il);
+    cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, NORM_TYPE_NORMAL, tfm_eps, il);
 
     ggml_tensor * Qcur = build_mm(layer.q_w, cur);
     ggml_tensor * Kcur = build_mm(layer.k_w, cur);
     ggml_tensor * Vcur = build_mm(layer.v_w, cur);
 
-    const int64_t n_pos = cur->ne[1];
-    Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_pos);
-    Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_pos);
-    Vcur = ggml_reshape_3d(ctx0, Vcur, d_head, n_head, n_pos);
+    Qcur = ggml_reshape_3d(ctx0, Qcur, tfm_d_head, tfm_n_head, n_pos);
+    Kcur = ggml_reshape_3d(ctx0, Kcur, tfm_d_head, tfm_n_head, n_pos);
+    Vcur = ggml_reshape_3d(ctx0, Vcur, tfm_d_head, tfm_n_head, n_pos);
 
-    Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, d_head, GGML_ROPE_TYPE_NORMAL, 0,
-                         hparams.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-    Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, d_head, GGML_ROPE_TYPE_NORMAL, 0,
-                         hparams.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+    Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, tfm_d_head, tfm_rope_type, 0,
+                         tfm_rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+    Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, tfm_d_head, tfm_rope_type, 0,
+                         tfm_rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
 
-    cur = build_attn(layer.o_w, nullptr, Qcur, Kcur, Vcur, kq_mask, kq_scale, il);
+    cur = build_attn(layer.o_w, nullptr, Qcur, Kcur, Vcur, kq_mask, 1.0f / sqrtf((float) tfm_d_head), il);
     cur = ggml_mul(ctx0, cur, layer.ls_1_w);
     cur = ggml_add(ctx0, cur, inp);
 
     inp = cur;
-    cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, NORM_TYPE_NORMAL, eps, il);
-    cur = build_ffn(cur, layer.ff_up_w, nullptr, nullptr, nullptr, layer.ff_down_w, nullptr, FFN_GELU, il);
+    cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, NORM_TYPE_NORMAL, tfm_eps, il);
+    cur = build_ffn(cur, layer.ff_up_w, nullptr, nullptr, nullptr, layer.ff_down_w, nullptr, tfm_ffn_type, il);
     cur = ggml_mul(ctx0, cur, layer.ls_2_w);
     cur = ggml_add(ctx0, cur, inp);
 
     return cur;
 }
 
-ggml_cgraph * mtmd_graph_pockettts_spkenc::build() {
-    // the preprocessor hands over the waveform as a single-row "mel", already [n_samples, 1]
-    ggml_tensor * inp_raw = build_inp_raw(1);
-    ggml_tensor * cur = ggml_reshape_2d(ctx0, inp_raw, inp_raw->ne[0], inp_raw->ne[1]);
-
-    mtmd_graph_pockettts_seanet seanet(*this);
-    cur = seanet.encode(cur);
+ggml_tensor * mtmd_graph_pockettts_spkenc::encode(const mtmd_graph_pockettts_seanet & seanet, ggml_tensor * x, const std::vector<mtmd_layer> & layers) {
+    ggml_tensor * cur = seanet.encode(x);
     cb(cur, "mimi_enc", -1);
 
     // [T, 512] -> transformer works on [512, T]
@@ -55,15 +52,26 @@ ggml_cgraph * mtmd_graph_pockettts_spkenc::build() {
     // the mimi transformer is causal with a sliding window, see _build_attention_mask()
     ggml_tensor * kq_mask = build_inp_attn_mask(cur->ne[1], cur->ne[1]);
 
-    for (int il = 0; il < n_layer; il++) {
-        cur = tfm_layer_forward(cur, model.layers[il], inp_pos, kq_mask, il);
+    for (size_t il = 0; il < layers.size(); il++) {
+        cur = tfm_layer_forward(cur, layers[il], inp_pos, kq_mask, (int) il);
     }
     cb(cur, "mimi_enc_tfm", -1);
 
-    // downsample to the model frame rate, [512, T] -> [T, 512] -> [T / 16, 32]
+    // downsample to the model frame rate, [512, T] -> [T, 512] -> [T / mimi_downsample, C]
     cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
     cur = seanet.conv1d(cur, model.downsample_w, nullptr, hparams.mimi_downsample, 1, true);
     cb(cur, "mimi_downsample", -1);
+
+    return cur;
+}
+
+ggml_cgraph * mtmd_graph_pockettts_spkenc::build() {
+    // the preprocessor hands over the waveform as a single-row "mel", already [n_samples, 1]
+    ggml_tensor * inp_raw = build_inp_raw(1);
+    ggml_tensor * cur = ggml_reshape_2d(ctx0, inp_raw, inp_raw->ne[0], inp_raw->ne[1]);
+
+    mtmd_graph_pockettts_seanet seanet(*this);
+    cur = encode(seanet, cur, model.layers);
 
     // voice latent -> backbone embd
     cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));

@@ -311,6 +311,10 @@ static size_t ggml_backend_metal_buffer_type_get_alloc_size(ggml_backend_buffer_
             {
                 res = 2*sizeof(int32_t)*ggml_nelements(tensor->src[0]);
             } break;
+        case GGML_OP_CONV_2D:
+            {
+                res += ggml_metal_op_conv_2d_extra_tmp(tensor);
+            } break;
         case GGML_OP_ARGMAX:
             {
                 res += ggml_metal_op_argmax_extra(tensor);
