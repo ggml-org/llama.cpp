@@ -12,10 +12,6 @@
 
 #import <Metal/Metal.h>
 
-#include <dlfcn.h>
-#include <mach/mach_time.h>
-#include <os/workgroup.h>
-
 #undef MIN
 #undef MAX
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -55,10 +51,6 @@ struct ggml_metal {
 
     id<MTLCaptureScope> capture_scope;
 
-    // work interval from graph_compute to synchronize, see ggml_metal_workgroup()
-    bool                      wg_active;
-    os_workgroup_join_token_s wg_token;
-
     // command buffer state
     int n_cb;           // number of extra threads used to submit the command buffers
 
@@ -91,79 +83,6 @@ struct ggml_metal {
     // once set, graph_compute will return GGML_STATUS_FAILED until the backend is recreated
     bool has_error;
 };
-
-// While the thread that calls graph_compute sleeps in synchronize, macOS sees a thread with low load and moves it to an
-// E-core, which makes the CPU part of each step slower. A work interval with a deadline from graph_compute to synchronize
-// keeps it on a P-core. AudioWorkIntervalCreate is the only public way to create an interval workgroup; dlsym avoids a
-// link-time dependency on AudioToolbox. GGML_METAL_NO_WORKGROUP=1 disables it.
-static const uint64_t GGML_METAL_WORKGROUP_DEADLINE_NS = 20 * 1000 * 1000;
-
-static os_workgroup_interval_t ggml_metal_workgroup(uint64_t * deadline_ticks) {
-    static os_workgroup_interval_t wg = NULL;
-    static uint64_t                ticks = 0;
-    static dispatch_once_t         once;
-
-    dispatch_once(&once, ^{
-        if (getenv("GGML_METAL_NO_WORKGROUP")) {
-            return;
-        }
-
-        typedef os_workgroup_interval_t (*create_fn_t)(const char *, os_clockid_t, os_workgroup_attr_t);
-
-        void * lib = dlopen("/System/Library/Frameworks/AudioToolbox.framework/AudioToolbox", RTLD_LAZY | RTLD_LOCAL);
-        create_fn_t create = lib ? (create_fn_t) dlsym(lib, "AudioWorkIntervalCreate") : NULL;
-        if (create == NULL) {
-            GGML_LOG_WARN("%s: AudioWorkIntervalCreate not available\n", __func__);
-            return;
-        }
-
-        mach_timebase_info_data_t tb;
-        mach_timebase_info(&tb);
-        ticks = GGML_METAL_WORKGROUP_DEADLINE_NS * tb.denom / tb.numer;
-
-        wg = create("ggml-metal", OS_CLOCK_MACH_ABSOLUTE_TIME, NULL);
-    });
-
-    *deadline_ticks = ticks;
-    return wg;
-}
-
-// join and leave on every step, so the thread never exits while joined (libdispatch traps on that)
-static void ggml_metal_workgroup_begin(ggml_metal_t ctx) {
-    uint64_t deadline_ticks;
-    os_workgroup_interval_t wg = ggml_metal_workgroup(&deadline_ticks);
-    if (wg == NULL || ctx->wg_active) {
-        return;
-    }
-
-    if (os_workgroup_join(wg, &ctx->wg_token) != 0) {
-        return;
-    }
-
-    const uint64_t now = mach_absolute_time();
-    if (os_workgroup_interval_start(wg, now, now + deadline_ticks, NULL) != 0) {
-        os_workgroup_leave(wg, &ctx->wg_token);
-        return;
-    }
-
-    ctx->wg_active = true;
-}
-
-static void ggml_metal_workgroup_end(ggml_metal_t ctx) {
-    if (!ctx->wg_active) {
-        return;
-    }
-
-    uint64_t deadline_ticks;
-    os_workgroup_interval_t wg = ggml_metal_workgroup(&deadline_ticks);
-
-    if (os_workgroup_interval_finish(wg, NULL) != 0) {
-        GGML_LOG_DEBUG("%s: os_workgroup_interval_finish failed\n", __func__);
-    }
-    os_workgroup_leave(wg, &ctx->wg_token);
-
-    ctx->wg_active = false;
-}
 
 ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
     GGML_LOG_INFO("%s: allocating\n", __func__);
@@ -276,8 +195,6 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
 void ggml_metal_free(ggml_metal_t ctx) {
     GGML_LOG_INFO("%s: deallocating\n", __func__);
 
-    ggml_metal_workgroup_end(ctx);
-
     for (int i = 0; i < GGML_METAL_MAX_COMMAND_BUFFERS; ++i) {
         if (ctx->cmd_bufs[i].obj) {
             [ctx->cmd_bufs[i].obj release];
@@ -340,8 +257,6 @@ void ggml_metal_synchronize(ggml_metal_t ctx) {
         [ctx->cmd_buf_last waitUntilCompleted];
         ctx->cmd_buf_last = nil;
     }
-
-    ggml_metal_workgroup_end(ctx);
 
     // check status of all command buffers
     {
@@ -565,8 +480,6 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
     if (gf->n_nodes == 0) {
         return GGML_STATUS_SUCCESS;
     }
-
-    ggml_metal_workgroup_begin(ctx);
 
     // number of nodes encoded by the main thread (empirically determined)
     const int n_main = MAX(64, 0.1*gf->n_nodes);
