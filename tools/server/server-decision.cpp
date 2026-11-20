@@ -278,8 +278,8 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
         if (strict_payload && (!decision_is_payload(instructions) || instructions == "")) {
             throw err("\"instructions\" must be non-empty text, an object or an array");
         }
-        if ((type == COMMON_DECISION_TYPE_LFM3_D1 || !support_audio_input) && decision_is_spoken(instructions)) {
-            throw err("spoken instructions need a model with audio input");
+        if ((type != COMMON_DECISION_TYPE_LFM3_D1_OMNI || !support_audio_input) && decision_is_spoken(instructions)) {
+            throw err("spoken instructions are only supported by lfm3-d1-omni with audio input");
         }
 
         server_decision_question question;

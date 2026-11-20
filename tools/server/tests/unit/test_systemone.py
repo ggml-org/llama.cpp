@@ -541,6 +541,9 @@ def test_systemone_lfm2_d1_omni_media():
     # a request has images or one audio clip, not both
     res = decide([{"role": "user", "content": [audio, {"type": "text", "text": TEST_STATE}]}], [get_img_url("IMG_BASE64_URI_0")])
     assert res.status_code == 400
+    # spoken questions are only supported by lfm3-d1-omni, even if the model has audio input
+    res = server.make_request("POST", "/v1/systemone", data={"state": TEST_STATE, "questions": {"spoken": {"type": "noul", "instructions": audio}}})
+    assert res.status_code == 400
 
 
 @pytest.mark.parametrize("data", [
