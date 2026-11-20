@@ -18,6 +18,7 @@
 #define REQD_SUBGROUP_SIZE_128 __attribute__((qcom_reqd_sub_group_size("full")))
 #endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 1
 // Workgroup must be a subgroup
 #ifdef INTEL_GPU
 REQD_SUBGROUP_SIZE_32
@@ -73,7 +74,9 @@ kernel void kernel_group_norm(
         dst[j] *= scale;
     }
 }
+#endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 2
 //------------------------------------------------------------------------------
 // group_norm_mul_add
 //------------------------------------------------------------------------------
@@ -122,3 +125,4 @@ kernel void kernel_group_norm_mul_add(
         dst[j] = ((src0[j] - mean) * scale) * src1[j] + src2[j];
     }
 }
+#endif
