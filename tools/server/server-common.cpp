@@ -1497,7 +1497,7 @@ json oaicompat_chat_params_parse(
     auto tools = json_value(body, "tools", json());
     auto has_tools = tools.is_array() && !tools.empty();
     auto stream = json_value(body, "stream", false);
-    auto tool_choice = json_value(body, "tool_choice", std::string("auto"));
+    auto tool_choice = json_value(body, "tool_choice", json("auto"));
 
     if (!opt.use_jinja) {
         if (has_tools) {
@@ -1585,6 +1585,14 @@ json oaicompat_chat_params_parse(
     inputs.messages               = common_chat_msgs_parse_oaicompat(messages);
     inputs.tools                  = common_chat_tools_parse_oaicompat(tools);
     inputs.tool_choice            = common_chat_tool_choice_parse_oaicompat(tool_choice);
+    for (const auto & name : inputs.tool_choice.allowed) {
+        const auto n_matching = std::count_if(inputs.tools.begin(), inputs.tools.end(), [&](const common_chat_tool & tool) {
+            return tool.name == name;
+        });
+        if (name.empty() || n_matching != 1) {
+            throw std::invalid_argument("tool_choice function name must match exactly one supplied tool: " + name);
+        }
+    }
     inputs.json_schema            = json_schema.is_null() ? "" : json_schema.dump();
     inputs.grammar                = grammar;
     inputs.use_jinja              = opt.use_jinja;

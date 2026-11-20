@@ -150,7 +150,8 @@ class common_chat_peg_builder : public common_peg_parser_builder {
                                           const std::string &              call_id_key = "",
                                           const std::string &              gen_call_id_key = "",
                                           const std::vector<std::string> & parameters_order = {},
-                                          bool                             accept_openai_wrapper = false);
+                                          bool                             accept_openai_wrapper = false,
+                                          const common_chat_tool_choice & tool_choice = {});
 
     // Legacy-compatible helper for building XML/tagged style tool calls
     // Used by tests and manual parsers
@@ -173,18 +174,21 @@ class common_chat_peg_builder : public common_peg_parser_builder {
 
     // Implementation helpers for standard_json_tools — one per JSON tool call layout mode
     common_peg_parser build_json_tools_function_is_key(const common_json & tools,
+                                                       const common_chat_tool_choice & tool_choice,
                                                        const std::string &            args_key,
                                                        const std::string &            effective_args_key,
                                                        const std::string &            call_id_key,
                                                        const std::string &            gen_call_id_key);
 
     common_peg_parser build_json_tools_nested_keys(const common_json & tools,
+                                                   const common_chat_tool_choice & tool_choice,
                                                    const std::string &            effective_name_key,
                                                    const std::string &            effective_args_key,
                                                    const std::string &            call_id_key,
                                                    const std::string &            gen_call_id_key);
 
     common_peg_parser build_json_tools_flat_keys(const common_json &   tools,
+                                                 const common_chat_tool_choice & tool_choice,
                                                  const std::string &              effective_name_key,
                                                  const std::string &              effective_args_key,
                                                  const std::string &              call_id_key,

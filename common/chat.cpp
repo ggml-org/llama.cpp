@@ -321,7 +321,21 @@ struct common_chat_templates {
     std::shared_ptr<common_tts_dicts> tts_dicts;         // dictionaries of the model for tts_dict(), by name
 };
 
-common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice) {
+bool common_chat_tool_choice::allows(const std::string & name) const {
+    return !is_none() && (allowed.empty() || std::find(allowed.begin(), allowed.end(), name) != allowed.end());
+}
+
+void common_chat_foreach_tool(const common_json & tools, const common_chat_tool_choice & tool_choice,
+                              const std::function<void(size_t, const common_json &)> & fn) {
+    for (size_t i = 0; i < tools.size(); i++) {
+        const auto & tool = tools[i];
+        if (tool_choice.allows(tool.at("function").at("name").get<std::string>())) {
+            fn(i, tool);
+        }
+    }
+}
+
+common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const common_json & tool_choice) {
     if (tool_choice == "auto") {
         return COMMON_CHAT_TOOL_CHOICE_AUTO;
     }
@@ -331,7 +345,34 @@ common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::strin
     if (tool_choice == "required") {
         return COMMON_CHAT_TOOL_CHOICE_REQUIRED;
     }
-    throw std::invalid_argument("Invalid tool_choice: " + tool_choice);
+    if (tool_choice.value("type", json()) == "function") {
+        common_chat_tool_choice choice = COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        choice.allowed.push_back(tool_choice.at("function").at("name").get<std::string>());
+        return choice;
+    }
+    if (tool_choice.value("type", json()) == "allowed_tools") {
+        const auto & allowed = tool_choice.at("allowed_tools");
+        const auto & mode = allowed.at("mode");
+        const auto & tools = allowed.at("tools");
+        if ((mode != "auto" && mode != "required") || !tools.is_array()) {
+            throw std::invalid_argument("allowed_tools requires mode auto or required and a tools array");
+        }
+        common_chat_tool_choice choice = mode == "required" ? COMMON_CHAT_TOOL_CHOICE_REQUIRED : COMMON_CHAT_TOOL_CHOICE_AUTO;
+        for (const auto & tool : tools) {
+            if (tool.value("type", json()) != "function") {
+                throw std::invalid_argument("allowed_tools entries must have type function");
+            }
+            choice.allowed.push_back(tool.at("function").at("name").get<std::string>());
+        }
+        if (choice.allowed.empty()) {
+            if (choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
+                throw std::invalid_argument("Required allowed_tools must contain at least one function");
+            }
+            choice.mode = COMMON_CHAT_TOOL_CHOICE_NONE;
+        }
+        return choice;
+    }
+    throw std::invalid_argument("Invalid tool_choice: " + tool_choice.dump());
 }
 
 bool common_chat_templates_support_enable_thinking(const common_chat_templates * chat_templates) {
