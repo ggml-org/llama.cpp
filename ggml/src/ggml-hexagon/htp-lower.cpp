@@ -626,6 +626,7 @@ static bool htp_lower_is_view(const ggml_tensor * tensor) {
 
 static bool htp_lower_is_root_candidate(const ggml_tensor * root, const std::unordered_set<const ggml_tensor *> & produced) {
     return produced.count(root) && root->type == GGML_TYPE_F32 && root->buffer &&
+           !ggml_backend_buffer_is_host(root->buffer) &&
            ggml_backend_buffer_get_usage(root->buffer) != GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
            (root->flags & (GGML_TENSOR_FLAG_INPUT | GGML_TENSOR_FLAG_OUTPUT | GGML_TENSOR_FLAG_PARAM)) == 0;
 }
