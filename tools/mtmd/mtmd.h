@@ -593,6 +593,10 @@ MTMD_API void             mtmd_gen_state_reset(mtmd_gen_state * state);
 // returns non-zero if the last encode produced no such data
 MTMD_API int32_t          mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state);
 
+// codes of the reference held by the state (frame-major, e.g. drama3: 10 per frame), NULL if it has none
+// valid until the next mtmd_gen_state_set_ref() / mtmd_gen_state_free() on this state
+MTMD_API const int32_t *  mtmd_gen_state_get_ref_codes(const mtmd_gen_state * state, size_t * n_codes);
+
 // defaults tuned for the loaded pipeline, callers override only what they care about
 MTMD_API struct mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx);
 

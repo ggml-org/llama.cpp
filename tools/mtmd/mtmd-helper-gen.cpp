@@ -2739,6 +2739,9 @@ public:
         seq_id = 0;
         pos = 0;
         prompt_tokens.clear();
+        ref_codes.clear();
+        ref_embd.clear();
+        ref_begin = 0;
         prompt_pos = 0;
         frame.clear();
         main_logits.clear();
@@ -2758,8 +2761,16 @@ public:
         seq_id   = inp->seq_id;
         out_type = inp->out_type;
         stream   = inp->stream;
-        if (inp->speaker_ref) {
-            LOG_WRN("mtmd_helper_gen_audio: voice cloning is not supported yet, the speaker file is ignored\n");
+
+        // voice cloning: backbone rows from the codec encoder, the codes of the clip go to the gen state
+        std::vector<float> ref_rows;
+        if (inp->speaker_ref && !mtmd_bitmap_is_voice(inp->speaker_ref) && !mtmd_support_audio(mctx)) {
+            LOG_WRN("mtmd_helper_gen_audio: mmproj has no speaker encoder (re-convert it for voice cloning), the speaker file is ignored\n");
+        } else if (inp->speaker_ref) {
+            if (!encode_speaker(inp->speaker_ref, ref_rows) || !init_gen_state(inp->seed) ||
+                    mtmd_gen_state_set_ref(mctx, gen_state.get()) != 0) {
+                return 1;
+            }
         }
 
         sem_begin = find_special_token(vocab, "<|semantic:0|>");
@@ -2770,7 +2781,12 @@ public:
             return 1;
         }
 
-        if (!tokenize_segments(prompt_segments(std::string(inp->prompt, inp->prompt_len)), prompt_tokens)) {
+        const std::string text(inp->prompt, inp->prompt_len);
+        if (ref_rows.empty()) {
+            if (!tokenize_segments(prompt_segments(text), prompt_tokens)) {
+                return 1;
+            }
+        } else if (!build_reference_prompt(text, inp->speaker_ref_text ? inp->speaker_ref_text : "", std::move(ref_rows))) {
             return 1;
         }
         if (prompt_tokens.size() >= llama_n_ctx_seq(lctx) || prompt_tokens.size() > max_rows()) {
@@ -2782,7 +2798,7 @@ public:
             return 1;
         }
         rng.seed(inp->seed == UINT32_MAX ? std::random_device{}() : inp->seed);
-        return init_gen_state(inp->seed) ? 0 : 1;
+        return gen_state || init_gen_state(inp->seed) ? 0 : 1;
     }
 
     // run the tower on every prompt row to fill its KV
@@ -2792,27 +2808,41 @@ public:
         if (prompt_pos >= n_prompt) {
             return 0;
         }
-        // small batches: every row also outputs logits
-        const int n = std::min({ n_batch, n_prompt - prompt_pos, 64 });
-        llama_batch_ext_ptr batch(llama_batch_ext_init(lctx));
-        if (!batch_set_tokens(batch.get(), prompt_tokens.data() + prompt_pos, n, pos, seq_id)) {
-            return -1;
+        // small batches of rows of one kind (text tokens or reference frames): every row also outputs logits
+        const bool speech = is_speech_row(prompt_pos);
+        int n = std::min({ n_batch, n_prompt - prompt_pos, 64 });
+        for (int i = 1; i < n; i++) {
+            if (is_speech_row(prompt_pos + i) != speech) {
+                n = i;
+                break;
+            }
         }
-        for (int i = 0; i < n; i++) {
-            llama_batch_ext_set_output_logits(batch.get(), i, true);
+        int ret = 0;
+        if (speech) {
+            ret = decode_embd_rows(ref_embd.data() + (size_t) (prompt_pos - ref_begin) * n_embd, n);
+        } else {
+            llama_batch_ext_ptr batch(llama_batch_ext_init(lctx));
+            if (!batch_set_tokens(batch.get(), prompt_tokens.data() + prompt_pos, n, pos, seq_id)) {
+                return -1;
+            }
+            for (int i = 0; i < n; i++) {
+                llama_batch_ext_set_output_logits(batch.get(), i, true);
+            }
+            ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
         }
-        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
+        if (ret != 0) {
             LOG_ERR("mtmd_helper_gen_audio: prompt decode failed\n");
             return -1;
         }
         for (int i = 0; i < n; i++) {
+            const int row = prompt_pos + i;
             const float * h = llama_get_embeddings_ith(lctx, i);
-            if (prompt_pos + i == n_prompt - 1) {
+            if (row == n_prompt - 1) {
                 h_state_buf.assign(h, h + n_embd); // first frame comes from the last prompt row
                 save_main_logits(i);
                 break;
             }
-            if (!run_tower(-1, h)) {
+            if (!run_prompt_tower(row, h)) {
                 return -1;
             }
         }
@@ -2845,17 +2875,7 @@ public:
         }
         codes_buf.insert(codes_buf.end(), frame.begin(), frame.end());
 
-        // text/speech stream: all mrope sections use the same position
-        const bool mrope = llama_model_rope_type(model) == LLAMA_ROPE_TYPE_MROPE ||
-                           llama_model_rope_type(model) == LLAMA_ROPE_TYPE_IMROPE;
-        decode_embd_batch batch(next_embd, 1, mrope ? 4 : 1, n_embd);
-        if (mrope) {
-            batch.set_position_mrope_1d(pos, seq_id);
-        } else {
-            batch.set_position_normal(pos, seq_id);
-        }
-        batch.logits[0] = 1;
-        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.render(lctx, 0, 1)) != 0) {
+        if (decode_embd_rows(next_embd, 1) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: decode failed\n");
             return 1;
         }
@@ -2938,9 +2958,24 @@ protected:
         return true;
     }
 
+    // offset of the leading speaker tag <|speaker:N|> after optional whitespace, npos without one
+    static size_t speaker_tag_pos(const std::string & text) {
+        const size_t lead = text.find_first_not_of(" \t\n\r\f\v");
+        static const std::string open = "<|speaker:";
+        if (lead == std::string::npos || text.compare(lead, open.size(), open) != 0) {
+            return std::string::npos;
+        }
+        size_t i = lead + open.size();
+        const size_t digits = i;
+        while (i < text.size() && text[i] >= '0' && text[i] <= '9') {
+            i++;
+        }
+        return i > digits && text.compare(i, 2, "|>") == 0 ? lead : std::string::npos;
+    }
+
     // reference-bracket-v1 prompt without references
     virtual std::vector<std::string> prompt_segments(std::string text) const {
-        if (text.rfind("<|speaker:", 0) != 0) {
+        if (speaker_tag_pos(text) == std::string::npos) {
             text = "<|speaker:0|> " + text;
         }
         return {
@@ -2951,6 +2986,86 @@ protected:
 
     // prompt rows but the last + generated frames
     virtual size_t max_rows() const { return n_tower_rows; }
+
+    // n speech rows from pos, every row outputs logits
+    // text/speech stream: all mrope sections use the same position
+    int32_t decode_embd_rows(const float * embd, int n) {
+        const bool mrope = llama_model_rope_type(model) == LLAMA_ROPE_TYPE_MROPE ||
+                           llama_model_rope_type(model) == LLAMA_ROPE_TYPE_IMROPE;
+        decode_embd_batch batch(embd, n, mrope ? 4 : 1, n_embd);
+        if (mrope) {
+            batch.set_position_mrope_1d(pos, seq_id);
+        } else {
+            batch.set_position_normal(pos, seq_id);
+        }
+        for (int i = 0; i < n; i++) {
+            batch.logits[i] = 1;
+        }
+        return llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.render(lctx, 0, n));
+    }
+
+    bool is_speech_row(int row) const {
+        return row >= ref_begin && (size_t) (row - ref_begin) < ref_embd.size() / n_embd;
+    }
+
+    // reference-bracket-v1 with one reference, see vLLM-Omni fish_omni/prompt.py
+    // system: instruction, "\n\n[Reference 1]\nText: <transcript>\nSpeech: " then one row per frame of the clip
+    bool build_reference_prompt(std::string text, std::string ref_text, std::vector<float> && ref_rows) {
+        size_t n_codes = 0;
+        const int32_t * codes = mtmd_gen_state_get_ref_codes(gen_state.get(), &n_codes);
+        const size_t n_frames = ref_rows.size() / n_embd;
+        if (!codes || n_frames == 0 || n_codes != n_frames * n_cb || ref_rows.size() != n_frames * n_embd) {
+            LOG_ERR("mtmd_helper_gen_audio: the speaker encoder gave no codes for the clip\n");
+            return false;
+        }
+        // the speaker tag follows "Text: " directly (default speaker 0), an untagged target reuses it
+        std::string tag = "<|speaker:0|>";
+        const size_t lead = speaker_tag_pos(ref_text);
+        if (lead == std::string::npos) {
+            ref_text = tag + " " + ref_text;
+        } else {
+            ref_text = ref_text.substr(lead);
+            tag = ref_text.substr(0, ref_text.find("|>") + 2);
+        }
+        if (speaker_tag_pos(text) == std::string::npos) {
+            text = tag + " " + text;
+        }
+
+        std::vector<llama_token> head, tail;
+        if (!tokenize_segments({ "<|im_start|>system\n", "convert the provided text to speech reference to the following:",
+                                 "\n\n[Reference 1]\nText: " + ref_text + "\nSpeech: " }, head) ||
+                !tokenize_segments({ "<|im_end|>\n", "<|im_start|>user\n", text, "<|im_end|>\n", "<|im_start|>assistant\n<|voice|>" }, tail)) {
+            return false;
+        }
+        prompt_tokens.assign(head.begin(), head.end());
+        prompt_tokens.insert(prompt_tokens.end(), n_frames, LLAMA_TOKEN_NULL);
+        prompt_tokens.insert(prompt_tokens.end(), tail.begin(), tail.end());
+        ref_codes.assign(codes, codes + n_codes);
+        ref_embd  = std::move(ref_rows);
+        ref_begin = (int) head.size();
+        return true;
+    }
+
+    // tower row of a prompt row: the input frame is the codes of this row (reference frame) or none,
+    // the codes of the next row are forced when it is a reference frame
+    bool run_prompt_tower(int row, const float * h) {
+        const bool cur  = is_speech_row(row);
+        const bool next = is_speech_row(row + 1);
+        const auto ref_frame = [&](int r) { return ref_codes.begin() + (size_t) (r - ref_begin) * n_cb; };
+        if (next) {
+            // [input frame, -1 for a text row | forced next frame]
+            frame.assign(n_cb, -1);
+            if (cur) {
+                std::copy(ref_frame(row), ref_frame(row + 1), frame.begin());
+            }
+            frame.insert(frame.end(), ref_frame(row + 1), ref_frame(row + 2));
+        } else if (cur) {
+            frame.assign(ref_frame(row), ref_frame(row + 1));
+        }
+        const bool ok = run_tower(next ? frame[n_cb] : -1, h) != nullptr;
+        frame.clear();
+        return ok;
+    }
 
     // copy right after our own decode, other sequences may decode on lctx before the next step_gen
     // layout: eos, then semantic codes 0..n_cb_vocab-1
@@ -3072,7 +3187,10 @@ protected:
 
     llama_seq_id seq_id = 0;
     llama_pos    pos    = 0;
-    std::vector<llama_token> prompt_tokens;
+    std::vector<llama_token> prompt_tokens;    // one per prompt row, LLAMA_TOKEN_NULL for a reference frame
+    std::vector<int32_t>     ref_codes;        // codes of the reference frames, n_cb per frame
+    std::vector<float>       ref_embd;         // backbone rows of the reference frames
+    int ref_begin = 0;                         // prompt row of the first reference frame
     int prompt_pos = 0;
 
     std::mt19937 rng;

@@ -175,7 +175,7 @@ python convert_hf_to_gguf.py path/to/chatterbox --mmproj --outfile mmproj-chatte
 Available params:
 - Speaker tags `<|speaker:0|>` to `<|speaker:15|>` in the text give each character its own voice, a text without a tag starts with `<|speaker:0|>`
 - The language is the one of the text, `--tts-lang` is not used
-- Note: `--tts-speaker-file` is not supported yet (voice cloning)
+- Voice cloning: `--tts-speaker-file` with the reference clip and `--tts-speaker-text` with its transcript (a transcript without a speaker tag is speaker 0). The clip is encoded by the codec encoder half of `codec.pth` and its codes are put in the prompt as one reference, as the reference does; the clip is truncated to the first 30 s. It needs an mmproj converted with the codec encoder
 - Note: `--top-k` and `--top-p` are not used, frames are sampled with the settings of the reference (main token: temperature 1.0, top-p 0.9, repetition-aware redraw over the last 16 frames; other codes: temperature 1.0, top-k 30, top-p 0.9)
 - Each frame is 2048 samples (about 46 ms), generation stops at the end-of-speech token
 - The codebook tower keeps the whole sequence in its KV cache, the prompt and the generated frames are limited to 4096 positions
@@ -192,7 +192,7 @@ llama-tts -m drama3.gguf \
 
 **Note for GGUF conversion:**
 
-The routed experts of the checkpoint are FP8, they are dequantized at conversion. The mmproj holds the codebook tower and the decoder half of `codec.pth`, it is best kept in BF16:
+The routed experts of the checkpoint are FP8, they are dequantized at conversion. The mmproj holds the codebook tower and `codec.pth` (the encoder half for voice cloning, the decoder half for the audio), it is best kept in BF16; the codec encoder is always stored in F16/F32:
 
 ```sh
 python convert_hf_to_gguf.py path/to/drama-3 --outtype q8_0 --outfile drama3.gguf
