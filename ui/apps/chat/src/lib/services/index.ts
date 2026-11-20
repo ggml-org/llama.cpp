@@ -307,6 +307,10 @@ export { SandboxService } from './sandbox.service';
  * @see utils/search-chats - parameter parsing, matching and formatting
  */
 export { SearchChatsService } from './search-chats.service';
+export {
+	type ConversationContentMatch,
+	ConversationSearchService
+} from './conversation-search.service';
 
 /**
  * **RouterService** — Dynamic route URL construction utility

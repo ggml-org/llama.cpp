@@ -16,6 +16,7 @@ export * from './auto-scroll.constants';
 export * from './context-gauge-dial.constants';
 export * from './context-gauge-popup.constants';
 export * from './conversation-import.constants';
+export * from './conversation-search.constants';
 export * from './binary-detection.constants';
 export * from './content-detection.constants';
 export * from './tool-call-args.constants';
