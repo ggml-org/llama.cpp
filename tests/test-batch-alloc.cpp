@@ -322,6 +322,54 @@ static void test_init(testing & t) {
             t.assert_true(ba.init(bb.b, vocab, false));
         }
     });
+
+
+    t.test("rejects_incompatible_sequence_sets", [&](testing & t) {
+      llama_batch_allocr ba(1);
+
+      // invalid:          x
+      //            i: 0 1 2 ...
+      // ---------------------------------------
+      // seq_id[i][0]: 0 0 1
+      // seq_id[i][1]: 1 1 2
+      // seq_id[i][2]: 2
+      // pos           0 1 1
+      {
+        batch_builder bb;
+        float embd[2];
+        llama_pos p;
+
+        // token0
+        const int32_t idx0 = bb.b.add_token(0);
+        bb.b.add_seq(idx0, 1);
+        bb.b.add_seq(idx0, 2);
+
+        p = 0;
+        bb.b.set_token_embd(idx0, {embd, 1, 2 });
+        bb.b.set_token_pos(idx0, &p);
+
+        // token1
+        const int32_t idx1 = bb.b.add_token(0);
+        bb.b.add_seq(idx1, 1);
+
+        p = 1;
+        bb.b.set_token_embd(idx1, {embd, 1, 2 });
+        bb.b.set_token_pos(idx1, &p);
+
+        // token2
+        const int32_t idx2 = bb.b.add_token(1);
+        bb.b.add_seq(idx2, 2);
+
+        p = 1;
+        bb.b.set_token_embd(idx2, {embd, 1, 2 });
+        bb.b.set_token_pos(idx2, &p); // invalid
+
+        // cause by sequence 1 belongs to incompatible sequence sets (not allowed)
+        t.assert_true(!ba.init(bb.b, vocab, false));
+      }
+
+    });
+
 }
 
 static void test_content_types(testing & t) {
@@ -932,7 +980,7 @@ static void test_compat(testing & t) {
         int32_t      n_seq_id[3] = { 1, 1, 2 };
         llama_seq_id s0[1]       = { 1 };
         llama_seq_id s1[1]       = { 1 };
-        llama_seq_id s2[2]       = { 1, 2 };
+        llama_seq_id s2[2]       = { 2, 3 };
         llama_seq_id * seq_id[4] = { s0, s1, s2, nullptr };
         int8_t       logits[3]   = { 0, 1, 0 };
 
@@ -958,7 +1006,7 @@ static void test_compat(testing & t) {
         t.assert_equal((size_t) 1, bb.b.tokens[0].seq_ids.size());
         t.assert_true(bb.b.tokens[0].seq_ids.count(1) == 1);
         t.assert_equal((size_t) 2, bb.b.tokens[2].seq_ids.size());
-        t.assert_true(bb.b.tokens[2].seq_ids.count(1) == 1 && bb.b.tokens[2].seq_ids.count(2) == 1);
+        t.assert_true(bb.b.tokens[2].seq_ids.count(2) == 1 && bb.b.tokens[2].seq_ids.count(3) == 1);
 
         // round trip through the allocator
         llama_batch_allocr ba(1);
