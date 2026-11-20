@@ -1535,6 +1535,102 @@ static void test_json_schema() {
     );
 }
 
+static void test_json_schema_all_of_repeated_properties() {
+    test_schema(
+        "allOf components that repeat a property",
+        R"""({"allOf": [{"type": "object", "properties": {"a": {"type": "integer"}}}, {"type": "object", "properties": {"a": {"type": "integer"}}}]})""",
+        {
+            R"""({"a": 1})""",
+        },
+        {
+            R"""({"a": 1, "a": 1})""",
+        });
+
+    test_schema(
+        "allOf property schema from a required component wins over an anyOf alternative",
+        R"""({
+            "allOf": [
+                {"anyOf": [{"type": "object", "properties": {"a": {"type": "string"}}}, {"type": "object", "properties": {"b": {"type": "boolean"}}}]},
+                {"type": "object", "properties": {"a": {"type": "integer"}}, "required": ["a"]}
+            ]
+        })""",
+        {
+            R"""({"a": 1, "b": true})""",
+        },
+        {
+            R"""({"a": "s"})""",
+            R"""({"b": true})""",
+        });
+}
+
+
+static void test_json_schema_refs_by_target() {
+    auto doc_a = common_chat_schema_from_json(json::parse(R"""({
+        "type": "object",
+        "properties": {"x": {"$ref": "#/$defs/D"}},
+        "required": ["x"],
+        "$defs": {"D": {"type": "object", "properties": {"a": {"type": "integer"}}, "required": ["a"]}}
+    })"""));
+    auto doc_b = common_chat_schema_from_json(json::parse(R"""({
+        "type": "object",
+        "properties": {"x": {"$ref": "#/$defs/D"}},
+        "required": ["x"],
+        "$defs": {"D": {"type": "object", "properties": {"b": {"type": "string"}}, "required": ["b"]}}
+    })"""));
+    auto grammar = build_grammar([&](const common_grammar_builder & builder) {
+        auto a = builder.add_schema("tool-a", *doc_a.root);
+        auto b = builder.add_schema("tool-b", *doc_b.root);
+        builder.add_rule("root", "\"A\" " + a + " | \"B\" " + b);
+    });
+    test("same $defs name with different targets in two documents", grammar,
+        {
+            R"""(A{"x": {"a": 1}})""",
+            R"""(B{"x": {"b": "s"}})""",
+        },
+        {
+            R"""(A{"x": {"b": "s"}})""",
+            R"""(B{"x": {"a": 1}})""",
+        });
+
+    test_schema(
+        "$defs names that format to the same rule name, with a self reference",
+        R"""({
+            "type": "object",
+            "properties": {"r": {"$ref": "#/$defs/a_b"}},
+            "required": ["r"],
+            "$defs": {
+                "a_b": {"type": "object", "properties": {"k": {"type": "boolean"}, "child": {"$ref": "#/$defs/a.b"}, "self": {"$ref": "#/$defs/a_b"}}, "required": ["k"]},
+                "a.b": {"type": "object", "properties": {"q": {"type": "integer"}}, "required": ["q"]}
+            }
+        })""",
+        {
+            R"""({"r": {"k": true, "self": {"k": false, "self": {"k": true, "child": {"q": 2}}}}})""",
+        },
+        {
+            R"""({"r": {"k": true, "self": {"q": 1}}})""",
+            R"""({"r": {"k": true, "child": {"k": true}}})""",
+        });
+
+    test_schema(
+        "nested rule that formats to the reserved $ref name",
+        R"""({
+            "type": "object",
+            "properties": {"r": {"$ref": "#/$defs/a-b"}},
+            "required": ["r"],
+            "$defs": {
+                "a-b": {"type": "object", "properties": {"x": {"$ref": "#/$defs/a"}, "self": {"$ref": "#/$defs/a-b"}}},
+                "a": {"type": "object", "properties": {"b": {"enum": ["v"]}}}
+            }
+        })""",
+        {
+            R"""({"r": {"x": {}, "self": {"self": {}}}})""",
+        },
+        {
+            R"""({"r": {"self": "v"}})""",
+            R"""({"r": {"x": "v"}})""",
+        });
+}
+
 int main() {
     fprintf(stdout, "Running grammar integration tests...\n");
     test_simple_grammar();
@@ -1547,6 +1643,8 @@ int main() {
     test_failure_missing_root_symbol();
     test_custom_root_symbol_check();
     test_json_schema();
+    test_json_schema_all_of_repeated_properties();
+    test_json_schema_refs_by_target();
     fprintf(stdout, "All tests passed.\n");
     return 0;
 }
