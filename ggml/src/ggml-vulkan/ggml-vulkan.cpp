@@ -9097,14 +9097,20 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     const bool k_quant = k->type != GGML_TYPE_F16 && k->type != GGML_TYPE_BF16 && k->type != GGML_TYPE_F32;
     const bool v_quant = v->type != GGML_TYPE_F16 && v->type != GGML_TYPE_BF16 && v->type != GGML_TYPE_F32;
     const bool kv_raw = (k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_BF16) && k->type == v->type;
+    // compact row lists in a pre-pass instead of gathering in the FA shader
+    const bool rows_compact = kv_rows && neq1 >= 64 &&
+                              (ctx->device->vendor_id == VK_VENDOR_ID_AMD ||
+                               (ctx->device->vendor_id == VK_VENDOR_ID_NVIDIA &&
+                                get_fa_tuning_params(ctx->device, HSK, HSV, neq1, KV, k->type, v->type, f32acc, qk_ratio).path == FA_COOPMAT2));
     // gated to AMD, except RDNA4, which regressed in benchmarks
-    const bool kv_raw_strided = ctx->device->vendor_id == VK_VENDOR_ID_AMD &&
-                                ctx->device->architecture != vk_device_architecture::AMD_RDNA4 &&
-                                neq1 >= 256 &&
-                                kv_raw &&
-                                (k->nb[1] != (uint64_t)HSK * ggml_type_size(k->type) ||
-                                 v->nb[1] != (uint64_t)HSV * ggml_type_size(v->type)) &&
-                                (HSK % 8) == 0 && (HSV % 8) == 0;
+    const bool kv_raw_strided = (rows_compact && kv_raw && (HSK % 8) == 0 && (HSV % 8) == 0) ||
+                                (ctx->device->vendor_id == VK_VENDOR_ID_AMD &&
+                                 ctx->device->architecture != vk_device_architecture::AMD_RDNA4 &&
+                                 neq1 >= 256 &&
+                                 kv_raw &&
+                                 (k->nb[1] != (uint64_t)HSK * ggml_type_size(k->type) ||
+                                  v->nb[1] != (uint64_t)HSV * ggml_type_size(v->type)) &&
+                                 (HSK % 8) == 0 && (HSV % 8) == 0);
     const size_t kv_scratch_ts = kv_raw_strided ? ggml_type_size(k->type) : sizeof(ggml_fp16_t);
     const uint64_t k_nel = (uint64_t)HSK * nek2 * KV * (kv_rows ? neq3 : nek3);
     const uint64_t v_nel = (uint64_t)HSV * nev2 * KV * (kv_rows ? neq3 : nev3);
@@ -9134,7 +9140,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                                 // Intel Xe1 regresses, see PR 25494
                                 (ctx->device->vendor_id != VK_VENDOR_ID_INTEL ||
                                  (ctx->device->coopmat_support && ctx->device->architecture != vk_device_architecture::INTEL_XE1)) &&
-                                (!ctx->device->coopmat2 || cm2_dequant_kv);
+                                (!ctx->device->coopmat2 || cm2_dequant_kv || rows_compact);
     const bool use_kv_rows = kv_rows && !use_dequant_kv;
     const bool compact_kv = kv_rows && use_dequant_kv;
     const ggml_type k_type_eff = (use_dequant_kv && !kv_raw_strided) ? GGML_TYPE_F16 : k->type;
