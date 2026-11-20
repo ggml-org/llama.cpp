@@ -31,7 +31,7 @@ describe('Button', () => {
 		const el = screen.getByRole('button', { name: 'danger' }).element() as HTMLElement;
 
 		expect(el.dataset.variant).toBe('destructive');
-		expect(el.className).toContain('bg-(--button-danger-background)');
+		expect(el.className).toContain('bg-(--action-danger)');
 	});
 
 	it('renders an anchor when href is set', async () => {

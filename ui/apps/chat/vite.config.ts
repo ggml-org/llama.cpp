@@ -55,7 +55,7 @@ export default defineConfig(({ mode }) => {
 					strict: true
 				}),
 				extensions: ['.svelte', '.svx'],
-				output: { bundleStrategy: 'single' },
+				output: { bundleStrategy: 'split' },
 				paths: { relative: true },
 				// Consult https://svelte.dev/docs/kit/integrations
 				// for more information about preprocessors
@@ -129,6 +129,8 @@ export default defineConfig(({ mode }) => {
 					],
 					test: {
 						browser: { ...browserBaseConfig, instances: [{ browser: 'chromium', headless: true }] },
+						// Llama UI's stories, shown in this Storybook too, are tested by the library itself (ui/lib/ui)
+						exclude: ['../../lib/ui/tests/**'],
 						name: 'ui'
 					}
 				}

@@ -143,6 +143,7 @@ class Keys:
         DECODER_BLOCK_COUNT               = "{arch}.decoder_block_count"
         ATTN_LOGIT_SOFTCAPPING            = "{arch}.attn_logit_softcapping"
         ROUTER_LOGIT_SOFTCAPPING          = "{arch}.router_logit_softcapping"
+        ROUTER_HIDDEN_SIZE                = "{arch}.router_hidden_size"
         FINAL_LOGIT_SOFTCAPPING           = "{arch}.final_logit_softcapping"
         FINAL_LOGIT_SIGMOID_CAPPING       = "{arch}.final_logit_sigmoid_capping"
         SWIN_NORM                         = "{arch}.swin_norm"
@@ -736,6 +737,7 @@ class MODEL_ARCH(IntEnum):
     LFM2             = auto()
     LFM2MOE          = auto()
     LFM3             = auto()
+    ZAYA1            = auto()
     DREAM            = auto()
     SMALLTHINKER     = auto()
     LLADA            = auto()
@@ -776,6 +778,7 @@ class MODEL_ARCH(IntEnum):
     KOLIBRI1         = auto()
     LIMITE           = auto()
     INKLING2         = auto()
+    DOMYN_EDGE       = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -1533,6 +1536,17 @@ class MODEL_TENSOR(IntEnum):
     LILICORR_OUT_HEAD             = auto()
     LILICORR_IN_HEAD              = auto()
     LILICORR_ANCHOR_OUT_HEAD      = auto()
+    # zaya1
+    CCA_CONV_GRP           = auto()
+    CCA_TEMP               = auto()
+    RES_SCALE_IN           = auto()
+    ATTN_RES_SCALE_HS      = auto()
+    FFN_RES_SCALE_HS       = auto()
+    ROUTER_EDA             = auto()
+    ROUTER_NORM            = auto()
+    ROUTER_FC1             = auto()
+    ROUTER_FC2             = auto()
+    ROUTER_OUT             = auto()
     # lfm2 audio
     A_ENC_NORM_CONV        = auto()
     A_ENC_LINEAR_POS       = auto()
@@ -1724,6 +1738,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.LFM2:             "lfm2",
     MODEL_ARCH.LFM2MOE:          "lfm2moe",
     MODEL_ARCH.LFM3:             "lfm3",
+    MODEL_ARCH.ZAYA1:            "zaya1",
     MODEL_ARCH.DREAM:            "dream",
     MODEL_ARCH.SMALLTHINKER:     "smallthinker",
     MODEL_ARCH.LLADA:            "llada",
@@ -1764,6 +1779,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.KOLIBRI1:         "kolibri1",
     MODEL_ARCH.LIMITE:           "limite",
     MODEL_ARCH.INKLING2:         "inkling2",
+    MODEL_ARCH.DOMYN_EDGE:       "domynedge",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -2559,6 +2575,16 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.LILICORR_OUT_HEAD:                     "lilicorr.out_head",
     MODEL_TENSOR.LILICORR_IN_HEAD:                      "lilicorr.in_head",
     MODEL_TENSOR.LILICORR_ANCHOR_OUT_HEAD:              "lilicorr.anchor_out_head",
+    MODEL_TENSOR.CCA_CONV_GRP:              "blk.{bid}.cca_conv_grp",
+    MODEL_TENSOR.CCA_TEMP:                  "blk.{bid}.cca_temp",
+    MODEL_TENSOR.RES_SCALE_IN:              "res_scale_in",
+    MODEL_TENSOR.ATTN_RES_SCALE_HS:         "blk.{bid}.attn_res_scale_hs",
+    MODEL_TENSOR.FFN_RES_SCALE_HS:          "blk.{bid}.ffn_res_scale_hs",
+    MODEL_TENSOR.ROUTER_EDA:                "blk.{bid}.ffn_router_eda",
+    MODEL_TENSOR.ROUTER_NORM:               "blk.{bid}.ffn_router_norm",
+    MODEL_TENSOR.ROUTER_FC1:                "blk.{bid}.ffn_router_fc1",
+    MODEL_TENSOR.ROUTER_FC2:                "blk.{bid}.ffn_router_fc2",
+    MODEL_TENSOR.ROUTER_OUT:                "blk.{bid}.ffn_router_out",
     MODEL_TENSOR.D2T:                       "d2t",
     MODEL_TENSOR.ATTN_V_GATE:               "blk.{bid}.attn_v_gate",
     MODEL_TENSOR.ATTN_V_EXP:                "blk.{bid}.attn_v_exps",
@@ -6130,6 +6156,34 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.ATTN_GATE,
     ],
+    MODEL_ARCH.ZAYA1: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.RES_SCALE_IN,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.CCA_CONV_GRP,
+        MODEL_TENSOR.CCA_TEMP,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_RES_SCALE_HS,
+        MODEL_TENSOR.ATTN_RESID_SCALE,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.ROUTER_EDA,
+        MODEL_TENSOR.ROUTER_NORM,
+        MODEL_TENSOR.ROUTER_FC1,
+        MODEL_TENSOR.ROUTER_FC2,
+        MODEL_TENSOR.ROUTER_OUT,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_GATE_UP_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_RES_SCALE_HS,
+        MODEL_TENSOR.FFN_RESID_SCALE,
+    ],
     MODEL_ARCH.SMALLTHINKER: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -7033,6 +7087,22 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_POST_CONV,
         MODEL_TENSOR.FFN_RES_QUERY,
     ],
+    MODEL_ARCH.DOMYN_EDGE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.FFN_PRE_NORM,
+        MODEL_TENSOR.FFN_POST_NORM,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.OUTPUT_NORM,
+    ],
 }
 
 # tensors that will not be serialized
@@ -7367,6 +7437,8 @@ class VisionProjectorType:
     ZONOS3_GEN = "zonos3_gen" # audio generation: 10 codebook heads + ZAC decoder
     ZONOS3_SPKENC = "zonos3_spkenc" # audio: MECT-B2 speaker encoder
     YUE2_GEN = "yue2_gen" # audio generation: flow-matching NAR + Oobleck VAE decoder
+    VOXCPM2_GEN = "voxcpm2_gen" # audio generation: residual LM + LocDiT flow matching + AudioVAE decoder
+    VOXCPM2_SPKENC = "voxcpm2_spkenc" # audio: AudioVAE encoder, reference clip -> latents
     MINIMAX_MUSIC3_GEN = "minimax_music3_gen" # audio generation: RVQ depth decoder + flow-matching DiT + DAC decoder
     FISH_S2_GEN = "fish_s2_gen" # audio generation: fast AR code predictor + Fish DAC decoder
     FISH_S2_SPKENC = "fish_s2_spkenc" # audio: Fish DAC encoder + RVQ, reference clip -> prompt rows

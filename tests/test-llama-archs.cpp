@@ -337,7 +337,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     if (arch == LLM_ARCH_QWEN3) {
         n_head_kv = 1; // MQA coverage
     } else if (arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_AFMOE || arch == LLM_ARCH_MAION_CODER ||
-            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_LIMITE || arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_RICURSIVE) {
+            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_LIMITE || arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_RICURSIVE ||
+            arch == LLM_ARCH_ZAYA1) {
         n_head_kv = 2; // GQA coverage
     }
     if (arch == LLM_ARCH_BEAM) {
@@ -495,15 +496,21 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern);
     } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_SPARK2_5 ||
             arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_GRANITE_SWA || arch == LLM_ARCH_DOTS3NOTE ||
-            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_FLINT || arch == LLM_ARCH_BEAM || arch == LLM_ARCH_RICURSIVE) {
+            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_FLINT || arch == LLM_ARCH_BEAM || arch == LLM_ARCH_RICURSIVE || arch == LLM_ARCH_DOMYN_EDGE) {
         std::vector<uint32_t> pattern;
         pattern.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
             pattern.push_back(il % 2);
         }
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern);
-        if (arch == LLM_ARCH_FLINT) {
+        if (arch == LLM_ARCH_FLINT || arch == LLM_ARCH_DOMYN_EDGE) {
             ms.add_kv(LLM_KV_ATTENTION_ROPE_PATTERN, pattern);
+        }
+        if (arch == LLM_ARCH_DOMYN_EDGE) {
+            // SWA (rope) layers use a smaller head dim than the full-attention (nope) layers
+            ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH_SWA,   n_embd_head/2);
+            ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_SWA, n_embd_head/2);
+            ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT_SWA, n_embd_head/2);
         }
     } else if (arch == LLM_ARCH_LFM3) {
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, std::vector<uint32_t>({0, 0, 1}));
@@ -744,7 +751,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,  uint32_t(2));
         // with more experts than a ubatch uses, the copy of the used experts in host memory skips some of them
         ms.add_kv(LLM_KV_EXPERT_COUNT,               uint32_t(host_experts_test(arch) ? 64 : arch == LLM_ARCH_CLOVER_MOE ? 4 : 2));
-        ms.add_kv(LLM_KV_EXPERT_USED_COUNT,          uint32_t(2));
+        ms.add_kv(LLM_KV_EXPERT_USED_COUNT,          uint32_t(arch == LLM_ARCH_ZAYA1 ? 1 : 2)); // ZAYA routes top-1
         ms.add_kv(LLM_KV_EXPERT_SHARED_COUNT,        uint32_t(1));
 
         uint32_t gating_func = 2;
@@ -799,7 +806,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_XIELU_BETA,                1.0f);
     ms.add_kv(LLM_KV_XIELU_EPS,                 1.0e-7f);
     ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_CLOVER_MOE || arch == LLM_ARCH_ZONOS3 ? 256 : 2*n_embd);
-    ms.add_kv(LLM_KV_SSM_CONV_KERNEL,           uint32_t(4));
+    ms.add_kv(LLM_KV_ROUTER_HIDDEN_SIZE,        n_embd);
+    ms.add_kv(LLM_KV_SSM_CONV_KERNEL,           uint32_t(arch == LLM_ARCH_ZAYA1 ? 2 : 4)); // ZAYA CCA convs have kernel 2
     ms.add_kv(LLM_KV_SSM_STATE_SIZE,            uint32_t(128));
     ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK,        n_head);
     ms.add_kv(LLM_KV_SSM_GROUP_COUNT,           arch == LLM_ARCH_PLAMO2 ? 0 : uint32_t(2));
@@ -1074,6 +1082,7 @@ static double check_draft_rollback(llama_model * model, const std::vector<llama_
 static bool moe_mandatory(const llm_arch arch) {
     switch (arch) {
         case LLM_ARCH_FLINT:
+        case LLM_ARCH_ZAYA1:
         case LLM_ARCH_LLAMA4:
         case LLM_ARCH_MAION_CODER:
         case LLM_ARCH_COHERE2MOE:

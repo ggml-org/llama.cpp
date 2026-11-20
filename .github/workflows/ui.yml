@@ -93,6 +93,11 @@ jobs:
         run: npm run lint
         working-directory: ui/apps/chat
 
+      - name: Check DESIGN.md is current with the tokens
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
+        run: npm run check:design
+        working-directory: ui/apps/chat
+
       - name: Install Playwright browsers
         id: playwright
         if: ${{ always() && steps.setup.conclusion == 'success' }}
@@ -130,6 +135,15 @@ jobs:
 
       - name: Run type checking
         run: npm run check
+        working-directory: ui/lib/ui
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+        working-directory: ui/lib/ui
+
+      # the unit tests and the Storybook stories (ui/lib/ui/tests/stories), which run as tests in Chromium
+      - name: Run tests
+        run: npm test
         working-directory: ui/lib/ui
 
       - name: Build the package
