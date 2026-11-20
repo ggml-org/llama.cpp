@@ -7,12 +7,22 @@
 #include "mtmd-helper.h"
 #include "mtmd-image.h"
 #include "mtmd-internal.h"
+#include "models/models.h"
+
+#include "chat-tts-norm.h"
+#include "jinja/lexer.h"
+#include "jinja/parser.h"
+#include "jinja/runtime.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <iterator>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -879,6 +889,177 @@ MAKE_TEST(test_helper_resampler) {
     }
 
     t.assert_true("invalid rate", mtmd_helper_resampler_init(0, rate_out) == nullptr);
+}
+
+//
+// kokoro
+//
+
+// a dictionary for tts_dict(): entries in any order, sorted here
+static common_tts_dict kokoro_dict(std::vector<std::pair<std::string, std::string>> entries) {
+    std::sort(entries.begin(), entries.end());
+    common_tts_dict dict;
+    for (auto & e : entries) {
+        dict.keys.push_back(e.first);
+        dict.values.push_back(e.second);
+    }
+    return dict;
+}
+
+// the "tts" template with small dictionaries: a few lexicon words, fixed tags, and a model for unknown words over the letters z a b i n g
+MAKE_TEST(test_kokoro_tts_template) {
+    std::string path = __FILE__;
+    const size_t pos = path.find_last_of("/\\");
+    path = (pos == std::string::npos ? std::string(".") : path.substr(0, pos)) + "/../models/templates/hexgrad-Kokoro-82M-tts.jinja";
+    std::ifstream fs(path, std::ios_base::binary);
+    if (!t.assert_true("template file is readable: " + path, fs.is_open())) {
+        return;
+    }
+    const std::string tmpl((std::istreambuf_iterator<char>(fs)), std::istreambuf_iterator<char>());
+
+    const auto dicts = std::make_shared<const common_tts_dicts>(common_tts_dicts{
+        {"gold", kokoro_dict({
+            {"hello", "\"h\xc9\x99l\xcb\x88O\""},
+            {"world", "\"w\xcb\x88\xc9\x9c\xc9\xb9ld\""},
+            {"I", "\"\xcb\x88I\""},
+            {"read", "{\"ADJ\":\"\xc9\xb9\xcb\x88\xc9\x9b" "d\",\"DEFAULT\":\"\xc9\xb9\xcb\x88id\",\"VBD\":\"\xc9\xb9\xcb\x88\xc9\x9b" "d\",\"VBN\":\"\xc9\xb9\xcb\x88\xc9\x9b" "d\",\"VBP\":\"\xc9\xb9\xcb\x88\xc9\x9b" "d\"}"},
+            {"it", "\"\xc9\xaat\""},
+            {"three", "\"\xce\xb8\xc9\xb9\xcb\x88i\""},
+            {"cat", "\"k\xcb\x88\xc3\xa6t\""},
+            {"walk", "\"w\xcb\x88\xc9\x94k\""},
+            {"the", "\"\xc3\xb0i\""},
+            {"Z", "\"z\xcb\x88i\""},
+            {"'s", "\"s\""},
+            {"a", "\"A\""},
+            {"and", "\"\xc3\xa6nd\""},
+            {"is", "\"\xc9\xaaz\""},
+        })},
+        {"silver", kokoro_dict({
+        })},
+        {"gold_gb", kokoro_dict({
+            {"hello", "\"h\xc9\x99l\xcb\x88Q\""},
+            {"world", "\"w\xcb\x88\xc9\x9c\xcb\x90ld\""},
+            {"walk", "\"w\xcb\x88\xc9\x94\xcb\x90k\""},
+        })},
+        {"silver_gb", kokoro_dict({
+        })},
+        {"pos_classes", kokoro_dict({
+            {"", "[\"NN\",\"NNP\",\"PRP\",\"VBD\"]"},
+        })},
+        {"pos_tagdict", kokoro_dict({
+            {"I", "\"PRP\""},
+            {"read", "\"VBD\""},
+            {"it", "\"PRP\""},
+            {".", "\".\""},
+            {",", "\",\""},
+        })},
+        {"pos_weights", kokoro_dict({
+            {"bias", "{\"c0\":1.0}"},
+        })},
+        {"lts", kokoro_dict({
+            {"z", "{\"z\":0.1}"},
+            {"b", "{\"b\":0.1}"},
+            {"i", "{\"\xc9\xaa\":0.1}"},
+            {"n", "{\"\xc5\x8b\":0.1}"},
+            {"g", "{\"\":0.1}"},
+            {"a", "{\"\xcb\x88\xc3\xa6\":0.1,\"\xc3\xa6\":0.06}"},
+            {"z:z a", "{\"\xcb\x88\xc3\xa6\":0.2,\"\xc3\xa6\":0.01}"},
+            {"$", "{\"\":0.2}"},
+        })},
+        {"lts_gb", kokoro_dict({
+            {"z", "{\"z\":0.1}"},
+            {"b", "{\"b\":0.1}"},
+            {"i", "{\"\xc9\xaa\":0.1}"},
+            {"n", "{\"\xc5\x8b\":0.1}"},
+            {"g", "{\"\":0.1}"},
+            {"a", "{\"\xcb\x88\xc9\x91\xcb\x90\":0.1,\"\xc9\x91\xcb\x90\":0.06}"},
+            {"z:z a", "{\"\xcb\x88\xc9\x91\xcb\x90\":0.2,\"\xc9\x91\xcb\x90\":0.01}"},
+            {"$", "{\"\":0.2}"},
+        })},
+    });
+
+    // voice, text, expected phonemes
+    const std::vector<std::array<std::string, 3>> cases = {
+        // words of the lexicon
+        { "af_heart", "Hello world.", "h\xc9\x99l\xcb\x88O w\xcb\x88\xc9\x9c\xc9\xb9ld." },
+        // the pronunciation depends on the part of speech
+        { "af_heart", "I read it.", "\xcb\x8cI \xc9\xb9\xcb\x88\xc9\x9b" "d \xc9\xaat." },
+        // a number, and the -s suffix rule
+        { "af_heart", "3 cats", "\xce\xb8\xc9\xb9\xcb\x88i k\xcb\x88\xc3\xa6ts" },
+        // the -ed and -ing suffix rules
+        { "af_heart", "walked, walking", "w\xcb\x88\xc9\x94kt, w\xcb\x88\xc9\x94k\xc9\xaa\xc5\x8b" },
+        // not in the lexicon: predicted from the spelling
+        { "af_heart", "zab", "z\xcb\x88\xc3\xa6" "b" },
+        // the free search gives two primary stresses, the stress pass keeps one
+        { "af_heart", "zaba", "z\xcb\x88\xc3\xa6" "b\xc3\xa6" },
+        // a doubled consonant says one sound
+        { "af_heart", "zabbing", "z\xcb\x88\xc3\xa6" "b\xc9\xaa\xc5\x8b" },
+        // an unknown word with 's
+        { "af_heart", "The zab's cat", "\xc3\xb0\xc9\x99 z\xcb\x88\xc3\xa6" "bs k\xcb\x88\xc3\xa6t" },
+        // no vowel: spelled out
+        { "af_heart", "zz", "z\xcb\x8ciz\xcb\x88i" },
+        // an accented letter is read as its base letter
+        { "af_heart", "H\xc3\xa9ll\xc3\xb3 world.", "h\xc9\x99l\xcb\x88O w\xcb\x88\xc9\x9c\xc9\xb9ld." },
+        // digits glued to letters are read as a number
+        { "af_heart", "3Z cats", "\xce\xb8\xc9\xb9\xcb\x88i z\xcb\x88i k\xcb\x88\xc3\xa6ts" },
+        // an unknown word in mixed case is read part by part
+        { "af_heart", "catWalk", "k\xcb\x88\xc3\xa6tw\xcb\x88\xc9\x94k" },
+        // a british voice uses the british lexicon
+        { "bf_emma", "Hello world.", "h\xc9\x99l\xcb\x88Q w\xcb\x88\xc9\x9c\xcb\x90ld." },
+        // and the british model for unknown words
+        { "bf_emma", "zaba", "z\xcb\x88\xc9\x91\xcb\x90" "b\xc9\x91\xcb\x90" },
+        // a voice of another language takes phonemes, they pass through
+        { "ef_dora", "\xcb\x88ola, m\xcb\x88undo.", "\xcb\x88ola, m\xcb\x88undo." },
+    };
+
+    jinja::lexer lexer;
+    const jinja::program ast = jinja::parse_from_tokens(lexer.tokenize(tmpl));
+    for (const auto & c : cases) {
+        std::string out;
+        try {
+            jinja::context ctx(tmpl);
+            common_chat_tts_norm_add_builtins(ctx, dicts);
+            auto msg = jinja::mk_val<jinja::value_object>();
+            msg->insert("role", jinja::mk_val<jinja::value_string>("user"));
+            msg->insert("content", jinja::mk_val<jinja::value_string>(c[1]));
+            auto msgs = jinja::mk_val<jinja::value_array>();
+            msgs->push_back(msg);
+            ctx.set_val("messages", msgs);
+            ctx.set_val("language", jinja::mk_val<jinja::value_string>(""));
+            ctx.set_val("voice", jinja::mk_val<jinja::value_string>(c[0]));
+            jinja::runtime runtime(ctx);
+            out = jinja::runtime::gather_string_parts(runtime.execute(ast))->as_string().str();
+        } catch (const std::exception & e) {
+            out = std::string("exception: ") + e.what();
+        }
+        if (!t.assert_true(c[0] + ": " + c[1], out == c[2])) {
+            t.log("Expected: " + c[2]);
+            t.log("Actual  : " + out);
+        }
+    }
+}
+
+// every frame is the constant 0.25 (only the DC bin, of magnitude n_fft * 0.25)
+// the overlap-add of hann windows at a quarter hop sums to 2, their squares to 1.5: the output is 0.25 * 2 / 1.5
+MAKE_TEST(test_kokoro_istft) {
+    const int n_fft = 20, hop = 5, n_frames = 9;
+    std::vector<float> spec((size_t) n_frames * (n_fft + 2), 0.0f);
+    for (int fr = 0; fr < n_frames; fr++) {
+        float * row = spec.data() + (size_t) fr * (n_fft + 2);
+        // the first half of a row is log magnitudes, the second half phases
+        for (int k = 0; k <= n_fft / 2; k++) {
+            row[k] = k == 0 ? logf(n_fft * 0.25f) : -100.0f;
+        }
+    }
+    std::vector<float> audio;
+    mtmd_graph_kokoro::istft(spec, audio);
+    t.assert_equal("samples", (size_t) (n_frames - 1) * hop, audio.size());
+    // the first and last hop are covered by fewer frames
+    float max_err = 0.0f;
+    for (size_t i = hop; i + hop < audio.size(); i++) {
+        max_err = std::max(max_err, std::fabs(audio[i] - 1.0f / 3.0f));
+    }
+    t.assert_true("constant signal, max error " + std::to_string(max_err), max_err < 1e-4f);
 }
 
 //

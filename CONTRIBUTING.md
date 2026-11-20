@@ -16,6 +16,8 @@ The project differentiates between 3 levels of contributors:
 >
 > Detailed information regarding permissible and restricted uses of AI can be found in the [AGENTS.md](AGENTS.md) file.
 
+### Requirements
+
 If AI is used to generate any portion of the code, contributors must adhere to the following requirements:
 
 1. Explicitly disclose the manner in which AI was employed.
@@ -23,6 +25,16 @@ If AI is used to generate any portion of the code, contributors must adhere to t
 3. Perform a comprehensive manual review prior to submitting the pull request. A proper code review usually takes something like one hour per 200-400 LOC and you should be spending **at least that much time on code review alone**.
 4. Be prepared to explain every line of code you submit when asked about it by a maintainer.
 5. It is strictly prohibited to use AI to write your posts for you (bug reports, feature requests, pull request descriptions, Github discussions, responding to humans, ...).
+
+### Checklist
+
+> [!IMPORTANT]
+>
+> **If you use AI, do all of the following:**
+>
+> 1. **Make sure [AGENTS.md](AGENTS.md) is loaded into your agent's context.** Skipping this step is one of the most common reasons PRs get rejected.
+> 2. **Search for related discussions, PRs and issues** to get the broader context before writing any code.
+> 3. **Run a local review pass before pushing anything**, using the [`code-review`](skills/code-review/SKILL.md) skill, once the change is implemented. Fix what it finds.
 
 For more info, please refer to the [AGENTS.md](AGENTS.md) file.
 

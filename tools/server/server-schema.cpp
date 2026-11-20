@@ -561,6 +561,13 @@ std::vector<std::unique_ptr<field>> make_tts_schema(server_task & task) {
     add((new field_num("loudness", task.tts_inp.data.loudness))
         ->set_desc("Target loudness in LUFS, for models that support it (0.0 = model default)"));
 
+    add((new field_num("cfg_scale", task.tts_inp.data.cfg_scale))
+        ->set_desc("Classifier-free guidance scale of the audio codes, for models that support it (0.0 = model default, 1.0 = no guidance)"));
+
+    add((new field_num("flow_steps", task.tts_inp.data.flow_steps))
+        ->set_hard_limits(0, 1024)
+        ->set_desc("Steps of the flow-matching ODE solver, for models that support it (0 = model default); fewer is faster, less accurate"));
+
     add((new field_num("n_predict", task.params.n_predict))
         ->set_hard_limits(-1, INT32_MAX)
         ->add_alias("max_tokens")

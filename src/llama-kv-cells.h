@@ -308,6 +308,27 @@ public:
         return false;
     }
 
+    // remove seq_id from its cells at positions in [p0, p1)
+    // return the lowest index of a cell that becomes empty, or size() if none does
+    uint32_t seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+        assert(seq_id >= 0);
+        assert(seq_id < LLAMA_MAX_SEQ);
+
+        uint32_t res = size();
+
+        const auto & sp = seq_pos[seq_id];
+        for (auto it = sp.lower_bound({ p0, 0 }); it != sp.end() && it->first < p1; ) {
+            const uint32_t i = it->second;
+            ++it; // advance first: seq_rm(i, seq_id) erases this entry from sp
+
+            if (seq_rm(i, seq_id)) {
+                res = std::min(res, i);
+            }
+        }
+
+        return res;
+    }
+
     // return true if the cell becomes empty (i.e. it did not contain seq_id before the call)
     bool seq_keep(uint32_t i, llama_seq_id seq_id) {
         assert(i < pos.size());

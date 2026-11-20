@@ -9,12 +9,15 @@ FROM docker.io/node:$NODE_VERSION AS web
 
 ARG APP_VERSION
 
-WORKDIR /app/tools/ui
+WORKDIR /app/ui/apps/chat
 
-COPY tools/ui/package.json tools/ui/package-lock.json ./
+COPY ui/apps/chat/package.json ui/apps/chat/package-lock.json ./
 RUN npm ci
 
-COPY tools/ui/ ./
+COPY ui/apps/chat/ ./
+# the app compiles Llama UI from its source next to it
+COPY ui/lib/ui/package.json /app/ui/lib/ui/package.json
+COPY ui/lib/ui/src/lib/ /app/ui/lib/ui/src/lib/
 RUN LLAMA_BUILD_NUMBER="$APP_VERSION" npm run build
 
 FROM docker.io/ubuntu:$UBUNTU_VERSION AS build
@@ -31,7 +34,7 @@ WORKDIR /app
 
 COPY . .
 
-COPY --from=web /app/tools/ui/dist tools/ui/dist
+COPY --from=web /app/ui/apps/chat/dist ui/apps/chat/dist
 
 RUN cmake -B build -DGGML_NATIVE=OFF -DGGML_VULKAN=ON -DLLAMA_BUILD_TESTS=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON && \
     cmake --build build --config Release -j$(nproc)

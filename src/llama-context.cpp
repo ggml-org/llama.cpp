@@ -405,6 +405,15 @@ llama_context::llama_context(
         }
     }
 
+    {
+        const char * LLAMA_MOE_RANDOM_ROUTING = getenv("LLAMA_MOE_RANDOM_ROUTING");
+        cparams.moe_random_routing = LLAMA_MOE_RANDOM_ROUTING ? (atoi(LLAMA_MOE_RANDOM_ROUTING) != 0) : false;
+
+        if (cparams.moe_random_routing && hparams.n_expert > 0) {
+            LLAMA_LOG_WARN("%s: MoE random routing enabled - the output is not valid, use for benchmarks only\n", __func__);
+        }
+    }
+
     // ref: https://github.com/ggml-org/llama.cpp/pull/17046#discussion_r2503085732
     cparams.n_ctx = GGML_PAD(cparams.n_ctx, 256);
 
@@ -1925,7 +1934,11 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
     const llama_ubatch ubatch = balloc->split_simple(n_tokens);
 
     // micro-batching is not possible for non-causal encoding, so we process the batch in a single shot
-    GGML_ASSERT(cparams.n_ubatch >= n_tokens && "encoder requires n_ubatch >= n_tokens");
+    if (n_tokens > cparams.n_ubatch) {
+        LLAMA_LOG_ERROR("%s: the encoder reads the batch in one pass, n_tokens = %u > n_ubatch = %u, increase n_ubatch (-ub)\n",
+                __func__, n_tokens, cparams.n_ubatch);
+        return -1;
+    }
 
     // TODO: this clear of the buffer can easily be forgotten - need something better
     // sync first so any in-flight async copies into embd_seq complete before it is freed
@@ -3082,7 +3095,6 @@ llm_graph_params llama_context::graph_params(
                           llm_graph_type   gtype) const {
     return {
         /*.model       =*/ &model,
-        /*.hparams     =*/ model.hparams,
         /*.cparams     =*/ cparams,
         /*.ubatch      =*/ ubatch,
         /*.gtype       =*/ gtype,
@@ -3093,8 +3105,6 @@ llm_graph_params llama_context::graph_params(
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
         /*.moe_cache   =*/ moe_cache.get(),
-        /*.prec_policy =*/ &model.prec_policy,
-        /*.hdmd        =*/ model.hdmd.rot.empty() ? nullptr : &model.hdmd,
         /*.layer_inp_dev =*/ layer_inp_dev,
         /*.layer_inp_src =*/ supports_embd_row() ? cparams.ctx_other->get_layer_inp_dev() : nullptr,
         /*.h_nextn_dev   =*/ cparams.embeddings_nextn_dev ? h_nextn_dev : nullptr,
@@ -4254,7 +4264,7 @@ void llama_context::opt_epoch_iter(
         ggml_opt_result_t                result,
         const std::vector<llama_token> & tokens,
         const std::vector<llama_token> & labels_sparse,
-        llama_batch                    & batch,
+        llama_batch_ext                & batch,
         ggml_opt_epoch_callback          callback,
         bool                             train,
         int64_t                          idata_in_loop,
@@ -4268,22 +4278,21 @@ void llama_context::opt_epoch_iter(
     memory->clear(true);
 
     for (uint32_t pos_ctx = 0; pos_ctx < n_ctx; pos_ctx += n_batch) {
-        batch.n_tokens = n_batch;
+        batch.clear();
         for (uint32_t pos_batch = 0; pos_batch < n_batch; ++pos_batch) {
-            batch.token   [pos_batch]    = tokens[pos_ctx + pos_batch];
-            batch.pos     [pos_batch]    = pos_ctx + pos_batch;
-            batch.n_seq_id[pos_batch]    = 1;
-            batch.seq_id  [pos_batch][0] = 0;
-            batch.logits  [pos_batch]    = true;
-        }
-
-        // TODO: use llama_batch_ext here
-        {
-            llama_batch_compat compat(this, batch);
-            if (!balloc->init(*compat.batch_ext, model.vocab, true)) {
+            const int32_t   idx = batch.add_token(0);
+            const llama_pos pos = pos_ctx + pos_batch;
+            if (idx < 0 || !batch.set_token_id(idx, tokens[pos_ctx + pos_batch])) {
                 LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
                 return;
             }
+            batch.set_token_pos(idx, &pos);
+            batch.set_output(idx, true);
+        }
+
+        if (!balloc->init(batch, model.vocab, true)) {
+            LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
+            return;
         }
 
         const uint32_t n_tokens_all = balloc->get_n_tokens();
@@ -4382,7 +4391,7 @@ void llama_context::opt_epoch(
 
     const uint32_t ubatch_per_ctx = n_ctx / n_ubatch;
 
-    struct llama_batch batch = llama_batch_init(n_batch, 0, 1);
+    llama_batch_ext batch(this);
     std::vector<llama_token>        tokens(n_ctx);
     std::vector<llama_token> labels_sparse(n_ctx);
 
@@ -4409,8 +4418,6 @@ void llama_context::opt_epoch(
         opt_epoch_iter(dataset, result_eval, tokens, labels_sparse, batch,
             callback_eval, train, idata_in_loop, ndata_in_loop, t_loop_start);
     }
-
-    llama_batch_free(batch);
 }
 
 //

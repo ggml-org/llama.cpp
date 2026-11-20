@@ -191,7 +191,7 @@ static value exec_binary_op(context & ctx, const token & op, value left_val, val
             if (is_float) {
                 return mk_val<value_float>(res);
             } else {
-                return mk_val<value_int>(static_cast<int64_t>(res));
+                return mk_val<value_int>(float_to_int(res));
             }
         } else if (op.value == "/") {
             JJ_DEBUG("Division operation: %f / %f", a, b);
@@ -222,7 +222,7 @@ static value exec_binary_op(context & ctx, const token & op, value left_val, val
             if (is_float) {
                 return mk_val<value_float>(rem);
             } else {
-                return mk_val<value_int>(static_cast<int64_t>(rem));
+                return mk_val<value_int>(float_to_int(rem));
             }
         } else if (op.value == "<") {
             JJ_DEBUG("Comparison operation: %f < %f is %d", a, b, a < b);
@@ -811,13 +811,14 @@ value call_statement::execute_impl(context & ctx) const {
     }
     auto * callee_func = cast_val<value_func>(callee_val);
 
-    context caller_ctx(ctx); // new scope for caller execution
+    // caller() can be saved and called after this scope ended, it owns a snapshot of the variables
+    auto caller_ctx = std::make_shared<context>(ctx.snapshot());
 
-    const func_handler func = [this, caller_ctx = std::move(caller_ctx)](const func_args & args) -> value {
+    const func_handler func = [this, caller_ctx](const func_args & args) -> value {
         if (args.ctx.macro_depth >= JINJA_RECURSIVE_LIMIT) {
             throw std::runtime_error("macro calls are nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
         }
-        context block_ctx(caller_ctx); // new scope for block execution
+        context block_ctx(*caller_ctx); // new scope for block execution
         block_ctx.macro_depth = args.ctx.macro_depth + 1;
 
         bind_parameters("caller", this->caller_args, args, block_ctx);

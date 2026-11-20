@@ -2058,7 +2058,7 @@ void server_models_routes::init_routes() {
             // main instance
             auto res = std::make_unique<server_http_res>();
             json props = {
-                // TODO: add support for this on web UI
+                // TODO: add support for this in Llama Chat
                 {"role",                 "router"},
                 {"max_instances",        params.models_max},
                 {"models_autoload",      params.models_autoload},

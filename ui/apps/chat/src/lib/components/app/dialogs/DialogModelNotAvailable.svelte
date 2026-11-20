@@ -1,0 +1,80 @@
+<script lang="ts">
+	import * as AlertDialog from '@ggml-org/llama-ui/ui/alert-dialog';
+	import { AlertTriangle, ArrowRight } from '@lucide/svelte';
+	import { ICON_CLASS_DEFAULT, URL_PARAMS } from '#lib/constants/index.ts';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
+
+	interface Props {
+		open: boolean;
+		modelName: string;
+		availableModels?: string[];
+		onOpenChange?: (open: boolean) => void;
+	}
+
+	let { availableModels = [], modelName, onOpenChange, open = $bindable() }: Props = $props();
+
+	function handleOpenChange(newOpen: boolean) {
+		open = newOpen;
+		onOpenChange?.(newOpen);
+	}
+
+	function handleSelectModel(model: string) {
+		// Build URL with selected model, preserving other params
+		const url = new URL(page.url.href);
+
+		url.searchParams.set(URL_PARAMS.MODEL, model);
+
+		handleOpenChange(false);
+		goto(url.toString());
+	}
+</script>
+
+<AlertDialog.Root onOpenChange={handleOpenChange} {open}>
+	<AlertDialog.Content class="max-w-lg">
+		<AlertDialog.Header>
+			<AlertDialog.Title class="flex items-center gap-2">
+				<AlertTriangle class="size-icon-lg text-amber-500" />
+				Model Not Available
+			</AlertDialog.Title>
+
+			<AlertDialog.Description>
+				The requested model could not be found. Select an available model to continue.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+
+		<div class="space-y-3">
+			<div class="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm">
+				<p class="font-medium text-amber-600 dark:text-amber-400">
+					Requested: <code class="rounded bg-amber-500/20 px-1.5 py-0.5">{modelName}</code>
+				</p>
+			</div>
+
+			{#if availableModels.length > 0}
+				<div class="text-sm">
+					<p class="mb-2 font-medium text-muted-foreground">Select an available model:</p>
+
+					<div class="max-h-48 space-y-1 overflow-y-auto rounded-md border p-1">
+						{#each availableModels as model (model)}
+							<button
+								class="group flex w-full items-center justify-between gap-2 rounded-sm px-3 py-2 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+								onclick={() => handleSelectModel(model)}
+								type="button"
+							>
+								<span class="min-w-0 truncate font-mono text-xs">{model}</span>
+
+								<ArrowRight
+									class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
+								/>
+							</button>
+						{/each}
+					</div>
+				</div>
+			{/if}
+		</div>
+
+		<AlertDialog.Footer>
+			<AlertDialog.Action onclick={() => handleOpenChange(false)}>Cancel</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>
