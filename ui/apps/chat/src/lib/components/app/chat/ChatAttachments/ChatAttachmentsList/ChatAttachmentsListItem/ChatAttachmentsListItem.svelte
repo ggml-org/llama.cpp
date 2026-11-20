@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { VoiceWaveformSize } from '@ggml-org/llama-ui/voice';
 	import {
 		ChatAttachmentsListItemMcpPrompt,
 		ChatAttachmentsListItemMcpResource,
@@ -101,7 +102,7 @@
 		{item}
 		onRemove={onFileRemove}
 		{readonly}
-		size={readonly ? 'md' : 'sm'}
+		size={readonly ? VoiceWaveformSize.MD : VoiceWaveformSize.SM}
 	/>
 {:else if item.isImage && item.preview}
 	<ChatAttachmentsListItemThumbnailImage

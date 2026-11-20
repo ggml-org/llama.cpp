@@ -1,4 +1,8 @@
-import { VOICE_PEAKS_COUNT } from './constants.js';
+import {
+	VOICE_DATA_URL_HEADER_PATTERN,
+	VOICE_DECODE_SAMPLE_RATE,
+	VOICE_PEAKS_COUNT
+} from './constants.js';
 import { base64ToBytes } from './pcm.js';
 
 /** Mono samples of a buffer: the mean of its channels. */
@@ -56,12 +60,12 @@ export function computePeaks(
 export async function decodeAudio(source: Blob | ArrayBuffer | string): Promise<AudioBuffer> {
 	const bytes =
 		typeof source === 'string'
-			? base64ToBytes(source.replace(/^data:[^,]*,/, '')).buffer
+			? base64ToBytes(source.replace(VOICE_DATA_URL_HEADER_PATTERN, '')).buffer
 			: source instanceof ArrayBuffer
 				? source
 				: await source.arrayBuffer();
 	// an offline context decodes without a running audio device; the rate is a placeholder
-	const context = new OfflineAudioContext(1, 1, 44_100);
+	const context = new OfflineAudioContext(1, 1, VOICE_DECODE_SAMPLE_RATE);
 
 	return context.decodeAudioData(bytes as ArrayBuffer);
 }

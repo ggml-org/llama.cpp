@@ -6,6 +6,8 @@ import { modelServerProps, seedStores } from '../stories/chat/form/fixtures';
 import { deferred, FakeVoiceRecorder } from '../stories/voice/fake-voice-recorder.svelte';
 import ChatFormVoiceTestWrapper from './components/ChatFormVoiceTestWrapper.svelte';
 import { EditorView } from '@codemirror/view';
+import { VoiceTranscriptStatus } from '@ggml-org/llama-ui/voice';
+import { VoiceRecorderStatus } from '@ggml-org/llama-voice';
 import { SETTINGS_KEYS, VOICE_MODE_MESSAGE } from '#lib/constants/index.ts';
 import { ServerRole, VoiceInputMode } from '#lib/enums/index.ts';
 import { voiceTranscriptsStore } from '#lib/stores/index.ts';
@@ -109,7 +111,7 @@ describe('the microphone', () => {
 		await expect.element(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
 
 		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
-		await expect.poll(() => recorder.status).toBe('recording');
+		await expect.poll(() => recorder.status).toBe(VoiceRecorderStatus.RECORDING);
 		recorder.say('there');
 		await expect.poll(() => state.value).toContain('there');
 		expect(state.value).toContain('Hello');
@@ -134,7 +136,7 @@ describe('the microphone', () => {
 		expect(micButton.getAttribute('data-variant')).toBe(stop.getAttribute('data-variant'));
 
 		await mic.click();
-		await expect.poll(() => recorder.status).toBe('recording');
+		await expect.poll(() => recorder.status).toBe(VoiceRecorderStatus.RECORDING);
 	});
 
 	it('leaves the send button on a single-model server without audio input', async () => {
@@ -191,7 +193,7 @@ describe('a pointer on the microphone', () => {
 		await expect.poll(() => getUserMedia.mock.calls.length).toBe(1);
 
 		await mic.click();
-		await expect.poll(() => recorder.status).toBe('recording');
+		await expect.poll(() => recorder.status).toBe(VoiceRecorderStatus.RECORDING);
 		expect((recorder.options?.capture as { stream?: MediaStream }).stream).toBe(stream);
 		// handed over, not asked for again
 		expect(getUserMedia).toHaveBeenCalledOnce();
@@ -231,7 +233,7 @@ describe('a pointer on the microphone', () => {
 		opening.resolve(stream);
 
 		await expect.poll(() => stream.getAudioTracks()[0].readyState).toBe('ended');
-		expect(recorder.status).toBe('idle');
+		expect(recorder.status).toBe(VoiceRecorderStatus.IDLE);
 	});
 });
 
@@ -243,7 +245,7 @@ describe('while a reply streams', () => {
 
 		recorder.transcript = Promise.resolve('And one more thing');
 		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
-		await expect.poll(() => recorder.status).toBe('recording');
+		await expect.poll(() => recorder.status).toBe(VoiceRecorderStatus.RECORDING);
 
 		// nothing said yet: nothing to send
 		expect(screen.container.innerHTML).not.toContain('Stop and send');
@@ -261,7 +263,7 @@ describe('while a reply streams', () => {
 		const { recorder, screen } = await renderForm({ isLoading: true });
 
 		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last().click();
-		await expect.poll(() => recorder.status).toBe('recording');
+		await expect.poll(() => recorder.status).toBe(VoiceRecorderStatus.RECORDING);
 		expect(screen.container.innerHTML).not.toContain('Stop and send');
 
 		recorder.say('What about tomorrow');
@@ -275,7 +277,7 @@ describe('while a reply streams', () => {
 
 		recorder.transcript = Promise.resolve('What about tomorrow');
 		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last().click();
-		await expect.poll(() => recorder.status).toBe('recording');
+		await expect.poll(() => recorder.status).toBe(VoiceRecorderStatus.RECORDING);
 		recorder.say('What about tomorrow');
 		await screen.getByRole('button', { name: 'Stop recording' }).last().click();
 		await expect.poll(() => state.files.length).toBe(1);
@@ -294,7 +296,7 @@ describe('recording', () => {
 		const raw = await renderForm();
 
 		await raw.screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
-		await expect.poll(() => raw.recorder.status).toBe('recording');
+		await expect.poll(() => raw.recorder.status).toBe(VoiceRecorderStatus.RECORDING);
 		expect(raw.recorder.options?.capture).not.toHaveProperty('constraints');
 		raw.screen.unmount();
 		restore?.();
@@ -307,7 +309,7 @@ describe('recording', () => {
 		const filtered = await renderForm();
 
 		await filtered.screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
-		await expect.poll(() => filtered.recorder.status).toBe('recording');
+		await expect.poll(() => filtered.recorder.status).toBe(VoiceRecorderStatus.RECORDING);
 		expect(filtered.recorder.options?.capture).toEqual({
 			boost: true,
 			constraints: { echoCancellation: true, noiseSuppression: true }
@@ -320,7 +322,7 @@ describe('recording', () => {
 		const boosted = await renderForm();
 
 		await boosted.screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
-		await expect.poll(() => boosted.recorder.status).toBe('recording');
+		await expect.poll(() => boosted.recorder.status).toBe(VoiceRecorderStatus.RECORDING);
 		expect(boosted.recorder.options?.capture).toMatchObject({ boost: true });
 		boosted.screen.unmount();
 		restore?.();
@@ -330,7 +332,7 @@ describe('recording', () => {
 		const plain = await renderForm();
 
 		await plain.screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
-		await expect.poll(() => plain.recorder.status).toBe('recording');
+		await expect.poll(() => plain.recorder.status).toBe(VoiceRecorderStatus.RECORDING);
 		expect(plain.recorder.options?.capture).toMatchObject({ boost: false });
 	});
 
@@ -340,7 +342,7 @@ describe('recording', () => {
 		const { recorder, screen } = await renderForm();
 
 		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last().click();
-		await expect.poll(() => recorder.status).toBe('recording');
+		await expect.poll(() => recorder.status).toBe(VoiceRecorderStatus.RECORDING);
 		expect(screen.container.innerHTML).not.toContain(VOICE_MODE_MESSAGE.tooQuiet);
 
 		recorder.setQuiet(true);
@@ -392,7 +394,7 @@ describe('dictation', () => {
 
 		recorder.transcript = transcript.promise;
 		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
-		await expect.poll(() => recorder.status).toBe('recording');
+		await expect.poll(() => recorder.status).toBe(VoiceRecorderStatus.RECORDING);
 
 		recorder.say('one');
 		await expect.poll(() => state.value).toBe('one');
@@ -419,7 +421,7 @@ describe('dictation', () => {
 
 		recorder.transcript = transcript.promise;
 		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
-		await expect.poll(() => recorder.status).toBe('recording');
+		await expect.poll(() => recorder.status).toBe(VoiceRecorderStatus.RECORDING);
 		await screen.getByRole('button', { name: 'Stop recording' }).last().click();
 
 		await expect.element(screen.getByText(VOICE_MODE_MESSAGE.transcribing)).toBeInTheDocument();
@@ -437,7 +439,7 @@ describe('dictation', () => {
 
 		recorder.transcript = transcript.promise;
 		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
-		await expect.poll(() => recorder.status).toBe('recording');
+		await expect.poll(() => recorder.status).toBe(VoiceRecorderStatus.RECORDING);
 		recorder.say('I went. To the store.');
 		await expect.poll(() => state.value).toBe('I went. To the store.');
 		await screen.getByRole('button', { name: 'Stop recording' }).last().click();
@@ -463,7 +465,7 @@ describe('dictation', () => {
 
 		recorder.transcript = Promise.resolve('Hello there');
 		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
-		await expect.poll(() => recorder.status).toBe('recording');
+		await expect.poll(() => recorder.status).toBe(VoiceRecorderStatus.RECORDING);
 		recorder.say('Hello there');
 
 		await screen.getByRole('button', { name: 'Stop and send' }).click();
@@ -477,7 +479,7 @@ describe('dictation', () => {
 		const { recorder, screen, state } = await renderForm();
 
 		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
-		await expect.poll(() => recorder.status).toBe('recording');
+		await expect.poll(() => recorder.status).toBe(VoiceRecorderStatus.RECORDING);
 		recorder.say('never mind');
 		await expect.poll(() => state.value).toBe('never mind');
 
@@ -494,7 +496,7 @@ describe('a voice message', () => {
 
 		recorder.transcript = Promise.resolve('model transcript');
 		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last().click();
-		await expect.poll(() => recorder.status).toBe('recording');
+		await expect.poll(() => recorder.status).toBe(VoiceRecorderStatus.RECORDING);
 		recorder.say('Hello wrold');
 
 		editor.focus();
@@ -522,7 +524,7 @@ describe('a voice message', () => {
 
 		recorder.transcript = transcript.promise;
 		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last().click();
-		await expect.poll(() => recorder.status).toBe('recording');
+		await expect.poll(() => recorder.status).toBe(VoiceRecorderStatus.RECORDING);
 
 		// streamed text shows in the empty message box as its placeholder, not in the message
 		const placeholder = () => screen.container.querySelector('.cm-placeholder')?.textContent;
@@ -541,20 +543,22 @@ describe('a voice message', () => {
 		expect(file.voice).toMatchObject({ durationMs: 2400 });
 		expect(file.voice?.peaks).toHaveLength(64);
 		expect(state.value).toBe('');
-		expect(voiceTranscriptsStore.get(file.name)?.status).toBe('transcribing');
+		expect(voiceTranscriptsStore.get(file.name)?.status).toBe(VoiceTranscriptStatus.TRANSCRIBING);
 
 		// drawn as a voice chip, its transcript on the way
 		const reveal = () =>
 			screen.container.querySelector('[data-slot="chat-attachment-voice"] [data-status]');
 
-		await expect.poll(() => reveal()?.getAttribute('data-status')).toBe('transcribing');
+		await expect
+			.poll(() => reveal()?.getAttribute('data-status'))
+			.toBe(VoiceTranscriptStatus.TRANSCRIBING);
 
 		transcript.resolve('What is the weather on Mars?');
 		await expect
 			.poll(() => voiceTranscriptsStore.transcriptOf(file.name))
 			.toBe('What is the weather on Mars?');
 
-		await expect.poll(() => reveal()?.getAttribute('data-status')).toBe('done');
+		await expect.poll(() => reveal()?.getAttribute('data-status')).toBe(VoiceTranscriptStatus.DONE);
 
 		const { extras } = await parseFilesToMessageExtras($state.snapshot(state.files));
 

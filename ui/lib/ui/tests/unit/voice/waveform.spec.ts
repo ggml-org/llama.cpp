@@ -1,5 +1,5 @@
+import { MIN_BAR_HEIGHT } from '../../../src/lib/constants/voice.constants.js';
 import {
-	MIN_BAR_HEIGHT,
 	barCapacity,
 	barHeightPercent,
 	formatClipPosition,
@@ -9,7 +9,7 @@ import {
 	progressFraction,
 	resamplePeaks,
 	stepPosition
-} from './waveform.js';
+} from '../../../src/lib/voice/waveform.js';
 import { describe, expect, it } from 'vite-plus/test';
 
 describe('voice clip times', () => {
@@ -62,7 +62,9 @@ describe('waveform bars', () => {
 
 	it('fills the live width with the newest levels last', () => {
 		// fewer levels than bars: stretched over the whole width
-		expect(liveBars([0.1, 0.2, 0.3], 5).map((bar) => Number(bar?.toFixed(2)))).toEqual([0.1, 0.15, 0.2, 0.25, 0.3]);
+		expect(liveBars([0.1, 0.2, 0.3], 5).map((bar) => Number(bar?.toFixed(2)))).toEqual([
+			0.1, 0.15, 0.2, 0.25, 0.3
+		]);
 		expect(liveBars([0.4], 3)).toEqual([0.4, 0.4, 0.4]);
 		// more levels than bars: the newest ones scroll in from the right
 		expect(liveBars([0.1, 0.2, 0.3, 2], 2)).toEqual([0.3, 1]);

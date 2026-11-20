@@ -3,7 +3,12 @@
 // levels move, the PCM worklet loads from its Blob URL and streams chunks, stop() returns
 // a WAV clip with a plausible duration and peaks, and every path stops the tracks.
 
-import { VOICE_MICROPHONE_MESSAGE, VoiceCapture, VoiceCaptureError } from '@ggml-org/llama-voice';
+import {
+	VOICE_MICROPHONE_MESSAGE,
+	VoiceCapture,
+	VoiceCaptureError,
+	VoiceCaptureState
+} from '@ggml-org/llama-voice';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 
@@ -65,7 +70,7 @@ describe('VoiceCapture', () => {
 		capture.onPcm((chunk) => chunks.push(chunk));
 
 		await capture.start();
-		expect(capture.state).toBe('recording');
+		expect(capture.state).toBe(VoiceCaptureState.RECORDING);
 
 		// at least 600 ms of tone recorded, however long the audio graph took to start
 		await waitFor(() => chunks.length >= 6 && levels.length > 5);
@@ -116,7 +121,7 @@ describe('VoiceCapture', () => {
 
 		expect(decoded.duration * 1000).toBeCloseTo(clip.durationMs, 0);
 		expect(stream.getTracks().every((track) => track.readyState === 'ended')).toBe(true);
-		expect(capture.state).toBe('stopped');
+		expect(capture.state).toBe(VoiceCaptureState.STOPPED);
 	});
 
 	it('cancel stops the tracks and drops the recording', async () => {
@@ -128,7 +133,7 @@ describe('VoiceCapture', () => {
 		capture.cancel();
 
 		expect(stream.getTracks().every((track) => track.readyState === 'ended')).toBe(true);
-		expect(capture.state).toBe('idle');
+		expect(capture.state).toBe(VoiceCaptureState.IDLE);
 		await expect(capture.stop()).rejects.toThrow();
 	});
 
@@ -158,7 +163,7 @@ describe('VoiceCapture', () => {
 		await capture.start();
 		dispatchEvent(new PageTransitionEvent('pagehide'));
 
-		expect(capture.state).toBe('idle');
+		expect(capture.state).toBe(VoiceCaptureState.IDLE);
 		expect(stream.getTracks().every((track) => track.readyState === 'ended')).toBe(true);
 	});
 
@@ -174,6 +179,6 @@ describe('VoiceCapture', () => {
 		});
 		expect(error).toBeInstanceOf(VoiceCaptureError);
 		expect(error.message).toBe(VOICE_MICROPHONE_MESSAGE.denied);
-		expect(capture.state).toBe('idle');
+		expect(capture.state).toBe(VoiceCaptureState.IDLE);
 	});
 });

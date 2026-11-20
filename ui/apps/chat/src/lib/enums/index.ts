@@ -100,6 +100,8 @@ export {
 	HtmlInputType,
 	McpPromptVariant,
 	MenuKind,
+	MouseButton,
+	PointerType,
 	ScrollCarouselVariant,
 	SidebarAction,
 	SidebarSectionKind,
@@ -122,4 +124,4 @@ export {
 
 export { SplashOrientation } from './splash.enums';
 
-export { VoiceInputMode, VoiceMode, VoiceModelRole } from './voice.enums';
+export { ChatFormVoiceState, VoiceInputMode, VoiceMode, VoiceModelRole } from './voice.enums';

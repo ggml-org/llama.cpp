@@ -1,16 +1,20 @@
 import {
 	VOICE_API_PATHS,
+	VOICE_ERROR_MESSAGE,
+	VOICE_LEADING_SPACE_PATTERN,
+	VOICE_REALTIME_AUDIO_FORMAT,
 	VOICE_REALTIME_EVENTS,
 	VOICE_REALTIME_QUERY,
 	VOICE_REALTIME_SESSION_TRANSCRIPTION,
 	VOICE_REALTIME_TIMEOUTS,
-	VOICE_REALTIME_UNSUPPORTED_PATTERN
+	VOICE_REALTIME_UNSUPPORTED_PATTERN,
+	VOICE_SOCKET_PROTOCOL,
+	VOICE_TRAILING_SPACE_PATTERN
 } from './constants.js';
+import { RealtimeState, RealtimeUnsupportedReason } from './enums.js';
 import { RealtimeError, RealtimeUnsupportedError } from './errors.js';
 import { pcm16ToBase64 } from './pcm.js';
 import type { RealtimeTranscriberOptions, VoiceServerContext } from './types.js';
-
-type RealtimeState = 'idle' | 'connecting' | 'open' | 'finishing' | 'closed';
 
 interface Pending<T> {
 	resolve: (value: T) => void;
@@ -23,7 +27,10 @@ interface RealtimeServerEvent {
 	delta?: unknown;
 	transcript?: unknown;
 	error?: { message?: unknown };
-	session?: { type?: unknown; audio?: { input?: { format?: { rate?: unknown } } } };
+	session?: {
+		type?: unknown;
+		audio?: { input?: { format?: { rate?: unknown } } };
+	};
 }
 
 /**
@@ -40,7 +47,10 @@ export function realtimeUrl(
 		context.baseHref ?? globalThis.location?.href
 	);
 
-	url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+	url.protocol =
+		url.protocol === VOICE_SOCKET_PROTOCOL.HTTPS
+			? VOICE_SOCKET_PROTOCOL.WSS
+			: VOICE_SOCKET_PROTOCOL.WS;
 	url.searchParams.set(VOICE_REALTIME_QUERY.INTENT, VOICE_REALTIME_QUERY.INTENT_TRANSCRIPTION);
 
 	if (options.model) url.searchParams.set(VOICE_REALTIME_QUERY.MODEL, options.model);
@@ -87,7 +97,7 @@ export class RealtimeTranscriber {
 	private queue: string[] = [];
 	private sentAudio = false;
 	private socket: WebSocket | null = null;
-	private state: RealtimeState = 'idle';
+	private state: RealtimeState = RealtimeState.IDLE;
 	private timer: ReturnType<typeof setTimeout> | null = null;
 
 	/**
@@ -95,7 +105,12 @@ export class RealtimeTranscriber {
 	 * audio since the last commit and no piece still being transcribed.
 	 */
 	get canCommitSegment(): boolean {
-		return this.state === 'open' && !this.live && this.audioSinceCommit && this.inFlight === 0;
+		return (
+			this.state === RealtimeState.OPEN &&
+			!this.live &&
+			this.audioSinceCommit &&
+			this.inFlight === 0
+		);
 	}
 
 	/** Pieces committed with commitSegment(), the final commit not counted. */
@@ -105,7 +120,7 @@ export class RealtimeTranscriber {
 
 	/** True between session.created and finish() or close(). */
 	get ready(): boolean {
-		return this.state === 'open';
+		return this.state === RealtimeState.OPEN;
 	}
 
 	/** The whole transcript so far, live text of the current item included. */
@@ -115,7 +130,12 @@ export class RealtimeTranscriber {
 
 	/** Streams a PCM16 mono chunk at `options.sampleRate`. */
 	append(chunk: Int16Array): void {
-		if (chunk.length === 0 || this.state === 'finishing' || this.state === 'closed') return;
+		if (
+			chunk.length === 0 ||
+			this.state === RealtimeState.FINISHING ||
+			this.state === RealtimeState.CLOSED
+		)
+			return;
 
 		const message = JSON.stringify({
 			audio: pcm16ToBase64(chunk),
@@ -125,7 +145,7 @@ export class RealtimeTranscriber {
 		this.sentAudio = true;
 		this.audioSinceCommit = true;
 
-		if (this.state === 'open') {
+		if (this.state === RealtimeState.OPEN) {
 			this.socket?.send(message);
 		} else {
 			this.queue.push(message);
@@ -134,9 +154,9 @@ export class RealtimeTranscriber {
 
 	/** Closes the socket; pending connect or finish calls reject. */
 	close(): void {
-		if (this.state === 'closed') return;
+		if (this.state === RealtimeState.CLOSED) return;
 
-		this.fail(new RealtimeError('The realtime session was closed.'));
+		this.fail(new RealtimeError(VOICE_ERROR_MESSAGE.realtimeClosed));
 	}
 
 	/** Commits the audio so far as a piece to transcribe now; see canCommitSegment. */
@@ -160,7 +180,7 @@ export class RealtimeTranscriber {
 			this.pendingConnect = { reject, resolve };
 		});
 
-		this.state = 'connecting';
+		this.state = RealtimeState.CONNECTING;
 
 		let socket: WebSocket;
 
@@ -168,9 +188,11 @@ export class RealtimeTranscriber {
 			socket = new WebSocket(realtimeUrl(this.context, this.options));
 		} catch (error) {
 			this.fail(
-				new RealtimeUnsupportedError('The realtime socket could not be opened.', 'connection', {
-					cause: error
-				})
+				new RealtimeUnsupportedError(
+					VOICE_ERROR_MESSAGE.realtimeSocketFailed,
+					RealtimeUnsupportedReason.CONNECTION,
+					{ cause: error }
+				)
 			);
 
 			return this.connecting;
@@ -181,7 +203,7 @@ export class RealtimeTranscriber {
 		socket.onclose = (event: CloseEvent) => this.handleClose(event);
 		this.startTimer(
 			this.options.connectTimeoutMs ?? VOICE_REALTIME_TIMEOUTS.CONNECT_MS,
-			'The realtime session did not start in time.'
+			VOICE_ERROR_MESSAGE.realtimeConnectTimeout
 		);
 
 		return this.connecting;
@@ -200,9 +222,10 @@ export class RealtimeTranscriber {
 	 * @throws RealtimeError when the session fails, closes or times out first
 	 */
 	async finish(options: { commitRest?: boolean } = {}): Promise<string> {
-		if (this.state === 'connecting') await this.connecting;
+		if (this.state === RealtimeState.CONNECTING) await this.connecting;
 
-		if (this.state !== 'open') throw new RealtimeError('The realtime session is not open.');
+		if (this.state !== RealtimeState.OPEN)
+			throw new RealtimeError(VOICE_ERROR_MESSAGE.realtimeNotOpen);
 
 		if (!this.sentAudio) {
 			this.close();
@@ -210,7 +233,7 @@ export class RealtimeTranscriber {
 			return '';
 		}
 
-		this.state = 'finishing';
+		this.state = RealtimeState.FINISHING;
 
 		const done = new Promise<string>((resolve, reject) => {
 			this.pendingFinish = { reject, resolve };
@@ -218,15 +241,15 @@ export class RealtimeTranscriber {
 
 		this.startTimer(
 			this.options.finishTimeoutMs ?? VOICE_REALTIME_TIMEOUTS.FINISH_MS,
-			'The transcript did not complete in time.'
+			VOICE_ERROR_MESSAGE.realtimeFinishTimeout
 		);
 
 		// a piece still being transcribed finishes first: the server follows one at a time
-		while (this.inFlight > 0 && this.state === 'finishing') {
+		while (this.inFlight > 0 && this.state === RealtimeState.FINISHING) {
 			await new Promise<void>((resolve) => this.idleWaiters.push(resolve));
 		}
 
-		if (this.state !== 'finishing') return done;
+		if (this.state !== RealtimeState.FINISHING) return done;
 
 		const commitRest = this.live || options.commitRest !== false || this.completedText === '';
 
@@ -252,7 +275,7 @@ export class RealtimeTranscriber {
 
 	/** Rejects whatever is pending with `error` and releases the socket. */
 	private fail(error: Error): void {
-		this.state = 'closed';
+		this.state = RealtimeState.CLOSED;
 		this.clearTimer();
 
 		for (const wake of this.idleWaiters.splice(0)) wake();
@@ -275,18 +298,18 @@ export class RealtimeTranscriber {
 	}
 
 	private handleClose(event: CloseEvent): void {
-		if (this.state === 'closed') return;
+		if (this.state === RealtimeState.CLOSED) return;
 
 		// a refused upgrade (e.g. 401 from a server with an API key) closes before any session
 		const error =
-			this.state === 'connecting'
+			this.state === RealtimeState.CONNECTING
 				? new RealtimeUnsupportedError(
-						`The realtime socket closed before the session started (code ${event.code}).`,
-						'connection'
+						VOICE_ERROR_MESSAGE.realtimeRefused(event.code),
+						RealtimeUnsupportedReason.CONNECTION
 					)
-				: new RealtimeError('The realtime socket closed before the transcript completed.');
+				: new RealtimeError(VOICE_ERROR_MESSAGE.realtimeClosedEarly);
 
-		if (this.state === 'open') this.options.onError?.(error);
+		if (this.state === RealtimeState.OPEN) this.options.onError?.(error);
 
 		this.fail(error);
 	}
@@ -302,16 +325,19 @@ export class RealtimeTranscriber {
 		}
 
 		// a live session completes once, on its final commit; a per-commit one once the last piece is in
-		if (this.state === 'finishing' && (this.live || (this.finalSent && this.inFlight === 0))) {
+		if (
+			this.state === RealtimeState.FINISHING &&
+			(this.live || (this.finalSent && this.inFlight === 0))
+		) {
 			this.resolveFinish();
 		}
 	}
 
 	private handleError(message: string): void {
-		if (this.state === 'connecting') {
+		if (this.state === RealtimeState.CONNECTING) {
 			this.fail(
 				VOICE_REALTIME_UNSUPPORTED_PATTERN.test(message)
-					? new RealtimeUnsupportedError(message, 'model')
+					? new RealtimeUnsupportedError(message, RealtimeUnsupportedReason.MODEL)
 					: new RealtimeError(message)
 			);
 
@@ -329,7 +355,7 @@ export class RealtimeTranscriber {
 
 		this.options.onError?.(error);
 
-		if (this.state === 'finishing') this.fail(error);
+		if (this.state === RealtimeState.FINISHING) this.fail(error);
 	}
 
 	private handleMessage(data: unknown): void {
@@ -365,7 +391,7 @@ export class RealtimeTranscriber {
 				this.handleError(
 					typeof event.error?.message === 'string'
 						? event.error.message
-						: 'Realtime transcription failed.'
+						: VOICE_ERROR_MESSAGE.realtimeFailed
 				);
 
 				break;
@@ -373,7 +399,7 @@ export class RealtimeTranscriber {
 	}
 
 	private handleSessionCreated(event: RealtimeServerEvent): void {
-		if (this.state !== 'connecting') return;
+		if (this.state !== RealtimeState.CONNECTING) return;
 
 		const rate = event.session?.audio?.input?.format?.rate;
 
@@ -386,7 +412,10 @@ export class RealtimeTranscriber {
 			session: {
 				audio: {
 					input: {
-						format: { rate: this.options.sampleRate, type: 'audio/pcm' },
+						format: {
+							rate: this.options.sampleRate,
+							type: VOICE_REALTIME_AUDIO_FORMAT
+						},
 						...(this.options.language ? { transcription: { language: this.options.language } } : {})
 					}
 				},
@@ -395,7 +424,7 @@ export class RealtimeTranscriber {
 			type: VOICE_REALTIME_EVENTS.SESSION_UPDATE
 		});
 
-		this.state = 'open';
+		this.state = RealtimeState.OPEN;
 
 		for (const message of this.queue) this.socket?.send(message);
 
@@ -430,5 +459,7 @@ export function joinPieces(before: string, piece: string): string {
 
 	if (!piece) return before;
 
-	return /\s$/.test(before) || /^\s/.test(piece) ? before + piece : `${before} ${piece}`;
+	return VOICE_TRAILING_SPACE_PATTERN.test(before) || VOICE_LEADING_SPACE_PATTERN.test(piece)
+		? before + piece
+		: `${before} ${piece}`;
 }

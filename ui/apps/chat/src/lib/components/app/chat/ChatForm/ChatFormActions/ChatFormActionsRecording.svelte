@@ -7,9 +7,8 @@
 <script lang="ts">
 	import { VoiceRecordingBar } from '@ggml-org/llama-ui/voice';
 	import { ChatFormActionRecord } from '#lib/components/app/index.ts';
-	import { VOICE_MODE_MESSAGE } from '#lib/constants/index.ts';
-	import { VoiceMode } from '#lib/enums/index.ts';
-	import type { ChatFormVoiceState } from '#lib/hooks/use-chat-form-voice.svelte.ts';
+	import { VOICE_MODE_MESSAGE, VOICE_RECORDING_BAR_STATUS } from '#lib/constants/index.ts';
+	import { type ChatFormVoiceState, VoiceMode } from '#lib/enums/index.ts';
 
 	interface Props {
 		class?: string;
@@ -55,7 +54,7 @@
 	{levels}
 	{onCancel}
 	{onSend}
-	status={state === 'transcribing' ? 'waiting' : state === 'starting' ? 'starting' : 'recording'}
+	status={VOICE_RECORDING_BAR_STATUS[state]}
 	warning={quiet ? VOICE_MODE_MESSAGE.tooQuiet : null}
 >
 	{#snippet stop({ disabled })}

@@ -16,6 +16,8 @@
 	import {
 		SETTING_CONFIG_INFO,
 		SETTINGS_KEYS,
+		VOICE_GGUF_EXTENSION_PATTERN,
+		VOICE_SETTINGS_LABEL,
 		VOICE_TRANSCRIPTION_MODEL_AUTO
 	} from '#lib/constants/index.ts';
 	import { modelsStore, serverStore } from '#lib/stores/index.ts';
@@ -31,7 +33,6 @@
 	let { fields, localConfig, onConfigChange }: Props = $props();
 
 	const KEY = SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL;
-	const AUTO_LABEL = 'Automatic';
 
 	// the picker sits right after the Voice input field
 	let splitAt = $derived(fields.findIndex((f) => f.key === SETTINGS_KEYS.VOICE_INPUT_MODE) + 1);
@@ -54,7 +55,10 @@
 			list.push({ label: current, value: current });
 		}
 
-		return [{ label: AUTO_LABEL, value: VOICE_TRANSCRIPTION_MODEL_AUTO }, ...list];
+		return [
+			{ label: VOICE_SETTINGS_LABEL.automatic, value: VOICE_TRANSCRIPTION_MODEL_AUTO },
+			...list
+		];
 	});
 
 	// speech-to-text models first: they are made for dictation, the chat models that hear can do it too
@@ -63,18 +67,18 @@
 
 		return [
 			{
-				heading: 'Speech to text',
+				heading: VOICE_SETTINGS_LABEL.speechToText,
 				items: models.filter((option) => isTranscriptionOnlyModel(option.value))
 			},
 			{
-				heading: 'Chat models with audio input',
+				heading: VOICE_SETTINGS_LABEL.chatModels,
 				items: models.filter((option) => !isTranscriptionOnlyModel(option.value))
 			}
 		].filter((group) => group.items.length > 0);
 	});
 
 	let selectedLabel = $derived(
-		options.find((option) => option.value === current)?.label ?? AUTO_LABEL
+		options.find((option) => option.value === current)?.label ?? VOICE_SETTINGS_LABEL.automatic
 	);
 
 	const MIC_KEY = SETTINGS_KEYS.VOICE_MICROPHONE;
@@ -85,24 +89,25 @@
 	let micNamesHidden = $derived(microphones.some((mic) => !mic.label));
 	let micOptions = $derived.by(() => {
 		const list = microphones.map((mic, index) => ({
-			label: mic.label || `Microphone ${index + 1}`,
+			label: mic.label || VOICE_SETTINGS_LABEL.microphone(index + 1),
 			value: mic.deviceId
 		}));
 		const fixed = [VOICE_MICROPHONE_AUTO, VOICE_MICROPHONE_DEFAULT];
 
 		// a microphone picked earlier that is not plugged in now stays visible as the choice
 		if (!fixed.includes(micCurrent) && !list.some((option) => option.value === micCurrent)) {
-			list.push({ label: 'A microphone that is not connected', value: micCurrent });
+			list.push({ label: VOICE_SETTINGS_LABEL.disconnectedMicrophone, value: micCurrent });
 		}
 
 		return [
-			{ label: 'Automatic', value: VOICE_MICROPHONE_AUTO },
-			{ label: 'System default', value: VOICE_MICROPHONE_DEFAULT },
+			{ label: VOICE_SETTINGS_LABEL.automatic, value: VOICE_MICROPHONE_AUTO },
+			{ label: VOICE_SETTINGS_LABEL.systemDefault, value: VOICE_MICROPHONE_DEFAULT },
 			...list.filter((option) => option.value)
 		];
 	});
 	let micLabel = $derived(
-		micOptions.find((option) => option.value === micCurrent)?.label ?? 'Automatic'
+		micOptions.find((option) => option.value === micCurrent)?.label ??
+			VOICE_SETTINGS_LABEL.automatic
 	);
 
 	onMount(() => {
@@ -123,7 +128,9 @@
 	let singleModelId = $derived(modelsStore.activeModelId);
 	// the file's name, not the GGUF path a single-model server reports
 	let singleModel = $derived(
-		singleModelId ? (singleModelId.split('/').pop() ?? singleModelId).replace(/\.gguf$/i, '') : null
+		singleModelId
+			? (singleModelId.split('/').pop() ?? singleModelId).replace(VOICE_GGUF_EXTENSION_PATTERN, '')
+			: null
 	);
 	let singleModelHasAudio = $derived(
 		singleModelId ? modelsStore.props.modelSupportsAudio(singleModelId) : false
@@ -172,8 +179,11 @@
 				<Select.Trigger class="w-full" id={KEY}>{selectedLabel}</Select.Trigger>
 
 				<Select.Content>
-					<Select.Item label={AUTO_LABEL} value={VOICE_TRANSCRIPTION_MODEL_AUTO}>
-						{AUTO_LABEL}
+					<Select.Item
+						label={VOICE_SETTINGS_LABEL.automatic}
+						value={VOICE_TRANSCRIPTION_MODEL_AUTO}
+					>
+						{VOICE_SETTINGS_LABEL.automatic}
 					</Select.Item>
 
 					{#each optionGroups as group (group.heading)}

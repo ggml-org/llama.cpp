@@ -1,4 +1,4 @@
-import { VOICE_WARMUP_RELEASE_MS } from './constants.js';
+import { VOICE_TRACK_LIVE, VOICE_WARMUP_RELEASE_MS } from './constants.js';
 import { microphoneAllowed, microphoneRequest, stopStream } from './microphone.js';
 import type { VoiceCaptureOptions } from './types.js';
 
@@ -62,7 +62,8 @@ export class MicrophoneWarmup {
 		if (!warm) return null;
 
 		const stream = await warm.stream;
-		const live = stream?.getAudioTracks().some((track) => track.readyState === 'live') ?? false;
+		const live =
+			stream?.getAudioTracks().some((track) => track.readyState === VOICE_TRACK_LIVE) ?? false;
 
 		if (warm.key !== JSON.stringify(microphoneRequest(options)) || !live) {
 			stopStream(stream);

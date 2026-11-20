@@ -76,7 +76,7 @@ export function measureSpeech(samples: Float32Array, sampleRate: number): number
 	if (levels.length === 0) return 0;
 
 	const sorted = [...levels].sort((a, b) => a - b);
-	const floorDb = rmsToDb(sorted[Math.floor((sorted.length - 1) * 0.1)]);
+	const floorDb = rmsToDb(sorted[Math.floor((sorted.length - 1) * VOICE_GAIN.FLOOR_QUANTILE)]);
 
 	let power = 0;
 	let count = 0;

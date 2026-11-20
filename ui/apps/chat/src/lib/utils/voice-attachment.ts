@@ -1,4 +1,9 @@
 import { base64ToBytes, computePeaksFromAudio } from '@ggml-org/llama-voice';
+import {
+	VOICE_FETCHABLE_URL_PATTERN,
+	VOICE_PEAKS_CACHE_TAIL_LENGTH,
+	VOICE_URL_PATTERN
+} from '#lib/constants/index.ts';
 import { AttachmentType, MimeTypeAudio } from '#lib/enums/index.ts';
 import type { ChatAttachmentDisplayItem, DatabaseMessageExtraAudioFile } from '#lib/types/index.ts';
 
@@ -55,7 +60,7 @@ export function audioUrl(
 	mimeType: string
 ): { url: string; revoke: boolean } | null {
 	// a data, blob or http URL plays as it is
-	if (typeof audio === 'string' && /^[a-z][a-z0-9+.-]*:/i.test(audio)) {
+	if (typeof audio === 'string' && VOICE_URL_PATTERN.test(audio)) {
 		return { revoke: false, url: audio };
 	}
 
@@ -80,13 +85,13 @@ export function audioUrl(
 export function lazyPeaks(name: string, audio: string | Blob): Promise<number[]> {
 	const key =
 		typeof audio === 'string'
-			? `${name}:${audio.length}:${audio.slice(-32)}`
+			? `${name}:${audio.length}:${audio.slice(-VOICE_PEAKS_CACHE_TAIL_LENGTH)}`
 			: `${name}:${audio.size}`;
 
 	let peaks = peaksCache.get(key);
 
 	if (!peaks) {
-		const isUrl = typeof audio === 'string' && /^(blob|https?):/i.test(audio);
+		const isUrl = typeof audio === 'string' && VOICE_FETCHABLE_URL_PATTERN.test(audio);
 		const bytes = isUrl ? fetch(audio as string).then((r) => r.blob()) : Promise.resolve(audio);
 
 		peaks = bytes

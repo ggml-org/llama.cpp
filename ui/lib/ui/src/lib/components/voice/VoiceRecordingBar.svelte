@@ -9,9 +9,6 @@
 	passes its stop button as the `stop` snippet. The default labels are English; an app passes its own through `labels`.
 -->
 <script lang="ts" module>
-	/** Where the recording is: waiting for the microphone, recording, or waiting for its text. */
-	export type VoiceRecordingBarStatus = 'starting' | 'recording' | 'waiting';
-
 	export interface VoiceRecordingBarLabels {
 		/** The cancel button, for screen readers */
 		cancel: string;
@@ -28,6 +25,11 @@
 	import { ArrowUp, LoaderCircle, TriangleAlert, X } from '@lucide/svelte';
 	import type { Snippet } from 'svelte';
 	import { ICON_CLASS_DEFAULT } from '../../constants/css-classes.constants';
+	import {
+		VOICE_RECORDING_BAR_LABELS,
+		VOICE_WARNING_SHOWN_MS
+	} from '../../constants/voice.constants';
+	import { VoiceRecordingBarStatus } from '../../enums/voice.enums';
 	import { formatClipTime } from '../../voice/waveform';
 	import { Button } from '../ui/button';
 	import * as Tooltip from '../ui/tooltip';
@@ -70,18 +72,8 @@
 		warning = null
 	}: Props = $props();
 
-	const DEFAULT_LABELS: VoiceRecordingBarLabels = {
-		cancel: 'Cancel recording',
-		send: 'Stop and send',
-		starting: 'Starting...',
-		waiting: 'Transcribing...'
-	};
-
-	/** How long a new warning stays open above the row before it waits for hover or focus. */
-	const WARNING_SHOWN_MS = 6000;
-
-	let text = $derived({ ...DEFAULT_LABELS, ...labels });
-	let recording = $derived(status === 'recording');
+	let text = $derived({ ...VOICE_RECORDING_BAR_LABELS, ...labels });
+	let recording = $derived(status === VoiceRecordingBarStatus.RECORDING);
 	let warningOpen = $state(false);
 
 	// a warning that appears opens by itself, as nobody hovers an icon they have not seen yet
@@ -94,7 +86,7 @@
 
 		warningOpen = true;
 
-		const timer = setTimeout(() => (warningOpen = false), WARNING_SHOWN_MS);
+		const timer = setTimeout(() => (warningOpen = false), VOICE_WARNING_SHOWN_MS);
 
 		return () => clearTimeout(timer);
 	});
@@ -113,7 +105,7 @@
 			<X class={ICON_CLASS_DEFAULT} />
 		</Button>
 
-		{#if status === 'waiting'}
+		{#if status === VoiceRecordingBarStatus.WAITING}
 			<div
 				class="flex min-w-0 flex-1 items-center gap-2 px-1 text-caption text-muted-foreground"
 				role="status"
@@ -155,7 +147,7 @@
 			{/if}
 
 			<!-- the timer starts with the first audio: until then, what is said is not recorded yet -->
-			{#if status === 'starting'}
+			{#if status === VoiceRecordingBarStatus.STARTING}
 				<span class="shrink-0 text-caption text-muted-foreground" role="status">{text.starting}</span>
 			{:else}
 				<span class="w-10 shrink-0 text-right text-caption text-muted-foreground tabular-nums">

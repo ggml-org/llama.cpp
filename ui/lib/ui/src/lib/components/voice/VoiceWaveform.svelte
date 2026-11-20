@@ -14,7 +14,14 @@
 	import { onDestroy } from 'svelte';
 	import { Button } from '../ui/button';
 	import { cn } from '../ui/utils';
-	import type { VoiceWaveformSize } from '../../voice/types';
+	import {
+		VOICE_BAR_GAP_PX,
+		VOICE_SEEK_STEP_MS,
+		VOICE_WAVEFORM_DEFAULT_LABEL,
+		VOICE_WAVEFORM_SIZES
+	} from '../../constants/voice.constants';
+	import { KeyboardKey, MouseButton } from '../../enums/ui.enums';
+	import { VoiceWaveformSize } from '../../enums/voice.enums';
 	import {
 		barCapacity,
 		barHeightPercent,
@@ -47,15 +54,12 @@
 	let {
 		class: className,
 		durationMs,
-		label = 'Voice message',
+		label = VOICE_WAVEFORM_DEFAULT_LABEL,
 		peaks,
 		playbackMs = $bindable(null),
-		size = 'md',
+		size = VoiceWaveformSize.MD,
 		src
 	}: Props = $props();
-
-	const SEEK_STEP_MS = 5000;
-	const BAR_GAP = 2;
 
 	let audio = $state<HTMLAudioElement>();
 	let track = $state<HTMLDivElement>();
@@ -66,14 +70,14 @@
 	let dragging = $state(false);
 	let width = $state(0);
 
-	let barWidth = $derived(size === 'sm' ? 2 : 3);
+	let sized = $derived(VOICE_WAVEFORM_SIZES[size]);
 	let playable = $derived(!!src && !failed);
 	let totalMs = $derived(
 		durationMs ?? (Number.isFinite(mediaDuration) ? Math.max(mediaDuration, 0) * 1000 : 0)
 	);
 	let elapsedMs = $derived(Math.min(currentTime * 1000, totalMs || Infinity));
 	let progress = $derived(progressFraction(elapsedMs, totalMs));
-	let bars = $derived(resamplePeaks(peaks, barCapacity(width, barWidth, BAR_GAP)));
+	let bars = $derived(resamplePeaks(peaks, barCapacity(width, sized.barWidthPx, VOICE_BAR_GAP_PX)));
 	// the length until playback starts, then where it is
 	let shownMs = $derived(!paused || elapsedMs > 0 ? elapsedMs : totalMs);
 
@@ -141,7 +145,7 @@
 	}
 
 	function handlePointerDown(event: PointerEvent) {
-		if (!playable || event.button !== 0) return;
+		if (!playable || event.button !== MouseButton.PRIMARY) return;
 
 		try {
 			track?.setPointerCapture(event.pointerId);
@@ -169,13 +173,13 @@
 		if (!playable) return;
 
 		const target =
-			event.key === 'ArrowRight' || event.key === 'ArrowUp'
-				? stepPosition(elapsedMs, SEEK_STEP_MS, totalMs)
-				: event.key === 'ArrowLeft' || event.key === 'ArrowDown'
-					? stepPosition(elapsedMs, -SEEK_STEP_MS, totalMs)
-					: event.key === 'Home'
+			event.key === KeyboardKey.ARROW_RIGHT || event.key === KeyboardKey.ARROW_UP
+				? stepPosition(elapsedMs, VOICE_SEEK_STEP_MS, totalMs)
+				: event.key === KeyboardKey.ARROW_LEFT || event.key === KeyboardKey.ARROW_DOWN
+					? stepPosition(elapsedMs, -VOICE_SEEK_STEP_MS, totalMs)
+					: event.key === KeyboardKey.HOME
 						? 0
-						: event.key === 'End'
+						: event.key === KeyboardKey.END
 							? totalMs
 							: null;
 
@@ -208,10 +212,10 @@
 </script>
 
 {#snippet barRow(className: string)}
-	<div style:gap="{BAR_GAP}px" class={cn('flex h-full items-center', className)} aria-hidden="true">
+	<div style:gap="{VOICE_BAR_GAP_PX}px" class={cn('flex h-full items-center', className)} aria-hidden="true">
 		{#each bars as peak, index (index)}
 			<span
-				style:width="{barWidth}px"
+				style:width="{sized.barWidthPx}px"
 				style:height="{barHeightPercent(peak)}%"
 				class="shrink-0 rounded-full bg-current"
 			></span>
@@ -220,22 +224,22 @@
 {/snippet}
 
 <div
-	class={cn('flex w-full min-w-0 items-center', size === 'sm' ? 'gap-2' : 'gap-3', className)}
+	class={cn('flex w-full min-w-0 items-center', sized.gap, className)}
 	data-size={size}
 	data-slot="voice-waveform"
 >
 	<Button
-		class={cn('shrink-0 rounded-full p-0', size === 'sm' ? 'size-7' : 'size-8')}
+		class={cn('shrink-0 rounded-full p-0', sized.button)}
 		aria-label={paused ? `Play ${label.toLowerCase()}` : `Pause ${label.toLowerCase()}`}
 		disabled={!playable}
 		onclick={toggle}
 	>
 		{#if paused}
 			<Play
-				class={cn('translate-x-px fill-current', size === 'sm' ? 'size-icon-sm' : 'size-icon-md')}
+				class={cn('translate-x-px fill-current', sized.icon)}
 			/>
 		{:else}
-			<Pause class={cn('fill-current', size === 'sm' ? 'size-icon-sm' : 'size-icon-md')} />
+			<Pause class={cn('fill-current', sized.icon)} />
 		{/if}
 	</Button>
 
@@ -243,7 +247,7 @@
 		bind:this={track}
 		class={cn(
 			'relative min-w-0 flex-1 touch-none rounded-md outline-none select-none focus-visible:ring-3 focus-visible:ring-ring/50',
-			size === 'sm' ? 'h-5' : 'h-7',
+			sized.track,
 			playable ? 'cursor-pointer' : 'cursor-default'
 		)}
 		aria-disabled={!playable || undefined}
@@ -275,7 +279,7 @@
 	<span
 		class={cn(
 			'shrink-0 text-right text-caption text-muted-foreground tabular-nums',
-			size === 'sm' ? 'min-w-8' : 'min-w-9'
+			sized.time
 		)}
 		aria-hidden="true"
 	>

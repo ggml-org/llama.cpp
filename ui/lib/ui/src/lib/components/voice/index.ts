@@ -6,7 +6,6 @@
 export {
   default as VoiceRecordingBar,
   type VoiceRecordingBarLabels,
-  type VoiceRecordingBarStatus,
 } from "./VoiceRecordingBar.svelte";
 export { default as VoiceSpokenText } from "./VoiceSpokenText.svelte";
 export { default as VoiceTranscriptReveal } from "./VoiceTranscriptReveal.svelte";

@@ -1,8 +1,5 @@
-import type {
-	VoiceRecorderStatus,
-	VoiceSessionOptions,
-	VoiceSessionResult
-} from '@ggml-org/llama-voice';
+import type { VoiceSessionOptions, VoiceSessionResult } from '@ggml-org/llama-voice';
+import { VoiceRecorderStatus } from '@ggml-org/llama-voice';
 import type { VoiceRecorderLike } from '#lib/hooks/use-chat-form-voice.svelte.ts';
 
 /** A transcript the test resolves when it wants. */
@@ -57,12 +54,12 @@ export class FakeVoiceRecorder implements VoiceRecorderLike {
 
 	quiet = $state(false);
 	startError: Error | null = null;
-	status = $state<VoiceRecorderStatus>('idle');
+	status = $state<VoiceRecorderStatus>(VoiceRecorderStatus.IDLE);
 	transcript: Promise<string> | null = null;
 
 	cancel(): void {
 		this.cancelled++;
-		this.status = 'idle';
+		this.status = VoiceRecorderStatus.IDLE;
 	}
 
 	/** Live text as a realtime socket would stream it. */
@@ -88,11 +85,11 @@ export class FakeVoiceRecorder implements VoiceRecorderLike {
 
 		this.options = options;
 		this.liveText = '';
-		this.status = 'recording';
+		this.status = VoiceRecorderStatus.RECORDING;
 	}
 
 	async stop(): Promise<VoiceSessionResult> {
-		this.status = 'idle';
+		this.status = VoiceRecorderStatus.IDLE;
 
 		return {
 			clip: {

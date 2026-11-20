@@ -5,7 +5,7 @@ import {
 	type VoiceServerContext,
 	type VoiceSessionOptions
 } from '@ggml-org/llama-voice';
-import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+import { HEADERS, SETTINGS_KEYS, VOICE_RELATIVE_PATH_PATTERN } from '#lib/constants/index.ts';
 import type { SettingsConfigType } from '#lib/types/index.ts';
 import { getAuthHeaders } from '#lib/utils/api-headers.ts';
 import { withBase } from '#lib/utils/base-path.ts';
@@ -69,13 +69,13 @@ export class VoiceService {
 	 */
 	static serverContext(): { context: VoiceServerContext; realtime: boolean } {
 		const hasAuth = Object.keys(getAuthHeaders()).some(
-			(key) => key.toLowerCase() === 'authorization'
+			(key) => key.toLowerCase() === HEADERS.AUTHORIZATION.toLowerCase()
 		);
 
 		return {
 			context: {
 				getHeaders: () => getAuthHeaders(),
-				resolveUrl: (path) => withBase(path.replace(/^\./, ''))
+				resolveUrl: (path) => withBase(path.replace(VOICE_RELATIVE_PATH_PATTERN, ''))
 			},
 			realtime: !hasAuth
 		};

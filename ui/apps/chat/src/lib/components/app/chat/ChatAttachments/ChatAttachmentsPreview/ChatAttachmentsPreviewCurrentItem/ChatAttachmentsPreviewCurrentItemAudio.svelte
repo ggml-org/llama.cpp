@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { VoiceTranscriptStatus } from '@ggml-org/llama-ui/voice';
 	import { Music } from '@lucide/svelte';
 	import { VOICE_MESSAGE_LABEL } from '#lib/constants/index.ts';
 	import { voiceTranscriptsStore } from '#lib/stores/index.ts';
@@ -16,7 +17,7 @@
 	// a voice message's transcript, from the message or still on its way
 	let shown = $derived(source ? voiceTranscriptsStore.shown(source.name, source.transcript) : null);
 	let transcript = $derived(shown?.transcript);
-	let transcribing = $derived(shown?.status === 'transcribing');
+	let transcribing = $derived(shown?.status === VoiceTranscriptStatus.TRANSCRIBING);
 </script>
 
 <div class="flex flex-1 items-center justify-center p-8">

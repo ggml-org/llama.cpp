@@ -1,3 +1,4 @@
+import { VOICE_AUDIO_CONTEXT_STATE, VOICE_AUDIO_SINK_NONE } from './constants.js';
 import { loadPcmTapModule } from './pcm-tap.js';
 
 /**
@@ -20,14 +21,16 @@ let holders = 0;
 function createContext(): AudioContext {
 	try {
 		// Chrome renders without an output device; other browsers reject the option
-		return new AudioContext({ sinkId: { type: 'none' } } as AudioContextOptions);
+		return new AudioContext({
+			sinkId: VOICE_AUDIO_SINK_NONE
+		} as AudioContextOptions);
 	} catch {
 		return new AudioContext();
 	}
 }
 
 function sharedContext(): { context: AudioContext; ready: Promise<void> } {
-	if (!shared || shared.state === 'closed') {
+	if (!shared || shared.state === VOICE_AUDIO_CONTEXT_STATE.CLOSED) {
 		shared = createContext();
 		holders = 0;
 		modulesReady = loadPcmTapModule(shared).catch((error) => {
@@ -43,7 +46,10 @@ function sharedContext(): { context: AudioContext; ready: Promise<void> } {
  * The shared context for a capture, made on first use, with the PCM tap's worklet loading.
  * The capture hands it back with idleCaptureContext.
  */
-export function captureContext(): { context: AudioContext; ready: Promise<void> } {
+export function captureContext(): {
+	context: AudioContext;
+	ready: Promise<void>;
+} {
 	const handle = sharedContext();
 
 	holders++;
@@ -69,12 +75,13 @@ export function warmUpVoiceCapture(): void {
 /** Hands back a capture's context: it idles between recordings, so it renders nothing. */
 export function idleCaptureContext(context: AudioContext): void {
 	if (context !== shared) {
-		if (context.state !== 'closed') context.close().catch(() => {});
+		if (context.state !== VOICE_AUDIO_CONTEXT_STATE.CLOSED) context.close().catch(() => {});
 
 		return;
 	}
 
 	holders = Math.max(0, holders - 1);
 
-	if (holders === 0 && context.state === 'running') context.suspend().catch(() => {});
+	if (holders === 0 && context.state === VOICE_AUDIO_CONTEXT_STATE.RUNNING)
+		context.suspend().catch(() => {});
 }

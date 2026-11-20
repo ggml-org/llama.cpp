@@ -2,8 +2,11 @@
 	import StateGallery from '../helpers/StateGallery.svelte';
 	import StateGalleryItem from '../helpers/StateGalleryItem.svelte';
 	import { demoClip } from './fixtures';
-	import type { VoiceTranscriptStatus } from '@ggml-org/llama-ui/voice';
-	import { VoiceTranscriptReveal, VoiceWaveform } from '@ggml-org/llama-ui/voice';
+	import {
+		VoiceTranscriptReveal,
+		VoiceTranscriptStatus,
+		VoiceWaveform
+	} from '@ggml-org/llama-ui/voice';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import { expect, waitFor } from 'storybook/test';
 
@@ -49,23 +52,23 @@
 		</StateGalleryItem>
 
 		<StateGalleryItem label="Transcribing">
-			{@render message('transcribing', null)}
+			{@render message(VoiceTranscriptStatus.TRANSCRIBING, null)}
 		</StateGalleryItem>
 
 		<StateGalleryItem label="Error">
-			{@render message('error', null)}
+			{@render message(VoiceTranscriptStatus.ERROR, null)}
 		</StateGalleryItem>
 
 		<StateGalleryItem label="None" note="no transcript asked for: nothing opens">
-			{@render message('idle', null)}
+			{@render message(VoiceTranscriptStatus.IDLE, null)}
 		</StateGalleryItem>
 
 		<StateGalleryItem label="Long text">
-			{@render message('done', LONG_TRANSCRIPT)}
+			{@render message(VoiceTranscriptStatus.DONE, LONG_TRANSCRIPT)}
 		</StateGalleryItem>
 
 		<StateGalleryItem label="No speech" note="done, but empty">
-			{@render message('done', '')}
+			{@render message(VoiceTranscriptStatus.DONE, '')}
 		</StateGalleryItem>
 	</StateGallery>
 </Story>

@@ -1,3 +1,9 @@
+import {
+	VOICE_CLOSING_PUNCTUATION_PATTERN,
+	VOICE_LEADING_SPACE_PATTERN,
+	VOICE_TRAILING_SPACE_PATTERN
+} from './constants.js';
+
 /**
  * The stretch of the message that dictation writes: it starts at the caret, and each
  * new version of the dictated text replaces only that stretch, so what the user typed
@@ -40,8 +46,14 @@ export class DictationSpan {
 		const before = value.slice(0, this.start + this.kept);
 		const after = value.slice(this.start + this.length);
 		// no space before text that goes on with punctuation, e.g. ", and then"
-		const lead = body && before && !/\s$/.test(before) && !/^[,.;:!?)\]}]/.test(body) ? ' ' : '';
-		const trail = body && after && !/^\s/.test(after) ? ' ' : '';
+		const lead =
+			body &&
+			before &&
+			!VOICE_TRAILING_SPACE_PATTERN.test(before) &&
+			!VOICE_CLOSING_PUNCTUATION_PATTERN.test(body)
+				? ' '
+				: '';
+		const trail = body && after && !VOICE_LEADING_SPACE_PATTERN.test(after) ? ' ' : '';
 		const inserted = lead + body + trail;
 
 		this.length = this.kept + inserted.length;

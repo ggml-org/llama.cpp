@@ -1,13 +1,13 @@
 import {
+	VOICE_ERROR_MESSAGE,
 	VOICE_SCRIPT_PROCESSOR_FRAMES,
 	VOICE_WORKLET_BATCH_FRAMES,
-	VOICE_WORKLET_PROCESSOR
+	VOICE_WORKLET_FLUSH_TIMEOUT_MS,
+	VOICE_WORKLET_MESSAGE,
+	VOICE_WORKLET_PROCESSOR,
+	VOICE_WORKLET_SOURCE_MIME
 } from './constants.js';
 
-/** Message the tap answers once it has posted the samples it still held. */
-const FLUSH = 'flush';
-const FLUSHED = 'flushed';
-const FLUSH_TIMEOUT_MS = 250;
 // runs on the audio thread; inline so no extra file has to be served next to the app
 const WORKLET_SOURCE = `
 class PcmTap extends AudioWorkletProcessor {
@@ -17,9 +17,9 @@ class PcmTap extends AudioWorkletProcessor {
 		this.buffer = new Float32Array(this.size);
 		this.filled = 0;
 		this.port.onmessage = (event) => {
-			if (event.data !== '${FLUSH}') return;
+			if (event.data !== '${VOICE_WORKLET_MESSAGE.FLUSH}') return;
 			this.post();
-			this.port.postMessage('${FLUSHED}');
+			this.port.postMessage('${VOICE_WORKLET_MESSAGE.FLUSHED}');
 		};
 	}
 
@@ -83,9 +83,12 @@ export function loadPcmTapModule(context: BaseAudioContext): Promise<void> {
 	let loading = modules.get(context);
 
 	if (!loading) {
-		if (!context.audioWorklet) return Promise.reject(new Error('AudioWorklet unavailable'));
+		if (!context.audioWorklet)
+			return Promise.reject(new Error(VOICE_ERROR_MESSAGE.workletUnavailable));
 
-		const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'text/javascript' }));
+		const url = URL.createObjectURL(
+			new Blob([WORKLET_SOURCE], { type: VOICE_WORKLET_SOURCE_MIME })
+		);
 
 		loading = context.audioWorklet.addModule(url).finally(() => URL.revokeObjectURL(url));
 		// a failed load may be tried again
@@ -113,7 +116,7 @@ async function createWorkletTap(
 	let flushed: (() => void) | null = null;
 
 	node.port.onmessage = (event: MessageEvent<Float32Array | string>) => {
-		if (event.data === FLUSHED) {
+		if (event.data === VOICE_WORKLET_MESSAGE.FLUSHED) {
 			flushed?.();
 		} else if (event.data instanceof Float32Array) {
 			onBlock(event.data);
@@ -128,14 +131,14 @@ async function createWorkletTap(
 		},
 		flush: () =>
 			new Promise<void>((resolve) => {
-				const timer = setTimeout(resolve, FLUSH_TIMEOUT_MS);
+				const timer = setTimeout(resolve, VOICE_WORKLET_FLUSH_TIMEOUT_MS);
 
 				flushed = () => {
 					clearTimeout(timer);
 					flushed = null;
 					resolve();
 				};
-				node.port.postMessage(FLUSH);
+				node.port.postMessage(VOICE_WORKLET_MESSAGE.FLUSH);
 			}),
 		node
 	};

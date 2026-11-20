@@ -1,5 +1,4 @@
-/** The smallest bar, as a fraction of the waveform's height, so silence still draws a dotted line. */
-export const MIN_BAR_HEIGHT = 0.12;
+import { MIN_BAR_HEIGHT } from '../constants/voice.constants.js';
 
 function clampUnit(value: number): number {
 	if (!Number.isFinite(value)) return 0;

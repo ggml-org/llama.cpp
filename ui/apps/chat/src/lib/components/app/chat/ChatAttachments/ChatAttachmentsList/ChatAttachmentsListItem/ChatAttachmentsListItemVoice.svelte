@@ -5,7 +5,12 @@
 	stored without peaks (an older message, an uploaded file) gets them computed from its audio.
 -->
 <script lang="ts">
-	import { spokenLength, VoiceTranscriptReveal, VoiceWaveform } from '@ggml-org/llama-ui/voice';
+	import {
+		spokenLength,
+		VoiceTranscriptReveal,
+		VoiceWaveform,
+		VoiceWaveformSize
+	} from '@ggml-org/llama-ui/voice';
 	import { X } from '@lucide/svelte';
 	import { ActionIcon } from '#lib/components/app/index.ts';
 	import { SETTINGS_KEYS, VOICE_MESSAGE_LABEL } from '#lib/constants/index.ts';
@@ -18,10 +23,16 @@
 		item: ChatAttachmentDisplayItem;
 		onRemove?: (id: string) => void;
 		readonly?: boolean;
-		size?: 'sm' | 'md';
+		size?: VoiceWaveformSize;
 	}
 
-	let { class: className = '', item, onRemove, readonly = false, size = 'md' }: Props = $props();
+	let {
+		class: className = '',
+		item,
+		onRemove,
+		readonly = false,
+		size = VoiceWaveformSize.MD
+	}: Props = $props();
 
 	let source = $derived(voiceAttachmentSource(item));
 	let computedPeaks = $state<number[] | null>(null);
@@ -82,7 +93,7 @@
 <div
 	class={[
 		'group relative min-w-0',
-		size === 'sm'
+		size === VoiceWaveformSize.SM
 			? 'w-60 max-w-[calc(100vw-4rem)] rounded-lg border border-border bg-muted py-2 pr-9 pl-2'
 			: 'w-80 max-w-full rounded-2xl matte-sheen bg-(--user-bubble-background) px-3 py-2.5 backdrop-blur-md dark:bg-primary/15',
 		className

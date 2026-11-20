@@ -42,8 +42,6 @@ export interface VoiceCaptureOptions {
 	boost?: boolean;
 }
 
-export type VoiceCaptureState = 'idle' | 'starting' | 'recording' | 'stopped';
-
 /**
  * How the engine reaches a server. The app wires its own URL resolution and
  * auth in, so the engine never imports app stores.
@@ -129,6 +127,3 @@ export interface VoiceSession {
 	/** Drops the recording and closes everything */
 	cancel(): void;
 }
-
-/** Where a VoiceRecorder (voice/svelte) is. */
-export type VoiceRecorderStatus = 'idle' | 'starting' | 'recording' | 'stopping';

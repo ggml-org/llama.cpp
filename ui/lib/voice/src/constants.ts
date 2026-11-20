@@ -142,6 +142,8 @@ export const VOICE_SPEECH = {
 export const VOICE_GAIN = {
 	/** Frames a finished recording is measured in */
 	FRAME_MS: 20,
+	/** Where in a finished recording's frames, quietest first, its noise floor is read */
+	FLOOR_QUANTILE: 0.1,
 	/** The soft limiter's knee: louder samples bend towards full scale */
 	KNEE: 0.8,
 	/** How long speech must stay too quiet before the recording says so, as the microphone may settle */
@@ -163,3 +165,137 @@ export const VOICE_GAIN = {
  * the pointer leaves the button, in case it comes back to press it.
  */
 export const VOICE_WARMUP_RELEASE_MS = 1500;
+
+/** Messages of the errors a recording, a transcription or a realtime session ends with. */
+export const VOICE_ERROR_MESSAGE = {
+	captureAlreadyStarted: 'Voice capture already started',
+	captureCancelled: 'Voice capture cancelled',
+	captureNotStarted: 'No voice capture to stop',
+	noTranscript: 'The server returned no transcript.',
+	realtimeClosed: 'The realtime session was closed.',
+	realtimeClosedEarly: 'The realtime socket closed before the transcript completed.',
+	realtimeConnectTimeout: 'The realtime session did not start in time.',
+	realtimeFailed: 'Realtime transcription failed.',
+	realtimeFinishTimeout: 'The transcript did not complete in time.',
+	realtimeNotOpen: 'The realtime session is not open.',
+	realtimeRefused: (code: number) =>
+		`The realtime socket closed before the session started (code ${code}).`,
+	realtimeSocketFailed: 'The realtime socket could not be opened.',
+	recorderBusy: 'Voice recorder already running',
+	recorderIdle: 'No voice recording to stop',
+	transcriptionFailed: 'Transcription failed',
+	workletUnavailable: 'AudioWorklet unavailable'
+} as const;
+
+/** The DOMException names the engine raises or tells apart. */
+export const VOICE_DOM_ERROR = {
+	ABORT: 'AbortError',
+	NOT_ALLOWED: 'NotAllowedError',
+	NOT_FOUND: 'NotFoundError',
+	NOT_READABLE: 'NotReadableError',
+	OVERCONSTRAINED: 'OverconstrainedError',
+	SECURITY: 'SecurityError'
+} as const;
+
+/** AudioContext states the engine checks. */
+export const VOICE_AUDIO_CONTEXT_STATE = {
+	CLOSED: 'closed',
+	RUNNING: 'running',
+	SUSPENDED: 'suspended'
+} as const satisfies Record<string, AudioContextState>;
+
+/** Output of the capture context where the browser allows none: it never opens the speakers. */
+export const VOICE_AUDIO_SINK_NONE = { type: 'none' } as const;
+
+/** What the browser lists microphones as. */
+export const VOICE_AUDIO_INPUT_KIND = 'audioinput' satisfies MediaDeviceKind;
+
+/** Entries Chrome lists beside the microphones: the system default and the communications device. */
+export const VOICE_DEVICE_ALIAS = {
+	COMMUNICATIONS: 'communications',
+	DEFAULT: 'default'
+} as const;
+
+/** Microphone labels that name a Bluetooth headset, whose microphone switches it to call mode. */
+export const VOICE_BLUETOOTH_LABEL_PATTERN = /bluetooth|airpods|beats|hands-?free|headset|buds/i;
+
+/** Microphone labels that name the computer's own microphone. */
+export const VOICE_BUILT_IN_LABEL_PATTERN = /built-?in|internal|macbook|imac|laptop/i;
+
+/** The Permissions API entry for the microphone, and the state that needs no prompt. */
+export const VOICE_MICROPHONE_PERMISSION = {
+	GRANTED: 'granted' satisfies PermissionState,
+	NAME: 'microphone'
+} as const;
+
+/** State of a track that still records. */
+export const VOICE_TRACK_LIVE = 'live' satisfies MediaStreamTrackState;
+
+/** Messages between the main thread and the PCM tap worklet, and how long a flush may take. */
+export const VOICE_WORKLET_MESSAGE = {
+	FLUSH: 'flush',
+	FLUSHED: 'flushed'
+} as const;
+
+export const VOICE_WORKLET_FLUSH_TIMEOUT_MS = 250;
+
+/** Type of the worklet's inline source. */
+export const VOICE_WORKLET_SOURCE_MIME = 'text/javascript';
+
+/** Sample rate of the offline context that decodes stored clips: a placeholder, decoding keeps the file's own. */
+export const VOICE_DECODE_SAMPLE_RATE = 44_100;
+
+/** A data URL's header, before the base64 payload. */
+export const VOICE_DATA_URL_HEADER_PATTERN = /^data:[^,]*,/;
+
+/** Quieter than anything a microphone gives, for a block of digital silence (dBFS). */
+export const VOICE_SILENCE_DB = -120;
+
+/** Defaults of a PauseDetector, see PauseDetectorOptions. */
+export const VOICE_PAUSE_DEFAULTS = {
+	MAX_SEGMENT_MS: 10_000,
+	MIN_SPEECH_MS: 300,
+	/** How far past its longest length a piece waits for a quiet moment before it is cut anyway */
+	OVERTIME: 1.5,
+	PAUSE_MS: 500
+} as const;
+
+/** Fields of the `/v1/audio/transcriptions` form, and the response format asked for. */
+export const VOICE_TRANSCRIPTION_FORM = {
+	FILE: 'file',
+	LANGUAGE: 'language',
+	MODEL: 'model',
+	PROMPT: 'prompt',
+	RESPONSE_FORMAT: 'response_format'
+} as const;
+
+export const VOICE_TRANSCRIPTION_RESPONSE_FORMAT = 'json';
+
+/** File names the audio is sent under: a whole clip, or a piece of a recording still going. */
+export const VOICE_CLIP_FILENAME = {
+	CLIP: 'audio.wav',
+	PIECE: 'piece.wav'
+} as const;
+
+/** The header the browser sets itself for a multipart body. */
+export const VOICE_CONTENT_TYPE_HEADER = 'content-type';
+
+/** An error body that is an HTML page, which says nothing useful in a toast. */
+export const VOICE_HTML_BODY_PATTERN = /^</;
+
+/** Socket protocols for the page's HTTP protocol. */
+export const VOICE_SOCKET_PROTOCOL = {
+	HTTPS: 'https:',
+	WS: 'ws:',
+	WSS: 'wss:'
+} as const;
+
+/** Format of the PCM16 chunks sent to the realtime socket. */
+export const VOICE_REALTIME_AUDIO_FORMAT = 'audio/pcm';
+
+/** Whitespace at either end of a text, where two pieces join without another space. */
+export const VOICE_TRAILING_SPACE_PATTERN = /\s$/;
+export const VOICE_LEADING_SPACE_PATTERN = /^\s/;
+
+/** Punctuation that closes onto the word before it, so dictated text needs no space before it. */
+export const VOICE_CLOSING_PUNCTUATION_PATTERN = /^[,.;:!?)\]}]/;

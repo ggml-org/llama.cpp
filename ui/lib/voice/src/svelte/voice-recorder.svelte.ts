@@ -1,11 +1,7 @@
-import { VOICE_LEVELS_LENGTH } from '../constants.js';
+import { VOICE_ERROR_MESSAGE, VOICE_LEVELS_LENGTH } from '../constants.js';
+import { VoiceRecorderStatus } from '../enums.js';
 import { startVoiceSession } from '../session.js';
-import type {
-	VoiceRecorderStatus,
-	VoiceSession,
-	VoiceSessionOptions,
-	VoiceSessionResult
-} from '../types.js';
+import type { VoiceSession, VoiceSessionOptions, VoiceSessionResult } from '../types.js';
 
 /**
  * Reactive voice session for components: `levels`, `liveText`, `live`, `quiet` and
@@ -20,7 +16,7 @@ export class VoiceRecorder {
 	liveText = $state('');
 	/** True while the speech is too quiet even at the highest gain */
 	quiet = $state(false);
-	status = $state<VoiceRecorderStatus>('idle');
+	status = $state<VoiceRecorderStatus>(VoiceRecorderStatus.IDLE);
 
 	// bumped by cancel(), so a start still waiting for the microphone drops its session
 	private generation = 0;
@@ -31,7 +27,7 @@ export class VoiceRecorder {
 		this.generation++;
 		this.session?.cancel();
 		this.session = null;
-		this.status = 'idle';
+		this.status = VoiceRecorderStatus.IDLE;
 	}
 
 	/**
@@ -39,7 +35,7 @@ export class VoiceRecorder {
 	 * @throws VoiceCaptureError when the microphone does not start
 	 */
 	async start(options: VoiceSessionOptions = {}): Promise<void> {
-		if (this.status !== 'idle') throw new Error('Voice recorder already running');
+		if (this.status !== VoiceRecorderStatus.IDLE) throw new Error(VOICE_ERROR_MESSAGE.recorderBusy);
 
 		const capture = options.capture;
 		const length =
@@ -51,7 +47,7 @@ export class VoiceRecorder {
 		this.liveText = '';
 		this.live = false;
 		this.quiet = false;
-		this.status = 'starting';
+		this.status = VoiceRecorderStatus.STARTING;
 
 		const generation = ++this.generation;
 
@@ -83,9 +79,9 @@ export class VoiceRecorder {
 			}
 
 			this.session = session;
-			this.status = 'recording';
+			this.status = VoiceRecorderStatus.RECORDING;
 		} catch (error) {
-			if (generation === this.generation) this.status = 'idle';
+			if (generation === this.generation) this.status = VoiceRecorderStatus.IDLE;
 
 			throw error;
 		}
@@ -95,15 +91,17 @@ export class VoiceRecorder {
 	async stop(): Promise<VoiceSessionResult> {
 		const session = this.session;
 
-		if (!session || this.status !== 'recording') throw new Error('No voice recording to stop');
+		if (!session || this.status !== VoiceRecorderStatus.RECORDING) {
+			throw new Error(VOICE_ERROR_MESSAGE.recorderIdle);
+		}
 
-		this.status = 'stopping';
+		this.status = VoiceRecorderStatus.STOPPING;
 
 		try {
 			return await session.stop();
 		} finally {
 			this.session = null;
-			this.status = 'idle';
+			this.status = VoiceRecorderStatus.IDLE;
 		}
 	}
 }

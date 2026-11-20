@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	import StateGallery from '../helpers/StateGallery.svelte';
 	import StateGalleryItem from '../helpers/StateGalleryItem.svelte';
-	import { VoiceRecordingBar } from '@ggml-org/llama-ui/voice';
+	import { VoiceRecordingBar, VoiceRecordingBarStatus } from '@ggml-org/llama-ui/voice';
 	import { Square } from '@lucide/svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import { expect, fn } from 'storybook/test';
@@ -44,7 +44,7 @@
 					levels={[]}
 					onCancel={fn()}
 					onSend={fn()}
-					status="starting"
+					status={VoiceRecordingBarStatus.STARTING}
 					stop={stopButton}
 				/>
 			</div>
@@ -58,7 +58,7 @@
 					{levels}
 					onCancel={fn()}
 					onSend={fn()}
-					status="recording"
+					status={VoiceRecordingBarStatus.RECORDING}
 					stop={stopButton}
 				/>
 			</div>
@@ -72,7 +72,7 @@
 					{levels}
 					onCancel={fn()}
 					onSend={fn()}
-					status="recording"
+					status={VoiceRecordingBarStatus.RECORDING}
 					stop={stopButton}
 				/>
 			</div>
@@ -84,7 +84,7 @@
 					elapsedMs={3_000}
 					levels={levels.map((level) => level / 6)}
 					onCancel={fn()}
-					status="recording"
+					status={VoiceRecordingBarStatus.RECORDING}
 					stop={stopButton}
 					warning="Your microphone sounds quiet. Move closer, or turn its input level up."
 				/>
@@ -97,7 +97,7 @@
 					elapsedMs={9_000}
 					{levels}
 					onCancel={fn()}
-					status="waiting"
+					status={VoiceRecordingBarStatus.WAITING}
 					stop={stopButton}
 				/>
 			</div>
@@ -114,7 +114,7 @@
 		levels: [],
 		onCancel: fn(),
 		onSend: fn(),
-		status: 'starting',
+		status: VoiceRecordingBarStatus.STARTING,
 		stop: stopButton
 	}}
 	play={async ({ args, canvas, userEvent }) => {

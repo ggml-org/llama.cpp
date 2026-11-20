@@ -1,4 +1,4 @@
-import { VOICE_MICROPHONE_MESSAGE } from './constants.js';
+import { VOICE_DOM_ERROR, VOICE_MICROPHONE_MESSAGE } from './constants.js';
 
 /**
  * What the browser offers for voice capture, and what to tell the user when it does not.
@@ -35,14 +35,14 @@ export function microphoneUnavailableReason(): string | null {
 /** Why the microphone would not start, from the error the browser raised. */
 export function describeMicrophoneError(error: unknown): string {
 	switch (error instanceof DOMException ? error.name : '') {
-		case 'NotAllowedError':
-		case 'SecurityError':
+		case VOICE_DOM_ERROR.NOT_ALLOWED:
+		case VOICE_DOM_ERROR.SECURITY:
 			return VOICE_MICROPHONE_MESSAGE.denied;
-		case 'NotFoundError':
-		case 'OverconstrainedError':
+		case VOICE_DOM_ERROR.NOT_FOUND:
+		case VOICE_DOM_ERROR.OVERCONSTRAINED:
 			return VOICE_MICROPHONE_MESSAGE.notFound;
-		case 'AbortError':
-		case 'NotReadableError':
+		case VOICE_DOM_ERROR.ABORT:
+		case VOICE_DOM_ERROR.NOT_READABLE:
 			return VOICE_MICROPHONE_MESSAGE.busy;
 		default:
 			return error instanceof Error && error.message

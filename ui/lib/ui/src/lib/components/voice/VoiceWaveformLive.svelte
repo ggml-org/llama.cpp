@@ -8,6 +8,7 @@
 <script lang="ts">
 	import { prefersReducedMotion } from 'svelte/motion';
 	import { cn } from '../ui/utils';
+	import { VOICE_BAR_GAP_PX, VOICE_LIVE_BAR_WIDTH_PX } from '../../constants/voice.constants';
 	import { barCapacity, barHeightPercent, liveBars } from '../../voice/waveform';
 
 	interface Props {
@@ -22,13 +23,10 @@
 
 	let { active = true, class: className, label, levels }: Props = $props();
 
-	const BAR_WIDTH = 3;
-	const BAR_GAP = 2;
-
 	let width = $state(0);
 
 	let bars = $derived(
-		liveBars(prefersReducedMotion.current ? [] : levels, barCapacity(width, BAR_WIDTH, BAR_GAP))
+		liveBars(prefersReducedMotion.current ? [] : levels, barCapacity(width, VOICE_LIVE_BAR_WIDTH_PX, VOICE_BAR_GAP_PX))
 	);
 </script>
 
@@ -41,14 +39,14 @@
 	{/if}
 
 	<div
-		style:gap="{BAR_GAP}px"
+		style:gap="{VOICE_BAR_GAP_PX}px"
 		class="flex h-full items-center justify-end overflow-hidden"
 		aria-hidden="true"
 		bind:clientWidth={width}
 	>
 		{#each bars as level, index (index)}
 			<span
-				style:width="{BAR_WIDTH}px"
+				style:width="{VOICE_LIVE_BAR_WIDTH_PX}px"
 				style:height="{barHeightPercent(level)}%"
 				class={[
 					'shrink-0 rounded-full bg-current transition-[height] duration-100 ease-linear motion-reduce:transition-none',

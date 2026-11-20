@@ -1,5 +1,5 @@
 import { VoiceCapture } from './capture.js';
-import { VOICE_PIECE, VOICE_RETRANSCRIBE_MAX_MS } from './constants.js';
+import { VOICE_CLIP_FILENAME, VOICE_PIECE, VOICE_RETRANSCRIBE_MAX_MS } from './constants.js';
 import { RealtimeUnsupportedError } from './errors.js';
 import { HttpPieceTranscriber } from './http-pieces.js';
 import { PauseDetector } from './pauses.js';
@@ -72,7 +72,7 @@ export async function startVoiceSession(options: VoiceSessionOptions = {}): Prom
 				sampleRate: capture.sampleRate,
 				transcribe: (wav, signal) =>
 					transcribeClip(transcribe.context, wav, {
-						filename: 'piece.wav',
+						filename: VOICE_CLIP_FILENAME.PIECE,
 						language: transcribe.language,
 						model: transcribe.model,
 						signal

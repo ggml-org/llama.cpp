@@ -8,7 +8,8 @@
  * gets it written into its stored attachment afterwards. Kept in memory only.
  */
 
-import type { VoiceTranscriptStatus } from '@ggml-org/llama-ui/voice';
+import { VoiceTranscriptStatus } from '@ggml-org/llama-ui/voice';
+import { VOICE_TRANSCRIPT_APPLY_RETRY_DELAYS_MS } from '#lib/constants/index.ts';
 import { AttachmentType } from '#lib/enums/index.ts';
 import { DatabaseService } from '#lib/services/database.service.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
@@ -21,12 +22,9 @@ import type {
 import { SvelteMap } from 'svelte/reactivity';
 
 export type VoiceTranscriptState =
-	| { status: 'transcribing' }
-	| { status: 'done'; transcript: string }
-	| { status: 'error'; message: string };
-
-/** How long a transcript that came back keeps looking for the message it belongs to. */
-const APPLY_RETRY_DELAYS_MS = [500, 1500, 4000];
+	| { status: VoiceTranscriptStatus.TRANSCRIBING }
+	| { status: VoiceTranscriptStatus.DONE; transcript: string }
+	| { status: VoiceTranscriptStatus.ERROR; message: string };
 
 function isPendingClip(extra: DatabaseMessageExtra, name: string): boolean {
 	return (
@@ -74,28 +72,28 @@ class VoiceTranscriptsStore {
 	setTranscript(name: string, transcript: string): void {
 		this.edited.add(name);
 		this.recordedAt.set(name, this.recordedAt.get(name) ?? Date.now());
-		this.entries.set(name, { status: 'done', transcript });
+		this.entries.set(name, { status: VoiceTranscriptStatus.DONE, transcript });
 	}
 
 	/** A clip's transcript as it is shown: the one stored with it, else the one on its way. */
 	shown(name: string, stored?: string): { status: VoiceTranscriptStatus; transcript?: string } {
 		const transcript = stored ?? this.transcriptOf(name);
 
-		if (transcript !== undefined) return { status: 'done', transcript };
+		if (transcript !== undefined) return { status: VoiceTranscriptStatus.DONE, transcript };
 
-		return { status: this.entries.get(name)?.status ?? 'idle' };
+		return { status: this.entries.get(name)?.status ?? VoiceTranscriptStatus.IDLE };
 	}
 
 	/** Follows a clip's transcript, and writes it into the message it went out with. */
 	track(name: string, transcript: Promise<string>): void {
-		this.entries.set(name, { status: 'transcribing' });
+		this.entries.set(name, { status: VoiceTranscriptStatus.TRANSCRIBING });
 		this.recordedAt.set(name, Date.now());
 
 		transcript.then(
 			(text) => {
 				if (!this.entries.has(name) || this.edited.has(name)) return;
 
-				this.entries.set(name, { status: 'done', transcript: text });
+				this.entries.set(name, { status: VoiceTranscriptStatus.DONE, transcript: text });
 				void this.applyToMessage(name, text);
 			},
 			(error: unknown) => {
@@ -104,7 +102,7 @@ class VoiceTranscriptsStore {
 				console.warn('Voice message transcription failed:', error);
 				this.entries.set(name, {
 					message: error instanceof Error ? error.message : String(error),
-					status: 'error'
+					status: VoiceTranscriptStatus.ERROR
 				});
 			}
 		);
@@ -114,11 +112,11 @@ class VoiceTranscriptsStore {
 	transcriptOf(name: string): string | undefined {
 		const entry = this.entries.get(name);
 
-		return entry?.status === 'done' ? entry.transcript : undefined;
+		return entry?.status === VoiceTranscriptStatus.DONE ? entry.transcript : undefined;
 	}
 
 	private async applyToMessage(name: string, transcript: string): Promise<void> {
-		for (const delay of [0, ...APPLY_RETRY_DELAYS_MS]) {
+		for (const delay of [0, ...VOICE_TRANSCRIPT_APPLY_RETRY_DELAYS_MS]) {
 			if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
 
 			// in its message now, which shows it from there

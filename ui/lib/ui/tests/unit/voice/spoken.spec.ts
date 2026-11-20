@@ -1,4 +1,4 @@
-import { speechFraction, spokenLength, spokenWords } from './spoken.js';
+import { speechFraction, spokenLength, spokenWords } from '../../../src/lib/voice/spoken.js';
 import { describe, expect, it } from 'vite-plus/test';
 
 const TEXT = 'one two three four';

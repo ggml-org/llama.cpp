@@ -25,6 +25,7 @@ export {
 	type DictationTarget
 } from './dictation.js';
 export { DictationSpan } from './dictation-span.js';
+export { RealtimeUnsupportedReason, VoiceCaptureState, VoiceRecorderStatus } from './enums.js';
 export {
 	RealtimeError,
 	RealtimeUnsupportedError,

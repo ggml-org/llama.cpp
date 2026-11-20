@@ -1,6 +1,7 @@
 <script lang="ts" module>
 	import { demoStoredClip } from '../../voice/fixtures';
 	import { CONV_ID, noopChatActions, seedChatStory, STORY_CLASS } from './fixtures';
+	import { VoiceTranscriptStatus } from '@ggml-org/llama-ui/voice';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatMessage from '#lib/components/app/chat/ChatMessages/ChatMessage/ChatMessage.svelte';
 	import { SETTINGS_KEYS } from '#lib/constants/index.ts';
@@ -136,7 +137,7 @@
 		await waitFor(() =>
 			expect(canvasElement.querySelector('[data-slot="voice-transcript-reveal"]')).toHaveAttribute(
 				'data-status',
-				'transcribing'
+				VoiceTranscriptStatus.TRANSCRIBING
 			)
 		);
 	}}

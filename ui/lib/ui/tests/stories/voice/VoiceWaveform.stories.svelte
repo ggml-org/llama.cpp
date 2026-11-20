@@ -2,7 +2,7 @@
 	import StateGallery from '../helpers/StateGallery.svelte';
 	import StateGalleryItem from '../helpers/StateGalleryItem.svelte';
 	import { demoClip } from './fixtures';
-	import { VoiceWaveform } from '@ggml-org/llama-ui/voice';
+	import { VoiceWaveform, VoiceWaveformSize } from '@ggml-org/llama-ui/voice';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import { expect } from 'storybook/test';
 
@@ -31,7 +31,7 @@
 				<VoiceWaveform
 					durationMs={short.durationMs}
 					peaks={short.peaks}
-					size="sm"
+					size={VoiceWaveformSize.SM}
 					src={short.src}
 				/>
 			</div>
@@ -67,7 +67,7 @@
 
 		<StateGalleryItem label="No peaks yet" note="a flat line">
 			<div class={CHIP_CLASS}>
-				<VoiceWaveform durationMs={short.durationMs} peaks={[]} size="sm" src={short.src} />
+				<VoiceWaveform durationMs={short.durationMs} peaks={[]} size={VoiceWaveformSize.SM} src={short.src} />
 			</div>
 		</StateGalleryItem>
 	</StateGallery>

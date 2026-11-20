@@ -2,7 +2,12 @@
 	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { Mic, MicOff, Square } from '@lucide/svelte';
-	import { ICON_CLASS_DEFAULT, VOICE_MODE_MESSAGE } from '#lib/constants/index.ts';
+	import {
+		ICON_CLASS_DEFAULT,
+		VOICE_MODE_MESSAGE,
+		VOICE_PRESS_CLICK_MS
+	} from '#lib/constants/index.ts';
+	import { MouseButton, PointerType } from '#lib/enums/index.ts';
 
 	interface Props {
 		/** What a press does: send a voice message or dictate. */
@@ -49,13 +54,12 @@
 	const showWarning = $derived(!unavailableReason && !isRecording && !!micWarning);
 	// a mouse starts recording on press, not on release, so the first words are not lost;
 	// a touch or a key goes through the click, which is when the browser allows it
-	const PRESS_CLICK_MS = 1000;
 	let pressedAt = -Infinity;
 
 	function handlePointerDown(event: PointerEvent) {
 		if (isRecording || disabled || isLoading || unavailableReason) return;
 
-		if (event.pointerType !== 'mouse' || event.button !== 0) return;
+		if (event.pointerType !== PointerType.MOUSE || event.button !== MouseButton.PRIMARY) return;
 
 		pressedAt = performance.now();
 		onMicClick?.();
@@ -63,17 +67,17 @@
 
 	// a touch presses at once, so only a mouse, a pen or the keyboard come ahead of the press
 	function handlePointerEnter(event: PointerEvent) {
-		if (event.pointerType !== 'touch' && !isRecording) onPrepare?.();
+		if (event.pointerType !== PointerType.TOUCH && !isRecording) onPrepare?.();
 	}
 
 	function handlePointerLeave(event: PointerEvent) {
-		if (event.pointerType !== 'touch') onPrepareEnd?.();
+		if (event.pointerType !== PointerType.TOUCH) onPrepareEnd?.();
 	}
 
 	function handleClick() {
 		// the click that ends the press that already started it; the recording bar may have
 		// taken the button's place meanwhile, so this one can also never come
-		if (performance.now() - pressedAt < PRESS_CLICK_MS) {
+		if (performance.now() - pressedAt < VOICE_PRESS_CLICK_MS) {
 			pressedAt = -Infinity;
 
 			return;

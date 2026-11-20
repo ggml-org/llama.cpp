@@ -21,7 +21,8 @@
 		ICON_CLASS_DEFAULT,
 		INITIAL_FILE_SIZE,
 		PROMPT_CONTENT_SEPARATOR,
-		SETTING_CONFIG_DEFAULT
+		SETTING_CONFIG_DEFAULT,
+		VOICE_EDITOR_SELECTOR
 	} from '#lib/constants/index.ts';
 	import {
 		ContentPartType,
@@ -633,7 +634,7 @@
 		if (voice.showButton && !voice.isActive) warmUpVoiceCapture();
 
 		// the voice message's live text shown as the placeholder turns into text to edit
-		if (voicePlaceholder && (event.target as Element | null)?.closest('.cm-editor')) {
+		if (voicePlaceholder && (event.target as Element | null)?.closest(VOICE_EDITOR_SELECTOR)) {
 			voice.adoptLiveText();
 		}
 	}

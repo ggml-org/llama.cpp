@@ -1,3 +1,5 @@
+import type { RealtimeUnsupportedReason } from './enums.js';
+
 /** A realtime session failed; the caller can transcribe the clip over HTTP instead. */
 export class RealtimeError extends Error {
 	constructor(message: string, options?: { cause?: unknown }) {
@@ -12,9 +14,9 @@ export class RealtimeError extends Error {
  * checks an API key, which a browser websocket cannot send.
  */
 export class RealtimeUnsupportedError extends RealtimeError {
-	readonly reason: 'model' | 'connection';
+	readonly reason: RealtimeUnsupportedReason;
 
-	constructor(message: string, reason: 'model' | 'connection', options?: { cause?: unknown }) {
+	constructor(message: string, reason: RealtimeUnsupportedReason, options?: { cause?: unknown }) {
 		super(message, options);
 		this.name = 'RealtimeUnsupportedError';
 		this.reason = reason;

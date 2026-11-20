@@ -22,11 +22,14 @@ import {
 } from '@ggml-org/llama-voice';
 import {
 	SETTINGS_KEYS,
+	VOICE_CLIP_EXTENSION,
+	VOICE_CLIP_ID_LENGTH,
 	VOICE_CLIP_NAME_PREFIX,
+	VOICE_ELAPSED_TICK_MS,
 	VOICE_MODE_MESSAGE,
 	VOICE_SEPARATE_MODEL_HINT_LOCALSTORAGE_KEY
 } from '#lib/constants/index.ts';
-import { MimeTypeAudio, VoiceMode } from '#lib/enums/index.ts';
+import { BooleanString, ChatFormVoiceState, MimeTypeAudio, VoiceMode } from '#lib/enums/index.ts';
 import { VoiceService } from '#lib/services/voice.service.ts';
 import {
 	serverStore,
@@ -53,9 +56,6 @@ export interface VoiceRecorderLike {
 	cancel(): void;
 }
 
-/** Where a recording is: off, waiting for the microphone, recording, or waiting for dictated text. */
-export type ChatFormVoiceState = 'idle' | 'starting' | 'recording' | 'transcribing';
-
 interface UseChatFormVoiceOptions {
 	recorder: VoiceRecorderLike;
 	getValue: () => string;
@@ -69,11 +69,9 @@ interface UseChatFormVoiceOptions {
 	onMicError: (message: string | null) => void;
 }
 
-const ELAPSED_TICK_MS = 200;
-
 function readHintSeen(): boolean {
 	try {
-		return localStorage.getItem(VOICE_SEPARATE_MODEL_HINT_LOCALSTORAGE_KEY) === 'true';
+		return localStorage.getItem(VOICE_SEPARATE_MODEL_HINT_LOCALSTORAGE_KEY) === BooleanString.TRUE;
 	} catch {
 		return false;
 	}
@@ -81,7 +79,7 @@ function readHintSeen(): boolean {
 
 function writeHintSeen(): void {
 	try {
-		localStorage.setItem(VOICE_SEPARATE_MODEL_HINT_LOCALSTORAGE_KEY, 'true');
+		localStorage.setItem(VOICE_SEPARATE_MODEL_HINT_LOCALSTORAGE_KEY, BooleanString.TRUE);
 	} catch {
 		// private mode: the hint shows again next time
 	}
@@ -106,7 +104,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 	const anyAudioModel = $derived(voiceStore.anyAudioModel);
 
 	let hintSeen = $state(readHintSeen());
-	let state = $state<ChatFormVoiceState>('idle');
+	let state = $state<ChatFormVoiceState>(ChatFormVoiceState.IDLE);
 	let elapsedMs = $state(0);
 	// the mode of the recording under way, fixed when it starts
 	let recordingMode = $state<VoiceMode>(VoiceMode.UNAVAILABLE);
@@ -124,7 +122,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		getValue: options.getValue,
 		onChange: () => dictationVersion++,
 		onError: (error) =>
-			toast.error(error instanceof Error ? error.message : 'Transcription failed'),
+			toast.error(error instanceof Error ? error.message : VOICE_MODE_MESSAGE.transcriptionFailed),
 		setCaretOffset: options.setCaretOffset,
 		setValue: options.setValue
 	});
@@ -142,7 +140,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		const startedAt = Date.now();
 
 		elapsedMs = 0;
-		ticker = setInterval(() => (elapsedMs = Date.now() - startedAt), ELAPSED_TICK_MS);
+		ticker = setInterval(() => (elapsedMs = Date.now() - startedAt), VOICE_ELAPSED_TICK_MS);
 	}
 
 	function stopTicker() {
@@ -157,7 +155,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 	function adoptLiveText() {
 		if (recordingMode !== VoiceMode.VOICE_MESSAGE || dictation.active) return;
 
-		if (state !== 'starting' && state !== 'recording') return;
+		if (state !== ChatFormVoiceState.STARTING && state !== ChatFormVoiceState.RECORDING) return;
 
 		dictation.begin({ at: options.getValue().length, keepsEdits: true });
 		dictation.write(recorder?.liveText ?? '');
@@ -178,14 +176,15 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 	 * recording starts at once. Let go shortly after the pointer leaves (unprepare).
 	 */
 	async function prepare() {
-		if (!recorder || state !== 'idle' || resolution.mode === VoiceMode.UNAVAILABLE) return;
+		if (!recorder || state !== ChatFormVoiceState.IDLE || resolution.mode === VoiceMode.UNAVAILABLE)
+			return;
 
 		preparing = true;
 
 		const wiring = await wiringFor(resolution.mode, resolution.transcriptionModel);
 
 		// the pointer may have left meanwhile, and a press asks for its own microphone
-		if (preparing && state === 'idle') warmup.open(wiring.capture);
+		if (preparing && state === ChatFormVoiceState.IDLE) warmup.open(wiring.capture);
 	}
 
 	function unprepare() {
@@ -194,7 +193,8 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 	}
 
 	async function start() {
-		if (!recorder || state !== 'idle' || resolution.mode === VoiceMode.UNAVAILABLE) return;
+		if (!recorder || state !== ChatFormVoiceState.IDLE || resolution.mode === VoiceMode.UNAVAILABLE)
+			return;
 
 		const mode = resolution.mode;
 		const model = resolution.transcriptionModel;
@@ -205,7 +205,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		}
 
 		recordingMode = mode;
-		state = 'starting';
+		state = ChatFormVoiceState.STARTING;
 
 		if (mode === VoiceMode.DICTATION) dictation.begin();
 
@@ -232,7 +232,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		} catch (error) {
 			if (run !== generation) return;
 
-			state = 'idle';
+			state = ChatFormVoiceState.IDLE;
 			dictation.cancel();
 
 			const message =
@@ -248,12 +248,12 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		if (run !== generation) return;
 
 		options.onMicError(null);
-		state = 'recording';
+		state = ChatFormVoiceState.RECORDING;
 		startTicker();
 	}
 
 	async function stop() {
-		if (!recorder || state !== 'recording') return;
+		if (!recorder || state !== ChatFormVoiceState.RECORDING) return;
 
 		const run = generation;
 		const mode = recordingMode;
@@ -267,7 +267,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		} catch (error) {
 			console.error('Failed to stop the recording:', error);
 			dictation.cancel();
-			state = 'idle';
+			state = ChatFormVoiceState.IDLE;
 
 			return;
 		}
@@ -278,7 +278,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 			// the clip carries the text from here: what the user edited is its transcript
 			const taken = dictation.take();
 
-			state = 'idle';
+			state = ChatFormVoiceState.IDLE;
 			await attachVoiceMessage(result, taken?.userEdited ? taken.text : null);
 
 			return;
@@ -286,17 +286,20 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 
 		// with live text the message already shows it and can be edited, while the whole
 		// recording is transcribed once more to refine it; otherwise wait for the text
-		state = result.transcript && !result.liveText ? 'transcribing' : 'idle';
+		state =
+			result.transcript && !result.liveText
+				? ChatFormVoiceState.TRANSCRIBING
+				: ChatFormVoiceState.IDLE;
 		await dictation.finish(result);
 
-		if (run === generation) state = 'idle';
+		if (run === generation) state = ChatFormVoiceState.IDLE;
 	}
 
 	async function attachVoiceMessage(
 		{ clip, transcript }: VoiceSessionResult,
 		edited: string | null = null
 	) {
-		const name = `${VOICE_CLIP_NAME_PREFIX}${Date.now()}-${uuid().slice(0, 8)}.wav`;
+		const name = `${VOICE_CLIP_NAME_PREFIX}${Date.now()}-${uuid().slice(0, VOICE_CLIP_ID_LENGTH)}${VOICE_CLIP_EXTENSION}`;
 		const file = new File([clip.blob], name, { type: MimeTypeAudio.WAV });
 
 		if (transcript) voiceTranscriptsStore.track(name, transcript);
@@ -320,7 +323,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		stopTicker();
 		recorder?.cancel();
 		dictation.cancel();
-		state = 'idle';
+		state = ChatFormVoiceState.IDLE;
 	}
 
 	/** Follows an edit the user typed while dictation writes into the message. */
@@ -332,7 +335,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		preparing = false;
 		warmup.drop();
 
-		if (state !== 'idle') cancel();
+		if (state !== ChatFormVoiceState.IDLE) cancel();
 	});
 
 	return {
@@ -347,7 +350,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		},
 		/** A recording (or its dictated text) is under way: the form shows the recording bar. */
 		get isActive() {
-			return state !== 'idle';
+			return state !== ChatFormVoiceState.IDLE;
 		},
 		/** The dictated text shown is still being refined by a pass over the whole recording. */
 		get isRefining() {
@@ -372,13 +375,13 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 				: '';
 		},
 		get mode() {
-			return state === 'idle' ? resolution.mode : recordingMode;
+			return state === ChatFormVoiceState.IDLE ? resolution.mode : recordingMode;
 		},
 		/** The pointer or the focus is on the microphone button: see prepare(). */
 		prepare,
 		/** The recording's speech is too quiet even at the highest gain: the form says so. */
 		get quiet() {
-			return state === 'recording' && (recorder?.quiet ?? false);
+			return state === ChatFormVoiceState.RECORDING && (recorder?.quiet ?? false);
 		},
 		get resolution() {
 			return resolution;

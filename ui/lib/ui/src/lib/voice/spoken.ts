@@ -1,5 +1,8 @@
-/** A peak under this share of the clip's loudest one counts as a pause, not speech. */
-const SPEECH_FLOOR = 0.15;
+import {
+	VOICE_SPEECH_PEAK_FLOOR,
+	VOICE_WHITESPACE_PATTERN,
+	VOICE_WORD_PATTERN
+} from '../constants/voice.constants.js';
 
 /**
  * How many characters of `text` have been spoken `elapsedMs` into a clip, estimated
@@ -27,7 +30,9 @@ export function speechFraction(peaks: readonly number[], position: number): numb
 
 	if (peaks.length === 0 || loudest <= 0) return clamp(position);
 
-	const weights = peaks.map((peak) => (Number.isFinite(peak) && peak > loudest * SPEECH_FLOOR ? 1 : 0));
+	const weights = peaks.map((peak) =>
+		Number.isFinite(peak) && peak > loudest * VOICE_SPEECH_PEAK_FLOOR ? 1 : 0
+	);
 	const total = weights.reduce<number>((sum, weight) => sum + weight, 0);
 
 	if (total === 0) return clamp(position);
@@ -48,7 +53,7 @@ function wordEnd(text: string, index: number): number {
 	if (index <= 0) return 0;
 	if (index >= text.length) return text.length;
 
-	const next = text.slice(index).search(/\s/);
+	const next = text.slice(index).search(VOICE_WHITESPACE_PATTERN);
 
 	return next === -1 ? text.length : index + next;
 }
@@ -59,12 +64,9 @@ function clamp(value: number): number {
 
 /** A text cut into words, each with the whitespace after it and where it starts. */
 export function spokenWords(text: string): { start: number; word: string }[] {
-	const words: { start: number; word: string }[] = [];
-	const pattern = /\s*\S+\s*|\s+/g;
-
-	for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
-		words.push({ start: match.index, word: match[0] });
-	}
-
-	return words;
+	// matchAll works on a copy of the pattern, so the shared one keeps no lastIndex
+	return [...text.matchAll(VOICE_WORD_PATTERN)].map((match) => ({
+		start: match.index,
+		word: match[0]
+	}));
 }

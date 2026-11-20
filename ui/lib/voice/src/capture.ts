@@ -1,7 +1,10 @@
 import { captureContext, idleCaptureContext } from './audio-context.js';
 import {
 	VOICE_ANALYSER_FFT_SIZE,
+	VOICE_AUDIO_CONTEXT_STATE,
 	VOICE_CHUNK_MS,
+	VOICE_DOM_ERROR,
+	VOICE_ERROR_MESSAGE,
 	VOICE_FIRST_AUDIO_TIMEOUT_MS,
 	VOICE_GAIN,
 	VOICE_LEVELS_INTERVAL_MS,
@@ -9,6 +12,7 @@ import {
 	VOICE_PEAKS_COUNT,
 	VOICE_SAMPLE_RATE
 } from './constants.js';
+import { VoiceCaptureState } from './enums.js';
 import { VoiceCaptureError } from './errors.js';
 import { normalizeSpeech, SpeechGain } from './gain.js';
 import { LevelHistory, rms, rmsToLevel } from './levels.js';
@@ -19,7 +23,6 @@ import { computePeaks } from './peaks.js';
 import { describeMicrophoneError } from './support.js';
 import type {
 	VoiceCaptureOptions,
-	VoiceCaptureState,
 	VoiceClip,
 	VoiceLevelsListener,
 	VoicePcmListener,
@@ -54,7 +57,7 @@ export class VoiceCapture {
 	readonly sampleRate: number;
 	private chunks: Int16Array[] = [];
 	private readonly chunkSamples: number;
-	private currentState: VoiceCaptureState = 'idle';
+	private currentState: VoiceCaptureState = VoiceCaptureState.IDLE;
 	// resolves the wait of start() for the first audio
 	private firstAudio: (() => void) | null = null;
 	private frame: number | null = null;
@@ -105,7 +108,7 @@ export class VoiceCapture {
 		this.chunks = [];
 		this.partial = [];
 		this.recordedSamples = 0;
-		this.currentState = 'idle';
+		this.currentState = VoiceCaptureState.IDLE;
 	}
 
 	constructor(options: VoiceCaptureOptions = {}) {
@@ -146,14 +149,17 @@ export class VoiceCapture {
 	 * @throws VoiceCaptureError with a message for the user when the microphone does not start
 	 */
 	async start(): Promise<void> {
-		if (this.currentState === 'starting' || this.currentState === 'recording') {
-			throw new Error('Voice capture already started');
+		if (
+			this.currentState === VoiceCaptureState.STARTING ||
+			this.currentState === VoiceCaptureState.RECORDING
+		) {
+			throw new Error(VOICE_ERROR_MESSAGE.captureAlreadyStarted);
 		}
 
 		const generation = ++this.generation;
 		const dropped = () => generation !== this.generation;
 
-		this.currentState = 'starting';
+		this.currentState = VoiceCaptureState.STARTING;
 		this.chunks = [];
 		this.partial = [];
 		this.recordedSamples = 0;
@@ -174,7 +180,7 @@ export class VoiceCapture {
 			context = shared.context;
 
 			// resumed now, while the click still allows it: the microphone may take a while
-			if (context.state === 'suspended') context.resume().catch(() => {});
+			if (context.state === VOICE_AUDIO_CONTEXT_STATE.SUSPENDED) context.resume().catch(() => {});
 
 			const request = microphoneRequest(this.options);
 
@@ -182,7 +188,8 @@ export class VoiceCapture {
 			timing.mark('microphone');
 			timing.note(checkProcessing(stream, request.audio as MediaTrackConstraints));
 
-			if (dropped()) throw new DOMException('Voice capture cancelled', 'AbortError');
+			if (dropped())
+				throw new DOMException(VOICE_ERROR_MESSAGE.captureCancelled, VOICE_DOM_ERROR.ABORT);
 
 			await shared.ready;
 			timing.mark('audio context');
@@ -200,7 +207,7 @@ export class VoiceCapture {
 			if (dropped()) {
 				tap.disconnect();
 
-				throw new DOMException('Voice capture cancelled', 'AbortError');
+				throw new DOMException(VOICE_ERROR_MESSAGE.captureCancelled, VOICE_DOM_ERROR.ABORT);
 			}
 
 			// the tap only runs while it is pulled by the destination, muted so nothing is heard
@@ -211,7 +218,7 @@ export class VoiceCapture {
 
 			this.graph = { analyser, context, mute, source, stream, tap };
 			started = true;
-			this.currentState = 'recording';
+			this.currentState = VoiceCaptureState.RECORDING;
 			this.watchLevels(analyser);
 			addEventListener('pagehide', this.handlePageHide);
 
@@ -219,17 +226,21 @@ export class VoiceCapture {
 			timing.mark('first audio');
 			timing.report();
 
-			if (dropped()) throw new DOMException('Voice capture cancelled', 'AbortError');
+			if (dropped())
+				throw new DOMException(VOICE_ERROR_MESSAGE.captureCancelled, VOICE_DOM_ERROR.ABORT);
 		} catch (error) {
 			if (!started) releaseDevice(stream, context);
 
 			if (!dropped()) {
-				this.currentState = 'idle';
+				this.currentState = VoiceCaptureState.IDLE;
 			}
 
-			if (error instanceof DOMException && error.name === 'AbortError' && dropped()) throw error;
+			if (error instanceof DOMException && error.name === VOICE_DOM_ERROR.ABORT && dropped())
+				throw error;
 
-			throw new VoiceCaptureError(describeMicrophoneError(error), { cause: error });
+			throw new VoiceCaptureError(describeMicrophoneError(error), {
+				cause: error
+			});
 		}
 	}
 
@@ -237,14 +248,14 @@ export class VoiceCapture {
 	async stop(): Promise<VoiceClip> {
 		const graph = this.graph;
 
-		if (!graph || this.currentState !== 'recording') {
-			throw new Error('No voice capture to stop');
+		if (!graph || this.currentState !== VoiceCaptureState.RECORDING) {
+			throw new Error(VOICE_ERROR_MESSAGE.captureNotStarted);
 		}
 
 		this.generation++;
 		await graph.tap.flush();
 
-		if (this.graph !== graph) throw new Error('Voice capture cancelled');
+		if (this.graph !== graph) throw new Error(VOICE_ERROR_MESSAGE.captureCancelled);
 
 		this.flushPartial();
 		this.teardown();
@@ -256,7 +267,7 @@ export class VoiceCapture {
 			: recorded;
 
 		this.chunks = [];
-		this.currentState = 'stopped';
+		this.currentState = VoiceCaptureState.STOPPED;
 
 		return {
 			blob: encodeWav(samples, this.sampleRate),
@@ -286,7 +297,7 @@ export class VoiceCapture {
 	}
 
 	private handleBlock(block: Float32Array): void {
-		if (!this.resampler || this.currentState !== 'recording') return;
+		if (!this.resampler || this.currentState !== VoiceCaptureState.RECORDING) return;
 
 		this.firstAudio?.();
 

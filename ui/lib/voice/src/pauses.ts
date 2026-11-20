@@ -1,3 +1,4 @@
+import { VOICE_PAUSE_DEFAULTS } from './constants.js';
 import { levelToDb } from './levels.js';
 import { SpeechDetector } from './speech-detector.js';
 
@@ -22,9 +23,6 @@ export interface PauseDetectorOptions {
 	maxSegmentMs?: number;
 }
 
-/** How far past its longest length a piece waits for a quiet moment before it is cut anyway. */
-const OVERTIME = 1.5;
-
 export class PauseDetector {
 	private readonly detector = new SpeechDetector();
 	private readonly intervalMs: number;
@@ -42,9 +40,9 @@ export class PauseDetector {
 
 	constructor(options: PauseDetectorOptions) {
 		this.intervalMs = options.intervalMs;
-		this.pauseMs = options.pauseMs ?? 500;
-		this.minSpeechMs = options.minSpeechMs ?? 300;
-		this.maxSegmentMs = options.maxSegmentMs ?? 10_000;
+		this.pauseMs = options.pauseMs ?? VOICE_PAUSE_DEFAULTS.PAUSE_MS;
+		this.minSpeechMs = options.minSpeechMs ?? VOICE_PAUSE_DEFAULTS.MIN_SPEECH_MS;
+		this.maxSegmentMs = options.maxSegmentMs ?? VOICE_PAUSE_DEFAULTS.MAX_SEGMENT_MS;
 	}
 
 	/** Takes the newest level; true when this is a place to cut the recording. */
@@ -62,7 +60,7 @@ export class PauseDetector {
 		const spoke = this.speechMs >= this.minSpeechMs;
 
 		// no quiet moment came: the text must not wait for one that a noisy room never has
-		if (spoke && this.segmentMs >= this.maxSegmentMs * OVERTIME) {
+		if (spoke && this.segmentMs >= this.maxSegmentMs * VOICE_PAUSE_DEFAULTS.OVERTIME) {
 			this.reset();
 
 			return true;

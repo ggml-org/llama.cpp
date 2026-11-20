@@ -12,7 +12,13 @@
 	import { Skeleton } from '../ui/skeleton';
 	import VoiceSpokenText from './VoiceSpokenText.svelte';
 	import { cn } from '../ui/utils';
-	import type { VoiceTranscriptStatus } from '../../voice/types';
+	import {
+		VOICE_INTERACTIVE_SELECTOR,
+		VOICE_NO_HOVER_QUERY,
+		VOICE_TRANSCRIPT_LABELS
+	} from '../../constants/voice.constants';
+	import { PointerType } from '../../enums/ui.enums';
+	import { VoiceTranscriptStatus } from '../../enums/voice.enums';
 
 	interface Props {
 		/** The clip, usually a VoiceWaveform. */
@@ -36,7 +42,6 @@
 		transcript = null
 	}: Props = $props();
 
-	const INTERACTIVE = 'button, a, input, textarea, select, [role="slider"], [tabindex]';
 	const id = $props.id();
 
 	let root = $state<HTMLDivElement>();
@@ -46,14 +51,14 @@
 	let hovered = $state(false);
 	let keyboardFocus = $state(false);
 
-	let shown = $derived<VoiceTranscriptStatus>(status ?? (transcript ? 'done' : 'idle'));
-	let hasContent = $derived(shown !== 'idle');
+	let shown = $derived<VoiceTranscriptStatus>(status ?? (transcript ? VoiceTranscriptStatus.DONE : VoiceTranscriptStatus.IDLE));
+	let hasContent = $derived(shown !== VoiceTranscriptStatus.IDLE);
 	let showToggle = $derived(hasContent && (noHover || open));
 	let revealed = $derived(hasContent && (open || hovered || keyboardFocus));
 
 	// plain matchMedia: in the app's type check svelte/reactivity resolves to the library's own copy of Svelte
 	$effect(() => {
-		const query = window.matchMedia('(hover: none)');
+		const query = window.matchMedia(VOICE_NO_HOVER_QUERY);
 		const update = () => (noHover = query.matches);
 
 		update();
@@ -63,17 +68,17 @@
 	});
 
 	function handlePointerEnter(event: PointerEvent) {
-		if (event.pointerType === 'mouse') hovered = true;
+		if (event.pointerType === PointerType.MOUSE) hovered = true;
 	}
 
 	function handlePointerLeave(event: PointerEvent) {
-		if (event.pointerType === 'mouse') hovered = false;
+		if (event.pointerType === PointerType.MOUSE) hovered = false;
 	}
 
 	// a tap where there is no hover toggles; a mouse opens it by hovering instead
 	function handlePointerUp(event: PointerEvent) {
-		if (!hasContent || event.pointerType === 'mouse') return;
-		if ((event.target as Element | null)?.closest(INTERACTIVE)) return;
+		if (!hasContent || event.pointerType === PointerType.MOUSE) return;
+		if ((event.target as Element | null)?.closest(VOICE_INTERACTIVE_SELECTOR)) return;
 
 		open = !open;
 	}
@@ -112,7 +117,7 @@
 				class="size-8 shrink-0 rounded-full p-0 text-muted-foreground"
 				aria-controls={id}
 				aria-expanded={open}
-				aria-label={open ? 'Hide transcript' : 'Show transcript'}
+				aria-label={open ? VOICE_TRANSCRIPT_LABELS.hide : VOICE_TRANSCRIPT_LABELS.show}
 				onclick={() => (open = !open)}
 				variant="ghost"
 			>
@@ -133,26 +138,26 @@
 				'grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none',
 				revealed ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
 			]}
-			aria-busy={shown === 'transcribing' || undefined}
+			aria-busy={shown === VoiceTranscriptStatus.TRANSCRIBING || undefined}
 			data-slot="voice-transcript"
 		>
 			<div class="min-h-0 overflow-hidden">
 				<div class="pt-2">
-					{#if shown === 'transcribing'}
+					{#if shown === VoiceTranscriptStatus.TRANSCRIBING}
 						<div class="flex flex-col gap-1.5">
-							<span class="text-caption text-muted-foreground">Transcribing...</span>
+							<span class="text-caption text-muted-foreground">{VOICE_TRANSCRIPT_LABELS.transcribing}</span>
 							<Skeleton
 								class="h-2.5 w-3/4 rounded-full bg-muted-foreground/20 motion-reduce:animate-none"
 							/>
 						</div>
-					{:else if shown === 'error'}
-						<p class="text-caption text-muted-foreground">Transcription unavailable</p>
+					{:else if shown === VoiceTranscriptStatus.ERROR}
+						<p class="text-caption text-muted-foreground">{VOICE_TRANSCRIPT_LABELS.error}</p>
 					{:else if transcript}
 						<p class="text-body-sm break-words whitespace-pre-wrap text-muted-foreground">
-							<span class="sr-only">Transcript: </span><VoiceSpokenText {spoken} text={transcript} />
+							<span class="sr-only">{VOICE_TRANSCRIPT_LABELS.prefix}</span><VoiceSpokenText {spoken} text={transcript} />
 						</p>
 					{:else}
-						<p class="text-caption text-muted-foreground">No speech detected</p>
+						<p class="text-caption text-muted-foreground">{VOICE_TRANSCRIPT_LABELS.empty}</p>
 					{/if}
 				</div>
 			</div>

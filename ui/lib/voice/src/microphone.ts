@@ -6,15 +6,20 @@
  * other value is a device id from enumerateDevices().
  */
 
-import { VOICE_MICROPHONE_CONSTRAINTS } from './constants.js';
+import {
+	VOICE_AUDIO_INPUT_KIND,
+	VOICE_BLUETOOTH_LABEL_PATTERN,
+	VOICE_BUILT_IN_LABEL_PATTERN,
+	VOICE_DEVICE_ALIAS,
+	VOICE_MICROPHONE_CONSTRAINTS,
+	VOICE_MICROPHONE_PERMISSION
+} from './constants.js';
 
 export const VOICE_MICROPHONE_AUTO = 'auto';
 export const VOICE_MICROPHONE_DEFAULT = 'default';
 
-const BLUETOOTH = /bluetooth|airpods|beats|hands-?free|headset|buds/i;
-const BUILT_IN = /built-?in|internal|macbook|imac|laptop/i;
 // Chrome lists the system default and the communications device as extra entries
-const ALIASES = new Set(['default', 'communications']);
+const ALIASES = new Set<string>(Object.values(VOICE_DEVICE_ALIAS));
 
 export interface Microphone {
 	deviceId: string;
@@ -28,7 +33,7 @@ export async function listMicrophones(): Promise<Microphone[]> {
 	const devices = await navigator.mediaDevices.enumerateDevices();
 
 	return devices
-		.filter((device) => device.kind === 'audioinput' && !ALIASES.has(device.deviceId))
+		.filter((device) => device.kind === VOICE_AUDIO_INPUT_KIND && !ALIASES.has(device.deviceId))
 		.map((device) => ({ deviceId: device.deviceId, label: device.label }));
 }
 
@@ -40,7 +45,7 @@ export function pickMicrophone(
 	devices: readonly Pick<MediaDeviceInfo, 'deviceId' | 'kind' | 'label'>[],
 	choice: string
 ): string | undefined {
-	const inputs = devices.filter((device) => device.kind === 'audioinput');
+	const inputs = devices.filter((device) => device.kind === VOICE_AUDIO_INPUT_KIND);
 
 	if (choice === VOICE_MICROPHONE_DEFAULT) return undefined;
 
@@ -51,13 +56,16 @@ export function pickMicrophone(
 
 	// Chrome names the default entry after the device, e.g. "Default - AirPods (Bluetooth)";
 	// elsewhere the first input is the default
-	const fallback = inputs.find((device) => device.deviceId === 'default') ?? inputs[0];
+	const fallback =
+		inputs.find((device) => device.deviceId === VOICE_DEVICE_ALIAS.DEFAULT) ?? inputs[0];
 
-	if (!fallback || !BLUETOOTH.test(fallback.label)) return undefined;
+	if (!fallback || !VOICE_BLUETOOTH_LABEL_PATTERN.test(fallback.label)) return undefined;
 
 	return inputs.find(
 		(device) =>
-			!ALIASES.has(device.deviceId) && BUILT_IN.test(device.label) && !BLUETOOTH.test(device.label)
+			!ALIASES.has(device.deviceId) &&
+			VOICE_BUILT_IN_LABEL_PATTERN.test(device.label) &&
+			!VOICE_BLUETOOTH_LABEL_PATTERN.test(device.label)
 	)?.deviceId;
 }
 
@@ -104,9 +112,11 @@ export function microphoneRequest(options: {
  */
 export async function microphoneAllowed(): Promise<boolean> {
 	try {
-		const status = await navigator.permissions?.query({ name: 'microphone' as PermissionName });
+		const status = await navigator.permissions?.query({
+			name: VOICE_MICROPHONE_PERMISSION.NAME as PermissionName
+		});
 
-		return status?.state === 'granted';
+		return status?.state === VOICE_MICROPHONE_PERMISSION.GRANTED;
 	} catch {
 		return false;
 	}

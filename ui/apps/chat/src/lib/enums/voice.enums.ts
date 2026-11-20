@@ -1,3 +1,11 @@
+/** Where the chat form's recording is: off, waiting for the microphone, recording, or waiting for dictated text. */
+export enum ChatFormVoiceState {
+	IDLE = 'idle',
+	RECORDING = 'recording',
+	STARTING = 'starting',
+	TRANSCRIBING = 'transcribing'
+}
+
 /** The Voice input setting: what the microphone does with a model that understands audio. */
 export enum VoiceInputMode {
 	/** Send the voice to a model with audio input, dictate otherwise. */
