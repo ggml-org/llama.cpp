@@ -429,6 +429,8 @@ extern "C" {
 
         GGML_OP_GLU,
 
+        GGML_OP_SLEEP,
+
         GGML_OP_COUNT,
     };
 
@@ -1314,12 +1316,6 @@ extern "C" {
 
     // indirect matrix multiplication
     // an id of -1 skips the slot and zeroes the matching row of the result
-    //
-    // [TAG_MUL_MAT_ID_DUPLICATE_ID]
-    // note: this op has undefined behaviour if a given `a` is referenced more than once for a given `b`
-    //       (i.e. duplicate experts per token are not guaranteed to be supported in all backends)
-    // TODO: add backend support: https://github.com/ggml-org/llama.cpp/pull/29998#issuecomment-6153742533
-    // the CPU backend skips negative ids, their rows of the result are zero
     GGML_API struct ggml_tensor * ggml_mul_mat_id(
             struct ggml_context * ctx,
             struct ggml_tensor  * as,
@@ -2598,6 +2594,12 @@ extern "C" {
             ggml_custom_op_t      fun,
             int                   n_tasks,
             void                * userdata);
+
+    // Busy-wait operator for scheduling and backend testing.
+    GGML_API struct ggml_tensor * ggml_sleep(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,   // wait after this tensor has executed, return value is simply a full view of this tensor
+            int32_t               us); // amount of time to wait in microseconds
 
     // loss function
 

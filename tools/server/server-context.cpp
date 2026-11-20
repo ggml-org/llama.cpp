@@ -353,6 +353,8 @@ struct server_slot {
             return false;
         }
 
+        const int64_t t_start = ggml_time_us();
+
         const size_t cur_size_tgt =           llama_state_seq_get_size_ext(ctx_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
         const size_t cur_size_dft = ctx_dft ? llama_state_seq_get_size_ext(ctx_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE) : 0;
 
@@ -373,6 +375,8 @@ struct server_slot {
             prompt_cache.states.pop_back();
             return false;
         }
+
+        SLT_TRC(*this, "prompt cache save took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
 
         return true;
     }
