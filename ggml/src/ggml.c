@@ -54,6 +54,8 @@
 
 #define UNUSED GGML_UNUSED
 
+static_assert(GGML_VERSION_MAJOR == 1, "major version update requires attending to all [TAG_GGML_VERSION_MAJOR_UPDATE] tags");
+
 uint64_t ggml_graph_next_uid(void) {
 #ifdef _MSC_VER
 #if defined(_WIN32)
