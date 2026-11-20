@@ -13,13 +13,19 @@ void llama_model_qwen3vl::load_arch_hparams(llama_model_loader & ml) {
     }
 }
 
-void llama_model_qwen3vl::load_arch_tensors(llama_model_loader &) {
+void llama_model_qwen3vl::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
+    // the output head can be smaller than the vocab (Qwen3-TTS codec head, Qwen3-ForcedAligner timestamp head)
     int64_t n_vocab_out = n_vocab;
-    if (arch == LLM_ARCH_QWEN3TTS) {
+    if (const ggml_tensor * meta = ml.get_tensor_meta(tn(LLM_TENSOR_OUTPUT, "weight").str().c_str())) {
+        n_vocab_out = meta->ne[1];
+    } else if (arch == LLM_ARCH_QWEN3TTS) {
         // [TAG_LLAMA_N_VOCAB_OUT]
         n_vocab_out = 3072;
+    }
+    if (n_vocab_out < 1 || n_vocab_out > n_vocab) {
+        throw std::runtime_error(format("tensor 'output.weight' has invalid head size %lld (vocab size %lld)", (long long) n_vocab_out, (long long) n_vocab));
     }
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
@@ -79,6 +85,8 @@ llama_model_qwen3vl::graph::graph(const llm_graph_params & params) : llm_graph_c
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
+        res->t_layer_inp[il] = inpL;
+
         ggml_tensor * inpSA = inpL;
 
         // norm
@@ -164,7 +172,7 @@ llama_model_qwen3vl::graph::graph(const llm_graph_params & params) : llm_graph_c
     int64_t n_vocab_in  = model.tok_embd->ne[1];
     int64_t n_vocab_out = model.output->ne[1];
     if (n_vocab_in > n_vocab_out) {
-        // case: Qwen3TTS model with codec_head as output
+        // case: output head smaller than vocab, see load_arch_tensors
         GGML_ASSERT(model.output_norm);
         int64_t pad = n_vocab_in - n_vocab_out;
 

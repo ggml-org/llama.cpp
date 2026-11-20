@@ -712,8 +712,8 @@ static bool ggml_vk_buffer_host_read_direct(const vk_buffer & buf) {
     // If the device is not an UMA device the memory is host-accessible through rebar. While writing
     // through PCIe is sufficient fast reading back data from PCIe is slower than going through
     // the HW device to host copy path.
-    // AMD UMA: uncached host-visible memory is write-combined, CPU reads are slow
-    const bool slow_host_read = buf->device->vendor_id == VK_VENDOR_ID_AMD &&
+    // UMA: uncached host-visible memory is write-combined, CPU reads are slow (except Nvidia, based on benchmarks)
+    const bool slow_host_read = buf->device->vendor_id != VK_VENDOR_ID_NVIDIA &&
                                 !(buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached);
     return (buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) && buf->device->uma && !slow_host_read;
 }
