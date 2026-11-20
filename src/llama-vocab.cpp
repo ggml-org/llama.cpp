@@ -3062,32 +3062,40 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         // TODO: convert scripts should provide these tokens through the KV metadata LLM_KV_TOKENIZER_...
         //       for now, we apply this workaround to find the tokens based on their text
 
+        // find EOT token: "<|eot_id|>", "<|im_end|>", "<end_of_turn>", etc.
+        // look up the names in list order: token_to_id is unordered, and a vocab can have more than one of them (Llama 3 has "<|eot_id|>" and "<|end_of_text|>")
+        if (special_eot_id == LLAMA_TOKEN_NULL) {
+            static const char * eot_names[] = {
+                "<|eot_id|>",
+                "<|im_end|>",
+                "<|end|>",
+                "<end_of_turn>",
+                "<|endoftext|>",
+                "<|end_of_text|>", // granite
+                "<EOT>",
+                "_<EOT>",
+                "[EOT]", // Kimi-K2
+                "<｜end▁of▁sentence｜>", // DeepSeek
+                "<end_of_utterance>", // smoldocling
+            };
+            for (const char * name : eot_names) {
+                const auto it = token_to_id.find(name);
+                if (it == token_to_id.end()) {
+                    continue;
+                }
+                special_eot_id = it->second;
+                auto & attr = id_to_token[it->second].attr;
+                if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
+                    LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
+                            __func__, it->second, it->first.c_str());
+                    attr = (llama_token_attr) (attr | LLAMA_TOKEN_ATTR_CONTROL);
+                }
+                break;
+            }
+        }
+
         for (const auto & t : token_to_id) {
             auto & attr = id_to_token[t.second].attr;
-
-            // find EOT token: "<|eot_id|>", "<|im_end|>", "<end_of_turn>", etc.
-            if (special_eot_id == LLAMA_TOKEN_NULL) {
-                if (false
-                        || t.first == "<|eot_id|>"
-                        || t.first == "<|im_end|>"
-                        || t.first == "<|end|>"
-                        || t.first == "<end_of_turn>"
-                        || t.first == "<|endoftext|>"
-                        || t.first == "<|end_of_text|>" // granite
-                        || t.first == "<EOT>"
-                        || t.first == "_<EOT>"
-                        || t.first == "[EOT]" // Kimi-K2
-                        || t.first == "<｜end▁of▁sentence｜>" // DeepSeek
-                        || t.first == "<end_of_utterance>" // smoldocling
-                   ) {
-                    special_eot_id = t.second;
-                    if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
-                        LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
-                                __func__, t.second, t.first.c_str());
-                        attr = (llama_token_attr) (attr | LLAMA_TOKEN_ATTR_CONTROL);
-                    }
-                }
-            }
 
             // find EOM token: "<|eom_id|>"
             if (special_eom_id == LLAMA_TOKEN_NULL) {
