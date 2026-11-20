@@ -167,10 +167,10 @@ bool htp_dsv4_hc_pre_can_collapse(
     const struct ggml_tensor * weights,
     const struct ggml_tensor * dst
 ) {
-    if (x->type != GGML_TYPE_F32 || weights->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
-        return false;
-    }
-    if (x->nb[0] != sizeof(float) || weights->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
+    const auto is_valid_type = [](const ggml_tensor * t) {
+        return (t->type == GGML_TYPE_F32 || t->type == GGML_TYPE_F16) && t->nb[0] == ggml_type_size(t->type);
+    };
+    if (!is_valid_type(x) || !is_valid_type(weights) || !is_valid_type(dst)) {
         return false;
     }
     if (x->ne[1] != 4 || dst->ne[0] != x->ne[0]) {
@@ -250,16 +250,13 @@ bool htp_dsv4_hc_post_can_collapse(
     const struct ggml_tensor * comb,
     const struct ggml_tensor * dst
 ) {
-    if (x->type != GGML_TYPE_F32 || residual->type != GGML_TYPE_F32 || post->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+    const auto is_valid_type = [](const ggml_tensor * t) {
+        return (t->type == GGML_TYPE_F32 || t->type == GGML_TYPE_F16) && t->nb[0] == ggml_type_size(t->type);
+    };
+    if (!is_valid_type(x) || !is_valid_type(residual) || !is_valid_type(post) || !is_valid_type(dst)) {
         return false;
     }
-    if (comb && comb->type != GGML_TYPE_F32) {
-        return false;
-    }
-    if (x->nb[0] != sizeof(float) || residual->nb[0] != sizeof(float) || post->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
-        return false;
-    }
-    if (comb && comb->nb[0] != sizeof(float)) {
+    if (comb && !is_valid_type(comb)) {
         return false;
     }
     if (residual->ne[0] != x->ne[0] || residual->ne[1] != 4 || dst->ne[0] != x->ne[0] || dst->ne[1] != 4 || post->ne[0] != 4) {
@@ -864,6 +861,15 @@ static bool htp_lower_is_get_rows_root(
            (owner.inputs[0]->type != GGML_TYPE_F32 || ggml_hexagon_tensor_is_tiled(owner.inputs[0]));
 }
 
+static bool htp_lower_is_repeat_root(
+    const std::vector<htp_opnode> & nodes,
+    const std::unordered_map<const ggml_tensor *, size_t> & owner_idx,
+    const ggml_tensor * root
+) {
+    auto it = owner_idx.find(root);
+    return it != owner_idx.end() && nodes[it->second].opcode == HTP_OP_REPEAT;
+}
+
 static bool htp_lower_safe_gdn_output(
     const htp_opnode & owner,
     const ggml_tensor * root,
@@ -1067,6 +1073,13 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
                     return true;
                 }
             }
+        } else if (owner.opcode == HTP_OP_DSV4_HC_POST) {
+            if (owner.inputs.size() >= 2 && owner.inputs[1]) {
+                const ggml_tensor * res = owner.inputs[1];
+                if (!is_f16_tensor(res) && !is_weight_or_bcast(res, r)) {
+                    return true;
+                }
+            }
         }
         return false;
     };
@@ -1098,9 +1111,10 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
 
     auto is_selected_root = [&](const ggml_tensor * r) -> bool {
         if (htp_lower_is_mm_root(nodes, owner_idx, r) || htp_lower_is_fa_root(nodes, owner_idx, r) ||
-            (opt_oplower >= 2 &&
-             (htp_lower_is_rms_root(nodes, owner_idx, r) || htp_lower_is_ssm_conv_root(nodes, owner_idx, r) ||
-              htp_lower_is_get_rows_root(nodes, owner_idx, r)))) {
+            (opt_oplower >= 2 && (htp_lower_is_rms_root(nodes, owner_idx, r) ||
+                                  htp_lower_is_ssm_conv_root(nodes, owner_idx, r) ||
+                                  htp_lower_is_get_rows_root(nodes, owner_idx, r) ||
+                                  htp_lower_is_repeat_root(nodes, owner_idx, r)))) {
             return true;
         }
         if (opt_oplower >= 1) {

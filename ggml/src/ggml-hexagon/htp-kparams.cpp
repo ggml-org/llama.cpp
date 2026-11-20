@@ -2226,7 +2226,8 @@ static bool htp_kparams_solve_repeat(
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * dst  = op;
 
-    if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) || src0->type != dst->type) {
+    if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+        (dst->type != src0->type && !(src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F16))) {
         return false;
     }
     if (!ggml_can_repeat(src0, dst) || ggml_is_transposed(src0) || ggml_is_transposed(dst)) {
@@ -4979,7 +4980,10 @@ static bool htp_kparams_solve_dsv4_hc_pre_impl(
 ) {
     memset(kparams, 0, sizeof(*kparams));
 
-    if (x->type != GGML_TYPE_F32 || weights->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+    const auto is_valid_type = [](const ggml_tensor * t) {
+        return (t->type == GGML_TYPE_F32 || t->type == GGML_TYPE_F16) && t->nb[0] == ggml_type_size(t->type);
+    };
+    if (!is_valid_type(x) || !is_valid_type(weights) || !is_valid_type(dst)) {
         return false;
     }
     if (x->ne[1] != 4 || x->ne[3] != 1) {
@@ -4989,9 +4993,6 @@ static bool htp_kparams_solve_dsv4_hc_pre_impl(
         return false;
     }
     if (dst->ne[0] != x->ne[0] || dst->ne[1] != x->ne[2] || dst->ne[2] != 1 || dst->ne[3] != 1) {
-        return false;
-    }
-    if (x->nb[0] != sizeof(float) || weights->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
         return false;
     }
     if (ggml_is_permuted(x) || ggml_is_permuted(weights) || ggml_is_permuted(dst)) {
@@ -5020,11 +5021,16 @@ static bool htp_kparams_solve_dsv4_hc_pre_impl(
     kparams->n_hvx        = (std::min)(htp_session_n_hvx(sess), kparams->total_jobs);
     kparams->jobs_per_hvx = (kparams->total_jobs + kparams->n_hvx - 1) / kparams->n_hvx;
 
+    const uint32_t x_es   = (uint32_t) ggml_type_size(x->type);
+    const uint32_t w_es   = (uint32_t) ggml_type_size(weights->type);
+    const uint32_t dst_es = (uint32_t) ggml_type_size(dst->type);
+    const uint32_t max_es = gated ? std::max({ x_es, w_es, dst_es }) : std::max(x_es, dst_es);
+
     const size_t vtcm_budget = htp_session_vtcm_size(sess);
     const uint32_t n_rows    = gated ? HTP_DSV4_HC_PRE_GATED_ROWS : HTP_DSV4_HC_PRE_PLAIN_ROWS;
     uint32_t block_chunks    = (std::min)((uint32_t) HTP_DSV4_HC_MAX_CHUNKS, kparams->n_chunks);
     while (block_chunks > 16) {
-        const uint32_t stride = block_chunks * 128;
+        const uint32_t stride = std::max<uint32_t>(128, GGML_PAD(block_chunks * HTP_DSV4_HC_CHUNK_ELEMS * max_es, 128));
         const uint32_t buf_sz = n_rows * stride;
         if (2 * buf_sz * kparams->n_hvx <= vtcm_budget) {
             break;
@@ -5033,7 +5039,7 @@ static bool htp_kparams_solve_dsv4_hc_pre_impl(
     }
 
     kparams->dma_block_chunks = block_chunks;
-    kparams->dma_row_stride   = block_chunks * 128;
+    kparams->dma_row_stride   = std::max<uint32_t>(128, GGML_PAD(block_chunks * HTP_DSV4_HC_CHUNK_ELEMS * max_es, 128));
     kparams->dma_buffer_size  = n_rows * kparams->dma_row_stride;
     kparams->vtcm_size        = 2 * kparams->dma_buffer_size * kparams->n_hvx;
     if (kparams->vtcm_size > vtcm_budget) {
@@ -5070,10 +5076,13 @@ static bool htp_kparams_solve_dsv4_hc_post_impl(
 ) {
     memset(kparams, 0, sizeof(*kparams));
 
-    if (x->type != GGML_TYPE_F32 || residual->type != GGML_TYPE_F32 || post->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+    const auto is_valid_type = [](const ggml_tensor * t) {
+        return (t->type == GGML_TYPE_F32 || t->type == GGML_TYPE_F16) && t->nb[0] == ggml_type_size(t->type);
+    };
+    if (!is_valid_type(x) || !is_valid_type(residual) || !is_valid_type(post) || !is_valid_type(dst)) {
         return false;
     }
-    if (comb && comb->type != GGML_TYPE_F32) {
+    if (comb && !is_valid_type(comb)) {
         return false;
     }
     if (x->ne[2] != 1 || x->ne[3] != 1) {
@@ -5094,12 +5103,6 @@ static bool htp_kparams_solve_dsv4_hc_post_impl(
     if (dst->ne[0] != x->ne[0] || dst->ne[1] != 4 || dst->ne[2] != x->ne[1] || dst->ne[3] != 1) {
         return false;
     }
-    if (x->nb[0] != sizeof(float) || residual->nb[0] != sizeof(float) || post->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
-        return false;
-    }
-    if (comb && comb->nb[0] != sizeof(float)) {
-        return false;
-    }
     if (ggml_is_permuted(x) || ggml_is_permuted(residual) || ggml_is_permuted(post) || ggml_is_permuted(dst) || (comb && ggml_is_permuted(comb))) {
         return false;
     }
@@ -5116,10 +5119,15 @@ static bool htp_kparams_solve_dsv4_hc_post_impl(
     kparams->n_hvx        = (std::min)(htp_session_n_hvx(sess), kparams->total_jobs);
     kparams->jobs_per_hvx = (kparams->total_jobs + kparams->n_hvx - 1) / kparams->n_hvx;
 
+    const uint32_t x_es   = (uint32_t) ggml_type_size(x->type);
+    const uint32_t r_es   = (uint32_t) ggml_type_size(residual->type);
+    const uint32_t dst_es = (uint32_t) ggml_type_size(dst->type);
+    const uint32_t max_es = std::max({ x_es, r_es, dst_es });
+
     const size_t vtcm_budget = htp_session_vtcm_size(sess);
     uint32_t block_chunks    = (std::min)((uint32_t) HTP_DSV4_HC_MAX_CHUNKS, kparams->n_chunks);
     while (block_chunks > 16) {
-        const uint32_t stride = block_chunks * 128;
+        const uint32_t stride = std::max<uint32_t>(256, GGML_PAD(block_chunks * HTP_DSV4_HC_CHUNK_ELEMS * max_es, 128));
         const uint32_t buf_sz = HTP_DSV4_HC_POST_ROWS * stride;
         if (2 * buf_sz * kparams->n_hvx <= vtcm_budget) {
             break;
@@ -5128,7 +5136,7 @@ static bool htp_kparams_solve_dsv4_hc_post_impl(
     }
 
     kparams->dma_block_chunks = block_chunks;
-    kparams->dma_row_stride   = block_chunks * 128;
+    kparams->dma_row_stride   = std::max<uint32_t>(256, GGML_PAD(block_chunks * HTP_DSV4_HC_CHUNK_ELEMS * max_es, 128));
     kparams->dma_buffer_size  = HTP_DSV4_HC_POST_ROWS * kparams->dma_row_stride;
     kparams->vtcm_size        = 2 * kparams->dma_buffer_size * kparams->n_hvx;
     if (kparams->vtcm_size > vtcm_budget) {

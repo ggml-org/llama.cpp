@@ -4876,6 +4876,92 @@ struct test_dsv4_hc_post : public test_dsv4_hc {
     }
 };
 
+struct test_dsv4_hc_chain : public test_case {
+    const ggml_type wtype;
+    const int64_t   n_embd;
+    const int64_t   n_tokens;
+    const bool      gated_pre;
+    const bool      identity_post;
+
+    test_dsv4_hc_chain(ggml_type wtype = GGML_TYPE_Q4_0, int64_t n_embd = 96, int64_t n_tokens = 1,
+                       bool gated_pre = true, bool identity_post = true)
+        : wtype(wtype), n_embd(n_embd), n_tokens(n_tokens), gated_pre(gated_pre), identity_post(identity_post) {}
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "DSV4_HC_POST";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR5(wtype, n_embd, n_tokens, gated_pre, identity_post);
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_nmse_err() override { return 5e-3; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        constexpr int64_t n_hc    = 4;
+        constexpr int64_t n_vocab = 64;
+
+        ggml_tensor * tok_embd   = ggml_new_tensor_2d(ctx, wtype, n_embd, n_vocab);
+        ggml_tensor * inp_tokens = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n_tokens);
+        ggml_tensor * embd       = ggml_get_rows(ctx, tok_embd, inp_tokens);
+        ggml_tensor * res_hc     = ggml_repeat_4d(ctx, ggml_reshape_3d(ctx, embd, n_embd, 1, n_tokens), n_embd, n_hc, n_tokens, 1);
+
+        for (int l = 0; l < 2; ++l) {
+            ggml_tensor * w_norm = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_hc);
+            ggml_tensor * xn     = ggml_mul(ctx, ggml_rms_norm(ctx, res_hc, 1e-5f), w_norm);
+            ggml_tensor * xn_2d  = ggml_reshape_2d(ctx, xn, n_hc * n_embd, n_tokens);
+
+            ggml_tensor * mixed = nullptr;
+            if (gated_pre) {
+                ggml_tensor * w_gate = ggml_new_tensor_2d(ctx, wtype, n_hc * n_embd, n_hc * n_embd);
+                ggml_tensor * gate   = ggml_mul_mat(ctx, w_gate, xn_2d);
+                mixed = ggml_dsv4_hc_pre_gated(ctx, xn, ggml_reshape_3d(ctx, gate, n_embd, n_hc, n_tokens), 1.0f / (float) n_hc);
+            } else {
+                ggml_tensor * w_pre = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_hc * n_embd, n_hc);
+                ggml_tensor * pre_w = ggml_sigmoid(ctx, ggml_mul_mat(ctx, w_pre, xn_2d));
+                mixed = ggml_dsv4_hc_pre(ctx, xn, pre_w);
+            }
+
+            ggml_tensor * w_blk   = ggml_new_tensor_2d(ctx, wtype, n_embd, n_embd);
+            ggml_tensor * blk_out = ggml_mul_mat(ctx, w_blk, mixed);
+
+            ggml_tensor * w_post = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_hc * n_embd, n_hc);
+            ggml_tensor * post_w = ggml_scale(ctx, ggml_sigmoid(ctx, ggml_scale(ctx, ggml_mul_mat(ctx, w_post, xn_2d), 1.0f / (float) n_hc)), 2.0f);
+
+            ggml_tensor * comb_w = nullptr;
+            if (!identity_post) {
+                ggml_tensor * w_comb = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_hc * n_embd, n_hc * n_hc);
+                comb_w = ggml_reshape_3d(ctx, ggml_soft_max(ctx, ggml_mul_mat(ctx, w_comb, xn_2d)), n_hc, n_hc, n_tokens);
+            }
+
+            res_hc = ggml_dsv4_hc_post(ctx, blk_out, res_hc, post_w, comb_w);
+        }
+
+        ggml_set_name(res_hc, "out");
+        return res_hc;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->op != GGML_OP_NONE) {
+                continue;
+            }
+            if (t->type == GGML_TYPE_I32) {
+                std::vector<int32_t> data(ggml_nelements(t));
+                for (size_t i = 0; i < data.size(); ++i) {
+                    data[i] = (int32_t) (i % 64);
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size() * sizeof(int32_t));
+            } else {
+                init_tensor_uniform(t, -0.1f, 0.1f);
+            }
+        }
+    }
+};
+
 
 // GGML_OP_SSM_CONV
 struct test_ssm_conv : public test_case {
@@ -11004,6 +11090,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_dsv4_hc_post(31, 17, false, true));
     test_cases.emplace_back(new test_dsv4_hc_post(4096, 1));             // DeepSeek-V4-Flash decode
     test_cases.emplace_back(new test_dsv4_hc_post(2560, 1, true, true)); // Qwen4-Exp decode
+    for (int64_t n_embd : {96, 256}) {
+        for (int64_t n_tokens : {1, 64}) {
+            test_cases.emplace_back(new test_dsv4_hc_chain(GGML_TYPE_Q4_0, n_embd, n_tokens, true,  true));
+            test_cases.emplace_back(new test_dsv4_hc_chain(GGML_TYPE_Q4_0, n_embd, n_tokens, false, false));
+        }
+    }
 
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
         // blocks with extra cells and scores (k-pool)
