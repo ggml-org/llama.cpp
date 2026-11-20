@@ -287,7 +287,7 @@ void * ggml_vk_host_malloc(size_t size) {
 
     ggml_vk_instance_init();
 
-    if (vk_instance.multi_device) {
+    if (vk_instance.multi_device || vk_instance.host_import_no_cached) {
         const size_t align      = std::max<size_t>(vk_instance.host_import_alignment, TENSOR_ALIGNMENT);
         const size_t alloc_size = (size + align - 1) / align * align;
 
@@ -351,7 +351,7 @@ void ggml_vk_host_free(void * ptr) {
     for (auto & view : entry.views) {
         ggml_vk_destroy_buffer(view);
     }
-    if (vk_instance.multi_device) {
+    if (vk_instance.multi_device || vk_instance.host_import_no_cached) {
         portable_aligned_free(entry.base);
     }
 }
@@ -370,7 +370,7 @@ void ggml_vk_host_get(const vk_device& device, const void * ptr, vk_buffer& buf,
 
     if (entry.views[device->idx] == nullptr) {
         const uint32_t bit = 1u << device->idx;
-        if (!vk_instance.multi_device || !vk_instance.device_host_buffer_import[device->idx] || (vk_instance.host_import_failed & bit)) {
+        if ((!vk_instance.multi_device && !vk_instance.host_import_no_cached) || !vk_instance.device_host_buffer_import[device->idx] || (vk_instance.host_import_failed & bit)) {
             return;
         }
         GGML_ASSERT(device->external_memory_host);

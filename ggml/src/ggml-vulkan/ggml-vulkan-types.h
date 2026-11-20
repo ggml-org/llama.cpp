@@ -1394,6 +1394,7 @@ struct vk_instance_t {
     uint32_t host_import_failed = 0;  // bitmask by device->idx, guarded by host_allocations_mutex
 
     bool multi_device = false;
+    bool host_import_no_cached = false;  // device 0 lacks cached host memory; host buffers use malloc+import
     bool allreduce_disabled = false;
 };
 

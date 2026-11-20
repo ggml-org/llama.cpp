@@ -5982,8 +5982,24 @@ void ggml_vk_instance_init() {
             props2.pNext = &driver_props;
             driver_props.pNext = &ext_props;
             vkdev.getProperties2(&props2);
-            host_buffer_import = ggml_vk_external_memory_host_usable(driver_props.driverID) &&
-                                 ggml_vk_host_buffer_import_usable(props2.properties.vendorID);
+            const bool external_usable = ggml_vk_external_memory_host_usable(driver_props.driverID);
+            const vk::PhysicalDeviceMemoryProperties mem_props = vkdev.getMemoryProperties();
+            bool has_cached_host = false;
+            for (uint32_t j = 0; j < mem_props.memoryTypeCount; j++) {
+                const vk::MemoryPropertyFlags flags = mem_props.memoryTypes[j].propertyFlags;
+                if ((flags & vk::MemoryPropertyFlagBits::eHostVisible) && (flags & vk::MemoryPropertyFlagBits::eHostCached)) {
+                    has_cached_host = true;
+                    break;
+                }
+            }
+            // UMA without cached host memory: CPU reads of GPU-written WC buffers run at ~100 MB/s.
+            // Import is the only way to get cached host buffers there; allow it despite the vendor gate.
+            host_buffer_import = external_usable &&
+                                 (ggml_vk_host_buffer_import_usable(props2.properties.vendorID) ||
+                                  (!has_cached_host && props2.properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu));
+            if (i == 0) {
+                vk_instance.host_import_no_cached = host_buffer_import && !has_cached_host;
+            }
             if (host_buffer_import) {
                 vk_instance.host_import_alignment = std::max<size_t>(vk_instance.host_import_alignment, ext_props.minImportedHostPointerAlignment);
                 host_buffer_import_count++;
