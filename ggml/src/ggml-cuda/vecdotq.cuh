@@ -112,6 +112,18 @@ static __device__ __forceinline__ uint32_t unpack_ksigns(const uint8_t v) {
 #define VDR_Q2_0_Q8_1_MMVQ 1  // Process one 32-element chunk at a time for parallelism
 #define VDR_Q2_0_Q8_1_MMQ  2  // Q2_0 group 64: 128 bits (4 ints) per block, 2 32-element chunks
 
+// Ternary: one 32-element chunk per vec_dot call (QK_K = 256 elements per block, 8 chunks).
+#define VDR_TQ1_0_Q8_1_MMVQ 1
+// MMQ unpacks the trits to signed bytes in the tile loader, so the tile row has the Q8_0 shape:
+// 8 ints (32 bytes) per 32-element chunk, consumed by the regular q8_0 vec_dot (dp4a or mma).
+#define VDR_TQ1_0_Q8_1_MMQ  8
+
+// TQ2_0: same shape as TQ1_0 (QK_K = 256 elements per block, 8 chunks of 32 elements).
+#define VDR_TQ2_0_Q8_1_MMVQ 1
+// MMQ expands the digits to signed bytes in the tile loader, so the tile row has the Q8_0 shape:
+// 8 ints (32 bytes) per 32-element chunk, consumed by the regular q8_0 vec_dot (dp4a or mma).
+#define VDR_TQ2_0_Q8_1_MMQ  8
+
 #define VDR_Q4_0_Q8_1_MMVQ 2
 #define VDR_Q4_0_Q8_1_MMQ  4
 
@@ -795,6 +807,150 @@ static __device__ __forceinline__ float vec_dot_q2_0_q8_1(
     // Apply Q2_0's single scale and this chunk's Q8_1 scale
     const float d8 = __low2float(bq8_1_chunk->ds);
     return d2 * d8 * sumi;
+}
+
+// Load 4 bytes from a 2-byte-aligned TQ block using 4-byte-aligned reads.
+// Callers shift p back by 2 bytes when kbx is odd so all word accesses stay 4-byte aligned.
+static __device__ __forceinline__ int ggml_cuda_tq_load_u32(
+    const uint32_t * p, const int idx, const int odd) {
+    const uint32_t p0 = p[idx];
+    const uint32_t p1 = odd ? p[idx + 1] : 0u;
+#if defined(GGML_USE_MUSA)
+    return odd ? (int) ((p0 >> 16) | (p1 << 16)) : (int) p0;
+#else
+    return (int) __funnelshift_r(p0, p1, 16 * odd);
+#endif // defined(GGML_USE_MUSA)
+}
+
+static __device__ __forceinline__ float vec_dot_tq1_0_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const int odd = kbx & 1;
+    const block_tq1_0 * bq = (const block_tq1_0 *) vbq + kbx;
+    const uint32_t * p = (const uint32_t *)((const char *) bq->qs - 2 * odd);
+
+    const int w_04 = ggml_cuda_tq_load_u32(p, iqs, odd);
+    const int w_56 = ggml_cuda_tq_load_u32(p, 8 + (iqs & 3), odd);
+    const int w_7  = (iqs < 4) ? w_56 : ggml_cuda_tq_load_u32(p, 12, odd);
+
+    int v_lo = w_04 & 0x00FF00FF;
+    int v_hi = (w_04 >> 8) & 0x00FF00FF;
+
+    float sumf = 0.0f;
+    float sumy = 0.0f;
+
+    // Elements 0..159 (chunks k = 0..4): sequential *3 unpack across all 8 threads.
+#pragma unroll
+    for (int k = 0; k < 5; ++k) {
+        const int u = get_int_b4(bq8_1[k].qs, iqs);
+        const float2 ds8f = __half22float2(bq8_1[k].ds);
+        sumy += ds8f.y;
+
+        const int dlo = v_lo * 3;
+        const int dhi = v_hi * 3;
+        if (k < 4) {
+            v_lo = dlo & 0x00FF00FF;
+            v_hi = dhi & 0x00FF00FF;
+        }
+        const int s4 = ggml_cuda_tq1_0_pack_digits4(dlo, dhi);
+        const int sumi = ggml_cuda_dp4a(s4, u, 0);
+        sumf += ds8f.x * sumi;
+    }
+
+    // Elements 160..191 (chunk k = 5).
+    {
+        const int p3_5 = (iqs < 4) ? 1 : 3;
+        const int u5 = get_int_b4(bq8_1[5].qs, iqs);
+        const float2 ds8f = __half22float2(bq8_1[5].ds);
+        sumy += ds8f.y;
+
+        const int wlo5 = (w_56 & 0x00FF00FF) * p3_5;
+        const int whi5 = ((w_56 >> 8) & 0x00FF00FF) * p3_5;
+        const int dlo5 = (wlo5 & 0x00FF00FF) * 3;
+        const int dhi5 = (whi5 & 0x00FF00FF) * 3;
+        v_lo = dlo5 & 0x00FF00FF;
+        v_hi = dhi5 & 0x00FF00FF;
+
+        const int s4 = ggml_cuda_tq1_0_pack_digits4(dlo5, dhi5);
+        const int sumi = ggml_cuda_dp4a(s4, u5, 0);
+        sumf += ds8f.x * sumi;
+    }
+
+    // Elements 192..223 (chunk k = 6): advance trit position by +2.
+    {
+        const int u6 = get_int_b4(bq8_1[6].qs, iqs);
+        const float2 ds8f = __half22float2(bq8_1[6].ds);
+        sumy += ds8f.y;
+
+        const int v_lo6 = v_lo * 3;
+        const int v_hi6 = v_hi * 3;
+        const int dlo6 = (v_lo6 & 0x00FF00FF) * 3;
+        const int dhi6 = (v_hi6 & 0x00FF00FF) * 3;
+
+        const int s4 = ggml_cuda_tq1_0_pack_digits4(dlo6, dhi6);
+        const int sumi = ggml_cuda_dp4a(s4, u6, 0);
+        sumf += ds8f.x * sumi;
+    }
+
+    // Elements 224..255 (chunk k = 7): qs[32..47]*81 for iqs < 4, qh[0..3]*{1,3,9,27} for iqs >= 4.
+    {
+        static constexpr int p3_7_table[8] = {81, 81, 81, 81, 1, 3, 9, 27};
+        const int u7 = get_int_b4(bq8_1[7].qs, iqs);
+        const float2 ds8f = __half22float2(bq8_1[7].ds);
+        sumy += ds8f.y;
+
+        const int s4 = ggml_cuda_tq1_0_digits4(w_7, p3_7_table[iqs]);
+        const int sumi = ggml_cuda_dp4a(s4, u7, 0);
+        sumf += ds8f.x * sumi;
+    }
+
+    // All 8 threads accumulate all 8 chunks of y, so divide y bias by 8.
+    return (float) bq->d * (sumf - 0.125f * sumy);
+}
+
+static __device__ __forceinline__ float vec_dot_tq2_0_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const int c    = iqs >> 2;
+    const int lane = iqs & 3;
+    const int j    = 2 * iqs;
+    const block_q8_1 * bq8_half = bq8_1 + 4 * c;
+
+    const int odd = kbx & 1;
+    const block_tq2_0 * bq = (const block_tq2_0 *) vbq + kbx;
+    const uint32_t * p = (const uint32_t *)((const char *) bq->qs - 2 * odd);
+
+    const uint32_t p0 = p[j + 0];
+    const uint32_t p1 = p[j + 1];
+    const uint32_t p2 = odd ? p[j + 2] : 0u;
+
+#if defined(GGML_USE_MUSA)
+    const int my_w0 = odd ? (int) ((p0 >> 16) | (p1 << 16)) : (int) p0;
+    const int my_w1 = odd ? (int) ((p1 >> 16) | (p2 << 16)) : (int) p1;
+#else
+    const int my_w0 = (int) __funnelshift_r(p0, p1, 16 * odd);
+    const int my_w1 = (int) __funnelshift_r(p1, p2, 16 * odd);
+#endif // defined(GGML_USE_MUSA)
+
+    float sumf = 0.0f;
+    float sumy = 0.0f;
+
+#pragma unroll
+    for (int l = 0; l < 4; ++l) {
+        const int u0 = get_int_b4(bq8_half[l].qs, 2 * lane + 0);
+        const int u1 = get_int_b4(bq8_half[l].qs, 2 * lane + 1);
+        const float2 ds8f = __half22float2(bq8_half[l].ds);
+        sumy += ds8f.y;
+
+        const int d4_a = (my_w0 >> (2 * l)) & 0x03030303;
+        const int d4_b = (my_w1 >> (2 * l)) & 0x03030303;
+        int sumi = ggml_cuda_dp4a(d4_a, u0, 0);
+        sumi     = ggml_cuda_dp4a(d4_b, u1, sumi);
+        sumf    += ds8f.x * sumi;
+    }
+
+    // 4 lanes share each 4-block half of y, so divide y bias by 4.
+    return (float) bq->d * (sumf - 0.25f * sumy);
 }
 
 static __device__ __forceinline__ float vec_dot_q4_0_q8_1(

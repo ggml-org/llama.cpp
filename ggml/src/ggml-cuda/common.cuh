@@ -1119,6 +1119,101 @@ struct ggml_cuda_type_traits<GGML_TYPE_Q2_0> {
 };
 
 template<>
+struct ggml_cuda_type_traits<GGML_TYPE_TQ1_0> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR_TQ1_0;
+    static constexpr int qi = QI_TQ1_0; // 8 chunks of 32 elements per block
+    static constexpr int bs = sizeof(block_tq1_0);
+};
+
+// TQ1_0: 256 ternary weights per block (5 trits/byte in qs[0..47], 4 trits/byte in qh[0..3]).
+static __device__ __forceinline__ int ggml_cuda_tq1_0_symbol(const block_tq1_0 * x, const int e) {
+    int b;
+    int n;
+
+    if (e < 160) {
+        b = x->qs[e % 32];
+        n = e / 32;
+    } else if (e < 240) {
+        b = x->qs[32 + (e - 160) % 16];
+        n = (e - 160) / 16;
+    } else {
+        b = x->qh[(e - 240) % 4];
+        n = (e - 240) / 4; // 0..3
+    }
+
+    int y = b;                          // y = b * 3^n
+    y = (n > 0) ? y + (y << 1) : y;     // *3
+    y = (n > 1) ? y + (y << 1) : y;     // *9
+    y = (n > 2) ? y + (y << 1) : y;     // *27
+    y = (n > 3) ? y + (y << 1) : y;     // *81
+    y &= 0xFF;
+
+    if (y >= 171) {
+        return 1;
+    }
+    if (y < 86) {
+        return -1;
+    }
+    return 0;
+}
+
+static __device__ __forceinline__ int ggml_cuda_tq1_0_pack_digits4(const int dlo, const int dhi) {
+#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+    return (((uint32_t) dlo >> 8) & 0x00FF00FF) | ((uint32_t) dhi & 0xFF00FF00);
+#else
+    return __byte_perm(dlo, dhi, 0x7351);
+#endif // defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+}
+
+// Extract four TQ1_0 base-3 digits (0..2) as packed bytes using 16-bit SWAR lanes.
+static __device__ __forceinline__ int ggml_cuda_tq1_0_digits4(const int b4, const int p3n) {
+    const int wlo = ((b4     ) & 0x00FF00FF) * p3n;
+    const int whi = ((b4 >> 8) & 0x00FF00FF) * p3n;
+
+    const int dlo = (wlo & 0x00FF00FF) * 3;
+    const int dhi = (whi & 0x00FF00FF) * 3;
+
+    return ggml_cuda_tq1_0_pack_digits4(dlo, dhi);
+}
+
+static __device__ __forceinline__ int ggml_cuda_tq1_0_symbols4(const int b4, const int p3n) {
+    return __vsub4(ggml_cuda_tq1_0_digits4(b4, p3n), 0x01010101);
+}
+
+static __device__ __forceinline__ int ggml_cuda_tq1_0_pow3(const int n) {
+    return (n > 1) ? ((n > 2) ? ((n > 3) ? 81 : 27) : 9) : ((n > 0) ? 3 : 1);
+}
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_TQ2_0> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR_TQ2_0;
+    static constexpr int qi = QI_TQ2_0; // 8 chunks of 32 elements per block
+    static constexpr int bs = sizeof(block_tq2_0);
+};
+
+// TQ2_0: 256 weights per block, e = 128*c + 32*l + m -> qs[32*c + m] at bit shift 2*l.
+static __device__ __forceinline__ int ggml_cuda_tq2_0_digit(const block_tq2_0 * x, const int e) {
+    const int c = e >> 7;
+    const int l = (e >> 5) & 3;
+    const int m = e & 31;
+    return (x->qs[32*c + m] >> (2*l)) & 3;
+}
+
+static __device__ __forceinline__ int ggml_cuda_tq2_0_symbol(const block_tq2_0 * x, const int e) {
+    return ggml_cuda_tq2_0_digit(x, e) - 1;
+}
+
+static __device__ __forceinline__ int ggml_cuda_tq2_0_digits4(const int w4, const int shift) {
+    return (w4 >> shift) & 0x03030303;
+}
+
+static __device__ __forceinline__ int ggml_cuda_tq2_0_symbols4(const int w4, const int shift) {
+    return __vsub4(ggml_cuda_tq2_0_digits4(w4, shift), 0x01010101);
+}
+
+template<>
 struct ggml_cuda_type_traits<GGML_TYPE_Q4_0> {
     static constexpr int qk = QK4_0;
     static constexpr int qr = QR4_0;
