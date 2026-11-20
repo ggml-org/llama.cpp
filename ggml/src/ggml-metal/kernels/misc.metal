@@ -913,6 +913,7 @@ constant bool FC_top_k_mask_has_extra  [[function_constant(FC_TOP_K_MASK + 2)]];
 constant bool FC_top_k_mask_vec        [[function_constant(FC_TOP_K_MASK + 3)]];
 
 // the fill runs before the scatter, both are fully parallel over the whole dst and over the picks of one row
+// TODO: construct T4 from T with value_type_4
 template <typename T, typename T4>
 kernel void kernel_top_k_mask_fill(
         constant ggml_metal_kargs_top_k_mask & args,
@@ -941,6 +942,7 @@ template [[host_name("kernel_top_k_mask_fill_f16")]] kernel kernel_top_k_mask_fi
 template [[host_name("kernel_top_k_mask_fill_f32")]] kernel kernel_top_k_mask_fill_f_t kernel_top_k_mask_fill<float, float4>;
 
 // one threadgroup per row: copy the mask cells of the live picks and of the extra cells over the fill
+// TODO: construct T4 from T with value_type_4
 template <typename T, typename T4>
 kernel void kernel_top_k_mask(
         constant ggml_metal_kargs_top_k_mask & args,

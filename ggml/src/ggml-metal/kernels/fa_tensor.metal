@@ -8,6 +8,7 @@ constant bool FC_flash_attn_ext_tensor_has_bias  [[function_constant(FC_FLASH_AT
 constant bool FC_flash_attn_ext_tensor_has_scap  [[function_constant(FC_FLASH_ATTN_EXT_TENSOR + 3)]];
 
 // ref: https://arxiv.org/pdf/2307.08691.pdf
+// TODO: construct T4 from T with value_type_4
 template<
     typename T,                                 // Q, K, V and P types
     typename T4,

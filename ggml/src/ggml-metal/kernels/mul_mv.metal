@@ -1147,6 +1147,7 @@ void kernel_mul_mv_t_t_4_disp(
     };
 }
 
+// TODO: construct T04/T14 from T0/T1 with value_type_4
 template<typename T0, typename T04, typename T1, typename T14>
 kernel void kernel_mul_mv_t_t_4(
         constant ggml_metal_kargs_mul_mv & args,

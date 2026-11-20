@@ -15,6 +15,7 @@ constant int32_t FC_flash_attn_ext_ns20 [[function_constant(FC_FLASH_ATTN_EXT + 
 constant int32_t FC_flash_attn_ext_nsg  [[function_constant(FC_FLASH_ATTN_EXT + 22)]];
 
 // ref: https://arxiv.org/pdf/2307.08691.pdf
+// TODO: construct q4_t/q8x8_t/k4x4_t/k8x8_t/v4x4_t/v8x8_t/qk8x8_t/s2_t/s8x8_t/o4_t/o8x8_t from the underlying types with value_type_4/value_type_2/value_type_4x4/value_type_8x8 (and the FA_TYPES macros)
 template<
     typename q_t,     // query types in shared memory
     typename q4_t,
@@ -654,6 +655,7 @@ void kernel_flash_attn_ext_impl(
 #undef NS20
 }
 
+// TODO: construct q4_t/q8x8_t/k4x4_t/k8x8_t/v4x4_t/v8x8_t/qk8x8_t/s2_t/s8x8_t/o4_t/o8x8_t from the underlying types with value_type_4/value_type_2/value_type_4x4/value_type_8x8 (and the FA_TYPES macros)
 template<
     typename q_t,     // query types in shared memory
     typename q4_t,

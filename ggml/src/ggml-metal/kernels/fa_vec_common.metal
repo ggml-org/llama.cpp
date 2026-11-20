@@ -14,6 +14,7 @@ constant int32_t FC_flash_attn_ext_vec_nsg  [[function_constant(FC_FLASH_ATTN_EX
 constant int32_t FC_flash_attn_ext_vec_nwg  [[function_constant(FC_FLASH_ATTN_EXT_VEC + 23)]];
 constant bool    FC_flash_attn_ext_vec_has_sparse [[function_constant(FC_FLASH_ATTN_EXT_VEC + 5)]];
 constant bool    FC_flash_attn_ext_vec_has_rows   [[function_constant(FC_FLASH_ATTN_EXT_VEC + 6)]];
+// TODO: construct s4_t from s_t with value_type_4 (and the FA_TYPES macros)
 template<
     typename q4_t,  // query types in shared memory
     typename k4_t,  // key types in shared memory
