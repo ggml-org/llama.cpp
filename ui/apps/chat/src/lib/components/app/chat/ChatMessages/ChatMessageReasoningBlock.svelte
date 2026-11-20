@@ -1,0 +1,161 @@
+<script lang="ts">
+	import { Lightbulb } from '@lucide/svelte';
+	import { CollapsibleContentBlock, MarkdownContent } from '#lib/components/app/index.ts';
+	import { REASONING_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '#lib/constants/index.ts';
+	import { AgenticSectionType } from '#lib/enums/index.ts';
+	import { settingsStore } from '#lib/stores/index.ts';
+	import type { AgenticSection, DatabaseMessageExtra } from '#lib/types/index.ts';
+
+	interface Props {
+		section: AgenticSection;
+		open: boolean;
+		isStreaming: boolean;
+		hasReasoningError?: boolean;
+		attachments?: DatabaseMessageExtra[];
+		onToggle?: () => void;
+	}
+
+	let {
+		attachments,
+		hasReasoningError = false,
+		isStreaming,
+		onToggle,
+		open,
+		section
+	}: Props = $props();
+
+	const currentConfig = settingsStore.config;
+
+	const REASONING_HEADER = 'Reasoning';
+	const REASONING_HEADER_PENDING = 'Reasoning...';
+	const REASONING_SUBTITLE_ERROR = 'Error';
+	const REASONING_SUBTITLE_CANCELLED = 'Cancelled';
+
+	const isPending = $derived(section.type === AgenticSectionType.REASONING_PENDING);
+	const title = $derived(isPending && isStreaming ? REASONING_HEADER_PENDING : REASONING_HEADER);
+	const subtitle = $derived.by(() => {
+		if (isPending && !isStreaming) {
+			return hasReasoningError ? REASONING_SUBTITLE_ERROR : REASONING_SUBTITLE_CANCELLED;
+		}
+
+		if (section.wasInterrupted) {
+			return hasReasoningError ? REASONING_SUBTITLE_ERROR : REASONING_SUBTITLE_CANCELLED;
+		}
+
+		return isStreaming ? '' : undefined;
+	});
+	const shimmerTitle = $derived(isPending && isStreaming);
+
+	let scrollEl: HTMLDivElement | undefined = $state();
+
+	const SCROLL_BOTTOM_THRESHOLD_PX = REASONING_SCROLL_AT_BOTTOM_THRESHOLD_PX;
+
+	let userScrolledUp = $state(false);
+	let lastScrollTop = 0;
+	let pendingFrame: number | null = null;
+
+	function isAtBottom(): boolean {
+		if (!scrollEl) return false;
+
+		return (
+			scrollEl.scrollHeight - scrollEl.clientHeight - scrollEl.scrollTop <=
+			SCROLL_BOTTOM_THRESHOLD_PX
+		);
+	}
+
+	function scrollToBottomOnFrame() {
+		if (pendingFrame !== null || !scrollEl || userScrolledUp) return;
+
+		pendingFrame = requestAnimationFrame(() => {
+			pendingFrame = null;
+
+			// User may scroll between scheduling and paint.
+			if (scrollEl && !userScrolledUp) {
+				scrollEl.scrollTop = scrollEl.scrollHeight;
+			}
+		});
+	}
+
+	function handleScrollEvent() {
+		if (!scrollEl) return;
+
+		const isScrollingUp = scrollEl.scrollTop < lastScrollTop;
+
+		if (isScrollingUp && !isAtBottom()) {
+			userScrolledUp = true;
+		} else if (isAtBottom()) {
+			userScrolledUp = false;
+		}
+
+		lastScrollTop = scrollEl.scrollTop;
+	}
+
+	$effect(() => {
+		void section.content;
+
+		if (!scrollEl || !isPending || !isStreaming) return;
+
+		scrollToBottomOnFrame();
+	});
+
+	$effect(() => {
+		// Layout shifts that don't change section.content (markdown re-parse,
+		// syntax-highlight settle, image loads).
+		if (!scrollEl || !isPending || !isStreaming) return;
+
+		const observer = new MutationObserver(() => scrollToBottomOnFrame());
+
+		observer.observe(scrollEl, {
+			characterData: true,
+			childList: true,
+			subtree: true
+		});
+
+		return () => observer.disconnect();
+	});
+
+	$effect(() => {
+		// Pin to bottom at the start of each round.
+		if (!isPending) {
+			userScrolledUp = false;
+			lastScrollTop = 0;
+		}
+	});
+</script>
+
+<CollapsibleContentBlock
+	class="my-2"
+	icon={Lightbulb}
+	iconClass="size-icon-sm"
+	{onToggle}
+	{open}
+	{shimmerTitle}
+	{subtitle}
+	{title}
+>
+	<div
+		bind:this={scrollEl}
+		class={['reasoning-content', isPending && 'is-streaming']}
+		onscroll={handleScrollEvent}
+	>
+		{#if currentConfig.renderThinkingAsMarkdown}
+			<MarkdownContent {attachments} class="text-muted-foreground" content={section.content} />
+		{:else}
+			<div
+				class="text-body-sm leading-relaxed wrap-break-word whitespace-pre-wrap text-muted-foreground"
+			>
+				{section.content}
+			</div>
+		{/if}
+	</div>
+</CollapsibleContentBlock>
+
+<style>
+	.reasoning-content.is-streaming {
+		/* page zoom shrinks the viewport, keep the box inside it */
+		max-height: min(28rem, 50dvh);
+		overflow-y: auto;
+		scrollbar-gutter: stable;
+		padding-right: 0.25rem;
+	}
+</style>

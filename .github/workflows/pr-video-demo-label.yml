@@ -22,7 +22,7 @@ jobs:
           BODY: ${{ github.event.pull_request.body }}
           HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'video demo') }}
         run: |
-          # sections written by demo:pr (see tools/ui/demo/cli.ts): the managed comment
+          # sections written by demo:pr (see ui/apps/chat/demo/cli.ts): the managed comment
           # markers, or a preview linking to a demo video uploaded for this PR
           has_demo=false
           if { grep -qF '<!-- demo:start -->' <<< "$BODY" && grep -qF '<!-- demo:end -->' <<< "$BODY"; } ||

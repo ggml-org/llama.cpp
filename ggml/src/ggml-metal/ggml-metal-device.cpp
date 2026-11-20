@@ -2540,6 +2540,71 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_conv_2d(ggml_met
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_conv_2d_mm(ggml_metal_library_t lib, const ggml_tensor * op) {
+    assert(op->op == GGML_OP_CONV_2D);
+
+    GGML_ASSERT(ggml_is_contiguous(op->src[0]));
+    GGML_ASSERT(op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(op->src[1]->type == GGML_TYPE_F32);
+    GGML_ASSERT(op->type         == GGML_TYPE_F32);
+
+    char base[256];
+    char name[256];
+
+    const bool has_tensor = ggml_metal_device_get_props(ggml_metal_library_get_device(lib))->has_tensor;
+
+    if (has_tensor) {
+        // nr0 output positions per threadgroup, nr1 output channels, same tiles as kernel_mul_mm
+        snprintf(base, 256, "kernel_conv_2d_mm_tensor_%s_%s", ggml_type_name(op->src[0]->type), ggml_type_name(op->src[1]->type));
+        snprintf(name, 256, "%s", base);
+
+        ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+        if (!res.pipeline) {
+            res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+        }
+
+        res.nr0  = SZ_SIMDGROUP * N_MM_BLOCK_Y * N_MM_SIMD_GROUP_Y;
+        res.nr1  = SZ_SIMDGROUP * N_MM_BLOCK_X * N_MM_SIMD_GROUP_X;
+        res.nsg  = N_MM_SIMD_GROUP_X * N_MM_SIMD_GROUP_Y;
+        res.smem = res.nr0 * N_MM_NK_TOTAL * sizeof(ggml_fp16_t);
+
+        return res;
+    }
+
+    const int nr0 = op->src[0]->ne[3] <= 32 ? 32 : 64;
+    const int nr1 = 2048/nr0;
+
+    snprintf(base, 256, "kernel_conv_2d_mm_%s_%s_%dx%d", ggml_type_name(op->src[0]->type), ggml_type_name(op->src[1]->type), nr0, nr1);
+    snprintf(name, 256, "%s", base);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+    }
+
+    res.nr0 = nr0;
+    res.nr1 = nr1;
+    res.nsg = N_SG_CONV_2D;
+
+    res.smem = nr0*nr1*sizeof(float);
+
+    return res;
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_conv_2d_mm_reduce(ggml_metal_library_t lib, const ggml_tensor * op) {
+    assert(op->op == GGML_OP_CONV_2D);
+    GGML_UNUSED(op);
+
+    const char * name = "kernel_conv_2d_mm_reduce";
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+    }
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_conv_2d_dw(ggml_metal_library_t lib, const ggml_tensor * op, bool tiled) {
     assert(op->op == GGML_OP_CONV_2D_DW);
 

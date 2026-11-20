@@ -3,11 +3,17 @@
 #include "../node_context.h"
 #include "../op_table.h"
 #include "../utils.h"
+#ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
+#include "recurrent_cache_update.hpp"
+#endif
 #include "ggml-openvino/ggml-openvino-extra.h"
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <openvino/op/add.hpp>
 #include <openvino/op/broadcast.hpp>
@@ -20,15 +26,23 @@
 #include <openvino/op/less.hpp>
 #include <openvino/op/loop.hpp>
 #include <openvino/op/matmul.hpp>
+#include <openvino/op/maximum.hpp>
+#include <openvino/op/minimum.hpp>
 #include <openvino/op/multiply.hpp>
+#include <openvino/op/range.hpp>
 #include <openvino/op/reduce_mean.hpp>
 #include <openvino/op/reshape.hpp>
-#include <openvino/op/squeeze.hpp>
+#include <openvino/op/select.hpp>
+#include <openvino/op/shape_of.hpp>
+#include <openvino/op/slice.hpp>
+#include <openvino/op/split.hpp>
 #include <openvino/op/sqrt.hpp>
+#include <openvino/op/squeeze.hpp>
 #include <openvino/op/subtract.hpp>
 #include <openvino/op/tile.hpp>
 #include <openvino/op/transpose.hpp>
 #include <openvino/op/unsqueeze.hpp>
+#include <utility>
 #include <vector>
 
 namespace ov {
@@ -92,7 +106,276 @@ static bool match_gdn_l2_norm(const Output<Node> & normalized, Output<Node> & in
     return true;
 }
 
-OutputVector translate_gated_delta_net(const NodeContext & context) {
+// A [CS, CS] mask of the chunked GatedDeltaNet, one instance per content for the whole process. The NPUW weights
+// bank, which all compiled models share (NPUW_WEIGHTS_BANK=shared), identifies a constant by its data pointer and
+// keeps its tensor after the model that owned it is gone. A mask of a later model that got the address of a freed
+// mask would then be read as that other mask, so a mask is never freed. Not needed once NPUW stops matching a new
+// constant to a detached one by pointer (OpenVINO 2026.4 does).
+static std::shared_ptr<ov::op::v0::Constant> gdn_chunk_mask(int64_t CS, const std::vector<float> & values) {
+    static std::mutex mutex;
+    static std::map<std::vector<float>, std::shared_ptr<ov::op::v0::Constant>> cache;
+    std::lock_guard<std::mutex> lock(mutex);
+    auto & mask = cache[values];
+    if (!mask) {
+        mask = ov::op::v0::Constant::create(ov::element::f32, {(size_t) CS, (size_t) CS}, values);
+    }
+    return mask;
+}
+
+// Chunked GatedDeltaNet built from MatMuls, for devices where the GatedDeltaNet op cannot run (NPU4000).
+// Same contract as the op with equal q/k/v heads and no fused l2 norm:
+//   q, k [B, T, H, Dk], v [B, T, H, Dv], g, beta [B, T, H], state [B, H, Dk, Dv]
+//   returns attn [B, T, H, Dv] and the new state [B, H, Dk, Dv].
+// Per chunk of CS tokens (gc = cumsum of g in the chunk, decay[i][j] = exp(gc_i - gc_j) for j <= i, else 0):
+//   P    = (I + strict_lower(beta k k^T * decay))^-1
+//   u    = P (beta v),  w = P (beta k exp(gc))
+//   v'   = u - w S
+//   out  = (q exp(gc)) S + lower(q k^T * decay) v'
+//   S    = S exp(gc_last) + (k exp(gc_last - gc))^T v'
+// The chunks run one after another; everything inside a chunk is batched over all chunks and heads.
+// P is built block-recursively, [[A, 0], [C, D]]^-1 = [[A^-1, 0], [-D^-1 C A^-1, D^-1]], for block sizes
+// 1, 2, 4, ..., CS / 2. Every intermediate is a part of the true inverse, so values stay small in f16. A Neumann
+// product (I - L)(I + L^2)... is exact too, but powers of L grow large and cancel, which f16 cannot hold.
+// A single token (decode) is a chunk of one token, where P = 1 and decay = 1:
+//   v'   = beta (v - exp(g) k S)
+//   S    = S exp(g) + k^T v'
+//   out  = q S
+// No Loop op is used, so the GatedDeltaNet loop fusion does not turn this back into the op.
+static std::pair<Output<Node>, Output<Node>> make_gated_delta_net_chunked(Output<Node> q, Output<Node> k,
+                                                                          Output<Node> v, Output<Node> g,
+                                                                          Output<Node> beta, Output<Node> state,
+                                                                          int64_t B, int64_t T, int64_t H, int64_t Dk,
+                                                                          int64_t Dv) {
+    const int64_t CS = ggml_openvino_gdn_decompose_chunk();
+    const int64_t max_dim = std::numeric_limits<int64_t>::max();
+    FRONT_END_OP_CONVERSION_CHECK(B > 0 && T > 0 && H > 0 && Dk > 0 && Dv > 0,
+                                  "GATED_DELTA_NET decomposition requires positive dimensions");
+    const int64_t pad = (CS - T % CS) % CS;
+    FRONT_END_OP_CONVERSION_CHECK(T <= max_dim - pad && B <= max_dim / H,
+                                  "GATED_DELTA_NET decomposition dimensions overflow");
+    const int64_t N = (T + pad) / CS;
+    const int64_t X = B * H;
+    FRONT_END_OP_CONVERSION_CHECK(X <= max_dim / N / CS / CS && X <= max_dim / N / CS / Dk &&
+                                  X <= max_dim / N / CS / Dv && X <= max_dim / Dk / Dv,
+                                  "GATED_DELTA_NET decomposition tensor size overflows");
+
+    auto i64 = [](const std::vector<int64_t> & v) {
+        return ov::op::v0::Constant::create(ov::element::i64, {v.size()}, v);
+    };
+    auto f32 = [](float x) { return ov::op::v0::Constant::create(ov::element::f32, {}, {x}); };
+    auto reshape = [&](const Output<Node> & x, const std::vector<int64_t> & shape) -> Output<Node> {
+        return std::make_shared<ov::op::v1::Reshape>(x, i64(shape), false);
+    };
+    auto transpose = [&](const Output<Node> & x, const std::vector<int64_t> & perm) -> Output<Node> {
+        return std::make_shared<ov::op::v1::Transpose>(x, i64(perm));
+    };
+    auto matmul = [](const Output<Node> & a, const Output<Node> & b, bool ta = false, bool tb = false) -> Output<Node> {
+        return std::make_shared<ov::op::v0::MatMul>(a, b, ta, tb);
+    };
+    auto mul = [](const Output<Node> & a, const Output<Node> & b) -> Output<Node> {
+        return std::make_shared<ov::op::v1::Multiply>(a, b);
+    };
+    auto add = [](const Output<Node> & a, const Output<Node> & b) -> Output<Node> {
+        return std::make_shared<ov::op::v1::Add>(a, b);
+    };
+    auto sub = [](const Output<Node> & a, const Output<Node> & b) -> Output<Node> {
+        return std::make_shared<ov::op::v1::Subtract>(a, b);
+    };
+    auto exp_op = [](const Output<Node> & x) -> Output<Node> { return std::make_shared<ov::op::v0::Exp>(x); };
+
+    if (T == 1) {
+        // [B, 1, H, D] -> [1, X, 1, D], batch 1 as below
+        q = mul(reshape(q, {1, X, 1, Dk}), f32(1.0f / std::sqrt((float) Dk)));
+        k = reshape(k, {1, X, 1, Dk});
+        v = reshape(v, {1, X, 1, Dv});
+        auto state_decay = exp_op(reshape(g, {1, X, 1, 1}));
+        beta = reshape(beta, {1, X, 1, 1});
+        Output<Node> s = reshape(state, {1, X, Dk, Dv});
+        auto v_new = mul(sub(v, matmul(mul(k, state_decay), s)), beta);  // [1, X, 1, Dv]
+        s = add(mul(s, state_decay), matmul(k, v_new, true, false));     // [1, X, Dk, Dv]
+        return {reshape(matmul(q, s), {B, 1, H, Dv}), reshape(s, {B, H, Dk, Dv})};
+    }
+
+    // Pad T to a multiple of CS. A padded token has g = 0 and beta = k = 0, so it leaves the state unchanged.
+    if (pad > 0) {
+        auto pad_tokens = [&](const Output<Node> & x, std::vector<size_t> zero_shape) -> Output<Node> {
+            zero_shape[1] = pad;
+            auto zeros = ov::op::v0::Constant::create(ov::element::f32, zero_shape, std::vector<float>{0.0f});
+            return std::make_shared<ov::op::v0::Concat>(ov::OutputVector{x, zeros}, 1);
+        };
+        q = pad_tokens(q, {(size_t) B, 0, (size_t) H, (size_t) Dk});
+        k = pad_tokens(k, {(size_t) B, 0, (size_t) H, (size_t) Dk});
+        v = pad_tokens(v, {(size_t) B, 0, (size_t) H, (size_t) Dv});
+        g = pad_tokens(g, {(size_t) B, 0, (size_t) H});
+        beta = pad_tokens(beta, {(size_t) B, 0, (size_t) H});
+    }
+
+    // Batch stays 1 for the NPU (a batched eltwise is split per batch and mis-broadcasts): X = B * H.
+    // [B, T, H, D] -> [1, X * N, CS, D]
+    auto to_chunks = [&](const Output<Node> & x, int64_t d) {
+        return reshape(transpose(x, {0, 2, 1, 3}), {1, X * N, CS, d});
+    };
+    q = mul(to_chunks(q, Dk), f32(1.0f / std::sqrt((float) Dk)));
+    k = to_chunks(k, Dk);
+    v = to_chunks(v, Dv);
+    g = reshape(transpose(g, {0, 2, 1}), {1, X * N, CS, 1});
+    beta = reshape(transpose(beta, {0, 2, 1}), {1, X * N, CS, 1});
+
+    std::vector<float> lower_incl(CS * CS), lower_strict(CS * CS), identity(CS * CS);
+    for (int64_t i = 0; i < CS; i++) {
+        for (int64_t j = 0; j < CS; j++) {
+            lower_incl[i * CS + j] = j <= i ? 1.0f : 0.0f;
+            lower_strict[i * CS + j] = j < i ? 1.0f : 0.0f;
+            identity[i * CS + j] = i == j ? 1.0f : 0.0f;
+        }
+    }
+    auto lower_incl_mask = gdn_chunk_mask(CS, lower_incl);
+    auto lower_strict_mask = gdn_chunk_mask(CS, lower_strict);
+    auto eye = gdn_chunk_mask(CS, identity);
+
+    // cumsum of g inside a chunk as a MatMul with the lower triangle of ones: gc [1, X * N, CS, 1]
+    auto gc_col = matmul(lower_incl_mask, g);
+    auto gc_row = reshape(gc_col, {1, X * N, 1, CS});
+    auto causal = std::make_shared<ov::op::v0::Convert>(lower_incl_mask, ov::element::boolean);
+    auto log_decay = std::make_shared<ov::op::v1::Select>(causal, sub(gc_col, gc_row), f32(0.0f));
+    auto decay = mul(exp_op(log_decay), lower_incl_mask);
+
+    auto kb = mul(k, beta);
+    auto vb = mul(v, beta);
+
+    // P = (I + L)^-1 with L = strict_lower(beta k k^T * decay)
+    auto neg_l = mul(mul(mul(matmul(kb, k, false, true), decay), lower_strict_mask), f32(-1.0f));
+    // p holds the inverses of the diagonal b x b blocks; merging pairs of them only needs the -L entries
+    // in the lower off-diagonal b x b block of each 2b x 2b block: p += p (-L masked) p
+    auto block_mask = [&](int64_t b) {
+        std::vector<float> m(CS * CS);
+        for (int64_t i = 0; i < CS; i++) {
+            for (int64_t j = 0; j < CS; j++) {
+                m[i * CS + j] = (i / (2 * b) == j / (2 * b) && i / b > j / b) ? 1.0f : 0.0f;
+            }
+        }
+        return gdn_chunk_mask(CS, m);
+    };
+    Output<Node> p = add(eye, mul(neg_l, block_mask(1)));
+    for (int64_t b = 2; b < CS; b *= 2) {
+        p = add(p, matmul(matmul(p, mul(neg_l, block_mask(b))), p));
+    }
+
+    auto gc_exp = exp_op(gc_col);                     // [1, X * N, CS, 1]
+    auto u = matmul(p, vb);                           // [1, X * N, CS, Dv]
+    auto w = matmul(p, mul(kb, gc_exp));              // [1, X * N, CS, Dk]
+    auto qg = mul(q, gc_exp);                         // [1, X * N, CS, Dk]
+    auto qk = mul(matmul(q, k, false, true), decay);  // [1, X * N, CS, CS]
+    auto gc_last = std::make_shared<ov::op::v8::Slice>(gc_col, i64({CS - 1}), i64({CS}), i64({1}), i64({2}));
+    auto kg = mul(k, exp_op(sub(gc_last, gc_col)));   // [1, X * N, CS, Dk]
+    auto state_decay = exp_op(gc_last);               // [1, X * N, 1, 1]
+
+    // Per-chunk slices, reshaped to [X, rows, cols]
+    auto chunk_axis = ov::op::v0::Constant::create(ov::element::i64, {}, {1});
+    auto split_chunks = [&](const Output<Node> & x, int64_t rows, int64_t cols) {
+        auto split = std::make_shared<ov::op::v1::Split>(reshape(x, {X, N, rows * cols}), chunk_axis,
+                                                         static_cast<size_t>(N));
+        std::vector<Output<Node>> parts;
+        for (int64_t n = 0; n < N; n++) {
+            parts.push_back(reshape(split->output(n), {X, rows, cols}));
+        }
+        return parts;
+    };
+    auto u_n = split_chunks(u, CS, Dv);
+    auto w_n = split_chunks(w, CS, Dk);
+    auto qg_n = split_chunks(qg, CS, Dk);
+    auto qk_n = split_chunks(qk, CS, CS);
+    auto kg_n = split_chunks(kg, CS, Dk);
+    auto state_decay_n = split_chunks(state_decay, 1, 1);
+
+    Output<Node> s = reshape(state, {X, Dk, Dv});
+    ov::OutputVector outs;
+    for (int64_t n = 0; n < N; n++) {
+        auto v_new = sub(u_n[n], matmul(w_n[n], s));                             // [X, CS, Dv]
+        outs.push_back(add(matmul(qg_n[n], s), matmul(qk_n[n], v_new)));         // [X, CS, Dv]
+        s = add(mul(s, state_decay_n[n]), matmul(kg_n[n], v_new, true, false));  // [X, Dk, Dv]
+    }
+
+    Output<Node> attn = N > 1 ? std::make_shared<ov::op::v0::Concat>(outs, 1)->output(0) : outs[0];
+    if (pad > 0) {
+        attn = std::make_shared<ov::op::v8::Slice>(attn, i64({0}), i64({T}), i64({1}), i64({1}));
+    }
+    attn = reshape(attn, {B, H, T, Dv});
+    return {transpose(attn, {0, 2, 1, 3}), reshape(s, {B, H, Dk, Dv})};
+}
+
+static OutputVector make_gated_delta_net(const Output<Node> & q,
+                                        const Output<Node> & k,
+                                        const Output<Node> & v,
+                                        const Output<Node> & state,
+                                        const Output<Node> & g,
+                                        const Output<Node> & beta,
+                                        bool norm,
+                                        float q_eps,
+                                        float k_eps) {
+    const auto & q_shape = q.get_partial_shape();
+    const auto & v_shape = v.get_partial_shape();
+    if (ggml_openvino_gdn_decompose_enabled() && !norm && q_shape.is_static() && v_shape.is_static()) {
+        auto outputs = make_gated_delta_net_chunked(q, k, v, g, beta, state,
+                                                   q_shape[0].get_length(), q_shape[1].get_length(),
+                                                   v_shape[2].get_length(), q_shape[3].get_length(),
+                                                   v_shape[3].get_length());
+        return {outputs.first, outputs.second};
+    }
+    auto gdn = std::make_shared<ov::op::internal::GatedDeltaNet>(q, k, v, state, g, beta, norm, q_eps, k_eps);
+    return {gdn->output(0), gdn->output(1)};
+}
+
+static OutputVector translate_gdn_snapshots(const Output<Node> & q,
+                                          const Output<Node> & k,
+                                          const Output<Node> & v,
+                                          const Output<Node> & state,
+                                          const Output<Node> & g,
+                                          const Output<Node> & beta,
+                                          int64_t features,
+                                          bool norm,
+                                          float q_eps,
+                                          float k_eps,
+                                          int64_t snapshot_count) {
+    // Unmatched graphs need state outputs. Ordinary GDN prefixes preserve that contract.
+    auto i64 = [](const Shape & shape, const std::vector<int64_t> & values) {
+        return ov::op::v0::Constant::create(ov::element::i64, shape, values);
+    };
+    auto shape = std::make_shared<ov::op::v3::ShapeOf>(q, ov::element::i64);
+    auto batch = std::make_shared<ov::op::v8::Gather>(shape, i64({1}, {0}), i64({}, {0}));
+    auto tokens = std::make_shared<ov::op::v8::Gather>(shape, i64({1}, {1}), i64({}, {0}));
+    auto perm = i64({4}, {0, 1, 3, 2});
+    auto initial = std::make_shared<ov::op::v1::Transpose>(state, perm);
+    Output<Node> attention;
+    OutputVector snapshots;
+    for (int64_t offset = 0; offset < snapshot_count; ++offset) {
+        auto end = std::make_shared<ov::op::v1::Maximum>(
+            std::make_shared<ov::op::v1::Subtract>(tokens, i64({1}, {offset})), i64({1}, {1}));
+        auto prefix = [&](const Output<Node> & value) -> Output<Node> {
+            if (offset == 0) {
+                return value;
+            }
+            // Materialize prefixes to avoid the GPU's dynamic Slice alias optimization.
+            auto indices = std::make_shared<ov::op::v4::Range>(
+                i64({}, {0}), std::make_shared<ov::op::v0::Squeeze>(end), i64({}, {1}), ov::element::i64);
+            return std::make_shared<ov::op::v8::Gather>(value, indices, i64({}, {1}));
+        };
+        auto gdn = std::make_shared<ov::op::internal::GatedDeltaNet>(
+            prefix(q), prefix(k), prefix(v), initial, prefix(g), prefix(beta), norm, q_eps, k_eps);
+        if (offset == 0) {
+            attention = gdn->output(0);
+        }
+        snapshots.push_back(std::make_shared<ov::op::v1::Reshape>(
+            std::make_shared<ov::op::v1::Transpose>(gdn->output(1), perm), i64({4}, {1, 1, -1, features}), false));
+    }
+    auto valid_rows = std::make_shared<ov::op::v1::Multiply>(
+        std::make_shared<ov::op::v1::Minimum>(tokens, i64({1}, {snapshot_count})), batch);
+    auto states = std::make_shared<ov::op::v8::Slice>(
+        std::make_shared<ov::op::v0::Concat>(snapshots, 2), i64({1}, {0}), valid_rows, i64({1}, {1}), i64({1}, {2}));
+    return {attention, states};
+}
+
+static OutputVector translate_gdn(const NodeContext & context, const OutputVector * cache_inputs) {
     auto v_shape = context.get_input_shape(2).to_shape();  // [B, T, H_v, S_v]
     auto q_shape = context.get_input_shape(0).to_shape();  // [B, T, H_k, S_k]
 
@@ -107,6 +390,7 @@ OutputVector translate_gated_delta_net(const NodeContext & context) {
     const int64_t H_v = v_shape[2];
     const int64_t S_v = v_shape[3];
     const int64_t H_k = q_shape[2];
+    const int64_t snapshot_count = context.get_output_op_params()[0];
     // const int64_t S_k = q_shape[3];
 
     auto q = context.get_input(0);
@@ -124,6 +408,12 @@ OutputVector translate_gated_delta_net(const NodeContext & context) {
         // Keep head tiling below; GDN applies normalization per head and keeps its attention scale.
         q = raw_q;
         k = raw_k;
+    }
+
+    if (context.get_op_case() == 1 && ggml_openvino_gdn_prescale_enabled()) {
+        // the output is linear in q and the state does not depend on q; the next rms_norm removes the scale
+        q = std::make_shared<ov::op::v1::Multiply>(
+            q, ov::op::v0::Constant::create(ov::element::f32, ov::Shape{1}, {ggml_openvino_gdn_q_scale()}));
     }
 
     // ggml maps GQA heads in tiled order, while OV GDN maps repeated heads in grouped order.
@@ -145,8 +435,13 @@ OutputVector translate_gated_delta_net(const NodeContext & context) {
 
     // ggml state layout (OV notation): [B, H_v, value_dim, key_dim]
     // GatedDeltaNet op expects: [B, H_v, key_dim, value_dim]
+    // With native state the buffer already holds the op layout, so skip both transposes. This is safe because
+    // resets and slot copies move whole states, and supports_op aborts instead of falling back to CPU.
+    const bool native_state = ggml_openvino_gdn_native_state_enabled();
     auto state_perm = ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{0, 1, 3, 2});
-    state = std::make_shared<ov::op::v1::Transpose>(state, state_perm);
+    if (!native_state && !cache_inputs && snapshot_count == 1) {
+        state = std::make_shared<ov::op::v1::Transpose>(state, state_perm);
+    }
 
     g = std::make_shared<ov::op::v0::Squeeze>(g, ov::op::v0::Constant::create(ov::element::i64, {1}, {3}));
     beta = std::make_shared<ov::op::v0::Squeeze>(beta, ov::op::v0::Constant::create(ov::element::i64, {1}, {3}));
@@ -177,32 +472,71 @@ OutputVector translate_gated_delta_net(const NodeContext & context) {
     //           << ", v=" << v.get_partial_shape() << ", g=" << g.get_partial_shape()
     //           << ", beta=" << beta.get_partial_shape() << ", state=" << state.get_partial_shape() << std::endl;
 
-    auto gdn = std::make_shared<ov::op::internal::GatedDeltaNet>(q, k, v, state, g, beta, fuse_qk_l2norm, q_eps, k_eps);
-    auto attn_4d = gdn->output(0);
-    auto state_4d = gdn->output(1);  // [B, H_v, key_dim, value_dim]
+#ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
+    if (cache_inputs) {
+        OutputVector args{q, k, v, (*cache_inputs)[0], g, beta};
+        args.insert(args.end(), cache_inputs->begin() + 1, cache_inputs->end());
+        auto fused = std::make_shared<ov::op::internal::RecurrentGatedDeltaNetUpdate>(
+            args, fuse_qk_l2norm, q_eps, k_eps, snapshot_count);
+        fused->set_friendly_name(context.get_name() + "/RecurrentGatedDeltaNetUpdate");
+        // The matched state VIEW is consumed only by the overridden full-cache
+        // writeback. Route that cache directly instead of materializing snapshots.
+        if (context.get_output_names().size() == 3) {
+            return {fused->output(0), fused->output(0), (*cache_inputs)[0]};
+        }
+        return {fused->output(0), (*cache_inputs)[0]};
+    }
+#endif
 
-    // std::cout << "GatedDeltaNet output shapes: attn=" << gdn->output(0).get_partial_shape()
-    //           << ", new_state=" << gdn->output(1).get_partial_shape() << std::endl;
-
-    // Transpose output state back to ggml layout [B, H_v, value_dim, key_dim]
-    auto state_transposed = std::make_shared<ov::op::v1::Transpose>(state_4d, state_perm);
-    if (context.get_output_names().size() == 2) {
+    Output<Node> attn_4d, states;
+    if (snapshot_count > 1) {
+        auto outputs = translate_gdn_snapshots(q, k, v, state, g, beta, H_v * S_v * q_shape[3],
+                                               fuse_qk_l2norm, q_eps, k_eps, snapshot_count);
+        attn_4d = outputs[0];
+        states = outputs[1];
+    } else {
+        auto outputs = make_gated_delta_net(q, k, v, state, g, beta, fuse_qk_l2norm, q_eps, k_eps);
+        attn_4d = outputs[0];
+        if (native_state) {
+            states = outputs[1];
+        } else {
+            states = std::make_shared<ov::op::v1::Transpose>(outputs[1], state_perm);
+        }
+    }
+    if (snapshot_count == 1 && context.get_output_names().size() == 2) {
         // The canonical graph consumes the packed GGML result only through separate attention
         // and state VIEWs. Publish the native outputs under those VIEW names to avoid
         // flatten -> concat -> reshape -> slice -> reshape chains. This also works for B > 1.
-        return rename_outputs_with_suffix({attn_4d, state_transposed}, context.get_name());
+        return rename_outputs_with_suffix({attn_4d, states}, context.get_name());
     }
 
     auto flat_shape_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
     auto attn = std::make_shared<ov::op::v1::Reshape>(attn_4d, flat_shape_1d, false);
-    auto new_state = std::make_shared<ov::op::v1::Reshape>(state_transposed, flat_shape_1d, false);
+    auto new_state = std::make_shared<ov::op::v1::Reshape>(states, flat_shape_1d, false);
     auto packed = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{attn, new_state}, 0);
     auto out_shape = ov::op::v0::Constant::create(ov::element::i64, {4},
                                                   std::vector<int64_t>{1, 1, -1 /*T * B + S_v * B*/, S_v * H_v});
     auto res = std::make_shared<ov::op::v1::Reshape>(packed, out_shape, false);
 
+    if (context.get_output_names().size() == 3) {
+        auto flat_states = std::make_shared<ov::op::v1::Reshape>(
+            states,
+            ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{1, 1, -1, S_v * S_v * H_v}),
+            false);
+        return rename_outputs_with_suffix({res, attn_4d, flat_states}, context.get_name());
+    }
     return rename_outputs_with_suffix({res}, context.get_name());
 }
+
+OutputVector translate_gated_delta_net(const NodeContext & context) {
+    return translate_gdn(context, nullptr);
+}
+
+#ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
+OutputVector translate_recurrent_gated_delta_net(const NodeContext & context, const OutputVector & cache_inputs) {
+    return translate_gdn(context, &cache_inputs);
+}
+#endif
 
 static OutputVector translate_gated_delta_net_ref(const NodeContext & context) {
     num_inputs_check(context, 6, 6);

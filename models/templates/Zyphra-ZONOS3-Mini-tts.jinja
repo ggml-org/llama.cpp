@@ -1,0 +1,627 @@
+{#- ZONOS3 "tts" template: the text to speak (first message), normalized; the helper adds BOS and EOS itself -#}
+{#- numbers, decimals, money, percents, ordinals, years and clock times are spelled out in en, fr, de, es, it, pt, ja and zh -#}
+{#- other languages pass through; patterns: tts_norm_scan() / tts_norm_sub(), see docs/tts-norm-patterns.md -#}
+{#- the ja / zh conventions follow the NeMo grammars of the reference (e.g. zh: 两千, 二百, 三百一十六, 二零零二年) -#}
+{#- optional identifies this template, so that llama.cpp can detect it and apply quick fixes to GGUFs already converted -#}
+{%- set template_name = "zonos3-mini" -%}
+
+{#- English -#}
+{%- set ones = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve",
+                "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"] -%}
+{%- set tens = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"] -%}
+{%- set scales = ["", " thousand", " million", " billion", " trillion"] -%}
+{%- set irregular = {"one": "first", "two": "second", "three": "third", "five": "fifth", "eight": "eighth", "nine": "ninth", "twelve": "twelfth"} -%}
+
+{%- macro under100(n) -%}
+{{- ones[n] if n < 20 else tens[(n / 10)|int] ~ ("-" ~ ones[n % 10] if n % 10 else "") -}}
+{%- endmacro -%}
+
+{%- macro under1000(n) -%}
+{{- (ones[(n / 100)|int] ~ " hundred" ~ (" " ~ under100(n % 100) if n % 100 else "")) if n >= 100 else under100(n) -}}
+{%- endmacro -%}
+
+{#- all the *_card macros take a digit string of up to 15 digits -#}
+{%- macro en_card(s) -%}
+{%- set p = ["", "00", "0"][(s|length) % 3] ~ s -%}
+{%- set ns = namespace(out="", ng=((p|length) / 3)|int) -%}
+{%- for g in range(ns.ng) -%}
+{%- set v = p[g * 3:g * 3 + 3]|int -%}
+{%- if v > 0 -%}
+{%- set ns.out = ns.out ~ (" " if ns.out else "") ~ under1000(v) ~ scales[ns.ng - 1 - g] -%}
+{%- endif -%}
+{%- endfor -%}
+{{- ns.out if ns.out else "zero" -}}
+{%- endmacro -%}
+
+{#- the last word of a cardinal becomes ordinal: twenty-one -> twenty-first -#}
+{%- macro en_ord(w) -%}
+{%- set last = (w.split(" ")|last).split("-")|last -%}
+{%- set head = w[0:(w|length) - (last|length)] -%}
+{{- head ~ (irregular[last] if last in irregular else (last[0:(last|length) - 1] ~ "ieth" if last.endswith("y") else last ~ "th")) -}}
+{%- endmacro -%}
+
+{#- French: traditional spelling, quatre-vingts / deux cents take the plural s only at the end -#}
+{%- set fr_u = ["zéro", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf", "dix", "onze", "douze", "treize",
+                "quatorze", "quinze", "seize"] -%}
+{%- set fr_t = ["", "", "vingt", "trente", "quarante", "cinquante", "soixante", "", "quatre-vingt", ""] -%}
+{%- set fr_big = [[], [], ["million", "millions"], ["milliard", "milliards"], ["billion", "billions"]] -%}
+
+{%- macro fr99(n, final) -%}
+{%- if n < 17 -%}
+{{- fr_u[n] -}}
+{%- elif n < 20 -%}
+{{- "dix-" ~ fr_u[n - 10] -}}
+{%- else -%}
+{%- set t = (n / 10)|int -%}
+{%- set u = n % 10 -%}
+{%- if t == 7 or t == 9 -%}
+{{- ("soixante" if t == 7 else "quatre-vingt") ~ (" et onze" if t == 7 and u == 1 else "-" ~ fr99(n - (60 if t == 7 else 80), final)) -}}
+{%- else -%}
+{{- fr_t[t] ~ ("s" if t == 8 and u == 0 and final else "") ~ (" et un" if u == 1 and t != 8 else ("-" ~ fr_u[u] if u else "")) -}}
+{%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro fr999(n, final) -%}
+{%- set h = (n / 100)|int -%}
+{%- set r = n % 100 -%}
+{%- set hs = "" if h == 0 else ("cent" if h == 1 else fr_u[h] ~ " cent" ~ ("s" if r == 0 and final else "")) -%}
+{{- hs ~ (" " if hs and r else "") ~ (fr99(r, final) if r else "") -}}
+{%- endmacro -%}
+
+{%- macro fr_card(s) -%}
+{%- set p = ["", "00", "0"][(s|length) % 3] ~ s -%}
+{%- set ns = namespace(out="", ng=((p|length) / 3)|int) -%}
+{%- for g in range(ns.ng) -%}
+{%- set v = p[g * 3:g * 3 + 3]|int -%}
+{%- set k = ns.ng - 1 - g -%}
+{%- if v > 0 -%}
+{%- if k == 0 -%}
+{%- set w = fr999(v, true) -%}
+{%- elif k == 1 -%}
+{%- set w = ("" if v == 1 else fr999(v, false) ~ " ") ~ "mille" -%}
+{%- else -%}
+{%- set w = fr999(v, true) ~ " " ~ fr_big[k][0 if v == 1 else 1] -%}
+{%- endif -%}
+{%- set ns.out = ns.out ~ (" " if ns.out else "") ~ w -%}
+{%- endif -%}
+{%- endfor -%}
+{{- ns.out if ns.out else "zéro" -}}
+{%- endmacro -%}
+
+{%- macro fr_ord(w) -%}
+{%- set last = (w.split(" ")|last).split("-")|last -%}
+{%- set head = w[0:(w|length) - (last|length)] -%}
+{%- set base = last[0:(last|length) - 1] if last in ["vingts", "cents", "millions", "milliards", "billions"] else last -%}
+{%- set map = {"cinq": "cinquième", "neuf": "neuvième"} -%}
+{{- head ~ (map[base] if base in map else (base[0:(base|length) - 1] ~ "ième" if base.endswith("e") else base ~ "ième")) -}}
+{%- endmacro -%}
+
+{#- German: below a million one word, eins / ein / eine -#}
+{%- set de_u = ["null", "eins", "zwei", "drei", "vier", "fünf", "sechs", "sieben", "acht", "neun", "zehn", "elf", "zwölf",
+                "dreizehn", "vierzehn", "fünfzehn", "sechzehn", "siebzehn", "achtzehn", "neunzehn"] -%}
+{%- set de_t = ["", "", "zwanzig", "dreißig", "vierzig", "fünfzig", "sechzig", "siebzig", "achtzig", "neunzig"] -%}
+{%- set de_big = [[], [], ["Million", "Millionen"], ["Milliarde", "Milliarden"], ["Billion", "Billionen"]] -%}
+
+{%- macro de99(n) -%}
+{{- de_u[n] if n < 20 else ((("ein" if n % 10 == 1 else de_u[n % 10]) ~ "und") if n % 10 else "") ~ de_t[(n / 10)|int] -}}
+{%- endmacro -%}
+
+{%- macro de999(n) -%}
+{%- set h = (n / 100)|int -%}
+{%- set r = n % 100 -%}
+{{- (((("ein" if h == 1 else de_u[h]) ~ "hundert")) if h else "") ~ (de99(r) if r else "") -}}
+{%- endmacro -%}
+
+{#- attributive form: eins -> ein -#}
+{%- macro de_attr(w) -%}
+{{- w[0:(w|length) - 1] if w.endswith("eins") else w -}}
+{%- endmacro -%}
+
+{%- macro de_card(s) -%}
+{%- set p = ["", "00", "0"][(s|length) % 3] ~ s -%}
+{%- set ns = namespace(big="", small="", ng=((p|length) / 3)|int) -%}
+{%- for g in range(ns.ng) -%}
+{%- set v = p[g * 3:g * 3 + 3]|int -%}
+{%- set k = ns.ng - 1 - g -%}
+{%- if v > 0 -%}
+{%- if k == 0 -%}
+{%- set ns.small = ns.small ~ de999(v) -%}
+{%- elif k == 1 -%}
+{%- set ns.small = ns.small ~ de_attr(de999(v)) ~ "tausend" -%}
+{%- else -%}
+{%- set ns.big = ns.big ~ (" " if ns.big else "") ~ ("eine" if v == 1 else de_attr(de999(v))) ~ " " ~ de_big[k][0 if v == 1 else 1] -%}
+{%- endif -%}
+{%- endif -%}
+{%- endfor -%}
+{%- set out = ns.big ~ (" " if ns.big and ns.small else "") ~ ns.small -%}
+{{- out if out else "null" -}}
+{%- endmacro -%}
+
+{#- join the non-empty parts with a space -#}
+{%- macro join4(a, b, c, d) -%}
+{%- set ns = namespace(out="") -%}
+{%- for x in [a, b, c, d] -%}
+{%- if x -%}
+{%- set ns.out = ns.out ~ (" " if ns.out else "") ~ x -%}
+{%- endif -%}
+{%- endfor -%}
+{{- ns.out -}}
+{%- endmacro -%}
+
+{#- Spanish: long scale (mil millones, billón), un / veintiún before a noun or mil -#}
+{%- set es_u = ["cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez", "once", "doce",
+                "trece", "catorce", "quince", "dieciséis", "diecisiete", "dieciocho", "diecinueve", "veinte", "veintiuno",
+                "veintidós", "veintitrés", "veinticuatro", "veinticinco", "veintiséis", "veintisiete", "veintiocho", "veintinueve"] -%}
+{%- set es_t = ["", "", "", "treinta", "cuarenta", "cincuenta", "sesenta", "setenta", "ochenta", "noventa"] -%}
+{%- set es_h = ["", "ciento", "doscientos", "trescientos", "cuatrocientos", "quinientos", "seiscientos", "setecientos",
+                "ochocientos", "novecientos"] -%}
+
+{%- macro es99(n) -%}
+{{- es_u[n] if n < 30 else es_t[(n / 10)|int] ~ (" y " ~ es_u[n % 10] if n % 10 else "") -}}
+{%- endmacro -%}
+
+{%- macro es999(n) -%}
+{%- if n == 100 -%}
+{{- "cien" -}}
+{%- else -%}
+{%- set h = (n / 100)|int -%}
+{%- set r = n % 100 -%}
+{{- es_h[h] ~ (" " if h and r else "") ~ (es99(r) if r else "") -}}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro es_apoc(w) -%}
+{{- (w[0:(w|length) - 9] ~ "veintiún") if w.endswith("veintiuno") else ((w[0:(w|length) - 3] ~ "un") if w.endswith("uno") else w) -}}
+{%- endmacro -%}
+
+{%- macro es6(n) -%}
+{%- set a = (n / 1000)|int -%}
+{%- set b = n % 1000 -%}
+{%- set hi = "" if a == 0 else ("mil" if a == 1 else es_apoc(es999(a)) ~ " mil") -%}
+{{- hi ~ (" " if hi and b else "") ~ (es999(b) if b else "") -}}
+{%- endmacro -%}
+
+{%- macro es_card(s) -%}
+{%- set p = ("000000000000000000" ~ s)[-18:] -%}
+{%- set top = p[0:6]|int -%}
+{%- set mid = p[6:12]|int -%}
+{%- set low = p[12:18]|int -%}
+{%- set a = "" if top == 0 else ("un billón" if top == 1 else es_apoc(es6(top)) ~ " billones") -%}
+{%- set b = "" if mid == 0 else ("un millón" if mid == 1 else es_apoc(es6(mid)) ~ " millones") -%}
+{%- set out = join4(a, b, es6(low) if low else "", "") -%}
+{{- out if out else "cero" -}}
+{%- endmacro -%}
+
+{#- Italian: below a million one word, ventitré, centottanta -#}
+{%- set it_u = ["zero", "uno", "due", "tre", "quattro", "cinque", "sei", "sette", "otto", "nove", "dieci", "undici", "dodici",
+                "tredici", "quattordici", "quindici", "sedici", "diciassette", "diciotto", "diciannove"] -%}
+{%- set it_t = ["", "", "venti", "trenta", "quaranta", "cinquanta", "sessanta", "settanta", "ottanta", "novanta"] -%}
+
+{%- macro it99(n) -%}
+{%- if n < 20 -%}
+{{- it_u[n] -}}
+{%- else -%}
+{%- set t = it_t[(n / 10)|int] -%}
+{%- set u = n % 10 -%}
+{{- (t[0:(t|length) - 1] if u == 1 or u == 8 else t) ~ (it_u[u] if u else "") -}}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro it999(n) -%}
+{%- set h = (n / 100)|int -%}
+{%- set r = n % 100 -%}
+{%- set hs = "" if h == 0 else ("cento" if h == 1 else it_u[h] ~ "cento") -%}
+{{- (hs[0:(hs|length) - 1] if (r / 10)|int == 8 else hs) ~ (it99(r) if r else "") -}}
+{%- endmacro -%}
+
+{#- without the final accent, see it_acc -#}
+{%- macro it6(n) -%}
+{%- set a = (n / 1000)|int -%}
+{%- set b = n % 1000 -%}
+{{- ("" if a == 0 else ("mille" if a == 1 else it999(a) ~ "mila")) ~ (it999(b) if b else "") -}}
+{%- endmacro -%}
+
+{%- macro it_acc(w) -%}
+{{- (w[0:(w|length) - 3] ~ "tré") if w.endswith("tre") and w != "tre" else w -}}
+{%- endmacro -%}
+
+{%- macro it_card(s) -%}
+{%- set p = ("000000000000000000" ~ s)[-18:] -%}
+{%- set bil = p[0:6]|int -%}
+{%- set mld = p[6:9]|int -%}
+{%- set mil = p[9:12]|int -%}
+{%- set low = p[12:18]|int -%}
+{%- set a = "" if bil == 0 else ("un bilione" if bil == 1 else it_acc(it6(bil)) ~ " bilioni") -%}
+{%- set b = "" if mld == 0 else ("un miliardo" if mld == 1 else it_acc(it999(mld)) ~ " miliardi") -%}
+{%- set c = "" if mil == 0 else ("un milione" if mil == 1 else it_acc(it999(mil)) ~ " milioni") -%}
+{%- set out = join4(a, b, c, it_acc(it6(low)) if low else "") -%}
+{{- out if out else "zero" -}}
+{%- endmacro -%}
+
+{#- Portuguese (Brazil): short scale, "e" before the last group when it is below 100 or a round hundred -#}
+{%- set pt_u = ["zero", "um", "dois", "três", "quatro", "cinco", "seis", "sete", "oito", "nove", "dez", "onze", "doze",
+                "treze", "catorze", "quinze", "dezesseis", "dezessete", "dezoito", "dezenove"] -%}
+{%- set pt_t = ["", "", "vinte", "trinta", "quarenta", "cinquenta", "sessenta", "setenta", "oitenta", "noventa"] -%}
+{%- set pt_h = ["", "cento", "duzentos", "trezentos", "quatrocentos", "quinhentos", "seiscentos", "setecentos", "oitocentos",
+                "novecentos"] -%}
+{%- set pt_big = [[], [], ["milhão", "milhões"], ["bilhão", "bilhões"], ["trilhão", "trilhões"]] -%}
+
+{%- macro pt99(n) -%}
+{{- pt_u[n] if n < 20 else pt_t[(n / 10)|int] ~ (" e " ~ pt_u[n % 10] if n % 10 else "") -}}
+{%- endmacro -%}
+
+{%- macro pt999(n) -%}
+{%- if n == 100 -%}
+{{- "cem" -}}
+{%- else -%}
+{%- set h = (n / 100)|int -%}
+{%- set r = n % 100 -%}
+{{- pt_h[h] ~ (" e " if h and r else "") ~ (pt99(r) if r else "") -}}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro pt_card(s) -%}
+{%- set p = ["", "00", "0"][(s|length) % 3] ~ s -%}
+{%- set ns = namespace(out="", ng=((p|length) / 3)|int, last=-1) -%}
+{%- for g in range(ns.ng) -%}
+{%- if p[g * 3:g * 3 + 3]|int > 0 -%}
+{%- set ns.last = g -%}
+{%- endif -%}
+{%- endfor -%}
+{%- for g in range(ns.ng) -%}
+{%- set v = p[g * 3:g * 3 + 3]|int -%}
+{%- set k = ns.ng - 1 - g -%}
+{%- if v > 0 -%}
+{%- if k == 0 -%}
+{%- set w = pt999(v) -%}
+{%- elif k == 1 -%}
+{%- set w = "mil" if v == 1 else pt999(v) ~ " mil" -%}
+{%- else -%}
+{%- set w = ("um" if v == 1 else pt999(v)) ~ " " ~ pt_big[k][0 if v == 1 else 1] -%}
+{%- endif -%}
+{%- set sep = " e " if g == ns.last and (v < 100 or v % 100 == 0) else " " -%}
+{%- set ns.out = ns.out ~ (sep if ns.out else "") ~ w -%}
+{%- endif -%}
+{%- endfor -%}
+{{- ns.out if ns.out else "zero" -}}
+{%- endmacro -%}
+
+{#- Japanese: 万 / 億 / 兆 groups, no 一 before 十 / 百 / 千 (but 一千万), zero digits are skipped -#}
+{%- set cjk_d = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九"] -%}
+
+{%- macro ja4(n, big) -%}
+{%- set th = (n / 1000)|int -%}
+{%- set h = ((n / 100)|int) % 10 -%}
+{%- set t = ((n / 10)|int) % 10 -%}
+{%- set u = n % 10 -%}
+{{- ((("一" if big else "") if th == 1 else cjk_d[th]) ~ "千" if th else "")
+  ~ (("" if h == 1 else cjk_d[h]) ~ "百" if h else "")
+  ~ (("" if t == 1 else cjk_d[t]) ~ "十" if t else "")
+  ~ (cjk_d[u] if u else "") -}}
+{%- endmacro -%}
+
+{%- macro ja_card(s) -%}
+{%- set p = ("0000000000000000" ~ s)[-16:] -%}
+{%- set ns = namespace(out="") -%}
+{%- for g in range(4) -%}
+{%- set v = p[g * 4:g * 4 + 4]|int -%}
+{%- if v > 0 -%}
+{%- set ns.out = ns.out ~ ja4(v, g < 3) ~ ["兆", "億", "万", ""][g] -%}
+{%- endif -%}
+{%- endfor -%}
+{{- ns.out if ns.out else "零" -}}
+{%- endmacro -%}
+
+{#- Chinese: 万 / 亿 groups, 两 before 千 / 万 / 亿, 二 before 百, 十 at the head but 一十 inside, one 零 per gap -#}
+{%- macro zh4(n, head) -%}
+{%- set ds = [(n / 1000)|int, ((n / 100)|int) % 10, ((n / 10)|int) % 10, n % 10] -%}
+{%- set ns = namespace(out="", zero=false) -%}
+{%- for i in range(4) -%}
+{%- set d = ds[i] -%}
+{%- if d == 0 -%}
+{%- if ns.out -%}
+{%- set ns.zero = true -%}
+{%- endif -%}
+{%- else -%}
+{%- set w = "两" if d == 2 and i == 0 else cjk_d[d] -%}
+{%- if i == 2 and d == 1 and head and not ns.out -%}
+{%- set w = "" -%}
+{%- endif -%}
+{%- set ns.out = ns.out ~ ("零" if ns.zero else "") ~ w ~ ["千", "百", "十", ""][i] -%}
+{%- set ns.zero = false -%}
+{%- endif -%}
+{%- endfor -%}
+{{- ns.out -}}
+{%- endmacro -%}
+
+{%- macro zh_card(s) -%}
+{%- set p = ("0000000000000000" ~ s)[-16:] -%}
+{%- set ns = namespace(out="", gap=false) -%}
+{%- for g in range(4) -%}
+{%- set v = p[g * 4:g * 4 + 4]|int -%}
+{%- if v == 0 -%}
+{%- if ns.out -%}
+{%- set ns.gap = true -%}
+{%- endif -%}
+{%- else -%}
+{%- set w = "两" if v == 2 and g < 3 else zh4(v, not ns.out) -%}
+{%- set ns.out = ns.out ~ ("零" if ns.out and (ns.gap or v < 1000) else "") ~ w ~ ["万亿", "亿", "万", ""][g] -%}
+{%- set ns.gap = false -%}
+{%- endif -%}
+{%- endfor -%}
+{{- ns.out if ns.out else "零" -}}
+{%- endmacro -%}
+
+{#- per-language words -#}
+{%- set digit_words = {"en": ones[0:10], "fr": fr_u[0:10], "de": de_u[0:10], "es": es_u[0:10], "it": it_u[0:10], "pt": pt_u[0:10],
+                       "ja": cjk_d, "zh": cjk_d} -%}
+{%- set W = {
+    "en": {"point": " point ",   "minus": "minus ",   "and": " and ", "percent": " percent",   "sep": " "},
+    "fr": {"point": " virgule ", "minus": "moins ",   "and": " et ",  "percent": " pour cent", "sep": " "},
+    "de": {"point": " Komma ",   "minus": "minus ",   "and": " und ", "percent": " Prozent",   "sep": " "},
+    "es": {"point": " coma ",    "minus": "menos ",   "and": " con ", "percent": " por ciento", "sep": " "},
+    "it": {"point": " virgola ", "minus": "meno ",    "and": " e ",   "percent": " per cento", "sep": " "},
+    "pt": {"point": " vírgula ", "minus": "menos ",   "and": " e ",   "percent": " por cento", "sep": " "},
+    "ja": {"point": "点",        "minus": "マイナス", "and": "",      "percent": "パーセント",  "sep": ""},
+    "zh": {"point": "点",        "minus": "负",       "and": "",      "percent": "",           "sep": ""},
+} -%}
+{#- currency -> [singular, plural, cent singular, cent plural]; ja / zh: the unit after the number -#}
+{%- set M = {
+    "en": {"$": ["dollar", "dollars", "cent", "cents"], "€": ["euro", "euros", "cent", "cents"],
+           "£": ["pound", "pounds", "penny", "pence"], "¥": ["yen", "yen", "sen", "sen"]},
+    "fr": {"$": ["dollar", "dollars", "cent", "cents"], "€": ["euro", "euros", "centime", "centimes"]},
+    "de": {"$": ["Dollar", "Dollar", "Cent", "Cent"], "€": ["Euro", "Euro", "Cent", "Cent"], "£": ["Pfund", "Pfund", "Penny", "Pence"]},
+    "es": {"$": ["dólar", "dólares", "centavo", "centavos"], "€": ["euro", "euros", "céntimo", "céntimos"]},
+    "it": {"$": ["dollaro", "dollari", "centesimo", "centesimi"], "€": ["euro", "euro", "centesimo", "centesimi"]},
+    "pt": {"$": ["dólar", "dólares", "centavo", "centavos"], "€": ["euro", "euros", "cêntimo", "cêntimos"],
+           "R$": ["real", "reais", "centavo", "centavos"]},
+    "ja": {"$": "ドル", "€": "ユーロ", "£": "ポンド", "¥": "円"},
+    "zh": {"$": "美元", "€": "欧元", "£": "英镑", "¥": "元"},
+} -%}
+{%- set es_ord = ["", "primero", "segundo", "tercero", "cuarto", "quinto", "sexto", "séptimo", "octavo", "noveno", "décimo"] -%}
+{%- set it_ord = ["", "primo", "secondo", "terzo", "quarto", "quinto", "sesto", "settimo", "ottavo", "nono", "decimo"] -%}
+{%- set pt_ord = ["", "primeiro", "segundo", "terceiro", "quarto", "quinto", "sexto", "sétimo", "oitavo", "nono", "décimo"] -%}
+
+{%- macro card(L, s) -%}
+{%- if L == "fr" -%}{{- fr_card(s) -}}
+{%- elif L == "de" -%}{{- de_card(s) -}}
+{%- elif L == "es" -%}{{- es_card(s) -}}
+{%- elif L == "it" -%}{{- it_card(s) -}}
+{%- elif L == "pt" -%}{{- pt_card(s) -}}
+{%- elif L == "ja" -%}{{- ja_card(s) -}}
+{%- elif L == "zh" -%}{{- zh_card(s) -}}
+{%- else -%}{{- en_card(s) -}}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- attributive form before a noun: ein Euro, un euro, veintiún euros -#}
+{%- macro attr(L, w) -%}
+{%- if L == "de" -%}{{- de_attr(w) -}}
+{%- elif L == "es" -%}{{- es_apoc(w) -}}
+{%- elif L == "it" and w == "uno" -%}{{- "un" -}}
+{%- else -%}{{- w -}}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro spell(L, s) -%}
+{%- set ns = namespace(out="") -%}
+{%- for i in range(s|length) -%}
+{%- set ns.out = ns.out ~ (W[L]["sep"] if i > 0 else "") ~ digit_words[L][s[i:i + 1]|int] -%}
+{%- endfor -%}
+{{- ns.out -}}
+{%- endmacro -%}
+
+{#- decimals: fr / es / it / pt read a short fraction as a number (virgule quatorze), the others digit by digit -#}
+{%- macro fraction(L, f) -%}
+{%- if L in ["fr", "es", "it", "pt"] and f|length <= 3 -%}
+{%- set z = tts_norm_sub(f, "^(0*).*", "%1") -%}
+{%- set rest = f[z|length:] -%}
+{{- spell(L, z) ~ (" " if z and rest else "") ~ (card(L, rest) if rest else "") -}}
+{%- else -%}
+{{- spell(L, f) -}}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- en: 1990 -> nineteen ninety, 1905 -> nineteen oh five, 2005 -> two thousand five; de: 1990 -> neunzehnhundertneunzig -#}
+{%- macro year(L, s) -%}
+{%- set hi = s[0:2]|int -%}
+{%- set lo = s[2:4]|int -%}
+{%- if L == "de" -%}
+{{- (de99(hi) ~ "hundert" ~ (de99(lo) if lo else "")) if hi < 20 else de_card(s) -}}
+{%- elif (hi == 20 and lo < 10) or (hi % 10 == 0 and lo == 0) -%}
+{{- en_card(s) -}}
+{%- elif lo == 0 -%}
+{{- under100(hi) ~ " hundred" -}}
+{%- else -%}
+{{- under100(hi) ~ (" oh " ~ ones[lo] if lo < 10 else " " ~ under100(lo)) -}}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- ip: digits with optional thousands separators, frac: decimal digits or empty -#}
+{%- macro number(L, ip, frac, year_ok) -%}
+{%- set d = tts_norm_sub(ip, "%D", "") -%}
+{%- if d|length > 15 or (d|length > 1 and d[0:1] == "0" and not frac) -%}
+{{- spell(L, d) ~ (W[L]["point"] ~ spell(L, frac) if frac else "") -}}
+{%- elif frac -%}
+{{- card(L, d) ~ W[L]["point"] ~ fraction(L, frac) -}}
+{%- elif year_ok and d == ip and d|length == 4 and d|int >= 1100 and d|int <= 2099 and L in ["en", "de"] -%}
+{{- year(L, d) -}}
+{%- else -%}
+{{- card(L, d) -}}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- fr / es / it / pt: million and above are nouns, a round amount takes "de" before the currency (deux millions d'euros) -#}
+{%- macro unit_sep(L, ip, unit) -%}
+{%- set d = tts_norm_sub(ip, "%D", "") -%}
+{%- if L in ["fr", "es", "it", "pt"] and d|length > 6 and d[(d|length) - 6:] == "000000" -%}
+{{- " d'" if L == "fr" and unit[0:1] in "aeiou" else " " ~ ("di" if L == "it" else "de") ~ " " -}}
+{%- else -%}
+{{- " " -}}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro money(L, cur, ip, cents, scale) -%}
+{%- if cur not in M[L] -%}
+{{- cur ~ W[L]["sep"] ~ number(L, ip, cents, false) -}}
+{%- elif L in ["ja", "zh"] -%}
+{{- number(L, ip, cents, false) ~ M[L][cur] -}}
+{%- else -%}
+{%- set u = M[L][cur] -%}
+{%- if scale -%}
+{{- number(L, ip, cents, false) ~ " " ~ scale ~ " " ~ u[1] -}}
+{%- elif cents|length == 2 -%}
+{%- set c = attr(L, card(L, cents)) ~ " " ~ u[2 if cents|int == 1 else 3] -%}
+{%- if tts_norm_sub(ip, "%D", "")|int == 0 -%}
+{{- c -}}
+{%- else -%}
+{{- attr(L, number(L, ip, "", false)) ~ unit_sep(L, ip, u[1]) ~ u[0 if ip == "1" else 1] ~ (W[L]["and"] ~ c if cents|int > 0 else "") -}}
+{%- endif -%}
+{%- elif cents -%}
+{{- number(L, ip, cents, false) ~ " " ~ u[1] -}}
+{%- else -%}
+{{- attr(L, number(L, ip, "", false)) ~ unit_sep(L, ip, u[1]) ~ u[0 if ip == "1" else 1] -}}
+{%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro clock(L, h, m) -%}
+{%- set hn = h|int -%}
+{%- set mm = m|int if m else 0 -%}
+{%- if L == "fr" -%}
+{%- set w = fr_card(h) -%}
+{{- w ~ ("e" if w.endswith("un") else "") ~ (" heure" if hn <= 1 else " heures") ~ (" " ~ fr_card(m) if mm else "") -}}
+{%- elif L == "de" -%}
+{{- de_attr(de_card(h)) ~ " Uhr" ~ (" " ~ de_card(m) if mm else "") -}}
+{%- elif L == "es" -%}
+{%- set w = es_card(h) -%}
+{{- (w[0:(w|length) - 1] ~ "a" if w.endswith("uno") else w) ~ (" y " ~ es_card(m) if mm else " en punto") -}}
+{%- elif L == "it" -%}
+{{- ("una" if hn == 1 else it_card(h)) ~ (" e " ~ it_card(m) if mm else "") -}}
+{%- elif L == "pt" -%}
+{%- set w = pt_card(h) -%}
+{%- set w = w ~ "a" if w.endswith("um") else (w[0:(w|length) - 4] ~ "duas" if w.endswith("dois") else w) -%}
+{{- w ~ (" e " ~ pt_card(m) if mm else (" hora" if hn == 1 else " horas")) -}}
+{%- elif L == "ja" -%}
+{{- ja_card(h) ~ "時" ~ (ja_card(m) ~ "分" if mm else "") -}}
+{%- elif L == "zh" -%}
+{{- ("两" if hn == 2 else zh_card(h)) ~ "点" ~ (zh_card(m) ~ "分" if mm else "") -}}
+{%- else -%}
+{{- en_card(h) ~ (" o'clock" if mm == 0 else (" oh " ~ ones[mm] if mm < 10 else " " ~ under100(mm))) -}}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro ordinal(L, d, suf) -%}
+{%- set n = d|int -%}
+{%- if L == "fr" -%}
+{%- set plural = "s" if suf.endswith("s") else "" -%}
+{%- if n == 1 -%}
+{{- ("première" if suf.startswith("r") or suf.startswith("è") else "premier") ~ plural -}}
+{%- elif n == 2 and suf.startswith("nd") -%}
+{{- ("seconde" if suf.startswith("nde") else "second") ~ plural -}}
+{%- else -%}
+{{- fr_ord(fr_card(d)) ~ plural -}}
+{%- endif -%}
+{%- elif L in ["es", "it", "pt"] -%}
+{%- set fem = suf == "ª" -%}
+{%- if n >= 1 and n <= 10 -%}
+{%- set w = {"es": es_ord, "it": it_ord, "pt": pt_ord}[L][n] -%}
+{{- w[0:(w|length) - 1] ~ "a" if fem else w -}}
+{%- elif L == "it" and n < 1000000 -%}
+{#- undicesimo, ventitreesimo, ventiseiesimo -#}
+{%- set w = it6(n) -%}
+{%- set w = w ~ "esimo" if w.endswith("tre") or w.endswith("sei") else w[0:(w|length) - 1] ~ "esimo" -%}
+{{- w[0:(w|length) - 1] ~ "a" if fem else w -}}
+{%- else -%}
+{{- card(L, d) -}}
+{%- endif -%}
+{%- else -%}
+{{- en_ord(en_card(d)) -}}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- set l = ((language | lower) if language is defined and language else "").replace("-", "_") -%}
+{%- set L = "en" if l == "" else ("zh" if l.startswith("zh") or l.startswith("cmn") else l.split("_")[0]) -%}
+{%- set text = messages[0]["content"] -%}
+{%- if L not in M -%}
+{{- text -}}
+{%- else -%}
+{%- set t = text -%}
+{%- if L not in ["ja", "zh"] -%}
+{#- a space between a number and the letters it touches (5km, mp3), except for ordinal suffixes and the French 15h30 -#}
+{%- set suffixes = {"en": "st|nd|rd|th|s", "fr": "ers?|res?|ères?|nde?s?|èmes?|es?|h", "es": "º|ª", "it": "º|ª", "pt": "º|ª"} -%}
+{%- if L in suffixes -%}
+{%- set t = tts_norm_sub(t, "(%d)(?!(?:" ~ suffixes[L] ~ ")(?!%a))(%a)", "%1 %2") -%}
+{%- else -%}
+{%- set t = tts_norm_sub(t, "(%d)(%a)", "%1 %2") -%}
+{%- endif -%}
+{%- set t = tts_norm_sub(t, "(?<!%d)(%a)(%d)", "%1 %2") -%}
+{%- endif -%}
+{#- integer part with thousands separators (groups of exactly three digits), decimal part not followed by another group -#}
+{%- set tsep = {"fr": "[%s.]", "de": "%.", "es": "%.", "it": "%.", "pt": "%."}.get(L, ",") -%}
+{%- set int = "(%d{1,3}(?:" ~ tsep ~ "%d{3})+(?!%d)|%d+)" -%}
+{%- set frac = ("(?:%.(%d+)(?![,.]%d))?" if L in ["en", "ja", "zh"] else "(?:[,.](%d+)(?![,.]%d))?") -%}
+{#- a minus sign at the start of the text, after a space or after an opening parenthesis; ja / zh: after anything but a digit -#}
+{%- set neg = "(?:(?<!%d)(-))?" if L in ["ja", "zh"] else "(?:(?<![^%s(])(-))?" -%}
+{%- set cur = "(R%$|[$€£¥])" -%}
+{#- the matcher never backtracks into a choice, so the longest hour forms come first -#}
+{%- set hour = "(?<!%d)(2[0-3]|[01]%d|%d)" -%}
+{%- set time = hour ~ "(?:h([0-5]%d)?|:([0-5]%d))(?![%d%a])" if L == "fr"
+          else hour ~ ":([0-5]%d)(?!%d)" ~ ("(?: Uhr%b)?" if L == "de" else "") -%}
+{%- set ords = {
+    "en": [["ordinal", "(?<![%d,.])(%d{1,15})(st|nd|rd|th)(?!%a)"]],
+    "fr": [["ordinal", "(?<![%d,.])(%d{1,15})(ers?|res?|ères?|nde?s?|èmes?|es?)(?!%a)"]],
+    "es": [["ordinal", "(?<![%d,.])(%d{1,15})%.?([ºª])"]],
+    "it": [["ordinal", "(?<![%d,.])(%d{1,15})%.?([ºª])"]],
+    "pt": [["ordinal", "(?<![%d,.])(%d{1,15})%.?([ºª])"]],
+}.get(L, []) -%}
+{#- en / de: a 4-digit number is read as a year only after one of these words (in 1990, im Jahr 1990), 1234 people stays a count -#}
+{%- set year_cues = {
+    "en": "(?i)%b(in|since|by|from|until|till|to|through|between|of|around|circa|before|after|during|year|early|late|mid"
+          ~ "|january|february|march|april|may|june|july|august|september|october|november|december)",
+    "de": "(?i)%b(im|seit|bis|von|ab|anno|um|vor|nach|zwischen|jahr|jahre|jahres|jahren|anfang|mitte|ende"
+          ~ "|januar|februar|märz|april|mai|juni|juli|august|september|oktober|november|dezember)",
+} -%}
+{%- set rules = [
+    ["money",   cur ~ "%s?" ~ int ~ frac ~ "(?: (thousand|million|billion|trillion)%b)?"],
+    ["money2",  int ~ frac ~ "%s?" ~ cur],
+    ["percent", neg ~ int ~ frac ~ "%s?[%%％]"],
+    ["date",    "(?<![%d,./])(%d{1,2})[./](%d{1,2})[./](%d{4}|%d{2})(?!%d|[,./]%d)"],
+    ["time",    time],
+] + ords
+  + ([["year", "(?<![%d,.])(%d{2,4})(?=年)"]] if L == "zh" else [])
+  + ([["year4", year_cues[L] ~ "(%s+)(%d{4})(?!%a|%d|[,.]%d|%s?[$€£¥%%])"]] if L in year_cues else [])
+  + ([["plural", "(?<![%d,.])(%d{1,15})s(?!%a)"]] if L == "en" else [])
+  + [["number", neg ~ int ~ frac]] -%}
+{%- for s in tts_norm_scan(t, rules) -%}
+{%- set g = s.groups -%}
+{%- if s.rule == "money" -%}
+{{- money(L, g[0], g[1], g[2], g[3]) -}}
+{%- elif s.rule == "money2" -%}
+{{- money(L, g[2], g[0], g[1], "") -}}
+{%- elif s.rule == "percent" -%}
+{%- set w = number(L, g[1], g[2], false) -%}
+{{- (W[L]["minus"] if g[0] else "") ~ ("百分之" ~ w if L == "zh" else w ~ W[L]["percent"]) -}}
+{%- elif s.rule == "date" -%}
+{#- read as three numbers, the order of day and month is the one of the text -#}
+{{- number(L, g[0], "", false) ~ W[L]["sep"] ~ number(L, g[1], "", false) ~ W[L]["sep"] ~ number(L, g[2], "", true) -}}
+{%- elif s.rule == "time" -%}
+{{- clock(L, g[0], g[1] or (g[2] if g|length > 2 else "")) -}}
+{%- elif s.rule == "ordinal" -%}
+{{- ordinal(L, g[0], g[1]) -}}
+{%- elif s.rule == "year" -%}
+{{- spell(L, g[0]) -}}
+{%- elif s.rule == "year4" -%}
+{{- g[0] ~ g[1] ~ number(L, g[2], "", true) -}}
+{%- elif s.rule == "plural" -%}
+{#- decades and plurals: 1990s -> nineteen nineties -#}
+{%- set w = number(L, g[0], "", true) -%}
+{{- (w[0:(w|length) - 1] ~ "ies") if w.endswith("y") else w ~ "s" -}}
+{%- elif s.rule == "number" -%}
+{{- (W[L]["minus"] if g[0] else "") ~ number(L, g[1], g[2], false) -}}
+{%- else -%}
+{{- s.text -}}
+{%- endif -%}
+{%- endfor -%}
+{%- endif -%}

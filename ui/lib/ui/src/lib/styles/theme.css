@@ -1,0 +1,110 @@
+/*
+ * Llama UI's theme: fonts, tokens, surfaces and the Tailwind theme the components read.
+ * Consumers import it after Tailwind, tw-animate-css, which the components' enter and exit
+ * animations come from (a peer dependency, like Tailwind), and @ggml-org/llama-brand's colours,
+ * which the primitives build on. Stylesheets here import no package, so an app that compiles
+ * these sources itself resolves all three from its own node_modules:
+ *
+ *   @import 'tailwindcss';
+ *   @import 'tw-animate-css';
+ *   @import '@ggml-org/llama-brand/css/colors.css';
+ *   @import '@ggml-org/llama-ui/theme.css';
+ *
+ * Dark mode is the `dark` class on <html>; the Matte light surfaces are the `theme-matte` class.
+ */
+
+@import './fonts.css';
+@import './tokens.css';
+@import './surfaces.css';
+
+/* the components' own classes, so Tailwind generates them in the consumer's build */
+@source '../';
+
+@custom-variant dark (&:is(.dark *));
+
+/* shadcn components key their orientation styles off these, toggle-group among them */
+@custom-variant data-horizontal (&[data-orientation='horizontal']);
+@custom-variant data-vertical (&[data-orientation='vertical']);
+
+/*
+ * Tailwind v4 dropped the pointer cursor from buttons. Every control a user can
+ * press gets it back, and anything disabled keeps the cursor its own class asks for.
+ */
+@layer base {
+	button:not(:disabled),
+	[role='button']:not([data-disabled]),
+	[role='checkbox']:not([data-disabled]),
+	[role='combobox']:not([data-disabled]),
+	[role='menuitem']:not([data-disabled]),
+	[role='menuitemcheckbox']:not([data-disabled]),
+	[role='menuitemradio']:not([data-disabled]),
+	[role='option']:not([data-disabled]),
+	[role='radio']:not([data-disabled]),
+	[role='switch']:not([data-disabled]),
+	[role='tab']:not([data-disabled]),
+	label[for],
+	select,
+	summary {
+		cursor: pointer;
+	}
+}
+
+:root {
+	--radius: 0.625rem;
+	--font-mono:
+		'Llama Mono', ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono',
+		Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+@theme inline {
+	/* the sans everywhere, headings included (their size sets the optical size): Llama Sans, then the system stack
+	   while it loads or if it can't */
+	--font-sans: 'Llama Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+	/* corners: one scale, every step computed from --radius: 6, 8, 10, 14, 16, 24 and 32px. md for controls, fields
+	   and badges, lg for menus and dialogs, xl for cards, 2xl for the sidebar and bubbles, 3xl for the chat form and
+	   4xl for it on a phone */
+	--radius-sm: calc(var(--radius) - 4px);
+	--radius-md: calc(var(--radius) - 2px);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) + 4px);
+	--radius-2xl: calc(var(--radius) + 6px);
+	--radius-3xl: calc(var(--radius) + 14px);
+	--radius-4xl: calc(var(--radius) + 22px);
+	/*
+	 * shadcn's colour names, as Tailwind utilities only (bg-background, text-muted-foreground, border-border ...), so
+	 * the vendored components and their classes keep working. Each is a semantic token; in CSS, read the semantic
+	 * token itself (var(--surface-page), not var(--background)).
+	 */
+	--color-background: var(--surface-page);
+	--color-foreground: var(--fg-default);
+	--color-card: var(--surface-raised);
+	--color-card-foreground: var(--fg-default);
+	--color-popover: var(--surface-raised);
+	--color-popover-foreground: var(--fg-default);
+	--color-primary: var(--action-primary);
+	--color-primary-foreground: var(--fg-on-action);
+	--color-secondary: var(--surface-emphasis);
+	--color-secondary-foreground: var(--fg-default);
+	--color-muted: var(--surface-muted);
+	--color-muted-foreground: var(--fg-muted);
+	--color-accent: var(--surface-selected);
+	--color-accent-foreground: var(--fg-default);
+	--color-destructive: var(--fg-danger);
+	--color-border: var(--line-default);
+	--color-input: var(--line-field);
+	--color-ring: var(--line-focus);
+}
+
+@layer base {
+	* {
+		@apply border-border outline-ring/50;
+	}
+
+	body {
+		@apply bg-background text-foreground antialiased;
+	}
+
+	:where(code, pre, kbd, samp) {
+		font-family: var(--font-mono);
+	}
+}
