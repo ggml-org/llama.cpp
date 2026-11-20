@@ -566,6 +566,24 @@ class ServerProcess:
 
 server_instances: Set[ServerProcess] = set()
 
+# tiny decision models for the /v1/systemone tests, by decision type, see ServerPreset.tinydecision()
+TINY_DECISION_MODELS = {
+    "lfm3-d1":                 "ggml-org-dev/tiny-d1-2B-for-testing-GGUF:Q4_0",
+    "lfm3-d1-omni":            "ggml-org-dev/tiny-d1-Omni-2B-for-testing-GGUF:Q4_0",
+    "lfm2-d1":                 "ggml-org-dev/tiny-d1-3B-for-testing-GGUF:Q4_0",
+    "lfm2-d1-omni":            "ggml-org-dev/tiny-d1-omni-600M-for-testing-GGUF:Q4_0",
+    "lev":                     "ggml-org-dev/tiny-lev-for-testing-GGUF:Q4_0",
+    "kev":                     "ggml-org-dev/tiny-kev-4b-for-testing-GGUF:Q4_0",
+    "nimble":                  "ggml-org-dev/tiny-Bespoke-Nimble-9B-v3-for-testing-GGUF:Q4_0",
+    "pplx-decider":            "ggml-org-dev/tiny-pplx-decider-v1-27b-for-testing-GGUF:Q4_0",
+    "vllm-d3":                 "ggml-org-dev/tiny-d3-nano-for-testing-GGUF:Q4_0",
+    "h2o-lightning":           "ggml-org-dev/tiny-h2o-lightning-4b-for-testing-GGUF:Q4_0",
+    "vllm-decision2":          "ggml-org-dev/tiny-Decision-2.0-Kai-0.6B-for-testing-GGUF:Q4_0",
+    "granite-switch":          "ggml-org-dev/tiny-granite-switch-4.1-8b-for-testing-GGUF:Q4_0",
+    "clef":                    "ggml-org-dev/tiny-clef-for-testing-GGUF:Q4_0",
+    "openbmb-minicpm-ocr-jev": "ggml-org-dev/tiny-MiniCPM-OCR-Jev-for-testing-GGUF:Q4_0",
+}
+
 
 class ServerPreset:
     @staticmethod
@@ -574,8 +592,9 @@ class ServerPreset:
         servers: List[ServerProcess] = [
             method()
             for name, method in ServerPreset.__dict__.items()
-            if callable(method) and name != "load_all"
+            if callable(method) and name not in ("load_all", "tinydecision")
         ]
+        servers += [ServerPreset.tinydecision(decision_type) for decision_type in TINY_DECISION_MODELS]
         for server in servers:
             server.offline = False
             server.start()
@@ -698,6 +717,21 @@ class ServerPreset:
         server.n_ctx = 4096
         server.n_batch = 512
         server.n_slots = 4
+        server.seed = 42
+        return server
+
+    @staticmethod
+    def tinydecision(decision_type: str) -> ServerProcess:
+        server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
+        # mmproj is already provided by HF registry API
+        server.model_hf_file = None
+        server.model_hf_repo = TINY_DECISION_MODELS[decision_type]
+        server.n_ctx = 4096
+        # non-causal models: the whole prompt must fit in one ubatch
+        server.n_batch = 1024
+        server.n_ubatch = 1024
+        server.n_slots = 2
         server.seed = 42
         return server
 
