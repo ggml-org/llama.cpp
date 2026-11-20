@@ -248,6 +248,8 @@ class Keys:
             TOP_K      = "{arch}.attention.indexer.top_k"
             BLOCK_SIZE   = "{arch}.attention.indexer.block_size"    # MSA
             LOCAL_BLOCKS = "{arch}.attention.indexer.local_blocks"  # MSA
+            PREFIX_BLOCKS = "{arch}.attention.indexer.prefix_blocks"  # Maxwell MBSA
+            DENSE_PREFIX_TOKENS = "{arch}.attention.indexer.dense_prefix_tokens"  # Maxwell MBSA
             TYPES      = "{arch}.attention.indexer.types"
             KPOOL             = "{arch}.attention.indexer.kpool"              # GLM5-Next
             KPOOL_SELECT_TAIL = "{arch}.attention.indexer.kpool_select_tail"  # GLM5-Next
@@ -690,6 +692,7 @@ class MODEL_ARCH(IntEnum):
     DEEPSEEK32       = auto()
     DEEPSEEK4        = auto()
     DEEPSEEK41       = auto()
+    MAXWELL_MOE      = auto()
     XING4_0          = auto()
     CHATGLM          = auto()
     GLM4             = auto()
@@ -1505,6 +1508,9 @@ class MODEL_TENSOR(IntEnum):
     NEXTN_HC_HEAD_NORM     = auto()
     NEXTN_HC_HEAD_DOWN     = auto()
     NEXTN_HC_HEAD_UP       = auto()
+    NEXTN_HC_HEAD_FN       = auto()
+    NEXTN_HC_HEAD_BASE     = auto()
+    NEXTN_HC_HEAD_SCALE    = auto()
     # eagle3
     FC                     = auto()  # feature fusion layer
     D2T                    = auto()  # draft to target vocabulary mapping
@@ -1691,6 +1697,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.DEEPSEEK4:        "deepseek4",
     MODEL_ARCH.XING4_0:          "xing4_0",
     MODEL_ARCH.DEEPSEEK41:       "deepseek41",
+    MODEL_ARCH.MAXWELL_MOE:      "maxwell-moe",
     MODEL_ARCH.CHATGLM:          "chatglm",
     MODEL_ARCH.GLM4:             "glm4",
     MODEL_ARCH.GLM4_MOE:         "glm4moe",
@@ -2547,6 +2554,9 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.NEXTN_HC_HEAD_NORM:        "blk.{bid}.nextn.hc_head_norm",
     MODEL_TENSOR.NEXTN_HC_HEAD_DOWN:        "blk.{bid}.nextn.hc_head_down",
     MODEL_TENSOR.NEXTN_HC_HEAD_UP:          "blk.{bid}.nextn.hc_head_up",
+    MODEL_TENSOR.NEXTN_HC_HEAD_FN:          "blk.{bid}.nextn.hc_head_fn",
+    MODEL_TENSOR.NEXTN_HC_HEAD_BASE:        "blk.{bid}.nextn.hc_head_base",
+    MODEL_TENSOR.NEXTN_HC_HEAD_SCALE:       "blk.{bid}.nextn.hc_head_scale",
     MODEL_TENSOR.FC:                        "fc",
     MODEL_TENSOR.DSPARK_MARKOV_W1:          "markov_w1",
     MODEL_TENSOR.DSPARK_MARKOV_W2:          "markov_w2",
@@ -4962,6 +4972,50 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_SHEXP,
         MODEL_TENSOR.FFN_DOWN_SHEXP,
         MODEL_TENSOR.FFN_UP_SHEXP,
+    ],
+    MODEL_ARCH.MAXWELL_MOE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.HC_HEAD_FN,
+        MODEL_TENSOR.HC_HEAD_BASE,
+        MODEL_TENSOR.HC_HEAD_SCALE,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.INDEXER_Q_PROJ,
+        MODEL_TENSOR.INDEXER_K_PROJ,
+        MODEL_TENSOR.INDEXER_Q_NORM,
+        MODEL_TENSOR.INDEXER_K_NORM,
+        MODEL_TENSOR.HC_ATTN_FN,
+        MODEL_TENSOR.HC_ATTN_BASE,
+        MODEL_TENSOR.HC_ATTN_SCALE,
+        MODEL_TENSOR.HC_FFN_FN,
+        MODEL_TENSOR.HC_FFN_BASE,
+        MODEL_TENSOR.HC_FFN_SCALE,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.LAYER_OUT_NORM,
+        MODEL_TENSOR.NEXTN_HC_HEAD_FN,
+        MODEL_TENSOR.NEXTN_HC_HEAD_BASE,
+        MODEL_TENSOR.NEXTN_HC_HEAD_SCALE,
     ],
     MODEL_ARCH.ERNIE4_5_MOE: [
         MODEL_TENSOR.TOKEN_EMBD,

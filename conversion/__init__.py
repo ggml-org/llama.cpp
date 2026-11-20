@@ -217,6 +217,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "MiniCPMV4_7ForConditionalGeneration": "minicpm",
     "MiniCPMOCRForSequenceClassification": "qwen",
     "MiniCPMOcrForConditionalGeneration": "minicpm",
+    "MaxwellMoeForCausalLM": "maxwell",
     "MiniMaxText01ForCausalLM": "minimax",
     "MiniMaxM1ForCausalLM": "minimax",
     "MiniMaxM2ForCausalLM": "minimax",

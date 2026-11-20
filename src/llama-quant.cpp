@@ -416,6 +416,11 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
         quantize &= name.find("hc_") == std::string::npos;
     }
 
+    // maxwell-moe: the mHC mixing matrices are small and the reference runs them in fp32
+    if (arch == LLM_ARCH_MAXWELL_MOE) {
+        quantize &= name.find("hc_") == std::string::npos;
+    }
+
     // the decision head of vllm-decision2 is small and computed in F32
     if (arch == LLM_ARCH_VLLM_DECISION2) {
         quantize &= name.compare(0, 9, "decision.") != 0;

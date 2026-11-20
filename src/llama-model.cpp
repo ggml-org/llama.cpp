@@ -220,6 +220,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_deepseek4(params);
         case LLM_ARCH_DEEPSEEK41:
             return new llama_model_deepseek41(params);
+        case LLM_ARCH_MAXWELL_MOE:
+            return new llama_model_maxwell_moe(params);
         case LLM_ARCH_XING4_0:
             return new llama_model_xing4_0(params);
         case LLM_ARCH_GLM_DSA:
@@ -3007,7 +3009,32 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                 res = nullptr;
             } break;
         case LLM_ARCH_MINIMAX_M3:
+        case LLM_ARCH_MAXWELL_MOE:
             {
+                if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP && hparams.n_layer_nextn > 0) {
+                    // the MTP draft head runs dense GQA, so its context uses a plain cache with only the nextn layer(s)
+                    llama_kv_cache::layer_filter_cb filter_nextn =
+                        [&](uint32_t il) { return il >= hparams.n_layer(); };
+
+                    res = new llama_kv_cache(
+                            *this,
+                            params.no_alloc,
+                            hparams,
+                            params.type_k,
+                            params.type_v,
+                            !cparams.flash_attn,
+                            cparams.offload_kqv,
+                            cparams.kv_unified,
+                            cparams.n_ctx_seq,
+                            cparams.n_seq_max,
+                            hparams.n_swa,
+                            hparams.swa_type,
+                            nullptr,
+                            filter_nextn,
+                            nullptr,
+                            nullptr);
+                    break;
+                }
                 // only sparse (MSA) layers carry an indexer key cache
                 llama_kv_cache::layer_filter_cb filter_idx =
                     [&](int32_t il) { return (uint32_t) il < hparams.n_layer() && hparams.is_indexer_full(il); };
@@ -3789,6 +3816,9 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_LIMITE:
         case LLM_ARCH_TINY_VOCA:
             return LLAMA_ROPE_TYPE_NORM;
+        case LLM_ARCH_MAXWELL_MOE:
+            // the reference uses rotate_half (half split), i.e. the NeoX convention
+            return LLAMA_ROPE_TYPE_NEOX;
         case LLM_ARCH_BAILINGMOE3:
             // VL files carry mrope sections; text-only files keep NORM rope
             return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_MROPE : LLAMA_ROPE_TYPE_NORM;

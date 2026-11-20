@@ -463,7 +463,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SPATIAL, 10000.0f);
     }
 
-    if (arch == LLM_ARCH_XING4_0) {
+    if (arch == LLM_ARCH_XING4_0 || arch == LLM_ARCH_MAXWELL_MOE) {
         // Manifold-Constrained Hyper-Connections (MHC) multi-residual-stream blocks
         ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,               uint32_t(4));
         ms.add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, uint32_t(20));
@@ -567,8 +567,17 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_PLE_HEAD_VOCAB_SIZES,        ple_head_vocab_sizes);
     }
 
-    // minimax-m3 keeps one indexer head per GQA head; the rest use a fixed 64 to match the fused
-    ms.add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,   arch == LLM_ARCH_MINIMAX_M3 ? n_head : uint32_t(64));
+    // minimax-m3 and maxwell-moe keep one indexer head per KV head; the rest use a fixed 64 to match the fused
+    ms.add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,   arch == LLM_ARCH_MAXWELL_MOE ? n_head_kv :
+                                                     arch == LLM_ARCH_MINIMAX_M3 ? n_head : uint32_t(64));
+    if (arch == LLM_ARCH_MAXWELL_MOE) {
+        // block sparse attention: full-head indexer keys, small blocks, low top-k
+        ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,    n_embd_head);
+        ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,         uint32_t(2));
+        ms.add_kv(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,    uint32_t(32));
+        ms.add_kv(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS,  uint32_t(1));
+        ms.add_kv(LLM_KV_ATTENTION_INDEXER_PREFIX_BLOCKS, uint32_t(1));
+    }
     // qwen4exp ropes indexer keys with the main rotary width, so its head can't be < n_rot
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,
               arch == LLM_ARCH_QWEN4EXP ? n_embd_head : uint32_t(128));
@@ -1105,6 +1114,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_DEEPSEEK4:
         case LLM_ARCH_DEEPSEEK41:
         case LLM_ARCH_XING4_0:
+        case LLM_ARCH_MAXWELL_MOE:
         case LLM_ARCH_GLM4_MOE:
         case LLM_ARCH_GLM_DSA:
         case LLM_ARCH_EXAONE_MOE:
