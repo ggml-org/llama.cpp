@@ -148,6 +148,7 @@ static inline void hmx_interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
             }
         }
     }
+    hvx_gather_sync(vtcm_dst);
 }
 
 // Interleave row-major FP16 data into column-major tile format.

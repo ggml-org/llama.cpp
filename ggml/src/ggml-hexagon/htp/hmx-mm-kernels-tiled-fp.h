@@ -723,6 +723,7 @@ void convert_f16_weight_to_fp16_tiles_task(
         }
         ++t; ++kt;
     }
+    hvx_gather_sync(state->dst + (size_t) start_tile * HTP_MM_HMX_TILE_N_ELMS);
 }
 
 static __attribute__((noinline))
@@ -770,6 +771,7 @@ void quantize_f32_weight_to_fp16_tiles_task(
         }
         ++t; ++kt;
     }
+    hvx_gather_sync(state->dst + (size_t) start_tile * HTP_MM_HMX_TILE_N_ELMS);
 }
 
 static __attribute__((noinline))
@@ -820,6 +822,7 @@ void convert_bf16_weight_to_fp16_tiles_task(
         }
         ++t; ++kt;
     }
+    hvx_gather_sync(state->dst + (size_t) start_tile * HTP_MM_HMX_TILE_N_ELMS);
 }
 
 // --- End tiled dequantizers ---

@@ -1477,7 +1477,6 @@ static inline void lid_hmx_scatter_q_tiles(const struct htp_lid_hmx_context * hc
         }
     }
     hmx_interleave_rows_to_tiles(qw, src, nr, D, src_stride, 0, hex_round_up(nr, 2));
-    hvx_gather_sync(qw);
 }
 
 // Staged f32 Q rows of channel tile c to f16, then to the weight tiles of a Q slot
