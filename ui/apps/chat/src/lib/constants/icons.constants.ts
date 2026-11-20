@@ -8,12 +8,13 @@ import LoadFailedIcon from '@lucide/svelte/icons/circle-alert';
 import DiscoverIcon from '@lucide/svelte/icons/compass';
 import UnloadIcon from '@lucide/svelte/icons/eject';
 import FileIcon from '@lucide/svelte/icons/file';
+// not a microphone: that one is for recording and dictation
+import AudioIcon from '@lucide/svelte/icons/file-headphone';
 import FileTextIcon from '@lucide/svelte/icons/file-text';
 import CompactCommandIcon from '@lucide/svelte/icons/fold-vertical';
 import CwdCommandIcon from '@lucide/svelte/icons/folder-open';
 import ImageIcon from '@lucide/svelte/icons/image';
 import LoadingIcon from '@lucide/svelte/icons/loader-2';
-import AudioIcon from '@lucide/svelte/icons/mic';
 import ModelIcon from '@lucide/svelte/icons/package';
 import PauseDownloadIcon from '@lucide/svelte/icons/pause';
 import ResumeDownloadIcon from '@lucide/svelte/icons/play';
