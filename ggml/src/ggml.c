@@ -1028,7 +1028,6 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "REPEAT_BACK",
     "CONCAT",
     "SILU_BACK",
-    "SIGMOID_BACK",
     "NORM",
     "RMS_NORM",
     "RMS_NORM_BACK",
@@ -1115,9 +1114,11 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 
     "SLEEP",
+
+    "SIGMOID_BACK",
 };
 
-static_assert(GGML_OP_COUNT == 100, "GGML_OP_COUNT != 100");
+static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1144,7 +1145,6 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "repeat_back(x)",
     "concat(x, y)",
     "silu_back(x)",
-    "sigmoid_back(x)",
     "norm(x)",
     "rms_norm(x)",
     "rms_norm_back(x)",
@@ -1231,9 +1231,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 
     "sleep(x)",
+
+    "sigmoid_back(x)",
 };
 
-static_assert(GGML_OP_COUNT == 100, "GGML_OP_COUNT != 100");
+static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 

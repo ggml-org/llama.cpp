@@ -344,7 +344,6 @@ extern "C" {
         GGML_OP_REPEAT_BACK,
         GGML_OP_CONCAT,
         GGML_OP_SILU_BACK,
-        GGML_OP_SIGMOID_BACK,
         GGML_OP_NORM, // normalize
         GGML_OP_RMS_NORM,
         GGML_OP_RMS_NORM_BACK,
@@ -431,6 +430,8 @@ extern "C" {
         GGML_OP_GLU,
 
         GGML_OP_SLEEP,
+
+        GGML_OP_SIGMOID_BACK,
 
         GGML_OP_COUNT,
     };
