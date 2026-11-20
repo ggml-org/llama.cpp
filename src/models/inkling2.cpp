@@ -395,8 +395,7 @@ llama_model_inkling2::graph::graph(const llm_graph_params & params) : llm_graph_
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur);
-    ggml_prec_set_acc(cur, GGML_PREC_F32);
+    cur = build_lora_mm(model.output, cur, nullptr, GGML_PREC_F32);
 
     if (hparams.f_final_logit_softcapping != 0.0f) {
         const float cap = hparams.f_final_logit_softcapping;

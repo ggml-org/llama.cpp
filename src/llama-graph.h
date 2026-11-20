@@ -1180,10 +1180,12 @@ struct llm_graph_context {
               ggml_tensor * cur) const;
 
     // do mat_mul, while optionally apply lora and per-tensor scale
+    // w_s defaults to the weight scale of w, acc sets the accumulator precision of the matmul
     ggml_tensor * build_lora_mm(
               ggml_tensor * w,
               ggml_tensor * cur,
-              ggml_tensor * w_s = nullptr) const;
+              ggml_tensor * w_s = nullptr,
+                ggml_prec   acc = GGML_PREC_UNDEFINED) const;
 
     // do mat_mul_id, while optionally apply lora and per-expert scale
     // if slots is set, the experts are selected by slots instead of ids, from the MoE cache if cached (see llama_moe_cache::build_lookup)
@@ -1193,7 +1195,8 @@ struct llm_graph_context {
               ggml_tensor * ids,
               ggml_tensor * w_s    = nullptr,
               ggml_tensor * slots  = nullptr,
-                     bool   cached = true) const;
+                     bool   cached = true,
+                ggml_prec   acc    = GGML_PREC_UNDEFINED) const;
 
     // rescale `cur` (the src1 of a matmul) by a power of two, computed from its maximum absolute
     // keep both individual values and Q8 activation block sums within F16 range

@@ -818,6 +818,11 @@ struct llama_model {
 
     llama_hadamard hdmd;
 
+    // weight -> "<name>.scale" tensor (e.g. NVFP4 scale2), applied by build_lora_mm and build_lora_mm_id
+    std::unordered_map<const ggml_tensor *, ggml_tensor *> w_scales;
+
+    ggml_tensor * get_w_scale(const ggml_tensor * w) const;
+
     // see llama_model_set_attn_rot
     bool attn_rot = true;
 

@@ -876,8 +876,7 @@ llama_model_deepseek41::graph::graph(const llm_graph_params & params) :
         cb(cur, "ffn_norm", il);
 
         // the reference computes the router in F32: https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017/blob/1bae0e1088993b9b82de08f59de5be5a34e42170/inference/model.py#L813
-        ggml_tensor * logits = build_lora_mm(layer.ffn_gate_inp, cur);
-        ggml_prec_set_acc(logits, GGML_PREC_F32);
+        ggml_tensor * logits = build_lora_mm(layer.ffn_gate_inp, cur, nullptr, GGML_PREC_F32);
         cb(logits, "ffn_moe_logits", il);
 
         // image (embedding) tokens use the vision router bias, as DeepSeek-V4
