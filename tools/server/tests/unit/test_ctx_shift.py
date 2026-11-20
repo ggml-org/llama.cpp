@@ -87,3 +87,22 @@ def test_ctx_shift_disabled_stream():
         else:
             assert choice["finish_reason"] is None
             content += choice["text"]
+
+
+def test_ctx_shift_n_keep_int32_max():
+    # n_keep = INT32_MAX must behave like any other n_keep larger than the context
+    global server
+    server.enable_ctx_shift = True
+    server.start()
+    contents = []
+    for n_keep in [1000, 2**31 - 1]:
+        res = server.make_request("POST", "/completion", data={
+            "n_predict": 200,
+            "prompt": SHORT_TEXT,
+            "n_keep": n_keep,
+            "temperature": 0.0,
+        })
+        assert res.status_code == 200
+        assert res.body["timings"]["predicted_n"] == 200
+        contents.append(res.body["content"])
+    assert contents[0] == contents[1]

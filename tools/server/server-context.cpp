@@ -3760,7 +3760,8 @@ private:
                 int n_keep = slot.task->params.n_keep < 0 ? slot.task->n_tokens() : slot.task->params.n_keep;
 
                 if (add_bos_token) {
-                    n_keep += 1;
+                    // clamp before adding BOS so that n_keep = INT32_MAX does not overflow
+                    n_keep = std::min(slot.n_ctx - 5, n_keep) + 1;
                 }
 
                 n_keep = std::min(slot.n_ctx - 4, n_keep);
