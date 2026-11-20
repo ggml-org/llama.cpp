@@ -1,3 +1,4 @@
+import http.client
 import pytest
 import requests
 import time
@@ -91,6 +92,44 @@ def test_completion_stream_vs_non_stream():
     for data in res_stream:
         content_stream += data["content"]
     assert content_stream == res_non_stream.body["content"]
+
+
+def test_completion_connection_reuse():
+    server.start()
+    conn = http.client.HTTPConnection(server.server_host, server.server_port, timeout=30)
+    try:
+        conn.connect()
+        conn.auto_open = 0
+        original_socket = conn.sock
+        conn.request("POST", "/completion", json.dumps({
+            "prompt": "Hello", "n_predict": 4, "stream": True,
+        }), {"Content-Type": "application/json"})
+        with conn.getresponse() as response:
+            assert response.status == 200
+            assert response.chunked
+            assert not response.will_close
+            assert response.read()
+        conn.request("GET", "/health")
+        with conn.getresponse() as response:
+            assert response.status == 200
+            assert json.loads(response.read())["status"] == "ok"
+        assert conn.sock is original_socket
+    finally:
+        conn.close()
+
+
+def test_completion_empty_reverse_prompt():
+    global server
+    server.reverse_prompt = ""
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "n_predict": 8,
+        "prompt": "I believe the meaning of life is",
+    })
+    assert res.status_code == 200
+    assert res.body["stop_type"] == "limit"
+    assert res.body["timings"]["predicted_n"] == 8
+    assert match_regex("(going|bed)+", res.body["content"])
 
 
 def test_completion_with_openai_library():
@@ -772,3 +811,57 @@ def test_completion_checkpoint_kept_after_restore():
     for suffix in suffixes[1:]:
         assert len(suffix) > server.n_ubatch + 4
         assert cache_n(prefix + suffix) == len(prefix) - 1
+
+
+# hybrid model with SWA: a checkpoint or a state right before the new tokens must be reused, even if it is less than n_swa tokens away
+def test_completion_checkpoint_hybrid_swa():
+    global server
+    server = ServerPreset.tinylfm3omni()
+    server.n_slots = 1
+    server.n_batch = 16
+    # one token per ubatch, like the generated tokens: the runs with and without the cache go through the same kernels
+    server.n_ubatch = 1
+    server.cache_ram = 0
+    server.temperature = 0.0
+    server.start()
+
+    def complete(prompt, cache_prompt=True, n_predict=4):
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "n_predict": n_predict,
+            "n_probs": 5,
+            "cache_prompt": cache_prompt,
+            "return_tokens": True,
+        })
+        assert res.status_code == 200
+        return res.body
+
+    def top_logprobs(body):
+        return [(p["id"], p["logprob"]) for p in body["completion_probabilities"][0]["top_logprobs"]]
+
+    def assert_same_output(actual, expected):
+        assert actual["tokens"] == expected["tokens"]
+        assert top_logprobs(actual) == top_logprobs(expected)
+
+    # shorter than n_swa (256), so that every checkpoint is within the SWA window of the prompt end
+    prefix = [1000 + i for i in range(200)]
+    suffix = [5000 + i for i in range(20)]
+
+    # the new prompt drops the generated tokens: the state is rolled back to the checkpoint 4 tokens before the end
+    expected = complete(prefix + suffix, cache_prompt=False)
+    complete(prefix)
+    actual = complete(prefix + suffix)
+    assert actual["timings"]["cache_n"] == len(prefix) - 4
+    assert_same_output(actual, expected)
+
+    # the new prompt continues after the generated tokens: the state is used as it is
+    first = complete(prefix)
+    prompt = prefix + first["tokens"] + suffix
+    expected = complete(prompt, cache_prompt=False)
+    first = complete(prefix)
+    assert prefix + first["tokens"] + suffix == prompt
+    actual = complete(prompt)
+    # the last generated token was sampled, but never processed
+    assert actual["timings"]["cache_n"] == len(prefix) + len(first["tokens"]) - 1
+    assert actual["timings"]["prompt_n"] == len(suffix) + 1
+    assert_same_output(actual, expected)

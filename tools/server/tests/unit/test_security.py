@@ -25,7 +25,7 @@ def test_access_public_endpoint(endpoint: str):
 
 
 def test_access_static_assets_without_api_key():
-    """Static web UI assets should not require API key authentication (issue #21229)"""
+    """Static Llama Chat assets should not require API key authentication (issue #21229)"""
     global server
     server.start()
     for path in ["/", "/sw.js", "/manifest.webmanifest", "/_app/version.json"]:
@@ -170,16 +170,16 @@ def test_cors_origins_localhost_blocks_simple_requests(headers: dict, expected_s
 
 def test_cors_origins_localhost_allows_same_origin():
     global server
-    lan_ip = get_lan_ip()
-    if lan_ip is None:
-        pytest.skip("no non-loopback interface")  # ty: ignore[too-many-positional-arguments]
     server.api_key = None
     server.cors_origins = "localhost"
     server.server_host = "0.0.0.0"
     server.start()
+    lan_ip = get_lan_ip(server)
+    if lan_ip is None:
+        pytest.skip("no LAN address reachable from this host")  # ty: ignore[too-many-positional-arguments]
     # UI opened via LAN address: Origin matches Host
     url = server.make_url("/tokenize", host=lan_ip)
-    res = requests.post(url, data='{"content": "hello"}', headers={
+    res = requests.post(url, data='{"content": "hello"}', timeout=DEFAULT_REQUEST_TIMEOUT, headers={
         "Content-Type": "text/plain",
         "Origin": f"http://{lan_ip}:{server.server_port}",
     })

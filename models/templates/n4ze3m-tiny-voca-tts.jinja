@@ -1,0 +1,2672 @@
+{#- tiny-voca "tts" template: english text -> phonemes, a port of dizione (the reference text to phonemes step)
+    output: symbols separated by spaces, <sp> between words, a stress mark (ˈ or ˌ) before a stressed vowel,
+    <eos> after each sentence (one utterance of the model)
+    dictionaries, written by conversion/tiny_voca.py:
+    - lexicon:       word -> phones (CMUdict, converted by dizione)
+    - functions:     word -> [stress class, form, final form], see function_words.txt of dizione
+    - phrases:       words -> [stress class, forms, final form], function-word groups spoken as one unit
+    - exceptions:    word -> phones or CMUdict notation, they win over the lexicon
+    - names, name_starts: names of several words, one pronunciation per word
+    - letters:       letter -> phones, for initialisms
+    - align:         CMUdict phoneme -> {letters: log probability}, to align a spelling with a pronunciation
+    - homographs, homograph_shared, homograph_plurals, homograph_rules: words read in two ways ("read", "live")
+    - chat:          chat spelling -> [words, only as a reply]
+    - accents:       accented letter -> plain letters
+    - abbreviations: abbreviation -> [when, words]
+    - units, exact_units, patterns: unit after a number -> [one, many], and the unit names as one pattern
+    - endings:       ending of a file name or an address -> "word" or "letters"
+    - nfkc:          character -> its compatibility form ("…" -> "...")
+    tts_g2p() is the unknown-word model (CMUdict notation); without it an unknown word is spelled
+    ported: the text rules (normalize.py), the choice of a pronunciation for each word (engine.py, morphology.py,
+    align.py, convert.py, homographs.py, sentence.py) and the split into sentences of tiny-voca (infer.py)
+    not ported: the composition of combining marks (NFKC of a sequence)
+    llama.cpp runs this with its own jinja engine: strings are sliced and measured in bytes, a negative string index
+    is undefined, a string cannot be looped over, and a variable set in a macro is seen by the macros it calls
+    (it must not have the name of a macro) -#}
+{%- set VOWELS = ['ə', 'ɐ', 'ɚ', 'ᵻ', 'ɪ', 'i', 'iː', 'ɛ', 'æ', 'ʌ', 'ɑː', 'ɔ', 'ɔː', 'ʊ', 'uː', 'ɜː', 'eɪ', 'aɪ', 'ɔɪ', 'oʊ', 'aʊ', 'iə', 'oː',
+                  'ɑːɹ', 'ɔːɹ', 'oːɹ', 'ɪɹ', 'ɛɹ', 'ʊɹ', 'aɪɚ', 'aɪə', 'əl', 'n̩'] -%}
+{%- set SPLIT = {'ɑːɹ': 'ɑː', 'ɔːɹ': 'ɔː', 'oːɹ': 'oː', 'ɪɹ': 'ɪ', 'ɛɹ': 'ɛ', 'ʊɹ': 'ʊ'} -%}
+{%- set RHOTIC = ['ɚ', 'ɜː', 'aɪɚ'] -%}
+{%- set ONES = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve',
+                'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'] -%}
+{%- set TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'] -%}
+{%- set ORDINALS = {'one': 'first', 'two': 'second', 'three': 'third', 'five': 'fifth', 'eight': 'eighth', 'nine': 'ninth', 'twelve': 'twelfth'} -%}
+
+{#- ---------- phones ---------- -#}
+{%- macro unstress(ps) -%}{{ ps | replace('ˈ', '') | replace('ˌ', '') }}{%- endmacro -%}
+
+{#- primary stress on the marked vowel (the last secondary one), else on the first vowel -#}
+{%- macro promote(ps) -%}
+{%- if 'ˈ' in ps -%}{{ ps }}
+{%- elif 'ˌ' in ps -%}{{ tts_norm_sub(ps, 'ˌ([^ˌ]*)$', 'ˈ%1') }}
+{%- else -%}
+  {%- set ns = namespace(out=[], done=false) -%}
+  {%- for t in ps.split(' ') -%}
+    {%- if not ns.done and t in VOWELS -%}{%- set ns.out = ns.out + ['ˈ' ~ t] -%}{%- set ns.done = true -%}
+    {%- else -%}{%- set ns.out = ns.out + [t] -%}
+    {%- endif -%}
+  {%- endfor -%}
+  {{ ns.out | join(' ') }}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- letter names, the last letter takes the primary stress; a possessive takes the plural ending -#}
+{%- macro spell(word) -%}
+{%- set possessive = (word | lower).endswith("'s") -%}
+{%- set ns = namespace(out=[]) -%}
+{%- for c in tts_norm_scan((word[:-2] if possessive else word) | lower, '[a-z]') -%}
+  {%- if c.rule -%}{%- set ns.out = ns.out + [tts_dict('letters', c.text)] -%}{%- endif -%}
+{%- endfor -%}
+{%- set ns2 = namespace(out=[]) -%}
+{%- for p in ns.out -%}{%- set ns2.out = ns2.out + [p if loop.last else (p | replace('ˈ', 'ˌ'))] -%}{%- endfor -%}
+{{ plural(ns2.out | join(' ')) if possessive and ns2.out else ns2.out | join(' ') }}
+{%- endmacro -%}
+
+{#- ---------- one word: the order of dizione (engine.py) ----------
+    exceptions, lexicon; regular endings, prefixes and compounds of known words; "-leigh" and "-virus" words;
+    the unknown-word model (tts_g2p) + the conversion rules; else the word is spelled
+    a pronunciation is a string of phones separated by spaces, a stress mark before a stressed vowel -#}
+{%- set ARPA_VOWELS = ['AA', 'AE', 'AH', 'AO', 'AW', 'AY', 'EH', 'ER', 'EY', 'IH', 'IY', 'OW', 'OY', 'UH', 'UW'] -%}
+{%- set ARPA_CONSONANTS = {'B': 'b', 'CH': 'tʃ', 'D': 'd', 'DH': 'ð', 'F': 'f', 'G': 'ɡ', 'HH': 'h', 'JH': 'dʒ', 'K': 'k', 'L': 'l',
+                           'M': 'm', 'N': 'n', 'NG': 'ŋ', 'P': 'p', 'R': 'ɹ', 'S': 's', 'SH': 'ʃ', 'T': 't', 'TH': 'θ', 'V': 'v',
+                           'W': 'w', 'Y': 'j', 'Z': 'z', 'ZH': 'ʒ'} -%}
+{%- set FULL_VOWELS = {'AA': 'ɑː', 'AE': 'æ', 'AH': 'ʌ', 'AO': 'ɔː', 'AW': 'aʊ', 'AY': 'aɪ', 'EH': 'ɛ', 'ER': 'ɜː', 'EY': 'eɪ',
+                       'IH': 'ɪ', 'IY': 'iː', 'OW': 'oʊ', 'OY': 'ɔɪ', 'UH': 'ʊ', 'UW': 'uː'} -%}
+{%- set SIBILANTS = ['S', 'Z', 'SH', 'ZH', 'CH', 'JH'] -%}
+{%- set FORCE_SPELLINGS = ['forc', 'ford', 'sword', 'worn', 'torn', 'sworn', 'borne', 'shorn', 'pork', 'divorc'] -%}
+{%- set CONV_PREFIXES = ['dis', 'mis', 'un', 'in', 're', 'non', 'over', 'pre'] -%}
+{%- set WEAK_PREFIXES = ['be', 'de', 're', 'pre'] -%}
+{%- set IRE_ENDINGS = ['ing', 'ings', 'ingly', 'able', 'y', 'er', 'ers', 'est'] -%}
+{%- set VOWEL_LETTERS = 'aeiouy' -%}
+{%- set CONSONANT_LETTERS = 'bcdfghjklmnpqrstvwxz' -%}
+
+{#- phone of a symbol without its stress mark, and the stress (0, 1, 2) -#}
+{#- startswith, not t[:1]: llama.cpp slices strings by bytes, a stress mark has two -#}
+{%- macro sz(t) -%}{{ 1 if t.startswith('ˈ') else (2 if t.startswith('ˌ') else 0) }}{%- endmacro -%}
+{%- macro mk(phone, stress) -%}{{ 'ˈ' if stress | int == 1 else ('ˌ' if stress | int == 2 else '') }}{{ phone }}{%- endmacro -%}
+
+{#- one primary stress per word, no secondary stress next to the primary one (convert.py: _settle_stress) -#}
+{%- macro settle(ps) -%}
+{%- set toks = ps.split(' ') -%}
+{%- set ns = namespace(v=[], prim=[], ph=[], st=[]) -%}
+{%- for t in toks -%}
+  {%- set ns.ph = ns.ph + [unstress(t)] -%}{%- set ns.st = ns.st + [sz(t) | int] -%}
+  {%- if unstress(t) in VOWELS -%}{%- set ns.v = ns.v + [loop.index0] -%}{%- if sz(t) | int == 1 -%}{%- set ns.prim = ns.prim + [loop.index0] -%}{%- endif -%}{%- endif -%}
+{%- endfor -%}
+{%- set st = namespace(s=ns.st) -%}
+{%- for k in ns.prim[:-1] -%}{%- set st.s = st.s[:k] + [2] + st.s[k + 1:] -%}{%- endfor -%}
+{%- for k in ns.v -%}
+  {%- set p = loop.index0 -%}
+  {%- if st.s[k] == 2 -%}
+    {%- set hit = namespace(v=false) -%}
+    {%- for q in [p - 1, p + 1] -%}{%- if q >= 0 and q < ns.v | length and st.s[ns.v[q]] == 1 -%}{%- set hit.v = true -%}{%- endif -%}{%- endfor -%}
+    {%- if hit.v -%}{%- set st.s = st.s[:k] + [0] + st.s[k + 1:] -%}{%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- set out = namespace(t=[]) -%}
+{%- for p in ns.ph -%}{%- set out.t = out.t + [mk(p, st.s[loop.index0])] -%}{%- endfor -%}
+{{ out.t | join(' ') }}
+{%- endmacro -%}
+
+{#- ---------- word endings (morphology.py) ---------- -#}
+{#- stem + ending, adjusted at the seam -#}
+{%- macro mjoin(stem, ending) -%}
+{%- if not stem or not ending -%}{{ (stem ~ ' ' ~ ending) | trim }}
+{%- else -%}
+  {%- set s = stem.split(' ') -%}{%- set e = ending.split(' ') -%}
+  {%- set last = unstress(s[-1]) -%}{%- set ls = sz(s[-1]) | int -%}
+  {%- set first = unstress(e[0]) -%}{%- set fs = sz(e[0]) | int -%}
+  {%- set r = namespace(s=s) -%}
+  {%- if first in VOWELS -%}
+    {%- if last in ['ɑːɹ', 'ɔːɹ', 'oːɹ', 'ɪɹ', 'ɛɹ'] -%}
+      {%- set r.s = s[:-1] + [mk({'ɑːɹ': 'ɑː', 'ɔːɹ': 'ɔː', 'oːɹ': 'oː', 'ɪɹ': 'ɪ', 'ɛɹ': 'ɛ'}[last], ls), 'ɹ'] -%}
+    {%- elif last in ['ɚ', 'ɜː', 'aɪɚ', 'ʊɹ'] -%}{%- set r.s = s + ['ɹ'] -%}
+    {%- elif last == 't' and s | length > 1 and (unstress(s[-2]) in VOWELS or unstress(s[-2]) == 'ɹ') and not fs
+            and not (first == 'ə' and e | length > 1 and unstress(e[1]) == 'n') -%}{%- set r.s = s[:-1] + ['ɾ'] -%}
+    {%- elif last == 'i' -%}{%- set r.s = s[:-1] + [mk('ɪ' if first != 'ɪ' else 'i', ls)] -%}
+    {%- endif -%}
+  {%- elif last == 'i' and first in ['n', 'l', 'f', 'm'] -%}{%- set r.s = s[:-1] + [mk('ɪ', ls)] -%}
+  {%- elif last == 'n' and first in ['k', 'ɡ'] -%}{%- set r.s = s[:-1] + ['ŋ'] -%}
+  {%- endif -%}
+  {{ (r.s + e) | join(' ') }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro plural(stem) -%}
+{%- set last = unstress(stem.split(' ')[-1]) -%}
+{{ mjoin(stem, 'ᵻ z' if last in ['s', 'z', 'ʃ', 'ʒ', 'tʃ', 'dʒ'] else ('s' if last in ['p', 't', 'k', 'f', 'θ', 'ʔ'] else 'z')) }}
+{%- endmacro -%}
+{%- macro past(stem) -%}
+{%- set last = unstress(stem.split(' ')[-1]) -%}
+{{ mjoin(stem, 'ᵻ d' if last in ['t', 'd', 'ɾ'] else ('t' if last in ['p', 't', 'k', 'f', 'θ', 'ʔ', 's', 'ʃ', 'tʃ'] else 'd')) }}
+{%- endmacro -%}
+{%- macro adverb(stem) -%}
+{%- set last = unstress(stem.split(' ')[-1]) -%}
+{{ mjoin(stem, 'i' if last in ['əl', 'l'] else 'l i') }}
+{%- endmacro -%}
+{%- macro compound(first, second) -%}{{ mjoin(first, second | replace('ˈ', 'ˌ')) }}{%- endmacro -%}
+
+{#- a short vowel before a single consonant at the end: "hop" (it doubles the consonant before -ed) -#}
+{%- macro short_stem(body) -%}
+{%- set n = body | length -%}
+{%- set c = 2 if body.endswith('th') else 1 -%}
+{%- if n > c and (body.endswith('th') or body[-1:] in 'bcdfgklmnprstvz') and body[n - c - 1] in 'aeiou'
+        and (n - c - 1 == 0 or body[n - c - 2] not in 'aeiou') -%}1{%- endif -%}
+{%- endmacro -%}
+
+{#- spellings the stem may have had before an ending starting with a vowel, separated by '|' -#}
+{%- macro stems(body) -%}
+{%- set ns = namespace(out=[body]) -%}
+{#- negative indexes are slices: llama.cpp gives undefined for a negative string index -#}
+{%- if body | length > 2 and body[-1:] == body[-2:-1] and body[-1:] in CONSONANT_LETTERS -%}{%- set ns.out = ns.out + [body[:-1]] -%}{%- endif -%}
+{%- if body and body[-1:] in CONSONANT_LETTERS ~ 'u' -%}
+  {%- set ns.out = ([body ~ 'e'] + ns.out) if short_stem(body) else (ns.out + [body ~ 'e']) -%}
+{%- endif -%}
+{%- if body.endswith('i') and body | length > 2 -%}{%- set ns.out = ns.out + [body[:-1] ~ 'y'] -%}{%- endif -%}
+{{ ns.out | join('|') }}
+{%- endmacro -%}
+
+{%- set ENDINGS = [['fully', 'f əl i'], ['lessly', 'l ə s l i'], ['ness', 'n ə s'], ['less', 'l ə s'], ['ments', 'm ə n t s'],
+                   ['ment', 'm ə n t'], ['ful', 'f əl'], ['ship', 'ʃ ˌɪ p'], ['hood', 'h ˌʊ d'], ['like', 'l ˌaɪ k'], ['dom', 'd ə m'],
+                   ['ish', 'ɪ ʃ'], ['able', 'ə b əl'], ['ism', 'ɪ z ə m'], ['ist', 'ɪ s t'], ['wards', 'w ɚ d z'], ['ward', 'w ɚ d'],
+                   ['age', 'ɪ dʒ'], ['ers', 'ɚ z'], ['er', 'ɚ'], ['est', 'ɪ s t'], ['y', 'i']] -%}
+{#- prefix -> [form before a stem stressed on its first syllable, form otherwise] -#}
+{%- set MORPH_PREFIXES = [['under', 'ˌʌ n d ɚ', 'ˌʌ n d ɚ'], ['over', 'ˌoʊ v ɚ', 'ˌoʊ v ɚ'], ['anti', 'ˌæ n t i', 'ˌæ n t i'],
+                          ['semi', 's ˌɛ m i', 's ˌɛ m i'], ['non', 'n ˌɑː n', 'n ˌɑː n'], ['out', 'ˌaʊ t', 'ˌaʊ t'],
+                          ['dis', 'd ɪ s', 'd ˌɪ s'], ['mis', 'm ɪ s', 'm ˌɪ s'], ['un', 'ʌ n', 'ˌʌ n'], ['in', 'ɪ n', 'ˌɪ n'],
+                          ['re', 'ɹ ᵻ', 'ɹ ˌiː'], ['pre', 'p ɹ ˌiː', 'p ɹ ˌiː']] -%}
+{%- set BRITISH = [['isation', 'ization'], ['ising', 'izing'], ['ised', 'ized'], ['ises', 'izes'], ['ise', 'ize'], ['yse', 'yze'],
+                   ['our', 'or'], ['ourable', 'orable'], ['ours', 'ors'], ['oured', 'ored'], ['ouring', 'oring'], ['tre', 'ter'],
+                   ['tres', 'ters'], ['bre', 'ber'], ['ence', 'ense'], ['ogue', 'og'], ['mme', 'm'], ['lled', 'led'],
+                   ['lling', 'ling'], ['ller', 'ler'], ['oul', 'ol'], ['ae', 'e'], ['enqui', 'inqui']] -%}
+
+{#- a dictionary word that may be half of a compound: it is also listed with a regular ending ("webs") -#}
+{%- macro ordinary(w) -%}
+{%- if w | length >= 3 and (tts_dict('lexicon', w ~ 's') is not none or tts_dict('lexicon', w ~ 'es') is not none
+        or tts_dict('lexicon', w ~ 'ed') is not none or tts_dict('lexicon', w ~ 'ing') is not none) -%}{{ known(w) }}{%- endif -%}
+{%- endmacro -%}
+
+{%- macro dstem(s, depth) -%}
+{%- if s | length >= 2 -%}
+  {%- set k = known(s) -%}
+  {%- if k -%}{{ k }}{%- elif depth < 2 -%}{{ derive(s, depth + 1) }}{%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- the first candidate stem that is known, built with the ending; 'build' is the name of the ending -#}
+{%- macro dfirst(candidates, build, depth) -%}
+{%- set ns = namespace(done=false) -%}
+{%- for c in candidates -%}
+  {%- if not ns.done -%}
+    {%- set f = dstem(c, depth) -%}
+    {%- if f -%}
+      {%- set ns.done = true -%}
+      {%- if build == 'plural' -%}{{ plural(f) }}
+      {%- elif build == 'past' -%}{{ past(f) }}
+      {%- elif build == 'adverb' -%}{{ adverb(f) }}
+      {%- elif build == 'same' -%}{{ f }}
+      {%- elif build == 'ves' -%}{%- if unstress(f.split(' ')[-1]) == 'f' -%}{{ mjoin((f.split(' ')[:-1] + ['v']) | join(' '), 'z') }}{%- endif -%}
+      {%- else -%}{{ mjoin(f, build) }}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- endmacro -%}
+
+{#- pronunciation of a word from a shorter dictionary word, or '' (morphology.derive) -#}
+{%- macro derive(w, depth) -%}
+{%- set n = w | length -%}
+{%- set r = namespace(v='', done=false) -%}
+{%- if w.endswith("'s") -%}{%- set r.v = dfirst([w[:-2]], 'plural', depth) -%}{%- set r.done = true -%}
+{%- elif w.endswith("s'") -%}{%- set r.v = dfirst([w[:-1]], 'same', depth) -%}{%- set r.done = true -%}
+{%- endif -%}
+{%- if not r.done and w.endswith('ies') and n > 4 -%}{%- set r.v = dfirst([w[:-3] ~ 'y'], 'plural', depth) -%}{%- endif -%}
+{%- if not r.done and not r.v and w.endswith('ves') and n > 4 -%}{%- set r.v = dfirst([w[:-3] ~ 'f', w[:-3] ~ 'fe'], 'ves', depth) -%}{%- endif -%}
+{%- if not r.done and not r.v and w.endswith('es') and n > 3 and w[-3:-2] in 'sxzh' -%}{%- set r.v = dfirst([w[:-2]], 'plural', depth) -%}{%- endif -%}
+{%- if not r.done and not r.v and w.endswith('s') and not (w.endswith('ss') or w.endswith('us') or w.endswith('is')) and n > 3 -%}{%- set r.v = dfirst([w[:-1]], 'plural', depth) -%}{%- endif -%}
+{%- if not r.done and not r.v and w.endswith('ied') and n > 4 -%}{%- set r.v = dfirst([w[:-3] ~ 'y'], 'past', depth) -%}{%- endif -%}
+{%- if not r.done and not r.v and w.endswith('ed') and n > 3 -%}{%- set r.v = dfirst(stems(w[:-2]).split('|'), 'past', depth) -%}{%- endif -%}
+{%- if not r.done and not r.v and w.endswith('ing') and n > 4 -%}{%- set r.v = dfirst(stems(w[:-3]).split('|'), 'ɪ ŋ', depth) -%}{%- endif -%}
+{%- if not r.done and not r.v and w.endswith('ily') and n > 4 -%}{%- set r.v = dfirst([w[:-3] ~ 'y'], 'adverb', depth) -%}{%- endif -%}
+{%- if not r.done and not r.v and w.endswith('ly') and n > 3 -%}
+  {%- set r.v = dfirst([w[:-2], w[:-2] ~ 'le', w[:-1] ~ 'e'] if (w.endswith('bly') or w.endswith('ply')) else [w[:-2]], 'adverb', depth) -%}
+{%- endif -%}
+{%- if not r.done and not r.v -%}
+  {%- for e in ENDINGS -%}
+    {%- if not r.v and w.endswith(e[0]) and n - e[0] | length > 2 -%}
+      {%- set body = w[:n - e[0] | length] -%}
+      {%- if not (e[0] == 'y' and body[-1:] not in CONSONANT_LETTERS) -%}
+        {%- set cands = stems(body).split('|') if unstress(e[1].split(' ')[0]) in VOWELS else ([body[:-1] ~ 'y', body] if body.endswith('i') else [body]) -%}
+        {%- set r.v = dfirst(cands, e[1], depth) -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endfor -%}
+{%- endif -%}
+{%- if not r.done and not r.v -%}
+  {%- for p in MORPH_PREFIXES -%}
+    {%- if not r.v and w.startswith(p[0]) and n - p[0] | length > 2 -%}
+      {%- set f = dstem(w[p[0] | length:], depth) -%}
+      {%- if f -%}
+        {%- set fv = namespace(s=none) -%}
+        {%- for t in f.split(' ') -%}{%- if fv.s is none and unstress(t) in VOWELS -%}{%- set fv.s = sz(t) | int -%}{%- endif -%}{%- endfor -%}
+        {%- set r.v = mjoin(p[1] if fv.s == 1 else p[2], f) -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endfor -%}
+{%- endif -%}
+{%- if not r.done and not r.v -%}
+  {%- for b in BRITISH -%}
+    {%- if not r.v and b[0] in w -%}{%- set halves = w.split(b[0]) -%}{%- set r.v = dstem(halves[0] ~ b[1] ~ halves[1:] | join(b[0]), depth) -%}{%- endif -%}
+  {%- endfor -%}
+{%- endif -%}
+{#- two dictionary words of four letters or more: "sandpiper" -#}
+{%- if not r.done and not r.v and depth == 0 -%}
+  {%- set best = namespace(score=-1, l='', r='') -%}
+  {%- for cut in range(4, n - 3) -%}
+    {%- set left = ordinary(w[:cut]) -%}
+    {%- if left -%}
+      {%- set right = ordinary(w[cut:]) -%}
+      {%- if right and [cut, n - cut] | min > best.score -%}{%- set best.score = [cut, n - cut] | min -%}{%- set best.l = left -%}{%- set best.r = right -%}{%- endif -%}
+    {%- endif -%}
+  {%- endfor -%}
+  {%- if best.l -%}{%- set r.v = compound(best.l, best.r) -%}{%- endif -%}
+{%- endif -%}
+{{ r.v }}
+{%- endmacro -%}
+
+{#- ---------- CMUdict notation -> phones (align.py, convert.py) ---------- -#}
+{#- letters of word spelling each phoneme: runs separated by '|', or 'NONE' (Viterbi with the table of align.json) -#}
+{%- macro align(word, bases) -%}
+{%- set L = word | length -%}{%- set C = bases | length -%}
+{%- if C == 0 or L > 4 * C -%}NONE
+{%- else -%}
+  {%- set LOW = -1000000000.0 -%}
+  {%- set first = namespace(r=[0.0]) -%}
+  {%- for i in range(L) -%}{%- set first.r = first.r + [LOW] -%}{%- endfor -%}
+  {%- set dp = namespace(best=[first.r], step=[[]]) -%}
+  {%- for j in range(1, C + 1) -%}
+    {%- set tbl = tts_dict('align', bases[j - 1]) -%}
+    {%- set prev = dp.best[j - 1] -%}
+    {%- set rw = namespace(row=[], tr=[]) -%}
+    {%- for i in range(L + 1) -%}
+      {%- set cell = namespace(v=LOW, k=0) -%}
+      {%- for k in range([4, i] | min + 1) -%}
+        {%- if prev[i - k] > LOW -%}
+          {%- set run = word[i - k:i] -%}
+          {%- set sc = tbl[run] if (tbl is not none and run in tbl) else (-14.0 - 2.0 * ((run | length) - 1) | abs) -%}
+          {%- set v = prev[i - k] + sc -%}
+          {%- if v > cell.v -%}{%- set cell.v = v -%}{%- set cell.k = k -%}{%- endif -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {%- set rw.row = rw.row + [cell.v] -%}{%- set rw.tr = rw.tr + [cell.k] -%}
+    {%- endfor -%}
+    {%- set dp.best = dp.best + [rw.row] -%}{%- set dp.step = dp.step + [rw.tr] -%}
+  {%- endfor -%}
+  {%- if dp.best[C][L] <= LOW -%}NONE
+  {%- else -%}
+    {%- set bt = namespace(runs=[], i=L) -%}
+    {%- for j in range(C, 0, -1) -%}
+      {%- set k = dp.step[j][bt.i] -%}
+      {%- set bt.runs = [word[bt.i - k:bt.i]] + bt.runs -%}
+      {%- set bt.i = bt.i - k -%}
+    {%- endfor -%}
+    {{ bt.runs | join('|') }}
+  {%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- the questions the conversion rules ask about segment i of the aligned word w (convert.py: _Word) -#}
+{%- macro cb(w, i) -%}{{ w.b[i] if i >= 0 and i < w.n else '' }}{%- endmacro -%}
+{%- macro cvowel(w, i) -%}{{ '1' if i >= 0 and i < w.n and w.b[i] in ARPA_VOWELS else '' }}{%- endmacro -%}
+{%- macro cunstressed(w, i) -%}{{ '1' if cvowel(w, i) and not w.s[i] else '' }}{%- endmacro -%}
+{%- macro cletters(w, i) -%}{%- for c in tts_norm_scan(w.r[i], '[aeiouy]+') -%}{{ c.text if c.rule else '' }}{%- endfor -%}{%- endmacro -%}
+{%- macro cbefore(w, i) -%}{{ w.word[:w.st[i]] if w.al else '' }}{%- endmacro -%}
+{%- macro cafter(w, i) -%}{{ w.word[w.st[i] + w.r[i] | length:] if w.al else '' }}{%- endmacro -%}
+{%- macro cends(w, i, syms) -%}{{ '1' if w.b[i + 1:] == syms else '' }}{%- endmacro -%}
+{%- macro cfirst_vowel(w, i) -%}{%- set ns = namespace(v=false) -%}{%- for b in w.b[:i] -%}{%- if b in ARPA_VOWELS -%}{%- set ns.v = true -%}{%- endif -%}{%- endfor -%}{{ '' if ns.v else '1' }}{%- endmacro -%}
+{%- macro cnext_stress(w, i) -%}
+{%- set ns = namespace(s='') -%}
+{%- for j in range(i + 1, w.n) -%}{%- if ns.s == '' and w.b[j] in ARPA_VOWELS -%}{%- set ns.s = w.s[j] | string -%}{%- endif -%}{%- endfor -%}
+{{ ns.s }}
+{%- endmacro -%}
+{%- macro cweak_prefix(w, i) -%}
+{%- set wp = namespace(v=false) -%}{%- for p in WEAK_PREFIXES -%}{%- if w.word.startswith(p) -%}{%- set wp.v = true -%}{%- endif -%}{%- endfor -%}
+{{ '1' if w.al and cfirst_vowel(w, i) and cletters(w, i) == 'e' and wp.v and cbefore(w, i) in ['b', 'd', 'r', 'pr'] else '' }}
+{%- endmacro -%}
+
+{%- macro north_or_force(w, i, before_vowel) -%}
+{%- set spelled = cletters(w, i) -%}
+{%- if not w.al -%}ɔː
+{%- elif spelled in ['oa', 'oo', 'ou'] -%}oː
+{%- elif spelled != 'o' -%}ɔː
+{%- else -%}
+  {%- set tail = w.r[i].split('o', 1)[1] ~ cafter(w, i) -%}
+  {%- set rest = tail[1:] -%}
+  {%- if not before_vowel -%}
+    {%- set fs = namespace(v=false) -%}{%- for s in FORCE_SPELLINGS -%}{%- if s in w.word -%}{%- set fs.v = true -%}{%- endif -%}{%- endfor -%}
+    {%- if rest.startswith('e') or (cbefore(w, i).endswith('p') and rest.startswith('t')) or fs.v -%}oː{%- else -%}ɔː{%- endif -%}
+  {%- elif rest.startswith('r') -%}ɔː
+  {%- elif rest in ['y', 'ies', 'ied', 'a', 'as', 'ah', 'er', 'ers'] or rest.startswith('ia') or rest.startswith('io') or rest.startswith('iu')
+          or rest.startswith('ing') or rest.startswith('age') -%}oː
+  {%- else -%}ɔː
+  {%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro weak_i(w, i) -%}
+{%- set nxt = cb(w, i + 1) -%}{%- set nxt2 = cb(w, i + 2) -%}
+{%- if nxt == 'F' and nxt2 == 'AH' and cb(w, i + 3) == 'L' -%}i
+{%- elif (nxt == 'T' and nxt2 == 'IY') or (nxt == 'B' and nxt2 in ['AH', 'L']) or (nxt == 'F' and nxt2 == 'AY') -%}ᵻ
+{%- elif nxt == 'T' and cends(w, i, ['T']) and cb(w, i - 1) in ['R', 'ER'] and w.word.endswith('ite') -%}ᵻ
+{%- else -%}ɪ
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro weak_e(w, i) -%}
+{%- set nxt = cb(w, i + 1) -%}{%- set prev = cb(w, i - 1) -%}
+{%- if nxt == 'T' and (cends(w, i, ['T']) or cends(w, i, ['T', 'S'])) -%}{{ 'ə' if prev == 'L' else ('ᵻ' if prev == 'R' else 'ɪ') }}
+{%- elif nxt == 'S' and (cends(w, i, ['S', 'T']) or cends(w, i, ['S', 'T', 'L', 'IY'])) -%}ɪ
+{%- elif nxt == 'JH' -%}ɪ
+{%- elif nxt == 'K' and cb(w, i + 2) == 'T' -%}ɛ
+{%- elif nxt == 'D' and cends(w, i, ['D']) -%}ɪ
+{%- else -%}ə
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro inflection(w, i) -%}
+{%- if i + 1 < w.n and not (w.al and 'e' not in w.r[i] ~ w.r[i + 1]) -%}
+  {%- set nxt = cb(w, i + 1) -%}{%- set prev = cb(w, i - 1) -%}
+  {%- if nxt == 'D' and prev in ['T', 'D'] and (cends(w, i, ['D']) or cends(w, i, ['D', 'L', 'IY'])) -%}1
+  {%- elif nxt == 'Z' and prev in SIBILANTS and cends(w, i, ['Z']) -%}1
+  {%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro first_syllable(w, i) -%}
+{%- set word = w.word -%}
+{%- if w.al and cfirst_vowel(w, i) and cnext_stress(w, i) in ['1', '2'] -%}
+  {%- if i == 0 and word.startswith('e') -%}
+    {%- if word.startswith('ex') -%}ɛ
+    {%- elif word[1:2] in ['n', 'm', 's'] and word[2:3] and word[2] not in VOWEL_LETTERS and word[2] != word[1] -%}ɛ
+    {%- else -%}ɪ
+    {%- endif -%}
+  {%- elif cweak_prefix(w, i) -%}
+    {%- if word.startswith('pre') or (word.startswith('be') and word[2:3] in ['c', 'g']) -%}ɪ{%- else -%}ᵻ{%- endif -%}
+  {%- elif cletters(w, i) == 'i' and word.startswith('di') and word | length > 3 and word[2] not in VOWEL_LETTERS and word[2] != 's'
+          and word[3] in VOWEL_LETTERS -%}ᵻ
+  {%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro reduced(w, i) -%}
+{%- set name = w.b[i] -%}{%- set spelled = cletters(w, i) -%}
+{%- set nxt = cb(w, i + 1) -%}{%- set prev = cb(w, i - 1) -%}
+{%- set pre = first_syllable(w, i) -%}
+{%- if name == 'IH' and nxt == 'NG' -%}ɪ
+{%- elif inflection(w, i) -%}ᵻ
+{%- elif name == 'AH' and prev == 'Y' and 'u' in w.r[i - 1] ~ w.r[i] -%}ʊ
+{%- elif name == 'AH' and i == 0 and w.word.startswith('a') -%}ɐ
+{%- elif name == 'AH' and i == 0 and nxt == 'N' and w.word.startswith('un') -%}ʌ
+{%- elif name == 'AH' and spelled == 'a' and cbefore(w, i) in CONV_PREFIXES and w.r[i].startswith('a') -%}ɐ
+{%- elif pre -%}{{ pre }}
+{%- elif spelled == 'e' and nxt in ['K', 'G'] and w.r[i + 1].startswith('x') and cnext_stress(w, i) in ['1', '2'] -%}ɛ
+{%- elif spelled in ['i', 'ai', 'ui', 'y'] -%}{{ weak_i(w, i) }}
+{%- elif spelled == 'e' -%}{{ weak_e(w, i) }}
+{%- elif spelled == 'a' -%}
+  {%- if nxt == 'JH' or (nxt == 'N' and cb(w, i + 2) == 'JH') -%}ɪ
+  {%- elif nxt == 'S' and cends(w, i, ['S']) and w.word.endswith('ace') -%}ɪ
+  {%- elif name == 'IH' and not (nxt == 'T' and cends(w, i, ['T'])) -%}ɪ
+  {%- else -%}ə
+  {%- endif -%}
+{%- elif name == 'AH' and nxt == 'M' and cends(w, i, ['M']) and w.word.endswith('ome') -%}ʌ
+{%- elif name == 'IH' and spelled not in ['o', 'u', 'ou'] -%}ɪ
+{%- else -%}ə
+{%- endif -%}
+{%- endmacro -%}
+
+{#- phone and stress, as "phone|stress" -#}
+{%- macro unstressed_iy(w, i) -%}
+{%- set nxt = cb(w, i + 1) -%}
+{%- if nxt == '' or cends(w, i, ['Z']) or cends(w, i, ['D']) -%}i|0
+{%- elif cvowel(w, i + 1) -%}{{ 'i' if nxt == 'IH' and cb(w, i + 2) == 'NG' else 'ɪ' }}|0
+{%- elif cweak_prefix(w, i) -%}{{ 'ᵻ|0' if cnext_stress(w, i) == '1' else 'iː|2' }}
+{%- else -%}ɪ|0
+{%- endif -%}
+{%- endmacro -%}
+
+{#- citation form of word from its CMUdict pronunciation (a list of symbols with stress digits) -#}
+{%- macro convert(word, arpa) -%}
+{%- set bs = namespace(b=[], s=[]) -%}
+{%- for a in arpa -%}
+  {%- if a[-1:] in ['0', '1', '2'] -%}{%- set bs.b = bs.b + [a[:-1]] -%}{%- set bs.s = bs.s + [a[-1:] | int] -%}
+  {%- else -%}{%- set bs.b = bs.b + [a] -%}{%- set bs.s = bs.s + [0] -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- set runs = align(word, bs.b) -%}
+{%- set al = runs != 'NONE' -%}
+{%- set empty = namespace(r=[]) -%}
+{%- for a in arpa -%}{%- set empty.r = empty.r + [''] -%}{%- endfor -%}
+{%- set rl = runs.split('|') if al else empty.r -%}
+{%- set pos = namespace(st=[], p=0) -%}
+{%- for r in rl -%}{%- set pos.st = pos.st + [pos.p] -%}{%- set pos.p = pos.p + r | length -%}{%- endfor -%}
+{%- set w = {'word': word, 'b': bs.b, 's': bs.s, 'al': al, 'r': rl, 'st': pos.st, 'n': bs.b | length} -%}
+{%- set o = namespace(ph=[], st=[], i=0) -%}
+{%- for _ in range(w.n) -%}
+  {%- if o.i < w.n -%}
+    {%- set i = o.i -%}
+    {%- set name = w.b[i] -%}{%- set stress = w.s[i] -%}
+    {%- set nxt = cb(w, i + 1) -%}
+    {%- if name not in ARPA_VOWELS -%}
+      {%- if name == 'Y' and nxt == 'AH' and cunstressed(w, i + 1) and cb(w, i - 1) in ['N', 'L'] and cb(w, i + 2) != 'L'
+              and (not al or 'i' in w.r[i] ~ w.r[i + 1]) -%}
+        {%- set o.ph = o.ph + ['iə'] -%}{%- set o.st = o.st + [0] -%}{%- set o.i = o.i + 1 -%}
+      {%- else -%}
+        {%- set o.ph = o.ph + [ARPA_CONSONANTS[name]] -%}{%- set o.st = o.st + [0] -%}
+      {%- endif -%}
+    {%- else -%}
+      {%- set before_vowel = cvowel(w, i + 2) -%}
+      {%- if name == 'ER' -%}
+        {%- set o.ph = o.ph + ['ɜː' if stress else 'ɚ'] -%}{%- set o.st = o.st + [stress] -%}
+        {%- if nxt == 'R' -%}{%- set o.i = o.i + 1 -%}{%- endif -%}
+        {%- if cvowel(w, o.i + 1) -%}{%- set o.ph = o.ph + ['ɹ'] -%}{%- set o.st = o.st + [0] -%}{%- endif -%}
+      {%- elif nxt == 'R' and name == 'AW' -%}
+        {%- set o.ph = o.ph + ['aʊ', 'ɚ'] -%}{%- set o.st = o.st + [stress, 0] -%}
+        {%- if before_vowel -%}{%- set o.ph = o.ph + ['ɹ'] -%}{%- set o.st = o.st + [0] -%}{%- endif -%}
+        {%- set o.i = o.i + 1 -%}
+      {%- elif nxt == 'R' and name in ['AA', 'AO', 'IH', 'IY', 'EH', 'UH', 'UW', 'AY'] -%}
+        {%- if name == 'AA' -%}{%- set q = 'ɑː' -%}{%- set single = 'ɑːɹ' -%}
+        {%- elif name == 'AO' -%}{%- set q = north_or_force(w, i, before_vowel) -%}{%- set single = q ~ 'ɹ' -%}
+        {%- elif name in ['IH', 'IY'] -%}{%- set q = 'iə' if stress and cletters(w, i) in ['e', 'eo'] else 'ɪ' -%}{%- set single = 'ɪɹ' -%}
+        {%- elif name == 'EH' -%}
+          {%- set doubled = (w.r[i + 1] ~ cafter(w, i + 1)).startswith('rr') or (w.r[i].endswith('r') and w.r[i + 1].startswith('r')) -%}
+          {%- set q = 'æ' if cletters(w, i) == 'a' and doubled else 'ɛ' -%}{%- set single = 'ɛɹ' -%}
+        {%- elif name in ['UH', 'UW'] -%}{%- set q = 'ʊɹ' -%}{%- set single = 'ʊɹ' -%}
+        {%- else -%}{%- set q = 'aɪɚ' if not al or cafter(w, i + 1) in IRE_ENDINGS else 'aɪ' -%}{%- set single = 'aɪɚ' -%}
+        {%- endif -%}
+        {%- if before_vowel -%}{%- set o.ph = o.ph + [q, 'ɹ'] -%}{%- set o.st = o.st + [stress, 0] -%}
+        {%- else -%}{%- set o.ph = o.ph + [single] -%}{%- set o.st = o.st + [stress] -%}
+        {%- endif -%}
+        {%- set o.i = o.i + 1 -%}
+      {%- elif name == 'AY' and nxt == 'ER' and cunstressed(w, i + 1) and w.r[i + 1] == 'er' and w.r[i] != 'i' -%}
+        {%- set o.ph = o.ph + ['aɪ'] -%}{%- set o.st = o.st + [stress] -%}
+      {%- elif name == 'AY' and nxt == 'ER' and cunstressed(w, i + 1) -%}
+        {%- set o.ph = o.ph + ['aɪɚ'] -%}{%- set o.st = o.st + [stress] -%}{%- set o.i = o.i + 1 -%}
+        {%- if cvowel(w, o.i + 1) -%}{%- set o.ph = o.ph + ['ɹ'] -%}{%- set o.st = o.st + [0] -%}{%- endif -%}
+      {%- elif name == 'AY' and nxt == 'AH' and cunstressed(w, i + 1) -%}
+        {%- set o.ph = o.ph + ['aɪə'] -%}{%- set o.st = o.st + [stress] -%}{%- set o.i = o.i + 1 -%}
+      {%- elif name == 'IY' and nxt == 'AH' and cunstressed(w, i + 1) and not cweak_prefix(w, i) -%}
+        {%- set after = cb(w, i + 2) -%}
+        {%- if stress != 1 and (after in ['L', 'D', 'T'] or (after == 'N' and cb(w, i + 3) == 'S')) -%}
+          {%- set o.ph = o.ph + ['ɪ'] -%}{%- set o.st = o.st + [0] -%}
+        {%- else -%}
+          {%- set o.ph = o.ph + ['iə'] -%}{%- set o.st = o.st + [stress] -%}{%- set o.i = o.i + 1 -%}
+        {%- endif -%}
+      {%- elif not stress and name == 'AH' and nxt == 'N' and cb(w, i - 1) == 'T' and cb(w, i + 2) != 'T'
+              and o.ph | length >= 2 and o.ph[-1] == 't' and o.ph[-2] in VOWELS and o.st[-2] -%}
+        {%- set o.ph = o.ph[:-1] + ['ʔ', 'n̩'] -%}{%- set o.st = o.st + [0] -%}{%- set o.i = o.i + 1 -%}
+      {%- elif not stress and name == 'AH' and nxt == 'W' and cb(w, i + 2) == 'AH' and cunstressed(w, i + 2) and 'u' in w.r[i] ~ w.r[i + 1] -%}
+        {%- set o.ph = o.ph + ['uː'] -%}{%- set o.st = o.st + [0] -%}{%- set o.i = o.i + 1 -%}
+      {%- elif not stress and name == 'AH' and nxt == 'L' and i > 0 and not (cvowel(w, i + 2) and w.s[i + 2]) -%}
+        {%- if cletters(w, i) == 'i' and cvowel(w, i + 2) -%}{%- set o.ph = o.ph + ['ɪ'] -%}{%- set o.st = o.st + [0] -%}
+        {%- elif cb(w, i - 1) == 'Y' and 'u' in w.r[i - 1] ~ w.r[i] -%}{%- set o.ph = o.ph + ['ʊ'] -%}{%- set o.st = o.st + [0] -%}
+        {%- else -%}{%- set o.ph = o.ph + ['əl'] -%}{%- set o.st = o.st + [0] -%}{%- set o.i = o.i + 1 -%}
+        {%- endif -%}
+      {%- elif not stress and name in ['AH', 'IH'] -%}
+        {%- set o.ph = o.ph + [reduced(w, i)] -%}{%- set o.st = o.st + [0] -%}
+      {%- elif name == 'IY' and (not stress or (stress == 2 and nxt == '')) -%}
+        {%- set u = unstressed_iy(w, i).split('|') -%}
+        {%- set o.ph = o.ph + [u[0]] -%}{%- set o.st = o.st + [u[1] | int] -%}
+      {%- elif not stress and name == 'AE' and i == 0 and (w.word.startswith('ad') or w.word.startswith('acc')) and nxt in ['D', 'K'] -%}
+        {%- set o.ph = o.ph + ['ɐ'] -%}{%- set o.st = o.st + [0] -%}
+      {%- elif name in ['AA', 'AO'] and cletters(w, i) == 'a' and (cbefore(w, i).endswith('w') or cbefore(w, i).endswith('qu')) and nxt == 'N' -%}
+        {%- set o.ph = o.ph + ['ɔ'] -%}{%- set o.st = o.st + [stress] -%}
+      {%- elif name == 'AO' and cletters(w, i) == 'o' -%}
+        {%- set o.ph = o.ph + ['ɔ'] -%}{%- set o.st = o.st + [stress] -%}
+      {%- else -%}
+        {%- set o.ph = o.ph + [FULL_VOWELS[name]] -%}{%- set o.st = o.st + [stress] -%}
+      {%- endif -%}
+    {%- endif -%}
+    {%- set o.i = o.i + 1 -%}
+  {%- endif -%}
+{%- endfor -%}
+{#- the flap: t between a vowel (or r) and an unstressed vowel -#}
+{%- set f = namespace(ph=o.ph) -%}
+{%- set n = o.ph | length -%}
+{%- for k in range(1, n - 1) -%}
+  {%- if f.ph[k] == 't' -%}
+    {%- set bf = f.ph[k - 1] -%}{%- set af = f.ph[k + 1] -%}{%- set ast = o.st[k + 1] -%}
+    {%- if not ((bf not in VOWELS and bf != 'ɹ') or bf in ['n̩', 'əl'] or af not in VOWELS or af == 'n̩') -%}
+      {%- set final_o = af == 'oʊ' and (k + 2 == n or (k + 3 == n and f.ph[k + 2] == 'z')) -%}
+      {%- if not (ast and not final_o) and not (af in ['ə', 'ɚ'] and k + 2 < n and f.ph[k + 2] == 'n') -%}
+        {%- set f.ph = f.ph[:k] + ['ɾ'] + f.ph[k + 1:] -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- for k in range(n - 1) -%}
+  {%- if f.ph[k] == 'n' and f.ph[k + 1] in ['k', 'ɡ'] -%}{%- set f.ph = f.ph[:k] + ['ŋ'] + f.ph[k + 1:] -%}{%- endif -%}
+{%- endfor -%}
+{%- set out = namespace(t=[]) -%}
+{%- for p in f.ph -%}{%- set out.t = out.t + [mk(p, o.st[loop.index0])] -%}{%- endfor -%}
+{{ settle(out.t | join(' ')) }}
+{%- endmacro -%}
+
+{#- ---------- the lookup chain of one word ---------- -#}
+{#- exceptions (phones, or CMUdict notation), then the lexicon -#}
+{#- a pronunciation of the exception table: phones, or CMUdict notation -#}
+{%- macro entry(w, e) -%}
+{%- set first = e.split(' ')[0] -%}
+{%- set is_arpa = first in ARPA_CONSONANTS or (first[-1:] in ['0', '1', '2'] and first[:-1] in ARPA_VOWELS) -%}
+{{ convert(w, e.split(' ')) if is_arpa else e }}
+{%- endmacro -%}
+
+{%- macro known(w) -%}
+{%- set e = tts_dict('exceptions', w) -%}
+{%- if e is not none -%}{{ entry(w, e) }}
+{%- else -%}{{ tts_dict('lexicon', w) or '' }}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- the letters the unknown-word model knows (accents removed: not done, the letter is dropped) -#}
+{%- macro spellable(w) -%}
+{%- set ns = namespace(s='') -%}
+{%- for c in tts_norm_scan(w | lower, "[a-z']") -%}{%- if c.rule -%}{%- set ns.s = ns.s ~ c.text -%}{%- endif -%}{%- endfor -%}
+{{ ns.s.strip("'") }}
+{%- endmacro -%}
+
+{#- the unknown-word model (tts_g2p, CMUdict notation), then the conversion rules; spelled without the model -#}
+{%- macro guess(w) -%}
+{%- set s = spellable(w) -%}
+{%- set g = tts_g2p(s) if s else none -%}
+{%- if g is none or not g -%}{{ spell(w) }}
+{%- else -%}
+  {%- set syms = g.split(' ') -%}
+  {#- an r with no vowel beside it is a syllable -#}
+  {%- set fx = namespace(s=[]) -%}
+  {%- for x in syms -%}
+    {%- set k = loop.index0 -%}
+    {%- set near = namespace(v=false) -%}
+    {#- the symbol before as already rewritten: of two such r in a row only the first becomes a syllable -#}
+    {%- if (k > 0 and fx.s[k - 1][-1:] in ['0', '1', '2']) or (k + 1 < syms | length and syms[k + 1][-1:] in ['0', '1', '2']) -%}{%- set near.v = true -%}{%- endif -%}
+    {%- set fx.s = fx.s + ['ER0' if x == 'R' and not near.v else x] -%}
+  {%- endfor -%}
+  {%- set hv = namespace(v=false) -%}
+  {%- for x in fx.s -%}{%- if x[-1:] in ['0', '1', '2'] -%}{%- set hv.v = true -%}{%- endif -%}{%- endfor -%}
+  {%- if not hv.v -%}{{ spell(w) }}{%- else -%}{{ promote(convert(s, fx.s)) }}{%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro word(w) -%}
+{%- set k = known(w) -%}
+{%- if k -%}{{ k }}
+{%- else -%}
+  {%- set d = derive(w, 0) -%}
+  {%- if d -%}{{ settle(d) }}
+  {%- else -%}
+    {%- set p = from_parts(w) -%}
+    {%- if p -%}{{ p }}
+    {%- elif w.endswith("'s") and w | length > 3 -%}{{ plural(guess(w[:-2])) }}
+    {%- else -%}{{ guess(w) }}
+    {%- endif -%}
+  {%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- a name in "-leigh" is said like the one in "-ley"; a word in "-virus" is its first part, then "virus" -#}
+{%- macro from_parts(w) -%}
+{%- set n = w | length -%}
+{%- if w.endswith("'s") and n > 3 -%}
+  {%- set f = from_parts(w[:-2]) -%}{%- if f -%}{{ plural(f) }}{%- endif -%}
+{%- else -%}
+  {%- set base = w[:-1] if w.endswith('s') else w -%}
+  {%- if base.endswith('leigh') and base | length >= 7 and base[-7:-6] in 'abcdefghijklmnopqrstuvwxyz' and base[-6:-5] in 'abcdefghijklmnopqrstuvwxyz' -%}
+    {{ word(base[:-5] ~ 'ley' ~ w[base | length:]) }}
+  {%- else -%}
+    {%- set ns = namespace(v='') -%}
+    {%- for tail in ['viruses', 'virus'] -%}
+      {%- if not ns.v and w.endswith(tail) and n - tail | length > 2 -%}
+        {%- set second = known(tail) -%}
+        {%- if second -%}{%- set ns.v = promote(settle(compound(word(w[:n - tail | length]), second))) -%}{%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {{ ns.v }}
+  {%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- ---------- homographs (homographs.py): "I read it yesterday" / "to read" ----------
+    hand-written rules first, then a linear classifier on the neighbouring words; toks is one sentence as written,
+    punctuation marks as their own tokens. Weights are integers (x10000) -#}
+{%- set UPPER = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' -%}
+{%- set LOWER = 'abcdefghijklmnopqrstuvwxyz' -%}
+{%- set HG_CLASSES = [
+    ['TO', ' to '],
+    ['DET', ' the a an this that these those every each no some any another such what which whose '],
+    ['POSS', ' my your his her its our their '],
+    ['SUBJ', ' i you he she it we they who '],
+    ['OBJ', ' me him us them '],
+    ['MODAL', " will would shall should can could may might must 'll 'd won't can't cannot couldn't shouldn't wouldn't let's please "],
+    ['DO', " do does did don't doesn't didn't "],
+    ['BE', " am is are was were be been being isn't aren't wasn't weren't i'm you're we're they're he's she's it's that's there's "],
+    ['HAVE', " have has had having haven't hasn't hadn't i've you've we've they've "],
+    ['NEG', ' not never '],
+    ['PREP', ' of in on at by for from with into onto over under about after before between through during without within against among around across behind beside near upon toward towards as than like '],
+    ['CONJ', ' and or but nor so yet if because although though while when where unless until since whether '],
+    ['ADV', ' very too quite rather more most less least also just only even still always often sometimes usually again now then here there soon already almost '],
+] -%}
+{%- set HG_SKIP_BEFORE = ['ADV', 'NEG', 'LY'] -%}
+{%- set HG_SKIP_AUX = ['ADV', 'NEG', 'LY', 'SUBJ', 'OBJ', 'DET', 'POSS'] -%}
+
+{#- coarse grammatical class of a neighbouring token, from closed lists and endings -#}
+{%- macro hg_tag(t) -%}
+{%- set c = t[:1] -%}
+{%- if t in ['<s>', '</s>'] -%}{{ t }}
+{%- elif c not in UPPER and c not in LOWER -%}{{ 'NUM' if c in '0123456789' else 'PUNCT' }}
+{%- else -%}
+  {%- set lower = t | lower -%}
+  {%- set n = lower | length -%}
+  {%- set ns = namespace(v='') -%}
+  {%- for cl in HG_CLASSES -%}{%- if not ns.v and (' ' ~ lower ~ ' ') in cl[1] -%}{%- set ns.v = cl[0] -%}{%- endif -%}{%- endfor -%}
+  {%- if ns.v -%}{{ ns.v }}
+  {%- elif lower.endswith("'s") and n > 3 -%}POS
+  {%- elif lower.endswith('ly') and n > 3 -%}LY
+  {%- elif lower.endswith('ing') and n > 4 -%}ING
+  {%- elif lower.endswith('ed') and n > 3 -%}ED
+  {%- elif lower.endswith('s') and not lower.endswith('ss') and n > 3 -%}S
+  {%- else -%}{{ 'CAP' if c in UPPER else 'W' }}
+  {%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- the nearest token to the left that is not of a skipped class; "'ll" and "'ve" read as "will" and "have" -#}
+{%- macro hg_left(toks, index, skip) -%}
+{%- set ns = namespace(v='<s>', done=false) -%}
+{%- for p in range(index - 1, [index - 6, -1] | max, -1) -%}
+  {%- if not ns.done and hg_tag(toks[p]) not in skip -%}
+    {%- set lower = toks[p] | lower -%}
+    {%- set ns.v = 'will' if lower.endswith("'ll") else ('have' if lower.endswith("'ve") else lower) -%}
+    {%- set ns.done = true -%}
+  {%- endif -%}
+{%- endfor -%}
+{{ ns.v }}
+{%- endmacro -%}
+
+{#- one condition of a hand-written rule, see homograph_rules.txt -#}
+{%- macro hg_holds(name, words, toks, index, joined) -%}
+{%- if name == 'first' -%}{{ '1' if index == 0 else '' }}
+{%- elif name == 'joined' -%}{{ '1' if joined and index > 0 and toks[index - 1] | lower in words else '' }}
+{%- elif name == 'aux' -%}{{ '1' if hg_left(toks, index, HG_SKIP_AUX) in words else '' }}
+{%- elif name == 'before' -%}{{ '1' if hg_left(toks, index, HG_SKIP_BEFORE) in words else '' }}
+{%- elif name == 'next' -%}{{ '1' if (toks[index + 1] | lower if index + 1 < toks | length else '</s>') in words else '' }}
+{%- else -%}
+  {%- set ns = namespace(v='') -%}
+  {%- for t in toks[[0, index - 6] | max:index + 7] -%}{%- if t | lower in words -%}{%- set ns.v = '1' -%}{%- endif -%}{%- endfor -%}
+  {{ ns.v }}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- index of the sense meant by written[place]; entry is the dictionary entry of the homograph "word" -#}
+{%- macro hg_choose(word, hg, written, place, joined) -%}
+{#- the sentence around the word -#}
+{%- set b = namespace(s=place, e=place) -%}
+{%- for _ in range(place) -%}{%- if b.s > 0 and written[b.s - 1] not in ['.', '?', '!'] -%}{%- set b.s = b.s - 1 -%}{%- endif -%}{%- endfor -%}
+{%- for _ in range(written | length - place) -%}{%- if b.e < written | length and written[b.e] not in ['.', '?', '!'] -%}{%- set b.e = b.e + 1 -%}{%- endif -%}{%- endfor -%}
+{%- set toks = written[b.s:b.e + 1] -%}
+{%- set index = place - b.s -%}
+{%- set n = toks | length -%}
+{%- set pick = namespace(i=-1, v=0) -%}
+{%- set rules = tts_dict('homograph_rules', word) -%}
+{%- for rule in (rules if rules is not none else []) -%}
+  {%- if pick.i < 0 -%}
+    {%- set ok = namespace(v=true) -%}
+    {%- for cond in rule[1] -%}{%- if ok.v and not hg_holds(cond[0], cond[1], toks, index, joined) -%}{%- set ok.v = false -%}{%- endif -%}{%- endfor -%}
+    {%- if ok.v -%}
+      {%- for s in hg.senses -%}{%- if pick.i < 0 and s[0] == rule[0] -%}{%- set pick.i = loop.index0 -%}{%- endif -%}{%- endfor -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- if pick.i >= 0 -%}{{ pick.i }}
+{%- else -%}
+  {#- the features that are on -#}
+  {%- set p2 = toks[index - 2] if index >= 2 else '<s>' -%}
+  {%- set p1 = toks[index - 1] if index >= 1 else '<s>' -%}
+  {%- set n1 = toks[index + 1] if index + 1 < n else '</s>' -%}
+  {%- set n2 = toks[index + 2] if index + 2 < n else '</s>' -%}
+  {%- set tp2 = hg_tag(p2) -%}{%- set tp1 = hg_tag(p1) -%}{%- set tn1 = hg_tag(n1) -%}{%- set tn2 = hg_tag(n2) -%}
+  {%- set f = namespace(shared=['tp1=' ~ tp1, 'tp2=' ~ tp2, 'tn1=' ~ tn1, 'tn2=' ~ tn2, 'tp2p1=' ~ tp2 ~ '+' ~ tp1,
+                                'tp1n1=' ~ tp1 ~ '+' ~ tn1, 'tn1n2=' ~ tn1 ~ '+' ~ tn2], own=[]) -%}
+  {%- if index == 0 -%}{%- set f.shared = f.shared + ['first'] -%}
+  {%- elif toks[index][:1] in UPPER -%}{%- set f.shared = f.shared + ['cap'] -%}
+  {%- endif -%}
+  {%- set f.own = ['p1=' ~ p1 | lower, 'p2=' ~ p2 | lower, 'n1=' ~ n1 | lower, 'n2=' ~ n2 | lower] -%}
+  {%- set target = toks[index] | lower -%}
+  {%- set near = namespace(w=[]) -%}
+  {%- for t in toks[[0, index - 6] | max:index + 7] -%}
+    {%- set lower = t | lower -%}
+    {%- if (t[:1] in UPPER or t[:1] in LOWER) and lower != target and lower not in near.w -%}
+      {%- set near.w = near.w + [lower] -%}{%- set f.own = f.own + ['w=' ~ lower] -%}
+    {%- endif -%}
+  {%- endfor -%}
+  {%- if hg.noun_verb -%}
+    {#- one score for the verb reading: the weights all such words share, and the word's own -#}
+    {%- set shared = tts_dict('homograph_shared', '') -%}
+    {%- set sc = namespace(v=shared + hg.bias[0]) -%}
+    {%- set own = hg.weights[0] -%}
+    {%- for name in f.shared -%}
+      {%- set sw = tts_dict('homograph_shared', name) -%}
+      {%- set sc.v = sc.v + (sw if sw is not none else 0) + (own[name] if name in own else 0) -%}
+    {%- endfor -%}
+    {%- for name in f.own -%}{%- set sc.v = sc.v + (own[name] if name in own else 0) -%}{%- endfor -%}
+    {#- the first of the highest scores: verb senses have the score, the others its opposite -#}
+    {%- for s in hg.senses -%}
+      {%- set v = sc.v if s[1] == 'v' else 0 - sc.v -%}
+      {%- if pick.i < 0 or v > pick.v -%}{%- set pick.i = loop.index0 -%}{%- set pick.v = v -%}{%- endif -%}
+    {%- endfor -%}
+  {%- else -%}
+    {%- for s in hg.senses -%}
+      {%- set own = hg.weights[loop.index0] -%}
+      {%- set sc = namespace(v=hg.bias[loop.index0]) -%}
+      {%- for name in f.shared + f.own -%}{%- set sc.v = sc.v + (own[name] if name in own else 0) -%}{%- endfor -%}
+      {%- if pick.i < 0 or sc.v > pick.v -%}{%- set pick.i = loop.index0 -%}{%- set pick.v = sc.v -%}{%- endif -%}
+    {%- endfor -%}
+  {%- endif -%}
+  {{ pick.i }}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- a homograph, or the regular -s form of a noun-or-verb one ("records") -#}
+{%- macro hg_covers(w) -%}
+{{ '1' if tts_dict('homographs', w) is not none or (w.endswith('s') and tts_dict('homograph_plurals', w[:-1]) is not none) else '' }}
+{%- endmacro -%}
+
+{%- macro hg_pronounce(w, written, place, joined) -%}
+{%- set hg = tts_dict('homographs', w) -%}
+{%- if hg is not none -%}{{ hg.senses[hg_choose(w, hg, written, place, joined) | int][2] }}
+{%- else -%}
+  {%- set base = tts_dict('homographs', w[:-1]) -%}
+  {%- set ns = namespace(n=-1, v=-1) -%}
+  {%- for s in base.senses -%}
+    {%- if ns.n < 0 and s[1] == 'n' -%}{%- set ns.n = loop.index0 -%}{%- endif -%}
+    {%- if ns.v < 0 and s[1] == 'v' -%}{%- set ns.v = loop.index0 -%}{%- endif -%}
+  {%- endfor -%}
+  {#- "separates" can only be the verb -#}
+  {%- if ns.n >= 0 and base.senses[ns.n][0] == 'adj' -%}{{ plural(base.senses[ns.v][2]) }}
+  {%- else -%}{{ plural(base.senses[hg_choose(w[:-1], base, written, place, joined) | int][2]) }}
+  {%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- ---------- one clause: words between two punctuation marks ----------
+    words: items {w: lower case, o: as written, a: joined to the word before (hyphen), spell: letter by letter}
+    written: the whole text as tokens, places: where each word sits in it (for the homographs) -#}
+{%- macro clause(words, written, places) -%}
+{#- units, in the order of dizione: letters, names of several words, function-word groups, homographs, function words, words -#}
+{%- set ns = namespace(units=[], i=0) -%}
+{%- set nw = words | length -%}
+{%- for _ in words -%}
+  {%- if ns.i < nw -%}
+    {%- set x = words[ns.i] -%}
+    {%- set w = x.w -%}
+    {%- set at = x.a -%}
+    {%- set found = namespace(name=0, phrase=0) -%}
+    {%- if not x.spell and not x.ps -%}
+      {#- the longest name, then the longest group, of plain words not joined by a hyphen -#}
+      {%- set longest = tts_dict('name_starts', w) -%}
+      {%- for size in (range(longest, 1, -1) | list if longest is not none else []) + [-2] -%}
+        {%- if not found.name and not found.phrase and ns.i + (size | abs) <= nw -%}
+          {%- set plain = namespace(v=true) -%}
+          {%- for y in words[ns.i + 1:ns.i + (size | abs)] -%}{%- if y.spell or y.a or y.ps -%}{%- set plain.v = false -%}{%- endif -%}{%- endfor -%}
+          {%- if plain.v -%}
+            {%- set key = words[ns.i:ns.i + (size | abs)] | map(attribute='w') | join(' ') -%}
+            {%- if size > 0 and tts_dict('names', key) is not none -%}{%- set found.name = size -%}
+            {%- elif size < 0 and tts_dict('phrases', key) is not none -%}{%- set found.phrase = 0 - size -%}
+            {%- endif -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+    {%- if x.ps or x.spell -%}
+      {%- set ns.units = ns.units + [{'w': w, 'ps': x.ps if x.ps else spell(w), 'k': 'c', 'f': '', 'a': at}] -%}
+      {%- set ns.i = ns.i + 1 -%}
+    {%- elif found.name -%}
+      {%- set key = words[ns.i:ns.i + found.name] | map(attribute='w') | join(' ') -%}
+      {%- set forms = tts_dict('names', key) -%}
+      {%- for part in key.split(' ') -%}
+        {%- set ns.units = ns.units + [{'w': part, 'ps': entry(part, forms[loop.index0]), 'k': 'c', 'f': '', 'a': at and loop.first}] -%}
+      {%- endfor -%}
+      {%- set ns.i = ns.i + found.name -%}
+    {%- elif found.phrase -%}
+      {%- set key = words[ns.i:ns.i + found.phrase] | map(attribute='w') | join(' ') -%}
+      {%- set ph = tts_dict('phrases', key) -%}
+      {%- if ph[1] | length == 1 -%}
+        {%- set ns.units = ns.units + [{'w': key, 'ps': ph[1][0], 'k': ph[0], 'f': ph[2], 'a': at}] -%}
+      {%- else -%}
+        {%- for part in key.split(' ') -%}
+          {%- set ns.units = ns.units + [{'w': part, 'ps': ph[1][loop.index0], 'k': ph[0], 'f': ph[2], 'a': at and loop.first}] -%}
+        {%- endfor -%}
+      {%- endif -%}
+      {%- set ns.i = ns.i + found.phrase -%}
+    {%- else -%}
+      {%- set fw = tts_dict('functions', w) -%}
+      {%- if hg_covers(w) and tts_dict('exceptions', w) is none -%}
+        {%- set ns.units = ns.units + [{'w': w, 'ps': hg_pronounce(w, written, places[ns.i], at), 'k': 'c', 'f': '', 'a': at}] -%}
+      {%- elif fw is not none -%}
+        {%- set ns.units = ns.units + [{'w': w, 'ps': fw[1], 'k': fw[0], 'f': fw[2], 'a': at}] -%}
+      {%- else -%}
+        {%- set ns.units = ns.units + [{'w': w, 'ps': word(w), 'k': 'c', 'f': '', 'a': at}] -%}
+      {%- endif -%}
+      {%- set ns.i = ns.i + 1 -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+{#- sentence stress, right to left -#}
+{%- set n = ns.units | length -%}
+{%- set st = namespace(out=[], pf=false) -%}
+{%- for j in range(n - 1, -1, -1) -%}
+  {%- set u = ns.units[j] -%}
+  {%- set promoted = u.f if u.f else promote(u.ps) -%}
+  {%- if u.k == 'u' -%}{%- set ps = unstress(u.ps) -%}
+  {%- elif u.k == 'uf' -%}{%- set ps = promoted if j == n - 1 else unstress(u.ps) -%}
+  {%- elif u.k == 'ur' -%}{%- set ps = unstress(u.ps) if st.pf else promoted -%}
+  {%- elif u.k == 's' -%}{%- set ps = u.ps if st.pf else promoted -%}
+  {%- elif u.k == 'si' -%}{%- set ps = promoted if not st.pf else (u.ps if j == 0 else unstress(u.ps)) -%}
+  {%- elif u.k == 'pf' -%}{%- set ps = promoted if j == n - 1 else u.ps -%}
+  {%- else -%}{%- set ps = u.ps -%}
+  {%- endif -%}
+  {%- set st.out = [{'w': u.w, 'ps': ps, 'a': u.a}] + st.out -%}
+  {%- set st.pf = st.pf or 'ˈ' in ps -%}
+{%- endfor -%}
+{#- a clause is never without any stress, primary or secondary -#}
+{%- set marks = st.out | map(attribute='ps') | join(' ') -%}
+{%- if 'ˈ' not in marks and 'ˌ' not in marks -%}
+  {%- set fix = namespace(out=[], done=false) -%}
+  {%- for u in st.out | reverse -%}
+    {%- set hv = namespace(v=false) -%}
+    {%- for t in u.ps.split(' ') -%}{%- if t in VOWELS -%}{%- set hv.v = true -%}{%- endif -%}{%- endfor -%}
+    {%- if not fix.done and hv.v -%}
+      {%- set fix.out = [{'w': u.w, 'ps': promote(u.ps), 'a': u.a}] + fix.out -%}{%- set fix.done = true -%}
+    {%- else -%}{%- set fix.out = [u] + fix.out -%}
+    {%- endif -%}
+  {%- endfor -%}
+  {%- set st.out = fix.out -%}
+{%- endif -%}
+{#- the end of each word adjusted to the beginning of the next -#}
+{#- a unit joined to the one before continues its spoken word: no <sp> -#}
+{%- set jn = namespace(s='') -%}
+{%- for u in st.out -%}
+  {%- set ps = u.ps -%}
+  {%- if not loop.last -%}
+    {%- set nxt = st.out[loop.index0 + 1] -%}
+    {%- set toks = ps.split(' ') -%}
+    {%- set last = toks[-1] -%}
+    {%- set mark = 'ˈ' if last.startswith('ˈ') else ('ˌ' if last.startswith('ˌ') else '') -%}
+    {%- set base = unstress(last) -%}
+    {%- set lw = u.w.split(' ')[-1] -%}
+    {%- if unstress(nxt.ps.split(' ')[0]) in VOWELS -%}
+      {%- if lw == 'the' and base == 'ə' -%}{%- set ps = (toks[:-1] + [mark ~ 'ɪ']) | join(' ') -%}
+      {%- elif lw == 'to' and base == 'ə' -%}{%- set ps = (toks[:-1] + [mark ~ 'ʊ']) | join(' ') -%}
+      {%- elif nxt.w.split(' ')[0] in ['and', 'or', 'if'] -%}
+      {%- elif base in SPLIT -%}{%- set ps = (toks[:-1] + [mark ~ SPLIT[base], 'ɹ']) | join(' ') -%}
+      {%- elif base in RHOTIC -%}{%- set ps = ps ~ ' ɹ' -%}
+      {%- elif base == 't' and u.w in ['it', 'at'] and toks | length > 1 and unstress(toks[-2]) in VOWELS -%}{%- set ps = (toks[:-1] + ['ɾ']) | join(' ') -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endif -%}
+  {%- if ps -%}{%- set jn.s = jn.s ~ ((' ' if u.a else ' <sp> ') if jn.s else '') ~ ps -%}{%- endif -%}
+{%- endfor -%}
+{{ jn.s }}
+{%- endmacro -%}
+
+{#- ---------- text -> items (normalize.py: tokens, _word_tokens) ----------
+    a word item: {w: lower case, r: as written, a: joined to the word before, spell: letter by letter, ps: phones given};
+    a punctuation mark: {p: mark} -#}
+{%- set INLINE_KEYS = ['ⓐ', 'ⓑ', 'ⓒ', 'ⓓ', 'ⓔ', 'ⓕ', 'ⓖ', 'ⓗ', 'ⓘ', 'ⓙ', 'ⓚ', 'ⓛ', 'ⓜ', 'ⓝ', 'ⓞ', 'ⓟ', 'ⓠ', 'ⓡ', 'ⓢ', 'ⓣ', 'ⓤ', 'ⓥ', 'ⓦ', 'ⓧ', 'ⓨ', 'ⓩ'] -%}
+{%- set INITIALISMS = ['US', 'IT', 'AI', 'ID', 'UN', 'EU', 'UK', 'LA', 'AD', 'BC', 'AM', 'PM', 'OS', 'PE', 'PA', 'MA', 'LED', 'SAT', 'RIP', 'ER'] -%}
+{%- set SOUNDS = ['sh', 'shh', 'ss', 'zz', 'hm', 'hmm', 'mm', 'tsk', 'psst', 'pfft', 'hmph', 'psh', 'pssh'] -%}
+{%- set CARDINAL_AFTER = ['war', 'chapter', 'part', 'book', 'volume', 'act', 'scene', 'section', 'phase', 'type', 'class', 'level', 'stage',
+                          'title', 'article', 'appendix', 'world'] -%}
+{%- set LABELLED = ['plan', 'vitamin', 'grade', 'type', 'option', 'class', 'section', 'part', 'team', 'group', 'exhibit', 'appendix', 'point',
+                    'model', 'series', 'hepatitis', 'level'] -%}
+{%- set ROMAN = {'II': 2, 'III': 3, 'IV': 4, 'VI': 6, 'VII': 7, 'VIII': 8, 'IX': 9, 'XI': 11, 'XII': 12, 'XIII': 13, 'XIV': 14,
+                 'XV': 15, 'XVI': 16, 'XVIII': 18, 'XX': 20} -%}
+{#- words whose accent is the only sign of how they are read: without it "résumé" is "resume" -#}
+{%- set ACCENT_DECIDES = {'résumé': 'R EH1 Z AH0 M EY2', 'resumé': 'R EH1 Z AH0 M EY2', 'exposé': 'EH2 K S P OW0 Z EY1',
+                          'rosé': 'R OW0 Z EY1', 'pâté': 'P AA0 T EY1', 'maté': 'M AA1 T EY2', 'saké': 'S AA1 K EY2',
+                          'lamé': 'L AA0 M EY1'} -%}
+{%- set CONSONANTS = ['p', 'b', 't', 'd', 'k', 'ɡ', 'f', 'v', 'θ', 'ð', 's', 'z', 'ʃ', 'ʒ', 'h', 'm', 'n', 'ŋ', 'l', 'ɹ', 'j', 'w', 'tʃ', 'dʒ', 'ɾ', 'ʔ'] -%}
+
+{%- macro is_word(w) -%}
+{{ '1' if tts_dict('lexicon', w) is not none or tts_dict('functions', w) is not none or tts_dict('exceptions', w) is not none else '' }}
+{%- endmacro -%}
+{#- s has capitals and no small letter -#}
+{%- macro is_upper(s) -%}{{ '1' if s == s | upper and s != s | lower else '' }}{%- endmacro -%}
+{#- the whole of s matches the pattern -#}
+{%- macro fullmatch(s, pattern) -%}
+{%- set r = tts_norm_scan(s, '^(?:' ~ pattern ~ ')$') -%}{{ '1' if r | length == 1 and r[0].rule else '' }}
+{%- endmacro -%}
+{#- the text after segment k starts with the pattern (a space stands for the end of the text) -#}
+{%- macro ahead(segs, k, pattern) -%}
+{%- set r = tts_norm_scan((segs[k + 1:k + 13] | map(attribute='text') | join('')) ~ ' ', '^(?:' ~ pattern ~ ')') -%}
+{{ '1' if r and r[0].rule else '' }}
+{%- endmacro -%}
+
+{#- spellings a word stretched for emphasis may stand for, separated by spaces: a letter typed three times or more
+    is cut to one or to two ("sooo" -> "so", "goood" -> "good") -#}
+{%- macro unstretched(word) -%}
+{%- set rl = namespace(runs=[], long=false) -%}
+{%- for c in tts_norm_scan(word, '.') -%}
+  {%- if rl.runs and rl.runs[-1][0] == c.text -%}
+    {%- set rl.runs = rl.runs[:-1] + [[c.text, rl.runs[-1][1] + 1]] -%}
+    {%- if rl.runs[-1][1] >= 3 -%}{%- set rl.long = true -%}{%- endif -%}
+  {%- else -%}{%- set rl.runs = rl.runs + [[c.text, 1]] -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- if rl.long -%}
+  {%- set last = rl.runs[-1] -%}
+  {%- set liked = (last[1] >= 3 and last[0] in 'lfsz') or (rl.runs | length == 1 and last[0] == 'm')
+               or (rl.runs | length == 2 and rl.runs[0] == ['t', 1] and last[0] == 'o' and last[1] >= 3) -%}
+  {%- set out = namespace(c=[]) -%}
+  {%- for inside, final in [[true, liked], [true, not liked], [false, liked], [false, not liked]] -%}
+    {%- set cut = namespace(s='') -%}
+    {%- for run in rl.runs -%}
+      {%- set n = run[1] if run[1] < 3 else (2 if (final if loop.last else inside) else 1) -%}
+      {%- for _ in range(n) -%}{%- set cut.s = cut.s ~ run[0] -%}{%- endfor -%}
+    {%- endfor -%}
+    {%- if cut.s not in out.c -%}{%- set out.c = out.c + [cut.s] -%}{%- endif -%}
+  {%- endfor -%}
+  {{ out.c | join(' ') }}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- "{...}": a pronunciation written by the user, as phones or in CMUdict notation; '' when it is something else -#}
+{%- macro inline_phones(body) -%}
+{%- set sy = namespace(s=[], letters=true, arpa=true, ok=true) -%}
+{%- for x in tts_norm_scan(body, '%S+') -%}
+  {%- if x.rule -%}
+    {%- set sy.s = sy.s + [x.text] -%}
+    {%- if not fullmatch(x.text, '[ -~]') -%}{%- set sy.letters = false -%}{%- endif -%}
+    {%- if not (x.text in ARPA_CONSONANTS or (x.text[-1:] in ['0', '1', '2'] and x.text[:-1] in ARPA_VOWELS)) -%}{%- set sy.arpa = false -%}{%- endif -%}
+    {%- set phone = x.text | replace('ˈ', '') | replace('ˌ', '') -%}
+    {%- set marked = x.text.startswith('ˈ') or x.text.startswith('ˌ') -%}
+    {%- if not (phone in VOWELS or (phone in CONSONANTS and not marked)) or (('ˈ' in x.text or 'ˌ' in x.text) and ('ˈ' ~ phone) != x.text and ('ˌ' ~ phone) != x.text) -%}{%- set sy.ok = false -%}{%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- if not sy.s or sy.letters -%}
+{%- elif sy.arpa -%}{{ convert('', sy.s) }}
+{%- elif sy.ok -%}{{ sy.s | join(' ') }}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- ---------- text rules (normalize.py: rewrite) ----------
+    every figure, sign and abbreviation of a sentence is written out in words, one macro per pass, in the order of
+    dizione: each macro takes the text and gives the text rewritten. Marks put in the text for the passes that follow
+    (they are removed from the text given by the user):
+      ⟦..⟧  letters to name          ⟪ⓐ⟫  a pronunciation given inline, ⓐ ⓑ ... for the first, second ...
+      ⟡     "is" before a comparison  ⟐   a "$" that closes a formula      ⟣   an angle bracket that encloses something
+    the patterns do not backtrack: the longer alternative comes first or carries its own lookahead, a lookbehind of
+    more than one character is checked in the macro, and "\w" is written [%w_] (%w takes the marks too) -#}
+{%- set SCALES = ['', 'thousand', 'million', 'billion', 'trillion', 'quadrillion', 'quintillion'] -%}
+{%- set MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'] -%}
+{%- set MONTH_NUMBER = {'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6, 'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12} -%}
+{%- set NOT_WORD = '(?![%w_])' -%}
+{#- a name of a month or of a day, the longest first, not followed by a letter -#}
+{%- set MONTH_NAMES = 'January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept|Sep|Oct|Nov|Dec' -%}
+{%- set DAY_NAMES_ALL = 'Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Thurs|Thur|Tues|Mon|Tue|Wed|Thu|Fri|Sat|Sun' -%}
+{%- set MONTH_PATTERN = '(?:' ~ MONTH_NAMES.split('|') | join(NOT_WORD ~ '|') ~ NOT_WORD ~ ')' -%}
+{%- set DAY_OR_MONTH = '(?:' ~ (DAY_NAMES_ALL ~ '|' ~ MONTH_NAMES).split('|') | join(NOT_WORD ~ '|') ~ NOT_WORD ~ ')' -%}
+{%- set DAY_NAMES = {'mon': 'Monday', 'tue': 'Tuesday', 'wed': 'Wednesday', 'thu': 'Thursday', 'fri': 'Friday', 'sat': 'Saturday', 'sun': 'Sunday'} -%}
+{%- set CURRENCY = {'$': ['dollar', 'dollars', 'cent', 'cents'], '£': ['pound', 'pounds', 'penny', 'pence'],
+                    '€': ['euro', 'euros', 'cent', 'cents'], '¥': ['yen', 'yen', '', ''], '₹': ['rupee', 'rupees', 'paisa', 'paise'],
+                    'USD': ['dollar', 'dollars', 'cent', 'cents'], 'EUR': ['euro', 'euros', 'cent', 'cents'],
+                    'GBP': ['pound', 'pounds', 'penny', 'pence'], 'JPY': ['yen', 'yen', '', ''], 'INR': ['rupee', 'rupees', 'paisa', 'paise'],
+                    'CHF': ['Swiss franc', 'Swiss francs', 'centime', 'centimes'], 'CAD': ['Canadian dollar', 'Canadian dollars', 'cent', 'cents'],
+                    'AUD': ['Australian dollar', 'Australian dollars', 'cent', 'cents'], 'CNY': ['yuan', 'yuan', '', '']} -%}
+{%- set CURRENCY_CODES = '(?:USD|EUR|GBP|JPY|INR|CHF|CAD|AUD|CNY)' -%}
+{%- set SCALE_LETTER = {'k': 'thousand', 'm': 'million', 'b': 'billion', 'bn': 'billion', 't': 'trillion'} -%}
+{%- set SYMBOL_WORDS = {'&': 'and', '@': 'at', '+': 'plus', '=': 'equals', '%': 'percent', '×': 'times', '÷': 'divided by',
+                        '±': 'plus or minus', '©': 'copyright', '§': 'section', '°': 'degrees',
+                        '≥': 'greater than or equal to', '≤': 'less than or equal to', '≠': 'not equal to', '≈': 'approximately',
+                        '∞': 'infinity', '√': 'square root of', 'π': 'pi'} -%}
+{%- set COMPARISONS = {'>=': 'greater than or equal to', '<=': 'less than or equal to', '!=': 'not equal to'} -%}
+{%- set CLAUSE_OPENERS = 'if elif while when whenever where whether that because since as and or but so then think thinks thought know knows say says said suppose assume means implies hence thus therefore although though unless until once else also clearly obviously indeed here now again first next finally similarly otherwise however moreover'.split(' ') -%}
+{%- set SENTENCE_STARTERS = 'the he she it i we they this that there but and in on at a an if when what why how who my our you then so now after before however'.split(' ') -%}
+{%- set YEAR_CONTEXT = 'in since by from until till before after during around circa of year early late mid summer winter spring fall autumn class'.split(' ') -%}
+{%- set PHONE_WORDS = 'call dial ring phone telephone tel mobile cell fax hotline text sms whatsapp'.split(' ') -%}
+{%- set PHONE_LINKS = 'to on at or us me him her them back'.split(' ') -%}
+{%- set PIN_WORDS = 'code pin extension ext passcode password zip postcode cvv cvc otp'.split(' ') -%}
+{%- set STRONG_WORDS = 'number id reference ref serial account tracking booking confirmation'.split(' ') -%}
+{%- set WEAK_WORDS = 'order ticket invoice case claim policy receipt transaction parcel shipment container payment reservation membership customer batch lot item job issue bug request'.split(' ') -%}
+{%- set LINK_WORDS = 'is was are were ends ending in with starts starting begins beginning'.split(' ') -%}
+{%- set NOT_COUNTED = 'is was has does goes ships arrives departs leaves shows needs blocks remains includes contains says reads starts ends closes opens runs takes comes this his its us as yes plus minus less'.split(' ') -%}
+{%- set NUMBERED = 'ref reference serial account order invoice tracking part model phone tel fax id room flight case ticket policy licence license booking customer vat tax reg registration'.split(' ') -%}
+{%- set DATE_BEFORE = 'on dated due until till by since from before after for shipped delivered arriving arrives arrive arrived expires expired ends ending starts starting begins beginning monday tuesday wednesday thursday friday saturday sunday mon tue tues wed thu thur thurs fri sat sun'.split(' ') -%}
+{%- set CLASSIC_FRACTIONS = [2, 3, 4, 5, 6, 8, 10, 16, 32, 64, 100] -%}
+{%- set RATIO_WORDS = 'ratio ratios scale odds aspect mix split proportion'.split(' ') -%}
+{%- set DURATION_WORDS = 'lasted took duration runtime recording video clip track lap pace length long'.split(' ') -%}
+{%- set CLOCK_WORDS = 'window slot open opens opening hours shift session served service available booked appointment delivery arrive arrives arriving'.split(' ') -%}
+{%- set CAPITAL_WORDS = 'IN ON AT TO OF BY OR IS AS IF NO SO WE HE MY ME DO GO UP AN AM PM BE IT US THE AND FOR BUT NOT ALL'.split(' ') -%}
+{%- set SHORT_WORDS = 'my to in on of go up no do me we us it is at by be so or an as if he hi ok'.split(' ') -%}
+{%- set ZONES = '(?:AEST|AEDT|CEST|EST|EDT|CST|CDT|MST|MDT|PST|PDT|GMT|UTC|BST|CET|IST|JST|ET|CT|MT|PT)' -%}
+{%- set SIZES = '(?:XXXL|XXL|XXS|XL|XS|S|M|L)' -%}
+{%- set SEPARATORS = {'.': 'dot', '/': 'slash', '@': 'at', '-': 'dash', '_': 'underscore', ':': 'colon', '=': 'equals', '&': 'and', '+': 'plus'} -%}
+{%- set VULGAR = {'½': [1, 2], '⅓': [1, 3], '⅔': [2, 3], '¼': [1, 4], '¾': [3, 4], '⅕': [1, 5], '⅖': [2, 5], '⅗': [3, 5], '⅘': [4, 5],
+                  '⅙': [1, 6], '⅚': [5, 6], '⅐': [1, 7], '⅛': [1, 8], '⅜': [3, 8], '⅝': [5, 8], '⅞': [7, 8], '⅑': [1, 9], '⅒': [1, 10]} -%}
+{#- " A M" or " P M": the two forms of a half of the day after a time -#}
+{%- set HALF_DAY_TIME = '(?:%s?([AaPp])%.[Mm](?:%.(?![%d:]))?(?![%d:])|%s?([AaPp])[Mm]' ~ NOT_WORD ~ '(?![%d:]))' -%}
+{%- set HALF_DAY_HOUR = '(?:%s?([AaPp])%.[Mm](?:%.(?![A-Za-z]))?(?![A-Za-z])|%s?([AaPp])[Mm]' ~ NOT_WORD ~ '(?![A-Za-z]))' -%}
+{%- set SIGN_AFTER = '(?:[$£€¥₹](?![%w_$£€¥₹])|' ~ CURRENCY_CODES ~ '(?![A-Za-z]))' -%}
+
+{#- ---------- helpers ---------- -#}
+{#- s ends with the pattern / s starts with the pattern -#}
+{%- macro ends(s, pattern) -%}
+{%- set r = tts_norm_scan(s, '(?:' ~ pattern ~ ')$') -%}{{ '1' if r | length > 0 and r[-1].rule else '' }}
+{%- endmacro -%}
+{%- macro starts(s, pattern) -%}
+{%- set r = tts_norm_scan(s, '^(?:' ~ pattern ~ ')') -%}{{ '1' if r | length > 0 and r[0].rule else '' }}
+{%- endmacro -%}
+{#- the same, any letter case -#}
+{%- macro starts_i(s, pattern) -%}
+{%- set r = tts_norm_scan(s, '(?i)^(?:' ~ pattern ~ ')') -%}{{ '1' if r | length > 0 and r[0].rule else '' }}
+{%- endmacro -%}
+{#- group number g of the pattern at the start of s, or '' -#}
+{%- macro at_start(s, pattern, g) -%}
+{%- set r = tts_norm_scan(s, '^(?:' ~ pattern ~ ')') -%}{{ r[0].groups[g] if r | length > 0 and r[0].rule else '' }}
+{%- endmacro -%}
+{#- the letters between the marks that say: name these letters -#}
+{%- macro spell_mark(letters) -%}⟦{{ letters }}⟧{%- endmacro -%}
+{#- the first word after here, when the text after a full stop starts a new sentence: nothing follows, or a capital
+    opens a word that often starts one -#}
+{%- macro new_sentence(after) -%}
+{%- set following = after | trim -%}
+{%- if not following -%}1
+{%- else -%}
+  {%- set first = at_start(following, "([A-Za-z']+)", 0) -%}
+  {{ '1' if following[:1] in UPPER and first and first | lower in SENTENCE_STARTERS else '' }}
+{%- endif -%}
+{%- endmacro -%}
+{#- the words just before position pos in the same clause, in lower case, separated by spaces (_before) -#}
+{%- macro words_before(text, pos, count) -%}
+{%- set ns = namespace(clause='', words=[]) -%}
+{%- for m in tts_norm_scan(text[[0, pos - 80] | max:pos], '[.!?;…]%s|[()"]') -%}
+  {%- set ns.clause = '' if m.rule else m.text -%}
+{%- endfor -%}
+{%- for m in tts_norm_scan(ns.clause, '[A-Za-z]+') -%}{%- if m.rule -%}{%- set ns.words = ns.words + [m.text | lower] -%}{%- endif -%}{%- endfor -%}
+{{ ns.words[[0, ns.words | length - count] | max:] | join(' ') }}
+{%- endmacro -%}
+{#- what the words before a number say it is: phone, pin, strong (a number, a reference), weak (an order), enter, or '' -#}
+{%- macro identifier(text, pos) -%}
+{%- set joined = words_before(text, pos, 4) -%}
+{%- if joined -%}
+  {%- set words = joined.split(' ') -%}
+  {%- set n = words | length -%}
+  {%- set linked = namespace(v=false) -%}
+  {%- for w in words[[0, n - 3] | max:n - 1] -%}{%- if w in PHONE_WORDS -%}{%- set linked.v = true -%}{%- endif -%}{%- endfor -%}
+  {%- if words[n - 1] in PHONE_WORDS or (words[n - 1] in PHONE_LINKS and linked.v) -%}phone
+  {%- else -%}
+    {%- set at = namespace(i=n - 1) -%}
+    {%- for _ in words -%}{%- if at.i > 0 and words[at.i] in LINK_WORDS -%}{%- set at.i = at.i - 1 -%}{%- endif -%}{%- endfor -%}
+    {%- set w = words[at.i] -%}
+    {%- if w in PHONE_WORDS -%}phone
+    {%- elif w in PIN_WORDS -%}pin
+    {%- elif w in STRONG_WORDS -%}strong
+    {%- elif w in WEAK_WORDS -%}weak
+    {%- elif words[n - 1] == 'enter' -%}enter
+    {%- endif -%}
+  {%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+{#- a plural noun follows a number: it is then an amount, not a reference -#}
+{%- macro counted(after) -%}
+{%- set noun = at_start(after, '%s*([A-Za-z]+)', 0) | lower -%}
+{%- if noun in ['people', 'men', 'women', 'children', 'feet', 'miles'] -%}1
+{%- elif noun | length > 3 and noun.endswith('s') and not noun.endswith('ss') and noun not in NOT_COUNTED and is_word(noun[:-1]) -%}1
+{%- endif -%}
+{%- endmacro -%}
+
+{#- ---------- numbers as words ---------- -#}
+{%- macro below_1000(n) -%}
+{%- if n >= 100 -%}{{ ONES[n // 100] }} hundred{{ (' ' ~ below_1000(n % 100)) if n % 100 else '' }}
+{%- elif n >= 20 -%}{{ TENS[n // 10] }}{{ (' ' ~ ONES[n % 10]) if n % 10 else '' }}
+{%- else -%}{{ ONES[n] }}
+{%- endif -%}
+{%- endmacro -%}
+{#- a whole number, given as a number or as its digits: three digits at a time, so that no large number is computed
+    (llama.cpp does its arithmetic in floating point) -#}
+{%- macro cardinal(n) -%}
+{%- set s = n | string | trim -%}
+{%- if s.startswith('-') -%}minus {{ cardinal(s[1:]) }}
+{%- else -%}
+  {%- set s = tts_norm_sub(s, '^(?:0(?=%d))+', '') -%}
+  {%- if s | length > 21 -%}{{ digits(s, 'zero') }}
+  {%- else -%}
+    {%- set ns = namespace(out=[], rest=s, k=0) -%}
+    {%- for _ in range(7) -%}
+      {%- if ns.rest -%}
+        {%- set part = ns.rest[-3:] | int -%}
+        {%- set ns.rest = ns.rest[:-3] -%}
+        {%- if part -%}{%- set ns.out = [below_1000(part) ~ ((' ' ~ SCALES[ns.k]) if ns.k else '')] + ns.out -%}{%- endif -%}
+        {%- set ns.k = ns.k + 1 -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {{ ns.out | join(' ') if ns.out else 'zero' }}
+  {%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+{%- macro ordinal(n) -%}
+{%- set words = cardinal(n).split(' ') -%}
+{%- set last = words[-1] -%}
+{%- set o = ORDINALS[last] if last in ORDINALS else ((last[:-1] ~ 'ieth') if last.endswith('y') else (last ~ 'th')) -%}
+{{ (words[:-1] + [o]) | join(' ') }}
+{%- endmacro -%}
+{#- the digits of a text one by one; zero is the word for "0" ("zero" or "oh") -#}
+{%- macro digits(s, zero) -%}
+{%- set ns = namespace(out=[]) -%}
+{%- for c in tts_norm_scan(s, '%d') -%}{%- if c.rule -%}{%- set ns.out = ns.out + [zero if c.text == '0' else ONES[c.text | int]] -%}{%- endif -%}{%- endfor -%}
+{{ ns.out | join(' ') }}
+{%- endmacro -%}
+{#- the way a year is said: 1984, 1905, 1900, 2005, 2026 -#}
+{%- macro year(n) -%}
+{%- set n = n | int -%}
+{%- set high = n // 100 -%}{%- set low = n % 100 -%}
+{%- if n < 1000 or n > 2999 -%}{{ cardinal(n) }}
+{%- elif low == 0 -%}{{ cardinal(n) if high % 10 == 0 else cardinal(high) ~ ' hundred' }}
+{%- elif high == 20 and low < 10 -%}two thousand {{ ONES[low] }}
+{%- else -%}{{ cardinal(high) }}{{ (' oh ' ~ ONES[low]) if low < 10 else (' ' ~ cardinal(low)) }}
+{%- endif -%}
+{%- endmacro -%}
+{#- a number read two digits at a time, the way model numbers are: 4070 "forty seventy", 720 "seven twenty" -#}
+{%- macro pairs(n) -%}
+{%- set n = n | int -%}
+{%- set high = n // 100 -%}{%- set low = n % 100 -%}
+{%- if n < 100 or n > 9999 or (low == 0 and (high < 10 or high % 10 == 0)) -%}{{ cardinal(n) }}
+{%- elif low == 0 -%}{{ cardinal(high) }} hundred
+{%- else -%}{{ cardinal(high) }}{{ (' oh ' ~ ONES[low]) if low < 10 else (' ' ~ cardinal(low)) }}
+{%- endif -%}
+{%- endmacro -%}
+{#- an unsigned number as written: 1,234 3.14 007 -#}
+{%- macro number_words(text) -%}
+{%- set parts = (text | replace(',', '')).split('.') -%}
+{%- set whole = parts[0] -%}
+{%- set fraction = parts[1:] | join('.') -%}
+{%- if fraction -%}{{ cardinal(whole) if whole else '' }} point {{ digits(fraction, 'zero') }}
+{%- elif (whole | length > 1 and whole.startswith('0')) or whole | length > 18 -%}{{ digits(whole, 'zero') }}
+{%- else -%}{{ cardinal(whole) }}
+{%- endif -%}
+{%- endmacro -%}
+{#- 2:03:45 as a length of time -#}
+{%- macro duration(hours, minutes, seconds) -%}
+{%- set ns = namespace(parts=[]) -%}
+{%- for count, name in [[hours, 'hour'], [minutes, 'minute'], [seconds, 'second']] -%}
+  {%- if count -%}{%- set ns.parts = ns.parts + [cardinal(count) ~ ' ' ~ (name if count == 1 else name ~ 's')] -%}{%- endif -%}
+{%- endfor -%}
+{%- if ns.parts | length < 2 -%}{{ ns.parts[0] if ns.parts else 'zero seconds' }}
+{%- else -%}{{ ns.parts[:-1] | join(', ') }} and {{ ns.parts[-1] }}
+{%- endif -%}
+{%- endmacro -%}
+{#- plural of a spelled number, for decades: "nineteen nineties" -#}
+{%- macro plural_of(words) -%}
+{{ (words[:-1] ~ 'ies') if words.endswith('y') else (words ~ 's') }}
+{%- endmacro -%}
+{#- "three quarters", "one half"; after a whole number "a half", "an eighth" -#}
+{%- macro fraction_words(top, bottom, article) -%}
+{%- set one = 'half' if bottom == 2 else ('quarter' if bottom == 4 else ordinal(bottom)) -%}
+{%- set many = 'halves' if bottom == 2 else ('quarters' if bottom == 4 else ordinal(bottom) ~ 's') -%}
+{%- if top != 1 -%}{{ cardinal(top) }} {{ many }}
+{%- elif article -%}{{ 'an ' if one[:1] in 'aeiou' else 'a ' }}{{ one }}
+{%- else -%}one {{ one }}
+{%- endif -%}
+{%- endmacro -%}
+{#- one part of a version number: "4" four, "12" twelve, "03" zero three, "129" one two nine -#}
+{%- macro version_part(part) -%}{{ digits(part, 'zero') if part | length > 2 else number_words(part) }}{%- endmacro -%}
+{#- the part after the point of a version: "12" twelve, "04" oh four -#}
+{%- macro minor(part) -%}{{ digits(part, 'oh') if part.startswith('0') else cardinal(part) }}{%- endmacro -%}
+{#- a number in a code that is said as a number: one or two digits, or a round one (B-12, KX-300) -#}
+{%- macro short_number(text) -%}
+{{ '1' if not text.startswith('0') and (text | length <= 2 or text[1:] | replace('0', '') == '') else '' }}
+{%- endmacro -%}
+{#- "1,5" before a unit is one number -#}
+{%- macro decimal_comma(text) -%}{{ text | replace(',', '.') if fullmatch(text, '%d+,%d%d?') else text }}{%- endmacro -%}
+{#- digits inside a file name or an address: 3, 2026, 0412 -#}
+{%- macro address_digits(text) -%}
+{%- if text | length <= 2 and not (text | length == 2 and text.startswith('0')) -%}{{ cardinal(text) }}
+{%- elif text | length == 4 and text | int >= 1900 and text | int <= 2099 -%}{{ year(text) }}
+{%- else -%}{{ digits(text, 'zero') }}
+{%- endif -%}
+{%- endmacro -%}
+{#- groups of digits with a short break between them; small numbers stay numbers: 9-1-1 -#}
+{%- macro digit_groups(groups, zero) -%}
+{%- set ns = namespace(small=true, out=[]) -%}
+{%- for g in groups -%}{%- if not (short_number(g) and g | length <= 2) -%}{%- set ns.small = false -%}{%- endif -%}{%- endfor -%}
+{%- for g in groups -%}{%- set ns.out = ns.out + [cardinal(g) if ns.small else digits(g, zero)] -%}{%- endfor -%}
+{{ ns.out | join(' , ') }}
+{%- endmacro -%}
+{#- a group that mixes letters and digits: the letters are named, the digits read one by one -#}
+{%- macro alnum(group, zero) -%}
+{%- set ns = namespace(out=[]) -%}
+{%- for m in tts_norm_scan(group, [['d', '%d+'], ['l', '[A-Za-z]+']]) -%}
+  {%- if m.rule == 'd' -%}{%- set ns.out = ns.out + [digits(m.text, zero)] -%}
+  {%- elif m.rule == 'l' -%}{%- set ns.out = ns.out + [spell_mark(m.text)] -%}
+  {%- endif -%}
+{%- endfor -%}
+{{ ns.out | join(' ') }}
+{%- endmacro -%}
+{#- letters inside a code that are a word to say, not letters to name: SAVE-20 -#}
+{%- macro reads_as_word(letters) -%}
+{%- set lower = letters | lower -%}
+{%- if lower | length >= 3 and is_word(lower) -%}
+  {{ '1' if lower | length > 3 or is_word(lower ~ 's') or is_word(lower ~ 'es') or is_word(lower ~ 'ed') or is_word(lower ~ 'ing') else '' }}
+{%- endif -%}
+{%- endmacro -%}
+{#- a date in words, or '' when it is none -#}
+{%- macro date(month, day, year_text, the) -%}
+{%- set month = month | int -%}{%- set day = day | int -%}
+{%- if month >= 1 and month <= 12 and day >= 1 and day <= 31 -%}
+  {%- set y = '' if not year_text else (' ' ~ (year(year_text) if year_text | length == 4 else (('oh ' if year_text | int < 10 else '') ~ cardinal(year_text | int)))) -%}
+  {{ ' ' }}{{ ('the ' ~ ordinal(day) ~ ' of ' ~ MONTHS[month - 1]) if the else (MONTHS[month - 1] ~ ' ' ~ ordinal(day)) }}{{ y }}{{ ' ' }}
+{%- endif -%}
+{%- endmacro -%}
+{#- an amount of money in words -#}
+{%- macro amount(symbol, whole, fraction, scale) -%}
+{%- set names = CURRENCY[symbol] -%}
+{%- if scale -%}{{ number_words(whole ~ (('.' ~ fraction) if fraction else '')) }} {{ SCALE_LETTER[scale | lower] if scale | lower in SCALE_LETTER else scale | lower }} {{ names[1] }}
+{%- elif fraction and (fraction | length > 2 or not names[2]) -%}{{ number_words(whole ~ '.' ~ fraction) }} {{ names[1] }}
+{%- else -%}
+  {%- set units = tts_norm_sub(whole, '^(?:0(?=%d))+', '') -%}
+  {%- set change = ((fraction ~ '0')[:2] | int) if fraction else 0 -%}
+  {%- set ns = namespace(parts=[]) -%}
+  {%- if units != '0' or not change -%}{%- set ns.parts = [cardinal(units) ~ ' ' ~ (names[0] if units == '1' else names[1])] -%}{%- endif -%}
+  {%- if change and names[2] -%}{%- set ns.parts = ns.parts + [cardinal(change) ~ ' ' ~ (names[2] if change == 1 else names[3])] -%}{%- endif -%}
+  {{ ns.parts | join(' and ') }}
+{%- endif -%}
+{%- endmacro -%}
+{#- " A M" or " P M" after a time; the full stop that closes "p.m." is kept as a sentence end only when a new sentence
+    follows. dotted, plain: the letter of the two written forms; whole: the text matched; after: the text after it -#}
+{%- macro half_day(dotted, plain, whole, after) -%}
+{%- if dotted or plain -%}
+  {{ spell_mark((dotted or plain) | upper ~ 'M') }}{{ ' .' if dotted and whole.endswith('.') and new_sentence(after) else '' }}{{ ' ' }}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- ---------- passes on figures (normalize.py: _figures), in the order they run ---------- -#}
+{#- "½" and "1½" -#}
+{%- macro nz_vulgar(text) -%}
+{%- set o = namespace(s='') -%}
+{%- for m in tts_norm_scan(text, '(?<![%d.,/])(?:(%d+)%s?)?([½⅓⅔¼¾⅕⅖⅗⅘⅙⅚⅐⅛⅜⅝⅞⅑⅒])') -%}
+  {%- if m.rule -%}
+    {%- set f = VULGAR[m.groups[1]] -%}
+    {%- set o.s = o.s ~ ((' ' ~ cardinal(m.groups[0]) ~ ' and ' ~ fraction_words(f[0], f[1], true) ~ ' ') if m.groups[0] else (' ' ~ f[0] ~ '/' ~ f[1] ~ ' ')) -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- "120 m²", "3 m3": square and cubic measures; plain: the power is written as a plain figure -#}
+{%- macro nz_area(text, plain) -%}
+{%- set o = namespace(s='') -%}
+{%- set pattern = '(?<![%w_.])(%d[%d,]*(?:%.%d+)?)%s?(km|cm|mm|m|ft)([23])(?![%w_])' if plain
+                  else '(?<![%w_.²³¹¼-¾⁰-₟⅐-↏①-⓿])(%d[%d,]*(?:%.%d+)?)%s?(km|cm|mm|mi|m|ft|yd|in)([²³])' -%}
+{%- for m in tts_norm_scan(text, pattern) -%}
+  {%- if m.rule -%}
+    {%- set unit = m.groups[1] -%}
+    {%- set names = ['inch', 'inches'] if unit == 'in' else (tts_dict('exact_units', unit) or tts_dict('units', unit)) -%}
+    {%- set value = decimal_comma(m.groups[0]) -%}
+    {%- set o.s = o.s ~ ' ' ~ number_words(value) ~ (' square ' if m.groups[2] in '²2' else ' cubic ') ~ (names[0] if value in ['1', '1.0'] else names[1]) ~ ' ' -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- "Mon.-Fri.", "Jan-Mar": from one day or month to another -#}
+{%- macro nz_day_range(text) -%}
+{%- set o = namespace(s='', pos=0) -%}
+{%- for m in tts_norm_scan(text, '(?<![%w_])(' ~ DAY_OR_MONTH ~ ')(%.?)%s?[-–]%s?(' ~ DAY_OR_MONTH ~ ')(%.?)') -%}
+  {%- if m.rule -%}
+    {%- set names = namespace(n=[]) -%}
+    {%- for name in [m.groups[0], m.groups[2]] -%}
+      {%- set key = name | lower -%}
+      {%- set a = tts_dict('abbreviations', key) -%}
+      {%- set names.n = names.n + [a[1] if a is not none else (DAY_NAMES[key] if key in DAY_NAMES else name)] -%}
+    {%- endfor -%}
+    {%- set o.s = o.s ~ names.n[0] ~ ' to ' ~ names.n[1] ~ (' .' if m.groups[3] and new_sentence(text[o.pos + m.text | length:]) else '') -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+  {%- set o.pos = o.pos + m.text | length -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- "$x = 2$": the sign after the last figure closes a formula, it is not a currency written after an amount. A formula
+    opens with a sign before a letter, or before a figure or a space when a "=" or the like follows -#}
+{%- macro nz_formula(text) -%}
+{%- set parts = text.split('$') -%}
+{%- set n = parts | length -%}
+{%- set o = namespace(s=parts[0], skip=false, close=false) -%}
+{%- for i in range(1, n) -%}
+  {#- the "$" before parts[i]: the closing one of a formula becomes the mark -#}
+  {%- set sign = '⟐' if o.close else '$' -%}
+  {%- set o.close = false -%}
+  {%- if o.skip -%}{%- set o.skip = false -%}
+  {%- elif i + 1 < n -%}
+    {#- does it open a formula that the next "$" closes? -#}
+    {%- set before = parts[i - 1] -%}{%- set inner = parts[i] -%}{%- set after = parts[i + 1] -%}
+    {%- set body = tts_norm_sub(inner, '%d%s?$', '') -%}
+    {%- set first = inner[:1] -%}
+    {%- set free = (i == 1 and not before) or (before and not ends(before, '[%w_]') and not ends(before, '%d%s')) -%}
+    {%- set closed = body != inner and not starts(after, '[%w_]') and (after or i + 2 >= n) -%}
+    {#- a sign with at most 80 characters before it and after it; slash: "/" counts as one -#}
+    {%- set cs = tts_norm_scan(body, '.') | map(attribute='text') | list -%}
+    {%- set sg = namespace(any=false, noslash=false) -%}
+    {%- for ch in cs -%}
+      {%- if ch in '=^_\\{}+*/<>' and loop.index0 <= 80 and cs | length - loop.index0 - 1 <= 80 -%}
+        {%- set sg.any = true -%}{%- if ch != '/' -%}{%- set sg.noslash = true -%}{%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {%- if free and closed and (
+          (inner and first not in ' 0123456789.,;:!?)' and cs | length <= 80)
+          or (first in '0123456789' and inner and sg.any)
+          or (first == ' ' and sg.noslash)) -%}
+      {%- set o.close = true -%}{%- set o.skip = true -%}
+    {%- endif -%}
+  {%- endif -%}
+  {%- set o.s = o.s ~ sign ~ parts[i] -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- "1.299,50" as "1,299.50"; four groups that could be an internet address are left alone -#}
+{%- macro nz_continental(text) -%}
+{%- set o = namespace(s='') -%}
+{%- for m in tts_norm_scan(text, '(?<![%w_.,])([1-9]%d{0,2}(?:%.%d%d%d)+),(%d%d?)(?!%d|[.,]%d)') -%}
+  {%- if m.rule -%}
+    {%- set groups = m.groups[0].split('.') -%}
+    {%- set small = namespace(v=true) -%}
+    {%- for g in groups -%}{%- if g | int > 255 -%}{%- set small.v = false -%}{%- endif -%}{%- endfor -%}
+    {%- set o.s = o.s ~ (m.text if groups | length == 4 and small.v else (groups | join(',') ~ '.' ~ m.groups[1])) -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- money: the sign before the amount ($5, USD 20, -$3, $2.5 million, $10k), or after it (20 €, 750 000 $) -#}
+{%- macro nz_money(text, after_amount) -%}
+{%- set o = namespace(s='') -%}
+{%- set pattern = ('(?:(?<![%w_.])(-)%s?)?(?<![%w_.,^])(%d{1,3}(?:,%d%d%d)+|[1-9]%d{0,2}(?: %d%d%d)+|%d+)(?:%.(%d+))?%s?(' ~ SIGN_AFTER ~ ')') if after_amount
+                  else ('(?:(?<![%w_.])(-)%s?)?([$£€¥₹]|(?<![A-Za-z])' ~ CURRENCY_CODES ~ '(?![A-Za-z]))%s?(-)?(%d{1,3}(?:,%d%d%d)+|%d+)(?:%.(%d+))?(?:%s?(thousand|million|billion|trillion|bn|[kKmMbB])(?![A-Za-z]))?') -%}
+{%- for m in tts_norm_scan(text, pattern) -%}
+  {%- if m.rule -%}
+    {%- set g = m.groups -%}
+    {%- if after_amount -%}
+      {%- set o.s = o.s ~ (' minus ' if g[0] else ' ') ~ amount(g[3], g[1] | replace(',', '') | replace(' ', ''), g[2], '') ~ ' ' -%}
+    {%- else -%}
+      {%- set o.s = o.s ~ (' minus ' if g[0] or g[2] else ' ') ~ amount(g[1], g[3] | replace(',', ''), g[4], g[5]) ~ ' ' -%}
+    {%- endif -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{%- macro nz_cents(text) -%}
+{%- set o = namespace(s='') -%}
+{%- for m in tts_norm_scan(text, '(?<![%w_.])(%d[%d,]*(?:%.%d+)?)%s?¢') -%}
+  {%- set o.s = o.s ~ ((' ' ~ number_words(m.groups[0]) ~ (' cent ' if m.groups[0] == '1' else ' cents ')) if m.rule else m.text) -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- "9.30 to 11.30" where the words before say it is a time of day -#}
+{%- macro nz_dot_times(text) -%}
+{%- set o = namespace(s='', pos=0) -%}
+{%- for m in tts_norm_scan(text, '(?<![%d.,:])(%d%d?)%.(00|15|30|45)(%s?(?:to|until|till|and|[-—])%s?)(%d%d?)%.(00|15|30|45)(?!%d|%.%d)') -%}
+  {%- if m.rule -%}
+    {%- set g = m.groups -%}
+    {%- set clock = namespace(v=false) -%}
+    {%- for w in words_before(text, o.pos, 4).split(' ') -%}{%- if w in CLOCK_WORDS -%}{%- set clock.v = true -%}{%- endif -%}{%- endfor -%}
+    {%- if g[0] | int > 23 or g[3] | int > 23 or not clock.v
+          or starts_i(text[o.pos + m.text | length:], '%s?(?:%%|percent(?![A-Za-z])|million(?![A-Za-z])|billion(?![A-Za-z])|' ~ tts_dict('patterns', 'units') ~ ')') -%}
+      {%- set o.s = o.s ~ m.text -%}
+    {%- else -%}{%- set o.s = o.s ~ g[0] ~ ':' ~ g[1] ~ g[2] ~ g[3] ~ ':' ~ g[4] -%}
+    {%- endif -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+  {%- set o.pos = o.pos + m.text | length -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- 16:9, 3:1, 1:25,000. Two digits after the colon are a time unless the words say "ratio" -#}
+{%- macro nz_ratio(text) -%}
+{%- set o = namespace(s='', pos=0) -%}
+{%- for m in tts_norm_scan(text, '(?<![%d:.,])(%d{1,3}):(%d{1,3}(?:,%d%d%d)+|%d+)(?![%d:]|[.,]%d)') -%}
+  {%- if m.rule -%}
+    {%- set first = m.groups[0] -%}{%- set second = m.groups[1] -%}
+    {%- set said = namespace(v=true) -%}
+    {%- if first | length <= 2 and second | length == 2 and second[:1] in '012345' -%}
+      {%- set said.v = at_start(text[o.pos + m.text | length:], '%s*([A-Za-z]+)', 0) | lower in RATIO_WORDS -%}
+      {%- for w in words_before(text, o.pos, 3).split(' ') -%}{%- if w in RATIO_WORDS -%}{%- set said.v = true -%}{%- endif -%}{%- endfor -%}
+    {%- endif -%}
+    {%- set o.s = o.s ~ ((' ' ~ number_words(first) ~ ' to ' ~ number_words(second) ~ ' ') if said.v else m.text) -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+  {%- set o.pos = o.pos + m.text | length -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- 3:45 PM, 20:00, 2:03:45 (a length of time), 48:12 -#}
+{%- macro nz_time(text) -%}
+{%- set o = namespace(s='', pos=0) -%}
+{%- for m in tts_norm_scan(text, '(?<![%d:])(%d%d?):([0-5]%d)(?::([0-5]%d))?' ~ HALF_DAY_TIME ~ '?(?![%d:])') -%}
+  {%- if m.rule -%}
+    {%- set hour = m.groups[0] | int -%}{%- set minute = m.groups[1] | int -%}{%- set second = m.groups[2] -%}
+    {%- set half = m.groups[3] or m.groups[4] -%}
+    {%- set after = text[o.pos + m.text | length:] -%}
+    {%- set before = words_before(text, o.pos, 3) -%}
+    {%- set words = before.split(' ') if before else [] -%}
+    {%- if second and not half and not (words and words[-1] == 'at') -%}
+      {%- set o.s = o.s ~ ' ' ~ duration(hour, minute, second | int) ~ ' ' -%}
+    {%- elif hour > 24 and not second and not half -%}
+      {%- set long = namespace(v=at_start(after, '%s*([A-Za-z]+)', 0) | lower in DURATION_WORDS) -%}
+      {%- for w in words -%}{%- if w in DURATION_WORDS -%}{%- set long.v = true -%}{%- endif -%}{%- endfor -%}
+      {%- set o.s = o.s ~ ' ' ~ (duration(0, hour, minute) if long.v else (cardinal(hour) ~ (' oh ' if minute < 10 else ' ') ~ cardinal(minute))) ~ ' ' -%}
+    {%- elif hour > 24 -%}{%- set o.s = o.s ~ m.text -%}
+    {%- else -%}
+      {%- if minute == 0 -%}
+        {%- set said = cardinal(hour) if half else ('midnight' if hour == 0 else (cardinal(hour) ~ (' hundred' if hour > 12 else " o'clock"))) -%}
+      {%- else -%}{%- set said = cardinal(hour) ~ (' oh ' if minute < 10 else ' ') ~ cardinal(minute) -%}
+      {%- endif -%}
+      {%- set secs = (' and ' ~ cardinal(second | int) ~ (' second' if second | int == 1 else ' seconds')) if second else '' -%}
+      {%- set o.s = o.s ~ ' ' ~ said ~ secs ~ ' ' ~ half_day(m.groups[3], m.groups[4], m.text, after) -%}
+    {%- endif -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+  {%- set o.pos = o.pos + m.text | length -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- 9am, 10 p.m. -#}
+{%- macro nz_hour(text) -%}
+{%- set o = namespace(s='', pos=0) -%}
+{%- for m in tts_norm_scan(text, '(?<![%d.:,])(%d%d?)' ~ HALF_DAY_HOUR) -%}
+  {%- if m.rule -%}
+    {%- set o.s = o.s ~ ' ' ~ cardinal(m.groups[0]) ~ ' ' ~ half_day(m.groups[1], m.groups[2], m.text, text[o.pos + m.text | length:]) -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+  {%- set o.pos = o.pos + m.text | length -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- how the dates of the text are written: "day first" when one of them can only be read that way and none the other
+    way; "dated" when one has a year. Gives two letters, '1' or '0' each -#}
+{%- macro date_habits(text) -%}
+{%- set h = namespace(day=false, month=false, dated=false) -%}
+{%- for m in tts_norm_scan(text, '(?<![%d/.])(%d%d?)/(%d%d?)(?:/(?:%d%d%d%d|%d%d))?(?![%d/])') -%}
+  {%- if m.rule -%}
+    {%- set a = m.groups[0] | int -%}{%- set b = m.groups[1] | int -%}
+    {%- if not (a == 24 and b == 7) -%}
+      {%- if a > 12 and b <= 12 -%}{%- set h.day = true -%}{%- endif -%}
+      {%- if b > 12 and a <= 12 -%}{%- set h.month = true -%}{%- endif -%}
+    {%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- for m in tts_norm_scan(text, '(?<![%d/])%d%d?/%d%d?/(?:%d%d%d%d|%d%d)(?![%d/])') -%}{%- if m.rule -%}{%- set h.dated = true -%}{%- endif -%}{%- endfor -%}
+{{ '1' if h.day and not h.month else '0' }}{{ '1' if h.dated else '0' }}
+{%- endmacro -%}
+
+{#- dates in figures: kind is iso (2026-11-14, 2026/11/14), dot (15.11.2026) or slash (12/09/2026) -#}
+{%- macro nz_date(text, kind, day_first) -%}
+{%- set o = namespace(s='') -%}
+{%- set pattern = [['a', '(?<![%d-])(%d%d%d%d)-(%d%d?)-(%d%d?)(?![%d-])'], ['a', '(?<![%d/])(%d%d%d%d)/(%d%d?)/(%d%d?)(?![%d/])']] if kind == 'iso'
+                  else ('(?<![%d.])(%d%d?)%.(%d%d?)%.(%d%d%d%d)(?!%d|%.%d)' if kind == 'dot' else '(?<![%d/])(%d%d?)/(%d%d?)/(%d%d%d%d|%d%d)(?![%d/])') -%}
+{%- for m in tts_norm_scan(text, pattern) -%}
+  {%- if m.rule -%}
+    {%- set g = m.groups -%}
+    {%- if kind == 'iso' -%}{%- set said = date(g[1], g[2], g[0], false) -%}
+    {%- elif kind == 'dot' -%}
+      {#- dates written with full stops put the day first -#}
+      {%- set swap = g[1] | int > 12 and g[0] | int <= 12 -%}
+      {%- set said = date(g[0] if swap else g[1], g[1] if swap else g[0], g[2], false) -%}
+    {%- else -%}
+      {%- set swap = (g[0] | int > 12 and g[1] | int <= 12) or (day_first and g[1] | int <= 12) -%}
+      {%- set said = date(g[1] if swap else g[0], g[0] if swap else g[1], g[2], false) -%}
+    {%- endif -%}
+    {%- set o.s = o.s ~ (said if said else m.text) -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- "November 3-17" (month first) and "3-17 November" -#}
+{%- macro nz_days_of_month(text, month_first) -%}
+{%- set o = namespace(s='') -%}
+{%- set pattern = ('(?<![%w_])(' ~ MONTH_PATTERN ~ ')%.?%s+(%d%d?)(?:st|nd|rd|th)?%s?[-—]%s?(%d%d?)(?:(?:st|nd|rd|th)(?=,?%s+%d%d%d%d(?![%d:])|(?![%d:])))?(?:,?%s+(%d%d%d%d)(?![%d:]))?(?![%d:])') if month_first
+                  else ('(?<![%d.,/:%-])(%d%d?)(?:st|nd|rd|th)?%s?[-—]%s?(%d%d?)(?:st|nd|rd|th)?%s+(' ~ MONTH_PATTERN ~ ')(?:,?%s+(%d%d%d%d))?') -%}
+{%- for m in tts_norm_scan(text, pattern) -%}
+  {%- if m.rule -%}
+    {%- set g = m.groups -%}
+    {%- set month = g[0] if month_first else g[2] -%}
+    {%- set first = (g[1] if month_first else g[0]) | int -%}{%- set second = (g[2] if month_first else g[1]) | int -%}
+    {%- if first >= 1 and first <= 31 and second >= 1 and second <= 31 -%}
+      {%- set name = MONTHS[MONTH_NUMBER[month[:3] | lower] - 1] -%}
+      {%- set o.s = o.s ~ ' ' ~ ((name ~ ' ' ~ ordinal(first) ~ ' to ' ~ ordinal(second)) if month_first else ('the ' ~ ordinal(first) ~ ' to the ' ~ ordinal(second) ~ ' of ' ~ name))
+                    ~ ((' ' ~ year(g[3])) if g[3] else '') ~ ' ' -%}
+    {%- else -%}{%- set o.s = o.s ~ m.text -%}
+    {%- endif -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- "January 5, 1990" (month first) and "22 February", "5 Jan. 2026" -#}
+{%- macro nz_month_day(text, month_first) -%}
+{%- set o = namespace(s='') -%}
+{%- set pattern = ('(?<![%w_])(' ~ MONTH_PATTERN ~ ')%.?%s+(%d%d?)(?:(?:st|nd|rd|th)(?=,?%s+%d%d%d%d(?![%d:])|(?![%d:])))?(?:,?%s+(%d%d%d%d)(?![%d:]))?(?![%d:])') if month_first
+                  else ('(?<![%d.,/:%-])(%d%d?)(?:st|nd|rd|th)?%s+(' ~ MONTH_PATTERN ~ ')(%.(?=%s+[a-z%d]))?(?:,?%s+(%d%d%d%d))?') -%}
+{%- for m in tts_norm_scan(text, pattern) -%}
+  {%- if m.rule -%}
+    {%- set g = m.groups -%}
+    {%- if month_first -%}{%- set said = date(MONTH_NUMBER[g[0][:3] | lower], g[1], g[2], false) -%}
+    {%- else -%}
+      {#- the stop after a short month name is dropped; any other one ends the sentence -#}
+      {%- set said = date(MONTH_NUMBER[g[1][:3] | lower], g[0], g[3], true) -%}
+      {%- set said = (said ~ '. ') if said and g[2] and g[1] in MONTHS else said -%}
+    {%- endif -%}
+    {%- set o.s = o.s ~ (said if said else m.text) -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- telephone numbers: +1 415 555 2671, (415) 555-2671, 555-0147 -#}
+{%- macro nz_phone(text) -%}
+{%- set o = namespace(s='') -%}
+{%- for m in tts_norm_scan(text, [['long', '(?<![%d%-])(?:%+?(1)[-.%s])?%(?(%d%d%d)%)?[-.%s](%d%d%d)[-.%s](%d%d%d%d)(?![%d%-])'],
+                                  ['short', '(?<![%w_.,%-])(%d%d%d)-(%d%d%d%d)(?![%w_%-])']]) -%}
+  {%- if m.rule -%}
+    {%- set said = namespace(g=[]) -%}
+    {%- for g in m.groups -%}{%- if g -%}{%- set said.g = said.g + ['eight hundred' if g == '800' else digits(g, 'oh')] -%}{%- endif -%}{%- endfor -%}
+    {%- set o.s = o.s ~ ' ' ~ said.g | join(', ') ~ ' ' -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- versions: 2.4.1, v2.3.1-14 (three parts or more), v2.12 -#}
+{%- macro nz_version(text) -%}
+{%- set o = namespace(s='') -%}
+{%- for m in tts_norm_scan(text, '(?<![%w_.])([vV])?(%d+%.%d+(?:%.%d+(?=%.%d))*%.%d+(?![%w_])|%d+%.%d+(?:%.%d+(?=%.%d))+)(?:-(%d+)(?![%w_%-]|%.%d))?') -%}
+  {%- if m.rule -%}
+    {%- set parts = namespace(p=[]) -%}
+    {%- for part in m.groups[1].split('.') -%}{%- set parts.p = parts.p + [version_part(part)] -%}{%- endfor -%}
+    {%- set o.s = o.s ~ ' ' ~ ((spell_mark(m.groups[0]) ~ ' ') if m.groups[0] else '') ~ parts.p | join(' point ')
+                  ~ ((' dash ' ~ number_words(m.groups[2])) if m.groups[2] else '') ~ ' ' -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- set o2 = namespace(s='') -%}
+{%- for m in tts_norm_scan(o.s, '(?<![%w_.])([vV])(%d+)%.(%d%d%d?)(?!%d|%.%d|[%w_])') -%}
+  {%- set o2.s = o2.s ~ ((' ' ~ spell_mark(m.groups[0]) ~ ' ' ~ cardinal(m.groups[1]) ~ ' point ' ~ minor(m.groups[2]) ~ ' ') if m.rule else m.text) -%}
+{%- endfor -%}
+{{ o2.s }}
+{%- endmacro -%}
+
+{#- before a number these mean a version: its parts are read as whole numbers ("Python three point twelve") -#}
+{%- set VERSIONED = 'version|ver|release|firmware|patch|kernel|build|python|node|nodejs|ios|ipados|macos|watchos|tvos|android|chrome|firefox|safari|java|php|ruby|rust|swift|kotlin|golang|django|rails|react|angular|vue|docker|kubernetes|ubuntu|debian|fedora|windows|linux|postgres|postgresql|mysql|redis|numpy|pytorch|tensorflow|cuda|xcode|gcc|clang|unity|minecraft|typescript|bluetooth|usb|hdmi|opengl|vulkan|directx|upgrade[ds]?|update[ds]?|downgrade[ds]?' -%}
+{%- set VERSIONED_PATTERN = '(?:' ~ VERSIONED.split('|') | join('(?=%.?%s)|') ~ '(?=%.?%s))' -%}
+{%- set NO_AMOUNT = '(?!%d|%.%d|%s?%%|%s(?:percent|million|billion)(?![%w_]))' -%}
+{%- macro nz_versioned(text) -%}
+{%- set o = namespace(s='') -%}
+{%- for m in tts_norm_scan(text, '(?i)(?<![%w_])(' ~ VERSIONED_PATTERN ~ ')(%.?%s(?:(?:from|to)%s)?)(%d+)%.(%d%d%d?)(?:(%s(?:to|or|and)%s)(%d+)%.(%d%d%d?)' ~ NO_AMOUNT ~ ')?' ~ NO_AMOUNT) -%}
+  {%- if m.rule -%}
+    {%- set g = m.groups -%}
+    {%- set o.s = o.s ~ g[0] ~ g[1] ~ cardinal(g[2]) ~ ' point ' ~ minor(g[3]) ~ ((g[4] ~ cardinal(g[5]) ~ ' point ' ~ minor(g[6])) if g[4] else '') ~ ' ' -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- the words for a code written with hyphens, or '' when it is none (5-year, COVID-19, a range) -#}
+{%- macro code_words(groups, numbered, text, pos) -%}
+{%- set token = groups | join('-') -%}
+{%- if starts(token, '[^%d]*%d') -%}
+  {%- set k = namespace(kinds=[], digits=true, upper=false) -%}
+  {%- for g in groups -%}
+    {%- set kind = 'd' if fullmatch(g, '%d+') else ('m' if starts(g, '[^%d]*%d') else ('u' if is_upper(g) else 'l')) -%}
+    {%- set k.kinds = k.kinds + [kind] -%}
+    {%- if kind != 'd' -%}{%- set k.digits = false -%}{%- endif -%}
+    {%- if g != g | lower -%}{%- set k.upper = true -%}{%- endif -%}
+  {%- endfor -%}
+  {%- set kinds = k.kinds -%}
+  {%- set n = groups | length -%}
+  {%- if k.digits -%}
+    {%- set rng = namespace(v=false) -%}
+    {%- if n == 2 -%}
+      {%- set years = groups[0] | length == 4 and groups[1] | length == 4 and groups[0] | int >= 1000 and groups[0] | int <= 2100 and groups[1] | int >= 1000 and groups[1] | int <= 2100 -%}
+      {%- set zero = (groups[0] | length > 1 and groups[0].startswith('0')) or (groups[1] | length > 1 and groups[1].startswith('0')) -%}
+      {%- set long = groups[0] | length >= 4 and groups[1] | length >= 4 and not years -%}
+      {#- 10-15 and 2019-2021 are ranges -#}
+      {%- set rng.v = not (numbered or zero or long or identifier(text, pos) in ['strong', 'pin']) -%}
+    {%- endif -%}
+    {%- if not rng.v -%}{{ digit_groups(groups, 'zero') }}{%- endif -%}
+  {%- elif n == 2 and kinds[1] == 'd' and kinds[0] in 'ul' -%}
+    {#- pre-2020, COVID-19, SAVE-20 are words; B-12, KX-300 -#}
+    {%- if not ((kinds[0] == 'l' and groups[0] | length > 1) or reads_as_word(groups[0])) -%}
+      {{ spell_mark(groups[0]) }} {{ cardinal(groups[1]) if short_number(groups[1]) else (', ' ~ digits(groups[1], 'zero')) }}
+    {%- endif -%}
+  {%- elif n == 2 and kinds[0] == 'd' and (kinds[1] == 'l' or groups[1] | length == 1 or fullmatch(groups[1], '%d+[A-Za-z]+')) -%}
+    {#- 5-year, 3-D, 5-10MB -#}
+  {%- else -%}
+    {%- set stop = namespace(v=false) -%}
+    {%- for g in groups -%}
+      {#- 20-year-old, F-16s -#}
+      {%- if (kinds[loop.index0] == 'l' and g | length > 2) or (kinds[loop.index0] == 'm' and fullmatch(g, '%d+(?:st|nd|rd|th|s)')) -%}{%- set stop.v = true -%}{%- endif -%}
+    {%- endfor -%}
+    {#- 3-in-1, 50s-60s -#}
+    {%- if not k.upper and ('l' in kinds or 'm' in kinds) -%}{%- set stop.v = true -%}{%- endif -%}
+    {%- if not stop.v -%}
+      {%- set parts = namespace(p=[]) -%}
+      {%- for g in groups -%}
+        {%- set kind = kinds[loop.index0] -%}
+        {%- if kind == 'd' -%}{%- set parts.p = parts.p + [digits(g, 'zero')] -%}
+        {%- elif kind == 'm' -%}{%- set parts.p = parts.p + [alnum(g, 'zero')] -%}
+        {%- elif g | length > 3 and is_word(g | lower) -%}{%- set parts.p = parts.p + [g] -%}
+        {%- else -%}{%- set parts.p = parts.p + [spell_mark(g) if g | length <= 5 else g] -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ parts.p | join(' , ') }}
+    {%- endif -%}
+  {%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- codes written with hyphens: AB-4471-Z, 91-220-0017, #A7-4419 -#}
+{%- macro nz_code(text) -%}
+{%- set o = namespace(s='', pos=0) -%}
+{%- for m in tts_norm_scan(text, '(?<![%w_.,/%-])(#)?([A-Za-z0-9]+(?:-[A-Za-z0-9]+)+)(?![%w_%-]|[.,]%d)') -%}
+  {%- if m.rule -%}
+    {%- set words = code_words(m.groups[1].split('-'), m.groups[0], text, o.pos) -%}
+    {%- set o.s = o.s ~ (((' number ' if m.groups[0] else ' ') ~ words ~ ' ') if words else m.text) -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+  {%- set o.pos = o.pos + m.text | length -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{%- macro nz_slashed(text) -%}
+{%- set o = namespace(s='') -%}
+{%- for m in tts_norm_scan(text, '(?<![%w_.,/%-])(%d+(?:/%d+){2,})(?![%w_/]|[.,]%d)') -%}
+  {%- set o.s = o.s ~ ((' ' ~ digit_groups(m.groups[0].split('/'), 'zero') ~ ' ') if m.rule else m.text) -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- digits written in groups with spaces: a telephone number, a card or tracking number, or a large number with
+    spaces between the thousands. T is one group: capitals and digits with a digit in it -#}
+{%- set GROUP = '[A-Z]*%d[A-Z0-9]*' -%}
+{%- set GROUP_END = '[%w_]|[.,:/%-]%d|%s?[%%°]' -%}
+{%- macro nz_grouped(text) -%}
+{%- set o = namespace(s='', pos=0) -%}
+{%- for m in tts_norm_scan(text, [['lead', '(?<![%w_.,:/#+%-])(%+)?([A-Z][A-Z]) (' ~ GROUP ~ '(?: ' ~ GROUP ~ ')+)(?: ([A-Z][A-Z])(?![%w_]))?'],
+                                  ['plain', '(?<![%w_.,:/#+%-])(%+)?(' ~ GROUP ~ '(?: ' ~ GROUP ~ ')+)']]) -%}
+  {%- if m.rule -%}
+    {%- set plus = m.groups[0] -%}
+    {%- set all = (m.groups[2] if m.rule == 'lead' else m.groups[1]).split(' ') -%}
+    {%- set after = text[o.pos + m.text | length:] -%}
+    {#- the longest run of groups after which the number can end (dizione's pattern gives groups back) -#}
+    {%- set c = namespace(n=0, trail='', rest='') -%}
+    {%- if m.rule == 'lead' and m.groups[3] and not starts(after, GROUP_END) -%}{%- set c.n = all | length -%}{%- set c.trail = m.groups[3] -%}
+    {%- else -%}
+      {%- set held = (' ' ~ m.groups[3]) if m.rule == 'lead' and m.groups[3] else '' -%}
+      {%- for count in range(all | length, 1, -1) -%}
+        {%- set rest = (' ' if count < all | length else '') ~ all[count:] | join(' ') ~ held -%}
+        {%- if not c.n and not starts(rest ~ after, GROUP_END) -%}{%- set c.n = count -%}{%- set c.rest = rest -%}{%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+    {%- if not c.n -%}{%- set o.s = o.s ~ m.text -%}
+    {%- else -%}
+      {%- set core = all[:c.n] -%}
+      {%- set following = c.rest ~ after -%}
+      {%- set whole = m.text[:m.text | length - c.rest | length] -%}
+      {%- set lead = m.groups[1] if m.rule == 'lead' else '' -%}
+      {#- "IN 2019 150 ..." in capitals: the two letters are a word -#}
+      {%- set word_lead = lead in CAPITAL_WORDS -%}
+      {%- set head = (lead ~ ' ') if word_lead else '' -%}
+      {%- set tail = (' ' ~ c.trail) if word_lead and c.trail else '' -%}
+      {%- set lead = '' if word_lead else lead -%}
+      {%- set trail = '' if word_lead else c.trail -%}
+      {%- set kind = identifier(text, o.pos) -%}
+      {%- set p = namespace(pure=true, three=true, long=false, total=0) -%}
+      {%- for part in core -%}
+        {%- if not fullmatch(part, '%d+') -%}{%- set p.pure = false -%}{%- endif -%}
+        {%- if not loop.first and part | length != 3 -%}{%- set p.three = false -%}{%- endif -%}
+        {%- if part | length > 2 -%}{%- set p.long = true -%}{%- endif -%}
+        {%- set p.total = p.total + part | length -%}
+      {%- endfor -%}
+      {%- set said = namespace(v='', done=false) -%}
+      {%- if p.pure and not plus and not lead -%}
+        {%- set is_amount = counted(following) or starts_i(following, '%s?(?:' ~ tts_dict('patterns', 'units') ~ ')') -%}
+        {%- if not kind and not core[0].startswith('0') and core[0] | length <= 3 and p.three and (core[-1] == '000' or (is_amount and core | length > 2)) -%}
+          {#- 1 000 000: the number rules read it -#}
+          {%- set said.v = head ~ core | join(',') ~ tail -%}{%- set said.done = true -%}
+        {%- elif not (kind or (core[0] | length > 1 and core[0].startswith('0')) or (core | length > 2 and p.long)) -%}
+          {%- set said.v = whole -%}{%- set said.done = true -%}
+        {%- endif -%}
+      {%- elif not p.pure and not lead and not plus and not kind -%}
+        {%- set said.v = whole -%}{%- set said.done = true -%}
+      {%- endif -%}
+      {%- if not said.done -%}
+        {%- set zero = 'oh' if plus or kind == 'phone' or (p.pure and core[0].startswith('0') and p.total >= 10) else 'zero' -%}
+        {%- if p.pure -%}{%- set spoken = digit_groups(core, zero) -%}
+        {%- else -%}
+          {%- set sp = namespace(p=[]) -%}
+          {%- for part in core -%}{%- set sp.p = sp.p + [digits(part, zero) if fullmatch(part, '%d+') else alnum(part, zero)] -%}{%- endfor -%}
+          {%- set spoken = sp.p | join(' , ') -%}
+        {%- endif -%}
+        {%- set spoken = ((spell_mark(lead) ~ ' , ') if lead else '') ~ spoken ~ ((' , ' ~ spell_mark(trail)) if trail else '') -%}
+        {%- set said.v = head ~ (' plus ' if plus else ' ') ~ spoken ~ ' ' ~ tail -%}
+      {%- endif -%}
+      {%- set o.s = o.s ~ said.v ~ (nz_grouped(c.rest) if c.rest else '') -%}
+    {%- endif -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+  {%- set o.pos = o.pos + m.text | length -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- chat spellings that contain a digit or a slash: gr8, b4, 2day -#}
+{%- macro nz_chat_forms(text) -%}
+{%- set o = namespace(s='') -%}
+{%- for m in tts_norm_scan(text, "(?<![%w_/'])[A-Za-z0-9/]+(?![%w_/'])") -%}
+  {%- set said = tts_dict('chat', m.text | lower) if m.rule and starts(m.text, '[A-Za-z]*[0-9/]') else none -%}
+  {%- if said is none -%}{%- set o.s = o.s ~ m.text -%}
+  {%- elif said[0] == '-' -%}{%- set o.s = o.s ~ ' ' -%}
+  {%- else -%}
+    {%- set w = namespace(p=[]) -%}
+    {%- for part in said[0].split(' ') -%}{%- set w.p = w.p + [spell_mark(part[1:]) if part.startswith('*') else part] -%}{%- endfor -%}
+    {%- set o.s = o.s ~ ' ' ~ w.p | join(' ') ~ ' ' -%}
+  {%- endif -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- the 1990s, the '80s; 21st; 1080p; 50% -#}
+{%- macro nz_small_figures(text) -%}
+{%- set o = namespace(s='') -%}
+{%- for m in tts_norm_scan(text, "(?<![%w_.])'?(%d%d%d%d|%d%d)'?s(?![%w_])") -%}
+  {%- set o.s = o.s ~ ((' ' ~ plural_of(year(m.groups[0]) if m.groups[0] | length == 4 else cardinal(m.groups[0])) ~ ' ') if m.rule else m.text) -%}
+{%- endfor -%}
+{%- set o2 = namespace(s='') -%}
+{%- for m in tts_norm_scan(o.s, '(?<![%w_.])(%d+)(?:st|nd|rd|th)(?![%w_])') -%}
+  {%- set o2.s = o2.s ~ ((' ' ~ ordinal(m.groups[0]) ~ ' ') if m.rule else m.text) -%}
+{%- endfor -%}
+{%- set o3 = namespace(s='') -%}
+{%- for m in tts_norm_scan(o2.s, '(?<![%w_.])(1080|1440|2160|4320|144|240|360|480|540|576|720|900)([pi])(?![%w_])') -%}
+  {%- set o3.s = o3.s ~ ((' ' ~ pairs(m.groups[0]) ~ ' ' ~ spell_mark(m.groups[1]) ~ ' ') if m.rule else m.text) -%}
+{%- endfor -%}
+{%- set o4 = namespace(s='') -%}
+{%- for m in tts_norm_scan(o3.s, '(%d[%d,]*(?:%.%d+)?)%s?%%') -%}
+  {%- set o4.s = o4.s ~ ((' ' ~ number_words(m.groups[0]) ~ ' percent ') if m.rule else m.text) -%}
+{%- endfor -%}
+{{ o4.s }}
+{%- endmacro -%}
+
+{#- a number and its unit: 5 km, 10-15 kg, 60 mph, 72°F -#}
+{%- macro nz_measure(text) -%}
+{%- set o = namespace(s='', pos=0) -%}
+{%- for m in tts_norm_scan(text, '(?i)(?<![%w_.])(%d[%d,]*(?:%.%d+)?)(?:[-–](%d[%d,]*(?:%.%d+)?))?%s?(' ~ tts_dict('patterns', 'units') ~ ')(%.(?=%s+[a-z]))?') -%}
+  {%- if m.rule -%}
+    {%- set unit = m.groups[2] -%}
+    {%- set after = text[o.pos + m.text | length:] -%}
+    {#- the stop of "5 min. more" belongs to the unit only before a word in small letters -#}
+    {%- set stop = '.' if m.groups[3] and not starts(after, '%s+[a-z]') else '' -%}
+    {%- set names = tts_dict('exact_units', unit) or tts_dict('units', unit | lower | replace('Μ', 'μ')) -%}
+    {%- set nxt = (stop ~ after)[:1] -%}
+    {%- if names is none or not names or (fullmatch(unit, '.') and nxt and nxt in "-'/") -%}{%- set o.s = o.s ~ m.text -%}
+    {%- else -%}
+      {%- set value = decimal_comma(m.groups[0]) -%}
+      {%- set upper = decimal_comma(m.groups[1]) if m.groups[1] else '' -%}
+      {%- set o.s = o.s ~ ' ' ~ ((number_words(value) ~ ' to ' ~ number_words(upper) ~ ' ' ~ names[1]) if upper
+                                 else (number_words(value) ~ ' ' ~ (names[0] if value in ['1', '1.0'] else names[1]))) ~ ' ' ~ stop -%}
+    {%- endif -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+  {%- set o.pos = o.pos + m.text | length -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- "2 1/2": two and a half -#}
+{%- macro nz_mixed_fraction(text) -%}
+{%- set o = namespace(s='') -%}
+{%- for m in tts_norm_scan(text, '(?<![%d/.,%-])(%d+) (%d)/(10|16|2|3|4|5|6|8)(?![%d/]|%.%d)') -%}
+  {%- if m.rule and m.groups[1] | int > 0 and m.groups[1] | int < m.groups[2] | int -%}
+    {%- set o.s = o.s ~ ' ' ~ number_words(m.groups[0]) ~ ' and ' ~ fraction_words(m.groups[1] | int, m.groups[2] | int, true) ~ ' ' -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- 3/4, 7/10; "14/03" and "12/10" as a day of the year where the text says so -#}
+{%- macro nz_fraction(text, day_first, dated) -%}
+{%- set o = namespace(s='', pos=0) -%}
+{%- for m in tts_norm_scan(text, '(?<![%d/.])(%d+)/(%d+)(?![%d/]|%.%d)') -%}
+  {%- if m.rule -%}
+    {%- set a = m.groups[0] -%}{%- set b = m.groups[1] -%}
+    {%- set said = namespace(v='') -%}
+    {%- if a | length <= 2 and b | length <= 2 -%}
+      {%- set first = a | int -%}{%- set second = b | int -%}
+      {%- set before = words_before(text, o.pos, 4) -%}
+      {%- set words = before.split(' ') if before else [] -%}
+      {%- if first >= 1 and first <= 12 and second >= 20 and second <= 49 and 'card' in words -%}
+        {#- a card that expires 08/27 -#}
+        {%- set said.v = ' ' ~ MONTHS[first - 1] ~ ' ' ~ year(2000 + second) ~ ' ' -%}
+      {%- else -%}
+        {%- set last = words[-1] if words else '' -%}
+        {#- 1/2, 3/4, 7/10 -#}
+        {%- set classic = first < second and second in CLASSIC_FRACTIONS -%}
+        {%- set zero = (a | length == 2 and a.startswith('0')) or (b | length == 2 and b.startswith('0')) -%}
+        {%- if zero or (first > 12 and first <= 31 and second <= 12 and not (first == 24 and second == 7))
+              or (last in DATE_BEFORE and (not classic or last == 'on')) or (dated and not classic and first != second) -%}
+          {%- set swap = first > 12 or (day_first and second <= 12) -%}
+          {%- set said.v = date(second if swap else first, first if swap else second, '', false) -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endif -%}
+    {%- if not said.v -%}
+      {%- set top = a | int -%}{%- set bottom = b | int -%}
+      {#- twenty four seven, fifty fifty -#}
+      {%- if (top == 24 and bottom == 7) or top == bottom -%}{%- set said.v = ' ' ~ cardinal(a) ~ ' ' ~ cardinal(b) ~ ' ' -%}
+      {%- elif top <= 0 or top >= 100 or bottom <= 1 or bottom > 100 -%}{%- set said.v = ' ' ~ cardinal(a) ~ ' over ' ~ cardinal(b) ~ ' ' -%}
+      {%- else -%}{%- set said.v = ' ' ~ fraction_words(top, bottom, false) ~ ' ' -%}
+      {%- endif -%}
+    {%- endif -%}
+    {%- set o.s = o.s ~ said.v -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+  {%- set o.pos = o.pos + m.text | length -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- 2019-2021, 10-15, 5x -#}
+{%- macro nz_ranges(text) -%}
+{%- set o = namespace(s='') -%}
+{%- for m in tts_norm_scan(text, '(?<![%w_.,%-])(%d%d%d%d)[-–](%d%d%d%d)(?![%w_.,%-])') -%}
+  {%- set o.s = o.s ~ ((' ' ~ year(m.groups[0]) ~ ' to ' ~ year(m.groups[1]) ~ ' ') if m.rule else m.text) -%}
+{%- endfor -%}
+{%- set o2 = namespace(s='') -%}
+{%- for m in tts_norm_scan(o.s, '(?<![%w_.,%-])(%d+)[-–](%d+)(?![%w_%-]|[.,]%d)') -%}
+  {%- set o2.s = o2.s ~ ((' ' ~ number_words(m.groups[0]) ~ ' to ' ~ number_words(m.groups[1]) ~ ' ') if m.rule else m.text) -%}
+{%- endfor -%}
+{%- set o3 = namespace(s='') -%}
+{%- for m in tts_norm_scan(o2.s, '(?<![%w_.])(%d+)x(?![%w_])') -%}
+  {%- set o3.s = o3.s ~ ((' ' ~ number_words(m.groups[0]) ~ ' times ') if m.rule else m.text) -%}
+{%- endfor -%}
+{{ o3.s }}
+{%- endmacro -%}
+
+{#- the passes that need a digit, in the order of dizione -#}
+{%- macro nz_figures(text) -%}
+{%- set text = nz_formula(text) if '$' in text else text -%}
+{#- continental figures become American ones, so every rule below sees one notation -#}
+{%- set text = nz_continental(text) -%}
+{%- set text = tts_norm_sub(text, '((?:[$£€¥₹]|(?<![A-Za-z])' ~ CURRENCY_CODES ~ ')%s?-?%d+),(%d%d?)(?!%d|[.,]%d)', '%1.%2') -%}
+{%- set text = tts_norm_sub(text, '(?<![%w_.,])(%d+),(%d%d?)(?=%s?(?:%%|' ~ SIGN_AFTER ~ '))', '%1.%2') -%}
+{%- set text = nz_money(text, false) -%}
+{%- set text = tts_norm_sub(text, '(?<![%w_.,%-])(%d[%d,]*(?:%.%d+)?)-(?=%d[%d,]*(?:%.%d+)?%s?' ~ SIGN_AFTER ~ ')', '%1 to ') -%}
+{%- set text = nz_money(text, true) -%}
+{%- set text = nz_cents(text) -%}
+{#- times of day, lengths of time, ratios -#}
+{%- set CLOCK = '(?:%d%d?:[0-5]%d(?:%s?[AaPp]%.?[Mm]%.?)?|(?<![%w_])%d%d?%s?[AaPp]%.?[Mm]%.?)' -%}
+{%- set text = tts_norm_sub(text, '(' ~ CLOCK ~ ')%s(' ~ ZONES ~ ')' ~ NOT_WORD, '%1 ⟦%2⟧') -%}
+{%- set text = tts_norm_sub(text, '(?<![%d.,:])(%d%d?)%.([0-5]%d)(?=%s?[AaPp]%.?[Mm]' ~ NOT_WORD ~ ')', '%1:%2') -%}
+{%- set text = nz_dot_times(text) -%}
+{%- set text = tts_norm_sub(text, '(' ~ CLOCK ~ ')%s?[-—]%s?(?=%d%d?(?::[0-5]%d|%s?[AaPp]%.?[Mm]' ~ NOT_WORD ~ '))', '%1 to ') -%}
+{%- set text = nz_ratio(text) -%}
+{%- set text = nz_time(text) -%}
+{%- set text = nz_hour(text) -%}
+{#- dates -#}
+{%- set habits = date_habits(text) -%}
+{%- set day_first = habits[:1] == '1' -%}
+{%- set text = nz_date(text, 'iso', false) -%}
+{%- set text = nz_date(text, 'dot', false) -%}
+{%- set text = nz_date(text, 'slash', day_first) -%}
+{%- set text = nz_days_of_month(text, true) -%}
+{%- set text = nz_days_of_month(text, false) -%}
+{%- set text = nz_month_day(text, true) -%}
+{%- set text = nz_month_day(text, false) -%}
+{#- telephone numbers, versions, codes -#}
+{%- set text = nz_phone(text) -%}
+{%- set text = nz_version(text) -%}
+{%- set text = nz_versioned(text) -%}
+{%- set text = nz_code(text) -%}
+{%- set text = nz_slashed(text) -%}
+{%- set text = nz_grouped(text) -%}
+{%- set text = tts_norm_sub(text, '(?<![%w_.])-(?=%d)', ' minus ') -%}
+{#- 3 × 4 metres -#}
+{%- set text = tts_norm_sub(text, '(?:(?<=%d)%s?[xX×]|×)%s?(?=%d[%d.,]*%s?(?:inches|metres?|meters?|pixels?|yards?|inch|feet|foot|mm|cm|km|ft|in|yd|px|m)' ~ NOT_WORD ~ ')', ' by ') -%}
+{%- set text = tts_norm_sub(text, '(?<=%d)%s[xX×]%s(?=%d)', ' times ') -%}
+{%- set text = nz_chat_forms(text) -%}
+{%- set text = nz_small_figures(text) -%}
+{%- set text = nz_area(text, true) -%}
+{%- set text = nz_measure(text) -%}
+{%- set text = nz_mixed_fraction(text) -%}
+{%- set text = nz_fraction(text, day_first, habits[1:] == '1') -%}
+{%- set text = nz_ranges(text) -%}
+{{ tts_norm_sub(text, '(?<=%d)%^(?=%d)', ' to the power of ') }}
+{%- endmacro -%}
+
+{#- ---------- signs, comparisons, abbreviations and the numbers that are left (normalize.py: _signs) ---------- -#}
+{#- the pattern is found somewhere in s -#}
+{%- macro has(s, pattern) -%}
+{%- set r = tts_norm_scan(s, pattern) -%}{{ '1' if r | length > 1 or (r | length == 1 and r[0].rule) else '' }}
+{%- endmacro -%}
+
+{#- text with the angle brackets that enclose something replaced by a mark of the same size, the inner ones first:
+    "<b>", "</p>", "<your name>", "Vec<u64>". The "<" and ">" that are left may compare two things -#}
+{%- macro without_angles(text) -%}
+{%- set a = namespace(s=text, done=false) -%}
+{%- for _ in range(8) -%}
+  {%- if not a.done and '<' in a.s and '>' in a.s -%}
+    {%- set marked = tts_norm_sub(a.s, '(?<![%w_)⟧⟡])<([A-Za-z0-9/!?][^<>(){}+*;|]*)>|(?<=[%w_⟧⟡])<([^<>(){}+*;|]{1,80})>(?![%w_$])|<(/?[A-Za-z][%w_%-]+/?)>', '\x01%1%2%3\x01') -%}
+    {%- set a.done = marked == a.s -%}
+    {%- set a.s = marked -%}
+  {%- endif -%}
+{%- endfor -%}
+{{ a.s }}
+{%- endmacro -%}
+
+{#- the words for a comparison sign, after "is" where the mark for it stands before the sign -#}
+{%- macro compared(marked, words) -%}{{ ' is ' if marked else ' ' }}{{ words }}{{ ' ' }}{%- endmacro -%}
+
+{#- put the mark for "is" after the first value of each comparison between two values: "67 > 66", "b>a", "f(x) >= 0".
+    Not where a word that opens no clause stands before that value: "for n > 4", "any q > 0" -#}
+{%- macro nz_mark_comparisons(text) -%}
+{%- set plain = without_angles(text) -%}
+{%- set o = namespace(s='', pos=0) -%}
+{%- for m in tts_norm_scan(text, [['spaced', ' (>=|<=|!=|[<>≥≤≠]) '], ['joined', '(>=|<=|!=|[<>≥≤≠])']]) -%}
+  {%- set mark = namespace(v=false) -%}
+  {%- if m.rule -%}
+    {%- set at = o.pos + (1 if m.rule == 'spaced' else 0) -%}
+    {%- set before = plain[:o.pos] -%}
+    {%- set value = tts_norm_scan(before, "(?:(?<![%w_.,])%d[%d.,]*%%?|(?<![%w_'’.%-])[A-Za-z]|%))$") -%}
+    {%- if plain[at:at + 1] == m.groups[0][:1] and value | length > 0 and value[-1].rule
+          and starts(plain[o.pos + m.text | length:], "[-+]?[$£€¥₹]?%d+(?:[.,%%]|(?![%w_]))|%.%d|[A-Za-z](?![%w_'’])|%(") -%}
+      {%- if value[-1].text == ')' -%}
+        {#- "f(x) > 0": the whole of it is the value -#}
+        {%- set cs = tts_norm_scan(before, '.') | map(attribute='text') | list -%}
+        {%- set st = namespace(i=cs | length - 1, depth=0, done=false) -%}
+        {%- for _ in cs -%}
+          {%- if not st.done and st.i >= 0 -%}
+            {%- set st.depth = st.depth + (1 if cs[st.i] == ')' else 0) - (1 if cs[st.i] == '(' else 0) -%}
+            {%- if st.depth == 0 -%}{%- set st.done = true -%}{%- else -%}{%- set st.i = st.i - 1 -%}{%- endif -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {%- for _ in cs -%}
+          {%- if st.i > 0 and cs[st.i - 1] in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.' -%}{%- set st.i = st.i - 1 -%}{%- endif -%}
+        {%- endfor -%}
+        {%- set head = cs[:[st.i, 0] | max] | join('') -%}
+      {%- else -%}{%- set head = before[:before | length - value[-1].text | length] -%}
+      {%- endif -%}
+      {%- set opener = tts_norm_scan(head | trim, "[A-Za-z']+$") -%}
+      {%- set mark.v = not (opener | length > 0 and opener[-1].rule and opener[-1].text | lower not in CLAUSE_OPENERS) -%}
+    {%- endif -%}
+  {%- endif -%}
+  {%- set o.s = o.s ~ ('⟡' if mark.v else '') ~ m.text -%}
+  {%- set o.pos = o.pos + m.text | length -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- "b>a", "x<5", "p<.05": the words for "<" and ">" written with no spaces. A comparison when a figure stands on one
+    side, or a single letter or a bracket on both; "File>Open" is none -#}
+{%- macro nz_joined_comparisons(text) -%}
+{%- set plain = without_angles(text) -%}
+{%- set o = namespace(s='', pos=0) -%}
+{%- for m in tts_norm_scan(text, '(?<=[%w_)⟧⟡])[<>](?=[%w_(⟦]|%.%d| minus %d)') -%}
+  {%- set read = namespace(v=false) -%}
+  {%- if m.rule and plain[o.pos:o.pos + 1] == m.text -%}
+    {%- set before = tts_norm_sub(text[:o.pos], '⟡+$', '') -%}
+    {%- set after = text[o.pos + 1:] -%}
+    {%- set read.v = ends(before, '(?<![%w_.,])%d[%d.,]*%%?') or starts(after, '%d+(?:[.,%%]|(?![%w_]))|%.%d| minus %d')
+                     or (ends(before, "(?<![%w_'’.])[A-Za-z]|[)⟧]") and starts(after, "[A-Za-z](?![%w_'’])|[(⟦]")) -%}
+  {%- endif -%}
+  {%- set o.s = o.s ~ (compared(ends(text[:o.pos], '⟡ *'), 'less than' if m.text == '<' else 'greater than') if read.v else m.text) -%}
+  {%- set o.pos = o.pos + m.text | length -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- mark the letters that stand for something, to be named: "a=10", "b>a", "(k)". "A", "a" and the small letters
+    chat writes for a word ("k", "u", "r") are read as words elsewhere -#}
+{%- set LETTER_SIGN = '[<>+*/^≤≥≠≈×÷±]' -%}
+{%- set LETTER_SPACED = ' [<>+*≤≥≠≈×÷±] ' -%}
+{#- after "=" or a spaced sign the letter must not open a phrase ("mode = a set of notes") -#}
+{%- set NO_PHRASE = "(?![%w_'’%-]|%s+(?!(?:and|or|then|if|when|where|while|for|is|are|was|but|so|in|to)(?![%w_]))[A-Za-z])" -%}
+{%- set LETTER_PLACES = [
+    ['plain', "(?<![%w_'’.%-])[Aakur](?=⟡?%s?(?:[<>!=]=|=))"],
+    ['plain', "(?:[<>!=]=|=)%s?[Aakur]" ~ NO_PHRASE],
+    ['plain', "(?<![%w_'’.%-])[Aakur](?=⟡?" ~ LETTER_SIGN ~ "(?:[%w_($]|%.%d))"],
+    ['after_sign', "(?<=" ~ LETTER_SIGN ~ ")[Aakur](?![%w_'’%-])"],
+    ['plain', "(?<![%w_'’.%-])[Aakur](?=⟡?" ~ LETTER_SPACED ~ "(?:[A-Za-z](?![%w_'’])|%d+(?:[.,]|(?![%w_'’]))))"],
+    ['plain', "(?<![%w_'’.])(?:[A-Za-z]|%d[%d.,]*)⟡?" ~ LETTER_SPACED ~ "[Aakur]" ~ NO_PHRASE],
+    ['plain', "(?<=%()[Aakur](?=%)|, )"],
+    ['after_comma', "(?<= )[Aakur](?=%))"],
+    ['plain', "(?<![^%s])[akur](?=%)%s)"],
+] -%}
+{%- macro nz_named_letters(text) -%}
+{%- if has(text, '[=<>+*/^()≤≥≠≈×÷±]') -%}
+  {%- set plain = without_angles(text) -%}
+  {%- set found = namespace(at=[]) -%}
+  {%- for place in LETTER_PLACES -%}
+    {%- set sc = namespace(pos=0) -%}
+    {%- for m in tts_norm_scan(plain, place[1]) -%}
+      {%- set sc.pos = sc.pos + m.text | length -%}
+      {%- if m.rule -%}
+        {#- the letter is the last character matched -#}
+        {%- set before = plain[:sc.pos - 1] -%}
+        {%- if (place[0] == 'plain' or (place[0] == 'after_sign' and ends(before, '[%w_)⟡]' ~ LETTER_SIGN) and not ends(before, '[Ww]/'))
+               or (place[0] == 'after_comma' and before.endswith(', '))) and sc.pos - 1 not in found.at -%}
+          {%- set found.at = found.at + [sc.pos - 1] -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+  {%- endfor -%}
+  {%- set o = namespace(s='', pos=0) -%}
+  {%- for at in found.at | sort -%}
+    {%- set o.s = o.s ~ text[o.pos:at] ~ spell_mark(text[at:at + 1] | upper) -%}
+    {%- set o.pos = at + 1 -%}
+  {%- endfor -%}
+  {{ o.s ~ text[o.pos:] }}
+{%- else -%}{{ text }}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- U.S., e.g., p.m.: letters with full stops -#}
+{%- macro nz_dotted(text) -%}
+{%- set o = namespace(s='', pos=0) -%}
+{%- for m in tts_norm_scan(text, '(?<![%w_])((?:[A-Za-z]%.){2,})') -%}
+  {%- if m.rule -%}
+    {%- set letters = m.text | replace('.', '') -%}
+    {%- set key = letters | lower -%}
+    {%- set o.s = o.s ~ ' ' ~ ('for example' if key == 'eg' else ('that is' if key == 'ie' else spell_mark(letters | upper)))
+                  ~ (' .' if new_sentence(text[o.pos + m.text | length:]) else '') ~ ' ' -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+  {%- set o.pos = o.pos + m.text | length -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- abbreviations written with a full stop (abbreviations.txt): the stop is not a sentence end. "St." and "Dr." are
+    Saint or Doctor before a name and Street or Drive after one -#}
+{%- macro nz_abbreviations(text) -%}
+{%- set o = namespace(s='', pos=0) -%}
+{%- for m in tts_norm_scan(text, "(?<![%w_])([A-Za-z]{1,6})(?![%w_])(%.?)(?![A-Za-z'’])") -%}
+  {%- set said = namespace(v=m.text) -%}
+  {%- if m.rule -%}
+    {%- set token = m.groups[0] -%}{%- set stop = m.groups[1] -%}
+    {%- set key = token | lower -%}
+    {%- set entry_ = tts_dict('abbreviations', key) -%}
+    {%- if entry_ is not none or (key in ['st', 'dr'] and token[:1] in UPPER) -%}
+      {%- set following = text[o.pos + m.text | length:] -%}
+      {%- set next_word = at_start(following, '%s*([A-Za-z]+|%d)', 0) -%}
+      {%- set capital_next = next_word[:1] in UPPER if next_word else false -%}
+      {%- set number_next = next_word[:1] in '0123456789' if next_word else false -%}
+      {%- if key in ['st', 'dr'] and token[:1] in UPPER -%}
+        {%- if capital_next and (stop or key == 'dr') -%}{%- set said.v = ' saint ' if key == 'st' else ' doctor ' -%}
+        {%- elif stop and ends(text[:o.pos], '[A-Z][a-z]+%s+') -%}
+          {%- set said.v = (' street' if key == 'st' else ' drive') ~ (' ' if following | trim else ' .') -%}
+        {%- endif -%}
+      {%- elif entry_ is not none -%}
+        {%- set when = entry_[0] -%}
+        {%- set use = namespace(v=true) -%}
+        {%- if when == 'title' -%}{%- set use.v = token[:1] in UPPER and (capital_next or stop) -%}
+        {%- elif when == 'number' -%}
+          {%- set previous = tts_norm_scan(text[:o.pos], '([A-Za-z]+)%.?%s+$') -%}
+          {%- set numbered = previous | length > 0 and previous[-1].rule and previous[-1].groups[0] | lower in NUMBERED -%}
+          {%- set use.v = stop and (number_next or (key == 'no' and numbered)) -%}
+        {%- elif not stop or (when == 'small' and is_upper(token)) -%}{%- set use.v = false -%}
+        {%- elif key in ['mar', 'sun', 'sat', 'jan', 'dec', 'max', 'min', 'est', 'no'] and token[:1] not in UPPER and not number_next -%}
+          {#- also words; "max. load" and "est. time" are the abbreviation, "he sat." is not -#}
+          {%- set use.v = key in ['max', 'min', 'est'] and next_word and next_word[:1] in LOWER -%}
+        {%- endif -%}
+        {%- if use.v -%}
+          {#- "Est. arrival"; "est. 1885" is "established" -#}
+          {%- set words = 'estimated' if key == 'est' and not number_next else entry_[1] -%}
+          {%- set closes = when != 'title' and (not following | trim or (capital_next and next_word | lower in SENTENCE_STARTERS)) -%}
+          {%- set said.v = ' ' ~ words ~ (' .' if closes else '') ~ ' ' -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endif -%}
+  {%- set o.s = o.s ~ said.v -%}
+  {%- set o.pos = o.pos + m.text | length -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- letters and digits written together: B12, 14C, X7K, PS5. A single letter is always named -#}
+{%- macro nz_glued(text) -%}
+{%- set o = namespace(s='') -%}
+{%- for m in tts_norm_scan(text, "(?<![%w_'.])(?=%d*[A-Za-z])(?=[A-Za-z]*%d)[A-Za-z0-9]+(?![%w_']|%.%d)") -%}
+  {%- if m.rule -%}
+    {%- set out = namespace(p=[]) -%}
+    {%- for run in tts_norm_scan(m.text, [['d', '%d+'], ['l', '[A-Za-z]+']]) -%}
+      {%- if run.rule == 'd' -%}{%- set out.p = out.p + [cardinal(run.text) if short_number(run.text) else digits(run.text, 'zero')] -%}
+      {%- elif run.text | length == 1 or ((is_upper(run.text) or run.text | length <= 3) and not reads_as_word(run.text)) -%}{%- set out.p = out.p + [spell_mark(run.text)] -%}
+      {%- else -%}{%- set out.p = out.p + [run.text] -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {%- set o.s = o.s ~ ' ' ~ out.p | join(' ') ~ ' ' -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- the numbers that are left: a reference is read digit by digit, a year as a year, a model number in pairs -#}
+{%- macro nz_numbers(text) -%}
+{%- set o = namespace(s='', pos=0) -%}
+{%- for m in tts_norm_scan(text, '(?<![%w_.])%d{1,3}(?:,%d%d%d)+(?:%.%d+)?|%d+(?:%.%d+)?|(?<![%w_.])%.%d+') -%}
+  {%- if m.rule -%}
+    {%- set value = m.text -%}
+    {%- set plain = value | replace(',', '') -%}
+    {%- set whole = '.' not in plain and ',' not in value and not plain.startswith('0') -%}
+    {%- set after = text[o.pos + value | length:] -%}
+    {%- set said = namespace(v='') -%}
+    {%- if whole and plain | length > 2 -%}
+      {%- set kind = identifier(text, o.pos) -%}
+      {%- set limit = 3 if kind in ['phone', 'pin'] else (4 if kind in ['strong', 'enter'] else (5 if kind == 'weak' else 7)) -%}
+      {#- a reference, not an amount -#}
+      {%- if plain | length >= limit and not (not kind and plain.endswith('000'))
+            and not (kind == 'enter' and plain | length == 4 and plain | int >= 1900 and plain | int <= 2099)
+            and not (kind in ['', 'phone', 'weak'] and counted(after)) -%}
+        {%- set said.v = digits(plain, 'oh' if kind == 'phone' else 'zero') -%}
+      {%- endif -%}
+    {%- endif -%}
+    {%- if not said.v and whole and plain | length == 4 -%}
+      {%- set number = plain | int -%}
+      {%- set before = text[:o.pos] -%}
+      {%- set near = namespace(last='') -%}
+      {%- for w in tts_norm_scan(before[[0, before | length - 24] | max:], '[A-Za-z]+') -%}{%- if w.rule -%}{%- set near.last = w.text | lower -%}{%- endif -%}{%- endfor -%}
+      {%- set next_word = at_start(after, '%s*([A-Za-z]+)', 0) | lower -%}
+      {%- set many = next_word and ((next_word.endswith('s') and not next_word.endswith('ss') and next_word | length > 1)
+                                    or next_word.endswith('people') or next_word.endswith('men') or next_word.endswith('children')
+                                    or next_word.endswith('feet') or next_word.endswith('miles')) -%}
+      {%- set dated = near.last and (near.last in YEAR_CONTEXT or near.last[:3] in MONTH_NUMBER) -%}
+      {%- set model = tts_norm_scan(before, '(?<![A-Za-z])([A-Z]{2,5}) $') -%}
+      {#- RTX 4070, ISO 9001 -#}
+      {%- if model | length > 0 and model[-1].rule and model[-1].groups[0] not in CAPITAL_WORDS and not many -%}{%- set said.v = pairs(number) -%}
+      {%- elif (number >= 1100 and number <= 1999) or (number >= 2000 and number <= 2099 and (dated or not many)) -%}{%- set said.v = year(number) -%}
+      {%- endif -%}
+    {%- endif -%}
+    {%- set o.s = o.s ~ ' ' ~ (said.v if said.v else number_words(value)) ~ ' ' -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+  {%- set o.pos = o.pos + m.text | length -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{%- macro nz_signs(text) -%}
+{%- set text = nz_named_letters(text) -%}
+{%- set text = nz_joined_comparisons(text) if '<' in text or '>' in text else text -%}
+{%- set o = namespace(s='') -%}
+{%- for m in tts_norm_scan(text, '(?<![%w_%-])(' ~ SIZES ~ ')-(' ~ SIZES ~ ')(?![%w_%-])') -%}
+  {%- set o.s = o.s ~ ((' ' ~ spell_mark(m.groups[0]) ~ ' to ' ~ spell_mark(m.groups[1]) ~ ' ') if m.rule else m.text) -%}
+{%- endfor -%}
+{%- set text = tts_norm_sub(o.s, '#(?=%d)', ' number ') -%}
+{#- Order #A7 -#}
+{%- set text = tts_norm_sub(text, '#(?=[A-Z]{1,4}-?%d)', ' number ') -%}
+{%- set text = tts_norm_sub(text, '#(?=[A-Za-z])', ' hashtag ') -%}
+{%- set text = tts_norm_sub(text, '~(?=%s?%d)', ' about ') -%}
+{%- set o = namespace(s='', pos=0) -%}
+{%- for m in tts_norm_scan(text, '(?<=[%w_%s⟧⟡])(>=|<=|!=)(?=[%w_%s⟦])') -%}
+  {%- set o.s = o.s ~ (compared(ends(text[:o.pos], '⟡ *'), COMPARISONS[m.text]) if m.rule else m.text) -%}
+  {%- set o.pos = o.pos + m.text | length -%}
+{%- endfor -%}
+{#- RTX 4070 Ti -#}
+{%- set text = tts_norm_sub(o.s, '(?<=%d) Ti' ~ NOT_WORD, ' ⟦TI⟧') -%}
+{%- set text = tts_norm_sub(text, '(?<![%w_])([Rr])ef%.%s?[Nn]o%.(?=%s)', '%1eference number') -%}
+{%- set text = nz_dotted(text) if '.' in text else text -%}
+{%- set text = nz_abbreviations(text) -%}
+{%- if has(text, '%d') -%}
+  {%- set text = nz_glued(text) -%}
+  {%- set text = nz_numbers(text) -%}
+{%- endif -%}
+{%- set text = tts_norm_sub(text, '(?<=[A-Za-z])/(?=[A-Za-z])', ' ') -%}
+{%- set o = namespace(s='', pos=0) -%}
+{%- for m in tts_norm_scan(text, '(?<=%d)⟡?%s?[<>]%s?(?=%d)|(?<=%s)[<>](?=%s)') -%}
+  {%- set o.s = o.s ~ (compared(m.text.startswith('⟡') or ends(text[:o.pos], '⟡ *'), 'less than' if '<' in m.text else 'greater than') if m.rule else m.text) -%}
+  {%- set o.pos = o.pos + m.text | length -%}
+{%- endfor -%}
+{%- set text = o.s -%}
+{%- set o = namespace(s='', pos=0) -%}
+{%- for m in tts_norm_scan(text, '[&@+=%%×÷±©§°≥≤≠≈∞√π]') -%}
+  {%- if m.rule -%}
+    {%- set o.s = o.s ~ (compared(ends(text[:o.pos], '⟡ *'), SYMBOL_WORDS[m.text]) if m.text in '≥≤≠' else (' ' ~ SYMBOL_WORDS[m.text] ~ ' ')) -%}
+  {%- else -%}{%- set o.s = o.s ~ m.text -%}
+  {%- endif -%}
+  {%- set o.pos = o.pos + m.text | length -%}
+{%- endfor -%}
+{{ o.s | replace('⟡', '') }}
+{%- endmacro -%}
+
+{#- ---------- web addresses and file names ---------- -#}
+{#- one run of letters inside an address: a word, or letters to name -#}
+{%- macro address_part(part) -%}
+{%- set lower = part | lower -%}
+{%- if part | length > 1 and is_word(lower) and (part | length > 2 or lower in SHORT_WORDS) -%}{{ part }}
+{%- else -%}{{ spell_mark(part) if part | length <= 3 else part }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro spoken_address(core) -%}
+{%- set pieces = tts_norm_scan(core, [['l', '[A-Za-z]+'], ['d', '%d+'], ['o', '.']]) -%}
+{%- set mail = '@' in core -%}
+{%- set a = namespace(out=[], host=false) -%}
+{%- for p in pieces -%}
+  {%- set piece = p.text -%}
+  {%- set following = pieces[loop.index0 + 1].text if not loop.last else '' -%}
+  {%- if piece == '@' -%}{%- set a.host = true -%}{%- endif -%}
+  {%- if p.rule == 'd' -%}{%- set a.out = a.out + [address_digits(piece)] -%}
+  {%- elif p.rule != 'l' -%}{%- set a.out = a.out + [SEPARATORS[piece] if piece in SEPARATORS else ''] -%}
+  {%- elif loop.index0 > 0 and pieces[loop.index0 - 1].text == '.' and (a.host or not mail)
+          and (following in ['', '/', ':', '?', '#'] or (piece | length <= 3 and (tts_dict('endings', piece | lower) is not none or not is_word(piece | lower)))) -%}
+    {#- the ending of a file name or an address: a word if the table says so, otherwise letters -#}
+    {%- set a.out = a.out + [piece | lower if tts_dict('endings', piece | lower) == 'word' else spell_mark(piece)] -%}
+  {%- else -%}
+    {%- set run = namespace(letters='') -%}
+    {%- for part in tts_norm_scan(piece, '[A-Z]?[a-z]+|(?:[A-Z](?![a-z]))+') -%}
+      {%- if part.rule -%}
+        {%- set said = address_part(part.text) -%}
+        {%- if said.startswith('⟦') -%}{%- set run.letters = run.letters ~ part.text -%}
+        {%- else -%}
+          {%- if run.letters -%}{%- set a.out = a.out + [spell_mark(run.letters)] -%}{%- set run.letters = '' -%}{%- endif -%}
+          {%- set a.out = a.out + [said] -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {%- if run.letters -%}{%- set a.out = a.out + [spell_mark(run.letters)] -%}{%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- set kept = namespace(p=[]) -%}
+{%- for item in a.out -%}{%- if item -%}{%- set kept.p = kept.p + [item] -%}{%- endif -%}{%- endfor -%}
+{{ kept.p | join(' ') }}
+{%- endmacro -%}
+
+{#- web and mail addresses, file names and paths: the dots, slashes, underscores and @ are spoken. The ending is a
+    word when the table says so ("dot com") and letters otherwise ("dot P D F") -#}
+{#- the ending of a file name: a dot, a letter, up to nine letters or figures; a part of the name that leaves an
+    ending after it. So the name stops before its last possible ending, as in dizione, and a name with no possible
+    ending is no match at all (the search goes on inside it: "1.0bpmhttp://...") -#}
+{%- set FILE_ENDING = '%.[A-Za-z][A-Za-z0-9]{0,9}(?![%w_%-])' -%}
+{%- set FILE_PART = '%.[%w_%-]+(?=(?:(?!' ~ FILE_ENDING ~ ')%.[%w_%-]+)*' ~ FILE_ENDING ~ ')' -%}
+{%- macro nz_address(text) -%}
+{%- set o = namespace(s='') -%}
+{%- for m in tts_norm_scan(text, [
+    ['url',  "(?:https?://|www%.)[^%s<>\"']+"],
+    ['mail', "[%w_.+%-]+@[%w_%-]+(?:%.[%w_%-]+)+"],
+    ['file', "(?<![%w_@./%-])(/?(?:[%w_~%-]+/)+)?([%w_%-]+(?:" ~ FILE_PART ~ ")*)%.([A-Za-z][A-Za-z0-9]{0,9})(?![%w_%-])(/[^%s<>\"']*)?"],
+]) -%}
+  {%- set said = namespace(v=m.text) -%}
+  {%- if m.rule -%}
+    {%- set ok = namespace(v=true) -%}
+    {%- if m.rule == 'file' -%}
+      {%- set stem = m.groups[1] -%}{%- set ending = m.groups[2] -%}
+      {%- set listed = tts_dict('endings', ending | lower) is not none -%}
+      {%- set marked = m.groups[0] or m.groups[3] or '_' in stem -%}
+      {#- "the end.Then": a missing space, not a file -#}
+      {%- set ok.v = listed or (marked and ending | length <= 5 and (ending == ending | lower or ending == ending | upper) and not is_word(ending | lower)) -%}
+    {%- endif -%}
+    {%- if ok.v -%}
+      {#- punctuation of the sentence, not of the address -#}
+      {%- set body = tts_norm_sub(m.text, '[.,;:!?)]+$', '') -%}
+      {%- set core = tts_norm_sub(tts_norm_sub(tts_norm_sub(body, '^https?://', ''), '^www%.', ''), '/+$', '') -%}
+      {%- set said.v = ' ' ~ spoken_address(core) ~ ' ' ~ m.text[body | length:] -%}
+    {%- endif -%}
+  {%- endif -%}
+  {%- set o.s = o.s ~ said.v -%}
+{%- endfor -%}
+{{ o.s }}
+{%- endmacro -%}
+
+{#- the text of one sentence with every non-word written out, marks included (normalize.py: rewrite). The text has
+    had its accents, quotation marks, brackets and inline pronunciations dealt with -#}
+{%- macro nz_rewrite(text) -%}
+{%- set text = nz_address(text) -%}
+{%- set text = tts_norm_sub(text | replace('→', ' to '), '[🀀-🫿☀-➿←-⇿⬀-⯿️‍⃣]+', ' ') -%}
+{#- faces are not read and make no pause: ":)", ";-)", "<3", "^_^"; a heart joined to
+    a word of two letters or more: "you<3" -#}
+{%- set o = namespace(s='', pos=0) -%}
+{%- for m in tts_norm_scan(text, [
+    ['mouth', "(?<![A-Za-z0-9])([:;=]['^%-]?)([DPpOo3|/\\*><]+)"],
+    ['face',  "(?<![A-Za-z0-9])(?:[)(][%-%^']?[:;=]|<3+|</3|%^_?%^|-_-|[oO]_[oO]|>_<|T_T|\\o/|:'[()])(?![A-Za-z0-9])|[:;]['^%-]?[)(]+|(?<![A-Za-z0-9)])=['^%-]?[)(]+|=['^%-]?[)(]+(?![A-Za-z0-9(.$%-])"],
+    ['heart', '(?<=[A-Za-z])<3+(?![.,]?%d)'],
+]) -%}
+  {%- if m.rule == 'mouth' -%}
+    {#- the longest mouth after which no letter or figure comes -#}
+    {%- set run = m.groups[1] -%}
+    {%- set after = text[o.pos + m.text | length:] -%}
+    {%- set cutm = namespace(n=0) -%}
+    {%- for k in range(run | length, 0, -1) -%}
+      {%- if not cutm.n and not starts(run[k:] ~ after, '[A-Za-z0-9]') -%}{%- set cutm.n = k -%}{%- endif -%}
+    {%- endfor -%}
+    {%- set o.s = o.s ~ ((' ' ~ run[cutm.n:]) if cutm.n else m.text) -%}
+  {%- else -%}
+    {%- set o.s = o.s ~ (' ' if m.rule == 'face' or (m.rule == 'heart' and ends(text[:o.pos], '[A-Za-z][A-Za-z]')) else m.text) -%}
+  {%- endif -%}
+  {%- set o.pos = o.pos + m.text | length -%}
+{%- endfor -%}
+{%- set text = o.s -%}
+{%- set text = tts_norm_sub(text, '%.%.%.+', '…') -%}
+{%- set text = tts_norm_sub(text, '(?<=%d)%s-%s(?=%d[%d.,]*%s?=)', ' minus ') -%}
+{#- 10-3=7, not the date 2024-11-15= -#}
+{%- set text = tts_norm_sub(text, '(?<![%d.,/%-])(%d[%d.,]*)-(?=%d[%d.,]*=)', '%1 minus ') -%}
+{#- a hyphen between spaces or two hyphens are a dash -#}
+{%- set text = tts_norm_sub(text, '%-%-+|%s%-%s', '—') -%}
+{%- set text = tts_norm_sub(text, '(?i)(?<![%w_])w/o(?![%w_])', ' without ') -%}
+{%- set text = tts_norm_sub(text, '(?i)(?<![%w_])w/(?=%s|$)', ' with ') -%}
+{%- set text = tts_norm_sub(text, '(?i)(?<![%w_])n/a(?![%w_])', ' not applicable ') -%}
+{%- set text = text | replace("'n'", " 'n ") -%}
+{%- set text = nz_mark_comparisons(text) if has(text, '[<>≥≤≠]|!=') else text -%}
+{#- most text has no digit and skips these passes -#}
+{%- set text = nz_figures(text) if has(text, '%d') else text -%}
+{{ nz_signs(text) }}
+{%- endmacro -%}
+
+{#- ---------- sentences (tiny-voca infer.py: sentences): each one is read by itself ----------
+    no break after a title or an initial, and only before a capital or a figure -#}
+{%- set whole = tts_norm_sub(messages[0].content if messages is defined and messages else '', '%s+', ' ') | trim -%}
+{#- a text that ends without a mark gets a full stop: without one the audio breaks off (infer.py: finished).
+    A face or another sign after the last word is no mark ("see you :)"), a comma or a colon is one -#}
+{%- set last = namespace(w='') -%}
+{%- for seg in tts_norm_scan(whole, '%S+') -%}{%- if seg.rule -%}{%- set last.w = seg.text -%}{%- endif -%}{%- endfor -%}
+{%- if last.w -%}
+  {%- set lw = namespace(word=false, stop=false) -%}
+  {%- for seg in tts_norm_scan(last.w, [['word', '[%w²³¹¼½¾⅐-⅞]'], ['stop', '[.!?…]']]) -%}
+    {%- if seg.rule == 'word' -%}{%- set lw.word = true -%}{%- elif seg.rule == 'stop' -%}{%- set lw.stop = true -%}{%- endif -%}
+  {%- endfor -%}
+  {%- set closed = tts_norm_scan(last.w, '[.!?…,;:]["\'”’)%]»]*$') -%}
+  {%- set marked = (closed | length > 0 and closed[-1].rule is not none) if lw.word else (lw.stop or last.w in [',', ';', ':']) -%}
+  {%- if not marked -%}{%- set whole = whole ~ '.' -%}{%- endif -%}
+{%- endif -%}
+{%- set sp = namespace(parts=[], cur='') -%}
+{%- for seg in tts_norm_scan(whole,
+                             [['end', '([.!?…]["\')%]]?)%s+(?=["\'(%[]?[A-Z0-9])']]) -%}
+  {%- if seg.rule -%}
+    {%- set sp.cur = sp.cur ~ seg.groups[0] -%}
+    {%- set held = tts_norm_scan(sp.cur, '(?i)(?<![A-Za-z0-9_])(?:mrs|mr|ms|dr|prof|sr|jr|st|vs|etc|no|inc|ltd|co|e%.g|i%.e|a%.m|p%.m|[a-z])%.$') -%}
+    {%- if held and held[-1].rule -%}{%- set sp.cur = sp.cur ~ ' ' -%}
+    {%- else -%}{%- set sp.parts = sp.parts + [sp.cur] -%}{%- set sp.cur = '' -%}
+    {%- endif -%}
+  {%- else -%}{%- set sp.cur = sp.cur ~ seg.text -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- if sp.cur -%}{%- set sp.parts = sp.parts + [sp.cur] -%}{%- endif -%}
+{%- set spoken_text = namespace(s='') -%}
+{%- for sentence in sp.parts -%}
+{%- if has(sentence, '[%w²³¹¼½¾⅐-⅞]') -%}
+{#- "1½" before the fraction is taken apart, "m²" before the power becomes a word -#}
+{%- set text = nz_vulgar(sentence) -%}
+{%- set text = nz_area(text, false) | replace('²', ' squared ') | replace('³', ' cubed ') -%}
+{#- compatibility forms (NFKC, a character at a time): "…" is three full stops, "ﬁ" is "fi" -#}
+{%- set forms = namespace(s='') -%}
+{%- for seg in tts_norm_scan(text, '[^ -~%s]') -%}
+  {%- set form = tts_dict('nfkc', seg.text) if seg.rule else none -%}
+  {%- set forms.s = forms.s ~ (form if form is not none else seg.text) -%}
+{%- endfor -%}
+{#- the marks of the text rules and control characters are not part of a text -#}
+{%- set text = tts_norm_sub(forms.s, '[⟦⟧⟪⟫⟡⟐ⓐ-ⓩ\x01]', '') | replace('⁄', '/') | replace('−', ' minus ') -%}
+{#- accented latin letters: a few words keep their reading, the others lose the accent ("café" is in the dictionary as "cafe") -#}
+{%- set fold = namespace(s='') -%}
+{%- for seg in tts_norm_scan(text, [
+    ['decides', '%b([Rr][éÉ][Ss][Uu][Mm][éÉ]|[Rr][Ee][Ss][Uu][Mm][éÉ]|[Ee][Xx][Pp][Oo][Ss][éÉ]|[Rr][Oo][Ss][éÉ]|[Pp][âÂ][Tt][éÉ]|[Mm][Aa][Tt][éÉ]|[Ss][Aa][Kk][éÉ]|[Ll][Aa][Mm][éÉ])([Ss]?)%b'],
+    ['letter',  '[^ -~%s]'],
+]) -%}
+  {%- if seg.rule == 'decides' -%}
+    {%- set fold.s = fold.s ~ '{' ~ ACCENT_DECIDES[seg.groups[0] | lower | replace('É', 'é') | replace('Â', 'â')] ~ (' Z' if seg.groups[1] else '') ~ '}' -%}
+  {%- elif seg.rule == 'letter' -%}
+    {%- set plain = tts_dict('accents', seg.text) -%}
+    {%- set fold.s = fold.s ~ (plain if plain is not none else seg.text) -%}
+  {%- else -%}{%- set fold.s = fold.s ~ seg.text -%}
+  {%- endif -%}
+{%- endfor -%}
+{#- 10–15 is a range, not a pause -#}
+{%- set text = nz_day_range(tts_norm_sub(fold.s, '(?<=%d)–(?=%d)', '-')) -%}
+{%- set text = text | replace('‘', "'") | replace('’', "'") | replace('‚', "'") | replace('‛', "'") | replace('`', "'") | replace('´', "'")
+                    | replace('“', '"') | replace('”', '"') | replace('„', '"') | replace('‟', '"') | replace('«', '"') | replace('»', '"')
+                    | replace('–', '—') | replace('―', '—') | replace('[', '(') | replace(']', ')') -%}
+{#- inline pronunciations become a mark, the other braces are read like brackets -#}
+{%- set il = namespace(s='', list=[]) -%}
+{%- for seg in tts_norm_scan(text, [['inline', "([A-Za-z']*)%{([^{}]*)%}"]]) -%}
+  {%- set ph = inline_phones(seg.groups[1]) if seg.rule and il.list | length < 26 else '' -%}
+  {%- if ph -%}
+    {%- set il.s = il.s ~ ' ⟪' ~ INLINE_KEYS[il.list | length] ~ '⟫ ' -%}
+    {%- set il.list = il.list + [{'w': seg.groups[0] | lower, 'r': seg.groups[0], 'a': false, 'spell': false, 'ps': ph}] -%}
+  {%- else -%}{%- set il.s = il.s ~ seg.text | replace('{', '(') | replace('}', ')') -%}
+  {%- endif -%}
+{%- endfor -%}
+{#- figures, signs and abbreviations in words -#}
+{%- set text = nz_rewrite(il.s) -%}
+{#- a text mostly in capitals: its capitals do not mark initialisms -#}
+{%- set caps = namespace(n=0, up=0) -%}
+{%- for seg in tts_norm_scan(text, '[A-Za-z][A-Za-z]+') -%}
+  {%- if seg.rule -%}{%- set caps.n = caps.n + 1 -%}{%- if seg.text == seg.text | upper -%}{%- set caps.up = caps.up + 1 -%}{%- endif -%}{%- endif -%}
+{%- endfor -%}
+{%- set all_caps = caps.n >= 3 and 5 * caps.up >= 3 * caps.n -%}
+
+{%- set segs = tts_norm_scan(text, [
+    ['spelled', '⟦([A-Za-z ]+)⟧'],
+    ['inline',  '⟪(.)⟫'],
+    ['aword',   "(?i)'(?:em|tis|twas|til|cause|bout|round|n)(?![A-Za-z]|'[A-Za-z])"],
+    ['word',    "[A-Za-z]+(?:'[A-Za-z]+)*"],
+    ['number',  '%d+'],
+    ['join',    '(?<=%S)-(?=%w)'],
+    ['hyphen',  '-'],
+    ['inside',  "(?<=%w)'(?=%w)(?![A-Za-z])"],
+    ['punct',   '[,.?!;:"\'()—…]'],
+]) -%}
+{#- attach: a hyphen joins the next word; previous: the word before as written; fresh: a sentence starts here;
+    short: where "Ss" or "Zz" stands apart (perhaps a hiss); replies: where a chat spelling read only as a reply stands -#}
+{%- set it = namespace(items=[], attach=false, previous='', fresh=true, short=[], replies=[]) -%}
+{%- for seg in segs -%}
+  {%- set k = loop.index0 -%}
+  {%- set t = namespace(new=[], word='', done=false) -%}
+  {%- if seg.rule == 'join' -%}
+    {%- set it.attach = it.items | length > 0 and it.items[-1].w is defined -%}
+  {%- elif seg.rule == 'hyphen' -%}
+    {%- set it.attach = false -%}
+  {%- elif seg.rule == 'punct' -%}
+    {%- set it.items = it.items + [{'p': seg.text}] -%}
+    {%- if seg.text in '.!?;…' -%}{%- set it.fresh = true -%}{%- endif -%}
+    {%- set it.attach = false -%}
+  {%- elif seg.rule -%}
+    {%- if seg.rule == 'word' -%}{%- set t.word = seg.text -%}
+    {%- elif seg.rule == 'aword' -%}{%- set t.word = seg.text if is_word(seg.text | lower) else seg.text[1:] -%}
+    {%- elif seg.rule == 'inline' -%}
+      {%- for key in INLINE_KEYS -%}{%- if key == seg.groups[0] and loop.index0 < il.list | length -%}{%- set t.new = [il.list[loop.index0]] -%}{%- endif -%}{%- endfor -%}
+    {%- elif seg.rule == 'spelled' -%}
+      {%- set t.new = [{'w': seg.groups[0] | replace(' ', '') | lower, 'r': seg.groups[0], 'a': false, 'spell': true, 'ps': ''}] -%}
+    {%- elif seg.rule == 'number' -%}
+      {%- for x in number_words(seg.text).split(' ') -%}{%- if x -%}{%- set t.new = t.new + [{'w': x, 'r': seg.text, 'a': false, 'spell': false, 'ps': ''}] -%}{%- endif -%}{%- endfor -%}
+    {%- endif -%}
+    {%- if t.word -%}
+      {#- one run of letters and apostrophes as written -#}
+      {%- set raw = t.word -%}
+      {%- set lower = raw | lower -%}
+      {%- set chat = tts_dict('chat', lower) -%}
+      {%- set possessive = lower.endswith("'s") -%}
+      {%- set stem = raw[:-2] if possessive else raw -%}
+      {%- set n = stem | length -%}
+      {%- if chat is not none and (raw | length > 1 or raw == lower) and not chat[1] -%}
+        {%- if chat[0] != '-' -%}
+          {%- for part in chat[0].split(' ') -%}
+            {%- set t.new = t.new + [{'w': part[1:] | lower, 'r': raw, 'a': false, 'spell': true, 'ps': ''} if part.startswith('*')
+                                     else {'w': part | lower, 'r': part, 'a': false, 'spell': false, 'ps': ''}] -%}
+          {%- endfor -%}
+        {%- endif -%}
+      {%- elif raw in ROMAN and it.previous and it.previous[:1] in UPPER -%}
+        {#- "World War II", "Henry VIII" -#}
+        {%- set said = cardinal(ROMAN[raw]) if it.previous | lower in CARDINAL_AFTER else 'the ' ~ ordinal(ROMAN[raw] | string) -%}
+        {%- for x in said.split(' ') -%}{%- set t.new = t.new + [{'w': x, 'r': raw, 'a': false, 'spell': false, 'ps': ''}] -%}{%- endfor -%}
+      {%- elif n == 1 -%}
+        {#- "A" is the article unless it labels something: "Plan A.", "vitamin A" -#}
+        {%- set label = stem == 'A' and it.previous and (not ahead(segs, k, '%s*[A-Za-z]') or (not it.fresh and it.previous | lower in LABELLED)) -%}
+        {%- set t.new = [{'w': lower, 'r': raw, 'a': false, 'spell': not (stem in ['a', 'A', 'I', 'i'] and not possessive and not label), 'ps': ''}] -%}
+      {%- elif n > 2 and stem[:1] in 'SsZz' and lower | replace(lower[:1], '') == '' and (all_caps or not is_upper(stem)) -%}
+        {#- "Sss", "Zzzz": a hiss, a snore -#}
+        {%- set t.new = [{'w': lower, 'r': raw, 'a': false, 'spell': false, 'ps': lower[:1]}] -%}
+      {%- else -%}
+        {%- set known_stem = is_word(stem | lower) -%}
+        {%- if is_upper(stem) and "'" not in stem and n >= 2 and n <= 5 and (not all_caps or not known_stem) and (stem in INITIALISMS or not known_stem) -%}
+          {%- set t.new = [{'w': lower, 'r': raw, 'a': false, 'spell': true, 'ps': ''}] -%}{%- set t.done = true -%}
+        {%- endif -%}
+        {#- iOS, macOS, eSIM: small letters, then capitals that are named. The dictionary's "ios" is another word -#}
+        {%- set capitals = fullmatch(raw, "[a-z]+(?:[A-Z][a-z]+)*[A-Z]{2,}(?:'s)?") -%}
+        {%- if not t.done and (capitals or not is_word(lower)) -%}
+          {%- if not capitals -%}
+            {%- for candidate in unstretched(lower).split(' ') -%}
+              {%- if not t.done and candidate and is_word(candidate) -%}
+                {%- set t.new = [{'w': candidate, 'r': raw, 'a': false, 'spell': false, 'ps': ''}] -%}{%- set t.done = true -%}
+              {%- endif -%}
+            {%- endfor -%}
+          {%- endif -%}
+          {%- if not t.done -%}
+            {#- iPhone, YouTube, JavaScript -#}
+            {%- set parts = tts_norm_scan(raw, "[A-Z]?[a-z']+|(?:[A-Z](?![a-z]))+") -%}
+            {%- set whole = namespace(v=true) -%}
+            {%- for part in parts -%}{%- if not part.rule -%}{%- set whole.v = false -%}{%- endif -%}{%- endfor -%}
+            {%- if whole.v and parts | length > 1 -%}
+              {%- for p in parts -%}
+                {%- set part = p.text -%}
+                {%- set named = capitals and is_upper(part) and part in INITIALISMS -%}
+                {%- set spelled = part | length == 1 or named or (is_upper(part) and not is_word(part | lower)) -%}
+                {%- set spelled = true if spelled else false -%}
+                {%- if capitals and t.new and t.new[-1].spell and (spelled or part == "'s") -%}
+                  {%- set before = t.new[-1] -%}
+                  {%- set t.new = t.new[:-1] + [{'w': before.w ~ part | lower, 'r': before.r ~ part, 'a': before.a, 'spell': true, 'ps': ''}] -%}
+                {%- else -%}
+                  {%- set t.new = t.new + [{'w': part | lower, 'r': part, 'a': t.new | length > 0, 'spell': spelled, 'ps': ''}] -%}
+                {%- endif -%}
+              {%- endfor -%}
+              {%- set t.done = true -%}
+            {%- endif -%}
+          {%- endif -%}
+        {%- endif -%}
+        {%- if not t.done -%}{%- set t.new = [{'w': lower, 'r': raw, 'a': false, 'spell': false, 'ps': ''}] -%}{%- endif -%}
+      {%- endif -%}
+      {%- set it.previous = raw -%}
+      {%- set kb = (k - 2) if seg.rule == 'word' and k > 0 and segs[k - 1].rule == 'punct' and segs[k - 1].text == "'" else (k - 1) -%}
+      {%- set before = segs[kb].text[-1:] if kb >= 0 else ' ' -%}
+      {%- set apart = before in [' ', '\t', '\n', '\r', '"', "'"] -%}
+      {%- if raw in ['Ss', 'ss', 'Zz', 'zz'] and t.new | length == 1 and (apart or before == '(') and ahead(segs, k, '[.!?…,;:—"\')]*%s') -%}
+        {%- set it.short = it.short + [it.items | length] -%}
+      {%- endif -%}
+      {%- if chat is not none and chat[1] and (raw | length > 1 or raw == lower) and t.new | length == 1 and apart
+            and ahead(segs, k, '[.?…,;—]*["\']?%s|!+["\']?%s*$') -%}
+        {%- set it.replies = it.replies + [it.items | length] -%}
+      {%- endif -%}
+    {%- endif -%}
+    {%- if t.new and it.attach -%}
+      {%- set y = t.new[0] -%}
+      {%- set t.new = [{'w': y.w, 'r': y.r, 'a': true, 'spell': y.spell, 'ps': y.ps}] + t.new[1:] -%}
+    {%- endif -%}
+    {%- set it.items = it.items + t.new -%}
+    {%- set it.attach = false -%}
+    {%- set it.fresh = it.fresh and not t.new -%}
+  {%- endif -%}
+{%- endfor -%}
+{#- "Ss!" and "Sh, ss, tsk" are a hiss. Beside an ordinary word the two letters stay letters ("the ss", "mm:ss");
+    quotation marks and brackets do not part them from that word -#}
+{%- for place in it.short -%}
+  {%- set r = namespace(first=place, last=place + 1, sounds=true) -%}
+  {%- for _ in range(place) -%}
+    {%- if r.first > 0 and (it.items[r.first - 1].w is defined or it.items[r.first - 1].p in ['"', "'", '(', ')']) -%}{%- set r.first = r.first - 1 -%}{%- endif -%}
+  {%- endfor -%}
+  {%- for _ in range(it.items | length - place) -%}
+    {%- if r.last < it.items | length and (it.items[r.last].w is defined or it.items[r.last].p in ['"', "'", '(', ')']) -%}{%- set r.last = r.last + 1 -%}{%- endif -%}
+  {%- endfor -%}
+  {%- for x in it.items[r.first:r.last] -%}
+    {%- if x.w is defined and not (x.w in SOUNDS or (x.ps and x.w and x.w | replace(x.w[:1], '') == '')) -%}{%- set r.sounds = false -%}{%- endif -%}
+  {%- endfor -%}
+  {%- if r.sounds -%}
+    {%- set y = it.items[place] -%}
+    {%- set it.items = it.items[:place] + [{'w': y.w, 'r': y.r, 'a': y.a, 'spell': false, 'ps': y.w[:1]}] + it.items[place + 1:] -%}
+  {%- endif -%}
+{%- endfor -%}
+{#- "k" is "okay" as a reply by itself ("k", "k, thanks"); beside a word or a figure it is the letter, and between two
+    commas, or with a single letter next to it across a comma, it is one of a list ("i, j, k") -#}
+{%- for place in it.replies | reverse -%}
+  {%- set r = namespace(reply=true, marks=[]) -%}
+  {%- for step in [-1, 1] -%}
+    {%- set at = namespace(i=place + step) -%}
+    {%- for _ in it.items -%}
+      {%- if at.i >= 0 and at.i < it.items | length and it.items[at.i].p is defined and it.items[at.i].p in ['"', "'", '(', ')'] -%}{%- set at.i = at.i + step -%}{%- endif -%}
+    {%- endfor -%}
+    {%- if at.i < 0 or at.i >= it.items | length -%}{%- set r.marks = r.marks + [''] -%}
+    {%- elif it.items[at.i].w is defined -%}{%- set r.reply = false -%}
+    {%- else -%}
+      {%- set r.marks = r.marks + [it.items[at.i].p] -%}
+      {%- set j = at.i + step -%}
+      {%- if it.items[at.i].p == ',' and j >= 0 and j < it.items | length and it.items[j].w is defined and it.items[j].w | length == 1 and it.items[j].w != 'i' -%}
+        {%- set r.reply = false -%}
+      {%- endif -%}
+    {%- endif -%}
+  {%- endfor -%}
+  {%- if r.reply and r.marks != [',', ','] -%}
+    {%- set y = it.items[place] -%}
+    {%- set said = namespace(new=[]) -%}
+    {%- set chat = tts_dict('chat', y.r | lower) -%}
+    {%- if chat[0] != '-' -%}
+      {%- for part in chat[0].split(' ') -%}
+        {%- set said.new = said.new + [{'w': part[1:] | lower, 'r': y.r, 'a': false, 'spell': true, 'ps': ''} if part.startswith('*')
+                                       else {'w': part | lower, 'r': part, 'a': false, 'spell': false, 'ps': ''}] -%}
+      {%- endfor -%}
+    {%- endif -%}
+    {%- set it.items = it.items[:place] + said.new + it.items[place + 1:] -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{#- ---------- clauses and marks -> symbols; repeated marks are collapsed ---------- -#}
+{#- the text as the homograph rules see it -#}
+{%- set wr = namespace(toks=[]) -%}
+{%- for x in it.items -%}{%- set wr.toks = wr.toks + [x.p if x.p is defined else (x.r if x.r else 'x')] -%}{%- endfor -%}
+{%- set out = namespace(s='', words=[], places=[], last='', phones=false) -%}
+{%- for x in it.items + [{'p': ''}] -%}
+  {%- if x.p is defined -%}
+    {%- if out.words -%}
+      {%- set said = clause(out.words, wr.toks, out.places) -%}
+      {%- set out.words = [] -%}{%- set out.places = [] -%}
+      {%- if said -%}
+        {%- set out.s = out.s ~ (' ' if out.s else '') ~ said -%}
+        {%- set out.last = '' -%}{%- set out.phones = true -%}
+      {%- endif -%}
+    {%- endif -%}
+    {%- if x.p and x.p != out.last -%}
+      {%- set out.s = out.s ~ (' ' if out.s else '') ~ x.p -%}
+      {%- set out.last = x.p -%}
+    {%- endif -%}
+  {%- else -%}
+    {%- set out.words = out.words + [x] -%}{%- set out.places = out.places + [loop.index0] -%}
+  {%- endif -%}
+{%- endfor -%}
+{#- <eos>: the end of an utterance -#}
+{%- if out.s and out.phones -%}{%- set spoken_text.s = spoken_text.s ~ (' ' if spoken_text.s else '') ~ out.s ~ ' <eos>' -%}{%- endif -%}
+{%- endif -%}
+{%- endfor -%}
+{{ spoken_text.s }}

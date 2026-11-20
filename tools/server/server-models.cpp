@@ -294,6 +294,8 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_MODELS_AUTOLOAD");
     preset.unset_option("LLAMA_ARG_CONNECT");
     preset.unset_option("LLAMA_ARG_CONNECT_CODE");
+    preset.unset_option("LLAMA_ARG_MCP_SERVERS_CONFIG");
+    preset.unset_option("LLAMA_ARG_MCP_SERVERS_JSON");
     if (unset_model_args) {
         preset.unset_option("LLAMA_ARG_MODEL");
         preset.unset_option("LLAMA_ARG_SHARD");
@@ -2056,7 +2058,7 @@ void server_models_routes::init_routes() {
             // main instance
             auto res = std::make_unique<server_http_res>();
             json props = {
-                // TODO: add support for this on web UI
+                // TODO: add support for this in Llama Chat
                 {"role",                 "router"},
                 {"max_instances",        params.models_max},
                 {"models_autoload",      params.models_autoload},

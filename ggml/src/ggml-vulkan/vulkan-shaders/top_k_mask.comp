@@ -1,0 +1,95 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_KHR_memory_scope_semantics : enable
+
+// One workgroup per row: fill the row with -inf, then copy the mask cells of the live picks and the extra cells.
+// The op only moves bits, so f16 needs no float16 arithmetic and the score check does not depend on float controls.
+
+layout(constant_id = 0) const uint BLOCK_SIZE = 256;
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform parameter
+{
+    uint n_kv;
+    uint n_top;
+    uint n_pick;
+    uint n_blk;   // 0: a pick is a cell
+    uint n_extra;
+    uint has_score;
+    uint ninf;    // bits of -inf: a 16-bit literal would need shaderInt16
+
+    uint ne1; uint ne2;
+
+    uint m1; uint m2; uint m3;
+    uint nbm1; uint nbm2; uint nbm3;
+    uint nbd1; uint nbd2; uint nbd3;
+
+    uint m_offset;
+    uint k_offset;
+    uint s_offset;
+    uint b_offset;
+    uint e_offset;
+    uint d_offset;
+};
+
+layout(binding = 0, std430) readonly buffer M { MASK_TYPE data_m[]; };
+layout(binding = 1, std430) readonly buffer K { int data_k[]; };
+layout(binding = 2, std430) readonly buffer S { uint data_s[]; };
+layout(binding = 3, std430) readonly buffer B { int data_b[]; };
+layout(binding = 4, std430) readonly buffer E { int data_e[]; };
+// coherent: the fill and the copy of a cell can come from different invocations
+layout(binding = 5, std430) coherent writeonly buffer D { MASK_TYPE data_d[]; };
+
+void keep(const int c, const uint m_row, const uint d_row) {
+    if (c >= 0 && uint(c) < n_kv) {
+        data_d[d_row + uint(c)] = data_m[m_row + uint(c)];
+    }
+}
+
+// score > -inf
+bool is_live(const uint s) {
+    return s != 0xFF800000u && (s & 0x7FFFFFFFu) <= 0x7F800000u;
+}
+
+void main() {
+    const uint tid = gl_LocalInvocationIndex;
+
+    const uint i1 = gl_WorkGroupID.x;
+    const uint i2 = gl_WorkGroupID.y;
+    const uint i3 = gl_WorkGroupID.z;
+
+    const uint row   = i1 + ne1*(i2 + ne2*i3);
+    const uint m_row = m_offset + (i1 % m1)*nbm1 + (i2 % m2)*nbm2 + (i3 % m3)*nbm3;
+    const uint d_row = d_offset + i1*nbd1 + i2*nbd2 + i3*nbd3;
+
+    for (uint i = tid; i < n_kv; i += BLOCK_SIZE) {
+        data_d[d_row + i] = MASK_TYPE(ninf);
+    }
+
+    controlBarrier(gl_ScopeWorkgroup, gl_ScopeWorkgroup, gl_StorageSemanticsBuffer, gl_SemanticsAcquireRelease);
+
+    // one invocation per pick or extra cell; cells kept twice get the same value
+    for (uint i = tid; i < n_top + n_extra; i += BLOCK_SIZE) {
+        if (i >= n_top) {
+            keep(data_e[e_offset + row*n_extra + (i - n_top)], m_row, d_row);
+            continue;
+        }
+
+        const int p = data_k[k_offset + row*n_top + i];
+        if (p < 0 || uint(p) >= n_pick) {
+            continue;
+        }
+        if (has_score != 0 && !is_live(data_s[s_offset + row*n_pick + uint(p)])) {
+            continue;
+        }
+        if (n_blk == 0) {
+            keep(p, m_row, d_row);
+            continue;
+        }
+        for (uint k = 0; k < n_blk; ++k) {
+            keep(data_b[b_offset + uint(p)*n_blk + k], m_row, d_row);
+        }
+    }
+}

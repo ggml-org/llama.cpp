@@ -228,6 +228,15 @@ extern "C" {
         LLAMA_CONTEXT_TYPE_MTP     = 1,
     };
 
+    // the head on the block of a DFlash draft model
+    enum llama_dflash_variant {
+        LLAMA_DFLASH_VARIANT_NONE     = -1, // not a DFlash draft model
+        LLAMA_DFLASH_VARIANT_DFLASH   = 0,
+        LLAMA_DFLASH_VARIANT_DFLASH2  = 1,
+        LLAMA_DFLASH_VARIANT_DSPARK   = 2,
+        LLAMA_DFLASH_VARIANT_LILICORR = 3,
+    };
+
     // TODO: simplify (https://github.com/ggml-org/llama.cpp/pull/9294#pullrequestreview-2286561979)
     typedef struct llama_token_data {
         llama_token id; // token id
@@ -262,6 +271,7 @@ extern "C" {
     //               - if not:        only the last token is output
     //            )
     //
+    // [DEPRECATED] use llama_batch_ext instead
     typedef struct llama_batch {
         int32_t n_tokens;
 
@@ -622,6 +632,17 @@ extern "C" {
     // Get metadata value as a string by index
     LLAMA_API int32_t llama_model_meta_val_str_by_index(const struct llama_model * model, int32_t i, char * buf, size_t buf_size);
 
+    // GGUF metadata arrays of strings
+    // currently, only these keys are support:
+    // - tokenizer.tts_dicts
+    // - tokenizer.tts_dict.*
+
+    // Get the number of elements, or -1 if there is no such array
+    LLAMA_API int32_t llama_model_meta_arr_n(const struct llama_model * model, const char * key);
+
+    // Get element i, owned by the model; nullptr if not found
+    LLAMA_API const char * llama_model_meta_arr_str(const struct llama_model * model, const char * key, int32_t i);
+
     // Get a string describing the model type
     LLAMA_API int32_t llama_model_desc(const struct llama_model * model, char * buf, size_t buf_size);
 
@@ -666,6 +687,9 @@ extern "C" {
     //
     // NextN / speculative draft model queries
     //
+
+    // the DFlash variant the model loader picked from the head of the draft
+    LLAMA_API enum llama_dflash_variant llama_model_dflash_variant(const struct llama_model * model);
 
     // DFlash2 selector: number of candidate tokens the draft keeps per block position from its logits
     // (the packed lattice also holds the top_k x top_k pairwise transition scores); 0 if the model has no selector head
@@ -933,9 +957,10 @@ extern "C" {
     //
     // NOTE: this is a helper function to facilitate transition to the new batch API - avoid using it
     //
-    LLAMA_API struct llama_batch llama_batch_get_one(
+    DEPRECATED(LLAMA_API struct llama_batch llama_batch_get_one(
                   llama_token * tokens,
-                      int32_t   n_tokens);
+                      int32_t   n_tokens),
+            "use llama_batch_ext_init and llama_batch_ext_add_token instead");
 
     // Allocates a batch of tokens on the heap that can hold a maximum of n_tokens
     // Each token can be assigned up to n_seq_max sequence ids
@@ -944,13 +969,15 @@ extern "C" {
     // Otherwise, llama_batch.token will be allocated to store n_tokens llama_token
     // The rest of the llama_batch members are allocated with size n_tokens
     // All members are left uninitialized
-    LLAMA_API struct llama_batch llama_batch_init(
+    DEPRECATED(LLAMA_API struct llama_batch llama_batch_init(
             int32_t n_tokens,
             int32_t embd,
-            int32_t n_seq_max);
+            int32_t n_seq_max),
+            "use llama_batch_ext_init instead");
 
     // Frees a batch of tokens allocated with llama_batch_init()
-    LLAMA_API void llama_batch_free(struct llama_batch batch);
+    DEPRECATED(LLAMA_API void llama_batch_free(struct llama_batch batch),
+            "use llama_batch_ext_free instead");
 
     // Process a batch of tokens.
     // In contrast to llama_decode() - this call does not use KV cache.
@@ -958,9 +985,10 @@ extern "C" {
     // Can store the encoder output internally for later use by the decoder's cross-attention layers.
     //   0 - success
     // < 0 - error. the memory state is restored to the state before this call
-    LLAMA_API int32_t llama_encode(
+    DEPRECATED(LLAMA_API int32_t llama_encode(
             struct llama_context * ctx,
-              struct llama_batch   batch);
+              struct llama_batch   batch),
+            "use llama_process with LLAMA_PROCESS_TYPE_ENCODE instead");
 
     // Process a batch of tokens.
     // Requires the context to have a memory.
@@ -974,9 +1002,10 @@ extern "C" {
     //    2 - aborted     (processed ubatches will remain in the context's memory)
     //   -1 - invalid input batch
     // < -1 - fatal error (processed ubatches will remain in the context's memory)
-    LLAMA_API int32_t llama_decode(
+    DEPRECATED(LLAMA_API int32_t llama_decode(
             struct llama_context * ctx,
-              struct llama_batch   batch);
+              struct llama_batch   batch),
+            "use llama_process with LLAMA_PROCESS_TYPE_DECODE instead");
 
     //
     // Extended batch API

@@ -41,6 +41,8 @@ std::string common_chat_template_generation_prompt_impl(
 
 bool is_lfm2_template(const std::string & src);
 
+bool is_inkling_template(const std::string & src);
+
 common_chat_params common_chat_params_init_cohere2moe(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 
 common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
@@ -54,6 +56,8 @@ common_chat_params common_chat_params_init_gigachat_v3(const common_chat_templat
 common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 
 common_chat_params common_chat_params_init_harmony_xml(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
+
+common_chat_params common_chat_params_init_inkling(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 
 common_chat_params common_chat_params_init_k2_horizon(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 

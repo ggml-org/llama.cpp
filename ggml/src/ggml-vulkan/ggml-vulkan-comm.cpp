@@ -335,7 +335,7 @@ static int ggml_vk_comm_sfd_export(vk_comm_device & d) {
     int fd = -1;
     VkSemaphoreGetFdInfoKHR gi{};
     gi.sType      = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
-    gi.semaphore  = d.sfd.sem;
+    gi.semaphore  = static_cast<VkSemaphore>(d.sfd.sem);
     gi.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
     const VkResult result = d.sfd.get_fd((VkDevice) d.ctx->device->device, &gi, &fd);
     if (result != VK_SUCCESS) {
@@ -348,7 +348,7 @@ static int ggml_vk_comm_sfd_export(vk_comm_device & d) {
 static void ggml_vk_comm_sfd_import(vk_comm_device & d, vk::Semaphore sem, int fd) {
     VkImportSemaphoreFdInfoKHR isi{};
     isi.sType      = VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR;
-    isi.semaphore  = sem;
+    isi.semaphore  = static_cast<VkSemaphore>(sem);
     isi.flags      = VK_SEMAPHORE_IMPORT_TEMPORARY_BIT;
     isi.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
     isi.fd         = fd;
