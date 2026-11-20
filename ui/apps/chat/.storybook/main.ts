@@ -16,7 +16,7 @@ const config: StorybookConfig = {
 		'../tests/stories/**/*.stories.@(js|ts|svelte)',
 		{
 			directory: '../../../lib/ui/tests/stories',
-			files: '{foundations,components,app,models,mockups}/**/*.stories.svelte'
+			files: '{foundations,components,app,models,mockups,voice}/**/*.stories.svelte'
 		}
 	],
 	addons: [

@@ -347,8 +347,10 @@ class AgenticStore {
 
 		console.log(`[AgenticStore] Starting agentic flow with ${tools.length} tools`);
 
-		const normalizedMessages: ApiChatMessageData[] =
-			await ChatService.normalizeMessagesForApi(messages);
+		const normalizedMessages: ApiChatMessageData[] = await ChatService.normalizeMessagesForApi(
+			messages,
+			options.model
+		);
 
 		this.updateSession(conversationId, {
 			currentTurn: 0,

@@ -1154,6 +1154,12 @@ screens. Status lamps, avatars and the round icon buttons in the chat form are f
   (`--sidebar-reveal-x`), taking no taps while the page is aside. The page keeps room under its
   last row (`max-md:pb-safe-24`) so the key never covers it. One per page, only for its main
   action; from `md` up the action stays a button in the header.
+- **Voice clips:** a recorded clip is a round primary play key, its waveform and the time in
+  `caption`: bars in the muted foreground at 40%, the played part in the primary colour, so
+  the clip stays neutral in both modes. The live waveform while recording is as tall as the
+  input's line (24px), the newest level on the right, and holds still with reduced motion. A
+  voice message's transcript opens under the clip on hover, keyboard focus or a tap, and
+  stays in the DOM for screen readers while closed.
 - **Copy feedback:** a copy action turns its icon into a `fg-success` check for 1.5s
   (`COPY_FEEDBACK_RESET_MS`), only when the copy succeeded, then back. The icon pops in with a
   150ms fade and scale, skipped on first render and with reduced motion.

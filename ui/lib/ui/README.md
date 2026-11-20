@@ -44,6 +44,10 @@ beside the apps built on it in `ui/apps`.
   `ModelQuantOptions`, `ModelQuantChip`, `ModelQuantRow`, `ModelDraftSidecars`, `ModelDownloadProgressBar`, plus the formatters and
   `minMemoryTierGb` and `summarizeSizes`, at `@ggml-org/llama-ui/models`. They take model data in and report what the user did out;
   fetching and downloading stay in the app.
+- **Voice UI** (also `@ggml-org/llama-ui/voice`): `VoiceWaveformLive` (the waveform while recording), `VoiceWaveform` (a
+  recorded clip: play, seek, time) and `VoiceTranscriptReveal` (a clip with its transcript, opened on hover, keyboard
+  focus or a tap), plus `formatClipTime` and the waveform math. They take levels, peaks, an audio URL and a transcript
+  in; recording and transcribing stay in the app.
 
 Next: llama.app's model page.
 
