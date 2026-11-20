@@ -1,0 +1,190 @@
+// Rows can be strided. The elements in a row must be contiguous.
+
+config.decl @ggml.rms_norm.lanes : %value: index where [range(%value, 16, 64)]
+config.decl @ggml.rms_norm.vecs : %value: index where [range(%value, 1, 8)]
+
+config.decl @ggml.norm.wg_size : %value: index where [range(%value, 64, 1024), multiple_of(%value, 64)]
+
+target.decl @ggml_wave64
+
+template.decl @ggml.reduce.sum_f32(%value: f32, %lanes: index) -> (f32)
+
+func.def inline @ggml_hrx_rms_norm_load(%src: buffer, %span: index, %base: index, %col: index, %ne0: index, %use: i1) -> (vector<4xf32>) {
+  %c3 = index.constant 3 : index
+  %zero = index.constant 0 : offset
+  %zero4 = vector.splatf 0.0 : vector<4xf32>
+  %view = buffer.view %src[%zero] : buffer -> view<[%span]xf32>
+  %v = scf.if %use -> (vector<4xf32>) {
+    %in_row = index.cmp ult, %col, %ne0 : index
+    %w = scf.if %in_row -> (vector<4xf32>) {
+      %idx = index.add %base, %col : index
+      %off = index.assume %idx [range(%idx, 0, 2147483640)] : index
+      %last = index.add %off, %c3 : index
+      %ok = index.cmp ult, %last, %span : index
+      %x = scf.if %ok -> (vector<4xf32>) {
+        %l = vector.load %view[%off] : view<[%span]xf32> -> vector<4xf32>
+        scf.yield %l : vector<4xf32>
+      } else {
+        scf.yield %zero4 : vector<4xf32>
+      }
+      scf.yield %x : vector<4xf32>
+    } else {
+      scf.yield %zero4 : vector<4xf32>
+    }
+    scf.yield %w : vector<4xf32>
+  } else {
+    scf.yield %zero4 : vector<4xf32>
+  }
+  func.return %v : vector<4xf32>
+}
+
+func.def inline @ggml_hrx_rms_norm_store(%dst: buffer, %span: index, %base: index, %col: index, %ne0: index, %use: i1, %v: vector<4xf32>, %scale: vector<4xf32>) {
+  %c3 = index.constant 3 : index
+  %zero = index.constant 0 : offset
+  %view = buffer.view %dst[%zero] : buffer -> view<[%span]xf32>
+  scf.if %use {
+    %in_row = index.cmp ult, %col, %ne0 : index
+    scf.if %in_row {
+      %idx = index.add %base, %col : index
+      %off = index.assume %idx [range(%idx, 0, 2147483640)] : index
+      %last = index.add %off, %c3 : index
+      %ok = index.cmp ult, %last, %span : index
+      scf.if %ok {
+        %y = vector.mulf %v, %scale : vector<4xf32>
+        vector.store %y, %view[%off] : vector<4xf32>, view<[%span]xf32>
+      }
+    }
+  }
+  func.return
+}
+
+func.def inline @ggml_hrx_rms_norm_sq(%acc: f32, %v: vector<4xf32>) -> (f32) {
+  %sq = vector.mulf %v, %v : vector<4xf32>
+  %r = vector.reduce<addf> %sq, %acc : vector<4xf32>, f32
+  func.return %r : f32
+}
+
+kernel.def target(@ggml_wave64) export("ggml_rms_norm_f32_rows") @ggml_rms_norm_f32_rows(%groups: index) {
+  %one = index.constant 1 : index
+  %wg_size = config.get @ggml.norm.wg_size : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%wg_size, %one, %one) : index
+} launch(%rows_in: index, %ne0_in: index, %ne1_in: index, %ne2_in: index, %s1_in: index, %s2_in: index, %s3_in: index, %src_span_in: index, %d1_in: index, %d2_in: index, %d3_in: index, %dst_span_in: index, %eps_bits: index, %src: buffer, %dst: buffer) {
+  // The caller checks these ranges. ne0 must be a multiple of 4.
+  %rows = index.assume %rows_in [range(%rows_in, 1, 2147483647)] : index
+  %ne0 = index.assume %ne0_in [range(%ne0_in, 4, 2147483644)] : index
+  %ne1 = index.assume %ne1_in [range(%ne1_in, 1, 2147483647)] : index
+  %ne2 = index.assume %ne2_in [range(%ne2_in, 1, 2147483647)] : index
+  %s1 = index.assume %s1_in [range(%s1_in, 0, 2147483647)] : index
+  %s2 = index.assume %s2_in [range(%s2_in, 0, 2147483647)] : index
+  %s3 = index.assume %s3_in [range(%s3_in, 0, 2147483647)] : index
+  %src_span = index.assume %src_span_in [range(%src_span_in, 1, 2147483647)] : index
+  %d1 = index.assume %d1_in [range(%d1_in, 0, 2147483647)] : index
+  %d2 = index.assume %d2_in [range(%d2_in, 0, 2147483647)] : index
+  %d3 = index.assume %d3_in [range(%d3_in, 0, 2147483647)] : index
+  %dst_span = index.assume %dst_span_in [range(%dst_span_in, 1, 2147483647)] : index
+  %lanes = config.get @ggml.rms_norm.lanes : index
+  %vecs = config.get @ggml.rms_norm.vecs : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c5 = index.constant 5 : index
+  %c6 = index.constant 6 : index
+  %c7 = index.constant 7 : index
+  %wg_size = config.get @ggml.norm.wg_size : index
+  %group = kernel.workgroup.id<x> : index
+  %item = kernel.workitem.id<x> : index
+  %rows_per_group = index.div %wg_size, %lanes : index
+  %group_row0 = index.mul %group, %rows_per_group : index
+  %local_row = index.div %item, %lanes : index
+  %lane = index.rem %item, %lanes : index
+  %row_raw = index.add %group_row0, %local_row : index
+  %row = index.assume %row_raw [range(%row_raw, 0, 2147483646)] : index
+  %row_ok = index.cmp ult, %row, %rows : index
+
+  %i1 = index.rem %row, %ne1 : index
+  %t0 = index.div %row, %ne1 : index
+  %i2 = index.rem %t0, %ne2 : index
+  %i3 = index.div %t0, %ne2 : index
+  %so1 = index.mul %i1, %s1 : index
+  %so2 = index.mul %i2, %s2 : index
+  %so3 = index.mul %i3, %s3 : index
+  %so12 = index.add %so1, %so2 : index
+  %src_base = index.add %so12, %so3 : index
+  %do1 = index.mul %i1, %d1 : index
+  %do2 = index.mul %i2, %d2 : index
+  %do3 = index.mul %i3, %d3 : index
+  %do12 = index.add %do1, %do2 : index
+  %dst_base = index.add %do12, %do3 : index
+
+  %lane_col = index.mul %lane, %c4 : index
+  %step = index.mul %lanes, %c4 : index
+  %col0 = index.add %lane_col, %c0 : index
+  %col1 = index.add %col0, %step : index
+  %col2 = index.add %col1, %step : index
+  %col3 = index.add %col2, %step : index
+  %col4 = index.add %col3, %step : index
+  %col5 = index.add %col4, %step : index
+  %col6 = index.add %col5, %step : index
+  %col7 = index.add %col6, %step : index
+  %k1 = index.cmp ult, %c1, %vecs : index
+  %k2 = index.cmp ult, %c2, %vecs : index
+  %k3 = index.cmp ult, %c3, %vecs : index
+  %k4 = index.cmp ult, %c4, %vecs : index
+  %k5 = index.cmp ult, %c5, %vecs : index
+  %k6 = index.cmp ult, %c6, %vecs : index
+  %k7 = index.cmp ult, %c7, %vecs : index
+  %u1 = scalar.andi %row_ok, %k1 : i1
+  %u2 = scalar.andi %row_ok, %k2 : i1
+  %u3 = scalar.andi %row_ok, %k3 : i1
+  %u4 = scalar.andi %row_ok, %k4 : i1
+  %u5 = scalar.andi %row_ok, %k5 : i1
+  %u6 = scalar.andi %row_ok, %k6 : i1
+  %u7 = scalar.andi %row_ok, %k7 : i1
+  %v0 = func.call @ggml_hrx_rms_norm_load(%src, %src_span, %src_base, %col0, %ne0, %row_ok) : (buffer, index, index, index, index, i1) -> (vector<4xf32>)
+  %v1 = func.call @ggml_hrx_rms_norm_load(%src, %src_span, %src_base, %col1, %ne0, %u1) : (buffer, index, index, index, index, i1) -> (vector<4xf32>)
+  %v2 = func.call @ggml_hrx_rms_norm_load(%src, %src_span, %src_base, %col2, %ne0, %u2) : (buffer, index, index, index, index, i1) -> (vector<4xf32>)
+  %v3 = func.call @ggml_hrx_rms_norm_load(%src, %src_span, %src_base, %col3, %ne0, %u3) : (buffer, index, index, index, index, i1) -> (vector<4xf32>)
+  %v4 = func.call @ggml_hrx_rms_norm_load(%src, %src_span, %src_base, %col4, %ne0, %u4) : (buffer, index, index, index, index, i1) -> (vector<4xf32>)
+  %v5 = func.call @ggml_hrx_rms_norm_load(%src, %src_span, %src_base, %col5, %ne0, %u5) : (buffer, index, index, index, index, i1) -> (vector<4xf32>)
+  %v6 = func.call @ggml_hrx_rms_norm_load(%src, %src_span, %src_base, %col6, %ne0, %u6) : (buffer, index, index, index, index, i1) -> (vector<4xf32>)
+  %v7 = func.call @ggml_hrx_rms_norm_load(%src, %src_span, %src_base, %col7, %ne0, %u7) : (buffer, index, index, index, index, i1) -> (vector<4xf32>)
+
+  %c0_f32 = scalar.constant 0.0 : f32
+  %q0 = func.call @ggml_hrx_rms_norm_sq(%c0_f32, %v0) : (f32, vector<4xf32>) -> (f32)
+  %q1 = func.call @ggml_hrx_rms_norm_sq(%q0, %v1) : (f32, vector<4xf32>) -> (f32)
+  %q2 = func.call @ggml_hrx_rms_norm_sq(%q1, %v2) : (f32, vector<4xf32>) -> (f32)
+  %q3 = func.call @ggml_hrx_rms_norm_sq(%q2, %v3) : (f32, vector<4xf32>) -> (f32)
+  %q4 = func.call @ggml_hrx_rms_norm_sq(%q3, %v4) : (f32, vector<4xf32>) -> (f32)
+  %q5 = func.call @ggml_hrx_rms_norm_sq(%q4, %v5) : (f32, vector<4xf32>) -> (f32)
+  %q6 = func.call @ggml_hrx_rms_norm_sq(%q5, %v6) : (f32, vector<4xf32>) -> (f32)
+  %partial = func.call @ggml_hrx_rms_norm_sq(%q6, %v7) : (f32, vector<4xf32>) -> (f32)
+
+  // All lanes must join the cluster reduce. Lanes past the last row add zeros.
+  %sum = template.apply<@ggml.reduce.sum_f32>(%partial, %lanes) : (f32, index) -> (f32)
+
+  %eps_i32 = index.cast %eps_bits : index to i32
+  %eps_vec = vector.from_elements %eps_i32 : vector<1xi32>
+  %eps_fvec = vector.bitcast %eps_vec : vector<1xi32> to vector<1xf32>
+  %eps = vector.extract %eps_fvec[0] : vector<1xf32> -> f32
+  %ne0_i32 = index.cast %ne0 : index to i32
+  %ne0_f32 = scalar.sitofp %ne0_i32 : i32 to f32
+  %c1_f32 = scalar.constant 1.0 : f32
+  %mean = scalar.divf %sum, %ne0_f32 : f32
+  %biased = scalar.addf %mean, %eps : f32
+  %root = scalar.sqrtf %biased : f32
+  %scale = scalar.divf %c1_f32, %root : f32
+  %scale4 = vector.splat %scale : vector<4xf32>
+
+  // Each lane writes only the values that it read. Thus dst can alias src.
+  func.call @ggml_hrx_rms_norm_store(%dst, %dst_span, %dst_base, %col0, %ne0, %row_ok, %v0, %scale4) : (buffer, index, index, index, index, i1, vector<4xf32>, vector<4xf32>)
+  func.call @ggml_hrx_rms_norm_store(%dst, %dst_span, %dst_base, %col1, %ne0, %u1, %v1, %scale4) : (buffer, index, index, index, index, i1, vector<4xf32>, vector<4xf32>)
+  func.call @ggml_hrx_rms_norm_store(%dst, %dst_span, %dst_base, %col2, %ne0, %u2, %v2, %scale4) : (buffer, index, index, index, index, i1, vector<4xf32>, vector<4xf32>)
+  func.call @ggml_hrx_rms_norm_store(%dst, %dst_span, %dst_base, %col3, %ne0, %u3, %v3, %scale4) : (buffer, index, index, index, index, i1, vector<4xf32>, vector<4xf32>)
+  func.call @ggml_hrx_rms_norm_store(%dst, %dst_span, %dst_base, %col4, %ne0, %u4, %v4, %scale4) : (buffer, index, index, index, index, i1, vector<4xf32>, vector<4xf32>)
+  func.call @ggml_hrx_rms_norm_store(%dst, %dst_span, %dst_base, %col5, %ne0, %u5, %v5, %scale4) : (buffer, index, index, index, index, i1, vector<4xf32>, vector<4xf32>)
+  func.call @ggml_hrx_rms_norm_store(%dst, %dst_span, %dst_base, %col6, %ne0, %u6, %v6, %scale4) : (buffer, index, index, index, index, i1, vector<4xf32>, vector<4xf32>)
+  func.call @ggml_hrx_rms_norm_store(%dst, %dst_span, %dst_base, %col7, %ne0, %u7, %v7, %scale4) : (buffer, index, index, index, index, i1, vector<4xf32>, vector<4xf32>)
+  kernel.return
+}

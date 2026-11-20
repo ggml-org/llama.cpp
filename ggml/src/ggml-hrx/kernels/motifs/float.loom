@@ -1,0 +1,117 @@
+// F16 weights.
+
+template.decl @ggml.weight.superblock(%wtype: index) -> (offset, offset, index)
+
+template.def<@ggml.weight.superblock> device @ggml_f16_superblock(%wtype: index) -> (offset, offset, index) where [eq(%wtype, 1)] {
+  %unit = index.constant 2 : offset
+  %sb = index.constant 512 : offset
+  %units = index.constant 256 : index
+  template.return %unit, %sb, %units : offset, offset, index
+}
+
+func.def inline @ggml_float_offsets16(%part: index) -> (index, index, index, index) {
+  %c4 = index.constant 4 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %c192 = index.constant 192 : index
+  %part_in = index.assume %part [range(%part, 0, 15)] : index
+  %o0 = index.mul %part_in, %c4 : index
+  %o1 = index.add %o0, %c64 : index
+  %o2 = index.add %o0, %c128 : index
+  %o3 = index.add %o0, %c192 : index
+  func.return %o0, %o1, %o2, %o3 : index, index, index, index
+}
+
+template.decl @ggml.weight.part16(%wtype: index, %weight: buffer, %sb_byte: offset, %part: index) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, index, index, index, index)
+
+template.def<@ggml.weight.part16> device @ggml_f16_part16(%wtype: index, %weight: buffer, %sb_byte: offset, %part: index) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, index, index, index, index) where [eq(%wtype, 1)] {
+  %o0, %o1, %o2, %o3 = func.call @ggml_float_offsets16(%part) : (index) -> (index, index, index, index)
+  %h_view = buffer.view %weight[%sb_byte] : buffer -> view<256xf16>
+  %h0 = vector.load %h_view[%o0] : view<256xf16> -> vector<4xf16>
+  %h1 = vector.load %h_view[%o1] : view<256xf16> -> vector<4xf16>
+  %h2 = vector.load %h_view[%o2] : view<256xf16> -> vector<4xf16>
+  %h3 = vector.load %h_view[%o3] : view<256xf16> -> vector<4xf16>
+  %w0 = vector.extf %h0 : vector<4xf16> to vector<4xf32>
+  %w1 = vector.extf %h1 : vector<4xf16> to vector<4xf32>
+  %w2 = vector.extf %h2 : vector<4xf16> to vector<4xf32>
+  %w3 = vector.extf %h3 : vector<4xf16> to vector<4xf32>
+  template.return %w0, %w1, %w2, %w3, %o0, %o1, %o2, %o3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, index, index, index, index
+}
+
+template.decl @ggml.weight.offsets16(%wtype: index, %part: index) -> (index, index, index, index)
+
+template.def<@ggml.weight.offsets16> device @ggml_f16_offsets16(%wtype: index, %part: index) -> (index, index, index, index) where [eq(%wtype, 1)] {
+  %o0, %o1, %o2, %o3 = func.call @ggml_float_offsets16(%part) : (index) -> (index, index, index, index)
+  template.return %o0, %o1, %o2, %o3 : index, index, index, index
+}
+
+func.def inline @ggml_f16_wmma8(%weight: buffer, %w_span: index, %row_base: index, %row_valid: i1, %k: index, %k_size: index) -> (vector<8xf16>) {
+  %c7 = index.constant 7 : index
+  %c0_offset = index.constant 0 : offset
+  %zero8 = vector.splatf 0.0 : vector<8xf16>
+  %halves = buffer.view %weight[%c0_offset] : buffer -> view<[%w_span]xf16>
+  %values = scf.if %row_valid -> (vector<8xf16>) {
+    %k_in = index.cmp ult, %k, %k_size : index
+    %k_values = scf.if %k_in -> (vector<8xf16>) {
+      %index0 = index.add %row_base, %k : index
+      %index = index.assume %index0 [range(%index0, 0, 2147483646)] : index
+      %last0 = index.add %index, %c7 : index
+      %last = index.assume %last0 [range(%last0, 0, 2147483646)] : index
+      %in_span = index.cmp ult, %last, %w_span : index
+      %loaded = scf.if %in_span -> (vector<8xf16>) {
+        %v = vector.load %halves[%index] : view<[%w_span]xf16> -> vector<8xf16>
+        scf.yield %v : vector<8xf16>
+      } else {
+        scf.yield %zero8 : vector<8xf16>
+      }
+      scf.yield %loaded : vector<8xf16>
+    } else {
+      scf.yield %zero8 : vector<8xf16>
+    }
+    scf.yield %k_values : vector<8xf16>
+  } else {
+    scf.yield %zero8 : vector<8xf16>
+  }
+  func.return %values : vector<8xf16>
+}
+
+template.decl @ggml.weight.wmma16(%wtype: index, %weight: buffer, %w_span: index, %row_base: index, %row_valid: i1, %k: index, %k_size: index, %part: index) -> (vector<8xf16>, vector<8xf16>)
+
+template.def<@ggml.weight.wmma16> device @ggml_f16_wmma16(%wtype: index, %weight: buffer, %w_span: index, %row_base: index, %row_valid: i1, %k: index, %k_size: index, %part: index) -> (vector<8xf16>, vector<8xf16>) where [eq(%wtype, 1)] {
+  %c8 = index.constant 8 : index
+  %c32 = index.constant 32 : index
+  %k_part = index.mul %part, %c8 : index
+  %k0 = index.add %k, %k_part : index
+  %k1 = index.add %k0, %c32 : index
+  %low = func.call @ggml_f16_wmma8(%weight, %w_span, %row_base, %row_valid, %k0, %k_size) : (buffer, index, index, i1, index, index) -> (vector<8xf16>)
+  %high = func.call @ggml_f16_wmma8(%weight, %w_span, %row_base, %row_valid, %k1, %k_size) : (buffer, index, index, i1, index, index) -> (vector<8xf16>)
+  template.return %low, %high : vector<8xf16>, vector<8xf16>
+}
+
+template.decl @ggml.weight.element(%wtype: index, %weight: buffer, %w_span: index, %index: index) -> (f32)
+
+template.def<@ggml.weight.element> device @ggml_f16_element(%wtype: index, %weight: buffer, %w_span: index, %index: index) -> (f32) where [eq(%wtype, 1)] {
+  %c0_offset = index.constant 0 : offset
+  %zero = scalar.constant 0.0 : f32
+  %off = index.assume %index [range(%index, 0, 2147483646)] : index
+  %ok = index.cmp ult, %off, %w_span : index
+  %value = scf.if %ok -> (f32) {
+    %view = buffer.view %weight[%c0_offset] : buffer -> view<[%w_span]xf16>
+    %half = view.load %view[%off] : view<[%w_span]xf16> -> f16
+    %wide = scalar.extf %half : f16 to f32
+    scf.yield %wide : f32
+  } else {
+    scf.yield %zero : f32
+  }
+  template.return %value : f32
+}
+
+template.decl @ggml.f16.bits_f32(%bits: i16) -> (f32)
+
+template.def<@ggml.f16.bits_f32> device @ggml_f16_bits_f32(%bits: i16) -> (f32) {
+  %bits_vector = vector.from_elements %bits : vector<1xi16>
+  %half_vector = vector.bitcast %bits_vector : vector<1xi16> to vector<1xf16>
+  %half = vector.extract %half_vector[0] : vector<1xf16> -> f16
+  %value = scalar.extf %half : f16 to f32
+  template.return %value : f32
+}

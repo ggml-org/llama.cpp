@@ -1,0 +1,18 @@
+// Sums over segments of lanes. lanes is the segment width.
+
+template.decl @ggml.reduce.sum_f32(%value: f32, %lanes: index) -> (f32)
+
+template.def<@ggml.reduce.sum_f32> device @ggml_reduce_sum_f32_16(%value: f32, %lanes: index) -> (f32) where [eq(%lanes, 16)] {
+  %sum = kernel.subgroup.reduce<addf> %value {cluster_size = 16} : f32
+  template.return %sum : f32
+}
+
+template.def<@ggml.reduce.sum_f32> device @ggml_reduce_sum_f32_32(%value: f32, %lanes: index) -> (f32) where [eq(%lanes, 32)] {
+  %sum = kernel.subgroup.reduce<addf> %value {cluster_size = 32} : f32
+  template.return %sum : f32
+}
+
+template.def<@ggml.reduce.sum_f32> device requires [#target.subgroup.size<64>] @ggml_reduce_sum_f32_64(%value: f32, %lanes: index) -> (f32) where [eq(%lanes, 64)] {
+  %sum = kernel.subgroup.reduce<addf> %value : f32
+  template.return %sum : f32
+}

@@ -37,6 +37,9 @@
 # with OPENVINO support
 # GG_BUILD_OPENVINO=1 GG_BUILD_LOW_PERF=1 GGML_OPENVINO_DEVICE=CPU bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
+# with HRX support
+# GG_BUILD_HRX=1 HRX_SDK_PATH=/path/to/hrx-sdk bash ./ci/run.sh ./tmp/results ./tmp/mnt
+#
 
 if [ -z "$2" ]; then
     echo "usage: $0 <output-dir> <mnt-dir>"
@@ -97,6 +100,17 @@ if [ ! -z ${GG_BUILD_ROCM} ]; then
     fi
 
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGPU_TARGETS=${GG_BUILD_AMDGPU_TARGETS}"
+fi
+
+if [ ! -z ${GG_BUILD_HRX} ]; then
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_HRX=ON"
+
+    if [ ! -z "${HRX_SDK_PATH}" ]; then
+        export CMAKE_PREFIX_PATH="${HRX_SDK_PATH}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
+    fi
+
+    # TODO: HRX has no quantized KV cache yet (SET_ROWS into q8_0)
+    CTEST_EXTRA="-E test-llama-context"
 fi
 
 if [ ! -z ${GG_BUILD_SYCL} ]; then
@@ -439,10 +453,13 @@ function gg_run_qwen3_0_6b {
 
     (time ./bin/llama-imatrix --model ${model_f16} -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-imatrix.log
 
-    (time ./bin/test-llama-context --model ${model_q4_0} -ngl 10 -c 1024 -fa off --no-op-offload) 2>&1 | tee -a $OUT/${ci}-test-llama-context.log
-    (time ./bin/test-llama-context --model ${model_q4_0} -ngl 99 -c 1024 -fa off                ) 2>&1 | tee -a $OUT/${ci}-test-llama-context.log
-    (time ./bin/test-llama-context --model ${model_q4_0} -ngl 10 -c 1024 -fa on  --no-op-offload) 2>&1 | tee -a $OUT/${ci}-test-llama-context.log
-    (time ./bin/test-llama-context --model ${model_q4_0} -ngl 99 -c 1024 -fa on                 ) 2>&1 | tee -a $OUT/${ci}-test-llama-context.log
+    # TODO: HRX has no quantized KV cache yet (SET_ROWS into q8_0)
+    if [ -z ${GG_BUILD_HRX} ]; then
+        (time ./bin/test-llama-context --model ${model_q4_0} -ngl 10 -c 1024 -fa off --no-op-offload) 2>&1 | tee -a $OUT/${ci}-test-llama-context.log
+        (time ./bin/test-llama-context --model ${model_q4_0} -ngl 99 -c 1024 -fa off                ) 2>&1 | tee -a $OUT/${ci}-test-llama-context.log
+        (time ./bin/test-llama-context --model ${model_q4_0} -ngl 10 -c 1024 -fa on  --no-op-offload) 2>&1 | tee -a $OUT/${ci}-test-llama-context.log
+        (time ./bin/test-llama-context --model ${model_q4_0} -ngl 99 -c 1024 -fa on                 ) 2>&1 | tee -a $OUT/${ci}-test-llama-context.log
+    fi
 
     check_ppl "f16"  "$(cat $OUT/${ci}-tg-f16.log  | grep "^\[1\]")"
     if [ -z ${GG_BUILD_NO_BF16} ]; then

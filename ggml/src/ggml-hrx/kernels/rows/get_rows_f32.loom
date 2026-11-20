@@ -1,0 +1,174 @@
+// Strides are in elements. dst must be contiguous.
+// A row id out of range leaves the dst element unchanged.
+
+config.decl @ggml.elementwise.wg_size : %value: index where [range(%value, 64, 1024), multiple_of(%value, 64)]
+
+target.decl @ggml_wave64
+
+kernel.def target(@ggml_wave64) export("ggml_get_rows_f32_rows") @ggml_get_rows_f32_rows(%n: index) {
+  %one = index.constant 1 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %wg_x2 = index.add %wg_size, %wg_size : index
+  %per_group = index.add %wg_x2, %wg_x2 : index
+  %round = index.sub %per_group, %one : index
+  %n_round = index.add %n, %round : index
+  %groups = index.div %n_round, %per_group : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%wg_size, %one, %one) : index
+} launch(%n_in: index, %ne0_in: index, %ne1_in: index, %ne2_in: index, %src_rows_in: index, %s0_in: index, %s1_in: index, %s2_in: index, %s3_in: index, %src_span_in: index, %ids_s0_in: index, %ids_s1_in: index, %ids_s2_in: index, %ids_span_in: index, %src: buffer, %ids: buffer, %dst: buffer) {
+  // The caller checks these ranges. n and ne0 must be multiples of 4. s0 must be 1.
+  %n = index.assume %n_in [range(%n_in, 4, 2147483644)] : index
+  %ne0 = index.assume %ne0_in [range(%ne0_in, 4, 2147483644)] : index
+  %ne1 = index.assume %ne1_in [range(%ne1_in, 1, 2147483647)] : index
+  %ne2 = index.assume %ne2_in [range(%ne2_in, 1, 2147483647)] : index
+  %src_rows = index.assume %src_rows_in [range(%src_rows_in, 1, 2147483647)] : index
+  %s1 = index.assume %s1_in [range(%s1_in, 0, 2147483647)] : index
+  %s2 = index.assume %s2_in [range(%s2_in, 0, 2147483647)] : index
+  %s3 = index.assume %s3_in [range(%s3_in, 0, 2147483647)] : index
+  %src_span = index.assume %src_span_in [range(%src_span_in, 1, 2147483647)] : index
+  %ids_s0 = index.assume %ids_s0_in [range(%ids_s0_in, 0, 2147483647)] : index
+  %ids_s1 = index.assume %ids_s1_in [range(%ids_s1_in, 0, 2147483647)] : index
+  %ids_s2 = index.assume %ids_s2_in [range(%ids_s2_in, 0, 2147483647)] : index
+  %ids_span = index.assume %ids_span_in [range(%ids_span_in, 1, 2147483647)] : index
+  %c0 = index.constant 0 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %wg_x2 = index.add %wg_size, %wg_size : index
+  %per_group = index.add %wg_x2, %wg_x2 : index
+  %group = kernel.workgroup.id<x> : index
+  %item = kernel.workitem.id<x> : index
+  %base = index.mul %group, %per_group : index
+  %lane = index.mul %item, %c4 : index
+  %j_raw = index.add %base, %lane : index
+  %j = index.assume %j_raw [range(%j_raw, 0, 2147483644)] : index
+  %j_last = index.add %j, %c3 : index
+  %zero = index.constant 0 : offset
+  %src_view = buffer.view %src[%zero] : buffer -> view<[%src_span]xf32>
+  %ids_view = buffer.view %ids[%zero] : buffer -> view<[%ids_span]xi32>
+  %dst_view = buffer.view %dst[%zero] : buffer -> view<[%n]xf32>
+  %in_bounds = index.cmp ult, %j_last, %n : index
+  scf.if %in_bounds {
+    %r = index.div %j, %ne0 : index
+    %r_start = index.mul %r, %ne0 : index
+    %i0 = index.sub %j, %r_start : index
+    %i1 = index.rem %r, %ne1 : index
+    %t1 = index.div %r, %ne1 : index
+    %i2 = index.rem %t1, %ne2 : index
+    %i3 = index.div %t1, %ne2 : index
+
+    %io0 = index.mul %i1, %ids_s0 : index
+    %io1 = index.mul %i2, %ids_s1 : index
+    %io2 = index.mul %i3, %ids_s2 : index
+    %io01 = index.add %io0, %io1 : index
+    %ids_idx = index.add %io01, %io2 : index
+    %ids_off = index.assume %ids_idx [range(%ids_idx, 0, 2147483646)] : index
+    %ids_ok = index.cmp ult, %ids_off, %ids_span : index
+    scf.if %ids_ok {
+      %row_i32 = view.load %ids_view[%ids_off] : view<[%ids_span]xi32> -> i32
+      %row = index.cast %row_i32 : i32 to index
+      %row_nonneg = index.cmp sge, %row, %c0 : index
+      scf.if %row_nonneg {
+        %row_below = index.cmp ult, %row, %src_rows : index
+        scf.if %row_below {
+          %so1 = index.mul %row, %s1 : index
+          %so2 = index.mul %i2, %s2 : index
+          %so3 = index.mul %i3, %s3 : index
+          %so12 = index.add %so1, %so2 : index
+          %so123 = index.add %so12, %so3 : index
+          %src_idx = index.add %so123, %i0 : index
+          %src_off = index.assume %src_idx [range(%src_idx, 0, 2147483640)] : index
+          %src_last = index.add %src_off, %c3 : index
+          %src_ok = index.cmp ult, %src_last, %src_span : index
+          scf.if %src_ok {
+            %x = vector.load %src_view[%src_off] : view<[%src_span]xf32> -> vector<4xf32>
+            vector.store %x, %dst_view[%j] : vector<4xf32>, view<[%n]xf32>
+          }
+        }
+      }
+    }
+  }
+  kernel.return
+}
+
+kernel.def target(@ggml_wave64) export("ggml_get_rows_f32_stream") @ggml_get_rows_f32_stream(%groups: index) {
+  %one = index.constant 1 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%wg_size, %one, %one) : index
+} launch(%n_in: index, %groups_in: index, %ne0_in: index, %ne1_in: index, %ne2_in: index, %src_rows_in: index, %s1_in: index, %s2_in: index, %s3_in: index, %src_span_in: index, %ids_s0_in: index, %ids_s1_in: index, %ids_s2_in: index, %ids_span_in: index, %src: buffer, %ids: buffer, %dst: buffer) {
+  // The caller checks these ranges. n and ne0 must be multiples of 4. s0 must be 1.
+  %n = index.assume %n_in [range(%n_in, 4, 2147483644)] : index
+  %groups = index.assume %groups_in [range(%groups_in, 1, 65535)] : index
+  %ne0 = index.assume %ne0_in [range(%ne0_in, 4, 2147483644)] : index
+  %ne1 = index.assume %ne1_in [range(%ne1_in, 1, 2147483647)] : index
+  %ne2 = index.assume %ne2_in [range(%ne2_in, 1, 2147483647)] : index
+  %src_rows = index.assume %src_rows_in [range(%src_rows_in, 1, 2147483647)] : index
+  %s1 = index.assume %s1_in [range(%s1_in, 0, 2147483647)] : index
+  %s2 = index.assume %s2_in [range(%s2_in, 0, 2147483647)] : index
+  %s3 = index.assume %s3_in [range(%s3_in, 0, 2147483647)] : index
+  %src_span = index.assume %src_span_in [range(%src_span_in, 1, 2147483647)] : index
+  %ids_s0 = index.assume %ids_s0_in [range(%ids_s0_in, 0, 2147483647)] : index
+  %ids_s1 = index.assume %ids_s1_in [range(%ids_s1_in, 0, 2147483647)] : index
+  %ids_s2 = index.assume %ids_s2_in [range(%ids_s2_in, 0, 2147483647)] : index
+  %ids_span = index.assume %ids_span_in [range(%ids_span_in, 1, 2147483647)] : index
+  %c0 = index.constant 0 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %group = kernel.workgroup.id<x> : index
+  %item = kernel.workitem.id<x> : index
+  %base = index.mul %group, %wg_size : index
+  %lane = index.add %base, %item : index
+  %first = index.mul %lane, %c4 : index
+  %lanes = index.mul %groups, %wg_size : index
+  %stride = index.mul %lanes, %c4 : index
+  %zero = index.constant 0 : offset
+  %src_view = buffer.view %src[%zero] : buffer -> view<[%src_span]xf32>
+  %ids_view = buffer.view %ids[%zero] : buffer -> view<[%ids_span]xi32>
+  %dst_view = buffer.view %dst[%zero] : buffer -> view<[%n]xf32>
+  scf.for %j_raw = [%first to %n step %stride] {
+    %j = index.assume %j_raw [range(%j_raw, 0, 2147483640)] : index
+    %j_last = index.add %j, %c3 : index
+    %in_bounds = index.cmp ult, %j_last, %n : index
+    scf.if %in_bounds {
+      %r = index.div %j, %ne0 : index
+      %r_start = index.mul %r, %ne0 : index
+      %i0 = index.sub %j, %r_start : index
+      %i1 = index.rem %r, %ne1 : index
+      %t1 = index.div %r, %ne1 : index
+      %i2 = index.rem %t1, %ne2 : index
+      %i3 = index.div %t1, %ne2 : index
+
+      %io0 = index.mul %i1, %ids_s0 : index
+      %io1 = index.mul %i2, %ids_s1 : index
+      %io2 = index.mul %i3, %ids_s2 : index
+      %io01 = index.add %io0, %io1 : index
+      %ids_idx = index.add %io01, %io2 : index
+      %ids_off = index.assume %ids_idx [range(%ids_idx, 0, 2147483646)] : index
+      %ids_ok = index.cmp ult, %ids_off, %ids_span : index
+      scf.if %ids_ok {
+        %row_i32 = view.load %ids_view[%ids_off] : view<[%ids_span]xi32> -> i32
+        %row = index.cast %row_i32 : i32 to index
+        %row_nonneg = index.cmp sge, %row, %c0 : index
+        scf.if %row_nonneg {
+          %row_below = index.cmp ult, %row, %src_rows : index
+          scf.if %row_below {
+            %so1 = index.mul %row, %s1 : index
+            %so2 = index.mul %i2, %s2 : index
+            %so3 = index.mul %i3, %s3 : index
+            %so12 = index.add %so1, %so2 : index
+            %so123 = index.add %so12, %so3 : index
+            %src_idx = index.add %so123, %i0 : index
+            %src_off = index.assume %src_idx [range(%src_idx, 0, 2147483640)] : index
+            %src_last = index.add %src_off, %c3 : index
+            %src_ok = index.cmp ult, %src_last, %src_span : index
+            scf.if %src_ok {
+              %x = vector.load %src_view[%src_off] : view<[%src_span]xf32> -> vector<4xf32>
+              vector.store %x, %dst_view[%j] : vector<4xf32>, view<[%n]xf32>
+            }
+          }
+        }
+      }
+    }
+  }
+  kernel.return
+}

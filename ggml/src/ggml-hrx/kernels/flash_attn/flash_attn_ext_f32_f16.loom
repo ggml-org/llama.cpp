@@ -1,0 +1,326 @@
+target.decl @ggml_wave64
+
+kernel.def target(@ggml_wave64) export("ggml_flash_attn_ext_f32_f16") @ggml_flash_attn_ext_f32_f16(%n_q: index, %n_head: index, %n_seq: index) {
+  %one = index.constant 1 : index
+  %wg_size = index.constant 64 : index
+  kernel.launch.config workgroups(%n_q, %n_head, %n_seq) workgroup_size(%wg_size, %one, %one) : index
+} launch(%n_q_in: index, %n_head_in: index, %n_seq_in: index, %d_k_in: index, %d_v_in: index, %n_kv_in: index, %q_s1_in: index, %q_s2_in: index, %q_s3_in: index, %q_span_in: index, %k_r2_in: index, %k_r3_in: index, %k_s1_in: index, %k_s2_in: index, %k_s3_in: index, %k_span_in: index, %v_r2_in: index, %v_r3_in: index, %v_s1_in: index, %v_s2_in: index, %v_s3_in: index, %v_span_in: index, %has_mask: index, %m_ne2_in: index, %m_ne3_in: index, %m_s1_in: index, %m_s2_in: index, %m_s3_in: index, %m_span_in: index, %dst_span_in: index, %scale_bits: index, %q: buffer, %k: buffer, %v: buffer, %mask: buffer, %dst: buffer) {
+  // The caller checks these ranges in supports_flash_attn_ext.
+  %n_q = index.assume %n_q_in [range(%n_q_in, 1, 2147483647)] : index
+  %n_head = index.assume %n_head_in [range(%n_head_in, 1, 2147483647)] : index
+  %n_seq = index.assume %n_seq_in [range(%n_seq_in, 1, 2147483647)] : index
+  %d_k = index.assume %d_k_in [range(%d_k_in, 1, 256)] : index
+  %d_v = index.assume %d_v_in [range(%d_v_in, 1, 256)] : index
+  %n_kv = index.assume %n_kv_in [range(%n_kv_in, 1, 2147483647)] : index
+  %q_s1 = index.assume %q_s1_in [range(%q_s1_in, 0, 2147483647)] : index
+  %q_s2 = index.assume %q_s2_in [range(%q_s2_in, 0, 2147483647)] : index
+  %q_s3 = index.assume %q_s3_in [range(%q_s3_in, 0, 2147483647)] : index
+  %q_span = index.assume %q_span_in [range(%q_span_in, 1, 2147483647)] : index
+  %k_r2 = index.assume %k_r2_in [range(%k_r2_in, 1, 2147483647)] : index
+  %k_r3 = index.assume %k_r3_in [range(%k_r3_in, 1, 2147483647)] : index
+  %k_s1 = index.assume %k_s1_in [range(%k_s1_in, 0, 2147483647)] : index
+  %k_s2 = index.assume %k_s2_in [range(%k_s2_in, 0, 2147483647)] : index
+  %k_s3 = index.assume %k_s3_in [range(%k_s3_in, 0, 2147483647)] : index
+  %k_span = index.assume %k_span_in [range(%k_span_in, 1, 2147483647)] : index
+  %v_r2 = index.assume %v_r2_in [range(%v_r2_in, 1, 2147483647)] : index
+  %v_r3 = index.assume %v_r3_in [range(%v_r3_in, 1, 2147483647)] : index
+  %v_s1 = index.assume %v_s1_in [range(%v_s1_in, 0, 2147483647)] : index
+  %v_s2 = index.assume %v_s2_in [range(%v_s2_in, 0, 2147483647)] : index
+  %v_s3 = index.assume %v_s3_in [range(%v_s3_in, 0, 2147483647)] : index
+  %v_span = index.assume %v_span_in [range(%v_span_in, 1, 2147483647)] : index
+  %m_ne2 = index.assume %m_ne2_in [range(%m_ne2_in, 1, 2147483647)] : index
+  %m_ne3 = index.assume %m_ne3_in [range(%m_ne3_in, 1, 2147483647)] : index
+  %m_s1 = index.assume %m_s1_in [range(%m_s1_in, 0, 2147483647)] : index
+  %m_s2 = index.assume %m_s2_in [range(%m_s2_in, 0, 2147483647)] : index
+  %m_s3 = index.assume %m_s3_in [range(%m_s3_in, 0, 2147483647)] : index
+  %m_span = index.assume %m_span_in [range(%m_span_in, 1, 2147483647)] : index
+  %dst_span = index.assume %dst_span_in [range(%dst_span_in, 1, 2147483647)] : index
+
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %c192 = index.constant 192 : index
+  %c256 = index.constant 256 : index
+  %zero = index.constant 0 : offset
+  %q_stage_bytes = index.constant 1024 : offset
+  %p_stage_bytes = index.constant 256 : offset
+  %zero_f32 = scalar.constant 0.0 : f32
+  %one_f32 = scalar.constant 1.0 : f32
+  // This value replaces -inf. Thus exp(s - max) stays finite for fully masked blocks.
+  %neg_large = scalar.constant -1e+30 : f32
+  %zero4 = vector.splatf 0.0 : vector<4xf32>
+
+  %iq1 = kernel.workgroup.id<x> : index
+  %iq2 = kernel.workgroup.id<y> : index
+  %iq3 = kernel.workgroup.id<z> : index
+  %lane = kernel.workitem.id<x> : index
+
+  %scale_i32 = index.cast %scale_bits : index to i32
+  %scale_ivec = vector.from_elements %scale_i32 : vector<1xi32>
+  %scale_fvec = vector.bitcast %scale_ivec : vector<1xi32> to vector<1xf32>
+  %scale = vector.extract %scale_fvec[0] : vector<1xf32> -> f32
+
+  %q_view = buffer.view %q[%zero] : buffer -> view<[%q_span]xf32>
+  %k_view = buffer.view %k[%zero] : buffer -> view<[%k_span]xf16>
+  %v_view = buffer.view %v[%zero] : buffer -> view<[%v_span]xf16>
+  %m_view = buffer.view %mask[%zero] : buffer -> view<[%m_span]xf16>
+  %dst_view = buffer.view %dst[%zero] : buffer -> view<[%dst_span]xf32>
+  %q_stage = buffer.alloca<workgroup> align(16) %q_stage_bytes : buffer
+  %p_stage = buffer.alloca<workgroup> align(16) %p_stage_bytes : buffer
+  %q_stage_view = buffer.view %q_stage[%zero] : buffer -> view<256xf32>
+  %p_stage_view = buffer.view %p_stage[%zero] : buffer -> view<64xf32>
+
+  %q_o1 = index.mul %iq1, %q_s1 : index
+  %q_o2 = index.mul %iq2, %q_s2 : index
+  %q_o3 = index.mul %iq3, %q_s3 : index
+  %q_o12 = index.add %q_o1, %q_o2 : index
+  %q_base = index.add %q_o12, %q_o3 : index
+  scf.for %qc = [%lane to %d_k step %c64] {
+    %qc_ok = index.cmp ult, %qc, %c256 : index
+    scf.if %qc_ok {
+      %q_raw = index.add %q_base, %qc : index
+      %q_idx = index.assume %q_raw [range(%q_raw, 0, 2147483646)] : index
+      %q_ok = index.cmp ult, %q_idx, %q_span : index
+      %q_val = scf.if %q_ok -> (f32) {
+        %x = view.load %q_view[%q_idx] : view<[%q_span]xf32> -> f32
+        scf.yield %x : f32
+      } else {
+        scf.yield %zero_f32 : f32
+      }
+      %q_scaled = scalar.mulf %q_val, %scale : f32
+      view.store %q_scaled, %q_stage_view[%qc] : f32, view<256xf32>
+    }
+  }
+  kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+
+  %ik2 = index.div %iq2, %k_r2 : index
+  %ik3 = index.div %iq3, %k_r3 : index
+  %k_o2 = index.mul %ik2, %k_s2 : index
+  %k_o3 = index.mul %ik3, %k_s3 : index
+  %k_head = index.add %k_o2, %k_o3 : index
+  %iv2 = index.div %iq2, %v_r2 : index
+  %iv3 = index.div %iq3, %v_r3 : index
+  %v_o2 = index.mul %iv2, %v_s2 : index
+  %v_o3 = index.mul %iv3, %v_s3 : index
+  %v_head = index.add %v_o2, %v_o3 : index
+  %im2 = index.rem %iq2, %m_ne2 : index
+  %im3 = index.rem %iq3, %m_ne3 : index
+  %m_o1 = index.mul %iq1, %m_s1 : index
+  %m_o2 = index.mul %im2, %m_s2 : index
+  %m_o3 = index.mul %im3, %m_s3 : index
+  %m_o12 = index.add %m_o1, %m_o2 : index
+  %m_row = index.add %m_o12, %m_o3 : index
+  %mask_on = index.cmp ne, %has_mask, %c0 : index
+
+  // An out-of-range channel reads channel 0. The kernel sets it to zero.
+  %ch0 = index.add %lane, %c0 : index
+  %ch1 = index.add %lane, %c64 : index
+  %ch2 = index.add %lane, %c128 : index
+  %ch3 = index.add %lane, %c192 : index
+  %ok0 = index.cmp ult, %ch0, %d_v : index
+  %ok1 = index.cmp ult, %ch1, %d_v : index
+  %ok2 = index.cmp ult, %ch2, %d_v : index
+  %ok3 = index.cmp ult, %ch3, %d_v : index
+  %sch0 = scf.select %ok0, %ch0, %c0 : index
+  %sch1 = scf.select %ok1, %ch1, %c0 : index
+  %sch2 = scf.select %ok2, %ch2, %c0 : index
+  %sch3 = scf.select %ok3, %ch3, %c0 : index
+
+  %n_kv_round = index.add %n_kv, %c63 : index
+  %n_blocks = index.div %n_kv_round, %c64 : index
+
+  %m_fin, %l_fin, %acc_fin = scf.for %blk = [%c0 to %n_blocks step %c1](%m_run = %neg_large : f32, %l_run = %zero_f32 : f32, %acc = %zero4 : vector<4xf32>) -> (f32, f32, vector<4xf32>) {
+    %kv0 = index.mul %blk, %c64 : index
+    %tok = index.add %kv0, %lane : index
+    %valid = index.cmp ult, %tok, %n_kv : index
+    %safe_tok = scf.select %valid, %tok, %c0 : index
+    %use_mask = scalar.andi %valid, %mask_on : i1
+    %mv = scf.if %use_mask -> (f32) {
+      %m_raw = index.add %m_row, %safe_tok : index
+      %m_idx = index.assume %m_raw [range(%m_raw, 0, 2147483646)] : index
+      %m_ok = index.cmp ult, %m_idx, %m_span : index
+      %m_val = scf.if %m_ok -> (f32) {
+        %m_f16 = view.load %m_view[%m_idx] : view<[%m_span]xf16> -> f16
+        %m_f32 = scalar.extf %m_f16 : f16 to f32
+        scf.yield %m_f32 : f32
+      } else {
+        scf.yield %zero_f32 : f32
+      }
+      scf.yield %m_val : f32
+    } else {
+      scf.yield %zero_f32 : f32
+    }
+    // The kernel skips tokens masked with -inf, as the CPU does.
+    %finite = scalar.cmpf ogt, %mv, %neg_large : f32
+    %active = scalar.andi %valid, %finite : i1
+    %s = scf.if %active -> (f32) {
+      %k_o1 = index.mul %tok, %k_s1 : index
+      %k_row = index.add %k_head, %k_o1 : index
+      %dot = scf.for %kc = [%c0 to %d_k step %c1](%sum = %zero_f32 : f32) -> (f32) {
+        %kc_ok = index.cmp ult, %kc, %c256 : index
+        %sum_next = scf.if %kc_ok -> (f32) {
+          %k_raw = index.add %k_row, %kc : index
+          %k_idx = index.assume %k_raw [range(%k_raw, 0, 2147483646)] : index
+          %k_ok = index.cmp ult, %k_idx, %k_span : index
+          %r = scf.if %k_ok -> (f32) {
+            %qv = view.load %q_stage_view[%kc] : view<256xf32> -> f32
+            %kh = view.load %k_view[%k_idx] : view<[%k_span]xf16> -> f16
+            %kf = scalar.extf %kh : f16 to f32
+            %fma = scalar.fmaf %qv, %kf, %sum : f32
+            scf.yield %fma : f32
+          } else {
+            scf.yield %sum : f32
+          }
+          scf.yield %r : f32
+        } else {
+          scf.yield %sum : f32
+        }
+        scf.yield %sum_next : f32
+      }
+      %masked = scalar.addf %dot, %mv : f32
+      scf.yield %masked : f32
+    } else {
+      scf.yield %neg_large : f32
+    }
+
+    %blk_max = kernel.subgroup.reduce<maxnumf> %s : f32
+    %m_new = scalar.maxnumf %m_run, %blk_max : f32
+    %m_diff = scalar.subf %m_run, %m_new : f32
+    %ms = scalar.expf<afn> %m_diff : f32
+    %s_diff = scalar.subf %s, %m_new : f32
+    %p_raw = scalar.expf<afn> %s_diff : f32
+    %p = scf.select %active, %p_raw, %zero_f32 : f32
+    %blk_sum = kernel.subgroup.reduce<addf> %p : f32
+    %l_scaled = scalar.mulf %l_run, %ms : f32
+    %l_new = scalar.addf %l_scaled, %blk_sum : f32
+    %ms_v = vector.splat %ms : vector<4xf32>
+    %acc_scaled = vector.mulf %acc, %ms_v : vector<4xf32>
+
+    view.store %p, %p_stage_view[%lane] : f32, view<64xf32>
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    %remaining = index.sub %n_kv, %kv0 : index
+    %blk_len = index.min %remaining, %c64 : index
+    %acc_new = scf.for %jj = [%c0 to %blk_len step %c1](%a = %acc_scaled : vector<4xf32>) -> (vector<4xf32>) {
+      %jj_ok = index.cmp ult, %jj, %c64 : index
+      %a_next = scf.if %jj_ok -> (vector<4xf32>) {
+        %pj = view.load %p_stage_view[%jj] : view<64xf32> -> f32
+        // pj is uniform across lanes. Thus masked tokens skip their V row without divergence.
+        %pj_nz = scalar.cmpf one, %pj, %zero_f32 : f32
+        %a_pv = scf.if %pj_nz -> (vector<4xf32>) {
+          %tj = index.add %kv0, %jj : index
+          %v_o1 = index.mul %tj, %v_s1 : index
+          %v_row = index.add %v_head, %v_o1 : index
+          %v_r0 = index.add %v_row, %sch0 : index
+          %v_r1 = index.add %v_row, %sch1 : index
+          %v_r2x = index.add %v_row, %sch2 : index
+          %v_r3x = index.add %v_row, %sch3 : index
+          %v_i0 = index.assume %v_r0 [range(%v_r0, 0, 2147483646)] : index
+          %v_i1 = index.assume %v_r1 [range(%v_r1, 0, 2147483646)] : index
+          %v_i2 = index.assume %v_r2x [range(%v_r2x, 0, 2147483646)] : index
+          %v_i3 = index.assume %v_r3x [range(%v_r3x, 0, 2147483646)] : index
+          %v_ok0 = index.cmp ult, %v_i0, %v_span : index
+          %vf0 = scf.if %v_ok0 -> (f32) {
+            %vh = view.load %v_view[%v_i0] : view<[%v_span]xf16> -> f16
+            %vf = scalar.extf %vh : f16 to f32
+            scf.yield %vf : f32
+          } else {
+            scf.yield %zero_f32 : f32
+          }
+          %v_ok1 = index.cmp ult, %v_i1, %v_span : index
+          %vf1 = scf.if %v_ok1 -> (f32) {
+            %vh = view.load %v_view[%v_i1] : view<[%v_span]xf16> -> f16
+            %vf = scalar.extf %vh : f16 to f32
+            scf.yield %vf : f32
+          } else {
+            scf.yield %zero_f32 : f32
+          }
+          %v_ok2 = index.cmp ult, %v_i2, %v_span : index
+          %vf2 = scf.if %v_ok2 -> (f32) {
+            %vh = view.load %v_view[%v_i2] : view<[%v_span]xf16> -> f16
+            %vf = scalar.extf %vh : f16 to f32
+            scf.yield %vf : f32
+          } else {
+            scf.yield %zero_f32 : f32
+          }
+          %v_ok3 = index.cmp ult, %v_i3, %v_span : index
+          %vf3 = scf.if %v_ok3 -> (f32) {
+            %vh = view.load %v_view[%v_i3] : view<[%v_span]xf16> -> f16
+            %vf = scalar.extf %vh : f16 to f32
+            scf.yield %vf : f32
+          } else {
+            scf.yield %zero_f32 : f32
+          }
+          %vz0 = scf.select %ok0, %vf0, %zero_f32 : f32
+          %vz1 = scf.select %ok1, %vf1, %zero_f32 : f32
+          %vz2 = scf.select %ok2, %vf2, %zero_f32 : f32
+          %vz3 = scf.select %ok3, %vf3, %zero_f32 : f32
+          %v_vec = vector.from_elements %vz0, %vz1, %vz2, %vz3 : vector<4xf32>
+          %pj_v = vector.splat %pj : vector<4xf32>
+          %a_upd = vector.fmaf %pj_v, %v_vec, %a : vector<4xf32>
+          scf.yield %a_upd : vector<4xf32>
+        } else {
+          scf.yield %a : vector<4xf32>
+        }
+        scf.yield %a_pv : vector<4xf32>
+      } else {
+        scf.yield %a : vector<4xf32>
+      }
+      scf.yield %a_next : vector<4xf32>
+    }
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    scf.yield %m_new, %l_new, %acc_new : f32, f32, vector<4xf32>
+  }
+
+  // A row with all tokens masked gets 0, as on the CPU.
+  %l_pos = scalar.cmpf ogt, %l_fin, %zero_f32 : f32
+  %l_safe = scf.select %l_pos, %l_fin, %one_f32 : f32
+  %l_inv0 = scalar.divf %one_f32, %l_safe : f32
+  %l_inv = scf.select %l_pos, %l_inv0, %zero_f32 : f32
+  %l_inv_v = vector.splat %l_inv : vector<4xf32>
+  %out = vector.mulf %acc_fin, %l_inv_v : vector<4xf32>
+
+  %o_seq = index.mul %iq3, %n_q : index
+  %o_tok = index.add %o_seq, %iq1 : index
+  %o_tokh = index.mul %o_tok, %n_head : index
+  %o_head = index.add %o_tokh, %iq2 : index
+  %o_row = index.mul %o_head, %d_v : index
+  %out0 = vector.extract %out[0] : vector<4xf32> -> f32
+  %out1 = vector.extract %out[1] : vector<4xf32> -> f32
+  %out2 = vector.extract %out[2] : vector<4xf32> -> f32
+  %out3 = vector.extract %out[3] : vector<4xf32> -> f32
+  scf.if %ok0 {
+    %o_r0 = index.add %o_row, %ch0 : index
+    %o_i0 = index.assume %o_r0 [range(%o_r0, 0, 2147483646)] : index
+    %o_ok0 = index.cmp ult, %o_i0, %dst_span : index
+    scf.if %o_ok0 {
+      view.store %out0, %dst_view[%o_i0] : f32, view<[%dst_span]xf32>
+    }
+  }
+  scf.if %ok1 {
+    %o_r1 = index.add %o_row, %ch1 : index
+    %o_i1 = index.assume %o_r1 [range(%o_r1, 0, 2147483646)] : index
+    %o_ok1 = index.cmp ult, %o_i1, %dst_span : index
+    scf.if %o_ok1 {
+      view.store %out1, %dst_view[%o_i1] : f32, view<[%dst_span]xf32>
+    }
+  }
+  scf.if %ok2 {
+    %o_r2 = index.add %o_row, %ch2 : index
+    %o_i2 = index.assume %o_r2 [range(%o_r2, 0, 2147483646)] : index
+    %o_ok2 = index.cmp ult, %o_i2, %dst_span : index
+    scf.if %o_ok2 {
+      view.store %out2, %dst_view[%o_i2] : f32, view<[%dst_span]xf32>
+    }
+  }
+  scf.if %ok3 {
+    %o_r3 = index.add %o_row, %ch3 : index
+    %o_i3 = index.assume %o_r3 [range(%o_r3, 0, 2147483646)] : index
+    %o_ok3 = index.cmp ult, %o_i3, %dst_span : index
+    scf.if %o_ok3 {
+      view.store %out3, %dst_view[%o_i3] : f32, view<[%dst_span]xf32>
+    }
+  }
+  kernel.return
+}

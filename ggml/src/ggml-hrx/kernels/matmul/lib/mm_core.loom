@@ -1,0 +1,233 @@
+// Weight types: 1 = F16, 2 = Q4_0, 4 = Q8_0. Weight units are 16-bit halves.
+
+template.decl @ggml.weight.element(%wtype: index, %weight: buffer, %w_span: index, %index: index) -> (f32)
+
+template.decl @ggml.weight.block(%wtype: index) -> (index, index)
+
+template.decl @ggml.weight.values4(%wtype: index, %weight: buffer, %w_span: index, %block_base: index, %j: index) -> (vector<4xf32>)
+
+func.def inline @ggml_hrx_mm_is_quant(%wtype: index) -> (i1) {
+  %c1 = index.constant 1 : index
+  %is_quant = index.cmp ne, %wtype, %c1 : index
+  func.return %is_quant : i1
+}
+
+// k is a multiple of 4 and below K.
+func.def inline @ggml_hrx_mm_quant4(%wtype: index, %weight: buffer, %w_span: index, %row_base: index, %k: index) -> (vector<4xf32>) {
+  %block_values, %block_units = template.apply<@ggml.weight.block>(%wtype) : (index) -> (index, index)
+  %block = index.div %k, %block_values : index
+  %j = index.rem %k, %block_values : index
+  %block_offset = index.mul %block, %block_units : index
+  %block_base = index.add %row_base, %block_offset : index
+  %values = template.apply<@ggml.weight.values4>(%wtype, %weight, %w_span, %block_base, %j) : (index, buffer, index, index, index) -> (vector<4xf32>)
+  func.return %values : vector<4xf32>
+}
+
+func.def inline @ggml_hrx_mm_load_input(%input: buffer, %x_span: index, %index: index) -> (f32) {
+  %c0_offset = index.constant 0 : offset
+  %zero = scalar.constant 0.0 : f32
+  %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%x_span]xf32>
+  %off = index.assume %index [range(%index, 0, 2147483646)] : index
+  %ok = index.cmp ult, %off, %x_span : index
+  %value = scf.if %ok -> (f32) {
+    %loaded = view.load %input_view[%off] : view<[%x_span]xf32> -> f32
+    scf.yield %loaded : f32
+  } else {
+    scf.yield %zero : f32
+  }
+  func.return %value : f32
+}
+
+func.def inline @ggml_hrx_mm_input_at(%input: buffer, %x_span: index, %x_col_base: index, %x_s0: index, %k: index, %k_size: index) -> (f32) {
+  %zero = scalar.constant 0.0 : f32
+  %k_in = index.cmp ult, %k, %k_size : index
+  %value = scf.if %k_in -> (f32) {
+    %offset = index.mul %k, %x_s0 : index
+    %index = index.add %x_col_base, %offset : index
+    %loaded = func.call @ggml_hrx_mm_load_input(%input, %x_span, %index) : (buffer, index, index) -> (f32)
+    scf.yield %loaded : f32
+  } else {
+    scf.yield %zero : f32
+  }
+  func.return %value : f32
+}
+
+func.def inline @ggml_hrx_mm_weight_at(%wtype: index, %weight: buffer, %w_span: index, %row_base: index, %k: index, %k_size: index) -> (f32) {
+  %zero = scalar.constant 0.0 : f32
+  %k_in = index.cmp ult, %k, %k_size : index
+  %value = scf.if %k_in -> (f32) {
+    %index = index.add %row_base, %k : index
+    %loaded = template.apply<@ggml.weight.element>(%wtype, %weight, %w_span, %index) : (index, buffer, index, index) -> (f32)
+    scf.yield %loaded : f32
+  } else {
+    scf.yield %zero : f32
+  }
+  func.return %value : f32
+}
+
+// k is a multiple of 4, or of 32 for block types.
+func.def inline @ggml_hrx_mm_weight4(%wtype: index, %weight: buffer, %w_span: index, %row_base: index, %row_valid: i1, %k: index, %k_size: index) -> (vector<4xf32>) {
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %zero4 = vector.splatf 0.0 : vector<4xf32>
+  %is_quant = func.call @ggml_hrx_mm_is_quant(%wtype) : (index) -> (i1)
+  %values = scf.if %row_valid -> (vector<4xf32>) {
+    %row_values = scf.if %is_quant -> (vector<4xf32>) {
+      // K is a multiple of the block size. Thus k < K covers all four values.
+      %k_in = index.cmp ult, %k, %k_size : index
+      %quant_values = scf.if %k_in -> (vector<4xf32>) {
+        %decoded = func.call @ggml_hrx_mm_quant4(%wtype, %weight, %w_span, %row_base, %k) : (index, buffer, index, index, index) -> (vector<4xf32>)
+        scf.yield %decoded : vector<4xf32>
+      } else {
+        scf.yield %zero4 : vector<4xf32>
+      }
+      scf.yield %quant_values : vector<4xf32>
+    } else {
+      %k1 = index.add %k, %c1 : index
+      %k2 = index.add %k, %c2 : index
+      %k3 = index.add %k, %c3 : index
+      %w0 = func.call @ggml_hrx_mm_weight_at(%wtype, %weight, %w_span, %row_base, %k, %k_size) : (index, buffer, index, index, index, index) -> (f32)
+      %w1 = func.call @ggml_hrx_mm_weight_at(%wtype, %weight, %w_span, %row_base, %k1, %k_size) : (index, buffer, index, index, index, index) -> (f32)
+      %w2 = func.call @ggml_hrx_mm_weight_at(%wtype, %weight, %w_span, %row_base, %k2, %k_size) : (index, buffer, index, index, index, index) -> (f32)
+      %w3 = func.call @ggml_hrx_mm_weight_at(%wtype, %weight, %w_span, %row_base, %k3, %k_size) : (index, buffer, index, index, index, index) -> (f32)
+      %plain_values = vector.from_elements %w0, %w1, %w2, %w3 : vector<4xf32>
+      scf.yield %plain_values : vector<4xf32>
+    }
+    scf.yield %row_values : vector<4xf32>
+  } else {
+    scf.yield %zero4 : vector<4xf32>
+  }
+  func.return %values : vector<4xf32>
+}
+
+func.def inline @ggml_hrx_mm_stage_input(%input: buffer, %x_span: index, %x_base: index, %x_valid: i1, %x_s0: index, %k: index, %k_size: index) -> (f32) {
+  %zero = scalar.constant 0.0 : f32
+  %value = scf.if %x_valid -> (f32) {
+    %loaded = func.call @ggml_hrx_mm_input_at(%input, %x_span, %x_base, %x_s0, %k, %k_size) : (buffer, index, index, index, index, index) -> (f32)
+    scf.yield %loaded : f32
+  } else {
+    scf.yield %zero : f32
+  }
+  func.return %value : f32
+}
+
+func.def inline @ggml_hrx_mm_tile(%wtype: index, %k_size: index, %w_base0: index, %w_valid0: i1, %w_base1: index, %w_valid1: i1, %x_base0: index, %x_valid0: i1, %x_base1: index, %x_valid1: i1, %x_base2: index, %x_valid2: i1, %x_base3: index, %x_valid3: i1, %x_s0: index, %w_span: index, %x_span: index, %weight: buffer, %input: buffer, %w_stage: buffer, %x_stage: buffer) -> (vector<4xf32>, vector<4xf32>) {
+  %t0 = kernel.workitem.id<x> : index
+  %t = index.assume %t0 [range(%t0, 0, 255)] : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c24 = index.constant 24 : index
+  %c32 = index.constant 32 : index
+  %c0_offset = index.constant 0 : offset
+  %zero4 = vector.splatf 0.0 : vector<4xf32>
+  %w_view = buffer.view %w_stage[%c0_offset] : buffer -> view<32x64xf32>
+  // Odd pitch prevents LDS bank conflicts.
+  %x_view = buffer.view %x_stage[%c0_offset] : buffer -> view<32x33xf32>
+  %w_packet = index.rem %t, %c8 : index
+  %w_k0 = index.mul %w_packet, %c4 : index
+  %w_k1 = index.add %w_k0, %c1 : index
+  %w_k2 = index.add %w_k0, %c2 : index
+  %w_k3 = index.add %w_k0, %c3 : index
+  %w_row0 = index.div %t, %c8 : index
+  %w_row1 = index.add %w_row0, %c32 : index
+  %x_k = index.rem %t, %c32 : index
+  %x_col0 = index.div %t, %c32 : index
+  %x_col1 = index.add %x_col0, %c8 : index
+  %x_col2 = index.add %x_col0, %c16 : index
+  %x_col3 = index.add %x_col0, %c24 : index
+  %out_row_group = index.rem %t, %c16 : index
+  %out_row = index.mul %out_row_group, %c4 : index
+  %out_col0 = index.div %t, %c16 : index
+  %out_col1 = index.add %out_col0, %c16 : index
+  %acc0, %acc1 = scf.for %k0 = [%c0 to %k_size step %c32](%tile_acc0 = %zero4 : vector<4xf32>, %tile_acc1 = %zero4 : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>) {
+    %w_k = index.add %k0, %w_k0 : index
+    %w0 = func.call @ggml_hrx_mm_weight4(%wtype, %weight, %w_span, %w_base0, %w_valid0, %w_k, %k_size) : (index, buffer, index, index, i1, index, index) -> (vector<4xf32>)
+    %w1 = func.call @ggml_hrx_mm_weight4(%wtype, %weight, %w_span, %w_base1, %w_valid1, %w_k, %k_size) : (index, buffer, index, index, i1, index, index) -> (vector<4xf32>)
+    %w0_0 = vector.extract %w0[0] : vector<4xf32> -> f32
+    %w0_1 = vector.extract %w0[1] : vector<4xf32> -> f32
+    %w0_2 = vector.extract %w0[2] : vector<4xf32> -> f32
+    %w0_3 = vector.extract %w0[3] : vector<4xf32> -> f32
+    %w1_0 = vector.extract %w1[0] : vector<4xf32> -> f32
+    %w1_1 = vector.extract %w1[1] : vector<4xf32> -> f32
+    %w1_2 = vector.extract %w1[2] : vector<4xf32> -> f32
+    %w1_3 = vector.extract %w1[3] : vector<4xf32> -> f32
+    view.store %w0_0, %w_view[%w_k0, %w_row0] : f32, view<32x64xf32>
+    view.store %w0_1, %w_view[%w_k1, %w_row0] : f32, view<32x64xf32>
+    view.store %w0_2, %w_view[%w_k2, %w_row0] : f32, view<32x64xf32>
+    view.store %w0_3, %w_view[%w_k3, %w_row0] : f32, view<32x64xf32>
+    view.store %w1_0, %w_view[%w_k0, %w_row1] : f32, view<32x64xf32>
+    view.store %w1_1, %w_view[%w_k1, %w_row1] : f32, view<32x64xf32>
+    view.store %w1_2, %w_view[%w_k2, %w_row1] : f32, view<32x64xf32>
+    view.store %w1_3, %w_view[%w_k3, %w_row1] : f32, view<32x64xf32>
+    %x_k_abs = index.add %k0, %x_k : index
+    %x0 = func.call @ggml_hrx_mm_stage_input(%input, %x_span, %x_base0, %x_valid0, %x_s0, %x_k_abs, %k_size) : (buffer, index, index, i1, index, index, index) -> (f32)
+    %x1 = func.call @ggml_hrx_mm_stage_input(%input, %x_span, %x_base1, %x_valid1, %x_s0, %x_k_abs, %k_size) : (buffer, index, index, i1, index, index, index) -> (f32)
+    %x2 = func.call @ggml_hrx_mm_stage_input(%input, %x_span, %x_base2, %x_valid2, %x_s0, %x_k_abs, %k_size) : (buffer, index, index, i1, index, index, index) -> (f32)
+    %x3 = func.call @ggml_hrx_mm_stage_input(%input, %x_span, %x_base3, %x_valid3, %x_s0, %x_k_abs, %k_size) : (buffer, index, index, i1, index, index, index) -> (f32)
+    view.store %x0, %x_view[%x_col0, %x_k] : f32, view<32x33xf32>
+    view.store %x1, %x_view[%x_col1, %x_k] : f32, view<32x33xf32>
+    view.store %x2, %x_view[%x_col2, %x_k] : f32, view<32x33xf32>
+    view.store %x3, %x_view[%x_col3, %x_k] : f32, view<32x33xf32>
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    %next0, %next1 = scf.for %kk = [%c0 to %c32 step %c1](%k_acc0 = %tile_acc0 : vector<4xf32>, %k_acc1 = %tile_acc1 : vector<4xf32>) -> (vector<4xf32>, vector<4xf32>) {
+      %w = vector.load %w_view[%kk, %out_row] : view<32x64xf32> -> vector<4xf32>
+      %a0 = view.load %x_view[%out_col0, %kk] : view<32x33xf32> -> f32
+      %a1 = view.load %x_view[%out_col1, %kk] : view<32x33xf32> -> f32
+      %a0_vector = vector.splat %a0 : vector<4xf32>
+      %a1_vector = vector.splat %a1 : vector<4xf32>
+      %k_next0 = vector.fmaf %w, %a0_vector, %k_acc0 : vector<4xf32>
+      %k_next1 = vector.fmaf %w, %a1_vector, %k_acc1 : vector<4xf32>
+      scf.yield %k_next0, %k_next1 : vector<4xf32>, vector<4xf32>
+    }
+    // The next K step overwrites the stages.
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    scf.yield %next0, %next1 : vector<4xf32>, vector<4xf32>
+  }
+  func.return %acc0, %acc1 : vector<4xf32>, vector<4xf32>
+}
+
+func.def inline @ggml_hrx_mm_store(%dst: buffer, %d_span: index, %index: index, %value: f32) {
+  %c0_offset = index.constant 0 : offset
+  %dst_view = buffer.view %dst[%c0_offset] : buffer -> view<[%d_span]xf32>
+  %off = index.assume %index [range(%index, 0, 2147483646)] : index
+  %ok = index.cmp ult, %off, %d_span : index
+  scf.if %ok {
+    view.store %value, %dst_view[%off] : f32, view<[%d_span]xf32>
+  }
+  func.return
+}
+
+func.def inline @ggml_hrx_mm_store_row(%dst: buffer, %d_span: index, %d_col_base: index, %row: index, %n_rows: index, %value: f32) {
+  %row_in = index.cmp ult, %row, %n_rows : index
+  scf.if %row_in {
+    %index = index.add %d_col_base, %row : index
+    func.call @ggml_hrx_mm_store(%dst, %d_span, %index, %value) : (buffer, index, index, f32)
+  }
+  func.return
+}
+
+func.def inline @ggml_hrx_mm_store4(%dst: buffer, %d_span: index, %d_col_base: index, %row0: index, %n_rows: index, %col_valid: i1, %values: vector<4xf32>) {
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  scf.if %col_valid {
+    %row1 = index.add %row0, %c1 : index
+    %row2 = index.add %row0, %c2 : index
+    %row3 = index.add %row0, %c3 : index
+    %value0 = vector.extract %values[0] : vector<4xf32> -> f32
+    %value1 = vector.extract %values[1] : vector<4xf32> -> f32
+    %value2 = vector.extract %values[2] : vector<4xf32> -> f32
+    %value3 = vector.extract %values[3] : vector<4xf32> -> f32
+    func.call @ggml_hrx_mm_store_row(%dst, %d_span, %d_col_base, %row0, %n_rows, %value0) : (buffer, index, index, index, index, f32)
+    func.call @ggml_hrx_mm_store_row(%dst, %d_span, %d_col_base, %row1, %n_rows, %value1) : (buffer, index, index, index, index, f32)
+    func.call @ggml_hrx_mm_store_row(%dst, %d_span, %d_col_base, %row2, %n_rows, %value2) : (buffer, index, index, index, index, f32)
+    func.call @ggml_hrx_mm_store_row(%dst, %d_span, %d_col_base, %row3, %n_rows, %value3) : (buffer, index, index, index, index, f32)
+  }
+  func.return
+}

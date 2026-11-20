@@ -1,0 +1,50 @@
+// n_tile is a config constant. Thus use folds at compile time.
+func.def inline @ggml_hrx_mv_col_base(%i: index, %n_tile: index, %n_cols: index, %x_batch: index, %x_s1: index, %k_size: index, %x_span: index, %ok_in: i1) -> (index, i1, i1, i1) {
+  %false = scalar.constant false : i1
+  %use = index.cmp ult, %i, %n_tile : index
+  %in_cols = index.cmp ult, %i, %n_cols : index
+  %store = scf.select %use, %in_cols, %false : i1
+  %x_offset = index.mul %i, %x_s1 : index
+  %x_base = index.add %x_batch, %x_offset : index
+  %x_end = index.add %x_base, %k_size : index
+  %fits = index.cmp ule, %x_end, %x_span : index
+  %col_ok = scf.select %use, %fits, %ok_in : i1
+  %ok = scf.select %ok_in, %col_ok, %false : i1
+  func.return %x_base, %use, %store, %ok : index, i1, i1, i1
+}
+
+func.def inline @ggml_hrx_mv_xload(%use: i1, %input: buffer, %x_base: index, %sb: index, %o0: index, %o1: index, %o2: index, %o3: index) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+  %c256 = index.constant 256 : index
+  %b4 = index.constant 4 : offset
+  %zero4 = vector.splatf 0.0 : vector<4xf32>
+  %x0, %x1, %x2, %x3 = scf.if %use -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+    %sb_values = index.mul %sb, %c256 : index
+    %x_index = index.add %x_base, %sb_values : index
+    %x_byte = index.scale %x_index, %b4 : index, offset -> offset
+    %x_view = buffer.view %input[%x_byte] : buffer -> view<256xf32>
+    %y0 = vector.load %x_view[%o0] : view<256xf32> -> vector<4xf32>
+    %y1 = vector.load %x_view[%o1] : view<256xf32> -> vector<4xf32>
+    %y2 = vector.load %x_view[%o2] : view<256xf32> -> vector<4xf32>
+    %y3 = vector.load %x_view[%o3] : view<256xf32> -> vector<4xf32>
+    scf.yield %y0, %y1, %y2, %y3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+  } else {
+    scf.yield %zero4, %zero4, %zero4, %zero4 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+  }
+  func.return %x0, %x1, %x2, %x3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+}
+
+func.def inline @ggml_hrx_mv_dot16(%use: i1, %w0: vector<4xf32>, %w1: vector<4xf32>, %w2: vector<4xf32>, %w3: vector<4xf32>, %x0: vector<4xf32>, %x1: vector<4xf32>, %x2: vector<4xf32>, %x3: vector<4xf32>) -> (f32) {
+  %zero = scalar.constant 0.0 : f32
+  %result = scf.if %use -> (f32) {
+    %p0 = vector.mulf %w0, %x0 : vector<4xf32>
+    %p1 = vector.fmaf %w1, %x1, %p0 : vector<4xf32>
+    %p2 = vector.fmaf %w2, %x2, %p1 : vector<4xf32>
+    %p3 = vector.fmaf %w3, %x3, %p2 : vector<4xf32>
+    %lane_sum = vector.reduce<addf> %p3, %zero : vector<4xf32>, f32
+    %sum = kernel.subgroup.reduce<addf> %lane_sum {cluster_size = 16} : f32
+    scf.yield %sum : f32
+  } else {
+    scf.yield %zero : f32
+  }
+  func.return %result : f32
+}

@@ -1,0 +1,124 @@
+// Weights and activations are rounded to f16. The sums are in f32.
+// The launch arguments are the same as in mul_mat.loom. The caller makes sure that K is a multiple of 32 and that x_s0 is 1.
+
+config.decl @ggml.mul_mat.weight_type : %value: index where [range(%value, 1, 4)]
+
+target.decl @ggml_wave32
+
+template.decl @ggml.mma.k64_2x2(%x_stage: buffer, %w_stage: buffer, %col0: index, %row0: index, %acc00: vector<8xf32>, %acc01: vector<8xf32>, %acc10: vector<8xf32>, %acc11: vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>)
+
+template.decl @ggml.mma.zero_acc() -> (vector<8xf32>)
+
+func.decl @ggml_hrx_mm_wmma_stage_weights64(%wtype: index, %weight: buffer, %w_span: index, %row_base: index, %row_valid: i1, %k: index, %k_size: index, %w_stage: buffer)
+
+func.decl @ggml_hrx_mm_wmma_stage_input64(%input: buffer, %x_span: index, %col_base: index, %col_valid: i1, %k: index, %k_size: index, %x_stage: buffer)
+
+func.decl @ggml_hrx_mm_wmma_store(%dst: buffer, %d_span: index, %d_base: index, %d_s1: index, %col0: index, %n_cols: index, %row0: index, %n_rows: index, %acc: vector<8xf32>)
+
+kernel.def target(@ggml_wave32) export("ggml_mul_mat_wmma") @ggml_mul_mat_wmma(%n_rows: index, %n_cols: index, %n_batch: index) {
+  %one = index.constant 1 : index
+  %wg_size = index.constant 256 : index
+  %c63 = index.constant 63 : index
+  %c64 = index.constant 64 : index
+  %c127 = index.constant 127 : index
+  %c128 = index.constant 128 : index
+  %rows_round = index.add %n_rows, %c127 : index
+  %row_tiles = index.div %rows_round, %c128 : index
+  %cols_round = index.add %n_cols, %c63 : index
+  %col_tiles = index.div %cols_round, %c64 : index
+  kernel.launch.config workgroups(%row_tiles, %col_tiles, %n_batch) workgroup_size(%wg_size, %one, %one) : index
+} launch(%k_size_in: index, %n_rows_in: index, %n_cols_in: index, %ne12_in: index, %r2_in: index, %r3_in: index, %w_s1_in: index, %w_s2_in: index, %w_s3_in: index, %w_span_in: index, %x_s0_in: index, %x_s1_in: index, %x_s2_in: index, %x_s3_in: index, %x_span_in: index, %d_s1_in: index, %d_s2_in: index, %d_s3_in: index, %d_span_in: index, %weight: buffer, %input: buffer, %dst: buffer) {
+  // supports_mul_mat checks these ranges.
+  %k_size = index.assume %k_size_in [range(%k_size_in, 1, 2147483647)] : index
+  %n_rows = index.assume %n_rows_in [range(%n_rows_in, 1, 2147483647)] : index
+  %n_cols = index.assume %n_cols_in [range(%n_cols_in, 1, 2147483647)] : index
+  %ne12 = index.assume %ne12_in [range(%ne12_in, 1, 2147483647)] : index
+  %r2 = index.assume %r2_in [range(%r2_in, 1, 2147483647)] : index
+  %r3 = index.assume %r3_in [range(%r3_in, 1, 2147483647)] : index
+  %w_s1 = index.assume %w_s1_in [range(%w_s1_in, 0, 2147483647)] : index
+  %w_s2 = index.assume %w_s2_in [range(%w_s2_in, 0, 2147483647)] : index
+  %w_s3 = index.assume %w_s3_in [range(%w_s3_in, 0, 2147483647)] : index
+  %w_span = index.assume %w_span_in [range(%w_span_in, 1, 2147483647)] : index
+  %x_s1 = index.assume %x_s1_in [range(%x_s1_in, 0, 2147483647)] : index
+  %x_s2 = index.assume %x_s2_in [range(%x_s2_in, 0, 2147483647)] : index
+  %x_s3 = index.assume %x_s3_in [range(%x_s3_in, 0, 2147483647)] : index
+  %x_span = index.assume %x_span_in [range(%x_span_in, 1, 2147483647)] : index
+  %d_s1 = index.assume %d_s1_in [range(%d_s1_in, 0, 2147483647)] : index
+  %d_s2 = index.assume %d_s2_in [range(%d_s2_in, 0, 2147483647)] : index
+  %d_s3 = index.assume %d_s3_in [range(%d_s3_in, 0, 2147483647)] : index
+  %d_span = index.assume %d_span_in [range(%d_span_in, 1, 2147483647)] : index
+  %wtype = config.get @ggml.mul_mat.weight_type : index
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %w_stage_bytes = index.constant 18432 : offset
+  %x_stage_bytes = index.constant 9216 : offset
+  %t0 = kernel.workitem.id<x> : index
+  %t = index.assume %t0 [range(%t0, 0, 255)] : index
+  %s0 = kernel.subgroup.id : index
+  %s = index.assume %s0 [range(%s0, 0, 7)] : index
+  %row_tile = kernel.workgroup.id<x> : index
+  %col_tile = kernel.workgroup.id<y> : index
+  %batch = kernel.workgroup.id<z> : index
+  %weight_noalias, %input_noalias, %dst_noalias = buffer.assume.noalias %weight, %input, %dst : buffer, buffer, buffer
+  %w_stage = buffer.alloca<workgroup> align(16) %w_stage_bytes : buffer
+  %x_stage = buffer.alloca<workgroup> align(16) %x_stage_bytes : buffer
+
+  %i12 = index.rem %batch, %ne12 : index
+  %i13 = index.div %batch, %ne12 : index
+  %i02 = index.div %i12, %r2 : index
+  %i03 = index.div %i13, %r3 : index
+  %w2 = index.mul %i02, %w_s2 : index
+  %w3 = index.mul %i03, %w_s3 : index
+  %w_batch = index.add %w2, %w3 : index
+  %x2 = index.mul %i12, %x_s2 : index
+  %x3 = index.mul %i13, %x_s3 : index
+  %x_batch = index.add %x2, %x3 : index
+  %d2 = index.mul %i12, %d_s2 : index
+  %d3 = index.mul %i13, %d_s3 : index
+  %d_batch = index.add %d2, %d3 : index
+  %tile_row0 = index.mul %row_tile, %c128 : index
+  %tile_col0 = index.mul %col_tile, %c64 : index
+
+  %w_local = index.div %t, %c2 : index
+  %w_row = index.add %tile_row0, %w_local : index
+  %w_valid = index.cmp ult, %w_row, %n_rows : index
+  %w_offset = index.mul %w_row, %w_s1 : index
+  %w_base = index.add %w_batch, %w_offset : index
+
+  %x_local = index.div %t, %c4 : index
+  %x_col = index.add %tile_col0, %x_local : index
+  %x_valid = index.cmp ult, %x_col, %n_cols : index
+  %x_offset = index.mul %x_col, %x_s1 : index
+  %x_base = index.add %x_batch, %x_offset : index
+
+  %sub_col_group = index.rem %s, %c2 : index
+  %sub_row_group = index.div %s, %c2 : index
+  %sub_col0 = index.mul %sub_col_group, %c32 : index
+  %sub_row0 = index.mul %sub_row_group, %c32 : index
+
+  %init = template.apply<@ggml.mma.zero_acc>() : () -> (vector<8xf32>)
+  %acc00, %acc01, %acc10, %acc11 = scf.for %k0 = [%c0 to %k_size step %c64](%a00 = %init : vector<8xf32>, %a01 = %init : vector<8xf32>, %a10 = %init : vector<8xf32>, %a11 = %init : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
+    func.call @ggml_hrx_mm_wmma_stage_weights64(%wtype, %weight_noalias, %w_span, %w_base, %w_valid, %k0, %k_size, %w_stage) : (index, buffer, index, index, i1, index, index, buffer)
+    func.call @ggml_hrx_mm_wmma_stage_input64(%input_noalias, %x_span, %x_base, %x_valid, %k0, %k_size, %x_stage) : (buffer, index, index, i1, index, index, buffer)
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    %n00, %n01, %n10, %n11 = template.apply<@ggml.mma.k64_2x2>(%x_stage, %w_stage, %sub_col0, %sub_row0, %a00, %a01, %a10, %a11) : (buffer, buffer, index, index, vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>)
+    // The next K step overwrites the stages.
+    kernel.barrier<workgroup> scope(workgroup) ordering(acq_rel)
+    scf.yield %n00, %n01, %n10, %n11 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
+  }
+
+  %out_col0 = index.add %tile_col0, %sub_col0 : index
+  %out_col1 = index.add %out_col0, %c16 : index
+  %out_row0 = index.add %tile_row0, %sub_row0 : index
+  %out_row1 = index.add %out_row0, %c16 : index
+  func.call @ggml_hrx_mm_wmma_store(%dst_noalias, %d_span, %d_batch, %d_s1, %out_col0, %n_cols, %out_row0, %n_rows, %acc00) : (buffer, index, index, index, index, index, index, index, vector<8xf32>)
+  func.call @ggml_hrx_mm_wmma_store(%dst_noalias, %d_span, %d_batch, %d_s1, %out_col0, %n_cols, %out_row1, %n_rows, %acc01) : (buffer, index, index, index, index, index, index, index, vector<8xf32>)
+  func.call @ggml_hrx_mm_wmma_store(%dst_noalias, %d_span, %d_batch, %d_s1, %out_col1, %n_cols, %out_row0, %n_rows, %acc10) : (buffer, index, index, index, index, index, index, index, vector<8xf32>)
+  func.call @ggml_hrx_mm_wmma_store(%dst_noalias, %d_span, %d_batch, %d_s1, %out_col1, %n_cols, %out_row1, %n_rows, %acc11) : (buffer, index, index, index, index, index, index, index, vector<8xf32>)
+  kernel.return
+}

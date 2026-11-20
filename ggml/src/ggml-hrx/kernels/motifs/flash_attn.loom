@@ -1,0 +1,422 @@
+target.decl @ggml_gfx11
+target.decl @ggml_gfx12
+
+template.decl @ggml.flash_attn.qk_k64(%k_tile: view<16x[%d_k]xf16, %k_layout>, %d_k: index, %k_layout: encoding<layout>, %q_t_view: view<256x16xf16, %q_t_layout>, %q_t_layout: encoding<layout>, %kx0: index, %kx1: index, %kx2: index, %kx3: index, %h1: i1, %h2: i1, %h3: i1, %se: vector<4xf32>, %so: vector<4xf32>) -> (vector<4xf32>, vector<4xf32>)
+
+template.decl @ggml.flash_attn.pv(%p_view: view<16x24xf16>, %ps_view: view<16x24xf16>, %a_bcast: view<16x16xf32, %a_layout>, %a_layout: encoding<layout>, %v_tile: view<16x[%d_v]xf16, %v_layout>, %d_v: index, %v_layout: encoding<layout>, %valid: vector<4xi1>, %unmasked: i1, %rv: i1, %row: index, %tq: index, %a0: vector<4xf32>, %a1: vector<4xf32>, %a2: vector<4xf32>, %a3: vector<4xf32>, %a4: vector<4xf32>, %a5: vector<4xf32>, %a6: vector<4xf32>, %a7: vector<4xf32>, %a8: vector<4xf32>, %a9: vector<4xf32>, %a10: vector<4xf32>, %a11: vector<4xf32>, %a12: vector<4xf32>, %a13: vector<4xf32>, %a14: vector<4xf32>, %a15: vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
+
+func.def inline @ggml_hrx_fa_keep_word(%keep_bits: i32, %shift: i32, %word: i32) -> (i32) {
+  %one = scalar.constant 1 : i32
+  %two = scalar.constant 2 : i32
+  %lo = scalar.constant 65535 : i32
+  %hi = scalar.constant -32768 : i32
+  %pair = scalar.shrui %keep_bits, %shift : i32
+  %ev = scalar.andi %pair, %one : i32
+  %od = scalar.andi %pair, %two : i32
+  %ev_m = scalar.muli %ev, %lo : i32
+  %od_m = scalar.muli %od, %hi : i32
+  %keep = scalar.ori %ev_m, %od_m : i32
+  %r = scalar.andi %word, %keep : i32
+  func.return %r : i32
+}
+
+func.def inline @ggml_hrx_fa_row_bits(%valid: vector<4xi1>, %tq: index) -> (i32) {
+  %z = scalar.constant 0 : i32
+  %one = scalar.constant 1 : i32
+  %tq_i = index.cast %tq : index to i32
+  %ones4 = vector.splat %one : vector<4xi32>
+  %zeros4 = vector.splat %z : vector<4xi32>
+  %sh4 = vector.iota %tq_i step %one : vector<4xi32>
+  %bit4 = vector.shli %ones4, %sh4 : vector<4xi32>
+  %sel4 = vector.select %valid, %bit4, %zeros4 : vector<4xi32>
+  %lane_bits = vector.reduce<ori> %sel4, %z : vector<4xi32>, i32
+  %row_bits = kernel.subgroup.reduce<ori> %lane_bits {cluster_size = 4} : i32
+  func.return %row_bits : i32
+}
+
+template.def<@ggml.flash_attn.qk_k64> device target(@ggml_gfx11) requires [#target.subgroup.size<64>] priority(20) @ggml_flash_attn_qk_k64_gfx11(%k_tile: view<16x[%d_k]xf16, %k_layout>, %d_k: index, %k_layout: encoding<layout>, %q_t_view: view<256x16xf16, %q_t_layout>, %q_t_layout: encoding<layout>, %kx0: index, %kx1: index, %kx2: index, %kx3: index, %h1: i1, %h2: i1, %h3: i1, %se: vector<4xf32>, %so: vector<4xf32>) -> (vector<4xf32>, vector<4xf32>) {
+  %c0 = index.constant 0 : index
+  %c16 = index.constant 16 : index
+  %kf0 = vector.fragment.load<lhs> %k_tile[%c0, %kx0] shape [%c16, %c16] : view<16x[%d_k]xf16, %k_layout> -> vector<16xf16>
+  %kf1 = vector.fragment.load<lhs> %k_tile[%c0, %kx1] shape [%c16, %c16] : view<16x[%d_k]xf16, %k_layout> -> vector<16xf16>
+  %kf2 = vector.fragment.load<lhs> %k_tile[%c0, %kx2] shape [%c16, %c16] : view<16x[%d_k]xf16, %k_layout> -> vector<16xf16>
+  %kf3 = vector.fragment.load<lhs> %k_tile[%c0, %kx3] shape [%c16, %c16] : view<16x[%d_k]xf16, %k_layout> -> vector<16xf16>
+  %qf0 = vector.fragment.load<rhs> %q_t_view[%kx0, %c0] shape [%c16, %c16] : view<256x16xf16, %q_t_layout> -> vector<16xf16>
+  %qf1 = vector.fragment.load<rhs> %q_t_view[%kx1, %c0] shape [%c16, %c16] : view<256x16xf16, %q_t_layout> -> vector<16xf16>
+  %qf2 = vector.fragment.load<rhs> %q_t_view[%kx2, %c0] shape [%c16, %c16] : view<256x16xf16, %q_t_layout> -> vector<16xf16>
+  %qf3 = vector.fragment.load<rhs> %q_t_view[%kx3, %c0] shape [%c16, %c16] : view<256x16xf16, %q_t_layout> -> vector<16xf16>
+  %e0 = vector.mma %kf0, %qf0, %se : vector<16xf16>, vector<16xf16>, vector<4xf32>
+  %o1 = vector.mma %kf1, %qf1, %so : vector<16xf16>, vector<16xf16>, vector<4xf32>
+  %o1s = scf.select %h1, %o1, %so : vector<4xf32>
+  %e2 = vector.mma %kf2, %qf2, %e0 : vector<16xf16>, vector<16xf16>, vector<4xf32>
+  %e2s = scf.select %h2, %e2, %e0 : vector<4xf32>
+  %o3 = vector.mma %kf3, %qf3, %o1s : vector<16xf16>, vector<16xf16>, vector<4xf32>
+  %o3s = scf.select %h3, %o3, %o1s : vector<4xf32>
+  template.return %e2s, %o3s : vector<4xf32>, vector<4xf32>
+}
+
+// A tile past d_v loads the last tile again. Thus the load needs no branch.
+// The merge drops that tile.
+func.def inline @ggml_hrx_fa_v_load_gfx11(%v_tile: view<16x[%d_v]xf16, %v_layout>, %d_v: index, %v_layout: encoding<layout>, %t: index) -> (vector<16xf16>) {
+  %c0 = index.constant 0 : index
+  %c15 = index.constant 15 : index
+  %c16 = index.constant 16 : index
+  %ch0 = index.mul %t, %c16 : index
+  %d_top = index.sub %d_v, %c16 : index
+  %ch1 = index.min %ch0, %d_top : index
+  %d_last = index.sub %d_v, %c15 : index
+  %ch = index.assume %ch1 [lt(%ch1, %d_last)] : index
+  %v_frag = vector.fragment.load<rhs> %v_tile[%c0, %ch] shape [%c16, %c16] : view<16x[%d_v]xf16, %v_layout> -> vector<16xf16>
+  func.return %v_frag : vector<16xf16>
+}
+
+func.def inline @ggml_hrx_fa_v_mask_gfx11(%v_frag: vector<16xf16>, %keep_bits: i32) -> (vector<16xf16>) {
+  %c16 = index.constant 16 : index
+  %v_bits = vector.bitcast %v_frag : vector<16xf16> to vector<8xi32>
+  %sh0 = scalar.constant 0 : i32
+  %e0 = vector.extract %v_bits[0] : vector<8xi32> -> i32
+  %r0 = func.call @ggml_hrx_fa_keep_word(%keep_bits, %sh0, %e0) : (i32, i32, i32) -> (i32)
+  %sh1 = scalar.constant 2 : i32
+  %e1 = vector.extract %v_bits[1] : vector<8xi32> -> i32
+  %r1 = func.call @ggml_hrx_fa_keep_word(%keep_bits, %sh1, %e1) : (i32, i32, i32) -> (i32)
+  %sh2 = scalar.constant 4 : i32
+  %e2 = vector.extract %v_bits[2] : vector<8xi32> -> i32
+  %r2 = func.call @ggml_hrx_fa_keep_word(%keep_bits, %sh2, %e2) : (i32, i32, i32) -> (i32)
+  %sh3 = scalar.constant 6 : i32
+  %e3 = vector.extract %v_bits[3] : vector<8xi32> -> i32
+  %r3 = func.call @ggml_hrx_fa_keep_word(%keep_bits, %sh3, %e3) : (i32, i32, i32) -> (i32)
+  %sh4 = scalar.constant 8 : i32
+  %e4 = vector.extract %v_bits[4] : vector<8xi32> -> i32
+  %r4 = func.call @ggml_hrx_fa_keep_word(%keep_bits, %sh4, %e4) : (i32, i32, i32) -> (i32)
+  %sh5 = scalar.constant 10 : i32
+  %e5 = vector.extract %v_bits[5] : vector<8xi32> -> i32
+  %r5 = func.call @ggml_hrx_fa_keep_word(%keep_bits, %sh5, %e5) : (i32, i32, i32) -> (i32)
+  %sh6 = scalar.constant 12 : i32
+  %e6 = vector.extract %v_bits[6] : vector<8xi32> -> i32
+  %r6 = func.call @ggml_hrx_fa_keep_word(%keep_bits, %sh6, %e6) : (i32, i32, i32) -> (i32)
+  %sh7 = scalar.constant 14 : i32
+  %e7 = vector.extract %v_bits[7] : vector<8xi32> -> i32
+  %r7 = func.call @ggml_hrx_fa_keep_word(%keep_bits, %sh7, %e7) : (i32, i32, i32) -> (i32)
+  %vm_bits = vector.from_elements %r0, %r1, %r2, %r3, %r4, %r5, %r6, %r7 : vector<8xi32>
+  %vm_h = vector.bitcast %vm_bits : vector<8xi32> to vector<16xf16>
+  %v_m = vector.fragment<rhs> %vm_h shape [%c16, %c16] : vector<16xf16>
+  func.return %v_m : vector<16xf16>
+}
+
+// A group keeps four V loads in flight. More loads in flight cause register spills.
+func.def inline @ggml_hrx_fa_pv_group_gfx11(%p_frag: vector<16xf16>, %alpha: vector<4xf32>, %row_bits: i32, %rv: i1, %row: index, %tq: index, %masked: i1, %p_view: view<16x24xf16>, %ps_view: view<16x24xf16>, %v_tile: view<16x[%d_v]xf16, %v_layout>, %d_v: index, %v_layout: encoding<layout>, %g: index, %x0: vector<4xf32>, %x1: vector<4xf32>, %x2: vector<4xf32>, %x3: vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c16 = index.constant 16 : index
+  %c64 = index.constant 64 : index
+  %g_ch = index.mul %g, %c64 : index
+  %ok = index.cmp ult, %g_ch, %d_v : index
+  %t0 = index.mul %g, %c4 : index
+  %t1 = index.add %t0, %c1 : index
+  %t2 = index.add %t0, %c2 : index
+  %t3 = index.add %t0, %c3 : index
+  %y0, %y1, %y2, %y3 = scf.if %ok -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+    %v0 = func.call @ggml_hrx_fa_v_load_gfx11(%v_tile, %d_v, %v_layout, %t0) : (view<16x[%d_v]xf16, %v_layout>, index, encoding<layout>, index) -> (vector<16xf16>)
+    %v1 = func.call @ggml_hrx_fa_v_load_gfx11(%v_tile, %d_v, %v_layout, %t1) : (view<16x[%d_v]xf16, %v_layout>, index, encoding<layout>, index) -> (vector<16xf16>)
+    %v2 = func.call @ggml_hrx_fa_v_load_gfx11(%v_tile, %d_v, %v_layout, %t2) : (view<16x[%d_v]xf16, %v_layout>, index, encoding<layout>, index) -> (vector<16xf16>)
+    %v3 = func.call @ggml_hrx_fa_v_load_gfx11(%v_tile, %d_v, %v_layout, %t3) : (view<16x[%d_v]xf16, %v_layout>, index, encoding<layout>, index) -> (vector<16xf16>)
+    // The WMMA adds two tokens in one step. A V value with p = 0 changes the rounding of that step.
+    // Thus each pass uses the rows that have one mask. The pass sets V to 0 for the tokens that the mask hides.
+    %z0, %z1, %z2, %z3 = scf.if %masked -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+      %true = scalar.constant true : i1
+      %zero_i = scalar.constant 0 : i32
+      %tag = scalar.constant 65536 : i32
+      %low16 = scalar.constant 65535 : i32
+      %zero_h = scalar.constant 0.0 : f16
+      %zero_h4 = vector.splat %zero_h : vector<4xf16>
+      %p_own = vector.load %p_view[%row, %tq] : view<16x24xf16> -> vector<4xf16>
+      %ms0 = vector.mulf %x0, %alpha : vector<4xf32>
+      %ms1 = vector.mulf %x1, %alpha : vector<4xf32>
+      %ms2 = vector.mulf %x2, %alpha : vector<4xf32>
+      %ms3 = vector.mulf %x3, %alpha : vector<4xf32>
+      %q0, %q1, %q2, %q3, %rem_end = scf.for %pass = [%c0 to %c16 step %c1](%u0 = %ms0 : vector<4xf32>, %u1 = %ms1 : vector<4xf32>, %u2 = %ms2 : vector<4xf32>, %u3 = %ms3 : vector<4xf32>, %rem = %rv : i1) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, i1) {
+        %any = kernel.subgroup.vote.any %rem : i1
+        %o0, %o1, %o2, %o3, %rem_n = scf.if %any -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, i1) {
+          %tagged = scalar.ori %row_bits, %tag : i32
+          %cand = scf.select %rem, %tagged, %zero_i : i32
+          %pick = kernel.subgroup.reduce<maxui> %cand : i32
+          %keep = scalar.andi %pick, %low16 : i32
+          %same = scalar.cmpi eq, %row_bits, %keep : i32
+          %sel = scalar.andi %rem, %same : i1
+          %p_sel = scf.select %sel, %p_own, %zero_h4 : vector<4xf16>
+          kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
+          vector.store %p_sel, %ps_view[%row, %tq] : vector<4xf16>, view<16x24xf16>
+          kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
+          %ps_frag = vector.fragment.load<lhs> %ps_view[%c0, %c0] shape [%c16, %c16] : view<16x24xf16> -> vector<16xf16>
+          %w0 = func.call @ggml_hrx_fa_v_mask_gfx11(%v0, %keep) : (vector<16xf16>, i32) -> (vector<16xf16>)
+          %ui0 = vector.fragment<init> %u0 shape [%c16, %c16] : vector<4xf32>
+          %s0 = vector.mma %ps_frag, %w0, %ui0 : vector<16xf16>, vector<16xf16>, vector<4xf32>
+          %w1 = func.call @ggml_hrx_fa_v_mask_gfx11(%v1, %keep) : (vector<16xf16>, i32) -> (vector<16xf16>)
+          %ui1 = vector.fragment<init> %u1 shape [%c16, %c16] : vector<4xf32>
+          %s1 = vector.mma %ps_frag, %w1, %ui1 : vector<16xf16>, vector<16xf16>, vector<4xf32>
+          %w2 = func.call @ggml_hrx_fa_v_mask_gfx11(%v2, %keep) : (vector<16xf16>, i32) -> (vector<16xf16>)
+          %ui2 = vector.fragment<init> %u2 shape [%c16, %c16] : vector<4xf32>
+          %s2 = vector.mma %ps_frag, %w2, %ui2 : vector<16xf16>, vector<16xf16>, vector<4xf32>
+          %w3 = func.call @ggml_hrx_fa_v_mask_gfx11(%v3, %keep) : (vector<16xf16>, i32) -> (vector<16xf16>)
+          %ui3 = vector.fragment<init> %u3 shape [%c16, %c16] : vector<4xf32>
+          %s3 = vector.mma %ps_frag, %w3, %ui3 : vector<16xf16>, vector<16xf16>, vector<4xf32>
+          %nsel = scalar.xori %sel, %true : i1
+          %rem2 = scalar.andi %rem, %nsel : i1
+          scf.yield %s0, %s1, %s2, %s3, %rem2 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, i1
+        } else {
+          scf.yield %u0, %u1, %u2, %u3, %rem : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, i1
+        }
+        scf.yield %o0, %o1, %o2, %o3, %rem_n : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, i1
+      }
+      scf.yield %q0, %q1, %q2, %q3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+    } else {
+      %ns0 = vector.mulf %x0, %alpha : vector<4xf32>
+      %ni0 = vector.fragment<init> %ns0 shape [%c16, %c16] : vector<4xf32>
+      %n0 = vector.mma %p_frag, %v0, %ni0 : vector<16xf16>, vector<16xf16>, vector<4xf32>
+      %ns1 = vector.mulf %x1, %alpha : vector<4xf32>
+      %ni1 = vector.fragment<init> %ns1 shape [%c16, %c16] : vector<4xf32>
+      %n1 = vector.mma %p_frag, %v1, %ni1 : vector<16xf16>, vector<16xf16>, vector<4xf32>
+      %ns2 = vector.mulf %x2, %alpha : vector<4xf32>
+      %ni2 = vector.fragment<init> %ns2 shape [%c16, %c16] : vector<4xf32>
+      %n2 = vector.mma %p_frag, %v2, %ni2 : vector<16xf16>, vector<16xf16>, vector<4xf32>
+      %ns3 = vector.mulf %x3, %alpha : vector<4xf32>
+      %ni3 = vector.fragment<init> %ns3 shape [%c16, %c16] : vector<4xf32>
+      %n3 = vector.mma %p_frag, %v3, %ni3 : vector<16xf16>, vector<16xf16>, vector<4xf32>
+      scf.yield %n0, %n1, %n2, %n3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+    }
+    scf.yield %z0, %z1, %z2, %z3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+  } else {
+    scf.yield %x0, %x1, %x2, %x3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+  }
+  func.return %y0, %y1, %y2, %y3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+}
+
+template.def<@ggml.flash_attn.pv> device target(@ggml_gfx11) requires [#target.subgroup.size<64>] priority(20) @ggml_flash_attn_pv_gfx11(%p_view: view<16x24xf16>, %ps_view: view<16x24xf16>, %a_bcast: view<16x16xf32, %a_layout>, %a_layout: encoding<layout>, %v_tile: view<16x[%d_v]xf16, %v_layout>, %d_v: index, %v_layout: encoding<layout>, %valid: vector<4xi1>, %unmasked: i1, %rv: i1, %row: index, %tq: index, %a0: vector<4xf32>, %a1: vector<4xf32>, %a2: vector<4xf32>, %a3: vector<4xf32>, %a4: vector<4xf32>, %a5: vector<4xf32>, %a6: vector<4xf32>, %a7: vector<4xf32>, %a8: vector<4xf32>, %a9: vector<4xf32>, %a10: vector<4xf32>, %a11: vector<4xf32>, %a12: vector<4xf32>, %a13: vector<4xf32>, %a14: vector<4xf32>, %a15: vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c16 = index.constant 16 : index
+  %all_tok = scalar.constant 65535 : i32
+  %true1 = scalar.constant true : i1
+  %p_frag = vector.fragment.load<lhs> %p_view[%c0, %c0] shape [%c16, %c16] : view<16x24xf16> -> vector<16xf16>
+  %alpha_f = vector.fragment.load<result> %a_bcast[%c0, %c0] shape [%c16, %c16] : view<16x16xf32, %a_layout> -> vector<4xf32>
+  %row_bits = scf.if %unmasked -> (i32) {
+    scf.yield %all_tok : i32
+  } else {
+    %bits = func.call @ggml_hrx_fa_row_bits(%valid, %tq) : (vector<4xi1>, index) -> (i32)
+    scf.yield %bits : i32
+  }
+  %masked = scalar.xori %unmasked, %true1 : i1
+  %n0, %n1, %n2, %n3 = func.call @ggml_hrx_fa_pv_group_gfx11(%p_frag, %alpha_f, %row_bits, %rv, %row, %tq, %masked, %p_view, %ps_view, %v_tile, %d_v, %v_layout, %c0, %a0, %a1, %a2, %a3) : (vector<16xf16>, vector<4xf32>, i32, i1, index, index, i1, view<16x24xf16>, view<16x24xf16>, view<16x[%d_v]xf16, %v_layout>, index, encoding<layout>, index, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
+  %n4, %n5, %n6, %n7 = func.call @ggml_hrx_fa_pv_group_gfx11(%p_frag, %alpha_f, %row_bits, %rv, %row, %tq, %masked, %p_view, %ps_view, %v_tile, %d_v, %v_layout, %c1, %a4, %a5, %a6, %a7) : (vector<16xf16>, vector<4xf32>, i32, i1, index, index, i1, view<16x24xf16>, view<16x24xf16>, view<16x[%d_v]xf16, %v_layout>, index, encoding<layout>, index, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
+  %n8, %n9, %n10, %n11 = func.call @ggml_hrx_fa_pv_group_gfx11(%p_frag, %alpha_f, %row_bits, %rv, %row, %tq, %masked, %p_view, %ps_view, %v_tile, %d_v, %v_layout, %c2, %a8, %a9, %a10, %a11) : (vector<16xf16>, vector<4xf32>, i32, i1, index, index, i1, view<16x24xf16>, view<16x24xf16>, view<16x[%d_v]xf16, %v_layout>, index, encoding<layout>, index, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
+  %n12, %n13, %n14, %n15 = func.call @ggml_hrx_fa_pv_group_gfx11(%p_frag, %alpha_f, %row_bits, %rv, %row, %tq, %masked, %p_view, %ps_view, %v_tile, %d_v, %v_layout, %c3, %a12, %a13, %a14, %a15) : (vector<16xf16>, vector<4xf32>, i32, i1, index, index, i1, view<16x24xf16>, view<16x24xf16>, view<16x[%d_v]xf16, %v_layout>, index, encoding<layout>, index, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
+  template.return %n0, %n1, %n2, %n3, %n4, %n5, %n6, %n7, %n8, %n9, %n10, %n11, %n12, %n13, %n14, %n15 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+}
+
+// Loom puts the gfx12 wave64 result rows 4 to 7 and 8 to 11 in the wrong lanes. The lhs row order corrects the result.
+func.def inline @ggml_flash_attn_lhs_lane_gfx12() -> (index, index) {
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %lane0 = kernel.subgroup.lane.id : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 63)] : index
+  %m = index.rem %lane, %c16 : index
+  %m_low = index.rem %m, %c4 : index
+  %m_quad = index.div %m, %c4 : index
+  %m_b2 = index.rem %m_quad, %c2 : index
+  %m_b3 = index.div %m, %c8 : index
+  %r8 = index.mul %m_b2, %c8 : index
+  %r4 = index.mul %m_b3, %c4 : index
+  %r84 = index.add %r8, %r4 : index
+  %row = index.add %m_low, %r84 : index
+  %k_group = index.div %lane, %c16 : index
+  %k = index.mul %k_group, %c4 : index
+  func.return %row, %k : index, index
+}
+
+template.def<@ggml.flash_attn.qk_k64> device target(@ggml_gfx12) requires [#target.subgroup.size<64>] priority(20) @ggml_flash_attn_qk_k64_gfx12(%k_tile: view<16x[%d_k]xf16, %k_layout>, %d_k: index, %k_layout: encoding<layout>, %q_t_view: view<256x16xf16, %q_t_layout>, %q_t_layout: encoding<layout>, %kx0: index, %kx1: index, %kx2: index, %kx3: index, %h1: i1, %h2: i1, %h3: i1, %se: vector<4xf32>, %so: vector<4xf32>) -> (vector<4xf32>, vector<4xf32>) {
+  %c0 = index.constant 0 : index
+  %c16 = index.constant 16 : index
+  %lane_row, %lane_k = func.call @ggml_flash_attn_lhs_lane_gfx12() : () -> (index, index)
+  %kk0 = index.add %kx0, %lane_k : index
+  %kk1 = index.add %kx1, %lane_k : index
+  %kk2 = index.add %kx2, %lane_k : index
+  %kk3 = index.add %kx3, %lane_k : index
+  %kv0 = vector.load %k_tile[%lane_row, %kk0] : view<16x[%d_k]xf16, %k_layout> -> vector<4xf16>
+  %kv1 = vector.load %k_tile[%lane_row, %kk1] : view<16x[%d_k]xf16, %k_layout> -> vector<4xf16>
+  %kv2 = vector.load %k_tile[%lane_row, %kk2] : view<16x[%d_k]xf16, %k_layout> -> vector<4xf16>
+  %kv3 = vector.load %k_tile[%lane_row, %kk3] : view<16x[%d_k]xf16, %k_layout> -> vector<4xf16>
+  %kf0 = vector.fragment<lhs> %kv0 shape [%c16, %c16] : vector<4xf16>
+  %kf1 = vector.fragment<lhs> %kv1 shape [%c16, %c16] : vector<4xf16>
+  %kf2 = vector.fragment<lhs> %kv2 shape [%c16, %c16] : vector<4xf16>
+  %kf3 = vector.fragment<lhs> %kv3 shape [%c16, %c16] : vector<4xf16>
+  %qf0 = vector.fragment.load<rhs> %q_t_view[%kx0, %c0] shape [%c16, %c16] : view<256x16xf16, %q_t_layout> -> vector<4xf16>
+  %qf1 = vector.fragment.load<rhs> %q_t_view[%kx1, %c0] shape [%c16, %c16] : view<256x16xf16, %q_t_layout> -> vector<4xf16>
+  %qf2 = vector.fragment.load<rhs> %q_t_view[%kx2, %c0] shape [%c16, %c16] : view<256x16xf16, %q_t_layout> -> vector<4xf16>
+  %qf3 = vector.fragment.load<rhs> %q_t_view[%kx3, %c0] shape [%c16, %c16] : view<256x16xf16, %q_t_layout> -> vector<4xf16>
+  %e0 = vector.mma %kf0, %qf0, %se : vector<4xf16>, vector<4xf16>, vector<4xf32>
+  %o1 = vector.mma %kf1, %qf1, %so : vector<4xf16>, vector<4xf16>, vector<4xf32>
+  %o1s = scf.select %h1, %o1, %so : vector<4xf32>
+  %e2 = vector.mma %kf2, %qf2, %e0 : vector<4xf16>, vector<4xf16>, vector<4xf32>
+  %e2s = scf.select %h2, %e2, %e0 : vector<4xf32>
+  %o3 = vector.mma %kf3, %qf3, %o1s : vector<4xf16>, vector<4xf16>, vector<4xf32>
+  %o3s = scf.select %h3, %o3, %o1s : vector<4xf32>
+  template.return %e2s, %o3s : vector<4xf32>, vector<4xf32>
+}
+
+func.def inline @ggml_hrx_fa_v_load_gfx12(%v_tile: view<16x[%d_v]xf16, %v_layout>, %d_v: index, %v_layout: encoding<layout>, %t: index) -> (vector<4xf16>) {
+  %c0 = index.constant 0 : index
+  %c15 = index.constant 15 : index
+  %c16 = index.constant 16 : index
+  %ch0 = index.mul %t, %c16 : index
+  %d_top = index.sub %d_v, %c16 : index
+  %ch1 = index.min %ch0, %d_top : index
+  %d_last = index.sub %d_v, %c15 : index
+  %ch = index.assume %ch1 [lt(%ch1, %d_last)] : index
+  %v_frag = vector.fragment.load<rhs> %v_tile[%c0, %ch] shape [%c16, %c16] : view<16x[%d_v]xf16, %v_layout> -> vector<4xf16>
+  func.return %v_frag : vector<4xf16>
+}
+
+// In the gfx12 wave64 rhs fragment, each lane holds 4 tokens.
+func.def inline @ggml_hrx_fa_v_mask_gfx12(%v_frag: vector<4xf16>, %keep_bits: i32) -> (vector<4xf16>) {
+  %c4 = index.constant 4 : index
+  %c16 = index.constant 16 : index
+  %two = scalar.constant 2 : i32
+  %lane0 = kernel.subgroup.lane.id : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 63)] : index
+  %k_group = index.div %lane, %c16 : index
+  %k0 = index.mul %k_group, %c4 : index
+  %sh0 = index.cast %k0 : index to i32
+  %sh1 = scalar.addi %sh0, %two : i32
+  %v_bits = vector.bitcast %v_frag : vector<4xf16> to vector<2xi32>
+  %e0 = vector.extract %v_bits[0] : vector<2xi32> -> i32
+  %r0 = func.call @ggml_hrx_fa_keep_word(%keep_bits, %sh0, %e0) : (i32, i32, i32) -> (i32)
+  %e1 = vector.extract %v_bits[1] : vector<2xi32> -> i32
+  %r1 = func.call @ggml_hrx_fa_keep_word(%keep_bits, %sh1, %e1) : (i32, i32, i32) -> (i32)
+  %vm_bits = vector.from_elements %r0, %r1 : vector<2xi32>
+  %vm_h = vector.bitcast %vm_bits : vector<2xi32> to vector<4xf16>
+  %v_m = vector.fragment<rhs> %vm_h shape [%c16, %c16] : vector<4xf16>
+  func.return %v_m : vector<4xf16>
+}
+
+func.def inline @ggml_hrx_fa_pv_group_gfx12(%p_frag: vector<4xf16>, %alpha: vector<4xf32>, %row_bits: i32, %rv: i1, %row: index, %tq: index, %masked: i1, %p_view: view<16x24xf16>, %ps_view: view<16x24xf16>, %v_tile: view<16x[%d_v]xf16, %v_layout>, %d_v: index, %v_layout: encoding<layout>, %g: index, %x0: vector<4xf32>, %x1: vector<4xf32>, %x2: vector<4xf32>, %x3: vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %c16 = index.constant 16 : index
+  %c64 = index.constant 64 : index
+  %lane_row, %lane_k = func.call @ggml_flash_attn_lhs_lane_gfx12() : () -> (index, index)
+  %g_ch = index.mul %g, %c64 : index
+  %ok = index.cmp ult, %g_ch, %d_v : index
+  %t0 = index.mul %g, %c4 : index
+  %t1 = index.add %t0, %c1 : index
+  %t2 = index.add %t0, %c2 : index
+  %t3 = index.add %t0, %c3 : index
+  %y0, %y1, %y2, %y3 = scf.if %ok -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+    %v0 = func.call @ggml_hrx_fa_v_load_gfx12(%v_tile, %d_v, %v_layout, %t0) : (view<16x[%d_v]xf16, %v_layout>, index, encoding<layout>, index) -> (vector<4xf16>)
+    %v1 = func.call @ggml_hrx_fa_v_load_gfx12(%v_tile, %d_v, %v_layout, %t1) : (view<16x[%d_v]xf16, %v_layout>, index, encoding<layout>, index) -> (vector<4xf16>)
+    %v2 = func.call @ggml_hrx_fa_v_load_gfx12(%v_tile, %d_v, %v_layout, %t2) : (view<16x[%d_v]xf16, %v_layout>, index, encoding<layout>, index) -> (vector<4xf16>)
+    %v3 = func.call @ggml_hrx_fa_v_load_gfx12(%v_tile, %d_v, %v_layout, %t3) : (view<16x[%d_v]xf16, %v_layout>, index, encoding<layout>, index) -> (vector<4xf16>)
+    %z0, %z1, %z2, %z3 = scf.if %masked -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+      %true = scalar.constant true : i1
+      %zero_i = scalar.constant 0 : i32
+      %tag = scalar.constant 65536 : i32
+      %low16 = scalar.constant 65535 : i32
+      %zero_h = scalar.constant 0.0 : f16
+      %zero_h4 = vector.splat %zero_h : vector<4xf16>
+      %p_own = vector.load %p_view[%row, %tq] : view<16x24xf16> -> vector<4xf16>
+      %ms0 = vector.mulf %x0, %alpha : vector<4xf32>
+      %ms1 = vector.mulf %x1, %alpha : vector<4xf32>
+      %ms2 = vector.mulf %x2, %alpha : vector<4xf32>
+      %ms3 = vector.mulf %x3, %alpha : vector<4xf32>
+      %q0, %q1, %q2, %q3, %rem_end = scf.for %pass = [%c0 to %c16 step %c1](%u0 = %ms0 : vector<4xf32>, %u1 = %ms1 : vector<4xf32>, %u2 = %ms2 : vector<4xf32>, %u3 = %ms3 : vector<4xf32>, %rem = %rv : i1) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, i1) {
+        %any = kernel.subgroup.vote.any %rem : i1
+        %o0, %o1, %o2, %o3, %rem_n = scf.if %any -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, i1) {
+          %tagged = scalar.ori %row_bits, %tag : i32
+          %cand = scf.select %rem, %tagged, %zero_i : i32
+          %pick = kernel.subgroup.reduce<maxui> %cand : i32
+          %keep = scalar.andi %pick, %low16 : i32
+          %same = scalar.cmpi eq, %row_bits, %keep : i32
+          %sel = scalar.andi %rem, %same : i1
+          %p_sel = scf.select %sel, %p_own, %zero_h4 : vector<4xf16>
+          kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
+          vector.store %p_sel, %ps_view[%row, %tq] : vector<4xf16>, view<16x24xf16>
+          kernel.barrier<workgroup> scope(subgroup) ordering(acq_rel)
+          %ps_lane = vector.load %ps_view[%lane_row, %lane_k] : view<16x24xf16> -> vector<4xf16>
+          %ps_frag = vector.fragment<lhs> %ps_lane shape [%c16, %c16] : vector<4xf16>
+          %w0 = func.call @ggml_hrx_fa_v_mask_gfx12(%v0, %keep) : (vector<4xf16>, i32) -> (vector<4xf16>)
+          %ui0 = vector.fragment<init> %u0 shape [%c16, %c16] : vector<4xf32>
+          %s0 = vector.mma %ps_frag, %w0, %ui0 : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %w1 = func.call @ggml_hrx_fa_v_mask_gfx12(%v1, %keep) : (vector<4xf16>, i32) -> (vector<4xf16>)
+          %ui1 = vector.fragment<init> %u1 shape [%c16, %c16] : vector<4xf32>
+          %s1 = vector.mma %ps_frag, %w1, %ui1 : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %w2 = func.call @ggml_hrx_fa_v_mask_gfx12(%v2, %keep) : (vector<4xf16>, i32) -> (vector<4xf16>)
+          %ui2 = vector.fragment<init> %u2 shape [%c16, %c16] : vector<4xf32>
+          %s2 = vector.mma %ps_frag, %w2, %ui2 : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %w3 = func.call @ggml_hrx_fa_v_mask_gfx12(%v3, %keep) : (vector<4xf16>, i32) -> (vector<4xf16>)
+          %ui3 = vector.fragment<init> %u3 shape [%c16, %c16] : vector<4xf32>
+          %s3 = vector.mma %ps_frag, %w3, %ui3 : vector<4xf16>, vector<4xf16>, vector<4xf32>
+          %nsel = scalar.xori %sel, %true : i1
+          %rem2 = scalar.andi %rem, %nsel : i1
+          scf.yield %s0, %s1, %s2, %s3, %rem2 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, i1
+        } else {
+          scf.yield %u0, %u1, %u2, %u3, %rem : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, i1
+        }
+        scf.yield %o0, %o1, %o2, %o3, %rem_n : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, i1
+      }
+      scf.yield %q0, %q1, %q2, %q3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+    } else {
+      %ns0 = vector.mulf %x0, %alpha : vector<4xf32>
+      %ni0 = vector.fragment<init> %ns0 shape [%c16, %c16] : vector<4xf32>
+      %n0 = vector.mma %p_frag, %v0, %ni0 : vector<4xf16>, vector<4xf16>, vector<4xf32>
+      %ns1 = vector.mulf %x1, %alpha : vector<4xf32>
+      %ni1 = vector.fragment<init> %ns1 shape [%c16, %c16] : vector<4xf32>
+      %n1 = vector.mma %p_frag, %v1, %ni1 : vector<4xf16>, vector<4xf16>, vector<4xf32>
+      %ns2 = vector.mulf %x2, %alpha : vector<4xf32>
+      %ni2 = vector.fragment<init> %ns2 shape [%c16, %c16] : vector<4xf32>
+      %n2 = vector.mma %p_frag, %v2, %ni2 : vector<4xf16>, vector<4xf16>, vector<4xf32>
+      %ns3 = vector.mulf %x3, %alpha : vector<4xf32>
+      %ni3 = vector.fragment<init> %ns3 shape [%c16, %c16] : vector<4xf32>
+      %n3 = vector.mma %p_frag, %v3, %ni3 : vector<4xf16>, vector<4xf16>, vector<4xf32>
+      scf.yield %n0, %n1, %n2, %n3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+    }
+    scf.yield %z0, %z1, %z2, %z3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+  } else {
+    scf.yield %x0, %x1, %x2, %x3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+  }
+  func.return %y0, %y1, %y2, %y3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+}
+
+template.def<@ggml.flash_attn.pv> device target(@ggml_gfx12) requires [#target.subgroup.size<64>] priority(20) @ggml_flash_attn_pv_gfx12(%p_view: view<16x24xf16>, %ps_view: view<16x24xf16>, %a_bcast: view<16x16xf32, %a_layout>, %a_layout: encoding<layout>, %v_tile: view<16x[%d_v]xf16, %v_layout>, %d_v: index, %v_layout: encoding<layout>, %valid: vector<4xi1>, %unmasked: i1, %rv: i1, %row: index, %tq: index, %a0: vector<4xf32>, %a1: vector<4xf32>, %a2: vector<4xf32>, %a3: vector<4xf32>, %a4: vector<4xf32>, %a5: vector<4xf32>, %a6: vector<4xf32>, %a7: vector<4xf32>, %a8: vector<4xf32>, %a9: vector<4xf32>, %a10: vector<4xf32>, %a11: vector<4xf32>, %a12: vector<4xf32>, %a13: vector<4xf32>, %a14: vector<4xf32>, %a15: vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c3 = index.constant 3 : index
+  %c16 = index.constant 16 : index
+  %all_tok = scalar.constant 65535 : i32
+  %true1 = scalar.constant true : i1
+  %lane_row, %lane_k = func.call @ggml_flash_attn_lhs_lane_gfx12() : () -> (index, index)
+  %p_lane = vector.load %p_view[%lane_row, %lane_k] : view<16x24xf16> -> vector<4xf16>
+  %p_frag = vector.fragment<lhs> %p_lane shape [%c16, %c16] : vector<4xf16>
+  %alpha_f = vector.fragment.load<result> %a_bcast[%c0, %c0] shape [%c16, %c16] : view<16x16xf32, %a_layout> -> vector<4xf32>
+  %row_bits = scf.if %unmasked -> (i32) {
+    scf.yield %all_tok : i32
+  } else {
+    %bits = func.call @ggml_hrx_fa_row_bits(%valid, %tq) : (vector<4xi1>, index) -> (i32)
+    scf.yield %bits : i32
+  }
+  %masked = scalar.xori %unmasked, %true1 : i1
+  %n0, %n1, %n2, %n3 = func.call @ggml_hrx_fa_pv_group_gfx12(%p_frag, %alpha_f, %row_bits, %rv, %row, %tq, %masked, %p_view, %ps_view, %v_tile, %d_v, %v_layout, %c0, %a0, %a1, %a2, %a3) : (vector<4xf16>, vector<4xf32>, i32, i1, index, index, i1, view<16x24xf16>, view<16x24xf16>, view<16x[%d_v]xf16, %v_layout>, index, encoding<layout>, index, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
+  %n4, %n5, %n6, %n7 = func.call @ggml_hrx_fa_pv_group_gfx12(%p_frag, %alpha_f, %row_bits, %rv, %row, %tq, %masked, %p_view, %ps_view, %v_tile, %d_v, %v_layout, %c1, %a4, %a5, %a6, %a7) : (vector<4xf16>, vector<4xf32>, i32, i1, index, index, i1, view<16x24xf16>, view<16x24xf16>, view<16x[%d_v]xf16, %v_layout>, index, encoding<layout>, index, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
+  %n8, %n9, %n10, %n11 = func.call @ggml_hrx_fa_pv_group_gfx12(%p_frag, %alpha_f, %row_bits, %rv, %row, %tq, %masked, %p_view, %ps_view, %v_tile, %d_v, %v_layout, %c2, %a8, %a9, %a10, %a11) : (vector<4xf16>, vector<4xf32>, i32, i1, index, index, i1, view<16x24xf16>, view<16x24xf16>, view<16x[%d_v]xf16, %v_layout>, index, encoding<layout>, index, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
+  %n12, %n13, %n14, %n15 = func.call @ggml_hrx_fa_pv_group_gfx12(%p_frag, %alpha_f, %row_bits, %rv, %row, %tq, %masked, %p_view, %ps_view, %v_tile, %d_v, %v_layout, %c3, %a12, %a13, %a14, %a15) : (vector<4xf16>, vector<4xf32>, i32, i1, index, index, i1, view<16x24xf16>, view<16x24xf16>, view<16x[%d_v]xf16, %v_layout>, index, encoding<layout>, index, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
+  template.return %n0, %n1, %n2, %n3, %n4, %n5, %n6, %n7, %n8, %n9, %n10, %n11, %n12, %n13, %n14, %n15 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>
+}

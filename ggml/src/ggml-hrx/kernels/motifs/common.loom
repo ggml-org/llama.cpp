@@ -1,0 +1,43 @@
+// Raw loads and byte decodes that several formats use.
+
+template.decl @ggml.u8.affine4(%word: i32, %scale: f32, %bias: f32) -> (vector<4xf32>)
+
+template.def<@ggml.u8.affine4> device @ggml_u8_affine4(%word: i32, %scale: f32, %bias: f32) -> (vector<4xf32>) {
+  %word_vector = vector.from_elements %word : vector<1xi32>
+  %bytes = vector.bitcast %word_vector : vector<1xi32> to vector<4xi8>
+  %values = vector.uitofp %bytes : vector<4xi8> to vector<4xf32>
+  %scale_vector = vector.splat %scale : vector<4xf32>
+  %bias_vector = vector.splat %bias : vector<4xf32>
+  %result = vector.fmaf %values, %scale_vector, %bias_vector : vector<4xf32>
+  template.return %result : vector<4xf32>
+}
+
+template.decl @ggml.mem.half(%weight: buffer, %span: index, %index: index) -> (i16)
+
+template.def<@ggml.mem.half> device @ggml_mem_half(%weight: buffer, %span: index, %index: index) -> (i16) {
+  %c0_offset = index.constant 0 : offset
+  %c0_i16 = scalar.constant 0 : i16
+  %halves = buffer.view %weight[%c0_offset] : buffer -> view<[%span]xi16>
+  %off = index.assume %index [range(%index, 0, 2147483646)] : index
+  %ok = index.cmp ult, %off, %span : index
+  %value = scf.if %ok -> (i16) {
+    %loaded = view.load %halves[%off] : view<[%span]xi16> -> i16
+    scf.yield %loaded : i16
+  } else {
+    scf.yield %c0_i16 : i16
+  }
+  template.return %value : i16
+}
+
+template.decl @ggml.mem.half_word(%weight: buffer, %span: index, %index: index) -> (vector<1xi32>)
+
+// The packed data is only 2-byte aligned. Thus this makes one word from two halves.
+template.def<@ggml.mem.half_word> device @ggml_mem_half_word(%weight: buffer, %span: index, %index: index) -> (vector<1xi32>) {
+  %c1 = index.constant 1 : index
+  %index1 = index.add %index, %c1 : index
+  %lo = template.apply<@ggml.mem.half>(%weight, %span, %index) : (buffer, index, index) -> (i16)
+  %hi = template.apply<@ggml.mem.half>(%weight, %span, %index1) : (buffer, index, index) -> (i16)
+  %pair = vector.from_elements %lo, %hi : vector<2xi16>
+  %word = vector.bitcast %pair : vector<2xi16> to vector<1xi32>
+  template.return %word : vector<1xi32>
+}

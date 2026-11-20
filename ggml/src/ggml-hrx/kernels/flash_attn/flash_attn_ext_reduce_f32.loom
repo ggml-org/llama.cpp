@@ -1,0 +1,92 @@
+// The partial buffer holds n_split blocks of dst rows. The (max, sum) pairs of each split and row follow them.
+
+target.decl @ggml_wave64
+
+kernel.def target(@ggml_wave64) export("ggml_flash_attn_ext_reduce_f32") @ggml_flash_attn_ext_reduce_f32(%n_rows: index) {
+  %one = index.constant 1 : index
+  %wg_size = index.constant 256 : index
+  kernel.launch.config workgroups(%n_rows, %one, %one) workgroup_size(%wg_size, %one, %one) : index
+} launch(%n_split_in: index, %d_v_in: index, %dst_span_in: index, %part_span_in: index, %part: buffer, %dst: buffer) {
+  // The caller checks these ranges.
+  %n_split = index.assume %n_split_in [range(%n_split_in, 1, 1024)] : index
+  %d_v = index.assume %d_v_in [range(%d_v_in, 1, 256)] : index
+  %dst_span = index.assume %dst_span_in [range(%dst_span_in, 1, 2147483647)] : index
+  %part_span = index.assume %part_span_in [range(%part_span_in, 1, 2147483647)] : index
+
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %zero = index.constant 0 : offset
+  %zero_f32 = scalar.constant 0.0 : f32
+  %one_f32 = scalar.constant 1.0 : f32
+  %neg_large = scalar.constant -1e+30 : f32
+  %ro = kernel.workgroup.id<x> : index
+  %t0 = kernel.workitem.id<x> : index
+  %t = index.assume %t0 [range(%t0, 0, 255)] : index
+  %part_view = buffer.view %part[%zero] : buffer -> view<[%part_span]xf32>
+  %dst_view = buffer.view %dst[%zero] : buffer -> view<[%dst_span]xf32>
+
+  %n_rows = index.div %dst_span, %d_v : index
+  %ml_base = index.mul %n_split, %dst_span : index
+  %ml_stride = index.mul %n_rows, %c2 : index
+  %ml_row0 = index.mul %ro, %c2 : index
+  %ml_row = index.add %ml_base, %ml_row0 : index
+  %c_ok = index.cmp ult, %t, %d_v : index
+  %o_row = index.mul %ro, %d_v : index
+  %o_raw = index.add %o_row, %t : index
+  %o_idx = index.assume %o_raw [range(%o_raw, 0, 2147483646)] : index
+  %o_in = index.cmp ult, %o_idx, %dst_span : index
+  %ok = scalar.andi %c_ok, %o_in : i1
+  scf.if %ok {
+    %m_all = scf.for %s = [%c0 to %n_split step %c1](%mx = %neg_large : f32) -> (f32) {
+      %mo = index.mul %s, %ml_stride : index
+      %mi0 = index.add %ml_row, %mo : index
+      %mi = index.assume %mi0 [range(%mi0, 0, 2147483646)] : index
+      %m_in = index.cmp ult, %mi, %part_span : index
+      %m = scf.if %m_in -> (f32) {
+        %x = view.load %part_view[%mi] : view<[%part_span]xf32> -> f32
+        scf.yield %x : f32
+      } else {
+        scf.yield %neg_large : f32
+      }
+      %mx_n = scalar.maxnumf %mx, %m : f32
+      scf.yield %mx_n : f32
+    }
+    %l_all, %o_all = scf.for %s = [%c0 to %n_split step %c1](%ls = %zero_f32 : f32, %os = %zero_f32 : f32) -> (f32, f32) {
+      %mo = index.mul %s, %ml_stride : index
+      %mi0 = index.add %ml_row, %mo : index
+      %mi = index.assume %mi0 [range(%mi0, 0, 2147483640)] : index
+      %li = index.add %mi, %c1 : index
+      %po = index.mul %s, %dst_span : index
+      %pi0 = index.add %po, %o_idx : index
+      %pi = index.assume %pi0 [range(%pi0, 0, 2147483646)] : index
+      %l_in = index.cmp ult, %li, %part_span : index
+      %ln, %on = scf.if %l_in -> (f32, f32) {
+        %m = view.load %part_view[%mi] : view<[%part_span]xf32> -> f32
+        %l = view.load %part_view[%li] : view<[%part_span]xf32> -> f32
+        %p_in = index.cmp ult, %pi, %part_span : index
+        %o = scf.if %p_in -> (f32) {
+          %x = view.load %part_view[%pi] : view<[%part_span]xf32> -> f32
+          scf.yield %x : f32
+        } else {
+          scf.yield %zero_f32 : f32
+        }
+        %d = scalar.subf %m, %m_all : f32
+        %e = scalar.expf<afn> %d : f32
+        %ln0 = scalar.fmaf %l, %e, %ls : f32
+        %on0 = scalar.fmaf %o, %e, %os : f32
+        scf.yield %ln0, %on0 : f32, f32
+      } else {
+        scf.yield %ls, %os : f32, f32
+      }
+      scf.yield %ln, %on : f32, f32
+    }
+    // A row with no unmasked token gets 0, as on the CPU.
+    %l_pos = scalar.cmpf ogt, %l_all, %zero_f32 : f32
+    %l_safe = scf.select %l_pos, %l_all, %one_f32 : f32
+    %y0 = scalar.divf %o_all, %l_safe : f32
+    %y = scf.select %l_pos, %y0, %zero_f32 : f32
+    view.store %y, %dst_view[%o_idx] : f32, view<[%dst_span]xf32>
+  }
+  kernel.return
+}

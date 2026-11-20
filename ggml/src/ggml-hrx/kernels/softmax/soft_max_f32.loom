@@ -1,0 +1,144 @@
+// The mask is f32. ALiBi and sinks are not supported.
+// Masked entries are -inf. The afn exp gives 0 for them.
+
+config.decl @ggml.norm.wg_size : %value: index where [range(%value, 64, 1024), multiple_of(%value, 64)]
+
+target.decl @ggml_wave64
+
+kernel.def target(@ggml_wave64) export("ggml_soft_max_f32") @ggml_soft_max_f32(%rows: index) {
+  %one = index.constant 1 : index
+  %wg_size = config.get @ggml.norm.wg_size : index
+  kernel.launch.config workgroups(%rows, %one, %one) workgroup_size(%wg_size, %one, %one) : index
+} launch(%rows_in: index, %ne0_in: index, %ne1_in: index, %ne2_in: index, %s1_in: index, %s2_in: index, %s3_in: index, %src_span_in: index, %m_ne2_in: index, %m_ne3_in: index, %m_s1_in: index, %m_s2_in: index, %m_s3_in: index, %m_span_in: index, %d1_in: index, %d2_in: index, %d3_in: index, %dst_span_in: index, %scale_bits: index, %src: buffer, %mask: buffer, %dst: buffer) {
+  // supports_soft_max checks these ranges.
+  %rows = index.assume %rows_in [range(%rows_in, 1, 2147483647)] : index
+  %ne0 = index.assume %ne0_in [range(%ne0_in, 1, 2147483647)] : index
+  %ne1 = index.assume %ne1_in [range(%ne1_in, 1, 2147483647)] : index
+  %ne2 = index.assume %ne2_in [range(%ne2_in, 1, 2147483647)] : index
+  %s1 = index.assume %s1_in [range(%s1_in, 0, 2147483647)] : index
+  %s2 = index.assume %s2_in [range(%s2_in, 0, 2147483647)] : index
+  %s3 = index.assume %s3_in [range(%s3_in, 0, 2147483647)] : index
+  %src_span = index.assume %src_span_in [range(%src_span_in, 1, 2147483647)] : index
+  %m_ne2 = index.assume %m_ne2_in [range(%m_ne2_in, 1, 2147483647)] : index
+  %m_ne3 = index.assume %m_ne3_in [range(%m_ne3_in, 1, 2147483647)] : index
+  %m_s1 = index.assume %m_s1_in [range(%m_s1_in, 0, 2147483647)] : index
+  %m_s2 = index.assume %m_s2_in [range(%m_s2_in, 0, 2147483647)] : index
+  %m_s3 = index.assume %m_s3_in [range(%m_s3_in, 0, 2147483647)] : index
+  %m_span = index.assume %m_span_in [range(%m_span_in, 1, 2147483647)] : index
+  %d1 = index.assume %d1_in [range(%d1_in, 0, 2147483647)] : index
+  %d2 = index.assume %d2_in [range(%d2_in, 0, 2147483647)] : index
+  %d3 = index.assume %d3_in [range(%d3_in, 0, 2147483647)] : index
+  %dst_span = index.assume %dst_span_in [range(%dst_span_in, 1, 2147483647)] : index
+  %wg_size = config.get @ggml.norm.wg_size : index
+  %row = kernel.workgroup.id<x> : index
+  %item = kernel.workitem.id<x> : index
+  %zero = index.constant 0 : offset
+  %src_view = buffer.view %src[%zero] : buffer -> view<[%src_span]xf32>
+  %mask_view = buffer.view %mask[%zero] : buffer -> view<[%m_span]xf32>
+  %dst_view = buffer.view %dst[%zero] : buffer -> view<[%dst_span]xf32>
+
+  %i1 = index.rem %row, %ne1 : index
+  %t0 = index.div %row, %ne1 : index
+  %i2 = index.rem %t0, %ne2 : index
+  %i3 = index.div %t0, %ne2 : index
+  %so1 = index.mul %i1, %s1 : index
+  %so2 = index.mul %i2, %s2 : index
+  %so3 = index.mul %i3, %s3 : index
+  %so12 = index.add %so1, %so2 : index
+  %src_base = index.add %so12, %so3 : index
+  %do1 = index.mul %i1, %d1 : index
+  %do2 = index.mul %i2, %d2 : index
+  %do3 = index.mul %i3, %d3 : index
+  %do12 = index.add %do1, %do2 : index
+  %dst_base = index.add %do12, %do3 : index
+  %mi2 = index.rem %i2, %m_ne2 : index
+  %mi3 = index.rem %i3, %m_ne3 : index
+  %mo1 = index.mul %i1, %m_s1 : index
+  %mo2 = index.mul %mi2, %m_s2 : index
+  %mo3 = index.mul %mi3, %m_s3 : index
+  %mo12 = index.add %mo1, %mo2 : index
+  %mask_base = index.add %mo12, %mo3 : index
+
+  %scale_i32 = index.cast %scale_bits : index to i32
+  %scale_vec = vector.from_elements %scale_i32 : vector<1xi32>
+  %scale_fvec = vector.bitcast %scale_vec : vector<1xi32> to vector<1xf32>
+  %scale = vector.extract %scale_fvec[0] : vector<1xf32> -> f32
+
+  %c0_f32 = scalar.constant 0.0 : f32
+  %lowest = scalar.constant -3.4028234663852886e+38 : f32
+
+  %partial_max = scf.for %c = [%item to %ne0 step %wg_size](%acc = %lowest : f32) -> (f32) {
+    %src_idx = index.add %src_base, %c : index
+    %src_off = index.assume %src_idx [range(%src_idx, 0, 2147483646)] : index
+    %mask_idx = index.add %mask_base, %c : index
+    %mask_off = index.assume %mask_idx [range(%mask_idx, 0, 2147483646)] : index
+    %src_ok = index.cmp ult, %src_off, %src_span : index
+    %next = scf.if %src_ok -> (f32) {
+      %x = view.load %src_view[%src_off] : view<[%src_span]xf32> -> f32
+      %xs = scalar.mulf %x, %scale : f32
+      %mask_ok = index.cmp ult, %mask_off, %m_span : index
+      %m = scf.if %mask_ok -> (f32) {
+        %mv = view.load %mask_view[%mask_off] : view<[%m_span]xf32> -> f32
+        scf.yield %mv : f32
+      } else {
+        scf.yield %c0_f32 : f32
+      }
+      %v = scalar.addf %xs, %m : f32
+      %mx = scalar.maxnumf %acc, %v : f32
+      scf.yield %mx : f32
+    } else {
+      scf.yield %acc : f32
+    }
+    scf.yield %next : f32
+  }
+  %row_max = kernel.workgroup.reduce<maxnumf> %partial_max : f32
+
+  %partial_sum = scf.for %c = [%item to %ne0 step %wg_size](%acc = %c0_f32 : f32) -> (f32) {
+    %src_idx = index.add %src_base, %c : index
+    %src_off = index.assume %src_idx [range(%src_idx, 0, 2147483646)] : index
+    %mask_idx = index.add %mask_base, %c : index
+    %mask_off = index.assume %mask_idx [range(%mask_idx, 0, 2147483646)] : index
+    %dst_idx = index.add %dst_base, %c : index
+    %dst_off = index.assume %dst_idx [range(%dst_idx, 0, 2147483646)] : index
+    %src_ok = index.cmp ult, %src_off, %src_span : index
+    %next = scf.if %src_ok -> (f32) {
+      %x = view.load %src_view[%src_off] : view<[%src_span]xf32> -> f32
+      %xs = scalar.mulf %x, %scale : f32
+      %mask_ok = index.cmp ult, %mask_off, %m_span : index
+      %m = scf.if %mask_ok -> (f32) {
+        %mv = view.load %mask_view[%mask_off] : view<[%m_span]xf32> -> f32
+        scf.yield %mv : f32
+      } else {
+        scf.yield %c0_f32 : f32
+      }
+      %v = scalar.addf %xs, %m : f32
+      %shifted = scalar.subf %v, %row_max : f32
+      %e = scalar.expf<afn> %shifted : f32
+      %dst_ok = index.cmp ult, %dst_off, %dst_span : index
+      scf.if %dst_ok {
+        view.store %e, %dst_view[%dst_off] : f32, view<[%dst_span]xf32>
+      }
+      %sum = scalar.addf %acc, %e : f32
+      scf.yield %sum : f32
+    } else {
+      scf.yield %acc : f32
+    }
+    scf.yield %next : f32
+  }
+  %row_sum = kernel.workgroup.reduce<addf> %partial_sum : f32
+  %c1_f32 = scalar.constant 1.0 : f32
+  %inv_sum = scalar.divf %c1_f32, %row_sum : f32
+
+  // Each work item reads back only the elements that it stored. Thus no barrier is necessary.
+  scf.for %c = [%item to %ne0 step %wg_size] {
+    %dst_idx = index.add %dst_base, %c : index
+    %dst_off = index.assume %dst_idx [range(%dst_idx, 0, 2147483646)] : index
+    %dst_ok = index.cmp ult, %dst_off, %dst_span : index
+    scf.if %dst_ok {
+      %e = view.load %dst_view[%dst_off] : view<[%dst_span]xf32> -> f32
+      %y = scalar.mulf %e, %inv_sum : f32
+      view.store %y, %dst_view[%dst_off] : f32, view<[%dst_span]xf32>
+    }
+  }
+  kernel.return
+}

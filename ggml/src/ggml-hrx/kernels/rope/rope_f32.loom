@@ -1,0 +1,207 @@
+// Matches ggml-cpu rope_flt, normal mode, forward only.
+
+config.decl @ggml.rope.freq_factors : %value: index where [range(%value, 0, 1)]
+
+config.decl @ggml.elementwise.wg_size : %value: index where [range(%value, 64, 1024), multiple_of(%value, 64)]
+
+target.decl @ggml_wave64
+
+kernel.def target(@ggml_wave64) export("ggml_rope_f32") @ggml_rope_f32(%n: index) {
+  %one = index.constant 1 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %round = index.sub %wg_size, %one : index
+  %n_round = index.add %n, %round : index
+  %groups = index.div %n_round, %wg_size : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%wg_size, %one, %one) : index
+} launch(%n_in: index, %half_ne0_in: index, %ne1_in: index, %ne2_in: index, %n_dims_in: index, %n_offs_in: index, %s1_in: index, %s2_in: index, %s3_in: index, %src_span_in: index, %d1_in: index, %d2_in: index, %d3_in: index, %dst_span_in: index, %pos_span_in: index, %ff_span_in: index, %log2_theta_scale_bits: index, %freq_scale_bits: index, %ext_factor_bits: index, %corr0_bits: index, %corr1_bits: index, %mscale_bits: index, %src: buffer, %pos: buffer, %ff: buffer, %dst: buffer) {
+  // supports_rope checks these ranges.
+  %n = index.assume %n_in [range(%n_in, 1, 2147483647)] : index
+  %half_ne0 = index.assume %half_ne0_in [range(%half_ne0_in, 1, 2147483647)] : index
+  %ne1 = index.assume %ne1_in [range(%ne1_in, 1, 2147483647)] : index
+  %ne2 = index.assume %ne2_in [range(%ne2_in, 1, 2147483647)] : index
+  %n_dims = index.assume %n_dims_in [range(%n_dims_in, 1, 2147483647)] : index
+  %n_offs = index.assume %n_offs_in [range(%n_offs_in, 0, 2147483647)] : index
+  %s1 = index.assume %s1_in [range(%s1_in, 0, 2147483647)] : index
+  %s2 = index.assume %s2_in [range(%s2_in, 0, 2147483647)] : index
+  %s3 = index.assume %s3_in [range(%s3_in, 0, 2147483647)] : index
+  %src_span = index.assume %src_span_in [range(%src_span_in, 1, 2147483647)] : index
+  %d1 = index.assume %d1_in [range(%d1_in, 0, 2147483647)] : index
+  %d2 = index.assume %d2_in [range(%d2_in, 0, 2147483647)] : index
+  %d3 = index.assume %d3_in [range(%d3_in, 0, 2147483647)] : index
+  %dst_span = index.assume %dst_span_in [range(%dst_span_in, 1, 2147483647)] : index
+  %pos_span = index.assume %pos_span_in [range(%pos_span_in, 1, 2147483647)] : index
+  %ff_span = index.assume %ff_span_in [range(%ff_span_in, 1, 2147483647)] : index
+  %has_ff = config.get @ggml.rope.freq_factors : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %group = kernel.workgroup.id<x> : index
+  %item = kernel.workitem.id<x> : index
+  %base = index.mul %group, %wg_size : index
+  %i = index.add %base, %item : index
+  %in_bounds = index.cmp ult, %i, %n : index
+  %zero = index.constant 0 : offset
+  %src_view = buffer.view %src[%zero] : buffer -> view<[%src_span]xf32>
+  %dst_view = buffer.view %dst[%zero] : buffer -> view<[%dst_span]xf32>
+  scf.if %in_bounds {
+    %j = index.rem %i, %half_ne0 : index
+    %t0 = index.div %i, %half_ne0 : index
+    %i1 = index.rem %t0, %ne1 : index
+    %t1 = index.div %t0, %ne1 : index
+    %i2 = index.rem %t1, %ne2 : index
+    %i3 = index.div %t1, %ne2 : index
+    %so1 = index.mul %i1, %s1 : index
+    %so2 = index.mul %i2, %s2 : index
+    %so3 = index.mul %i3, %s3 : index
+    %so12 = index.add %so1, %so2 : index
+    %src_base = index.add %so12, %so3 : index
+    %do1 = index.mul %i1, %d1 : index
+    %do2 = index.mul %i2, %d2 : index
+    %do3 = index.mul %i3, %d3 : index
+    %do12 = index.add %do1, %do2 : index
+    %dst_base = index.add %do12, %do3 : index
+
+    %ch = index.mul %j, %c2 : index
+    %rot_end = index.add %n_offs, %n_dims : index
+    %after_start = index.cmp uge, %ch, %n_offs : index
+    %before_end = index.cmp ult, %ch, %rot_end : index
+    %is_rot = scalar.andi %after_start, %before_end : i1
+
+    %eb = index.add %ch, %c1 : index
+    %cos_theta, %sin_theta = scf.if %is_rot -> (f32, f32) {
+      // Here ch >= n_offs. Thus k >= 0.
+      %half_offs = index.div %n_offs, %c2 : index
+      %k_raw = index.sub %j, %half_offs : index
+      %k = index.assume %k_raw [range(%k_raw, 0, 1073741823)] : index
+      %pos_off = index.assume %i2 [range(%i2, 0, 2147483646)] : index
+      %pos_ok = index.cmp ult, %pos_off, %pos_span : index
+      %c0_i32 = scalar.constant 0 : i32
+      %p_i32 = scf.if %pos_ok -> (i32) {
+        %pos_view = buffer.view %pos[%zero] : buffer -> view<[%pos_span]xi32>
+        %pv = view.load %pos_view[%pos_off] : view<[%pos_span]xi32> -> i32
+        scf.yield %pv : i32
+      } else {
+        scf.yield %c0_i32 : i32
+      }
+      %p = scalar.sitofp %p_i32 : i32 to f32
+
+      %log2_theta_scale_i32 = index.cast %log2_theta_scale_bits : index to i32
+      %freq_scale_i32 = index.cast %freq_scale_bits : index to i32
+      %ext_factor_i32 = index.cast %ext_factor_bits : index to i32
+      %corr0_i32 = index.cast %corr0_bits : index to i32
+      %corr1_i32 = index.cast %corr1_bits : index to i32
+      %mscale_i32 = index.cast %mscale_bits : index to i32
+      %log2_theta_scale_vec = vector.from_elements %log2_theta_scale_i32 : vector<1xi32>
+      %freq_scale_vec = vector.from_elements %freq_scale_i32 : vector<1xi32>
+      %ext_factor_vec = vector.from_elements %ext_factor_i32 : vector<1xi32>
+      %corr0_vec = vector.from_elements %corr0_i32 : vector<1xi32>
+      %corr1_vec = vector.from_elements %corr1_i32 : vector<1xi32>
+      %mscale_vec = vector.from_elements %mscale_i32 : vector<1xi32>
+      %log2_theta_scale_fvec = vector.bitcast %log2_theta_scale_vec : vector<1xi32> to vector<1xf32>
+      %freq_scale_fvec = vector.bitcast %freq_scale_vec : vector<1xi32> to vector<1xf32>
+      %ext_factor_fvec = vector.bitcast %ext_factor_vec : vector<1xi32> to vector<1xf32>
+      %corr0_fvec = vector.bitcast %corr0_vec : vector<1xi32> to vector<1xf32>
+      %corr1_fvec = vector.bitcast %corr1_vec : vector<1xi32> to vector<1xf32>
+      %mscale_fvec = vector.bitcast %mscale_vec : vector<1xi32> to vector<1xf32>
+      %log2_theta_scale = vector.extract %log2_theta_scale_fvec[0] : vector<1xf32> -> f32
+      %freq_scale = vector.extract %freq_scale_fvec[0] : vector<1xf32> -> f32
+      %ext_factor = vector.extract %ext_factor_fvec[0] : vector<1xf32> -> f32
+      %corr0 = vector.extract %corr0_fvec[0] : vector<1xf32> -> f32
+      %corr1 = vector.extract %corr1_fvec[0] : vector<1xf32> -> f32
+      %mscale = vector.extract %mscale_fvec[0] : vector<1xf32> -> f32
+
+      %k_i32 = index.cast %k : index to i32
+      %k_f32 = scalar.sitofp %k_i32 : i32 to f32
+      %freq_exp = scalar.mulf %k_f32, %log2_theta_scale : f32
+      %freq = scalar.exp2f<afn> %freq_exp : f32
+      %theta_base = scalar.mulf %p, %freq : f32
+      %use_ff = index.cmp eq, %has_ff, %c1 : index
+      %theta_extrap = scf.if %use_ff -> (f32) {
+        %ff_ok = index.cmp ult, %k, %ff_span : index
+        %scaled = scf.if %ff_ok -> (f32) {
+          %ff_view = buffer.view %ff[%zero] : buffer -> view<[%ff_span]xf32>
+          %factor = view.load %ff_view[%k] : view<[%ff_span]xf32> -> f32
+          %q = scalar.divf %theta_base, %factor : f32
+          scf.yield %q : f32
+        } else {
+          scf.yield %theta_base : f32
+        }
+        scf.yield %scaled : f32
+      } else {
+        scf.yield %theta_base : f32
+      }
+
+      // As in ggml-cpu, YaRN is not used when ext_factor is 0.
+      %c0_f32 = scalar.constant 0.0 : f32
+      %c1_f32 = scalar.constant 1.0 : f32
+      %min_span = scalar.constant 0.001 : f32
+      %theta_interp = scalar.mulf %freq_scale, %theta_extrap : f32
+      %corr_span = scalar.subf %corr1, %corr0 : f32
+      %corr_span_safe = scalar.maxnumf %corr_span, %min_span : f32
+      %ramp_num = scalar.subf %k_f32, %corr0 : f32
+      %ramp_y = scalar.divf %ramp_num, %corr_span_safe : f32
+      %ramp_y_clamped = scalar.clampf<number> %ramp_y, %c0_f32, %c1_f32 : f32
+      %ramp = scalar.subf %c1_f32, %ramp_y_clamped : f32
+      %ramp_mix = scalar.mulf %ramp, %ext_factor : f32
+      %keep = scalar.subf %c1_f32, %ramp_mix : f32
+      %interp_part = scalar.mulf %theta_interp, %keep : f32
+      %extrap_part = scalar.mulf %theta_extrap, %ramp_mix : f32
+      %theta_yarn = scalar.addf %interp_part, %extrap_part : f32
+      %has_ext = scalar.cmpf one, %ext_factor, %c0_f32 : f32
+      %theta = scf.select %has_ext, %theta_yarn, %theta_interp : f32
+
+      // The approximate sin and cos need an angle in [-pi, pi]. A two-part 2*pi keeps the precision.
+      %inv_two_pi = scalar.constant 0.15915494309189535 : f32
+      %two_pi_hi = scalar.constant 6.2831854820251465 : f32
+      %two_pi_lo = scalar.constant -1.7484556000744487e-07 : f32
+      %turns = scalar.mulf %theta, %inv_two_pi : f32
+      %turns_n = scalar.roundf %turns : f32
+      %neg_n = scalar.negf %turns_n : f32
+      %red_hi = scalar.fmaf %neg_n, %two_pi_hi, %theta : f32
+      %red = scalar.fmaf %neg_n, %two_pi_lo, %red_hi : f32
+      %cos_raw = scalar.cosf<afn> %red : f32
+      %sin_raw = scalar.sinf<afn> %red : f32
+      %cos_m = scalar.mulf %cos_raw, %mscale : f32
+      %sin_m = scalar.mulf %sin_raw, %mscale : f32
+      scf.yield %cos_m, %sin_m : f32, f32
+    } else {
+      %one_f32 = scalar.constant 1.0 : f32
+      %zero_f32 = scalar.constant 0.0 : f32
+      scf.yield %one_f32, %zero_f32 : f32, f32
+    }
+
+    %src_a_idx = index.add %src_base, %ch : index
+    %src_b_idx = index.add %src_base, %eb : index
+    %dst_a_idx = index.add %dst_base, %ch : index
+    %dst_b_idx = index.add %dst_base, %eb : index
+    %src_a = index.assume %src_a_idx [range(%src_a_idx, 0, 2147483646)] : index
+    %src_b = index.assume %src_b_idx [range(%src_b_idx, 0, 2147483646)] : index
+    %dst_a = index.assume %dst_a_idx [range(%dst_a_idx, 0, 2147483646)] : index
+    %dst_b = index.assume %dst_b_idx [range(%dst_b_idx, 0, 2147483646)] : index
+    %src_a_ok = index.cmp ult, %src_a, %src_span : index
+    scf.if %src_a_ok {
+      %src_b_ok = index.cmp ult, %src_b, %src_span : index
+      scf.if %src_b_ok {
+        %dst_a_ok = index.cmp ult, %dst_a, %dst_span : index
+        scf.if %dst_a_ok {
+          %dst_b_ok = index.cmp ult, %dst_b, %dst_span : index
+          scf.if %dst_b_ok {
+            %x0 = view.load %src_view[%src_a] : view<[%src_span]xf32> -> f32
+            %x1 = view.load %src_view[%src_b] : view<[%src_span]xf32> -> f32
+            %x0c = scalar.mulf %x0, %cos_theta : f32
+            %x1s = scalar.mulf %x1, %sin_theta : f32
+            %x0s = scalar.mulf %x0, %sin_theta : f32
+            %x1c = scalar.mulf %x1, %cos_theta : f32
+            %r0 = scalar.subf %x0c, %x1s : f32
+            %r1 = scalar.addf %x0s, %x1c : f32
+            %y0 = scf.select %is_rot, %r0, %x0 : f32
+            %y1 = scf.select %is_rot, %r1, %x1 : f32
+            view.store %y0, %dst_view[%dst_a] : f32, view<[%dst_span]xf32>
+            view.store %y1, %dst_view[%dst_b] : f32, view<[%dst_span]xf32>
+          }
+        }
+      }
+    }
+  }
+  kernel.return
+}

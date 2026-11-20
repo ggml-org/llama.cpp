@@ -1,0 +1,44 @@
+// s and b are f32 bits.
+
+config.decl @ggml.elementwise.wg_size : %value: index where [range(%value, 64, 1024), multiple_of(%value, 64)]
+
+target.decl @ggml_wave64
+
+func.def inline @ggml_hrx_scale_param(%bits: index) -> (f32) {
+  %bits_i32 = index.cast %bits : index to i32
+  %vec = vector.from_elements %bits_i32 : vector<1xi32>
+  %fvec = vector.bitcast %vec : vector<1xi32> to vector<1xf32>
+  %value = vector.extract %fvec[0] : vector<1xf32> -> f32
+  func.return %value : f32
+}
+
+kernel.def target(@ggml_wave64) export("ggml_scale_f32") @ggml_scale_f32(%n: index) {
+  %one = index.constant 1 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %round = index.sub %wg_size, %one : index
+  %n_round = index.add %n, %round : index
+  %groups = index.div %n_round, %wg_size : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%wg_size, %one, %one) : index
+} launch(%n_in: index, %s_bits: index, %b_bits: index, %src: buffer, %dst: buffer) {
+  // supports_scale checks the range.
+  %n = index.assume %n_in [range(%n_in, 1, 2147483647)] : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %group = kernel.workgroup.id<x> : index
+  %item = kernel.workitem.id<x> : index
+  %base = index.mul %group, %wg_size : index
+  %i = index.add %base, %item : index
+  %zero = index.constant 0 : offset
+  // src and dst can alias for in-place ops. Thus do not use noalias.
+  %src_view = buffer.view %src[%zero] : buffer -> view<[%n]xf32>
+  %dst_view = buffer.view %dst[%zero] : buffer -> view<[%n]xf32>
+  %in_bounds = index.cmp ult, %i, %n : index
+  scf.if %in_bounds {
+    %x = view.load %src_view[%i] : view<[%n]xf32> -> f32
+    %s = func.call @ggml_hrx_scale_param(%s_bits) : (index) -> (f32)
+    %b = func.call @ggml_hrx_scale_param(%b_bits) : (index) -> (f32)
+    %xs = scalar.mulf %x, %s : f32
+    %r = scalar.addf %xs, %b : f32
+    view.store %r, %dst_view[%i] : f32, view<[%n]xf32>
+  }
+  kernel.return
+}

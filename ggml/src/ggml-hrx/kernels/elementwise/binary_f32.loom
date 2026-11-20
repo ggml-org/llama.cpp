@@ -1,0 +1,118 @@
+// Strides are in elements. dst must be contiguous.
+
+config.decl @ggml.binary.op : %value: index where [range(%value, 0, 4)]
+// 1 means that each row of b is one value.
+config.decl @ggml.binary.b_bcast0 : %value: index where [range(%value, 0, 1)]
+
+config.decl @ggml.elementwise.wg_size : %value: index where [range(%value, 64, 1024), multiple_of(%value, 64)]
+
+target.decl @ggml_wave64
+
+// op is a config constant. Thus the compiler removes the unused branches.
+func.def inline @ggml_hrx_binary_op4(%op: index, %x: vector<4xf32>, %y: vector<4xf32>) -> (vector<4xf32>) {
+  %op_sub = index.constant 1 : index
+  %op_mul = index.constant 2 : index
+  %op_div = index.constant 3 : index
+  %is_sub = index.cmp eq, %op, %op_sub : index
+  %is_mul = index.cmp eq, %op, %op_mul : index
+  %is_div = index.cmp eq, %op, %op_div : index
+  %r = scf.if %is_div -> (vector<4xf32>) {
+    %quot = vector.divf %x, %y : vector<4xf32>
+    scf.yield %quot : vector<4xf32>
+  } else {
+    %r2 = scf.if %is_mul -> (vector<4xf32>) {
+      %prod = vector.mulf %x, %y : vector<4xf32>
+      scf.yield %prod : vector<4xf32>
+    } else {
+      %r1 = scf.if %is_sub -> (vector<4xf32>) {
+        %diff = vector.subf %x, %y : vector<4xf32>
+        scf.yield %diff : vector<4xf32>
+      } else {
+        %sum = vector.addf %x, %y : vector<4xf32>
+        scf.yield %sum : vector<4xf32>
+      }
+      scf.yield %r1 : vector<4xf32>
+    }
+    scf.yield %r2 : vector<4xf32>
+  }
+  func.return %r : vector<4xf32>
+}
+
+kernel.def target(@ggml_wave64) export("ggml_binary_f32_rows") @ggml_binary_f32_rows(%n: index) {
+  %one = index.constant 1 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %wg_x2 = index.add %wg_size, %wg_size : index
+  %per_group = index.add %wg_x2, %wg_x2 : index
+  %round = index.sub %per_group, %one : index
+  %n_round = index.add %n, %round : index
+  %groups = index.div %n_round, %per_group : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%wg_size, %one, %one) : index
+} launch(%n_in: index, %d0_in: index, %a_rs_in: index, %a_span_in: index, %b_rows_in: index, %b_rs_in: index, %b_span_in: index, %a: buffer, %b: buffer, %dst: buffer) {
+  // The caller checks these ranges. n and d0 must be multiples of 4.
+  %n = index.assume %n_in [range(%n_in, 4, 2147483644)] : index
+  %d0 = index.assume %d0_in [range(%d0_in, 4, 2147483644)] : index
+  %a_rs = index.assume %a_rs_in [range(%a_rs_in, 0, 2147483647)] : index
+  %a_span = index.assume %a_span_in [range(%a_span_in, 1, 2147483647)] : index
+  %b_rows = index.assume %b_rows_in [range(%b_rows_in, 1, 2147483647)] : index
+  %b_rs = index.assume %b_rs_in [range(%b_rs_in, 0, 2147483647)] : index
+  %b_span = index.assume %b_span_in [range(%b_span_in, 1, 2147483647)] : index
+  %op = config.get @ggml.binary.op : index
+  %b_bcast0 = config.get @ggml.binary.b_bcast0 : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c3 = index.constant 3 : index
+  %c4 = index.constant 4 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %wg_x2 = index.add %wg_size, %wg_size : index
+  %per_group = index.add %wg_x2, %wg_x2 : index
+  %group = kernel.workgroup.id<x> : index
+  %item = kernel.workitem.id<x> : index
+  %base = index.mul %group, %per_group : index
+  %lane = index.mul %item, %c4 : index
+  %j_raw = index.add %base, %lane : index
+  %j = index.assume %j_raw [range(%j_raw, 0, 2147483644)] : index
+  %j_last = index.add %j, %c3 : index
+  %zero = index.constant 0 : offset
+  %a_view = buffer.view %a[%zero] : buffer -> view<[%a_span]xf32>
+  %b_view = buffer.view %b[%zero] : buffer -> view<[%b_span]xf32>
+  %dst_view = buffer.view %dst[%zero] : buffer -> view<[%n]xf32>
+  %in_bounds = index.cmp ult, %j_last, %n : index
+  scf.if %in_bounds {
+    %r = index.div %j, %d0 : index
+    %r_start = index.mul %r, %d0 : index
+    %c = index.sub %j, %r_start : index
+    %a_row = index.mul %r, %a_rs : index
+    %a_idx = index.add %a_row, %c : index
+    %br = index.rem %r, %b_rows : index
+    %b_row = index.mul %br, %b_rs : index
+    %is_bcast0 = index.cmp eq, %b_bcast0, %c1 : index
+    %b_col = scf.select %is_bcast0, %c0, %c : index
+    %b_idx = index.add %b_row, %b_col : index
+    // The prover reads only branch conditions. Thus cap the offsets and check one bound in each scf.if.
+    %a_off = index.assume %a_idx [range(%a_idx, 0, 2147483640)] : index
+    %b_off = index.assume %b_idx [range(%b_idx, 0, 2147483640)] : index
+    %a_last = index.add %a_off, %c3 : index
+    %b_last = index.add %b_off, %c3 : index
+    %a_ok = index.cmp ult, %a_last, %a_span : index
+    scf.if %a_ok {
+      %x = vector.load %a_view[%a_off] : view<[%a_span]xf32> -> vector<4xf32>
+      scf.if %is_bcast0 {
+        %b_ok = index.cmp ult, %b_off, %b_span : index
+        scf.if %b_ok {
+          %s = view.load %b_view[%b_off] : view<[%b_span]xf32> -> f32
+          %y = vector.splat %s : vector<4xf32>
+          %r4 = func.call @ggml_hrx_binary_op4(%op, %x, %y) : (index, vector<4xf32>, vector<4xf32>) -> (vector<4xf32>)
+          vector.store %r4, %dst_view[%j] : vector<4xf32>, view<[%n]xf32>
+        }
+      } else {
+        %b_ok = index.cmp ult, %b_last, %b_span : index
+        scf.if %b_ok {
+          %y = vector.load %b_view[%b_off] : view<[%b_span]xf32> -> vector<4xf32>
+          %r4 = func.call @ggml_hrx_binary_op4(%op, %x, %y) : (index, vector<4xf32>, vector<4xf32>) -> (vector<4xf32>)
+          vector.store %r4, %dst_view[%j] : vector<4xf32>, view<[%n]xf32>
+        }
+      }
+    }
+  }
+  kernel.return
+}
