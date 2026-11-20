@@ -1205,6 +1205,29 @@ static void rescale_int_weight_to_int8_task(
     }
 }
 
+#if __HVX_ARCH__ >= 81
+static inline void pack_hf_quad_to_u8_sm_pair(
+        uint8_t * restrict tile_base,
+        uint32_t kt,
+        uint32_t rg,
+        HVX_Vector hf0,
+        HVX_Vector hf1,
+        HVX_Vector hf2,
+        HVX_Vector hf3) {
+    const HVX_Vector v_zp_u8   = Q6_Vb_vsplat_R(0x80);
+    const HVX_Vector v_min_u8b = Q6_Vb_vsplat_R(1);
+
+    HVX_Vector vb02 = Q6_Vb_vshuff_Vb(Q6_Vb_vpack_VhVh_sat(Q6_Vh_equals_Vhf_rnd(hf2), Q6_Vh_equals_Vhf_rnd(hf0)));
+    HVX_Vector vb13 = Q6_Vb_vshuff_Vb(Q6_Vb_vpack_VhVh_sat(Q6_Vh_equals_Vhf_rnd(hf3), Q6_Vh_equals_Vhf_rnd(hf1)));
+    HVX_VectorPair w_u8 = Q6_W_vshuff_VVR(vb13, vb02, -1);
+
+    ((HVX_Vector *) (tile_base + (size_t) (kt + 0) * HTP_MM_HMX_TILE_SIZE))[rg] =
+        Q6_Vub_vmax_VubVub(Q6_V_vxor_VV(Q6_V_lo_W(w_u8), v_zp_u8), v_min_u8b);
+    ((HVX_Vector *) (tile_base + (size_t) (kt + 1) * HTP_MM_HMX_TILE_SIZE))[rg] =
+        Q6_Vub_vmax_VubVub(Q6_V_vxor_VV(Q6_V_hi_W(w_u8), v_zp_u8), v_min_u8b);
+}
+#endif
+
 static inline void quantize_f16_quad_step_to_u8_sm(
         uint8_t * restrict tile_row_base,
         uint32_t kt,
@@ -1222,6 +1245,31 @@ static inline void quantize_f16_quad_step_to_u8_sm(
         HVX_Vector v_min_u8,
         HVX_Vector v_max_u8) {
 
+#if __HVX_ARCH__ >= 81
+    (void) v_bias_u8;
+    (void) v_min_u8;
+    (void) v_max_u8;
+
+    HVX_VectorPair vp0 = Q6_Wqf32_vmpy_VhfVhf(vh0, v_one_f16);
+    HVX_VectorPair vp1 = Q6_Wqf32_vmpy_VhfVhf(vh1, v_one_f16);
+    HVX_VectorPair vp2 = Q6_Wqf32_vmpy_VhfVhf(vh2, v_one_f16);
+    HVX_VectorPair vp3 = Q6_Wqf32_vmpy_VhfVhf(vh3, v_one_f16);
+
+    HVX_Vector hf0 = Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(
+        Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(vp0), v_inv0_qf),
+        Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(vp0), v_inv0_qf)));
+    HVX_Vector hf1 = Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(
+        Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(vp1), v_inv1_qf),
+        Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(vp1), v_inv1_qf)));
+    HVX_Vector hf2 = Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(
+        Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(vp2), v_inv2_qf),
+        Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(vp2), v_inv2_qf)));
+    HVX_Vector hf3 = Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(
+        Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(vp3), v_inv3_qf),
+        Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(vp3), v_inv3_qf)));
+
+    pack_hf_quad_to_u8_sm_pair(tile_row_base, kt, rg, hf0, hf1, hf2, hf3);
+#else
     HVX_VectorPair vp0 = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(vh0), v_one_f16);
     HVX_VectorPair vp1 = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(vh1), v_one_f16);
     HVX_VectorPair vp2 = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(vh2), v_one_f16);
@@ -1245,6 +1293,7 @@ static inline void quantize_f16_quad_step_to_u8_sm(
         HVX_Vector vh13 = Q6_Vh_vmin_VhVh(Q6_Vh_vmax_VhVh(Q6_Vh_vshuffe_VhVh(y3, y1), v_min_u8), v_max_u8);
         ((HVX_Vector *) (tile_row_base + (size_t) (kt + 1) * HTP_MM_HMX_TILE_SIZE))[rg] = Q6_Vb_vshuffe_VbVb(vh13, vh02);
     }
+#endif
 }
 
 static __attribute__((noinline)) void quantize_act_superblock_quad_f32_to_u8_sm_2k(
@@ -1309,6 +1358,25 @@ static __attribute__((noinline)) void quantize_act_superblock_quad_f32_to_u8_sm_
     HVX_Vector v_inv2 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax2, v_eps), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax2), v_127), Q6_V_vzero());
     HVX_Vector v_inv3 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax3, v_eps), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax3), v_127), Q6_V_vzero());
 
+#if __HVX_ARCH__ >= 81
+    for (uint32_t step = 0; step < HTP_MM_HMX_W8A8_KGROUP_TILES / 2; ++step) {
+        const uint32_t off = step * 64;
+        HVX_Vector hf0 = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(
+            Q6_Vqf32_vmpy_VsfVsf(hvx_vmem(p0_base + off + 32), v_inv0),
+            Q6_Vqf32_vmpy_VsfVsf(hvx_vmem(p0_base + off + 0),  v_inv0))));
+        HVX_Vector hf1 = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(
+            Q6_Vqf32_vmpy_VsfVsf(hvx_vmem(p1_base + off + 32), v_inv1),
+            Q6_Vqf32_vmpy_VsfVsf(hvx_vmem(p1_base + off + 0),  v_inv1))));
+        HVX_Vector hf2 = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(
+            Q6_Vqf32_vmpy_VsfVsf(hvx_vmem(p2_base + off + 32), v_inv2),
+            Q6_Vqf32_vmpy_VsfVsf(hvx_vmem(p2_base + off + 0),  v_inv2))));
+        HVX_Vector hf3 = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(
+            Q6_Vqf32_vmpy_VsfVsf(hvx_vmem(p3_base + off + 32), v_inv3),
+            Q6_Vqf32_vmpy_VsfVsf(hvx_vmem(p3_base + off + 0),  v_inv3))));
+
+        pack_hf_quad_to_u8_sm_pair(tile_dst_base, step * 2, rg, hf0, hf1, hf2, hf3);
+    }
+#else
     const HVX_Vector v_bias_u8 = Q6_V_vsplat_R(0x4B400080); // 12582912.0f + 128.0f
     const HVX_Vector v_min_u8  = Q6_Vh_vsplat_R(1);
     const HVX_Vector v_max_u8  = Q6_Vh_vsplat_R(255);
@@ -1331,6 +1399,7 @@ static __attribute__((noinline)) void quantize_act_superblock_quad_f32_to_u8_sm_
 
         ((HVX_Vector *) (tile_dst_base + (size_t) kt * HTP_MM_HMX_TILE_SIZE))[rg] = v_u8;
     }
+#endif
 }
 
 // Quantize one superblock g (k_group columns, multiple of 32) of a 4-row FP32 group into W8A8 SM 64x32 tiles.
