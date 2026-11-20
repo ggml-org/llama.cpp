@@ -31,6 +31,13 @@
 		return { x: (x - view.x) / view.scale, y: (y - view.y) / view.scale };
 	}
 
+	// the same view, give or take the pixel the layout rounds a size by
+	function expectSameView(actual: ReturnType<typeof readView>, expected: typeof actual) {
+		expect(actual.scale).toBeCloseTo(expected.scale, 2);
+		expect(Math.abs(actual.x - expected.x)).toBeLessThanOrEqual(1);
+		expect(Math.abs(actual.y - expected.y)).toBeLessThanOrEqual(1);
+	}
+
 	function screenOf(view: ReturnType<typeof readView>, p: { x: number; y: number }) {
 		return { x: p.x * view.scale + view.x, y: p.y * view.scale + view.y };
 	}
@@ -47,6 +54,10 @@
 
 			return el!;
 		});
+
+		// a font that loads late changes the height of the diagram's box, and so the fit
+		await document.fonts.ready;
+
 		const rect = viewport.getBoundingClientRect();
 		const middle = { x: rect.width / 2, y: rect.height / 2 };
 		const fitted = readView(canvasElement);
@@ -95,7 +106,7 @@
 
 		// reset fits the diagram again
 		await userEvent.click(canvasElement.querySelector<HTMLElement>('[aria-label="Reset view"]')!);
-		await waitFor(() => expect(readView(canvasElement)).toEqual(fitted));
+		await waitFor(() => expectSameView(readView(canvasElement), fitted));
 		await expect(canvasElement.querySelector('.mermaid-preview-zoom-label')?.textContent).toBe(
 			`${Math.round(fitted.scale * 100)}%`
 		);
