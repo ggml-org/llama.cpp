@@ -4479,25 +4479,13 @@ llama_context * llama_init_from_model(
         }
     }
 
-    if ((model->hparams.is_mla() || model->arch == LLM_ARCH_DEEPSEEK4 || model->arch == LLM_ARCH_DEEPSEEK41) && params.type_k != params.type_v) {
+    if (model->kv_types_must_match() && params.type_k != params.type_v) {
         LLAMA_LOG_ERROR("%s: model does not support different K (%s) and V (%s) cache types\n", __func__, ggml_type_name(params.type_k), ggml_type_name(params.type_v));
         return nullptr;
     }
 
     const bool fp8_cache = params.type_k == GGML_TYPE_F8_E4M3 || params.type_v == GGML_TYPE_F8_E4M3;
-    // Direct cache consumers do not use the shared attention scaling helpers.
-    if (fp8_cache && (model->hparams.is_mla() ||
-            model->arch == LLM_ARCH_DEEPSEEK32 ||
-            model->arch == LLM_ARCH_DEEPSEEK4 ||
-            model->arch == LLM_ARCH_DEEPSEEK41 ||
-            model->arch == LLM_ARCH_GLM_DSA ||
-            model->arch == LLM_ARCH_GLM5_NEXT ||
-            model->arch == LLM_ARCH_DOTS3NOTE ||
-            model->arch == LLM_ARCH_MISTRAL_LARGE4 ||
-            model->arch == LLM_ARCH_HY_V4 ||
-            model->arch == LLM_ARCH_MINIMAX_M3 ||
-            model->arch == LLM_ARCH_QWEN4EXP ||
-            model->arch == LLM_ARCH_DFLASH)) {
+    if (fp8_cache && !model->supports_fp8_kv_cache()) {
         LLAMA_LOG_ERROR("%s: FP8 cache is not supported for architecture '%s'\n", __func__, llm_arch_name(model->arch));
         return nullptr;
     }

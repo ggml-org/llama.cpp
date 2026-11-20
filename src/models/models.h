@@ -1246,6 +1246,7 @@ struct llama_model_deepseek32 : public llama_model_base {
     llama_model_deepseek32(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
+    bool supports_fp8_kv_cache() const override { return false; }
 
     struct graph : public llm_graph_context {
         graph(const llm_graph_params & params);
@@ -1262,6 +1263,7 @@ struct llama_model_dots3note : public llama_model_base {
     llama_model_dots3note(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
+    bool supports_fp8_kv_cache() const override { return false; }
 
     struct graph : public llm_graph_context {
         graph(const llm_graph_params & params);
@@ -1285,6 +1287,8 @@ struct llama_model_deepseek4 : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
     uint32_t graph_nodes_per_tensor() const override { return 32; }
+    bool kv_types_must_match() const override { return true; }
+    bool supports_fp8_kv_cache() const override { return false; }
 
     struct graph : public llm_graph_context {
         struct no_build {};
@@ -1543,6 +1547,7 @@ struct llama_model_glm_dsa : public llama_model_base {
     llama_model_glm_dsa(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
+    bool supports_fp8_kv_cache() const override { return false; }
 
     struct graph : public llm_graph_context {
         graph(const llm_graph_params & params);
@@ -1576,6 +1581,7 @@ struct llama_model_dflash : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
     uint32_t graph_nodes_per_tensor() const override;
+    bool supports_fp8_kv_cache() const override { return false; }
 
     enum variant_type {
         VARIANT_DFLASH,
@@ -1677,6 +1683,7 @@ struct llama_model_mistral_large4 : public llama_model_base {
     llama_model_mistral_large4(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
+    bool supports_fp8_kv_cache() const override { return false; }
 
     struct graph : public llm_graph_context {
         graph(const llm_graph_params & params);
@@ -2355,6 +2362,7 @@ struct llama_model_hy_v4 : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
     uint32_t graph_nodes_per_tensor() const override { return 32; }
+    bool supports_fp8_kv_cache() const override { return false; }
 
     struct graph : public llm_graph_context {
         graph(const llm_graph_params & params);
@@ -2641,6 +2649,7 @@ struct llama_model_minimax_m3 : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
     uint32_t graph_nodes_per_tensor() const override { return 32; }
+    bool supports_fp8_kv_cache() const override { return false; }
     msa_params msa_p;
     struct graph : public llm_graph_context {
         graph(const llm_graph_params & params);
@@ -2866,6 +2875,7 @@ struct llama_model_qwen4exp : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
     uint32_t graph_nodes_per_tensor() const override { return 32; }
+    bool supports_fp8_kv_cache() const override { return false; }
 
     struct graph : public llm_build_delta_net_base {
         graph(const llm_graph_params & params);
@@ -3161,6 +3171,7 @@ struct llama_model_glm5_next : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
     uint32_t graph_nodes_per_tensor() const override { return 64; }
+    bool supports_fp8_kv_cache() const override { return false; }
 
     // k-pool indexer inputs on top of the generic hybrid input
     class llm_graph_input_kpool;

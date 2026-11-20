@@ -1055,6 +1055,12 @@ struct llama_model {
     // graph size budget: max graph nodes per model tensor
     virtual uint32_t graph_nodes_per_tensor() const { return 8; }
 
+    // the K and V caches must have the same type
+    virtual bool kv_types_must_match() const { return hparams.is_mla(); }
+
+    // the graph can read an F8_E4M3 KV cache: graphs that read the cache directly skip the shared scaling helpers
+    virtual bool supports_fp8_kv_cache() const { return !hparams.is_mla(); }
+
     ggml_cgraph * build_graph(const llm_graph_params & params) const;
 
     virtual void load_stats  (llama_model_loader & ml) = 0;
