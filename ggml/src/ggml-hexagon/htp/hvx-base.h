@@ -191,6 +191,9 @@ static inline HVX_VectorPair hvx_vec_f16_to_f32(HVX_Vector v) {
 #endif
 
 static inline HVX_Vector hvx_vec_i16_from_hf_rnd_sat(HVX_Vector vin) {
+#if __HVX_ARCH__ >= 81
+    return Q6_Vh_equals_Vhf_rnd(vin);
+#else
     // This looks complicated.
     // Ideally should just be Q6_Vh_equals_Vhf(vin)
     // but that instruction does not do proper rounding.
@@ -212,6 +215,7 @@ static inline HVX_Vector hvx_vec_i16_from_hf_rnd_sat(HVX_Vector vin) {
 
     // now round down to 16
     return Q6_Vh_vround_VwVw_sat(vsf_1, vsf_0);
+#endif
 }
 
 #if __HVX_ARCH__ < 79
