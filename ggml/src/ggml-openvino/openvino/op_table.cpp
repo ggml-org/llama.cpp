@@ -98,6 +98,7 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
         {"GGML_OP_PAD",             op::translate_pad                              },
         {"GGML_OP_TOP_K",           op::translate_top_k                            },
         {"GGML_OP_SSM_CONV",        op::translate_ssm_conv                         },
+        {"GGML_OP_SSM_SCAN",        op::translate_ssm_scan                         },
         {"GGML_OP_GATED_DELTA_NET", op::translate_gated_delta_net                  },
         {"GGML_OP_REPEAT",          op::translate_repeat                           },
         {"GGML_OP_CUMSUM",          op::translate_cumsum                           },

@@ -105,7 +105,7 @@
 		{#if showIcons}
 			<div transition:fade={itemTransition}>
 				<Button
-					class="w-full min-w-9 justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 rounded-(--surface-row-radius) max-md:h-12 max-md:rounded-2xl max-md:px-3 max-md:text-[17px] {isActive
+					class="w-full min-w-9 justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 rounded-(--surface-row-radius) max-md:h-12 max-md:rounded-2xl max-md:px-3 max-md:text-body {isActive
 						? 'selected-row-surface text-accent-foreground'
 						: ''}"
 					href={item.route}

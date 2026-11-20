@@ -133,11 +133,11 @@
 		/>
 
 		{#if isError && errorMessage}
-			<p class="text-xs text-destructive">{errorMessage}</p>
+			<p class="text-caption text-destructive">{errorMessage}</p>
 		{/if}
 
 		{#if isConnected && serverInfo?.description}
-			<p class="line-clamp-2 text-xs text-muted-foreground">
+			<p class="line-clamp-2 text-caption text-muted-foreground">
 				{serverInfo.description}
 			</p>
 		{/if}
@@ -187,7 +187,7 @@
 				<Skeleton class="h-3 w-28" />
 			{:else if protocolVersion}
 				<div class="flex flex-wrap items-center gap-1">
-					<span class="text-[10px] text-muted-foreground">
+					<span class="text-caption-sm text-muted-foreground">
 						Protocol version: {protocolVersion}
 					</span>
 				</div>

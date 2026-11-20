@@ -202,7 +202,7 @@
 		     its place on hover, the way the table's status column does -->
 			<span class="flex shrink-0 items-center gap-0.5 pr-2.5">
 				<span
-					class="text-xs text-muted-foreground tabular-nums group-hover:hidden [@media(pointer:coarse)]:hidden"
+					class="text-caption text-muted-foreground tabular-nums group-hover:hidden [@media(pointer:coarse)]:hidden"
 				>
 					{percent !== null ? `${percent}%` : state.isPaused ? 'Paused' : 'Downloading'}
 				</span>

@@ -209,6 +209,7 @@ struct server_task {
     struct decision {
         std::vector<llama_token> labels;       // logits of these tokens, at the last prompt token
         std::vector<int32_t>     label_groups; // if set, number of labels per output, the output is their max
+        std::vector<int32_t>     label_pos;    // if set, prompt position of each output, else the last token
         std::vector<int32_t>     markers;      // embeddings[column] at these prompt positions
         int32_t                  column = 0;
         // if set, embeddings is [q | k], and the output is instead the scaled dot product of q[pointer] and k[marker]
@@ -237,6 +238,9 @@ struct server_task {
         // the scores are the first n_scores rows of the embeddings
         std::vector<int32_t> order;
         int32_t              n_scores = 0;
+
+        // one value per prompt token, see llama_batch_ext_set_decision_group()
+        std::vector<int32_t> group;
     };
     decision decision;
 

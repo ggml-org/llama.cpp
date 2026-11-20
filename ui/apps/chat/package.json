@@ -19,7 +19,7 @@
 	"bugs": "https://github.com/ggml-org/llama.cpp/issues",
 	"type": "module",
 	"bin": {
-		"llama-chat": "./bin/cli.js"
+		"llama-chat": "bin/cli.js"
 	},
 	"exports": {
 		"./cli": "./bin/cli.js",
@@ -110,19 +110,19 @@
 		"dompurify": "3.4.17",
 		"eslint": "10.14.0",
 		"eslint-config-prettier": "10.1.8",
-		"eslint-plugin-perfectionist": "^5.10.1",
-		"eslint-plugin-simple-import-sort": "^14.0.0",
+		"eslint-plugin-perfectionist": "5.13.0",
+		"eslint-plugin-simple-import-sort": "14.0.0",
 		"eslint-plugin-storybook": "10.6.6",
 		"eslint-plugin-svelte": "3.24.1",
 		"fflate": "0.8.3",
 		"globals": "16.5.0",
 		"highlight.js": "11.11.1",
 		"http-server": "14.1.1",
-		"@ggml-org/llama-brand": "https://codeload.github.com/ggml-org/llama-brand/tar.gz/f05540643c1ca2a18d732ed6491c839686da9a3a",
+		"@ggml-org/llama-brand": "0.1.0",
 		"mdsvex": "0.12.7",
-		"mermaid": "11.17.2",
 		"mode-watcher": "1.1.0",
 		"pdfjs-dist": "5.4.54",
+		"pele": "1.13.0",
 		"playwright": "1.56.1",
 		"prettier": "3.8.3",
 		"prettier-plugin-svelte": "4.1.0",

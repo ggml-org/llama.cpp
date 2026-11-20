@@ -91,7 +91,7 @@
 				<span class="flex min-w-0 items-center gap-1.25">
 					<ModelId
 						aliases={option.aliases}
-						class="min-w-0 flex-1 max-md:text-sm"
+						class="min-w-0 flex-1 max-md:text-body-sm"
 						draftSidecars={option.draftSidecars}
 						hideCapabilities
 						hideModalities

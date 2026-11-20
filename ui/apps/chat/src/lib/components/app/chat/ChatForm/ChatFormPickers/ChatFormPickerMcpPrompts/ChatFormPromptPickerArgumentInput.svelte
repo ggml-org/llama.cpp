@@ -46,7 +46,7 @@
 		</span>
 
 		{#if isLoadingSuggestions}
-			<span class="text-xs text-muted-foreground/50">...</span>
+			<span class="text-caption text-muted-foreground/50">...</span>
 		{/if}
 	</Label>
 
@@ -70,7 +70,7 @@
 		>
 			{#each suggestions as suggestion, i (suggestion)}
 				<button
-					class="w-full px-3 py-1.5 text-left text-sm hover:bg-accent {i === autocompleteIndex
+					class="w-full px-3 py-1.5 text-left text-body-sm hover:bg-accent {i === autocompleteIndex
 						? 'bg-accent'
 						: ''}"
 					onmousedown={() => onSelectSuggestion(suggestion)}

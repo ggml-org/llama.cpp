@@ -20,7 +20,7 @@
 
 <Story asChild name="Over the page">
 	<div class="relative min-h-80 p-6">
-		<div class="flex flex-col gap-2 text-sm">
+		<div class="flex flex-col gap-2 text-body-sm">
 			{#each LINES as line (line)}
 				<p>{line}</p>
 			{/each}

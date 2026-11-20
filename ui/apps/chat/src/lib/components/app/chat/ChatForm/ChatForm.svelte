@@ -678,9 +678,7 @@
 		bind:this={cardEl}
 		class={[
 			'chat-form-surface group/chat-form relative flex shrink flex-col overflow-hidden outline-none transition-[min-height,padding,border-radius,border-color,background-color] duration-400 ease-[var(--chat-form-resize-ease,cubic-bezier(0.3,1.12,0.5,1))] motion-reduce:transition-none',
-			isSingleRow
-				? 'rounded-(--chat-form-single-row-radius)'
-				: 'rounded-(--chat-form-radius-compact) md:rounded-(--chat-form-radius)',
+			isSingleRow ? 'rounded-(--chat-form-single-row-radius)' : 'rounded-4xl md:rounded-3xl',
 			// on a phone the sheet's animation moves it (see useChatFormExpansion): only its
 			// border, hidden on the sheet, fades back in after
 			'max-md:transition-[border-color] max-md:duration-200',
@@ -702,7 +700,7 @@
 				'max-md:pt-safe',
 				// no rim, ring or visible border along the screen's edges; the border stays
 				// transparent so nothing inside shifts by its width
-				'max-md:[--glass-edge-side:transparent] max-md:[--glass-edge-mid:transparent] max-md:[--glass-edge-side-focus:transparent] max-md:[--glass-edge-mid-focus:transparent] max-md:[--glass-highlight:transparent]',
+				'max-md:[--glass-edge:transparent] max-md:[--glass-edge-focus:transparent] max-md:[--glass-highlight:transparent]',
 				'max-md:border-transparent max-md:focus-within:border-transparent max-md:dark:border-transparent max-md:dark:focus-within:border-transparent',
 				EXPANDED_SHEET_FILL
 			],
@@ -734,7 +732,7 @@
 
 		<div
 			class={[
-				'relative flex flex-1 shadow-sm transition-shadow focus-within:shadow-md',
+				'relative flex flex-1 shadow-(--elevation-control) transition-shadow focus-within:shadow-(--elevation-surface)',
 				// the add button, the text and the rest of the actions, or the text above them
 				isSingleRow
 					? 'items-center gap-2 rounded-(--chat-form-single-row-radius) px-3 py-2.5'

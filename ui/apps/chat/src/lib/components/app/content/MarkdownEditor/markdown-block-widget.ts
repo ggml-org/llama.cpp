@@ -12,14 +12,12 @@ import {
 import { getMarkdownProcessor } from '#lib/components/app/content/MarkdownContent/markdown-processor.ts';
 import { getCodeInfoFromTarget } from '#lib/components/app/content/MarkdownContent/markdown-utils.ts';
 import { MERMAID_BLOCK_CLASS } from '#lib/constants/index.ts';
-import { ColorMode } from '#lib/enums/index.ts';
 import {
 	copyCodeToClipboard,
 	copyToClipboard,
 	preprocessLaTeX,
 	splitGluedClosingCodeFences
 } from '#lib/utils/index.ts';
-import { mode } from 'mode-watcher';
 
 export interface MarkdownBlockWidgetOptions {
 	onPreviewCode?: (code: string, language: string) => void;
@@ -311,9 +309,7 @@ export class MarkdownBlockWidget extends WidgetType {
 
 		// mermaid draws asynchronously and changes the block's height when done
 		if (dom.querySelector(`pre.${MERMAID_BLOCK_CLASS}`)) {
-			void renderMermaidDiagrams(dom, mode.current === ColorMode.DARK).then(() =>
-				this.measure(dom, view, key)
-			);
+			void renderMermaidDiagrams(dom).then(() => this.measure(dom, view, key));
 		}
 	}
 }

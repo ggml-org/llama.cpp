@@ -228,6 +228,9 @@ class TensorNameMap:
         MODEL_TENSOR.LILICORR_ANCHOR_OUT_HEAD: (
             "model.lilicorr.anchor_out_head",
         ),
+        MODEL_TENSOR.RES_SCALE_IN: (
+            "model.input_hidden_states",  # zaya1
+        ),
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
@@ -269,6 +272,7 @@ class TensorNameMap:
             "model.layers.{bid}.pre_attention_layernorm",           # kormo
             "head.layers.{bid}.norm1",  # laya
             "model.layers.{bid}.attn_norm",                         # inkling2
+            "model.layers.{bid}.pre_attention_norm",                # domynedge
         ),
 
         # Attention norm 2
@@ -437,6 +441,7 @@ class TensorNameMap:
             "model.layers.{bid}.post_attn_norm",                 # kolibri1
             "model.layers.layers.{bid}.post_mixer_norm.weight",  # plamo2
             "model.layers.{bid}.post_operator_norm",             # lfm3
+            "model.layers.{bid}.post_attention_norm",            # domynedge
         ),
 
         # Rotary embeddings
@@ -636,6 +641,7 @@ class TensorNameMap:
             "layers.{bid}.pre_feedforward_layernorm",       # embeddinggemma
             "model.layers.{bid}.pre_ff_layernorm.weight",
             "model.layers.{bid}.pre_mlp_layernorm",        # afmoe
+            "model.layers.{bid}.pre_feedforward_norm",     # domynedge
         ),
 
         MODEL_TENSOR.FFN_PRE_NORM_2: (
@@ -660,6 +666,7 @@ class TensorNameMap:
             "model.layers.{bid}.feed_forward.up_proj",
             "model.layers.{bid}.post_moe_norm",               # grok-2
             "model.layers.{bid}.post_ffn_norm",               # lfm3
+            "model.layers.{bid}.post_feedforward_norm",       # domynedge
         ),
 
         MODEL_TENSOR.FFN_POST_NORM_1: (
@@ -749,6 +756,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.mlp.dense_h_to_4h",                 # chatglm
             "transformer.h.{bid}.mlp.c_fc_1",                         # exaone
             "model.layers.{bid}.feed_forward.up_proj",                # llama4 jamba granite-hybrid
+            "model.layers.{bid}.feedforward.up_proj",                 # domynedge
             "transformer_encoder.{bid}.ffn.w12",                      # neobert
             "model.layers.{bid}.block_sparse_moe.up",                 # smallthinker
             "model.transformer.blocks.{bid}.up_proj",                 # llada
@@ -812,6 +820,7 @@ class TensorNameMap:
             "layers.{bid}.mlp.gate_proj",                     # qwen3-embedding
             "model.layers.{bid}.mlp.language_mlp.gate_proj",  # cogvlm
             "model.blocks.{bid}.mlp.mlp_gate",                # talkie
+            "model.layers.{bid}.feedforward.gate_proj",       # domynedge
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
@@ -980,6 +989,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.mlp.dense_4h_to_h",                 # chatglm
             "model.layers.h.{bid}.mlp.c_proj",                        # exaone
             "model.layers.{bid}.feed_forward.down_proj",              # llama4 jamba granite-hybrid
+            "model.layers.{bid}.feedforward.down_proj",               # domynedge
             "transformer_encoder.{bid}.ffn.w3",                       # neobert
             "model.layers.{bid}.block_sparse_moe.down",               # smallthinker
             "model.transformer.blocks.{bid}.ff_out",                  # llada
@@ -1054,6 +1064,7 @@ class TensorNameMap:
             "layers.{bid}.self_attn.k_norm",                                  # qwen3-embedding
             "model.layers.{bid}.self_attn.k_rope_only_layernorm",             # dots3note
             "model.layers.{bid}.attention.key_layernorm",                     # apertus
+            "model.layers.{bid}.attention.k_norm",                            # domynedge
         ),
 
         MODEL_TENSOR.ROPE_FREQS: (
@@ -3410,6 +3421,22 @@ class TensorNameMap:
 
     # architecture-specific block mappings
     arch_block_mappings_cfg: dict[MODEL_ARCH, dict[MODEL_TENSOR, tuple[str, ...]]] = {
+        MODEL_ARCH.ZAYA1: {
+            MODEL_TENSOR.ATTN_Q:        ("model.layers.{bid}.self_attn.qkv_proj.q_proj",),
+            MODEL_TENSOR.ATTN_K:        ("model.layers.{bid}.self_attn.qkv_proj.k_proj",),
+            # the converter joins v_proj_delayed onto v_proj_current, attn_v holds both kv heads
+            MODEL_TENSOR.ATTN_V:        ("model.layers.{bid}.self_attn.qkv_proj.v_proj_current",),
+            MODEL_TENSOR.SSM_CONV1D:    ("model.layers.{bid}.self_attn.qkv_proj.conv_qk_depthwise",),
+            MODEL_TENSOR.CCA_CONV_GRP:  ("model.layers.{bid}.self_attn.qkv_proj.conv_qk_grouped",),
+            MODEL_TENSOR.CCA_TEMP:      ("model.layers.{bid}.self_attn.qk_norm.temp",),
+            MODEL_TENSOR.FFN_GATE_INP:  ("model.layers.{bid}.mlp.gate.down_proj",),
+            MODEL_TENSOR.FFN_EXP_PROBS_B: ("model.layers.{bid}.mlp.gate.balancing_biases",),
+            MODEL_TENSOR.ROUTER_EDA:    ("model.layers.{bid}.mlp.gate.router_states_scale",),
+            MODEL_TENSOR.ROUTER_NORM:   ("model.layers.{bid}.mlp.gate.router_mlp.norm",),
+            MODEL_TENSOR.ROUTER_FC1:    ("model.layers.{bid}.mlp.gate.router_mlp.fc1",),
+            MODEL_TENSOR.ROUTER_FC2:    ("model.layers.{bid}.mlp.gate.router_mlp.fc2",),
+            MODEL_TENSOR.ROUTER_OUT:    ("model.layers.{bid}.mlp.gate.router_mlp.out_proj",),
+        },
         MODEL_ARCH.ARCTIC: {
             MODEL_TENSOR.FFN_NORM: (
                 "model.layers.{bid}.residual_layernorm",

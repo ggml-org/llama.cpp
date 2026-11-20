@@ -11,7 +11,7 @@
 </script>
 
 <div class="principles">
-	<section class="principle wide card-surface rounded-card">
+	<section class="principle wide card-surface rounded-xl">
 		<div class="picture">
 			<div class="devices">
 				<Smartphone aria-hidden="true" size={28} />
@@ -35,9 +35,9 @@
 		<p>Private by default, and open to everyone.</p>
 	</section>
 
-	<section class="principle card-surface rounded-card">
+	<section class="principle card-surface rounded-xl">
 		<div class="picture">
-			<div class="pick rounded-panel bg-surface-lifted elevated-control">
+			<div class="pick rounded-lg bg-(--surface-lifted) elevated-control">
 				<Badge>Recommended</Badge>
 
 				<span class="pick-note">Reads, sees and hears</span>
@@ -51,7 +51,7 @@
 		<p>Choices made for you to start; every setting when you want it.</p>
 	</section>
 
-	<section class="principle card-surface rounded-card">
+	<section class="principle card-surface rounded-xl">
 		<div class="picture character">
 			<svg aria-hidden="true" class="icon" viewBox="0 0 {SIZE} {SIZE}">
 				{#each PATHS as d (d)}<path {d} />{/each}
@@ -67,8 +67,8 @@
 		<p>The icon, the type, one accent. The rest is neutral.</p>
 	</section>
 
-	<section class="principle card-surface rounded-card">
-		<div class="picture grid-bg rounded-panel">
+	<section class="principle card-surface rounded-xl">
+		<div class="picture grid-bg rounded-lg">
 			<Button size="sm" variant="outline">Run</Button>
 		</div>
 
@@ -77,7 +77,7 @@
 		<p>Every element has a job and a reason for its size.</p>
 	</section>
 
-	<section class="principle card-surface rounded-card">
+	<section class="principle card-surface rounded-xl">
 		<div class="picture chain">
 			<code>--neutral-900</code>
 
@@ -87,7 +87,7 @@
 
 			<span aria-hidden="true">↓</span>
 
-			<code>--button-primary-background</code>
+			<code>--button-primary-edge</code>
 		</div>
 
 		<h3>Design lives in code</h3>

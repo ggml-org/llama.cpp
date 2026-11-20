@@ -197,8 +197,7 @@ void ggml_openvino_model_cache_init() {
         }
         return;
     }
-    if (cache_only && (ggml_openvino_is_npu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC") ||
-                       ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_CACHE") ||
+    if (cache_only && (ggml_openvino_is_static() || ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_CACHE") ||
                        ggml_openvino_getenv_int("GGML_OPENVINO_ENABLE_FALLBACK"))) {
         GGML_ABORT("ggml-openvino: cache-only mode requires dynamic CPU/GPU execution with caching and without fallback");
     }
@@ -368,7 +367,8 @@ uint64_t ggml_openvino_model_fingerprint(const ggml_cgraph * cgraph,
     // Version 5 requantizes K-quant MoE experts to Q4_1_64 on GPU by default.
     // Version 6 clears recurrent-cache slots with Select, so a NaN in a cleared slot does not survive.
     // Version 7 reads ROPE frequency factors named other than rope_freqs.weight as a Constant, not a Parameter.
-    h = fnv1a_u64(h, 7);
+    // Version 8 drops result_norm from the outputs when it has a consumer, and hashes the output flags.
+    h = fnv1a_u64(h, 8);
     h = fnv1a(h, graph_signature.data(), graph_signature.size());
     for (const char * name : cache_settings) {
         const char * value = ggml_openvino_getenv_str(name, "");
@@ -391,6 +391,8 @@ uint64_t ggml_openvino_model_fingerprint(const ggml_cgraph * cgraph,
         const ggml_tensor * node = cgraph->nodes[i];
         h = fnv1a_u64(h, static_cast<uint64_t>(node->op));
         h = fnv1a(h, node->name, strlen(node->name));
+        // Each output is a Result of the model; llama_set_embeddings_layer_inp() changes only the flags.
+        h = fnv1a_u64(h, (node->flags & GGML_TENSOR_FLAG_OUTPUT) ? 1u : 0u);
         has_gdn = has_gdn || node->op == GGML_OP_GATED_DELTA_NET;
     }
     if (has_gdn && ggml_openvino_is_npu()) {

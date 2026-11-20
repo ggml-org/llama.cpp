@@ -34,9 +34,11 @@ const THEMES = [
 ];
 // the type roles, by the @theme names Tailwind turns into text-body, text-label-sm, ...: a size with a line height
 const TYPE_ROLE = /^--text-([a-z]+(?:-[a-z]+)*)$/;
+// body and caption text takes the weight around it, which is regular unless a parent says otherwise
+const DEFAULT_WEIGHT = '400';
 // code takes the body-sm role in the mono stack (see `:where(code, pre, kbd, samp)` in theme.css)
 const CODE_ROLE = 'body-sm';
-// Tailwind's own `rounded-full`, for lamps, avatars and round buttons; the other corners are roles in semantic.css
+// Tailwind's own `rounded-full`, for lamps, avatars and round buttons; the other corners are the scale in theme.css
 const ROUNDED_FULL = '9999px';
 // the sections this script owns, in the order they appear in the front matter; the next one is written by hand
 const SECTIONS = ['colors', 'typography', 'rounded'];
@@ -104,6 +106,8 @@ const isColorLiteral = (value) =>
 	/^(oklch|oklab|rgb|hsl)\([^()]*\)$/.test(value);
 /** @param {string} value */
 const isColorMix = (value) => /^color-mix\(.*\)$/.test(value) && !/\)\s*,/.test(value);
+/** a share a theme sets for a derivation, e.g. `--status-surface-share: 11%` @param {string} value */
+const isShare = (value) => /^\d+(?:\.\d+)?%$/.test(value);
 /** @param {string} value */
 const varName = (value) => /^var\(--([\w-]+)\)$/.exec(value)?.[1];
 
@@ -136,7 +140,19 @@ function build() {
 
 		return next !== undefined && isColor(next, scope);
 	};
-	const semanticColors = [...semantic].filter(([, value]) => isColor(value, semantic));
+	/**
+	 * A value with the shares it reads written out, as the theme whose declarations are `scope` sets them, so a
+	 * derivation reads as the mix it is: `color-mix(in oklab, var(--fill-danger) 11%, var(--surface-page))`.
+	 * @param {string} value
+	 * @param {Map<string, string>} [scope]
+	 */
+	const withShares = (value, scope) =>
+		value.replace(/var\((--[\w-]+)\)/g, (reference, name) => {
+			const share = scope?.get(name) ?? semantic.get(name) ?? '';
+
+			return isShare(share) ? share : reference;
+		});
+	const semanticColors = [...semantic].filter(([, value]) => isColor(withShares(value), semantic));
 	const semanticNames = new Set(semanticColors.map(([name]) => name.slice(2)));
 	/**
 	 * A token's value as the front matter writes it: a reference to another token, a literal, or a mix of them. A
@@ -166,7 +182,7 @@ function build() {
 	const base = new Map();
 
 	for (const [name, value] of semanticColors) {
-		const rendered = render(value, (n) => n);
+		const rendered = render(withShares(value), (n) => n);
 
 		base.set(name, rendered);
 		colors.push([name.slice(2), rendered]);
@@ -190,7 +206,9 @@ function build() {
 				if (semanticNames.has(ref)) resolve(`--${ref}`);
 			}
 
-			const result = render(value, (n) => (twins.has(n) ? `${n}${suffix}` : n));
+			const result = render(withShares(value, overrides), (n) =>
+				twins.has(n) ? `${n}${suffix}` : n
+			);
 
 			rendered.set(name, result);
 
@@ -217,6 +235,13 @@ function build() {
 
 		return (name && primitives.get(`--${name}`)) ?? value ?? '';
 	};
+	// a line height is written as the line over the size, `calc(1.25 / 0.875)`: the line, in rem
+	/** @param {string | undefined} value */
+	const lineHeight = (value) => {
+		const ratio = /^calc\(([\d.]+) \/ [\d.]+\)$/.exec(value ?? '');
+
+		return ratio ? `${ratio[1]}rem` : length(value);
+	};
 	/** @type {[string, Record<string, string>][]} */
 	const typography = [];
 
@@ -230,8 +255,8 @@ function build() {
 			{
 				fontFamily: sans,
 				fontSize: length(value),
-				fontWeight: length(inline.get(`${name}--font-weight`)),
-				lineHeight: length(inline.get(`${name}--line-height`))
+				fontWeight: inline.get(`${name}--font-weight`) ?? DEFAULT_WEIGHT,
+				lineHeight: lineHeight(inline.get(`${name}--line-height`))
 			}
 		]);
 	}
@@ -242,11 +267,17 @@ function build() {
 
 	/** @type {[string, string][]} */
 	const rounded = [];
+	// the corner scale is computed from --radius: `calc(var(--radius) + 4px)`, with 1rem as 16px
+	const baseRadius = parseFloat(theme.get(':root')?.get('--radius') ?? '') * 16;
 
-	for (const [name, value] of inline) {
-		const role = /^--radius-([a-z-]+)$/.exec(name)?.[1];
+	for (const [name, value] of theme.get('@theme inline') ?? []) {
+		const step = /^--radius-([a-z0-9]+)$/.exec(name)?.[1];
+		const offset = /^calc\(var\(--radius\) ([+-]) ([\d.]+)px\)$/.exec(value);
 
-		if (role) rounded.push([role, length(value)]);
+		if (!step) continue;
+
+		if (offset) rounded.push([step, `${baseRadius + Number(offset[1] + offset[2])}px`]);
+		else if (value === 'var(--radius)') rounded.push([step, `${baseRadius}px`]);
 	}
 
 	rounded.push(['full', ROUNDED_FULL]);

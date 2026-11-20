@@ -75,6 +75,28 @@ OutputVector translate_cpy(const NodeContext & context) {
         return rename_outputs_with_suffix({result}, context.get_name());
     }
 
+    if (op_case == 13) {
+        // SSM_SCAN final-state writeback: output the written state block and the full updated cache
+        auto src = process_view_input_new(context, 0);
+        auto base = context.get_input(1);
+        if (src.get_element_type() != context.get_output_type()) {
+            src = std::make_shared<ov::op::v0::Convert>(src, context.get_output_type());
+        }
+        auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+        auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+        auto int_max = ov::op::v0::Constant::create(ov::element::i64, {1}, {INT_MAX});
+        auto axis = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
+        auto begin = context.get_input("rs_slot_begin_" + context.get_name());
+        auto src_len = std::make_shared<ov::op::v8::Gather>(
+            std::make_shared<ov::op::v3::ShapeOf>(src, ov::element::i64), axis,
+            ov::op::v0::Constant::create(ov::element::i64, {}, {0}));
+        auto end = std::make_shared<ov::op::v1::Add>(begin, src_len);
+        auto head_part = std::make_shared<ov::op::v8::Slice>(base, zero, begin, one, axis);
+        auto tail_part = std::make_shared<ov::op::v8::Slice>(base, end, int_max, one, axis);
+        auto updated = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{head_part, src, tail_part}, 2);
+        return rename_outputs_with_suffix({src, updated}, context.get_name());
+    }
+
     if (op_case == 4) {
         auto src = process_view_input_new(context, 0);
         auto base = context.get_input(1);

@@ -159,6 +159,7 @@ struct server_batch {
         bool output;
         bool is_prompt; // for stats tracking
         int32_t decision_order = 0;
+        int32_t decision_group = 0;
         int32_t i_embd = -1; // row in embd, -1 if this is a token
     };
     std::vector<token> tokens;
@@ -239,6 +240,11 @@ struct server_batch {
         tokens[idx].decision_order = order;
     }
 
+    void set_decision_group(int32_t idx, int32_t group) {
+        GGML_ASSERT(idx >= 0 && idx < (int32_t)tokens.size());
+        tokens[idx].decision_group = group;
+    }
+
     // render the sub-batch [off, off + n_tokens) into view, index i in view is index off + i here
     void render(int32_t off, int32_t n_tokens) {
         GGML_ASSERT(off >= 0 && off < size());
@@ -253,6 +259,7 @@ struct server_batch {
                 view.add(t.token, t.pos[0], t.id_slot, t.output);
             }
             view.tokens.back().decision_order = t.decision_order;
+            view.tokens.back().decision_group = t.decision_group;
         }
     }
 };
@@ -346,6 +353,8 @@ struct server_slot {
             return false;
         }
 
+        const int64_t t_start = ggml_time_us();
+
         const size_t cur_size_tgt =           llama_state_seq_get_size_ext(ctx_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
         const size_t cur_size_dft = ctx_dft ? llama_state_seq_get_size_ext(ctx_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE) : 0;
 
@@ -366,6 +375,8 @@ struct server_slot {
             prompt_cache.states.pop_back();
             return false;
         }
+
+        SLT_TRC(*this, "prompt cache save took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
 
         return true;
     }
@@ -2469,25 +2480,26 @@ private:
             }
             res->scores.assign(embd, embd + llama_model_n_embd_out(model_tgt));
         } else if (!decision.labels.empty()) {
-            const float * logits = llama_get_logits_ith(slot.ctx_tgt, i_batch);
-            if (logits == nullptr) {
-                send_error(slot, "failed to get logits", ERROR_TYPE_SERVER);
-                return;
-            }
             const int32_t n_vocab = llama_vocab_n_tokens(vocab);
-            for (const llama_token label : decision.labels) {
-                GGML_ASSERT(label >= 0 && label < n_vocab);
-                res->scores.push_back(logits[label]);
-            }
-            if (!decision.label_groups.empty()) {
-                std::vector<float> scores;
-                size_t i = 0;
-                for (const int32_t n : decision.label_groups) {
-                    GGML_ASSERT(n > 0 && i + n <= res->scores.size());
-                    scores.push_back(*std::max_element(res->scores.begin() + i, res->scores.begin() + i + n));
-                    i += n;
+            const size_t  n_out   = decision.label_groups.empty() ? decision.labels.size() : decision.label_groups.size();
+            GGML_ASSERT(decision.label_pos.empty() || decision.label_pos.size() == n_out);
+            size_t i = 0;
+            for (size_t o = 0; o < n_out; o++) {
+                const int32_t i_out  = decision.label_pos.empty() ? i_batch : i_batch - (slot.task->n_tokens() - 1 - decision.label_pos[o]);
+                const float * logits = llama_get_logits_ith(slot.ctx_tgt, i_out);
+                if (logits == nullptr) {
+                    send_error(slot, "failed to get logits", ERROR_TYPE_SERVER);
+                    return;
                 }
-                res->scores = std::move(scores);
+                const size_t n = decision.label_groups.empty() ? 1 : decision.label_groups[o];
+                GGML_ASSERT(n > 0 && i + n <= decision.labels.size());
+                float score = -INFINITY;
+                for (size_t j = i; j < i + n; j++) {
+                    GGML_ASSERT(decision.labels[j] >= 0 && decision.labels[j] < n_vocab);
+                    score = std::max(score, logits[decision.labels[j]]);
+                }
+                res->scores.push_back(score);
+                i += n;
             }
         } else {
             // the outputs of this slot in this batch are the last tokens of the prompt
@@ -4430,6 +4442,9 @@ private:
                         if (!slot.task->decision.order.empty()) {
                             batch.set_decision_order(batch.size() - 1, slot.task->decision.order[slot.prompt.n_tokens()]);
                         }
+                        if (!slot.task->decision.group.empty()) {
+                            batch.set_decision_group(batch.size() - 1, slot.task->decision.group[slot.prompt.n_tokens()]);
+                        }
                         slot.prompt.tokens.push_back(cur_tok);
 
                         // break at the last user message, or at user messages at least min step past the last checkpoint
@@ -4482,6 +4497,11 @@ private:
 
                         // extract the logits only for the last token
                         batch.set_output(batch.size() - 1, true);
+
+                        // and at the answer of each packed question
+                        for (const int32_t pos : slot.task->decision.label_pos) {
+                            batch.set_output(batch.size() - slot.task->n_tokens() + pos, true);
+                        }
 
                         slot.stats.n_gen = 0;
                         slot.i_batch     = batch.size() - 1;
@@ -4554,6 +4574,9 @@ private:
                 GGML_ASSERT(add_ok);
                 if (!slot.task->decision.order.empty()) {
                     batch.set_decision_order(batch.size() - 1, slot.task->decision.order[cur_token_idx]);
+                }
+                if (!slot.task->decision.group.empty()) {
+                    batch.set_decision_group(batch.size() - 1, slot.task->decision.group[cur_token_idx]);
                 }
                 slot.prompt.tokens.push_back(cur_tok);
                 continue;
@@ -6087,6 +6110,9 @@ void server_routes::init_routes() {
     // audio is PCM16 mono at the model sample rate, sent as base64 in input_audio_buffer.append events
     // input_audio_buffer.commit with "final": true ends the input, closing the socket also ends it
     this->ws_realtime = [this](const server_http_req & req, server_http_context::ws_conn & conn) {
+        // make sure sleep state is handled by create_response()
+        auto res = create_response();
+
         auto send_event = [&conn](json ev) {
             ev["event_id"] = "event_" + random_string();
             conn.send(safe_json_to_str(ev));
@@ -6131,7 +6157,6 @@ void server_routes::init_routes() {
             }}}},
         };
 
-        auto res = create_response();
         auto & rd = res->rd;
         {
             server_task task(SERVER_TASK_TYPE_TRANSCRIBE_RT);
@@ -6464,6 +6489,7 @@ void server_routes::init_routes() {
 
         const json body = json::parse(req.body);
         const auto questions = decision.parse_questions(body);
+        const size_t set_size = decision.set_size(questions);
 
         std::vector<raw_buffer> files;
         const json state = decision.prepare_state(decision.parse_state(body, files));
@@ -6472,7 +6498,8 @@ void server_routes::init_routes() {
             return res;
         }
 
-        // one task per variant of each question, or one task for all the questions
+        // one task per variant of each question, or one task for all the questions, or per packed set
+        const bool is_packed = decision.is_joint() || set_size > 0;
         auto & rd = res->rd;
         {
             std::vector<server_task> tasks;
@@ -6481,6 +6508,14 @@ void server_routes::init_routes() {
                 task.id = rd.get_new_id();
                 decision.fill_task_joint(state, questions, files, ctx_server.mctx, ctx_server.init_opt, task);
                 tasks.push_back(std::move(task));
+            } else if (set_size > 0) {
+                for (size_t i = 0; i < questions.size(); i += set_size) {
+                    const std::vector<server_decision_question> set(questions.begin() + i, questions.begin() + std::min(questions.size(), i + set_size));
+                    server_task task = server_task(SERVER_TASK_TYPE_DECISION);
+                    task.id = rd.get_new_id();
+                    decision.fill_task_set(state, set, files, ctx_server.mctx, ctx_server.init_opt, task);
+                    tasks.push_back(std::move(task));
+                }
             } else {
                 for (const auto & question : questions) {
                     for (size_t variant = 0; variant < decision.n_variants(question); variant++) {
@@ -6512,15 +6547,20 @@ void server_routes::init_routes() {
         size_t i_score  = 0;
         for (const auto & question : questions) {
             std::vector<std::vector<float>> scores;
-            if (decision.is_joint()) {
-                // one result with the scores of all the questions, in order
-                auto * result = dynamic_cast<server_task_result_decision *>(all_results.results[0].get());
+            if (is_packed) {
+                auto * result = dynamic_cast<server_task_result_decision *>(all_results.results[i_result].get());
                 GGML_ASSERT(result != nullptr && i_score + question.options.size() <= result->scores.size());
                 scores.emplace_back(result->scores.begin() + i_score, result->scores.begin() + i_score + question.options.size());
+                if (i_score == 0) {
+                    n_tokens += result->n_tokens;
+                }
                 i_score += question.options.size();
-                n_tokens = result->n_tokens;
+                if (i_score == result->scores.size()) {
+                    i_result++;
+                    i_score = 0;
+                }
             }
-            for (size_t variant = 0; !decision.is_joint() && variant < decision.n_variants(question); variant++) {
+            for (size_t variant = 0; !is_packed && variant < decision.n_variants(question); variant++) {
                 auto * result = dynamic_cast<server_task_result_decision *>(all_results.results[i_result++].get());
                 GGML_ASSERT(result != nullptr);
                 scores.push_back(result->scores);

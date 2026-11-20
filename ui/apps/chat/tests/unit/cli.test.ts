@@ -71,7 +71,7 @@ describe('llama-chat packages', () => {
 		const alias = await read('../../alias/package.json');
 
 		expect(app.private).toBeUndefined();
-		expect(app.bin['llama-chat']).toBe('./bin/cli.js');
+		expect(app.bin['llama-chat']).toBe('bin/cli.js');
 		expect(alias.version).toBe(app.version);
 		expect(alias.dependencies[app.name]).toBe(app.version);
 	});

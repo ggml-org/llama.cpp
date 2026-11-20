@@ -12,12 +12,13 @@
 	});
 
 	const radii = [
-		{ name: 'rounded-control', note: '8px, buttons, fields, badges' },
-		{ name: 'rounded-panel', note: '10px, menus and dialogs' },
-		{ name: 'rounded-card', note: '14px, cards' },
-		{ name: 'rounded-container', note: '16px, the sidebar' },
-		{ name: 'rounded-surface', note: '24px, chat form, bubbles' },
-		{ name: 'rounded-surface-lg', note: '32px, chat form on mobile' },
+		{ name: 'rounded-sm', note: '6px, small marks and chips' },
+		{ name: 'rounded-md', note: '8px, buttons, fields, badges' },
+		{ name: 'rounded-lg', note: '10px, menus and dialogs' },
+		{ name: 'rounded-xl', note: '14px, cards' },
+		{ name: 'rounded-2xl', note: '16px, the sidebar, bubbles' },
+		{ name: 'rounded-3xl', note: '24px, chat form' },
+		{ name: 'rounded-4xl', note: '32px, chat form on mobile' },
 		{ name: 'rounded-full', note: 'lamps, avatars, round icon buttons' }
 	];
 </script>
@@ -26,7 +27,7 @@
 	<StateGallery columns={4}>
 		{#each radii as radius (radius.name)}
 			<StateGalleryItem label={radius.name} note={radius.note}>
-				<div class="h-24 border border-line-default bg-surface-muted {radius.name}"></div>
+				<div class="h-24 border border-border bg-muted {radius.name}"></div>
 			</StateGalleryItem>
 		{/each}
 	</StateGallery>

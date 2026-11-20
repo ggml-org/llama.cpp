@@ -16,7 +16,7 @@
 	</div>
 
 	{#if subtitle}
-		<div class="text-[10px] leading-tight text-muted-foreground/70 max-md:text-[11px]">
+		<div class="text-caption-sm leading-tight text-muted-foreground/70 max-md:text-caption">
 			{subtitle}
 		</div>
 	{/if}
