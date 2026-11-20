@@ -131,8 +131,6 @@ static void htp_collapse_dims(struct ggml_tensor ** tensors, size_t n_tensors, s
                 tensors[t]->ne[0] *= k;
                 tensors[t]->ne[1] /= k;
                 tensors[t]->nb[1] *= k;
-                tensors[t]->nb[2]  = tensors[t]->nb[1] * tensors[t]->ne[1];
-                tensors[t]->nb[3]  = tensors[t]->nb[2] * tensors[t]->ne[2];
             }
         }
     }
@@ -159,8 +157,6 @@ static void htp_collapse_dims(struct ggml_tensor ** tensors, size_t n_tensors, s
                 tensors[t]->ne[0] /= k;
                 tensors[t]->ne[1] *= k;
                 tensors[t]->nb[1]  = tensors[t]->ne[0] * elem_size;
-                tensors[t]->nb[2]  = tensors[t]->nb[1] * tensors[t]->ne[1];
-                tensors[t]->nb[3]  = tensors[t]->nb[2] * tensors[t]->ne[2];
             }
         }
     }
