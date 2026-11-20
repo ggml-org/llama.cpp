@@ -108,6 +108,7 @@ export {
 
 // IME utilities
 export { isIMEComposing } from './is-ime-composing';
+export { shouldTypeToFocus } from './type-to-focus';
 
 // LaTeX utilities
 export { maskInlineLaTeX, preprocessLaTeX } from './latex-protection';
