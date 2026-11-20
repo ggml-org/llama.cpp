@@ -339,7 +339,7 @@
 		/>
 
 		{#if !fileSearchEnabled}
-			<div class="px-2 py-1.5 text-sm text-muted-foreground">{searchUnavailableMessage}</div>
+			<div class="px-2 py-1.5 text-body-sm text-muted-foreground">{searchUnavailableMessage}</div>
 		{:else if query.trim() && (search.isSearching || queryResults.length > 0 || searchError)}
 			<ChatFormCurrentWorkingDirectoryResultsList
 				bind:container={listContainer}
@@ -358,8 +358,8 @@
 				class={[
 					'flex cursor-pointer items-center outline-hidden select-none hover:bg-accent hover:text-accent-foreground',
 					inDrawer
-						? 'mt-1 gap-2 rounded-lg px-2 py-2.5 text-[15px]'
-						: '-mt-1 gap-2 rounded-sm px-2 py-1.5 text-sm'
+						? 'mt-1 gap-2 rounded-lg px-2 py-2.5 text-body'
+						: '-mt-1 gap-2 rounded-sm px-2 py-1.5 text-body-sm'
 				]}
 				onclick={browseNative}
 				type="button"
@@ -375,8 +375,8 @@
 				class={[
 					'flex cursor-pointer items-center outline-hidden select-none hover:bg-accent hover:text-accent-foreground',
 					inDrawer
-						? 'gap-2 rounded-lg px-2 py-2.5 text-[15px]'
-						: 'gap-2 rounded-sm px-2 py-1.5 text-sm'
+						? 'gap-2 rounded-lg px-2 py-2.5 text-body'
+						: 'gap-2 rounded-sm px-2 py-1.5 text-body-sm'
 				]}
 				onclick={clearDirectory}
 				type="button"
@@ -393,7 +393,9 @@
 				class={['h-px', inDrawer ? 'my-1 bg-border/60' : '-mx-2 my-2 bg-border/20']}
 			></div>
 
-			<span class={['font-mono', inDrawer ? 'px-2 py-2 text-xs' : 'px-2 py-1.5 text-[10px]']}>
+			<span
+				class={['font-mono', inDrawer ? 'px-2 py-2 text-caption' : 'px-2 py-1.5 text-caption-sm']}
+			>
 				Searching in:
 
 				<span class="truncate text-muted-foreground/70" title={searchScope}

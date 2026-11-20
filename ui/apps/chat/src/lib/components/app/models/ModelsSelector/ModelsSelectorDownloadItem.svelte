@@ -68,7 +68,7 @@
      compact sub-lines instead of rows of their own. -->
 <div class="group relative rounded-sm transition-colors hover:bg-accent/50">
 	<div
-		class="flex items-center gap-2 p-2 text-left text-sm max-md:gap-2.5 max-md:px-2.5 max-md:py-2.5"
+		class="flex items-center gap-2 p-2 text-left text-body-sm max-md:gap-2.5 max-md:px-2.5 max-md:py-2.5"
 	>
 		<button
 			aria-label="Manage model"
@@ -95,11 +95,11 @@
 			/>
 
 			{#if percent !== null}
-				<span class="ml-auto shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
+				<span class="ml-auto shrink-0 font-mono text-caption tabular-nums text-muted-foreground">
 					{percent}%
 				</span>
 			{:else if entry.isPaused}
-				<span class="ml-auto shrink-0 text-xs text-muted-foreground">Paused</span>
+				<span class="ml-auto shrink-0 text-caption text-muted-foreground">Paused</span>
 			{/if}
 		</button>
 
@@ -113,15 +113,15 @@
 		>
 			{#if entry.isPaused}
 				<Play
-					class="absolute size-icon-md scale-75 opacity-0 transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:scale-100 group-hover:opacity-100 [@media(pointer:coarse)]:scale-100 [@media(pointer:coarse)]:opacity-100"
+					class="absolute size-icon-md scale-75 opacity-0 transition-[opacity,transform] duration-150 ease-out-quint group-hover:scale-100 group-hover:opacity-100 [@media(pointer:coarse)]:scale-100 [@media(pointer:coarse)]:opacity-100"
 				/>
 			{:else}
 				<Loader2
-					class="absolute size-icon-md animate-spin text-muted-foreground transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:opacity-0 [@media(pointer:coarse)]:hidden"
+					class="absolute size-icon-md animate-spin text-muted-foreground transition-opacity duration-150 ease-out-quint group-hover:opacity-0 [@media(pointer:coarse)]:hidden"
 				/>
 
 				<Pause
-					class="absolute size-icon-md opacity-0 transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100"
+					class="absolute size-icon-md opacity-0 transition-opacity duration-150 ease-out-quint group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100"
 				/>
 			{/if}
 		</button>

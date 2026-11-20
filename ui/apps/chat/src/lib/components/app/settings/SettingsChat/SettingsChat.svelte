@@ -209,7 +209,9 @@
 				</div>
 
 				<div class="mt-8 border-t border-border/30 pt-6 pb-6">
-					<p class="text-xs text-muted-foreground">Settings are saved in browser's localStorage</p>
+					<p class="text-caption text-muted-foreground">
+						Settings are saved in browser's localStorage
+					</p>
 				</div>
 			</div>
 

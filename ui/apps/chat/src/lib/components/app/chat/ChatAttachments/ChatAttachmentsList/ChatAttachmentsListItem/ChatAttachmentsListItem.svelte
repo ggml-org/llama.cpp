@@ -77,7 +77,7 @@
 				: null}
 	{#if mcpPrompt}
 		<ChatAttachmentsListItemMcpPrompt
-			class="max-w-[300px] min-w-[200px] flex-shrink-0 {className} {scrollClasses}"
+			class="max-w-75 min-w-50 flex-shrink-0 {className} {scrollClasses}"
 			isLoading={item.isLoading}
 			loadError={item.loadError}
 			onRemove={onFileRemove ? () => onFileRemove(item.id) : undefined}

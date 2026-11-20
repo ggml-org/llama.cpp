@@ -35,7 +35,7 @@
 	<Tooltip.Trigger>
 		<button
 			class={[
-				'flex flex-shrink-0 items-center gap-1.5 rounded-md border px-2 py-0.75 text-sm transition-colors',
+				'flex flex-shrink-0 items-center gap-1.5 rounded-md border px-2 py-0.75 text-body-sm transition-colors',
 				getStatusClass(attachment),
 				onclick && 'cursor-pointer hover:bg-muted/50',
 				className
@@ -52,7 +52,7 @@
 				<ResourceIcon class="size-icon-xs text-muted-foreground" />
 			{/if}
 
-			<span class="max-w-[150px] truncate text-xs">
+			<span class="max-w-37.5 truncate text-caption">
 				{getResourceDisplayName(attachment.resource)}
 			</span>
 
@@ -70,7 +70,7 @@
 	</Tooltip.Trigger>
 
 	<Tooltip.Content>
-		<div class="flex items-center gap-1 text-xs">
+		<div class="flex items-center gap-1 text-caption">
 			{#if favicon}
 				<img
 					alt={attachment.resource.serverName}

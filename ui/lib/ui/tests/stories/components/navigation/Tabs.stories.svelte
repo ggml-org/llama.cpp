@@ -26,11 +26,11 @@
 					<Tabs.Trigger value="tools">Tools</Tabs.Trigger>
 				</Tabs.List>
 
-				<Tabs.Content class="pt-2 text-fg-muted" value="general">General settings.</Tabs.Content>
+				<Tabs.Content class="pt-2 text-muted-foreground" value="general">General settings.</Tabs.Content>
 
-				<Tabs.Content class="pt-2 text-fg-muted" value="sampling">Sampling settings.</Tabs.Content>
+				<Tabs.Content class="pt-2 text-muted-foreground" value="sampling">Sampling settings.</Tabs.Content>
 
-				<Tabs.Content class="pt-2 text-fg-muted" value="tools">Tool settings.</Tabs.Content>
+				<Tabs.Content class="pt-2 text-muted-foreground" value="tools">Tool settings.</Tabs.Content>
 			</Tabs.Root>
 		</StateGalleryItem>
 

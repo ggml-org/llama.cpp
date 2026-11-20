@@ -57,7 +57,7 @@
 
 	{#if promptError}
 		<div
-			class="flex items-start gap-2 rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+			class="flex items-start gap-2 rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-body-sm text-destructive"
 			role="alert"
 		>
 			<span class="shrink-0">⚠</span>

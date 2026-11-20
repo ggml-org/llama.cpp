@@ -9,14 +9,14 @@
 }
 
 .ds-docs {
-	@apply mx-auto max-w-3xl font-sans text-body text-fg-default;
+	@apply mx-auto max-w-3xl font-sans text-body text-foreground;
 
 	& :where(h1) {
 		@apply mb-4 text-heading;
 	}
 
 	& :where(h2) {
-		@apply mt-10 mb-3 border-b border-line-default pb-2 text-title;
+		@apply mt-10 mb-3 border-b border-border pb-2 text-title;
 	}
 
 	& :where(h3) {
@@ -48,16 +48,16 @@
 	}
 
 	& :where(a) {
-		@apply underline underline-offset-2 hover:text-fg-muted;
+		@apply underline underline-offset-2 hover:text-muted-foreground;
 	}
 
 	& :where(blockquote) {
-		@apply border-l-2 border-line-default pl-4 text-fg-muted;
+		@apply border-l-2 border-border pl-4 text-muted-foreground;
 	}
 
 	/* a note that stands out from the running text: a quiet panel with the accent on its edge */
 	& :where(.callout) {
-		@apply my-6 rounded-panel border-l-2 border-(--art-cinder) bg-surface-muted px-5 py-4;
+		@apply my-6 rounded-lg border-l-2 border-(--art-cinder) bg-muted px-5 py-4;
 
 		& > :where(p) {
 			@apply my-0;
@@ -65,16 +65,16 @@
 	}
 
 	& :where(hr) {
-		@apply my-8 border-line-default;
+		@apply my-8 border-border;
 	}
 
 	/* inline code only, with a selector that outranks the code the Markdown block renders */
 	& :not(pre) > code {
-		@apply rounded-control border-0 bg-surface-code px-1 py-0.5 font-mono text-[0.875em] text-(--fg-code);
+		@apply rounded-md border-0 bg-(--surface-code) px-1 py-0.5 font-mono text-[0.875em] text-(--fg-code);
 	}
 
 	& :where(pre) {
-		@apply overflow-x-auto rounded-panel bg-surface-code p-4 text-body-sm;
+		@apply overflow-x-auto rounded-lg bg-(--surface-code) p-4 text-body-sm;
 	}
 
 	& :where(table) {
@@ -82,7 +82,7 @@
 	}
 
 	& :where(th, td) {
-		@apply border-b border-line-default px-3 py-2 text-left align-top;
+		@apply border-b border-border px-3 py-2 text-left align-top;
 	}
 
 	& :where(th) {

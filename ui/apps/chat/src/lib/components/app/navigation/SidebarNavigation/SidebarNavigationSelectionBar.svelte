@@ -83,7 +83,7 @@
 			onCheckedChange={onSelectAllToggle}
 		/>
 
-		<span class="truncate text-xs font-medium text-muted-foreground">
+		<span class="truncate text-label-sm text-muted-foreground">
 			{selectedCount} / {visibleCount} selected
 		</span>
 	</label>

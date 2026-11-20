@@ -71,7 +71,7 @@
 			{@render children()}
 
 			{#if isEmpty}
-				<div class="px-2 py-3 text-center text-sm text-muted-foreground">{emptyMessage}</div>
+				<div class="px-2 py-3 text-center text-body-sm text-muted-foreground">{emptyMessage}</div>
 			{/if}
 		</div>
 	</div>

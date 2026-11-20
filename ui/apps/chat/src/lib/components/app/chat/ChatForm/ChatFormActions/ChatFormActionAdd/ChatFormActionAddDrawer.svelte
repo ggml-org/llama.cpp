@@ -77,10 +77,10 @@
 	const toolsPanel = useToolsPanel();
 
 	const itemClass =
-		'flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent active:bg-accent disabled:cursor-not-allowed disabled:opacity-50';
+		'flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-body-sm transition-colors hover:bg-accent active:bg-accent disabled:cursor-not-allowed disabled:opacity-50';
 
 	const itemRowClass =
-		'flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent';
+		'flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-body-sm transition-colors hover:bg-accent';
 </script>
 
 <div class="flex items-center gap-1 {className}">
@@ -204,9 +204,9 @@
 			/>
 		{/if}
 
-		<span class="min-w-0 flex-1 truncate text-sm font-medium">{group.label}</span>
+		<span class="min-w-0 flex-1 truncate text-label">{group.label}</span>
 
-		<span class="shrink-0 text-xs text-muted-foreground">
+		<span class="shrink-0 text-caption text-muted-foreground">
 			{enabledCount}/{group.tools.length}
 		</span>
 

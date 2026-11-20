@@ -38,5 +38,5 @@
 		</Button>
 	</div>
 
-	<h3 class="text-sm font-medium">Available resources</h3>
+	<h3 class="text-label">Available resources</h3>
 </div>

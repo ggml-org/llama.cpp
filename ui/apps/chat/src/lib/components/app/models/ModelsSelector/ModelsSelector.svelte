@@ -290,7 +290,7 @@
 			<button
 				aria-disabled="true"
 				aria-selected="true"
-				class="flex w-full cursor-not-allowed items-center bg-surface-danger p-2 text-left text-sm text-fg-danger"
+				class="flex w-full cursor-not-allowed items-center bg-surface-danger p-2 text-left text-body-sm text-fg-danger"
 				disabled
 				role="option"
 				type="button"
@@ -302,12 +302,12 @@
 					modelId={displayModel}
 				/>
 
-				<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
+				<span class="ml-2 text-caption whitespace-nowrap opacity-70">(not available)</span>
 			</button>
 		{/if}
 
 		{#if ms.isEmpty}
-			<p class="px-4 py-3 text-sm text-muted-foreground">{ms.emptyMessage}</p>
+			<p class="px-4 py-3 text-body-sm text-muted-foreground">{ms.emptyMessage}</p>
 		{/if}
 
 		<ModelsSelectorList
@@ -318,14 +318,14 @@
 			loaded={ms.loadedItems}
 			onSelect={ms.handleSelect}
 			renderOption={modelOption}
-			sectionHeaderClass="[&:not(:first-child)]:mt-2 mb-1 px-2 py-2.5 text-sm font-semibold text-foreground/80 select-none"
+			sectionHeaderClass="[&:not(:first-child)]:mt-2 mb-1 px-2 py-2.5 text-body-sm font-semibold text-foreground/80 select-none"
 			{showOrgName}
 		/>
 	</div>
 {/snippet}
 
 {#if ms.loading && ms.options.length === 0 && ms.isMultiModel}
-	<div class="flex items-center gap-2 text-xs text-muted-foreground">
+	<div class="flex items-center gap-2 text-caption text-muted-foreground">
 		<Loader2 class="size-icon-sm animate-spin" />
 
 		Loading models...
@@ -333,18 +333,18 @@
 {:else if ms.options.length === 0 && ms.isMultiModel}
 	{#if displayModel}
 		<span
-			class="inline-flex items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs text-muted-foreground"
+			class="inline-flex items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-caption text-muted-foreground"
 			style="max-width: min(calc(100cqw - 10rem), 48rem)"
 		>
 			<MODEL_ICON class="size-icon-sm shrink-0" />
 		</span>
 	{:else}
-		<span class="text-xs text-muted-foreground">No models yet.</span>
+		<span class="text-caption text-muted-foreground">No models yet.</span>
 	{/if}
 {:else if ms.isMultiModel}
 	{#if isMobile}
 		<button
-			class="relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-xs shadow-(--chat-form-key-shadow) transition hover:bg-muted-foreground/20 max-md:gap-1.5 max-md:h-7 max-md:px-2.25 max-md:py-1 max-md:text-[13px] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground"
+			class="relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-caption shadow-(--elevation-key) transition hover:bg-muted-foreground/20 max-md:gap-1.5 max-md:h-7 max-md:px-2.25 max-md:py-1 max-md:text-body-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground"
 			disabled={disabled || ms.updating}
 			onclick={() => ms.handleOpenChange(true)}
 			style="max-width: min(calc(100vw-4rem), 32rem)"
@@ -383,7 +383,7 @@
 	<!-- a phone has no manager: the single model still gets the drawer, so its
 	     load control, actions and information stay reachable -->
 	<button
-		class="relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-xs shadow-(--chat-form-key-shadow) transition hover:bg-muted-foreground/20 max-md:gap-1.5 max-md:h-7 max-md:px-2.25 max-md:py-1 max-md:text-[13px] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground"
+		class="relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-caption shadow-(--elevation-key) transition hover:bg-muted-foreground/20 max-md:gap-1.5 max-md:h-7 max-md:px-2.25 max-md:py-1 max-md:text-body-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground"
 		disabled={disabled || ms.updating}
 		onclick={() => ms.handleOpenChange(true)}
 		style="max-width: min(calc(100vw-4rem), 32rem)"
@@ -415,7 +415,7 @@
 				<button
 					{...props}
 					class={[
-						`inline-flex items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-(--chat-form-key-shadow) transition focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
+						`inline-flex items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-caption shadow-(--elevation-key) transition focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 						uiStore.isModelsManagerShown
 							? 'cursor-pointer hover:bg-muted-foreground/20'
 							: 'cursor-default',

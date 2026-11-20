@@ -144,7 +144,7 @@
 	shouldScaleBackground={false}
 >
 	<Drawer.Content
-		class="data-[vaul-drawer-direction=bottom]:h-[85dvh] data-[vaul-drawer-direction=bottom]:max-h-[85dvh] data-[vaul-drawer-direction=right]:w-[30rem] data-[vaul-drawer-direction=right]:max-w-[calc(100vw-2rem)] data-[vaul-drawer-direction=right]:sm:max-w-[30rem]"
+		class="data-[vaul-drawer-direction=bottom]:h-[85dvh] data-[vaul-drawer-direction=bottom]:max-h-[85dvh] data-[vaul-drawer-direction=right]:w-120 data-[vaul-drawer-direction=right]:max-w-[calc(100vw-2rem)] data-[vaul-drawer-direction=right]:sm:max-w-120"
 	>
 		<Drawer.Title class="sr-only">Model details</Drawer.Title>
 

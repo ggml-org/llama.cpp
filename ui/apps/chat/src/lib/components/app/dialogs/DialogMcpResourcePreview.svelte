@@ -60,10 +60,10 @@
 
 			<Dialog.Description>
 				<div class="flex items-center gap-2">
-					<span class="text-xs text-muted-foreground">{extra.uri}</span>
+					<span class="text-caption text-muted-foreground">{extra.uri}</span>
 
 					{#if serverName}
-						<span class="flex items-center gap-1 text-xs text-muted-foreground">
+						<span class="flex items-center gap-1 text-caption text-muted-foreground">
 							·
 							{#if favicon}
 								<img
@@ -80,7 +80,7 @@
 					{/if}
 
 					{#if extra.mimeType}
-						<span class="rounded bg-muted px-1.5 py-0.5 text-xs">{extra.mimeType}</span>
+						<span class="rounded bg-muted px-1.5 py-0.5 text-caption">{extra.mimeType}</span>
 					{/if}
 				</div>
 			</Dialog.Description>
@@ -120,9 +120,9 @@
 				<SyntaxHighlightedCode code={extra.content} language={getLanguage()} maxHeight="70vh" />
 			{:else if extra.content}
 				<pre
-					class="max-h-[70vh] overflow-auto rounded-md border bg-muted/30 p-4 font-mono text-sm break-words whitespace-pre-wrap">{extra.content}</pre>
+					class="max-h-[70vh] overflow-auto rounded-md border bg-muted/30 p-4 font-mono text-body-sm break-words whitespace-pre-wrap">{extra.content}</pre>
 			{:else}
-				<div class="py-8 text-center text-sm text-muted-foreground">No content available</div>
+				<div class="py-8 text-center text-body-sm text-muted-foreground">No content available</div>
 			{/if}
 		</div>
 	</Dialog.Content>

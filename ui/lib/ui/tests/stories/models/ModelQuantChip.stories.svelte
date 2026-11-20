@@ -77,7 +77,7 @@
 
 			{#snippet command()}
 				<pre
-					class="overflow-x-auto rounded-panel bg-(--surface-code) px-3 py-2 text-xs text-(--fg-code)">llama serve -hf ggml-org/Qwen3.8-27B-GGUF:Q4_K_M</pre>
+					class="overflow-x-auto rounded-lg bg-(--surface-code) px-3 py-2 text-caption text-(--fg-code)">llama serve -hf ggml-org/Qwen3.8-27B-GGUF:Q4_K_M</pre>
 			{/snippet}
 		</ModelQuantRow>
 
