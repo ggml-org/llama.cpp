@@ -2981,8 +2981,6 @@ class tinyBLAS_Q0_PPC {
         int64_t n_aligned = 0;
         if (n % n_chunk == 0) {
             n_aligned = n;
-        } else if (n == 4) {
-            n_aligned = 4;
         } else if (n < n_chunk) {
             n_aligned = (n / 8) * 8;
         } else {
