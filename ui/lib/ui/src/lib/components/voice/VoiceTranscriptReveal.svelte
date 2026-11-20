@@ -109,7 +109,7 @@
 
 		{#if showToggle}
 			<Button
-				class="size-8 shrink-0 rounded-full p-0 text-fg-muted"
+				class="size-8 shrink-0 rounded-full p-0 text-muted-foreground"
 				aria-controls={id}
 				aria-expanded={open}
 				aria-label={open ? 'Hide transcript' : 'Show transcript'}
@@ -140,19 +140,19 @@
 				<div class="pt-2">
 					{#if shown === 'transcribing'}
 						<div class="flex flex-col gap-1.5">
-							<span class="text-caption text-fg-muted">Transcribing...</span>
+							<span class="text-caption text-muted-foreground">Transcribing...</span>
 							<Skeleton
 								class="h-2.5 w-3/4 rounded-full bg-muted-foreground/20 motion-reduce:animate-none"
 							/>
 						</div>
 					{:else if shown === 'error'}
-						<p class="text-caption text-fg-muted">Transcription unavailable</p>
+						<p class="text-caption text-muted-foreground">Transcription unavailable</p>
 					{:else if transcript}
-						<p class="text-body-sm break-words whitespace-pre-wrap text-fg-muted">
+						<p class="text-body-sm break-words whitespace-pre-wrap text-muted-foreground">
 							<span class="sr-only">Transcript: </span><VoiceSpokenText {spoken} text={transcript} />
 						</p>
 					{:else}
-						<p class="text-caption text-fg-muted">No speech detected</p>
+						<p class="text-caption text-muted-foreground">No speech detected</p>
 					{/if}
 				</div>
 			</div>

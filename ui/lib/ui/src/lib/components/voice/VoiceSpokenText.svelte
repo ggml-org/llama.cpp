@@ -27,7 +27,7 @@
 	>{#each words as { start, word }, index (live ? index : start)}<span
 			class={[
 				'transition-colors duration-300 ease-out motion-reduce:transition-none',
-				start < reached ? 'text-fg-default' : 'text-fg-muted',
+				start < reached ? 'text-foreground' : 'text-muted-foreground',
 				live && 'spoken-in'
 			]}
 			data-spoken={start < reached || undefined}>{word}</span

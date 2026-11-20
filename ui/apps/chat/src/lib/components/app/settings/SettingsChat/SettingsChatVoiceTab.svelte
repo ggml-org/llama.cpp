@@ -134,7 +134,7 @@
 	<SettingsChatFields fields={fields.slice(0, splitAt)} {localConfig} {onConfigChange} />
 
 	<div class="space-y-2" data-slot="voice-microphone">
-		<Label class="text-sm font-medium" for={MIC_KEY}>Microphone</Label>
+		<Label class="text-label" for={MIC_KEY}>Microphone</Label>
 
 		<Select.Root
 			onValueChange={(value) => onConfigChange(MIC_KEY, value)}
@@ -150,10 +150,10 @@
 			</Select.Content>
 		</Select.Root>
 
-		<p class="mt-1 text-xs text-muted-foreground">{SETTING_CONFIG_INFO[MIC_KEY]}</p>
+		<p class="mt-1 text-caption text-muted-foreground">{SETTING_CONFIG_INFO[MIC_KEY]}</p>
 
 		{#if micNamesHidden}
-			<p class="text-xs text-muted-foreground">
+			<p class="text-caption text-muted-foreground">
 				The browser names your microphones once you have allowed one, e.g. after your first
 				recording.
 			</p>
@@ -161,7 +161,7 @@
 	</div>
 
 	<div class="space-y-2" data-slot="voice-transcription-model">
-		<Label class="text-sm font-medium" for={KEY}>Transcription model</Label>
+		<Label class="text-label" for={KEY}>Transcription model</Label>
 
 		{#if isRouter}
 			<Select.Root
@@ -188,17 +188,17 @@
 				</Select.Content>
 			</Select.Root>
 
-			<p class="mt-1 text-xs text-muted-foreground">
+			<p class="mt-1 text-caption text-muted-foreground">
 				{SETTING_CONFIG_INFO[KEY]} Only models with audio input are listed.
 			</p>
 
-			<p class="text-xs text-muted-foreground">
+			<p class="text-caption text-muted-foreground">
 				A model you pick here is loaded on the server when you dictate, alongside the chat model, if
 				it isn't loaded already. A server that keeps one model at a time (<code>--models-max 1</code
 				>) unloads the chat model to do it.
 			</p>
 		{:else}
-			<p class="text-sm text-muted-foreground">
+			<p class="text-body-sm text-muted-foreground">
 				{#if singleModel}
 					This server runs one model, <span class="font-medium text-foreground">{singleModel}</span
 					>.

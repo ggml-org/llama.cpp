@@ -242,7 +242,7 @@
 	<div
 		bind:this={track}
 		class={cn(
-			'relative min-w-0 flex-1 touch-none rounded-control outline-none select-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
+			'relative min-w-0 flex-1 touch-none rounded-md outline-none select-none focus-visible:ring-3 focus-visible:ring-ring/50',
 			size === 'sm' ? 'h-5' : 'h-7',
 			playable ? 'cursor-pointer' : 'cursor-default'
 		)}
@@ -274,7 +274,7 @@
 
 	<span
 		class={cn(
-			'shrink-0 text-right text-caption text-fg-muted tabular-nums',
+			'shrink-0 text-right text-caption text-muted-foreground tabular-nums',
 			size === 'sm' ? 'min-w-8' : 'min-w-9'
 		)}
 		aria-hidden="true"

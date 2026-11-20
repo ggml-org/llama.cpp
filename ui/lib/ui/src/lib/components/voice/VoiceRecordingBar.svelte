@@ -115,7 +115,7 @@
 
 		{#if status === 'waiting'}
 			<div
-				class="flex min-w-0 flex-1 items-center gap-2 px-1 text-caption text-fg-muted"
+				class="flex min-w-0 flex-1 items-center gap-2 px-1 text-caption text-muted-foreground"
 				role="status"
 			>
 				<LoaderCircle class="size-icon-sm animate-spin motion-reduce:animate-none" />
@@ -156,9 +156,9 @@
 
 			<!-- the timer starts with the first audio: until then, what is said is not recorded yet -->
 			{#if status === 'starting'}
-				<span class="shrink-0 text-caption text-fg-muted" role="status">{text.starting}</span>
+				<span class="shrink-0 text-caption text-muted-foreground" role="status">{text.starting}</span>
 			{:else}
-				<span class="w-10 shrink-0 text-right text-caption text-fg-muted tabular-nums">
+				<span class="w-10 shrink-0 text-right text-caption text-muted-foreground tabular-nums">
 					{formatClipTime(elapsedMs)}
 				</span>
 			{/if}
@@ -184,7 +184,7 @@
 	{#if caption}
 		<p
 			aria-live="polite"
-			class="line-clamp-2 px-10 text-body-sm break-words text-fg-muted max-md:px-11"
+			class="line-clamp-2 px-10 text-body-sm break-words text-muted-foreground max-md:px-11"
 			data-slot="voice-recording-bar-caption"
 		>
 			<VoiceSpokenText live text={caption} />

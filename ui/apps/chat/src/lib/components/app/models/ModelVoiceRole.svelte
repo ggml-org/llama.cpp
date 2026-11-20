@@ -48,7 +48,7 @@
 				<span
 					{...props}
 					class={[
-						'inline-flex h-4 shrink-0 items-center gap-0.5 rounded-md px-1 text-[10px] leading-none font-medium whitespace-nowrap',
+						'inline-flex h-4 shrink-0 items-center gap-0.5 rounded-md px-1 text-caption-sm leading-none font-medium whitespace-nowrap',
 						role === VoiceModelRole.DICTATION
 							? 'bg-primary text-primary-foreground'
 							: 'border border-border/60 text-muted-foreground',

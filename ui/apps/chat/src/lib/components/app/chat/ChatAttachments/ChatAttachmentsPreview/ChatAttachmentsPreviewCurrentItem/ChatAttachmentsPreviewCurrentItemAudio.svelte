@@ -31,7 +31,7 @@
 			<p class="mb-4 text-white/70">Audio preview not available</p>
 		{/if}
 
-		<p class="text-sm text-white/50">
+		<p class="text-body-sm text-white/50">
 			{source?.voice ? VOICE_MESSAGE_LABEL : currentItem?.name || 'Audio'}
 		</p>
 

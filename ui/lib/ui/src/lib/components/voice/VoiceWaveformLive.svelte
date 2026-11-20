@@ -33,7 +33,7 @@
 </script>
 
 <div
-	class={cn('relative h-6 w-full min-w-0', active ? 'text-fg-default' : 'text-fg-muted', className)}
+	class={cn('relative h-6 w-full min-w-0', active ? 'text-foreground' : 'text-muted-foreground', className)}
 	data-slot="voice-waveform-live"
 >
 	{#if label}

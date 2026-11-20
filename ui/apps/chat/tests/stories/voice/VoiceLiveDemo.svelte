@@ -46,7 +46,7 @@
 >
 	<VoiceWaveformLive {active} class="flex-1 px-2" label="Recording" {levels} />
 
-	<span class="w-9 shrink-0 text-right text-caption text-fg-muted tabular-nums">
+	<span class="w-9 shrink-0 text-right text-caption text-muted-foreground tabular-nums">
 		{formatClipTime(elapsedMs)}
 	</span>
 

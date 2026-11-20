@@ -183,7 +183,7 @@
 
 	{#if isVoiceRefining}
 		<span
-			class="flex items-center gap-1.5 text-xs whitespace-nowrap text-muted-foreground"
+			class="flex items-center gap-1.5 text-caption whitespace-nowrap text-muted-foreground"
 			data-slot="voice-refining"
 			role="status"
 		>

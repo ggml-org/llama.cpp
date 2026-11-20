@@ -23,7 +23,7 @@
 		"Okay, so here's what I'm thinking for the trip. We fly into Lisbon on Friday evening, spend the weekend there, and then on Monday take the train up to Porto. I'd like to stay somewhere near the river, nothing fancy, and I want at least one day with no plans at all. Can you put together a rough itinerary with a couple of options for each day, and flag anything we should book ahead, like restaurants or the tram tours?";
 
 	const BUBBLE_CLASS =
-		'w-80 max-w-full rounded-[1.125rem] matte-sheen bg-(--user-bubble-background) px-2.5 py-2';
+		'w-80 max-w-full rounded-2xl matte-sheen bg-(--user-bubble-background) px-2.5 py-2';
 
 	function region(root: HTMLElement): HTMLElement {
 		return root.querySelector<HTMLElement>('[data-slot="voice-transcript"]')!;
@@ -105,7 +105,7 @@
 	<div class="flex flex-col gap-4">
 		{@render message()}
 
-		<button class="text-caption text-fg-muted" type="button">After the message</button>
+		<button class="text-caption text-muted-foreground" type="button">After the message</button>
 	</div>
 </Story>
 

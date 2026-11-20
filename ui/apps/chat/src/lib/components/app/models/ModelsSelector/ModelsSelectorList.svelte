@@ -194,7 +194,7 @@
 			<!-- the model that transcribes dictation, apart from the ones to chat with -->
 			{#if loadedForChat.length > 0}
 				<p
-					class="m-0 px-2 pt-2 pb-1 text-[11px] font-medium text-muted-foreground/70 select-none"
+					class="m-0 px-2 pt-2 pb-1 text-label-sm text-muted-foreground/70 select-none"
 					data-slot="models-loaded-dictation-heading"
 				>
 					For dictation

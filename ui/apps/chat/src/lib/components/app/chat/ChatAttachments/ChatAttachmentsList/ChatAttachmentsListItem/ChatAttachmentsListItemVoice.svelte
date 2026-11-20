@@ -84,7 +84,7 @@
 		'group relative min-w-0',
 		size === 'sm'
 			? 'w-60 max-w-[calc(100vw-4rem)] rounded-lg border border-border bg-muted py-2 pr-9 pl-2'
-			: 'w-80 max-w-full rounded-[1.125rem] matte-sheen bg-(--user-bubble-background) px-3 py-2.5 backdrop-blur-md dark:bg-primary/15',
+			: 'w-80 max-w-full rounded-2xl matte-sheen bg-(--user-bubble-background) px-3 py-2.5 backdrop-blur-md dark:bg-primary/15',
 		className
 	]}
 	data-slot="chat-attachment-voice"
@@ -97,7 +97,7 @@
 	{/key}
 
 	{#if !source.voice}
-		<p class="mt-1 truncate px-1 text-caption text-fg-muted">{source.name}</p>
+		<p class="mt-1 truncate px-1 text-caption text-muted-foreground">{source.name}</p>
 	{/if}
 
 	{#if !readonly && onRemove}

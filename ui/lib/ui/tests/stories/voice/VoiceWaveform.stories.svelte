@@ -21,7 +21,7 @@
 
 	const CHIP_CLASS = 'w-64 max-w-full rounded-lg border border-border bg-muted py-1.5 pr-3 pl-1.5';
 	const BUBBLE_CLASS =
-		'w-80 max-w-full rounded-[1.125rem] matte-sheen bg-(--user-bubble-background) px-2.5 py-2';
+		'w-80 max-w-full rounded-2xl matte-sheen bg-(--user-bubble-background) px-2.5 py-2';
 </script>
 
 <Story asChild name="Sizes">
