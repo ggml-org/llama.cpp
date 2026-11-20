@@ -66,23 +66,6 @@ static inline int8x16_t ggml_q1_0_unpack_pair(uint8_t bits0, uint8_t bits1) {
 }
 #endif
 
-// Helper for decoding scales and mins of Q4_K  block formats, to utilise the scalar  pipelines 
-static inline void decode_q_Kx8_6bit_scales_scalar(const uint8_t * GGML_RESTRICT scales_in,
-                                                   uint8_t * GGML_RESTRICT       out_mins,
-                                                   uint8_t * GGML_RESTRICT       out_scales) {
-    constexpr uint32_t kmask1 = 0x3f3f3f3f;
-    constexpr uint32_t kmask2 = 0x0f0f0f0f;
-    constexpr uint32_t kmask3 = 0x03030303;
-
-    uint32_t sm[3];
-    memcpy(sm, scales_in, 12);
-
-    const uint32_t mins[2]   = { sm[1] & kmask1, ((sm[2] >> 4) & kmask2) | (((sm[1] >> 6) & kmask3) << 4) };
-    const uint32_t scales[2] = { sm[0] & kmask1, (sm[2] & kmask2) | (((sm[0] >> 6) & kmask3) << 4) };
-    memcpy(out_mins,   mins,   8);
-    memcpy(out_scales, scales, 8);
-}
-
 #if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
 // Widening operation
 static inline svfloat32_t load_f16_as_f32_sve(const __fp16 * p, svbool_t pg32) {
