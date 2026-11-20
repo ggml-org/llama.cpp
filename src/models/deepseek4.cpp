@@ -1308,9 +1308,6 @@ llama_model_deepseek4::graph::graph(const llm_graph_params & params) :
                 il,
                 nullptr,
                 nullptr,
-                nullptr,
-                nullptr,
-                nullptr,
                 selected_experts);
         cb(moe_out, "ffn_moe_out", il);
 

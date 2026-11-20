@@ -2312,9 +2312,6 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                  int   il,
          ggml_tensor * probs_in,
          ggml_tensor * gate_up_exps,
-         ggml_tensor * up_exps_s,
-         ggml_tensor * gate_exps_s,
-         ggml_tensor * down_exps_s,
          ggml_tensor * selected_experts_in,
          ggml_tensor * post_exp_norm,
                float   post_exp_norm_eps) const {
@@ -2335,9 +2332,6 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         probs_in,
         gate_up_exps,
         /* gate_up_exps_b */ nullptr,
-        up_exps_s,
-        gate_exps_s,
-        down_exps_s,
         selected_experts_in,
         post_exp_norm,
         post_exp_norm_eps
@@ -2365,9 +2359,6 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * probs_in,
          ggml_tensor * gate_up_exps,
          ggml_tensor * gate_up_exps_b,
-         ggml_tensor * up_exps_s,
-         ggml_tensor * gate_exps_s,
-         ggml_tensor * down_exps_s,
          ggml_tensor * selected_experts_in,
          ggml_tensor * post_exp_norm,
                float   post_exp_norm_eps) const {
@@ -2554,12 +2545,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
         if (gate_up_exps) {
             // merged gate_up path: one mul_mat_id, then split into gate and up views
-            ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, ids, up_exps_s, mm_ids, cached); // [n_ff*2, n_expert_used, n_tokens]
+            ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, ids, nullptr, mm_ids, cached); // [n_ff*2, n_expert_used, n_tokens]
             cb(gate_up, "ffn_moe_gate_up", il);
-
-            if (up_exps_s) {
-                cb(gate_up, "ffn_moe_gate_up_scaled", il);
-            }
 
             if (gate_up_exps_b) {
                 gate_up = ggml_add_id(ctx0, gate_up, gate_up_exps_b, ids);
@@ -2573,12 +2560,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             cb(up, "ffn_moe_up", il);
         } else {
             // separate gate and up path
-            up = build_lora_mm_id(up_exps, cur, ids, up_exps_s, mm_ids, cached); // [n_ff, n_expert_used, n_tokens]
+            up = build_lora_mm_id(up_exps, cur, ids, nullptr, mm_ids, cached); // [n_ff, n_expert_used, n_tokens]
             cb(up, "ffn_moe_up", il);
-
-            if (up_exps_s) {
-                cb(up, "ffn_moe_up_scaled", il);
-            }
 
             if (up_exps_b) {
                 up = ggml_add_id(ctx0, up, up_exps_b, ids);
@@ -2586,14 +2569,10 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             }
 
             if (gate_exps) {
-                cur = build_lora_mm_id(gate_exps, cur, ids, gate_exps_s, mm_ids, cached); // [n_ff, n_expert_used, n_tokens]
+                cur = build_lora_mm_id(gate_exps, cur, ids, nullptr, mm_ids, cached); // [n_ff, n_expert_used, n_tokens]
                 cb(cur, "ffn_moe_gate", il);
             } else {
                 cur = up;
-            }
-
-            if (gate_exps_s) {
-                cb(cur, "ffn_moe_gate_scaled", il);
             }
 
             if (gate_exps_b) {
@@ -2698,7 +2677,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             cur = amax_src1.res;
         }
 
-        ggml_tensor * experts = build_lora_mm_id(down_exps, cur, ids, down_exps_s, mm_ids, cached); // [n_embd, n_expert_used, n_tokens]
+        ggml_tensor * experts = build_lora_mm_id(down_exps, cur, ids, nullptr, mm_ids, cached); // [n_embd, n_expert_used, n_tokens]
         //ggml_prec_set_src(experts, GGML_PREC_BF16, 1); // (see TODO above)
         cb(experts, "ffn_moe_down", il);
 
@@ -2715,10 +2694,6 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 [](ggml_tensor * cur, ggml_tensor * ids, ggml_tensor * mm_ids, bool cached, void * user_data) {
                     return (*static_cast<decltype(build_experts) *>(user_data))(cur, ids, mm_ids, cached);
                 }, &build_experts);
-
-    if (down_exps_s) {
-        cb(experts, "ffn_moe_down_scaled", il);
-    }
 
     if (down_exps_b) {
         experts = ggml_add_id(ctx0, experts, down_exps_b, selected_experts);

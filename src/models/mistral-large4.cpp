@@ -458,10 +458,7 @@ llama_model_mistral_large4::graph::graph(const llm_graph_params & params) :
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
                 il,
                 nullptr,
-                layer.ffn_gate_up_exps,
-                layer.ffn_up_exps_s,
-                layer.ffn_gate_exps_s,
-                layer.ffn_down_exps_s);
+                layer.ffn_gate_up_exps);
             cb(moe_out, "ffn_moe_out", il);
 
             ggml_tensor * ffn_shexp = build_ffn(cur,
