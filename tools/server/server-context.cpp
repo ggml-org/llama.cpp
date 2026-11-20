@@ -3949,6 +3949,8 @@ private:
             const bool use_ckpt_dft = ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
 
             auto & draft_params = common_speculative_get_draft_params(spec.get(), slot.id);
+            // A skipped process() must not bypass another slot or drafter. Both memories must support
+            // partial removal so a retained seed can be discarded without a full checkpoint restore.
             draft_params.seed_reusable = draft_params.seed_reusable && draft.empty() && slots.size() == 1 &&
                 std::all_of(params_base.speculative.types.begin(), params_base.speculative.types.end(),
                     [](common_speculative_type type) {
@@ -4792,16 +4794,31 @@ private:
         //       ref: https://github.com/ggml-org/llama.cpp/pull/22728#issuecomment-4400925384
         if (spec) {
             bool ok = true;
-            auto & draft_params = common_speculative_get_draft_params(spec.get(), slots[0].id);
-            if (slots.size() == 1 && draft_params.seed_reusable) {
-                GGML_ASSERT(batch.view.size() == 1);
-                const auto & t = batch.view.tokens[0];
-                GGML_ASSERT(t.id == draft_params.id_last && t.pos[0] == draft_params.pos0 && t.embd.data == nullptr);
-                GGML_ASSERT(t.seq_id == slots[0].id && t.seq_ids_extra.empty());
-                GGML_ASSERT(llama_memory_seq_pos_max(llama_get_memory(ctx_dft), slots[0].id) == draft_params.pos0);
-                SLT_DBG(slots[0], "reusing draft seed at pos %d\n", draft_params.pos0);
-                draft_params.seed_reusable = false;
-            } else {
+            bool reuse_seed = false;
+            server_slot * replay_slot = nullptr;
+            if (slots.size() == 1) {
+                auto & slot = slots.front();
+                auto & draft_params = common_speculative_get_draft_params(spec.get(), slot.id);
+                if (draft_params.seed_reusable) {
+                    draft_params.seed_reusable = false;
+                    const auto mem_dft = llama_get_memory(ctx_dft);
+                    const auto pos_max = llama_memory_seq_pos_max(mem_dft, slot.id);
+                    if (batch.view.size() == 1 && pos_max == draft_params.pos0) {
+                        const auto & token = batch.view.tokens[0];
+                        reuse_seed = token.id == draft_params.id_last && token.pos[0] == draft_params.pos0 &&
+                            token.embd.data == nullptr && token.seq_id == slot.id && token.seq_ids_extra.empty();
+                    }
+                    if (reuse_seed) {
+                        SLT_DBG(slot, "reusing draft seed at pos %d\n", draft_params.pos0);
+                    } else if (pos_max < slot.spec_ckpt.pos_max || !llama_memory_seq_rm(mem_dft, slot.id, slot.spec_ckpt.pos_max + 1, -1)) {
+                        slot.prompt_clear();
+                        throw std::runtime_error("failed to restore draft prefix before processing batch");
+                    } else {
+                        replay_slot = &slot;
+                    }
+                }
+            }
+            if (!reuse_seed) {
                 queue_tasks.yield_to_queue([&]() {
                     ok = common_speculative_process(spec.get(), batch.view);
                 });
@@ -4810,6 +4827,9 @@ private:
             if (!ok) {
                 SRV_ERR("%s", "failed to process speculative batch\n");
 
+                if (replay_slot) {
+                    replay_slot->prompt_clear();
+                }
                 // TODO: handle error
                 throw std::runtime_error("failed to process speculative batch");
             }

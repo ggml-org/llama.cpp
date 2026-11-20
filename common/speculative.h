@@ -80,6 +80,8 @@ struct common_speculative_draft_params {
     float    temp = 1.0f;
     uint32_t seed = LLAMA_DEFAULT_SEED;
 
+    // On first-step rejection, draft-simple may retain id_last at pos0 without proposing a token.
+    // This is a one-shot hint: the caller must verify the next batch and draft KV before skipping process().
     bool seed_reusable = false;
 };
 
