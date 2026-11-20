@@ -67,6 +67,7 @@
 		setShowForkDialog: (show: boolean) => {
 			forkDialogOpen = show;
 		},
+		share: () => {},
 		get showDeleteDialog() {
 			return deleteDialogOpen;
 		},

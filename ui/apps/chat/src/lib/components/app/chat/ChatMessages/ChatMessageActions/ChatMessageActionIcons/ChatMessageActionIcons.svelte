@@ -3,7 +3,7 @@
 	import { Input } from '@ggml-org/llama-ui/ui/input';
 	import { Label } from '@ggml-org/llama-ui/ui/label';
 	import { Switch } from '@ggml-org/llama-ui/ui/switch';
-	import { ArrowRight, Copy, Edit, GitBranch, RefreshCw, Trash2 } from '@lucide/svelte';
+	import { ArrowRight, Copy, Edit, GitBranch, RefreshCw, Share2, Trash2 } from '@lucide/svelte';
 	import {
 		ActionIcon,
 		ChatMessageActionIconsBranchingControls,
@@ -96,6 +96,8 @@
 					tooltip="Fork conversation"
 				/>
 			{/if}
+
+			<ActionIcon icon={Share2} onclick={messageActions.share} tooltip="Share" />
 
 			<ActionIcon icon={Trash2} onclick={messageActions.requestDelete} tooltip="Delete" />
 		</div>

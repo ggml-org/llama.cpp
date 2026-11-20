@@ -240,3 +240,21 @@ export interface HfCatalogEntry {
 	maxMemGb?: number;
 	sizes: HfCatalogSize[];
 }
+
+// Account and trace sharing
+
+/** The signed-in account, from `/api/whoami-v2`. */
+export interface HfUser {
+	name: string;
+	fullname?: string;
+	/** `read`, `write` or `fineGrained`; a read token cannot share. */
+	tokenRole?: string;
+}
+
+export interface HfTraceUpload {
+	repoId: string;
+	path: string;
+	content: string;
+	isPrivate: boolean;
+	commitMessage: string;
+}

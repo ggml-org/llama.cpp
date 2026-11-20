@@ -4,6 +4,7 @@
 		ActionIcon,
 		DialogConversationDelete,
 		DialogConversationRename,
+		DialogConversationShare,
 		DialogDiscoverModels,
 		DialogGroup,
 		DialogGroupPicker,
@@ -44,7 +45,7 @@
 	import { buildConversationTree, remToPx } from '#lib/utils/index.ts';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { tick } from 'svelte';
+	import { tick, untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { fade } from 'svelte/transition';
 
@@ -171,10 +172,8 @@
 	let isSelectionMode = $state(false);
 	let selectedIds = new SvelteSet<string>();
 
-	let renameDialogOpen = $state(false);
 	let settingsDialogOpen = $state(false);
 	let mcpDialogOpen = $state(false);
-	let renameTargetConversationId = $state<string | null>(null);
 	let renameDraft = $state('');
 	let renameOriginalTitle = $state('');
 
@@ -312,19 +311,25 @@
 		navigateBehind(() => goto(RouterService.chat(id)));
 	}
 
-	async function handleEditConversation(id: string) {
-		const conversation = conversationsStore.conversations.find((conv) => conv.id === id);
+	// the sidebar hosts the rename and delete dialogs for every conversation menu, tabs included
+	let renameTarget = $derived(
+		conversationsStore.conversations.find((conv) => conv.id === uiStore.conversationRenameId)
+	);
 
-		if (!conversation) return;
+	// a fresh draft every time the rename dialog opens
+	$effect.pre(() => {
+		if (!renameTarget) return;
 
-		renameTargetConversationId = id;
-		renameOriginalTitle = conversation.name;
-		renameDraft = conversation.name;
-		renameDialogOpen = true;
-	}
+		const name = renameTarget.name;
+
+		untrack(() => {
+			renameOriginalTitle = name;
+			renameDraft = name;
+		});
+	});
 
 	async function handleRenameConfirm() {
-		const id = renameTargetConversationId;
+		const id = renameTarget?.id;
 
 		if (!id) return;
 
@@ -334,33 +339,19 @@
 
 		await conversationsStore.updateConversationName(id, nextName);
 
-		renameDialogOpen = false;
-		renameTargetConversationId = null;
+		uiStore.conversationRenameId = null;
 	}
 
 	function handleRenameCancel() {
-		renameDialogOpen = false;
-		renameTargetConversationId = null;
+		uiStore.conversationRenameId = null;
 		renameDraft = '';
 		renameOriginalTitle = '';
 	}
 
-	let deleteDialogOpen = $state(false);
-	let deleteTargetId = $state<string | null>(null);
-
-	function handleDeleteConversation(id: string) {
-		const conversation = conversationsStore.conversations.find((conv) => conv.id === id);
-
-		if (!conversation) return;
-
-		deleteTargetId = conversation.id;
-		deleteDialogOpen = true;
-	}
-
 	async function handleDeleteConfirm() {
-		const id = deleteTargetId;
+		const id = uiStore.conversationDeleteId;
 
-		deleteDialogOpen = false;
+		uiStore.conversationDeleteId = null;
 
 		if (!id) return;
 
@@ -368,7 +359,7 @@
 	}
 
 	function handleDeleteCancel() {
-		deleteDialogOpen = false;
+		uiStore.conversationDeleteId = null;
 	}
 
 	function handleStopGeneration(id: string) {
@@ -688,8 +679,6 @@
 						onBulkExport={handleBulkExport}
 						onBulkPinToggle={handleBulkPinToggle}
 						onCloseSelection={exitSelectionMode}
-						onDelete={handleDeleteConversation}
-						onEdit={handleEditConversation}
 						onEnterSelectionMode={enterSelectionMode}
 						onRowMouseDown={handleRowMouseDown}
 						onSelect={selectConversation}
@@ -743,7 +732,7 @@
 {/if}
 
 <DialogConversationRename
-	bind:open={renameDialogOpen}
+	bind:open={() => !!renameTarget, (open) => !open && handleRenameCancel()}
 	bind:value={renameDraft}
 	currentTitle={renameOriginalTitle}
 	onCancel={handleRenameCancel}
@@ -751,7 +740,7 @@
 />
 
 <DialogConversationDelete
-	bind:open={deleteDialogOpen}
+	bind:open={() => uiStore.conversationDeleteId !== null, (open) => !open && handleDeleteCancel()}
 	onCancel={handleDeleteCancel}
 	onConfirm={handleDeleteConfirm}
 />
@@ -767,6 +756,8 @@
 <DialogGroup />
 
 <DialogGroupPicker />
+
+<DialogConversationShare />
 
 <ModelsManagerModelDrawer />
 

@@ -36,6 +36,16 @@ export { default as DialogMcpServers } from './DialogMcpServers.svelte';
 export { default as DialogSettingsChat } from './DialogSettingsChat.svelte';
 
 /**
+ * **DialogConversationShare** - Share a conversation to Hugging Face as a trace
+ *
+ * Opened through `uiStore.openConversationShare` from a conversation's menu
+ * (whole conversation) or a message's share action (whole or up to that
+ * message). Signs in with a Hugging Face access token, then commits the
+ * branch as a JSONL trace to a dataset, which the Hub's trace viewer reads.
+ */
+export { default as DialogConversationShare } from './DialogConversationShare.svelte';
+
+/**
  * **DialogExportSettings** - Settings export dialog with sensitive data warning
  *
  * Dialog for exporting settings with an option to include or exclude

@@ -158,6 +158,14 @@ export { ModelsService } from './models.service';
 export { HuggingFaceService } from './huggingface.service';
 
 /**
+ * **HfTracesService** - Sharing conversations to Hugging Face as traces
+ *
+ * Stateless HTTP client that checks an access token, creates a dataset and
+ * commits a trace file (the JSONL session export) to it.
+ */
+export { HfTracesService } from './hf-traces.service';
+
+/**
  * **PropsService** - Server properties and capabilities retrieval
  *
  * Fetches server configuration, model information, and capabilities from the `/props`

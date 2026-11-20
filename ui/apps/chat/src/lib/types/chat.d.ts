@@ -310,6 +310,8 @@ export interface ChatMessageActionsContext {
 	setShowForkDialog: (show: boolean) => void;
 	navigateToSibling: (siblingId: string) => void;
 	forkConversation?: (options: { name: string; includeAttachments: boolean }) => void;
+	/** Opens the share dialog, which can end the trace at this message. */
+	share: () => void;
 }
 
 export interface ChatMessageEditState {

@@ -50,7 +50,9 @@ export type {
 	HfModelSearchParams,
 	HfMmprojEncoders,
 	HfModelSibling,
-	HfModelSiblingRef
+	HfModelSiblingRef,
+	HfTraceUpload,
+	HfUser
 } from './huggingface';
 
 // Chat types

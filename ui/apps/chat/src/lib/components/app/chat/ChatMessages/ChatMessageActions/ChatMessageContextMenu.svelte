@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ArrowRight, Copy, Edit, GitBranch, RefreshCw, Trash2 } from '@lucide/svelte';
+	import { ArrowRight, Copy, Edit, GitBranch, RefreshCw, Share2, Trash2 } from '@lucide/svelte';
 	import { ContextMenuActions } from '#lib/components/app/index.ts';
 	import { NATIVE_CONTEXT_MENU_SELECTOR } from '#lib/constants/index.ts';
 	import { getChatMessageActionsContext, getChatMessageEditContext } from '#lib/contexts/index.ts';
@@ -39,6 +39,7 @@
 					}
 				]
 			: []),
+		{ icon: Share2, label: 'Share', onclick: messageActions.share },
 		{
 			icon: Trash2,
 			label: 'Delete',

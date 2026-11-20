@@ -34,6 +34,12 @@ interface GroupDialogOptions {
 	onCreate?: (group: Group) => void;
 }
 
+interface ConversationShareOptions {
+	conversationId: string;
+	/** Message the share was started from; the trace can end there. */
+	messageId?: string;
+}
+
 interface GroupPickerOptions {
 	/** Group ticked in the list: the one the chat is in. */
 	currentGroupId?: string | null;
@@ -74,6 +80,15 @@ class UiStore {
 	collapsedSidebarSections = loadCollapsedSidebarSections();
 	/** Set when a flow outside the chat wants the composer focused once it can take it. */
 	composerFocusRequested = $state(false);
+
+	/** Conversation the delete dialog asks about, `null` while closed. */
+	conversationDeleteId = $state<string | null>(null);
+
+	/** Conversation the rename dialog edits, `null` while closed. */
+	conversationRenameId = $state<string | null>(null);
+
+	/** Open state of the share dialog, `null` while closed. */
+	conversationShare = $state<ConversationShareOptions | null>(null);
 
 	/** Repo the Discover dialog selects when it opens, set by a model row. */
 	discoverModelFocus = $state<string | null>(null);
@@ -200,6 +215,21 @@ class UiStore {
 
 	isSidebarSectionOpen(id: string): boolean {
 		return !this.collapsedSidebarSections.has(id);
+	}
+
+	/** Ask to delete a conversation, from any of its menus. */
+	openConversationDelete(conversationId: string): void {
+		this.conversationDeleteId = conversationId;
+	}
+
+	/** Rename a conversation, from any of its menus. */
+	openConversationRename(conversationId: string): void {
+		this.conversationRenameId = conversationId;
+	}
+
+	/** Share a conversation to Hugging Face, whole or up to `messageId`. */
+	openConversationShare(options: ConversationShareOptions): void {
+		this.conversationShare = options;
 	}
 
 	/** Open the group dialog to create a group, or to rename `groupId`. */

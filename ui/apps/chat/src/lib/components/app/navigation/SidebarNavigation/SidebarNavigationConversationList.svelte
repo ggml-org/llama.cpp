@@ -37,8 +37,6 @@
 		isSelectionMode?: boolean;
 		selectedIds?: Set<string>;
 		onSelect: (id: string) => void;
-		onEdit: (id: string) => void;
-		onDelete: (id: string) => void;
 		onStop: (id: string) => void;
 		onToggleSelect?: (id: string) => void;
 		onEnterSelectionMode?: (id: string) => void;
@@ -67,8 +65,6 @@
 		onBulkExport,
 		onBulkPinToggle,
 		onCloseSelection,
-		onDelete,
-		onEdit,
 		onEnterSelectionMode,
 		onRowMouseDown,
 		onSelect,
@@ -277,8 +273,6 @@
 		isActive={currentChatId === conversation.id}
 		isSelected={selectedIds.has(conversation.id)}
 		{isSelectionMode}
-		{onDelete}
-		{onEdit}
 		{onEnterSelectionMode}
 		{onRowMouseDown}
 		{onSelect}
