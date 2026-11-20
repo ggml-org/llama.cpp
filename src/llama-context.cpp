@@ -136,12 +136,6 @@ static const llm_fused_op_probe llm_fused_op_flash_attn_kv_rows_probe = {
     /*.n_tokens_per_seq =*/ 1,
 };
 
-static const llm_fused_op_probe llm_fused_op_lid_probe = {
-    /*.op               =*/ LLM_FUSED_OP_LIGHTNING_INDEXER,
-    /*.name             =*/ "Lightning Indexer",
-    /*.n_tokens_per_seq =*/ 1,
-};
-
 static const llm_fused_op_probe llm_fused_op_dsv4_hc_pre_probe = {
     /*.op               =*/ LLM_FUSED_OP_DSV4_HC_PRE,
     /*.name             =*/ "fused DeepSeek V4 HC pre",
@@ -333,9 +327,6 @@ llama_context::llama_context(
         cparams.flash_attn = flash_attn_other;
         cparams.auto_fa    = false;
     }
-
-    cparams.fused_lid = true;
-    cparams.auto_flid = false;
 
     cparams.fused_dsv4_hc_pre  = true;
     cparams.fused_dsv4_hc_comb = true;
@@ -723,12 +714,6 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
         cparams.fused_kv_rows = cparams.flash_attn;
         resolve(llm_fused_op_flash_attn_kv_rows_probe, cparams.fused_kv_rows);
         cparams.auto_fkvr = false;
-    }
-
-    if (cparams.auto_flid) {
-        LLAMA_LOG_INFO("%s: resolving fused Lightning Indexer support:\n", func);
-        resolve(llm_fused_op_lid_probe, cparams.fused_lid);
-        cparams.auto_flid = false;
     }
 
     if (cparams.auto_fhc) {
