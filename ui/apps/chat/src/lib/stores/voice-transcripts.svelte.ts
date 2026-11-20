@@ -12,6 +12,7 @@ import { VoiceTranscriptStatus } from '@ggml-org/llama-ui/voice';
 import { VOICE_TRANSCRIPT_APPLY_RETRY_DELAYS_MS } from '#lib/constants/index.ts';
 import { AttachmentType } from '#lib/enums/index.ts';
 import { DatabaseService } from '#lib/services/database.service.ts';
+import { VoiceService } from '#lib/services/voice.service.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { conversationsStore } from '#lib/stores/conversations/index.svelte.ts';
 import type {
@@ -24,7 +25,12 @@ import { SvelteMap } from 'svelte/reactivity';
 export type VoiceTranscriptState =
 	| { status: VoiceTranscriptStatus.TRANSCRIBING }
 	| { status: VoiceTranscriptStatus.DONE; transcript: string }
-	| { status: VoiceTranscriptStatus.ERROR; message: string };
+	| {
+			status: VoiceTranscriptStatus.ERROR;
+			message: string;
+			/** Why, in words for the user, when the app can tell (VoiceService.failureReason) */
+			reason: string | null;
+	  };
 
 function isPendingClip(extra: DatabaseMessageExtra, name: string): boolean {
 	return (
@@ -76,12 +82,20 @@ class VoiceTranscriptsStore {
 	}
 
 	/** A clip's transcript as it is shown: the one stored with it, else the one on its way. */
-	shown(name: string, stored?: string): { status: VoiceTranscriptStatus; transcript?: string } {
+	shown(
+		name: string,
+		stored?: string
+	): { status: VoiceTranscriptStatus; transcript?: string; errorReason?: string | null } {
 		const transcript = stored ?? this.transcriptOf(name);
 
 		if (transcript !== undefined) return { status: VoiceTranscriptStatus.DONE, transcript };
 
-		return { status: this.entries.get(name)?.status ?? VoiceTranscriptStatus.IDLE };
+		const entry = this.entries.get(name);
+
+		return {
+			errorReason: entry?.status === VoiceTranscriptStatus.ERROR ? entry.reason : null,
+			status: entry?.status ?? VoiceTranscriptStatus.IDLE
+		};
 	}
 
 	/** Follows a clip's transcript, and writes it into the message it went out with. */
@@ -102,6 +116,7 @@ class VoiceTranscriptsStore {
 				console.warn('Voice message transcription failed:', error);
 				this.entries.set(name, {
 					message: error instanceof Error ? error.message : String(error),
+					reason: VoiceService.failureReason(error),
 					status: VoiceTranscriptStatus.ERROR
 				});
 			}

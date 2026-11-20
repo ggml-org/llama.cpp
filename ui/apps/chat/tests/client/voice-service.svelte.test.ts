@@ -1,11 +1,12 @@
 // Guards the wiring every voice feature starts its session with: the Voice settings become
 // capture options (boost, processing, a caller's own constraints), the language and the
 // transcription model go where a router needs them, and an API key keeps the realtime
-// socket off, since a browser websocket can not send it.
+// socket off, since a browser websocket can not send it, which the app says of a model that
+// only transcribes over that socket.
 
 import { seedStores } from '../stories/chat/form/fixtures';
-import { VOICE_MICROPHONE_DEFAULT } from '@ggml-org/llama-voice';
-import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+import { VOICE_MICROPHONE_DEFAULT, VoiceTranscriptionError } from '@ggml-org/llama-voice';
+import { SETTINGS_KEYS, VOICE_MODE_MESSAGE } from '#lib/constants/index.ts';
 import { SETTING_CONFIG_DEFAULT } from '#lib/constants/settings.constants.ts';
 import { VoiceService } from '#lib/services/voice.service.ts';
 import type { SettingsConfigType } from '#lib/types/index.ts';
@@ -103,5 +104,33 @@ describe('VoiceService.serverContext', () => {
 
 		expect(realtime).toBe(false);
 		expect(context.getHeaders?.()).toEqual({ Authorization: 'Bearer secret' });
+	});
+});
+
+describe('VoiceService.failureReason', () => {
+	const notSupported = new VoiceTranscriptionError(
+		'this server does not support chat/completions',
+		501
+	);
+
+	it('says a live-only model cannot transcribe on a server with an API key', () => {
+		restore = seedStores({ config: { apiKey: 'secret' } });
+
+		expect(VoiceService.failureReason(notSupported)).toBe(VOICE_MODE_MESSAGE.realtimeOnlyBehindKey);
+	});
+
+	it("leaves other failures to the server's own words", () => {
+		restore = seedStores({ config: { apiKey: 'secret' } });
+
+		expect(
+			VoiceService.failureReason(new VoiceTranscriptionError('Loading model', 503))
+		).toBeNull();
+		expect(VoiceService.failureReason(new Error('Failed to fetch'))).toBeNull();
+
+		restore();
+		restore = seedStores({ config: { apiKey: '' } });
+
+		// without a key the realtime socket was tried first: the model simply cannot hear
+		expect(VoiceService.failureReason(notSupported)).toBeNull();
 	});
 });

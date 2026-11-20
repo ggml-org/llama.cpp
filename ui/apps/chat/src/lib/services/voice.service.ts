@@ -3,9 +3,16 @@ import {
 	VOICE_MICROPHONE_AUTO,
 	type VoiceCaptureOptions,
 	type VoiceServerContext,
-	type VoiceSessionOptions
+	type VoiceSessionOptions,
+	VoiceTranscriptionError
 } from '@ggml-org/llama-voice';
-import { HEADERS, SETTINGS_KEYS, VOICE_RELATIVE_PATH_PATTERN } from '#lib/constants/index.ts';
+import {
+	HEADERS,
+	SETTINGS_KEYS,
+	VOICE_MODE_MESSAGE,
+	VOICE_NOT_SUPPORTED_STATUS,
+	VOICE_RELATIVE_PATH_PATTERN
+} from '#lib/constants/index.ts';
 import type { SettingsConfigType } from '#lib/types/index.ts';
 import { getAuthHeaders } from '#lib/utils/api-headers.ts';
 import { withBase } from '#lib/utils/base-path.ts';
@@ -43,6 +50,21 @@ export type VoiceSessionWiring = Pick<VoiceSessionOptions, 'realtime' | 'transcr
  * reach the server the same way and follow the same settings.
  */
 export class VoiceService {
+	/**
+	 * Why a transcription failed, where the app can say more than the server did, else null.
+	 * A model that only transcribes live (Voxtral Realtime) has no HTTP route, and the
+	 * realtime socket is left out for a server with an API key (see serverContext), so
+	 * there it cannot transcribe at all.
+	 */
+	static failureReason(error: unknown): string | null {
+		const liveOnly =
+			error instanceof VoiceTranscriptionError && error.status === VOICE_NOT_SUPPORTED_STATUS;
+
+		return liveOnly && !VoiceService.serverContext().realtime
+			? VOICE_MODE_MESSAGE.realtimeOnlyBehindKey
+			: null;
+	}
+
 	/** The transcription language from the Voice settings, undefined to let the model tell. */
 	static language(config: SettingsConfigType): string | undefined {
 		return String(config[SETTINGS_KEYS.VOICE_TRANSCRIPTION_LANGUAGE] ?? '').trim() || undefined;

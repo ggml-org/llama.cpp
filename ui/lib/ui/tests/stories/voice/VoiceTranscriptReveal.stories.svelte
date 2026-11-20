@@ -37,9 +37,13 @@
 	}
 </script>
 
-{#snippet message(status?: VoiceTranscriptStatus, transcript: string | null = TRANSCRIPT)}
+{#snippet message(
+	status?: VoiceTranscriptStatus,
+	transcript: string | null = TRANSCRIPT,
+	errorReason: string | null = null
+)}
 	<div class={BUBBLE_CLASS}>
-		<VoiceTranscriptReveal {status} {transcript}>
+		<VoiceTranscriptReveal {errorReason} {status} {transcript}>
 			<VoiceWaveform durationMs={clip.durationMs} peaks={clip.peaks} src={clip.src} />
 		</VoiceTranscriptReveal>
 	</div>
@@ -57,6 +61,14 @@
 
 		<StateGalleryItem label="Error">
 			{@render message(VoiceTranscriptStatus.ERROR, null)}
+		</StateGalleryItem>
+
+		<StateGalleryItem label="Error with its reason" note="when the app can say why">
+			{@render message(
+				VoiceTranscriptStatus.ERROR,
+				null,
+				'This model only transcribes live, over a connection a browser cannot open on a server with an API key.'
+			)}
 		</StateGalleryItem>
 
 		<StateGalleryItem label="None" note="no transcript asked for: nothing opens">

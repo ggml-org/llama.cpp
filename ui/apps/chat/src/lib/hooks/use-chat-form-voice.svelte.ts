@@ -122,7 +122,10 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		getValue: options.getValue,
 		onChange: () => dictationVersion++,
 		onError: (error) =>
-			toast.error(error instanceof Error ? error.message : VOICE_MODE_MESSAGE.transcriptionFailed),
+			toast.error(
+				VoiceService.failureReason(error) ??
+					(error instanceof Error ? error.message : VOICE_MODE_MESSAGE.transcriptionFailed)
+			),
 		setCaretOffset: options.setCaretOffset,
 		setValue: options.setValue
 	});

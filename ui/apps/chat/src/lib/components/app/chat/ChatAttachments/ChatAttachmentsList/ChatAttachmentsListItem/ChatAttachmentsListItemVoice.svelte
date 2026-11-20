@@ -42,6 +42,7 @@
 	let shown = $derived(voiceTranscriptsStore.shown(source.name, source.transcript));
 	let transcript = $derived(shown.transcript);
 	let status = $derived(shown.status);
+	let errorReason = $derived(shown.errorReason);
 	let label = $derived(source.voice ? VOICE_MESSAGE_LABEL : source.name);
 	// the transcript lights up word by word as the clip plays, and stays lit
 	let playbackMs = $state<number | null>(null);
@@ -102,7 +103,7 @@
 	data-voice={source.voice || undefined}
 >
 	{#key collapsed}
-		<VoiceTranscriptReveal defaultOpen={!collapsed} {spoken} {status} {transcript}>
+		<VoiceTranscriptReveal defaultOpen={!collapsed} {errorReason} {spoken} {status} {transcript}>
 			<VoiceWaveform bind:playbackMs durationMs={source.durationMs} {label} {peaks} {size} {src} />
 		</VoiceTranscriptReveal>
 	{/key}

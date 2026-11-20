@@ -26,6 +26,8 @@
 		transcript?: string | null;
 		/** Left out: `done` with a transcript, `idle` without. */
 		status?: VoiceTranscriptStatus;
+		/** Why there is no transcript, in words for the user, said after the `error` status' own label. */
+		errorReason?: string | null;
 		/** Start with the transcript open; read once, the toggle key changes it after that. */
 		defaultOpen?: boolean;
 		/** Characters of the transcript spoken so far, to follow playback; left out, all of it reads as spoken. */
@@ -37,6 +39,7 @@
 		children,
 		class: className,
 		defaultOpen = false,
+		errorReason = null,
 		spoken = null,
 		status,
 		transcript = null
@@ -151,7 +154,9 @@
 							/>
 						</div>
 					{:else if shown === VoiceTranscriptStatus.ERROR}
-						<p class="text-caption text-muted-foreground">{VOICE_TRANSCRIPT_LABELS.error}</p>
+						<p class="text-caption break-words text-muted-foreground">
+							{VOICE_TRANSCRIPT_LABELS.error}{errorReason ? `: ${errorReason}` : ''}
+						</p>
 					{:else if transcript}
 						<p class="text-body-sm break-words whitespace-pre-wrap text-muted-foreground">
 							<span class="sr-only">{VOICE_TRANSCRIPT_LABELS.prefix}</span><VoiceSpokenText {spoken} text={transcript} />

@@ -6,6 +6,8 @@ import { ChatFormVoiceState } from '#lib/enums/voice.enums.ts';
 export const VOICE_MODE_MESSAGE = {
 	dictate: 'Dictate',
 	dictating: 'Dictating',
+	realtimeOnlyBehindKey:
+		'This model only transcribes live, over a connection a browser cannot open on a server with an API key.',
 	recording: 'Recording a voice message',
 	refining: 'Refining transcript...',
 	sendAfterRefining: 'Sending once the transcript is refined',
@@ -20,6 +22,9 @@ export const VOICE_MODE_MESSAGE = {
 		'No model with audio input is available. In router mode, load one or pick a transcription model in Settings > Voice.',
 	voiceMessage: 'Send a voice message'
 } as const;
+
+/** The status of a server that has no such route for the model, e.g. a live-only model asked over HTTP. */
+export const VOICE_NOT_SUPPORTED_STATUS = 501;
 
 /** Where the chat form remembers that it showed the hint about a separate transcription model. */
 export const VOICE_SEPARATE_MODEL_HINT_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.voiceSeparateModelHintSeen`;
