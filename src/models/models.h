@@ -55,6 +55,19 @@ struct llm_build_delta_net_base : public llm_graph_context {
             int64_t              conv_channels,
             int                  il);
 
+    ggml_tensor * build_kda_conv1d(
+            llm_graph_input_rs * inp,
+            ggml_tensor *        conv_states_all,
+            ggml_tensor *        conv_states_seq,
+            int64_t              qkv,
+            ggml_tensor *        x_proj,
+            ggml_tensor *        conv_w,
+            int64_t              d_conv,
+            int64_t              head_dim,
+            int64_t              n_heads,
+            int64_t              n_seq_tokens,
+            int64_t              n_seqs);
+
     // run delta-net attention and write the new recurrent state(s) back to ssm_states_all
     // s: (head_v_dim, head_v_dim, num_v_heads, n_seqs); returns output: (head_v_dim, num_v_heads, n_seq_tokens, n_seqs)
     ggml_tensor * build_recurrent_attn(
@@ -3071,11 +3084,6 @@ struct llama_model_kimi_k3 : public llama_model_base {
                                       int64_t d_conv, int64_t head_dim, int64_t n_head_kda,
                                       int64_t d_inner, int64_t n_seq_tokens, int64_t n_seqs, int il);
 
-        // causal conv1d over one of Q/K/V, qkv selects which third of the conv state row is used
-        ggml_tensor * build_kda_conv1d(llm_graph_input_rs * inp_rs, ggml_tensor * conv_states_all, ggml_tensor * conv_state_all,
-                                       int64_t qkv, ggml_tensor * x, ggml_tensor * proj_w, ggml_tensor * conv_w,
-                                       int64_t d_conv, int64_t head_dim, int64_t n_head_kda, int64_t n_seq_tokens, int64_t n_seqs);
-
         ggml_tensor * build_mla_layer(ggml_tensor * cur, const llama_layer & layer,
                                       llm_graph_input_attn_k  * inp_attn_k,
                                       llm_graph_input_attn_kv * inp_attn_kv,
@@ -3135,6 +3143,38 @@ struct llama_model_kimi_k31 : public llama_model_base {
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+struct llama_model_raon1_mini : public llama_model_base {
+    llama_model_raon1_mini(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+
+    struct graph : public llm_build_delta_net_base {
+        graph(const llm_graph_params & params);
+
+        ggml_tensor * helmert    = nullptr;
+        ggml_tensor * identity   = nullptr;
+        ggml_tensor * chart_base = nullptr;
+
+        ggml_tensor * build_hc_pre(ggml_tensor * x, ggml_tensor * fn, ggml_tensor * scale,
+                                   ggml_tensor * base, ggml_tensor ** post, ggml_tensor ** comb, int il);
+
+        ggml_tensor * build_hc_post(ggml_tensor * x, ggml_tensor * branch,
+                                    ggml_tensor * post, ggml_tensor * comb, int il);
+
+        ggml_tensor * build_rda_gate(ggml_tensor * x, ggml_tensor * ssm_a);
+
+        ggml_tensor * build_rda_layer(ggml_tensor * cur, const llama_layer & layer,
+                                      llm_graph_input_rs * inp_rs, int il);
+
+        ggml_tensor * build_mla_layer(ggml_tensor * cur, const llama_layer & layer,
+                                      llm_graph_input_attn_k * inp_attn_k, int il);
+
+        ggml_tensor * build_situ_ffn(ggml_tensor * cur, ggml_tensor * up, ggml_tensor * gate,
+                                     ggml_tensor * down, int il);
+    };
 };
 
 struct llama_model_glm5_next : public llama_model_base {
