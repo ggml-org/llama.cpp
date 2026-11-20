@@ -112,6 +112,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_qwen2moe(params);
         case LLM_ARCH_SENSENOVA_U1:
             return new llama_model_sensenova_u1(params);
+        case LLM_ARCH_SENSENOVA_LOOP:
+            return new llama_model_sensenova_loop(params);
         case LLM_ARCH_QWEN3:
             return new llama_model_qwen3(params);
         case LLM_ARCH_FLINT:
@@ -2725,6 +2727,7 @@ void llama_model::print_info() const {
                 arch == LLM_ARCH_GRANITE_HYBRID ||
                 arch == LLM_ARCH_QWEN3NEXT ||
                 arch == LLM_ARCH_QWEN35 ||
+                arch == LLM_ARCH_SENSENOVA_LOOP ||
                 arch == LLM_ARCH_QWEN35MOE ||
                 arch == LLM_ARCH_CLOVER_MOE ||
                 arch == LLM_ARCH_ZONOS3 ||
@@ -3313,7 +3316,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                 // Dense MTP heads use a plain attention KV cache instead of the hybrid wrapper.
                 const bool mtp_on_hybrid_qwen =
                     params.ctx_type == LLAMA_CONTEXT_TYPE_MTP &&
-                    (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE ||
+                    (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_SENSENOVA_LOOP ||
                      arch == LLM_ARCH_BAILINGMOE3);
 
                 const bool mtp_on_hybrid_nemotron =
@@ -3361,7 +3364,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         filter_recr = [&](uint32_t il) {
                             return hparams.is_recr(il) && hparams.n_ff(il) == 0;
                         };
-                    } else if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_CLOVER_MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_MINIMAX_01 ||
+                    } else if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_SENSENOVA_LOOP || arch == LLM_ARCH_CLOVER_MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_MINIMAX_01 ||
                                arch == LLM_ARCH_ZONOS3) {
                         filter_attn = [&](uint32_t il) {
                             return il < hparams.n_layer() && !hparams.is_recr(il);
@@ -3890,6 +3893,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN3VL:
         case LLM_ARCH_QWEN3VLMOE:
         case LLM_ARCH_QWEN35:
+        case LLM_ARCH_SENSENOVA_LOOP:
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_CLEF:
         case LLM_ARCH_QWEN4EXP:

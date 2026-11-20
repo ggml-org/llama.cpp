@@ -2912,7 +2912,13 @@ void llama_context::output_reorder() {
 
 uint32_t llama_context::graph_max_nodes() const {
     uint32_t res;
-    if (model.arch == LLM_ARCH_KIMI_K3 || model.arch == LLM_ARCH_KIMI_K31 || model.arch == LLM_ARCH_GLM5_NEXT ||
+    if (model.arch == LLM_ARCH_SENSENOVA_LOOP) {
+        uint32_t n_mhc = model.hparams.mhc_end - model.hparams.mhc_start;
+        if (model.hparams.mhc_start >= model.hparams.loop_start && model.hparams.mhc_end <= model.hparams.loop_end) {
+            n_mhc *= model.hparams.loop_count;
+        }
+        res = std::max<uint32_t>(1024u, 64u * model.n_tensors() + 128u * model.hparams.n_layer() + 48u * model.hparams.mhc_iterations * n_mhc);
+    } else if (model.arch == LLM_ARCH_KIMI_K3 || model.arch == LLM_ARCH_KIMI_K31 || model.arch == LLM_ARCH_GLM5_NEXT ||
         model.arch == LLM_ARCH_HRM_TEXT) {
         res = std::max<uint32_t>(1024u, 64u * model.n_tensors());
     } else if (model.arch == LLM_ARCH_QWEN3NEXT ||

@@ -1725,6 +1725,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.HC_ATTN_FN: (
+            "model.layers.{bid}.mhc_attn", # sensenova-loop
             "model.layers.{bid}.hc_attn_layer.hc_pre.hc_fn", # hy-v4
             "model.layers.{bid}.hc_attn_fn",                 # glm5-next
         ),
@@ -1740,6 +1741,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.HC_FFN_FN: (
+            "model.layers.{bid}.mhc_ffn", # sensenova-loop
             "model.layers.{bid}.hc_mlp_layer.hc_pre.hc_fn", # hy-v4
             "model.layers.{bid}.hc_ffn_fn",                 # glm5-next
         ),

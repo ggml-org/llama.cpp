@@ -330,7 +330,8 @@ void llama_model_saver::add_kv_from_model() {
             }
         }
     }
-    add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS,        hparams.is_recr_impl, true);
+    add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS, std::vector<uint32_t>(
+            hparams.is_recr_impl.begin(), hparams.is_recr_impl.begin() + hparams.n_layer_all));
     if (hparams.n_relative > 0) {
         add_kv(LLM_KV_ATTENTION_RELATIVE_LENGTH,     hparams.n_relative);
         add_kv(LLM_KV_ATTENTION_RELATIVE_EXTENT,     hparams.n_relative_extent);
@@ -351,8 +352,18 @@ void llama_model_saver::add_kv_from_model() {
     } else {
         add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,         hparams.dsv4_compress_ratios, true);
     }
-    add_kv(LLM_KV_HYPER_CONNECTION_COUNT,               hparams.dsv4_hc_mult);
-    add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters);
+    if (hparams.loop_count > 0) {
+        add_kv(LLM_KV_LOOP_START,               hparams.loop_start);
+        add_kv(LLM_KV_LOOP_END,                 hparams.loop_end);
+        add_kv(LLM_KV_LOOP_COUNT,               hparams.loop_count);
+        add_kv(LLM_KV_HYPER_CONNECTION_START,          hparams.mhc_start);
+        add_kv(LLM_KV_HYPER_CONNECTION_END,            hparams.mhc_end);
+        add_kv(LLM_KV_HYPER_CONNECTION_PRE_SCALE,      hparams.mhc_pre_scale);
+        add_kv(LLM_KV_HYPER_CONNECTION_FIXED_IDENTITY, hparams.mhc_fixed_identity);
+    }
+
+    add_kv(LLM_KV_HYPER_CONNECTION_COUNT,               hparams.loop_count > 0 ? hparams.mhc_streams : hparams.dsv4_hc_mult);
+    add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.loop_count > 0 ? hparams.mhc_iterations : hparams.dsv4_hc_sinkhorn_iters);
     add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,             hparams.dsv4_hc_eps);
     add_kv(LLM_KV_HYPER_CONNECTION_MAGNITUDE,           hparams.hc_magnitude);
     add_kv(LLM_KV_HASH_LAYER_COUNT,                     hparams.dsv4_hash_layer_count);

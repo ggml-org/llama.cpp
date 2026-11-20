@@ -362,6 +362,16 @@ struct llama_hparams {
     // Shared indexers reuse top-k from previous full layer
     std::array<uint32_t, LLAMA_MAX_LAYERS> is_indexer_full_impl;
 
+    uint32_t loop_start         = 0;
+    uint32_t loop_end           = 0;
+    uint32_t loop_count         = 0;
+    uint32_t mhc_start          = 0;
+    uint32_t mhc_end            = 0;
+    uint32_t mhc_streams        = 0;
+    uint32_t mhc_iterations     = 0;
+    float    mhc_pre_scale      = 1.0f;
+    bool     mhc_fixed_identity = false;
+
     // DeepSeek-V4
     uint32_t dsv4_o_group_count        = 0;
     uint32_t dsv4_o_lora_rank          = 0;
