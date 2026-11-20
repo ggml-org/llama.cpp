@@ -3,8 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
-import torch
-
 if TYPE_CHECKING:
     from torch import Tensor
 
