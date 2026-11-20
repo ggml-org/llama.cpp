@@ -1313,6 +1313,11 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
         LOG_INF("%s", "decision model reads the embeddings output, enabling embedding mode\n");
     }
 
+    // 0 is n_batch
+    if ((decision_type == COMMON_DECISION_TYPE_LFM3_D1 || decision_type == COMMON_DECISION_TYPE_LFM3_D1_OMNI) && cparams.n_outputs_max != 0) {
+        cparams.n_outputs_max = std::max(cparams.n_outputs_max, (uint32_t) COMMON_DECISION_LFM3_D1_SET_SIZE);
+    }
+
     if (llama_model_classifier_free_guidance(model)) {
         params.kv_unified   = true;
         cparams.kv_unified  = true;
@@ -2333,6 +2338,9 @@ llama_batch_ext * common_batch::get_sub_batch(int32_t off, int32_t n) {
         }
         if (t.decision_order != 0) {
             llama_batch_ext_set_decision_order(res, idx, (llama_decision_order) t.decision_order);
+        }
+        if (t.decision_group != 0 && !llama_batch_ext_set_decision_group(res, idx, t.decision_group)) {
+            GGML_ABORT("%s: failed to set the decision group of the entry at index %d\n", __func__, i);
         }
     }
 

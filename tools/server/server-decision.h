@@ -89,7 +89,8 @@ struct server_decision_context {
     }
 
     // throw std::invalid_argument on bad input
-    std::vector<server_decision_question> parse_questions(const json & body) const;
+    // support_audio_input: false if the server has no audio encoder, a spoken question is then rejected
+    std::vector<server_decision_question> parse_questions(const json & body, bool support_audio_input) const;
 
     // the state as the model reads it, done once per request; returns the state for most models
     json prepare_state(const json & state) const;
@@ -117,6 +118,18 @@ struct server_decision_context {
     // set the prompt of all the questions, the result has the scores of all their options, in order
     // mctx is only used if there are files
     void fill_task_joint(
+            const json & state,
+            const std::vector<server_decision_question> & questions,
+            const std::vector<raw_buffer> & files,
+            mtmd_context * mctx,
+            const mtmd_helper_init_opt & init_opt,
+            server_task & task) const;
+
+    // lfm3-d1: max questions per prompt, 0 if each question has its own prompt
+    size_t set_size(const std::vector<server_decision_question> & questions) const;
+
+    // set the prompt of these questions packed after their state, the result has the scores of all their options
+    void fill_task_set(
             const json & state,
             const std::vector<server_decision_question> & questions,
             const std::vector<raw_buffer> & files,
