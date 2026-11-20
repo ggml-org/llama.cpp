@@ -2527,12 +2527,12 @@ struct llama_model_inkling2_loop : public llama_model_inkling2 {
     int n_layer_phys() const override { return n_phys; }
     int layer_phys(int il) const;
 
-    int      n_phys         = 0;
-    uint32_t core_start     = 0;
-    uint32_t core_end       = 0;
-    uint32_t n_passes       = 0;
-    uint32_t gate_rank      = 0;
-    bool     variable_count = false; // trained for a variable number of passes
+    int      n_phys     = 0;
+    uint32_t core_start = 0;
+    uint32_t core_end   = 0;
+    uint32_t n_passes   = 0;
+    uint32_t gate_rank  = 0;
+    bool     varying    = false; // trained for a varying number of passes
 
     // indexed by physical layer - core_start
     std::vector<loop_layer> loop_layers;

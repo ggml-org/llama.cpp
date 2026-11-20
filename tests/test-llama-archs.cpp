@@ -707,11 +707,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,         uint32_t(2));
         if (loop) {
             // prelude 0, core 1, coda 2; the loader adds slot 3 for the second pass over the core
-            ms.add_kv(LLM_KV_LOOP_START,          uint32_t(1));
-            ms.add_kv(LLM_KV_LOOP_END,            uint32_t(2));
-            ms.add_kv(LLM_KV_LOOP_COUNT,          uint32_t(2));
-            ms.add_kv(LLM_KV_LOOP_GATE_RANK,      uint32_t(8));
-            ms.add_kv(LLM_KV_LOOP_VARIABLE_COUNT, false);
+            ms.add_kv(LLM_KV_LOOP_START,     uint32_t(1));
+            ms.add_kv(LLM_KV_LOOP_END,       uint32_t(2));
+            ms.add_kv(LLM_KV_LOOP_COUNT,     uint32_t(2));
+            ms.add_kv(LLM_KV_LOOP_GATE_RANK, uint32_t(8));
+            ms.add_kv(LLM_KV_LOOP_VARYING,   false);
         }
         ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,           uint32_t(4));
         ms.add_kv(LLM_KV_VOCAB_SIZE,                  n_vocab + 2);

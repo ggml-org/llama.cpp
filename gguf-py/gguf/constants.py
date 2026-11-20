@@ -326,11 +326,11 @@ class Keys:
         PREFIX_LM        = "{arch}.hrm.prefix_lm"
 
     class Loop:
-        START          = "{arch}.loop.start"
-        END            = "{arch}.loop.end"
-        COUNT          = "{arch}.loop.count"
-        GATE_RANK      = "{arch}.loop.gate_rank"
-        VARIABLE_COUNT = "{arch}.loop.variable_count"
+        START     = "{arch}.loop.start"
+        END       = "{arch}.loop.end"
+        COUNT     = "{arch}.loop.count"
+        GATE_RANK = "{arch}.loop.gate_rank"
+        VARYING   = "{arch}.loop.varying"
 
     class Metis:
         PASS_COUNT               = "{arch}.metis.pass_count"
