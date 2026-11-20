@@ -277,8 +277,10 @@ llama_model_maxwell_moe::graph::graph(const llm_graph_params & params) : llm_gra
         }
     }
     const bool in_dense_prefix = pos_min < dense_prefix;
-    // block sparse layers need flash attention and per-sequence cache streams; anything else falls back to dense
-    const bool msa_enabled = fa_on && streams_ok && !in_dense_prefix;
+    // flash attention and per-sequence cache streams are prerequisites for the indexer; without them
+    // the model attends dense and the indexer key cache does not exist
+    const bool msa_available = fa_on && streams_ok;
+    const bool sparse_mode   = msa_available && !in_dense_prefix;
 
     static bool warned_no_fa = false;
     if (!fa_on && !warned_no_fa) {
@@ -291,7 +293,7 @@ llama_model_maxwell_moe::graph::graph(const llm_graph_params & params) : llm_gra
         warned_unified = true;
     }
 
-    auto * inp_attn = build_attn_inp_kv_msa(msa_enabled);
+    auto * inp_attn = build_attn_inp_kv_msa(msa_available);
 
     // hoisted per-graph MSA state
     llm_graph_input_maxwell_msa * msa = nullptr;
@@ -304,7 +306,7 @@ llama_model_maxwell_moe::graph::graph(const llm_graph_params & params) : llm_gra
     const int     prefix = (int) hparams.indexer_prefix_blocks;
     const int64_t Hd     = hparams.indexer_n_head;
 
-    if (msa_enabled) {
+    if (sparse_mode) {
         const auto * mctx_msa = static_cast<const llama_kv_cache_msa_context *>(mctx);
 
         msa_kqm = inp_attn->self_attn_mask.raw;
@@ -376,26 +378,35 @@ llama_model_maxwell_moe::graph::graph(const llm_graph_params & params) : llm_gra
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
 
-            if (!msa_enabled || !hparams.is_indexer_full(il)) {
+            if (!msa_available || !hparams.is_indexer_full(il)) {
                 cur = build_attn(inp_attn, layer.wo, NULL, layer.wo_s, Qcur, Kcur, Vcur,
                         nullptr, nullptr, nullptr, kq_scale, il);
                 cb(cur, "kqv_out", il);
             } else {
                 const int64_t n_idx_dim = hparams.indexer_head_size;
 
-                ggml_tensor * iq = build_lora_mm(layer.index_q_proj, cur);
-                ggml_tensor * ik = build_lora_mm(layer.index_k_proj, cur);
-                iq = ggml_reshape_3d(ctx0, iq, n_idx_dim, Hd, n_tokens);
-                ik = ggml_reshape_3d(ctx0, ik, n_idx_dim, 1,  n_tokens);
-                iq = build_norm(iq, layer.index_q_norm, NULL, LLM_NORM_RMS, il);
-                ik = build_norm(ik, layer.index_k_norm, NULL, LLM_NORM_RMS, il);
-                iq = build_rope(iq, inp_pos, il);
-                ik = build_rope(ik, inp_pos, il);
-
                 const auto * mctx_msa_l = static_cast<const llama_kv_cache_msa_context *>(mctx);
                 const auto * mctx_cur = mctx_msa_l->get_base();
                 const auto * mctx_idx = mctx_msa_l->get_idx();
+
+                // the indexer key cache is written for every FA batch, dense or sparse; a later
+                // sparse batch scores every cell, so dense batches must not leave holes
+                ggml_tensor * ik = build_lora_mm(layer.index_k_proj, cur);
+                ik = ggml_reshape_3d(ctx0, ik, n_idx_dim, 1, n_tokens);
+                ik = build_norm(ik, layer.index_k_norm, NULL, LLM_NORM_RMS, il);
+                ik = build_rope(ik, inp_pos, il);
                 ggml_build_forward_expand(gf, mctx_idx->cpy_k(ctx0, ik, inp_attn->get_k_idxs_idx(), il));
+
+                if (!sparse_mode) {
+                    cur = build_attn(inp_attn, layer.wo, NULL, layer.wo_s, Qcur, Kcur, Vcur,
+                            nullptr, nullptr, nullptr, kq_scale, il);
+                    cb(cur, "kqv_out", il);
+                } else {
+                ggml_tensor * iq = build_lora_mm(layer.index_q_proj, cur);
+                iq = ggml_reshape_3d(ctx0, iq, n_idx_dim, Hd, n_tokens);
+                iq = build_norm(iq, layer.index_q_norm, NULL, LLM_NORM_RMS, il);
+                iq = build_rope(iq, inp_pos, il);
+
                 ggml_tensor * ik_kv = mctx_idx->get_k(ctx0, il);
 
                 ggml_build_forward_expand(gf, Qcur);
@@ -537,6 +548,7 @@ llama_model_maxwell_moe::graph::graph(const llm_graph_params & params) : llm_gra
                 // output projection (the dense path does this inside build_attn)
                 cur = build_lora_mm(layer.wo, cur, layer.wo_s);
                 cb(cur, "kqv_out", il);
+                }
             }
         }
 
