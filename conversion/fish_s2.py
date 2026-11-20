@@ -73,7 +73,6 @@ class FishS2TextModel(Qwen3Model):
 @ModelBase.register("fish_qwen3_omni")
 @ModelBase.example("fishaudio/s2-pro")
 class FishS2MmprojModel(Drama3MmprojModel):
-    has_audio_encoder = True  # codec encoder, for voice cloning
     gen_projector_type = gguf.VisionProjectorType.FISH_S2_GEN
 
     _FAST_AR_MAP = {

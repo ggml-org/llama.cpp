@@ -2616,8 +2616,9 @@ static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * im
 static int32_t cbx_ref_encode(mtmd_context * ctx, const mtmd_audio_tokens * audio_tokens, std::vector<float> & out_embd);
 static int32_t voxcpm2_ref_encode(mtmd_context * ctx, const mtmd_audio_tokens * audio_tokens, std::vector<float> & out_embd);
 
-static bool mtmd_audio_batch_encode(mtmd_context * ctx, const mtmd_image_f32_batch & batch_f32, mtmd_audio_preproc_out * source, uint32_t idx, std::vector<float> & out_embd) {
-    mtmd_image_f32_batch batch = batch_f32.clone();
+// copy of batch_f32, the mel is computed from source when there is one
+static bool mtmd_audio_batch_prepare(mtmd_context * ctx, const mtmd_image_f32_batch & batch_f32, mtmd_audio_preproc_out * source, uint32_t idx, mtmd_image_f32_batch & batch) {
+    batch = batch_f32.clone();
     if (source) {
         if (!ctx->audio_preproc->compute(*source)) {
             LOG_ERR("%s: unable to compute the mel\n", __func__);
@@ -2626,19 +2627,19 @@ static bool mtmd_audio_batch_encode(mtmd_context * ctx, const mtmd_image_f32_bat
         GGML_ASSERT(idx < source->entries.size());
         batch.entries[0] = source->entries[idx];
     }
-    return ctx->ctx_a->encode_batch(ctx->n_threads, &batch, out_embd);
+    return true;
+}
+
+static bool mtmd_audio_batch_encode(mtmd_context * ctx, const mtmd_image_f32_batch & batch_f32, mtmd_audio_preproc_out * source, uint32_t idx, std::vector<float> & out_embd) {
+    mtmd_image_f32_batch batch;
+    return mtmd_audio_batch_prepare(ctx, batch_f32, source, idx, batch) && ctx->ctx_a->encode_batch(ctx->n_threads, &batch, out_embd);
 }
 
 // fish_s2_spkenc: one backbone row per reference frame, the codes go to ctx->gen_ref, see mtmd_gen_state_set_ref()
 static int32_t mtmd_fish_s2_ref_encode(mtmd_context * ctx, const mtmd_audio_tokens * audio_tokens, std::vector<float> & out_embd) {
-    mtmd_image_f32_batch batch = audio_tokens->batch_f32.clone();
-    if (audio_tokens->source) {
-        if (!ctx->audio_preproc->compute(*audio_tokens->source)) {
-            LOG_ERR("%s: unable to compute the mel\n", __func__);
-            return 1;
-        }
-        GGML_ASSERT(audio_tokens->source_idx < audio_tokens->source->entries.size());
-        batch.entries[0] = audio_tokens->source->entries[audio_tokens->source_idx];
+    mtmd_image_f32_batch batch;
+    if (!mtmd_audio_batch_prepare(ctx, audio_tokens->batch_f32, audio_tokens->source.get(), audio_tokens->source_idx, batch)) {
+        return 1;
     }
     std::vector<int32_t> codes;
     out_embd.resize((size_t) audio_tokens->n_tokens * ctx->n_embd_out());

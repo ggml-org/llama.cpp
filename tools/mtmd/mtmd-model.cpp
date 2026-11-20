@@ -1174,7 +1174,7 @@ struct mtmd_model_loader {
                         // drama3 shares the codec, only the backbone rows of a frame differ
                         std::string gen_proj;
                         get_string(KEY_GEN_AUDIO_PROJ_TYPE, gen_proj, false);
-                        hparams.spkenc_drama3_rows = gen_proj == "drama3_gen";
+                        hparams.spkenc_drama3_rows = projector_type_from_string(gen_proj) == PROJECTOR_TYPE_DRAMA3_GEN;
                     } break;
                 case PROJECTOR_TYPE_CHATTERBOX:
                     {

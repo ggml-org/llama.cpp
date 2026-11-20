@@ -2739,9 +2739,9 @@ public:
         seq_id = 0;
         pos = 0;
         prompt_tokens.clear();
-        prompt_codes.clear();
-        prompt_embd.clear();
-        prompt_embd_idx.clear();
+        ref_codes.clear();
+        ref_embd.clear();
+        ref_begin = 0;
         prompt_pos = 0;
         frame.clear();
         main_logits.clear();
@@ -2819,17 +2819,7 @@ public:
         }
         int ret = 0;
         if (speech) {
-            const size_t first = prompt_embd_idx[prompt_pos];
-            decode_embd_batch batch(prompt_embd.data() + first * n_embd, n, mrope() ? 4 : 1, n_embd);
-            if (mrope()) {
-                batch.set_position_mrope_1d(pos, seq_id);
-            } else {
-                batch.set_position_normal(pos, seq_id);
-            }
-            for (int i = 0; i < n; i++) {
-                batch.logits[i] = 1;
-            }
-            ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.render(lctx, 0, n));
+            ret = decode_embd_rows(ref_embd.data() + (size_t) (prompt_pos - ref_begin) * n_embd, n);
         } else {
             llama_batch_ext_ptr batch(llama_batch_ext_init(lctx));
             if (!batch_set_tokens(batch.get(), prompt_tokens.data() + prompt_pos, n, pos, seq_id)) {
@@ -2885,17 +2875,7 @@ public:
         }
         codes_buf.insert(codes_buf.end(), frame.begin(), frame.end());
 
-        // text/speech stream: all mrope sections use the same position
-        const bool mrope = llama_model_rope_type(model) == LLAMA_ROPE_TYPE_MROPE ||
-                           llama_model_rope_type(model) == LLAMA_ROPE_TYPE_IMROPE;
-        decode_embd_batch batch(next_embd, 1, mrope ? 4 : 1, n_embd);
-        if (mrope) {
-            batch.set_position_mrope_1d(pos, seq_id);
-        } else {
-            batch.set_position_normal(pos, seq_id);
-        }
-        batch.logits[0] = 1;
-        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.render(lctx, 0, 1)) != 0) {
+        if (decode_embd_rows(next_embd, 1) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: decode failed\n");
             return 1;
         }
@@ -3007,12 +2987,25 @@ protected:
     // prompt rows but the last + generated frames
     virtual size_t max_rows() const { return n_tower_rows; }
 
-    bool mrope() const {
-        return llama_model_rope_type(model) == LLAMA_ROPE_TYPE_MROPE || llama_model_rope_type(model) == LLAMA_ROPE_TYPE_IMROPE;
+    // n speech rows from pos, every row outputs logits
+    // text/speech stream: all mrope sections use the same position
+    int32_t decode_embd_rows(const float * embd, int n) {
+        const bool mrope = llama_model_rope_type(model) == LLAMA_ROPE_TYPE_MROPE ||
+                           llama_model_rope_type(model) == LLAMA_ROPE_TYPE_IMROPE;
+        decode_embd_batch batch(embd, n, mrope ? 4 : 1, n_embd);
+        if (mrope) {
+            batch.set_position_mrope_1d(pos, seq_id);
+        } else {
+            batch.set_position_normal(pos, seq_id);
+        }
+        for (int i = 0; i < n; i++) {
+            batch.logits[i] = 1;
+        }
+        return llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.render(lctx, 0, n));
     }
 
     bool is_speech_row(int row) const {
-        return !prompt_codes.empty() && prompt_codes[(size_t) row * n_cb] >= 0;
+        return row >= ref_begin && (size_t) (row - ref_begin) < ref_embd.size() / n_embd;
     }
 
     // reference-bracket-v1 with one reference, see vLLM-Omni fish_omni/prompt.py
@@ -3044,38 +3037,32 @@ protected:
                 !tokenize_segments({ "<|im_end|>\n", "<|im_start|>user\n", text, "<|im_end|>\n", "<|im_start|>assistant\n<|voice|>" }, tail)) {
             return false;
         }
-        const size_t n_rows = head.size() + n_frames + tail.size();
         prompt_tokens.assign(head.begin(), head.end());
         prompt_tokens.insert(prompt_tokens.end(), n_frames, LLAMA_TOKEN_NULL);
         prompt_tokens.insert(prompt_tokens.end(), tail.begin(), tail.end());
-        prompt_codes.assign(n_rows * n_cb, -1);
-        std::copy(codes, codes + n_codes, prompt_codes.begin() + head.size() * n_cb);
-        prompt_embd = std::move(ref_rows);
-        prompt_embd_idx.assign(n_rows, SIZE_MAX);
-        for (size_t f = 0; f < n_frames; f++) {
-            prompt_embd_idx[head.size() + f] = f;
-        }
+        ref_codes.assign(codes, codes + n_codes);
+        ref_embd  = std::move(ref_rows);
+        ref_begin = (int) head.size();
         return true;
     }
 
     // tower row of a prompt row: the input frame is the codes of this row (reference frame) or none,
     // the codes of the next row are forced when it is a reference frame
     bool run_prompt_tower(int row, const float * h) {
-        if (prompt_codes.empty()) {
-            return run_tower(-1, h) != nullptr;
-        }
-        const auto row_codes = [&](int r) { return prompt_codes.begin() + (size_t) r * n_cb; };
-        bool ok;
-        if (is_speech_row(row + 1)) {
+        const bool cur  = is_speech_row(row);
+        const bool next = is_speech_row(row + 1);
+        const auto ref_frame = [&](int r) { return ref_codes.begin() + (size_t) (r - ref_begin) * n_cb; };
+        if (next) {
             // [input frame, -1 for a text row | forced next frame]
-            frame.assign(row_codes(row), row_codes(row + 2));
-            ok = run_tower(frame[n_cb], h) != nullptr;
-        } else {
-            if (is_speech_row(row)) {
-                frame.assign(row_codes(row), row_codes(row + 1));
+            frame.assign(n_cb, -1);
+            if (cur) {
+                std::copy(ref_frame(row), ref_frame(row + 1), frame.begin());
             }
-            ok = run_tower(-1, h) != nullptr;
+            frame.insert(frame.end(), ref_frame(row + 1), ref_frame(row + 2));
+        } else if (cur) {
+            frame.assign(ref_frame(row), ref_frame(row + 1));
         }
+        const bool ok = run_tower(next ? frame[n_cb] : -1, h) != nullptr;
         frame.clear();
         return ok;
     }
@@ -3201,9 +3188,9 @@ protected:
     llama_seq_id seq_id = 0;
     llama_pos    pos    = 0;
     std::vector<llama_token> prompt_tokens;    // one per prompt row, LLAMA_TOKEN_NULL for a reference frame
-    std::vector<int32_t>     prompt_codes;     // n_cb per prompt row, -1 for a text row; empty without reference
-    std::vector<float>       prompt_embd;      // backbone rows of the reference frames
-    std::vector<size_t>      prompt_embd_idx;  // prompt row -> reference frame
+    std::vector<int32_t>     ref_codes;        // codes of the reference frames, n_cb per frame
+    std::vector<float>       ref_embd;         // backbone rows of the reference frames
+    int ref_begin = 0;                         // prompt row of the first reference frame
     int prompt_pos = 0;
 
     std::mt19937 rng;

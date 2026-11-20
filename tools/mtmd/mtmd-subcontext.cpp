@@ -2012,13 +2012,12 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                     const bool next_speech = params->code0 >= 0;
                     const size_t n_given   = params->codes ? params->codes->size() : 0;
                     const bool forced      = n_given == (size_t) (2 * n_cb);
-                    const bool cur_speech  = n_given >= (size_t) n_cb && (n_given == (size_t) n_cb || forced) &&
-                                             (*params->codes)[0] >= 0;
                     if (params->code0 >= n_vocab || (n_given != 0 && n_given != (size_t) n_cb && !forced) ||
                             (forced && params->code0 != (*params->codes)[n_cb])) {
                         LOG_ERR("%s: invalid tower input (code0 %d, %zu codes)\n", __func__, params->code0, n_given);
                         return false;
                     }
+                    const bool cur_speech  = n_given != 0 && (*params->codes)[0] >= 0;
                     std::vector<int32_t> code0 = { std::max(params->code0, 0) };
                     set_input_i32("inp_code0", code0);
 
