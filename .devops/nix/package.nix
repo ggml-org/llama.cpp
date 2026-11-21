@@ -153,6 +153,30 @@ let
     makeWrapper "$src" "$out/bin/ocloc" \
       --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath [ intel-graphics-compiler ]}
   '';
+
+  # Builds Llama Chat locally, taking care not to require updating any sha256 hash.
+  webui = stdenvNoCC.mkDerivation {
+    pname = "webui";
+    version = llamaVersion;
+    # the app compiles Llama UI from its source in ../../lib/ui, so the source is ui/ as a whole
+    src = lib.cleanSource ../../ui;
+    sourceRoot = "source/apps/chat";
+
+    nativeBuildInputs = [
+      nodejs
+      importNpmLock.linkNodeModulesHook
+    ];
+
+    # no sha256 required when using buildNodeModules
+    npmDeps = importNpmLock.buildNodeModules {
+      npmRoot = ../../ui/apps/chat;
+      inherit nodejs;
+    };
+
+    installPhase = ''
+      LLAMA_UI_OUT_DIR=$out npm run build --offline
+    '';
+  };
 in
 
 effectiveStdenv.mkDerivation (finalAttrs: {
@@ -178,32 +202,8 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     src = lib.cleanSource ../../.;
   };
 
-  # Builds Llama Chat locally, taking care not to require updating any sha256 hash.
-  webui = stdenvNoCC.mkDerivation {
-    pname = "webui";
-    version = llamaVersion;
-    # the app compiles Llama UI from its source in ../../lib/ui, so the source is ui/ as a whole
-    src = lib.cleanSource ../../ui;
-    sourceRoot = "source/apps/chat";
-
-    nativeBuildInputs = [
-      nodejs
-      importNpmLock.linkNodeModulesHook
-    ];
-
-    # no sha256 required when using buildNodeModules
-    npmDeps = importNpmLock.buildNodeModules {
-      npmRoot = ../../ui/apps/chat;
-      inherit nodejs;
-    };
-
-    installPhase = ''
-      LLAMA_UI_OUT_DIR=$out npm run build --offline
-    '';
-  };
-
   postPatch = lib.optionalString useWebUi ''
-    cp -r ${finalAttrs.webui} ui/apps/chat/dist
+    cp -r ${webui} ui/apps/chat/dist
     chmod -R u+w ui/apps/chat/dist
   '';
 
