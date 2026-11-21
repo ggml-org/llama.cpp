@@ -1528,22 +1528,81 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
     }
 };
 
+// softmax probability of id under the raw logits of output i, used as the draft confidence
+static float draft_token_prob(llama_context * ctx, int32_t i, llama_token id) {
+    const float * logits = llama_get_logits_ith(ctx, i);
+    if (logits == nullptr) {
+        return 1.0f;
+    }
+    const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx)));
+    const float lmax = *std::max_element(logits, logits + n_vocab);
+    double sum = 0.0;
+    for (int k = 0; k < n_vocab; ++k) {
+        sum += std::exp(logits[k] - lmax);
+    }
+    return (float) (std::exp(logits[id] - lmax) / sum);
+}
+
 struct common_speculative_impl_inkling2_dspark final : public common_speculative_impl_draft_dflash {
     std::vector<common_params_sampling> sampler_cfg;
     std::vector<std::mt19937> rng;
     std::vector<int64_t> seeds;
 
+    // adaptive drafting: two states only (full draft or paused), because every change of the
+    // verification batch size forces a graph rebuild (~25 ms on a 12k node graph)
+    struct adapt_state {
+        float   rate   = 0.5f;
+        int32_t last_n = 0;
+        int32_t n_seen = 0;
+        int32_t paused = 0;
+    };
+    std::vector<adapt_state> adapt;
+    bool  adapt_on  = false;
+    float adapt_min = 0.33f;
+
+    int32_t adapt_count(llama_seq_id seq_id, int32_t count) {
+        if (!adapt_on || (size_t) seq_id >= adapt.size()) {
+            return count;
+        }
+        auto & a = adapt[seq_id];
+        if (a.paused > 0) {
+            if (--a.paused == 0) {
+                a = {};
+            }
+            return 0;
+        }
+        if (a.n_seen >= 8 && a.rate < adapt_min) {
+            a.paused = 64;
+            return 0;
+        }
+        return count;
+    }
+
+    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool /*is_other*/) override {
+        if (!adapt_on || (size_t) seq_id >= adapt.size()) {
+            return;
+        }
+        auto & a = adapt[seq_id];
+        if (a.last_n > 0) {
+            a.rate = 0.85f*a.rate + 0.15f*std::min(1.0f, (float) n_accepted / a.last_n);
+            a.n_seen++;
+        }
+        a.last_n = 0;
+    }
+
     common_speculative_impl_inkling2_dspark(const common_params_speculative & config, uint32_t n_seq)
-        : common_speculative_impl_draft_dflash(config, n_seq, COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK), rng(n_seq), seeds(n_seq, -1) {
+        : common_speculative_impl_draft_dflash(config, n_seq, COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK), rng(n_seq), seeds(n_seq, -1), adapt(n_seq) {
+        if (const char * env_adapt = std::getenv("LLAMA_SPEC_ADAPT")) {
+            const float v = (float) std::atof(env_adapt);
+            adapt_on  = v > 0.0f;
+            adapt_min = v > 0.0f && v < 1.0f ? v : 0.33f;
+        }
         const auto * model = llama_get_model(params.ctx_dft);
         char buf[32];
         if (llama_model_meta_val_str(model, "dflash.sample_from_anchor", buf, sizeof(buf)) < 0 ||
                 std::strcmp(buf, "false") != 0 || causal_attn || n_embd_tgt != n_embd_dec ||
                 target_layer_ids[target_layer_ids_n - 1] != llama_model_n_layer(llama_get_model(params.ctx_tgt))) {
             throw std::runtime_error("invalid Inkling2 DSpark target or attention configuration");
-        }
-        if (params.p_min > 0) {
-            throw std::runtime_error("Inkling2 DSpark has no confidence head: please set --spec-draft-p-min 0");
         }
         if (llama_n_ubatch(params.ctx_dft) < (uint32_t) block_size || llama_n_batch(params.ctx_dft) < (uint32_t) block_size) {
             throw std::runtime_error("Inkling2 DSpark requires a draft batch and ubatch of at least one block");
@@ -1556,6 +1615,9 @@ struct common_speculative_impl_inkling2_dspark final : public common_speculative
         common_speculative_impl_draft_dflash::begin(seq_id, prompt);
         if ((size_t) seq_id < seeds.size()) {
             seeds[seq_id] = -1;
+        }
+        if ((size_t) seq_id < adapt.size()) {
+            adapt[seq_id] = {};
         }
         if ((size_t) seq_id < sampler_cfg.size()) {
             sampler_cfg[seq_id].temp = NAN;
@@ -1584,13 +1646,16 @@ struct common_speculative_impl_inkling2_dspark final : public common_speculative
             if (context_pos[slot] != dp.pos0 - 1) {
                 continue;
             }
-            const int32_t count = dp.n_max >= 0 ? std::min(params.n_max, dp.n_max) : params.n_max;
+            const int32_t count = adapt_count(seq_id, dp.n_max >= 0 ? std::min(params.n_max, dp.n_max) : params.n_max);
             if (count < params.n_min || count == 0) {
                 continue;
             }
+            if ((size_t) seq_id < adapt.size()) {
+                adapt[seq_id].last_n = count;
+            }
             const bool sample = params.probabilistic && dp.result_q && dp.temp > 0;
             const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx)));
-            const bool backend = params.backend_sampling && n_vocab > 1 && n_vocab <= (1 << 23) && (size_t) count < 2*width;
+            const bool backend = params.backend_sampling && params.p_min <= 0.0f && n_vocab > 1 && n_vocab <= (1 << 23) && (size_t) count < 2*width;
             std::mt19937 next_rng;
             std::vector<float> input;
             if (backend) {
@@ -1694,6 +1759,10 @@ struct common_speculative_impl_inkling2_dspark final : public common_speculative
                     auto & dp = dparams[block.seq_id];
                     auto * sampler = smpls[block.seq_id].get();
                     const llama_token id = common_sampler_sample(sampler, ctx, i, true);
+                    if (params.p_min > 0.0f && draft_token_prob(ctx, i, id) < params.p_min) {
+                        block.count = step;
+                        continue;
+                    }
                     dp.result->push_back(id);
                     if (params.probabilistic && dp.result_q && dp.temp > 0) {
                         const auto * q = common_sampler_get_candidates(sampler, false);
