@@ -1151,6 +1151,20 @@ struct mtmd_model_loader {
                         hparams.flow_n_step       = 1;
                         hparams.gen_eos_threshold = -4.0f;
                     } break;
+                case PROJECTOR_TYPE_MOSHI:
+                case PROJECTOR_TYPE_MOSHI_GEN:
+                    {
+                        // mimi of the moshi family, see _seanet_kwargs and _transformer_kwargs of the reference
+                        hparams.audio_sample_rate = 24000;
+                        // seanet ratios are [8,6,5,4] in the config, the encoder reverses them
+                        hparams.seanet_ratios    = { 4, 5, 6, 8 };
+                        hparams.seanet_n_stage   = (int32_t) hparams.seanet_ratios.size();
+                        hparams.mimi_downsample  = 2;
+                        hparams.mimi_tfm_context = 250;
+                        hparams.rope_theta       = 10000.0f;
+                        // one step of the audio stream
+                        hparams.warmup_audio_size = 4 * mtmd_graph_moshi::n_samples_per_frame;
+                    } break;
                 case PROJECTOR_TYPE_VOXCPM2_SPKENC:
                     {
                         // AudioVAE encoder, one backbone row per patch of latents (checked against the strides at load)
@@ -1429,6 +1443,7 @@ struct mtmd_model_loader {
                                        model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO &&
                                        model.proj_type != PROJECTOR_TYPE_VIBEVOICE_ASR &&
                                        model.proj_type != PROJECTOR_TYPE_POCKETTTS_SPKENC &&
+                                       model.proj_type != PROJECTOR_TYPE_MOSHI &&
                                        model.proj_type != PROJECTOR_TYPE_FISH_S2_SPKENC &&
                                        model.proj_type != PROJECTOR_TYPE_VOXCPM2_SPKENC;
 
@@ -1524,6 +1539,29 @@ struct mtmd_model_loader {
                 stage.res_conv2_b  = get_tensor(mtmd_format(res2,  i, "bias"));
                 stage.scale_conv_w = get_tensor(mtmd_format(scale, i, "weight"));
                 stage.scale_conv_b = get_tensor(mtmd_format(scale, i, "bias"));
+            }
+        };
+
+        // mimi decoder: upsample, transformer, SEANet decoder
+        auto load_mimi_decoder = [&](int n_tfm_layer) {
+            model.gen_upsample_w = get_tensor(mtmd_format(TN_A_GEN_WAV_UPSAMPLE, "weight"));
+            load_seanet(model.seanet, true);
+            model.gen_tfm_layers.resize(n_tfm_layer);
+            for (int il = 0; il < n_tfm_layer; il++) {
+                auto & layer = model.gen_tfm_layers[il];
+                const char * p = "a.gen.wav.tfm";
+                layer.ln_1_w    = get_tensor(mtmd_format(TN_LN_1,        p, il, "weight"));
+                layer.ln_1_b    = get_tensor(mtmd_format(TN_LN_1,        p, il, "bias"));
+                layer.q_w       = get_tensor(mtmd_format(TN_ATTN_Q,      p, il, "weight"));
+                layer.k_w       = get_tensor(mtmd_format(TN_ATTN_K,      p, il, "weight"));
+                layer.v_w       = get_tensor(mtmd_format(TN_ATTN_V,      p, il, "weight"));
+                layer.o_w       = get_tensor(mtmd_format(TN_ATTN_OUTPUT, p, il, "weight"));
+                layer.ls_1_w    = get_tensor(mtmd_format(TN_LS_1,        p, il, "weight"));
+                layer.ln_2_w    = get_tensor(mtmd_format(TN_LN_2,        p, il, "weight"));
+                layer.ln_2_b    = get_tensor(mtmd_format(TN_LN_2,        p, il, "bias"));
+                layer.ff_up_w   = get_tensor(mtmd_format(TN_FFN_UP,      p, il, "weight"));
+                layer.ff_down_w = get_tensor(mtmd_format(TN_FFN_DOWN,    p, il, "weight"));
+                layer.ls_2_w    = get_tensor(mtmd_format(TN_LS_2,        p, il, "weight"));
             }
         };
 
@@ -2759,25 +2797,7 @@ struct mtmd_model_loader {
 
                     // mimi decoder
                     model.gen_quant_out_w = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_OUT, "weight"));
-                    model.gen_upsample_w  = get_tensor(mtmd_format(TN_A_GEN_WAV_UPSAMPLE, "weight"));
-                    load_seanet(model.seanet, true);
-                    model.gen_tfm_layers.resize(hparams.n_layer);
-                    for (int il = 0; il < hparams.n_layer; il++) {
-                        auto & layer = model.gen_tfm_layers[il];
-                        const char * p = "a.gen.wav.tfm";
-                        layer.ln_1_w    = get_tensor(mtmd_format(TN_LN_1,        p, il, "weight"));
-                        layer.ln_1_b    = get_tensor(mtmd_format(TN_LN_1,        p, il, "bias"));
-                        layer.q_w       = get_tensor(mtmd_format(TN_ATTN_Q,      p, il, "weight"));
-                        layer.k_w       = get_tensor(mtmd_format(TN_ATTN_K,      p, il, "weight"));
-                        layer.v_w       = get_tensor(mtmd_format(TN_ATTN_V,      p, il, "weight"));
-                        layer.o_w       = get_tensor(mtmd_format(TN_ATTN_OUTPUT, p, il, "weight"));
-                        layer.ls_1_w    = get_tensor(mtmd_format(TN_LS_1,        p, il, "weight"));
-                        layer.ln_2_w    = get_tensor(mtmd_format(TN_LN_2,        p, il, "weight"));
-                        layer.ln_2_b    = get_tensor(mtmd_format(TN_LN_2,        p, il, "bias"));
-                        layer.ff_up_w   = get_tensor(mtmd_format(TN_FFN_UP,      p, il, "weight"));
-                        layer.ff_down_w = get_tensor(mtmd_format(TN_FFN_DOWN,    p, il, "weight"));
-                        layer.ls_2_w    = get_tensor(mtmd_format(TN_LS_2,        p, il, "weight"));
-                    }
+                    load_mimi_decoder(hparams.n_layer);
 
                     for (int64_t i = 0; i < gguf_get_n_tensors(ctx_gguf.get()); ++i) {
                         const char * name = gguf_get_tensor_name(ctx_gguf.get(), i);
@@ -2798,6 +2818,43 @@ struct mtmd_model_loader {
                     if (!model.gen_voices.empty()) {
                         LOG_INF("%s: %zu predefined voices\n", __func__, model.gen_voices.size());
                     }
+                } break;
+            case PROJECTOR_TYPE_MOSHI:
+                {
+                    // streaming mimi encoder, its RVQ, then the backbone embeddings of the input codes
+                    load_seanet(model.seanet, false);
+                    model.downsample_w = get_tensor(mtmd_format(TN_A_DOWNSAMPLE_CONV, "weight"));
+                    auto & c2w = model.c2w;
+                    c2w.quant_first_in_w = get_tensor(mtmd_format(TN_A_CODEC_VQ_FIRST_IN, "weight"));
+                    c2w.quant_first_cb_w = get_tensor(mtmd_format(TN_A_CODEC_VQ_FIRST_CB, "weight"));
+                    c2w.quant_rest_in_w  = get_tensor(mtmd_format(TN_A_CODEC_VQ_REST_IN,  "weight"));
+                    c2w.quant_rest_cb_w  = get_tensor(mtmd_format(TN_A_CODEC_VQ_REST_CB,  "weight"));
+                    model.mm_a_code_embd = get_tensor(mtmd_format(TN_MM_A_CODE_EMBD, "weight"));
+                    if (model.mm_a_code_embd->ne[2] != c2w.quant_rest_cb_w->ne[2] + 1) {
+                        throw std::runtime_error(mtmd_format("%s: the input code embeddings do not match the codebooks\n", __func__));
+                    }
+                } break;
+            case PROJECTOR_TYPE_MOSHI_GEN:
+                {
+                    // depformer, the generic loop above loaded the a.gen.code.blk.* tensors (per-step weights on dim 2)
+                    model.gen_code_proj_in_w  = get_tensor(mtmd_format(TN_A_GEN_CODE_PROJ_IN,  "weight"));
+                    model.gen_code_tok_embd_w = get_tensor(mtmd_format(TN_A_GEN_CODE_TOK_EMBD, "weight"));
+                    model.gen_code_embd_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_EMBD,     "weight"));
+                    model.gen_code_head_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_HEAD,     "weight"));
+                    model.gen_code_out_embd_w = get_tensor(mtmd_format(TN_A_GEN_CODE_OUT_EMBD, "weight"));
+                    const int64_t n_q = model.gen_code_head_w->ne[2];
+                    if (model.gen_code_embd_w->ne[2] != n_q - 1 || model.gen_code_out_embd_w->ne[2] != n_q ||
+                            model.gen_code_proj_in_w->ne[2] > n_q || (int64_t) n_q > mtmd_graph_moshi_gen::n_q_max) {
+                        throw std::runtime_error(mtmd_format("%s: invalid depformer tensors\n", __func__));
+                    }
+
+                    // RVQ decode, then the mimi decoder
+                    auto & c2w = model.c2w;
+                    c2w.quant_first_out_w = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_FIRST_OUT, "weight"));
+                    c2w.quant_first_cb_w  = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_FIRST_CB,  "weight"));
+                    c2w.quant_rest_out_w  = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_REST_OUT,  "weight"));
+                    c2w.quant_rest_cb_w   = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_REST_CB,   "weight"));
+                    load_mimi_decoder(mtmd_graph_moshi_gen::mimi_n_layer);
                 } break;
             case PROJECTOR_TYPE_LFM3A_GEN:
                 {
@@ -5023,6 +5080,16 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
                 // one latent per call for GEN_CODE, GEN_WAV sizes its input from the caller
                 n_patches = 1;
             } break;
+        case PROJECTOR_TYPE_MOSHI:
+            {
+                // one row per codebook and frame, then the rows of the initial codes, see mtmd_graph_moshi
+                const int n_q = (int) mm_a_code_embd->ne[2];
+                n_patches = n_q * (img->nx() / mtmd_graph_moshi::n_samples_per_frame + 1);
+            } break;
+        case PROJECTOR_TYPE_MOSHI_GEN:
+            {
+                n_patches = 1;
+            } break;
         case PROJECTOR_TYPE_GRANITE4_VISION:
             {
                 // Per-tile output token count: each projector block outputs
@@ -5214,6 +5281,10 @@ int mtmd_model::n_mmproj_embd() const {
             return spk_proj_w->ne[1];
         case PROJECTOR_TYPE_POCKETTTS_GEN:
             return gen_input_lin_w->ne[1];
+        case PROJECTOR_TYPE_MOSHI:
+            return mm_a_code_embd->ne[0];
+        case PROJECTOR_TYPE_MOSHI_GEN:
+            return gen_code_out_embd_w->ne[0];
         case PROJECTOR_TYPE_CHATTERBOX:
             // talker width, carried by the speech table
             return cbx_tensors.at("a.gen.code.out_embd.weight")->ne[0];
