@@ -1905,7 +1905,9 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_GATED_DELTA_NET:
             return has_simdgroup_reduction && op->src[2]->ne[0] % 32 == 0;
         case GGML_OP_SOLVE_TRI:
-            return has_simdgroup_reduction && op->src[0]->type == GGML_TYPE_F32;
+            // at least one row of PAD(n, 32) floats must fit in threadgroup memory
+            return has_simdgroup_reduction && op->src[0]->type == GGML_TYPE_F32 &&
+                GGML_PAD(GGML_PAD(op->src[1]->ne[1], 32)*sizeof(float), 16) <= dev->props.max_theadgroup_memory_size;
         case GGML_OP_MUL_MAT:
             if (!ggml_metal_supports_mul_mat_src1_prec(op, dev->props.has_tensor)) {
                 return false;

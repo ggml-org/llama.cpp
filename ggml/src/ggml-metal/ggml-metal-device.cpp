@@ -784,9 +784,16 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_solve_tri(ggml_m
     char base[256];
     char name[256];
 
-    const int nsg = 8;
     const int n   = op->src[1]->ne[1];
     const int k   = op->src[1]->ne[0];
+
+    const size_t smem_max = ggml_metal_device_get_props(ggml_metal_library_get_device(lib))->max_theadgroup_memory_size;
+
+    // threadgroup memory holds nsg rows of PAD(n, 32) floats: use fewer simdgroups for large n
+    int nsg = 8;
+    while (nsg > 1 && GGML_PAD(GGML_PAD(n, 32)*nsg*sizeof(float), 16) > smem_max) {
+        nsg /= 2;
+    }
 
     snprintf(base, 256, "kernel_solve_tri_%s", ggml_type_name(op->src[0]->type));
     snprintf(name, 256, "%s_nsg=%d_n=%d_k=%d", base, nsg, n, k);

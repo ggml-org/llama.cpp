@@ -9804,6 +9804,39 @@ struct test_solve_tri : public test_case {
     }
 };
 
+// GGML_OP_SOLVE_TRI with large n
+// the default A makes the solution blow up for large n (NaN in the CPU reference), so use a
+// diagonally dominant A: diagonal in [1, 2], strictly lower part in [-1/n, 1/n]
+struct test_solve_tri_large : public test_solve_tri {
+    using test_solve_tri::test_solve_tri;
+
+    std::string vars() override {
+        return test_solve_tri::vars() + ",a_diag=[1,2]";
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_solve_tri::initialize_tensors(ctx);
+
+        ggml_tensor * a = ggml_get_tensor(ctx, "a");
+        const int64_t n = a->ne[0];
+
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_real_distribution<float> off(-1.0f/n, 1.0f/n);
+        std::uniform_real_distribution<float> diag(1.0f, 2.0f);
+
+        std::vector<float> data(ggml_nelements(a), 0.0f);
+        for (int64_t ir = 0; ir < ggml_nrows(a); ir++) {
+            const int64_t i1 = ir % n;
+            for (int64_t i0 = 0; i0 < i1; i0++) {
+                data[ir*n + i0] = off(gen);
+            }
+            data[ir*n + i1] = diag(gen);
+        }
+        ggml_backend_tensor_set(a, data.data(), 0, ggml_nbytes(a));
+    }
+};
+
 // GGML_OP_DIAG
 struct test_diag : public test_case {
     const ggml_type              type;
@@ -13154,6 +13187,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // n % 32 != 0, output prefilled with NaN
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 34, 34, 1, 1 }, { 256, 34, 1, 1 }, true));
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 79, 79, 5, 3 }, { 417, 79, 5, 3 }, true));
+    // large n: Metal cannot fit 8 simdgroups in threadgroup memory
+    test_cases.emplace_back(new test_solve_tri_large(GGML_TYPE_F32, { 2080, 2080, 1, 1 }, { 33, 2080, 1, 1 }));
 
     for (int tfrm : {0, 1, 2}) {
         for (bool circular : {false, true}) {
