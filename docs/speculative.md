@@ -143,6 +143,32 @@ See:
 
 - #25173
 
+#### MiniCPM5 MoE target
+
+The backbone restriction above applies to the draft network, not the target model. MiniCPM5 MoE exposes the per-layer target inputs required by DSpark.
+
+Use a draft GGUF trained for the selected MiniCPM5 target checkpoint. The following example uses a compatible, pre-existing target/draft GGUF pair:
+
+```bash
+llama-server -m /path/to/MiniCPM5-15B-A2.5B-BF16.gguf \
+    -md /path/to/MiniCPM5-15B-A2.5B-DSpark.gguf \
+    --spec-type draft-dspark --spec-draft-n-max 2 --spec-draft-p-min 0 \
+    --min-p 0 \
+    -ngl 99 --n-gpu-layers-draft 99 -fa on \
+    -c 8192 -np 1 --jinja \
+    -ctk f16 -ctv f16 -ctkd f16 -ctvd f16
+```
+
+The target in `-m` may also use Q8_0 or Q4_K_M weights.
+
+- `--min-p 0` disables the target sampler's min-p filter. `--spec-draft-p-min 0` disables DSpark's confidence-based truncation of draft blocks. The target still verifies the draft tokens.
+- With one slot (`-np 1`), `-c 8192` provides an 8,192-token context for the prompt and generated tokens. The short smoke tests used `-c 2048`. Choose the context size for your workload and available memory.
+- `-ctk` and `-ctv` set the target K and V cache types. `-ctkd` and `-ctvd` set the draft K and V cache types. This example uses unquantized F16 K/V for both models. The cache types are independent of weight quantization.
+
+MiniCPM5 DSpark was tested with `--spec-draft-n-max 2`. `--spec-draft-n-max 7` has not been tested for this pairing.
+
+The [MiniCPM5 MoE conversion instructions](models.md#minicpm5-moe) export the target GGUF. Supply the compatible DSpark draft separately in GGUF format.
+
 ### LiliCorr (`draft-lilicorr`)
 
 [LiliCorr](https://arxiv.org/pdf/2608.20530) puts a _candidate scorer_ on the DFlash block: a small transformer over the top-k candidates

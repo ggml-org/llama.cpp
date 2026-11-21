@@ -214,6 +214,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "MiMoV2FlashForCausalLM": "mimo",
     "MiMoV2ForCausalLM": "mimo",
     "MiniCPM3ForCausalLM": "minicpm",
+    "MiniCPM5MoEForCausalLM": "minicpm",
     "MiniCPMForCausalLM": "minicpm",
     "MiniCPMV4_6ForConditionalGeneration": "minicpm",
     "MiniCPMV4_7ForConditionalGeneration": "minicpm",
