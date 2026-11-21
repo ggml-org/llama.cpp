@@ -1,1 +1,8 @@
-export { highlightCode, trimCodePadding } from './code';
+export {
+  getLoadedHighlightLanguages,
+  highlightCode,
+  isHighlightLanguageLoaded,
+  loadHighlightLanguages,
+  resolveHighlightLanguage,
+  trimCodePadding,
+} from "./code";

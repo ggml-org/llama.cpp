@@ -15,7 +15,7 @@
 
 <DropdownMenuPrimitive.GroupHeading
 	bind:ref
-	class={cn('px-2 py-1.5 text-sm font-semibold data-[inset]:pl-8', className)}
+	class={cn('px-2 py-1.5 text-body-sm font-semibold data-[inset]:pl-8', className)}
 	data-inset={inset}
 	data-slot="dropdown-menu-group-heading"
 	{...restProps}

@@ -72,7 +72,7 @@
 	{#if orgAvatarFailed}
 		<span
 			aria-hidden="true"
-			class="flex {size} items-center justify-center rounded-md text-sm font-semibold text-white"
+			class="flex {size} items-center justify-center rounded-md text-body-sm font-semibold text-white"
 			style="background-color: hsl({hue} 60% 45%)"
 		>
 			{org.charAt(0).toUpperCase()}
@@ -103,7 +103,7 @@
 			{#if quantAvatarFailed}
 				<span
 					aria-hidden="true"
-					class="flex size-full items-center justify-center rounded-full text-[8px] font-semibold text-white"
+					class="flex size-full items-center justify-center rounded-full text-caption-sm font-semibold text-white"
 					style="background-color: hsl({quantHue} 60% 45%)"
 				>
 					{quantOrg.charAt(0).toUpperCase()}

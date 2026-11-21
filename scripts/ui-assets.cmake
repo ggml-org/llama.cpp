@@ -20,10 +20,12 @@ set(LLAMA_UI_GZIP     "" CACHE STRING "Apply gzip compress to assets to save ban
 set(DIST_DIR     "${UI_BINARY_DIR}/dist")
 set(SRC_DIST_DIR "${UI_SOURCE_DIR}/dist")
 # The stage keeps the layout of ui/: the app in apps/chat, with the sources of
-# Llama UI that it compiles next to it in lib/ui (see ui/apps/chat/scripts/llama-ui.js).
+# Llama UI that it compiles next to it in lib/ui (see ui/apps/chat/scripts/llama-ui.js),
+# and those of Llama Voice in lib/voice (see ui/apps/chat/vite.config.ts).
 set(STAGE_DIR    "${UI_BINARY_DIR}/ui-src")
 set(WORK_DIR     "${STAGE_DIR}/apps/chat")
 set(UI_LIB_DIR   "${UI_SOURCE_DIR}/../../lib/ui")
+set(UI_VOICE_DIR "${UI_SOURCE_DIR}/../../lib/voice")
 set(STAMP_FILE   "${UI_BINARY_DIR}/.ui-stamp")
 set(EMBED_STAMP  "${UI_BINARY_DIR}/.ui-embed.sha256")
 set(UI_CPP       "${UI_BINARY_DIR}/ui.cpp")
@@ -354,6 +356,12 @@ function(stage_sources)
     )
     file(COPY "${UI_LIB_DIR}/src/lib"
         DESTINATION "${STAGE_DIR}/lib/ui/src"
+        NO_SOURCE_PERMISSIONS
+    )
+
+    # and of Llama Voice, its sources only: they import nothing from outside them
+    file(COPY "${UI_VOICE_DIR}/src"
+        DESTINATION "${STAGE_DIR}/lib/voice"
         NO_SOURCE_PERMISSIONS
     )
 endfunction()

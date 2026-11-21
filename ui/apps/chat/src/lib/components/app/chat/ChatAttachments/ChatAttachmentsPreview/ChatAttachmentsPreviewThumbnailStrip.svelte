@@ -61,7 +61,9 @@
 								<FileText class="{ICON_CLASS_DEFAULT} text-white/70" />
 							{/if}
 
-							<span class="font-mono text-[9px] text-white/60">{getFileExtension(item.name)}</span>
+							<span class="font-mono text-caption-sm text-white/60"
+								>{getFileExtension(item.name)}</span
+							>
 						</div>
 					{/if}
 				</button>

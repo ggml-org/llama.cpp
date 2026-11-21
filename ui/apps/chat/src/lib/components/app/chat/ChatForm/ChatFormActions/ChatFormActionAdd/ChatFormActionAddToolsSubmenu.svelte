@@ -23,13 +23,13 @@
 	<DropdownMenu.SubContent class="w-72 p-0">
 		{#if toolsPanel.totalToolCount === 0}
 			{#if toolsStore.loading}
-				<div class="px-3 py-4 text-center text-sm text-muted-foreground">
+				<div class="px-3 py-4 text-center text-body-sm text-muted-foreground">
 					<Loader2 class="mx-auto mb-1 {ICON_CLASS_DEFAULT} animate-spin" />
 
 					Loading tools...
 				</div>
 			{:else if toolsStore.isToolsEndpointUnreachable}
-				<div class="grid gap-2.5 px-3 py-4 text-sm text-muted-foreground">
+				<div class="grid gap-2.5 px-3 py-4 text-body-sm text-muted-foreground">
 					<span class="flex gap-2">
 						<Info class="mt-0.5 {ICON_CLASS_DEFAULT} shrink-0" />
 
@@ -54,15 +54,19 @@
 					{/if}
 				</div>
 			{:else if toolsStore.error}
-				<div class="px-3 py-4 text-center text-sm text-muted-foreground">Failed to load tools</div>
+				<div class="px-3 py-4 text-center text-body-sm text-muted-foreground">
+					Failed to load tools
+				</div>
 			{:else if toolsPanel.noToolsInfoMessage}
-				<div class="flex gap-2 px-3 py-4 text-sm text-muted-foreground">
+				<div class="flex gap-2 px-3 py-4 text-body-sm text-muted-foreground">
 					<Info class="mt-0.5 {ICON_CLASS_DEFAULT} shrink-0" />
 
 					<span>{toolsPanel.noToolsInfoMessage}</span>
 				</div>
 			{:else}
-				<div class="px-3 py-4 text-center text-sm text-muted-foreground">No tools available</div>
+				<div class="px-3 py-4 text-center text-body-sm text-muted-foreground">
+					No tools available
+				</div>
 			{/if}
 		{:else}
 			<div class="max-h-80 overflow-y-auto p-2 pr-1">
@@ -90,7 +94,7 @@
 	>
 		<div class="flex items-center gap-1 {groupDisabled ? 'pointer-events-none opacity-50' : ''}">
 			<Collapsible.Trigger
-				class="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50"
+				class="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-body-sm hover:bg-muted/50"
 			>
 				{#if isExpanded}
 					<ChevronDown class="size-icon-sm shrink-0" />
@@ -113,7 +117,7 @@
 					<span class="truncate">{group.label}</span>
 				</span>
 
-				<span class="ml-auto shrink-0 text-xs text-muted-foreground">
+				<span class="ml-auto shrink-0 text-caption text-muted-foreground">
 					{toolsPanel.getEnabledToolCount(group)}/{group.tools.length}
 				</span>
 			</Collapsible.Trigger>
@@ -146,7 +150,7 @@
 					{@const enabled = toolsPanel.isToolEnabled(entry)}
 					{@const parentDisabled = toolsPanel.isToolParentDisabled(entry)}
 					<button
-						class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted/50 {parentDisabled
+						class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-body-sm transition-colors hover:bg-muted/50 {parentDisabled
 							? 'opacity-50'
 							: ''}"
 						onclick={() => toolsPanel.toggleTool(entry)}
@@ -162,7 +166,7 @@
 							{/if}
 						</span>
 
-						<span class="min-w-0 flex-1 truncate font-mono text-[12px]">
+						<span class="min-w-0 flex-1 truncate font-mono text-caption">
 							{entry.definition.function.name}
 						</span>
 					</button>

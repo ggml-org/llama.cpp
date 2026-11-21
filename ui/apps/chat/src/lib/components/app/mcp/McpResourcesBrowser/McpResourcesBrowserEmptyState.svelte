@@ -6,7 +6,7 @@
 	let { isLoading }: Props = $props();
 </script>
 
-<div class="py-4 text-center text-sm text-muted-foreground">
+<div class="py-4 text-center text-body-sm text-muted-foreground">
 	{#if isLoading}
 		Loading resources...
 	{:else}

@@ -40,8 +40,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define GGML_FILE_MAGIC   0x67676d6c // "ggml"
-#define GGML_FILE_VERSION 2
+#define GGML_FILE_MAGIC         0x67676d6c // "ggml"
+#define GGML_FILE_VERSION       2
 
 #define GGML_QNT_VERSION        2    // bump this on quantization format changes
 #define GGML_QNT_VERSION_FACTOR 1000 // do not change this
@@ -214,7 +214,7 @@ extern "C" {
     struct ggml_context;
     struct ggml_cgraph;
 
-    // NOTE: always add types at the end of the enum to keep backward compatibility
+    // note: always add types at the end of the enum to keep backward compatibility
     enum ggml_type {
         GGML_TYPE_F32     = 0,
         GGML_TYPE_F16     = 1,
@@ -286,6 +286,7 @@ extern "C" {
     };
 
     // model file types
+    // [DEPRECATED] will be removed in v2 [TAG_GGML_VERSION_MAJOR_UPDATE]
     enum ggml_ftype {
         GGML_FTYPE_UNKNOWN        = -1,
         GGML_FTYPE_ALL_F32        = 0,
@@ -319,6 +320,7 @@ extern "C" {
     };
 
     // available tensor operations:
+    // note: add new entries at the end of the enum. reorder (if needed) upon major version bumps [TAG_GGML_VERSION_MAJOR_UPDATE]
     enum ggml_op {
         GGML_OP_NONE = 0,
 
@@ -501,7 +503,7 @@ extern "C" {
         GGML_TRI_TYPE_UPPER_DIAG = 0,
         GGML_TRI_TYPE_UPPER      = 1,
         GGML_TRI_TYPE_LOWER_DIAG = 2,
-        GGML_TRI_TYPE_LOWER      = 3
+        GGML_TRI_TYPE_LOWER      = 3,
     };
 
     struct ggml_init_params {
@@ -547,6 +549,8 @@ extern "C" {
     };
 
     static const size_t GGML_TENSOR_SIZE = sizeof(struct ggml_tensor);
+
+    typedef struct ggml_tensor * ggml_tensor_t;
 
     // Abort callback
     // If not NULL, called before ggml computation
@@ -1316,12 +1320,6 @@ extern "C" {
 
     // indirect matrix multiplication
     // an id of -1 skips the slot and zeroes the matching row of the result
-    //
-    // [TAG_MUL_MAT_ID_DUPLICATE_ID]
-    // note: this op has undefined behaviour if a given `a` is referenced more than once for a given `b`
-    //       (i.e. duplicate experts per token are not guaranteed to be supported in all backends)
-    // TODO: add backend support: https://github.com/ggml-org/llama.cpp/pull/29998#issuecomment-6153742533
-    // the CPU backend skips negative ids, their rows of the result are zero
     GGML_API struct ggml_tensor * ggml_mul_mat_id(
             struct ggml_context * ctx,
             struct ggml_tensor  * as,
@@ -2287,12 +2285,12 @@ extern "C" {
 
     // TODO: needs to be adapted to ggml_flash_attn_ext
     GGML_API struct ggml_tensor * ggml_flash_attn_back(
-           struct ggml_context * ctx,
-           struct ggml_tensor  * q,
-           struct ggml_tensor  * k,
-           struct ggml_tensor  * v,
-           struct ggml_tensor  * d,
-           bool                  masked);
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * d,
+            bool                  masked);
 
     GGML_API struct ggml_tensor * ggml_ssm_conv(
             struct ggml_context * ctx,
@@ -2332,13 +2330,13 @@ extern "C" {
 
     GGML_API struct ggml_tensor * ggml_unary(
             struct ggml_context * ctx,
-             struct ggml_tensor * a,
-             enum ggml_unary_op op);
+            struct ggml_tensor  * a,
+            enum ggml_unary_op    op);
 
     GGML_API struct ggml_tensor * ggml_unary_inplace(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * a,
-        enum ggml_unary_op op);
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            enum ggml_unary_op    op);
 
     // used in sam
     GGML_API struct ggml_tensor * ggml_get_rel_pos(
@@ -2402,12 +2400,12 @@ extern "C" {
     *  TODO: currently only lower, right, non-unitriangular variant is implemented
     */
     GGML_API struct ggml_tensor * ggml_solve_tri(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * a,
-        struct ggml_tensor  * b,
-        bool                  left,
-        bool                  lower,
-        bool                  uni);
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            bool                  left,
+            bool                  lower,
+            bool                  uni);
 
     // TODO: add ggml_gated_delta_net_set_bcast() to be able to configure Q, K broadcast type: tiled vs interleaved [TAG_GGML_GDN_BCAST]
     // ref: https://github.com/ggml-org/llama.cpp/pull/19468#discussion_r2786394306
@@ -2445,11 +2443,11 @@ extern "C" {
     //   ne3 % ne33 == 0
     //
     GGML_API struct ggml_tensor * ggml_lightning_indexer(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * q,
-        struct ggml_tensor  * k,
-        struct ggml_tensor  * weights,
-        struct ggml_tensor  * mask);
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * weights,
+            struct ggml_tensor  * mask);
 
     // DeepSeek V4 hyper-connections (ref. https://arxiv.org/pdf/2512.24880)
     // In short these operations are replacements for the original residual connection (x = transformer(x) + x)
@@ -2530,54 +2528,54 @@ extern "C" {
     // n_tasks == GGML_N_TASKS_MAX means to use max number of tasks
 
     GGML_API struct ggml_tensor * ggml_map_custom1(
-            struct ggml_context   * ctx,
-            struct ggml_tensor    * a,
-            ggml_custom1_op_t       fun,
-            int                     n_tasks,
-            void                  * userdata);
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            ggml_custom1_op_t     fun,
+            int                   n_tasks,
+            void                * userdata);
 
     GGML_API struct ggml_tensor * ggml_map_custom1_inplace(
-            struct ggml_context   * ctx,
-            struct ggml_tensor    * a,
-            ggml_custom1_op_t       fun,
-            int                     n_tasks,
-            void                  * userdata);
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            ggml_custom1_op_t     fun,
+            int                   n_tasks,
+            void                * userdata);
 
     GGML_API struct ggml_tensor * ggml_map_custom2(
-            struct ggml_context   * ctx,
-            struct ggml_tensor    * a,
-            struct ggml_tensor    * b,
-            ggml_custom2_op_t       fun,
-            int                     n_tasks,
-            void                  * userdata);
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            ggml_custom2_op_t     fun,
+            int                   n_tasks,
+            void                * userdata);
 
     GGML_API struct ggml_tensor * ggml_map_custom2_inplace(
-            struct ggml_context   * ctx,
-            struct ggml_tensor    * a,
-            struct ggml_tensor    * b,
-            ggml_custom2_op_t       fun,
-            int                     n_tasks,
-            void                  * userdata);
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            ggml_custom2_op_t     fun,
+            int                   n_tasks,
+            void                * userdata);
 
     GGML_API struct ggml_tensor * ggml_map_custom3(
-            struct ggml_context   * ctx,
-            struct ggml_tensor    * a,
-            struct ggml_tensor    * b,
-            struct ggml_tensor    * c,
-            ggml_custom3_op_t       fun,
-            int                     n_tasks,
-            void                  * userdata);
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * c,
+            ggml_custom3_op_t     fun,
+            int                   n_tasks,
+            void                * userdata);
 
     GGML_API struct ggml_tensor * ggml_map_custom3_inplace(
-            struct ggml_context   * ctx,
-            struct ggml_tensor    * a,
-            struct ggml_tensor    * b,
-            struct ggml_tensor    * c,
-            ggml_custom3_op_t       fun,
-            int                     n_tasks,
-            void                  * userdata);
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * c,
+            ggml_custom3_op_t     fun,
+            int                   n_tasks,
+            void                * userdata);
 
-    typedef void (*ggml_custom_op_t)(struct ggml_tensor * dst , int ith, int nth, void * userdata);
+    typedef void (*ggml_custom_op_t)(struct ggml_tensor * dst, int ith, int nth, void * userdata);
 
     GGML_API struct ggml_tensor * ggml_custom_4d(
             struct ggml_context * ctx,
@@ -2633,10 +2631,10 @@ extern "C" {
 
     // stochastic gradient descent step (with weight decay)
     GGML_API struct ggml_tensor * ggml_opt_step_sgd(
-        struct ggml_context * ctx,
-        struct ggml_tensor *  a,
-        struct ggml_tensor *  grad,
-        struct ggml_tensor *  sgd_params); // alpha, weight decay
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * grad,
+            struct ggml_tensor  * sgd_params); // alpha, weight decay
 
     // build forward multiple tensors and select one of them for computing
     // this is useful for creating graphs that have constant topology but compute different things based on the input
@@ -2671,19 +2669,19 @@ extern "C" {
             int                   idx);
 
     GGML_API void ggml_build_forward_expand(
-            struct ggml_cgraph * cgraph,
-            struct ggml_tensor * tensor);
+            struct ggml_cgraph  * cgraph,
+            struct ggml_tensor  * tensor);
 
     // add the tensor and its parents to the graph without marking them for compute
     // the flag is set later, when the tensor is reached from a node that computes
     GGML_API void ggml_build_forward_order(
-            struct ggml_cgraph * cgraph,
-            struct ggml_tensor * tensor);
+            struct ggml_cgraph  * cgraph,
+            struct ggml_tensor  * tensor);
 
     GGML_API void ggml_build_backward_expand(
-        struct ggml_context *  ctx,        // context for gradient computation
-        struct ggml_cgraph  *  cgraph,
-        struct ggml_tensor  ** grad_accs);
+            struct ggml_context *  ctx,        // context for gradient computation
+            struct ggml_cgraph  *  cgraph,
+            struct ggml_tensor  ** grad_accs);
 
     // graph allocation in a context
     GGML_API struct ggml_cgraph * ggml_new_graph       (struct ggml_context * ctx); // size = GGML_DEFAULT_GRAPH_SIZE, grads = false

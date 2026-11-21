@@ -1,7 +1,7 @@
 import { createRawSnippet } from 'svelte';
 import { describe, expect, it, vi } from 'vite-plus/test';
 import { render } from 'vitest-browser-svelte';
-import Button from './button.svelte';
+import Button from '../../src/lib/components/ui/button/button.svelte';
 
 function textSnippet(text: string) {
 	return createRawSnippet(() => ({
@@ -31,7 +31,7 @@ describe('Button', () => {
 		const el = screen.getByRole('button', { name: 'danger' }).element() as HTMLElement;
 
 		expect(el.dataset.variant).toBe('destructive');
-		expect(el.className).toContain('bg-(--button-danger-background)');
+		expect(el.className).toContain('bg-(--action-danger)');
 	});
 
 	it('renders an anchor when href is set', async () => {

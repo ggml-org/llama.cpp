@@ -695,6 +695,7 @@ struct vk_op_col2im_1d_push_constants {
     uint32_t K;
     int32_t  stride;
     int32_t  p0;
+    uint32_t src_offset;
 };
 
 struct vk_op_conv_transpose_1d_push_constants {
@@ -787,6 +788,7 @@ struct vk_op_gated_delta_net_push_constants {
     uint32_t n_seqs;
     uint32_t s_off;
     uint32_t sq1, sq2, sq3;
+    uint32_t sk1, sk2, sk3;
     uint32_t sv1, sv2, sv3;
     uint32_t sb1, sb2, sb3;
     uint32_t neq1, rq3;
@@ -1025,6 +1027,15 @@ template <> inline void init_pushconst_tensor_offsets(ggml_backend_vk_context * 
 template <> inline void init_pushconst_tensor_offsets(ggml_backend_vk_context * ctx, vk_op_fwht_push_constants &p, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * src3, ggml_tensor * dst) {
     p.src_offset = get_misalign_bytes(ctx, src0) / ggml_type_size(src0->type);
     p.dst_offset = get_misalign_bytes(ctx, dst)  / ggml_type_size(dst->type);
+
+    GGML_UNUSED(src1);
+    GGML_UNUSED(src2);
+    GGML_UNUSED(src3);
+}
+
+template <> inline void init_pushconst_tensor_offsets(ggml_backend_vk_context * ctx, vk_op_col2im_1d_push_constants &p, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * src3, ggml_tensor * dst) {
+    p.src_offset = get_misalign_bytes(ctx, src0) / ggml_type_size(src0->type);
+    GGML_ASSERT(get_misalign_bytes(ctx, dst) == 0);
 
     GGML_UNUSED(src1);
     GGML_UNUSED(src2);

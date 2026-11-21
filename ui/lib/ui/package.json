@@ -1,6 +1,6 @@
 {
 	"name": "@ggml-org/llama-ui",
-	"version": "0.4.0",
+	"version": "0.5.0",
 	"description": "Shared UI library for llama.cpp frontend apps.",
 	"license": "MIT",
 	"repository": {
@@ -53,6 +53,10 @@
 		"./models": {
 			"types": "./dist/components/models/index.d.ts",
 			"svelte": "./dist/components/models/index.js"
+		},
+		"./voice": {
+			"types": "./dist/components/voice/index.d.ts",
+			"svelte": "./dist/components/voice/index.js"
 		},
 		"./utils": {
 			"types": "./dist/components/ui/utils.d.ts",

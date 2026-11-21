@@ -277,10 +277,7 @@ ggml_tensor * llama_model_granite_swa::graph::build_layer_ffn(
                 hparams.expert_weights_scale,
                 LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
                 il,
-                nullptr, model.layers[il].ffn_gate_up_exps,
-                model.layers[il].ffn_up_exps_s,
-                model.layers[il].ffn_gate_exps_s,
-                model.layers[il].ffn_down_exps_s);
+                nullptr, model.layers[il].ffn_gate_up_exps);
         cb(moe_out, "ffn_moe_out", il);
 
         // For Granite MoE Shared - gate+up kept fused in ffn_up_shexp

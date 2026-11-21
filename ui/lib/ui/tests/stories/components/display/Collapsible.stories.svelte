@@ -18,7 +18,7 @@
 {#snippet section(open: boolean)}
 	<Collapsible.Root class="w-72 space-y-2" {open}>
 		<div class="flex items-center justify-between">
-			<span class="text-sm font-medium">Advanced sampling</span>
+			<span class="text-label">Advanced sampling</span>
 
 			<Collapsible.Trigger>
 				{#snippet child({ props })}
@@ -29,12 +29,12 @@
 			</Collapsible.Trigger>
 		</div>
 
-		<div class="rounded-md border px-4 py-2 font-mono text-sm">temperature 0.8</div>
+		<div class="rounded-md border px-4 py-2 font-mono text-body-sm">temperature 0.8</div>
 
 		<Collapsible.Content class="space-y-2">
-			<div class="rounded-md border px-4 py-2 font-mono text-sm">top_p 0.95</div>
+			<div class="rounded-md border px-4 py-2 font-mono text-body-sm">top_p 0.95</div>
 
-			<div class="rounded-md border px-4 py-2 font-mono text-sm">min_p 0.05</div>
+			<div class="rounded-md border px-4 py-2 font-mono text-body-sm">min_p 0.05</div>
 		</Collapsible.Content>
 	</Collapsible.Root>
 {/snippet}

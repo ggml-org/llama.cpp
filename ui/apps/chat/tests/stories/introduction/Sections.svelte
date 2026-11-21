@@ -25,7 +25,7 @@
 	{#each sections as section (section.name)}
 		<li class="section">
 			<span
-				class={['glyph rounded-control bg-surface-lifted elevated-control', { here: section.here }]}
+				class={['glyph rounded-md bg-(--surface-lifted) elevated-control', { here: section.here }]}
 			>
 				{#if section.icon}
 					<section.icon aria-hidden="true" size={16} />
@@ -36,7 +36,7 @@
 				{/if}
 			</span>
 
-			<div class="body card-surface rounded-card">
+			<div class="body card-surface rounded-xl">
 				<p class="head">
 					<b>{section.name}</b>
 
@@ -48,7 +48,7 @@
 				{#if section.pages.length}
 					<ul class="pages">
 						{#each section.pages as page (page)}
-							<li class="page rounded-control">{page}</li>
+							<li class="page rounded-md">{page}</li>
 						{/each}
 					</ul>
 				{/if}

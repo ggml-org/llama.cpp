@@ -157,9 +157,9 @@
 
 	{#if isComplete}
 		<div class="rounded-md bg-muted/50 px-3 py-2">
-			<p class="text-xs text-muted-foreground">Resolved URI:</p>
+			<p class="text-caption text-muted-foreground">Resolved URI:</p>
 
-			<p class="mt-0.5 font-mono text-xs break-all">{expandedUri}</p>
+			<p class="mt-0.5 font-mono text-caption break-all">{expandedUri}</p>
 		</div>
 	{/if}
 

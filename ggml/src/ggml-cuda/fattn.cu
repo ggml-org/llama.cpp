@@ -17,15 +17,6 @@ static __global__ void flash_attn_mask_to_sparse_indices(
 
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int values_per_lane = 8;
-    using lane_mask_t = std::conditional_t<warp_size == 64, uint64_t, uint32_t>;
-    constexpr uint64_t ballot_mask = ~(lane_mask_t)0;
-    const auto popc = [](const lane_mask_t mask) {
-        if constexpr (warp_size == 64) {
-            return __popcll(mask);
-        } else {
-            return __popc(mask);
-        }
-    };
     const int tid      = threadIdx.x;
     const int warp     = tid / warp_size;
     const int lane     = tid % warp_size;
@@ -48,7 +39,7 @@ static __global__ void flash_attn_mask_to_sparse_indices(
     __syncthreads();
 
     for (int i0 = 0; i0 < ne30; i0 += blockDim.x*values_per_lane) {
-        lane_mask_t selected_warp[values_per_lane];
+        ggml_cuda_thread_mask_t selected_warp[values_per_lane];
         int warp_count = 0;
 #pragma unroll
         for (int item = 0; item < values_per_lane; ++item) {
@@ -60,8 +51,8 @@ static __global__ void flash_attn_mask_to_sparse_indices(
                     selected |= (!oob || q < q1 - q0) && isfinite(__half2float(mask[q*s31 + i]));
                 }
             }
-            selected_warp[item] = (lane_mask_t)ggml_cuda_ballot((int) selected, ballot_mask);
-            warp_count += popc(selected_warp[item]);
+            selected_warp[item] = ggml_cuda_ballot((int) selected);
+            warp_count += ggml_cuda_popc(selected_warp[item]);
         }
 
         if (lane == 0) {
@@ -81,16 +72,16 @@ static __global__ void flash_attn_mask_to_sparse_indices(
         }
         __syncthreads();
 
-        const lane_mask_t lane_mask = lane == 0 ? 0 : ((lane_mask_t)1 << lane) - 1;
+        const ggml_cuda_thread_mask_t lane_mask = lane == 0 ? 0 : ((ggml_cuda_thread_mask_t)1 << lane) - 1;
         int warp_item_offset = 0;
 #pragma unroll
         for (int item = 0; item < values_per_lane; ++item) {
             const int i = i0 + (warp*values_per_lane + item)*warp_size + lane;
-            const int dst = row_count + warp_offsets[warp] + warp_item_offset + popc(selected_warp[item] & lane_mask);
-            if ((selected_warp[item] & ((lane_mask_t)1 << lane)) && dst < n_kv_max) {
+            const int dst = row_count + warp_offsets[warp] + warp_item_offset + ggml_cuda_popc(selected_warp[item] & lane_mask);
+            if ((selected_warp[item] & ((ggml_cuda_thread_mask_t)1 << lane)) && dst < n_kv_max) {
                 indices[dst] = i;
             }
-            warp_item_offset += popc(selected_warp[item]);
+            warp_item_offset += ggml_cuda_popc(selected_warp[item]);
         }
         __syncthreads();
 

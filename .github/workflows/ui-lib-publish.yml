@@ -18,6 +18,10 @@ name: UI Lib Publish
 # ui-lib-publish.yml, and Environment left blank - this job names no environment, since creating
 # one needs repository admin. Merging this workflow before that exists leaves the publish step
 # red on master: the release is late rather than wrong, and re-running the job publishes it.
+#
+# The unscoped llama-ui is an alias: once the scoped package is out, the same build is renamed
+# and published again at the same version, so the two never drift. It is a package of its own
+# on npm, and needs the same trusted publisher set on it.
 
 on:
   workflow_dispatch:
@@ -128,26 +132,29 @@ jobs:
           npm publish --access public --provenance --ignore-scripts --tag "$TAG"
         working-directory: ${{ env.LIB_DIR }}
 
-      - name: Verify it landed
-        if: github.ref == 'refs/heads/master' && steps.version.outputs.should_publish == 'true' && inputs.dry_run != true
+      - name: Rename the build to the unscoped alias
+        # after the scoped publish, so nothing above sees the changed name. Not on a PR: the
+        # advisory check there is about the version, which the alias shares.
+        if: github.event_name != 'pull_request'
+        run: node scripts/alias-package.mjs
+        working-directory: ${{ env.LIB_DIR }}
+
+      - name: Compare the alias with npm
+        id: alias
+        if: github.event_name != 'pull_request'
+        run: node scripts/npm-version-check.mjs
+        working-directory: ${{ env.LIB_DIR }}
+
+      - name: Publish the alias
+        # its own verdict rather than the scoped one's, so an alias that fell behind catches up
+        # on the next run instead of waiting for a bump
+        if: github.ref == 'refs/heads/master' && steps.alias.outputs.should_publish == 'true' && inputs.dry_run != true
         env:
-          NAME: ${{ steps.version.outputs.name }}
-          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.alias.outputs.tag }}
         run: |
-          # the registry can serve a new version some time after publish returns, so retry rather
-          # than call a release that worked a failure
-          for try in 1 2 3 4 5 6; do
-            seen=$(npm view "$NAME@$VERSION" version 2>/dev/null || true)
-            if [ "$seen" = "$VERSION" ]; then
-              echo "$NAME@$VERSION is on npm"
-              npm view "$NAME@$VERSION" dist-tags version dist.integrity
-              exit 0
-            fi
-            echo "not visible yet (attempt $try of 6)"
-            sleep 10
-          done
-          echo "::error::$NAME@$VERSION published without error but is not visible on the registry after 6 attempts. The publish did not fail: check the package on npm before publishing again."
-          exit 1
+          test -d dist || { echo "dist/ is missing: nothing was built, so nothing is published"; exit 1; }
+          npm publish --access public --provenance --ignore-scripts --tag "$TAG"
+        working-directory: ${{ env.LIB_DIR }}
 
       - name: Report
         if: always()
@@ -161,6 +168,11 @@ jobs:
           NOTE: ${{ steps.version.outputs.note }}
           SHOULD: ${{ steps.version.outputs.should_publish }}
           DRY: ${{ inputs.dry_run }}
+          ALIAS_LATEST: ${{ steps.alias.outputs.latest }}
+          ALIAS_VERDICT: ${{ steps.alias.outputs.verdict || 'not reached' }}
+          ALIAS_NOTE: ${{ steps.alias.outputs.note }}
+          ALIAS_SHOULD: ${{ steps.alias.outputs.should_publish }}
+          EVENT: ${{ github.event_name }}
         run: |
           if [ "$DRY" = "true" ]; then published="no (dry run)"
           elif [ "$SHOULD" = "true" ]; then published=yes
@@ -176,6 +188,23 @@ jobs:
             echo "| published | $published |"
             echo
             echo "> $NOTE"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$EVENT" = "pull_request" ] && exit 0
+          if [ "$DRY" = "true" ]; then published="no (dry run)"
+          elif [ "$ALIAS_SHOULD" = "true" ]; then published=yes
+          else published=no
+          fi
+          {
+            echo
+            echo "### llama-ui (alias) $VERSION"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| npm latest was | ${ALIAS_LATEST:-nothing published yet} |"
+            echo "| verdict | \`$ALIAS_VERDICT\` |"
+            echo "| published | $published |"
+            echo
+            echo "> $ALIAS_NOTE"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Mind the verdict

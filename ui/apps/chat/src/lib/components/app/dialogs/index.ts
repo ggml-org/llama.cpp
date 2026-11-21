@@ -502,26 +502,16 @@ export { default as DialogMcpResourcesBrowser } from './DialogMcpResourcesBrowse
 export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.svelte';
 
 /**
- * **DialogMermaidPreview** - Full-screen Mermaid diagram preview with zoom and pan
+ * **DialogMermaidPreview** - Full-screen diagram preview with zoom and pan
  *
- * Full-screen dialog for previewing Mermaid diagrams with interactive controls.
- * Supports mouse wheel zoom, drag-to-pan, and toolbar buttons for zoom in/out,
- * fit to view, and reset.
- *
- * **Architecture:**
- * - Uses UI dialog components (`Dialog.Root`, `Dialog.Overlay`, `Dialog.Content`)
- *   for consistent styling, animations, and accessibility
- * - CSS transform-based zoom and pan (no external dependencies)
- * - Pointer events for cross-device drag support (mouse + touch)
- * - Wheel events for zoom-to-cursor functionality
+ * Opens a diagram in a dialog that fills the window on every device, with
+ * `MermaidPreview` inside it for zooming and panning.
  *
  * **Features:**
- * - Scroll wheel zoom centered on cursor position
- * - Click and drag to pan the diagram
- * - Toolbar with zoom in, zoom out, fit to view, reset controls
- * - Zoom percentage indicator
- * - Keyboard accessible close button
- * - Dark/light theme support
+ * - Full screen, keeping clear of the status bar and home indicator on phones
+ * - Zoom around the pointer or the middle of the screen, pan by drag or pinch
+ * - Zoom percentage, reset (fit) and download controls
+ * - Keyboard accessible close button, Escape closes
  *
  * @example
  * ```svelte

@@ -81,10 +81,10 @@
 	role="group"
 >
 	{#if editCtx.isEditing}
-		<div class="w-full max-w-[80%]">
+		<div class="w-full max-w-4/5">
 			<textarea
 				bind:this={textareaElement}
-				class="min-h-[60px] w-full resize-none rounded-2xl px-3 py-2 text-base md:text-sm {INPUT_CLASSES}"
+				class="min-h-15 w-full resize-none rounded-2xl px-3 py-2 text-body md:text-body-sm {INPUT_CLASSES}"
 				oninput={(e) => {
 					autoResizeTextarea(e.currentTarget);
 					editCtx.setContent(e.currentTarget.value);
@@ -116,7 +116,7 @@
 		</div>
 	{:else}
 		{#if message.content.trim()}
-			<div class="relative max-w-[80%]">
+			<div class="relative max-w-4/5">
 				<button
 					class="group/expand block w-full text-left {!isExpanded && showExpandButton
 						? 'cursor-pointer'
@@ -125,9 +125,9 @@
 					type="button"
 				>
 					<Card
-						class="overflow-y-auto rounded-[1.125rem] !border-2 !border-dashed !border-border/50 bg-muted px-3.75 py-1.5 data-[multiline]:py-2.5"
+						class="overflow-y-auto rounded-2xl !border-2 !border-dashed !border-border/50 bg-muted px-3.75 py-1.5 data-[multiline]:py-2.5"
 						data-multiline={isMultiline ? '' : undefined}
-						style="border: 2px dashed hsl(var(--border)); max-height: var(--max-message-height); overflow-wrap: anywhere; word-break: break-word;"
+						style="border: 2px dashed hsl(var(--line-default)); max-height: var(--max-message-height); overflow-wrap: anywhere; word-break: break-word;"
 					>
 						<div
 							class="relative transition-all duration-300 {isExpanded
@@ -159,7 +159,7 @@
 									class="pointer-events-none absolute right-0 bottom-4 left-0 flex justify-center opacity-0 transition-opacity group-hover/expand:opacity-100"
 								>
 									<Button
-										class="rounded-full px-4 py-1.5 text-xs shadow-(--elevation-surface)"
+										class="rounded-full px-4 py-1.5 text-caption shadow-(--elevation-surface)"
 										size="sm"
 										variant="outline"
 									>
@@ -172,7 +172,7 @@
 						{#if isExpanded && showExpandButton}
 							<div class="mb-2 flex justify-center">
 								<Button
-									class="rounded-full px-4 py-1.5 text-xs"
+									class="rounded-full px-4 py-1.5 text-caption"
 									onclick={(e) => {
 										e.stopPropagation();
 										toggleExpand();
@@ -190,7 +190,7 @@
 		{/if}
 
 		{#if message.timestamp}
-			<div class="max-w-[80%]">
+			<div class="max-w-4/5">
 				<ChatMessageActionIcons actionsPosition="right" justify="end" />
 			</div>
 		{/if}
