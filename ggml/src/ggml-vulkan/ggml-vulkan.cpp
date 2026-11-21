@@ -14129,24 +14129,8 @@ void ggml_backend_vk_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_ten
         return;
     }
 
-    const size_t begin = vk_tensor_offset(tensor) + tensor->view_offs + offset;
-    const size_t end   = begin + size;
-
-    // vkCmdFillBuffer requires a 4-byte aligned offset and size, so write the unaligned ends as bytes
-    const size_t begin_aligned = std::min(GGML_PAD(begin, 4), end);
-    const size_t end_aligned   = std::max(end & ~(size_t) 3, begin_aligned);
-
-    const uint8_t edge[4] = { value, value, value, value };
-    if (begin_aligned > begin) {
-        ggml_vk_buffer_write(buf, begin, edge, begin_aligned - begin);
-    }
-    if (end_aligned > begin_aligned) {
-        uint32_t val32 = (uint32_t)value * 0x01010101;
-        ggml_vk_buffer_memset(buf, begin_aligned, val32, end_aligned - begin_aligned);
-    }
-    if (end > end_aligned) {
-        ggml_vk_buffer_write(buf, end_aligned, edge, end - end_aligned);
-    }
+    uint32_t val32 = (uint32_t)value * 0x01010101;
+    ggml_vk_buffer_memset(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, val32, size);
 }
 
 void ggml_backend_vk_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
