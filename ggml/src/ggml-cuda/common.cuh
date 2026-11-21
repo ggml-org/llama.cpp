@@ -521,6 +521,7 @@ template<typename T, int width>
 static __device__ __forceinline__ T warp_reduce_sum_impl(T x) {
 #if defined(GGML_USE_HIP)
     if constexpr (width <= 64 && width <= ggml_cuda_get_physical_warp_size()) {
+        static_assert(width >= 2 && width <= 64 && (width & (width - 1)) == 0, "width must be a power of two between 2 and 64");
         x += ggml_hip_dpp_update<GGML_HIP_DPP_QUAD_PERM_1032>(x);
         if constexpr (width >= 4) {
             x += ggml_hip_dpp_update<GGML_HIP_DPP_QUAD_PERM_2301>(x);
