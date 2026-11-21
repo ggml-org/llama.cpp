@@ -21,20 +21,15 @@ void llama_model_hrm_text::load_arch_hparams(llama_model_loader & ml) {
     GGML_ASSERT(hparams.n_hrm_l_cycles > 0);
 
     // the GGUF block count is the expanded cache-slot count
-    // Each factor is uint32_t; their true product can reach 2^96, so a single uint64_t
-    // accumulator can wrap (e.g. 6*1824726041*1684887088 == 2^64 + 32). Validate the
-    // product in 128-bit and require it to equal block_count exactly.
-    const __uint128_t n_slot_wide =
-        (__uint128_t) hparams.n_hrm_layers_per_stack *
-        (__uint128_t) hparams.n_hrm_h_cycles *
-        (__uint128_t) ((uint64_t) hparams.n_hrm_l_cycles + 1);
-    const uint64_t n_slot = (uint64_t) n_slot_wide;
-    if (n_slot_wide != (__uint128_t) hparams.n_layer() ||
-        hparams.n_hrm_layers_per_stack >= hparams.n_layer()) {
+    // check the product in 128-bit so the uint32 factors cannot wrap
+    const __uint128_t n_slot = (__uint128_t) hparams.n_hrm_layers_per_stack *
+                               (__uint128_t) hparams.n_hrm_h_cycles *
+                               ((uint64_t) hparams.n_hrm_l_cycles + 1);
+    if (hparams.n_hrm_layers_per_stack >= hparams.n_layer() || n_slot != hparams.n_layer()) {
         throw std::runtime_error(format(
             "hrm: cache-slot count %" PRIu64 " (layers_per_stack %u, h_cycles %u, l_cycles %u) "
             "does not match block_count %u",
-            n_slot, hparams.n_hrm_layers_per_stack, hparams.n_hrm_h_cycles,
+            (uint64_t) n_slot, hparams.n_hrm_layers_per_stack, hparams.n_hrm_h_cycles,
             hparams.n_hrm_l_cycles, hparams.n_layer()));
     }
 
@@ -70,10 +65,10 @@ void llama_model_hrm_text::load_arch_tensors(llama_model_loader &) {
 
     for (int h = 0; h < (int) hparams.n_hrm_h_cycles; ++h) {
         for (int l = 0; l < (int) hparams.n_hrm_l_cycles + 1; ++l) {
-            // 64-bit index arithmetic, bounded to the layers vector.
-            const int64_t slot_base_i64 =
-                ((int64_t) h * ((int64_t) hparams.n_hrm_l_cycles + 1) + l) * lps;
-            GGML_ASSERT(slot_base_i64 >= 0 && slot_base_i64 + lps <= (int64_t) hparams.n_layer());
+            const int64_t slot_base_i64 = ((int64_t) h * ((int64_t) hparams.n_hrm_l_cycles + 1) + l) * lps;
+            if (slot_base_i64 < 0 || slot_base_i64 + lps > hparams.n_layer()) {
+                throw std::runtime_error("hrm: cache slot out of bounds");
+            }
             const int slot_base = (int) slot_base_i64;
             const int blk_base  = l == (int) hparams.n_hrm_l_cycles ? lps : 0;
 
@@ -201,18 +196,20 @@ llama_model_hrm_text::graph::graph(const llm_graph_params & params) :
 
     for (uint32_t h = 0; h < model.hparams.n_hrm_h_cycles; ++h) {
         for (uint32_t l = 0; l < model.hparams.n_hrm_l_cycles; ++l) {
-            const int64_t slot_base_i64 =
-                ((int64_t) h * ((int64_t) model.hparams.n_hrm_l_cycles + 1) + l) * model.hparams.n_hrm_layers_per_stack;
-            GGML_ASSERT(slot_base_i64 >= 0 && slot_base_i64 < (int64_t) model.hparams.n_layer());
+            const int64_t slot_base_i64 = ((int64_t) h * ((int64_t) model.hparams.n_hrm_l_cycles + 1) + l) * model.hparams.n_hrm_layers_per_stack;
+            if (slot_base_i64 < 0 || slot_base_i64 >= model.hparams.n_layer()) {
+                throw std::runtime_error("hrm: cache slot out of bounds");
+            }
             const int slot_base = (int) slot_base_i64;
 
             zL = build_stack(inp_attn, inp_pos, ggml_add(ctx0, zH, zL), slot_base);
         }
 
-        const int64_t slot_base_i64 =
-            ((int64_t) h * ((int64_t) model.hparams.n_hrm_l_cycles + 1) + model.hparams.n_hrm_l_cycles) *
-            model.hparams.n_hrm_layers_per_stack;
-        GGML_ASSERT(slot_base_i64 >= 0 && slot_base_i64 < (int64_t) model.hparams.n_layer());
+        const int64_t slot_base_i64 = ((int64_t) h * ((int64_t) model.hparams.n_hrm_l_cycles + 1) + model.hparams.n_hrm_l_cycles) *
+                                      model.hparams.n_hrm_layers_per_stack;
+        if (slot_base_i64 < 0 || slot_base_i64 >= model.hparams.n_layer()) {
+            throw std::runtime_error("hrm: cache slot out of bounds");
+        }
         const int slot_base = (int) slot_base_i64;
 
         zH = build_stack(inp_attn, inp_pos, ggml_add(ctx0, zH, zL), slot_base);
