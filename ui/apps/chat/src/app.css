@@ -153,14 +153,14 @@
 		overscroll-behavior: none;
 	}
 
-	/* Global scrollbar styling - visible only on hover */
+	/* Global scrollbar styling */
 	* {
 		scrollbar-width: thin;
-		scrollbar-color: transparent transparent;
+		scrollbar-color: color-mix(in oklch, var(--fg-muted) 15%, transparent) transparent;
 	}
 
 	*:hover {
-		scrollbar-color: color-mix(in oklch, var(--fg-muted) 30%, transparent) transparent;
+		scrollbar-color: color-mix(in oklch, var(--fg-muted) 50%, transparent) transparent;
 	}
 
 	*::-webkit-scrollbar {
@@ -173,13 +173,14 @@
 	}
 
 	*::-webkit-scrollbar-thumb {
-		background: transparent;
+		background: color-mix(in oklch, var(--fg-muted) 15%, transparent);
 		border-radius: 3px;
-		transition: background 0.2s ease;
+		transition: background 0.2s ease 0.8s;
 	}
 
 	*:hover::-webkit-scrollbar-thumb {
-		background: color-mix(in oklch, var(--fg-muted) 30%, transparent);
+		background: color-mix(in oklch, var(--fg-muted) 50%, transparent);
+        transition-delay: 0s;
 	}
 
 	*::-webkit-scrollbar-thumb:hover {
