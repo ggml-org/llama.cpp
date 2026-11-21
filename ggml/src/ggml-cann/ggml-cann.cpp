@@ -42,6 +42,7 @@
 #include <queue>
 #include <unordered_map>
 #include <unordered_set>
+#include <algorithm>
 #include <vector>
 
 #define GGML_COMMON_DECL_C
@@ -1063,6 +1064,539 @@ static void ggml_backend_cann_transform_back_q8_0(const ggml_tensor * tensor, co
     }
 }
 
+// Q4_K is affine (w = d*sc*q - dmin*m per 32-weight sub-block), so unlike
+// Q4_0/Q8_0 it needs an antiquant OFFSET array in addition to the scale array.
+// Transformed layout, all three regions contiguous:
+//   [ int4 quants: n/2 ][ f16 scale: (n/32)*2 ][ f16 offset: (n/32)*2 ]
+// That is 0.625 bytes/weight vs 0.5625 native, which is why
+// ggml_backend_cann_buffer_type_get_alloc_size needs a Q4_K case.
+#define QK_K_GROUP 32
+
+static size_t ggml_cann_q4_k_quant_bytes(int64_t n_elems) {
+    return (size_t) n_elems / 2;
+}
+
+static size_t ggml_cann_q4_k_scale_bytes(int64_t n_elems) {
+    return (size_t) (n_elems / QK_K_GROUP) * sizeof(uint16_t);
+}
+
+// Bytes of original super-block header (d, dmin, scales[12]) kept per 256
+// weights so that transform_back can restore the block exactly. Without this,
+// d/dmin/scales are unrecoverable from f16 scale+offset alone (only their
+// products are), and ggml_backend_tensor_get would hand out garbage -- which is
+// not academic: ggml_backend_compare_graph_backend seeds the CPU reference by
+// reading tensors back out of the CANN buffer.
+#define Q4_K_HDR_BYTES 16
+
+static size_t ggml_cann_q4_k_hdr_bytes(int64_t n_elems) {
+    return (size_t) (n_elems / QK_K) * Q4_K_HDR_BYTES;
+}
+
+// Unpack the two 6-bit values (scale, min) for sub-block j of a Q4_K
+// super-block. Mirrors get_scale_min_k4() in ggml-quants.c:877 exactly; keep
+// them in sync.
+static inline void ggml_cann_q4_k_scale_min(int j, const uint8_t * q, uint8_t * d, uint8_t * m) {
+    if (j < 4) {
+        *d = q[j] & 63;
+        *m = q[j + 4] & 63;
+    } else {
+        *d = (q[j + 4] & 0xF) | ((q[j - 4] >> 6) << 4);
+        *m = (q[j + 4] >> 4) | ((q[j - 0] >> 6) << 4);
+    }
+}
+
+/**
+ * @brief Transform quantized Q4_K tensor data into a format suitable for CANN
+ * processing.
+ *
+ * Splits ggml's array-of-super-blocks into separate quant/scale/offset regions
+ * and converts the quants to signed int4, matching what
+ * aclnnWeightQuantBatchMatmulV2 expects with antiquantGroupSize = 32.
+ *
+ * @param tensor Pointer to the tensor information.
+ * @param src Pointer to the source data in Q4_K format.
+ * @param dst Pointer to the destination buffer where transformed data will be
+ * stored.
+ */
+static void ggml_backend_cann_transform_q4_k(const ggml_tensor * tensor, const void * src, void * dst) {
+    const int64_t n_elems      = ggml_nelements(tensor);
+    const int64_t superblocks  = n_elems / QK_K;
+    const size_t  quant_bytes  = ggml_cann_q4_k_quant_bytes(n_elems);
+    const size_t  scale_bytes  = ggml_cann_q4_k_scale_bytes(n_elems);
+
+    uint8_t *  quant_offset  = (uint8_t *) dst;
+    uint16_t * scale_offset  = (uint16_t *) ((char *) dst + quant_bytes);
+    uint16_t * offset_offset = (uint16_t *) ((char *) dst + quant_bytes + scale_bytes);
+    uint8_t *  hdr_offset    = (uint8_t *) dst + quant_bytes + 2 * scale_bytes;
+
+    // one super-block = 256 weights = 8 sub-blocks of 32
+    uint8_t q_unsigned[QK_K];
+
+    for (int64_t i = 0; i < superblocks; i++) {
+        const block_q4_K * sb = (const block_q4_K *) ((const char *) src + i * sizeof(block_q4_K));
+
+        const float d    = ggml_fp16_to_fp32(sb->d);
+        const float dmin = ggml_fp16_to_fp32(sb->dmin);
+
+        // keep d, dmin, scales[12] verbatim for an exact transform_back
+        memcpy(hdr_offset + i * Q4_K_HDR_BYTES, &sb->d, sizeof(ggml_half));
+        memcpy(hdr_offset + i * Q4_K_HDR_BYTES + 2, &sb->dmin, sizeof(ggml_half));
+        memcpy(hdr_offset + i * Q4_K_HDR_BYTES + 4, sb->scales, K_SCALE_SIZE);
+
+        // Unpack quants in sequential weight order. Q4_K packs each 64-weight
+        // half as 32 bytes: low nibbles are weights 0..31, high nibbles are
+        // weights 32..63 (ggml-quants.c:1539-1546). This differs from Q4_0's
+        // 16/16 split, so the loop cannot be copied from the Q4_0 transform.
+        {
+            const uint8_t * q = sb->qs;
+            int             w = 0;
+            for (int chunk = 0; chunk < QK_K; chunk += 64) {
+                for (int l = 0; l < 32; ++l) {
+                    q_unsigned[w + l] = q[l] & 0xF;
+                }
+                for (int l = 0; l < 32; ++l) {
+                    q_unsigned[w + 32 + l] = q[l] >> 4;
+                }
+                q += 32;
+                w += 64;
+            }
+        }
+
+        for (int j = 0; j < QK_K / QK_K_GROUP; j++) {
+            uint8_t sc, m;
+            ggml_cann_q4_k_scale_min(j, sb->scales, &sc, &m);
+
+            float scale = d * (float) sc;
+            float dm    = dmin * (float) m;
+
+            // Signed int4 stores s = q - 8, so the target is
+            //   w = d*sc*q - dmin*m = scale*(s + 8) - dm
+            // aclnnWeightQuantBatchMatmulV2 antiquantises as
+            //   w = (weight + antiquantOffset) * antiquantScale
+            // (measured: assuming w = scale*s + offset instead gave NMSE
+            // 1e-2..5e-2 on every q4_K case, which is this formula's error term
+            // (8*scale - dm)*(scale - 1); with the form below it passes).
+            // Hence offset = 8 - dm/scale, which needs the scale==0 guard below.
+            float offset = 8.0f - dm / scale;
+
+            // scale == 0 (sc == 0) means every weight in this sub-block equals
+            // -dm; ggml's quantizer explicitly skips these (ggml-quants.c:1508).
+            // The quants are then free, so pin them to s = 0 and carry the
+            // constant in the offset: (0 + -dm) * 1 == -dm. This also avoids the
+            // division above. The same guard covers an offset that would exceed
+            // f16 range, where dm/scale is too large to represent.
+            if (scale == 0.0f || !(fabsf(offset) < 60000.0f)) {
+                for (int l = 0; l < QK_K_GROUP; l++) {
+                    q_unsigned[j * QK_K_GROUP + l] = 8;  // s = 0
+                }
+                scale  = 1.0f;
+                offset = -dm;
+            }
+
+            scale_offset[i * (QK_K / QK_K_GROUP) + j]  = ggml_fp32_to_fp16(scale);
+            offset_offset[i * (QK_K / QK_K_GROUP) + j] = ggml_fp32_to_fp16(offset);
+        }
+
+        // pack 2 weights per byte, low nibble = even index (same order the
+        // Q4_0 transform uses)
+        uint8_t * out = quant_offset + i * (QK_K / 2);
+        for (int l = 0; l < QK_K / 2; l++) {
+            out[l] = (uint8_t) ((q_unsigned[2 * l] & 0x0F) | (q_unsigned[2 * l + 1] << 4));
+        }
+    }
+
+    // uint4 -> int4: flipping each nibble's sign bit maps 0..15 to -8..7
+    for (uint8_t * p = (uint8_t *) dst; p < (uint8_t *) dst + quant_bytes; p++) {
+        *p ^= 0x88;
+    }
+}
+
+/**
+ * @brief Transform CANN processed data back into quantized Q4_K format.
+ *
+ * Only needed so get_tensor() on a Q4_K weight round-trips. The scale/min
+ * 6-bit packing cannot be recovered exactly from f16 scale+offset, so this
+ * reconstructs the quants and leaves the super-block scales as recovered
+ * approximations.
+ *
+ * @param tensor Pointer to the tensor information.
+ * @param src Pointer to the source buffer containing transformed data.
+ * @param dst Pointer to the destination buffer where Q4_K data will be stored.
+ */
+static void ggml_backend_cann_transform_back_q4_k(const ggml_tensor * tensor, const void * src, void * dst) {
+    const int64_t n_elems     = ggml_nelements(tensor);
+    const int64_t superblocks = n_elems / QK_K;
+    const size_t  quant_bytes = ggml_cann_q4_k_quant_bytes(n_elems);
+    const size_t  scale_bytes = ggml_cann_q4_k_scale_bytes(n_elems);
+
+    const uint8_t * quant_offset = (const uint8_t *) src;
+    const uint8_t * hdr_offset   = (const uint8_t *) src + quant_bytes + 2 * scale_bytes;
+
+    for (int64_t i = 0; i < superblocks; i++) {
+        block_q4_K * sb = (block_q4_K *) ((char *) dst + i * sizeof(block_q4_K));
+
+        // d, dmin and the packed 6-bit scales come back verbatim.
+        memcpy(&sb->d, hdr_offset + i * Q4_K_HDR_BYTES, sizeof(ggml_half));
+        memcpy(&sb->dmin, hdr_offset + i * Q4_K_HDR_BYTES + 2, sizeof(ggml_half));
+        memcpy(sb->scales, hdr_offset + i * Q4_K_HDR_BYTES + 4, K_SCALE_SIZE);
+
+        uint8_t q_unsigned[QK_K];
+        for (int l = 0; l < QK_K / 2; l++) {
+            const uint8_t b        = quant_offset[i * (QK_K / 2) + l] ^ 0x88;
+            q_unsigned[2 * l]      = b & 0x0F;
+            q_unsigned[2 * l + 1]  = b >> 4;
+        }
+
+        uint8_t * q = sb->qs;
+        int       w = 0;
+        for (int chunk = 0; chunk < QK_K; chunk += 64) {
+            for (int l = 0; l < 32; ++l) {
+                q[l] = (uint8_t) ((q_unsigned[w + l] & 0xF) | (q_unsigned[w + 32 + l] << 4));
+            }
+            q += 32;
+            w += 64;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Q5_K and IQ4_XS: same mechanism as Q4_K, but 5-bit/codebook quants do not fit
+// int4, so they are stored as int8. Layouts (per n weights):
+//   Q5_K:   [ int8 n ][ f16 scale n/32*2 ][ f16 offset n/32*2 ][ 16B hdr /256 ]
+//   IQ4_XS: [ int8 n ][ f16 scale n/32*2 ][ 8B hdr /256 ]
+// IQ4_XS needs no offset: its 4 bits index kvalues_iq4nl[16], whose values span
+// -127..113 and therefore fit int8 exactly, giving a purely symmetric scale.
+#define IQ4_XS_HDR_BYTES 8
+
+// IQ4_NL/IQ4_XS codebook. Not visible here: ggml-common.h emits its tables only
+// under GGML_COMMON_IMPL_*, and this file defines GGML_COMMON_DECL_C.
+// Keep in sync with ggml-common.h.
+static const int8_t ggml_cann_kvalues_iq4nl[16] = { -127, -104, -83, -65, -49, -35, -22, -10,
+                                                       1,   13,  25,  38,  53,  69,  89, 113 };
+
+static size_t ggml_cann_int8_quant_bytes(int64_t n_elems) {
+    return (size_t) n_elems;
+}
+
+/**
+ * @brief Transform quantized Q5_K tensor data for CANN processing.
+ *
+ * Q5_K is affine per 32-weight sub-block with 5-bit quants:
+ *   w = d*sc_j*q - dmin*m_j,  q in 0..31  (ggml-quants.c:1743-1752)
+ * Stored as int8 s = q - 16, so with the op's (weight + offset) * scale rule:
+ *   scale_j = d*sc_j,  offset_j = 16 - (dmin*m_j)/scale_j
+ */
+static void ggml_backend_cann_transform_q5_k(const ggml_tensor * tensor, const void * src, void * dst) {
+    const int64_t n_elems     = ggml_nelements(tensor);
+    const int64_t superblocks = n_elems / QK_K;
+    const size_t  quant_bytes = ggml_cann_int8_quant_bytes(n_elems);
+    const size_t  scale_bytes = ggml_cann_q4_k_scale_bytes(n_elems);
+
+    int8_t *   quant_offset  = (int8_t *) dst;
+    uint16_t * scale_offset  = (uint16_t *) ((char *) dst + quant_bytes);
+    uint16_t * offset_offset = (uint16_t *) ((char *) dst + quant_bytes + scale_bytes);
+    uint8_t *  hdr_offset    = (uint8_t *) dst + quant_bytes + 2 * scale_bytes;
+
+    uint8_t q_unsigned[QK_K];
+
+    for (int64_t i = 0; i < superblocks; i++) {
+        const block_q5_K * sb = (const block_q5_K *) ((const char *) src + i * sizeof(block_q5_K));
+
+        const float d    = ggml_fp16_to_fp32(sb->d);
+        const float dmin = ggml_fp16_to_fp32(sb->dmin);
+
+        memcpy(hdr_offset + i * Q4_K_HDR_BYTES, &sb->d, sizeof(ggml_half));
+        memcpy(hdr_offset + i * Q4_K_HDR_BYTES + 2, &sb->dmin, sizeof(ggml_half));
+        memcpy(hdr_offset + i * Q4_K_HDR_BYTES + 4, sb->scales, K_SCALE_SIZE);
+
+        // Unpack 5-bit quants: low nibble from qs, 5th bit from qh. Bit index
+        // walks u1=1,u2=2 shifted left by 2 per 64-weight chunk.
+        {
+            const uint8_t * ql = sb->qs;
+            const uint8_t * qh = sb->qh;
+            uint8_t         u1 = 1, u2 = 2;
+            int             w = 0;
+            for (int chunk = 0; chunk < QK_K; chunk += 64) {
+                for (int l = 0; l < 32; ++l) {
+                    q_unsigned[w + l] = (uint8_t) ((ql[l] & 0xF) + ((qh[l] & u1) ? 16 : 0));
+                }
+                for (int l = 0; l < 32; ++l) {
+                    q_unsigned[w + 32 + l] = (uint8_t) ((ql[l] >> 4) + ((qh[l] & u2) ? 16 : 0));
+                }
+                ql += 32;
+                w  += 64;
+                u1 <<= 2;
+                u2 <<= 2;
+            }
+        }
+
+        for (int j = 0; j < QK_K / QK_K_GROUP; j++) {
+            uint8_t sc, m;
+            ggml_cann_q4_k_scale_min(j, sb->scales, &sc, &m);
+
+            float scale  = d * (float) sc;
+            float dm     = dmin * (float) m;
+            float offset = 16.0f - dm / scale;
+
+            if (scale == 0.0f || !(fabsf(offset) < 60000.0f)) {
+                // constant sub-block (= -dm); see the Q4_K equivalent
+                for (int l = 0; l < QK_K_GROUP; l++) {
+                    q_unsigned[j * QK_K_GROUP + l] = 16;  // s = 0
+                }
+                scale  = 1.0f;
+                offset = -dm;
+            }
+
+            scale_offset[i * (QK_K / QK_K_GROUP) + j]  = ggml_fp32_to_fp16(scale);
+            offset_offset[i * (QK_K / QK_K_GROUP) + j] = ggml_fp32_to_fp16(offset);
+        }
+
+        for (int l = 0; l < QK_K; l++) {
+            quant_offset[i * QK_K + l] = (int8_t) ((int) q_unsigned[l] - 16);
+        }
+    }
+}
+
+static void ggml_backend_cann_transform_back_q5_k(const ggml_tensor * tensor, const void * src, void * dst) {
+    const int64_t n_elems     = ggml_nelements(tensor);
+    const int64_t superblocks = n_elems / QK_K;
+    const size_t  quant_bytes = ggml_cann_int8_quant_bytes(n_elems);
+    const size_t  scale_bytes = ggml_cann_q4_k_scale_bytes(n_elems);
+
+    const int8_t *  quant_offset = (const int8_t *) src;
+    const uint8_t * hdr_offset   = (const uint8_t *) src + quant_bytes + 2 * scale_bytes;
+
+    for (int64_t i = 0; i < superblocks; i++) {
+        block_q5_K * sb = (block_q5_K *) ((char *) dst + i * sizeof(block_q5_K));
+
+        memcpy(&sb->d, hdr_offset + i * Q4_K_HDR_BYTES, sizeof(ggml_half));
+        memcpy(&sb->dmin, hdr_offset + i * Q4_K_HDR_BYTES + 2, sizeof(ggml_half));
+        memcpy(sb->scales, hdr_offset + i * Q4_K_HDR_BYTES + 4, K_SCALE_SIZE);
+
+        uint8_t q_unsigned[QK_K];
+        for (int l = 0; l < QK_K; l++) {
+            q_unsigned[l] = (uint8_t) ((int) quant_offset[i * QK_K + l] + 16);
+        }
+
+        memset(sb->qh, 0, QK_K / 8);
+        uint8_t * ql = sb->qs;
+        uint8_t * qh = sb->qh;
+        uint8_t   u1 = 1, u2 = 2;
+        int       w  = 0;
+        for (int chunk = 0; chunk < QK_K; chunk += 64) {
+            for (int l = 0; l < 32; ++l) {
+                const uint8_t lo = q_unsigned[w + l];
+                const uint8_t hi = q_unsigned[w + 32 + l];
+                ql[l] = (uint8_t) ((lo & 0xF) | ((hi & 0xF) << 4));
+                if (lo & 16) {
+                    qh[l] |= u1;
+                }
+                if (hi & 16) {
+                    qh[l] |= u2;
+                }
+            }
+            ql += 32;
+            w  += 64;
+            u1 <<= 2;
+            u2 <<= 2;
+        }
+    }
+}
+
+/**
+ * @brief Transform quantized IQ4_XS tensor data for CANN processing.
+ *
+ * IQ4_XS is NOT affine in q: the 4 bits index kvalues_iq4nl[16]
+ * (ggml-quants.c:2751-2760). Storing kvalues[q] directly as int8 is exact, so
+ * this becomes a plain symmetric per-32 quantisation with scale d*(ls-32) and
+ * no offset.
+ */
+static void ggml_backend_cann_transform_iq4_xs(const ggml_tensor * tensor, const void * src, void * dst) {
+    const int64_t n_elems     = ggml_nelements(tensor);
+    const int64_t superblocks = n_elems / QK_K;
+    const size_t  quant_bytes = ggml_cann_int8_quant_bytes(n_elems);
+    const size_t  scale_bytes = ggml_cann_q4_k_scale_bytes(n_elems);
+
+    int8_t *   quant_offset = (int8_t *) dst;
+    uint16_t * scale_offset = (uint16_t *) ((char *) dst + quant_bytes);
+    uint8_t *  hdr_offset   = (uint8_t *) dst + quant_bytes + scale_bytes;
+
+    for (int64_t i = 0; i < superblocks; i++) {
+        const block_iq4_xs * sb = (const block_iq4_xs *) ((const char *) src + i * sizeof(block_iq4_xs));
+
+        const float d = ggml_fp16_to_fp32(sb->d);
+
+        memcpy(hdr_offset + i * IQ4_XS_HDR_BYTES, &sb->d, sizeof(ggml_half));
+        memcpy(hdr_offset + i * IQ4_XS_HDR_BYTES + 2, &sb->scales_h, sizeof(uint16_t));
+        memcpy(hdr_offset + i * IQ4_XS_HDR_BYTES + 4, sb->scales_l, QK_K / 64);
+
+        const uint8_t * qs = sb->qs;
+        for (int ib = 0; ib < QK_K / 32; ++ib) {
+            const int ls = ((sb->scales_l[ib / 2] >> (4 * (ib % 2))) & 0xf) | (((sb->scales_h >> (2 * ib)) & 3) << 4);
+            const float dl = d * (float) (ls - 32);
+
+            int8_t * out = quant_offset + i * QK_K + ib * 32;
+            for (int j = 0; j < 16; ++j) {
+                out[j]      = ggml_cann_kvalues_iq4nl[qs[j] & 0xf];
+                out[j + 16] = ggml_cann_kvalues_iq4nl[qs[j] >> 4];
+            }
+            qs += 16;
+
+            scale_offset[i * (QK_K / QK_K_GROUP) + ib] = ggml_fp32_to_fp16(dl);
+        }
+    }
+}
+
+static void ggml_backend_cann_transform_back_iq4_xs(const ggml_tensor * tensor, const void * src, void * dst) {
+    const int64_t n_elems     = ggml_nelements(tensor);
+    const int64_t superblocks = n_elems / QK_K;
+    const size_t  quant_bytes = ggml_cann_int8_quant_bytes(n_elems);
+    const size_t  scale_bytes = ggml_cann_q4_k_scale_bytes(n_elems);
+
+    const int8_t *  quant_offset = (const int8_t *) src;
+    const uint8_t * hdr_offset   = (const uint8_t *) src + quant_bytes + scale_bytes;
+
+    // reverse map from codebook value back to its 4-bit index
+    int8_t inv[256];
+    memset(inv, 0, sizeof(inv));
+    for (int v = 0; v < 16; v++) {
+        inv[(uint8_t) ggml_cann_kvalues_iq4nl[v]] = (int8_t) v;
+    }
+
+    for (int64_t i = 0; i < superblocks; i++) {
+        block_iq4_xs * sb = (block_iq4_xs *) ((char *) dst + i * sizeof(block_iq4_xs));
+
+        memcpy(&sb->d, hdr_offset + i * IQ4_XS_HDR_BYTES, sizeof(ggml_half));
+        memcpy(&sb->scales_h, hdr_offset + i * IQ4_XS_HDR_BYTES + 2, sizeof(uint16_t));
+        memcpy(sb->scales_l, hdr_offset + i * IQ4_XS_HDR_BYTES + 4, QK_K / 64);
+
+        uint8_t * qs = sb->qs;
+        for (int ib = 0; ib < QK_K / 32; ++ib) {
+            const int8_t * in = quant_offset + i * QK_K + ib * 32;
+            for (int j = 0; j < 16; ++j) {
+                const uint8_t lo = (uint8_t) inv[(uint8_t) in[j]];
+                const uint8_t hi = (uint8_t) inv[(uint8_t) in[j + 16]];
+                qs[j] = (uint8_t) ((lo & 0xf) | (hi << 4));
+            }
+            qs += 16;
+        }
+    }
+}
+
+
+/**
+ * @brief Transform quantized IQ4_NL tensor data for CANN processing.
+ *
+ * IQ4_NL is the 32-element sibling of IQ4_XS: one f16 scale per 32 weights and
+ * 4-bit indices into the same kvalues_iq4nl codebook (ggml-quants.c:2723-2737).
+ * Storing kvalues[q] as int8 is exact and symmetric, so there is no offset. The
+ * group scale IS d, copied as raw f16 bits, so no header is needed either and
+ * transform_back is exact.
+ * Layout: [ int8 quants n ][ f16 scale n/32*2 ]
+ */
+static void ggml_backend_cann_transform_iq4_nl(const ggml_tensor * tensor, const void * src, void * dst) {
+    const int64_t n_elems     = ggml_nelements(tensor);
+    const int64_t blocks      = n_elems / QK4_NL;
+    const size_t  quant_bytes = ggml_cann_int8_quant_bytes(n_elems);
+
+    int8_t *   quant_offset = (int8_t *) dst;
+    uint16_t * scale_offset = (uint16_t *) ((char *) dst + quant_bytes);
+
+    for (int64_t i = 0; i < blocks; i++) {
+        const block_iq4_nl * b = (const block_iq4_nl *) ((const char *) src + i * sizeof(block_iq4_nl));
+
+        // raw f16 bits, so the scale round-trips bit-exactly
+        memcpy(&scale_offset[i], &b->d, sizeof(uint16_t));
+
+        int8_t * out = quant_offset + i * QK4_NL;
+        for (int j = 0; j < QK4_NL / 2; ++j) {
+            out[j]                = ggml_cann_kvalues_iq4nl[b->qs[j] & 0xf];
+            out[j + QK4_NL / 2]   = ggml_cann_kvalues_iq4nl[b->qs[j] >> 4];
+        }
+    }
+}
+
+static void ggml_backend_cann_transform_back_iq4_nl(const ggml_tensor * tensor, const void * src, void * dst) {
+    const int64_t n_elems     = ggml_nelements(tensor);
+    const int64_t blocks      = n_elems / QK4_NL;
+    const size_t  quant_bytes = ggml_cann_int8_quant_bytes(n_elems);
+
+    const int8_t *   quant_offset = (const int8_t *) src;
+    const uint16_t * scale_offset = (const uint16_t *) ((const char *) src + quant_bytes);
+
+    int8_t inv[256];
+    memset(inv, 0, sizeof(inv));
+    for (int v = 0; v < 16; v++) {
+        inv[(uint8_t) ggml_cann_kvalues_iq4nl[v]] = (int8_t) v;
+    }
+
+    for (int64_t i = 0; i < blocks; i++) {
+        block_iq4_nl * b = (block_iq4_nl *) ((char *) dst + i * sizeof(block_iq4_nl));
+        memcpy(&b->d, &scale_offset[i], sizeof(uint16_t));
+
+        const int8_t * in = quant_offset + i * QK4_NL;
+        for (int j = 0; j < QK4_NL / 2; ++j) {
+            const uint8_t lo = (uint8_t) inv[(uint8_t) in[j]];
+            const uint8_t hi = (uint8_t) inv[(uint8_t) in[j + QK4_NL / 2]];
+            b->qs[j] = (uint8_t) ((lo & 0xf) | (hi << 4));
+        }
+    }
+}
+
+
+// Types that cannot use the antiquant path (per-16 scales, or codebook formats)
+// are dequantised to f16 at upload and use the ordinary fp matmul. Exact, at
+// 2 bytes/weight. The original blocks are kept after the f16 data so
+// transform_back is bit-exact.
+// Layout: [ f16 weights n*2 ][ original block bytes ]
+static size_t ggml_cann_f16_bytes(int64_t n_elems) {
+    return (size_t) n_elems * sizeof(uint16_t);
+}
+
+/**
+ * @brief Dequantise a quantized tensor to f16 for the fp matmul path.
+ *
+ * Defers to ggml's own ggml_get_type_traits(type)->to_float rather than
+ * unpacking each format by hand: that cannot drift from the reference, and
+ * IQ3_S would otherwise need the iq3s_grid and kmask_iq2xs tables, which
+ * ggml-common.h only emits under GGML_COMMON_IMPL_* (this file defines just
+ * GGML_COMMON_DECL_C).
+ */
+static void ggml_backend_cann_transform_dequant_f16(const ggml_tensor * tensor, const void * src, void * dst) {
+    const int64_t n_elems  = ggml_nelements(tensor);
+    const size_t  f16_size = ggml_cann_f16_bytes(n_elems);
+    const size_t  src_size = ggml_nbytes(tensor);
+
+    const struct ggml_type_traits * tt = ggml_get_type_traits(tensor->type);
+    GGML_ASSERT(tt->to_float != nullptr);
+
+    const int64_t blck = ggml_blck_size(tensor->type);
+    GGML_ASSERT(n_elems % blck == 0);
+
+    // chunked: a whole-tensor f32 scratch would be several GB for a large
+    // embedding. Chunks stay on block boundaries, as to_float requires.
+    const int64_t chunk_blocks = std::max<int64_t>(1, (1 << 20) / blck);
+    const int64_t chunk_elems  = chunk_blocks * blck;
+
+    std::vector<float> tmp(chunk_elems);
+
+    for (int64_t off = 0; off < n_elems; off += chunk_elems) {
+        const int64_t cur = std::min<int64_t>(chunk_elems, n_elems - off);
+        const char *  sp  = (const char *) src + (off / blck) * ggml_type_size(tensor->type);
+        tt->to_float(sp, tmp.data(), cur);
+        ggml_fp32_to_fp16_row(tmp.data(), (ggml_fp16_t *) ((char *) dst + off * sizeof(uint16_t)), cur);
+    }
+
+    // preserve the original blocks for an exact transform_back
+    memcpy((char *) dst + f16_size, src, src_size);
+}
+
+static void ggml_backend_cann_transform_back_dequant_f16(const ggml_tensor * tensor, const void * src, void * dst) {
+    const int64_t n_elems  = ggml_nelements(tensor);
+    const size_t  f16_size = ggml_cann_f16_bytes(n_elems);
+    memcpy(dst, (const char *) src + f16_size, ggml_nbytes(tensor));
+}
+
 /**
  * @brief Transform tensor data based on its type for CANN processing.
  *
@@ -1082,6 +1616,33 @@ static void ggml_backend_cann_transform(const ggml_tensor * tensor, const void *
             break;
         case GGML_TYPE_Q8_0:
             ggml_backend_cann_transform_q8_0(tensor, src, dst);
+            break;
+        case GGML_TYPE_Q4_K:
+            ggml_backend_cann_transform_q4_k(tensor, src, dst);
+            break;
+        case GGML_TYPE_Q5_K:
+            ggml_backend_cann_transform_q5_k(tensor, src, dst);
+            break;
+        case GGML_TYPE_IQ4_XS:
+            ggml_backend_cann_transform_iq4_xs(tensor, src, dst);
+            break;
+        case GGML_TYPE_IQ4_NL:
+            ggml_backend_cann_transform_iq4_nl(tensor, src, dst);
+            break;
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+            ggml_backend_cann_transform_dequant_f16(tensor, src, dst);
             break;
         default:
             break;
@@ -1108,6 +1669,33 @@ static void ggml_backend_cann_transform_back(const ggml_tensor * tensor, void * 
         case GGML_TYPE_Q8_0:
             ggml_backend_cann_transform_back_q8_0(tensor, src, dst);
             break;
+        case GGML_TYPE_Q4_K:
+            ggml_backend_cann_transform_back_q4_k(tensor, src, dst);
+            break;
+        case GGML_TYPE_Q5_K:
+            ggml_backend_cann_transform_back_q5_k(tensor, src, dst);
+            break;
+        case GGML_TYPE_IQ4_XS:
+            ggml_backend_cann_transform_back_iq4_xs(tensor, src, dst);
+            break;
+        case GGML_TYPE_IQ4_NL:
+            ggml_backend_cann_transform_back_iq4_nl(tensor, src, dst);
+            break;
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+            ggml_backend_cann_transform_back_dequant_f16(tensor, src, dst);
+            break;
         default:
             break;
     }
@@ -1126,9 +1714,76 @@ static bool need_transform(ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
             return true;
         default:
             return false;
+    }
+}
+
+/**
+ * @brief Size of a quantized tensor after ggml_backend_cann_transform().
+ *
+ * Q4_0 and Q8_0 transform to exactly their native size, which is why the
+ * allocator never had to care. Q4_K does not: it gains a second (offset) array,
+ * so 0.625 bytes/weight against 0.5625 native. Returns 0 for types that are not
+ * transformed.
+ */
+static size_t ggml_cann_transformed_size(ggml_type type, int64_t n_elems) {
+    switch (type) {
+        case GGML_TYPE_Q4_0:
+            return (size_t) n_elems / 2 + (size_t) (n_elems / QK4_0) * sizeof(uint16_t);
+        case GGML_TYPE_Q8_0:
+            return (size_t) n_elems + (size_t) (n_elems / QK8_0) * sizeof(uint16_t);
+        case GGML_TYPE_Q4_K:
+            return ggml_cann_q4_k_quant_bytes(n_elems) + 2 * ggml_cann_q4_k_scale_bytes(n_elems) +
+                   ggml_cann_q4_k_hdr_bytes(n_elems);
+        case GGML_TYPE_Q5_K:
+            // int8 quants + f16 scale + f16 offset + 16B header per super-block
+            return ggml_cann_int8_quant_bytes(n_elems) + 2 * ggml_cann_q4_k_scale_bytes(n_elems) +
+                   ggml_cann_q4_k_hdr_bytes(n_elems);
+        case GGML_TYPE_IQ4_XS:
+            // int8 quants + f16 scale (no offset: symmetric) + 8B header
+            return ggml_cann_int8_quant_bytes(n_elems) + ggml_cann_q4_k_scale_bytes(n_elems) +
+                   (size_t) (n_elems / QK_K) * IQ4_XS_HDR_BYTES;
+        case GGML_TYPE_IQ4_NL:
+            // int8 quants + f16 scale; scale is d itself so no header needed
+            return ggml_cann_int8_quant_bytes(n_elems) +
+                   (size_t) (n_elems / QK4_NL) * sizeof(uint16_t);
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+            // dequantised f16 + the original blocks kept for exact readback
+            return ggml_cann_f16_bytes(n_elems) +
+                   (size_t) (n_elems / ggml_blck_size(type)) * ggml_type_size(type);
+        default:
+            return 0;
     }
 }
 
@@ -1298,9 +1953,14 @@ static void ggml_backend_cann_buffer_set_tensor(ggml_backend_buffer_t buffer,
     // Single-shot write (full tensor at once): handle directly without tracking overhead
     if (offset == 0 && size == ggml_nbytes(tensor)) {
         if (is_quantized) {
-            void * transform_buffer = malloc(size);
+            // The transformed layout can be LARGER than ggml_nbytes (Q4_K gains
+            // an offset array), so size the staging buffer and the upload by the
+            // transformed size, not by the source size.
+            const size_t xfrm_size = std::max(size, ggml_cann_transformed_size(tensor->type, ggml_nelements(tensor)));
+            void *       transform_buffer = malloc(xfrm_size);
             ggml_backend_cann_transform(tensor, data, transform_buffer);
-            ACL_CHECK(aclrtMemcpy(tensor->data, size, transform_buffer, size, ACL_MEMCPY_HOST_TO_DEVICE));
+            ACL_CHECK(
+                aclrtMemcpy(tensor->data, xfrm_size, transform_buffer, xfrm_size, ACL_MEMCPY_HOST_TO_DEVICE));
             free(transform_buffer);
         } else {
             // NZ weight
@@ -1332,9 +1992,13 @@ static void ggml_backend_cann_buffer_set_tensor(ggml_backend_buffer_t buffer,
     // All chunks received: perform deferred transform/conversion
     if (tracker->bytes_written >= tracker->total_bytes) {
         if (is_quantized) {
-            void * transform_buffer = malloc(tracker->total_bytes);
+            // See the single-shot path: transformed size may exceed total_bytes.
+            const size_t xfrm_size =
+                std::max(tracker->total_bytes, ggml_cann_transformed_size(tensor->type, ggml_nelements(tensor)));
+            void * transform_buffer = malloc(xfrm_size);
             ggml_backend_cann_transform(tensor, tracker->host_buffer.data(), transform_buffer);
-            ACL_CHECK(aclrtMemcpy(tensor->data, tracker->total_bytes, transform_buffer, tracker->total_bytes, ACL_MEMCPY_HOST_TO_DEVICE));
+            ACL_CHECK(
+                aclrtMemcpy(tensor->data, xfrm_size, transform_buffer, xfrm_size, ACL_MEMCPY_HOST_TO_DEVICE));
             free(transform_buffer);
         }
 
@@ -1375,8 +2039,13 @@ static void ggml_backend_cann_buffer_get_tensor(ggml_backend_buffer_t buffer,
     if (!need_transform(tensor->type)) {
         ACL_CHECK(aclrtMemcpy(data, size, (char *) tensor->data + offset, size, ACL_MEMCPY_DEVICE_TO_HOST));
     } else {
-        void * transform_buffer = malloc(size);
-        ACL_CHECK(aclrtMemcpy(transform_buffer, size, (char *) tensor->data + offset, size, ACL_MEMCPY_DEVICE_TO_HOST));
+        // The transformed layout can exceed ggml_nbytes (Q4_K keeps extra
+        // scale/offset/header regions past that point), so read back the full
+        // transformed size or transform_back sees uninitialized memory.
+        const size_t xfrm_size = std::max(size, ggml_cann_transformed_size(tensor->type, ggml_nelements(tensor)));
+        void *       transform_buffer = malloc(xfrm_size);
+        ACL_CHECK(aclrtMemcpy(transform_buffer, xfrm_size, (char *) tensor->data + offset, xfrm_size,
+                              ACL_MEMCPY_DEVICE_TO_HOST));
         ggml_backend_cann_transform_back(tensor, transform_buffer, data);
         free(transform_buffer);
     }
@@ -1567,6 +2236,11 @@ static size_t ggml_backend_cann_buffer_type_get_alloc_size(ggml_backend_buffer_t
         if (ne0 % MATRIX_ROW_PADDING != 0) {
             size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
         }
+        // Types whose transformed layout is larger than native (Q4_K) would
+        // otherwise overrun the allocation during set_tensor.
+        const size_t padded_elems = (size_t) size / ggml_type_size(tensor->type) * ggml_blck_size(tensor->type);
+        const size_t transformed  = ggml_cann_transformed_size(tensor->type, (int64_t) padded_elems);
+        size = std::max(size, transformed);
     } else if (weight_to_nz && tensor->type != GGML_TYPE_BF16
                && is_matmul_weight((const ggml_tensor *) tensor)) {
         // NZ format weight are not support quantized yet.
@@ -2461,6 +3135,55 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
 #else
                         // only support contiguous for quantized types.
                         return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
+#endif
+                    case GGML_TYPE_Q6_K:
+                    case GGML_TYPE_Q3_K:
+                    case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+#ifdef ASCEND_310P
+                        return false;
+#else
+                        // Per-16-scale and codebook formats cannot use the
+                        // antiquant path (it requires groupSize >= 32), so they are
+                        // dequantised to f16 at upload and use the fp matmul.
+                        // 2D only: that path does not broadcast. Keep this case
+                        // separate from the group below, which has a laxer
+                        // condition.
+                        // ggml_cann_mul_mat_dequant_f16 is strictly 2D and does
+                        // NOT broadcast, so src1 and dst must be 2D as well -
+                        // not just the weight. Checking only the weight let the
+                        // broadcast cases (nr=[2,1] / nr=[1,2]) through, where
+                        // it computed the first batch slice and silently
+                        // returned wrong values for the rest: 12 test-backend-ops
+                        // failures with NMSE ~0.7-3.2.
+                        return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]) &&
+                               op->src[0]->ne[0] % ggml_blck_size(op->src[0]->type) == 0 &&
+                               op->src[0]->ne[2] == 1 && op->src[0]->ne[3] == 1 &&
+                               op->src[1]->ne[2] == 1 && op->src[1]->ne[3] == 1 &&
+                               op->ne[2] == 1 && op->ne[3] == 1;
+#endif
+                    case GGML_TYPE_Q4_K:
+                    case GGML_TYPE_Q5_K:
+                    case GGML_TYPE_IQ4_XS:
+                    case GGML_TYPE_IQ4_NL:
+#ifdef ASCEND_310P
+                        return false;
+#else
+                        // Affine/codebook antiquant via aclnnWeightQuantBatchMatmulV2.
+                        // Use the type's own block size, not QK_K: IQ4_NL blocks are
+                        // 32 wide, so hardcoding 256 rejects every IQ4_NL weight in
+                        // models whose row size is not a multiple of 256.
+                        return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]) &&
+                               op->src[0]->ne[0] % ggml_blck_size(op->src[0]->type) == 0;
 #endif
                     default:
                         return false;

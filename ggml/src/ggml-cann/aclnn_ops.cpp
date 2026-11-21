@@ -2244,22 +2244,32 @@ static void ggml_cann_mul_mat_quant(ggml_backend_cann_context & ctx, ggml_tensor
     // HC is regarded as batch.
     // weight need transpose.
     float weight_elem_size;
-    if (type == GGML_TYPE_Q4_0) {
+    if (type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q4_K) {
         weight_elem_size = float(sizeof(uint8_t)) / 2;
-    } else if (type == GGML_TYPE_Q8_0) {
+    } else if (type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q5_K || type == GGML_TYPE_IQ4_XS || type == GGML_TYPE_IQ4_NL) {
         weight_elem_size = float(sizeof(uint8_t));
     } else {
-        GGML_ABORT("Only support Q4_0 and Q8_0 MUL_MAT");
+        GGML_ABORT("Only support Q4_0, Q8_0, Q4_K, Q5_K and IQ4_XS MUL_MAT");
     }
+
+    // Affine formats carry an antiquant offset array after the scales. Q4_0,
+    // Q8_0 and IQ4_XS are symmetric (IQ4_XS because its codebook values are
+    // stored directly as int8), so they pass nullptr for the offset.
+    const bool has_antiquant_offset = (type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K);
     float  weight_nb[]   = { src0->ne[0] * weight_elem_size, weight_elem_size };
     size_t weight_stride = src0->ne[1] * src0->ne[0] * weight_elem_size;
     size_t weight_size   = weight_stride * src0->ne[2] * src0->ne[3];
 
     // scale stored at the end of weight. Also need transpose.
+    // Q4_0, Q8_0 and Q4_K all group by 32, so QK8_0 is the right divisor for all.
     size_t scale_elem_size = sizeof(uint16_t);
     size_t scale_nb[]      = { src0->ne[0] / QK8_0 * scale_elem_size, scale_elem_size };
     size_t scale_stride    = src0->ne[1] * src0->ne[0] / QK8_0 * scale_elem_size;
     char * scale_offset    = (char *) src0->data + weight_size;
+
+    // Affine layout: [ quants ][ scales ][ offsets ], offsets same shape as scales.
+    size_t scale_size      = scale_stride * src0->ne[2] * src0->ne[3];
+    char * aq_offset_base  = has_antiquant_offset ? (char *) src0->data + weight_size + scale_size : nullptr;
 
     // input
     size_t               input_elem_size = sizeof(uint16_t);
@@ -2322,16 +2332,44 @@ static void ggml_cann_mul_mat_quant(ggml_backend_cann_context & ctx, ggml_tensor
             acl_tensor_ptr acl_scale_tensor =
                 ggml_cann_create_tensor(scale_offset + batch0 * scale_stride, ACL_FLOAT16, scale_elem_size, scale_ne,
                                         scale_nb, 2, ACL_FORMAT_ND, scale_ne_offset);
-            acl_tensor_ptr acl_output_tensor =
-                ggml_cann_create_tensor((char *) output_buffer + batch1 * output_stride, ACL_FLOAT16, output_elem_size,
-                                        output_ne, output_nb, 2, ACL_FORMAT_ND, output_ne_offset);
+            // A split's slice of output_buffer is strided (extent weight_ne[0],
+            // row stride dst->ne[0]), which this op rejects. Compute into
+            // contiguous scratch and copy the slice into place.
+            size_t split_out_nb[2] = { output_elem_size, (size_t) output_ne[0] * output_elem_size };
+            ggml_cann_pool_alloc split_out_allocator(ctx.pool());
+
+            acl_tensor_ptr acl_output_tensor;
+            if (split_size > 1) {
+                void * split_out = split_out_allocator.alloc(output_ne[0] * output_ne[1] * output_elem_size);
+                acl_output_tensor = ggml_cann_create_tensor(split_out, ACL_FLOAT16, output_elem_size, output_ne,
+                                                            split_out_nb, 2);
+            } else {
+                acl_output_tensor =
+                    ggml_cann_create_tensor((char *) output_buffer + batch1 * output_stride, ACL_FLOAT16,
+                                            output_elem_size, output_ne, output_nb, 2, ACL_FORMAT_ND,
+                                            output_ne_offset);
+            }
+            acl_tensor_ptr acl_offset_tensor;
+            if (has_antiquant_offset) {
+                acl_offset_tensor =
+                    ggml_cann_create_tensor(aq_offset_base + batch0 * scale_stride, ACL_FLOAT16, scale_elem_size,
+                                            scale_ne, scale_nb, 2, ACL_FORMAT_ND, scale_ne_offset);
+            }
+
             int64_t antiquantGroupSize = 0;
             if (src0->ne[0] > QK8_0) {
                 antiquantGroupSize = QK8_0;
             }
             GGML_CANN_CALL_ACLNN_OP(ctx, WeightQuantBatchMatmulV2, acl_input_tensor.get(), acl_weight_tensor.get(),
-                                    acl_scale_tensor.get(), nullptr, nullptr, nullptr, nullptr, antiquantGroupSize,
-                                    acl_output_tensor.get());
+                                    acl_scale_tensor.get(), acl_offset_tensor.get(), nullptr, nullptr, nullptr,
+                                    antiquantGroupSize, acl_output_tensor.get());
+
+            if (split_size > 1) {
+                acl_tensor_ptr acl_slice = ggml_cann_create_tensor(
+                    (char *) output_buffer + batch1 * output_stride, ACL_FLOAT16, output_elem_size, output_ne,
+                    output_nb, 2, ACL_FORMAT_ND, output_ne_offset);
+                GGML_CANN_CALL_ACLNN_OP(ctx, InplaceCopy, acl_slice.get(), acl_output_tensor.get());
+            }
 
             // other splits
             for (int64_t split = 1; split < split_size; split++) {
@@ -2340,7 +2378,10 @@ static void ggml_cann_mul_mat_quant(ggml_backend_cann_context & ctx, ggml_tensor
                     max_elem_size * (split + 1) > src0->ne[1] ? src0->ne[1] - (max_elem_size * split) : max_elem_size;
                 scale_ne_offset += scale_elem_size * scale_ne[0] * scale_ne[1];
                 scale_ne[0] = weight_ne[0];
-                output_ne_offset += output_elem_size * output_ne[0] * output_ne[1];
+                // Advance by rows: output_buffer is strided [dst->ne[0], dst->ne[1]],
+                // so split k starts at row k*max_elem_size. Advancing by a whole
+                // block is only equivalent when dst->ne[1] == 1.
+                output_ne_offset += output_elem_size * output_ne[0];
                 output_ne[0] = weight_ne[0];
 
                 acl_weight_tensor =
@@ -2349,12 +2390,26 @@ static void ggml_cann_mul_mat_quant(ggml_backend_cann_context & ctx, ggml_tensor
                 acl_scale_tensor =
                     ggml_cann_create_tensor(scale_offset + batch0 * scale_stride, ACL_FLOAT16, scale_elem_size,
                                             scale_ne, scale_nb, 2, ACL_FORMAT_ND, scale_ne_offset);
+                // contiguous scratch; a fresh allocator per split, since
+                // ggml_cann_pool_alloc holds exactly one allocation
+                ggml_cann_pool_alloc cur_out_allocator(ctx.pool());
+                void * split_out = cur_out_allocator.alloc(output_ne[0] * output_ne[1] * output_elem_size);
+                size_t cur_out_nb[2] = { output_elem_size, (size_t) output_ne[0] * output_elem_size };
                 acl_output_tensor =
-                    ggml_cann_create_tensor((char *) output_buffer + batch1 * output_stride, ACL_FLOAT16,
-                                            output_elem_size, output_ne, output_nb, 2, ACL_FORMAT_ND, output_ne_offset);
+                    ggml_cann_create_tensor(split_out, ACL_FLOAT16, output_elem_size, output_ne, cur_out_nb, 2);
+                if (has_antiquant_offset) {
+                    acl_offset_tensor =
+                        ggml_cann_create_tensor(aq_offset_base + batch0 * scale_stride, ACL_FLOAT16, scale_elem_size,
+                                                scale_ne, scale_nb, 2, ACL_FORMAT_ND, scale_ne_offset);
+                }
                 GGML_CANN_CALL_ACLNN_OP(ctx, WeightQuantBatchMatmulV2, acl_input_tensor.get(), acl_weight_tensor.get(),
-                                        acl_scale_tensor.get(), nullptr, nullptr, nullptr, nullptr, antiquantGroupSize,
-                                        acl_output_tensor.get());
+                                        acl_scale_tensor.get(), acl_offset_tensor.get(), nullptr, nullptr, nullptr,
+                                        antiquantGroupSize, acl_output_tensor.get());
+
+                acl_tensor_ptr acl_slice = ggml_cann_create_tensor(
+                    (char *) output_buffer + batch1 * output_stride, ACL_FLOAT16, output_elem_size, output_ne,
+                    output_nb, 2, ACL_FORMAT_ND, output_ne_offset);
+                GGML_CANN_CALL_ACLNN_OP(ctx, InplaceCopy, acl_slice.get(), acl_output_tensor.get());
             }
         }
     }
@@ -2375,6 +2430,53 @@ static void ggml_cann_mul_mat_quant(ggml_backend_cann_context & ctx, ggml_tensor
     }
 }
 
+
+/**
+ * @brief Matmul for a tensor whose weights were dequantised to f16 at upload.
+ *
+ * Used by Q6_K, whose per-16 scales rule out aclnnWeightQuantBatchMatmulV2
+ * (see ops/probe_groupsize.cpp). The ggml tensor still reports its quantized
+ * type, so tensor->nb describes the BLOCK layout and cannot be used -- the
+ * weight tensor is built from explicit f16 strides over the dequantised region
+ * that ggml_backend_cann_transform_q6_k wrote at the start of the buffer.
+ *
+ * Restricted to the 2D case, which is what supports_op allows; LLM weight
+ * matmuls are all 2D.
+ */
+static void ggml_cann_mul_mat_dequant_f16(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
+    ggml_tensor * src0 = dst->src[0];  // weight: f16 payload in a quantized-typed tensor
+    ggml_tensor * src1 = dst->src[1];  // input
+
+    GGML_ASSERT(src0->ne[2] == 1 && src0->ne[3] == 1);
+
+    const size_t f16_elem = sizeof(uint16_t);
+
+    // ggml-order view of the dequantised weight: ne = {K, N}, contiguous f16
+    int64_t w_ne[2] = { src0->ne[0], src0->ne[1] };
+    size_t  w_nb[2] = { f16_elem, (size_t) src0->ne[0] * f16_elem };
+
+    // Transposed the same way ggml_cann_mat_mul_fp does it, by swapping both
+    // ne and nb so the data is reinterpreted rather than moved.
+    int64_t w_t_ne[2] = { w_ne[1], w_ne[0] };
+    size_t  w_t_nb[2] = { w_nb[1], w_nb[0] };
+
+    acl_tensor_ptr acl_weight =
+        ggml_cann_create_tensor(src0->data, ACL_FLOAT16, f16_elem, w_t_ne, w_t_nb, 2, ACL_FORMAT_ND);
+
+    // aclnnMm takes exactly 2 dimensions. The default ggml_cann_create_tensor
+    // builds a 4D view, which it rejects with
+    //   "Expected 2 dimension input, but got self with sizes [1,1,1,256]".
+    int64_t in_ne[2] = { src1->ne[0], src1->ne[1] };
+    size_t  in_nb[2] = { src1->nb[0], src1->nb[1] };
+    int64_t d_ne[2]  = { dst->ne[0], dst->ne[1] };
+    size_t  d_nb[2]  = { dst->nb[0], dst->nb[1] };
+
+    acl_tensor_ptr acl_input = ggml_cann_create_tensor(src1, in_ne, in_nb, 2);
+    acl_tensor_ptr acl_dst   = ggml_cann_create_tensor(dst, d_ne, d_nb, 2);
+
+    GGML_CANN_CALL_ACLNN_OP(ctx, Mm, acl_input.get(), acl_weight.get(), acl_dst.get(), 2);
+}
+
 void ggml_cann_mul_mat(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     const enum ggml_type type = dst->src[0]->type;
     switch (type) {
@@ -2387,7 +2489,26 @@ void ggml_cann_mul_mat(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
             break;
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_IQ4_NL:
             ggml_cann_mul_mat_quant(ctx, dst, type);
+            break;
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+            ggml_cann_mul_mat_dequant_f16(ctx, dst);
             break;
         default:
             GGML_ABORT("Unsupported type for mul_mat");
