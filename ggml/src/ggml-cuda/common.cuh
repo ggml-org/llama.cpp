@@ -570,13 +570,10 @@ static __device__ __forceinline__ float warp_reduce_sum(float x) {
     return warp_reduce_sum_impl<float, width, only_lane0_is_used>(x);
 }
 
-template<int width = WARP_SIZE>
+template<int width = WARP_SIZE, bool only_lane0_is_used = false>
 static __device__ __forceinline__ float2 warp_reduce_sum(float2 a) {
-#pragma unroll
-    for (int offset = width/2; offset > 0; offset >>= 1) {
-        a.x += ggml_cuda_shfl_xor(a.x, offset, width);
-        a.y += ggml_cuda_shfl_xor(a.y, offset, width);
-    }
+    a.x = warp_reduce_sum_impl<float, width, only_lane0_is_used>(a.x);
+    a.y = warp_reduce_sum_impl<float, width, only_lane0_is_used>(a.y);
     return a;
 }
 
