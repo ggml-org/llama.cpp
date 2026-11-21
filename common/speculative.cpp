@@ -10,6 +10,8 @@
 #include "ngram-mod.h"
 #include "sampling.h"
 
+#include "../src/llama-ext.h"
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -394,6 +396,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
         int i = 0;
 
         while (n_drafting > 0) {
+            const auto * outputs = llama_get_sampling_outputs(ctx_dft);
             int i_batch = 0;
 
             batch.clear();
@@ -405,7 +408,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
 
                 auto * smpl = smpls[seq_id].get();
 
-                const llama_token id_sampled = common_sampler_sample(smpl, ctx_dft, i_batch, true);
+                const llama_token id_sampled = common_sampler_sample_from_outputs(smpl, outputs, i_batch, true);
                 ++i_batch;
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
@@ -842,6 +845,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         int i = 0;
 
         while (n_drafting > 0) {
+            const auto * outputs = llama_get_sampling_outputs(ctx_dft);
             int i_batch = 0;
 
             batch.clear();
@@ -853,7 +857,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
 
                 auto * smpl = smpls[seq_id].get();
 
-                common_sampler_sample(smpl, ctx_dft, i_batch, true);
+                common_sampler_sample_from_outputs(smpl, outputs, i_batch, true);
                 // pre-norm hidden state of this position becomes g_embd for the next step
                 const float * prenorm = llama_get_embeddings_nextn_ith(ctx_dft, i_batch);
                 ++i_batch;
@@ -1322,6 +1326,8 @@ public:
             return;
         }
 
+        const auto * outputs = llama_get_sampling_outputs(ctx_dft);
+
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             if (i_block_beg[seq_id] < 0) {
                 continue;
@@ -1337,7 +1343,7 @@ public:
 
             // greedily read the predicted block at this sequence's noise positions 1..n_block_tokens-1
             for (int32_t i = 1; i < n_block_tokens; ++i) {
-                common_sampler_sample(smpl, ctx_dft, beg + i, true);
+                common_sampler_sample_from_outputs(smpl, outputs, beg + i, true);
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
@@ -1447,6 +1453,8 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
             return;
         }
 
+        const auto * outputs = llama_get_sampling_outputs(ctx_dft);
+
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             if (i_block_beg[seq_id] < 0) {
                 continue;
@@ -1471,7 +1479,7 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
                     break;
                 }
 
-                common_sampler_sample(smpl, ctx_dft, idx, true);
+                common_sampler_sample_from_outputs(smpl, outputs, idx, true);
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
@@ -2178,6 +2186,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 break;
             }
 
+            const auto * outputs = llama_get_sampling_outputs(ctx_dft);
+
             // rebuild the batch for the next step: the growing-KV paths re-add only the
             // new token (the KV already holds the prefix), while chained heads re-add the
             // whole prefix at the next head. dropped sequences are simply not re-added.
@@ -2190,7 +2200,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
                 auto * smpl = smpls[seq_id].get();
 
-                const llama_token id_sampled = common_sampler_sample(smpl, ctx_dft, i_last[seq_id], true);
+                const llama_token id_sampled = common_sampler_sample_from_outputs(smpl, outputs, i_last[seq_id], true);
                 const float * h_row = llama_get_embeddings_nextn_ith(ctx_dft, i_last[seq_id]);
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);

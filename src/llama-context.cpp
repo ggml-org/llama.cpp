@@ -24,6 +24,23 @@
 #include <unordered_map>
 
 //
+// llama_sampling_outputs
+//
+
+llama_sampling_output_view llama_sampling_outputs::get_sampling_ith(int32_t i) const {
+    int64_t row = i;
+    if (i < 0) {
+        row += (int64_t) sampling.size();
+    } else {
+        if (!output_ids || (size_t) i >= output_ids->size()) {
+            return {};
+        }
+        row = (*output_ids)[i];
+    }
+    return row >= 0 && (size_t) row < sampling.size() ? sampling[row] : llama_sampling_output_view{};
+}
+
+//
 // llama_context
 //
 
@@ -1099,6 +1116,29 @@ bool llama_context::memory_update(bool optimize) {
 
 enum llama_pooling_type llama_context::pooling_type() const {
     return cparams.pooling_type;
+}
+
+const llama_sampling_outputs * llama_context::get_sampling_outputs() {
+    synchronize();
+    output_reorder();
+
+    sampling_outputs.vocab = &model.vocab;
+    sampling_outputs.output_ids = &output_ids;
+
+    sampling_outputs.sampling.resize(n_outputs);
+    for (uint32_t row = 0; row < n_outputs; ++row) {
+        const int32_t idx = (int32_t) row - (int32_t) n_outputs;
+        auto & output = sampling_outputs.sampling[row];
+        output.token = get_sampled_token_ith(idx);
+        output.probs = get_sampled_probs_ith(idx);
+        output.sampled_logits = get_sampled_logits_ith(idx);
+        output.candidates = get_sampled_candidates_ith(idx);
+        output.n_probs = (uint32_t) get_sampled_probs_count(idx);
+        output.n_logits = (uint32_t) get_sampled_logits_count(idx);
+        output.logits = !output.sampled_logits && logits.has_data() ? get_logits_ith(idx) : nullptr;
+    }
+
+    return &sampling_outputs;
 }
 
 float * llama_context::get_logits() {
@@ -4769,6 +4809,10 @@ float * llama_get_embeddings_layer_inp(llama_context * ctx, uint32_t lid) {
 
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {
     return ctx->set_sampler(seq_id, smpl);
+}
+
+const llama_sampling_outputs * llama_get_sampling_outputs(llama_context * ctx) {
+    return ctx->get_sampling_outputs();
 }
 
 llama_token llama_get_sampled_token_ith(llama_context * ctx, int32_t i) {
