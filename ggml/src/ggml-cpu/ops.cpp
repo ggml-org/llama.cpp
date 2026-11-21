@@ -8694,13 +8694,13 @@ void ggml_compute_forward_timestep_embedding(
 
 // ggml_compute_forward_argsort
 
-template<enum ggml_sort_order order, bool strided = false>
+template<enum ggml_sort_order order>
 struct cmp_argsort {
     const float * data;
-    size_t stride = 1;
+    size_t stride;
     bool operator()(int32_t a, int32_t b) const {
-        const size_t ia = strided ? a * stride : a;
-        const size_t ib = strided ? b * stride : b;
+        const size_t ia = a * stride;
+        const size_t ib = b * stride;
         if constexpr (order == GGML_SORT_ORDER_ASC) {
             return data[ia] < data[ib];
         } else {
@@ -8740,19 +8740,11 @@ static void ggml_compute_forward_argsort_f32(
 
         switch (order) {
             case GGML_SORT_ORDER_ASC:
-                if (nb00 == sizeof(float)) {
-                    std::sort(dst_data, dst_data + ne0, cmp_argsort<GGML_SORT_ORDER_ASC>{src_data});
-                } else {
-                    std::sort(dst_data, dst_data + ne0, cmp_argsort<GGML_SORT_ORDER_ASC, true>{src_data, nb00 / sizeof(float)});
-                }
+                std::sort(dst_data, dst_data + ne0, cmp_argsort<GGML_SORT_ORDER_ASC>{src_data, nb00 / sizeof(float)});
                 break;
 
             case GGML_SORT_ORDER_DESC:
-                if (nb00 == sizeof(float)) {
-                    std::sort(dst_data, dst_data + ne0, cmp_argsort<GGML_SORT_ORDER_DESC>{src_data});
-                } else {
-                    std::sort(dst_data, dst_data + ne0, cmp_argsort<GGML_SORT_ORDER_DESC, true>{src_data, nb00 / sizeof(float)});
-                }
+                std::sort(dst_data, dst_data + ne0, cmp_argsort<GGML_SORT_ORDER_DESC>{src_data, nb00 / sizeof(float)});
                 break;
 
             default:
@@ -8781,13 +8773,12 @@ void ggml_compute_forward_argsort(
 
 // ggml_compute_forward_top_k
 
-template<bool strided = false>
 struct cmp_top_k {
     const float * data;
-    size_t stride = 1;
+    size_t stride;
     bool operator()(int32_t a, int32_t b) const {
-        const size_t ia = strided ? a * stride : a;
-        const size_t ib = strided ? b * stride : b;
+        const size_t ia = a * stride;
+        const size_t ib = b * stride;
         return data[ia] > data[ib];
     }
 };
@@ -8821,11 +8812,7 @@ static void ggml_compute_forward_top_k_f32(
             tmp[j] = j;
         }
 
-        if (nb00 == sizeof(float)) {
-            std::partial_sort(tmp, tmp + top_k, tmp + ne00, cmp_top_k<>{src_data});
-        } else {
-            std::partial_sort(tmp, tmp + top_k, tmp + ne00, cmp_top_k<true>{src_data, nb00 / sizeof(float)});
-        }
+        std::partial_sort(tmp, tmp + top_k, tmp + ne00, cmp_top_k{src_data, nb00 / sizeof(float)});
 
         int32_t * dst_data = (int32_t *)((char *) dst->data + i*nb1);
 
