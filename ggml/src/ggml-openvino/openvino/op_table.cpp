@@ -103,7 +103,6 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
         {"GGML_OP_GATED_DELTA_NET", op::translate_gated_delta_net                  },
         {"GGML_OP_REPEAT",          op::translate_repeat                           },
         {"GGML_OP_CUMSUM",          op::translate_cumsum                           },
-        {"GGML_OP_FILL",            op::translate_fill                             },
         {"GGML_OP_DIAG",            op::translate_diag                             },
         {"GGML_OP_TRI",             op::translate_tri                              },
         {"GGML_OP_SET",             op::translate_set                              },

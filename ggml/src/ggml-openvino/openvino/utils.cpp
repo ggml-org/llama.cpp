@@ -848,20 +848,23 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                         return split_node->output(static_cast<size_t>(split_index));
                     }
                     if (split_index >= 0 && split_index < num_splits && !dynamic_split) {
+                        // as above: a weak reference, and one Split per output port
                         auto src_node = input.get_node_shared_ptr();
-                        std::string rt_key = "split_dim_" + std::to_string(split_dim);
+                        std::string rt_key =
+                            "split_dim_static_" + std::to_string(split_dim) + "_" + std::to_string(input.get_index());
                         auto & rt_info = src_node->get_rt_info();
-
-                        if (rt_info.find(rt_key) == rt_info.end()) {
+                        std::shared_ptr<ov::Node> split_node;
+                        if (rt_info.count(rt_key) != 0) {
+                            split_node = rt_info[rt_key].as<std::weak_ptr<ov::Node>>().lock();
+                        }
+                        if (split_node == nullptr) {
                             auto axis_const =
                                 ov::op::v0::Constant::create(ov::element::i64, {}, {static_cast<int64_t>(split_dim)});
-                            auto split_node =
+                            split_node =
                                 std::make_shared<ov::op::v1::Split>(input, axis_const, static_cast<size_t>(num_splits));
                             split_node->set_friendly_name(src_node->get_friendly_name() + "_split");
-                            rt_info[rt_key] = split_node;
+                            rt_info[rt_key] = std::weak_ptr<ov::Node>(split_node);
                         }
-
-                        auto split_node = rt_info[rt_key].as<std::shared_ptr<ov::op::v1::Split>>();
                         return split_node->output(static_cast<size_t>(split_index));
                     }
                 }

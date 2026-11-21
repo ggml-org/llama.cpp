@@ -57,7 +57,6 @@ OutputVector translate_recurrent_gated_delta_net(const NodeContext & context, co
 #endif
 GGML_OP_CONVERTER(translate_repeat);
 GGML_OP_CONVERTER(translate_cumsum);
-GGML_OP_CONVERTER(translate_fill);
 GGML_OP_CONVERTER(translate_set);
 GGML_OP_CONVERTER(translate_diag);
 GGML_OP_CONVERTER(translate_tri);

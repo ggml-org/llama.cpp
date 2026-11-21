@@ -100,14 +100,20 @@ struct ggml_backend_openvino_buffer_context {
 
     // Used for re-allocation on device for kvcache
     void * data_prev = nullptr;
+    // data is in the weight buffer registry
+    bool weight_registered = false;
+
+    // One counter for both constructors: the id is part of the weight identity in the graph key, so a host-pointer
+    // buffer and an allocated buffer must never share one.
+    static size_t next_buffer_id() {
+        static std::atomic<size_t> next_id{1};
+        return next_id.fetch_add(1);
+    }
 
     ggml_backend_openvino_buffer_context(int device, void * external_data, size_t size) :
         device(device),
         name(std::string(GGML_OPENVINO_NAME) + std::to_string(device)),
-        id([]() {
-            static std::atomic<size_t> next_id{1};
-            return next_id.fetch_add(1);
-        }()),
+        id(next_buffer_id()),
         data(external_data),
         size(size),
         is_remote(false),
@@ -118,10 +124,7 @@ struct ggml_backend_openvino_buffer_context {
     ggml_backend_openvino_buffer_context(int device, size_t size, bool is_remote = false, bool lazy = false) :
         device(device),
         name(std::string(GGML_OPENVINO_NAME) + std::to_string(device)),
-        id([]() {
-            static std::atomic<size_t> next_id{1};
-            return next_id.fetch_add(1);
-        }()),
+        id(next_buffer_id()),
         data(nullptr),
         size(size),
         is_remote(is_remote) {
@@ -261,6 +264,10 @@ struct ggml_backend_openvino_buffer_context {
             delete pair.second;
         }
         tensor_extras.clear();
+        // a later release must not madvise memory this buffer no longer owns
+        if (weight_registered) {
+            ggml_openvino_unregister_weight_buffer(data);
+        }
         if (kv_on_demand) {
             ggml_openvino_kv_storage_unregister(data, size);
         }
@@ -322,6 +329,17 @@ void ggml_openvino_register_weight_buffer(void * data, size_t size) {
     reg.buffers.emplace_back(data, size);
 }
 
+void ggml_openvino_unregister_weight_buffer(const void * data) {
+    if (data == nullptr) {
+        return;
+    }
+    auto & reg = ov_weight_registry();
+    std::lock_guard<std::mutex> lock(reg.mutex);
+    reg.buffers.erase(std::remove_if(reg.buffers.begin(), reg.buffers.end(),
+                                     [data](const std::pair<void *, size_t> & b) { return b.first == data; }),
+                      reg.buffers.end());
+}
+
 bool ggml_openvino_weight_buffers_released() {
     auto & reg = ov_weight_registry();
     std::lock_guard<std::mutex> lock(reg.mutex);
@@ -379,6 +397,39 @@ static bool is_self_contained_mmap_enabled() {
            ggml_openvino_getenv_str("GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR");
 }
 
+// Stores extra as the tensor's extra, deleting the one it replaces
+static void ggml_openvino_set_extra(ggml_backend_openvino_buffer_context * ctx,
+                                    ggml_tensor * tensor,
+                                    ggml_openvino_extra_base * extra) {
+    auto it = ctx->tensor_extras.find(tensor);
+    if (it != ctx->tensor_extras.end() && it->second != extra) {
+        delete it->second;
+    }
+    ctx->tensor_extras[tensor] = extra;
+    tensor->extra = extra;
+}
+
+// Replaces the buffer's context with a new allocation of the same size and moves tensor->data to it. The old
+// allocation is freed first, so the two never take memory at the same time. Returns false when the new
+// allocation fails.
+static bool ggml_openvino_swap_buffer_context(ggml_backend_buffer_t buffer,
+                                              ggml_backend_openvino_buffer_context *& ctx,
+                                              ggml_tensor * tensor,
+                                              bool is_remote,
+                                              bool lazy) {
+    const int device = ctx->device;
+    const size_t size = ctx->size;
+    const size_t offset = (char *) tensor->data - (char *) ctx->data;
+    delete ctx;
+    ctx = new ggml_backend_openvino_buffer_context(device, size, is_remote, lazy);
+    buffer->context = ctx;
+    if (ctx->data == nullptr) {
+        return false;
+    }
+    tensor->data = (char *) ctx->data + offset;
+    return true;
+}
+
 static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     // GGML_LOG_DEBUG("%s: buffer usage=%d, tensor name=%s\n", __func__, buffer->usage, tensor->name);
     ggml_backend_openvino_buffer_context * ctx = (ggml_backend_openvino_buffer_context *) buffer->context;
@@ -390,13 +441,9 @@ static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_bu
                                  strcmp(tensor->name, "layer_inp_dev") == 0 || strcmp(tensor->name, "h_nextn_dev") == 0;
     if (is_device_state && !ctx->is_remote && ggml_openvino_is_gpu() && !is_stateful_enabled()) {
         GGML_ASSERT(ctx->tensor_extras.empty());
-        auto device = ctx->device;
-        auto size = ctx->size;
-        auto * data_prev = ctx->data;
-        delete ctx;
-        ctx = new ggml_backend_openvino_buffer_context(device, size, true);
-        buffer->context = ctx;
-        tensor->data = (char *) ctx->data + ((char *) tensor->data - (char *) data_prev);
+        if (!ggml_openvino_swap_buffer_context(buffer, ctx, tensor, true, false)) {
+            return GGML_STATUS_ALLOC_FAILED;
+        }
     }
 
     // On-demand NPU KV: swap the eagerly committed buffer for demand-zero memory at its first KV tensor
@@ -405,14 +452,10 @@ static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_bu
     if (is_kv_tensor && tensor->view_src == nullptr && !ctx->is_remote && ggml_openvino_npu_kv_on_demand_enabled() &&
         tensor->ne[2] == 1 && tensor->ne[3] == 1 && tensor->nb[1] == ggml_row_size(tensor->type, tensor->ne[0])) {
         if (!ctx->kv_on_demand && ctx->tensor_extras.empty() && tensor->data == ctx->data) {
-            auto device = ctx->device;
-            auto size = ctx->size;
-            auto * data_prev = ctx->data;
-            delete ctx;
-            ctx = new ggml_backend_openvino_buffer_context(device, size, false, true);
+            if (!ggml_openvino_swap_buffer_context(buffer, ctx, tensor, false, true)) {
+                return GGML_STATUS_ALLOC_FAILED;
+            }
             ctx->kv_on_demand = true;
-            buffer->context = ctx;
-            tensor->data = (char *) ctx->data + ((char *) tensor->data - (char *) data_prev);
         }
         if (ctx->kv_on_demand) {
             ggml_openvino_kv_storage_register(tensor->data, tensor->nb[1], tensor->ne[1]);
@@ -435,12 +478,7 @@ static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_bu
                 if (ggml_openvino_tensor_extra * extra =
                         ggml_openvino_create_tensor_extra(tensor, ctx->is_remote,
                                                           ggml_openvino_get_available_devices()[ctx->device])) {
-                    auto it = ctx->tensor_extras.find(tensor);
-                    if (it != ctx->tensor_extras.end()) {
-                        delete it->second;
-                    }
-                    ctx->tensor_extras[tensor] = extra;
-                    tensor->extra = extra;
+                    ggml_openvino_set_extra(ctx, tensor, extra);
                     return GGML_STATUS_SUCCESS;
                 }
             }
@@ -455,12 +493,7 @@ static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_bu
         ggml_openvino_tensor_extra * extra = ggml_openvino_create_tensor_extra(
             tensor, ctx->is_remote, ggml_openvino_get_available_devices()[ctx->device]);
         if (extra != nullptr) {
-            auto it = ctx->tensor_extras.find(tensor);
-            if (it != ctx->tensor_extras.end()) {
-                delete it->second;
-            }
-            ctx->tensor_extras[tensor] = extra;
-            tensor->extra = extra;
+            ggml_openvino_set_extra(ctx, tensor, extra);
         }
     }
 
@@ -648,8 +681,7 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
                 // }
             }
 
-            ctx->tensor_extras[tensor] = extra;
-            tensor->extra = extra;
+            ggml_openvino_set_extra(ctx, tensor, extra);
 
             // Register the host buffer so its pages can be dropped after the GPU
             // plugin has its own device copy (GGML_OPENVINO_RELEASE_WEIGHTS).
@@ -665,6 +697,7 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
                         "multi-model runs.");
                 }
                 ggml_openvino_register_weight_buffer(ctx->data, ctx->size);
+                ctx->weight_registered = true;
             }
 
             if (!ctx->external_memory) {
@@ -704,12 +737,7 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
             return;
         }
 
-        auto it = ctx->tensor_extras.find(tensor);
-        if (it != ctx->tensor_extras.end()) {
-            delete it->second;
-        }
-        ctx->tensor_extras[tensor] = extra;
-        tensor->extra = extra;
+        ggml_openvino_set_extra(ctx, tensor, extra);
     }
 }
 
@@ -1091,15 +1119,8 @@ void ggml_openvino_buffer_register_extra(ggml_tensor * tensor, ggml_openvino_ext
     GGML_ASSERT(tensor->buffer != nullptr);
     GGML_ASSERT(ggml_backend_buffer_is_openvino(tensor->buffer));
 
-    auto * ctx = static_cast<ggml_backend_openvino_buffer_context *>(tensor->buffer->context);
-
-    auto it = ctx->tensor_extras.find(tensor);
-    if (it != ctx->tensor_extras.end()) {
-        delete it->second;
-    }
-
-    ctx->tensor_extras[tensor] = extra;
-    tensor->extra = extra;
+    ggml_openvino_set_extra(static_cast<ggml_backend_openvino_buffer_context *>(tensor->buffer->context), tensor,
+                            extra);
 }
 
 bool ggml_backend_buft_is_openvino(ggml_backend_buffer_type_t buft) {

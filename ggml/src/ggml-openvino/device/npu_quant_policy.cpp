@@ -45,6 +45,10 @@ std::optional<ExtraQuantType> ggml_openvino_npu_token_embd_requant_type(const gg
 }
 
 std::optional<ExtraQuantType> ggml_openvino_npu_weight_requant_type(const ggml_tensor * tensor) {
-    GGML_UNUSED(tensor);
-    return ggml_openvino_get_npu_requant_type();
+    const ExtraQuantType type = ggml_openvino_get_npu_requant_type();
+    // a group must fit within a row
+    if (type == ExtraQuantType::Q4_0_128 && tensor->ne[0] % 128 != 0) {
+        return ExtraQuantType::Q4_0_C;
+    }
+    return type;
 }

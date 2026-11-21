@@ -815,10 +815,8 @@ ov::Tensor get_ov_input_tensor_static_decode(const std::shared_ptr<GgmlOvDecoder
     if (GgmlOvDecoder::is_output_idx(ggml_tensor, op)) {
         ov::Shape input_shape = {1, 1, 1, 1};
         ov::Tensor input_tensor(GgmlOvDecoder::get_ov_type(ggml_tensor), input_shape);
-        int32_t inp_out_id = *((int32_t *) ggml_tensor->data);
-        assert(ggml_tensor->ne[0] == 1);
-        assert(inp_out_id == 0);
-        *input_tensor.data<int32_t>() = inp_out_id;
+        // The only decode token is row 0. out_ids is empty when the graph has no output, so it is not read.
+        *input_tensor.data<int32_t>() = 0;
         return input_tensor;
     }
 
@@ -2345,10 +2343,8 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
         // Same fail-fast as the dynamic path: once the host weight pages have been dropped
         // they read as zeros, so a recompile here would bake garbage into the new model.
         if (ggml_openvino_weight_buffers_released()) {
-            GGML_ABORT(
-                "ggml-openvino: a new graph needs to be compiled but host weight buffers were already "
-                "released via GGML_OPENVINO_RELEASE_WEIGHTS. This mode requires "
-                "stable graph shapes; disable host weight release for dynamic workloads.");
+            GGML_LOG_ERROR("ggml-openvino: cannot compile a new graph after releasing host weights\n");
+            return GGML_STATUS_FAILED;
         }
         if (cache_enabled) {
             std::lock_guard<std::mutex> map_lock(r_ctx->ctx_mutex);

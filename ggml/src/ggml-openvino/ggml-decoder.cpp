@@ -9,9 +9,11 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <map>
@@ -31,7 +33,6 @@
 #include <set>
 #include <stdexcept>
 #include <string>
-#include <cstring>
 #include <unordered_map>
 #include <vector>
 
@@ -765,7 +766,8 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
                 // pre-scaled, and the norm then scales its eps to match; 4: it is not.
                 op_case = is_gdn_out_prescaled(node->src[0]->src[0]) ? 3 : 4;
             } else if (node->src[0]->src[0]->op == GGML_OP_GATED_DELTA_NET) {
-                op_case = is_gdn_out_prescaled(node->src[0]->src[0]) ? 3 : 2;
+                // packed [attn | state] output, sliced by the norm. 5: pre-scaled, as in 3; 2: not.
+                op_case = is_gdn_out_prescaled(node->src[0]->src[0]) ? 5 : 2;
             }
         }
         break;
@@ -918,13 +920,10 @@ std::optional<int> extract_layer_from_name(const std::string & name) {
         return std::nullopt;
     }
     pos1 += 2;
-    size_t pos2 = name.find(' ', pos1);
-    if (pos2 == std::string::npos) {
-        pos2 = name.length();
+    if (pos1 >= name.size() || !std::isdigit(static_cast<unsigned char>(name[pos1]))) {
+        return std::nullopt;
     }
-    std::string layer_str = name.substr(pos1, pos2 - pos1);
-    int layer = std::stoi(layer_str);
-    return layer;
+    return std::stoi(name.substr(pos1));
 }
 
 // Recover the sliding window width from ggml's own SWA mask. llama.cpp never passes n_swa to a
@@ -1223,7 +1222,11 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             }
 
             ggml_tensor * cache_k = cache_k_view->src[0];
-            int layer = extract_layer_from_name(cache_k->name).value();
+            const auto layer_opt = extract_layer_from_name(cache_k->name);
+            if (!layer_opt) {
+                continue;
+            }
+            const int layer = *layer_opt;
 
             // Classified by the pre-pass above, which groups layers by mask tensor identity. The
             // mask NAME cannot be used: build_attn_inp_kq_mask() gives both masks the same name.
