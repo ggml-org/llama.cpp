@@ -15,6 +15,7 @@ Supported models:
 - [Fish Audio S2 Pro](#fish-audio-s2-pro)
 - [YuE2](#yue2) (songs)
 - [MiniMax Music 3](#minimax-music-3) (songs)
+- [Hibiki](#hibiki) (speech translation, `llama-server` realtime endpoint only)
 - [Kokoro](#kokoro)
 - [tiny-voca](#tiny-voca)
 - [VoxCPM2](#voxcpm2)
@@ -366,6 +367,22 @@ python convert_hf_to_gguf.py MiniMax-Music3 --mmproj --outfile mmproj-minimax-mu
 ```
 
 The mmproj holds the depth decoder and the DiT layers (in the `--outtype` type), and the condition encoder, the small DiT projections and the DAC decoder, always in F32.
+
+## Hibiki
+
+Hibiki (Kyutai) translates French speech to English speech in real time. It is a full duplex model: it only runs through the [realtime endpoint](../../tools/server/README.md#full-duplex) of `llama-server`, the audio goes in and comes out every 80 ms.
+
+The checkpoint is not in the HF layout, the converter reads its `config.json` and the LM and mimi files it names (Hibiki-1B `kyutai/hibiki-1b-pytorch-bf16`, Hibiki-2B `kyutai/hibiki-2b-pytorch-bf16`):
+
+```sh
+python convert_hf_to_gguf.py path/to/hibiki-1b-pytorch-bf16 --outfile hibiki-1b.gguf
+python convert_hf_to_gguf.py path/to/hibiki-1b-pytorch-bf16 --mmproj --outfile mmproj-hibiki-1b.gguf
+
+llama-server -m hibiki-1b.gguf --mmproj mmproj-hibiki-1b.gguf -c 1500
+```
+
+- The voice of the output is conditioned like the reference (`very_good`), classifier-free guidance is not supported yet
+- The audio codes are sampled with the settings of the checkpoint (temperature 0.8, top-k 250), so is the text (temperature 0.8, top-k 50) unless the server sampling options override it
 
 ## Kokoro
 

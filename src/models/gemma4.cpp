@@ -406,10 +406,7 @@ llama_model_gemma4::graph::graph(const llm_graph_params & params) :
                     1.0f,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
                     il, logits,
-                    model.layers[il].ffn_gate_up_exps,
-                    model.layers[il].ffn_up_exps_s,
-                    model.layers[il].ffn_gate_exps_s,
-                    model.layers[il].ffn_down_exps_s);
+                    model.layers[il].ffn_gate_up_exps);
             cur_moe = build_norm(cur_moe,
                     model.layers[il].ffn_post_norm_2, nullptr,
                     LLM_NORM_RMS, il);

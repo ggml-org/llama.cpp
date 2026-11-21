@@ -41,6 +41,7 @@ cohere2             ,0   ,any     ,NORM+MUL                    ,      3
 cohere2moe          ,1   ,any     ,ADD+ADD                     ,      2
 cohere2moe          ,1   ,any     ,MUL+ADD                     ,      2
 cohere2moe          ,1   ,any     ,RMS_NORM+MUL                ,      3
+command-r           ,0   ,any     ,ADD+ADD                     ,      2
 command-r           ,0   ,any     ,NORM+MUL                    ,      3
 dbrx                ,0   ,any     ,MUL+ADD                     ,      4
 dbrx                ,0   ,any     ,NORM+MUL                    ,      5
@@ -207,6 +208,7 @@ llama               ,0   ,any     ,MUL+ADD                     ,      4
 llama               ,0   ,any     ,RMS_NORM+MUL                ,      5
 llama               ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 llama4              ,0   ,any     ,ADD+ADD                     ,      2
+llama4              ,0   ,any     ,MUL+ADD                     ,      4
 llama4              ,0   ,any     ,RMS_NORM+MUL                ,      9
 maincoder           ,0   ,any     ,RMS_NORM+MUL                ,      9
 maion-coder         ,0   ,any     ,MUL+ADD                     ,      4
@@ -253,11 +255,11 @@ mistral4            ,0   ,any     ,ADD+ADD                     ,      1
 mistral4            ,0   ,any     ,MUL+ADD                     ,      2
 mistral4            ,0   ,any     ,RMS_NORM+MUL                ,      9
 mistral4            ,0   ,any     ,UNARY+ADD+ARGSORT+GET_ROWS  ,      1
+moshi               ,0   ,any     ,RMS_NORM+MUL                ,      5
 mpt                 ,0   ,any     ,NORM+MUL+ADD                ,      5
 muse-glimmer        ,0   ,any     ,RMS_NORM+MUL                ,     10
 muse-glimmer        ,0   ,any     ,RMS_NORM+MUL+ADD            ,      3
-muse-spark          ,0   ,prefill ,MUL+ADD                     ,      2
-muse-spark          ,0   ,decode  ,MUL+ADD                     ,      4
+muse-spark          ,0   ,any     ,MUL+ADD                     ,      4
 muse-spark          ,0   ,any     ,RMS_NORM+MUL                ,     11
 muse-spark          ,0   ,any     ,RMS_NORM+MUL+ADD            ,      3
 muse-spark          ,0   ,any     ,UNARY+ADD+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2

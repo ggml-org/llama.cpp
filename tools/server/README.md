@@ -1667,6 +1667,12 @@ LFM3-Omni is not trained to reason, run it with `--reasoning off` so that its tu
 
 Tools go into the system prompt with the chat template, and the tool calls are parsed as in `/v1/chat/completions`. The client runs the calls of a response, sends their results as `function_call_output` items, then asks for the next response.
 
+#### Full duplex
+
+Full duplex models, like Hibiki (French to English speech translation), speak while they listen on the same endpoint. There are no turns: the first `input_audio_buffer.append` opens a response, then every 80 ms of input audio gives 80 ms of output audio (`response.output_audio.delta`) and the text of the translation (`response.output_text.delta`). `response.cancel` ends the response with `response.done`, the next audio opens another one. Audio input and output are PCM16 mono, as for a realtime conversation.
+
+The model attends to the last 120 s of the stream, so the context of each slot only needs to hold that window (1500 frames for Hibiki, `-c` divided by `-np`). The model is trained on streams no longer than its window, so once the window is full the first frames of the stream stay in context and the oldest frames after them are dropped, 20 s at a time. This keeps Hibiki-1B going on long streams; Hibiki-2B still degrades after about 2 minutes, as the reference implementation does, cancel the response between long segments of speech. `input_audio_buffer.commit`, `conversation.item.create` and `response.create` are rejected. The text and the audio are sampled with the settings of the model, the text settings can be overridden with the server sampling options.
+
 ### POST `/v1/audio/speech`: OpenAI-compatible Speech API
 
 Generates speech from text, for models that can generate audio. The request is converted to a [`/tts`](#post-tts-generate-speech-audio-from-text) request, so the `/tts` options such as `lang`, `seed` or `speaker_ref_b64` can also be used.
