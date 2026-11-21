@@ -433,6 +433,9 @@ extern "C" {
 
         GGML_OP_SLEEP,
 
+        GGML_OP_GELU_BACK,
+        GGML_OP_GEGLU_BACK,
+
         GGML_OP_COUNT,
     };
 
@@ -1037,6 +1040,19 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
+
+    // a - dy
+    // b - x
+    GGML_API struct ggml_tensor * ggml_gelu_back(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
+
+    // grad - dy multiplied by the up projection, g - gate input
+    GGML_API struct ggml_tensor * ggml_geglu_back(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * grad,
+            struct ggml_tensor  * g);
 
     // hardswish(x) = x * relu6(x + 3) / 6
     GGML_API struct ggml_tensor * ggml_hardswish(
