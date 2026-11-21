@@ -700,9 +700,10 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
 
         // the vec kernel reads quantized/bf16/f8 K/V in place, the MMA kernel would convert the whole cache to f16
-        const bool vec_rows = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && n_kv % FATTN_KQ_STRIDE == 0 &&
+        // only for K/V pairs with a compiled vec kernel, the f16 fallback of the vec kernel also converts the whole cache
+        const bool vec_rows = n_kv % FATTN_KQ_STRIDE == 0 &&
             (K->type != GGML_TYPE_F16 || V->type != GGML_TYPE_F16) && K->type != GGML_TYPE_F32 && V->type != GGML_TYPE_F32 &&
-            Q->ne[1] == 1 && logit_softcap == 0.0f;
+            Q->ne[1] == 1 && logit_softcap == 0.0f && ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type) != nullptr;
         if (vec_rows) {
             return BEST_FATTN_KERNEL_VEC;
         }
