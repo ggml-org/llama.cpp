@@ -136,9 +136,9 @@ MAKE_TEST(test_apertus_image_preprocessor) {
         t.assert_equal(entry.second.width, actual.width);
         t.assert_equal(entry.second.height, actual.height);
     }
-    const auto small = mtmd_apertus_image_calc_size({128, 128}, 16, 16384, 1960000);
-    t.assert_equal(128, small.width);
-    t.assert_equal(128, small.height);
+    const auto size_small = mtmd_apertus_image_calc_size({128, 128}, 16, 16384, 1960000);
+    t.assert_equal(128, size_small.width);
+    t.assert_equal(128, size_small.height);
     const auto narrow = mtmd_apertus_image_calc_size({1600, 8}, 16, 16384, 1960000);
     t.assert_equal(1824, narrow.width);
     t.assert_equal(16, narrow.height);
