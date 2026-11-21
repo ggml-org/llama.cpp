@@ -749,6 +749,11 @@ void process_shaders() {
 #endif
             }
 
+            if (!f16acc) {
+                string_to_spv("flash_attn_f32_f16_rows", "flash_attn.comp",
+                    merge_maps(fa_base_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"KV_ROWS", "1"}}), fp16, false, false, false);
+            }
+
             string_to_spv("flash_attn_f32_f16", "flash_attn.comp",
                 merge_maps(fa_base_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}}), fp16, false, false, f16acc);
 

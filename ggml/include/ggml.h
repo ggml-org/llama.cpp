@@ -2283,6 +2283,13 @@ extern "C" {
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);
 
+    // Add table[head, indices[key, query], query] to the mask before its F16 rounding.
+    // Queries from all streams are flattened in stream order. Indices must be in [0, table->ne[1]).
+    GGML_API void ggml_flash_attn_ext_add_indexed_bias(
+            struct ggml_tensor * a,
+            struct ggml_tensor * table,
+            struct ggml_tensor * indices);
+
     // TODO: needs to be adapted to ggml_flash_attn_ext
     GGML_API struct ggml_tensor * ggml_flash_attn_back(
             struct ggml_context * ctx,
