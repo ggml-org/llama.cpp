@@ -7006,6 +7006,28 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // Qwen3-ASR: "language <lang><asr_text><transcript>", the language prefix is delimiter-style reasoning
+    {
+        auto tst = peg_tester("models/templates/Qwen3-ASR.jinja", detailed_debug);
+
+        tst.test("language English<asr_text>And so, my fellow Americans, ask not.")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(simple_assist_msg("And so, my fellow Americans, ask not.", "language English"))
+            .expect_reconstruction()
+            .run();
+
+        tst.test("language None<asr_text>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(simple_assist_msg("", "language None"))
+            .run();
+
+        // reasoning_format none keeps the raw output
+        tst.test("language English<asr_text>Hello")
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .expect_content("language English<asr_text>Hello")
+            .run();
+    }
+
     // Mistral Small 3.2 - FUNC_BRACKET_TAG format: [TOOL_CALLS]func_name[CALL_ID]id[ARGS]{...}
     {
         auto tst = peg_tester("models/templates/Mistral-Small-3.2-24B-Instruct-2506.jinja", detailed_debug);

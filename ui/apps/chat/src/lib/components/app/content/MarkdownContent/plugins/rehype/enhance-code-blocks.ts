@@ -17,7 +17,7 @@ import {
 	createWrapper,
 	generateBlockId
 } from './code-block-utils';
-import { CODE_BLOCK_CLASS, MARKDOWN_DATA_ATTRS } from '#lib/constants/index.ts';
+import { CODE_BLOCK, CODE_BLOCK_CLASS, MARKDOWN_DATA_ATTRS } from '#lib/constants/index.ts';
 import type { Element, ElementContent, Root } from 'hast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
@@ -34,8 +34,8 @@ function extractLanguage(codeElement: Element): string {
 	if (!Array.isArray(className)) return 'text';
 
 	for (const cls of className) {
-		if (typeof cls === 'string' && cls.startsWith('language-')) {
-			return cls.replace('language-', '');
+		if (typeof cls === 'string' && cls.startsWith(CODE_BLOCK.LANGUAGE_CLASS_PREFIX)) {
+			return cls.slice(CODE_BLOCK.LANGUAGE_CLASS_PREFIX.length);
 		}
 	}
 

@@ -1048,6 +1048,7 @@ mtmd_helper_cap mtmd_helper_get_capabilities(const llama_model * model, const mt
     cap.audio_gen = gen_audio_type != MTMD_GEN_AUDIO_TYPE_NONE;
     cap.audio_gen_spk_ref = gen_audio_type == MTMD_GEN_AUDIO_TYPE_QWEN3TTS
                          || gen_audio_type == MTMD_GEN_AUDIO_TYPE_POCKETTTS;
+    cap.audio_duplex = cap.audio_stream && gen_audio_type == MTMD_GEN_AUDIO_TYPE_MOSHI;
 
     // a tts model without a chat template only outputs audio, it cannot be used for chat
     // neither can a realtime transcription model (e.g. Voxtral Realtime): its text follows the audio by a token delay

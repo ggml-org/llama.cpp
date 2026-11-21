@@ -239,6 +239,9 @@ struct mtmd_hparams {
     int32_t wav_tfm_swa          = 0; // pre_transformer's KV cache size, in frames
     int32_t wav_frame_stack      = 0; // lfm3a codec: decoder positions per frame
 
+    // fish_s2_spkenc in a drama3_gen mmproj: backbone rows as drama3_gen builds them
+    bool spkenc_drama3_rows = false;
+
     // mimo-v2.5: LLM-side connector (input_local_transformer)
     int32_t audio_local_n_layer = 0;
     int32_t audio_local_group_size = 0;

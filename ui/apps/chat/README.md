@@ -89,6 +89,7 @@ The app imports the library as `@ggml-org/llama-ui/ui/<name>` and compiles its s
 | Routes         | `src/routes`              | `/`, `/chat/[id]`, `/models`, `/mcp-servers`, `/settings`, `/search`                                |
 | App components | `src/lib/components/app`  | Chat, navigation, models, MCP, settings and dialogs, grouped by area                                |
 | UI components  | `ui/lib/ui`               | shadcn-svelte on bits-ui, from Llama UI                                                             |
+| Voice          | `ui/lib/voice`            | Microphone capture, transcription and dictation, from Llama Voice (`@ggml-org/llama-voice`)         |
 | Hooks          | `src/lib/hooks`           | View logic between components and stores: scroll, drag and drop, pickers, keyboard                  |
 | Stores         | `src/lib/stores`          | Application state as Svelte 5 runes: chat, conversations, the agentic loop, tools, models, settings |
 | Services       | `src/lib/services`        | Stateless I/O: the llama-server API, IndexedDB, MCP, the Hugging Face Hub, the tool sandbox         |

@@ -277,9 +277,6 @@ ggml_tensor * llama_model_zaya1::graph::build_router_moe(const llama_model & mod
             il,
             logits,
             layer.ffn_gate_up_exps,
-            nullptr,
-            nullptr,
-            nullptr,
             expert);
 
     return ggml_mul(ctx0, moe, keep);

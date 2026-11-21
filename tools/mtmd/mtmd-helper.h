@@ -260,6 +260,7 @@ struct mtmd_helper_cap {
 
     // realtime capabilities
     bool audio_stream; // realtime transcription, see mtmd_audio_stream_init()
+    bool audio_duplex; // full duplex (e.g. Hibiki): the model speaks while it listens, see the moshi pipeline of mtmd_helper_gen_audio
 
     // output capabilities
     bool text_gen; // false for an audio-only model (tts-only, no chat template)
