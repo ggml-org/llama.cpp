@@ -481,11 +481,18 @@ def device_room(log):
     m = re.search(r"(\S+) MoE cache size =", log)
     if host == 0 or not m:
         sys.exit("no MoE cache: the experts must be in host memory (-cmoe, -ncmoe or -ot)")
+    dev = m.group(1)
     free = {d: int(x) for d, x in re.findall(r"using device (\S+) \(.*- (\d+) MiB free", log)}
-    used = sum(float(x) for d, x in re.findall(r"(\S+) +(?:model|KV|RS|compute|output) +buffer size =\s+([0-9.]+) MiB", log) if d == m.group(1))
-    if m.group(1) not in free:
-        sys.exit(f"the free memory of {m.group(1)} is not in the log, pass --max-mib")
-    return host, m.group(1), free[m.group(1)], used
+    if dev not in free:
+        sys.exit(f"the free memory of {dev} is not in the log, pass --max-mib")
+    lines = log.splitlines()
+    last = max(i for i, l in enumerate(lines) if re.search(rf"using device {re.escape(dev)} \(.*- \d+ MiB free", l))
+    tail = "\n".join(lines[last:])
+    used = sum(float(x) for d, x in re.findall(r"(\S+) +(?:model|KV|RS|output) +buffer size =\s+([0-9.]+) MiB", tail) if d == dev)
+    comp = [float(x) for d, x in re.findall(r"(\S+) +compute +buffer size =\s+([0-9.]+) MiB", tail) if d == dev]
+    if comp:
+        used += max(comp)
+    return host, dev, free[dev], used
 
 
 def run_server(cmd, out, mib, share, n_predict, seed, label, warm):
