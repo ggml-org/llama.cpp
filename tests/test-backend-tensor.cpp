@@ -325,7 +325,8 @@ static bool test_buft(ggml_backend_buffer_type_t buft) {
 // Mock buffer type
 //
 // Ad-hoc host-backed buffer type used to exercise the dispatch logic in
-// ggml_backend_tensor_{set,get,copy}_n and ggml_backend_tensor_memset without relying on real backend hooks.
+// ggml_backend_tensor_{set,get,copy}_n and ggml_backend_tensor_memset
+// without relying on real backend hooks.
 //
 
 struct mock_config {
@@ -639,13 +640,13 @@ static bool test_mock_grouping() {
     return true;
 }
 
-// verify that memset writes the value with set_tensor when the buffer has no memset_tensor
+// verify that memset routes to memset_tensor when the buffer has it and to set_tensor otherwise
 static bool test_mock_memset(bool with_hook) {
     mock_config_reset(false, false, false, true);
     g_mock.memset = with_hook;
 
     ggml_init_params params = {};
-    params.mem_size = ggml_tensor_overhead()*8;
+    params.mem_size = ggml_tensor_overhead();
     params.no_alloc = true;
 
     ggml_context_ptr ctx(ggml_init(params));
@@ -653,14 +654,19 @@ static bool test_mock_memset(bool with_hook) {
         return false;
     }
 
-    // larger than one fallback chunk, so that the write takes more than one set_tensor call
+    // the fallback writes in chunks of this size, see ggml_backend_tensor_memset
+    const size_t chunk_size = 1024*1024;
+    const int n_chunks = 2;
+
     std::vector<ggml_tensor *> tensors;
-    ggml_backend_buffer_ptr buf = alloc_tensors(ctx.get(), mock_buft(), { 300*1024 }, tensors);
+    ggml_backend_buffer_ptr buf = alloc_tensors(ctx.get(), mock_buft(), { n_chunks*chunk_size/sizeof(float) }, tensors);
     if (!buf) {
         return false;
     }
 
     const size_t n_bytes = ggml_nbytes(tensors[0]);
+
+    // leaves untouched bytes at both ends
     const size_t offset  = 3;
     const size_t size    = n_bytes - 2*offset;
 
@@ -673,21 +679,28 @@ static bool test_mock_memset(bool with_hook) {
     ggml_backend_tensor_memset(tensors[0], 0xA5, offset, size);
     ggml_backend_tensor_get(tensors[0], out.data(), 0, n_bytes);
 
-    // the hook writes without set_tensor, the fallback with one set_tensor call per chunk
-    const bool used_expected_path = with_hook ? g_mock.set_calls == 0 : g_mock.set_calls > 1;
+    if (out != expected) {
+        return false;
+    }
 
-    return used_expected_path && out == expected;
+    // the hook writes without set_tensor, the fallback with one set_tensor call per chunk
+    const int expected_calls = with_hook ? 0 : n_chunks;
+    if (g_mock.set_calls != expected_calls) {
+        return false;
+    }
+
+    return true;
 }
 
 static bool test_mock() {
     return
-        test_mock_memset(true)     &&
-        test_mock_memset(false)    &&
         test_mock_set_get_n(true)  &&
         test_mock_set_get_n(false) &&
         test_mock_copy_n(true)     &&
         test_mock_copy_n(false)    &&
-        test_mock_grouping();
+        test_mock_grouping()       &&
+        test_mock_memset(true)     &&
+        test_mock_memset(false);
 }
 
 int main() {
