@@ -5,6 +5,7 @@
 #include <sycl/ext/intel/experimental/grf_size_properties.hpp>
 
 #include "common.hpp"
+#include "xmx-compat.hpp"
 
 #ifdef GGML_SYCL_MMVQ_HAS_XMX
 #include <sycl/ext/intel/esimd/xmx/dpas.hpp>
@@ -613,9 +614,11 @@ inline bool xmx_supported(const void * vx, const int ncols) {
 
 // transposed 2D block load of 16 rows, dword (kd, n) lands at [kd * 16 + n]
 // 2D block loads need rows of at least 64 bytes, shorter rows (SR) are read row by row
-template <int W, bool SR>
+// HW: the architecture the kernel is built for (ggml_sycl_xmx::xe2)
+template <typename HW, int W, bool SR>
 ESIMD_INLINE simd<uint32_t, W * XMX_ROWS> xmx_load_t(const void * base, unsigned pitch, unsigned h, int x, int y) {
     using namespace sycl::ext::intel::esimd;
+    namespace xmx = ggml_sycl_xmx::esimd;
     if constexpr (SR) {
         simd<uint32_t, W * XMX_ROWS> r;
         for (int n = 0; n < XMX_ROWS; ++n) {
@@ -625,7 +628,7 @@ ESIMD_INLINE simd<uint32_t, W * XMX_ROWS> xmx_load_t(const void * base, unsigned
         }
         return r;
     } else {
-        return load_2d<uint32_t, W, XMX_ROWS, 1, true, false>((const uint32_t *) base, pitch, h, pitch, x, y);
+        return xmx::load_2d<HW, uint32_t, W, XMX_ROWS, 1, true, false>((const uint32_t *) base, pitch, h, pitch, x, y);
     }
 }
 
@@ -736,11 +739,12 @@ template <bool SR> struct xmx_traits_q6_k : xmx_traits_base<SR, 7, xmx_scale_kin
     };
 
     // rows: clamped row index of each of the 16 lanes
+    template <typename HW>
     static ESIMD_INLINE scales_t load_scales(const ctx & c, int sb, const simd<uint32_t, 16> & rows) {
         using namespace sycl::ext::intel::esimd;
         scales_t s;
         s.dv = convert<float>(gather<sycl::half, 16>(c.dh, (rows * c.bpr + sb) * (uint32_t) sizeof(sycl::half)));
-        simd<uint32_t, 64> raw = xmx_load_t<4, SR>(c.scales, c.ps, c.h, sb * 4, c.row0);
+        simd<uint32_t, 64> raw = xmx_load_t<HW, 4, SR>(c.scales, c.ps, c.h, sb * 4, c.row0);
         s.sc8                  = raw.template bit_cast_view<int8_t>();
         return s;
     }
@@ -749,11 +753,11 @@ template <bool SR> struct xmx_traits_q6_k : xmx_traits_base<SR, 7, xmx_scale_kin
         simd<uint32_t, 128> a, b, h;
     };
 
-    static ESIMD_INLINE part_t load_part(const ctx & c, int sb, int part) {
+    template <typename HW> static ESIMD_INLINE part_t load_part(const ctx & c, int sb, int part) {
         part_t p;
-        p.a = xmx_load_t<8, SR>(c.ql, c.pl, c.h, sb * 32 + part * 16, c.row0);
-        p.b = xmx_load_t<8, SR>(c.ql, c.pl, c.h, sb * 32 + part * 16 + 8, c.row0);
-        p.h = xmx_load_t<8, SR>(c.qh, c.ph, c.h, sb * 16 + part * 8, c.row0);
+        p.a = xmx_load_t<HW, 8, SR>(c.ql, c.pl, c.h, sb * 32 + part * 16, c.row0);
+        p.b = xmx_load_t<HW, 8, SR>(c.ql, c.pl, c.h, sb * 32 + part * 16 + 8, c.row0);
+        p.h = xmx_load_t<HW, 8, SR>(c.qh, c.ph, c.h, sb * 16 + part * 8, c.row0);
         return p;
     }
 
@@ -799,6 +803,7 @@ template <bool SR> struct xmx_traits_q3_k : xmx_traits_base<SR, 16, xmx_scale_ki
 
     using scales_t = xmx_row_scales<16>;
 
+    template <typename HW>
     static ESIMD_INLINE scales_t load_scales(const ctx & c, int sb, const simd<uint32_t, 16> & rows) {
         using namespace sycl::ext::intel::esimd;
         scales_t           s;
@@ -822,10 +827,10 @@ template <bool SR> struct xmx_traits_q3_k : xmx_traits_base<SR, 16, xmx_scale_ki
         simd<uint32_t, 128> q, h;
     };
 
-    static ESIMD_INLINE part_t load_part(const ctx & c, int sb, int part) {
+    template <typename HW> static ESIMD_INLINE part_t load_part(const ctx & c, int sb, int part) {
         part_t p;
-        p.q = xmx_load_t<8, SR>(c.qs, c.pq, c.h, sb * 16 + part * 8, c.row0);
-        p.h = xmx_load_t<8, SR>(c.hm, c.ph, c.h, sb * 8, c.row0);
+        p.q = xmx_load_t<HW, 8, SR>(c.qs, c.pq, c.h, sb * 16 + part * 8, c.row0);
+        p.h = xmx_load_t<HW, 8, SR>(c.hm, c.ph, c.h, sb * 8, c.row0);
         return p;
     }
 
@@ -866,6 +871,7 @@ template <bool QH, bool SR> struct xmx_traits_q45_k : xmx_traits_base<SR, QH ? 1
         xmx_row_scales<8> m;  // dmin * min of each group
     };
 
+    template <typename HW>
     static ESIMD_INLINE scales_t load_scales(const ctx & c, int sb, const simd<uint32_t, 16> & rows) {
         using namespace sycl::ext::intel::esimd;
         scales_t           s;
@@ -895,12 +901,12 @@ template <bool QH, bool SR> struct xmx_traits_q45_k : xmx_traits_base<SR, QH ? 1
         simd<uint32_t, 128> a, b, h;
     };
 
-    static ESIMD_INLINE part_t load_part(const ctx & c, int sb, int part) {
+    template <typename HW> static ESIMD_INLINE part_t load_part(const ctx & c, int sb, int part) {
         part_t p;
-        p.a = xmx_load_t<8, SR>(c.qs, c.pq, c.h, sb * 32 + part * 16, c.row0);
-        p.b = xmx_load_t<8, SR>(c.qs, c.pq, c.h, sb * 32 + part * 16 + 8, c.row0);
+        p.a = xmx_load_t<HW, 8, SR>(c.qs, c.pq, c.h, sb * 32 + part * 16, c.row0);
+        p.b = xmx_load_t<HW, 8, SR>(c.qs, c.pq, c.h, sb * 32 + part * 16 + 8, c.row0);
         if constexpr (QH) {
-            p.h = xmx_load_t<8, SR>(c.qh, c.ph, c.h, sb * 8, c.row0);
+            p.h = xmx_load_t<HW, 8, SR>(c.qh, c.ph, c.h, sb * 8, c.row0);
         }
         return p;
     }
@@ -945,11 +951,12 @@ template <bool SR> struct xmx_traits_q2_k : xmx_traits_base<SR, 16, xmx_scale_ki
         ESIMD_INLINE simd<uint8_t, 16> byte(int gr) { return code.template select<16, 4>(64 * (gr / 4) + (gr % 4)); }
     };
 
+    template <typename HW>
     static ESIMD_INLINE scales_t load_scales(const ctx & c, int sb, const simd<uint32_t, 16> & rows) {
         using namespace sycl::ext::intel::esimd;
         scales_t           s;
         simd<uint32_t, 16> bi  = rows * c.bpr + sb;
-        simd<uint32_t, 64> raw = xmx_load_t<4, SR>(c.sc, c.ps, c.h, sb * 4, c.row0);
+        simd<uint32_t, 64> raw = xmx_load_t<HW, 4, SR>(c.sc, c.ps, c.h, sb * 4, c.row0);
         s.code                 = raw.template bit_cast_view<uint8_t>();
         xmx_load_dm(c.dm, bi, s.d, s.dmin);
         return s;
@@ -959,9 +966,9 @@ template <bool SR> struct xmx_traits_q2_k : xmx_traits_base<SR, 16, xmx_scale_ki
         simd<uint32_t, 128> q;
     };
 
-    static ESIMD_INLINE part_t load_part(const ctx & c, int sb, int part) {
+    template <typename HW> static ESIMD_INLINE part_t load_part(const ctx & c, int sb, int part) {
         part_t p;
-        p.q = xmx_load_t<8, SR>(c.qs, c.pq, c.h, sb * 16 + part * 8, c.row0);
+        p.q = xmx_load_t<HW, 8, SR>(c.qs, c.pq, c.h, sb * 16 + part * 8, c.row0);
         return p;
     }
 
@@ -992,6 +999,7 @@ template <bool SR> struct xmx_traits_q8_0 : xmx_traits_base<SR, 16, xmx_scale_ki
         xmx_row_scales<8> d;  // scale of each of the 8 blocks of a super-block
     };
 
+    template <typename HW>
     static ESIMD_INLINE scales_t load_scales(const ctx & c, int sb, const simd<uint32_t, 16> & rows) {
         using namespace sycl::ext::intel::esimd;
         scales_t           s;
@@ -1007,11 +1015,11 @@ template <bool SR> struct xmx_traits_q8_0 : xmx_traits_base<SR, 16, xmx_scale_ki
         simd<uint32_t, 128> q[4];
     };
 
-    static ESIMD_INLINE part_t load_part(const ctx & c, int sb, int part) {
+    template <typename HW> static ESIMD_INLINE part_t load_part(const ctx & c, int sb, int part) {
         part_t p;
 #pragma unroll
         for (int g = 0; g < 4; ++g) {
-            p.q[g] = xmx_load_t<8, SR>(c.qs, c.pq, c.h, sb * 64 + 8 * (4 * part + g), c.row0);
+            p.q[g] = xmx_load_t<HW, 8, SR>(c.qs, c.pq, c.h, sb * 64 + 8 * (4 * part + g), c.row0);
         }
         return p;
     }
@@ -1036,7 +1044,7 @@ ESIMD_INLINE simd<float, RC * NT> xmx_term(const simd<int8_t, 512> &    B,
                                            const simd<int8_t, RC * 32> & A,
                                            const simd<float, NT> &       s) {
     using namespace sycl::ext::intel::esimd;
-    namespace xmx = sycl::ext::intel::esimd::xmx;
+    namespace xmx = ggml_sycl_xmx::esimd;
 
     simd<int, RC * NT> C = xmx::dpas<8, RC, int>(B, A);
     return convert<float>(C) * s.template replicate<RC>();
@@ -1149,7 +1157,7 @@ template <int N> ESIMD_INLINE simd<float, N> xmx_glu_act(const simd<float, N> & 
 // weights instead, zeros in B drop the other half of K.
 // KS is the most threads that split K for one tile, the launch may use fewer.
 // FUSED computes up * act(gate) from the weights vx (up) and vg (gate), reading the activations once.
-template <typename T, int NC, int KS, bool FUSED>
+template <typename HW, typename T, int NC, int KS, bool FUSED>
 ESIMD_INLINE void xmx_mul_mat(const void * vx,
                               const void * vg,
                               const char * vy,
@@ -1164,6 +1172,9 @@ ESIMD_INLINE void xmx_mul_mat(const void * vx,
                               const int    lid,
                               const int    ks) {
     using namespace sycl::ext::intel::esimd;
+    namespace xmx = ggml_sycl_xmx::esimd;
+    // the weights are the 16-column B operand of one dpas (xmx_term): Xe2's width
+    static_assert(HW::dpas_width == XMX_ROWS, "the XMX mat-vec is built for a 16-wide dpas");
 
     constexpr int  NT    = XMX_ROWS;
     constexpr int  RC    = NC < 8 ? NC : 8;
@@ -1203,27 +1214,28 @@ ESIMD_INLINE void xmx_mul_mat(const void * vx,
     }
 
     for (int sb = lid; sb < bpr; sb += ks) {
-        auto                 sc = T::load_scales(c, sb, rows);
+        auto                 sc = T::template load_scales<HW>(c, sb, rows);
         typename T::scales_t scg;
         if constexpr (FUSED) {
-            scg = T::load_scales(cg, sb, rows);
+            scg = T::template load_scales<HW>(cg, sb, rows);
         }
 
         // d of the 8 groups of the super-block, [column * 8 + group]
         simd<float, 8 * RC> d8f[NB];
 #pragma unroll
         for (int b = 0; b < NB; ++b) {
-            simd<uint32_t, 8 * RC>    ds = load_2d<uint32_t, 8, RC, 1, false, false>(yd, ydw, yh, yp, sb * 8, b * RC);
+            simd<uint32_t, 8 * RC> ds =
+                xmx::load_2d<HW, uint32_t, 8, RC, 1, false, false>(yd, ydw, yh, yp, sb * 8, b * RC);
             simd<sycl::half, 16 * RC> dh = ds.template bit_cast_view<sycl::half>();
             d8f[b]                       = convert<float>(simd<sycl::half, 8 * RC>(dh.template select<8 * RC, 2>(0)));
         }
 
 #pragma unroll
         for (int part = 0; part < 2; ++part) {
-            const auto         pd = T::load_part(c, sb, part);
+            const auto         pd = T::template load_part<HW>(c, sb, part);
             typename T::part_t pdg;
             if constexpr (FUSED) {
-                pdg = T::load_part(cg, sb, part);
+                pdg = T::template load_part<HW>(cg, sb, part);
             }
 
             simd<uint32_t, 16 * RC> A2[NB];  // quants of two groups
@@ -1235,15 +1247,15 @@ ESIMD_INLINE void xmx_mul_mat(const void * vx,
                     if (g % 2 == 0) {
 #pragma unroll
                         for (int b = 0; b < NB; ++b) {
-                            A2[b] =
-                                load_2d<uint32_t, 8, RC, 2, false, false>(yq, yqw, yh, yp, sb * 64 + gi * 8, b * RC);
+                            A2[b] = xmx::load_2d<HW, uint32_t, 8, RC, 2, false, false>(yq, yqw, yh, yp,
+                                                                                       sb * 64 + gi * 8, b * RC);
                         }
                     }
                 } else {
 #pragma unroll
                     for (int b = 0; b < NB; ++b) {
-                        A2[b].template select<RC * 8, 1>(0) =
-                            load_2d<uint32_t, 8, RC, 1, false, false>(yq, yqw, yh, yp, sb * 64 + gi * 8, b * RC);
+                        A2[b].template select<RC * 8, 1>(0) = xmx::load_2d<HW, uint32_t, 8, RC, 1, false, false>(
+                            yq, yqw, yh, yp, sb * 64 + gi * 8, b * RC);
                     }
                 }
 
@@ -1302,7 +1314,7 @@ ESIMD_INLINE void xmx_mul_mat(const void * vx,
 
 // KS_MAX bounds the threads that split K for one tile, the launch uses as few as keep every thread to the same
 // number of super-blocks as the busiest one
-template <typename T, int NC, int KS_MAX, bool FUSED>
+template <typename HW, typename T, int NC, int KS_MAX, bool FUSED>
 static void xmx_mul_mat_launch_ks(const void *    vx,
                                   const void *    vg,
                                   const char *    vy,
@@ -1324,14 +1336,14 @@ static void xmx_mul_mat_launch_ks(const void *    vx,
                          sycl::ext::oneapi::experimental::properties{
                              sycl::ext::intel::experimental::grf_size<xmx_grf<T, NC, FUSED>()> },
                          [=](sycl::nd_item<1> it) [[intel::sycl_explicit_simd]] {
-                             xmx_mul_mat<T, NC, KS_MAX, FUSED>(vx, vg, vy, dst, ncols, nrows, ncv, stride_y_bytes, ldd,
-                                                               glu_op, (int) it.get_group(0), (int) it.get_local_id(0),
-                                                               ks);
+                             xmx_mul_mat<HW, T, NC, KS_MAX, FUSED>(vx, vg, vy, dst, ncols, nrows, ncv, stride_y_bytes,
+                                                                   ldd, glu_op, (int) it.get_group(0),
+                                                                   (int) it.get_local_id(0), ks);
                          });
     });
 }
 
-template <typename T, int NC, bool FUSED>
+template <typename HW, typename T, int NC, bool FUSED>
 static void xmx_mul_mat_launch(const void *    vx,
                                const void *    vg,
                                const char *    vy,
@@ -1345,12 +1357,13 @@ static void xmx_mul_mat_launch(const void *    vx,
                                dpct::queue_ptr stream) {
     // the fused kernel keeps two sets of accumulators in shared memory, half the threads for the same size
     constexpr int ks_max = xmx_n_split<NC>() / (FUSED ? 2 : 1);
-    xmx_mul_mat_launch_ks<T, NC, ks_max, FUSED>(vx, vg, vy, dst, ncols, nrows, ncv, stride_y_bytes, ldd, glu_op,
-                                                stream);
+    xmx_mul_mat_launch_ks<HW, T, NC, ks_max, FUSED>(vx, vg, vy, dst, ncols, nrows, ncv, stride_y_bytes, ldd, glu_op,
+                                                    stream);
 }
 
-// FUSED: vx and vg are the up and gate weights, dst gets up * act(gate) with glu_op a ggml_glu_op
-template <typename T, bool FUSED = false>
+// FUSED: vx and vg are the up and gate weights, dst gets up * act(gate) with glu_op a ggml_glu_op. HW: the
+// architecture built for; the kernel exists for Xe2 (16-wide dpas, 2D block loads) only.
+template <typename T, bool FUSED = false, typename HW = ggml_sycl_xmx::xe2>
 static void xmx_mul_mat_ncols(const void *    vx,
                               const void *    vg,
                               const char *    vy,
@@ -1369,9 +1382,9 @@ static void xmx_mul_mat_ncols(const void *    vx,
         float *      d  = dst + (size_t) c0 * ldd;
         const int    nc = n > 32 ? 64 : (n > 16 ? 32 : (n > 8 ? 16 : n));
         switch (nc) {
-#define XMX_CASE(N)                                                                                          \
-    case N:                                                                                                  \
-        xmx_mul_mat_launch<T, N, FUSED>(vx, vg, y, d, ncols, nrows, n, stride_y_bytes, ldd, glu_op, stream); \
+#define XMX_CASE(N)                                                                                              \
+    case N:                                                                                                      \
+        xmx_mul_mat_launch<HW, T, N, FUSED>(vx, vg, y, d, ncols, nrows, n, stride_y_bytes, ldd, glu_op, stream); \
         break
             XMX_CASE(1);
             XMX_CASE(2);
@@ -1383,11 +1396,11 @@ static void xmx_mul_mat_ncols(const void *    vx,
             XMX_CASE(8);
 #undef XMX_CASE
             // short row variants are for tests, not built for the wide tiles
-#define XMX_CASE_WIDE(N)                                                                                         \
-    case N:                                                                                                      \
-        if constexpr (!T::short_rows && (!FUSED || N <= XMX_FUSED_CHUNK)) {                                      \
-            xmx_mul_mat_launch<T, N, FUSED>(vx, vg, y, d, ncols, nrows, n, stride_y_bytes, ldd, glu_op, stream); \
-        }                                                                                                        \
+#define XMX_CASE_WIDE(N)                                                                                             \
+    case N:                                                                                                          \
+        if constexpr (!T::short_rows && (!FUSED || N <= XMX_FUSED_CHUNK)) {                                          \
+            xmx_mul_mat_launch<HW, T, N, FUSED>(vx, vg, y, d, ncols, nrows, n, stride_y_bytes, ldd, glu_op, stream); \
+        }                                                                                                            \
         break
             XMX_CASE_WIDE(16);
             XMX_CASE_WIDE(32);

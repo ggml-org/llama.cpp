@@ -91,6 +91,7 @@
 #include "ggml-sycl/solve_tri.hpp"
 #include "ggml-sycl/gated_delta_net.hpp"
 #include "ggml-sycl/pool.hpp"
+#include "ggml-sycl/xmx-compat.hpp"
 #include "ggml-sycl/cross_entropy_loss.hpp"
 
 #define MEM_SIZE_2M	0x00200000
@@ -119,6 +120,7 @@ int g_ggml_sycl_xmx_glu_max_cols = GGML_SYCL_XMX_GLU_MAX_COLS;
 int g_ggml_sycl_prioritize_dmmv = 0;
 int g_ggml_sycl_xmx_gather_types = GGML_SYCL_XMX_GATHER_TYPES_DEFAULT;
 int g_ggml_sycl_xmx_gather_shapes = GGML_SYCL_XMX_GATHER_SHAPES_DEFAULT;
+int g_ggml_sycl_hwemul = 0;
 int g_ggml_sycl_mmid_sched = GGML_SYCL_MMID_SCHED_DEVICE;
 int g_ggml_sycl_dynamic_precision = GGML_SYCL_DYNAMIC_PRECISION_DEFAULT;
 int g_ggml_sycl_dynamic_required_precision = GGML_SYCL_DYNAMIC_PRECISION_F32;
@@ -456,6 +458,13 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_xmx_gather_types = ggml_sycl_get_env("GGML_SYCL_XMX_GATHER_TYPES", GGML_SYCL_XMX_GATHER_TYPES_DEFAULT);
         g_ggml_sycl_mmid_sched = ggml_sycl_get_env("GGML_SYCL_MMID_SCHED", GGML_SYCL_MMID_SCHED_DEVICE) & 3;
         g_ggml_sycl_xmx_gather_shapes = ggml_sycl_get_env("GGML_SYCL_XMX_GATHER_SHAPES", GGML_SYCL_XMX_GATHER_SHAPES_DEFAULT);
+        g_ggml_sycl_hwemul = ggml_sycl_get_env("GGML_SYCL_HWEMUL", 0);
+        if (g_ggml_sycl_hwemul != 0 && !ggml_sycl_xmx::emulated) {
+            // the emulated architectures' instructions would run on this device's XMX and compute garbage
+            GGML_LOG_WARN("GGML_SYCL_HWEMUL=%d is ignored: it needs a build with GGML_SYCL_XMX_EMULATION\n",
+                          g_ggml_sycl_hwemul);
+            g_ggml_sycl_hwemul = 0;
+        }
         g_ggml_sycl_dynamic_precision =
             ggml_sycl_get_env_precision("GGML_SYCL_DYNAMIC_PRECISION", GGML_SYCL_DYNAMIC_PRECISION_DEFAULT);
         g_ggml_sycl_dynamic_required_precision =
@@ -505,6 +514,12 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_F16: yes\n");
 #else
         GGML_LOG_INFO("  GGML_SYCL_F16: no\n");
+#endif
+
+#if defined(GGML_SYCL_XMX_EMULATION)
+        GGML_LOG_INFO("  GGML_SYCL_XMX_EMULATION: yes (dpas and joint_matrix in software, slow)\n");
+#else
+        GGML_LOG_INFO("  GGML_SYCL_XMX_EMULATION: no\n");
 #endif
 
 #if defined(GGML_SYCL_FORCE_MMQ)
@@ -582,6 +597,7 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_MMID_SCHED: %d\n", g_ggml_sycl_mmid_sched);
         GGML_LOG_INFO("  GGML_SYCL_MMID_ESIMD: %d\n", g_ggml_sycl_mmid_esimd);
         GGML_LOG_INFO("  GGML_SYCL_XMX_GATHER_SHAPES: %d\n", g_ggml_sycl_xmx_gather_shapes);
+        GGML_LOG_INFO("  GGML_SYCL_HWEMUL: %d\n", g_ggml_sycl_hwemul);
         GGML_LOG_INFO("  GGML_SYCL_DYNAMIC_PRECISION: %s\n",
                       ggml_sycl_dynamic_precision_names[g_ggml_sycl_dynamic_precision]);
         GGML_LOG_INFO("  GGML_SYCL_DYNAMIC_REQUIRED_PRECISION: %s\n",
@@ -5176,36 +5192,54 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
         min_compute_capability = ggml_sycl_info().devices[ctx.device].cc;
     }
 
+    bool use_dequantize_mul_mat_vec = false;
+    bool use_mul_mat_vec_q          = false;
+    bool use_mul_mat_q              = false;
+
     // check data types and tensor shapes for custom matrix multiplication kernels:
-    bool use_dequantize_mul_mat_vec = can_use_dequantize_mul_mat_vec(src0, src1, dst);
-    if (src1->ne[1] == 1 && ggml_sycl_xmx_min_cols(src0->type) == 1 && can_use_xmx_batch(ctx.device, src0, src1)) {
-        use_dequantize_mul_mat_vec = false;
-    }
+    const auto choose = [&]() {
+        use_dequantize_mul_mat_vec = can_use_dequantize_mul_mat_vec(src0, src1, dst);
+        if (src1->ne[1] == 1 && ggml_sycl_xmx_min_cols(src0->type) == 1 && can_use_xmx_batch(ctx.device, src0, src1)) {
+            use_dequantize_mul_mat_vec = false;
+        }
 #ifdef GGML_SYCL_F16
-    // dmmv may convert src1 to f16 in this build [TAG_GGML_PREC]
-    use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && ggml_sycl_src1_f16_ok(dst);
+        // dmmv may convert src1 to f16 in this build [TAG_GGML_PREC]
+        use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && ggml_sycl_src1_f16_ok(dst);
 #endif
 
-    bool use_mul_mat_vec_q = can_use_mul_mat_vec_q(ctx.device, src0, src1, dst);
+        use_mul_mat_vec_q = can_use_mul_mat_vec_q(ctx.device, src0, src1, dst);
 
-    bool use_mul_mat_q = can_use_mul_mat_q(src0, src1, dst);
+        use_mul_mat_q = can_use_mul_mat_q(src0, src1, dst);
 
-    // When reorder is enabled, both ESIMD, MMVQ and DMMV kernels may be used. For
-    // best performance use ESIMD when supported, followed by MMVQ, and finally DMMV.
-    // But the reordered ESIMD path cannot be used without reordered MMVQ. A later
-    // multi-token call (ne[1] in 2..8) will take the MMVQ path and it would read the
-    // reordered bytes as if they were still the unreordered layout.
+        // When reorder is enabled, both ESIMD, MMVQ and DMMV kernels may be used. For
+        // best performance use ESIMD when supported, followed by MMVQ, and finally DMMV.
+        // But the reordered ESIMD path cannot be used without reordered MMVQ. A later
+        // multi-token call (ne[1] in 2..8) will take the MMVQ path and it would read the
+        // reordered bytes as if they were still the unreordered layout.
 
-    if (!g_ggml_sycl_prioritize_dmmv && ((should_reorder_tensor(ctx, dst) &&
-                                          ggml_sycl_supports_reorder_mmvq(src0->type)))) {
-        bool use = g_ggml_sycl_enable_esimd && ggml_sycl_supports_reorder_esimd(src0->type);
-        // Arc770 get benefit with Q4_0 by skipping MMVQ path
-        if (!(ggml_sycl_info().devices[ctx.device].hw_info.arch ==
-                    gpu_arch::intel_gpu_acm_g10 &&
-                src0->type == GGML_TYPE_Q4_0)) {
-            use = use || !use_mul_mat_vec_q;
+        if (!g_ggml_sycl_prioritize_dmmv && ((should_reorder_tensor(ctx, dst) &&
+                                              ggml_sycl_supports_reorder_mmvq(src0->type)))) {
+            bool use = g_ggml_sycl_enable_esimd && ggml_sycl_supports_reorder_esimd(src0->type);
+            // Arc770 get benefit with Q4_0 by skipping MMVQ path
+            if (!(ggml_sycl_info().devices[ctx.device].hw_info.arch ==
+                        gpu_arch::intel_gpu_acm_g10 &&
+                    src0->type == GGML_TYPE_Q4_0)) {
+                use = use || !use_mul_mat_vec_q;
+            }
+            use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && use;
         }
-        use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && use;
+    };
+    choose();
+
+    // The first mat-vec of a weight reorders it in the branch below. Do that here and choose again, so the first call
+    // takes the kernel of the later ones: the XMX kernels only take reordered weights, and a different kernel on the
+    // first call makes the result depend on whether the weight was used before.
+    const auto * extra0 = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
+    if (!split && extra0 && !extra0->optimized_feature.reorder && (use_dequantize_mul_mat_vec || use_mul_mat_vec_q)) {
+        opt_for_reorder(&ctx, src0, src1, dst, use_dequantize_mul_mat_vec ? mul_mat_algo::DMMV : mul_mat_algo::MMVQ);
+        if (extra0->optimized_feature.reorder) {
+            choose();
+        }
     }
 
     if (!split && src0->type == GGML_TYPE_F16 && ggml_is_permuted(src0) && ggml_is_permuted(src1) && src1->ne[1] == 1) {
