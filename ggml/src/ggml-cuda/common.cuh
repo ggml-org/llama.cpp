@@ -537,7 +537,7 @@ static __device__ __forceinline__ T warp_reduce_sum_impl(T x) {
             x += ggml_hip_dpp_update<GGML_HIP_DPP_ROW_BCAST_31>(x);
             if constexpr (only_lane0_is_used) {
                 return ggml_hip_dpp_update<GGML_HIP_DPP_WAVE_ROR_1>(x);
-            }else {
+            } else {
                 return ggml_cuda_shfl(x, 63, 64);
             }
         }
