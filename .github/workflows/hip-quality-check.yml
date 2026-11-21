@@ -155,19 +155,35 @@ jobs:
 
       - name: Cache master metrics baseline
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-        uses: actions/cache/save@v5
-        with:
-          path: hip-baseline-metrics
-          key: hip-quality-check-master-yaml-device-${{ github.sha }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        run: |
+          if [ -n "$HF_TOKEN" ]; then
+            tar -czf hip-baseline-metrics.tar.gz -C hip-baseline-metrics .
+            .venv-hf/bin/hf buckets cp hip-baseline-metrics.tar.gz "hf://buckets/ggml-org/cache/llama.cpp/hip-quality-check-yaml-device-rocm-7.2.1-gfx908-${{ github.sha }}.tar.gz" || echo "Failed to save HIP metrics baseline"
+          fi
 
       # Restore the device optimization records for the exact baseline commit.
       - name: Restore master metrics baseline
         if: ${{ github.event_name == 'pull_request' }}
         id: baseline_cache
-        uses: actions/cache/restore@v5
-        with:
-          path: hip-baseline-metrics
-          key: hip-quality-check-master-yaml-device-${{ steps.master_sha.outputs.sha }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+        run: |
+          cache_url="hf://buckets/ggml-org/cache/llama.cpp/hip-quality-check-yaml-device-rocm-7.2.1-gfx908-${{ steps.master_sha.outputs.sha }}.tar.gz"
+          if .venv-hf/bin/hf buckets cp "$cache_url" hip-baseline-metrics.tar.gz; then
+            mkdir -p hip-baseline-metrics
+            if tar -xzf hip-baseline-metrics.tar.gz -C hip-baseline-metrics && [ -n "$(find hip-baseline-metrics -type f -name '*.opt.yaml' -print -quit)" ]; then
+              echo "cache-hit=true" >> "$GITHUB_OUTPUT"
+              echo "Restored HIP metrics baseline from HF Buckets"
+            else
+              rm -rf hip-baseline-metrics
+              echo "Invalid HIP metrics baseline cache"
+            fi
+            rm -f hip-baseline-metrics.tar.gz
+          else
+            echo "No HIP metrics baseline in HF Buckets; building from source"
+          fi
 
       # Fallback when the baseline commit has no cached metrics.
       - name: Checkout baseline (master)
