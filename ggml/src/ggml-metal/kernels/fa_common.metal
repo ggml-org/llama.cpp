@@ -17,28 +17,17 @@ constant int32_t FC_flash_attn_ext_nsg  [[function_constant(FC_FLASH_ATTN_EXT + 
 // ref: https://arxiv.org/pdf/2307.08691.pdf
 template<
     typename q_t,     // query types in shared memory
-    typename q4_t,
-    typename q8x8_t,
     typename k_t,     // key types in shared memory
-    typename k4x4_t,
-    typename k8x8_t,
     typename v_t,     // value types in shared memory
-    typename v4x4_t,
-    typename v8x8_t,
     typename qk_t,    // Q*K types
-    typename qk8x8_t,
     typename s_t,     // soft-max types
-    typename s2_t,
-    typename s8x8_t,
     typename o_t,     // attention accumulation types
-    typename o4_t,
-    typename o8x8_t,
     typename kd4x4_t, // key type in device memory
     short nl_k,
-    void (*deq_k)(device const kd4x4_t *, short, thread k4x4_t &),
+    void (*deq_k)(device const kd4x4_t *, short, thread typename value_type_4x4<k_t>::type &),
     typename vd4x4_t, // value type in device memory
     short nl_v,
-    void (*deq_v)(device const vd4x4_t *, short, thread v4x4_t &),
+    void (*deq_v)(device const vd4x4_t *, short, thread typename value_type_4x4<v_t>::type &),
     short DK,         // K head size
     short DV,         // V head size
     short Q,          // queries per threadgroup
@@ -58,6 +47,18 @@ void kernel_flash_attn_ext_impl(
         uint3   tgpig,
         ushort  tiisg,
         ushort  sgitg) {
+    using q4_t   = typename value_type_4   <q_t>::type;
+    using q8x8_t = typename value_type_8x8 <q_t>::type;
+    using k4x4_t = typename value_type_4x4 <k_t>::type;
+    using k8x8_t = typename value_type_8x8 <k_t>::type;
+    using v4x4_t = typename value_type_4x4 <v_t>::type;
+    using v8x8_t = typename value_type_8x8 <v_t>::type;
+    using qk8x8_t = typename value_type_8x8<qk_t>::type;
+    using s2_t   = typename value_type_2   <s_t>::type;
+    using s8x8_t = typename value_type_8x8 <s_t>::type;
+    using o4_t   = typename value_type_4   <o_t>::type;
+    using o8x8_t = typename value_type_8x8 <o_t>::type;
+
     const ushort iq3 = tgpig[2];
     const ushort iq2 = tgpig[1];
     const ushort iq1 = tgpig[0]*Q;
@@ -656,28 +657,17 @@ void kernel_flash_attn_ext_impl(
 
 template<
     typename q_t,     // query types in shared memory
-    typename q4_t,
-    typename q8x8_t,
     typename k_t,     // key types in shared memory
-    typename k4x4_t,
-    typename k8x8_t,
     typename v_t,     // value types in shared memory
-    typename v4x4_t,
-    typename v8x8_t,
     typename qk_t,    // Q*K types
-    typename qk8x8_t,
     typename s_t,     // soft-max types
-    typename s2_t,
-    typename s8x8_t,
     typename o_t,     // attention accumulation types
-    typename o4_t,
-    typename o8x8_t,
     typename kd4x4_t, // key type in device memory
     short nl_k,
-    void (*deq_k)(device const kd4x4_t *, short, thread k4x4_t &),
+    void (*deq_k)(device const kd4x4_t *, short, thread typename value_type_4x4<k_t>::type &),
     typename vd4x4_t, // value type in device memory
     short nl_v,
-    void (*deq_v)(device const vd4x4_t *, short, thread v4x4_t &),
+    void (*deq_v)(device const vd4x4_t *, short, thread typename value_type_4x4<v_t>::type &),
     short DK,         // K head size
     short DV,         // V head size
     short Q  = OP_FLASH_ATTN_EXT_NQPSG, // queries per threadgroup
@@ -696,7 +686,7 @@ kernel void kernel_flash_attn_ext(
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
-#define FWD_TMPL q_t, q4_t, q8x8_t, k_t, k4x4_t, k8x8_t, v_t, v4x4_t, v8x8_t, qk_t, qk8x8_t, s_t, s2_t, s8x8_t, o_t, o4_t, o8x8_t, kd4x4_t, nl_k, deq_k, vd4x4_t, nl_v, deq_v, DK, DV, Q, C
+#define FWD_TMPL q_t, k_t, v_t, qk_t, s_t, o_t, kd4x4_t, nl_k, deq_k, vd4x4_t, nl_v, deq_v, DK, DV, Q, C
 #define FWD_ARGS args, q, k, v, mask, sinks, pad, blk, dst, shmem_f16, tgpig, tiisg, sgitg
     switch (FC_flash_attn_ext_nsg) {
       // note: disabled cases to reduce library load time
