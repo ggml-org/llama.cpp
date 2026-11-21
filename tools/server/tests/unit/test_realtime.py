@@ -81,11 +81,14 @@ def session_update(ws: Connection, **session) -> dict:
 # live transcription
 #
 
+# [TAG_MTMD_NO_REALLOC] TODO: mtmd reallocs its graphs on audio stream steps
+skip_no_realloc = pytest.mark.skipif(is_no_realloc(), reason="mtmd: graph realloc on audio stream step")
+
 LIVE_ASR = [
     # a chat model with an "asr" chat template, live only in sessions opened with ?intent=transcription
     ("tinylfm3omni",  "/v1/realtime?intent=transcription"),
     # no chat, the text follows the audio by a few tokens
-    ("tinyvoxtralrt", "/v1/realtime"),
+    pytest.param("tinyvoxtralrt", "/v1/realtime", marks=skip_no_realloc),
 ]
 
 
@@ -119,6 +122,7 @@ def test_live_asr(preset: str, path: str):
     assert all(len(text) > 0 for _, text in transcripts)
 
 
+@skip_no_realloc
 @pytest.mark.parametrize("preset,path", LIVE_ASR)
 def test_live_asr_chunked_audio(preset: str, path: str):
     start_live_asr(preset)
@@ -168,6 +172,7 @@ def test_live_asr_invalid_events(preset: str, path: str):
         assert len(get_transcripts(recv_all(ws))) == 1
 
 
+@skip_no_realloc
 def test_live_asr_depends_on_audio():
     # the random weights of this model give a different text for each input
     start_live_asr("tinyvoxtralrt")
