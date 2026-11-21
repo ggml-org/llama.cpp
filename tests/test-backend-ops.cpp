@@ -11304,6 +11304,38 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_conv_2d({ 13, 11, 16, 3 }, { 1, 1, 16, 33 }, GGML_TYPE_F16, 1, 1, 0, 0, 1, 1));
     test_cases.emplace_back(new test_conv_2d({ 19, 17, 8, 2 }, { 3, 3, 8, 17 }, GGML_TYPE_F16, 1, 1, 1, 1, 1, 1, false, 1));
 
+    // Small versions of diffusion model convolutions (UNet and VAE blocks):
+    // channel counts that are multiples of 16, odd spatial sizes and output
+    // channel counts, asymmetric padding, stride-2 downsampling, 1x1 shortcuts.
+    for (auto kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+        for (auto c : std::vector<std::array<int64_t, 11>>{
+                // W, H, Cin, Cout, N, KW, KH, s, s, p0, p1
+                { 23, 19,  16, 128, 1, 3, 3, 1, 1, 1, 1 },   // VAE conv_in from a 16-channel latent
+                { 23, 19,  64,  40, 2, 3, 3, 1, 1, 1, 1 },
+                {  9,  7, 320, 320, 1, 3, 3, 1, 1, 1, 1 },
+                {  7,  7, 512,  64, 2, 3, 3, 1, 1, 1, 1 },
+                { 70, 37,  64,  32, 1, 3, 3, 1, 1, 1, 1 },
+                { 13, 11, 128,   3, 1, 3, 3, 1, 1, 1, 1 },   // VAE conv_out
+                { 30, 17,  32,  65, 2, 3, 3, 1, 1, 1, 2 },
+                { 40,  9,  64,  64, 3, 4, 3, 1, 1, 2, 1 },
+                { 21, 21,  64,  17, 2, 4, 4, 1, 1, 1, 1 },
+                { 80, 80,  64, 192, 1, 4, 4, 1, 1, 1, 1 },  // many output tiles with a 16-tap filter
+                {  9, 11,  16,  24, 1, 2, 3, 1, 1, 1, 0 },
+                { 17, 17,  64,  64, 1, 3, 3, 2, 2, 1, 1 },   // downsample
+                { 33,  7,  96,  48, 2, 1, 1, 1, 1, 0, 0 },   // 1x1 shortcut
+                // deep, low-resolution layers: few output tiles, long CRS loop
+                // (split-K candidates)
+                { 12, 12, 1280, 192, 1, 3, 3, 1, 1, 1, 1 },
+                { 26, 26, 2048, 256, 1, 3, 3, 1, 1, 1, 1 },
+                { 32, 32,  640, 640, 1, 3, 3, 2, 2, 1, 1 },  // SD 1.5 UNet downsample from 32x32 to 16x16
+            }) {
+            test_cases.emplace_back(new test_conv_2d({ c[0], c[1], c[2], c[4] }, { c[5], c[6], c[2], c[3] }, kernel_type,
+                                                     (int)c[7], (int)c[8], (int)c[9], (int)c[10], 1, 1, false));
+        }
+        // VAE conv_out again, with the filter at an odd offset in its buffer
+        test_cases.emplace_back(new test_conv_2d({ 13, 11, 128, 1 }, { 3, 3, 128, 3 }, kernel_type, 1, 1, 1, 1, 1, 1, false, 1));
+    }
+
     // sycl backend will limit task global_range < MAX_INT
     // test cases for 2D im2col with large input W and H (occurs in stable-diffusion)
     // however these cases need to alloc more memory which may fail in some devices (Intel Arc770, etc.)
@@ -11399,6 +11431,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_conv_3d(1, 2, 64, 2, 40, 3, 64, 2, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, kernel_type));
         test_cases.emplace_back(new test_conv_3d(1, 2, 85, 3, 40, 3, 85, 3, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, kernel_type));
         test_cases.emplace_back(new test_conv_3d(1, 2, 16, 16, 40, 3, 16, 16, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, kernel_type));
+        // Small versions of video VAE convolutions: causal 3x3x3 with the
+        // padding applied beforehand (one output frame from three input
+        // frames, as in single-image Wan VAE decoding), and operator padding.
+        test_cases.emplace_back(new test_conv_3d(1, 32, 3, 12, 10, 48, 3, 3, 3, 1, 1, 1, 0, 0, 0, 1, 1, 1, kernel_type));
+        test_cases.emplace_back(new test_conv_3d(1, 64, 5, 9, 11, 64, 3, 3, 3, 1, 1, 1, 0, 0, 0, 1, 1, 1, kernel_type));
+        test_cases.emplace_back(new test_conv_3d(2, 16, 4, 8, 13, 40, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, kernel_type));
+        test_cases.emplace_back(new test_conv_3d(1, 128, 3, 7, 9, 96, 3, 3, 3, 1, 1, 1, 1, 1, 0, 1, 1, 1, kernel_type));
+        // Large enough (64 or more channels, 4K output pixels) for the faster
+        // paths: the Wan 2.1 VAE decoder at full resolution (96 channels) on a
+        // 64x64 crop, and 8 frames with zero padding on all sides
+        test_cases.emplace_back(new test_conv_3d(1, 96, 3, 66, 66, 96, 3, 3, 3, 1, 1, 1, 0, 0, 0, 1, 1, 1, kernel_type));
+        test_cases.emplace_back(new test_conv_3d(1, 64, 8, 16, 32, 64, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, kernel_type));
     }
 
     for(uint32_t Cout : {1, 9}){
@@ -13999,6 +14043,38 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
+    // 2D convolutions from diffusion models, as stable-diffusion.cpp runs them
+    // with direct convolution: f16 filters, WHCN, batch 1.
+    struct conv2d_diffusion_case {
+        int IW, IH, Cin, Cout, K, s, p;
+    };
+    const std::vector<conv2d_diffusion_case> conv2d_diffusion_cases = {
+        // SD 1.5 UNet, 512x512 image (64x64 latent)
+        {   64,   64,  320,  320, 3, 1, 1 },  // resnet, 64x64 level
+        {   32,   32,  640,  640, 3, 1, 1 },  // resnet, 32x32 level
+        {   16,   16, 1280, 1280, 3, 1, 1 },  // resnet, 16x16 level
+        {    8,    8, 1280, 1280, 3, 1, 1 },  // resnet, 8x8 level and mid block
+        {   64,   64,  320,  320, 3, 2, 1 },  // downsample from 64x64 to 32x32
+        // SDXL UNet, 1024x1024 image (128x128 latent)
+        {  128,  128,  320,  320, 3, 1, 1 },  // resnet, 128x128 level
+        {   64,   64,  640,  640, 3, 1, 1 },  // resnet, 64x64 level
+        {   32,   32, 1280, 1280, 3, 1, 1 },  // resnet, 32x32 level and mid block
+        {   64,   64,  320,  640, 3, 1, 1 },  // first resnet of the 64x64 down block
+        {   32,   32, 2560, 1280, 3, 1, 1 },  // 32x32 up block resnet, skip connection concatenated
+        {   32,   32, 2560, 1280, 1, 1, 0 },  // and its 1x1 shortcut
+        // VAE decoder, 1024x1024 image (SDXL, SD3 and Flux share these layers)
+        {  128,  128,   16,  512, 3, 1, 1 },  // conv_in from a 16-channel latent (SD3, Flux)
+        {  128,  128,  512,  512, 3, 1, 1 },  // mid block and first up block, 128x128
+        {  256,  256,  512,  512, 3, 1, 1 },  // up block at 256x256
+        {  512,  512,  256,  256, 3, 1, 1 },  // up block at 512x512
+        { 1024, 1024,  128,  128, 3, 1, 1 },  // up block at 1024x1024
+        { 1024, 1024,  128,    3, 3, 1, 1 },  // conv_out to RGB
+    };
+    for (const conv2d_diffusion_case & c : conv2d_diffusion_cases) {
+        test_cases.emplace_back(new test_conv_2d({ c.IW, c.IH, c.Cin, 1 }, { c.K, c.K, c.Cin, c.Cout }, GGML_TYPE_F16,
+                                                 c.s, c.s, c.p, c.p, 1, 1, false));
+    }
+
     struct conv3d_perf_case {
         int N, IC, ID, IH, IW, OC, KD, KH, KW, s0, s1, s2, p0, p1, p2, d0, d1, d2;
     };
@@ -14018,6 +14094,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         {1,  256, 6, 154, 106,  256, 3, 3, 3, 1, 1, 1, 0, 0, 0, 1, 1, 1},
         {1,  384, 3,  38,  26,  768, 3, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1},
         {1,  192, 2,  76,  52,   96, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1},
+        // Wan 2.1 VAE decoder (also used by Qwen-Image), one 1024x1024 image.
+        // Each causal 3x3x3 conv makes one output frame from the frame plus
+        // two padding frames; the spatial padding is applied beforehand.
+        {1,  384, 3, 130, 130,  384, 3, 3, 3, 1, 1, 1, 0, 0, 0, 1, 1, 1},  // at 128x128 (1/8 resolution)
+        {1,  192, 3, 514, 514,  192, 3, 3, 3, 1, 1, 1, 0, 0, 0, 1, 1, 1},  // at 512x512 (1/2 resolution)
+        // HunyuanVideo VAE decoder, 33 frames of 480x848 (9 latent frames of 60x106)
+        {1,  512, 11, 62, 108,  512, 3, 3, 3, 1, 1, 1, 0, 0, 0, 1, 1, 1},  // at latent resolution
+        // Wan 2.1 VAE decoder, 832x480 video. It decodes one latent frame at a
+        // time, so each causal 3x3x3 conv gets the chunk's frames (doubled by
+        // each temporal upsample) plus two cached frames; the spatial padding
+        // is applied beforehand.
+        {1,  384, 3,  62, 106,  384, 3, 3, 3, 1, 1, 1, 0, 0, 0, 1, 1, 1},  // at 104x60, 1 frame per chunk
+        {1,  384, 4, 122, 210,  384, 3, 3, 3, 1, 1, 1, 0, 0, 0, 1, 1, 1},  // at 208x120, 2 frames per chunk
+        {1,  192, 6, 242, 418,  192, 3, 3, 3, 1, 1, 1, 0, 0, 0, 1, 1, 1},  // at 416x240, 4 frames per chunk
+        {1,   96, 6, 482, 834,   96, 3, 3, 3, 1, 1, 1, 0, 0, 0, 1, 1, 1},  // at 832x480, 4 frames per chunk
 #if 0
         // too slow on some devices
         {1, 1280, 8, 152, 104, 1280, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1},

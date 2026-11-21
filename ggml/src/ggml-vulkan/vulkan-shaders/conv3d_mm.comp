@@ -30,45 +30,7 @@ layout(binding = 2) writeonly buffer D {
     D_TYPE dst_data[];
 };  // dst - result:    [OW, OH, OD, OC*N]
 
-layout(push_constant) uniform parameter {
-    // I/O channels, batch size
-    uint32_t OC;
-    uint32_t IC;
-    uint32_t N;
-
-    // Tensor spatial sizes: input, output
-    uint32_t IW;
-    uint32_t IH;
-    uint32_t ID;
-    uint32_t OW;
-    uint32_t OH;
-    uint32_t OD;
-
-    // Strides in elements
-    uint32_t nb01;
-    uint32_t nb02;
-    uint32_t nb03;
-
-    uint32_t nb11;
-    uint32_t nb12;
-    uint32_t nb13;
-
-    uint32_t nb1;
-    uint32_t nb2;
-    uint32_t nb3;
-
-    // fastdiv helper values
-    uint32_t OWmp;   uint32_t OWL;
-    uint32_t OWOHmp; uint32_t OWOHL;
-    uint32_t OWOHODmp; uint32_t OWOHODL;
-
-    // element offsets for misaligned buffer bindings
-    uint32_t knl_offset;
-    uint32_t src_offset;
-    uint32_t dst_offset;
-}
-
-p;
+#include "conv3d_push_constants.glsl"
 
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 // Blocktile sizes
@@ -213,18 +175,21 @@ void split_npq(uint32_t npq_idx, out uint32_t n, out uint32_t od, out uint32_t o
 #ifdef COOPMAT2
 #define ACC_TYPE float16_t
 
-ACC_TYPE perElemOpStore(const in uint32_t r, const in uint32_t c, const in ACC_TYPE elem)
+// Stores one element of the result. The tile's position is passed in because
+// reading globals here is slow with current drivers.
+ACC_TYPE perElemOpStore(const in uint32_t r, const in uint32_t c, const in ACC_TYPE elem,
+                        const in uint32_t K_base, const in uint32_t NPQ_base, const in uint32_t split_base)
 {
-    uint32_t K_idx   = B_idx_K * BS_K + r;
-    uint32_t NPQ_idx = B_idx_NPQ * BS_NPQ + c;
+    uint32_t K_idx   = K_base + r;
+    uint32_t NPQ_idx = NPQ_base + c;
     uint32_t N_idx;
     uint32_t OD_idx;
     uint32_t OH_idx;
     uint32_t OW_idx;
     split_npq(NPQ_idx, N_idx, OD_idx, OH_idx, OW_idx);
     uint32_t dst_idx = OW_idx + OH_idx * p.nb1 + OD_idx * p.nb2 + (N_idx * p.OC + K_idx) * p.nb3;
-    if (aligned != 0 || (K_idx < K && NPQ_idx < NPQ)) {
-        dst_data[dst_idx + p.dst_offset + split_offset] = D_TYPE(elem);
+    if (aligned != 0 || (K_idx < p.OC && NPQ_idx < p.N * p.OD * p.OH * p.OW)) {
+        dst_data[dst_idx + p.dst_offset + split_base] = D_TYPE(elem);
     }
     return elem;
 }
@@ -413,7 +378,7 @@ void main() {
     }
 #ifdef COOPMAT2
     else {
-        coopMatPerElementNV(matC, matC, perElemOpStore);
+        coopMatPerElementNV(matC, matC, perElemOpStore, B_idx_K * BS_K, B_idx_NPQ * BS_NPQ, split_offset);
     }
 #endif
 #else

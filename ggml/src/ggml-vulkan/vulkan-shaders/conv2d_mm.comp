@@ -34,42 +34,7 @@ layout(binding = 2) writeonly buffer D {
     D_TYPE dst_data[];
 };  // dst - result:    [OW, OH, Cout, N]
 
-layout(push_constant) uniform parameter {
-    // I/O channels, batch size
-    uint32_t Cout;
-    uint32_t Cin;
-    uint32_t N;
-
-    // Tensor spatial sizes: input, output
-    uint32_t W;
-    uint32_t H;
-    uint32_t OW;
-    uint32_t OH;
-
-    // Strides in elements
-    uint32_t nb01;
-    uint32_t nb02;
-    uint32_t nb03;
-
-    uint32_t nb11;
-    uint32_t nb12;
-    uint32_t nb13;
-
-    uint32_t nb1;
-    uint32_t nb2;
-    uint32_t nb3;
-
-    // fastdiv helper values
-    uint32_t OWmp;   uint32_t OWL;
-    uint32_t OWOHmp; uint32_t OWOHL;
-
-    // element offsets for misaligned buffer bindings
-    uint32_t knl_offset;
-    uint32_t src_offset;
-    uint32_t dst_offset;
-}
-
-p;
+#include "conv2d_push_constants.glsl"
 
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 // Blocktile sizes
@@ -124,6 +89,9 @@ const bool stride_in_bounds = (s0 == 1) && (s1 == 1);
 const bool stride_in_bounds = true;
 #endif
 
+// Number of workgroups the CRS loop is split across (1 = no split).
+layout(constant_id = 19) const uint split_k        = 1;
+
 uint32_t       tid     = gl_LocalInvocationID.x;
 const uint32_t WG_SIZE = gl_WorkGroupSize.x;
 
@@ -131,8 +99,8 @@ uint splitWork(uint work_size, uint block_size) {
     return (block_size + work_size - 1) / block_size;
 }
 
-uint32_t K   = p.Cout;
-uint32_t CRS = p.Cin * KH * KW;
+uint32_t K   = p.OC;
+uint32_t CRS = p.IC * KH * KW;
 uint32_t NPQ = p.N * p.OH * p.OW;
 
 uint32_t n_elems_out = K * NPQ;
@@ -185,8 +153,14 @@ R,S=KH,KW
 P,Q=OH,OW
 */
 
-uint32_t B_idx_K   = gl_WorkGroupID.x;
-uint32_t B_idx_NPQ = gl_WorkGroupID.y + gl_WorkGroupID.z * 512;
+// With split_k > 1, each workgroup runs one contiguous part of the CRS loop
+// and writes its partial sums to its own copy of the output, and a reduce pass
+// adds the copies up. Neighboring workgroups take different channel tiles of
+// the same split, so they read the same inputs at about the same time.
+uint32_t B_idx_K     = split_k > 1 ? gl_WorkGroupID.x % splitWork(K, BS_K) : gl_WorkGroupID.x;
+uint32_t B_idx_split = split_k > 1 ? gl_WorkGroupID.x / splitWork(K, BS_K) : 0;
+uint32_t B_idx_NPQ   = gl_WorkGroupID.y + gl_WorkGroupID.z * 512;
+uint32_t split_offset = B_idx_split * K * NPQ;
 
 uint32_t T_y = tid / NT_NPQ;
 uint32_t T_x = tid % NT_NPQ;
@@ -202,16 +176,19 @@ const uint32_t BrpWg = WG_SIZE / BS_NPQ;
 #ifdef COOPMAT2
 #define ACC_TYPE float16_t
 
-ACC_TYPE perElemOpStore(const in uint32_t r, const in uint32_t c, const in ACC_TYPE elem)
+// Stores one element of the result. The tile's position is passed in because
+// reading globals here is slow with current drivers.
+ACC_TYPE perElemOpStore(const in uint32_t r, const in uint32_t c, const in ACC_TYPE elem,
+                        const in uint32_t K_base, const in uint32_t NPQ_base, const in uint32_t split_base)
 {
-    uint32_t K_idx   = B_idx_K * BS_K + r;
-    uint32_t NPQ_idx = B_idx_NPQ * BS_NPQ + c;
+    uint32_t K_idx   = K_base + r;
+    uint32_t NPQ_idx = NPQ_base + c;
     uint32_t N_idx   = fastdiv(NPQ_idx, p.OWOHmp, p.OWOHL); // divide by p.OH * p.OW;
     uint32_t OH_idx  = fastdiv(NPQ_idx - N_idx * p.OH * p.OW, p.OWmp, p.OWL); // divide by p.OW;
     uint32_t OW_idx  = NPQ_idx - N_idx * p.OH * p.OW - OH_idx * p.OW;
     uint32_t dst_idx = OW_idx + OH_idx * p.nb1 + K_idx * p.nb2 + N_idx * p.nb3;
-    if (aligned != 0 || (K_idx < K && NPQ_idx < NPQ)) {
-        dst_data[dst_idx + p.dst_offset] = D_TYPE(elem);
+    if (aligned != 0 || (K_idx < p.OC && NPQ_idx < p.N * p.OH * p.OW)) {
+        dst_data[dst_idx + p.dst_offset + split_base] = D_TYPE(elem);
     }
     return elem;
 }
@@ -241,7 +218,11 @@ void main() {
     }
 #endif
     /* Advance block in CRS dim */
-    [[dont_unroll]] for (uint32_t B_idx_CRS = 0; B_idx_CRS < NB_CRS; B_idx_CRS++) {
+    const uint32_t crs_count = NB_CRS / split_k;
+    const uint32_t crs_extra = NB_CRS % split_k;
+    const uint32_t crs_begin = B_idx_split * crs_count + min(B_idx_split, crs_extra);
+    const uint32_t crs_end   = crs_begin + crs_count + uint32_t(B_idx_split < crs_extra);
+    [[dont_unroll]] for (uint32_t B_idx_CRS = crs_begin; B_idx_CRS < crs_end; B_idx_CRS++) {
         uint32_t CRS_idx_a;
         uint32_t Cin_idx_a;
         uint32_t KH_idx_a;
@@ -344,7 +325,7 @@ void main() {
             uint32_t src_idx = W_idx + H_idx * p.nb11 + Cin_idx_b * p.nb12 + N_idx * p.nb13;
             // skip clamp when address can't go OOB
             if (aligned == 0 || !hw_in_bounds || !stride_in_bounds) {
-                src_idx = min(max(src_idx, 0), p.Cin * p.N * p.W * p.H - 1);
+                src_idx = min(max(src_idx, 0), p.IC * p.N * p.IW * p.IH - 1);
             }
             float val = src_data[src_idx + p.src_offset];
             bool oob = false;
@@ -352,7 +333,7 @@ void main() {
                 oob = true;
             }
             // also catches lower-bound underflow (idx wraps to 0x80000000+)
-            if (!hw_in_bounds && (H_idx >= p.H || W_idx >= p.W)) {
+            if (!hw_in_bounds && (H_idx >= p.IH || W_idx >= p.IW)) {
                 oob = true;
             }
 #ifdef TRANSPOSE
@@ -449,13 +430,13 @@ void main() {
             uint32_t OW_idx  = NPQ_idx - N_idx * p.OH * p.OW - OH_idx * p.OW;
             uint32_t dst_idx = OW_idx + OH_idx * p.nb1 + K_idx * p.nb2 + N_idx * p.nb3;
             if (aligned != 0 || (K_idx < K && NPQ_idx < NPQ)) {
-                dst_data[dst_idx + p.dst_offset] = D_TYPE(Csh[k_local * Csh_stride + npq_thread]);
+                dst_data[dst_idx + p.dst_offset + split_offset] = D_TYPE(Csh[k_local * Csh_stride + npq_thread]);
             }
         }
     }
 #ifdef COOPMAT2
     else {
-        coopMatPerElementNV(matC, matC, perElemOpStore);
+        coopMatPerElementNV(matC, matC, perElemOpStore, B_idx_K * BS_K, B_idx_NPQ * BS_NPQ, split_offset);
     }
 #endif
 #else
@@ -469,7 +450,7 @@ void main() {
                 uint32_t OW_idx  = NPQ_idx - N_idx * p.OH * p.OW - OH_idx * p.OW;
                 uint32_t dst_idx = OW_idx + OH_idx * p.nb1 + K_idx * p.nb2 + N_idx * p.nb3;
                 if (aligned != 0 || (K_idx < K && NPQ_idx < NPQ)) {
-                    dst_data[dst_idx + p.dst_offset] = regC[T_ly][T_lx];
+                    dst_data[dst_idx + p.dst_offset + split_offset] = regC[T_ly][T_lx];
                 }
             }
         }

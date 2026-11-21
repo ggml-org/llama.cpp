@@ -473,16 +473,18 @@ struct vk_xe_fa_pipeline_state {
 };
 
 struct vk_conv2d_pipeline_state {
-    vk_conv2d_pipeline_state(uint32_t s0, uint32_t s1, uint32_t p0, uint32_t p1, uint32_t d0, uint32_t d1, uint32_t KW, uint32_t KH, uint32_t aligned)
-        : s0(s0), s1(s1), p0(p0), p1(p1), d0(d0), d1(d1), KW(KW), KH(KH), aligned(aligned) {}
+    vk_conv2d_pipeline_state(uint32_t s0, uint32_t s1, uint32_t p0, uint32_t p1, uint32_t d0, uint32_t d1, uint32_t KW, uint32_t KH, uint32_t aligned, uint32_t split_k)
+        : s0(s0), s1(s1), p0(p0), p1(p1), d0(d0), d1(d1), KW(KW), KH(KH), aligned(aligned), split_k(split_k) {}
 
     uint32_t s0, s1, p0, p1, d0, d1, KW, KH;
     // when set, shader can skip K/CRS/NPQ bounds checks and address clamps
     uint32_t aligned;
+    // number of workgroups the CRS loop is split across (1 = no split)
+    uint32_t split_k;
 
     bool operator<(const vk_conv2d_pipeline_state &b) const {
-        return std::tie(s0, s1, p0, p1, d0, d1, KW, KH, aligned) <
-               std::tie(b.s0, b.s1, b.p0, b.p1, b.d0, b.d1, b.KW, b.KH, b.aligned);
+        return std::tie(s0, s1, p0, p1, d0, d1, KW, KH, aligned, split_k) <
+               std::tie(b.s0, b.s1, b.p0, b.p1, b.d0, b.d1, b.KW, b.KH, b.aligned, b.split_k);
     }
 };
 
@@ -916,6 +918,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_cpy_f32_quant[GGML_TYPE_COUNT];
     vk_pipeline pipeline_cpy_quant_f32[GGML_TYPE_COUNT];
     vk_pipeline pipeline_cpy_transpose_16, pipeline_cpy_transpose_32;
+    vk_pipeline pipeline_cpy_transpose_f32_f16;
     vk_pipeline pipeline_cpy_transpose_02_16, pipeline_cpy_transpose_02_32;
     // [src0 0=fp32,1=fp16][dst]
     vk_pipeline pipeline_set_rows_i32[2][GGML_TYPE_COUNT];
@@ -1027,6 +1030,9 @@ struct vk_device_struct {
     vk_pipeline pipeline_opt_step_sgd_f32;
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv2d_f32[CONV_SHAPE_COUNT];
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv2d_f16_f32[CONV_SHAPE_COUNT];
+    // conv_halo.comp for CONV_2D and CONV_3D, keyed by vk_conv_halo_params::key().
+    std::map<std::array<uint32_t, 11>, vk_pipeline> pipeline_conv2d_halo_f16_f32;
+    std::map<std::array<uint32_t, 11>, vk_pipeline> pipeline_conv3d_halo_f16_f32;
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv_transpose_2d_f32[CONV_SHAPE_COUNT];
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv_transpose_2d_f16_f32[CONV_SHAPE_COUNT];
     std::map<vk_conv3d_pipeline_state, vk_pipeline> pipeline_conv3d_f32[CONV_SHAPE_COUNT];
