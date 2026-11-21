@@ -777,6 +777,10 @@ static __global__ void flash_attn_mask_to_KV_max(
 void ggml_cuda_flash_attn_ext_compact_mask(
         const ggml_tensor * mask, int32_t * indices, int32_t * counts, int32_t n_queries, int32_t ncols1, int32_t n_kv_max, cudaStream_t stream);
 
+void ggml_cuda_flash_attn_ext_compact_top_k_mask(
+        const ggml_tensor * top_k_mask, const ggml_tensor * fa_mask, int32_t * indices, int32_t * counts,
+        uint8_t * sparse_qmask, int32_t n_queries, int32_t ncols1, int32_t n_kv_max, cudaStream_t stream);
+
 template<int D, int ncols1, int ncols2> // D == head size
 __launch_bounds__(D, 1)
 static __global__ void flash_attn_stream_k_fixup_uniform(
@@ -1032,7 +1036,7 @@ template <int DV, int ncols1, int ncols2>
 void launch_fattn(
     ggml_backend_cuda_context & ctx, ggml_tensor * dst, fattn_kernel_t fattn_kernel, const int nwarps, const size_t nbytes_shared,
     const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k, const bool use_sparse,
-    const int warp_size = WARP_SIZE, const bool async_kv_preload = false
+    const int warp_size = WARP_SIZE, const bool async_kv_preload = false, const ggml_tensor * top_k_mask = nullptr
 ) {
     constexpr int ncols = ncols1 * ncols2;
 
@@ -1070,9 +1074,10 @@ void launch_fattn(
     const ggml_cuda_flash_attn_ext_f16_extra_data f16_extra =
         ggml_cuda_flash_attn_ext_get_f16_extra_data(KQV, need_f16_K, need_f16_V);
 
-    ggml_cuda_pool_alloc<int>    KV_max(pool);
-    ggml_cuda_pool_alloc<float>  dst_tmp(pool);
-    ggml_cuda_pool_alloc<float2> dst_tmp_meta(pool);
+    ggml_cuda_pool_alloc<int>     KV_max(pool);
+    ggml_cuda_pool_alloc<uint8_t> sparse_qmask(pool);
+    ggml_cuda_pool_alloc<float>   dst_tmp(pool);
+    ggml_cuda_pool_alloc<float2>  dst_tmp_meta(pool);
 
     const char * K_data = (const char *) K->data;
     size_t nb11 = K->nb[1];
@@ -1164,7 +1169,16 @@ void launch_fattn(
         const size_t n_lists = size_t(ntiles_x) * mask->ne[3];
 
         KV_max.alloc(size_t(n_kv_max)*n_lists + n_lists);
-        ggml_cuda_flash_attn_ext_compact_mask(mask, KV_max.ptr, KV_max.ptr + size_t(n_kv_max)*n_lists, Q->ne[1], ncols1, n_kv_max, main_stream);
+        if (top_k_mask != nullptr) {
+            if constexpr (ncols1 > 1) {
+                sparse_qmask.alloc(size_t(n_kv_max)*n_lists);
+            }
+            ggml_cuda_flash_attn_ext_compact_top_k_mask(
+                top_k_mask, mask, KV_max.ptr, KV_max.ptr + size_t(n_kv_max)*n_lists,
+                sparse_qmask.ptr, Q->ne[1], ncols1, n_kv_max, main_stream);
+        } else {
+            ggml_cuda_flash_attn_ext_compact_mask(mask, KV_max.ptr, KV_max.ptr + size_t(n_kv_max)*n_lists, Q->ne[1], ncols1, n_kv_max, main_stream);
+        }
     }
 
     // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
@@ -1309,22 +1323,45 @@ void launch_fattn(
 
     GGML_ASSERT(block_dim.x % warp_size == 0);
 
+    const ggml_tensor * mask_src = mask;
+    int64_t mask_ne1 = mask ? mask->ne[1] : 0;
+    int64_t mask_ne2 = mask ? mask->ne[2] : 0;
+    int64_t mask_ne3 = mask ? mask->ne[3] : 0;
+    int64_t mask_nb1 = mask ? mask->nb[1] : 0;
+    int64_t mask_nb2 = mask ? mask->nb[2] : 0;
+    int64_t mask_nb3 = mask ? mask->nb[3] : 0;
+    if (use_sparse && top_k_mask != nullptr) {
+        // Keep mask_ne3 from fa_mask so sparse index/count/qmask stream indexing matches the reshaped output.
+        const ggml_tensor * base_mask = top_k_mask->src[0];
+        const bool mask_reshaped = mask != top_k_mask;
+        mask_src = base_mask;
+        mask_nb2 = 0;
+        if (mask_reshaped) {
+            const bool is_1d_bcast = base_mask->ne[1] == 1 && base_mask->ne[3] == 1;
+            mask_nb1 = is_1d_bcast ? 0 : mask->nb[1];
+            mask_nb3 = is_1d_bcast ? 0 : mask->nb[3];
+        } else {
+            mask_nb1 = base_mask->ne[1] == 1 ? 0 : base_mask->nb[1];
+            mask_nb3 = base_mask->ne[3] == 1 ? 0 : base_mask->nb[3];
+        }
+    }
+
     ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num, block_dim, nbytes_shared, main_stream);
     ggml_cuda_kernel_launch(fattn_kernel, launch_params,
         (const char *) Q->data,
         K_data,
         V_data,
-        mask ? ((const char *) mask->data) : nullptr,
+        mask_src ? ((const char *) mask_src->data) : nullptr,
         sinks ? ((const char *) sinks->data) : nullptr,
         KV_max.ptr,
-        kv_rows ? (const int *) kv_rows->data : nullptr,
+        use_sparse ? (const int *) sparse_qmask.ptr : (kv_rows ? (const int *) kv_rows->data : nullptr),
         !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (float *) KQV->data, dst_tmp_meta.ptr,
         scale, max_bias, m0, m1, n_head_log2, logit_softcap,
         Q->ne[0], ne01,     Q->ne[2], Q->ne[3], Q->nb[1], Q->nb[2], Q->nb[3],
         K->ne[0], n_kv, K->ne[2], K->ne[3], nb11, nb12, nb13,
         nb21, nb22, nb23,
-        mask ? mask->ne[1] : 0, mask ? mask->ne[2] : 0, mask ? mask->ne[3] : 0,
-        mask ? mask->nb[1] : 0, mask ? mask->nb[2] : 0, mask ? mask->nb[3] : 0
+        mask_ne1, mask_ne2, mask_ne3,
+        mask_nb1, mask_nb2, mask_nb3
     );
     CUDA_CHECK(cudaGetLastError());
 
