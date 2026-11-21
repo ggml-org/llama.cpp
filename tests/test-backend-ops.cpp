@@ -9231,6 +9231,42 @@ struct test_flash_attn_ext : public test_case {
     }
 };
 
+struct test_flash_attn_ext_swa : public test_flash_attn_ext {
+    const int64_t n_swa;
+    const int64_t pos_shift;
+    const bool hole_blocks;
+
+    test_flash_attn_ext_swa(int64_t nh, int64_t gqa, int64_t kv, int64_t nb, int64_t n_swa, int64_t pos_shift = 0, bool hole_blocks = false)
+        : test_flash_attn_ext(128, 128, nh, {gqa, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}),
+          n_swa(n_swa), pos_shift(pos_shift), hole_blocks(hole_blocks) {
+        GGML_ASSERT(kv > 0 && nb > 0 && nb <= kv);
+        GGML_ASSERT(n_swa >= 0 && n_swa <= kv && pos_shift >= 0 && pos_shift < kv);
+    }
+
+    std::string vars() override {
+        return test_flash_attn_ext::vars() + "," + VARS_TO_STR3(n_swa, pos_shift, hole_blocks);
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_flash_attn_ext::initialize_tensors(ctx);
+        ggml_tensor * m = ggml_get_tensor(ctx, "m");
+        std::vector<ggml_fp16_t> data(ggml_nelements(m), ggml_fp32_to_fp16(-INFINITY));
+
+        // Rotate logical key positions into physical cache slots without a sparse attention hint.
+        for (int64_t iq = 0; iq < nb; ++iq) {
+            const int64_t pos_q = kv - nb + iq;
+            for (int64_t ik = std::max<int64_t>(0, pos_q - n_swa + 1); ik <= pos_q; ++ik) {
+                if (hole_blocks && (ik/64)%3 == 1) {
+                    continue;
+                }
+                data[iq*kv + (ik + pos_shift)%kv] = ggml_fp32_to_fp16(0.0f);
+            }
+        }
+
+        ggml_backend_tensor_set(m, data.data(), 0, data.size()*sizeof(ggml_fp16_t));
+    }
+};
+
 // large Q values, so the online softmax has to rescale the partial results
 struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     static constexpr int q_range = 20;
@@ -13324,6 +13360,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // Sliding windows without the sparse hint: circular cache slots, empty splits, and partial blocks.
+    for (int64_t gqa : {1, 6}) {
+        for (int64_t nb : {1, 4}) {
+            for (int64_t shift : {0, 129}) {
+                test_cases.emplace_back(new test_flash_attn_ext_swa(2, gqa, 2560, nb, 512, shift));
+            }
+        }
+        test_cases.emplace_back(new test_flash_attn_ext_swa(2, gqa, 2573, 4,  512, 29));
+        test_cases.emplace_back(new test_flash_attn_ext_swa(2, gqa, 2573, 4,    1));
+        test_cases.emplace_back(new test_flash_attn_ext_swa(2, gqa, 2560, 1,    0));
+        test_cases.emplace_back(new test_flash_attn_ext_swa(2, gqa, 2560, 4,    0));
+        test_cases.emplace_back(new test_flash_attn_ext_swa(2, gqa, 2560, 4, 2560));
+        test_cases.emplace_back(new test_flash_attn_ext_swa(2, gqa, 2560, 4,  512, 129, true));
+    }
+    test_cases.emplace_back(new test_flash_attn_ext_swa(2, 6, 2048, 8, 512, 129));
+
     // sparse mask with large batch size
     test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, { 8, 1}, 4096, 64, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false,  512));
     test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, { 8, 1}, 4096, 64, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2048));
@@ -14116,6 +14168,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_flash_attn_ext(72, 72, 16, {1, 1}, 5776, 5776, false, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     // Same non-causal vision-encoder shape for the other head size padded in-kernel by the CUDA MMA kernels
     test_cases.emplace_back(new test_flash_attn_ext(40, 40, 16, {1, 1}, 5776, 5776, false, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+
+    // Sliding-window and dense causal masks at the same decode shapes, without the sparse hint.
+    for (int64_t kv : {2560, 16384}) {
+        for (int64_t nb : {1, 4}) {
+            test_cases.emplace_back(new test_flash_attn_ext_swa(8, 6, kv, nb, 512));
+            test_cases.emplace_back(new test_flash_attn_ext_swa(8, 6, kv, nb,  kv));
+        }
+    }
 
     // Sparse flash attention (n_kv_max hint) decode across KV depths.
     // Shapes: 576/512 DeepSeek MLA, 512/512 DeepSeek-V4/GLM-5.2, 256/256 gqa12 Qwen QSA.

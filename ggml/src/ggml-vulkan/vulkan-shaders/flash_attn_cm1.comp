@@ -88,6 +88,57 @@ O_TYPEV4 pvsh_load(const uint32_t i) {
 }
 #endif
 
+uint32_t mask_opt_active_bits(const in uint32_t word, const in uint32_t w, const in uint32_t n_blocks) {
+    const uint32_t n_valid = min(16u, n_blocks - w * 16);
+    const uint32_t valid = n_valid == 16 ? 0x55555555u : (((1u << (2 * n_valid)) - 1u) & 0x55555555u);
+    // Only ALL_NEG_INF has its low bit set.
+    return valid & ~word;
+}
+
+void mask_opt_balance_split_k(const in uint32_t mo_offset, const in uint32_t mo_stride) {
+    const uint32_t n_blocks = CEIL_DIV(KV, Bc);
+    uint32_t n_active = 0;
+    for (uint32_t w = 0; w < mo_stride; ++w) {
+        n_active += bitCount(mask_opt_active_bits(data_mask_opt[mo_offset + w], w, n_blocks));
+    }
+    if (n_active == n_blocks) {
+        return;
+    }
+
+    const uint32_t per_split = CEIL_DIV(n_active, p.k_num);
+    const uint32_t first = split_k_index * per_split;
+    const uint32_t last = min(first + per_split, n_active);
+    start_j = 0;
+    end_j = 0;
+    if (first >= last) {
+        return;
+    }
+
+    // Partition active blocks in KV order; the attention loop still skips holes inside each range.
+    uint32_t seen = 0;
+    for (uint32_t w = 0; w < mo_stride && seen < last; ++w) {
+        const uint32_t bits = mask_opt_active_bits(data_mask_opt[mo_offset + w], w, n_blocks);
+        const uint32_t count = bitCount(bits);
+        if (seen + count <= first) {
+            seen += count;
+            continue;
+        }
+        for (uint32_t b = 0; b < 16; ++b) {
+            if ((bits & (1u << (2 * b))) == 0) {
+                continue;
+            }
+            if (seen == first) {
+                start_j = w * 16 + b;
+            }
+            seen++;
+            if (seen == last) {
+                end_j = w * 16 + b + 1;
+                break;
+            }
+        }
+    }
+}
+
 void main() {
 #ifdef NEEDS_INIT_IQ_SHMEM
     if (fa_type_needs_shmem(FaTypeK) || fa_type_needs_shmem(FaTypeV)) {
@@ -207,6 +258,10 @@ void main() {
     if (p.nem2 != 1 || p.nem3 != 1) {
         m_offset += ((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * p.nem1 * KV;
         mo_offset += ((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * CEIL_DIV(p.nem1, Br) * mo_stride;
+    }
+
+    if (USE_MASK_OPT && !USE_SPARSE && p.nem1 <= 8 && p.k_num > 1) {
+        mask_opt_balance_split_k(mo_offset, mo_stride);
     }
 
     uint32_t mask_opt = 0;

@@ -9180,7 +9180,13 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     }
 
     // Only use mask opt when the mask is fairly large. This hasn't been tuned extensively.
-    bool use_mask_opt = mask && !use_sparse && nem1 >= 32 && nem0 * nem1 > 32768 && nem0 >= tuning_params.block_cols * 16
+    const bool mask_opt_large_batch = nem1 >= 32 && nem0 * nem1 > 32768;
+    // GQA workgroups share the first mask tile, so it must include every query row.
+    const bool mask_opt_small_batch = ctx->device->vendor_id == VK_VENDOR_ID_AMD && ctx->device->properties.deviceID == 0x1586 &&
+                                      tuning_params.path == FA_COOPMAT1 && HSK == 128 && HSV == 128 && kv_f16 && f32acc &&
+                                      nem0 == KV && nem0 >= 2048 && nem1 == neq1 && nem1 <= 8 && nem1 <= tuning_params.block_rows &&
+                                      nem2 == 1 && nem3 == 1 && neq3 == 1;
+    bool use_mask_opt = mask && !use_sparse && (mask_opt_large_batch || mask_opt_small_batch) && nem0 >= tuning_params.block_cols * 16
                         && (ctx->device->architecture != vk_device_architecture::AMD_GCN || HSK > 256 || HSV > 256);
     vk_fa_pipeline_state fa_pipeline_state = get_fa_pipeline_state(ctx->device, tuning_params, HSK, HSV, aligned, f32acc,
                                                                    mask != nullptr, use_mask_opt, logit_softcap != 0, use_sparse, k_type_eff, v_type_eff);
