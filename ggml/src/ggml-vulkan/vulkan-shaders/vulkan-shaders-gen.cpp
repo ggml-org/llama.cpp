@@ -1193,6 +1193,8 @@ void process_shaders() {
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
     string_to_spv("conv2d_halo_f16_f32", "conv_halo.comp", {}, true, true, false);
     string_to_spv("conv3d_halo_f16_f32", "conv_halo.comp", {{"CONV3D", "1"}}, true, true, false);
+    string_to_spv("conv2d_halo_n8_f16_f32", "conv_halo.comp", {{"FRAG_N8", "1"}}, true, true, false);
+    string_to_spv("conv3d_halo_n8_f16_f32", "conv_halo.comp", {{"CONV3D", "1"}, {"FRAG_N8", "1"}}, true, true, false);
 #endif
 
     for (auto unroll : {false, true}) {

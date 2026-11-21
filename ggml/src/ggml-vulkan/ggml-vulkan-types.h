@@ -472,6 +472,9 @@ struct vk_xe_fa_pipeline_state {
     }
 };
 
+// Spec constants of a conv_halo.comp pipeline; see vk_conv_halo_params::key().
+typedef std::array<uint32_t, 12> vk_conv_halo_key;
+
 struct vk_conv2d_pipeline_state {
     vk_conv2d_pipeline_state(uint32_t s0, uint32_t s1, uint32_t p0, uint32_t p1, uint32_t d0, uint32_t d1, uint32_t KW, uint32_t KH, uint32_t aligned, uint32_t split_k)
         : s0(s0), s1(s1), p0(p0), p1(p1), d0(d0), d1(d1), KW(KW), KH(KH), aligned(aligned), split_k(split_k) {}
@@ -797,6 +800,7 @@ struct vk_device_struct {
     bool coopmat_m1_per_element_ops {};
     bool coopmat_m1_get_coordinate {};
     bool coopmat_support_16x16x16_f16acc {};
+    bool coopmat_support_16x8x16_f16acc {};
     bool coopmat_support_16x16x16_f32acc {};
     bool coopmat1_fa_support {};
     uint32_t coopmat_m;
@@ -1032,8 +1036,8 @@ struct vk_device_struct {
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv2d_f32[CONV_SHAPE_COUNT];
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv2d_f16_f32[CONV_SHAPE_COUNT];
     // conv_halo.comp for CONV_2D and CONV_3D, keyed by vk_conv_halo_params::key().
-    std::map<std::array<uint32_t, 11>, vk_pipeline> pipeline_conv2d_halo_f16_f32;
-    std::map<std::array<uint32_t, 11>, vk_pipeline> pipeline_conv3d_halo_f16_f32;
+    std::map<vk_conv_halo_key, vk_pipeline> pipeline_conv2d_halo_f16_f32;
+    std::map<vk_conv_halo_key, vk_pipeline> pipeline_conv3d_halo_f16_f32;
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv_transpose_2d_f32[CONV_SHAPE_COUNT];
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv_transpose_2d_f16_f32[CONV_SHAPE_COUNT];
     std::map<vk_conv3d_pipeline_state, vk_pipeline> pipeline_conv3d_f32[CONV_SHAPE_COUNT];

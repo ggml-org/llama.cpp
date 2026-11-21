@@ -1963,13 +1963,6 @@ static bool ggml_vk_amd_large_tile_supported(const vk_device& device) {
     return major > 2 || (major == 2 && build >= 416);
 }
 
-// Box width in pixels (HALO_W in conv_halo.comp): the output tile width plus
-// KW - 1, rounded up so that the accumulator width, out_rows * HALO_W, is a
-// multiple of 32.
-static uint32_t ggml_vk_conv_halo_width(uint32_t out_rows, uint32_t out_cols, uint32_t KW) {
-    return ROUNDUP_POW2(out_cols + KW - 1, 32 / out_rows);
-}
-
 // Whether the device can run the halo convolution, which uses KHR cooperative
 // matrices (coopmat1): the same requirements as conv2d_mm's coopmat1 path.
 // Devices with coopmat2 use it too; a coopmat2 version was slower overall.
@@ -1984,23 +1977,28 @@ static bool ggml_vk_conv_halo_cm1(const vk_device & device) {
 }
 
 // Splits the coopmat1 halo accumulator (bs_k channels x nt columns) between
-// the subgroups as a grid, giving each a wm x wn tile of whole 16x16 fragments.
-// Keeps as many subgroups busy as possible. Among such grids it picks the one
-// with the fewest fragment loads per subgroup and tap (wm / 16 from the filter
-// plus wn / 16 from the box), which is the squarest tile.
-static void ggml_vk_conv_halo_cm1_tile(uint32_t bs_k, uint32_t nt, uint32_t subgroups, uint32_t & wm, uint32_t & wn) {
-    const uint32_t frag_rows = bs_k / 16;  // 2 or 4
-    const uint32_t frag_cols = nt / 16;
+// the subgroups as a grid, giving each a wm x wn tile of whole 16 x fn
+// fragments. Keeps as many subgroups busy as possible. Among such grids it
+// picks the one with the least data loaded per subgroup and tap (wm / 16
+// fragments from the filter plus wn / fn from the box), which is the
+// squarest tile.
+static void ggml_vk_conv_halo_cm1_tile(uint32_t bs_k, uint32_t nt, uint32_t fn, uint32_t subgroups, uint32_t & wm, uint32_t & wn) {
+    const uint32_t frag_rows = bs_k / 16;
+    const uint32_t frag_cols = nt / fn;
     uint32_t best_busy = 0, best_loads = 0;
-    // Split the channels 1, 2 or 4 ways, and the columns as many ways as the
-    // remaining subgroups allow while dividing them evenly.
-    for (uint32_t row_splits = 1; row_splits <= frag_rows; row_splits *= 2) {
+    // Split the channels into a divisor of frag_rows, and the columns as many
+    // ways as the remaining subgroups allow while dividing them evenly.
+    for (uint32_t row_splits = 1; row_splits <= frag_rows; ++row_splits) {
+        if (frag_rows % row_splits != 0 || row_splits > subgroups) {
+            continue;
+        }
         uint32_t col_splits = std::min(subgroups / row_splits, frag_cols);
         while (frag_cols % col_splits != 0) {
             col_splits--;
         }
         const uint32_t busy  = row_splits * col_splits;
-        const uint32_t loads = frag_rows / row_splits + frag_cols / col_splits;
+        // in units of 8 x 16 halves
+        const uint32_t loads = 2 * frag_rows / row_splits + (frag_cols / col_splits) * fn / 8;
         if (busy > best_busy || (busy == best_busy && loads < best_loads)) {
             best_busy  = busy;
             best_loads = loads;
@@ -4561,22 +4559,28 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 #if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
     // conv_halo.comp, one pipeline per vk_conv_halo_params::key().
     if (ggml_vk_conv_halo_cm1(device)) {
-        auto create_halo = [&](std::map<std::array<uint32_t, 11>, vk_pipeline> & pipelines, const char * name,
-                               size_t spv_len, const void * spv_data, uint32_t pc_size) {
+        // spv: { 16-pixel fragments, 8-pixel fragments }
+        auto create_halo = [&](std::map<vk_conv_halo_key, vk_pipeline> & pipelines, const char * name,
+                               const std::array<size_t, 2> & spv_lens, const std::array<const void *, 2> & spv_datas, uint32_t pc_size) {
             for (auto & c : pipelines) {
-                const std::array<uint32_t, 11> & k = c.first;
+                const vk_conv_halo_key & k = c.first;
+                const uint32_t fn = k[11];
+                const uint32_t variant = fn == 8 ? 1 : 0;
                 uint32_t wm = 0, wn = 0;
-                ggml_vk_conv_halo_cm1_tile(k[0], k[1] * ggml_vk_conv_halo_width(k[1], k[2], k[3]),
-                                           256 / device->subgroup_size, wm, wn);
+                ggml_vk_conv_halo_cm1_tile(k[0], k[1] * k[2], fn, 256 / device->subgroup_size, wm, wn);
                 const std::vector<uint32_t> spec = { 256, k[0], 16, k[1], k[2], k[3], k[4], k[5], k[6], k[7], k[8], k[9], k[10], wm, wn };
-                ggml_vk_create_pipeline(device, c.second, name, spv_len, spv_data, "main", 3, pc_size, { k[0], 1, 1 },
+                ggml_vk_create_pipeline(device, c.second, name, spv_lens[variant], spv_datas[variant], "main", 3, pc_size, { k[0], 1, 1 },
                                         spec, 1, true, true, device->subgroup_size);
             }
         };
-        create_halo(device->pipeline_conv2d_halo_f16_f32, "conv2d_halo_f16_f32", conv2d_halo_f16_f32_cm1_len,
-                    conv2d_halo_f16_f32_cm1_data, sizeof(vk_op_conv2d_push_constants));
-        create_halo(device->pipeline_conv3d_halo_f16_f32, "conv3d_halo_f16_f32", conv3d_halo_f16_f32_cm1_len,
-                    conv3d_halo_f16_f32_cm1_data, sizeof(vk_op_conv3d_push_constants));
+        create_halo(device->pipeline_conv2d_halo_f16_f32, "conv2d_halo_f16_f32",
+                    { conv2d_halo_f16_f32_cm1_len, conv2d_halo_n8_f16_f32_cm1_len },
+                    { conv2d_halo_f16_f32_cm1_data, conv2d_halo_n8_f16_f32_cm1_data },
+                    sizeof(vk_op_conv2d_push_constants));
+        create_halo(device->pipeline_conv3d_halo_f16_f32, "conv3d_halo_f16_f32",
+                    { conv3d_halo_f16_f32_cm1_len, conv3d_halo_n8_f16_f32_cm1_len },
+                    { conv3d_halo_f16_f32_cm1_data, conv3d_halo_n8_f16_f32_cm1_data },
+                    sizeof(vk_op_conv3d_push_constants));
     }
 #endif
     ggml_vk_create_pipeline(device, device->pipeline_conv2d_dw_whcn_f32, "conv2d_dw_whcn_f32", conv2d_dw_whcn_f32_len, conv2d_dw_whcn_f32_data, "main", 3, sizeof(vk_op_conv2d_dw_push_constants), {512, 1, 1}, {}, 1);
@@ -5454,6 +5458,9 @@ vk_device ggml_vk_get_device(size_t idx) {
                         }
                         if (prop.MSize == 16 && prop.NSize == 16 && prop.KSize == 16) {
                             device->coopmat_support_16x16x16_f16acc = true;
+                        }
+                        if (prop.MSize == 16 && prop.NSize == 8 && prop.KSize == 16) {
+                            device->coopmat_support_16x8x16_f16acc = true;
                         }
                     }
                 } else if ((vk::ComponentTypeKHR)prop.AType      == vk::ComponentTypeKHR::eSint8 &&
@@ -9924,10 +9931,11 @@ struct vk_conv_halo_params {
     uint32_t bs_k, out_rows, out_cols, KW, KH, a_pad, pad_w, pad_h;
     uint32_t filter_copy; // 1: read the host's f16 copy of the filter (output channels innermost); 0: read the f16 filter in place (2D only)
     uint32_t KD, pad_d;
-    uint32_t tiles;  // number of output tiles, over all batches and depth slices
+    uint32_t fn;        // accumulator fragment width in pixels: 16, or 8 (FRAG_N8)
+    uint32_t tiles;     // number of output tiles, over all batches and depth slices
 
-    std::array<uint32_t, 11> key() const {
-        return { bs_k, out_rows, out_cols, KW, KH, a_pad, pad_w, pad_h, filter_copy, KD, pad_d };
+    vk_conv_halo_key key() const {
+        return { bs_k, out_rows, out_cols, KW, KH, a_pad, pad_w, pad_h, filter_copy, KD, pad_d, fn };
     }
 };
 
@@ -9995,8 +10003,7 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
     hp.pad_h = (uint32_t)pd[1];
     hp.pad_d = (uint32_t)pd[2];
     // The filter slices of all taps (up to 16) must fit in shared memory at
-    // once, and filters up to 9 wide leave at least 8 output columns in a
-    // 16-pixel box row.
+    // once.
     const uint32_t taps = hp.KW * hp.KH;
     if (Cin % 16 != 0 || taps > 16 || hp.KW > 9) {
         return false;
@@ -10029,34 +10036,10 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
     if (hp.filter_copy && (uint64_t)Cin * ROUNDUP_POW2(Cout, 8) * taps * hp.KD * sizeof(ggml_fp16_t) > ctx->device->properties.limits.maxStorageBufferRange) {
         return false;
     }
-    // Output tile width: whole rows if the box row (output columns plus KW - 1)
-    // fits in 24 pixels, otherwise a 16-pixel box row.
-    hp.out_cols = OW + hp.KW - 1 <= 24 ? OW : 17 - hp.KW;
-    const uint32_t sms = ctx->device->shader_core_count > 0 ? ctx->device->shader_core_count : 32;
-    const uint64_t slices = (uint64_t)N * OD;
-    hp.bs_k = 64;
-    auto tiles_for = [&](uint32_t rows) {
-        return (uint64_t)CEIL_DIV(Cout, hp.bs_k) * slices * CEIL_DIV(OH, rows) * CEIL_DIV(OW, hp.out_cols);
-    };
-    // 16 output rows reuse each filter slice for twice as many outputs, as
-    // long as that still leaves at least 4 workgroups per SM. Small layers get
-    // fewer rows, down to 2, until there are at least half as many workgroups
-    // as SMs.
-    hp.out_rows = OH >= 16 && tiles_for(16) >= 4 * sms ? 16 : 8;
-    while (tiles_for(hp.out_rows) < sms / 2 && hp.out_rows > 2) {
-        hp.out_rows /= 2;
-    }
-    // Use 32 output channels per workgroup instead of 64 if that still gives
-    // fewer workgroups than SMs (more, smaller workgroups were faster), or if
-    // there are at most 32 output channels (the other 32 would be wasted).
-    if (tiles_for(hp.out_rows) < sms || Cout <= 32) {
-        hp.bs_k = 32;
-    }
-    const size_t halo_w = ggml_vk_conv_halo_width(hp.out_rows, hp.out_cols, hp.KW);
     // Shared memory holds the filter slices of all taps and the box (pixels of
-    // 24 halves, plus 8 spare pixels). The same memory stages the output tile
-    // at the end, in rows of out_rows * halo_w + 8 halves. The filter is
-    // padded against bank conflicts:
+    // 24 halves). The same memory stages the output tile at the end, in rows
+    // of out_rows * out_cols + 8 halves. The filter is padded against bank
+    // conflicts:
     //  - The copy is stored as columns of bs_k output channels plus 8 halves.
     //    Unpadded, all 8 rows of a matrix load would hit the same banks, so
     //    if the tile doesn't fit, halve the output channels instead.
@@ -10064,20 +10047,72 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
     //    halves. Unpadded rows conflict only 2 ways, so drop the padding
     //    first, then halve the output channels; 16-tap filters need that.
     const size_t limit = ctx->device->properties.limits.maxComputeSharedMemorySize;
-    auto shmem = [&](uint32_t pad) {
-        const size_t filter = hp.filter_copy ? (size_t)taps * 16 * (hp.bs_k + pad) * 2 : (size_t)taps * hp.bs_k * (16 + pad) * 2;
-        const size_t pass = filter + ((hp.out_rows + hp.KH - 1) * halo_w + 8) * 24 * 2;
-        const size_t out = (size_t)hp.bs_k * (hp.out_rows * halo_w + 8) * 2;
+    auto shmem = [&](uint32_t cols, uint32_t rows, uint32_t bs_k, uint32_t pad) {
+        const size_t filter = hp.filter_copy ? (size_t)taps * 16 * (bs_k + pad) * 2 : (size_t)taps * bs_k * (16 + pad) * 2;
+        const size_t pass = filter + (size_t)(rows + hp.KH - 1) * (cols + hp.KW - 1) * 24 * 2;
+        const size_t out = (size_t)bs_k * (rows * cols + 8) * 2;
         return std::max(pass, out);
     };
-    auto pick_pad = [&]() -> uint32_t { return hp.filter_copy || shmem(8) <= limit ? 8 : 0; };
-    hp.a_pad = pick_pad();
-    while (shmem(hp.a_pad) > limit && hp.bs_k > 32) {
-        hp.bs_k /= 2;
-        hp.a_pad = pick_pad();
+    // Picks bs_k and a_pad for a tile: 32 or 64 output channels per
+    // workgroup, the fewest that cover Cout, or 32 if 64 doesn't fit. Returns
+    // false if the tile doesn't fit at all.
+    auto fit = [&](uint32_t cols, uint32_t rows, uint32_t & bs_k, uint32_t & a_pad) {
+        bs_k = Cout <= 32 ? 32 : 64;
+        for (;;) {
+            a_pad = hp.filter_copy || shmem(cols, rows, bs_k, 8) <= limit ? 8 : 0;
+            if (shmem(cols, rows, bs_k, a_pad) <= limit) {
+                return true;
+            }
+            if (bs_k <= 32) {
+                return false;
+            }
+            bs_k = 32;
+        }
+    };
+    // Output tile: the shape with the lowest padded area times its cost per
+    // output. 256-pixel tiles (32 x 8, 16 x 16) cost least; 8-pixel fragments
+    // cost about 15% more, 128-pixel tiles 20%, 64-pixel tiles 40%, and 32
+    // output channels per workgroup 15%.
+    double best = 0;
+    const uint32_t shapes[9][2] = { { 32, 8 }, { 16, 16 }, { 8, 32 }, { 16, 8 }, { 8, 16 }, { 32, 4 }, { 8, 8 }, { 16, 4 }, { 32, 2 } };
+    for (const auto & shape : shapes) {
+        // 8-pixel fragments need 16x8x16 cooperative matrices.
+        if (shape[0] % 16 != 0 && !ctx->device->coopmat_support_16x8x16_f16acc) {
+            continue;
+        }
+        uint32_t bs_k, a_pad;
+        if (!fit(shape[0], shape[1], bs_k, a_pad)) {
+            continue;
+        }
+        const uint32_t nt = shape[0] * shape[1];
+        const double cost = (shape[0] % 16 != 0 ? 1.15 : 1.0) * (nt == 256 ? 1.0 : nt == 128 ? 1.2 : 1.4) * (bs_k < 64 && Cout > 32 ? 1.15 : 1.0);
+        const double area = (double)CEIL_DIV(OW, shape[0]) * shape[0] * CEIL_DIV(OH, shape[1]) * shape[1] * cost;
+        if (best == 0 || area < best) {
+            best = area;
+            hp.out_cols = shape[0];
+            hp.out_rows = shape[1];
+            hp.bs_k = bs_k;
+            hp.a_pad = a_pad;
+        }
     }
-    if (shmem(hp.a_pad) > limit) {
+    if (best == 0) {
         return false;
+    }
+    hp.fn = hp.out_cols % 16 == 0 ? 16 : 8;
+    const uint32_t sms = ctx->device->shader_core_count > 0 ? ctx->device->shader_core_count : 32;
+    const uint64_t slices = (uint64_t)N * OD;
+    auto tiles_for = [&](uint32_t rows) {
+        return (uint64_t)CEIL_DIV(Cout, hp.bs_k) * slices * CEIL_DIV(OH, rows) * CEIL_DIV(OW, hp.out_cols);
+    };
+    // Small layers get fewer rows, down to 2, until there are at least half
+    // as many workgroups as SMs, and then if there are fewer than SMs, 32
+    // output channels per workgroup.
+    while (tiles_for(hp.out_rows) < sms / 2 && hp.out_rows > 2) {
+        hp.out_rows /= 2;
+    }
+    if (tiles_for(hp.out_rows) < sms && hp.bs_k > 32) {
+        hp.bs_k = 32;
+        hp.a_pad = hp.filter_copy || shmem(hp.out_cols, hp.out_rows, 32, 8) <= limit ? 8 : 0;
     }
     hp.tiles = (uint32_t)(slices * CEIL_DIV(OH, hp.out_rows) * CEIL_DIV(OW, hp.out_cols));
     return true;
