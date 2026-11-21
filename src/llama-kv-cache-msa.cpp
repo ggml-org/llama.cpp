@@ -185,7 +185,8 @@ llama_kv_cache_msa_context::llama_kv_cache_msa_context(
     kv(kv),
     ctx_base(kv->get_base()->init_full()),
     ctx_idx (kv->get_idx ()->init_full()),
-    status(llama_memory_status_combine(ctx_base->get_status(), ctx_idx->get_status())) {
+    status(llama_memory_status_combine(ctx_base->get_status(), ctx_idx->get_status())),
+    is_full(true) {
 }
 
 llama_kv_cache_msa_context::llama_kv_cache_msa_context(
@@ -263,6 +264,10 @@ uint32_t llama_kv_cache_msa_context::get_n_pos() const {
     // pad the value so that the graph remains constant across batches and can be reused
     const uint32_t n_pad = 256;
 
+    if (is_full) {
+        return std::max(n_pad, GGML_PAD(kv->get_kv_size(), n_pad));
+    }
+
     llama_pos pos_max = -1;
 
     for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) kv->get_n_seq_max(); ++seq_id) {
@@ -270,6 +275,47 @@ uint32_t llama_kv_cache_msa_context::get_n_pos() const {
     }
 
     return std::max(n_pad, GGML_PAD((uint32_t) (pos_max + 1), n_pad));
+}
+
+void llama_kv_cache_msa_context::set_input_blk_cells(ggml_tensor * dst, const llama_ubatch * ubatch, int32_t blk) const {
+    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+    GGML_ASSERT(dst->type == GGML_TYPE_I32);
+    GGML_ASSERT(blk > 0);
+    GGML_ASSERT(dst->ne[0] == blk);
+
+    const int64_t n_tokens    = ubatch->n_tokens;
+    const int64_t nblk        = dst->ne[1];
+    const int64_t n_stream_ub = dst->ne[2];
+    const int64_t n_pos       = nblk * blk;
+
+    GGML_ASSERT(n_tokens % n_stream_ub == 0);
+    const int64_t n_tps = n_tokens / n_stream_ub;
+
+    int32_t * data = (int32_t *) dst->data;
+    std::fill(data, data + (size_t) blk * nblk * n_stream_ub, -1);
+
+    if (!ubatch->seq_id) {
+        return;
+    }
+
+    for (int64_t s = 0; s < n_stream_ub; ++s) {
+        if (!ubatch->seq_id[s * n_tps]) {
+            continue;
+        }
+        const llama_seq_id seq_id = ubatch->seq_id[s * n_tps][0];
+        const auto & cells = kv->get_base()->get_cells(seq_id);
+
+        for (uint32_t j = 0; j < cells.size(); ++j) {
+            if (cells.is_empty(j) || !cells.seq_has(j, seq_id)) {
+                continue;
+            }
+            const llama_pos p0 = cells.pos_get(j);
+            if (p0 < 0 || p0 >= n_pos) {
+                continue;
+            }
+            data[(s * nblk + (p0 / blk)) * blk + (p0 % blk)] = (int32_t) j;
+        }
+    }
 }
 
 void llama_kv_cache_msa_context::set_input_cell_pos(ggml_tensor * dst, const llama_ubatch * ubatch, int32_t div) const {
