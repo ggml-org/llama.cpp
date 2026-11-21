@@ -7,6 +7,8 @@ llama.cpp supports multimodal input via `libmtmd`. Currently, there are 2 tools 
 
 Currently, we support **image**, **audio** and **video** input.
 
+For a complete image request from a Python client, see [Send a local image to llama-server](multimodal/image-request.md).
+
 To enable it, you can use one of the 2 methods below:
 
 - Use `-hf` option with a supported model (see a list of pre-quantized model below)
