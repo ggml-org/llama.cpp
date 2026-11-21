@@ -4458,8 +4458,8 @@ ggml_tensor * llm_graph_context::build_attn(
                     rel_bias->nb[1], rel_bias->nb[2], n_tps*rel_bias->nb[2], i0*rel_bias->nb[2]);
             ggml_tensor * pos  = ggml_view_3d(ctx0, rel_pos, n_kv, n, n_stream,
                     rel_pos->nb[1], n_tps*rel_pos->nb[1], i0*rel_pos->nb[1]);
-            // the KQ mask of these rows, already repeated over the heads
-            ggml_tensor * rows = ggml_view_4d(ctx0, kq_mask, n_kv, n, n_head, n_stream,
+            // the KQ mask of these rows from the first head, not written yet, broadcast over the heads
+            ggml_tensor * rows = ggml_view_4d(ctx0, kq_mask, n_kv, n, 1, n_stream,
                     kq_mask->nb[1], kq_mask->nb[2], kq_mask->nb[3], i0*kq_mask->nb[1]);
 
             // [n_head, n_kv, n, n_stream] -> [n_kv, n, n_head, n_stream]
