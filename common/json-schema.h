@@ -230,3 +230,8 @@ using common_chat_schema_document_ptr = std::shared_ptr<const common_chat_schema
 
 // Throws std::runtime_error when the schema falls outside the supported subset.
 common_chat_schema_document common_chat_schema_from_json(const common_json & schema);
+
+// Build the object surface declared at the root, for individually tagged parameters.
+// Root combinators are not compiled here and their branches do not contribute properties.
+// Property schemas and their references use the full schema conversion.
+common_chat_schema_document common_chat_schema_object_from_json(const common_json & schema);

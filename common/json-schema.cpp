@@ -238,15 +238,15 @@ class common_chat_schema_builder {
 
     int depth_ = 0;
 
-    common_chat_schema_ptr build_node(const common_json & schema, const std::string & path) {
+    common_chat_schema_ptr build_node(const common_json & schema, const std::string & path, bool object_properties = false) {
         depth_guard guard(depth_);
-        return build_node_impl(schema, path);
-    }
-
-    common_chat_schema_ptr build_node_impl(const common_json & schema, const std::string & path) {
         if (!schema.is_object()) {
             fail(path, "schema must be an object");
         }
+        return object_properties ? build_object(schema, path) : build_node_impl(schema, path);
+    }
+
+    common_chat_schema_ptr build_node_impl(const common_json & schema, const std::string & path) {
         if (schema.contains("$ref")) {
             return build_ref(schema.at("$ref"), path);
         }
@@ -344,8 +344,8 @@ class common_chat_schema_builder {
   public:
     common_chat_schema_builder(const common_json & root, common_chat_schema_document & doc) : root_(root), doc_(doc) {}
 
-    common_chat_schema_ptr build() {
-        auto node = build_node(root_, "#");
+    common_chat_schema_ptr build(bool object_properties = false) {
+        auto node = build_node(root_, "#", object_properties);
         for (auto & entry : refs_) {
             doc_.refs[entry.first] = std::move(entry.second);
         }
@@ -359,6 +359,12 @@ class common_chat_schema_builder {
 common_chat_schema_document common_chat_schema_from_json(const common_json & schema) {
     common_chat_schema_document doc;
     doc.root = common_chat_schema_builder(schema, doc).build();
+    return doc;
+}
+
+common_chat_schema_document common_chat_schema_object_from_json(const common_json & schema) {
+    common_chat_schema_document doc;
+    doc.root = common_chat_schema_builder(schema, doc).build(/* object_properties = */ true);
     return doc;
 }
 
