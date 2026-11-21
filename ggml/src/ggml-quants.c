@@ -4352,6 +4352,8 @@ static void quantize_row_iq3_s_impl(int block_size, const float * GGML_RESTRICT 
             memset(L, 0, block_size);
             if (!max) {
                 scales[ib] = 0;
+                qs += bs4;
+                signs += bs8;
                 continue;
             }
             float best = 0;
