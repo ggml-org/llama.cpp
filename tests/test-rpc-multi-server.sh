@@ -35,6 +35,26 @@ pid_b=$!
 wait_for_port "$port_a"
 wait_for_port "$port_b"
 
+if /bin/bash -c 'ulimit -c 0; "$@"' bash "$client" --zero-element-outside-buffer "$endpoint_a" >"$test_dir/rejected-client.log" 2>&1; then
+    echo "RPC server accepted a zero-element tensor with data outside its buffer"
+    exit 1
+fi
+if ! grep -q "data 0x1 with size 0 out of buffer bounds" "$test_dir/server-a.log"; then
+    cat "$test_dir/server-a.log"
+    exit 1
+fi
+"$client" --zero-element-buffer-end "$endpoint_a"
+
+if /bin/bash -c 'ulimit -c 0; "$@"' bash "$client" --get-rows-in-buffer-stride "$endpoint_a" >"$test_dir/get-rows-rejected-client.log" 2>&1; then
+    echo "RPC server accepted GET_ROWS with a forged in-buffer row stride"
+    exit 1
+fi
+if ! grep -q "malformed GET_ROWS graph" "$test_dir/server-a.log"; then
+    cat "$test_dir/server-a.log"
+    exit 1
+fi
+"$client" --get-rows-valid "$endpoint_a"
+
 "$client" "$endpoint_a" "$endpoint_b"
 
 if grep -q "invalid data ptr" "$test_dir/server-b.log"; then
