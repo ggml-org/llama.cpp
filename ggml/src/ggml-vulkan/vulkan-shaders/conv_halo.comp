@@ -425,16 +425,17 @@ void storeOut(const uint r, const uint c, const float16_t e) {
 
 void main() {
     // Workgroup x picks the output channel block and the split. y and z
-    // together number the output tiles: tiles of one depth slice are
-    // row-major, then slices, then batches.
+    // together number the output tiles: depth slices fastest, then the tiles
+    // of a slice row-major, then batches, so that workgroups of neighboring
+    // output slices share their input slices in L2.
     const uint tiles_w = (p.OW + OUT_COLS - 1) / OUT_COLS;
     const uint tiles_h = (p.OH + OUT_ROWS - 1) / OUT_ROWS;
     const uint per_slice = tiles_w * tiles_h;
     const uint tile = gl_WorkGroupID.y + gl_WorkGroupID.z * 512;
-    const uint nd = tile / per_slice;             // n * OD + od
-    const uint rem = tile - nd * per_slice;
-    n = nd / out_depth();
-    od = nd - n * out_depth();
+    od = tile % out_depth();
+    const uint ns = tile / out_depth();           // n * per_slice + tile within the slice
+    n = ns / per_slice;
+    const uint rem = ns - n * per_slice;
     oh0 = (rem / tiles_w) * OUT_ROWS;
     ow0 = (rem - (rem / tiles_w) * tiles_w) * OUT_COLS;
     const uint kblocks = (p.OC + BS_K - 1) / BS_K;

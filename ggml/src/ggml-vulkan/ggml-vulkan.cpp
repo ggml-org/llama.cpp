@@ -10038,9 +10038,19 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
         return std::max(pass, out);
     };
     // Picks bs_k and a_pad for a tile: 32 or 64 output channels per
-    // workgroup, the fewest that cover Cout, or 32 if 64 doesn't fit. Returns
-    // false if the tile doesn't fit at all.
+    // workgroup, the fewest that cover Cout, or 32 if 64 doesn't fit. With 64
+    // to 128 output channels, not a multiple of 64 (96 would pad to 128), all
+    // of them on tiles of up to 128 pixels, where that fits. Returns false if
+    // the tile doesn't fit at all.
+    const uint32_t bs_k_all = Cout > 64 && Cout <= 128 && Cout % 64 != 0 ? ROUNDUP_POW2(Cout, 16) : 0;
     auto fit = [&](uint32_t cols, uint32_t rows, uint32_t & bs_k, uint32_t & a_pad) {
+        if (bs_k_all && cols * rows <= 128) {
+            bs_k = bs_k_all;
+            a_pad = 8;
+            if (shmem(cols, rows, bs_k, a_pad) <= limit) {
+                return true;
+            }
+        }
         bs_k = Cout <= 32 ? 32 : 64;
         for (;;) {
             a_pad = hp.filter_copy || shmem(cols, rows, bs_k, 8) <= limit ? 8 : 0;
@@ -10053,15 +10063,21 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
             bs_k = 32;
         }
     };
-    // Output tile: the shape with the lowest padded area times its cost per
-    // output. 256-pixel tiles (32 x 8, 16 x 16) cost least; 8-pixel fragments
-    // cost about 15% more, 128-pixel tiles 20%, 64-pixel tiles 40%, and 32
-    // output channels per workgroup 15%.
+    // Output tile: the shape with the lowest padded area (output pixels and
+    // channels) times its cost per output. Tiles of 192 pixels or more
+    // (32 x 8, 16 x 16, 56 x 4) cost least; 8-pixel fragments cost about 15%
+    // more, 128-pixel tiles 20%, 64-pixel tiles 40%, and 32 output channels
+    // per workgroup 15%. 56 x 4 fits outputs 49 to 56 wide, but not on layers
+    // with few workgroups.
+    const uint32_t sms = ctx->device->shader_core_count > 0 ? ctx->device->shader_core_count : 32;
     double best = 0;
-    const uint32_t shapes[9][2] = { { 32, 8 }, { 16, 16 }, { 8, 32 }, { 16, 8 }, { 8, 16 }, { 32, 4 }, { 8, 8 }, { 16, 4 }, { 32, 2 } };
+    const uint32_t shapes[10][2] = { { 32, 8 }, { 16, 16 }, { 8, 32 }, { 56, 4 }, { 16, 8 }, { 8, 16 }, { 32, 4 }, { 8, 8 }, { 16, 4 }, { 32, 2 } };
     for (const auto & shape : shapes) {
         // 8-pixel fragments need 16x8x16 cooperative matrices.
         if (shape[0] % 16 != 0 && !ctx->device->coopmat_support_16x8x16_f16acc) {
+            continue;
+        }
+        if (shape[0] == 56 && (uint64_t)CEIL_DIV(Cout, 64) * N * OD * CEIL_DIV(OH, shape[1]) * CEIL_DIV(OW, shape[0]) < sms / 2) {
             continue;
         }
         uint32_t bs_k, a_pad;
@@ -10069,8 +10085,8 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
             continue;
         }
         const uint32_t nt = shape[0] * shape[1];
-        const double cost = (shape[0] % 16 != 0 ? 1.15 : 1.0) * (nt == 256 ? 1.0 : nt == 128 ? 1.2 : 1.4) * (bs_k < 64 && Cout > 32 ? 1.15 : 1.0);
-        const double area = (double)CEIL_DIV(OW, shape[0]) * shape[0] * CEIL_DIV(OH, shape[1]) * shape[1] * cost;
+        const double cost = (shape[0] % 16 != 0 ? 1.15 : 1.0) * (nt >= 192 ? 1.0 : nt >= 128 ? 1.2 : 1.4) * (bs_k < 64 && Cout > 32 ? 1.15 : 1.0);
+        const double area = (double)CEIL_DIV(OW, shape[0]) * shape[0] * CEIL_DIV(OH, shape[1]) * shape[1] * cost * CEIL_DIV(Cout, bs_k) * bs_k / Cout;
         if (best == 0 || area < best) {
             best = area;
             hp.out_cols = shape[0];
@@ -10083,7 +10099,6 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
         return false;
     }
     hp.fn = hp.out_cols % 16 == 0 ? 16 : 8;
-    const uint32_t sms = ctx->device->shader_core_count > 0 ? ctx->device->shader_core_count : 32;
     const uint64_t slices = (uint64_t)N * OD;
     auto tiles_for = [&](uint32_t rows) {
         return (uint64_t)CEIL_DIV(Cout, hp.bs_k) * slices * CEIL_DIV(OH, rows) * CEIL_DIV(OW, hp.out_cols);
