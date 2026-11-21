@@ -521,19 +521,19 @@ template<typename T, int width>
 static __device__ __forceinline__ T warp_reduce_sum_impl(T x) {
 #if defined(GGML_USE_HIP)
     if constexpr (width <= 64 && width <= ggml_cuda_get_physical_warp_size()) {
-        x += ggml_hip_dpp_move<GGML_HIP_DPP_QUAD_PERM_1032>(x);
+        x += ggml_hip_dpp_update<GGML_HIP_DPP_QUAD_PERM_1032>(x);
         if constexpr (width >= 4) {
-            x += ggml_hip_dpp_move<GGML_HIP_DPP_QUAD_PERM_2301>(x);
+            x += ggml_hip_dpp_update<GGML_HIP_DPP_QUAD_PERM_2301>(x);
         }
         if constexpr (width >= 8) {
-            x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_HALF_MIRROR>(x);
+            x += ggml_hip_dpp_update<GGML_HIP_DPP_ROW_HALF_MIRROR>(x);
         }
         if constexpr (width >= 16) {
-            x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_ROR_8>(x);
+            x += ggml_hip_dpp_update<GGML_HIP_DPP_ROW_ROR_8>(x);
         }
         if constexpr (width == 64) {
-            x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_BCAST_15>(x);
-            x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_BCAST_31>(x);
+            x += ggml_hip_dpp_update<GGML_HIP_DPP_ROW_BCAST_15>(x);
+            x += ggml_hip_dpp_update<GGML_HIP_DPP_ROW_BCAST_31>(x);
             return ggml_cuda_shfl(x, 63, 64);
         }
         if constexpr (width == 32) {
