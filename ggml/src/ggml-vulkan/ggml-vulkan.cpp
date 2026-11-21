@@ -14279,7 +14279,9 @@ bool ggml_backend_vk_buffer_cpy_tensor_n(ggml_backend_buffer_t buffer, const ggm
 void ggml_backend_vk_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     ggml_backend_vk_buffer_context * ctx = (ggml_backend_vk_buffer_context *)buffer->context;
 
-    ggml_vk_buffer_memset(ctx->dev_buffer, 0, value, buffer->size);
+    // set all bytes of a u32 to the same 1 byte value
+    uint32_t val32 = (uint32_t)value * 0x01010101;
+    ggml_vk_buffer_memset(ctx->dev_buffer, 0, val32, buffer->size);
 }
 
 const char * ggml_backend_vk_buffer_type_name(ggml_backend_buffer_type_t buft) {
