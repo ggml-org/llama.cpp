@@ -3054,8 +3054,11 @@ common_params common_base_params_to_speculative(const common_params & params) {
         }
     }
 
-    result.cache_type_k  = params_spec.cache_type_k;
-    result.cache_type_v  = params_spec.cache_type_v;
+    result.cache_type_k     = params_spec.cache_type_k;
+    result.cache_type_v     = params_spec.cache_type_v;
+    // the draft context follows its own -ctk/-ctv, not the target SWA override
+    result.cache_type_k_swa = GGML_TYPE_COUNT;
+    result.cache_type_v_swa = GGML_TYPE_COUNT;
     result.n_outputs_max = params.n_parallel;
     result.n_outputs_max_per_seq = 1;
 

@@ -38,6 +38,14 @@ int main(int argc, char ** argv) {
         LOG_INF("%s: force changing v cache type to f32 due to a lack of f16 support for OUT_PROD\n", __func__);
         params.cache_type_v = GGML_TYPE_F32;
     }
+    if (params.cache_type_k_swa != GGML_TYPE_COUNT && params.cache_type_k_swa != GGML_TYPE_F32) {
+        LOG_INF("%s: force changing swa k cache type to f32 due to a lack of f16 support for OUT_PROD\n", __func__);
+        params.cache_type_k_swa = GGML_TYPE_F32;
+    }
+    if (params.cache_type_v_swa != GGML_TYPE_COUNT && params.cache_type_v_swa != GGML_TYPE_F32) {
+        LOG_INF("%s: force changing swa v cache type to f32 due to a lack of f16 support for OUT_PROD\n", __func__);
+        params.cache_type_v_swa = GGML_TYPE_F32;
+    }
 
     llama_backend_init();
     llama_numa_init(params.numa);
