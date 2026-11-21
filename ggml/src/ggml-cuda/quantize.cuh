@@ -28,8 +28,21 @@ void quantize_mmq_q8_1_cuda(
 static constexpr int MMQ_FEW_NCOLS     = 8; // src1 columns per column group
 static constexpr int MMQ_FEW_Q8_1_INT4 = 4*WARP_SIZE + 4*4; // int4 per 256 values and column group
 
+// nvfp4_order: the value order of block_nvfp4 within 16 values, see quantize_mmq_few_q8_1.
 void quantize_mmq_few_q8_1_cuda(
-        const float * x, void * vy, mmq_q8_1_ds_layout ds_layout, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
+        const float * x, void * vy, mmq_q8_1_ds_layout ds_layout, bool nvfp4_order, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
+        int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
+
+// src1 of the few-row MMQ for NVFP4 src0 with 4-bit src1 (Blackwell), quantized like quantize_mmq_nvfp4: a float scale per column, E2M1 values with a UE4M3 scale per 16 values.
+// A 64 value block has the block_nvfp4 layout: 8 ints of packed values and an int of 4 scales. The values of int i are k = 8i .. 8i + 7 of the m16n8k64 MMA.
+// Per channel, 256 values and column group:
+//   qs: int4[2][32], [h][lane] holds the B fragments of the blocks 2h and 2h+1 of lane (g, t): ints t and t + 4 of column g.
+//   sc: int4[8], [g] holds the scales of the 4 blocks of column g.
+// The column scales are a float array per channel, ne1 padded to a multiple of MMQ_FEW_NCOLS.
+static constexpr int MMQ_FEW_FP4_INT4 = 2*WARP_SIZE + MMQ_FEW_NCOLS; // int4 per 256 values and column group
+
+void quantize_mmq_few_nvfp4_cuda(
+        const float * x, void * vy, float * y_scale, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
         int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
 
 // MUL_MAT_ID: a pair is an expert and one column group of up to MMQ_FEW_NCOLS of its (token, slot) entries. The src1 of pair p is channel p above, its columns past the entries are not written.

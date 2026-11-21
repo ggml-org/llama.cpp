@@ -2360,7 +2360,7 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
     }
 
     // do not fuse the matmuls that few-row MMQ takes in ggml_cuda_mul_mat_id
-    if (tensor->op == GGML_OP_MUL_MAT_ID && ggml_cuda_should_use_mmq_few(src0, src1, tensor->src[2], cc)) {
+    if (tensor->op == GGML_OP_MUL_MAT_ID && ggml_cuda_should_use_mmq_few(src0, src1, tensor->src[2], tensor, cc)) {
         return false;
     }
 
@@ -2521,7 +2521,7 @@ static bool ggml_cuda_should_fuse_mul_mat_q(const ggml_tensor * up, const ggml_t
     const int64_t nchannels = is_id ? x_up->ne[2] : y->ne[2]*y->ne[3];
     const bool    use_mmvq  = is_id ? ncols <= get_mmvq_mmid_max_batch(x_up->type, cc) : ggml_cuda_should_use_mmvq(x_up->type, cc, ncols);
     // do not fuse the matmuls that few-row MMQ takes in ggml_cuda_mul_mat; for MUL_MAT_ID the fused MMQ keeps the expert gate and up
-    if (!is_id && ggml_cuda_should_use_mmq_few(x_up, y, nullptr, cc)) {
+    if (!is_id && ggml_cuda_should_use_mmq_few(x_up, y, nullptr, up, cc)) {
         return false;
     }
     if (use_mmvq || !ggml_cuda_should_use_mmq(x_up->type, cc, ncols, /*n_experts =*/ is_id ? x_up->ne[2] : 0)) {
@@ -2577,7 +2577,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         return;
     }
     // from a per-type number of src1 columns up to 24, few-row MMQ is faster than MMVQ and MMQ
-    const bool use_mmq_few = ggml_cuda_should_use_mmq_few(src0, src1, nullptr, cc);
+    const bool use_mmq_few = ggml_cuda_should_use_mmq_few(src0, src1, nullptr, dst, cc);
     if (!use_mmq_few && ggml_cuda_should_use_mmvq(src0->type, cc, ne11)) {
         ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst);
         return;
@@ -2620,7 +2620,7 @@ static bool ggml_cuda_mul_mat_id_needs_sync(const ggml_tensor * dst, const int c
         }
     }
 
-    if (ggml_cuda_should_use_mmq_few(src0, src1, dst->src[2], cc)) {
+    if (ggml_cuda_should_use_mmq_few(src0, src1, dst->src[2], dst, cc)) {
         return false;
     }
 
@@ -2651,7 +2651,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
     if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
         // up to 24 tokens few-row MMQ is faster than MMQ, on DGX Spark also faster than MMVQ
-        const bool use_mmq_few = ggml_cuda_should_use_mmq_few(src0, src1, ids, cc);
+        const bool use_mmq_few = ggml_cuda_should_use_mmq_few(src0, src1, ids, dst, cc);
 
         static_assert(MMVQ_MAX_BATCH_SIZE == MMVF_MAX_BATCH_SIZE);
         if (!use_mmq_few && ne2 <= MMVQ_MAX_BATCH_SIZE) {
@@ -5155,9 +5155,14 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                 const bool bad_padding_clear = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
                                                ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) &&
                                                src0->view_src;
+                fusion_data.prec_src1 = ggml_prec_get_src(mm_node, 1);
+                // few-row MMQ takes the same matmuls as in ggml_cuda_mul_mat, it applies the scale in its write-back
+                if (!is_id && !bad_padding_clear && ggml_cuda_should_use_mmq_few(src0, src1, nullptr, mm_node, cc)) {
+                    ggml_cuda_mul_mat_q_few(*cuda_ctx, src0, src1, nullptr, out_node, &fusion_data);
+                    return n_ops - 1;
+                }
                 if (!use_mmvq && !bad_padding_clear &&
                         ggml_cuda_should_use_mmq(src0->type, cc, ncols, /*n_experts =*/ is_id ? src0->ne[2] : 0)) {
-                    fusion_data.prec_src1 = ggml_prec_get_src(mm_node, 1);
                     ggml_cuda_mul_mat_q(*cuda_ctx, src0, src1, ids, out_node, &fusion_data);
                     return n_ops - 1;
                 }

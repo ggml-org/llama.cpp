@@ -10,10 +10,14 @@ struct __builtin_align__(32) float8 {
 };
 
 #if CUDART_VERSION >= 12080
-static __device__ __forceinline__ float nvfp4_native_scale_error(
-        const float vals[QK_NVFP4_SUB], const float inv_col_scale, const float inv_scale, const float scale) {
-    const float scale_dequant = 2.0f * scale;
-    float err = 0.0f;
+// The squared errors of the 16 values (times inv_col_scale) for each of the n scales. The n sums do not depend on each other, so they run in parallel.
+template <int n>
+static __device__ __forceinline__ void nvfp4_native_scale_error(
+        const float vals[QK_NVFP4_SUB], const float inv_col_scale, const float (&inv_scale)[n], const float (&scale)[n], float (&err)[n]) {
+#pragma unroll
+    for (int c = 0; c < n; ++c) {
+        err[c] = 0.0f;
+    }
 
 #pragma unroll
     for (int k = 0; k < QK_NVFP4_SUB; k += 4) {
@@ -22,30 +26,33 @@ static __device__ __forceinline__ float nvfp4_native_scale_error(
         const float v2 = vals[k + 2] * inv_col_scale;
         const float v3 = vals[k + 3] * inv_col_scale;
 
-        const __nv_fp4x4_e2m1 q(make_float4(v0 * inv_scale, v1 * inv_scale, v2 * inv_scale, v3 * inv_scale));
-        const __nv_fp4x4_storage_t q_storage = q.__x;
-        const __nv_fp4x2_storage_t q_lo = static_cast<__nv_fp4x2_storage_t>(q_storage);
-        const __nv_fp4x2_storage_t q_hi = static_cast<__nv_fp4x2_storage_t>(q_storage >> 8U);
+#pragma unroll
+        for (int c = 0; c < n; ++c) {
+            const float scale_dequant = 2.0f * scale[c];
 
-        const __half2_raw hraw2_lo = __nv_cvt_fp4x2_to_halfraw2(q_lo, __NV_E2M1);
-        const __half2_raw hraw2_hi = __nv_cvt_fp4x2_to_halfraw2(q_hi, __NV_E2M1);
-        const __half2 h2_lo = static_cast<__half2>(hraw2_lo);
-        const __half2 h2_hi = static_cast<__half2>(hraw2_hi);
-        const float2 dq_lo = __half22float2(h2_lo);
-        const float2 dq_hi = __half22float2(h2_hi);
+            const __nv_fp4x4_e2m1 q(make_float4(v0 * inv_scale[c], v1 * inv_scale[c], v2 * inv_scale[c], v3 * inv_scale[c]));
+            const __nv_fp4x4_storage_t q_storage = q.__x;
+            const __nv_fp4x2_storage_t q_lo = static_cast<__nv_fp4x2_storage_t>(q_storage);
+            const __nv_fp4x2_storage_t q_hi = static_cast<__nv_fp4x2_storage_t>(q_storage >> 8U);
 
-        const float err0 = fabsf(v0) - fabsf(dq_lo.x) * scale_dequant;
-        const float err1 = fabsf(v1) - fabsf(dq_lo.y) * scale_dequant;
-        const float err2 = fabsf(v2) - fabsf(dq_hi.x) * scale_dequant;
-        const float err3 = fabsf(v3) - fabsf(dq_hi.y) * scale_dequant;
+            const __half2_raw hraw2_lo = __nv_cvt_fp4x2_to_halfraw2(q_lo, __NV_E2M1);
+            const __half2_raw hraw2_hi = __nv_cvt_fp4x2_to_halfraw2(q_hi, __NV_E2M1);
+            const __half2 h2_lo = static_cast<__half2>(hraw2_lo);
+            const __half2 h2_hi = static_cast<__half2>(hraw2_hi);
+            const float2 dq_lo = __half22float2(h2_lo);
+            const float2 dq_hi = __half22float2(h2_hi);
 
-        err = fmaf(err0, err0, err);
-        err = fmaf(err1, err1, err);
-        err = fmaf(err2, err2, err);
-        err = fmaf(err3, err3, err);
+            const float err0 = fabsf(v0) - fabsf(dq_lo.x) * scale_dequant;
+            const float err1 = fabsf(v1) - fabsf(dq_lo.y) * scale_dequant;
+            const float err2 = fabsf(v2) - fabsf(dq_hi.x) * scale_dequant;
+            const float err3 = fabsf(v3) - fabsf(dq_hi.y) * scale_dequant;
+
+            err[c] = fmaf(err0, err0, err[c]);
+            err[c] = fmaf(err1, err1, err[c]);
+            err[c] = fmaf(err2, err2, err[c]);
+            err[c] = fmaf(err3, err3, err[c]);
+        }
     }
-
-    return err;
 }
 #endif // CUDART_VERSION >= 12080
 #endif // defined(BLACKWELL_MMA_AVAILABLE)
@@ -122,6 +129,119 @@ __device__ __forceinline__ uint8_t compute_e8m0_scale(float amax) {
 
     return static_cast<uint8_t>(biased);
 }
+
+#if defined(BLACKWELL_MMA_AVAILABLE)
+// Quantizes 16 values divided by col_scale to E2M1 with the UE4M3 scale of the lowest squared error of 5 candidates, returns the scale code.
+// q0 and q1 get the 8 bytes of block_nvfp4: byte i holds the values i and i + 8 in its low and high nibble.
+static __device__ __forceinline__ uint8_t quantize_nvfp4_subblock(
+        const float (&vals)[QK_NVFP4_SUB], const float col_scale, uint32_t & q0, uint32_t & q1) {
+    const float inv_col_scale = col_scale > 0.0f ? 1.0f / col_scale : 0.0f;
+    q0 = 0;
+    q1 = 0;
+
+    float amax_sub = 0.0f;
+#pragma unroll
+    for (int k = 0; k < QK_NVFP4_SUB; ++k) {
+        amax_sub = fmaxf(amax_sub, fabsf(vals[k] * inv_col_scale));
+    }
+
+    static constexpr int test_offsets[5] = { 0, -1, 1, -2, 2 };
+    const int first_fp8_code = (int) ggml_cuda_fp32_to_ue4m3(amax_sub / 6.0f);
+
+    uint8_t fp8_code = (uint8_t) first_fp8_code;
+    float subblock_scale = ggml_cuda_ue4m3_to_fp32(fp8_code);
+#if CUDART_VERSION >= 12080
+    // the errors of all candidates at once, then compared in order; codes out of range are skipped
+    bool  valid[5];
+    float test_scale[5];
+    float test_inv_scale[5];
+#pragma unroll
+    for (int i = 0; i < 5; ++i) {
+        const int test_code = first_fp8_code + test_offsets[i];
+        valid[i]          = i == 0 || (test_code >= 0 && test_code <= 0x7e);
+        test_scale[i]     = ggml_cuda_ue4m3_to_fp32((uint8_t) (valid[i] ? test_code : first_fp8_code));
+        test_inv_scale[i] = test_scale[i] > 0.0f ? 0.5f / test_scale[i] : 0.0f;
+    }
+    float err[5];
+    nvfp4_native_scale_error(vals, inv_col_scale, test_inv_scale, test_scale, err);
+
+    float best_err = err[0];
+#pragma unroll
+    for (int i = 1; i < 5; ++i) {
+        if (valid[i] && err[i] < best_err) {
+            best_err       = err[i];
+            fp8_code       = (uint8_t) (first_fp8_code + test_offsets[i]);
+            subblock_scale = test_scale[i];
+        }
+    }
+#else
+    float inv_scale_err = subblock_scale > 0.0f ? 0.5f / subblock_scale : 0.0f;
+    float best_err = 0.0f;
+#pragma unroll
+    for (int k = 0; k < QK_NVFP4_SUB; ++k) {
+        const float v = vals[k] * inv_col_scale;
+        const uint8_t q = ggml_cuda_float_to_fp4_e2m1(v, inv_scale_err);
+        const float err_diff = fabsf(v) - fabsf(kvalues_fp4[q & 0x7]) * subblock_scale;
+        best_err = fmaf(err_diff, err_diff, best_err);
+    }
+
+#pragma unroll
+    for (int i = 1; i < 5; ++i) {
+        const int test_code = first_fp8_code + test_offsets[i];
+        if (test_code < 0 || test_code > 0x7e) {
+            continue;
+        }
+
+        const float test_scale = ggml_cuda_ue4m3_to_fp32((uint8_t) test_code);
+        const float test_inv_scale = test_scale > 0.0f ? 0.5f / test_scale : 0.0f;
+        float cur_err = 0.0f;
+#pragma unroll
+        for (int k = 0; k < QK_NVFP4_SUB; ++k) {
+            const float v = vals[k] * inv_col_scale;
+            const uint8_t q = ggml_cuda_float_to_fp4_e2m1(v, test_inv_scale);
+            const float err_diff = fabsf(v) - fabsf(kvalues_fp4[q & 0x7]) * test_scale;
+            cur_err = fmaf(err_diff, err_diff, cur_err);
+        }
+
+        if (cur_err < best_err) {
+            best_err = cur_err;
+            fp8_code = (uint8_t) test_code;
+            subblock_scale = test_scale;
+        }
+    }
+#endif // CUDART_VERSION >= 12080
+#if CUDART_VERSION >= 12080
+    const float inv_scale = subblock_scale > 0.0f ? 0.5f / subblock_scale : 0.0f;
+    const float s = inv_col_scale * inv_scale;
+
+    __nv_fp4x4_e2m1 q0_lo(make_float4(vals[0] * s, vals[8]  * s, vals[1] * s, vals[9]  * s));
+    __nv_fp4x4_e2m1 q0_hi(make_float4(vals[2] * s, vals[10] * s, vals[3] * s, vals[11] * s));
+    __nv_fp4x4_e2m1 q1_lo(make_float4(vals[4] * s, vals[12] * s, vals[5] * s, vals[13] * s));
+    __nv_fp4x4_e2m1 q1_hi(make_float4(vals[6] * s, vals[14] * s, vals[7] * s, vals[15] * s));
+
+    const char2 q0_lo_c = *reinterpret_cast<char2 *>(&q0_lo);
+    const char2 q0_hi_c = *reinterpret_cast<char2 *>(&q0_hi);
+    const char2 q1_lo_c = *reinterpret_cast<char2 *>(&q1_lo);
+    const char2 q1_hi_c = *reinterpret_cast<char2 *>(&q1_hi);
+
+    q0 = uint32_t(uint8_t(q0_lo_c.x)) | (uint32_t(uint8_t(q0_lo_c.y)) <<  8) |
+        (uint32_t(uint8_t(q0_hi_c.x)) << 16) | (uint32_t(uint8_t(q0_hi_c.y)) << 24);
+    q1 = uint32_t(uint8_t(q1_lo_c.x)) | (uint32_t(uint8_t(q1_lo_c.y)) <<  8) |
+        (uint32_t(uint8_t(q1_hi_c.x)) << 16) | (uint32_t(uint8_t(q1_hi_c.y)) << 24);
+#else
+    const float inv_scale = subblock_scale > 0.0f ? 0.5f / subblock_scale : 0.0f;
+#pragma unroll
+    for (int k = 0; k < QK_NVFP4_SUB / 4; ++k) {
+        q0 |= uint32_t(ggml_cuda_float_to_fp4_e2m1(vals[k + 0] * inv_col_scale, inv_scale)) << (8 * k);
+        q0 |= uint32_t(ggml_cuda_float_to_fp4_e2m1(vals[k + 8] * inv_col_scale, inv_scale)) << (8 * k + 4);
+        q1 |= uint32_t(ggml_cuda_float_to_fp4_e2m1(vals[k + 4] * inv_col_scale, inv_scale)) << (8 * k);
+        q1 |= uint32_t(ggml_cuda_float_to_fp4_e2m1(vals[k + 12] * inv_col_scale, inv_scale)) << (8 * k + 4);
+    }
+#endif // CUDART_VERSION >= 12080
+
+    return fp8_code;
+}
+#endif // defined(BLACKWELL_MMA_AVAILABLE)
 
 // scatter: grid over tokens, quantize once, write to all the token's compact rows
 template <bool scatter, bool use_aligned_float8>
@@ -200,7 +320,6 @@ static __global__ void quantize_mmq_nvfp4(
         const int sub = (i0_base % QK_FP4_MMQ) / QK_NVFP4_SUB;
 
         const float row_scale = warp_amax[0];
-        const float inv_col_scale = row_scale > 0.0f ? 1.0f / row_scale : 0.0f;
 
         float vals[QK_NVFP4_SUB];
         if constexpr (use_aligned_float8) {
@@ -219,90 +338,9 @@ static __global__ void quantize_mmq_nvfp4(
             }
         }
 
-        uint32_t q0 = 0;
-        uint32_t q1 = 0;
-
-        float amax_sub = 0.0f;
-#pragma unroll
-        for (int k = 0; k < QK_NVFP4_SUB; ++k) {
-            amax_sub = fmaxf(amax_sub, fabsf(vals[k] * inv_col_scale));
-        }
-
-        static constexpr int test_offsets[5] = { 0, -1, 1, -2, 2 };
-        const int first_fp8_code = (int) ggml_cuda_fp32_to_ue4m3(amax_sub / 6.0f);
-
-        uint8_t fp8_code = (uint8_t) first_fp8_code;
-        float subblock_scale = ggml_cuda_ue4m3_to_fp32(fp8_code);
-        float inv_scale_err = subblock_scale > 0.0f ? 0.5f / subblock_scale : 0.0f;
-#if CUDART_VERSION >= 12080
-        float best_err = nvfp4_native_scale_error(vals, inv_col_scale, inv_scale_err, subblock_scale);
-#else
-        float best_err = 0.0f;
-#pragma unroll
-        for (int k = 0; k < QK_NVFP4_SUB; ++k) {
-            const float v = vals[k] * inv_col_scale;
-            const uint8_t q = ggml_cuda_float_to_fp4_e2m1(v, inv_scale_err);
-            const float err_diff = fabsf(v) - fabsf(kvalues_fp4[q & 0x7]) * subblock_scale;
-            best_err = fmaf(err_diff, err_diff, best_err);
-        }
-#endif // CUDART_VERSION >= 12080
-
-#pragma unroll
-        for (int i = 1; i < 5; ++i) {
-            const int test_code = first_fp8_code + test_offsets[i];
-            if (test_code < 0 || test_code > 0x7e) {
-                continue;
-            }
-
-            const float test_scale = ggml_cuda_ue4m3_to_fp32((uint8_t) test_code);
-            const float test_inv_scale = test_scale > 0.0f ? 0.5f / test_scale : 0.0f;
-#if CUDART_VERSION >= 12080
-            const float cur_err = nvfp4_native_scale_error(vals, inv_col_scale, test_inv_scale, test_scale);
-#else
-            float cur_err = 0.0f;
-#pragma unroll
-            for (int k = 0; k < QK_NVFP4_SUB; ++k) {
-                const float v = vals[k] * inv_col_scale;
-                const uint8_t q = ggml_cuda_float_to_fp4_e2m1(v, test_inv_scale);
-                const float err_diff = fabsf(v) - fabsf(kvalues_fp4[q & 0x7]) * test_scale;
-                cur_err = fmaf(err_diff, err_diff, cur_err);
-            }
-#endif // CUDART_VERSION >= 12080
-
-            if (cur_err < best_err) {
-                best_err = cur_err;
-                fp8_code = (uint8_t) test_code;
-                subblock_scale = test_scale;
-            }
-        }
-#if CUDART_VERSION >= 12080
-        const float inv_scale = subblock_scale > 0.0f ? 0.5f / subblock_scale : 0.0f;
-        const float s = inv_col_scale * inv_scale;
-
-        __nv_fp4x4_e2m1 q0_lo(make_float4(vals[0] * s, vals[8]  * s, vals[1] * s, vals[9]  * s));
-        __nv_fp4x4_e2m1 q0_hi(make_float4(vals[2] * s, vals[10] * s, vals[3] * s, vals[11] * s));
-        __nv_fp4x4_e2m1 q1_lo(make_float4(vals[4] * s, vals[12] * s, vals[5] * s, vals[13] * s));
-        __nv_fp4x4_e2m1 q1_hi(make_float4(vals[6] * s, vals[14] * s, vals[7] * s, vals[15] * s));
-
-        const char2 q0_lo_c = *reinterpret_cast<char2 *>(&q0_lo);
-        const char2 q0_hi_c = *reinterpret_cast<char2 *>(&q0_hi);
-        const char2 q1_lo_c = *reinterpret_cast<char2 *>(&q1_lo);
-        const char2 q1_hi_c = *reinterpret_cast<char2 *>(&q1_hi);
-
-        q0 = uint32_t(uint8_t(q0_lo_c.x)) | (uint32_t(uint8_t(q0_lo_c.y)) <<  8) |
-            (uint32_t(uint8_t(q0_hi_c.x)) << 16) | (uint32_t(uint8_t(q0_hi_c.y)) << 24);
-        q1 = uint32_t(uint8_t(q1_lo_c.x)) | (uint32_t(uint8_t(q1_lo_c.y)) <<  8) |
-            (uint32_t(uint8_t(q1_hi_c.x)) << 16) | (uint32_t(uint8_t(q1_hi_c.y)) << 24);
-#else
-        const float inv_scale = subblock_scale > 0.0f ? 0.5f / subblock_scale : 0.0f;
-#pragma unroll
-        for (int k = 0; k < QK_NVFP4_SUB / 4; ++k) {
-            q0 |= uint32_t(ggml_cuda_float_to_fp4_e2m1(vals[k + 0] * inv_col_scale, inv_scale)) << (8 * k);
-            q0 |= uint32_t(ggml_cuda_float_to_fp4_e2m1(vals[k + 8] * inv_col_scale, inv_scale)) << (8 * k + 4);
-            q1 |= uint32_t(ggml_cuda_float_to_fp4_e2m1(vals[k + 4] * inv_col_scale, inv_scale)) << (8 * k);
-            q1 |= uint32_t(ggml_cuda_float_to_fp4_e2m1(vals[k + 12] * inv_col_scale, inv_scale)) << (8 * k + 4);
-        }
-#endif // CUDART_VERSION >= 12080
+        uint32_t q0;
+        uint32_t q1;
+        const uint8_t fp8_code = quantize_nvfp4_subblock(vals, row_scale, q0, q1);
 
         if constexpr (scatter) {
 #pragma unroll
@@ -635,7 +673,8 @@ static __device__ __forceinline__ void quantize_mmq_few_store(const float4 xi, i
 }
 
 // Each thread quantizes 4 values of one column, see quantize.cuh for the layout.
-template <mmq_q8_1_ds_layout ds_layout>
+// nvfp4_order: the 4 values of a thread are 2m, 2m + 8, 2m + 1, 2m + 9 of 16 values, the values of 2 bytes of block_nvfp4.
+template <mmq_q8_1_ds_layout ds_layout, bool nvfp4_order>
 static __global__ void quantize_mmq_few_q8_1(
         const float * x_ptr, void * vy_ptr, const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int ne1, const int ne2) {
@@ -651,7 +690,18 @@ static __global__ void quantize_mmq_few_q8_1(
 
     const int64_t i2 = blockIdx.z % ne2;
     const int64_t i3 = blockIdx.z / ne2;
-    const float4  xi = (int) blockIdx.x < ne1 ? *(const float4 *) (x + i3*s03 + i2*s02 + blockIdx.x*s01 + i0) : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    float4 xi = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    if ((int) blockIdx.x < ne1) {
+        const float * xc = x + i3*s03 + i2*s02 + blockIdx.x*s01;
+        if constexpr (nvfp4_order) {
+            const int64_t i16 = i0 - i0 % 16 + 2*((i0 % 16)/4);
+            const float2  lo  = *(const float2 *) (xc + i16);
+            const float2  hi  = *(const float2 *) (xc + i16 + 8);
+            xi = make_float4(lo.x, hi.x, lo.y, hi.y);
+        } else {
+            xi = *(const float4 *) (xc + i0);
+        }
+    }
 
     const int g = blockIdx.x % MMQ_FEW_NCOLS; // column in group
     int4 * yg = vy + ((blockIdx.z*(ne00/QK_K) + i0/QK_K)*(gridDim.x/MMQ_FEW_NCOLS) + blockIdx.x/MMQ_FEW_NCOLS)*MMQ_FEW_Q8_1_INT4;
@@ -749,26 +799,114 @@ static __global__ void quantize_mmq_few_id_q8_1(
 }
 
 void quantize_mmq_few_q8_1_cuda(
-        const float * x, void * vy, const mmq_q8_1_ds_layout ds_layout, const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const float * x, void * vy, const mmq_q8_1_ds_layout ds_layout, const bool nvfp4_order, const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
     GGML_ASSERT(ne00 % QK_K == 0);
+    GGML_ASSERT(!nvfp4_order || ds_layout == MMQ_Q8_1_DS_LAYOUT_D4);
 
     const int64_t block_num_y = (ne00 + 4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1) / (4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ);
     const dim3 num_blocks(GGML_PAD(ne1, MMQ_FEW_NCOLS), block_num_y, ne2*ne3);
     const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE_MMQ, 1, 1);
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(num_blocks, block_size, 0, stream);
+    if (nvfp4_order) {
+        ggml_cuda_kernel_launch(quantize_mmq_few_q8_1<MMQ_Q8_1_DS_LAYOUT_D4, true>, launch_params,
+            x, vy, ne00, s01, s02, s03, (int) ne1, (int) ne2);
+        return;
+    }
     switch (ds_layout) {
         case MMQ_Q8_1_DS_LAYOUT_D4:
-            ggml_cuda_kernel_launch(quantize_mmq_few_q8_1<MMQ_Q8_1_DS_LAYOUT_D4>, launch_params,
+            ggml_cuda_kernel_launch(quantize_mmq_few_q8_1<MMQ_Q8_1_DS_LAYOUT_D4, false>, launch_params,
                 x, vy, ne00, s01, s02, s03, (int) ne1, (int) ne2);
             break;
         case MMQ_Q8_1_DS_LAYOUT_DS4:
-            ggml_cuda_kernel_launch(quantize_mmq_few_q8_1<MMQ_Q8_1_DS_LAYOUT_DS4>, launch_params,
+            ggml_cuda_kernel_launch(quantize_mmq_few_q8_1<MMQ_Q8_1_DS_LAYOUT_DS4, false>, launch_params,
                 x, vy, ne00, s01, s02, s03, (int) ne1, (int) ne2);
             break;
         default:
             GGML_ABORT("fatal error");
     }
+}
+
+// Each thread quantizes one sub-block of 16 values like quantize_mmq_nvfp4, columns beyond ne1 are zero.
+// A CUDA block takes a chunk of the sub-blocks of one column, so each CUDA block first reads the whole column for the column scale.
+static __global__ void quantize_mmq_few_nvfp4(
+        const float * x_ptr, void * vy_ptr, float * y_scale_ptr, const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int ne1, const int ne2) {
+#if defined(BLACKWELL_MMA_AVAILABLE)
+    ggml_cuda_pdl_lc();
+    const float * GGML_CUDA_RESTRICT x       = x_ptr;
+    int         * GGML_CUDA_RESTRICT vy      = (int *) vy_ptr;
+    float       * GGML_CUDA_RESTRICT y_scale = y_scale_ptr;
+
+    const int     col = blockIdx.x;
+    const int64_t i2  = blockIdx.z % ne2;
+    const int64_t i3  = blockIdx.z / ne2;
+    const float * x_row = x + i3*s03 + i2*s02 + int64_t(col)*s01;
+
+    ggml_cuda_pdl_sync();
+
+    float amax = 0.0f;
+    if (col < ne1) {
+        for (int64_t i0 = 4*threadIdx.x; i0 < ne00; i0 += 4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ) {
+            const float4 v = *(const float4 *) (x_row + i0);
+            amax = fmaxf(amax, fmaxf(fmaxf(fabsf(v.x), fabsf(v.y)), fmaxf(fabsf(v.z), fabsf(v.w))));
+        }
+    }
+    __shared__ float amax_warp[CUDA_QUANTIZE_BLOCK_SIZE_MMQ/WARP_SIZE];
+    amax = block_reduce<block_reduce_method::MAX, CUDA_QUANTIZE_BLOCK_SIZE_MMQ>(amax, amax_warp);
+
+    const float col_scale = amax / (6.0f * 448.0f);
+    if (blockIdx.y == 0 && threadIdx.x == 0) {
+        y_scale[blockIdx.z*gridDim.x + col] = col_scale;
+    }
+
+    const int64_t isb = int64_t(blockIdx.y)*CUDA_QUANTIZE_BLOCK_SIZE_MMQ + threadIdx.x;
+    if (isb >= ne00/QK_NVFP4_SUB) {
+        return;
+    }
+
+    float vals[QK_NVFP4_SUB] = {0.0f};
+    if (col < ne1) {
+#pragma unroll
+        for (int k = 0; k < QK_NVFP4_SUB; k += 4) {
+            const float4 v = *(const float4 *) (x_row + isb*QK_NVFP4_SUB + k);
+            vals[k + 0] = v.x;
+            vals[k + 1] = v.y;
+            vals[k + 2] = v.z;
+            vals[k + 3] = v.w;
+        }
+    }
+
+    uint32_t q[2];
+    const uint8_t code = quantize_nvfp4_subblock(vals, col_scale, q[0], q[1]);
+
+    const int64_t kb  = isb / (QK_NVFP4/QK_NVFP4_SUB); // block of 64 values
+    const int     sub = isb % (QK_NVFP4/QK_NVFP4_SUB);
+    const int     ib  = kb % (QK_K/QK_NVFP4);           // block in the unit of 256 values
+    const int     g   = col % MMQ_FEW_NCOLS;
+    int * yg = vy + 4*(((blockIdx.z*(ne00/QK_K) + kb/(QK_K/QK_NVFP4))*(gridDim.x/MMQ_FEW_NCOLS) + col/MMQ_FEW_NCOLS)*MMQ_FEW_FP4_INT4);
+#pragma unroll
+    for (int h = 0; h < 2; ++h) {
+        const int i = 2*sub + h; // int of the block
+        yg[4*((ib/2)*WARP_SIZE + 4*g + i % 4) + 2*(ib % 2) + i/4] = q[h];
+    }
+    ((uint8_t *) (yg + 4*(2*WARP_SIZE + g) + ib))[sub] = code;
+#else
+    GGML_UNUSED_VARS(x_ptr, vy_ptr, y_scale_ptr, ne00, s01, s02, s03, ne1, ne2);
+    NO_DEVICE_CODE;
+#endif // defined(BLACKWELL_MMA_AVAILABLE)
+}
+
+void quantize_mmq_few_nvfp4_cuda(
+        const float * x, void * vy, float * y_scale, const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
+    GGML_ASSERT(ne00 % QK_K == 0);
+
+    const int64_t nsub = ne00 / QK_NVFP4_SUB;
+    const dim3 num_blocks(GGML_PAD(ne1, MMQ_FEW_NCOLS), (nsub + CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1) / CUDA_QUANTIZE_BLOCK_SIZE_MMQ, ne2*ne3);
+    const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE_MMQ, 1, 1);
+    const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(num_blocks, block_size, 0, stream);
+    ggml_cuda_kernel_launch(quantize_mmq_few_nvfp4, launch_params, x, vy, y_scale, ne00, s01, s02, s03, (int) ne1, (int) ne2);
 }
 
 void quantize_mmq_few_id_q8_1_cuda(

@@ -1725,5 +1725,12 @@ void ggml_cuda_mul_mat_q(
 
 bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t n_experts);
 
+// The src1 precision of MMQ: GGML_PREC_Q4 for MXFP4 and NVFP4 on Blackwell unless the precision is GGML_PREC_Q8, else GGML_PREC_Q8.
+// GGML_CUDA_MMQ_PREC, if set, replaces prec_requested. prec_requested must pass ggml_cuda_mmq_prec_src1_supported (asserted).
+ggml_prec ggml_cuda_mmq_get_prec_src1(ggml_type type, ggml_prec prec_requested, int cc);
+
+// Whether MMQ takes this src1 precision request: UNDEFINED, Q8 or Q4 after the GGML_CUDA_MMQ_PREC override.
+bool ggml_cuda_mmq_prec_src1_supported(ggml_prec prec_requested);
+
 // prec_requested: the src1 precision requested by the fused MUL_MATs.
 bool ggml_cuda_mmq_fusion_is_efficient(ggml_type type, ggml_prec prec_requested, int64_t nrows_x, int64_t ncols, int64_t nchannels, int device);
