@@ -362,10 +362,13 @@ static __global__ void mul_mat_vec_f(
         }
 
         if (block_size > warp_size) {
-            buf_iw[tid/warp_size] = sumf[j];
-            if constexpr (has_fusion) {
-                if (use_gate) {
-                    buf_iw_gate[tid/warp_size] = sumf_gate[j];
+            // one write per warp
+            if (tid % warp_size == 0) {
+                buf_iw[tid/warp_size] = sumf[j];
+                if constexpr (has_fusion) {
+                    if (use_gate) {
+                        buf_iw_gate[tid/warp_size] = sumf_gate[j];
+                    }
                 }
             }
             __syncthreads();
