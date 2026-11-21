@@ -1,6 +1,7 @@
 <script lang="ts">
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { deviceStore } from '$lib/stores';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
+	import { GLASS_KEY_CLASS } from '#lib/constants/index.ts';
+	import { deviceStore } from '#lib/stores/index.ts';
 	import type { Component, Snippet } from 'svelte';
 	import type { HTMLButtonAttributes } from 'svelte/elements';
 
@@ -33,11 +34,7 @@
 		{...props}
 		{...rest}
 		aria-label={label}
-		class={[
-			'inline-flex shrink-0 cursor-pointer items-center justify-center rounded-full border border-border/20 bg-muted/60 text-accent-foreground shadow-sm backdrop-blur-sm transition-colors hover:bg-muted',
-			size === 'md' ? 'size-10' : 'size-9',
-			className
-		]}
+		class={[GLASS_KEY_CLASS, size === 'md' ? 'size-10' : 'size-9', className]}
 		type="button"
 	>
 		{#if Icon}
@@ -48,7 +45,7 @@
 	</button>
 {/snippet}
 
-<!-- a round key over the page: the menu and context gauge keys at a phone's top corners, and the
+<!-- a round matte glass key: the menu and context gauge keys at a phone's top corners, and the
      key back to the bottom of a chat -->
 {#if tooltip && !deviceStore.isMobile}
 	<Tooltip.Root>

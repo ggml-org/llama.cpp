@@ -5,7 +5,7 @@
  * Reference: https://huggingface.co/docs/huggingface_hub/package_reference/hf_api
  */
 
-import type { HfEntryType, HfModelSort } from '$lib/enums';
+import type { HfEntryType, HfModelSort } from '#lib/enums/index.ts';
 
 // Search Options
 

@@ -4,7 +4,7 @@
 // so the driver can mutate it without depending on how the test renderer
 // forwards props.
 
-import type { DatabaseMessage } from '$lib/types';
+import type { DatabaseMessage } from '#lib/types/index.ts';
 
 export const perfState = $state<{
 	message: DatabaseMessage | null;

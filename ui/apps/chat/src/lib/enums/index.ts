@@ -90,7 +90,7 @@ export {
 	ServerModelSource,
 	ServerModelStatus,
 	ServerModelsSseEventType
-} from './server.enums';
+} from './llama-server.enums';
 
 export { ParameterSource, SyncableParameterType, SettingsFieldType } from './settings.enums';
 
@@ -100,9 +100,12 @@ export {
 	HtmlInputType,
 	McpPromptVariant,
 	MenuKind,
+	MouseButton,
+	PointerType,
 	ScrollCarouselVariant,
 	SidebarAction,
 	SidebarSectionKind,
+	SurfaceTheme,
 	TooltipSide,
 	UrlProtocol
 } from './ui.enums';
@@ -120,3 +123,5 @@ export {
 } from './tools.enums';
 
 export { SplashOrientation } from './splash.enums';
+
+export { ChatFormVoiceState, VoiceInputMode, VoiceMode, VoiceModelRole } from './voice.enums';

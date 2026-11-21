@@ -15,9 +15,9 @@ import {
 	SANDBOX_TIMEOUT_MS_MAX,
 	SANDBOX_TOOL_NAME,
 	SANDBOX_TRUNCATION_NOTICE
-} from '$lib/constants';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
-import type { ToolExecutionResult } from '$lib/types';
+} from '#lib/constants/index.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
+import type { ToolExecutionResult } from '#lib/types/index.ts';
 
 /** Cached harnesses keyed by whether nerdamer is included. */
 const harnessCache: Record<string, string> = {};
@@ -33,9 +33,9 @@ async function getHarness(): Promise<string> {
 
 	if (!harnessCache[key]) {
 		if (enabled) {
-			const { default: nerdamerJs } = await import('virtual:nerdamer');
+			const { default: loadNerdamer } = await import('virtual:nerdamer');
 
-			harnessCache[key] = buildSandboxHarness(nerdamerJs);
+			harnessCache[key] = buildSandboxHarness(await loadNerdamer());
 		} else {
 			harnessCache[key] = buildSandboxHarness('');
 		}

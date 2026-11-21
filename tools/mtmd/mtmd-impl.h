@@ -252,6 +252,12 @@
 #define TN_A_ASP_ATTN  "a.asp_attn.%s"
 #define TN_A_ASP_TDNN  "a.asp_tdnn.%s"
 
+// qwen3tts reference encoder, the transformer blocks use the generic names with the "a.gen.enc.tfm" prefix
+#define TN_A_GEN_ENC_QUANT_FIRST_IN  "a.gen.enc.quant.first.in_proj.%s"
+#define TN_A_GEN_ENC_QUANT_FIRST_CB  "a.gen.enc.quant.first.codebook.%s"
+#define TN_A_GEN_ENC_QUANT_REST_IN   "a.gen.enc.quant.rest.in_proj.%s"
+#define TN_A_GEN_ENC_QUANT_REST_CB   "a.gen.enc.quant.rest.codebook.%s"
+
 // qwen3tts code_predictor
 #define TN_A_GEN_CODE_PROJ_IN  "a.gen.code.proj_in.%s"
 #define TN_A_GEN_CODE_EMBD     "a.gen.code.embd.%s"
@@ -608,12 +614,19 @@ enum projector_type {
     PROJECTOR_TYPE_QWEN3TTS_GEN,
     PROJECTOR_TYPE_POCKETTTS_SPKENC,
     PROJECTOR_TYPE_POCKETTTS_GEN,
+    PROJECTOR_TYPE_MOSHI,
+    PROJECTOR_TYPE_MOSHI_GEN,
     PROJECTOR_TYPE_SOPRANO,
+    PROJECTOR_TYPE_KOKORO,
+    PROJECTOR_TYPE_TINY_VOCA,
     PROJECTOR_TYPE_LFM3A_GEN,
     PROJECTOR_TYPE_DRAMA3_GEN,
     PROJECTOR_TYPE_ZONOS3_GEN,
     PROJECTOR_TYPE_ZONOS3_SPKENC,
     PROJECTOR_TYPE_YUE2_GEN,
+    PROJECTOR_TYPE_VOXCPM2_GEN,
+    PROJECTOR_TYPE_VOXCPM2_SPKENC,
+    PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN,
     PROJECTOR_TYPE_FISH_S2_GEN,
     PROJECTOR_TYPE_FISH_S2_SPKENC,
     PROJECTOR_TYPE_MUSE_GLIMMER,
@@ -703,12 +716,19 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_QWEN3TTS_GEN,      "qwen3tts_gen"},
     { PROJECTOR_TYPE_POCKETTTS_SPKENC,  "pockettts_spkenc"},
     { PROJECTOR_TYPE_POCKETTTS_GEN,     "pockettts_gen"},
+    { PROJECTOR_TYPE_MOSHI,             "moshi"},
+    { PROJECTOR_TYPE_MOSHI_GEN,         "moshi_gen"},
     { PROJECTOR_TYPE_SOPRANO,           "soprano"},
+    { PROJECTOR_TYPE_KOKORO,            "kokoro"},
+    { PROJECTOR_TYPE_TINY_VOCA,         "tiny_voca"},
     { PROJECTOR_TYPE_LFM3A_GEN,         "lfm3a_gen"},
     { PROJECTOR_TYPE_DRAMA3_GEN,        "drama3_gen"},
     { PROJECTOR_TYPE_ZONOS3_GEN,        "zonos3_gen"},
     { PROJECTOR_TYPE_ZONOS3_SPKENC,     "zonos3_spkenc"},
     { PROJECTOR_TYPE_YUE2_GEN,          "yue2_gen"},
+    { PROJECTOR_TYPE_VOXCPM2_GEN,       "voxcpm2_gen"},
+    { PROJECTOR_TYPE_VOXCPM2_SPKENC,    "voxcpm2_spkenc"},
+    { PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN, "minimax_music3_gen"},
     { PROJECTOR_TYPE_FISH_S2_GEN,       "fish_s2_gen"},
     { PROJECTOR_TYPE_FISH_S2_SPKENC,    "fish_s2_spkenc"},
     { PROJECTOR_TYPE_MUSE_GLIMMER,      "muse-glimmer"},

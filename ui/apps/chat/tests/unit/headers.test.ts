@@ -1,4 +1,4 @@
-import { parseHeadersToArray, serializeHeaders } from '$lib/utils/headers';
+import { parseHeadersToArray, serializeHeaders } from '#lib/utils/headers.ts';
 import { describe, expect, it } from 'vitest';
 
 /**

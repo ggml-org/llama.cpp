@@ -1,6 +1,6 @@
 <script lang="ts">
-	import SidebarNavigation from '$lib/components/app/navigation/SidebarNavigation/SidebarNavigation.svelte';
-	import * as Tooltip from '$lib/components/ui/tooltip';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
+	import SidebarNavigation from '#lib/components/app/navigation/SidebarNavigation/SidebarNavigation.svelte';
 </script>
 
 <!-- the sidebar with the tooltip provider +layout.svelte gives it -->

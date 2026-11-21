@@ -4,8 +4,12 @@ import {
 	SECONDS_PER_DAY,
 	SECONDS_PER_HOUR,
 	SECONDS_PER_MINUTE
-} from '$lib/constants';
-import { formatContextLength, formatParameters, formatRelativeTime } from '$lib/utils/formatters';
+} from '#lib/constants/index.ts';
+import {
+	formatContextLength,
+	formatParameters,
+	formatRelativeTime
+} from '#lib/utils/formatters.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 describe('formatContextLength', () => {

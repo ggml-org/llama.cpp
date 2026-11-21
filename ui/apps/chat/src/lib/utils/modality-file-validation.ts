@@ -3,9 +3,9 @@
  * Ensures only compatible file types are processed based on model capabilities
  */
 
-import { FileTypeCategory } from '$lib/enums';
-import type { ModalityCapabilities } from '$lib/types';
-import { getFileTypeCategory } from '$lib/utils';
+import { FileTypeCategory } from '#lib/enums/index.ts';
+import type { ModalityCapabilities } from '#lib/types/index.ts';
+import { getFileTypeCategory } from '#lib/utils/index.ts';
 
 /**
  * Check if a file type is supported by the given modalities
@@ -143,7 +143,7 @@ export function generateModalityErrorMessage(
 
 	const { hasAudio, hasVideo, hasVision } = capabilities;
 
-	let message = '';
+	let message: string;
 
 	if (unsupportedFiles.length === 1) {
 		const file = unsupportedFiles[0];

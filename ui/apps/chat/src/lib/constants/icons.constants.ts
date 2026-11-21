@@ -3,36 +3,36 @@
  * Centralized configuration to ensure consistent icon usage across the app
  */
 
-import {
-	CircleAlert as LoadFailedIcon,
-	Compass as DiscoverIcon,
-	Eject as UnloadIcon,
-	Eye as VisionIcon,
-	File as FileIcon,
-	FileText as FileTextIcon,
-	FolderOpen as CwdCommandIcon,
-	FoldVertical as CompactCommandIcon,
-	Image as ImageIcon,
-	Lightbulb as ReasoningIcon,
-	Loader2 as LoadingIcon,
-	Mic as AudioIcon,
-	Package as ModelIcon,
-	Pause as PauseDownloadIcon,
-	Play as ResumeDownloadIcon,
-	Power as LoadIcon,
-	RotateCw as RetryIcon,
-	Sparkles as PromptCommandIcon,
-	Video as VideoIcon,
-	Wrench as ToolUseIcon
-} from '@lucide/svelte';
-import {
-	ChatFormCommandAction,
-	FileTypeCategory,
-	ModelCapability,
-	ModelModality
-} from '$lib/enums';
-import type { ModelCapabilities, ModelModalities } from '$lib/types/models';
+import { MODALITY_FLAG_KEYS, MODALITY_ORDER } from '@ggml-org/llama-ui/models';
+import LoadFailedIcon from '@lucide/svelte/icons/circle-alert';
+import DiscoverIcon from '@lucide/svelte/icons/compass';
+import UnloadIcon from '@lucide/svelte/icons/eject';
+import FileIcon from '@lucide/svelte/icons/file';
+// not a microphone: that one is for recording and dictation
+import AudioIcon from '@lucide/svelte/icons/file-headphone';
+import FileTextIcon from '@lucide/svelte/icons/file-text';
+import CompactCommandIcon from '@lucide/svelte/icons/fold-vertical';
+import CwdCommandIcon from '@lucide/svelte/icons/folder-open';
+import ImageIcon from '@lucide/svelte/icons/image';
+import LoadingIcon from '@lucide/svelte/icons/loader-2';
+import ModelIcon from '@lucide/svelte/icons/package';
+import PauseDownloadIcon from '@lucide/svelte/icons/pause';
+import ResumeDownloadIcon from '@lucide/svelte/icons/play';
+import LoadIcon from '@lucide/svelte/icons/power';
+import RetryIcon from '@lucide/svelte/icons/rotate-cw';
+import PromptCommandIcon from '@lucide/svelte/icons/sparkles';
+import VideoIcon from '@lucide/svelte/icons/video';
+import { ChatFormCommandAction, FileTypeCategory, ModelCapability } from '#lib/enums/index.ts';
+import type { ModelCapabilities } from '#lib/types/models.js';
 import type { Component } from 'svelte';
+export {
+	CAPABILITY_ICONS,
+	CAPABILITY_LABELS,
+	MODALITY_FLAG_KEYS,
+	MODALITY_ICONS,
+	MODALITY_LABELS,
+	MODALITY_ORDER
+} from '@ggml-org/llama-ui/models';
 
 export const FILE_TYPE_ICONS = {
 	[FileTypeCategory.AUDIO]: AudioIcon,
@@ -50,35 +50,6 @@ export const MODEL_ICON = ModelIcon;
 /** The mark for the Discover Models surface and its entry points. */
 export const DISCOVER_ICON = DiscoverIcon;
 
-export const MODALITY_ICONS = {
-	[ModelModality.AUDIO]: AudioIcon,
-	[ModelModality.VIDEO]: VideoIcon,
-	[ModelModality.VISION]: VisionIcon
-} as const;
-
-export const MODALITY_LABELS = {
-	[ModelModality.AUDIO]: 'Audio',
-	[ModelModality.VIDEO]: 'Video',
-	[ModelModality.VISION]: 'Vision'
-} as const;
-
-/** Maps an input ModelModality to the boolean flag it drives on the ModelModalities type */
-export const MODALITY_FLAG_KEYS: Record<
-	Exclude<ModelModality, ModelModality.TEXT>,
-	keyof ModelModalities
-> = {
-	[ModelModality.AUDIO]: 'audio',
-	[ModelModality.VIDEO]: 'video',
-	[ModelModality.VISION]: 'vision'
-};
-
-/** Modalities in the order the filters and the model cards list them. */
-export const MODALITY_ORDER: Exclude<ModelModality, ModelModality.TEXT>[] = [
-	ModelModality.VISION,
-	ModelModality.VIDEO,
-	ModelModality.AUDIO
-];
-
 /** Boolean flag a modality drives on the ModelModalities type. */
 export type ModalityKey = (typeof MODALITY_FLAG_KEYS)[keyof typeof MODALITY_FLAG_KEYS];
 
@@ -86,16 +57,6 @@ export type ModalityKey = (typeof MODALITY_FLAG_KEYS)[keyof typeof MODALITY_FLAG
 export const MODALITY_KEYS: ModalityKey[] = MODALITY_ORDER.map(
 	(modality) => MODALITY_FLAG_KEYS[modality]
 );
-
-export const CAPABILITY_ICONS: Record<ModelCapability, Component> = {
-	[ModelCapability.REASONING]: ReasoningIcon,
-	[ModelCapability.TOOL_USE]: ToolUseIcon
-} as const;
-
-export const CAPABILITY_LABELS: Record<ModelCapability, string> = {
-	[ModelCapability.REASONING]: 'Reasoning',
-	[ModelCapability.TOOL_USE]: 'Tool use'
-} as const;
 
 /** Maps a ModelCapability to the boolean flag it drives on the ModelCapabilities type */
 export const CAPABILITY_FLAG_KEYS: Record<ModelCapability, keyof ModelCapabilities> = {

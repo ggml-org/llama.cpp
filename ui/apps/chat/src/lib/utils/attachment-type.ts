@@ -1,5 +1,5 @@
-import { AttachmentType, FileTypeCategory } from '$lib/enums';
-import { getFileTypeCategory, getFileTypeCategoryByExtension } from '$lib/utils';
+import { AttachmentType, FileTypeCategory } from '#lib/enums/index.ts';
+import { getFileTypeCategory, getFileTypeCategoryByExtension } from '#lib/utils/index.ts';
 
 /**
  * Gets the file type category from an uploaded file, checking both MIME type and extension

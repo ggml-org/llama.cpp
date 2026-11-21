@@ -2,12 +2,12 @@
 	import { parseWriteFileMeta, parseWriteFileTitleMeta } from './parsers/write-file';
 	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { XCircle } from '@lucide/svelte';
-	import { SyntaxHighlightedCode } from '$lib/components/app';
-	import { MAX_HEIGHT_CODE_BLOCK, RESULT_STAT_SEPARATOR } from '$lib/constants';
-	import { FileTypeText } from '$lib/enums';
-	import { toolsStore } from '$lib/stores';
-	import type { AgenticSection } from '$lib/types';
-	import { abbreviateHome, formatJsonPretty } from '$lib/utils';
+	import { SyntaxHighlightedCode } from '#lib/components/app/index.ts';
+	import { MAX_HEIGHT_CODE_BLOCK, RESULT_STAT_SEPARATOR } from '#lib/constants/index.ts';
+	import { FileTypeText } from '#lib/enums/index.ts';
+	import { toolsStore } from '#lib/stores/index.ts';
+	import type { AgenticSection } from '#lib/types/index.ts';
+	import { abbreviateHome, formatJsonPretty } from '#lib/utils/index.ts';
 
 	interface Props {
 		section: AgenticSection;
@@ -37,7 +37,7 @@
 				</span>
 
 				{#if writeFileMeta?.errorMessage}
-					<span class="shrink-0 text-xs italic text-muted-foreground/70">(failed)</span>
+					<span class="shrink-0 text-caption italic text-muted-foreground/70">(failed)</span>
 				{/if}
 			</span>
 		</span>
@@ -46,9 +46,9 @@
 	{#snippet children(_meta, ctx)}
 		{#if writeFileBody?.errorMessage}
 			<div
-				class="flex items-start gap-2 rounded bg-red-500/10 p-2 text-xs text-red-600 italic dark:text-red-400"
+				class="flex items-start gap-2 rounded bg-surface-danger p-2 text-caption text-fg-danger italic"
 			>
-				<XCircle class="mt-0.5 h-3 w-3 shrink-0" />
+				<XCircle class="mt-0.5 size-icon-xs shrink-0" />
 
 				<span>{writeFileBody.errorMessage}</span>
 			</div>
@@ -60,7 +60,7 @@
 				streaming={ctx.isCodeStreaming}
 			/>
 
-			<div class="mt-1.5 text-xs text-muted-foreground/70 italic">
+			<div class="mt-1.5 text-caption text-muted-foreground/70 italic">
 				{#if writeFileBody.resultMessage}
 					{writeFileBody.resultMessage}{writeFileBody.bytesWritten != null
 						? RESULT_STAT_SEPARATOR
@@ -80,11 +80,13 @@
 				streaming={ctx.isCodeStreaming}
 			/>
 		{:else if ctx.isStreaming}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
+			<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">
 				Receiving arguments...
 			</div>
 		{:else}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">No content</div>
+			<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">
+				No content
+			</div>
 		{/if}
 	{/snippet}
 </ToolCallBlock>

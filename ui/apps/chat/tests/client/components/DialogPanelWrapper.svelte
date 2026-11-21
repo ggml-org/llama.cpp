@@ -1,6 +1,6 @@
 <script lang="ts">
-	import DialogMcpServers from '$lib/components/app/dialogs/DialogMcpServers.svelte';
-	import DialogSettingsChat from '$lib/components/app/dialogs/DialogSettingsChat.svelte';
+	import DialogMcpServers from '#lib/components/app/dialogs/DialogMcpServers.svelte';
+	import DialogSettingsChat from '#lib/components/app/dialogs/DialogSettingsChat.svelte';
 
 	let { panel }: { panel: 'mcp' | 'settings' } = $props();
 </script>

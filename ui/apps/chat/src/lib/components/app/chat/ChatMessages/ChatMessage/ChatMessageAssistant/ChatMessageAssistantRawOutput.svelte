@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { buildAssistantRawOutput, deriveAgenticSections } from '$lib/utils';
+	import { buildAssistantRawOutput, deriveAgenticSections } from '#lib/utils/index.ts';
 
 	interface Props {
 		message: DatabaseMessage;
@@ -24,8 +24,8 @@
 		margin-top: 1.5rem;
 		padding: 1rem 1.25rem;
 		border-radius: 1rem;
-		background: hsl(var(--muted) / 0.3);
-		color: var(--foreground);
+		background: hsl(var(--surface-muted) / 0.3);
+		color: var(--fg-default);
 		font-size: 0.875rem;
 		line-height: 1.6;
 		white-space: pre-wrap;

@@ -1,11 +1,14 @@
 <script lang="ts">
 	import { parseReadMediaMeta } from './parsers/read-media';
 	import ToolCallBlock from './ToolCallBlock.svelte';
-	import { ATTACHMENT_SAVED_REGEX } from '$lib/constants/agentic.constants';
-	import { AttachmentType, MimeTypeAudio } from '$lib/enums';
-	import type { DatabaseMessageExtraAudioFile, DatabaseMessageExtraImageFile } from '$lib/types';
-	import type { AgenticSection } from '$lib/types';
-	import { createBase64DataUrl } from '$lib/utils/data-url';
+	import { ATTACHMENT_SAVED_REGEX } from '#lib/constants/agentic.constants.ts';
+	import { AttachmentType, MimeTypeAudio } from '#lib/enums/index.ts';
+	import type {
+		DatabaseMessageExtraAudioFile,
+		DatabaseMessageExtraImageFile
+	} from '#lib/types/index.ts';
+	import type { AgenticSection } from '#lib/types/index.ts';
+	import { createBase64DataUrl } from '#lib/utils/data-url.ts';
 
 	interface Props {
 		section: AgenticSection;
@@ -55,7 +58,7 @@
 	{#snippet children(_meta, _ctx)}
 		{#if section.toolResult}
 			{#if !mediaAttachment}
-				<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
+				<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">
 					Media attachment not found in message extras
 				</div>
 			{:else if mediaAttachment.type === AttachmentType.AUDIO}
@@ -72,7 +75,7 @@
 				<div class="mt-2">
 					<img
 						alt={readMediaMeta?.fileName ?? 'media'}
-						class="max-h-[60vh] max-w-full rounded-lg object-contain shadow-lg"
+						class="max-h-[60vh] max-w-full rounded-lg object-contain shadow-(--elevation-raised)"
 						loading="lazy"
 						src={mediaAttachment.base64Url}
 					/>
@@ -80,7 +83,7 @@
 			{/if}
 
 			{#if readMediaMeta?.sizeBytes || readMediaMeta?.mimeType}
-				<div class="mt-2 flex gap-4 text-xs text-muted-foreground">
+				<div class="mt-2 flex gap-4 text-caption text-muted-foreground">
 					{#if readMediaMeta?.sizeBytes}
 						<span>Size: {readMediaMeta.sizeBytes} bytes</span>
 					{/if}
@@ -92,10 +95,10 @@
 			{/if}
 
 			{#if readMediaMeta?.path}
-				<div class="mt-1 font-mono text-xs text-muted-foreground/60">{readMediaMeta.path}</div>
+				<div class="mt-1 font-mono text-caption text-muted-foreground/60">{readMediaMeta.path}</div>
 			{/if}
 		{:else}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
+			<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">
 				Waiting for media data...
 			</div>
 		{/if}

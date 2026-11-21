@@ -1,5 +1,5 @@
-import { hasMarkdownStructure } from '$lib/components/app/content/MarkdownEditor/markdown-structure';
-import { CHAT_FORM_EXPAND_MIN_LINES } from '$lib/constants';
+import { hasMarkdownStructure } from '#lib/components/app/content/MarkdownEditor/markdown-structure.ts';
+import { CHAT_FORM_EXPAND_MIN_LINES } from '#lib/constants/index.ts';
 
 /** The collapsed card's `rounded-4xl` on a phone. */
 const COLLAPSED_CARD_RADIUS = '2rem';

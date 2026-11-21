@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { COLLAPSIBLE_TRANSITION_MS } from '$lib/constants';
+	import { COLLAPSIBLE_TRANSITION_MS } from '#lib/constants/index.ts';
 	import type { Snippet } from 'svelte';
 
 	interface Props {

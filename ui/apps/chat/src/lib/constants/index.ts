@@ -1,5 +1,5 @@
 // Central constants export file
-// All constants should be imported from '$lib/constants'
+// All constants should be imported from '#lib/constants/index.ts'
 
 export * from './agentic.constants';
 export * from './api-endpoints.constants';
@@ -14,8 +14,8 @@ export * from './icons.constants';
 export * from './attachment-menu.constants';
 export * from './auto-scroll.constants';
 export * from './context-gauge-dial.constants';
-export * from './context-gauge-popup.constants';
 export * from './conversation-import.constants';
+export * from './conversation-search.constants';
 export * from './binary-detection.constants';
 export * from './content-detection.constants';
 export * from './tool-call-args.constants';
@@ -25,7 +25,6 @@ export * from './chat-form.constants';
 export * from './cli-flags.constants';
 export * from './compaction.constants';
 export * from './code-block.constants';
-export * from './context-keys.constants';
 export * from './control-actions.constants';
 export * from './css-classes.constants';
 export * from './formatters.constants';
@@ -47,7 +46,6 @@ export * from './mcp-form.constants';
 export * from './mcp-resource.constants';
 export * from './mention-badge.constants';
 export * from './message-export.constants';
-export * from './microphone.constants';
 export * from './path-display.constants';
 export * from './model-id.constants';
 export * from './model-loading.constants';
@@ -75,3 +73,4 @@ export * from './read-media';
 export * from './get-datetime';
 export * from './browser-info';
 export * from './search-chats';
+export * from './voice.constants';

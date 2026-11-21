@@ -1,7 +1,7 @@
 <script lang="ts">
+	import * as AlertDialog from '@ggml-org/llama-ui/ui/alert-dialog';
 	import { AlertTriangle, TimerOff } from '@lucide/svelte';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { ErrorDialogType } from '$lib/enums';
+	import { ErrorDialogType } from '#lib/enums/index.ts';
 
 	interface Props {
 		open: boolean;
@@ -38,9 +38,9 @@
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
 				{#if isTimeout}
-					<TimerOff class={`h-5 w-5 ${iconClass}`} />
+					<TimerOff class={`size-icon-lg ${iconClass}`} />
 				{:else}
-					<AlertTriangle class={`h-5 w-5 ${iconClass}`} />
+					<AlertTriangle class={`size-icon-lg ${iconClass}`} />
 				{/if}
 
 				{title}
@@ -51,11 +51,11 @@
 			</AlertDialog.Description>
 		</AlertDialog.Header>
 
-		<div class={`rounded-lg border px-4 py-3 text-sm ${badgeClass}`}>
+		<div class={`rounded-lg border px-4 py-3 text-body-sm ${badgeClass}`}>
 			<p class="font-medium">{message}</p>
 
 			{#if contextInfo}
-				<div class="mt-2 space-y-1 text-xs opacity-80">
+				<div class="mt-2 space-y-1 text-caption opacity-80">
 					<p>
 						<span class="font-medium">Prompt tokens:</span>
 

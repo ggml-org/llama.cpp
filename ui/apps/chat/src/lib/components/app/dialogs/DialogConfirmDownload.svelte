@@ -1,7 +1,7 @@
 <script lang="ts">
-	import DialogConfirmation from '$lib/components/app/dialogs/DialogConfirmation.svelte';
-	import { ModelDownloadConfirmAction } from '$lib/enums';
-	import { modelsStore } from '$lib/stores';
+	import DialogConfirmation from '#lib/components/app/dialogs/DialogConfirmation.svelte';
+	import { ModelDownloadConfirmAction } from '#lib/enums/index.ts';
+	import { modelsStore } from '#lib/stores/index.ts';
 
 	interface Props {
 		/** Action being confirmed; drives the wording. */

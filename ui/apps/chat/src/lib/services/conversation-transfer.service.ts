@@ -6,13 +6,13 @@
  * DB access and store refreshes stay in conversationsStore.
  */
 
-import { EXPORT_CONV, NEWLINE, ZIP_MAGIC } from '$lib/constants';
+import { EXPORT_CONV, NEWLINE, ZIP_MAGIC } from '#lib/constants/index.ts';
 import {
 	FileExtensionText,
 	MimeTypeApplication,
 	MimeTypeText,
 	SessionRecordType
-} from '$lib/enums';
+} from '#lib/enums/index.ts';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 
 export class ConversationTransferService {

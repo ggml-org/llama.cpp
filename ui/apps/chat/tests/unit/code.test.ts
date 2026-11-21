@@ -1,5 +1,12 @@
-import { highlightCode, splitGluedClosingCodeFences, trimCodePadding } from '$lib/utils/code';
-import { describe, expect, it } from 'vitest';
+import {
+	highlightCode,
+	loadHighlightLanguages,
+	splitGluedClosingCodeFences,
+	trimCodePadding
+} from '#lib/utils/code.ts';
+import { beforeAll, describe, expect, it } from 'vitest';
+
+beforeAll(() => loadHighlightLanguages());
 
 describe('trimCodePadding', () => {
 	it('removes a single leading newline', () => {
@@ -147,5 +154,39 @@ describe('splitGluedClosingCodeFences', () => {
 		const input = '```ts\nlet foo = 1;';
 
 		expect(splitGluedClosingCodeFences(input)).toBe(input);
+	});
+});
+
+describe('highlightCode in bash', () => {
+	const API_CALL = `curl http://localhost:9931/v1/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -d '{"model": "x"}'`;
+
+	it('marks a command name as a built-in', () => {
+		expect(highlightCode(API_CALL, 'bash')).toContain('<span class="hljs-built_in">curl</span>');
+	});
+
+	it('marks flags as attributes', () => {
+		const html = highlightCode('brew install --cask llama-app -LsSf', 'bash');
+
+		expect(html).toContain('<span class="hljs-attr">--cask</span>');
+		expect(html).toContain('<span class="hljs-attr">-LsSf</span>');
+	});
+
+	it('marks the command after a pipe', () => {
+		expect(highlightCode('curl -LsSf https://llama.app/install.sh | sh', 'bash')).toContain(
+			'| <span class="hljs-built_in">sh</span>'
+		);
+	});
+
+	it("doesn't mark a continued line's first word as a command", () => {
+		expect(highlightCode('brew \\\n  install x', 'bash')).not.toContain('hljs-built_in">install');
+	});
+
+	it('leaves keywords, and flags inside strings, as they were', () => {
+		const html = highlightCode('if true; then\n  echo "hi -x"\nfi', 'bash');
+
+		expect(html).toContain('<span class="hljs-keyword">if</span>');
+		expect(html).not.toContain('hljs-attr">-x');
 	});
 });

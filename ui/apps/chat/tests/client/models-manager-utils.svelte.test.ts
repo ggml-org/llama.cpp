@@ -7,11 +7,11 @@ import {
 	groupModelQuants,
 	modelContextLength,
 	splitHiddenQuants
-} from '$lib/components/app/models/ModelsManager/utils';
-import { LOCAL_BACKEND_ID } from '$lib/constants';
-import { ModelDraftSidecar, ModelGroupKind, ServerModelStatus } from '$lib/enums';
-import { modelsStore } from '$lib/stores/models/index.svelte';
-import type { ApiModelDataEntry, ModelOption } from '$lib/types';
+} from '#lib/components/app/models/ModelsManager/utils.ts';
+import { LOCAL_BACKEND_ID } from '#lib/constants/index.ts';
+import { ModelDraftSidecar, ModelGroupKind, ServerModelStatus } from '#lib/enums/index.ts';
+import { modelsStore } from '#lib/stores/models/index.svelte.ts';
+import type { ApiModelDataEntry, ModelOption } from '#lib/types/index.ts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 function option(model: string, id = model): ModelOption {

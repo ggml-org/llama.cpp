@@ -8,18 +8,16 @@ import {
 	renderMermaidDiagrams,
 	renderSvgDiagrams,
 	toggleDiagramSource
-} from '$lib/components/app/content/MarkdownContent/markdown-diagrams';
-import { getMarkdownProcessor } from '$lib/components/app/content/MarkdownContent/markdown-processor';
-import { getCodeInfoFromTarget } from '$lib/components/app/content/MarkdownContent/markdown-utils';
-import { MERMAID_BLOCK_CLASS } from '$lib/constants';
-import { ColorMode } from '$lib/enums';
+} from '#lib/components/app/content/MarkdownContent/markdown-diagrams.ts';
+import { getMarkdownProcessor } from '#lib/components/app/content/MarkdownContent/markdown-processor.ts';
+import { getCodeInfoFromTarget } from '#lib/components/app/content/MarkdownContent/markdown-utils.ts';
+import { MERMAID_BLOCK_CLASS } from '#lib/constants/index.ts';
 import {
 	copyCodeToClipboard,
 	copyToClipboard,
 	preprocessLaTeX,
 	splitGluedClosingCodeFences
-} from '$lib/utils';
-import { mode } from 'mode-watcher';
+} from '#lib/utils/index.ts';
 
 export interface MarkdownBlockWidgetOptions {
 	onPreviewCode?: (code: string, language: string) => void;
@@ -311,9 +309,7 @@ export class MarkdownBlockWidget extends WidgetType {
 
 		// mermaid draws asynchronously and changes the block's height when done
 		if (dom.querySelector(`pre.${MERMAID_BLOCK_CLASS}`)) {
-			void renderMermaidDiagrams(dom, mode.current === ColorMode.DARK).then(() =>
-				this.measure(dom, view, key)
-			);
+			void renderMermaidDiagrams(dom).then(() => this.measure(dom, view, key));
 		}
 	}
 }

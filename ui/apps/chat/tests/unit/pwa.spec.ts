@@ -15,19 +15,20 @@ describe('PWA Build Output', () => {
 		return;
 	}
 
-	const swContent = readFileSync(resolve(DIST_DIR, 'sw.js'), 'utf-8');
+	const swContent = readFileSync(resolve(DIST_DIR, 'service-worker.js'), 'utf-8');
+	const legacySwContent = readFileSync(resolve(DIST_DIR, 'sw.js'), 'utf-8');
 	const indexContent = readFileSync(resolve(DIST_DIR, 'index.html'), 'utf-8');
 
 	describe('Core files exist', () => {
-		it('service worker (sw.js) exists', () => {
-			expect(existsSync(resolve(DIST_DIR, 'sw.js')), 'sw.js not found').toBeTruthy();
+		it('service worker (service-worker.js) exists', () => {
+			expect(
+				existsSync(resolve(DIST_DIR, 'service-worker.js')),
+				'service-worker.js not found'
+			).toBeTruthy();
 		});
 
-		it('workbox library exists (hashed filename)', () => {
-			// SvelteKit generates workbox-{hash}.js files
-			const files = readdirSync(DIST_DIR).filter((f) => f.match(/^workbox-[^.]+\.js$/));
-
-			expect(files.length).toBeGreaterThan(0);
+		it('legacy service worker (sw.js) exists', () => {
+			expect(existsSync(resolve(DIST_DIR, 'sw.js')), 'sw.js not found').toBeTruthy();
 		});
 
 		it('manifest.webmanifest exists', () => {
@@ -37,24 +38,23 @@ describe('PWA Build Output', () => {
 			).toBeTruthy();
 		});
 
-		it('SvelteKit bundle.js exists in _app/immutable/', () => {
-			// SvelteKit generates hashed bundle names in _app/immutable/
-			const appDir = resolve(DIST_DIR, '_app', 'immutable');
+		it('SvelteKit entry start.js and app.js exist in _app/immutable/entry/', () => {
+			// a split build: hashed entry points in _app/immutable/entry/, the rest in chunks/ and nodes/
+			const entryDir = resolve(DIST_DIR, '_app', 'immutable', 'entry');
 
-			expect(existsSync(appDir), '_app/immutable/ not found').toBeTruthy();
-			const files = readdirSync(appDir).filter((f) => f.startsWith('bundle.') && f.endsWith('.js'));
+			expect(existsSync(entryDir), '_app/immutable/entry/ not found').toBeTruthy();
+			const files = readdirSync(entryDir);
 
-			expect(files.length).toBeGreaterThan(0);
+			expect(files.some((f) => /^start\.[a-zA-Z0-9_-]+\.js$/.test(f))).toBe(true);
+			expect(files.some((f) => /^app\.[a-zA-Z0-9_-]+\.js$/.test(f))).toBe(true);
 		});
 
-		it('SvelteKit bundle.css exists in _app/immutable/assets/', () => {
-			// SvelteKit generates hashed CSS bundles in _app/immutable/assets/
+		it('SvelteKit CSS exists in _app/immutable/assets/', () => {
+			// SvelteKit generates hashed CSS files in _app/immutable/assets/
 			const cssDir = resolve(DIST_DIR, '_app', 'immutable', 'assets');
 
 			expect(existsSync(cssDir), '_app/immutable/assets/ not found').toBeTruthy();
-			const files = readdirSync(cssDir).filter(
-				(f) => f.startsWith('bundle.') && f.endsWith('.css')
-			);
+			const files = readdirSync(cssDir).filter((f) => f.endsWith('.css'));
 
 			expect(files.length).toBeGreaterThan(0);
 		});
@@ -80,73 +80,68 @@ describe('PWA Build Output', () => {
 	});
 
 	describe('Service worker content', () => {
-		it('service worker has minified self.define format', () => {
-			expect(swContent).toBeTruthy();
-			// SvelteKit's workbox-plugin-sveltekit produces a minified SW with self.define
-			expect(swContent).toMatch(/if\(!self.define\)/);
+		it('precache contains every file in _app/immutable/, so lazily loaded chunks work offline', () => {
+			const immutableDir = resolve(DIST_DIR, '_app', 'immutable');
+			const files = readdirSync(immutableDir, { recursive: true, withFileTypes: true })
+				.filter((entry) => entry.isFile())
+				.map((entry) => resolve(entry.parentPath, entry.name).slice(resolve(DIST_DIR).length + 1));
+
+			expect(files.length).toBeGreaterThan(0);
+
+			for (const file of files) expect(swContent).toContain(file);
 		});
 
-		it('references hashed workbox file (SvelteKit build output)', () => {
-			expect(swContent).toBeTruthy();
-			// SvelteKit's workbox-plugin-sveltekit references hashed workbox files
-			expect(swContent).toMatch(/define\(\["\.\/workbox-[a-zA-Z0-9]+"\]/);
+		it('precache contains the app shell, _app/version.json and manifest.webmanifest', () => {
+			expect(swContent).toMatch(/["'`]\.\/["'`]/);
+			expect(swContent).toMatch(/["'`]_app\/version\.json["'`]/);
+			expect(swContent).toMatch(/["'`]manifest\.webmanifest["'`]/);
 		});
 
-		it('precache contains SvelteKit bundle.js with content hash', () => {
-			expect(swContent).toBeTruthy();
-			// SvelteKit uses content-hashed bundle names in _app/immutable/
-			expect(swContent).toMatch(/"_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js"/);
+		it('activates a waiting worker on SKIP_WAITING', () => {
+			expect(swContent).toMatch(/SKIP_WAITING/);
+			expect(swContent).toMatch(/skipWaiting\(\)/);
 		});
 
-		it('precache contains SvelteKit bundle.css with content hash', () => {
-			expect(swContent).toBeTruthy();
-			// SvelteKit uses content-hashed CSS bundle names in _app/immutable/assets/
-			expect(swContent).toMatch(/"_app\/immutable\/assets\/bundle\.[a-zA-Z0-9_-]+\.css"/);
+		it('precaches from the network, not the HTTP cache', () => {
+			// a stale index.html from the HTTP cache would point at the previous build's bundle
+			expect(swContent).toMatch(/cache:\s*["'`]reload["'`]/);
 		});
 
-		it('precache contains _app/version.json', () => {
-			expect(swContent).toBeTruthy();
-			// SvelteKit stores version.json in _app directory
-			expect(swContent).toMatch(/"_app\/version\.json"/);
+		it('does not route API requests', () => {
+			// only precached files are served from cache, so API calls always hit the server
+			expect(swContent).not.toMatch(/v1\//);
 		});
+	});
 
-		it('precache contains manifest.webmanifest', () => {
-			expect(swContent).toBeTruthy();
-			expect(swContent).toMatch(/"manifest\.webmanifest"/);
-		});
-
-		it('no navigation route — API endpoints bypass PWA', () => {
-			expect(swContent).toBeTruthy();
-			// NavigationRoute is intentionally absent so direct browser
-			// navigation to server API endpoints returns JSON, not HTML.
-			expect(swContent).not.toMatch(/NavigationRoute/);
-		});
-
-		it('has runtime caching for API routes', () => {
-			expect(swContent).toBeTruthy();
-			expect(swContent).toMatch(/api-cache/);
-			expect(swContent).toMatch(/NetworkFirst/);
+	describe('Legacy service worker content', () => {
+		it('unregisters itself and clears caches', () => {
+			expect(legacySwContent).toMatch(/registration\.unregister\(\)/);
+			expect(legacySwContent).toMatch(/caches\.delete/);
 		});
 	});
 
 	describe('index.html content', () => {
-		it('has modulepreload link for SvelteKit bundle with content hash', () => {
-			expect(indexContent).toBeTruthy();
-			// SvelteKit generates hashed bundle names in _app/immutable/
-			expect(indexContent).toMatch(/href="(\.\/|\/)_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js"/);
-		});
-
-		it('has stylesheet link for SvelteKit bundle.css with content hash', () => {
+		it('has modulepreload link for the SvelteKit entry with content hash', () => {
 			expect(indexContent).toBeTruthy();
 			expect(indexContent).toMatch(
-				/href="(\.\/|\/)_app\/immutable\/assets\/bundle\.[a-zA-Z0-9_-]+\.css"/
+				/href="(\.\/|\/)_app\/immutable\/entry\/start\.[a-zA-Z0-9_-]+\.js"/
 			);
 		});
 
-		it('has dynamic import for SvelteKit bundle with content hash', () => {
+		it('has stylesheet link for SvelteKit CSS with content hash', () => {
 			expect(indexContent).toBeTruthy();
 			expect(indexContent).toMatch(
-				/import\("(\.\/|\/)_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js"\)/
+				/href="(\.\/|\/)_app\/immutable\/assets\/[a-zA-Z0-9_.-]+\.[a-zA-Z0-9_-]+\.css"/
+			);
+		});
+
+		it('has dynamic imports for the SvelteKit entry with content hash', () => {
+			expect(indexContent).toBeTruthy();
+			expect(indexContent).toMatch(
+				/import\("(\.\/|\/)_app\/immutable\/entry\/start\.[a-zA-Z0-9_-]+\.js"\)/
+			);
+			expect(indexContent).toMatch(
+				/import\("(\.\/|\/)_app\/immutable\/entry\/app\.[a-zA-Z0-9_-]+\.js"\)/
 			);
 		});
 
@@ -176,14 +171,6 @@ describe('PWA Build Output', () => {
 	describe('SvelteKit _app directory', () => {
 		it('_app directory exists (SvelteKit uses it for hashed assets)', () => {
 			expect(existsSync(resolve(DIST_DIR, '_app'))).toBeTruthy();
-		});
-	});
-
-	describe('Hashed workbox files', () => {
-		it('workbox-*.js files exist in dist root (SvelteKit build output)', () => {
-			const files = readdirSync(DIST_DIR).filter((f) => f.match(/^workbox-[^.]+\.js$/));
-
-			expect(files.length).toBeGreaterThan(0);
 		});
 	});
 

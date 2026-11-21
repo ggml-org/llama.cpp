@@ -1,5 +1,10 @@
-import { MODEL_ID, type ModelSidecar, PATH_SEPARATOR, SIDECAR_TOKENS } from '$lib/constants';
-import { ModelAuxSidecar, ModelDraftSidecar } from '$lib/enums';
+import {
+	MODEL_ID,
+	type ModelSidecar,
+	PATH_SEPARATOR,
+	SIDECAR_TOKENS
+} from '#lib/constants/index.ts';
+import { ModelAuxSidecar, ModelDraftSidecar } from '#lib/enums/index.ts';
 
 const SIDECAR_TOKEN_SET = new Set<string>(SIDECAR_TOKENS);
 const DRAFT_SIDECAR_SET = new Set<string>(Object.values(ModelDraftSidecar));

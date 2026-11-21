@@ -1,4 +1,4 @@
-import { CHAT_FORM_RESIZE_MS } from '$lib/constants';
+import { CHAT_FORM_RESIZE_MS } from '#lib/constants/index.ts';
 
 export interface CollapsedHeightHoldOptions {
 	getCard: () => HTMLElement | undefined;

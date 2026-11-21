@@ -7,9 +7,9 @@
  * probes draw from and promote into.
  */
 
-import { DEFAULT_MCP_CONFIG } from '$lib/constants';
-import { HealthCheckStatus, MCPConnectionPhase, MCPLogLevel } from '$lib/enums';
-import { MCPService } from '$lib/services/mcp.service';
+import { DEFAULT_MCP_CONFIG } from '#lib/constants/index.ts';
+import { HealthCheckStatus, MCPConnectionPhase, MCPLogLevel } from '#lib/enums/index.ts';
+import { MCPService } from '#lib/services/mcp.service.ts';
 import type {
 	ClientCapabilities,
 	HealthCheckParams,
@@ -19,8 +19,8 @@ import type {
 	MCPConnectionLog,
 	MCPServerConfig,
 	ServerCapabilities
-} from '$lib/types';
-import { detectMcpTransportFromUrl } from '$lib/utils';
+} from '#lib/types/index.ts';
+import { detectMcpTransportFromUrl } from '#lib/utils/index.ts';
 
 // module-level so the timestamp is not flagged as reactive state by prefer-svelte-reactivity
 function createConnectionErrorLog(message: string): MCPConnectionLog {

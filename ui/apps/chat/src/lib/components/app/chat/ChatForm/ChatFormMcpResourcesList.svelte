@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { ChatAttachmentsListItemMcpResource, ScrollCarousel } from '$lib/components/app';
-	import { ScrollCarouselVariant } from '$lib/enums';
-	import { mcpStore } from '$lib/stores';
+	import { ChatAttachmentsListItemMcpResource, ScrollCarousel } from '#lib/components/app/index.ts';
+	import { ScrollCarouselVariant } from '#lib/enums/index.ts';
+	import { mcpStore } from '#lib/stores/index.ts';
 
 	interface Props {
 		class?: string;

@@ -1,7 +1,7 @@
 import { markdownLanguage } from '@codemirror/lang-markdown';
 import { LanguageSupport } from '@codemirror/language';
 import { EditorState } from '@codemirror/state';
-import { codeRanges } from '$lib/components/app/content/MarkdownEditor/markdown-syntax';
+import { codeRanges } from '#lib/components/app/content/MarkdownEditor/markdown-syntax.ts';
 import { describe, expect, it } from 'vitest';
 
 function stateOf(doc: string): EditorState {

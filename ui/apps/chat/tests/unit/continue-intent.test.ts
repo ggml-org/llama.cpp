@@ -1,6 +1,6 @@
-import { ContinueIntentKind, MessageRole, MessageType } from '$lib/enums';
-import type { DatabaseMessage } from '$lib/types/database';
-import { classifyContinueIntent } from '$lib/utils/agentic';
+import { ContinueIntentKind, MessageRole, MessageType } from '#lib/enums/index.ts';
+import type { DatabaseMessage } from '#lib/types/database.js';
+import { classifyContinueIntent } from '#lib/utils/agentic.ts';
 import { describe, expect, it } from 'vitest';
 
 /**

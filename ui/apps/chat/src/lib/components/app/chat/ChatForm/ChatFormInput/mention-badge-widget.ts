@@ -4,10 +4,10 @@
 
 import type { EditorState, Range } from '@codemirror/state';
 import { Decoration, WidgetType } from '@codemirror/view';
-import { codeRanges } from '$lib/components/app/content/MarkdownEditor/markdown-syntax';
-import { SETTINGS_KEYS } from '$lib/constants';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
-import { toolsStore } from '$lib/stores/tools.svelte';
+import { codeRanges } from '#lib/components/app/content/MarkdownEditor/markdown-syntax.ts';
+import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
+import { toolsStore } from '#lib/stores/tools.svelte.ts';
 import {
 	decodeFileLinkPath,
 	fileMentionLinkRe,
@@ -16,7 +16,7 @@ import {
 	MENTION_BADGE_CLASSNAME,
 	MENTION_BADGE_ICON_CLASSNAME,
 	MENTION_BADGE_SVG_ATTRIBUTES
-} from '$lib/utils';
+} from '#lib/utils/index.ts';
 
 const MENTION_RE = new RegExp(fileMentionLinkRe().source, 'g');
 

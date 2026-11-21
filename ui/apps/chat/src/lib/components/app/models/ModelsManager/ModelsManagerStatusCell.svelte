@@ -1,10 +1,10 @@
 <script lang="ts">
 	import ModelLoadControl from '../ModelLoadControl.svelte';
 	import ModelsManagerDownloadControl from './ModelsManagerDownloadControl.svelte';
-	import type { ModelRowDownloadState } from '$lib/enums';
-	import { ServerModelStatus } from '$lib/enums';
-	import { modelsStore, serverStore } from '$lib/stores';
-	import type { ModelOption } from '$lib/types/models';
+	import type { ModelRowDownloadState } from '#lib/enums/index.ts';
+	import { ServerModelStatus } from '#lib/enums/index.ts';
+	import { modelsStore, serverStore } from '#lib/stores/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
 
 	interface Props {
 		class?: string;
@@ -35,7 +35,7 @@
 	/>
 {:else}
 	<span
-		class="justify-self-center text-sm text-muted-foreground {className}"
+		class="justify-self-center text-body-sm text-muted-foreground {className}"
 		title="Served by this server"
 	>
 		-

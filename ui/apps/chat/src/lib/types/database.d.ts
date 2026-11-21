@@ -1,6 +1,6 @@
-import { AttachmentType, ReasoningEffort, ToolSource } from '$lib/enums';
-import type { ChatMessageTimings, ChatMessageType, ChatRole } from '$lib/types/chat';
-import type { Group } from '$lib/types/groups';
+import { AttachmentType, ReasoningEffort, ToolSource } from '#lib/enums/index.ts';
+import type { ChatMessageTimings, ChatMessageType, ChatRole } from '#lib/types/chat.js';
+import type { Group } from '#lib/types/groups.js';
 
 /**
  * @deprecated Legacy per-conversation MCP server flags. MCP server enabled
@@ -38,6 +38,13 @@ export interface DatabaseMessageExtraAudioFile {
 	size?: number;
 	base64Data: string;
 	mimeType: string;
+	/** Recorded in the app as a voice message, as opposed to an uploaded audio file. */
+	voice?: true;
+	/** What was said, for reading; a model without audio input gets it in place of the audio. */
+	transcript?: string;
+	/** Normalised 0..1 waveform of the clip; computed from the audio when left out. */
+	peaks?: number[];
+	durationMs?: number;
 }
 
 export interface DatabaseMessageExtraVideoFile {

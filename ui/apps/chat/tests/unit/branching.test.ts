@@ -2,9 +2,9 @@
 // leaf resolution. A wrong leaf id here breaks branch navigation, so the
 // deep-chain and multi-branch cases below pin the resolution down.
 
-import { MessageRole, MessageType } from '$lib/enums';
-import type { DatabaseMessage } from '$lib/types/database';
-import { buildSiblingInfoMap, findLeafNode } from '$lib/utils/branching';
+import { MessageRole, MessageType } from '#lib/enums/index.ts';
+import type { DatabaseMessage } from '#lib/types/database.js';
+import { buildSiblingInfoMap, findLeafNode } from '#lib/utils/branching.ts';
 import { describe, expect, it } from 'vitest';
 
 function msg(id: string, parent: string | null, children: string[] = []): DatabaseMessage {

@@ -3,7 +3,8 @@
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import ZoomInIcon from '@lucide/svelte/icons/zoom-in';
 	import ZoomOutIcon from '@lucide/svelte/icons/zoom-out';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { withThemeColors } from '#lib/components/app/content/MarkdownContent/markdown-diagrams.ts';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 
 	interface Props {
 		scale: number;
@@ -18,7 +19,7 @@
 	function downloadSvg() {
 		if (!svgHtml) return;
 
-		const blob = new Blob([svgHtml], { type: 'image/svg+xml' });
+		const blob = new Blob([withThemeColors(svgHtml)], { type: 'image/svg+xml' });
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
 
@@ -30,12 +31,12 @@
 </script>
 
 <div
-	class="mermaid-preview-controls absolute bottom-8 flex shrink-0 items-center justify-center p-3"
+	class="mermaid-preview-controls absolute bottom-8 left-1/2 flex shrink-0 -translate-x-1/2 cursor-auto items-center justify-center p-3"
 >
 	<div class="mermaid-preview-controls-inner flex items-center gap-1 rounded-lg bg-muted p-1">
 		<button
 			aria-label="Zoom out"
-			class="mermaid-preview-btn flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-foreground transition-colors hover:bg-muted-foreground/15 active:bg-muted-foreground/25"
+			class="mermaid-preview-btn flex size-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-foreground transition-colors hover:bg-muted-foreground/15 active:bg-muted-foreground/25"
 			onclick={onZoomOut}
 			title="Zoom out"
 		>
@@ -43,13 +44,13 @@
 		</button>
 
 		<span
-			class="mermaid-preview-zoom-label min-w-[3.5rem] px-0.5 text-center text-xs font-medium text-muted-foreground tabular-nums select-none"
+			class="mermaid-preview-zoom-label min-w-14 px-0.5 text-center text-label-sm text-muted-foreground tabular-nums select-none"
 			>{Math.round(scale * 100)}%</span
 		>
 
 		<button
 			aria-label="Zoom in"
-			class="mermaid-preview-btn flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-foreground transition-colors hover:bg-muted-foreground/15 active:bg-muted-foreground/25"
+			class="mermaid-preview-btn flex size-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-foreground transition-colors hover:bg-muted-foreground/15 active:bg-muted-foreground/25"
 			onclick={onZoomIn}
 			title="Zoom in"
 		>
@@ -60,7 +61,7 @@
 
 		<button
 			aria-label="Reset view"
-			class="mermaid-preview-btn flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-foreground transition-colors hover:bg-muted-foreground/15 active:bg-muted-foreground/25"
+			class="mermaid-preview-btn flex size-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-foreground transition-colors hover:bg-muted-foreground/15 active:bg-muted-foreground/25"
 			onclick={onResetView}
 			title="Reset view"
 		>
@@ -71,7 +72,7 @@
 
 		<button
 			aria-label="Download SVG"
-			class="mermaid-preview-btn flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-foreground transition-colors hover:bg-muted-foreground/15 active:bg-muted-foreground/25"
+			class="mermaid-preview-btn flex size-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-foreground transition-colors hover:bg-muted-foreground/15 active:bg-muted-foreground/25"
 			onclick={downloadSvg}
 			title="Download SVG"
 		>

@@ -1,16 +1,21 @@
 <script lang="ts">
+	import { Checkbox } from '@ggml-org/llama-ui/ui/checkbox';
+	import { Input } from '@ggml-org/llama-ui/ui/input';
+	import { Label } from '@ggml-org/llama-ui/ui/label';
+	import * as RadioGroup from '@ggml-org/llama-ui/ui/radio-group';
+	import * as Select from '@ggml-org/llama-ui/ui/select';
+	import { Textarea } from '@ggml-org/llama-ui/ui/textarea';
 	import { FlaskConical, RotateCcw } from '@lucide/svelte';
-	import { SettingsChatParameterSourceIndicator } from '$lib/components/app/settings';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { Input } from '$lib/components/ui/input';
-	import Label from '$lib/components/ui/label/label.svelte';
-	import * as RadioGroup from '$lib/components/ui/radio-group';
-	import * as Select from '$lib/components/ui/select';
-	import { Textarea } from '$lib/components/ui/textarea';
-	import { ICON_CLASS_DEFAULT, SETTING_CONFIG_INFO, SETTINGS_KEYS } from '$lib/constants';
-	import { SettingsFieldType } from '$lib/enums/settings.enums';
-	import { modelsStore, serverStore, settingsStore } from '$lib/stores';
-	import { normalizeFloatingPoint } from '$lib/utils/precision';
+	import { SettingsChatParameterSourceIndicator } from '#lib/components/app/settings/index.ts';
+	import {
+		ICON_CLASS_DEFAULT,
+		ICON_CLASS_SM,
+		SETTING_CONFIG_INFO,
+		SETTINGS_KEYS
+	} from '#lib/constants/index.ts';
+	import { SettingsFieldType } from '#lib/enums/settings.enums.ts';
+	import { modelsStore, serverStore, settingsStore } from '#lib/stores/index.ts';
+	import { normalizeFloatingPoint } from '#lib/utils/precision.ts';
 	import type { Component } from 'svelte';
 
 	interface Props {
@@ -22,11 +27,15 @@
 
 	let { fields, localConfig, onConfigChange, onThemeChange }: Props = $props();
 
-	// discover needs the hub metadata reads, so its checkbox is read-only while discover is on
-	let hubLocked = $derived(Boolean(localConfig[SETTINGS_KEYS.ENABLE_DISCOVER_MODELS]));
+	// discover needs the hub metadata reads, and opens from the Models page, so both checkboxes
+	// are read-only while discover is on
+	let discoverOn = $derived(Boolean(localConfig[SETTINGS_KEYS.ENABLE_DISCOVER_MODELS]));
 
 	function isLockedField(key: string): boolean {
-		return hubLocked && key === SETTINGS_KEYS.USE_HUGGING_FACE_HUB;
+		return (
+			discoverOn &&
+			(key === SETTINGS_KEYS.USE_HUGGING_FACE_HUB || key === SETTINGS_KEYS.SHOW_MODELS_MANAGER)
+		);
 	}
 
 	let currentModelParams = $derived.by(() => {
@@ -73,11 +82,11 @@
 				})()}
 
 				<div class="flex items-center gap-2">
-					<Label class="flex items-center gap-1.5 text-sm font-medium" for={field.key}>
+					<Label class="flex items-center gap-1.5 text-label" for={field.key}>
 						{field.label}
 
 						{#if field.isExperimental}
-							<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+							<FlaskConical class="size-icon-sm text-muted-foreground" />
 						{/if}
 					</Label>
 
@@ -109,7 +118,7 @@
 					{#if isCustomRealTime}
 						<button
 							aria-label="Reset to default"
-							class="absolute top-1/2 right-2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-colors hover:bg-muted"
+							class="absolute top-1/2 right-2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded transition-colors hover:bg-muted"
 							onclick={() => {
 								settingsStore.resetParameterToServerDefault(field.key);
 								onConfigChange(field.key, '');
@@ -117,29 +126,29 @@
 							title="Reset to default"
 							type="button"
 						>
-							<RotateCcw class="h-3 w-3" />
+							<RotateCcw class="size-icon-xs" />
 						</button>
 					{/if}
 				</div>
 
 				{#if field.help || SETTING_CONFIG_INFO[field.key]}
-					<p class="mt-1 text-xs text-muted-foreground">
+					<p class="mt-1 text-caption text-muted-foreground">
 						{@html field.help || SETTING_CONFIG_INFO[field.key]}
 					</p>
 				{/if}
 			{:else if field.type === SettingsFieldType.TEXTAREA}
 				{#if field.label}
-					<Label class="block flex items-center gap-1.5 text-sm font-medium" for={field.key}>
+					<Label class="block flex items-center gap-1.5 text-label" for={field.key}>
 						{field.label}
 
 						{#if field.isExperimental}
-							<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+							<FlaskConical class="size-icon-sm text-muted-foreground" />
 						{/if}
 					</Label>
 				{/if}
 
 				<Textarea
-					class="min-h-[10rem] w-full md:max-w-3xl"
+					class="min-h-40 w-full md:max-w-3xl"
 					id={field.key}
 					oninput={(e) => onConfigChange(field.key, e.currentTarget.value)}
 					placeholder=""
@@ -147,7 +156,7 @@
 				/>
 
 				{#if field.help || SETTING_CONFIG_INFO[field.key]}
-					<p class="mt-1 text-xs text-muted-foreground">
+					<p class="mt-1 text-caption text-muted-foreground">
 						{field.help || SETTING_CONFIG_INFO[field.key]}
 					</p>
 				{/if}
@@ -161,7 +170,7 @@
 								onConfigChange(SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE, Boolean(checked))}
 						/>
 
-						<Label class="cursor-pointer text-sm font-normal" for="showSystemMessage">
+						<Label class="cursor-pointer text-body-sm font-normal" for="showSystemMessage">
 							Show system message in conversations
 						</Label>
 					</div>
@@ -182,11 +191,11 @@
 				})()}
 
 				<div class="flex items-center gap-2">
-					<Label class="flex items-center gap-1.5 text-sm font-medium" for={field.key}>
+					<Label class="flex items-center gap-1.5 text-label" for={field.key}>
 						{field.label}
 
 						{#if field.isExperimental}
-							<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+							<FlaskConical class="size-icon-sm text-muted-foreground" />
 						{/if}
 					</Label>
 
@@ -211,7 +220,7 @@
 							<div class="flex items-center gap-2">
 								{#if selectedOption?.icon}
 									{@const IconComponent = selectedOption.icon}
-									<IconComponent class={ICON_CLASS_DEFAULT} />
+									<IconComponent class={ICON_CLASS_SM} />
 								{/if}
 
 								{selectedOption?.label || `Select ${field.label.toLowerCase()}`}
@@ -221,7 +230,7 @@
 						{#if isCustomRealTime}
 							<button
 								aria-label="Reset to default"
-								class="absolute top-1/2 right-8 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-colors hover:bg-muted"
+								class="absolute top-1/2 right-8 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded transition-colors hover:bg-muted"
 								onclick={() => {
 									settingsStore.resetParameterToServerDefault(field.key);
 									onConfigChange(field.key, '');
@@ -229,7 +238,7 @@
 								title="Reset to default"
 								type="button"
 							>
-								<RotateCcw class="h-3 w-3" />
+								<RotateCcw class="size-icon-xs" />
 							</button>
 						{/if}
 					</div>
@@ -252,7 +261,7 @@
 				</Select.Root>
 
 				{#if field.help || SETTING_CONFIG_INFO[field.key]}
-					<p class="mt-1 text-xs text-muted-foreground">
+					<p class="mt-1 text-caption text-muted-foreground">
 						{field.help || SETTING_CONFIG_INFO[field.key]}
 					</p>
 				{/if}
@@ -262,11 +271,11 @@
 					radioOptions.find((o: { key: string }) => Boolean(localConfig[o.key]))?.value ??
 					radioOptions[0].value}
 
-				<Label class="flex items-center gap-1.5 text-sm font-medium mb-4">
+				<Label class="flex items-center gap-1.5 text-label mb-4">
 					{field.label}
 
 					{#if field.isExperimental}
-						<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+						<FlaskConical class="size-icon-sm text-muted-foreground" />
 					{/if}
 				</Label>
 
@@ -285,13 +294,13 @@
 							<RadioGroup.Item id={itemId} value={opt.value} />
 
 							<Label
-								class="flex cursor-pointer items-center gap-1.5 text-sm font-normal"
+								class="flex cursor-pointer items-center gap-1.5 text-body-sm font-normal"
 								for={itemId}
 							>
 								{opt.label}
 
 								{#if opt.isExperimental}
-									<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+									<FlaskConical class="size-icon-sm text-muted-foreground" />
 								{/if}
 							</Label>
 						</div>
@@ -299,7 +308,7 @@
 				</RadioGroup.Root>
 
 				{#if field.help || SETTING_CONFIG_INFO[field.key]}
-					<p class="text-xs text-muted-foreground">
+					<p class="text-caption text-muted-foreground">
 						{field.help || SETTING_CONFIG_INFO[field.key]}
 					</p>
 				{/if}
@@ -315,7 +324,7 @@
 
 					<div class="space-y-1">
 						<label
-							class="flex items-center gap-1.5 pt-1 pb-0.5 text-sm leading-none font-medium {isLockedField(
+							class="flex items-center gap-1.5 pt-1 pb-0.5 text-label leading-none {isLockedField(
 								field.key
 							)
 								? 'cursor-default opacity-80'
@@ -325,12 +334,12 @@
 							{field.label}
 
 							{#if field.isExperimental}
-								<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+								<FlaskConical class="size-icon-sm text-muted-foreground" />
 							{/if}
 						</label>
 
 						{#if field.help || SETTING_CONFIG_INFO[field.key]}
-							<p class="text-xs text-muted-foreground">
+							<p class="text-caption text-muted-foreground">
 								{field.help || SETTING_CONFIG_INFO[field.key]}
 							</p>
 						{/if}

@@ -1,8 +1,8 @@
 <script lang="ts">
+	import * as Dialog from '@ggml-org/llama-ui/ui/dialog';
 	import { Check, Plus } from '@lucide/svelte';
-	import { SearchInput } from '$lib/components/app';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import { groupsStore, uiStore } from '$lib/stores';
+	import { SearchInput } from '#lib/components/app/index.ts';
+	import { groupsStore, uiStore } from '#lib/stores/index.ts';
 
 	let options = $derived(uiStore.groupPicker);
 	let query = $state('');
@@ -58,7 +58,7 @@
 			class="flex max-h-80 min-h-0 flex-col gap-0.5 overflow-y-auto p-1 max-md:max-h-none max-md:flex-1"
 		>
 			<button
-				class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+				class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-body-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
 				disabled={!newGroupName}
 				onclick={createAndSelect}
 				type="button"
@@ -75,7 +75,7 @@
 
 				{#each groups as group (group.id)}
 					<button
-						class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent"
+						class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-body-sm hover:bg-accent"
 						onclick={() => select(group.id)}
 						type="button"
 					>
@@ -87,7 +87,7 @@
 					</button>
 				{/each}
 			{:else if newGroupName}
-				<p class="px-2 py-2 text-sm text-muted-foreground">No matching groups</p>
+				<p class="px-2 py-2 text-body-sm text-muted-foreground">No matching groups</p>
 			{/if}
 		</div>
 	</Dialog.Content>

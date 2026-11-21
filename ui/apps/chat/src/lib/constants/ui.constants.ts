@@ -6,10 +6,12 @@ import {
 	SHORTCUT_SETTINGS
 } from './keyboard-shortcuts.constants';
 import { MCP_SERVERS_ROUTE_ID, MODELS_ROUTE_ID, SETTINGS_ROUTE_ID } from './routes.constants';
-import { Search, Settings, SquarePen } from '@lucide/svelte';
-import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
-import { SidebarAction, ToolSource } from '$lib/enums';
-import type { DesktopIconStripItem } from '$lib/types';
+import Search from '@lucide/svelte/icons/search';
+import Settings from '@lucide/svelte/icons/settings';
+import SquarePen from '@lucide/svelte/icons/square-pen';
+import McpLogo from '#lib/components/app/mcp/McpLogo.svelte';
+import { SidebarAction, ToolSource } from '#lib/enums/index.ts';
+import type { DesktopIconStripItem } from '#lib/types/index.ts';
 
 /** Delay before a copied affordance resets from its check to the copy icon. */
 export const COPY_FEEDBACK_RESET_MS = 1500;
@@ -97,9 +99,6 @@ export const DEFAULT_MOBILE_BREAKPOINT = 768;
 
 /** Models listed per remote provider before the "+ X more" line; search covers the rest. */
 export const REMOTE_PROVIDER_MODEL_LIMIT = 12;
-
-/** Orgs whose avatar is dark and needs inverting in dark mode. */
-export const DARK_INVERT_AVATAR_ORGS = ['openai'];
 
 /** Model rows mounted before the list scrolls; a local catalog can hold hundreds. */
 export const MODEL_ROW_WINDOW = 50;

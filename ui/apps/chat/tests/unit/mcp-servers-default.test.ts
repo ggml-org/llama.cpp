@@ -1,4 +1,4 @@
-import { SETTINGS_KEYS } from '$lib/constants';
+import { SETTINGS_KEYS } from '#lib/constants/index.ts';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
  */
 describe('MCP_SERVERS default value', () => {
 	it('does not preload any servers in the MCP_SERVERS setting default', async () => {
-		const { SETTING_CONFIG_DEFAULT } = await import('$lib/constants');
+		const { SETTING_CONFIG_DEFAULT } = await import('#lib/constants/index.ts');
 
 		expect(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.MCP_SERVERS]).toBe('[]');
 	}, 15000);

@@ -126,8 +126,14 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_qwen3tts(params);
         case LLM_ARCH_POCKETTTS:
             return new llama_model_pockettts(params);
+        case LLM_ARCH_MOSHI:
+            return new llama_model_moshi(params);
         case LLM_ARCH_ZONOS3:
             return new llama_model_zonos3(params);
+        case LLM_ARCH_KOKORO:
+            return new llama_model_kokoro(params);
+        case LLM_ARCH_TINY_VOCA:
+            return new llama_model_tiny_voca(params);
         case LLM_ARCH_PHI2:
             return new llama_model_phi2(params);
         case LLM_ARCH_PHI3:
@@ -322,12 +328,16 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_falcon_h1(params);
         case LLM_ARCH_INKLING2:
             return new llama_model_inkling2(params);
+        case LLM_ARCH_INKLING2_LOOP:
+            return new llama_model_inkling2_loop(params);
         case LLM_ARCH_LFM2:
             return new llama_model_lfm2(params);
         case LLM_ARCH_LFM2MOE:
             return new llama_model_lfm2moe(params);
         case LLM_ARCH_LFM3:
             return new llama_model_lfm3(params);
+        case LLM_ARCH_ZAYA1:
+            return new llama_model_zaya1(params);
         case LLM_ARCH_SMALLTHINKER:
             return new llama_model_smallthinker(params);
         case LLM_ARCH_GROVEMOE:
@@ -388,6 +398,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_k2_horizon(params);
         case LLM_ARCH_KOLIBRI1:
             return new llama_model_kolibri1(params);
+        case LLM_ARCH_DOMYN_EDGE:
+            return new llama_model_domyn_edge(params);
         default:
             throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
     }
@@ -1471,6 +1483,20 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     for (int i = 0; i < gguf_get_n_kv(ctx); i++) {
         gguf_type type = gguf_get_kv_type(ctx, i);
         if (type == GGUF_TYPE_ARRAY) {
+            // only the string arrays listed here are kept, see llama_model_meta_arr_str()
+            static const char * const kept_prefixes[] = { "tokenizer.tts_dict" };
+            const std::string arr_name = gguf_get_key(ctx, i);
+            const bool is_kept = std::any_of(std::begin(kept_prefixes), std::end(kept_prefixes), [&](const char * prefix) {
+                return arr_name.rfind(prefix, 0) == 0;
+            });
+            if (is_kept && gguf_get_arr_type(ctx, i) == GGUF_TYPE_STRING) {
+                auto & arr = gguf_kv_arr[arr_name];
+                const size_t n = gguf_get_arr_n(ctx, i);
+                arr.reserve(n);
+                for (size_t j = 0; j < n; j++) {
+                    arr.emplace_back(gguf_get_arr_str(ctx, i, j));
+                }
+            }
             continue;
         }
         const char * name = gguf_get_key(ctx, i);
@@ -1889,6 +1915,12 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             }
             if (!layer.ffn_up_exps_s && layer.ffn_up_exps) {
                 layer.ffn_up_exps_s = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS, "scale", i), {n_expert}, TENSOR_NOT_REQUIRED);
+                if (layer.ffn_up_exps_s && layer.ffn_gate_up_exps) {
+                    throw std::runtime_error(format("ffn_up_exps.scale and ffn_gate_up_exps.weight both exist for layer %d", i));
+                }
+            }
+            if (!layer.ffn_up_exps_s && layer.ffn_gate_up_exps) {
+                layer.ffn_up_exps_s = create_tensor(tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "scale", i), {n_expert}, TENSOR_NOT_REQUIRED);
             }
 
             // recurrent / linear-attention weight scales (per-tensor, shape {1})
@@ -1989,6 +2021,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
                 output_in_s = create_tensor(tn(LLM_TENSOR_OUTPUT, "input_scale"), {1}, TENSOR_NOT_REQUIRED);
             }
         }
+        post_arch_tensors(ml);
     }
 
     ml.done_getting_tensors();
@@ -2169,6 +2202,10 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         for (auto & mapping : ml.mappings) {
             pimpl->mappings.emplace_back(std::move(mapping));
         }
+    }
+
+    if (per_layer_tok_embd_s) {
+        ggml_backend_tensor_get(per_layer_tok_embd_s, &per_layer_tok_embd_scale, 0, sizeof(per_layer_tok_embd_scale));
     }
 
     load_tensors_hadamard();
@@ -2969,6 +3006,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         case LLM_ARCH_LLADA_MOE:
         case LLM_ARCH_RND1:
         case LLM_ARCH_CLEF:
+        case LLM_ARCH_KOKORO:
+        case LLM_ARCH_TINY_VOCA:
             {
                 res = nullptr;
             } break;
@@ -3116,6 +3155,27 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     /* filter_attn       */ std::move(filter_attn),
                     /* filter_recr       */ std::move(filter_recr),
                     /* filter_idx        */ std::move(filter_idx));
+            } break;
+        case LLM_ARCH_MOSHI:
+            {
+                // every layer attends to the same sliding window: one cache that masks it, the cells past the window are reused
+                res = new llama_kv_cache(
+                        *this,
+                        params.no_alloc,
+                        hparams,
+                        params.type_k,
+                        params.type_v,
+                        !cparams.flash_attn,
+                        cparams.offload_kqv,
+                        cparams.kv_unified,
+                        cparams.n_ctx_seq,
+                        cparams.n_seq_max,
+                        hparams.n_swa,
+                        LLAMA_SWA_TYPE_STANDARD,
+                        nullptr,
+                        nullptr,
+                        nullptr,
+                        nullptr);
             } break;
         case LLM_ARCH_HY_V4:
             {
@@ -3325,7 +3385,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         filter_idx = [&](uint32_t il) {
                             return il < hparams.n_layer() && !hparams.is_recr(il) && hparams.is_indexer_full(il);
                         };
-                    } else if (arch == LLM_ARCH_FALCON_H1 || arch == LLM_ARCH_INKLING2) {
+                    } else if (arch == LLM_ARCH_FALCON_H1 || arch == LLM_ARCH_INKLING2 || arch == LLM_ARCH_INKLING2_LOOP || arch == LLM_ARCH_ZAYA1) {
                         filter_attn = [&](uint32_t) { return true; };
                         filter_recr = [&](uint32_t) { return true; };
                     } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
@@ -3701,6 +3761,8 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_STARCODER:
         case LLM_ARCH_INKLING2:
+        case LLM_ARCH_INKLING2_LOOP:
+        case LLM_ARCH_KOKORO:
             return LLAMA_ROPE_TYPE_NONE;
 
         // use what we call a normal RoPE, operating on pairs of consecutive head values
@@ -3750,8 +3812,10 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_DOTS3NOTE:
         case LLM_ARCH_NANBEIGE:
         case LLM_ARCH_POCKETTTS:
+        case LLM_ARCH_MOSHI:
         case LLM_ARCH_ZONOS3:
         case LLM_ARCH_LIMITE:
+        case LLM_ARCH_TINY_VOCA:
             return LLAMA_ROPE_TYPE_NORM;
         case LLM_ARCH_BAILINGMOE3:
             // VL files carry mrope sections; text-only files keep NORM rope
@@ -3821,6 +3885,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_LFM2:
         case LLM_ARCH_LFM2MOE:
         case LLM_ARCH_LFM3:
+        case LLM_ARCH_ZAYA1:
         case LLM_ARCH_SMALLTHINKER:
         case LLM_ARCH_SEED_OSS:
         case LLM_ARCH_GROVEMOE:
@@ -3844,6 +3909,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_HRM_TEXT:
         case LLM_ARCH_BEAM:
         case LLM_ARCH_KOLIBRI1:
+        case LLM_ARCH_DOMYN_EDGE:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_DFLASH:
@@ -3942,6 +4008,22 @@ int32_t llama_model_meta_val_str_by_index(const llama_model * model, int32_t i, 
     auto it = model->gguf_kv.begin();
     std::advance(it, i);
     return snprintf(buf, buf_size, "%s", it->second.c_str());
+}
+
+int32_t llama_model_meta_arr_n(const llama_model * model, const char * key) {
+    const auto it = model->gguf_kv_arr.find(key);
+    if (it == model->gguf_kv_arr.end() || it->second.size() > (size_t) INT32_MAX) {
+        return -1;
+    }
+    return (int32_t) it->second.size();
+}
+
+const char * llama_model_meta_arr_str(const llama_model * model, const char * key, int32_t i) {
+    const auto it = model->gguf_kv_arr.find(key);
+    if (it == model->gguf_kv_arr.end() || i < 0 || (size_t) i >= it->second.size()) {
+        return nullptr;
+    }
+    return it->second[i].c_str();
 }
 
 int32_t llama_model_desc(const llama_model * model, char * buf, size_t buf_size) {

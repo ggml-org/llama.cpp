@@ -78,7 +78,7 @@ export { default as MentionText } from './MentionText.svelte';
  * <SyntaxHighlightedCode code={jsonString} language="json" />
  * ```
  */
-export { default as SyntaxHighlightedCode } from './SyntaxHighlightedCode.svelte';
+export { SyntaxHighlightedCode } from '@ggml-org/llama-ui/app/content';
 
 /**
  * **CollapsibleContentBlock** - Expandable content card
@@ -123,16 +123,18 @@ export { default as CollapsibleContentBlock } from './CollapsibleContentBlock.sv
 export { default as CollapsibleTerminalBlock } from './CollapsibleTerminalBlock.svelte';
 
 /**
- * **MermaidPreview** - Interactive Mermaid diagram viewer
+ * **MermaidPreview** - Pan and zoom viewer for a diagram's svg
  *
- * Renders Mermaid-generated SVG diagrams with zoom, pan, and fit-to-view controls.
+ * Shows a diagram (a Pele-drawn Mermaid block or an svg block) fitted to its box, with
+ * zoom, pan and download controls.
  *
  * **Features:**
- * - Mouse wheel zoom in/out
- * - Click-drag panning with pointer capture
- * - Fit to view and reset view controls
- * - Download as SVG
- * - Responsive scaling with viewBox detection
+ * - Fits the diagram until the user pans or zooms, also as the box resizes
+ * - Wheel and trackpad pinch zoom around the pointer; zoom buttons and +/- keys zoom
+ *   around the middle of the box, wherever the diagram has been panned to
+ * - Drag to pan, two-finger pinch on touch, double-click to zoom in, arrow keys to pan
+ * - Reset view (0) fits the diagram again
+ * - Download as SVG with the theme colors written in
  *
  * @example
  * ```svelte

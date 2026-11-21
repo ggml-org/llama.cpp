@@ -1,5 +1,5 @@
 import { createPreTransform } from './pre-transform';
-import { SVG } from '$lib/constants';
+import { SVG } from '#lib/constants/index.ts';
 
 /**
  * Converts svg code blocks to <pre class="svg-block"> for client-side rendering.

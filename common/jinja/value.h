@@ -105,6 +105,10 @@ struct context; // forward declaration
 template<typename T_JSON>
 void global_from_json(context & ctx, const T_JSON & json_obj, bool mark_input);
 
+// convert a single JSON value, same rules as global_from_json()
+template<typename T_JSON>
+value value_from_json(const T_JSON & json_val, bool mark_input);
+
 //
 // base value type
 //
@@ -233,6 +237,20 @@ struct value_equality {
 // primitive value types
 //
 
+// double to int64, saturating and with nan as 0; a plain cast is undefined outside the int64 range
+inline int64_t float_to_int(double v) {
+    if (std::isnan(v)) {
+        return 0;
+    }
+    if (v >= 9223372036854775808.0) {
+        return INT64_MAX;
+    }
+    if (v <= -9223372036854775808.0) {
+        return INT64_MIN;
+    }
+    return static_cast<int64_t>(v);
+}
+
 struct value_int_t : public value_t {
     static constexpr auto kind_id = value_kind::INTEGER;
     int64_t val_int;
@@ -240,7 +258,7 @@ struct value_int_t : public value_t {
     value_int_t(int64_t v) : value_t(kind_id) {
         val_int = v;
         val_flt = static_cast<double>(v);
-        if (static_cast<int64_t>(val_flt) != v) {
+        if (float_to_int(val_flt) != v) {
             val_flt = v < 0 ? -INFINITY : INFINITY;
         }
     }
@@ -276,7 +294,7 @@ struct value_float_t : public value_t {
     double val_flt;
     value_float_t(double v) : value_t(kind_id) {
         val_flt = v;
-        val_int = std::isfinite(v) ? static_cast<int64_t>(v) : 0;
+        val_int = std::isfinite(v) ? float_to_int(v) : 0;
     }
     virtual std::string type() const override { return "Float"; }
     virtual double as_float() const override { return val_flt; }

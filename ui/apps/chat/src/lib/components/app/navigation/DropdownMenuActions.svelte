@@ -1,13 +1,13 @@
 <script lang="ts">
 	import MenuActionsList from './MenuActionsList.svelte';
-	import { KeyboardShortcutInfo } from '$lib/components/app';
-	import * as Drawer from '$lib/components/ui/drawer';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import { Separator } from '$lib/components/ui/separator';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { MenuKind } from '$lib/enums';
-	import { deviceStore } from '$lib/stores';
-	import type { MenuAction } from '$lib/types';
+	import * as Drawer from '@ggml-org/llama-ui/ui/drawer';
+	import * as DropdownMenu from '@ggml-org/llama-ui/ui/dropdown-menu';
+	import { Separator } from '@ggml-org/llama-ui/ui/separator';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
+	import { KeyboardShortcutInfo } from '#lib/components/app/index.ts';
+	import { MenuKind } from '#lib/enums/index.ts';
+	import { deviceStore } from '#lib/stores/index.ts';
+	import type { MenuAction } from '#lib/types/index.ts';
 	import type { Component } from 'svelte';
 
 	interface Props {
@@ -45,7 +45,7 @@
 
 {#if isMobile}
 	<button
-		class="flex h-6 w-6 cursor-pointer items-center justify-center rounded-md p-0 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none disabled:pointer-events-none disabled:opacity-50 data-[state=open]:bg-accent data-[state=open]:text-accent-foreground {triggerClass}"
+		class="flex h-6 w-6 cursor-pointer items-center justify-center rounded-md p-0 text-label transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none disabled:pointer-events-none disabled:opacity-50 data-[state=open]:bg-accent data-[state=open]:text-accent-foreground {triggerClass}"
 		data-slot="dropdown-menu-trigger"
 		data-state={open ? 'open' : 'closed'}
 		onclick={(event) => {
@@ -74,7 +74,7 @@
 					{/if}
 
 					<button
-						class="flex min-h-11 w-full cursor-pointer items-center gap-3 rounded-md px-3 text-left text-sm transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50 {action.variant ===
+						class="flex min-h-11 w-full cursor-pointer items-center gap-3 rounded-md px-3 text-left text-body-sm transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50 {action.variant ===
 						'destructive'
 							? 'text-destructive'
 							: ''}"
@@ -82,14 +82,14 @@
 						onclick={(event) => runAction(action, event)}
 						type="button"
 					>
-						{@render iconComponent(action.icon, 'h-4 w-4 shrink-0')}
+						{@render iconComponent(action.icon, 'size-icon-md shrink-0')}
 
 						<span class="flex flex-1 flex-col">
 							{action.label}
 
 							<!-- a phone has no hover, so the hint sits under the label -->
 							{#if action.tooltip}
-								<span class="text-xs text-muted-foreground">{action.tooltip}</span>
+								<span class="text-caption text-muted-foreground">{action.tooltip}</span>
 							{/if}
 						</span>
 
@@ -109,7 +109,7 @@
 				{#snippet child({ props })}
 					<DropdownMenu.Trigger
 						{...props}
-						class="flex h-6 w-6 cursor-pointer items-center justify-center rounded-md p-0 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none disabled:pointer-events-none disabled:opacity-50 data-[state=open]:bg-accent data-[state=open]:text-accent-foreground {triggerClass}"
+						class="flex h-6 w-6 cursor-pointer items-center justify-center rounded-md p-0 text-label transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none disabled:pointer-events-none disabled:opacity-50 data-[state=open]:bg-accent data-[state=open]:text-accent-foreground {triggerClass}"
 						onclick={(e) => e.stopPropagation()}
 					>
 						{@render iconComponent(triggerIcon, 'h-3 w-3')}
@@ -128,7 +128,7 @@
 			{/if}
 		</Tooltip.Root>
 
-		<DropdownMenu.Content {align} class="z-[999999] w-48" customAnchor={anchor}>
+		<DropdownMenu.Content {align} class="z-999999 w-48" customAnchor={anchor}>
 			<MenuActionsList {actions} kind={MenuKind.DROPDOWN} onClose={() => (open = false)} />
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>

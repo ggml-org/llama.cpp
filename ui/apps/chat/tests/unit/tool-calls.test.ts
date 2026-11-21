@@ -1,24 +1,29 @@
 import {
 	extractToolArgPath,
 	parseToolArgs
-} from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/_shared';
+} from '#lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/_shared.ts';
 import {
 	parseEditFileMeta,
 	parseEditFileTitleMeta
-} from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/edit-file';
-import { parseExecShellCommandMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/exec-shell-command';
-import { parseFileGlobSearchMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/file-glob-search';
-import { parseGrepSearchMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/grep-search';
-import { parseReadFileMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/read-file';
-import { parseRunJavascriptMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/run-javascript';
+} from '#lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/edit-file.ts';
+import { parseExecShellCommandMeta } from '#lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/exec-shell-command.ts';
+import { parseFileGlobSearchMeta } from '#lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/file-glob-search.ts';
+import { parseGrepSearchMeta } from '#lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/grep-search.ts';
+import { parseReadFileMeta } from '#lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/read-file.ts';
+import { parseRunJavascriptMeta } from '#lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/run-javascript.ts';
 import {
 	parseWriteFileMeta,
 	parseWriteFileTitleMeta
-} from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/write-file';
-import { CODE_BLOCK } from '$lib/constants';
-import { AgenticSectionType, BuiltInTool } from '$lib/enums';
-import type { AgenticSection, WriteFileMeta } from '$lib/types';
-import { abbreviateHome, formatCwdMessage, lastPathSegment, parseCwdMessage } from '$lib/utils';
+} from '#lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/write-file.ts';
+import { CODE_BLOCK } from '#lib/constants/index.ts';
+import { AgenticSectionType, BuiltInTool } from '#lib/enums/index.ts';
+import type { AgenticSection, WriteFileMeta } from '#lib/types/index.ts';
+import {
+	abbreviateHome,
+	formatCwdMessage,
+	lastPathSegment,
+	parseCwdMessage
+} from '#lib/utils/index.ts';
 import { describe, expect, it } from 'vitest';
 
 function makeSection(

@@ -1,9 +1,9 @@
 <script lang="ts">
+	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
+	import { cn } from '@ggml-org/llama-ui/utils';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
-	import CollapsibleRegion from '$lib/components/app/misc/CollapsibleRegion.svelte';
-	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
-	import { cn } from '$lib/components/ui/utils';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import CollapsibleRegion from '#lib/components/app/misc/CollapsibleRegion.svelte';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 	import type { Snippet } from 'svelte';
 	import type { Component } from 'svelte';
 
@@ -77,7 +77,7 @@
 	<div class="flex min-w-0 items-center gap-1.5">
 		{@render toggleIcon('')}
 
-		{@render toggleTitle('text-xs whitespace-nowrap')}
+		{@render toggleTitle('text-caption whitespace-nowrap')}
 
 		{#if collapsible}
 			<ChevronDown
@@ -108,7 +108,7 @@
 	</span>
 
 	{#if subtitle}
-		<span class="text-xs italic text-muted-foreground/70">{subtitle}</span>
+		<span class="text-caption italic text-muted-foreground/70">{subtitle}</span>
 	{/if}
 {/snippet}
 
@@ -142,7 +142,7 @@
 			<div class="flex min-w-0 items-start gap-2 text-muted-foreground">
 				{@render toggleIcon('mt-0.75')}
 
-				{@render toggleTitle('overflow-x-auto text-sm')}
+				{@render toggleTitle('overflow-x-auto text-body-sm')}
 			</div>
 
 			<ChevronDown

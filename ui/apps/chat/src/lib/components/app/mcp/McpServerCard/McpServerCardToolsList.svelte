@@ -1,7 +1,7 @@
 <script lang="ts">
+	import { Badge } from '@ggml-org/llama-ui/ui/badge';
+	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
 	import { ChevronDown, ChevronRight } from '@lucide/svelte';
-	import { Badge } from '$lib/components/ui/badge';
-	import * as Collapsible from '$lib/components/ui/collapsible';
 
 	interface Tool {
 		name: string;
@@ -20,12 +20,12 @@
 
 <Collapsible.Root bind:open={isExpanded}>
 	<Collapsible.Trigger
-		class="flex w-full items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+		class="flex w-full items-center gap-1 text-caption text-muted-foreground hover:text-foreground"
 	>
 		{#if isExpanded}
-			<ChevronDown class="h-3.5 w-3.5" />
+			<ChevronDown class="size-icon-sm" />
 		{:else}
-			<ChevronRight class="h-3.5 w-3.5" />
+			<ChevronRight class="size-icon-sm" />
 		{/if}
 
 		<span>{toolsCount} tools available · Show details</span>
@@ -38,7 +38,7 @@
 					<Badge variant="secondary">{tool.name}</Badge>
 
 					{#if tool.description}
-						<p class="mt-1 text-xs text-muted-foreground">{tool.description}</p>
+						<p class="mt-1 text-caption text-muted-foreground">{tool.description}</p>
 					{/if}
 				</div>
 			{/each}

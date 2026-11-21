@@ -9,11 +9,14 @@
 	import { parseExecShellCommandMeta } from './parsers/exec-shell-command';
 	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { AlertTriangle, Check, CircleStop, Loader2, XCircle } from '@lucide/svelte';
-	import { CollapsibleTerminalBlock } from '$lib/components/app';
-	import { SETTINGS_KEYS, TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants';
-	import { AgenticSectionType, AttachmentType } from '$lib/enums';
-	import { settingsStore, toolsStore } from '$lib/stores';
-	import type { AgenticSection, DatabaseMessageExtra, ToolResultLine } from '$lib/types';
+	import { CollapsibleTerminalBlock } from '#lib/components/app/index.ts';
+	import {
+		SETTINGS_KEYS,
+		TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX
+	} from '#lib/constants/index.ts';
+	import { AgenticSectionType, AttachmentType } from '#lib/enums/index.ts';
+	import { settingsStore, toolsStore } from '#lib/stores/index.ts';
+	import type { AgenticSection, DatabaseMessageExtra, ToolResultLine } from '#lib/types/index.ts';
 	import {
 		abbreviateHome,
 		type ExecShellExitStatus,
@@ -22,7 +25,7 @@
 		parseExecShellCommandError,
 		parseExecShellCommandExitStatus,
 		parseToolResultWithMedia
-	} from '$lib/utils';
+	} from '#lib/utils/index.ts';
 
 	interface Props {
 		section: AgenticSection;
@@ -245,31 +248,30 @@
 
 	{#snippet children(_meta, ctx)}
 		{#if (ctx.isPending && !commandStreaming) || (isLive && !section.toolResult)}
-			<div class="flex items-start gap-2 text-xs text-muted-foreground/70">
-				<Loader2 class="h-3 w-3 animate-spin" />
+			<div class="flex items-start gap-2 text-caption text-muted-foreground/70">
+				<Loader2 class="size-icon-xs animate-spin" />
 				Executing command...
 			</div>
 		{:else if ctx.isInterrupted}
-			<div class="flex items-start gap-2 text-xs text-muted-foreground/70 italic">
+			<div class="flex items-start gap-2 text-caption text-muted-foreground/70 italic">
 				<CircleStop class="mt-0.5 h-3 w-3 shrink-0" />
 
 				<span>Command interrupted before it returned output</span>
 			</div>
 		{:else if execShellError}
-			<div class="flex items-start gap-2 text-xs text-red-600 italic dark:text-red-400">
-				<XCircle class="mt-0.5 h-3 w-3 shrink-0" />
+			<div class="flex items-start gap-2 text-caption text-fg-danger italic">
+				<XCircle class="mt-0.5 size-icon-xs shrink-0" />
 
 				<span>{execShellError}</span>
 			</div>
 		{:else if section.toolResult}
 			<div
 				bind:this={scrollEl}
-				class:is-clamped={!useFullHeightCodeBlocks}
-				class="terminal-output"
+				class={['terminal-output', !useFullHeightCodeBlocks && 'is-clamped']}
 				onscroll={handleScrollEvent}
 			>
 				{#each outputLines as line, i (i)}
-					<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{line.text}</div>
+					<div class="font-mono text-caption leading-relaxed whitespace-pre-wrap">{line.text}</div>
 
 					{#if line.media?.type === AttachmentType.IMAGE}
 						<img
@@ -284,7 +286,7 @@
 				{#if isExitCodeFinalLine && execShellExitStatus}
 					<div class={exitBadgeClass}>
 						{#if execShellExitStatus.timedOut}
-							<AlertTriangle class="h-3 w-3" />
+							<AlertTriangle class="size-icon-xs" />
 
 							<span>timed out</span>
 
@@ -292,11 +294,11 @@
 
 							<span>exit {execShellExitStatus.code}</span>
 						{:else if execShellExitStatus.code === 0}
-							<Check class="h-3 w-3" />
+							<Check class="size-icon-xs" />
 
 							<span>exit 0</span>
 						{:else}
-							<XCircle class="h-3 w-3" />
+							<XCircle class="size-icon-xs" />
 
 							<span>exit {execShellExitStatus.code}</span>
 						{/if}
@@ -314,13 +316,13 @@
 
 	.exec-wd {
 		font-family: var(--font-mono);
-		color: var(--muted-foreground);
+		color: var(--fg-muted);
 		margin-right: var(--exec-wd-margin);
 	}
 
 	.exec-prompt {
 		font-family: var(--font-mono);
-		color: var(--muted-foreground);
+		color: var(--fg-muted);
 		opacity: 0.55;
 		margin-right: var(--exec-wd-margin);
 	}
@@ -331,7 +333,7 @@
 		height: 1.05em;
 		margin-left: 0.15rem;
 		vertical-align: text-bottom;
-		background: var(--foreground);
+		background: var(--fg-default);
 		animation: exec-cursor-blink 1.1s steps(1) infinite;
 	}
 
@@ -362,34 +364,20 @@
 		line-height: 1;
 	}
 
+	/* the status tokens, which follow the theme on their own */
 	.exit-badge.success {
-		background: color-mix(in oklch, var(--color-green-500, #22c55e) 14%, transparent);
-		color: var(--color-green-700, #15803d);
-	}
-
-	:global(.dark) .exit-badge.success {
-		background: color-mix(in oklch, var(--color-green-400, #4ade80) 18%, transparent);
-		color: var(--color-green-300, #86efac);
+		background: var(--surface-success);
+		color: var(--fg-success);
 	}
 
 	.exit-badge.failure {
-		background: color-mix(in oklch, var(--color-red-500, #ef4444) 14%, transparent);
-		color: var(--color-red-700, #b91c1c);
-	}
-
-	:global(.dark) .exit-badge.failure {
-		background: color-mix(in oklch, var(--color-red-400, #f87171) 18%, transparent);
-		color: var(--color-red-300, #fca5a5);
+		background: var(--surface-danger);
+		color: var(--fg-danger);
 	}
 
 	.exit-badge.warning {
-		background: color-mix(in oklch, var(--color-amber-500, #f59e0b) 14%, transparent);
-		color: var(--color-amber-700, #b45309);
-	}
-
-	:global(.dark) .exit-badge.warning {
-		background: color-mix(in oklch, var(--color-amber-400, #fbbf24) 18%, transparent);
-		color: var(--color-amber-300, #fcd34d);
+		background: var(--surface-warning);
+		color: var(--fg-warning);
 	}
 
 	.exit-sep {

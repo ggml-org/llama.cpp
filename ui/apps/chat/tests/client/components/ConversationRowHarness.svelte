@@ -1,6 +1,6 @@
 <script lang="ts">
-	import SidebarNavigationConversationItem from '$lib/components/app/navigation/SidebarNavigation/SidebarNavigationConversationItem.svelte';
-	import * as Tooltip from '$lib/components/ui/tooltip';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
+	import SidebarNavigationConversationItem from '#lib/components/app/navigation/SidebarNavigation/SidebarNavigationConversationItem.svelte';
 	import type { ComponentProps } from 'svelte';
 
 	let props: ComponentProps<typeof SidebarNavigationConversationItem> = $props();

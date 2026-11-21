@@ -8,7 +8,7 @@
  * copy of its row; either glides from where it was let go into its new place.
  */
 
-import { uiStore } from '$lib/stores/ui.svelte';
+import { uiStore } from '#lib/stores/ui.svelte.ts';
 import { tick } from 'svelte';
 
 /** A section that takes dropped chats, registered by its drop zone. */

@@ -2,8 +2,8 @@
 // vibrates (Android), and a toggled hidden switch where it does not (iOS), which leaves no
 // element behind.
 
-import { HAPTIC_TAP_MS } from '$lib/constants';
-import { hapticTap } from '$lib/utils';
+import { HAPTIC_TAP_MS } from '#lib/constants/index.ts';
+import { hapticTap } from '#lib/utils/index.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 function setCoarsePointer(coarse: boolean) {

@@ -1,4 +1,4 @@
-import { isValidModelName, normalizeModelName } from '$lib/utils/model-names';
+import { isValidModelName, normalizeModelName } from '#lib/utils/model-names.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('normalizeModelName', () => {

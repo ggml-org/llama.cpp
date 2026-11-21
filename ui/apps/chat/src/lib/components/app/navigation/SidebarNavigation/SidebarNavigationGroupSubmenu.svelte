@@ -1,11 +1,11 @@
 <script lang="ts">
+	import * as ContextMenu from '@ggml-org/llama-ui/ui/context-menu';
+	import * as DropdownMenu from '@ggml-org/llama-ui/ui/dropdown-menu';
 	import { Check, FolderInput, Plus } from '@lucide/svelte';
-	import { SearchInput } from '$lib/components/app';
-	import * as ContextMenu from '$lib/components/ui/context-menu';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { MenuKind } from '$lib/enums';
-	import { groupsStore, uiStore } from '$lib/stores';
+	import { SearchInput } from '#lib/components/app/index.ts';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
+	import { MenuKind } from '#lib/enums/index.ts';
+	import { groupsStore, uiStore } from '#lib/stores/index.ts';
 	import { tick } from 'svelte';
 
 	interface Props {
@@ -74,12 +74,9 @@
 		<span class="flex-1 whitespace-nowrap">{label}</span>
 	</Menu.SubTrigger>
 
-	<Menu.SubContent
-		alignOffset={-6}
-		class="w-64 p-1.5"
-		onOpenAutoFocus={(event) => event.preventDefault()}
-		sideOffset={6}
-	>
+	<!-- the actions menu it opens from sits above dialogs and toasts (z-999999); a submenu renders
+	     apart from it, so it takes the same layer -->
+	<Menu.SubContent class="z-999999 w-64 p-1.5" onOpenAutoFocus={(event) => event.preventDefault()}>
 		<SearchInput
 			bind:ref={searchInput}
 			bind:value={query}
@@ -91,7 +88,7 @@
 		<div aria-hidden="true" class="mx-1 my-1.5 h-px bg-border/40"></div>
 
 		<button
-			class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent"
+			class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-body-sm hover:bg-accent"
 			onclick={handleNewGroup}
 			type="button"
 		>
@@ -106,7 +103,7 @@
 			<div class="flex max-h-64 flex-col gap-0.5 overflow-y-auto">
 				{#each groups as group (group.id)}
 					<button
-						class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent"
+						class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-body-sm hover:bg-accent"
 						onclick={() => select(group.id)}
 						type="button"
 					>

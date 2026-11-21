@@ -23,10 +23,10 @@ import {
 	SETTINGS_KEYS,
 	STORAGE_APP_NAME,
 	STORAGE_APP_NAME_DEPRECATED
-} from '$lib/constants';
-import { BooleanString, MessageRole } from '$lib/enums';
-import type { McpServerOverride } from '$lib/types/database';
-import { withSearchChatsDisabled } from '$lib/utils/search-chats';
+} from '#lib/constants/index.ts';
+import { BooleanString, MessageRole } from '#lib/enums/index.ts';
+import type { McpServerOverride } from '#lib/types/database.js';
+import { withSearchChatsDisabled } from '#lib/utils/search-chats.ts';
 import Dexie from 'dexie';
 
 // Types

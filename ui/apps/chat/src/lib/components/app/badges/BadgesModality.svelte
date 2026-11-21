@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { MODALITY_ICONS, MODALITY_LABELS } from '$lib/constants';
-	import { ModelModality } from '$lib/enums';
+	import { MODALITY_ICONS, MODALITY_LABELS } from '#lib/constants/index.ts';
+	import { ModelModality } from '#lib/enums/index.ts';
 
 	interface Props {
 		modalities: ModelModality[];
@@ -18,11 +18,11 @@
 	{@const ModalityIcon = MODALITY_ICONS[modality]}
 	<span
 		class={[
-			'inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs font-medium',
+			'inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-caption font-medium',
 			className
 		]}
 	>
-		<ModalityIcon class="h-3 w-3" />
+		<ModalityIcon class="size-icon-xs" />
 
 		{MODALITY_LABELS[modality]}
 	</span>

@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { X } from '@lucide/svelte';
-	import { ActionIcon, ChatMessageMcpPromptContent } from '$lib/components/app';
-	import { McpPromptVariant } from '$lib/enums';
-	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
+	import { ActionIcon, ChatMessageMcpPromptContent } from '#lib/components/app/index.ts';
+	import { McpPromptVariant } from '#lib/enums/index.ts';
+	import type { DatabaseMessageExtraMcpPrompt } from '#lib/types/index.ts';
 
 	interface Props {
 		class?: string;

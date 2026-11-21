@@ -2,14 +2,14 @@ import type { ChatMessagePromptProgress, ChatMessageTimings } from './chat';
 import type { DatabaseMessageExtra } from './database';
 import type { OpenAIToolDefinition } from './mcp';
 import type { Icon } from '@lucide/svelte';
-import type { SETTING_CONFIG_DEFAULT, SETTINGS_SECTION_TITLES } from '$lib/constants';
+import type { SETTING_CONFIG_DEFAULT, SETTINGS_SECTION_TITLES } from '#lib/constants/index.ts';
 import type {
 	ParameterSource,
 	ReasoningEffort,
 	SettingsFieldType,
 	StreamConnectionState,
 	SyncableParameterType
-} from '$lib/enums';
+} from '#lib/enums/index.ts';
 import type { Component } from 'svelte';
 
 export type SettingsConfigValue = string | number | boolean | undefined;
@@ -148,7 +148,7 @@ export type SettingsConfigType = typeof SETTING_CONFIG_DEFAULT & {
 
 /**
  * Parameter synchronization types for server defaults and user overrides
- * Note: ParameterSource and SyncableParameterType enums are imported from '$lib/enums'
+ * Note: ParameterSource and SyncableParameterType enums are imported from '#lib/enums/index.ts'
  */
 export type ParameterValue = string | number | boolean;
 export type ParameterRecord = Record<string, ParameterValue>;

@@ -1,15 +1,15 @@
 <script lang="ts">
-	import ModelCapabilityIcons from '../../ModelCapabilityIcons.svelte';
 	import ModelOrgAvatar from '../../ModelOrgAvatar.svelte';
 	import ModelsDiscoverDetailsHfHubStats from './ModelsDiscoverDetailsHfHubStats.svelte';
 	import ModelsDiscoverDetailsMetadata from './ModelsDiscoverDetailsMetadata.svelte';
+	import { ModelCapabilityIcons } from '@ggml-org/llama-ui/models';
+	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import { ExternalLink } from '@lucide/svelte';
-	import { base } from '$app/paths';
-	import { Button } from '$lib/components/ui/button';
-	import { HuggingFaceService } from '$lib/services';
-	import type { HfModelDetailInfo, HfModelGguf } from '$lib/types/huggingface';
-	import type { ModelModalities } from '$lib/types/models';
-	import { orgOf } from '$lib/utils';
+	import { HuggingFaceService } from '#lib/services/index.ts';
+	import type { HfModelDetailInfo, HfModelGguf } from '#lib/types/huggingface.js';
+	import type { ModelModalities } from '#lib/types/models.js';
+	import { orgOf } from '#lib/utils/index.ts';
+	import { asset } from '$app/paths';
 
 	interface Props {
 		modelId: string;
@@ -48,17 +48,17 @@
 				org={avatarOrg}
 				{quantOrg}
 				quantPositionClass="-bottom-1.5 -right-1.5"
-				quantSize="h-6 w-6"
-				size="h-12 w-12"
+				quantSize="size-6"
+				size="size-12"
 			/>
 
 			<div class="min-w-0">
 				<div class="flex items-center gap-2 @max-lg:flex-col @max-lg:items-start">
-					<h1 class="truncate text-lg font-semibold @max-lg:w-full">{details.id ?? modelId}</h1>
+					<h1 class="truncate text-title @max-lg:w-full">{details.id ?? modelId}</h1>
 
 					<ModelCapabilityIcons
 						gapClass="gap-2"
-						iconSize="h-4 w-4"
+						iconSize="size-icon-md"
 						{modalities}
 						supportsThinking={hasReasoning}
 						supportsToolUse={hasTools}
@@ -67,7 +67,7 @@
 
 				{#if baseModels.length}
 					<div class="flex items-center gap-1">
-						<span class="truncate text-xs text-muted-foreground">{baseModels.join(', ')}</span>
+						<span class="truncate text-caption text-muted-foreground">{baseModels.join(', ')}</span>
 
 						<a
 							aria-label="View base model on HuggingFace"
@@ -76,7 +76,7 @@
 							rel="noopener noreferrer"
 							target="_blank"
 						>
-							<ExternalLink class="h-3 w-3" />
+							<ExternalLink class="size-icon-xs" />
 						</a>
 					</div>
 				{/if}
@@ -84,14 +84,14 @@
 		</div>
 
 		<Button
-			class="h-auto gap-1.5 px-2.5 py-1.5 text-xs"
+			class="h-auto gap-1.5 px-2.5 py-1.5 text-caption"
 			href={HuggingFaceService.getModelUrl(modelId)}
 			rel="noopener noreferrer"
 			size="sm"
 			target="_blank"
-			variant="tertiary"
+			variant="secondary"
 		>
-			<img alt="" class="h-3.5 w-3.5" src="{base}/recommended-mcp/huggingface.ico" />
+			<img alt="" class="size-3.5" src={asset('recommended-mcp/huggingface.ico')} />
 
 			View on Hugging Face
 

@@ -11,7 +11,7 @@
 
 <div class="flex flex-1 items-center justify-center p-8">
 	<div class="w-full max-w-md text-center">
-		<Video class="mx-auto mb-4 h-16 w-16 text-white/50" />
+		<Video class="mx-auto mb-4 size-16 text-white/50" />
 
 		{#if videoSrc}
 			<video class="mb-4 w-full" controls src={videoSrc}>
@@ -22,6 +22,6 @@
 			<p class="mb-4 text-white/70">Video preview not available</p>
 		{/if}
 
-		<p class="text-sm text-white/50">{currentItem?.name || 'Video'}</p>
+		<p class="text-body-sm text-white/50">{currentItem?.name || 'Video'}</p>
 	</div>
 </div>

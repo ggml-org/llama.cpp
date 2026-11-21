@@ -26,9 +26,9 @@ import {
 	SEARCH_CHATS_OUTPUT_MAX_CHARS,
 	SEARCH_CHATS_PATTERN_MAX_CHARS,
 	SEARCH_CHATS_TOOL_KEY
-} from '$lib/constants';
-import { MessageRole, SearchChatsMessageSelection, SearchChatsOrder } from '$lib/enums';
-import type { DatabaseConversation, DatabaseMessage } from '$lib/types/database';
+} from '#lib/constants/index.ts';
+import { MessageRole, SearchChatsMessageSelection, SearchChatsOrder } from '#lib/enums/index.ts';
+import type { DatabaseConversation, DatabaseMessage } from '#lib/types/database.js';
 
 export class SearchChatsError extends Error {
 	constructor(message: string) {

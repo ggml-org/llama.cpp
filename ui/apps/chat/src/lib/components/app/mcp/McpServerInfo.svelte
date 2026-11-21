@@ -1,6 +1,6 @@
 <script lang="ts">
+	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
 	import { ChevronDown, ChevronRight } from '@lucide/svelte';
-	import * as Collapsible from '$lib/components/ui/collapsible';
 
 	interface Props {
 		instructions?: string;
@@ -15,19 +15,19 @@
 {#if instructions}
 	<Collapsible.Root bind:open={isExpanded} class={className}>
 		<Collapsible.Trigger
-			class="flex w-full items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+			class="flex w-full items-center gap-1 text-caption text-muted-foreground hover:text-foreground"
 		>
 			{#if isExpanded}
-				<ChevronDown class="h-3.5 w-3.5" />
+				<ChevronDown class="size-icon-sm" />
 			{:else}
-				<ChevronRight class="h-3.5 w-3.5" />
+				<ChevronRight class="size-icon-sm" />
 			{/if}
 
 			<span>Server instructions</span>
 		</Collapsible.Trigger>
 
 		<Collapsible.Content class="mt-2">
-			<p class="rounded bg-muted/50 p-2 text-xs text-muted-foreground">
+			<p class="rounded bg-muted/50 p-2 text-caption text-muted-foreground">
 				{instructions}
 			</p>
 		</Collapsible.Content>

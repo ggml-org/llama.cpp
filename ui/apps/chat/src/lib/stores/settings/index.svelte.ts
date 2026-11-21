@@ -7,21 +7,22 @@
  * ParameterSyncService.
  */
 
-import { browser } from '$app/environment';
-import { SETTING_CONFIG_DEFAULT, SETTINGS_KEYS } from '$lib/constants';
-import { ColorMode } from '$lib/enums';
-import { ParameterSyncService } from '$lib/services/parameter-sync.service';
-import { SettingsService } from '$lib/services/settings.service';
-import { deviceStore } from '$lib/stores/device.svelte';
+import { SETTING_CONFIG_DEFAULT, SETTINGS_KEYS } from '#lib/constants/index.ts';
+import { ColorMode } from '#lib/enums/index.ts';
+import { ParameterSyncService } from '#lib/services/parameter-sync.service.ts';
+import { SettingsService } from '#lib/services/settings.service.ts';
+import { deviceStore } from '#lib/stores/device.svelte.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { serverStore } from '$lib/stores/server.svelte';
-import type { SettingsExportType } from '$lib/types';
+import { serverStore } from '#lib/stores/llama-server.svelte.ts';
+import type { SettingsExportType } from '#lib/types/index.ts';
 import {
 	configToParameterRecord,
 	getConfigValue,
 	normalizeFloatingPoint,
+	parseMcpServerSettings,
 	setConfigValue
-} from '$lib/utils';
+} from '#lib/utils/index.ts';
+import { browser } from '$app/env';
 import { setMode } from 'mode-watcher';
 
 class SettingsStore {
@@ -421,15 +422,18 @@ class SettingsStore {
 	}
 
 	/**
-	 * Discover needs the hub metadata reads, so a checked Discover Models keeps
-	 * the hub setting on; call wherever stored or reset state may disagree.
+	 * Discover needs the hub metadata reads and opens from the Models page, so a
+	 * checked Discover Models keeps the hub setting and Models on; call wherever
+	 * stored or reset state may disagree.
 	 */
 	private enforceDiscoverCoupling(): void {
 		if (
 			this.config[SETTINGS_KEYS.ENABLE_DISCOVER_MODELS] &&
-			!this.config[SETTINGS_KEYS.USE_HUGGING_FACE_HUB]
+			(!this.config[SETTINGS_KEYS.USE_HUGGING_FACE_HUB] ||
+				!this.config[SETTINGS_KEYS.SHOW_MODELS_MANAGER])
 		) {
 			setConfigValue(this.config, SETTINGS_KEYS.USE_HUGGING_FACE_HUB, true);
+			setConfigValue(this.config, SETTINGS_KEYS.SHOW_MODELS_MANAGER, true);
 			this.saveConfig();
 		}
 	}
@@ -515,6 +519,15 @@ class SettingsStore {
 			if (deviceStore.isMobile) {
 				this.config[SETTINGS_KEYS.SEND_ON_ENTER] = false;
 			}
+		}
+
+		// MCP shows by default for someone who already added a server, from before it moved
+		// behind its setting, so they keep the way to manage their servers
+		if (
+			!(SETTINGS_KEYS.SHOW_MCP in savedVal) &&
+			parseMcpServerSettings(savedVal[SETTINGS_KEYS.MCP_SERVERS]).length > 0
+		) {
+			this.config[SETTINGS_KEYS.SHOW_MCP] = true;
 		}
 
 		// Load user overrides

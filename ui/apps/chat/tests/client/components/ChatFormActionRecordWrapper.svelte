@@ -1,14 +1,18 @@
 <script lang="ts">
-	import ChatFormActionRecord from '$lib/components/app/chat/ChatForm/ChatFormActions/ChatFormActionRecord.svelte';
-	import * as Tooltip from '$lib/components/ui/tooltip';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
+	import ChatFormActionRecord from '#lib/components/app/chat/ChatForm/ChatFormActions/ChatFormActionRecord.svelte';
 
 	let {
-		hasAudioModality = true,
 		micWarning = null,
-		onMicClick
-	}: { hasAudioModality?: boolean; micWarning?: string | null; onMicClick?: () => void } = $props();
+		onMicClick,
+		unavailableReason = null
+	}: {
+		micWarning?: string | null;
+		onMicClick?: () => void;
+		unavailableReason?: string | null;
+	} = $props();
 </script>
 
 <Tooltip.Provider>
-	<ChatFormActionRecord {hasAudioModality} {micWarning} {onMicClick} />
+	<ChatFormActionRecord {micWarning} {onMicClick} {unavailableReason} />
 </Tooltip.Provider>

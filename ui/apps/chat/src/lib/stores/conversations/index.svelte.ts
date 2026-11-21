@@ -7,29 +7,29 @@
  * composed as {@link ConversationsStore.preferences}.
  */
 
-import { browser } from '$app/environment';
-import { goto } from '$app/navigation';
-import { NEW_CHAT_TAB_ID, ROUTES } from '$lib/constants';
-import { MessageRole } from '$lib/enums';
-import { ConversationTransferService } from '$lib/services/conversation-transfer.service';
-import { DatabaseService } from '$lib/services/database.service';
-import { MigrationService } from '$lib/services/migration.service';
-import { RouterService } from '$lib/services/router.service';
+import { NEW_CHAT_TAB_ID, ROUTES } from '#lib/constants/index.ts';
+import { MessageRole } from '#lib/enums/index.ts';
+import { ConversationTransferService } from '#lib/services/conversation-transfer.service.ts';
+import { DatabaseService } from '#lib/services/database.service.ts';
+import { MigrationService } from '#lib/services/migration.service.ts';
+import { RouterService } from '#lib/services/router.service.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { draftMessagesStore } from '$lib/stores/chat/drafts.svelte';
+import { draftMessagesStore } from '#lib/stores/chat/drafts.svelte.ts';
 import {
 	ConversationPreferences,
 	type ConversationsPreferencesHost
-} from '$lib/stores/conversations/preferences.svelte';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
-import { tabsStore } from '$lib/stores/tabs.svelte';
+} from '#lib/stores/conversations/preferences.svelte.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
+import { tabsStore } from '#lib/stores/tabs.svelte.ts';
 import {
 	collectForkFamily,
 	filterByLeafNodeId,
 	findLeafNode,
 	generateConversationTitle
-} from '$lib/utils';
-import { withSearchChatsDisabled } from '$lib/utils/search-chats';
+} from '#lib/utils/index.ts';
+import { withSearchChatsDisabled } from '#lib/utils/search-chats.ts';
+import { browser } from '$app/env';
+import { goto } from '$app/navigation';
 import { SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
@@ -808,10 +808,14 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	 * @param nodeId - The new current node ID
 	 */
 	async updateCurrentNode(nodeId: string): Promise<void> {
-		if (!this.activeConversation) return;
+		const conversationId = this.activeConversation?.id;
 
-		await DatabaseService.updateCurrentNode(this.activeConversation.id, nodeId);
-		this.activeConversation.currNode = nodeId;
+		if (!conversationId) return;
+
+		await DatabaseService.updateCurrentNode(conversationId, nodeId);
+
+		// the active conversation can change or close during the write
+		if (this.activeConversation?.id === conversationId) this.activeConversation.currNode = nodeId;
 	}
 
 	/**

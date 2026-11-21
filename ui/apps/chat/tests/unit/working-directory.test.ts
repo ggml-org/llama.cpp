@@ -1,4 +1,4 @@
-import { GLOB, SEARCH } from '$lib/constants';
+import { GLOB, SEARCH } from '#lib/constants/index.ts';
 import {
 	buildCaseInsensitiveGlob,
 	buildGlobSearchArgs,
@@ -6,7 +6,7 @@ import {
 	joinPath,
 	rankEntries,
 	splitPathQuery
-} from '$lib/utils';
+} from '#lib/utils/index.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('splitPathQuery', () => {

@@ -1,4 +1,4 @@
-import { UrlProtocol } from '$lib/enums';
+import { UrlProtocol } from '#lib/enums/index.ts';
 
 const STD = ['com', 'net', 'org', 'gov', 'edu'] as const;
 const STD_MIL = [...STD, 'mil'] as const;

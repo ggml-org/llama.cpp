@@ -1,18 +1,18 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import * as Dialog from '@ggml-org/llama-ui/ui/dialog';
 	import { Download } from '@lucide/svelte';
-	import { ActionIconCopyToClipboard, SyntaxHighlightedCode } from '$lib/components/app';
-	import { Button } from '$lib/components/ui/button';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import { DEFAULT_RESOURCE_FILENAME, MIME_TYPE_SUBSTRINGS } from '$lib/constants';
-	import { MimeTypeText } from '$lib/enums';
-	import { deviceStore, mcpStore } from '$lib/stores';
-	import type { DatabaseMessageExtraMcpResource } from '$lib/types';
+	import { ActionIconCopyToClipboard, SyntaxHighlightedCode } from '#lib/components/app/index.ts';
+	import { DEFAULT_RESOURCE_FILENAME, MIME_TYPE_SUBSTRINGS } from '#lib/constants/index.ts';
+	import { MimeTypeText } from '#lib/enums/index.ts';
+	import { deviceStore, mcpStore } from '#lib/stores/index.ts';
+	import type { DatabaseMessageExtraMcpResource } from '#lib/types/index.ts';
 	import {
 		downloadResourceContent,
 		getLanguageFromFilename,
 		isCodeResource,
 		isImageResource
-	} from '$lib/utils';
+	} from '#lib/utils/index.ts';
 
 	interface Props {
 		open: boolean;
@@ -60,15 +60,15 @@
 
 			<Dialog.Description>
 				<div class="flex items-center gap-2">
-					<span class="text-xs text-muted-foreground">{extra.uri}</span>
+					<span class="text-caption text-muted-foreground">{extra.uri}</span>
 
 					{#if serverName}
-						<span class="flex items-center gap-1 text-xs text-muted-foreground">
+						<span class="flex items-center gap-1 text-caption text-muted-foreground">
 							·
 							{#if favicon}
 								<img
 									alt=""
-									class="h-3 w-3 shrink-0 rounded-sm"
+									class="size-3 shrink-0 rounded-sm"
 									onerror={(e) => {
 										(e.currentTarget as HTMLImageElement).style.display = 'none';
 									}}
@@ -80,7 +80,7 @@
 					{/if}
 
 					{#if extra.mimeType}
-						<span class="rounded bg-muted px-1.5 py-0.5 text-xs">{extra.mimeType}</span>
+						<span class="rounded bg-muted px-1.5 py-0.5 text-caption">{extra.mimeType}</span>
 					{/if}
 				</div>
 			</Dialog.Description>
@@ -94,14 +94,14 @@
 			/>
 
 			<Button
-				class="h-7 w-7 p-0"
+				class="size-7 p-0"
 				disabled={!extra.content}
 				onclick={handleDownload}
 				size="sm"
 				title="Download content"
 				variant="ghost"
 			>
-				<Download class="h-3.5 w-3.5" />
+				<Download class="size-icon-md" />
 			</Button>
 		</div>
 
@@ -120,9 +120,9 @@
 				<SyntaxHighlightedCode code={extra.content} language={getLanguage()} maxHeight="70vh" />
 			{:else if extra.content}
 				<pre
-					class="max-h-[70vh] overflow-auto rounded-md border bg-muted/30 p-4 font-mono text-sm break-words whitespace-pre-wrap">{extra.content}</pre>
+					class="max-h-[70vh] overflow-auto rounded-md border bg-muted/30 p-4 font-mono text-body-sm break-words whitespace-pre-wrap">{extra.content}</pre>
 			{:else}
-				<div class="py-8 text-center text-sm text-muted-foreground">No content available</div>
+				<div class="py-8 text-center text-body-sm text-muted-foreground">No content available</div>
 			{/if}
 		</div>
 	</Dialog.Content>

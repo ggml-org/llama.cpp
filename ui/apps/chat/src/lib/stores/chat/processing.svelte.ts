@@ -9,16 +9,16 @@
  */
 
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { modelsStore } from '$lib/stores/models/index.svelte';
-import { serverStore } from '$lib/stores/server.svelte';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
+import { serverStore } from '#lib/stores/llama-server.svelte.ts';
+import { modelsStore } from '#lib/stores/models/index.svelte.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
 import type {
 	ApiProcessingState,
 	ChatMessagePromptProgress,
 	ChatMessageTimings,
 	DatabaseMessage
-} from '$lib/types';
-import { lastContextBearingMessage } from '$lib/utils/compaction';
+} from '#lib/types/index.ts';
+import { lastContextBearingMessage } from '#lib/utils/compaction.ts';
 import { SvelteMap } from 'svelte/reactivity';
 
 interface ProcessingTimingData {

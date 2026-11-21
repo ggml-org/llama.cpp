@@ -1,8 +1,11 @@
-import { SEARCH_CHATS_OUTPUT_MAX_CHARS, SEARCH_CHATS_PATTERN_MAX_CHARS } from '$lib/constants';
-import { MessageRole, MessageType } from '$lib/enums';
-import type { DatabaseConversation, DatabaseMessage } from '$lib/types/database';
-import { formatLocalIso } from '$lib/utils/formatters';
-import { parseSearchChatsParams, searchChats, SearchChatsError } from '$lib/utils/search-chats';
+import {
+	SEARCH_CHATS_OUTPUT_MAX_CHARS,
+	SEARCH_CHATS_PATTERN_MAX_CHARS
+} from '#lib/constants/index.ts';
+import { MessageRole, MessageType } from '#lib/enums/index.ts';
+import type { DatabaseConversation, DatabaseMessage } from '#lib/types/database.js';
+import { formatLocalIso } from '#lib/utils/formatters.ts';
+import { parseSearchChatsParams, searchChats, SearchChatsError } from '#lib/utils/search-chats.ts';
 import { describe, expect, it } from 'vitest';
 
 type Turn = [role: 'user' | 'assistant' | 'tool', content: string];

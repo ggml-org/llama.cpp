@@ -1,4 +1,6 @@
 <script lang="ts">
+	import * as Card from '@ggml-org/llama-ui/ui/card';
+	import { Skeleton } from '@ggml-org/llama-ui/ui/skeleton';
 	import {
 		McpConnectionLogs,
 		McpServerCardActions,
@@ -7,13 +9,11 @@
 		McpServerCardHeader,
 		McpServerCardToolsList,
 		McpServerInfo
-	} from '$lib/components/app/mcp';
-	import * as Card from '$lib/components/ui/card';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { HealthCheckStatus } from '$lib/enums';
-	import { mcpStore } from '$lib/stores';
-	import type { HealthCheckState, MCPServerSettingsEntry } from '$lib/types';
+	} from '#lib/components/app/mcp/index.ts';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
+	import { HealthCheckStatus } from '#lib/enums/index.ts';
+	import { mcpStore } from '#lib/stores/index.ts';
+	import type { HealthCheckState, MCPServerSettingsEntry } from '#lib/types/index.ts';
 	import { tick } from 'svelte';
 
 	interface Props {
@@ -133,11 +133,11 @@
 		/>
 
 		{#if isError && errorMessage}
-			<p class="text-xs text-destructive">{errorMessage}</p>
+			<p class="text-caption text-destructive">{errorMessage}</p>
 		{/if}
 
 		{#if isConnected && serverInfo?.description}
-			<p class="line-clamp-2 text-xs text-muted-foreground">
+			<p class="line-clamp-2 text-caption text-muted-foreground">
 				{serverInfo.description}
 			</p>
 		{/if}
@@ -187,7 +187,7 @@
 				<Skeleton class="h-3 w-28" />
 			{:else if protocolVersion}
 				<div class="flex flex-wrap items-center gap-1">
-					<span class="text-[10px] text-muted-foreground">
+					<span class="text-caption-sm text-muted-foreground">
 						Protocol version: {protocolVersion}
 					</span>
 				</div>

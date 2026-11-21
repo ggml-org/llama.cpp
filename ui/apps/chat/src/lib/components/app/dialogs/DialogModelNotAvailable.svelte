@@ -1,9 +1,9 @@
 <script lang="ts">
+	import * as AlertDialog from '@ggml-org/llama-ui/ui/alert-dialog';
 	import { AlertTriangle, ArrowRight } from '@lucide/svelte';
+	import { ICON_CLASS_DEFAULT, URL_PARAMS } from '#lib/constants/index.ts';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { ICON_CLASS_DEFAULT, URL_PARAMS } from '$lib/constants';
 
 	interface Props {
 		open: boolean;
@@ -21,7 +21,7 @@
 
 	function handleSelectModel(model: string) {
 		// Build URL with selected model, preserving other params
-		const url = new URL(page.url);
+		const url = new URL(page.url.href);
 
 		url.searchParams.set(URL_PARAMS.MODEL, model);
 
@@ -34,7 +34,7 @@
 	<AlertDialog.Content class="max-w-lg">
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
-				<AlertTriangle class="h-5 w-5 text-amber-500" />
+				<AlertTriangle class="size-icon-lg text-amber-500" />
 				Model Not Available
 			</AlertDialog.Title>
 
@@ -44,24 +44,24 @@
 		</AlertDialog.Header>
 
 		<div class="space-y-3">
-			<div class="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm">
+			<div class="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-body-sm">
 				<p class="font-medium text-amber-600 dark:text-amber-400">
 					Requested: <code class="rounded bg-amber-500/20 px-1.5 py-0.5">{modelName}</code>
 				</p>
 			</div>
 
 			{#if availableModels.length > 0}
-				<div class="text-sm">
+				<div class="text-body-sm">
 					<p class="mb-2 font-medium text-muted-foreground">Select an available model:</p>
 
 					<div class="max-h-48 space-y-1 overflow-y-auto rounded-md border p-1">
 						{#each availableModels as model (model)}
 							<button
-								class="group flex w-full items-center justify-between gap-2 rounded-sm px-3 py-2 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+								class="group flex w-full items-center justify-between gap-2 rounded-sm px-3 py-2 text-left text-body-sm transition-colors hover:bg-accent hover:text-accent-foreground"
 								onclick={() => handleSelectModel(model)}
 								type="button"
 							>
-								<span class="min-w-0 truncate font-mono text-xs">{model}</span>
+								<span class="min-w-0 truncate font-mono text-caption">{model}</span>
 
 								<ArrowRight
 									class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"

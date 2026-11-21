@@ -2,19 +2,12 @@
  * Browser-only utility exports
  *
  * These utilities require browser APIs (DOM, Canvas, MediaRecorder, etc.)
- * and cannot be imported during SSR. Import from '$lib/utils/browser-only'
+ * and cannot be imported during SSR. Import from '#lib/utils/browser-only.ts'
  * only in client-side code or components that are not server-rendered.
  */
 
-// Audio utilities (MediaRecorder API)
-export {
-	AudioRecorder,
-	convertToWav,
-	createAudioFile,
-	describeMicrophoneError,
-	isAudioRecordingSupported,
-	microphoneUnavailableReason
-} from './audio-recording';
+// Audio file utilities (Web Audio decoding); microphone support lives in @ggml-org/llama-voice
+export { convertToWav, createAudioFile } from './audio-recording';
 
 // PDF processing utilities (pdfjs-dist with DOMMatrix)
 export {

@@ -9,6 +9,7 @@
 		type ModelQuantGroup,
 		type ModelsTableGroup
 	} from './utils';
+	import * as Empty from '@ggml-org/llama-ui/ui/empty';
 	import {
 		ArrowDown,
 		ArrowUp,
@@ -19,6 +20,7 @@
 		Heart,
 		Power
 	} from '@lucide/svelte';
+	import { DialogConfirmDownload } from '#lib/components/app/dialogs/index.ts';
 	import {
 		CollapsibleRegion,
 		GroupedList,
@@ -27,9 +29,7 @@
 		Logo,
 		ModelAvatar,
 		ModelsSection
-	} from '$lib/components/app';
-	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
-	import * as Empty from '$lib/components/ui/empty';
+	} from '#lib/components/app/index.ts';
 	import {
 		FAMILY_ROW_WINDOW,
 		type ModalityKey,
@@ -39,17 +39,17 @@
 		MODEL_ROW_WINDOW,
 		MODELS_TABLE_GROUP_STICKY_OFFSET,
 		SETTINGS_KEYS
-	} from '$lib/constants';
+	} from '#lib/constants/index.ts';
 	import {
 		KeyboardKey,
 		ModelCapability,
 		ModelDownloadConfirmAction,
 		ModelsTableGroupKind,
 		ModelsTableSortKey
-	} from '$lib/enums';
-	import { modelsStore, settingsStore } from '$lib/stores';
-	import type { ModelOption } from '$lib/types/models';
-	import { groupModelFamilies, type ModelFamilyGroup } from '$lib/utils/model-families';
+	} from '#lib/enums/index.ts';
+	import { modelsStore, settingsStore } from '#lib/stores/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
+	import { groupModelFamilies, type ModelFamilyGroup } from '#lib/utils/model-families.ts';
 	import type { Snippet } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 
@@ -218,9 +218,9 @@
 
 		{#if sortKey === key}
 			{#if sortAsc}
-				<ArrowUp class="h-3 w-3" />
+				<ArrowUp class="size-icon-xs" />
 			{:else}
-				<ArrowDown class="h-3 w-3" />
+				<ArrowDown class="size-icon-xs" />
 			{/if}
 		{/if}
 	</button>
@@ -286,9 +286,10 @@
 				size="size-6"
 			/>
 
-			<span class="truncate text-sm font-medium">{family.label}</span>
+			<span class="truncate text-label">{family.label}</span>
 
-			<span class="shrink-0 text-sm whitespace-nowrap text-muted-foreground">{countLabel}</span>
+			<span class="shrink-0 text-body-sm whitespace-nowrap text-muted-foreground">{countLabel}</span
+			>
 		</span>
 
 		<!-- the context and status columns stay empty here: the fold control is this
@@ -303,9 +304,9 @@
 				: ''}"
 		>
 			{#if expanded}
-				<ChevronUp class="h-3.5 w-3.5 text-muted-foreground" />
+				<ChevronUp class="size-icon-sm text-muted-foreground" />
 			{:else}
-				<ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
+				<ChevronDown class="size-icon-sm text-muted-foreground" />
 			{/if}
 		</span>
 	</div>
@@ -326,7 +327,7 @@
 })}
 	<div class="px-2 max-md:px-3">
 		<button
-			class="w-full cursor-pointer rounded-md px-2 py-2 text-left text-xs text-muted-foreground transition hover:bg-muted/40"
+			class="w-full cursor-pointer rounded-md px-2 py-2 text-left text-caption text-muted-foreground transition hover:bg-muted/40"
 			onclick={onMore}
 			type="button"
 		>
@@ -352,7 +353,7 @@
 	/>
 
 	<div
-		class="{MODEL_ROW_GRID_CLASS} shrink-0 border-b border-border/30 px-2 pb-2 text-xs font-medium text-muted-foreground max-md:px-3 dark:border-border/20"
+		class="{MODEL_ROW_GRID_CLASS} shrink-0 border-b border-border/30 px-2 pb-2 text-label-sm text-muted-foreground max-md:px-3 dark:border-border/20"
 	>
 		<span>{@render sortHeader(ModelsTableSortKey.NAME, 'Model')}</span>
 
@@ -370,13 +371,13 @@
 			{#if group.items.length > 0}
 				{#snippet groupIcon()}
 					{#if group.kind === ModelsTableGroupKind.DOWNLOADING}
-						<Download class="h-3.5 w-3.5 shrink-0" />
+						<Download class="size-icon-sm shrink-0" />
 					{:else if group.kind === ModelsTableGroupKind.FAVORITES}
-						<Heart class="h-3.5 w-3.5 shrink-0" />
+						<Heart class="size-icon-sm shrink-0" />
 					{:else if group.kind === ModelsTableGroupKind.LOADED}
-						<Power class="h-3.5 w-3.5 shrink-0" />
+						<Power class="size-icon-sm shrink-0" />
 					{:else if group.kind === ModelsTableGroupKind.HIDDEN}
-						<EyeOff class="h-3.5 w-3.5 shrink-0" />
+						<EyeOff class="size-icon-sm shrink-0" />
 					{:else if group.kind === ModelsTableGroupKind.LOCAL}
 						<Logo class="shrink-0" style="--size: 0.875rem" />
 					{/if}
@@ -390,7 +391,7 @@
 					label={group.label}
 					persistKey={group.key}
 					revealChevronOnHover
-					sectionHeaderClass="m-0 rounded-lg px-2 py-2 text-[13px] font-semibold text-foreground/85 select-none transition-colors hover:bg-muted max-md:px-3"
+					sectionHeaderClass="m-0 rounded-lg px-2 py-2 text-body-sm font-semibold text-foreground/85 select-none transition-colors hover:bg-muted max-md:px-3"
 					sticky
 					stickyClass="sticky z-10 bg-muted/70 backdrop-blur-lg"
 				>

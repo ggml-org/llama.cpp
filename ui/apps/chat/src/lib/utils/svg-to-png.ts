@@ -1,4 +1,4 @@
-import { MimeTypeImage } from '$lib/enums';
+import { MimeTypeImage } from '#lib/enums/index.ts';
 
 /**
  * Convert an SVG base64 data URL to a PNG data URL

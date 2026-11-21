@@ -1,8 +1,8 @@
 <script lang="ts">
+	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
+	import { cn } from '@ggml-org/llama-ui/utils';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
-	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
-	import { cn } from '$lib/components/ui/utils';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 	import type { Snippet } from 'svelte';
 	import type { Component } from 'svelte';
 
@@ -46,7 +46,7 @@
 		onToggle?.();
 	}}
 	{open}
-	style="background: var(--code-background); border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);"
+	style="background: var(--surface-code); border: 1px solid color-mix(in oklch, var(--line-default) 30%, transparent);"
 >
 	<Collapsible.Trigger
 		class={cn(
@@ -68,7 +68,7 @@
 
 			<span
 				class={cn(
-					'min-w-0 overflow-x-auto text-sm font-medium',
+					'min-w-0 overflow-x-auto text-body-sm font-medium',
 					shimmerTitle ? 'shimmer-text' : 'text-foreground/80'
 				)}
 			>
@@ -80,7 +80,7 @@
 			</span>
 
 			{#if subtitle}
-				<span class="text-xs italic text-muted-foreground/70">{subtitle}</span>
+				<span class="text-caption italic text-muted-foreground/70">{subtitle}</span>
 			{/if}
 		</div>
 

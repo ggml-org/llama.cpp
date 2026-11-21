@@ -7,7 +7,6 @@
  * {@link ModelsStore.status}; tracks which conversations use which models.
  */
 
-import { browser } from '$app/environment';
 import {
 	FAVORITE_MODELS_LOCALSTORAGE_KEY,
 	HIDDEN_MODELS_LOCALSTORAGE_KEY,
@@ -16,19 +15,20 @@ import {
 	MODEL_REMOVE_BLOCKED_REASONS,
 	RECENT_MODEL_LIMIT,
 	RECENT_MODELS_LOCALSTORAGE_KEY
-} from '$lib/constants';
-import { ReasoningEffort, ServerModelSource, ServerModelStatus } from '$lib/enums';
-import { HuggingFaceService } from '$lib/services/huggingface.service';
-import { ModelsService } from '$lib/services/models.service';
+} from '#lib/constants/index.ts';
+import { ReasoningEffort, ServerModelSource, ServerModelStatus } from '#lib/enums/index.ts';
+import { HuggingFaceService } from '#lib/services/huggingface.service.ts';
+import { ModelsService } from '#lib/services/models.service.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { conversationsStore } from '$lib/stores/conversations/index.svelte';
-import { type ModelPropsHost, ModelPropsManager } from '$lib/stores/models/props.svelte';
-import { type ModelStatusHost, ModelStatusManager } from '$lib/stores/models/status.svelte';
-import { serverStore } from '$lib/stores/server.svelte';
-import type { ApiModelDataEntry } from '$lib/types';
-import type { ParsedModelId } from '$lib/types/models';
-import { getConversationModel } from '$lib/utils/conversation-utils';
-import { repoOf } from '$lib/utils/model-names';
+import { conversationsStore } from '#lib/stores/conversations/index.svelte.ts';
+import { serverStore } from '#lib/stores/llama-server.svelte.ts';
+import { type ModelPropsHost, ModelPropsManager } from '#lib/stores/models/props.svelte.ts';
+import { type ModelStatusHost, ModelStatusManager } from '#lib/stores/models/status.svelte.ts';
+import type { ApiModelDataEntry } from '#lib/types/index.ts';
+import type { ParsedModelId } from '#lib/types/models.js';
+import { getConversationModel } from '#lib/utils/conversation-utils.ts';
+import { repoOf } from '#lib/utils/model-names.ts';
+import { browser } from '$app/env';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 

@@ -1,6 +1,6 @@
-import type { ModelSidecar } from '$lib/constants';
-import type { ModelDraftSidecar, ModelSelectableFileKind } from '$lib/enums';
-import type { HfModelSibling } from '$lib/types/huggingface';
+import type { ModelSidecar } from '#lib/constants/index.ts';
+import type { ModelDraftSidecar, ModelSelectableFileKind } from '#lib/enums/index.ts';
+import type { HfModelSibling } from '#lib/types/huggingface.js';
 
 /**
  * Option of a quant `<select>` in the download-options command builder; the

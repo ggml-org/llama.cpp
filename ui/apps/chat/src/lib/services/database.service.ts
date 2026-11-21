@@ -12,12 +12,12 @@ import {
 	IDXDB_TABLES,
 	IDXDB_VERSION,
 	STORAGE_APP_NAME
-} from '$lib/constants';
-import { MessageRole } from '$lib/enums';
-import type { McpServerOverride } from '$lib/types/database';
-import type { ExportedConversation } from '$lib/types/database';
-import type { Group } from '$lib/types/groups';
-import { filterByLeafNodeId, findDescendantMessages, uuid } from '$lib/utils';
+} from '#lib/constants/index.ts';
+import { MessageRole } from '#lib/enums/index.ts';
+import type { McpServerOverride } from '#lib/types/database.js';
+import type { ExportedConversation } from '#lib/types/database.js';
+import type { Group } from '#lib/types/groups.js';
+import { filterByLeafNodeId, findDescendantMessages, uuid } from '#lib/utils/index.ts';
 import Dexie, { type EntityTable } from 'dexie';
 
 class LlamaUiDatabase extends Dexie {
@@ -570,6 +570,16 @@ export class DatabaseService {
 		}
 
 		return result;
+	}
+
+	/**
+	 * Gets the messages written at or after `timestamp`, in any conversation.
+	 *
+	 * @param timestamp - Epoch ms
+	 * @returns Messages, oldest first
+	 */
+	static async getMessagesSince(timestamp: number): Promise<DatabaseMessage[]> {
+		return await db[IDXDB_TABLES.messages].where('timestamp').aboveOrEqual(timestamp).toArray();
 	}
 
 	/**

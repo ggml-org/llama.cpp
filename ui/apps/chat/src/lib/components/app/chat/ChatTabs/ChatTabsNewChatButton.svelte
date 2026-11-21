@@ -1,7 +1,7 @@
 <script lang="ts">
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { Plus } from '@lucide/svelte';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 
 	interface Props {
 		onclick?: () => void;

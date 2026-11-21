@@ -4,7 +4,7 @@ import {
 	PDF_FILE_TYPES,
 	TEXT_FILE_TYPES,
 	VIDEO_FILE_TYPES
-} from '$lib/constants';
+} from '#lib/constants/index.ts';
 import {
 	FileExtensionAudio,
 	FileExtensionImage,
@@ -16,7 +16,7 @@ import {
 	MimeTypeImage,
 	MimeTypeText,
 	MimeTypeVideo
-} from '$lib/enums';
+} from '#lib/enums/index.ts';
 
 function normalizeMimeType(mimeType: string): string {
 	return mimeType.trim().toLowerCase();

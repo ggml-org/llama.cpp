@@ -4,8 +4,8 @@ import {
 	MimeTypeAudio,
 	MimeTypeImage,
 	ToolCallType
-} from '$lib/enums';
-import type { OpenAIToolDefinition } from '$lib/types';
+} from '#lib/enums/index.ts';
+import type { OpenAIToolDefinition } from '#lib/types/index.ts';
 
 export const READ_MEDIA_TOOL_NAME = BuiltInTool.BROWSER_READ_MEDIA;
 

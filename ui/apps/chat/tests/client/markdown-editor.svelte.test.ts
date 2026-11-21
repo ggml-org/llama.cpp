@@ -4,8 +4,8 @@
 
 import { undo } from '@codemirror/commands';
 import { EditorView, type WidgetType } from '@codemirror/view';
-import MarkdownEditor from '$lib/components/app/content/MarkdownEditor/MarkdownEditor.svelte';
-import { SVG } from '$lib/constants';
+import MarkdownEditor from '#lib/components/app/content/MarkdownEditor/MarkdownEditor.svelte';
+import { SVG } from '#lib/constants/index.ts';
 import { tick } from 'svelte';
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';

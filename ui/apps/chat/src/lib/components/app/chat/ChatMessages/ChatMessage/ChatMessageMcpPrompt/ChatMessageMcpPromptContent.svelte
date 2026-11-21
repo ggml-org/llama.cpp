@@ -1,10 +1,10 @@
 <script lang="ts">
-	import { TruncatedText } from '$lib/components/app/misc';
-	import { Card } from '$lib/components/ui/card';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { McpPromptVariant } from '$lib/enums';
-	import { mcpStore } from '$lib/stores';
-	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
+	import { Card } from '@ggml-org/llama-ui/ui/card';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
+	import { TruncatedText } from '#lib/components/app/misc/index.ts';
+	import { McpPromptVariant } from '#lib/enums/index.ts';
+	import { mcpStore } from '#lib/stores/index.ts';
+	import type { DatabaseMessageExtraMcpPrompt } from '#lib/types/index.ts';
 	import { SvelteMap } from 'svelte/reactivity';
 
 	interface ContentPart {
@@ -82,7 +82,7 @@
 
 	let showArgBadges = $derived(hasArguments && !isLoading && !loadError);
 	let isAttachment = $derived(variant === McpPromptVariant.ATTACHMENT);
-	let textSizeClass = $derived(isAttachment ? 'text-xs' : 'text-md');
+	let textSizeClass = $derived(isAttachment ? 'text-caption' : 'text-md');
 	let paddingClass = $derived(isAttachment ? 'px-3 py-2' : 'px-3.75 py-2.5');
 	let maxHeightStyle = $derived(
 		isAttachment ? 'max-height: 6rem;' : 'max-height: var(--max-message-height);'
@@ -94,13 +94,13 @@
 
 <div class="flex flex-col gap-2 {className}">
 	<div class="flex items-center justify-between gap-2">
-		<div class="inline-flex flex-wrap items-center gap-1.25 text-xs text-muted-foreground">
+		<div class="inline-flex flex-wrap items-center gap-1.25 text-caption text-muted-foreground">
 			<Tooltip.Root>
 				<Tooltip.Trigger>
 					{#if serverFavicon}
 						<img
 							alt=""
-							class="h-3.5 w-3.5 shrink-0 rounded-sm"
+							class="size-3.5 shrink-0 rounded-sm"
 							onerror={(e) => {
 								(e.currentTarget as HTMLImageElement).style.display = 'none';
 							}}
@@ -124,7 +124,7 @@
 						<Tooltip.Trigger>
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							<span
-								class="rounded-sm bg-purple-200/60 px-1.5 py-0.5 text-[10px] leading-none text-purple-700 transition-opacity dark:bg-purple-800/40 dark:text-purple-300 {hoveredArgKey &&
+								class="rounded-sm bg-purple-200/60 px-1.5 py-0.5 text-caption-sm leading-none text-purple-700 transition-opacity dark:bg-purple-800/40 dark:text-purple-300 {hoveredArgKey &&
 								hoveredArgKey !== key
 									? 'opacity-30'
 									: ''}"
@@ -146,7 +146,7 @@
 
 	{#if loadError}
 		<Card
-			class="relative overflow-hidden rounded-[1.125rem] border border-destructive/50 bg-destructive/10 backdrop-blur-md"
+			class="relative overflow-hidden rounded-2xl border border-destructive/50 bg-destructive/10 backdrop-blur-md"
 		>
 			<div
 				class="overflow-y-auto {paddingClass}"
@@ -157,7 +157,7 @@
 		</Card>
 	{:else if isLoading}
 		<Card
-			class="relative overflow-hidden rounded-[1.125rem] border border-purple-200 bg-purple-500/10 px-1 py-2 backdrop-blur-md dark:border-purple-800 dark:bg-purple-500/20"
+			class="relative overflow-hidden rounded-2xl border border-purple-200 bg-purple-500/10 px-1 py-2 backdrop-blur-md dark:border-purple-800 dark:bg-purple-500/20"
 		>
 			<div
 				class="overflow-y-auto {paddingClass}"
@@ -174,7 +174,7 @@
 		</Card>
 	{:else if hasContent}
 		<Card
-			class="relative overflow-hidden rounded-[1.125rem] border border-purple-200 bg-purple-500/10 py-0 text-foreground backdrop-blur-md dark:border-purple-800 dark:bg-purple-500/20"
+			class="relative overflow-hidden rounded-2xl border border-purple-200 bg-purple-500/10 py-0 text-foreground backdrop-blur-md dark:border-purple-800 dark:bg-purple-500/20"
 		>
 			<div
 				class="overflow-y-auto {paddingClass}"

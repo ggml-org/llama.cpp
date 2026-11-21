@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { MarkdownContent } from '$lib/components/app';
+	import { MarkdownContent } from '#lib/components/app/index.ts';
 
 	interface Props {
 		readme: string | null;
@@ -9,9 +9,7 @@
 </script>
 
 {#if readme}
-	<section
-		class="p-3 rounded-3xl border border-border/30 bg-muted/60 shadow-sm dark:border-border/20"
-	>
+	<section class="p-3 rounded-3xl bg-muted/60 elevated-control">
 		<MarkdownContent allowHtml class="prose-sm max-w-none" content={readme} />
 	</section>
 {/if}

@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { mcpStore } from '$lib/stores';
-	import type { MCPServerSettingsEntry } from '$lib/types';
+	import { mcpStore } from '#lib/stores/index.ts';
+	import type { MCPServerSettingsEntry } from '#lib/types/index.ts';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
@@ -18,11 +18,11 @@
 </script>
 
 <div class="min-w-0 flex-1">
-	<div class="mb-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+	<div class="mb-0.5 flex items-center gap-1.5 text-caption text-muted-foreground">
 		{#if faviconUrl}
 			<img
 				alt=""
-				class="h-3 w-3 shrink-0 rounded-sm"
+				class="size-3 shrink-0 rounded-sm"
 				onerror={(e) => {
 					(e.currentTarget as HTMLImageElement).style.display = 'none';
 				}}
@@ -44,7 +44,7 @@
 	</div>
 
 	{#if description}
-		<p class="mt-0.5 truncate text-sm text-muted-foreground">
+		<p class="mt-0.5 truncate text-body-sm text-muted-foreground">
 			{description}
 		</p>
 	{/if}

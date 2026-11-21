@@ -3,8 +3,6 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { resolve } from 'path';
 import type { Plugin } from 'vite';
 
-let processed = false;
-
 const OUTPUT_DIR = process.env.LLAMA_UI_OUT_DIR ?? BUILD_CONFIG.OUTPUT_DIR;
 
 /**
@@ -16,13 +14,10 @@ const OUTPUT_DIR = process.env.LLAMA_UI_OUT_DIR ?? BUILD_CONFIG.OUTPUT_DIR;
 export function buildInfoPlugin(): Plugin {
 	return {
 		apply: 'build',
-		closeBundle() {
-			setTimeout(() => {
+		buildApp: {
+			// post order runs after the SvelteKit adapter has written the output
+			async handler() {
 				try {
-					if (processed) return;
-
-					processed = true;
-
 					const buildNumber = process.env.LLAMA_BUILD_NUMBER || 'b0000';
 					const outDir = resolve(OUTPUT_DIR);
 					const indexPath = resolve(outDir, 'index.html');
@@ -36,7 +31,8 @@ export function buildInfoPlugin(): Plugin {
 				} catch (error) {
 					console.error('Failed to write build.json:', error);
 				}
-			}, 100);
+			},
+			order: 'post'
 		},
 		name: 'llamacpp:build-info'
 	};

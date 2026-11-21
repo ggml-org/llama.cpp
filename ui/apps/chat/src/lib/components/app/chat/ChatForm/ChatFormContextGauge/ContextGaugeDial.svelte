@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { colorLevelTextClass } from './context-gauge';
-	import { CONTEXT_GAUGE_DIAL_SIZES } from '$lib/constants';
-	import { ColorLevel } from '$lib/enums';
+	import { CONTEXT_GAUGE_DIAL_SIZES } from '#lib/constants/index.ts';
+	import { ColorLevel } from '#lib/enums/index.ts';
 
 	interface Props {
 		percent: number | null;

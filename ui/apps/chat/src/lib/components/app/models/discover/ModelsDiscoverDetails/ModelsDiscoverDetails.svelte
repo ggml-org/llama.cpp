@@ -3,11 +3,11 @@
 	import ModelsDiscoverDetailsHeader from './ModelsDiscoverDetailsHeader.svelte';
 	import ModelsDiscoverDetailsReadme from './ModelsDiscoverDetailsReadme.svelte';
 	import ModelsDiscoverDetailsSkeleton from './ModelsDiscoverDetailsSkeleton.svelte';
-	import { OTHER_BIT_DEPTH } from '$lib/constants';
-	import { ModelAuxSidecar } from '$lib/enums';
-	import { HuggingFaceService } from '$lib/services';
-	import type { HfModelDetailInfo, HfModelSibling, ModelBitDepthRow } from '$lib/types';
-	import { detectThinkingSupport, detectToolUseSupport } from '$lib/utils';
+	import { OTHER_BIT_DEPTH } from '#lib/constants/index.ts';
+	import { ModelAuxSidecar } from '#lib/enums/index.ts';
+	import { HuggingFaceService } from '#lib/services/index.ts';
+	import type { HfModelDetailInfo, HfModelSibling, ModelBitDepthRow } from '#lib/types/index.ts';
+	import { detectThinkingSupport, detectToolUseSupport } from '#lib/utils/index.ts';
 	import { SvelteMap } from 'svelte/reactivity';
 
 	interface Props {
@@ -80,7 +80,7 @@
 	<ModelsDiscoverDetailsSkeleton />
 {:else if error}
 	<div class="flex h-full items-center justify-center py-20">
-		<p class="text-sm text-destructive">{error}</p>
+		<p class="text-body-sm text-destructive">{error}</p>
 	</div>
 {:else if details}
 	<div class="@container space-y-6 p-6 pr-0">

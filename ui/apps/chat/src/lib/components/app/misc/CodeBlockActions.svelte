@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Eye } from '@lucide/svelte';
-	import { ActionIcon, ActionIconCopyToClipboard } from '$lib/components/app';
-	import { FileTypeText } from '$lib/enums';
+	import { ActionIcon, ActionIconCopyToClipboard } from '#lib/components/app/index.ts';
+	import { FileTypeText } from '#lib/enums/index.ts';
 
 	interface Props {
 		code: string;

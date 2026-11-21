@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ModelsDiscoverListItem from './ModelsDiscoverListItem.svelte';
 	import ModelsDiscoverListItemSkeleton from './ModelsDiscoverListItemSkeleton.svelte';
-	import type { HfModelInfo } from '$lib/types/huggingface';
+	import type { HfModelInfo } from '#lib/types/huggingface.js';
 
 	interface Props {
 		models: HfModelInfo[];

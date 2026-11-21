@@ -260,6 +260,7 @@ struct mtmd_helper_cap {
 
     // realtime capabilities
     bool audio_stream; // realtime transcription, see mtmd_audio_stream_init()
+    bool audio_duplex; // full duplex (e.g. Hibiki): the model speaks while it listens, see the moshi pipeline of mtmd_helper_gen_audio
 
     // output capabilities
     bool text_gen; // false for an audio-only model (tts-only, no chat template)
@@ -310,7 +311,7 @@ struct mtmd_helper_gen_audio_inp {
     enum mtmd_helper_gen_audio_out_mode out_mode; // n_past > 0 only (default: auto)
 
     mtmd_bitmap * speaker_ref; // optional, can be NULL: audio to clone, or a voice bitmap
-    const char * speaker_ref_text; // optional, can be NULL: transcript of speaker_ref, for models that put it in the prompt (e.g. Fish S2)
+    const char * speaker_ref_text; // optional, can be NULL: transcript of speaker_ref, for models that use it to clone the voice (e.g. Fish S2, Qwen3-TTS)
     const char * lang; // optional, can be NULL
 
     int32_t  top_k;

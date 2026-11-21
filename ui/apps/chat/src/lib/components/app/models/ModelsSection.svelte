@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ChevronLeft, CircleAlert, Loader2 } from '@lucide/svelte';
-	import { CollapsibleSection } from '$lib/components/app';
-	import { modelsStore } from '$lib/stores';
+	import { CollapsibleSection } from '#lib/components/app/index.ts';
+	import { modelsStore } from '#lib/stores/index.ts';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
@@ -40,7 +40,7 @@
 		onBack,
 		persistKey,
 		revealChevronOnHover = false,
-		sectionHeaderClass = 'm-0 px-2 py-2 text-[13px] font-semibold text-muted-foreground select-none',
+		sectionHeaderClass = 'm-0 px-2 py-2 text-body-sm font-semibold text-muted-foreground select-none',
 		sticky = false,
 		stickyClass = 'sticky z-10 bg-popover'
 	}: Props = $props();
@@ -72,7 +72,7 @@
 				}}
 				type="button"
 			>
-				<ChevronLeft class="h-3.5 w-3.5" />
+				<ChevronLeft class="size-icon-sm" />
 			</button>
 		{/if}
 
@@ -83,13 +83,13 @@
 		<span class="truncate">{label}</span>
 
 		{#if loading}
-			<Loader2 class="h-3 w-3 shrink-0 animate-spin" />
+			<Loader2 class="size-icon-xs shrink-0 animate-spin" />
 		{:else if error}
-			<CircleAlert class="h-3 w-3 shrink-0 text-destructive" />
+			<CircleAlert class="size-icon-xs shrink-0 text-destructive" />
 		{/if}
 
 		{#if count !== undefined}
-			<span class="shrink-0 text-xs text-muted-foreground/70">{count}</span>
+			<span class="shrink-0 text-caption text-muted-foreground/70">{count}</span>
 		{/if}
 	{/snippet}
 

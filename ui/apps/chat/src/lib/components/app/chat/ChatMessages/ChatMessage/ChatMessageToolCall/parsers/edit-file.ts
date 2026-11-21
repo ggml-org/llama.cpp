@@ -10,10 +10,15 @@ import {
 	fileNameFromPath,
 	parseToolArgs
 } from './_shared';
-import { TOOL_ARG_PATH_KEYS } from '$lib/constants';
-import { BuiltInTool } from '$lib/enums';
-import type { AgenticSection, EditFileEdit, EditFileMeta, EditFileTitleMeta } from '$lib/types';
-import { tryParseToolResultObject } from '$lib/utils';
+import { TOOL_ARG_PATH_KEYS } from '#lib/constants/index.ts';
+import { BuiltInTool } from '#lib/enums/index.ts';
+import type {
+	AgenticSection,
+	EditFileEdit,
+	EditFileMeta,
+	EditFileTitleMeta
+} from '#lib/types/index.ts';
+import { tryParseToolResultObject } from '#lib/utils/index.ts';
 
 export function parseEditFileMeta(section: AgenticSection): EditFileMeta | null {
 	const args = parseToolArgs(BuiltInTool.SERVER_EDIT_FILE, section, { partial: true });

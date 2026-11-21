@@ -1,9 +1,9 @@
 <script lang="ts">
 	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { XCircle } from '@lucide/svelte';
-	import { toolsStore } from '$lib/stores';
-	import type { AgenticSection } from '$lib/types';
-	import { abbreviateHome } from '$lib/utils';
+	import { toolsStore } from '#lib/stores/index.ts';
+	import type { AgenticSection } from '#lib/types/index.ts';
+	import { abbreviateHome } from '#lib/utils/index.ts';
 
 	interface Props {
 		section: AgenticSection;
@@ -60,14 +60,14 @@
 	{#snippet children(meta, _ctx)}
 		{#if meta?.errorMessage}
 			<div
-				class="flex items-start gap-2 rounded bg-red-500/10 p-2 text-xs text-red-600 italic dark:text-red-400"
+				class="flex items-start gap-2 rounded bg-surface-danger p-2 text-caption text-fg-danger italic"
 			>
-				<XCircle class="mt-0.5 h-3 w-3 shrink-0" />
+				<XCircle class="mt-0.5 size-icon-xs shrink-0" />
 
 				<span>{meta.errorMessage}</span>
 			</div>
 		{:else if infoMeta.os || infoMeta.cwd}
-			<table class="w-full table-fixed border-collapse text-sm">
+			<table class="w-full table-fixed border-collapse text-body-sm">
 				<colgroup>
 					<col class="w-12" />
 
@@ -78,7 +78,7 @@
 					{#if infoMeta.os}
 						<tr>
 							<th
-								class="py-1 pr-3 text-left align-baseline text-[11px] font-medium tracking-wide text-muted-foreground/60 uppercase"
+								class="py-1 pr-3 text-left align-baseline text-label-sm tracking-wide text-muted-foreground/60 uppercase"
 								scope="row"
 							>
 								os
@@ -95,7 +95,7 @@
 					{#if infoMeta.cwd}
 						<tr>
 							<th
-								class="py-1 pr-3 text-left align-baseline text-[11px] font-medium tracking-wide text-muted-foreground/60 uppercase"
+								class="py-1 pr-3 text-left align-baseline text-label-sm tracking-wide text-muted-foreground/60 uppercase"
 								scope="row"
 							>
 								cwd
@@ -114,11 +114,11 @@
 				</tbody>
 			</table>
 		{:else if section.toolResult}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
+			<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">
 				{section.toolResult}
 			</div>
 		{:else}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
+			<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">
 				Waiting for runtime info...
 			</div>
 		{/if}

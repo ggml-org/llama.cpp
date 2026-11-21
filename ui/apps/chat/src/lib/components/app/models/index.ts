@@ -48,17 +48,19 @@ export { default as ModelCapabilities } from './ModelCapabilities.svelte';
 export { default as ModelContext } from './ModelContext.svelte';
 export { default as ModelId } from './ModelId.svelte';
 export { default as ModelAvatar } from './ModelAvatar.svelte';
-export { default as ModelDownloadProgressBar } from './ModelDownloadProgressBar.svelte';
+export { ModelDownloadProgressBar } from '@ggml-org/llama-ui/models';
 export { default as ModelLoadControl } from './ModelLoadControl.svelte';
 export { default as ModelOrgAvatar } from './ModelOrgAvatar.svelte';
 export { default as ModelRowActions } from './ModelRowActions.svelte';
 export { default as ModelsSection } from './ModelsSection.svelte';
+/** **ModelVoiceRole** - a model's part in voice input (dictation, speech to text, voice), as a badge. */
+export { default as ModelVoiceRole } from './ModelVoiceRole.svelte';
 
 /** Capability and modality icon row, shared by every model-id surface. */
-export { default as ModelCapabilityIcons } from './ModelCapabilityIcons.svelte';
+export { ModelCapabilityIcons } from '@ggml-org/llama-ui/models';
 
 /** Draft sidecar badges, rendered as `+ [KIND] [QUANT]` per sidecar. */
-export { default as ModelDraftSidecars } from './ModelDraftSidecars.svelte';
+export { ModelDraftSidecars } from '@ggml-org/llama-ui/models';
 
 /** Compact draft download line, embedded in the item it belongs to. */
 export { default as ModelDraftSubline } from './ModelDraftSubline.svelte';

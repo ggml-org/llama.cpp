@@ -8,10 +8,10 @@ import {
 	FILE_PATH_SEPARATOR_REGEX,
 	TOOL_ARG_PATH_KEYS,
 	TOOL_ARG_STRING_FIELD_PATTERN_TEMPLATE
-} from '$lib/constants';
-import { BuiltInTool } from '$lib/enums';
-import type { AgenticSection } from '$lib/types/agentic';
-import { parsePartialJsonArgs } from '$lib/utils/parse-partial-json-args';
+} from '#lib/constants/index.ts';
+import { BuiltInTool } from '#lib/enums/index.ts';
+import type { AgenticSection } from '#lib/types/agentic.js';
+import { parsePartialJsonArgs } from '#lib/utils/parse-partial-json-args.ts';
 
 /**
  * Strict (final-state) JSON parser for a tool-args blob. Mirrors the

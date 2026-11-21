@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { parseReadFileMeta } from './parsers/read-file';
 	import ToolCallBlock from './ToolCallBlock.svelte';
-	import { SyntaxHighlightedCode } from '$lib/components/app';
-	import { CODE_BLOCK, MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
-	import type { AgenticSection } from '$lib/types';
+	import { SyntaxHighlightedCode } from '#lib/components/app/index.ts';
+	import { CODE_BLOCK, MAX_HEIGHT_CODE_BLOCK } from '#lib/constants/index.ts';
+	import type { AgenticSection } from '#lib/types/index.ts';
 
 	interface Props {
 		section: AgenticSection;
@@ -42,7 +42,7 @@
 				maxHeight={MAX_HEIGHT_CODE_BLOCK}
 			/>
 		{:else}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
+			<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">
 				Waiting for file content...
 			</div>
 		{/if}

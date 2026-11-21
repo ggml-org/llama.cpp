@@ -1,6 +1,10 @@
 import { getAuthHeaders, getJsonHeaders } from './api-headers';
-import { base } from '$app/paths';
-import { API_ABSOLUTE_URL_PROTOCOLS, ERROR_MESSAGES, HTTP_CODE_TO_STRING } from '$lib/constants';
+import { withBase } from './base-path';
+import {
+	API_ABSOLUTE_URL_PROTOCOLS,
+	ERROR_MESSAGES,
+	HTTP_CODE_TO_STRING
+} from '#lib/constants/index.ts';
 
 /**
  * API Fetch Utilities
@@ -63,7 +67,7 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
 	const baseHeaders = authOnly ? getAuthHeaders() : getJsonHeaders();
 	const headers = { ...baseHeaders, ...customHeaders };
 	// absolute URLs with an allowed protocol pass through untouched; relative paths get the base prefix
-	const url = API_ABSOLUTE_URL_PROTOCOLS.some((p) => path.startsWith(p)) ? path : `${base}${path}`;
+	const url = API_ABSOLUTE_URL_PROTOCOLS.some((p) => path.startsWith(p)) ? path : withBase(path);
 
 	let response;
 
@@ -73,7 +77,7 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
 			headers
 		});
 	} catch (e) {
-		throw new Error(beautifyNetworkError(e));
+		throw new Error(beautifyNetworkError(e), { cause: e });
 	}
 
 	if (!response.ok) {

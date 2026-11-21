@@ -16,9 +16,9 @@ import {
 	READ_MEDIA_AUDIO_MIME,
 	READ_MEDIA_IMAGE_MIME,
 	RESP_TYPE_BASE64
-} from '$lib/constants';
-import { BuiltInTool, ToolResponseField } from '$lib/enums';
-import type { ToolExecutionResult } from '$lib/types';
+} from '#lib/constants/index.ts';
+import { BuiltInTool, ToolResponseField } from '#lib/enums/index.ts';
+import type { ToolExecutionResult } from '#lib/types/index.ts';
 
 /** Modalities of the model the tool call runs for. */
 export interface ReadMediaCapabilities {

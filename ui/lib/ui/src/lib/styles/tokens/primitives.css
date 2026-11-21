@@ -1,0 +1,58 @@
+/*
+ * Tier 1: primitives. Raw values named by what they are, never by where they are used.
+ * Only the token tiers reference these: semantic.css, and components.css where no semantic token fits. A component's
+ * classes never do.
+ *
+ * The brand's own colours come from @ggml-org/llama-brand's css/colors.css, under the same names: the neutral greys
+ * (Tailwind's neutral scale plus four in-between steps), sand for communications, and the artwork colours (the day and
+ * night skies, cinder) with the skies' gradients. An app imports it before theme.css (see there); this file adds what
+ * only the interface needs.
+ *
+ * Colours only. Sizes are not primitives: type and control sizes are roles in semantic.css that hold their value,
+ * corners are one scale computed from --radius in theme.css, and spacing is Tailwind's 4px grid.
+ */
+
+:root {
+	/* cool greys (hue 250) for hairline edges */
+	--cool-gray-100: oklch(0.938 0.004 250);
+	--cool-gray-200: oklch(0.91 0.005 250);
+	--cool-gray-400: oklch(0.81 0.01 250);
+
+	/* red and green: each scale keeps one hue */
+	--red-450: oklch(0.635 0.229 28);
+	--red-550: oklch(0.588 0.236 28);
+	--red-600: oklch(0.55 0.22 27);
+
+	--green-450: oklch(0.756 0.197 147);
+	--green-550: oklch(0.669 0.197 147);
+	--green-650: oklch(0.52 0.17 147);
+
+	/* amber and blue: the warning and info hues, as saturated as the reds and greens */
+	--amber-250: oklch(0.842 0.165 84);
+	--amber-400: oklch(0.752 0.157 78);
+	--amber-650: oklch(0.547 0.116 74);
+
+	--blue-450: oklch(0.67 0.173 256);
+	--blue-550: oklch(0.587 0.177 256);
+	--blue-650: oklch(0.535 0.177 256);
+
+	/* translucent white and black, named by opacity in percent */
+	--white-a2: oklch(1 0 0 / 0.02);
+	--white-a4: oklch(1 0 0 / 0.04);
+	--white-a6: oklch(1 0 0 / 0.06);
+	--white-a9: oklch(1 0 0 / 0.09);
+	--white-a12: oklch(1 0 0 / 0.12);
+	--white-a18: oklch(1 0 0 / 0.18);
+	--white-a20: oklch(1 0 0 / 0.2);
+	--white-a30: oklch(1 0 0 / 0.3);
+	--white-a50: oklch(1 0 0 / 0.5);
+	--white-a85: oklch(1 0 0 / 0.85);
+	--black-a3: oklch(0 0 0 / 0.03);
+	--black-a4: oklch(0 0 0 / 0.04);
+	--black-a5: oklch(0 0 0 / 0.05);
+	--black-a6: oklch(0 0 0 / 0.06);
+	--black-a8: oklch(0 0 0 / 0.08);
+	--black-a40: oklch(0 0 0 / 0.4);
+	--black-a55: oklch(0 0 0 / 0.55);
+
+}

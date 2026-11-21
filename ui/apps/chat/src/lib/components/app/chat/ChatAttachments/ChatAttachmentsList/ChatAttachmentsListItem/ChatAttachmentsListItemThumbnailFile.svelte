@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Music, Video, X } from '@lucide/svelte';
-	import { ActionIcon } from '$lib/components/app';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { AttachmentType } from '$lib/enums';
+	import { ActionIcon } from '#lib/components/app/index.ts';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
+	import { AttachmentType } from '#lib/enums/index.ts';
 	import {
 		formatFileSize,
 		getFileTypeLabel,
@@ -11,7 +11,7 @@
 		isPdfFile,
 		isTextFile,
 		isVideoFile
-	} from '$lib/utils';
+	} from '#lib/utils/index.ts';
 
 	interface Props {
 		attachment?: DatabaseMessageExtra;
@@ -80,7 +80,7 @@
 {#snippet textPreview(content: string)}
 	<div class="relative">
 		<div
-			class="font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-muted-foreground {!readonly
+			class="font-mono text-caption leading-relaxed break-words whitespace-pre-wrap text-muted-foreground {!readonly
 				? 'max-h-3rem line-height-1.2'
 				: ''}"
 		>
@@ -107,7 +107,7 @@
 
 {#snippet fileIcon()}
 	<div
-		class="flex h-8 w-8 items-center justify-center rounded bg-primary/10 text-xs font-medium text-primary"
+		class="flex size-8 items-center justify-center rounded bg-primary/10 text-label-sm text-primary"
 	>
 		{#if isAudio}
 			<Music class="{ICON_CLASS_DEFAULT} text-white/70" />
@@ -121,7 +121,7 @@
 
 {#snippet info(text: string | undefined)}
 	{#if text}
-		<span class="text-xs text-muted-foreground">{text}</span>
+		<span class="text-caption text-muted-foreground">{text}</span>
 	{/if}
 {/snippet}
 
@@ -129,7 +129,7 @@
 	<button
 		aria-label={readonly ? `Preview ${name}` : undefined}
 		class="rounded-lg border border-border bg-muted p-3 {className} cursor-pointer {readonly
-			? 'w-full max-w-2xl transition-shadow hover:shadow-md'
+			? 'w-full max-w-2xl transition-shadow hover:shadow-(--elevation-surface)'
 			: `group relative text-left ${textContent ? 'max-h-24 max-w-72' : 'max-w-36'}`} overflow-hidden"
 		{onclick}
 		type="button"
@@ -142,7 +142,7 @@
 			{#if readonly}
 				<div class="flex items-start gap-3">
 					<div class="flex min-w-0 flex-1 flex-col items-start text-left">
-						<span class="w-full truncate text-sm font-medium text-foreground">{name}</span>
+						<span class="w-full truncate text-label text-foreground">{name}</span>
 
 						{@render info(pdfProcessingMode || (size ? formatFileSize(size) : undefined))}
 
@@ -152,7 +152,7 @@
 					</div>
 				</div>
 			{:else}
-				<span class="mb-3 block truncate text-sm font-medium text-foreground">{name}</span>
+				<span class="mb-3 block truncate text-label text-foreground">{name}</span>
 
 				{#if textContent}
 					{@render textPreview(textContent)}
@@ -170,7 +170,7 @@
 
 		<div class="flex flex-col items-start gap-0.5">
 			<span
-				class="max-w-24 truncate text-sm font-medium text-foreground {readonly
+				class="max-w-24 truncate text-label text-foreground {readonly
 					? ''
 					: 'group-hover:pr-6'} md:max-w-32"
 			>

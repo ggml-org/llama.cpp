@@ -10,10 +10,10 @@ import {
 	fileNameFromPath,
 	parseToolArgs
 } from './_shared';
-import { CODE_BLOCK, TOOL_ARG_PATH_KEYS } from '$lib/constants';
-import { BuiltInTool } from '$lib/enums';
-import type { AgenticSection, WriteFileMeta, WriteFileTitleMeta } from '$lib/types';
-import { getFileTypeByExtension, tryParseToolResultObject } from '$lib/utils';
+import { CODE_BLOCK, TOOL_ARG_PATH_KEYS } from '#lib/constants/index.ts';
+import { BuiltInTool } from '#lib/enums/index.ts';
+import type { AgenticSection, WriteFileMeta, WriteFileTitleMeta } from '#lib/types/index.ts';
+import { getFileTypeByExtension, tryParseToolResultObject } from '#lib/utils/index.ts';
 
 // Plain text when the call carries no path, or one with no known extension.
 function languageForPath(filePath: string | undefined): string {

@@ -1,9 +1,15 @@
 <script lang="ts">
 	import ModelsManagerModelConfiguration from './ModelsManagerModelConfiguration/ModelsManagerModelConfiguration.svelte';
 	import { downloadGroups, findModelOption } from './utils';
-	import * as Drawer from '$lib/components/ui/drawer';
-	import { conversationsStore, deviceStore, modelsStore, serverStore, uiStore } from '$lib/stores';
-	import type { ModelOption } from '$lib/types/models';
+	import * as Drawer from '@ggml-org/llama-ui/ui/drawer';
+	import {
+		conversationsStore,
+		deviceStore,
+		modelsStore,
+		serverStore,
+		uiStore
+	} from '#lib/stores/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
 	import { untrack } from 'svelte';
 
 	// tracked downloads are not in the listing yet
@@ -138,7 +144,7 @@
 	shouldScaleBackground={false}
 >
 	<Drawer.Content
-		class="data-[vaul-drawer-direction=bottom]:h-[85dvh] data-[vaul-drawer-direction=bottom]:max-h-[85dvh] data-[vaul-drawer-direction=right]:w-[30rem] data-[vaul-drawer-direction=right]:max-w-[calc(100vw-2rem)] data-[vaul-drawer-direction=right]:sm:max-w-[30rem]"
+		class="data-[vaul-drawer-direction=bottom]:h-[85dvh] data-[vaul-drawer-direction=bottom]:max-h-[85dvh] data-[vaul-drawer-direction=right]:w-120 data-[vaul-drawer-direction=right]:max-w-[calc(100vw-2rem)] data-[vaul-drawer-direction=right]:sm:max-w-120"
 	>
 		<Drawer.Title class="sr-only">Model details</Drawer.Title>
 

@@ -2,8 +2,8 @@ import {
 	TRAILING_SLASHES_REGEX,
 	TWO_PART_PUBLIC_SUFFIXES,
 	WILDCARD_PUBLIC_SUFFIXES
-} from '$lib/constants';
-import { UrlProtocol } from '$lib/enums';
+} from '#lib/constants/index.ts';
+import { UrlProtocol } from '#lib/enums/index.ts';
 
 /**
  * Check whether a hostname looks like an IPv4 or IPv6 address.

@@ -1,10 +1,10 @@
 <script lang="ts">
-	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { ScrollArea } from '$lib/components/ui/scroll-area';
-	import { UI_DATA_ATTRS } from '$lib/constants';
-	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
+	import { SearchInput } from '@ggml-org/llama-ui/app/forms';
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import { Checkbox } from '@ggml-org/llama-ui/ui/checkbox';
+	import { ScrollArea } from '@ggml-org/llama-ui/ui/scroll-area';
+	import { UI_DATA_ATTRS } from '#lib/constants/index.ts';
+	import { useMarqueeSelection } from '#lib/hooks/use-marquee-selection.svelte.ts';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
@@ -93,7 +93,7 @@
 <div class="space-y-4">
 	<SearchInput bind:value={searchQuery} placeholder="Search conversations..." />
 
-	<div class="flex items-center justify-between text-sm text-muted-foreground">
+	<div class="flex items-center justify-between text-body-sm text-muted-foreground">
 		<span>
 			{selectedIds.size} of {conversations.length} selected
 			{#if searchQuery}
@@ -115,16 +115,16 @@
 							/>
 						</th>
 
-						<th class="p-3 text-left text-sm font-medium">Conversation Name</th>
+						<th class="p-3 text-left text-label">Conversation Name</th>
 
-						<th class="w-32 p-3 text-left text-sm font-medium">Messages</th>
+						<th class="w-32 p-3 text-left text-label">Messages</th>
 					</tr>
 				</thead>
 
 				<tbody>
 					{#if filteredConversations.length === 0}
 						<tr>
-							<td class="p-8 text-center text-sm text-muted-foreground" colspan="3">
+							<td class="p-8 text-center text-body-sm text-muted-foreground" colspan="3">
 								{#if searchQuery}
 									No conversations found matching "{searchQuery}"
 								{:else}
@@ -154,13 +154,13 @@
 									/>
 								</td>
 
-								<td class="p-3 text-sm">
+								<td class="p-3 text-body-sm">
 									<div class="max-w-68 truncate" title={conv.name || 'Untitled conversation'}>
 										{conv.name || 'Untitled conversation'}
 									</div>
 								</td>
 
-								<td class="p-3 text-sm text-muted-foreground">
+								<td class="p-3 text-body-sm text-muted-foreground">
 									{messageCountMap.get(conv.id) ?? 0}
 								</td>
 							</tr>

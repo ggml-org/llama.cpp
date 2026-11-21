@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import { RefreshCw } from '@lucide/svelte';
 	import {
 		SettingsChatDesktopSidebar,
@@ -6,20 +7,21 @@
 		SettingsChatImportExportTab,
 		SettingsChatMobileHeader,
 		SettingsChatToolsTab,
+		SettingsChatVoiceTab,
 		SettingsFooter,
 		SettingsResetButton
-	} from '$lib/components/app/settings';
-	import { Button } from '$lib/components/ui/button';
+	} from '#lib/components/app/settings/index.ts';
 	import {
 		NUMERIC_FIELDS,
 		POSITIVE_INTEGER_FIELDS,
 		SETTINGS_CHAT_SECTIONS,
 		SETTINGS_KEYS,
 		SETTINGS_SECTION_SLUGS
-	} from '$lib/constants';
-	import { ColorMode } from '$lib/enums/ui.enums';
-	import { modelsStore, serverStore, settingsStore } from '$lib/stores';
-	import type { SettingsSection, SettingsSectionTitle } from '$lib/types';
+	} from '#lib/constants/index.ts';
+	import { ColorMode } from '#lib/enums/ui.enums.ts';
+	import { modelsStore, serverStore, settingsStore } from '#lib/stores/index.ts';
+	import type { SettingsSection, SettingsSectionTitle } from '#lib/types/index.ts';
+	import { applySurfaceTheme } from '#lib/utils/index.ts';
 	import { setMode } from 'mode-watcher';
 	import { fade } from 'svelte/transition';
 	interface Props {
@@ -89,16 +91,24 @@
 	function handleConfigChange(key: string, value: string | boolean) {
 		localConfig[key] = value;
 
+		// the surface theme previews at once, like the colour theme
+		if (key === SETTINGS_KEYS.SURFACE_THEME) applySurfaceTheme(value);
+
 		// discover needs the hub metadata reads: checking it turns the hub on,
 		// unchecking it turns the hub back off, so the checkbox never lies
 		if (key === SETTINGS_KEYS.ENABLE_DISCOVER_MODELS) {
 			localConfig[SETTINGS_KEYS.USE_HUGGING_FACE_HUB] = value === true;
+
+			// it opens from the Models page, so checking it shows Models too; unchecking it
+			// leaves Models as it is, since Models is useful without it
+			if (value === true) localConfig[SETTINGS_KEYS.SHOW_MODELS_MANAGER] = true;
 		}
 	}
 
 	function handleReset() {
 		localConfig = { ...settingsStore.config };
 		setMode(localConfig.theme as ColorMode);
+		applySurfaceTheme(localConfig[SETTINGS_KEYS.SURFACE_THEME]);
 		mobileHeader?.updateCarousel();
 	}
 
@@ -153,7 +163,7 @@
 	}
 </script>
 
-<div in:fade={{ duration: 150 }} class="mx-auto flex h-full w-full flex-col">
+<div in:fade={{ duration: 150 }} class="mx-auto flex size-full flex-col">
 	<div class="flex flex-1 flex-col md:flex-row md:gap-4">
 		<SettingsChatDesktopSidebar
 			isActive={(section: SettingsSection) => section.slug === activeSlug}
@@ -176,6 +186,12 @@
 						<SettingsChatToolsTab />
 					{:else if currentSection.slug === SETTINGS_SECTION_SLUGS.IMPORT_EXPORT}
 						<SettingsChatImportExportTab />
+					{:else if currentSection.slug === SETTINGS_SECTION_SLUGS.VOICE && currentSection.fields}
+						<SettingsChatVoiceTab
+							fields={currentSection.fields}
+							{localConfig}
+							onConfigChange={handleConfigChange}
+						/>
 					{:else if currentSection.fields}
 						<div class="space-y-6">
 							<SettingsChatFields
@@ -190,7 +206,7 @@
 									<SettingsResetButton onReset={handleReset} />
 
 									<Button onclick={() => window.location.reload()} variant="outline">
-										<RefreshCw class="h-3 w-3" />
+										<RefreshCw class="size-icon-md" />
 										Reload app
 									</Button>
 								</div>
@@ -200,7 +216,9 @@
 				</div>
 
 				<div class="mt-8 border-t border-border/30 pt-6 pb-6">
-					<p class="text-xs text-muted-foreground">Settings are saved in browser's localStorage</p>
+					<p class="text-caption text-muted-foreground">
+						Settings are saved in browser's localStorage
+					</p>
 				</div>
 			</div>
 

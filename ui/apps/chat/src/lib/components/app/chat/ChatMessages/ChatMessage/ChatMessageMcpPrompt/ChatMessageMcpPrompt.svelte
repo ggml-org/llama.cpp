@@ -3,10 +3,10 @@
 		ChatMessageActionIcons,
 		ChatMessageEditForm,
 		ChatMessageMcpPromptContent
-	} from '$lib/components/app';
-	import { getChatMessageEditContext } from '$lib/contexts';
-	import { McpPromptVariant } from '$lib/enums';
-	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
+	} from '#lib/components/app/index.ts';
+	import { getChatMessageEditContext } from '#lib/contexts/index.ts';
+	import { McpPromptVariant } from '#lib/enums/index.ts';
+	import type { DatabaseMessageExtraMcpPrompt } from '#lib/types/index.ts';
 
 	interface Props {
 		class?: string;
@@ -29,13 +29,13 @@
 		<ChatMessageEditForm />
 	{:else}
 		<ChatMessageMcpPromptContent
-			class="w-full max-w-[80%]"
+			class="w-full max-w-4/5"
 			prompt={mcpPrompt}
 			variant={McpPromptVariant.MESSAGE}
 		/>
 
 		{#if message.timestamp}
-			<div class="max-w-[80%]">
+			<div class="max-w-4/5">
 				<ChatMessageActionIcons actionsPosition="right" justify="end" />
 			</div>
 		{/if}

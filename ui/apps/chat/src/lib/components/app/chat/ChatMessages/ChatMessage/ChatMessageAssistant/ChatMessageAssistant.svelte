@@ -8,13 +8,13 @@
 		ChatMessageAssistantStatistics,
 		ChatMessageContextMenu,
 		ChatMessageEditForm
-	} from '$lib/components/app';
-	import { getChatMessageEditContext } from '$lib/contexts';
-	import { MessageRole } from '$lib/enums';
-	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { chatStore, modelsStore, serverStore, settingsStore } from '$lib/stores';
-	import { modelLoadProgressText } from '$lib/utils';
-	import { hasAgenticContent } from '$lib/utils';
+	} from '#lib/components/app/index.ts';
+	import { getChatMessageEditContext } from '#lib/contexts/index.ts';
+	import { MessageRole } from '#lib/enums/index.ts';
+	import { useProcessingState } from '#lib/hooks/use-processing-state.svelte.ts';
+	import { chatStore, modelsStore, serverStore, settingsStore } from '#lib/stores/index.ts';
+	import { modelLoadProgressText } from '#lib/utils/index.ts';
+	import { hasAgenticContent } from '#lib/utils/index.ts';
 
 	interface Props {
 		class?: string;
@@ -199,7 +199,7 @@
 
 	{#if displayedModel}
 		<div class="info my-6 grid gap-4 tabular-nums">
-			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
+			<div class="inline-flex flex-wrap items-start gap-2 text-caption text-muted-foreground">
 				<ChatMessageAssistantModel
 					{displayedModel}
 					isLoading={chatStore.isLoading}

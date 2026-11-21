@@ -4,9 +4,9 @@
 		ChatAttachmentsPreviewFileInfo,
 		ChatAttachmentsPreviewNavButtons,
 		ChatAttachmentsPreviewThumbnailStrip
-	} from '$lib/components/app';
-	import { UI_DATA_ATTRS } from '$lib/constants';
-	import { modelsStore } from '$lib/stores';
+	} from '#lib/components/app/index.ts';
+	import { UI_DATA_ATTRS } from '#lib/constants/index.ts';
+	import { modelsStore } from '#lib/stores/index.ts';
 	import {
 		createBase64DataUrl,
 		formatFileSize,
@@ -19,7 +19,7 @@
 		isPdfFile,
 		isTextFile,
 		isVideoFile
-	} from '$lib/utils';
+	} from '#lib/utils/index.ts';
 
 	interface PreviewItem {
 		id: string;
@@ -189,7 +189,7 @@
 	<div class="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden">
 		<ChatAttachmentsPreviewNavButtons onNext={next} onPrev={prev} show={allItems.length > 1} />
 
-		<div class="flex h-full w-full flex-col items-center justify-start overflow-auto py-4">
+		<div class="flex size-full flex-col items-center justify-start overflow-auto py-4">
 			{#if currentItem}
 				<ChatAttachmentsPreviewFileInfo {displayName} {fileSize} />
 

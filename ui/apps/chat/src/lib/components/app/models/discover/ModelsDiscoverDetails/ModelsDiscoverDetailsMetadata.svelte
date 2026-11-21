@@ -1,11 +1,11 @@
 <script lang="ts">
 	import ModelsDiscoverChatTemplateDialog from './ModelsDiscoverChatTemplateDialog.svelte';
 	import ModelsDiscoverDetailsMetadataItem from './ModelsDiscoverDetailsMetadataItem.svelte';
+	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import { MessageSquareCode } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { modelsDiscoverStore } from '$lib/stores';
-	import type { HfModelDetailInfo, HfModelGguf } from '$lib/types/huggingface';
-	import { formatParameters } from '$lib/utils';
+	import { modelsDiscoverStore } from '#lib/stores/index.ts';
+	import type { HfModelDetailInfo, HfModelGguf } from '#lib/types/huggingface.js';
+	import { formatParameters } from '#lib/utils/index.ts';
 
 	interface Props {
 		/** Full HuggingFace model id, e.g. `ggml-org/gemma-3-4b-it-GGUF`. */
@@ -26,7 +26,7 @@
 </script>
 
 {#if description}
-	<p class="text-sm text-muted-foreground">{description}</p>
+	<p class="text-body-sm text-muted-foreground">{description}</p>
 {/if}
 
 <!-- Metadata chips: label | value pairs, matching the HF model page style -->
@@ -51,10 +51,10 @@
 
 	{#if gguf?.chat_template}
 		<Button
-			class="h-auto gap-1.5 px-2.5 py-1 text-xs"
+			class="h-auto gap-1.5 px-2.5 py-1 text-caption"
 			onclick={() => (chatTemplateOpen = true)}
 			size="sm"
-			variant="tertiary"
+			variant="secondary"
 		>
 			<MessageSquareCode class="size-3" />
 			Chat template
@@ -67,7 +67,7 @@
 
 	{#if details.gated === true}
 		<span
-			class="rounded bg-yellow-500/10 px-2 py-0.5 text-xs font-medium text-yellow-600 dark:text-yellow-400"
+			class="rounded bg-yellow-500/10 px-2 py-0.5 text-label-sm text-yellow-600 dark:text-yellow-400"
 		>
 			gated
 		</span>

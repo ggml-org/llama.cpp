@@ -270,6 +270,14 @@ static void ifft(const mtmd_audio_cache & cache, float * in, int N, float * out)
     fft_impl<true, false>(cache, in, N, out);
 }
 
+void mtmd_audio_fft(const mtmd_audio_cache & cache, float * in, int N, float * out) {
+    fft(cache, in, N, out);
+}
+
+void mtmd_audio_ifft(const mtmd_audio_cache & cache, float * in, int N, float * out) {
+    ifft(cache, in, N, out);
+}
+
 static void mtmd_audio_fill_entries(std::vector<mtmd_audio_mel> & mels, bool shape_only, std::vector<mtmd_image_f32> & entries) {
     entries.clear();
     for (auto & mel : mels) {
@@ -2242,11 +2250,11 @@ bool mtmd_audio_preprocessor_pockettts::process(const float *                 sa
     return true;
 }
 
-bool mtmd_audio_preprocessor_fish_s2::process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const {
-    const size_t max_samples = (size_t) mtmd_hparams::fish_s2_max_spk_seconds * hparams.audio_sample_rate;
+bool mtmd_audio_preprocessor_spk_ref::process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const {
+    const size_t max_samples = (size_t) max_seconds * hparams.audio_sample_rate;
     if (n_samples > max_samples) {
         LOG_WRN("%s: speaker reference is %.1f s, truncating to the first %d s\n", __func__,
-                (double) n_samples / hparams.audio_sample_rate, mtmd_hparams::fish_s2_max_spk_seconds);
+                (double) n_samples / hparams.audio_sample_rate, max_seconds);
         n_samples = max_samples;
     }
     return mtmd_audio_preprocessor_muse_spark_audio::process(samples, n_samples, output, shape_only);

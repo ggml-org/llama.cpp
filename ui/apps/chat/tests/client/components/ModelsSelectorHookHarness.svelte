@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
+	import { useModelsSelector } from '#lib/hooks/use-models-selector.svelte.ts';
 
 	interface Props {
 		currentModel?: () => string | null;

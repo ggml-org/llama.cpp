@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { ModelBadge, ModelsSelector } from '$lib/components/app';
-	import { ServerModelStatus } from '$lib/enums';
-	import { modelsStore } from '$lib/stores';
-	import { copyToClipboard } from '$lib/utils';
+	import { ModelBadge, ModelsSelector } from '#lib/components/app/index.ts';
+	import { ServerModelStatus } from '#lib/enums/index.ts';
+	import { modelsStore } from '#lib/stores/index.ts';
+	import { copyToClipboard } from '#lib/utils/index.ts';
 
 	interface Props {
 		displayedModel: string | null;

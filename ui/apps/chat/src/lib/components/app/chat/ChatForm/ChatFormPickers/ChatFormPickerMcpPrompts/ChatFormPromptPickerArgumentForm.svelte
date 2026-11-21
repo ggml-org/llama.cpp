@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ChatFormPromptPickerArgumentInput from './ChatFormPromptPickerArgumentInput.svelte';
-	import { Button } from '$lib/components/ui/button';
-	import type { MCPPromptInfo } from '$lib/types';
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import type { MCPPromptInfo } from '#lib/types/index.ts';
 
 	interface Props {
 		prompt: MCPPromptInfo;
@@ -57,7 +57,7 @@
 
 	{#if promptError}
 		<div
-			class="flex items-start gap-2 rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+			class="flex items-start gap-2 rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-body-sm text-destructive"
 			role="alert"
 		>
 			<span class="shrink-0">⚠</span>
@@ -67,7 +67,7 @@
 	{/if}
 
 	<div class="mt-8 flex justify-end gap-2">
-		<Button onclick={onCancel} size="sm" type="button" variant="secondary">Cancel</Button>
+		<Button onclick={onCancel} size="sm" type="button" variant="outline">Cancel</Button>
 
 		<Button size="sm" type="submit">Use Prompt</Button>
 	</div>

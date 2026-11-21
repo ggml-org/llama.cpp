@@ -8,9 +8,9 @@
  * fetching model props from the server on demand if they are not cached yet.
  */
 
-import { conversationsStore, modelsStore, serverStore } from '$lib/stores';
-import type { DatabaseMessage } from '$lib/types/database';
-import { getConversationModel } from '$lib/utils';
+import { conversationsStore, modelsStore, serverStore } from '#lib/stores/index.ts';
+import type { DatabaseMessage } from '#lib/types/database.js';
+import { getConversationModel } from '#lib/utils/index.ts';
 
 export function useChatFormModel() {
 	const isRouter = $derived(serverStore.isRouterMode);

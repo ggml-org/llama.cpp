@@ -9,9 +9,9 @@ import {
 	MERMAID_BLOCK_CLASS,
 	MERMAID_SYNTAX_ATTR,
 	MERMAID_WRAPPER_CLASS
-} from '$lib/constants';
-import { BooleanString } from '$lib/enums';
-import { copyCodeToClipboard, copyToClipboard } from '$lib/utils';
+} from '#lib/constants/index.ts';
+import { BooleanString } from '#lib/enums/index.ts';
+import { copyCodeToClipboard, copyToClipboard } from '#lib/utils/index.ts';
 
 export interface PreviewState {
 	previewDialogOpen: boolean;

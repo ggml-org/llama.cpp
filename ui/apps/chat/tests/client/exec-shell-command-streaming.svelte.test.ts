@@ -4,12 +4,12 @@
 // while the args are incomplete, and the conversation cwd standing in
 // for the x-tool-cwd value that only arrives with the result message.
 
-import ChatMessageToolCallBlockExecShellCommand from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlockExecShellCommand.svelte';
-import ChatMessageAgenticContent from '$lib/components/app/chat/ChatMessages/ChatMessageAgenticContent.svelte';
-import { SETTINGS_KEYS } from '$lib/constants';
-import { AgenticSectionType, BuiltInTool, MessageRole, MessageType } from '$lib/enums';
-import { conversationsStore, settingsStore } from '$lib/stores';
-import type { AgenticSection, DatabaseMessage } from '$lib/types';
+import ChatMessageToolCallBlockExecShellCommand from '#lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlockExecShellCommand.svelte';
+import ChatMessageAgenticContent from '#lib/components/app/chat/ChatMessages/ChatMessageAgenticContent.svelte';
+import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+import { AgenticSectionType, BuiltInTool, MessageRole, MessageType } from '#lib/enums/index.ts';
+import { conversationsStore, settingsStore } from '#lib/stores/index.ts';
+import type { AgenticSection, DatabaseMessage } from '#lib/types/index.ts';
 import { tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-svelte';

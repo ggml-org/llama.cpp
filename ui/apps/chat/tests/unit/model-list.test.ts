@@ -1,10 +1,10 @@
-import type { ModelOption } from '$lib/types/models';
+import type { ModelOption } from '#lib/types/models.js';
 import {
 	filterModelOptions,
 	type GroupedModelOptions,
 	groupModelOptions,
 	windowLocalGroups
-} from '$lib/utils/model-list';
+} from '#lib/utils/model-list.ts';
 import { describe, expect, it } from 'vitest';
 
 function option(model: string, orgName: string | null = null): ModelOption {

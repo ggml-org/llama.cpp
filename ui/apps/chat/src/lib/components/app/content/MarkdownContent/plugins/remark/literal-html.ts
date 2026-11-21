@@ -1,7 +1,14 @@
-import { LINE_BREAK, NBSP, PHRASE_PARENTS, TAB_AS_SPACES } from '$lib/constants';
+import { LINE_BREAK, NBSP, PHRASE_PARENTS, TAB_AS_SPACES } from '#lib/constants/index.ts';
 import type { Break, Content, Paragraph, PhrasingContent, Root, Text } from 'mdast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
+
+// Marks a paragraph the plugin created around literal HTML, so adjacent ones merge
+declare module 'mdast' {
+	interface ParagraphData {
+		literalHtml?: boolean;
+	}
+}
 
 /**
  * remark plugin that rewrites raw HTML nodes into plain-text equivalents.

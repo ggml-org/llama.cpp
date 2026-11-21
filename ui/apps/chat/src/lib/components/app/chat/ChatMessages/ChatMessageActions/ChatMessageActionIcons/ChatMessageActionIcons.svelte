@@ -1,16 +1,16 @@
 <script lang="ts">
+	import { Checkbox } from '@ggml-org/llama-ui/ui/checkbox';
+	import { Input } from '@ggml-org/llama-ui/ui/input';
+	import { Label } from '@ggml-org/llama-ui/ui/label';
+	import { Switch } from '@ggml-org/llama-ui/ui/switch';
 	import { ArrowRight, Copy, Edit, GitBranch, RefreshCw, Trash2 } from '@lucide/svelte';
 	import {
 		ActionIcon,
 		ChatMessageActionIconsBranchingControls,
 		DialogConfirmation
-	} from '$lib/components/app';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import Input from '$lib/components/ui/input/input.svelte';
-	import Label from '$lib/components/ui/label/label.svelte';
-	import { Switch } from '$lib/components/ui/switch';
-	import { getChatMessageActionsContext, getChatMessageEditContext } from '$lib/contexts';
-	import { conversationsStore } from '$lib/stores';
+	} from '#lib/components/app/index.ts';
+	import { getChatMessageActionsContext, getChatMessageEditContext } from '#lib/contexts/index.ts';
+	import { conversationsStore } from '#lib/stores/index.ts';
 	import { untrack } from 'svelte';
 
 	interface Props {
@@ -103,7 +103,7 @@
 
 	{#if showRawOutputSwitch}
 		<div class="flex items-center gap-2">
-			<span class="text-xs text-muted-foreground">Show raw output</span>
+			<span class="text-caption text-muted-foreground">Show raw output</span>
 
 			<Switch
 				checked={rawOutputEnabled}
@@ -161,7 +161,7 @@
 				}}
 			/>
 
-			<Label class="cursor-pointer text-sm font-normal" for="fork-attachments">
+			<Label class="cursor-pointer text-body-sm font-normal" for="fork-attachments">
 				Include all attachments
 			</Label>
 		</div>

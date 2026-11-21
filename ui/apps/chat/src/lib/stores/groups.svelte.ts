@@ -6,14 +6,14 @@
  * change to the loaded list.
  */
 
-import { browser } from '$app/environment';
-import { GROUP_NAME_MAX_LENGTH, SIDEBAR_SECTION_IDS } from '$lib/constants';
-import { DatabaseService } from '$lib/services/database.service';
+import { GROUP_NAME_MAX_LENGTH, SIDEBAR_SECTION_IDS } from '#lib/constants/index.ts';
+import { DatabaseService } from '#lib/services/database.service.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { conversationsStore } from '$lib/stores/conversations/index.svelte';
-import { uiStore } from '$lib/stores/ui.svelte';
-import type { DatabaseConversation, Group } from '$lib/types';
-import { uuid } from '$lib/utils';
+import { conversationsStore } from '#lib/stores/conversations/index.svelte.ts';
+import { uiStore } from '#lib/stores/ui.svelte.ts';
+import type { DatabaseConversation, Group } from '#lib/types/index.ts';
+import { uuid } from '#lib/utils/index.ts';
+import { browser } from '$app/env';
 
 function normalizeName(name: string): string {
 	return name.trim().slice(0, GROUP_NAME_MAX_LENGTH);

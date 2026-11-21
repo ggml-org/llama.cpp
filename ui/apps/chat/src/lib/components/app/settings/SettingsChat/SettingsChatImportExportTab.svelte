@@ -5,12 +5,12 @@
 		DialogConfirmation,
 		DialogConversationSelection,
 		DialogExportSettings
-	} from '$lib/components/app';
-	import SettingsGroup from '$lib/components/app/settings/SettingsGroup.svelte';
-	import { ConversationSelectionMode, FileExtensionText, HtmlInputType } from '$lib/enums';
-	import { ConversationTransferService } from '$lib/services';
-	import { conversationsStore, groupsStore, settingsStore } from '$lib/stores';
-	import { createMessageCountMap } from '$lib/utils';
+	} from '#lib/components/app/index.ts';
+	import SettingsGroup from '#lib/components/app/settings/SettingsGroup.svelte';
+	import { ConversationSelectionMode, FileExtensionText, HtmlInputType } from '#lib/enums/index.ts';
+	import { ConversationTransferService } from '#lib/services/index.ts';
+	import { conversationsStore, groupsStore, settingsStore } from '#lib/stores/index.ts';
+	import { createMessageCountMap } from '#lib/utils/index.ts';
 	import { fade } from 'svelte/transition';
 	import { toast } from 'svelte-sonner';
 
@@ -282,7 +282,7 @@
 
 		<SettingsChatImportExportSection
 			IconComponent={Trash2}
-			buttonClass="text-destructive-foreground justify-start justify-self-start bg-destructive hover:bg-destructive/80 md:w-auto"
+			buttonClass="justify-start justify-self-start md:w-auto"
 			buttonText="Delete all conversations"
 			buttonVariant="destructive"
 			description="Permanently delete all conversations and their messages. This action cannot be undone. Consider exporting your conversations first if you want to keep a backup."

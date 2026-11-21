@@ -1,4 +1,4 @@
-import { tryParseToolResultObject } from '$lib/utils';
+import { tryParseToolResultObject } from '#lib/utils/index.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('tryParseToolResultObject', () => {

@@ -1,4 +1,4 @@
-import { groupModelFamilies, modelFamilyKey } from '$lib/utils/model-families';
+import { groupModelFamilies, modelFamilyKey } from '#lib/utils/model-families.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('modelFamilyKey', () => {

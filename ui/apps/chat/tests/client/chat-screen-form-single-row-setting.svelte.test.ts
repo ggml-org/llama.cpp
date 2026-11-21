@@ -2,8 +2,8 @@
 // it leaves a one-line message on the two rows.
 
 import ChatScreenFormTestWrapper from './components/ChatScreenFormTestWrapper.svelte';
-import { SETTINGS_KEYS } from '$lib/constants';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
+import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
 import { tick } from 'svelte';
 import { afterEach, describe, expect, it } from 'vitest';
 import { page } from 'vitest/browser';

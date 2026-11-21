@@ -1,4 +1,4 @@
-import { AttachmentType } from '$lib/enums';
+import { AttachmentType } from '#lib/enums/index.ts';
 import type {
 	ClipboardAttachment,
 	ClipboardMcpPromptAttachment,
@@ -9,7 +9,7 @@ import type {
 	DatabaseMessageExtraMcpResource,
 	DatabaseMessageExtraTextFile,
 	ParsedClipboardContent
-} from '$lib/types';
+} from '#lib/types/index.ts';
 import { toast } from 'svelte-sonner';
 
 /**
@@ -110,6 +110,16 @@ export function formatMessageForClipboard(
 	extras?: DatabaseMessageExtra[],
 	asPlainText: boolean = false
 ): string {
+	// what was said in a voice message reads as the message's text
+	const transcripts =
+		extras?.flatMap((extra) =>
+			extra.type === AttachmentType.AUDIO && extra.transcript ? [extra.transcript] : []
+		) ?? [];
+
+	if (transcripts.length > 0) {
+		content = [...transcripts, content].filter((part) => part.trim()).join('\n\n');
+	}
+
 	// Filter text-like attachments (TEXT, LEGACY_CONTEXT, MCP_PROMPT, and MCP_RESOURCE types)
 	const textAttachments =
 		extras?.filter(

@@ -7,21 +7,19 @@
 // (see ChatMessageToolCallBlockGetDatetime and
 // ChatMessageToolCallBlockSearchResults for prior art).
 
-import {
-	Braces,
-	Clock,
-	Eye,
-	FilePen,
-	FilePlus,
-	FileSearch,
-	FileText,
-	Info,
-	MessagesSquare,
-	SearchCode,
-	Terminal
-} from '@lucide/svelte';
-import { BuiltInTool, ToolSource } from '$lib/enums';
-import type { ToolUiEntry } from '$lib/types';
+import Braces from '@lucide/svelte/icons/braces';
+import Clock from '@lucide/svelte/icons/clock';
+import Eye from '@lucide/svelte/icons/eye';
+import FilePen from '@lucide/svelte/icons/file-pen';
+import FilePlus from '@lucide/svelte/icons/file-plus';
+import FileSearch from '@lucide/svelte/icons/file-search';
+import FileText from '@lucide/svelte/icons/file-text';
+import Info from '@lucide/svelte/icons/info';
+import MessagesSquare from '@lucide/svelte/icons/messages-square';
+import SearchCode from '@lucide/svelte/icons/search-code';
+import Terminal from '@lucide/svelte/icons/terminal';
+import { BuiltInTool, ToolSource } from '#lib/enums/index.ts';
+import type { ToolUiEntry } from '#lib/types/index.ts';
 
 export const TOOL_UI: Readonly<Record<BuiltInTool, ToolUiEntry>> = {
 	[BuiltInTool.BROWSER_GET_DATETIME]: {

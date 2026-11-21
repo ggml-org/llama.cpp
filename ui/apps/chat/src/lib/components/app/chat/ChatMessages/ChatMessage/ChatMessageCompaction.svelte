@@ -6,13 +6,13 @@
 		ChatMessageEditForm,
 		CollapsibleContentBlock,
 		MarkdownContent
-	} from '$lib/components/app';
-	import { COLLAPSIBLE_TRANSITION_MS } from '$lib/constants';
-	import { getChatMessageEditContext } from '$lib/contexts';
-	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { chatStore, conversationsStore, settingsStore } from '$lib/stores';
-	import type { DatabaseMessage } from '$lib/types';
-	import { compactionTokensBefore, formatNumber } from '$lib/utils';
+	} from '#lib/components/app/index.ts';
+	import { COLLAPSIBLE_TRANSITION_MS } from '#lib/constants/index.ts';
+	import { getChatMessageEditContext } from '#lib/contexts/index.ts';
+	import { useProcessingState } from '#lib/hooks/use-processing-state.svelte.ts';
+	import { chatStore, conversationsStore, settingsStore } from '#lib/stores/index.ts';
+	import type { DatabaseMessage } from '#lib/types/index.ts';
+	import { compactionTokensBefore, formatNumber } from '#lib/utils/index.ts';
 
 	interface Props {
 		class?: string;
@@ -126,7 +126,7 @@
 			collapsible={hasContent}
 			flushBody
 			icon={isSummarizing ? Loader2 : FoldVertical}
-			iconClass={isSummarizing ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'}
+			iconClass={isSummarizing ? 'size-icon-sm animate-spin' : 'size-icon-sm'}
 			onToggle={handleToggle}
 			shimmerTitle={isSummarizing || !hasContent}
 			{title}

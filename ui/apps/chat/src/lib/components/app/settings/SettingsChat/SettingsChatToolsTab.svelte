@@ -1,12 +1,12 @@
 <script lang="ts">
+	import { Checkbox } from '@ggml-org/llama-ui/ui/checkbox';
+	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
 	import { ChevronDown, ChevronRight } from '@lucide/svelte';
-	import { McpServerIdentity, TruncatedText } from '$lib/components/app';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import * as Collapsible from '$lib/components/ui/collapsible';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { ToolSource } from '$lib/enums/tools.enums';
-	import { conversationsStore, mcpStore, permissionsStore, toolsStore } from '$lib/stores';
-	import { getToolUi } from '$lib/utils';
+	import { McpServerIdentity, TruncatedText } from '#lib/components/app/index.ts';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
+	import { ToolSource } from '#lib/enums/tools.enums.ts';
+	import { conversationsStore, mcpStore, permissionsStore, toolsStore } from '#lib/stores/index.ts';
+	import { getToolUi } from '#lib/utils/index.ts';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	let expandedGroups = new SvelteSet<string>();
@@ -22,10 +22,10 @@
 </script>
 
 {#if groups.length === 0}
-	<div class="py-8 text-center text-sm text-muted-foreground">No tools available</div>
+	<div class="py-8 text-center text-body-sm text-muted-foreground">No tools available</div>
 {:else}
 	<div class="space-y-2">
-		<p class="text-sm text-muted-foreground">
+		<p class="text-body-sm text-muted-foreground">
 			{#if conversationsStore.activeConversation}
 				Applies to this conversation.
 			{:else}
@@ -37,12 +37,12 @@
 			{@const isExpanded = expandedGroups.has(group.key)}
 			<Collapsible.Root onOpenChange={() => toggleExpanded(group.key)} open={isExpanded}>
 				<Collapsible.Trigger
-					class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-muted/50"
+					class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-body-sm hover:bg-muted/50"
 				>
 					{#if isExpanded}
-						<ChevronDown class="h-3.5 w-3.5 shrink-0" />
+						<ChevronDown class="size-icon-sm shrink-0" />
 					{:else}
-						<ChevronRight class="h-3.5 w-3.5 shrink-0" />
+						<ChevronRight class="size-icon-sm shrink-0" />
 					{/if}
 
 					<Checkbox
@@ -67,7 +67,7 @@
 						{/if}
 					</span>
 
-					<span class="ml-auto shrink-0 text-xs text-muted-foreground">
+					<span class="ml-auto shrink-0 text-caption text-muted-foreground">
 						{group.tools.length} tool{group.tools.length !== 1 ? 's' : ''}
 					</span>
 				</Collapsible.Trigger>
@@ -75,7 +75,7 @@
 				<Collapsible.Content>
 					<div class="ml-4 border-l border-border/50 pl-2">
 						<!-- Header row -->
-						<div class="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground">
+						<div class="flex items-center gap-2 px-2 py-1 text-caption text-muted-foreground">
 							<span class="min-w-0 flex-1">Tool</span>
 
 							<span class="w-16 shrink-0 text-center">Enabled</span>
@@ -95,7 +95,9 @@
 							{@const permissionKey = entry.key}
 							{@const isAlwaysAllowed = permissionsStore.hasTool(permissionKey)}
 
-							<div class="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50">
+							<div
+								class="flex items-center gap-2 rounded px-2 py-1.5 text-body-sm hover:bg-muted/50"
+							>
 								<span class="flex min-w-0 flex-1 items-center gap-1.5">
 									{#if IconComponent}
 										<IconComponent class={ICON_CLASS_DEFAULT} />

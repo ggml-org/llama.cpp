@@ -5,11 +5,22 @@
  * Reference: https://huggingface.co/docs/huggingface_hub/package_reference/hf_api
  */
 
+import { GIGABYTE, KILOBYTE, MEGABYTE } from '@ggml-org/llama-ui/models';
+export {
+	BYTE_LABEL,
+	GIGABYTE,
+	GIGABYTE_LABEL,
+	HF_AVATARS_URL,
+	KILOBYTE,
+	KILOBYTE_LABEL,
+	MEGABYTE,
+	MEGABYTE_LABEL
+} from '@ggml-org/llama-ui/models';
+
 // API endpoints
 
 export const HF_BASE_URL = 'https://huggingface.co';
 export const HF_API_MODELS_URL = `${HF_BASE_URL}/api/models`;
-export const HF_AVATARS_URL = `${HF_BASE_URL}/api/avatars`;
 
 // Query params
 
@@ -176,9 +187,6 @@ export const HF_TASK_TAGS: readonly string[] = [
 // Formatting
 
 export const BYTE = 1;
-export const KILOBYTE = 1_000;
-export const MEGABYTE = 1_000_000;
-export const GIGABYTE = 1_000_000_000;
 export const TERABYTE = 1_000_000_000_000;
 
 /**
@@ -198,11 +206,6 @@ export const HF_SIZE_SUFFIX_BYTES: Readonly<Record<string, number>> = {
 	m: MEGABYTE,
 	t: TERABYTE
 };
-
-export const BYTE_LABEL = 'B';
-export const KILOBYTE_LABEL = 'KB';
-export const MEGABYTE_LABEL = 'MB';
-export const GIGABYTE_LABEL = 'GB';
 
 /** Count suffixes for compact number formatting, e.g. `1.5K`, `2.0M`. */
 export const KILO_LABEL = 'K';

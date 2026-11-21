@@ -86,15 +86,38 @@ Due to wide variety of audio generation pipelines, the `mtmd_gen_audio` system i
 
 ### Running a transformer stage on libllama (mtmd-owned `llama_context`)
 
-Some stages are a full LLM-sized transformer that attends to the keys/values of the backbone, for example the flow-matching NAR of YuE2 (same layer shapes as the backbone, its own weights, bidirectional over its rows, and it reads the backbone KV). Do not re-implement it as an mtmd graph. Instead, mtmd can own a second `llama_model` + `llama_context` (see `mtmd_yue2_nar_load()` and `mtmd_gen_flow_yue2()` in `mtmd.cpp`):
+Some stages are a full LLM-sized transformer that attends to the keys/values of the backbone, for example the flow-matching NAR of YuE2 (same layer shapes as the backbone, its own weights, bidirectional over its rows, and it reads the backbone KV). Do not re-implement it as an mtmd graph. Instead, mtmd can own a second `llama_model` + `llama_context` (see `mtmd_yue2_nar_load()` and `mtmd_gen_flow_yue2()`, or `mtmd_voxcpm2_res_load()` and `mtmd_gen_code_voxcpm2()` in `mtmd.cpp`):
 
 - Conversion: store the layers in the mmproj under `a.gen.<stage>.` with the libllama tensor names of an existing arch (e.g. `a.gen.nar.blk.0.attn_q.weight`)
-- Loading: build a synthetic `gguf_context` with the arch hparams (`general.architecture`, `tokenizer.ggml.model = none`, `vocab_size = 1`, ...) and one tensor info per mmproj tensor (only the type is used, the shapes come from the hparams), then call `llama_model_init_from_user()`. The `set_tensor_data` callback reads the data from the mmproj file, so no copy is kept in the mtmd model
-    - libllama also creates every optional tensor of the arch (biases, `*.scale`, `*.input_scale`, `dense_2`, ...) for a model built from metadata. The callback must fill them with values that leave the graph unchanged: 0 for biases, 1 for scales, identity for `dense_2`. Zeros everywhere silently make every matmul output 0
+- Loading: build a synthetic `gguf_context` with the arch hparams (`general.architecture`, `tokenizer.ggml.model = none`, `vocab_size = 1`, ...) and one tensor info per mmproj tensor (only the type is used, the shapes come from the hparams), then call `llama_model_init_from_user()` (`mtmd_owned_llama_load()` does this, the caller only writes the hparams). The `set_tensor_data` callback reads the data from the mmproj file, so no copy is kept in the mtmd model
+    - libllama also creates every optional tensor of the arch (biases, `*.scale`, `*.input_scale`, `dense_2`, ...) for a model built from metadata. The callback must fill them with values that leave the graph unchanged: 0 for biases, 1 for scales and `rope_freqs`, identity for `dense_2`. Zeros everywhere silently make every matmul output 0
 - Backbone keys/values: the helper passes the backbone sequence state (`llama_state_seq_get_data()`) through `mtmd_gen_inp`, mtmd loads it into its context with `llama_state_seq_set_data()`. This only checks the layer count and the K/V types and row sizes, so it works across models with the same KV layout. The two contexts must agree on the KV type and on flash attention (`v_trans`)
 - Inputs and outputs are embedding rows (`llama_batch::embd`, `llama_get_embeddings()` with `LLAMA_POOLING_TYPE_NONE`), the projections around them stay small mtmd graphs
 - Non-causal rows: `LLAMA_ATTENTION_TYPE_NON_CAUSAL`, all rows in one ubatch (`n_ubatch` >= rows), they see every cached position of the sequence. Remove them with `llama_memory_seq_rm()` after each pass
 - Size the context per call (`n_ctx`, `n_ubatch`) instead of keeping one for the whole session
+- Causal stage with its own KV cache across calls (the residual LM of VoxCPM2): the `mtmd_gen_state` owns the `llama_context`, `mtmd_gen_state_reset()` clears its memory. Options of the arch may switch parts off, e.g. RoPE with `rope.scaling.finetuned = false` on granite
+
+### Text preprocessing (the `tts` chat template)
+
+Anything a model needs done to the input text before tokenization (prompt format, text normalization, text to phonemes) goes in `tokenizer.chat_template.tts`, as a jinja program. It receives the text as `messages[0].content`, plus `language` and `voice`.
+
+Examples:
+- Prompt format: `conversion/lfm3.py`
+- Text normalization: `models/templates/Zyphra-ZONOS3-Mini-tts.jinja`
+- Text to phonemes (G2P): `models/templates/hexgrad-Kokoro-82M-tts.jinja`
+
+Functions available to the template (see `docs/tts-norm-patterns.md`):
+- `tts_norm_scan()` / `tts_norm_sub()`: pattern matching for text normalization
+- `tts_dict()`: lookup in a dictionary stored in the GGUF, such as a pronunciation lexicon
+
+Add test cases to `tests/test-jinja.cpp`, which also checks them against the python reference with `-py`.
+
+Rules for phoneme-based models:
+- C++ only holds the pieces that every such model needs (the functions above). The rules of one model (lexicon handling, stress, suffixes, number spelling, ...) live in its jinja template
+- The reason is binary size: phoneme logic compiled into C++ is shipped to every user, and most of them never run a TTS model. A template only costs the users of that model
+- Do not add a model-specific or language-specific G2P step in C++, and do not add a dependency for it (e.g. espeak-ng)
+
+G2P in jinja has limits, mostly for languages other than English (no lexicon, or rules that need a real morphological analyzer). For now the escape hatch is on the application side: the user runs the text to phonemes step in their own code and sends the phonemes with `raw_prompt` (see the `/tts` endpoint of `llama-server`), which skips the template. Document it in `docs/multimodal/tts.md` when a model relies on it.
 
 ### Checklist for porting new audio generation models to mtmd
 
@@ -116,7 +139,7 @@ Some stages are a full LLM-sized transformer that attends to the keys/values of 
         - In most cases, you can hard-code model configs in the model graph class, or in `mtmd_hparams`
         - If some values need to be exposed to the `mtmd_helper` layer, hard-code them in `mtmd_helper` and distinguish by pipeline and `mtmd_gen_audio_info::model_variant` if necessary
         - Do NOT add new GGUF metadata or new fields to `mtmd_gen_audio_info` unless you can prove that you absolutely need them
-    - If the model requires special preprocessing of the input text prompt (prompt format, text normalization), put it in `tokenizer.chat_template.tts` as a jinja program. It receives the text as `messages[0].content`, plus `language` and `voice`. See `conversion/lfm3.py` (prompt format) and `models/templates/Zyphra-ZONOS3-Mini-tts.jinja` (text normalization) as examples. For text normalization, use `tts_norm_scan()` / `tts_norm_sub()` (see `docs/tts-norm-patterns.md`) and add test cases to `tests/test-jinja.cpp`, which also checks them against the python reference with `-py`
+    - If the model requires special preprocessing of the input text prompt, see [Text preprocessing](#text-preprocessing-the-tts-chat-template)
 4. Make sure most of the changes happen inside `mtmd-helper-gen.cpp`. A good PR looks like this:
     - 10-20% changes is to add new backbone (text) model and conversion
     - 60% changes inside `mtmd-helper-gen.cpp`

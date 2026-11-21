@@ -1,7 +1,7 @@
-import { REASONING_TAGS } from '$lib/constants';
-import { AgenticSectionType } from '$lib/enums';
-import type { AgenticSection } from '$lib/types/agentic';
-import { buildAssistantRawOutput } from '$lib/utils/agentic';
+import { REASONING_TAGS } from '#lib/constants/index.ts';
+import { AgenticSectionType } from '#lib/enums/index.ts';
+import type { AgenticSection } from '#lib/types/agentic.js';
+import { buildAssistantRawOutput } from '#lib/utils/agentic.ts';
 import { describe, expect, it } from 'vitest';
 
 function makeSection(

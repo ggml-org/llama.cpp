@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { SIDEBAR_DRAG_HIGHLIGHT_CLASS } from '$lib/constants';
-	import { sidebarDragStore } from '$lib/stores';
+	import { SIDEBAR_DRAG_HIGHLIGHT_CLASS } from '#lib/constants/index.ts';
+	import { sidebarDragStore } from '#lib/stores/index.ts';
 	import type { Snippet } from 'svelte';
 	import type { ClassValue } from 'svelte/elements';
 

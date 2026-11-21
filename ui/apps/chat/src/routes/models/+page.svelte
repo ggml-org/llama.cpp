@@ -1,8 +1,8 @@
 <script lang="ts">
-	import ModelsManager from '$lib/components/app/models/ModelsManager/ModelsManager.svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { APP_NAME, DISCOVER_ICON } from '$lib/constants';
-	import { modelsStore, uiStore } from '$lib/stores';
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import ModelsManager from '#lib/components/app/models/ModelsManager/ModelsManager.svelte';
+	import { APP_NAME, DISCOVER_ICON } from '#lib/constants/index.ts';
+	import { modelsStore, uiStore } from '#lib/stores/index.ts';
 	import { onMount } from 'svelte';
 
 	// a direct load lands here before any chat has listed the models, and the root
@@ -24,13 +24,13 @@
 </svelte:head>
 
 <div
-	class="mx-auto flex h-[100dvh] w-full max-w-7xl flex-col gap-6 px-4 pt-(--page-top) md:px-8 md:pt-6"
+	class="mx-auto flex h-dvh w-full max-w-7xl flex-col gap-6 px-4 pt-(--page-top) md:px-8 md:pt-6"
 >
 	<div class="flex items-start gap-4">
 		<div class="flex min-w-0 flex-col gap-1">
-			<h1 class="text-2xl font-semibold tracking-tight">Models</h1>
+			<h1 class="text-heading tracking-tight">Models</h1>
 
-			<p class="text-sm text-muted-foreground">
+			<p class="text-body-sm text-muted-foreground">
 				Load, configure and remove the models this server can run.
 			</p>
 		</div>
@@ -42,7 +42,7 @@
 				size="sm"
 				variant="tertiary"
 			>
-				<DISCOVER_ICON class="h-3.5 w-3.5" />
+				<DISCOVER_ICON class="size-icon-md" />
 
 				Discover Models
 			</Button>

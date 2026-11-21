@@ -1,4 +1,4 @@
-import { ChatService } from '$lib/services/chat.service';
+import { ChatService } from '#lib/services/chat.service.ts';
 import { describe, expect, it } from 'vitest';
 
 // a streamed answer of one text delta, the chunk that ends it saying why

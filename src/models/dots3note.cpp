@@ -257,42 +257,8 @@ llama_model_dots3note::graph::graph(const llm_graph_params & params) :
                 indexer_weights = ggml_scale(ctx0, indexer_weights, 1.0f / sqrtf(float(n_embd_indexer_head * n_indexer_head)));
                 cb(indexer_weights, "indexer_weights", il);
 
-                ggml_tensor * indexer_score = nullptr;
-                if (cparams.fused_lid) {
-                    indexer_score = ggml_lightning_indexer(ctx0, indexer_q, indexer_k, indexer_weights, inp_attn->get_dsa()->self_attn_mask_lid.raw);
-                    cb(indexer_score, "indexer_score", il);
-                    res->add_fused_node({LLM_FUSED_OP_LIGHTNING_INDEXER, indexer_score, il});
-                } else {
-                    indexer_q = ggml_permute(ctx0, indexer_q, 0, 2, 1, 3);
-                    cb(indexer_q, "indexer_q", il);
-                    indexer_k = ggml_permute(ctx0, indexer_k, 0, 2, 1, 3);
-                    cb(indexer_k, "indexer_k", il);
-
-                    ggml_tensor * indexer_kq = ggml_mul_mat(ctx0, indexer_k, indexer_q);
-                    cb(indexer_kq, "indexer_kq", il);
-
-                    // ReLU requires contiguous tensors
-                    indexer_kq = ggml_cont(ctx0, ggml_permute(ctx0, indexer_kq, 2, 1, 0, 3));
-                    cb(indexer_kq, "indexer_kq", il);
-
-                    indexer_score = ggml_relu(ctx0, indexer_kq);
-                    cb(indexer_score, "indexer_score", il);
-
-                    indexer_score = ggml_mul(ctx0, indexer_score, indexer_weights);
-                    cb(indexer_score, "indexer_score", il);
-
-                    // sum by q n_indexer_head dimension
-                    indexer_score = ggml_sum_rows(ctx0, indexer_score);
-                    cb(indexer_score, "indexer_score", il);
-
-                    // permute result to match KQ mask
-                    indexer_score = ggml_cont(ctx0, ggml_permute(ctx0, indexer_score, 2, 1, 0, 3));
-                    cb(indexer_score, "indexer_score", il);
-
-                    ggml_tensor * indexer_kq_mask = inp_attn->get_dsa()->self_attn_mask_lid.raw;
-                    indexer_score = ggml_add(ctx0, indexer_score, indexer_kq_mask);
-                    cb(indexer_score, "indexer_score", il);
-                }
+                ggml_tensor * indexer_score = ggml_lightning_indexer(ctx0, indexer_q, indexer_k, indexer_weights, inp_attn->get_dsa()->self_attn_mask_lid.raw);
+                cb(indexer_score, "indexer_score", il);
 
                 // get indices of top k indexer scores
                 uint32_t n_top_k = indexer_score->ne[0] < n_indexer_top_k ? indexer_score->ne[0] : n_indexer_top_k;

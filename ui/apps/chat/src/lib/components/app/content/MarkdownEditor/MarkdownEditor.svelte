@@ -11,7 +11,7 @@
 </script>
 
 <script lang="ts">
-	import '$lib/styles/katex-custom.scss';
+	import '#lib/styles/katex-custom.scss';
 	import MarkdownSurface from '../MarkdownContent/MarkdownSurface.svelte';
 	import {
 		markdownLivePreview,
@@ -39,9 +39,9 @@
 	} from '@codemirror/state';
 	import { keymap, placeholder as placeholderExt } from '@codemirror/view';
 	import { tags } from '@lezer/highlight';
-	import { DialogCodePreview, DialogMermaidPreview } from '$lib/components/app';
-	import { ColorMode } from '$lib/enums';
-	import { loadHighlightTheme } from '$lib/utils';
+	import { DialogCodePreview, DialogMermaidPreview } from '#lib/components/app/index.ts';
+	import { ColorMode } from '#lib/enums/index.ts';
+	import { loadHighlightTheme } from '#lib/utils/index.ts';
 	import { mode } from 'mode-watcher';
 	import { onDestroy, onMount, untrack } from 'svelte';
 
@@ -87,7 +87,7 @@
 		{ fontSize: '0.875rem', fontWeight: '600', tag: tags.heading6 },
 		{ fontWeight: '600', tag: tags.strong },
 		{ fontStyle: 'italic', tag: tags.emphasis },
-		{ color: 'var(--muted-foreground)', fontStyle: 'italic', tag: tags.quote },
+		{ color: 'var(--fg-muted)', fontStyle: 'italic', tag: tags.quote },
 		{ opacity: '0.7', tag: tags.strikethrough, textDecoration: 'line-through' },
 		{ fontFamily: 'var(--font-mono)', fontSize: '0.875rem', tag: tags.monospace }
 	]);
@@ -349,7 +349,7 @@
 
 	div :global(.cm-content) {
 		padding: 0;
-		caret-color: var(--foreground);
+		caret-color: var(--fg-default);
 	}
 
 	div :global(.cm-line) {
@@ -357,8 +357,8 @@
 	}
 
 	div :global(.cm-placeholder) {
-		color: var(--muted-foreground);
-		text-shadow: none;
+		color: var(--fg-muted);
+		text-shadow: var(--text-shadow-engraved);
 	}
 
 	/* The markdown img styles must not reach the editor's invisible caret helpers */
@@ -390,25 +390,25 @@
 		padding-inline: 1rem;
 		font-family: var(--font-mono);
 		font-size: 0.875rem;
-		background: var(--code-background);
-		border-inline: 1px solid color-mix(in oklch, var(--border) 30%, transparent);
+		background: var(--surface-code);
+		border-inline: 1px solid color-mix(in oklch, var(--line-default) 30%, transparent);
 	}
 
 	div :global(.cm-md-raw-code-first) {
 		padding-top: 0.75rem;
-		border-top: 1px solid color-mix(in oklch, var(--border) 30%, transparent);
+		border-top: 1px solid color-mix(in oklch, var(--line-default) 30%, transparent);
 		border-radius: 0.75rem 0.75rem 0 0;
 	}
 
 	div :global(.cm-md-raw-code-last) {
 		padding-bottom: 0.75rem;
-		border-bottom: 1px solid color-mix(in oklch, var(--border) 30%, transparent);
+		border-bottom: 1px solid color-mix(in oklch, var(--line-default) 30%, transparent);
 		border-radius: 0 0 0.75rem 0.75rem;
 	}
 
 	/* A link reference definition renders to nothing, so it stays raw and muted */
 	div :global(.cm-md-raw-definition) {
-		color: var(--muted-foreground);
+		color: var(--fg-muted);
 		font-size: 0.875rem;
 	}
 </style>

@@ -7,11 +7,11 @@
  * resolvePermission/resolveContinue. Owned by agenticStore, no host coupling.
  */
 
-import { ToolPermissionDecision } from '$lib/enums';
+import { ToolPermissionDecision } from '#lib/enums/index.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { permissionsStore } from '$lib/stores/permissions.svelte';
-import { toolsStore } from '$lib/stores/tools.svelte';
-import type { DatabaseMessageExtra, SteeringMessage } from '$lib/types';
+import { permissionsStore } from '#lib/stores/permissions.svelte.ts';
+import { toolsStore } from '#lib/stores/tools.svelte.ts';
+import type { DatabaseMessageExtra, SteeringMessage } from '#lib/types/index.ts';
 import { SvelteMap } from 'svelte/reactivity';
 
 export class AgenticGates {

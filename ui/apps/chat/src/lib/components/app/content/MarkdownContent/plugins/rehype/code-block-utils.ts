@@ -4,13 +4,14 @@
  */
 
 import {
+	CODE_BLOCK,
 	CODE_BLOCK_CLASS,
 	CODE_ICON_SVG,
 	COPY_ICON_SVG,
 	DIAGRAM_SOURCE_CLASS,
 	PREVIEW_ICON_SVG,
 	TOGGLE_SOURCE_BTN_CLASS
-} from '$lib/constants';
+} from '#lib/constants/index.ts';
 import type { Element, ElementContent } from 'hast';
 
 export interface BlockIdGenerator {
@@ -100,7 +101,9 @@ export function createSourceView(
 ): Element {
 	const code: Element = codeElement ?? {
 		children: [{ type: 'text', value: source }],
-		properties: { className: ['hljs', `language-${language}`] },
+		properties: {
+			className: [CODE_BLOCK_CLASS.HLJS, `${CODE_BLOCK.LANGUAGE_CLASS_PREFIX}${language}`]
+		},
 		tagName: 'code',
 		type: 'element'
 	};

@@ -5,21 +5,21 @@ import {
 	REASONING_TAGS,
 	SEARCH_SUMMARY,
 	TOOL_RESULT_JSON_OPEN_REGEX
-} from '$lib/constants';
+} from '#lib/constants/index.ts';
 import {
 	AgenticSectionType,
 	AttachmentType,
 	ContinueIntentKind,
 	MessageRole,
 	ToolResultKind
-} from '$lib/enums';
-import type { AgenticSection, ContinueIntent, ToolResultLine } from '$lib/types/agentic';
-import type { ApiChatCompletionToolCall } from '$lib/types/api';
+} from '#lib/enums/index.ts';
+import type { AgenticSection, ContinueIntent, ToolResultLine } from '#lib/types/agentic.js';
+import type { ApiChatCompletionToolCall } from '#lib/types/api.js';
 import type {
 	DatabaseMessage,
 	DatabaseMessageExtra,
 	DatabaseMessageExtraImageFile
-} from '$lib/types/database';
+} from '#lib/types/database.js';
 
 /**
  * Derives display sections from a single assistant message and its direct tool results.

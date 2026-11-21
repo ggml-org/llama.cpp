@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
-	import { ActionIcon } from '$lib/components/app';
-	import { getChatMessageActionsContext } from '$lib/contexts';
+	import { ActionIcon } from '#lib/components/app/index.ts';
+	import { getChatMessageActionsContext } from '#lib/contexts/index.ts';
 
 	interface Props {
 		class?: string;
@@ -26,23 +26,23 @@
 {#if siblingInfo && siblingInfo.totalSiblings > 1}
 	<div
 		aria-label="Message version {siblingInfo.currentIndex + 1} of {siblingInfo.totalSiblings}"
-		class="flex items-center gap-1 text-xs text-muted-foreground {className}"
+		class="flex items-center gap-1 text-caption text-muted-foreground {className}"
 		role="navigation"
 	>
 		<ActionIcon
-			class="h-5 w-5 p-0 {!hasPrevious ? '!cursor-not-allowed opacity-30' : ''}"
+			class="size-icon-lg p-0 {!hasPrevious ? '!cursor-not-allowed opacity-30' : ''}"
 			disabled={!hasPrevious}
 			icon={ChevronLeft}
 			onclick={() => messageActions.navigateToSibling(previousSiblingId!)}
 			tooltip="Previous version"
 		/>
 
-		<span class="px-1 font-mono text-xs">
+		<span class="px-1 font-mono text-caption">
 			{siblingInfo.currentIndex + 1}/{siblingInfo.totalSiblings}
 		</span>
 
 		<ActionIcon
-			class="h-5 w-5 p-0 {!hasNext ? 'opacity-30' : ''}"
+			class="size-icon-lg p-0 {!hasNext ? 'opacity-30' : ''}"
 			disabled={!hasNext}
 			icon={ChevronRight}
 			onclick={() => messageActions.navigateToSibling(nextSiblingId!)}

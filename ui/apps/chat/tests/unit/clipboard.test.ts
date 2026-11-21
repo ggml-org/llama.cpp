@@ -1,9 +1,9 @@
-import { AttachmentType } from '$lib/enums';
+import { AttachmentType } from '#lib/enums/index.ts';
 import {
 	formatMessageForClipboard,
 	hasClipboardAttachments,
 	parseClipboardContent
-} from '$lib/utils/clipboard';
+} from '#lib/utils/clipboard.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('formatMessageForClipboard', () => {

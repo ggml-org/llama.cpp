@@ -8,7 +8,7 @@ import type {
 	ErrorDialogType,
 	FileMentionEntryType,
 	MessageRole
-} from '$lib/enums';
+} from '#lib/enums/index.ts';
 import type { Component } from 'svelte';
 
 /**
@@ -48,6 +48,14 @@ export interface ChatUploadedFile {
 	};
 	isLoading?: boolean;
 	loadError?: string;
+	/** A voice message recorded in the chat form. */
+	voice?: ChatUploadedVoice;
+}
+
+/** What a voice message recorded in the chat form carries besides its WAV file. */
+export interface ChatUploadedVoice {
+	durationMs: number;
+	peaks: number[];
 }
 
 export interface ChatAttachmentDisplayItem {

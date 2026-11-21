@@ -1,6 +1,6 @@
 <script lang="ts">
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { KeyboardKey } from '$lib/enums';
+	import * as AlertDialog from '@ggml-org/llama-ui/ui/alert-dialog';
+	import { KeyboardKey } from '#lib/enums/index.ts';
 	import type { Component, Snippet } from 'svelte';
 
 	interface Props {
@@ -55,7 +55,9 @@
 				{#if icon}
 					{@const IconComponent = icon}
 
-					<IconComponent class="h-5 w-5 {variant === 'destructive' ? 'text-destructive' : ''}" />
+					<IconComponent
+						class="size-icon-lg {variant === 'destructive' ? 'text-destructive' : ''}"
+					/>
 				{/if}
 				{title}
 			</AlertDialog.Title>
@@ -72,10 +74,7 @@
 		<AlertDialog.Footer>
 			<AlertDialog.Cancel onclick={onCancel}>{cancelText}</AlertDialog.Cancel>
 
-			<AlertDialog.Action
-				class={variant === 'destructive' ? 'bg-destructive text-white hover:bg-destructive/80' : ''}
-				onclick={onConfirm}
-			>
+			<AlertDialog.Action onclick={onConfirm} {variant}>
 				{confirmText}
 			</AlertDialog.Action>
 		</AlertDialog.Footer>

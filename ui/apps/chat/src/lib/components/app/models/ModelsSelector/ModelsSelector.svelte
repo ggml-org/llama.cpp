@@ -1,21 +1,34 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
+	import ModelsSelectorReasoning from './ModelsSelectorReasoning.svelte';
+	import ModelsSelectorReasoningBadge from './ModelsSelectorReasoningBadge.svelte';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { ChevronDown, Loader2 } from '@lucide/svelte';
 	import {
+		ChatFormActionReasoning,
 		ModelId,
 		ModelsSelectorDrawer,
 		ModelsSelectorDropdown,
 		ModelsSelectorList,
 		ModelsSelectorOption,
 		ModelsSelectorTriggerIcon
-	} from '$lib/components/app';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR, MODEL_ICON, SETTINGS_KEYS } from '$lib/constants';
-	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
-	import { useChatFormModel } from '$lib/hooks/use-chat-form-model.svelte';
-	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
-	import { deviceStore, modelsStore, serverStore, settingsStore, uiStore } from '$lib/stores';
-	import { type ModelItem, modelLoadFraction } from '$lib/utils';
+	} from '#lib/components/app/index.ts';
+	import {
+		DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR,
+		MODEL_ICON,
+		SETTINGS_KEYS
+	} from '#lib/constants/index.ts';
+	import { KeyboardKey, ServerModelStatus } from '#lib/enums/index.ts';
+	import { useChatFormModel } from '#lib/hooks/use-chat-form-model.svelte.ts';
+	import { useModelsSelector } from '#lib/hooks/use-models-selector.svelte.ts';
+	import {
+		deviceStore,
+		modelsStore,
+		serverStore,
+		settingsStore,
+		uiStore
+	} from '#lib/stores/index.ts';
+	import { type ModelItem, modelLoadFraction } from '#lib/utils/index.ts';
 	import { untrack } from 'svelte';
 
 	interface Props {
@@ -24,6 +37,8 @@
 		disabled?: boolean;
 		forceForegroundText?: boolean;
 		onModelChange?: (modelId: string, modelName: string) => Promise<boolean> | boolean | void;
+		/** The chat's reasoning effort at the foot of the picker (the chat form's selector). */
+		showReasoning?: boolean;
 		useGlobalSelection?: boolean;
 	}
 
@@ -32,6 +47,7 @@
 		disabled = false,
 		forceForegroundText = false,
 		onModelChange,
+		showReasoning = false,
 		useGlobalSelection = false
 	}: Props = $props();
 
@@ -207,7 +223,7 @@
 
 {#snippet selectorTriggerInner()}
 	<ModelsSelectorTriggerIcon
-		class="mr-0.375 size-3.5 max-md:size-4 shrink-0"
+		class="mr-0.375 size-icon-sm max-md:size-icon-md shrink-0"
 		option={selectedOption}
 	/>
 
@@ -219,6 +235,11 @@
 				hideQuantization
 				modelId={selectedOption.model}
 			/>
+
+			<!-- in the model's column: the trigger is a grid of icon, model and chevron -->
+			{#if showReasoning}
+				<ModelsSelectorReasoningBadge />
+			{/if}
 		{:else}
 			<span class="min-w-0 font-medium">Select model</span>
 		{/if}
@@ -258,6 +279,10 @@
 	/>
 {/snippet}
 
+{#snippet reasoningFooter()}
+	<ModelsSelectorReasoning variant="list" />
+{/snippet}
+
 {#snippet pickerList(listClass: string)}
 	<div class={['models-list', listClass]}>
 		{#if !ms.isCurrentModelInCache && displayModel}
@@ -265,7 +290,7 @@
 			<button
 				aria-disabled="true"
 				aria-selected="true"
-				class="flex w-full cursor-not-allowed items-center bg-red-400/10 p-2 text-left text-sm text-red-400"
+				class="flex w-full cursor-not-allowed items-center bg-surface-danger p-2 text-left text-body-sm text-fg-danger"
 				disabled
 				role="option"
 				type="button"
@@ -277,12 +302,12 @@
 					modelId={displayModel}
 				/>
 
-				<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
+				<span class="ml-2 text-caption whitespace-nowrap opacity-70">(not available)</span>
 			</button>
 		{/if}
 
 		{#if ms.isEmpty}
-			<p class="px-4 py-3 text-sm text-muted-foreground">{ms.emptyMessage}</p>
+			<p class="px-4 py-3 text-body-sm text-muted-foreground">{ms.emptyMessage}</p>
 		{/if}
 
 		<ModelsSelectorList
@@ -293,33 +318,33 @@
 			loaded={ms.loadedItems}
 			onSelect={ms.handleSelect}
 			renderOption={modelOption}
-			sectionHeaderClass="[&:not(:first-child)]:mt-2 mb-1 px-2 py-2.5 text-sm font-semibold text-foreground/80 select-none"
+			sectionHeaderClass="[&:not(:first-child)]:mt-2 mb-1 px-2 py-2.5 text-body-sm font-semibold text-foreground/80 select-none"
 			{showOrgName}
 		/>
 	</div>
 {/snippet}
 
 {#if ms.loading && ms.options.length === 0 && ms.isMultiModel}
-	<div class="flex items-center gap-2 text-xs text-muted-foreground">
-		<Loader2 class="h-3.5 w-3.5 animate-spin" />
+	<div class="flex items-center gap-2 text-caption text-muted-foreground">
+		<Loader2 class="size-icon-sm animate-spin" />
 
 		Loading models...
 	</div>
 {:else if ms.options.length === 0 && ms.isMultiModel}
 	{#if displayModel}
 		<span
-			class="inline-flex items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs text-muted-foreground"
+			class="inline-flex items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-caption text-muted-foreground"
 			style="max-width: min(calc(100cqw - 10rem), 48rem)"
 		>
-			<MODEL_ICON class="h-3.5 w-3.5 shrink-0" />
+			<MODEL_ICON class="size-icon-sm shrink-0" />
 		</span>
 	{:else}
-		<span class="text-xs text-muted-foreground">No models yet.</span>
+		<span class="text-caption text-muted-foreground">No models yet.</span>
 	{/if}
 {:else if ms.isMultiModel}
 	{#if isMobile}
 		<button
-			class="relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 max-md:gap-1.5 max-md:h-7 max-md:px-2.25 max-md:py-1 max-md:text-[13px] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground"
+			class="relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-caption shadow-(--elevation-key) transition hover:bg-muted-foreground/20 max-md:gap-1.5 max-md:h-7 max-md:px-2.25 max-md:py-1 max-md:text-body-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground"
 			disabled={disabled || ms.updating}
 			onclick={() => ms.handleOpenChange(true)}
 			style="max-width: min(calc(100vw-4rem), 32rem)"
@@ -331,6 +356,7 @@
 		<ModelsSelectorDrawer
 			bind:open={isOpen}
 			emptyMessage={ms.emptyMessage}
+			footer={showReasoning ? reasoningFooter : undefined}
 			isEmpty={ms.isEmpty && ms.isCurrentModelInCache}
 			onOpenChange={ms.handleOpenChange}
 			onSearchChange={(v) => ms.setSearchTerm(v)}
@@ -350,13 +376,14 @@
 			onModelKeyAction={(id, unload) => void handleModelKeyAction(id, unload)}
 			onSearchKeyDown={handleSearchKeyDown}
 			{showOrgName}
+			{showReasoning}
 		/>
 	{/if}
 {:else if isMobile}
 	<!-- a phone has no manager: the single model still gets the drawer, so its
 	     load control, actions and information stay reachable -->
 	<button
-		class="relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 max-md:gap-1.5 max-md:h-7 max-md:px-2.25 max-md:py-1 max-md:text-[13px] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground"
+		class="relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-caption shadow-(--elevation-key) transition hover:bg-muted-foreground/20 max-md:gap-1.5 max-md:h-7 max-md:px-2.25 max-md:py-1 max-md:text-body-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground"
 		disabled={disabled || ms.updating}
 		onclick={() => ms.handleOpenChange(true)}
 		style="max-width: min(calc(100vw-4rem), 32rem)"
@@ -368,6 +395,7 @@
 	<ModelsSelectorDrawer
 		bind:open={isOpen}
 		emptyMessage={ms.emptyMessage}
+		footer={showReasoning ? reasoningFooter : undefined}
 		isEmpty={ms.isEmpty && ms.isCurrentModelInCache}
 		onOpenChange={ms.handleOpenChange}
 		onSearchChange={(v) => ms.setSearchTerm(v)}
@@ -378,7 +406,8 @@
 	</ModelsSelectorDrawer>
 {:else}
 	<!-- a lone llama.cpp server has nothing to choose from: the trigger opens the
-	     manager instead, so the button is its own affordance -->
+	     manager instead, so the button is its own affordance. With the manager hidden
+	     there is nothing to open, so it is only a label: no pointer, hover or focus -->
 	<Tooltip.Root>
 		<Tooltip.Trigger>
 			<!-- prevent another nested button element -->
@@ -386,19 +415,26 @@
 				<button
 					{...props}
 					class={[
-						`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
+						`inline-flex items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-caption shadow-(--elevation-key) transition focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
+						uiStore.isModelsManagerShown
+							? 'cursor-pointer hover:bg-muted-foreground/20'
+							: 'cursor-default',
 						!ms.isCurrentModelInCache
-							? 'bg-red-400/10 text-red-400! hover:bg-red-400/20 hover:text-red-400'
+							? 'bg-surface-danger text-fg-danger! hover:bg-surface-danger/80 hover:text-fg-danger'
 							: forceForegroundText
 								? 'text-foreground'
 								: 'text-foreground',
 						isOpen && 'text-foreground'
 					]}
 					disabled={disabled || ms.updating}
-					onclick={() => ms.handleOpenChange(true)}
+					onclick={uiStore.isModelsManagerShown ? () => ms.handleOpenChange(true) : undefined}
 					style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
+					tabindex={uiStore.isModelsManagerShown ? undefined : -1}
 				>
-					<ModelsSelectorTriggerIcon class="mr-0.375 size-3.5 shrink-0" option={selectedOption} />
+					<ModelsSelectorTriggerIcon
+						class="mr-0.375 size-icon-sm shrink-0"
+						option={selectedOption}
+					/>
 
 					{#if selectedOption}
 						<ModelId
@@ -416,4 +452,9 @@
 			{/snippet}
 		</Tooltip.Trigger>
 	</Tooltip.Root>
+
+	<!-- a lone model has no picker to hold the reasoning effort: it keeps its own button -->
+	{#if showReasoning}
+		<ChatFormActionReasoning />
+	{/if}
 {/if}

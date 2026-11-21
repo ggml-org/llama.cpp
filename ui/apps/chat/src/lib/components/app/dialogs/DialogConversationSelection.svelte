@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { ConversationSelection } from '$lib/components/app';
-	import * as Dialog from '$lib/components/ui/dialog';
+	import * as Dialog from '@ggml-org/llama-ui/ui/dialog';
+	import { ConversationSelection } from '#lib/components/app/index.ts';
 
 	interface Props {
 		conversations: DatabaseConversation[];

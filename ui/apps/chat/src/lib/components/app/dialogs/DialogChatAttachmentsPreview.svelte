@@ -1,8 +1,8 @@
 <script lang="ts">
+	import * as DialogUI from '@ggml-org/llama-ui/ui/dialog';
 	import { X } from '@lucide/svelte';
-	import { ChatAttachmentsPreview } from '$lib/components/app';
-	import * as DialogUI from '$lib/components/ui/dialog';
-	import { KeyboardKey } from '$lib/enums';
+	import { ChatAttachmentsPreview } from '#lib/components/app/index.ts';
+	import { KeyboardKey } from '#lib/enums/index.ts';
 	import { Dialog } from 'bits-ui';
 
 	interface Props {
@@ -69,7 +69,7 @@
 		<DialogUI.Overlay class="bg-black/85" style="z-index: 1000" />
 
 		<Dialog.Content
-			class="fixed inset-0 z-[1000] flex flex-col pt-safe pb-safe bg-transparent! shadow-none! backdrop-filter-none! outline-none"
+			class="fixed inset-0 z-1000 flex flex-col pt-safe pb-safe bg-transparent! shadow-none! backdrop-filter-none! outline-none"
 		>
 			<Dialog.Close
 				aria-label="Close"

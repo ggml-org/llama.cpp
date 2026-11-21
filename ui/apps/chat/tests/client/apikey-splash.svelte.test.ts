@@ -1,6 +1,6 @@
-import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
-import { validateApiKey } from '$lib/utils/api-key-validation';
+import { CONFIG_LOCALSTORAGE_KEY } from '#lib/constants/index.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
+import { validateApiKey } from '#lib/utils/api-key-validation.ts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 function fakeFetch(status: number, capture: { auth?: string | null } = {}) {

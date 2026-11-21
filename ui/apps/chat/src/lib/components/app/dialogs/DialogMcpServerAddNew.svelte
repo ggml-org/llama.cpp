@@ -1,17 +1,17 @@
 <script lang="ts">
-	import { browser } from '$app/environment';
-	import { McpServerCardCompact, McpServerForm } from '$lib/components/app/mcp';
-	import { Button } from '$lib/components/ui/button';
-	import * as Dialog from '$lib/components/ui/dialog';
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import * as Dialog from '@ggml-org/llama-ui/ui/dialog';
+	import { McpServerCardCompact, McpServerForm } from '#lib/components/app/mcp/index.ts';
 	import {
 		DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY,
 		HEADERS,
 		MCP_SERVER_ID_PREFIX,
 		RECOMMENDED_MCP_SERVERS
-	} from '$lib/constants';
-	import { BooleanString, HealthCheckStatus } from '$lib/enums';
-	import { deviceStore, mcpStore } from '$lib/stores';
-	import { canonicalizeServerUrl, parseHeadersToArray, uuid } from '$lib/utils';
+	} from '#lib/constants/index.ts';
+	import { BooleanString, HealthCheckStatus } from '#lib/enums/index.ts';
+	import { deviceStore, mcpStore } from '#lib/stores/index.ts';
+	import { canonicalizeServerUrl, parseHeadersToArray, uuid } from '#lib/utils/index.ts';
+	import { browser } from '$app/env';
 
 	interface Props {
 		open: boolean;
@@ -255,7 +255,7 @@
 		{#if recommendationsToShow.length > 0}
 			<div class="space-y-3 pt-2">
 				<div class="flex items-center justify-between gap-3">
-					<h3 class="text-sm font-medium">Recommended Servers</h3>
+					<h3 class="text-label">Recommended Servers</h3>
 
 					<Button class="text-muted-foreground" onclick={handleDismissAll} size="sm" variant="ghost"
 						>Dismiss</Button
@@ -294,9 +294,7 @@
 			</div>
 
 			<Dialog.Footer>
-				<Button onclick={() => handleOpenChange(false)} size="sm" variant="secondary">
-					Cancel
-				</Button>
+				<Button onclick={() => handleOpenChange(false)} size="sm" variant="outline">Cancel</Button>
 
 				<Button aria-label="Save" disabled={!canSave} size="sm" type="submit" variant="default">
 					Add

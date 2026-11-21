@@ -1,16 +1,16 @@
 <script lang="ts">
 	import LazyChatMessage from './LazyChatMessage.svelte';
-	import { ChatMessageUserPending } from '$lib/components/app';
-	import { LANDING_EAGER_ROWS } from '$lib/constants';
-	import { MessageRole } from '$lib/enums';
-	import { agenticStore, chatStore, conversationsStore, settingsStore } from '$lib/stores';
-	import type { ChatMessageActions } from '$lib/types';
+	import { ChatMessageUserPending } from '#lib/components/app/index.ts';
+	import { LANDING_EAGER_ROWS } from '#lib/constants/index.ts';
+	import { MessageRole } from '#lib/enums/index.ts';
+	import { agenticStore, chatStore, conversationsStore, settingsStore } from '#lib/stores/index.ts';
+	import type { ChatMessageActions } from '#lib/types/index.ts';
 	import {
 		buildSiblingInfoMap,
 		copyToClipboard,
 		formatMessageForClipboard,
 		hasAgenticContent
-	} from '$lib/utils';
+	} from '#lib/utils/index.ts';
 
 	interface Props {
 		messages?: DatabaseMessage[];
@@ -261,7 +261,7 @@
 
 			{#if pendingContent}
 				<ChatMessageUserPending
-					class="mx-auto mt-12 w-full max-w-[48rem]"
+					class="mx-auto mt-12 w-full max-w-3xl"
 					content={pendingContent}
 					extras={agenticStore.getPendingSteeringMessageExtras(convId)}
 					onDelete={() => agenticStore.clearSteeringMessage(convId)}
@@ -276,7 +276,7 @@
 
 			{#if pendingContent}
 				<ChatMessageUserPending
-					class="mx-auto mt-12 w-full max-w-[48rem]"
+					class="mx-auto mt-12 w-full max-w-3xl"
 					content={pendingContent}
 					extras={chatStore.getPendingMessageExtras(convId)}
 					onDelete={() => chatStore.clearPendingMessage(convId)}

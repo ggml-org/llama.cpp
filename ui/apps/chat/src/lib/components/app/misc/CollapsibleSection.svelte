@@ -1,8 +1,8 @@
 <script lang="ts">
 	import CollapsibleRegion from './CollapsibleRegion.svelte';
+	import * as DropdownMenu from '@ggml-org/llama-ui/ui/dropdown-menu';
 	import { ChevronDown, ChevronUp } from '@lucide/svelte';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
@@ -67,7 +67,7 @@
 		<!-- A menu item (for keyboard nav) wrapping the trigger via `child`;
 		     closeOnSelect keeps the menu open while the section toggles. -->
 		<DropdownMenu.Item
-			class="group w-full min-w-0 cursor-pointer items-center gap-2 rounded-md text-left text-sm"
+			class="group w-full min-w-0 cursor-pointer items-center gap-2 rounded-md text-left text-body-sm"
 			closeOnSelect={false}
 		>
 			{#snippet child({ props })}

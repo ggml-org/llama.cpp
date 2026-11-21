@@ -3,9 +3,9 @@
  * Handles text file detection, reading, and validation
  */
 
-import { DEFAULT_BINARY_DETECTION_OPTIONS } from '$lib/constants';
-import { FileExtensionText } from '$lib/enums';
-import type { BinaryDetectionOptions } from '$lib/types';
+import { DEFAULT_BINARY_DETECTION_OPTIONS } from '#lib/constants/index.ts';
+import { FileExtensionText } from '#lib/enums/index.ts';
+import type { BinaryDetectionOptions } from '#lib/types/index.ts';
 
 /**
  * Check if a filename indicates a text file based on its extension
