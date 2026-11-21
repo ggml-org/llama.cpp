@@ -4,6 +4,23 @@
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
 
+static bool has_spark_tag(const gguf_context * metadata) {
+    const int tags_key = gguf_find_key(metadata, "general.tags");
+    if (tags_key < 0) {
+        return false;
+    }
+    if (gguf_get_kv_type(metadata, tags_key) != GGUF_TYPE_ARRAY ||
+        gguf_get_arr_type(metadata, tags_key) != GGUF_TYPE_STRING) {
+        throw std::runtime_error("general.tags must be a string array");
+    }
+    for (size_t i = 0; i < gguf_get_arr_n(metadata, tags_key); ++i) {
+        if (std::strcmp(gguf_get_arr_str(metadata, tags_key, i), "sparkx2_5") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key(LLM_KV_EMBEDDING_SCALE, hparams.f_embedding_scale, false);
@@ -72,11 +89,16 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         backbone = BACKBONE_MISTRAL_LARGE4;
     } else if (ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false) && hparams.n_swa > 0) {
         // optional interleaved sliding-window attention with per-layer pattern array.
+        hparams.is_spark_dspark = variant == VARIANT_DSPARK && has_spark_tag(ml.metadata);
         // DFlash has a single rope, so the SWA rope == main rope.
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
         ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
         hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
         hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
+        if (hparams.is_spark_dspark) {
+            // Spark drafts use the history window before the anchor.
+            hparams.n_swa += 1;
+        }
     }
 
     ml.get_key_or_arr(LLM_KV_ATTENTION_ROPE_PATTERN, hparams.rope_pattern, hparams.n_layer(), false);
@@ -152,8 +174,12 @@ void llama_model_dflash::load_tensors_layers_base() {
         layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), { n_embd, n_embd_v_gqa }, TENSOR_NOT_REQUIRED);
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
 
-        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k }, 0);
-        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, 0);
+        if (hparams.is_spark_dspark) {
+            layer.wqkv_gate = create_tensor(tn(LLM_TENSOR_ATTN_GATE, "weight", i), { n_embd, n_head }, 0);
+        } else {
+            layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k }, 0);
+            layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, 0);
+        }
 
         layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), { n_embd }, TENSOR_NOT_REQUIRED);
         layer.ffn_post_norm  = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM,  "weight", i), { n_embd }, TENSOR_NOT_REQUIRED);
@@ -191,6 +217,11 @@ template <>
 llama_model_dflash::graph<true>::graph(const llm_graph_params & params) : llm_graph_context(params) {
     ggml_tensor * cur = build_inp_embd_enc();
 
+    if (hparams.is_spark_dspark) {
+        cur = ggml_reshape_3d(ctx0, cur, n_embd, model.target_layer_ids.size(), n_tokens);
+        cur = build_norm(cur, model.fc_norm, nullptr, LLM_NORM_RMS, -1);
+        cur = ggml_reshape_2d(ctx0, cur, model.fc->ne[0], n_tokens);
+    }
     cur = build_lora_mm(model.fc, cur, model.fc_s);
     cb(cur, "fc_out", -1);
 
@@ -231,6 +262,11 @@ ggml_tensor * llama_model_dflash::build_inject_inp(llm_graph_context & g, const 
 
     g.res->add_input(std::move(inp));
 
+    if (g.hparams.is_spark_dspark) {
+        inp_target = ggml_reshape_3d(g.ctx0, inp_target, g.n_embd, model.target_layer_ids.size(), g.n_tokens);
+        inp_target = g.build_norm(inp_target, model.fc_norm, nullptr, LLM_NORM_RMS, -1);
+        inp_target = ggml_reshape_2d(g.ctx0, inp_target, n_embd_inp, g.n_tokens);
+    }
     ggml_tensor * inp_g = g.build_lora_mm(model.fc, inp_target, model.fc_s);
     return g.build_norm(inp_g, model.output_norm_enc, nullptr, LLM_NORM_RMS, -1);
 }
@@ -310,7 +346,9 @@ ggml_tensor * llama_model_dflash::graph_base::build_inject() {
         Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
         Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-        Kcur = build_norm(Kcur, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
+        if (!hparams.is_spark_dspark) {
+            Kcur = build_norm(Kcur, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
+        }
         if (shared_kv) {
             Vcur = ggml_rms_norm(ctx0, Vcur, hparams.f_norm_rms_eps);
         }
@@ -398,8 +436,10 @@ ggml_tensor * llama_model_dflash::graph_base::build_layers(ggml_tensor * inp_tok
         Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
         Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-        Qcur = build_norm(Qcur, layer.attn_q_norm, NULL, LLM_NORM_RMS, il);
-        Kcur = build_norm(Kcur, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
+        if (!hparams.is_spark_dspark) {
+            Qcur = build_norm(Qcur, layer.attn_q_norm, NULL, LLM_NORM_RMS, il);
+            Kcur = build_norm(Kcur, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
+        }
         if (shared_kv) {
             Vcur = ggml_rms_norm(ctx0, Vcur, hparams.f_norm_rms_eps);
         }
@@ -411,9 +451,18 @@ ggml_tensor * llama_model_dflash::graph_base::build_layers(ggml_tensor * inp_tok
         cb(Vcur, "Vcur", il);
 
         // cache-aware, non-causal attention
+        ggml_tensor * wo = hparams.is_spark_dspark ? nullptr : layer.wo;
         ggml_tensor * cur = use_iswa
-            ? build_attn(inp_attn_iswa, layer.wo, NULL, layer.wo_s, Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr, kq_scale, il)
-            : build_attn(inp_attn,      layer.wo, NULL, layer.wo_s, Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr, kq_scale, il);
+            ? build_attn(inp_attn_iswa, wo, NULL, layer.wo_s, Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr, kq_scale, il)
+            : build_attn(inp_attn,      wo, NULL, layer.wo_s, Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr, kq_scale, il);
+        if (hparams.is_spark_dspark) {
+            ggml_tensor * gate = ggml_sigmoid(ctx0, build_lora_mm(layer.wqkv_gate, noise_norm));
+            cur = ggml_reshape_3d(ctx0, cur, n_embd_head, n_head, n_tokens);
+            gate = ggml_reshape_3d(ctx0, gate, 1, n_head, n_tokens);
+            cur = ggml_mul(ctx0, cur, gate);
+            cur = ggml_reshape_2d(ctx0, cur, n_embd_head * n_head, n_tokens);
+            cur = build_lora_mm(layer.wo, cur, layer.wo_s);
+        }
 
         if (hparams.f_attn_value_scale != 0.0f) {
             cur = ggml_scale(ctx0, cur, hparams.f_attn_value_scale);
