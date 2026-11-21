@@ -142,7 +142,7 @@ bool common_imatrix_load(const std::string & fname, common_imatrix & imatrix) {
         struct ggml_tensor * in_sum  = nullptr;
         struct ggml_tensor * in_sum2 = nullptr;
         struct ggml_tensor * counts  = nullptr;
-        struct ggml_tensor * stats  = nullptr;
+        struct ggml_tensor * stats   = nullptr;
     };
 
     std::map<std::string, sum_tensors> sums_counts_for;
@@ -166,7 +166,7 @@ bool common_imatrix_load(const std::string & fname, common_imatrix & imatrix) {
         const struct ggml_tensor * in_sum  = sc.second.in_sum;
         const struct ggml_tensor * in_sum2 = sc.second.in_sum2;
         const struct ggml_tensor * counts  = sc.second.counts;
-        const struct ggml_tensor * stats  = sc.second.stats;
+        const struct ggml_tensor * stats   = sc.second.stats;
 
         if (!in_sum2 || !counts || (in_sum != nullptr && ggml_nelements(in_sum) != ggml_nelements(in_sum2))) {
             LOG_ERR("%s: mismatched sums and counts for %s\n", __func__, name.c_str());

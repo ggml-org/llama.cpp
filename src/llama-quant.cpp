@@ -20,6 +20,7 @@
 #include <random>
 #include <regex>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 
 // result of parsing --tensor-type option
