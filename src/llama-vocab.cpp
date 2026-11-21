@@ -452,6 +452,17 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_MAXWELL_MOE:
+                regex_exprs = {
+                    // tokenizer.json split sequence: newline, Han (with optional prefix), SEA scripts, then the o200k rule.
+                    // The Han and SEA stages use custom implementations in unicode.cpp.
+                    "\\n",
+                    "[^\\p{L}\\p{N}]?[\\p{Han}]+",
+                    "[\\u0E00-\\u0E7F\\u0E80-\\u0EFF\\u1000-\\u109F\\u1780-\\u17FF]+",
+                    // o200k rule from tokenizer.json, with the inline (?i:..) suffixes spelled out
+                    "[^\\p{L}\\p{N}]?((?=[\\p{L}\\p{M}])([^a-z]))*((?=[\\p{L}\\p{M}])([^A-Z]))+(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|[^\\p{L}\\p{N}]?((?=[\\p{L}\\p{M}])([^a-z]))+((?=[\\p{L}\\p{M}])([^A-Z]))*(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+                };
+                break;
             case LLAMA_VOCAB_PRE_TYPE_GPT4O:
             case LLAMA_VOCAB_PRE_TYPE_MINIMAX_M2:
                 regex_exprs = {
@@ -2661,6 +2672,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             } else if (
                 tokenizer_pre == "megrez") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_QWEN2;
+            } else if (
+                tokenizer_pre == "maxwell-moe") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_MAXWELL_MOE;
+                clean_spaces = false;
             } else if (
                 tokenizer_pre == "gpt-4o" ||
                 tokenizer_pre == "llama4" ||

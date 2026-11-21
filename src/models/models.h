@@ -3,6 +3,7 @@
 #include "llama-model.h"
 #include "llama-graph.h"
 #include "llama-model-loader.h"
+#include "hyper-connection.h"
 
 // note: almost all graphs require at least sqrtf, so include cmath globally
 #include <cmath>
@@ -1289,65 +1290,10 @@ struct llama_model_deepseek4 : public llama_model_base {
     uint32_t graph_nodes_per_tensor() const override { return 32; }
     bool lid_k_hdmd() const override { return true; }
 
-    struct graph : public llm_graph_context {
+    struct graph : public llm_graph_context, public hc_graph<graph> {
         struct no_build {};
         graph(const llm_graph_params & params, no_build) : llm_graph_context(params) {}
         graph(const llm_graph_params & params);
-
-        // collapse the hc streams with per-stream weights
-        ggml_tensor * build_hc_pre(
-                ggml_tensor * x,
-                ggml_tensor * weights,
-                int il) const;
-
-        // mean over the hyper-connection streams: [n_embd, hc, n_tokens] -> [n_embd, n_tokens]
-        ggml_tensor * build_hc_mean(ggml_tensor * x) const;
-
-        // all outputs of the hc mix builders:
-        //   build_hc_pre   - cur is the collapsed input, post / comb feed build_hc_post
-        //   build_hc_mixes - pre is the pre weights, post / comb feed build_hc_post
-        struct hc_pre {
-            ggml_tensor * cur;
-            ggml_tensor * post;
-            ggml_tensor * comb;
-        };
-
-        struct hc_mixes {
-            ggml_tensor * pre;
-            ggml_tensor * post;
-            ggml_tensor * comb;
-        };
-
-        hc_pre build_hc_pre(
-                ggml_tensor * x,
-                ggml_tensor * hc_fn,
-                ggml_tensor * hc_scale,
-                ggml_tensor * hc_base,
-                int il) const;
-
-        hc_mixes build_hc_mixes(
-                ggml_tensor * x,
-                ggml_tensor * hc_fn,
-                ggml_tensor * hc_scale,
-                ggml_tensor * hc_base,
-                int il) const;
-
-        ggml_tensor * build_hc_post(
-                ggml_tensor * x,
-                ggml_tensor * residual,
-                ggml_tensor * post,
-                ggml_tensor * comb,
-                int il) const;
-
-        ggml_tensor * build_hc_sinkhorn(
-                ggml_tensor * comb,
-                int il) const;
-
-        ggml_tensor * build_hc_head(
-                ggml_tensor * x,
-                ggml_tensor * hc_fn,
-                ggml_tensor * hc_scale,
-                ggml_tensor * hc_base) const;
 
         ggml_tensor * build_attention(
                 llm_graph_input_dsv4 * inp_dsv4,
@@ -2267,6 +2213,29 @@ struct llama_model_beam : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
+
+struct llama_model_maxwell_moe : public llama_model_base {
+    llama_model_maxwell_moe(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader &) override;
+
+    struct graph_mtp : public llm_graph_context, public hc_graph<graph_mtp> {
+        graph_mtp(const llm_graph_params & params);
+    };
+
+    struct graph : public llm_graph_context, public hc_graph<graph> {
+        graph(const llm_graph_params & params);
+
+        ggml_tensor * build_attn_msa_fa(
+                ggml_tensor * q_cur,
+                ggml_tensor * k,
+                ggml_tensor * v,
+                ggml_tensor * mask,
+                int64_t Gp, float kq_scale, int il) const;
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
 
 struct llama_model_ricursive : public llama_model_base {
     llama_model_ricursive(const struct llama_model_params & params) : llama_model_base(params) {}

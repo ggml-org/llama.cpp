@@ -319,6 +319,8 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_INDEXER_KPOOL,           hparams.indexer_kpool);
     add_kv(LLM_KV_ATTENTION_INDEXER_KPOOL_SELECT_TAIL, hparams.indexer_kpool_select_tail);
     add_kv(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS,    hparams.indexer_local_blocks);
+    add_kv(LLM_KV_ATTENTION_INDEXER_PREFIX_BLOCKS,   hparams.indexer_prefix_blocks);
+    add_kv(LLM_KV_ATTENTION_INDEXER_DENSE_PREFIX_TOKENS, hparams.indexer_dense_prefix_tokens);
     add_kv(LLM_KV_ATTENTION_INDEXER_TYPES,           hparams.is_indexer_full_impl, true);
     if (hparams.n_layer_kv_from_start >= 0) {
         add_kv(LLM_KV_ATTENTION_SHARED_KV_LAYERS,    uint32_t(hparams.n_layer_all - hparams.n_layer_kv_from_start));
