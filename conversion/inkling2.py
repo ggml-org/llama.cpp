@@ -385,7 +385,6 @@ class Inkling2DSparkModel(TextModel):
         w.add_uint32(gguf.Keys.LLM.VOCAB_SIZE_UNPADDED.format(arch="dflash"), hp["unpadded_vocab_size"])
         w.add_block_size(hp["block_size"])
         w.add_target_layers(hp["target_layer_ids"])
-        w.add_uint32(gguf.Keys.LLM.DSPARK_MARKOV_RANK.format(arch="dflash"), hp["markov_rank"])
         w.add_sample_from_anchor(False)
         w.add_has_confidence_head(False)
         w.add_bool("dflash.attention.causal", False)

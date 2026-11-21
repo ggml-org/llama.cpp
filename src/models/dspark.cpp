@@ -88,6 +88,9 @@ void llama_model_dflash::load_hparams_inkling2(llama_model_loader & ml) {
             std::adjacent_find(target_layer_ids.begin(), target_layer_ids.end(), std::greater_equal<int32_t>()) != target_layer_ids.end()) {
         throw std::runtime_error("Inkling2 DSpark target layers must be in range and strictly increasing");
     }
+    if (target_layer_ids.size() * (uint64_t) hparams.n_embd > UINT32_MAX) {
+        throw std::runtime_error("Inkling2 DSpark target features exceed the input width");
+    }
     if (!std::isfinite(hparams.f_norm_rms_eps) || hparams.f_norm_rms_eps <= 0 ||
             !std::isfinite(hparams.f_final_logit_softcapping) || hparams.f_final_logit_softcapping <= 0) {
         throw std::runtime_error("invalid Inkling2 DSpark RMS epsilon or logit softcap");
@@ -210,9 +213,9 @@ void llama_model_dflash::load_tensors_layers_mistral_large4() {
 void llama_model_dflash::load_tensors_inkling2() {
     LLAMA_LOAD_LOCALS;
 
-    const int64_t rank = hparams.dspark_markov_rank;
-    if (rank > n_embd) {
-        throw std::runtime_error("Inkling2 DSpark recurrent rank exceeds the embedding size");
+    const int64_t rank = ml->require_tensor_meta("markov_w1.weight")->ne[0];
+    if (rank <= 0 || rank > n_embd) {
+        throw std::runtime_error("invalid Inkling2 DSpark recurrent rank");
     }
     // The greedy tie-break stores token ranks in F32.
     if (n_vocab <= 0 || n_vocab != hparams.n_vocab_unpadded || n_vocab > hparams.n_vocab_padded || n_vocab > (1 << 24)) {
@@ -949,7 +952,7 @@ llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llm_graph_p
 static ggml_tensor * build_inkling2_head(llm_graph_context & g, const llama_model & model, const llama_model & target,
         ggml_tensor * prev, ggml_tensor * & state, ggml_tensor * hidden, ggml_tensor * base, ggml_tensor * context) {
     auto * ctx0 = g.ctx0;
-    const int64_t rank = model.hparams.dspark_markov_rank;
+    const int64_t rank = model.dspark_markov_w1->ne[0];
     auto * joint = ggml_concat(ctx0, state, ggml_get_rows(ctx0, model.dspark_markov_w1, prev), 0);
     joint = ggml_concat(ctx0, joint, ggml_concat(ctx0, hidden, context, 0), 0);
     joint = ggml_add(ctx0, g.build_lora_mm(model.dspark_joint_proj, joint), model.dspark_joint_proj_b);
@@ -975,7 +978,7 @@ static ggml_tensor * build_inkling2_head(llm_graph_context & g, const llama_mode
 llama_model_dflash::graph_inkling2::graph_inkling2(const llm_graph_params & params) : llm_graph_context(params) {
     auto * positions = build_inp_pos();
     auto * attn = build_attn_inp_kv_iswa();
-    const int64_t rank = hparams.dspark_markov_rank;
+    const int64_t rank = model.dspark_markov_w1->ne[0];
     const int64_t ntarget = model.target_layer_ids.size();
     const auto mix = [&](ggml_tensor * features, int row, ggml_tensor * norm) {
         auto * weights = ggml_soft_max(ctx0, ggml_view_1d(ctx0, model.dspark_fuse, ntarget, row*model.dspark_fuse->nb[1]));
@@ -1062,12 +1065,10 @@ llama_model_dflash::graph_inkling2::graph_inkling2(const llm_graph_params & para
     auto * base = build_lora_mm(target->output, cur, target->output_s);
     ggml_prec_set_acc(base, GGML_PREC_F32);
     if (block > hparams.dflash_block_size) {
-        res->t_h_nextn = cur;
         res->t_logits = ggml_cont(ctx0, ggml_view_2d(ctx0, base, hparams.n_vocab_unpadded, n_tokens, base->nb[1], 0));
         return;
     }
     auto * state = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, rank, nb), 0.0f);
-    auto * states = ggml_pad(ctx0, state, n_embd - rank, 0, 0, 0);
     auto * logits = ggml_cont(ctx0, ggml_view_2d(ctx0, base, base->ne[0], nb, block*base->nb[1], 0));
     const auto column = [&](ggml_tensor * t, int64_t i) {
         return ggml_cont(ctx0, ggml_view_2d(ctx0, t, t->ne[0], nb, block*t->nb[1], i*t->nb[1]));
@@ -1078,7 +1079,6 @@ llama_model_dflash::graph_inkling2::graph_inkling2(const llm_graph_params & para
     auto * prev = ids;
     for (int64_t i = 1; i < block; ++i) {
         auto * col = build_inkling2_head(*this, model, *target, prev, state, column(cur, i), column(base, i), context);
-        states = ggml_concat(ctx0, states, ggml_pad(ctx0, state, n_embd - rank, 0, 0, 0), 1);
         logits = ggml_concat(ctx0, logits, col, 1);
         // Select the first maximum, independent of backend argmax tie order.
         auto * valid = ggml_cont(ctx0, ggml_view_2d(ctx0, col, hparams.n_vocab_unpadded, nb, col->nb[1], 0));
@@ -1086,13 +1086,7 @@ llama_model_dflash::graph_inkling2::graph_inkling2(const llm_graph_params & para
         auto * is_max = ggml_scale_bias(ctx0, ggml_step(ctx0, ggml_sub(ctx0, ggml_repeat(ctx0, maximum, valid), valid)), -1.0f, 1.0f);
         prev = ggml_argmax(ctx0, ggml_mul(ctx0, is_max, tie_rank));
     }
-    const auto block_order = [&](ggml_tensor * t) {
-        t = ggml_reshape_3d(ctx0, t, t->ne[0], nb, block);
-        return ggml_reshape_2d(ctx0, ggml_cont(ctx0, ggml_permute(ctx0, t, 0, 2, 1, 3)), t->ne[0], n_tokens);
-    };
-    res->t_h_nextn = block_order(states);
-    cb(res->t_h_nextn, "dspark_chain_state", -1);
-    ggml_build_forward_expand(gf, res->t_h_nextn);
-    logits = block_order(logits);
+    logits = ggml_reshape_3d(ctx0, logits, logits->ne[0], nb, block);
+    logits = ggml_reshape_2d(ctx0, ggml_cont(ctx0, ggml_permute(ctx0, logits, 0, 2, 1, 3)), logits->ne[0], n_tokens);
     res->t_logits = ggml_cont(ctx0, ggml_view_2d(ctx0, logits, hparams.n_vocab_unpadded, n_tokens, logits->nb[1], 0));
 }

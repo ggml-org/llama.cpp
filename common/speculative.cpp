@@ -980,6 +980,11 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
     }
 };
 
+static int32_t dflash_block_size(const llama_model * model) {
+    char buf[32] = {};
+    return llama_model_meta_val_str(model, "dflash.block_size", buf, sizeof(buf)) >= 0 ? std::atoi(buf) : 16;
+}
+
 // DFlash: block-diffusion drafting with a draft-side KV cache injection
 struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     common_params_speculative_draft params;
@@ -995,7 +1000,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     std::vector<llama_sampler *> backend_chains;
 
     int32_t n_embd_dec = 0;  // draft hidden size
-    int32_t n_embd_enc = 0;  // target_layer_ids_n * target_hidden_size
+    size_t  n_embd_enc = 0;  // target_layer_ids_n * target_hidden_size
     int32_t n_embd_tgt = 0;  // target model hidden size
 
     int32_t     block_size    = 0;
@@ -1049,15 +1054,11 @@ protected:
 
         n_embd_tgt    = llama_model_n_embd(model_tgt);
         n_embd_dec    = llama_model_n_embd(model_dft);
-        n_embd_enc    = (int32_t) target_layer_ids_n * n_embd_tgt;
+        n_embd_enc    = (size_t) target_layer_ids_n * n_embd_tgt;
 
-        // read the trained block size from the dflash.block_size metadata key
-        block_size = 16;
+        block_size = dflash_block_size(model_dft);
         {
             char buf[32] = {};
-            if (llama_model_meta_val_str(model_dft, "dflash.block_size", buf, sizeof(buf)) >= 0) {
-                block_size = std::atoi(buf);
-            }
             if (llama_model_meta_val_str(model_dft, "dflash.attention.causal", buf, sizeof(buf)) >= 0) {
                 causal_attn = std::strcmp(buf, "true") == 0;
             }
@@ -1140,7 +1141,6 @@ protected:
         llama_set_causal_attn(ctx_dft, causal_attn); // DFlash needs non-causal attention unless the model says otherwise
     }
 
-    // only LiliCorr uses this, to keep the context features for its scorer; the other heads only need the KV cache
     // called after the host copy injection of a chunk, while h_nextn still holds the context features of batch_inject
     virtual void store_context_features(llama_seq_id /*seq_id*/, int32_t /*n_chunk*/) {}
 
@@ -1267,7 +1267,7 @@ public:
                 for (int32_t i = 0; i < n_chunk; ++i) {
                     const llama_pos p = batch_in.tokens[i_batch_beg[seq_id] + offset + i].pos[0];
                     const llama_pos pos_arr[4] = { p, p, p, 0 };
-                    batch_inject.add_embd({ features_buf.data() + (size_t) i * n_embd_enc, 1, (size_t) n_embd_enc }, pos_arr, seq_id, false);
+                    batch_inject.add_embd({ features_buf.data() + (size_t) i * n_embd_enc, 1, n_embd_enc }, pos_arr, seq_id, false);
                 }
                 const int32_t rc = llama_process(ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch_inject.get());
                 if (rc != 0) {
@@ -1393,19 +1393,16 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
             }
         }
 
+        has_rnn_context = llama_model_dflash_variant(model_dft) == LLAMA_DFLASH_VARIANT_DSPARK_INKLING2;
+
         if (this->params.p_min > 0.0f) {
             char buf[16] = {};
-            const bool has_conf =
-                llama_model_meta_val_str(model_dft, "dflash.has_confidence_head", buf, sizeof(buf)) < 0 ||
-                std::strcmp(buf, "true") == 0;
+            const bool has_conf = !has_rnn_context &&
+                (llama_model_meta_val_str(model_dft, "dflash.has_confidence_head", buf, sizeof(buf)) < 0 ||
+                 std::strcmp(buf, "true") == 0);
             if (!has_conf) {
                 throw std::runtime_error("DSpark draft has no confidence head: please set --spec-draft-p-min 0");
             }
-        }
-
-        {
-            char buf[32] = {};
-            has_rnn_context = llama_model_meta_val_str(model_dft, "dflash.dspark.markov_rank", buf, sizeof(buf)) >= 0;
         }
 
         if (has_rnn_context) {
@@ -1476,9 +1473,10 @@ public:
         batch.clear();
 
         // build one batch holding every drafting sequence's noise block into a single decode
-        // record where each block starts and its size
         std::vector<int32_t> i_block_beg(n_seq, -1);
-        std::vector<int32_t> n_block    (n_seq,  0);
+        const int32_t i_draft_beg = sample_from_anchor ? 0 : 1;
+        // Later mask rows affect earlier predictions through noncausal attention.
+        const int32_t n_block_tokens = has_rnn_context ? block_size : i_draft_beg + params.n_max;
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             auto & dp = dparams[seq_id];
@@ -1490,21 +1488,20 @@ public:
 
             const int32_t n = (int32_t) dp.pos0;
 
-            const int32_t n_draft = params.n_max;
-            // the recurrent head reads a full block
-            const int32_t n_block_tokens = has_rnn_context ? block_size : n_draft + (sample_from_anchor ? 0 : 1);
+            const float * context = nullptr;
+            if (has_rnn_context) {
+                const llama_pos pos = dp.pos0 - 1;
+                const size_t slot = (size_t) seq_id * context_rows + (size_t) pos % context_rows;
+                if (pos < 0 || context_pos[slot] != pos) {
+                    throw std::runtime_error("DSpark committed context feature is missing");
+                }
+                context = context_embd.data() + slot * (size_t) n_embd_dec;
+            }
             i_block_beg[seq_id] = batch.size();
-            n_block    [seq_id] = n_block_tokens;
             for (int32_t i = 0; i < n_block_tokens; ++i) {
                 const int32_t idx = batch.add(i == 0 ? dp.id_last : mask_token_id, n + i, seq_id, true);
-                if (has_rnn_context) {
-                    // the context features of the committed anchor condition the recurrent head
-                    const llama_pos pos = dp.pos0 - 1;
-                    const size_t slot = (size_t) seq_id * context_rows + (size_t) pos % context_rows;
-                    if (pos < 0 || context_pos[slot] != pos) {
-                        throw std::runtime_error("DSpark committed context feature is missing");
-                    }
-                    batch.set_embd_state(idx, { context_embd.data() + slot * (size_t) n_embd_dec, 1, (size_t) n_embd_dec });
+                if (context) {
+                    batch.set_embd_state(idx, { context, 1, (size_t) n_embd_dec });
                 }
             }
         }
@@ -1525,8 +1522,7 @@ public:
             }
             auto & dp = dparams[seq_id];
 
-            const int32_t beg            = i_block_beg[seq_id];
-            const int32_t n_block_tokens = n_block[seq_id];
+            const int32_t beg = i_block_beg[seq_id];
 
             auto * smpl = smpls[seq_id].get();
 
@@ -1535,8 +1531,7 @@ public:
             // DSpark: read from the first draft slot, truncate below the confidence threshold
             const float * conf = params.p_min > 0.0f ? llama_get_embeddings_nextn(ctx_dft) : nullptr;
             // bonus-anchor drafts read the mask positions only, like DFlash
-            const int32_t i_draft_beg = sample_from_anchor ? 0 : 1;
-            for (int32_t i = i_draft_beg; i < std::min(n_block_tokens, i_draft_beg + params.n_max); ++i) {
+            for (int32_t i = i_draft_beg; i < i_draft_beg + params.n_max; ++i) {
                 const int32_t idx = beg + i;
 
                 if (conf && conf[(size_t) idx * n_embd_dec] < params.p_min) {
@@ -3214,14 +3209,12 @@ common_speculative_init_result::common_speculative_init_result(
 
         pimpl->model.reset(model_dft);
 
-        char rank_meta[32] = {};
-        if (llama_model_meta_val_str(model_dft, "dflash.dspark.markov_rank", rank_meta, sizeof(rank_meta)) >= 0) {
-            char block_meta[32] = {};
-            llama_model_meta_val_str(model_dft, "dflash.block_size", block_meta, sizeof(block_meta));
-            const uint32_t block = std::stoul(block_meta);
-            cparams.n_outputs_max = std::max(cparams.n_outputs_max, block * params.n_parallel);
-            cparams.n_batch = std::max(cparams.n_batch, block * params.n_parallel);
-            cparams.n_ubatch = std::max(cparams.n_ubatch, block);
+        if (llama_model_dflash_variant(model_dft) == LLAMA_DFLASH_VARIANT_DSPARK_INKLING2) {
+            // Noncausal decode needs every sequence's full block in one ubatch.
+            const uint32_t rows = dflash_block_size(model_dft) * cparams.n_seq_max;
+            cparams.n_batch       = std::max(cparams.n_batch, rows);
+            cparams.n_ubatch      = cparams.n_ubatch ? std::max(cparams.n_ubatch, rows) : 0;
+            cparams.n_outputs_max = cparams.n_outputs_max ? std::max(cparams.n_outputs_max, rows) : 0;
         }
 
         llama_context * ctx_dft = llama_init_from_model(model_dft, cparams);
@@ -3339,6 +3332,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                 switch (llama_model_dflash_variant(llama_get_model(config.params.draft.ctx_dft))) {
                     case LLAMA_DFLASH_VARIANT_DFLASH:   type_model = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;   break;
                     case LLAMA_DFLASH_VARIANT_DFLASH2:  type_model = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2;  break;
+                    case LLAMA_DFLASH_VARIANT_DSPARK_INKLING2:
                     case LLAMA_DFLASH_VARIANT_DSPARK:   type_model = COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;   break;
                     case LLAMA_DFLASH_VARIANT_LILICORR: type_model = COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR; break;
                     case LLAMA_DFLASH_VARIANT_NONE:     break;

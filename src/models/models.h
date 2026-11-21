@@ -1577,27 +1577,20 @@ struct llama_model_eagle3 : public llama_model_base {
 };
 
 struct llama_model_dflash : public llama_model_base {
-    llama_model_dflash(const struct llama_model_params & params) : llama_model_base(params) {}
+    llama_model_dflash(const struct llama_model_params & params) : llama_model_base(params) {
+        hparams.dflash_variant = LLAMA_DFLASH_VARIANT_DFLASH;
+    }
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
     uint32_t graph_nodes_per_tensor() const override;
-
-    enum variant_type {
-        VARIANT_DFLASH,
-        VARIANT_DFLASH2,
-        VARIANT_DSPARK,
-        VARIANT_LILICORR,
-    };
 
     enum backbone_type {
         BACKBONE_BASE,
         BACKBONE_DSV4,
         BACKBONE_DSV41,
         BACKBONE_MISTRAL_LARGE4,
-        BACKBONE_INKLING2,
     };
 
-    variant_type  variant  = VARIANT_DFLASH;
     backbone_type backbone = BACKBONE_BASE;
 
     void load_hparams_lilicorr(llama_model_loader & ml);

@@ -826,8 +826,9 @@ class TestInkling2DSparkConversion(unittest.TestCase):
                                            ("layers.4.dflare_norm.weight", "blk.4.dflare_norm.weight")):
                         np.testing.assert_array_equal(actual[target], tensors[source].float().numpy())
                     kv = model.gguf_writer.kv_data[0]
+                    self.assertNotIn("dflash.dspark.markov_rank", kv)
                     for key, value in (("general.architecture", "dflash"), ("dflash.block_count", 5),
-                                       ("dflash.block_size", 8), ("dflash.dspark.markov_rank", 4),
+                                       ("dflash.block_size", 8),
                                        ("dflash.sample_from_anchor", False), ("dflash.has_confidence_head", False),
                                        ("dflash.rope.freq_base", 1000000.0), ("dflash.attention.sliding_window", 16)):
                         self.assertEqual(kv[key].value, value)

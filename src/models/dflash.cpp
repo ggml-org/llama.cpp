@@ -39,27 +39,20 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
     const bool has_markov   = ml.get_tensor_meta("markov_w1.weight")       != nullptr;
     const bool has_selector = ml.get_tensor_meta("selector_hidden.weight") != nullptr;
     const bool has_lilicorr = ml.get_key(LLM_KV_LILICORR_HIDDEN_SIZE, hparams.lilicorr_hidden_size, false);
-    if (has_markov) {
-        variant = VARIANT_DSPARK;
+    if (ml.get_tensor_meta("dspark_hidden_out.weight")) {
+        hparams.dflash_variant = LLAMA_DFLASH_VARIANT_DSPARK_INKLING2;
+    } else if (has_markov) {
+        hparams.dflash_variant = LLAMA_DFLASH_VARIANT_DSPARK;
     } else if (has_selector) {
-        variant = VARIANT_DFLASH2;
+        hparams.dflash_variant = LLAMA_DFLASH_VARIANT_DFLASH2;
     } else if (has_lilicorr) {
-        variant = VARIANT_LILICORR;
+        hparams.dflash_variant = LLAMA_DFLASH_VARIANT_LILICORR;
         load_hparams_lilicorr(ml);
     }
 
     if (!ml.get_arr(LLM_KV_TARGET_LAYERS, target_layer_ids, false)) {
         throw std::runtime_error("DFlash model requires 'target_layers' in GGUF metadata");
     }
-
-    ml.get_key(LLM_KV_DSPARK_MARKOV_RANK, hparams.dspark_markov_rank, false);
-    if (hparams.dspark_markov_rank) {
-        if (target_layer_ids.size() > LLAMA_MAX_LAYERS + 1 ||
-                target_layer_ids.size() * (uint64_t) hparams.n_embd > UINT32_MAX) {
-            throw std::runtime_error("invalid DFlash target feature dimensions");
-        }
-    }
-    hparams.n_embd_inp_enc_impl = (uint32_t) target_layer_ids.size() * hparams.n_embd;
 
     std::string layers;
     const char * sep = "";
@@ -71,9 +64,8 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
     LLAMA_LOG_INFO("%s: DFlash extract_layers = [%s]\n", __func__, layers.c_str());
 
     ml.get_key(LLM_KV_HYPER_CONNECTION_COUNT, hparams.dsv4_hc_mult, false);
-    if (hparams.dspark_markov_rank > 0) {
+    if (hparams.dflash_variant == LLAMA_DFLASH_VARIANT_DSPARK_INKLING2) {
         load_hparams_inkling2(ml);
-        backbone = BACKBONE_INKLING2;
     } else if (hparams.dsv4_hc_mult > 0) {
         load_hparams_dsv4(ml);
         backbone = hparams.dsv4_hc_single_pass ? BACKBONE_DSV41 : BACKBONE_DSV4;
@@ -89,6 +81,8 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
     }
 
+    hparams.n_embd_inp_enc_impl = (uint32_t) target_layer_ids.size() * hparams.n_embd;
+
     ml.get_key_or_arr(LLM_KV_ATTENTION_ROPE_PATTERN, hparams.rope_pattern, hparams.n_layer(), false);
 
     type = LLM_TYPE_UNKNOWN;
@@ -97,8 +91,7 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
 void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
 
-    // Inkling2 DSpark shares the target's embeddings and lm head and has no fc encoder
-    if (backbone == BACKBONE_INKLING2) {
+    if (hparams.dflash_variant == LLAMA_DFLASH_VARIANT_DSPARK_INKLING2) {
         load_tensors_inkling2();
         return;
     }
@@ -116,11 +109,12 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         LLAMA_LOG_INFO("%s: DFlash using d2t mapping (draft_vocab_size = %lld)\n", __func__, (long long) n_vocab_draft);
     }
 
-    switch (variant) {
-        case VARIANT_DSPARK:   load_tensors_dspark(n_vocab_draft); break;
-        case VARIANT_DFLASH2:  load_tensors_dflash2();             break;
-        case VARIANT_LILICORR: load_tensors_lilicorr();            break;
-        case VARIANT_DFLASH:                                       break;
+    switch (hparams.dflash_variant) {
+        case LLAMA_DFLASH_VARIANT_DSPARK:          load_tensors_dspark(n_vocab_draft); break;
+        case LLAMA_DFLASH_VARIANT_DFLASH2:         load_tensors_dflash2();             break;
+        case LLAMA_DFLASH_VARIANT_LILICORR:        load_tensors_lilicorr();            break;
+        case LLAMA_DFLASH_VARIANT_DFLASH:                                              break;
+        default: GGML_ABORT("invalid DFlash variant");
     }
 
     fc              = create_tensor(tn(LLM_TENSOR_FC,              "weight"), { n_embd_inp, n_embd }, 0);
@@ -138,7 +132,6 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         case BACKBONE_DSV4:
         case BACKBONE_DSV41:          load_tensors_layers_dsv4();           break;
         case BACKBONE_MISTRAL_LARGE4: load_tensors_layers_mistral_large4(); break;
-        case BACKBONE_INKLING2:                                             break; // loaded above
     }
 }
 
@@ -557,13 +550,14 @@ std::unique_ptr<llm_graph_context> llama_model_dflash::build_arch_graph(const ll
                 case BACKBONE_DSV4:           return std::make_unique<graph_dsv4>(params);
                 case BACKBONE_DSV41:          return std::make_unique<graph_dsv41>(params);
                 case BACKBONE_MISTRAL_LARGE4: return std::make_unique<graph_mistral_large4>(params);
-                case BACKBONE_INKLING2:       return std::make_unique<graph_inkling2>(params);
             }
-            switch (variant) {
-                case VARIANT_DFLASH:   return std::make_unique<graph_dflash>(params);
-                case VARIANT_DFLASH2:  return std::make_unique<graph_dflash2>(params);
-                case VARIANT_DSPARK:   return std::make_unique<graph_dspark>(params);
-                case VARIANT_LILICORR: return std::make_unique<graph_lilicorr>(params);
+            switch (hparams.dflash_variant) {
+                case LLAMA_DFLASH_VARIANT_DFLASH:          return std::make_unique<graph_dflash>(params);
+                case LLAMA_DFLASH_VARIANT_DFLASH2:         return std::make_unique<graph_dflash2>(params);
+                case LLAMA_DFLASH_VARIANT_DSPARK:          return std::make_unique<graph_dspark>(params);
+                case LLAMA_DFLASH_VARIANT_DSPARK_INKLING2: return std::make_unique<graph_inkling2>(params);
+                case LLAMA_DFLASH_VARIANT_LILICORR:        return std::make_unique<graph_lilicorr>(params);
+                case LLAMA_DFLASH_VARIANT_NONE:            break;
             }
             GGML_ABORT("invalid DFlash variant");
         default:
