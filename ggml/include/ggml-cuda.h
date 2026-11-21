@@ -24,6 +24,10 @@ GGML_BACKEND_API ggml_backend_t ggml_backend_cuda_init(int device);
 
 GGML_BACKEND_API bool ggml_backend_is_cuda(ggml_backend_t backend);
 
+// force a single batch size independent kernel path for ops whose reduction
+// order would otherwise depend on batch size, for example spec decoding
+GGML_BACKEND_API void ggml_backend_cuda_set_batch_invariant(ggml_backend_t backend, bool batch_invariant);
+
 // device buffer
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_cuda_buffer_type(int device);
 

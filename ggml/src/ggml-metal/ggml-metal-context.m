@@ -82,6 +82,10 @@ struct ggml_metal {
     // error state - set when a command buffer fails during synchronize
     // once set, graph_compute will return GGML_STATUS_FAILED until the backend is recreated
     bool has_error;
+
+    // force a single, batch-size-independent kernel path for ops whose reduction order would
+    // otherwise vary with batch size (see ggml_backend_metal_set_batch_invariant)
+    bool batch_invariant;
 };
 
 ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
@@ -769,7 +773,8 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
             idx_end,
             ctx->use_concurrency,
             ctx->capture_compute == 0,
-            ctx->debug_graph);
+            ctx->debug_graph,
+            ctx->batch_invariant);
 
         for (int idx = 0; idx < ggml_metal_op_n_nodes(ctx_op); ++idx) {
             const int res = ggml_metal_op_encode(ctx_op, idx);
@@ -791,6 +796,10 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
 void ggml_metal_set_abort_callback(ggml_metal_t ctx, ggml_abort_callback abort_callback, void * user_data) {
     ctx->abort_callback = abort_callback;
     ctx->abort_callback_data = user_data;
+}
+
+void ggml_metal_set_batch_invariant(ggml_metal_t ctx, bool batch_invariant) {
+    ctx->batch_invariant = batch_invariant;
 }
 
 bool ggml_metal_supports_family(ggml_metal_t ctx, int family) {

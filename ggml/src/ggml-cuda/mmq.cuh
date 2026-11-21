@@ -1562,8 +1562,10 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     GGML_ASSERT(ntiles_dst * blocks_per_ne00_fd.z < (1 << 30)); // Assert that variable kbc will not overflow.
 
     const int nwork = ntiles_dst * k_chunks; // Maximum number of CUDA blocks that can do useful work.
-    int nblocks_stream_k = GGML_CUDA_CC_IS_NVIDIA(cc) && tiles_efficiency_percent >= 90 ? ntiles_dst : std::min(stream_k_blocks, nwork);
-    if (GGML_CUDA_CC_IS_GCN(cc) && ntiles_dst < nsm) {
+    // batch_invariance each block computes one whole tile, so the K split does not depend on the batch size.
+    const bool one_tile_per_block = (GGML_CUDA_CC_IS_NVIDIA(cc) && tiles_efficiency_percent >= 90) || ctx.batch_invariant;
+    int nblocks_stream_k = one_tile_per_block ? ntiles_dst : std::min(stream_k_blocks, nwork);
+    if (!ctx.batch_invariant && GGML_CUDA_CC_IS_GCN(cc) && ntiles_dst < nsm) {
         // Use a 512-thread budget per CU when the tiles do not fill the device.
         nblocks_stream_k = std::min(nwork, nsm * std::max(1, 512 / config.nthreads));
     }

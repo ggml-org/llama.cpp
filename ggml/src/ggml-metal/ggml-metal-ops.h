@@ -19,7 +19,8 @@ ggml_metal_op_t ggml_metal_op_init(
         int  idx_end,
         bool use_concurrency,
         bool use_capture,
-        int  debug_graph);
+        int  debug_graph,
+        bool batch_invariant);
 
 void ggml_metal_op_free(ggml_metal_op_t ctx);
 

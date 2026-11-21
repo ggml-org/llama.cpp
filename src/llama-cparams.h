@@ -50,6 +50,7 @@ struct llama_cparams {
     bool no_perf;
     bool op_offload;
     bool kv_unified;
+    bool batch_invariant;
     bool pipeline_parallel;
     bool training;           // set by llama_opt_init()
     bool moe_random_routing; // benchmark only: random expert ids in the MoE GEMMs
