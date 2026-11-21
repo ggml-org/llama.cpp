@@ -159,8 +159,15 @@ jobs:
       - name: Dependencies
         id: depends
         run: |
-          apt-get update
-          apt-get install -y build-essential git cmake libssl-dev jq python3-venv musa-mualg-5-2 musa-muthrust-5-2 libmthreads-compute
+          apt-get update || true
+          apt-get install -y build-essential git cmake libssl-dev jq python3-venv
+          # Use github repositories as dl.mthreads.com has been unreachable.
+          # We can go back to using apt-get install later by using:
+          # apt-get install -y build-essential git cmake libssl-dev jq python3-venv musa-mualg-5-2 musa-muthrust-5-2 libmthreads-compute
+          git clone https://github.com/MooreThreads/muAlg.git /tmp/muAlg
+          cd /tmp/muAlg && git checkout e189e81f545694cfc79db7d216a049637235d176 && ./mt_build.sh -i
+          git clone https://github.com/MooreThreads/muThrust.git /tmp/muThrust
+          cd /tmp/muThrust && git checkout c2e8bbfc8f07b7e755e87ef360505f63fbe9e59e && ./mt_build.sh -i
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
@@ -182,7 +189,9 @@ jobs:
         run: |
           cmake -B build -S . \
             -DGGML_MUSA=ON \
-            -DMUSA_ARCHITECTURES=31
+            -DMUSA_ARCHITECTURES=31 \
+            -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined \
+            -DCMAKE_SHARED_LINKER_FLAGS=-Wl,--allow-shlib-undefined
           cmake --build build --config Release -j $(nproc)
 
       - name: ccache-buckets-save
