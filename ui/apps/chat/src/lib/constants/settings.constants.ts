@@ -5,19 +5,17 @@ import { DEFAULT_MCP_CONFIG } from './mcp.constants';
 import { SETTINGS_KEYS } from './settings-keys.constants';
 import { TITLE_GENERATION } from './title-generation.constants';
 import { FILE_GLOB_SEARCH_PICKERS } from './working-directory.constants';
-import {
-	Code,
-	Database,
-	File,
-	Funnel,
-	GlassWater,
-	ListRestart,
-	Monitor,
-	Moon,
-	PencilRuler,
-	SlidersVertical,
-	Sun
-} from '@lucide/svelte';
+import Code from '@lucide/svelte/icons/code';
+import Database from '@lucide/svelte/icons/database';
+import File from '@lucide/svelte/icons/file';
+import Funnel from '@lucide/svelte/icons/funnel';
+import GlassWater from '@lucide/svelte/icons/glass-water';
+import ListRestart from '@lucide/svelte/icons/list-restart';
+import Monitor from '@lucide/svelte/icons/monitor';
+import Moon from '@lucide/svelte/icons/moon';
+import PencilRuler from '@lucide/svelte/icons/pencil-ruler';
+import SlidersVertical from '@lucide/svelte/icons/sliders-vertical';
+import Sun from '@lucide/svelte/icons/sun';
 import { SurfaceTheme, SyncableParameterType } from '#lib/enums/index.ts';
 import { SettingsFieldType } from '#lib/enums/settings.enums.ts';
 import { ColorMode } from '#lib/enums/ui.enums.ts';
@@ -149,7 +147,14 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: false,
-				help: 'Show the Discover Models sidebar action to browse and download HuggingFace GGUF models. Turns the Hugging Face Hub API on while it is enabled. Only available in router mode.',
+				help: 'Show Models in the sidebar and "Manage models" in the model selector, to see, load and configure the models on the server.',
+				key: SETTINGS_KEYS.SHOW_MODELS_MANAGER,
+				label: 'Show Models',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
+				help: 'Show Discover Models on the Models page, to browse and download HuggingFace GGUF models. Turns Models and the Hugging Face Hub API on while it is enabled. Only available in router mode.',
 				key: SETTINGS_KEYS.ENABLE_DISCOVER_MODELS,
 				label: 'Enable Discover Models',
 				type: SettingsFieldType.CHECKBOX
@@ -159,6 +164,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Fetch model display data (avatars, context length, chat template) and everything in the Discover Models view from the Hugging Face Hub API. Locked on while Discover Models is enabled; can be turned on alone for just the display data.',
 				key: SETTINGS_KEYS.USE_HUGGING_FACE_HUB,
 				label: 'Use the Hugging Face Hub API',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
+				help: 'Show MCP in the sidebar, to add and manage MCP servers. Servers already added keep working while it is hidden.',
+				key: SETTINGS_KEYS.SHOW_MCP,
+				label: 'Show MCP',
 				type: SettingsFieldType.CHECKBOX
 			},
 			{

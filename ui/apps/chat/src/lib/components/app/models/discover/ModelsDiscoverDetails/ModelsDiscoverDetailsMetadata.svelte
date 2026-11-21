@@ -26,7 +26,7 @@
 </script>
 
 {#if description}
-	<p class="text-sm text-muted-foreground">{description}</p>
+	<p class="text-body-sm text-muted-foreground">{description}</p>
 {/if}
 
 <!-- Metadata chips: label | value pairs, matching the HF model page style -->
@@ -51,7 +51,7 @@
 
 	{#if gguf?.chat_template}
 		<Button
-			class="h-auto gap-1.5 px-2.5 py-1 text-xs"
+			class="h-auto gap-1.5 px-2.5 py-1 text-caption"
 			onclick={() => (chatTemplateOpen = true)}
 			size="sm"
 			variant="secondary"
@@ -67,7 +67,7 @@
 
 	{#if details.gated === true}
 		<span
-			class="rounded bg-yellow-500/10 px-2 py-0.5 text-xs font-medium text-yellow-600 dark:text-yellow-400"
+			class="rounded bg-yellow-500/10 px-2 py-0.5 text-label-sm text-yellow-600 dark:text-yellow-400"
 		>
 			gated
 		</span>

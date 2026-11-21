@@ -346,7 +346,7 @@
 					(sidebarReveal.isRevealed ? 'min-h-[calc(100dvh+var(--safe-area-top))]' : 'min-h-dvh'),
 				deviceStore.isMobile &&
 					sidebarReveal.dragOffset === null &&
-					'transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
+					'transition-transform duration-300 ease-sheet',
 				// slid aside: nothing inside scrolls or takes a tap, which lands on the page itself and
 				// closes the sidebar; forced on every descendant, as the fixed bars opt back into events
 				sidebarReveal.isRevealed && 'touch-none [&_*]:pointer-events-none!'
@@ -376,14 +376,14 @@
 					<!-- under the chat form, which keeps its taps where the two overlap -->
 					<div
 						aria-hidden="true"
-						class="screen-bottom-edge sidebar-reveal-pin-bottom fixed inset-x-0 bottom-0 z-[6]"
+						class="screen-bottom-edge sidebar-reveal-pin-bottom fixed inset-x-0 bottom-0 z-6"
 					></div>
 				{/if}
 
 				<!-- over the content, under the chat form (see its wrapper in ChatScreen) -->
 				<div
 					aria-hidden="true"
-					class="screen-bottom-fade sidebar-reveal-pin-bottom pointer-events-none fixed inset-x-0 bottom-0 z-[5]"
+					class="screen-bottom-fade sidebar-reveal-pin-bottom pointer-events-none fixed inset-x-0 bottom-0 z-5"
 				></div>
 			{/if}
 
@@ -413,10 +413,10 @@
 				style:transform={revealTransform}
 				aria-hidden="true"
 				class={[
-					'pointer-events-none fixed inset-0 z-[25] rounded-[2.5rem]',
+					'pointer-events-none fixed inset-0 z-25 rounded-[2.5rem]',
 					'shadow-[-0.5rem_0_2rem_-0.25rem_rgb(0_0_0/0.12)] dark:shadow-[-0.5rem_0_2rem_-0.25rem_rgb(0_0_0/0.45)]',
 					sidebarReveal.dragOffset === null &&
-						'transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
+						'transition-[transform,opacity] duration-300 ease-sheet',
 					isRevealed
 						? 'opacity-100'
 						: 'opacity-0 [transition-delay:0ms,150ms] [transition-duration:300ms,150ms]'
@@ -429,7 +429,7 @@
 				class={[
 					'pointer-events-none fixed inset-0 z-20 overflow-hidden',
 					sidebarReveal.dragOffset === null &&
-						'transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
+						'transition-[transform,opacity] duration-300 ease-sheet',
 					// on close the corners hold until the page is nearly home, then fade
 					isRevealed
 						? 'opacity-100'
@@ -458,7 +458,7 @@
 <!-- PWA update prompt + version -->
 <div class="fixed right-4 bottom-4 z-9999 flex flex-col items-end gap-1">
 	{#if showBuildVersion && versionStore.build}
-		<span class="text-[10px] tabular-nums text-muted-foreground">{versionStore.build}</span>
+		<span class="text-caption-sm tabular-nums text-muted-foreground">{versionStore.build}</span>
 	{/if}
 
 	<PwaRefreshAlert needRefresh={pwa.needRefresh} updateServiceWorker={pwa.updateServiceWorker} />

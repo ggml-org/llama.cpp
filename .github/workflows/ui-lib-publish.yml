@@ -128,27 +128,6 @@ jobs:
           npm publish --access public --provenance --ignore-scripts --tag "$TAG"
         working-directory: ${{ env.LIB_DIR }}
 
-      - name: Verify it landed
-        if: github.ref == 'refs/heads/master' && steps.version.outputs.should_publish == 'true' && inputs.dry_run != true
-        env:
-          NAME: ${{ steps.version.outputs.name }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          # the registry can serve a new version some time after publish returns, so retry rather
-          # than call a release that worked a failure
-          for try in 1 2 3 4 5 6; do
-            seen=$(npm view "$NAME@$VERSION" version 2>/dev/null || true)
-            if [ "$seen" = "$VERSION" ]; then
-              echo "$NAME@$VERSION is on npm"
-              npm view "$NAME@$VERSION" dist-tags version dist.integrity
-              exit 0
-            fi
-            echo "not visible yet (attempt $try of 6)"
-            sleep 10
-          done
-          echo "::error::$NAME@$VERSION published without error but is not visible on the registry after 6 attempts. The publish did not fail: check the package on npm before publishing again."
-          exit 1
-
       - name: Report
         if: always()
         # every value reaches the shell through env, not through the script, so a package name

@@ -49,7 +49,7 @@
 		loaded = [],
 		onSelect,
 		renderOption,
-		sectionHeaderClass = 'm-0 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none',
+		sectionHeaderClass = 'm-0 px-2 py-2 text-body-sm font-semibold text-muted-foreground/70 select-none',
 		showOrgName = true
 	}: Props = $props();
 	let render = $derived(renderOption ?? defaultOption);
@@ -117,11 +117,11 @@
 			size="size-6"
 		/>
 
-		<span class="truncate text-[13px] font-semibold text-muted-foreground/70">
+		<span class="truncate text-body-sm font-semibold text-muted-foreground/70">
 			{family.label}
 		</span>
 
-		<span class="text-xs text-muted-foreground">
+		<span class="text-caption text-muted-foreground">
 			{family.entries.length} model{family.entries.length === 1 ? '' : 's'}
 		</span>
 	</div>

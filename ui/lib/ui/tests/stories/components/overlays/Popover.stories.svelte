@@ -25,7 +25,7 @@
 
 			<Popover.Content class="w-72">
 				<div class="grid gap-3">
-					<p class="text-sm font-medium">Sampling</p>
+					<p class="text-label">Sampling</p>
 
 					<div class="grid grid-cols-3 items-center gap-2">
 						<Label for="story-temp">Temperature</Label>

@@ -30,11 +30,11 @@
 <div
 	class="sidebar-reveal-pin-top pointer-events-none fixed top-(--corner-control-top) right-16 left-16 z-20 flex h-10 flex-col items-center justify-center text-center"
 >
-	<p class="w-full truncate text-[15px] leading-5 font-semibold">{title}</p>
+	<p class="w-full truncate text-body leading-5 font-semibold">{title}</p>
 
 	{#if showWorkingDirectory}
 		<button
-			class="pointer-events-auto max-w-full truncate text-[13px] leading-4 text-muted-foreground"
+			class="pointer-events-auto max-w-full truncate text-body-sm leading-4 text-muted-foreground"
 			onclick={onWorkingDirectoryClick}
 			title={directory ?? undefined}
 			type="button"

@@ -3,7 +3,7 @@
 	import type { VariantProps } from 'tailwind-variants';
 
 	export const badgeVariants = tv({
-		base: 'focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive inline-flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden whitespace-nowrap rounded-control border px-2 py-0.5 text-label-sm font-medium transition-[color,box-shadow] focus-visible:ring-[3px] [&>svg]:pointer-events-none [&>svg]:size-icon-xs',
+		base: 'focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive inline-flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden whitespace-nowrap rounded-md border px-2 py-0.5 text-label-sm font-medium transition-[color,box-shadow] focus-visible:ring-3 [&>svg]:pointer-events-none [&>svg]:size-icon-xs',
 		defaultVariants: {
 			variant: 'default'
 		},
@@ -13,15 +13,14 @@
 				danger:
 					"matte-sheen bg-surface-danger text-fg-danger border-line-danger-soft rounded-full gap-1.5 before:size-1.5 before:shrink-0 before:rounded-full before:bg-fill-danger before:content-['']",
 				default:
-					'matte-sheen-solid bg-(--badge-primary-background) text-(--badge-primary-text) [a&]:hover:bg-(--badge-primary-background-hover) border-transparent',
+					'matte-sheen-solid bg-(--action-primary) text-(--fg-on-action) [a&]:hover:bg-(--action-primary-hover) border-transparent',
 				// solid, for what needs attention now
 				destructive:
-					'matte-sheen-solid bg-(--badge-danger-background) [a&]:hover:bg-(--badge-danger-background-hover) focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 border-transparent text-(--badge-danger-text)',
+					'matte-sheen-solid bg-(--action-danger) [a&]:hover:bg-(--badge-danger-background-hover) focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 border-transparent text-(--fg-on-danger)',
 				info: "matte-sheen bg-surface-info text-fg-info border-line-info-soft rounded-full gap-1.5 before:size-1.5 before:shrink-0 before:rounded-full before:bg-fill-info before:content-['']",
-				outline:
-					'text-(--badge-text) border-(--badge-outline-border) [a&]:hover:bg-(--badge-outline-background-hover)',
+				outline: 'text-(--fg-default) border-(--line-default) [a&]:hover:bg-(--surface-selected)',
 				secondary:
-					'matte-sheen bg-(--badge-secondary-background) text-(--badge-text) [a&]:hover:bg-(--badge-secondary-background-hover) border-transparent',
+					'matte-sheen bg-(--badge-secondary-background) text-(--fg-default) [a&]:hover:bg-(--badge-secondary-background-hover) border-transparent',
 				success:
 					"matte-sheen bg-surface-success text-fg-success border-line-success-soft rounded-full gap-1.5 before:size-1.5 before:shrink-0 before:rounded-full before:bg-fill-success before:content-['']",
 				warning:

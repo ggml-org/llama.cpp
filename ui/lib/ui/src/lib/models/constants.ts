@@ -2,30 +2,28 @@
 // models-discover-download and model-compatibility).
 import { ModelCapability, ModelModality } from './enums.js';
 import type { ModelModalities } from './types.js';
-import {
-	Eye as VisionIcon,
-	Lightbulb as ReasoningIcon,
-	Mic as AudioIcon,
-	Video as VideoIcon,
-	Wrench as ToolUseIcon
-} from '@lucide/svelte';
+import VisionIcon from '@lucide/svelte/icons/glasses';
+import ReasoningIcon from '@lucide/svelte/icons/lightbulb';
+import AudioIcon from '@lucide/svelte/icons/headphones';
+import VideoIcon from '@lucide/svelte/icons/video';
+import ToolUseIcon from '@lucide/svelte/icons/wrench';
 import type { Component } from 'svelte';
 
 /** Neutral model badge: params, quantization, tags. */
 export const MODEL_BADGE_CLASS =
-	'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-border/50 px-1 py-0 text-[10px] font-mono bg-foreground/15 dark:bg-foreground/10 text-foreground [a&]:hover:bg-foreground/25';
+	'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-border/50 px-1 py-0 text-caption-sm font-mono bg-foreground/15 dark:bg-foreground/10 text-foreground [a&]:hover:bg-foreground/25';
 
 /** Emphasis model badge: draft sidecars and other markers that must stand out. */
 export const MODEL_VARIANT_BADGE_CLASS =
-	'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md bg-primary px-1.5 py-0 text-[10px] font-mono font-semibold uppercase tracking-wide text-primary-foreground';
+	'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md bg-primary px-1.5 py-0 text-caption-sm font-mono font-semibold uppercase tracking-wide text-primary-foreground';
 
 /** Tag badge: free-form tags on a model id. */
 export const MODEL_TAG_BADGE_CLASS =
-	'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-border/50 px-1 py-0 text-[10px] font-mono text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground';
+	'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-border/50 px-1 py-0 text-caption-sm font-mono text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground';
 
 /** A draft that rides with a quant chip, e.g. `MTP:Q8_0`. */
 export const SIDECAR_BADGE_CLASS =
-	'rounded-md bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase';
+	'rounded-md bg-primary px-1 py-0.5 text-caption-sm font-semibold tracking-wide text-primary-foreground uppercase';
 
 export const MODALITY_ICONS = {
 	[ModelModality.AUDIO]: AudioIcon,

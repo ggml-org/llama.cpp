@@ -21,6 +21,6 @@
 			<p class="mb-4 text-white/70">Audio preview not available</p>
 		{/if}
 
-		<p class="text-sm text-white/50">{currentItem?.name || 'Audio'}</p>
+		<p class="text-body-sm text-white/50">{currentItem?.name || 'Audio'}</p>
 	</div>
 </div>

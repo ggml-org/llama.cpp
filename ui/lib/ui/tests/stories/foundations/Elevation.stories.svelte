@@ -14,9 +14,8 @@
 	const levels = [
 		{ name: 'elevation-inset', note: 'fields, recessed' },
 		{ name: 'elevation-control', note: 'buttons and tabs' },
-		{ name: 'elevation-surface', note: 'chat form, cards, sidebar' },
-		{ name: 'elevation-raised', note: 'menus, popovers, dialogs' },
-		{ name: 'elevation-tooltip', note: 'tooltips' }
+		{ name: 'elevation-surface', note: 'chat form, cards, sidebar, tooltips' },
+		{ name: 'elevation-raised', note: 'menus, popovers, dialogs' }
 	];
 </script>
 
@@ -27,7 +26,7 @@
 				<div class="p-4">
 					<div
 						style:box-shadow="var(--{level.name})"
-						class="h-20 rounded-card bg-surface-raised"
+						class="h-20 rounded-xl bg-card"
 					></div>
 				</div>
 			</StateGalleryItem>

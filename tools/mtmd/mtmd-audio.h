@@ -134,10 +134,13 @@ struct mtmd_audio_preprocessor_muse_spark_audio : mtmd_audio_preprocessor {
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 };
 
-// fish_s2 speaker reference: same as muse spark (raw waveform, whole frames), truncated to fish_s2_max_spk_seconds
-struct mtmd_audio_preprocessor_fish_s2 : mtmd_audio_preprocessor_muse_spark_audio {
-    using mtmd_audio_preprocessor_muse_spark_audio::mtmd_audio_preprocessor_muse_spark_audio;
+// speaker reference (fish_s2, voxcpm2): same as muse spark (raw waveform, whole frames), truncated to max_seconds
+struct mtmd_audio_preprocessor_spk_ref : mtmd_audio_preprocessor_muse_spark_audio {
+    mtmd_audio_preprocessor_spk_ref(const mtmd_model * model, int32_t max_seconds)
+        : mtmd_audio_preprocessor_muse_spark_audio(model), max_seconds(max_seconds) {}
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
+
+    const int32_t max_seconds;
 };
 
 // vibevoice: gain to -25 dBFS RMS, without clipping the peak

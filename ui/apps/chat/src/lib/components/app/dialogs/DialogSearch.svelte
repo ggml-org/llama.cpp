@@ -11,7 +11,7 @@
 	} from '#lib/constants/index.ts';
 	import { KeyboardKey, SidebarAction } from '#lib/enums/index.ts';
 	import { RouterService } from '#lib/services/router.service.ts';
-	import { conversationsStore, deviceStore } from '#lib/stores/index.ts';
+	import { conversationsStore, deviceStore, uiStore } from '#lib/stores/index.ts';
 	import { formatRelativeTime, isIMEComposing } from '#lib/utils/index.ts';
 	import { goto } from '$app/navigation';
 	import type { Component } from 'svelte';
@@ -71,13 +71,14 @@
 	);
 
 	const actionEntries = $derived.by((): SearchEntry[] =>
-		// every sidebar action but Search itself, which is what opened this dialog, and the models
-		// manager on a phone, which picks its models in the selector
+		// every sidebar action the sidebar shows but Search itself, which is what opened this
+		// dialog, and the models manager on a phone, which picks its models in the selector
 		[...SIDEBAR_ACTIONS_ITEMS, ...SIDEBAR_FOOTER_ITEMS]
 			.filter(
 				(item) =>
 					item.action &&
 					item.action !== SidebarAction.SEARCH &&
+					uiStore.isSidebarActionShown(item.action) &&
 					(item.action !== SidebarAction.MANAGE_MODELS || !deviceStore.isMobile)
 			)
 			.map((item) => ({
@@ -148,7 +149,7 @@
 		<span class="flex items-center gap-1">
 			{#each keys as Key, index (index)}
 				<kbd
-					class="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border/60 px-1 font-sans text-[11px]"
+					class="inline-flex h-5 min-w-5 items-center justify-center rounded border border-border/60 px-1 font-sans text-caption"
 				>
 					{#if typeof Key === 'string'}
 						{Key}
@@ -171,7 +172,7 @@
 				aria-controls="search-results"
 				aria-expanded="true"
 				autocomplete="off"
-				class="h-10 min-w-0 flex-1 border-0 bg-transparent px-1 text-lg outline-none placeholder:text-muted-foreground focus:outline-none focus-visible:ring-0"
+				class="h-10 min-w-0 flex-1 border-0 bg-transparent px-1 text-title font-normal outline-none placeholder:text-muted-foreground focus:outline-none focus-visible:ring-0"
 				oninput={() => (highlighted = 0)}
 				onkeydown={handleKeydown}
 				placeholder="Search"
@@ -196,7 +197,7 @@
 				.reduce((total, previous) => total + previous.entries.length, 0)}
 
 			<div class="flex flex-col gap-0.5 {sectionIndex > 0 ? 'mt-3' : ''}" role="group">
-				<p class="px-2.5 pt-1 pb-1.5 text-xs font-medium text-muted-foreground">
+				<p class="px-2.5 pt-1 pb-1.5 text-label-sm text-muted-foreground">
 					{section.title}
 				</p>
 
@@ -207,7 +208,7 @@
 					<!-- a phone has no keyboard to move a highlight with: no row is lit there -->
 					<button
 						aria-selected={isActive}
-						class="flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm transition-colors max-md:rounded-xl max-md:py-3 max-md:text-base {isActive
+						class="flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-body-sm transition-colors max-md:rounded-xl max-md:py-3 max-md:text-body {isActive
 							? 'bg-accent text-accent-foreground'
 							: ''}"
 						id="search-result-{index}"
@@ -226,7 +227,7 @@
 						{/if}
 
 						{#if entry.meta}
-							<span class="max-w-[40%] shrink-0 truncate text-xs text-muted-foreground">
+							<span class="max-w-2/5 shrink-0 truncate text-caption text-muted-foreground">
 								{entry.meta}
 							</span>
 						{/if}
@@ -244,12 +245,12 @@
 				{/each}
 			</div>
 		{:else}
-			<p class="px-3 py-12 text-center text-sm text-muted-foreground">{emptyMessage}</p>
+			<p class="px-3 py-12 text-center text-body-sm text-muted-foreground">{emptyMessage}</p>
 		{/each}
 	</div>
 
 	<div
-		class="flex items-center gap-5 border-t border-border/30 px-4 py-2.5 text-xs text-muted-foreground max-md:hidden dark:border-border/20"
+		class="flex items-center gap-5 border-t border-border/30 px-4 py-2.5 text-caption text-muted-foreground max-md:hidden dark:border-border/20"
 	>
 		{@render hint('Close', ['Esc'])}
 

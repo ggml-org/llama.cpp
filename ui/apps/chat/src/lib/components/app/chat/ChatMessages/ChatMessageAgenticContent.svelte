@@ -268,6 +268,6 @@
 	}
 
 	.turn-stats {
-		border-top: 1px solid hsl(var(--muted) / 0.5);
+		border-top: 1px solid hsl(var(--surface-muted) / 0.5);
 	}
 </style>

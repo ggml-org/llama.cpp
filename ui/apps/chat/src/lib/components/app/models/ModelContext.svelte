@@ -52,7 +52,7 @@
 
 <span
 	{@attach nearViewport(() => (isNearViewport = true))}
-	class={['text-sm text-muted-foreground', className]}
+	class={['text-body-sm text-muted-foreground', className]}
 >
 	{formatContextLength(values)}
 </span>
