@@ -126,6 +126,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_qwen3tts(params);
         case LLM_ARCH_POCKETTTS:
             return new llama_model_pockettts(params);
+        case LLM_ARCH_MOSHI:
+            return new llama_model_moshi(params);
         case LLM_ARCH_ZONOS3:
             return new llama_model_zonos3(params);
         case LLM_ARCH_KOKORO:
@@ -326,6 +328,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_falcon_h1(params);
         case LLM_ARCH_INKLING2:
             return new llama_model_inkling2(params);
+        case LLM_ARCH_INKLING2_LOOP:
+            return new llama_model_inkling2_loop(params);
         case LLM_ARCH_LFM2:
             return new llama_model_lfm2(params);
         case LLM_ARCH_LFM2MOE:
@@ -2024,6 +2028,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
                 output_in_s = create_tensor(tn(LLM_TENSOR_OUTPUT, "input_scale"), {1}, TENSOR_NOT_REQUIRED);
             }
         }
+        post_arch_tensors(ml);
     }
 
     ml.done_getting_tensors();
@@ -3199,6 +3204,27 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     /* filter_recr       */ std::move(filter_recr),
                     /* filter_idx        */ std::move(filter_idx));
             } break;
+        case LLM_ARCH_MOSHI:
+            {
+                // every layer attends to the same sliding window: one cache that masks it, the cells past the window are reused
+                res = new llama_kv_cache(
+                        *this,
+                        params.no_alloc,
+                        hparams,
+                        params.type_k,
+                        params.type_v,
+                        !cparams.flash_attn,
+                        cparams.offload_kqv,
+                        cparams.kv_unified,
+                        cparams.n_ctx_seq,
+                        cparams.n_seq_max,
+                        hparams.n_swa,
+                        LLAMA_SWA_TYPE_STANDARD,
+                        nullptr,
+                        nullptr,
+                        nullptr,
+                        nullptr);
+            } break;
         case LLM_ARCH_HY_V4:
             {
                 if (hparams.indexer_top_k == 0) {
@@ -3407,7 +3433,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         filter_idx = [&](uint32_t il) {
                             return il < hparams.n_layer() && !hparams.is_recr(il) && hparams.is_indexer_full(il);
                         };
-                    } else if (arch == LLM_ARCH_FALCON_H1 || arch == LLM_ARCH_INKLING2 || arch == LLM_ARCH_ZAYA1) {
+                    } else if (arch == LLM_ARCH_FALCON_H1 || arch == LLM_ARCH_INKLING2 || arch == LLM_ARCH_INKLING2_LOOP || arch == LLM_ARCH_ZAYA1) {
                         filter_attn = [&](uint32_t) { return true; };
                         filter_recr = [&](uint32_t) { return true; };
                     } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
@@ -3783,6 +3809,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_STARCODER:
         case LLM_ARCH_INKLING2:
+        case LLM_ARCH_INKLING2_LOOP:
         case LLM_ARCH_KOKORO:
             return LLAMA_ROPE_TYPE_NONE;
 
@@ -3833,6 +3860,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_DOTS3NOTE:
         case LLM_ARCH_NANBEIGE:
         case LLM_ARCH_POCKETTTS:
+        case LLM_ARCH_MOSHI:
         case LLM_ARCH_ZONOS3:
         case LLM_ARCH_LIMITE:
         case LLM_ARCH_TINY_VOCA:

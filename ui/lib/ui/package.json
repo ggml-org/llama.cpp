@@ -54,6 +54,10 @@
 			"types": "./dist/components/models/index.d.ts",
 			"svelte": "./dist/components/models/index.js"
 		},
+		"./voice": {
+			"types": "./dist/components/voice/index.d.ts",
+			"svelte": "./dist/components/voice/index.js"
+		},
 		"./utils": {
 			"types": "./dist/components/ui/utils.d.ts",
 			"svelte": "./dist/components/ui/utils.js"

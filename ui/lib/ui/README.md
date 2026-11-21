@@ -44,12 +44,22 @@ beside the apps built on it in `ui/apps`.
   `ModelQuantOptions`, `ModelQuantChip`, `ModelQuantRow`, `ModelDraftSidecars`, `ModelDownloadProgressBar`, plus the formatters and
   `minMemoryTierGb` and `summarizeSizes`, at `@ggml-org/llama-ui/models`. They take model data in and report what the user did out;
   fetching and downloading stay in the app.
+- **Voice UI** (also `@ggml-org/llama-ui/voice`): `VoiceWaveformLive` (the waveform while recording), `VoiceWaveform` (a
+  recorded clip: play, seek, time) and `VoiceTranscriptReveal` (a clip with its transcript, opened on hover, keyboard
+  focus or a tap), plus `formatClipTime` and the waveform math. They take levels, peaks, an audio URL and a transcript
+  in; recording and transcribing stay in the app.
 
 Next: llama.app's model page.
 
 The constants, enums and code helpers the components use are entry points too, for an app that shows the same things:
 `@ggml-org/llama-ui/constants` (the shared classes and code-block constants), `@ggml-org/llama-ui/enums` (`ColorMode`,
-`TooltipSide`, `BooleanString`) and `@ggml-org/llama-ui/code` (`highlightCode`, `trimCodePadding`). The model data
+`TooltipSide`, `BooleanString`) and `@ggml-org/llama-ui/code` (`highlightCode`, `trimCodePadding`,
+`loadHighlightLanguages`, `isHighlightLanguageLoaded`, `resolveHighlightLanguage`, `getLoadedHighlightLanguages`).
+highlight.js loads one language at a time, each its own chunk, so none is in an app's first load: until a language
+has loaded, `highlightCode` returns the code escaped as plain text, and a `$derived` or `$effect` that called it runs
+again once it has. A language loads with the ones it embeds (CSS and JavaScript inside HTML); auto-detection picks
+among lowlight's common languages. Await `loadHighlightLanguages([...])` where highlighted output is needed at once.
+`scripts/generate-highlight-languages.mjs` regenerates the language table after a highlight.js or lowlight update. The model data
 (constants, enums, formatters and types) comes with the Model UI at `@ggml-org/llama-ui/models`.
 
 ## How the apps in this repo use it
