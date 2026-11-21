@@ -10114,8 +10114,30 @@ static void ggml_compute_forward_ssm_scan_f32(
 
                         sumf = GGML_F32xt_REDUCE_ONE(sum);
     #elif defined(__riscv_v)
-                        // todo: RVV implementation
-                        const int np = 0;
+                        int64_t np = 0;
+                        if (!params->use_ref) {
+                            const size_t vlmax = __riscv_vsetvlmax_e32m4();
+                            vfloat32m4_t sum = __riscv_vfmv_v_f_f32m4(0.0f, vlmax);
+
+                            for (int64_t i0 = 0; i0 < nc; ) {
+                                const size_t vl = __riscv_vsetvl_e32m4(nc - i0);
+                                vfloat32m4_t t0 = __riscv_vle32_v_f32m4(s0 + i0 + ii*nc, vl);
+                                vfloat32m4_t t1 = __riscv_vle32_v_f32m4(B + i0 + g*nc, vl);
+                                vfloat32m4_t t2 = __riscv_vle32_v_f32m4(C + i0 + g*nc, vl);
+
+                                t0 = __riscv_vfmul_vf_f32m4(t0, dA, vl);
+                                t1 = __riscv_vfmul_vf_f32m4(t1, x_dt, vl);
+                                t0 = __riscv_vfadd_vv_f32m4(t0, t1, vl);
+
+                                sum = __riscv_vfmacc_vv_f32m4_tu(sum, t0, t2, vl);
+                                __riscv_vse32_v_f32m4(s + i0 + ii*nc, t0, vl);
+                                i0 += vl;
+                            }
+
+                            vfloat32m1_t zero = __riscv_vfmv_v_f_f32m1(0.0f, 1);
+                            sumf = __riscv_vfmv_f_s_f32m1_f32(__riscv_vfredusum_vs_f32m4_f32m1(sum, zero, vlmax));
+                            np = nc;
+                        }
     #else
                         const int np = (nc & ~(GGML_F32_STEP - 1));
 
