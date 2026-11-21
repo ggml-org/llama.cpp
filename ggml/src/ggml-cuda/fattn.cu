@@ -194,7 +194,7 @@ bool ggml_cuda_flash_attn_ext_tile_shall_use_sparse(const int cc, const ggml_ten
     }
 
     // CDNA and RDNA: the cost of the sparse kernel grows with the number of gathered rows nq*n_kv_max,
-    // the break even depends on the fraction of selected positions n_kv_max/n_kv. Tuned on gfx908 and gfx1201.
+    // the break even depends on the fraction of selected positions n_kv_max/n_kv. Tuned on gfx908, gfx1100 and gfx1201.
     const int64_t n_gather = Q->ne[1]*int64_t(n_kv_max);
     if (GGML_CUDA_CC_IS_CDNA(cc)) {
         if (4*int64_t(n_kv_max) > n_kv) {
@@ -202,7 +202,13 @@ bool ggml_cuda_flash_attn_ext_tile_shall_use_sparse(const int cc, const ggml_ten
         }
         return n_gather <= (8*int64_t(n_kv_max) > n_kv ? 4 : 8)*n_kv;
     }
-    if (GGML_CUDA_CC_IS_RDNA2(cc) || GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
+    if (GGML_CUDA_CC_IS_RDNA2(cc) || GGML_CUDA_CC_IS_RDNA3(cc)) {
+        if (2*int64_t(n_kv_max) > n_kv) {
+            return false;
+        }
+        return 4*int64_t(n_kv_max) > n_kv ? n_gather <= 4*n_kv : true;
+    }
+    if (GGML_CUDA_CC_IS_RDNA4(cc)) {
         if (2*int64_t(n_kv_max) > n_kv) {
             return false;
         }
@@ -854,7 +860,10 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
 #ifdef GGML_USE_HIP
     // the sparse tile kernel needs ncols2 > 1, it also handles quantized K/V by converting them to f16
-    if (gqa_opt_applies && gqa_ratio % 2 == 0 && ggml_cuda_flash_attn_ext_tile_shall_use_sparse(cc, dst, Q->ne[0], V->ne[0])) {
+    // the conversion of all of K/V is slower than the vector kernel at small batch sizes unless the GQA ratio is large
+    const bool quantized_kv = ggml_is_quantized(K->type) || ggml_is_quantized(V->type);
+    if (gqa_opt_applies && gqa_ratio % 2 == 0 && (!quantized_kv || Q->ne[1] > 2 || gqa_ratio >= 12) &&
+            ggml_cuda_flash_attn_ext_tile_shall_use_sparse(cc, dst, Q->ne[0], V->ne[0])) {
         return BEST_FATTN_KERNEL_TILE;
     }
 #endif // GGML_USE_HIP
