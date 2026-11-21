@@ -2082,6 +2082,9 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
             }
             return {false, reason};
         }
+        if (((const int32_t *) op->op_params)[1] != 0) {
+            return {false, "GATED_DELTA_NET with replay of pending tokens is not supported"};
+        }
         break;
     }
     case GGML_OP_SSM_CONV: {

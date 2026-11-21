@@ -752,6 +752,8 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_gated_delta_net(
     const int ne30 = op->src[3]->ne[0]; // G
     // state is src[5], 4D [S_v, S_v, H_v, n_seqs] (s0 only); K is op param 0.
     const int K = ggml_get_op_params_i32(op, 0);
+    // replay of pending tokens, see ggml_gated_delta_net
+    const bool replay = op->src[6] != nullptr;
 
     const int nsg = op->src[2]->ne[0]/32;
 
@@ -760,15 +762,16 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_gated_delta_net(
     GGML_ASSERT(ne20 % 32 == 0);
 
     snprintf(base, 256, "kernel_gated_delta_net_%s_%d", ggml_type_name(op->src[0]->type), nsg);
-    snprintf(name, 256, "%s_ne20=%d_ne30=%d_K=%d", base, ne20, ne30, K);
+    snprintf(name, 256, "%s_ne20=%d_ne30=%d_K=%d_rep=%d", base, ne20, ne30, K, replay ? 1 : 0);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
         ggml_metal_cv_t cv = ggml_metal_cv_init();
 
-        ggml_metal_cv_set_int16(cv, ne20, FC_GATED_DELTA_NET + 0);
-        ggml_metal_cv_set_int16(cv, ne30, FC_GATED_DELTA_NET + 1);
-        ggml_metal_cv_set_int16(cv, K,    FC_GATED_DELTA_NET + 2);
+        ggml_metal_cv_set_int16(cv, ne20,   FC_GATED_DELTA_NET + 0);
+        ggml_metal_cv_set_int16(cv, ne30,   FC_GATED_DELTA_NET + 1);
+        ggml_metal_cv_set_int16(cv, K,      FC_GATED_DELTA_NET + 2);
+        ggml_metal_cv_set_bool (cv, replay, FC_GATED_DELTA_NET + 3);
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
 
