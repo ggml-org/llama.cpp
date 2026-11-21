@@ -340,6 +340,84 @@ def test_completion_without_tool_call_slow(template_name: str, n_predict: int, t
     do_test_completion_without_tool_call(server, n_predict, tools, tool_choice, stream=stream == CompletionMode.STREAMED)
 
 
+# tool_choice object form (named function selection)
+
+def do_test_completion_with_named_tool_choice(server: ServerProcess, n_predict: int, tools: list[dict], tool_choice: dict, argument_key: str | None = None, **kwargs):
+    body = server.make_any_request("POST", "/v1/chat/completions", data={
+        "max_tokens": n_predict,
+        "messages": [
+            {"role": "system", "content": "You are a coding assistant."},
+            {"role": "user", "content": "Write an example"},
+        ],
+        "tool_choice": tool_choice,
+        "tools": tools,
+        "parallel_tool_calls": False,
+        "temperature": 0.0,
+        "top_k": 1,
+        "top_p": 1.0,
+        **kwargs,
+    }, timeout=TIMEOUT_HTTP_REQUEST)
+    choice = body["choices"][0]
+    tool_calls = choice["message"].get("tool_calls")
+    assert tool_calls and len(tool_calls) == 1, f'Expected 1 tool call in {choice["message"]}'
+    assert tool_calls[0]["function"]["name"] == tool_choice["function"]["name"], \
+        f'Expected tool call to {tool_choice["function"]["name"]} in {choice["message"]}'
+    actual_arguments = tool_calls[0]["function"]["arguments"]
+    if isinstance(actual_arguments, str):
+        actual_arguments = json.loads(actual_arguments)
+    assert isinstance(actual_arguments, dict), f'Expected arguments to be a dict, got: {actual_arguments}'
+    assert argument_key is None or argument_key in actual_arguments, f"tool arguments: {actual_arguments}, expected: {argument_key}"
+
+
+@pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
+@pytest.mark.parametrize("function_name,argument_key", [
+    ("test",   "success"),
+    ("python", "code"),
+])
+def test_completion_with_named_tool_choice_object(function_name: str, argument_key: str, stream: CompletionMode):
+    # https://github.com/ggml-org/llama.cpp/issues/30369
+    # object-form named tool_choice must force a call to the named function
+    # instead of silently falling back to "auto"
+    global server
+    n_predict = 512
+    server.jinja = True
+    server.offline = False
+    server.n_ctx = 8192
+    server.n_predict = n_predict
+    server.model_hf_repo = "bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M"
+    server.model_hf_file = None
+    server.chat_template_file = '../../../models/templates/meta-llama-Llama-3.2-3B-Instruct.jinja'
+    server.start(timeout_seconds=TIMEOUT_START_SLOW)
+    do_test_completion_with_named_tool_choice(
+        server, n_predict, [TEST_TOOL, PYTHON_TOOL],
+        {"type": "function", "function": {"name": function_name}},
+        argument_key=argument_key,
+        stream=stream == CompletionMode.STREAMED,
+    )
+
+
+@pytest.mark.parametrize("tool_choice,tools", [
+    ({"type": "function", "function": {"name": "unknown_tool"}}, [TEST_TOOL]),  # function not in tools
+    ({"type": "function", "function": {"name": "test"}},         None),         # missing tools
+    ({"type": "function", "function": {}},                       [TEST_TOOL]),  # missing function name
+    ({"type": "auto"},                                           [TEST_TOOL]),  # unsupported object type
+])
+def test_completion_with_invalid_tool_choice_object(tool_choice, tools):
+    # malformed / unmatched object-form tool_choice must be rejected with 400
+    # instead of being silently downgraded to "auto"
+    global server
+    server.jinja = True
+    server.start()
+    res = server.make_request("POST", "/v1/chat/completions", data={
+        "messages": [
+            {"role": "user", "content": "Write an example"},
+        ],
+        "tool_choice": tool_choice,
+        "tools": tools,
+    })
+    assert res.status_code == 400, f'Expected 400 for tool_choice {tool_choice}, got {res.status_code}: {res.body}'
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
 @pytest.mark.parametrize("hf_repo,template_override", [
