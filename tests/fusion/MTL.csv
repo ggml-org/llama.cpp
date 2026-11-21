@@ -253,6 +253,7 @@ mistral4            ,0   ,any     ,ADD+ADD                     ,      1
 mistral4            ,0   ,any     ,MUL+ADD                     ,      2
 mistral4            ,0   ,any     ,RMS_NORM+MUL                ,      9
 mistral4            ,0   ,any     ,UNARY+ADD+ARGSORT+GET_ROWS  ,      1
+moshi               ,0   ,any     ,RMS_NORM+MUL                ,      5
 mpt                 ,0   ,any     ,NORM+MUL+ADD                ,      5
 muse-glimmer        ,0   ,any     ,RMS_NORM+MUL                ,     10
 muse-glimmer        ,0   ,any     ,RMS_NORM+MUL+ADD            ,      3
