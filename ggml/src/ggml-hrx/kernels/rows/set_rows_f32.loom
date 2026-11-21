@@ -1,0 +1,125 @@
+// Row ids are i64. Strides are in elements. A row id out of range is skipped.
+
+config.decl @ggml.set_rows.dst_type : %value: index where [range(%value, 0, 1)]
+
+config.decl @ggml.elementwise.wg_size : %value: index where [range(%value, 64, 1024), multiple_of(%value, 64)]
+
+target.decl @ggml_wave64
+
+kernel.def target(@ggml_wave64) export("ggml_set_rows_f32") @ggml_set_rows_f32(%n: index) {
+  %one = index.constant 1 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %round = index.sub %wg_size, %one : index
+  %n_round = index.add %n, %round : index
+  %groups = index.div %n_round, %wg_size : index
+  kernel.launch.config workgroups(%groups, %one, %one) workgroup_size(%wg_size, %one, %one) : index
+} launch(%n_in: index, %ne0_in: index, %ne1_in: index, %ne2_in: index, %s0_in: index, %s1_in: index, %s2_in: index, %s3_in: index, %src_span_in: index, %ids_ne1_in: index, %ids_ne2_in: index, %ids_s0_in: index, %ids_s1_in: index, %ids_s2_in: index, %ids_span_in: index, %dst_rows_in: index, %d0_in: index, %d1_in: index, %d2_in: index, %d3_in: index, %dst_span_in: index, %src: buffer, %ids: buffer, %dst: buffer) {
+  // supports_set_rows checks these ranges.
+  %n = index.assume %n_in [range(%n_in, 1, 2147483647)] : index
+  %ne0 = index.assume %ne0_in [range(%ne0_in, 1, 2147483647)] : index
+  %ne1 = index.assume %ne1_in [range(%ne1_in, 1, 2147483647)] : index
+  %ne2 = index.assume %ne2_in [range(%ne2_in, 1, 2147483647)] : index
+  %s0 = index.assume %s0_in [range(%s0_in, 0, 2147483647)] : index
+  %s1 = index.assume %s1_in [range(%s1_in, 0, 2147483647)] : index
+  %s2 = index.assume %s2_in [range(%s2_in, 0, 2147483647)] : index
+  %s3 = index.assume %s3_in [range(%s3_in, 0, 2147483647)] : index
+  %src_span = index.assume %src_span_in [range(%src_span_in, 1, 2147483647)] : index
+  %ids_ne1 = index.assume %ids_ne1_in [range(%ids_ne1_in, 1, 2147483647)] : index
+  %ids_ne2 = index.assume %ids_ne2_in [range(%ids_ne2_in, 1, 2147483647)] : index
+  %ids_s0 = index.assume %ids_s0_in [range(%ids_s0_in, 0, 2147483647)] : index
+  %ids_s1 = index.assume %ids_s1_in [range(%ids_s1_in, 0, 2147483647)] : index
+  %ids_s2 = index.assume %ids_s2_in [range(%ids_s2_in, 0, 2147483647)] : index
+  %ids_span = index.assume %ids_span_in [range(%ids_span_in, 1, 2147483647)] : index
+  %dst_rows = index.assume %dst_rows_in [range(%dst_rows_in, 1, 2147483647)] : index
+  %d0 = index.assume %d0_in [range(%d0_in, 0, 2147483647)] : index
+  %d1 = index.assume %d1_in [range(%d1_in, 0, 2147483647)] : index
+  %d2 = index.assume %d2_in [range(%d2_in, 0, 2147483647)] : index
+  %d3 = index.assume %d3_in [range(%d3_in, 0, 2147483647)] : index
+  %dst_span = index.assume %dst_span_in [range(%dst_span_in, 1, 2147483647)] : index
+  // dst_type: 0 is f32, 1 is f16.
+  %dst_type = config.get @ggml.set_rows.dst_type : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %wg_size = config.get @ggml.elementwise.wg_size : index
+  %group = kernel.workgroup.id<x> : index
+  %item = kernel.workitem.id<x> : index
+  %base = index.mul %group, %wg_size : index
+  %i = index.add %base, %item : index
+  %in_bounds = index.cmp ult, %i, %n : index
+  %zero = index.constant 0 : offset
+  %src_view = buffer.view %src[%zero] : buffer -> view<[%src_span]xf32>
+  scf.if %in_bounds {
+    %i0 = index.rem %i, %ne0 : index
+    %t0 = index.div %i, %ne0 : index
+    %i1 = index.rem %t0, %ne1 : index
+    %t1 = index.div %t0, %ne1 : index
+    %i2 = index.rem %t1, %ne2 : index
+    %i3 = index.div %t1, %ne2 : index
+
+    %j1 = index.rem %i2, %ids_ne1 : index
+    %j2 = index.rem %i3, %ids_ne2 : index
+    %io0 = index.mul %i1, %ids_s0 : index
+    %io1 = index.mul %j1, %ids_s1 : index
+    %io2 = index.mul %j2, %ids_s2 : index
+    %io01 = index.add %io0, %io1 : index
+    %ids_idx = index.add %io01, %io2 : index
+    %ids_off = index.assume %ids_idx [range(%ids_idx, 0, 2147483646)] : index
+    %ids_ok = index.cmp ult, %ids_off, %ids_span : index
+    scf.if %ids_ok {
+      // An i64 id out of range becomes -1. The check below skips it.
+      %ids_view = buffer.view %ids[%zero] : buffer -> view<[%ids_span]xi64>
+      %v = view.load %ids_view[%ids_off] : view<[%ids_span]xi64> -> i64
+      %c0_i64 = scalar.constant 0 : i64
+      %cm1_i32 = scalar.constant -1 : i32
+      %limit = index.cast %dst_rows : index to i64
+      %nonneg = scalar.cmpi sge, %v, %c0_i64 : i64
+      %below = scalar.cmpi slt, %v, %limit : i64
+      %ok = scalar.andi %nonneg, %below : i1
+      %safe = scf.select %ok, %v, %c0_i64 : i64
+      %narrow = scalar.trunci %safe : i64 to i32
+      %row_i32 = scf.select %ok, %narrow, %cm1_i32 : i32
+      %row = index.cast %row_i32 : i32 to index
+      %row_nonneg = index.cmp sge, %row, %c0 : index
+      scf.if %row_nonneg {
+        %row_below = index.cmp ult, %row, %dst_rows : index
+        scf.if %row_below {
+          %so0 = index.mul %i0, %s0 : index
+          %so1 = index.mul %i1, %s1 : index
+          %so2 = index.mul %i2, %s2 : index
+          %so3 = index.mul %i3, %s3 : index
+          %so01 = index.add %so0, %so1 : index
+          %so23 = index.add %so2, %so3 : index
+          %src_idx = index.add %so01, %so23 : index
+          %src_off = index.assume %src_idx [range(%src_idx, 0, 2147483646)] : index
+
+          %do0 = index.mul %i0, %d0 : index
+          %do1 = index.mul %row, %d1 : index
+          %do2 = index.mul %i2, %d2 : index
+          %do3 = index.mul %i3, %d3 : index
+          %do01 = index.add %do0, %do1 : index
+          %do23 = index.add %do2, %do3 : index
+          %dst_idx = index.add %do01, %do23 : index
+          %dst_off = index.assume %dst_idx [range(%dst_idx, 0, 2147483646)] : index
+
+          %src_ok = index.cmp ult, %src_off, %src_span : index
+          scf.if %src_ok {
+            %dst_ok = index.cmp ult, %dst_off, %dst_span : index
+            scf.if %dst_ok {
+              %x = view.load %src_view[%src_off] : view<[%src_span]xf32> -> f32
+              %is_f16 = index.cmp eq, %dst_type, %c1 : index
+              scf.if %is_f16 {
+                %dst_view = buffer.view %dst[%zero] : buffer -> view<[%dst_span]xf16>
+                %h = scalar.fptrunc %x : f32 to f16
+                view.store %h, %dst_view[%dst_off] : f16, view<[%dst_span]xf16>
+              } else {
+                %dst_view = buffer.view %dst[%zero] : buffer -> view<[%dst_span]xf32>
+                view.store %x, %dst_view[%dst_off] : f32, view<[%dst_span]xf32>
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  kernel.return
+}

@@ -1,0 +1,203 @@
+// The accumulator of a 16x16 tile has the gfx11 wave32 WMMA layout: element e of lane l is column col + l / 16 + 2 * e and row row + l % 16.
+// x_stage holds [col][k] f16 rows with a pitch of 72. w_stage holds [k][row] f16 with a row pitch of 72.
+
+target.decl @ggml_gfx11
+target.decl @ggml_gfx12
+
+template.decl @ggml.mma.zero_acc() -> (vector<8xf32>)
+
+template.def<@ggml.mma.zero_acc> device target(@ggml_gfx11) requires [#target.subgroup.size<32>] priority(20) @ggml_mma_zero_acc_gfx11() -> (vector<8xf32>) {
+  %c16 = index.constant 16 : index
+  %zero8 = vector.splatf 0.0 : vector<8xf32>
+  %init = vector.fragment<init> %zero8 shape [%c16, %c16] : vector<8xf32>
+  template.return %init : vector<8xf32>
+}
+
+template.def<@ggml.mma.zero_acc> device requires [#target.subgroup.size<32>] priority(1) @ggml_mma_zero_acc() -> (vector<8xf32>) {
+  %zero8 = vector.splatf 0.0 : vector<8xf32>
+  template.return %zero8 : vector<8xf32>
+}
+
+template.decl @ggml.mma.k64_2x2(%x_stage: buffer, %w_stage: buffer, %col0: index, %row0: index, %acc00: vector<8xf32>, %acc01: vector<8xf32>, %acc10: vector<8xf32>, %acc11: vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>)
+
+template.def<@ggml.mma.k64_2x2> device target(@ggml_gfx11) requires [#target.subgroup.size<32>] priority(20) @ggml_mma_k64_2x2_gfx11(%x_stage: buffer, %w_stage: buffer, %col0: index, %row0: index, %acc00: vector<8xf32>, %acc01: vector<8xf32>, %acc10: vector<8xf32>, %acc11: vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
+  %c0 = index.constant 0 : index
+  %c16 = index.constant 16 : index
+  %c64 = index.constant 64 : index
+  %c0_offset = index.constant 0 : offset
+  %m = index.constant 16 : index
+  %n = index.constant 16 : index
+  %k = index.constant 16 : index
+  %w_layout = encoding.layout.strided [1, 72] : encoding<layout>
+  %x_view = buffer.view %x_stage[%c0_offset] : buffer -> view<64x72xf16>
+  %w_view = buffer.view %w_stage[%c0_offset] : buffer -> view<64x128xf16, %w_layout>
+  %col1 = index.add %col0, %c16 : index
+  %row1 = index.add %row0, %c16 : index
+  %r00, %r01, %r10, %r11 = scf.for %kh = [%c0 to %c64 step %c16](%a00 = %acc00 : vector<8xf32>, %a01 = %acc01 : vector<8xf32>, %a10 = %acc10 : vector<8xf32>, %a11 = %acc11 : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) unroll {
+    %lhs0 = vector.fragment.load<lhs> %x_view[%col0, %kh] shape [%m, %k] : view<64x72xf16> -> vector<16xf16>
+    %lhs1 = vector.fragment.load<lhs> %x_view[%col1, %kh] shape [%m, %k] : view<64x72xf16> -> vector<16xf16>
+    %rhs0 = vector.fragment.load<rhs> %w_view[%kh, %row0] shape [%k, %n] : view<64x128xf16, %w_layout> -> vector<16xf16>
+    %rhs1 = vector.fragment.load<rhs> %w_view[%kh, %row1] shape [%k, %n] : view<64x128xf16, %w_layout> -> vector<16xf16>
+    %n00 = vector.mma %lhs0, %rhs0, %a00 : vector<16xf16>, vector<16xf16>, vector<8xf32>
+    %n01 = vector.mma %lhs0, %rhs1, %a01 : vector<16xf16>, vector<16xf16>, vector<8xf32>
+    %n10 = vector.mma %lhs1, %rhs0, %a10 : vector<16xf16>, vector<16xf16>, vector<8xf32>
+    %n11 = vector.mma %lhs1, %rhs1, %a11 : vector<16xf16>, vector<16xf16>, vector<8xf32>
+    scf.yield %n00, %n01, %n10, %n11 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
+  }
+  template.return %r00, %r01, %r10, %r11 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
+}
+
+template.def<@ggml.mma.zero_acc> device target(@ggml_gfx12) requires [#target.subgroup.size<32>] priority(20) @ggml_mma_zero_acc_gfx12() -> (vector<8xf32>) {
+  %c16 = index.constant 16 : index
+  %zero8 = vector.splatf 0.0 : vector<8xf32>
+  %init = vector.fragment<init> %zero8 shape [%c16, %c16] : vector<8xf32>
+  template.return %init : vector<8xf32>
+}
+
+// The gfx12 result layout is different from the gfx11 layout. The lhs row order changes the result to the gfx11 layout.
+func.def inline @ggml_mma_lhs_lane_gfx12() -> (index, index) {
+  %c2 = index.constant 2 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %lane0 = kernel.subgroup.lane.id : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 31)] : index
+  %m = index.rem %lane, %c16 : index
+  %half = index.div %lane, %c16 : index
+  %m_high = index.div %m, %c8 : index
+  %m_low = index.rem %m, %c8 : index
+  %m_low2 = index.mul %m_low, %c2 : index
+  %row = index.add %m_high, %m_low2 : index
+  %k = index.mul %half, %c8 : index
+  func.return %row, %k : index, index
+}
+
+template.def<@ggml.mma.k64_2x2> device target(@ggml_gfx12) requires [#target.subgroup.size<32>] priority(20) @ggml_mma_k64_2x2_gfx12(%x_stage: buffer, %w_stage: buffer, %col0: index, %row0: index, %acc00: vector<8xf32>, %acc01: vector<8xf32>, %acc10: vector<8xf32>, %acc11: vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
+  %c0 = index.constant 0 : index
+  %c16 = index.constant 16 : index
+  %c64 = index.constant 64 : index
+  %c0_offset = index.constant 0 : offset
+  %m = index.constant 16 : index
+  %w_layout = encoding.layout.strided [1, 72] : encoding<layout>
+  %x_view = buffer.view %x_stage[%c0_offset] : buffer -> view<64x72xf16>
+  %w_view = buffer.view %w_stage[%c0_offset] : buffer -> view<64x128xf16, %w_layout>
+  %lane_row, %lane_k = func.call @ggml_mma_lhs_lane_gfx12() : () -> (index, index)
+  %x_row0 = index.add %col0, %lane_row : index
+  %x_row1 = index.add %x_row0, %c16 : index
+  %row1 = index.add %row0, %c16 : index
+  %r00, %r01, %r10, %r11 = scf.for %kh = [%c0 to %c64 step %c16](%a00 = %acc00 : vector<8xf32>, %a01 = %acc01 : vector<8xf32>, %a10 = %acc10 : vector<8xf32>, %a11 = %acc11 : vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) unroll {
+    %xk = index.add %kh, %lane_k : index
+    %x0 = vector.load %x_view[%x_row0, %xk] : view<64x72xf16> -> vector<8xf16>
+    %x1 = vector.load %x_view[%x_row1, %xk] : view<64x72xf16> -> vector<8xf16>
+    %lhs0 = vector.fragment<lhs> %x0 shape [%m, %m] : vector<8xf16>
+    %lhs1 = vector.fragment<lhs> %x1 shape [%m, %m] : vector<8xf16>
+    %rhs0 = vector.fragment.load<rhs> %w_view[%kh, %row0] shape [%m, %m] : view<64x128xf16, %w_layout> -> vector<8xf16>
+    %rhs1 = vector.fragment.load<rhs> %w_view[%kh, %row1] shape [%m, %m] : view<64x128xf16, %w_layout> -> vector<8xf16>
+    %n00 = vector.mma %lhs0, %rhs0, %a00 : vector<8xf16>, vector<8xf16>, vector<8xf32>
+    %n01 = vector.mma %lhs0, %rhs1, %a01 : vector<8xf16>, vector<8xf16>, vector<8xf32>
+    %n10 = vector.mma %lhs1, %rhs0, %a10 : vector<8xf16>, vector<8xf16>, vector<8xf32>
+    %n11 = vector.mma %lhs1, %rhs1, %a11 : vector<8xf16>, vector<8xf16>, vector<8xf32>
+    scf.yield %n00, %n01, %n10, %n11 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
+  }
+  template.return %r00, %r01, %r10, %r11 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
+}
+
+func.def inline @ggml_mma_x(%x_stage: buffer, %x_rows: index, %col: index, %k: index) -> (f32) {
+  %c72 = index.constant 72 : index
+  %c0_offset = index.constant 0 : offset
+  %zero = scalar.constant 0.0 : f32
+  %x_view = buffer.view %x_stage[%c0_offset] : buffer -> view<[%x_rows]x72xf16>
+  %col_in = index.cmp ult, %col, %x_rows : index
+  %value = scf.if %col_in -> (f32) {
+    %k_in = index.cmp ult, %k, %c72 : index
+    %loaded = scf.if %k_in -> (f32) {
+      %half = view.load %x_view[%col, %k] : view<[%x_rows]x72xf16> -> f16
+      %wide = scalar.extf %half : f16 to f32
+      scf.yield %wide : f32
+    } else {
+      scf.yield %zero : f32
+    }
+    scf.yield %loaded : f32
+  } else {
+    scf.yield %zero : f32
+  }
+  func.return %value : f32
+}
+
+func.def inline @ggml_mma_w(%w_stage: buffer, %k: index, %row: index) -> (f32) {
+  %c64 = index.constant 64 : index
+  %c128 = index.constant 128 : index
+  %c0_offset = index.constant 0 : offset
+  %zero = scalar.constant 0.0 : f32
+  %w_layout = encoding.layout.strided [1, 72] : encoding<layout>
+  %w_view = buffer.view %w_stage[%c0_offset] : buffer -> view<64x128xf16, %w_layout>
+  %row_in = index.cmp ult, %row, %c128 : index
+  %value = scf.if %row_in -> (f32) {
+    %k_in = index.cmp ult, %k, %c64 : index
+    %loaded = scf.if %k_in -> (f32) {
+      %half = view.load %w_view[%k, %row] : view<64x128xf16, %w_layout> -> f16
+      %wide = scalar.extf %half : f16 to f32
+      scf.yield %wide : f32
+    } else {
+      scf.yield %zero : f32
+    }
+    scf.yield %loaded : f32
+  } else {
+    scf.yield %zero : f32
+  }
+  func.return %value : f32
+}
+
+func.def inline @ggml_mma_tile16(%x_stage: buffer, %x_rows: index, %w_stage: buffer, %col: index, %row: index, %acc: vector<8xf32>) -> (vector<8xf32>) {
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c6 = index.constant 6 : index
+  %c8 = index.constant 8 : index
+  %c10 = index.constant 10 : index
+  %c12 = index.constant 12 : index
+  %c14 = index.constant 14 : index
+  %c16 = index.constant 16 : index
+  %c64 = index.constant 64 : index
+  %lane0 = kernel.subgroup.lane.id : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 31)] : index
+  %lane_col = index.div %lane, %c16 : index
+  %lane_row = index.rem %lane, %c16 : index
+  %r = index.add %row, %lane_row : index
+  %col_e0 = index.add %col, %lane_col : index
+  %col_e1 = index.add %col_e0, %c2 : index
+  %col_e2 = index.add %col_e0, %c4 : index
+  %col_e3 = index.add %col_e0, %c6 : index
+  %col_e4 = index.add %col_e0, %c8 : index
+  %col_e5 = index.add %col_e0, %c10 : index
+  %col_e6 = index.add %col_e0, %c12 : index
+  %col_e7 = index.add %col_e0, %c14 : index
+  %result = scf.for %k = [%c0 to %c64 step %c1](%a = %acc : vector<8xf32>) -> (vector<8xf32>) {
+    %w = func.call @ggml_mma_w(%w_stage, %k, %r) : (buffer, index, index) -> (f32)
+    %x0 = func.call @ggml_mma_x(%x_stage, %x_rows, %col_e0, %k) : (buffer, index, index, index) -> (f32)
+    %x1 = func.call @ggml_mma_x(%x_stage, %x_rows, %col_e1, %k) : (buffer, index, index, index) -> (f32)
+    %x2 = func.call @ggml_mma_x(%x_stage, %x_rows, %col_e2, %k) : (buffer, index, index, index) -> (f32)
+    %x3 = func.call @ggml_mma_x(%x_stage, %x_rows, %col_e3, %k) : (buffer, index, index, index) -> (f32)
+    %x4 = func.call @ggml_mma_x(%x_stage, %x_rows, %col_e4, %k) : (buffer, index, index, index) -> (f32)
+    %x5 = func.call @ggml_mma_x(%x_stage, %x_rows, %col_e5, %k) : (buffer, index, index, index) -> (f32)
+    %x6 = func.call @ggml_mma_x(%x_stage, %x_rows, %col_e6, %k) : (buffer, index, index, index) -> (f32)
+    %x7 = func.call @ggml_mma_x(%x_stage, %x_rows, %col_e7, %k) : (buffer, index, index, index) -> (f32)
+    %xv = vector.from_elements %x0, %x1, %x2, %x3, %x4, %x5, %x6, %x7 : vector<8xf32>
+    %wv = vector.splat %w : vector<8xf32>
+    %next = vector.fmaf %xv, %wv, %a : vector<8xf32>
+    scf.yield %next : vector<8xf32>
+  }
+  func.return %result : vector<8xf32>
+}
+
+template.def<@ggml.mma.k64_2x2> device requires [#target.subgroup.size<32>] priority(1) @ggml_mma_k64_2x2(%x_stage: buffer, %w_stage: buffer, %col0: index, %row0: index, %acc00: vector<8xf32>, %acc01: vector<8xf32>, %acc10: vector<8xf32>, %acc11: vector<8xf32>) -> (vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>) {
+  %c16 = index.constant 16 : index
+  %x_rows = index.constant 64 : index
+  %col1 = index.add %col0, %c16 : index
+  %row1 = index.add %row0, %c16 : index
+  %t00 = func.call @ggml_mma_tile16(%x_stage, %x_rows, %w_stage, %col0, %row0, %acc00) : (buffer, index, buffer, index, index, vector<8xf32>) -> (vector<8xf32>)
+  %t01 = func.call @ggml_mma_tile16(%x_stage, %x_rows, %w_stage, %col0, %row1, %acc01) : (buffer, index, buffer, index, index, vector<8xf32>) -> (vector<8xf32>)
+  %t10 = func.call @ggml_mma_tile16(%x_stage, %x_rows, %w_stage, %col1, %row0, %acc10) : (buffer, index, buffer, index, index, vector<8xf32>) -> (vector<8xf32>)
+  %t11 = func.call @ggml_mma_tile16(%x_stage, %x_rows, %w_stage, %col1, %row1, %acc11) : (buffer, index, buffer, index, index, vector<8xf32>) -> (vector<8xf32>)
+  template.return %t00, %t01, %t10, %t11 : vector<8xf32>, vector<8xf32>, vector<8xf32>, vector<8xf32>
+}
