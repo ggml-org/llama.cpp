@@ -2801,11 +2801,14 @@ size_t GgmlOvDecoder::get_output_op_offset(int node_idx) const {
 }
 
 void GgmlOvDecoder::visit_subgraph(std::function<void(std::shared_ptr<GgmlDecoder>, int node_idx)> node_visitor) const {
+    // One copy for the whole walk: translators only read the decoder, and a copy per node costs a full
+    // copy of the node list for every node.
+    auto decoder = std::make_shared<GgmlOvDecoder>(*this);
     for (int node_idx = 0; node_idx < m_cgraph->n_nodes; node_idx++) {
         if (m_cgraph->nodes[node_idx]->op == GGML_OP_NONE) {
             continue;
         }
-        node_visitor(std::make_shared<GgmlOvDecoder>(*this), node_idx);
+        node_visitor(decoder, node_idx);
     }
 }
 

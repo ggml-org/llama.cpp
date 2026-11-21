@@ -198,10 +198,10 @@ std::optional<ov::Tensor> try_make_kv_4d_tensor(const std::shared_ptr<GgmlOvDeco
 }
 
 // Column count of a static KQ mask input; must match GgmlOvDecoder::get_graph_input_shape().
-static size_t get_static_attention_size(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & name) {
+static size_t get_static_attention_size(const std::shared_ptr<GgmlOvDecoder> & ggml_decoder, const std::string & name) {
     const bool is_swa = ggml_decoder->is_swa_mask(ggml_decoder->get_input_ggml_tensor(name));
     if (ggml_decoder->m_is_prefill ? ggml_openvino_kv_slice_enabled() : ggml_openvino_npu_decode_bucket() > 0) {
-        const auto params = ggml_decoder->get_compute_params();
+        const auto & params = ggml_decoder->get_compute_params();
         const int attention_size = is_swa ? params.attention_size_swa : params.attention_size;
         if (attention_size > 0) {
             return static_cast<size_t>(attention_size);
