@@ -1,0 +1,79 @@
+0.00.038.095 I llama_completion: llama backend init
+0.00.060.260 I llama_completion: load the model and apply lora adapter, if any
+=================================================================
+==2634157==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x53300001a300 at pc 0x7f1944270c65 bp 0x7ffec2f4eac0 sp 0x7ffec2f4eab8
+WRITE of size 3288 at 0x53300001a300 thread T0
+    #0 0x7f1944270c64 in llama_model_hrm_text::load_arch_tensors(llama_model_loader&) /root/cve-harness/llama-src/src/models/hrm-text.cpp:73
+    #1 0x7f19448fb225 in llama_model_base::load_tensors(llama_model_loader&) /root/cve-harness/llama-src/src/llama-model.cpp:1848
+    #2 0x7f19444b18f6 in llama_model_load /root/cve-harness/llama-src/src/llama.cpp:368
+    #3 0x7f19444b27fc in llama_model_load_from_file_impl /root/cve-harness/llama-src/src/llama.cpp:428
+    #4 0x7f19444b309b in llama_model_load_from_file /root/cve-harness/llama-src/src/llama.cpp:463
+    #5 0x7f1945cbe05c in common_model_load(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&, llama_model_params const&) /root/cve-harness/llama-src/common/common.cpp:1732
+    #6 0x7f1945d4eadd in common_get_device_memory_data_impl /root/cve-harness/llama-src/common/fit.cpp:74
+    #7 0x7f1945d560da in common_params_fit_impl /root/cve-harness/llama-src/common/fit.cpp:351
+    #8 0x7f1945d5e0a7 in common_fit_params(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&, llama_model_params*, llama_context_params*, float*, llama_model_tensor_buft_override*, unsigned long*, unsigned int, common_fit_extra_model const*, ggml_log_level) /root/cve-harness/llama-src/common/fit.cpp:993
+    #9 0x7f1945cb8ddc in common_fit_apply(common_params&, llama_model_params&, llama_context_params&) /root/cve-harness/llama-src/common/common.cpp:1267
+    #10 0x7f1945cb91a9 in common_init_result::common_init_result(common_params&, bool) /root/cve-harness/llama-src/common/common.cpp:1281
+    #11 0x7f1945cbae53 in common_init_from_params(common_params&, bool) /root/cve-harness/llama-src/common/common.cpp:1438
+    #12 0x7f194714b391 in llama_completion(int, char**) /root/cve-harness/llama-src/tools/completion/completion.cpp:143
+    #13 0x55d733ec2178 in main /root/cve-harness/llama-src/tools/completion/main.cpp:4
+    #14 0x7f1942833ca7  (/lib/x86_64-linux-gnu/libc.so.6+0x29ca7) (BuildId: def5460e3cee00bfee25b429c97bcc4853e5b3a8)
+    #15 0x7f1942833d64 in __libc_start_main (/lib/x86_64-linux-gnu/libc.so.6+0x29d64) (BuildId: def5460e3cee00bfee25b429c97bcc4853e5b3a8)
+    #16 0x55d733ec2090 in _start (/root/cve-harness/llama-src/build/bin/llama-completion+0x1090) (BuildId: 97847dcbd9dc5af69b6b8d3f17a9c8f1564f0ff9)
+
+0x53300001a300 is located 0 bytes after 105216-byte region [0x533000000800,0x53300001a300)
+allocated by thread T0 here:
+    #0 0x7f1946af5778 in operator new(unsigned long) ../../../../src/libsanitizer/asan/asan_new_delete.cpp:95
+    #1 0x7f194402798e in std::__new_allocator<llama_layer>::allocate(unsigned long, void const*) /usr/include/c++/14/bits/new_allocator.h:151
+    #2 0x7f19440261fc in std::allocator_traits<std::allocator<llama_layer> >::allocate(std::allocator<llama_layer>&, unsigned long) /usr/include/c++/14/bits/alloc_traits.h:515
+    #3 0x7f19440261fc in std::_Vector_base<llama_layer, std::allocator<llama_layer> >::_M_allocate(unsigned long) /usr/include/c++/14/bits/stl_vector.h:380
+    #4 0x7f19440243fa in std::vector<llama_layer, std::allocator<llama_layer> >::_M_default_append(unsigned long) /usr/include/c++/14/bits/vector.tcc:834
+    #5 0x7f1944020b26 in std::vector<llama_layer, std::allocator<llama_layer> >::resize(unsigned long) /usr/include/c++/14/bits/stl_vector.h:1016
+    #6 0x7f19448fb1ba in llama_model_base::load_tensors(llama_model_loader&) /root/cve-harness/llama-src/src/llama-model.cpp:1845
+    #7 0x7f19444b18f6 in llama_model_load /root/cve-harness/llama-src/src/llama.cpp:368
+    #8 0x7f19444b27fc in llama_model_load_from_file_impl /root/cve-harness/llama-src/src/llama.cpp:428
+    #9 0x7f19444b309b in llama_model_load_from_file /root/cve-harness/llama-src/src/llama.cpp:463
+    #10 0x7f1945cbe05c in common_model_load(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&, llama_model_params const&) /root/cve-harness/llama-src/common/common.cpp:1732
+    #11 0x7f1945d4eadd in common_get_device_memory_data_impl /root/cve-harness/llama-src/common/fit.cpp:74
+    #12 0x7f1945d560da in common_params_fit_impl /root/cve-harness/llama-src/common/fit.cpp:351
+    #13 0x7f1945d5e0a7 in common_fit_params(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&, llama_model_params*, llama_context_params*, float*, llama_model_tensor_buft_override*, unsigned long*, unsigned int, common_fit_extra_model const*, ggml_log_level) /root/cve-harness/llama-src/common/fit.cpp:993
+    #14 0x7f1945cb8ddc in common_fit_apply(common_params&, llama_model_params&, llama_context_params&) /root/cve-harness/llama-src/common/common.cpp:1267
+    #15 0x7f1945cb91a9 in common_init_result::common_init_result(common_params&, bool) /root/cve-harness/llama-src/common/common.cpp:1281
+    #16 0x7f1945cbae53 in common_init_from_params(common_params&, bool) /root/cve-harness/llama-src/common/common.cpp:1438
+    #17 0x7f194714b391 in llama_completion(int, char**) /root/cve-harness/llama-src/tools/completion/completion.cpp:143
+    #18 0x55d733ec2178 in main /root/cve-harness/llama-src/tools/completion/main.cpp:4
+    #19 0x7f1942833ca7  (/lib/x86_64-linux-gnu/libc.so.6+0x29ca7) (BuildId: def5460e3cee00bfee25b429c97bcc4853e5b3a8)
+
+SUMMARY: AddressSanitizer: heap-buffer-overflow /root/cve-harness/llama-src/src/models/hrm-text.cpp:73 in llama_model_hrm_text::load_arch_tensors(llama_model_loader&)
+Shadow bytes around the buggy address:
+  0x53300001a080: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x53300001a100: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x53300001a180: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x53300001a200: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x53300001a280: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+=>0x53300001a300:[fa]fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x53300001a380: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x53300001a400: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x53300001a480: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x53300001a500: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+  0x53300001a580: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+Shadow byte legend (one shadow byte represents 8 application bytes):
+  Addressable:           00
+  Partially addressable: 01 02 03 04 05 06 07 
+  Heap left redzone:       fa
+  Freed heap region:       fd
+  Stack left redzone:      f1
+  Stack mid redzone:       f2
+  Stack right redzone:     f3
+  Stack after return:      f5
+  Stack use after scope:   f8
+  Global redzone:          f9
+  Global init order:       f6
+  Poisoned by user:        f7
+  Container overflow:      fc
+  Array cookie:            ac
+  Intra object redzone:    bb
+  ASan internal:           fe
+  Left alloca redzone:     ca
+  Right alloca redzone:    cb
+==2634157==ABORTING
