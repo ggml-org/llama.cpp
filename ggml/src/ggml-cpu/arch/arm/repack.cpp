@@ -227,6 +227,153 @@ void ggml_quantize_mat_q8_0_4x8(const float * GGML_RESTRICT x, void * GGML_RESTR
 #endif
 }
 
+#if defined(__aarch64__) && defined(__ARM_NEON)
+// iscale for one row of a super block; the first value attaining the max picks the sign
+static float ggml_quantize_mat_q8_K_iscale(const float * GGML_RESTRICT xrow) {
+    float32x4_t amaxv0 = vdupq_n_f32(0.0f);
+    float32x4_t amaxv1 = vdupq_n_f32(0.0f);
+    float32x4_t amaxv2 = vdupq_n_f32(0.0f);
+    float32x4_t amaxv3 = vdupq_n_f32(0.0f);
+
+    for (int j = 0; j < QK_K; j += 16) {
+        amaxv0 = vmaxq_f32(amaxv0, vabsq_f32(vld1q_f32(xrow + j +  0)));
+        amaxv1 = vmaxq_f32(amaxv1, vabsq_f32(vld1q_f32(xrow + j +  4)));
+        amaxv2 = vmaxq_f32(amaxv2, vabsq_f32(vld1q_f32(xrow + j +  8)));
+        amaxv3 = vmaxq_f32(amaxv3, vabsq_f32(vld1q_f32(xrow + j + 12)));
+    }
+
+    const float amax = vmaxvq_f32(vmaxq_f32(vmaxq_f32(amaxv0, amaxv1), vmaxq_f32(amaxv2, amaxv3)));
+
+    const float32x4_t amaxq = vdupq_n_f32(amax);
+    float max = 0.0f;
+
+    for (int j = 0; j < QK_K; j += 4) {
+        const float32x4_t v = vld1q_f32(xrow + j);
+        const uint32x4_t   m = vceqq_f32(vabsq_f32(v), amaxq);
+
+        if (vaddvq_s32(vreinterpretq_s32_u32(m)) != 0) {
+            if      (vgetq_lane_u32(m, 0)) { max = vgetq_lane_f32(v, 0); }
+            else if (vgetq_lane_u32(m, 1)) { max = vgetq_lane_f32(v, 1); }
+            else if (vgetq_lane_u32(m, 2)) { max = vgetq_lane_f32(v, 2); }
+            else                           { max = vgetq_lane_f32(v, 3); }
+            break;
+        }
+    }
+
+    return amax ? -127.f/max : 0.0f;
+}
+#endif
+
+void ggml_quantize_mat_q8_K_4x4(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(QK_K == 256);
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+
+    block_q8_Kx4 * GGML_RESTRICT y = (block_q8_Kx4 *) vy;
+
+#if defined(__aarch64__) && defined(__ARM_NEON)
+    float iscale[4];
+
+    for (int i = 0; i < nb; i++) {
+        const float * GGML_RESTRICT xr = x + i * QK_K;
+
+        for (int row_iter = 0; row_iter < 4; row_iter++) {
+            const float is = ggml_quantize_mat_q8_K_iscale(xr + row_iter * k);
+
+            iscale[row_iter] = is;
+            y[i].d[row_iter] = is ? 1/is : 0;
+        }
+
+        int32x4_t bsumv[4] = { vdupq_n_s32(0), vdupq_n_s32(0), vdupq_n_s32(0), vdupq_n_s32(0) };
+
+        // Quants of the four rows are interleaved in groups of four values;
+        // each bsum is the sum of 16 consecutive quants of a row
+        for (int j = 0; j < QK_K / 4; j++) {
+            const int32x4_t q0 = vcvtnq_s32_f32(vmulq_n_f32(vld1q_f32(xr + 4 * j),         iscale[0]));
+            const int32x4_t q1 = vcvtnq_s32_f32(vmulq_n_f32(vld1q_f32(xr + k + 4 * j),     iscale[1]));
+            const int32x4_t q2 = vcvtnq_s32_f32(vmulq_n_f32(vld1q_f32(xr + 2 * k + 4 * j), iscale[2]));
+            const int32x4_t q3 = vcvtnq_s32_f32(vmulq_n_f32(vld1q_f32(xr + 3 * k + 4 * j), iscale[3]));
+
+            vst1q_s8(y[i].qs + 16 * j, vcombine_s8(vqmovn_s16(vcombine_s16(vqmovn_s32(q0), vqmovn_s32(q1))),
+                                                   vqmovn_s16(vcombine_s16(vqmovn_s32(q2), vqmovn_s32(q3)))));
+
+            bsumv[0] = vaddq_s32(bsumv[0], q0);
+            bsumv[1] = vaddq_s32(bsumv[1], q1);
+            bsumv[2] = vaddq_s32(bsumv[2], q2);
+            bsumv[3] = vaddq_s32(bsumv[3], q3);
+
+            if ((j & 3) == 3) {
+                const int sb  = j >> 4;       // 64-value quarter of the super block
+                const int grp = (j >> 2) & 3; // 16-value group inside the quarter
+
+                y[i].bsums[16 * sb +  0 + grp] = (int16_t) vaddvq_s32(bsumv[0]);
+                y[i].bsums[16 * sb +  4 + grp] = (int16_t) vaddvq_s32(bsumv[1]);
+                y[i].bsums[16 * sb +  8 + grp] = (int16_t) vaddvq_s32(bsumv[2]);
+                y[i].bsums[16 * sb + 12 + grp] = (int16_t) vaddvq_s32(bsumv[3]);
+
+                bsumv[0] = vdupq_n_s32(0);
+                bsumv[1] = vdupq_n_s32(0);
+                bsumv[2] = vdupq_n_s32(0);
+                bsumv[3] = vdupq_n_s32(0);
+            }
+        }
+    }
+#else
+    UNUSED(nb);
+    UNUSED(y);
+    ggml_quantize_mat_q8_K_4x4_generic(x, vy, k);
+#endif
+}
+
+void ggml_quantize_mat_q8_K_4x8(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(QK_K == 256);
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+
+    block_q8_Kx4 * GGML_RESTRICT y = (block_q8_Kx4 *) vy;
+
+#if defined(__aarch64__) && defined(__ARM_NEON)
+    float iscale[4];
+
+    for (int i = 0; i < nb; i++) {
+        const float * GGML_RESTRICT xr = x + i * QK_K;
+
+        for (int row_iter = 0; row_iter < 4; row_iter++) {
+            const float is = ggml_quantize_mat_q8_K_iscale(xr + row_iter * k);
+
+            iscale[row_iter] = is;
+            y[i].d[row_iter] = is ? 1/is : 0;
+        }
+
+        for (int j = 0; j < QK_K / 4; j++) {
+            y[i].bsums[j] = 0;
+        }
+
+        // Quants of the four rows are interleaved in groups of eight values;
+        // each bsum is the sum of 16 consecutive quants of a row
+        for (int g = 0; g < QK_K / 8; g++) {
+            const int sb  = g >> 3;       // 64-value quarter of the super block
+            const int grp = (g >> 1) & 3; // 16-value group inside the quarter
+
+            for (int row_iter = 0; row_iter < 4; row_iter++) {
+                const float * GGML_RESTRICT xrow = xr + row_iter * k + 8 * g;
+
+                const int32x4_t q0 = vcvtnq_s32_f32(vmulq_n_f32(vld1q_f32(xrow + 0), iscale[row_iter]));
+                const int32x4_t q1 = vcvtnq_s32_f32(vmulq_n_f32(vld1q_f32(xrow + 4), iscale[row_iter]));
+
+                vst1_s8(y[i].qs + 32 * g + 8 * row_iter, vqmovn_s16(vcombine_s16(vqmovn_s32(q0), vqmovn_s32(q1))));
+
+                y[i].bsums[16 * sb + 4 * row_iter + grp] += (int16_t) vaddvq_s32(vaddq_s32(q0, q1));
+            }
+        }
+    }
+#else
+    UNUSED(nb);
+    UNUSED(y);
+    ggml_quantize_mat_q8_K_4x8_generic(x, vy, k);
+#endif
+}
+
 void ggml_gemv_q4_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
