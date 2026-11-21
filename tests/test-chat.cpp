@@ -7898,6 +7898,119 @@ static void test_inkling2_media_blocks() {
     assert_equals(U + T + "a" + E,                             render({ "a" }));
 }
 
+static void test_minicpm5_xml_recovery() {
+    auto tmpls = read_templates("models/templates/openbmb-MiniCPM5-1B.jinja");
+    common_chat_templates_inputs inputs;
+    inputs.messages = {message_user};
+    inputs.enable_thinking = false;
+    inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+    inputs.parallel_tool_calls = true;
+    inputs.tools = {{
+        "search", "Look up a record",
+        R"({"type":"object","properties":{"query":{"type":"string"},"filters":{"type":"array"}},"required":["query"]})",
+    }};
+
+    const std::string recovered =
+        "<function name=\"search\"><param name=\"query\">first"
+        "<param name=\"filters\">[true,16,null]</function>";
+    const std::string cdata =
+        "<function name='search' scope='test'>"
+        "<param name='query'>\n<![CDATA[ A </function> <param name='x'> &amp; B ]]></param>"
+        "<param name='query'>ignore duplicate</param>"
+        "<param name='unknown'>ignore unknown</param>"
+        "<param name='filters'>(True, 0x10, None)</param></function>";
+    const std::string missing = "<function name=\"search\"><param name=\"filters\">[1]</param></function>";
+    const std::string unknown = "<function name=\"undefined\"><param name=\"query\">plain</param></function>";
+    const std::string text = "head " + recovered + " middle " + cdata + missing + unknown + " tail";
+    const auto first_args = common_json::parse(R"({"query":"first","filters":[true,16,null]})");
+    const auto second_args = common_json::parse(R"({"query":" A </function> <param name='x'> &amp; B ","filters":[true,16,null]})");
+
+    common_chat_session complete(tmpls.get(), nullptr, inputs);
+    const auto expected = complete.finish(common_chat_input(text));
+    assert_equals(std::string("head  middle ") + unknown + " tail", expected.content);
+    assert_equals(size_t(2), expected.tool_calls.size());
+    assert_equals(std::string("search"), expected.tool_calls[0].name);
+    assert_equals(true, first_args == common_json::parse(expected.tool_calls[0].arguments));
+    assert_equals(true, second_args == common_json::parse(expected.tool_calls[1].arguments));
+
+    {
+        common_chat_session session(tmpls.get(), nullptr, inputs);
+        const auto & result = session.finish(common_chat_input(
+            "<function name=\"search\"><param name=\"query\">  padded \n</param></function>"));
+        assert_equals(std::string("  padded \n"), common_json::parse(result.tool_calls[0].arguments).at("query").get<std::string>());
+    }
+
+    // Check split tag and CDATA boundaries, plus several calls in one feed.
+    for (size_t chunk_size : {size_t(1), size_t(7), text.size()}) {
+        common_chat_session session(tmpls.get(), nullptr, inputs);
+        common_chat_msg previous;
+        for (size_t pos = 0; pos < text.size(); pos += chunk_size) {
+            const auto & next = session.feed(common_chat_input(text.substr(pos, chunk_size)));
+            assert_equals(previous.content, next.content.substr(0, previous.content.size()));
+            for (size_t i = 0; i < previous.tool_calls.size(); ++i) {
+                assert_equals(previous.tool_calls[i].arguments, next.tool_calls[i].arguments);
+            }
+            previous = next;
+        }
+        const auto & result = session.finish();
+        assert_equals(expected.content, result.content);
+        assert_equals(expected.tool_calls.size(), result.tool_calls.size());
+        assert_equals(true, first_args == common_json::parse(result.tool_calls[0].arguments));
+        assert_equals(true, second_args == common_json::parse(result.tool_calls[1].arguments));
+    }
+
+    {
+        common_chat_session session(tmpls.get(), nullptr, inputs);
+        const auto & result = session.feed(common_chat_input(recovered + cdata));
+        assert_equals(size_t(2), result.tool_calls.size());
+        assert_equals(size_t(2), session.finish().tool_calls.size());
+    }
+
+    {
+        common_chat_session session(tmpls.get(), nullptr, inputs);
+        const auto fake_close = cdata.find("</function>") + std::string("</function>").size();
+        const auto & partial = session.feed(common_chat_input(cdata.substr(0, fake_close)));
+        assert_equals(size_t(0), partial.tool_calls.size());
+        assert_equals(std::string(), partial.content);
+        const auto & result = session.finish(common_chat_input(cdata.substr(fake_close)));
+        assert_equals(size_t(1), result.tool_calls.size());
+        assert_equals(true, second_args == common_json::parse(result.tool_calls[0].arguments));
+    }
+
+    const std::string call =
+        "<function name=\"search\"><param name=\"query\">value</param></function>";
+    for (bool thinking : {false, true}) {
+        inputs.enable_thinking = thinking;
+        const std::string reasoning = thinking ? "reasoning</think>\n\n" : "";
+        for (const std::string & prefix : {std::string(), std::string("Explain <function> syntax. "),
+                                         std::string("Explain <function>text</function>. ")}) {
+            const std::string text = reasoning + prefix + call + call;
+            common_chat_session complete(tmpls.get(), nullptr, inputs);
+            const auto expected = complete.finish(common_chat_input(text));
+            assert_equals(prefix, expected.content);
+            assert_equals(size_t(2), expected.tool_calls.size());
+            if (thinking) {
+                assert_equals(true, expected.reasoning_content.find("reasoning") != std::string::npos);
+            }
+            for (size_t chunk_size : {size_t(1), text.size()}) {
+                common_chat_session session(tmpls.get(), nullptr, inputs);
+                common_chat_msg previous;
+                for (size_t pos = 0; pos < text.size(); pos += chunk_size) {
+                    const auto & next = session.feed(common_chat_input(text.substr(pos, chunk_size)));
+                    assert_equals(previous.content, next.content.substr(0, previous.content.size()));
+                    previous = next;
+                }
+                const auto & result = session.finish();
+                assert_equals(prefix, result.content);
+                assert_equals(size_t(2), result.tool_calls.size());
+                assert_equals(expected.reasoning_content, result.reasoning_content);
+                assert_equals(expected.tool_calls[0].arguments, result.tool_calls[0].arguments);
+                assert_equals(expected.tool_calls[1].arguments, result.tool_calls[1].arguments);
+            }
+        }
+    }
+}
+
 static void test_template_generation_prompt() {
     common_chat_msg system_msg;
     system_msg.role = "system";
@@ -8895,6 +9008,7 @@ int main(int argc, char ** argv) {
     } else
 #endif
     {
+        test_minicpm5_xml_recovery();
         test_msg_diffs_compute();
         test_msgs_oaicompat_json_conversion();
         test_msg_token_delimiters_split();

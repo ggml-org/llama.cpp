@@ -1833,6 +1833,9 @@ common_chat_input common_chat_input_tokenize(const llama_vocab * vocab, const st
 common_chat_msg common_chat_parse(const common_chat_input &         input,
                                   bool                              is_partial,
                                   const common_chat_parser_params & params) {
+    if (params.minicpm5_xml) {
+        return common_chat_parse_minicpm5_xml(input, is_partial, params);
+    }
     return common_chat_peg_parse(params.parser, input, is_partial, params);
 }
 
@@ -1939,6 +1942,7 @@ common_chat_session::common_chat_session(const common_chat_templates *        tm
                                             : common_chat_input(applied.generation_prompt);
     parser_params.debug             = params.debug;
     parser_params.parser            = std::move(applied.parser);
+    parser_params.minicpm5_xml       = std::move(applied.minicpm5_xml);
 
     delimiters = std::move(applied.message_delimiters);
 

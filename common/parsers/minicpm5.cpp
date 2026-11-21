@@ -1,5 +1,335 @@
 #include "parsers.h"
 
+#include "unicode.h"
+
+#include <algorithm>
+#include <map>
+#include <string_view>
+
+namespace {
+
+// Recover complete XML calls while PEG handles reasoning and the generation grammar.
+constexpr std::string_view function_open = "<function";
+constexpr std::string_view function_close = "</function>";
+constexpr std::string_view param_open = "<param";
+constexpr std::string_view param_close = "</param>";
+constexpr std::string_view cdata_open = "<![CDATA[";
+constexpr std::string_view cdata_close = "]]>";
+
+bool starts_with(std::string_view text, std::string_view prefix) {
+    return text.substr(0, prefix.size()) == prefix;
+}
+
+size_t space_size(std::string_view text) {
+    if (text.empty()) {
+        return 0;
+    }
+
+    const auto ch = common_parse_utf8_codepoint(text, 0);
+    if (ch.status != utf8_parse_result::SUCCESS) {
+        return 0;
+    }
+
+    const auto cp = ch.codepoint;
+    const bool space =
+        (cp >= 0x09 && cp <= 0x0d) || (cp >= 0x1c && cp <= 0x20) ||
+        cp == 0x85 || cp == 0xa0 || cp == 0x1680 || (cp >= 0x2000 && cp <= 0x200a) ||
+        cp == 0x2028 || cp == 0x2029 || cp == 0x202f || cp == 0x205f || cp == 0x3000;
+    return space ? ch.bytes_consumed : 0;
+}
+
+size_t skip_space(std::string_view text) {
+    size_t pos = 0;
+    while (const auto len = space_size(text.substr(pos))) {
+        pos += len;
+    }
+    return pos;
+}
+
+std::string_view trim_space(std::string_view text) {
+    text.remove_prefix(skip_space(text));
+    while (!text.empty()) {
+        size_t pos = text.size() - 1;
+        while (pos > 0 && (static_cast<unsigned char>(text[pos]) & 0xc0) == 0x80) {
+            --pos;
+        }
+        if (space_size(text.substr(pos)) != text.size() - pos) {
+            break;
+        }
+        text = text.substr(0, pos);
+    }
+    return text;
+}
+
+struct named_tag {
+    std::string name;
+    size_t end;
+};
+
+// Accept whitespace, either quote, and attributes after name.
+std::optional<named_tag> read_named_tag(std::string_view text, std::string_view tag, size_t pos) {
+    if (!starts_with(text.substr(pos), tag)) {
+        return std::nullopt;
+    }
+    pos += tag.size();
+    const size_t spaces = skip_space(text.substr(pos));
+    if (!spaces) {
+        return std::nullopt;
+    }
+    pos += spaces;
+    constexpr std::string_view attribute = "name=";
+    if (!starts_with(text.substr(pos), attribute)) {
+        return std::nullopt;
+    }
+    pos += attribute.size();
+    if (pos == text.size() || (text[pos] != '\'' && text[pos] != '"')) {
+        return std::nullopt;
+    }
+
+    const size_t first = pos + 1;
+    const size_t last  = text.find(text[pos], first);
+    if (last == text.npos || first == last) {
+        return std::nullopt;
+    }
+    const size_t end = text.find('>', last + 1);
+    if (end == text.npos) {
+        return std::nullopt;
+    }
+    return named_tag{std::string(trim_space(text.substr(first, last - first))), end + 1};
+}
+
+size_t find_function_close(std::string_view text, size_t begin, bool is_partial) {
+    while (true) {
+        const size_t close = text.find(function_close, begin);
+        if (close == text.npos) {
+            return close;
+        }
+        const size_t cdata = text.find(cdata_open, begin);
+        if (cdata == text.npos || cdata > close) {
+            return close;
+        }
+        const size_t end = text.find(cdata_close, cdata + cdata_open.size());
+        if (end == text.npos) {
+            return is_partial ? text.npos : close;
+        }
+        begin = end + cdata_close.size();
+    }
+}
+
+std::string_view read_param_value(std::string_view text, size_t & pos) {
+    const size_t cdata = pos + skip_space(text.substr(pos));
+    if (starts_with(text.substr(cdata), cdata_open)) {
+        pos = cdata + cdata_open.size();
+        const size_t end = text.find(cdata_close, pos);
+        if (end != text.npos) {
+            const auto value = text.substr(pos, end - pos);
+            pos = end + cdata_close.size();
+            if (starts_with(text.substr(pos), param_close)) {
+                pos += param_close.size();
+            }
+            return value;
+        }
+    }
+
+    for (size_t end = text.find('<', pos); end != text.npos; end = text.find('<', end + 1)) {
+        const auto boundary = text.substr(end);
+        const bool param_ends = starts_with(boundary, param_close);
+        if (param_ends || starts_with(boundary, param_open) || starts_with(boundary, function_close)) {
+            const auto value = param_ends ? text.substr(pos, end - pos) : trim_space(text.substr(pos, end - pos));
+            pos = end + (param_ends ? param_close.size() : 0);
+            return value;
+        }
+    }
+
+    const auto value = text.substr(pos);
+    pos = text.size();
+    return value;
+}
+
+json get_schema_properties(const json & schema) {
+    if (!schema.is_object()) {
+        return json::object();
+    }
+    if (schema.contains("properties") && schema.at("properties").is_object()) {
+        return schema.at("properties");
+    }
+
+    json merged = json::object();
+    for (const char * keyword : {"anyOf", "oneOf", "allOf"}) {
+        if (!schema.contains(keyword) || !schema.at(keyword).is_array()) {
+            continue;
+        }
+        for (const auto & branch : schema.at(keyword)) {
+            const auto nested = get_schema_properties(branch);
+            for (const auto & item : nested.items()) {
+                if (!merged.contains(item.key())) {
+                    merged[item.key()] = item.value();
+                }
+            }
+        }
+    }
+    return merged;
+}
+
+struct tool_schema {
+    json properties;
+    std::vector<std::string> required;
+};
+
+std::optional<json> parse_arguments(std::string_view text, size_t pos, size_t body_end, const tool_schema & schema) {
+    json arguments = json::object();
+    while (pos < body_end) {
+        pos += skip_space(text.substr(pos, body_end - pos));
+        if (pos == body_end) {
+            break;
+        }
+
+        auto param = read_named_tag(text, param_open, pos);
+        if (param) {
+            pos = param->end;
+            const auto value = read_param_value(text, pos);
+            const auto & properties = schema.properties;
+            const auto * prop = properties.contains(param->name) ? &properties.at(param->name) : nullptr;
+            if (arguments.contains(param->name) || (!properties.empty() && !prop)) {
+                continue;
+            }
+            if (prop && !prop->is_object()) {
+                return std::nullopt;
+            }
+            const auto type = prop ? prop->value("type", json()) : json();
+            if (!type.is_null() && type != "string") {
+                arguments[param->name] = common_chat_parse_minicpm5_value(value);
+            } else {
+                arguments[param->name] = std::string(value);
+            }
+        } else if (starts_with(text.substr(pos), param_open)) {
+            const size_t end = text.find(param_close, pos);
+            if (end == text.npos || end + param_close.size() > body_end) {
+                break;
+            }
+            pos = end + param_close.size();
+        } else {
+            break;
+        }
+    }
+    return arguments;
+}
+
+common_peg_parser minicpm5_prefix(common_chat_peg_builder & p, bool extract_reasoning) {
+    auto prefix = p.literal("<|im_start|>assistant\n");
+    if (extract_reasoning) {
+        prefix = prefix + ("<think>" << p.reasoning(p.until("</think>")) << "</think>");
+    }
+    return prefix;
+}
+
+}  // namespace
+
+struct common_chat_minicpm5_xml {
+    std::map<std::string, tool_schema> tools;
+    bool extract_reasoning;
+
+    common_chat_minicpm5_xml(const json & tool_specs, bool extract_reasoning)
+        : extract_reasoning(extract_reasoning) {
+        foreach_function(tool_specs, [&](size_t, const json & tool) {
+            const auto & function = tool.at("function");
+            const auto name = function.value("name", std::string());
+            if (name.empty()) {
+                return;
+            }
+
+            const auto params = function.value("parameters", json());
+            tool_schema schema{get_schema_properties(params), {}};
+            if (params.is_object() && params.contains("required")) {
+                const auto & required = params.at("required");
+                if (required.is_array()) {
+                    for (const auto & key : required) {
+                        if (key.is_string()) {
+                            schema.required.push_back(key.get<std::string>());
+                        }
+                    }
+                }
+            }
+            tools.insert_or_assign(name, std::move(schema));
+        });
+    }
+};
+
+static void parse_xml(std::string_view text, bool is_partial, const common_chat_minicpm5_xml & config, common_chat_msg & msg) {
+    size_t pos = 0;
+    while (true) {
+        const size_t start = text.find(function_open, pos);
+        if (start == text.npos) {
+            size_t end = text.size();
+            if (is_partial) {
+                for (size_t n = 1; n < function_open.size() && n <= text.size() - pos; ++n) {
+                    if (text.substr(text.size() - n) == function_open.substr(0, n)) {
+                        end = text.size() - n;
+                    }
+                }
+            }
+            msg.content += text.substr(pos, end - pos);
+            return;
+        }
+
+        msg.content += text.substr(pos, start - pos);
+        const auto opening = read_named_tag(text, function_open, start);
+        if (!opening) {
+            // A split opening tag may still become a tool call.
+            if (is_partial && text.find('>', start) == text.npos) {
+                return;
+            }
+            msg.content += function_open;
+            pos = start + function_open.size();
+            continue;
+        }
+        const size_t close = find_function_close(text, opening->end, is_partial);
+        if (close == text.npos) {
+            if (!is_partial) {
+                msg.content += text.substr(start);
+            }
+            return;
+        }
+
+        pos = close + function_close.size();
+        const auto tool = config.tools.find(opening->name);
+        if (tool == config.tools.end()) {
+            msg.content += text.substr(start, pos - start);
+            continue;
+        }
+
+        const auto args = parse_arguments(text.substr(0, close), opening->end, close, tool->second);
+        if (!args) {
+            // Keep the original text if a supplied property is not a schema object.
+            msg.content = text;
+            msg.tool_calls.clear();
+            return;
+        }
+        const auto & required = tool->second.required;
+        if (std::all_of(required.begin(), required.end(), [&](const std::string & key) { return args->contains(key); })) {
+            msg.tool_calls.push_back({opening->name, args->dump(), {}});
+        }
+    }
+}
+
+common_chat_msg common_chat_parse_minicpm5_xml(const common_chat_input & input,
+                                               bool is_partial,
+                                               const common_chat_parser_params & params) {
+    static const auto plain = build_chat_peg_parser([](common_chat_peg_builder & p) {
+        return minicpm5_prefix(p, false) + p.content(p.rest()) + p.end();
+    });
+    static const auto reasoning = build_chat_peg_parser([](common_chat_peg_builder & p) {
+        return minicpm5_prefix(p, true) + p.space() + p.content(p.rest()) + p.end();
+    });
+    const auto & config = *params.minicpm5_xml;
+    auto msg = common_chat_peg_parse(config.extract_reasoning ? reasoning : plain, input, is_partial, params);
+    const auto raw = std::move(msg.content);
+    msg.content.clear();
+
+    parse_xml(raw, is_partial, config, msg);
+    return msg;
+}
+
 // MiniCPM5 format:
 // - Reasoning: <think>{reasoning}</think> (optional)
 // - Tool calls: <function name="foo"><param name="bar">value</param></function>
@@ -47,16 +377,14 @@ common_chat_params common_chat_params_init_minicpm5(const common_chat_template &
     }
 
     data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        auto generation_prompt = p.literal("<|im_start|>assistant\n");
-
-        auto reasoning = p.eps();
+        auto prefix = minicpm5_prefix(p, extract_reasoning);
         if (extract_reasoning) {
-            reasoning = ("<think>" << p.reasoning(p.until("</think>")) << "</think>") + p.space();
+            prefix += p.space();
         }
 
         // Response format parser
         if (has_response_format) {
-            return generation_prompt + reasoning + p.content(p.schema(p.json(), "response-format", inputs.json_schema));
+            return prefix + p.content(p.schema(p.json(), "response-format", inputs.json_schema));
         }
 
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
@@ -107,10 +435,10 @@ common_chat_params common_chat_params_init_minicpm5(const common_chat_template &
 
             auto content = p.content(p.until("<function"));
 
-            return generation_prompt + reasoning + content + tool_calls + p.end();
+            return prefix + content + tool_calls + p.end();
         }
 
-        return generation_prompt + reasoning + p.content(p.rest()) + p.end();
+        return prefix + p.content(p.rest()) + p.end();
     });
 
     if (include_grammar) {
@@ -122,6 +450,10 @@ common_chat_params common_chat_params_init_minicpm5(const common_chat_template &
         data.grammar_triggers = {
             { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<function" },
         };
+    }
+
+    if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && !has_response_format) {
+        data.minicpm5_xml = std::make_shared<common_chat_minicpm5_xml>(inputs.tools, extract_reasoning);
     }
 
     return data;

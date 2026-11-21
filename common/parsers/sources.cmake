@@ -18,6 +18,7 @@ set(LLAMA_CHAT_PARSERS_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/lfm2.cpp
     ${CMAKE_CURRENT_LIST_DIR}/llm-jp-harmony.cpp
     ${CMAKE_CURRENT_LIST_DIR}/minicpm5.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/minicpm5-value.cpp
     ${CMAKE_CURRENT_LIST_DIR}/minimax-m3.cpp
     ${CMAKE_CURRENT_LIST_DIR}/ministral3.cpp
     ${CMAKE_CURRENT_LIST_DIR}/muse-glimmer.cpp

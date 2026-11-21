@@ -74,6 +74,12 @@ common_chat_params common_chat_params_init_llm_jp_harmony(const common_chat_temp
 
 common_chat_params common_chat_params_init_minicpm5(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 
+json common_chat_parse_minicpm5_value(std::string_view input);
+
+common_chat_msg common_chat_parse_minicpm5_xml(const common_chat_input & input,
+                                               bool is_partial,
+                                               const common_chat_parser_params & params);
+
 common_chat_params common_chat_params_init_minimax_m3(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 
 common_chat_params common_chat_params_init_ministral_3(const common_chat_template & tmpl, const autoparser::generation_params & inputs);

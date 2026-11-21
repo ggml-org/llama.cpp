@@ -9,6 +9,7 @@ Function calling is supported for all models (see https://github.com/ggml-org/ll
 
 - Native tool call formats supported:
   - Llama 3.1 / 3.3 (including builtin tools support - tool names for `wolfram_alpha`, `web_search` / `brave_search`, `code_interpreter`), Llama 3.2
+  - MiniCPM5 XML tool calls (including CDATA and recovery of missing parameter end tags)
   - Functionary v3.1 / v3.2
   - Hermes 2/3, Qwen 2.5
   - Qwen 2.5 Coder
@@ -23,6 +24,8 @@ Function calling is supported for all models (see https://github.com/ggml-org/ll
   - Generic support may consume more tokens and be less efficient than a model's native format.
 
 - Multiple/parallel tool calling is supported on some models but disabled by default, enable it by passing `"parallel_tool_calls": true` in the completion endpoint payload.
+
+MiniCPM5 uses its native XML parser when the tool-use template is recognized. Start the server with `--jinja` and the model's tool-use template. Streaming emits each call after `</function>` closes, so CDATA and recovered parameters use the same parsing path as non-streaming. Calls in the same chunk are emitted together. Literal `<function>` tags without a `name` attribute remain text and do not block later calls. Whitespace separating reasoning from the tool response is omitted from `content`. Explicitly closed string parameters and CDATA preserve whitespace; duplicate parameters keep the first value, unknown parameters are ignored, and calls missing required parameters are omitted.
 
 <details>
 <summary>Show some common templates and which format handler they use</summary>

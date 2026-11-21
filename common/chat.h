@@ -13,6 +13,7 @@
 #include <chrono>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -25,6 +26,7 @@ struct generation_params;
 struct autoparser;
 }  // namespace autoparser
 
+struct common_chat_minicpm5_xml;
 struct common_chat_params;
 struct common_chat_template;
 
@@ -314,6 +316,7 @@ struct common_chat_params {
     std::vector<std::string>            preserved_tokens;
     std::vector<std::string>            additional_stops;
     common_peg_arena                    parser;
+    std::shared_ptr<const common_chat_minicpm5_xml> minicpm5_xml;
     common_chat_msg_delimiters          message_delimiters;
 };
 
@@ -349,9 +352,11 @@ struct common_chat_parser_params {
     common_chat_input  generation_prompt;
     bool               debug  = false; // Enable debug output for PEG parser
     common_peg_arena   parser = {};
+    std::shared_ptr<const common_chat_minicpm5_xml> minicpm5_xml;
     common_chat_parser_params() = default;
     common_chat_parser_params(const common_chat_params & chat_params) {
-        format  = chat_params.format;
+        format            = chat_params.format;
+        minicpm5_xml       = chat_params.minicpm5_xml;
         generation_prompt = common_chat_input(chat_params.generation_prompt);
     }
 };
