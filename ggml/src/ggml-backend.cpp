@@ -1030,11 +1030,6 @@ ggml_backend_buffer_t ggml_backend_dev_buffer_from_host_ptr(ggml_backend_dev_t d
 
 bool ggml_backend_dev_supports_op(ggml_backend_dev_t device, const struct ggml_tensor * op) {
     GGML_ASSERT(device);
-    // Backends predating indexed bias would accept the ordinary FA op and ignore the extra inputs.
-    if (op->op == GGML_OP_FLASH_ATTN_EXT && op->src[6] &&
-            !ggml_backend_reg_get_proc_address(device->reg, "ggml_backend_flash_attn_ext_indexed_bias")) {
-        return false;
-    }
     return device->iface.supports_op(device, op);
 }
 

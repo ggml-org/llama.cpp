@@ -3246,7 +3246,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             ggml_flash_attn_ext_add_indexed_bias(cur, bias_table, bias_indices);
             const auto dev = model.dev_layer(il);
             if (!cparams.offload_kqv || !dev || !ggml_backend_dev_supports_op(dev, cur)) {
-                cur->src[6] = cur->src[7] = nullptr;
+                ggml_flash_attn_ext_add_indexed_bias(cur, nullptr, nullptr);
                 cur->src[3] = dense_bias_mask();
             } else if (kv_rows) {
                 // Looped layers can project Q and the bias on a different device from their KV cache.

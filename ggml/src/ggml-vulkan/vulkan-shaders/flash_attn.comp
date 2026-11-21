@@ -226,7 +226,7 @@ void main() {
                                 uint bin = uint(data_sparse[query * KV + kcol]);
                                 if (bin < n_bins) {
                                     float bias = uintBitsToFloat(data_mask_opt[(query * n_bins + bin) * p.neq2 + iq2]);
-                                    m = FLOAT_TYPE(unpackHalf2x16(packHalf2x16(vec2(float(m) + bias, 0))).x);
+                                    m = FLOAT_TYPE(float16_t(float(m) + bias));
                                 }
                             }
                             masksh[c * masksh_stride + r] = m;

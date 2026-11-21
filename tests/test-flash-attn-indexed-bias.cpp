@@ -22,6 +22,12 @@ static void test_indexed_bias(ggml_backend_t backend, int width, bool use_rows, 
     auto * sinks = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, heads);
     auto * out = ggml_flash_attn_ext_rows(ctx, q, k, v, mask, rows, 1.0f/sqrtf(width), 0, 0);
     ggml_flash_attn_ext_add_sinks(out, sinks);
+    const bool supports_plain = ggml_backend_supports_op(backend, out);
+    ggml_flash_attn_ext_add_indexed_bias(out, table, indices);
+    GGML_ASSERT(ggml_flash_attn_ext_has_indexed_bias(out));
+    ggml_flash_attn_ext_add_indexed_bias(out, nullptr, nullptr);
+    GGML_ASSERT(!ggml_flash_attn_ext_has_indexed_bias(out) && !out->src[6] && !out->src[7]);
+    GGML_ASSERT(ggml_backend_supports_op(backend, out) == supports_plain);
     ggml_flash_attn_ext_add_indexed_bias(out, table, indices);
     ggml_prec_set_acc(out, GGML_PREC_F32);
 
@@ -66,7 +72,7 @@ static void test_indexed_bias(ggml_backend_t backend, int width, bool use_rows, 
             const int query = s*n_query + j;
             for (int h = 0; h < heads; ++h) {
                 for (int b = 0; b < bins; ++b) {
-                    biases[(query*bins + b)*heads + h] = float((b*(3 + h) + query) % 13 - 6)/2;
+                    biases[(query*bins + b)*heads + h] = float((b*(3 + h) + query) % 13 - 6)/2.9f;
                 }
                 double sum = exp(double(sink_logits[h])), weighted = 0.0;
                 for (int c = 0; c < cols; ++c) {
@@ -78,7 +84,8 @@ static void test_indexed_bias(ggml_backend_t backend, int width, bool use_rows, 
                     if (visible) {
                         const int vk = (use_rows ? 0 : s)*kv_heads + h/(heads/kv_heads);
                         const double qk = 4.0*ggml_fp16_to_fp32(keys[(vk*cells + cell)*width])/sqrt(width);
-                        const double weight = exp(qk + 0.25 + biases[(query*bins + idx[i])*heads + h]);
+                        const float m = 0.25f + biases[(query*bins + idx[i])*heads + h];
+                        const double weight = exp(qk + ggml_fp16_to_fp32(ggml_fp32_to_fp16(m)));
                         weighted += weight*ggml_fp16_to_fp32(values[(vk*cells + cell)*width]);
                         sum += weight;
                     }
@@ -114,9 +121,6 @@ int main() {
     ggml_backend_load_all();
     for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
         auto dev = ggml_backend_dev_get(i);
-        if (!ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(dev), "ggml_backend_flash_attn_ext_indexed_bias")) {
-            continue;
-        }
         auto backend = ggml_backend_dev_init(dev, nullptr);
         GGML_ASSERT(backend);
         for (int width : {64, 128}) {

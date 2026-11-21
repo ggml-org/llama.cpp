@@ -16798,11 +16798,12 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_FLASH_ATTN_EXT:
             {
                 // Only the indexed-bias scalar kernel reads row lists.
-                if (op->src[5] && (!op->src[6] || device->properties.limits.maxPerStageDescriptorStorageBuffers < 9 ||
+                const bool indexed_bias = ggml_flash_attn_ext_has_indexed_bias(op);
+                if (op->src[5] && (!indexed_bias || device->properties.limits.maxPerStageDescriptorStorageBuffers < 9 ||
                         device->properties.limits.maxDescriptorSetStorageBuffers < 9)) {
                     return false;
                 }
-                if (op->src[6] && (op->src[6]->ne[1] > 0x7fffff || !device->subgroup_shuffle || !device->subgroup_vote ||
+                if (indexed_bias && (op->src[6]->ne[1] > 0x7fffff || !device->subgroup_shuffle || !device->subgroup_vote ||
                         ggml_nelements(op->src[6]) > UINT32_MAX || ggml_nelements(op->src[7]) > UINT32_MAX ||
                         op->src[1]->type != GGML_TYPE_F16 || op->src[2]->type != GGML_TYPE_F16 ||
                         (op->src[1]->ne[0] != 64 && op->src[1]->ne[0] != 128) || op->src[1]->ne[0] != op->src[2]->ne[0])) {
@@ -17510,9 +17511,6 @@ static ggml_backend_dev_t ggml_backend_vk_reg_get_device(ggml_backend_reg_t reg,
 }
 
 static void * ggml_backend_vk_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
-    if (strcmp(name, "ggml_backend_flash_attn_ext_indexed_bias") == 0) {
-        return (void *) ggml_backend_vk_device_supports_op;
-    }
     UNUSED(reg);
 #if !defined(_WIN32)
     if (strcmp(name, "ggml_backend_comm_init") == 0) {

@@ -7004,9 +7004,6 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t 
 }
 
 static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
-    if (strcmp(name, "ggml_backend_flash_attn_ext_indexed_bias") == 0) {
-        return (void *) ggml_backend_cuda_device_supports_op;
-    }
     GGML_UNUSED(reg);
     if (strcmp(name, "ggml_backend_comm_init") == 0) {
         return (void *)ggml_backend_cuda_comm_init;

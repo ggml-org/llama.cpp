@@ -3113,9 +3113,8 @@ static ggml_backend_buffer_type_t ggml_backend_rpc_device_get_buffer_type(ggml_b
 
 static bool ggml_backend_rpc_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     GGML_UNUSED(dev);
-    GGML_UNUSED(op);
     //TODO: call the remote backend and cache the results
-    return true;
+    return op->op != GGML_OP_FLASH_ATTN_EXT || !ggml_flash_attn_ext_has_indexed_bias(op);
 }
 
 static bool ggml_backend_rpc_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {

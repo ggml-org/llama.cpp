@@ -1905,6 +1905,10 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
             return {false, "FLASH_ATTN_EXT gemma3n pattern on GPU is not supported"};
         }
 
+        if (ggml_flash_attn_ext_has_indexed_bias(op)) {
+            return {false, "FLASH_ATTN_EXT with indexed bias is not supported"};
+        }
+
         // K/V row lists (ggml_flash_attn_ext_rows) are not supported
         if (op->src[5] != nullptr) {
             return {false, "FLASH_ATTN_EXT with K/V row lists is not supported"};
