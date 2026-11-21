@@ -2300,6 +2300,15 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up,
     return true;
 }
 
+// MUL_MAT_ID with F32/F16/BF16 experts takes MMVF (up to MMVF_MAX_BATCH_SIZE tokens) on AMD, and on NVIDIA for a BF16 src1,
+// which MMF can not read. On NVIDIA an F32 src1 takes MMF where MMF supports the experts, otherwise the sorted fallback.
+// MMVF reads src0 in pairs of values, so it needs an even number of columns and rows aligned to a pair.
+static bool ggml_cuda_mul_mat_id_use_mmvf_float(const ggml_tensor * src0, const ggml_tensor * src1, const int cc) {
+    return (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16) &&
+        (GGML_CUDA_CC_IS_AMD(cc) || src1->type == GGML_TYPE_BF16) &&
+        src0->ne[0] % 2 == 0 && ggml_cuda_is_aligned(src0, 2*ggml_type_size(src0->type));
+}
+
 static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor, const ggml_tensor * gate = nullptr) {
     ggml_tensor *       src0 = tensor->src[0];
     ggml_tensor *       src1 = tensor->src[1];
@@ -2310,13 +2319,19 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor, cons
     bool use_mul_mat_vec_f =
         (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16 ||
          src0->type == GGML_TYPE_F8_E4M3) &&
-        src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
+        (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16) && dst->type == GGML_TYPE_F32;
 
     const int cc        = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
-    use_mul_mat_vec_f = use_mul_mat_vec_f && ggml_cuda_should_use_mmvf(src0, cc, warp_size, is_mul_mat_id ? src1->ne[2] : src1->ne[1]);
+    const int64_t ne11  = is_mul_mat_id ? src1->ne[2] : src1->ne[1];
+    // with a BF16 src1, ggml_cuda_mul_mat_id runs MMVF for float experts of any size, so the fusion may as well
+    const auto use_mmvf = [&](const ggml_tensor * x) {
+        return ggml_cuda_should_use_mmvf(x, cc, warp_size, ne11) ||
+            (is_mul_mat_id && src1->type == GGML_TYPE_BF16 && ggml_cuda_mul_mat_id_use_mmvf_float(x, src1, cc));
+    };
+    use_mul_mat_vec_f = use_mul_mat_vec_f && use_mmvf(src0);
 
-    if (gate && !ggml_cuda_should_use_mmvf(gate->src[0], cc, warp_size, is_mul_mat_id ? src1->ne[2] : src1->ne[1])) {
+    if (gate && !use_mmvf(gate->src[0])) {
         return false;
     }
 
@@ -2344,7 +2359,7 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
 
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     bool use_mul_mat_vec_q = ggml_cuda_should_use_mmvq(src0->type, cc, src1->ne[1]) && !bad_padding_clear &&
-                             src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
+                             (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16) && dst->type == GGML_TYPE_F32;
 
     // fusion is not universally faster on Pascal
     if (cc < GGML_CUDA_CC_VOLTA) {
@@ -2466,7 +2481,8 @@ static bool ggml_cuda_mul_mat_q_fusion_matches(const ggml_tensor * up, const ggm
     const ggml_tensor * x_up = up->src[0];
     const ggml_tensor * y    = up->src[1];
 
-    if ((up->op != GGML_OP_MUL_MAT && up->op != GGML_OP_MUL_MAT_ID) || !ggml_cuda_mmq_fusion_supported(x_up->type) || y->type != GGML_TYPE_F32) {
+    if ((up->op != GGML_OP_MUL_MAT && up->op != GGML_OP_MUL_MAT_ID) || !ggml_cuda_mmq_fusion_supported(x_up->type) ||
+            (y->type != GGML_TYPE_F32 && y->type != GGML_TYPE_BF16)) {
         return false;
     }
 
@@ -2544,7 +2560,8 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     // Therefore, in such cases use cuBLAS.
     const bool bad_padding_clear = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE
         && ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) && src0->view_src;
-    if (bad_padding_clear || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+    // MMVF, MMVQ and MMQ also read a BF16 src1, MMF only an F32 src1
+    if (bad_padding_clear || (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_BF16) || dst->type != GGML_TYPE_F32) {
         ggml_cuda_mul_mat_cublas(ctx, src0, src1, dst);
         return;
     }
@@ -2572,7 +2589,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_vec_f(ctx, src1, src0, nullptr, &dst_vec);
         return;
     }
-    if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, ne11, /*mul_mat_id =*/ false)) {
+    if (src1->type == GGML_TYPE_F32 && ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, ne11, /*mul_mat_id =*/ false)) {
         ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
         return;
     }
@@ -2603,7 +2620,7 @@ static bool ggml_cuda_mul_mat_id_needs_sync(const ggml_tensor * dst, const int c
     const ggml_tensor * src1 = dst->src[1];
     const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
 
-    if (src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+    if ((src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_BF16) || dst->type != GGML_TYPE_F32) {
         return true;
     }
 
@@ -2615,7 +2632,7 @@ static bool ggml_cuda_mul_mat_id_needs_sync(const ggml_tensor * dst, const int c
         } else if (src0->type == GGML_TYPE_F8_E4M3 &&
                 ggml_cuda_should_use_mmvf(src0, cc, warp_size, dst->ne[2])) {
             return false;
-        } else if (src0->type != GGML_TYPE_F8_E4M3 && GGML_CUDA_CC_IS_AMD(cc) && src0->ne[0] % 2 == 0) {
+        } else if (ggml_cuda_mul_mat_id_use_mmvf_float(src0, src1, cc)) {
             return false;
         }
     }
@@ -2628,7 +2645,7 @@ static bool ggml_cuda_mul_mat_id_needs_sync(const ggml_tensor * dst, const int c
         return false;
     }
 
-    if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, src1->ne[2], /*mul_mat_id=*/true)) {
+    if (src1->type == GGML_TYPE_F32 && ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, src1->ne[2], /*mul_mat_id=*/true)) {
         return false;
     }
 
@@ -2640,7 +2657,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const ggml_tensor * src1 = dst->src[1];
     const ggml_tensor * ids  = dst->src[2];
 
-    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16);
     GGML_ASSERT(dst->type  == GGML_TYPE_F32);
 
     GGML_TENSOR_BINARY_OP_LOCALS
@@ -2649,7 +2666,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
 
     // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
-    if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+    if ((src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16) && dst->type == GGML_TYPE_F32) {
         // up to 24 tokens few-row MMQ is faster than MMQ, on DGX Spark also faster than MMVQ
         const bool use_mmq_few = ggml_cuda_should_use_mmq_few(src0, src1, ids, cc);
 
@@ -2665,12 +2682,9 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
                     ggml_cuda_should_use_mmvf(src0, cc, warp_size, ne2)) {
                 ggml_cuda_mul_mat_vec_f(ctx, src0, src1, ids, dst);
                 return;
-            } else {
-                // MMVF reads src0 in pairs of values, so it needs an even number of columns
-                if (src0->type != GGML_TYPE_F8_E4M3 && GGML_CUDA_CC_IS_AMD(cc) && ne00 % 2 == 0) {
-                    ggml_cuda_mul_mat_vec_f(ctx, src0, src1, ids, dst);
-                    return;
-                }
+            } else if (ggml_cuda_mul_mat_id_use_mmvf_float(src0, src1, cc)) {
+                ggml_cuda_mul_mat_vec_f(ctx, src0, src1, ids, dst);
+                return;
             }
         }
 
@@ -2684,7 +2698,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
             return;
         }
 
-        if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, src1->ne[2], /*mul_mat_id=*/true)) {
+        if (src1->type == GGML_TYPE_F32 && ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, src1->ne[2], /*mul_mat_id=*/true)) {
             ggml_cuda_mul_mat_f(ctx, src0, src1, ids, dst);
             return;
         }
@@ -5146,7 +5160,8 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                 return 1;
             }
 
-            if (!with_bias && src0->type == GGML_TYPE_NVFP4 && src1->type == GGML_TYPE_F32 && mm_node->type == GGML_TYPE_F32) {
+            if (!with_bias && src0->type == GGML_TYPE_NVFP4 && (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16) &&
+                    mm_node->type == GGML_TYPE_F32) {
                 const int cc = ggml_cuda_info().devices[cuda_ctx->device].cc;
                 const bool is_id = op == GGML_OP_MUL_MAT_ID;
                 const int64_t ncols = is_id ? src1->ne[2] : src1->ne[1];
@@ -6409,11 +6424,14 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 if (b->type == GGML_TYPE_F16 && a->type != GGML_TYPE_F16 && !ggml_cuda_op_mul_mat_use_fwht(op)) {
                     return false;
                 }
+                if (op->op == GGML_OP_MUL_MAT_ID && b->type != GGML_TYPE_F32 && b->type != GGML_TYPE_BF16) {
+                    return false;
+                }
                 const int cc_dev = ggml_cuda_info().devices[dev_ctx->device].cc;
                 const bool f32_src1_ok = GGML_CUDA_CC_IS_NVIDIA(cc_dev) && cc_dev < GGML_CUDA_CC_AMPERE;
                 const enum ggml_prec prec_src1 = ggml_prec_get_src(op, 1);
                 const bool fp8_id_mmvf = op->op == GGML_OP_MUL_MAT_ID &&
-                    a->type == GGML_TYPE_F8_E4M3 && b->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+                    a->type == GGML_TYPE_F8_E4M3 && (b->type == GGML_TYPE_F32 || b->type == GGML_TYPE_BF16) && op->type == GGML_TYPE_F32 &&
                     ggml_cuda_should_use_mmvf(a, cc_dev, ggml_cuda_info().devices[dev_ctx->device].warp_size, b->ne[2]);
                 if (prec_src1 == GGML_PREC_F32 && !fp8_id_mmvf && (op->op == GGML_OP_MUL_MAT_ID || !f32_src1_ok || a->type != GGML_TYPE_F32)) {
                     return false;
@@ -6429,7 +6447,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                         return false;
                     }
                     if (GGML_CUDA_CC_IS_QY2(cc) && op->op == GGML_OP_MUL_MAT_ID &&
-                            a->type == GGML_TYPE_Q2_K && b->type == GGML_TYPE_F32) {
+                            a->type == GGML_TYPE_Q2_K) {
                         return false;
                     }
                 }

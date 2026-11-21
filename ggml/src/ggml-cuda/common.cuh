@@ -1515,6 +1515,7 @@ struct ggml_cuda_mm_fusion_args_device {
     const void * shared_gate = nullptr;
     float * shared_dst = nullptr;
     uint32_t shared_stride_col_dst = 0;
+    bool y_bf16 = false; // MMVF: y holds BF16 values
 };
 
 struct ggml_cuda_kernel_launch_params {

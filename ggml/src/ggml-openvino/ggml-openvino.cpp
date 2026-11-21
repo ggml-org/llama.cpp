@@ -2017,6 +2017,9 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
             return {false, "MUL_MAT_ID with single-expert or empty ne[2] <= 1 (ne[2]=" +
                            std::to_string(op->src[0]->ne[2]) + ") is not supported"};
         }
+        if (op->src[1] != nullptr && op->src[1]->type == GGML_TYPE_BF16) {
+            return {false, "MUL_MAT_ID with a BF16 src1 is not supported"};
+        }
         // The GPU plugin's GatherMatmul returns wrong values for the layouts test-backend-ops
         // produces: it builds a rank-4 input layout ([n_used, n_tokens, k, 1]) instead of rank 3
         // and the kernel misreads it, silently returning garbage (NMSE ~86) rather than asserting.

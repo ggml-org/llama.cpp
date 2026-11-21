@@ -53,13 +53,20 @@ static __global__ void mul_mat_vec_f(
 
     constexpr int warp_size   = ggml_cuda_get_physical_warp_size();
 
-    x   += int64_t(sample_x)  *stride_sample_x   + channel_x  *stride_channel_x   + row*stride_row;
-    y   += int64_t(sample_y)  *stride_sample_y   + channel_y  *stride_channel_y;
+    int64_t offset_y = int64_t(sample_y)*stride_sample_y + channel_y*stride_channel_y;
+    x   += int64_t(sample_x)  *stride_sample_x   + int64_t(channel_x)*stride_channel_x + row*stride_row;
     dst += int64_t(sample_dst)*stride_sample_dst + channel_dst*stride_channel_dst;
     if constexpr (is_multi_token_id) {
-        y   += token_idx*stride_col_y2*2;
-        dst += token_idx*stride_col_dst;
+        offset_y += token_idx*stride_col_y2*2;
+        dst      += token_idx*stride_col_dst;
     }
+
+    // y holds BF16 values if fusion.y_bf16
+    const float2       * y2      = (const float2       *) (y + offset_y);
+    const nv_bfloat162 * y2_bf16 = (const nv_bfloat162 *) ((const nv_bfloat16 *) y + offset_y);
+    const auto load_y2 = [&](const int i) {
+        return fusion.y_bf16 ? ggml_cuda_cast<float2>(y2_bf16[i]) : y2[i];
+    };
 
     bool use_gate = false;
     bool use_bias = false;
@@ -106,7 +113,7 @@ static __global__ void mul_mat_vec_f(
     }
 
     if (use_gate) {
-        gate_x += int64_t(sample_x)  *stride_sample_x   + channel_x  *stride_channel_x   + row*stride_row;
+        gate_x += int64_t(sample_x)  *stride_sample_x   + int64_t(channel_x)*stride_channel_x + row*stride_row;
     }
 
     if constexpr (has_fusion) {
@@ -148,7 +155,6 @@ static __global__ void mul_mat_vec_f(
     }
 
     if constexpr (std::is_same_v<T, float>) {
-        const float2 * y2 = (const float2 *) y;
         const float2 * x2 = (const float2 *) x;
         [[maybe_unused]] const float2 * gate_x2 = nullptr;
         if constexpr (has_fusion) {
@@ -168,7 +174,7 @@ static __global__ void mul_mat_vec_f(
 
 #pragma unroll
             for (int j = 0; j < ncols_dst; ++j) {
-                const float2 tmpy = y2[j*stride_col_y2 + col2];
+                const float2 tmpy = load_y2(j*stride_col_y2 + col2);
                 ggml_cuda_mad(sumf[j], tmpx.x, tmpy.x);
                 ggml_cuda_mad(sumf[j], tmpx.y, tmpy.y);
 
@@ -181,7 +187,6 @@ static __global__ void mul_mat_vec_f(
             }
         }
     } else if constexpr (std::is_same_v<T, half>) {
-        const float2 * y2 = (const float2 *) y;
         const half2 * x2 = (const half2 *) x;
         [[maybe_unused]] const half2 * gate_x2 = nullptr;
         if constexpr (has_fusion) {
@@ -201,7 +206,7 @@ static __global__ void mul_mat_vec_f(
                 }
 #pragma unroll
                 for (int j = 0; j < ncols_dst; ++j) {
-                    const float2 tmpy = y2[j*stride_col_y2 + col2];
+                    const float2 tmpy = load_y2(j*stride_col_y2 + col2);
                     ggml_cuda_mad(sumf[j], tmpx.x, tmpy.x);
                     ggml_cuda_mad(sumf[j], tmpx.y, tmpy.y);
 
@@ -228,7 +233,7 @@ static __global__ void mul_mat_vec_f(
                 }
 #pragma unroll
                 for (int j = 0; j < ncols_dst; ++j) {
-                    const float2 tmpy = y2[j*stride_col_y2 + col2];
+                    const float2 tmpy = load_y2(j*stride_col_y2 + col2);
                     sumh2[j] += tmpx * make_half2(tmpy.x, tmpy.y);
 
                     if constexpr (has_fusion) {
@@ -257,7 +262,6 @@ static __global__ void mul_mat_vec_f(
 #endif // FP16_AVAILABLE
         }
     } else if constexpr (std::is_same_v<T, nv_bfloat16>) {
-        const float2 * y2 = (const float2 *) y;
 //TODO: add support for ggml_cuda_mad for hip_bfloat162
 #if defined(GGML_USE_HIP)
         const int * x2 = (const int *) x;
@@ -277,7 +281,7 @@ static __global__ void mul_mat_vec_f(
             }
 #pragma unroll
             for (int j = 0; j < ncols_dst; ++j) {
-                const float2 tmpy = y2[j*stride_col_y2 + col2];
+                const float2 tmpy = load_y2(j*stride_col_y2 + col2);
                 const float tmpx0 = ggml_cuda_cast<float>(reinterpret_cast<const nv_bfloat16 *>(&tmpx)[0]);
                 const float tmpx1 = ggml_cuda_cast<float>(reinterpret_cast<const nv_bfloat16 *>(&tmpx)[1]);
                 ggml_cuda_mad(sumf[j], tmpx0, tmpy.x);
@@ -311,7 +315,7 @@ static __global__ void mul_mat_vec_f(
             }
 #pragma unroll
             for (int j = 0; j < ncols_dst; ++j) {
-                const float2 tmpy = y2[j*stride_col_y2 + col2];
+                const float2 tmpy = load_y2(j*stride_col_y2 + col2);
                 ggml_cuda_mad(sumf[j], tmpx.x, tmpy.x);
                 ggml_cuda_mad(sumf[j], tmpx.y, tmpy.y);
 
@@ -325,7 +329,6 @@ static __global__ void mul_mat_vec_f(
         }
 #endif
     } else if constexpr (std::is_same_v<T, ggml_fp8_e4m3_t>) {
-        const float2 * y2 = (const float2 *) y;
         for (int col2 = tid; col2 < ncols2; col2 += block_size) {
             const float2 tmpx = mmvf_load_fp8x2(x, col2);
             float2 tmpx_gate = {};
@@ -336,7 +339,7 @@ static __global__ void mul_mat_vec_f(
             }
 #pragma unroll
             for (int j = 0; j < ncols_dst; ++j) {
-                const float2 tmpy = y2[j*stride_col_y2 + col2];
+                const float2 tmpy = load_y2(j*stride_col_y2 + col2);
                 ggml_cuda_mad(sumf[j], tmpx, tmpy);
 
                 if constexpr (has_fusion) {
@@ -688,7 +691,7 @@ static void mul_mat_vec_f_cuda(
 
 void ggml_cuda_mul_mat_vec_f(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
     const ggml_cuda_mm_fusion_args_host * fusion) {
-    GGML_ASSERT(        src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(        src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16);
     GGML_ASSERT(!ids ||  ids->type == GGML_TYPE_I32);
     GGML_ASSERT(         dst->type == GGML_TYPE_F32);
 
@@ -711,11 +714,12 @@ void ggml_cuda_mul_mat_vec_f(ggml_backend_cuda_context & ctx, const ggml_tensor 
     // the fused GLU path gets the GLU node as dst, which carries no matmul precision, so it accumulates in F32
     const enum ggml_prec prec = fast_fp16_available(cc) && !(fusion && fusion->gate) ? ggml_prec_get_acc(dst) : GGML_PREC_F32;
 
-    const float   * src1_d =       (const float   *) src1->data;
+    const float   * src1_d =       (const float   *) src1->data; // nv_bfloat16 if fusion_local.y_bf16
     const int32_t *  ids_d = ids ? (const int32_t *)  ids->data : nullptr;
     float         *  dst_d =       (float         *)  dst->data;
 
     ggml_cuda_mm_fusion_args_device fusion_local{};
+    fusion_local.y_bf16 = src1->type == GGML_TYPE_BF16;
 
     if (fusion) {
         GGML_ASSERT( !ids || dst->ne[2] == 1);
