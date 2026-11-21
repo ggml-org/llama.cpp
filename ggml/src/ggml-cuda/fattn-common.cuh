@@ -105,7 +105,9 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_f16(
 #pragma unroll
         for (int k_KQ_1 = 0; k_KQ_1 < cpy_ne; ++k_KQ_1) {
 #ifdef V_DOT2_F32_F16_AVAILABLE
-            ggml_cuda_mad(sum,                tmp[k_KQ_1] , ((const half2  *) Q_v)[k_KQ_0/nthreads + k_KQ_1]);
+            // Not ggml_cuda_mad: its asm volatile keeps the compiler from issuing the next K loads before this dot product.
+            const half2 Q_k = ((const half2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1];
+            asm("v_dot2_f32_f16 %0, %1, %2, %0" : "+v"(sum) : "v"(tmp[k_KQ_1]), "v"(Q_k));
 #else
             ggml_cuda_mad(sum, __half22float2(tmp[k_KQ_1]), ((const float2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1]);
 #endif // V_DOT2_F32_F16_AVAILABLE
