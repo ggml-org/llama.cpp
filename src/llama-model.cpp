@@ -399,7 +399,7 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
         case LLM_ARCH_DOMYN_EDGE:
             return new llama_model_domyn_edge(params);
         default:
-            throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
+            throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "' " + std::to_string(arch));
     }
 
 }
@@ -420,7 +420,7 @@ llama_model * llama_model_create(llm_arch arch, const llama_model_params & param
 llama_model * llama_model_create(llama_model_loader & ml, const llama_model_params & params) {
     llm_arch arch = ml.get_arch();
     if (arch == LLM_ARCH_UNKNOWN) {
-        throw std::runtime_error("unknown model architecture: '" + ml.get_arch_name() + "'");
+        throw std::runtime_error("unknown model architecture: '" + ml.get_arch_name() + "' " + std::to_string(arch));
     }
 
     return llama_model_create(arch, params);
