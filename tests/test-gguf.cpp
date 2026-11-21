@@ -53,6 +53,7 @@ enum handcrafted_file_type {
     HANDCRAFTED_DATA_BAD_ALIGN             =  15 + offset_has_data,
     HANDCRAFTED_DATA_INCONSISTENT_ALIGN    =  20 + offset_has_data,
     HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW     =  30 + offset_has_data,
+    HANDCRAFTED_DATA_SIZE_EXCEEDS_FILE     =  35 + offset_has_data,
     HANDCRAFTED_DATA_SUCCESS               = 800 + offset_has_data,
     HANDCRAFTED_DATA_CUSTOM_ALIGN          = 810 + offset_has_data,
 };
@@ -94,6 +95,7 @@ static std::string handcrafted_file_type_name(const enum handcrafted_file_type h
         case HANDCRAFTED_DATA_BAD_ALIGN:             return "DATA_BAD_ALIGN";
         case HANDCRAFTED_DATA_INCONSISTENT_ALIGN:    return "DATA_INCONSISTENT_ALIGN";
         case HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW:     return "DATA_MEM_SIZE_OVERFLOW";
+        case HANDCRAFTED_DATA_SIZE_EXCEEDS_FILE:     return "DATA_SIZE_EXCEEDS_FILE";
         case HANDCRAFTED_DATA_SUCCESS:               return "DATA_SUCCESS";
         case HANDCRAFTED_DATA_CUSTOM_ALIGN:          return "DATA_CUSTOM_ALIGN";
     }
@@ -250,6 +252,12 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
 
         tensor_configs[0] = { GGML_TYPE_I8, { 0x7FFFFFFFFFFFFFC0, 1, 1, 1 } };
         tensor_configs[1] = { GGML_TYPE_I8, { 0x7FFFFFFFFFFFFFC0, 1, 1, 1 } };
+    }
+
+    if (hft == HANDCRAFTED_DATA_SIZE_EXCEEDS_FILE) {
+        tensor_configs.resize(1);
+        // 8 TiB of F32 data
+        tensor_configs[0] = { GGML_TYPE_F32, { 2, INT64_C(1) << 40, 1, 1 } };
     }
 
     if (hft == HANDCRAFTED_TENSORS_NBYTES_PAD_WRAP) {
@@ -488,7 +496,7 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         if (hft == HANDCRAFTED_DATA_NOT_ENOUGH_DATA) {
             nbytes -= 1;
         }
-        if (hft == HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW) {
+        if (hft == HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW || hft == HANDCRAFTED_DATA_SIZE_EXCEEDS_FILE) {
             nbytes = 32;
         }
         for (uint64_t i = 0; i < nbytes; ++i) {
@@ -796,6 +804,7 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
         HANDCRAFTED_DATA_BAD_ALIGN,
         HANDCRAFTED_DATA_INCONSISTENT_ALIGN,
         HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW,
+        HANDCRAFTED_DATA_SIZE_EXCEEDS_FILE,
         HANDCRAFTED_DATA_SUCCESS,
         HANDCRAFTED_DATA_CUSTOM_ALIGN,
     };

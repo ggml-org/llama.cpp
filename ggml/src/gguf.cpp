@@ -350,6 +350,10 @@ struct gguf_reader {
         return data_offset;
     }
 
+    uint64_t remain() const {
+        return nbytes_remain;
+    }
+
     // position in the file where the GGUF data starts, alignment is relative to it, not to the file
     uint64_t start() const {
         return start_offset;
@@ -803,6 +807,11 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
                 return nullptr;
             }
             ctx->size += padded_size;
+        }
+        if (ctx->size > gr.remain()) {
+            GGML_LOG_ERROR("%s: tensor data size %zu exceeds remaining file size %" PRIu64 " bytes\n", __func__, ctx->size, gr.remain());
+            gguf_free(ctx);
+            return nullptr;
         }
     }
 
