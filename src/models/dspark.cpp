@@ -974,7 +974,7 @@ static ggml_tensor * build_inkling2_head(llm_graph_context & g, const llama_mode
     return ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, logits, 1.0f/cap)), cap);
 }
 
-// Inkling2 uses separate context projections and one feature mixture per draft layer.
+// dspark_fuse has one row of target-layer mixing weights per draft layer and a final row for the recurrent head.
 llama_model_dflash::graph_inkling2::graph_inkling2(const llm_graph_params & params) : llm_graph_context(params) {
     auto * positions = build_inp_pos();
     auto * attn = build_attn_inp_kv_iswa();
