@@ -113,6 +113,10 @@ int g_ggml_sycl_enable_vmm = 1;
 int g_ggml_sycl_enable_fusion = 1;
 int g_ggml_sycl_enable_esimd = 1;
 int g_ggml_sycl_mmid_esimd = 1;
+int g_ggml_sycl_dense_esimd_max_cols = -1;  // -1: per weight type (ggml_sycl_dense_esimd_max_cols)
+int64_t g_ggml_sycl_dense_esimd_min_weights = 16 * 1024 * 1024;
+int g_ggml_sycl_dense_esimd_gm = 8;
+int g_ggml_sycl_dense_esimd_kranges = -1;
 int g_ggml_sycl_mmvq_wide = 1;
 int g_ggml_sycl_enable_xmx_esimd = 1;
 int g_ggml_sycl_xmx_max_cols = GGML_SYCL_XMX_MAX_COLS_DEFAULT;
@@ -448,6 +452,11 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_enable_fusion = ggml_sycl_get_env("GGML_SYCL_ENABLE_FUSION", 1);
         g_ggml_sycl_enable_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_ESIMD", 1);
         g_ggml_sycl_mmid_esimd = ggml_sycl_get_env("GGML_SYCL_MMID_ESIMD", 1);
+        g_ggml_sycl_dense_esimd_max_cols =
+            getenv("GGML_SYCL_DENSE_ESIMD_MAX_COLS") ? ggml_sycl_get_env("GGML_SYCL_DENSE_ESIMD_MAX_COLS", 0) : -1;
+        g_ggml_sycl_dense_esimd_min_weights = ggml_sycl_get_env("GGML_SYCL_DENSE_ESIMD_MIN_WEIGHTS", 16 * 1024 * 1024);
+        g_ggml_sycl_dense_esimd_gm = ggml_sycl_get_env("GGML_SYCL_DENSE_ESIMD_GM", 8);
+        g_ggml_sycl_dense_esimd_kranges = ggml_sycl_get_env("GGML_SYCL_DENSE_ESIMD_KRANGES", -1);
         g_ggml_sycl_mmvq_wide = ggml_sycl_get_env("GGML_SYCL_MMVQ_WIDE", 1);
         g_ggml_sycl_enable_xmx_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_XMX_ESIMD", 1);
         g_ggml_sycl_xmx_max_cols = std::max(0, ggml_sycl_get_env("GGML_SYCL_XMX_MAX_COLS", GGML_SYCL_XMX_MAX_COLS_DEFAULT));
@@ -596,6 +605,12 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_XMX_GATHER_TYPES: %d\n", g_ggml_sycl_xmx_gather_types);
         GGML_LOG_INFO("  GGML_SYCL_MMID_SCHED: %d\n", g_ggml_sycl_mmid_sched);
         GGML_LOG_INFO("  GGML_SYCL_MMID_ESIMD: %d\n", g_ggml_sycl_mmid_esimd);
+        if (g_ggml_sycl_dense_esimd_max_cols < 0) {
+            GGML_LOG_INFO("  GGML_SYCL_DENSE_ESIMD_MAX_COLS: per weight type\n");
+        } else {
+            GGML_LOG_INFO("  GGML_SYCL_DENSE_ESIMD_MAX_COLS: %d\n", g_ggml_sycl_dense_esimd_max_cols);
+        }
+        GGML_LOG_INFO("  GGML_SYCL_DENSE_ESIMD_MIN_WEIGHTS: %lld\n", (long long) g_ggml_sycl_dense_esimd_min_weights);
         GGML_LOG_INFO("  GGML_SYCL_XMX_GATHER_SHAPES: %d\n", g_ggml_sycl_xmx_gather_shapes);
         GGML_LOG_INFO("  GGML_SYCL_HWEMUL: %d\n", g_ggml_sycl_hwemul);
         GGML_LOG_INFO("  GGML_SYCL_DYNAMIC_PRECISION: %s\n",
@@ -5247,6 +5262,36 @@ static bool can_use_mul_mat_q(const ggml_tensor * src0, const ggml_tensor * src1
     return src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 }
 
+// Widest product (activation columns) the dense ESIMD GEMM takes for a weight type. Above the size threshold the
+// crossover with dequantize + oneDNN depends on the type and the layout, not the size (B60, 16M-89M weights). The
+// caps follow the reordered layout a weight has after its first decode: the IQ formats dequantize slowly and still
+// win at 1024 columns; Q3_K, Q4_K, Q5_K and Q8_0 stop winning between 256 and 512, the other types above 128.
+// GGML_SYCL_DENSE_ESIMD_MAX_COLS replaces the table with one value for every type.
+static int ggml_sycl_dense_esimd_max_cols(ggml_type type) {
+    if (g_ggml_sycl_dense_esimd_max_cols >= 0) {
+        return g_ggml_sycl_dense_esimd_max_cols;
+    }
+    switch (type) {
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+            return 1024;
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q8_0:
+            return 256;
+        default:
+            return 128;
+    }
+}
+
 static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
 
@@ -5262,6 +5307,28 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     }
 
     const bool split = ggml_backend_buffer_is_sycl_split(src0->buffer);
+
+    // Dense ESIMD dequant GEMM (on by default) for the products where it beats the other kernels: more columns than
+    // the mat-vec kernels take (MMVQ up to 8, the XMX mat-vec on reordered weights up to GGML_SYCL_XMX_MAX_COLS), at
+    // most ggml_sycl_dense_esimd_max_cols() of them (wider, dequantize + oneDNN wins), and a weight of at least
+    // GGML_SYCL_DENSE_ESIMD_MIN_WEIGHTS values (on small matrices too few tiles fill the device).
+    const int64_t dense_n = src1->ne[1];
+    if (g_ggml_sycl_dense_esimd_max_cols != 0 && g_ggml_sycl_enable_esimd && !split && dst->op == GGML_OP_MUL_MAT &&
+        ggml_is_quantized(src0->type) && src0->ne[2] == 1 && src0->ne[3] == 1 && src1->type == GGML_TYPE_F32 &&
+        dst->type == GGML_TYPE_F32 && dense_n > MMVQ_MAX_BATCH_SIZE &&
+        dense_n <= ggml_sycl_dense_esimd_max_cols(src0->type) &&
+        src0->ne[0] * src0->ne[1] >= g_ggml_sycl_dense_esimd_min_weights && src1->ne[2] == 1 && src1->ne[3] == 1 &&
+        ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst) &&
+        !can_use_xmx_batch(ctx.device, src0, src1)) {
+        const auto * extra     = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
+        const bool   reordered = extra && extra->optimized_feature.reorder;
+        if (ggml_sycl_dense_dequant_gemm_esimd(src0->type, src0->data, (const float *) src1->data,
+                                               ggml_sycl_src1_prec(dst), (float *) dst->data, src0->ne[1],
+                                               src1->ne[1], src0->ne[0], reordered, ctx.pool(), ctx.stream())) {
+            return;
+        }
+    }
+
     int64_t min_compute_capability = INT_MAX;
 
     if (split) {

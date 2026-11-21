@@ -42,6 +42,13 @@ bool ggml_sycl_grouped_gemm_esimd(const char * src0_dd, size_t expert_stride, co
                                   const ggml_sycl_grouped_gemm_rows & dst_rows, bool reordered, int64_t n_tiles,
                                   dpct::queue_ptr stream);
 
+// Dense dequant GEMM on the same formats (not F16 / BF16): MR x 64 tiles over the whole K, thread order
+// grouped by row blocks so concurrent threads share weight rows in L2. B packed as [K/2][Npad][2] T, dst
+// [N][M]. Xe2 / Xe-HPC only (2D block loads); false when the shape is not covered.
+template <typename block_q_t, typename T>
+bool ggml_sycl_dense_gemm_esimd(const char * weights, const T * packed, float * dst, int M, int N, int Npad, int K,
+                                bool reordered, dpct::queue_ptr stream);
+
 // GGML_SYCL_MMID_ESIMD: 1 (default) takes the ESIMD kernel above where it applies, 0 never does
 bool ggml_sycl_grouped_gemm_esimd_enabled();
 

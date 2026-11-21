@@ -139,6 +139,12 @@ inline bool ggml_sycl_xmx_gather_type_enabled(ggml_type src0_type) {
     }
 }
 
+// Dense quantized MUL_MAT on the ESIMD dequant GEMM (ggml_sycl_dense_gemm_esimd): src1 [N][K] f32, dst [N][M]
+// f32. GGML_SYCL_DENSE_ESIMD_MAX_COLS gates the caller. False when not covered.
+bool ggml_sycl_dense_dequant_gemm_esimd(ggml_type src0_type, const void * src0, const float * src1, int32_t src1_prec,
+                                        float * dst, int64_t M, int64_t N, int64_t K, bool reordered,
+                                        ggml_sycl_pool & pool, dpct::queue_ptr stream);
+
 // dst[n*ldd + m] = sum_k dequant(src0)[m*K + k] * src1[n*K + k], src1 is F32, F16 or BF16.
 // The XMX combination is picked per call from the src1 type and its precision request src1_prec
 // (op_params[3], [TAG_GGML_PREC]); the accumulator is f32, which meets any request.
