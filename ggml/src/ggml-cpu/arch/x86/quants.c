@@ -3463,7 +3463,14 @@ void ggml_vec_dot_iq3_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const 
 #endif
 }
 
+extern void ggml_vec_dot_iq3_s_q8_K_asm(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+
 void ggml_vec_dot_iq3_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+#if defined(__AVX512F__) && defined(__AVX512BW__)
+    ggml_vec_dot_iq3_s_q8_K_asm(n, s, bs, vx, bx, vy, by, nrc);
+    return;
+#endif
+
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
