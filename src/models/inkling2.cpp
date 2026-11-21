@@ -453,15 +453,14 @@ ggml_tensor * llama_model_inkling2::graph::build_layer(int il, int ip, ggml_tens
 
         ggml_tensor * kq_b;
         if (n_tokens == 1) {
-            // one token: the product gives the table as [n_head, n_extent + 1] with no copy, and the mask add
-            // in build_attn reads the gathered bias through a permuted view
+            // one token: the product gives the table as [n_head, n_extent + 1] with no copy
             ggml_tensor * table = ggml_mul_mat(ctx0, ggml_reshape_2d(ctx0, Rcur, hparams.n_relative, n_head), bias);
 
             // the sink logit t is per query: exp(s - t)/(1 + sum(exp(s - t))) = exp(s)/(exp(t) + sum(exp(s))), with a zero sink
             table = ggml_sub(ctx0, table, ggml_reshape_2d(ctx0, sinks, n_head, 1));
 
             kq_b = ggml_get_rows(ctx0, table, rel_pos);
-            kq_b = ggml_permute(ctx0, ggml_reshape_4d(ctx0, kq_b, n_head, n_kv, 1, 1), 2, 0, 1, 3);
+            kq_b = ggml_cont(ctx0, ggml_permute(ctx0, ggml_reshape_4d(ctx0, kq_b, n_head, n_kv, 1, 1), 2, 0, 1, 3));
         } else {
             ggml_tensor * table = ggml_mul_mat(ctx0, bias, Rcur);
 
