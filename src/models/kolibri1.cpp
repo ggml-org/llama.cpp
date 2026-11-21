@@ -142,7 +142,7 @@ llama_model_kolibri1::graph::graph(const llm_graph_params & params)
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
                 il,
                 logits,
-                nullptr, nullptr, nullptr, nullptr, selected);
+                nullptr, selected);
         cb(moe_out, "ffn_moe_out", il);
 
         ggml_tensor * shared = build_ffn(cur,

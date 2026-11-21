@@ -329,7 +329,7 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) :
 
                 ggml_tensor * moe_out = build_moe_ffn(latent, nullptr, nullptr, nullptr, layer.ffn_down_exps, nullptr,
                         n_exp, n_used, LLM_FFN_SILU, false, 0.0f, LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT, il_p,
-                        logits, layer.ffn_gate_up_exps, nullptr, nullptr, nullptr, selected);
+                        logits, layer.ffn_gate_up_exps, selected);
                 ggml_tensor * shexp = build_ffn(latent,
                         layer.ffn_up_shexp,   NULL, NULL,
                         layer.ffn_gate_shexp, NULL, NULL,
