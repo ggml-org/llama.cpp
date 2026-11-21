@@ -14,6 +14,9 @@ import unittest
 import numpy as np
 import torch
 from safetensors.torch import save_file
+from tokenizers import Tokenizer
+from tokenizers.models import BPE
+from tokenizers.processors import TemplateProcessing
 
 from conversion.base import gguf
 from conversion.minicpm import MiniCPM5MoEModel
@@ -113,6 +116,41 @@ class TestMiniCPM5MoEConversion(unittest.TestCase):
         }
         for name, value in expected.items():
             self.assertEqual(metadata[f"minicpm5_moe.{name}"].value, value)
+
+
+    def test_vocab_uses_hf_add_bos_token(self):
+        for config_add_bos, expected in ((False, False), (None, True)):
+            with self.subTest(config_add_bos=config_add_bos):
+                model, _ = self.convert({"model.layers.0.self_attn.q_proj.weight": torch.zeros(16, 4)})
+                tokenizer = Tokenizer(BPE(
+                    vocab={"<s>": 0, "</s>": 1, "<unk>": 2, "H": 3, "i": 4, "Hi": 5},
+                    merges=[("H", "i")],
+                    unk_token="<unk>",
+                ))
+                tokenizer.add_special_tokens(["<s>", "</s>", "<unk>"])
+                tokenizer.post_processor = TemplateProcessing(
+                    single="<s> $A",
+                    pair="<s> $A $B:1",
+                    special_tokens=[("<s>", 0)],
+                )
+                tokenizer.save(str(model.dir_model / "tokenizer.json"))
+                config: dict[str, str | bool] = {
+                    "tokenizer_class": "LlamaTokenizerFast",
+                    "bos_token": "<s>",
+                    "eos_token": "</s>",
+                    "unk_token": "<unk>",
+                }
+                if config_add_bos is not None:
+                    config["add_bos_token"] = config_add_bos
+                (model.dir_model / "tokenizer_config.json").write_text(json.dumps(config))
+                template = "{{ bos_token }}{{ messages[0]['content'] }}"
+                (model.dir_model / "chat_template.jinja").write_text(template)
+
+                model.set_vocab()
+                metadata = model.gguf_writer.kv_data[0]
+                self.assertIs(metadata[gguf.Keys.Tokenizer.ADD_BOS].value, expected)
+                self.assertEqual(metadata[gguf.Keys.Tokenizer.BOS_ID].value, 0)
+                self.assertEqual(metadata[gguf.Keys.Tokenizer.CHAT_TEMPLATE].value, template)
 
 
 if __name__ == "__main__":
