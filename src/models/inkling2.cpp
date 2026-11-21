@@ -292,7 +292,10 @@ ggml_tensor * llama_model_inkling2::graph::control(ggml_tensor * cur, ggml_tenso
     ggml_tensor * forget = ggml_tanh(ctx0, forget_mm);
 
     // message first: its view node then stays out from between the tanh and the mul, which fuse
-    return ggml_add(ctx0, ggml_sub(ctx0, cur, ggml_mul(ctx0, forget, cur)), ggml_mul(ctx0, message, gain));
+    ggml_tensor * res = ggml_add(ctx0, ggml_sub(ctx0, cur, ggml_mul(ctx0, forget, cur)), ggml_mul(ctx0, message, gain));
+    // the whole controller side by side in the graph, where a backend can run it as one step
+    ggml_build_forward_expand(gf, res);
+    return res;
 }
 
 ggml_tensor * llama_model_inkling2::graph::build_inputs() {
