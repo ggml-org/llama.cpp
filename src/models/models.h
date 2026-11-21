@@ -2520,7 +2520,8 @@ struct llama_model_inkling2 : public llama_model_base {
     struct graph : public llm_graph_context {
         graph(const llm_graph_params & params);
         ggml_tensor * mix(const std::vector<ggml_tensor *> & blocks, ggml_tensor * cur, ggml_tensor * query);
-        ggml_tensor * clip(ggml_tensor * cur, ggml_tensor * scale, float threshold);
+        // without rescale the result is clip(cur)/threshold, for a consumer that folds the threshold in
+        ggml_tensor * clip(ggml_tensor * cur, ggml_tensor * scale, float threshold, bool rescale = true);
         ggml_tensor * convolve(
                 ggml_tensor * cur,
                 ggml_tensor * weight,
@@ -2559,6 +2560,7 @@ struct llama_model_inkling2 : public llama_model_base {
         ggml_tensor * rms_norm_once(ggml_tensor * cur);
         std::map<ggml_tensor *, ggml_tensor *> rms_norms;
         std::map<int64_t, ggml_tensor *> zero_sinks;
+        std::map<ggml_tensor *, ggml_tensor *> padded_rel_bias; // per physical layer, shared by the loop passes
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
