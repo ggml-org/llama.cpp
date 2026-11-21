@@ -1,6 +1,7 @@
 #include "server-chat.h"
 #include "server-common.h"
 
+#include <algorithm>
 #include <sstream>
 
 json server_chat_convert_responses_tools(const json & tools) {
@@ -29,6 +30,34 @@ json server_chat_convert_responses_tools(const json & tools) {
     return chatcmpl_tools;
 }
 
+static void merge_responses_search_tools(json & tools, const json & discovered) {
+    if (!discovered.is_array()) {
+        throw std::invalid_argument("'tool_search_output.tools' must be an array");
+    }
+    for (const auto & tool : discovered) {
+        const auto type = json_value(tool, "type", std::string());
+        if (type != "function" && type != "namespace") {
+            continue;
+        }
+        const auto name = json_value(tool, "name", std::string());
+        if (name.empty()) {
+            throw std::invalid_argument("Discovered tools require a name");
+        }
+        if (type == "namespace" && (!tool.contains("tools") || !tool.at("tools").is_array())) {
+            throw std::invalid_argument("Discovered namespaces require a tools array");
+        }
+        auto existing = std::find_if(tools.begin(), tools.end(), [&](const json & declared) {
+            return json_value(declared, "type", std::string()) == type &&
+                   json_value(declared, "name", std::string()) == name;
+        });
+        if (existing == tools.end()) {
+            tools.push_back(tool);
+        } else if (type == "namespace") {
+            merge_responses_search_tools((*existing)["tools"], tool.at("tools"));
+        }
+    }
+}
+
 json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
     if (!response_body.contains("input")) {
         throw std::invalid_argument("'input' is required");
@@ -41,6 +70,10 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
     json chatcmpl_body = response_body;
     chatcmpl_body.erase("input");
     std::vector<json> chatcmpl_messages;
+    json replayed_tools = response_body.value("tools", json::array());
+    if (!replayed_tools.is_array()) {
+        throw std::invalid_argument("'tools' must be an array of objects");
+    }
 
     if (response_body.contains("instructions")) {
         chatcmpl_messages.push_back({
@@ -67,6 +100,17 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
         };
 
         for (json item : input_value) {
+            const auto item_type = json_value(item, "type", std::string());
+            if (item_type == "tool_search_call") {
+                continue;
+            }
+            if (item_type == "tool_search_output") {
+                if (!item.contains("tools")) {
+                    throw std::invalid_argument("'tool_search_output' requires 'tools'");
+                }
+                merge_responses_search_tools(replayed_tools, item.at("tools"));
+                continue;
+            }
             bool merge_prev = !chatcmpl_messages.empty() && chatcmpl_messages.back().value("role", "") == "assistant";
 
             if (exists_and_is_string(item, "content")) {
@@ -289,8 +333,8 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
 
     chatcmpl_body["messages"] = chatcmpl_messages;
 
-    if (response_body.contains("tools")) {
-        const json chatcmpl_tools = server_chat_convert_responses_tools(response_body.at("tools"));
+    if (response_body.contains("tools") || !replayed_tools.empty()) {
+        const json chatcmpl_tools = server_chat_convert_responses_tools(replayed_tools);
         chatcmpl_body.erase("tools");
         if (!chatcmpl_tools.empty()) {
             chatcmpl_body["tools"] = chatcmpl_tools;

@@ -2106,6 +2106,47 @@ static void test_convert_responses_to_chatcmpl() {
     }
 }
 
+static void test_responses_tool_search_replay() {
+    const auto body = common_json::parse(R"({
+        "tools": [{"type":"function","name":"lookup","description":"declared","parameters":{"type":"object","properties":{}}}],
+        "input": [
+            {"type":"tool_search_call","call_id":"search_1","arguments":{"query":"weather"}},
+            {"type":"tool_search_output","call_id":"search_1","tools":[
+                {"type":"function","name":"lookup","description":"replace","parameters":{"type":"object","properties":{}}},
+                {"type":"function","name":"forecast","description":"first","parameters":{"type":"object","properties":{}}}
+            ]},
+            {"type":"tool_search_output","call_id":"search_2","tools":[
+                {"type":"function","name":"forecast","description":"later","parameters":{"type":"object","properties":{}}}
+            ]},
+            {"role":"user","content":"Use the discovered forecast tool."},
+            {"type":"function_call","name":"forecast","call_id":"call_1","arguments":"{}"},
+            {"type":"function_call_output","call_id":"call_1","output":"sunny"}
+        ]
+    })");
+    const auto result = server_chat_convert_responses_to_chatcmpl(body);
+    assert_equals(size_t(2), result.at("tools").size());
+    assert_equals(std::string("declared"), result.at("tools")[0].at("function").at("description").get<std::string>());
+    assert_equals(std::string("first"), result.at("tools")[1].at("function").at("description").get<std::string>());
+    assert_equals(size_t(3), result.at("messages").size());
+    assert_equals(std::string("forecast"), result.at("messages")[1].at("tool_calls")[0].at("function").at("name").get<std::string>());
+    assert_equals(std::string("call_1"), result.at("messages")[2].at("tool_call_id").get<std::string>());
+    assert_equals(std::string("sunny"), result.at("messages")[2].at("content").get<std::string>());
+
+    auto without_declarations = body;
+    without_declarations.erase("tools");
+    assert_equals(size_t(2), server_chat_convert_responses_to_chatcmpl(without_declarations).at("tools").size());
+
+    auto malformed = body;
+    malformed["input"][1]["tools"] = common_json::object();
+    bool rejected = false;
+    try {
+        server_chat_convert_responses_to_chatcmpl(malformed);
+    } catch (const std::invalid_argument &) {
+        rejected = true;
+    }
+    assert_equals(true, rejected);
+}
+
 // Shared LFM2 parser cases - all variants use one output format and parser
 static void test_lfm2_parser(const std::string & template_path, bool detailed_debug) {
     auto tst = peg_tester(template_path, detailed_debug);
@@ -9014,6 +9055,7 @@ int main(int argc, char ** argv) {
         test_msg_token_delimiters_split();
         test_tools_oaicompat_json_conversion();
         test_convert_responses_to_chatcmpl();
+        test_responses_tool_search_replay();
         test_developer_role_to_system_workaround();
         test_translate_gemma();
         test_deepseek_v4_thinking_retention();

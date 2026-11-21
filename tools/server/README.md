@@ -1745,6 +1745,9 @@ curl http://localhost:9931/v1/responses \
 
 This endpoint works by converting Responses request into Chat Completions request.
 
+Client-provided `tool_search_call` and `tool_search_output` history items are accepted. Function definitions in `tool_search_output.tools` are loaded before applying the chat template; explicitly declared tools and earlier discoveries keep their definitions. Search history items are omitted from the rendered conversation. Tool search runs on the client.
+
+
 
 ### POST `/v1/embeddings`: OpenAI-compatible embeddings API
 
