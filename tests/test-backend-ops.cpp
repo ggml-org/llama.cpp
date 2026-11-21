@@ -2243,6 +2243,20 @@ struct test_unary : public test_case {
 
 };
 
+struct test_unary_softplus_neg : public test_unary {
+    test_unary_softplus_neg() : test_unary(GGML_UNARY_OP_SOFTPLUS) {}
+
+    std::string vars() override {
+        return test_unary::vars() + ",neg";
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -16.6f, -16.0f);
+        }
+    }
+};
+
 // GGML_OP_GLU
 struct test_glu : public test_case {
     const ggml_glu_op op;
@@ -10717,7 +10731,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::default_random_engine rng(0);
 
     // unary ops
-    // TODO: add GGML_UNARY_OP_SOFTPLUS test that is sensitive to using `log1p(exp(x))` vs `log(exp(x) + 1)`
+    test_cases.emplace_back(new test_unary_softplus_neg());
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16}) {
         for (int v : {0, 1}) {
             for (int op = 0; op < GGML_UNARY_OP_COUNT; op++) {
