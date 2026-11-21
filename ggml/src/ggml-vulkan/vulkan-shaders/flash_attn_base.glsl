@@ -88,6 +88,10 @@ layout (binding = 5) writeonly buffer OV4 {D_TYPEV4 data_ov4[];};
 
 layout (binding = 6) readonly buffer MO {uint32_t data_mask_opt[];};
 
+#ifdef KV_ROWS
+layout (binding = 8) readonly buffer KR {int32_t data_kv_rows[];};
+#endif
+
 layout (binding = 7) readonly buffer SP {int32_t data_sparse[];};
 
 // Use -FLT_MAX/2 rather than -inf to reduce the possibility of NaNs, e.g. when computing Mold-M.
@@ -237,6 +241,15 @@ void init_indices()
 
 // Resolve a linear KV slot to a real column; false for inactive (sparse padding/-1, or dense OOB).
 bool fa_kv_index(uint lin, out uint kv_col) {
+#ifdef KV_ROWS
+    if (lin >= KV) {
+        kv_col = 0;
+        return false;
+    }
+    int row = data_kv_rows[iq3 * KV + lin];
+    kv_col = uint(max(row, 0));
+    return row >= 0;
+#endif
     if (USE_SPARSE) {
         if (lin >= p.split_kv) {
             kv_col = 0;

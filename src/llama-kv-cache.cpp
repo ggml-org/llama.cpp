@@ -2007,14 +2007,18 @@ bool llama_kv_cache::has_cell_ext() const {
     return hparams.n_pos_per_embd() > 1 || hparams.ple_n_heads > 0;
 }
 
-void llama_kv_cache::set_input_relative_pos(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const {
+void llama_kv_cache::set_input_relative_pos(ggml_tensor * dst, const ggml_tensor * rows, const llama_ubatch * ubatch, uint32_t extent) const {
     GGML_ASSERT(dst->type == GGML_TYPE_I32);
     const int64_t n_kv = dst->ne[0];
+    GGML_ASSERT(!rows || (rows->ne[0] == n_kv && ggml_backend_buffer_is_host(rows->buffer)));
+    const int64_t n_tps = ubatch->n_tokens / (rows ? rows->ne[1] : 1);
     std::vector<int32_t> data(n_kv * ubatch->n_tokens);
     for (uint32_t i = 0; i < ubatch->n_tokens; ++i) {
         const auto & cells = v_cells.at(seq_to_stream.at(ubatch->seq_id[i][0]));
+        const int32_t * list = rows ? (const int32_t *) rows->data + (i/n_tps)*n_kv : nullptr;
         for (int64_t j = 0; j < n_kv; ++j) {
-            const int64_t distance = cells.is_empty(j) ? -1 : int64_t(ubatch->pos[i]) - cells.pos_get(j);
+            const int64_t cell = list ? list[j] : j;
+            const int64_t distance = cell < 0 || cells.is_empty(cell) ? -1 : int64_t(ubatch->pos[i]) - cells.pos_get(cell);
             data[i*n_kv + j] = distance >= 0 && distance < extent ? distance : extent;
         }
     }
@@ -3124,8 +3128,8 @@ void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama
     kv->set_input_pos_bucket(dst, ubatch);
 }
 
-void llama_kv_cache_context::set_input_relative_pos(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const {
-    kv->set_input_relative_pos(dst, ubatch, extent);
+void llama_kv_cache_context::set_input_relative_pos(ggml_tensor * dst, const ggml_tensor * rows, const llama_ubatch * ubatch, uint32_t extent) const {
+    kv->set_input_relative_pos(dst, rows, ubatch, extent);
 }
 
 void llama_kv_cache_context::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const {
