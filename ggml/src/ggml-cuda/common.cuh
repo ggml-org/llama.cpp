@@ -538,7 +538,7 @@ static __device__ __forceinline__ T warp_reduce_sum_impl(T x) {
             return ggml_cuda_shfl(x, 63, 64);
         }
         if constexpr (width == 32) {
-            return x + ggml_cuda_shfl_xor(x, 16, 32);
+            return x + ggml_hip_swizzle<GGML_HIP_SWIZZLE_SWAP16>(x);
         }
         return x;
     } else

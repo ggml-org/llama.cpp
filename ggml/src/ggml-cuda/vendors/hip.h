@@ -342,11 +342,22 @@ static __device__ __forceinline__ uint32_t ggml_hip_perm(const uint32_t hi, cons
 #define GGML_HIP_DPP_ROW_BCAST_15    0x142 // row_bcast:15, GCN/CDNA only
 #define GGML_HIP_DPP_ROW_BCAST_31    0x143 // row_bcast:31, GCN/CDNA only
 
+// DS swizzle mask codes.
+#define GGML_HIP_SWIZZLE_SWAP16      0x401F // XOR16 within each 32-lane group
+
 template <int dpp_ctrl, typename T>
 static __device__ __forceinline__ T ggml_hip_dpp_update(T x) {
     static_assert(sizeof(T) == 4, "DPP updates require 32-bit values");
     union { T t; int i; } value;
     value.t = x;
     value.i = __builtin_amdgcn_update_dpp(value.i, value.i, dpp_ctrl, 0xf, 0xf, true);
+    return value.t;
+}
+
+template <int swizzle_mask, typename T>
+static __device__ __forceinline__ T ggml_hip_swizzle(T x) {
+    union { T t; int i; } value;
+    value.t = x;
+    value.i = __builtin_amdgcn_ds_swizzle(value.i, swizzle_mask);
     return value.t;
 }
