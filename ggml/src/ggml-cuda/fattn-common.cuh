@@ -1032,7 +1032,8 @@ template <int DV, int ncols1, int ncols2>
 void launch_fattn(
     ggml_backend_cuda_context & ctx, ggml_tensor * dst, fattn_kernel_t fattn_kernel, const int nwarps, const size_t nbytes_shared,
     const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k, const bool use_sparse,
-    const int warp_size = WARP_SIZE, const bool async_kv_preload = false
+    const int warp_size = WARP_SIZE, const bool async_kv_preload = false,
+    const fattn_kernel_t occ_kernel = nullptr, const size_t occ_nbytes = 0
 ) {
     constexpr int ncols = ncols1 * ncols2;
 
@@ -1196,7 +1197,11 @@ void launch_fattn(
 
     const dim3 block_dim(warp_size, nwarps, 1);
     int max_blocks_per_sm = 1; // Max. number of active blocks limited by occupancy.
-    CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm, fattn_kernel, block_dim.x * block_dim.y * block_dim.z, nbytes_shared));
+    // Fused dequant parity: with occ_kernel set, derive the grid geometry from the unfused kernel instance
+    // (its regs and smem), so stream-K seams are placed exactly where the f16-copy route places them and the
+    // two routes stay bit-identical. The fused kernel still launches with its own fattn_kernel/nbytes_shared.
+    CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm, occ_kernel ? occ_kernel : fattn_kernel,
+        block_dim.x * block_dim.y * block_dim.z, occ_kernel ? occ_nbytes : nbytes_shared));
     GGML_ASSERT(max_blocks_per_sm > 0);
     int parallel_blocks = max_blocks_per_sm;
 
