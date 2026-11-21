@@ -11366,6 +11366,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_conv_transpose_1d({3,2,1,1}, {3,1,2,1}, 1, 0, 1));
     test_cases.emplace_back(new test_conv_transpose_1d({2,1,1,1}, {3,1,1,1}, 1, 0, 1));
 
+    test_cases.emplace_back(new test_conv_transpose_1d({33,32,1,1}, {20,24,32,1}, 10, 0, 1));
+    test_cases.emplace_back(new test_conv_transpose_1d({35,33,1,1}, {11,17,33,1}, 5, 0, 1));
+
     for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16}) {
         // ConvTranspose1d expressed as mul_mat + col2im (DAC decoder upsampling)
         test_cases.emplace_back(new test_col2im_1d(type, 16, 32, 197, 8, 0)); // kernel = 2*stride

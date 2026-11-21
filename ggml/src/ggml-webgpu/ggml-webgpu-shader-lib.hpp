@@ -1270,6 +1270,7 @@ class ggml_webgpu_shader_lib {
     std::unordered_map<int, webgpu_pipeline> argsort_merge_pipelines;       // key is order
     std::unordered_map<int, webgpu_pipeline> cumsum_pipelines;              // key is fixed, no variants yet
     std::unordered_map<int, webgpu_pipeline> col2im_1d_pipelines;           // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> conv_transpose_1d_pipelines;   // key is kernel type
     std::unordered_map<int, webgpu_pipeline> arange_pipelines;              // key is fixed, no variants yet
     std::unordered_map<int, webgpu_pipeline> count_equal_pipelines;         // key is src_overlap
     std::unordered_map<int, webgpu_pipeline> timestep_embedding_pipelines;  // key is fixed, no variants yet
@@ -2112,6 +2113,26 @@ class ggml_webgpu_shader_lib {
         pipeline.context                   = decisions;
         col2im_1d_pipelines[1]             = pipeline;
         return pipeline;
+    }
+
+    webgpu_pipeline get_conv_transpose_1d_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        const ggml_type type = context.src0->type;
+        auto            it   = conv_transpose_1d_pipelines.find(type);
+        if (it != conv_transpose_1d_pipelines.end()) {
+            return it->second;
+        }
+
+        const uint32_t           tile    = 16;
+        std::vector<std::string> defines = {
+            "TILE=" + std::to_string(tile),
+            type == GGML_TYPE_F16 ? "KERNEL_TYPE=f16" : "KERNEL_TYPE=f32",
+        };
+        auto processed           = preprocessor.preprocess(wgsl_conv_transpose_1d, defines);
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size       = tile;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, "conv_transpose_1d");
+        pipeline.context         = decisions;
+        return conv_transpose_1d_pipelines.emplace(type, std::move(pipeline)).first->second;
     }
 
     webgpu_pipeline get_pad_pipeline(const ggml_webgpu_shader_lib_context & context) {
