@@ -34,6 +34,7 @@ layout (binding = 0) readonly buffer A_PACKED16 {A_TYPE_PACKED16 data_a_packed16
 #if defined(A_TYPE_PACKED32)
 layout (binding = 0) readonly buffer A_PACKED32 {A_TYPE_PACKED32 data_a_packed32[];};
 #endif
+layout (binding = 0) readonly buffer A_U32 {uint32_t data_a_u32[];};
 layout (binding = 1) readonly buffer B {block_q8_1_x4_packed128 data_b[];};
 layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
 
@@ -448,6 +449,8 @@ void main() {
 #undef PREFETCH_BLOCK
 #undef STORE_BLOCK_TO_LDS
 #undef B_IB_CALC
+#undef A_STORE_LOOP
+#undef A_IB_LO_FIXED
 
     const uint dr = ir * BM + a_row0;
     const uint dc = ic * BN + b_col0;
