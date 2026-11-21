@@ -5,9 +5,11 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf = false);
 std::string json_schema_to_grammar(const common_chat_schema_document & schema);
+void json_schema_filter_pattern(const std::string & pattern, std::vector<common_json> & values);
 
 struct common_grammar_builder {
     std::function<std::string(const std::string &, const std::string &)>    add_rule;

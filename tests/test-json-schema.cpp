@@ -254,11 +254,15 @@ static void test_const_enum(testing & t) {
         t.assert_equal("values[3]", "true", e.values[3].dump());
     });
 
-    t.test("const wins over enum, enum wins over type", [](testing & t) {
+    t.test("finite values satisfy sibling constraints", [](testing & t) {
         auto doc_enum = parse(R"({"type": "integer", "enum": [1, 2]})");
         root<common_chat_schema_enum>(t, doc_enum);
         auto doc_const = parse(R"({"type": "string", "const": "x", "enum": ["y"]})");
-        t.assert_equal("value", "\"x\"", root<common_chat_schema_const>(t, doc_const).value.dump());
+        t.assert_true("conflicting const and enum are impossible", root<common_chat_schema_enum>(t, doc_const).values.empty());
+        auto doc_equal_numbers = parse(R"({"const": 1.0, "enum": [1]})");
+        root<common_chat_schema_const>(t, doc_equal_numbers);
+        auto doc_distinct_numbers = parse(R"({"const": 9007199254740993, "enum": [9007199254740992.0]})");
+        t.assert_true("large distinct numbers stay distinct", root<common_chat_schema_enum>(t, doc_distinct_numbers).values.empty());
     });
 }
 
