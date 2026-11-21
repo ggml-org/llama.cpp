@@ -543,6 +543,9 @@ std::unique_ptr<llm_graph_context> llama_model_dflash::build_arch_graph(const ll
     switch (params.gtype) {
         case LLM_GRAPH_TYPE_ENCODER:
             return std::make_unique<graph<true>>(params);
+        case LLM_GRAPH_TYPE_DSPARK_BACKBONE:
+        case LLM_GRAPH_TYPE_DSPARK_HEAD:
+            return std::make_unique<graph_inkling2>(params);
         case LLM_GRAPH_TYPE_DEFAULT:
         case LLM_GRAPH_TYPE_DECODER:
             switch (backbone) {

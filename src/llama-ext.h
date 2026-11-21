@@ -165,3 +165,10 @@ LLAMA_API uint32_t llama_model_n_tokens_delay(const struct llama_model * model);
 
 // each sequence is paired with an unconditional one at n_seq_max / 2 + seq_id, in a unified KV cache
 LLAMA_API bool llama_model_classifier_free_guidance(const struct llama_model * model);
+
+// Decode the Inkling2 DSpark backbone, returning hidden rows and base logits in the context.
+LLAMA_API int32_t llama_decode_dspark_backbone(struct llama_context * ctx, const struct llama_batch_ext * batch);
+
+// Evaluate one Inkling2 DSpark recurrent step without changing the KV cache.
+LLAMA_API bool llama_decode_dspark_head(struct llama_context * ctx, llama_token prev, llama_embd hidden, llama_embd base, llama_embd context,
+        std::vector<float> & state, std::vector<float> & logits);

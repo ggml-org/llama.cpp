@@ -346,15 +346,15 @@ class Inkling2DSparkModel(TextModel):
         target_depth = text["num_hidden_layers"]
         if loop := text.get("loop_config"):
             target_depth += (loop["core_end"] - loop["core_start"]) * (loop["num_passes"] - 1)
-        if (len(targets) < 2 or targets != sorted(set(targets)) or targets[0] < 0 or
-                targets[-1] != target_depth or mtp["hidden_size"] != text["hidden_size"] or
-                mtp["markov_head_type"] != "rnn_hidden" or mtp.get("q_bias") or mtp.get("o_bias")):
+        if (len(targets) < 2 or targets != sorted(set(targets)) or targets[0] < 0
+                or targets[-1] != target_depth or mtp["hidden_size"] != text["hidden_size"]
+                or mtp["markov_head_type"] != "rnn_hidden" or mtp.get("q_bias") or mtp.get("o_bias")):
             raise ValueError("Unsupported Inkling2 DSpark configuration")
-        if (mtp["block_size"] != 8 or not 0 < mtp["markov_rank"] <= mtp["hidden_size"] or
-                mtp["num_attention_heads"] < 1 or mtp["num_key_value_heads"] < 1 or
-                mtp["num_attention_heads"] % mtp["num_key_value_heads"] or mtp["head_dim"] < 2 or mtp["head_dim"] % 2 or
-                mtp["sliding_window_size"] < 1 or
-                any(i < 0 or i >= mtp["num_hidden_layers"] for i in mtp["local_layer_ids"])):
+        if (mtp["block_size"] != 8 or not 0 < mtp["markov_rank"] <= mtp["hidden_size"]
+                or mtp["num_attention_heads"] < 1 or mtp["num_key_value_heads"] < 1
+                or mtp["num_attention_heads"] % mtp["num_key_value_heads"] or mtp["head_dim"] < 2 or mtp["head_dim"] % 2
+                or mtp["sliding_window_size"] < 1
+                or any(i < 0 or i >= mtp["num_hidden_layers"] for i in mtp["local_layer_ids"])):
             raise ValueError("Invalid Inkling2 DSpark dimensions")
         hp = {**mtp, "architectures": ["Inkling2ForCausalLM"],
               "vocab_size": text["vocab_size"], "unpadded_vocab_size": text["unpadded_vocab_size"],

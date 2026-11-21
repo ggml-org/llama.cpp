@@ -4,6 +4,7 @@
 #include "ggml.h"
 #include "ggml-cpp.h"
 #include "llama.h"
+#include "../src/llama-ext.h"
 #include "log.h"
 #include "ngram-cache.h"
 #include "ngram-map.h"
@@ -1380,6 +1381,7 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
     size_t context_rows = 0;
     std::vector<float>     context_embd;
     std::vector<llama_pos> context_pos;
+    std::vector<std::pair<uint32_t, llama_sampler_ptr>> rnn_samplers;
 
     common_speculative_impl_draft_dspark(const common_params_speculative & params, uint32_t n_seq)
         : common_speculative_impl_draft_dflash(params, n_seq, COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK)
@@ -1417,6 +1419,9 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
             const size_t slots = (size_t) n_seq * context_rows;
             context_embd.resize(slots * (size_t) n_embd_dec);
             context_pos.assign(slots, -1);
+            if (this->params.probabilistic) {
+                rnn_samplers.resize(n_seq);
+            }
         }
 
         LOG_INF("%s: - sample_from_anchor=%s\n", __func__, sample_from_anchor ? "true" : "false");
@@ -1467,7 +1472,69 @@ protected:
 
 public:
 
+    void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
+        common_speculative_impl_draft_dflash::begin(seq_id, prompt);
+        if (seq_id >= 0 && (size_t) seq_id < rnn_samplers.size()) {
+            rnn_samplers[seq_id].second.reset();
+        }
+    }
+
     void draft(common_speculative_draft_params_vec & dparams) override {
+        draft_batch(dparams, false);
+        if (!rnn_samplers.empty()) {
+            draft_batch(dparams, true);
+        }
+    }
+
+private:
+    const float * anchor_context(llama_seq_id seq_id, llama_pos pos) const {
+        const size_t slot = (size_t) seq_id * context_rows + (size_t) pos % context_rows;
+        if (pos < 0 || context_pos[slot] != pos) {
+            throw std::runtime_error("DSpark committed context feature is missing");
+        }
+        return context_embd.data() + slot * (size_t) n_embd_dec;
+    }
+
+    bool draft_recurrent(llama_seq_id seq_id, common_speculative_draft_params & dp, int32_t beg,
+            const float * hidden, const float * base, int32_t n_vocab) {
+        auto & sampler = rnn_samplers[seq_id];
+        if (!sampler.second || sampler.first != dp.seed) {
+            sampler.first = dp.seed;
+            sampler.second.reset(llama_sampler_init_dist(dp.seed == LLAMA_DEFAULT_SEED ? dp.seed : dp.seed ^ 0x85ebca6bu));
+        }
+
+        const llama_embd context = { anchor_context(seq_id, dp.pos0 - 1), 1, (size_t) n_embd_dec };
+        std::vector<float> state, logits;
+        llama_token prev = dp.id_last;
+        for (int32_t i = 1; i <= params.n_max; ++i) {
+            const size_t row = beg + i;
+            if (!llama_decode_dspark_head(params.ctx_dft, prev,
+                    { hidden + row*n_embd_dec, 1, (size_t) n_embd_dec },
+                    { base + row*n_vocab, 1, (size_t) n_vocab }, context, state, logits)) {
+                return false;
+            }
+
+            const float max_logit = *std::max_element(logits.begin(), logits.end());
+            auto & q = dp.result_q->emplace_back(n_vocab);
+            for (int32_t id = 0; id < n_vocab; ++id) {
+                if (!std::isfinite(logits[id])) {
+                    return false;
+                }
+                q[id] = { id, (logits[id] - max_logit) / dp.temp, 0.0f };
+            }
+            llama_token_data_array candidates = { q.data(), q.size(), -1, false };
+            llama_sampler_apply(sampler.second.get(), &candidates);
+            if (candidates.selected < 0 || !(q[candidates.selected].p > 0.0f)) {
+                return false;
+            }
+
+            prev = q[candidates.selected].id;
+            dp.result->push_back(prev);
+        }
+        return true;
+    }
+
+    void draft_batch(common_speculative_draft_params_vec & dparams, bool sampled) {
         auto & ctx_dft = params.ctx_dft;
 
         batch.clear();
@@ -1480,23 +1547,17 @@ public:
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             auto & dp = dparams[seq_id];
-            if (!dp.drafting) {
+            const bool wants_sampling = !rnn_samplers.empty() && dp.result_q && dp.temp > 0.0f;
+            if (!dp.drafting || wants_sampling != sampled) {
                 continue;
             }
 
-            common_sampler_reset(smpls[seq_id].get());
+            if (!sampled) {
+                common_sampler_reset(smpls[seq_id].get());
+            }
 
             const int32_t n = (int32_t) dp.pos0;
-
-            const float * context = nullptr;
-            if (has_rnn_context) {
-                const llama_pos pos = dp.pos0 - 1;
-                const size_t slot = (size_t) seq_id * context_rows + (size_t) pos % context_rows;
-                if (pos < 0 || context_pos[slot] != pos) {
-                    throw std::runtime_error("DSpark committed context feature is missing");
-                }
-                context = context_embd.data() + slot * (size_t) n_embd_dec;
-            }
+            const float * context = has_rnn_context && !sampled ? anchor_context(seq_id, dp.pos0 - 1) : nullptr;
             i_block_beg[seq_id] = batch.size();
             for (int32_t i = 0; i < n_block_tokens; ++i) {
                 const int32_t idx = batch.add(i == 0 ? dp.id_last : mask_token_id, n + i, seq_id, true);
@@ -1510,11 +1571,16 @@ public:
             return;
         }
 
-        int ret = llama_process(ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+        const int ret = sampled ? llama_decode_dspark_backbone(ctx_dft, batch.get()) :
+            llama_process(ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch.get());
         if (ret != 0) {
             LOG_WRN("%s: llama_process returned %d\n", __func__, ret);
             return;
         }
+
+        const float * hidden = sampled ? llama_get_embeddings_nextn(ctx_dft) : nullptr;
+        const float * base = sampled ? llama_get_logits(ctx_dft) : nullptr;
+        const int32_t n_vocab = sampled ? llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx_dft))) : 0;
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             if (i_block_beg[seq_id] < 0) {
@@ -1523,6 +1589,18 @@ public:
             auto & dp = dparams[seq_id];
 
             const int32_t beg = i_block_beg[seq_id];
+
+            if (sampled) {
+                if (!hidden || !base || !draft_recurrent(seq_id, dp, beg, hidden, base, n_vocab)) {
+                    LOG_ERR("%s: DSpark recurrent head sampling failed\n", __func__);
+                    dp.result->clear();
+                    dp.result_q->clear();
+                } else if (dp.result->size() < (size_t) params.n_min) {
+                    dp.result->clear();
+                    dp.result_q->clear();
+                }
+                continue;
+            }
 
             auto * smpl = smpls[seq_id].get();
 

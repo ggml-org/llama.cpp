@@ -2135,7 +2135,7 @@ static bool needs_raw_logits(const llama_ubatch & ubatch, const std::map<llama_s
     return false; // all sequences use backend sampling
 }
 
-int llama_context::decode(const llama_batch_ext & batch_inp) {
+int llama_context::decode(const llama_batch_ext & batch_inp, llm_graph_type gtype) {
     if (!memory) {
         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
         return encode(batch_inp);
@@ -2362,7 +2362,8 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
         ggml_status status;
 
-        const auto * res = process_ubatch(ubatch, ctx_type_to_graph_type(cparams.ctx_type), mctx.get(), status);
+        const auto graph_type = gtype == LLM_GRAPH_TYPE_DEFAULT ? ctx_type_to_graph_type(cparams.ctx_type) : gtype;
+        const auto * res = process_ubatch(ubatch, graph_type, mctx.get(), status);
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
@@ -5152,4 +5153,64 @@ llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * c
 
 llama_context * llama_get_ctx_other(struct llama_context * ctx) {
     return ctx->get_cparams().ctx_other;
+}
+
+int32_t llama_decode_dspark_backbone(llama_context * ctx, const llama_batch_ext * batch) {
+    if (!ctx || !batch || !ctx->get_cparams().ctx_other ||
+            llama_model_dflash_variant(llama_get_model(ctx)) != LLAMA_DFLASH_VARIANT_DSPARK_INKLING2) {
+        return -1;
+    }
+    return ctx->decode(*batch, LLM_GRAPH_TYPE_DSPARK_BACKBONE);
+}
+
+bool llama_context::dspark_head(llama_token prev, llama_embd hidden, llama_embd base, llama_embd context,
+        std::vector<float> & state, std::vector<float> & logits_out) {
+    if (model.hparams.dflash_variant != LLAMA_DFLASH_VARIANT_DSPARK_INKLING2 || !cparams.ctx_other) {
+        return false;
+    }
+    const size_t width = model.hparams.n_embd;
+    const size_t vocab = model.vocab.n_tokens();
+    const size_t rank = model.dspark_markov_w1->ne[0];
+    const auto valid = [](llama_embd row, size_t size) { return row.data && row.n_rows == 1 && row.n_embd == size; };
+    if (prev < 0 || (size_t) prev >= vocab || !valid(hidden, width) || !valid(base, vocab) ||
+            !valid(context, width) || (!state.empty() && state.size() != rank)) {
+        return false;
+    }
+    if (state.empty()) {
+        state.resize(rank, 0.0f);
+    }
+
+    std::vector<float> inputs;
+    inputs.reserve(rank + 2*width + vocab);
+    inputs.insert(inputs.end(), state.begin(), state.end());
+    inputs.insert(inputs.end(), hidden.data, hidden.data + width);
+    inputs.insert(inputs.end(), context.data, context.data + width);
+    inputs.insert(inputs.end(), base.data, base.data + vocab);
+
+    llama_batch_allocr head_batch(model.hparams.n_pos_per_embd());
+    auto ubatch = head_batch.ubatch_reserve(1, 1);
+    ubatch.token[0] = prev;
+    ubatch.output[0] = true;
+    ubatch.n_seq_id[0] = 1;
+    ubatch.seq_id[0] = ubatch.seq_id_unq;
+    ubatch.embd_state = inputs.data();
+
+    const auto n_outputs_prev = n_outputs;
+    n_outputs = 1;
+    ggml_status status;
+    const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DSPARK_HEAD, nullptr, status);
+    n_outputs = n_outputs_prev;
+    if (!res) {
+        return false;
+    }
+    ggml_backend_sched_synchronize(sched.get());
+    logits_out.resize(vocab);
+    ggml_backend_tensor_get(res->get_logits(), logits_out.data(), 0, vocab * sizeof(float));
+    ggml_backend_tensor_get(res->get_h_nextn(), state.data(), 0, rank * sizeof(float));
+    return true;
+}
+
+bool llama_decode_dspark_head(llama_context * ctx, llama_token prev, llama_embd hidden, llama_embd base, llama_embd context,
+        std::vector<float> & state, std::vector<float> & logits) {
+    return ctx && ctx->dspark_head(prev, hidden, base, context, state, logits);
 }
