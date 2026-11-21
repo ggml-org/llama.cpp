@@ -11,7 +11,8 @@ on:
       '**/*.cuh',
       'ggml/src/ggml-hip/CMakeLists.txt',
       'ggml/src/ggml-cuda/vendors/hip.h',
-      'scripts/hip/gcn-cdna-vgpr-check.py'
+      'scripts/hip/gcn-cdna-metrics.py',
+      'scripts/hip/test_gcn_cdna_metrics.py'
     ]
 
   pull_request:
@@ -22,7 +23,8 @@ on:
       '**/*.cuh',
       'ggml/src/ggml-hip/CMakeLists.txt',
       'ggml/src/ggml-cuda/vendors/hip.h',
-      'scripts/hip/gcn-cdna-vgpr-check.py'
+      'scripts/hip/gcn-cdna-metrics.py',
+      'scripts/hip/test_gcn_cdna_metrics.py'
     ]
 
 cache-mode: none
@@ -45,15 +47,32 @@ jobs:
     runs-on: ubuntu-22.04
     container: rocm/dev-ubuntu-22.04:7.2.1
     steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
       - name: Dependencies
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev python3 python3-venv python3-pip jq
+          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev python3 python3-venv python3-pip python3-yaml jq
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+
+      # The first parent of the tested merge commit is the exact baseline.
+      - name: Get baseline SHA
+        if: ${{ github.event_name == 'pull_request' }}
+        id: master_sha
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git rev-parse --verify HEAD^2 > /dev/null
+          baseline_sha=$(git rev-parse HEAD^1)
+          pr_sha=$(git rev-parse HEAD)
+          printf 'sha=%s\npr_sha=%s\n' "$baseline_sha" "$pr_sha" >> "$GITHUB_OUTPUT"
+          printf 'Baseline commit: %s\nPR merge commit: %s\n' "$baseline_sha" "$pr_sha"
+
+      - name: Test HIP kernel metrics scripts
+        run: python3 -m unittest discover -s scripts/hip -p 'test_gcn_cdna_metrics.py'
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
@@ -70,6 +89,21 @@ jobs:
           folder: llama.cpp
           hf_bucket: ggml-org/cache
 
+      # Verify device optimization records before starting the expensive builds.
+      - name: Validate HIP resource remarks
+        run: |
+          mkdir -p hip-metrics-probe
+          cd hip-metrics-probe
+          printf '%s\n' '#include <hip/hip_runtime.h>' '__global__ void metrics_probe(float * out) { *out = 1.0f; }' > probe.hip
+          "$(hipconfig -l)/clang" -x hip --offload-arch=gfx908 -O2 -c probe.hip -o probe.o \
+            -Rpass-analysis=kernel-resource-usage --save-temps \
+            -Xarch_device -fsave-optimization-record=yaml \
+            -Xarch_device -foptimization-record-passes=kernel-resource-usage
+          for metric in NumVGPR Occupancy VGPRSpill SGPRSpill; do
+            grep -q "Name: *$metric$" probe.opt.yaml || { echo "Missing $metric in GPU optimization records"; exit 1; }
+          done
+          python3 ../scripts/hip/gcn-cdna-metrics.py vgpr probe.opt.yaml
+
       - name: Build with Werror
         id: cmake_build
         run: |
@@ -83,19 +117,151 @@ jobs:
           cd build
           make -j $(nproc)
 
-      - name: Check for major VGPR spills
+      - name: Build HIP kernel resource metrics
         id: vgpr_check
+        shell: bash
         run: |
           cmake -B build -S . \
             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
             -DGPU_TARGETS=gfx908 \
             -DGGML_HIP=ON \
             -DGGML_HIP_EXPORT_METRICS=On \
-            -DCMAKE_HIP_FLAGS="" \
+            -DCMAKE_HIP_FLAGS="-Xarch_device -fsave-optimization-record=yaml -Xarch_device -foptimization-record-passes=kernel-resource-usage" \
             -DCMAKE_BUILD_TYPE=Release
           cd build
-          make -j $(nproc) 2>&1 | tee metrics.log | grep -v 'Rpass-analysis=kernel-resource-usage\|remark:\|^$'
-          python3 ../scripts/hip/gcn-cdna-vgpr-check.py metrics.log
+          set -o pipefail
+          CCACHE_DISABLE=1 make -j $(nproc) ggml-hip 2>&1 | tee metrics.log | sed -e '/Rpass-analysis=kernel-resource-usage/d' -e '/remark:/d' -e '/^$/d'
+          echo "Optimization record files:"
+          find . -type f -name '*.opt.yaml' | sed -n '1,10p'
+          echo "GPU kernel remarks in YAML:"
+          grep -rl --include='*.opt.yaml' 'kernel-resource-usage' . | sed -n '1,10p' || true
+          echo "First YAML record:"
+          first_yaml=$(find ggml/src/ggml-hip -type f -name '*.opt.yaml' -print -quit)
+          if [ -n "$first_yaml" ]; then head -n 35 "$first_yaml"; fi
+          echo "GPU resource diagnostics in compiler log:"
+          grep -m 3 'Function Name:' metrics.log || true
+
+      # The PR comparison evaluates every rule and reports all failures at the end.
+      - name: Check VGPR limit on master
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        run: python3 scripts/hip/gcn-cdna-metrics.py vgpr build/ggml/src/ggml-hip
+
+      # On master pushes, cache the device optimization records as the baseline for PR checks.
+      - name: Save master metrics baseline
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        run: |
+          mkdir -p hip-baseline-metrics
+          find build/ggml/src/ggml-hip -type f -name '*.opt.yaml' -exec cp --parents {} hip-baseline-metrics/ \;
+
+      - name: Cache master metrics baseline
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        run: |
+          if [ -n "$HF_TOKEN" ]; then
+            tar -czf hip-baseline-metrics.tar.gz -C hip-baseline-metrics .
+            .venv-hf/bin/hf buckets cp hip-baseline-metrics.tar.gz "hf://buckets/ggml-org/cache/llama.cpp/hip-quality-check-yaml-device-rocm-7.2.1-gfx908-${{ github.sha }}.tar.gz" || echo "Failed to save HIP metrics baseline"
+          fi
+
+      # Restore the device optimization records for the exact baseline commit.
+      - name: Restore master metrics baseline
+        if: ${{ github.event_name == 'pull_request' }}
+        id: baseline_cache
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+        run: |
+          cache_url="hf://buckets/ggml-org/cache/llama.cpp/hip-quality-check-yaml-device-rocm-7.2.1-gfx908-${{ steps.master_sha.outputs.sha }}.tar.gz"
+          if .venv-hf/bin/hf buckets cp "$cache_url" hip-baseline-metrics.tar.gz; then
+            mkdir -p hip-baseline-metrics
+            if tar -xzf hip-baseline-metrics.tar.gz -C hip-baseline-metrics && [ -n "$(find hip-baseline-metrics -type f -name '*.opt.yaml' -print -quit)" ]; then
+              echo "cache-hit=true" >> "$GITHUB_OUTPUT"
+              echo "Restored HIP metrics baseline from HF Buckets"
+            else
+              rm -rf hip-baseline-metrics
+              echo "Invalid HIP metrics baseline cache"
+            fi
+            rm -f hip-baseline-metrics.tar.gz
+          else
+            echo "No HIP metrics baseline in HF Buckets; building from source"
+          fi
+
+      # Fallback when the baseline commit has no cached metrics.
+      - name: Checkout baseline (master)
+        if: ${{ github.event_name == 'pull_request' && steps.baseline_cache.outputs.cache-hit != 'true' }}
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.master_sha.outputs.sha }}
+          path: hip-baseline
+
+      - name: Build master metrics baseline
+        if: ${{ github.event_name == 'pull_request' && steps.baseline_cache.outputs.cache-hit != 'true' }}
+        shell: bash
+        run: |
+          cd hip-baseline
+          cmake -B build -S . \
+            -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
+            -DGPU_TARGETS=gfx908 \
+            -DGGML_HIP=ON \
+            -DGGML_HIP_EXPORT_METRICS=On \
+            -DCMAKE_HIP_FLAGS="-Xarch_device -fsave-optimization-record=yaml -Xarch_device -foptimization-record-passes=kernel-resource-usage" \
+            -DCMAKE_BUILD_TYPE=Release
+          cd build
+          set -o pipefail
+          CCACHE_DISABLE=1 make -j $(nproc) ggml-hip 2>&1 | tee metrics.log | sed -e '/Rpass-analysis=kernel-resource-usage/d' -e '/remark:/d' -e '/^$/d'
+          mkdir -p ../../hip-baseline-metrics
+          find ggml/src/ggml-hip -type f -name '*.opt.yaml' -exec cp --parents {} ../../hip-baseline-metrics/ \;
+
+      - name: Check kernel resource rules vs master
+        if: ${{ github.event_name == 'pull_request' }}
+        id: occupancy_check
+        env:
+          BASELINE_SHA: ${{ steps.master_sha.outputs.sha }}
+          PR_SHA: ${{ steps.master_sha.outputs.pr_sha }}
+        run: |
+          # The PR optimization records come from the VGPR spill check build above, so
+          # this step adds no extra build when the baseline cache hits.
+          python3 scripts/hip/gcn-cdna-metrics.py compare hip-baseline-metrics build/ggml/src/ggml-hip \
+            --dump hip-kernel-metrics-deltas.tsv || check_failed=true
+          if [ ! -s hip-kernel-metrics-deltas.tsv ]; then
+            echo "Kernel metrics comparison failed before producing a TSV report"
+            exit 1
+          fi
+          python3 scripts/hip/gcn-cdna-metrics.py report hip-kernel-metrics-deltas.tsv \
+            -o hip-kernel-metrics-report.md
+          sed -i "3i\\- Baseline commit: $BASELINE_SHA\\n- PR merge commit: $PR_SHA" hip-kernel-metrics-report.md
+          if [ -n "$check_failed" ]; then
+            echo "check_failed=true" >> "$GITHUB_OUTPUT"
+          fi
+          exit 0
+
+      - name: Upload kernel metrics report
+        if: ${{ github.event_name == 'pull_request' }}
+        id: metrics_report
+        uses: actions/upload-artifact@v7
+        with:
+          name: hip-kernel-metrics-report
+          path: hip-kernel-metrics-report.md
+
+      - name: Publish kernel metrics summary
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          ARTIFACT_URL: ${{ steps.metrics_report.outputs.artifact-url }}
+        run: |
+          {
+            if [ "$(wc -c < hip-kernel-metrics-report.md)" -le 1000000 ]; then
+              cat hip-kernel-metrics-report.md
+            else
+              sed -n -e '/^# /p' -e '/^- Baseline/p' -e '/^- PR/p' -e '/^Kernels compared:/p' -e 's/^## /- /p' hip-kernel-metrics-report.md
+              printf '\nThe full report exceeds the GitHub job summary size limit.\n'
+            fi
+            printf '\n[Download the full kernel metrics report](%s)\n' "$ARTIFACT_URL"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail on blocking regressions
+        if: ${{ github.event_name == 'pull_request' && steps.occupancy_check.outputs.check_failed == 'true' }}
+        run: |
+          echo "Blocking kernel metrics regressions detected, see the job summary and hip-kernel-metrics-report artifact"
+          exit 1
 
       - name: ccache-buckets-save
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
