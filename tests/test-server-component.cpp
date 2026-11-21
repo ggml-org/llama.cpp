@@ -936,6 +936,79 @@ static void test_pcm_f32_to_s16(testing & t) {
     t.assert_true ("empty",          pcm_f32_to_s16(nullptr, 0).empty());
 }
 
+static void test_responses_reasoning_input(testing & t) {
+    auto messages_of = [](const char * input) {
+        json body = {
+            {"model", "M"},
+            {"input", json::parse(input)},
+        };
+        return server_chat_convert_responses_to_chatcmpl(body).at("messages");
+    };
+
+    t.test("summary only", [&](testing & t) {
+        json messages = messages_of(R"([
+            {"type":"reasoning","id":"r1","summary":[{"type":"summary_text","text":"thinking"}]},
+            {"type":"message","role":"user","content":"say hi"}
+        ])");
+        t.assert_equal("count", (size_t) 2, messages.size());
+        t.assert_equal("role", std::string("assistant"), messages.at(0).at("role").get<std::string>());
+        t.assert_equal("reasoning", std::string("thinking"), messages.at(0).at("reasoning_content").get<std::string>());
+        t.assert_true("empty content", messages.at(0).at("content").empty());
+        t.assert_equal("user", std::string("user"), messages.at(1).at("role").get<std::string>());
+    });
+
+    t.test("empty content falls back to summary", [&](testing & t) {
+        json messages = messages_of(R"([
+            {"type":"reasoning","id":"r1","summary":[{"type":"summary_text","text":"thinking"}],"content":[]}
+        ])");
+        t.assert_equal("count", (size_t) 1, messages.size());
+        t.assert_equal("reasoning", std::string("thinking"), messages.at(0).at("reasoning_content").get<std::string>());
+    });
+
+    t.test("content text wins", [&](testing & t) {
+        json messages = messages_of(R"([
+            {"type":"reasoning","summary":[{"type":"summary_text","text":"from-summary"}],
+             "content":[{"type":"reasoning_text","text":"from-content"}]}
+        ])");
+        t.assert_equal("reasoning", std::string("from-content"), messages.at(0).at("reasoning_content").get<std::string>());
+    });
+
+    t.test("nothing to replay is skipped", [&](testing & t) {
+        json messages = messages_of(R"([
+            {"type":"reasoning","id":"r1","summary":[],"content":[]},
+            {"type":"message","role":"user","content":"say hi"}
+        ])");
+        t.assert_equal("count", (size_t) 1, messages.size());
+        t.assert_equal("user", std::string("user"), messages.at(0).at("role").get<std::string>());
+    });
+
+    t.test("null summary still accepts content", [&](testing & t) {
+        json messages = messages_of(R"([
+            {"type":"reasoning","summary":null,"content":[{"type":"reasoning_text","text":"thinking"}]}
+        ])");
+        t.assert_equal("reasoning", std::string("thinking"), messages.at(0).at("reasoning_content").get<std::string>());
+    });
+
+    t.test("null summary and no text is skipped", [&](testing & t) {
+        json messages = messages_of(R"([
+            {"type":"reasoning","summary":null},
+            {"role":"user","content":"say hi"}
+        ])");
+        t.assert_equal("count", (size_t) 1, messages.size());
+        t.assert_equal("user", std::string("user"), messages.at(0).at("role").get<std::string>());
+    });
+
+    t.test("merges onto the previous assistant message", [&](testing & t) {
+        json messages = messages_of(R"([
+            {"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]},
+            {"type":"reasoning","summary":[{"type":"summary_text","text":"thinking"}]}
+        ])");
+        t.assert_equal("count", (size_t) 1, messages.size());
+        t.assert_equal("reasoning", std::string("thinking"), messages.at(0).at("reasoning_content").get<std::string>());
+        t.assert_equal("text", std::string("hi"), messages.at(0).at("content").at(0).at("text").get<std::string>());
+    });
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -965,6 +1038,7 @@ int main(int argc, char ** argv) {
     t.test("stop_strings",    test_stop_strings);
     t.test("speech_convert",  test_speech_convert);
     t.test("pcm_f32_to_s16",  test_pcm_f32_to_s16);
+    t.test("responses_reasoning", test_responses_reasoning_input);
 
     return t.summary();
 }
