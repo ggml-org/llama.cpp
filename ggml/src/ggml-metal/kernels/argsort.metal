@@ -567,6 +567,156 @@ kernel void kernel_topk_moe_f32(
     }
 }
 
+// fused sigmoid + bias + grouped top-k + GET_ROWS + norm + scale for MoE routing (DeepSeek-V3 style grouped selection). One SIMDgroup handles one token row.
+// The routing weights come from the unbiased sigmoid probs, the selection scores are probs + bias, and only the top n_grp_used groups can be selected.
+kernel void kernel_topk_moe_grouped_f32(
+        constant   ggml_metal_kargs_topk_moe_grouped & args,
+        device const float * src0,
+        device const float * bias,
+        device       float * weights,
+        device      int32_t * ids,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort  tiisg[[thread_index_in_simdgroup]]) {
+    const int row = (int) tgpig.x;
+    if (row >= args.ne01) {
+        return;
+    }
+
+    const int n_expert   = args.n_expert;
+    const int n_group    = args.n_group;
+    const int n_grp_used = args.n_grp_used;
+    const int top_k      = args.n_expert_used;
+    const int per_group  = n_expert / n_group;
+    const int lane       = (int) tiisg;
+    const int n_per_lane = (n_expert + 31) / 32;
+
+    device const float * logits_row  = (device const float *) ((device const char *) src0 + row * args.nb01);
+    device       float * weights_row = weights + row * top_k;
+    device      int32_t * ids_row    = ids + row * (args.nb1_ids / sizeof(int32_t));
+
+    float pv[32]; // sigmoid probs, unbiased
+    float sv[32]; // selection scores, masked to -INFINITY outside the selected groups
+
+    for (int i = 0; i < 32; ++i) {
+        pv[i] = 0.0f;
+        sv[i] = -INFINITY;
+    }
+
+    for (int i = 0; i < n_per_lane; ++i) {
+        const int e = lane + i*32;
+        if (e < n_expert) {
+            const float p = 1.0f / (1.0f + exp(-logits_row[e]));
+            pv[i] = p;
+            sv[i] = p + bias[e];
+        }
+    }
+
+    // group score: sum of the two largest selection scores in the group
+    float gs = -INFINITY;
+    if (lane < n_group) {
+        float a = -INFINITY;
+        float b = -INFINITY;
+        for (int j = 0; j < per_group; ++j) {
+            const int   e = lane*per_group + j;
+            const float v = 1.0f / (1.0f + exp(-logits_row[e])) + bias[e];
+            if (v > a) {
+                b = a;
+                a = v;
+            } else if (v > b) {
+                b = v;
+            }
+        }
+        gs = a + b;
+    }
+
+    // select the top n_grp_used groups, ties broken by the lower group index
+    bool gsel = false;
+    for (int k = 0; k < n_grp_used; ++k) {
+        float best = gs;
+        int   bg   = lane;
+
+        for (int m = 16; m > 0; m >>= 1) {
+            const float v = simd_shuffle_xor(best, (ushort) m);
+            const int   g = simd_shuffle_xor(bg,   (ushort) m);
+            if (v > best || (v == best && g < bg)) {
+                best = v;
+                bg   = g;
+            }
+        }
+
+        if (lane == bg) {
+            gsel = true;
+            gs   = -INFINITY;
+        }
+    }
+
+    // mask the experts of the groups that were not selected
+    for (int i = 0; i < n_per_lane; ++i) {
+        const int e   = lane + i*32;
+        const int g   = (e < n_expert) ? (e / per_group) : 0;
+        const int sel = simd_shuffle(gsel ? 1 : 0, (ushort) g);
+        if (e < n_expert && !sel) {
+            sv[i] = -INFINITY;
+        }
+    }
+
+    float output_weights[32];
+    FOR_UNROLL (int i = 0; i < 32; ++i) {
+        output_weights[i] = 0.0f;
+    }
+
+    float wt_sum = 0.0f;
+
+    for (int k = 0; k < top_k; ++k) {
+        float best_val    = -INFINITY;
+        int   best_expert = -1;
+
+        for (int i = 0; i < n_per_lane; ++i) {
+            const int e = lane + i*32;
+            if (e < n_expert && (sv[i] > best_val || (sv[i] == best_val && e < best_expert))) {
+                best_val    = sv[i];
+                best_expert = e;
+            }
+        }
+
+        for (int m = 16; m > 0; m >>= 1) {
+            const float v = simd_shuffle_xor(best_val,    (ushort) m);
+            const int   e = simd_shuffle_xor(best_expert, (ushort) m);
+            if (v > best_val || (v == best_val && e < best_expert)) {
+                best_val    = v;
+                best_expert = e;
+            }
+        }
+
+        // the routing weight is the unbiased prob of the selected expert
+        float w = 0.0f;
+        if ((best_expert & 31) == lane) {
+            w = pv[best_expert / 32];
+            sv[best_expert / 32] = -INFINITY;
+            ids_row[k] = best_expert;
+        }
+
+        const float wsel = simd_shuffle(w, (ushort) (best_expert & 31));
+
+        if ((k & 31) == lane) {
+            output_weights[k / 32] = wsel;
+            wt_sum += wsel;
+        }
+    }
+
+    wt_sum = simd_sum(wt_sum);
+    wt_sum = max(wt_sum, args.clamp);
+
+    const float inv = 1.0f / wt_sum;
+
+    for (int i = 0; i < n_per_lane; ++i) {
+        const int idx = i*32 + lane;
+        if (idx < top_k) {
+            weights_row[idx] = output_weights[i] * inv * args.scale;
+        }
+    }
+}
+
 // fused MoE expert weighting + reduction: weighted = sum(experts[e] * weights[e]).
 // The host guarantees all tensors are contiguous F32.
 kernel void kernel_moe_reduce_f32(
