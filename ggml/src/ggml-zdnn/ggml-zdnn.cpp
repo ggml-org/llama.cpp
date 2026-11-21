@@ -5,6 +5,7 @@
 #include "ggml-zdnn/common.hpp"
 #include "ggml-zdnn/fattn.hpp"
 #include "ggml-zdnn/mmf.hpp"
+#include "ggml-zdnn/mmid.hpp"
 #include "ggml-zdnn/mmq.hpp"
 #include "ggml-zdnn/utils.hpp"
 #include "ggml.h"
@@ -37,6 +38,11 @@ static bool ggml_zdnn_compute_forward(
         case GGML_OP_MUL_MAT:
             {
                 ggml_zdnn_compute_forward_mul_mat(ctx, dst);
+            } break;
+
+        case GGML_OP_MUL_MAT_ID:
+            {
+                ggml_zdnn_mul_mat_id(ctx, dst);
             } break;
 
         case GGML_OP_FLASH_ATTN_EXT:
@@ -99,6 +105,17 @@ static bool ggml_zdnn_is_tensor_own(const ggml_tensor * tensor) {
     return tensor->buffer != nullptr && tensor->buffer->buft == ggml_backend_zdnn_buffer_type();
 }
 
+static bool ggml_zdnn_supports_matmul_weights(const ggml_tensor * weights) {
+    // computed weights and weights in other buffers have no cached ztensor
+    if (weights->op != GGML_OP_NONE || (weights->flags & GGML_TENSOR_FLAG_INPUT) ||
+        (weights->buffer != nullptr && !ggml_zdnn_is_tensor_own(weights))) {
+        return false;
+    }
+
+    // training writes allocated weights through ->data
+    return weights->buffer == nullptr || !(weights->flags & GGML_TENSOR_FLAG_PARAM);
+}
+
 static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_dev, const ggml_tensor * op) {
     switch (op->op) {
         case GGML_OP_NONE:
@@ -135,15 +152,8 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
                     return false;
                 }
 
-                // tensors with no buffer yet get a zDNN buffer, computed or graph input weights and tensors in other buffers have no ztensor
-                if (weights->op != GGML_OP_NONE || (weights->flags & GGML_TENSOR_FLAG_INPUT) ||
-                    (weights->buffer != nullptr && !ggml_zdnn_is_tensor_own(weights)) ||
-                    (op->buffer      != nullptr && !ggml_zdnn_is_tensor_own(op))) {
-                    return false;
-                }
-
-                // training writes allocated weights through ->data, test-backend-ops sets PARAM before it allocates and uses set_tensor
-                if ((weights->flags & GGML_TENSOR_FLAG_PARAM) && weights->buffer != nullptr) {
+                if (!ggml_zdnn_supports_matmul_weights(weights) ||
+                    (op->buffer != nullptr && !ggml_zdnn_is_tensor_own(op))) {
                     return false;
                 }
 
@@ -158,6 +168,10 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
                         return false;
                 }
             } break;
+
+        case GGML_OP_MUL_MAT_ID:
+            return ggml_zdnn_supports_matmul_weights(op->src[0]) &&
+                   ggml_zdnn_supports_mul_mat_id(ctx_dev, op);
 
         case GGML_OP_FLASH_ATTN_EXT:
             return ggml_zdnn_supports_flash_attn_ext(ctx_dev, op);
@@ -292,8 +306,8 @@ static enum ggml_status ggml_backend_zdnn_buffer_init_tensor(ggml_backend_buffer
         return GGML_STATUS_SUCCESS;
     }
 
-    // ops read other compute tensors through ->data
-    if (tensor->op != GGML_OP_NONE && tensor->op != GGML_OP_MUL_MAT) {
+    // routing IDs and other compute tensors are read through ->data
+    if (tensor->type == GGML_TYPE_I32 || (tensor->op != GGML_OP_NONE && tensor->op != GGML_OP_MUL_MAT)) {
         return GGML_STATUS_SUCCESS;
     }
 
