@@ -2561,6 +2561,9 @@ struct llama_model_inkling2 : public llama_model_base {
         std::map<ggml_tensor *, ggml_tensor *> rms_norms;
         std::map<int64_t, ggml_tensor *> zero_sinks;
         std::map<ggml_tensor *, ggml_tensor *> padded_rel_bias; // per physical layer, shared by the loop passes
+        // I32 indices that reverse the lags of n_heads groups of n_conv dynamic convolution taps, once per graph
+        ggml_tensor * lag_reverse(int64_t n_conv, int64_t n_heads);
+        std::map<int64_t, ggml_tensor *> lag_reverse_idx;
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;

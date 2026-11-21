@@ -172,6 +172,19 @@ ggml_tensor * llama_model_inkling2::graph::clip(ggml_tensor * cur, ggml_tensor *
     return rescale ? ggml_scale(ctx0, cur, threshold) : cur;
 }
 
+ggml_tensor * llama_model_inkling2::graph::lag_reverse(int64_t n_conv, int64_t n_heads) {
+    auto & idx = lag_reverse_idx[n_heads];
+    if (!idx) {
+        // per head: n_conv - 1, ..., 0, offset by head*n_conv
+        ggml_tensor * rev  = ggml_scale_bias(ctx0, ggml_arange(ctx0, 0, n_conv, 1), -1.0f, n_conv - 1);
+        rev = ggml_reshape_2d(ctx0, rev, n_conv, 1);
+        ggml_tensor * offs = ggml_reshape_2d(ctx0, ggml_arange(ctx0, 0, n_conv*n_heads, n_conv), 1, n_heads);
+        idx = ggml_add(ctx0, ggml_repeat(ctx0, rev, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_conv, n_heads)), offs);
+        idx = ggml_cast(ctx0, ggml_reshape_1d(ctx0, idx, n_conv*n_heads), GGML_TYPE_I32);
+    }
+    return idx;
+}
+
 ggml_tensor * llama_model_inkling2::graph::cont(ggml_tensor * cur) {
     return ggml_is_contiguous(cur) ? cur : ggml_cont(ctx0, cur);
 }
@@ -242,6 +255,21 @@ ggml_tensor * llama_model_inkling2::graph::convolve(
     const int64_t n_seq_tokens = ubatch.n_seq_tokens;
     const int64_t n_seqs       = ubatch.n_seqs;
 
+    // one token: lag l of the dynamic taps meets window column n_conv - 1 - l, so the taps in reverse order add to the
+    // static weights and a single convolution does both (built before the window, so that the window, the state
+    // store and the convolution stay side by side in the graph)
+    const bool fold_dynamic = dynamic && n_seq_tokens == 1 && n_seqs == 1;
+    if (fold_dynamic) {
+        const int64_t n_heads = dynamic->ne[0]/n_conv;
+
+        ggml_tensor * taps = ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, dynamic, 1, n_conv*n_heads), lag_reverse(n_conv, n_heads));
+        taps = ggml_reshape_3d(ctx0, taps, n_conv, 1, n_heads);
+
+        weight = ggml_add(ctx0, ggml_reshape_3d(ctx0, weight, n_conv, n_channels/n_heads, n_heads), taps);
+        weight = ggml_reshape_2d(ctx0, weight, n_conv, n_channels);
+        ggml_build_forward_expand(gf, weight);
+    }
+
     ggml_tensor * past = ggml_view_3d(ctx0, history, n_conv - 1, n_channels, n_seqs, history->nb[1], history->nb[2], offset*history->nb[1]);
 
     ggml_tensor * x = ggml_transpose(ctx0, ggml_reshape_3d(ctx0, cur, n_channels, n_seq_tokens, n_seqs));
@@ -252,7 +280,7 @@ ggml_tensor * llama_model_inkling2::graph::convolve(
     ggml_tensor * out = ggml_ssm_conv(ctx0, x, weight);
     out = ggml_reshape_2d(ctx0, out, n_channels, n_tokens);
 
-    if (dynamic) {
+    if (dynamic && !fold_dynamic) {
         const int64_t n_heads = dynamic->ne[0]/n_conv;
 
         dynamic = ggml_reshape_3d(ctx0, dynamic, n_conv, n_heads, n_tokens);
