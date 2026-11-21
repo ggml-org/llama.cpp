@@ -70,10 +70,13 @@ static inline void htp_get_rows_vtcm_layout_build(
             src0_row_size = htp_tensor_get_row_size(src0_type, ne00);
         }
 
-        const size_t dst_row_size = htp_tensor_get_row_size(dst_type, ne00);
+        const bool direct_f16_spad =
+            (kernel_type == HTP_GET_ROWS_KERNEL_TILED && src0_type == HTP_TYPE_F16 && dst_type == HTP_TYPE_F16) ||
+            (kernel_type == HTP_GET_ROWS_KERNEL_FLAT  && src0_type == HTP_TYPE_F32 && dst_type == HTP_TYPE_F16);
+        const size_t dst_spad_row_size = htp_tensor_get_row_size(direct_f16_spad ? dst_type : HTP_TYPE_F32, ne00);
 
         L->src0_spad_half_size   = (src0_row_size + 255) & ~255;
-        L->dst_spad_half_size    = (dst_row_size + 255) & ~255;
+        L->dst_spad_half_size    = (dst_spad_row_size + 255) & ~255;
         L->src0_bytes_per_hvx    = 2 * L->src0_spad_half_size;
         L->dst_bytes_per_hvx     = 2 * L->dst_spad_half_size;
     }

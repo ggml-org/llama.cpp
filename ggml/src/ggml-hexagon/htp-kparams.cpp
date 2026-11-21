@@ -1702,11 +1702,7 @@ bool htp_kparams_solve_repeat_get_rows(
         if (dst->type != GGML_TYPE_I32 || tiled) {
             return false;
         }
-    } else if (dst->type == GGML_TYPE_F16) {
-        if (src0->type != GGML_TYPE_F16 && src0->type != GGML_TYPE_F32) {
-            return false;
-        }
-    } else if (dst->type != GGML_TYPE_F32) {
+    } else if (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) {
         return false;
     }
 

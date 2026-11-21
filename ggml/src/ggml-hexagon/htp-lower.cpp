@@ -850,6 +850,20 @@ static bool htp_lower_is_ssm_conv_root(
     return it != owner_idx.end() && nodes[it->second].opcode == HTP_OP_SSM_CONV;
 }
 
+static bool htp_lower_is_get_rows_root(
+    const std::vector<htp_opnode> & nodes,
+    const std::unordered_map<const ggml_tensor *, size_t> & owner_idx,
+    const ggml_tensor * root
+) {
+    auto it = owner_idx.find(root);
+    if (it == owner_idx.end()) {
+        return false;
+    }
+    const htp_opnode & owner = nodes[it->second];
+    return owner.opcode == HTP_OP_GET_ROWS && !owner.inputs.empty() && owner.inputs[0] &&
+           (owner.inputs[0]->type != GGML_TYPE_F32 || ggml_hexagon_tensor_is_tiled(owner.inputs[0]));
+}
+
 static bool htp_lower_safe_gdn_output(
     const htp_opnode & owner,
     const ggml_tensor * root,
@@ -1085,7 +1099,8 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
     auto is_selected_root = [&](const ggml_tensor * r) -> bool {
         if (htp_lower_is_mm_root(nodes, owner_idx, r) || htp_lower_is_fa_root(nodes, owner_idx, r) ||
             (opt_oplower >= 2 &&
-             (htp_lower_is_rms_root(nodes, owner_idx, r) || htp_lower_is_ssm_conv_root(nodes, owner_idx, r)))) {
+             (htp_lower_is_rms_root(nodes, owner_idx, r) || htp_lower_is_ssm_conv_root(nodes, owner_idx, r) ||
+              htp_lower_is_get_rows_root(nodes, owner_idx, r)))) {
             return true;
         }
         if (opt_oplower >= 1) {
@@ -1198,7 +1213,8 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
                     const ggml_tensor * inp_root = inp ? htp_tensor_root(inp) : nullptr;
                     if (inp_root && can_lower(inp_root) &&
                         (is_selected_root(inp_root) || htp_lower_is_rms_root(nodes, owner_idx, inp_root) ||
-                         htp_lower_is_ssm_conv_root(nodes, owner_idx, inp_root)) &&
+                         htp_lower_is_ssm_conv_root(nodes, owner_idx, inp_root) ||
+                         htp_lower_is_get_rows_root(nodes, owner_idx, inp_root)) &&
                         apply_root(inp_root)) {
                         expanded = true;
                     }

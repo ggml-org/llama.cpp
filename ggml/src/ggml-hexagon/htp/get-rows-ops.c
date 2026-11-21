@@ -172,6 +172,66 @@ static __attribute__((noinline)) void get_rows_flat_f32_to_f16(
     }
 }
 
+static inline void get_rows_pack_f32_to_f16_inplace(
+    void * spad_ptr,
+    uint32_t n
+) {
+    HVX_Vector * vec = (HVX_Vector *) spad_ptr;
+
+    const uint32_t n_vec = n / 64;
+    const uint32_t n_rem = n % 64;
+
+    for (uint32_t i = 0; i < n_vec; i++) {
+        const HVX_Vector v0 = get_rows_clamp_f16_finite(vec[2 * i + 0]);
+        const HVX_Vector v1 = get_rows_clamp_f16_finite(vec[2 * i + 1]);
+        vec[i] = hvx_vec_f32_to_f16(v0, v1);
+    }
+
+    if (n_rem > 0) {
+        const HVX_Vector v0 = get_rows_clamp_f16_finite(vec[2 * n_vec + 0]);
+        const HVX_Vector v1 = (n_rem > 32) ? get_rows_clamp_f16_finite(vec[2 * n_vec + 1]) : Q6_V_vzero();
+        const HVX_Vector v  = hvx_vec_f32_to_f16(v0, v1);
+        hvx_vec_store_a(&vec[n_vec], n_rem * sizeof(__fp16), v);
+    }
+}
+
+#define DEFINE_GET_ROWS_FLAT_F16(type)                                              \
+    static void get_rows_flat_##type##_f16(                                         \
+        float * dst_spad, const void * src_spad, uint32_t n) {                      \
+        hvx_dequantize_row_flat_##type##_f32(dst_spad, src_spad, n);                \
+        get_rows_pack_f32_to_f16_inplace(dst_spad, n);                              \
+    }
+
+DEFINE_GET_ROWS_FLAT_F16(bf16)
+DEFINE_GET_ROWS_FLAT_F16(q1_0)
+DEFINE_GET_ROWS_FLAT_F16(q2_0)
+DEFINE_GET_ROWS_FLAT_F16(q8_0)
+DEFINE_GET_ROWS_FLAT_F16(q4_0)
+DEFINE_GET_ROWS_FLAT_F16(q4_k)
+DEFINE_GET_ROWS_FLAT_F16(q5_k)
+DEFINE_GET_ROWS_FLAT_F16(q6_k)
+
+#undef DEFINE_GET_ROWS_FLAT_F16
+
+#define DEFINE_GET_ROWS_TILED_F16(type, tile_k)                                     \
+    static void get_rows_tiled_##type##_f16(                                        \
+        void * dst_spad, const uint8_t * src_spad, uint32_t n_k_tiles,              \
+        uint32_t tile_stride, uint32_t row) {                                       \
+        hvx_dequantize_row_tiled_##type##_f32(                                      \
+            dst_spad, src_spad, n_k_tiles, tile_stride, row);                       \
+        get_rows_pack_f32_to_f16_inplace(dst_spad, n_k_tiles * (tile_k));           \
+    }
+
+DEFINE_GET_ROWS_TILED_F16(q1_0, HTP_TENSOR_TILE_K_Q1_0)
+DEFINE_GET_ROWS_TILED_F16(q2_0, HTP_TENSOR_TILE_K_Q2_0)
+DEFINE_GET_ROWS_TILED_F16(q8_0, HTP_TENSOR_TILE_N_COLS)
+DEFINE_GET_ROWS_TILED_F16(q4_0, HTP_TENSOR_TILE_N_COLS)
+DEFINE_GET_ROWS_TILED_F16(q4_k, HTP_TENSOR_TILE_N_COLS)
+DEFINE_GET_ROWS_TILED_F16(q5_k, HTP_TENSOR_TILE_N_COLS)
+DEFINE_GET_ROWS_TILED_F16(q6_k, HTP_TENSOR_TILE_N_COLS)
+
+#undef DEFINE_GET_ROWS_TILED_F16
+
 struct get_rows_flat_task {
     dma_addr_t src0_data;
     dma_addr_t dst_data;
@@ -422,13 +482,8 @@ int op_get_rows(struct htp_ops_context * octx) {
         if (octx->src[0]->type != octx->dst->type) {
             return HTP_STATUS_NO_SUPPORT;
         }
-    } else if (octx->dst->type == HTP_TYPE_F16) {
-        const bool flat_f32_to_f16  = (kparams->kernel_type == HTP_GET_ROWS_KERNEL_FLAT  && octx->src[0]->type == HTP_TYPE_F32);
-        const bool tiled_f16_to_f16 = (kparams->kernel_type == HTP_GET_ROWS_KERNEL_TILED && octx->src[0]->type == HTP_TYPE_F16);
-        if (!flat_f32_to_f16 && !tiled_f16_to_f16) {
-            return HTP_STATUS_NO_SUPPORT;
-        }
-    } else if (octx->dst->type != HTP_TYPE_F32 || octx->src[0]->type == HTP_TYPE_F32) {
+    } else if ((octx->dst->type != HTP_TYPE_F32 && octx->dst->type != HTP_TYPE_F16) ||
+               (octx->src[0]->type == HTP_TYPE_F32 && octx->dst->type == HTP_TYPE_F32)) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
@@ -491,10 +546,17 @@ int op_get_rows(struct htp_ops_context * octx) {
             break;
         case HTP_GET_ROWS_KERNEL_TILED:
             if (octx->dst->type == HTP_TYPE_F16) {
-                if (octx->src[0]->type != HTP_TYPE_F16) {
-                    return HTP_STATUS_NO_SUPPORT;
+                switch (octx->src[0]->type) {
+                    case HTP_TYPE_F16:  grctx.compute_tiled = hvx_dequantize_row_tiled_f16_f16; break;
+                    case HTP_TYPE_Q1_0: grctx.compute_tiled = get_rows_tiled_q1_0_f16;          break;
+                    case HTP_TYPE_Q2_0: grctx.compute_tiled = get_rows_tiled_q2_0_f16;          break;
+                    case HTP_TYPE_Q8_0: grctx.compute_tiled = get_rows_tiled_q8_0_f16;          break;
+                    case HTP_TYPE_Q4_0: grctx.compute_tiled = get_rows_tiled_q4_0_f16;          break;
+                    case HTP_TYPE_Q4_K: grctx.compute_tiled = get_rows_tiled_q4_k_f16;          break;
+                    case HTP_TYPE_Q5_K: grctx.compute_tiled = get_rows_tiled_q5_k_f16;          break;
+                    case HTP_TYPE_Q6_K: grctx.compute_tiled = get_rows_tiled_q6_k_f16;          break;
+                    default:            return HTP_STATUS_NO_SUPPORT;
                 }
-                grctx.compute_tiled = hvx_dequantize_row_tiled_f16_f16;
             } else {
                 switch (octx->src[0]->type) {
                     case HTP_TYPE_F16:  grctx.compute_tiled = hvx_dequantize_row_tiled_f16_f32;  break;
@@ -513,18 +575,32 @@ int op_get_rows(struct htp_ops_context * octx) {
             q_func = get_rows_thread_tiled;
             break;
         case HTP_GET_ROWS_KERNEL_FLAT:
-            switch (octx->src[0]->type) {
-                case HTP_TYPE_F32:  grctx.compute_flat = get_rows_flat_f32_to_f16;         break;
-                case HTP_TYPE_F16:  grctx.compute_flat = hvx_dequantize_row_flat_f16_f32;  break;
-                case HTP_TYPE_BF16: grctx.compute_flat = hvx_dequantize_row_flat_bf16_f32; break;
-                case HTP_TYPE_Q1_0: grctx.compute_flat = hvx_dequantize_row_flat_q1_0_f32; break;
-                case HTP_TYPE_Q2_0: grctx.compute_flat = hvx_dequantize_row_flat_q2_0_f32; break;
-                case HTP_TYPE_Q8_0: grctx.compute_flat = hvx_dequantize_row_flat_q8_0_f32; break;
-                case HTP_TYPE_Q4_0: grctx.compute_flat = hvx_dequantize_row_flat_q4_0_f32; break;
-                case HTP_TYPE_Q4_K: grctx.compute_flat = hvx_dequantize_row_flat_q4_k_f32; break;
-                case HTP_TYPE_Q5_K: grctx.compute_flat = hvx_dequantize_row_flat_q5_k_f32; break;
-                case HTP_TYPE_Q6_K: grctx.compute_flat = hvx_dequantize_row_flat_q6_k_f32; break;
-                default:            return HTP_STATUS_NO_SUPPORT;
+            if (octx->dst->type == HTP_TYPE_F16) {
+                switch (octx->src[0]->type) {
+                    case HTP_TYPE_F32:  grctx.compute_flat = get_rows_flat_f32_to_f16; break;
+                    case HTP_TYPE_BF16: grctx.compute_flat = get_rows_flat_bf16_f16;   break;
+                    case HTP_TYPE_Q1_0: grctx.compute_flat = get_rows_flat_q1_0_f16;   break;
+                    case HTP_TYPE_Q2_0: grctx.compute_flat = get_rows_flat_q2_0_f16;   break;
+                    case HTP_TYPE_Q8_0: grctx.compute_flat = get_rows_flat_q8_0_f16;   break;
+                    case HTP_TYPE_Q4_0: grctx.compute_flat = get_rows_flat_q4_0_f16;   break;
+                    case HTP_TYPE_Q4_K: grctx.compute_flat = get_rows_flat_q4_k_f16;   break;
+                    case HTP_TYPE_Q5_K: grctx.compute_flat = get_rows_flat_q5_k_f16;   break;
+                    case HTP_TYPE_Q6_K: grctx.compute_flat = get_rows_flat_q6_k_f16;   break;
+                    default:            return HTP_STATUS_NO_SUPPORT;
+                }
+            } else {
+                switch (octx->src[0]->type) {
+                    case HTP_TYPE_F16:  grctx.compute_flat = hvx_dequantize_row_flat_f16_f32;  break;
+                    case HTP_TYPE_BF16: grctx.compute_flat = hvx_dequantize_row_flat_bf16_f32; break;
+                    case HTP_TYPE_Q1_0: grctx.compute_flat = hvx_dequantize_row_flat_q1_0_f32; break;
+                    case HTP_TYPE_Q2_0: grctx.compute_flat = hvx_dequantize_row_flat_q2_0_f32; break;
+                    case HTP_TYPE_Q8_0: grctx.compute_flat = hvx_dequantize_row_flat_q8_0_f32; break;
+                    case HTP_TYPE_Q4_0: grctx.compute_flat = hvx_dequantize_row_flat_q4_0_f32; break;
+                    case HTP_TYPE_Q4_K: grctx.compute_flat = hvx_dequantize_row_flat_q4_k_f32; break;
+                    case HTP_TYPE_Q5_K: grctx.compute_flat = hvx_dequantize_row_flat_q5_k_f32; break;
+                    case HTP_TYPE_Q6_K: grctx.compute_flat = hvx_dequantize_row_flat_q6_k_f32; break;
+                    default:            return HTP_STATUS_NO_SUPPORT;
+                }
             }
             q_func = get_rows_thread_flat;
             break;
