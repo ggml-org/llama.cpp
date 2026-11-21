@@ -1,0 +1,139 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer K {float16_t data_k[];};
+layout (binding = 1) readonly buffer V {float16_t data_v[];};
+layout (binding = 2) readonly buffer M {float16_t data_m[];};
+layout (binding = 3) writeonly buffer S {float data_s[];};
+layout (binding = 4) writeonly buffer A {float data_a[];};
+
+#include "fa_rt_common.glsl"
+
+shared uint invalid;
+shared uint count;
+shared vec3 center_sh;
+shared float values_sh[128];
+shared vec3 centers_sh[128];
+shared uint counts_sh[128];
+
+void main() {
+    const uint page = gl_WorkGroupID.x;
+    const uint head = gl_WorkGroupID.y;
+    const uint tid = gl_LocalInvocationIndex;
+    const uint begin = page * p.page_size;
+    const uint end = min(begin + p.page_size, p.KV);
+    const uint base = summary_offset(head, page);
+    const uint k_base = head * p.k_head_stride;
+    const uint v_base = head * p.v_head_stride;
+    if (tid == 0) {
+        invalid = 0;
+        count = 0;
+        center_sh = vec3(0.0);
+        if (p.light_summary == 0) {
+            for (uint row = begin; row < end; ++row) {
+                const float m = float(data_m[row]);
+                if (m == 0.0) {
+                    ++count;
+                    const vec3 k = key_projection(k_base + row * p.k_stride);
+                    if (is_finite(k)) {
+                        center_sh += k;
+                    } else {
+                        invalid = 1;
+                    }
+                } else if (!isinf(m) || m > 0.0) {
+                    invalid = 1;
+                }
+            }
+        }
+    }
+    barrier();
+
+    if (p.light_summary != 0) {
+        vec3 center = vec3(0.0);
+        uint rows = 0;
+        for (uint row = begin + tid; row < end; row += gl_WorkGroupSize.x) {
+            const float m = float(data_m[row]);
+            if (m == 0.0) {
+                const vec3 k = key_projection(k_base + row * p.k_stride);
+                ++rows;
+                if (is_finite(k)) { center += k; }
+                else { atomicOr(invalid, 1); }
+            } else if (!isinf(m) || m > 0.0) { atomicOr(invalid, 1); }
+        }
+        centers_sh[tid] = center;
+        counts_sh[tid] = rows;
+        barrier();
+        for (uint offset = gl_WorkGroupSize.x / 2; offset != 0; offset >>= 1) {
+            if (tid < offset) {
+                centers_sh[tid] += centers_sh[tid + offset];
+                counts_sh[tid] += counts_sh[tid + offset];
+            }
+            barrier();
+        }
+        if (tid == 0) { center_sh = centers_sh[0]; count = counts_sh[0]; }
+        barrier();
+    }
+
+    if (p.light_summary == 0) {
+        for (uint dim = tid; dim < p.HSK; dim += 128) {
+            float lo = FLOAT_MAX;
+            float hi = -FLOAT_MAX;
+            for (uint row = begin; row < end; ++row) {
+                if (float(data_m[row]) != 0.0) {
+                    continue;
+                }
+                const float k = float(data_k[k_base + row * p.k_stride + dim]);
+                if (!is_finite(k)) {
+                    atomicOr(invalid, 1);
+                    continue;
+                }
+                lo = min(lo, k);
+                hi = max(hi, k);
+            }
+            data_s[base + 4 + dim] = count != 0 ? lo : 0.0;
+            data_s[base + 4 + p.HSK + dim] = count != 0 ? hi : 0.0;
+        }
+
+        float maximum = 0.0;
+        for (uint dim = tid; dim < p.HSV; dim += 128) {
+            for (uint row = begin; row < end; ++row) {
+                if (float(data_m[row]) != 0.0) {
+                    continue;
+                }
+                const float v = float(data_v[v_base + row * p.v_stride + dim]);
+                if (!is_finite(v)) {
+                    atomicOr(invalid, 1);
+                } else {
+                    maximum = max(maximum, abs(v));
+                }
+            }
+        }
+        values_sh[tid] = maximum;
+        barrier();
+        for (uint offset = 64; offset != 0; offset >>= 1) {
+            if (tid < offset) {
+                values_sh[tid] = max(values_sh[tid], values_sh[tid + offset]);
+            }
+            barrier();
+        }
+
+    }
+    if (tid == 0) {
+        const vec3 direction = write_summary(base, count, p.light_summary != 0 ? 1.0 : values_sh[0], invalid != 0, center_sh);
+
+        if (p.unit_box != 0) {
+            return;
+        }
+        const uint a_base = (head * p.pages + page) * 6;
+        data_a[a_base] = direction.x - p.padding;
+        data_a[a_base + 1] = direction.y - p.padding;
+        data_a[a_base + 2] = direction.z - p.padding;
+        data_a[a_base + 3] = direction.x + p.padding;
+        data_a[a_base + 4] = direction.y + p.padding;
+        data_a[a_base + 5] = direction.z + p.padding;
+    }
+}

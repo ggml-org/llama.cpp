@@ -877,6 +877,8 @@ void process_shaders() {
         string_to_spv("rms_norm_set_rows_f32_f16" + suffix, "rms_norm.comp", merge_maps({{"D_TYPE", "float16_t"}, {"RMS_NORM_SET_ROWS_FUSION", "1"}}, rms_dict)); // keep rms_dict last so 'merge_maps' overwrites the value for key 'D_TYPE'
         string_to_spv("rms_norm_mul_rope_f32_f32" + suffix, "rms_norm.comp", merge_maps(rms_dict, {{"ROPE_D_TYPE", "float"}, {"RMS_NORM_ROPE_FUSION", "1"}}));
         string_to_spv("rms_norm_mul_rope_f32_f16" + suffix, "rms_norm.comp", merge_maps(rms_dict, {{"ROPE_D_TYPE", "float16_t"}, {"RMS_NORM_ROPE_FUSION", "1"}}));
+        string_to_spv("rms_norm_set_rows_rt" + suffix, "rms_norm.comp", merge_maps(rms_dict, {{"D_TYPE", "float16_t"}, {"RMS_NORM_SET_ROWS_FUSION", "1"}, {"RT_KV_BINDING", "4"}}));
+        string_to_spv("rms_norm_mul_rope_rt" + suffix, "rms_norm.comp", merge_maps(rms_dict, {{"ROPE_D_TYPE", "float16_t"}, {"RMS_NORM_ROPE_FUSION", "1"}, {"RT_KV_BINDING", "7"}}));
     }
     string_to_spv("rms_norm_mul_add_partials_f32", "rms_norm_partials.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}, {"RMS_NORM_ADD_FUSION", "1"}}));
     string_to_spv("rms_norm_partials_f32", "rms_norm_partials.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}}));
@@ -916,6 +918,11 @@ void process_shaders() {
         for (std::string dst : {"f32", "f16", "bf16", "q1_0", "q2_0", "q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "iq4_nl"}) {
             string_to_spv("set_rows_" + std::string(src.first) + "_" + dst + "_i32", "copy_to_quant.comp", {{"SET_ROWS", "1"}, {"DATA_A_" + to_uppercase(dst), "1"}, {"B_TYPE", "uint"}, {"B_SIZE", "32"}, {"S_TYPE", src.second}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
             string_to_spv("set_rows_" + std::string(src.first) + "_" + dst + "_i64", "copy_to_quant.comp", {{"SET_ROWS", "1"}, {"DATA_A_" + to_uppercase(dst), "1"}, {"B_TYPE", "uvec2"}, {"B_SIZE", "64"}, {"S_TYPE", src.second}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
+            if (dst == "f16") {
+                for (bool i64 : {false, true}) {
+                    string_to_spv("set_rows_rt_" + std::string(src.first) + (i64 ? "_i64" : "_i32"), "copy_to_quant.comp", {{"SET_ROWS", "1"}, {"DATA_A_F16", "1"}, {"B_TYPE", i64 ? "uvec2" : "uint"}, {"B_SIZE", i64 ? "64" : "32"}, {"S_TYPE", src.second}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}, {"RT_KV_BINDING", "3"}});
+                }
+            }
         }
     }
 
@@ -963,6 +970,10 @@ void process_shaders() {
 #endif
 
     string_to_spv("fa_sparse_compact", "flash_attn_sparse_compact.comp", {});
+    string_to_spv("fa_rt_summary", "fa_rt_summary.comp", {});
+    string_to_spv("fa_rt_select", "fa_rt_select.comp", {});
+    string_to_spv("fa_rt_select_subgroup", "fa_rt_select.comp", {{"USE_SUBGROUPS", "1"}});
+    string_to_spv("fa_rt_select_unit", "fa_rt_select.comp", {{"USE_SUBGROUPS", "1"}, {"UNIT_BOX", "1"}});
     string_to_spv("fa_sparse_compact_subgroup", "flash_attn_sparse_compact.comp", {{"USE_SUBGROUPS", "1"}});
 
     string_to_spv("quantize_q8_1", "quantize_q8_1.comp", {});
@@ -1046,6 +1057,11 @@ void process_shaders() {
     string_to_spv("soft_max_large2_f32_f16", "soft_max_large2.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"B_TYPE", "float16_t"}, {"D_TYPE", "float"}}));
     string_to_spv("soft_max_large3_f32_f16", "soft_max_large3.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"B_TYPE", "float16_t"}, {"D_TYPE", "float"}}));
 
+    for (std::string mode : {"norm", "neox", "multi"}) {
+        for (bool f16 : {false, true}) {
+            string_to_spv("rope_rt_" + mode + (f16 ? "_f16" : "_f32"), "rope_" + mode + ".comp", {{"A_TYPE", f16 ? "float16_t" : "float"}, {"ROPE_D_TYPE", "float16_t"}, {"RT_KV_BINDING", "5"}});
+        }
+    }
     string_to_spv("rope_norm_f32", "rope_norm.comp", {{"A_TYPE", "float"}, {"ROPE_D_TYPE", "float"}});
     string_to_spv("rope_norm_f16", "rope_norm.comp", {{"A_TYPE", "float16_t"}, {"ROPE_D_TYPE", "float16_t"}});
     string_to_spv("rope_norm_f32_f16", "rope_norm.comp", {{"A_TYPE", "float"}, {"ROPE_D_TYPE", "float16_t"}});

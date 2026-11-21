@@ -9247,6 +9247,76 @@ struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     }
 };
 
+// Coherent K pages with different winning pages within each GQA group.
+struct test_flash_attn_ext_kv_pages : public test_flash_attn_ext {
+    enum mask_kind { MASK_KIND_NONE, MASK_KIND_ZERO, MASK_KIND_CAUSAL, MASK_KIND_BIAS };
+
+    static constexpr int64_t page_size = 32;
+    const mask_kind mask_mode;
+    const bool peaked;
+    const bool historical;
+    const float query_scale;
+
+    test_flash_attn_ext_kv_pages(int64_t hs, int64_t gqa, int64_t kv, mask_kind mask_mode, bool kv_view = true, bool peaked = true, bool historical = false, float query_scale = 4.0f, int64_t heads = 2)
+        : test_flash_attn_ext(hs, hs, heads, {gqa, 1}, kv, 1, mask_mode != MASK_KIND_NONE, false, 0, 0, GGML_PREC_F32,
+                              GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, kv_view), mask_mode(mask_mode), peaked(peaked), historical(historical), query_scale(query_scale) {}
+
+    std::string vars() override {
+        return test_flash_attn_ext::vars() + ",kv_pages=1,mask_mode=" + std::to_string(mask_mode) + ",peaked=" + std::to_string(peaked) + ",historical=" + std::to_string(historical) + ",query_scale=" + std::to_string(query_scale);
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_flash_attn_ext::initialize_tensors(ctx);
+
+        const int64_t n_visible = kv - (mask_mode >= MASK_KIND_CAUSAL ? 17 : 0);
+        const int64_t n_pages = (n_visible + page_size - 1)/page_size;
+        std::vector<int64_t> hot_pages(nh);
+        for (int64_t h = 0; h < nh; ++h) {
+            hot_pages[h] = h % 2 == 0 ? (historical ? n_pages/3 : n_pages - 1) : (historical ? n_pages/2 : n_pages/3);
+        }
+
+        ggml_tensor * q = ggml_get_tensor(ctx, "q");
+        std::vector<float> q_data(ggml_nelements(q));
+        for (int64_t h = 0; h < q->ne[2]; ++h) {
+            const float sign = h % nr23[0] < (nr23[0] + 1)/2 ? 1.0f : -1.0f;
+            for (int64_t d = 0; d < hsk; ++d) {
+                const float direction = historical && d >= hsk/2 ? -sign : sign;
+                q_data[h*hsk + d] = peaked ? direction * query_scale * (1.0f + 0.0078125f*(d % 3)) : 0.0f;
+            }
+        }
+        ggml_backend_tensor_set(q, q_data.data(), 0, q_data.size()*sizeof(float));
+
+        for (const char * name : {"k", "v"}) {
+            ggml_tensor * t = ggml_get_tensor(ctx, name);
+            std::vector<ggml_fp16_t> data(ggml_nbytes(t)/sizeof(ggml_fp16_t));
+            for (int64_t h = 0; h < nh; ++h) {
+                const int64_t other_page = historical ? hot_pages[h]/2 : (hot_pages[h] + n_pages/2) % n_pages;
+                for (int64_t r = 0; r < kv; ++r) {
+                    for (int64_t d = 0; d < hsk; ++d) {
+                        const size_t i = (h*t->nb[2] + r*t->nb[1] + d*t->nb[0])/sizeof(ggml_fp16_t);
+                        const float direction = historical && d >= hsk/2 ? -1.0f : 1.0f;
+                        const float value = name[0] == 'k' ? (r/page_size == hot_pages[h] ? direction : r/page_size == other_page ? -direction : historical ? -1.0f : 0.0f)
+                                                          : 0.0625f*((d + 3*r + 5*h) % 29 - 14);
+                        data[i] = ggml_fp32_to_fp16(value);
+                    }
+                }
+            }
+            ggml_backend_tensor_set(t, data.data(), 0, data.size()*sizeof(ggml_fp16_t));
+        }
+
+        if (mask) {
+            ggml_tensor * m = ggml_get_tensor(ctx, "m");
+            std::vector<ggml_fp16_t> data(kv);
+            for (int64_t r = 0; r < kv; ++r) {
+                // A finite bias must keep the dense path even when the attention is peaked.
+                const float value = r >= n_visible ? -INFINITY : mask_mode == MASK_KIND_BIAS && r == hot_pages[0]*page_size ? 3.0f : 0.0f;
+                data[r] = ggml_fp32_to_fp16(value);
+            }
+            ggml_backend_tensor_set(m, data.data(), 0, data.size()*sizeof(ggml_fp16_t));
+        }
+    }
+};
+
 // mask with 2 heads and 2 batches, broadcast over the Q heads and batches
 struct test_flash_attn_ext_mask_bcast : public test_flash_attn_ext {
     using test_flash_attn_ext::test_flash_attn_ext;
@@ -9268,6 +9338,88 @@ struct test_flash_attn_ext_mask_bcast : public test_flash_attn_ext {
         ggml_set_name(out, "out");
 
         return out;
+    }
+};
+
+// Reuse page summaries after a K cache update between attention calls.
+struct test_flash_attn_ext_kv_update : public test_case {
+    const int64_t hs;
+    const int64_t gqa;
+    const ggml_type index_type;
+    std::vector<ggml_tensor *> outputs;
+
+    test_flash_attn_ext_kv_update(int64_t hs, int64_t gqa, ggml_type index_type)
+        : hs(hs), gqa(gqa), index_type(index_type) {}
+
+    std::string vars() override {
+        return VARS_TO_STR3(hs, gqa, index_type);
+    }
+
+    std::string op_desc(ggml_tensor *) override { return "FLASH_ATTN_EXT(kv_update)"; }
+    bool run_whole_graph() override { return true; }
+    std::vector<ggml_tensor *> fusion_test_nodes() override { return outputs; }
+    double max_nmse_err() override { return 5e-4; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, hs, 1, 2*gqa, 1);
+        ggml_set_name(q, "q");
+        ggml_tensor * mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 1024, 1);
+        ggml_set_name(mask, "mask");
+        ggml_tensor * caches[2][2];
+        auto flash_attn = [&](ggml_tensor * k, ggml_tensor * v) {
+            k = ggml_permute(ctx, ggml_reshape_3d(ctx, k, hs, 2, 1024), 0, 2, 1, 3);
+            v = ggml_permute(ctx, ggml_reshape_3d(ctx, v, hs, 2, 1024), 0, 2, 1, 3);
+            ggml_tensor * out = ggml_flash_attn_ext(ctx, q, k, v, mask, 1.0f/sqrtf(hs), 0.0f, 0.0f);
+            ggml_prec_set_acc(out, GGML_PREC_F32);
+            return out;
+        };
+        outputs.resize(3);
+        for (int layer = 0; layer < 2; ++layer) {
+            for (int kv = 0; kv < 2; ++kv) {
+                caches[layer][kv] = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 2*hs, 1024);
+                ggml_format_name(caches[layer][kv], "%c%d", kv == 0 ? 'k' : 'v', layer);
+            }
+            outputs[layer] = flash_attn(caches[layer][0], caches[layer][1]);
+            ggml_build_forward_expand(gf, outputs[layer]);
+        }
+        ggml_tensor * rows = ggml_new_tensor_1d(ctx, index_type, 32);
+        ggml_set_name(rows, "rows");
+        ggml_tensor * values = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2*hs, 32);
+        ggml_set_name(values, "values");
+        ggml_tensor * updated = ggml_set_rows(ctx, caches[0][0], values, rows);
+        ggml_build_forward_expand(gf, updated);
+        outputs[2] = flash_attn(updated, caches[0][1]);
+        return outputs[2];
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->view_src || t->op != GGML_OP_NONE) {
+                continue;
+            }
+            if (strcmp(t->name, "rows") == 0) {
+                std::array<int64_t, 32> indices;
+                std::array<int32_t, 32> indices32;
+                for (int i = 0; i < 32; ++i) {
+                    indices[i] = indices32[i] = 256 + i;
+                }
+                ggml_backend_tensor_set(t, index_type == GGML_TYPE_I64 ? (void *) indices.data() : (void *) indices32.data(), 0, ggml_nbytes(t));
+            } else if (t->type == GGML_TYPE_F16 && (t->name[0] == 'k' || t->name[0] == 'v')) {
+                std::vector<ggml_fp16_t> data(ggml_nelements(t));
+                const int hot_page = t->name[1] == '0' ? 0 : 16;
+                for (int64_t i = 0; i < ggml_nelements(t); ++i) {
+                    const bool hot = i / (2*hs) / 32 == hot_page;
+                    data[i] = ggml_fp32_to_fp16(t->name[0] == 'k' ? (hot ? 4.0f : -4.0f) : (t->name[1] == '0' ? float(!hot) : 2.0f*float(hot)));
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+            } else if (strcmp(t->name, "mask") == 0) {
+                init_tensor_uniform(t, 0.0f, 0.0f);
+            } else if (strcmp(t->name, "values") == 0) {
+                init_tensor_uniform(t, 4.0f, 4.0f);
+            } else {
+                init_tensor_uniform(t, 1.0f, 1.0f);
+            }
+        }
     }
 };
 
@@ -13185,6 +13337,42 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+
+    for (int64_t hs : { 64, 256 }) {
+        for (int64_t gqa : { 1, 4 }) {
+            for (ggml_type index_type : { GGML_TYPE_I32, GGML_TYPE_I64 }) {
+                test_cases.emplace_back(new test_flash_attn_ext_kv_update(hs, gqa, index_type));
+            }
+        }
+    }
+
+    // Batch-one page selection, partial pages, GQA union, and dense fallbacks.
+    for (int hs : { 128, 256, }) {
+        for (int gqa : { 1, 4, }) {
+            for (int kv : { 513, 1057, 2048, 4096, }) {
+                for (auto mask_mode : { test_flash_attn_ext_kv_pages::MASK_KIND_ZERO,
+                                        test_flash_attn_ext_kv_pages::MASK_KIND_CAUSAL,
+                                        test_flash_attn_ext_kv_pages::MASK_KIND_BIAS, }) {
+                    test_cases.emplace_back(new test_flash_attn_ext_kv_pages(hs, gqa, kv, mask_mode, kv != 1057));
+                }
+            }
+            test_cases.emplace_back(new test_flash_attn_ext_kv_pages(hs, gqa, 1057, test_flash_attn_ext_kv_pages::MASK_KIND_NONE));
+            test_cases.emplace_back(new test_flash_attn_ext_kv_pages(hs, gqa, 1057, test_flash_attn_ext_kv_pages::MASK_KIND_CAUSAL, true, false));
+            // Retrieve middle hot pages and prune nonzero cold pages outside the recent window.
+            test_cases.emplace_back(new test_flash_attn_ext_kv_pages(hs, gqa, 1057, test_flash_attn_ext_kv_pages::MASK_KIND_ZERO, true, true, true));
+            test_cases.emplace_back(new test_flash_attn_ext_kv_pages(hs, gqa, 4096, test_flash_attn_ext_kv_pages::MASK_KIND_CAUSAL, true, true, true));
+            // Nearly uniform attention exposes unmasked padding in a partial last block.
+            test_cases.emplace_back(new test_flash_attn_ext_kv_pages(hs, gqa, 513, test_flash_attn_ext_kv_pages::MASK_KIND_ZERO, true, true, false, 0.0001f));
+        }
+        // Large GQA and KV layouts exercise every query bitmap, including the last page.
+        test_cases.emplace_back(new test_flash_attn_ext_kv_pages(hs, 8, 32768, test_flash_attn_ext_kv_pages::MASK_KIND_CAUSAL, true, true, true));
+    }
+
+    // Derive selector resources from the attention tensors and KV allocation.
+    test_cases.emplace_back(new test_flash_attn_ext_kv_pages(512, 4, 2048, test_flash_attn_ext_kv_pages::MASK_KIND_CAUSAL));
+    test_cases.emplace_back(new test_flash_attn_ext_kv_pages(128, 4, 2048, test_flash_attn_ext_kv_pages::MASK_KIND_CAUSAL, true, true, true, 4.0f, 16));
+    test_cases.emplace_back(new test_flash_attn_ext_kv_pages(128, 16, 2048, test_flash_attn_ext_kv_pages::MASK_KIND_CAUSAL));
+    test_cases.emplace_back(new test_flash_attn_ext_kv_pages(128, 4, 131329, test_flash_attn_ext_kv_pages::MASK_KIND_CAUSAL, true, true, true));
 
     for (int hsk : { 40, 64, 72, 80, 96, 128, 192, 256, 320, 512, 576 }) {
         for (int hsv : { 40, 64, 72, 80, 96, 128, 192, 256, 512 }) {

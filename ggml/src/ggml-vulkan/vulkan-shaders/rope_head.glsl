@@ -3,6 +3,7 @@
 #extension GL_EXT_shader_16bit_storage : require
 
 #include "rope_params.glsl"
+#include "rt_kv_dirty.glsl"
 
 layout(local_size_x = 1, local_size_y = 256, local_size_z = 1) in;
 

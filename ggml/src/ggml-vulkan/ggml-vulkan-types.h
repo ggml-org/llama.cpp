@@ -759,6 +759,7 @@ struct vk_device_struct {
     bool multi_add;
     bool shader_int64;
     bool buffer_device_address;
+    bool rt_kv {};
     bool vulkan_memory_model;
     bool shader_clock;
 
@@ -920,6 +921,7 @@ struct vk_device_struct {
     // [src0 0=fp32,1=fp16][dst]
     vk_pipeline pipeline_set_rows_i32[2][GGML_TYPE_COUNT];
     vk_pipeline pipeline_set_rows_i64[2][GGML_TYPE_COUNT];
+    vk_pipeline pipeline_set_rows_rt[2][2];
     vk_pipeline pipeline_norm_f32;
     vk_pipeline pipeline_group_norm_f32;
     // [src/dst 0=fp32,1=bf16][mul]
@@ -930,10 +932,13 @@ struct vk_device_struct {
     vk_pipeline pipeline_rms_norm_mul_add_mul_partials_f32;
     vk_pipeline pipeline_rms_norm_set_rows_f32_f32;
     vk_pipeline pipeline_rms_norm_set_rows_f32_f16;
+    vk_pipeline pipeline_rms_norm_set_rows_rt;
     vk_pipeline pipeline_rms_norm_partials_f32;
     vk_pipeline pipeline_rms_norm_mul_partials_f32;
     std::array<vk_pipeline, 3> pipeline_rms_norm_mul_rope_f32_f32;
     std::array<vk_pipeline, 3> pipeline_rms_norm_mul_rope_f32_f16;
+    std::array<vk_pipeline, 3> pipeline_rms_norm_mul_rope_rt;
+    vk_pipeline pipeline_rope_rt[3][2];
     vk_pipeline pipeline_rms_norm_back_f32;
     vk_pipeline pipeline_l2_norm_f32;
 
@@ -1100,6 +1105,8 @@ struct vk_buffer_struct {
     void * ptr;
     size_t size = 0;
     vk::DeviceAddress bda_addr {};
+    std::atomic<uint64_t> rt_kv_generation {0};
+    bool rt_kv_source {};
 
     vk_device device;
 
@@ -1299,10 +1306,13 @@ class vk_perf_logger {
     uint32_t print_count {};
 };
 
+struct vk_rt_kv_context;
+
 struct ggml_backend_vk_context {
     std::string name;
 
     vk_device device;
+    std::shared_ptr<vk_rt_kv_context> rt_kv;
 
     // Workaround for drivers moving VRAM contents off the GPU when idle
     std::promise<void> keepalive_stop;

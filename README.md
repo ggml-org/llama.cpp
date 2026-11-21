@@ -76,6 +76,7 @@ llama serve -hf ggml-org/Qwen3.5-0.8B-GGUF
 #### Development
 
 - [How to build](docs/build.md)
+- [Vulkan RT Core-assisted KV filtering](docs/backend/vulkan/README.md)
 - [Running on Docker](docs/docker.md)
 - [Build on Android](docs/android.md)
 - [Multi-GPU usage](docs/multi-gpu.md)
