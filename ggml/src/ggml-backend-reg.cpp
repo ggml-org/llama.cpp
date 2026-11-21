@@ -66,6 +66,10 @@
 #include "ggml-blas.h"
 #endif
 
+#ifdef GGML_USE_ANE
+#include "ggml-ane.h"
+#endif
+
 #ifdef GGML_USE_RPC
 #include "ggml-rpc.h"
 #endif
@@ -155,6 +159,9 @@ struct ggml_backend_registry {
 #endif
 #ifdef GGML_USE_CANN
         register_backend(ggml_backend_cann_reg());
+#endif
+#ifdef GGML_USE_ANE
+        register_backend(ggml_backend_ane_reg());
 #endif
 #ifdef GGML_USE_BLAS
         register_backend(ggml_backend_blas_reg());
@@ -582,6 +589,7 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     ggml_backend_load_best("cuda",     silent, dir_path);
     ggml_backend_load_best("hip",      silent, dir_path);
     ggml_backend_load_best("metal",    silent, dir_path);
+    ggml_backend_load_best("ane",      silent, dir_path);
     ggml_backend_load_best("rpc",      silent, dir_path);
     ggml_backend_load_best("sycl",     silent, dir_path);
     ggml_backend_load_best("vulkan",   silent, dir_path);
