@@ -5176,36 +5176,54 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
         min_compute_capability = ggml_sycl_info().devices[ctx.device].cc;
     }
 
+    bool use_dequantize_mul_mat_vec = false;
+    bool use_mul_mat_vec_q          = false;
+    bool use_mul_mat_q              = false;
+
     // check data types and tensor shapes for custom matrix multiplication kernels:
-    bool use_dequantize_mul_mat_vec = can_use_dequantize_mul_mat_vec(src0, src1, dst);
-    if (src1->ne[1] == 1 && ggml_sycl_xmx_min_cols(src0->type) == 1 && can_use_xmx_batch(ctx.device, src0, src1)) {
-        use_dequantize_mul_mat_vec = false;
-    }
+    const auto choose = [&]() {
+        use_dequantize_mul_mat_vec = can_use_dequantize_mul_mat_vec(src0, src1, dst);
+        if (src1->ne[1] == 1 && ggml_sycl_xmx_min_cols(src0->type) == 1 && can_use_xmx_batch(ctx.device, src0, src1)) {
+            use_dequantize_mul_mat_vec = false;
+        }
 #ifdef GGML_SYCL_F16
-    // dmmv may convert src1 to f16 in this build [TAG_GGML_PREC]
-    use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && ggml_sycl_src1_f16_ok(dst);
+        // dmmv may convert src1 to f16 in this build [TAG_GGML_PREC]
+        use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && ggml_sycl_src1_f16_ok(dst);
 #endif
 
-    bool use_mul_mat_vec_q = can_use_mul_mat_vec_q(ctx.device, src0, src1, dst);
+        use_mul_mat_vec_q = can_use_mul_mat_vec_q(ctx.device, src0, src1, dst);
 
-    bool use_mul_mat_q = can_use_mul_mat_q(src0, src1, dst);
+        use_mul_mat_q = can_use_mul_mat_q(src0, src1, dst);
 
-    // When reorder is enabled, both ESIMD, MMVQ and DMMV kernels may be used. For
-    // best performance use ESIMD when supported, followed by MMVQ, and finally DMMV.
-    // But the reordered ESIMD path cannot be used without reordered MMVQ. A later
-    // multi-token call (ne[1] in 2..8) will take the MMVQ path and it would read the
-    // reordered bytes as if they were still the unreordered layout.
+        // When reorder is enabled, both ESIMD, MMVQ and DMMV kernels may be used. For
+        // best performance use ESIMD when supported, followed by MMVQ, and finally DMMV.
+        // But the reordered ESIMD path cannot be used without reordered MMVQ. A later
+        // multi-token call (ne[1] in 2..8) will take the MMVQ path and it would read the
+        // reordered bytes as if they were still the unreordered layout.
 
-    if (!g_ggml_sycl_prioritize_dmmv && ((should_reorder_tensor(ctx, dst) &&
-                                          ggml_sycl_supports_reorder_mmvq(src0->type)))) {
-        bool use = g_ggml_sycl_enable_esimd && ggml_sycl_supports_reorder_esimd(src0->type);
-        // Arc770 get benefit with Q4_0 by skipping MMVQ path
-        if (!(ggml_sycl_info().devices[ctx.device].hw_info.arch ==
-                    gpu_arch::intel_gpu_acm_g10 &&
-                src0->type == GGML_TYPE_Q4_0)) {
-            use = use || !use_mul_mat_vec_q;
+        if (!g_ggml_sycl_prioritize_dmmv && ((should_reorder_tensor(ctx, dst) &&
+                                              ggml_sycl_supports_reorder_mmvq(src0->type)))) {
+            bool use = g_ggml_sycl_enable_esimd && ggml_sycl_supports_reorder_esimd(src0->type);
+            // Arc770 get benefit with Q4_0 by skipping MMVQ path
+            if (!(ggml_sycl_info().devices[ctx.device].hw_info.arch ==
+                        gpu_arch::intel_gpu_acm_g10 &&
+                    src0->type == GGML_TYPE_Q4_0)) {
+                use = use || !use_mul_mat_vec_q;
+            }
+            use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && use;
         }
-        use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && use;
+    };
+    choose();
+
+    // The first mat-vec of a weight reorders it in the branch below. Do that here and choose again, so the first call
+    // takes the kernel of the later ones: the XMX kernels only take reordered weights, and a different kernel on the
+    // first call makes the result depend on whether the weight was used before.
+    const auto * extra0 = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
+    if (!split && extra0 && !extra0->optimized_feature.reorder && (use_dequantize_mul_mat_vec || use_mul_mat_vec_q)) {
+        opt_for_reorder(&ctx, src0, src1, dst, use_dequantize_mul_mat_vec ? mul_mat_algo::DMMV : mul_mat_algo::MMVQ);
+        if (extra0->optimized_feature.reorder) {
+            choose();
+        }
     }
 
     if (!split && src0->type == GGML_TYPE_F16 && ggml_is_permuted(src0) && ggml_is_permuted(src1) && src1->ne[1] == 1) {
