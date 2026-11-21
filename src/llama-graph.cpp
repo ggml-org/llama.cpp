@@ -278,7 +278,7 @@ void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
         }
 
         // input is always [t, y, x, z]
-        // token entries are expanded by the batch to [p, p, p, 0]
+        // token entries are expanded by the batch to [p, p, p, p]
         GGML_ASSERT(n_pos_per_embd == 4);
 
         // slot index per section, slots are t = 0, y = 1, x = 2, z = 3
