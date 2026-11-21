@@ -630,7 +630,7 @@ public:
     ggml_tensor * k_idxs        = nullptr; // I64     [n_tokens]
     ggml_tensor * pool_cells    = nullptr; // I32     [n_pool]         cell caching each pool's pooled key
     ggml_tensor * pool_idxs     = nullptr; // I32     [kpool, n_pool]  member cells per pool
-    ggml_tensor * pool_mask     = nullptr; // F32/F16 [n_pool, n_tokens]
+    ggml_tensor * pool_mask     = nullptr; // F16 [n_pool, n_tokens]
     ggml_tensor * tail_idxs     = nullptr; // I32     [kpool, n_tokens] when the current group is forced
     ggml_tensor * sel_mask      = nullptr; // F32     [n_sel, 1, 1, n_tokens]
     ggml_tensor * new_pool_idxs = nullptr; // I32     [kpool*n_new]
@@ -652,14 +652,12 @@ llama_model_hy_v4_flash::llm_graph_input_kpool * llama_model_hy_v4_flash::graph:
     // at least one (dummy) entry, so the graph shape does not change every kpool tokens
     const uint32_t n_new  = std::max(mctx_idx->get_n_kpool_new(), 1u);
 
-    const auto type_mask = cparams.fused_lid ? GGML_TYPE_F16 : GGML_TYPE_F32;
-
     auto inp = std::make_unique<llm_graph_input_kpool>(mctx_idx);
 
     inp->k_idxs     = mctx_lid->build_input_k_idxs(ctx0, ubatch);
     inp->pool_cells = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pool);
     inp->pool_idxs  = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, kpool, n_pool);
-    inp->pool_mask  = ggml_new_tensor_2d(ctx0, type_mask, n_pool, n_tokens);
+    inp->pool_mask  = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, n_pool, n_tokens);
     inp->tail_idxs  = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, hparams.indexer_kpool_select_tail ? kpool : kpool - 1, n_tokens);
     ggml_set_input(inp->pool_cells);
     ggml_set_input(inp->pool_idxs);
@@ -793,22 +791,7 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_kpool_select(
     weights = ggml_scale(ctx0, weights, 1.0f / sqrtf(float(n_idx * n_idx_head)));
     cb(weights, "indexer_weights", il);
 
-    ggml_tensor * score = nullptr;
-    if (cparams.fused_lid) {
-        score = ggml_lightning_indexer(ctx0, iq, pooled, weights, inp_kpool->pool_mask);
-        res->add_fused_node({LLM_FUSED_OP_LIGHTNING_INDEXER, score, il});
-    } else {
-        ggml_tensor * q_p = ggml_permute(ctx0, iq, 0, 2, 1, 3);     // [n_idx, n_tokens, n_head]
-        ggml_tensor * k_p = ggml_permute(ctx0, pooled, 0, 2, 1, 3); // [n_idx, n_pool, 1]
-
-        ggml_tensor * kq = ggml_mul_mat(ctx0, k_p, q_p);            // [n_pool, n_tokens, n_head]
-        kq = ggml_cont(ctx0, ggml_permute(ctx0, kq, 2, 1, 0, 3));   // [n_head, n_tokens, n_pool]
-        score = ggml_relu(ctx0, kq);
-        score = ggml_mul(ctx0, score, weights);
-        score = ggml_sum_rows(ctx0, score);                          // [1, n_tokens, n_pool]
-        score = ggml_cont(ctx0, ggml_permute(ctx0, score, 2, 1, 0, 3)); // [n_pool, n_tokens, 1]
-        score = ggml_add(ctx0, score, inp_kpool->pool_mask);
-    }
+    ggml_tensor * score = ggml_lightning_indexer(ctx0, iq, pooled, weights, inp_kpool->pool_mask);
     cb(score, "indexer_score", il);
 
     const int64_t n_top_pool = std::min<int64_t>(n_pool, hparams.indexer_top_k / kpool - hparams.indexer_kpool_select_tail);
