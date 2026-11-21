@@ -1265,17 +1265,17 @@ void llama_memory_recurrent::state_clear(llama_seq_id seq_id, uint32_t cell_head
     for (uint32_t il = 0; il < n_layer; ++il) {
         if (r_l[il] != nullptr) {
             const size_t r_size_row = ggml_row_size(r_l[il]->type, hparams.n_embd_r());
-            llama_clear_tensor_data(r_l[il], cell_head * r_size_row, cell_count * r_size_row);
+            ggml_backend_tensor_memset(r_l[il], 0, cell_head * r_size_row, cell_count * r_size_row);
         }
 
         if (s_l[il] != nullptr) {
             const size_t s_size_row = ggml_row_size(s_l[il]->type, hparams.n_embd_s());
-            llama_clear_tensor_data(s_l[il], cell_head * s_size_row, cell_count * s_size_row);
+            ggml_backend_tensor_memset(s_l[il], 0, cell_head * s_size_row, cell_count * s_size_row);
         }
 
         if (p_l[il] != nullptr) {
             const size_t p_size_row = ggml_row_size(p_l[il]->type, hparams.ple_conv_state());
-            llama_clear_tensor_data(p_l[il], cell_head * p_size_row, cell_count * p_size_row);
+            ggml_backend_tensor_memset(p_l[il], 0, cell_head * p_size_row, cell_count * p_size_row);
         }
     }
 }
