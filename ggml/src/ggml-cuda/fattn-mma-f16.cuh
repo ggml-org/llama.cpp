@@ -2039,9 +2039,22 @@ static __global__ void flash_attn_ext_f16(
         KV_max = KV_max_ptr + int64_t(iter_j)*ne33*ne11;
     }
 
+    // Group member r works on the tiles whose index modulo group_size is r.
+    const int ntiles     = iter_j*iter_z_gqa*ne12*ne03;
+    const int group_size = fattn_stream_k_group_size(gridDim.x, ntiles, iter_j, ne12*ne03);
+    const int group      = blockIdx.x / group_size;
+    const int ngroups    = gridDim.x / group_size;
+
     // kbc == k block continuous, current index in continuous ijk space.
-    int       kbc      = int64_t(blockIdx.x + 0)*(iter_k*iter_j*iter_z_gqa*ne12*ne03) / gridDim.x;
-    const int kbc_stop = int64_t(blockIdx.x + 1)*(iter_k*iter_j*iter_z_gqa*ne12*ne03) / gridDim.x;
+    int       kbc      = int64_t(group + 0)*(iter_k*(ntiles/group_size)) / ngroups;
+    const int kbc_stop = int64_t(group + 1)*(iter_k*(ntiles/group_size)) / ngroups;
+
+    // Start, in the ijk space of all tiles, of the tile that holds kbc_group.
+    // The group size and member are computed again here. Keeping them live across the tile loop makes the kernel slower.
+    auto tile_start_all = [&] __device__ (const int kbc_group) {
+        const int size = fattn_stream_k_group_size(gridDim.x, iter_j*iter_z_gqa*ne12*ne03, iter_j, ne12*ne03);
+        return ((kbc_group/iter_k)*size + int(blockIdx.x) % size)*iter_k;
+    };
 
     // If the seams of 2 CUDA blocks fall within an output tile their results need to be combined.
     // For this we need to track both the block that starts the tile (needs_fixup) and the block that finishes the tile (is_fixup).
@@ -2065,10 +2078,11 @@ static __global__ void flash_attn_ext_f16(
 
     while (kbc < kbc_stop && kb0_stop == iter_k) {
         // z_KV == K/V head index, zt_gqa = Q head start index per K/V head, jt = token position start index
-        const int sequence =  kbc /(iter_k*iter_j*iter_z_gqa*ne12);
-        const int z_KV     = (kbc - iter_k*iter_j*iter_z_gqa*ne12 * sequence)/(iter_k*iter_j*iter_z_gqa);
-        const int zt_gqa   = (kbc - iter_k*iter_j*iter_z_gqa*ne12 * sequence - iter_k*iter_j*iter_z_gqa * z_KV)/(iter_k*iter_j);
-        const int jt       = (kbc - iter_k*iter_j*iter_z_gqa*ne12 * sequence - iter_k*iter_j*iter_z_gqa * z_KV - iter_k*iter_j * zt_gqa) / iter_k;
+        const int kbc_all  = tile_start_all(kbc);
+        const int sequence =  kbc_all /(iter_k*iter_j*iter_z_gqa*ne12);
+        const int z_KV     = (kbc_all - iter_k*iter_j*iter_z_gqa*ne12 * sequence)/(iter_k*iter_j*iter_z_gqa);
+        const int zt_gqa   = (kbc_all - iter_k*iter_j*iter_z_gqa*ne12 * sequence - iter_k*iter_j*iter_z_gqa * z_KV)/(iter_k*iter_j);
+        const int jt       = (kbc_all - iter_k*iter_j*iter_z_gqa*ne12 * sequence - iter_k*iter_j*iter_z_gqa * z_KV - iter_k*iter_j * zt_gqa) / iter_k;
 
         const int zt_Q = z_KV*gqa_ratio + zt_gqa*ncols2; // Global Q head start index.
 
@@ -2119,10 +2133,11 @@ static __global__ void flash_attn_ext_f16(
     }
 
     // z_KV == K/V head index, zt_gqa = Q head start index per K/V head, jt = token position start index.
-    const int sequence =  kbc /(iter_k*iter_j*iter_z_gqa*ne12);
-    const int z_KV     = (kbc - iter_k*iter_j*iter_z_gqa*ne12 * sequence)/(iter_k*iter_j*iter_z_gqa);
-    const int zt_gqa   = (kbc - iter_k*iter_j*iter_z_gqa*ne12 * sequence - iter_k*iter_j*iter_z_gqa * z_KV)/(iter_k*iter_j);
-    const int jt       = (kbc - iter_k*iter_j*iter_z_gqa*ne12 * sequence - iter_k*iter_j*iter_z_gqa * z_KV - iter_k*iter_j * zt_gqa) / iter_k;
+    const int kbc_all  = tile_start_all(kbc);
+    const int sequence =  kbc_all /(iter_k*iter_j*iter_z_gqa*ne12);
+    const int z_KV     = (kbc_all - iter_k*iter_j*iter_z_gqa*ne12 * sequence)/(iter_k*iter_j*iter_z_gqa);
+    const int zt_gqa   = (kbc_all - iter_k*iter_j*iter_z_gqa*ne12 * sequence - iter_k*iter_j*iter_z_gqa * z_KV)/(iter_k*iter_j);
+    const int jt       = (kbc_all - iter_k*iter_j*iter_z_gqa*ne12 * sequence - iter_k*iter_j*iter_z_gqa * z_KV - iter_k*iter_j * zt_gqa) / iter_k;
 
     const int zt_Q = z_KV*gqa_ratio + zt_gqa*ncols2; // Global Q head start index.
 

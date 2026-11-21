@@ -18,6 +18,31 @@
 // The macro on the following line shifts it by a factor of 2**3=8, as was needed to fix https://github.com/ggml-org/llama.cpp/issues/18606 .
 #define FATTN_KQ_MAX_OFFSET (3.0f*0.6931f)
 
+// Stream-k blocks are split into groups of this size. The blocks of a group work on adjacent tiles at the same k offsets. So they read the same K/V data at the same time.
+#define FATTN_STREAM_K_GROUP_SIZE 4
+
+// Without groups, gcd(nblocks, ntiles_dst) / nslices_KV blocks read the same K/V data at the same time. Groups help only if this number is less than the group size.
+// Groups are only used on NVIDIA GPUs.
+static __host__ __device__ __forceinline__ int fattn_stream_k_group_size(const int nblocks, const int ntiles_dst, const int ntiles_x, const int nslices_KV) {
+#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+    GGML_UNUSED_VARS(nblocks, ntiles_dst, ntiles_x, nslices_KV);
+    return 1;
+#else
+    const bool fractional_tiles = nblocks % ntiles_dst != 0 && ntiles_dst % nblocks != 0;
+    const bool divisible        = nblocks % FATTN_STREAM_K_GROUP_SIZE == 0 && ntiles_x % FATTN_STREAM_K_GROUP_SIZE == 0;
+
+    int gcd = nblocks;
+    int rem = ntiles_dst;
+    while (rem != 0) {
+        const int tmp = gcd % rem;
+        gcd = rem;
+        rem = tmp;
+    }
+
+    return fractional_tiles && divisible && gcd < FATTN_STREAM_K_GROUP_SIZE*nslices_KV ? FATTN_STREAM_K_GROUP_SIZE : 1;
+#endif // defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
+}
+
 typedef void (* fattn_kernel_t)(
         const char * __restrict__ Q,
         const char * __restrict__ K,
@@ -869,6 +894,7 @@ static __global__ void flash_attn_stream_k_fixup_general(
         const int ne01, const int ne02,
         const int gqa_ratio,
         const int total_work,
+        const int group_size,
         const uint3 fd_iter_k_j_z_ne12,
         const uint3 fd_iter_k_j_z,
         const uint3 fd_iter_k_j,
@@ -885,8 +911,14 @@ static __global__ void flash_attn_stream_k_fixup_general(
 
     const float * dst_fixup_data = ((const float *) dst_fixup) + gridDim.x*(2*2*ncols);
 
-    const int kbc0      = int64_t(bidx0 + 0)*total_work / gridDim.x;
-    const int kbc0_stop = int64_t(bidx0 + 1)*total_work / gridDim.x;
+    // Must split the work in the same way as flash_attn_ext_f16.
+    const int group        = bidx0 / group_size;
+    const int group_member = bidx0 % group_size;
+    const int ngroups      = gridDim.x / group_size;
+    const int group_work   = total_work / group_size;
+
+    const int kbc0      = int64_t(group + 0)*group_work / ngroups;
+    const int kbc0_stop = int64_t(group + 1)*group_work / ngroups;
 
     const bool did_not_have_any_data   = kbc0 == kbc0_stop;
     const bool wrote_beginning_of_tile = fastmodulo(kbc0, fd_iter_k) == 0;
@@ -896,7 +928,8 @@ static __global__ void flash_attn_stream_k_fixup_general(
     }
 
     // z_KV == K/V head index, zt_gqa = Q head start index per K/V head, jt = token position start index
-    const uint2 dm0 = fast_div_modulo(kbc0, fd_iter_k_j_z_ne12);
+    const int kbc0_all = (fastdiv(kbc0, fd_iter_k)*group_size + group_member)*fd_iter_k.z; // index in the ijk space of all tiles
+    const uint2 dm0 = fast_div_modulo(kbc0_all, fd_iter_k_j_z_ne12);
     const uint2 dm1 = fast_div_modulo(dm0.y, fd_iter_k_j_z);
     const uint2 dm2 = fast_div_modulo(dm1.y, fd_iter_k_j);
     const uint2 dm3 = fast_div_modulo(dm2.y, fd_iter_k);
@@ -930,12 +963,12 @@ static __global__ void flash_attn_stream_k_fixup_general(
     // Iterate over previous blocks and compute the combined results.
     // All CUDA blocks that get here must have a previous block that needs a fixup.
     const int tile_kbc0 = fastdiv(kbc0, fd_iter_k);
-    int bidx = bidx0 - 1;
+    int bidx = bidx0 - group_size; // previous block of the same group member
     int kbc_stop = kbc0;
     while(true) {
-        const int kbc = int64_t(bidx)*total_work / gridDim.x;
+        const int kbc = int64_t(bidx / group_size)*group_work / ngroups;
         if (kbc == kbc_stop) { // Did not have any data.
-            bidx--;
+            bidx -= group_size;
             kbc_stop = kbc;
             continue;
         }
@@ -962,7 +995,7 @@ static __global__ void flash_attn_stream_k_fixup_general(
         if (fastmodulo(kbc, fd_iter_k) == 0 || fastdiv(kbc, fd_iter_k) < tile_kbc0) {
             break;
         }
-        bidx--;
+        bidx -= group_size;
         kbc_stop = kbc;
     }
 
@@ -1240,9 +1273,19 @@ void launch_fattn(
             const int efficiency_loss_percent = nblocks_stream_k_rounded > 0
                 ? 100 * (nblocks_stream_k_raw - nblocks_stream_k_rounded) / nblocks_stream_k_raw
                 : 100;
-            const int nblocks_stream_k = efficiency_loss_percent <= max_efficiency_loss_percent
+            int nblocks_stream_k = efficiency_loss_percent <= max_efficiency_loss_percent
                 ? nblocks_stream_k_rounded
                 : nblocks_stream_k_raw;
+
+            // Groups need a block count that is a multiple of the group size. Same efficiency loss limit as above.
+            // A block count that divides ntiles_dst needs no fixup, so it is kept.
+            const bool fractional_split       = ntiles_dst % nblocks_stream_k != 0;
+            const int nblocks_stream_k_groups = nblocks_stream_k - nblocks_stream_k % FATTN_STREAM_K_GROUP_SIZE;
+            const int groups_loss_percent     = 100 * (nblocks_stream_k - nblocks_stream_k_groups) / nblocks_stream_k;
+            if (fractional_split && nblocks_stream_k_groups > 0 && groups_loss_percent <= max_efficiency_loss_percent &&
+                fattn_stream_k_group_size(nblocks_stream_k_groups, ntiles_dst, ntiles_x, K->ne[2]*Q->ne[3]) > 1) {
+                nblocks_stream_k = nblocks_stream_k_groups;
+            }
 
             blocks_num.x = nblocks_stream_k;
         }
@@ -1349,6 +1392,8 @@ void launch_fattn(
         } else if (ntiles_dst % blocks_num.x != 0) {
             // General fixup for the cases where nblocks_stream_k < ntiles_dst.
             const int total_work = ntiles_KV * ntiles_dst;
+            const int group_size = fattn_stream_k_group_size(blocks_num.x, ntiles_dst, ntiles_x, K->ne[2]*Q->ne[3]);
+            GGML_ASSERT(ntiles_dst % group_size == 0); // the kernel and the fixup both split ntiles_dst / group_size tiles per group member
 
             const uint3 fd_k_j_z_ne12 = init_fastdiv_values(ntiles_KV * ntiles_x * ntiles_z_gqa * K->ne[2]);
             const uint3 fd_k_j_z      = init_fastdiv_values(ntiles_KV * ntiles_x * ntiles_z_gqa);
@@ -1361,7 +1406,7 @@ void launch_fattn(
             const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_combine, block_dim_combine, 0, main_stream);
             ggml_cuda_kernel_launch(flash_attn_stream_k_fixup_general<DV, ncols1, ncols2>, launch_params,
                 (float *) KQV->data, dst_tmp_meta.ptr,
-                 Q->ne[1], Q->ne[2], gqa_ratio, total_work,
+                 Q->ne[1], Q->ne[2], gqa_ratio, total_work, group_size,
                  fd_k_j_z_ne12, fd_k_j_z, fd_k_j, fd_k);
         }
     } else if (parallel_blocks > 1) {
