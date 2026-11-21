@@ -2019,6 +2019,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
                 output_in_s = create_tensor(tn(LLM_TENSOR_OUTPUT, "input_scale"), {1}, TENSOR_NOT_REQUIRED);
             }
         }
+        post_arch_tensors(ml);
     }
 
     ml.done_getting_tensors();
