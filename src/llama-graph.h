@@ -807,6 +807,9 @@ public:
     ggml_tensor * self_rel_pos     = nullptr; // I32 [n_kv,     n_batch]
     ggml_tensor * self_rel_pos_swa = nullptr; // I32 [n_kv_swa, n_batch]
 
+    // 0, 1, ..., the query rows that the per-head KQ mask is written to
+    ggml_tensor * self_rows = nullptr; // I32 [n_batch]
+
     const uint32_t extent;
     const uint32_t extent_swa;
 
@@ -1534,17 +1537,18 @@ struct llm_graph_context {
             uint32_t extent,
             uint32_t extent_swa) const;
 
-    // kq_b is added to the KQ mask, after the KQ scale
+    // rel_bias holds the bias of each query and head by distance bucket, it is gathered by the distance to
+    // each cell and added to the KQ mask, after the KQ scale
     ggml_tensor * build_attn(
             llm_graph_input_mem_hybrid_iswa_rel * inp,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
             ggml_tensor * wo_s,
-            ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
-            ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
-            ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
-            ggml_tensor * kq_b,  // [n_kv, n_tokens/n_stream, n_head_q, n_stream]
-            ggml_tensor * sinks, // [n_head_q]
+            ggml_tensor * q_cur,    // [n_embd_head_q, n_head_q, n_tokens]
+            ggml_tensor * k_cur,    // [n_embd_head_k, n_head_k, n_tokens]
+            ggml_tensor * v_cur,    // [n_embd_head_v, n_head_v, n_tokens]
+            ggml_tensor * rel_bias, // [n_head_q, extent + 1, n_tokens]
+            ggml_tensor * sinks,    // [n_head_q]
                   float   kq_scale,
                     int   il) const;
 

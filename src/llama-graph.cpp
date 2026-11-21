@@ -1432,6 +1432,12 @@ void llm_graph_input_mem_hybrid_iswa_rel::set_input(const llama_ubatch * ubatch)
         attn_ctx->get_swa()->set_input_relative_pos(self_rel_pos_swa, ubatch, extent_swa);
     }
 
+    if (self_rows->buffer) {
+        std::vector<int32_t> rows(self_rows->ne[0]);
+        std::iota(rows.begin(), rows.end(), 0);
+        ggml_backend_tensor_set(self_rows, rows.data(), 0, ggml_nbytes(self_rows));
+    }
+
     const int64_t n_rs = mctx->get_recr()->get_n_rs();
 
     if (inp_rs->s_copy) {
@@ -1475,6 +1481,8 @@ bool llm_graph_input_mem_hybrid_iswa_rel::can_reuse(const llm_graph_params & par
 
     res &= self_rel_pos_swa->ne[0] == attn_ctx->get_swa()->get_n_kv();
     res &= self_rel_pos_swa->ne[1] == params.ubatch.n_tokens;
+
+    res &= self_rows->ne[0] == params.ubatch.n_tokens;
 
     res &= inp_rs->s_copy->ne[0] == mctx->get_recr()->get_n_rs();
 
@@ -4382,6 +4390,10 @@ llm_graph_input_mem_hybrid_iswa_rel * llm_graph_context::build_inp_mem_hybrid_is
     ggml_set_input(inp->self_rel_pos_swa);
     ggml_set_name(inp->self_rel_pos_swa, "attn_inp_rel_pos_swa");
 
+    inp->self_rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
+    ggml_set_input(inp->self_rows);
+    ggml_set_name(inp->self_rows, "attn_inp_rows");
+
     return (llm_graph_input_mem_hybrid_iswa_rel *) res->add_input(std::move(inp));
 }
 
@@ -4393,7 +4405,7 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_tensor * q_cur,
         ggml_tensor * k_cur,
         ggml_tensor * v_cur,
-        ggml_tensor * kq_b,
+        ggml_tensor * rel_bias,
         ggml_tensor * sinks,
             float     kq_scale,
             int       il) const {
@@ -4407,14 +4419,59 @@ ggml_tensor * llm_graph_context::build_attn(
     //       needs a kv_rows flash attention with a per-head mask (CUDA has none)
     GGML_ASSERT(attn_mask.rows == nullptr);
 
-    // a mask per head, in the dense layout of the input mask, which flash attention takes in F16
-    ggml_tensor * kq_mask = attn_mask.raw;
-    if (kq_mask->type != GGML_TYPE_F32) {
-        kq_mask = ggml_cast(ctx0, kq_mask, GGML_TYPE_F32);
-    }
-    kq_mask = ggml_add(ctx0, kq_b, kq_mask);
-    if (cparams.flash_attn) {
-        kq_mask = ggml_cast(ctx0, kq_mask, GGML_TYPE_F16);
+    ggml_tensor * mask    = attn_mask.raw;                                         // [n_kv, n_tps, 1, n_stream]
+    ggml_tensor * rel_pos = is_swa ? inp->self_rel_pos_swa : inp->self_rel_pos; // [n_kv, n_tokens]
+
+    const int64_t n_kv     = mask->ne[0];
+    const int64_t n_tps    = mask->ne[1];
+    const int64_t n_stream = mask->ne[3];
+    const int64_t n_head   = rel_bias->ne[0];
+    const int64_t n_bucket = rel_bias->ne[1];
+
+    // a mask per head, in the dense layout of the input mask and of its type (F16 for flash attention)
+    ggml_tensor * kq_mask = nullptr;
+
+    // the bias of all rows at once is n_kv x n_tokens x n_head in F32, which does not fit at long context:
+    // the full-attention layers write the mask a few query rows at a time, at most 32 chunks
+    const int64_t n_rows = is_swa ? n_tps : std::max<int64_t>(32, (n_tps + 31)/32);
+
+    if (n_rows >= n_tps) {
+        // [n_head, n_kv, n_tokens] -> [n_kv, n_tps, n_head, n_stream]
+        ggml_tensor * kq_b = ggml_get_rows(ctx0, rel_bias, rel_pos);
+        kq_b = ggml_reshape_4d(ctx0, kq_b, n_head, n_kv, n_tps, n_stream);
+        kq_b = ggml_cont(ctx0, ggml_permute(ctx0, kq_b, 2, 0, 1, 3));
+
+        kq_mask = ggml_add(ctx0, kq_b, mask->type == GGML_TYPE_F32 ? mask : ggml_cast(ctx0, mask, GGML_TYPE_F32));
+        if (mask->type != GGML_TYPE_F32) {
+            kq_mask = ggml_cast(ctx0, kq_mask, mask->type);
+        }
+    } else {
+        // the scheduler copies each view of an input to the device on its own, copy the whole input once instead
+        rel_pos = ggml_cont(ctx0, rel_pos);
+
+        kq_mask = ggml_repeat_4d(ctx0, mask, n_kv, n_tps, n_head, n_stream);
+
+        for (int64_t i0 = 0; i0 < n_tps; i0 += n_rows) {
+            const int64_t n = std::min(n_rows, n_tps - i0);
+
+            ggml_tensor * bias = ggml_view_4d(ctx0, rel_bias, n_head, n_bucket, n, n_stream,
+                    rel_bias->nb[1], rel_bias->nb[2], n_tps*rel_bias->nb[2], i0*rel_bias->nb[2]);
+            ggml_tensor * pos  = ggml_view_3d(ctx0, rel_pos, n_kv, n, n_stream,
+                    rel_pos->nb[1], n_tps*rel_pos->nb[1], i0*rel_pos->nb[1]);
+            // the KQ mask of these rows, already repeated over the heads
+            ggml_tensor * rows = ggml_view_4d(ctx0, kq_mask, n_kv, n, n_head, n_stream,
+                    kq_mask->nb[1], kq_mask->nb[2], kq_mask->nb[3], i0*kq_mask->nb[1]);
+
+            // [n_head, n_kv, n, n_stream] -> [n_kv, n, n_head, n_stream]
+            ggml_tensor * cur = ggml_get_rows(ctx0, bias, pos);
+            cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 2, 0, 1, 3));
+            cur = ggml_add(ctx0, cur, rows->type == GGML_TYPE_F32 ? rows : ggml_cast(ctx0, rows, GGML_TYPE_F32));
+
+            kq_mask = ggml_set_rows(ctx0, kq_mask, cur, ggml_view_1d(ctx0, inp->self_rows, n, i0*ggml_element_size(inp->self_rows)));
+
+            // add the chunks in order, otherwise the graph computes all of them before the first write
+            ggml_build_forward_expand(gf, kq_mask);
+        }
     }
     cb(kq_mask, "kq_mask_rel_pos", il);
 
