@@ -254,6 +254,9 @@ extern "C" {
         void * context;
     };
 
+    // NUMA all-reduce as a graph node: fills the custom op to be run by all the threads of the device "rank", false if not supported
+    typedef bool   (*ggml_backend_comm_get_allreduce_op_t)(void * comm_ctx, size_t rank, size_t size, ggml_custom_op_t * fun, void ** userdata);
+
     // Add backend dynamic loading support to the backend
 
     // Initialize the backend

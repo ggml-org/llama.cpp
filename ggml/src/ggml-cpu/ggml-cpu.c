@@ -55,11 +55,6 @@
 #    include "spacemit/ime.h"
 #endif
 
-// Note: once we move threading into a separate C++ file
-// will use std::hardware_destructive_interference_size instead of hardcoding it here
-// and we'll use C++ attribute syntax.
-#define GGML_CACHE_LINE  64
-
 #if defined(__clang__) || defined(__GNUC__)
 #define GGML_CACHE_ALIGN __attribute__((aligned(GGML_CACHE_LINE)))
 #endif
@@ -208,7 +203,9 @@ typedef pthread_t ggml_thread_t;
 
 #define GGML_THREADPOOL_N_THREADS_MASK (0xffffU)
 #define GGML_THREADPOOL_N_THREADS_BITS (16)
-
+#define GGML_DISSEMINATION_BARRIER_MAX_STEPS (4)
+#define GGML_DISSEMINATION_BARRIER_MAX_RADIX (9)
+// 4 steps and 9 radix cover up to 512 threads.
 #if defined(__APPLE__)
 #include <unistd.h>
 #include <mach/mach.h>
@@ -485,6 +482,10 @@ typedef pthread_mutex_t    ggml_mutex_t;
 #define ggml_thread_join   pthread_join
 
 #endif
+// one flag per cache line, value[face] is used
+struct ggml_barrier_flag {
+    atomic_int value[GGML_CACHE_LINE/sizeof(atomic_int)];
+};
 
 // Threadpool def
 struct ggml_threadpool {
@@ -499,7 +500,9 @@ struct ggml_threadpool {
     atomic_int GGML_CACHE_ALIGN n_barrier;
     atomic_int GGML_CACHE_ALIGN n_barrier_passed;
     atomic_int GGML_CACHE_ALIGN current_chunk; // currently processing chunk during Mat_Mul, shared between all the threads.
-
+    // for dissemination barrier
+    struct ggml_barrier_flag (* barrier_flags)[GGML_DISSEMINATION_BARRIER_MAX_STEPS][GGML_DISSEMINATION_BARRIER_MAX_RADIX - 1];
+    int barrier_n_threads; // thread count the flags were last reset for
     // these are atomic as an annotation for thread-sanitizer
     atomic_bool stop;         // Used for stopping the threadpool altogether
     atomic_bool pause;        // Used for pausing the threadpool or individual threads
@@ -523,29 +526,9 @@ struct ggml_compute_state {
     bool cpumask[GGML_MAX_N_THREADS];
     struct ggml_threadpool * threadpool;
     int ith;
+    int barrier_face;
+    int barrier_sense;
 };
-
-// Helpers for polling loops
-#if defined(__aarch64__) && ( defined(__clang__) || defined(__GNUC__) )
-static inline void ggml_thread_cpu_relax(void) {
-    __asm__ volatile("yield" ::: "memory");
-}
-#elif defined(__x86_64__)
-static inline void ggml_thread_cpu_relax(void) {
-    _mm_pause();
-}
-#elif defined(__riscv)
-static inline void ggml_thread_cpu_relax(void) {
-    #ifdef __riscv_zihintpause
-        __asm__ __volatile__ ("pause");
-    #else
-        /* Encoding of the pause instruction */
-        __asm__ __volatile__ (".4byte 0x100000F");
-    #endif
-}
-#else
-static inline void ggml_thread_cpu_relax(void) {;}
-#endif
 
 //
 // NUMA support
@@ -582,12 +565,63 @@ struct ggml_state {
 
 static struct ggml_state g_state = {0};
 
+#if defined(_MSC_VER) && !defined(__clang__)
+static __declspec(thread) int ggml_current_thread_index;
+#else
+static _Thread_local int ggml_current_thread_index;
+#endif
+
+static int ggml_barrier_max_radix(int n_threads) {
+    const int candidates[] = { 9, 8, 7 };
+    for (size_t i = 0; i < sizeof(candidates)/sizeof(candidates[0]); i++) {
+        if (n_threads % candidates[i] == 0) {
+            return candidates[i];
+        }
+    }
+    return 8;
+}
+
+static void ggml_barrier_dissemination(struct ggml_threadpool * tp, int n_threads) {
+    const int tid = ggml_current_thread_index;
+    struct ggml_compute_state * state = &tp->workers[tid];
+    const int face = state->barrier_face;
+    const int sense = state->barrier_sense;
+    const int max_radix = ggml_barrier_max_radix(n_threads);
+
+    int dist = 1;
+    int step = 0;
+    while (dist < n_threads) {
+        const int needed = (n_threads + dist - 1)/dist;
+        const int radix = needed > max_radix ? max_radix : needed;
+
+        GGML_ASSERT(step < GGML_DISSEMINATION_BARRIER_MAX_STEPS);
+        for (int j = 1; j < radix; j++) {
+            const int partner = (tid + j*dist) % n_threads;
+            atomic_store_explicit(&tp->barrier_flags[partner][step][j - 1].value[face], sense, memory_order_release);
+        }
+        for (int j = 1; j < radix; j++) {
+            while (atomic_load_explicit(&tp->barrier_flags[tid][step][j - 1].value[face], memory_order_acquire) != sense) {
+                ggml_thread_cpu_relax();
+            }
+        }
+
+        dist *= radix;
+        step++;
+    }
+
+    state->barrier_sense = sense ^ face;
+    state->barrier_face = face ^ 1;
+}
+
 void ggml_barrier(struct ggml_threadpool * tp) {
     int n_threads = atomic_load_explicit(&tp->n_graph, memory_order_relaxed) & GGML_THREADPOOL_N_THREADS_MASK;
     if (n_threads == 1) {
         return;
     }
-
+    if (tp->barrier_flags != NULL) {
+        ggml_barrier_dissemination(tp, n_threads);
+        return;
+    }
 #ifdef GGML_USE_OPENMP
     #pragma omp barrier
 #else
@@ -734,6 +768,25 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
 bool ggml_is_numa(void) {
     return g_state.numa.n_nodes > 1;
 }
+
+// Count NUMA nodes WITHOUT initializing the NUMA state
+uint32_t ggml_numa_node_count(void) {
+#if defined(__gnu_linux__)
+    struct stat st;
+    char path[256];
+    uint32_t n = 0;
+    while (n < GGML_NUMA_MAX_NODES) {
+        int rv = snprintf(path, sizeof(path), "/sys/devices/system/node/node%u", n);
+        GGML_ASSERT(rv > 0 && (unsigned) rv < sizeof(path));
+        if (stat(path, &st) != 0) { break; }
+        ++n;
+    }
+    return n;
+#else
+    return 0;
+#endif
+}
+
 
 #if defined(__ARM_ARCH)
 #if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
@@ -2655,6 +2708,13 @@ static bool ggml_thread_apply_priority(int32_t prio) {
 // TODO: this may not work on BSD, to be verified
 
 static bool ggml_thread_apply_affinity(const bool * mask) {
+    // runs on every thread for every graph, skip the syscall when the thread already has this mask
+    static _Thread_local bool applied[GGML_MAX_N_THREADS];
+    static _Thread_local bool applied_valid =  false;
+    if (applied_valid && memcmp(applied, mask, sizeof(applied)) == 0) {
+        return true;
+    }
+
     cpu_set_t cpuset;
     int err;
 
@@ -2680,7 +2740,15 @@ static bool ggml_thread_apply_affinity(const bool * mask) {
         return false;
     }
 
+    memcpy(applied, mask, sizeof(applied));
+    applied_valid = true;
+
     return true;
+}
+
+// for affinity changes outside a threadpool (NUMA pools): going through the helper keeps its per-thread cache right
+bool ggml_cpu_thread_set_affinity(const bool * mask) {
+    return ggml_thread_apply_affinity(mask);
 }
 
 static bool ggml_thread_apply_priority(int32_t prio) {
@@ -2776,7 +2844,9 @@ void ggml_threadpool_free(struct ggml_threadpool* threadpool) {
     ggml_mutex_destroy(&threadpool->mutex);
     ggml_cond_destroy(&threadpool->cond);
 #endif // GGML_USE_OPENMP
-
+    if (threadpool->barrier_flags != NULL) {
+        ggml_aligned_free(threadpool->barrier_flags, sizeof(*threadpool->barrier_flags)*(size_t) n_threads);
+    }
     const size_t workers_size = sizeof(struct ggml_compute_state) * n_threads;
     ggml_aligned_free(threadpool->workers, workers_size);
     ggml_aligned_free(threadpool, sizeof(struct ggml_threadpool));
@@ -3115,6 +3185,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     struct ggml_compute_state * state = (struct ggml_compute_state *) data;
     struct ggml_threadpool    * tp    = state->threadpool;
 
+    ggml_current_thread_index = state->ith;
     const struct ggml_cgraph * cgraph = tp->cgraph;
     const struct ggml_cplan  * cplan  = tp->cplan;
 
@@ -3338,6 +3409,8 @@ static struct ggml_threadpool * ggml_threadpool_new_impl(
         threadpool->n_barrier        = 0;
         threadpool->n_barrier_passed = 0;
         threadpool->current_chunk    = 0;
+        threadpool->barrier_flags    = NULL;
+        threadpool->barrier_n_threads = 0;
         threadpool->stop             = false;
         threadpool->pause            = tpp->paused;
         threadpool->abort            = -1;
@@ -3401,6 +3474,15 @@ struct ggml_threadpool * ggml_threadpool_new(struct ggml_threadpool_params * tpp
     return ggml_threadpool_new_impl(tpp, NULL, NULL);
 }
 
+struct ggml_threadpool * ggml_threadpool_new_numa(struct ggml_threadpool_params * tpp) {
+    struct ggml_threadpool * threadpool = ggml_threadpool_new_impl(tpp, NULL, NULL);
+#ifdef GGML_USE_OPENMP
+    // flags are reset by the first compute, as barrier_n_threads is 0
+    threadpool->barrier_flags = ggml_aligned_malloc(sizeof(*threadpool->barrier_flags)*(size_t) tpp->n_threads);
+#endif
+    return threadpool;
+}
+
 enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cplan * cplan) {
     ggml_cpu_init();
 
@@ -3438,6 +3520,15 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
                 // update the number of threads from the actual number of threads that we got from OpenMP
                 n_threads = omp_get_num_threads();
                 atomic_store_explicit(&threadpool->n_graph, n_threads, memory_order_relaxed);
+                // stale flags from another team size can break the barrier, so reset them
+                if (threadpool->barrier_flags != NULL && threadpool->barrier_n_threads != n_threads) {
+                    memset(threadpool->barrier_flags, 0, sizeof(*threadpool->barrier_flags)*(size_t) threadpool->n_threads);
+                    for (int j = 0; j < threadpool->n_threads; j++) {
+                        threadpool->workers[j].barrier_face  = 0;
+                        threadpool->workers[j].barrier_sense = 1;
+                    }
+                    threadpool->barrier_n_threads = n_threads;
+                }
             }
 
             // Apply thread CPU mask and priority

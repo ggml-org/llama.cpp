@@ -163,7 +163,8 @@ static std::vector<ggml_backend_dev_t> parse_devices_arg(const std::string & val
             throw std::invalid_argument("invalid device specification");
         }
         auto * dev = ggml_backend_dev_by_name(dev_name.c_str());
-        if (!dev || ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+        // the default CPU device is rejected, llama adds it by itself. The NUMA devices (GGML_CPU_NUMA_DEVICES) are valid targets
+        if (!dev || dev == ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU)) {
             throw std::invalid_argument(string_format("invalid device: %s", dev_name.c_str()));
         }
         devices.push_back(dev);

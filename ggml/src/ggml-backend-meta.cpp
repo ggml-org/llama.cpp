@@ -8,9 +8,13 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <mutex>
+#include <thread>
 #include <map>
 #include <memory>
 #include <set>
@@ -212,6 +216,54 @@ static ggml_backend_dev_t ggml_backend_meta_dev_simple_dev(ggml_backend_dev_t me
     return meta_dev_ctx->simple_devs[index];
 }
 
+// llama finds ggml_backend_set_n_threads through the registry, without this stub the children run at GGML_DEFAULT_N_THREADS
+
+static void ggml_backend_meta_set_n_threads(ggml_backend_t backend, int n_threads);
+
+static const char * ggml_backend_meta_reg_get_name(ggml_backend_reg_t reg) {
+    return "Meta";
+
+    GGML_UNUSED(reg);
+}
+
+static size_t ggml_backend_meta_reg_get_device_count(ggml_backend_reg_t reg) {
+    return 0;
+
+    GGML_UNUSED(reg);
+}
+
+static ggml_backend_dev_t ggml_backend_meta_reg_get_device(ggml_backend_reg_t reg, size_t index) {
+    GGML_ABORT("the meta registry holds no devices; they are created by ggml_backend_meta_device");
+
+    GGML_UNUSED(reg);
+    GGML_UNUSED(index);
+}
+
+static void * ggml_backend_meta_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
+    if (strcmp(name, "ggml_backend_set_n_threads") == 0) {
+        return (void *) (ggml_backend_set_n_threads_t) ggml_backend_meta_set_n_threads;
+    }
+    return nullptr;
+
+    GGML_UNUSED(reg);
+}
+
+static const ggml_backend_reg_i ggml_backend_meta_reg_iface = {
+    /* .get_name         = */ ggml_backend_meta_reg_get_name,
+    /* .get_device_count = */ ggml_backend_meta_reg_get_device_count,
+    /* .get_device       = */ ggml_backend_meta_reg_get_device,
+    /* .get_proc_address = */ ggml_backend_meta_reg_get_proc_address,
+};
+
+static ggml_backend_reg_t ggml_backend_meta_reg(void) {
+    static ggml_backend_reg reg = {
+        /*.api_version = */ GGML_BACKEND_API_VERSION,
+        /*.iface       = */ ggml_backend_meta_reg_iface,
+        /*.context     = */ nullptr,
+    };
+    return &reg;
+}
+
 ggml_backend_dev_t ggml_backend_meta_device(
         ggml_backend_dev_t * devs, size_t n_devs, ggml_backend_meta_get_split_state_t get_split_state, void * get_split_state_ud) {
     GGML_ASSERT(n_devs <= GGML_BACKEND_META_MAX_DEVICES);
@@ -236,7 +288,7 @@ ggml_backend_dev_t ggml_backend_meta_device(
 
     struct ggml_backend_device meta_dev = {
         /*iface  =*/ ggml_backend_meta_device_iface,
-        /*reg    =*/ nullptr,
+        /*reg    =*/ ggml_backend_meta_reg(),
         /*ctx    =*/ ctxs.back().get(),
     };
 
@@ -1866,6 +1918,89 @@ static ggml_guid_t ggml_backend_meta_guid() {
     return &guid;
 }
 
+// CPU graph compute blocks, so the devices only run at the same time if each one has its own thread
+
+struct ggml_backend_meta_dispatch_pool {
+    std::vector<std::thread>   threads;
+    std::mutex                 mtx;
+    std::condition_variable    cv_work;
+    std::condition_variable    cv_done;
+    std::vector<ggml_status>   results;
+    const std::vector<ggml_backend_t> * backends = nullptr;
+    const std::vector<ggml_cgraph *>  * graphs = nullptr;
+    uint64_t                   epoch     = 0;
+    size_t                     n_pending = 0;
+    bool                       stop = false;
+
+    ~ggml_backend_meta_dispatch_pool() { shutdown(); }
+
+    void shutdown() {
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            stop = true;
+        }
+        cv_work.notify_all();
+        for (auto & t : threads) {
+            t.join();
+        }
+        threads.clear();
+    }
+
+    void worker(size_t k) {
+        std::unique_lock<std::mutex> lock(mtx);
+        uint64_t seen = 0;
+        while (true) {
+            cv_work.wait(lock, [&] {return stop || epoch != seen;});
+            if (stop) {
+                return;
+            }
+            seen = epoch;
+            ggml_backend_t b = (*backends)[k + 1];
+            ggml_cgraph *  g = (*graphs)[k + 1];
+            lock.unlock();
+            const ggml_status status = ggml_backend_graph_compute_async(b, g);
+            lock.lock();
+            results[k+1] = status;
+            if (--n_pending == 0) {
+                cv_done.notify_one();
+            }
+        }
+    }
+
+    ggml_status run(const std::vector<ggml_backend_t> &bs, const std::vector<ggml_cgraph *> &gs) {
+        const size_t n = bs.size();
+        if (n == 1) {
+            return ggml_backend_graph_compute_async(bs[0], gs[0]);
+        }
+        while (threads.size() < n - 1) {
+            const size_t k = threads.size();
+            threads.emplace_back([this, k] { worker(k); });
+        }
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            backends  = &bs;
+            graphs    = &gs;
+            results.assign(n, GGML_STATUS_SUCCESS);
+            n_pending = n - 1;
+            epoch++;
+        }
+        cv_work.notify_all();
+
+        results[0] = ggml_backend_graph_compute_async(bs[0], gs[0]);
+
+        {
+            std::unique_lock<std::mutex> lock(mtx);
+            cv_done.wait(lock, [&] { return n_pending == 0; });
+        }
+        for (const ggml_status status : results) {
+            if (status != GGML_STATUS_SUCCESS) {
+                return status;
+            }
+        }
+        return GGML_STATUS_SUCCESS;
+    }
+};
+
 struct ggml_backend_meta_context {
     struct cgraph_config {
         ggml_cgraph * cgraph_main = nullptr;
@@ -1899,6 +2034,23 @@ struct ggml_backend_meta_context {
     void *                               comm_ctx       = nullptr;
     ggml_backend_comm_allreduce_tensor_t comm_allreduce = nullptr;
 
+    // all-reduce as a graph node run by all the threads of the device, only for concurrent CPU children
+    ggml_backend_comm_get_allreduce_op_t comm_get_allreduce_op = nullptr;
+    ggml_context_ptr                     ctx_ar;
+    std::vector<ggml_tensor *>           nodes_ar;    // [rank*max_subgraphs + i_subgraph]
+    std::vector<char>                    subgraph_ar; // sub-graph ends with the all-reduce node, so the comm all-reduce is skipped
+
+    // all sub-graphs of a device back to back, used when every all-reduce is a graph node: one dispatch per graph
+    ggml_context_ptr                     ctx_fused;
+    std::vector<ggml_cgraph *>           cgraphs_fused; // [rank]
+    bool                                 fused = false;
+
+    // only CPU children block, GPU children return immediately
+    bool                            concurrent = false;
+    int                             n_threads  = 0; // last set_n_threads, before it is split over the children
+    std::vector<ggml_backend_t>     dispatch_backends;
+    ggml_backend_meta_dispatch_pool pool;
+
     ggml_backend_meta_context(ggml_backend_dev_t meta_dev, const char * params) {
         const size_t n_devs = ggml_backend_meta_dev_n_devs(meta_dev);
         n_reduce_steps = std::ceil(std::log2(n_devs));
@@ -1929,10 +2081,24 @@ struct ggml_backend_meta_context {
                 ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(
                     ggml_backend_get_device(simple_backends[0])), "ggml_backend_comm_allreduce_tensor");
             GGML_ASSERT(comm_allreduce != nullptr);
+            comm_get_allreduce_op = (ggml_backend_comm_get_allreduce_op_t)
+                ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(
+                    ggml_backend_get_device(simple_backends[0])), "ggml_backend_comm_get_allreduce_op");
         }
+
+        dispatch_backends = simple_backends;
+        concurrent = n_devs > 1;
+        for (ggml_backend_t b : simple_backends) {
+            ggml_backend_dev_t d = ggml_backend_get_device(b);
+            if (!d || ggml_backend_dev_type(d) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                concurrent = false;
+            }
+        }
+
     }
 
     ~ggml_backend_meta_context() {
+        pool.shutdown();
         if (comm_ctx != nullptr) {
             ggml_backend_comm_free_t comm_free = (ggml_backend_comm_free_t) ggml_backend_reg_get_proc_address(
                 ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_configs[0].backend)), "ggml_backend_comm_free");
@@ -1956,6 +2122,28 @@ static void ggml_backend_meta_free(ggml_backend_t backend) {
     ggml_backend_meta_context * backend_ctx = (ggml_backend_meta_context *) backend->context;
     delete backend_ctx;
     delete backend;
+}
+
+static void ggml_backend_meta_set_n_threads(ggml_backend_t backend, int n_threads) {
+    GGML_ASSERT(ggml_backend_is_meta(backend));
+    ggml_backend_meta_context * backend_ctx = (ggml_backend_meta_context *)backend->context;
+    backend_ctx->n_threads = n_threads;
+    const size_t n_backends = ggml_backend_meta_n_backends(backend);
+    for (size_t i = 0; i < n_backends; i++) {
+        ggml_backend_t simple_backend = ggml_backend_meta_simple_backend(backend, i);
+        ggml_backend_dev_t simple_dev = ggml_backend_get_device(simple_backend);
+        ggml_backend_reg_t simple_reg = simple_dev ? ggml_backend_dev_backend_reg(simple_dev) : nullptr;
+        if (!simple_reg) {
+            continue;
+        }
+        auto set_n_threads = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(
+            simple_reg, "ggml_backend_set_n_threads");
+        if (set_n_threads) {
+            // sub-graphs run at the same time and share the machine, so split the threads to avoid oversubscription
+            const int n = backend_ctx->concurrent ? std::max(1, n_threads / (int) n_backends) : n_threads;
+            set_n_threads(simple_backend, n);
+        }
+    }
 }
 
 static void ggml_backend_meta_set_tensor_async(ggml_backend_t backend, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
@@ -2059,6 +2247,13 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
     GGML_ASSERT(cgraph->grads == nullptr);
     const size_t n_backends = ggml_backend_meta_n_backends(backend);
     ggml_backend_meta_context * backend_ctx = (ggml_backend_meta_context *) backend->context;
+
+    // each concurrent CPU child runs n_threads / n_backends threads, reject a count that does not divide evenly
+    if (backend_ctx->concurrent && backend_ctx->n_threads % (int) n_backends != 0) {
+        GGML_LOG_ERROR("%s: %d threads do not divide evenly over %zu NUMA devices, use a multiple of %zu\n",
+            __func__, backend_ctx->n_threads, n_backends, n_backends);
+        return GGML_STATUS_FAILED;
+    }
 
     // If the previous cgraph had a defined UID it can be used to skip rebuilding the subgraphs per simple backend.
     const bool needs_rebuild = (cgraph->uid == 0) || (cgraph->uid != backend_ctx->uid);
@@ -2239,7 +2434,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                         }
                     }
 
-                    if (next->view_src != nullptr && next->view_src->op == GGML_OP_NONE && ggml_backend_buffer_is_host(next->view_src->buffer)) {
+                    if (next->view_src != nullptr && next->view_src->op == GGML_OP_NONE && !ggml_backend_buffer_is_meta(next->view_src->buffer)) {
                         continue;
                     }
                     if (ggml_backend_meta_get_split_state(next, false).axis != GGML_BACKEND_SPLIT_AXIS_PARTIAL) {
@@ -2278,7 +2473,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
             int i_start = 0;
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
-                if (node->view_src != nullptr && node->view_src->op == GGML_OP_NONE && ggml_backend_buffer_is_host(node->view_src->buffer)) {
+                if (node->view_src != nullptr && node->view_src->op == GGML_OP_NONE && !ggml_backend_buffer_is_meta(node->view_src->buffer)) {
                     continue;
                 }
                 const ggml_backend_meta_split_state split_state = ggml_backend_meta_get_split_state(node, /*assume_sync =*/ false);
@@ -2361,6 +2556,39 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
             }
         }
 
+        // the nodes are only ready here, so check for every sub-graph if all devices can use the all-reduce node
+        std::vector<ggml_custom_op_t> fun_ar(n_backends, nullptr);
+        std::vector<void *>           userdata_ar(n_backends, nullptr);
+        backend_ctx->subgraph_ar.assign(n_subgraphs, 0);
+        if (backend_ctx->concurrent && backend_ctx->comm_get_allreduce_op != nullptr && n_subgraphs > 1) {
+            bool success = true;
+            for (size_t j = 0; j < n_backends; j++) {
+                success = success && backend_ctx->comm_get_allreduce_op(backend_ctx->comm_ctx, j, backend_ctx->max_tmp_size, &fun_ar[j], &userdata_ar[j]);
+            }
+            if (success && backend_ctx->nodes_ar.size() != n_backends*backend_ctx->max_subgraphs) {
+                const ggml_init_params params = {
+                    /*.mem_size   =*/ n_backends*backend_ctx->max_subgraphs*ggml_tensor_overhead(),
+                    /*.mem_buffer =*/ nullptr,
+                    /*.no_alloc   =*/ true,
+                };
+                backend_ctx->ctx_ar.reset(ggml_init(params));
+                backend_ctx->nodes_ar.resize(n_backends*backend_ctx->max_subgraphs);
+                for (ggml_tensor *& node_ar : backend_ctx->nodes_ar) {
+                    node_ar = ggml_new_tensor_1d(backend_ctx->ctx_ar.get(), GGML_TYPE_F32, 1);
+                }
+            }
+            for (size_t i_graph = 0; success && i_graph + 1 < n_subgraphs; i_graph++) {
+                const ggml_tensor * node_0 = backend_ctx->backend_configs[0].nodes[backend_ctx->backend_configs[0].cgraphs[i_graph + 1].offset - 1];
+                bool supported = true;
+                for (size_t j = 0; j < n_backends; j++) {
+                    auto & bcj = backend_ctx->backend_configs[j];
+                    const ggml_tensor * node_j = bcj.nodes[bcj.cgraphs[i_graph + 1].offset - 1];
+                    supported = supported && node_j->type == GGML_TYPE_F32 && ggml_is_contiguous(node_j) && ggml_nelements(node_j) == ggml_nelements(node_0);
+                }
+                backend_ctx->subgraph_ar[i_graph] = supported;
+            }
+        }
+
         for (size_t j = 0; j < n_backends; j++) {
             auto & bcj = backend_ctx->backend_configs[j];
             for (size_t i_graph = 0; i_graph < n_subgraphs; i_graph++) {
@@ -2376,7 +2604,68 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                     const size_t hash_pos_ij = ggml_hash_insert(&cgraph_ij->visited_hash_set, node_ij);
                     cgraph_ij->use_counts[hash_pos_ij] = cgraph->use_counts[hash_pos_orig];
                 }
+                if (backend_ctx->subgraph_ar[i_graph]) {
+                    // in place on the data of the last node, which is the partial result
+                    ggml_tensor * node_last = cgraph_ij->nodes[cgraph_ij->n_nodes - 1];
+                    ggml_tensor * node_ar   = backend_ctx->nodes_ar[j*backend_ctx->max_subgraphs + i_graph];
+                    memset(node_ar, 0, sizeof(ggml_tensor));
+                    node_ar->type = node_last->type;
+                    for (size_t k = 0; k < GGML_MAX_DIMS; k++) {
+                        node_ar->ne[k] = node_last->ne[k];
+                        node_ar->nb[k] = node_last->nb[k];
+                    }
+                    node_ar->op        = GGML_OP_CUSTOM;
+                    node_ar->src[0]    = node_last;
+                    node_ar->view_src  = node_last->view_src == nullptr ? node_last : node_last->view_src;
+                    node_ar->view_offs = node_last->view_offs;
+                    node_ar->flags    |= GGML_TENSOR_FLAG_COMPUTE;
+                    const ggml_custom_op_params params = { fun_ar[j], GGML_N_TASKS_MAX, userdata_ar[j] };
+                    ggml_set_op_params(node_ar, &params, sizeof(params));
+                    ggml_backend_view_init(node_ar);
+                    cgraph_ij->nodes[cgraph_ij->n_nodes++] = node_ar;
+                }
                 cgraph_ij->uid = ggml_graph_next_uid();
+            }
+        }
+
+        // the all-reduce nodes keep the devices in step, so no need to return to the meta backend between sub-graphs
+        backend_ctx->fused = n_subgraphs > 1;
+        for (size_t i_graph = 0; i_graph + 1 < n_subgraphs; i_graph++) {
+            backend_ctx->fused = backend_ctx->fused && backend_ctx->subgraph_ar[i_graph];
+        }
+        if (backend_ctx->fused) {
+            const size_t size_fused = cgraph->n_nodes + n_subgraphs;
+            if (backend_ctx->cgraphs_fused.empty() || (size_t) backend_ctx->cgraphs_fused[0]->size < size_fused) {
+                const ggml_init_params params = {
+                    /*.mem_size   =*/ n_backends*ggml_graph_overhead_custom(size_fused, /*grads =*/ false),
+                    /*.mem_buffer =*/ nullptr,
+                    /*.no_alloc   =*/ true,
+                };
+                backend_ctx->ctx_fused.reset(ggml_init(params));
+                backend_ctx->cgraphs_fused.resize(n_backends);
+                for (ggml_cgraph *& cgraph_fused : backend_ctx->cgraphs_fused) {
+                    cgraph_fused = ggml_new_graph_custom(backend_ctx->ctx_fused.get(), size_fused, /*grads =*/ false);
+                }
+            }
+            for (size_t j = 0; j < n_backends; j++) {
+                auto & bcj = backend_ctx->backend_configs[j];
+                ggml_cgraph * cgraph_fused = backend_ctx->cgraphs_fused[j];
+                cgraph_fused->n_nodes = 0;
+                ggml_hash_set_reset(&cgraph_fused->visited_hash_set);
+                for (size_t i_graph = 0; i_graph < n_subgraphs; i_graph++) {
+                    const ggml_cgraph * cgraph_ij = bcj.cgraphs[i_graph].cgraph_main;
+                    for (int i_node = 0; i_node < cgraph_ij->n_nodes; i_node++) {
+                        ggml_tensor * node = cgraph_ij->nodes[i_node];
+                        cgraph_fused->nodes[cgraph_fused->n_nodes++] = node;
+                        // the all-reduce node is not in the hash set of the sub-graph
+                        if (ggml_hash_contains(&cgraph_ij->visited_hash_set, node)) {
+                            const size_t hash_pos_ij    = ggml_hash_find(&cgraph_ij->visited_hash_set, node);
+                            const size_t hash_pos_fused = ggml_hash_insert(&cgraph_fused->visited_hash_set, node);
+                            cgraph_fused->use_counts[hash_pos_fused] = cgraph_ij->use_counts[hash_pos_ij];
+                        }
+                    }
+                }
+                cgraph_fused->uid = ggml_graph_next_uid();
             }
         }
     }
@@ -2528,17 +2817,32 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
         return GGML_STATUS_SUCCESS;
     };
 
+    if (backend_ctx->fused) {
+        return backend_ctx->pool.run(backend_ctx->dispatch_backends, backend_ctx->cgraphs_fused);
+    }
+
+    std::vector<ggml_cgraph *> dispatch_graphs(n_backends, nullptr);
 
     for (size_t i = 0; i < backend_ctx->n_subgraphs; i++) {
-        for (size_t j = 0; j < n_backends; j++) {
-            auto & bcj = backend_ctx->backend_configs[j];
-            const ggml_status status = ggml_backend_graph_compute_async(bcj.backend, bcj.cgraphs[i].cgraph_main);
+        if (backend_ctx->concurrent) {
+            for (size_t j = 0; j < n_backends; j++) {
+                dispatch_graphs[j] = backend_ctx->backend_configs[j].cgraphs[i].cgraph_main;
+            }
+            const ggml_status status = backend_ctx->pool.run(backend_ctx->dispatch_backends, dispatch_graphs);
             if (status != GGML_STATUS_SUCCESS) {
                 return status;
             }
+        } else {
+            for (size_t j = 0; j < n_backends; j++) {
+                auto & bcj = backend_ctx->backend_configs[j];
+                const ggml_status status = ggml_backend_graph_compute_async(bcj.backend, bcj.cgraphs[i].cgraph_main);
+                if (status != GGML_STATUS_SUCCESS) {
+                    return status;
+                }
+            }
         }
 
-        if (n_backends > 1 && i < backend_ctx->n_subgraphs - 1) {
+        if (n_backends > 1 && i < backend_ctx->n_subgraphs - 1 && !backend_ctx->subgraph_ar[i]) {
             bool backend_allreduce_success = false;
             if (backend_ctx->comm_ctx) {
                 std::vector<ggml_tensor *> nodes;
