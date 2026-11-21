@@ -5068,6 +5068,76 @@ struct test_ssm_conv_res_scale : public test_case {
     }
 };
 
+// one token of attention over stored states (Inkling 2 block attention residuals, fused by CUDA):
+// RMS_NORM(cur), appended to the blocks in both layouts, scores against the queries, softmax, weighted sum
+struct test_depth_mix : public test_case {
+    const int64_t ne;
+    const int64_t n_blocks;
+    const int64_t nq;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "DEPTH_MIX";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_nmse_err() override {
+        return 1e-6;
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR3(ne, n_blocks, nq);
+    }
+
+    test_depth_mix(int64_t ne, int64_t n_blocks, int64_t nq) : ne(ne), n_blocks(n_blocks), nq(nq) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * blocks_s = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, ne, n_blocks, 1);
+        ggml_tensor * blocks_t = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_blocks, ne, 1);
+        ggml_tensor * cur      = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ne, 1);
+        ggml_tensor * query    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ne, nq);
+        ggml_set_name(blocks_s, "blocks_s");
+        ggml_set_name(blocks_t, "blocks_t");
+        ggml_set_name(cur, "cur");
+        ggml_set_name(query, "query");
+
+        ggml_tensor * state    = ggml_rms_norm(ctx, ggml_reshape_3d(ctx, cur, ne, 1, 1), 1e-6f);
+        ggml_tensor * states   = ggml_concat(ctx, blocks_s, state, 1);
+        ggml_tensor * states_t = ggml_concat(ctx, blocks_t, ggml_transpose(ctx, state), 0);
+
+        ggml_tensor * scores = ggml_mul_mat(ctx, states, query);
+        scores = ggml_soft_max_ext(ctx, scores, nullptr, 1.0f/sqrtf(ne), 0.0f);
+
+        ggml_tensor * out = ggml_mul_mat(ctx, states_t, scores);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        // the transposed blocks hold the same values as the blocks, as in the model
+        std::vector<float> bs(ne*n_blocks), bt(ne*n_blocks);
+        std::mt19937 rng(1234);
+        std::normal_distribution<float> nd(0.0f, 1.0f);
+        for (int64_t j = 0; j < n_blocks; ++j) {
+            for (int64_t e = 0; e < ne; ++e) {
+                const float v = nd(rng);
+                bs[j*ne + e] = v;
+                bt[e*n_blocks + j] = v;
+            }
+        }
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "blocks_s") == 0) {
+                ggml_backend_tensor_set(t, bs.data(), 0, ggml_nbytes(t));
+            } else if (strcmp(t->name, "blocks_t") == 0) {
+                ggml_backend_tensor_set(t, bt.data(), 0, ggml_nbytes(t));
+            } else if (t->op == GGML_OP_NONE) {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // one token of a short convolution with its state (fused by CUDA): CONCAT(history, x) -> CPY(last columns to the
 // state) -> SSM_CONV -> ADD(residual) -> SCALE, the output holds the new state and the convolution
 struct test_ssm_conv_step : public test_case {
@@ -12134,6 +12204,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 4, 1}, {d_conv, d_inner, 1, 1}));
         }
     }
+
+    // one token of attention over stored states (Inkling 2)
+    for (int64_t n_blocks : {1, 2, 4, 8}) {
+        for (int64_t nq : {1, 3, 4}) {
+            test_cases.emplace_back(new test_depth_mix(2304, n_blocks, nq));
+        }
+    }
+    test_cases.emplace_back(new test_depth_mix(1000, 3, 2));
 
     // one token of a short convolution with its state (Inkling 2)
     for (int64_t n_conv : {2, 3, 4}) {
