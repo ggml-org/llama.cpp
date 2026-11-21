@@ -244,6 +244,11 @@ uint32_t llama_hparams::n_embd_r() const {
 }
 
 uint32_t llama_hparams::n_embd_s() const {
+    if (n_sconv_channels != 0) {
+        // for Inkling2 models, mirrored attn/ffn history
+        return 2 * n_embd * (n_shortconv_l_cache - 1);
+    }
+
     if (wkv_head_size != 0) {
         // corresponds to RWKV's wkv_states size
         return n_embd * wkv_head_size;
