@@ -202,12 +202,23 @@ if (LLAMA_BUILD_TOOLS)
     add_executable(llama-qwen2vl-cli  deprecation-warning.cpp)
 
     set(TARGET llama-mtmd-cli)
-    add_executable         (${TARGET} mtmd-cli.cpp)
+    add_executable         (${TARGET} mtmd-cli.cpp mtmd-cli-audio.cpp)
     set_target_properties  (${TARGET} PROPERTIES OUTPUT_NAME llama-mtmd-cli)
     if(LLAMA_TOOLS_INSTALL)
         install(TARGETS ${TARGET} RUNTIME)
     endif()
-    target_link_libraries  (${TARGET} PRIVATE llama-common mtmd Threads::Threads)
+    # same miniaudio.h workarounds as the mtmd target above
+    if (NOT MSVC)
+        set_property(SOURCE mtmd-cli-audio.cpp APPEND PROPERTY COMPILE_OPTIONS -Wno-cast-qual)
+    endif()
+    if (ANDROID)
+        set_property(SOURCE mtmd-cli-audio.cpp APPEND PROPERTY COMPILE_OPTIONS -Wno-missing-prototypes)
+    endif()
+    if (MSVC AND MTMD_GENERATOR_PLATFORM_LWR STREQUAL "arm64ec")
+        set_property(SOURCE mtmd-cli-audio.cpp APPEND PROPERTY COMPILE_DEFINITIONS MA_NO_AVX2)
+    endif()
+    # miniaudio loads the audio backends at runtime
+    target_link_libraries  (${TARGET} PRIVATE llama-common mtmd Threads::Threads vendor::miniaudio ${CMAKE_DL_LIBS})
     target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
     # mtmd-debug tool
