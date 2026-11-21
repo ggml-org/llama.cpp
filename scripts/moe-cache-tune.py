@@ -517,7 +517,11 @@ def run_server(cmd, out, mib, share, n_predict, seed, label, warm):
                 timings = [http(port, "/completion", {"prompt": PROMPT, "n_predict": n, "ignore_eos": True, "cache_prompt": False,
                                                       "temperature": 0.8, "top_p": 0.95, "seed": seed + k})["timings"] for k in (0, 1)]
             finally:
-                proc.send_signal(signal.SIGINT)
+                if os.name == 'nt':
+                    interrupt = signal.CTRL_C_EVENT
+                else:
+                    interrupt = signal.SIGINT
+                proc.send_signal(interrupt)
                 try:
                     proc.wait(timeout=120)
                 except subprocess.TimeoutExpired:
