@@ -9933,6 +9933,7 @@ struct vk_conv_halo_params {
     uint32_t KD, pad_d;
     uint32_t fn;        // accumulator fragment width in pixels: 16, or 8 (FRAG_N8)
     uint32_t tiles;     // number of output tiles, over all batches and depth slices
+    uint32_t split_k;   // workgroups the input channel passes of a tile are split across
 
     vk_conv_halo_key key() const {
         return { bs_k, out_rows, out_cols, KW, KH, a_pad, pad_w, pad_h, filter_copy, KD, pad_d, fn };
@@ -9940,7 +9941,7 @@ struct vk_conv_halo_params {
 };
 
 // Decides whether the halo shader handles this convolution and, if so, picks
-// its tile shape and filter staging. The shader needs stride 1, dilation 1,
+// its tile shape, split-K and filter staging. The shader needs stride 1, dilation 1,
 // padding smaller than the filter, a contiguous f16 or f32 filter, f32 input
 // and output, and input channels in blocks of 16.
 static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_tensor * src0, const ggml_tensor * src1,
@@ -9952,17 +9953,6 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
         (src0->type != GGML_TYPE_F16 && src0->type != GGML_TYPE_F32) || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
         !ggml_is_contiguous(src0)) {
         return false;
-    }
-    if (!is_3d) {
-        // If conv2d split-K splits this layer into full tiles, leave the
-        // layer to it: split-K was faster on mid-size UNet layers with 640 or
-        // more output channels. The halo is faster when split-K doesn't split
-        // or would pad the output channels.
-        uint32_t split_k;
-        const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, src0, dst, split_k);
-        if (split_k > 1 && dst->ne[2] % vk_conv_block_sizes[shape].K == 0) {
-            return false;
-        }
     }
     const int32_t * op = dst->op_params;
     int32_t s[3], pd[3], dl[3]; // width, height, depth
@@ -10104,15 +10094,26 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
     auto tiles_for = [&](uint32_t rows) {
         return (uint64_t)CEIL_DIV(Cout, hp.bs_k) * slices * CEIL_DIV(OH, rows) * CEIL_DIV(OW, hp.out_cols);
     };
-    // Small layers get fewer rows, down to 2, until there are at least half
-    // as many workgroups as SMs, and then if there are fewer than SMs, 32
-    // output channels per workgroup.
-    while (tiles_for(hp.out_rows) < sms / 2 && hp.out_rows > 2) {
-        hp.out_rows /= 2;
+    // With fewer workgroups than two per SM (two fit on an SM), split the
+    // input channel passes of each tile between workgroups (split-K), up to
+    // one wave of them, with at least 4 passes per split. With still fewer
+    // workgroups than half the SMs, use fewer rows, down to 2, and then with
+    // fewer than SMs, 32 output channels per workgroup.
+    const uint32_t stages = Cin / 16 * hp.KD;
+    hp.split_k = 1;
+    if (tiles_for(hp.out_rows) < 2 * sms) {
+        hp.split_k = (uint32_t)std::max<uint64_t>(1, std::min<uint64_t>(2 * sms / tiles_for(hp.out_rows), stages / 4));
+        while (tiles_for(hp.out_rows) * hp.split_k < sms / 2 && hp.out_rows > 2) {
+            hp.out_rows /= 2;
+        }
+        if (tiles_for(hp.out_rows) * hp.split_k < sms && hp.bs_k > 32) {
+            hp.bs_k = 32;
+            hp.a_pad = hp.filter_copy || shmem(hp.out_cols, hp.out_rows, 32, 8) <= limit ? 8 : 0;
+        }
     }
-    if (tiles_for(hp.out_rows) < sms && hp.bs_k > 32) {
-        hp.bs_k = 32;
-        hp.a_pad = hp.filter_copy || shmem(hp.out_cols, hp.out_rows, 32, 8) <= limit ? 8 : 0;
+    // The splits are written to scratch as copies of the whole output.
+    if (hp.split_k > 1 && (!ggml_is_contiguous(dst) || get_misalign_bytes(ctx, dst) != 0)) {
+        hp.split_k = 1;
     }
     hp.tiles = (uint32_t)(slices * CEIL_DIV(OH, hp.out_rows) * CEIL_DIV(OW, hp.out_cols));
     return true;
@@ -11014,8 +11015,8 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         if constexpr (std::is_same_v<PC, vk_op_conv2d_push_constants>) {
             vk_conv_halo_params hp;
             if (ggml_vk_conv_halo_params(ctx, src0, src1, dst, hp)) {
-                // One workgroup per bs_k output channels and out_rows x out_cols output tile.
-                elements = { pc.Cout, hp.tiles, 1 };
+                // One workgroup per bs_k output channels, out_rows x out_cols output tile and split.
+                elements = { CEIL_DIV(pc.Cout, hp.bs_k) * hp.bs_k * hp.split_k, hp.tiles, 1 };
             } else {
                 const uint32_t NPQ = pc.N * pc.OH * pc.OW;
                 const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, src0, dst, split_k);
@@ -11036,7 +11037,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         if constexpr (std::is_same_v<PC, vk_op_conv3d_push_constants>) {
             vk_conv_halo_params hp;
             if (ggml_vk_conv_halo_params(ctx, src0, src1, dst, hp)) {
-                elements = { pc.OC, hp.tiles, 1 };
+                elements = { CEIL_DIV(pc.OC, hp.bs_k) * hp.bs_k * hp.split_k, hp.tiles, 1 };
             } else {
                 const uint32_t NPQ = pc.N * pc.OD * pc.OH * pc.OW;
                 const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, src0, dst, split_k);
@@ -11179,8 +11180,34 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     if constexpr (std::is_same_v<PC, vk_op_conv3d_push_constants> || std::is_same_v<PC, vk_op_conv2d_push_constants>) {
         vk_conv_halo_params hp;
         if (ggml_vk_conv_halo_params(ctx, src0, src1, dst, hp)) {
+            // With split-K, each split writes its own copy of the output to
+            // scratch, and a reduce pass adds them up into dst.
+            vk_subbuffer out_buf = dst_buf;
+            if (hp.split_k > 1) {
+                const size_t scratch_size = ggml_nbytes(dst) * hp.split_k;
+                if (ctx->prealloc_size_split_k < scratch_size) {
+                    ctx->prealloc_size_split_k = scratch_size;
+                    ggml_vk_preallocate_buffers(ctx, subctx);
+                }
+                if (ctx->prealloc_split_k_need_sync) {
+                    ggml_vk_sync_buffers(ctx, subctx);
+                }
+                out_buf = { ctx->prealloc_split_k, 0, scratch_size };
+                pc.dst_offset = 0;
+                ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_matmul_split_k_reduce, 1);
+            }
+            auto reduce = [&]() {
+                if (hp.split_k > 1) {
+                    ggml_vk_sync_buffers(ctx, subctx);
+                    const uint32_t ne = (uint32_t)ggml_nelements(dst);
+                    const std::array<uint32_t, 2> reduce_pc = { ne, hp.split_k };
+                    ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_matmul_split_k_reduce, { out_buf, dst_buf }, reduce_pc, { ne, 1, 1 });
+                    ctx->prealloc_split_k_need_sync = true;
+                }
+            };
             if (!hp.filter_copy) {
-                ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { src0_buf, src1_buf, dst_buf }, pc, elements);
+                ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { src0_buf, src1_buf, out_buf }, pc, elements);
+                reduce();
                 return;
             }
             // Copy the filter into prealloc_x as f16, output channels innermost,
@@ -11228,8 +11255,9 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
             ggml_vk_dispatch_pipeline(ctx, subctx, cpy, { src0_buf, knl }, cp, cpy_elements);
             ggml_vk_sync_buffers(ctx, subctx);
             pc.knl_offset = 0;
-            ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { knl, src1_buf, dst_buf }, pc, elements);
+            ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { knl, src1_buf, out_buf }, pc, elements);
             ctx->prealloc_x_need_sync = true;
+            reduce();
             return;
         }
         if (split_k > 1) {

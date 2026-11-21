@@ -115,6 +115,12 @@
 //   acc[k][j]      = output[k0 + k][oh0 + r][ow0 + x], after every pass
 //
 // (3D: kd is the pass's filter depth slice, on input depth slice od + kd - PAD_D.)
+//
+// Split-K: when the output has too few tiles to fill the GPU, the passes of
+// each tile are split between workgroups; workgroup x is then the split times
+// the number of output channel blocks, plus the block. Each split writes its
+// partial sums to its own copy of the output, split_off elements apart, and
+// the host's reduce pass adds the copies up.
 
 layout(binding = 0) readonly buffer A4 { uvec4 knl4[]; };    // FILTER_COPY: the host's f16 filter copy
 layout(binding = 0) readonly buffer A2 { uvec2 knl2[]; };    // in place: original f16 filter, 4 halves at a time
@@ -233,6 +239,8 @@ bool arin[AR_IT];
 // The workgroup's tile: batch n, output depth slice od, first output row oh0,
 // first output column ow0, first output channel k0.
 uint n, od, oh0, ow0, k0;
+// With split-K, the offset of this workgroup's copy of the output.
+uint split_off;
 
 void setupItems() {
     [[unroll]] for (uint it = 0; it < HALO_IT; ++it) {
@@ -411,14 +419,14 @@ void storeOut(const uint r, const uint c, const float16_t e) {
     const uint col = c - row * OUT_COLS;
     const uint oh = oh0 + row, ow = ow0 + col, k = k0 + r;
     if (oh < p.OH && ow < p.OW && k < p.OC) {
-        dst_data[dst_index(n, k, od, oh, ow)] = float(e);
+        dst_data[dst_index(n, k, od, oh, ow) + split_off] = float(e);
     }
 }
 
 void main() {
-    // Workgroup x picks the output channel block. y and z together number the
-    // output tiles: tiles of one depth slice are row-major, then slices, then
-    // batches.
+    // Workgroup x picks the output channel block and the split. y and z
+    // together number the output tiles: tiles of one depth slice are
+    // row-major, then slices, then batches.
     const uint tiles_w = (p.OW + OUT_COLS - 1) / OUT_COLS;
     const uint tiles_h = (p.OH + OUT_ROWS - 1) / OUT_ROWS;
     const uint per_slice = tiles_w * tiles_h;
@@ -429,7 +437,11 @@ void main() {
     od = nd - n * out_depth();
     oh0 = (rem / tiles_w) * OUT_ROWS;
     ow0 = (rem - (rem / tiles_w) * tiles_w) * OUT_COLS;
-    k0 = gl_WorkGroupID.x * BS_K;
+    const uint kblocks = (p.OC + BS_K - 1) / BS_K;
+    const uint split = gl_WorkGroupID.x / kblocks;
+    const uint nsplit = gl_NumWorkGroups.x / kblocks;
+    k0 = (gl_WorkGroupID.x - split * kblocks) * BS_K;
+    split_off = split * p.N * p.OC * out_depth() * p.OH * p.OW;
     if (n >= p.N) {
         return;
     }
@@ -446,18 +458,21 @@ void main() {
     }
     setupItems();
 
-    // One pass per block of BS_C input channels and filter depth slice. There
-    // is one copy of the box and filter in shared memory, so the next pass is
-    // only loaded after this pass's multiplies. While one workgroup waits for
-    // its loads, a second workgroup on the same SM runs its multiplies.
-    // (Issuing the loads before the multiplies measured slower: holding them
-    // in registers costs occupancy.) The last pass is peeled off so the loop
-    // body has no branches.
+    // One pass per block of BS_C input channels and filter depth slice (this
+    // workgroup's share of them, with split-K). There is one copy of the box
+    // and filter in shared memory, so the next pass is only loaded after this
+    // pass's multiplies. While one workgroup waits for its loads, a second
+    // workgroup on the same SM runs its multiplies. (Issuing the loads before
+    // the multiplies measured slower: holding them in registers costs
+    // occupancy.) The last pass is peeled off so the loop body has no
+    // branches.
     const uint stages = (p.IC / BS_C) * KD;
-    loadStage(0);
+    const uint s_begin = split * stages / nsplit;
+    const uint s_end = (split + 1) * stages / nsplit;
+    loadStage(s_begin);
     storeStage();
     barrier();
-    [[dont_unroll]] for (uint s = 0; s + 1 < stages; ++s) {
+    [[dont_unroll]] for (uint s = s_begin; s + 1 < s_end; ++s) {
         mmaStage();
         barrier();
         loadStage(s + 1);
