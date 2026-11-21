@@ -1093,11 +1093,38 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
                 auto oit = owner_idx.find(tensor);
                 if (oit != owner_idx.end()) {
                     for (const ggml_tensor * input : nodes[oit->second].inputs) {
-                        if (input && ggml_hexagon_tensor_is_lowered_f16(input)) {
+                        if (is_f16_tensor(input) && (opt_oplower >= 2 || !is_weight_or_bcast(input, tensor))) {
                             return true;
                         }
                     }
                 }
+            }
+        }
+        return false;
+    };
+
+    auto has_real_inputs = [](const htp_opnode & node) -> bool {
+        for (const ggml_tensor * inp : node.inputs) {
+            if (inp && inp->type != GGML_TYPE_I32 && inp->type != GGML_TYPE_I64) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    auto is_f16_consumer_seed = [&](const ggml_tensor * r) -> bool {
+        const htp_opnode * owner = find_owner(r);
+        if (!owner || has_real_inputs(*owner)) {
+            return false;
+        }
+        auto uit = root_users.find(r);
+        if (uit == root_users.end()) {
+            return false;
+        }
+        for (size_t idx : uit->second) {
+            const htp_opnode & user = nodes[idx];
+            if (&user != owner && is_f16_tensor(user.dst())) {
+                return true;
             }
         }
         return false;
@@ -1112,11 +1139,7 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
 
     std::vector<int> touched_pos(nodes.size(), -1);
 
-    for (const ggml_tensor * root : roots) {
-        if (!can_lower(root) || !is_selected_root(root)) {
-            continue;
-        }
-
+    auto try_lower_root = [&](const ggml_tensor * root) {
         std::vector<const ggml_tensor *> tx_roots;
         std::vector<saved_node>          touched;
 
@@ -1202,7 +1225,7 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
             for (saved_node & s : touched) {
                 memcpy(s.node->kernel_params, s.kernel_params, sizeof(s.kernel_params));
             }
-            continue;
+            return;
         }
 
         for (const ggml_tensor * r : tx_roots) {
@@ -1211,6 +1234,18 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
             if (htp_lower_is_mm_root(nodes, owner_idx, r)) {
                 ++n_lowered_mm;
             }
+        }
+    };
+
+    for (const ggml_tensor * root : roots) {
+        if (can_lower(root) && is_selected_root(root)) {
+            try_lower_root(root);
+        }
+    }
+
+    for (const ggml_tensor * root : roots) {
+        if (can_lower(root) && is_f16_consumer_seed(root)) {
+            try_lower_root(root);
         }
     }
 
