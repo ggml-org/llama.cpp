@@ -513,7 +513,7 @@ static __global__ void flash_attn_ext_vec(
 #endif // V_DOT2_F32_F16_AVAILABLE
 
         KQ_sum[j_VKQ] *= kqmax_scale;
-        KQ_sum[j_VKQ] = warp_reduce_sum(KQ_sum[j_VKQ]);
+        KQ_sum[j_VKQ] = warp_reduce_sum<WARP_SIZE, true>(KQ_sum[j_VKQ]);
         if (threadIdx.x == 0) {
             KQ_sum_shared[j_VKQ][threadIdx.y] = KQ_sum[j_VKQ];
         }

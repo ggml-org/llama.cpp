@@ -341,6 +341,7 @@ static __device__ __forceinline__ uint32_t ggml_hip_perm(const uint32_t hi, cons
 #define GGML_HIP_DPP_ROW_ROR_8       0x128 // row_ror:8
 #define GGML_HIP_DPP_ROW_BCAST_15    0x142 // row_bcast:15, GCN/CDNA only
 #define GGML_HIP_DPP_ROW_BCAST_31    0x143 // row_bcast:31, GCN/CDNA only
+#define GGML_HIP_DPP_WAVE_ROR_1      0x13c // wave_ror:1
 
 // DS swizzle mask codes.
 #define GGML_HIP_SWIZZLE_SWAP16      0x401F // XOR16 within each 32-lane group

@@ -290,7 +290,7 @@ static __global__ void lightning_indexer_kernel_vec(
 
 #pragma unroll
             for (int k = 0; k < K_VECS_PER_WARP; ++k) {
-                float sum = warp_reduce_sum(qk[k]);
+                float sum = warp_reduce_sum<WARP_SIZE, true>(qk[k]);
 
                 // ReLU, weight
                 if (i_lane == 0) {

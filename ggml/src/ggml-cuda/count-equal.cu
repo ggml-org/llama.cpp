@@ -16,7 +16,7 @@ static __global__ void count_equal(const T * __restrict__ x, const T * __restric
         nequal += xi == yi;
     }
 
-    nequal = warp_reduce_sum(nequal);
+    nequal = warp_reduce_sum<WARP_SIZE, true>(nequal);
 
     if (threadIdx.x != 0) {
         return;
