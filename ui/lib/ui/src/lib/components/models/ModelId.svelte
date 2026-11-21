@@ -229,7 +229,7 @@
 				<span class="inline-flex items-center gap-1 text-muted-foreground">
 					<ScrollText class="size-icon-xs" />
 
-					<span class="text-xs">{formatParameters(contextLength)}</span>
+					<span class="text-caption">{formatParameters(contextLength)}</span>
 				</span>
 			{/if}
 
@@ -237,7 +237,7 @@
 				<span class="inline-flex items-center gap-1 text-muted-foreground">
 					<Database class="size-icon-xs" />
 
-					<span class="text-xs">{formatSizeRange(sizeRange.min, sizeRange.max)}</span>
+					<span class="text-caption">{formatSizeRange(sizeRange.min, sizeRange.max)}</span>
 				</span>
 			{/if}
 		</span>

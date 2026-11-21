@@ -40,9 +40,10 @@ test.describe('PWA Service Worker', () => {
 		const swResponse = await page.request.get(swActive!);
 		const swContent = await swResponse.text();
 
-		// Precache contains SvelteKit content-hashed bundle paths
-		expect(swContent).toMatch(/["'`]_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js["'`]/);
-		expect(swContent).toMatch(/["'`]_app\/immutable\/assets\/bundle\.[a-zA-Z0-9_-]+\.css["'`]/);
+		// Precache contains SvelteKit's content-hashed entry points and CSS (a split build)
+		expect(swContent).toMatch(/["'`]_app\/immutable\/entry\/start\.[a-zA-Z0-9_-]+\.js["'`]/);
+		expect(swContent).toMatch(/["'`]_app\/immutable\/entry\/app\.[a-zA-Z0-9_-]+\.js["'`]/);
+		expect(swContent).toMatch(/["'`]_app\/immutable\/assets\/[a-zA-Z0-9_.-]+\.css["'`]/);
 		expect(swContent).toMatch(/["'`]manifest\.webmanifest["'`]/);
 		expect(swContent).toMatch(/["'`]_app\/version\.json["'`]/);
 	});
@@ -120,16 +121,17 @@ test.describe('PWA Service Worker', () => {
 		expect(manifest.icons.length).toBeGreaterThan(0);
 	});
 
-	test('index.html contains content-hashed bundle references', async ({ page }) => {
+	test('index.html contains content-hashed entry references', async ({ page }) => {
 		const response = await page.request.get('/');
 
 		expect(response.ok()).toBeTruthy();
 
 		const html = await response.text();
 
-		// SvelteKit outputs content-hashed bundle names in _app/immutable/
-		expect(html).toMatch(/href="(\.\/|\/)_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js"/);
-		expect(html).toMatch(/href="(\.\/|\/)_app\/immutable\/assets\/bundle\.[a-zA-Z0-9_-]+\.css"/);
-		expect(html).toMatch(/import\("(\.\/|\/)_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js"\)/);
+		// a split build: SvelteKit's content-hashed entry points in _app/immutable/entry/
+		expect(html).toMatch(/href="(\.\/|\/)_app\/immutable\/entry\/start\.[a-zA-Z0-9_-]+\.js"/);
+		expect(html).toMatch(/href="(\.\/|\/)_app\/immutable\/assets\/[a-zA-Z0-9_.-]+\.css"/);
+		expect(html).toMatch(/import\("(\.\/|\/)_app\/immutable\/entry\/start\.[a-zA-Z0-9_-]+\.js"\)/);
+		expect(html).toMatch(/import\("(\.\/|\/)_app\/immutable\/entry\/app\.[a-zA-Z0-9_-]+\.js"\)/);
 	});
 });

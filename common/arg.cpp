@@ -3420,12 +3420,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--ui-mcp-proxy", "--webui-mcp-proxy"},
         {"--no-ui-mcp-proxy", "--no-webui-mcp-proxy"},
-        "experimental: whether to enable MCP CORS proxy, for Llama Chat to reach public MCP servers without CORS headers; local and private addresses are refused - do not enable in untrusted environments (default: disabled)\n"
+        "experimental: whether to enable MCP CORS proxy, for Llama Chat to reach public MCP servers without CORS headers; local and private addresses are refused unless --ui-mcp-proxy-allow-private-urls is set - do not enable in untrusted environments (default: disabled)\n"
         "note: for security reasons, this will limit --cors-origins to localhost by default",
         [](common_params & params, bool value) {
             params.ui_mcp_proxy = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_MCP_PROXY"));
+    add_opt(common_arg(
+        {"--ui-mcp-proxy-allow-private-urls"},
+        "allow the MCP CORS proxy to reach local or private addresses (e.g. MCP servers on localhost or LAN) - anyone who can reach the proxy can then reach your local network (default: disabled, only public addresses)\n"
+        "note: only has effect with --ui-mcp-proxy",
+        [](common_params & params) {
+            params.ui_mcp_proxy_allow_private_urls = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_MCP_PROXY_ALLOW_PRIVATE_URLS"));
     add_opt(common_arg(
         {"--tools"}, "TOOL1,TOOL2,...",
         "experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)\n"

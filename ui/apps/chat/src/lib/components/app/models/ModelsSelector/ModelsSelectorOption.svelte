@@ -5,7 +5,8 @@
 		ModelCapabilities,
 		ModelId,
 		ModelLoadControl,
-		ModelRowActions
+		ModelRowActions,
+		ModelVoiceRole
 	} from '#lib/components/app/index.ts';
 	import { SETTINGS_KEYS } from '#lib/constants/index.ts';
 	import { ServerModelStatus } from '#lib/enums/index.ts';
@@ -54,7 +55,7 @@
 <div
 	aria-selected={isSelected || isHighlighted}
 	class={[
-		'group relative flex w-full items-center gap-2 rounded-sm p-2 text-left text-sm transition focus:outline-none',
+		'group relative flex w-full items-center gap-2 rounded-sm p-2 text-left text-body-sm transition focus:outline-none',
 		'cursor-pointer',
 		// skip layout and paint for rows scrolled out of the long lists
 		'[content-visibility:auto] [contain-intrinsic-size:auto_2.25rem] max-md:[contain-intrinsic-size:auto_3rem]',
@@ -88,6 +89,8 @@
 		tags={option.tags}
 		title={option.model}
 	/>
+
+	<ModelVoiceRole model={option.model} />
 
 	{#if showCapabilities}
 		<ModelCapabilities {option} />

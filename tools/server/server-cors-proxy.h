@@ -20,7 +20,7 @@ static std::string proxy_header_to_lower(std::string header) {
     return header;
 }
 
-static server_http_res_ptr proxy_request(const server_http_req & req, std::string method) {
+static server_http_res_ptr proxy_request(const server_http_req & req, std::string method, bool allow_private_urls) {
     std::string target_url = req.get_param("url");
     common_http_url parsed_url = common_http_parse_url(target_url);
 
@@ -70,8 +70,7 @@ static server_http_res_ptr proxy_request(const server_http_req & req, std::strin
             req.should_stop,
             600, // timeout_read (default to 10 minutes)
             600, // timeout_write (default to 10 minutes)
-            // test-only escape hatch
-            server_resolve_public_addr(parsed_url.host, !common_get_env("LLAMA_SERVER_DEBUG_PROXY_ALLOW_PRIVATE").empty())
+            server_resolve_public_addr(parsed_url.host, allow_private_urls)
             );
 
     // route redirects back through the proxy, so each hop is checked
@@ -86,10 +85,8 @@ static server_http_res_ptr proxy_request(const server_http_req & req, std::strin
     return proxy;
 }
 
-static server_http_context::handler_t proxy_handler_post = [](const server_http_req & req) -> server_http_res_ptr {
-    return proxy_request(req, "POST");
-};
-
-static server_http_context::handler_t proxy_handler_get = [](const server_http_req & req) -> server_http_res_ptr {
-    return proxy_request(req, "GET");
-};
+static server_http_context::handler_t proxy_make_handler(const std::string & method, bool allow_private_urls) {
+    return [method, allow_private_urls](const server_http_req & req) -> server_http_res_ptr {
+        return proxy_request(req, method, allow_private_urls);
+    };
+}

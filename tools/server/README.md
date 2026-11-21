@@ -202,7 +202,8 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--api-prefix PREFIX` | prefix path the server serves from, without the trailing slash (default: )<br/>(env: LLAMA_ARG_API_PREFIX) |
 | `--ui-config, --webui-config JSON` | JSON that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG) |
 | `--ui-config-file, --webui-config-file PATH` | JSON file that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG_FILE) |
-| `--ui-mcp-proxy, --webui-mcp-proxy, --no-ui-mcp-proxy, --no-webui-mcp-proxy` | experimental: whether to enable MCP CORS proxy, for Llama Chat to reach public MCP servers without CORS headers; local and private addresses are refused - do not enable in untrusted environments (default: disabled)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_UI_MCP_PROXY) |
+| `--ui-mcp-proxy, --webui-mcp-proxy, --no-ui-mcp-proxy, --no-webui-mcp-proxy` | experimental: whether to enable MCP CORS proxy, for Llama Chat to reach public MCP servers without CORS headers; local and private addresses are refused unless --ui-mcp-proxy-allow-private-urls is set - do not enable in untrusted environments (default: disabled)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_UI_MCP_PROXY) |
+| `--ui-mcp-proxy-allow-private-urls` | allow the MCP CORS proxy to reach local or private addresses (e.g. MCP servers on localhost or LAN) - anyone who can reach the proxy can then reach your local network (default: disabled, only public addresses)<br/>note: only has effect with --ui-mcp-proxy<br/>(env: LLAMA_ARG_UI_MCP_PROXY_ALLOW_PRIVATE_URLS) |
 | `--tools TOOL1,TOOL2,...` | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_info<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_TOOLS) |
 | `--tools-runtime OPTION` | experimental: run tools in a separate runtime environment (default: none, use host environment)<br/>available options:<br/>  'docker:<image>', 'podman:<image>': spin up a new container and reuse it for all invocations, clean up on server exit<br/>  'docker-container:<id>', 'podman-container:<id>': use an existing container by ID, won't stop on server exit<br/>  'ssh:<target>': run tools on a remote POSIX host over SSH, key-based auth and a trusted host key are required<br/><br/>(env: LLAMA_ARG_TOOLS_RUNTIME) |
 | `--allow-unauthenticated-tools` | allow server tools, MCP servers or MCP proxy on a non-loopback address without an API key - only for trusted networks (default: disabled)<br/>(env: LLAMA_ARG_ALLOW_UNAUTHENTICATED_TOOLS) |
@@ -393,7 +394,7 @@ Every server is spawned once at startup to list its tools, then stopped, and res
 
 The child process runs with the same privileges as the server, so only declare commands you trust. As with `--tools`, `--cors-origins` then defaults to `localhost`.
 
-Note: `--ui-mcp-proxy` is unrelated, it only lets Llama Chat reach public MCP servers that do not send CORS headers. It refuses local and private addresses (loopback, LAN, link-local); connect to those from Llama Chat directly.
+Note: `--ui-mcp-proxy` is unrelated, it only lets Llama Chat reach public MCP servers that do not send CORS headers. By default it refuses local and private addresses (loopback, LAN, link-local); either connect to those from Llama Chat directly (the MCP server must send CORS headers), or add `--ui-mcp-proxy-allow-private-urls`.
 
 Any server written against the [MCP specification](https://modelcontextprotocol.io) works as is, whether it uses an official SDK or not: the transport is one JSON-RPC message per line on stdio, so a script wrapping an existing program is a valid server too.
 
@@ -1640,7 +1641,7 @@ Models that answer after the audio, like LFM3-Audio and LFM3-Omni, hold a conver
 `session.type` selects the session, it can be changed with `session.update` before the first audio or message:
 
 - `realtime` (default): a conversation, every response stays in context for the next turns
-- `transcription`: each committed audio buffer is transcribed on its own, `audio.input.transcription.language` picks the language
+- `transcription`: each committed audio buffer is transcribed on its own, `audio.input.transcription.language` picks the language and `audio.input.transcription.prompt` replaces the default instruction (`Transcribe audio to text`) as the `prompt` of `/v1/audio/transcriptions` does; the prompt can change between utterances
 
 *Client events:*
 
@@ -1931,11 +1932,11 @@ Follows the [TypeSafe API](https://docs.typesafe.ai/api), streaming is not suppo
   - `score`: An array of 2 to 10 level descriptions, lowest level first.
   - `noul`: Optional. An object with the descriptions of `true` and `false`.
 
-The questions of a request are answered independently, an answer does not depend on the other questions. The exception is clef: it reads all the questions in one prompt and decides them jointly.
+The questions of a request are answered independently, an answer does not depend on the other questions. The exceptions are clef, which reads all the questions in one prompt and decides them jointly, and lfm3-d1 and lfm3-d1-omni, which read up to 16 questions after the state in one pass, as the models were trained (requests with a spoken question read one question per pass).
 
 The number of options of a `choice` question is limited by the model, for example: 52 for openjev, 255 for granite-switch, laya, clef, pplx-decider, vllm-decision2, vllm-d3, lfm2-d1, lfm2-d1-omni and h2o-lightning, 2 for openbmb-minicpm-ocr-jev. For laya, long questions and options are truncated to the token budget the model was trained with.
 
-For laya, clef, vllm-d3 and lfm2-d1-omni, the whole prompt is evaluated in one batch: it must fit in `--ubatch-size`. An lfm2-d1-omni prompt is cut to 16384 tokens. For vllm-decision2, the options of a question and the end of the prompt must fit in one batch. An h2o-lightning state longer than 32000 tokens keeps its first and last 16000 tokens. A server that runs clef only serves this endpoint, text generation is not available. A decision model that is also a text model, such as granite-switch, serves both and reports `["text", "decisions"]`.
+For laya, clef, vllm-d3, lfm2-d1-omni, lfm3-d1 and lfm3-d1-omni, the whole prompt is evaluated in one batch: it must fit in `--ubatch-size`. An lfm2-d1-omni prompt is cut to 16384 tokens. For vllm-decision2, the options of a question and the end of the prompt must fit in one batch. An h2o-lightning state longer than 32000 tokens keeps its first and last 16000 tokens. A server that runs clef only serves this endpoint, text generation is not available. A decision model that is also a text model, such as granite-switch, serves both and reports `["text", "decisions"]`.
 
 openbmb-minicpm-ocr-jev answers one fixed question: is an OCR text, rendered as an image, consistent with the original image? `state` is the OCR text, as a string, special tokens written in it are escaped. `files` (or `images`) has exactly 2 images: the original, then the rendered one, both are required. The request has one question and no `instructions`: the task is part of the prompt of the model, so a request that sends one is rejected. It is either a `choice` with the `criteria` `{"0": null, "1": null}`, where `1` means consistent, or a `noul` without `criteria`, which returns the probability of `1`. The model has no LM head, so text generation is not available.
 

@@ -301,9 +301,39 @@ function agenticDebugging(): Trace {
 	return trace;
 }
 
+/** A reply with a diagram, for diagram preview demos. */
+function diagrams(): Trace {
+	const trace = new Trace('How a request flows through llama-server');
+
+	trace.user('Can you draw how a chat request flows through llama-server?');
+	trace.assistant(
+		[
+			'Here is the path a request takes:',
+			'',
+			'```mermaid',
+			'flowchart LR',
+			'    U[Browser] -->|POST /v1/chat/completions| S(llama-server)',
+			'    S --> Q{Slot free?}',
+			'    Q -->|yes| P[Prompt processing]',
+			'    Q -->|no| W[Queue]',
+			'    W --> P',
+			'    P --> G[Sample token]',
+			'    G -->|more| G',
+			'    G -->|SSE tokens| U',
+			'    click S href "https://github.com/ggml-org/llama.cpp" "llama.cpp on GitHub" _blank',
+			'```',
+			'',
+			'Requests wait in the queue until a slot is free, then tokens stream back as they are sampled.'
+		].join('\n')
+	);
+
+	return trace;
+}
+
 /** Built-in traces, by name. */
 export const DEMO_TRACES: Record<string, () => Trace> = {
 	'agentic-debugging': agenticDebugging,
+	diagrams,
 	'long-chat': longChat
 };
 

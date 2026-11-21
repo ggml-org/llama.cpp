@@ -59,7 +59,7 @@
 // While BW spans CC 1000, 1100 & 1200, we are integrating Tensor Core instructions available to 1200 family, see
 // https://docs.nvidia.com/cutlass/media/docs/cpp/blackwell_functionality.html#blackwell-sm120-gemms
 #define GGML_CUDA_CC_BLACKWELL       1200
-#define GGML_CUDA_CC_DGX_SPARK       1210
+#define GGML_CUDA_CC_GB10            1210
 #define GGML_CUDA_CC_RUBIN           1300
 #define GGML_CUDA_CC_OFFSET_AMD      0x1000000
 #define GGML_CUDA_CC_OFFSET_MTHREADS 0x0100000
@@ -451,6 +451,16 @@ static __device__ __forceinline__ T ggml_cuda_shfl_xor(T value, int lane_mask, i
 static __device__ __forceinline__ ggml_cuda_thread_mask_t ggml_cuda_ballot(int predicate, ggml_cuda_thread_mask_t mask = GGML_CUDA_FULL_THREAD_MASK) {
     return __ballot_sync(mask, predicate);
 }
+
+static __device__ __forceinline__ int ggml_cuda_popc(ggml_cuda_thread_mask_t x) {
+    static_assert(sizeof(ggml_cuda_thread_mask_t) == 4 || sizeof(ggml_cuda_thread_mask_t) == 8, "unsupported thread mask type");
+    if constexpr (sizeof(ggml_cuda_thread_mask_t) == 4) {
+        return __popc(x);
+    } else {
+        return __popcll(x);
+    }
+}
+template<typename T> static __device__ __forceinline__ int ggml_cuda_popc(T x) = delete; // Makes implicit type casts result in an error.
 
 static __device__ __forceinline__ int ggml_cuda_all(int predicate, ggml_cuda_thread_mask_t mask = GGML_CUDA_FULL_THREAD_MASK) {
     return __all_sync(mask, predicate);
@@ -1293,6 +1303,7 @@ struct ggml_cuda_device_info {
         size_t  total_vram;
         int     warp_size;                      // Number of threads in a dispatch
         bool    supports_cooperative_launch;    // whether cooperative launch is supported
+        bool    prefer_fp32_acc;                // prefer BF16 inputs with FP32 accumulation for quantized cuBLAS
         int     physical_device;                // backing physical CUDA device for this (virtual) device
         int     physical_share_count;           // number of (virtual) devices sharing this device's physical GPU
         int     virtual_index;                  // index of this (virtual) device among those sharing its physical GPU

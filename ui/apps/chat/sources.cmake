@@ -5,6 +5,8 @@ set(UI_SOURCE_GLOBS
     static/*
     # Llama UI, which the app compiles from source
     ../../lib/ui/src/lib/*
+    # Llama Voice, also compiled from source
+    ../../lib/voice/src/*
 )
 
 set(UI_SOURCE_FILES

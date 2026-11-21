@@ -226,6 +226,23 @@ struct llama_layer_shortconv {
     struct ggml_tensor * out_proj = nullptr;
 };
 
+struct llama_layer_zaya1 {
+    struct ggml_tensor * cca_conv_grp   = nullptr;
+    struct ggml_tensor * cca_conv_grp_b = nullptr;
+    struct ggml_tensor * cca_temp       = nullptr;
+
+    struct ggml_tensor * attn_res_hs = nullptr;
+    struct ggml_tensor * ffn_res_hs  = nullptr;
+
+    struct ggml_tensor * router_eda     = nullptr;
+    struct ggml_tensor * router_norm    = nullptr;
+    struct ggml_tensor * router_fc1     = nullptr;
+    struct ggml_tensor * router_fc1_b   = nullptr;
+    struct ggml_tensor * router_fc2     = nullptr;
+    struct ggml_tensor * router_fc2_b   = nullptr;
+    struct ggml_tensor * router_out     = nullptr;
+};
+
 struct llama_layer_nextn {
     struct ggml_tensor * eh_proj               = nullptr;
     struct ggml_tensor * eh_proj_s             = nullptr;
@@ -667,8 +684,10 @@ struct llama_layer {
     // limite
     struct ggml_tensor * attn_ve_gate     = nullptr;
     struct ggml_tensor * attn_xsa_alpha   = nullptr;
-    struct ggml_tensor * attn_resid_scale = nullptr;
-    struct ggml_tensor * ffn_resid_scale  = nullptr;
+    struct ggml_tensor * attn_resid_scale   = nullptr;
+    struct ggml_tensor * attn_resid_scale_b = nullptr;
+    struct ggml_tensor * ffn_resid_scale    = nullptr;
+    struct ggml_tensor * ffn_resid_scale_b  = nullptr;
     struct ggml_tensor * mudd_down        = nullptr;
     struct ggml_tensor * mudd_up          = nullptr;
     struct ggml_tensor * mudd_up_b        = nullptr;
@@ -696,6 +715,8 @@ struct llama_layer {
     struct llama_layer_convnext convnext;
 
     struct llama_layer_shortconv shortconv;
+
+    struct llama_layer_zaya1 zaya1;
 
     struct llama_layer_nextn nextn;
 
@@ -909,6 +930,10 @@ struct llama_model {
     struct ggml_tensor * dspark_joint_proj_b = nullptr;
     struct ggml_tensor * dspark_mask_embd    = nullptr; // per-slot mask embeddings
 
+    // zaya1
+    struct ggml_tensor * res_scale_in   = nullptr;
+    struct ggml_tensor * res_scale_in_b = nullptr;
+
     struct ggml_tensor * dflash_selector_prev   = nullptr;
     struct ggml_tensor * dflash_selector_next   = nullptr;
     struct ggml_tensor * dflash_selector_hidden = nullptr;
@@ -1026,6 +1051,12 @@ struct llama_model {
     ggml_tensor * get_rope_factors(const llama_cparams & cparams, int il) const;
 
     llama_memory_i * create_memory(const llama_memory_params & params, const llama_cparams & cparams) const;
+
+    // graph size budget: max graph nodes per model tensor
+    virtual uint32_t graph_nodes_per_tensor() const { return 8; }
+
+    // apply Hadamard transform to the lightning indexer keys
+    virtual bool lid_k_hdmd() const { return false; }
 
     ggml_cgraph * build_graph(const llm_graph_params & params) const;
 

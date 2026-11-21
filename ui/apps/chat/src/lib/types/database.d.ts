@@ -38,6 +38,13 @@ export interface DatabaseMessageExtraAudioFile {
 	size?: number;
 	base64Data: string;
 	mimeType: string;
+	/** Recorded in the app as a voice message, as opposed to an uploaded audio file. */
+	voice?: true;
+	/** What was said, for reading; a model without audio input gets it in place of the audio. */
+	transcript?: string;
+	/** Normalised 0..1 waveform of the clip; computed from the audio when left out. */
+	peaks?: number[];
+	durationMs?: number;
 }
 
 export interface DatabaseMessageExtraVideoFile {

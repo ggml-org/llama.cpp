@@ -1,0 +1,53 @@
+{
+  "name": "@ggml-org/llama-voice",
+  "version": "0.1.0",
+  "description": "Voice input for llama.cpp frontend apps: capture, transcription and dictation.",
+  "homepage": "https://github.com/ggml-org/llama.cpp/tree/master/ui/lib/voice",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ggml-org/llama.cpp.git",
+    "directory": "ui/lib/voice"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./svelte": {
+      "types": "./dist/svelte/index.d.ts",
+      "svelte": "./dist/svelte/index.js",
+      "default": "./dist/svelte/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc --noEmit",
+    "prepack": "npm run build && publint",
+    "test": "vitest --run"
+  },
+  "peerDependencies": {
+    "svelte": "^5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "svelte": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "publint": "0.3.25",
+    "svelte": "5.57.3",
+    "typescript": "6.0.3",
+    "vitest": "5.0.5"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -217,6 +217,8 @@ struct mtmd_hparams {
     static constexpr int32_t qwen3tts_max_ref_seconds = 30;
     // fish_s2: the codec encoder runs at 44.1 kHz, memory grows with the clip
     static constexpr int32_t fish_s2_max_spk_seconds = 30;
+    // voxcpm2: the AudioVAE encoder runs at 16 kHz, memory grows with the clip
+    static constexpr int32_t voxcpm2_max_spk_seconds = 30;
     int32_t seanet_n_stage    = 0;
     std::vector<int32_t> seanet_ratios; // encoder order (reversed compared to the config)
     int32_t mimi_downsample   = 0;      // encoder frame rate / model frame rate
@@ -236,6 +238,9 @@ struct mtmd_hparams {
     int32_t wav_dac_n_res        = 0;
     int32_t wav_tfm_swa          = 0; // pre_transformer's KV cache size, in frames
     int32_t wav_frame_stack      = 0; // lfm3a codec: decoder positions per frame
+
+    // fish_s2_spkenc in a drama3_gen mmproj: backbone rows as drama3_gen builds them
+    bool spkenc_drama3_rows = false;
 
     // mimo-v2.5: LLM-side connector (input_local_transformer)
     int32_t audio_local_n_layer = 0;
@@ -1067,6 +1072,68 @@ struct mtmd_music3 {
     std::vector<mtmd_layer> dit;
 };
 
+// voxcpm2: LocEnc, LocDiT projections, FSQ, residual LM fusion, stop head and the causal AudioVAE
+// the LocDiT layers are model.layers, the residual LM layers are loaded by libllama, see mtmd_voxcpm2_res_load()
+struct mtmd_voxcpm2 {
+    ggml_tensor * rope_factors = nullptr; // LongRoPE factors of LocEnc and LocDiT
+
+    // LocEnc: [special token, patch latents] -> output of the special token -> backbone input row
+    std::vector<mtmd_layer> enc_layers;
+    ggml_tensor * enc_special = nullptr;
+    ggml_tensor * enc_in_w    = nullptr;
+    ggml_tensor * enc_in_b    = nullptr;
+    ggml_tensor * enc_norm_w  = nullptr;
+    ggml_tensor * enc_to_lm_w = nullptr;
+    ggml_tensor * enc_to_lm_b = nullptr;
+
+    // LocDiT: [lm, res, time, cond patch, noisy patch] -> velocity of the noisy patch
+    ggml_tensor * dit_in_w     = nullptr;
+    ggml_tensor * dit_in_b     = nullptr;
+    ggml_tensor * dit_cond_w   = nullptr;
+    ggml_tensor * dit_cond_b   = nullptr;
+    ggml_tensor * dit_out_w    = nullptr;
+    ggml_tensor * dit_out_b    = nullptr;
+    ggml_tensor * time0_w      = nullptr; // time_mlp, the constant dt term is folded into time1_b
+    ggml_tensor * time0_b      = nullptr;
+    ggml_tensor * time1_w      = nullptr;
+    ggml_tensor * time1_b      = nullptr;
+    ggml_tensor * lm_to_dit_w  = nullptr;
+    ggml_tensor * lm_to_dit_b  = nullptr;
+    ggml_tensor * res_to_dit_w = nullptr;
+    ggml_tensor * res_to_dit_b = nullptr;
+
+    // backbone hidden state: FSQ (audio rows), residual LM input, stop head
+    ggml_tensor * fsq_in_w    = nullptr;
+    ggml_tensor * fsq_in_b    = nullptr;
+    ggml_tensor * fsq_out_w   = nullptr;
+    ggml_tensor * fsq_out_b   = nullptr;
+    ggml_tensor * fusion_w    = nullptr;
+    ggml_tensor * fusion_b    = nullptr;
+    ggml_tensor * stop_proj_w = nullptr;
+    ggml_tensor * stop_proj_b = nullptr;
+    ggml_tensor * stop_head_w = nullptr;
+
+    // AudioVAE decoder (gen): depthwise conv, conv k = 1, upsample blocks with a sample-rate scale and bias, Snake, conv
+    ggml_tensor * dec_in_dw_w = nullptr;
+    ggml_tensor * dec_in_dw_b = nullptr;
+    ggml_tensor * dec_in_w    = nullptr;
+    ggml_tensor * dec_in_b    = nullptr;
+    std::vector<ggml_tensor *> dec_sr_scale;
+    std::vector<ggml_tensor *> dec_sr_bias;
+    std::vector<mtmd_code2wav::dac_block> dec;
+    ggml_tensor * dec_post_alpha = nullptr;
+    ggml_tensor * dec_post_beta  = nullptr;
+    ggml_tensor * dec_out_w      = nullptr;
+    ggml_tensor * dec_out_b      = nullptr;
+
+    // AudioVAE encoder (spkenc): conv, downsample blocks (residual units, Snake, strided conv), fc_mu
+    ggml_tensor * enc_conv_in_w = nullptr;
+    ggml_tensor * enc_conv_in_b = nullptr;
+    std::vector<mtmd_code2wav::dac_block> enc;
+    ggml_tensor * enc_mu_w = nullptr;
+    ggml_tensor * enc_mu_b = nullptr;
+};
+
 struct mtmd_vocos {
     ggml_tensor * input_w        = nullptr;
     ggml_tensor * input_b        = nullptr;
@@ -1362,6 +1429,7 @@ struct mtmd_model {
     std::vector<mtmd_drama3_layer> drama3_layers;
     mtmd_zonos3_wav zonos3;
     mtmd_yue2 yue2;
+    mtmd_voxcpm2 voxcpm2;
     mtmd_music3 music3;
     mtmd_snake_vae snake_vae; // yue2, minimax_music3
     mtmd_tiny_voca tiny_voca;

@@ -36,11 +36,34 @@ class ModelsDiscoverStore {
 	private catalog: HfCatalogEntry[] = [];
 	/** Repo id -> size range, for catalog rows and lazily measured search rows. */
 	private catalogSizeRanges = new SvelteMap<string, ModelsDiscoverSizeRange>();
-	private defaultModels: HfModelInfo[] = [];
+	private defaultModels = $state.raw<HfModelInfo[]>([]);
 	private fetched = false;
 	private searchRequestId = 0;
 	/** In-flight `sizeRange()` lookups, keyed by repo id. */
 	private sizeRangePending = new Map<string, Promise<ModelsDiscoverSizeRange | undefined>>();
+
+	/** The curated catalog repos as they land, whatever a search shows right now. */
+	get catalogModels(): HfModelInfo[] {
+		return this.defaultModels;
+	}
+
+	/**
+	 * Repos published by their base model's own org first (e.g. `Qwen/Qwen3-8B-GGUF`
+	 * ahead of third-party quants of `Qwen/Qwen3-8B`); the hub's order holds otherwise.
+	 * Every Hub search ranks its results this way.
+	 */
+	baseOrgFirst(models: HfModelInfo[]): HfModelInfo[] {
+		// org names are case-insensitive on the hub, and base_model tags are not always canonical
+		const isBaseOrg = (model: HfModelInfo) => {
+			const org = orgOf(model.id).toLowerCase();
+
+			return HuggingFaceService.getBaseModels(model).some(
+				(base) => orgOf(base).toLowerCase() === org
+			);
+		};
+
+		return [...models.filter(isBaseOrg), ...models.filter((model) => !isBaseOrg(model))];
+	}
 
 	/**
 	 * Cached size range for a repo, without measuring: the synchronous part of
@@ -102,7 +125,10 @@ class ModelsDiscoverStore {
 					this.catalogSizeRanges.set(build.repo, this.sizeRangeFor(build, tree));
 
 					// the catalog repo id, not the HF response `id`, drives selection
-					this.defaultModels.push({ ...info, id: build.repo, modelId: build.repo });
+					this.defaultModels = [
+						...this.defaultModels,
+						{ ...info, id: build.repo, modelId: build.repo }
+					];
 				}
 
 				// show what has landed, unless a search owns the list right now
@@ -179,23 +205,6 @@ class ModelsDiscoverStore {
 		this.sizeRangePending.set(modelId, request);
 
 		return request;
-	}
-
-	/**
-	 * Repos published by their base model's own org first (e.g. `Qwen/Qwen3-8B-GGUF`
-	 * ahead of third-party quants of `Qwen/Qwen3-8B`); the hub's order holds otherwise.
-	 */
-	private baseOrgFirst(models: HfModelInfo[]): HfModelInfo[] {
-		// org names are case-insensitive on the hub, and base_model tags are not always canonical
-		const isBaseOrg = (model: HfModelInfo) => {
-			const org = orgOf(model.id).toLowerCase();
-
-			return HuggingFaceService.getBaseModels(model).some(
-				(base) => orgOf(base).toLowerCase() === org
-			);
-		};
-
-		return [...models.filter(isBaseOrg), ...models.filter((model) => !isBaseOrg(model))];
 	}
 
 	/**

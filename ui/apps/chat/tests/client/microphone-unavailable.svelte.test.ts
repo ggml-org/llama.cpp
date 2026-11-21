@@ -4,8 +4,12 @@
 // while staying tappable, so a tap on a phone, which shows no tooltip, can explain it.
 
 import ChatFormActionRecordWrapper from './components/ChatFormActionRecordWrapper.svelte';
-import { MICROPHONE_UNAVAILABLE_MESSAGE } from '#lib/constants/index.ts';
-import { describeMicrophoneError, microphoneUnavailableReason } from '#lib/utils/browser-only.ts';
+import {
+	describeMicrophoneError,
+	microphoneUnavailableReason,
+	VOICE_MICROPHONE_MESSAGE
+} from '@ggml-org/llama-voice';
+import { VOICE_MODE_MESSAGE } from '#lib/constants/index.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 
@@ -17,14 +21,14 @@ describe('microphoneUnavailableReason', () => {
 	it('names HTTPS when the page is not a secure context', () => {
 		vi.stubGlobal('isSecureContext', false);
 
-		expect(microphoneUnavailableReason()).toBe(MICROPHONE_UNAVAILABLE_MESSAGE.insecure);
+		expect(microphoneUnavailableReason()).toBe(VOICE_MICROPHONE_MESSAGE.insecure);
 	});
 
-	it('names the browser when it has no recorder', () => {
+	it('names the browser when it cannot capture audio', () => {
 		vi.stubGlobal('isSecureContext', true);
-		vi.stubGlobal('MediaRecorder', undefined);
+		vi.stubGlobal('AudioContext', undefined);
 
-		expect(microphoneUnavailableReason()).toBe(MICROPHONE_UNAVAILABLE_MESSAGE.unsupported);
+		expect(microphoneUnavailableReason()).toBe(VOICE_MICROPHONE_MESSAGE.unsupported);
 	});
 
 	it('has nothing to say when the page can record', () => {
@@ -36,17 +40,17 @@ describe('microphoneUnavailableReason', () => {
 
 describe('describeMicrophoneError', () => {
 	it.each([
-		['NotAllowedError', MICROPHONE_UNAVAILABLE_MESSAGE.denied],
-		['SecurityError', MICROPHONE_UNAVAILABLE_MESSAGE.denied],
-		['NotFoundError', MICROPHONE_UNAVAILABLE_MESSAGE.notFound],
-		['NotReadableError', MICROPHONE_UNAVAILABLE_MESSAGE.busy]
+		['NotAllowedError', VOICE_MICROPHONE_MESSAGE.denied],
+		['SecurityError', VOICE_MICROPHONE_MESSAGE.denied],
+		['NotFoundError', VOICE_MICROPHONE_MESSAGE.notFound],
+		['NotReadableError', VOICE_MICROPHONE_MESSAGE.busy]
 	])('names a %s', (name, message) => {
 		expect(describeMicrophoneError(new DOMException('', name))).toBe(message);
 	});
 
 	it("keeps an unknown error's own message", () => {
 		expect(describeMicrophoneError(new Error('boom'))).toBe(
-			`${MICROPHONE_UNAVAILABLE_MESSAGE.failed} boom`
+			`${VOICE_MICROPHONE_MESSAGE.failed} boom`
 		);
 	});
 });
@@ -56,7 +60,7 @@ describe('the record button', () => {
 	it('shows the reason and stays tappable when the microphone cannot record', async () => {
 		const onMicClick = vi.fn();
 		const screen = render(ChatFormActionRecordWrapper, {
-			micWarning: MICROPHONE_UNAVAILABLE_MESSAGE.insecure,
+			micWarning: VOICE_MICROPHONE_MESSAGE.insecure,
 			onMicClick
 		});
 		const button = screen.getByRole('button', { name: /^Recording unavailable: / }).last();
@@ -71,18 +75,18 @@ describe('the record button', () => {
 		const screen = render(ChatFormActionRecordWrapper, {});
 
 		await expect
-			.element(screen.getByRole('button', { name: 'Start recording' }).last())
+			.element(screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last())
 			.toBeEnabled();
 	});
 
-	it('stays disabled for a model without audio, whatever the microphone', async () => {
+	it('stays disabled when no model can take audio, whatever the microphone', async () => {
 		const screen = render(ChatFormActionRecordWrapper, {
-			hasAudioModality: false,
-			micWarning: MICROPHONE_UNAVAILABLE_MESSAGE.insecure
+			micWarning: VOICE_MICROPHONE_MESSAGE.insecure,
+			unavailableReason: VOICE_MODE_MESSAGE.unavailable
 		});
 
 		await expect
-			.element(screen.getByRole('button', { name: 'Start recording' }).last())
+			.element(screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last())
 			.toBeDisabled();
 	});
 });

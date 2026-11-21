@@ -255,7 +255,7 @@
 		{#if recommendationsToShow.length > 0}
 			<div class="space-y-3 pt-2">
 				<div class="flex items-center justify-between gap-3">
-					<h3 class="text-sm font-medium">Recommended Servers</h3>
+					<h3 class="text-label">Recommended Servers</h3>
 
 					<Button class="text-muted-foreground" onclick={handleDismissAll} size="sm" variant="ghost"
 						>Dismiss</Button

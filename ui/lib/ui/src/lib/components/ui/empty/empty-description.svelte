@@ -13,7 +13,7 @@
 <div
 	bind:this={ref}
 	class={cn(
-		'text-sm/relaxed text-muted-foreground [&>a:hover]:text-primary text-sm/relaxed [&>a]:underline [&>a]:underline-offset-4',
+		'text-body-sm/relaxed text-muted-foreground [&>a:hover]:text-primary text-body-sm/relaxed [&>a]:underline [&>a]:underline-offset-4',
 		className
 	)}
 	data-slot="empty-description"

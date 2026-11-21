@@ -1,0 +1,30 @@
+import { Markdown, Meta, Source, Unstyled } from '@storybook/addon-docs/blocks';
+import designMd from '../../DESIGN.md?raw';
+
+export const [, tokens, guidelines] = designMd.split(/^---$/m);
+
+<Meta title="Agents/Design guidelines" />
+
+<Unstyled>
+<div className="ds-docs">
+
+# Design guidelines
+
+<div className="callout">
+
+**Written for agents first.** This is the how of Llama UI, in a form an agent can follow when it builds or changes the UI: the tokens, the roles and the rules, precise rather than persuasive. People can read it too.
+
+</div>
+
+Rendered from `ui/apps/chat/DESIGN.md`. The implementation lives in `ui/lib/ui/src/lib/styles`, and every token and surface below can be seen under **Llama UI** in this Storybook. The logo, type and colours are in llama-brand's Storybook.
+
+<Markdown>{guidelines}</Markdown>
+
+## Tokens
+
+The machine-readable half of `ui/apps/chat/DESIGN.md`, in the [DESIGN.md format](https://github.com/google-labs-code/design.md). Check it with `npx @google/design.md lint DESIGN.md`.
+
+<Source code={tokens.trim()} language="yaml" dark />
+
+</div>
+</Unstyled>

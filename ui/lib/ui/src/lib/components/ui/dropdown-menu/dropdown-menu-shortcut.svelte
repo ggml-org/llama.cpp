@@ -12,7 +12,7 @@
 
 <span
 	bind:this={ref}
-	class={cn('ml-auto text-xs tracking-widest text-muted-foreground', className)}
+	class={cn('ml-auto text-caption tracking-widest text-muted-foreground', className)}
 	data-slot="dropdown-menu-shortcut"
 	{...restProps}
 >

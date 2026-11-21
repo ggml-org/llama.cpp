@@ -1327,11 +1327,17 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
 }
 
 json server_task_result_cmpl_partial::to_json_oaicompat_asr() {
-    json event = json {
-        {"type", "transcript.text.delta"},
-        {"delta", content.text},
-    };
-    return event;
+    // only the parsed content is the transcript, e.g. the "language XXX" prefix of Qwen3-ASR is reasoning
+    json events = json::array();
+    for (const auto & diff : oaicompat_msg_diffs) {
+        if (!diff.content_delta.empty()) {
+            events.push_back({
+                {"type", "transcript.text.delta"},
+                {"delta", diff.content_delta},
+            });
+        }
+    }
+    return events;
 }
 
 json server_task_result_cmpl_partial::to_json_anthropic() {
