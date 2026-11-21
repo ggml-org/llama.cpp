@@ -123,7 +123,8 @@ struct mtmd_subctx_kokoro_io {
     int n_har    = 0;
     const std::vector<int32_t> * tokens = nullptr; // STAGE_TEXT
     const std::vector<float> *   x      = nullptr; // STAGE_F0N: shared LSTM output, STAGE_DEC: aligned text features
-    const std::vector<float> *   style  = nullptr; // predictor or decoder half of the voice row
+    const std::vector<float> *   style  = nullptr; // predictor or generator style of the voice row
+    const std::vector<float> *   style_trunk = nullptr; // STAGE_DEC
     const std::vector<float> *   f0     = nullptr; // STAGE_DEC
     const std::vector<float> *   en     = nullptr;
     const std::vector<float> *   har    = nullptr;

@@ -242,6 +242,9 @@ def _g2p_dicts() -> dict[str, dict[str, Any]] | None:
 class KokoroTextModel(TextModel):
     model_arch = gguf.MODEL_ARCH.KOKORO
 
+    # jinja code put before the "tts" template
+    tts_template_prefix = ""
+
     _LAYER = "encoder.albert_layer_groups.0.albert_layers.0."
     _TENSOR_MAP = {
         "embeddings.LayerNorm":                gguf.MODEL_TENSOR.TOKEN_EMBD_NORM,
@@ -292,7 +295,7 @@ class KokoroTextModel(TextModel):
         if dicts is not None:
             template_path = Path(__file__).parent.parent / "models" / "templates" / "hexgrad-Kokoro-82M-tts.jinja"
             with open(template_path, encoding="utf-8") as f:
-                self.gguf_writer.add_chat_template([{"name": "tts", "template": f.read()}])
+                self.gguf_writer.add_chat_template([{"name": "tts", "template": self.tts_template_prefix + f.read()}])
             self.gguf_writer.add_tts_dicts(dicts)
 
     def set_gguf_parameters(self):
@@ -343,6 +346,9 @@ class KokoroMmprojModel(MmprojModel):
     def get_audio_config(self) -> dict[str, Any] | None:
         return self.global_config.get("audio_config")
 
+    def default_voice(self) -> str | None:
+        return DEFAULT_VOICE if (self.dir_model / "voices" / f"{DEFAULT_VOICE}.pt").is_file() else None
+
     def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
         del remote_hf_model_id
         tensors: dict[str, Callable[[], Tensor]] = {}
@@ -367,8 +373,9 @@ class KokoroMmprojModel(MmprojModel):
         self.gguf_writer.add_gen_audio_block_count(config["n_layer"])
         self.gguf_writer.add_gen_audio_head_count(1)
         self.gguf_writer.add_gen_audio_attention_layernorm_eps(1e-5)
-        if (self.dir_model / "voices" / f"{DEFAULT_VOICE}.pt").is_file():
-            self.gguf_writer.add_gen_audio_default_voice(DEFAULT_VOICE)
+        default_voice = self.default_voice()
+        if default_voice is not None:
+            self.gguf_writer.add_gen_audio_default_voice(default_voice)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid

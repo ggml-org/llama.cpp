@@ -523,8 +523,8 @@ mtmd_subctx_enc_state * mtmd_subcontext::enc_state_init(int32_t n_frames_max) {
 }
 
 bool mtmd_subcontext::encode_kokoro(mtmd_subctx_encode_params * params) {
-    const int n_embd  = model.n_mmproj_embd();
-    const int n_style = mtmd_graph_kokoro::n_style;
+    const int  n_embd = model.n_mmproj_embd();
+    const auto sz     = mtmd_graph_kokoro::get_sizes(model);
     if (params->gen_process != MTMD_SUBCTX_GEN_PROCESS_GEN_WAV || !params->codes || !params->feats || !params->gen_state || !params->out_audio) {
         LOG_ERR("%s: kokoro takes the phoneme tokens and their backbone states\n", __func__);
         return false;
@@ -532,8 +532,13 @@ bool mtmd_subcontext::encode_kokoro(mtmd_subctx_encode_params * params) {
     const auto & tokens = *params->codes;
     const auto & feats  = *params->feats;
     const int n_tok = (int) tokens.size();
-    if (n_tok < 2 || feats.size() != (size_t) 2 * n_style + (size_t) n_tok * n_embd) {
-        LOG_ERR("%s: expected a voice row of %d values, then %d values for each of the %d tokens\n", __func__, 2 * n_style, n_embd, n_tok);
+    // voice row: generator style, predictor style, then the trunk style if the generator one is not used for it
+    const size_t n_row_shared = (size_t) sz.n_style_gen + sz.n_style_pred;
+    const size_t n_row_trunk  = n_row_shared + sz.n_style_trunk;
+    const size_t n_bert       = (size_t) n_tok * n_embd;
+    const bool has_trunk = feats.size() == n_row_trunk + n_bert;
+    if (n_tok < 2 || (!has_trunk && (feats.size() != n_row_shared + n_bert || sz.n_style_trunk != sz.n_style_gen))) {
+        LOG_ERR("%s: expected a voice row, then %d values for each of the %d tokens\n", __func__, n_embd, n_tok);
         return false;
     }
     const int64_t n_vocab = model.cbx_tensors.at("a.gen.text.embedding.weight")->ne[1];
@@ -543,9 +548,10 @@ bool mtmd_subcontext::encode_kokoro(mtmd_subctx_encode_params * params) {
             return false;
         }
     }
-    const std::vector<float> style_dec(feats.begin(), feats.begin() + n_style);
-    const std::vector<float> style_pred(feats.begin() + n_style, feats.begin() + 2 * n_style);
-    const float * bert = feats.data() + 2 * n_style;
+    const std::vector<float> style_gen(feats.begin(), feats.begin() + sz.n_style_gen);
+    const std::vector<float> style_pred(feats.begin() + sz.n_style_gen, feats.begin() + n_row_shared);
+    const std::vector<float> style_trunk = has_trunk ? std::vector<float>(feats.begin() + n_row_shared, feats.begin() + n_row_trunk) : style_gen;
+    const float * bert = feats.data() + (has_trunk ? n_row_trunk : n_row_shared);
 
     auto run = [&](mtmd_subctx_kokoro_io & io) {
         mtmd_subctx_encode_params p = *params;
@@ -590,7 +596,8 @@ bool mtmd_subcontext::encode_kokoro(mtmd_subctx_encode_params * params) {
         io.n_frames = n_frames;
         io.n_har    = mtmd_graph_kokoro::har_source(model, f0, params->gen_state->rng, har);
         io.x        = &asr;
-        io.style    = &style_dec;
+        io.style    = &style_gen;
+        io.style_trunk = &style_trunk;
         io.f0       = &f0;
         io.en       = &en;
         io.har      = &har;
@@ -1656,6 +1663,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                     case mtmd_graph_kokoro::STAGE_DEC:
                         set_input_f32("inp_asr",   *io->x);
                         set_input_f32("inp_style", *io->style);
+                        set_input_f32("inp_style_trunk", *io->style_trunk);
                         set_input_f32("inp_f0",    *io->f0);
                         set_input_f32("inp_n",     *io->en);
                         set_input_f32("inp_har",   *io->har);
