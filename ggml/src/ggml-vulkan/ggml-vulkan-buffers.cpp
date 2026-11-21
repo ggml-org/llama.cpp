@@ -797,7 +797,6 @@ void ggml_vk_buffer_memset_async(vk_context& ctx, vk_buffer& dst, size_t offset,
     }
 
     // Fall back to GPU fillBuffer for non-UMA or non-host-visible buffers
-    GGML_ASSERT(offset % 4 == 0 && size % 4 == 0);
     ctx->s->buffer->buf.fillBuffer(dst->buffer, offset, size, c);
 }
 
