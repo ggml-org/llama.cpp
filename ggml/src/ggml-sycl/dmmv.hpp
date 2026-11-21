@@ -33,4 +33,11 @@ bool ggml_sycl_dequantize_mul_mat_vec_glu_reorder_esimd(
     const void * vx, const void * vgate, const float * y,
     float * dst, int ncols, int nrows, dpct::queue_ptr stream);
 
+// Routed-expert mat-vec of one token on reordered expert slices (Q3_K), on the ESIMD DMMV kernel: reads the
+// f32 activation, so no q8_1 quantize. Only defined when GGML_SYCL_DMMV_HAS_ESIMD; false if the type is unhandled.
+bool ggml_sycl_mul_mat_vec_q_id_reorder_esimd(
+    enum ggml_type src0_type, const void * vx_base, const float * y, const int32_t * ids_dev, float * dst_base,
+    int ncols, int nrows, int n_experts_used, size_t expert_weight_stride, size_t dst_row_stride,
+    size_t src1_row_stride, dpct::queue_ptr stream);
+
 #endif // GGML_SYCL_DMMV_HPP

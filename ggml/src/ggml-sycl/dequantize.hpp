@@ -14,6 +14,7 @@
 #define GGML_SYCL_DEQUANTIZE_HPP
 
 #include "common.hpp"
+#include "layout.hpp"
 #include "convert.hpp"
 
 typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, dfloat2 & v);
@@ -1413,13 +1414,103 @@ static void dequantize_block_q6_K_reorder(const void * __restrict__ vx, dst_t * 
     const int8_t     sc0   = reinterpret_cast<const int8_t *>(scales_ptr + 8 * ip + eh0 / 16)[0];
     const uint8_t *  ql4   = ql_ptr + 64 * ip + (eh0 & 63);
     const uint8_t *  qh4   = qh_ptr + 32 * ip + (eh0 & 31);
+    // f32 like dequantize_block_q6_K: a half d would round the products in half precision
+    const float      dv    = *d;
 
     sycl::vec<dst_t, 4> v;
 #pragma unroll
     for (int j = 0; j < 4; ++j) {
-        v[j] = *d * sc0 * ((int8_t) (((ql4[j] >> shift) & 0xF) | ((((qh4[j] >> qb) & 3)) << 4)) - 32);
+        v[j] = dv * sc0 * ((int8_t) (((ql4[j] >> shift) & 0xF) | ((((qh4[j] >> qb) & 3)) << 4)) - 32);
     }
     *reinterpret_cast<sycl::vec<dst_t, 4> *>(yy + 128 * ip + eh0) = v;
+}
+
+// The iq2 formats and iq4_xs in their reorder layout (ggml_sycl_layout, MoE experts): the canonical
+// dequantizers below with the fields of block i of the nb blocks at their layout offsets.
+template <typename T, int F>
+static __dpct_inline__ const uint8_t * dequantize_field(const void * vx, const int64_t i, const int64_t nb) {
+    return static_cast<const uint8_t *>(vx) + ggml_sycl_layout_at<ggml_sycl_layout<T>>(F, i, nb);
+}
+
+template <typename dst_t>
+static void dequantize_block_iq2_xxs_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy,
+                                             const sycl::nd_item<3> & item_ct1, const int64_t nb) {
+    using L                = ggml_sycl_layout<block_iq2_xxs>;
+    const int64_t   i      = item_ct1.get_group(2);
+    const int64_t   il     = item_ct1.get_local_id(2) / 8;
+    const int64_t   ib     = item_ct1.get_local_id(2) % 8;
+    dst_t *         y      = yy + i * QK_K + 32 * ib + 8 * il;
+    const uint8_t * aux8   = dequantize_field<block_iq2_xxs, L::QS>(vx, i, nb) + 8 * ib;
+    const uint8_t * grid   = (const uint8_t *) (iq2xxs_grid + aux8[il]);
+    const uint32_t  aux32  = *(const uint32_t *) (aux8 + 4);
+    const float     d      = (float) *(const ggml_half *) dequantize_field<block_iq2_xxs, L::D>(vx, i, nb) *
+                    (0.5f + (aux32 >> 28)) * 0.25f;
+    const uint8_t signs = ksigns_iq2xs[(aux32 >> 7 * il) & 127];
+#pragma unroll
+    for (int j = 0; j < 8; ++j) {
+        y[j] = d * grid[j] * (signs & kmask_iq2xs[j] ? -1.f : 1.f);
+    }
+}
+
+template <typename dst_t>
+static void dequantize_block_iq2_xs_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy,
+                                            const sycl::nd_item<3> & item_ct1, const int64_t nb) {
+    using L                 = ggml_sycl_layout<block_iq2_xs>;
+    const int64_t    i      = item_ct1.get_group(2);
+    const int64_t    il     = item_ct1.get_local_id(2) / 8;
+    const int64_t    ib     = item_ct1.get_local_id(2) % 8;
+    dst_t *          y      = yy + i * QK_K + 32 * ib + 8 * il;
+    const uint16_t * q2     = (const uint16_t *) dequantize_field<block_iq2_xs, L::QS>(vx, i, nb) + 4 * ib;
+    const uint8_t *  grid   = (const uint8_t *) (iq2xs_grid + (q2[il] & 511));
+    const uint8_t    sc     = dequantize_field<block_iq2_xs, L::SC>(vx, i, nb)[ib];
+    const float      d      = (float) *(const ggml_half *) dequantize_field<block_iq2_xs, L::D>(vx, i, nb) *
+                    (0.5f + ((sc >> 4 * (il / 2)) & 0xf)) * 0.25f;
+    const uint8_t signs = ksigns_iq2xs[q2[il] >> 9];
+#pragma unroll
+    for (int j = 0; j < 8; ++j) {
+        y[j] = d * grid[j] * (signs & kmask_iq2xs[j] ? -1.f : 1.f);
+    }
+}
+
+template <typename dst_t>
+static void dequantize_block_iq2_s_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy,
+                                           const sycl::nd_item<3> & item_ct1, const int64_t nb) {
+    using L                = ggml_sycl_layout<block_iq2_s>;
+    const int64_t   i      = item_ct1.get_group(2);
+    const int64_t   il     = item_ct1.get_local_id(2) / 8;
+    const int64_t   ib     = item_ct1.get_local_id(2) % 8;
+    dst_t *         y      = yy + i * QK_K + 32 * ib + 8 * il;
+    const uint8_t * qs     = dequantize_field<block_iq2_s, L::QS>(vx, i, nb);
+    const int       qh     = dequantize_field<block_iq2_s, L::QH>(vx, i, nb)[ib];
+    const uint8_t   sc     = dequantize_field<block_iq2_s, L::SC>(vx, i, nb)[ib];
+    const uint8_t * grid   = (const uint8_t *) (iq2s_grid + (qs[4 * ib + il] | ((qh << (8 - 2 * il)) & 0x300)));
+    const float     d      = (float) *(const ggml_half *) dequantize_field<block_iq2_s, L::D>(vx, i, nb) *
+                    (0.5f + ((sc >> 4 * (il / 2)) & 0xf)) * 0.25f;
+    const uint8_t signs = qs[QK_K / 8 + 4 * ib + il];
+#pragma unroll
+    for (int j = 0; j < 8; ++j) {
+        y[j] = d * grid[j] * (signs & kmask_iq2xs[j] ? -1.f : 1.f);
+    }
+}
+
+template <typename dst_t>
+static void dequantize_block_iq4_xs_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy,
+                                            const sycl::nd_item<3> & item_ct1, const int64_t nb) {
+    using L                = ggml_sycl_layout<block_iq4_xs>;
+    const int64_t   i      = item_ct1.get_group(2);
+    const int64_t   il     = item_ct1.get_local_id(2) / 8;
+    const int64_t   ib     = item_ct1.get_local_id(2) % 8;
+    dst_t *         y      = yy + i * QK_K + 32 * ib + 4 * il;
+    const uint8_t * q4     = dequantize_field<block_iq4_xs, L::QS>(vx, i, nb) + 16 * ib + 4 * il;
+    const uint16_t  sh     = *(const uint16_t *) dequantize_field<block_iq4_xs, L::SH>(vx, i, nb);
+    const uint8_t   sl     = dequantize_field<block_iq4_xs, L::SL>(vx, i, nb)[ib / 2];
+    const float     d      = (float) *(const ggml_half *) dequantize_field<block_iq4_xs, L::D>(vx, i, nb) *
+                    ((((sl >> 4 * (ib % 2)) & 0xf) | (((sh >> 2 * ib) & 3) << 4)) - 32);
+#pragma unroll
+    for (int j = 0; j < 4; ++j) {
+        y[j + 0]  = d * kvalues_iq4nl[q4[j] & 0xf];
+        y[j + 16] = d * kvalues_iq4nl[q4[j] >> 4];
+    }
 }
 
 template<typename dst_t>
