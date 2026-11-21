@@ -3247,26 +3247,61 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             LLAMA_LOG_INFO("%s: %u unused tokens\n", __func__, n_unused);
         }
 
-        // maintain a list of tokens that cause end-of-generation
-        // this is currently determined based on the token text, which is obviously not ideal
-        // ref: https://github.com/ggml-org/llama.cpp/issues/9606
         special_eog_ids.clear();
-        if (special_fim_pad_id != LLAMA_TOKEN_NULL && special_eog_ids.count(special_fim_pad_id) == 0) {
+        const std::string eog_key = kv(LLM_KV_TOKENIZER_EOG_IDS);
+        const int eog_idx = gguf_find_key(ctx, eog_key.c_str());
+        const bool has_eog_ids = eog_idx >= 0;
+        if (has_eog_ids) {
+            if (gguf_get_kv_type(ctx, eog_idx) != GGUF_TYPE_ARRAY) {
+                throw std::runtime_error(format("%s must be an array of int32 or uint32 token IDs", eog_key.c_str()));
+            }
+            const gguf_type eog_type = gguf_get_arr_type(ctx, eog_idx);
+            if (eog_type != GGUF_TYPE_INT32 && eog_type != GGUF_TYPE_UINT32) {
+                throw std::runtime_error(format("%s must be an array of int32 or uint32 token IDs", eog_key.c_str()));
+            }
+            const size_t n_eog = gguf_get_arr_n(ctx, eog_idx);
+            if (n_eog == 0) {
+                throw std::runtime_error(format("%s must not be empty", eog_key.c_str()));
+            }
+            if (n_eog > id_to_token.size()) {
+                throw std::runtime_error(format("%s has more entries than the vocabulary size", eog_key.c_str()));
+            }
+            const void * ids = gguf_get_arr_data(ctx, eog_idx);
+            for (size_t i = 0; i < n_eog; ++i) {
+                const int64_t id = eog_type == GGUF_TYPE_INT32
+                    ? int64_t(static_cast<const int32_t *>(ids)[i])
+                    : int64_t(static_cast<const uint32_t *>(ids)[i]);
+                if (id < 0 || uint64_t(id) >= id_to_token.size()) {
+                    throw std::runtime_error(format("%s token ID %lld is out of range (vocab size %zu)", eog_key.c_str(), (long long) id, id_to_token.size()));
+                }
+                const llama_token token_id = static_cast<llama_token>(id);
+                special_eog_ids.insert(token_id);
+                auto & attr = id_to_token[token_id].attr;
+                if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
+                    LLAMA_LOG_INFO("%s: setting configured EOG token %d '%s' to control-type\n", __func__, token_id, id_to_token[token_id].text.c_str());
+                    attr = (llama_token_attr) (attr | LLAMA_TOKEN_ATTR_CONTROL);
+                }
+            }
+        }
+
+        // Infer EOG tokens only when no authoritative list is present.
+        // ref: https://github.com/ggml-org/llama.cpp/issues/9606
+        if (!has_eog_ids && special_fim_pad_id != LLAMA_TOKEN_NULL && special_eog_ids.count(special_fim_pad_id) == 0) {
             special_eog_ids.insert(special_fim_pad_id);
         }
 
-        if (special_fim_rep_id != LLAMA_TOKEN_NULL && special_eog_ids.count(special_fim_rep_id) == 0) {
+        if (!has_eog_ids && special_fim_rep_id != LLAMA_TOKEN_NULL && special_eog_ids.count(special_fim_rep_id) == 0) {
             special_eog_ids.insert(special_fim_rep_id);
         }
 
-        if (special_fim_sep_id != LLAMA_TOKEN_NULL && special_eog_ids.count(special_fim_sep_id) == 0) {
+        if (!has_eog_ids && special_fim_sep_id != LLAMA_TOKEN_NULL && special_eog_ids.count(special_fim_sep_id) == 0) {
             special_eog_ids.insert(special_fim_sep_id);
         }
 
         for (const auto & t : token_to_id) {
             auto & attr = id_to_token[t.second].attr;
 
-            if (false
+            if (!has_eog_ids && (false
                     || t.first == "<|eot_id|>"
                     || t.first == "<|eot|>"    // muse-spark
                     || t.first == "<|im_end|>"
@@ -3292,7 +3327,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     || t.first == "<｜end▁of▁sentence｜>" // deepseek-ocr
                     || t.first == "[e~[" // minimax-m2/m3
                     || t.first == "<|ifm|im_end|>" // k2-horizon
-               ) {
+               )) {
                 special_eog_ids.insert(t.second);
                 if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
                     LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
@@ -3314,7 +3349,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         for (const auto & t : token_to_id) {
             auto & attr = id_to_token[t.second].attr;
 
-            if (t.first == "<|channel|>" || t.first == "<|message|>" || t.first == "<|start|>" || t.first == "<|constrain|>") {
+            if ((!has_eog_ids || special_eog_ids.count(t.second) == 0) &&
+                    (t.first == "<|channel|>" || t.first == "<|message|>" || t.first == "<|start|>" || t.first == "<|constrain|>")) {
                 LLAMA_LOG_WARN("%s: setting token '%s' (%d) attribute to USER_DEFINED (%u), old attributes: %u\n",
                         __func__, t.first.c_str(), t.second, LLAMA_TOKEN_ATTR_USER_DEFINED, attr);
 
@@ -3322,22 +3358,22 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             }
         }
 
-        if (pre_type == LLAMA_VOCAB_PRE_TYPE_SOPRANO) {
+        if (!has_eog_ids && pre_type == LLAMA_VOCAB_PRE_TYPE_SOPRANO) {
             special_eog_ids.insert(special_eos_id);
         }
 
         // sanity checks
-        if (special_eos_id != LLAMA_TOKEN_NULL && special_eog_ids.count(special_eos_id) == 0) {
+        if (!has_eog_ids && special_eos_id != LLAMA_TOKEN_NULL && special_eog_ids.count(special_eos_id) == 0) {
             special_eog_ids.insert(special_eos_id);
             LLAMA_LOG_WARN("%s: special_eos_id is not in special_eog_ids - the tokenizer config may be incorrect\n", __func__);
         }
 
-        if (special_eot_id != LLAMA_TOKEN_NULL && special_eog_ids.count(special_eot_id) == 0) {
+        if (!has_eog_ids && special_eot_id != LLAMA_TOKEN_NULL && special_eog_ids.count(special_eot_id) == 0) {
             special_eog_ids.insert(special_eot_id);
             LLAMA_LOG_WARN("%s: special_eot_id is not in special_eog_ids - the tokenizer config may be incorrect\n", __func__);
         }
 
-        if (special_eom_id != LLAMA_TOKEN_NULL && special_eog_ids.count(special_eom_id) == 0) {
+        if (!has_eog_ids && special_eom_id != LLAMA_TOKEN_NULL && special_eog_ids.count(special_eom_id) == 0) {
             special_eog_ids.insert(special_eom_id);
             LLAMA_LOG_WARN("%s: special_eom_id is not in special_eog_ids - the tokenizer config may be incorrect\n", __func__);
         }
@@ -3376,7 +3412,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 }
             }
 
-            if ((has_return && has_call && has_end) || (has_call && has_flush && has_end)) {
+            if (!has_eog_ids && ((has_return && has_call && has_end) || (has_call && has_flush && has_end))) {
                 special_eog_ids.erase(end_id);
 
                 auto & attr = id_to_token[end_id].attr;
@@ -3407,7 +3443,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 }
             }
 
-            if (has_normal_s_marker && has_s) {
+            if (!has_eog_ids && has_normal_s_marker && has_s) {
                 special_eog_ids.erase(s_id);
 
                 auto & attr = id_to_token[s_id].attr;

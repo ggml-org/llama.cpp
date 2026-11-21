@@ -13,12 +13,13 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import Mock
 
 import numpy as np
 import torch
 from safetensors.torch import save_file
 
-from conversion.base import LazyTorchTensor, gguf
+from conversion.base import LazyTorchTensor, TextModel, gguf
 from conversion.deepseek import DeepseekV2Model
 from conversion.inkling2 import Inkling2Model, _E4M3, _E2M1
 from conversion.llama import LlamaModel
@@ -202,6 +203,20 @@ class TestFP8Conversion(unittest.TestCase):
         dtype, data = result["blk.0.attn_q.bias"]
         self.assertEqual(dtype, gguf.GGMLQuantizationType.F32)
         np.testing.assert_array_equal(data, [1., -1.])
+
+    def test_generation_config_eog_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model_path = Path(directory)
+            (model_path / "generation_config.json").write_text(
+                json.dumps({"eos_token_id": [3, 5]}), encoding="utf-8"
+            )
+            model = TextModel.__new__(TextModel)
+            model.dir_model = model_path
+            model.gguf_writer = Mock()
+
+            model._set_eog_token_ids()
+
+            model.gguf_writer.add_eog_token_ids.assert_called_once_with([3, 5])
 
     def test_fp8_mandatory_f32(self):
         for name, target, shape in (
