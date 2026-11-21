@@ -9998,10 +9998,8 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
     if (Cin % 16 != 0 || taps > 16 || hp.KW > 9) {
         return false;
     }
-    // With fewer than 64 input channels there are too few passes to make up
-    // for filling the box, and 1x1 filters have nothing to reuse. Both were
-    // slower than conv2d_mm.
-    if (Cin < 64 || taps == 1) {
+    // 1x1 filters have nothing to reuse; conv2d_mm/conv3d_mm are faster.
+    if (taps == 1) {
         return false;
     }
     const uint32_t OW = (uint32_t)dst->ne[0], OH = (uint32_t)dst->ne[1];
@@ -10009,12 +10007,8 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
     // pass over the whole filter, which only pays off when the layer has
     // enough outputs, about 8K or more. Smaller 2D layers read the filter in
     // place and reorder it in registers instead. 3D always copies, because
-    // its filter slices are not 8-byte aligned, so small 3D layers (under 4K
-    // outputs) are left to conv3d_mm.
+    // its filter slices are not 8-byte aligned.
     const uint64_t npq = (uint64_t)N * OD * OH * OW;
-    if (is_3d && npq < 4096) {
-        return false;
-    }
     hp.filter_copy = is_3d || npq >= 8192 ? 1 : 0;
     // Reading in place takes 8-byte packets of f16 values. f32 filters always
     // use the copy, which converts them to f16.
@@ -10094,9 +10088,17 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
     auto tiles_for = [&](uint32_t rows) {
         return (uint64_t)CEIL_DIV(Cout, hp.bs_k) * slices * CEIL_DIV(OH, rows) * CEIL_DIV(OW, hp.out_cols);
     };
-    // With fewer workgroups than two per SM (two fit on an SM), split the
-    // input channel passes of each tile between workgroups (split-K), up to
-    // one wave of them, with at least 4 passes per split. With still fewer
+    // With fewer workgroups than two per SM (two fit on an SM) and the filter
+    // read in place, first use 32 output channels per workgroup, if there are
+    // enough passes to split: twice the workgroups without split-K's partial
+    // outputs. (With the filter copy, and for 1x1 filters, that was slower.)
+    if (tiles_for(hp.out_rows) < 2 * sms && hp.bs_k == 64 && !hp.filter_copy && taps * hp.KD > 1 && Cin / 16 * hp.KD >= 8) {
+        hp.bs_k = 32;
+        hp.a_pad = shmem(hp.out_cols, hp.out_rows, 32, 8) <= limit ? 8 : 0;
+    }
+    // Then, with still fewer workgroups than two per SM, split the input
+    // channel passes of each tile between workgroups (split-K), up to one
+    // wave of them, with at least 4 passes per split. With still fewer
     // workgroups than half the SMs, use fewer rows, down to 2, and then with
     // fewer than SMs, 32 output channels per workgroup.
     const uint32_t stages = Cin / 16 * hp.KD;
