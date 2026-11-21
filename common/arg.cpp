@@ -26,7 +26,6 @@
 #include <set>
 #include <string>
 #include <system_error>
-#include <thread> // for hardware_concurrency
 #include <vector>
 
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
@@ -1502,7 +1501,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.cpuparams.n_threads = value;
             if (params.cpuparams.n_threads <= 0) {
-                params.cpuparams.n_threads = std::thread::hardware_concurrency();
+                params.cpuparams.n_threads = common_cpu_get_num_physical_cores();
             }
         }
     ).set_env("LLAMA_ARG_THREADS"));
@@ -1512,7 +1511,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.cpuparams_batch.n_threads = value;
             if (params.cpuparams_batch.n_threads <= 0) {
-                params.cpuparams_batch.n_threads = std::thread::hardware_concurrency();
+                params.cpuparams_batch.n_threads = common_cpu_get_num_physical_cores();
             }
         }
     ));
@@ -4047,7 +4046,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.speculative.draft.cpuparams.n_threads = value;
             if (params.speculative.draft.cpuparams.n_threads <= 0) {
-                params.speculative.draft.cpuparams.n_threads = std::thread::hardware_concurrency();
+                params.speculative.draft.cpuparams.n_threads = common_cpu_get_num_physical_cores();
             }
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
@@ -4057,7 +4056,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.speculative.draft.cpuparams_batch.n_threads = value;
             if (params.speculative.draft.cpuparams_batch.n_threads <= 0) {
-                params.speculative.draft.cpuparams_batch.n_threads = std::thread::hardware_concurrency();
+                params.speculative.draft.cpuparams_batch.n_threads = common_cpu_get_num_physical_cores();
             }
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
