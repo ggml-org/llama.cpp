@@ -111,6 +111,7 @@ int g_ggml_sycl_memtrace_step = 64;
 int g_ggml_sycl_enable_vmm = 1;
 int g_ggml_sycl_enable_fusion = 1;
 int g_ggml_sycl_enable_esimd = 1;
+int g_ggml_sycl_mmid_esimd = 1;
 int g_ggml_sycl_mmvq_wide = 1;
 int g_ggml_sycl_enable_xmx_esimd = 1;
 int g_ggml_sycl_xmx_max_cols = GGML_SYCL_XMX_MAX_COLS_DEFAULT;
@@ -444,6 +445,7 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_enable_vmm = ggml_sycl_get_env("GGML_SYCL_ENABLE_VMM", 1);
         g_ggml_sycl_enable_fusion = ggml_sycl_get_env("GGML_SYCL_ENABLE_FUSION", 1);
         g_ggml_sycl_enable_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_ESIMD", 1);
+        g_ggml_sycl_mmid_esimd = ggml_sycl_get_env("GGML_SYCL_MMID_ESIMD", 1);
         g_ggml_sycl_mmvq_wide = ggml_sycl_get_env("GGML_SYCL_MMVQ_WIDE", 1);
         g_ggml_sycl_enable_xmx_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_XMX_ESIMD", 1);
         g_ggml_sycl_xmx_max_cols = std::max(0, ggml_sycl_get_env("GGML_SYCL_XMX_MAX_COLS", GGML_SYCL_XMX_MAX_COLS_DEFAULT));
@@ -578,6 +580,7 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_OPT: %d\n", g_ggml_sycl_enable_optimize);
         GGML_LOG_INFO("  GGML_SYCL_XMX_GATHER_TYPES: %d\n", g_ggml_sycl_xmx_gather_types);
         GGML_LOG_INFO("  GGML_SYCL_MMID_SCHED: %d\n", g_ggml_sycl_mmid_sched);
+        GGML_LOG_INFO("  GGML_SYCL_MMID_ESIMD: %d\n", g_ggml_sycl_mmid_esimd);
         GGML_LOG_INFO("  GGML_SYCL_XMX_GATHER_SHAPES: %d\n", g_ggml_sycl_xmx_gather_shapes);
         GGML_LOG_INFO("  GGML_SYCL_DYNAMIC_PRECISION: %s\n",
                       ggml_sycl_dynamic_precision_names[g_ggml_sycl_dynamic_precision]);
