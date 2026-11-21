@@ -20,6 +20,7 @@ struct unicode_cpt_flags {
         LOWERCASE       = 0x0200,
         UPPERCASE       = 0x0400,
         NFD             = 0x0800,
+        NONSPACING_MARK = 0x1000,  // regex: \p{Mn}
     };
 
     // codepoint type
@@ -36,6 +37,7 @@ struct unicode_cpt_flags {
     uint16_t is_lowercase   : 1;
     uint16_t is_uppercase   : 1;
     uint16_t is_nfd         : 1;
+    uint16_t is_nonspacing_mark : 1;  // regex: \p{Mn}
 
     // decode from uint16
     inline unicode_cpt_flags(const uint16_t flags = 0) {
@@ -54,6 +56,7 @@ struct unicode_cpt_flags {
         is_lowercase   = (flags & LOWERCASE)   ? 1 : 0;
         is_uppercase   = (flags & UPPERCASE)   ? 1 : 0;
         is_nfd         = (flags & NFD)         ? 1 : 0;
+        is_nonspacing_mark = (flags & NONSPACING_MARK) ? 1 : 0;
 #else
 #error Unexpected or undefined __BYTE_ORDER__
 #endif
@@ -76,6 +79,7 @@ struct unicode_cpt_flags {
             + is_lowercase   * LOWERCASE
             + is_uppercase   * UPPERCASE
             + is_nfd         * NFD
+            + is_nonspacing_mark * NONSPACING_MARK
             ;
 
         return result;
