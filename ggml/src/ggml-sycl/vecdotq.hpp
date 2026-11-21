@@ -388,6 +388,14 @@ template <> struct reorder_vec_dot_shared_weights<GGML_TYPE_Q5_K> {
     static constexpr bool value = true;
 };
 
+template <> struct reorder_vec_dot_shared_weights<GGML_TYPE_IQ4_NL> {
+    static constexpr bool value = true;
+};
+
+template <> struct reorder_vec_dot_shared_weights<GGML_TYPE_IQ4_XS> {
+    static constexpr bool value = true;
+};
+
 template <ggml_type T> struct reorder_vec_dot_shared_activations {
     static constexpr bool value = false;
 };
@@ -1955,5 +1963,89 @@ vec_dot_iq4_xs_q8_1(const void *__restrict__ vbq,
     assert(false);
 #endif
 }
+
+// IQ4_NL blocks and IQ4_XS sub-blocks are both 32 values in 16 qs bytes: the low nibbles pair with
+// q8_1 ints 0..3 and the high nibbles with ints 4..7. A lane decodes them once for all columns.
+struct reorder_vec_dot_iq4_32 {
+    struct weights {
+        int   v[8];
+        float d;
+    };
+
+    static __dpct_inline__ weights decode(const uint8_t * qs, const float d) {
+        const sycl::int4 q4     = *reinterpret_cast<const sycl::int4 *>(qs);
+        const uint8_t *  values = (const uint8_t *) kvalues_iq4nl;
+
+        weights w;
+        get_int_from_table_16((uint32_t) q4.x(), values, w.v[0], w.v[4]);
+        get_int_from_table_16((uint32_t) q4.y(), values, w.v[1], w.v[5]);
+        get_int_from_table_16((uint32_t) q4.z(), values, w.v[2], w.v[6]);
+        get_int_from_table_16((uint32_t) q4.w(), values, w.v[3], w.v[7]);
+        w.d = d;
+        return w;
+    }
+
+    static __dpct_inline__ float dot32(const weights & w, const int8_t * q8, const sycl::half2 ds8) {
+        const int * u     = (const int *) q8;
+        int         sumi1 = 0;
+        int         sumi2 = 0;
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            sumi1 = dpct::dp4a(w.v[j + 0], u[j + 0], sumi1);
+            sumi2 = dpct::dp4a(w.v[j + 4], u[j + 4], sumi2);
+        }
+        return w.d * (float) ds8[0] * (sumi1 + sumi2);
+    }
+};
+
+template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_IQ4_NL> : reorder_vec_dot_iq4_32 {
+    static constexpr ggml_type gtype = GGML_TYPE_IQ4_NL;
+
+    // a lane holds a whole block, so iqs is always 0
+    __dpct_inline__ static weights load(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                        const std::pair<int, int> d_offset, const int & /* iqs */) {
+        const uint8_t * base = static_cast<const uint8_t *>(vbq);
+        return decode(base + ibx_offset.first, *reinterpret_cast<const ggml_half *>(base + d_offset.first));
+    }
+
+    __dpct_inline__ static float dot(const weights & w, const int8_t * q8_1_quant_ptr, const sycl::half2 * q8_1_ds,
+                                     const int & /* iqs */) {
+        return dot32(w, q8_1_quant_ptr, *q8_1_ds);
+    }
+
+    __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                     const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        return dot(load(vbq, ibx_offset, d_offset, iqs), q8_1_quant_ptr, q8_1_ds, iqs);
+    }
+};
+
+template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_IQ4_XS> : reorder_vec_dot_iq4_32 {
+    static constexpr ggml_type gtype = GGML_TYPE_IQ4_XS;
+
+    // iqs is the first qs int of the lane's sub-block
+    __dpct_inline__ static weights load(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                        const std::pair<int, int> d_offset, const int & iqs) {
+        const uint8_t * base     = static_cast<const uint8_t *>(vbq);
+        const uint8_t * meta     = base + d_offset.first;
+        const int       ib32     = iqs / 4;
+        const uint16_t  scales_h = *reinterpret_cast<const uint16_t *>(meta + offsetof(block_iq4_xs, scales_h));
+        const uint8_t   scales_l = meta[offsetof(block_iq4_xs, scales_l) + ib32 / 2];
+        const int       ls       = ((scales_l >> (4 * (ib32 % 2))) & 0xf) | (((scales_h >> (2 * ib32)) & 3) << 4);
+        const float     d        = (float) *reinterpret_cast<const ggml_half *>(meta + offsetof(block_iq4_xs, d));
+        return decode(base + ibx_offset.first + sizeof(int) * iqs, d * (ls - 32));
+    }
+
+    __dpct_inline__ static float dot(const weights & w, const int8_t * q8_1_quant_ptr, const sycl::half2 * q8_1_ds,
+                                     const int & iqs) {
+        return dot32(w, q8_1_quant_ptr + (iqs / 4) * QK8_1, q8_1_ds[iqs / 4]);
+    }
+
+    __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                     const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        return dot(load(vbq, ibx_offset, d_offset, iqs), q8_1_quant_ptr, q8_1_ds, iqs);
+    }
+};
 
 #endif // GGML_SYCL_VECDOTQ_HPP

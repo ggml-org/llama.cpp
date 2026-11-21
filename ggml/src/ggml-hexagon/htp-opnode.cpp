@@ -19,7 +19,9 @@
 #include "htp/softmax-ops.h"
 #include "htp/solve-tri-ops.h"
 #include "htp/ssm-conv.h"
+#include "htp/ssm-scan-ops.h"
 #include "htp/sum-rows-ops.h"
+#include "htp/timestep-ops.h"
 #include "htp/top-k-mask-ops.h"
 #include "htp/unary-ops.h"
 #include "htp/upscale-ops.h"
@@ -182,6 +184,13 @@ static std::string format_kernel_params(const htp_opnode & node) {
         const auto * kparams = node.kparams<htp_ssm_conv_kernel_params>();
         snprintf(str, max_size, "%s nhvx %u vtcm %u", kparams->n_t == 1 ? "decode" : "prefill",
                  (unsigned int) kparams->n_hvx, (unsigned int) kparams->vtcm_size);
+    } else if (node.opcode == HTP_OP_SSM_SCAN) {
+        const auto * kparams = node.kparams<htp_ssm_scan_kernel_params>();
+        const char * ktype_str = kparams->kernel_type == HTP_SSM_SCAN_KERNEL_HMX        ? "hmx" :
+                                 kparams->kernel_type == HTP_SSM_SCAN_KERNEL_HVX_DECODE ? "hvx-decode" :
+                                                                                          "hvx-prefill";
+        snprintf(str, max_size, "%s nhvx %u vtcm %u", ktype_str,
+                 (unsigned int) kparams->n_hvx, (unsigned int) kparams->vtcm_size);
     } else if (node.opcode == HTP_OP_SOFTMAX) {
         const auto * kparams = node.kparams<htp_softmax_kernel_params>();
         snprintf(str, max_size, "k%d nhvx %u vtcm %u", (int) kparams->kernel_type,
@@ -268,6 +277,9 @@ static std::string format_kernel_params(const htp_opnode & node) {
             case HTP_UPSCALE_KERNEL_BICUBIC:     ktype_str = "bicubic";     break;
         }
         snprintf(str, max_size, "%s nhvx %u chk %u vtcm %u", ktype_str, (unsigned int) kparams->n_hvx, (unsigned int) kparams->dst_nrows_per_chunk, (unsigned int) kparams->vtcm_size);
+    } else if (node.opcode == HTP_OP_TIMESTEP_EMBEDDING) {
+        const auto * kparams = node.kparams<htp_timestep_kernel_params>();
+        snprintf(str, max_size, "%s nhvx %u chk %u vtcm %u", kparams->split_cols ? "cols" : "rows", (unsigned int) kparams->n_hvx, (unsigned int) kparams->chunk_rows, (unsigned int) kparams->vtcm_size);
     } else {
         snprintf(str, max_size, "----");
     }

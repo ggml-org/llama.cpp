@@ -117,6 +117,13 @@ Block-32 formats use a tile size of 32 rows x 32 columns (`K_cols = 32`):
     Kernel converts E8M0 bias to IEEE FP16 bias via `vh = clamp(e - 112, 0, 30) << 10` to form a power-of-two FP16 scale.
     Each 4-bit FP4 nibble is unpacked via `mxfp4_to_fp16_lut` and multiplied by this scale.
 
+- **NVFP4** (576 bytes per tile, `HTP_TENSOR_TILE_SIZE_NVFP4`, lossless tiling with same size as `block_nvfp4`):
+  - A 64-element block spans 2 consecutive k-tiles; k-tile `h` holds sub-blocks `2h` and `2h+1`.
+  - **Quants** (bytes 0..511): same nibble transposition as `Q4_0`, holding E2M1 values in element order
+    (within a 16-element sub-block, `qs` byte `j` holds elements `j` and `j+8`).
+  - **Scales** (bytes 512..575): UE4M3 bytes, `tile[512 + 32*u + row]` for sub-block `u = 0..1` of the k-tile.
+  - The per-tensor F32 scale is not part of the tile.
+
 - **Q4_1** (640 bytes per tile, `HTP_TENSOR_TILE_SIZE_Q4_1`):
   - **Quants** (bytes 0..511, 512 bytes):
     Same 4-bit nibble transposition and storage layout as `Q4_0`.
@@ -191,6 +198,10 @@ Byte ordering: `Q2_K`, `Q3_K`, and `Q6_K` use `vrmpy` byte order within each 128
   - `bytes   0..255` (vec 0..1): unsigned 2-bit quants; vec `m` holds groups `4m..4m+3` at bit offsets 0, 2, 4, 6.
   - `bytes 256..319`: raw `scales[]` bytes (`min << 4 | sc`): `[0..31]` for k 0..15, `[32..63]` for k 16..31.
   - `bytes 320..335`: 8 FP16 in tile `j` (0..7) of super-block: `d` (`j < 4`) or `-dmin` (`j >= 4`) for rows `8*(j%4)..8*(j%4)+7`.
+
+- **IQ2_XXS** (264 bytes per tile, `HTP_TENSOR_TILE_SIZE_IQ2_XXS`, lossless tiling with same size as `block_iq2_xxs`):
+  - `bytes   0..255`: `qs[4*kt .. 4*kt+3]` (grid indices, signs and scales of one 32-element group) of row `r` at `8*r`.
+  - `bytes 256..263`: 4 FP16 `d` in tile `j` (0..7) of super-block: rows `4*j..4*j+3`.
 
 - **Q3_K** (512 bytes per tile, `HTP_TENSOR_TILE_SIZE_Q3_K`):
   - `bytes   0..255` (vec 0..1): low 2 bits; vec `m` holds groups `4m..4m+3` at bit offsets 0, 2, 4, 6.

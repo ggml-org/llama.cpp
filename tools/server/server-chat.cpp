@@ -659,6 +659,15 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
         }
     }
 
+    // Handle Anthropic-specific output_config param
+    if (body.contains("output_config")) {
+        json output_config = json_value(body, "output_config", json::object());
+        std::string effort = json_value(output_config, "effort", std::string());
+        if (!effort.empty()) {
+            oai_body["reasoning_effort"] = effort;
+        }
+    }
+
     // Handle Anthropic-specific metadata param
     if (body.contains("metadata")) {
         json metadata = json_value(body, "metadata", json::object());
@@ -730,14 +739,22 @@ json convert_transcriptions_to_chatcmpl(
     if (response_format != "json") {
         throw std::invalid_argument("Only 'json' response_format is supported for transcription");
     }
-    const common_chat_prompt_preset preset = common_chat_get_asr_prompt(tmpls, language);
-    if (prompt.empty()) {
+    common_chat_prompt_preset preset = common_chat_get_asr_prompt(tmpls, language, 0.0, prompt);
+    if (preset.needs_audio_length) {
+        mtmd_helper_media_meta meta;
+        if (mtmd_helper_get_media_meta(out_files[0].data(), out_files[0].size(), mtmd_helper_init_opt_default(), &meta) != 0 ||
+                meta.type != MTMD_HELPER_MEDIA_TYPE_AUDIO || meta.duration < 0) {
+            throw std::invalid_argument("the input file is not a supported audio file");
+        }
+        preset = common_chat_get_asr_prompt(tmpls, language, meta.duration, prompt);
+    }
+    if (prompt.empty() || preset.has_context) {
         prompt = preset.user;
     }
     if (!language.empty() && !preset.has_language) {
         prompt += string_format(" (language: %s)", language.c_str());
     }
-    prompt += get_media_marker();
+    prompt = preset.media_first ? get_media_marker() + prompt : prompt + get_media_marker();
 
     json messages = json::array();
     if (!preset.system.empty()) {
@@ -788,10 +805,6 @@ json convert_speech_to_tts(const json & inp_body) {
         tts_body["stream"] = true;
     } else if (!stream_format.empty()) {
         throw std::invalid_argument("Only 'audio' stream_format is supported for speech");
-    }
-
-    if (json_value(inp_body, "speed", 1.0) != 1.0) {
-        throw std::invalid_argument("'speed' is not supported for speech");
     }
 
     if (!json_value(inp_body, "instructions", std::string()).empty()) {

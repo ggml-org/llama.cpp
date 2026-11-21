@@ -2,4 +2,5 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 
 ## Embedding Gemma requires PyTorch 2.6.0 or later, bumped to 2.11.0 for compatibility
-torch==2.11.0
+torch==2.11.0; python_version < "3.15"
+torch==2.15.0; python_version >= "3.15"

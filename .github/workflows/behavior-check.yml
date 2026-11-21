@@ -140,6 +140,11 @@ jobs:
           source .venv/Scripts/activate
           pip install -r requirements/requirements-convert_hf_to_gguf.txt
 
+      - name: Install LLVM
+        run: |
+          choco install llvm --version=22.1.8
+          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+
       - name: Build
         id: cmake_build
         shell: cmd
