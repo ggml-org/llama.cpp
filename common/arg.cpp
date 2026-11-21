@@ -3580,6 +3580,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SSL_CERT_FILE"));
     add_opt(common_arg(
+        {"--max-request-body"}, "N",
+        "maximum request body size in MiB before rejecting it with HTTP 413 (default: 100, 0 = unlimited)",
+        [](common_params & params, const std::string & value) {
+            params.max_request_body_mb = std::stoi(value);
+            if (params.max_request_body_mb < 0) {
+                throw std::invalid_argument("invalid value: cannot be negative");
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MAX_REQUEST_BODY"));
+    add_opt(common_arg(
         {"--chat-template-kwargs"}, "STRING",
         "sets additional params for the json template parser, must be a valid json object string, e.g. '{\"key1\":\"value1\",\"key2\":\"value2\"}'",
         [](common_params & params, const std::string & value) {

@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <functional>
 #include <future>
+#include <limits>
 #include <memory>
 #include <string>
 #include <thread>
@@ -265,6 +266,12 @@ bool server_http_context::init_listener(const common_params & params) {
 #endif
 
     srv->set_default_headers({{"Server", "llama.cpp"}});
+    // cpp-httplib default limit is 100 MiB; make it adjustable for clients that send many images
+    if (params.max_request_body_mb > 0) {
+        srv->set_payload_max_length((size_t) params.max_request_body_mb * 1024 * 1024);
+    } else {
+        srv->set_payload_max_length((std::numeric_limits<size_t>::max)());
+    }
     // srv->set_logger(log_server_request); // TODO @ngxson : this is too spamy, no very useful; improve it in the future
     srv->set_exception_handler([](const httplib::Request &, httplib::Response & res, const std::exception_ptr & ep) {
         // this is fail-safe; exceptions should already handled by `ex_wrapper`
