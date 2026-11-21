@@ -69,13 +69,17 @@ static int test_speculative_rejection_sampling(common_params & params, int n_tri
 
     std::unordered_map<llama_token, int> token_counts;
 
-    std::vector<llama_token_data> q(n_vocab);
+    std::vector<llama_token_data> dense(n_vocab);
+    std::vector<llama_token_data> sparse;
     for (int i = 0; i < n_vocab; ++i) {
-        q[i].id = i;
-        q[i].logit = 0.0f;
+        dense[i].id = i;
+        if (i % 2 == 0) {
+            sparse.push_back({ n_vocab - 1 - i, 0.0f, 0.0f });
+        }
     }
 
     for (int trial = 0; trial < n_trials; ++trial) {
+        auto & q = trial % 2 == 0 ? dense : sparse;
         float q_sum = 0.0f;
 
         for (auto & td : q) {

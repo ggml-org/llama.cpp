@@ -132,8 +132,8 @@ llama-server -m Qwen3-4B.gguf -md Qwen3-4B-DSpark.gguf \
 acceptance (from the draft's confidence head) falls below `P` (default 0 = disabled).
 Values above 0 require a draft with a confidence head.
 
-Currently only drafts with a Qwen3 backbone are supported; support for other backbones
-(e.g. Gemma4) is planned.
+Inkling 2 DSpark supports `--spec-draft-sampling probabilistic`. At a positive request temperature,
+each sample conditions the next draft token and the target verifies the proposals by rejection sampling.
 
 DSpark drafts exported in the [speculators](https://github.com/vllm-project/speculators) format
 (for example [`RedHatAI/gemma-4-31B-it-speculator.dspark`](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dspark))

@@ -806,11 +806,28 @@ std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct com
             continue;
         }
 
+        // Inkling2 rows are already indexed by id. Index the rest of a sparse or reordered row once.
+        size_t n_dense = 0;
+        while (n_dense < q.size() && q[n_dense].id >= 0 && (size_t) q[n_dense].id == n_dense) {
+            ++n_dense;
+        }
+        std::unordered_map<llama_token, float> q_sparse;
+        for (size_t k = n_dense; k < q.size(); ++k) {
+            q_sparse.emplace(q[k].id, q[k].p); // keep the first match, as in prob_of
+        }
+        auto q_of = [&](llama_token id) {
+            if (id >= 0 && (size_t) id < n_dense) {
+                return q[id].p;
+            }
+            const auto it = q_sparse.find(id);
+            return it != q_sparse.end() ? it->second : 0.0f;
+        };
+
         // rejected: tokens outside q's support keep all of p
         residual.clear();
         float sum = 0.0f;
         for (size_t k = 0; k < cur_p->size; ++k) {
-            const float r = p_of(k) - prob_of(q.data(), q.size(), cur_p->data[k].id);
+            const float r = p_of(k) - q_of(cur_p->data[k].id);
             if (r > 0.0f) {
                 residual.push_back({ cur_p->data[k].id, 0.0f, r });
                 sum += r;
