@@ -130,7 +130,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
@@ -180,6 +180,8 @@ jobs:
             os: ubuntu-24.04-arm
           - build: 's390x'
             os: ubuntu-24.04-s390x
+          - build: '26.04-s390x'
+            os: ubuntu-26.04-s390x
 
     runs-on: ${{ matrix.os }}
 
@@ -194,13 +196,13 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Dependencies
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libssl-dev
+          sudo apt-get install -y build-essential libssl-dev
 
       - name: Toolchain workaround (GCC 14)
         if: ${{ contains(matrix.os, 'ubuntu-24.04') }}
@@ -210,7 +212,7 @@ jobs:
           echo "CXX=g++-14" >> "$GITHUB_ENV"
 
       - name: ccache
-        if: ${{ matrix.build != 's390x' }}
+        if: ${{ !contains(matrix.os, 's390x') }}
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-${{ matrix.os }}-cpu
@@ -242,7 +244,7 @@ jobs:
           archive: false
 
       - name: ccache-clear
-        if: ${{ matrix.build != 's390x' }}
+        if: ${{ !contains(matrix.os, 's390x') }}
         uses: ./.github/actions/ccache-clear
         with:
           key: release-${{ matrix.os }}-cpu
@@ -272,7 +274,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Dependencies
         id: depends
@@ -343,14 +345,14 @@ jobs:
             defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
           - build: 'x64'
             os: ubuntu-24.04
-            cuda: '13.4.1'
-            label: '13.4'
-            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
+            cuda: '13.5.0'
+            label: '13.5'
+            defines: ''
           - build: 'arm64'
             os: ubuntu-24.04-arm
-            cuda: '13.4.1'
-            label: '13.4'
-            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
+            cuda: '13.5.0'
+            label: '13.5'
+            defines: ''
 
     runs-on: ${{ matrix.os }}
     container: nvidia/cuda:${{ matrix.cuda }}-devel-ubuntu24.04
@@ -379,7 +381,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Dependencies
         id: depends
@@ -461,7 +463,7 @@ jobs:
     needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
-    runs-on: ubuntu-24.04  # previously ubuntu-latest
+    runs-on: ubuntu-24.04
 
     env:
       NDK_VERSION: "29.0.14206865"
@@ -477,7 +479,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Set up JDK
         uses: actions/setup-java@v5
@@ -546,7 +548,7 @@ jobs:
     needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.8'
 
     defaults:
@@ -569,7 +571,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Build
         id: cmake_build
@@ -599,7 +601,7 @@ jobs:
     needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container: 'ghcr.io/snapdragon-toolchain/arm64-linux:v0.8'
 
     defaults:
@@ -622,7 +624,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Build
         id: cmake_build
@@ -670,7 +672,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
@@ -892,11 +894,16 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Install Ninja
         run: |
           choco install ninja
+
+      - name: Install LLVM
+        run: |
+          choco install llvm --version=22.1.8
+          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
@@ -967,6 +974,11 @@ jobs:
           key: windows-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
           evict-old-files: 1d
           max-size: "1G"
+
+      - name: Tune ccache for ROCm
+        run: |
+          # since ROCm 10.1, clang -E output has no GPU code, so the preprocessor fallback can reuse objects with old GPU code
+          ccache --set-config=depend_mode=true
 
       # - name: Cache ROCm Installation
       #   id: cache-rocm
@@ -1139,6 +1151,11 @@ jobs:
         run: |
           choco install ninja
 
+      - name: Install LLVM
+        run: |
+          choco install llvm --version=22.1.8
+          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+
       # TODO: these jobs need to use llvm toolchain in order to utilize the ccache
       #- name: ccache
       #  uses: ggml-org/ccache-action@v1.2.24
@@ -1204,12 +1221,12 @@ jobs:
           - cuda: '12.4'
             arch: x64
             defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
-          - cuda: '13.4'
+          - cuda: '13.5'
             arch: x64
-            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
-          - cuda: '13.4'
+            defines: ''
+          - cuda: '13.5'
             arch: arm64
-            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3 -DCMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-msvc-cuda.cmake'
+            defines: '-DCMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-msvc-cuda.cmake'
 
     steps:
       - name: Clone
@@ -1232,6 +1249,7 @@ jobs:
         with:
           key: release-windows-2022-${{ matrix.arch }}-cuda-${{ matrix.cuda }}
           evict-old-files: 1d
+          max-size: "1G"
 
       - name: Build
         id: cmake_build
@@ -1300,14 +1318,14 @@ jobs:
         shell: bash
 
     env:
-      WINDOWS_DLE_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/a51104eb-6f4a-4a0e-9dae-1b81b0c81ae1/intel-deep-learning-essentials-2026.1.4.16_offline.exe
-      WINDOWS_ONEDNN_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/34e28083-d04b-46a3-826c-8c1d00bf1e1c/intel-onednn-2026.0.2.47_offline.exe
+      WINDOWS_DLE_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/b177a006-5cd9-4cb2-807f-8199cc73d53c/intel-deep-learning-essentials-2026.2.0.638_offline.exe
+      WINDOWS_ONEDNN_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/8f905666-c85c-43fb-9bd0-2618c7ecd33b/intel-onednn-2026.1.0.622_offline.exe
       WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.tbb.devel
       WINDOWS_DNNL: intel.oneapi.win.dnnl
 
-      LEVEL_ZERO_SDK_URL: https://github.com/oneapi-src/level-zero/releases/download/v1.33.1/level-zero-win-sdk-1.33.1.zip
+      LEVEL_ZERO_SDK_URL: https://github.com/oneapi-src/level-zero/releases/download/v1.34.0/level-zero-win-sdk-1.34.0.zip
       ONEAPI_ROOT: "C:/Program Files (x86)/Intel/oneAPI"
-      ONEAPI_INSTALLER_VERSION: "2026.1"
+      ONEAPI_INSTALLER_VERSION: "2026.2"
 
     steps:
       - name: Clone
@@ -1356,11 +1374,12 @@ jobs:
           cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_def.3.dll" ./build/bin
           cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_avx2.3.dll" ./build/bin
           cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_tbb_thread.3.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_intel_thread.3.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/libimalloc.dll" ./build/bin
 
           cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_level_zero.dll" ./build/bin
           cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_level_zero_v2.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_opencl.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_loader.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_loader_shared.dll" ./build/bin
           cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_win_proxy_loader.dll" ./build/bin
           ZE_LOADER_DLL=$(find "${{ env.ONEAPI_ROOT }}" "$LEVEL_ZERO_V1_SDK_PATH" -iname ze_loader.dll -print -quit 2>/dev/null || true)
           if [ -n "$ZE_LOADER_DLL" ]; then
@@ -1414,8 +1433,8 @@ jobs:
 
     env:
       ONEAPI_ROOT: /opt/intel/oneapi/
-      ONEAPI_INSTALLER_VERSION: "2026.1"
-      LEVEL_ZERO_VERSION: "1.33.1"
+      ONEAPI_INSTALLER_VERSION: "2026.2"
+      LEVEL_ZERO_VERSION: "1.34.0"
       LEVEL_ZERO_UBUNTU_VERSION: "u24.04"
 
     steps:
@@ -1430,12 +1449,12 @@ jobs:
         run: |
           cd /tmp
           echo "Download oneAPI Deep Learning Essentials installation package"
-          wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/b5c100a7-8052-4e88-90e2-63d9916a998b/intel-deep-learning-essentials-2026.1.4.17_offline.sh -O intel-deep-learning-essentials_offline.sh
+          wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/aef232d2-aac5-4cd6-bceb-911019bbb6a8/intel-deep-learning-essentials-2026.2.0.640_offline.sh -O intel-deep-learning-essentials_offline.sh
           echo "Install oneAPI Deep Learning Essentials components"
           sudo bash intel-deep-learning-essentials_offline.sh -s -a --silent --eula accept
 
           echo "Download oneDNN installation package"
-          wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/94c3dbac-0852-45be-a57d-21c204cada3e/intel-onednn-2026.0.2.46_offline.sh -O intel-onednn_offline.sh
+          wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/46452a4a-7b7f-49f2-be4c-602a900180bb/intel-onednn-2026.1.0.625_offline.sh -O intel-onednn_offline.sh
           echo "Install oneDNN components"
           sudo bash intel-onednn_offline.sh -s -a --silent --eula accept
 
@@ -1451,7 +1470,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Dependencies
         id: depends
@@ -1523,7 +1542,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Free up disk space
         uses: ggml-org/free-disk-space@v1.3.1
@@ -1545,6 +1564,8 @@ jobs:
           # builds hit.
           ccache --set-config=compiler_check=content
           ccache --set-config=sloppiness=time_macros,include_file_mtime,include_file_ctime
+          # since ROCm 10.1, clang -E output has no GPU code, so the preprocessor fallback can reuse objects with old GPU code
+          ccache --set-config=depend_mode=true
 
       - name: Dependencies
         id: depends
@@ -1618,6 +1639,60 @@ jobs:
         uses: ./.github/actions/ccache-clear
         with:
           key: release-ubuntu-24.04-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
+
+  ubuntu-26-zdnn:
+    needs: [check-release, ui-build]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+
+    runs-on: ubuntu-26.04-s390x
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download UI build
+        uses: actions/download-artifact@v8
+        with:
+          name: llama-ui.zip
+          path: ui/apps/chat/dist
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libssl-dev libzdnn-dev
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_VXE=ON \
+            -DGGML_ZDNN=ON \
+            -DCMAKE_C_FLAGS="-march=arch15" \
+            -DCMAKE_CXX_FLAGS="-march=arch15" \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          tar -czvf llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-zdnn-s390x.tar.gz --transform "s,^\.,llama-${{ needs.check-release.outputs.tag_name }}," -C ./build/bin .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          path: llama-${{ needs.check-release.outputs.tag_name }}-bin-ubuntu-zdnn-s390x.tar.gz
+          archive: false
 
   ios-xcode:
     needs: [check-release]

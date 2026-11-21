@@ -657,7 +657,7 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         case GGML_TYPE_Q5_K:
             if (src0_reordered) {
                 const void * vx = dst->src[0]->data;
-                get_rows_sycl_reorder_k<3, 64, K_SCALE_SIZE>(dst->src[0], dst->src[1], dst, src1_i32, (float *)dst->data, ctx.stream(),
+                get_rows_sycl_reorder_k<3, 32, K_SCALE_SIZE>(dst->src[0], dst->src[1], dst, src1_i32, (float *)dst->data, ctx.stream(),
                     [=](float * y, int64_t ib, uint8_t * scales_local, const sycl::nd_item<3> & item_ct1, int64_t nb) {
                         dequantize_block_q5_K_reorder(vx, y, ib, scales_local, item_ct1, nb);
                     });

@@ -3,6 +3,7 @@
 #include "llama.h"
 
 #include <map>
+#include <memory>
 #include <regex>
 #include <string>
 #include <vector>
@@ -102,13 +103,15 @@ struct llama_grammar_parser {
             const char        * src,
             const std::string & rule_name,
             uint32_t            rule_id,
-            bool                is_nested);
+            bool                is_nested,
+            uint32_t            depth = 0);
 
     const char * parse_sequence(
             const char         * src,
             const std::string  & rule_name,
             llama_grammar_rule & rule,
-            bool               is_nested);
+            bool               is_nested,
+            uint32_t           depth = 0);
 
     const char * parse_rule(const char * src);
 
@@ -130,8 +133,8 @@ struct llama_grammar {
     // note: allow null vocab for testing (not great)
     const llama_vocab * vocab;
 
-    const llama_grammar_rules  rules;  // TODO: shared ptr
-          llama_grammar_stacks stacks;
+    const std::shared_ptr<const llama_grammar_rules> rules;
+    llama_grammar_stacks stacks;
 
     // buffer for partially generated UTF-8 sequence from accepted tokens
     llama_partial_utf8 partial_utf8;

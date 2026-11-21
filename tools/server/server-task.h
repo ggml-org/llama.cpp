@@ -20,6 +20,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_DECISION,
     SERVER_TASK_TYPE_INFILL,
     SERVER_TASK_TYPE_TRANSCRIBE_RT,
+    SERVER_TASK_TYPE_REALTIME, // a conversation over /v1/realtime, see server-realtime.cpp
     SERVER_TASK_TYPE_CANCEL,
     SERVER_TASK_TYPE_CONTROL,
     SERVER_TASK_TYPE_NEXT_RESPONSE,
@@ -57,6 +58,20 @@ enum server_control_action {
     SERVER_CONTROL_ACTION_AUDIO_APPEND, // push control_audio into the slot's audio stream
     SERVER_CONTROL_ACTION_AUDIO_COMMIT, // flush the audio stream, more audio can follow
     SERVER_CONTROL_ACTION_AUDIO_END,    // flush the audio stream and end it
+    // realtime conversations (SERVER_TASK_TYPE_REALTIME), applied in order with the audio actions
+    SERVER_CONTROL_ACTION_TEXT_APPEND,     // append control_text to the conversation
+    SERVER_CONTROL_ACTION_RESPONSE_CREATE, // generate after control_text, see control_response
+    SERVER_CONTROL_ACTION_RESPONSE_CANCEL, // stop the response being generated
+    SERVER_CONTROL_ACTION_CLEAR,           // drop the conversation
+};
+
+// a response of a realtime conversation
+struct server_control_response {
+    mtmd_helper_gen_audio_out_mode out_mode  = MTMD_HELPER_GEN_AUDIO_OUT_AUTO;
+    common_params_sampling         sampling;       // of the text tokens: tool call grammar and preserved tokens
+    int32_t                        n_predict = -1; // text tokens and audio frames, -1: until the context is full
+    std::string                    lang;           // empty: model default
+    std::string                    voice;          // empty: model default
 };
 
 struct task_params {
@@ -100,6 +115,8 @@ struct task_params {
     server_control_action control_action = SERVER_CONTROL_ACTION_NONE;
     std::string           control_cmpl_id;
     std::vector<float>    control_audio; // PCM F32 samples for SERVER_CONTROL_ACTION_AUDIO_APPEND
+    std::string           control_text;  // raw text, special tokens are parsed
+    server_control_response control_response;
 
     // reported in generation_settings, parsing itself is owned by the chat session
     common_chat_format      chat_format      = COMMON_CHAT_FORMAT_CONTENT_ONLY;
@@ -192,10 +209,16 @@ struct server_task {
     struct decision {
         std::vector<llama_token> labels;       // logits of these tokens, at the last prompt token
         std::vector<int32_t>     label_groups; // if set, number of labels per output, the output is their max
+        std::vector<int32_t>     label_pos;    // if set, prompt position of each output, else the last token
         std::vector<int32_t>     markers;      // embeddings[column] at these prompt positions
         int32_t                  column = 0;
         // if set, embeddings is [q | k], and the output is instead the scaled dot product of q[pointer] and k[marker]
         int32_t                  pointer = -1;
+        // if set, the prompt must be the only sequence of its batch
+        bool                     no_batching = false;
+
+        // if set, the outputs are the pooled embeddings of the sequence, one score per class
+        bool                     pooled = false;
 
         // first prompt position that is read, -1 if none
         int32_t pos_first() const {
@@ -215,6 +238,9 @@ struct server_task {
         // the scores are the first n_scores rows of the embeddings
         std::vector<int32_t> order;
         int32_t              n_scores = 0;
+
+        // one value per prompt token, see llama_batch_ext_set_decision_group()
+        std::vector<int32_t> group;
     };
     decision decision;
 
@@ -238,7 +264,7 @@ struct server_task {
             case SERVER_TASK_TYPE_RERANK:
                 return true;
             case SERVER_TASK_TYPE_DECISION:
-                return !decision.markers.empty() || !decision.order.empty();
+                return !decision.markers.empty() || !decision.order.empty() || decision.pooled;
             default:
                 return false;
         }
@@ -533,6 +559,21 @@ struct server_task_result_embd : server_task_result {
     json to_json_oaicompat();
 };
 
+// one event of a realtime conversation: text and audio of the response being generated, or its end
+struct server_task_result_realtime : server_task_result {
+    common_chat_input  content;             // the text with its token
+    std::vector<float> audio;               // PCM F32 at the sample rate of mtmd_gen_audio_get_info()
+    bool               response_done = false;
+    bool               cancelled     = false;
+    int32_t            n_decoded     = 0;
+
+    virtual bool is_stop() override {
+        return false; // the session ends when the client leaves, the task is cancelled then
+    }
+
+    virtual json to_json() override;
+};
+
 struct server_task_result_tts : server_task_result {
     std::string audio; // raw bytes for this chunk (WAV or PCM, per request's out_type)
     int32_t     sample_rate = 0;
@@ -646,77 +687,6 @@ struct server_task_result_get_lora : server_task_result {
 
 struct server_task_result_apply_lora : server_task_result {
     virtual json to_json() override;
-};
-
-struct server_prompt {
-    server_tokens tokens;
-
-    std::list<common_prompt_checkpoint> checkpoints;
-
-    void clear() {
-        tokens.clear();
-        checkpoints.clear();
-    }
-
-    int n_tokens() const {
-        return tokens.size();
-    }
-
-    server_prompt clone() const {
-        return server_prompt {
-            tokens.clone(),
-            checkpoints,
-        };
-    }
-};
-
-struct server_prompt_data {
-    std::vector<uint8_t> main;
-    std::vector<uint8_t> drft;
-
-    size_t size() const {
-        return main.size() + drft.size();
-    }
-};
-
-struct server_prompt_cache_state {
-    server_prompt prompt;
-    server_prompt_data data;
-
-    size_t size() const {
-        size_t res = data.size();
-
-        for (const auto & ckpt : prompt.checkpoints) {
-            res += ckpt.size();
-        }
-
-        return res;
-    }
-};
-
-struct server_prompt_cache {
-    server_prompt_cache(int32_t limit_size_mib, size_t limit_tokens) {
-        this->limit_size   = 1024ull*1024ull*(limit_size_mib < 0 ? 0 : limit_size_mib);
-        this->limit_tokens = limit_tokens;
-    }
-
-    std::list<server_prompt_cache_state> states;
-
-    // in bytes, 0 = no limit
-    size_t limit_size = 0;
-
-    // in tokens, 0 = no limit
-    size_t limit_tokens = 0;
-
-    size_t size() const;
-
-    size_t n_tokens() const;
-
-    server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
-
-    bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
-
-    void update();
 };
 
 // used exclusively by router mode

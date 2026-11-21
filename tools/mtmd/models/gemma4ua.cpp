@@ -1,7 +1,7 @@
 #include "models.h"
 #include <cmath>
 
-ggml_cgraph * clip_graph_gemma4ua::build() {
+ggml_cgraph * mtmd_graph_gemma4ua::build() {
     ggml_tensor * inp = build_inp_raw(1);
 
     auto cur = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 0, 2, 3));

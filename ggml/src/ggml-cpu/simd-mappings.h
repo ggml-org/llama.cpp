@@ -14,7 +14,9 @@
 #include <arm_neon.h>
 #endif
 
-#if defined(__riscv_v_intrinsic)
+// __riscv_v_intrinsic reports compiler API support and can be defined without
+// enabling V; use the ISA feature macro to select RVV code.
+#if defined(__riscv_v)
 #include <riscv_vector.h>
 #endif
 
@@ -126,6 +128,8 @@ extern float ggml_table_f32_e8m0_half[1 << 8];
 // precomputed f32 table for ue4m3 (1 KB)
 // defined in ggml-cpu.c, initialized in ggml_cpu_init()
 extern float ggml_table_f32_ue4m3[1 << 8];
+
+extern float ggml_table_f32_f8_e4m3[1 << 8];
 
 // Use lookup table for E8M0 on x86 (faster than bit manipulation)
 #if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__)
@@ -1304,7 +1308,7 @@ static inline void __lzs_f16cx4_store(ggml_fp16_t * x, float32x4_t v_y) {
 #define GGML_BF16_FMA_HI(acc, x, y) \
     (acc) = GGML_F32x4_FMA((acc), GGML_BF16_TO_F32_HI(x), GGML_BF16_TO_F32_HI(y))
 
-#elif defined(__riscv_v_intrinsic)
+#elif defined(__riscv_v)
 
 // compatible with vlen >= 128
 

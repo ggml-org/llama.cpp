@@ -102,10 +102,10 @@ void llama_model_jamba::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_jamba::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_jamba::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_build_mamba_base(params) {
+llama_model_jamba::graph::graph(const llm_graph_params & params) : llm_build_mamba_base(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     ggml_tensor * cur;
@@ -125,7 +125,7 @@ llama_model_jamba::graph::graph(const llama_model & model, const llm_graph_param
         cb(cur, "attn_norm", il);
 
         if (n_head_kv == 0) {
-            cur = build_mamba_layer(inp_hybrid->get_recr(), cur, model, ubatch, il);
+            cur = build_mamba_layer(inp_hybrid->get_recr(), cur, ubatch, il);
         } else {
             // Attention
 

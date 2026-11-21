@@ -1340,7 +1340,7 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
 #define  MMQ_X_Q4_0_RDNA1  64
 #define  MMQ_Y_Q4_0_RDNA1  64
 #define NWARPS_Q4_0_RDNA1  8
-#if defined(SYCL_USE_XMX)
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
 #define  MMQ_X_Q4_0_AMPERE 4
 #define  MMQ_Y_Q4_0_AMPERE 32
 #define NWARPS_Q4_0_AMPERE 4
@@ -1384,7 +1384,7 @@ template <bool need_check> static void
 #define  MMQ_X_Q4_1_RDNA1  64
 #define  MMQ_Y_Q4_1_RDNA1  64
 #define NWARPS_Q4_1_RDNA1  8
-#if defined(SYCL_USE_XMX)
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
 #define  MMQ_X_Q4_1_AMPERE 4
 #define  MMQ_Y_Q4_1_AMPERE 32
 #define NWARPS_Q4_1_AMPERE 4
@@ -1427,7 +1427,7 @@ template <bool need_check> static void
 #define  MMQ_X_Q5_0_RDNA1  64
 #define  MMQ_Y_Q5_0_RDNA1  64
 #define NWARPS_Q5_0_RDNA1  8
-#if defined(SYCL_USE_XMX)
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
 #define  MMQ_X_Q5_0_AMPERE 4
 #define  MMQ_Y_Q5_0_AMPERE 32
 #define NWARPS_Q5_0_AMPERE 4
@@ -1470,7 +1470,7 @@ template <bool need_check> static void
 #define  MMQ_X_Q5_1_RDNA1  64
 #define  MMQ_Y_Q5_1_RDNA1  64
 #define NWARPS_Q5_1_RDNA1  8
-#if defined(SYCL_USE_XMX)
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
 #define  MMQ_X_Q5_1_AMPERE 4
 #define  MMQ_Y_Q5_1_AMPERE 32
 #define NWARPS_Q5_1_AMPERE 4
@@ -1513,7 +1513,7 @@ mul_mat_q5_1(
 #define  MMQ_X_Q8_0_RDNA1  64
 #define  MMQ_Y_Q8_0_RDNA1  64
 #define NWARPS_Q8_0_RDNA1  8
-#if defined(SYCL_USE_XMX)
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
 #define  MMQ_X_Q8_0_AMPERE 4
 #define  MMQ_Y_Q8_0_AMPERE 32
 #define NWARPS_Q8_0_AMPERE 4
@@ -1556,7 +1556,7 @@ template <bool need_check> static void
 #define  MMQ_X_Q2_K_RDNA1  128
 #define  MMQ_Y_Q2_K_RDNA1  32
 #define NWARPS_Q2_K_RDNA1  8
-#if defined(SYCL_USE_XMX)
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
 #define  MMQ_X_Q2_K_AMPERE 4
 #define  MMQ_Y_Q2_K_AMPERE 32
 #define NWARPS_Q2_K_AMPERE 4
@@ -1600,7 +1600,7 @@ mul_mat_q2_K(
 #define  MMQ_X_Q3_K_RDNA1  32
 #define  MMQ_Y_Q3_K_RDNA1  128
 #define NWARPS_Q3_K_RDNA1  8
-#if defined(SYCL_USE_XMX)
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
 #define  MMQ_X_Q3_K_AMPERE 4
 #define  MMQ_Y_Q3_K_AMPERE 32
 #define NWARPS_Q3_K_AMPERE 4
@@ -1645,7 +1645,7 @@ mul_mat_q3_K(
 #define  MMQ_X_Q4_K_RDNA1  32
 #define  MMQ_Y_Q4_K_RDNA1  64
 #define NWARPS_Q4_K_RDNA1  8
-#if defined(SYCL_USE_XMX)
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
 #define  MMQ_X_Q4_K_AMPERE 4
 #define  MMQ_Y_Q4_K_AMPERE 32
 #define NWARPS_Q4_K_AMPERE 4
@@ -1689,7 +1689,7 @@ template <bool need_check> static void
 #define  MMQ_X_Q5_K_RDNA1  32
 #define  MMQ_Y_Q5_K_RDNA1  64
 #define NWARPS_Q5_K_RDNA1  8
-#if defined(SYCL_USE_XMX)
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
 #define  MMQ_X_Q5_K_AMPERE 4
 #define  MMQ_Y_Q5_K_AMPERE 32
 #define NWARPS_Q5_K_AMPERE 4
@@ -1733,7 +1733,7 @@ mul_mat_q5_K(
 #define  MMQ_X_Q6_K_RDNA1  32
 #define  MMQ_Y_Q6_K_RDNA1  64
 #define NWARPS_Q6_K_RDNA1  8
-#if defined(SYCL_USE_XMX)
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
 #define  MMQ_X_Q6_K_AMPERE 4
 #define  MMQ_Y_Q6_K_AMPERE 32
 #define NWARPS_Q6_K_AMPERE 4

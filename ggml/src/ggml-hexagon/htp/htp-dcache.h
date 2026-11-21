@@ -2,9 +2,13 @@
 #define HTP_DCACHE_H
 
 #include <stdint.h>
+#include "hex-common.h"
 #include "htp-ops.h"
 
-#define HTP_MAX_DIRTY_RANGES 64
+#define HTP_MAX_DIRTY_RANGES           64
+#define HTP_DCACHE_BLOCK_SIZE          (HEX_L2_LINE_SIZE * 4) // flush granularity (chunks per thread)
+#define HTP_DCACHE_FLUSH_WQ_THRESHOLD  (4 * 1024)
+#define HTP_DCACHE_FLUSH_ALL_THRESHOLD (4 * 1024 * 1024)
 
 struct htp_dirty_range {
     uint32_t start;

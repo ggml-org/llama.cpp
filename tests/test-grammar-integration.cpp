@@ -193,6 +193,19 @@ static void test_schema(const std::string & test_desc, const std::string & schem
 }
 
 static void test_simple_grammar() {
+    test_grammar(
+        "left factor leading empty suffix",
+        "root ::= \"ab\" | \"abc\" | \"abd\" | \"abe\"",
+        {"ab", "abc", "abd", "abe"}, {"", "a", "abb", "abcc"});
+    test_grammar(
+        "left factor middle empty suffix",
+        "root ::= \"abc\" | \"ab\" | \"abd\" | \"abe\"",
+        {"ab", "abc", "abd", "abe"}, {"", "a", "abb", "abcc"});
+    test_grammar(
+        "left factor recursive references",
+        "root ::= \"ok\" | choice\nchoice ::= a | b | c | d\na ::= \"x\" a\nb ::= \"x\" b\nc ::= \"x\" c\nd ::= \"x\" d",
+        {"ok"}, {"", "x", "xx", "okx"});
+
     test_schema(
         "min 0",
         R"""({
@@ -623,6 +636,19 @@ static void test_special_chars() {
             "🔵🟠abc🟠🔵"
         }
     );
+
+    test_grammar(
+        "skip left factoring inside character classes",
+        "root ::= [ab] \"x\" | [ac] \"x\" | [ad] \"x\" | [ae] \"x\"",
+        {"ax", "bx", "cx", "dx", "ex"}, {"", "a", "fx", "axx"});
+    test_grammar(
+        "skip left factoring inside character ranges",
+        "root ::= [a-b] \"x\" | [a-c] \"x\" | [a-d] \"x\" | [a-e] \"x\"",
+        {"ax", "bx", "cx", "dx", "ex"}, {"", "a", "fx", "axx"});
+    test_grammar(
+        "left factor referenced character alternatives",
+        "root ::= a | b | c | d\na ::= \"p\" [a] \"x\"\nb ::= \"p\" [ab] \"x\"\nc ::= \"p\" [ac] \"x\"\nd ::= \"p\" [ad] \"x\"",
+        {"pax", "pbx", "pcx", "pdx"}, {"", "px", "pex", "paxx"});
 }
 
 static void test_quantifiers() {
@@ -878,6 +904,18 @@ static void test_failure_left_recursion() {
         foo ::= "c" | empty asdf "d" | "e"
         empty ::= "blah" | )""";
     assert(test_build_grammar_fails(hardest_str));
+
+    const auto chain = [](int n) {
+        std::string s = "root ::= r0\n";
+        for (int i = 0; i < n; i++) {
+            s += "r" + std::to_string(i) + " ::= r" + std::to_string(i + 1) + "\n";
+        }
+        return s + "r" + std::to_string(n) + " ::= \"a\"\n";
+    };
+    llama_grammar * grammar = build_grammar(chain(100));
+    assert(grammar != nullptr);
+    llama_grammar_free_impl(grammar);
+    assert(test_build_grammar_fails(chain(1000)));
 
     fprintf(stderr, "  ✅︎ Passed\n");
 }
@@ -1474,6 +1512,25 @@ static void test_json_schema() {
             R"""({"productId": 1, "productName": "A green door", "price": 12.50, "dimensions": {"length": 785, "width": 250.5, "height": -0.359}, "tags": ["home", "green"]})""", // Tags and dimensions are out of order
             // TODO: The following line should fail, but currently it passes. `uniqueItems` is not supported, as it would likely be too difficult to implement.
             // R"""({"productId": 1, "productName": "A green door", "price": 12.50, "tags": ["home", "green", "home"]})""",
+        }
+    );
+
+    // the deepest schema of json_schema_to_grammar must give a valid grammar
+    std::string deep_schema;
+    for (int i = 0; i < 127; i++) {
+        deep_schema += R"({"type": "array", "items": )";
+    }
+    deep_schema += R"({"type": "string"})" + std::string(127, '}');
+    test_schema(
+        "127 nested arrays",
+        deep_schema,
+        // Passing strings
+        {
+            std::string(127, '[') + R"("a")" + std::string(127, ']'),
+        },
+        // Failing strings
+        {
+            std::string(126, '[') + R"("a")" + std::string(126, ']'),
         }
     );
 }

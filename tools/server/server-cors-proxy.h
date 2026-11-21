@@ -11,6 +11,7 @@
 #include <cctype>
 
 #include "server-http.h"
+#include "server-common.h"
 
 static std::string proxy_header_to_lower(std::string header) {
     std::transform(header.begin(), header.end(), header.begin(), [](unsigned char c) {
@@ -19,7 +20,7 @@ static std::string proxy_header_to_lower(std::string header) {
     return header;
 }
 
-static server_http_res_ptr proxy_request(const server_http_req & req, std::string method) {
+static server_http_res_ptr proxy_request(const server_http_req & req, std::string method, bool allow_private_urls) {
     std::string target_url = req.get_param("url");
     common_http_url parsed_url = common_http_parse_url(target_url);
 
@@ -68,16 +69,24 @@ static server_http_res_ptr proxy_request(const server_http_req & req, std::strin
             req.files,
             req.should_stop,
             600, // timeout_read (default to 10 minutes)
-            600  // timeout_write (default to 10 minutes)
+            600, // timeout_write (default to 10 minutes)
+            server_resolve_public_addr(parsed_url.host, allow_private_urls)
             );
+
+    // route redirects back through the proxy, so each hop is checked
+    if (proxy->status >= 300 && proxy->status < 400) {
+        for (auto & [key, value] : proxy->headers) {
+            if (proxy_header_to_lower(key) == "location") {
+                value = "?url=" + httplib::encode_uri_component(common_http_resolve_location(target_url, value));
+            }
+        }
+    }
 
     return proxy;
 }
 
-static server_http_context::handler_t proxy_handler_post = [](const server_http_req & req) -> server_http_res_ptr {
-    return proxy_request(req, "POST");
-};
-
-static server_http_context::handler_t proxy_handler_get = [](const server_http_req & req) -> server_http_res_ptr {
-    return proxy_request(req, "GET");
-};
+static server_http_context::handler_t proxy_make_handler(const std::string & method, bool allow_private_urls) {
+    return [method, allow_private_urls](const server_http_req & req) -> server_http_res_ptr {
+        return proxy_request(req, method, allow_private_urls);
+    };
+}

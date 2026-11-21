@@ -25,6 +25,24 @@ __dpct_inline__ int best_index_int8(int n, const int8_t * val, float x) {
     return x - val[mu - 1] < val[mu] - x ? mu - 1 : mu;
 }
 
+// exact roundf (half away from zero); x + 0.5f carries for x = 0.5 - 2^-25, and sycl::round is not exact under fast fp
+inline int round_half_away_int(float x) {
+    const float t = sycl::trunc(x);
+    return (int) (sycl::fabs(x - t) >= 0.5f ? t + sycl::copysign(1.0f, x) : t);
+}
+
+// correctly rounded a / b to match the CPU: fast fp gives an approximate reciprocal (~12% off by an ulp on B580),
+// so pick the approximation or a neighbour by smallest exact FMA residual
+inline float div_correctly_rounded(float a, float b) {
+    const float y  = a / b;
+    const float lo = sycl::nextafter(y, -INFINITY);
+    const float hi = sycl::nextafter(y, INFINITY);
+    const float e  = sycl::fabs(sycl::fma(-b, y, a));
+    const float el = sycl::fabs(sycl::fma(-b, lo, a));
+    const float eh = sycl::fabs(sycl::fma(-b, hi, a));
+    return el < e && el <= eh ? lo : (eh < e ? hi : y);
+}
+
 inline void cpy_blck_f32_q8_0(const char * cxi, char * cdsti) {
     const float * xi   = (const float *) cxi;
     block_q8_0 *  dsti = (block_q8_0 *) cdsti;
@@ -36,15 +54,16 @@ inline void cpy_blck_f32_q8_0(const char * cxi, char * cdsti) {
         amax          = sycl::fmax(amax, sycl::fabs((float) v));
     }
 
-    const float d  = amax / ((1 << 7) - 1);
-    const float id = d ? 1.0f / d : 0.0f;
+    // matches the x86 AVX/AVX2 CPU path (ggml-cpu/arch/x86/quants.c): id = 127/amax, round half to even
+    const float d  = div_correctly_rounded(amax, 127.0f);
+    const float id = amax != 0.0f ? div_correctly_rounded(127.0f, amax) : 0.0f;
 
     dsti->d = d;
 
     for (int j = 0; j < QK8_0; ++j) {
         const float x0 = xi[j] * id;
 
-        dsti->qs[j] = sycl::round((float) x0);
+        dsti->qs[j] = (int) sycl::rint(x0);
     }
 }
 
@@ -70,10 +89,6 @@ inline void cpy_blck_f32_q1_0(const char * cxi, char * cdsti) {
     }
 }
 
-inline int round_nearest_int(float x) {
-    return (int)(x >= 0.0f ? x + 0.5f : x - 0.5f);
-}
-
 inline void cpy_blck_f32_q2_0(const char * cxi, char * cdsti) {
     const float * xi   = (const float *) cxi;
     block_q2_0 *  dsti = (block_q2_0 *) cdsti;
@@ -85,7 +100,7 @@ inline void cpy_blck_f32_q2_0(const char * cxi, char * cdsti) {
     }
 
     const float d  = amax;
-    const float id = d > 0.0f ? 1.0f / d : 0.0f;
+    const float id = d > 0.0f ? div_correctly_rounded(1.0f, d) : 0.0f;
 
     dsti->d = d;
 
@@ -94,7 +109,7 @@ inline void cpy_blck_f32_q2_0(const char * cxi, char * cdsti) {
     }
 
     for (int j = 0; j < QK2_0; ++j) {
-        int q = round_nearest_int(xi[j] * id) + 1;
+        int q = round_half_away_int(xi[j] * id) + 1;
         q = dpct::max(0, dpct::min(3, q));
 
         const int byte_index = j / 4;
@@ -378,7 +393,7 @@ inline void cpy_blck_f32_q4_0(const char * cxi, char * cdsti) {
     }
 
     const float d  = vmax / -8;
-    const float id = d ? 1.0f / d : 0.0f;
+    const float id = d ? div_correctly_rounded(1.0f, d) : 0.0f;
 
     dsti->d = d;
 
@@ -386,8 +401,9 @@ inline void cpy_blck_f32_q4_0(const char * cxi, char * cdsti) {
         const float x0 = xi[0 + j] * id;
         const float x1 = xi[QK4_0 / 2 + j] * id;
 
-        const uint8_t xi0 = dpct::min(15, (int8_t) (x0 + 8.5f));
-        const uint8_t xi1 = dpct::min(15, (int8_t) (x1 + 8.5f));
+        // no-op fmin stops x * id + 8.5f being fused into an FMA, so x * id is rounded as on the CPU
+        const uint8_t xi0 = dpct::min(15, (int8_t) (sycl::fmin(x0, 6.5f) + 8.5f));
+        const uint8_t xi1 = dpct::min(15, (int8_t) (sycl::fmin(x1, 6.5f) + 8.5f));
 
         dsti->qs[j] = xi0;
         dsti->qs[j] |= xi1 << 4;
@@ -408,8 +424,8 @@ inline void cpy_blck_f32_q4_1(const char * cxi, char * cdsti) {
         vmax = sycl::max(v, vmax);
     }
 
-    const float d  = (vmax - vmin) / ((1 << 4) - 1);
-    const float id = d ? 1.0f / d : 0.0f;
+    const float d  = div_correctly_rounded(vmax - vmin, (1 << 4) - 1);
+    const float id = d ? div_correctly_rounded(1.0f, d) : 0.0f;
 
     dsti->dm.x() = d;
     dsti->dm.y() = vmin;
@@ -418,8 +434,9 @@ inline void cpy_blck_f32_q4_1(const char * cxi, char * cdsti) {
         const float x0 = (xi[0 + j] - vmin) * id;
         const float x1 = (xi[QK4_1 / 2 + j] - vmin) * id;
 
-        const uint8_t xi0 = dpct::min(15, (int8_t) (x0 + 0.5f));
-        const uint8_t xi1 = dpct::min(15, (int8_t) (x1 + 0.5f));
+        // fmin: no FMA, see cpy_blck_f32_q4_0
+        const uint8_t xi0 = dpct::min(15, (int8_t) (sycl::fmin(x0, 15.5f) + 0.5f));
+        const uint8_t xi1 = dpct::min(15, (int8_t) (sycl::fmin(x1, 15.5f) + 0.5f));
 
         dsti->qs[j] = xi0;
         dsti->qs[j] |= xi1 << 4;
@@ -442,7 +459,7 @@ inline void cpy_blck_f32_q5_0(const char * cxi, char * cdsti) {
     }
 
     const float d  = vmax / -16;
-    const float id = d ? 1.0f / d : 0.0f;
+    const float id = d ? div_correctly_rounded(1.0f, d) : 0.0f;
 
     dsti->d = d;
 
@@ -451,8 +468,9 @@ inline void cpy_blck_f32_q5_0(const char * cxi, char * cdsti) {
         const float x0 = xi[0 + j] * id;
         const float x1 = xi[QK5_0 / 2 + j] * id;
 
-        const uint8_t xi0 = dpct::min(31, (int8_t) (x0 + 16.5f));
-        const uint8_t xi1 = dpct::min(31, (int8_t) (x1 + 16.5f));
+        // fmin: no FMA, see cpy_blck_f32_q4_0
+        const uint8_t xi0 = dpct::min(31, (int8_t) (sycl::fmin(x0, 14.5f) + 16.5f));
+        const uint8_t xi1 = dpct::min(31, (int8_t) (sycl::fmin(x1, 14.5f) + 16.5f));
 
         dsti->qs[j] = (xi0 & 0xf) | ((xi1 & 0xf) << 4);
         qh |= ((xi0 & 0x10u) >> 4) << (j + 0);
@@ -474,8 +492,8 @@ inline void cpy_blck_f32_q5_1(const char * cxi, char * cdsti) {
         max           = v > max ? v : max;
     }
 
-    const float d  = (max - min) / 31;
-    const float id = d ? 1.0f / d : 0.0f;
+    const float d  = div_correctly_rounded(max - min, 31);
+    const float id = d ? div_correctly_rounded(1.0f, d) : 0.0f;
 
     dsti->dm.x() = d;
     dsti->dm.y() = min;
@@ -485,8 +503,9 @@ inline void cpy_blck_f32_q5_1(const char * cxi, char * cdsti) {
         const float x0 = (xi[0 + j] - min) * id;
         const float x1 = (xi[QK5_1 / 2 + j] - min) * id;
 
-        const uint8_t xi0 = (uint8_t) (x0 + 0.5f);
-        const uint8_t xi1 = (uint8_t) (x1 + 0.5f);
+        // fmin: no FMA, see cpy_blck_f32_q4_0
+        const uint8_t xi0 = (uint8_t) (sycl::fmin(x0, 31.5f) + 0.5f);
+        const uint8_t xi1 = (uint8_t) (sycl::fmin(x1, 31.5f) + 0.5f);
 
         dsti->qs[j] = (xi0 & 0xf) | ((xi1 & 0xf) << 4);
         qh |= ((xi0 & 0x10u) >> 4) << (j + 0);
