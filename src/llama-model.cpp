@@ -2904,6 +2904,17 @@ ggml_backend_buffer_type_t llama_model::select_buft(int il) const {
             });
 }
 
+bool llama_model::dev_layer_supports_kv_type(int il, ggml_type type) const {
+    ggml_backend_dev_t dev = dev_layer(il);
+    auto fn = [&](ggml_context * ctx) {
+        ggml_tensor * kv   = ggml_new_tensor_2d(ctx, type, 8, 4);
+        ggml_tensor * cur  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 8, 1);
+        ggml_tensor * idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, 1);
+        return ggml_set_rows(ctx, kv, cur, idxs);
+    };
+    return buft_supported(ggml_backend_dev_buffer_type(dev), dev, fn);
+}
+
 bool llama_model::has_tensor_overrides() const {
     return pimpl->has_tensor_overrides;
 }

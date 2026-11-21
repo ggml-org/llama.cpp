@@ -1035,6 +1035,9 @@ struct llama_model {
 
     ggml_backend_buffer_type_t select_buft(int il) const;
 
+    // check if the device of the layer can write rows into a KV cache of this type
+    bool dev_layer_supports_kv_type(int il, ggml_type type) const;
+
     bool has_tensor_overrides() const;
 
     const struct ggml_tensor * get_tensor(const char * name) const;

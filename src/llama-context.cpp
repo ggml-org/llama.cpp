@@ -4502,6 +4502,26 @@ llama_context * llama_init_from_model(
         return nullptr;
     }
 
+    if (fp8_cache && params.offload_kqv && !model->hparams.vocab_only) {
+        ggml_backend_dev_t dev_prev = nullptr;
+        for (uint32_t il = 0; il < model->hparams.n_layer_all; ++il) {
+            if (!model->hparams.has_kv(il)) {
+                continue;
+            }
+
+            ggml_backend_dev_t dev = model->dev_layer(il);
+            if (dev == dev_prev) {
+                continue;
+            }
+            dev_prev = dev;
+
+            if (!model->dev_layer_supports_kv_type(il, GGML_TYPE_F8_E4M3)) {
+                LLAMA_LOG_ERROR("%s: FP8 cache is not supported on device '%s'\n", __func__, ggml_backend_dev_name(dev));
+                return nullptr;
+            }
+        }
+    }
+
     if (fp8_cache) {
         for (uint32_t il = 0; il < model->hparams.n_layer_all; ++il) {
             if (!model->hparams.has_kv(il)) {
