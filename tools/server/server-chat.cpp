@@ -133,8 +133,8 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                 chatcmpl_messages.push_back(item);
             } else if (exists_and_is_string(item, "role") &&
                 item.at("role") == "assistant" &&
-                exists_and_is_string(item, "type") &&
-                item.at("type") == "message"
+                (!item.contains("type") ||
+                    (exists_and_is_string(item, "type") && item.at("type") == "message"))
             ) {
                 // #responses_create-input-input_item_list-item-output_message
                 auto chatcmpl_content = json::array();
