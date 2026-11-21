@@ -475,6 +475,7 @@ static __attribute__((noinline)) void hvx_sigglu_f32_vec(HVX_Vector * restrict v
     const HVX_Vector v_max_exp = hvx_vec_splat_f32(87.0f);
     const HVX_Vector v_min_exp = hvx_vec_splat_f32(-87.0f);
 
+    _Pragma("unroll(2)")
     for (uint32_t i = 0; i < nvec; i++) {
         HVX_Vector sig = hvx_vec_fast_sigmoid_f32_guard(vsrc0[i], v_one, v_max_exp, v_min_exp);
         vdst[i]        = hvx_vec_mul_f32_f32(sig, vsrc1[i]);
@@ -522,6 +523,11 @@ static void sigglu_f32(const float * restrict src0,
                        const uint32_t num_rows,
                        const struct htp_glu_context * gctx) {
     htp_glu_op_preamble;
+
+    if ((size_t) nc * sizeof(float) == src0_row_size_aligned) {
+        hvx_sigglu_f32_aa((uint8_t *) dst, (const uint8_t *) src0, (const uint8_t *) src1, num_rows * (uint32_t) nc);
+        return;
+    }
 
     for (uint32_t ib = 0; ib < num_rows; ib++) {
         const uint8_t * restrict src0_ptr = (const uint8_t *) src0 + (ib * src0_row_size_aligned);
@@ -668,9 +674,13 @@ static __attribute__((noinline)) void hvx_sigglu_f16_vec(HVX_Vector * restrict v
                                                          const HVX_Vector * restrict vsrc0,
                                                          const HVX_Vector * restrict vsrc1,
                                                          uint32_t nvec) {
-    for (uint32_t i = 0; i < nvec; i++) {
-        HVX_Vector sig = hvx_vec_fast_sigmoid_f16(vsrc0[i]);
-        vdst[i]        = hvx_vec_mul_f16_f16(sig, vsrc1[i]);
+    for (uint32_t i = 0; i + 2 < nvec; i += 3) {
+        HVX_Vector sig0 = hvx_vec_fast_sigmoid_f16(vsrc0[i + 0]);
+        HVX_Vector sig1 = hvx_vec_fast_sigmoid_f16(vsrc0[i + 1]);
+        HVX_Vector sig2 = hvx_vec_fast_sigmoid_f16(vsrc0[i + 2]);
+        vdst[i + 0]     = hvx_vec_mul_f16_f16(sig0, vsrc1[i + 0]);
+        vdst[i + 1]     = hvx_vec_mul_f16_f16(sig1, vsrc1[i + 1]);
+        vdst[i + 2]     = hvx_vec_mul_f16_f16(sig2, vsrc1[i + 2]);
     }
 }
 
@@ -695,9 +705,15 @@ static inline void hvx_sigglu_f16_aa(uint8_t * restrict dst, const uint8_t * res
     const uint32_t epv  = 128 / sizeof(_Float16);
     const uint32_t nvec = n / epv;
     const uint32_t nloe = n % epv;
+    uint32_t       i    = 0;
 
-    if (nvec) {
-        hvx_sigglu_f16_vec(vdst, vsrc0, vsrc1, nvec);
+    if (nvec >= 3) {
+        const uint32_t nvec3 = nvec - (nvec % 3);
+        hvx_sigglu_f16_vec(vdst, vsrc0, vsrc1, nvec3);
+        i = nvec3;
+    }
+    for (; i < nvec; i++) {
+        hvx_sigglu_f16_tail(vdst + i, vsrc0 + i, vsrc1 + i, epv);
     }
     if (nloe) {
         hvx_sigglu_f16_tail(vdst + nvec, vsrc0 + nvec, vsrc1 + nvec, nloe);
@@ -711,6 +727,11 @@ static void sigglu_f16(const _Float16 * restrict src0,
                        const uint32_t num_rows,
                        const struct htp_glu_context * gctx) {
     htp_glu_op_preamble;
+
+    if ((size_t) nc * sizeof(_Float16) == src0_row_size_aligned) {
+        hvx_sigglu_f16_aa((uint8_t *) dst, (const uint8_t *) src0, (const uint8_t *) src1, num_rows * (uint32_t) nc);
+        return;
+    }
 
     for (uint32_t ib = 0; ib < num_rows; ib++) {
         const uint8_t * restrict src0_ptr = (const uint8_t *) src0 + (ib * src0_row_size_aligned);
