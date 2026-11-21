@@ -1381,7 +1381,7 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
     size_t context_rows = 0;
     std::vector<float>     context_embd;
     std::vector<llama_pos> context_pos;
-    std::vector<std::pair<uint32_t, llama_sampler_ptr>> rnn_samplers;
+    std::vector<std::pair<uint32_t, llama_sampler_ptr>> rnn_samplers; // request seed and sampler for each sequence
 
     common_speculative_impl_draft_dspark(const common_params_speculative & params, uint32_t n_seq)
         : common_speculative_impl_draft_dflash(params, n_seq, COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK)
@@ -1488,8 +1488,11 @@ public:
 
 private:
     const float * anchor_context(llama_seq_id seq_id, llama_pos pos) const {
+        if (pos < 0) {
+            throw std::runtime_error("invalid DSpark anchor position");
+        }
         const size_t slot = (size_t) seq_id * context_rows + (size_t) pos % context_rows;
-        if (pos < 0 || context_pos[slot] != pos) {
+        if (context_pos[slot] != pos) {
             throw std::runtime_error("DSpark committed context feature is missing");
         }
         return context_embd.data() + slot * (size_t) n_embd_dec;
@@ -1500,6 +1503,7 @@ private:
         auto & sampler = rnn_samplers[seq_id];
         if (!sampler.second || sampler.first != dp.seed) {
             sampler.first = dp.seed;
+            // The default seed requests randomness. Mix an explicit seed so it differs from the target's.
             sampler.second.reset(llama_sampler_init_dist(dp.seed == LLAMA_DEFAULT_SEED ? dp.seed : dp.seed ^ 0x85ebca6bu));
         }
 
@@ -1574,7 +1578,7 @@ private:
         const int ret = sampled ? llama_decode_dspark_backbone(ctx_dft, batch.get()) :
             llama_process(ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch.get());
         if (ret != 0) {
-            LOG_WRN("%s: llama_process returned %d\n", __func__, ret);
+            LOG_WRN("%s: %s returned %d\n", __func__, sampled ? "llama_decode_dspark_backbone" : "llama_process", ret);
             return;
         }
 
@@ -1616,11 +1620,11 @@ private:
                     break;
                 }
 
-                const llama_token sampled = common_sampler_sample(smpl, ctx_dft, idx, true);
+                const llama_token id_sampled = common_sampler_sample(smpl, ctx_dft, idx, true);
                 if (has_rnn_context) {
                     // Use the first maximum, as in the RNN conditioning graph.
-                    common_sampler_accept(smpl, sampled, true);
-                    result.push_back(sampled);
+                    common_sampler_accept(smpl, id_sampled, true);
+                    result.push_back(id_sampled);
                     continue;
                 }
 

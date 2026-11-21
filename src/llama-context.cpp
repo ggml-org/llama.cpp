@@ -2344,6 +2344,18 @@ int llama_context::decode(const llama_batch_ext & batch_inp, llm_graph_type gtyp
     do {
         const auto & ubatch = mctx->get_ubatch();
 
+        if (hparams.dflash_variant == LLAMA_DFLASH_VARIANT_DSPARK_INKLING2 && ubatch.token && !ubatch.embd) {
+            const uint32_t block = hparams.dflash_block_size;
+            bool valid = ubatch.n_tokens == (uint64_t) block * ubatch.n_seqs_unq;
+            for (uint32_t i = 0; valid && i < ubatch.n_tokens; ++i) {
+                valid = ubatch.n_seq_id[i] == 1 && ubatch.seq_id[i][0] == ubatch.seq_id[i - i % block][0];
+            }
+            if (!valid) {
+                LLAMA_LOG_ERROR("%s: Inkling2 DSpark needs one contiguous full block per sequence\n", __func__);
+                return n_tokens_prev == 0 ? -1 : -3;
+            }
+        }
+
         // count the outputs in this ubatch
         {
             int32_t n_outputs_new = 0;
@@ -5195,6 +5207,7 @@ bool llama_context::dspark_head(llama_token prev, llama_embd hidden, llama_embd 
     ubatch.seq_id[0] = ubatch.seq_id_unq;
     ubatch.embd_state = inputs.data();
 
+    // The head produces one logit row. Keep the backbone's output count for its remaining rows.
     const auto n_outputs_prev = n_outputs;
     n_outputs = 1;
     ggml_status status;

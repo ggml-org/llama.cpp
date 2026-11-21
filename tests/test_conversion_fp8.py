@@ -779,7 +779,7 @@ class TestQwen4ExpPleScale(unittest.TestCase):
 class TestInkling2DSparkConversion(unittest.TestCase):
     def fixture(self, path):
         mtp = {"hidden_size": 16, "num_hidden_layers": 5, "num_attention_heads": 4, "num_key_value_heads": 1,
-               "head_dim": 4, "intermediate_size": 32, "max_position_embeddings": 128, "rms_norm_eps": 1e-6,
+               "head_dim": 8, "intermediate_size": 32, "max_position_embeddings": 128, "rms_norm_eps": 1e-6,
                "rope_theta": 1000000.0, "local_layer_ids": [0, 1, 3, 4], "sliding_window_size": 16,
                "block_size": 8, "markov_rank": 4, "markov_head_type": "rnn_hidden", "target_layer_ids": [0, 2]}
         config = {"model_type": "inkling2", "architectures": ["Inkling2ForConditionalGeneration"],
@@ -794,9 +794,9 @@ class TestInkling2DSparkConversion(unittest.TestCase):
             for name in ("input_layernorm", "post_attention_layernorm", "dflare_norm"):
                 shapes[f"layers.{i}.{name}.weight"] = (16,)
             for name in ("q_norm", "k_norm", "k_norm_ctx"):
-                shapes[f"layers.{i}.self_attn.{name}.weight"] = (4,)
-            for name, shape in (("q_proj", (16, 16)), ("k_proj", (4, 16)), ("v_proj", (4, 16)),
-                                ("o_proj", (16, 16)), ("k_proj_ctx", (4, 16)), ("v_proj_ctx", (4, 16))):
+                shapes[f"layers.{i}.self_attn.{name}.weight"] = (8,)
+            for name, shape in (("q_proj", (32, 16)), ("k_proj", (8, 16)), ("v_proj", (8, 16)),
+                                ("o_proj", (16, 32)), ("k_proj_ctx", (8, 16)), ("v_proj_ctx", (8, 16))):
                 shapes[f"layers.{i}.self_attn.{name}.weight"] = shape
             for name, shape in (("gate_proj", (32, 16)), ("up_proj", (32, 16)), ("down_proj", (16, 32))):
                 shapes[f"layers.{i}.mlp.{name}.weight"] = shape
@@ -821,7 +821,12 @@ class TestInkling2DSparkConversion(unittest.TestCase):
                     for source, target in (("fuse_weight", "dspark_fuse.weight"), ("mask_embed", "mask_embd.weight"),
                                            ("markov_head.rnn_proj.weight", "joint_proj.weight"),
                                            ("markov_head.hidden_out.bias", "dspark_hidden_out.bias"),
+                                           ("layers.4.self_attn.q_proj.weight", "blk.4.attn_q.weight"),
+                                           ("layers.4.self_attn.k_proj.weight", "blk.4.attn_k.weight"),
+                                           ("layers.4.self_attn.v_proj.weight", "blk.4.attn_v.weight"),
+                                           ("layers.4.self_attn.o_proj.weight", "blk.4.attn_output.weight"),
                                            ("layers.4.self_attn.k_proj_ctx.weight", "blk.4.attn_k_ctx.weight"),
+                                           ("layers.4.self_attn.v_proj_ctx.weight", "blk.4.attn_v_ctx.weight"),
                                            ("layers.4.self_attn.k_norm_ctx.weight", "blk.4.attn_k_ctx_norm.weight"),
                                            ("layers.4.dflare_norm.weight", "blk.4.dflare_norm.weight")):
                         np.testing.assert_array_equal(actual[target], tensors[source].float().numpy())
@@ -829,6 +834,8 @@ class TestInkling2DSparkConversion(unittest.TestCase):
                     self.assertNotIn("dflash.dspark.markov_rank", kv)
                     for key, value in (("general.architecture", "dflash"), ("dflash.block_count", 5),
                                        ("dflash.block_size", 8),
+                                       ("dflash.attention.key_length", 8), ("dflash.attention.value_length", 8),
+                                       ("dflash.rope.dimension_count", 8),
                                        ("dflash.sample_from_anchor", False), ("dflash.has_confidence_head", False),
                                        ("dflash.rope.freq_base", 1000000.0), ("dflash.attention.sliding_window", 16)):
                         self.assertEqual(kv[key].value, value)
