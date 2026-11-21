@@ -278,10 +278,17 @@ ggml_tensor * llama_model_inkling2::graph::control(ggml_tensor * cur, ggml_tenso
     ggml_tensor * gate = ggml_concat(ctx0, rms_norm_once(cur), message_norm, 0);
     gate = build_lora_mm(loop.ctrl_down[ctrl], gate);
 
-    ggml_tensor * gain   = ggml_tanh(ctx0, build_lora_mm(loop.ctrl_gain[ctrl],   gate));
-    ggml_tensor * forget = ggml_tanh(ctx0, build_lora_mm(loop.ctrl_forget[ctrl], gate));
+    // both products on gate side by side in the graph, where a backend can run them in one launch
+    ggml_tensor * gain_mm   = build_lora_mm(loop.ctrl_gain[ctrl],   gate);
+    ggml_tensor * forget_mm = build_lora_mm(loop.ctrl_forget[ctrl], gate);
+    ggml_build_forward_expand(gf, forget_mm);
+    ggml_build_forward_expand(gf, gain_mm);
 
-    return ggml_add(ctx0, ggml_sub(ctx0, cur, ggml_mul(ctx0, forget, cur)), ggml_mul(ctx0, gain, message));
+    ggml_tensor * gain   = ggml_tanh(ctx0, gain_mm);
+    ggml_tensor * forget = ggml_tanh(ctx0, forget_mm);
+
+    // message first: its view node then stays out from between the tanh and the mul, which fuse
+    return ggml_add(ctx0, ggml_sub(ctx0, cur, ggml_mul(ctx0, forget, cur)), ggml_mul(ctx0, message, gain));
 }
 
 ggml_tensor * llama_model_inkling2::graph::build_inputs() {
@@ -364,12 +371,23 @@ ggml_tensor * llama_model_inkling2::graph::build_layer(int il, int ip, ggml_tens
 
     // self-attention
     {
-        ggml_tensor * Qcur = build_lora_mm(layer.wq, inputs[0]);
-        ggml_tensor * Kcur = convolve(build_lora_mm(layer.wk, inputs[1]), layer.attn_k_conv,
-                is_swa ? nullptr : build_lora_mm(layer.attn_k_conv_proj, inputs[1]), state, history, recr, 0);
-        ggml_tensor * Vcur = convolve(build_lora_mm(layer.wv, inputs[2]), layer.attn_v_conv,
-                is_swa ? nullptr : build_lora_mm(layer.attn_v_conv_proj, inputs[2]), state, history, recr, n_embd_k_gqa);
-        ggml_tensor * Rcur = build_lora_mm(layer.attn_rel, inputs[0]);
+        // the projections of each input side by side in the graph, where a backend can run them in one launch
+        ggml_tensor * Qcur  = build_lora_mm(layer.wq,             inputs[0]);
+        ggml_tensor * gate  = build_lora_mm(layer.wqkv_gate,      inputs[0]);
+        ggml_tensor * Rcur  = build_lora_mm(layer.attn_rel,       inputs[0]);
+        ggml_tensor * sinks = build_lora_mm(layer.attn_sink_proj, inputs[0]);
+        ggml_tensor * Kproj = build_lora_mm(layer.wk, inputs[1]);
+        ggml_tensor * Kdyn  = is_swa ? nullptr : build_lora_mm(layer.attn_k_conv_proj, inputs[1]);
+        ggml_tensor * Vproj = build_lora_mm(layer.wv, inputs[2]);
+        ggml_tensor * Vdyn  = is_swa ? nullptr : build_lora_mm(layer.attn_v_conv_proj, inputs[2]);
+        for (ggml_tensor * t : {Qcur, gate, Rcur, sinks, Kproj, Kdyn, Vproj, Vdyn}) {
+            if (t) {
+                ggml_build_forward_expand(gf, t);
+            }
+        }
+
+        ggml_tensor * Kcur = convolve(Kproj, layer.attn_k_conv, Kdyn, state, history, recr, 0);
+        ggml_tensor * Vcur = convolve(Vproj, layer.attn_v_conv, Vdyn, state, history, recr, n_embd_k_gqa);
 
         // Q and K stay divided by the clip threshold, the attention scale takes it back (threshold^2)
         Qcur = clip(ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens), layer.attn_q_clip, hparams.f_qk_clip, false);
@@ -391,8 +409,6 @@ ggml_tensor * llama_model_inkling2::graph::build_layer(int il, int ip, ggml_tens
 
         const int64_t n_stream = (is_swa ? attn->self_attn_mask_swa.raw : attn->self_attn_mask.raw)->ne[3];
         const int64_t n_kv     = rel_pos->ne[0];
-
-        ggml_tensor * sinks = build_lora_mm(layer.attn_sink_proj, inputs[0]);
 
         // project r on the bias table first, then gather by distance: only the gathered bias is n_kv x n_tokens x n_head
         ggml_tensor *& bias = padded_rel_bias[layer.attn_rel_bias];
@@ -433,7 +449,7 @@ ggml_tensor * llama_model_inkling2::graph::build_layer(int il, int ip, ggml_tens
                 nullptr, nullptr, nullptr,
                 Qcur, Kcur, Vcur, kq_b, sinks, hparams.f_qk_clip*hparams.f_qk_clip/sqrtf(n_embd_head), il);
 
-        cur = ggml_mul(ctx0, cur, ggml_sigmoid(ctx0, build_lora_mm(layer.wqkv_gate, inputs[0])));
+        cur = ggml_mul(ctx0, cur, ggml_sigmoid(ctx0, gate));
         cur = convolve(build_lora_mm(layer.wo, cur), layer.attn_post_conv, nullptr, state, history, recr, 2*n_embd_k_gqa);
         cb(cur, "attn_out", il);
     }
