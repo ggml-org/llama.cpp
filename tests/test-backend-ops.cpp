@@ -1234,6 +1234,13 @@ static bool backend_lacks_skipped_ids(ggml_backend_t backend, ggml_cgraph * gf) 
         if (node->op != GGML_OP_MUL_MAT_ID && node->op != GGML_OP_ADD_ID) {
             continue;
         }
+        if (strcmp(name, "CUDA") == 0 && node->op == GGML_OP_MUL_MAT_ID &&
+            ggml_prec_get_src(node, 1) == GGML_PREC_F32 && node->src[1]->type == GGML_TYPE_F32 &&
+            node->src[2]->ne[1] == 1 &&
+            (node->src[0]->type == GGML_TYPE_Q4_K || node->src[0]->type == GGML_TYPE_Q5_0 ||
+             node->src[0]->type == GGML_TYPE_Q8_0)) {
+            continue;
+        }
         const ggml_tensor * ids = node->src[2];
         std::vector<int32_t> row(ids->ne[0]);
         for (int64_t i1 = 0; i1 < ids->ne[1]; i1++) {
@@ -1342,6 +1349,11 @@ struct test_case {
     }
 
     virtual bool run_whole_graph() { return false; }
+
+    virtual bool supports_backend(ggml_backend_t backend) {
+        GGML_UNUSED(backend);
+        return true;
+    }
     // the output must be the same in each run on the same backend
     virtual bool deterministic(ggml_backend_t backend) {
         GGML_UNUSED(backend);
@@ -1362,7 +1374,7 @@ struct test_case {
 
     static const int sentinel_size = 1024;
 
-    test_mode mode;
+    test_mode mode = MODE_TEST;
 
     std::vector<ggml_tensor *> sentinels;
 
@@ -1476,6 +1488,10 @@ struct test_case {
             return test_status_t::SKIPPED;
         }
 
+        if (!supports_backend(backend1)) {
+            return test_status_t::SKIPPED;
+        }
+
         // check if the backends support the ops
         bool supported = true;
         std::string unsupported_str;
@@ -1578,6 +1594,7 @@ struct test_case {
                     ud->ok = false;
                     return true;
                 }
+                return true;
             }
 
             std::vector<float> f1 = tensor_to_float(t1);
@@ -6001,6 +6018,121 @@ struct test_mul_mat_id : public test_case {
 
     void reinit_perf_iter(ggml_context * ctx) override {
         init_mul_mat_id_ids(ctx, n_mats, skip);
+    }
+};
+
+struct test_mul_mat_id_f32 : public test_mul_mat_id {
+    using test_mul_mat_id::test_mul_mat_id;
+    std::vector<float> expected;
+    ggml_tensor *      out = nullptr;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_ID_F32";
+    }
+
+    double max_nmse_err() override { return 1e-10; }
+
+    bool run_whole_graph() override { return mode != MODE_SUPPORT; }
+
+    bool deterministic(ggml_backend_t backend) override {
+        GGML_UNUSED(backend);
+        return true;
+    }
+
+    std::vector<ggml_tensor *> fusion_test_nodes() override {
+        std::vector<ggml_tensor *> nodes = { out };
+        nodes.insert(nodes.end(), sentinels.begin(), sentinels.end());
+        return nodes;
+    }
+
+    bool supports_backend(ggml_backend_t backend) override {
+        const char * name = ggml_backend_reg_name(ggml_backend_dev_backend_reg(ggml_backend_get_device(backend)));
+        return strcmp(name, "CUDA") == 0;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        out = test_mul_mat_id::build_graph(ctx);
+        ggml_prec_set_src(out, GGML_PREC_F32, 1);
+        add_sentinel(ctx);
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t; t = ggml_get_next_tensor(ctx, t)) {
+            if (!ggml_is_view_op(t->op)) {
+                std::vector<uint8_t> zeros(ggml_nbytes(t), 0);
+                ggml_backend_tensor_set(t, zeros.data(), 0, zeros.size());
+            }
+        }
+
+        for (ggml_tensor * sentinel : sentinels) {
+            std::vector<float> guard(ggml_nelements(sentinel), 1.0f);
+            ggml_backend_tensor_set(sentinel, guard.data(), 0, ggml_nbytes(sentinel));
+        }
+
+        ggml_tensor *      weights    = out->src[0];
+        ggml_tensor *      activation = out->src[1];
+        ggml_tensor *      ids        = out->src[2];
+        std::vector<float> poison(ggml_nelements(out), -123.0f);
+        ggml_backend_tensor_set(out, poison.data(), 0, ggml_nbytes(out));
+        std::vector<float>   row(k, 0.0f);
+        std::vector<uint8_t> quantized(ggml_row_size(type_a, k));
+        for (int expert = 0; expert < n_mats; ++expert) {
+            for (int64_t r = 0; r < m; ++r) {
+                row[1] = 1.0f + expert + float(r % 7) / 8;
+                ggml_quantize_chunk(type_a, row.data(), quantized.data(), 0, 1, k, nullptr);
+                ggml_backend_tensor_set(weights, quantized.data(), expert * weights->nb[2] + r * weights->nb[1],
+                                        quantized.size());
+            }
+        }
+        for (int64_t token = 0; token < n; ++token) {
+            for (int64_t slot = 0; slot < activation->ne[1]; ++slot) {
+                std::fill(row.begin(), row.end(), 0.0f);
+                // Quantizing this row loses the small value next to the outlier.
+                row[0] = 1e5f;
+                row[1] = 1.0f + float(token) / 4 + float(slot) / 8;
+                ggml_backend_tensor_set(activation, row.data(), token * activation->nb[2] + slot * activation->nb[1],
+                                        k * sizeof(float));
+            }
+            for (int slot = 0; slot < n_used; ++slot) {
+                const int32_t expert = skip && slot == n_used - 1 ? -1 : (token + slot + 1) % n_mats;
+                ggml_backend_tensor_set(ids, &expert, token * ids->nb[1] + slot * ids->nb[0], sizeof(expert));
+            }
+        }
+
+        const std::vector<float> w       = tensor_to_float(weights);
+        const std::vector<float> x       = tensor_to_float(activation);
+        const std::vector<float> routing = tensor_to_float(ids);
+        expected.assign(m * n_used * n, 0.0f);
+        for (int64_t token = 0; token < n; ++token) {
+            for (int slot = 0; slot < n_used; ++slot) {
+                const int expert = int(routing[token * n_used + slot]);
+                if (expert < 0) {
+                    continue;
+                }
+                for (int64_t r = 0; r < m; ++r) {
+                    double sum = 0.0;
+                    for (int64_t col = 0; col < k; ++col) {
+                        sum += double(w[(expert * m + r) * k + col]) *
+                               double(x[(token * activation->ne[1] + (b ? 0 : slot)) * k + col]);
+                    }
+                    expected[(token * n_used + slot) * m + r] = float(sum);
+                }
+            }
+        }
+    }
+
+    double err(const float * actual, const float * cpu, size_t count) override {
+        GGML_UNUSED(cpu);
+        GGML_ASSERT(count == expected.size());
+        for (size_t i = 0; i < count; ++i) {
+            if (expected[i] == 0.0f && actual[i] != 0.0f) {
+                return INFINITY;
+            }
+        }
+        // The CPU quantized dot product is not an F32 activation reference.
+        return nmse(expected.data(), actual, count);
     }
 };
 
@@ -12364,6 +12496,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    for (ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q5_0, GGML_TYPE_Q8_0 }) {
+        for (int64_t m : { 1, 127, 128, 129 }) {
+            test_cases.emplace_back(new test_mul_mat_id_f32(type, GGML_TYPE_F32, 4, 2, false, m, 1, 256));
+        }
+        for (int64_t n : { 1, 3 }) {
+            for (bool broadcast : { false, true }) {
+                for (bool strided : { false, true }) {
+                    for (bool skip : { false, true }) {
+                        test_cases.emplace_back(new test_mul_mat_id_f32(type, GGML_TYPE_F32, 4, 2, broadcast, 33, n,
+                                                                        256, strided ? 40 : 0, strided, skip));
+                    }
+                }
+            }
+        }
+    }
+
     // Both experts receive every token
     for (ggml_type type : {GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K}) {
         for (int n : {64, 65}) {
@@ -14610,6 +14758,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases(test_mode mode, c
         test_cases.erase( std::remove_if(test_cases.begin(), test_cases.end(),
             [&](const std::unique_ptr<test_case> & tc) { return !std::regex_search(tc->vars(), params_filter_regex); }),
             test_cases.end());
+    }
+
+    for (auto & tc : test_cases) {
+        tc->mode = mode;
     }
 
     if (mode == MODE_GRAD || mode == MODE_SUPPORT) {
