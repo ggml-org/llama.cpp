@@ -164,3 +164,76 @@ void ggml_cuda_op_ctrl_mix(ggml_backend_cuda_context & ctx, const ggml_cgraph * 
             GGML_ABORT("unsupported type");
     }
 }
+
+// a warp per row: v = x*w, out = v/max(|v|, eps)*scale
+static __global__ void mul_l2_norm_f32(const float * x, const float * w, float * dst, const int ncols, const int nrows,
+        const float eps, const float scale) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    const int row  = blockIdx.x*(blockDim.x/warp_size) + threadIdx.x/warp_size;
+    const int lane = threadIdx.x % warp_size;
+    if (row >= nrows) {
+        return;
+    }
+    const float * xr = x + (int64_t) row*ncols;
+    const float * wr = w + (int64_t) row*ncols;
+    float       * dr = dst + (int64_t) row*ncols;
+
+    float sum = 0.0f;
+    for (int c = lane; c < ncols; c += warp_size) {
+        const float v = xr[c]*wr[c];
+        sum += v*v;
+    }
+    sum = warp_reduce_sum<warp_size>(sum);
+    const float s = rsqrtf(fmaxf(sum, eps*eps));
+
+    for (int c = lane; c < ncols; c += warp_size) {
+        dr[c] = ((xr[c]*wr[c])*s)*scale;
+    }
+}
+
+int ggml_cuda_match_mul_l2_norm(const ggml_cgraph * cgraph, int i) {
+    if (i + 1 >= cgraph->n_nodes) {
+        return -1;
+    }
+    const ggml_tensor * mul = cgraph->nodes[i];
+    const ggml_tensor * l2  = cgraph->nodes[i + 1];
+    // a warp per row: for the few rows of a generated token, larger batches keep the separate kernels
+    if (mul->op != GGML_OP_MUL || l2->op != GGML_OP_L2_NORM || l2->src[0] != mul || mul->type != GGML_TYPE_F32 ||
+            ggml_nrows(mul) > 1024 ||
+            l2->type != GGML_TYPE_F32 || ggml_node_get_use_count(cgraph, i) != 1 || (mul->flags & GGML_TENSOR_FLAG_OUTPUT)) {
+        return -1;
+    }
+    for (const ggml_tensor * t : { (const ggml_tensor *) mul->src[0], (const ggml_tensor *) mul->src[1], mul, l2 }) {
+        if (t->type != GGML_TYPE_F32 || !ggml_is_contiguous(t) || !ggml_are_same_shape(t, mul)) {
+            return -1;
+        }
+    }
+    int last = i + 1;
+    if (i + 2 < cgraph->n_nodes) {
+        const ggml_tensor * sc = cgraph->nodes[i + 2];
+        if (sc->op == GGML_OP_SCALE && sc->src[0] == l2 && ggml_get_op_params_f32(sc, 1) == 0.0f &&
+                ggml_is_contiguous(sc) && sc->type == GGML_TYPE_F32 && ggml_node_get_use_count(cgraph, i + 1) == 1 &&
+                !(l2->flags & GGML_TENSOR_FLAG_OUTPUT) && (sc->flags & GGML_TENSOR_FLAG_COMPUTE)) {
+            last = i + 2;
+        }
+    }
+    return last;
+}
+
+void ggml_cuda_op_mul_l2_norm(ggml_backend_cuda_context & ctx, const ggml_cgraph * cgraph, int i, int last) {
+    const ggml_tensor * mul = cgraph->nodes[i];
+    const ggml_tensor * l2  = cgraph->nodes[i + 1];
+    ggml_tensor       * out = cgraph->nodes[last];
+
+    const int ncols = (int) mul->ne[0];
+    const int nrows = (int) ggml_nrows(mul);
+    const float eps   = ggml_get_op_params_f32(l2, 0);
+    const float scale = last > i + 1 ? ggml_get_op_params_f32(out, 0) : 1.0f;
+
+    constexpr int block_size = 256;
+    const int warp_size = ggml_cuda_info().devices[ctx.device].warp_size;
+    const int rows_per_block = block_size/warp_size;
+    const dim3 grid((nrows + rows_per_block - 1)/rows_per_block);
+    mul_l2_norm_f32<<<grid, block_size, 0, ctx.stream()>>>((const float *) mul->src[0]->data, (const float *) mul->src[1]->data,
+        (float *) out->data, ncols, nrows, eps, scale);
+}

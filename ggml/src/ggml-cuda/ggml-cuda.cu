@@ -5473,6 +5473,14 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         return 2;
     }
 
+    if (node->op == GGML_OP_MUL) {
+        const int last = ggml_cuda_match_mul_l2_norm(cgraph, i);
+        if (last > 0) {
+            ggml_cuda_op_mul_l2_norm(*cuda_ctx, cgraph, i, last);
+            return last - i;
+        }
+    }
+
     if (node->op == GGML_OP_RMS_NORM && ggml_cuda_match_depth_mix(cgraph, i)) {
         ggml_cuda_op_depth_mix(*cuda_ctx, cgraph, i);
         return 6;

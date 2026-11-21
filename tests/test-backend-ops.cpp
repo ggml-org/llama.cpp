@@ -5068,6 +5068,40 @@ struct test_ssm_conv_res_scale : public test_case {
     }
 };
 
+// MUL(x, w) -> L2_NORM [-> SCALE] (Inkling 2 clipped Q and R, fused by CUDA)
+struct test_mul_l2_norm : public test_case {
+    const std::array<int64_t, 4> ne;
+    const float eps;
+    const bool with_scale;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_L2_NORM";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR3(ne, eps, with_scale);
+    }
+
+    test_mul_l2_norm(std::array<int64_t, 4> ne, float eps, bool with_scale) : ne(ne), eps(eps), with_scale(with_scale) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        ggml_tensor * w = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        ggml_set_name(x, "x");
+        ggml_set_name(w, "w");
+
+        ggml_tensor * out = ggml_l2_norm(ctx, ggml_mul(ctx, x, w), eps);
+        if (with_scale) {
+            out = ggml_scale(ctx, out, eps);
+        }
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // gated mix of two vectors driven by two small products on one vector (Inkling 2 loop controllers, fused by CUDA):
 // cur - tanh(W_f g)*cur + msg*tanh(W_g g)
 struct test_ctrl_mix : public test_case {
@@ -12254,6 +12288,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 1, 1}, {d_conv, d_inner, 1, 1}));
             test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 4, 1}, {d_conv, d_inner, 1, 1}));
         }
+    }
+
+    // per-channel scale, L2 norm with a clip threshold as eps, optional rescale (Inkling 2 Q and R)
+    for (bool with_scale : { false, true }) {
+        test_cases.emplace_back(new test_mul_l2_norm({128, 24, 1, 1}, 22.6f, with_scale));
+        test_cases.emplace_back(new test_mul_l2_norm({16, 24, 1, 1}, 8.0f, with_scale));
+        test_cases.emplace_back(new test_mul_l2_norm({128, 24, 7, 1}, 0.5f, with_scale));
+        test_cases.emplace_back(new test_mul_l2_norm({100, 3, 2, 1}, 1e-6f, with_scale));
     }
 
     // gated mix driven by two small products (Inkling 2 loop controllers)
