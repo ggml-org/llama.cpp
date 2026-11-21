@@ -225,3 +225,35 @@ def test_metrics_embedding_prompt_is_counted():
     assert metrics["llamacpp:prompt_tokens_total"][1] > 0
     assert metrics["llamacpp:n_decode_total"][1] > 0
     assert metrics["llamacpp:tokens_predicted_total"][1] == 0
+
+
+def test_metrics_prompt_increments_for_cached_tokens():
+    global server
+    server.n_slots = 1  # keep the prompt cache on a single slot
+    server.start()
+
+    # First request: cache the prompt
+    prompt = "the quick brown fox jumps over the lazy dog"
+    res = server.make_request("POST", "/completion", data={"prompt": prompt, "n_predict": 4})
+    assert res.status_code == 200
+    first_prompt_tokens = res.body["timings"]["prompt_n"]
+    assert first_prompt_tokens > 0
+
+    # Get metrics after first request
+    metrics1 = parse_metrics(fetch_metrics(server))
+    prompt_tokens_after_first = metrics1["llamacpp:prompt_tokens_total"][1]
+
+    # Second request: should reuse cached prompt
+    res = server.make_request("POST", "/completion", data={"prompt": prompt, "n_predict": 4})
+    assert res.status_code == 200
+
+    # Get metrics after second request
+    metrics2 = parse_metrics(fetch_metrics(server))
+    prompt_tokens_after_second = metrics2["llamacpp:prompt_tokens_total"][1]
+
+    # Total prompt tokens should have increased (cached tokens are still counted)
+    assert prompt_tokens_after_second >= prompt_tokens_after_first
+
+    # The prompt timing should also have been updated (not stuck at first value)
+    # This ensures metrics_flush_prompt() is called even for cached-only requests
+    assert metrics2["llamacpp:prompt_seconds_total"][1] > 0
