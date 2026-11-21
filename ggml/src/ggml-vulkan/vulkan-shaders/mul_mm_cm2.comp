@@ -28,6 +28,8 @@ layout (constant_id = 7) const uint MmTypeA = 0;
 layout (constant_id = 8) const uint MmABlockBytes = 2;
 #endif
 
+// Coopmat shaders are not used on Qualcomm devices, keep the 8-bit vector builtins.
+#define ALLOW_8BIT_VECTOR_BUILTINS
 #include "types.glsl"
 #include "utils.glsl"
 

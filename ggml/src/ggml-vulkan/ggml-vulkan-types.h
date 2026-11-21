@@ -1061,6 +1061,7 @@ struct vk_device_struct {
     std::atomic<bool> fusion_stats_enabled {false};
     std::mutex fusion_mutex;
     std::map<std::string, uint64_t> fusion_counts;
+    bool avoid_8bit_vectors;
     bool disable_descriptor_reuse;
     std::atomic<uint64_t> buffer_destroy_count {};
     bool disable_stream_k;

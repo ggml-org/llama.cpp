@@ -32,8 +32,8 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint itid, 
             sign_vals[l] = qs >> 9;
             sign7_vals[l] = bitCount(sign_vals[l]);
             const uvec2 grid_data = iq2xs_grid[qs & 511];
-            grid0_vals[l] = vec4(unpack8(grid_data.x));
-            grid1_vals[l] = vec4(unpack8(grid_data.y));
+            grid0_vals[l] = vec4(unpack_u8x4(grid_data.x));
+            grid1_vals[l] = vec4(unpack_u8x4(grid_data.y));
         }
         // Preload B data for all j columns (reduce repeated index calculations)
         [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {

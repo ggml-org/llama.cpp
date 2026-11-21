@@ -46,10 +46,10 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint itid, 
         const uint32_t q2_u32 = ql0_u32_hi4  | qh4_u32;
         const uint32_t q3_u32 = ql32_u32_hi4 | qh6_u32;
 
-        const vec4 q0 = vec4(unpack8(q0_u32)) - 32;
-        const vec4 q1 = vec4(unpack8(q1_u32)) - 32;
-        const vec4 q2 = vec4(unpack8(q2_u32)) - 32;
-        const vec4 q3 = vec4(unpack8(q3_u32)) - 32;
+        const vec4 q0 = vec4(unpack_u8x4(q0_u32)) - 32;
+        const vec4 q1 = vec4(unpack_u8x4(q1_u32)) - 32;
+        const vec4 q2 = vec4(unpack_u8x4(q2_u32)) - 32;
+        const vec4 q3 = vec4(unpack_u8x4(q3_u32)) - 32;
 
         if (all_threads) {
             sccache[csel][ix][itid] = FLOAT_TYPE(data_a[ib0 + i].scales[itid]);
