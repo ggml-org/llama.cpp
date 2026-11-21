@@ -686,13 +686,24 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
                 CU_CHECK(cuMemUnmap(mapping.first, mapping.second));
             }
 #else
-            CU_CHECK(cuMemUnmap(pool_addr, pool_size));
+            // pool_size is 0 if the first try_alloc failed
+            if (pool_size > 0) {
+                CU_CHECK(cuMemUnmap(pool_addr, pool_size));
+            }
 #endif
             CU_CHECK(cuMemAddressFree(pool_addr, max_size));
         }
     }
 
     void * alloc(size_t size, size_t * actual_size) override {
+        return alloc_impl(size, actual_size, false);
+    }
+
+    void * try_alloc(size_t size, size_t * actual_size) override {
+        return alloc_impl(size, actual_size, true);
+    }
+
+    void * alloc_impl(size_t size, size_t * actual_size, bool may_fail) {
         // round up the allocation size to the alignment to ensure that all allocations are aligned for all data types
         const size_t alignment = 128;
         size = alignment * ((size + alignment - 1) / alignment);
@@ -726,7 +737,11 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
             prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
             prop.location.id = physical_device;
             CUmemGenericAllocationHandle handle;
-            CU_CHECK(cuMemCreate(&handle, reserve_size, &prop, 0));
+            const CUresult err = cuMemCreate(&handle, reserve_size, &prop, 0);
+            if (err == CUDA_ERROR_OUT_OF_MEMORY && may_fail) {
+                return nullptr;
+            }
+            CU_CHECK(err);
 
             // map at the end of the pool
             CUdeviceptr start_ptr = (CUdeviceptr)((char *)(pool_addr) + pool_size);
@@ -5415,7 +5430,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 stream_ctx.concurrent_events.clear();
             }
 
-            for (int i = 0; i < cgraph->n_nodes; i++) {
+            for (int i = 0; i < cgraph->n_nodes && !cuda_ctx->pool_oom; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
 #ifdef USE_CUDA_GRAPH
                 // fused nodes are skipped together, so a cut never splits a fusion
@@ -5617,6 +5632,15 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     }
 
     ggml_cuda_graph_evaluate_and_capture(cuda_ctx, cgraph, use_cuda_graph, cuda_graph_update_required, graph_key);
+
+    if (cuda_ctx->pool_oom) {
+        cuda_ctx->pool_oom = false;
+#ifdef USE_CUDA_GRAPH
+        // a graph captured up to the failed op must not be replayed
+        cuda_ctx->cuda_graphs.clear();
+#endif // USE_CUDA_GRAPH
+        return GGML_STATUS_ALLOC_FAILED;
+    }
 
     return GGML_STATUS_SUCCESS;
 }

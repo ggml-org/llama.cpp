@@ -370,6 +370,11 @@ llama_build_and_test(test-backend-tensor.cpp LINK ggml)
 llama_build_and_test(test-sleep.cpp LINK ggml)
 llama_build_and_test(test-backend-sched.cpp LINK ggml)
 
+if (GGML_CUDA AND NOT GGML_CUDA_NO_VMM)
+    llama_build_and_test(test-backend-oom.cpp LINK ggml)
+    set_tests_properties(test-backend-oom PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
 if (BUILD_SHARED_LIBS)
     llama_build_and_test(test-llama-mmap.cpp ${PROJECT_SOURCE_DIR}/src/llama-impl.cpp ${PROJECT_SOURCE_DIR}/src/llama-mmap.cpp LABEL behavior)
     target_compile_definitions(test-llama-mmap PRIVATE LLAMA_BUILD)
