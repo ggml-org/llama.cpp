@@ -1,3 +1,8 @@
+option(GGML_VULKAN_ADRENO_750_SHMEM "Enable unqualified Adreno 750 matvec compatibility candidate" OFF)
+if (GGML_VULKAN_ADRENO_750_SHMEM)
+    add_compile_definitions(GGML_VULKAN_ADRENO_750_SHMEM)
+endif()
+
 cmake_minimum_required(VERSION 3.19)
 cmake_policy(SET CMP0114 NEW)
 cmake_policy(SET CMP0116 NEW)
