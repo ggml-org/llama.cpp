@@ -127,6 +127,47 @@ void ggml_cuda_flash_attn_ext_compact_mask(
 #endif // !defined(GGML_USE_MUSA)
 }
 
+#ifdef GGML_USE_HIP
+bool ggml_cuda_flash_attn_ext_tile_shall_use_sparse(const int cc, const ggml_tensor * dst, const int DKQ, const int DV) {
+    const ggml_tensor * Q    = dst->src[0];
+    const ggml_tensor * K    = dst->src[1];
+    const ggml_tensor * mask = dst->src[3];
+
+    const int n_kv_max = ggml_get_op_params_i32(dst, 4);
+    const int64_t n_kv = K->ne[1];
+
+    float max_bias = 0.0f;
+    memcpy(&max_bias, (const float *) dst->op_params + 1, sizeof(float));
+
+    if (!mask || mask->ne[0] != n_kv || mask->ne[1] < Q->ne[1] ||
+        mask->ne[2] != 1 || dst->src[5] || n_kv_max <= 0 || max_bias != 0.0f) {
+        return false;
+    }
+
+    if (GGML_CUDA_CC_IS_GCN(cc)) {
+        // Sparse compaction is not beneficial when the selected positions exceed 25% of the KV cache.
+        if (n_kv_max > n_kv/4) {
+            return false;
+        }
+
+        const int gqa_ratio = Q->ne[2] / K->ne[2];
+
+        if (DKQ == 72  && DV == 72)  return n_kv >= 8192;
+        if (DKQ == 80  && DV == 80)  return n_kv >= 16384;
+        if (DKQ == 96  && DV == 96)  return n_kv >= 16384;
+        if (DKQ == 112 && DV == 112) return n_kv >= 16384;
+        if (DKQ == 128 && DV == 128) return n_kv >= 8192;
+        if (DKQ == 192 && DV == 128) return n_kv >= 16384;
+        if (DKQ == 256 && DV == 256) return n_kv >= (gqa_ratio == 2 ? 32768 : 4096);
+        if (DKQ == 320 && DV == 256) return n_kv >= 65536 && gqa_ratio >= 64;
+        if (DKQ == 512 && DV == 512) return n_kv >= 16384 && gqa_ratio >= 16;
+        if (DKQ == 576 && DV == 512) return n_kv >= 32768 && gqa_ratio >= 32;
+    }
+
+    return false;
+}
+#endif // GGML_USE_HIP
+
 bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(const int cc, const ggml_tensor * dst, const int ncols1, const int ncols2) {
 #ifdef GGML_USE_MUSA
     GGML_UNUSED_VARS(cc, dst, ncols1, ncols2);
