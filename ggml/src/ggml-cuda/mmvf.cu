@@ -23,11 +23,20 @@ static __global__ void mul_mat_vec_f(
     if ((int) blockIdx.x >= nrows) {
         return;
     }
+    // several matrices on the same y: the rows of the grid run through them in turn
+    int row = blockIdx.x;
+    for (int k = fusion.n_extra; k > 0; --k) {
+        if (row >= fusion.row_start[k]) {
+            x_ptr   = static_cast<const T *>(fusion.x_extra[k - 1]);
+            dst_ptr = fusion.dst_extra[k - 1];
+            row    -= fusion.row_start[k];
+            break;
+        }
+    }
     const T       * GGML_CUDA_RESTRICT x   = x_ptr;
     const float   * GGML_CUDA_RESTRICT y   = y_ptr;
     const int32_t * GGML_CUDA_RESTRICT ids = ids_ptr;
     float         * GGML_CUDA_RESTRICT dst = dst_ptr;
-    const int row         = blockIdx.x;
     // for MUL_MAT_ID - blockIdx.y = n_expert_used, blockIdx.z = ncols_dst (tokens)
     const int channel_dst = blockIdx.y;
     const int tid         = threadIdx.x;
@@ -764,6 +773,25 @@ void ggml_cuda_mul_mat_vec_f(ggml_backend_cuda_context & ctx, const ggml_tensor 
         fusion_local.glu_limit = fusion->glu_limit;
     }
 
+    // more matrices on the same src1, one vector: their rows extend the grid
+    int64_t nrows_total = ne01;
+    if (fusion && fusion->n_extra > 0) {
+        GGML_ASSERT(!ids && ne11 == 1 && ne02 == 1 && ne03 == 1 && dst->ne[1] == 1);
+        GGML_ASSERT(!fusion->gate && !fusion->x_bias && !fusion->x_scale);
+        GGML_ASSERT(fusion->n_extra <= 3);
+        fusion_local.n_extra = fusion->n_extra;
+        for (int k = 0; k < fusion->n_extra; ++k) {
+            const ggml_tensor * xk = fusion->x_extra[k];
+            ggml_tensor       * dk = fusion->dst_extra[k];
+            GGML_ASSERT(xk->type == src0->type && xk->ne[0] == ne00 && xk->nb[1] == nb01 && xk->ne[2] == 1 && xk->ne[3] == 1);
+            GGML_ASSERT(dk->type == GGML_TYPE_F32 && ggml_is_contiguous(dk) && dk->ne[0] == xk->ne[1] && ggml_nrows(dk) == 1);
+            fusion_local.x_extra[k]       = xk->data;
+            fusion_local.dst_extra[k]     = (float *) dk->data;
+            fusion_local.row_start[k + 1] = (int) nrows_total;
+            nrows_total += xk->ne[1];
+        }
+    }
+
     const int64_t s01 = src0->nb[1] / ts_src0;
     const int64_t s11 = src1->nb[1] / ts_src1;
     const int64_t s1  =  dst->nb[1] / ts_dst;
@@ -788,25 +816,25 @@ void ggml_cuda_mul_mat_vec_f(ggml_backend_cuda_context & ctx, const ggml_tensor 
     switch (src0->type) {
         case GGML_TYPE_F32: {
             const float * src0_d = (const float *) src0->data;
-            mul_mat_vec_f_cuda(src0_d, src1_d, ids_d, fusion_local, dst_d, ne00, ne01, ncols_dst, s01, stride_col_y, stride_col_dst,
+            mul_mat_vec_f_cuda(src0_d, src1_d, ids_d, fusion_local, dst_d, ne00, nrows_total, ncols_dst, s01, stride_col_y, stride_col_dst,
                 ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
                 ne03,              ne3,           s03, s13,              s3,                 ids_stride, prec, ctx.stream());
         } break;
         case GGML_TYPE_F16: {
             const half * src0_d = (const half *) src0->data;
-            mul_mat_vec_f_cuda(src0_d, src1_d, ids_d, fusion_local, dst_d, ne00, ne01, ncols_dst, s01, stride_col_y, stride_col_dst,
+            mul_mat_vec_f_cuda(src0_d, src1_d, ids_d, fusion_local, dst_d, ne00, nrows_total, ncols_dst, s01, stride_col_y, stride_col_dst,
                 ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
                 ne03,              ne3,           s03, s13,              s3,                 ids_stride, prec, ctx.stream());
         } break;
         case GGML_TYPE_BF16: {
             const nv_bfloat16 * src0_d = (const nv_bfloat16 *) src0->data;
-            mul_mat_vec_f_cuda(src0_d, src1_d, ids_d, fusion_local, dst_d, ne00, ne01, ncols_dst, s01, stride_col_y, stride_col_dst,
+            mul_mat_vec_f_cuda(src0_d, src1_d, ids_d, fusion_local, dst_d, ne00, nrows_total, ncols_dst, s01, stride_col_y, stride_col_dst,
                 ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
                 ne03,              ne3,           s03, s13,              s3,                 ids_stride, prec, ctx.stream());
         } break;
         case GGML_TYPE_F8_E4M3: {
             const ggml_fp8_e4m3_t * src0_d = (const ggml_fp8_e4m3_t *) src0->data;
-            mul_mat_vec_f_cuda(src0_d, src1_d, ids_d, fusion_local, dst_d, ne00, ne01, ncols_dst, s01, stride_col_y, stride_col_dst,
+            mul_mat_vec_f_cuda(src0_d, src1_d, ids_d, fusion_local, dst_d, ne00, nrows_total, ncols_dst, s01, stride_col_y, stride_col_dst,
                 ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
                 ne03, ne3, s03, s13, s3, ids_stride, prec, ctx.stream());
         } break;

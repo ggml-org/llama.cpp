@@ -1508,6 +1508,10 @@ struct ggml_cuda_mm_fusion_args_host {
     const ggml_tensor * shared_up = nullptr;
     const ggml_tensor * shared_gate = nullptr;
     ggml_tensor * shared_dst = nullptr;
+    // up to MMVF_MAX_EXTRA more matrices on the same src1, their rows follow those of src0 in one launch (mmvf)
+    int n_extra = 0;
+    const ggml_tensor * x_extra[3] = {};
+    ggml_tensor * dst_extra[3] = {};
 };
 struct ggml_cuda_mm_fusion_args_device {
     const void * x_bias = nullptr;
@@ -1521,6 +1525,10 @@ struct ggml_cuda_mm_fusion_args_device {
     const void * shared_gate = nullptr;
     float * shared_dst = nullptr;
     uint32_t shared_stride_col_dst = 0;
+    int n_extra = 0;
+    const void * x_extra[3] = {};
+    float * dst_extra[3] = {};
+    int row_start[4] = {};  // first row of each matrix in the grid, row_start[0] = 0
 };
 
 struct ggml_cuda_kernel_launch_params {

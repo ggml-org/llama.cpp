@@ -5068,6 +5068,55 @@ struct test_ssm_conv_res_scale : public test_case {
     }
 };
 
+// consecutive GGML_OP_MUL_MAT on the same vector (fused into one launch by CUDA mmvf)
+struct test_mul_mat_same_src1 : public test_case {
+    const ggml_type type;
+    const int64_t k;
+    const std::vector<int64_t> rows;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_SAME_SRC1";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_nmse_err() override {
+        return 5e-4; // as test_mul_mat
+    }
+
+    std::string vars() override {
+        std::string r;
+        for (int64_t n : rows) {
+            r += (r.empty() ? "" : ":") + std::to_string(n);
+        }
+        return VARS_TO_STR2(type, k) + ",rows=" + r;
+    }
+
+    test_mul_mat_same_src1(ggml_type type, int64_t k, std::vector<int64_t> rows)
+        : type(type), k(k), rows(std::move(rows)) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, 1);
+        ggml_set_name(x, "x");
+
+        std::vector<ggml_tensor *> outs;
+        for (size_t i = 0; i < rows.size(); ++i) {
+            ggml_tensor * w = ggml_new_tensor_2d(ctx, type, k, rows[i]);
+            ggml_set_name(w, ("w" + std::to_string(i)).c_str());
+            outs.push_back(ggml_mul_mat(ctx, w, x));
+        }
+
+        // concatenated right to left, so that the graph visits all products first, side by side
+        ggml_tensor * out = outs.back();
+        for (size_t i = outs.size() - 1; i-- > 0;) {
+            out = ggml_concat(ctx, outs[i], out, 0);
+        }
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // GGML_OP_SSM_SCAN
 struct test_ssm_scan : public test_case {
     const ggml_type type;
@@ -12037,6 +12086,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 1, 1}, {d_conv, d_inner, 1, 1}));
             test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 4, 1}, {d_conv, d_inner, 1, 1}));
         }
+    }
+
+    // matrix-vector products on one vector, in one launch (Inkling 2 Q/gate/R/sink, K/V, loop controllers)
+    for (ggml_type type : { GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16 }) {
+        test_cases.emplace_back(new test_mul_mat_same_src1(type, 2304, { 3072, 3072, 384, 24 }));
+        test_cases.emplace_back(new test_mul_mat_same_src1(type, 2304, { 1024, 32 }));
+        test_cases.emplace_back(new test_mul_mat_same_src1(type, 64, { 2304, 2304 }));
+        test_cases.emplace_back(new test_mul_mat_same_src1(type, 256, { 256, 512, 7 }));
     }
 
     // fused ssm_conv + residual add + scale (Inkling 2 short convolutions)

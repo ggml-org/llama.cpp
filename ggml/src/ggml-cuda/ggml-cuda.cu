@@ -4506,6 +4506,46 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
 }
 
 // try and fuse nodes and return the number of nodes to skip
+// the number of consecutive MUL_MAT nodes from i, at most 4, that one mmvf launch can compute: one F32 vector, the
+// same src1, 2D contiguous src0 of one type and row length, and no node reading another's result
+static int ggml_cuda_mul_mat_vec_f_group(const ggml_cgraph * cgraph, int i) {
+    const ggml_tensor * first = cgraph->nodes[i];
+    const ggml_tensor * src1  = first->src[1];
+    const int cc        = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
+
+    auto eligible = [&](const ggml_tensor * mm) {
+        const ggml_tensor * src0 = mm->src[0];
+        return mm->op == GGML_OP_MUL_MAT && mm->src[1] == src1 && (mm->flags & GGML_TENSOR_FLAG_COMPUTE) &&
+            (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16) &&
+            src0->type == first->src[0]->type && src0->ne[0] == first->src[0]->ne[0] && src0->nb[1] == first->src[0]->nb[1] &&
+            src0->ne[2] == 1 && src0->ne[3] == 1 && ggml_is_contiguous(src0) &&
+            mm->type == GGML_TYPE_F32 && ggml_is_contiguous(mm) && !ggml_cuda_op_mul_mat_use_fwht(mm) &&
+            ggml_cuda_should_use_mmvf(src0, cc, warp_size, 1);
+    };
+
+    if (src1->type != GGML_TYPE_F32 || !ggml_is_contiguous(src1) || ggml_nrows(src1) != 1 || !eligible(first)) {
+        return 1;
+    }
+
+    int n = 1;
+    while (n < 4 && i + n < cgraph->n_nodes) {
+        const ggml_tensor * mm = cgraph->nodes[i + n];
+        if (!eligible(mm)) {
+            break;
+        }
+        bool reads_group = false;
+        for (int k = 0; k < n; ++k) {
+            reads_group |= mm->src[0] == cgraph->nodes[i + k] || mm->src[0]->view_src == cgraph->nodes[i + k];
+        }
+        if (reads_group) {
+            break;
+        }
+        ++n;
+    }
+    return n;
+}
+
 static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
 
     if (ggml_cuda_fusion_disabled()) {
@@ -5351,6 +5391,21 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SCALE, GGML_OP_UNARY, GGML_OP_SCALE }, { GGML_UNARY_OP_TANH })) {
         ggml_cuda_op_softcap(*cuda_ctx, cgraph->nodes[i + 2], node);
         return 2;
+    }
+
+    // consecutive matrix-vector products on the same vector in one mmvf launch (e.g. separate Q, K, V projections)
+    if (node->op == GGML_OP_MUL_MAT) {
+        const int n_fused = ggml_cuda_mul_mat_vec_f_group(cgraph, i);
+        if (n_fused > 1) {
+            ggml_cuda_mm_fusion_args_host args;
+            args.n_extra = n_fused - 1;
+            for (int k = 1; k < n_fused; ++k) {
+                args.x_extra[k - 1]   = cgraph->nodes[i + k]->src[0];
+                args.dst_extra[k - 1] = cgraph->nodes[i + k];
+            }
+            ggml_cuda_mul_mat_vec_f(*cuda_ctx, node->src[0], node->src[1], nullptr, node, &args);
+            return n_fused - 1;
+        }
     }
 
     return 0;
