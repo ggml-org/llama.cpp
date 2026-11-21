@@ -461,38 +461,55 @@ static int common_download_file_single_online(const std::string & url,
     return finish(success ? head->status : -1);
 }
 
-std::pair<long, std::vector<char>> common_remote_get_content(const std::string          & url,
+std::pair<long, std::vector<char>> common_remote_get_content(const std::string          & url_in,
                                                              const common_remote_params & params) {
-    auto [cli, parts] = common_http_client(url);
+    static constexpr int max_redirects = 5;
+    std::string url = url_in;
+    for (int n_redirects = 0; ; n_redirects++) {
+        auto [cli, parts] = common_http_client(url);
 
-    httplib::Headers headers;
-    for (const auto & h : params.headers) {
-        headers.emplace(h.first, h.second);
+        httplib::Headers headers;
+        for (const auto & h : params.headers) {
+            headers.emplace(h.first, h.second);
+        }
+        if (headers.find("User-Agent") == headers.end()) {
+            headers.emplace("User-Agent", "llama-cpp/" + std::string(llama_build_info()));
+        }
+
+        if (params.timeout > 0) {
+            cli.set_read_timeout(params.timeout, 0);
+            cli.set_write_timeout(params.timeout, 0);
+        }
+        if (params.resolve_host) {
+            // pin checked address, follow redirects manually to check each hop
+            cli.set_direct_hostname_addr_map({{parts.host, params.resolve_host(parts.host)}});
+            cli.set_follow_location(false);
+        }
+
+        std::vector<char> buf;
+        auto res = cli.Get(parts.path, headers,
+            [&](const char *data, size_t len) {
+                buf.insert(buf.end(), data, data + len);
+                return params.max_size == 0 ||
+                       buf.size() <= static_cast<size_t>(params.max_size);
+            },
+            nullptr
+        );
+
+        if (!res) {
+            throw std::runtime_error("error: cannot make GET request");
+        }
+
+        if (params.resolve_host && res->status >= 300 && res->status < 400 && res->has_header("Location")) {
+            if (n_redirects >= max_redirects) {
+                throw std::runtime_error("error: too many redirects");
+            }
+            url = common_http_resolve_location(url, res->get_header_value("Location"));
+            continue;
+        }
+
+        return { res->status, std::move(buf) };
     }
-    if (headers.find("User-Agent") == headers.end()) {
-        headers.emplace("User-Agent", "llama-cpp/" + std::string(llama_build_info()));
-    }
-
-    if (params.timeout > 0) {
-        cli.set_read_timeout(params.timeout, 0);
-        cli.set_write_timeout(params.timeout, 0);
-    }
-
-    std::vector<char> buf;
-    auto res = cli.Get(parts.path, headers,
-        [&](const char *data, size_t len) {
-            buf.insert(buf.end(), data, data + len);
-            return params.max_size == 0 ||
-                   buf.size() <= static_cast<size_t>(params.max_size);
-        },
-        nullptr
-    );
-
-    if (!res) {
-        throw std::runtime_error("error: cannot make GET request");
-    }
-
-    return { res->status, std::move(buf) };
 }
 
 int common_download_file_single(const std::string & url,

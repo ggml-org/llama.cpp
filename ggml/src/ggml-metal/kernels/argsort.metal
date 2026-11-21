@@ -256,7 +256,6 @@ kernel void kernel_top_k_f32_i32(
         threadgroup atomic_uint * histo     [[threadgroup(0)]],
         threadgroup        uint * sh_bucket [[threadgroup(1)]],
         threadgroup        uint * sh_above  [[threadgroup(2)]],
-        threadgroup atomic_uint * out_count [[threadgroup(3)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort3 tpitg[[thread_position_in_threadgroup]],
         ushort3   ntg[[threads_per_threadgroup]]) {
@@ -294,20 +293,32 @@ kernel void kernel_top_k_f32_i32(
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        // top-down scan for the bucket holding the k-th value
-        if (tid == 0) {
-            uint acc = 0;
-            uint b   = 0;
-            for (int bb = 255; bb >= 0; --bb) {
-                const uint c = atomic_load_explicit(&histo[bb], memory_order_relaxed);
-                if (acc + c >= desired) {
-                    b = uint(bb);
-                    break;
-                }
-                acc += c;
+        // top-down scan for the bucket holding the k-th value: each lane of the first
+        // simdgroup sums 8 bins, the lane whose range reaches desired scans its own bins
+        if (tid < 32) {
+            const uint top = 255 - 8*tid;
+
+            uint c[8];
+            uint sum = 0;
+            for (uint j = 0; j < 8; ++j) {
+                c[j] = atomic_load_explicit(&histo[top - j], memory_order_relaxed);
+                sum += c[j];
             }
-            *sh_bucket = b;
-            *sh_above  = acc;
+            uint acc = simd_prefix_exclusive_sum(sum);
+
+            const simd_vote::vote_t hit = simd_vote::vote_t(simd_ballot(acc + sum >= desired));
+            if (tid == (uint) ctz(hit)) {
+                uint b = top;
+                for (uint j = 0; j < 8; ++j) {
+                    if (acc + c[j] >= desired) {
+                        b = top - j;
+                        break;
+                    }
+                    acc += c[j];
+                }
+                *sh_bucket = b;
+                *sh_above  = acc;
+            }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -318,28 +329,101 @@ kernel void kernel_top_k_f32_i32(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
-    if (tid == 0) {
-        atomic_store_explicit(out_count, 0u, memory_order_relaxed);
+    // deterministic compaction: rank the kept elements by column order, so the
+    // result does not depend on the thread scheduling
+    const uint threshold = prefix;
+
+    // each warp scans a contiguous chunk of the row, and the lanes of the warp
+    // interleave within the chunk with stride 32 to keep the accesses coalesced
+    const uint lane  = tid & 31u;
+    const uint wg    = tid >> 5u;
+    const uint nw    = ntg_x >> 5u;
+    const uint wlo   = wg*((ncols + nw - 1) / nw);
+    const uint whi   = MIN(wlo + (ncols + nw - 1) / nw, ncols);
+    const uint wlen  = wlo < whi ? whi - wlo : 0;
+    const uint nstep = (wlen + 31) >> 5;
+
+    uint ca = 0; // elements above the threshold in this lane's substream
+    uint ct = 0; // elements tied with the threshold in this lane's substream
+    for (uint i = wlo + lane; i < whi; i += 32u) {
+        const uint key = ggml_top_k_f2ui(src0_row[i]);
+        ca += (key >  threshold) ? 1u : 0u;
+        ct += (key == threshold) ? 1u : 0u;
+    }
+
+    // per-warp totals into the now unused histogram, so that the first warp can
+    // compute the exclusive base of each warp with a scan across its lanes
+    const uint wca = simd_sum(ca);
+    const uint wct = simd_sum(ct);
+    if (lane == 0) {
+        atomic_store_explicit(&histo[wg],      wca, memory_order_relaxed);
+        atomic_store_explicit(&histo[32 + wg], wct, memory_order_relaxed);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    // emit everything above the threshold, then fill the rest from ties
-    const uint threshold = prefix;
-
-    for (uint i = tid; i < ncols; i += ntg_x) {
-        if (ggml_top_k_f2ui(src0_row[i]) > threshold) {
-            const uint pos = atomic_fetch_add_explicit(out_count, 1u, memory_order_relaxed);
-            dst_row[pos] = (int32_t) i;
+    if (tid < 32) {
+        const bool valid = tid < nw;
+        const uint sa = valid ? atomic_load_explicit(&histo[tid],      memory_order_relaxed) : 0u;
+        const uint st = valid ? atomic_load_explicit(&histo[32 + tid], memory_order_relaxed) : 0u;
+        const uint ea = simd_prefix_exclusive_sum(sa);
+        const uint et = simd_prefix_exclusive_sum(st);
+        if (valid) {
+            atomic_store_explicit(&histo[tid],      ea, memory_order_relaxed);
+            atomic_store_explicit(&histo[32 + tid], et, memory_order_relaxed);
+        }
+        const uint ta = simd_sum(sa);
+        const uint tt = simd_sum(st);
+        if (tid == 0) {
+            *sh_bucket = ta; // total above the threshold
+            *sh_above  = tt; // total tied with the threshold
         }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    for (uint i = tid; i < ncols; i += ntg_x) {
-        if (ggml_top_k_f2ui(src0_row[i]) == threshold) {
-            const uint pos = atomic_fetch_add_explicit(out_count, 1u, memory_order_relaxed);
-            if (pos < top_k) {
+    const uint above_total = *sh_bucket;
+    const uint tie_total   = *sh_above;
+    const uint base_wa = atomic_load_explicit(&histo[wg],      memory_order_relaxed);
+    const uint base_wt = above_total + atomic_load_explicit(&histo[32 + wg], memory_order_relaxed);
+
+    // the lanes write their kept elements at lane-major ranks, which does not
+    // depend on the thread scheduling. with more tied candidates than remaining
+    // slots, the ties are instead ranked in column order with a per-step
+    // cross-lane scan, so that the lowest tied indices are the ones kept
+    const uint excl_a = simd_prefix_exclusive_sum(ca);
+    const uint excl_t = simd_prefix_exclusive_sum(ct);
+
+    if (tie_total <= top_k - above_total) {
+        uint na = 0;
+        uint nt = 0;
+        for (uint i = wlo + lane; i < whi; i += 32u) {
+            const uint key = ggml_top_k_f2ui(src0_row[i]);
+            if (key > threshold) {
+                dst_row[base_wa + excl_a + na] = (int32_t) i;
+                ++na;
+            } else if (key == threshold) {
+                dst_row[base_wt + excl_t + nt] = (int32_t) i;
+                ++nt;
+            }
+        }
+    } else {
+        uint na = 0;
+        for (uint i = wlo + lane; i < whi; i += 32u) {
+            if (ggml_top_k_f2ui(src0_row[i]) > threshold) {
+                dst_row[base_wa + excl_a + na] = (int32_t) i;
+                ++na;
+            }
+        }
+
+        uint tt = 0; // tied elements in the earlier steps of this warp
+        for (uint s = 0; s < nstep; ++s) {
+            const uint i   = wlo + 32u*s + lane;
+            const bool ok  = i < whi;
+            const bool t   = ok && ggml_top_k_f2ui(src0_row[i]) == threshold;
+            const uint pos = base_wt + tt + simd_prefix_exclusive_sum((uint) t);
+            if (t && pos < top_k) {
                 dst_row[pos] = (int32_t) i;
             }
+            tt += simd_sum((uint) t);
         }
     }
 }

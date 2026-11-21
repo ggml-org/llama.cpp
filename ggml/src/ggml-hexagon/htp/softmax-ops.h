@@ -18,7 +18,7 @@ enum htp_softmax_kernel_type {
 
 struct htp_softmax_kernel_params {
     uint8_t  kernel_type;
-    uint32_t n_threads;
+    uint32_t n_hvx;
     uint32_t vtcm_size;
 
     uint32_t n_head;
@@ -49,9 +49,9 @@ struct htp_softmax_vtcm_layout {
     size_t off_dst;
     size_t off_src1;
 
-    size_t src0_bytes_per_thread;
-    size_t dst_bytes_per_thread;
-    size_t src1_bytes_per_thread;
+    size_t src0_bytes_per_hvx;
+    size_t dst_bytes_per_hvx;
+    size_t src1_bytes_per_hvx;
 
     size_t src0_spad_half_size;
     size_t dst_spad_half_size;
@@ -64,7 +64,7 @@ static inline void htp_softmax_vtcm_layout_build(
     uint32_t ne10,
     bool use_src1,
     bool use_f16,
-    uint32_t n_threads
+    uint32_t n_hvx
 ) {
     size_t src0_row_size = ne00 * sizeof(float);
     size_t dst_row_size  = ne00 * sizeof(float);
@@ -79,14 +79,14 @@ static inline void htp_softmax_vtcm_layout_build(
     L->src1_spad_half_size = src1_row_size_aligned;
 
     // Double buffering: 2 half-buffers per thread
-    L->src0_bytes_per_thread = src0_row_size_aligned * 2;
-    L->dst_bytes_per_thread  = dst_row_size_aligned  * 2;
-    L->src1_bytes_per_thread = src1_row_size_aligned * 2;
+    L->src0_bytes_per_hvx = src0_row_size_aligned * 2;
+    L->dst_bytes_per_hvx  = dst_row_size_aligned  * 2;
+    L->src1_bytes_per_hvx = src1_row_size_aligned * 2;
 
     size_t off = 0;
-    VTCM_LAYOUT_ALLOC(off, off_src0, L->src0_bytes_per_thread * n_threads);
-    VTCM_LAYOUT_ALLOC(off, off_dst,  L->dst_bytes_per_thread  * n_threads);
-    VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_src1, L->src1_bytes_per_thread * n_threads, use_src1);
+    VTCM_LAYOUT_ALLOC(off, off_src0, L->src0_bytes_per_hvx * n_hvx);
+    VTCM_LAYOUT_ALLOC(off, off_dst,  L->dst_bytes_per_hvx  * n_hvx);
+    VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_src1, L->src1_bytes_per_hvx * n_hvx, use_src1);
 
     L->total_bytes = off;
 }

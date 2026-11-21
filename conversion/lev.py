@@ -77,10 +77,10 @@ class _DecisionLoraMixin:
             delta = self.lora_scale * (lora["B"] @ lora["A"])
             data_torch = data_torch.float() + LazyTorchTensor.from_eager(delta)
             self.lora_merged.add(name[name.index("layers."):])
-        yield from super().modify_tensors(data_torch, name, bid)  # ty: ignore[unresolved-attribute]
+        yield from super().modify_tensors(data_torch, name, bid)  # ty: ignore[missing-attribute]
 
     def prepare_tensors(self):
-        super().prepare_tensors()  # ty: ignore[unresolved-attribute]
+        super().prepare_tensors()  # ty: ignore[missing-attribute]
         if len(self.lora_merged) != len(self.lora):
             raise ValueError(f"only {len(self.lora_merged)} of {len(self.lora)} LoRA tensors were merged into the base model")
 

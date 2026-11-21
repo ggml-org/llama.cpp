@@ -157,6 +157,29 @@ static ggml_tensor * gemma4_view_2d_slice(ggml_context * ctx0, ggml_tensor * x, 
     return ggml_view_2d(ctx0, x, x->ne[0], x->ne[1], x->nb[1], idx * x->nb[2]);
 }
 
+class llm_graph_input_gemma4_prune : public llm_graph_input_i {
+    int64_t n_slices;
+    int64_t n_slice_tokens;
+    int64_t n_slice_outputs;
+public:
+    ggml_tensor * full_mask      = nullptr;
+    ggml_tensor * full_mask_swa  = nullptr;
+    ggml_tensor * out_mask       = nullptr;
+    ggml_tensor * out_mask_swa   = nullptr;
+    ggml_tensor * inp_prune_ids  = nullptr;
+    ggml_tensor * inp_prune_keep = nullptr;
+    llm_graph_input_gemma4_prune(int64_t n_slices, int64_t n_slice_tokens, int64_t n_slice_outputs)
+            : n_slices(n_slices), n_slice_tokens(n_slice_tokens), n_slice_outputs(n_slice_outputs) {}
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    bool can_reuse(const llm_graph_params & params) override;
+
+    static int64_t max_outputs_per_slice(
+        const llama_ubatch & ubatch, int64_t n_slices, int64_t n_slice_tokens
+    );
+};
+
 llama_model_gemma4::graph::graph(const llm_graph_params & params) :
         llm_graph_context(params),
         n_embd_per_layer(model.hparams.n_embd_per_layer) {
@@ -181,10 +204,7 @@ llama_model_gemma4::graph::graph(const llm_graph_params & params) :
     // TODO: is causal == true correct? might need some changes
     auto * inp_attn = build_attn_inp_kv_iswa();
 
-    auto inp_attn_full  = *inp_attn;
     auto inp_attn_prune = *inp_attn;
-
-    ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     if (model.per_layer_tok_embd) {
         // fold per_layer_input_scale (1/sqrt(2)) from project_per_layer_inputs() into tok_embd_scale
@@ -197,34 +217,57 @@ llama_model_gemma4::graph::graph(const llm_graph_params & params) :
         inp_per_layer = project_per_layer_inputs(inpL, inp_per_layer);
     }
 
+    const bool needs_unmasked_nextn =
+        cparams.embeddings_nextn && !cparams.embeddings_nextn_masked;
+
     // KV-shared layers do not write to the KV cache, so prune non-output token rows before the first KV-shared layer
-    bool prune_shared = crop_before_nextn(inp_out_ids) &&
+    bool prune_shared = !needs_unmasked_nextn &&
                         hparams.n_layer_kv_from_start > 0 && hparams.n_layer_kv_from_start < n_layer &&
-                        !cparams.embeddings && cparams.n_seq_max == 1;
+                        !cparams.embeddings;
     for (int il = (int) hparams.n_layer_kv_from_start; prune_shared && il <= n_layer; ++il) {
         prune_shared = !cparams.embeddings_layer_inp[il];
     }
 
     int64_t n_rows = n_tokens;
 
+    ggml_tensor * inp_prune_ids = nullptr;
+    ggml_tensor * inp_prune_keep = nullptr;
+    ggml_tensor * inp_out_ids = prune_shared ? nullptr : build_inp_out_ids();
+
     for (int il = 0; il < n_layer; ++il) {
         if (prune_shared && il == (int) hparams.n_layer_kv_from_start) {
-            inpL    = ggml_get_rows(ctx0, inpL, inp_out_ids);
-            inp_pos = ggml_reshape_1d(ctx0, ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, inp_pos, 1, n_tokens), inp_out_ids), n_outputs);
+            ggml_tensor * full     = inp_attn->self_attn_mask.raw;
+            ggml_tensor * full_swa = inp_attn->self_attn_mask_swa.raw;
 
-            // TODO: instead of doing get_rows here, extend llm_attn_mask to have a `out` mask that
-            //       is construted during set_input to contain just the pruned output cells
-            //       this can be used to enable pruning with more than 1 sequence, both with unified and split KV cache
-            //       ref: https://github.com/ggml-org/llama.cpp/pull/31356#discussion_r4455286628
-            inp_attn_prune.self_attn_mask.raw     = ggml_get_rows(ctx0, inp_attn_full.self_attn_mask.raw,     inp_out_ids);
-            inp_attn_prune.self_attn_mask_swa.raw = ggml_get_rows(ctx0, inp_attn_full.self_attn_mask_swa.raw, inp_out_ids);
+            const int64_t n_slices = full->ne[3], n_slice_tokens = full->ne[1];
+            const int64_t n_slice_outputs = llm_graph_input_gemma4_prune::max_outputs_per_slice(ubatch, n_slices, n_slice_tokens);
 
-            inp_attn_prune.self_attn_mask.raw     = ggml_cast(ctx0, inp_attn_prune.self_attn_mask.raw,     GGML_TYPE_F16);
-            inp_attn_prune.self_attn_mask_swa.raw = ggml_cast(ctx0, inp_attn_prune.self_attn_mask_swa.raw, GGML_TYPE_F16);
+            n_rows = n_slices * n_slice_outputs;
 
-            n_rows = n_outputs;
+            auto prune_input = std::make_unique<llm_graph_input_gemma4_prune>(n_slices, n_slice_tokens, n_slice_outputs);
+            prune_input->full_mask = full;
+            prune_input->full_mask_swa = full_swa;
+            prune_input->out_mask = ggml_new_tensor_4d(ctx0, full->type, full->ne[0], n_slice_outputs, 1, n_slices);
+            prune_input->out_mask_swa = ggml_new_tensor_4d(ctx0, full_swa->type, full_swa->ne[0], n_slice_outputs, 1, n_slices);
+            prune_input->inp_prune_ids  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_rows);
+            prune_input->inp_prune_keep = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_outputs);
 
+            ggml_set_input(prune_input->out_mask);
+            ggml_set_input(prune_input->out_mask_swa);
+            ggml_set_input(prune_input->inp_prune_ids);
+            ggml_set_input(prune_input->inp_prune_keep);
+
+            inp_prune_ids  = prune_input->inp_prune_ids;
+            inp_prune_keep = prune_input->inp_prune_keep;
+
+            inpL = ggml_get_rows(ctx0, inpL, inp_prune_ids);
+            inp_pos = ggml_reshape_1d(ctx0, ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, inp_pos, 1, n_tokens), inp_prune_ids), n_rows);
+
+            inp_attn_prune.self_attn_mask.raw = prune_input->out_mask;
+            inp_attn_prune.self_attn_mask_swa.raw = prune_input->out_mask_swa;
             inp_attn = &inp_attn_prune;
+
+            res->add_input(std::move(prune_input));
         }
 
         const int64_t n_embd_head = hparams.n_embd_head_k(il);
@@ -363,10 +406,7 @@ llama_model_gemma4::graph::graph(const llm_graph_params & params) :
                     1.0f,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
                     il, logits,
-                    model.layers[il].ffn_gate_up_exps,
-                    model.layers[il].ffn_up_exps_s,
-                    model.layers[il].ffn_gate_exps_s,
-                    model.layers[il].ffn_down_exps_s);
+                    model.layers[il].ffn_gate_up_exps);
             cur_moe = build_norm(cur_moe,
                     model.layers[il].ffn_post_norm_2, nullptr,
                     LLM_NORM_RMS, il);
@@ -406,7 +446,9 @@ llama_model_gemma4::graph::graph(const llm_graph_params & params) :
 
             ggml_tensor * inp_this_layer = gemma4_view_2d_slice(ctx0, inp_per_layer, il); // [n_embd_per_layer, n_tokens]
 
-            if ((prune_shared && !hparams.has_kv(il)) || (il == n_layer - 1 && crop_before_nextn(inp_out_ids))) {
+            if (prune_shared && !hparams.has_kv(il)) {
+                inp_this_layer = ggml_get_rows(ctx0, inp_this_layer, inp_prune_ids);
+            } else if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
                 inp_this_layer = ggml_get_rows(ctx0, inp_this_layer, inp_out_ids);
             }
 
@@ -432,6 +474,9 @@ llama_model_gemma4::graph::graph(const llm_graph_params & params) :
         inpL = cur;
     }
     cur = inpL;
+    if (prune_shared) {
+        cur = ggml_get_rows(ctx0, cur, inp_prune_keep);
+    }
 
     cur = build_norm(cur,
             model.output_norm, nullptr,
@@ -557,4 +602,90 @@ ggml_tensor * llama_model_gemma4::graph::project_per_layer_inputs(ggml_tensor * 
 
     // permute to shape: [n_embd_per_layer, n_tokens, n_layer]
     return ggml_permute(ctx0, inp_per_layer, 0, 2, 1, 3);
+}
+
+void llm_graph_input_gemma4_prune::set_input(const llama_ubatch * ubatch) {
+    std::vector<std::vector<int32_t>> selected(n_slices);
+
+    for (int32_t s = 0; s < n_slices; ++s) {
+        for (int32_t t = 0; t < n_slice_tokens; ++t) {
+            const int32_t i = s * n_slice_tokens + t;
+            if (ubatch->output[i]) {
+                selected[s].push_back(i);
+            }
+        }
+    }
+
+    std::vector<int32_t> take, keep;
+    for (int32_t s = 0; s < n_slices; ++s) {
+        const auto & ids = selected[s];
+
+        for (int32_t j = 0; j < int32_t(ids.size()); ++j) {
+            keep.push_back(s * n_slice_outputs + j);
+        }
+
+        take.insert(take.end(), ids.begin(), ids.end());
+        const int32_t dummy = ids.empty() ? s * n_slice_tokens : ids.back();
+        take.insert(take.end(), n_slice_outputs - ids.size(), dummy);
+    }
+
+    GGML_ASSERT(take.size() == size_t(inp_prune_ids->ne[0]));
+    if (!take.empty()) {
+        ggml_backend_tensor_set(inp_prune_ids, take.data(), 0,
+                                take.size() * sizeof(int32_t));
+    }
+
+    auto copy_mask = [&](const ggml_tensor * full, ggml_tensor * out) {
+        if (take.empty() || !out->buffer) {
+            return;
+        }
+
+        GGML_ASSERT(full->buffer && ggml_backend_buffer_is_host(full->buffer));
+        const size_t row_bytes = full->ne[0] * ggml_element_size(full);
+        const auto * src = static_cast<const uint8_t *>(full->data);
+        std::vector<uint8_t> packed(take.size() * row_bytes);
+
+        for (size_t j = 0; j < take.size(); ++j) {
+            memcpy(packed.data() + j * row_bytes,
+                        src + take[j] * row_bytes,
+                        row_bytes);
+        }
+
+        ggml_backend_tensor_set(out, packed.data(), 0, packed.size());
+    };
+
+    copy_mask(full_mask, out_mask);
+    copy_mask(full_mask_swa, out_mask_swa);
+
+    if (!keep.empty()) {
+        ggml_backend_tensor_set(
+            inp_prune_keep, keep.data(), 0,
+            keep.size() * sizeof(int32_t));
+    }
+}
+
+bool llm_graph_input_gemma4_prune::can_reuse(const llm_graph_params & params) {
+    const auto & ubatch = params.ubatch;
+
+    if (ubatch.n_tokens != n_slices * n_slice_tokens || !ubatch.output) {
+        return false;
+    }
+
+    return max_outputs_per_slice(ubatch, n_slices, n_slice_tokens) == n_slice_outputs;
+}
+
+int64_t llm_graph_input_gemma4_prune::max_outputs_per_slice(const llama_ubatch & ubatch, int64_t n_slices, int64_t n_slice_tokens) {
+    int64_t res = 0;
+
+    for (int32_t s = 0; s < n_slices; ++s) {
+        int64_t m = 0;
+        for (int32_t t = 0; t < n_slice_tokens; ++t) {
+            const int32_t i = s * n_slice_tokens + t;
+            if (ubatch.output[i]) {
+                m++;
+            }
+        }
+        res = std::max(res, m);
+    }
+    return res;
 }

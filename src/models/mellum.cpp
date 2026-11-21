@@ -199,11 +199,7 @@ llama_model_mellum::graph<iswa>::graph(const llm_graph_params & params) : llm_gr
                     LLM_FFN_SILU, hparams.expert_weights_norm,
                     hparams.expert_weights_scale,
                     (llama_expert_gating_func_type) hparams.expert_gating_func,
-                    il,
-                    nullptr, nullptr,
-                    model.layers[il].ffn_up_exps_s,
-                    model.layers[il].ffn_gate_exps_s,
-                    model.layers[il].ffn_down_exps_s);
+                    il);
         cb(moe_out, "ffn_moe_out", il);
         cur = moe_out;
 
@@ -266,9 +262,7 @@ llama_model_mellum::graph_mtp<iswa>::graph_mtp(const llm_graph_params & params) 
     inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd_inp(), n_tokens);
     ggml_set_input(inp->embd);
 
-    inp->h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
-    ggml_set_input(inp->h);
-    ggml_set_name(inp->h, "mtp_h_input");
+    inp->h = build_inp_embd_state(inp.get(), hparams.n_embd);
 
     // TODO: make static using `ggml_build_forward_select()`
     //       see llm_graph_context::build_inp_embd() for reference
@@ -353,11 +347,7 @@ llama_model_mellum::graph_mtp<iswa>::graph_mtp(const llm_graph_params & params) 
             LLM_FFN_SILU, hparams.expert_weights_norm,
             hparams.expert_weights_scale,
             (llama_expert_gating_func_type) hparams.expert_gating_func,
-            il,
-            nullptr, nullptr,
-            layer.ffn_up_exps_s,
-            layer.ffn_gate_exps_s,
-            layer.ffn_down_exps_s);
+            il);
     cb(cur, "mtp_ffn_moe_out", il);
 
     cur = ggml_add(ctx0, cur, ffn_inp);
