@@ -668,6 +668,9 @@ const char * llama_grammar_parser::parse_sequence(
             if (max_times != UINT64_MAX && max_times > MAX_REPETITION_THRESHOLD) {
                 max_times = UINT64_MAX;
             }
+            if (max_times < min_times) {
+                throw std::runtime_error(std::string("incorrect number of repetitions"));
+            }
             handle_repetitions(min_times, max_times);
         } else {
             break;
