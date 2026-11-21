@@ -1,7 +1,7 @@
 #include "fused-gemm.hpp"
 #include "fused-gemm-esimd.hpp"
 
-#include <sycl/ext/oneapi/matrix/matrix.hpp>
+#include "xmx-compat.hpp"
 
 #include <algorithm>
 #include <string>
@@ -10,7 +10,7 @@
 #include <set>
 #include <unordered_map>
 
-namespace mx = sycl::ext::oneapi::experimental::matrix;
+namespace mx = ggml_sycl_xmx::matrix;
 
 // FG_ / fg_ is short for fused GEMM: the weights are dequantized inside the GEMM, into the XMX tiles.
 
@@ -128,9 +128,10 @@ template <typename F> static void fg_visit_combo(int idx, F && f);
 static constexpr int FG_N_COMBOS = 8;
 
 // A spir64_gen AOT build (GGML_SYCL_XMX_AOT_SG) drops the combinations of the other sub-group size
-// entirely: ocloc rejects even an empty kernel that asks for a sub-group size it lacks.
+// entirely: ocloc rejects even an empty kernel that asks for a sub-group size it lacks. An XMX-emulation
+// build asks for hardware sub-groups of 16 (ggml_sycl_xmx::hw_sub_group_size) and keeps them all.
 template <int SG> static constexpr bool fg_listed() {
-#if defined(GGML_SYCL_XMX_AOT_SG)
+#if defined(GGML_SYCL_XMX_AOT_SG) && !defined(GGML_SYCL_XMX_EMULATION)
     return SG == GGML_SYCL_XMX_AOT_SG;
 #else
     return true;
@@ -202,8 +203,27 @@ static std::string fg_combo_name(int idx) {
     return name;
 }
 
-// Combinations this build has kernels for and the device lists, one bit each. Cached per device:
-// on a mixed box the first caller's verdict is not the others'.
+// The combinations of the architectures GGML_SYCL_HWEMUL selects, one bit each: Xe-HPG's are those
+// on sub-group 8, Xe2's those on sub-group 16
+static int fg_hwemul_combos() {
+    int m = 0;
+    for (int idx = 0; idx < FG_N_COMBOS; ++idx) {
+        fg_visit_combo(idx, [&](auto s) {
+            using S = decltype(s);
+            if (((g_ggml_sycl_hwemul & GGML_SYCL_HWEMUL_XEHPG) && S::SG == 8) ||
+                ((g_ggml_sycl_hwemul & GGML_SYCL_HWEMUL_XE2) && S::SG == 16)) {
+                m |= 1 << idx;
+            }
+        });
+    }
+    return m;
+}
+
+// Combinations this build has kernels for and the device offers, one bit each: those it lists, plus
+// those of the architectures GGML_SYCL_HWEMUL emulates (the device's own stay available), each only if
+// the device has the hardware sub-group size its joint_matrix kernel launches with
+// (ggml_sycl_xmx::hw_sub_group_size: emulated, a logical sub-group of 8 runs on hardware sub-groups of
+// 16). Cached per device: on a mixed box the first caller's verdict is not the others'.
 static int fg_device_combos(const sycl::device & dev) {
     static std::mutex                            mtx;
     static std::unordered_map<sycl::device, int> known;
@@ -212,24 +232,33 @@ static int fg_device_combos(const sycl::device & dev) {
     if (it != known.end()) {
         return it->second;
     }
-    int available = 0;
+    int native = 0, launchable = 0;
     try {
-        const auto combinations = dev.get_info<sycl::ext::oneapi::experimental::info::device::matrix_combinations>();
-        const auto sg_sizes     = dev.get_info<sycl::info::device::sub_group_sizes>();
+        const auto sg_sizes = dev.get_info<sycl::info::device::sub_group_sizes>();
         for (int idx = 0; idx < FG_N_COMBOS; ++idx) {
             fg_visit_combo(idx, [&](auto s) {
-                using S = decltype(s);
-                const bool sg_ok = std::find(sg_sizes.begin(), sg_sizes.end(), (size_t) S::SG) != sg_sizes.end();
-                if (sg_ok && fg_device_has_combo<S>(combinations)) {
-                    available |= 1 << idx;
+                const size_t hw = ggml_sycl_xmx::hw_sub_group_size(decltype(s)::SG);
+                if (std::find(sg_sizes.begin(), sg_sizes.end(), hw) != sg_sizes.end()) {
+                    launchable |= 1 << idx;
+                }
+            });
+        }
+        const auto combinations = dev.get_info<sycl::ext::oneapi::experimental::info::device::matrix_combinations>();
+        for (int idx = 0; idx < FG_N_COMBOS; ++idx) {
+            fg_visit_combo(idx, [&](auto s) {
+                if (fg_device_has_combo<decltype(s)>(combinations)) {
+                    native |= 1 << idx;
                 }
             });
         }
     } catch (const sycl::exception &) {
-        available = 0;
+        native = 0; // no XMX
     }
-    GGML_LOG_INFO("%s: %s: XMX dequant-GEMM combinations available 0x%x, allowed 0x%x\n", __func__,
-                  dev.get_info<sycl::info::device::name>().c_str(), available, g_ggml_sycl_xmx_gather_shapes);
+    const int emulated  = fg_hwemul_combos();
+    const int available = (native | emulated) & launchable;
+    GGML_LOG_INFO("%s: %s: XMX dequant-GEMM combinations available 0x%x (emulated 0x%x), allowed 0x%x\n", __func__,
+                  dev.get_info<sycl::info::device::name>().c_str(), available, available & ~native,
+                  g_ggml_sycl_xmx_gather_shapes);
     known.emplace(dev, available);
     return available;
 }
@@ -341,51 +370,8 @@ static void fused_gemm_pack_b(const T_src * y, typename E::store * packed, int N
 }
 
 // A stage: one lane owns one row and decodes FG_BK values of it per k step, with every scale
-// folded into the value so the mad below sees plain A elements. One overload per weight format.
-template <typename E>
-static __dpct_inline__ void fg_stage_a(const block_iq4_nl * __restrict__ xrow, const int kb, typename E::pair * a) {
-    const block_iq4_nl blk = xrow[kb];
-    const float        d   = (float) blk.d;
-#pragma unroll
-    for (int j = 0; j < QK4_NL / 2; j += 2) {
-        const uint8_t q0 = blk.qs[j];
-        const uint8_t q1 = blk.qs[j + 1];
-        a[j / 2]     = E::make(d * kvalues_iq4nl[q0 & 0xf], d * kvalues_iq4nl[q1 & 0xf]);
-        a[j / 2 + 8] = E::make(d * kvalues_iq4nl[q0 >> 4], d * kvalues_iq4nl[q1 >> 4]);
-    }
-}
-
-// iq3_s: k step kb is sub-block kb % 8 of superblock kb / 8. The superblock is 110 bytes, so read
-// only the fields of that sub-block instead of copying the block. Same decode as
-// dequantize_block_iq3_s: grid entries are taken as dwords and the sign bit is a plain shift.
-template <typename E>
-static __dpct_inline__ void fg_stage_a(const block_iq3_s * __restrict__ xrow, const int kb, typename E::pair * a) {
-    static_assert(QK_K == 256, "the iq3_s A stage assumes 8 sub-blocks per superblock");
-    const block_iq3_s * blk = xrow + kb / (QK_K / 32);
-    const int           ib8 = kb % (QK_K / 32);
-    const uint8_t *     qs  = blk->qs + 8 * ib8;
-    const int           qh  = blk->qh[ib8];
-    const float         d   = (float) blk->d * (1 + 2 * ((blk->scales[ib8 / 2] >> (4 * (ib8 % 2))) & 0xf));
-#pragma unroll
-    for (int il = 0; il < 4; ++il) {
-        const uint32_t grid1 = iq3s_grid[qs[2 * il + 0] | ((qh << (8 - 2 * il)) & 256)];
-        const uint32_t grid2 = iq3s_grid[qs[2 * il + 1] | ((qh << (7 - 2 * il)) & 256)];
-        const int      signs = blk->signs[4 * ib8 + il];
-#pragma unroll
-        for (int j = 0; j < 2; ++j) {
-            const float g1a = (float) ((grid1 >> (16 * j + 0)) & 0xff);
-            const float g1b = (float) ((grid1 >> (16 * j + 8)) & 0xff);
-            const float g2a = (float) ((grid2 >> (16 * j + 0)) & 0xff);
-            const float g2b = (float) ((grid2 >> (16 * j + 8)) & 0xff);
-            const int   s   = 2 * j;
-            a[4 * il + j]     = E::make(d * ((signs & (1 << (s + 0))) ? -g1a : g1a),
-                                        d * ((signs & (1 << (s + 1))) ? -g1b : g1b));
-            a[4 * il + j + 2] = E::make(d * ((signs & (1 << (s + 4))) ? -g2a : g2a),
-                                        d * ((signs & (1 << (s + 5))) ? -g2b : g2b));
-        }
-    }
-}
-
+// folded into the value so the mad below sees plain A elements. One fg_a<format> per weight format,
+// reading the block's fields through fg_at in either layout (ggml_sycl_layout in fused-gemm.hpp).
 // values per stored block, so a row of K values is K/qk blocks
 template <typename block_q_t> struct fg_block_traits;
 template <> struct fg_block_traits<block_iq4_nl> { static constexpr int qk = QK4_NL; };
@@ -403,16 +389,76 @@ template <> struct fg_block_traits<block_q3_K>    { static constexpr int qk = QK
 template <> struct fg_block_traits<block_q4_K>    { static constexpr int qk = QK_K; };
 template <> struct fg_block_traits<block_q5_K>    { static constexpr int qk = QK_K; };
 template <> struct fg_block_traits<block_q6_K>    { static constexpr int qk = QK_K; };
+template <> struct fg_block_traits<block_q4_0>    { static constexpr int qk = QK4_0; };
+template <> struct fg_block_traits<block_q4_1>    { static constexpr int qk = QK4_1; };
+template <> struct fg_block_traits<block_q5_0>    { static constexpr int qk = QK5_0; };
+template <> struct fg_block_traits<block_q5_1>    { static constexpr int qk = QK5_1; };
+template <> struct fg_block_traits<block_q1_0>    { static constexpr int qk = QK1_0; };
+template <> struct fg_block_traits<block_q2_0>    { static constexpr int qk = QK2_0; };
+template <> struct fg_block_traits<block_mxfp4>   { static constexpr int qk = QK_MXFP4; };
+template <> struct fg_block_traits<block_nvfp4>   { static constexpr int qk = QK_NVFP4; };
+template <> struct fg_block_traits<sycl::half>    { static constexpr int qk = 1; };
+template <> struct fg_block_traits<sycl::ext::oneapi::bfloat16> { static constexpr int qk = 1; };
 
-// The A stages below are the dequantize_block_iq* kernels rewritten for one k step. There a
-// work-item handled one quarter (il) of one 32-wide sub-block (ib); here one lane produces the
-// whole step, so il becomes a loop and ib is kb inside the superblock. Each quarter yields 8
-// consecutive values, i.e. 4 pairs at a[4*il], so nothing larger than 8 floats is ever live.
-#define FG_SUPERBLOCK(T)                                                         \
-    static_assert(QK_K == 256, "the " #T " A stage assumes 8 sub-blocks per superblock"); \
-    const T * blk = xrow + kb / (QK_K / 32);                                     \
-    const int ib  = kb % (QK_K / 32)
+// Where a block's fields are: in the canonical layout at their offset in the block, in the reorder
+// (SoA) layout in their streams over the nblocks blocks of the matrix (of the expert slice for
+// MUL_MAT_ID). f<F>(inner) is byte `inner` of field F of the block.
+template <typename T, bool reordered> struct fg_at;
 
+template <typename T> struct fg_at<T, false> {
+    using L = ggml_sycl_layout<T>;
+    const uint8_t * b;
+
+    template <int F> const __dpct_inline__ uint8_t * f(const int inner = 0) const { return b + L::seg[F].aos + inner; }
+};
+
+template <typename T> struct fg_at<T, true> {
+    using L = ggml_sycl_layout<T>;
+    const uint8_t * x;
+    size_t          nblocks;
+    size_t          ib;
+
+    template <int F> const __dpct_inline__ uint8_t * f(const int inner = 0) const {
+        return x + nblocks * ggml_sycl_layout_pre<L>(F) + ib * ggml_sycl_layout_stride<L>(F) + ggml_sycl_layout_off<L>(F) +
+               inner;
+    }
+};
+
+// fields read as values: halves and the 16-bit words sit on even bytes in both layouts, a dword may
+// not (q5_0's qh is at offset 2), so it is read as bytes
+static __dpct_inline__ float fg_f16(const uint8_t * p) {
+    return (float) sycl::bit_cast<sycl::half>(*(const uint16_t *) p);
+}
+
+static __dpct_inline__ uint16_t fg_u16(const uint8_t * p) {
+    return *(const uint16_t *) p;
+}
+
+static __dpct_inline__ uint32_t fg_u32(const uint8_t * p) {
+    return fg_u16(p) | ((uint32_t) fg_u16(p + 2) << 16);
+}
+
+// N bytes of a field in registers, loaded once in 16-bit words: the decodes then pick their values
+// from them instead of loading a byte per value
+template <int N> struct fg_bytes {
+    uint8_t b[N];
+};
+
+template <int N> static __dpct_inline__ fg_bytes<N> fg_load(const uint8_t * p) {
+    fg_bytes<N> r;
+#pragma unroll
+    for (int i = 0; i < N / 2; ++i) {
+        ((uint16_t *) r.b)[i] = fg_u16(p + 2 * i);
+    }
+    return r;
+}
+
+template <typename T> struct fg_a;
+
+// The A stages of the iq formats are the dequantize_block_iq* kernels rewritten for one k step.
+// There a work-item handled one quarter (il) of one 32-wide sub-block (ib); here one lane produces
+// the whole step, so il becomes a loop and ib is the k step j inside the superblock. Each quarter
+// yields 8 consecutive values, i.e. 4 pairs at a[4*il], so nothing larger than 8 floats is ever live.
 template <typename E>
 static __dpct_inline__ void fg_pack_quarter(const float * __restrict__ t, typename E::pair * a, int il) {
 #pragma unroll
@@ -421,150 +467,221 @@ static __dpct_inline__ void fg_pack_quarter(const float * __restrict__ t, typena
     }
 }
 
-template <typename E>
-static __dpct_inline__ void fg_stage_a(const block_iq4_xs * __restrict__ xrow, const int kb, typename E::pair * a) {
-    FG_SUPERBLOCK(block_iq4_xs);
-    // low nibbles fill the first half of the step, high nibbles the second, so the two halves
-    // land at a[0..7] and a[8..15] and no quarter loop is needed
-    const float d = (float) blk->d *
-        ((((blk->scales_l[ib / 2] >> (4 * (ib % 2))) & 0xf) | (((blk->scales_h >> (2 * ib)) & 3) << 4)) - 32);
-    const uint8_t * q4 = blk->qs + 16 * ib;
+template <> struct fg_a<block_iq4_nl> {
+    template <typename E, typename P> static __dpct_inline__ void stage(const P & p, const int, typename E::pair * a) {
+        using L            = ggml_sycl_layout<block_iq4_nl>;
+        const float     d  = fg_f16(p.template f<L::D>());
+        const auto      qb = fg_load<16>(p.template f<L::QS>());
+        const uint8_t * qs = qb.b;
 #pragma unroll
-    for (int j = 0; j < 8; ++j) {
-        a[j]     = E::make(d * kvalues_iq4nl[q4[2 * j] & 0xf], d * kvalues_iq4nl[q4[2 * j + 1] & 0xf]);
-        a[8 + j] = E::make(d * kvalues_iq4nl[q4[2 * j] >> 4],  d * kvalues_iq4nl[q4[2 * j + 1] >> 4]);
-    }
-}
-
-template <typename E>
-static __dpct_inline__ void fg_stage_a(const block_iq3_xxs * __restrict__ xrow, const int kb, typename E::pair * a) {
-    FG_SUPERBLOCK(block_iq3_xxs);
-    const uint8_t *  q3    = blk->qs + 8 * ib;
-    const uint16_t * gas   = (const uint16_t *) (blk->qs + QK_K / 4) + 2 * ib;
-    const uint32_t   aux32 = gas[0] | (gas[1] << 16);
-    const float      d     = (float) blk->d * (0.5f + (aux32 >> 28)) * 0.5f;
-#pragma unroll
-    for (int il = 0; il < 4; ++il) {
-        const uint8_t * grid1 = (const uint8_t *) (iq3xxs_grid + q3[2 * il + 0]);
-        const uint8_t * grid2 = (const uint8_t *) (iq3xxs_grid + q3[2 * il + 1]);
-        const uint8_t   signs = ksigns_iq2xs[(aux32 >> (7 * il)) & 127];
-        float t[8];
-#pragma unroll
-        for (int j = 0; j < 4; ++j) {
-            t[j + 0] = d * grid1[j] * (signs & kmask_iq2xs[j + 0] ? -1.f : 1.f);
-            t[j + 4] = d * grid2[j] * (signs & kmask_iq2xs[j + 4] ? -1.f : 1.f);
+        for (int j = 0; j < QK4_NL / 2; j += 2) {
+            const uint8_t q0 = qs[j];
+            const uint8_t q1 = qs[j + 1];
+            a[j / 2]         = E::make(d * kvalues_iq4nl[q0 & 0xf], d * kvalues_iq4nl[q1 & 0xf]);
+            a[j / 2 + 8]     = E::make(d * kvalues_iq4nl[q0 >> 4], d * kvalues_iq4nl[q1 >> 4]);
         }
-        fg_pack_quarter<E>(t, a, il);
     }
-}
+};
 
-template <typename E>
-static __dpct_inline__ void fg_stage_a(const block_iq2_xxs * __restrict__ xrow, const int kb, typename E::pair * a) {
-    FG_SUPERBLOCK(block_iq2_xxs);
-    const uint16_t * q2    = blk->qs + 4 * ib;
-    const uint8_t *  aux8  = (const uint8_t *) q2;
-    const uint32_t   aux32 = q2[2] | (q2[3] << 16);
-    const float      d     = (float) blk->d * (0.5f + (aux32 >> 28)) * 0.25f;
+// iq3_s: k step j is sub-block j of the superblock; grid entries are taken as dwords and the sign
+// bit is a plain shift, as in dequantize_block_iq3_s
+template <> struct fg_a<block_iq3_s> {
+    template <typename E, typename P>
+    static __dpct_inline__ void stage(const P & p, const int ib8, typename E::pair * a) {
+        using L               = ggml_sycl_layout<block_iq3_s>;
+        const uint8_t * qs    = p.template f<L::QS>(8 * ib8);
+        const int       qh    = *p.template f<L::QH>(ib8);
+        const uint8_t * signs = p.template f<L::SG>(4 * ib8);
+        const float     d =
+            fg_f16(p.template f<L::D>()) * (1 + 2 * ((*p.template f<L::SC>(ib8 / 2) >> (4 * (ib8 % 2))) & 0xf));
 #pragma unroll
-    for (int il = 0; il < 4; ++il) {
-        const uint8_t * grid  = (const uint8_t *) (iq2xxs_grid + aux8[il]);
-        const uint8_t   signs = ksigns_iq2xs[(aux32 >> (7 * il)) & 127];
-        float t[8];
+        for (int il = 0; il < 4; ++il) {
+            const uint32_t grid1 = iq3s_grid[qs[2 * il + 0] | ((qh << (8 - 2 * il)) & 256)];
+            const uint32_t grid2 = iq3s_grid[qs[2 * il + 1] | ((qh << (7 - 2 * il)) & 256)];
+            const int      sg    = signs[il];
+#pragma unroll
+            for (int j = 0; j < 2; ++j) {
+                const float g1a = (float) ((grid1 >> (16 * j + 0)) & 0xff);
+                const float g1b = (float) ((grid1 >> (16 * j + 8)) & 0xff);
+                const float g2a = (float) ((grid2 >> (16 * j + 0)) & 0xff);
+                const float g2b = (float) ((grid2 >> (16 * j + 8)) & 0xff);
+                const int   s   = 2 * j;
+                a[4 * il + j] =
+                    E::make(d * ((sg & (1 << (s + 0))) ? -g1a : g1a), d * ((sg & (1 << (s + 1))) ? -g1b : g1b));
+                a[4 * il + j + 2] =
+                    E::make(d * ((sg & (1 << (s + 4))) ? -g2a : g2a), d * ((sg & (1 << (s + 5))) ? -g2b : g2b));
+            }
+        }
+    }
+};
+
+template <> struct fg_a<block_iq4_xs> {
+    template <typename E, typename P>
+    static __dpct_inline__ void stage(const P & p, const int ib, typename E::pair * a) {
+        using L            = ggml_sycl_layout<block_iq4_xs>;
+        // low nibbles fill the first half of the step, high nibbles the second, so the two halves
+        // land at a[0..7] and a[8..15] and no quarter loop is needed
+        const int       sl = (*p.template f<L::SL>(ib / 2) >> (4 * (ib % 2))) & 0xf;
+        const int       sh = (fg_u16(p.template f<L::SH>()) >> (2 * ib)) & 3;
+        const float     d  = fg_f16(p.template f<L::D>()) * ((sl | (sh << 4)) - 32);
+        const uint8_t * q4 = p.template f<L::QS>(16 * ib);
 #pragma unroll
         for (int j = 0; j < 8; ++j) {
-            t[j] = d * grid[j] * (signs & kmask_iq2xs[j] ? -1.f : 1.f);
+            a[j]     = E::make(d * kvalues_iq4nl[q4[2 * j] & 0xf], d * kvalues_iq4nl[q4[2 * j + 1] & 0xf]);
+            a[8 + j] = E::make(d * kvalues_iq4nl[q4[2 * j] >> 4], d * kvalues_iq4nl[q4[2 * j + 1] >> 4]);
         }
-        fg_pack_quarter<E>(t, a, il);
     }
-}
+};
 
-template <typename E>
-static __dpct_inline__ void fg_stage_a(const block_iq2_xs * __restrict__ xrow, const int kb, typename E::pair * a) {
-    FG_SUPERBLOCK(block_iq2_xs);
-    const uint16_t * q2 = blk->qs + 4 * ib;
+template <> struct fg_a<block_iq3_xxs> {
+    template <typename E, typename P>
+    static __dpct_inline__ void stage(const P & p, const int ib, typename E::pair * a) {
+        using L               = ggml_sycl_layout<block_iq3_xxs>;
+        const uint8_t * q3    = p.template f<L::QS>(8 * ib);
+        const uint32_t  aux32 = fg_u32(p.template f<L::QS>(QK_K / 4 + 4 * ib));
+        const float     d     = fg_f16(p.template f<L::D>()) * (0.5f + (aux32 >> 28)) * 0.5f;
 #pragma unroll
-    for (int il = 0; il < 4; ++il) {
-        const uint8_t * grid  = (const uint8_t *) (iq2xs_grid + (q2[il] & 511));
-        const float     d     = (float) blk->d * (0.5f + ((blk->scales[ib] >> (4 * (il / 2))) & 0xf)) * 0.25f;
-        const uint8_t   signs = ksigns_iq2xs[q2[il] >> 9];
-        float t[8];
+        for (int il = 0; il < 4; ++il) {
+            const uint8_t * grid1 = (const uint8_t *) (iq3xxs_grid + q3[2 * il + 0]);
+            const uint8_t * grid2 = (const uint8_t *) (iq3xxs_grid + q3[2 * il + 1]);
+            const uint8_t   signs = ksigns_iq2xs[(aux32 >> (7 * il)) & 127];
+            float           t[8];
 #pragma unroll
-        for (int j = 0; j < 8; ++j) {
-            t[j] = d * grid[j] * (signs & kmask_iq2xs[j] ? -1.f : 1.f);
+            for (int j = 0; j < 4; ++j) {
+                t[j + 0] = d * grid1[j] * (signs & kmask_iq2xs[j + 0] ? -1.f : 1.f);
+                t[j + 4] = d * grid2[j] * (signs & kmask_iq2xs[j + 4] ? -1.f : 1.f);
+            }
+            fg_pack_quarter<E>(t, a, il);
         }
-        fg_pack_quarter<E>(t, a, il);
     }
-}
+};
 
-template <typename E>
-static __dpct_inline__ void fg_stage_a(const block_iq2_s * __restrict__ xrow, const int kb, typename E::pair * a) {
-    FG_SUPERBLOCK(block_iq2_s);
+template <> struct fg_a<block_iq2_xxs> {
+    template <typename E, typename P>
+    static __dpct_inline__ void stage(const P & p, const int ib, typename E::pair * a) {
+        using L               = ggml_sycl_layout<block_iq2_xxs>;
+        const uint8_t * aux8  = p.template f<L::QS>(8 * ib);
+        const uint32_t  aux32 = fg_u32(aux8 + 4);
+        const float     d     = fg_f16(p.template f<L::D>()) * (0.5f + (aux32 >> 28)) * 0.25f;
 #pragma unroll
-    for (int il = 0; il < 4; ++il) {
-        const uint8_t * grid =
-            (const uint8_t *) (iq2s_grid + (blk->qs[4 * ib + il] | ((blk->qh[ib] << (8 - 2 * il)) & 0x300)));
-        const float   d     = (float) blk->d * (0.5f + ((blk->scales[ib] >> (4 * (il / 2))) & 0xf)) * 0.25f;
-        const uint8_t signs = blk->qs[QK_K / 8 + 4 * ib + il];
-        float t[8];
+        for (int il = 0; il < 4; ++il) {
+            const uint8_t * grid  = (const uint8_t *) (iq2xxs_grid + aux8[il]);
+            const uint8_t   signs = ksigns_iq2xs[(aux32 >> (7 * il)) & 127];
+            float           t[8];
 #pragma unroll
-        for (int j = 0; j < 8; ++j) {
-            t[j] = d * grid[j] * (signs & kmask_iq2xs[j] ? -1.f : 1.f);
+            for (int j = 0; j < 8; ++j) {
+                t[j] = d * grid[j] * (signs & kmask_iq2xs[j] ? -1.f : 1.f);
+            }
+            fg_pack_quarter<E>(t, a, il);
         }
-        fg_pack_quarter<E>(t, a, il);
     }
-}
+};
 
-template <typename E>
-static __dpct_inline__ void fg_stage_a(const block_iq1_s * __restrict__ xrow, const int kb, typename E::pair * a) {
-    FG_SUPERBLOCK(block_iq1_s);
-    const float delta = blk->qh[ib] & 0x8000 ? -1 - IQ1S_DELTA : -1 + IQ1S_DELTA;
-    const float d     = (float) blk->d * (2 * ((blk->qh[ib] >> 12) & 7) + 1);
+template <> struct fg_a<block_iq2_xs> {
+    template <typename E, typename P>
+    static __dpct_inline__ void stage(const P & p, const int ib, typename E::pair * a) {
+        using L            = ggml_sycl_layout<block_iq2_xs>;
+        const uint8_t * q2 = p.template f<L::QS>(8 * ib);
+        const float     db = fg_f16(p.template f<L::D>());
+        const int       sc = *p.template f<L::SC>(ib);
 #pragma unroll
-    for (int il = 0; il < 4; ++il) {
-        uint32_t       grid32[2];
-        const int8_t * q = (const int8_t *) grid32;
-        grid32[0] = iq1s_grid_gpu[blk->qs[4 * ib + il] | (((blk->qh[ib] >> (3 * il)) & 7) << 8)];
-        grid32[1] = (grid32[0] >> 4) & 0x0f0f0f0f;
-        grid32[0] &= 0x0f0f0f0f;
-        float t[8];
+        for (int il = 0; il < 4; ++il) {
+            const uint16_t  q     = fg_u16(q2 + 2 * il);
+            const uint8_t * grid  = (const uint8_t *) (iq2xs_grid + (q & 511));
+            const float     d     = db * (0.5f + ((sc >> (4 * (il / 2))) & 0xf)) * 0.25f;
+            const uint8_t   signs = ksigns_iq2xs[q >> 9];
+            float           t[8];
 #pragma unroll
-        for (int j = 0; j < 8; ++j) {
-            t[j] = d * (q[j] + delta);
+            for (int j = 0; j < 8; ++j) {
+                t[j] = d * grid[j] * (signs & kmask_iq2xs[j] ? -1.f : 1.f);
+            }
+            fg_pack_quarter<E>(t, a, il);
         }
-        fg_pack_quarter<E>(t, a, il);
     }
-}
+};
 
-template <typename E>
-static __dpct_inline__ void fg_stage_a(const block_iq1_m * __restrict__ xrow, const int kb, typename E::pair * a) {
-    FG_SUPERBLOCK(block_iq1_m);
-    const uint16_t * sc = (const uint16_t *) blk->scales;
-    iq1m_scale_t     scale;
-    scale.u16 = (sc[0] >> 12) | ((sc[1] >> 8) & 0x00f0) | ((sc[2] >> 4) & 0x0f00) | (sc[3] & 0xf000);
+template <> struct fg_a<block_iq2_s> {
+    template <typename E, typename P>
+    static __dpct_inline__ void stage(const P & p, const int ib, typename E::pair * a) {
+        using L            = ggml_sycl_layout<block_iq2_s>;
+        const uint8_t * qs = p.template f<L::QS>();
+        const int       qh = *p.template f<L::QH>(ib);
+        const int       sc = *p.template f<L::SC>(ib);
+        const float     db = fg_f16(p.template f<L::D>());
 #pragma unroll
-    for (int il = 0; il < 4; ++il) {
-        const int   ib16  = 2 * ib + il / 2;
-        const float d     = (float) scale.f16 * (2 * ((sc[ib16 / 4] >> (3 * (ib16 % 4))) & 0x7) + 1);
-        const float delta = blk->qh[2 * ib + il / 2] & (0x08 << (4 * (il % 2))) ? -1 - IQ1M_DELTA : -1 + IQ1M_DELTA;
-        uint32_t       grid32[2];
-        const int8_t * q = (const int8_t *) grid32;
-        grid32[0] = iq1s_grid_gpu[blk->qs[4 * ib + il] |
-                                  (((blk->qh[2 * ib + il / 2] >> (4 * (il % 2))) & 7) << 8)];
-        grid32[1] = (grid32[0] >> 4) & 0x0f0f0f0f;
-        grid32[0] &= 0x0f0f0f0f;
-        float t[8];
+        for (int il = 0; il < 4; ++il) {
+            const uint8_t * grid  = (const uint8_t *) (iq2s_grid + (qs[4 * ib + il] | ((qh << (8 - 2 * il)) & 0x300)));
+            const float     d     = db * (0.5f + ((sc >> (4 * (il / 2))) & 0xf)) * 0.25f;
+            const uint8_t   signs = qs[QK_K / 8 + 4 * ib + il];
+            float           t[8];
 #pragma unroll
-        for (int j = 0; j < 8; ++j) {
-            t[j] = d * (q[j] + delta);
+            for (int j = 0; j < 8; ++j) {
+                t[j] = d * grid[j] * (signs & kmask_iq2xs[j] ? -1.f : 1.f);
+            }
+            fg_pack_quarter<E>(t, a, il);
         }
-        fg_pack_quarter<E>(t, a, il);
     }
-}
+};
 
+template <> struct fg_a<block_iq1_s> {
+    template <typename E, typename P>
+    static __dpct_inline__ void stage(const P & p, const int ib, typename E::pair * a) {
+        using L               = ggml_sycl_layout<block_iq1_s>;
+        const uint8_t * qs    = p.template f<L::QS>(4 * ib);
+        const uint16_t  qh    = fg_u16(p.template f<L::QH>(2 * ib));
+        const float     delta = qh & 0x8000 ? -1 - IQ1S_DELTA : -1 + IQ1S_DELTA;
+        const float     d     = fg_f16(p.template f<L::D>()) * (2 * ((qh >> 12) & 7) + 1);
+#pragma unroll
+        for (int il = 0; il < 4; ++il) {
+            uint32_t       grid32[2];
+            const int8_t * q = (const int8_t *) grid32;
+            grid32[0]        = iq1s_grid_gpu[qs[il] | (((qh >> (3 * il)) & 7) << 8)];
+            grid32[1]        = (grid32[0] >> 4) & 0x0f0f0f0f;
+            grid32[0] &= 0x0f0f0f0f;
+            float t[8];
+#pragma unroll
+            for (int j = 0; j < 8; ++j) {
+                t[j] = d * (q[j] + delta);
+            }
+            fg_pack_quarter<E>(t, a, il);
+        }
+    }
+};
 
-// q8_0 and the k-quants. Each decode takes the fields of one 32-value sub-block, so the canonical
-// layout and the reorder (SoA) layout of reorder_qw() share it and differ only in where the fields
-// live, as in dequantize.hpp.
+template <> struct fg_a<block_iq1_m> {
+    template <typename E, typename P>
+    static __dpct_inline__ void stage(const P & p, const int ib, typename E::pair * a) {
+        using L            = ggml_sycl_layout<block_iq1_m>;
+        const uint8_t * qs = p.template f<L::QS>(4 * ib);
+        const uint8_t * qh = p.template f<L::QH>(2 * ib);
+        uint16_t        sc[4];
+#pragma unroll
+        for (int i = 0; i < 4; ++i) {
+            sc[i] = fg_u16(p.template f<L::SC>(2 * i));
+        }
+        iq1m_scale_t scale;
+        scale.u16 = (sc[0] >> 12) | ((sc[1] >> 8) & 0x00f0) | ((sc[2] >> 4) & 0x0f00) | (sc[3] & 0xf000);
+#pragma unroll
+        for (int il = 0; il < 4; ++il) {
+            const int      ib16  = 2 * ib + il / 2;
+            const float    d     = (float) scale.f16 * (2 * ((sc[ib16 / 4] >> (3 * (ib16 % 4))) & 0x7) + 1);
+            const float    delta = qh[il / 2] & (0x08 << (4 * (il % 2))) ? -1 - IQ1M_DELTA : -1 + IQ1M_DELTA;
+            uint32_t       grid32[2];
+            const int8_t * q = (const int8_t *) grid32;
+            grid32[0]        = iq1s_grid_gpu[qs[il] | (((qh[il / 2] >> (4 * (il % 2))) & 7) << 8)];
+            grid32[1]        = (grid32[0] >> 4) & 0x0f0f0f0f;
+            grid32[0] &= 0x0f0f0f0f;
+            float t[8];
+#pragma unroll
+            for (int j = 0; j < 8; ++j) {
+                t[j] = d * (q[j] + delta);
+            }
+            fg_pack_quarter<E>(t, a, il);
+        }
+    }
+};
+
+// q8_0 and the k-quants: each decode takes the fields of one 32-value sub-block, as in dequantize.hpp
 template <typename E>
 static __dpct_inline__ void fg_decode_q8_0(const int8_t * __restrict__ qs, const float d, typename E::pair * a) {
 #pragma unroll
@@ -685,142 +802,202 @@ static __dpct_inline__ void fg_decode_q6_K(const uint8_t * __restrict__ ql, cons
     }
 }
 
-template <typename E>
-static __dpct_inline__ void fg_stage_a(const block_q8_0 * __restrict__ xrow, const int kb, typename E::pair * a) {
-    fg_decode_q8_0<E>(xrow[kb].qs, (float) xrow[kb].d, a);
-}
-
-template <typename E>
-static __dpct_inline__ void fg_stage_a(const block_q2_K * __restrict__ xrow, const int kb, typename E::pair * a) {
-    FG_SUPERBLOCK(block_q2_K);
-    fg_decode_q2_K<E>(blk->qs, blk->scales, (float) blk->dm[0], (float) blk->dm[1], ib, a);
-}
-
-template <typename E>
-static __dpct_inline__ void fg_stage_a(const block_q3_K * __restrict__ xrow, const int kb, typename E::pair * a) {
-    FG_SUPERBLOCK(block_q3_K);
-    fg_decode_q3_K<E>(blk->qs, blk->hmask, blk->scales, (float) blk->d, ib, a);
-}
-
-template <typename E>
-static __dpct_inline__ void fg_stage_a(const block_q4_K * __restrict__ xrow, const int kb, typename E::pair * a) {
-    FG_SUPERBLOCK(block_q4_K);
-    fg_decode_q4_K<E>(blk->qs, blk->scales, blk->dm, ib, a);
-}
-
-template <typename E>
-static __dpct_inline__ void fg_stage_a(const block_q5_K * __restrict__ xrow, const int kb, typename E::pair * a) {
-    FG_SUPERBLOCK(block_q5_K);
-    fg_decode_q5_K<E>(blk->qs, blk->qh, blk->scales, blk->dm, ib, a);
-}
-
-template <typename E>
-static __dpct_inline__ void fg_stage_a(const block_q6_K * __restrict__ xrow, const int kb, typename E::pair * a) {
-    FG_SUPERBLOCK(block_q6_K);
-    fg_decode_q6_K<E>(blk->ql, blk->qh, blk->scales, (float) blk->d, ib, a);
-}
-
-// Reorder (SoA) layout: each block field is one stream over the nblocks of the matrix (of the expert
-// slice for MUL_MAT_ID), in the order reorder_qw() writes them. Block ib holds k step kb.
-template <typename block_q_t> struct fg_soa {
-    static constexpr bool supported = false;
-};
-
-template <> struct fg_soa<block_q8_0> {
-    static constexpr bool supported = true;
-    // [qs][d]
-    template <typename E>
-    static __dpct_inline__ void stage(const uint8_t * x, const size_t nblocks, const size_t ib, const int,
-                                      typename E::pair * a) {
-        const float d = (float) ((const sycl::half *) (x + nblocks * QK8_0))[ib];
-        fg_decode_q8_0<E>((const int8_t *) x + ib * QK8_0, d, a);
+template <> struct fg_a<block_q8_0> {
+    template <typename E, typename P> static __dpct_inline__ void stage(const P & p, const int, typename E::pair * a) {
+        using L = ggml_sycl_layout<block_q8_0>;
+        fg_decode_q8_0<E>((const int8_t *) p.template f<L::QS>(), fg_f16(p.template f<L::D>()), a);
     }
 };
 
-template <> struct fg_soa<block_q2_K> {
-    static constexpr bool supported = true;
-
-    // [qs][scales][dm]
-    template <typename E>
-    static __dpct_inline__ void stage(const uint8_t * x, const size_t nblocks, const size_t ib, const int kb,
-                                      typename E::pair * a) {
-        const uint8_t * scales = x + nblocks * (QK_K / 4);
-        const sycl::half2 dm = ((const sycl::half2 *) (scales + nblocks * (QK_K / 16)))[ib];
-        fg_decode_q2_K<E>(x + ib * (QK_K / 4), scales + ib * (QK_K / 16), (float) dm[0], (float) dm[1],
-                          kb % (QK_K / 32), a);
+template <> struct fg_a<block_q2_K> {
+    template <typename E, typename P>
+    static __dpct_inline__ void stage(const P & p, const int ib, typename E::pair * a) {
+        using L = ggml_sycl_layout<block_q2_K>;
+        fg_decode_q2_K<E>(p.template f<L::QS>(), p.template f<L::SC>(), fg_f16(p.template f<L::DM>()),
+                          fg_f16(p.template f<L::DM>(2)), ib, a);
     }
 };
 
-template <> struct fg_soa<block_q3_K> {
-    static constexpr bool supported = true;
+template <> struct fg_a<block_q3_K> {
+    template <typename E, typename P>
+    static __dpct_inline__ void stage(const P & p, const int ib, typename E::pair * a) {
+        using L = ggml_sycl_layout<block_q3_K>;
+        fg_decode_q3_K<E>(p.template f<L::QS>(), p.template f<L::HM>(), p.template f<L::SC>(),
+                          fg_f16(p.template f<L::D>()), ib, a);
+    }
+};
 
-    // [qs][hmask][scales][d]
-    template <typename E>
-    static __dpct_inline__ void stage(const uint8_t * x, const size_t nblocks, const size_t ib, const int kb,
-                                      typename E::pair * a) {
-        const uint8_t * hmask = x + nblocks * (QK_K / 4);
-        const uint8_t * scales = hmask + nblocks * (QK_K / 8);
-        const float d = (float) ((const sycl::half *) (scales + nblocks * 12))[ib];
-        const int sub = kb % (QK_K / 32);
-        // 16-byte aligned, see opt_for_reorder_id
-        using v4 = sycl::vec<uint32_t, 4>;
-        const v4 * q = (const v4 *) (x + ib * (QK_K / 4) + 32 * (sub / 4));
-        const v4 * h = (const v4 *) (hmask + ib * (QK_K / 8));
-        const v4 qv[2] = { q[0], q[1] };
-        const v4 hv[2] = { h[0], h[1] };
-        const int shift = 2 * (sub % 4);
-        float dl[2];
-        fg_q3_K_dl(scales + ib * 12, d, sub, dl);
+template <> struct fg_a<block_q4_K> {
+    template <typename E, typename P>
+    static __dpct_inline__ void stage(const P & p, const int ib, typename E::pair * a) {
+        using L = ggml_sycl_layout<block_q4_K>;
+        fg_decode_q4_K<E>(p.template f<L::QS>(), p.template f<L::SC>(), *(const sycl::half2 *) p.template f<L::DM>(),
+                          ib, a);
+    }
+};
+
+template <> struct fg_a<block_q5_K> {
+    template <typename E, typename P>
+    static __dpct_inline__ void stage(const P & p, const int ib, typename E::pair * a) {
+        using L = ggml_sycl_layout<block_q5_K>;
+        fg_decode_q5_K<E>(p.template f<L::QS>(), p.template f<L::QH>(), p.template f<L::SC>(),
+                          *(const sycl::half2 *) p.template f<L::DM>(), ib, a);
+    }
+};
+
+template <> struct fg_a<block_q6_K> {
+    template <typename E, typename P>
+    static __dpct_inline__ void stage(const P & p, const int ib, typename E::pair * a) {
+        using L = ggml_sycl_layout<block_q6_K>;
+        fg_decode_q6_K<E>(p.template f<L::QL>(), p.template f<L::QH>(), (const int8_t *) p.template f<L::SC>(),
+                          fg_f16(p.template f<L::D>()), ib, a);
+    }
+};
+
+// The formats below are one value lambda each: a[i] = (v(2 i), v(2 i + 1)) for k in [0, 32) of the k step.
+// The formats below are one value lambda each: a[i] = (v(2 i), v(2 i + 1)) for k in [0, 32) of the k step.
+template <typename E, typename V> static __dpct_inline__ void fg_stage_values(V && v, typename E::pair * a) {
 #pragma unroll
-        for (int w = 0; w < 8; ++w) {
-            const uint32_t v = ((qv[w / 4][w % 4] >> shift) & 0x03030303u) | (((hv[w / 4][w % 4] >> sub) & 0x01010101u) << 2);
-            const float    f = dl[w / 4];
-            a[2 * w]     = E::make(f * ((int) (v & 0xFF) - 4), f * ((int) ((v >> 8) & 0xFF) - 4));
-            a[2 * w + 1] = E::make(f * ((int) ((v >> 16) & 0xFF) - 4), f * ((int) (v >> 24) - 4));
-        }
+    for (int i = 0; i < FG_BK / 2; ++i) {
+        a[i] = E::make(v(2 * i), v(2 * i + 1));
+    }
+}
+
+// 32-value blocks of nibbles: byte j holds k = j (low nibble) and k = j + 16 (high nibble)
+static __dpct_inline__ int fg_nibble(const uint8_t * qs, const int k) {
+    return (k < 16 ? qs[k] : qs[k - 16] >> 4) & 0xf;
+}
+
+// q5_0 / q5_1: bit k of qh is the fifth bit of value k
+static __dpct_inline__ int fg_q5_code(const uint8_t * qs, const uint32_t qh, const int k) {
+    return fg_nibble(qs, k) | (int) (((qh >> k) & 1) << 4);
+}
+
+template <> struct fg_a<block_q4_0> {
+    template <typename E, typename P> static __dpct_inline__ void stage(const P & p, const int, typename E::pair * a) {
+        using L            = ggml_sycl_layout<block_q4_0>;
+        const auto      qb = fg_load<16>(p.template f<L::QS>());
+        const uint8_t * qs = qb.b;
+        const float     d  = fg_f16(p.template f<L::D>());
+        fg_stage_values<E>([&](int k) { return d * (fg_nibble(qs, k) - 8); }, a);
     }
 };
 
-template <> struct fg_soa<block_q4_K> {
-    static constexpr bool supported = true;
-    // [qs][scales][dm]
-    template <typename E>
-    static __dpct_inline__ void stage(const uint8_t * x, const size_t nblocks, const size_t ib, const int kb,
-                                      typename E::pair * a) {
-        const uint8_t *   scales = x + nblocks * (QK_K / 2);
-        const sycl::half2 dm     = ((const sycl::half2 *) (scales + nblocks * K_SCALE_SIZE))[ib];
-        fg_decode_q4_K<E>(x + ib * (QK_K / 2), scales + ib * K_SCALE_SIZE, dm, kb % (QK_K / 32), a);
+template <> struct fg_a<block_q4_1> {
+    template <typename E, typename P> static __dpct_inline__ void stage(const P & p, const int, typename E::pair * a) {
+        using L            = ggml_sycl_layout<block_q4_1>;
+        const auto      qb = fg_load<16>(p.template f<L::QS>());
+        const uint8_t * qs = qb.b;
+        const float     d = fg_f16(p.template f<L::DM>()), m = fg_f16(p.template f<L::DM>(2));
+        fg_stage_values<E>([&](int k) { return d * fg_nibble(qs, k) + m; }, a);
     }
 };
 
-template <> struct fg_soa<block_q5_K> {
-    static constexpr bool supported = true;
-    // [qs][qh][scales][dm]
-    template <typename E>
-    static __dpct_inline__ void stage(const uint8_t * x, const size_t nblocks, const size_t ib, const int kb,
-                                      typename E::pair * a) {
-        const uint8_t *   qh     = x + nblocks * (QK_K / 2);
-        const uint8_t *   scales = qh + nblocks * (QK_K / 8);
-        const sycl::half2 dm     = ((const sycl::half2 *) (scales + nblocks * K_SCALE_SIZE))[ib];
-        fg_decode_q5_K<E>(x + ib * (QK_K / 2), qh + ib * (QK_K / 8), scales + ib * K_SCALE_SIZE, dm,
-                          kb % (QK_K / 32), a);
+template <> struct fg_a<block_q5_0> {
+    template <typename E, typename P> static __dpct_inline__ void stage(const P & p, const int, typename E::pair * a) {
+        using L            = ggml_sycl_layout<block_q5_0>;
+        const auto      qb = fg_load<16>(p.template f<L::QS>());
+        const uint8_t * qs = qb.b;
+        const uint32_t  qh = fg_u32(p.template f<L::QH>());
+        const float     d  = fg_f16(p.template f<L::D>());
+        fg_stage_values<E>([&](int k) { return d * (fg_q5_code(qs, qh, k) - 16); }, a);
     }
 };
 
-template <> struct fg_soa<block_q6_K> {
-    static constexpr bool supported = true;
-    // [ql][qh][scales][d]
-    template <typename E>
-    static __dpct_inline__ void stage(const uint8_t * x, const size_t nblocks, const size_t ib, const int kb,
-                                      typename E::pair * a) {
-        const uint8_t * qh     = x + nblocks * (QK_K / 2);
-        const uint8_t * scales = qh + nblocks * (QK_K / 4);
-        const float     d      = (float) ((const sycl::half *) (scales + nblocks * (QK_K / 16)))[ib];
-        fg_decode_q6_K<E>(x + ib * (QK_K / 2), qh + ib * (QK_K / 4), (const int8_t *) scales + ib * (QK_K / 16), d,
-                          kb % (QK_K / 32), a);
+template <> struct fg_a<block_q5_1> {
+    template <typename E, typename P> static __dpct_inline__ void stage(const P & p, const int, typename E::pair * a) {
+        using L            = ggml_sycl_layout<block_q5_1>;
+        const auto      qb = fg_load<16>(p.template f<L::QS>());
+        const uint8_t * qs = qb.b;
+        const uint32_t  qh = fg_u32(p.template f<L::QH>());
+        const float     d = fg_f16(p.template f<L::DM>()), m = fg_f16(p.template f<L::DM>(2));
+        fg_stage_values<E>([&](int k) { return d * fg_q5_code(qs, qh, k) + m; }, a);
     }
 };
 
+template <typename E>
+static __dpct_inline__ void fg_decode_mxfp4(const uint8_t * __restrict__ qs, const uint8_t e, typename E::pair * a) {
+    const float d = 0.5f * ggml_sycl_e8m0_to_fp32(e);
+    fg_stage_values<E>([&](int k) { return d * kvalues_mxfp4[fg_nibble(qs, k)]; }, a);
+}
+
+template <> struct fg_a<block_mxfp4> {
+    template <typename E, typename P> static __dpct_inline__ void stage(const P & p, const int, typename E::pair * a) {
+        using L = ggml_sycl_layout<block_mxfp4>;
+        fg_decode_mxfp4<E>(p.template f<L::QS>(), *p.template f<L::E>(), a);
+    }
+};
+
+// q1_0: 128 values per block, four k steps; bit k % 8 of byte k / 8 of the step picks +d or -d
+template <> struct fg_a<block_q1_0> {
+    template <typename E, typename P>
+    static __dpct_inline__ void stage(const P & p, const int j, typename E::pair * a) {
+        using L            = ggml_sycl_layout<block_q1_0>;
+        const uint8_t * qs = p.template f<L::QS>(j * (FG_BK / 8));
+        const float     d  = fg_f16(p.template f<L::D>());
+        fg_stage_values<E>([&](int k) { return (qs[k / 8] >> (k % 8)) & 1 ? d : -d; }, a);
+    }
+};
+
+// q2_0: 64 values per block, two k steps; two bits per value, (q - 1) * d
+template <> struct fg_a<block_q2_0> {
+    template <typename E, typename P>
+    static __dpct_inline__ void stage(const P & p, const int j, typename E::pair * a) {
+        using L            = ggml_sycl_layout<block_q2_0>;
+        const uint8_t * qs = p.template f<L::QS>(j * (FG_BK / 4));
+        const float     d  = fg_f16(p.template f<L::D>());
+        fg_stage_values<E>([&](int k) { return d * (((qs[k / 4] >> (2 * (k % 4))) & 3) - 1); }, a);
+    }
+};
+
+// nvfp4: 64 values per block, two k steps of two 16-value sub-blocks with a UE4M3 scale each; byte j of
+// a sub-block holds its value j (low nibble) and j + 8 (high nibble)
+template <> struct fg_a<block_nvfp4> {
+    template <typename E, typename P>
+    static __dpct_inline__ void stage(const P & p, const int j, typename E::pair * a) {
+        using L            = ggml_sycl_layout<block_nvfp4>;
+        const int       s0 = j * (FG_BK / QK_NVFP4_SUB);
+        const uint8_t * qs = p.template f<L::QS>(s0 * (QK_NVFP4_SUB / 2));
+        const float     d0 = ggml_sycl_ue4m3_to_fp32(*p.template f<L::D>(s0));
+        const float     d1 = ggml_sycl_ue4m3_to_fp32(*p.template f<L::D>(s0 + 1));
+        fg_stage_values<E>(
+            [&](int k) {
+                const uint8_t q = qs[(k / QK_NVFP4_SUB) * (QK_NVFP4_SUB / 2) + k % (QK_NVFP4_SUB / 2)];
+                return (k < QK_NVFP4_SUB ? d0 : d1) *
+                       kvalues_mxfp4[(k % QK_NVFP4_SUB) < QK_NVFP4_SUB / 2 ? q & 0xf : q >> 4];
+            },
+            a);
+    }
+};
+
+// f16 / bf16 weights: nothing to decode, one k step is 32 consecutive values; no reorder layout
+template <typename E>
+static __dpct_inline__ void fg_stage_plain(const sycl::half * __restrict__ xrow, const int kb, typename E::pair * a) {
+    fg_stage_values<E>([&](int k) { return (float) xrow[kb * FG_BK + k]; }, a);
+}
+
+template <typename E>
+static __dpct_inline__ void fg_stage_plain(const sycl::ext::oneapi::bfloat16 * __restrict__ xrow,
+                                           const int          kb,
+                                           typename E::pair * a) {
+    fg_stage_values<E>([&](int k) { return (float) xrow[kb * FG_BK + k]; }, a);
+}
+
+// a plain f16 / bf16 matrix rather than a format with a layout table
+template <typename T> static constexpr bool fg_plain_type() {
+    return std::is_same_v<T, sycl::half> || std::is_same_v<T, sycl::ext::oneapi::bfloat16>;
+}
+
+// The formats whose backend reorder (reorder_qw) writes the streams of their layout table. A reordered
+// weight of another format is declined: its reorder, if it has one (iq3_s, iq3_xxs for the mat-vec),
+// is laid out for another kernel.
+template <typename T> static constexpr bool fg_reorder_layout() {
+    return std::is_same_v<T, block_q8_0> || std::is_same_v<T, block_q2_K> || std::is_same_v<T, block_q3_K> ||
+           std::is_same_v<T, block_q4_K> || std::is_same_v<T, block_q5_K> || std::is_same_v<T, block_q6_K> ||
+           std::is_same_v<T, block_iq3_xxs> || std::is_same_v<T, block_iq3_s> || std::is_same_v<T, block_iq2_xxs> ||
+           std::is_same_v<T, block_iq2_xs> || std::is_same_v<T, block_iq2_s> || std::is_same_v<T, block_iq4_xs> ||
+           std::is_same_v<T, block_mxfp4>;
+}
 
 // one SG_ROWS x BN output tile: B columns [b0, b0 + BN) of packed_b go to dst columns [n0, n1),
 // n1 - n0 <= BN
@@ -838,7 +1015,7 @@ static void fused_dequant_gemm_tile(
         using EA = typename S::EA;
         using TA = typename S::ta;
         using TB = typename S::tb;
-        const auto sg     = item.get_sub_group();
+        const auto sg     = ggml_sycl_xmx::sub_group_of<S::SG>(item);
         const int  sg_id  = sg.get_group_id()[0];
         const int  lane   = sg.get_local_id()[0];
         const int  m0     = item.get_group(1) * S::SG_ROWS;
@@ -856,7 +1033,8 @@ static void fused_dequant_gemm_tile(
         }
 
         // lane decodes rows lane, lane + SG, ... of the sub-group's SG_ROWS
-        constexpr int         KPB     = fg_block_traits<block_q_t>::qk / FG_BK; // k steps per block
+        constexpr int KPB =
+            fg_plain_type<block_q_t>() ? 1 : fg_block_traits<block_q_t>::qk / FG_BK;  // k steps per block
         const size_t          bpr     = K / fg_block_traits<block_q_t>::qk;
         const size_t          nblocks = (size_t) M * bpr;
         size_t                row_blk[S::RPL];
@@ -880,11 +1058,15 @@ static void fused_dequant_gemm_tile(
 #pragma unroll
             for (int r = 0; r < S::RPL; ++r) {
                 if (row_ok[r]) {
-                    if constexpr (reordered) {
-                        fg_soa<block_q_t>::template stage<EA>((const uint8_t *) x, nblocks, row_blk[r] + kb / KPB, kb,
-                                                              a[r]);
+                    if constexpr (fg_plain_type<block_q_t>()) {
+                        fg_stage_plain<EA>(x + row_blk[r], kb, a[r]);
+                    } else if constexpr (reordered) {
+                        fg_a<block_q_t>::template stage<EA>(
+                            fg_at<block_q_t, true>{ (const uint8_t *) x, nblocks, row_blk[r] + kb / KPB }, kb % KPB,
+                            a[r]);
                     } else {
-                        fg_stage_a<EA>(x + row_blk[r], kb, a[r]);
+                        fg_a<block_q_t>::template stage<EA>(
+                            fg_at<block_q_t, false>{ (const uint8_t *) (x + row_blk[r] + kb / KPB) }, kb % KPB, a[r]);
                     }
                 } else {
 #pragma unroll
@@ -893,7 +1075,7 @@ static void fused_dequant_gemm_tile(
                     }
                 }
             }
-            sycl::group_barrier(sg);
+            ggml_sycl_xmx::group_barrier(sg);
 
 #pragma unroll
             for (int kt = 0; kt < FG_BK / S::TK; ++kt) {
@@ -916,7 +1098,7 @@ static void fused_dequant_gemm_tile(
                 }
             }
             // the next step overwrites tile_a
-            sycl::group_barrier(sg);
+            ggml_sycl_xmx::group_barrier(sg);
         }
 
 #pragma unroll
@@ -963,7 +1145,7 @@ static void fused_dequant_gemm_launch(const void * src0, const typename S::tsb *
         sycl::local_accessor<float, 1>          tile_c(FG_KSPLIT * S::SG_ROWS * S::BN, cgh);
         cgh.parallel_for(
             sycl::nd_range<2>(sycl::range<2>(groups_n, groups_m * S::WG_SIZE), sycl::range<2>(1, S::WG_SIZE)),
-            [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(S::SG)]] {
+            [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(ggml_sycl_xmx::hw_sub_group_size(S::SG))]] {
                 const int n0 = item.get_group(0) * S::BN;
                 fused_dequant_gemm_tile<S, block_q_t, reordered>((const block_q_t *) src0, packed, dst, M, Npad, K,
                                                       ldd, n0, n0, N, tile_a, tile_c, item);
@@ -992,7 +1174,7 @@ static void grouped_dequant_gemm_launch(const char * src0_dd, const size_t exper
         sycl::local_accessor<float, 1>          tile_c(FG_KSPLIT * S::SG_ROWS * S::BN, cgh);
         cgh.parallel_for(
             sycl::nd_range<2>(sycl::range<2>(n_tiles, groups_m * S::WG_SIZE), sycl::range<2>(1, S::WG_SIZE)),
-            [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(S::SG)]] {
+            [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(ggml_sycl_xmx::hw_sub_group_size(S::SG))]] {
                 const int                         t    = item.get_group(0);
                 const ggml_sycl_grouped_gemm_tile tile = tiles_ptr[t];
                 if (tile.n0 == tile.n1) {
@@ -1036,12 +1218,13 @@ static void grouped_gemm_pack_b(const float * y, typename S::tsb * packed, const
     });
 }
 
-// q8_0 and the k-quants take only the grouped path. The plain kernel decodes A again for every BN columns
-// of a dense batch, and for these formats that costs more than the one dequantization of the library GEMM.
+// Only the iq formats take the plain path; the others take only the grouped path. The plain kernel decodes
+// A again for every BN columns of a dense batch, and for those formats that costs more than the one
+// dequantization of the library GEMM.
 template <typename T> static constexpr bool fg_plain_ok() {
-    return !std::is_same_v<T, block_q8_0> && !std::is_same_v<T, block_q2_K> && !std::is_same_v<T, block_q3_K> &&
-           !std::is_same_v<T, block_q4_K> && !std::is_same_v<T, block_q5_K> &&
-           !std::is_same_v<T, block_q6_K>;
+    return std::is_same_v<T, block_iq4_nl> || std::is_same_v<T, block_iq3_s> || std::is_same_v<T, block_iq4_xs> ||
+           std::is_same_v<T, block_iq3_xxs> || std::is_same_v<T, block_iq2_xxs> || std::is_same_v<T, block_iq2_xs> ||
+           std::is_same_v<T, block_iq2_s> || std::is_same_v<T, block_iq1_s> || std::is_same_v<T, block_iq1_m>;
 }
 
 template <typename T, bool R> struct fg_tag {
@@ -1055,7 +1238,7 @@ template <typename T, typename F> static bool fg_visit_layout(bool reordered, F 
         f(fg_tag<T, false>{});
         return true;
     }
-    if constexpr (fg_soa<T>::supported) {
+    if constexpr (fg_reorder_layout<T>()) {
         f(fg_tag<T, true>{});
         return true;
     }
@@ -1079,6 +1262,16 @@ template <typename F> static bool fg_visit_type(ggml_type type, bool reordered, 
         case GGML_TYPE_Q4_K:    return fg_visit_layout<block_q4_K>(reordered, f);
         case GGML_TYPE_Q5_K:    return fg_visit_layout<block_q5_K>(reordered, f);
         case GGML_TYPE_Q6_K:    return fg_visit_layout<block_q6_K>(reordered, f);
+        case GGML_TYPE_Q4_0:    return fg_visit_layout<block_q4_0>(reordered, f);
+        case GGML_TYPE_Q4_1:    return fg_visit_layout<block_q4_1>(reordered, f);
+        case GGML_TYPE_Q5_0:    return fg_visit_layout<block_q5_0>(reordered, f);
+        case GGML_TYPE_Q5_1:    return fg_visit_layout<block_q5_1>(reordered, f);
+        case GGML_TYPE_Q1_0:    return fg_visit_layout<block_q1_0>(reordered, f);
+        case GGML_TYPE_Q2_0:    return fg_visit_layout<block_q2_0>(reordered, f);
+        case GGML_TYPE_MXFP4:   return fg_visit_layout<block_mxfp4>(reordered, f);
+        case GGML_TYPE_NVFP4:   return fg_visit_layout<block_nvfp4>(reordered, f);
+        case GGML_TYPE_F16:     return fg_visit_layout<sycl::half>(reordered, f);
+        case GGML_TYPE_BF16:    return fg_visit_layout<sycl::ext::oneapi::bfloat16>(reordered, f);
         default:                return false;
     }
 }
@@ -1157,7 +1350,7 @@ bool ggml_sycl_fused_dequant_gemm(ggml_type src0_type, bool src0_reordered, cons
     // every BN columns dequantize A again, so wide N is left to the library GEMM.
     // src0_reordered: the persistent weight reorder may have been installed on this
     // tensor by an earlier small-batch mul_mat; the A stage then has to decode the
-    // SoA layout. Types without an SoA stage (fg_soa<T>::supported == false)
+    // SoA layout. Types whose reorder is not their layout table (fg_reorder_layout)
     // decline via fg_visit_layout and the caller falls through to the
     // reorder-aware conversion route.
     bool plain_ok = false;
