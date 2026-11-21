@@ -1497,6 +1497,11 @@ static webgpu_encoded_op ggml_webgpu_ssm_scan(webgpu_context & ctx,
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x, wg_y);
 }
 
+// storage buffers of the gated delta net shader: q, k, v, g, beta, state and dst, the fused cache, then the replay inputs
+static uint32_t ggml_webgpu_gated_delta_net_n_storage_buffers(const ggml_tensor * op, bool fused_cache) {
+    return 7 + (fused_cache ? 1 : 0) + (op->src[6] != nullptr ? 4 : 0);
+}
+
 static webgpu_encoded_op ggml_webgpu_gated_delta_net(webgpu_context & ctx,
                                                      ggml_tensor *    src0,
                                                      ggml_tensor *    src1,
@@ -3757,7 +3762,9 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_encode(webgpu_context ctx,
             return ggml_webgpu_ssm_scan(ctx, src0, src1, src2, node->src[3], node->src[4], node->src[5], node->src[6],
                                         node);
         case GGML_OP_GATED_DELTA_NET:
-            if (ggml_webgpu_can_fuse_gdn_cache(cgraph, node_idx, num_encoded_ops)) {
+            if (ggml_webgpu_gated_delta_net_n_storage_buffers(node, true) <=
+                    ctx->global_ctx->capabilities.limits.maxStorageBuffersPerShaderStage &&
+                ggml_webgpu_can_fuse_gdn_cache(cgraph, node_idx, num_encoded_ops)) {
                 ggml_tensor * dst_fuse = cgraph->nodes[node_idx + num_encoded_ops - 1]->src[1];
                 return ggml_webgpu_gated_delta_net(ctx, src0, src1, src2, node->src[3], node->src[4], node->src[5],
                                                    node, dst_fuse);
@@ -5298,7 +5305,9 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                               src2->type == GGML_TYPE_F32 && op->src[3]->type == GGML_TYPE_F32 &&
                               op->src[4]->type == GGML_TYPE_F32 && op->src[5]->type == GGML_TYPE_F32 &&
                               s_v <= ctx->webgpu_global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup &&
-                              ggml_are_same_stride(src0, src1);
+                              ggml_are_same_stride(src0, src1) &&
+                              ggml_webgpu_gated_delta_net_n_storage_buffers(op, false) <=
+                                  ctx->webgpu_global_ctx->capabilities.limits.maxStorageBuffersPerShaderStage;
             }
             break;
         case GGML_OP_CLAMP:
