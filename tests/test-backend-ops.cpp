@@ -12176,6 +12176,57 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
         test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1025, 17, 2048, {1, 1}, {1, 1}));
     }
+    // Q4_K small-column matmul: partial tiles and dispatch boundaries
+    for (int64_t n : {8, 9, 10, 11, 12, 13, 23, 24, 25}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 127, n, 2048, {1, 1}, {1, 1}));
+    }
+    for (int64_t m : {1023, 1024, 1025}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, m, 17, 2048, {1, 1}, {1, 1}));
+    }
+    for (int64_t k : {1792, 2304}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 127, 9, k, {1, 1}, {1, 1}));
+    }
+    test_cases.emplace_back(new test_mul_mat_pos(GGML_TYPE_Q4_K, GGML_TYPE_F32, 127, 11, 2048, {1, 1}, {1, 1}));
+    for (int64_t n : {9, 13, 24}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 127, n, 2048, {1, 1}, {1, 1}));
+    }
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K, GGML_TYPE_F32, 1025, 17, 2048, {1, 1}, {1, 1}));
+    for (int64_t n : {9, 13, 24}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 127, n, 2048, {1, 1}, {1, 1}));
+    }
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 1025, 17, 2048, {1, 1}, {1, 1}));
+    for (int64_t n : {9, 13, 24}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q3_K, GGML_TYPE_F32, 127, n, 2048, {1, 1}, {1, 1}));
+    }
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q3_K, GGML_TYPE_F32, 1025, 17, 2048, {1, 1}, {1, 1}));
+    for (int64_t n : {9, 13, 24}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q5_K, GGML_TYPE_F32, 127, n, 2048, {1, 1}, {1, 1}));
+    }
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q5_K, GGML_TYPE_F32, 1025, 17, 2048, {1, 1}, {1, 1}));
+    for (int64_t n : {9, 13, 24}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ4_NL, GGML_TYPE_F32, 127, n, 2048, {1, 1}, {1, 1}));
+    }
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ4_NL, GGML_TYPE_F32, 1025, 17, 2048, {1, 1}, {1, 1}));
+    for (int64_t n : {9, 13, 24}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ4_XS, GGML_TYPE_F32, 127, n, 2048, {1, 1}, {1, 1}));
+    }
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ4_XS, GGML_TYPE_F32, 1025, 17, 2048, {1, 1}, {1, 1}));
+    for (int64_t n : {9, 13, 24}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ3_S, GGML_TYPE_F32, 127, n, 2048, {1, 1}, {1, 1}));
+    }
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ3_S, GGML_TYPE_F32, 1025, 17, 2048, {1, 1}, {1, 1}));
+    for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q2_K}) {
+        for (int64_t n : {9, 13, 24}) {
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 127, n, 2048, {1, 1}, {1, 1}));
+        }
+        test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1025, 17, 2048, {1, 1}, {1, 1}));
+    }
+    for (ggml_type type_a : {GGML_TYPE_MXFP4, GGML_TYPE_NVFP4}) {
+        for (int64_t n : {9, 13, 24}) {
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 127, n, 2048, {1, 1}, {1, 1}));
+        }
+        test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1025, 17, 2048, {1, 1}, {1, 1}));
+    }
     // permuted and broadcast src0/src1 for the 2 byte aligned types
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K,  GGML_TYPE_F32, 64, 13, 2304, {2, 3}, {1, 1}, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K,  GGML_TYPE_F32, 63,  5, 2304, {3, 2}, {2, 2}));
