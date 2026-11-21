@@ -20,6 +20,7 @@ from safetensors.torch import save_file
 
 from conversion.base import LazyTorchTensor, gguf
 from conversion.deepseek import DeepseekV2Model
+from conversion.gpt_oss import GptOssModel
 from conversion.inkling2 import Inkling2Model, _E4M3, _E2M1
 from conversion.llama import LlamaModel
 from conversion.nemotron import NemotronHModel
@@ -774,6 +775,64 @@ class TestQwen4ExpPleScale(unittest.TestCase):
                     dtype, data = result[self.TABLE]
                     self.assertEqual(dtype, qtype)
                     np.testing.assert_array_equal(data, values * (0.25 if scaled else 1.))
+
+
+class TestGptOssMxfp4Conversion(unittest.TestCase):
+    def test_expert_shard_order(self):
+        layers = []
+        for layer, (down, gate, up) in enumerate(((0x11, 0x22, 0x33), (0x44, 0x55, 0x77))):
+            prefix = f"model.layers.{layer}.mlp.experts."
+            gate_up = torch.full((2, 4, 1, 16), up, dtype=torch.uint8)
+            gate_up[:, ::2] = gate
+            gate_up_scales = torch.full((2, 4, 1), 126 + layer, dtype=torch.uint8)
+            gate_up_scales[:, ::2] = 128 + layer
+            layers.append({
+                prefix + "down_proj_blocks": torch.full((2, 2, 1, 16), down, dtype=torch.uint8),
+                prefix + "down_proj_scales": torch.full((2, 2, 1), 127 + layer, dtype=torch.uint8),
+                prefix + "gate_up_proj_blocks": gate_up,
+                prefix + "gate_up_proj_scales": gate_up_scales,
+            })
+        tensors = layers[0] | layers[1]
+        blocks = {name: data for name, data in tensors.items() if name.endswith("_blocks")}
+        scales = {name: data for name, data in tensors.items() if name.endswith("_scales")}
+        expected = {
+            f"blk.{layer}.ffn_{proj}_exps.weight": value
+            for layer, values in enumerate(((0.5, 2.0, 0.75), (4.0, 12.0, 6.0)))
+            for proj, value in zip(("down", "gate", "up"), values)
+        }
+        for layout, shards in (("by_layer", layers), ("blocks_first", (blocks, scales)), ("scales_first", (scales, blocks))):
+            with self.subTest(layout=layout), tempfile.TemporaryDirectory() as directory:
+                actual = self.convert_shards(Path(directory), shards)
+                self.assertEqual(actual.keys(), expected.keys())
+                for name, value in expected.items():
+                    np.testing.assert_array_equal(actual[name], np.full((2, 2, 32), value), err_msg=name)
+
+    def convert_shards(self, path, shards):
+        weight_map = {}
+        for i, shard in enumerate(shards, 1):
+            filename = f"model-{i:05d}-of-{len(shards):05d}.safetensors"
+            save_file(shard, path / filename)
+            weight_map.update(dict.fromkeys(shard, filename))
+        (path / "model.safetensors.index.json").write_text(json.dumps({"weight_map": weight_map}))
+        output = path / "out.gguf"
+        hparams = {
+            "architectures": ["GptOssForCausalLM"],
+            "num_hidden_layers": 2,
+            "quantization_config": {"quant_method": "mxfp4"},
+        }
+        model = GptOssModel(path, gguf.LlamaFileType.MOSTLY_F16, output, hparams=hparams)
+        model.prepare_tensors()
+        writer = model.gguf_writer
+        writer.write_header_to_file(path=output)
+        writer.write_kv_data_to_file()
+        writer.write_tensors_to_file()
+        writer.close()
+
+        result = {}
+        for tensor in gguf.GGUFReader(output).tensors:
+            self.assertEqual(tensor.tensor_type, gguf.GGMLQuantizationType.MXFP4)
+            result[tensor.name] = gguf.dequantize(tensor.data, tensor.tensor_type)
+        return result
 
 
 if __name__ == "__main__":
