@@ -19,7 +19,10 @@ static __global__ void mul_mat_vec_f(
         const int ncols2, const uint3 nchannels_y, const int stride_row, const int stride_col_y2, const int stride_col_dst,
         const uint3 channel_ratio, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
         const uint3 sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst,
-        const int ids_stride) {
+        const int ids_stride, const int nrows) {
+    if ((int) blockIdx.x >= nrows) {
+        return;
+    }
     const T       * GGML_CUDA_RESTRICT x   = x_ptr;
     const float   * GGML_CUDA_RESTRICT y   = y_ptr;
     const int32_t * GGML_CUDA_RESTRICT ids = ids_ptr;
@@ -448,7 +451,14 @@ static void mul_mat_vec_f_switch_fusion(
         const uint3 sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst,
         const dim3 & block_dims, const dim3 & block_nums, const int nbytes_shared, const int ids_stride, const cudaStream_t stream) {
 
-    const ggml_cuda_kernel_launch_params launch_params = {block_nums, block_dims, nbytes_shared, stream};
+    // RDNA4 runs a grid of a multiple of 256 blocks in x about twice as slow (e.g. 17 vs 8 us for a 1024 x 2304 BF16
+    // matrix on an R9700), two idle blocks avoid it; the idle blocks return at the start of the kernel
+    const int nrows = block_nums.x;
+    dim3 grid = block_nums;
+    if (nrows % 256 == 0 && GGML_CUDA_CC_IS_RDNA4(ggml_cuda_info().devices[ggml_cuda_get_device()].cc)) {
+        grid.x += 2;
+    }
+    const ggml_cuda_kernel_launch_params launch_params = {grid, block_dims, nbytes_shared, stream};
 
     const bool has_fusion = fusion.gate != nullptr || fusion.x_bias != nullptr || fusion.gate_bias != nullptr ||
         fusion.x_scale != nullptr || fusion.gate_scale != nullptr;
@@ -457,7 +467,7 @@ static void mul_mat_vec_f_switch_fusion(
             ggml_cuda_kernel_launch(mul_mat_vec_f<T, type_acc, ncols_dst, block_size, true, is_multi_token_id>, launch_params,
                 x, y, ids, fusion, dst, ncols, nchannels_y, stride_row, stride_col_y, stride_col_dst,
                 channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride);
+                sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, nrows);
             return;
        }
     }
@@ -467,7 +477,7 @@ static void mul_mat_vec_f_switch_fusion(
     ggml_cuda_kernel_launch(mul_mat_vec_f<T, type_acc, ncols_dst, block_size, false, is_multi_token_id>, launch_params,
         x, y, ids, fusion, dst, ncols, nchannels_y, stride_row, stride_col_y, stride_col_dst,
         channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-        sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride);
+        sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, nrows);
 
 }
 
