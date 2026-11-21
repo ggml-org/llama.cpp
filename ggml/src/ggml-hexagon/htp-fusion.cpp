@@ -449,6 +449,97 @@ static bool fuse_repeat_get_rows(const ggml_hexagon_session * sess, htp_opnode &
     return true;
 }
 
+static inline bool htp_is_scale_bias_unary(uint32_t opcode) {
+    switch (opcode) {
+        case HTP_OP_UNARY_EXP:
+        case HTP_OP_UNARY_SIGMOID:
+        case HTP_OP_UNARY_SILU:
+        case HTP_OP_UNARY_GELU:
+        case HTP_OP_UNARY_GELU_QUICK:
+        case HTP_OP_UNARY_GELU_ERF:
+        case HTP_OP_UNARY_SOFTPLUS:
+        case HTP_OP_UNARY_TANH:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool fuse_scale_unary(const ggml_hexagon_session * sess, htp_opnode & prev, const htp_opnode & cur) {
+    if (prev.opcode != HTP_OP_SCALE || !prev.fused.empty() || !htp_is_scale_bias_unary(cur.opcode)) return false;
+    if (cur.kparams<htp_unary_kernel_params>()->has_scale_bias) return false;
+    if (!htp_match_consumer(prev, cur, /*commutative=*/ false)) return false;
+
+    const ggml_tensor * src0 = prev.src0();
+    const ggml_tensor * dst  = cur.dst();
+    if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+        dst->type != src0->type || !htp_same_shape_and_contiguity(prev.dst(), dst)) {
+        return false;
+    }
+    if (htp_inputs_overlap_unsafe(prev, dst)) return false;
+
+    float in_scale = 0.0f;
+    float in_bias  = 0.0f;
+    memcpy(&in_scale, (const float *) prev.params + 0, sizeof(float));
+    memcpy(&in_bias,  (const float *) prev.params + 1, sizeof(float));
+
+    htp_opnode cand = prev;
+    cand.opcode  = cur.opcode;
+    cand.outputs = { dst };
+    memcpy(cand.params, cur.params, sizeof(cand.params));
+
+    auto * kp          = cand.kparams<htp_unary_kernel_params>();
+    kp->has_scale_bias = 1;
+    kp->in_scale       = in_scale;
+    kp->in_bias        = in_bias;
+    kp->out_scale      = 1.0f;
+    kp->out_bias       = 0.0f;
+    if (!htp_kparams_solve(sess, cand)) return false;
+
+    prev = std::move(cand);
+    prev.fused.push_back(cur.node);
+    return true;
+}
+
+static bool fuse_unary_scale(const ggml_hexagon_session * sess, htp_opnode & prev, const htp_opnode & cur) {
+    if (!htp_is_scale_bias_unary(prev.opcode) || prev.fused.size() >= HTP_OP_MAX_FUSED) return false;
+    if (!htp_match_consumer(prev, cur, /*commutative=*/ false)) return false;
+
+    const ggml_tensor * src0 = prev.src0();
+    const ggml_tensor * dst  = cur.dst();
+    if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+        dst->type != src0->type || !htp_same_shape_and_contiguity(prev.dst(), dst)) {
+        return false;
+    }
+    if (htp_inputs_overlap_unsafe(prev, dst)) return false;
+
+    float s_out = 0.0f;
+    float b_out = 0.0f;
+    memcpy(&s_out, (const float *) cur.params + 0, sizeof(float));
+    memcpy(&b_out, (const float *) cur.params + 1, sizeof(float));
+
+    const auto * prev_kp  = prev.kparams<htp_unary_kernel_params>();
+    const float in_scale  = prev_kp->has_scale_bias ? prev_kp->in_scale  : 1.0f;
+    const float in_bias   = prev_kp->has_scale_bias ? prev_kp->in_bias   : 0.0f;
+    const float out_scale = (prev_kp->has_scale_bias ? prev_kp->out_scale : 1.0f) * s_out;
+    const float out_bias  = (prev_kp->has_scale_bias ? prev_kp->out_bias  : 0.0f) * s_out + b_out;
+
+    htp_opnode cand = prev;
+    cand.outputs = { dst };
+
+    auto * kp          = cand.kparams<htp_unary_kernel_params>();
+    kp->has_scale_bias = 1;
+    kp->in_scale       = in_scale;
+    kp->in_bias        = in_bias;
+    kp->out_scale      = out_scale;
+    kp->out_bias       = out_bias;
+    if (!htp_kparams_solve(sess, cand)) return false;
+
+    prev = std::move(cand);
+    prev.fused.push_back(cur.node);
+    return true;
+}
+
 static bool fuse_unary_mul_glu(const ggml_hexagon_session * sess, htp_opnode & prev, const htp_opnode & cur) {
     htp_op_code glu_op = HTP_OP_INVALID;
     switch (prev.opcode) {
@@ -460,6 +551,7 @@ static bool fuse_unary_mul_glu(const ggml_hexagon_session * sess, htp_opnode & p
         case HTP_OP_UNARY_SIGMOID:    glu_op = HTP_OP_GLU_SIGMOID;     break;
         default: return false;
     }
+    if (prev.kparams<htp_unary_kernel_params>()->has_scale_bias) return false;
 
     const ggml_tensor * up = nullptr;
     if (!htp_match_consumer(prev, cur, /*commutative=*/ true, &up)) return false;
@@ -692,9 +784,19 @@ bool htp_fusion_try_fuse(const struct ggml_hexagon_session * sess, struct htp_op
         case HTP_OP_DIV:
             return htp_fusion_enabled(HTP_FUSE_BINARY_NX) && fuse_binary_nx(sess, prev, cur);
         case HTP_OP_SCALE:
-            return htp_fusion_enabled(HTP_FUSE_RMS_NORM_SCALE) && fuse_rms_norm_scale(sess, prev, cur);
+            return (htp_fusion_enabled(HTP_FUSE_RMS_NORM_SCALE) && fuse_rms_norm_scale(sess, prev, cur)) ||
+                   (htp_fusion_enabled(HTP_FUSE_UNARY_SCALE)    && fuse_unary_scale(sess, prev, cur));
         case HTP_OP_UNARY_SILU:
-            return htp_fusion_enabled(HTP_FUSE_SSM_CONV_SILU) && fuse_ssm_conv_silu(sess, prev, cur);
+            return (htp_fusion_enabled(HTP_FUSE_SSM_CONV_SILU) && fuse_ssm_conv_silu(sess, prev, cur)) ||
+                   (htp_fusion_enabled(HTP_FUSE_UNARY_SCALE)   && fuse_scale_unary(sess, prev, cur));
+        case HTP_OP_UNARY_EXP:
+        case HTP_OP_UNARY_SIGMOID:
+        case HTP_OP_UNARY_GELU:
+        case HTP_OP_UNARY_GELU_QUICK:
+        case HTP_OP_UNARY_GELU_ERF:
+        case HTP_OP_UNARY_SOFTPLUS:
+        case HTP_OP_UNARY_TANH:
+            return htp_fusion_enabled(HTP_FUSE_UNARY_SCALE) && fuse_scale_unary(sess, prev, cur);
         case HTP_OP_GET_ROWS:
             return htp_fusion_enabled(HTP_FUSE_REPEAT_GET_ROWS) && fuse_repeat_get_rows(sess, prev, cur);
         case HTP_OP_CPY:

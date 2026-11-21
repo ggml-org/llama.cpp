@@ -19,6 +19,12 @@ struct htp_unary_kernel_params {
     uint32_t  vtcm_size;
     uint32_t  tiles_per_row;
 
+    uint32_t  has_scale_bias;
+    float     in_scale;
+    float     in_bias;
+    float     out_scale;
+    float     out_bias;
+
     // Fastdiv helpers
     struct fastdiv_values div_ne01;
     struct fastdiv_values div_ne02;

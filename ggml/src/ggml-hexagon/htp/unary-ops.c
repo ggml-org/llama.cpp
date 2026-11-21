@@ -2250,6 +2250,95 @@ static void tanh_f16(const void * restrict src,
     }
 }
 
+static inline HVX_Vector hvx_vec_exp_clamped_f32(HVX_Vector x) {
+    return hvx_vec_exp_f32(Q6_Vsf_vmin_VsfVsf(x, hvx_vec_splat_f32(88.0f)));
+}
+
+#define DEFINE_UNARY_SCALE_BIAS_FNS(NAME, VEC_FN)                                                                      \
+    static __attribute__((noinline)) HVX_Vector unary_vec_##NAME##_scale_bias_f32(                                     \
+        HVX_Vector x,                                                                                                  \
+        HVX_Vector v_in_s,                                                                                             \
+        HVX_Vector v_in_b,                                                                                             \
+        HVX_Vector v_out_s,                                                                                            \
+        HVX_Vector v_out_b                                                                                             \
+    ) {                                                                                                                \
+        HVX_Vector u = hvx_vec_add_f32_f32(hvx_vec_mul_f32_f32(x, v_in_s), v_in_b);                                    \
+        HVX_Vector y = VEC_FN(u);                                                                                      \
+        return hvx_vec_add_f32_f32(hvx_vec_mul_f32_f32(y, v_out_s), v_out_b);                                          \
+    }                                                                                                                  \
+    static void NAME##_scale_bias_f32(const void * restrict src,                                                       \
+                                      void * restrict dst,                                                             \
+                                      const uint32_t num_rows,                                                         \
+                                      const uint32_t ne0,                                                              \
+                                      const struct htp_unary_context * uctx) {                                         \
+        const struct htp_unary_kernel_params * kp = uctx->kparams;                                                     \
+        const size_t src0_row_size_aligned = uctx->src0_row_size_aligned;                                              \
+        const size_t dst_row_size_aligned  = uctx->dst_row_size_aligned;                                               \
+        const HVX_Vector v_in_s  = hvx_vec_splat_f32(kp->in_scale);                                                    \
+        const HVX_Vector v_in_b  = hvx_vec_splat_f32(kp->in_bias);                                                     \
+        const HVX_Vector v_out_s = hvx_vec_splat_f32(kp->out_scale);                                                   \
+        const HVX_Vector v_out_b = hvx_vec_splat_f32(kp->out_bias);                                                    \
+        const uint32_t nvec = ne0 / VLEN_FP32;                                                                         \
+        const uint32_t nloe = ne0 % VLEN_FP32;                                                                         \
+        for (uint32_t ir = 0; ir < num_rows; ir++) {                                                                   \
+            const HVX_Vector * restrict vsrc =                                                                         \
+                    (const HVX_Vector *) ((const uint8_t *) src + ir * src0_row_size_aligned);                         \
+            HVX_Vector * restrict       vdst = (HVX_Vector *) ((uint8_t *) dst + ir * dst_row_size_aligned);           \
+            for (uint32_t i = 0; i < nvec; i++) {                                                                      \
+                vdst[i] = unary_vec_##NAME##_scale_bias_f32(vsrc[i], v_in_s, v_in_b, v_out_s, v_out_b);                \
+            }                                                                                                          \
+            if (nloe) {                                                                                                \
+                hvx_vec_store_a(&vdst[nvec], nloe * sizeof(float),                                                     \
+                                unary_vec_##NAME##_scale_bias_f32(vsrc[nvec], v_in_s, v_in_b, v_out_s, v_out_b));      \
+            }                                                                                                          \
+        }                                                                                                              \
+    }                                                                                                                  \
+    static void NAME##_scale_bias_f16(const void * restrict src,                                                       \
+                                      void * restrict dst,                                                             \
+                                      const uint32_t num_rows,                                                         \
+                                      const uint32_t ne0,                                                              \
+                                      const struct htp_unary_context * uctx) {                                         \
+        const struct htp_unary_kernel_params * kp = uctx->kparams;                                                     \
+        const size_t src0_row_size_aligned = uctx->src0_row_size_aligned;                                              \
+        const size_t dst_row_size_aligned  = uctx->dst_row_size_aligned;                                               \
+        const HVX_Vector v_in_s  = hvx_vec_splat_f32(kp->in_scale);                                                    \
+        const HVX_Vector v_in_b  = hvx_vec_splat_f32(kp->in_bias);                                                     \
+        const HVX_Vector v_out_s = hvx_vec_splat_f32(kp->out_scale);                                                   \
+        const HVX_Vector v_out_b = hvx_vec_splat_f32(kp->out_bias);                                                    \
+        const uint32_t nvec = ne0 / VLEN_FP16;                                                                         \
+        const uint32_t nloe = ne0 % VLEN_FP16;                                                                         \
+        for (uint32_t ir = 0; ir < num_rows; ir++) {                                                                   \
+            const HVX_Vector * restrict vsrc =                                                                         \
+                    (const HVX_Vector *) ((const uint8_t *) src + ir * src0_row_size_aligned);                         \
+            HVX_Vector * restrict       vdst = (HVX_Vector *) ((uint8_t *) dst + ir * dst_row_size_aligned);           \
+            for (uint32_t i = 0; i < nvec; i++) {                                                                      \
+                HVX_VectorPair f32p = hvx_vec_f16_to_f32(vsrc[i]);                                                     \
+                HVX_Vector lo = hvx_vec_clamp_f16_f32(                                                                 \
+                    unary_vec_##NAME##_scale_bias_f32(Q6_V_lo_W(f32p), v_in_s, v_in_b, v_out_s, v_out_b));             \
+                HVX_Vector hi = hvx_vec_clamp_f16_f32(                                                                 \
+                    unary_vec_##NAME##_scale_bias_f32(Q6_V_hi_W(f32p), v_in_s, v_in_b, v_out_s, v_out_b));             \
+                vdst[i] = hvx_vec_f32_to_f16(lo, hi);                                                                  \
+            }                                                                                                          \
+            if (nloe) {                                                                                                \
+                HVX_VectorPair f32p = hvx_vec_f16_to_f32(vsrc[nvec]);                                                  \
+                HVX_Vector lo = hvx_vec_clamp_f16_f32(                                                                 \
+                    unary_vec_##NAME##_scale_bias_f32(Q6_V_lo_W(f32p), v_in_s, v_in_b, v_out_s, v_out_b));             \
+                HVX_Vector hi = hvx_vec_clamp_f16_f32(                                                                 \
+                    unary_vec_##NAME##_scale_bias_f32(Q6_V_hi_W(f32p), v_in_s, v_in_b, v_out_s, v_out_b));             \
+                hvx_vec_store_a(&vdst[nvec], nloe * sizeof(_Float16), hvx_vec_f32_to_f16(lo, hi));                     \
+            }                                                                                                          \
+        }                                                                                                              \
+    }
+
+DEFINE_UNARY_SCALE_BIAS_FNS(exp,        hvx_vec_exp_clamped_f32)
+DEFINE_UNARY_SCALE_BIAS_FNS(sigmoid,    hvx_vec_sigmoid_f32)
+DEFINE_UNARY_SCALE_BIAS_FNS(silu,       hvx_vec_silu_f32)
+DEFINE_UNARY_SCALE_BIAS_FNS(gelu,       hvx_vec_gelu_f32_inline)
+DEFINE_UNARY_SCALE_BIAS_FNS(gelu_quick, hvx_vec_gelu_quick_f32_inline)
+DEFINE_UNARY_SCALE_BIAS_FNS(gelu_erf,   hvx_vec_gelu_erf_f32)
+DEFINE_UNARY_SCALE_BIAS_FNS(softplus,   hvx_vec_softplus_f32_inline)
+DEFINE_UNARY_SCALE_BIAS_FNS(tanh,       hvx_vec_tanh_f32)
+
 static void abs_f32(const void * restrict src,
                     void * restrict dst,
                     const uint32_t num_rows,
@@ -3572,6 +3661,8 @@ static int execute_op_unary(struct htp_ops_context * octx) {
             break;
     }
 
+    const bool has_scale_bias = (kparams->has_scale_bias != 0);
+
     if (!compute_func && is_f16) {
         switch (octx->op) {
             case HTP_OP_NORM:             compute_func = (void *) norm_f16;        break;
@@ -3581,14 +3672,14 @@ static int execute_op_unary(struct htp_ops_context * octx) {
             case HTP_OP_SQR:              compute_func = (void *) sqr_f16;         break;
             case HTP_OP_SQRT:             compute_func = (void *) sqrt_f16;        break;
             case HTP_OP_UNARY_NEG:        compute_func = (void *) neg_f16;         break;
-            case HTP_OP_UNARY_EXP:        compute_func = (void *) exp_f16;         break;
-            case HTP_OP_UNARY_SIGMOID:    compute_func = (void *) sigmoid_f16;     break;
-            case HTP_OP_UNARY_SILU:       compute_func = (void *) silu_f16;        break;
-            case HTP_OP_UNARY_GELU:       compute_func = (void *) gelu_f16;        break;
-            case HTP_OP_UNARY_GELU_QUICK: compute_func = (void *) gelu_quick_f16;  break;
-            case HTP_OP_UNARY_GELU_ERF:   compute_func = (void *) gelu_erf_f16;    break;
-            case HTP_OP_UNARY_SOFTPLUS:   compute_func = (void *) softplus_f16;    break;
-            case HTP_OP_UNARY_TANH:       compute_func = (void *) tanh_f16;        break;
+            case HTP_OP_UNARY_EXP:        compute_func = (void *) (has_scale_bias ? exp_scale_bias_f16        : exp_f16);        break;
+            case HTP_OP_UNARY_SIGMOID:    compute_func = (void *) (has_scale_bias ? sigmoid_scale_bias_f16    : sigmoid_f16);    break;
+            case HTP_OP_UNARY_SILU:       compute_func = (void *) (has_scale_bias ? silu_scale_bias_f16       : silu_f16);       break;
+            case HTP_OP_UNARY_GELU:       compute_func = (void *) (has_scale_bias ? gelu_scale_bias_f16       : gelu_f16);       break;
+            case HTP_OP_UNARY_GELU_QUICK: compute_func = (void *) (has_scale_bias ? gelu_quick_scale_bias_f16 : gelu_quick_f16); break;
+            case HTP_OP_UNARY_GELU_ERF:   compute_func = (void *) (has_scale_bias ? gelu_erf_scale_bias_f16   : gelu_erf_f16);   break;
+            case HTP_OP_UNARY_SOFTPLUS:   compute_func = (void *) (has_scale_bias ? softplus_scale_bias_f16   : softplus_f16);   break;
+            case HTP_OP_UNARY_TANH:       compute_func = (void *) (has_scale_bias ? tanh_scale_bias_f16       : tanh_f16);       break;
             case HTP_OP_UNARY_ABS:        compute_func = (void *) abs_f16;         break;
             case HTP_OP_UNARY_LOG:        compute_func = (void *) log_f16;         break;
             case HTP_OP_UNARY_RELU:       compute_func = (void *) relu_f16;        break;
@@ -3608,14 +3699,14 @@ static int execute_op_unary(struct htp_ops_context * octx) {
             case HTP_OP_SQR:              compute_func = (void *) sqr_f32;         break;
             case HTP_OP_SQRT:             compute_func = (void *) sqrt_f32;        break;
             case HTP_OP_UNARY_NEG:        compute_func = (void *) neg_f32;         break;
-            case HTP_OP_UNARY_EXP:        compute_func = (void *) exp_f32;         break;
-            case HTP_OP_UNARY_SIGMOID:    compute_func = (void *) sigmoid_f32;     break;
-            case HTP_OP_UNARY_SILU:       compute_func = (void *) silu_f32;        break;
-            case HTP_OP_UNARY_GELU:       compute_func = (void *) gelu_f32;        break;
-            case HTP_OP_UNARY_GELU_QUICK: compute_func = (void *) gelu_quick_f32;  break;
-            case HTP_OP_UNARY_GELU_ERF:   compute_func = (void *) gelu_erf_f32;    break;
-            case HTP_OP_UNARY_SOFTPLUS:   compute_func = (void *) softplus_f32;    break;
-            case HTP_OP_UNARY_TANH:       compute_func = (void *) tanh_f32;        break;
+            case HTP_OP_UNARY_EXP:        compute_func = (void *) (has_scale_bias ? exp_scale_bias_f32        : exp_f32);        break;
+            case HTP_OP_UNARY_SIGMOID:    compute_func = (void *) (has_scale_bias ? sigmoid_scale_bias_f32    : sigmoid_f32);    break;
+            case HTP_OP_UNARY_SILU:       compute_func = (void *) (has_scale_bias ? silu_scale_bias_f32       : silu_f32);       break;
+            case HTP_OP_UNARY_GELU:       compute_func = (void *) (has_scale_bias ? gelu_scale_bias_f32       : gelu_f32);       break;
+            case HTP_OP_UNARY_GELU_QUICK: compute_func = (void *) (has_scale_bias ? gelu_quick_scale_bias_f32 : gelu_quick_f32); break;
+            case HTP_OP_UNARY_GELU_ERF:   compute_func = (void *) (has_scale_bias ? gelu_erf_scale_bias_f32   : gelu_erf_f32);   break;
+            case HTP_OP_UNARY_SOFTPLUS:   compute_func = (void *) (has_scale_bias ? softplus_scale_bias_f32   : softplus_f32);   break;
+            case HTP_OP_UNARY_TANH:       compute_func = (void *) (has_scale_bias ? tanh_scale_bias_f32       : tanh_f32);       break;
             case HTP_OP_UNARY_ABS:        compute_func = (void *) abs_f32;         break;
             case HTP_OP_UNARY_LOG:        compute_func = (void *) log_f32;         break;
             case HTP_OP_UNARY_RELU:       compute_func = (void *) relu_f32;        break;

@@ -5338,8 +5338,22 @@ bool htp_kparams_solve(
     };
 
     if (htp_op_is_unary(tmp.opcode)) {
+        auto * kp = tmp.kparams<htp_unary_kernel_params>();
+        const uint32_t has_scale_bias = kp->has_scale_bias;
+        const float    in_scale       = kp->in_scale;
+        const float    in_bias        = kp->in_bias;
+        const float    out_scale      = kp->out_scale;
+        const float    out_bias       = kp->out_bias;
         const ggml_tensor * src2 = tmp.inputs.size() > 2 ? tmp.inputs[2] : nullptr;
-        return commit(htp_kparams_solve_unary_impl(sess, tmp.opcode, src0, src1, src2, dst, tmp.kparams<htp_unary_kernel_params>()));
+        const bool ok = htp_kparams_solve_unary_impl(sess, tmp.opcode, src0, src1, src2, dst, kp);
+        if (has_scale_bias) {
+            kp->has_scale_bias = has_scale_bias;
+            kp->in_scale       = in_scale;
+            kp->in_bias        = in_bias;
+            kp->out_scale      = out_scale;
+            kp->out_bias       = out_bias;
+        }
+        return commit(ok);
     }
     if (htp_op_is_glu(tmp.opcode)) {
         return commit(htp_kparams_solve_unary_mul_glu(sess, tmp.opcode, src0, src1, dst, tmp.kparams<htp_glu_kernel_params>()));

@@ -4625,6 +4625,83 @@ struct test_add_unary_mul : public test_case {
     }
 };
 
+struct test_unary_scale_fusion : public test_case {
+    const ggml_unary_op op;
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+    const float in_scale;
+    const float in_bias;
+    const float out_scale;
+    const float out_bias;
+    const std::string mode_str;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "UNARY_SCALE_FUSION";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_nmse_err() override {
+        return (type == GGML_TYPE_F16 || mode_str == "lower") ? 5e-5 : 1e-6;
+    }
+
+    std::string vars() override {
+        std::string op_name = ggml_unary_op_name(op);
+        return VARS_TO_STR8(op_name, type, ne, in_scale, in_bias, out_scale, out_bias, mode_str);
+    }
+
+    test_unary_scale_fusion(
+            ggml_unary_op op,
+            ggml_type type,
+            std::array<int64_t, 4> ne,
+            float in_scale,
+            float in_bias,
+            float out_scale,
+            float out_bias,
+            std::string mode_str = "pre_post")
+        : op(op), type(type), ne(ne),
+          in_scale(in_scale), in_bias(in_bias),
+          out_scale(out_scale), out_bias(out_bias),
+          mode_str(std::move(mode_str)) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = (mode_str == "lower")
+            ? ggml_new_tensor_4d(ctx, type, ne[0], 1, 1, 1)
+            : ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_name(a, "a");
+
+        ggml_tensor * cur = a;
+        if (mode_str == "lower") {
+            ggml_tensor * b_shape = ggml_new_tensor(ctx, type, 4, ne.data());
+            ggml_set_name(b_shape, "b_shape");
+            cur = ggml_repeat(ctx, cur, b_shape);
+            ggml_set_name(cur, "rep");
+        }
+        if (mode_str == "pre" || mode_str == "pre_post" || mode_str == "lower" || mode_str == "glu_guard") {
+            cur = (in_bias != 0.0f) ? ggml_scale_bias(ctx, cur, in_scale, in_bias) : ggml_scale(ctx, cur, in_scale);
+            ggml_set_name(cur, "scale_in");
+        }
+        cur = ggml_unary(ctx, cur, op);
+        ggml_set_name(cur, "unary");
+        if (mode_str == "post" || mode_str == "pre_post" || mode_str == "lower") {
+            cur = (out_bias != 0.0f) ? ggml_scale_bias(ctx, cur, out_scale, out_bias) : ggml_scale(ctx, cur, out_scale);
+            ggml_set_name(cur, "scale_out");
+        }
+        if (mode_str == "glu_guard") {
+            ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne.data());
+            ggml_set_name(b, "b");
+            cur = ggml_mul(ctx, cur, b);
+        } else if (mode_str == "lower") {
+            ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne.data());
+            ggml_set_name(b, "b");
+            cur = ggml_add(ctx, cur, b);
+        }
+        ggml_set_name(cur, "out");
+        return cur;
+    }
+};
+
 // SNAKE activation fusion: y = x + sin(a*x)^2 * inv_b
 // CUDA backend matches the naive 5-op chain (mul, sin, sqr, mul, add)
 // and dispatches a single fused kernel.
@@ -11044,6 +11121,25 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
     // a unary op with no fused kernel must fall back to the three-op chain
     test_cases.emplace_back(new test_add_unary_mul(GGML_UNARY_OP_GELU, GGML_TYPE_F32, { 32, 7, 1, 1 }));
+
+    // fused [SCALE ->] UNARY [-> SCALE] chains
+    for (ggml_type type : { GGML_TYPE_F32, GGML_TYPE_F16 }) {
+        test_cases.emplace_back(new test_unary_scale_fusion(GGML_UNARY_OP_EXP,        type, { 256, 16, 1, 1 }, -0.5f, 0.0f, 2.0f, 0.0f, "pre_post"));
+        test_cases.emplace_back(new test_unary_scale_fusion(GGML_UNARY_OP_SIGMOID,    type, { 256, 16, 1, 1 }, 0.25f, 0.0f, 2.0f, 0.0f, "pre_post"));
+        test_cases.emplace_back(new test_unary_scale_fusion(GGML_UNARY_OP_SIGMOID,    type, { 133,  7, 1, 1 }, 0.25f, 0.0f, 2.0f, 0.0f, "pre_post"));
+        test_cases.emplace_back(new test_unary_scale_fusion(GGML_UNARY_OP_SILU,       type, { 256, 16, 1, 1 }, 0.25f, 0.0f, 1.0f, 0.0f, "pre"));
+        test_cases.emplace_back(new test_unary_scale_fusion(GGML_UNARY_OP_SIGMOID,    type, { 256, 16, 1, 1 }, 1.0f,  0.0f, 1.0f, 1e-4f, "post"));
+        test_cases.emplace_back(new test_unary_scale_fusion(GGML_UNARY_OP_GELU,       type, { 256, 16, 1, 1 }, 0.5f,  0.1f, 1.5f, -0.1f, "pre_post"));
+        test_cases.emplace_back(new test_unary_scale_fusion(GGML_UNARY_OP_GELU_QUICK, type, { 256, 16, 1, 1 }, 0.5f,  0.1f, 1.5f, -0.1f, "pre_post"));
+        test_cases.emplace_back(new test_unary_scale_fusion(GGML_UNARY_OP_GELU_ERF,   type, { 256, 16, 1, 1 }, 0.5f,  0.1f, 1.5f, -0.1f, "pre_post"));
+        test_cases.emplace_back(new test_unary_scale_fusion(GGML_UNARY_OP_SOFTPLUS,   type, { 256, 16, 1, 1 }, 0.69314718f, 0.0f, 1.44269504f, 0.0f, "pre_post"));
+        test_cases.emplace_back(new test_unary_scale_fusion(GGML_UNARY_OP_TANH,       type, { 256, 16, 1, 1 }, 1.0f / 30.0f, 0.0f, 30.0f, 0.0f, "pre_post"));
+        test_cases.emplace_back(new test_unary_scale_fusion(GGML_UNARY_OP_TANH,       type, { 32768, 2, 1, 1 }, 1.0f / 30.0f, 0.0f, 30.0f, 0.0f, "pre_post"));
+        test_cases.emplace_back(new test_unary_scale_fusion(GGML_UNARY_OP_TANH,       type, { 100032, 8, 1, 1 }, 1.0f / 30.0f, 0.0f, 30.0f, 0.0f, "pre_post"));
+        test_cases.emplace_back(new test_unary_scale_fusion(GGML_UNARY_OP_SILU,       type, { 256, 16, 1, 1 }, 0.25f, 0.0f, 1.0f, 0.0f, "glu_guard"));
+        test_cases.emplace_back(new test_unary_scale_fusion(GGML_UNARY_OP_GELU,       type, { 256, 16, 1, 1 }, 0.25f, 0.0f, 1.0f, 0.0f, "glu_guard"));
+    }
+    test_cases.emplace_back(new test_unary_scale_fusion(GGML_UNARY_OP_SIGMOID, GGML_TYPE_F32, { 256, 16, 1, 1 }, 0.25f, 0.0f, 2.0f, 0.0f, "lower"));
 
     // SNAKE activation fusion: x + sin(a*x)^2 * inv_b
     for (ggml_type type : { GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16 }) {
