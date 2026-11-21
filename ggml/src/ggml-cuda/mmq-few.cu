@@ -1366,7 +1366,7 @@ bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * 
         return false;
     }
     if (mmq_few_use_wmma(cc)) {
-        if (src1->ne[1] > mmq_few_wmma_ncols_range(src0->type, cc).y) {
+        if (src1->ne[1] > mmq_few_wmma_ncols_range(src0->type, cc).y || src0->ne[0] % QK_K != 0) {
             return false;
         }
         // the decoders read whole 4 byte values from 16 byte aligned units, Q6_K values 2 bytes at a time
