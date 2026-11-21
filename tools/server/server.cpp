@@ -363,65 +363,44 @@ static bool server_on_listening(server_http_context & ctx_http, const common_par
     return true;
 }
 
-//
-// download worker: a child of the router that pulls a model into the cache and reports the progress
-//
-
-struct server_download_state : public common_download_callback {
-    server_role * role;
+// throttled download progress, shared by the download worker and single-model mode
+struct server_download_progress : public common_download_callback {
+    // called under the lock, the files are downloaded in parallel threads
+    std::function<void(const common_download_progress &)> on_progress;
     std::function<bool()> should_stop;
-    // files download in parallel threads: throttle each file on its own, a shared
-    // timer lets a small, fast file (e.g. a draft) starve the updates of the others
-    std::mutex progress_mutex;
+    // throttle each file on its own, a shared timer lets a small, fast file (e.g. a draft) starve the updates of the others
+    std::mutex mutex;
     std::unordered_map<std::string, int64_t> last_progress_time;
-    bool is_ok = false;
 
-    server_download_state(server_role * r) : role(r) {}
-
-    bool run(common_params & params) {
-        try {
-            common_models_handler handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
-            common_models_handler_apply(handler, params, this);
-            is_ok = true;
-        } catch (const std::exception & e) {
-            auto model_name = params.model.get_name();
-            SRV_ERR("download failed for model name=%s: %s\n", model_name.c_str(), e.what());
-            is_ok = false;
-        }
-        return is_ok;
-    }
-    void on_progress(const common_download_progress & p) {
-        json data = {
-            {"url", p.url},
-            {"downloaded", p.downloaded},
-            {"total", p.total},
-        };
-        role->notify_to_router(server_state_to_str(SERVER_STATE_DOWNLOADING), data);
+    void notify(const common_download_progress & p) {
+        std::lock_guard<std::mutex> lk(mutex);
+        on_progress(p);
     }
     void on_start(const common_download_progress & p) override {
-        on_progress(p);
+        notify(p);
     }
     void on_update(const common_download_progress & p) override {
         int64_t now = ggml_time_ms();
-        // throttle progress updates to avoid flooding logs; the first update of a file
-        // always passes, it carries the file's total size
-        {
-            std::lock_guard<std::mutex> lk(progress_mutex);
-            auto it = last_progress_time.find(p.url);
-            if (it != last_progress_time.end() && now - it->second < 100) {
-                return;
-            }
-            last_progress_time[p.url] = now;
+        // the first update of a file always passes, it carries the file's total size
+        std::lock_guard<std::mutex> lk(mutex);
+        auto it = last_progress_time.find(p.url);
+        if (it != last_progress_time.end() && now - it->second < 100) {
+            return;
         }
+        last_progress_time[p.url] = now;
         on_progress(p);
     }
     void on_done(const common_download_progress & p, bool) override {
-        on_progress(p);
+        notify(p);
     }
     bool is_cancelled() const override {
         return should_stop ? should_stop() : false;
     }
 };
+
+//
+// download worker: a child of the router that pulls a model into the cache and reports the progress
+//
 
 static int server_run_download(common_params & params, server_role & role) {
     auto cancelled = std::make_shared<std::atomic<bool>>(false);
@@ -431,12 +410,27 @@ static int server_run_download(common_params & params, server_role & role) {
         cancelled->store(true, std::memory_order_relaxed);
     });
 
-    server_download_state dl(&role);
+    server_download_progress dl;
+    dl.on_progress = [&role](const common_download_progress & p) {
+        role.notify_to_router(server_state_to_str(SERVER_STATE_DOWNLOADING), {
+            {"url", p.url},
+            {"downloaded", p.downloaded},
+            {"total", p.total},
+        });
+    };
     dl.should_stop = [cancelled]() {
         return cancelled->load(std::memory_order_relaxed);
     };
 
-    bool ok = dl.run(params);
+    bool ok = true;
+    try {
+        common_models_handler handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
+        common_models_handler_apply(handler, params, &dl);
+    } catch (const std::exception & e) {
+        auto model_name = params.model.get_name();
+        SRV_ERR("download failed for model name=%s: %s\n", model_name.c_str(), e.what());
+        ok = false;
+    }
 
     role.notify_to_router(server_state_to_str(SERVER_STATE_DOWNLOADING), {
         {"result", ok ? "download_finished" : "download_failed"},
@@ -638,15 +632,21 @@ static int server_run_router(common_params & params, int argc, char ** argv, con
 //
 
 static int server_run_instance(common_params & params, server_role & role, common_models_handler & models_handler, const server_run_opts & opts) {
-    // -hf / docker: download if needed and resolve the local path. a child resolves what the router downloaded
-    if (opts.resolve_model) {
-        try {
-            common_models_handler_apply(models_handler, params);
-        } catch (const std::exception & e) {
-            SRV_ERR("failed to download model: %s\n", e.what());
-            return 1;
+    // a router child reports its state to the router, a single-model server to its own /models/sse clients
+    const bool managed = role.is_managed_by_router();
+    const std::string model_name = server_get_model_name(params);
+    server_models_sse sse(/* replay_last */ true);
+    std::atomic<bool> sse_stopping = false;
+
+    auto notify = [&](const std::string & event, const json & data = nullptr) {
+        if (!managed) {
+            sse.notify(event, model_name, data);
         }
-    }
+    };
+    auto notify_status = [&](server_model_status status, json data = json::object()) {
+        data["status"] = server_model_status_to_string(status);
+        notify("status_change", data);
+    };
 
     // note: this is guaranteed to out-live ctx_http and tools
     server_mcp mcp_mgr;
@@ -667,37 +667,82 @@ static int server_run_instance(common_params & params, server_role & role, commo
         server_stream_make_get_handler(),
         server_stream_make_lookup_handler(),
         server_stream_make_delete_handler());
+    if (!managed) {
+        ctx_http.get("/models/sse", ex_wrapper(sse.make_handler([&sse_stopping]() {
+            return sse_stopping.load(std::memory_order_relaxed);
+        })));
+    }
 
     if (!server_setup_features(ctx_http, params, mcp_mgr, tools, SERVER_ROLE_INSTANCE)) {
         return 1;
     }
 
     // setup clean up function, to be called before exit
-    auto clean_up = [&ctx_http, &ctx_server, &mcp_mgr]() {
+    auto clean_up = [&ctx_http, &ctx_server, &mcp_mgr, &sse_stopping]() {
         SRV_INF("%s: cleaning up before exit...\n", __func__);
         // stop the session GC first, it finalizes live sessions and wakes pending readers
         server_stream_session_manager_stop();
+        sse_stopping.store(true); // disconnect the SSE clients
         ctx_http.stop();
         ctx_server.terminate();
         mcp_mgr.shutdown();
         llama_backend_free();
     };
 
-    // start the HTTP server before loading the model to be able to serve /health requests
+    // start the HTTP server before downloading and loading the model to be able to serve /health and /models/sse requests
     if (!ctx_http.start()) {
         clean_up();
         SRV_ERR("%s", "exiting due to HTTP server error\n");
         return 1;
     }
 
-    // setup communication child --> router if necessary
-    if (role.is_managed_by_router()) {
-        ctx_server.set_state_callback([&](server_state state, json payload) {
-            role.notify_to_router(server_state_to_str(state), payload);
-        });
+    // -hf / docker: download if needed and resolve the local path. a child resolves what the router downloaded
+    if (opts.resolve_model) {
+        json progress = json::object(); // url -> {done, total}, the same shape as the router sends
+        server_download_progress dl;
+        dl.on_progress = [&](const common_download_progress & p) {
+            if (p.total == 0) {
+                return; // not started yet, or found in the cache
+            }
+            progress[p.url] = {
+                {"done",  p.downloaded},
+                {"total", p.total},
+            };
+            notify("download_progress", {{"progress", progress}});
+        };
+        try {
+            common_models_handler_apply(models_handler, params, managed ? nullptr : &dl);
+            if (!progress.empty()) {
+                notify("download_finished");
+            }
+        } catch (const std::exception & e) {
+            SRV_ERR("failed to download model: %s\n", e.what());
+            notify("download_failed");
+            notify_status(SERVER_MODEL_STATUS_UNLOADED, {{"exit_code", 1}});
+            clean_up();
+            ctx_http.join();
+            return 1;
+        }
     }
 
+    // setup communication child --> router, or to the SSE clients
+    ctx_server.set_state_callback([&](server_state state, json payload) {
+        if (managed) {
+            role.notify_to_router(server_state_to_str(state), payload);
+            return;
+        }
+        switch (state) {
+            case SERVER_STATE_LOADING:  notify_status(SERVER_MODEL_STATUS_LOADING, {{"progress", payload}}); break;
+            case SERVER_STATE_READY:    notify_status(SERVER_MODEL_STATUS_LOADED);                           break; // wakeup from sleeping
+            case SERVER_STATE_SLEEPING: notify_status(SERVER_MODEL_STATUS_SLEEPING);                         break;
+            default:                                                                                         break;
+        }
+    });
+
+    notify_status(SERVER_MODEL_STATUS_LOADING);
+
     if (!ctx_server.load_model(params)) {
+        notify_status(SERVER_MODEL_STATUS_UNLOADED, {{"exit_code", 1}});
         clean_up();
         ctx_http.join();
         SRV_ERR("%s", "exiting due to model loading error\n");
@@ -709,7 +754,22 @@ static int server_run_instance(common_params & params, server_role & role, commo
 
     SRV_INF("%s", "model loaded\n");
 
+    json info = routes.get_model_info();
+    json memory;
+    if (const auto * ll_ctx = ctx_server.get_llama_context()) {
+        memory = server_model_memory(llama_n_ctx(ll_ctx), common_memory_breakdown_rows(ll_ctx)).to_json();
+    }
+
+    {
+        json data = {{"info", info}};
+        if (!memory.is_null()) {
+            data["memory"] = memory;
+        }
+        notify_status(SERVER_MODEL_STATUS_LOADED, data);
+    }
+
     shutdown_handler = [&](int) {
+        sse_stopping.store(true);
         mcp_mgr.shutdown();
         // this will unblock start_loop()
         ctx_server.terminate();
@@ -729,12 +789,11 @@ static int server_run_instance(common_params & params, server_role & role, commo
 
     // optionally, notify router server that this instance is ready
     std::thread monitor_thread;
-    if (role.is_managed_by_router()) {
+    if (managed) {
         monitor_thread = role.setup(shutdown_handler);
-        json info = routes.get_model_info();
         // the router tracks device memory from these reports
-        if (const auto * ll_ctx = ctx_server.get_llama_context()) {
-            info["memory"] = server_model_memory(llama_n_ctx(ll_ctx), common_memory_breakdown_rows(ll_ctx)).to_json();
+        if (!memory.is_null()) {
+            info["memory"] = memory;
         }
         role.notify_to_router(server_state_to_str(SERVER_STATE_READY), info);
     }

@@ -2429,6 +2429,8 @@ Response:
 
 ### GET `/models/sse`: Real-time events
 
+This endpoint is also available in single-model mode (`-m`, `-hf`, ...), where it is served before the model is loaded, to follow the download and loading progress. As `GET /models` is unavailable until the model is loaded, each new client first receives the last event sent. If the download or the loading fails, a `status_change` event with status `unloaded` is sent before the server exits.
+
 Example events:
 
 ```js

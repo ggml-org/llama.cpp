@@ -2381,6 +2381,18 @@ server_role::~server_role() {
     }
 }
 
+std::string server_get_model_name(const common_params & params) {
+    if (!params.model_alias.empty()) {
+        // backward compat: use first alias as model name
+        return *params.model_alias.begin();
+    }
+    if (!params.model.get_name().empty()) {
+        return params.model.get_name();
+    }
+    // fallback: derive model name from file name
+    return std::filesystem::path(params.model.path).filename().string();
+}
+
 bool server_role::is_managed_by_router() {
     return std::getenv(SERVER_ENV_ROUTER_PORT) != nullptr;
 }
