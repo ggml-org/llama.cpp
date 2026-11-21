@@ -1613,7 +1613,8 @@ static void launch_mul_mat_q_few(const ggml_tensor * src0, const ggml_tensor * s
         src0->ne[0]/mmq_few_block_span(type), k_padded/QK8_1, dst->nb[1]/sizeof(float), (int) src1->ne[1]);
 }
 
-void ggml_cuda_mul_mat_q_few(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+void ggml_cuda_mul_mat_q_few(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst) {
+    GGML_ASSERT(ids == nullptr);
     cudaStream_t stream = ctx.stream();
     const int64_t k_padded = GGML_PAD(src1->ne[0], MATRIX_ROW_PADDING);
     ggml_cuda_pool_alloc<block_q8_1> y(ctx.pool(), src1->ne[1]*k_padded/QK8_1);
@@ -1675,9 +1676,17 @@ static bool mmq_few_supported(const ggml_type type, const int64_t nrows, const i
     switch (type) {
         case GGML_TYPE_Q2_K:
             return nrows < 1024 || ncols < 23 || k > 3072;
+        case GGML_TYPE_Q8_0:
+            // vs the standard MMQ on gfx906: few wins at ncols 9 for all nrows below 1024,
+            // up to nrows 512 at ncols 10-12, and small nrows only at ncols 13-16;
+            // at ncols >= 20 the standard MMQ wins for regular row counts (multiple of 128)
+            // but falls back to a slow config for irregular ones
+            if (ncols >= 20) return nrows % 128 != 0;
+            if (ncols >= 13) return nrows <= 128 && k <= 4096;
+            if (ncols >= 10) return nrows <= 512;
+            return k <= 3072 || nrows < 1024;
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q6_K:
-        case GGML_TYPE_Q8_0:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_IQ4_NL:
@@ -1695,13 +1704,13 @@ static bool mmq_few_supported(const ggml_type type, const int64_t nrows, const i
     }
 }
 
-bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * src1, const int cc) {
+bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, const int cc) {
 #ifdef GGML_CUDA_FORCE_CUBLAS
-    GGML_UNUSED_VARS(src0, src1, cc);
+    GGML_UNUSED_VARS(src0, src1, ids, cc);
     return false;
 #else
     // TODO: validated on gfx906 (VEGA20) only, the other GCN targets are untested
-    return GGML_CUDA_CC_IS_GCN(cc) && mmq_few_supported(src0->type, src0->ne[1], src1->ne[1], src0->ne[0]) && src1->type == GGML_TYPE_F32 &&
+    return ids == nullptr && GGML_CUDA_CC_IS_GCN(cc) && mmq_few_supported(src0->type, src0->ne[1], src1->ne[1], src0->ne[0]) && src1->type == GGML_TYPE_F32 &&
         src1->ne[1] >= 9 && src1->ne[1] <= 24 && ggml_is_matrix(src0) && ggml_is_matrix(src1) &&
         ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_cuda_is_aligned(src0, 4) &&
         ggml_cuda_is_aligned(src1, 4) && src0->ne[0] % mmq_few_block_span(src0->type) == 0 &&
