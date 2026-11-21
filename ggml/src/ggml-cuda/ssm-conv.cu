@@ -238,3 +238,70 @@ void ggml_cuda_op_ssm_conv(ggml_backend_cuda_context & ctx, ggml_tensor * dst, g
                           lay->nb[2], nc, nr, n_t, n_s, stream);
     }
 }
+
+// one token of a short convolution with its state: the window is the n_conv - 1 columns of history and the new
+// column x, out = (sum(window*w) + res)*scale, and the state keeps the last n_conv - 1 columns of the window
+template <int d_conv>
+static __global__ void ssm_conv_step_f32(
+        const float * __restrict__ past, const int64_t past_s1, const char * __restrict__ x, const int64_t x_s,
+        const float * __restrict__ w, const int64_t w_s1, const float * res, const float scale,
+        float * dst, float * __restrict__ state, const int nc) {
+    const int c = blockIdx.x*blockDim.x + threadIdx.x;
+    if (c >= nc) {
+        return;
+    }
+
+    float win[d_conv];
+#pragma unroll
+    for (int k = 0; k < d_conv - 1; ++k) {
+        win[k] = past[c*past_s1 + k];
+    }
+    win[d_conv - 1] = *(const float *) (x + c*x_s);
+
+    float sumf = 0.0f;
+#pragma unroll
+    for (int k = 0; k < d_conv; ++k) {
+        sumf += win[k] * w[c*w_s1 + k];
+    }
+    const float y = (sumf + res[c]) * scale;
+
+#pragma unroll
+    for (int k = 0; k < d_conv - 1; ++k) {
+        state[c*(d_conv - 1) + k] = win[k + 1];
+    }
+    dst[c] = y;
+}
+
+void ggml_cuda_op_ssm_conv_step(ggml_backend_cuda_context & ctx, const ggml_tensor * concat, ggml_tensor * cpy,
+        const ggml_tensor * conv, const ggml_tensor * add, ggml_tensor * scale) {
+    const ggml_tensor * past  = concat->src[0];   // [n_conv - 1, nc]
+    const ggml_tensor * x     = concat->src[1];   // [1, nc]
+    const ggml_tensor * w     = conv->src[1];     // [n_conv, nc]
+    const ggml_tensor * state = cpy->src[1];      // n_conv - 1 floats per channel
+    const ggml_tensor * res   = add->src[0]->op == GGML_OP_RESHAPE && add->src[0]->src[0] == conv ? add->src[1] : add->src[0];
+
+    const int nc     = (int) w->ne[1];
+    const int n_conv = (int) w->ne[0];
+
+    const int64_t past_s1 = past->nb[1] / sizeof(float);
+    const int64_t w_s1    = w->nb[1] / sizeof(float);
+    const float   s       = ggml_get_op_params_f32(scale, 0);
+
+    const int block = 256;
+    const dim3 grid((nc + block - 1) / block);
+    cudaStream_t stream = ctx.stream();
+
+    const float * past_d  = (const float *) past->data;
+    const char  * x_d     = (const char *) x->data;
+    const float * w_d     = (const float *) w->data;
+    const float * res_d   = (const float *) res->data;
+    float       * dst_d   = (float *) scale->data;
+    float       * state_d = (float *) state->data;
+
+    switch (n_conv) {
+        case 2: ssm_conv_step_f32<2><<<grid, block, 0, stream>>>(past_d, past_s1, x_d, x->nb[1], w_d, w_s1, res_d, s, dst_d, state_d, nc); break;
+        case 3: ssm_conv_step_f32<3><<<grid, block, 0, stream>>>(past_d, past_s1, x_d, x->nb[1], w_d, w_s1, res_d, s, dst_d, state_d, nc); break;
+        case 4: ssm_conv_step_f32<4><<<grid, block, 0, stream>>>(past_d, past_s1, x_d, x->nb[1], w_d, w_s1, res_d, s, dst_d, state_d, nc); break;
+        default: GGML_ABORT("unsupported conv width %d", n_conv);
+    }
+}

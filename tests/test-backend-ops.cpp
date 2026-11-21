@@ -5068,6 +5068,53 @@ struct test_ssm_conv_res_scale : public test_case {
     }
 };
 
+// one token of a short convolution with its state (fused by CUDA): CONCAT(history, x) -> CPY(last columns to the
+// state) -> SSM_CONV -> ADD(residual) -> SCALE, the output holds the new state and the convolution
+struct test_ssm_conv_step : public test_case {
+    const int64_t n_conv;
+    const int64_t nc;
+    const int64_t ch_offs; // channel offset of the history view in a wider history
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "SSM_CONV_STEP";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR3(n_conv, nc, ch_offs);
+    }
+
+    test_ssm_conv_step(int64_t n_conv, int64_t nc, int64_t ch_offs) : n_conv(n_conv), nc(nc), ch_offs(ch_offs) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * hist  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_conv - 1, nc + 2*ch_offs);
+        ggml_tensor * cur   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nc, 1);
+        ggml_tensor * w     = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_conv, nc);
+        ggml_tensor * state = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, (n_conv - 1)*nc, 1);
+        ggml_set_name(hist, "hist");
+        ggml_set_name(cur, "cur");
+        ggml_set_name(w, "w");
+        ggml_set_name(state, "state");
+
+        ggml_tensor * past = ggml_view_3d(ctx, hist, n_conv - 1, nc, 1, hist->nb[1], hist->nb[1]*hist->ne[1], ch_offs*hist->nb[1]);
+        ggml_tensor * x    = ggml_concat(ctx, past, ggml_transpose(ctx, ggml_reshape_3d(ctx, cur, nc, 1, 1)), 0);
+
+        ggml_tensor * last = ggml_view_3d(ctx, x, n_conv - 1, nc, 1, x->nb[1], x->nb[2], ggml_row_size(x->type, 1));
+        ggml_tensor * cell = ggml_view_2d(ctx, state, (n_conv - 1)*nc, 1, state->nb[1], 0);
+        ggml_tensor * stored = ggml_cpy(ctx, last, cell);
+
+        ggml_tensor * conv = ggml_reshape_2d(ctx, ggml_ssm_conv(ctx, x, w), nc, 1);
+        ggml_tensor * y    = ggml_scale(ctx, ggml_add(ctx, cur, conv), 0.33f);
+
+        // the store first, so that the graph keeps the step's nodes side by side
+        ggml_tensor * out = ggml_concat(ctx, stored, y, 0);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // consecutive GGML_OP_MUL_MAT on the same vector (fused into one launch by CUDA mmvf)
 struct test_mul_mat_same_src1 : public test_case {
     const ggml_type type;
@@ -12086,6 +12133,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 1, 1}, {d_conv, d_inner, 1, 1}));
             test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 4, 1}, {d_conv, d_inner, 1, 1}));
         }
+    }
+
+    // one token of a short convolution with its state (Inkling 2)
+    for (int64_t n_conv : {2, 3, 4}) {
+        test_cases.emplace_back(new test_ssm_conv_step(n_conv, 1024, 0));
+        test_cases.emplace_back(new test_ssm_conv_step(n_conv, 2304, 1024));
+        test_cases.emplace_back(new test_ssm_conv_step(n_conv, 384, 7));
     }
 
     // matrix-vector products on one vector, in one launch (Inkling 2 Q/gate/R/sink, K/V, loop controllers)
