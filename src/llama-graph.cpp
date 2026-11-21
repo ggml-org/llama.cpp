@@ -1474,6 +1474,8 @@ void llm_graph_input_mem_hybrid_iswa_rel::set_input(const llama_ubatch * ubatch)
             data[i] = mctx->get_recr()->s_copy(i);
         }
     }
+
+    inp_rs->set_input_rep(mctx->get_recr(), ubatch);
 }
 
 bool llm_graph_input_mem_hybrid_iswa_rel::can_reuse(const llm_graph_params & params) {
@@ -4497,7 +4499,7 @@ llm_graph_input_mem_hybrid_iswa_rel * llm_graph_context::build_inp_mem_hybrid_is
         uint32_t extent_swa) const {
     const auto * mctx_cur = static_cast<const llama_memory_hybrid_iswa_context *>(mctx);
 
-    auto inp_rs = build_rs_inp_impl(ctx0, ubatch, mctx_cur->get_recr());
+    auto inp_rs = build_rs_inp_impl(ctx0, ubatch, hparams, cparams, mctx_cur->get_recr());
 
     const auto * attn_ctx = mctx_cur->get_attn();
 
