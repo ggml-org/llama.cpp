@@ -1,5 +1,5 @@
 <script lang="ts">
-	import ContextGaugePopup from './ChatFormContextGauge/ContextGaugePopup.svelte';
+	import ContextGaugeDrawer from './ChatFormContextGauge/ContextGaugeDrawer.svelte';
 	import { microphoneUnavailableReason, warmUpVoiceCapture } from '@ggml-org/llama-voice';
 	import { VoiceRecorder } from '@ggml-org/llama-voice/svelte';
 	import { Maximize, Minimize } from '@lucide/svelte';
@@ -882,7 +882,9 @@
 		</div>
 	</div>
 
-	<ContextGaugePopup />
+	{#if deviceStore.isMobile}
+		<ContextGaugeDrawer />
+	{/if}
 
 	<!-- iOS Safari tints its bottom toolbar from a solid fixed element at the screen's bottom
 	     edge: this strip carries the sheet's fill while it rests -->
