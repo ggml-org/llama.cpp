@@ -823,6 +823,7 @@ struct vk_device_struct {
     PFN_vkGetDeviceFaultInfoEXT pfn_vkGetDeviceFaultInfoEXT {};
 
     bool serialize_submissions {};
+    bool limit_pending_work {};
 
     const ggml_cgraph * diag_cgraph {};
     int diag_prev_start = -1;
@@ -1321,6 +1322,7 @@ struct ggml_backend_vk_context {
     bool do_add_rms_partials;
 
     uint64_t last_total_flops {UINT64_MAX};
+    uint64_t pending_flops {};
 
     // Cache most recent tensor that was converted into prealloc_y, and what pipeline it used to convert.
     vk_pipeline_struct * prealloc_y_last_pipeline_used {};
