@@ -88,6 +88,7 @@ void llama_log_callback_default(ggml_log_level level, const char * text, void * 
     fflush(stderr);
 }
 
+// TODO: call ggml_backend_tensor_memset directly in the callers and remove this function
 void llama_clear_tensor_data(ggml_tensor * t, size_t offset, size_t size) {
     ggml_backend_tensor_memset(t, 0, offset, size);
 }
