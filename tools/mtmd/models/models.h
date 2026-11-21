@@ -351,6 +351,11 @@ struct mtmd_graph_hunyuanvl : mtmd_graph {
     ggml_cgraph * build() override;
 };
 
+struct mtmd_graph_hy_v4 : mtmd_graph {
+    mtmd_graph_hy_v4(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
 struct mtmd_graph_mobilenetv5 : mtmd_graph {
     mtmd_graph_mobilenetv5(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;

@@ -17,6 +17,7 @@
 #include "llama-memory-hybrid.h"
 #include "llama-memory-hybrid-iswa.h"
 #include "llama-memory-hybrid-idx.h"
+#include "llama-memory-idx-iswa.h"
 #include "llama-memory-recurrent.h"
 
 #include "llama.h"
@@ -320,6 +321,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_hy_v3(params);
         case LLM_ARCH_HY_V4:
             return new llama_model_hy_v4(params);
+        case LLM_ARCH_HY_V4_FLASH:
+            return new llama_model_hy_v4_flash(params);
         case LLM_ARCH_SMOLLM3:
             return new llama_model_smollm3(params);
         case LLM_ARCH_OPENAI_MOE:
@@ -2775,7 +2778,8 @@ void llama_model::print_info() const {
         if (arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_DEEPSEEK2OCR ||
                 arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA ||
                 arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_MISTRAL4 ||
-                arch == LLM_ARCH_MISTRAL_LARGE4 || arch == LLM_ARCH_HY_V4) {
+                arch == LLM_ARCH_MISTRAL_LARGE4 || arch == LLM_ARCH_HY_V4 ||
+                arch == LLM_ARCH_HY_V4_FLASH) {
             LLAMA_LOG_INFO("%s: n_layer_dense_lead    = %d\n",     __func__, hparams.n_layer_dense_lead);
             LLAMA_LOG_INFO("%s: n_lora_q              = %d\n",     __func__, hparams.n_lora_q);
             LLAMA_LOG_INFO("%s: n_lora_kv             = %d\n",     __func__, hparams.n_lora_kv);
@@ -3217,6 +3221,74 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             nullptr,
                             filter_lid,
                             nullptr);
+                }
+            } break;
+        case LLM_ARCH_HY_V4_FLASH:
+            {
+                GGML_ASSERT(hparams.swa_type != LLAMA_SWA_TYPE_NONE);
+
+                if (hparams.indexer_top_k == 0) {
+                    // without an indexer the sparse layers attend their whole context
+                    llama_kv_cache_iswa::layer_filter_cb filter = [&](uint32_t il) {
+                        return il < hparams.n_layer();
+                    };
+
+                    // the draft context holds the MTP block alone
+                    if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
+                        if (hparams.n_layer_nextn == 0) {
+                            throw std::runtime_error("hy_v4_flash MTP requires the draft block, convert without --no-mtp");
+                        }
+                        filter = [&](uint32_t il) { return il >= hparams.n_layer(); };
+                    }
+
+                    res = new llama_kv_cache_iswa(
+                            *this,
+                            params.no_alloc,
+                            params.type_k,
+                            params.type_v,
+                            !cparams.flash_attn,
+                            cparams.offload_kqv,
+                            params.swa_full,
+                            cparams.kv_unified,
+                            cparams.n_ctx_seq,
+                            cparams.n_seq_max,
+                            cparams.n_ubatch,
+                            nullptr,
+                            filter,
+                            nullptr,
+                            nullptr);
+                } else {
+                    // the indexer lives on the sparse layers, which are the non-SWA ones
+                    llama_memory_idx_iswa::layer_filter_cb filter     = [&](uint32_t il) {
+                        return il < hparams.n_layer();
+                    };
+                    llama_memory_idx_iswa::layer_filter_cb filter_idx = [&](uint32_t il) {
+                        return il < hparams.n_layer() && !hparams.is_swa(il) && hparams.is_indexer_full(il);
+                    };
+
+                    // the draft context holds the MTP block alone, a sparse layer with its own indexer
+                    if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
+                        if (hparams.n_layer_nextn == 0) {
+                            throw std::runtime_error("hy_v4_flash MTP requires the draft block, convert without --no-mtp");
+                        }
+                        filter     = [&](uint32_t il) { return il >= hparams.n_layer(); };
+                        filter_idx = [&](uint32_t il) { return il >= hparams.n_layer(); };
+                    }
+
+                    res = new llama_memory_idx_iswa(
+                            *this,
+                            params.no_alloc,
+                            params.type_k,
+                            params.type_v,
+                            !cparams.flash_attn,
+                            cparams.offload_kqv,
+                            params.swa_full,
+                            cparams.kv_unified,
+                            cparams.n_ctx_seq,
+                            cparams.n_seq_max,
+                            cparams.n_ubatch,
+                            std::move(filter),
+                            std::move(filter_idx));
                 }
             } break;
         case LLM_ARCH_DOTS3NOTE:
@@ -3820,8 +3892,11 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_BAILINGMOE3:
             // VL files carry mrope sections; text-only files keep NORM rope
             return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_MROPE : LLAMA_ROPE_TYPE_NORM;
-        // HY_V4 rotates consecutive pairs, matching the reference implementation
+        // HY_V4 rotates consecutive pairs, matching the reference implementation.
+        // VL files carry rope sections and NeoX ordered rope rows (see conversion/hy_v4.py).
         case LLM_ARCH_HY_V4:
+            return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_IMROPE : LLAMA_ROPE_TYPE_NORM;
+        case LLM_ARCH_HY_V4_FLASH:
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2

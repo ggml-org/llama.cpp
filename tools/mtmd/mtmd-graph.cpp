@@ -911,6 +911,10 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
             {
                 builder = std::make_unique<mtmd_graph_hunyuanvl>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_HY_V4_VL:
+            {
+                builder = std::make_unique<mtmd_graph_hy_v4>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_MLP:
         case PROJECTOR_TYPE_MLP_NORM:
         case PROJECTOR_TYPE_LDP:

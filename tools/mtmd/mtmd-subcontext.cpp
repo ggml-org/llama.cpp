@@ -2111,13 +2111,12 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                 }
             } break;
         case PROJECTOR_TYPE_HUNYUANVL:
+        case PROJECTOR_TYPE_HY_V4_VL:
             {
-                // Compute the HunyuanVL 2D position embedding on CPU (with the
-                // custom sf=(target+0.1)/n_grid bilinear sampling that the
-                // reference implementation uses) and upload it to the graph
-                // input declared in mtmd_graph_hunyuanvl::build().
+                // Compute the 2D position embedding on CPU (with the custom sf=(target+0.1)/n_grid bilinear sampling that the reference implementation uses) and upload it to the graph input declared in mtmd_graph_hunyuanvl::build() / mtmd_graph_hy_v4::build().
                 GGML_ASSERT(model.position_embeddings != nullptr);
                 ggml_tensor * src_t   = model.position_embeddings;
+                GGML_ASSERT(ggml_is_matrix(src_t) && src_t->type == GGML_TYPE_F32);
                 const int64_t n_embd  = src_t->ne[0];
                 const int64_t n_pos   = src_t->ne[1];            // = n_grid * n_grid
                 const int     n_grid  = (int)std::lround(std::sqrt((double)n_pos));

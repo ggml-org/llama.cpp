@@ -1392,6 +1392,16 @@ struct mtmd_context {
                     img_end = "<｜hy_place▁holder▁no▁101｜>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(models.v.get());
                 } break;
+            case PROJECTOR_TYPE_HY_V4_VL:
+                {
+                    // image start/end markers use fullwidth bar and U+2581 like hunyuanvl; the trailing hash follows the tokenizer revision, so take it from the vocab
+                    if (text_model && pos_type != MTMD_POS_TYPE_MROPE) {
+                        throw std::runtime_error("hy_v4_vl needs a text model converted with rope sections (HYV4VLForConditionalGeneration)");
+                    }
+                    img_beg = lookup_token_text_prefix("<｜hy_image▁start");
+                    img_end = lookup_token_text_prefix("<｜hy_image▁end");
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(models.v.get());
+                } break;
             case PROJECTOR_TYPE_EXAONE4_5:
                 {
                     // <vision> ... (image embeddings) ... </vision>
@@ -1617,6 +1627,21 @@ private:
             }
         }
         return LLAMA_TOKEN_NULL;
+    }
+
+    // returns the full text of the first token starting with prefix, for marker tokens that embed a per-revision tokenizer hash (hy-v4)
+    std::string lookup_token_text_prefix(const std::string & prefix) {
+        if (vocab == nullptr) {
+            return "";
+        }
+        const int n_vocab = llama_vocab_n_tokens(vocab);
+        for (int i = 0; i < n_vocab; i++) {
+            std::string piece = token_to_piece(vocab, i, true);
+            if (piece.rfind(prefix, 0) == 0) {
+                return piece;
+            }
+        }
+        return "";
     }
 
     std::string token_to_piece(const llama_vocab * vocab, llama_token token, bool special) {

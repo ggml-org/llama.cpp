@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable
+from typing import Callable, Iterable
 
 import torch
 
-from .base import ModelBase, gguf, logger
+from .base import MmprojModel, ModelBase, gguf, logger
 from .deepseek import DeepseekV2Model
 
 
@@ -19,6 +19,18 @@ def split_gate_up(weight: torch.Tensor, moe_intermediate_size: int):
     gate = weight[:, :moe_intermediate_size, :].contiguous()
     up = weight[:, moe_intermediate_size:, :].contiguous()
     return gate, up
+
+
+def rope_rows_to_neox(weight: torch.Tensor, head_dim: int, rope_dim: int) -> torch.Tensor:
+    """Reorder the rope rows of each head from interleaved pairs to NeoX halves.
+
+    The rope rows are the last rope_dim rows of each head_dim block. The M-RoPE kernels only support NeoX ordering, so this lets the graph use them for the same rotation.
+    """
+    shape = weight.shape
+    w = weight.reshape(-1, head_dim, *shape[1:])
+    nope, rope = w[:, :head_dim - rope_dim], w[:, head_dim - rope_dim:]
+    rope = torch.cat((rope[:, 0::2], rope[:, 1::2]), dim=1)
+    return torch.cat((nope, rope), dim=1).reshape(shape)
 
 
 @ModelBase.register("HYV4ForCausalLM")
@@ -102,6 +114,9 @@ class HYV4Model(DeepseekV2Model):
     def set_gguf_parameters(self):
         hparams = self.hparams
 
+        # rope sections mean "rope rows are NeoX ordered" to the graph, only the VL model writes them
+        self.rope_parameters = {k: v for k, v in self.rope_parameters.items() if k != "mrope_section"}
+
         # HY4 has n_group == topk_group == 1 (no group routing). Drop the keys so the base does
         # not emit expert_group_count/used; llama.cpp then takes the ungrouped MoE path.
         if hparams.get("n_group") == 1 and hparams.get("topk_group") == 1:
@@ -160,7 +175,8 @@ class HYV4Model(DeepseekV2Model):
             self.gguf_writer.add_indexer_head_count(hparams["index_n_heads"])
             self.gguf_writer.add_indexer_key_length(hparams["index_head_dim"])
             self.gguf_writer.add_indexer_top_k(hparams["index_topk"])
-            self.gguf_writer.add_indexer_types(is_full)
+            # the loader reads this key over n_layer(), which excludes the draft block
+            self.gguf_writer.add_indexer_types(is_full[:hparams["num_hidden_layers"]])
             logger.info(
                 "HY_V4 DSA: %d/%d layers own an indexer (top_k=%d, n_heads=%d, head_dim=%d)",
                 sum(is_full), len(is_full), hparams["index_topk"],
@@ -242,3 +258,113 @@ class HYV4Model(DeepseekV2Model):
             name += ".weight"
 
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("HYV4VLForConditionalGeneration")
+class HYV4VLTextModel(HYV4Model):
+    """Text tower of the HY_V4 VL model.
+
+    The LLM uses interleaved M-RoPE over GPT-J style pairs. The rope rows are reordered to NeoX halves here, so the graph can run the IMROPE kernel. For text-only positions this is the same rotation as the NORM rope of HYV4Model.
+    """
+
+    model_arch = gguf.MODEL_ARCH.HY_V4
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        rope = self.rope_parameters
+        if not rope.get("mrope_interleaved", False):
+            raise NotImplementedError("HY_V4 VL expects mrope_interleaved = true")
+        section = list(rope["mrope_section"])
+        if len(section) == 4 and section[3] == 0:
+            section = section[:3]
+        self.mrope_section = section
+        if len(self.mrope_section) != 3 or 2 * sum(self.mrope_section) != self.hparams["qk_rope_head_dim"]:
+            raise ValueError(f"HY_V4 VL mrope_section {self.mrope_section} must sum to qk_rope_head_dim / 2")
+
+    @classmethod
+    def filter_tensors(cls, item):
+        if item[0].startswith("vit."):
+            return None
+        return super().filter_tensors(item)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_rope_dimension_sections(self.mrope_section + [0])
+
+    def modify_tensors(self, data_torch: torch.Tensor, name: str, bid: int | None) -> Iterable[tuple[str, torch.Tensor]]:
+        hparams = self.hparams
+        rope_dim = hparams["qk_rope_head_dim"]
+        qk_head_dim = hparams["qk_nope_head_dim"] + rope_dim
+        index_head_dim = hparams.get("index_head_dim", 0)
+
+        if name.endswith(".self_attn.q_b_proj.weight"):
+            data_torch = rope_rows_to_neox(data_torch, qk_head_dim, rope_dim)
+        elif name.endswith(".self_attn.kv_a_proj_with_mqa.weight"):
+            data_torch = rope_rows_to_neox(data_torch, hparams["kv_lora_rank"] + rope_dim, rope_dim)
+        elif re.search(r"\.self_attn\.indexer\.(?:wq_b\.weight|wk\.weight|k_norm\.weight|k_norm\.bias)$", name):
+            # k_norm sits between wk and the rope, so its affine params follow the same order
+            data_torch = rope_rows_to_neox(data_torch, index_head_dim, rope_dim)
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("HYV4VLForConditionalGeneration")
+class HYV4VLVisionModel(MmprojModel):
+    """Vision tower of the HY_V4 VL model: a SigLIP-shaped encoder with a rmsnorm_mlp_adapter projector.
+
+    Positions come from a learned 128x128 grid, resampled to the patch grid. The projector merges 2x2 patches with a strided conv2d, runs a 1x1 conv2d and appends a newline embedding to every row.
+    """
+
+    projector_type = gguf.VisionProjectorType.HY_V4_VL
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        # there is no image_size, the position-embedding grid is max_image_size / patch_size
+        self.hparams_vision["image_size"] = self.hparams_vision.get("max_image_size", 2048)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        assert self.hparams_vision is not None
+        vcfg = self.hparams_vision
+        projector_type = vcfg.get("projector_type")
+        if projector_type != "rmsnorm_mlp_adapter":
+            raise ValueError(f"unsupported projector_type {projector_type!r}")
+        # the graph implements the plain variant only
+        unsupported = {
+            "use_2d_rope": bool(vcfg.get("use_2d_rope", False)),
+            "cat_extra_token": bool(vcfg.get("cat_extra_token", False)),
+            "use_image_newline_token": not vcfg.get("use_image_newline_token", True),
+            "perceive_post_norm": bool(vcfg.get("perceive_post_norm", False)),
+            "hidden_act": vcfg.get("hidden_act", "gelu") != "gelu",
+            "interpolate_mode": vcfg.get("interpolate_mode", "bilinear") != "bilinear",
+        }
+        for key, bad in unsupported.items():
+            if bad:
+                raise NotImplementedError(f"HY_V4 VL vision config {key}={vcfg.get(key)!r} is not supported")
+        self.gguf_writer.add_clip_projector_type(self.projector_type)
+        self.gguf_writer.add_vision_use_gelu(True)
+        # rms_norm_eps is also the LayerNorm eps of the encoder blocks
+        self.gguf_writer.add_vision_attention_layernorm_eps(vcfg.get("rms_norm_eps", 1e-5))
+        self.gguf_writer.add_vision_spatial_merge_size(vcfg.get("spatial_merge_size", 2))
+        self.gguf_writer.add_vision_min_pixels(int(self.preprocessor_config["min_pixels"]))
+        self.gguf_writer.add_vision_max_pixels(int(self.preprocessor_config["max_pixels"]))
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], torch.Tensor]]) -> tuple[str, Callable[[], torch.Tensor]] | None:
+        if not item[0].startswith("vit."):
+            return None
+
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: torch.Tensor, name: str, bid: int | None) -> Iterable[tuple[str, torch.Tensor]]:
+        # row 0 of the position embedding is an unused CLS slot, the reference resamples rows 1:
+        if "position_embedding" in name:
+            data_torch = data_torch[1:]
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        # force conv weights to F32 or F16 to avoid BF16 IM2COL issues on Metal
+        if ("mm.0." in new_name or "mm.2." in new_name) and new_name.endswith(".weight"):
+            return gguf.GGMLQuantizationType.F16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
