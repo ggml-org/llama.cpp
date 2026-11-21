@@ -1310,14 +1310,11 @@ static void test_json_schema() {
             // "By extension, even an empty object is valid"
             R"""({})""",
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type": "Avenue" })""",
+            R"""({ "street_name": "Pennsylvania", "number": 1600 })""",
         },
         // Failing strings
         {
             // Change datatype from number to string
-            R"""({ "number": "1600", "street_name": "Pennsylvania", "street_type":"Avenue"})""",
-            // Reorder properties
-            R"""({ "street_name": "Pennsylvania", "number": 1600 })""",
-            // Reorder properties
             R"""({ "number": "1600", "street_name": "Pennsylvania", "street_type":"Avenue"})""",
             // "Additional properties default to false for generation, even though the spec says true.
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type":"Avenue", "direction":"NW"})""",
@@ -1385,7 +1382,7 @@ static void test_json_schema() {
 
     // Additional properties: false
     test_schema(
-        "required + optional props each in original order",
+        "required + optional props in any order",
         // Schema
         R"""({
             "type": "object",
@@ -1404,18 +1401,17 @@ static void test_json_schema() {
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type":"Avenue"})""",
             // Spaces are permitted around enum values
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type": "Avenue" })""",
+            R"""({ "street_type": "Avenue", "number": 1600 })""",
         },
         // Failing strings
         {
-            // Reorder properties
-            R"""({ "street_type": "Avenue", "number": 1600 })""",
             // Add "direction"
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type": "Avenue", "direction": "NW" })""",
         }
     );
 
     test_schema(
-        "required + optional props each in original order",
+        "required + optional props in any order",
         // Schema
         R"""({
             "properties": {
@@ -1432,13 +1428,13 @@ static void test_json_schema() {
             R"""({"b": "foo", "a": "bar"})""",
             R"""({"b":"foo","a":"bar","d":"qux"})""",
             R"""({"b":"foo", "a":"bar", "d":"qux", "c":"baz"})""",
+            R"""({"a": "foo", "b": "bar"})""",
+            R"""({"a":"foo", "b":"bar", "c":"baz", "d":"qux"})""",
         },
         // Failing strings
         {
-            R"""({"a": "foo", "b": "bar"})""",
             R"""({"b": "bar"})""",
             R"""({"a": "foo", "c": "baz"})""",
-            R"""({"a":"foo", "b":"bar", "c":"baz", "d":"qux"})""",
         }
     );
 
@@ -1498,18 +1494,18 @@ static void test_json_schema() {
             R"""({"productId": 1, "productName": "A green door", "price": 12.50})""",
             R"""({"productId": 1, "productName": "A green door", "price": 12.50, "tags": ["home", "green"]})""",
             R"""({"productId": 1, "productName": "A green door", "price": 12.50, "tags": ["home", "green"], "dimensions": {"length": 785, "width": 250.5, "height": -0.359}})""",
+            R"""({"productName": "A green door", "price": 12.50, "productId": 1})""",
+            R"""({"productId": 1, "productName": "A green door", "price": 12.50, "dimensions": {"length": 785, "width": 250.5, "height": -0.359}, "tags": ["home", "green"]})""",
         },
         // Failing strings
         {
             R"""({})""", // Missing all required properties
-            R"""({"productName": "A green door", "price": 12.50, "productId": 1})""", // Out of order properties
             // TODO: The following line should fail, but currently it passes. `exclusiveMinimum` is not supported, as it would likely be too difficult to implement.
             //  Perhaps special checks for minimum and maximum values of 0 could be added (since that's relatively easy to do with grammars), but anything else would likely be too complex.
             // R"""({"productId": 1, "productName": "A green door", "price": -12.50})""",
             R"""({"productId": 1, "productName": "A green door"})""", // Missing required property (price)
             R"""({"productName": "A green door", "price": 12.50})""", // Missing required property (productId)
             R"""({"productId": 1, "productName": "A green door", "price": 12.50, "tags": []})""", // tags is empty, but minItems is 1
-            R"""({"productId": 1, "productName": "A green door", "price": 12.50, "dimensions": {"length": 785, "width": 250.5, "height": -0.359}, "tags": ["home", "green"]})""", // Tags and dimensions are out of order
             // TODO: The following line should fail, but currently it passes. `uniqueItems` is not supported, as it would likely be too difficult to implement.
             // R"""({"productId": 1, "productName": "A green door", "price": 12.50, "tags": ["home", "green", "home"]})""",
         }
@@ -1535,6 +1531,98 @@ static void test_json_schema() {
     );
 }
 
+static void test_json_schema_any_order() {
+    test_schema(
+        "closed object: properties in any order, each at most once",
+        R"""({
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "expr": {"type": "string"}, "dtype": {"type": "string"}, "drop": {"type": "boolean"}},
+            "required": ["name"],
+            "additionalProperties": false
+        })""",
+        {
+            R"""({"name": "n", "expr": "0", "dtype": "int"})""",
+            R"""({"dtype": "int", "drop": true, "name": "n", "expr": "0"})""",
+            R"""({"name": "n"})""",
+        },
+        {
+            R"""({"expr": "0"})""",
+            R"""({"name": "n", "dtype": "int", "dtype": "int"})""",
+            R"""({"name": "n", "other": 1})""",
+            R"""({"name": "n", "drop": "yes"})""",
+            R"""({"name": "n",})""",
+        });
+
+    test_schema(
+        "open object: properties keep the declared order",
+        R"""({
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "expr": {"type": "string"}, "dtype": {"type": "string"}},
+            "required": ["name"],
+            "additionalProperties": true
+        })""",
+        {
+            R"""({"name": "n", "expr": "0", "dtype": "int"})""",
+            R"""({"name": "n", "dtype": "int", "other": 1})""",
+        },
+        {
+            R"""({"dtype": "int", "name": "n"})""",
+        });
+
+    test_schema(
+        "property names that clash with generated rule names",
+        R"""({
+            "type": "object",
+            "properties": {
+                "rest-0": {"type": "object", "properties": {"x": {"type": "integer"}}, "required": ["x"]},
+                "rest-1": {"type": "object", "properties": {"y": {"type": "string"}}, "required": ["y"]},
+                "rest-2": {"type": "object", "properties": {"z": {"type": "boolean"}}, "required": ["z"]}
+            },
+            "required": ["rest-1"]
+        })""",
+        {
+            R"""({"rest-2": {"z": true}, "rest-1": {"y": "s"}, "rest-0": {"x": 1}})""",
+        },
+        {
+            R"""({"rest-0": {"x": 1}})""",
+            R"""({"rest-1": {"x": 1}})""",
+            R"""({"rest-1": {"y": "s"}, "rest-2": {"y": "s"}})""",
+            R"""({"rest-1": {"y": "s"}, "rest-1": {"y": "t"}})""",
+        });
+}
+
+static void test_json_schema_any_order_many_keys() {
+    auto closed_object = [](int n_required, int n_optional) {
+        json props = json::object();
+        json req = json::array();
+        for (int i = 0; i < n_required + n_optional; i++) {
+            props["k" + std::to_string(i)] = {{"type", "integer"}};
+            if (i < n_required) {
+                req.push_back("k" + std::to_string(i));
+            }
+        }
+        return json{{"type", "object"}, {"properties", props}, {"required", req}, {"additionalProperties", false}};
+    };
+    auto first_two_swapped = [](int n_keys) {
+        std::string s = R"""({"k1": 1, "k0": 1)""";
+        for (int i = 2; i < n_keys; i++) {
+            s += ", \"k" + std::to_string(i) + "\": 1";
+        }
+        return s + "}";
+    };
+
+    test("8 keys in any order", json_schema_to_grammar(closed_object(0, 8), true), {first_two_swapped(8)}, {});
+    test("9 keys in declared order", json_schema_to_grammar(closed_object(0, 9), true), {}, {first_two_swapped(9)});
+
+    fprintf(stdout, "Testing grammar size of wide closed objects\n");
+    assert(json_schema_to_grammar(closed_object(0, 300), true).size() < 1024 * 1024);
+    const std::string grammar_str = json_schema_to_grammar(closed_object(1000, 250), true);
+    assert(grammar_str.size() < 1024 * 1024);
+    llama_grammar * grammar = build_grammar(grammar_str);
+    assert(grammar != nullptr);
+    llama_grammar_free_impl(grammar);
+}
+
 int main() {
     fprintf(stdout, "Running grammar integration tests...\n");
     test_simple_grammar();
@@ -1547,6 +1635,8 @@ int main() {
     test_failure_missing_root_symbol();
     test_custom_root_symbol_check();
     test_json_schema();
+    test_json_schema_any_order();
+    test_json_schema_any_order_many_keys();
     fprintf(stdout, "All tests passed.\n");
     return 0;
 }
