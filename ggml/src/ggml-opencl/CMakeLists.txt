@@ -4,10 +4,19 @@ find_package(Python3 REQUIRED)
 set(TARGET_NAME ggml-opencl)
 
 ggml_add_backend_library(${TARGET_NAME}
-                         ggml-opencl.cpp
-                         cl-program-cache.cpp
-                         cl-program-cache.h
-                         ../../include/ggml-opencl.h)
+                          ggml-opencl.cpp
+                          Conv3D_GMEM.cpp
+                          Conv3D_GMEM.h
+                          MM_GMEM.cpp
+                          MM_GMEM.h
+                          FA_GMEM.cpp
+                          FA_GMEM.h
+                          fa-per-row-data.h
+                          cl-recordable-queue.h
+                          cl-program-cache.cpp
+                          cl-program-cache.h
+                          opencl_profiling_info.h
+                          ../../include/ggml-opencl.h)
 target_link_libraries(${TARGET_NAME} PRIVATE ${OpenCL_LIBRARIES})
 target_include_directories(${TARGET_NAME} PRIVATE ${OpenCL_INCLUDE_DIRS})
 
@@ -330,6 +339,8 @@ set(GGML_OPENCL_KERNELS
     conv2d_f16_f32
     conv2_dw
     flash_attn_repack
+    conv3d
+    conv3d_f16_f32
     flash_attn_pre_f16
     flash_attn_pv_direct
     flash_attn_f32_f16
@@ -341,6 +352,10 @@ set(GGML_OPENCL_KERNELS
 
 if (GGML_OPENCL_USE_ADRENO_KERNELS)
     list(APPEND GGML_OPENCL_KERNELS gemm_xmem_f16_f32_os8 sdpa_xmem_f32_f16_os8)
+endif ()
+
+if (GGML_OPENCL_USE_ADRENO_KERNELS AND GGML_OPENCL_USE_ADRENO_BIN_KERNELS AND GGML_OPENCL_TARGET_VERSION GREATER_EQUAL 300)
+    list(APPEND GGML_OPENCL_KERNELS fa_per_row_data fa_gmem)
 endif ()
 
 foreach (K ${GGML_OPENCL_KERNELS})

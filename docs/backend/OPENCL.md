@@ -89,6 +89,12 @@ To allow using the kernel library, add `-DGGML_OPENCL_USE_ADRENO_BIN_KERNELS=ON`
 Then, extract `adreno-opencl-kernels.dll` from the zip file downloaded from the above URL and put it alongside the executables.
 If kernels compatible with the current GPU are found in the library, they will be loaded and used.
 
+CONV_3D can use the library's GMEM programs on supported X2 GPUs with F32 input and F32 or F16 weights. If the DLL is absent, the requested CONV_3D program is missing or cannot be loaded, or the tensor does not meet the GMEM requirements, CONV_3D uses the generic OpenCL kernel.
+
+MUL_MAT can use the library's GMEM programs on supported X2 GPUs with F32, F16 or Q8_0 weights and F32 or F16 activations, subject to the backend's existing type and precision support. Eligible tensors are contiguous, have matching batch dimensions, and have M, N and K of at least 128. Q8_0 weights must use the backend's single-batch structure-of-arrays layout. If the requested program is absent or incompatible, or the tensor does not meet the GMEM requirements, MUL_MAT uses the existing OpenCL matmul path. Set `GGML_OPENCL_DISABLE_MM_GMEM=1` to disable this path.
+
+FLASH_ATTN_EXT can use GMEM on supported X2 GPUs with F32 queries and output and matching F32 or F16 K/V. Eligible tensors are contiguous, single-batch, have matching head counts and head dimensions of at least 64 divisible by 8, and have at least 64 queries and 64 padded KV rows. Masks, sinks, KV row lists, nonzero bias or softcap, and precision requests other than F32 or default use the existing attention paths. Source kernels own Q/K/V staging, online softmax, output rescaling, and output permutation; MM0 and MM1 reuse the ordinary MUL_MAT F32- and F16-accumulator binaries. No FA-specific binary programs are required. Missing source, compilation failures, or incompatible MM programs fall back to the existing attention paths. Set `GGML_OPENCL_DISABLE_FA_GMEM=1` to disable this path.
+
 
 ## CMake Options
 
