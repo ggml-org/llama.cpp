@@ -3784,6 +3784,7 @@ static bool ggml_cuda_topk_moe_fusion(const struct ggml_cgraph * cgraph, int nod
     args.delayed_softmax = false;
     args.prob_bias       = false;
     args.norm            = false;
+    args.norm_eps        = false;
     args.n_groups        = 0;
     args.n_group_used    = 0;
 
@@ -3904,8 +3905,8 @@ static bool ggml_cuda_topk_moe_fusion(const struct ggml_cgraph * cgraph, int nod
     }
 
     if (nodes[node_idx]->op == GGML_OP_RESHAPE) {
-        //check RESHAPE->SUM_ROWS->CLAMP->DIV->RESHAPE
-        static const std::vector<ggml_op> norm_ops = { GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_CLAMP };
+        //check RESHAPE->SUM_ROWS->CLAMP->DIV->RESHAPE, or SCALE(s = 1, b = eps >= 0) in place of the CLAMP
+        static const std::vector<ggml_op> norm_ops = { GGML_OP_RESHAPE, GGML_OP_SUM_ROWS };
 
         args.norm = true;
         for (const ggml_op op : norm_ops) {
@@ -3916,6 +3917,16 @@ static bool ggml_cuda_topk_moe_fusion(const struct ggml_cgraph * cgraph, int nod
                 return true;
             }
         }
+
+        const ggml_tensor * clamp = node_idx < n_nodes ? nodes[node_idx] : nullptr;
+        if (clamp && clamp->src[0] == nodes[node_idx - 1] && clamp->op == GGML_OP_SCALE &&
+                ggml_get_op_params_f32(clamp, 0) == 1.0f && ggml_get_op_params_f32(clamp, 1) >= 0.0f) {
+            args.norm_eps = true;
+        } else if (!clamp || clamp->src[0] != nodes[node_idx - 1] || clamp->op != GGML_OP_CLAMP) {
+            args.norm = false;
+            return true;
+        }
+        node_idx++;
 
         // DIV <- CLAMP, RESHAPE
         if (nodes[node_idx]->op != GGML_OP_DIV || nodes[node_idx]->src[1] != nodes[node_idx - 1] ||
@@ -3946,7 +3957,8 @@ static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
                                                  const int           node_count,
                                                  const int *         out_nodes,
                                                  const int           out_count,
-                                                 const bool          is_topk_moe = false) {
+                                                 const bool          is_topk_moe = false,
+                                                 const ggml_tensor * may_alias   = nullptr) {
     auto nodes_overlap = [&](const ggml_tensor * a, const ggml_tensor * b) {
         const int64_t a_start = (int64_t) a->data;
         const int64_t a_end   = a_start + ggml_backend_buft_get_alloc_size(a->buffer->buft, a);
@@ -3963,7 +3975,8 @@ static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
 
     bool is_ok = true;
     // one block reads all logits before it writes, so logits may alias the out nodes
-    const ggml_tensor * logits_may_alias = nullptr;
+    // a src the fused kernel reads element-wise at the index it writes may alias the out nodes
+    const ggml_tensor * logits_may_alias = may_alias;
     if (is_topk_moe && ggml_nrows(cgraph->nodes[node_idx]) <= TOPK_MOE_ROWS_PER_BLOCK) {
         logits_may_alias = cgraph->nodes[node_idx]->src[0];
     }
@@ -4194,6 +4207,32 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
             int out_nodes[] = { node_idx + 2 };
             return ggml_cuda_check_fusion_memory_ranges(cgraph, node_idx, (int)ops.size(), out_nodes, 1);
         }
+    }
+
+    // a short convolution with a residual: SSM_CONV -> RESHAPE -> ADD(residual) -> SCALE (Inkling 2)
+    std::initializer_list<enum ggml_op> ssm_conv_res_scale_ops = { GGML_OP_SSM_CONV, GGML_OP_RESHAPE, GGML_OP_ADD, GGML_OP_SCALE };
+
+    if (is_equal(ssm_conv_res_scale_ops, ops) && ggml_can_fuse_subgraph(cgraph, node_idx, ops, { node_idx + 3 })) {
+        const ggml_tensor * conv    = cgraph->nodes[node_idx];
+        const ggml_tensor * reshape = cgraph->nodes[node_idx + 1];
+        const ggml_tensor * add     = cgraph->nodes[node_idx + 2];
+        const ggml_tensor * scale   = cgraph->nodes[node_idx + 3];
+
+        if (reshape->src[0] != conv || scale->src[0] != add || (add->src[0] != reshape && add->src[1] != reshape)) {
+            return false;
+        }
+        const ggml_tensor * res = add->src[0] == reshape ? add->src[1] : add->src[0];
+
+        if (conv->type != GGML_TYPE_F32 || add->type != GGML_TYPE_F32 || scale->type != GGML_TYPE_F32 ||
+                res->type != GGML_TYPE_F32 || !ggml_is_contiguous(conv) || !ggml_is_contiguous(res) ||
+                !ggml_is_contiguous(scale) || !ggml_are_same_shape(res, add) ||
+                ggml_get_op_params_f32(scale, 1) != 0.0f) {
+            return false;
+        }
+
+        // each element of the residual is read by the thread that writes it, so it may share the output buffer
+        int out_nodes[] = { node_idx + 3 };
+        return ggml_cuda_check_fusion_memory_ranges(cgraph, node_idx, (int)ops.size(), out_nodes, 1, false, res);
     }
 
     std::initializer_list<enum ggml_op> rms_norm_mul_rope_ops          = { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ROPE };
@@ -4445,8 +4484,8 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
             return false;
         }
 
-        // TODO: make the fused softcap kernel stride aware, it reads src and writes dst as dense
-        if (!ggml_is_contiguous(scale->src[0]) || !ggml_is_contiguous(scale2)) {
+        // the fused softcap kernel reads strided rows of src, and writes dst as dense
+        if (scale->src[0]->nb[0] != sizeof(float) || !ggml_is_contiguous(scale2)) {
             return false;
         }
 
@@ -4575,8 +4614,8 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                 ids = cgraph->nodes[out_nodes[0]];
 
                 if (args.norm) {
-                    ops.insert(ops.end(),
-                               { GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_CLAMP, GGML_OP_DIV, GGML_OP_RESHAPE });
+                    ops.insert(ops.end(), { GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, args.norm_eps ? GGML_OP_SCALE : GGML_OP_CLAMP,
+                                            GGML_OP_DIV, GGML_OP_RESHAPE });
                     clamp = cgraph->nodes[i + ops.size() - 3];
                 }
                 if (args.scale) {
@@ -5275,6 +5314,11 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         return 1;
     }
 
+    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SSM_CONV, GGML_OP_RESHAPE, GGML_OP_ADD, GGML_OP_SCALE }, {})) {
+        ggml_cuda_op_ssm_conv(*cuda_ctx, node, nullptr, nullptr, cgraph->nodes[i + 2], cgraph->nodes[i + 3]);
+        return 3;
+    }
+
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SSM_CONV, GGML_OP_ADD, GGML_OP_UNARY }, { GGML_UNARY_OP_SILU })) {
         ggml_cuda_op_ssm_conv(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
         return 2;
@@ -5777,8 +5821,9 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
                         ids = cgraph->nodes[out_nodes[0]];
 
                         if (args.norm) {
-                            ops.insert(ops.end(),
-                                       { GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_CLAMP, GGML_OP_DIV, GGML_OP_RESHAPE });
+                            ops.insert(ops.end(), { GGML_OP_RESHAPE, GGML_OP_SUM_ROWS,
+                                                    args.norm_eps ? GGML_OP_SCALE : GGML_OP_CLAMP, GGML_OP_DIV,
+                                                    GGML_OP_RESHAPE });
                         }
                         if (args.scale) {
                             ops.insert(ops.end(), { GGML_OP_SCALE });
