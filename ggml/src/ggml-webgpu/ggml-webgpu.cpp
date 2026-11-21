@@ -3169,7 +3169,8 @@ static webgpu_encoded_op ggml_webgpu_soft_max(webgpu_context & ctx,
         ggml_webgpu_u32_from_f32(max_bias),
         ggml_webgpu_u32_from_f32(n_head_log2),
         ggml_webgpu_u32_from_f32(m0),
-        ggml_webgpu_u32_from_f32(m1)
+        ggml_webgpu_u32_from_f32(m1),
+        (uint32_t) ggml_nrows(dst)
     };
 
     std::vector<wgpu::BindGroupEntry> entries     = { ggml_webgpu_make_bind_group_entry(
