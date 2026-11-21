@@ -265,3 +265,39 @@ def test_draft_token_probs():
         assert abs(tok_draft["logprob"] - tok_no_draft["logprob"]) < 0.25
     # real logprobs are not all exactly 0.0 (prob 1.0)
     assert any(tok["logprob"] < -1e-4 for tok in probs_draft)
+
+
+def test_combined_draft_and_mtp_graceful():
+    # regression: https://github.com/ggml-org/llama.cpp/issues/27839
+    # a combined spec list (external draft + draft-mtp) with a target that has
+    # no MTP layers must not force an MTP context type onto the external draft
+    # model (pre-fix: server dies at load), and must degrade to plain external
+    # drafting (post-fix: combined == draft-only outputs)
+    server.spec_type = "draft-simple,draft-mtp"
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "I believe the meaning of life is",
+        "temperature": 0.0,
+        "top_k": 1,
+        "n_predict": 16,
+        "return_tokens": True,
+        "seed": 4242,
+    })
+    assert res.status_code == 200, res.body
+    assert len(res.body["content"]) > 0
+    tokens_combined = res.body["tokens"]
+    assert tokens_combined
+    server.stop()
+
+    create_server()  # plain draft-simple baseline
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "I believe the meaning of life is",
+        "temperature": 0.0,
+        "top_k": 1,
+        "n_predict": 16,
+        "return_tokens": True,
+        "seed": 4242,
+    })
+    assert res.status_code == 200, res.body
+    assert tokens_combined == res.body["tokens"]
