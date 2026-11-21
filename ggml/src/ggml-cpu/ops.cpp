@@ -8721,11 +8721,22 @@ void ggml_compute_forward_timestep_embedding(
 template<enum ggml_sort_order order>
 struct cmp_argsort {
     const float * data;
+    bool has_nan;
     bool operator()(int32_t a, int32_t b) const {
+        const float va_raw = data[a], vb_raw = data[b];
+        if (!has_nan) {
+            if constexpr (order == GGML_SORT_ORDER_ASC) {
+                return va_raw < vb_raw;
+            } else {
+                return va_raw > vb_raw;
+            }
+        }
+        const float va = std::isnan(va_raw) ? -FLT_MAX : va_raw;
+        const float vb = std::isnan(vb_raw) ? -FLT_MAX : vb_raw;
         if constexpr (order == GGML_SORT_ORDER_ASC) {
-            return data[a] < data[b];
+            return va < vb;
         } else {
-            return data[a] > data[b];
+            return va > vb;
         }
     }
 };
@@ -8756,13 +8767,21 @@ static void ggml_compute_forward_argsort_f32(
             dst_data[j] = j;
         }
 
+        bool has_nan = false;
+        for (int64_t j = 0; j < ne0; j++) {
+            if (std::isnan(src_data[j])) {
+                has_nan = true;
+                break;
+            }
+        }
+
         switch (order) {
             case GGML_SORT_ORDER_ASC:
-                std::sort(dst_data, dst_data + ne0, cmp_argsort<GGML_SORT_ORDER_ASC>{src_data});
+                std::sort(dst_data, dst_data + ne0, cmp_argsort<GGML_SORT_ORDER_ASC>{src_data, has_nan});
                 break;
 
             case GGML_SORT_ORDER_DESC:
-                std::sort(dst_data, dst_data + ne0, cmp_argsort<GGML_SORT_ORDER_DESC>{src_data});
+                std::sort(dst_data, dst_data + ne0, cmp_argsort<GGML_SORT_ORDER_DESC>{src_data, has_nan});
                 break;
 
             default:

@@ -7493,19 +7493,59 @@ struct test_argsort : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
     ggml_sort_order order;
+    const bool with_nan;
+    ggml_tensor * input = nullptr;
 
     std::string vars() override {
-        return VARS_TO_STR3(type, ne, order);
+        return with_nan ? VARS_TO_STR4(type, ne, order, with_nan) : VARS_TO_STR3(type, ne, order);
     }
 
     test_argsort(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {16, 10, 10, 10},
-            ggml_sort_order order = GGML_SORT_ORDER_ASC)
-        : type(type), ne(ne), order(order) {}
+            ggml_sort_order order = GGML_SORT_ORDER_ASC,
+            bool with_nan = false)
+        : type(type), ne(ne), order(order), with_nan(with_nan) {}
+
+    // the framework rejects NaN inputs, so the whole graph is compared when NaN is present
+    bool run_whole_graph() override { return with_nan; }
+
+    double max_err() override { return 0.0; }
+
+    double err(const float * a, const float * b, size_t n) override {
+        if (!with_nan) {
+            return test_case::err(a, b, n);
+        }
+        std::vector<float> src(ggml_nelements(input));
+        ggml_backend_tensor_get(input, src.data(), 0, ggml_nbytes(input));
+        const int64_t cols = input->ne[0];
+        const int64_t nr = ggml_nrows(input);
+        double diff = 0.0;
+        std::vector<int32_t> idx(cols);
+        for (int64_t r = 0; r < nr; ++r) {
+            const float * row = src.data() + r*cols;
+            auto key = [&](int32_t i) { const float v = row[i]; return std::isnan(v) ? -FLT_MAX : v; };
+            for (int64_t i = 0; i < cols; ++i) {
+                idx[i] = (int32_t) i;
+            }
+            std::sort(idx.begin(), idx.end(), [&](int32_t x, int32_t y) {
+                return order == GGML_SORT_ORDER_ASC ? key(x) < key(y) : key(x) > key(y);
+            });
+            for (int64_t i = 0; i < cols; ++i) {
+                if ((int32_t) a[r*cols + i] != idx[i]) {
+                    diff += 1.0;
+                }
+                if ((int32_t) b[r*cols + i] != idx[i]) {
+                    diff += 1.0;
+                }
+            }
+        }
+        return diff;
+    }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
         ggml_set_name(a, "a");
+        input = a;
 
         ggml_tensor * out = ggml_argsort(ctx, a, order);
         ggml_set_name(out, "out");
@@ -7533,6 +7573,9 @@ struct test_argsort : public test_case {
                         data[i] = i;
                     }
                     std::shuffle(data.begin(), data.end(), rng);
+                    if (with_nan) {
+                        data[r % t->ne[0]] = NAN;
+                    }
                     ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(float));
                 }
             } else {
@@ -12887,6 +12930,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {1023, 2, 1, 3}, order));
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {1024, 2, 1, 3}, order));
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {1025, 2, 1, 3}, order));
+        test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {16, 10, 10, 10}, order, true));
+        test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {1024, 2, 1, 3}, order, true));
+        test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {1025, 2, 1, 3}, order, true));
+        test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {2048, 2, 1, 3}, order, true));
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {1025, 256, 1, 1}, order)); // test ceildiv in CUDA's CUB's DeviceSegmentedSort
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {2047, 2, 1, 3}, order));
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {2048, 2, 1, 3}, order));

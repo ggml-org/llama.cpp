@@ -28,6 +28,14 @@ static __global__ void init_offsets(int * offsets, const int ncols, const int nr
 }
 #endif  // STRIDED_ITERATOR_AVAILABLE
 
+static __global__ void copy_sanitize_keys(float * dst, const float * src, const int n) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        const float v = src[i];
+        dst[i] = __isnanf(v) ? -FLT_MAX : v;
+    }
+}
+
 // returns the suggested maximum number of rows to process at once, given the temporary buffer bytes per row
 int ggml_cuda_chunk_nrows(const size_t row_bytes, const int64_t nrows) {
     // process rows in chunks up to approximately this size (currently 64MB)
@@ -73,7 +81,11 @@ void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
     const dim3                offset_grid((nrows_offset + block_size - 1) / block_size);
     init_offsets<<<offset_grid, block_size, 0, stream>>>(offset_iterator, ncols, nrows);
 #endif
-    CUDA_CHECK(cudaMemcpyAsync(temp_keys, x, ncols * nrows * sizeof(float), cudaMemcpyDeviceToDevice, stream));
+    {
+        static const int block_size = 256;
+        const int n = (int) (ncols * nrows);
+        copy_sanitize_keys<<<(n + block_size - 1) / block_size, block_size, 0, stream>>>(temp_keys, x, n);
+    }
 
     size_t temp_storage_bytes = 0;
 
@@ -167,6 +179,10 @@ static inline __device__ void ggml_cuda_swap(T & a, T & b) {
     b = tmp;
 }
 
+static inline __device__ float argsort_key(float v) {
+    return __isnanf(v) ? -FLT_MAX : v;
+}
+
 // One compare-exchange of the bitonic network at (k, j) for column col.
 template<ggml_sort_order order>
 static inline __device__ void bitonic_step(const float * x_row, int * dst_row, const int ncols, const int col, const int k, const int j) {
@@ -177,16 +193,16 @@ static inline __device__ void bitonic_step(const float * x_row, int * dst_row, c
     if ((col & k) == 0) {
         if (dst_row[col] >= ncols ||
             (dst_row[ixj] < ncols && (order == GGML_SORT_ORDER_ASC ?
-                x_row[dst_row[col]] > x_row[dst_row[ixj]] :
-                x_row[dst_row[col]] < x_row[dst_row[ixj]]))
+                argsort_key(x_row[dst_row[col]]) > argsort_key(x_row[dst_row[ixj]]) :
+                argsort_key(x_row[dst_row[col]]) < argsort_key(x_row[dst_row[ixj]])))
         ) {
             ggml_cuda_swap(dst_row[col], dst_row[ixj]);
         }
     } else {
         if (dst_row[ixj] >= ncols ||
             (dst_row[col] < ncols && (order == GGML_SORT_ORDER_ASC ?
-                x_row[dst_row[col]] < x_row[dst_row[ixj]] :
-                x_row[dst_row[col]] > x_row[dst_row[ixj]]))
+                argsort_key(x_row[dst_row[col]]) < argsort_key(x_row[dst_row[ixj]]) :
+                argsort_key(x_row[dst_row[col]]) > argsort_key(x_row[dst_row[ixj]])))
         ) {
             ggml_cuda_swap(dst_row[col], dst_row[ixj]);
         }
