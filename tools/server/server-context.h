@@ -12,6 +12,7 @@
 #include <set>
 
 struct server_context_impl; // private implementation
+struct mtmd_helper_video_decoder; // see mtmd-helper.h
 
 struct server_context_meta {
     std::string build_info;
@@ -90,6 +91,10 @@ struct server_context {
 
     // note: must be set before load_model() is called
     void set_state_callback(server_state_callback_t callback);
+
+    // decode video with a custom decoder instead of ffmpeg, the decoder must outlive the server
+    // note: must be set before load_model() is called
+    void set_video_decoder(const mtmd_helper_video_decoder * decoder);
 };
 
 
@@ -134,6 +139,7 @@ struct server_routes {
     server_http_context::handler_t post_embeddings_oai;
     server_http_context::handler_t post_rerank;
     server_http_context::handler_t post_tts;
+    server_http_context::handler_t post_speech_oai;
     server_http_context::handler_t post_systemone;
     server_http_context::handler_t get_lora_adapters;
     server_http_context::handler_t post_lora_adapters;
@@ -154,6 +160,7 @@ private:
     std::unique_ptr<server_res_generator> handle_slots_erase(const server_http_req &, int id_slot);
     std::unique_ptr<server_res_generator> handle_embeddings_impl(const server_http_req & req, task_response_type res_type);
     std::unique_ptr<server_res_generator> handle_rerank_impl(const server_http_req & req);
+    std::unique_ptr<server_res_generator> handle_tts_impl(const server_http_req & req, json body);
     std::unique_ptr<server_res_generator> handle_count_tokens(const server_http_req & req, task_response_type res_type);
 
     // using unique_ptr to allow late initialization of const

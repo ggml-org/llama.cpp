@@ -16,8 +16,7 @@
 
 // !!! Internal header, to be used by mtmd only !!!
 
-// a subcontext runs the graphs of one mtmd_model (one modality)
-// it owns the backends and the compute buffers, the weights are owned by the model
+// runs the graphs of one mtmd_model on the shared backends and scheduler
 
 enum mtmd_flash_attn_type {
     MTMD_FLASH_ATTN_TYPE_AUTO     = -1,
@@ -26,22 +25,40 @@ enum mtmd_flash_attn_type {
 };
 
 struct mtmd_subctx_params {
-    ggml_backend_dev_t device; // nullptr means CPU, see mtmd_select_device()
-    std::shared_ptr<ggml_threadpool> threadpool; // CPU threadpool shared by the subcontexts, can be nullptr
     enum mtmd_flash_attn_type flash_attn_type;
     bool warmup;
-    ggml_backend_sched_eval_callback cb_eval;
-    void * cb_eval_user_data;
 };
 
 // the device the weights and the graphs are placed on, nullptr means CPU
 ggml_backend_dev_t mtmd_select_device(bool use_gpu, ggml_backend_dev_t device);
 
-// nullptr if n_threads < 2 or the CPU backend has no threadpool support
-std::shared_ptr<ggml_threadpool> mtmd_threadpool_init(int n_threads);
+// shared by the subcontexts, not thread-safe
+struct mtmd_backends {
+    ggml_backend_t backend     = nullptr; // backend_cpu if no accelerator
+    ggml_backend_t backend_cpu = nullptr;
+
+    // for ggml_backend_sched_new(), backend_cpu last
+    std::vector<ggml_backend_t>             ptrs;
+    std::vector<ggml_backend_buffer_type_t> bufts;
+
+    std::shared_ptr<ggml_threadpool> threadpool; // can be nullptr
+
+    // its buffers fit the largest graph reserved by the subcontexts
+    ggml_backend_sched_ptr sched;
+
+    // device nullptr means CPU
+    mtmd_backends(ggml_backend_dev_t device, int n_threads, int max_nodes,
+                  ggml_backend_sched_eval_callback cb_eval, void * cb_eval_user_data);
+    ~mtmd_backends();
+
+    std::map<ggml_backend_dev_t, size_t> get_mem_compute() const;
+
+    mtmd_backends(const mtmd_backends &) = delete;
+    mtmd_backends & operator=(const mtmd_backends &) = delete;
+};
 
 // compute the log-mel of n_frames frames, the waveform must already be padded and window must hold one whole frame
-// out has the layout [n_frames, n_mel]; like the encoders, must not run at the same time as another pass on config.sched
+// out has the layout [n_frames, n_mel]; must not run at the same time as another pass
 struct mtmd_audio_mel_config;
 bool mtmd_audio_log_mel(const mtmd_audio_mel_config & config, const float * samples, const float * window, int64_t n_frames, float * out);
 
@@ -52,6 +69,11 @@ enum mtmd_subctx_gen_process {
     MTMD_SUBCTX_GEN_PROCESS_TTS,        // full utterance of codes to raw PCM audio
     MTMD_SUBCTX_GEN_PROCESS_TTS_VOCODE, // internal: mel + source stft to istft input
     MTMD_SUBCTX_GEN_PROCESS_TOKENIZE,   // raw PCM audio to semantic speech tokens
+    MTMD_SUBCTX_GEN_PROCESS_LATENT_IN,  // internal: flow latent rows to backbone embd rows (tiny-voca: token states to durations)
+    MTMD_SUBCTX_GEN_PROCESS_LATENT_OUT, // internal: backbone hidden rows to flow velocity rows (tiny-voca: to source-filter params)
+    MTMD_SUBCTX_GEN_PROCESS_RES_INP,    // internal: backbone row to residual LM input row (voxcpm2)
+    MTMD_SUBCTX_GEN_PROCESS_FLOW_COND,  // internal: frame rows to flow condition rows
+    MTMD_SUBCTX_GEN_PROCESS_FLOW_STEP,  // internal: one velocity pass of the flow transformer
 };
 
 // persistent state of a causal audio encoder, for streaming input (one per stream)
@@ -93,6 +115,22 @@ struct mtmd_subctx_gen_state {
     }
 };
 
+// kokoro: inputs and outputs of one graph stage, see mtmd_graph_kokoro
+struct mtmd_subctx_kokoro_io {
+    int stage    = 0;
+    int n_tok    = 0;
+    int n_frames = 0;
+    int n_har    = 0;
+    const std::vector<int32_t> * tokens = nullptr; // STAGE_TEXT
+    const std::vector<float> *   x      = nullptr; // STAGE_F0N: shared LSTM output, STAGE_DEC: aligned text features
+    const std::vector<float> *   style  = nullptr; // predictor or decoder half of the voice row
+    const std::vector<float> *   f0     = nullptr; // STAGE_DEC
+    const std::vector<float> *   en     = nullptr;
+    const std::vector<float> *   har    = nullptr;
+    std::vector<float> * out0 = nullptr; // text features, F0, or STFT coefficients
+    std::vector<float> * out1 = nullptr; // STAGE_F0N: energy
+};
+
 struct mtmd_subctx_encode_params {
     int n_threads = 1;
     const mtmd_image_f32_batch * imgs = nullptr;
@@ -108,6 +146,9 @@ struct mtmd_subctx_encode_params {
     std::vector<int32_t> * out_codes = nullptr; // this frame's 16 sampled codes
     std::vector<float> * out_feats = nullptr; // continuous counterpart of out_codes
     float   temp = 0.0f;                      // sampling temperature, noise scale for flow-matching decoders
+    float   cfg_scale = 1.0f;                 // classifier-free guidance, 1.0 = off
+    float   flow_t = 0.0f;                    // FLOW_STEP: flow-matching time, 0 = noise
+    int     n_steps   = 0;                    // steps of the flow-matching ODE solver (voxcpm2)
     bool * out_is_eos = nullptr;
 
     // TOKENIZE: speech embedding rows of the produced codes
@@ -125,6 +166,10 @@ struct mtmd_subctx_encode_params {
     int vocode_n_stft = 0;
     std::vector<float> * out_spec = nullptr;
 
+    // kokoro: set by encode_kokoro() for each of its graph stages
+    const mtmd_subctx_kokoro_io * kokoro = nullptr;
+    float speed = 1.0f; // kokoro: the predicted durations are divided by it
+
     // audio gen: state of one sequence, encode() updates it in place
     struct mtmd_subctx_gen_state * gen_state = nullptr;
 
@@ -134,37 +179,25 @@ struct mtmd_subctx_encode_params {
 
 struct mtmd_subcontext {
     const mtmd_model & model;
+    mtmd_backends & backends;
 
     std::vector<uint8_t> buf_compute_meta;
 
-    std::vector<ggml_backend_t> backend_ptrs;
-    std::vector<ggml_backend_buffer_type_t> backend_buft;
-
-    std::shared_ptr<ggml_threadpool> threadpool; // shared by the subcontexts of a model
-
-    ggml_backend_t backend = nullptr;
-    ggml_backend_t backend_cpu = nullptr;
-
     int max_nodes = 8192;
-    ggml_backend_sched_ptr sched;
     mtmd_flash_attn_type flash_attn_type = MTMD_FLASH_ATTN_TYPE_AUTO;
     bool is_allocated = false;
 
     bool debug_output_embeddings = false;
 
-    // for measuring memory usage
-    std::map<ggml_backend_dev_t, size_t> mem_compute;
-
     bool support_batch = false;
 
-    // the model must outlive the subcontext
-    mtmd_subcontext(const mtmd_model & model, const mtmd_subctx_params & params);
-    ~mtmd_subcontext();
+    // model and backends must outlive the subcontext
+    mtmd_subcontext(const mtmd_model & model, mtmd_backends & backends, const mtmd_subctx_params & params);
+
+    bool encode(mtmd_subctx_encode_params * params);
 
     // reserve the compute buffers for the given batch
     void warmup(const mtmd_image_f32_batch & batch);
-
-    bool encode(mtmd_subctx_encode_params * params);
 
     // TODO: remove encode_image() and always use batched version
     bool encode_image(int n_threads, const mtmd_image_f32 * img, std::vector<float> & out_vec);
@@ -175,9 +208,6 @@ struct mtmd_subcontext {
 
     // seed UINT32_MAX means random, free the result with delete
     mtmd_subctx_gen_state * gen_state_init(uint32_t seed);
-
-    // weights and compute buffers
-    std::map<ggml_backend_dev_t, size_t> get_mem_usage() const;
 
 private:
     struct support_info_op {
@@ -196,6 +226,9 @@ private:
     };
 
     mtmd_image_f32_batch get_dummy_batch() const;
+
+    // kokoro GEN_WAV: codes are the phoneme tokens, feats the voice row followed by the backbone state of each token
+    bool encode_kokoro(mtmd_subctx_encode_params * params);
 
     // only initialize backend buffers, but do not allocate them yet
     support_info_graph reserve_compute_meta(const mtmd_image_f32_batch & batch);

@@ -13,7 +13,37 @@ struct vk_mat_mat_push_constants {
     uint32_t k_split;
     uint32_t ne02; uint32_t ne12; uint32_t broadcast2; uint32_t broadcast3;
     uint32_t padded_N;
+    uint32_t k_units_per_tile;
+    uint32_t work_units_per_group;
+    uint32_t groups_with_extra_unit;
+    uint32_t k_units_mp;
+    uint32_t blocks_m_mp;
+    uint32_t blocks_n_mp;
+    uint32_t ne12_mp;
+    uint32_t broadcast2_mp;
+    uint32_t broadcast3_mp;
+    uint32_t div_Ls0;
+    uint32_t div_Ls1;
 };
+
+struct vk_mat_mat_stream_k_fixup_push_constants {
+    uint32_t M; uint32_t N;
+    uint32_t BM; uint32_t BN;
+    uint32_t k_units_per_tile;
+    uint32_t blocks_m;
+    uint32_t blocks_n;
+    uint32_t work_units_per_group;
+    uint32_t groups_with_extra_unit;
+    uint32_t k_units_mp;
+    uint32_t blocks_m_mp;
+    uint32_t blocks_n_mp;
+    uint32_t work_units_mp;
+    uint32_t large_group_work_mp;
+    uint32_t div_Ls0;
+    uint32_t div_Ls1;
+};
+
+static_assert(sizeof(vk_mat_mat_push_constants) <= 128);
 
 struct vk_mat_vec_push_constants {
     uint32_t ncols;
@@ -124,22 +154,30 @@ struct vk_flash_attn_push_constants {
 
 static_assert(sizeof(vk_flash_attn_push_constants) <= 128, "sizeof(vk_flash_attn_push_constants) must be <= 128");
 
-struct vk_fa_xe_opt_push_constants {
-    uint32_t kv_seq_len;
-    uint32_t activation_length;
-    uint32_t q_head;
-    uint32_t kv_head;
-    uint32_t qk_ratio;
-    uint32_t qk_sub_groups;
+struct vk_xe_fa_push_constants {
+    uint32_t neq1;
+    uint32_t neq2;
+    uint32_t neq3;
+    uint32_t nek1;
+    uint32_t nek2;
+    uint32_t nek3;
+    uint32_t nev2;
+    uint32_t nev3;
+    uint32_t nem1;
+    uint32_t nem2;
+    uint32_t nem3;
+    uint32_t nbq1;
+    uint32_t nbq2;
+    uint32_t nbk1;
+    uint32_t nbk2;
+    uint32_t nbv1;
+    uint32_t nbv2;
+    uint32_t nbq3;
+    uint32_t nbk3;
+    uint32_t nbv3;
+    uint32_t nb3;
     uint32_t flag;
-    uint32_t nbkv_tok;
-    uint32_t nbkv_head;
-    uint32_t batch_stride_q;
-    uint32_t batch_stride_k;
-    uint32_t batch_stride_v;
-    uint32_t batch_stride_m;
-    uint32_t batch_stride_o;
-    float softmax_scale;
+    float scale;
 };
 
 struct vk_op_push_constants {
@@ -149,6 +187,10 @@ struct vk_op_push_constants {
     float param2;
     float param3;
     float param4;
+};
+
+struct vk_op_sleep_push_constants {
+    uint32_t ticks;
 };
 
 struct vk_op_fwht_push_constants {
@@ -209,6 +251,29 @@ struct vk_op_dsv4_hc_post_push_constants {
     uint32_t gate;
     float    gate_scale_in;
     float    gate_scale_out;
+};
+
+struct vk_op_top_k_mask_push_constants {
+    uint32_t n_kv;
+    uint32_t n_top;
+    uint32_t n_pick;
+    uint32_t n_blk;
+    uint32_t n_extra;
+    uint32_t has_score;
+    uint32_t ninf;
+
+    uint32_t ne1; uint32_t ne2;
+
+    uint32_t m1; uint32_t m2; uint32_t m3;
+    uint32_t nbm1; uint32_t nbm2; uint32_t nbm3;
+    uint32_t nbd1; uint32_t nbd2; uint32_t nbd3;
+
+    uint32_t m_offset;
+    uint32_t k_offset;
+    uint32_t s_offset;
+    uint32_t b_offset;
+    uint32_t e_offset;
+    uint32_t d_offset;
 };
 
 struct vk_op_count_experts_push_constants {
@@ -372,6 +437,34 @@ template <typename T> void init_pushconst_fastdiv(T &p) {
     static_assert(!std::is_const<T>::value, "unexpected type");
 }
 
+inline void init_pushconst_fastdiv(vk_mat_mat_push_constants &p) {
+    uint32_t ne12_L, broadcast2_L, broadcast3_L;
+    init_fastdiv_values(p.ne12,       p.ne12_mp,       ne12_L);
+    init_fastdiv_values(p.broadcast2, p.broadcast2_mp, broadcast2_L);
+    init_fastdiv_values(p.broadcast3, p.broadcast3_mp, broadcast3_L);
+    p.div_Ls1 = pack_fastdiv_L(ne12_L, broadcast2_L, broadcast3_L);
+}
+
+inline void init_pushconst_fastdiv(vk_mat_mat_push_constants &p, uint32_t blocks_m, uint32_t blocks_n) {
+    uint32_t k_units_L, blocks_m_L, blocks_n_L;
+    init_fastdiv_values(p.k_units_per_tile, p.k_units_mp, k_units_L);
+    init_fastdiv_values(blocks_m, p.blocks_m_mp, blocks_m_L);
+    init_fastdiv_values(blocks_n, p.blocks_n_mp, blocks_n_L);
+    p.div_Ls0 = pack_fastdiv_L(k_units_L, blocks_m_L, blocks_n_L);
+    init_pushconst_fastdiv(p);
+}
+
+template <> inline void init_pushconst_fastdiv(vk_mat_mat_stream_k_fixup_push_constants &p) {
+    uint32_t k_units_L, blocks_m_L, blocks_n_L, work_units_L, large_group_work_L;
+    init_fastdiv_values(p.k_units_per_tile, p.k_units_mp, k_units_L);
+    init_fastdiv_values(p.blocks_m, p.blocks_m_mp, blocks_m_L);
+    init_fastdiv_values(p.blocks_n, p.blocks_n_mp, blocks_n_L);
+    init_fastdiv_values(p.work_units_per_group, p.work_units_mp, work_units_L);
+    init_fastdiv_values(p.work_units_per_group + 1, p.large_group_work_mp, large_group_work_L);
+    p.div_Ls0 = pack_fastdiv_L(k_units_L, blocks_m_L, blocks_n_L);
+    p.div_Ls1 = pack_fastdiv_L(work_units_L, large_group_work_L, 0);
+}
+
 template <> inline void init_pushconst_fastdiv(vk_op_unary_push_constants &p) {
     // Compute magic values to divide by these six numbers.
     uint32_t ne0_012L;
@@ -452,12 +545,6 @@ struct vk_op_add_id_push_constants {
     uint32_t s02;
     uint32_t s11;
     uint32_t s21;
-};
-
-struct vk_op_diag_mask_push_constants {
-    uint32_t ncols;
-    uint32_t rows_per_channel;
-    int32_t n_past;
 };
 
 struct vk_op_rope_push_constants {
@@ -608,6 +695,7 @@ struct vk_op_col2im_1d_push_constants {
     uint32_t K;
     int32_t  stride;
     int32_t  p0;
+    uint32_t src_offset;
 };
 
 struct vk_op_conv_transpose_1d_push_constants {
@@ -700,6 +788,7 @@ struct vk_op_gated_delta_net_push_constants {
     uint32_t n_seqs;
     uint32_t s_off;
     uint32_t sq1, sq2, sq3;
+    uint32_t sk1, sk2, sk3;
     uint32_t sv1, sv2, sv3;
     uint32_t sb1, sb2, sb3;
     uint32_t neq1, rq3;
@@ -829,7 +918,7 @@ struct vk_op_upscale_push_constants {
 struct vk_op_sum_rows_push_constants
 {
     uint32_t n_cols;
-    uint32_t ne01, ne02;
+    uint32_t ne01, ne02, ne03;
     uint32_t nb01, nb02, nb03;
     uint32_t nb11, nb12, nb13;
     float weight;
@@ -844,6 +933,7 @@ static vk_op_sum_rows_push_constants vk_op_sum_rows_push_constants_init(const gg
     p.n_cols = (uint32_t)n_cols;
     p.ne01 = (uint32_t)src->ne[1];
     p.ne02 = (uint32_t)src->ne[2];
+    p.ne03 = (uint32_t)src->ne[3];
     p.nb01 = (uint32_t)src->nb[1] / type_size;
     p.nb02 = (uint32_t)src->nb[2] / type_size;
     p.nb03 = (uint32_t)src->nb[3] / type_size;
@@ -943,6 +1033,15 @@ template <> inline void init_pushconst_tensor_offsets(ggml_backend_vk_context * 
     GGML_UNUSED(src3);
 }
 
+template <> inline void init_pushconst_tensor_offsets(ggml_backend_vk_context * ctx, vk_op_col2im_1d_push_constants &p, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * src3, ggml_tensor * dst) {
+    p.src_offset = get_misalign_bytes(ctx, src0) / ggml_type_size(src0->type);
+    GGML_ASSERT(get_misalign_bytes(ctx, dst) == 0);
+
+    GGML_UNUSED(src1);
+    GGML_UNUSED(src2);
+    GGML_UNUSED(src3);
+}
+
 template <> inline void init_pushconst_tensor_offsets(ggml_backend_vk_context * ctx, vk_op_dsv4_hc_comb_push_constants &p, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * src3, ggml_tensor * dst) {
     p.m_offset = get_misalign_bytes(ctx, src0) / ggml_type_size(src0->type);
     p.s_offset = get_misalign_bytes(ctx, src1) / ggml_type_size(src1->type);
@@ -967,6 +1066,18 @@ template <> inline void init_pushconst_tensor_offsets(ggml_backend_vk_context * 
     p.p_offset = get_misalign_bytes(ctx, src2) / ggml_type_size(src2->type);
     p.c_offset = src3 ? get_misalign_bytes(ctx, src3) / ggml_type_size(src3->type) : 0;
     p.d_offset = get_misalign_bytes(ctx, dst)  / ggml_type_size(dst->type);
+}
+
+// the fifth source, extra, comes from dst
+template <> inline void init_pushconst_tensor_offsets(ggml_backend_vk_context * ctx, vk_op_top_k_mask_push_constants &p, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * src3, ggml_tensor * dst) {
+    const ggml_tensor * extra = dst->src[4];
+
+    p.m_offset = get_misalign_bytes(ctx, src0) / ggml_type_size(src0->type);
+    p.k_offset = get_misalign_bytes(ctx, src1) / ggml_type_size(src1->type);
+    p.s_offset = src2  ? get_misalign_bytes(ctx, src2)  / ggml_type_size(src2->type)  : 0;
+    p.b_offset = src3  ? get_misalign_bytes(ctx, src3)  / ggml_type_size(src3->type)  : 0;
+    p.e_offset = extra ? get_misalign_bytes(ctx, extra) / ggml_type_size(extra->type) : 0;
+    p.d_offset = get_misalign_bytes(ctx, dst) / ggml_type_size(dst->type);
 }
 
 template <typename T> size_t push_constant_size(const T &t) {

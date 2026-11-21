@@ -3,7 +3,7 @@ from utils import *
 
 server = ServerPreset.stories15m_moe()
 
-LORA_FILE_URL = "https://huggingface.co/ggml-org/stories15M_MOE/resolve/main/moe_shakespeare15M.gguf"
+LORA_FILE_URL = "https://huggingface.co/ggml-org-dev/stories15M_MOE/resolve/main/moe_shakespeare15M.gguf"
 
 @pytest.fixture(autouse=True)
 def create_server():
@@ -64,6 +64,107 @@ def test_lora_per_request():
     assert all([res.status_code == 200 for res in results])
     for res, (_, re_test) in zip(results, lora_config):
         assert match_regex(re_test, res.body["content"])
+
+
+def test_lora_global_change_clears_slot_cache():
+    global server
+    server.n_slots = 1
+    server.cache_ram = 0
+    server.start()
+
+    # long enough that stale kv changes the output
+    prompt = "Look in thy glass and tell the face thou viewest, now is the time that face should form another, whose fresh repair if now thou not renewest, thou dost beguile the world, unbless some mother."
+
+    def set_global_lora(scale: float):
+        res = server.make_request("POST", "/lora-adapters", data=[{"id": 0, "scale": scale}])
+        assert res.status_code == 200
+
+    def complete(lora=None, cache_prompt: bool = True) -> dict:
+        data = {
+            "prompt": prompt,
+            "cache_prompt": cache_prompt,
+            "temperature": 0.0,
+            "seed": 42,
+            "n_predict": 16,
+        }
+        if lora is not None:
+            data["lora"] = lora
+        res = server.make_request("POST", "/completion", data=data)
+        assert res.status_code == 200
+        return res.body
+
+    set_global_lora(0.0)
+    expected_zero = complete(cache_prompt=False)["content"]
+    set_global_lora(1.0)
+    expected_one = complete(cache_prompt=False)["content"]
+    assert expected_zero != expected_one
+
+    # the global config changes between two requests that do not set "lora"
+    set_global_lora(0.0)
+    res = complete()
+    assert res["timings"]["cache_n"] == 0
+    assert res["content"] == expected_zero
+    set_global_lora(1.0)
+    res = complete()
+    assert res["timings"]["cache_n"] == 0
+    assert res["content"] == expected_one
+
+    # unchanged config keeps the cache
+    res = complete()
+    assert res["timings"]["cache_n"] > 0
+
+    # a request that sets "lora", followed by one that doesn't
+    res = complete(lora=[{"id": 0, "scale": 0.0}])
+    assert res["timings"]["cache_n"] == 0
+    assert res["content"] == expected_zero
+    res = complete()
+    assert res["timings"]["cache_n"] == 0
+    assert res["content"] == expected_one
+
+
+def test_lora_prompt_cache():
+    global server
+    server.n_slots = 1
+    server.start()
+
+    # long enough that stale kv changes the output
+    prompt = "Look in thy glass and tell the face thou viewest, now is the time that face should form another, whose fresh repair if now thou not renewest, thou dost beguile the world, unbless some mother."
+    other  = "Once upon a time there was a little girl named Lily who loved to play in the garden with her dog, and one day she found a shiny key under the big tree."
+
+    def complete(prompt: str, scale: float, cache_prompt: bool = True) -> dict:
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "lora": [{"id": 0, "scale": scale}],
+            "cache_prompt": cache_prompt,
+            "temperature": 0.0,
+            "seed": 42,
+            "n_predict": 16,
+        })
+        assert res.status_code == 200
+        return res.body
+
+    expected_zero = complete(prompt, 0.0, cache_prompt=False)["content"]
+    expected_one  = complete(prompt, 1.0, cache_prompt=False)["content"]
+    assert expected_zero != expected_one
+
+    # start again, so that the prompt cache has no state of the prompt with scale 0
+    server.stop()
+    server.start()
+
+    # the prompt goes to the prompt cache with scale 1 when the other prompt takes the slot
+    assert complete(prompt, 1.0)["content"] == expected_one
+    complete(other, 0.0)
+
+    # the cached state was made with another lora config, it must not be used
+    res = complete(prompt, 0.0)
+    assert res["timings"]["cache_n"] <= 1 # the BOS token
+    assert res["content"] == expected_zero
+
+    # with the same config, it is used
+    complete(other, 1.0)
+    res = complete(prompt, 1.0)
+    assert res["timings"]["cache_n"] > 1
+    assert res["content"] == expected_one
 
 
 @pytest.mark.skipif(not is_slow_test_allowed(), reason="skipping slow test")
