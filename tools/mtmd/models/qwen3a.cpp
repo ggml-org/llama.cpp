@@ -6,13 +6,16 @@ ggml_cgraph * mtmd_graph_qwen3a::build() {
     // inp_raw: [n_frames, n_mel, 1]  (nx=n_frames, ny=n_mel)
     ggml_tensor * inp = build_inp_raw(1);
 
-    const int64_t n_frames   = inp->ne[0]; // total frames, padded to multiple of chunk_size
     const int64_t n_mel      = inp->ne[1]; // 128
     const int64_t chunk_size = 100;        // n_window * 2 (n_window=50 from model config)
-    const int64_t n_chunks   = n_frames / chunk_size;
+    const int64_t n_chunks   = (inp->ne[0] + chunk_size - 1) / chunk_size;
+    const int64_t n_tail     = inp->ne[0] % chunk_size;
 
-    GGML_ASSERT(n_frames % chunk_size == 0); // preprocessor should already pad the input
     GGML_ASSERT(inp->type == GGML_TYPE_F32);
+
+    // zero-pad the last chunk to chunk_size, as the reference pads all chunks to the longest one
+    inp = ggml_pad(ctx0, inp, n_chunks * chunk_size - inp->ne[0], 0, 0, 0);
+    const int64_t n_frames = inp->ne[0];
 
     // View mel spectrogram as batched 100-frame chunks: [chunk_size, n_mel, 1, n_chunks]
     inp = ggml_view_4d(ctx0, inp,
@@ -69,7 +72,12 @@ ggml_cgraph * mtmd_graph_qwen3a::build() {
         inp = ggml_add(ctx0, inp, ggml_repeat(ctx0, pos_tmp, tgt));
     }
 
-    ggml_tensor * cur = build_vit(inp, n_pos,
+    // drop the outputs of the padding in the last chunk
+    const int64_t tokens_per_chunk = n_pos / n_chunks; // 13
+    const int64_t n_out = n_pos - (n_tail > 0 ? tokens_per_chunk - (((n_tail + 1) / 2 + 1) / 2 + 1) / 2 : 0);
+    inp = ggml_view_2d(ctx0, inp, inp->ne[0], n_out, inp->nb[1], 0);
+
+    ggml_tensor * cur = build_vit(inp, n_out,
         NORM_TYPE_NORMAL, hparams.ffn_op,
         nullptr,  // pos embd already added above
         nullptr);
