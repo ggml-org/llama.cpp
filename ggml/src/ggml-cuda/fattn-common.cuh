@@ -434,6 +434,16 @@ static __device__ __forceinline__ void dequantize_V_bf16(const void * __restrict
     }
 }
 
+// Byte l of q as int8_t. On sm_100+ nvcc 12.8 puts the byte-pointer read in local memory, so use shifts there and
+// keep the pointer read elsewhere, where it compiles well.
+static __device__ __forceinline__ int8_t get_int8(const int & q, const int l) {
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= 1000
+    return (int8_t) (q >> (8*l));
+#else
+    return ((const int8_t *) &q)[l];
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= 1000
+}
+
 template <typename T, int ne>
 static __device__ __forceinline__ void dequantize_V_f8_e4m3(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
     static_assert(ne == 2 || ne == 4, "bad ne");
@@ -467,15 +477,13 @@ static __device__ __forceinline__ void dequantize_V_q4_0(const void * __restrict
     q &= 0x0F0F0F0F;
     q = __vsub4(q, 0x08080808);
 
-    const int8_t * q8 = (const int8_t *) &q;
-
     if constexpr (std::is_same_v<T, half>) {
 #ifdef FP16_AVAILABLE
         const half2 d = __half2half2(x[ib].d);
 
 #pragma unroll
         for (int l0 = 0; l0 < ne; l0 += 2) {
-            ((half2 *) dst)[l0/2] = d * make_half2(q8[l0 + 0], q8[l0 + 1]);
+            ((half2 *) dst)[l0/2] = d * make_half2(get_int8(q, l0 + 0), get_int8(q, l0 + 1));
         }
 #else
         NO_DEVICE_CODE;
@@ -485,7 +493,7 @@ static __device__ __forceinline__ void dequantize_V_q4_0(const void * __restrict
 
 #pragma unroll
         for (int l = 0; l < ne; ++l) {
-            ((float *) dst)[l] = d * q8[l];
+            ((float *) dst)[l] = d * get_int8(q, l);
         }
     } else {
         static_assert(std::is_same_v<T, void>, "bad type");
@@ -559,15 +567,13 @@ static __device__ __forceinline__ void dequantize_V_q5_0(const void * __restrict
 
     q = __vsub4(q, 0x10101010);
 
-    const int8_t * q8 = (const int8_t *) &q;
-
     if constexpr (std::is_same_v<T, half>) {
 #ifdef FP16_AVAILABLE
         const half2 d = __half2half2(x[ib].d);
 
 #pragma unroll
         for (int l0 = 0; l0 < ne; l0 += 2) {
-            ((half2 *) dst)[l0/2] = d * make_half2(q8[l0 + 0], q8[l0 + 1]);
+            ((half2 *) dst)[l0/2] = d * make_half2(get_int8(q, l0 + 0), get_int8(q, l0 + 1));
         }
 #else
         NO_DEVICE_CODE;
@@ -577,7 +583,7 @@ static __device__ __forceinline__ void dequantize_V_q5_0(const void * __restrict
 
 #pragma unroll
         for (int l = 0; l < ne; ++l) {
-            ((float *) dst)[l] = d * q8[l];
+            ((float *) dst)[l] = d * get_int8(q, l);
         }
     } else {
         static_assert(std::is_same_v<T, void>, "bad type");
