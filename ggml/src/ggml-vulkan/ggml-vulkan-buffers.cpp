@@ -812,7 +812,7 @@ void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, size_t siz
     // vkCmdFillBuffer requires a 4-byte aligned offset and size, so write the unaligned ends from the matching bytes of c
     const size_t end           = offset + size;
     const size_t begin_aligned = std::min(GGML_PAD(offset, 4), end);
-    const size_t end_aligned   = std::max(end & ~(size_t) 3, begin_aligned);
+    const size_t end_aligned   = std::max(end - end % 4, begin_aligned);
 
     const uint8_t * c_bytes = (const uint8_t *) &c;
     if (begin_aligned > offset) {
