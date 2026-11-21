@@ -115,8 +115,26 @@ float op_expm1(float x) {
     return exp(x) - 1.0f;
 }
 
+float op_log1p(float x) {
+    float y = x / (2.0f + x);
+    float y2 = y * y;
+    float p = 1.0f / 13.0f;
+    p = p * y2 + 1.0f / 11.0f;
+    p = p * y2 + 1.0f / 9.0f;
+    p = p * y2 + 1.0f / 7.0f;
+    p = p * y2 + 1.0f / 5.0f;
+    p = p * y2 + 1.0f / 3.0f;
+    p = p * y2 + 1.0f;
+    float s = 2.0f * y * p;
+    float l = log(1.0f + x);
+    bool in_series = (x >= -0.5f) && (x <= 1.0f);
+    bool tiny = abs(x) < 2.5e-38f;
+    float r = in_series ? s : l;
+    return tiny ? x : r;
+}
+
 float op_softplus(float x) {
-    return (x > 20.0f) ? x : log(1.0f + exp(x));
+    return (x > 20.0f) ? x : op_log1p(exp(x));
 }
 
 float op_gelu_erf(float a) {
