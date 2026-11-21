@@ -2,4 +2,4 @@
 
 #include "../fattn-tile.cuh"
 
-DECL_FATTN_TILE_CASE(128, 128);
+DECL_FATTN_TILE_CASE(96, 96, GGML_TYPE_F16, GGML_TYPE_F16);
