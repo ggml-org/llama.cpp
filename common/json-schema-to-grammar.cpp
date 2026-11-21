@@ -56,6 +56,8 @@ static void build_min_max_int(int64_t min_value, int64_t max_value, std::strings
         out << "]";
     };
     auto more_digits = [&](int min_digits, int max_digits) {
+        // a bound with more digits than decimals_left raises the length limit to its own length
+        max_digits = std::max(max_digits, min_digits);
         out << "[0-9]";
         if (min_digits == max_digits && min_digits == 1) {
             return;
