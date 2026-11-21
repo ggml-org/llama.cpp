@@ -71,6 +71,7 @@
 !/models/.editorconfig
 !/models/ggml-vocab-*.gguf*
 !/models/templates
+!/models/sparsetral-minimal
 
 # Zig
 
