@@ -41,5 +41,7 @@ using dl_handle_ptr = std::unique_ptr<dl_handle, dl_handle_deleter>;
 
 dl_handle * dl_load_library(const fs::path & path);
 void * dl_get_sym(dl_handle * handle, const char * name);
+// On Windows, return and clear the last load/symbol error; successful operations clear it too.
+// The string is valid until the next dl_error() call on this thread or thread exit.
 const char * dl_error();
 
