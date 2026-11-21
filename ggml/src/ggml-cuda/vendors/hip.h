@@ -357,6 +357,7 @@ static __device__ __forceinline__ T ggml_hip_dpp_update(T x) {
 
 template <int swizzle_mask, typename T>
 static __device__ __forceinline__ T ggml_hip_swizzle(T x) {
+    static_assert(sizeof(T) == 4, "DS swizzle requires 32-bit values");
     union { T t; int i; } value;
     value.t = x;
     value.i = __builtin_amdgcn_ds_swizzle(value.i, swizzle_mask);
