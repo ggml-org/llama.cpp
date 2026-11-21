@@ -551,7 +551,31 @@ struct gguf_split_info {
     std::string tag;
     int index;
     int count;
+    bool imatrix; // the file is a quant built with an importance matrix, `-imatrix` suffix
 };
+
+// Q4_0, Q8_K_M, IQ2_XS, MXFP4, TQ1_0, BF16, F16... but not a model name tail such as `4B`
+static bool name_is_quant_tag(const std::string & tag) {
+    static const std::regex re_quant("^(IQ|TQ|BF|MXFP|NVFP|F|Q)[0-9]", std::regex::icase);
+    return std::regex_search(tag, re_quant);
+}
+
+// `model-Q4_K_M-imatrix.gguf`, never `model-Q4_K_M_imatrix.gguf`: a dash separates
+// the keyword from the quant, an underscore is part of a quant tag such as Q4_K_M
+static bool string_remove_imatrix_suffix(std::string & str) {
+    static const std::string suffix = "-imatrix";
+    if (str.size() <= suffix.size()) {
+        return false;
+    }
+    const size_t pos = str.size() - suffix.size();
+    for (size_t i = 0; i < suffix.size(); ++i) {
+        if (std::tolower((unsigned char) str[pos + i]) != suffix[i]) {
+            return false;
+        }
+    }
+    str.resize(pos);
+    return true;
+}
 
 static gguf_split_info get_gguf_split_info(const std::string & path) {
     static const std::regex re_split("^(.+)-([0-9]{5})-of-([0-9]{5})$", std::regex::icase);
@@ -580,7 +604,28 @@ static gguf_split_info get_gguf_split_info(const std::string & path) {
         }
     }
 
-    return {std::move(prefix), std::move(tag), index, count};
+    // a `-imatrix` suffix marks a quant built with an importance matrix, the quant
+    // tag in front of it stays the tag: `model-Q4_K_M-imatrix.gguf` is `Q4_K_M`
+    bool imatrix = false;
+    std::string bare = prefix;
+    if (string_remove_imatrix_suffix(bare)) {
+        std::string bare_tag;
+        if (std::regex_search(bare, m, re_tag)) {
+            bare_tag = m[1].str();
+            for (char & c : bare_tag) {
+                c = std::toupper((unsigned char)c);
+            }
+        }
+        // without a quant in front of the keyword the file is a standalone
+        // importance matrix, e.g. `model-imatrix.gguf`
+        if (name_is_quant_tag(bare_tag)) {
+            prefix = std::move(bare);
+            tag     = std::move(bare_tag);
+            imatrix = true;
+        }
+    }
+
+    return {std::move(prefix), std::move(tag), index, count, imatrix};
 }
 
 // Q4_0 -> 4, F16 -> 16, NVFP4 -> 4, Q8_K_M -> 8, etc
@@ -750,7 +795,21 @@ static bool gguf_filename_is_model(const std::string & filepath) {
         filename = filename.substr(pos + 1);
     }
 
-    return filename.find("imatrix") == std::string::npos && !name_is_sidecar(filename);
+    if (name_is_sidecar(filename)) {
+        return false;
+    }
+
+    // a quant built with an importance matrix carries the keyword after its quant tag,
+    // `model-Q4_K_M-imatrix.gguf`; elsewhere the keyword names a standalone importance
+    // matrix, `imatrix.gguf` / `model-imatrix.gguf`, which is not a model
+    for (char & c : filename) {
+        c = (char) std::tolower((unsigned char) c);
+    }
+    if (filename.find("imatrix") == std::string::npos) {
+        return true;
+    }
+
+    return get_gguf_split_info(filename).imatrix;
 }
 
 static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
