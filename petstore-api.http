@@ -1,0 +1,76 @@
+# Define API Key variable
+@API_KEY = 12345
+@baseUrl = https://petstore3.swagger.io/api/v3
+
+# Generate a unique pet ID, an integer between 100000 and 999999
+@uniquePetId = {{$randomInt 100000 999999}}
+
+###
+
+# Create a new pet
+POST {{baseUrl}}/pet
+Content-Type: application/json
+Accept: application/json
+api_key: {{API_KEY}}
+
+{
+  "id": {{uniquePetId}},
+  "name": "Fluffy",
+  "category": {
+    "id": 1,
+    "name": "Dogs"
+  },
+  "photoUrls": [
+    "https://example.com/photo.jpg"
+  ],
+  "tags": [
+    {
+      "id": 1,
+      "name": "cute"
+    }
+  ],
+  "status": "available"
+}
+
+@petId = {{uniquePetId}}
+
+###
+
+# Retrieve the newly created pet
+GET {{baseUrl}}/pet/{{petId}}
+Accept: application/json
+api_key: {{API_KEY}}
+
+###
+
+# Update the pet
+PUT {{baseUrl}}/pet
+Content-Type: application/json
+Accept: application/json
+api_key: {{API_KEY}}
+
+{
+  "id": {{petId}},
+  "name": "UpdatedFluffy",
+  "category": {
+    "id": 1,
+    "name": "Dogs"
+  },
+  "photoUrls": [
+    "https://example.com/newphoto.jpg"
+  ],
+  "tags": [
+    {
+      "id": 1,
+      "name": "cute"
+    }
+  ],
+  "status": "sold"
+}
+
+###
+
+# Delete the pet
+DELETE {{baseUrl}}/pet/{{petId}}
+Accept: application/json
+api_key: {{API_KEY}}
