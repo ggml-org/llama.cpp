@@ -807,10 +807,15 @@ std::vector<llama_token> common_sampler_sample_and_accept_n_rejection(struct com
         }
 
         // rejected: tokens outside q's support keep all of p
+        bool dense = q.size() == (size_t) llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx)));
+        for (size_t k = 0; dense && k < q.size(); ++k) {
+            dense = q[k].id == (llama_token) k;
+        }
         residual.clear();
         float sum = 0.0f;
         for (size_t k = 0; k < cur_p->size; ++k) {
-            const float r = p_of(k) - prob_of(q.data(), q.size(), cur_p->data[k].id);
+            const llama_token id = cur_p->data[k].id;
+            const float r = p_of(k) - (dense && (size_t) id < q.size() ? q[id].p : prob_of(q.data(), q.size(), id));
             if (r > 0.0f) {
                 residual.push_back({ cur_p->data[k].id, 0.0f, r });
                 sum += r;

@@ -862,32 +862,13 @@ static void test_dist_and_cpu(const test_params & params) {
 }
 
 static void test_logit_bias(const test_params & params) {
-    const auto * model = params.model.get();
-    const auto * vocab = llama_model_get_vocab(model);
-
-    const int seq_id = 0;
-
-    std::vector<llama_logit_bias> logit_bias;
-
-    // Get the token for the piece "World".
-    const std::string piece = "World";
-    std::vector<llama_token> tokens(16);
-    llama_tokenize(vocab, piece.c_str(), piece.size(), tokens.data(), tokens.size(), false, false);
-
-    llama_token bias_token = tokens[0];
-    // TODO: biasing too much here makes the Vulkan sampling fail - should be investigated further
-    //       https://github.com/ggml-org/llama.cpp/actions/runs/20894267644/job/60030252675?pr=18753#step:3:23350
-    //logit_bias.push_back({ bias_token, +100.0f });
-    logit_bias.push_back({ bias_token, +10.0f });
-
-    printf("biasing token piece '%s' -> token id %d\n", piece.c_str(), bias_token);
+    const llama_seq_id seq_id = 0;
+    const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(params.model.get()));
+    const llama_logit_bias bias = { n_vocab / 2, 10.0f };
 
     struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
     llama_sampler_ptr backend_sampler_chain(llama_sampler_chain_init(backend_chain_params));
-    llama_sampler_chain_add(backend_sampler_chain.get(), llama_sampler_init_logit_bias(
-                llama_vocab_n_tokens(vocab),
-                logit_bias.size(),
-                logit_bias.data()));
+    llama_sampler_chain_add(backend_sampler_chain.get(), llama_sampler_init_logit_bias(n_vocab, 1, &bias));
     llama_sampler_chain_add(backend_sampler_chain.get(), llama_sampler_init_dist(88));
 
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {
@@ -895,14 +876,24 @@ static void test_logit_bias(const test_params & params) {
     };
 
     test_context test_ctx(params, backend_sampler_configs);
+    std::vector<llama_sampler_seq_config> reference_configs;
+    test_context reference_ctx(params, reference_configs);
+    GGML_ASSERT(test_ctx.decode({{seq_id, "Hello"}}));
+    GGML_ASSERT(reference_ctx.decode({{seq_id, "Hello"}}));
 
-    if (!test_ctx.decode({{seq_id, "Hello"}})) {
-        GGML_ASSERT(false && "Failed to decode token");
+    const int32_t idx = test_ctx.idx_for_seq(seq_id);
+    const float * logits = llama_get_sampled_logits_ith(test_ctx.ctx.get(), idx);
+    const float * reference = llama_get_logits_ith(reference_ctx.ctx.get(), reference_ctx.idx_for_seq(seq_id));
+    GGML_ASSERT(logits && reference);
+    GGML_ASSERT(llama_get_sampled_logits_count_ith(test_ctx.ctx.get(), idx) == (uint32_t) n_vocab);
+    const llama_token token = llama_get_sampled_token_ith(test_ctx.ctx.get(), idx);
+    GGML_ASSERT(token >= 0 && token < n_vocab);
+
+    for (llama_token id = 0; id < n_vocab; ++id) {
+        const float expected = reference[id] + (id == bias.token ? bias.bias : 0.0f);
+        const float tolerance = 1e-4f * std::max(1.0f, std::fabs(expected));
+        GGML_ASSERT(std::fabs(logits[id] - expected) <= tolerance);
     }
-
-    llama_token backend_token = llama_get_sampled_token_ith(test_ctx.ctx.get(), test_ctx.idx_for_seq(seq_id));
-    printf("sampled token = %d, expected = %d\n", backend_token, bias_token);
-    GGML_ASSERT(backend_token == bias_token);
 
     printf("backend logit bias sampling test PASSED\n");
 }

@@ -1216,6 +1216,9 @@ size_t llama_batch_ext_select_n_embd_state(llama_context_type ctx_type, const ll
         return hparams.n_embd_out();
     }
     // TODO: this probably should become a function of `llm_arch`
+    if (hparams.dspark_context_rank) {
+        return 3*(size_t) hparams.n_embd;
+    }
     if (hparams.lilicorr_candidate_topk > 0) {
         return hparams.n_embd_inp();
     }

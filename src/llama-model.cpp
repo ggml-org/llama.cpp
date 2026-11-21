@@ -3679,6 +3679,10 @@ llama_dflash_variant llama_model_dflash_variant(const llama_model * model) {
         return LLAMA_DFLASH_VARIANT_NONE;
     }
 
+    if (model->hparams.dspark_context_rank) {
+        return LLAMA_DFLASH_VARIANT_DSPARK_INKLING2;
+    }
+
     switch (dflash->variant) {
         case llama_model_dflash::VARIANT_DFLASH:   return LLAMA_DFLASH_VARIANT_DFLASH;
         case llama_model_dflash::VARIANT_DFLASH2:  return LLAMA_DFLASH_VARIANT_DFLASH2;
