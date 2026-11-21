@@ -95,6 +95,7 @@ kernel void kernel_gated_delta_net(
         uint  n_seqs,
         uint  s_off,
         uint  sq1, uint sq2, uint sq3,
+        uint  sk1, uint sk2, uint sk3,
         uint  sv1, uint sv2, uint sv3,
         uint  sb1, uint sb2, uint sb3,
         uint  H_k,
@@ -136,6 +137,7 @@ kernel void kernel_gated_delta_net(
     // input state holds s0 only [S_v, S_v, H, n_seqs]: per-seq stride is H*D.
     const uint state_base = (seq_id * H_v + head_id) * state_size;
     const uint q_off_base  = iq3 * sq3 + iq1 * sq1;
+    const uint k_off_base  = iq3 * sk3 + iq1 * sk1;
     const uint v_off_base  = seq_id * sv3 + head_id * sv1;
     const uint gb_off_base = seq_id * sb3 + head_id * sb1;
     const uint state_out_base      = (seq_id * H_v + head_id) * state_size;
@@ -231,7 +233,7 @@ kernel void kernel_gated_delta_net(
 
     for (uint t = 0; t < n_tokens; t++) {
         const uint  q_off    = q_off_base + t * sq2;
-        const uint  k_off    = q_off;
+        const uint  k_off    = k_off_base + t * sk2;
         const uint  v_off    = v_off_base + t * sv2;
         const uint  gb_off   = gb_off_base + t * sb2;
         const float beta_val = data_beta[gb_off];
