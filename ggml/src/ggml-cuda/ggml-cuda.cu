@@ -2,6 +2,7 @@
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 
+#include "ggml-cuda/arena.h"
 #include "ggml-cuda/allreduce.cuh"
 #include "ggml-cuda/common.cuh"
 #include "ggml-cuda/graph.cuh"
@@ -817,6 +818,36 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
 };
 #endif // defined(GGML_USE_VMM)
 
+static bool ggml_cuda_shared_pool_enabled = false;
+
+// The caller must serialize context construction and synchronize between context executions.
+static void ggml_backend_cuda_use_shared_pool(bool enabled) {
+    ggml_cuda_shared_pool_enabled = enabled;
+}
+
+#if defined(GGML_USE_VMM)
+struct ggml_cuda_pool_shared : public ggml_cuda_pool {
+    std::shared_ptr<ggml_cuda_pool> pool;
+
+    ggml_cuda_pool_shared(int device, int stream) {
+        static std::weak_ptr<ggml_cuda_pool> pools[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS];
+        pool = pools[device][stream].lock();
+        if (!pool) {
+            pool = std::make_shared<ggml_cuda_pool_vmm>(device);
+            pools[device][stream] = pool;
+        }
+    }
+
+    void * alloc(size_t size, size_t * actual_size) override {
+        return pool->alloc(size, actual_size);
+    }
+
+    void free(void * ptr, size_t size) override {
+        pool->free(ptr, size);
+    }
+};
+#endif
+
 // Debug pool for NVIDIA compute-sanitizer, e.g.
 // `GGML_CUDA_POOL_DEBUG=1 compute-sanitizer --tool memcheck ./build/bin/test-backend-ops -b CUDA0`
 // Allocations are exact-size and freed on release,
@@ -856,6 +887,9 @@ std::unique_ptr<ggml_cuda_pool> ggml_backend_cuda_context::new_pool_for_device(g
     }
 #if defined(GGML_USE_VMM)
     if (ggml_cuda_info().devices[device].vmm) {
+        if (ggml_cuda_shared_pool_enabled) {
+            return std::unique_ptr<ggml_cuda_pool>(new ggml_cuda_pool_shared(device, stream_no));
+        }
         return std::unique_ptr<ggml_cuda_pool>(new ggml_cuda_pool_vmm(device));
     }
 #endif // defined(GGML_USE_VMM)
@@ -1020,6 +1054,9 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 struct ggml_backend_cuda_buffer_context {
     int device;
     void * dev_ptr = nullptr;
+    bool owned = true;
+    void (*release)(void *) = nullptr;
+    void * release_data = nullptr;
     std::string name;
 
     ggml_backend_cuda_buffer_context(int device, void * dev_ptr) :
@@ -1028,7 +1065,11 @@ struct ggml_backend_cuda_buffer_context {
     }
 
     ~ggml_backend_cuda_buffer_context() {
-        CUDA_CHECK(cudaFree(dev_ptr));
+        if (owned) {
+            CUDA_CHECK(cudaFree(dev_ptr));
+        } else if (release) {
+            release(release_data);
+        }
     }
 };
 
@@ -1292,6 +1333,18 @@ static ggml_backend_buffer_t ggml_backend_cuda_buffer_type_alloc_buffer(ggml_bac
 
     ggml_backend_cuda_buffer_context * ctx = new ggml_backend_cuda_buffer_context(buft_ctx->device, dev_ptr);
 
+    return ggml_backend_buffer_init(buft, ggml_backend_cuda_buffer_interface, ctx, size);
+}
+
+static ggml_backend_buffer_t ggml_backend_cuda_buffer_from_ptr(ggml_backend_buffer_type_t buft, void * ptr, size_t size,
+        void (*release)(void *), void * release_data) {
+    GGML_ASSERT(ggml_backend_buft_is_cuda(buft));
+    auto * buft_ctx = (ggml_backend_cuda_buffer_type_context *) buft->context;
+    ggml_cuda_set_device(buft_ctx->device);
+    auto * ctx = new ggml_backend_cuda_buffer_context(buft_ctx->device, ptr);
+    ctx->owned = false;
+    ctx->release = release;
+    ctx->release_data = release_data;
     return ggml_backend_buffer_init(buft, ggml_backend_cuda_buffer_interface, ctx, size);
 }
 
@@ -3194,6 +3247,7 @@ static void ggml_backend_cuda_free(ggml_backend_t backend) {
 
 static void ggml_backend_cuda_set_tensor_async(ggml_backend_t backend, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
+    ggml_cuda_set_device(cuda_ctx->device);
     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
 
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
@@ -3203,6 +3257,7 @@ static void ggml_backend_cuda_set_tensor_async(ggml_backend_t backend, ggml_tens
 
 static void ggml_backend_cuda_get_tensor_async(ggml_backend_t backend, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
+    ggml_cuda_set_device(cuda_ctx->device);
     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
 
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
@@ -3213,6 +3268,7 @@ static void ggml_backend_cuda_get_tensor_async(ggml_backend_t backend, const ggm
 static void ggml_backend_cuda_set_tensor_2d_async(ggml_backend_t backend, struct ggml_tensor * tensor, const void * data,
         size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
+    ggml_cuda_set_device(cuda_ctx->device);
     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
 
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
@@ -3224,6 +3280,7 @@ static void ggml_backend_cuda_set_tensor_2d_async(ggml_backend_t backend, struct
 static void ggml_backend_cuda_get_tensor_2d_async(ggml_backend_t backend, const struct ggml_tensor * tensor, void * data,
         size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
+    ggml_cuda_set_device(cuda_ctx->device);
     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
 
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
@@ -7005,6 +7062,23 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t 
 
 static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     GGML_UNUSED(reg);
+#if defined(GGML_USE_VMM) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    if (strcmp(name, "ggml_backend_cuda_get_arena_api_v1") == 0) {
+        const auto & info = ggml_cuda_info();
+        for (int i = 0; i < info.device_count; i++) {
+            if (info.devices[i].physical_device != i || !info.devices[i].vmm) {
+                return nullptr;
+            }
+        }
+        return (void *) ggml_backend_cuda_get_arena_api;
+    }
+#endif
+    if (strcmp(name, "ggml_backend_cuda_buffer_from_ptr") == 0) {
+        return (void *) ggml_backend_cuda_buffer_from_ptr;
+    }
+    if (strcmp(name, "ggml_backend_cuda_use_shared_pool") == 0) {
+        return (void *) ggml_backend_cuda_use_shared_pool;
+    }
     if (strcmp(name, "ggml_backend_comm_init") == 0) {
         return (void *)ggml_backend_cuda_comm_init;
     }

@@ -11,6 +11,7 @@
 #include "server-realtime.h"
 #include "server-schema.h"
 #include "server-slot-sched.h"
+#include "server-split.h"
 #include "server-stream.h"
 
 #include "build-info.h"
@@ -271,6 +272,7 @@ struct server_slot {
     llama_context * ctx_dft = nullptr;
 
     common_memory mem;
+    server_split * split = nullptr;
 
     // multimodal
     mtmd_context * mctx = nullptr;
@@ -886,6 +888,7 @@ struct server_slot {
 // encode the mtmd chunk at idx, batched with as many of the next chunks as possible
 // returns 0 on success
 static int encode_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch, size_t idx) {
+    server_split_external external(slot.split);
     const auto & mctx = slot.mctx;
     const auto & input_tokens = slot.task->tokens;
     const auto & chunk = input_tokens.find_chunk(idx);
@@ -940,7 +943,8 @@ static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch
                 struct cb_data_t {
                     common_speculative * spec;
                     llama_context * ctx;
-                } cb_data = { slot.spec, slot.ctx_tgt };
+                    llama_context * ctx_dft;
+                } cb_data = { slot.spec, slot.ctx_tgt, slot.split ? slot.ctx_dft : nullptr };
 
                 static auto cb = [](const mtmd_helper_embd_batch * b, void * user_data) {
                     const auto * data = static_cast<cb_data_t *>(user_data);
@@ -954,7 +958,10 @@ static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch
                         batch.add_embd({ b->embd + (size_t) i * b->n_embd, 1, (size_t) b->n_embd }, pos, b->seq_id, false);
                     }
 
-                    return common_speculative_process(data->spec, batch) ? 0 : 1;
+                    if (data->ctx_dft) llama_synchronize(data->ctx);
+                    const bool ok = common_speculative_process(data->spec, batch);
+                    if (data->ctx_dft) llama_synchronize(data->ctx_dft);
+                    return ok ? 0 : 1;
                 };
 
                 llama_pos new_n_past; // unused for now
@@ -1096,6 +1103,7 @@ private:
 
     // note: keep these alive - they determine the lifetime of the model, context, etc.
     common_init_result_ptr llama_init;
+    std::unique_ptr<server_split> split;
 
     llama_context * ctx_tgt = nullptr;
 
@@ -1109,7 +1117,8 @@ private:
     common_context_seq_rm_type ctx_tgt_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
     common_context_seq_rm_type ctx_dft_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
 
-    common_speculative_ptr spec;
+    common_speculative_ptr spec_owned;
+    common_speculative * spec = nullptr;
 
     bool add_bos_token = true;
 
@@ -1154,13 +1163,15 @@ private:
     int64_t t_last_load_progress_ms = 0;
 
     void destroy() {
-        spec.reset();
+        spec = nullptr;
+        spec_owned.reset();
         spec_init.reset();
 
         ctx_dft   = nullptr;
         model_dft = nullptr;
 
         llama_init.reset();
+        split.reset();
 
         ctx_tgt = nullptr;
         model_tgt = nullptr;
@@ -1323,10 +1334,23 @@ private:
             params_base.load_progress_callback_user_data = &load_progress_text;
         }
 
-        llama_init = common_init_from_params(params_base);
-
-        model_tgt = llama_init->model();
-        ctx_tgt   = llama_init->context();
+        if (!params_base.hybrid_prefill.empty()) {
+            try {
+                if (has_mmproj && mmproj_usage.backend_mem_usage.empty()) {
+                    throw std::runtime_error("hybrid prefill requires a projector memory estimate");
+                }
+                split = server_split_init(params_base, mmproj_usage.backend_mem_usage);
+            } catch (const std::exception & e) {
+                SRV_ERR("hybrid initialization failed: %s\n", e.what());
+                return false;
+            }
+            model_tgt = split->model();
+            ctx_tgt = split->context();
+        } else {
+            llama_init = common_init_from_params(params_base);
+            model_tgt = llama_init->model();
+            ctx_tgt   = llama_init->context();
+        }
 
         if (model_tgt == nullptr) {
             SRV_ERR("failed to load model, '%s'\n", params_base.model.path.c_str());
@@ -1363,9 +1387,13 @@ private:
                 params_dft.load_progress_callback           = load_progress_callback;
                 params_dft.load_progress_callback_user_data = &load_progress_spec;
 
-                spec_init = common_speculative_init_from_params(params_dft, model_tgt, ctx_tgt);
-                model_dft = spec_init->model();
-                ctx_dft   = spec_init->context();
+                if (split) {
+                    ctx_dft = split->draft_context();
+                } else {
+                    spec_init = common_speculative_init_from_params(params_dft, model_tgt, ctx_tgt);
+                    model_dft = spec_init->model();
+                    ctx_dft   = spec_init->context();
+                }
 
                 if (has_draft && model_dft == nullptr) {
                     SRV_ERR("failed to load draft model, '%s'\n", params_dft.model.path.c_str());
@@ -1410,7 +1438,10 @@ private:
                 }
             }
 
-            mctx = mtmd_init_from_file(mmproj_path.c_str(), model_tgt, mparams);
+            {
+                server_split_external external(split.get());
+                mctx = mtmd_init_from_file(mmproj_path.c_str(), model_tgt, mparams);
+            }
             if (mctx == nullptr) {
                 SRV_ERR("failed to load multimodal model, '%s'\n", mmproj_path.c_str());
                 return false;
@@ -1434,6 +1465,10 @@ private:
         }
 
         mtmd_cap = mtmd_helper_get_capabilities(model_tgt, mctx);
+        if (split && (mtmd_cap.audio_gen || mtmd_cap.audio)) {
+            SRV_ERR("%s", "hybrid prefill currently supports text and image input only\n");
+            return false;
+        }
         // the helper only knows about the built-in video decoder
         mtmd_cap.video = mtmd_cap.video || (mtmd_cap.vision && init_opt.video_params.decoder != nullptr);
 
@@ -1516,7 +1551,12 @@ private:
         // try speculative decoding
         if (ctx_tgt_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_NO) {
             try {
-                spec.reset(common_speculative_init(params_base.speculative, params_base.n_parallel));
+                if (split) {
+                    spec = split->speculative();
+                } else {
+                    spec_owned.reset(common_speculative_init(params_base.speculative, params_base.n_parallel));
+                    spec = spec_owned.get();
+                }
             } catch (const std::exception & e) {
                 SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
                 if (params_base.speculative.has_synth()) {
@@ -1525,6 +1565,10 @@ private:
             }
         }
 
+        if (split && ctx_dft && !spec) {
+            SRV_ERR("%s", "hybrid MTP requires speculative decoding support\n");
+            return false;
+        }
         if (ctx_dft) {
             ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft);
         }
@@ -1549,7 +1593,8 @@ private:
             slot.ctx_tgt = ctx_tgt;
             slot.ctx_dft = ctx_dft;
             slot.mem.init(ctx_tgt, ctx_dft);
-            slot.spec    = spec.get();
+            slot.split = split.get();
+            slot.spec    = spec;
             slot.n_ctx   = n_ctx_slot();
 
             slot.mctx                   = mctx;
@@ -2023,7 +2068,7 @@ private:
             bool use_backend_sampling = task.params.sampling.backend_sampling;
 
             // TODO: getting pre sampling logits is not yet supported with backend sampling
-            use_backend_sampling &= !need_pre_sample_logits;
+            use_backend_sampling &= !need_pre_sample_logits && !split;
 
             // TODO: check verify if this actually works with TTS
             use_backend_sampling &= task.type != SERVER_TASK_TYPE_TTS;
@@ -2038,7 +2083,7 @@ private:
             SLT_TRC(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
             SLT_TRC(slot, "sampler params: \n%s\n", task.params.sampling.print().c_str());
 
-            if (spec && !common_speculative_get_synth_probs(spec.get()).empty()) {
+            if (spec && !common_speculative_get_synth_probs(spec).empty()) {
                 const uint32_t seed = task.params.sampling.seed == LLAMA_DEFAULT_SEED
                     ? std::random_device{}()
                     : task.params.sampling.seed;
@@ -2724,7 +2769,7 @@ private:
         cur.update_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
         cur.update_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
         // stash the draft's speculative state with the checkpoint
-        common_speculative_get_state(spec.get(), slot.id, cur.data_spec);
+        common_speculative_get_state(spec, slot.id, cur.data_spec);
 
         slot.prompt.checkpoints.push_back(std::move(ckpt));
 
@@ -2882,7 +2927,7 @@ private:
             data_dft.resize(llama_state_seq_get_size_ext(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_NONE));
             llama_state_seq_get_data_ext(ctx_dft, data_dft.data(), data_dft.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
         }
-        common_speculative_get_state(spec.get(), slot.id, data_spec);
+        common_speculative_get_state(spec, slot.id, data_spec);
         if (data_dft.empty() && data_spec.empty()) {
             return true;
         }
@@ -2943,7 +2988,7 @@ private:
             }
         }
         if (!data_spec.empty()) {
-            common_speculative_set_state(spec.get(), slot.id, data_spec);
+            common_speculative_set_state(spec, slot.id, data_spec);
         }
         SLT_INF(slot, "restored the draft state (%.3f MiB) from '%s'\n", (float) n_read / 1024 / 1024, filepath.c_str());
         return n_read;
@@ -3728,6 +3773,10 @@ private:
     }
 
     void pre_decode() {
+        // Switch before drafting and saving speculative checkpoints.
+        if (split && llama_get_model(ctx_tgt) != model_tgt && std::any_of(slots.begin(), slots.end(), [](const server_slot & slot) { return slot.state == SLOT_STATE_GENERATING; })) {
+            prepare_split(false, 0);
+        }
         // apply context-shift if needed
         // TODO: simplify and improve
         iterate(slots, [&](server_slot & slot) {
@@ -3825,7 +3874,7 @@ private:
             generating.push_back(&slot);
 
             if (spec) {
-                common_speculative_get_draft_params(spec.get(), slot.id).drafting = false;
+                common_speculative_get_draft_params(spec, slot.id).drafting = false;
 
                 const bool use_ckpt_tgt = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
                 const bool use_ckpt_dft = ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
@@ -3859,7 +3908,7 @@ private:
 
                         const bool spec_reject = slot.use_spec_rejection();
 
-                        common_speculative_get_draft_params(spec.get(), slot.id) = {
+                        common_speculative_get_draft_params(spec, slot.id) = {
                             /* .drafting = */ true,
                             /* .n_max    = */ n_draft_max,
                             /* .pos0     = */ slot.prompt.tokens.pos_next(),
@@ -3880,7 +3929,8 @@ private:
         // generate the actual drafts (if any)
         if (!drafting.empty()) {
             queue_tasks.yield_to_queue([&]() {
-                common_speculative_draft(spec.get());
+                common_speculative_draft(spec);
+                if (split && ctx_dft) llama_synchronize(ctx_dft);
             });
         }
 
@@ -4228,7 +4278,7 @@ private:
                                         reuse = {};
                                     } else {
                                         // restore the draft's speculative state
-                                        common_speculative_set_state(spec.get(), slot.id, cur.data_spec);
+                                        common_speculative_set_state(spec, slot.id, cur.data_spec);
 
                                         SLT_TRC(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", cur.pos_min, cur.pos_max, cur.n_tokens, reuse.n_past, (float) cur.size() / 1024 / 1024);
                                     }
@@ -4365,6 +4415,10 @@ private:
                             input_tokens[cur_token_idx] != LLAMA_TOKEN_NULL // encountered a text token
                         ) {
                             break;
+                        }
+
+                        if (split) {
+                            prepare_split(true, slot.task->n_tokens() - slot.prompt.n_tokens());
                         }
 
                         // process the mtmd chunk
@@ -4609,6 +4663,24 @@ private:
         return true;
     }
 
+    bool prepare_split(bool prefill, size_t remaining) {
+        queue_tasks.yield_to_queue([&]() { split->prepare(prefill, remaining); });
+        if (ctx_tgt == split->context()) return false;
+        ctx_tgt = split->context();
+        ctx_dft = split->draft_context();
+        spec = split->speculative();
+        params_base.speculative.draft.ctx_tgt = ctx_tgt;
+        params_base.speculative.draft.ctx_dft = ctx_dft;
+        for (auto & slot : slots) {
+            slot.ctx_tgt = ctx_tgt;
+            slot.ctx_dft = ctx_dft;
+            slot.spec = spec;
+            slot.mem.init(ctx_tgt, ctx_dft);
+        }
+        batch.view = common_batch(ctx_tgt);
+        return true;
+    }
+
     // returns true = success ; false = retry with smaller batch size
     // throw std::runtime_error on fatal error
     bool decode(int32_t & n_batch, int32_t off) {
@@ -4631,11 +4703,25 @@ private:
         // TODO @ngxson : dft model may have different n_embd than the tgt model, so we check & reject if that's the case
         // this case is not currently used by any models, but may need to be supported in the future
         if (spec && batch.has_embd()) {
-            if (llama_model_n_embd_inp(model_dft) != llama_model_n_embd_inp(model_tgt)) {
+            if (llama_model_n_embd_inp(llama_get_model(ctx_dft)) != llama_model_n_embd_inp(model_tgt)) {
                 SRV_ERR("%s", "unsupported batch.has_embd + spec case\n");
                 throw std::runtime_error("unsupported batch.has_embd + spec case");
             }
         }
+
+        bool hybrid_prompt = split != nullptr;
+        if (split) {
+            size_t remaining = batch.size() - off;
+            for (int i = off; i < off + batch.view.size(); ++i) hybrid_prompt &= batch.tokens[i].is_prompt;
+            for (const auto & slot : slots) {
+                if (slot.task && slot.state == SLOT_STATE_PROCESSING_PROMPT) {
+                    remaining += std::max<int64_t>(0, int64_t(slot.task->n_tokens()) - slot.prompt.n_tokens());
+                }
+            }
+            const int count = batch.view.size();
+            if (prepare_split(hybrid_prompt, remaining)) batch.render(off, count);
+        }
+        const int64_t hybrid_start = ggml_time_us();
 
         bool has_output = false;
         for (int i = off; i < off + batch.view.size(); ++i) {
@@ -4647,7 +4733,7 @@ private:
         int ret = 0;
         queue_tasks.yield_to_queue([&]() {
             ret = llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_DECODE, batch.view.get());
-            if (ret == 0 && has_output) {
+            if (ret == 0 && (has_output || split)) {
                 llama_synchronize(ctx_tgt);
             }
         });
@@ -4711,7 +4797,8 @@ private:
         if (spec) {
             bool ok = true;
             queue_tasks.yield_to_queue([&]() {
-                ok = common_speculative_process(spec.get(), batch.view);
+                ok = common_speculative_process(spec, batch.view);
+                if (split && ctx_dft) llama_synchronize(ctx_dft);
             });
 
             if (!ok) {
@@ -4721,6 +4808,8 @@ private:
                 throw std::runtime_error("failed to process speculative batch");
             }
         }
+
+        if (hybrid_prompt) split->observe(batch.view.size(), (ggml_time_us() - hybrid_start) / 1000.0);
 
         // handle `n_cmpl > 1` tasks - when the main prompt is processed, activate all child tasks too
         for (auto & slot : slots) {
@@ -4813,7 +4902,7 @@ private:
                 slot.state = SLOT_STATE_GENERATING;
 
                 if (slot.can_speculate()) {
-                    common_speculative_begin(spec.get(), slot.id, slot.prompt.tokens.get_text_tokens());
+                    common_speculative_begin(spec, slot.id, slot.prompt.tokens.get_text_tokens());
                 }
             } else if (slot.state != SLOT_STATE_GENERATING) {
                 return;
@@ -4891,7 +4980,7 @@ private:
 
                 GGML_ASSERT(spec_i_batch.size() == n_draft + 1);
                 GGML_ASSERT(slot.spec_draft_q.empty() || (slot.spec_draft_q.size() == slot.spec_draft.size()));
-                const auto & synth_probs = common_speculative_get_synth_probs(spec.get());
+                const auto & synth_probs = common_speculative_get_synth_probs(spec);
 
                 // drafters that fill no distribution fall back here
                 const bool use_rejection = slot.use_spec_rejection() && !slot.spec_draft_q.empty();
@@ -4953,7 +5042,7 @@ private:
                     SLT_INF(slot, "accepted %2zu/%2zu draft tokens\n", accepted.size() - 1, n_draft);
                 }
 
-                common_speculative_accept(spec.get(), slot.id, accepted.size() - 1);
+                common_speculative_accept(spec, slot.id, accepted.size() - 1);
 
                 slot.spec_draft = std::move(accepted);
             }
@@ -4974,7 +5063,7 @@ private:
 
             auto & n_accepted_per_pos = slot.n_accepted_per_pos;
             if (n_accepted_per_pos.empty()) {
-                n_accepted_per_pos.resize(common_speculative_n_max(spec.get()), 0);
+                n_accepted_per_pos.resize(common_speculative_n_max(spec), 0);
             }
             for (size_t i = 0; i < n_accepted && i < n_accepted_per_pos.size(); ++i) {
                 n_accepted_per_pos[i]++;

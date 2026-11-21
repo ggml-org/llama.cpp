@@ -2824,6 +2824,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_SPLIT_MODE"));
     add_opt(common_arg(
+        {"--hybrid-prefill"}, "N0,N1,...",
+        "experimental CUDA server: layer split for adaptive prefill; requires tensor mode and one slot; supports text and image input",
+        [](common_params & params, const std::string & value) {
+            params.hybrid_prefill = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_HYBRID_PREFILL"));
+    add_opt(common_arg(
         {"-ts", "--tensor-split"}, "N0,N1,N2,...",
         "fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1",
         [](common_params & params, const std::string & value) {

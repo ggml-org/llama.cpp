@@ -92,6 +92,29 @@ llama-cli -m model.gguf -sm tensor -ctk f16 -ctv f16
   - **State-space / RWKV-style:** Mamba, Mamba2 (and the hybrid Mamba-attention models above)
   - **Other:** PLAMO2, MiniCPM3, Gemma-3n, OLMo2, BitNet, T5
 
+### Adaptive server prefill
+
+Enable the experimental server integration with `--hybrid-prefill N0,N1,...`, with one positive layer-mode proportion per visible CUDA GPU. Keep `--split-mode tensor` and `--tensor-split` for decoding. For the tested Qwen3.8-27B device pair:
+
+```bash
+build/bin/llama-server \
+  -m models/custom/Qwen3.8-27B/Qwen3.8-27B-UD-Q5_K_XL.gguf \
+  -sm tensor -ts 4,1 --hybrid-prefill 57,9 \
+  -c 224000 -b 512 -ub 512 -np 1 -fa on
+```
+
+The equivalent environment variable is `LLAMA_ARG_HYBRID_PREFILL=57,9`. This is opt-in and currently requires one generation slot and at least two VMM-capable CUDA GPUs, using all visible devices in backend order, with CPU target sampling and no external draft model or adapters. Text, image input, and single-head MTP with independent draft KV memory are supported; audio is not. Keep `mmproj` and `mmproj-device` to use images. Both layouts are fully GPU-offloaded; automatic context fitting is disabled for this mode.
+
+Startup loads and calibrates both layouts into shared CUDA arenas. Each GPU arena grows to fit the larger memory requirement of the two layouts on that GPU. Both layouts use the configured batch and microbatch sizes. The image projector uses separate allocations, with its estimated peak memory reserved before loading the language model.
+
+The first prompt uses layer mode. Before generation, the server migrates sequence state and switches to tensor mode. Later prefills use layer mode only when estimated prefill savings exceed the round-trip migration cost by 25 percent. Timings update this estimate as requests run. Small prompts can be slower because migration has a fixed cost.
+
+MTP requires one draft head with independent KV memory. Switching migrates both caches and the pending hidden row. Multi-head MTP, shared target/draft KV memory, audio, adapters, and external draft models are unsupported.
+
+The two layouts share GPU weight storage. Startup temporarily retains full pinned host snapshots of both layouts; afterward, only the weight ranges uploaded during switching and sequence-state staging remain pinned. Local weight rearrangement reuses inactive cache space. If it needs more space, the arena grows during startup. CUDA handles and workspace pools have additional memory costs outside the arenas.
+
+An opt-in regression in `tools/server/tests/unit/test_spec_methods.py` exercises MTP, cached-prefix reuse, and layout round trips. Set `HYBRID_MTP_MODEL` to a local model path to enable `test_hybrid_mtp_round_trip`; `HYBRID_MTP_SPLIT` and `HYBRID_MTP_TENSOR_SPLIT` override the default layer and tensor placements (`59,7` and `4,1`). The test defaults target Qwen3.8-27B on a 32 GiB + 12 GiB CUDA pair.
+
 ### 5. With NCCL
 
 There's no runtime flag for NCCL - it's selected at build time (`-DGGML_CUDA_NCCL=ON`, this is the default). Note that NCCL is **not** automatically distributed with CUDA and you may need to install it manually - when in doubt check the CMake log to see whether or not it can find the package. When llama.cpp is compiled with NCCL support it uses it automatically for cross-GPU reductions in `tensor` mode. When NCCL is missing on a multi-GPU build, you'll see this one-time warning and performance will be lower:
