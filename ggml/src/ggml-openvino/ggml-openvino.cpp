@@ -1862,7 +1862,7 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
     case GGML_OP_DIV: {
         // The GPU plugin can fuse broadcast DIV into the preceding FFN GEMM path
         // and produce infs for per-channel scale vectors. Keep those DIVs on CPU
-        // until the fused GPU kernel is reliable. (falied case llama-arch-test mpt)
+        // until the fused GPU kernel is reliable (failing case: test-llama-archs, mpt).
         // Only a weight divisor is such a scale; at one token an activation divisor has the same shape
         // (qwen2moe's shared-expert sigmoid, silu(x) / x).
         if (ggml_openvino_is_gpu() && op->src[1]->ne[0] == op->ne[0] &&
@@ -1923,11 +1923,10 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         memcpy(&max_bias, (const float *) op_params + 1, sizeof(float));
         memcpy(&logit_softcap, (const float *) op_params + 2, sizeof(float));
 
-        // Keep gemma3n flash-attn pattern on CPU for GPU runs to avoid
-        // accuracy drift in the OpenVINO path. Restrict by scale=1.0 to avoid
-        // affecting non-gemma3n models such as Llama-3.2.
+        // Keep gemma3n flash-attn pattern on CPU to avoid accuracy drift in the OpenVINO path.
+        // Restrict by scale=1.0 to avoid affecting non-gemma3n models such as Llama-3.2.
         if (fabsf(scale - 1.0f) < 1e-6f && is_gemma3n_flash_attn_pattern(op)) {
-            return {false, "FLASH_ATTN_EXT gemma3n pattern on GPU is not supported"};
+            return {false, "FLASH_ATTN_EXT gemma3n pattern is not supported"};
         }
 
         // K/V row lists (ggml_flash_attn_ext_rows) are not supported
@@ -1973,7 +1972,7 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
             return {false, "CPY with BF16 src[1] type is not supported"};
         }
         if (ggml_openvino_is_npu() && (op->src[0]->type == GGML_TYPE_BF16 || op->src[1]->type == GGML_TYPE_BF16)) {
-            return {false, "CPY with BF16 is not supported is not supported on NPU"};
+            return {false, "CPY with BF16 is not supported on NPU"};
         }
         // CPY to a quantized destination (e.g. f32 -> q4_0) is numerically unstable with OpenVINO backend.
         if (ggml_is_quantized(op->type)) {
@@ -2107,12 +2106,6 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
             }
             return {false, reason};
         }
-        break;
-    }
-    case GGML_OP_SSM_CONV: {
-        // qwen3next is numerically unstable with OpenVINO SSM_CONV.
-        // Keep this op on CPU until the OpenVINO implementation is fixed.
-        // return true;
         break;
     }
     case GGML_OP_SSM_SCAN: {
@@ -2317,9 +2310,6 @@ static ggml_openvino_op_support ggml_backend_openvino_device_supports_op_impl(gg
         if (!supported) {
             return {false, "GLU op " + std::string(ggml_glu_op_name(ggml_get_glu_op(op))) + " has no op translator"};
         }
-        // if (has_view_op_input(op)) {
-        //     return {false, "GLU op " + std::string(ggml_glu_op_name(ggml_get_glu_op(op))) + " with view input is not supported"};
-        // }
         if (op->src[1] == nullptr && op->src[0]->ne[0] % 2 != 0) {
             // triggers bug in ov gpu
             return {false, "GLU op with odd src0 ne[0] and null src1 is not supported"};

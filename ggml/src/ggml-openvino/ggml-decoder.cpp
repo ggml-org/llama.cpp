@@ -716,45 +716,6 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
             op_case = 1;
             break;
         }
-        if (node->src[0]->op == GGML_OP_VIEW) {
-            auto * src = node->src[0];
-            if (ggml_nelements(node) != ggml_nelements(src)) {
-                // throw std::runtime_error("Unsupported VIEW case");
-            }
-            op_case = 0;
-            if (m_model_is_splitted && m_model_inputs.find(get_tensor_ov_name(m_cgraph, src)) != m_model_inputs.end()) {
-                op_case = 0;
-            }
-        }
-        {
-            auto * src = node->src[0];
-            if (ggml_nelements(node) != ggml_nelements(src)) {
-                // Case 4: select one slice on src dim1 (via view offset), keep src dim2 as output dim1.
-                // Typical pattern:
-                //   src: ne=[N, M, K, 1], nb=[b0, b1, b2, b3]
-                //   dst: ne=[N, K, 1, 1], nb=[b0, b2, b3, b3]
-                if (node->ne[0] == src->ne[0] && node->ne[1] == src->ne[2] && node->ne[2] == 1 &&
-                    node->nb[0] == src->nb[0] && node->nb[1] == src->nb[2] && src->ne[1] > 1) {
-                    op_case = 0;
-                    break;
-                }
-
-                // General case 3: shape differs from source (one or more dims) and is handled as VIEW slicing.
-                int diff_count = 0;
-                for (int i = 0; i < GGML_MAX_DIMS; i++) {
-                    if (node->ne[i] != src->ne[i]) {
-                        diff_count++;
-                    }
-                    // if node ne[i] > src ne[i], case = 0
-                    if (node->ne[i] > src->ne[i]) {
-                        return 0;
-                    }
-                }
-                if (diff_count >= 1) {
-                    op_case = 0;
-                }
-            }
-        }
         break;
     }
     case GGML_OP_RMS_NORM: {

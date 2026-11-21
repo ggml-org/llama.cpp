@@ -546,6 +546,14 @@ std::string ggml_openvino_config_overrides_in_use() {
     return value ? std::string(name) + "=" + value : std::string();
 }
 
+bool ggml_openvino_manual_gqa_enabled() {
+    // set: a positive value enables it, 0 disables it; unset: on GPU only
+    if (ggml_openvino_getenv_str("GGML_OPENVINO_MANUAL_GQA_ATTN") != nullptr) {
+        return ggml_openvino_getenv_int("GGML_OPENVINO_MANUAL_GQA_ATTN") > 0;
+    }
+    return ggml_openvino_is_gpu();
+}
+
 bool ggml_openvino_gdn_prescale_enabled() {
     // float value, so not getenv_int: "64.0" must enable it. Unset means on.
     const char * v = ggml_openvino_getenv_str("GGML_OPENVINO_GDN_Q_SCALE", nullptr);

@@ -44,18 +44,6 @@ void num_inputs_check(const NodeContext & context, size_t min_inputs, size_t max
     FRONT_END_OP_CONVERSION_CHECK(input_size <= max_inputs, "Got more inputs than expected");
 }
 
-int non_cont_dim(std::vector<size_t> ne, std::vector<size_t> nb) {
-    int dim = nb.size() - 1;
-    size_t bytes = nb[dim];
-    for (int i = dim; i > 0; i--) {
-        bytes *= ne[i];
-        if (bytes != nb[i - 1]) {
-            return i;
-        }
-    }
-    return 0;
-}
-
 std::shared_ptr<ov::Node> get_dimensions(const std::shared_ptr<ov::op::v3::ShapeOf> & shape,
                                          const std::vector<int> & dims) {
     using namespace ov::op;

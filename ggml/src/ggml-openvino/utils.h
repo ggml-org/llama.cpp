@@ -233,10 +233,6 @@ enum ggml_status ov_graph_compute(struct ggml_cgraph * cgraph, ggml_backend_t ba
 // Releases the cached blobs this process imported (GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR).
 void ov_clear_imported_blobs();
 
-size_t checksum(const void * data, size_t size);
-
-bool save_ggml_tensor_data_to_txt(const ggml_tensor * tensor, const std::string & file_path);
-
 void print_input_tensor_info(const std::string & name, const ov::Tensor & tensor);
 
 void print_output_tensor_info(const std::string & name, const ov::Tensor & tensor, const void * output_dst);

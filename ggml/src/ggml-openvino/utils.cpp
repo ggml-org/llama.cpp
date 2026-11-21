@@ -215,10 +215,7 @@ static size_t get_static_attention_size(const std::shared_ptr<GgmlOvDecoder> & g
 }
 
 static uint64_t ggml_openvino_model_cache_extra_cfg(bool stateful, bool recurrent) {
-    const char * manual_gqa_env = ggml_openvino_getenv_str("GGML_OPENVINO_MANUAL_GQA_ATTN");
-    const bool manual_gqa_enabled = manual_gqa_env != nullptr ?
-                                        ggml_openvino_getenv_int("GGML_OPENVINO_MANUAL_GQA_ATTN") > 0 :
-                                        ggml_openvino_is_gpu();
+    const bool manual_gqa_enabled = ggml_openvino_manual_gqa_enabled();
 
     uint64_t extra_cfg = 15;  // Recurrent caches are writable inputs without cache Results.
 #ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
@@ -1690,8 +1687,6 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
 
                 infer_request = std::make_shared<ov::InferRequest>(compiled_model.create_infer_request());
                 shared_model = compiled_model;
-                entry->ptr = ggml_decoder;
-
             }  // end non-imported (compile) path
 
             entry->ptr = ggml_decoder;
@@ -3402,7 +3397,7 @@ bool is_model_splitted(ggml_cgraph * cgraph) {
             // the src is also not the model weights, we think the model is splitted.
             // the src is also not in model leafs, we think the model is splitted.
             if (src != nullptr && model_nodes.find(src) == model_nodes.end() &&
-                model_weights.find(std::string(src->name)) == model_weights.end() && !model_leafs.empty() == false &&
+                model_weights.find(std::string(src->name)) == model_weights.end() &&
                 model_leafs.find(src) == model_leafs.end()) {
                 if (GgmlOvDecoder::is_inp_tok(src, node)) {
                     return false;
@@ -3423,75 +3418,6 @@ bool is_naive(ggml_cgraph * cgraph) {
         }
     }
     return count < naive_graph_size_threshold;
-}
-
-size_t checksum(const void * data, size_t size) {
-    const uint8_t * bytes = static_cast<const uint8_t *>(data);
-    size_t sum = 0;
-    for (size_t i = 0; i < size; ++i) {
-        sum += (uint8_t) i;
-        sum += bytes[i];
-    }
-    return sum;
-}
-
-bool save_ggml_tensor_data_to_txt(const ggml_tensor * tensor, const std::string & file_path) {
-    if (tensor == nullptr || tensor->data == nullptr) {
-        return false;
-    }
-
-    std::ofstream out(file_path);
-    if (!out.is_open()) {
-        return false;
-    }
-
-    const size_t n = ggml_nelements(tensor);
-    out << "name: " << tensor->name << ", type: " << ggml_type_name(tensor->type) << ", shape: [" << tensor->ne[0]
-        << ", " << tensor->ne[1] << ", " << tensor->ne[2] << ", " << tensor->ne[3] << "]" << ", elements: " << n
-        << ", data:" << '\n';
-
-    switch (tensor->type) {
-    case GGML_TYPE_F32: {
-        const auto * data = static_cast<const float *>(tensor->data);
-        for (size_t i = 0; i < n; ++i) {
-            out << data[i] << '\n';
-        }
-        break;
-    }
-    case GGML_TYPE_F16: {
-        const auto * data = static_cast<const ggml_fp16_t *>(tensor->data);
-        for (size_t i = 0; i < n; ++i) {
-            out << ggml_fp16_to_fp32(data[i]) << '\n';
-        }
-        break;
-    }
-    case GGML_TYPE_BF16: {
-        const auto * data = static_cast<const ggml_bf16_t *>(tensor->data);
-        for (size_t i = 0; i < n; ++i) {
-            out << ggml_bf16_to_fp32(data[i]) << '\n';
-        }
-        break;
-    }
-    case GGML_TYPE_I32: {
-        const auto * data = static_cast<const int32_t *>(tensor->data);
-        for (size_t i = 0; i < n; ++i) {
-            out << data[i] << '\n';
-        }
-        break;
-    }
-    case GGML_TYPE_I64: {
-        const auto * data = static_cast<const int64_t *>(tensor->data);
-        for (size_t i = 0; i < n; ++i) {
-            out << data[i] << '\n';
-        }
-        break;
-    }
-    default:
-        out << "unsupported tensor type for text dump" << '\n';
-        return false;
-    }
-
-    return true;
 }
 
 void print_input_tensor_info(const std::string & name, const ov::Tensor & input) {
