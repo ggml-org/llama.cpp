@@ -12,6 +12,8 @@ charset = utf-8
 indent_style = space
 indent_size = 4
 
+[*.bat]
+end_of_line = crlf
 [Makefile]
 indent_style = tab
 
