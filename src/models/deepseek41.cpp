@@ -533,7 +533,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
             ggml_tensor * ik = ggml_view_4d(ctx0, comp_all, n_idx_embd, 1, n_comp, n_stream,
                     comp_all->nb[1], comp_all->nb[2], comp_all->nb[3], ggml_row_size(comp_all->type, n_embd_head));
             // the fused indexer reads the strided view in place, the unfused path needs it contiguous; CUDA has no same-type copy of quantized views, so dequantize them
-            const bool fused_idx = sparse && cparams.fused_lid && ci.kq_mask->type == GGML_TYPE_F16;
+            const bool fused_idx = sparse && ci.kq_mask->type == GGML_TYPE_F16;
             if (ggml_is_quantized(ik->type)) {
                 ik = ggml_cast(ctx0, ik, GGML_TYPE_F32);
             } else if (!fused_idx) {
@@ -572,7 +572,6 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
                 ggml_tensor * score = nullptr;
                 if (fused_idx) {
                     score = ggml_lightning_indexer(ctx0, iq, ik, iw, ci.kq_mask);
-                    res->add_fused_node({LLM_FUSED_OP_LIGHTNING_INDEXER, score, il});
                 } else {
                     ggml_tensor * iqc = ggml_view_4d(ctx0, iq, iq->ne[0], iq->ne[1], nc, n_stream, iq->nb[1], iq->nb[2], iq->nb[3], t0*iq->nb[2]);
 
