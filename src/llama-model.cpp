@@ -1942,6 +1942,16 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         pimpl->dev_layer[il] = get_layer_buft_list(il);
     }
 
+    // Keep each loop pass's independent state on the device owning its shared weights.
+    if (split_mode == LLAMA_SPLIT_MODE_LAYER && n_devices() > 1 &&
+            act_gpu_layers == n_layer_all + 1 && !has_tensor_overrides()) {
+        if (const auto * loop = dynamic_cast<const llama_model_inkling2_loop *>(this)) {
+            for (int il = loop->n_phys; il < n_layer_all; ++il) {
+                pimpl->dev_layer[il] = pimpl->dev_layer[loop->layer_phys(il)];
+            }
+        }
+    }
+
     // assign the output layer
     pimpl->dev_output = get_layer_buft_list(n_layer_all);
 
