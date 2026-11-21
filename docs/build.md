@@ -558,6 +558,53 @@ Finally, after finishing your build, you should be able to do something like thi
 # ggml_vulkan: Using Intel(R) Graphics (ADL GT2) | uma: 1 | fp16: 1 | warp size: 32
 ```
 
+### For Android (Termux) users:
+
+#### Setup
+
+First, download and install the Termux app from its [GitHub releases page](https://github.com/termux/termux-app/releases/latest).
+
+> [!IMPORTANT]
+> Before proceeding to the next step, make sure you have switched the package sources to a mirror closest to you (e.g. via `termux-change-repo`). Otherwise, package downloads may be extremely slow or fail entirely. Additionally, before starting the build, run `termux-wake-lock` to acquire a wake lock on your device. Otherwise, Android may kill Termux or throttle it in the background, causing the build to fail unexpectedly. Note that the wake lock is only active for the current session; if you exit Termux or reboot your device, you must run this command again before performing another build.
+
+Then update the Termux environment and install the dependencies.
+```bash
+apt update && apt upgrade
+apt install git ccache cmake clang ninja vulkan-headers vulkan-loader-android vulkan-tools glslang spirv-headers spirv-tools vulkan-extension-layer shaderc -y
+```
+
+Check your environment.
+```bash
+vulkaninfo --summary
+```
+
+You at least need Vulkan 1.2. If you don't meet this requirement, you can check out the blog below, though stable operation isn't guaranteed.
+
+#### How to build
+
+```bash
+cmake -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -G Ninja \
+  -DCMAKE_CXX_FLAGS="-mcpu=native -O3 -ffp-model=fast -fvectorize -flto -D_GNU_SOURCE" \
+  -DGGML_VULKAN=1
+ninja -C build
+```
+
+#### How to run
+
+Remember to use the "-ngl" parameter
+
+```bash
+./build/bin/llama-cli -m test.gguf -t 4 -c 4096 -ngl 99
+# You should see in the output, ggml_vulkan detected your GPU. For example:
+# ggml_vulkan: 0 = Mali-G77 MC9 (Mali-G77 MC9) | uma: 1 | fp16: 1 | bf16: 0 | warp size: 16 | shared memory: 32768 | int dot: 0 | matrix cores: none
+```
+
+#### Benchmark data
+
+Please note that this data was measured on the low-speed path (Vulkan 1.1); for details, see [Blog](https://jetsontan.github.io/blog/llamacpp-on-old-vulkan-driver.html).
+
 ### For Mac users:
 
 Generally, follow LunarG's [Getting Started with the MacOS Vulkan SDK](https://vulkan.lunarg.com/doc/sdk/latest/mac/getting_started.html) guide for installation and setup of the Vulkan SDK. There are two options of Vulkan drivers on macOS, both of which implement translation layers to map Vulkan to Metal. They can be hot-swapped by setting the `VK_ICD_FILENAMES` environment variable to point to the respective ICD JSON file.
