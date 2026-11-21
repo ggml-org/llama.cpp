@@ -403,8 +403,13 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     },
     [GGML_TYPE_BF16] = {
         .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_bf16,
+#if defined(GGML_CPU_BF16_F32_ACT)
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_bf16_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+#else
         .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_bf16,
         .vec_dot_type             = GGML_TYPE_BF16,
+#endif
         .nrows                    = 1,
     },
     [GGML_TYPE_TQ1_0] = {
