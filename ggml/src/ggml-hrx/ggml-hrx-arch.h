@@ -29,30 +29,15 @@ struct ggml_hrx_tune {
     ggml_hrx_mul_mat_vec_tune mul_mat_vec[GGML_TYPE_COUNT];
 
     int64_t elementwise_wg_size; // Multiple of 64, at most 1024.
-    int64_t norm_wg_size;        // Multiple of 64, at most 1024. Also for soft_max.
-    // At most 16. Workgroup limit for each CU of the grid-stride copy kernels. 0 disables these kernels.
+    // At most 16. Workgroup limit for each CU of the grid-stride copy kernel. 0 disables this kernel.
     int64_t stream_wg_per_cu;
-
-    int64_t rms_norm_rows_max;  // At most 2048. Longer rows are not supported.
-    int64_t rms_norm_lanes_max; // 16, 32 or 64. Lanes for each row.
-
-    int64_t fa_target_workgroups;
-    int64_t fa_many_tiles;
-    int64_t fa_long_kv_subblocks;
-    int64_t fa_mid_kv_subblocks;
-    int64_t fa_small_batch;
-    int64_t fa_split_waves;
-    int64_t fa_min_split_subblocks;
-    int64_t fa_max_splits;
 };
 
 struct ggml_hrx_arch {
     const char *          name;        // Architecture that the device reports.
     const char *          loom_target; // Loom AMDGPU target of the kernels.
     bool                  wave32;
-    bool                  wave64;
     ggml_hrx_matrix_op    matrix_op;
-    uint32_t              lds_bytes;         // Local memory limit of one workgroup.
     uint32_t              max_workgroups_yz; // Workgroup count limit in y and z.
     const ggml_hrx_tune * tune;
 };

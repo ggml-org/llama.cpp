@@ -458,14 +458,12 @@ cmake --build build --config Release
 
 The devices are named `HRX0`, `HRX1`, ... Use `--list-devices` to show them and `--device HRX0` to select one.
 
-This version of the backend targets TinyStories-15M (`stories15M-q4_0.gguf`, the model of the llama.cpp tests). It supports only the ops of this model, with flash attention on or off:
+This version of the backend targets TinyStories-15M (`stories15M-q4_0.gguf`, the model of the llama.cpp tests). It supports only these ops:
 
-* `MUL_MAT` with Q4_0, Q8_0 and F16 weights and F32 activations
-* `FLASH_ATTN_EXT` and `SET_ROWS` with an F16 KV cache
-* `SOFT_MAX`, `ROPE`, `RMS_NORM`, `ADD`, `MUL`, `SWIGLU`, `GET_ROWS` (F32), `CPY`, `DUP` and `CONT`
-* `SCALE` (F32), which llama.cpp runs in place on recurrent state
+* `MUL_MAT` with Q4_0 weights and F32 activations
+* `SET_ROWS`, `CPY`, `DUP` and `CONT` (F32 to F32 or F16) and `SCALE` (F32). llama.cpp runs these ops in place on the KV cache and the recurrent state in GPU memory. The CPU cannot run them there.
 
-Other ops and types run on the CPU, so other models also run, partly on the CPU. The token embedding `GET_ROWS` also runs on the CPU.
+All other ops and types run on the CPU.
 
 ## Vulkan
 

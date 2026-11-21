@@ -48,7 +48,7 @@ static ggml_backend_buffer_t ggml_hrx_tensor_buffer(const ggml_tensor * t) {
     return t->view_src != nullptr ? t->view_src->buffer : t->buffer;
 }
 
-bool ggml_hrx_tensor_on_device(const ggml_tensor * t) {
+static bool ggml_hrx_tensor_on_device(const ggml_tensor * t) {
     ggml_backend_buffer_t buffer = ggml_hrx_tensor_buffer(t);
     return buffer != nullptr && buffer->iface.get_base == ggml_backend_hrx_buffer_get_base;
 }
@@ -397,28 +397,6 @@ bool ggml_hrx_dispatch(ggml_backend_hrx_context * ctx, ggml_hrx_kernel * kernel,
                                               constants.data(), constants.size(), refs.data(), refs.size(), 0));
 }
 
-const ggml_tensor * ggml_hrx_scratch(ggml_backend_hrx_context * ctx, size_t size) {
-    if (ctx->scratch.empty() || ggml_backend_buffer_get_size(ctx->scratch.back()) < size) {
-        // Dispatches in flight can use the old buffer. The context frees it at the end.
-        size = std::max(size, 2 * (ctx->scratch.empty() ? 0 : ggml_backend_buffer_get_size(ctx->scratch.back())));
-        ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(&ctx->device->buft, size);
-        if (buffer == nullptr) {
-            return nullptr;
-        }
-        ctx->scratch.push_back(buffer);
-        ggml_tensor & t = ctx->scratch_tensor;
-        t               = {};
-        t.type          = GGML_TYPE_I8;
-        t.buffer        = buffer;
-        t.data          = ggml_backend_buffer_get_base(buffer);
-        t.ne[0]         = (int64_t) size;
-        t.ne[1] = t.ne[2] = t.ne[3] = 1;
-        t.nb[0]         = 1;
-        t.nb[1] = t.nb[2] = t.nb[3] = size;
-    }
-    return &ctx->scratch_tensor;
-}
-
 static ggml_guid_t ggml_backend_hrx_guid() {
     static ggml_guid guid = { 0xd2, 0x3d, 0x72, 0x83, 0xb2, 0x82, 0x4d, 0xe0, 0x8a, 0x3e, 0x21, 0x1d, 0x68, 0x87, 0x2f, 0x4b };
     return &guid;
@@ -486,9 +464,6 @@ static void ggml_backend_hrx_free(ggml_backend_t backend) {
     GGML_HRX_CHECK(hrx_stream_synchronize(ctx->stream));
     hrx_stream_release(ctx->stream);
     ggml_hrx_readback_release(ctx);
-    for (ggml_backend_buffer_t buffer : ctx->scratch) {
-        ggml_backend_buffer_free(buffer);
-    }
     delete ctx;
     delete backend;
 }
@@ -577,21 +552,13 @@ static void ggml_backend_hrx_event_wait(ggml_backend_t backend, ggml_backend_eve
 
 static bool ggml_hrx_compute_node(ggml_backend_hrx_context * ctx, const ggml_tensor * node) {
     switch (node->op) {
-        case GGML_OP_ADD:
-        case GGML_OP_MUL:            return ggml_hrx_op_binary(ctx, node);
-        case GGML_OP_SCALE:          return ggml_hrx_op_scale(ctx, node);
-        case GGML_OP_GLU:            return ggml_hrx_op_glu(ctx, node);
+        case GGML_OP_SCALE:    return ggml_hrx_op_scale(ctx, node);
         case GGML_OP_CPY:
         case GGML_OP_DUP:
-        case GGML_OP_CONT:           return ggml_hrx_op_cpy(ctx, node);
-        case GGML_OP_GET_ROWS:       return ggml_hrx_op_get_rows(ctx, node);
-        case GGML_OP_SET_ROWS:       return ggml_hrx_op_set_rows(ctx, node);
-        case GGML_OP_RMS_NORM:       return ggml_hrx_op_rms_norm(ctx, node);
-        case GGML_OP_ROPE:           return ggml_hrx_op_rope(ctx, node);
-        case GGML_OP_SOFT_MAX:       return ggml_hrx_op_soft_max(ctx, node);
-        case GGML_OP_MUL_MAT:        return ggml_hrx_op_mul_mat(ctx, node);
-        case GGML_OP_FLASH_ATTN_EXT: return ggml_hrx_op_flash_attn_ext(ctx, node);
-        default:                     return false;
+        case GGML_OP_CONT:     return ggml_hrx_op_cpy(ctx, node);
+        case GGML_OP_SET_ROWS: return ggml_hrx_op_set_rows(ctx, node);
+        case GGML_OP_MUL_MAT:  return ggml_hrx_op_mul_mat(ctx, node);
+        default:               return false;
     }
 }
 
@@ -714,22 +681,14 @@ static bool ggml_backend_hrx_device_supports_op(ggml_backend_dev_t dev, const gg
         case GGML_OP_VIEW:
         case GGML_OP_RESHAPE:
         case GGML_OP_PERMUTE:
-        case GGML_OP_TRANSPOSE:      return true;
-        case GGML_OP_ADD:
-        case GGML_OP_MUL:            return ggml_hrx_supports_binary(ctx, op);
-        case GGML_OP_SCALE:          return ggml_hrx_supports_scale(ctx, op);
-        case GGML_OP_GLU:            return ggml_hrx_supports_glu(ctx, op);
+        case GGML_OP_TRANSPOSE: return true;
+        case GGML_OP_SCALE:     return ggml_hrx_supports_scale(ctx, op);
         case GGML_OP_CPY:
         case GGML_OP_DUP:
-        case GGML_OP_CONT:           return ggml_hrx_supports_cpy(ctx, op);
-        case GGML_OP_GET_ROWS:       return ggml_hrx_supports_get_rows(ctx, op);
-        case GGML_OP_SET_ROWS:       return ggml_hrx_supports_set_rows(ctx, op);
-        case GGML_OP_RMS_NORM:       return ggml_hrx_supports_rms_norm(ctx, op);
-        case GGML_OP_ROPE:           return ggml_hrx_supports_rope(ctx, op);
-        case GGML_OP_SOFT_MAX:       return ggml_hrx_supports_soft_max(ctx, op);
-        case GGML_OP_MUL_MAT:        return ggml_hrx_supports_mul_mat(ctx, op);
-        case GGML_OP_FLASH_ATTN_EXT: return ggml_hrx_supports_flash_attn_ext(ctx, op);
-        default:                     return false;
+        case GGML_OP_CONT:      return ggml_hrx_supports_cpy(ctx, op);
+        case GGML_OP_SET_ROWS:  return ggml_hrx_supports_set_rows(ctx, op);
+        case GGML_OP_MUL_MAT:   return ggml_hrx_supports_mul_mat(ctx, op);
+        default:                return false;
     }
 }
 

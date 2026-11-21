@@ -1,7 +1,7 @@
 // Weights and activations are rounded to f16. The sums are in f32.
 // The launch arguments are the same as in mul_mat.loom. The caller makes sure that K is a multiple of 32 and that x_s0 is 1.
 
-config.decl @ggml.mul_mat.weight_type : %value: index where [range(%value, 1, 4)]
+config.decl @ggml.mul_mat.weight_type : %value: index where [range(%value, 2, 2)]
 
 target.decl @ggml_wave32
 

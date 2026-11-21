@@ -13,14 +13,12 @@ static bool ggml_hrx_mul_mat_wmma_arch(const ggml_hrx_device_context * dev) {
 // Weight type config value of kernels/matmul/lib/mm_core.loom. The value is -1 if the type is not supported.
 static int ggml_hrx_mul_mat_weight_type(ggml_type type) {
     switch (type) {
-        case GGML_TYPE_F16:  return 1;
         case GGML_TYPE_Q4_0: return 2;
-        case GGML_TYPE_Q8_0: return 4;
         default:             return -1;
     }
 }
 
-// Weight strides and spans are in halves. Q4_0 and Q8_0 blocks have only 2-byte alignment. F16 rows must be contiguous.
+// Weight strides and spans are in halves. Q4_0 blocks have only 2-byte alignment.
 static bool ggml_hrx_mul_mat_weight_strides(const ggml_tensor * w, int64_t s[GGML_MAX_DIMS]) {
     if (w->view_offs % 2 != 0) {
         return false;
@@ -31,7 +29,7 @@ static bool ggml_hrx_mul_mat_weight_strides(const ggml_tensor * w, int64_t s[GGM
         }
         s[i] = (int64_t) (w->nb[i] / 2);
     }
-    return ggml_is_quantized(w->type) || s[0] == 1;
+    return true;
 }
 
 bool ggml_hrx_supports_mul_mat(const ggml_hrx_device_context * dev, const ggml_tensor * op) {
@@ -64,14 +62,14 @@ bool ggml_hrx_supports_mul_mat(const ggml_hrx_device_context * dev, const ggml_t
     return ggml_nbytes(w) <= INT_MAX && ggml_nbytes(x) <= INT_MAX && ggml_nbytes(op) <= INT_MAX;
 }
 
-// The matrix-op kernel needs K in steps of 32 and contiguous input rows.
+// The matrix-op kernel needs contiguous input rows.
 // It converts src1 to F16. The src1 precision request must allow this.
-static bool ggml_hrx_mul_mat_use_wmma(const ggml_tensor * node, const ggml_tensor * w, const int64_t xs[GGML_MAX_DIMS]) {
+static bool ggml_hrx_mul_mat_use_wmma(const ggml_tensor * node, const int64_t xs[GGML_MAX_DIMS]) {
     const ggml_prec prec_src1 = ggml_prec_get_src(node, 1);
     if (prec_src1 != GGML_PREC_UNDEFINED && prec_src1 < GGML_PREC_F16) {
         return false;
     }
-    return w->ne[0] % 32 == 0 && xs[0] == 1;
+    return xs[0] == 1;
 }
 
 bool ggml_hrx_op_mul_mat(ggml_backend_hrx_context * ctx, const ggml_tensor * node) {
@@ -88,20 +86,17 @@ bool ggml_hrx_op_mul_mat(ggml_backend_hrx_context * ctx, const ggml_tensor * nod
     const ggml_hrx_mul_mat_vec_tune & mv = ctx->device->tune->mul_mat_vec[w->type];
     // The vector kernel reads K in 256-value superblocks with 4-wide activation loads.
     // The choice does not depend on the column count. Thus a column gets the same result for each batch size.
-    // A partial last superblock needs whole 32-value blocks.
     const bool k_tail = w->ne[0] % 256 != 0;
-    const bool vec    = x->ne[1] <= mv.max_cols && (!k_tail || ggml_blck_size(w->type) == 32) && w->ne[0] <= mv.xs_max_k &&
-                        xs[0] == 1;
+    const bool vec    = x->ne[1] <= mv.max_cols && w->ne[0] <= mv.xs_max_k && xs[0] == 1;
     const bool wmma   = x->ne[1] > mv.max_cols && ggml_hrx_mul_mat_wmma_arch(ctx->device) &&
-                        ggml_hrx_mul_mat_use_wmma(node, w, xs);
+                        ggml_hrx_mul_mat_use_wmma(node, xs);
 
     const int64_t n_batch = x->ne[2] * x->ne[3];
 
     ggml_hrx_kernel_desc desc;
     desc.file   = wmma ? "matmul/mul_mat_wmma.loom" : "matmul/mul_mat.loom";
     desc.symbol = wmma ? "ggml_mul_mat_wmma" : vec ? "ggml_mul_mat_vec_xs" : "ggml_mul_mat_tiled";
-    desc.libs   = { "motifs/common.loom", "motifs/float.loom", "motifs/q4_0.loom", "motifs/q8_0.loom",
-                    "matmul/lib/mm_core.loom", "matmul/lib/mm_vec.loom" };
+    desc.libs   = { "motifs/common.loom", "motifs/q4_0.loom", "matmul/lib/mm_core.loom", "matmul/lib/mm_vec.loom" };
     if (wmma) {
         desc.libs.push_back("matmul/lib/mm_wmma.loom");
         desc.libs.push_back("motifs/wmma.loom");

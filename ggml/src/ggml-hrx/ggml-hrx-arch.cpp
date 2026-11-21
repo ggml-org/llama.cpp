@@ -11,13 +11,9 @@ static constexpr bool ggml_hrx_tune_valid(const ggml_hrx_tune & t) {
             return false;
         }
     }
-    const bool wg_sizes  = t.elementwise_wg_size >= 64 && t.elementwise_wg_size <= 1024 && t.elementwise_wg_size % 64 == 0 &&
-                           t.norm_wg_size >= 64 && t.norm_wg_size <= 1024 && t.norm_wg_size % 64 == 0;
-    const bool stream    = t.stream_wg_per_cu >= 0 && t.stream_wg_per_cu <= 16;
-    const bool rms_lanes = t.rms_norm_lanes_max == 16 || t.rms_norm_lanes_max == 32 || t.rms_norm_lanes_max == 64;
-    // The rows kernel has at most 8 vectors of 4 values for each lane.
-    const bool rms_rows  = t.rms_norm_rows_max <= 2048 && t.rms_norm_rows_max <= 32 * t.rms_norm_lanes_max;
-    return wg_sizes && stream && rms_rows && rms_lanes;
+    const bool wg_size = t.elementwise_wg_size >= 64 && t.elementwise_wg_size <= 1024 && t.elementwise_wg_size % 64 == 0;
+    const bool stream  = t.stream_wg_per_cu >= 0 && t.stream_wg_per_cu <= 16;
+    return wg_size && stream;
 }
 
 // Tuned on gfx1151.
@@ -34,19 +30,8 @@ static constexpr ggml_hrx_tune ggml_hrx_tune_rdna3_5 = [] {
             /* .xs_depth     = */ 2,
         };
     }
-    t.elementwise_wg_size    = 256;
-    t.norm_wg_size           = 256;
-    t.stream_wg_per_cu       = 0;
-    t.rms_norm_rows_max      = 2048;
-    t.rms_norm_lanes_max     = 64;
-    t.fa_target_workgroups   = 32;
-    t.fa_many_tiles          = 64;
-    t.fa_long_kv_subblocks   = 64;
-    t.fa_mid_kv_subblocks    = 16;
-    t.fa_small_batch         = 8;
-    t.fa_split_waves         = 4;
-    t.fa_min_split_subblocks = 8;
-    t.fa_max_splits          = 32;
+    t.elementwise_wg_size = 256;
+    t.stream_wg_per_cu    = 0;
     return t;
 }();
 
@@ -75,17 +60,17 @@ static constexpr uint32_t GGML_HRX_WG_16BIT = 65536;
 
 static constexpr ggml_hrx_arch ggml_hrx_archs[] = {
     // RDNA3. Untuned.
-    { "gfx1100", "gfx1100", true, true, GGML_HRX_MATRIX_OP_WMMA_GFX11, 65536, GGML_HRX_WG_32BIT, &ggml_hrx_tune_rdna3 },
-    { "gfx1101", "gfx1101", true, true, GGML_HRX_MATRIX_OP_WMMA_GFX11, 65536, GGML_HRX_WG_32BIT, &ggml_hrx_tune_rdna3 },
-    { "gfx1102", "gfx1102", true, true, GGML_HRX_MATRIX_OP_WMMA_GFX11, 65536, GGML_HRX_WG_32BIT, &ggml_hrx_tune_rdna3 },
-    { "gfx1103", "gfx1103", true, true, GGML_HRX_MATRIX_OP_WMMA_GFX11, 65536, GGML_HRX_WG_32BIT, &ggml_hrx_tune_rdna3 },
+    { "gfx1100", "gfx1100", true, GGML_HRX_MATRIX_OP_WMMA_GFX11, GGML_HRX_WG_32BIT, &ggml_hrx_tune_rdna3 },
+    { "gfx1101", "gfx1101", true, GGML_HRX_MATRIX_OP_WMMA_GFX11, GGML_HRX_WG_32BIT, &ggml_hrx_tune_rdna3 },
+    { "gfx1102", "gfx1102", true, GGML_HRX_MATRIX_OP_WMMA_GFX11, GGML_HRX_WG_32BIT, &ggml_hrx_tune_rdna3 },
+    { "gfx1103", "gfx1103", true, GGML_HRX_MATRIX_OP_WMMA_GFX11, GGML_HRX_WG_32BIT, &ggml_hrx_tune_rdna3 },
     // RDNA3.5. Only gfx1151 is tuned.
-    { "gfx1150", "gfx1150", true, true, GGML_HRX_MATRIX_OP_WMMA_GFX11, 65536, GGML_HRX_WG_32BIT, &ggml_hrx_tune_rdna3_5 },
-    { "gfx1151", "gfx1151", true, true, GGML_HRX_MATRIX_OP_WMMA_GFX11, 65536, GGML_HRX_WG_32BIT, &ggml_hrx_tune_rdna3_5 },
-    { "gfx1152", "gfx1152", true, true, GGML_HRX_MATRIX_OP_WMMA_GFX11, 65536, GGML_HRX_WG_32BIT, &ggml_hrx_tune_rdna3_5 },
+    { "gfx1150", "gfx1150", true, GGML_HRX_MATRIX_OP_WMMA_GFX11, GGML_HRX_WG_32BIT, &ggml_hrx_tune_rdna3_5 },
+    { "gfx1151", "gfx1151", true, GGML_HRX_MATRIX_OP_WMMA_GFX11, GGML_HRX_WG_32BIT, &ggml_hrx_tune_rdna3_5 },
+    { "gfx1152", "gfx1152", true, GGML_HRX_MATRIX_OP_WMMA_GFX11, GGML_HRX_WG_32BIT, &ggml_hrx_tune_rdna3_5 },
     // RDNA4. Only gfx1201 is tuned.
-    { "gfx1200", "gfx1200", true, true, GGML_HRX_MATRIX_OP_WMMA_GFX12, 65536, GGML_HRX_WG_16BIT, &ggml_hrx_tune_rdna4 },
-    { "gfx1201", "gfx1201", true, true, GGML_HRX_MATRIX_OP_WMMA_GFX12, 65536, GGML_HRX_WG_16BIT, &ggml_hrx_tune_gfx1201 },
+    { "gfx1200", "gfx1200", true, GGML_HRX_MATRIX_OP_WMMA_GFX12, GGML_HRX_WG_16BIT, &ggml_hrx_tune_rdna4 },
+    { "gfx1201", "gfx1201", true, GGML_HRX_MATRIX_OP_WMMA_GFX12, GGML_HRX_WG_16BIT, &ggml_hrx_tune_gfx1201 },
 };
 
 static constexpr bool ggml_hrx_archs_valid() {

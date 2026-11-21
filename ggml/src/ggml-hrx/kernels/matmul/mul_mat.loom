@@ -1,7 +1,7 @@
 // Weight strides and span are in weight units (see lib/mm_core.loom). Input and dst strides are in elements.
 // All kernels have the same launch arguments.
 
-config.decl @ggml.mul_mat.weight_type : %value: index where [range(%value, 1, 4)]
+config.decl @ggml.mul_mat.weight_type : %value: index where [range(%value, 2, 2)]
 
 // ggml_mul_mat_vec_xs unrolls one dot product for each column.
 config.decl @ggml.mul_mat.vec_cols : %value: index where [range(%value, 1, 8)]
@@ -10,7 +10,7 @@ config.decl @ggml.mul_mat.vec_xs_workgroups : %value: index where [range(%value,
 
 config.decl @ggml.mul_mat.vec_xs_depth : %value: index where [range(%value, 1, 4)]
 
-// 1: the last superblock is partial. Only for weight types with 32-value blocks.
+// 1: the last superblock is partial.
 config.decl @ggml.mul_mat.vec_k_tail : %value: index where [range(%value, 0, 1)]
 
 target.decl @ggml_wave64

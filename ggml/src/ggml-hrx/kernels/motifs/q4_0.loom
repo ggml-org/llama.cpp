@@ -9,7 +9,25 @@ template.decl @ggml.mem.half_word(%weight: buffer, %span: index, %index: index) 
 
 template.decl @ggml.u8.affine4(%word: i32, %scale: f32, %bias: f32) -> (vector<4xf32>)
 
-func.decl @ggml_block32_offsets16(%part: index) -> (index, index, index, index)
+// A superblock is 8 blocks of 32 values. A part is one half of a block.
+func.def inline @ggml_block32_offsets16(%part: index) -> (index, index, index, index) {
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c12 = index.constant 12 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %part_in = index.assume %part [range(%part, 0, 15)] : index
+  %blk = index.div %part_in, %c2 : index
+  %half = index.rem %part_in, %c2 : index
+  %o_blk = index.mul %blk, %c32 : index
+  %o_half = index.mul %half, %c16 : index
+  %o0 = index.add %o_blk, %o_half : index
+  %o1 = index.add %o0, %c4 : index
+  %o2 = index.add %o0, %c8 : index
+  %o3 = index.add %o0, %c12 : index
+  func.return %o0, %o1, %o2, %o3 : index, index, index, index
+}
 
 template.decl @ggml.weight.block(%wtype: index) -> (index, index)
 

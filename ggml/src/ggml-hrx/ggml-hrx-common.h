@@ -77,10 +77,6 @@ struct ggml_backend_hrx_context {
     std::string               name;
     uint64_t                  upload_wait = 0; // Last buffer_stream timeline value that this stream waits on.
 
-    // Grow-only device scratch for op partial results. Old buffers stay alive until the context is freed.
-    std::vector<ggml_backend_buffer_t> scratch;
-    ggml_tensor                        scratch_tensor = {};
-
     // Mapped host memory for get_tensor_async. The stream copies into it. synchronize copies it to the caller memory.
     struct readback_copy {
         void * dst;
@@ -110,12 +106,6 @@ bool ggml_hrx_dispatch(ggml_backend_hrx_context *         ctx,
                        const std::vector<int64_t> &       workload,
                        const std::vector<int64_t> &       scalars,
                        const std::vector<const ggml_tensor *> & buffers);
-
-bool ggml_hrx_tensor_on_device(const ggml_tensor * t);
-
-// Returns a device scratch tensor of at least size bytes. Its contents do not persist between ops.
-// Returns nullptr on failure.
-const ggml_tensor * ggml_hrx_scratch(ggml_backend_hrx_context * ctx, size_t size);
 
 inline bool ggml_hrx_elem_strides(const ggml_tensor * t, int64_t s[GGML_MAX_DIMS]) {
     const size_t ts = ggml_type_size(t->type);
