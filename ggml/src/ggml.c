@@ -6350,22 +6350,25 @@ struct ggml_tensor * ggml_gated_delta_net(
     GGML_ASSERT(beta->type == GGML_TYPE_F32);
     GGML_ASSERT(state->type == GGML_TYPE_F32);
 
+    const int64_t S_k      = q->ne[0];
     const int64_t S_v      = v->ne[0];
     const int64_t H        = v->ne[1];
     const int64_t n_tokens = v->ne[2];
     const int64_t n_seqs   = v->ne[3];
 
-    // gate: scalar [1, H, T, B] or vector [S_v, H, T, B] (KDA)
-    GGML_ASSERT(g->ne[0] == 1 || g->ne[0] == S_v);
+    GGML_ASSERT(k->ne[0] == S_k);
+
+    // gate: scalar [1, H, T, B] or vector [S_k, H, T, B] (KDA)
+    GGML_ASSERT(g->ne[0] == 1 || g->ne[0] == S_k);
     GGML_ASSERT(beta->ne[0] == 1);
 
-    // state holds the initial state s0 only: [S_v, S_v, H, n_seqs]. K (snapshot slot count) is an op param.
-    GGML_ASSERT(state->ne[0] == S_v);
+    // state holds the initial state s0 only: [S_k, S_v, H, n_seqs]. K (snapshot slot count) is an op param.
+    GGML_ASSERT(state->ne[0] == S_k);
     GGML_ASSERT(state->ne[1] == S_v);
     GGML_ASSERT(state->ne[2] == H);
     GGML_ASSERT(state->ne[3] == n_seqs);
     GGML_ASSERT(K >= 1);
-    const int64_t state_rows = K * S_v * n_seqs;
+    const int64_t state_rows = K * S_k * n_seqs;
     const int64_t ne[4] = { S_v * H, n_tokens * n_seqs + state_rows, 1, 1 };
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
 

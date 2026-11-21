@@ -2063,7 +2063,10 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         //     return true;
         // }
         const char * reason = nullptr;
-        if (op->src[2]->op == GGML_OP_PERMUTE) {
+        if (op->src[0]->ne[0] != op->src[2]->ne[0]) {
+            reason = "GATED_DELTA_NET with unequal key/value widths is not supported";
+        }
+        else if (op->src[2]->op == GGML_OP_PERMUTE) {
             reason = "GATED_DELTA_NET with PERMUTE src2 is not supported";
         }
         else if (op->src[3]->ne[0] != 1) {

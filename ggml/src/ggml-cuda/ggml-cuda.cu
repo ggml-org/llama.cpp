@@ -3598,11 +3598,12 @@ static int ggml_cuda_try_gdn_cache_fusion(
     }
 
     const ggml_tensor * src_v     = gdn->src[2];
+    const int64_t       S_k       = gdn->src[0]->ne[0];
     const int64_t       S_v       = src_v->ne[0];
     const int64_t       H         = src_v->ne[1];
     const int64_t       n_tokens  = src_v->ne[2];
     const int64_t       n_seqs    = src_v->ne[3];
-    const int64_t       D         = S_v * S_v * H;
+    const int64_t       D         = S_k * S_v * H;
     const int64_t       K         = ggml_get_op_params_i32(gdn, 0); // snapshot slot count
     const int64_t       n_written = std::min<int64_t>(n_tokens, K); // newest n_written slots are written
 
@@ -6798,7 +6799,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_RWKV_WKV7:
             return true;
         case GGML_OP_GATED_DELTA_NET:
-            return ggml_are_same_stride(op->src[0], op->src[1]);
+            return ggml_are_same_stride(op->src[0], op->src[1]) &&
+                   (op->src[0]->ne[0] == op->src[2]->ne[0] ||
+                    (op->src[0]->ne[0] == 64 && op->src[2]->ne[0] == 32 && op->src[3]->ne[0] == 1));
         case GGML_OP_DSV4_HC_COMB:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 &&
                 op->src[2]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;

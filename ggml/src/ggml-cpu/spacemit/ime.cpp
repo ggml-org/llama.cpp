@@ -1156,7 +1156,7 @@ class tensor_traits_common : public tensor_traits_base {
                 }
                 return true;
             case GGML_OP_GATED_DELTA_NET:
-                if (params->use_ref) {
+                if (params->use_ref || op->src[0]->ne[0] != op->src[2]->ne[0]) {
                     return false;
                 }
                 switch (op->src[0]->type) {

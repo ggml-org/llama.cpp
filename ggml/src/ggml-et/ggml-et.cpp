@@ -1531,6 +1531,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 op->src[3] && op->src[3]->type == GGML_TYPE_F32 &&                               // g
                 op->src[4] && op->src[4]->type == GGML_TYPE_F32 &&                               // beta
                 op->src[5] && op->src[5]->type == GGML_TYPE_F32 &&                               // state
+                op->src[0]->ne[0] == op->src[2]->ne[0] &&
                 op->src[2]->ne[0] % 8 == 0 &&                                                    // S_v multiple of 8
                 (op->src[3]->ne[0] == 1 || op->src[3]->ne[0] == op->src[2]->ne[0]) &&  // g is scalar or per-element
                 op->src[4]->ne[0] == 1 &&                                              // beta is scalar per position
