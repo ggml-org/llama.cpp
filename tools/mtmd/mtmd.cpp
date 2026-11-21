@@ -1470,6 +1470,7 @@ struct mtmd_context {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_whisper>(models.a.get());
                 } break;
             case PROJECTOR_TYPE_VOXTRAL_RT:
+            case PROJECTOR_TYPE_MOSHI:
                 {
                     // audio and text share positions, only usable via mtmd_audio_stream
                 } break;
@@ -2827,6 +2828,10 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
             info.type = MTMD_GEN_AUDIO_TYPE_POCKETTTS;
             info.sample_rate = 24000;
             break;
+        case PROJECTOR_TYPE_MOSHI_GEN:
+            info.type = MTMD_GEN_AUDIO_TYPE_MOSHI;
+            info.sample_rate = 24000;
+            break;
         case PROJECTOR_TYPE_SOPRANO:
             info.type = MTMD_GEN_AUDIO_TYPE_SOPRANO;
             info.sample_rate = 32000;
@@ -3343,6 +3348,12 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
         case PROJECTOR_TYPE_KOKORO:
         case PROJECTOR_TYPE_TINY_VOCA:
             inp.type = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
+            break;
+        case PROJECTOR_TYPE_MOSHI_GEN:
+            // lm_gen_config of the checkpoint (audio codes), the text token is sampled by the caller
+            inp.top_k = 250;
+            inp.top_p = 1.0f;
+            inp.temp  = 0.8f;
             break;
         case PROJECTOR_TYPE_VOXCPM2_GEN:
             // UnifiedCFM.forward(): unit gaussian noise, see VoxCPM2Model._inference() for the steps and the guidance
@@ -5485,6 +5496,36 @@ struct mtmd_audio_stream_lfm3a : mtmd_audio_stream {
     int32_t step_live(llama_token last_token);
 };
 
+// Moshi family (e.g. Hibiki): full duplex, one row per 80 ms frame of input audio
+// row = embeddings of the input codes (the acoustic ones lag by acoustic_delay frames) + the text token sampled from the previous row
+// the codes the model generates are added by the caller, see the moshi pipeline of mtmd_helper_gen_audio
+struct mtmd_audio_stream_moshi : mtmd_audio_stream {
+    static constexpr int acoustic_delay = 2;
+    static constexpr int n_frames_max   = 4; // frames per encoder call
+
+    mtmd_subctx_enc_state * enc_state = nullptr;
+
+    int n_q = 0;
+    llama_token tok_text_start = LLAMA_TOKEN_NULL;
+
+    std::vector<float> codes_embd; // n_q rows per encoded frame, from frame codes_off
+    int64_t codes_off = 0;
+    int64_t n_frames_enc = 0;
+    std::vector<float> init_embd;  // n_q rows of the initial codes
+    std::vector<float> tok_embd;
+
+    ~mtmd_audio_stream_moshi() override {
+        delete enc_state;
+    }
+
+    bool    init(const mtmd_audio_stream_params & params) override;
+    int32_t flush(bool end) override;
+    int32_t step(llama_token last_token) override;
+
+    bool encode();
+    const float * code_row(int64_t frame, int k) const;
+};
+
 // Gemma 4: the encoder is causal
 struct mtmd_audio_stream_gemma4a : mtmd_audio_stream {
     mtmd_subctx_enc_state * enc_state = nullptr;
@@ -5564,7 +5605,7 @@ bool mtmd_support_audio_stream(const mtmd_context * ctx) {
     }
     const projector_type proj = ctx->ctx_a->model.proj_type;
     return proj == PROJECTOR_TYPE_VOXTRAL_RT || proj == PROJECTOR_TYPE_LFM3A || proj == PROJECTOR_TYPE_GEMMA4A ||
-           proj == PROJECTOR_TYPE_HIGGS_AUDIO || proj == PROJECTOR_TYPE_VIBEVOICE_ASR;
+           proj == PROJECTOR_TYPE_HIGGS_AUDIO || proj == PROJECTOR_TYPE_VIBEVOICE_ASR || proj == PROJECTOR_TYPE_MOSHI;
 }
 
 mtmd_audio_stream_params mtmd_audio_stream_params_default(void) {
@@ -5589,6 +5630,7 @@ mtmd_audio_stream * mtmd_audio_stream_init(mtmd_context * ctx, mtmd_audio_stream
         case PROJECTOR_TYPE_GEMMA4A:    s = std::make_unique<mtmd_audio_stream_gemma4a>();    break;
         case PROJECTOR_TYPE_HIGGS_AUDIO:   s = std::make_unique<mtmd_audio_stream_higgs_audio>();   break;
         case PROJECTOR_TYPE_VIBEVOICE_ASR: s = std::make_unique<mtmd_audio_stream_vibevoice_asr>(); break;
+        case PROJECTOR_TYPE_MOSHI:         s = std::make_unique<mtmd_audio_stream_moshi>();         break;
         default:                        GGML_ABORT("unsupported projector");
     }
     s->ctx      = ctx;
@@ -6537,4 +6579,121 @@ int64_t mtmd_audio_stream_get_n_rows(const mtmd_audio_stream * s) {
 
 int64_t mtmd_audio_stream_get_n_rows_flushed(const mtmd_audio_stream * s) {
     return s->n_rows_flushed;
+}
+
+//
+// Moshi
+//
+
+bool mtmd_audio_stream_moshi::init(const mtmd_audio_stream_params & params) {
+    if (params.n_prompt > 0) {
+        LOG_ERR("%s: moshi takes no prompt\n", __func__);
+        return false;
+    }
+    n_q = (int) sctx->model.mm_a_code_embd->ne[2];
+    samples_per_tok = mtmd_graph_moshi::n_samples_per_frame;
+
+    const std::string name = "<|text_start|>";
+    std::vector<llama_token> toks(4);
+    if (llama_tokenize(ctx->vocab, name.c_str(), (int32_t) name.size(), toks.data(), (int32_t) toks.size(), false, true) != 1) {
+        LOG_ERR("%s: cannot find the %s token\n", __func__, name.c_str());
+        return false;
+    }
+    tok_text_start = toks[0];
+
+    enc_state = sctx->enc_state_init(0);
+    return enc_state != nullptr;
+}
+
+int32_t mtmd_audio_stream_moshi::flush(bool end) {
+    // pad to a whole frame
+    const int64_t n_align = (samples_per_tok - n_samples % samples_per_tok) % samples_per_tok;
+    add_silence(n_align);
+    n_rows_flushed = n_samples / samples_per_tok;
+    ended = end;
+    return 0;
+}
+
+// encodes the whole frames of buf, n_frames_max per call
+bool mtmd_audio_stream_moshi::encode() {
+    while (true) {
+        const int64_t n = std::min<int64_t>((int64_t) buf.size() / samples_per_tok, n_frames_max);
+        if (n <= 0) {
+            return true;
+        }
+        const size_t n_in = (size_t) (n * samples_per_tok);
+
+        mtmd_image_f32 img;
+        img.set_size({(int) n_in, 1}, false, /* is_audio */ true);
+        img.cpy_buf(std::vector<float>(buf.begin(), buf.begin() + n_in));
+        mtmd_image_f32_batch batch;
+        batch.is_audio = true;
+        batch.entries.push_back(std::move(img));
+
+        std::vector<float> res((size_t) n_embd * n_q * (n + 1));
+        mtmd_subctx_encode_params params;
+        params.n_threads = ctx->n_threads;
+        params.imgs      = &batch;
+        params.out_embd  = &res;
+        params.enc_state = enc_state;
+        if (!sctx->encode(&params)) {
+            LOG_ERR("%s: failed to encode audio\n", __func__);
+            return false;
+        }
+        const size_t n_codes = (size_t) n_embd * n_q * n;
+        codes_embd.insert(codes_embd.end(), res.begin(), res.begin() + n_codes);
+        init_embd.assign(res.begin() + n_codes, res.end());
+        n_frames_enc += n;
+
+        buf.erase(buf.begin(), buf.begin() + n_in);
+        buf_pos += (int64_t) n_in;
+    }
+}
+
+const float * mtmd_audio_stream_moshi::code_row(int64_t frame, int k) const {
+    return codes_embd.data() + ((size_t) (frame - codes_off) * n_q + k) * n_embd;
+}
+
+int32_t mtmd_audio_stream_moshi::step(llama_token last_token) {
+    n_rows_done = n_rows;
+    out.clear();
+
+    if (!encode()) {
+        return -2;
+    }
+    // row p goes with frame p
+    if (n_rows >= n_frames_enc) {
+        return ended ? -1 : 0;
+    }
+    const int64_t p = n_rows;
+
+    // the text of the previous row, see _get_initial_token() of the reference
+    const llama_token tok = p == 0 ? tok_text_start : last_token;
+    if (tok == LLAMA_TOKEN_NULL) {
+        LOG_ERR("%s: the token sampled from the previous row is required\n", __func__);
+        return -2;
+    }
+    tok_embd.resize(n_embd);
+    if (llama_model_get_tok_embd_rows(ctx->text_model, &tok, 1, tok_embd.data()) == 0) {
+        return -2;
+    }
+
+    // the semantic code has no delay; a stream starts with initial codes, the first frame is never seen, like the reference
+    out = tok_embd;
+    for (int k = 0; k < n_q; k++) {
+        const int64_t delay = k == 0 ? 0 : acoustic_delay;
+        const float * row = p <= delay ? init_embd.data() + (size_t) k * n_embd : code_row(p - delay, k);
+        for (int i = 0; i < n_embd; i++) {
+            out[i] += row[i];
+        }
+    }
+    n_rows++;
+
+    // drop the frames no row will need again
+    const int64_t keep_from = std::max<int64_t>(0, n_rows - acoustic_delay);
+    if (keep_from - codes_off >= 64) {
+        codes_embd.erase(codes_embd.begin(), codes_embd.begin() + (size_t) (keep_from - codes_off) * n_q * n_embd);
+        codes_off = keep_from;
+    }
+    return 1;
 }

@@ -770,6 +770,18 @@ struct llama_model_pockettts : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
+struct llama_model_moshi : public llama_model_base {
+    llama_model_moshi(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_graph_context {
+        graph(const llm_graph_params & params);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
 struct llama_model_kokoro : public llama_model_base {
     llama_model_kokoro(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
@@ -2547,6 +2559,7 @@ struct llama_model_inkling2_loop : public llama_model_inkling2 {
     llama_model_inkling2_loop(const struct llama_model_params & params) : llama_model_inkling2(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
+    void post_arch_tensors(llama_model_loader & ml) override;
 
     int n_layer_phys() const override { return n_phys; }
     int layer_phys(int il) const;

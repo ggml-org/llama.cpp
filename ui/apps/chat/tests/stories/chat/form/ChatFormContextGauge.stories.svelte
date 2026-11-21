@@ -10,8 +10,9 @@
 	} from './fixtures';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatFormContextGauge from '#lib/components/app/chat/ChatForm/ChatFormContextGauge/ChatFormContextGauge.svelte';
-	import ContextGaugePopup from '#lib/components/app/chat/ChatForm/ChatFormContextGauge/ContextGaugePopup.svelte';
+	import ContextGaugeDrawer from '#lib/components/app/chat/ChatForm/ChatFormContextGauge/ContextGaugeDrawer.svelte';
 	import { gaugePopupClose } from '#lib/components/app/chat/ChatForm/ChatFormContextGauge/gauge-popup.svelte.ts';
+	import { deviceStore } from '#lib/stores/index.ts';
 	import { userEvent, within } from 'storybook/test';
 
 	const { Story } = defineMeta({
@@ -24,7 +25,7 @@
 
 	const N_CTX = 32768;
 
-	// the popup state is module-wide, so close it around each story
+	// the open state is module-wide, so close it around each story
 	function seedUsage(promptTokens: number) {
 		return () => {
 			gaugePopupClose();
@@ -67,21 +68,22 @@
 		};
 	}
 
+	// the popover renders in a portal, so it is looked up on the whole page
 	async function openPopup({ canvasElement }: { canvasElement: HTMLElement }) {
-		const canvas = within(canvasElement);
-
-		canvas.getByRole('button', { name: 'Context usage' }).focus();
-		await userEvent.keyboard('{Enter}');
-		await canvas.findByRole('status');
+		await userEvent.click(within(canvasElement).getByRole('button', { name: 'Context usage' }));
+		await within(document.body).findByRole('dialog');
 	}
 </script>
 
 {#snippet frame()}
-	<!-- the popup positions itself against the closest form -->
+	<!-- room above the form for the popover -->
 	<form class="relative mt-96 flex w-80 justify-end rounded-3xl border p-3">
 		<ChatFormContextGauge />
 
-		<ContextGaugePopup />
+		<!-- a phone opens the panel in the drawer the chat form renders -->
+		{#if deviceStore.isMobile}
+			<ContextGaugeDrawer />
+		{/if}
 	</form>
 {/snippet}
 

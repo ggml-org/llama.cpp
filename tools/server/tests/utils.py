@@ -902,6 +902,11 @@ def is_slow_test_allowed():
     return os.environ.get("SLOW_TESTS") == "1" or os.environ.get("SLOW_TESTS") == "ON"
 
 
+# [TAG_MTMD_NO_REALLOC] TODO @ngxson : remove when mtmd side is fixed
+def is_no_realloc():
+    return os.environ.get("GGML_SCHED_NO_REALLOC") in ("1", "ON") or os.environ.get("GGML_SCHED_DEBUG_REALLOC", "0") != "0"
+
+
 def make_pcm16(seconds: float = 1.0, rate: int = 16000, freq: float = 440.0) -> bytes:
     """ sine tone as raw PCM16 mono samples """
     n = int(seconds * rate)

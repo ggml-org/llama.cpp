@@ -516,6 +516,16 @@ static void dequantize_row_iq4_nl_sycl(const void *vx, dst_t *y, const int64_t k
       }
 }
 
+template <ggml_type type, typename dst_t>
+static void dequantize_row_iq4_sycl_reorder(const void * vx, dst_t * y, const int64_t k, dpct::queue_ptr stream) {
+    // flat range<1>, four qs bytes (8 outputs) per item
+    GGML_ASSERT(k % ggml_sycl_reordered::block_q_t<type>::traits::qk == 0);
+    stream->parallel_for(sycl::range<1>((size_t) (k / 8)),
+        [=](sycl::id<1> idx) {
+            dequantize_block_iq4_reorder_wide<type>(vx, y, k, idx);
+        });
+}
+
 template <typename dst_t>
 static void dequantize_row_mxfp4_sycl(const void * vx, dst_t * y, const int64_t k, dpct::queue_ptr stream) {
     const int nb = (k + QK_K - 1) / QK_K;
@@ -743,9 +753,17 @@ static to_t_sycl_t<dst_t> ggml_get_dequant_sycl(ggml_type type, ggml_tensor * ds
                 return dequantize_row_iq3_s_sycl;
             }
         case GGML_TYPE_IQ4_XS:
-            return dequantize_row_iq4_xs_sycl;
+            if (is_reordered_src0(dst)) {
+                return dequantize_row_iq4_sycl_reorder<GGML_TYPE_IQ4_XS>;
+            } else {
+                return dequantize_row_iq4_xs_sycl;
+            }
         case GGML_TYPE_IQ4_NL:
-            return dequantize_row_iq4_nl_sycl;
+            if (is_reordered_src0(dst)) {
+                return dequantize_row_iq4_sycl_reorder<GGML_TYPE_IQ4_NL>;
+            } else {
+                return dequantize_row_iq4_nl_sycl;
+            }
         case GGML_TYPE_MXFP4:
             if (is_reordered_src0(dst)) {
                 return dequantize_row_mxfp4_sycl_reorder;

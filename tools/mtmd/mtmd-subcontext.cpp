@@ -392,6 +392,7 @@ static std::vector<c2w_state_slot> list_gen_state_slots(const mtmd_hparams & hpa
         case PROJECTOR_TYPE_FISH_S2_GEN:   return list_c2w_state_slots(hparams, model);
         case PROJECTOR_TYPE_DRAMA3_GEN:    return list_drama3_state_slots(hparams, model);
         case PROJECTOR_TYPE_POCKETTTS_GEN: return list_pockettts_state_slots(hparams, model);
+        case PROJECTOR_TYPE_MOSHI_GEN:     return list_pockettts_state_slots(hparams, model);
         case PROJECTOR_TYPE_LFM3A_GEN:     return list_lfm3a_gen_state_slots(hparams, model);
         case PROJECTOR_TYPE_ZONOS3_GEN:    return list_zonos3_gen_state_slots(hparams, model);
         case PROJECTOR_TYPE_VOXCPM2_GEN:   return list_voxcpm2_state_slots(hparams, model);
@@ -405,6 +406,7 @@ static std::vector<c2w_state_slot> list_enc_state_slots(const mtmd_hparams & hpa
         case PROJECTOR_TYPE_LFM3A:   return list_lfm3a_state_slots(hparams, model);
         case PROJECTOR_TYPE_GEMMA4A: return list_gemma4a_state_slots(hparams, model);
         case PROJECTOR_TYPE_VIBEVOICE_ASR: return list_vibevoice_asr_state_slots(hparams, model);
+        case PROJECTOR_TYPE_MOSHI:   return list_moshi_state_slots(hparams, model);
         default:                     return {};
     }
 }
@@ -454,7 +456,8 @@ mtmd_subctx_gen_state * mtmd_subcontext::gen_state_init(uint32_t seed) {
 
 mtmd_subctx_enc_state * mtmd_subcontext::enc_state_init(int32_t n_frames_max) {
     const auto & hparams = model.hparams;
-    if (model.proj_type == PROJECTOR_TYPE_LFM3A || model.proj_type == PROJECTOR_TYPE_GEMMA4A || model.proj_type == PROJECTOR_TYPE_VIBEVOICE_ASR) {
+    if (model.proj_type == PROJECTOR_TYPE_LFM3A || model.proj_type == PROJECTOR_TYPE_GEMMA4A || model.proj_type == PROJECTOR_TYPE_VIBEVOICE_ASR ||
+            model.proj_type == PROJECTOR_TYPE_MOSHI) {
         // see list_enc_state_slots()
         const auto slots = list_enc_state_slots(hparams, model);
         auto st = std::make_unique<mtmd_subctx_enc_state>();
@@ -2329,6 +2332,61 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                 }
                 set_input_f32("pos_emb", pos_emb);
             } break;
+        case PROJECTOR_TYPE_MOSHI:
+            {
+                // positions and masks are derived in-graph from the "pos" slot
+                set_enc_state_in();
+            } break;
+        case PROJECTOR_TYPE_MOSHI_GEN:
+            {
+                const int64_t n_q = model.gen_code_head_w->ne[2];
+                if (params->gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_WAV) {
+                    GGML_ASSERT(params->codes != nullptr);
+                    // frame-major to codebook-major
+                    const auto &  in       = *params->codes;
+                    const int64_t n_frames = (int64_t) in.size() / n_q;
+                    const int64_t n_codes  = model.c2w.quant_first_cb_w->ne[1];
+                    std::vector<int32_t> codes(in.size());
+                    for (int64_t f = 0; f < n_frames; f++) {
+                        for (int64_t k = 0; k < n_q; k++) {
+                            const int32_t c = in[(size_t) (f * n_q + k)];
+                            if (c < 0 || c >= n_codes) {
+                                LOG_ERR("%s: code out of range (%d, codebook size %lld)\n", __func__, c, (long long) n_codes);
+                                return false;
+                            }
+                            codes[(size_t) (k * n_frames + f)] = c;
+                        }
+                    }
+                    set_input_i32("inp_codes", codes);
+                    set_gen_state_in();
+                } else if (params->codes != nullptr) {
+                    std::vector<int32_t> codes = *params->codes;
+                    const int64_t n_rows = model.gen_code_out_embd_w->ne[1];
+                    for (int32_t c : codes) {
+                        if (c < 0 || c >= n_rows) {
+                            LOG_ERR("%s: code out of range (%d)\n", __func__, c);
+                            return false;
+                        }
+                    }
+                    set_input_i32("inp_codes", codes);
+                } else {
+                    std::vector<int32_t> code0 = { params->code0 };
+                    if (code0[0] < 0 || code0[0] >= model.gen_code_tok_embd_w->ne[1]) {
+                        LOG_ERR("%s: text token out of range (%d)\n", __func__, code0[0]);
+                        return false;
+                    }
+                    set_input_i32("inp_code0", code0);
+                    // greedy has no random input
+                    if (ggml_graph_get_tensor(gf, "inp_rand") != nullptr) {
+                        std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+                        std::vector<float> r(n_q);
+                        for (auto & v : r) {
+                            v = dist(params->gen_state->rng);
+                        }
+                        set_input_f32("inp_rand", r);
+                    }
+                }
+            } break;
         case PROJECTOR_TYPE_LFM3A:
             {
                 GGML_ASSERT(imgs.entries.size() == 1);
@@ -2902,7 +2960,8 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
             }
         }
     }
-    if (params->enc_state != nullptr && (model.proj_type == PROJECTOR_TYPE_LFM3A || model.proj_type == PROJECTOR_TYPE_GEMMA4A || model.proj_type == PROJECTOR_TYPE_VIBEVOICE_ASR)) {
+    if (params->enc_state != nullptr && (model.proj_type == PROJECTOR_TYPE_LFM3A || model.proj_type == PROJECTOR_TYPE_GEMMA4A || model.proj_type == PROJECTOR_TYPE_VIBEVOICE_ASR ||
+                                         model.proj_type == PROJECTOR_TYPE_MOSHI)) {
         const auto & slots = params->enc_state->slots;
         size_t i = 0;
         for (const auto & slot : list_enc_state_slots(hparams, model)) {
