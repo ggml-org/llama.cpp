@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <stdexcept>
+#include <unordered_set>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -504,6 +505,112 @@ std::string finalize_file(const hf_file & file, const std::function<bool()> & ke
         }
     }
     return file.final_path;
+}
+
+static fs::path resolve_blob_path(const fs::path & repo_path, const fs::path & snapshot_path, bool for_reference = false) {
+    std::error_code ec;
+    const fs::path target = fs::read_symlink(snapshot_path, ec);
+    if (ec) {
+        return {};
+    }
+
+    fs::path blobs_path = fs::absolute(repo_path / "blobs").lexically_normal();
+    fs::path blob_path = fs::absolute(snapshot_path.parent_path() / target).lexically_normal();
+
+    if (for_reference) {
+        blobs_path = fs::weakly_canonical(blobs_path, ec);
+        if (ec) {
+            return {};
+        }
+        blob_path = fs::weakly_canonical(blob_path, ec);
+        if (ec) {
+            return {};
+        }
+    }
+
+    // HF blobs are direct children of the repository's blobs directory
+    if (!for_reference && blob_path.parent_path() != blobs_path) {
+        return {};
+    }
+    return blob_path;
+}
+
+static std::string blob_reference(const fs::path & path) {
+    std::error_code ec;
+    fs::path reference = fs::weakly_canonical(path, ec);
+    if (ec) {
+        reference = fs::absolute(path, ec).lexically_normal();
+    }
+    return reference.string();
+}
+
+bool remove_cached_files(const std::string & repo_id, const hf_files & files) {
+    const fs::path repo_path = get_repo_path(repo_id);
+
+    std::vector<fs::path> to_remove;
+    for (const auto & f : files) {
+        to_remove.emplace_back(f.local_path);
+    }
+
+    std::error_code ec;
+    const fs::path canonical_repo = fs::weakly_canonical(repo_path, ec);
+    const fs::path canonical_blobs = ec ? fs::path() : fs::weakly_canonical(repo_path / "blobs", ec);
+    const auto [repo_end, _] = std::mismatch(canonical_repo.begin(), canonical_repo.end(), canonical_blobs.begin(), canonical_blobs.end());
+    const bool cleanup_blobs = !ec && canonical_repo != canonical_blobs && repo_end == canonical_repo.end();
+
+    // resolve blob paths from symlinks before deleting snapshot entries
+    std::vector<fs::path> blobs_to_check;
+    if (cleanup_blobs) {
+        for (const auto & p : to_remove) {
+            const fs::path blob = resolve_blob_path(repo_path, p);
+            if (!blob.empty()) {
+                blobs_to_check.push_back(blob);
+            }
+        }
+    }
+
+    // remove snapshot entries
+    bool removed = false;
+    for (const auto & p : to_remove) {
+        std::error_code ec;
+        removed = fs::remove(p, ec) || removed;
+        if (ec) {
+            LOG_WRN("%s: failed to remove %s: %s\n", __func__, p.string().c_str(), ec.message().c_str());
+        }
+    }
+
+    if (blobs_to_check.empty()) {
+        return removed;
+    }
+
+    // collect blobs still referenced by any remaining snapshot entry
+    std::unordered_set<std::string> still_referenced;
+    try {
+        for (const auto & revision : fs::directory_iterator(repo_path / "snapshots")) {
+            for (const auto & entry : fs::recursive_directory_iterator(revision.path())) {
+                const fs::path blob = resolve_blob_path(repo_path, entry.path(), true);
+                if (!blob.empty()) {
+                    still_referenced.insert(blob.string());
+                }
+            }
+        }
+    } catch (const fs::filesystem_error & e) {
+        LOG_WRN("%s: failed to scan remaining snapshots: %s\n", __func__, e.code().message().c_str());
+        return removed;
+    }
+
+    // remove orphaned blobs
+    for (const auto & blob : blobs_to_check) {
+        if (still_referenced.find(blob_reference(blob)) == still_referenced.end()) {
+            std::error_code ec;
+            removed = fs::remove(blob, ec) || removed;
+            if (ec) {
+                LOG_WRN("%s: failed to remove blob %s: %s\n", __func__, blob.string().c_str(), ec.message().c_str());
+            }
+        }
+    }
+
+    return removed;
 }
 
 bool remove_cached_repo(const std::string & repo_id) {
