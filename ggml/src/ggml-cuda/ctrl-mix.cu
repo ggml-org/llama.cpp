@@ -48,7 +48,7 @@ static void ctrl_mix_span(const ggml_tensor * t, int64_t & beg, int64_t & end) {
     }
 }
 
-int ggml_cuda_match_ctrl_mix(const ggml_cgraph * cgraph, int i) {
+int ggml_cuda_match_ctrl_mix(const ggml_cgraph * cgraph, int i, bool check_memory) {
     // the compute nodes of the pattern, view nodes may sit between them
     const ggml_op ops[8] = { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT, GGML_OP_UNARY, GGML_OP_MUL, GGML_OP_SUB, GGML_OP_UNARY, GGML_OP_MUL, GGML_OP_ADD };
     int idx[8];
@@ -113,11 +113,9 @@ int ggml_cuda_match_ctrl_mix(const ggml_cgraph * cgraph, int i) {
             return -1;
         }
     }
-    // the output is read element-wise from cur and msg, but g is read by every row
-    int64_t ob, oe, gb, ge;
-    ctrl_mix_span(add, ob, oe);
-    ctrl_mix_span(g, gb, ge);
-    if (ob < ge && gb < oe) {
+    // cur and msg are read element-wise, g by every row
+    if (check_memory && (ggml_cuda_fusion_overlap(add, g) || !ggml_cuda_fusion_elementwise_ok(add, cur) ||
+                         !ggml_cuda_fusion_elementwise_ok(add, msg))) {
         return -1;
     }
     return idx[7];
@@ -191,7 +189,7 @@ static __global__ void mul_l2_norm_f32(const float * x, const float * w, float *
     }
 }
 
-int ggml_cuda_match_mul_l2_norm(const ggml_cgraph * cgraph, int i) {
+int ggml_cuda_match_mul_l2_norm(const ggml_cgraph * cgraph, int i, bool check_memory) {
     if (i + 1 >= cgraph->n_nodes) {
         return -1;
     }
@@ -217,6 +215,11 @@ int ggml_cuda_match_mul_l2_norm(const ggml_cgraph * cgraph, int i) {
             last = i + 2;
         }
     }
+    // a row is read whole before it is written, by one warp: the output may only be exactly an input
+    const ggml_tensor * out = cgraph->nodes[last];
+    if (check_memory && (!ggml_cuda_fusion_elementwise_ok(out, mul->src[0]) || !ggml_cuda_fusion_elementwise_ok(out, mul->src[1]))) {
+        return -1;
+    }
     return last;
 }
 
@@ -236,4 +239,135 @@ void ggml_cuda_op_mul_l2_norm(ggml_backend_cuda_context & ctx, const ggml_cgraph
     const dim3 grid((nrows + rows_per_block - 1)/rows_per_block);
     mul_l2_norm_f32<<<grid, block_size, 0, ctx.stream()>>>((const float *) mul->src[0]->data, (const float *) mul->src[1]->data,
         (float *) out->data, ncols, nrows, eps, scale);
+}
+
+// out[h, i] = f16((<r_h, table_rel[i]> - sinks[h]) + mask[i]), stored as [n_kv, 1, n_head]
+static __global__ void rel_bias_f32_f16(const float * __restrict__ r, const float * __restrict__ table, const int64_t table_s1,
+        const float * __restrict__ sinks, const int32_t * __restrict__ rel, const float * __restrict__ mask,
+        half * __restrict__ dst, const int n_rel, const int n_kv) {
+    const int i = blockIdx.x*blockDim.x + threadIdx.x;
+    const int h = blockIdx.y;
+    if (i >= n_kv) {
+        return;
+    }
+    const float * rh = r + (int64_t) h*n_rel;
+    const float * ti = table + (int64_t) rel[i]*table_s1;
+    float dot = 0.0f;
+    for (int k = 0; k < n_rel; ++k) {
+        dot += rh[k]*ti[k];
+    }
+    dst[(int64_t) h*n_kv + i] = __float2half((dot - sinks[h]) + mask[i]);
+}
+
+int ggml_cuda_match_rel_bias(const ggml_cgraph * cgraph, int i, bool check_memory) {
+    const ggml_op ops[6] = { GGML_OP_MUL_MAT, GGML_OP_SUB, GGML_OP_GET_ROWS, GGML_OP_CONT, GGML_OP_ADD, GGML_OP_CPY };
+    int idx[6];
+    int n = 0;
+    for (int k = i; k < cgraph->n_nodes && n < 6; ++k) {
+        const ggml_tensor * t = cgraph->nodes[k];
+        if (ctrl_mix_is_view(t) && n > 0) {
+            continue;
+        }
+        if (t->op != ops[n]) {
+            return -1;
+        }
+        idx[n++] = k;
+    }
+    if (n < 6) {
+        return -1;
+    }
+    const ggml_tensor * mm   = cgraph->nodes[idx[0]];
+    const ggml_tensor * sub  = cgraph->nodes[idx[1]];
+    const ggml_tensor * gr   = cgraph->nodes[idx[2]];
+    const ggml_tensor * cont = cgraph->nodes[idx[3]];
+    const ggml_tensor * add  = cgraph->nodes[idx[4]];
+    const ggml_tensor * cpy  = cgraph->nodes[idx[5]];
+
+    const ggml_tensor * r     = mm->src[0];   // [n_rel, n_head]
+    const ggml_tensor * table = mm->src[1];   // [n_rel, n_extent + 1]
+    const ggml_tensor * sinks = sub->src[1];  // [n_head, 1]
+    const ggml_tensor * rel   = gr->src[1];   // I32 [n_kv, 1]
+    const ggml_tensor * kqb   = cont->src[0]; // permuted view of gr, [n_kv, 1, n_head]
+    const ggml_tensor * mask  = add->src[1];  // [n_kv, 1]
+
+    const int64_t n_rel  = r->ne[0];
+    const int64_t n_head = r->ne[1];
+    const int64_t n_kv   = rel->ne[0];
+
+    if (r->type != GGML_TYPE_F32 || table->type != GGML_TYPE_F32 || !ggml_is_contiguous(r) || r->ne[2] != 1 ||
+            table->nb[0] != sizeof(float) || table->ne[0] != n_rel || table->ne[2] != 1 || mm->ne[0] != n_head) {
+        return -1;
+    }
+    if (sub->src[0] != mm || sinks->type != GGML_TYPE_F32 || !ggml_is_contiguous(sinks) || ggml_nelements(sinks) != n_head ||
+            sinks->ne[0] != n_head) {
+        return -1;
+    }
+    if (gr->src[0] != sub || rel->type != GGML_TYPE_I32 || !ggml_is_contiguous(rel) || ggml_nelements(rel) != n_kv) {
+        return -1;
+    }
+    // the bias reaches the add through views of the gathered rows only, as [n_kv, 1, n_head]
+    const ggml_tensor * v = kqb;
+    while (v != gr && ctrl_mix_is_view(v)) {
+        v = v->src[0];
+    }
+    if (v != gr || kqb->ne[0] != n_kv || kqb->ne[1] != 1 || kqb->ne[2] != n_head || kqb->ne[3] != 1 ||
+            kqb->nb[0] != gr->nb[1] || kqb->nb[2] != gr->nb[0]) {
+        return -1;
+    }
+    if (add->src[0] != cont || !ggml_are_same_shape(cont, kqb) || mask->type != GGML_TYPE_F32 || mask->ne[0] != n_kv ||
+            ggml_nelements(mask) != n_kv || mask->nb[0] != sizeof(float)) {
+        return -1;
+    }
+    if (cpy->src[0] != add || cpy->type != GGML_TYPE_F16 || !ggml_is_contiguous(cpy) || !ggml_are_same_shape(cpy, add) ||
+            !ggml_is_contiguous(cpy->src[1])) {
+        return -1;
+    }
+    for (int k = 0; k < 5; ++k) {
+        const ggml_tensor * t = cgraph->nodes[idx[k]];
+        if (ggml_node_get_use_count(cgraph, idx[k]) != 1 || (t->flags & GGML_TENSOR_FLAG_OUTPUT)) {
+            return -1;
+        }
+    }
+    for (int k = 0; k < 6; ++k) {
+        if (!(cgraph->nodes[idx[k]]->flags & GGML_TENSOR_FLAG_COMPUTE)) {
+            return -1;
+        }
+    }
+    // every input is read by many threads
+    for (const ggml_tensor * src : { r, table, sinks, rel, mask }) {
+        if (check_memory && ggml_cuda_fusion_overlap(cpy->src[1], src)) {
+            return -1;
+        }
+    }
+    return idx[5];
+}
+
+void ggml_cuda_op_rel_bias(ggml_backend_cuda_context & ctx, const ggml_cgraph * cgraph, int i, int last) {
+    const ggml_tensor * mm   = cgraph->nodes[i];
+    ggml_tensor       * cpy  = cgraph->nodes[last];
+    const ggml_tensor * add  = cpy->src[0];
+    const ggml_tensor * sub  = mm;
+    // walk back from the add to the SUB and GET_ROWS
+    const ggml_tensor * v = add->src[0];
+    while (v->op != GGML_OP_GET_ROWS) {
+        v = v->src[0];
+    }
+    const ggml_tensor * gr = v;
+    sub = gr->src[0];
+
+    const ggml_tensor * r     = mm->src[0];
+    const ggml_tensor * table = mm->src[1];
+    const ggml_tensor * sinks = sub->src[1];
+    const ggml_tensor * rel   = gr->src[1];
+    const ggml_tensor * mask  = add->src[1];
+
+    const int n_rel  = (int) r->ne[0];
+    const int n_head = (int) r->ne[1];
+    const int n_kv   = (int) rel->ne[0];
+
+    constexpr int block_size = 256;
+    const dim3 grid((n_kv + block_size - 1)/block_size, n_head);
+    rel_bias_f32_f16<<<grid, block_size, 0, ctx.stream()>>>((const float *) r->data, (const float *) table->data,
+        table->nb[1]/sizeof(float), (const float *) sinks->data, (const int32_t *) rel->data, (const float *) mask->data,
+        (half *) cpy->src[1]->data, n_rel, n_kv);
 }

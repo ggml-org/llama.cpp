@@ -1,4 +1,5 @@
 #include "depth-mix.cuh"
+#include "ctrl-mix.cuh"
 
 // out[:, q] = sum_j softmax_j(scale*<s_j, query_q>) s_j over the states s_j: the n_blocks stored (already
 // normalized) blocks, then rms_norm(cur). One pass gathers the sum of squares of cur and all dot products (those of
@@ -113,15 +114,7 @@ static __global__ void depth_mix_f32(
     }
 }
 
-static void depth_mix_span(const ggml_tensor * t, int64_t & beg, int64_t & end) {
-    beg = (int64_t) t->data;
-    end = beg + ggml_type_size(t->type);
-    for (int d = 0; d < GGML_MAX_DIMS; ++d) {
-        end += (t->ne[d] - 1)*t->nb[d];
-    }
-}
-
-bool ggml_cuda_match_depth_mix(const ggml_cgraph * cgraph, int i) {
+bool ggml_cuda_match_depth_mix(const ggml_cgraph * cgraph, int i, bool check_memory) {
     if (i + 6 >= cgraph->n_nodes) {
         return false;
     }
@@ -176,13 +169,9 @@ bool ggml_cuda_match_depth_mix(const ggml_cgraph * cgraph, int i) {
             return false;
         }
     }
-    // the output is written while the blocks and the query are read
-    int64_t ob, oe;
-    depth_mix_span(m2, ob, oe);
-    for (const ggml_tensor * src : { blocks, query }) {
-        int64_t b, e;
-        depth_mix_span(src, b, e);
-        if (ob < e && b < oe) {
+    // the output is written while the blocks, the query and cur are read
+    for (const ggml_tensor * src : { blocks, query, cur }) {
+        if (check_memory && ggml_cuda_fusion_overlap(m2, src)) {
             return false;
         }
     }
