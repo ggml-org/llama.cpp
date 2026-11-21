@@ -1099,6 +1099,30 @@ static void test_buft_get_alloc_size_n_does_not_allocate() {
     GGML_ASSERT(x[1]->data == nullptr);
 }
 
+// Parent larger than max_size splits off a view-only tail with size 0.
+// That tail is not in the alloc plan, so views must be initialized after the split.
+static void test_view_init_after_max_size_split() {
+    const size_t max_size = 16;
+    dummy_backend backend = dummy_backend_init(max_size);
+    auto [ctx, graph, ctx_ptr] = make_context();
+    (void) graph;
+
+    ggml_tensor * parent = make_input_with_size(ctx, 24); // 6 x f32, > max_size
+    ggml_tensor * view0  = ggml_view_1d(ctx, parent, 2, 0);
+    ggml_tensor * view1  = ggml_view_1d(ctx, parent, 2, 2 * sizeof(float));
+    assign_names(ctx);
+
+    ggml_backend_buffer_ptr buf(ggml_backend_alloc_ctx_tensors_from_buft(ctx, &backend.buffer_type));
+    GGML_ASSERT(buf);
+
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx); t; t = ggml_get_next_tensor(ctx, t)) {
+        GGML_ASSERT(t->buffer != nullptr);
+        GGML_ASSERT(t->data != nullptr);
+    }
+    GGML_ASSERT(view0->view_src == parent);
+    GGML_ASSERT(view1->view_src == parent);
+}
+
 static void run(const char * name, void (*f)()) {
     printf("%s ", name);
     fflush(stdout);
@@ -1139,5 +1163,6 @@ int main() {
     run("test_buft_get_alloc_size_n_custom_override", test_buft_get_alloc_size_n_custom_override);
     run("test_buft_get_alloc_size_n_custom_override_ctx_size", test_buft_get_alloc_size_n_custom_override_ctx_size);
     run("test_buft_get_alloc_size_n_does_not_allocate", test_buft_get_alloc_size_n_does_not_allocate);
+    run("test_view_init_after_max_size_split", test_view_init_after_max_size_split);
     return 0;
 }
