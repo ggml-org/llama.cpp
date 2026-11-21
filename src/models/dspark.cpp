@@ -1093,6 +1093,7 @@ llama_model_dflash::graph_inkling2::graph_inkling2(const llm_graph_params & para
     res->t_embd = cur;
     auto * base = build_lora_mm(target->output, cur, target->output_s);
     ggml_prec_set_acc(base, GGML_PREC_F32);
+    // Graph reservation can use more rows per sequence than a draft block.
     if (backbone_only || block > hparams.dflash_block_size) {
         if (backbone_only) {
             res->t_h_nextn = cur;
