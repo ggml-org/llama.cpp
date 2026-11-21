@@ -30,6 +30,10 @@ The Hexagon NPU backend takes advantage of Snapdragon unified memory where all D
 The NPU has dedicated tightly-coupled memory called VTCM (Vector Tightly-Coupled Memory). VTCM is used for intermediate data (such as
 dynamically quantized activations) and streaming buffers (chunks of weight and activation tensors fetched via DMA).
 
+Both DDR and VTCM reserve trailing guard space so HVX kernels can issue full-width vector loads (`vmem` / `vmemu`) on tail elements without boundary branches:
+- Shared DDR buffers pad allocations to 4 KB and append a 4 KB guard page.
+- Usable VTCM (`htp_vtcm_usable_size`) reserves `HTP_VTCM_GUARD_SIZE` (128 bytes) at the end of the physical VTCM page.
+
 ## Large model handling
 
 Hexagon NPU sessions have a 32-bit virtual address space window of around 3.5GB.
@@ -256,22 +260,22 @@ Writing high-performance operators for Hexagon requires following specific guide
 - Hexagon cores do not have hardware division instructions.
 - For recurring divisions across iterations or threads, use `fastdiv` from
   [`hex-fastdiv.h`](../../../ggml/src/ggml-hexagon/htp/hex-fastdiv.h) with precomputed divisors (such as
-  `octx->ctx->mdev.count_div` or `octx->n_threads_div`).
+  `octx->ctx->mdev.count_div` or `octx->n_hvx_div`).
 - Do not call `init_fastdiv_values()` for single-use divisions; use standard compiler division (`/`) instead.
 
 ### Host-Side Precomputation via `kernel_params`
 
 - Precompute tensor shapes, strides, scale conversions, tiling layouts, and validation checks on the host CPU during graph
-  preparation in [`ggml-hexagon.cpp`](../../../ggml/src/ggml-hexagon/ggml-hexagon.cpp).
+  preparation in [`htp-kparams.cpp`](../../../ggml/src/ggml-hexagon/htp-kparams.cpp).
 - Pack precomputed parameters into the operator's fixed `kernel_params` structure in `htp_op_node` (such as
   `htp_mm_kernel_params`, `htp_unary_kernel_params`, `htp_fa_kernel_params`, `htp_get_rows_kernel_params`).
 - The NPU executes directly using `octx->kernel_params` without redundant runtime metadata extraction or validation.
 - **Strict Host-Kernel Alignment**:
   - Verify that parameters calculated by the host CPU are strictly honored by the NPU kernel.
-  - Ensure the kernel does not ignore host-computed fields (for example, falling back to `octx->n_threads` instead of
-    using `kparams->n_threads`, or ignoring precomputed `tasks_per_thread` and chunk counts).
+  - Ensure the kernel does not ignore host-computed fields (for example, falling back to `octx->n_hvx` instead of
+    using `kparams->n_hvx`, or ignoring precomputed `tasks_per_hvx` and chunk counts).
   - Both human developers and coding agents must audit both sides of the interface: ensure fields populated in `kernel_params`
-    in [`ggml-hexagon.cpp`](../../../ggml/src/ggml-hexagon/ggml-hexagon.cpp) are actively and consistently utilized by the
+    in [`htp-kparams.cpp`](../../../ggml/src/ggml-hexagon/htp-kparams.cpp) are actively and consistently utilized by the
     corresponding operator entry point and worker threads in `htp/*-ops.c`.
 
 ### Tracing Instrumentation
@@ -292,7 +296,7 @@ Writing high-performance operators for Hexagon requires following specific guide
 - Distribute parallel work across NPU worker threads using the thread pool work queue:
 
   ```c
-  work_queue_run(ctx->work_queue, worker_func, &op_ctx, n_threads);
+  work_queue_run(ctx->hvx_queue, worker_func, &op_ctx, n_hvx);
   ```
 
 - Keep worker functions independent and re-entrant. Worker threads should only operate on their designated chunk of rows or elements.
@@ -307,6 +311,12 @@ Writing high-performance operators for Hexagon requires following specific guide
 - **Distinction**: `octx->src[N]` pointers *can* be NULL by design and must be checked when optional.
   Examples include attention masks, optional bias or weights in fused kernels, and frequency factors.
 
+### Prefer Early Dispatch and Specialized Micro-Kernels
+
+- Avoid peppering micro-kernels, row or tile compute loops, or DMA worker loops with runtime checks for operand types, optional inputs, broadcast modes, or layout variants.
+- Resolve execution variants early during operator setup (`op_*` / `execute_op_*`) via function pointers or dispatch tables so each micro-kernel and inner loop handles a single clean path that the compiler can unroll and software-pipeline without extra branch or register pressure.
+- Prefer clean standalone specialized functions; use macros only to avoid genuine code duplication across type or mode instantiations.
+
 ### `supports_op` Independence from Buffer and Repack State
 
 - `supports_op` (and op-specific checkers such as `supported_mul_mat()`, `supported_get_rows()`) runs during GGML graph scheduling **before** buffers are allocated and before tensor data is populated.
@@ -318,6 +328,10 @@ Writing high-performance operators for Hexagon requires following specific guide
 - Operator support decisions must depend strictly on static tensor properties: operand types (`t->type`), shapes (`t->ne`), strides (`t->nb`), and operation parameters.
 - Repacking (converting weights to tiled layout) is an internal optimization applied during `set_tensor()` or rt-repack. Non-weight tensors or test harness tensors with the same type remain in flat layout.
 - Therefore, any supported type (such as BF16, F16, quantized types) must be supported both when repacked into tiles and when stored flat in memory.
+
+### FP16 and Mixed-Precision Operator Support
+
+- New and updated Hexagon compute operators must support `F16` (and mixed `F16`/`F32` where applicable for graph lowering) across activation inputs and outputs, even when `ggml-cpu` only implements `F32`.
 
 ### Multiline Macro Formatting
 

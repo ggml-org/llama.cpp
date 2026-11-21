@@ -149,17 +149,21 @@ static std::string format_kernel_params(const htp_opnode & node) {
         node.opcode == HTP_OP_MUL_MAT_NX || node.opcode == HTP_OP_MUL_MAT_ID_NX ||
         node.opcode == HTP_OP_MUL_MAT_ADD) {
         const auto * kparams = node.kparams<htp_mm_kernel_params>();
-        const char * path = "unknown";
         int32_t type = kparams->kernel_type;
-        if (type == HTP_MM_KERNEL_HMX_2D || type == HTP_MM_KERNEL_HMX_BATCHED) {
-            path = (kparams->tile_size > 0) ? "hmx-tiled" : "hmx-flat";
-        } else if (type == HTP_MM_KERNEL_HVX_F16_F16_VTCM || type == HTP_MM_KERNEL_HVX_F32_F32_VTCM ||
-                   type == HTP_MM_KERNEL_HVX_BF16_F32_VTCM) {
-            path = "hvx-flat";
-        } else if (type == HTP_MM_KERNEL_HVX_QUANT_ROW || type == HTP_MM_KERNEL_HVX_QUANT_BLOCK) {
-            path = "hvx-tiled";
+        if (htp_mm_kernel_is_hmx_w8a8(type)) {
+            snprintf(str, max_size, "hmx-w8a8 nhvx %u vtcm %u", (unsigned int) kparams->n_hvx, (unsigned int) kparams->vtcm_size);
+        } else {
+            const char * path = "unknown";
+            if (type == HTP_MM_KERNEL_HMX_2D || type == HTP_MM_KERNEL_HMX_BATCHED) {
+                path = (kparams->tile_size > 0) ? "hmx-tiled" : "hmx-flat";
+            } else if (type == HTP_MM_KERNEL_HVX_F16_F16_VTCM || type == HTP_MM_KERNEL_HVX_F32_F32_VTCM ||
+                       type == HTP_MM_KERNEL_HVX_BF16_F32_VTCM) {
+                path = "hvx-flat";
+            } else if (type == HTP_MM_KERNEL_HVX_QUANT_ROW || type == HTP_MM_KERNEL_HVX_QUANT_BLOCK) {
+                path = "hvx-tiled";
+            }
+            snprintf(str, max_size, "%s nhvx %u vtcm %u", path, (unsigned int) kparams->n_hvx, (unsigned int) kparams->vtcm_size);
         }
-        snprintf(str, max_size, "%s nhvx %u vtcm %u", path, (unsigned int) kparams->n_hvx, (unsigned int) kparams->vtcm_size);
     } else if (node.opcode == HTP_OP_FLASH_ATTN_EXT) {
         const auto * kparams = node.kparams<htp_fa_kernel_params>();
         const char * path = "unknown";

@@ -48,12 +48,20 @@
     const uint32_t nb2 = dst->nb[2];   \
     const uint32_t nb3 = dst->nb[3];
 
+struct htp_rope_context;
+
+typedef void (*rope_compute_fn_t)(const struct htp_rope_context * rctx, uint8_t * src, uint32_t nr, const float * restrict theta_cache);
+
 struct htp_rope_context {
-    int32_t n_dims;
-    int32_t n_offs;
-    int32_t mode;
-    int32_t n_ctx_orig;
-    int32_t sections[4];
+    int32_t  n_dims;
+    int32_t  n_offs;
+    int32_t  mode;
+    int32_t  n_ctx_orig;
+    int32_t  sections[4];
+    uint32_t ne_rot;
+    bool     is_f16;
+
+    rope_compute_fn_t compute_block;
 
     float freq_base;
     float freq_scale;
@@ -74,12 +82,11 @@ struct htp_rope_context {
     size_t    spad_per_hvx;
     size_t    theta_cache_offset;
 
-    size_t src0_row_size;
-    size_t src0_row_stride;
-    size_t dst_row_size;
-    size_t dst_row_stride;
-    size_t src0_row_size_aligned;
-    uint32_t src0_nrows;
+    size_t   src0_row_size;
+    size_t   src0_row_stride;
+    size_t   dst_row_size;
+    size_t   dst_row_stride;
+    size_t   src0_row_size_aligned;
     uint32_t row_start;
     uint32_t nrows;
 
@@ -121,7 +128,7 @@ static inline void rope_yarn_one(float theta, float freq_scale, float * corr_dim
 }
 
 // 32 thetas -> 32 deinterleaved pairs [cos[32] | sin[32]] at cache[i0].
-static inline void rope_cache_hvx_32(float * cache, uint32_t i0,
+static __attribute__((noinline)) void rope_cache_hvx_32(float * cache, uint32_t i0,
                                      HVX_Vector v_theta,
                                      const float * freq_factors,
                                      HVX_Vector v_freq_scale,
@@ -138,13 +145,9 @@ static inline void rope_cache_hvx_32(float * cache, uint32_t i0,
     vcos = hvx_vec_mul_f32_f32(vcos, v_mscale);
     vsin = hvx_vec_mul_f32_f32(vsin, v_mscale);
 
-    if (((uintptr_t) (cache + i0)) % 128 == 0) {
-        hvx_vmem(cache + i0 + 0)  = vcos;
-        hvx_vmem(cache + i0 + 32) = vsin;
-    } else {
-        hvx_vec_store_u(cache + i0 + 0,  32 * sizeof(float), vcos);
-        hvx_vec_store_u(cache + i0 + 32, 32 * sizeof(float), vsin);
-    }
+    assert(((uintptr_t) (cache + i0)) % 128 == 0);
+    hvx_vmem(cache + i0 + 0)  = vcos;
+    hvx_vmem(cache + i0 + 32) = vsin;
 }
 
 static __attribute__((noinline)) void rope_cache_init(const float    theta_base,
@@ -401,6 +404,18 @@ static inline void hvx_rope_neox_mul(HVX_Vector v0, HVX_Vector v1, HVX_Vector vc
     *o1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(vx0_s, vx1_c));
 }
 
+#if __HVX_ARCH__ < 79
+static inline void hvx_rope_neox_mul_qf32(HVX_Vector v0_qf, HVX_Vector v1_qf, HVX_Vector vcos_qf, HVX_Vector vsin_qf,
+                                          HVX_Vector * o0, HVX_Vector * o1) {
+    HVX_Vector vx0_c = Q6_Vqf32_vmpy_Vqf32Vqf32(v0_qf, vcos_qf);
+    HVX_Vector vx0_s = Q6_Vqf32_vmpy_Vqf32Vqf32(v0_qf, vsin_qf);
+    HVX_Vector vx1_c = Q6_Vqf32_vmpy_Vqf32Vqf32(v1_qf, vcos_qf);
+    HVX_Vector vx1_s = Q6_Vqf32_vmpy_Vqf32Vqf32(v1_qf, vsin_qf);
+    *o0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_Vqf32Vqf32(vx0_c, vx1_s));
+    *o1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(vx0_s, vx1_c));
+}
+#endif
+
 // theta_cache full 32-pair blocks are deinterleaved [cos | sin].
 static inline void hvx_rope_neox_f32_aa(float * restrict dst, const float * restrict src0, uint32_t ne, const float * restrict theta_cache) {
     const uint32_t he = ne / 2;
@@ -512,7 +527,7 @@ static inline void hvx_rope_f32_aa(float * restrict dst, const float * restrict 
     }
 }
 
-static void inline rope_basic_f32_inplace(struct htp_rope_context * rctx, uint8_t * src,
+static __attribute__((noinline)) void rope_basic_f32_inplace(const struct htp_rope_context * rctx, uint8_t * src,
                    uint32_t nr, const float * restrict theta_cache) {
     const uint32_t n_offs = rctx->n_offs;
     #pragma unroll(4)
@@ -522,9 +537,10 @@ static void inline rope_basic_f32_inplace(struct htp_rope_context * rctx, uint8_
     }
 }
 
-static void inline rope_neox_f32_inplace(struct htp_rope_context * rctx, uint8_t * src,
-                   uint32_t nr, uint32_t ne, const float * restrict theta_cache) {
+static __attribute__((noinline)) void rope_neox_f32_inplace(const struct htp_rope_context * rctx, uint8_t * src,
+                   uint32_t nr, const float * restrict theta_cache) {
     const uint32_t n_offs = rctx->n_offs;
+    const uint32_t ne     = rctx->ne_rot;
     #pragma unroll(4)
     for (uint32_t i = 0; i < nr; i++) {
         float * s = (float *) (src + i * rctx->src0_row_size_aligned);
@@ -532,7 +548,333 @@ static void inline rope_neox_f32_inplace(struct htp_rope_context * rctx, uint8_t
     }
 }
 
-static void rope_job_f32(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
+static inline HVX_Vector hvx_vec_clamp_f16_f32_vec(HVX_Vector x, HVX_Vector f16_min, HVX_Vector f16_max) {
+    return Q6_Vsf_vmin_VsfVsf(Q6_Vsf_vmax_VsfVsf(x, f16_min), f16_max);
+}
+
+static inline HVX_Vector hvx_vec_clamp_f16_f32(HVX_Vector x) {
+    const HVX_Vector f16_max = hvx_vec_splat_f32(65504.0f);
+    const HVX_Vector f16_min = hvx_vec_splat_f32(-65504.0f);
+    return hvx_vec_clamp_f16_f32_vec(x, f16_min, f16_max);
+}
+
+static __attribute__((noinline)) void hvx_rope_neox_f16_aa(_Float16 * restrict dst, const _Float16 * restrict src0, uint32_t ne, const float * restrict theta_cache) {
+    const uint32_t he   = ne / 2;
+    const uint32_t nvec = he / 64;
+    const uint32_t nloe = he % 64;
+
+    const HVX_Vector * vt = (const HVX_Vector *) theta_cache;
+
+    const HVX_Vector f16_max = hvx_vec_splat_f32(65504.0f);
+    const HVX_Vector f16_min = hvx_vec_splat_f32(-65504.0f);
+#if __HVX_ARCH__ < 79
+    const HVX_Vector one_hf  = hvx_vec_splat_f16(1.0f);
+    const HVX_Vector zero    = Q6_V_vzero();
+#endif
+
+    if (nloe == 0) {
+        const HVX_Vector * vs = (const HVX_Vector *) src0;
+        HVX_Vector * vd       = (HVX_Vector *) dst;
+        for (uint32_t i = 0; i < nvec; i++) {
+            HVX_Vector v0 = vs[i];
+            HVX_Vector v1 = vs[nvec + i];
+#if __HVX_ARCH__ < 79
+            HVX_VectorPair vp0 = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v0), one_hf);
+            HVX_VectorPair vp1 = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v1), one_hf);
+
+            HVX_Vector vcos0_qf = Q6_Vqf32_vadd_VsfVsf(vt[i * 4 + 0], zero);
+            HVX_Vector vsin0_qf = Q6_Vqf32_vadd_VsfVsf(vt[i * 4 + 1], zero);
+            HVX_Vector vcos1_qf = Q6_Vqf32_vadd_VsfVsf(vt[i * 4 + 2], zero);
+            HVX_Vector vsin1_qf = Q6_Vqf32_vadd_VsfVsf(vt[i * 4 + 3], zero);
+
+            HVX_Vector o0_lo, o1_lo, o0_hi, o1_hi;
+            hvx_rope_neox_mul_qf32(Q6_V_lo_W(vp0), Q6_V_lo_W(vp1), vcos0_qf, vsin0_qf, &o0_lo, &o1_lo);
+            hvx_rope_neox_mul_qf32(Q6_V_hi_W(vp0), Q6_V_hi_W(vp1), vcos1_qf, vsin1_qf, &o0_hi, &o1_hi);
+#else
+            HVX_VectorPair vp0 = hvx_vec_f16_to_f32(v0);
+            HVX_VectorPair vp1 = hvx_vec_f16_to_f32(v1);
+
+            HVX_Vector o0_lo, o1_lo, o0_hi, o1_hi;
+            hvx_rope_neox_mul(Q6_V_lo_W(vp0), Q6_V_lo_W(vp1), vt[i * 4 + 0], vt[i * 4 + 1], &o0_lo, &o1_lo);
+            hvx_rope_neox_mul(Q6_V_hi_W(vp0), Q6_V_hi_W(vp1), vt[i * 4 + 2], vt[i * 4 + 3], &o0_hi, &o1_hi);
+#endif
+            HVX_Vector vout0 = hvx_vec_f32_to_f16(hvx_vec_clamp_f16_f32_vec(o0_lo, f16_min, f16_max),
+                                                  hvx_vec_clamp_f16_f32_vec(o0_hi, f16_min, f16_max));
+            HVX_Vector vout1 = hvx_vec_f32_to_f16(hvx_vec_clamp_f16_f32_vec(o1_lo, f16_min, f16_max),
+                                                  hvx_vec_clamp_f16_f32_vec(o1_hi, f16_min, f16_max));
+
+            vd[i]        = vout0;
+            vd[nvec + i] = vout1;
+        }
+        return;
+    }
+
+    for (uint32_t i = 0; i < nvec; i++) {
+        HVX_Vector v0 = ((const HVX_Vector *) src0)[i];
+        HVX_Vector v1 = hvx_vmemu(src0 + he + i * 64);
+#if __HVX_ARCH__ < 79
+        HVX_VectorPair vp0 = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v0), one_hf);
+        HVX_VectorPair vp1 = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v1), one_hf);
+
+        HVX_Vector vcos0_qf = Q6_Vqf32_vadd_VsfVsf(vt[i * 4 + 0], zero);
+        HVX_Vector vsin0_qf = Q6_Vqf32_vadd_VsfVsf(vt[i * 4 + 1], zero);
+        HVX_Vector vcos1_qf = Q6_Vqf32_vadd_VsfVsf(vt[i * 4 + 2], zero);
+        HVX_Vector vsin1_qf = Q6_Vqf32_vadd_VsfVsf(vt[i * 4 + 3], zero);
+
+        HVX_Vector o0_lo, o1_lo, o0_hi, o1_hi;
+        hvx_rope_neox_mul_qf32(Q6_V_lo_W(vp0), Q6_V_lo_W(vp1), vcos0_qf, vsin0_qf, &o0_lo, &o1_lo);
+        hvx_rope_neox_mul_qf32(Q6_V_hi_W(vp0), Q6_V_hi_W(vp1), vcos1_qf, vsin1_qf, &o0_hi, &o1_hi);
+#else
+        HVX_VectorPair vp0 = hvx_vec_f16_to_f32(v0);
+        HVX_VectorPair vp1 = hvx_vec_f16_to_f32(v1);
+
+        HVX_Vector o0_lo, o1_lo, o0_hi, o1_hi;
+        hvx_rope_neox_mul(Q6_V_lo_W(vp0), Q6_V_lo_W(vp1), vt[i * 4 + 0], vt[i * 4 + 1], &o0_lo, &o1_lo);
+        hvx_rope_neox_mul(Q6_V_hi_W(vp0), Q6_V_hi_W(vp1), vt[i * 4 + 2], vt[i * 4 + 3], &o0_hi, &o1_hi);
+#endif
+        HVX_Vector vout0 = hvx_vec_f32_to_f16(hvx_vec_clamp_f16_f32_vec(o0_lo, f16_min, f16_max),
+                                              hvx_vec_clamp_f16_f32_vec(o0_hi, f16_min, f16_max));
+        HVX_Vector vout1 = hvx_vec_f32_to_f16(hvx_vec_clamp_f16_f32_vec(o1_lo, f16_min, f16_max),
+                                              hvx_vec_clamp_f16_f32_vec(o1_hi, f16_min, f16_max));
+
+        ((HVX_Vector *) dst)[i]      = vout0;
+        hvx_vmemu(dst + he + i * 64) = vout1;
+    }
+
+    if (nloe > 0) {
+        HVX_Vector v0 = ((const HVX_Vector *) src0)[nvec];
+        HVX_Vector v1 = hvx_vmemu(src0 + he + nvec * 64);
+#if __HVX_ARCH__ < 79
+        HVX_VectorPair vp0 = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v0), one_hf);
+        HVX_VectorPair vp1 = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v1), one_hf);
+
+        HVX_Vector vcos0_qf = Q6_Vqf32_vadd_VsfVsf(vt[nvec * 4 + 0], zero);
+        HVX_Vector vsin0_qf = Q6_Vqf32_vadd_VsfVsf(vt[nvec * 4 + 1], zero);
+
+        HVX_Vector o0_lo, o1_lo;
+        hvx_rope_neox_mul_qf32(Q6_V_lo_W(vp0), Q6_V_lo_W(vp1), vcos0_qf, vsin0_qf, &o0_lo, &o1_lo);
+        o0_lo = hvx_vec_clamp_f16_f32_vec(o0_lo, f16_min, f16_max);
+        o1_lo = hvx_vec_clamp_f16_f32_vec(o1_lo, f16_min, f16_max);
+
+        HVX_Vector o0_hi = o0_lo;
+        HVX_Vector o1_hi = o1_lo;
+        if (nloe > 32) {
+            HVX_Vector vcos1_qf = Q6_Vqf32_vadd_VsfVsf(vt[nvec * 4 + 2], zero);
+            HVX_Vector vsin1_qf = Q6_Vqf32_vadd_VsfVsf(vt[nvec * 4 + 3], zero);
+            hvx_rope_neox_mul_qf32(Q6_V_hi_W(vp0), Q6_V_hi_W(vp1), vcos1_qf, vsin1_qf, &o0_hi, &o1_hi);
+            o0_hi = hvx_vec_clamp_f16_f32_vec(o0_hi, f16_min, f16_max);
+            o1_hi = hvx_vec_clamp_f16_f32_vec(o1_hi, f16_min, f16_max);
+        }
+#else
+        HVX_VectorPair vp0 = hvx_vec_f16_to_f32(v0);
+        HVX_VectorPair vp1 = hvx_vec_f16_to_f32(v1);
+
+        HVX_Vector o0_lo, o1_lo;
+        hvx_rope_neox_mul(Q6_V_lo_W(vp0), Q6_V_lo_W(vp1), vt[nvec * 4 + 0], vt[nvec * 4 + 1], &o0_lo, &o1_lo);
+        o0_lo = hvx_vec_clamp_f16_f32_vec(o0_lo, f16_min, f16_max);
+        o1_lo = hvx_vec_clamp_f16_f32_vec(o1_lo, f16_min, f16_max);
+
+        HVX_Vector o0_hi = o0_lo;
+        HVX_Vector o1_hi = o1_lo;
+        if (nloe > 32) {
+            hvx_rope_neox_mul(Q6_V_hi_W(vp0), Q6_V_hi_W(vp1), vt[nvec * 4 + 2], vt[nvec * 4 + 3], &o0_hi, &o1_hi);
+            o0_hi = hvx_vec_clamp_f16_f32_vec(o0_hi, f16_min, f16_max);
+            o1_hi = hvx_vec_clamp_f16_f32_vec(o1_hi, f16_min, f16_max);
+        }
+#endif
+        HVX_Vector vout0 = hvx_vec_f32_to_f16(o0_lo, o0_hi);
+        HVX_Vector vout1 = hvx_vec_f32_to_f16(o1_lo, o1_hi);
+
+        hvx_vec_store_a(dst + nvec * 64,      nloe * sizeof(_Float16), vout0);
+        hvx_vec_store_u(dst + he + nvec * 64, nloe * sizeof(_Float16), vout1);
+    }
+}
+
+static __attribute__((noinline)) void hvx_rope_f16_aa(_Float16 * restrict dst, const _Float16 * restrict src0, uint32_t ne, const float * restrict theta_cache) {
+    const uint32_t nvec = ne / 64;
+    const uint32_t nloe = ne % 64;
+
+    const HVX_Vector * vs = (const HVX_Vector *) src0;
+    HVX_Vector * vd       = (HVX_Vector *) dst;
+    const HVX_Vector * vt = (const HVX_Vector *) theta_cache;
+
+    const HVX_Vector f16_max = hvx_vec_splat_f32(65504.0f);
+    const HVX_Vector f16_min = hvx_vec_splat_f32(-65504.0f);
+#if __HVX_ARCH__ < 79
+    const HVX_Vector one_hf  = hvx_vec_splat_f16(1.0f);
+    const HVX_Vector zero    = Q6_V_vzero();
+#endif
+
+    for (uint32_t i = 0; i < nvec; i++) {
+#if __HVX_ARCH__ < 79
+        HVX_VectorPair vx0_x1 = Q6_Wqf32_vmpy_VhfVhf(vs[i], one_hf);
+
+        HVX_Vector vcos_qf = Q6_Vqf32_vadd_VsfVsf(vt[i * 2 + 0], zero);
+        HVX_Vector vsin_qf = Q6_Vqf32_vadd_VsfVsf(vt[i * 2 + 1], zero);
+
+        HVX_Vector o0, o1;
+        hvx_rope_neox_mul_qf32(Q6_V_lo_W(vx0_x1), Q6_V_hi_W(vx0_x1), vcos_qf, vsin_qf, &o0, &o1);
+#else
+        HVX_VectorPair vx0_x1 = hvx_vec_f16_to_f32_shuff(vs[i]);
+
+        HVX_Vector o0, o1;
+        hvx_rope_neox_mul(Q6_V_lo_W(vx0_x1), Q6_V_hi_W(vx0_x1), vt[i * 2 + 0], vt[i * 2 + 1], &o0, &o1);
+#endif
+        HVX_Vector vout = hvx_vec_f32_to_f16_shuff(hvx_vec_clamp_f16_f32_vec(o0, f16_min, f16_max),
+                                                   hvx_vec_clamp_f16_f32_vec(o1, f16_min, f16_max));
+
+        vd[i] = vout;
+    }
+
+    if (nloe > 0) {
+#if __HVX_ARCH__ < 79
+        HVX_VectorPair vx0_x1 = Q6_Wqf32_vmpy_VhfVhf(vs[nvec], one_hf);
+
+        HVX_Vector vcos_qf = Q6_Vqf32_vadd_VsfVsf(vt[nvec * 2 + 0], zero);
+        HVX_Vector vsin_qf = Q6_Vqf32_vadd_VsfVsf(vt[nvec * 2 + 1], zero);
+
+        HVX_Vector o0, o1;
+        hvx_rope_neox_mul_qf32(Q6_V_lo_W(vx0_x1), Q6_V_hi_W(vx0_x1), vcos_qf, vsin_qf, &o0, &o1);
+#else
+        HVX_VectorPair vx0_x1 = hvx_vec_f16_to_f32_shuff(vs[nvec]);
+
+        HVX_Vector o0, o1;
+        hvx_rope_neox_mul(Q6_V_lo_W(vx0_x1), Q6_V_hi_W(vx0_x1), vt[nvec * 2 + 0], vt[nvec * 2 + 1], &o0, &o1);
+#endif
+        HVX_Vector vout = hvx_vec_f32_to_f16_shuff(hvx_vec_clamp_f16_f32_vec(o0, f16_min, f16_max),
+                                                   hvx_vec_clamp_f16_f32_vec(o1, f16_min, f16_max));
+
+        hvx_vec_store_a(dst + nvec * 64, nloe * sizeof(_Float16), vout);
+    }
+}
+
+static __attribute__((noinline)) void hvx_rope_neox_f16(_Float16 * restrict dst, const _Float16 * restrict src0, uint32_t ne, const float * restrict theta_cache) {
+    const uint32_t he   = ne / 2;
+    const uint32_t nvec = he / 64;
+    const uint32_t nloe = he % 64;
+
+    const HVX_Vector * vt = (const HVX_Vector *) theta_cache;
+
+    const HVX_Vector f16_max = hvx_vec_splat_f32(65504.0f);
+    const HVX_Vector f16_min = hvx_vec_splat_f32(-65504.0f);
+
+    for (uint32_t i = 0; i < nvec; i++) {
+        HVX_VectorPair vp0 = hvx_vec_f16_to_f32(hvx_vmemu(src0 + i * 64));
+        HVX_VectorPair vp1 = hvx_vec_f16_to_f32(hvx_vmemu(src0 + he + i * 64));
+
+        HVX_Vector o0_lo, o1_lo, o0_hi, o1_hi;
+        hvx_rope_neox_mul(Q6_V_lo_W(vp0), Q6_V_lo_W(vp1), vt[i * 4 + 0], vt[i * 4 + 1], &o0_lo, &o1_lo);
+        hvx_rope_neox_mul(Q6_V_hi_W(vp0), Q6_V_hi_W(vp1), vt[i * 4 + 2], vt[i * 4 + 3], &o0_hi, &o1_hi);
+
+        HVX_Vector vout0 = hvx_vec_f32_to_f16(hvx_vec_clamp_f16_f32_vec(o0_lo, f16_min, f16_max),
+                                              hvx_vec_clamp_f16_f32_vec(o0_hi, f16_min, f16_max));
+        HVX_Vector vout1 = hvx_vec_f32_to_f16(hvx_vec_clamp_f16_f32_vec(o1_lo, f16_min, f16_max),
+                                              hvx_vec_clamp_f16_f32_vec(o1_hi, f16_min, f16_max));
+
+        hvx_vmemu(dst + i * 64)      = vout0;
+        hvx_vmemu(dst + he + i * 64) = vout1;
+    }
+
+    if (nloe > 0) {
+        HVX_VectorPair vp0 = hvx_vec_f16_to_f32(hvx_vmemu(src0 + nvec * 64));
+        HVX_VectorPair vp1 = hvx_vec_f16_to_f32(hvx_vmemu(src0 + he + nvec * 64));
+
+        HVX_Vector o0_lo, o1_lo;
+        hvx_rope_neox_mul(Q6_V_lo_W(vp0), Q6_V_lo_W(vp1), vt[nvec * 4 + 0], vt[nvec * 4 + 1], &o0_lo, &o1_lo);
+        o0_lo = hvx_vec_clamp_f16_f32_vec(o0_lo, f16_min, f16_max);
+        o1_lo = hvx_vec_clamp_f16_f32_vec(o1_lo, f16_min, f16_max);
+
+        HVX_Vector o0_hi = o0_lo;
+        HVX_Vector o1_hi = o1_lo;
+        if (nloe > 32) {
+            hvx_rope_neox_mul(Q6_V_hi_W(vp0), Q6_V_hi_W(vp1), vt[nvec * 4 + 2], vt[nvec * 4 + 3], &o0_hi, &o1_hi);
+            o0_hi = hvx_vec_clamp_f16_f32_vec(o0_hi, f16_min, f16_max);
+            o1_hi = hvx_vec_clamp_f16_f32_vec(o1_hi, f16_min, f16_max);
+        }
+
+        HVX_Vector vout0 = hvx_vec_f32_to_f16(o0_lo, o0_hi);
+        HVX_Vector vout1 = hvx_vec_f32_to_f16(o1_lo, o1_hi);
+
+        hvx_vec_store_u(dst + nvec * 64,      nloe * sizeof(_Float16), vout0);
+        hvx_vec_store_u(dst + he + nvec * 64, nloe * sizeof(_Float16), vout1);
+    }
+}
+
+static __attribute__((noinline)) void hvx_rope_f16(_Float16 * restrict dst, const _Float16 * restrict src0, uint32_t ne, const float * restrict theta_cache) {
+    const uint32_t nvec = ne / 64;
+    const uint32_t nloe = ne % 64;
+
+    const HVX_Vector * vt = (const HVX_Vector *) theta_cache;
+
+    const HVX_Vector f16_max = hvx_vec_splat_f32(65504.0f);
+    const HVX_Vector f16_min = hvx_vec_splat_f32(-65504.0f);
+
+    for (uint32_t i = 0; i < nvec; i++) {
+        HVX_VectorPair vx0_x1 = hvx_vec_f16_to_f32_shuff(hvx_vmemu(src0 + i * 64));
+
+        HVX_Vector o0, o1;
+        hvx_rope_neox_mul(Q6_V_lo_W(vx0_x1), Q6_V_hi_W(vx0_x1), vt[i * 2 + 0], vt[i * 2 + 1], &o0, &o1);
+
+        HVX_Vector vout = hvx_vec_f32_to_f16_shuff(hvx_vec_clamp_f16_f32_vec(o0, f16_min, f16_max),
+                                                   hvx_vec_clamp_f16_f32_vec(o1, f16_min, f16_max));
+
+        hvx_vmemu(dst + i * 64) = vout;
+    }
+
+    if (nloe > 0) {
+        HVX_VectorPair vx0_x1 = hvx_vec_f16_to_f32_shuff(hvx_vmemu(src0 + nvec * 64));
+
+        HVX_Vector o0, o1;
+        hvx_rope_neox_mul(Q6_V_lo_W(vx0_x1), Q6_V_hi_W(vx0_x1), vt[nvec * 2 + 0], vt[nvec * 2 + 1], &o0, &o1);
+
+        HVX_Vector vout = hvx_vec_f32_to_f16_shuff(hvx_vec_clamp_f16_f32_vec(o0, f16_min, f16_max),
+                                                   hvx_vec_clamp_f16_f32_vec(o1, f16_min, f16_max));
+
+        hvx_vec_store_u(dst + nvec * 64, nloe * sizeof(_Float16), vout);
+    }
+}
+
+static __attribute__((noinline)) void rope_basic_f16_aa_inplace(const struct htp_rope_context * rctx, uint8_t * src,
+                   uint32_t nr, const float * restrict theta_cache) {
+    const uint32_t n_offs = rctx->n_offs;
+    #pragma unroll(4)
+    for (uint32_t i = 0; i < nr; i++) {
+        _Float16 * s = (_Float16 *) (src + i * rctx->src0_row_size_aligned);
+        hvx_rope_f16_aa(s + n_offs, s + n_offs, rctx->n_dims, theta_cache);
+    }
+}
+
+static __attribute__((noinline)) void rope_basic_f16_ua_inplace(const struct htp_rope_context * rctx, uint8_t * src,
+                   uint32_t nr, const float * restrict theta_cache) {
+    const uint32_t n_offs = rctx->n_offs;
+    for (uint32_t i = 0; i < nr; i++) {
+        _Float16 * s = (_Float16 *) (src + i * rctx->src0_row_size_aligned);
+        hvx_rope_f16(s + n_offs, s + n_offs, rctx->n_dims, theta_cache);
+    }
+}
+
+static __attribute__((noinline)) void rope_neox_f16_aa_inplace(const struct htp_rope_context * rctx, uint8_t * src,
+                   uint32_t nr, const float * restrict theta_cache) {
+    const uint32_t n_offs = rctx->n_offs;
+    const uint32_t ne     = rctx->ne_rot;
+    #pragma unroll(4)
+    for (uint32_t i = 0; i < nr; i++) {
+        _Float16 * s = (_Float16 *) (src + i * rctx->src0_row_size_aligned);
+        hvx_rope_neox_f16_aa(s + n_offs, s + n_offs, ne, theta_cache);
+    }
+}
+
+static __attribute__((noinline)) void rope_neox_f16_ua_inplace(const struct htp_rope_context * rctx, uint8_t * src,
+                   uint32_t nr, const float * restrict theta_cache) {
+    const uint32_t n_offs = rctx->n_offs;
+    const uint32_t ne     = rctx->ne_rot;
+    for (uint32_t i = 0; i < nr; i++) {
+        _Float16 * s = (_Float16 *) (src + i * rctx->src0_row_size_aligned);
+        hvx_rope_neox_f16(s + n_offs, s + n_offs, ne, theta_cache);
+    }
+}
+
+static void rope_job(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct htp_rope_context * rctx = (struct htp_rope_context *) data;
     struct htp_ops_context * octx = rctx->octx;
 
@@ -554,9 +896,7 @@ static void rope_job_f32(const htp_thread_t * th, unsigned int nth, unsigned int
         return;
     }
 
-    const int32_t mode    = rctx->mode;
-    // MROPE, IMROPE and VISION use NEOX-style pairing for the rotation
-    const bool    is_neox = (mode & HTP_ROPE_TYPE_NEOX) || (mode & HTP_ROPE_TYPE_MROPE);
+    const int32_t mode      = rctx->mode;
     const bool    is_vision = (mode == HTP_ROPE_TYPE_VISION);
 
     // VTCM setup
@@ -611,8 +951,7 @@ static void rope_job_f32(const htp_thread_t * th, unsigned int nth, unsigned int
                     prev_i2 = i2;
 
                     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, i2);
-                    // VISION rotates the full row; other modes only rotate n_dims.
-                    const uint32_t n_cache = is_vision ? ne0 : (uint32_t) rctx->n_dims;
+                    const uint32_t n_cache = rctx->ne_rot;
                     const bool is_mrope = (rctx->mode & HTP_ROPE_TYPE_MROPE) != 0;
                     if (is_mrope) {
                         // src1 holds four position arrays stacked along ne0:
@@ -639,13 +978,11 @@ static void rope_job_f32(const htp_thread_t * th, unsigned int nth, unsigned int
                 for (uint32_t d = 0; d < dma_depth; d++) { dma_queue_pop_nowait(dma_q); }
 
                 // Compute loop
-                const uint32_t ne = is_vision ? ne0 : rctx->n_dims;
                 const uint32_t base_i1 = i1;
                 const uint32_t base_ir = ir;
 
                 for (uint32_t cnr = 0, cr = 0; cr < nrows; cr += cnr) {
                     cnr = MIN(nrows - cr, HTP_ROPE_SPAD_BLOCK);
-                    const uint32_t slot = (cur_slot + cr / HTP_ROPE_SPAD_BLOCK) % HTP_ROPE_SPAD_NSLOTS;
                     const uint32_t cur_ir   = base_ir + cr;
                     const uint32_t cur_i1   = base_i1 + cr;
 
@@ -653,11 +990,7 @@ static void rope_job_f32(const htp_thread_t * th, unsigned int nth, unsigned int
                     uint8_t * cur_spad = (uint8_t *) dma_queue_pop(dma_q).dst;
 
                     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, cur_ir);
-                    if (is_neox || is_vision) {
-                        rope_neox_f32_inplace(rctx, cur_spad, cnr, ne, theta_cache);
-                    } else {
-                        rope_basic_f32_inplace(rctx, cur_spad, cnr, theta_cache);
-                    }
+                    rctx->compute_block(rctx, cur_spad, cnr, theta_cache);
                     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, cur_ir);
 
                     const dma_addr_t dst_data = dst->data + i3 * nb3 + i2 * nb2 + cur_i1 * nb1;
@@ -689,10 +1022,10 @@ static void rope_job_f32(const htp_thread_t * th, unsigned int nth, unsigned int
 done:
     dma_queue_flush(dma_q);
 
-    FARF(HIGH, "rope-f32: %d/%d: (%u:%u)\n", ith, nth, src0_start_row, src0_end_row);
+    FARF(HIGH, "rope-%s: %d/%d: (%u:%u)\n", rctx->is_f16 ? "f16" : "f32", ith, nth, src0_start_row, src0_end_row);
 }
 
-static int execute_op_rope_f32(struct htp_ops_context * octx) {
+static int execute_op_rope(struct htp_ops_context * octx) {
     int err = HTP_STATUS_OK;
 
     const struct htp_tensor * src0 = octx->src[0];
@@ -710,15 +1043,18 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
+    const bool is_f16      = (src0->type == HTP_TYPE_F16);
+    const size_t elem_size = is_f16 ? sizeof(_Float16) : sizeof(float);
+
     const uint32_t total_rows = src0->ne[1] * src0->ne[2] * src0->ne[3];
-    const size_t dst_data_row_size = dst->ne[0] * sizeof(float);
+    const size_t dst_data_row_size = dst->ne[0] * elem_size;
 
     uint32_t row_start = 0;
     uint32_t nrows     = total_rows;
 
     if (octx->ctx->mdev.count > 1) {
         uint32_t rows_per_chunk = 0;
-        htp_tensor_mdev_rows_per_chunk(dst, sizeof(float), (uint32_t) dst_data_row_size, &rows_per_chunk);
+        htp_tensor_mdev_rows_per_chunk(dst, (uint32_t) elem_size, (uint32_t) dst_data_row_size, &rows_per_chunk);
         const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(
             total_rows, rows_per_chunk, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
         row_start = range.start;
@@ -732,13 +1068,13 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     const uint32_t n_hvx = octx->n_hvx;
 
     const uint32_t ne0 = dst->ne[0];
-    const size_t src0_row_size   = src0->ne[0] * sizeof(float);
+    const size_t src0_row_size   = src0->ne[0] * elem_size;
     const size_t src0_row_stride = src0->nb[1];
-    const size_t dst_row_size    = dst->ne[0] * sizeof(float);
+    const size_t dst_row_size    = dst->ne[0] * elem_size;
     const size_t dst_row_stride  = dst->nb[1];
 
     struct htp_rope_vtcm_layout layout;
-    htp_rope_vtcm_layout_build(&layout, src0->ne[0], kparams->n_hvx, src2 ? src2->ne[0] : 0);
+    htp_rope_vtcm_layout_build(&layout, src0->ne[0], elem_size, kparams->n_hvx, src2 ? src2->ne[0] : 0);
 
     struct htp_rope_context rctx;
     memset(&rctx, 0, sizeof(struct htp_rope_context));
@@ -787,25 +1123,47 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     rctx.dst_row_stride        = dst_row_stride;
     rctx.src0_row_size_aligned = layout.src0_row_size_aligned;
 
-    rctx.src0_nrows            = nrows;
     rctx.nrows                 = nrows;
     rctx.row_start             = row_start;
     rctx.src0_nrows_per_hvx    = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div);
     rctx.div_ne2_ne1           = kparams->div_ne2_ne1;
     rctx.div_ne1               = kparams->div_ne1;
 
-    FARF(HIGH, "rope-f32 n-rows %u n-dims %d ne0 %u ext-factor %.6f theta-scale %.6f attn-factor %.6f\n", rctx.src0_nrows, rctx.n_dims, ne0,
+    // MROPE, IMROPE and VISION use NEOX-style pairing for the rotation; VISION rotates full ne0
+    const bool is_neox   = (rctx.mode & HTP_ROPE_TYPE_NEOX) || (rctx.mode & HTP_ROPE_TYPE_MROPE);
+    const bool is_vision = (rctx.mode == HTP_ROPE_TYPE_VISION);
+    const bool f16_aa    = (rctx.n_offs & 63) == 0;
+
+    rctx.is_f16 = is_f16;
+    rctx.ne_rot = is_vision ? ne0 : (uint32_t) rctx.n_dims;
+    if (is_f16) {
+        if (is_neox || is_vision) {
+            rctx.compute_block = f16_aa ? rope_neox_f16_aa_inplace : rope_neox_f16_ua_inplace;
+        } else {
+            rctx.compute_block = f16_aa ? rope_basic_f16_aa_inplace : rope_basic_f16_ua_inplace;
+        }
+    } else {
+        rctx.compute_block = (is_neox || is_vision) ? rope_neox_f32_inplace : rope_basic_f32_inplace;
+    }
+
+    FARF(HIGH, "rope-%s n-rows %u n-dims %d ne0 %u ext-factor %.6f theta-scale %.6f attn-factor %.6f\n",
+         is_f16 ? "f16" : "f32", rctx.nrows, rctx.n_dims, ne0,
          rctx.ext_factor, rctx.theta_scale, rctx.attn_factor);
 
-    work_queue_run(octx->ctx->hvx_queue, rope_job_f32, &rctx, n_hvx);
+    work_queue_run(octx->ctx->hvx_queue, rope_job, &rctx, n_hvx);
 
     return err;
 }
 
 int op_rope(struct htp_ops_context * octx) {
+    if (octx->src[0]->type != octx->dst->type) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+
     switch (octx->src[0]->type) {
         case HTP_TYPE_F32:
-            return execute_op_rope_f32(octx);
+        case HTP_TYPE_F16:
+            return execute_op_rope(octx);
 
         default:
             return HTP_STATUS_NO_SUPPORT;

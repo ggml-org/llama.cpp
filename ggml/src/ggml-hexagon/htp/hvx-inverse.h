@@ -70,12 +70,9 @@ static inline HVX_Vector hvx_vec_inverse_f16(HVX_Vector vals) {
     // Get mantissa for 16-bit representation
     HVX_Vector mant_recip = Q6_V_vand_VV(Q6_Vh_vasr_VhR(Q6_Vh_vasl_VhVh(rm, vcl0), 5), Q6_Vh_vsplat_R(0x03FF));
 
-    //Compute Reciprocal Exponent
-    HVX_Vector exp_recip =
-        Q6_Vh_vsub_VhVh(Q6_Vh_vsub_VhVh(Q6_Vh_vsplat_R(254), exp_u16), Q6_Vh_vsub_VhVh(vcl0, Q6_Vh_vsplat_R(1)));
-    //Convert it for 16-bit representation
-    exp_recip = Q6_Vh_vadd_VhVh_sat(Q6_Vh_vsub_VhVh(exp_recip, Q6_Vh_vsplat_R(127)), Q6_Vh_vsplat_R(15));
-    exp_recip = Q6_Vh_vasl_VhR(exp_recip, 10);
+    // Compute reciprocal exponent for 16-bit representation: (254 - exp_u16) - (vcl0 - 1) - 127 + 15
+    HVX_Vector exp_recip = Q6_Vh_vsub_VhVh(Q6_Vh_vsub_VhVh(Q6_Vh_vsplat_R(143), exp_u16), vcl0);
+    exp_recip            = Q6_Vh_vasl_VhR(exp_recip, 10);
 
     //Merge exponent and mantissa for reciprocal
     HVX_Vector recip = Q6_V_vor_VV(exp_recip, mant_recip);
@@ -84,6 +81,25 @@ static inline HVX_Vector hvx_vec_inverse_f16(HVX_Vector vals) {
     // add sign back
     recip            = Q6_V_vandor_VQR(recip, is_neg, 0x80008000);
     return recip;
+}
+
+// Reciprocal of positive normal fp16 (vals >= 1.0f, e.g. 1 + exp(-|x|) in sigmoid).
+static inline HVX_Vector hvx_vec_inverse_pos_f16(HVX_Vector avals) {
+    HVX_VectorPair to_qf32  = Q6_Wqf32_vmpy_VhfVhf(avals, Q6_Vh_vsplat_R(0x3C00));
+    HVX_Vector     to_f32_0 = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(to_qf32));
+    HVX_Vector     to_f32_1 = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(to_qf32));
+
+    HVX_Vector mant_u16 = Q6_Vh_vshuffo_VhVh(Q6_Vw_vasl_VwR(to_f32_1, 9), Q6_Vw_vasl_VwR(to_f32_0, 9));
+    HVX_Vector exp_u16  = Q6_Vuh_vlsr_VuhR(Q6_Vh_vshuffo_VhVh(to_f32_1, to_f32_0), 7);
+
+    HVX_Vector rm   = hvx_vec_recip_xp1_O3_unsigned(mant_u16);
+    HVX_Vector vcl0 = Q6_Vuh_vcl0_Vuh(rm);
+
+    HVX_Vector mant_recip = Q6_V_vand_VV(Q6_Vh_vasr_VhR(Q6_Vh_vasl_VhVh(rm, vcl0), 5), Q6_Vh_vsplat_R(0x03FF));
+    HVX_Vector exp_recip  = Q6_Vh_vsub_VhVh(Q6_Vh_vsub_VhVh(Q6_Vh_vsplat_R(143), exp_u16), vcl0);
+    exp_recip             = Q6_Vh_vasl_VhR(exp_recip, 10);
+
+    return Q6_V_vor_VV(exp_recip, mant_recip);
 }
 
 static inline HVX_Vector hvx_vec_inverse_f32(HVX_Vector v_sf) {

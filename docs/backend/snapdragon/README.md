@@ -304,6 +304,21 @@ Unlike host-level tensor-splitting, row-splitting is executed entirely inside th
 You can also combine row-splitting with layer-splitting across multiple grouped devices (e.g. `--devices 'HTP0[0-1],HTP1[2-3]'`
 on 4 physical NPUs, or `--devices 'HTP0[0-1:0],HTP1[0-1:1]'` on 2 physical NPUs using virtual sessions 0 and 1).
 
+## Numerical Precision and End-to-End Accuracy
+
+By default, the Hexagon backend is tuned for higher NPU throughput and lower memory bandwidth while preserving strong
+end-to-end accuracy across typical models. Specifically, batched matrix multiplications default to `W8A8` integer HMX
+(`--hex-mm-select 3`), which dynamically quantizes activations into 8-bit (`uint8` x `int8`) blocks with a 2048-element
+`K`-group scale (using HVX when `M <= 4`),
+and internal `FP32` activation tensors within each HTP subgraph are automatically lowered in-place to `FP16`
+(`--hex-oplower 2`). If a particular model or workload exhibits accuracy degradation (for example due to large activation
+outliers or `FP16` residual overflow), try stepping down to higher-precision configurations in the following order:
+
+1. `--hex-mm-select 3 --hex-oplower 2` (default): `W8A8` INT HMX + full internal `FP16` lowering
+2. `--hex-mm-select 3 --hex-oplower 0`: `W8A8` INT HMX + `FP32` intermediate activations (or `--hex-oplower 1` to keep only the cross-layer residual spine in `FP32`)
+3. `--hex-mm-select 2 --hex-oplower 2`: `FP16` HMX + full internal `FP16` lowering
+4. `--hex-mm-select 2 --hex-oplower 0`: `FP16` HMX + `FP32` intermediate activations
+
 ## Environment variables
 
 - `GGML_HEXAGON_DEVICES` (default: not set, defaults to HTP0 session)
@@ -398,3 +413,18 @@ on 4 physical NPUs, or `--devices 'HTP0[0-1:0],HTP1[0-1:1]'` on 2 physical NPUs 
   # Disable ADD and SUB on Hexagon (fall back to CPU or GPU)
   ./scripts/snapdragon/run.py --target adb --hex-opfilter "ADD|SUB" -- llama-cli ...
   ```
+
+- `GGML_HEXAGON_OPLOWER=N`
+  Controls internal FP32-to-FP16 activation tensor lowering inside HTP opbatches (configurable via `--hex-oplower` in `run.py`):
+
+  - `0`: Disabled - keep internal activations in FP32
+  - `1`: Intra-layer FP16 with FP32 residual spine - lower internal `MUL_MAT*` and `FLASH_ATTN_EXT` outputs and downstream intra-layer ops to FP16 while keeping cross-layer residual merges (`ADD`, `RMS_NORM_MUL_ADD`, `MUL_MAT_ADD` with FP32 residual) and `GGML_PREC_F32`-hinted matmuls in FP32
+  - `2`: Full opbatch FP16 (default) - also lower internal `RMS_NORM*` and intra-opbatch residual merges to FP16
+
+- `GGML_HEXAGON_MM_SELECT=N`
+  Selects the matrix multiplication engine on HTP (configurable via `--hex-mm-select` in `run.py`):
+
+  - `0`: Disabled (falls back to CPU or GPU)
+  - `1`: HVX vector kernels only
+  - `2`: FP16 HMX matrix engine (`M > 4`) with HVX decode (`M <= 4`)
+  - `3`: INT HMX `W8A8` (`uint8` activations x `int8` weights) with HVX decode (`M <= 4`) (default; automatically defaults to 2 on multi-session v73 hardware unless overridden)

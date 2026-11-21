@@ -148,6 +148,7 @@ static inline void hmx_interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
             }
         }
     }
+    hvx_gather_sync(vtcm_dst);
 }
 
 // Interleave row-major FP16 data into column-major tile format.
@@ -226,5 +227,49 @@ static inline void hmx_interleave_cols_to_tiles(__fp16 * restrict tiles_out,
 
 #define HMX_CLRACC_F16() \
     "mxclracc.hf\n"
+
+// --- Fixed-point INT HMX inline asm macros and helpers (v73+) ---
+
+#define HMX_CLRACC_INT() \
+    "mxclracc\n"
+
+#define HMX_LOAD_MPY_DEEP_U8_S8_SM(act, act_rt, wt, wt_rt)      \
+    "{\n"                                                       \
+    "    activation.ub = mxmem(" act ", " act_rt "):deep\n"     \
+    "    weight.b = mxmem(" wt ", " wt_rt ")\n"                 \
+    "}\n"
+
+#define HMX_CVT_UB_ACC(ctrl) \
+    "cvt.ub = acc(" ctrl ")\n"
+
+#define HMX_CVT_UH_ACC_2X1(ctrl) \
+    "cvt.uh = acc(" ctrl "):2x1\n"
+
+#define HMX_STORE_CVT_SM(out, range) \
+    "mxmem(" out ", " range ") = cvt\n"
+
+#define HMX_STORE_CVT_CM(out, range) \
+    "mxmem(" out ", " range "):cm = cvt\n"
+
+static inline uint32_t hmx_act_sm_range(uint32_t n_tiles) {
+    return 2048u * n_tiles - 1u;
+}
+
+static inline uint32_t hmx_out_cm_range(void) {
+    return 0x3Fu << 5;
+}
+
+static inline uint32_t hmx_wt_b_range(uint32_t n_bytes) {
+    return ((n_bytes - 128u) & ~127u) | 0x7Fu;
+}
+
+static inline uint32_t hmx_cvt_ctrl(uint32_t bank, uint32_t frac_only, uint32_t sat_mode, uint32_t retain_acc) {
+    return (1u << 15) | ((frac_only & 1u) << 14) | ((bank & 3u) << 12) | ((sat_mode & 1u) << 1) | (retain_acc & 1u);
+}
+
+static inline void hmx_load_bias_bank(const void * addr, uint32_t bank) {
+    uint32_t rs = ((uint32_t) (uintptr_t) addr & ~255u) | (bank & 3u);
+    asm volatile("bias = mxmem2(%0)\n" :: "r"(rs) : "memory");
+}
 
 #endif // HMX_UTILS_H
