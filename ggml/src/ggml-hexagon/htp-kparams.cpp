@@ -888,6 +888,8 @@ static bool htp_kparams_solve_matmul_impl(
     struct htp_mm_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
+    kparams->out_scale          = HTP_MM_OUT_SCALE_ONE;
+    kparams->iq2xxs_grid_copies = opt_iq2xxs_grid_copies;
 
     const int ne00 = src0->ne[0];
     const int ne01 = src0->ne[1];
@@ -1112,7 +1114,9 @@ bool htp_kparams_solve_mmnx(
     const size_t   vtcm_budget = htp_session_vtcm_size(sess);
 
     memset(kparams, 0, sizeof(*kparams));
-    kparams->n_hvx = n_hvx;
+    kparams->n_hvx              = n_hvx;
+    kparams->out_scale          = HTP_MM_OUT_SCALE_ONE;
+    kparams->iq2xxs_grid_copies = opt_iq2xxs_grid_copies;
 
     const int ne00 = src0->ne[0];
     const int ne01 = src0->ne[1];

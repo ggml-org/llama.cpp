@@ -140,6 +140,7 @@ int    opt_gdn_select    = 2; // 2 = HMX -> HVX, 1 = HVX, 0 = CPU (unsupported)
 int    opt_ssm_select    = 2; // 2 = HMX -> HVX, 1 = HVX, 0 = CPU (unsupported)
 int    opt_ar_select     = 2; // 2 = fused ALLREDUCE+ADD (default), 1 = unfused ALLREDUCE, 0 = fallback to CPY+FENCE
 int    opt_ar_scatter    = 1; // 1 = reduce-scatter the fused ALLREDUCE+ADD (default), 0 = full reduction
+int    opt_iq2xxs_grid_copies = HTP_IQ2XXS_GRID_COPIES; // IQ2_XXS grid copies in VTCM: 1 (off), 2, 4, 8, 16 (default)
 
 // Default PMU events, if profiling with PMU (mode=2) is enabled
 // See https://docs.qualcomm.com/doc/80-N2040-60/topic/pmu-events.html
@@ -3550,6 +3551,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_ssm_select = getenv("GGML_HEXAGON_SSM_SELECT");
     const char * str_ar_select = getenv("GGML_HEXAGON_AR_SELECT");
     const char * str_ar_scatter = getenv("GGML_HEXAGON_AR_SCATTER");
+    const char * str_iq2xxs_grid_copies = getenv("GGML_HEXAGON_IQ2XXS_GRID_COPIES");
     const char * str_ndev     = getenv("GGML_HEXAGON_NDEV");
     const char * str_arch     = getenv("GGML_HEXAGON_ARCH");
     const char * str_vmem     = getenv("GGML_HEXAGON_VMEM");
@@ -3618,6 +3620,15 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_ssm_select    = str_ssm_select    ? atoi(str_ssm_select)          : opt_ssm_select;
     opt_ar_select     = str_ar_select     ? atoi(str_ar_select)           : opt_ar_select;
     opt_ar_scatter    = str_ar_scatter    ? atoi(str_ar_scatter)          : opt_ar_scatter;
+    if (str_iq2xxs_grid_copies) {
+        const int n = atoi(str_iq2xxs_grid_copies);
+        if (n >= 1 && n <= HTP_IQ2XXS_GRID_COPIES && (n & (n - 1)) == 0) {
+            opt_iq2xxs_grid_copies = n;
+        } else {
+            GGML_LOG_WARN("ggml-hex: GGML_HEXAGON_IQ2XXS_GRID_COPIES must be a power of 2 in [1, %d], got '%s', using %d\n",
+                          HTP_IQ2XXS_GRID_COPIES, str_iq2xxs_grid_copies, opt_iq2xxs_grid_copies);
+        }
+    }
 
     if (str_mbuf) {
         const char * p = str_mbuf;

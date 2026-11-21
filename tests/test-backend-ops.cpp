@@ -5769,6 +5769,92 @@ struct test_mul_mat : public test_case {
     }
 };
 
+// small activations (Nemotron decode MoE inputs), so per-block q8 activation scales amax/127 fall below the fp16 normal min
+static constexpr float SMALL_A_RANGE = 0.004f;
+
+struct test_mul_mat_small_a : public test_mul_mat {
+    using test_mul_mat::test_mul_mat;
+    std::string vars() override { return test_mul_mat::vars() + ",small_a=1"; }
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "b") == 0) {
+                init_tensor_uniform(t, -SMALL_A_RANGE, SMALL_A_RANGE);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
+// raw weights near the NVFP4 max with a small per-tensor scale (build_lora_mm w_s), so the unscaled product exceeds the fp16 max
+static constexpr float RAW_W_RANGE = 2000.0f;
+
+// GGML_OP_MUL_MAT followed by GGML_OP_MUL by a 1-element weight scale
+struct test_mul_mat_w_scale : public test_case {
+    const ggml_type type_a;
+    const int64_t m;
+    const int64_t n;
+    const int64_t k;
+    const float w_scale;
+
+    std::string vars() override {
+        return VARS_TO_STR5(type_a, m, n, k, w_scale);
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return 2 * m * n * k;
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_W_SCALE";
+    }
+
+    test_mul_mat_w_scale(ggml_type type_a = GGML_TYPE_NVFP4, int64_t m = 4096, int64_t n = 8, int64_t k = 4096,
+                         float w_scale = 1.3369e-4f)
+        : type_a(type_a), m(m), n(n), k(k), w_scale(w_scale) {}
+
+    bool use_weight_context() override { return true; }
+
+    // the scale must reach the backend in the same graph as the matmul
+    bool run_whole_graph() override { return true; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        GGML_UNUSED(ctx);
+        GGML_ABORT("needs the weights context");
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
+        ggml_tensor * a = ggml_new_tensor_2d(ctx_weights, type_a, k, m);
+        ggml_set_name(a, "a");
+        ggml_tensor * s = ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, 1);
+        ggml_set_name(s, "s");
+        ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+        ggml_set_name(b, "b");
+
+        ggml_tensor * out = ggml_mul(ctx, ggml_mul_mat(ctx, a, b), s);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "a") == 0) {
+                init_tensor_uniform(t, -RAW_W_RANGE, RAW_W_RANGE);
+            } else if (strcmp(t->name, "s") == 0) {
+                ggml_backend_tensor_set(t, &w_scale, 0, sizeof(w_scale));
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // GGML_HINT_SRC0_IS_HADAMARD
 struct test_mul_mat_hadamard : public test_mul_mat {
     test_mul_mat_hadamard(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
@@ -6053,6 +6139,19 @@ struct test_mul_mat_id : public test_case {
 
     void reinit_perf_iter(ggml_context * ctx) override {
         init_mul_mat_id_ids(ctx, n_mats, skip);
+    }
+};
+
+struct test_mul_mat_id_small_a : public test_mul_mat_id {
+    using test_mul_mat_id::test_mul_mat_id;
+    std::string vars() override { return test_mul_mat_id::vars() + ",small_a=1"; }
+    void initialize_tensors(ggml_context * ctx) override {
+        test_mul_mat_id::initialize_tensors(ctx);
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "b") == 0) {
+                init_tensor_uniform(t, -SMALL_A_RANGE, SMALL_A_RANGE);
+            }
+        }
     }
 };
 
@@ -12375,6 +12474,36 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 16, 10, 256, {1, 1}, {1, 1}));
     }
 
+    // NVFP4 with the per-tensor weight scale (Nemotron ssm_in/ssm_out): the unscaled product exceeds the fp16 max
+    for (int n : {1, 16}) {
+        test_cases.emplace_back(new test_mul_mat_w_scale(GGML_TYPE_NVFP4, 64, n, 4096));
+    }
+    // F32 MoE router, expert count not a multiple of the 32-row tile (Nemotron: 16 mod 32)
+    for (int n : {1, 16}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 240, n, 256, {1, 1}, {1, 1}));
+    }
+    // IQ2_XXS experts, 9 used per token (Nemotron), plain and fused (MUL_MAT_ID_NX)
+    for (int n : {1, 2, 16, 64}) {
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_IQ2_XXS, GGML_TYPE_F32, 16, 9, false, 64, n, 256));
+    }
+    // small activations through every HTP q8 quant path: row mode (n = 16) and block mode (n = 1, rows < n_hvx)
+    for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_MXFP4, GGML_TYPE_NVFP4, GGML_TYPE_IQ4_NL,
+                             GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ2_XXS}) {
+        for (int n : {1, 16}) {
+            test_cases.emplace_back(new test_mul_mat_small_a(type_a, GGML_TYPE_F32, 64, n, 256, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat_id_small_a(type_a, GGML_TYPE_F32, 4, 2, false, 64, n, 256));
+        }
+    }
+    for (int n : {1, 16}) {
+        for (uint32_t o : {2, 3}) {
+            test_cases.emplace_back(new test_mul_mat_id_fusion(GGML_TYPE_IQ2_XXS, GGML_TYPE_F32, 16, 9, false, 64, n, 256, o));
+        }
+    }
+    // activations too large for VTCM: HTP must decline (CPU fallback, no crash) or match the CPU
+    for (int n : {1, 8}) {
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_IQ2_XXS, GGML_TYPE_F32, 8, 4, false, 64, n, 131072));
+    }
+
     // Tile-aligned shapes for NVFP4 and IQ2_XXS across GEMV (n=1, 2) and HMX (n=16, 64) paths
     for (ggml_type type_a : {GGML_TYPE_NVFP4, GGML_TYPE_IQ2_XXS}) {
         for (int n : {1, 2, 16, 64}) {
@@ -13690,6 +13819,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (float scale_w : {0.0f, 2.0f}) {
         test_cases.emplace_back(new test_topk_moe({8, 22, 1, 1}, 4, true, true, GATING_FUNC_SIGMOID, scale_w, 1, true));
         test_cases.emplace_back(new test_topk_moe({384,  1, 1, 1}, 6, true, true, GATING_FUNC_SIGMOID, scale_w, 1, true));
+    }
+
+    // Nemotron routing: sigmoid, bias, top-9, norm, scale 5, expert count not a multiple of 32
+    for (int n : {1, 16}) {
+        test_cases.emplace_back(new test_topk_moe({368, n, 1, 1}, 9, true, true, GATING_FUNC_SIGMOID, 5.0f));
     }
 
     // Cover the supported boundaries, common k = 8 shapes, interleaved views and adds, and k = 16 fallback.

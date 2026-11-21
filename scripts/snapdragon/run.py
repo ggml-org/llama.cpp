@@ -38,6 +38,7 @@ MANAGED_ENV_NAMES = (
     "GGML_HEXAGON_SSM_SELECT",
     "GGML_HEXAGON_AR_SELECT",
     "GGML_HEXAGON_AR_SCATTER",
+    "GGML_HEXAGON_IQ2XXS_GRID_COPIES",
     "GGML_HEXAGON_ETM",
     "GGML_HEXAGON_ARCH",
     "GGML_HEXAGON_OPTRACE",
@@ -226,6 +227,7 @@ def main():
     parser.add_argument("--hex-ssm-select", help="Select SSM Scan kernel (GGML_HEXAGON_SSM_SELECT) 2:HMX,1:HVX,0:disable")
     parser.add_argument("--hex-ar-select", help="Select All-Reduce kernel (GGML_HEXAGON_AR_SELECT) 1:enable,0:disable")
     parser.add_argument("--hex-ar-scatter", help="Enable (1) or disable (0) reduce-scatter for fused ALLREDUCE+ADD (GGML_HEXAGON_AR_SCATTER)")
+    parser.add_argument("--hex-iq2xxs-grid-copies", help="IQ2_XXS grid copies in VTCM (GGML_HEXAGON_IQ2XXS_GRID_COPIES) 1:off,2,4,8,16:default")
     parser.add_argument("--hex-etm", help="Enable Embedded Trace Macrocell hardware tracing / trace logging (GGML_HEXAGON_ETM)")
     parser.add_argument("--hex-arch", help="Target Hexagon NPU architecture version override (v73, v75, v79, v81, etc.) (GGML_HEXAGON_ARCH)")
     parser.add_argument("--hex-libhtp-dir", default=os.environ.get("GGML_HEXAGON_LIBHTP_DIR"), help="Directory containing libggml-htp-v<arch>.so (GGML_HEXAGON_LIBHTP_DIR)")
@@ -382,6 +384,7 @@ def main():
     set_env("GGML_HEXAGON_SSM_SELECT", args.hex_ssm_select)
     set_env("GGML_HEXAGON_AR_SELECT", args.hex_ar_select)
     set_env("GGML_HEXAGON_AR_SCATTER", args.hex_ar_scatter)
+    set_env("GGML_HEXAGON_IQ2XXS_GRID_COPIES", args.hex_iq2xxs_grid_copies)
     set_env("GGML_HEXAGON_ETM", args.hex_etm)
     set_env("GGML_HEXAGON_ARCH", args.hex_arch)
     set_env("GGML_HEXAGON_LIBHTP_DIR", args.hex_libhtp_dir)
