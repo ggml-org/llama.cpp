@@ -36,6 +36,10 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
     add((new field_bool("return_tokens", params.return_tokens))
         ->set_desc("Return the raw generated token ids in the `tokens` field"));
 
+    add((new field_bool("return_last_hidden_state", params.return_last_hidden_state))
+        ->add_alias("return_hidden_state")
+        ->set_desc("Return the last hidden state of the prompt (PromptEOL / NuMind embedding)"));
+
     add((new field_bool("return_progress", params.return_progress))
         ->set_desc("Include prompt processing progress events in stream mode"));
 

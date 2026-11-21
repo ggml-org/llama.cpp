@@ -392,6 +392,9 @@ json server_task_result_cmpl_final::to_json_oaicompat() {
         {"id", oaicompat_cmpl_id}
     };
 
+    if (!last_hidden_state.empty()) {
+        res["last_hidden_state"] = last_hidden_state;
+    }
     // extra fields for debugging purposes
     if (verbose) {
         res["__verbose"] = to_json_non_oaicompat();
@@ -439,6 +442,10 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
         {"usage",              usage_json_oaicompat()},
         {"id", oaicompat_cmpl_id}
     };
+
+    if (!last_hidden_state.empty()) {
+        res["last_hidden_state"] = last_hidden_state;
+    }
 
     // extra fields for debugging purposes
     if (verbose) {

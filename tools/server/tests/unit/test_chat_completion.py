@@ -631,3 +631,26 @@ def test_verbose_debug():
             assert "Book" in res.body["__verbose"]["prompt"]
         else:
             assert "__verbose" not in res.body
+
+
+def test_return_last_hidden_state():
+    global server
+    server.start()
+    for return_lhs in [True, False]:
+        res = server.make_request("POST", "/chat/completions", data={
+            "max_tokens": 1,
+            "messages": [
+                {"role": "system", "content": "Book"},
+                {"role": "user", "content": "What is the best book"},
+            ],
+            "return_last_hidden_state": return_lhs,
+        })
+        assert res.status_code == 200
+        if return_lhs:
+            assert "last_hidden_state" in res.body
+            vec = res.body["last_hidden_state"]
+            assert isinstance(vec, list)
+            assert len(vec) > 0
+            assert all(isinstance(x, (int, float)) for x in vec)
+        else:
+            assert "last_hidden_state" not in res.body
