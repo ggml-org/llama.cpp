@@ -52,6 +52,7 @@
 #include "ggml-cuda/snake.cuh"
 #include "ggml-cuda/softcap.cuh"
 #include "ggml-cuda/depth-mix.cuh"
+#include "ggml-cuda/ctrl-mix.cuh"
 #include "ggml-cuda/softmax.cuh"
 #include "ggml-cuda/ssm-conv.cuh"
 #include "ggml-cuda/ssm-scan.cuh"
@@ -5482,6 +5483,14 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         if (last > 0) {
             ggml_cuda_op_ssm_conv_step(*cuda_ctx, node, cgraph->nodes[i + 3], cgraph->nodes[i + 4], cgraph->nodes[i + 6],
                                        cgraph->nodes[last]);
+            return last - i;
+        }
+    }
+
+    if (node->op == GGML_OP_MUL_MAT) {
+        const int last = ggml_cuda_match_ctrl_mix(cgraph, i);
+        if (last > 0) {
+            ggml_cuda_op_ctrl_mix(*cuda_ctx, cgraph, i, last);
             return last - i;
         }
     }

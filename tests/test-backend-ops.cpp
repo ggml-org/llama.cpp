@@ -5068,6 +5068,57 @@ struct test_ssm_conv_res_scale : public test_case {
     }
 };
 
+// gated mix of two vectors driven by two small products on one vector (Inkling 2 loop controllers, fused by CUDA):
+// cur - tanh(W_f g)*cur + msg*tanh(W_g g)
+struct test_ctrl_mix : public test_case {
+    const ggml_type type;
+    const int64_t k;
+    const int64_t ne;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "CTRL_MIX";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_nmse_err() override {
+        return 5e-4; // as test_mul_mat
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR3(type, k, ne);
+    }
+
+    test_ctrl_mix(ggml_type type, int64_t k, int64_t ne) : type(type), k(k), ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * wf  = ggml_new_tensor_2d(ctx, type, k, ne);
+        ggml_tensor * wg  = ggml_new_tensor_2d(ctx, type, k, ne);
+        ggml_tensor * g   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, 1);
+        ggml_tensor * cur = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ne, 1);
+        ggml_tensor * msg = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ne, 1);
+        ggml_set_name(wf, "wf");
+        ggml_set_name(wg, "wg");
+        ggml_set_name(g, "g");
+        ggml_set_name(cur, "cur");
+        ggml_set_name(msg, "msg");
+
+        // both products first, as in the model
+        ggml_tensor * mf = ggml_mul_mat(ctx, wf, g);
+        ggml_tensor * mg = ggml_mul_mat(ctx, wg, g);
+        if (gf) {
+            ggml_build_forward_expand(gf, mf);
+            ggml_build_forward_expand(gf, mg);
+        }
+
+        ggml_tensor * out = ggml_add(ctx, ggml_sub(ctx, cur, ggml_mul(ctx, ggml_tanh(ctx, mf), cur)),
+                                          ggml_mul(ctx, msg, ggml_tanh(ctx, mg)));
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // one token of attention over stored states (Inkling 2 block attention residuals, fused by CUDA):
 // RMS_NORM(cur), appended to the blocks in both layouts, scores against the queries, softmax, weighted sum
 struct test_depth_mix : public test_case {
@@ -12203,6 +12254,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 1, 1}, {d_conv, d_inner, 1, 1}));
             test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 4, 1}, {d_conv, d_inner, 1, 1}));
         }
+    }
+
+    // gated mix driven by two small products (Inkling 2 loop controllers)
+    for (ggml_type type : { GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16 }) {
+        test_cases.emplace_back(new test_ctrl_mix(type, 64, 2304));
+        test_cases.emplace_back(new test_ctrl_mix(type, 100, 1000));
     }
 
     // one token of attention over stored states (Inkling 2)
