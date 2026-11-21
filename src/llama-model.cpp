@@ -1410,12 +1410,19 @@ bool llama_prec_policy::apply(ggml_tensor * res) const {
         return false;
     }
 
-    const auto it = prec_src1.find(res->src[0]);
-    if (it == prec_src1.end()) {
-        return false;
+    bool applied = false;
+
+    const auto it_acc = prec_acc.find(res->src[0]);
+    if (it_acc != prec_acc.end()) {
+        applied |= ggml_prec_set_acc(res, it_acc->second);
     }
 
-    return ggml_prec_set_src(res, it->second, 1);
+    const auto it_src1 = prec_src1.find(res->src[0]);
+    if (it_src1 != prec_src1.end()) {
+        applied |= ggml_prec_set_src(res, it_src1->second, 1);
+    }
+
+    return applied;
 }
 
 void llama_prec_policy::load(llama_model_loader & ml, const llama_model & model) {
@@ -2044,6 +2051,42 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
+    // map each weight to its "<name>.scale" tensor: shape {1} for a 2D weight, {n_expert} for a 3D weight
+    {
+        auto ends_with = [](const std::string & str, const std::string & suffix) {
+            return str.size() >= suffix.size() && str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
+        };
+        std::unordered_map<std::string, ggml_tensor *> weights;
+        for (const auto & [name, cur] : tensors_by_name) {
+            if (ends_with(name, ".weight")) {
+                weights.emplace(name.substr(0, name.size() - 7), cur);
+            }
+        }
+        for (const auto & [name, s] : tensors_by_name) {
+            if (!ends_with(name, ".scale")) {
+                continue;
+            }
+            const auto it = weights.find(name.substr(0, name.size() - 6));
+            if (it == weights.end()) {
+                continue;
+            }
+            ggml_tensor * w = it->second;
+            const bool ok = w->ne[3] == 1 && ggml_nelements(s) == w->ne[2] && s->ne[0] == w->ne[2];
+            if (ok) {
+                w_scales.emplace(w, s);
+            } else {
+                LLAMA_LOG_DEBUG("%s: '%s' is not a weight scale for '%s', skipping\n", __func__, name.c_str(), w->name);
+            }
+        }
+    }
+
+    // the reference computes the router in F32: https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/blob/60d8d70770c6776ff598c94bb586a859a38244f1/inference/model.py#L565
+    if (hparams.expert_gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS || hparams.expert_router_f32) {
+        for (const auto & layer : layers) {
+            prec_policy.set_acc(layer.ffn_gate_inp, GGML_PREC_F32);
+        }
+    }
+
     // per-tensor activation precision policy
     prec_policy.load(ml, *this);
 
@@ -2573,6 +2616,11 @@ llama_ftype llama_model::ftype() const {
 
 size_t llama_model::size() const {
     return pimpl->n_bytes;
+}
+
+ggml_tensor * llama_model::get_w_scale(const ggml_tensor * w) const {
+    const auto it = w_scales.find(w);
+    return it == w_scales.end() ? nullptr : it->second;
 }
 
 size_t llama_model::n_tensors() const {
