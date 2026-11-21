@@ -1387,6 +1387,11 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
                 if (sched->op_offload && src_backend_id == sched->n_backends - 1 && ggml_backend_buffer_is_host(src->buffer)) {
                     for (int b = 0; b < src_backend_id; b++) {
                         if (ggml_backend_supports_op(sched->backends[b], tensor) && ggml_backend_offload_op(sched->backends[b], tensor)) {
+                            // a 1-D weight (e.g. a norm) is not a reason to offload the op
+                            // leave it unassigned so that it runs on the same backend as its neighbors
+                            if (ggml_n_dims(src) == 1) {
+                                return -1;
+                            }
                             SET_CAUSE(tensor, "1.off");
                             return b;
                         }

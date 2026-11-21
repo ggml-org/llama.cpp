@@ -677,6 +677,56 @@ static void test_graph_optimize_alloc_dep() {
     GGML_ASSERT(!graph_reuses_allocation(true));
 }
 
+// same batch size as the CUDA backend: ne[1] for MUL_MAT, the number of rows for other ops
+static bool dummy_gpu_device_offload_op(ggml_backend_dev_t /*dev*/, const ggml_tensor * op) {
+    const int64_t batch_size = op->op == GGML_OP_MUL_MAT ? op->ne[1] : ggml_nrows(op);
+    return batch_size >= 32;
+}
+
+// layer with its weights on the CPU next to a GPU that offloads ops with a batch size of at least 32
+// the per-head norm MUL has n_head rows per token, so it reaches the threshold with a single token
+static void test_sched_op_offload(int64_t n_tokens) {
+    const int64_t n_embd   = 64;
+    const int64_t n_head   = 32;
+    const int64_t head_dim = 4;
+
+    dummy_backend gpu = dummy_backend_init(SIZE_MAX);
+    gpu.context->device.iface.offload_op = dummy_gpu_device_offload_op;
+    dummy_backend cpu = dummy_backend_init(SIZE_MAX);
+
+    auto [ctx_w, _w, ctx_w_ptr] = make_context();
+    ggml_tensor * w_norm   = ggml_new_tensor_1d(ctx_w, GGML_TYPE_F32, n_embd);
+    ggml_tensor * w_q      = ggml_new_tensor_2d(ctx_w, GGML_TYPE_F32, n_embd, n_head*head_dim);
+    ggml_tensor * w_q_norm = ggml_new_tensor_1d(ctx_w, GGML_TYPE_F32, head_dim);
+    ggml_tensor * w_o      = ggml_new_tensor_2d(ctx_w, GGML_TYPE_F32, n_head*head_dim, n_embd);
+
+    ggml_backend_buffer_ptr buf_w(ggml_backend_alloc_ctx_tensors_from_buft(ctx_w, &cpu.buffer_type));
+    ggml_backend_buffer_set_usage(buf_w.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+    auto [ctx, graph, ctx_ptr] = make_context();
+    ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_tokens);
+    ggml_set_input(x);
+
+    ggml_tensor * norm   = ggml_mul(ctx, ggml_rms_norm(ctx, x, 1e-6f), w_norm);
+    ggml_tensor * q      = ggml_reshape_3d(ctx, ggml_mul_mat(ctx, w_q, norm), head_dim, n_head, n_tokens);
+    ggml_tensor * q_norm = ggml_mul(ctx, ggml_rms_norm(ctx, q, 1e-6f), w_q_norm);
+    ggml_tensor * out    = ggml_mul_mat(ctx, w_o, ggml_reshape_2d(ctx, q_norm, n_head*head_dim, n_tokens));
+
+    ggml_set_output(out);
+    ggml_build_forward_expand(graph, out);
+
+    ggml_backend_t             backends[2] = { &gpu.context->backend, &cpu.context->backend };
+    ggml_backend_buffer_type_t bufts[2]    = { &gpu.buffer_type, &cpu.buffer_type };
+    ggml_backend_sched_ptr     sched(ggml_backend_sched_new(backends, bufts, 2, 64, false, true));
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(sched.get(), graph));
+
+    // every op must run where the MUL_MATs run
+    ggml_backend_t expected = n_tokens >= 32 ? backends[0] : backends[1];
+    for (int i = 0; i < ggml_graph_n_nodes(graph); i++) {
+        GGML_ASSERT(ggml_backend_sched_get_tensor_backend(sched.get(), ggml_graph_node(graph, i)) == expected);
+    }
+}
+
 // Check that the size reported by ggml_backend_alloc_ctx_tensors_from_buft_size
 // matches the actual size of the buffer allocated for the ctx tensors
 static ggml_backend_buffer_ptr check_size_matches(ggml_backend_buffer_type_t buft, ggml_context * ctx) {
@@ -1121,6 +1171,8 @@ int main() {
     run("test_buffer_size_zero", test_buffer_size_zero);
     run("test_reallocation", test_reallocation);
     run("test_graph_optimize_alloc_dep", test_graph_optimize_alloc_dep);
+    run("test_sched_op_offload(1)", []() { test_sched_op_offload(1); });
+    run("test_sched_op_offload(32)", []() { test_sched_op_offload(32); });
     run("test_buft_alloc_buffer_n_single_buffer", test_buft_alloc_buffer_n_single_buffer);
     run("test_buft_alloc_buffer_n_multi_buffer", test_buft_alloc_buffer_n_multi_buffer);
     run("test_buft_alloc_buffer_n_zero_size", test_buft_alloc_buffer_n_zero_size);
