@@ -2003,7 +2003,7 @@ static __global__ void flash_attn_ext_f16(
 #endif // __CUDA_ARCH__ == GGML_CUDA_CC_TURING
 
 #if defined(AMD_WMMA_AVAILABLE)
-    if (ncols1*ncols2 < 16 || ncols2 == 1 || DKQ > 256) {
+    if (ncols1*ncols2 < 16 || DKQ > 256) {
         NO_DEVICE_CODE;
         return;
     }
