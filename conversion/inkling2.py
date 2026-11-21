@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from functools import partial
@@ -65,6 +66,28 @@ def _dequant_expert_chunk(weight: Callable[[], Tensor], scale: Callable[[], Tens
     return values
 
 
+def _nvfp4_expert_rows(packed: np.ndarray, scales: np.ndarray, name: str, expert: int) -> np.ndarray:
+    # Original checkpoint: consecutive FP4 nibbles, with one E4M3 scale per 16 values.
+    # GGML block_nvfp4: four scales followed by 32 bytes pairing values j and j+8.
+    n, half = packed.shape
+    nb = scales.shape[1]
+    if half * 2 != nb * 16 or nb % 4:
+        raise ValueError(f"Inkling2: {name} expert {expert}: {half * 2} columns do not form NVFP4 blocks of 64")
+    if np.any(scales & 0x80) or np.any(scales == 0x7F):
+        raise ValueError(f"Inkling2: {name}_scale expert {expert}: block scales must be non-negative and finite to keep NVFP4")
+    nibbles = np.stack([packed & 15, packed >> 4], axis=-1).reshape(n, nb, 16)
+    qs = (nibbles[:, :, :8] | (nibbles[:, :, 8:] << 4)).astype(np.uint8)
+    blocks = np.concatenate([scales.reshape(n, nb // 4, 4), qs.reshape(n, nb // 4, 32)], axis=-1)
+    return blocks.reshape(n, nb // 4 * 36)
+
+def _nvfp4_expert(weight: Callable[[], Tensor], scale: Callable[[], Tensor], name: str, expert: int, w13: bool) -> np.ndarray:
+    packed = LazyTorchTensor.to_eager(weight().view(torch.uint8)[expert]).numpy()
+    scales = LazyTorchTensor.to_eager(scale().view(torch.uint8)[expert]).numpy()
+    if not w13:
+        return _nvfp4_expert_rows(packed, scales, name, expert)
+    # Original checkpoint interleaves gate and up rows; GGUF stores them grouped.
+    return np.concatenate([_nvfp4_expert_rows(packed[half::2], scales[half::2], name, expert) for half in (0, 1)])
+
 def _is_inkling2(dir_model: Path) -> bool:
     if not (dir_model / "config.json").is_file():
         return False
@@ -87,6 +110,9 @@ class Inkling2Model(TextModel):
     def __init__(self, dir_model: Path, *args, **kwargs):
         self._expert_quant: dict[str, dict] = {}
         self._packed_experts: dict[str, gguf.LazyChunkedTensor] = {}
+        # Opt-in: keep packed NVFP4 weights instead of dequantizing before GGUF export.
+        self._native_nvfp4 = os.environ.get("INKLING2_NVFP4_NATIVE", "0") == "1"
+        self._native_experts: dict[str, tuple[gguf.LazyChunkedTensor, np.ndarray]] = {}
         quant_path = dir_model / "hf_quant_config.json"
         if quant_path.is_file():
             with open(quant_path, encoding="utf-8") as f:
@@ -165,6 +191,23 @@ class Inkling2Model(TextModel):
                     t = gen()
                     if t.dtype != torch.float32 or tuple(t.shape) != expected:
                         raise ValueError(f"Inkling2: {companion}: expected F32 {expected}, got {t.dtype} {tuple(t.shape)}")
+            if nvfp4 and self._native_nvfp4:
+                assert amax is not None and denominator is not None
+                a = LazyTorchTensor.to_eager(amax()).numpy().astype(np.float32)
+                d = LazyTorchTensor.to_eager(denominator()).numpy().astype(np.float32)
+                if not np.isfinite(a).all() or (a < 0).any() or not np.isfinite(d).all() or (d <= 0).any():
+                    raise ValueError(f"Inkling2: {name}: amax must be finite and nonnegative, denominator finite and positive")
+                if cols % 64:
+                    raise ValueError(f"Inkling2: {name}: {cols} columns do not form NVFP4 blocks of 64")
+                byte_shape = (experts, rows, cols // 64 * 36)
+                chunks_native: list[Callable[[], np.ndarray]] = [
+                    partial(_nvfp4_expert, weight, scale, name, expert, w13) for expert in range(experts)
+                ]
+                self._native_experts[name] = (gguf.LazyChunkedTensor(chunks_native, byte_shape, np.uint8), a / d)
+                self.model_tensors[name] = lambda shape=shape: torch.empty(shape, dtype=torch.float32, device="meta")
+                for companion in required:
+                    del self.model_tensors[companion]
+                continue
             chunks: list[Callable[[], np.ndarray]] = []
             for expert in range(experts):
                 for half in range(2 if w13 else 1):
@@ -248,6 +291,13 @@ class Inkling2Model(TextModel):
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name in self._native_experts:
+            target = name.replace(".w13_weight", ".gate_up_proj").replace(".w2_weight", ".down_proj")
+            new_name = self.map_tensor_name(target, try_suffixes=()) + ".weight"
+            packed, scale = self._native_experts[name]
+            self.gguf_writer.add_tensor(new_name, cast("np.ndarray", packed), raw_dtype=gguf.GGMLQuantizationType.NVFP4)
+            yield new_name.removesuffix(".weight") + ".scale", torch.from_numpy(scale)
+            return
         if name in self._packed_experts:
             target = name.replace(".w13_weight", ".gate_up_proj").replace(".w2_weight", ".down_proj")
             yield self.map_tensor_name(target, try_suffixes=()) + ".weight", cast("Tensor", self._packed_experts[name])
