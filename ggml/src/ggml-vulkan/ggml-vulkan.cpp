@@ -8939,9 +8939,10 @@ bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_
     const uint32_t qstride = hsk_pad / 4 + 2;
     const uint32_t Qf = (params.q_in_regs ? 1 : Br * qstride) * f16vec4;
 
-    const uint32_t psh_stride = Br / 4 + 2;
+    // P is row major, except with Q in registers, where it stays column major (see flash_attn_cm1.comp).
+    const uint32_t psh_size = params.q_in_regs ? Bc * (Br / 4 + 2) : Br * (Bc / 4 + 2);
     const uint32_t qchunk_stride = 4 * 16 / 4 + 2;
-    const uint32_t Psh = std::max(Bc * psh_stride, params.q_in_regs ? Br * qchunk_stride : 0) * f16vec4;
+    const uint32_t Psh = std::max(psh_size, params.q_in_regs ? Br * qchunk_stride : 0) * f16vec4;
 
     const uint32_t sfshstride = (hsk <= 128) ? (Br + 8) : Br;
     const uint32_t sfsh = Bc * sfshstride * acctype;

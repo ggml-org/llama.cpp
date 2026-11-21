@@ -44,10 +44,13 @@ shared float tmpsh[row_split];
 const uint32_t qstride = HSK_pad / 4 + 2;
 shared FLOAT_TYPEV4 Qf[Q_IN_REGS ? 1 : (Br * qstride)];
 
-const uint psh_stride = Br / 4 + 2;
+// P is row major, so each lane loads contiguous keys. Bc + 8 halves (Bc / 4 + 2 vec4s) keeps the coopMatLoad stride a multiple of 16 bytes.
+// With Q in registers the register file is full, so P stays column major and is loaded where it is used.
+const bool P_ROW_MAJOR = !Q_IN_REGS;
+const uint psh_stride = P_ROW_MAJOR ? Bc / 4 + 2 : Br / 4 + 2;
 const uint32_t qchunk_dtiles = 4;
 const uint32_t qchunk_stride = qchunk_dtiles * 16 / 4 + 2;
-const uint32_t psh_size = Bc * psh_stride;
+const uint32_t psh_size = P_ROW_MAJOR ? Br * psh_stride : Bc * psh_stride;
 const uint32_t qchunk_size = Q_IN_REGS ? Br * qchunk_stride : 0;
 shared FLOAT_TYPEV4 Psh[psh_size >= qchunk_size ? psh_size : qchunk_size];
 
@@ -470,14 +473,26 @@ void main() {
             [[unroll]] for (uint32_t r = 0; r < rows_per_thread; r += 4) {
                 const uint row = tile_row(r);
                 if (KV_bounds_check && j * Bc + col >= KV) {
-                    Psh[col * psh_stride + row / 4] = FLOAT_TYPEV4(0.0f);
+                    if (P_ROW_MAJOR) {
+                        [[unroll]] for (uint32_t vec_idx = 0; vec_idx < 4; ++vec_idx) {
+                            Psh[(row + vec_idx) * psh_stride + col / 4][col % 4] = FLOAT_TYPE(0.0f);
+                        }
+                    } else {
+                        Psh[col * psh_stride + row / 4] = FLOAT_TYPEV4(0.0f);
+                    }
                 } else {
                     const vec4 mfvec = vec4(Mf[r], Mf[r + 1], Mf[r + 2], Mf[r + 3]);
                     const FLOAT_TYPEV4 Pf = FLOAT_TYPEV4(exp(vec4(sfsh[row / 4 + col * sfshstride]) - mfvec));
                     [[unroll]] for (uint32_t vec_idx = 0; vec_idx < 4; ++vec_idx) {
                         Lf[r + vec_idx] += Pf[vec_idx];
                     }
-                    Psh[col * psh_stride + row / 4] = Pf;
+                    if (P_ROW_MAJOR) {
+                        [[unroll]] for (uint32_t vec_idx = 0; vec_idx < 4; ++vec_idx) {
+                            Psh[(row + vec_idx) * psh_stride + col / 4][col % 4] = Pf[vec_idx];
+                        }
+                    } else {
+                        Psh[col * psh_stride + row / 4] = Pf;
+                    }
                 }
             }
         }
@@ -509,6 +524,16 @@ void main() {
             }
         }
         barrier();
+
+        // P is the same for every hsv tile, so load its fragments once per KV block.
+        coopmat<FLOAT_TYPE, gl_ScopeSubgroup, MatBc, 16, gl_MatrixUseA> PMat[P_ROW_MAJOR ? (q_tiles * (Bc / MatBc)) : 1];
+        if (P_ROW_MAJOR) {
+            [[unroll]] for (uint32_t q = 0; q < q_tiles; ++q) {
+                [[unroll]] for (uint32_t bc_chunk = 0; bc_chunk < Bc / MatBc; ++bc_chunk) {
+                    coopMatLoad(PMat[q * (Bc / MatBc) + bc_chunk], Psh, q * MatBc * psh_stride + bc_chunk * MatBc / 4, psh_stride, gl_CooperativeMatrixLayoutRowMajor);
+                }
+            }
+        }
 
         const uint num_hsv_tiles = (HSV + MatBc * row_split - 1) / (MatBc * row_split); // round up
 
@@ -585,8 +610,12 @@ void main() {
                     }
 
                     [[unroll]] for (uint32_t q = 0; q < q_tiles; ++q) {
-                        coopMatLoad(KMat, Psh, bc_chunk * MatBc * psh_stride + q * (MatBc / 4), psh_stride, gl_CooperativeMatrixLayoutColumnMajor);
-                        PVMat[q] = coopMatMulAdd(KMat, QMat, PVMat[q]);
+                        if (P_ROW_MAJOR) {
+                            PVMat[q] = coopMatMulAdd(PMat[q * (Bc / MatBc) + bc_chunk], QMat, PVMat[q]);
+                        } else {
+                            coopMatLoad(KMat, Psh, bc_chunk * MatBc * psh_stride + q * (MatBc / 4), psh_stride, gl_CooperativeMatrixLayoutColumnMajor);
+                            PVMat[q] = coopMatMulAdd(KMat, QMat, PVMat[q]);
+                        }
                     }
                 }
 
