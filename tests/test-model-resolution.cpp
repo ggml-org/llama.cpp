@@ -219,6 +219,11 @@ struct plan_case {
 };
 
 static const plan_case plan_cases[] = {
+    {"imatrix quant tag", {"imatrix.gguf", "model-Q4_K_M_imatrix.gguf"},
+     "test/repo:Q4_K_M_IMATRIX", "", false, false,
+     "model-Q4_K_M_imatrix.gguf", {"model-Q4_K_M_imatrix.gguf"}, "", "", "", "", ""},
+    {"standalone importance matrix", {"model-imatrix.gguf"}, "test/repo", "", false, false,
+     "", {}, "", "", "", "", ""},
     // exact tag picks the matching primary, sidecars follow the tag
     {"flat exact tag", flat, "test/repo:Q8_0", "", true, false,
      "model-Q8_0.gguf", {"model-Q8_0.gguf"},

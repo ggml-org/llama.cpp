@@ -750,7 +750,18 @@ static bool gguf_filename_is_model(const std::string & filepath) {
         filename = filename.substr(pos + 1);
     }
 
-    return filename.find("imatrix") == std::string::npos && !name_is_sidecar(filename);
+    if (name_is_sidecar(filename)) {
+        return false;
+    }
+    const auto imatrix = filename.find("imatrix");
+    if (imatrix == std::string::npos) {
+        return true;
+    }
+    // A quant tag such as Q4_K_M_imatrix describes a model quantized with an importance matrix.
+    const auto split = get_gguf_split_info(filename);
+    return string_ends_with(split.tag, "_IMATRIX") &&
+           split.prefix.size() == imatrix + sizeof("imatrix") - 1 &&
+           (split.tag.front() == 'Q' || split.tag.compare(0, 2, "IQ") == 0);
 }
 
 static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
