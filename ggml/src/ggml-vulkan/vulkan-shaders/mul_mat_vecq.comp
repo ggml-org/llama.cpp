@@ -163,6 +163,13 @@ void main() {
         if (first_row >= p.stride_d) {
             return;
         }
+#if MMVQ_USE_HOIST
+        // Pass the known tail size to allow unrolling.
+        if (NUM_ROWS == 2u) {
+            compute_outputs(first_row, 1u);
+            return;
+        }
+#endif
         compute_outputs(first_row, p.stride_d - first_row);
     }
 }
