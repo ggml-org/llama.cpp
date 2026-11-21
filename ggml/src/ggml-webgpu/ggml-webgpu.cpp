@@ -4464,7 +4464,8 @@ static size_t ggml_backend_webgpu_buffer_type_get_alignment(ggml_backend_buffer_
 static size_t ggml_backend_webgpu_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
     ggml_backend_webgpu_device_context * dev_ctx =
         static_cast<ggml_backend_webgpu_device_context *>(buft->device->context);
-    return dev_ctx->webgpu_global_ctx->capabilities.limits.maxBufferSize;
+    // clamp to avoid overflows where size_t is 32-bit (e.g. wasm32)
+    return (size_t) std::min<uint64_t>(dev_ctx->webgpu_global_ctx->capabilities.limits.maxBufferSize, SIZE_MAX / 2);
 }
 
 static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft,

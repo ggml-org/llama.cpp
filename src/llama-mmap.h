@@ -22,12 +22,12 @@ struct llama_file {
     llama_file(FILE * file);
     ~llama_file();
 
-    size_t tell() const;
-    size_t size() const;
+    uint64_t tell() const;
+    uint64_t size() const;
 
     int file_id() const; // fileno overload
 
-    void seek(size_t offset, int whence) const;
+    void seek(uint64_t offset, int whence) const;
 
     void read_raw(void * ptr, size_t len);
     void read_raw_unsafe(void * ptr, size_t len);

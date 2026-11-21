@@ -619,7 +619,7 @@ static bool cbx_is_mtl(const mtmd_model & model) {
 // libllama loads them from a synthetic GGUF: gdst holds the arch hparams, the tensor data is read from the mmproj file
 struct mtmd_owned_llama_source {
     std::ifstream f;
-    std::map<std::string, std::pair<size_t, size_t>> tensors; // name in the synthetic model -> offset and size in the mmproj
+    std::map<std::string, std::pair<uint64_t, size_t>> tensors; // name in the synthetic model -> offset and size in the mmproj
 };
 
 static void mtmd_owned_llama_set_tensor_data(ggml_tensor * t, void * user_data) {

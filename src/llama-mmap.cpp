@@ -183,7 +183,7 @@ struct llama_file::impl {
         seek(0, SEEK_SET);
     }
 
-    size_t tell() const {
+    uint64_t tell() const {
         LARGE_INTEGER li;
         li.QuadPart = 0;
         BOOL ret = SetFilePointerEx(fp_win32, li, &li, FILE_CURRENT);
@@ -194,7 +194,7 @@ struct llama_file::impl {
         return li.QuadPart;
     }
 
-    void seek(size_t offset, int whence) const {
+    void seek(uint64_t offset, int whence) const {
         static_assert(SEEK_SET == FILE_BEGIN, "SEEK_SET != FILE_BEGIN");
         static_assert(SEEK_CUR == FILE_CURRENT, "SEEK_CUR != FILE_CURRENT");
         static_assert(SEEK_END == FILE_END, "SEEK_END != FILE_END");
@@ -212,13 +212,13 @@ struct llama_file::impl {
             return;
         }
 
-        const size_t read_offset = tell();
+        const uint64_t read_offset = tell();
         if (read_offset > size) {
             throw std::runtime_error("unexpectedly reached end of file");
         }
 
         if (!has_direct_io()) {
-            const size_t read_size = std::min(len, size - read_offset);
+            const size_t read_size = (size_t) std::min<uint64_t>(len, size - read_offset);
             size_t bytes_read = 0;
             while (bytes_read < read_size) {
                 const DWORD to_read = (DWORD) std::min<size_t>(read_size - bytes_read, MAXDWORD);
@@ -297,13 +297,13 @@ struct llama_file::impl {
             return;
         }
 
-        const size_t offset = tell();
+        const uint64_t offset = tell();
         if (offset > size || len > size - offset) {
             throw std::runtime_error("unexpectedly reached end of file");
         }
 
-        const size_t aligned_offset = offset & ~(alignment - 1);
-        const size_t offset_from_alignment = offset - aligned_offset;
+        const uint64_t aligned_offset = offset & ~((uint64_t) alignment - 1);
+        const size_t offset_from_alignment = (size_t) (offset - aligned_offset);
         const size_t bytes_to_read = (offset_from_alignment + len + alignment - 1) & ~(alignment - 1);
         const size_t buffer_size = std::min<size_t>(bytes_to_read, LLAMA_DIRECT_IO_BUFFER_SIZE);
 
@@ -347,7 +347,7 @@ struct llama_file::impl {
             return;
         }
 
-        const size_t offset = tell();
+        const uint64_t offset = tell();
         if (offset > size || len > size - offset) {
             throw std::runtime_error("unexpectedly reached end of file");
         }
@@ -454,24 +454,24 @@ struct llama_file::impl {
         seek(0, SEEK_SET);
     }
 
-    size_t tell() const {
+    uint64_t tell() const {
         if (fd == -1) {
             off_t ret = llama_mmap_ftell(fp);
             if (ret == -1) {
                 throw std::runtime_error(format("ftell error: %s", strerror(errno)));
             }
 
-            return (size_t) ret;
+            return (uint64_t) ret;
         }
 
         off_t pos = lseek(fd, 0, SEEK_CUR);
         if (pos == -1) {
             throw std::runtime_error(format("lseek error: %s", strerror(errno)));
         }
-        return (size_t) pos;
+        return (uint64_t) pos;
     }
 
-    void seek(size_t offset, int whence) const {
+    void seek(uint64_t offset, int whence) const {
         off_t ret = 0;
         if (fd == -1) {
             ret = llama_mmap_fseek(fp, offset, whence);
@@ -489,8 +489,8 @@ struct llama_file::impl {
         }
         errno = 0;
         if (fd == -1) {
-            const size_t read_offset = tell();
-            const size_t to_read = std::min(len, size - read_offset);
+            const uint64_t read_offset = tell();
+            const size_t to_read = (size_t) std::min<uint64_t>(len, size - read_offset);
 
             std::size_t ret = std::fread(ptr, to_read, 1, fp);
             if (ferror(fp)) {
@@ -512,7 +512,7 @@ struct llama_file::impl {
                     if (errno == EFAULT || errno == EINVAL || errno == EIO) {
                         LLAMA_LOG_WARN("%s: file '%s' falling back to buffered I/O due to %s\n",
                                        __func__, fname.c_str(), strerror(errno));
-                        const size_t read_offset = tell();
+                        const uint64_t read_offset = tell();
                         close(fd);
                         fd = -1;
                         alignment = 1;
@@ -525,7 +525,7 @@ struct llama_file::impl {
                 }
                 if (ret == 0) {
                     off_t pos = lseek(fd, 0, SEEK_CUR);
-                    if (pos != -1 && (size_t) pos == size) {
+                    if (pos != -1 && (uint64_t) pos == size) {
                         std::memset(reinterpret_cast<char *>(ptr) + bytes_read, 0, len - bytes_read);
                         return;
                     }
@@ -538,8 +538,8 @@ struct llama_file::impl {
     }
 
     void read_aligned_chunk(void * dest, size_t len) {
-        size_t offset = tell();
-        off_t aligned_offset = offset & ~(alignment - 1);
+        uint64_t offset = tell();
+        off_t aligned_offset = (off_t) (offset & ~((uint64_t) alignment - 1));
         off_t offset_from_alignment = offset - aligned_offset;
         size_t bytes_to_read = (offset_from_alignment + len + alignment - 1) & ~(alignment - 1);
 
@@ -635,7 +635,7 @@ struct llama_file::impl {
     size_t alignment = 1;
 
     FILE * fp{};
-    size_t size{};
+    uint64_t size{};
     bool owns_fp = true;
 };
 
@@ -646,8 +646,8 @@ llama_file::llama_file(FILE * file) : pimpl(std::make_unique<impl>(file)) {}
 
 llama_file::~llama_file() = default;
 
-size_t llama_file::tell() const { return pimpl->tell(); }
-size_t llama_file::size() const { return pimpl->size; }
+uint64_t llama_file::tell() const { return pimpl->tell(); }
+uint64_t llama_file::size() const { return pimpl->size; }
 
 size_t llama_file::read_alignment() const { return pimpl->read_alignment(); }
 bool llama_file::has_direct_io() const { return pimpl->has_direct_io(); }
@@ -667,7 +667,7 @@ int llama_file::file_id() const {
 #endif
 }
 
-void llama_file::seek(size_t offset, int whence) const { pimpl->seek(offset, whence); }
+void llama_file::seek(uint64_t offset, int whence) const { pimpl->seek(offset, whence); }
 void llama_file::read_raw(void * ptr, size_t len) { pimpl->read_raw(ptr, len); }
 void llama_file::read_raw_unsafe(void * ptr, size_t len) { pimpl->read_raw_unsafe(ptr, len); }
 
@@ -706,6 +706,9 @@ struct llama_mmap::impl {
     std::vector<std::pair<size_t, size_t>> mapped_fragments;
 
     impl(struct llama_file * file, size_t prefetch, bool numa, const llama_mmap::ranges & lazy_ranges) {
+        if (file->size() > SIZE_MAX) {
+            throw std::runtime_error("file is too large to mmap on this platform");
+        }
         size = file->size();
         int fd = file->file_id();
         int flags = MAP_SHARED;
@@ -727,7 +730,7 @@ struct llama_mmap::impl {
         auto advise = [&](size_t beg, size_t end, int advice, const char * name) {
             const size_t page_size = sysconf(_SC_PAGESIZE);
             beg = beg & ~(page_size - 1);
-            end = std::min((end + page_size - 1) & ~(page_size - 1), file->size());
+            end = std::min((end + page_size - 1) & ~(page_size - 1), (size_t) file->size());
             if (beg >= end) {
                 return;
             }
@@ -737,7 +740,7 @@ struct llama_mmap::impl {
         };
 
         if (prefetch > 0) {
-            for (const auto & range : ranges_complement(lazy_ranges, std::min(file->size(), prefetch))) {
+            for (const auto & range : ranges_complement(lazy_ranges, std::min((size_t) file->size(), prefetch))) {
                 advise(range.first, range.second, POSIX_MADV_WILLNEED, "POSIX_MADV_WILLNEED");
             }
         }
@@ -815,6 +818,9 @@ struct llama_mmap::impl {
     impl(struct llama_file * file, size_t prefetch, bool numa, const llama_mmap::ranges & lazy_ranges) {
         GGML_UNUSED(numa);
 
+        if (file->size() > SIZE_MAX) {
+            throw std::runtime_error("file is too large to mmap on this platform");
+        }
         size = file->size();
 
         HANDLE hFile = (HANDLE) _get_osfhandle(file->file_id());

@@ -103,12 +103,12 @@ struct mtmd_model_loader {
         if (!skip_tensors) {
             for (int i = 0; i < n_tensors; ++i) {
                 const char * name = gguf_get_tensor_name(ctx_gguf.get(), i);
-                const size_t offset = gguf_get_tensor_offset(ctx_gguf.get(), i);
+                const uint64_t offset = gguf_get_tensor_offset(ctx_gguf.get(), i);
                 enum ggml_type type = gguf_get_tensor_type(ctx_gguf.get(), i);
                 ggml_tensor * cur = ggml_get_tensor(meta, name);
                 size_t tensor_size = ggml_nbytes(cur);
                 model_size += tensor_size;
-                LOG_DBG("%s: tensor[%d]: n_dims = %d, name = %s, tensor_size=%zu, offset=%zu, shape:[%" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 "], type = %s\n",
+                LOG_DBG("%s: tensor[%d]: n_dims = %d, name = %s, tensor_size=%zu, offset=%" PRIu64 ", shape:[%" PRIu64 ", %" PRIu64 ", %" PRIu64 ", %" PRIu64 "], type = %s\n",
                     __func__, i, ggml_n_dims(cur), cur->name, tensor_size, offset, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3], ggml_type_name(type));
             }
         }
@@ -1449,7 +1449,7 @@ struct mtmd_model_loader {
 
     void load_tensors(mtmd_model & model, ggml_backend_buffer_type_t buft, bool no_alloc) {
         auto & hparams = model.hparams;
-        std::map<std::string, size_t> tensor_offset;
+        std::map<std::string, uint64_t> tensor_offset;
         std::vector<ggml_tensor *> tensors_to_load;
 
         auto fin = open_ifstream_binary(fname);
