@@ -73,7 +73,7 @@ struct common_speculative_draft_params {
     // the generated draft from the last _draft() call
     llama_tokens * result;
 
-    // candidate distribution per drafted token; set it to make draft-simple, draft-mtp and draft-dflash2 sample
+    // candidate distribution per drafted token; set it to make draft-simple, draft-mtp, draft-dflash2 and draft-dspine sample
     std::vector<std::vector<llama_token_data>> * result_q = nullptr;
 
     // the target's temp and seed, read only when the drafter samples probabilistically

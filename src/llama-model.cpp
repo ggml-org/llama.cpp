@@ -3732,6 +3732,7 @@ llama_dflash_variant llama_model_dflash_variant(const llama_model * model) {
         case llama_model_dflash::VARIANT_DFLASH2:  return LLAMA_DFLASH_VARIANT_DFLASH2;
         case llama_model_dflash::VARIANT_DSPARK:   return LLAMA_DFLASH_VARIANT_DSPARK;
         case llama_model_dflash::VARIANT_LILICORR: return LLAMA_DFLASH_VARIANT_LILICORR;
+        case llama_model_dflash::VARIANT_DSPINE:   return LLAMA_DFLASH_VARIANT_DSPINE;
     }
 
     return LLAMA_DFLASH_VARIANT_NONE;
