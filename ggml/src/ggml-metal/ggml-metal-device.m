@@ -129,6 +129,7 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
     X(MUL_MV,          mul_mv)         \
     X(MUL_MV_MMA,      mul_mv_mma)     \
     X(MUL_MM,          mul_mm)         \
+    X(MUL_MM_TENSOR,   mul_mm_tensor)  \
     X(QUANTIZE,        quantize)       \
     X(SOFTMAX,         softmax)        \
     X(NORM,            norm)           \
@@ -1516,7 +1517,7 @@ static bool ggml_metal_supports_mul_mat_src1_prec(const struct ggml_tensor * op,
     const enum ggml_prec prec = ggml_prec_get_src(op, 1);
 
     if (prec == GGML_PREC_F32) {
-        return false;
+        return true;
     }
     if (prec == GGML_PREC_BF16) {
         return has_bfloat && op->src[1]->type == GGML_TYPE_F32;
