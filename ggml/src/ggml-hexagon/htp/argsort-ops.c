@@ -197,35 +197,44 @@ static int32_t top_k_argmax_hvx(const float * restrict vals, uint32_t n, uint32_
 
 __attribute__((always_inline))
 static inline void vec_cas(HVX_Vector * X_val, HVX_Vector * X_idx, HVX_Vector * Y_val, HVX_Vector * Y_idx, bool asc) {
-    HVX_VectorPred pred = asc ? Q6_Q_vcmp_gt_VsfVsf(*X_val, *Y_val)
-                              : Q6_Q_vcmp_gt_VsfVsf(*Y_val, *X_val);
-    HVX_Vector next_X_val = Q6_V_vmux_QVV(pred, *Y_val, *X_val);
-    HVX_Vector next_Y_val = Q6_V_vmux_QVV(pred, *X_val, *Y_val);
-    HVX_Vector next_X_idx = Q6_V_vmux_QVV(pred, *Y_idx, *X_idx);
-    HVX_Vector Y_tmp_idx  = Q6_V_vmux_QVV(pred, *X_idx, *Y_idx);
+    asm volatile("" : "+v"(*X_val), "+v"(*X_idx), "+v"(*Y_val), "+v"(*Y_idx));
+    const HVX_Vector lhs        = asc ? *X_val : *Y_val;
+    const HVX_Vector rhs        = asc ? *Y_val : *X_val;
+    const HVX_VectorPred pred   = Q6_Q_vcmp_gt_VsfVsf(lhs, rhs);
+    const HVX_Vector next_X_val = Q6_V_vmux_QVV(pred, *Y_val, *X_val);
+    const HVX_Vector next_Y_val = Q6_V_vmux_QVV(pred, *X_val, *Y_val);
+    const HVX_Vector next_X_idx = Q6_V_vmux_QVV(pred, *Y_idx, *X_idx);
+    const HVX_Vector next_Y_idx = Q6_V_vmux_QVV(pred, *X_idx, *Y_idx);
     *X_val = next_X_val;
     *Y_val = next_Y_val;
     *X_idx = next_X_idx;
-    *Y_idx = Y_tmp_idx;
+    *Y_idx = next_Y_idx;
+    asm volatile("" : "+v"(*X_val), "+v"(*X_idx), "+v"(*Y_val), "+v"(*Y_idx));
 }
 
 __attribute__((always_inline))
-static inline void bitonic_cas_32(HVX_Vector * V, HVX_Vector * I, int d, HVX_VectorPred dir_mask, HVX_Vector idx_vec, HVX_Vector zero_vec) {
-    const HVX_Vector v_ctrl   = Q6_Vb_vsplat_R(d * 4);
+static inline void bitonic_cas_32(HVX_Vector * V, HVX_Vector * I, int d, int s, int stage_d, bool asc, HVX_Vector idx_vec, HVX_Vector zero_vec) {
+    HVX_Vector idx = idx_vec;
+    int flip = asc ? 0 : d;
+    asm volatile("" : "+v"(*V), "+v"(*I), "+v"(idx), "+r"(d), "+r"(flip));
+
+    const HVX_Vector v_ctrl   = Q6_Vb_vsplat_R(d << 2);
     const HVX_Vector V_paired = Q6_V_vdelta_VV(*V, v_ctrl);
     const HVX_Vector I_paired = Q6_V_vdelta_VV(*I, v_ctrl);
 
-    const HVX_VectorPred mask_left = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(d)), zero_vec);
-    const HVX_VectorPred want_max  = Q6_Q_xor_QQ(mask_left, dir_mask);
-    const HVX_VectorPred V_gt_P    = Q6_Q_vcmp_gt_VsfVsf(*V, V_paired);
-    const HVX_VectorPred P_gt_V    = Q6_Q_vcmp_gt_VsfVsf(V_paired, *V);
-    const HVX_VectorPred Q_swap    = Q6_Q_or_QQ(
+    const HVX_Vector v_rhs    = (s < 5) ? Q6_Vuw_vlsr_VuwR(idx, s - stage_d) : Q6_V_vsplat_R(flip);
+    const HVX_Vector v_lane_x = Q6_V_vxor_VV(idx, v_rhs);
+    const HVX_VectorPred want_max = Q6_Q_vcmp_gt_VwVw(Q6_V_vand_VV(v_lane_x, Q6_V_vsplat_R(d)), zero_vec);
+    const HVX_VectorPred V_gt_P   = Q6_Q_vcmp_gt_VsfVsf(*V, V_paired);
+    const HVX_VectorPred P_gt_V   = Q6_Q_vcmp_gt_VsfVsf(V_paired, *V);
+    const HVX_VectorPred Q_swap   = Q6_Q_or_QQ(
         Q6_Q_and_QQ(want_max, P_gt_V),
         Q6_Q_and_QQn(V_gt_P, want_max)
     );
 
     *V = Q6_V_vmux_QVV(Q_swap, V_paired, *V);
     *I = Q6_V_vmux_QVV(Q_swap, I_paired, *I);
+    asm volatile("" : "+v"(*V), "+v"(*I));
 }
 
 __attribute__((always_inline))
@@ -263,21 +272,10 @@ static inline void bitonic_sort_generic_hvx(uint8_t * values, uint8_t * indices,
                     }
                 }
             } else {
-                if (s < 5) {
-                    const HVX_VectorPred dir_mask = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(1 << s)), zero_vec);
-                    #pragma clang loop unroll(full)
-                    for (int v = 0; v < K; v++) {
-                        bitonic_cas_32(&V[v], &I[v], d, dir_mask, idx_vec, zero_vec);
-                    }
-                } else {
-                    #pragma clang loop unroll(full)
-                    for (int v = 0; v < K; v++) {
-                        const bool asc = (s < M) ? ((((v * 32) >> s) & 1) == 0) : asc_order;
-                        const HVX_VectorPred dir_mask = asc
-                            ? Q6_Q_vcmp_eq_VwVw(zero_vec, zero_vec)
-                            : Q6_Q_vcmp_gt_VwVw(zero_vec, zero_vec);
-                        bitonic_cas_32(&V[v], &I[v], d, dir_mask, idx_vec, zero_vec);
-                    }
+                #pragma clang loop unroll(full)
+                for (int v = 0; v < K; v++) {
+                    const bool asc = (s < M) ? ((((v * 32) >> s) & 1) == 0) : asc_order;
+                    bitonic_cas_32(&V[v], &I[v], d, s, stage_d, asc, idx_vec, zero_vec);
                 }
             }
         }
@@ -292,8 +290,10 @@ static inline void bitonic_sort_generic_hvx(uint8_t * values, uint8_t * indices,
 
 __attribute__((always_inline))
 static inline void vec_cas_i32(HVX_Vector * X_val, HVX_Vector * X_idx, HVX_Vector * Y_val, HVX_Vector * Y_idx, bool asc) {
-    const HVX_VectorPred pred = asc ? Q6_Q_vcmp_gt_VwVw(*X_val, *Y_val)
-                                    : Q6_Q_vcmp_gt_VwVw(*Y_val, *X_val);
+    asm volatile("" : "+v"(*X_val), "+v"(*X_idx), "+v"(*Y_val), "+v"(*Y_idx));
+    const HVX_Vector lhs        = asc ? *X_val : *Y_val;
+    const HVX_Vector rhs        = asc ? *Y_val : *X_val;
+    const HVX_VectorPred pred   = Q6_Q_vcmp_gt_VwVw(lhs, rhs);
     const HVX_Vector next_X_val = Q6_V_vmux_QVV(pred, *Y_val, *X_val);
     const HVX_Vector next_Y_val = Q6_V_vmux_QVV(pred, *X_val, *Y_val);
     const HVX_Vector next_X_idx = Q6_V_vmux_QVV(pred, *Y_idx, *X_idx);
@@ -302,25 +302,32 @@ static inline void vec_cas_i32(HVX_Vector * X_val, HVX_Vector * X_idx, HVX_Vecto
     *Y_val = next_Y_val;
     *X_idx = next_X_idx;
     *Y_idx = next_Y_idx;
+    asm volatile("" : "+v"(*X_val), "+v"(*X_idx), "+v"(*Y_val), "+v"(*Y_idx));
 }
 
 __attribute__((always_inline))
-static inline void bitonic_cas_32_i32(HVX_Vector * V, HVX_Vector * I, int d, HVX_VectorPred dir_mask, HVX_Vector idx_vec, HVX_Vector zero_vec) {
-    const HVX_Vector v_ctrl   = Q6_Vb_vsplat_R(d * 4);
+static inline void bitonic_cas_32_i32(HVX_Vector * V, HVX_Vector * I, int d, int s, int stage_d, bool asc, HVX_Vector idx_vec, HVX_Vector zero_vec) {
+    HVX_Vector idx = idx_vec;
+    int flip = asc ? 0 : d;
+    asm volatile("" : "+v"(*V), "+v"(*I), "+v"(idx), "+r"(d), "+r"(flip));
+
+    const HVX_Vector v_ctrl   = Q6_Vb_vsplat_R(d << 2);
     const HVX_Vector V_paired = Q6_V_vdelta_VV(*V, v_ctrl);
     const HVX_Vector I_paired = Q6_V_vdelta_VV(*I, v_ctrl);
 
-    const HVX_VectorPred mask_left = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(d)), zero_vec);
-    const HVX_VectorPred want_max  = Q6_Q_xor_QQ(mask_left, dir_mask);
-    const HVX_VectorPred V_gt_P    = Q6_Q_vcmp_gt_VwVw(*V, V_paired);
-    const HVX_VectorPred P_gt_V    = Q6_Q_vcmp_gt_VwVw(V_paired, *V);
-    const HVX_VectorPred Q_swap    = Q6_Q_or_QQ(
+    const HVX_Vector v_rhs    = (s < 5) ? Q6_Vuw_vlsr_VuwR(idx, s - stage_d) : Q6_V_vsplat_R(flip);
+    const HVX_Vector v_lane_x = Q6_V_vxor_VV(idx, v_rhs);
+    const HVX_VectorPred want_max = Q6_Q_vcmp_gt_VwVw(Q6_V_vand_VV(v_lane_x, Q6_V_vsplat_R(d)), zero_vec);
+    const HVX_VectorPred V_gt_P   = Q6_Q_vcmp_gt_VwVw(*V, V_paired);
+    const HVX_VectorPred P_gt_V   = Q6_Q_vcmp_gt_VwVw(V_paired, *V);
+    const HVX_VectorPred Q_swap   = Q6_Q_or_QQ(
         Q6_Q_and_QQ(want_max, P_gt_V),
         Q6_Q_and_QQn(V_gt_P, want_max)
     );
 
     *V = Q6_V_vmux_QVV(Q_swap, V_paired, *V);
     *I = Q6_V_vmux_QVV(Q_swap, I_paired, *I);
+    asm volatile("" : "+v"(*V), "+v"(*I));
 }
 
 __attribute__((always_inline))
@@ -369,21 +376,10 @@ static inline void bitonic_sort_top_k_hvx(const float * restrict values, int32_t
                     }
                 }
             } else {
-                if (s < 5) {
-                    const HVX_VectorPred dir_mask = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(1 << s)), zero_vec);
-                    #pragma clang loop unroll(full)
-                    for (int v = 0; v < K; v++) {
-                        bitonic_cas_32_i32(&V[v], &I[v], d, dir_mask, idx_vec, zero_vec);
-                    }
-                } else {
-                    #pragma clang loop unroll(full)
-                    for (int v = 0; v < K; v++) {
-                        const bool asc = (s < M) ? ((((v * 32) >> s) & 1) == 0) : false;
-                        const HVX_VectorPred dir_mask = asc
-                            ? Q6_Q_vcmp_eq_VwVw(zero_vec, zero_vec)
-                            : Q6_Q_vcmp_gt_VwVw(zero_vec, zero_vec);
-                        bitonic_cas_32_i32(&V[v], &I[v], d, dir_mask, idx_vec, zero_vec);
-                    }
+                #pragma clang loop unroll(full)
+                for (int v = 0; v < K; v++) {
+                    const bool asc = (s < M) ? ((((v * 32) >> s) & 1) == 0) : false;
+                    bitonic_cas_32_i32(&V[v], &I[v], d, s, stage_d, asc, idx_vec, zero_vec);
                 }
             }
         }
@@ -436,18 +432,11 @@ static void sort64_i32_desc(int32_t * restrict keys, int32_t * restrict indices)
             const int d = 1 << stage_d;
             if (d >= 32) {
                 vec_cas_i32(&V[0], &I[0], &V[1], &I[1], false);
-            } else if (s < 5) {
-                const HVX_VectorPred dir_mask = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(1 << s)), zero_vec);
-                bitonic_cas_32_i32(&V[0], &I[0], d, dir_mask, idx_vec, zero_vec);
-                bitonic_cas_32_i32(&V[1], &I[1], d, dir_mask, idx_vec, zero_vec);
             } else {
                 #pragma clang loop unroll(full)
                 for (int v = 0; v < 2; v++) {
                     const bool asc = (s < 6) ? (v == 0) : false;
-                    const HVX_VectorPred dir_mask = asc
-                        ? Q6_Q_vcmp_eq_VwVw(zero_vec, zero_vec)
-                        : Q6_Q_vcmp_gt_VwVw(zero_vec, zero_vec);
-                    bitonic_cas_32_i32(&V[v], &I[v], d, dir_mask, idx_vec, zero_vec);
+                    bitonic_cas_32_i32(&V[v], &I[v], d, s, stage_d, asc, idx_vec, zero_vec);
                 }
             }
         }
@@ -502,29 +491,21 @@ static void bitonic_sort_vtcm(uint8_t * restrict values, uint8_t * restrict indi
         for (uint32_t v = 0; v < n_vec; v++) {
             HVX_Vector Vv = *(HVX_Vector *)(values + v * 128);
             HVX_Vector Iv = *(HVX_Vector *)(indices + v * 128);
-
-            HVX_VectorPred dir_mask;
-            if (s < 5) {
-                dir_mask = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(1 << s)), zero_vec);
-            } else {
-                const bool asc = (s < M) ? ((((v * 32u) >> s) & 1u) == 0u) : asc_order;
-                dir_mask = asc ? Q6_Q_vcmp_eq_VwVw(zero_vec, zero_vec)
-                               : Q6_Q_vcmp_gt_VwVw(zero_vec, zero_vec);
-            }
+            const bool asc = (s < M) ? ((((v * 32u) >> s) & 1u) == 0u) : asc_order;
 
             if (s >= 5) {
-                bitonic_cas_32(&Vv, &Iv, 16, dir_mask, idx_vec, zero_vec);
+                bitonic_cas_32(&Vv, &Iv, 16, s, 4, asc, idx_vec, zero_vec);
             }
             if (s >= 4) {
-                bitonic_cas_32(&Vv, &Iv, 8, dir_mask, idx_vec, zero_vec);
+                bitonic_cas_32(&Vv, &Iv, 8, s, 3, asc, idx_vec, zero_vec);
             }
             if (s >= 3) {
-                bitonic_cas_32(&Vv, &Iv, 4, dir_mask, idx_vec, zero_vec);
+                bitonic_cas_32(&Vv, &Iv, 4, s, 2, asc, idx_vec, zero_vec);
             }
             if (s >= 2) {
-                bitonic_cas_32(&Vv, &Iv, 2, dir_mask, idx_vec, zero_vec);
+                bitonic_cas_32(&Vv, &Iv, 2, s, 1, asc, idx_vec, zero_vec);
             }
-            bitonic_cas_32(&Vv, &Iv, 1, dir_mask, idx_vec, zero_vec);
+            bitonic_cas_32(&Vv, &Iv, 1, s, 0, asc, idx_vec, zero_vec);
 
             *(HVX_Vector *)(values + v * 128)  = Vv;
             *(HVX_Vector *)(indices + v * 128) = Iv;
