@@ -186,6 +186,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_INKLING2,         "inkling2"         },
     { LLM_ARCH_INKLING2_LOOP,    "inkling2_loop"    },
     { LLM_ARCH_DOMYN_EDGE,       "domynedge"        },
+    { LLM_ARCH_NEMOTRON3_6_ACADEMIA,              "nemotron3_6_academia"              },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -280,6 +281,16 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_TOKEN_SHIFT_COUNT,                 "%s.token_shift_count"                 },
     { LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         "%s.interleave_moe_layer_step"         },
     { LLM_KV_FULL_ATTENTION_INTERVAL,           "%s.full_attention_interval"           },
+    { LLM_KV_INPUT_LAYER_COUNT,                 "%s.input_layer_count"                 },
+    { LLM_KV_RECURRENT_LAYER_COUNT,             "%s.recurrent_layer_count"             },
+    { LLM_KV_OUTPUT_LAYER_COUNT,                "%s.output_layer_count"                },
+    { LLM_KV_LAYER_PATTERN,                     "%s.layer_pattern"                     },
+    { LLM_KV_RECURRENT_KV_CACHE_MODE,           "%s.recurrent_kv_cache_mode"           },
+    { LLM_KV_LOOP_CONDITIONING_HIDDEN_SIZE,     "%s.loop_conditioning.hidden_size"     },
+    { LLM_KV_LOOP_CONDITIONING_MAX_LOOPS,       "%s.loop_conditioning.max_loops"       },
+    { LLM_KV_LOOP_ADAPTER_RANK,                 "%s.loop_adapter_rank"                 },
+    { LLM_KV_LOOP_INPUT_MIXING,                 "%s.loop_input_mixing"                 },
+    { LLM_KV_SSM_HOUSEHOLDER_COUNT,             "%s.ssm.householder_count"             },
     { LLM_KV_NUM_LOOPS,                         "%s.num_loops"                         },
     { LLM_KV_SKIP_LOOP_FINAL_NORM,              "%s.skip_loop_final_norm"              },
     { LLM_KV_HRM_LAYERS_PER_STACK,              "%s.hrm.layers_per_stack"              },
@@ -678,6 +689,21 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_DECISION_QUERY_MLP,                     "decision.query_mlp" },
     { LLM_TENSOR_ENC_OUTPUT_NORM,                        "enc.output_norm" },
     { LLM_TENSOR_FFN_GATE_INP_SHEXP,                     "blk.%d.ffn_gate_inp_shexp" },
+    { LLM_TENSOR_LOOP_COND_UP,                           "loop_cond_up" },
+    { LLM_TENSOR_LOOP_COND_DOWN,                         "loop_cond_down" },
+    { LLM_TENSOR_LOOP_ENTRY_NORM,                        "loop_entry_norm" },
+    { LLM_TENSOR_LOOP_ENTRY_GAMMA,                       "loop_entry_gamma" },
+    { LLM_TENSOR_LOOP_ENTRY_BETA,                        "loop_entry_beta" },
+    { LLM_TENSOR_LOOP_EXIT_GATE,                         "loop_exit_gate" },
+    { LLM_TENSOR_LOOP_INPUT_MIX,                         "loop_input_mix" },
+    { LLM_TENSOR_STATE_UPDATE,                           "state_update" },
+    { LLM_TENSOR_STATE_ALPHA,                            "state_alpha" },
+    { LLM_TENSOR_LOOP_GAMMA,                             "blk.%d.loop_gamma" },
+    { LLM_TENSOR_LOOP_BETA,                              "blk.%d.loop_beta" },
+    { LLM_TENSOR_LOOP_GATE,                              "blk.%d.loop_gate" },
+    { LLM_TENSOR_LOOP_ADAPTER_GATE,                      "blk.%d.loop_adapter_gate" },
+    { LLM_TENSOR_LOOP_ADAPTER_UP,                        "blk.%d.loop_adapter_up" },
+    { LLM_TENSOR_LOOP_ADAPTER_DOWN,                      "blk.%d.loop_adapter_down" },
     { LLM_TENSOR_SSM_A_NOSCAN,                           "blk.%d.ssm_a" },
     { LLM_TENSOR_SSM_CONV1D,                             "blk.%d.ssm_conv1d" },
     { LLM_TENSOR_SSM_DT,                                 "blk.%d.ssm_dt" },
@@ -1118,6 +1144,21 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_FFN_ACT,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_DIV}},
     {LLM_TENSOR_SSM_CONV1D,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_SSM_CONV}},
     {LLM_TENSOR_SSM_A,                      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_SSM_SCAN}},
+    {LLM_TENSOR_LOOP_COND_UP,               {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_LOOP_COND_DOWN,             {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_LOOP_ENTRY_NORM,            {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL}},
+    {LLM_TENSOR_LOOP_ENTRY_GAMMA,           {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_LOOP_ENTRY_BETA,            {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_LOOP_EXIT_GATE,             {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_LOOP_INPUT_MIX,             {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_STATE_UPDATE,               {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_STATE_ALPHA,                {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL}},
+    {LLM_TENSOR_LOOP_GAMMA,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_LOOP_BETA,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_LOOP_GATE,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_LOOP_ADAPTER_GATE,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_LOOP_ADAPTER_UP,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_LOOP_ADAPTER_DOWN,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_SSM_A_NOSCAN,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}}, // a version of SSM_A used for MUL instead of SSM_SCAN
     {LLM_TENSOR_SSM_DT_NORM,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_SSM_B_NORM,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
@@ -1454,6 +1495,7 @@ bool llm_arch_is_recurrent(const llm_arch & arch) {
 
 bool llm_arch_is_hybrid(const llm_arch & arch) {
     switch (arch) {
+        case LLM_ARCH_NEMOTRON3_6_ACADEMIA:
         case LLM_ARCH_JAMBA:
         case LLM_ARCH_FALCON_H1:
         case LLM_ARCH_PLAMO2:
@@ -1545,6 +1587,7 @@ bool llm_arch_supports_mixed_batch(const llm_arch & arch) {
 
 bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
     switch (arch) {
+        case LLM_ARCH_NEMOTRON3_6_ACADEMIA:
         case LLM_ARCH_CLOVER_MOE:
         case LLM_ARCH_ZAYA1:
         case LLM_ARCH_GROK:
@@ -1593,6 +1636,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
 
 bool llama_arch_supports_save(llm_arch arch) {
     switch (arch) {
+        case LLM_ARCH_NEMOTRON3_6_ACADEMIA:
         case LLM_ARCH_SENSENOVA_U1:
         case LLM_ARCH_GEMMA3N:
         case LLM_ARCH_BITNET:

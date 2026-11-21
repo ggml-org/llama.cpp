@@ -236,7 +236,7 @@ uint32_t llama_hparams::n_embd_r() const {
     // TODO: maybe support other convolution strides than 1
     // NOTE: since the first column of the conv_state is shifted out each time, it's not actually needed
     // Corresponds to Mamba's conv_states size
-    const uint32_t n_conv = (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * (ssm_d_inner + 2*ssm_n_group*ssm_d_state);
+    const uint32_t n_conv = (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * (ssm_n_householder*ssm_d_inner + (ssm_n_householder + 1)*ssm_n_group*ssm_d_state);
 
     // PLE conv history needs its own row: Meta splits cache_r_l by head, so a history packed behind the first is unaddressable
     // it lives in cache_ple_r_l instead, mirrored like the rest of the PLE module

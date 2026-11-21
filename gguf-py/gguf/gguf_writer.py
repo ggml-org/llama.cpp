@@ -1038,6 +1038,36 @@ class GGUFWriter:
     def add_token_shift_count(self, count: int) -> None:
         self.add_uint32(Keys.LLM.TOKEN_SHIFT_COUNT.format(arch=self.arch), count)
 
+    def add_input_layer_count(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.INPUT_LAYER_COUNT.format(arch=self.arch), value)
+
+    def add_recurrent_layer_count(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.RECURRENT_LAYER_COUNT.format(arch=self.arch), value)
+
+    def add_output_layer_count(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.OUTPUT_LAYER_COUNT.format(arch=self.arch), value)
+
+    def add_layer_pattern(self, value: str) -> None:
+        self.add_string(Keys.LLM.LAYER_PATTERN.format(arch=self.arch), value)
+
+    def add_recurrent_kv_cache_mode(self, value: str) -> None:
+        self.add_string(Keys.LLM.RECURRENT_KV_CACHE_MODE.format(arch=self.arch), value)
+
+    def add_loop_conditioning_hidden_size(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.LOOP_CONDITIONING_HIDDEN_SIZE.format(arch=self.arch), value)
+
+    def add_loop_conditioning_max_loops(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.LOOP_CONDITIONING_MAX_LOOPS.format(arch=self.arch), value)
+
+    def add_loop_adapter_rank(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.LOOP_ADAPTER_RANK.format(arch=self.arch), value)
+
+    def add_loop_input_mixing(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.LOOP_INPUT_MIXING.format(arch=self.arch), value)
+
+    def add_ssm_householder_count(self, value: int) -> None:
+        self.add_uint32(Keys.SSM.HOUSEHOLDER_COUNT.format(arch=self.arch), value)
+
     def add_num_loops(self, count: int) -> None:
         self.add_uint32(Keys.LLM.NUM_LOOPS.format(arch=self.arch), count)
 

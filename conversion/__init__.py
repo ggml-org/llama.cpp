@@ -169,6 +169,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "KimiLinearForCausalLM": "kimi_linear",
     "KimiLinearModel": "kimi_linear",
     "KimiVLForConditionalGeneration": "deepseek",
+    "Nemotron3_6AcademiaForCausalLM": "nemotron3_6_academia",
     "LFM2ForCausalLM": "lfm2",
     "LLaDAMoEModel": "llada",
     "LLaDAMoEModelLM": "llada",

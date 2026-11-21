@@ -7,6 +7,7 @@
 #include "llama.h"
 #include "llama-cpp.h"
 #include "../src/llama-ext.h"
+#include "../src/llama-model.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -257,7 +258,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     uint32_t n_head  = 2;
     uint32_t n_ff    = 384;
     uint32_t n_layer = 2;
-    if (arch == LLM_ARCH_LLAMA4) {
+    if (arch == LLM_ARCH_NEMOTRON3_6_ACADEMIA) {
+        n_layer = 5;
+    } else if (arch == LLM_ARCH_LLAMA4) {
         n_layer = 4; // hparams.n_no_rope_layer_step is hard-coded to 4
     } else if (arch == LLM_ARCH_MAION_CODER) {
         n_head = 4;
@@ -842,6 +845,23 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, 25.0f);
     ms.add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,        -5.0f);
 
+    if (arch == LLM_ARCH_NEMOTRON3_6_ACADEMIA) {
+        ms.add_kv(LLM_KV_INPUT_LAYER_COUNT, uint32_t(1));
+        ms.add_kv(LLM_KV_RECURRENT_LAYER_COUNT, uint32_t(3));
+        ms.add_kv(LLM_KV_OUTPUT_LAYER_COUNT, uint32_t(1));
+        ms.add_kv(LLM_KV_NUM_LOOPS, uint32_t(2));
+        ms.add_kv(LLM_KV_LAYER_PATTERN, "MM*--");
+        ms.add_kv(LLM_KV_RECURRENT_KV_CACHE_MODE, "per_loop");
+        ms.add_kv(LLM_KV_LOOP_CONDITIONING_HIDDEN_SIZE, uint32_t(16));
+        ms.add_kv(LLM_KV_LOOP_CONDITIONING_MAX_LOOPS, uint32_t(4));
+        ms.add_kv(LLM_KV_LOOP_ADAPTER_RANK, uint32_t(8));
+        ms.add_kv(LLM_KV_LOOP_INPUT_MIXING, true);
+        ms.add_kv(LLM_KV_SSM_INNER_SIZE, uint32_t(256));
+        ms.add_kv(LLM_KV_SSM_STATE_SIZE, uint32_t(64));
+        ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK, uint32_t(8));
+        ms.add_kv(LLM_KV_SSM_HOUSEHOLDER_COUNT, uint32_t(3));
+    }
+
     for (uint32_t il = 0; il < n_layer; il++) {
         ggml_tensor t;
         memset(&t, 0, sizeof(ggml_tensor));
@@ -871,7 +891,7 @@ static llama_model_ptr get_model(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER,
-        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr) {
+        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, int n_gpu_layers = -1) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
     model_params.progress_callback = silent_model_load_progress;
@@ -880,6 +900,7 @@ static llama_model_ptr get_model(
     model_params.devices = devs_copy.data();
     model_params.split_mode = split_mode;
     model_params.tensor_buft_overrides = tensor_buft_overrides;
+    model_params.n_gpu_layers = n_gpu_layers;
 
     tensor_data_params tensor_params = { seed, stdev };
     llama_model_ptr model(gguf_ctx != nullptr ?
@@ -1304,6 +1325,80 @@ static std::string get_device_label(ggml_backend_dev_t dev) {
     return std::string(desc) + " (" + name + ")";
 }
 
+static bool check_academia_cache(const size_t seed, const float stdev, const std::vector<ggml_backend_dev_t> & devs) {
+    const auto tokens = get_tokens(16, 128, seed);
+    struct config {
+        uint32_t loops;
+        const char * cache_mode;
+        ggml_type type_kv;
+        int n_gpu_layers;
+    };
+    const config configs[] = {
+        { 1, "per_loop",  GGML_TYPE_F16,  -1 },
+        { 3, "per_loop",  GGML_TYPE_Q8_0,  3 },
+        { 3, "last_loop", GGML_TYPE_F16,   3 },
+        { 4, "last_loop", GGML_TYPE_Q8_0, -1 },
+    };
+    for (const auto & cfg : configs) {
+        auto metadata = get_gguf_ctx(LLM_ARCH_NEMOTRON3_6_ACADEMIA, false);
+        const LLM_KV kv(LLM_ARCH_NEMOTRON3_6_ACADEMIA);
+        gguf_set_val_u32(metadata.get(), kv(LLM_KV_NUM_LOOPS).c_str(), cfg.loops);
+        gguf_set_val_str(metadata.get(), kv(LLM_KV_RECURRENT_KV_CACHE_MODE).c_str(), cfg.cache_mode);
+        const auto run = [&](bool cpu, uint32_t n_ubatch) {
+            auto model = get_model(metadata.get(), nullptr, seed, stdev, cpu ? std::vector<ggml_backend_dev_t>{} : devs,
+                    LLAMA_SPLIT_MODE_LAYER, nullptr, cfg.n_gpu_layers);
+            if (llama_model_n_layer(model.get()) != 5) {
+                throw std::runtime_error("physical layer count changed with loop count");
+            }
+            for (uint32_t loop = 1; loop < cfg.loops; ++loop) {
+                if (model->layers[2 + 3*loop].wq_s != model->layers[2].wq_s) {
+                    throw std::runtime_error("shared attention weights have different scales");
+                }
+            }
+            auto params = llama_context_default_params();
+            params.n_ctx = 128;
+            params.n_threads = params.n_threads_batch = 4;
+            params.type_k = params.type_v = cfg.type_kv;
+            params.n_ubatch = n_ubatch;
+            llama_context_ptr ctx(llama_init_from_model(model.get(), params));
+            if (!ctx) {
+                throw std::runtime_error("failed to create Academia cache context");
+            }
+            auto logits = get_logits(model.get(), ctx.get(), tokens);
+            common_batch batch(ctx.get());
+            batch.add(tokens.front(), tokens.size(), 0, true);
+            if (llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
+                throw std::runtime_error("failed to decode after Academia prefill");
+            }
+            const float * next = llama_get_logits_ith(ctx.get(), 0);
+            logits.insert(logits.end(), next, next + llama_vocab_n_tokens(llama_model_get_vocab(model.get())));
+            return logits;
+        };
+        // last_loop shares KV between passes, so compare the same token partition.
+        const auto reference = run(true, strcmp(cfg.cache_mode, "per_loop") == 0 ? 16 : 4);
+        const auto actual = run(false, 4);
+        const double error = nmse(reference, actual);
+        if (!(error <= 1e-4)) {
+            LOG_ERR("Academia loops=%u cache=%s type=%s ngl=%d: NMSE %.2e\n", cfg.loops, cfg.cache_mode, ggml_type_name(cfg.type_kv), cfg.n_gpu_layers, error);
+            return false;
+        }
+        if (cfg.loops == 3 && strcmp(cfg.cache_mode, "last_loop") == 0) {
+            gguf_set_val_str(metadata.get(), kv(LLM_KV_RECURRENT_KV_CACHE_MODE).c_str(), "per_loop");
+            const auto per_loop = run(true, 4);
+            const auto per_loop_full = run(true, 16);
+            gguf_set_val_str(metadata.get(), kv(LLM_KV_RECURRENT_KV_CACHE_MODE).c_str(), "last_loop");
+            const auto last_loop_full = run(true, 16);
+            const size_t n_vocab = reference.size() / (tokens.size() + 1);
+            if (std::equal(reference.end() - n_vocab, reference.end(), per_loop.end() - n_vocab) ||
+                    !std::equal(per_loop_full.begin(), per_loop_full.end() - n_vocab, last_loop_full.begin())) {
+                LOG_ERR("Academia cache modes must agree for a whole prompt and differ after chunked prefill\n");
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 static int test_backends(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const char * target_backend) {
     struct user_data_t {
         struct {
@@ -1520,6 +1615,11 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                                 status_nmse = "\033[1;31mFAIL\033[0m (toggle)";
                             }
                             test_ok = false;
+                        }
+
+                        if (arch == LLM_ARCH_NEMOTRON3_6_ACADEMIA && !check_academia_cache(seed, stdev, dc.devs)) {
+                            test_ok = false;
+                            status_nmse = "\033[1;31mFAIL\033[0m (cache)";
                         }
 
                         // the k-pool layout is updated in place when drafts are rejected

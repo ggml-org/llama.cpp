@@ -130,6 +130,50 @@ struct llm_build_rwkv7_base : public llm_graph_context {
 // models
 //
 
+struct llama_model_nemotron3_6_academia : public llama_model_base {
+    llama_model_nemotron3_6_academia(const llama_model_params & params) : llama_model_base(params) {}
+
+    struct linear {
+        ggml_tensor * weight = nullptr;
+        ggml_tensor * bias = nullptr;
+    };
+
+    struct conditioning {
+        linear gamma, beta, gate, adapter_gate;
+        ggml_tensor * adapter_up = nullptr;
+        ggml_tensor * adapter_down = nullptr;
+    };
+
+    uint32_t n_input = 0, n_recurrent = 0, n_output = 0, n_loops = 0;
+    uint32_t n_cond = 0, max_loops = 0, adapter_rank = 0;
+    bool input_mixing = false;
+    std::string pattern;
+    std::vector<uint32_t> physical;
+    std::vector<uint32_t> cache_layer;
+    std::vector<conditioning> cond;
+    linear cond_up, cond_down, entry_gamma, entry_beta, exit_gate, input_mix, state_update;
+    ggml_tensor * entry_norm = nullptr;
+    ggml_tensor * state_alpha = nullptr;
+
+    uint32_t graph_nodes_per_tensor() const override { return 64; }
+    uint32_t n_layer_physical() const override { return pattern.size(); }
+    int layer_to_physical(int il) const override { return physical.at(il); }
+
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+
+    struct graph : public llm_build_delta_net_base {
+        const llama_model_nemotron3_6_academia & model;
+
+        graph(const llama_model_nemotron3_6_academia & model, const llm_graph_params & params);
+        ggml_tensor * build_linear(const linear & layer, ggml_tensor * cur);
+        ggml_tensor * build_condition(float progress, float budget);
+        ggml_tensor * build_layer(llm_graph_input_mem_hybrid * inp, ggml_tensor * cur, ggml_tensor * condition, int il);
+        ggml_tensor * build_gdp(llm_graph_input_rs * inp, ggml_tensor * cur, int il);
+    };
+};
+
 struct llama_model_llama : public llama_model_base {
     llama_model_llama(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
