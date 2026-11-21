@@ -8720,7 +8720,7 @@ static void test_reasoning_effort_caps() {
         assert_equals(json(expected).dump(), common_chat_templates_get_caps(tmpls.get()).at("reasoning_effort_levels").dump());
     };
 
-    const std::vector<std::string> all_levels = { "minimal", "low", "medium", "high", "xhigh", "max" };
+    const std::vector<std::string> all_levels = { "none", "minimal", "low", "medium", "high", "xhigh", "max" };
 
     assert_effort_levels("models/templates/deepseek-ai-DeepSeek-V4.jinja", { "max" });
     assert_effort_levels("models/templates/deepseek-ai-DeepSeek-V4-Flash-0731.jinja", { "high", "max" });
@@ -8730,7 +8730,8 @@ static void test_reasoning_effort_caps() {
     assert_effort_levels("models/templates/upstage-Solar-Open-100B.jinja", { "low" });
     assert_effort_levels("models/templates/muse-glimmer.jinja", all_levels);
     assert_effort_levels("models/templates/openai-gpt-oss-120b.jinja", all_levels);
-    assert_effort_levels("models/templates/Cohere2MoE.jinja", {});
+    assert_effort_levels("models/templates/Cohere2MoE.jinja", { "none" });
+    assert_effort_levels("models/templates/thinkingmachines-Inkling-2-Small.jinja", { "none", "minimal", "low", "medium", "high", "max" });
     assert_effort_levels("models/templates/Qwen-Qwen3-0.6B.jinja", {});
 
     auto assert_effort_rejected = [](const std::string & path, const std::vector<std::string> & expected) {
