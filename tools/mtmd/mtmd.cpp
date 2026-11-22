@@ -1113,6 +1113,7 @@ struct mtmd_context {
                     }
                 } break;
             case PROJECTOR_TYPE_QWEN3VL:
+            case PROJECTOR_TYPE_QWEN3VL_MLP:
                 {
                     // <|vision_start|> ... (image embeddings) ... <|vision_end|>
                     img_beg = "<|vision_start|>";
@@ -4736,6 +4737,7 @@ mtmd_video_config mtmd_get_video_config(const mtmd_context * ctx,
             tmpl = ctx->video_has_soundtrack() ? MTMD_VIDEO_TEMPLATE_LFM3_OMNI : MTMD_VIDEO_TEMPLATE_LFM3;
             break;
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_QWEN3VL_MLP:
             tmpl = MTMD_VIDEO_TEMPLATE_QWEN3VL;
             break;
         default:

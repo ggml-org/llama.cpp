@@ -656,6 +656,7 @@ struct mtmd_model_loader {
                 case PROJECTOR_TYPE_QWEN2VL:
                 case PROJECTOR_TYPE_QWEN25VL:
                 case PROJECTOR_TYPE_QWEN3VL:
+                case PROJECTOR_TYPE_QWEN3VL_MLP:
                 case PROJECTOR_TYPE_LING3VL:
                     {
                         hparams.n_merge = 2; // default value for Qwen 2 and 2.5
@@ -2048,6 +2049,20 @@ struct mtmd_model_loader {
                     model.mm_0_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"));
                     model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
                     model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"));
+                } break;
+            case PROJECTOR_TYPE_QWEN3VL_MLP:
+                {
+                    // qwen3vl merger (ViT output -> text dim)
+                    model.mm_0_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"));
+                    // extra projector after the merger: norm -> linear -> gelu -> linear
+                    model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
+                    model.mm_4_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 4, "weight"));
+                    model.mm_4_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 4, "bias"));
+                    model.mm_6_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 6, "weight"));
+                    model.mm_6_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 6, "bias"));
                 } break;
             case PROJECTOR_TYPE_LFM3VL:
                 {
@@ -4677,6 +4692,7 @@ int mtmd_model::n_output_tokens_x(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_QWEN3VL_MLP:
         case PROJECTOR_TYPE_MAGEVL:
         case PROJECTOR_TYPE_SENSENOVA_U1:
         case PROJECTOR_TYPE_LING3VL:
@@ -4712,6 +4728,7 @@ int mtmd_model::n_output_tokens_y(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_QWEN3VL_MLP:
         case PROJECTOR_TYPE_MAGEVL:
         case PROJECTOR_TYPE_SENSENOVA_U1:
         case PROJECTOR_TYPE_LING3VL:
@@ -4803,6 +4820,7 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_QWEN3VL_MLP:
         case PROJECTOR_TYPE_MAGEVL:
         case PROJECTOR_TYPE_SENSENOVA_U1:
         case PROJECTOR_TYPE_LING3VL:
@@ -5186,6 +5204,9 @@ int mtmd_model::n_mmproj_embd() const {
         case PROJECTOR_TYPE_QWEN3VL:
             // main path + deepstack paths
             return mm_1_b->ne[0] * (1 + n_deepstack_layers);
+        case PROJECTOR_TYPE_QWEN3VL_MLP:
+            // merger output goes through the extra MLP projector
+            return mm_6_b->ne[0];
         case PROJECTOR_TYPE_LING3VL:
             return mm_1_b->ne[0];
         case PROJECTOR_TYPE_MIMOVL:
@@ -5310,6 +5331,7 @@ int mtmd_model::n_temporal_merge() const {
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_QWEN3VL_MLP:
         case PROJECTOR_TYPE_LFM3VL:
         case PROJECTOR_TYPE_NEMOTRON_OMNI:
         case PROJECTOR_TYPE_LING3VL:
