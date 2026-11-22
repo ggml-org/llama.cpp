@@ -5653,6 +5653,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     for (const int version : { 1, 2 }) {
         auto tst = peg_tester(version == 1 ? "models/templates/thinkingmachines-Inkling.jinja" :
                                              "models/templates/thinkingmachines-Inkling-2-Small.jinja", detailed_debug);
+        tst.specials({ "<|message_model|>", "<|content_thinking|>", "<|content_text|>", "<|content_invoke_tool_json|>", "<|end_message|>" });
 
         // Inkling 1 has the first header in the generation prompt, Inkling 2 writes it
         const std::string H = "<|message_model|>";
@@ -5693,7 +5694,8 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_tool_calls({
                 { "special_function", R"({"arg1":1})", "" },
             })
-            .expect_rules({ "tool-0" })
+            .expect_rules({ "tool-calls" })
+            .expect_grammar()
             .run();
 
         // Thinking, content, then a tool call
@@ -5721,20 +5723,41 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             })
             .run();
 
-        // The block closer inside a string argument does not end the block
-        tst.test(P + "python<|content_invoke_tool_json|>{\"name\":\"python\",\"args\":{\"code\":\"print('<|end_message|>')\"}}" + E)
-            .tools({ python_tool })
-            .expect_tool_calls({
-                { "python", R"JSON({"code":"print('<|end_message|>')"})JSON", "" },
-            })
-            .run();
-
         // Forced tool call
         tst.test(P + "<|content_thinking|>I should call it" + E + H + CALL)
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
             .tools({ special_function_tool })
             .expect(simple_assist_msg("", "I should call it", "special_function", R"({"arg1":1})", ""))
+            .expect_rules({ "tool-0" })
+            .expect_grammar()
+            .run();
+
+        // The research model does not write the name before the tool token
+        for (const auto tool_choice : { COMMON_CHAT_TOOL_CHOICE_AUTO, COMMON_CHAT_TOOL_CHOICE_REQUIRED }) {
+            tst.test(P + "<|content_invoke_tool_json|>{\"name\":\"special_function\",\"args\":{\"arg1\":1}}" + E)
+                .tool_choice(tool_choice)
+                .tools({ special_function_tool })
+                .expect_tool_calls({
+                    { "special_function", R"({"arg1":1})", "" },
+                })
+                .run();
+        }
+
+        // A tool that is not in the list, with spaces in the JSON
+        tst.test(P + "unknown_tool<|content_invoke_tool_json|>{\"name\": \"unknown_tool\", \"args\": {\"arg1\": 1}}" + E)
+            .tools({ special_function_tool })
+            .expect_tool_calls({
+                { "unknown_tool", R"({"arg1": 1})", "" },
+            })
+            .run();
+
+        // The call takes the name in the JSON, not the one before the tool token
+        tst.test(P + "special<|content_invoke_tool_json|>{\"name\":\"special_function\",\"args\":{\"arg1\":1}}" + E)
+            .tools({ special_function_tool })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1":1})", "" },
+            })
             .run();
 
         // Response format
