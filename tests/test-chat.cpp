@@ -1118,6 +1118,7 @@ struct peg_test_case {
     common_chat_msg              expect;
     bool                         is_partial            = false;
     bool                         expect_reconstruction = false;
+    bool                         expect_grammar        = false;
     std::vector<std::string>     expect_rules;
 };
 
@@ -1189,6 +1190,10 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
             common_log_flush(common_log_main());
             throw std::runtime_error("Test failed");
         }
+    }
+
+    if (tc.expect_grammar && session.grammar().empty()) {
+        throw std::runtime_error("expected a grammar constraining the tool calls, but none was produced");
     }
 
     common_chat_msg msg_accum;
@@ -1611,6 +1616,11 @@ class peg_test_builder {
 
     peg_test_builder & expect_rules(std::vector<std::string> rules) {
         tc_.expect_rules = std::move(rules);
+        return *this;
+    }
+
+    peg_test_builder & expect_grammar() {
+        tc_.expect_grammar = true;
         return *this;
     }
 
@@ -7108,6 +7118,19 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         auto tst = peg_tester("models/templates/meta-llama-Llama-3.2-3B-Instruct.jinja", detailed_debug);
         tst.test("Hello, world!\nWhat's up?").tools({ special_function_tool }).expect(message_assist).expect_reconstruction().expect_rules({ "tool-0" }).run();
 
+        // bare JSON calls have no start marker, auto mode must still produce a lazy grammar
+        tst.test("{\"name\": \"special_function\", \"parameters\": {\"arg1\": 1}}")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .expect_grammar()
+            .run();
+        // same without spaces
+        tst.test("{\"name\":\"special_function\",\"parameters\":{\"arg1\":1}}")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .expect_grammar()
+            .run();
+
         // Continuation tests
         tst.test("world!\nWhat's up?")
             .messages({ message_user, message_assist_prefill_content })
@@ -8720,7 +8743,7 @@ static void test_reasoning_effort_caps() {
         assert_equals(json(expected).dump(), common_chat_templates_get_caps(tmpls.get()).at("reasoning_effort_levels").dump());
     };
 
-    const std::vector<std::string> all_levels = { "minimal", "low", "medium", "high", "xhigh", "max" };
+    const std::vector<std::string> all_levels = { "none", "minimal", "low", "medium", "high", "xhigh", "max" };
 
     assert_effort_levels("models/templates/deepseek-ai-DeepSeek-V4.jinja", { "max" });
     assert_effort_levels("models/templates/deepseek-ai-DeepSeek-V4-Flash-0731.jinja", { "high", "max" });
@@ -8730,7 +8753,8 @@ static void test_reasoning_effort_caps() {
     assert_effort_levels("models/templates/upstage-Solar-Open-100B.jinja", { "low" });
     assert_effort_levels("models/templates/muse-glimmer.jinja", all_levels);
     assert_effort_levels("models/templates/openai-gpt-oss-120b.jinja", all_levels);
-    assert_effort_levels("models/templates/Cohere2MoE.jinja", {});
+    assert_effort_levels("models/templates/Cohere2MoE.jinja", { "none" });
+    assert_effort_levels("models/templates/thinkingmachines-Inkling-2-Small.jinja", { "none", "minimal", "low", "medium", "high", "max" });
     assert_effort_levels("models/templates/Qwen-Qwen3-0.6B.jinja", {});
 
     auto assert_effort_rejected = [](const std::string & path, const std::vector<std::string> & expected) {

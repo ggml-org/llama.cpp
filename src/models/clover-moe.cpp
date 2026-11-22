@@ -398,10 +398,7 @@ ggml_tensor * llama_model_clover_moe::graph::build_layer_ffn(ggml_tensor * cur, 
             LLM_FFN_SILU, true,
             hparams.expert_weights_scale,
             LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il,
-            nullptr, model.layers[il].ffn_gate_up_exps,
-            model.layers[il].ffn_up_exps_s,
-            model.layers[il].ffn_gate_exps_s,
-            model.layers[il].ffn_down_exps_s);
+            nullptr, model.layers[il].ffn_gate_up_exps);
     cb(moe_out, "ffn_moe_out", il);
 
     if (model.layers[il].ffn_up_shexp != nullptr) {
