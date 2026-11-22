@@ -9215,7 +9215,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
 
     if (bias) {
         // Bind the table and indices in the two unused mask optimization slots.
-        fa_pipeline_state.flags |= (uint32_t) bias->ne[1] << 8;
+        fa_pipeline_state.flags |= (uint32_t) bias->ne[0] << 8;
         if (rows) {
             fa_pipeline_state.flags |= 1u << 31;
         }
@@ -16803,7 +16803,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                         device->properties.limits.maxDescriptorSetStorageBuffers < 9)) {
                     return false;
                 }
-                if (indexed_bias && (op->src[6]->ne[1] > 0x7fffff || !device->subgroup_shuffle || !device->subgroup_vote ||
+                if (indexed_bias && (op->src[6]->ne[0] > 0x7fffff || !device->subgroup_shuffle || !device->subgroup_vote ||
                         ggml_nelements(op->src[6]) > UINT32_MAX || ggml_nelements(op->src[7]) > UINT32_MAX ||
                         op->src[1]->type != GGML_TYPE_F16 || op->src[2]->type != GGML_TYPE_F16 ||
                         (op->src[1]->ne[0] != 64 && op->src[1]->ne[0] != 128) || op->src[1]->ne[0] != op->src[2]->ne[0])) {

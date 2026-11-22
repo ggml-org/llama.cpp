@@ -22,6 +22,17 @@ struct fattn_indexed_bias {
     const float * table;
     const int32_t * indices;
     int64_t n_bins;
+    int64_t n_keys;
+    int64_t query_stride;
+
+    __device__ fattn_indexed_bias for_head(int64_t first_query, int head) const {
+        return {table + first_query*query_stride + head*n_bins, indices + first_query*n_keys, n_bins, n_keys, query_stride};
+    }
+
+    __device__ half add(half mask, int query, int key) const {
+        const int bin = indices[query*n_keys + key];
+        return uint32_t(bin) < n_bins ? __float2half(__half2float(mask) + table[query*query_stride + bin]) : mask;
+    }
 };
 
 typedef void (* fattn_kernel_t)(
@@ -983,7 +994,7 @@ static __global__ void flash_attn_combine_results(
         const float  * VKQ_parts_ptr,
         const float2 * VKQ_meta_ptr,
         float * dst_ptr,
-        const int parallel_blocks, const float * sinks) {
+        const int parallel_blocks) {
     ggml_cuda_pdl_lc();
     const float  * GGML_CUDA_RESTRICT VKQ_parts = VKQ_parts_ptr;
     const float2 * GGML_CUDA_RESTRICT VKQ_meta  = VKQ_meta_ptr;
@@ -1018,13 +1029,13 @@ static __global__ void flash_attn_combine_results(
 
     __syncthreads();
 
-    float kqmax = sinks ? fmaxf(meta[0].x, sinks[head]) : meta[0].x;
+    float kqmax = meta[0].x;
     for (int l = 1; l < parallel_blocks; ++l) {
         kqmax = max(kqmax, meta[l].x);
     }
 
     float VKQ_numerator   = 0.0f;
-    float VKQ_denominator = sinks ? expf(sinks[head] - kqmax) : 0.0f;
+    float VKQ_denominator = 0.0f;
     for (int l = 0; l < parallel_blocks; ++l) {
         const float KQ_max_scale = expf(meta[l].x - kqmax);
 
@@ -1177,7 +1188,7 @@ void launch_fattn(
     // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
     // Only worth the overhead if there is at lease one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
     //     multiple sequences of possibly different lengths, or kv_rows lists that end with padding.
-    const bool scan_mask = Q->ne[1] % ncols1 == 0 && !use_sparse && mask && mask->ne[2] == 1 && n_kv_cols % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1 || kv_rows);
+    const bool scan_mask = !dst->src[6] && !use_sparse && mask && mask->ne[2] == 1 && n_kv_cols % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1 || kv_rows);
     if (scan_mask) {
         const int64_t s31 = mask->nb[1] / sizeof(half2);
         const int64_t s33 = mask->nb[3] / sizeof(half2);
@@ -1317,13 +1328,12 @@ void launch_fattn(
     GGML_ASSERT(block_dim.x % warp_size == 0);
 
     ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num, block_dim, nbytes_shared, main_stream);
-    const float * combine_sinks = dst->src[6] && sinks && !stream_k && parallel_blocks > 1 ? (const float *) sinks->data : nullptr;
     ggml_cuda_kernel_launch(fattn_kernel, launch_params,
         (const char *) Q->data,
         K_data,
         V_data,
         mask ? ((const char *) mask->data) : nullptr,
-        sinks && !combine_sinks ? (const char *) sinks->data : nullptr,
+        sinks ? ((const char *) sinks->data) : nullptr,
         KV_max.ptr,
         kv_rows ? (const int *) kv_rows->data : nullptr,
         !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (float *) KQV->data, dst_tmp_meta.ptr,
@@ -1335,7 +1345,9 @@ void launch_fattn(
         mask ? mask->nb[1] : 0, mask ? mask->nb[2] : 0, mask ? mask->nb[3] : 0,
         fattn_indexed_bias{dst->src[6] ? (const float *) dst->src[6]->data : nullptr,
                            dst->src[7] ? (const int32_t *) dst->src[7]->data : nullptr,
-                           dst->src[6] ? dst->src[6]->ne[1] : 0}
+                           dst->src[6] ? dst->src[6]->ne[0] : 0,
+                           dst->src[7] ? dst->src[7]->ne[0] : 0,
+                           dst->src[6] ? dst->src[6]->ne[0]*dst->src[6]->ne[1] : 0}
     );
     CUDA_CHECK(cudaGetLastError());
 
@@ -1382,7 +1394,7 @@ void launch_fattn(
 
         const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_combine, block_dim_combine, nbytes_shared_combine, main_stream);
         ggml_cuda_kernel_launch(flash_attn_combine_results<DV>, launch_params,
-            dst_tmp.ptr, dst_tmp_meta.ptr, (float *) KQV->data, parallel_blocks, combine_sinks);
+            dst_tmp.ptr, dst_tmp_meta.ptr, (float *) KQV->data, parallel_blocks);
     }
     CUDA_CHECK(cudaGetLastError());
 }

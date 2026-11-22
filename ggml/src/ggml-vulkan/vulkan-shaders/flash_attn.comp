@@ -225,7 +225,7 @@ void main() {
                                 uint query = iq3 * p.N + i * Br + r;
                                 uint bin = uint(data_sparse[query * KV + kcol]);
                                 if (bin < n_bins) {
-                                    float bias = uintBitsToFloat(data_mask_opt[(query * n_bins + bin) * p.neq2 + iq2]);
+                                    float bias = uintBitsToFloat(data_mask_opt[(query * p.neq2 + iq2) * n_bins + bin]);
                                     m = FLOAT_TYPE(float16_t(float(m) + bias));
                                 }
                             }

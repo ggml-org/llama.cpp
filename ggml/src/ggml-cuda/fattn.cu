@@ -671,7 +671,14 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     if (ggml_flash_attn_ext_has_indexed_bias(dst)) {
         const float softcap = ggml_get_op_params_f32(dst, 2);
-        return (Q->ne[0] == 128 || (Q->ne[0] == 64 && softcap == 0.0f)) ? BEST_FATTN_KERNEL_TILE : BEST_FATTN_KERNEL_NONE;
+        if (Q->ne[0] != 128 && !(Q->ne[0] == 64 && softcap == 0.0f)) {
+            return BEST_FATTN_KERNEL_NONE;
+        }
+        if (softcap == 0.0f && Q->ne[1] == 1 && n_kv % FATTN_KQ_STRIDE == 0 &&
+                ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type)) {
+            return BEST_FATTN_KERNEL_VEC;
+        }
+        return BEST_FATTN_KERNEL_TILE;
     }
 
     if (mask && mask->ne[2] != 1) {
