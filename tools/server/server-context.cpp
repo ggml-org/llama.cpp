@@ -1,4 +1,6 @@
 #include "server-context.h"
+
+#include "ggml-backend.h"
 #include <atomic>
 #include <thread>
 #include "base64.hpp"
@@ -362,6 +364,20 @@ struct server_slot {
 
         SRV_TRC(" - saving prompt with length %d, total state size = %.3f MiB (draft: %.3f MiB)\n",
                 (int) prompt.tokens.size(), cur_size / (1024.0 * 1024.0), cur_size_dft / (1024.0 * 1024.0));
+
+        // skip the save when the state plus a safety margin does not fit into the free host memory: at long context the serialized state reaches GiB scale and allocating it can OOM the process or the container (see #21436, #31127)
+        // --cache-ram limits the cache against a fixed budget but not against the actual free memory; this complements it
+        // the free-memory query also accounts for cgroup limits; when no estimate is available (no CPU backend device) the save proceeds, keeping the previous behavior
+        if (ggml_backend_dev_t dev_cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU)) {
+            size_t host_free  = 0;
+            size_t host_total = 0;
+            ggml_backend_dev_memory(dev_cpu, &host_free, &host_total);
+            if (!server_prompt_cache_fits(cur_size, host_free)) {
+                SLT_WRN(*this, "skipping prompt cache save: state size %.3f MiB + %.3f MiB margin exceeds free host memory %.3f MiB\n",
+                        cur_size / (1024.0 * 1024.0), SERVER_PROMPT_CACHE_SAVE_MARGIN / (1024.0 * 1024.0), host_free / (1024.0 * 1024.0));
+                return false;
+            }
+        }
 
         auto * cur = prompt_cache.alloc(prompt, cur_size_tgt, cur_size_dft);
         if (cur == nullptr) {
