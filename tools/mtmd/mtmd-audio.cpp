@@ -129,13 +129,8 @@ void mtmd_audio_cache::fill_mel_filterbank_matrix(int64_t n_mel,
     }
 }
 
-// FFT/IFFT of N = n_sub * n_odd points, n_sub a power of two and n_odd odd (any N > 0):
-//   1. DFT of size n_odd of each of the n_sub subsequences in[r + n_sub * n], all r at once,
-//      the result of subsequence r goes to block bitrev(r) of out
-//   2. in-place radix-2 stages on blocks of 2 * n_odd, 4 * n_odd, ..., N values; for n_odd == 1 the first stage
-//      (twiddle 1) is done while gathering the input in bit-reversed order
-// each output value goes through the same float operations, in the same order, as recursive radix-2 splitting down to
-// an odd-size DFT
+// FFT/IFFT of N = n_sub * n_odd points (n_sub a power of two, n_odd odd): batched odd-size DFT of the n_sub subsequences into bit-reversed blocks, then iterative radix-2 stages
+// matches the previous recursive implementation for finite inputs (the twiddle-1 multiply of the first stage is skipped when n_odd == 1)
 // Template parameters:
 //   Inverse: false = FFT with exp(-2 pi i k / N), no scaling
 //            true  = IFFT with exp(+2 pi i k / N), scales by 1/N (1/n_odd in the DFT, 0.5 per stage)
@@ -1950,7 +1945,7 @@ mtmd_audio_zonos3_synth::mtmd_audio_zonos3_synth(const std::vector<float> & mixe
         b.n_fft = n_fft[i];
         b.cache.fill_sin_cos_table(b.n_fft);
         b.cache.fill_hann_window(b.n_fft, true);
-        b.ifft_in.assign((size_t) b.n_fft * 2 * 4, 0.0f);
+        b.ifft_in.assign((size_t) b.n_fft * 2, 0.0f);
         b.ifft_out.assign((size_t) b.n_fft * 2 * 4, 0.0f);
         b.mix_in.assign((size_t) h, 0.0f);
         b.mix_avail = h;
@@ -2111,7 +2106,7 @@ mtmd_audio_streaming_istft::mtmd_audio_streaming_istft(int n_fft, int hop_length
     overlap_buffer(n_fft, 0.0f),
     window_sum_buffer(n_fft, 0.0f),
     padding_to_remove((n_fft - hop_length) / 2),
-    ifft_in(n_fft * 2 * 4, 0.0f),  // extra space for recursive IFFT
+    ifft_in(n_fft * 2, 0.0f),
     ifft_out(n_fft * 2 * 4, 0.0f) {
     GGML_ASSERT(n_fft > 0 && hop_length > 0 && hop_length <= n_fft);
     cache.fill_sin_cos_table(n_fft);
