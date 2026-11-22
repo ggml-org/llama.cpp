@@ -4537,6 +4537,12 @@ llama_context * llama_init_from_model(
         return nullptr;
     }
 
+    // DeepSeek-V4 concatenates raw and compressed KV without a type conversion.
+    if (model->arch == LLM_ARCH_DEEPSEEK4 && params.ctx_type != LLAMA_CONTEXT_TYPE_MTP && params.type_k != params.type_k_swa) {
+        LLAMA_LOG_ERROR("%s: model does not support different full-attention and SWA cache types (%s and %s)\n", __func__, ggml_type_name(params.type_k), ggml_type_name(params.type_k_swa));
+        return nullptr;
+    }
+
     if (fp8_cache) {
         for (uint32_t il = 0; il < model->hparams.n_layer_all; ++il) {
             if (!model->hparams.has_kv(il)) {
