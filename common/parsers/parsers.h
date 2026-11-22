@@ -53,6 +53,8 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template & t
 
 common_chat_params common_chat_params_init_gigachat_v3(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 
+common_chat_params common_chat_params_init_gigachat_v3_5(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
+
 common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 
 common_chat_params common_chat_params_init_harmony_xml(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
