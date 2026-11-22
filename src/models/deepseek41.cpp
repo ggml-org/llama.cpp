@@ -649,9 +649,13 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
         const int64_t k_sel    = top_k->ne[0];
         const int64_t n_raw    = raw_k->ne[2];
 
+        // tokens of each stream are contiguous in the ubatch (split_equal), n_tps per stream
+        const int64_t n_tps = nt/n_stream;
+        GGML_ASSERT(n_tps*n_stream == nt);
+
         // few queries per stream: attend over [window | top-k rows of the query], one FA stream per query; same keys and mask as dense, different key order
         const bool gather = sparse && cparams.flash_attn && raw_mask->type == GGML_TYPE_F16 && ci.kq_mask->type == GGML_TYPE_F16 &&
-                ((n_stream == 1 && nt <= 32) || nt == n_stream);
+                n_tps <= 32;
 
         if (gather) {
             // ggml_top_k returns the rows in no fixed order and FA sums the keys in that order: sort them so the result is deterministic
@@ -667,13 +671,10 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
             // built once per (storage, top-k) pair
             ggml_tensor *& comp_k = gather_k_of[{rd, topk_src}];
             if (!comp_k) {
-                if (n_stream == 1) {
-                    ggml_tensor * src_rows = ggml_view_3d(ctx0, comp_all, n_embd_head, n_comp, 1, comp_all->nb[2], comp_all->nb[3], 0);
-                    comp_k = ggml_get_rows(ctx0, src_rows, ggml_reshape_1d(ctx0, sel, k_sel*nt));
-                } else {
-                    ggml_tensor * src_rows = ggml_view_3d(ctx0, comp_all, n_embd_head, n_comp, n_stream, comp_all->nb[2], comp_all->nb[3], 0);
-                    comp_k = ggml_get_rows(ctx0, src_rows, sel);
-                }
+                // each stream's tokens pick rows of their own stream: [k_sel*n_tps, 1, n_stream] ids into [n_embd_head, n_comp, 1, n_stream]
+                ggml_tensor * src_rows = ggml_view_4d(ctx0, comp_all, n_embd_head, n_comp, 1, n_stream,
+                        comp_all->nb[2], comp_all->nb[3], comp_all->nb[3], 0);
+                comp_k = ggml_get_rows(ctx0, src_rows, ggml_reshape_3d(ctx0, sel, k_sel*n_tps, 1, n_stream));
                 comp_k = ggml_reshape_4d(ctx0, comp_k, n_embd_head, 1, k_sel, nt); // F32 (get_rows dequantizes)
                 if (k_rot) {
                     // quantized K cache: the window is stored rotated, the compressed rows are not
@@ -685,23 +686,28 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
                 cb(comp_k, "comp_k_sel", il);
             }
 
-            if (n_stream == 1 && nt > 1) {
+            if (n_tps > 1) {
+                // one window copy per query, next to the other queries of its stream: [n_embd_head, n_raw, n_tps, n_stream]
+                GGML_ASSERT(raw_k->ne[1] == 1);
+                ggml_tensor * win = ggml_view_4d(ctx0, raw_k, n_embd_head, n_raw, 1, n_stream,
+                        raw_k->nb[2], raw_k->nb[3], raw_k->nb[3], 0);
                 if (ggml_is_quantized(raw_k->type)) {
                     // no REPEAT kernel for quantized types: byte-exact copies by doubling concats
                     ggml_tensor * rep = nullptr;
-                    ggml_tensor * pw  = raw_k;
-                    for (int64_t n = nt; n > 0; n >>= 1) {
+                    ggml_tensor * pw  = win;
+                    for (int64_t n = n_tps; n > 0; n >>= 1) {
                         if (n & 1) {
-                            rep = rep ? ggml_concat(ctx0, rep, pw, 3) : pw;
+                            rep = rep ? ggml_concat(ctx0, rep, pw, 2) : pw;
                         }
                         if (n > 1) {
-                            pw = ggml_concat(ctx0, pw, pw, 3);
+                            pw = ggml_concat(ctx0, pw, pw, 2);
                         }
                     }
-                    raw_k = rep;
+                    win = rep;
                 } else {
-                    raw_k = ggml_repeat_4d(ctx0, raw_k, n_embd_head, 1, n_raw, nt);
+                    win = ggml_repeat_4d(ctx0, win, n_embd_head, n_raw, n_tps, n_stream);
                 }
+                raw_k = ggml_reshape_4d(ctx0, win, n_embd_head, 1, n_raw, nt);
             }
             ggml_tensor * k_all = ggml_concat(ctx0, raw_k, comp_k, 2);
 
