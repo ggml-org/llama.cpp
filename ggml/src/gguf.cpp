@@ -327,6 +327,10 @@ struct gguf_reader {
         if (!read(tmp)) {
             return false;
         }
+        if (tmp < 0 || tmp >= GGML_TYPE_COUNT) {
+            GGML_LOG_ERROR("%s: invalid ggml type %d (should be in [0, %d))\n", __func__, tmp, GGML_TYPE_COUNT);
+            return false;
+        }
         dst = ggml_type(tmp);
         return true;
     }
@@ -334,6 +338,10 @@ struct gguf_reader {
     bool read(enum gguf_type & dst) const {
         int32_t tmp = -1;
         if (!read(tmp)) {
+            return false;
+        }
+        if (tmp < 0 || tmp >= GGUF_TYPE_COUNT) {
+            GGML_LOG_ERROR("%s: invalid GGUF type %d (should be in [0, %d))\n", __func__, tmp, GGUF_TYPE_COUNT);
             return false;
         }
         dst = gguf_type(tmp);
@@ -555,7 +563,7 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
 
         for (int64_t i = 0; ok && i < n_kv; ++i) {
             std::string key;
-            gguf_type   type     = gguf_type(-1);
+            gguf_type   type     = GGUF_TYPE_COUNT;
             bool        is_array = false;
             uint64_t    n        = 1;
 
@@ -581,7 +589,7 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
             }
 
             ok = ok && gr.read(type);
-            if (type == GGUF_TYPE_ARRAY) {
+            if (ok && type == GGUF_TYPE_ARRAY) {
                 is_array = true;
                 ok = ok && gr.read(type);
                 ok = ok && gr.read(n);
@@ -724,17 +732,10 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
 
         // tensor type
         {
-            int32_t raw_type = -1;
-            ok = ok && gr.read(raw_type);
-
-            // check that tensor type is within defined range before forming enum ggml_type
-            if (!ok || raw_type < 0 || raw_type >= GGML_TYPE_COUNT) {
-                GGML_LOG_ERROR("%s: tensor '%s' has invalid ggml type %d. should be in [0, %d)\n",
-                    __func__, info.t.name, raw_type, GGML_TYPE_COUNT);
-                ok = false;
+            ok = ok && gr.read(info.t.type);
+            if (!ok) {
                 break;
             }
-            info.t.type = (enum ggml_type) raw_type;
 
             const size_t  type_size = ggml_type_size(info.t.type);
             const int64_t blck_size = ggml_blck_size(info.t.type);

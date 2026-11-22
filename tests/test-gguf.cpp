@@ -157,7 +157,7 @@ static std::vector<std::pair<enum gguf_type, enum gguf_type>> get_kv_types(std::
             continue;
         }
 
-        kv_types.push_back(std::make_pair(type, gguf_type(-1)));
+        kv_types.push_back(std::make_pair(type, GGUF_TYPE_COUNT));
     }
     std::shuffle(kv_types.begin(), kv_types.end(), rng);
 
@@ -902,7 +902,6 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
         printf("\n");
     }
 
-
     return std::make_pair(npass, ntest);
 }
 
@@ -993,6 +992,44 @@ static std::pair<int, int> test_handcrafted_overflow_guards() {
         }
         ntest++;
         fclose(file_bad_stride);
+    }
+
+    FILE * file_bad_kv_type = tmpfile();
+    if (file_bad_kv_type) {
+        const char magic[4] = { 'G', 'G', 'U', 'F' };
+        const uint32_t version = GGUF_VERSION;
+        const uint64_t n_tensors = 0;
+        const uint64_t n_kv = 1;
+        const char kname[] = "bad_kv";
+        const uint64_t key_len = strlen(kname);
+        const int32_t bad_kv_type = -1;
+        const uint32_t dummy_val = 0;
+
+        helper_write(file_bad_kv_type, magic, sizeof(magic));
+        helper_write(file_bad_kv_type, version);
+        helper_write(file_bad_kv_type, n_tensors);
+        helper_write(file_bad_kv_type, n_kv);
+        helper_write(file_bad_kv_type, key_len);
+        helper_write(file_bad_kv_type, kname, key_len);
+        helper_write(file_bad_kv_type, bad_kv_type);
+        helper_write(file_bad_kv_type, dummy_val);
+        rewind(file_bad_kv_type);
+
+        struct gguf_init_params params = {
+            /*.no_alloc =*/ true,
+            /*.ctx      =*/ nullptr,
+        };
+        struct gguf_context * ctx_bad_kv = gguf_init_from_file_ptr(file_bad_kv_type, params);
+        printf("%s: kv_bad_type_rejected: ", __func__);
+        if (ctx_bad_kv == nullptr) {
+            printf("\033[1;32mOK\033[0m\n");
+            npass++;
+        } else {
+            printf("\033[1;31mFAIL\033[0m\n");
+            gguf_free(ctx_bad_kv);
+        }
+        ntest++;
+        fclose(file_bad_kv_type);
     }
 
     return std::make_pair(npass, ntest);
