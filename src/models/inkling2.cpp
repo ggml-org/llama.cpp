@@ -384,8 +384,9 @@ ggml_tensor * llama_model_inkling2::graph::build_layer(int il, int ip, ggml_tens
         // the sink logit t is per query: exp(s - t)/(1 + sum(exp(s - t))) = exp(s)/(exp(t) + sum(exp(s))), with a zero sink
         table = ggml_sub(ctx0, table, ggml_reshape_3d(ctx0, sinks, 1, n_head, n_tokens));
 
-        // keep shape and split state of sinks, even if 1D [n_head] would be enough
-        sinks = ggml_fill(ctx0, sinks, 0.0f);
+        // keep split state of sinks on the head axis
+        sinks = ggml_view_1d(ctx0, sinks, n_head, 0);
+        sinks = ggml_fill(ctx0, ggml_reshape_1d(ctx0, sinks, n_head), 0.0f);
 
         cur = build_attn(inp,
                 nullptr, nullptr,
