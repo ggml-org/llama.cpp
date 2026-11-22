@@ -594,5 +594,36 @@ int main()
         {LLAMA_GRETYPE_END, 0},
     });
 
+    // rule names may contain uppercase letters, digits, and hyphens
+    verify_parsing(R"""(
+        root ::= camelCase
+        camelCase ::= "a"
+        UPPER ::= "b"
+        rule-1 ::= "c"
+        MiXeD-123 ::= "d"
+    )""", {
+        {"MiXeD-123", 4},
+        {"UPPER", 2},
+        {"camelCase", 1},
+        {"root", 0},
+        {"rule-1", 3},
+    }, {
+        // root (index 0)
+        {LLAMA_GRETYPE_RULE_REF, /* camelCase */ 1},
+        {LLAMA_GRETYPE_END, 0},
+        // camelCase (index 1)
+        {LLAMA_GRETYPE_CHAR, 'a'},
+        {LLAMA_GRETYPE_END, 0},
+        // UPPER (index 2)
+        {LLAMA_GRETYPE_CHAR, 'b'},
+        {LLAMA_GRETYPE_END, 0},
+        // rule-1 (index 3)
+        {LLAMA_GRETYPE_CHAR, 'c'},
+        {LLAMA_GRETYPE_END, 0},
+        // MiXeD-123 (index 4)
+        {LLAMA_GRETYPE_CHAR, 'd'},
+        {LLAMA_GRETYPE_END, 0},
+    });
+
     return 0;
 }
