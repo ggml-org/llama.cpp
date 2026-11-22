@@ -41,3 +41,7 @@ void ggml_cuda_op_mul_l2_norm(ggml_backend_cuda_context & ctx, const ggml_cgraph
 // CPY, or -1.
 int  ggml_cuda_match_rel_bias(const ggml_cgraph * cgraph, int i, bool check_memory = true);
 void ggml_cuda_op_rel_bias(ggml_backend_cuda_context & ctx, const ggml_cgraph * cgraph, int i, int last);
+
+// the same bias for a prompt batch: GET_ROWS from the per-token table -> views -> CONT -> ADD(mask) -> CPY(F16)
+int  ggml_cuda_match_rel_bias_batch(const ggml_cgraph * cgraph, int i, bool check_memory = true);
+void ggml_cuda_op_rel_bias_batch(ggml_backend_cuda_context & ctx, const ggml_cgraph * cgraph, int i, int last);

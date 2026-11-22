@@ -5143,6 +5143,87 @@ struct test_rel_bias : public test_case {
     }
 };
 
+// Inkling 2 relative-position bias for a prompt batch, as the per-head F16 mask flash attention takes: the
+// per-token table, gathered by distance, transposed to [n_kv, n_tps, n_head, n_stream], plus the mask (fused by CUDA)
+struct test_rel_bias_batch : public test_case {
+    const int64_t n_rel;
+    const int64_t n_head;
+    const int64_t n_ext;
+    const int64_t n_kv;
+    const int64_t n_tps;
+    const int64_t n_stream;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "REL_BIAS_BATCH";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_nmse_err() override {
+        return 1e-5; // F16 output
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR6(n_rel, n_head, n_ext, n_kv, n_tps, n_stream);
+    }
+
+    test_rel_bias_batch(int64_t n_rel, int64_t n_head, int64_t n_ext, int64_t n_kv, int64_t n_tps, int64_t n_stream = 1)
+        : n_rel(n_rel), n_head(n_head), n_ext(n_ext), n_kv(n_kv), n_tps(n_tps), n_stream(n_stream) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t n_tokens = n_tps*n_stream;
+        ggml_tensor * r     = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_rel, n_head, n_tokens);
+        ggml_tensor * bias  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_rel, n_ext);
+        ggml_tensor * sinks = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_head, n_tokens);
+        ggml_tensor * rel   = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_kv, n_tokens);
+        ggml_tensor * mask  = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, n_kv, n_tps, 1, n_stream);
+        ggml_set_name(r, "r");
+        ggml_set_name(bias, "bias");
+        ggml_set_name(sinks, "sinks");
+        ggml_set_name(rel, "rel");
+        ggml_set_name(mask, "mask");
+
+        ggml_tensor * table = ggml_pad(ctx, bias, 0, 1, 0, 0);
+        if (gf) {
+            ggml_build_forward_expand(gf, table);
+        }
+        table = ggml_mul_mat(ctx, table, r);                                       // [n_ext + 1, n_head, n_tokens]
+        table = ggml_sub(ctx, table, ggml_reshape_3d(ctx, sinks, 1, n_head, n_tokens));
+        table = ggml_cont(ctx, ggml_permute(ctx, table, 1, 0, 2, 3));              // [n_head, n_ext + 1, n_tokens]
+
+        ggml_tensor * kq_b = ggml_get_rows(ctx, table, rel);                       // [n_head, n_kv, n_tokens]
+        kq_b = ggml_reshape_4d(ctx, kq_b, n_head, n_kv, n_tps, n_stream);
+        kq_b = ggml_cont(ctx, ggml_permute(ctx, kq_b, 2, 0, 1, 3));               // [n_kv, n_tps, n_head, n_stream]
+
+        ggml_tensor * out = ggml_cast(ctx, ggml_add(ctx, kq_b, mask), GGML_TYPE_F16);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        std::mt19937 rng(42);
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_I32) {
+                std::vector<int32_t> v(ggml_nelements(t));
+                std::uniform_int_distribution<int32_t> d(0, (int32_t) n_ext);
+                for (auto & x : v) {
+                    x = d(rng);
+                }
+                ggml_backend_tensor_set(t, v.data(), 0, ggml_nbytes(t));
+            } else if (strcmp(t->name, "mask") == 0) {
+                std::vector<float> v(ggml_nelements(t));
+                for (size_t i = 0; i < v.size(); ++i) {
+                    v[i] = i % 3 == 0 ? -10000.0f : 0.0f;
+                }
+                ggml_backend_tensor_set(t, v.data(), 0, ggml_nbytes(t));
+            } else if (t->op == GGML_OP_NONE) {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // MUL(x, w) -> L2_NORM [-> SCALE] (Inkling 2 clipped Q and R, fused by CUDA)
 struct test_mul_l2_norm : public test_case {
     const std::array<int64_t, 4> ne;
@@ -12370,6 +12451,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_rel_bias(16, 24, 1024, 256));
     test_cases.emplace_back(new test_rel_bias(16, 24, 4096, 4096));
     test_cases.emplace_back(new test_rel_bias(8, 5, 100, 300));
+    test_cases.emplace_back(new test_rel_bias_batch(16, 24, 1024, 1536, 8));
+    test_cases.emplace_back(new test_rel_bias_batch(16, 24, 1024, 300, 5));
+    test_cases.emplace_back(new test_rel_bias_batch(16, 24, 4096, 4096, 64));
+    test_cases.emplace_back(new test_rel_bias_batch(8, 5, 100, 300, 3, 2));
 
     // per-channel scale, L2 norm with a clip threshold as eps, optional rescale (Inkling 2 Q and R)
     for (bool with_scale : { false, true }) {
@@ -14693,6 +14778,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, kv, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0, {0, 1, 2, 3}, true, false, 2048));
         test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, kv, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_BF16, GGML_TYPE_BF16, {0, 1, 2, 3}, true, false, 2048));
         test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, kv, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 1, 2, 3}, true, false, 0));
+    }
+
+    // Inkling 2 per-head F16 mask for a 128-token prompt batch over a long context
+    for (int64_t n_kv : { 32768, 111616 }) {
+        test_cases.emplace_back(new test_rel_bias_batch(16, 24, 1024, n_kv, 128));
     }
 
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {8, 1}, 7680, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));

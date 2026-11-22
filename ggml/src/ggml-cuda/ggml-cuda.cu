@@ -5494,6 +5494,14 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         }
     }
 
+    if (node->op == GGML_OP_GET_ROWS) {
+        const int last = ggml_cuda_match_rel_bias_batch(cgraph, i);
+        if (last > 0) {
+            ggml_cuda_op_rel_bias_batch(*cuda_ctx, cgraph, i, last);
+            return last - i;
+        }
+    }
+
     if (node->op == GGML_OP_MUL_MAT) {
         const int last = ggml_cuda_match_ctrl_mix(cgraph, i);
         if (last > 0) {
@@ -5965,6 +5973,8 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
                     if (last < 0) {
                         last = ggml_cuda_match_ctrl_mix(cgraph, i, false);
                     }
+                } else if (op == GGML_OP_GET_ROWS) {
+                    last = ggml_cuda_match_rel_bias_batch(cgraph, i, false);
                 }
                 if (last > i) {
                     add_alloc_deps(i, last);
