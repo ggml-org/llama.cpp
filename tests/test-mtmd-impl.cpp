@@ -609,6 +609,50 @@ MAKE_TEST(test_audio_preprocessor_whisper_chunks) {
     }
 }
 
+MAKE_TEST(test_audio_preprocessor_qwen3a_tail) {
+    mtmd_hparams hparams;
+    hparams.n_mel_bins        = 128;
+    hparams.audio_sample_rate = 16000;
+    hparams.audio_n_fft       = 400;
+    hparams.audio_window_len  = 400;
+    hparams.audio_hop_len     = 160;
+
+    ggml_backend_ptr backend(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
+    ggml_backend_t backends[] = { backend.get() };
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends, nullptr, 1, 256, false, true));
+
+    mtmd_audio_preprocessor_qwen3a preproc(hparams, sched.get());
+    preproc.initialize();
+
+    // one 800-frame window covers 128000 samples (hop 160), so longer audio is split;
+    // the last window is emitted with its exact frame count, the graph pads the final 100-frame chunk
+    // { sample count, expected n_len of each output window }
+    const std::vector<std::pair<size_t, std::vector<int64_t>>> cases = {
+        {       0, {}          },
+        {       1, {1}         },
+        {   32000, {200}       },
+        {  128000, {800}       },
+        {  128160, {800, 1}    },
+        {  168000, {800, 250}  },
+        {  170080, {800, 263}  },
+        {  176000, {800, 300}  },
+    };
+
+    for (const auto & [n_samples, expected] : cases) {
+        const std::string name = std::to_string(n_samples) + " samples";
+        std::vector<float> samples(n_samples, 0.0f);
+        if (n_samples > 0) {
+            samples.back() = 0.5f;
+        }
+        mtmd_audio_preproc_out out = preproc.preprocess(samples.data(), samples.size());
+        t.assert_equal("windows for " + name, expected.size(), out.entries.size());
+        for (size_t i = 0; i < out.entries.size(); i++) {
+            t.assert_equal("frames for " + name, expected[i], out.entries[i].nx());
+            t.assert_equal("mel bins for " + name, 128, out.entries[i].ny());
+        }
+    }
+}
+
 MAKE_TEST(test_audio_preprocessor_conformer) {
     mtmd_hparams hparams;
     hparams.n_mel_bins        = 128;
@@ -1060,6 +1104,27 @@ MAKE_TEST(test_kokoro_istft) {
         max_err = std::max(max_err, std::fabs(audio[i] - 1.0f / 3.0f));
     }
     t.assert_true("constant signal, max error " + std::to_string(max_err), max_err < 1e-4f);
+}
+
+// 13 tokens per 100-frame chunk; the tail is ceil^3 (one halving per stride-2 conv layer)
+MAKE_TEST(test_qwen3a_tokens_for_frames) {
+    const std::vector<std::pair<int64_t, int64_t>> cases = {
+        {    0,   0 },
+        {    1,   1 },
+        {   99,  13 },
+        {  100,  13 },
+        {  101,  14 },
+        {  110,  15 },
+        {  200,  26 },
+        {  210,  28 },
+        { 1000, 130 },
+        { 1024, 133 },
+    };
+
+    for (const auto & [frames, expected] : cases) {
+        const std::string name = std::to_string(frames) + " frames";
+        t.assert_equal(name, expected, mtmd_graph_qwen3a::qwen3a_tokens_for_frames(frames));
+    }
 }
 
 //
