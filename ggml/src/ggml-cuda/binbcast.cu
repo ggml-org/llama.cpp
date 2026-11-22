@@ -256,6 +256,18 @@ static void launch_bin_bcast_pack(const ggml_tensor * src0, const ggml_tensor * 
         size_t s02 = nb02 / sizeof(src0_t);
         size_t s03 = nb03 / sizeof(src0_t);
 
+        // the index of a dim of size 1 is always 0, so its stride is never applied,
+        // but after collapsing contiguous dims it can be the whole tensor size and exceed 32 bits
+        if (cne0[1] == 1) { s01 = 0; }
+        if (cne0[2] == 1) { s02 = 0; }
+        if (cne0[3] == 1) { s03 = 0; }
+        if (cne1[1] == 1) { s11 = 0; }
+        if (cne1[2] == 1) { s12 = 0; }
+        if (cne1[3] == 1) { s13 = 0; }
+        if (ne1 == 1) { s1 = 0; }
+        if (ne2 == 1) { s2 = 0; }
+        if (ne3 == 1) { s3 = 0; }
+
         GGML_ASSERT(ne0 <= std::numeric_limits<uint32_t>::max());
         GGML_ASSERT(ne1 <= std::numeric_limits<uint32_t>::max());
         GGML_ASSERT(ne2 <= std::numeric_limits<uint32_t>::max());
