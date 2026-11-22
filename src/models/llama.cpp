@@ -198,11 +198,7 @@ llama_model_llama::graph<embed>::graph(const llm_graph_params & params) : llm_gr
                     LLM_FFN_SILU, true,
                     hparams.expert_weights_scale,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
-                    il,
-                    nullptr, nullptr,
-                    model.layers[il].ffn_up_exps_s,
-                    model.layers[il].ffn_gate_exps_s,
-                    model.layers[il].ffn_down_exps_s);
+                    il);
             cb(cur, "ffn_moe_out", il);
         }
         cur = ggml_add(ctx0, cur, ffn_inp);

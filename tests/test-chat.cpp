@@ -7113,6 +7113,28 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // Qwen3-ASR: "language <lang><asr_text><transcript>", the language prefix is delimiter-style reasoning
+    {
+        auto tst = peg_tester("models/templates/Qwen3-ASR.jinja", detailed_debug);
+
+        tst.test("language English<asr_text>And so, my fellow Americans, ask not.")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(simple_assist_msg("And so, my fellow Americans, ask not.", "language English"))
+            .expect_reconstruction()
+            .run();
+
+        tst.test("language None<asr_text>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(simple_assist_msg("", "language None"))
+            .run();
+
+        // reasoning_format none keeps the raw output
+        tst.test("language English<asr_text>Hello")
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .expect_content("language English<asr_text>Hello")
+            .run();
+    }
+
     // Mistral Small 3.2 - FUNC_BRACKET_TAG format: [TOOL_CALLS]func_name[CALL_ID]id[ARGS]{...}
     {
         auto tst = peg_tester("models/templates/Mistral-Small-3.2-24B-Instruct-2506.jinja", detailed_debug);
@@ -8960,7 +8982,7 @@ static void test_reasoning_effort_caps() {
         assert_equals(json(expected).dump(), common_chat_templates_get_caps(tmpls.get()).at("reasoning_effort_levels").dump());
     };
 
-    const std::vector<std::string> all_levels = { "minimal", "low", "medium", "high", "xhigh", "max" };
+    const std::vector<std::string> all_levels = { "none", "minimal", "low", "medium", "high", "xhigh", "max" };
 
     assert_effort_levels("models/templates/deepseek-ai-DeepSeek-V4.jinja", { "max" });
     assert_effort_levels("models/templates/deepseek-ai-DeepSeek-V4-Flash-0731.jinja", { "high", "max" });
@@ -8970,7 +8992,8 @@ static void test_reasoning_effort_caps() {
     assert_effort_levels("models/templates/upstage-Solar-Open-100B.jinja", { "low" });
     assert_effort_levels("models/templates/muse-glimmer.jinja", all_levels);
     assert_effort_levels("models/templates/openai-gpt-oss-120b.jinja", all_levels);
-    assert_effort_levels("models/templates/Cohere2MoE.jinja", {});
+    assert_effort_levels("models/templates/Cohere2MoE.jinja", { "none" });
+    assert_effort_levels("models/templates/thinkingmachines-Inkling-2-Small.jinja", { "none", "minimal", "low", "medium", "high", "max" });
     assert_effort_levels("models/templates/Qwen-Qwen3-0.6B.jinja", {});
 
     auto assert_effort_rejected = [](const std::string & path, const std::vector<std::string> & expected) {

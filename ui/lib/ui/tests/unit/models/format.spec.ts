@@ -5,7 +5,7 @@ import {
 	getAvatarUrl,
 	minMemoryTierGb,
 	summarizeSizes
-} from './format.js';
+} from '../../../src/lib/models/format.js';
 import { describe, expect, it } from 'vite-plus/test';
 
 describe('Model UI formatting', () => {

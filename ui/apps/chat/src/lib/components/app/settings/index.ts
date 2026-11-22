@@ -53,6 +53,15 @@ export { default as SettingsResetButton } from './SettingsResetButton.svelte';
 export { default as SettingsChatImportExportTab } from './SettingsChat/SettingsChatImportExportTab.svelte';
 
 /**
+ * **SettingsChatVoiceTab** - Voice section of the settings
+ *
+ * The registry's voice fields, with the transcription model picker between them:
+ * in router mode it lists the server's models with audio input, on a single-model
+ * server it says whether that model can transcribe.
+ */
+export { default as SettingsChatVoiceTab } from './SettingsChat/SettingsChatVoiceTab.svelte';
+
+/**
  * Section wrapper for import/export sections. Displays a title, description,
  * icon button, and optional summary of recent actions.
  */

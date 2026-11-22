@@ -57,6 +57,7 @@ export type {
 export type {
 	AttachmentMenuItem,
 	ChatUploadedFile,
+	ChatUploadedVoice,
 	ChatAttachmentDisplayItem,
 	ChatMessageSiblingInfo,
 	ChatMessageActions,

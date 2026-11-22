@@ -16,7 +16,7 @@
 		SETTINGS_KEYS
 	} from '#lib/constants/index.ts';
 	import { ModelDownloadConfirmAction } from '#lib/enums/index.ts';
-	import { modelsStore, settingsStore } from '#lib/stores/index.ts';
+	import { modelsStore, settingsStore, voiceStore } from '#lib/stores/index.ts';
 	import {
 		type GroupedModelOptions,
 		groupModelFamilies,
@@ -53,6 +53,12 @@
 		showOrgName = true
 	}: Props = $props();
 	let render = $derived(renderOption ?? defaultOption);
+	// a loaded model that only transcribes dictation is listed apart from the chat models;
+	// the conversation's own model stays with them, even when it also dictates
+	const isDictationOnly = (item: ModelItem) =>
+		item.option.model === voiceStore.dictationModel && item.option.model !== currentModel;
+	let loadedForDictation = $derived(loaded.filter(isDictationOnly));
+	let loadedForChat = $derived(loaded.filter((item) => !isDictationOnly(item)));
 	// a large catalog mounts a window at a time: the sentinel at the end of the list
 	// grows the window when it scrolls into view
 	let visibleCount = $state(MODEL_ROW_WINDOW);
@@ -180,9 +186,25 @@
 			<Power class="size-icon-sm shrink-0" />
 		{/snippet}
 
-		{#each loaded as item (item.option.id)}
+		{#each loadedForChat as item (item.option.id)}
 			{@render render(item, !showOrgName)}
 		{/each}
+
+		{#if loadedForDictation.length > 0}
+			<!-- the model that transcribes dictation, apart from the ones to chat with -->
+			{#if loadedForChat.length > 0}
+				<p
+					class="m-0 px-2 pt-2 pb-1 text-label-sm text-muted-foreground/70 select-none"
+					data-slot="models-loaded-dictation-heading"
+				>
+					For dictation
+				</p>
+			{/if}
+
+			{#each loadedForDictation as item (item.option.id)}
+				{@render render(item, !showOrgName)}
+			{/each}
+		{/if}
 	</ModelsSection>
 {/if}
 

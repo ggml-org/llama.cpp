@@ -50,5 +50,6 @@ export enum AttachmentLabel {
 	FILE = 'File',
 	MCP_PROMPT = 'MCP Prompt',
 	MCP_RESOURCE = 'MCP Resource',
-	PDF_FILE = 'PDF File'
+	PDF_FILE = 'PDF File',
+	VOICE_TRANSCRIPT = 'Voice message transcript'
 }

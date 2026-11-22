@@ -87,6 +87,17 @@ export const SETTINGS_KEYS = {
 	TYP_P: 'typ_p',
 	// General
 	USE_HUGGING_FACE_HUB: 'useHuggingFaceHub',
+	// Voice
+	VOICE_AUTO_GAIN: 'voiceAutoGain',
+	VOICE_BOOST: 'voiceBoost',
+	VOICE_COLLAPSE_TRANSCRIPTS: 'voiceCollapseTranscripts',
+	VOICE_ECHO_CANCELLATION: 'voiceEchoCancellation',
+	VOICE_INPUT_MODE: 'voiceInputMode',
+	VOICE_MICROPHONE: 'voiceMicrophone',
+	VOICE_NOISE_SUPPRESSION: 'voiceNoiseSuppression',
+	VOICE_TRANSCRIBE_MESSAGES: 'voiceTranscribeMessages',
+	VOICE_TRANSCRIPTION_LANGUAGE: 'voiceTranscriptionLanguage',
+	VOICE_TRANSCRIPTION_MODEL: 'voiceTranscriptionModel',
 	XTC_PROBABILITY: 'xtc_probability',
 	XTC_THRESHOLD: 'xtc_threshold'
 } as const;

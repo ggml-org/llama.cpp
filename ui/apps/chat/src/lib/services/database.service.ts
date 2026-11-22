@@ -573,6 +573,16 @@ export class DatabaseService {
 	}
 
 	/**
+	 * Gets the messages written at or after `timestamp`, in any conversation.
+	 *
+	 * @param timestamp - Epoch ms
+	 * @returns Messages, oldest first
+	 */
+	static async getMessagesSince(timestamp: number): Promise<DatabaseMessage[]> {
+		return await db[IDXDB_TABLES.messages].where('timestamp').aboveOrEqual(timestamp).toArray();
+	}
+
+	/**
 	 * Imports multiple conversations and their messages.
 	 * Skips conversations that already exist.
 	 *

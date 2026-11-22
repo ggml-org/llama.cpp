@@ -23,7 +23,7 @@ void llama_model_hrm_text::load_arch_hparams(llama_model_loader & ml) {
     // the GGUF block count is the expanded cache-slot count
     // 64-bit: a 32-bit product can wrap and match n_layer(), then load_arch_tensors() indexes past model.layers
     const uint64_t n_slot = (uint64_t) hparams.n_hrm_layers_per_stack * hparams.n_hrm_h_cycles * (hparams.n_hrm_l_cycles + 1);
-    if (hparams.n_hrm_layers_per_stack >= hparams.n_layer() || n_slot != hparams.n_layer()) {
+    if (hparams.n_hrm_layers_per_stack >= hparams.n_layer() || hparams.n_hrm_h_cycles > LLAMA_MAX_LAYERS/2 || hparams.n_hrm_l_cycles >= LLAMA_MAX_LAYERS || n_slot != hparams.n_layer()) {
         throw std::runtime_error(format(
             "hrm: cache-slot count %" PRIu64 " (layers_per_stack %u, h_cycles %u, l_cycles %u) "
             "does not match block_count %u",

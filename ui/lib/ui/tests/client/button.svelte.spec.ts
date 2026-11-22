@@ -1,7 +1,7 @@
 import { createRawSnippet } from 'svelte';
 import { describe, expect, it, vi } from 'vite-plus/test';
 import { render } from 'vitest-browser-svelte';
-import Button from './button.svelte';
+import Button from '../../src/lib/components/ui/button/button.svelte';
 
 function textSnippet(text: string) {
 	return createRawSnippet(() => ({

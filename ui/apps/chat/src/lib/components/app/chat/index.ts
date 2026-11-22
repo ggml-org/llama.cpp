@@ -80,6 +80,14 @@ export { default as ChatAttachmentsListItemMcpResource } from './ChatAttachments
 export { default as ChatAttachmentsListItemThumbnailFile } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItemThumbnailFile.svelte';
 
 /**
+ * An audio attachment drawn as a clip: a playable waveform (peaks computed from
+ * the audio when it was stored without them) and, for a voice message, its
+ * transcript under it on hover, focus or a tap, with the transcribing and failed
+ * states. `sm` in the chat form, removable; `md` in a sent message.
+ */
+export { default as ChatAttachmentsListItemVoice } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItemVoice.svelte';
+
+/**
  * Thumbnail for image attachments with lazy loading and error fallback.
  * Displays image preview with configurable dimensions. Falls back to placeholder
  * on load error.
@@ -170,11 +178,19 @@ export { default as ChatForm } from './ChatForm/ChatForm.svelte';
 export { default as ChatFormActionsAdd } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionsAdd.svelte';
 
 /**
- * Audio recording button with real-time recording indicator. Records audio
- * and converts to WAV format for upload. Only visible when the active model
- * supports audio modality and setting for automatic audio input is enabled. Shows recording duration while active.
+ * Microphone button: starts a voice message or a dictation (its label says which),
+ * or, disabled, says why no model can take a recording; while recording it is the
+ * stop button. Shown on an empty message when voice input is available and the
+ * setting for the microphone on empty input is on.
  */
 export { default as ChatFormActionRecord } from './ChatForm/ChatFormActions/ChatFormActionRecord.svelte';
+
+/**
+ * The actions row while the chat form records: cancel, the live waveform and the
+ * elapsed time, and stop, with a voice message's streaming text under the waveform
+ * and a waiting state while dictated text is transcribed after recording.
+ */
+export { default as ChatFormActionsRecording } from './ChatForm/ChatFormActions/ChatFormActionsRecording.svelte';
 
 /**
  * Container for chat form action buttons. Arranges file attachment, audio record,

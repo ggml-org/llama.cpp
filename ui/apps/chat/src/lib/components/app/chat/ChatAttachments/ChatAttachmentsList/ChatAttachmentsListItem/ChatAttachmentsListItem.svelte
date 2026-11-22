@@ -1,9 +1,11 @@
 <script lang="ts">
+	import { VoiceWaveformSize } from '@ggml-org/llama-ui/voice';
 	import {
 		ChatAttachmentsListItemMcpPrompt,
 		ChatAttachmentsListItemMcpResource,
 		ChatAttachmentsListItemThumbnailFile,
-		ChatAttachmentsListItemThumbnailImage
+		ChatAttachmentsListItemThumbnailImage,
+		ChatAttachmentsListItemVoice
 	} from '#lib/components/app/index.ts';
 	import { AttachmentType } from '#lib/enums/index.ts';
 	import type {
@@ -12,7 +14,7 @@
 		DatabaseMessageExtraMcpResource,
 		MCPResourceAttachment
 	} from '#lib/types/index.ts';
-	import { isMcpPrompt, isMcpResource, isPdfFile } from '#lib/utils/index.ts';
+	import { isAudioFile, isMcpPrompt, isMcpResource, isPdfFile } from '#lib/utils/index.ts';
 
 	interface Props {
 		class?: string;
@@ -92,6 +94,15 @@
 		attachment={toMcpResourceAttachment(mcpResource, item.id)}
 		class="flex-shrink-0 {className} {scrollClasses}"
 		onclick={() => onMcpResourcePreview?.(mcpResource)}
+	/>
+{:else if isAudioFile(item.attachment, item.uploadedFile)}
+	<!-- a clip plays where it is: the waveform takes the presses a chip would -->
+	<ChatAttachmentsListItemVoice
+		class="{layoutClasses} {className} {scrollClasses}"
+		{item}
+		onRemove={onFileRemove}
+		{readonly}
+		size={readonly ? VoiceWaveformSize.MD : VoiceWaveformSize.SM}
 	/>
 {:else if item.isImage && item.preview}
 	<ChatAttachmentsListItemThumbnailImage

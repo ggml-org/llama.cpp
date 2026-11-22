@@ -69,7 +69,7 @@ def _is_inkling2(dir_model: Path) -> bool:
     if not (dir_model / "config.json").is_file():
         return False
     with open(dir_model / "config.json", encoding="utf-8") as f:
-        return json.load(f).get("model_type") in ("inkling2", "inkling2_text")
+        return json.load(f).get("model_type") in ("inkling2", "inkling2_text", "inkling2_loop", "inkling2_loop_text")
 
 
 @ModelBase.register_hparams_loader(_is_inkling2)
@@ -274,7 +274,62 @@ class Inkling2Model(TextModel):
             yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Inkling2ForConditionalGeneration")
+@ModelBase.register("Inkling2LoopForConditionalGeneration", "Inkling2LoopForCausalLM")
+class Inkling2LoopModel(Inkling2Model):
+    model_arch = gguf.MODEL_ARCH.INKLING2_LOOP
+
+    # raw checkpoint and transformers names of the cross-pass message queries
+    _query_kinds = {
+        "model.middle_cycle_cross_pass_queries": "q",
+        "model.middle_cycle_cross_pass_kv_queries": "kv",
+        "model.cross_pass_messages.queries": "q",
+        "model.cross_pass_messages.kv_queries": "kv",
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._queries: dict[str, Tensor] = {}
+        self.loop = self.hparams["loop_config"]
+        if set(self.loop) != {"core_start", "core_end", "num_passes", "gate_rank", "is_varloop"}:
+            raise ValueError(f"Inkling2Loop: unsupported loop_config keys {sorted(self.loop)}")
+        start, end, block = self.loop["core_start"], self.loop["core_end"], self.hparams["n_layers_per_attn_res_block"]
+        # a fixed loop needs at least 2 passes, a variable loop at least 1
+        min_passes = 1 if self.loop["is_varloop"] else 2
+        if not 0 < start < end <= self.block_count or start % block or end % block or self.loop["num_passes"] < min_passes or self.loop["gate_rank"] < 1:
+            raise ValueError(f"Inkling2Loop: invalid loop_config {self.loop}")
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_loop_start(self.loop["core_start"])
+        self.gguf_writer.add_loop_end(self.loop["core_end"])
+        self.gguf_writer.add_loop_count(self.loop["num_passes"])
+        self.gguf_writer.add_loop_gate_rank(self.loop["gate_rank"])
+        self.gguf_writer.add_loop_varying(self.loop["is_varloop"])
+
+    def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
+        # the reference does not quantize the loop tensors
+        if new_name.endswith(("loop_msg_query.weight", "_ctrl_down.weight", "_ctrl_gain.weight", "_ctrl_forget.weight")):
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name not in self._query_kinds:
+            yield from super().modify_tensors(data_torch, name, bid)
+            return
+        self._queries[self._query_kinds[name]] = data_torch
+        if len(self._queries) < 2:
+            return
+        q, kv = self._queries["q"], self._queries["kv"]
+        start = self.loop["core_start"]
+        if q.shape[0] != 2 * (self.loop["core_end"] - start) or kv.shape != q.shape:
+            raise ValueError(f"Inkling2Loop: cross-pass queries {tuple(q.shape)} and {tuple(kv.shape)} do not match the loop core")
+        # core layer start + i mixes its q, k, v and mlp messages with these four queries
+        for i in range(q.shape[0] // 2):
+            query = torch.stack([q[2 * i], kv[2 * i], kv[2 * i + 1], q[2 * i + 1]])
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.LOOP_MSG_QUERY, start + i, ".weight"), query
+
+
+@ModelBase.register("Inkling2ForConditionalGeneration", "Inkling2LoopForConditionalGeneration")
 class Inkling2VisionModel(MmprojModel):
     def get_vision_config(self):
         config = self.global_config.get("vision_config")
