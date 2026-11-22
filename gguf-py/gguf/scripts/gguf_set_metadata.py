@@ -9,9 +9,21 @@ from pathlib import Path
 if "NO_LOCAL_GGUF" not in os.environ and (Path(__file__).parent.parent.parent.parent / 'gguf-py').exists():
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from gguf import GGUFReader  # noqa: E402
+from gguf import GGUFReader, GGUFValueType  # noqa: E402
 
 logger = logging.getLogger("gguf-set-metadata")
+
+
+def parse_bool(value: str) -> bool:
+    """Parse a CLI boolean value the same way the C++ reader spells it."""
+    lowered = value.strip().lower()
+    if lowered in ("1", "true", "yes", "on"):
+        return True
+    if lowered in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(
+        f"Invalid boolean value {value!r}; expected one of true/false, 1/0, yes/no, on/off"
+    )
 
 
 def minimal_example(filename: str) -> None:
@@ -54,7 +66,16 @@ def set_metadata(reader: GGUFReader, args: argparse.Namespace) -> None:
         logger.error(f'! This tool only supports changing simple values, {repr(args.key)} has unsupported type {field.types}')
         sys.exit(1)
     current_value = field.parts[field.data[0]][0]
-    new_value = handler(args.value)
+    try:
+        # numpy casts any non-empty string to True, so booleans need an
+        # explicit parser instead of handler(args.value).
+        if field.types[0] == GGUFValueType.BOOL:
+            new_value = parse_bool(args.value)
+        else:
+            new_value = handler(args.value)
+    except (ValueError, OverflowError) as exc:
+        logger.error(f'! {exc}')
+        sys.exit(1)
     logger.info(f'* Preparing to change field {repr(args.key)} from {current_value} to {new_value}')
     if current_value == new_value:
         logger.info(f'- Key {repr(args.key)} already set to requested value {current_value}')
