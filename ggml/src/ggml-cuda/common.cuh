@@ -561,8 +561,12 @@ static __device__ __forceinline__ half2 warp_reduce_sum(half2 a) {
 
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_all(int x) {
-    if (width == ggml_cuda_get_physical_warp_size()) {
+    if constexpr (width == ggml_cuda_get_physical_warp_size()) {
         return ggml_cuda_all(x);
+#if defined(GGML_USE_HIP)
+    } else if constexpr (width == 16 || width == 32) {
+        return ggml_cuda_ballot_subgroup<width>(x) == (width == 16 ? 0xffffu : 0xffffffffu);
+#endif
     } else {
 #pragma unroll
         for (int offset = width/2; offset > 0; offset >>= 1) {
@@ -574,8 +578,12 @@ static __device__ __forceinline__ int warp_reduce_all(int x) {
 
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_any(int x) {
-    if (width == ggml_cuda_get_physical_warp_size()) {
+    if constexpr (width == ggml_cuda_get_physical_warp_size()) {
         return ggml_cuda_any(x);
+#if defined(GGML_USE_HIP)
+    } else if constexpr (width == 16 || width == 32) {
+        return ggml_cuda_ballot_subgroup<width>(x) != 0;
+#endif
     } else {
 #pragma unroll
         for (int offset = width/2; offset > 0; offset >>= 1) {
