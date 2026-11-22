@@ -245,7 +245,7 @@ static __global__ __launch_bounds__(256, BLOCKS) void gdn_single(ggml_cuda_gdn_m
                     s.prefix[t] = g;
                     s.beta[t]   = beta;
                 }
-                carry = ggml_cuda_shfl(g, warp_size - 1, warp_size);
+                carry = ggml_cuda_shfl_uniform(g, warp_size - 1);
             }
         }
 #pragma unroll
@@ -323,7 +323,7 @@ static __global__ __launch_bounds__(256, BLOCKS) void gdn_single(ggml_cuda_gdn_m
                 x[j] = col == row ? 1.f : (col < row ? -s.lower[s.lower_index(row, col)] : 0.f);
             }
             for (int pivot = row - 1; pivot > 0; --pivot) {
-                const float xp = ggml_cuda_shfl(x[pivot / warp_size], pivot % warp_size, warp_size);
+                const float xp = ggml_cuda_shfl_uniform(x[pivot / warp_size], pivot % warp_size);
 #pragma unroll
                 for (int j = 0; j < (C + warp_size - 1) / warp_size; ++j) {
                     const int col = lane + warp_size * j;

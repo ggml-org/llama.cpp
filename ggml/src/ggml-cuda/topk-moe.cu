@@ -117,7 +117,7 @@ __device__ void group_mask_warp_inplace(float (&vals)[experts_per_thread], const
     // rank of each group, lower index wins ties
     int rank = 0;
     for (int g = 0; g < n_groups; g++) {
-        const float other = ggml_cuda_shfl(score, g, warp_size);
+        const float other = ggml_cuda_shfl_uniform(score, g);
         rank += other > score || (other == score && g < lane);
     }
     const auto keep = ggml_cuda_ballot(lane < n_groups && rank < n_group_used);
