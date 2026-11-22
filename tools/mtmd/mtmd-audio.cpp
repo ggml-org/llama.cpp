@@ -649,7 +649,8 @@ bool mtmd_audio_preprocessor_qwen3a::process(const float *                 sampl
         return false;
     }
 
-    // WhisperFeatureExtractor drops the last STFT frame, keeping n_samples / hop_length frames
+    // WhisperFeatureExtractor drops the last STFT frame, keeping n_samples / hop_length frames;
+    // sub-hop clips would give 0 frames, clamp to 1 so the cgraph stays non-empty
     const int64_t n_eff = std::max<int64_t>(1, std::min(mel_full.n_len - 1, (int64_t)(n_samples / hparams.audio_hop_len)));
 
     // Whisper-style normalization over the kept frames: clamp to (max - 8), scale to [-1, 1]

@@ -9,7 +9,7 @@ ggml_cgraph * mtmd_graph_qwen3a::build() {
     const int64_t n_mel      = inp->ne[1]; // 128
     const int64_t chunk_size = 100;        // n_window * 2 (n_window=50 from model config)
     const int64_t n_chunks   = (inp->ne[0] + chunk_size - 1) / chunk_size;
-    const int64_t n_tail     = inp->ne[0] % chunk_size;
+    const int64_t n_pre_pad  = inp->ne[0];
 
     GGML_ASSERT(inp->type == GGML_TYPE_F32);
 
@@ -73,8 +73,7 @@ ggml_cgraph * mtmd_graph_qwen3a::build() {
     }
 
     // drop the outputs of the padding in the last chunk
-    const int64_t tokens_per_chunk = n_pos / n_chunks; // 13
-    const int64_t n_out = n_pos - (n_tail > 0 ? tokens_per_chunk - (((n_tail + 1) / 2 + 1) / 2 + 1) / 2 : 0);
+    const int64_t n_out = qwen3a_tokens_for_frames(n_pre_pad);
     inp = ggml_view_2d(ctx0, inp, inp->ne[0], n_out, inp->nb[1], 0);
 
     ggml_tensor * cur = build_vit(inp, n_out,

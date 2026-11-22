@@ -4680,6 +4680,16 @@ int mtmd_model::n_output_tokens_y(const mtmd_image_f32 * img) const {
     return 1;
 }
 
+int64_t qwen3a_tokens_for_frames(int64_t n_frames) {
+    const int64_t chunk_size       = 100; // n_window * 2
+    const int64_t tokens_per_chunk = 13;  // 100 -> 50 -> 25 -> 13 after 3x stride-2 conv2d
+    const int64_t n_full = n_frames / chunk_size;
+    const int64_t n_tail = n_frames % chunk_size;
+    // ceil(ceil(ceil(n_tail / 2) / 2) / 2), one halving per conv layer
+    const int64_t n_tail_tokens = n_tail == 0 ? 0 : (((n_tail + 1) / 2 + 1) / 2 + 1) / 2;
+    return n_full * tokens_per_chunk + n_tail_tokens;
+}
+
 int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
     const auto & params = hparams;
 
@@ -4889,11 +4899,7 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
             } break;
         case PROJECTOR_TYPE_QWEN3A:
             {
-                // chunk_size=100 frames --> 3x stride-2 conv2d --> 13 tokens per chunk, the last chunk may be shorter
-                const int chunk_size       = 100;
-                const int tokens_per_chunk = 13;
-                const int n_tail           = img->nx() % chunk_size;
-                n_patches = (img->nx() / chunk_size) * tokens_per_chunk + (n_tail > 0 ? (((n_tail + 1) / 2 + 1) / 2 + 1) / 2 : 0);
+                n_patches = (int) qwen3a_tokens_for_frames(img->nx());
             } break;
         case PROJECTOR_TYPE_GLMA:
             {

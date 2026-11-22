@@ -1622,3 +1622,7 @@ struct mtmd_model_caps {
 
 // read the modalities of an mmproj file without loading its tensors
 mtmd_model_caps mtmd_model_get_caps(const char * fname);
+
+// audio tokens from n_frames mel frames: 13 per 100-frame chunk, ceil^3(tail) otherwise.
+// shared by the qwen3a graph and mtmd_model::n_output_tokens so they cannot drift
+int64_t qwen3a_tokens_for_frames(int64_t n_frames);
