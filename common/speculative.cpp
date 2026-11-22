@@ -1140,8 +1140,8 @@ protected:
         llama_set_causal_attn(ctx_dft, causal_attn); // DFlash needs non-causal attention unless the model says otherwise
     }
 
-    // only LiliCorr uses this, to keep the context features for its scorer; the other heads only need the KV cache
-    // called after the host copy injection of a chunk, while h_nextn still holds the context features of batch_inject
+    // LiliCorr and the Inkling2 DSpark keep context features from h_nextn; the other heads only need the KV cache
+    // called after the injection of a chunk, while h_nextn still holds the context features of batch_inject
     virtual void store_context_features(llama_seq_id /*seq_id*/, int32_t /*n_chunk*/) {}
 
 public:
@@ -1245,6 +1245,7 @@ public:
                                 __func__, rc, (int) n_chunk, (int) offset);
                         return false;
                     }
+                    store_context_features(seq_id, n_chunk);
                     continue;
                 }
 
@@ -1374,6 +1375,13 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
     // bonus anchor (SpecForge exports) when false: slot 0 is a bonus token, not a prediction slot
     bool sample_from_anchor = true;
 
+    // the Markov head reads the context state of the last committed token (Inkling2 f_rnn)
+    // it comes back from the injection as h_nextn, kept for the last ctx_rows positions of each sequence
+    bool has_markov_context = false;
+    size_t ctx_rows = 0;
+    std::vector<float>     ctx_embd;
+    std::vector<llama_pos> ctx_pos;
+
     common_speculative_impl_draft_dspark(const common_params_speculative & params, uint32_t n_seq)
         : common_speculative_impl_draft_dflash(params, n_seq, COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK)
     {
@@ -1384,6 +1392,15 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
             if (llama_model_meta_val_str(model_dft, "dflash.sample_from_anchor", buf, sizeof(buf)) >= 0) {
                 sample_from_anchor = std::strcmp(buf, "true") == 0;
             }
+            if (llama_model_meta_val_str(model_dft, "dflash.has_markov_context", buf, sizeof(buf)) >= 0) {
+                has_markov_context = std::strcmp(buf, "true") == 0;
+            }
+        }
+
+        if (has_markov_context) {
+            ctx_rows = (size_t) block_size + 1;
+            ctx_embd.resize((size_t) n_seq * ctx_rows * (size_t) n_embd_dec);
+            ctx_pos.assign((size_t) n_seq * ctx_rows, -1);
         }
 
         if (this->params.p_min > 0.0f) {
@@ -1396,16 +1413,50 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
             }
         }
 
-        LOG_INF("%s: - sample_from_anchor=%s\n", __func__, sample_from_anchor ? "true" : "false");
+        LOG_INF("%s: - sample_from_anchor=%s, has_markov_context=%s\n", __func__,
+                sample_from_anchor ? "true" : "false", has_markov_context ? "true" : "false");
 
         // anchor-first DSpark yields a full block_size draft tokens
+        // the context state is read back from h_nextn at every injected row
         init({
             /* .n_draft_max      = */ sample_from_anchor ? block_size : block_size - 1,
             /* .backend_sampling = */ true,
             /* .dev_features     = */ true,
-            /* .nextn_masked     = */ true,
+            /* .nextn_masked     = */ !has_markov_context,
         });
     }
+
+protected:
+    void store_context_features(llama_seq_id seq_id, int32_t n_chunk) override {
+        if (!has_markov_context) {
+            return;
+        }
+        const float * state = llama_get_embeddings_nextn(params.ctx_dft);
+        if (!state) {
+            return;
+        }
+        const llama_pos pos_min = std::max(0, batch_inject.tokens.back().pos[0] - block_size);
+        for (int32_t i = 0; i < n_chunk; ++i) {
+            const llama_pos pos = batch_inject.tokens[i].pos[0];
+            if (pos < pos_min) {
+                continue;
+            }
+            const size_t slot = (size_t) seq_id * ctx_rows + (size_t) pos % ctx_rows;
+            std::memcpy(ctx_embd.data() + slot * (size_t) n_embd_dec, state + (size_t) i * n_embd_dec, (size_t) n_embd_dec * sizeof(float));
+            ctx_pos[slot] = pos;
+        }
+    }
+
+    // context state of the token before the block, nullptr if it was not injected
+    const float * get_context_state(llama_seq_id seq_id, llama_pos pos) const {
+        if (pos < 0) {
+            return nullptr;
+        }
+        const size_t slot = (size_t) seq_id * ctx_rows + (size_t) pos % ctx_rows;
+        return ctx_pos[slot] == pos ? ctx_embd.data() + slot * (size_t) n_embd_dec : nullptr;
+    }
+
+public:
 
     void draft(common_speculative_draft_params_vec & dparams) override {
         auto & ctx_dft = params.ctx_dft;
@@ -1423,16 +1474,26 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
                 continue;
             }
 
+            // the Markov head reads the context state of the token before the block, no draft without it
+            const float * state = has_markov_context ? get_context_state(seq_id, dp.pos0 - 1) : nullptr;
+            if (has_markov_context && !state) {
+                continue;
+            }
+
             common_sampler_reset(smpls[seq_id].get());
 
             const int32_t n = (int32_t) dp.pos0;
 
+            // the block attention is non-causal: a draft with a markov context decodes the full trained block, then reads n_max of it
             const int32_t n_draft = params.n_max;
-            const int32_t n_block_tokens = n_draft + (sample_from_anchor ? 0 : 1);
+            const int32_t n_block_tokens = has_markov_context ? block_size : n_draft + (sample_from_anchor ? 0 : 1);
             i_block_beg[seq_id] = batch.size();
             n_block    [seq_id] = n_block_tokens;
             for (int32_t i = 0; i < n_block_tokens; ++i) {
-                batch.add(i == 0 ? dp.id_last : mask_token_id, n + i, seq_id, true);
+                const int32_t idx = batch.add(i == 0 ? dp.id_last : mask_token_id, n + i, seq_id, true);
+                if (state) {
+                    batch.set_embd_state(idx, { state, 1, (size_t) n_embd_dec });
+                }
             }
         }
 
@@ -1464,7 +1525,8 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
             const float * conf = params.p_min > 0.0f ? llama_get_embeddings_nextn(ctx_dft) : nullptr;
             // bonus-anchor drafts read the mask positions only, like DFlash
             const int32_t i_draft_beg = sample_from_anchor ? 0 : 1;
-            for (int32_t i = i_draft_beg; i < n_block_tokens; ++i) {
+            const int32_t i_draft_end = std::min(n_block_tokens, i_draft_beg + params.n_max);
+            for (int32_t i = i_draft_beg; i < i_draft_end; ++i) {
                 const int32_t idx = beg + i;
 
                 if (conf && conf[(size_t) idx * n_embd_dec] < params.p_min) {
@@ -3135,6 +3197,19 @@ common_speculative_init_result::common_speculative_init_result(
         }
 
         pimpl->model.reset(model_dft);
+
+        // a draft with a markov context decodes its full trained block, whatever n_max is
+        {
+            char buf[32] = {};
+            if (llama_model_meta_val_str(model_dft, "dflash.has_markov_context", buf, sizeof(buf)) >= 0 && std::strcmp(buf, "true") == 0 &&
+                llama_model_meta_val_str(model_dft, "dflash.block_size",         buf, sizeof(buf)) >= 0) {
+                const uint32_t block_size = (uint32_t) std::max(1, std::atoi(buf));
+                cparams.n_outputs_max = std::max(cparams.n_outputs_max, cparams.n_seq_max * block_size);
+                if (cparams.n_outputs_max_per_seq > 1) {
+                    cparams.n_outputs_max_per_seq = std::max(cparams.n_outputs_max_per_seq, block_size);
+                }
+            }
+        }
 
         llama_context * ctx_dft = llama_init_from_model(model_dft, cparams);
         if (ctx_dft == nullptr) {
