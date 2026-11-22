@@ -776,6 +776,13 @@ struct ggml_opencl_mul_mat_kernels {
     cl_kernel kernel_gemm_noshuffle_iq4_nl_q8_1_dp4a;
     cl_kernel kernel_gemm_noshuffle_q4_0_q8_1_dp4a;
     cl_kernel kernel_gemm_noshuffle_q4_0_q8_1_dp4a_act_vload4;
+    cl_kernel kernel_pack_b_f16_coopmat;
+    cl_kernel kernel_gemm_noshuffle_q4_0_f32_coopmat;
+    cl_kernel kernel_gemm_noshuffle_q5_0_f32_coopmat;
+    cl_kernel kernel_gemm_noshuffle_q8_0_f32_coopmat;
+    cl_kernel kernel_gemm_noshuffle_q4_k_f32_coopmat;
+    cl_kernel kernel_gemm_noshuffle_q5_k_f32_coopmat;
+    cl_kernel kernel_gemm_noshuffle_q6_k_f32_coopmat;
     cl_kernel kernel_gemm_coopk_q4_0_q8_1_dp4a_c4;
     cl_kernel kernel_gemm_coopk_q4_0_q8_1_dp4a_c2;
     int       nsg_coopk_dp4a_q4_0  = 8;

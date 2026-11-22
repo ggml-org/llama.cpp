@@ -705,7 +705,8 @@ bool use_q4_0_bin_kernels(const ggml_backend_opencl_context *backend_ctx, const 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     if (!backend_ctx->mul_mat.kernel_gemv_noshuffle_q4_0_f32_32b_trans ||
         !(backend_ctx->mul_mat.kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a8_bin ||
-          backend_ctx->mul_mat.kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a7_bin)) {
+          backend_ctx->mul_mat.kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a7_bin ||
+          backend_ctx->mul_mat.kernel_gemm_noshuffle_q4_0_f32_coopmat)) {
         return false;
     }
     // bin kernels require ne2 == 1 and ne3 == 1 for weights
@@ -722,7 +723,8 @@ bool use_q4_k_bin_kernels(const ggml_backend_opencl_context *backend_ctx, const 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     if (!backend_ctx->mul_mat.kernel_gemv_noshuffle_q4_k_f32_32b_trans ||
         !(backend_ctx->mul_mat.kernel_gemm_noshuffle_q4_k_f32_32b_trans_ila_a8_bin ||
-          backend_ctx->mul_mat.kernel_gemm_noshuffle_q4_k_f32_32b_trans_ila_a7_bin)) {
+          backend_ctx->mul_mat.kernel_gemm_noshuffle_q4_k_f32_32b_trans_ila_a7_bin ||
+          backend_ctx->mul_mat.kernel_gemm_noshuffle_q4_k_f32_coopmat)) {
         return false;
     }
     // bin kernels require ne2 == 1 and ne3 == 1 for weights
@@ -740,7 +742,8 @@ bool use_q5_k_bin_kernels(const ggml_backend_opencl_context *backend_ctx, const 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     if (!backend_ctx->mul_mat.kernel_gemv_noshuffle_q5_k_f32_32b_trans ||
         !(backend_ctx->mul_mat.kernel_gemm_noshuffle_q5_k_f32_32b_trans_ila_a8_bin ||
-          backend_ctx->mul_mat.kernel_gemm_noshuffle_q5_k_f32_32b_trans_ila_a7_bin)) {
+          backend_ctx->mul_mat.kernel_gemm_noshuffle_q5_k_f32_32b_trans_ila_a7_bin ||
+          backend_ctx->mul_mat.kernel_gemm_noshuffle_q5_k_f32_coopmat)) {
         return false;
     }
     return (tensor->ne[0] % 256 == 0) && (tensor->ne[1] % 64 == 0);
@@ -755,7 +758,8 @@ bool use_q6_k_bin_kernels(const ggml_backend_opencl_context * backend_ctx, const
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     if (!backend_ctx->mul_mat.kernel_gemv_noshuffle_q6_k_f32_32b_trans ||
         !(backend_ctx->mul_mat.kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a8_bin ||
-          backend_ctx->mul_mat.kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a7_bin)) {
+          backend_ctx->mul_mat.kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a7_bin ||
+          backend_ctx->mul_mat.kernel_gemm_noshuffle_q6_k_f32_coopmat)) {
         return false;
     }
     // bin kernels require ne2 == 1 and ne3 == 1 for weights

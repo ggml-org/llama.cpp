@@ -172,6 +172,137 @@ static void load_cl_kernels_gemm_coopk(ggml_backend_opencl_context * backend_ctx
         GGML_LOG_CONT(".");
     }
 }
+
+static void load_cl_kernels_coopmat(ggml_backend_opencl_context * backend_ctx) {
+    if (backend_ctx->gpu_family != GPU_FAMILY::ADRENO || !strstr(backend_ctx->device_name.c_str(), "850")) {
+        return;
+    }
+
+    cl_int err;
+    const std::string opts = "-cl-std=CL" + std::to_string(backend_ctx->opencl_c_version.major) + "." +
+                             std::to_string(backend_ctx->opencl_c_version.minor) +
+                             (backend_ctx->adreno_use_large_buffer ? " -qcom-enable-large-buffer" : "");
+
+    // pack_b_f16_coopmat
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "pack_b_f16_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("pack_b_f16_coopmat.cl");
+#endif
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), opts, false);
+        if (!prog) {
+            return;
+        }
+        CL_CHECK((backend_ctx->mul_mat.kernel_pack_b_f16_coopmat = clCreateKernel(prog, "kernel_pack_b_f16_coopmat", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
+        GGML_LOG_CONT(".");
+    }
+
+    // gemm_noshuffle_q4_0_f32_coopmat
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_noshuffle_q4_0_f32_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_noshuffle_q4_0_f32_coopmat.cl");
+#endif
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->mul_mat.kernel_gemm_noshuffle_q4_0_f32_coopmat = clCreateKernel(prog, "kernel_gemm_noshuffle_q4_0_f32_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+
+    // gemm_noshuffle_q5_0_f32_coopmat
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_noshuffle_q5_0_f32_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_noshuffle_q5_0_f32_coopmat.cl");
+#endif
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->mul_mat.kernel_gemm_noshuffle_q5_0_f32_coopmat = clCreateKernel(prog, "kernel_gemm_noshuffle_q5_0_f32_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+
+    // gemm_noshuffle_q8_0_f32_coopmat
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_noshuffle_q8_0_f32_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_noshuffle_q8_0_f32_coopmat.cl");
+#endif
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->mul_mat.kernel_gemm_noshuffle_q8_0_f32_coopmat = clCreateKernel(prog, "kernel_gemm_noshuffle_q8_0_f32_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+
+    // gemm_noshuffle_q4_k_f32_coopmat
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_noshuffle_q4_k_f32_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_noshuffle_q4_k_f32_coopmat.cl");
+#endif
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->mul_mat.kernel_gemm_noshuffle_q4_k_f32_coopmat = clCreateKernel(prog, "kernel_gemm_noshuffle_q4_k_f32_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+
+    // gemm_noshuffle_q5_k_f32_coopmat
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_noshuffle_q5_k_f32_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_noshuffle_q5_k_f32_coopmat.cl");
+#endif
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->mul_mat.kernel_gemm_noshuffle_q5_k_f32_coopmat = clCreateKernel(prog, "kernel_gemm_noshuffle_q5_k_f32_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+
+    // gemm_noshuffle_q6_k_f32_coopmat
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_noshuffle_q6_k_f32_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_noshuffle_q6_k_f32_coopmat.cl");
+#endif
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->mul_mat.kernel_gemm_noshuffle_q6_k_f32_coopmat = clCreateKernel(prog, "kernel_gemm_noshuffle_q6_k_f32_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+}
 #endif
 
 void ggml_cl_load_kernels_mul_mat_adreno(ggml_backend_opencl_context * backend_ctx) {
@@ -2912,6 +3043,7 @@ void ggml_cl_load_kernels_mul_mat_adreno(ggml_backend_opencl_context * backend_c
     }
 
     load_cl_kernels_gemm_coopk(backend_ctx);
+    load_cl_kernels_coopmat(backend_ctx);
 #else
     GGML_UNUSED(backend_ctx);
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
@@ -3908,6 +4040,48 @@ void ggml_cl_mul_mat_q2_0_f32_adreno(ggml_backend_t backend, const ggml_tensor *
 }
 
 
+static bool ggml_cl_mul_mat_coopmat(ggml_backend_opencl_context * backend_ctx, cl_kernel kernel,
+                                    std::initializer_list<cl_mem> weights,
+                                    const ggml_tensor * src1, ggml_tensor * dst, int K, int M, int N) {
+    if (kernel == nullptr || M % 64 != 0 || N < 2) {
+        return false;
+    }
+    ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
+    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    const int n_tiles = CEIL_DIV(N, 64);
+
+    backend_ctx->prealloc_act_trans.allocate(backend_ctx->context, (size_t)n_tiles * 64 * K * sizeof(cl_half));
+
+    cl_kernel pk = backend_ctx->mul_mat.kernel_pack_b_f16_coopmat;
+    CL_CHECK(clSetKernelArg(pk, 0, sizeof(cl_mem),   &extra1->data_device));
+    CL_CHECK(clSetKernelArg(pk, 1, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(pk, 2, sizeof(cl_mem),   &backend_ctx->prealloc_act_trans.buffer));
+    CL_CHECK(clSetKernelArg(pk, 3, sizeof(int),      &K));
+    CL_CHECK(clSetKernelArg(pk, 4, sizeof(int),      &N));
+    size_t p_local[2]  = { 64, 4 };
+    size_t p_global[2] = { (size_t)n_tiles * 64, (size_t)CEIL_DIV(K, 64) * 4 };
+    backend_ctx->enqueue_ndrange_kernel(pk, 2, p_global, p_local, dst);
+
+    cl_uint ka = 0;
+    for (cl_mem w : weights) {
+        CL_CHECK(clSetKernelArg(kernel, ka++, sizeof(cl_mem), &w));
+    }
+    CL_CHECK(clSetKernelArg(kernel, ka++, sizeof(cl_mem),   &backend_ctx->prealloc_act_trans.buffer));
+    CL_CHECK(clSetKernelArg(kernel, ka++, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel, ka++, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel, ka++, sizeof(int),      &K));
+    CL_CHECK(clSetKernelArg(kernel, ka++, sizeof(int),      &M));
+    CL_CHECK(clSetKernelArg(kernel, ka++, sizeof(int),      &N));
+
+    size_t c_local[3]  = { 64, 1, 4 };
+    size_t c_global[3] = { 64, (size_t)(M / 64), (size_t)CEIL_DIV(n_tiles, 4) * 4 };
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, c_global, c_local, dst);
+    return true;
+}
+
 static void ggml_cl_mul_mat_q4_0_f32_adreno_ila(ggml_backend_t backend, const ggml_tensor * src0,
                                                 const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_ASSERT(src0);
@@ -4220,6 +4394,11 @@ void ggml_cl_mul_mat_q4_0_f32_adreno(ggml_backend_t backend, const ggml_tensor *
     const bool use_q40_mc3 = q40_mc3 && (ne1 >= 2 && ne1 <= 4) && (ne01 < 32768);
 
     const bool use_bin = use_q4_0_bin_kernels(backend_ctx, src0);
+
+    if (use_bin && ggml_cl_mul_mat_coopmat(backend_ctx, backend_ctx->mul_mat.kernel_gemm_noshuffle_q4_0_f32_coopmat,
+            { extra0_q4_0->q, extra0_q4_0->d }, src1, dst, K, M, N)) {
+        return;
+    }
 
     if (use_bin) {
         if (use_q40_mc3) {
@@ -4774,6 +4953,11 @@ void ggml_cl_mul_mat_q5_0_f32_adreno(ggml_backend_t backend, const ggml_tensor *
     int M = ne01;
     int N = ne1;
     int K = ne00;
+
+    if (ggml_cl_mul_mat_coopmat(backend_ctx, backend_ctx->mul_mat.kernel_gemm_noshuffle_q5_0_f32_coopmat,
+            { extra0_q5_0->qs, extra0_q5_0->qh, extra0_q5_0->d }, src1, dst, K, M, N)) {
+        return;
+    }
 
     if (ne1 == 1) {
         cl_mem qs_img = nullptr;
@@ -5438,6 +5622,11 @@ void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_tensor *
     int M = ne01;
     int N = ne1;
     int K = ne00;
+
+    if (ggml_cl_mul_mat_coopmat(backend_ctx, backend_ctx->mul_mat.kernel_gemm_noshuffle_q8_0_f32_coopmat,
+            { extra0_q8_0->q, extra0_q8_0->d }, src1, dst, K, M, N)) {
+        return;
+    }
 
     // Multi-column verify GEMV for ne1 2..4, reuses the ne1 == 1 image setup.
     // Default on for X2E, GGML_OPENCL_Q8_0_MC=0/1 forces it.
@@ -6415,6 +6604,11 @@ void ggml_cl_mul_mat_q4_K_f32_adreno(ggml_backend_t backend, const ggml_tensor *
 
     const bool use_bin = use_q4_k_bin_kernels(backend_ctx, src0);
 
+    if (use_bin && ggml_cl_mul_mat_coopmat(backend_ctx, backend_ctx->mul_mat.kernel_gemm_noshuffle_q4_k_f32_coopmat,
+            { extra0_q4_k->q, extra0_q4_k->s, extra0_q4_k->d, extra0_q4_k->dm }, src1, dst, K, M, N)) {
+        return;
+    }
+
     if (use_bin) {
         if (use_mc3) {
             static bool warned = false;
@@ -7330,6 +7524,11 @@ void ggml_cl_mul_mat_q5_K_f32_adreno(ggml_backend_t backend, const ggml_tensor *
 
     const bool use_bin = use_q5_k_bin_kernels(backend_ctx, src0);
 
+    if (use_bin && ggml_cl_mul_mat_coopmat(backend_ctx, backend_ctx->mul_mat.kernel_gemm_noshuffle_q5_k_f32_coopmat,
+            { extra0_q5_k->q, extra0_q5_k->qh, extra0_q5_k->s, extra0_q5_k->d, extra0_q5_k->dm }, src1, dst, K, M, N)) {
+        return;
+    }
+
     if (use_bin) {
         if (use_q5k_mc3) {
             static bool warned = false;
@@ -7875,6 +8074,11 @@ void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_tensor *
     const bool use_q6k_tiled_mc = q6k_tiled_mc && (ne1 >= 2 && ne1 <= 4) && (ne01 >= 32768) && use_q6k_tiled(backend_ctx, src0);
 
     const bool use_bin = use_q6_k_bin_kernels(backend_ctx, src0);
+
+    if (use_bin && ggml_cl_mul_mat_coopmat(backend_ctx, backend_ctx->mul_mat.kernel_gemm_noshuffle_q6_k_f32_coopmat,
+            { extra0_q6_K->ql, extra0_q6_K->qh, extra0_q6_K->s, extra0_q6_K->d }, src1, dst, ne00, ne01, ne1)) {
+        return;
+    }
 
     if (use_bin) {
         if (use_q6k_mc3 || use_q6k_tiled_mc) {
