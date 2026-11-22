@@ -179,6 +179,16 @@ struct mtmd_audio_preprocessor_lfm3a : mtmd_audio_preprocessor {
     mtmd_audio_cache cache;
 };
 
+struct mtmd_audio_preprocessor_wemm_audio : mtmd_audio_preprocessor {
+    // WeMM-Video: whisper 128-mel, 30s segments (3000 mel frames each)
+    mtmd_audio_preprocessor_wemm_audio(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
+    void initialize() override;
+    bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
+
+  private:
+    mtmd_audio_cache cache;
+};
+
 struct mtmd_audio_preprocessor_granite_speech : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_granite_speech(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     void initialize() override;
