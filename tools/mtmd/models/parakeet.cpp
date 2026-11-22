@@ -4,7 +4,7 @@ static constexpr int PARAKEET_LOCAL_ATTN_THRESHOLD = 8192;
 static constexpr int PARAKEET_LOCAL_ATTN_WINDOW    = 128;
 
 // conv subsampling + conformer encoder
-ggml_cgraph * clip_graph_parakeet::build() {
+ggml_cgraph * mtmd_graph_parakeet::build() {
 
     // Conv subsampling
     ggml_tensor * inp = build_inp_raw(1);

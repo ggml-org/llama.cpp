@@ -48,6 +48,12 @@ jobs:
   cpu-x64-high-perf:
     runs-on: hf-jobs-cpu-upgrade:ubuntu26_04
 
+    # note: this runner has 8 CPUs, but std::thread::hardware_concurrency reports the cores of the
+    #   host (https://github.com/ggml-org/llama.cpp/pull/31439#issuecomment-6683386059)
+    env:
+      TEST_ARG_HARDWARE_CONCURRENCY: 8
+      TEST_ARG_PARALLEL_WORKERS: 4
+
     steps:
       - name: Clone
         id: checkout

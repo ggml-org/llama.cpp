@@ -1,18 +1,28 @@
 #include "utils.h"
 
+#include "ggml-impl.h"
+#include "ggml-openvino/ggml-openvino-extra.h"
+
 #include <cmath>
 #include <cstddef>
 #include <ctime>
 #include <memory>
 #include <openvino/op/add.hpp>
 #include <openvino/op/clamp.hpp>
+#include <openvino/op/constant.hpp>
+#include <openvino/op/concat.hpp>
 #include <openvino/op/convert.hpp>
 #include <openvino/op/cos.hpp>
 #include <openvino/op/divide.hpp>
 #include <openvino/op/gather.hpp>
+#include <openvino/op/greater_eq.hpp>
+#include <openvino/op/less.hpp>
+#include <openvino/op/logical_or.hpp>
 #include <openvino/op/maximum.hpp>
 #include <openvino/op/multiply.hpp>
+#include <openvino/op/range.hpp>
 #include <openvino/op/reshape.hpp>
+#include <openvino/op/select.hpp>
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/sin.hpp>
 #include <openvino/op/slice.hpp>
@@ -20,6 +30,7 @@
 #include <openvino/op/squeeze.hpp>
 #include <openvino/op/subtract.hpp>
 #include <openvino/op/transpose.hpp>
+#include <openvino/op/unsqueeze.hpp>
 #include <string>
 
 namespace ov {
@@ -90,24 +101,6 @@ ov::Output<ov::Node> rope_yarn_ramp_mix(int num_elements, const float corr_dims[
     return ramp_mix;
 }
 
-float ggml_rope_yarn_corr_dim(int n_dims, int n_ctx_orig, float n_rot, float base) {
-#ifndef M_PI
-#    define M_PI 3.14159265358979323846
-#endif
-    return n_dims * logf(n_ctx_orig / (n_rot * 2 * (float) M_PI)) / (2 * logf(base));
-}
-
-void ggml_rope_yarn_corr_dims(int n_dims,
-                              int n_ctx_orig,
-                              float freq_base,
-                              float beta_fast,
-                              float beta_slow,
-                              float dims[2]) {
-    float start = floorf(ggml_rope_yarn_corr_dim(n_dims, n_ctx_orig, beta_fast, freq_base));
-    float end = ceilf(ggml_rope_yarn_corr_dim(n_dims, n_ctx_orig, beta_slow, freq_base));
-    dims[0] = std::max(0.0f, start);
-    dims[1] = std::min(static_cast<float>(n_dims - 1), end);
-}
 }  // namespace
 
 std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params,
@@ -154,6 +147,7 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
     float beta_slow;
     const int n_dims = rope_params[1];
     const size_t n_dims_half = n_dims >> 1;
+    const bool truncate = rope_params[3] == 0;
     const int n_ctx_orig = rope_params[4];
     memcpy(&freq_base, rope_params + 5, sizeof(float));
     memcpy(&freq_scale, rope_params + 6, sizeof(float));
@@ -248,7 +242,7 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
             theta = theta_interp;
         } else {
             float corr_dims[2];
-            ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
+            ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, truncate, corr_dims);
             auto ramp_mix = rope_yarn_ramp_mix(num_pairs, corr_dims, ext_factor);
             Output<Node> one = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1, 1}, {1.0f});
             auto one_minus_ramp = std::make_shared<ov::op::v1::Subtract>(one, ramp_mix);
@@ -261,7 +255,7 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
         std::vector<float> factor(n_dims_half);
         Output<Node> freq_factors;
         float corr_dims[2];
-        ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
+        ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, truncate, corr_dims);
         factor[0] = 1.0f;
         for (size_t i = 1; i < factor.size(); i++) {
             factor[i] = theta_scale * factor[i - 1];
@@ -358,6 +352,109 @@ ov::Output<ov::Node> process_view_input(const NodeContext & context, int input_i
     return sliced;
 }
 
+namespace {
+
+// Walk a dequantization chain, gathering `indices` out of every leaf Constant that is indexed by
+// the gathered axis, and rebuild the chain on top of the gathered rows. Only the node types
+// make_intX_weights emits are recognized; anything else aborts the rewrite (nullptr).
+std::shared_ptr<ov::Node> rebuild_on_gathered_rows(const ov::Output<ov::Node> & out,
+                                                   const ov::Output<ov::Node> & indices,
+                                                   int64_t rows,
+                                                   size_t idx_rank,
+                                                   bool & saw_compressed,
+                                                   size_t depth) {
+    static constexpr size_t max_depth = 8;
+    if (depth > max_depth) {
+        return nullptr;
+    }
+    auto node = out.get_node_shared_ptr();
+
+    if (auto cnst = ov::as_type_ptr<ov::op::v0::Constant>(node)) {
+        const auto & shape = cnst->get_shape();
+        const auto type = cnst->get_element_type();
+        if (type == ov::element::u4 || type == ov::element::i4 || type == ov::element::u8 ||
+            type == ov::element::i8) {
+            saw_compressed = true;
+        }
+        if (shape.empty() || static_cast<int64_t>(shape[0]) != rows) {
+            // Scalar or already-broadcast operand (e.g. a single zero point): share it unchanged.
+            return cnst;
+        }
+        auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {0});
+        return std::make_shared<ov::op::v8::Gather>(cnst, indices, axis);
+    }
+
+    if (auto reshape = ov::as_type_ptr<ov::op::v1::Reshape>(node)) {
+        // The only Reshape in the chain collapses the group axis back into the row, [N,K/G,G] ->
+        // [N,K]. On gathered rows the leading N becomes the index dims, so keep those and collapse
+        // whatever remains.
+        const auto & ps = reshape->get_output_partial_shape(0);
+        if (ps.rank().is_dynamic() || ps.rank().get_length() != 2) {
+            return nullptr;
+        }
+        auto input = rebuild_on_gathered_rows(reshape->input_value(0), indices, rows, idx_rank,
+                                              saw_compressed, depth + 1);
+        if (!input) {
+            return nullptr;
+        }
+        std::vector<int64_t> target(idx_rank, 0);
+        target.push_back(-1);
+        auto target_shape = ov::op::v0::Constant::create(ov::element::i64, {target.size()}, target);
+        return std::make_shared<ov::op::v1::Reshape>(input, target_shape, true);
+    }
+
+    if (ov::is_type<ov::op::v0::Convert>(node) || ov::is_type<ov::op::v1::Multiply>(node) ||
+        ov::is_type<ov::op::v1::Subtract>(node)) {
+        ov::OutputVector args;
+        args.reserve(node->get_input_size());
+        for (size_t i = 0; i < node->get_input_size(); i++) {
+            auto arg = rebuild_on_gathered_rows(node->input_value(i), indices, rows, idx_rank,
+                                                saw_compressed, depth + 1);
+            if (!arg) {
+                return nullptr;
+            }
+            args.push_back(arg);
+        }
+        return node->clone_with_new_inputs(args);
+    }
+
+    return nullptr;
+}
+
+}  // namespace
+
+std::shared_ptr<ov::Node> gather_compressed_rows(const ov::Output<ov::Node> & weights,
+                                                 const ov::Output<ov::Node> & indices) {
+    // Below this the dequantized table is small enough that the extra nodes are not worth it.
+    static constexpr int64_t min_elements = 1 << 20;
+
+    const auto & ps = weights.get_partial_shape();
+    const auto & idx_ps = indices.get_partial_shape();
+    if (ps.rank().is_dynamic() || ps.rank().get_length() != 2 || ps[0].is_dynamic() ||
+        ps[1].is_dynamic() || idx_ps.rank().is_dynamic()) {
+        return nullptr;
+    }
+    if (ps[0].get_length() * ps[1].get_length() < min_elements) {
+        return nullptr;
+    }
+
+    bool saw_compressed = false;
+    auto gathered = rebuild_on_gathered_rows(weights, indices, ps[0].get_length(),
+                                             idx_ps.rank().get_length(), saw_compressed, 0);
+    return saw_compressed ? gathered : nullptr;
+}
+
+ov::Output<ov::Node> get_kq_mask_input(const NodeContext & context, size_t input_index) {
+    const auto & name = context.get_input_names()[input_index];
+    const std::string sliced = name == "self_kq_mask_swa"                  ? "KQ_mask_swa_sliced" :
+                               name == "self_kq_mask" || name == "KQ_mask" ? "KQ_mask_sliced" :
+                                                                             std::string();
+    if (!sliced.empty() && context.has_input(sliced)) {
+        return context.get_input(sliced);
+    }
+    return context.get_input(input_index);
+}
+
 ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int input_index) {
     auto input = context.get_input(input_index);
 
@@ -366,6 +463,182 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
     if (view_input_size == 0) {
         // No view inputs, return the input as is
         return input;
+    }
+
+    // A VIEW over the packed SSM_SCAN output selects one whole Concat part: y at offset 0, the
+    // final state after it. The y length is token-dependent, so a static Slice of the flat
+    // tensor would bake in the captured token count; return the native part instead.
+    if (view_input_size == 1 && input.get_node_shared_ptr()->get_rt_info().count(GGML_OV_SSM_SCAN_PACKED)) {
+        const bool is_y = context.get_view_input_offset(input_index, 0) == 0;
+        auto part = input.get_node_shared_ptr()->input_value(is_y ? 0 : 1).get_node_shared_ptr()->input_value(0);
+        if (is_y) {
+            // y keeps its native [n_seqs, n_tokens, n_head, head_dim] layout
+            return part;
+        }
+        // state [n_seqs, n_head, head_dim, d_state] -> view layout [1, 1, n_seqs, d_state * d_inner]
+        auto n_seqs = get_dimensions(std::make_shared<ov::op::v3::ShapeOf>(part, ov::element::i64), {0});
+        auto target = std::make_shared<ov::op::v0::Concat>(
+            ov::OutputVector{ov::op::v0::Constant::create(ov::element::i64, {2}, {1, 1}), n_seqs,
+                             ov::op::v0::Constant::create(ov::element::i64, {1}, {-1})},
+            0);
+        return std::make_shared<ov::op::v1::Reshape>(part, target, false);
+    }
+
+    // Integer router views can share these strides when their row count is zero.
+    // Packed projections can store query and gate in separate halves of each head.
+    if (!context.is_static() && view_input_size == 1 && input.get_element_type().is_real()) {
+        const auto source = context.get_view_input_src_ggml_shape(input_index, 0);
+        const auto view = context.get_view_input_ggml_shape(input_index, 0);
+        const auto source_stride = context.get_view_input_src_stride(input_index, 0);
+        const auto view_stride = context.get_view_input_stride(input_index, 0);
+        if (source.size() == 4 && view.size() == 4 && source_stride.size() == 4 && view_stride.size() == 4 &&
+            source[0] == 1 && source[1] == 1 && view[0] == 1 && view[1] == source[2] &&
+            view[2] > 0 && view[3] > 0 && source_stride[3] > 0 &&
+            view_stride[1] == source_stride[2] && view_stride[3] == source_stride[3] &&
+            view_stride[2] % source_stride[3] == 0) {
+            const size_t head_width = view_stride[2] / source_stride[3];
+            const auto offset = context.get_view_input_offset(input_index, 0);
+            const auto source_offset = context.get_view_input_src_offset(input_index, 0);
+            if (head_width > view[3] && source[3] % head_width == 0 && source[3] / head_width == view[2] &&
+                offset >= source_offset && (offset - source_offset) % source_stride[3] == 0) {
+                const size_t begin = (offset - source_offset) / source_stride[3];
+                if (begin <= head_width - view[3]) {
+                    auto heads = std::make_shared<ov::op::v1::Reshape>(input,
+                        ov::op::v0::Constant::create(ov::element::i64, {4},
+                            std::vector<int64_t>{1, -1, int64_t(view[2]), int64_t(head_width)}), false);
+                    auto part = std::make_shared<ov::op::v8::Slice>(heads,
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {begin}),
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {begin + view[3]}),
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {3}));
+                    return part;
+                }
+            }
+        }
+    }
+
+    if (!context.is_static() && view_input_size == 1 && input.get_element_type().is_real() &&
+        context.has_input("s_copy_active_slot_len")) {
+        const auto source = context.get_view_input_src_ggml_shape(input_index, 0);
+        const auto view = context.get_view_input_ggml_shape(input_index, 0);
+        const auto source_stride = context.get_view_input_src_stride(input_index, 0);
+        const auto view_stride = context.get_view_input_stride(input_index, 0);
+        if (source.size() == 4 && view.size() == 4 && source_stride.size() == 4 && view_stride.size() == 4 &&
+            source[0] == 1 && view[0] == source[1] && view[1] == source[2] && view[3] > 0 &&
+            view[2] <= source[3] / view[3] &&
+            view_stride[0] == source_stride[1] && view_stride[1] == source_stride[2] &&
+            view_stride[3] == source_stride[3]) {
+            const auto offset = context.get_view_input_offset(input_index, 0);
+            const auto source_offset = context.get_view_input_src_offset(input_index, 0);
+            if (offset >= source_offset && source_stride[3] > 0 &&
+                (offset - source_offset) % source_stride[3] == 0) {
+                const int64_t begin = (offset - source_offset) / source_stride[3];
+                const int64_t width = view[2] * view[3];
+                if (begin <= int64_t(source[3]) - width) {
+                    auto sliced = std::make_shared<ov::op::v8::Slice>(input,
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {begin}),
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {begin + width}),
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {3}));
+                    auto prefix = std::make_shared<ov::op::v8::Gather>(
+                        std::make_shared<ov::op::v3::ShapeOf>(input, ov::element::i64),
+                        ov::op::v0::Constant::create(ov::element::i64, {2}, {1, 2}),
+                        ov::op::v0::Constant::create(ov::element::i64, {}, {0}));
+                    auto shape = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{prefix,
+                        ov::op::v0::Constant::create(ov::element::i64, {2},
+                            std::vector<int64_t>{int64_t(view[2]), int64_t(view[3])})}, 0);
+                    return std::make_shared<ov::op::v1::Reshape>(sliced, shape, false);
+                }
+            }
+        }
+    }
+
+    // A VIEW that regroups one contiguous span of every source row, e.g. the z/x/B/C splits of the
+    // fused mamba projections: [head_dim, n_head, nt, ns] over [d_in_proj, nt, ns] rows. The span
+    // dims are packed and the remaining dims carry the source's outer strides, so the view is a
+    // Slice of the source's innermost axis plus a Reshape.
+    if (!context.is_static() && view_input_size == 1 && input.get_element_type().is_real()) {
+        const auto source = context.get_view_input_src_ggml_shape(input_index, 0);
+        const auto view = context.get_view_input_ggml_shape(input_index, 0);
+        const auto source_stride = context.get_view_input_src_stride(input_index, 0);
+        const auto view_stride = context.get_view_input_stride(input_index, 0);
+        const auto in_rank = input.get_partial_shape().rank();
+        const size_t nd = view.size();
+        if (nd == 4 && source.size() == nd && view_stride.size() == nd && source_stride.size() == nd &&
+            in_rank.is_static() && in_rank.get_length() == static_cast<int64_t>(nd) &&
+            view_stride[nd - 1] == source_stride[nd - 1] && source_stride[nd - 1] > 0) {
+            const size_t es = source_stride[nd - 1];
+            int j = static_cast<int>(nd) - 1;
+            size_t span = 1;
+            while (j >= 0 && view_stride[j] == span * es) {
+                span *= view[j];
+                --j;
+            }
+            // at least two packed dims replace the source's innermost dim; a one-dim span keeps the
+            // source rank and is handled by the generic paths below
+            const int shift = static_cast<int>(nd) - 2 - j;
+            bool matches = j >= 0 && shift >= 1;
+            for (int t = 0; matches && t <= j; ++t) {
+                matches = view[t] == source[t + shift] && view_stride[t] == source_stride[t + shift];
+            }
+            for (int t = 0; matches && t < shift; ++t) {
+                matches = source[t] == 1;
+            }
+            const size_t offset = context.get_view_input_offset(input_index, 0);
+            const size_t src_offset = context.get_view_input_src_offset(input_index, 0);
+            if (matches && offset >= src_offset && (offset - src_offset) % es == 0) {
+                const int64_t begin = static_cast<int64_t>((offset - src_offset) / es);
+                if (begin + static_cast<int64_t>(span) <= static_cast<int64_t>(source[nd - 1])) {
+                    auto sliced = std::make_shared<ov::op::v8::Slice>(
+                        input, ov::op::v0::Constant::create(ov::element::i64, {1}, {begin}),
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {begin + static_cast<int64_t>(span)}),
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
+                        ov::op::v0::Constant::create(ov::element::i64, {1}, {static_cast<int64_t>(nd) - 1}));
+                    const auto view_ov_shape = context.get_view_input_ov_shape(input_index, 0);
+                    std::vector<int64_t> pattern(nd);
+                    size_t dynamic_dims = 0;
+                    for (size_t i = 0; i < nd; ++i) {
+                        if (view_ov_shape.rank().is_static() && view_ov_shape[i].is_static()) {
+                            pattern[i] = view_ov_shape[i].get_length();
+                        } else {
+                            pattern[i] = -1;
+                            ++dynamic_dims;
+                        }
+                    }
+                    if (dynamic_dims > 1) {
+                        for (size_t i = 0; i < nd; ++i) {
+                            pattern[i] = static_cast<int64_t>(view[i]);
+                        }
+                    }
+                    return std::make_shared<ov::op::v1::Reshape>(
+                        sliced, ov::op::v0::Constant::create(ov::element::i64, {nd}, pattern), false);
+                }
+            }
+        }
+    }
+
+    // A row range of a 2D weight (BERT's token type row): slice the rows of the [rows, row_size] Constant
+    if (view_input_size == 1 && input.get_partial_shape().rank().is_static() &&
+        input.get_partial_shape().rank().get_length() == 2 &&
+        ov::is_type<ov::op::v0::Constant>(input.get_node_shared_ptr())) {
+        const auto view = context.get_view_input_ggml_shape(input_index, 0);
+        const auto source = context.get_view_input_src_ggml_shape(input_index, 0);
+        const auto view_stride = context.get_view_input_stride(input_index, 0);
+        const auto source_stride = context.get_view_input_src_stride(input_index, 0);
+        const size_t offset = context.get_view_input_offset(input_index, 0);
+        const size_t source_offset = context.get_view_input_src_offset(input_index, 0);
+        if (view.size() == 4 && source.size() == 4 && view[0] == 1 && view[1] == 1 && view[3] == source[3] &&
+            view_stride.size() == 4 && source_stride.size() == 4 && view_stride[2] == source_stride[2] &&
+            source_stride[2] > 0 && offset >= source_offset && (offset - source_offset) % source_stride[2] == 0) {
+            const int64_t begin = (offset - source_offset) / source_stride[2];
+            if (begin + int64_t(view[2]) <= int64_t(source[2])) {
+                return std::make_shared<ov::op::v8::Slice>(
+                    input, ov::op::v0::Constant::create(ov::element::i64, {1}, {begin}),
+                    ov::op::v0::Constant::create(ov::element::i64, {1}, {begin + int64_t(view[2])}),
+                    ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
+                    ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
+            }
+        }
     }
 
     // If translate_view already resolved this VIEW (produced a Slice), the input
@@ -431,7 +704,10 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
     // This ensures NPUW's FOLD doesn't parametrize per-layer slice indices (which
     // would introduce dynamic shapes). A shared Split node sits outside the repeated
     // subgraph boundary; each layer receives one of its output ports.
-    if (context.is_static() && view_input_size == 1) {
+    // The dynamic GPU path uses it too: a StridedSlice costs a full shape inference per run on GPU, a Split output does
+    // not (gemma-4 slices its per-layer embeddings this way, once per layer)
+    const bool dynamic_split = !context.is_static() && ggml_openvino_is_gpu();
+    if ((context.is_static() || dynamic_split) && view_input_size == 1) {
         auto view_stride_v = context.get_view_input_stride(input_index, 0);
         auto view_src_stride_v = context.get_view_input_src_stride(input_index, 0);
         auto view_ggml_shape = context.get_view_input_ggml_shape(input_index, 0);
@@ -471,7 +747,43 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                     size_t relative_offset = view_offset >= view_src_offset ? view_offset - view_src_offset : 0;
                     int64_t split_index = static_cast<int64_t>(relative_offset / view_src_stride_v[split_dim]);
 
-                    if (split_index >= 0 && split_index < num_splits) {
+                    // the view must be exactly one Split output: offset on a chunk boundary, the strides of all
+                    // other dims with more than one element equal
+                    bool exact_chunk = relative_offset % view_src_stride_v[split_dim] == 0;
+                    for (size_t i = 0; i < ndims && exact_chunk; ++i) {
+                        exact_chunk = i == static_cast<size_t>(split_dim) || view_ggml_shape[i] == 1 ||
+                                      view_stride_v[i] == view_src_stride_v[i];
+                    }
+                    // num_splits is the captured source size: on a dynamic axis (e.g. the token axis of DSpark's
+                    // result_norm, read one block position at a time) the graph is reused with other sizes, and
+                    // each Split output would then hold several rows or the wrong one
+                    const auto input_shape = input.get_partial_shape();
+                    const int64_t split_axis = input_shape.rank().is_static() ?
+                                                   split_dim - (int64_t) ndims + input_shape.rank().get_length() :
+                                                   -1;
+                    const bool split_axis_static = split_axis >= 0 && input_shape[split_axis].is_static() &&
+                                                   input_shape[split_axis].get_length() == num_splits;
+                    if (split_index >= 0 && split_index < num_splits && dynamic_split && exact_chunk &&
+                        split_axis_static) {
+                        // the Split keeps its input alive, so only keep a weak reference to it on the input
+                        auto src_node = input.get_node_shared_ptr();
+                        std::string rt_key =
+                            "split_dim_weak_" + std::to_string(split_dim) + "_" + std::to_string(input.get_index());
+                        auto & rt_info = src_node->get_rt_info();
+                        std::shared_ptr<ov::Node> split_node;
+                        if (rt_info.count(rt_key) != 0) {
+                            split_node = rt_info[rt_key].as<std::weak_ptr<ov::Node>>().lock();
+                        }
+                        if (split_node == nullptr) {
+                            auto axis_const = ov::op::v0::Constant::create(ov::element::i64, {}, {split_axis});
+                            split_node =
+                                std::make_shared<ov::op::v1::Split>(input, axis_const, static_cast<size_t>(num_splits));
+                            split_node->set_friendly_name(src_node->get_friendly_name() + "_split");
+                            rt_info[rt_key] = std::weak_ptr<ov::Node>(split_node);
+                        }
+                        return split_node->output(static_cast<size_t>(split_index));
+                    }
+                    if (split_index >= 0 && split_index < num_splits && !dynamic_split) {
                         auto src_node = input.get_node_shared_ptr();
                         std::string rt_key = "split_dim_" + std::to_string(split_dim);
                         auto & rt_info = src_node->get_rt_info();
@@ -495,7 +807,8 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
 
     // Lambda function to process a single view operation
     auto process_single_view =
-        [](ov::Output<ov::Node> current, size_t view_offset, const std::vector<size_t> & view_stride,
+        [is_static = context.is_static()](
+           ov::Output<ov::Node> current, size_t view_offset, const std::vector<size_t> & view_stride,
            const ov::Shape & view_ggml_shape, const ov::PartialShape & view_ov_shape, const std::string & view_name,
            size_t view_src_offset, const std::vector<size_t> & view_src_stride, const ov::Shape & view_src_ggml_shape,
            const ov::PartialShape & view_src_ov_shape, const std::string & view_src_name) -> ov::Output<ov::Node> {
@@ -620,7 +933,12 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                             ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
                             ov::op::v0::Constant::create(ov::element::i64, {1}, {slice_dim - axis_shift}));
 
-                        if (view_ov_shape.is_static()) {
+                        // In a static graph a rank-preserving slice (diff_dims has one entry) already has the view
+                        // shape. Skip the Reshape: its target bakes the static chunk size into the token axis, which
+                        // is wrong after the output-ids GET_ROWS of the last layer (1 token in the prefill graph).
+                        const bool rank_kept = is_static && current_rank.is_static() &&
+                                               static_cast<size_t>(current_rank.get_length()) == ndims;
+                        if (view_ov_shape.is_static() && !rank_kept) {
                             auto reshaped = std::make_shared<ov::op::v1::Reshape>(
                                 sliced,
                                 ov::op::v0::Constant::create(ov::element::i64, {ndims}, view_ov_shape.to_shape()),
@@ -756,6 +1074,45 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                             return sliced;
                         }
                     }
+                }
+            }
+
+            // A view that reads the first cells of a single-sequence cache [1, 1, cells, row] with each cell one whole
+            // row, e.g. MLA's K view [1, n_kv, 1 (n_head_kv), 576]. With the cache input sliced to the cells in use,
+            // this is a reshape that keeps the cell axis dynamic.
+            if (same_rank && relative_offset == 0 && view_ggml_shape.size() >= 2 && view_ov_shape.rank().is_static() &&
+                view_ov_shape.rank().get_length() == static_cast<int64_t>(view_ggml_shape.size()) &&
+                current.get_partial_shape().rank().is_static() &&
+                current.get_partial_shape().rank().get_length() == static_cast<int64_t>(view_ggml_shape.size())) {
+                const size_t ndims = view_ggml_shape.size();
+                const size_t row_stride = view_src_stride[ndims - 2];
+                bool src_rows = view_src_stride[ndims - 1] == view_stride[ndims - 1];
+                for (size_t i = 0; i + 2 < ndims && src_rows; ++i) {
+                    src_rows = view_src_ggml_shape[i] == 1;
+                }
+                int cell_axis = -1;
+                for (size_t i = 0; i < ndims && src_rows; ++i) {
+                    if (view_stride[i] == row_stride && view_ov_shape[i].is_dynamic()) {
+                        cell_axis = static_cast<int>(i);
+                    }
+                }
+                bool one_row_per_cell = cell_axis >= 0;
+                size_t inner_bytes = view_stride[ndims - 1];
+                for (size_t i = 0; i < ndims && one_row_per_cell; ++i) {
+                    if (static_cast<int>(i) < cell_axis) {
+                        one_row_per_cell = view_ggml_shape[i] == 1;
+                    } else if (static_cast<int>(i) > cell_axis) {
+                        inner_bytes *= view_ggml_shape[i];
+                    }
+                }
+                if (one_row_per_cell && inner_bytes == row_stride) {
+                    auto reshape_pattern = build_reshape_pattern(view_ov_shape, view_ggml_shape);
+                    auto reshaped = std::make_shared<ov::op::v1::Reshape>(
+                        current,
+                        ov::op::v0::Constant::create(ov::element::i64, {reshape_pattern.size()}, reshape_pattern),
+                        false);
+                    reshaped->set_friendly_name(view_name);
+                    return reshaped;
                 }
             }
 
@@ -980,6 +1337,37 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
     }
 
     return current;
+}
+
+bool is_recurrent_cache_reset_case(const NodeContext & context) {
+    return context.get_op_case() == 1 && context.has_input("cache_rs_reset_len");
+}
+
+OutputVector translate_recurrent_cache_reset(const NodeContext & context) {
+    auto cache_rs = context.get_input(0);
+    auto cache_rs_reset_idx = context.get_input("cache_rs_reset_idx");
+    auto cache_rs_reset_len = context.get_input("cache_rs_reset_len");
+
+    auto cache_shape = std::make_shared<ov::op::v3::ShapeOf>(cache_rs, ov::element::i64);
+    auto n_slots_1d = std::make_shared<ov::op::v8::Gather>(
+        cache_shape, ov::op::v0::Constant::create(ov::element::i64, ov::Shape{1}, {2}),
+        ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {0}));
+    auto n_slots = std::make_shared<ov::op::v0::Squeeze>(n_slots_1d);
+
+    auto iota = std::make_shared<ov::op::v4::Range>(
+        ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {0}), n_slots,
+        ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {1}), ov::element::i64);
+
+    auto idx_plus_len = std::make_shared<ov::op::v1::Add>(cache_rs_reset_idx, cache_rs_reset_len);
+    auto less_than_idx = std::make_shared<ov::op::v1::Less>(iota, cache_rs_reset_idx);
+    auto greater_equal_idx_plus_len = std::make_shared<ov::op::v1::GreaterEqual>(iota, idx_plus_len);
+    auto keep_mask = std::make_shared<ov::op::v1::LogicalOr>(less_than_idx, greater_equal_idx_plus_len);
+    auto keep_mask_reshape = std::make_shared<ov::op::v0::Unsqueeze>(
+        keep_mask, ov::op::v0::Constant::create(ov::element::i64, ov::Shape{1}, {1}));
+
+    auto zero = ov::op::v0::Constant::create(cache_rs.get_element_type(), ov::Shape{}, {0});
+    auto cleared_cache_rs = std::make_shared<ov::op::v1::Select>(keep_mask_reshape, cache_rs, zero);
+    return rename_outputs_with_suffix({cleared_cache_rs}, context.get_name());
 }
 
 }  // namespace ggml

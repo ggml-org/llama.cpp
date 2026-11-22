@@ -467,21 +467,6 @@ void ggml_cann_dup(ggml_backend_cann_context & ctx, ggml_tensor * dst);
 void ggml_cann_rms_norm(ggml_backend_cann_context & ctx, ggml_tensor * dst);
 
 /**
- * @brief   Applies a diagonal mask to the tensor with a specified value.
- *
- * @details This function creates a mask tensor filled with ones, then applies
- *          an upper triangular and lower triangular operation to it based on
- *          the number of past elements specified. Afterward, it adds the masked
- *          tensor to the destination tensor in-place.
- *
- * @param ctx The backend CANN context used for operations.
- * @param dst The destination tensor where the result will be stored. dst->op is
- *            `GGML_OP_DIAG_MASK`
- * @param value The value to use for masking.
- */
-void ggml_cann_diag_mask(ggml_backend_cann_context & ctx, ggml_tensor * dst, float value);
-
-/**
  * @brief   Performs an image-to-column transformation on the input tensor.
  *
  * @details This function takes an input tensor and applies an image-to-column

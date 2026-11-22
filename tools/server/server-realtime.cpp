@@ -13,7 +13,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <climits>
+#include <condition_variable>
 #include <cmath>
 #include <cstring>
 #include <map>
@@ -130,6 +132,9 @@ struct realtime_conversation {
     std::string                    type = "realtime";
     std::string                    instructions;
     std::string                    language; // transcription
+    std::string                    prompt;   // transcription
+    std::string                    out_language;
+    std::string                    out_voice;
     mtmd_helper_gen_audio_out_mode out_mode          = MTMD_HELPER_GEN_AUDIO_OUT_AUTO;
     int32_t                        max_output_tokens = -1; // "inf"
     int                            input_rate        = 16000;
@@ -153,9 +158,11 @@ struct realtime_conversation {
     bool        started   = false; // something went into the slot, the session config is fixed
     bool        turn_open = false; // a user turn is being filled
     bool        has_audio = false; // the open turn has audio not committed yet
+    int64_t     n_turn_samples = 0; // audio of the open turn, at the model rate
     bool        tool_results = false; // tool results went in after the last response, the next one answers them
     int         n_turns   = 0;
     std::string next_header;       // text that goes in before the next user turn
+    mtmd_helper::resampler_ptr resampler; // input_rate -> model rate
 
     // the item or response the results belong to, shared with the result loop
     std::mutex  mutex;
@@ -175,7 +182,14 @@ struct realtime_conversation {
 
     std::atomic<bool> closed{false};
 
-    realtime_conversation(const server_realtime_deps & deps, server_http_context::ws_conn & conn) : deps(deps), conn(conn) {}
+    // full duplex: no turns, the first audio opens a response that runs until response.cancel
+    const bool              duplex;
+    bool                    duplex_open = false; // guarded by mutex
+    std::condition_variable duplex_done;         // the cancelled response is done
+
+    realtime_conversation(const server_realtime_deps & deps, server_http_context::ws_conn & conn)
+        : deps(deps), conn(conn), out_language(deps.params.tts_lang), out_voice(deps.params.tts_voice),
+          duplex(deps.cap.audio_duplex) {}
 
     //
     // events
@@ -196,7 +210,11 @@ struct realtime_conversation {
     json session_json() const {
         json audio_in = {{"format", {{"type", "audio/pcm"}, {"rate", input_rate}}}, {"turn_detection", nullptr}};
         if (type == "transcription") {
-            audio_in["transcription"] = {{"model", deps.meta.model_name}, {"language", language.empty() ? json(nullptr) : json(language)}};
+            audio_in["transcription"] = {
+                {"model",    deps.meta.model_name},
+                {"language", language.empty() ? json(nullptr) : json(language)},
+                {"prompt",   prompt},
+            };
             return {
                 {"id",     id},
                 {"object", "realtime.transcription_session"},
@@ -206,7 +224,11 @@ struct realtime_conversation {
         }
         json audio = {{"input", audio_in}};
         if (deps.cap.audio_gen) {
-            audio["output"] = {{"format", {{"type", "audio/pcm"}, {"rate", output_rate}}}};
+            audio["output"] = {
+                {"format",   {{"type", "audio/pcm"}, {"rate", output_rate}}},
+                {"voice",    out_voice.empty()    ? json(nullptr) : json(out_voice)},
+                {"language", out_language.empty() ? json(nullptr) : json(out_language)},
+            };
         }
         return {
             {"id",                id},
@@ -244,7 +266,7 @@ struct realtime_conversation {
 
     // sampling of a response: the server defaults, with the tool call grammar of chat
     common_params_sampling response_sampling(const common_chat_session * chat) const {
-        common_params_sampling sampling = deps.sampling;
+        common_params_sampling sampling = deps.params.sampling;
         if (chat) {
             chat->apply_sampling(sampling);
         }
@@ -333,12 +355,28 @@ struct realtime_conversation {
     // conversation
     //
 
+    // the transcription instruction, built the same way as /v1/audio/transcriptions
+    std::string asr_user_text(const common_chat_prompt_preset & preset) const {
+        std::string text = prompt.empty() || preset.has_context ? preset.user : prompt;
+        if (!language.empty() && !preset.has_language) {
+            text += string_format(" (language: %s)", language.c_str());
+        }
+        return text;
+    }
+
     // the header of a user turn goes in before its first audio or text
     bool ensure_turn() {
         if (turn_open) {
             return true;
         }
-        const std::string header = n_turns == 0 ? first_header : next_header + user_header;
+        std::string header = n_turns == 0 ? first_header : next_header + user_header;
+        if (type == "transcription") {
+            // most models take the instruction before the audio, the others get it in on_commit
+            const auto preset = common_chat_get_asr_prompt(deps.meta.chat_params.tmpls.get(), language, 0.0, prompt);
+            if (!preset.media_first) {
+                header += asr_user_text(preset);
+            }
+        }
         if (!control(SERVER_CONTROL_ACTION_TEXT_APPEND, header)) {
             return false;
         }
@@ -362,12 +400,54 @@ struct realtime_conversation {
             memcpy(&v, pcm.data() + 2 * i, sizeof(v));
             samples[i] = v / 32768.0f;
         }
-        if (samples.empty() || !ensure_turn()) {
+        if (samples.empty()) {
             return;
         }
+        if (duplex) {
+            if (!resample(samples) || samples.empty()) {
+                return;
+            }
+            bool open = false;
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                open = !duplex_open;
+                duplex_open = true;
+            }
+            if (open) {
+                started = true;
+                open_response(MTMD_HELPER_GEN_AUDIO_OUT_MIXED);
+            }
+            control(SERVER_CONTROL_ACTION_AUDIO_APPEND, {}, std::move(samples));
+            return;
+        }
+        if (!resample(samples) || samples.empty() || !ensure_turn()) {
+            return;
+        }
+        const int64_t n = (int64_t) samples.size();
         if (control(SERVER_CONTROL_ACTION_AUDIO_APPEND, {}, std::move(samples))) {
             has_audio = true;
+            n_turn_samples += n;
         }
+    }
+
+    bool resample(std::vector<float> & samples) {
+        if (!resampler) {
+            resampler.reset(mtmd_helper_resampler_init(input_rate, mtmd_get_audio_sample_rate(deps.mctx)));
+            if (!resampler) {
+                send_error("failed to initialize the audio resampler", "server_error");
+                return false;
+            }
+        }
+        const float * out = nullptr;
+        const int64_t n   = mtmd_helper_resampler_process(resampler.get(), samples.data(), samples.size(), &out);
+        if (n < 0) {
+            send_error("failed to resample the audio", "server_error");
+            return false;
+        }
+        if (out != samples.data()) {
+            samples.assign(out, out + n);
+        }
+        return true;
     }
 
     // ends the audio of the open turn, it becomes a user item
@@ -379,7 +459,8 @@ struct realtime_conversation {
         if (!control(SERVER_CONTROL_ACTION_AUDIO_END)) {
             return false;
         }
-        has_audio = false;
+        has_audio      = false;
+        n_turn_samples = 0;
 
         std::lock_guard<std::mutex> lock(mutex);
         const json prev = last_item_id.empty() ? json(nullptr) : json(last_item_id);
@@ -393,6 +474,11 @@ struct realtime_conversation {
     }
 
     void on_commit() {
+        if (duplex) {
+            send_error("input_audio_buffer.commit: the model answers while it listens, there is no turn to commit");
+            return;
+        }
+        const int64_t n_audio = n_turn_samples;
         if (!commit() || type != "transcription") {
             return;
         }
@@ -402,11 +488,19 @@ struct realtime_conversation {
             transcribe_item_id = last_item_id;
             transcript.clear();
         }
+        // some models (VibeVoice-ASR) take an instruction after the audio, with its length
+        const auto * tmpls = deps.meta.chat_params.tmpls.get();
+        common_chat_prompt_preset preset = common_chat_get_asr_prompt(tmpls, language, 0.0, prompt);
+        if (preset.needs_audio_length) {
+            preset = common_chat_get_asr_prompt(tmpls, language, (double) n_audio / mtmd_get_audio_sample_rate(deps.mctx), prompt);
+        }
+        const std::string after_audio = preset.media_first ? asr_user_text(preset) : "";
+
         server_control_response response;
         response.n_predict = max_output_tokens;
         response.out_mode  = MTMD_HELPER_GEN_AUDIO_OUT_TEXT;
         response.sampling  = response_sampling(nullptr);
-        if (!control(SERVER_CONTROL_ACTION_RESPONSE_CREATE, user_footer + assistant_header, {}, response)) {
+        if (!control(SERVER_CONTROL_ACTION_RESPONSE_CREATE, after_audio + user_footer + assistant_header, {}, response)) {
             return;
         }
         control(SERVER_CONTROL_ACTION_CLEAR);
@@ -415,6 +509,10 @@ struct realtime_conversation {
     }
 
     void on_item_create(const json & ev) {
+        if (duplex) {
+            send_error("conversation.item.create: the model only takes audio");
+            return;
+        }
         if (type == "transcription") {
             send_error("conversation.item.create: not supported in a transcription session");
             return;
@@ -472,6 +570,10 @@ struct realtime_conversation {
     }
 
     void on_response_create(const json & ev) {
+        if (duplex) {
+            send_error("response.create: the model answers while it listens, its response opens with the first audio");
+            return;
+        }
         if (type == "transcription") {
             send_error("response.create: not supported in a transcription session");
             return;
@@ -520,6 +622,8 @@ struct realtime_conversation {
             return;
         }
         response.out_mode = mode;
+        response.lang     = out_language;
+        response.voice    = out_voice;
 
         // with tools, the output goes through the tool call parser of the chat template and its grammar
         std::optional<common_chat_session> chat;
@@ -539,24 +643,7 @@ struct realtime_conversation {
         }
         response.sampling = response_sampling(chat ? &*chat : nullptr);
 
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            response_id      = "resp_" + random_string();
-            response_item_id = "item_" + random_string();
-            response_text.clear();
-            parts       = json::array();
-            idx_text    = -1;
-            idx_audio   = -1;
-            output      = json::array();
-            idx_message = -1;
-            call_items.clear();
-            parse.reset();
-            if (chat) {
-                parse.emplace(std::move(*chat));
-            }
-            send_event({{"type", "response.created"}, {"response", {{"id", response_id}, {"object", "realtime.response"},
-                        {"status", "in_progress"}, {"output_modalities", output_modalities_json(mode)}, {"output", json::array()}}}});
-        }
+        open_response(mode, chat ? &*chat : nullptr);
         if (!control(SERVER_CONTROL_ACTION_RESPONSE_CREATE, prompt, {}, response)) {
             return;
         }
@@ -565,6 +652,26 @@ struct realtime_conversation {
         turn_open    = false;
         tool_results = false;
         n_turns++;
+    }
+
+    // the results that follow belong to a new response
+    void open_response(mtmd_helper_gen_audio_out_mode mode, common_chat_session * chat = nullptr) {
+        std::lock_guard<std::mutex> lock(mutex);
+        response_id      = "resp_" + random_string();
+        response_item_id = "item_" + random_string();
+        response_text.clear();
+        parts       = json::array();
+        idx_text    = -1;
+        idx_audio   = -1;
+        output      = json::array();
+        idx_message = -1;
+        call_items.clear();
+        parse.reset();
+        if (chat) {
+            parse.emplace(std::move(*chat));
+        }
+        send_event({{"type", "response.created"}, {"response", {{"id", response_id}, {"object", "realtime.response"},
+                    {"status", "in_progress"}, {"output_modalities", output_modalities_json(mode)}, {"output", json::array()}}}});
     }
 
     void on_session_update(const json & ev) {
@@ -577,6 +684,10 @@ struct realtime_conversation {
             const std::string t = session["type"];
             if (t != "realtime" && t != "transcription") {
                 send_error("session.update: unknown session type " + t);
+                return;
+            }
+            if (duplex) {
+                send_error("session.update: the model only holds \"realtime\" sessions");
                 return;
             }
             if (started) {
@@ -623,13 +734,43 @@ struct realtime_conversation {
         }
         const json audio = session.value("audio", json::object());
         const json in    = audio.value("input", json::object());
-        if (in.contains("format") && in["format"].is_object() && json_value(in["format"], "rate", input_rate) != input_rate) {
-            send_error("session.update: the input audio must be PCM16 at " + std::to_string(input_rate) + " Hz");
+        if (in.contains("format") && in["format"].is_object()) {
+            const int rate = json_value(in["format"], "rate", input_rate);
+            if (rate < 8000 || rate > 192000) {
+                send_error("session.update: the input audio rate must be between 8000 and 192000 Hz");
+                return;
+            }
+            if (rate != input_rate) {
+                input_rate = rate;
+                resampler.reset();
+            }
         }
         if (in.contains("transcription") && in["transcription"].is_object()) {
             language = json_value(in["transcription"], "language", language);
+            prompt   = json_value(in["transcription"], "prompt",   prompt);
         }
-        if (!started && !configure()) {
+        const json out = audio.value("output", json::object());
+        if (out.contains("voice") || out.contains("language")) {
+            std::string voice = out_voice;
+            if (out.contains("voice")) {
+                // string or {"id": name}
+                const json & v = out["voice"];
+                voice = v.is_object() ? json_value(v, "id", std::string()) : v.is_string() ? v.get<std::string>() : std::string();
+            }
+            const std::string lang = json_value(out, "language", out_language);
+            const auto & voices = deps.meta.tts_voices;
+            if (!voice.empty() && !voices.empty() && std::find(voices.begin(), voices.end(), voice) == voices.end()) {
+                send_error("session.update: unknown voice \"" + voice + "\", see \"voices\" in GET /props");
+                return;
+            }
+            if (started && (voice != out_voice || lang != out_language)) {
+                send_error("session.update: the output voice and language cannot change after the first audio or message");
+                return;
+            }
+            out_voice    = voice;
+            out_language = lang;
+        }
+        if (!duplex && !started && !configure()) {
             send_error("the chat template does not fit the realtime turn format", "server_error");
             return;
         }
@@ -642,6 +783,11 @@ struct realtime_conversation {
         if (type == "transcription") {
             const auto preset = common_chat_get_asr_prompt(deps.meta.chat_params.tmpls.get(), language);
             instructions = preset.system;
+        } else if (deps.cap.audio_gen) {
+            const std::string speech = common_chat_get_speech_system_prompt(deps.meta.chat_params.tmpls.get(), out_language, out_voice);
+            if (!speech.empty()) {
+                instructions = instructions.empty() ? speech : speech + "\n" + instructions;
+            }
         }
         const bool ok = derive_turn_text();
         instructions = saved;
@@ -672,6 +818,11 @@ struct realtime_conversation {
             on_response_create(ev);
         } else if (t == "response.cancel") {
             control(SERVER_CONTROL_ACTION_RESPONSE_CANCEL);
+            if (duplex) {
+                // the next audio opens another response, once the results of this one are out
+                std::unique_lock<std::mutex> lock(mutex);
+                duplex_done.wait_for(lock, std::chrono::seconds(10), [this]() { return !duplex_open || closed.load(); });
+            }
         } else {
             send_error("unknown event type: " + t);
         }
@@ -682,12 +833,7 @@ struct realtime_conversation {
     //
 
     static std::string encode_pcm16(const std::vector<float> & samples) {
-        std::string bytes(samples.size() * sizeof(int16_t), '\0');
-        for (size_t i = 0; i < samples.size(); i++) {
-            const int16_t v = (int16_t) std::lround(std::max(-1.0f, std::min(1.0f, samples[i])) * 32767.0f);
-            memcpy(&bytes[2 * i], &v, sizeof(v));
-        }
-        return base64::encode(bytes);
+        return base64::encode(pcm_f32_to_s16(samples.data(), samples.size()));
     }
 
     // the message item of the response is added with its first delta
@@ -745,10 +891,10 @@ struct realtime_conversation {
     void on_result(const server_task_result_realtime & res) {
         std::lock_guard<std::mutex> lock(mutex);
         if (!transcribe_item_id.empty()) {
-            if (!res.text.empty()) {
-                transcript += res.text;
+            if (!res.content.empty()) {
+                transcript += res.content.text;
                 send_event({{"type", "conversation.item.input_audio_transcription.delta"}, {"item_id", transcribe_item_id},
-                            {"content_index", 0}, {"delta", res.text}});
+                            {"content_index", 0}, {"delta", res.content.text}});
             }
             if (res.response_done) {
                 send_event({{"type", "conversation.item.input_audio_transcription.completed"}, {"item_id", transcribe_item_id},
@@ -761,12 +907,12 @@ struct realtime_conversation {
         // with tools, the text goes through the parser: content and tool calls
         std::vector<common_chat_msg_diff> diffs;
         if (parse) {
-            if (!res.text.empty() || res.response_done) {
-                parse->update_chat_msg(common_chat_input(res.text), !res.response_done, diffs, true);
+            if (!res.content.empty() || res.response_done) {
+                parse->update_chat_msg(res.content, !res.response_done, diffs, true);
             }
-        } else if (!res.text.empty()) {
+        } else if (!res.content.empty()) {
             diffs.emplace_back();
-            diffs.back().content_delta = res.text;
+            diffs.back().content_delta = res.content.text;
         }
         for (const auto & diff : diffs) {
             if (!diff.content_delta.empty()) {
@@ -821,6 +967,8 @@ struct realtime_conversation {
         send_event({{"type", "response.done"}, {"response", {{"id", response_id}, {"object", "realtime.response"}, {"status", status},
                     {"output", output}, {"usage", {{"output_tokens", res.n_decoded}}}}}});
         parse.reset();
+        duplex_open = false;
+        duplex_done.notify_all();
     }
 
     //
@@ -832,7 +980,7 @@ struct realtime_conversation {
         if (deps.cap.audio_gen) {
             output_rate = mtmd_gen_audio_get_info(deps.mctx).sample_rate;
         }
-        if (!configure()) {
+        if (!duplex && !configure()) {
             send_error("the chat template does not fit the realtime turn format", "server_error");
             conn.close();
             return;
@@ -842,7 +990,7 @@ struct realtime_conversation {
         {
             server_task task(SERVER_TASK_TYPE_REALTIME);
             task.id                       = rd.get_new_id();
-            task.params.sampling          = deps.sampling;
+            task.params.sampling          = deps.params.sampling;
             task.params.stream            = true;
             task.params.oaicompat_cmpl_id = id;
             task.params.oaicompat_model   = deps.meta.model_name;
@@ -918,6 +1066,7 @@ server_realtime_slot::server_realtime_slot(llama_context * ctx, mtmd_context * m
     if (mtmd_gen_audio_get_info(mctx).type != MTMD_GEN_AUDIO_TYPE_NONE) {
         gen.init(ctx, mctx);
     }
+    duplex = mtmd_helper_get_capabilities(model, mctx).audio_duplex;
 }
 
 void server_realtime_slot::push(server_realtime_op && op) {
@@ -925,10 +1074,19 @@ void server_realtime_slot::push(server_realtime_op && op) {
 }
 
 void server_realtime_slot::cancel() {
+    if (duplex) {
+        // in order with the audio: the response of a full duplex model may still be opening
+        ops.push_back({SERVER_CONTROL_ACTION_RESPONSE_CANCEL, {}, {}, {}});
+        return;
+    }
     cancelled = responding;
 }
 
 bool server_realtime_slot::is_idle() const {
+    if (duplex) {
+        // a full duplex response waits for the next audio
+        return ops.empty() && !(responding && duplex_pending);
+    }
     return ops.empty() && !responding;
 }
 
@@ -938,11 +1096,11 @@ bool server_realtime_slot::fail(const std::string & msg, enum error_type type) {
     return false;
 }
 
-void server_realtime_slot::send_result(std::string text, std::vector<float> audio, bool response_done) {
+void server_realtime_slot::send_result(common_chat_input content, std::vector<float> audio, bool response_done) {
     auto res = std::make_unique<server_task_result_realtime>();
     res->id            = id_task;
     res->index         = index;
-    res->text          = std::move(text);
+    res->content       = std::move(content);
     res->audio         = std::move(audio);
     res->response_done = response_done;
     res->cancelled     = response_done && cancelled;
@@ -954,27 +1112,24 @@ void server_realtime_slot::send_result(std::string text, std::vector<float> audi
 bool server_realtime_slot::decode(const llama_token * tokens, const float * rows, int32_t n, bool logits_last) {
     const int32_t n_embd  = llama_model_n_embd_inp(model);
     const int32_t n_batch = llama_n_batch(ctx);
-    if (n_past + n >= n_ctx) {
+    // a full duplex model attends to a sliding window, its stream has no end
+    if (!duplex && n_past + n >= n_ctx) {
         return fail("the conversation does not fit in the context", ERROR_TYPE_EXCEED_CONTEXT_SIZE);
     }
-    for (int32_t i0 = 0; i0 < n; i0 += n_batch) {
-        const int32_t n_cur = std::min(n_batch, n - i0);
-        llama_batch b = llama_batch_init(n_cur, rows ? n_embd : 0, 1);
-        for (int32_t i = 0; i < n_cur; i++) {
-            if (rows) {
-                memcpy(b.embd + (size_t) i * n_embd, rows + (size_t) (i0 + i) * n_embd, n_embd * sizeof(float));
-            } else {
-                b.token[i] = tokens[i0 + i];
-            }
-            b.pos[i]       = n_past + i0 + i;
-            b.n_seq_id[i]  = 1;
-            b.seq_id[i][0] = seq_id;
-            b.logits[i]    = logits_last && i0 + i == n - 1;
+    common_batch batch(ctx);
+    for (int32_t i = 0; i < n; i++) {
+        const llama_pos pos    = n_past + i;
+        const bool      output = logits_last && i == n - 1;
+        if (rows) {
+            const llama_embd e = { rows + (size_t) i * n_embd, 1, (size_t) n_embd };
+            batch.add_embd(e, &pos, seq_id, output);
+        } else {
+            batch.add(tokens[i], pos, seq_id, output);
         }
-        b.n_tokens = n_cur;
-        const int ret = llama_decode(ctx, b);
-        llama_batch_free(b);
-        if (ret != 0) {
+    }
+    for (int32_t i = 0; i < n; i += n_batch) {
+        const int32_t n_cur = std::min(n_batch, n - i);
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get_sub_batch(i, n_cur)) != 0) {
             return fail("failed to decode the conversation");
         }
     }
@@ -1025,6 +1180,15 @@ bool server_realtime_slot::response_start(const server_realtime_op & op) {
         inp.data.stream   = true;
         inp.data.out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM;
         inp.data.out_mode = op.response.out_mode;
+        inp.set_lang(op.response.lang);
+        // predefined voice -> speaker ref, LFM3 uses the system prompt instead
+        if (!op.response.voice.empty() && mtmd_gen_audio_get_info(mctx).n_voices > 0) {
+            mtmd::bitmap_ptr voice(mtmd_gen_audio_get_voice(mctx, op.response.voice.c_str()));
+            if (!voice) {
+                return fail("unknown voice \"" + op.response.voice + "\"", ERROR_TYPE_INVALID_REQUEST);
+            }
+            inp.set_speaker_ref(std::move(voice));
+        }
         if (gen.set_input(inp.get()) != 0) {
             return fail("failed to start the response");
         }
@@ -1065,8 +1229,8 @@ std::string server_realtime_slot::piece(llama_token tok) const {
 
 // one text token or audio frame of the response being generated
 bool server_realtime_slot::response_step() {
-    bool        stop = false;
-    std::string text;
+    bool stop = false;
+    common_chat_input content;
     std::vector<float> audio;
 
     if (gen.valid()) {
@@ -1075,7 +1239,7 @@ bool server_realtime_slot::response_step() {
             return fail("response generation failed");
         }
         if (sampled != LLAMA_TOKEN_NULL && !stop) {
-            text = piece(sampled);
+            content.append(piece(sampled), sampled);
         }
         if (h_next) {
             h_state.assign(h_next, h_next + llama_model_n_embd(model));
@@ -1083,7 +1247,7 @@ bool server_realtime_slot::response_step() {
     } else {
         stop = llama_vocab_is_eog(vocab, sampled);
         if (!stop) {
-            text = piece(sampled);
+            content.append(piece(sampled), sampled);
             if (!decode(&sampled, nullptr, 1, true)) {
                 return false;
             }
@@ -1110,23 +1274,156 @@ bool server_realtime_slot::response_step() {
             audio.assign((const float *) data, (const float *) data + data_len / sizeof(float));
         }
     }
-    if (!text.empty() || !audio.empty()) {
-        send_result(std::move(text), std::move(audio));
+    if (!content.empty() || !audio.empty()) {
+        send_result(std::move(content), std::move(audio));
     }
     if (done) {
         if (gen.valid()) {
             // the pipeline decoded the response, the sequence ends where it stopped
             n_past = llama_memory_seq_pos_max(llama_get_memory(ctx), seq_id) + 1;
         }
-        send_result({}, {}, true);
-        responding = false;
-        cancelled  = false;
+        response_end();
     }
     return true;
 }
 
+void server_realtime_slot::response_end() {
+    send_result({}, {}, true);
+    responding = false;
+    cancelled  = false;
+}
+
+//
+// full duplex (e.g. Hibiki): one row per frame of input audio, the model speaks while it listens
+// row = the stream row (input audio + previous text token) + the embedding of the audio generated at the previous frame
+//
+
+bool server_realtime_slot::duplex_start() {
+    // the cells past the window are reused, the window itself must fit
+    const int32_t n_swa = llama_model_n_swa(model);
+    if (n_ctx < n_swa) {
+        return fail("the context of a slot (" + std::to_string(n_ctx) + ") must hold the attention window of the model (" +
+                    std::to_string(n_swa) + "), see -c and -np");
+    }
+    stream.reset(mtmd_audio_stream_init(mctx, mtmd_audio_stream_params_default()));
+    if (!stream) {
+        return fail("failed to initialize the audio stream");
+    }
+    mtmd_helper::gen_audio::inp inp;
+    inp.data.seq_id   = seq_id;
+    inp.data.seed     = sampling.seed;
+    inp.data.stream   = true;
+    inp.data.out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM;
+    if (gen.set_input(inp.get()) != 0 || gen.step_prompt(llama_n_batch(ctx)) != 0) {
+        return fail("failed to start the response");
+    }
+    llama_memory_seq_rm(llama_get_memory(ctx), seq_id, -1, -1);
+    n_past    = 0;
+    n_decoded = 0;
+    sampled   = LLAMA_TOKEN_NULL;
+    h_state.assign(llama_model_n_embd_inp(model), 0.0f);
+    smpl.reset(common_sampler_init(model, sampling));
+    responding = true;
+    cancelled  = false;
+    return true;
+}
+
+bool server_realtime_slot::duplex_frame() {
+    const int32_t n = mtmd_audio_stream_step(stream.get(), sampled);
+    if (n == -2) {
+        return fail("audio stream error");
+    }
+    if (n <= 0) {
+        duplex_pending = false;
+        return true;
+    }
+    GGML_ASSERT(n == 1);
+
+    // the model was trained on streams no longer than its window, so it always saw their start (it acts as an attention sink)
+    // once the window is full: the first rows stay, the oldest rows after them go and the rest shifts back, like StreamingLLM
+    llama_memory_t mem   = llama_get_memory(ctx);
+    const int32_t  n_swa = llama_model_n_swa(model);
+    if (n_swa > 0 && n_past >= n_swa && llama_memory_can_shift(mem)) {
+        const int32_t n_discard = n_swa / duplex_discard_div;
+        llama_memory_seq_rm (mem, seq_id, duplex_n_keep, duplex_n_keep + n_discard);
+        llama_memory_seq_add(mem, seq_id, duplex_n_keep + n_discard, -1, -n_discard);
+        n_past -= n_discard;
+    }
+
+    const float * row = mtmd_audio_stream_get_output_embd(stream.get());
+    std::vector<float> inp(row, row + h_state.size());
+    for (size_t i = 0; i < inp.size(); i++) {
+        inp[i] += h_state[i];
+    }
+    if (!decode(nullptr, inp.data(), 1, true)) {
+        return false;
+    }
+    sampled = common_sampler_sample(smpl.get(), ctx, -1);
+    common_sampler_accept(smpl.get(), sampled, true);
+
+    // copy the hidden state before any other slot decodes
+    const float * h = llama_get_embeddings_ith(ctx, -1);
+    std::vector<float> h_cur(h, h + llama_model_n_embd(model));
+    const float * fb = nullptr;
+    if (gen.step_gen(sampled, h_cur.data(), &fb) != 0 || fb == nullptr) {
+        return fail("response generation failed");
+    }
+    h_state.assign(fb, fb + h_state.size());
+    n_decoded++;
+
+    common_chat_input content;
+    content.append(piece(sampled), sampled);
+    std::vector<float> audio;
+    int32_t sample_rate = 0;
+    const char * data   = nullptr;
+    size_t data_len     = 0;
+    if (gen.get_output(&sample_rate, &data, &data_len) == 0 && data_len > 0) {
+        audio.assign((const float *) data, (const float *) data + data_len / sizeof(float));
+    }
+    if (!content.empty() || !audio.empty()) {
+        send_result(std::move(content), std::move(audio));
+    }
+    return true;
+}
+
+bool server_realtime_slot::duplex_update() {
+    while (!ops.empty()) {
+        server_realtime_op op = std::move(ops.front());
+        ops.pop_front();
+        switch (op.action) {
+            case SERVER_CONTROL_ACTION_AUDIO_APPEND:
+                {
+                    // the first audio opens the response
+                    if (!responding && !duplex_start()) {
+                        return false;
+                    }
+                    mtmd_audio_stream_push(stream.get(), op.audio.data(), op.audio.size());
+                    duplex_pending = true;
+                } break;
+            case SERVER_CONTROL_ACTION_RESPONSE_CANCEL:
+                {
+                    // the audio after it opens another response
+                    if (responding) {
+                        stream.reset();
+                        gen.reset();
+                        duplex_pending = false;
+                        cancelled      = true;
+                        response_end();
+                    }
+                } break;
+            default:
+                break;
+        }
+    }
+    return !responding || !duplex_pending || duplex_frame();
+}
+
 bool server_realtime_slot::update() {
-    llama_set_embeddings(ctx, true);
+    llama_set_embeddings(ctx, gen.valid());
+
+    if (duplex) {
+        return duplex_update();
+    }
 
     if (responding) {
         return response_step();

@@ -81,7 +81,7 @@ int main(int argc, char ** argv) {
     llama_init = common_init_from_params(params);
     {
         auto * model = llama_init->model();
-        const char * clip_path = params.mmproj.path.c_str();
+        const char * mmproj_path = params.mmproj.path.c_str();
         mtmd_context_params mparams = mtmd_context_params_default();
         mparams.use_gpu          = params.mmproj_use_gpu;
         mparams.device           = params.mmproj_device;
@@ -96,9 +96,9 @@ int main(int argc, char ** argv) {
             mparams.cb_eval_user_data = &cb_data;
             mparams.cb_eval = common_debug_cb_eval;
         }
-        ctx_mtmd.reset(mtmd_init_from_file(clip_path, model, mparams));
+        ctx_mtmd.reset(mtmd_init_from_file(mmproj_path, model, mparams));
         if (!ctx_mtmd.get()) {
-            LOG_ERR("Failed to load vision model from %s\n", clip_path);
+            LOG_ERR("Failed to load vision model from %s\n", mmproj_path);
             exit(1);
         }
     }

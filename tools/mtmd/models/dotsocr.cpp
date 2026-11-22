@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_dotsocr::build() {
+ggml_cgraph * mtmd_graph_dotsocr::build() {
     const int n_pos            = n_patches;
     const int num_position_ids = n_pos * 4; // m-rope requires 4 dim per position
 
@@ -11,7 +11,7 @@ ggml_cgraph * clip_graph_dotsocr::build() {
     ggml_set_name(positions, "positions");
     ggml_set_input(positions);
 
-    auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+    auto add_pos = [&](ggml_tensor * cur, const mtmd_layer &) {
         return ggml_rope_multi(
                     ctx0, cur, positions, nullptr,
                     d_head/2, mrope_sections, GGML_ROPE_TYPE_VISION,

@@ -27,7 +27,7 @@ static constexpr float SPK_WEAK_BOOST   = 2.0f; // _boost_topk_scores, scale_fac
 static constexpr float SPK_SPEECH_THR   = 0.5f; // _disable_low_scores: a speaker's frames at or below it are not cached
 
 // the speaker expert has its own layers, width and head count, which build_vit does not take; full rotary
-ggml_tensor * clip_graph_nemotron_transcribe::build_spk_encoder(ggml_tensor * cur, ggml_tensor * pos) {
+ggml_tensor * mtmd_graph_nemotron_transcribe::build_spk_encoder(ggml_tensor * cur, ggml_tensor * pos) {
     const int     n_head = hparams.spk_n_head;
     const int64_t n_embd = cur->ne[0];
     const int64_t n_pos  = cur->ne[1];
@@ -57,7 +57,7 @@ ggml_tensor * clip_graph_nemotron_transcribe::build_spk_encoder(ggml_tensor * cu
     return build_norm(cur, model.spk_post_ln_w, model.spk_post_ln_b, NORM_TYPE_NORMAL, eps, -1);
 }
 
-ggml_cgraph * clip_graph_nemotron_transcribe::build() {
+ggml_cgraph * mtmd_graph_nemotron_transcribe::build() {
     const int     sub          = hparams.subsampling_factor;
     const int64_t n_mel        = hparams.n_mel_bins;
     const int64_t n_mel_frames = img.nx();
@@ -90,7 +90,7 @@ ggml_cgraph * clip_graph_nemotron_transcribe::build() {
     }
 
     ggml_tensor * asr_pos = ggml_view_1d(ctx0, pos, n_pos, 0);
-    auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+    auto add_pos = [&](ggml_tensor * cur, const mtmd_layer &) {
         return ggml_rope_ext(ctx0, cur, asr_pos, nullptr, hparams.audio_rope_dims, GGML_ROPE_TYPE_NEOX, 0, 10000.0f, 1.0f,
                              0.0f, 1.0f, 0.0f, 0.0f);
     };
@@ -231,10 +231,10 @@ struct spk_stream {
 };
 
 // every update has a full window, which overflows the FIFO and the cache (NeMo's update period of 300 never applies)
-static_assert(clip_graph_nemotron_transcribe::window_core - SPK_FIFO_LEN > SPK_CACHE_LEN);
+static_assert(mtmd_graph_nemotron_transcribe::window_core - SPK_FIFO_LEN > SPK_CACHE_LEN);
 
 // NeMo SortformerModules.streaming_update: core rows join the FIFO, its overflow moves to the cache, which is compressed
-static void update_spk_state(spk_stream & ss, const clip_enc_state & st, const clip_model & model, int64_t core_begin,
+static void update_spk_state(spk_stream & ss, const mtmd_subctx_enc_state & st, const mtmd_model & model, int64_t core_begin,
                              int64_t n_core) {
     const int64_t d       = model.hparams.spk_n_embd;
     const int64_t n_spk   = model.spk_head_fc2_w->ne[1];
@@ -257,13 +257,13 @@ static void update_spk_state(spk_stream & ss, const clip_enc_state & st, const c
 }
 
 // NeMo ParallelExpertEncoder._forward_online: windows with left/right context, one graph each, the speaker state carried
-bool clip_graph_nemotron_transcribe::encode_windows(clip_ctx * ctx, const clip_model & model, clip_encode_params * params) {
+bool mtmd_graph_nemotron_transcribe::encode_windows(mtmd_subcontext * ctx, const mtmd_model & model, mtmd_subctx_encode_params * params) {
     GGML_ASSERT(params->imgs->entries.size() == 1 && params->out_embd != nullptr);
-    const clip_image_f32 & rec = params->imgs->entries[0];
+    const mtmd_image_f32 & rec = params->imgs->entries[0];
     const auto &  buf      = rec.get_ro_buf();
     const int64_t n_frames = rec.nx();
     const int64_t n_rows   = rec.ny();
-    const int64_t n_embd   = clip_n_mmproj_embd(ctx);
+    const int64_t n_embd   = ctx->model.n_mmproj_embd();
     const int     sub      = model.hparams.subsampling_factor;
     const int64_t core     = (int64_t) window_core  * sub;
     const int64_t left     = (int64_t) window_left  * sub;
@@ -272,7 +272,7 @@ bool clip_graph_nemotron_transcribe::encode_windows(clip_ctx * ctx, const clip_m
     GGML_ASSERT((int64_t) buf.size() == n_frames * n_rows);
 
     auto & out = *params->out_embd;
-    GGML_ASSERT(out.size() == (size_t) n_embd * clip_n_output_tokens(ctx, &rec));
+    GGML_ASSERT(out.size() == (size_t) n_embd * ctx->model.n_output_tokens(&rec));
 
     // the ASR expert's input: per-feature normalization over the whole recording (NeMo normalize_batch, per_feature)
     std::vector<double> mean(n_rows), denom(n_rows);
@@ -292,7 +292,7 @@ bool clip_graph_nemotron_transcribe::encode_windows(clip_ctx * ctx, const clip_m
     }
 
     spk_stream     ss;
-    clip_enc_state st;
+    mtmd_subctx_enc_state st;
     size_t n_out = 0;
     for (int64_t w = 0; w < n_win; w++) {
         const int64_t core_begin = w * core;
@@ -310,18 +310,18 @@ bool clip_graph_nemotron_transcribe::encode_windows(clip_ctx * ctx, const clip_m
                 st.mel_norm[r * win_len + t] = (float) ((src[t] - mean[r]) / denom[r]);
             }
         }
-        clip_image_f32_batch batch;
+        mtmd_image_f32_batch batch;
         batch.is_audio = true;
         batch.entries.emplace_back();
         batch.entries[0].set_size({(int) win_len, (int) n_rows}, false, true);
         batch.entries[0].cpy_buf(data);
 
-        std::vector<float> embd((size_t) n_embd * clip_n_output_tokens(ctx, &batch.entries[0]));
-        clip_encode_params wp = *params;
+        std::vector<float> embd((size_t) n_embd * ctx->model.n_output_tokens(&batch.entries[0]));
+        mtmd_subctx_encode_params wp = *params;
         wp.imgs      = &batch;
         wp.out_embd  = &embd;
         wp.enc_state = &st;
-        if (!clip_encode(ctx, &wp)) {
+        if (!ctx->encode(&wp)) {
             return false;
         }
 

@@ -13,11 +13,11 @@
 #include <future>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <utility>
 #include <vector>
 
-#define GGML_ZDNN_NAME    "zDNN"
-#define GGML_ZDNN_VERSION ZDNN_VERNUM
+#define GGML_ZDNN_NAME "zDNN"
 
 #define ZDNN_CHECK(stmt)                \
     do {                                \
@@ -50,6 +50,8 @@ struct ggml_backend_zdnn_buffer {
 
     std::vector<float> scales;          // per-row scales for quantized weights
     std::vector<float> channel_scales;  // per-input-channel scales for quantized weights, applied to the inputs
+
+    std::mutex mutex;
 
     char name[GGML_MAX_NAME];
 };

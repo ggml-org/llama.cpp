@@ -4610,6 +4610,10 @@ int ggml_metal_op_group_norm(ggml_metal_op_t ctx, int idx) {
         /*.nb00 =*/ nb00,
         /*.nb01 =*/ nb01,
         /*.nb02 =*/ nb02,
+        /*.nb03 =*/ nb03,
+        /*.nb1  =*/ nb1,
+        /*.nb2  =*/ nb2,
+        /*.nb3  =*/ nb3,
         /*.ngrp =*/ ngrp,
         /*.eps  =*/ eps,
     };
@@ -4633,7 +4637,7 @@ int ggml_metal_op_group_norm(ggml_metal_op_t ctx, int idx) {
 
     ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 
-    ggml_metal_encoder_dispatch_threadgroups(enc, ngrp, 1, 1, nth, 1, 1);
+    ggml_metal_encoder_dispatch_threadgroups(enc, ngrp, 1, ne03, nth, 1, 1);
 
     return 1;
 }
@@ -4694,16 +4698,17 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
 
             for (int i = 1; i < n_fuse; i++) {
                 const ggml_tensor * fn = ctx->node(idx + i);
+                const ggml_tensor * fs = fn->src[0] == ctx->node(idx + i - 1) ? fn->src[1] : fn->src[0];
 
-                bid_fuse[i - 1] = ggml_metal_get_buffer_id(fn->src[1]);
+                bid_fuse[i - 1] = ggml_metal_get_buffer_id(fs);
 
-                args.nef1[i] = fn->src[1]->ne[1];
-                args.nef2[i] = fn->src[1]->ne[2];
-                args.nef3[i] = fn->src[1]->ne[3];
+                args.nef1[i] = fs->ne[1];
+                args.nef2[i] = fs->ne[2];
+                args.nef3[i] = fs->ne[3];
 
-                args.nbf1[i] = fn->src[1]->nb[1];
-                args.nbf2[i] = fn->src[1]->nb[2];
-                args.nbf3[i] = fn->src[1]->nb[3];
+                args.nbf1[i] = fs->nb[1];
+                args.nbf2[i] = fs->nb[2];
+                args.nbf3[i] = fs->nb[3];
             }
 
             if (debug_fusion > 1) {
@@ -4955,6 +4960,33 @@ int ggml_metal_op_im2col(ggml_metal_op_t ctx, int idx) {
     return 1;
 }
 
+// number of reduction splits of the conv_2d matmul kernels
+// A small output with a long reduction leaves the GPU idle, so the reduction is split until there are about 1M partial sums.
+static int ggml_metal_op_conv_2d_nsplit(const ggml_tensor * op, int32_t * nk) {
+    const int64_t K      = op->src[0]->ne[0]*op->src[0]->ne[1]*op->src[0]->ne[2];
+    const int64_t nsteps = (K + 31)/32;
+    const int64_t ne     = ggml_nelements(op);
+
+    // at least 3 reduction steps of 32 per split, at most 32 splits
+    const int64_t nsplit = std::max<int64_t>(1, std::min<int64_t>({ (1024*1024 + ne - 1)/ne, nsteps/3, 32 }));
+    const int64_t steps  = (nsteps + nsplit - 1)/nsplit;
+
+    if (nk) {
+        *nk = (int32_t) (steps*32);
+    }
+
+    return (int) ((nsteps + steps - 1)/steps);
+}
+
+size_t ggml_metal_op_conv_2d_extra_tmp(const ggml_tensor * op) {
+    assert(op->op == GGML_OP_CONV_2D);
+
+    const int nsplit = ggml_metal_op_conv_2d_nsplit(op, nullptr);
+
+    // partial sums of the reduction splits
+    return nsplit > 1 ? nsplit*ggml_nelements(op)*sizeof(float) : 0;
+}
+
 int ggml_metal_op_conv_2d(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
@@ -5008,7 +5040,71 @@ int ggml_metal_op_conv_2d(ggml_metal_op_t ctx, int idx) {
         /*.p1   =*/ p1,
         /*.d0   =*/ d0,
         /*.d1   =*/ d1,
+        /*.nk   =*/ 0,
     };
+
+    const ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx->dev);
+
+    // the matmul kernels walk the patches with 32-bit byte offsets inside an image
+    // larger images, possibly a strided view, take the generic kernel
+    const uint64_t max_off = (ne12 - 1)*nb12 + (ne11 - 1)*nb11 + (ne10 - 1)*nb10 + sizeof(float);
+    const bool     fits_32 = max_off <= UINT32_MAX;
+
+    if (props_dev->has_simdgroup_mm && fits_32) {
+        auto pipeline = ggml_metal_library_get_pipeline_conv_2d_mm(lib, op);
+
+        const int nr0 = pipeline.nr0;
+        const int nr1 = pipeline.nr1;
+        const int nsg = pipeline.nsg;
+
+        const int64_t NP = ne3*ne1*ne0;
+        const int64_t OC = ne03;
+
+        const int nsplit = ggml_metal_op_conv_2d_nsplit(op, &args.nk);
+
+        ggml_metal_buffer_id bid_dst = ggml_metal_get_buffer_id(op);
+        ggml_metal_buffer_id bid_tmp = bid_dst;
+        bid_tmp.offs += ggml_nbytes(op);
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+        ggml_metal_encoder_set_buffer  (enc, nsplit > 1 ? bid_tmp : bid_dst,       3);
+
+        ggml_metal_encoder_set_threadgroup_memory_size(enc, pipeline.smem, 0);
+
+        if (props_dev->has_tensor) {
+            // per image: nr0 positions times nr1 channels per threadgroup
+            const int64_t OHW = ne1*ne0;
+            ggml_metal_encoder_dispatch_threadgroups(enc, (OC + nr1 - 1)/nr1, (OHW + nr0 - 1)/nr0, ne3*nsplit, 32, nsg, 1);
+        } else {
+            ggml_metal_encoder_dispatch_threadgroups(enc, (NP + nr1 - 1)/nr1, (OC + nr0 - 1)/nr0, nsplit, 32, nsg, 1);
+        }
+
+        if (nsplit > 1) {
+            GGML_ASSERT(ggml_is_contiguous(op));
+
+            // sync the 2 kernels
+            ggml_metal_op_concurrency_reset(ctx);
+
+            ggml_metal_kargs_conv_2d_reduce args0 = {
+                /*.ne     =*/ (int32_t) ggml_nelements(op),
+                /*.nsplit =*/ nsplit,
+            };
+
+            auto pipeline0 = ggml_metal_library_get_pipeline_conv_2d_mm_reduce(lib, op);
+
+            ggml_metal_encoder_set_pipeline(enc, pipeline0);
+            ggml_metal_encoder_set_bytes   (enc, &args0, sizeof(args0), 0);
+            ggml_metal_encoder_set_buffer  (enc, bid_tmp, 1);
+            ggml_metal_encoder_set_buffer  (enc, bid_dst, 2);
+
+            ggml_metal_encoder_dispatch_threadgroups(enc, (args0.ne + 255)/256, 1, 1, 256, 1, 1);
+        }
+
+        return 1;
+    }
 
     auto pipeline = ggml_metal_library_get_pipeline_conv_2d(lib, op);
 
@@ -6004,11 +6100,10 @@ static void ggml_metal_op_top_k_radix(ggml_metal_op_t ctx, int idx) {
         /*.top_k =*/ (int32_t) op->ne[0],
     };
 
-    // shared memory: 256-entry histogram + bucket/above scalars + output counter
+    // shared memory: 256-entry histogram + bucket/above scalars
     const size_t smem_histo  = GGML_PAD(256*sizeof(uint32_t), 16);
     const size_t smem_bucket = GGML_PAD(    sizeof(uint32_t), 16);
     const size_t smem_above  = GGML_PAD(    sizeof(uint32_t), 16);
-    const size_t smem_out    = GGML_PAD(    sizeof(uint32_t), 16);
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
     ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
@@ -6018,7 +6113,6 @@ static void ggml_metal_op_top_k_radix(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_threadgroup_memory_size(enc, smem_histo,  0);
     ggml_metal_encoder_set_threadgroup_memory_size(enc, smem_bucket, 1);
     ggml_metal_encoder_set_threadgroup_memory_size(enc, smem_above,  2);
-    ggml_metal_encoder_set_threadgroup_memory_size(enc, smem_out,    3);
 
     ggml_metal_encoder_dispatch_threadgroups(enc, ne01, ne02, ne03, nth, 1, 1);
 }

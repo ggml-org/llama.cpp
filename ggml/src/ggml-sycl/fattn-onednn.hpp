@@ -7,6 +7,10 @@
 // (f16 KV, no softcap/ALiBi, single stream, tuned head_dim, prefill-sized q.)
 bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst, bool use_shape_limit = true);
 
+// True once a oneDNN SDPA execute has failed on this device. Not part of _supported(): that also sizes the
+// FA scratch buffer, and a size that depends on runtime state can come out smaller than a later call needs.
+bool ggml_sycl_flash_attn_ext_onednn_failed(int device);
+
 // True when the oneDNN path binds an F16 KV cache in place instead of staging a dense copy of
 // it. Depends only on the types and strides of K and V, so the answer holds for every call.
 bool ggml_sycl_fattn_onednn_binds_kv(const ggml_tensor * K, const ggml_tensor * V);

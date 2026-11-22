@@ -557,7 +557,8 @@ struct case_state_rotation : ctx_test {
             }
 
             llama_token token = 0;
-            if (llama_decode(src.get(), llama_batch_get_one(&token, 1))) {
+            common_batch batch = common_batch_get_one(src.get(), &token, 1);
+            if (llama_process(src.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
                 TLOG_ERR("%s: failed to decode a token\n", __func__);
                 success = false;
                 break;

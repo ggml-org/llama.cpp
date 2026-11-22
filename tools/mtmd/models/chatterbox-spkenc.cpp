@@ -5,7 +5,7 @@
 static constexpr float bn_eps = 1e-5f;
 
 // per-channel batchnorm on x [C, T], w/b are null on the affine=False variant
-ggml_tensor * clip_graph_chatterbox_spkenc::bn1d(const clip_chatterbox::bn & n, ggml_tensor * x) {
+ggml_tensor * mtmd_graph_chatterbox_spkenc::bn1d(const mtmd_chatterbox::bn & n, ggml_tensor * x) {
     ggml_tensor * sd = ggml_sqrt(ctx0, ggml_scale_bias(ctx0, n.var, 1.0f, bn_eps));
     if (!n.w) {
         return ggml_div(ctx0, ggml_sub(ctx0, x, n.mean), sd);
@@ -16,7 +16,7 @@ ggml_tensor * clip_graph_chatterbox_spkenc::bn1d(const clip_chatterbox::bn & n, 
 }
 
 // batchnorm on a conv2d activation [W=T, H=F, C, 1], stats on ne2
-static ggml_tensor * cbx_bn2d(ggml_context * ctx0, const clip_chatterbox::bn & n, ggml_tensor * x) {
+static ggml_tensor * cbx_bn2d(ggml_context * ctx0, const mtmd_chatterbox::bn & n, ggml_tensor * x) {
     const int C = (int) x->ne[2];
     ggml_tensor * mean = ggml_reshape_4d(ctx0, n.mean, 1, 1, C, 1);
     ggml_tensor * var  = ggml_reshape_4d(ctx0, n.var,  1, 1, C, 1);
@@ -27,12 +27,12 @@ static ggml_tensor * cbx_bn2d(ggml_context * ctx0, const clip_chatterbox::bn & n
     return ggml_add(ctx0, ggml_mul(ctx0, x, a), shift);
 }
 
-ggml_tensor * clip_graph_chatterbox_spkenc::bn2d_relu(const clip_chatterbox::bn & n, ggml_tensor * x) {
+ggml_tensor * mtmd_graph_chatterbox_spkenc::bn2d_relu(const mtmd_chatterbox::bn & n, ggml_tensor * x) {
     return ggml_relu(ctx0, cbx_bn2d(ctx0, n, x));
 }
 
 // fcm residual 2d block, stride on the frequency axis only
-ggml_tensor * clip_graph_chatterbox_spkenc::res2d(const clip_chatterbox::spk_res2d & r, ggml_tensor * x,
+ggml_tensor * mtmd_graph_chatterbox_spkenc::res2d(const mtmd_chatterbox::spk_res2d & r, ggml_tensor * x,
                                                   int stride) {
     ggml_tensor * cur = ggml_conv_2d(ctx0, r.conv1_w, x, 1, stride, 1, 1, 1, 1);
     cur = bn2d_relu(r.bn1, cur);
@@ -48,7 +48,7 @@ ggml_tensor * clip_graph_chatterbox_spkenc::res2d(const clip_chatterbox::spk_res
 }
 
 // cam dense tdnn layer: bottleneck then context-gated conv; x [C_in, T] -> [growth, T]
-ggml_tensor * clip_graph_chatterbox_spkenc::cam_layer(const clip_chatterbox::spk_cam_layer & l, ggml_tensor * x,
+ggml_tensor * mtmd_graph_chatterbox_spkenc::cam_layer(const mtmd_chatterbox::spk_cam_layer & l, ggml_tensor * x,
                                                       int dil, ggml_tensor * segfix) {
     ggml_tensor * h = ggml_relu(ctx0, bn1d(l.nl1_bn, x));
     h = cbx_conv1d(l.linear1_w, nullptr, h, 1, 0, 0);
@@ -86,7 +86,7 @@ ggml_tensor * clip_graph_chatterbox_spkenc::cam_layer(const clip_chatterbox::spk
     return ggml_mul(ctx0, y, m);
 }
 
-ggml_cgraph * clip_graph_chatterbox_spkenc::build() {
+ggml_cgraph * mtmd_graph_chatterbox_spkenc::build() {
     const auto & c = model.cbx;
 
     const int T  = img.nx();
@@ -119,7 +119,7 @@ ggml_cgraph * clip_graph_chatterbox_spkenc::build() {
     cb(x, "spk_tdnn", -1);
 
     static const int block_dil[3] = {1, 2, 2};
-    const clip_chatterbox::spk_cam_block * blocks[3] = { &c.spk_block1, &c.spk_block2, &c.spk_block3 };
+    const mtmd_chatterbox::spk_cam_block * blocks[3] = { &c.spk_block1, &c.spk_block2, &c.spk_block3 };
     for (int bi = 1; bi <= 3; bi++) {
         const auto & blk = *blocks[bi - 1];
         for (const auto & l : blk.layers) {

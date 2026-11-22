@@ -42,6 +42,10 @@ void llama_model_jais2::load_arch_tensors(llama_model_loader &) {
         layer.ffn_up_b   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "bias", i),   {n_ff}, 0);
         layer.ffn_down   = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
         layer.ffn_down_b = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "bias", i),   {n_embd}, 0);
+
+        // numerical issues with F16 accumulators
+        prec_policy.set_acc(layer.wo,       GGML_PREC_BF16);
+        prec_policy.set_acc(layer.ffn_down, GGML_PREC_BF16);
     }
 }
 

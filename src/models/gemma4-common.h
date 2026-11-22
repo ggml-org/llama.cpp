@@ -103,7 +103,7 @@ static inline ggml_tensor * gemma4_build_ffn_moe(
                 nullptr, g.n_expert, g.n_expert_used,
                 LLM_FFN_GELU, true, 1.0f, LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
                 il, logits,
-                layer.ffn_gate_up_exps, layer.ffn_up_exps_s, layer.ffn_gate_exps_s, layer.ffn_down_exps_s);
+                layer.ffn_gate_up_exps);
         cur_moe = g.build_norm(cur_moe, layer.ffn_post_norm_2, nullptr, LLM_NORM_RMS, il);
         g.cb(cur_moe, "ffn_moe", il);
 

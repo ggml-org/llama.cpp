@@ -82,9 +82,10 @@ protected:
     std::string last_error;
     std::vector<server_mcp_tool_def> tools;
 
-    // both assume rpc_mutex is already held by the public caller
+    // all assume rpc_mutex is already held by the public caller
     bool ensure_init(const std::function<bool()> & should_stop); // initialize handshake, once
     json send_rpc(const json & request, const std::function<bool()> & should_stop); // returns the reply or an {"error": ...}
+    void notify_cancelled(const json & request, const std::string & reason); // notifications/cancelled for an abandoned request
 };
 
 //
