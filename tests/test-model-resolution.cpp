@@ -542,6 +542,49 @@ static void test_blob_removal() {
         fs::remove_all(cache_dir / "actual-blobs");
         fs::remove(external);
     }
+
+    g_context = "blob removal: external revision";
+    fs::path blob = cache_put(repo_id, "dflash-model-Q4_0.gguf");
+    const fs::path external_revision = cache_dir / "external-revision";
+    fs::create_directories(external_revision);
+    { std::ofstream(external_revision / local.filename()) << "gguf"; }
+    fs::remove_all(local.parent_path());
+    fs::create_directory_symlink(external_revision, local.parent_path());
+    REQUIRE(!cache_remove(repo_id, local));
+    REQUIRE(fs::exists(local));
+    fs::remove_all(repo);
+    fs::remove_all(external_revision);
+
+    g_context = "blob removal: deep linked revision";
+    blob = cache_put(repo_id, "dflash-model-Q4_0.gguf");
+    const fs::path deep_revision = repo / "revisions" / "nested" / COMMIT;
+    const fs::path deep_local = repo / "snapshots" / "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" / local.filename();
+    fs::create_directories(deep_revision);
+    cache_link(blob, deep_revision / deep_local.filename());
+    fs::create_directory_symlink(deep_revision, deep_local.parent_path());
+    REQUIRE(cache_remove(repo_id, local));
+    REQUIRE(!fs::is_symlink(local));
+    REQUIRE(fs::exists(blob));
+    REQUIRE(fs::exists(deep_local));
+    fs::remove_all(repo);
+
+    g_context = "blob removal: unresolved revision entry";
+    blob = cache_put(repo_id, "dflash-model-Q4_0.gguf");
+    const fs::path unresolved = repo / "snapshots" / "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" / local.filename();
+    fs::create_directories(unresolved.parent_path());
+    fs::create_symlink(unresolved.filename(), unresolved);
+    REQUIRE(cache_remove(repo_id, local));
+    REQUIRE(!fs::is_symlink(local));
+    REQUIRE(fs::exists(blob));
+    fs::remove_all(repo);
+
+    g_context = "blob removal: snapshots regular file";
+    blob = cache_put(repo_id, "dflash-model-Q4_0.gguf");
+    { std::ofstream(repo / "snapshots" / ".DS_Store") << "metadata"; }
+    REQUIRE(cache_remove(repo_id, local));
+    REQUIRE(!fs::is_symlink(local));
+    REQUIRE(!fs::exists(blob));
+    fs::remove_all(repo);
 }
 
 static void test_cache_permissions() {
