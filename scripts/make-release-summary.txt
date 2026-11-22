@@ -33,7 +33,7 @@ Write a summary of the change log in a few sections:
 
 ### UI changes (if applicable)
 
-[summarize the changes to `/tools/ui/`]
+[summarize the changes to `/ui/apps/chat/`]
 
 ### ggml changes (if applicable)
 

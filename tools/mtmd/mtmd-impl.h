@@ -106,6 +106,7 @@
 #define KEY_GEN_AUDIO_PROJ_TYPE    "clip.gen.audio.projector_type" // for models with mixed modalities
 // name of the weight variant, for settings that are not in the checkpoint
 #define KEY_GEN_AUDIO_VARIANT      "clip.gen.audio.model_variant"
+#define KEY_GEN_AUDIO_DEFAULT_VOICE "clip.gen.audio.default_voice"
 // sampling defaults of the generated audio, like general.sampling.* for text
 #define KEY_GEN_AUDIO_TEMP           "clip.gen.audio.sampling.temp"
 #define KEY_GEN_AUDIO_TOP_K          "clip.gen.audio.sampling.top_k"
@@ -124,6 +125,7 @@
 
 #define TN_POS_EMBD        "%s.position_embd.weight"
 #define TN_CLASS_EMBD      "v.class_embd"
+#define TN_CLASS_POS_EMBD  "v.class_position_embd.weight"
 #define TN_PATCH_EMBD      "v.patch_embd.weight"  // not rename tensor with ".0" postfix for backward compat
 #define TN_PATCH_EMBD_1    "v.patch_embd.weight.1"
 #define TN_PATCH_BIAS      "v.patch_embd.bias"
@@ -250,6 +252,12 @@
 #define TN_A_ASP_ATTN  "a.asp_attn.%s"
 #define TN_A_ASP_TDNN  "a.asp_tdnn.%s"
 
+// qwen3tts reference encoder, the transformer blocks use the generic names with the "a.gen.enc.tfm" prefix
+#define TN_A_GEN_ENC_QUANT_FIRST_IN  "a.gen.enc.quant.first.in_proj.%s"
+#define TN_A_GEN_ENC_QUANT_FIRST_CB  "a.gen.enc.quant.first.codebook.%s"
+#define TN_A_GEN_ENC_QUANT_REST_IN   "a.gen.enc.quant.rest.in_proj.%s"
+#define TN_A_GEN_ENC_QUANT_REST_CB   "a.gen.enc.quant.rest.codebook.%s"
+
 // qwen3tts code_predictor
 #define TN_A_GEN_CODE_PROJ_IN  "a.gen.code.proj_in.%s"
 #define TN_A_GEN_CODE_EMBD     "a.gen.code.embd.%s"
@@ -268,6 +276,31 @@
 #define TN_A_GEN_CODE_EH_PROJ      "a.gen.code.blk.%d.eh_proj.%s"
 #define TN_A_GEN_CODE_BLK_EMBD     "a.gen.code.blk.%d.embd.%s"
 #define TN_A_GEN_CODE_BLK_OUT_NORM "a.gen.code.blk.%d.out_norm.%s"
+
+// fish_s2: fast AR input embedding, shared by all codebooks
+#define TN_A_GEN_CODE_TOK_EMBD "a.gen.code.tok_embd.%s"
+
+// fish_s2 codec encoder, the transformer layers use the generic a.blk.* names
+#define TN_A_CODEC_ENC_ENTRY      "a.codec.enc.entry.%s"
+#define TN_A_CODEC_ENC_SNAKE      "a.codec.enc.blk.%d.snake.%s"
+#define TN_A_CODEC_ENC_CONV       "a.codec.enc.blk.%d.conv.%s"
+#define TN_A_CODEC_ENC_RES_ACT1   "a.codec.enc.blk.%d.res.%d.act1.%s"
+#define TN_A_CODEC_ENC_RES_CONV1  "a.codec.enc.blk.%d.res.%d.conv1.%s"
+#define TN_A_CODEC_ENC_RES_ACT2   "a.codec.enc.blk.%d.res.%d.act2.%s"
+#define TN_A_CODEC_ENC_RES_CONV2  "a.codec.enc.blk.%d.res.%d.conv2.%s"
+#define TN_A_CODEC_ENC_POST_SNAKE "a.codec.enc.post_snake.%s"
+#define TN_A_CODEC_ENC_POST_CONV  "a.codec.enc.post_conv.%s"
+#define TN_A_CODEC_DOWN_CONV      "a.codec.down.blk.%d.conv.%s"
+#define TN_A_CODEC_DOWN_DWCONV    "a.codec.down.blk.%d.dwconv.%s"
+#define TN_A_CODEC_DOWN_NORM      "a.codec.down.blk.%d.norm.%s"
+#define TN_A_CODEC_DOWN_PW1       "a.codec.down.blk.%d.pw1.%s"
+#define TN_A_CODEC_DOWN_PW2       "a.codec.down.blk.%d.pw2.%s"
+#define TN_A_CODEC_DOWN_GAMMA     "a.codec.down.blk.%d.gamma"
+#define TN_A_CODEC_PRE_NORM       "a.codec.pre_norm.%s"
+#define TN_A_CODEC_VQ_FIRST_IN    "a.codec.vq.first.in_proj.%s"
+#define TN_A_CODEC_VQ_FIRST_CB    "a.codec.vq.first.codebook.%s"
+#define TN_A_CODEC_VQ_REST_IN     "a.codec.vq.rest.in_proj.%s"
+#define TN_A_CODEC_VQ_REST_CB     "a.codec.vq.rest.codebook.%s"
 
 // qwen3tts code2wav (RVQ codes -> raw PCM)
 // pre_transformer layers use the generic TN_ATTN_*/TN_FFN_*/TN_LN_*/TN_LS_* macros, prefix "a.gen.wav.tfm"
@@ -413,6 +446,17 @@
 #define TN_A_CONV1D_NORM     "a.conv1d.%d.norm.%s"
 #define TN_A_PATCH           "a.patch.%d.%s"
 #define TN_A_PATCH_NORM      "a.patch.%d.norm.%s"
+
+// vibevoice-asr: causal ConvNeXt encoders, first index = encoder (0 = acoustic, 1 = semantic)
+#define TN_A_CNX_CONV        "a.cnx.%d.conv.%d.%s"
+#define TN_A_CNX_NORM        "a.cnx.%d.blk.%d.norm.%s"
+#define TN_A_CNX_DW          "a.cnx.%d.blk.%d.dw.%s"
+#define TN_A_CNX_LS1         "a.cnx.%d.blk.%d.ls1.%s"
+#define TN_A_CNX_FFN_NORM    "a.cnx.%d.blk.%d.ffn_norm.%s"
+#define TN_A_CNX_FFN_UP      "a.cnx.%d.blk.%d.ffn_up.%s"
+#define TN_A_CNX_FFN_DOWN    "a.cnx.%d.blk.%d.ffn_down.%s"
+#define TN_A_CNX_LS2         "a.cnx.%d.blk.%d.ls2.%s"
+#define TN_MM_AUDIO_MLP_NORM "mm.a.mlp_norm.%d.%s"
 #define TN_A_OUT_PROJ        "a.pre_encode.out.%s"
 #define TN_A_ATTN_PRE_NORM   "%s.blk.%d.attn_pre_norm.%s"
 #define TN_A_ATTN_POST_NORM  "%s.blk.%d.attn_post_norm.%s"
@@ -520,6 +564,8 @@ enum projector_type {
     PROJECTOR_TYPE_QWEN2A,
     PROJECTOR_TYPE_QWEN3A,
     PROJECTOR_TYPE_GLMA,
+    PROJECTOR_TYPE_HIGGS_AUDIO,
+    PROJECTOR_TYPE_VIBEVOICE_ASR,
     PROJECTOR_TYPE_QWEN25O, // will be replaced by QWEN2A or QWEN25VL depending on mtmd_subcontext
     PROJECTOR_TYPE_VOXTRAL,
     PROJECTOR_TYPE_VOXTRAL_RT,
@@ -568,15 +614,28 @@ enum projector_type {
     PROJECTOR_TYPE_QWEN3TTS_GEN,
     PROJECTOR_TYPE_POCKETTTS_SPKENC,
     PROJECTOR_TYPE_POCKETTTS_GEN,
+    PROJECTOR_TYPE_MOSHI,
+    PROJECTOR_TYPE_MOSHI_GEN,
     PROJECTOR_TYPE_SOPRANO,
+    PROJECTOR_TYPE_KOKORO,
+    PROJECTOR_TYPE_TINY_VOCA,
     PROJECTOR_TYPE_LFM3A_GEN,
     PROJECTOR_TYPE_DRAMA3_GEN,
+    PROJECTOR_TYPE_ZONOS3_GEN,
+    PROJECTOR_TYPE_ZONOS3_SPKENC,
+    PROJECTOR_TYPE_YUE2_GEN,
+    PROJECTOR_TYPE_VOXCPM2_GEN,
+    PROJECTOR_TYPE_VOXCPM2_SPKENC,
+    PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN,
+    PROJECTOR_TYPE_FISH_S2_GEN,
+    PROJECTOR_TYPE_FISH_S2_SPKENC,
     PROJECTOR_TYPE_MUSE_GLIMMER,
     PROJECTOR_TYPE_SENSENOVA_U1,
     PROJECTOR_TYPE_COHERE2V,
     PROJECTOR_TYPE_MUSE_SPARK_AUDIO,
     PROJECTOR_TYPE_CHATTERBOX,
     PROJECTOR_TYPE_CHATTERBOX_SPKENC,
+    PROJECTOR_TYPE_INKLING2V,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -607,6 +666,8 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_QWEN2A,            "qwen2a"},
     { PROJECTOR_TYPE_QWEN3A,            "qwen3a"},
     { PROJECTOR_TYPE_GLMA,              "glma"},
+    { PROJECTOR_TYPE_HIGGS_AUDIO,       "higgs_audio"},
+    { PROJECTOR_TYPE_VIBEVOICE_ASR,     "vibevoice_asr"},
     { PROJECTOR_TYPE_QWEN25O,           "qwen2.5o"},
     { PROJECTOR_TYPE_VOXTRAL,           "voxtral"},
     { PROJECTOR_TYPE_VOXTRAL_RT,        "voxtral_rt"},
@@ -655,15 +716,28 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_QWEN3TTS_GEN,      "qwen3tts_gen"},
     { PROJECTOR_TYPE_POCKETTTS_SPKENC,  "pockettts_spkenc"},
     { PROJECTOR_TYPE_POCKETTTS_GEN,     "pockettts_gen"},
+    { PROJECTOR_TYPE_MOSHI,             "moshi"},
+    { PROJECTOR_TYPE_MOSHI_GEN,         "moshi_gen"},
     { PROJECTOR_TYPE_SOPRANO,           "soprano"},
+    { PROJECTOR_TYPE_KOKORO,            "kokoro"},
+    { PROJECTOR_TYPE_TINY_VOCA,         "tiny_voca"},
     { PROJECTOR_TYPE_LFM3A_GEN,         "lfm3a_gen"},
     { PROJECTOR_TYPE_DRAMA3_GEN,        "drama3_gen"},
+    { PROJECTOR_TYPE_ZONOS3_GEN,        "zonos3_gen"},
+    { PROJECTOR_TYPE_ZONOS3_SPKENC,     "zonos3_spkenc"},
+    { PROJECTOR_TYPE_YUE2_GEN,          "yue2_gen"},
+    { PROJECTOR_TYPE_VOXCPM2_GEN,       "voxcpm2_gen"},
+    { PROJECTOR_TYPE_VOXCPM2_SPKENC,    "voxcpm2_spkenc"},
+    { PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN, "minimax_music3_gen"},
+    { PROJECTOR_TYPE_FISH_S2_GEN,       "fish_s2_gen"},
+    { PROJECTOR_TYPE_FISH_S2_SPKENC,    "fish_s2_spkenc"},
     { PROJECTOR_TYPE_MUSE_GLIMMER,      "muse-glimmer"},
     { PROJECTOR_TYPE_SENSENOVA_U1,      "sensenova_u1"},
     { PROJECTOR_TYPE_COHERE2V,          "cohere2v"},
     { PROJECTOR_TYPE_MUSE_SPARK_AUDIO,  "muse-spark-audio"},
     { PROJECTOR_TYPE_CHATTERBOX,        "chatterbox"},
     { PROJECTOR_TYPE_CHATTERBOX_SPKENC, "chatterbox_spkenc"},
+    { PROJECTOR_TYPE_INKLING2V,         "inkling2v"},
 };
 
 static projector_type projector_type_from_string(const std::string & str) {
@@ -807,6 +881,8 @@ struct mtmd_image_f32 {
     // deepseek4v: number of leading IMAGE_PAD embeddings, aligns IMAGE_START to the LLM compressor ratio
     // depends on the chunk position, set at tokenize time (see mtmd_tokenizer::add_media)
     int32_t lead_pad = 0;
+    // audio (vibevoice): leading samples that only feed the causal convs, they produce no embedding
+    int32_t audio_n_ctx = 0;
     // separators appended after the image tokens
     mtmd_suffix_type suffix_type = MTMD_SUFFIX_NONE;
 

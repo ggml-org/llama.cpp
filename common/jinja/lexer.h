@@ -39,7 +39,6 @@ struct token {
         multiplicative_binary_operator, // * / %
         power_operator, // **
         comparison_binary_operator, // < > <= >= == !=
-        unary_operator, // ! - +
         comment, // {# ... #}
     };
     type t;
@@ -74,7 +73,6 @@ static std::string type_to_string(token::type t) {
         case token::multiplicative_binary_operator: return "multiplicative_binary_operator";
         case token::power_operator: return "power_operator";
         case token::comparison_binary_operator: return "comparison_binary_operator";
-        case token::unary_operator: return "unary_operator";
         case token::comment: return "comment";
         default: return "unknown";
     }
@@ -141,6 +139,7 @@ struct lexer {
         {"~", token::additive_binary_operator},
         {"**", token::power_operator},
         {"*", token::multiplicative_binary_operator},
+        {"//", token::multiplicative_binary_operator},
         {"/", token::multiplicative_binary_operator},
         {"%", token::multiplicative_binary_operator},
         // Assignment operator

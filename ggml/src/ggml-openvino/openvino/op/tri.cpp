@@ -70,7 +70,8 @@ OutputVector translate_tri(const NodeContext & context) {
             throw std::runtime_error("translate_tri: invalid tri_type " + std::to_string(tri_type));
     }
 
-    auto zero = ov::op::v0::Constant::create(ov::element::f32, {}, {0.0f});
+    // Select needs the zero in the input's type (f32, f16 or bf16).
+    auto zero = ov::op::v0::Constant::create(x.get_element_type(), {}, {0.0f});
     auto res  = std::make_shared<ov::op::v1::Select>(mask, x, zero);
 
     return rename_outputs_with_suffix({res}, context.get_name());

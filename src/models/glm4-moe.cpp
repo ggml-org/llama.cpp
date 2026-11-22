@@ -113,6 +113,11 @@ void llama_model_glm4_moe::load_arch_tensors(llama_model_loader & ml) {
             layer.nextn.shared_head_head = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", i), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED | flags);
             layer.nextn.shared_head_norm = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", i), { n_embd }, TENSOR_NOT_REQUIRED | flags);
         }
+
+        // numerical issues with F16 accumulators
+        prec_policy.set_acc(layer.wo,             GGML_PREC_BF16);
+        prec_policy.set_acc(layer.ffn_down,       GGML_PREC_BF16);
+        prec_policy.set_acc(layer.ffn_down_shexp, GGML_PREC_BF16);
     }
 }
 

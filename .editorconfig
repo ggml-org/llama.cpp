@@ -48,7 +48,7 @@ insert_final_newline = unset
 [vendor/**.patch]
 trim_trailing_whitespace = unset
 
-[tools/ui/**]
+[ui/**]
 indent_style = unset
 indent_size = unset
 end_of_line = unset

@@ -1,3 +1,4 @@
+#include "arg.h"
 #include "common.h"
 #include "download.h"
 #include "log.h"
@@ -6,6 +7,7 @@
 #include "mtmd-helper.h"
 #include "chat.h"
 #include "base64.hpp"
+#include "hash/hash.h"
 
 #include "server-common.h"
 
@@ -305,10 +307,9 @@ bool lora_should_clear_cache(
         const std::vector<common_adapter_lora_info> & current,
         const std::vector<common_adapter_lora_info> & next) {
 
-    // This should always be called after determining that the two sets are
-    // _not_ equal. This assert is therefore some slightly wasted work and
-    // should be safe to remove as long as this method is called correctly.
-    GGML_ASSERT(!are_lora_equal(current, next));
+    if (are_lora_equal(current, next)) {
+        return false;
+    }
 
     return (
         !(lora_get_enabled_ids(current).empty() || lora_all_alora(current)) ||
@@ -525,6 +526,7 @@ server_tokens::server_tokens(mtmd::input_chunks & mtmd_chunks, bool has_mtmd) : 
 }
 
 server_tokens::server_tokens(const llama_tokens & tokens, bool has_mtmd) : has_mtmd(has_mtmd), tokens(tokens) {
+    update_hashes();
 }
 
 llama_pos server_tokens::pos_next(int64_t n_tokens) const {
@@ -641,6 +643,7 @@ void server_tokens::push_back(llama_token tok) {
         throw std::runtime_error("Invalid token");
     }
     tokens.emplace_back(tok);
+    update_hashes();
 }
 
 void server_tokens::push_back(const mtmd_input_chunk * chunk) {
@@ -654,6 +657,7 @@ void server_tokens::push_back(const mtmd_input_chunk * chunk) {
         }
         mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_copy(chunk));
         map_idx_to_media[start_idx] = std::move(new_chunk);
+        update_hashes();
     } else if (type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
         size_t n_tokens;
         const auto * text_tokens = mtmd_input_chunk_get_tokens_text(chunk, &n_tokens);
@@ -677,6 +681,7 @@ void server_tokens::push_back_placeholder(const mtmd_input_chunk * chunk) {
             tokens.emplace_back(LLAMA_TOKEN_NULL);
         }
         map_idx_to_media[start_idx] = std::move(new_chunk);
+        update_hashes();
     } else {
         push_back(chunk);
     }
@@ -701,6 +706,7 @@ void server_tokens::push_back(server_tokens & tokens) {
 
 void server_tokens::insert(const llama_tokens & inp_tokens) {
     tokens.insert(tokens.end(), inp_tokens.begin(), inp_tokens.end());
+    update_hashes();
 }
 
 const llama_tokens & server_tokens::get_tokens() const {
@@ -768,6 +774,10 @@ server_tokens server_tokens::deserialize(const llama_tokens & packed, bool has_m
         result.map_idx_to_media[start_idx] = std::move(chunk);
     }
 
+    // the hashes from the constructor do not include the media chunks
+    result.hashes.clear();
+    result.update_hashes();
+
     if (reader.remaining() >= sizeof(llama_token)) {
         throw std::runtime_error("Trailing data in server tokens state");
     }
@@ -789,6 +799,7 @@ llama_tokens server_tokens::get_text_tokens() const {
 void server_tokens::set_token(llama_pos pos, llama_token id) {
     GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
     tokens[pos] = id;
+    hashes.resize(std::min(hashes.size(), (size_t) pos / hash_block_size));
 }
 
 void server_tokens::keep_first(size_t n) {
@@ -822,6 +833,7 @@ void server_tokens::keep_first(size_t n) {
         }
     }
     tokens.resize(n);
+    hashes.resize(std::min(hashes.size(), n / hash_block_size));
 }
 
 std::string server_tokens::detokenize(const llama_context * ctx, bool special) const {
@@ -838,8 +850,11 @@ std::string server_tokens::detokenize(const llama_context * ctx, bool special) c
 size_t server_tokens::get_common_prefix(const server_tokens & b) const {
     const size_t max_idx = std::min(tokens.size(), b.tokens.size());
 
+    // the blocks with equal hashes are not compared again
+    const size_t min_idx = get_common_prefix_lower(b.get_prefix_hashes());
+
     if (!has_mtmd) {
-        for (size_t i = 0; i < max_idx; ++i) {
+        for (size_t i = min_idx; i < max_idx; ++i) {
             if (tokens[i] == b.tokens[i]) {
                 continue;
             }
@@ -850,7 +865,7 @@ size_t server_tokens::get_common_prefix(const server_tokens & b) const {
         return max_idx;
     }
 
-    for (size_t i = 0; i < max_idx; ++i) {
+    for (size_t i = min_idx; i < max_idx; ++i) {
         const llama_token ai =   tokens[i];
         const llama_token bi = b.tokens[i];
 
@@ -883,6 +898,66 @@ size_t server_tokens::get_common_prefix(const server_tokens & b) const {
     }
 
     return max_idx; // all tokens are equal
+}
+
+void server_tokens::update_hashes() {
+    const size_t n_blocks = tokens.size() / hash_block_size;
+
+    std::string buf;
+    const auto append = [&buf](const void * data, size_t len) {
+        buf.append((const char *) data, len);
+    };
+
+    for (size_t k = hashes.size(); k < n_blocks; k++) {
+        const size_t i_begin = k * hash_block_size;
+        const size_t i_end   = i_begin + hash_block_size;
+
+        // the previous hash comes first, zeros for the first block
+        const prefix_hash prev = k > 0 ? hashes[k - 1] : prefix_hash{};
+
+        buf.clear();
+        append(prev.data(), prev.size());
+        append(tokens.data() + i_begin, hash_block_size * sizeof(llama_token));
+
+        // a media chunk is hashed in the block of its first token, it can span over many blocks
+        for (auto it = map_idx_to_media.lower_bound(i_begin); it != map_idx_to_media.end() && it->first < i_end; ++it) {
+            const std::string_view id = mtmd_input_chunk_get_id(it->second.get());
+            const uint64_t fields[]   = { it->first, mtmd_input_chunk_get_n_tokens(it->second.get()), id.size() };
+            append(fields, sizeof(fields));
+            append(id.data(), id.size());
+        }
+
+        hashes.push_back(hash_sha256(buf.data(), buf.size()));
+    }
+}
+
+size_t server_tokens::get_common_prefix_lower(const std::vector<prefix_hash> & b_hashes) const {
+    const auto & a_hashes = hashes;
+
+    // a hash covers all the tokens before it, so the equal entries come first
+    size_t lo = 0;
+    size_t hi = std::min(a_hashes.size(), b_hashes.size());
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo) / 2;
+        if (a_hashes[mid] == b_hashes[mid]) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+
+    size_t n = lo * hash_block_size;
+
+    // do not cut a media chunk, go back to its start
+    auto it = map_idx_to_media.upper_bound(n);
+    if (it != map_idx_to_media.begin()) {
+        --it;
+        if (it->first < n && n < it->first + mtmd_input_chunk_get_n_tokens(it->second.get())) {
+            n = it->first;
+        }
+    }
+
+    return n;
 }
 
 common_chat_msg_spans server_tokens::find_message_spans(const common_chat_msg_delimiters & delims) const {
@@ -933,6 +1008,7 @@ server_tokens server_tokens::clone() const {
     server_tokens res;
     res.has_mtmd = has_mtmd;
     res.tokens   = tokens;
+    res.hashes   = hashes;
     for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ++it) {
         size_t idx = it->first;
         const mtmd::input_chunk_ptr & chunk = it->second;
@@ -1566,10 +1642,20 @@ json oaicompat_chat_params_parse(
     // Parse the OAI "reasoning_effort" field; "none" disables reasoning.
     if (body.contains("reasoning_effort")) {
         auto reasoning_effort = json_value(body, "reasoning_effort", std::string(""));
+        const auto levels = caps.at("reasoning_effort_levels").get<std::vector<std::string>>();
         if (reasoning_effort == "none") {
             inputs.enable_thinking = false;
-            inputs.chat_template_kwargs.erase("reasoning_effort");
+            // Some models use reasoning_effort = none and some throw an exception, so check the model's list of effort levels first
+            if (std::find(levels.begin(), levels.end(), reasoning_effort) != levels.end()) {
+                inputs.chat_template_kwargs["reasoning_effort"] = json(reasoning_effort).dump();
+            } else {
+                inputs.chat_template_kwargs.erase("reasoning_effort");
+            }
         } else if (!reasoning_effort.empty()) {
+            const auto rejected = caps.at("reasoning_effort_rejected").get<std::vector<std::string>>();
+            if (std::find(rejected.begin(), rejected.end(), reasoning_effort) != rejected.end()) {
+                throw std::invalid_argument("reasoning_effort \"" + reasoning_effort + "\" is not supported by the chat template, supported levels: " + string_join(levels, ", "));
+            }
             inputs.chat_template_kwargs["reasoning_effort"] = json(reasoning_effort).dump();
         }
     }
@@ -2299,6 +2385,22 @@ server_role::~server_role() {
     if (cmd_out) {
         fclose(cmd_out);
     }
+}
+
+std::string server_get_model_name(const common_params & params) {
+    if (!params.model_alias.empty()) {
+        // backward compat: use first alias as model name
+        return *params.model_alias.begin();
+    }
+    if (!params.model.get_name().empty()) {
+        return params.model.get_name();
+    }
+    if (!params.model.url.empty()) {
+        // -mu before the download: the path the model will be stored at
+        return common_get_default_local_path(params.model.url);
+    }
+    // fallback: derive model name from file name
+    return std::filesystem::path(params.model.path).filename().string();
 }
 
 bool server_role::is_managed_by_router() {

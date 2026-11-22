@@ -1,0 +1,55 @@
+<script lang="ts">
+	import { mcpStore } from '#lib/stores/index.ts';
+	import type { MCPServerSettingsEntry } from '#lib/types/index.ts';
+	import type { Snippet } from 'svelte';
+
+	interface Props {
+		server: MCPServerSettingsEntry | undefined;
+		serverLabel: string;
+		title: string;
+		description?: string;
+		titleExtra?: Snippet;
+		subtitle?: Snippet;
+	}
+
+	let { description, server, serverLabel, subtitle, title, titleExtra }: Props = $props();
+
+	let faviconUrl = $derived(server ? mcpStore.getServerFavicon(server.id) : null);
+</script>
+
+<div class="min-w-0 flex-1">
+	<div class="mb-0.5 flex items-center gap-1.5 text-caption text-muted-foreground">
+		{#if faviconUrl}
+			<img
+				alt=""
+				class="size-3 shrink-0 rounded-sm"
+				onerror={(e) => {
+					(e.currentTarget as HTMLImageElement).style.display = 'none';
+				}}
+				src={faviconUrl}
+			/>
+		{/if}
+
+		<span>{serverLabel}</span>
+	</div>
+
+	<div class="flex items-center gap-2">
+		<span class="font-medium">
+			{title}
+		</span>
+
+		{#if titleExtra}
+			{@render titleExtra()}
+		{/if}
+	</div>
+
+	{#if description}
+		<p class="mt-0.5 truncate text-body-sm text-muted-foreground">
+			{description}
+		</p>
+	{/if}
+
+	{#if subtitle}
+		{@render subtitle()}
+	{/if}
+</div>

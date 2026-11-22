@@ -23,6 +23,26 @@ def create_server():
     server.n_slots = 1
 
 
+def test_reasoning_effort_rejected_by_template():
+    global server
+    server.jinja = True
+    # the template raises on max, and high is one of its levels
+    server.chat_template_file = '../../../models/templates/IFM-K2-Horizon.jinja'
+    server.start()
+
+    messages = [{"role": "user", "content": "Hello"}]
+    for path, data in [
+        ("/chat/completions/input_tokens", {"messages": messages, "reasoning_effort": "max"}),
+        ("/v1/responses/input_tokens",     {"input": "Hello", "reasoning": {"effort": "max"}}),
+        ("/v1/messages/count_tokens",      {"model": "test", "messages": messages, "output_config": {"effort": "max"}}),
+    ]:
+        res = server.make_request("POST", path, data=data)
+        assert res.status_code == 400, f"{path}: {res.body}"
+
+    res = server.make_request("POST", "/chat/completions/input_tokens", data={"messages": messages, "reasoning_effort": "high"})
+    assert res.status_code == 200, res.body
+
+
 @pytest.mark.parametrize("tools", [None, [], [TEST_TOOL]])
 @pytest.mark.parametrize("template_name,reasoning,expected_end", [
     ("deepseek-ai-DeepSeek-R1-Distill-Qwen-32B",  "on", "<think>\n"),
