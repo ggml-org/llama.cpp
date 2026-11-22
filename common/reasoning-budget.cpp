@@ -31,14 +31,18 @@ struct token_matcher {
     static common_trie build_trie(const std::vector<llama_tokens> & seqs) {
         common_trie t;
         for (const auto & seq : seqs) {
-            t.insert(std::vector<uint32_t>(seq.begin(), seq.end()));
+            std::vector<common_trie::symbol> symbols;
+            for (llama_token token : seq) {
+                symbols.push_back(common_trie::symbol::token(token));
+            }
+            t.insert(symbols);
         }
         return t;
     }
 
     // returns the index into seqs of the longest sequence ending at this token, or -1
     int32_t advance(llama_token token) {
-        state = ac.next(state, (uint32_t) token);
+        state = ac.next(state, common_trie::symbol::token(token));
         const int32_t p = ac.match_pattern(state);
         if (p >= 0) {
             state = 0;

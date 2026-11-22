@@ -1,3 +1,4 @@
+#include "arg.h"
 #include "common.h"
 #include "download.h"
 #include "log.h"
@@ -2384,6 +2385,22 @@ server_role::~server_role() {
     if (cmd_out) {
         fclose(cmd_out);
     }
+}
+
+std::string server_get_model_name(const common_params & params) {
+    if (!params.model_alias.empty()) {
+        // backward compat: use first alias as model name
+        return *params.model_alias.begin();
+    }
+    if (!params.model.get_name().empty()) {
+        return params.model.get_name();
+    }
+    if (!params.model.url.empty()) {
+        // -mu before the download: the path the model will be stored at
+        return common_get_default_local_path(params.model.url);
+    }
+    // fallback: derive model name from file name
+    return std::filesystem::path(params.model.path).filename().string();
 }
 
 bool server_role::is_managed_by_router() {
