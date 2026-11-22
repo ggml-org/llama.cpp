@@ -2087,7 +2087,9 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         //     return true;
         // }
         const char * reason = nullptr;
-        if (op->src[2]->op == GGML_OP_PERMUTE) {
+        // a VIEW of the PERMUTE (v with padded heads) is still a permuted v
+        const ggml_tensor * v_src = op->src[2]->op == GGML_OP_VIEW ? op->src[2]->src[0] : op->src[2];
+        if (v_src->op == GGML_OP_PERMUTE) {
             reason = "GATED_DELTA_NET with PERMUTE src2 is not supported";
         }
         else if (op->src[3]->ne[0] != 1 && (op->op_params[0] > 1 || ggml_openvino_gdn_native_state_enabled()) &&
