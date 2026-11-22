@@ -413,13 +413,11 @@ private:
 
     // state of sched_copy_experts, reset before each graph compute
     struct copy_experts_info {
-        ggml_cgraph *        gf  = nullptr; // the graph being computed
         const ggml_tensor *  ids = nullptr;
         std::vector<int32_t> ids_data;
         std::vector<bool>    used;
 
         void reset() {
-            gf  = nullptr;
             ids = nullptr;
             ids_data.clear();
             used.clear();
