@@ -1106,6 +1106,27 @@ MAKE_TEST(test_kokoro_istft) {
     t.assert_true("constant signal, max error " + std::to_string(max_err), max_err < 1e-4f);
 }
 
+// 13 tokens per 100-frame chunk; the tail is ceil^3 (one halving per stride-2 conv layer)
+MAKE_TEST(test_qwen3a_tokens_for_frames) {
+    const std::vector<std::pair<int64_t, int64_t>> cases = {
+        {    0,   0 },
+        {    1,   1 },
+        {   99,  13 },
+        {  100,  13 },
+        {  101,  14 },
+        {  110,  15 },
+        {  200,  26 },
+        {  210,  28 },
+        { 1000, 130 },
+        { 1024, 133 },
+    };
+
+    for (const auto & [frames, expected] : cases) {
+        const std::string name = std::to_string(frames) + " frames";
+        t.assert_equal(name, expected, mtmd_graph_qwen3a::qwen3a_tokens_for_frames(frames));
+    }
+}
+
 //
 // main
 //

@@ -4680,7 +4680,7 @@ int mtmd_model::n_output_tokens_y(const mtmd_image_f32 * img) const {
     return 1;
 }
 
-int64_t qwen3a_tokens_for_frames(int64_t n_frames) {
+int64_t mtmd_graph_qwen3a::qwen3a_tokens_for_frames(int64_t n_frames) {
     const int64_t chunk_size       = 100; // n_window * 2
     const int64_t tokens_per_chunk = 13;  // 100 -> 50 -> 25 -> 13 after 3x stride-2 conv2d
     const int64_t n_full = n_frames / chunk_size;
@@ -4899,7 +4899,7 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
             } break;
         case PROJECTOR_TYPE_QWEN3A:
             {
-                n_patches = (int) qwen3a_tokens_for_frames(img->nx());
+                n_patches = (int) mtmd_graph_qwen3a::qwen3a_tokens_for_frames(img->nx());
             } break;
         case PROJECTOR_TYPE_GLMA:
             {
