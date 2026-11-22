@@ -109,6 +109,7 @@ static server_role_type server_role_detect(const common_params & params, server_
     }
     // a server given no model is a router
     const bool has_model = !params.model.path.empty()
+                        || !params.model.url.empty()
                         || !params.model.hf_repo.empty()
                         || !params.model.docker_repo.empty();
     return has_model ? SERVER_ROLE_INSTANCE : SERVER_ROLE_ROUTER;
