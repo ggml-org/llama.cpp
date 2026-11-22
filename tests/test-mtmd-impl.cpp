@@ -624,8 +624,8 @@ MAKE_TEST(test_audio_preprocessor_qwen3a_tail) {
     mtmd_audio_preprocessor_qwen3a preproc(hparams, sched.get());
     preproc.initialize();
 
-    // HF WhisperFeatureExtractor drops the last STFT frame, so one window of 800 frames
-    // holds 128000 samples and the last window is emitted as is, without chunk padding
+    // one 800-frame window covers 128000 samples (hop 160), so longer audio is split;
+    // the last window is emitted with its exact frame count, the graph pads the final 100-frame chunk
     // { sample count, expected n_len of each output window }
     const std::vector<std::pair<size_t, std::vector<int64_t>>> cases = {
         {       0, {}          },

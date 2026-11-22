@@ -654,7 +654,7 @@ bool mtmd_audio_preprocessor_qwen3a::process(const float *                 sampl
     const int64_t n_eff = std::max<int64_t>(1, std::min(mel_full.n_len - 1, (int64_t)(n_samples / hparams.audio_hop_len)));
 
     // Whisper-style normalization over the kept frames: clamp to (max - 8), scale to [-1, 1]
-    {
+    if (!shape_only) {
         double mmax = -1e20;
         for (int64_t m = 0; m < mel_full.n_mel; m++) {
             for (int64_t t = 0; t < n_eff; t++) {

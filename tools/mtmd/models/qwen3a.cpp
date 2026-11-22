@@ -14,7 +14,9 @@ ggml_cgraph * mtmd_graph_qwen3a::build() {
     GGML_ASSERT(inp->type == GGML_TYPE_F32);
 
     // zero-pad the last chunk to chunk_size, as the reference pads all chunks to the longest one
-    inp = ggml_pad(ctx0, inp, n_chunks * chunk_size - inp->ne[0], 0, 0, 0);
+    if (n_pre_pad % chunk_size > 0) {
+        inp = ggml_pad(ctx0, inp, n_chunks * chunk_size - n_pre_pad, 0, 0, 0);
+    }
     const int64_t n_frames = inp->ne[0];
 
     // View mel spectrogram as batched 100-frame chunks: [chunk_size, n_mel, 1, n_chunks]
