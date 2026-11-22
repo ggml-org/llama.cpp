@@ -1220,7 +1220,8 @@ size_t llama_batch_ext_select_n_embd_state(llama_context_type ctx_type, const ll
         return hparams.n_embd_inp();
     }
     if (hparams.dspark_f_rnn) {
-        return hparams.n_embd;
+        // Inkling2 DSpark rnn head: [f_rnn | uniform | 1/temp]
+        return hparams.n_embd + 2;
     }
     return 0;
 }

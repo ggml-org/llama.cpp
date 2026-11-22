@@ -191,10 +191,11 @@ void llama_model_dflash::load_tensors_layers_mistral_large4() {
 }
 
 // DSpark (DFlash + Markov & Confidence head): Markov bias on the draft logits, chained per block position
-// f_rnn: [n_embd, n_tokens] extra rnn input, read at the anchor of each block
+// rnn_state: [n_embd + 2, n_tokens] per-token state of the Inkling2 rnn head, [f_rnn | uniform | 1/temp] (see llama_batch_ext_select_n_embd_state)
+//   f_rnn is an extra rnn input read at the anchor; each step draws its token at 1/temp (0: argmax) and packs [token, k, ids, probs] into h_nextn
 // softcap_after_bias: softcap(base + bias) instead of leaving the logits uncapped
 static void build_dspark_markov_head(llm_graph_context & g, const llama_model & model, ggml_tensor * tokens, ggml_tensor * hidden = nullptr,
-        ggml_tensor * f_rnn = nullptr, bool softcap_after_bias = false) {
+        ggml_tensor * rnn_state = nullptr, bool softcap_after_bias = false) {
     ggml_context * ctx0 = g.ctx0;
     auto         & res  = g.res;
 
@@ -238,14 +239,57 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     ggml_tensor * prev = ggml_view_2d(ctx0, tokens, 1, n_blocks, token_stride, 0);
     prev = ggml_cont_1d(ctx0, prev, n_blocks);
 
-    if (f_rnn) {
-        f_rnn = ggml_cont(ctx0, ggml_view_2d(ctx0, f_rnn, f_rnn->ne[0], n_blocks, (size_t) block_drafts * f_rnn->nb[1], 0)); // [n_embd, n_blocks]
+    const int64_t n_embd = g.hparams.n_embd;
+
+    // n_rows values from offset off of the state at block position i, [n_rows, n_blocks]
+    const auto state_rows = [&](int64_t n_rows, int64_t off, int64_t i) {
+        return ggml_cont(ctx0, ggml_view_2d(ctx0, rnn_state, n_rows, n_blocks, (size_t) block_drafts * rnn_state->nb[1],
+                i*rnn_state->nb[1] + off*ggml_element_size(rnn_state)));
+    };
+
+    ggml_tensor * f_rnn     = nullptr; // [n_embd, n_blocks]
+    ggml_tensor * inv_temp  = nullptr; // [1, n_blocks]
+    ggml_tensor * is_greedy = nullptr; // [1, n_blocks], 1 when inv_temp is 0
+    if (rnn_state) {
+        GGML_ASSERT(!has_conf && rnn_state->ne[0] == n_embd + 2);
+        f_rnn     = state_rows(n_embd, 0, 0);
+        inv_temp  = state_rows(1, n_embd + 1, 0);
+        is_greedy = ggml_scale_bias(ctx0, ggml_step(ctx0, inv_temp), -1.0f, 1.0f);
     }
+
+    // the draws keep the top n_cand candidates, q of the verifier is their distribution
+    const int64_t n_cand = std::min<int64_t>(64, n_vocab);
+    GGML_ASSERT(!rnn_state || 2 + 2*n_cand <= n_embd);
+
+    // draw the token of block position i from softmax(top_k(col) * inv_temp), like the backend dist sampler
+    // returns [n_embd, n_blocks] packed rows [token, n_cand, ids, probs] and sets the next prev
+    const auto draw = [&](ggml_tensor * col, int64_t i, ggml_tensor *& next) {
+        ggml_tensor * ids   = ggml_top_k(ctx0, col, n_cand); // [n_cand, n_blocks], unordered
+        ggml_tensor * vals  = ggml_reshape_2d(ctx0, ggml_get_rows(ctx0, ggml_reshape_3d(ctx0, col, 1, n_vocab, n_blocks), ids), n_cand, n_blocks);
+        ggml_tensor * probs = ggml_soft_max(ctx0, ggml_mul(ctx0, vals, inv_temp));
+
+        // index of the first candidate whose cumulative probability passes the uniform
+        ggml_tensor * n_over = ggml_sum_rows(ctx0, ggml_step(ctx0, ggml_sub(ctx0, ggml_cumsum(ctx0, probs), state_rows(1, n_embd, i))));
+        ggml_tensor * idx    = ggml_cast(ctx0, ggml_scale_bias(ctx0, ggml_clamp(ctx0, n_over, 1.0f, (float) n_cand), -1.0f, (float) n_cand), GGML_TYPE_I32);
+
+        ggml_tensor * ids_f  = ggml_cast(ctx0, ids, GGML_TYPE_F32);
+        ggml_tensor * drawn  = ggml_reshape_2d(ctx0, ggml_get_rows(ctx0, ggml_reshape_3d(ctx0, ids_f, 1, n_cand, n_blocks), idx), 1, n_blocks);
+        ggml_tensor * argmax = ggml_reshape_2d(ctx0, ggml_cast(ctx0, ggml_argmax(ctx0, col), GGML_TYPE_F32), 1, n_blocks);
+
+        // greedy keeps the exact argmax
+        ggml_tensor * tok = ggml_add(ctx0, drawn, ggml_mul(ctx0, is_greedy, ggml_sub(ctx0, argmax, drawn)));
+        next = ggml_cast(ctx0, ggml_reshape_1d(ctx0, tok, n_blocks), GGML_TYPE_I32);
+
+        ggml_tensor * k_col = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_blocks), (float) n_cand);
+        ggml_tensor * row   = ggml_concat(ctx0, ggml_concat(ctx0, ggml_concat(ctx0, tok, k_col, 0), ids_f, 0), probs, 0);
+        return ggml_pad(ctx0, row, n_embd - row->ne[0], 0, 0, 0);
+    };
 
     const float softcap = softcap_after_bias ? g.hparams.f_final_logit_softcapping : 0.0f;
 
     ggml_tensor * cat      = nullptr;
     ggml_tensor * cat_conf = nullptr;
+    ggml_tensor * cat_draw = nullptr;
 
     if (!sample_from_anchor) {
         // bonus anchor slot: pass the logits through unbiased, pad the (unread) confidence column
@@ -253,11 +297,14 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
         if (has_conf) {
             cat_conf = ggml_sigmoid(ctx0, ggml_view_2d(ctx0, base, 1, n_blocks, base_stride, 0));
         }
+        if (rnn_state) {
+            cat_draw = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_blocks), 0.0f);
+        }
     }
 
     ggml_tensor * state = nullptr; // [R, n_blocks]
 
-    // TODO: the in-graph chain is greedy (argmax); sampling params affect only the final
+    // TODO: without rnn_state the in-graph chain is greedy (argmax); sampling params affect only the final
     //       token pick, not the Markov conditioning path
     for (int64_t i = i_draft_beg; i < block_drafts; ++i) {
         ggml_tensor * w1_prev = ggml_get_rows(ctx0, w1, prev); // [R, n_blocks]
@@ -327,9 +374,20 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
             cat_conf = cat_conf ? ggml_concat(ctx0, cat_conf, conf, 1) : conf;
         }
 
-        if (i + 1 < block_drafts) {
+        if (rnn_state) {
+            ggml_tensor * packed = draw(col, i, prev);
+            cat_draw = cat_draw ? ggml_concat(ctx0, cat_draw, packed, 1) : packed;
+        } else if (i + 1 < block_drafts) {
             prev = ggml_argmax(ctx0, col);
         }
+    }
+
+    if (cat_draw) {
+        // position-major like cat; restore ubatch block-major order
+        ggml_tensor * draws = ggml_reshape_3d(ctx0, cat_draw, n_embd, n_blocks, block_drafts);
+        draws = ggml_cont(ctx0, ggml_permute(ctx0, draws, 0, 2, 1, 3));
+        res->t_h_nextn = ggml_reshape_2d(ctx0, draws, n_embd, n_tok);
+        ggml_build_forward_expand(g.gf, res->t_h_nextn);
     }
 
     // cat is position-major; restore ubatch block-major order
@@ -359,19 +417,19 @@ llama_model_dflash::graph_dspark::graph_dspark(const llm_graph_params & params) 
         return;
     }
 
-    // f_rnn arrives as the state embedding of the block tokens
+    // the Inkling2 rnn head state arrives as the state embedding of the block tokens
     ggml_tensor * inp_tokens = nullptr;
-    ggml_tensor * f_rnn      = nullptr;
+    ggml_tensor * rnn_state  = nullptr;
     if (hparams.dspark_f_rnn && ubatch.embd_state) {
         inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
         ggml_set_input(inp_tokens);
         res->t_inp_tokens = inp_tokens;
 
-        auto inp = std::make_unique<llm_graph_input_embd_h>(n_embd, n_embd);
+        auto inp = std::make_unique<llm_graph_input_embd_h>(n_embd, n_embd + 2);
         inp->tokens = inp_tokens;
-        inp->h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tokens);
+        inp->h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd + 2, n_tokens);
         ggml_set_input(inp->h);
-        f_rnn = inp->h;
+        rnn_state = inp->h;
         res->add_input(std::move(inp));
     } else {
         inp_tokens = build_inp_tokens();
@@ -389,8 +447,8 @@ llama_model_dflash::graph_dspark::graph_dspark(const llm_graph_params & params) 
     // bias the draft logits with the Markov head
     if (!hparams.dspark_f_rnn) {
         build_dspark_markov_head(*this, model, inp_tokens);
-    } else if (f_rnn) {
-        build_dspark_markov_head(*this, model, inp_tokens, cur, f_rnn, true);
+    } else if (rnn_state) {
+        build_dspark_markov_head(*this, model, inp_tokens, cur, rnn_state, true);
     }
 }
 
