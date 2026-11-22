@@ -28296,8 +28296,9 @@ static void ggml_cl_mul_mat_q4_k_f32_adreno_ila(ggml_backend_t backend, const gg
     int N = ne1;
     int K = ne00;
 
+    const int coopk_c8_min_n = backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ? 2 : 5;
     if (backend_ctx->kernel_gemm_coopk_q4_k_q8_1_dp4a_bin_c8 != nullptr &&
-        N >= 5 && N <= 8 && M > 0 && K > 0 && M % 256 == 0 && K % 256 == 0 &&
+        N >= coopk_c8_min_n && N <= 8 && M > 0 && K > 0 && M % 256 == 0 && K % 256 == 0 &&
         src0->ne[0] == K && src0->ne[1] == M && dst->ne[1] == N &&
         K <= INT_MAX / 8 && (int64_t) M * K / 8 <= INT_MAX &&
         src0->ne[2] == 1 && src0->ne[3] == 1 && src0->view_src == nullptr &&
