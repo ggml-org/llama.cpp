@@ -191,8 +191,9 @@ void llama_model_dflash::load_tensors_layers_mistral_large4() {
 }
 
 // DSpark (DFlash + Markov & Confidence head): Markov bias on the draft logits, chained per block position
-// rnn_state: [n_embd + 2, n_tokens] per-token state of the Inkling2 rnn head, [f_rnn | uniform | 1/temp] (see llama_batch_ext_select_n_embd_state)
-//   f_rnn is an extra rnn input read at the anchor; each step draws its token at 1/temp (0: argmax) and packs [token, k, ids, probs] into h_nextn
+// rnn_state: [n_embd, n_tokens] per-token state of the Inkling2 rnn head (see llama_batch_ext_select_n_embd_state)
+//   anchor row: f_rnn, an extra rnn input; draft row i: [uniform | 1/temp | 0...] of its draw
+//   each step draws its token at 1/temp (0: argmax) and packs [token, k, ids, probs] into h_nextn
 // softcap_after_bias: softcap(base + bias) instead of leaving the logits uncapped
 static void build_dspark_markov_head(llm_graph_context & g, const llama_model & model, ggml_tensor * tokens, ggml_tensor * hidden = nullptr,
         ggml_tensor * rnn_state = nullptr, bool softcap_after_bias = false) {
@@ -251,10 +252,13 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     ggml_tensor * inv_temp  = nullptr; // [1, n_blocks]
     ggml_tensor * is_greedy = nullptr; // [1, n_blocks], 1 when inv_temp is 0
     if (rnn_state) {
-        GGML_ASSERT(!has_conf && rnn_state->ne[0] == n_embd + 2);
-        f_rnn     = state_rows(n_embd, 0, 0);
-        inv_temp  = state_rows(1, n_embd + 1, 0);
-        is_greedy = ggml_scale_bias(ctx0, ggml_step(ctx0, inv_temp), -1.0f, 1.0f);
+        // the anchor row holds f_rnn, so it cannot be a draft row
+        GGML_ASSERT(!has_conf && !sample_from_anchor && rnn_state->ne[0] == n_embd);
+        f_rnn = state_rows(n_embd, 0, 0);
+        if (block_drafts > i_draft_beg) {
+            inv_temp  = state_rows(1, 1, i_draft_beg);
+            is_greedy = ggml_scale_bias(ctx0, ggml_step(ctx0, inv_temp), -1.0f, 1.0f);
+        }
     }
 
     // the draws keep the top n_cand candidates, q of the verifier is their distribution
@@ -266,10 +270,16 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     const auto draw = [&](ggml_tensor * col, int64_t i, ggml_tensor *& next) {
         ggml_tensor * ids   = ggml_top_k(ctx0, col, n_cand); // [n_cand, n_blocks], unordered
         ggml_tensor * vals  = ggml_reshape_2d(ctx0, ggml_get_rows(ctx0, ggml_reshape_3d(ctx0, col, 1, n_vocab, n_blocks), ids), n_cand, n_blocks);
+
+        // the top-k order can change between runs, sort by logit so a seed draws the same tokens
+        ggml_tensor * order = ggml_argsort(ctx0, vals, GGML_SORT_ORDER_DESC);
+        ids  = ggml_reshape_2d(ctx0, ggml_get_rows(ctx0, ggml_reshape_3d(ctx0, ids,  1, n_cand, n_blocks), order), n_cand, n_blocks);
+        vals = ggml_reshape_2d(ctx0, ggml_get_rows(ctx0, ggml_reshape_3d(ctx0, vals, 1, n_cand, n_blocks), order), n_cand, n_blocks);
+
         ggml_tensor * probs = ggml_soft_max(ctx0, ggml_mul(ctx0, vals, inv_temp));
 
         // index of the first candidate whose cumulative probability passes the uniform
-        ggml_tensor * n_over = ggml_sum_rows(ctx0, ggml_step(ctx0, ggml_sub(ctx0, ggml_cumsum(ctx0, probs), state_rows(1, n_embd, i))));
+        ggml_tensor * n_over = ggml_sum_rows(ctx0, ggml_step(ctx0, ggml_sub(ctx0, ggml_cumsum(ctx0, probs), state_rows(1, 0, i))));
         ggml_tensor * idx    = ggml_cast(ctx0, ggml_scale_bias(ctx0, ggml_clamp(ctx0, n_over, 1.0f, (float) n_cand), -1.0f, (float) n_cand), GGML_TYPE_I32);
 
         ggml_tensor * ids_f  = ggml_cast(ctx0, ids, GGML_TYPE_F32);
@@ -425,9 +435,9 @@ llama_model_dflash::graph_dspark::graph_dspark(const llm_graph_params & params) 
         ggml_set_input(inp_tokens);
         res->t_inp_tokens = inp_tokens;
 
-        auto inp = std::make_unique<llm_graph_input_embd_h>(n_embd, n_embd + 2);
+        auto inp = std::make_unique<llm_graph_input_embd_h>(n_embd, n_embd);
         inp->tokens = inp_tokens;
-        inp->h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd + 2, n_tokens);
+        inp->h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tokens);
         ggml_set_input(inp->h);
         rnn_state = inp->h;
         res->add_input(std::move(inp));

@@ -1382,7 +1382,7 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
     std::vector<float>     ctx_embd;
     std::vector<llama_pos> ctx_pos;
 
-    // per-token state of the block tokens: [context state | uniform | 1/temp], see llama_batch_ext_select_n_embd_state
+    // per-token state of the block tokens, n_embd_dec wide: the context state on the anchor row, [uniform | 1/temp] on the draft rows, see llama_batch_ext_select_n_embd_state
     // with probabilistic drafting the graph draws each block token from it and returns [token, k, ids, probs] in h_nextn
     std::vector<float>        block_state;
     std::vector<std::mt19937> draw_rng;
@@ -1407,7 +1407,7 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
             ctx_rows = (size_t) block_size + 1;
             ctx_embd.resize((size_t) n_seq * ctx_rows * (size_t) n_embd_dec);
             ctx_pos.assign((size_t) n_seq * ctx_rows, -1);
-            block_state.reserve((size_t) n_seq * block_size * (n_embd_dec + 2));
+            block_state.reserve((size_t) n_seq * block_size * n_embd_dec);
             draw_rng.resize(n_seq);
             draw_seed.assign(n_seq, -1);
         }
@@ -1466,6 +1466,14 @@ protected:
     }
 
 public:
+    void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
+        // the markov context draws: reseed per request rather than per round, or two identical requests differ
+        if (has_markov_context && seq_id >= 0 && seq_id < (llama_seq_id) n_seq) {
+            draw_seed[seq_id] = -1;
+        }
+
+        common_speculative_impl_draft_dflash::begin(seq_id, prompt);
+    }
 
     void draft(common_speculative_draft_params_vec & dparams) override {
         auto & ctx_dft = params.ctx_dft;
@@ -1492,6 +1500,11 @@ public:
                 continue;
             }
 
+            // the full block of a markov context draft has to fit in the draft context
+            if (has_markov_context && (uint64_t) dp.pos0 + block_size > llama_n_ctx_seq(ctx_dft)) {
+                continue;
+            }
+
             // the graph draws the block at the target's temperature, the verifier then does rejection sampling with q
             sampled[seq_id] = has_markov_context && params.probabilistic && dp.result_q && dp.temp > 0.0f;
             if (sampled[seq_id] && draw_seed[seq_id] != dp.seed) {
@@ -1513,12 +1526,20 @@ public:
                 const int32_t idx = batch.add(i == 0 ? dp.id_last : mask_token_id, n + i, seq_id, true);
                 if (state) {
                     // reserved up front, so the views of the earlier tokens stay valid
-                    GGML_ASSERT(block_state.size() + n_embd_dec + 2 <= block_state.capacity());
+                    GGML_ASSERT(block_state.size() + n_embd_dec <= block_state.capacity());
                     float * row = block_state.data() + block_state.size();
-                    block_state.insert(block_state.end(), state, state + n_embd_dec);
-                    block_state.push_back(sampled[seq_id] ? (float) std::uniform_real_distribution<double>(0.0, 1.0)(draw_rng[seq_id]) : 0.5f);
-                    block_state.push_back(sampled[seq_id] ? 1.0f / dp.temp : 0.0f);
-                    batch.set_embd_state(idx, { row, 1, (size_t) n_embd_dec + 2 });
+                    if (i == 0) {
+                        block_state.insert(block_state.end(), state, state + n_embd_dec);
+                    } else {
+                        block_state.resize(block_state.size() + n_embd_dec, 0.0f);
+                        if (sampled[seq_id]) {
+                            // u in [0, 1): a draw in double can round up to 1 in float
+                            const float u = (float) std::uniform_real_distribution<double>(0.0, 1.0)(draw_rng[seq_id]);
+                            row[0] = std::min(u, std::nextafter(1.0f, 0.0f));
+                            row[1] = 1.0f / dp.temp;
+                        }
+                    }
+                    batch.set_embd_state(idx, { row, 1, (size_t) n_embd_dec });
                 }
             }
         }
