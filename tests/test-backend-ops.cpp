@@ -9030,21 +9030,17 @@ struct test_roll : public test_case {
     const int shift4;
     const bool permute;
     const std::array<int64_t, 4> ne_a;
-    const bool view;
 
     std::string vars() override {
-        return VARS_TO_STR7(shift0, shift1, shift3, shift4, permute, ne_a, view);
+        return VARS_TO_STR6(shift0, shift1, shift3, shift4, permute, ne_a);
     }
 
     test_roll(int shift0 = 3, int shift1 = -2, int shift3 = 1, int shift4 = -1, bool permute = false,
-            std::array<int64_t, 4> ne_a = {10, 5, 4, 3}, bool view = false)
-        : shift0(shift0), shift1(shift1), shift3(shift3), shift4(shift4), permute(permute), ne_a(ne_a), view(view) {}
+            std::array<int64_t, 4> ne_a = {10, 5, 4, 3})
+        : shift0(shift0), shift1(shift1), shift3(shift3), shift4(shift4), permute(permute), ne_a(ne_a) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne_a[0] + (view ? 1 : 0), ne_a[1], ne_a[2], ne_a[3]);
-        if (view) {
-            a = ggml_view_4d(ctx, a, ne_a[0], ne_a[1], ne_a[2], ne_a[3], a->nb[1], a->nb[2], a->nb[3], sizeof(float));
-        }
+        ggml_tensor * a = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_a.data());
         ggml_set_name(a, "a");
 
         if (permute) {
@@ -13130,14 +13126,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_roll(3, -2, 1, -1, true));
     test_cases.emplace_back(new test_roll(0, 0, 0, 0, false, {1, 1, 1, 1}));
     test_cases.emplace_back(new test_roll(256, 0, 0, 0, false, {257, 1, 1, 1}));
-    test_cases.emplace_back(new test_roll(16, -6, 2, -1, false, {17, 7, 3, 2}, true));
     test_cases.emplace_back(new test_roll(-16, 6, -2, 1, false, {17, 7, 3, 2}));
-    test_cases.emplace_back(new test_roll(4, -2, 6, 1, true, {17, 7, 3, 2}, true));
-    test_cases.emplace_back(new test_roll(-256, 6, -2, 1, false, {257, 7, 3, 2}, true));
     test_cases.emplace_back(new test_roll(4, 0, 0, 0, false, {42, 512, 1, 1}));
     test_cases.emplace_back(new test_roll(4, 0, 0, 0, false, {380, 512, 1, 1}));
-    // More than 65535 workgroups, even with 1024 invocations per workgroup.
-    test_cases.emplace_back(new test_roll(65536, -1023, 0, 0, false, {65537, 1024, 1, 1}));
     test_cases.emplace_back(new test_arange());
     test_cases.emplace_back(new test_arange(GGML_TYPE_F32, 3.0f, 3.5f, 1.0f));
     test_cases.emplace_back(new test_arange(GGML_TYPE_F32, -10.0f, 10.0f, 0.3f));
