@@ -183,9 +183,39 @@ kernel void kernel_concat(
 
     // chunk ic of nc0 along the row
     const int n0  = (args.ne0 + args.nc0 - 1)/args.nc0;
-    const int i0e = min(args.ne0, (ic + 1)*n0);
+    const int i0b = ntg.y == 1 ? ic*n0 : 0;
+    const int i0e = ntg.y == 1 ? min(args.ne0, (ic + 1)*n0) : args.ne0;
 
-    for (int i0 = ic*n0 + tpitg.x; i0 < i0e; i0 += ntg.x) {
+    const bool from0 = i0b < args.ne00 && i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03;
+
+    if (args.dim != 0 && args.nb0 == sizeof(T) && (from0 ? args.nb00 : args.nb10) == sizeof(T)) {
+        device const char * src_row = from0
+            ? src0 + i3*args.nb03 + i2*args.nb02 + i1*args.nb01
+            : src1 + (i3 - o[3])*args.nb13 + (i2 - o[2])*args.nb12 + (i1 - o[1])*args.nb11;
+        device       char * dst_row = dst + i3*args.nb3 + i2*args.nb2 + i1*args.nb1;
+
+        typedef vec<T, 4> T4;
+
+        const int n4 = (i0e - i0b)/4;
+        const int i04 = i0b;
+
+        if (i04 % 4 == 0 &&
+                ((size_t)(src_row + i04*sizeof(T)) % sizeof(T4) == 0) &&
+                ((size_t)(dst_row + i04*sizeof(T)) % sizeof(T4) == 0)) {
+            device const T4 * x4 = (device const T4 *)(src_row + i04*sizeof(T));
+            device       T4 * y4 = (device       T4 *)(dst_row + i04*sizeof(T));
+
+            for (int i = tpitg.x; i < n4; i += ntg.x) {
+                y4[i] = x4[i];
+            }
+            for (int i = i04 + n4*4 + tpitg.x; i < i0e; i += ntg.x) {
+                ((device T *)(dst_row))[i] = ((device const T *)(src_row))[i];
+            }
+            return;
+        }
+    }
+
+    for (int i0 = i0b + tpitg.x; i0 < i0e; i0 += ntg.x) {
         device const T * x;
 
         if (i0 < args.ne00 && i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03) {

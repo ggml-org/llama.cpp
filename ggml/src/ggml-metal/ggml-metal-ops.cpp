@@ -603,6 +603,13 @@ int ggml_metal_op_concat(ggml_metal_op_t ctx, int idx) {
         }
     }
 
+    const bool row_cont = !is_q && dim == 2 &&
+        ggml_is_contiguous_rows(op->src[0]) && ggml_is_contiguous_rows(op->src[1]) && ggml_is_contiguous_rows(op);
+    if (row_cont && ne0_arg >= 64 && (int64_t) ne1*ne2*ne3 >= 2048) {
+        nth   = std::min<int64_t>(32, ne0_arg);
+        nrptg = std::max<int64_t>(1, std::min<int64_t>(8, ne1));
+    }
+
     const int nw0 = (ne1 + nrptg - 1) / nrptg;
 
     // split long rows across threadgroups when there are too few rows to fill the GPU
