@@ -358,16 +358,17 @@ static __global__ void mul_mat_vec_f(
     ggml_cuda_pdl_lc();
 #pragma unroll
     for (int j = 0; j < ncols_dst; ++j) {
-        sumf[j] = warp_reduce_sum<warp_size, ncols_dst == 1>(sumf[j]);
+        sumf[j] = warp_reduce_sum<warp_size, (block_size > warp_size || ncols_dst == 1)>(sumf[j]);
 
         if constexpr (has_fusion) {
             if (use_gate) {
-                sumf_gate[j] = warp_reduce_sum<warp_size, ncols_dst == 1>(sumf_gate[j]);
+                sumf_gate[j] = warp_reduce_sum<warp_size, (block_size > warp_size || ncols_dst == 1)>(sumf_gate[j]);
             }
         }
 
         if (block_size > warp_size) {
-            if (ncols_dst != 1 || tid % warp_size == 0) {
+            // one write per warp
+            if (tid % warp_size == 0) {
                 buf_iw[tid/warp_size] = sumf[j];
                 if constexpr (has_fusion) {
                     if (use_gate) {
