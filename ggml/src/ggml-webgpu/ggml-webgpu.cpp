@@ -4406,6 +4406,7 @@ static void ggml_backend_webgpu_buffer_clear(ggml_backend_buffer_t buffer, uint8
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_clear(" << buffer << ", " << (uint32_t) value << ")");
     WEBGPU_CPU_PROFILE_TOTAL_START(clear);
     ggml_backend_webgpu_buffer_context * buf_ctx = (ggml_backend_webgpu_buffer_context *) buffer->context;
+
     // set all bytes of a u32 to the same 1 byte value
     uint32_t val32 = (uint32_t) value * 0x01010101;
     ggml_backend_webgpu_buffer_memset(buf_ctx->global_ctx, buf_ctx->buffer, val32, 0, buffer->size);
