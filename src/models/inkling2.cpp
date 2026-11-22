@@ -188,7 +188,11 @@ ggml_tensor * llama_model_inkling2::graph::mix(const std::vector<ggml_tensor *> 
     ggml_tensor * scores = ggml_mul_mat(ctx0, states, queries);
     scores = ggml_soft_max_ext(ctx0, scores, nullptr, 1.0f/sqrtf(n_embd), 0.0f);
 
-    return ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, states)), scores);
+    ggml_tensor * out = ggml_mul_mat(ctx0, scores, ggml_cont(ctx0, ggml_transpose(ctx0, states))); // [n_queries, n_embd, n_tokens]
+    if (query->ne[1] == 1) {
+        return ggml_reshape_3d(ctx0, out, n_embd, 1, n_tokens);
+    }
+    return ggml_cont(ctx0, ggml_permute(ctx0, out, 1, 0, 2, 3));
 }
 
 // causal short convolution with a residual; dynamic adds input-dependent taps per head
