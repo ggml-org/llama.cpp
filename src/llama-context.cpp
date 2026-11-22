@@ -376,7 +376,17 @@ llama_context::llama_context(
 
         const char * LLAMA_KV_ROWS_DISABLE = getenv("LLAMA_KV_ROWS_DISABLE");
         if (!LLAMA_KV_ROWS_DISABLE) {
-            cparams.auto_fkvr = cparams.kv_unified;
+            // a KQ bias (relative positions) takes the non-flash path over the whole cache, which a row-list graph does not have
+            const bool attn_kq_bias = model.hparams.n_rel_attn_bkts > 0 || model.hparams.n_relative > 0;
+
+            // a single sequence has a single cache stream, the same layout as a unified cache; measured on ROCm only, so attention on other backends (CPU included) keeps the dense path
+            bool rows_single_seq = cparams.n_seq_max == 1 && cparams.offload_kqv && model.hparams.n_layer() > 0;
+            for (uint32_t il = 0; il < model.hparams.n_layer(); ++il) {
+                ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(model.dev_layer(il));
+                rows_single_seq = rows_single_seq && reg && strcmp(ggml_backend_reg_name(reg), "ROCm") == 0;
+            }
+
+            cparams.auto_fkvr = !attn_kq_bias && (cparams.kv_unified || rows_single_seq);
         } else {
             LLAMA_LOG_INFO("%s: LLAMA_KV_ROWS_DISABLE set, disabling kv_rows\n", __func__);
             cparams.auto_fkvr = false;

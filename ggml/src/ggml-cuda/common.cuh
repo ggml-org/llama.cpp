@@ -337,6 +337,17 @@ static bool fast_fp16_available(const int cc) {
         (GGML_CUDA_CC_IS_MTHREADS(cc) && fp16_available(cc));
 }
 
+// 1 if the variable is set to non-zero, 0 if set to 0, -1 if unset
+static inline int ggml_cuda_env_switch(const char * name) {
+    const char * value = getenv(name);
+    return value != nullptr ? (atoi(value) != 0 ? 1 : 0) : -1;
+}
+
+// tuned on RDNA3.5 (Strix Halo): on by default there, an explicit switch overrides
+static inline bool ggml_cuda_switch_or_rdna3_5(const int env_switch, const int cc) {
+    return env_switch != -1 ? env_switch == 1 : GGML_CUDA_CC_IS_RDNA3_5(cc);
+}
+
 // To be used for feature selection of external libraries, e.g. cuBLAS.
 static bool fast_fp16_hardware_available(const int cc) {
     return (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_PASCAL && cc != 610) || GGML_CUDA_CC_IS_AMD(cc) ||

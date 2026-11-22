@@ -202,6 +202,13 @@ static constexpr __host__ __device__ fattn_mma_config ggml_cuda_fattn_mma_get_co
     return fattn_mma_config(32, 1, 0, 0, 0, 0, 0, false);
 }
 
+// 32 columns (e.g. 4-token verify with an 8-column GQA tile) is faster with 64 threads and 32-row KV batches (measured on RDNA3.5)
+// host and device both select it for all of RDNA3: a gfx11-generic binary has no RDNA3.5 device code
+static constexpr __host__ __device__ fattn_mma_config ggml_cuda_fattn_mma_get_config_rdna3(const int DKQ, const int DV, const int ncols) {
+    GGML_CUDA_FATTN_MMA_CONFIG_CASE(128, 128, 32,  64, 2,  32,  64,  64,  64, 1, true);
+    return ggml_cuda_fattn_mma_get_config_rdna(DKQ, DV, ncols);
+}
+
 static constexpr __host__ __device__ fattn_mma_config ggml_cuda_fattn_mma_get_config_cdna(const int DKQ, const int DV, const int ncols) {
     GGML_CUDA_FATTN_MMA_CONFIG_CASE( 40,  40,  8, 256, 2,  64,  24,  24,  24, 1, true);
     GGML_CUDA_FATTN_MMA_CONFIG_CASE( 40,  40, 16, 256, 2,  64,  24,  24,  24, 1, true);
@@ -275,6 +282,9 @@ static __host__ fattn_mma_config ggml_cuda_fattn_mma_get_config(const int DKQ, c
         return ggml_cuda_fattn_mma_get_config_cdna(DKQ, DV, ncols);
     }
     if (amd_wmma_available(cc)) {
+        if (GGML_CUDA_CC_IS_RDNA3(cc)) {
+            return ggml_cuda_fattn_mma_get_config_rdna3(DKQ, DV, ncols);
+        }
         return ggml_cuda_fattn_mma_get_config_rdna(DKQ, DV, ncols);
     }
     GGML_ASSERT(volta_mma_available(cc));
@@ -291,7 +301,11 @@ static constexpr __device__ fattn_mma_config ggml_cuda_fattn_mma_get_config(cons
 #elif defined(VOLTA_MMA_AVAILABLE)
     return ggml_cuda_fattn_mma_get_config_volta(DKQ, DV, ncols);
 #elif defined(AMD_WMMA_AVAILABLE)
+#if defined(RDNA3)
+    return ggml_cuda_fattn_mma_get_config_rdna3(DKQ, DV, ncols);
+#else
     return ggml_cuda_fattn_mma_get_config_rdna(DKQ, DV, ncols);
+#endif // defined(RDNA3)
 #else
     GGML_UNUSED_VARS(DKQ, DV, ncols);
     return fattn_mma_config(32, 1, 0, 0, 0, 0, 0, false);
@@ -1570,6 +1584,10 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 #pragma unroll
         for (int col = 0; col < cols_per_thread; ++col) {
             const int jc = (threadIdx.y/np)*cols_per_warp + (cols_per_warp == 8 ? T_C_KQ::get_j(col) : T_C_KQ::get_i(2*col));
+            if (zt_gqa*ncols2 + jc % ncols2 >= gqa_ratio) {
+                KQ_max_scale[col] = 1.0f;
+                continue;
+            }
             const float sink = sinks_f[jc % ncols2];
 
             const float KQ_max_new = fmaxf(KQ_max[col], sink);

@@ -5,6 +5,18 @@
 #include "fattn-vec.cuh"
 #include "fattn.cuh"
 
+// pad a GQA group that 8 does not divide (e.g. GQA 6) to one 8-column tile, so K/V are read once per KV head
+static bool ggml_cuda_fattn_rdna_gqa_pad_enabled(const int cc) {
+    static const int env_switch = ggml_cuda_env_switch("GGML_HIP_FA_GQA_PAD");
+    return ggml_cuda_switch_or_rdna3_5(env_switch, cc);
+}
+
+// read K/V through row lists, e.g. only the visible sliding window instead of the whole SWA cache
+static bool ggml_cuda_fattn_rdna_kv_rows_enabled(const int cc) {
+    static const int env_switch = ggml_cuda_env_switch("GGML_HIP_FA_KV_ROWS");
+    return ggml_cuda_switch_or_rdna3_5(env_switch, cc);
+}
+
 #if !defined(GGML_USE_MUSA)
 
 // one list per group of ncols1 queries: a column is selected if any query of the group can see it
@@ -260,6 +272,13 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_con
     // On RDNA it is preferable to minimize wasted compute vs. duplicate I/O for the mask.
     if (amd_wmma_available(cc)) {
         if (use_gqa_opt && gqa_ratio % 8 == 0) {
+            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 8>(ctx, dst);
+            return;
+        }
+
+        // small batches are K/V bandwidth bound, large batches fill the tiles without padding
+        // only with row lists: without them the padded tiles made the output depend on earlier requests (cause not found)
+        if (use_gqa_opt && gqa_ratio > 4 && Q->ne[1] <= 8 && dst->src[5] && ggml_cuda_fattn_rdna_gqa_pad_enabled(cc)) {
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 8>(ctx, dst);
             return;
         }
@@ -684,8 +703,21 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // only the MMA kernel reads K/V through kv_rows
     if (kv_rows) {
-        return GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && mask && Q->ne[0] != 40 && Q->ne[0] != 72 ?
-            BEST_FATTN_KERNEL_MMA_F16 : BEST_FATTN_KERNEL_NONE;
+        // its logit softcap variants are compiled for these head sizes only
+        float logit_softcap;
+        memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
+        if (logit_softcap != 0.0f && Q->ne[0] != 128 && Q->ne[0] != 256 && Q->ne[0] != 512) {
+            return BEST_FATTN_KERNEL_NONE;
+        }
+        if (GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && mask && Q->ne[0] != 40 && Q->ne[0] != 72) {
+            return BEST_FATTN_KERNEL_MMA_F16;
+        }
+        // the WMMA kernel reads kv_rows only on the GQA path (ncols2 >= 2)
+        if (amd_wmma_available(cc) && ggml_cuda_fattn_rdna_kv_rows_enabled(cc) && mask && gqa_opt_applies &&
+                Q->ne[0] <= 256 && Q->ne[0] != 40 && Q->ne[0] != 72) {
+            return BEST_FATTN_KERNEL_MMA_F16;
+        }
+        return BEST_FATTN_KERNEL_NONE;
     }
 
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:

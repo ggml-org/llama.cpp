@@ -9379,11 +9379,14 @@ struct test_flash_attn_ext_kv_rows : public test_case {
     const int64_t nb;       // queries per slice
     const int64_t n_slices;
     const ggml_type type_KV;
+    const bool sinks;
+    const bool mask_shared; // one mask for all slices
+    const float logit_softcap;
 
     std::vector<int32_t> rows;
 
     std::string vars() override {
-        return VARS_TO_STR8(hs, nh, gqa, n_cells, kv, nb, n_slices, type_KV);
+        return VARS_TO_STR11(hs, nh, gqa, n_cells, kv, nb, n_slices, type_KV, sinks, mask_shared, logit_softcap);
     }
 
     double max_nmse_err() override {
@@ -9391,8 +9394,10 @@ struct test_flash_attn_ext_kv_rows : public test_case {
     }
 
     test_flash_attn_ext_kv_rows(int64_t hs = 256, int64_t nh = 2, int64_t gqa = 8, int64_t n_cells = 2048, int64_t kv = 512,
-                                int64_t nb = 8, int64_t n_slices = 4, ggml_type type_KV = GGML_TYPE_F16)
-        : hs(hs), nh(nh), gqa(gqa), n_cells(n_cells), kv(kv), nb(nb), n_slices(n_slices), type_KV(type_KV) {}
+                                int64_t nb = 8, int64_t n_slices = 4, ggml_type type_KV = GGML_TYPE_F16, bool sinks = false,
+                                bool mask_shared = false, float logit_softcap = 0.0f)
+        : hs(hs), nh(nh), gqa(gqa), n_cells(n_cells), kv(kv), nb(nb), n_slices(n_slices), type_KV(type_KV), sinks(sinks),
+          mask_shared(mask_shared), logit_softcap(logit_softcap) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, hs, nb, nh*gqa, n_slices);
@@ -9407,13 +9412,18 @@ struct test_flash_attn_ext_kv_rows : public test_case {
         ggml_tensor * k = ggml_permute(ctx, k0, 0, 2, 1, 3);
         ggml_tensor * v = ggml_permute(ctx, v0, 0, 2, 1, 3);
 
-        ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv, nb, 1, n_slices);
+        ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv, nb, 1, mask_shared ? 1 : n_slices);
         ggml_set_name(m, "m");
 
         ggml_tensor * r = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, kv, n_slices);
         ggml_set_name(r, "r");
 
-        ggml_tensor * out = ggml_flash_attn_ext_rows(ctx, q, k, v, m, r, 1.0f/sqrtf(hs), 0.0f, 0.0f);
+        ggml_tensor * out = ggml_flash_attn_ext_rows(ctx, q, k, v, m, r, 1.0f/sqrtf(hs), 0.0f, logit_softcap);
+        if (sinks) {
+            ggml_tensor * s = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, nh*gqa);
+            ggml_set_name(s, "sinks");
+            ggml_flash_attn_ext_add_sinks(out, s);
+        }
         ggml_prec_set_acc(out, GGML_PREC_F32);
         ggml_set_name(out, "out");
 
@@ -9431,7 +9441,8 @@ struct test_flash_attn_ext_kv_rows : public test_case {
                 order[i] = i;
             }
             std::shuffle(order.begin(), order.end(), gen);
-            const int64_t n_used = std::min<int64_t>(n_cells, kv - (s*37) % std::max<int64_t>(1, kv/2));
+            // a shared mask needs the same padding tail in every slice
+            const int64_t n_used = std::min<int64_t>(n_cells, kv - (mask_shared ? 0 : (s*37) % std::max<int64_t>(1, kv/2)));
             for (int64_t i = 0; i < n_used; ++i) {
                 rows[s*kv + i] = order[i];
             }
@@ -9446,7 +9457,7 @@ struct test_flash_attn_ext_kv_rows : public test_case {
             } else if (strcmp(t->name, "m") == 0) {
                 std::vector<float> f(ggml_nelements(t));
                 std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
-                for (int64_t s = 0; s < n_slices; ++s) {
+                for (int64_t s = 0; s < t->ne[3]; ++s) {
                     for (int64_t j = 0; j < nb; ++j) {
                         for (int64_t i = 0; i < kv; ++i) {
                             const bool pad = rows[s*kv + i] < 0;
@@ -13386,6 +13397,29 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // Padded GQA groups, partial query tiles, and exact-sized attention sinks.
+    for (int nb : {1, 3, 4, 8}) {
+        for (bool sinks : {false, true}) {
+            test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {6, 1}, 512, nb, true, sinks, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+        }
+    }
+    for (int hs : {64, 256}) {
+        test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 2, {6, 1}, 512, 4, true, true, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    }
+    for (int gqa : {4, 8, 12}) {
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {gqa, 1}, 512, 4, true, true, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    }
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {6, 1}, 512, 9, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    for (ggml_type type_KV : {GGML_TYPE_BF16, GGML_TYPE_Q8_0}) {
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {6, 1}, 512, 1, true, false, 0, 0, GGML_PREC_F32, type_KV, type_KV));
+    }
+    // GQA 6 with long K/V: decode, speculative verification and a draft block.
+    for (int kv : {8192, 32768}) {
+        for (int nb : {1, 4, 8}) {
+            test_cases.emplace_back(new test_flash_attn_ext(128, 128, 8, {6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+        }
+    }
+
     // q8_0 KV cases: decode and prompt batches, KV pad, permuted KV, feature flags, and long context
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {16, 1},   113,   1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {16, 1},  1024,   1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
@@ -13434,6 +13468,27 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_flash_attn_ext_kv_rows(512, 2, 8, 4096, 1024, nb, n_slices));
             test_cases.emplace_back(new test_flash_attn_ext_kv_rows(256, 8, 2, 4096, 1280, nb, n_slices));
         }
+    }
+
+    // GQA 6 over a sliding window and a complete row list.
+    for (int64_t nb : {1, 4, 8}) {
+        test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 8, 6, 2560, 768, nb, 1));
+    }
+    test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 2, 6, 4096, 4096, 4, 1));
+    // Exact-sized query masks with a fully padded final K/V tile.
+    for (int64_t nb : {1, 3, 5, 7}) {
+        test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 2, 6, 512, 768, nb, 1));
+    }
+    for (ggml_type type_KV : {GGML_TYPE_BF16, GGML_TYPE_Q8_0}) {
+        test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 2, 6, 512, 768, 3, 4, type_KV));
+    }
+    // Odd GQA ratios already use padded WMMA head tiles without the small-batch optimization.
+    test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 2, 3, 512, 768, 1, 1, GGML_TYPE_F16, true));
+    // One mask shared by all slices.
+    test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 2, 6, 512, 768, 3, 4, GGML_TYPE_F16, false, true));
+    // Logit softcap; head size 64 has no softcap kernel and must be rejected, not dispatched.
+    for (int64_t hs : {64, 128}) {
+        test_cases.emplace_back(new test_flash_attn_ext_kv_rows(hs, 2, 6, 512, 768, 3, 1, GGML_TYPE_F16, false, false, 30.0f));
     }
 
     // sparse mask with large batch size
@@ -14270,6 +14325,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_flash_attn_ext(512, 512, 2, { 8, 1}, 49152, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2048));
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {16, 1}, 49152, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, true,     0));
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {16, 1}, 49152, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, true,  2048));
+
+    // GQA 6: decode, speculative verification, and a prompt batch at long context.
+    for (int kv : {32768, 131072}) {
+        for (int nb : {1, 4, 8, 2048}) {
+            test_cases.emplace_back(new test_flash_attn_ext(128, 128, 8, {6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+        }
+    }
+
+    // Sliding-window decode and a full row-list control.
+    for (int64_t nb : {1, 4}) {
+        test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 8, 6, 2560, 768, nb, 1));
+        test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 8, 6, 32768, 32768, nb, 1));
+    }
 
     // GLM 4.7 Flash gqa20
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {20, 1}, 8192, 32, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, true));
