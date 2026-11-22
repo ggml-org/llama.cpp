@@ -2285,7 +2285,7 @@ extern "C" {
 
     GGML_API bool ggml_flash_attn_ext_has_indexed_bias(const struct ggml_tensor * a);
 
-    // Add table[indices[key, query], head, query] to the mask before its F16 rounding.
+    // Add table[indices[key, query], head, query] to the mask, in F32.
     // Queries from all streams are flattened in stream order. Indices must be in [0, table->ne[0]).
     GGML_API void ggml_flash_attn_ext_add_indexed_bias(
             struct ggml_tensor * a,

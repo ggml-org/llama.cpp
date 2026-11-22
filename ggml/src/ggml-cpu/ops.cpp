@@ -8989,7 +8989,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
             float mv = mp ? GGML_CPU_FP16_TO_FP32(mp[ic]) : 0.0f;
             if (bias) {
                 GGML_ASSERT(bins[ic] >= 0 && bins[ic] < n_bins);
-                mv = GGML_CPU_FP16_TO_FP32(GGML_CPU_FP32_TO_FP16(mv + bias[bins[ic]]));
+                mv += bias[bins[ic]];
             }
             mv *= slope;
             if (mv == -INFINITY) {
@@ -9257,7 +9257,7 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                         float m = GGML_CPU_FP16_TO_FP32(mp_row[ic + tk]);
                         if (bias) {
                             GGML_ASSERT(bins[ic + tk] >= 0 && bins[ic + tk] < n_bins);
-                            m = GGML_CPU_FP16_TO_FP32(GGML_CPU_FP32_TO_FP16(m + bias[bins[ic + tk]]));
+                            m += bias[bins[ic + tk]];
                         }
                         mask32[tq * KV_TILE_SZ + tk] = slope * m;
                         if (mask32[tq * KV_TILE_SZ + tk] != -INFINITY) {
