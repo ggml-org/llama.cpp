@@ -52,10 +52,10 @@ struct mtmd_audio_cache {
     );
 };
 
-// FFT of N real samples -> N complex values (interleaved), in needs 2 * N floats and out 8 * N floats (scratch)
-void mtmd_audio_fft(const mtmd_audio_cache & cache, float * in, int N, float * out);
-// inverse FFT of N complex values (interleaved), scaled by 1 / N; in and out need 8 * N floats (scratch)
-void mtmd_audio_ifft(const mtmd_audio_cache & cache, float * in, int N, float * out);
+// FFT of N real samples -> N complex values (interleaved), in holds N floats, out needs 8 * N floats (scratch)
+void mtmd_audio_fft(const mtmd_audio_cache & cache, const float * in, int N, float * out);
+// inverse FFT of N complex values (interleaved), scaled by 1 / N; in holds 2 * N floats, out needs 8 * N floats (scratch)
+void mtmd_audio_ifft(const mtmd_audio_cache & cache, const float * in, int N, float * out);
 
 // compute one log10-mel frame from n_fft windowed samples, cache must be initialized for n_fft
 void mtmd_audio_log_mel_frame(const mtmd_audio_cache & cache, const float * samples, int n_fft, int n_mel, float * out);

@@ -881,6 +881,64 @@ static double tone_amplitude(const std::vector<float> & x, double freq, int rate
     return 2.0 * std::sqrt(re * re + im * im) / (x.size() - 2 * skip);
 }
 
+MAKE_TEST(test_audio_fft) {
+    // the sizes in use: powers of two, and an odd part (400 = 16 * 25, 736 = 32 * 23, 1920 = 128 * 15)
+    // plus small edge cases: 4 = gather + one stage, 6 = n_odd 3 with n_sub 2, 15 = odd composite with n_sub 1
+    const int sizes[] = { 1, 2, 3, 4, 6, 12, 15, 256, 400, 512, 736, 1920 };
+    const double pi = 3.14159265358979323846;
+    for (int n : sizes) {
+        mtmd_audio_cache cache;
+        cache.fill_sin_cos_table(n);
+        // phase offset so that x[0] != 0 (n = 1 would otherwise compare all zeros)
+        std::vector<float> x(2 * n);
+        for (int i = 0; i < 2 * n; i++) {
+            x[i] = (float) std::sin(0.37 * i + 0.001 * i * i + 0.5);
+        }
+        std::vector<float> out(8 * n);
+        for (bool inv : { false, true }) {
+            // input sized exactly as documented so that sanitizers catch any overread
+            const std::vector<float> in(x.begin(), x.begin() + (inv ? 2 * n : n));
+            if (inv) {
+                mtmd_audio_ifft(cache, in.data(), n, out.data());
+            } else {
+                mtmd_audio_fft(cache, in.data(), n, out.data());
+            }
+            double max_err = 0.0, max_ref = 0.0;
+            for (int k = 0; k < n; k++) {
+                double re = 0.0, im = 0.0;
+                for (int j = 0; j < n; j++) {
+                    const double theta = (inv ? 2 : -2) * pi * (double) ((int64_t) j * k % n) / n;
+                    const double a = inv ? x[2 * j] : x[j];
+                    const double b = inv ? x[2 * j + 1] : 0.0;
+                    re += a * std::cos(theta) - b * std::sin(theta);
+                    im += a * std::sin(theta) + b * std::cos(theta);
+                }
+                if (inv) {
+                    re /= n;
+                    im /= n;
+                }
+                max_err = std::max({ max_err, std::fabs(re - out[2 * k]), std::fabs(im - out[2 * k + 1]) });
+                max_ref = std::max({ max_ref, std::fabs(re), std::fabs(im) });
+            }
+            t.assert_true(std::string(inv ? "ifft" : "fft") + " n = " + std::to_string(n) + ", relative error " + std::to_string(max_err / max_ref),
+                          max_ref > 0.0 && max_err <= 1e-5 * max_ref);
+        }
+
+        // round trip: ifft(fft(x)) == x for real x
+        std::vector<float> spec(8 * n);
+        mtmd_audio_fft(cache, x.data(), n, spec.data());
+        const std::vector<float> spec_in(spec.begin(), spec.begin() + 2 * n);
+        mtmd_audio_ifft(cache, spec_in.data(), n, out.data());
+        double max_err = 0.0, max_ref = 0.0;
+        for (int k = 0; k < n; k++) {
+            max_err = std::max({ max_err, (double) std::fabs(out[2 * k] - x[k]), (double) std::fabs(out[2 * k + 1]) });
+            max_ref = std::max(max_ref, (double) std::fabs(x[k]));
+        }
+        t.assert_true("fft round trip n = " + std::to_string(n) + ", relative error " + std::to_string(max_err / max_ref),
+                      max_ref > 0.0 && max_err <= 1e-5 * max_ref);
+    }
+}
+
 static std::vector<float> resample_chunked(mtmd_helper_resampler * rs, const std::vector<float> & in, size_t chunk) {
     std::vector<float> res;
     for (size_t off = 0; off < in.size(); off += chunk) {
