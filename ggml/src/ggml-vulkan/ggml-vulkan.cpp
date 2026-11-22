@@ -14279,7 +14279,9 @@ bool ggml_backend_vk_buffer_cpy_tensor_n(ggml_backend_buffer_t buffer, const ggm
 void ggml_backend_vk_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     ggml_backend_vk_buffer_context * ctx = (ggml_backend_vk_buffer_context *)buffer->context;
 
-    ggml_vk_buffer_memset(ctx->dev_buffer, 0, value, buffer->size);
+    // set all bytes of a u32 to the same 1 byte value
+    uint32_t val32 = (uint32_t)value * 0x01010101;
+    ggml_vk_buffer_memset(ctx->dev_buffer, 0, val32, buffer->size);
 }
 
 const char * ggml_backend_vk_buffer_type_name(ggml_backend_buffer_type_t buft) {
@@ -17046,7 +17048,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_SLEEP:
             return device->shader_clock;
         case GGML_OP_SCALE:
-            return ggml_is_contiguous(op->src[0]) && ggml_vk_is_float_elementwise(op);
+            return ggml_vk_is_float_elementwise(op);
         case GGML_OP_PAD:
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_ROLL:

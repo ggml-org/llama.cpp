@@ -3143,6 +3143,12 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
         return false;
     }
 
+    // Later loop passes can select different experts from the same device copy.
+    // TODO: copy only the experts needed by each pass (see #32807 and #32809).
+    if (lctx->model.arch == LLM_ARCH_INKLING2_LOOP) {
+        return false;
+    }
+
     const ggml_tensor * ids = node->src[2];
     if (ggml_nelements(ids) == 0) {
         return true;
