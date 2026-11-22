@@ -2,52 +2,27 @@
 	import { colorLevelBgClass, colorLevelTextClass } from './context-gauge';
 	import ContextGaugeDetails from './ContextGaugeDetails.svelte';
 	import ContextGaugeLoadModel from './ContextGaugeLoadModel.svelte';
-	import {
-		gaugeCardEnter,
-		gaugeCardLeave,
-		gaugePopup,
-		gaugePopupClose
-	} from './gauge-popup.svelte';
+	import { gaugePopupClose } from './gauge-popup.svelte';
 	import { Button } from '@ggml-org/llama-ui/ui/button';
-	import * as Drawer from '@ggml-org/llama-ui/ui/drawer';
 	import { FoldVertical, Loader2 } from '@lucide/svelte';
 	import { useContextGauge } from '#lib/hooks/use-context-gauge.svelte.ts';
-	import { agenticStore, chatStore, conversationsStore, deviceStore } from '#lib/stores/index.ts';
+	import { agenticStore, chatStore, conversationsStore } from '#lib/stores/index.ts';
 	import { formatParameters } from '#lib/utils/formatters.ts';
+
+	interface Props {
+		/** The drawer brings its own title, so the panel drops the inline one there. */
+		inDrawer?: boolean;
+	}
+
+	let { inDrawer = false }: Props = $props();
 
 	const gauge = useContextGauge();
 
 	// The gauge hook wraps a processing state instance that only follows the
-	// live stream while its own monitoring flag is set, so the card instance
+	// live stream while its own monitoring flag is set, so the panel instance
 	// starts monitoring like the dial does.
 	$effect(() => {
 		gauge.startMonitoring();
-	});
-
-	let cardEl = $state<HTMLElement | null>(null);
-
-	// Any press outside the card and outside the dial closes the card.
-	// Presses on the dial are excluded because the dial handles its own
-	// toggle; the listener only exists while the card is open. A phone shows
-	// the panel in a drawer instead, which brings its own dismissal.
-	$effect(() => {
-		if (!gaugePopup.open || deviceStore.isMobile) return;
-
-		const onPointerDown = (event: PointerEvent) => {
-			const target = event.target;
-
-			if (!(target instanceof Node)) return;
-
-			if (cardEl?.contains(target)) return;
-
-			if (target instanceof Element && target.closest('[data-context-gauge-trigger]')) return;
-
-			gaugePopupClose();
-		};
-
-		document.addEventListener('pointerdown', onPointerDown, true);
-
-		return () => document.removeEventListener('pointerdown', onPointerDown, true);
 	});
 
 	const showProgressBar = $derived(
@@ -60,7 +35,7 @@
 
 	const activeConvId = $derived(conversationsStore.activeConversation?.id ?? null);
 
-	// A summary in flight keeps the card open for the numbers, so the action
+	// A summary in flight keeps the panel open for the numbers, so the action
 	// reports the run instead of inviting a second one.
 	const isCompacting = $derived(activeConvId !== null && chatStore.isCompacting(activeConvId));
 
@@ -149,47 +124,20 @@
 	{/if}
 {/snippet}
 
-{#if deviceStore.isMobile}
-	<Drawer.Root bind:open={gaugePopup.open}>
-		<Drawer.Content>
-			<Drawer.Header>
-				<Drawer.Title>Context</Drawer.Title>
+<div class={['flex flex-col gap-2', inDrawer ? 'px-4 pb-4 max-md:gap-3.5' : 'px-2 py-1.5']}>
+	{#if inDrawer}
+		{@render usage()}
+	{:else}
+		<div class="flex items-center gap-2">
+			<span class="font-medium">Context</span>
 
-				<Drawer.Description class="sr-only">
-					Context window usage of the model the chat runs
-				</Drawer.Description>
-			</Drawer.Header>
+			<span class="text-muted-foreground">·</span>
 
-			<div class="flex flex-col gap-2 px-4 pb-4 max-md:gap-3.5">
-				{@render usage()}
-
-				{@render body()}
-
-				{@render compactAction()}
-			</div>
-		</Drawer.Content>
-	</Drawer.Root>
-{:else if gaugePopup.open}
-	<div
-		bind:this={cardEl}
-		class="absolute z-50 w-64 -translate-x-1/2 rounded-xl border matte-float p-1.5 text-body-sm"
-		onpointerenter={gaugeCardEnter}
-		onpointerleave={gaugeCardLeave}
-		role="status"
-		style="left: {gaugePopup.centerX}px; bottom: {gaugePopup.bottom}px"
-	>
-		<div class="flex flex-col gap-2 px-2 py-1.5">
-			<div class="flex items-center gap-2">
-				<span class="font-medium">Context</span>
-
-				<span class="text-muted-foreground">·</span>
-
-				{@render usage()}
-			</div>
-
-			{@render body()}
-
-			{@render compactAction()}
+			{@render usage()}
 		</div>
-	</div>
-{/if}
+	{/if}
+
+	{@render body()}
+
+	{@render compactAction()}
+</div>

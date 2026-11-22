@@ -433,7 +433,11 @@ struct mtmd_graph_qwen3tts_gen : mtmd_graph {
 
     // MTMD_SUBCTX_GEN_PROCESS_TOKENIZE: reference clip -> codes and their talker input rows
     ggml_cgraph * build_ref_encoder();
-    ggml_tensor * nearest_code(ggml_tensor * x, ggml_tensor * codebook) const;
+    static ggml_tensor * nearest_code(ggml_context * ctx0, ggml_tensor * x, ggml_tensor * codebook);
+    // split RVQ (mimi): the first codebook on x_first, the residual ones on x_rest, cb_rest is stacked on dim 2
+    // x_first, x_rest: [dim, T] -> one [T] code tensor per codebook; also used by the moshi encoder
+    static std::vector<ggml_tensor *> rvq_encode(ggml_context * ctx0, ggml_tensor * x_first, ggml_tensor * cb_first,
+                                                 ggml_tensor * x_rest, ggml_tensor * cb_rest);
 
     // reference encoder transformer, see encoder_config in speech_tokenizer/config.json
     static constexpr int   ref_enc_n_head     = 8;
@@ -529,6 +533,8 @@ struct mtmd_graph_qwen3tts_gen : mtmd_graph {
 // pocket-tts: SEANet convolution stack, shared by the voice encoder and the mimi decoder.
 // stateless unless state_in is populated: convs then pad instead of carrying left-context.
 //
+struct c2w_state_slot;
+
 struct mtmd_graph_pockettts_seanet : mtmd_graph {
     mtmd_graph_pockettts_seanet(const mtmd_graph & parent) : mtmd_graph(parent) {}
     ggml_cgraph * build() override { GGML_ABORT("call encode()/decode() instead"); }
@@ -542,6 +548,10 @@ struct mtmd_graph_pockettts_seanet : mtmd_graph {
     std::map<std::string, ggml_tensor *> state_in;
     mutable std::vector<std::pair<std::string, ggml_tensor *>> state_out;
 
+    // the "state_in_<slot>" inputs of the slots, then the "state_out_<slot>" outputs written by the graph
+    void state_inputs(const std::vector<c2w_state_slot> & slots);
+    void state_outputs(ggml_cgraph * graph) const;
+
     ggml_tensor * conv1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride, int dilation,
                          bool pad_replicate = false, const std::string & state_name = "") const;
     ggml_tensor * conv_transpose1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride,
@@ -549,10 +559,15 @@ struct mtmd_graph_pockettts_seanet : mtmd_graph {
     ggml_tensor * res_unit(ggml_tensor * x, const mtmd_seanet::stage & stage, int dilation,
                            const std::string & state_prefix = "") const;
 
-    // x: [T, C] -> [T / hop, dim]
+    // x: [T, C] -> [T / hop, dim], streams when state_in is populated
     ggml_tensor * encode(ggml_tensor * x) const;
     // x: [T, dim] -> [T * hop, 1], streams when state_in is populated
     ggml_tensor * decode(ggml_tensor * x) const;
+
+    // mimi transformer, always streams (see list_pockettts_state_slots): x: [dim, n_pos] -> [dim, n_pos]
+    ggml_tensor * transformer(ggml_tensor * x, const std::vector<mtmd_layer> & layers, int n_head, float eps) const;
+    // mimi decoder: upsample, transformer, SEANet decoder; x: [dim, n_frames] -> [n_samples, 1]
+    ggml_tensor * mimi_decode(ggml_tensor * x, int n_head, float eps) const;
 };
 
 // mimi encoder + speaker_proj: reference waveform -> voice conditioning rows
@@ -594,6 +609,43 @@ struct mtmd_graph_pockettts_gen : mtmd_graph {
     ggml_tensor * flow_forward(ggml_tensor * cond, ggml_tensor * x, float s, float t) const;
 };
 
+//
+// moshi family (e.g. Hibiki): streaming mimi encoder + RVQ, rows of the input audio codes
+// output: [n_embd, n_q * (n_frames + 1)], the embedding of each code of each frame, then of the initial codes
+//
+struct mtmd_graph_moshi : mtmd_graph {
+    mtmd_graph_moshi(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+
+    static constexpr int n_samples_per_frame = 1920; // 80 ms at 24 kHz
+};
+
+//
+// moshi generation:
+// GEN_CODE = depformer, the codes of one frame + their backbone embedding; with all codes known, only the embedding
+// GEN_WAV  = RVQ decode + mimi decoder
+//
+struct mtmd_graph_moshi_gen : mtmd_graph {
+    mtmd_graph_moshi_gen(mtmd_subcontext * ctx, const mtmd_image_f32 & img, mtmd_subctx_gen_process gen_process, bool fb_only,
+                         int n_frames, int top_k, float temp)
+        : mtmd_graph(ctx, img), gen_process(gen_process), fb_only(fb_only), n_frames(n_frames), top_k(top_k), temp(temp) {}
+    ggml_cgraph * build() override;
+
+    static constexpr int   mimi_n_layer = 8;
+    static constexpr int   mimi_n_head  = 8;
+    static constexpr float mimi_eps     = 1e-5f;
+    static constexpr int   n_q_max      = 32;
+
+    mtmd_subctx_gen_process gen_process;
+    bool  fb_only;
+    int   n_frames;
+    int   top_k;
+    float temp;
+
+    ggml_tensor * dep_step(ggml_tensor * x, int64_t iw, std::vector<ggml_tensor *> & k_all, std::vector<ggml_tensor *> & v_all);
+    ggml_tensor * feedback(const std::vector<ggml_tensor *> & codes);
+};
+
 // one persisted state buffer used by code2wav, see qwen3tts-gen.cpp
 struct c2w_state_slot {
     std::string name;
@@ -608,6 +660,9 @@ std::vector<c2w_state_slot> list_drama3_state_slots(const mtmd_hparams & hparams
 
 // same, for the streaming mimi decoder (pocket-tts GEN_WAV)
 std::vector<c2w_state_slot> list_pockettts_state_slots(const mtmd_hparams & hparams, const mtmd_model & model);
+
+// streaming mimi encoder of moshi, "pos" leads
+std::vector<c2w_state_slot> list_moshi_state_slots(const mtmd_hparams & hparams, const mtmd_model & model);
 
 //
 // drama3 generation:

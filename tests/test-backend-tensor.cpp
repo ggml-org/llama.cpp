@@ -171,6 +171,25 @@ static bool test_tensor_n(ggml_backend_buffer_type_t buft) {
     }
 
     {
+        uint8_t expected[24], out[24] = {};
+        memset(expected, 0x11, sizeof(expected));
+        ggml_backend_tensor_set(t_big, expected, 0, sizeof(expected));
+
+        // Verify memset of unaligned ranges, such as single F16 elements.
+        const size_t ranges[][2] = { { 2, 2 }, { 1, 1 }, { 5, 2 }, { 9, 13 }, { 22, 2 } };
+        for (const auto & range : ranges) {
+            const uint8_t value = (uint8_t) (0xA0 + range[0]);
+            memset(expected + range[0], value, range[1]);
+            ggml_backend_tensor_memset(t_big, value, range[0], range[1]);
+        }
+
+        ggml_backend_tensor_get(t_big, out, 0, sizeof(out));
+        if (memcmp(out, expected, sizeof(out)) != 0) {
+            return false;
+        }
+    }
+
+    {
         std::vector<ggml_tensor *> batch;
         ggml_backend_buffer_ptr scatter_buf = alloc_tensors(ctx.get(), buft, { 64 }, batch);
         if (!scatter_buf) {
