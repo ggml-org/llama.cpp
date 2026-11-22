@@ -414,6 +414,8 @@ class Inkling2DSparkModel(Inkling2Model):
         if weight.shape[0] != n_embd or bias.shape != (n_embd,):
             raise ValueError(f"Inkling2 DSpark: hidden_out {tuple(weight.shape)} does not match unembed {(n_vocab, n_embd)}")
         # markov_w2 = unembed @ hidden_out, fp64 like vLLM, one row chunk at a time
+        # padded tokens are never sampled, so keep only the tokenizer rows
+        n_vocab = self.hparams["unpadded_vocab_size"]
         row_chunks = [slice(i, min(i + 4096, n_vocab)) for i in range(0, n_vocab, 4096)]
         for name, w, b, shape in (
             ("mtp.markov_head.fold.weight", weight, None, (n_vocab, weight.shape[1])),
@@ -438,8 +440,6 @@ class Inkling2DSparkModel(Inkling2Model):
         n = self.block_count
         w = self.gguf_writer
         w.add_block_count(n)
-        w.add_vocab_size(hp["vocab_size"])
-        w.add_vocab_size_unpadded(hp["unpadded_vocab_size"])
         w.add_context_length(mtp["max_position_embeddings"])
         w.add_embedding_length(mtp["hidden_size"])
         w.add_feed_forward_length(mtp["intermediate_size"])
@@ -450,7 +450,8 @@ class Inkling2DSparkModel(Inkling2Model):
         w.add_rope_dimension_count(mtp["head_dim"])
         w.add_rope_freq_base(float(mtp["rope_theta"]))
         w.add_layer_norm_rms_eps(mtp["rms_norm_eps"])
-        w.add_sliding_window(mtp["sliding_window_size"])
+        # the block sees W positions before the anchor, llama.cpp SWA sees n_swa - 1
+        w.add_sliding_window(mtp["sliding_window_size"] + 1)
         w.add_sliding_window_pattern([i in mtp["local_layer_ids"] for i in range(n)])
         w.add_final_logit_softcapping(hp["final_logit_softcapping"])
         w.add_block_size(mtp["block_size"])
@@ -458,6 +459,7 @@ class Inkling2DSparkModel(Inkling2Model):
         # slot 0 is the anchor, it does not predict a token
         w.add_sample_from_anchor(False)
         w.add_has_confidence_head(False)
+        w.add_has_markov_context(True)
         w.add_file_type(self.ftype)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
@@ -465,6 +467,8 @@ class Inkling2DSparkModel(Inkling2Model):
             suffix = ".bias" if name.endswith(".bias") else ".weight"
             yield self.format_tensor_name(gguf.MODEL_TENSOR.DSPARK_MARKOV_W2, None, suffix), cast("Tensor", self._folded[name])
             return
+        if name == "mtp.markov_head.markov_w1.weight":
+            data_torch = data_torch[:self.hparams["unpadded_vocab_size"]]
         if name in self._ROOT:
             suffix = ".bias" if name.endswith(".bias") else ".weight"
             yield self.format_tensor_name(self._ROOT[name], None, suffix), data_torch
