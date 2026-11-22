@@ -363,7 +363,6 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
             break;
 #endif
         case GGML_TYPE_F8_E4M3:
-            dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
             set_rows_sycl<TIn, TIdx, ggml_fp8_e4m3_t>(
                 src0_d, src1_d, (char *)dst->data,
                 ne00, ne01, ne02, ne03,
