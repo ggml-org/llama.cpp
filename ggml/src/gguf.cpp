@@ -724,15 +724,18 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
 
         // tensor type
         {
-            ok = ok && gr.read(info.t.type);
+            int32_t raw_type = -1;
+            ok = ok && gr.read(raw_type);
 
-            // check that tensor type is within defined range
-            if (info.t.type < 0 || info.t.type >= GGML_TYPE_COUNT) {
+            // check that tensor type is within defined range before forming enum ggml_type
+            if (!ok || raw_type < 0 || raw_type >= GGML_TYPE_COUNT) {
                 GGML_LOG_ERROR("%s: tensor '%s' has invalid ggml type %d. should be in [0, %d)\n",
-                    __func__, info.t.name, info.t.type, GGML_TYPE_COUNT);
+                    __func__, info.t.name, raw_type, GGML_TYPE_COUNT);
                 ok = false;
                 break;
             }
+            info.t.type = (enum ggml_type) raw_type;
+
             const size_t  type_size = ggml_type_size(info.t.type);
             const int64_t blck_size = ggml_blck_size(info.t.type);
 
@@ -754,14 +757,30 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
             }
 
             // calculate byte offsets given the tensor shape and type
-            info.t.nb[0] = type_size;
-            info.t.nb[1] = info.t.nb[0]*(info.t.ne[0]/blck_size);
-            for (int j = 2; j < GGML_MAX_DIMS; ++j) {
-                info.t.nb[j] = info.t.nb[j - 1]*info.t.ne[j - 1];
+            const uint64_t n_rows_0 = (uint64_t) (info.t.ne[0] / blck_size);
+            if (n_rows_0 > SIZE_MAX / type_size) {
+                GGML_LOG_ERROR("%s: tensor '%s' row stride overflows size_t\n", __func__, info.t.name);
+                ok = false;
+                break;
             }
-        }
-        if (!ok) {
-            break;
+            info.t.nb[0] = type_size;
+            info.t.nb[1] = info.t.nb[0] * (size_t) n_rows_0;
+            for (int j = 2; j < GGML_MAX_DIMS; ++j) {
+                if (info.t.ne[j - 1] < 0) {
+                    ok = false;
+                    break;
+                }
+                const uint64_t dim_prev = (uint64_t) info.t.ne[j - 1];
+                if (dim_prev > 0 && info.t.nb[j - 1] > SIZE_MAX / dim_prev) {
+                    GGML_LOG_ERROR("%s: tensor '%s' stride nb[%d] overflows size_t\n", __func__, info.t.name, j);
+                    ok = false;
+                    break;
+                }
+                info.t.nb[j] = info.t.nb[j - 1] * (size_t) dim_prev;
+            }
+            if (!ok) {
+                break;
+            }
         }
 
         // tensor data offset within buffer

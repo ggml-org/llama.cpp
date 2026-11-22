@@ -49,10 +49,14 @@ bool ggml_op_can_inplace(enum ggml_op op) {
 
 static size_t aligned_offset(const void * buffer, size_t offset, size_t alignment) {
     assert(alignment && !(alignment & (alignment - 1))); // power of 2
-    size_t align = (alignment - (((uintptr_t)buffer + offset) % alignment)) % alignment;
+    const size_t mask = alignment - 1;
+    const size_t buf_rem = (size_t) ((uintptr_t) buffer & mask);
+    const size_t off_rem = offset & mask;
+    const size_t rem = (buf_rem + off_rem) & mask;
+    const size_t align = (alignment - rem) & mask;
+    GGML_ASSERT(offset <= SIZE_MAX - align);
     return offset + align;
 }
-
 // tallocr
 
 struct ggml_tallocr ggml_tallocr_new(ggml_backend_buffer_t buffer) {
@@ -71,12 +75,19 @@ struct ggml_tallocr ggml_tallocr_new(ggml_backend_buffer_t buffer) {
 }
 
 enum ggml_status ggml_tallocr_alloc(struct ggml_tallocr * talloc, struct ggml_tensor * tensor) {
-    size_t size = ggml_backend_buffer_get_alloc_size(talloc->buffer, tensor);
-    size = GGML_PAD(size, talloc->alignment);
+    const size_t raw_size = ggml_backend_buffer_get_alloc_size(talloc->buffer, tensor);
+    const size_t align = talloc->alignment;
+    if (align > 0 && raw_size > SIZE_MAX - (align - 1)) {
+        GGML_LOG_ERROR("%s: tensor %s size %zu overflows padding alignment %zu\n",
+                __func__, tensor->name, raw_size, align);
+        return GGML_STATUS_ALLOC_FAILED;
+    }
+    const size_t size = GGML_PAD(raw_size, align);
+    const size_t buf_size = ggml_backend_buffer_get_size(talloc->buffer);
 
-    if (talloc->offset + size > ggml_backend_buffer_get_size(talloc->buffer)) {
+    if (talloc->offset > buf_size || size > buf_size - talloc->offset) {
         GGML_LOG_ERROR("%s: not enough space in the buffer to allocate %s (needed %zu, available %zu)\n",
-                __func__, tensor->name, size, ggml_backend_buffer_get_size(talloc->buffer) - talloc->offset);
+                __func__, tensor->name, size, talloc->offset <= buf_size ? buf_size - talloc->offset : 0);
         GGML_ABORT("not enough space in the buffer");
     }
 

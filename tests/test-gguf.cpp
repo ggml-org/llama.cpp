@@ -906,6 +906,98 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
     return std::make_pair(npass, ntest);
 }
 
+// verify malformed tensor types and zero-trailed stride overflows are rejected cleanly
+static std::pair<int, int> test_handcrafted_overflow_guards() {
+    int npass = 0;
+    int ntest = 0;
+
+    FILE * file_bad_type = tmpfile();
+    if (file_bad_type) {
+        const char magic[4] = { 'G', 'G', 'U', 'F' };
+        const uint32_t version = GGUF_VERSION;
+        const uint64_t n_tensors = 1;
+        const uint64_t n_kv = 0;
+        const char tname[] = "bad_type";
+        const uint64_t name_len = strlen(tname);
+        const uint32_t n_dims = 1;
+        const int64_t ne0 = 4;
+        const int32_t bad_type = 9999;
+        const uint64_t offset = 0;
+
+        helper_write(file_bad_type, magic, sizeof(magic));
+        helper_write(file_bad_type, version);
+        helper_write(file_bad_type, n_tensors);
+        helper_write(file_bad_type, n_kv);
+        helper_write(file_bad_type, name_len);
+        helper_write(file_bad_type, tname, name_len);
+        helper_write(file_bad_type, n_dims);
+        helper_write(file_bad_type, ne0);
+        helper_write(file_bad_type, bad_type);
+        helper_write(file_bad_type, offset);
+        rewind(file_bad_type);
+
+        struct gguf_init_params params = {
+            /*.no_alloc =*/ true,
+            /*.ctx      =*/ nullptr,
+        };
+        struct gguf_context * ctx_bad = gguf_init_from_file_ptr(file_bad_type, params);
+        printf("%s: tensor_bad_type_rejected: ", __func__);
+        if (ctx_bad == nullptr) {
+            printf("\033[1;32mOK\033[0m\n");
+            npass++;
+        } else {
+            printf("\033[1;31mFAIL\033[0m\n");
+            gguf_free(ctx_bad);
+        }
+        ntest++;
+        fclose(file_bad_type);
+    }
+
+    FILE * file_bad_stride = tmpfile();
+    if (file_bad_stride) {
+        const char magic[4] = { 'G', 'G', 'U', 'F' };
+        const uint32_t version = GGUF_VERSION;
+        const uint64_t n_tensors = 1;
+        const uint64_t n_kv = 0;
+        const char tname[] = "bad_stride";
+        const uint64_t name_len = strlen(tname);
+        const uint32_t n_dims = 4;
+        const int64_t ne[4] = { INT64_C(1073741824), INT64_C(4294967296), 1, 0 };
+        const int32_t f32_type = int32_t(GGML_TYPE_F32);
+        const uint64_t offset = 0;
+
+        helper_write(file_bad_stride, magic, sizeof(magic));
+        helper_write(file_bad_stride, version);
+        helper_write(file_bad_stride, n_tensors);
+        helper_write(file_bad_stride, n_kv);
+        helper_write(file_bad_stride, name_len);
+        helper_write(file_bad_stride, tname, name_len);
+        helper_write(file_bad_stride, n_dims);
+        helper_write(file_bad_stride, ne, sizeof(ne));
+        helper_write(file_bad_stride, f32_type);
+        helper_write(file_bad_stride, offset);
+        rewind(file_bad_stride);
+
+        struct gguf_init_params params = {
+            /*.no_alloc =*/ true,
+            /*.ctx      =*/ nullptr,
+        };
+        struct gguf_context * ctx_stride = gguf_init_from_file_ptr(file_bad_stride, params);
+        printf("%s: tensor_stride_overflow_rejected: ", __func__);
+        if (ctx_stride == nullptr) {
+            printf("\033[1;32mOK\033[0m\n");
+            npass++;
+        } else {
+            printf("\033[1;31mFAIL\033[0m\n");
+            gguf_free(ctx_stride);
+        }
+        ntest++;
+        fclose(file_bad_stride);
+    }
+
+    return std::make_pair(npass, ntest);
+}
+
 struct random_gguf_context_result {
     struct gguf_context * gguf_ctx;
     struct ggml_context * ctx;
@@ -1458,6 +1550,12 @@ int main(int argc, char ** argv) {
     int ntest = 0;
     {
         std::pair<int, int> result = test_handcrafted_file(seed);
+        npass += result.first;
+        ntest += result.second;
+    }
+
+    {
+        std::pair<int, int> result = test_handcrafted_overflow_guards();
         npass += result.first;
         ntest += result.second;
     }
