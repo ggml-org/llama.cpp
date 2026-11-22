@@ -1192,8 +1192,7 @@ struct llm_graph_context {
               ggml_tensor * cur, // ggml_tensor * b
               ggml_tensor * ids,
               ggml_tensor * slots  = nullptr,
-                     bool   cached = true,
-             enum ggml_prec  prec_src1 = GGML_PREC_UNDEFINED) const;
+                     bool   cached = true) const;
 
     // rescale `cur` (the src1 of a matmul) by a power of two, computed from its maximum absolute
     // keep both individual values and Q8 activation block sums within F16 range

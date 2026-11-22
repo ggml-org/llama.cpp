@@ -1592,6 +1592,18 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
     }
 }
 
+bool llm_arch_mmid_down_bf16(const llm_arch & arch) {
+    switch (arch) {
+        case LLM_ARCH_MISTRAL4:
+        case LLM_ARCH_MELLUM:
+        case LLM_ARCH_FLINT:
+        case LLM_ARCH_LAGUNA:
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool llama_arch_supports_save(llm_arch arch) {
     switch (arch) {
         case LLM_ARCH_SENSENOVA_U1:
