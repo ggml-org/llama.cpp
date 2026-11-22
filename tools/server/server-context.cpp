@@ -1642,16 +1642,7 @@ private:
             SRV_TRC("%s", "context checkpoints disabled\n");
         }
 
-        if (!params_base.model_alias.empty()) {
-            // backward compat: use first alias as model name
-            model_name = *params_base.model_alias.begin();
-        } else if (!params_base.model.get_name().empty()) {
-            model_name = params_base.model.get_name();
-        } else {
-            // fallback: derive model name from file name
-            auto model_path = std::filesystem::path(params_base.model.path);
-            model_name = model_path.filename().string();
-        }
+        model_name = server_get_model_name(params_base);
 
         model_aliases = params_base.model_alias;
         model_tags    = params_base.model_tags;
