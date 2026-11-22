@@ -1622,4 +1622,3 @@ struct mtmd_model_caps {
 
 // read the modalities of an mmproj file without loading its tensors
 mtmd_model_caps mtmd_model_get_caps(const char * fname);
-
