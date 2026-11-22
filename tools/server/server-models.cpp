@@ -2560,11 +2560,15 @@ static std::string to_lower_copy(const std::string & value) {
 }
 
 static bool should_strip_proxy_header(const std::string & header_name) {
-    // Headers that get duplicated when router forwards child responses
+    // Headers handled by the router instead of copied from the child
     if (header_name == "server" ||
         header_name == "transfer-encoding" ||
         header_name == "content-length" || // quick fix for https://github.com/ggml-org/llama.cpp/issues/17710
-        header_name == "keep-alive") {
+        header_name == "keep-alive" ||
+        header_name == "connection" ||
+        header_name == "proxy-connection" ||
+        header_name == "te" ||
+        header_name == "upgrade") {
         return true;
     }
 
@@ -2703,9 +2707,21 @@ server_http_proxy::server_http_proxy(
     auto make_header_msg = [](const httplib::Response & response) {
         msg_t msg;
         msg.status = response.status;
+        std::vector<std::string> connection_headers;
+        const auto connection = response.headers.equal_range("Connection");
+        for (auto it = connection.first; it != connection.second; ++it) {
+            for (const auto & option : string_split(it->second, ",")) {
+                const auto first = option.find_first_not_of(" \t");
+                if (first != std::string::npos) {
+                    const auto last = option.find_last_not_of(" \t");
+                    connection_headers.push_back(to_lower_copy(option.substr(first, last - first + 1)));
+                }
+            }
+        }
         for (const auto & [key, value] : response.headers) {
             const auto lowered = to_lower_copy(key);
-            if (should_strip_proxy_header(lowered)) {
+            if (should_strip_proxy_header(lowered) ||
+                std::find(connection_headers.begin(), connection_headers.end(), lowered) != connection_headers.end()) {
                 continue;
             }
             if (lowered == "content-type") {
