@@ -61,11 +61,17 @@ ggml_cgraph * mtmd_graph_wemm_audio::build() {
 
     // ---- qformer ----
     // learnable query [1, 4104] -> expand to [4104, 1, n_win]
-    // official export stores q_tokens as F16; repeat needs matching F32
+    // official export stores q_tokens as F16; repeat needs matching F32.
+    // reference BertEmbeddings applies LayerNorm to the query embeddings
+    // (h5_modeling_bert.py: embeddings = query_embeds; embeddings = self.LayerNorm(...));
+    // q_tokens are tiny-magnitude (std 0.02), so skipping this LN is a real numeric error.
     ggml_tensor * qf_query = model.wemm_q_tokens->type == GGML_TYPE_F32
         ? model.wemm_q_tokens
         : ggml_cast(ctx0, model.wemm_q_tokens, GGML_TYPE_F32);
     ggml_tensor * q = ggml_reshape_3d(ctx0, qf_query, C_q, 1, 1);
+    if (model.wemm_qf_ln_w) {
+        q = build_norm(q, model.wemm_qf_ln_w, model.wemm_qf_ln_b, NORM_TYPE_NORMAL, ln_eps, -1);
+    }
     {
         ggml_tensor * q3 = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, C_q, 1, n_win);
         q = ggml_repeat(ctx0, q, q3);
@@ -109,11 +115,12 @@ ggml_cgraph * mtmd_graph_wemm_audio::build() {
 
         // ffn (intermediate 12288, gelu)
         {
+            // reference ACT2FN['gelu'] = erf gelu (not the tanh approximation)
             ggml_tensor * ffn_out = build_ffn(q,
                 L.ff_up_w, L.ff_up_b,
                 nullptr, nullptr,
                 L.ff_down_w, L.ff_down_b,
-                FFN_GELU, il);
+                FFN_GELU_ERF, il);
             q = build_norm(ggml_add(ctx0, ffn_out, q), L.ln_2_w, L.ln_2_b,
                            NORM_TYPE_NORMAL, ln_eps, il);
             cb(q, "wemm_qf_ffn", il);

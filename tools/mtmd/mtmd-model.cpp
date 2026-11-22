@@ -2556,8 +2556,8 @@ struct mtmd_model_loader {
                     model.norm_embd_w = get_tensor("a.layer_norm.weight");
                     model.norm_embd_b = get_tensor("a.layer_norm.bias");
                     model.wemm_q_tokens     = get_tensor("a.q_tokens");
-                    model.wemm_qf_ln_w      = get_tensor("a.qf.embeddings.LayerNorm.weight", false);
-                    model.wemm_qf_ln_b      = get_tensor("a.qf.embeddings.LayerNorm.bias", false);
+                    model.wemm_qf_ln_w      = get_tensor("a.qf.embeddings.LayerNorm.weight");
+                    model.wemm_qf_ln_b      = get_tensor("a.qf.embeddings.LayerNorm.bias");
                     model.wemm_audio_proj_w = get_tensor("a.audio_proj.weight");
                     model.wemm_audio_proj_b = get_tensor("a.audio_proj.bias");
                     // whisper encoder layers -> generic vit layer fields
@@ -2596,8 +2596,8 @@ struct mtmd_model_loader {
                         L.o_b = get_tensor(mtmd_format("a.qf.encoder.layer.%d.attention.output.dense.bias", il));
                         L.ln_1_w   = get_tensor(mtmd_format("a.qf.encoder.layer.%d.attention.output.LayerNorm.weight", il));
                         L.ln_1_b   = get_tensor(mtmd_format("a.qf.encoder.layer.%d.attention.output.LayerNorm.bias", il));
-                        L.cross_attn_q_w = get_tensor(mtmd_format("a.qf.encoder.layer.%d.crossattention.self.query.weight", il), false);
-                        L.cross_attn_q_b = get_tensor(mtmd_format("a.qf.encoder.layer.%d.crossattention.self.query.bias", il), false);
+                        L.cross_attn_q_w = get_tensor(mtmd_format("a.qf.encoder.layer.%d.crossattention.self.query.weight", il));
+                        L.cross_attn_q_b = get_tensor(mtmd_format("a.qf.encoder.layer.%d.crossattention.self.query.bias", il));
                         L.cross_attn_k_w = get_tensor(mtmd_format("a.qf.encoder.layer.%d.crossattention.self.key.weight", il));
                         L.cross_attn_k_b = get_tensor(mtmd_format("a.qf.encoder.layer.%d.crossattention.self.key.bias", il));
                         L.cross_attn_v_w = get_tensor(mtmd_format("a.qf.encoder.layer.%d.crossattention.self.value.weight", il));
