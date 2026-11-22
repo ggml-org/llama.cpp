@@ -4285,7 +4285,9 @@ private:
 
                     if (!slot.can_split()) {
                         // cannot fit the prompt in the current batch - will try next iter
-                        if (batch.size() + slot.task->n_tokens() > n_batch) {
+                        // with non-causal attention the whole batch must fit in one ubatch, see llama_decode
+                        const int32_t n_batch_max = llama_get_causal_attn(ctx_tgt) ? n_batch : std::min(n_batch, n_ubatch);
+                        if (batch.size() + slot.task->n_tokens() > n_batch_max) {
                             return;
                         }
                     }
