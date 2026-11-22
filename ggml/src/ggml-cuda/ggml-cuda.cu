@@ -3324,6 +3324,18 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
             continue;
         }
 
+#ifdef GGML_USE_HIP
+        // hipGraphExecUpdate can crash inside the runtime (a null write) while updating the graph of a long prompt:
+        // seen with ROCm 7.2.4 on gfx1201, deterministic for a given prompt, never on one-token graphs. Prompt
+        // batches gain little from graphs, so only one-token batches are captured.
+        if (node->op == GGML_OP_FLASH_ATTN_EXT && node->src[0]->ne[1] > 1) {
+            use_cuda_graph = false;
+            if (ggml_cuda_graph_debug_enabled()) {
+                GGML_LOG_DEBUG("%s: disabling CUDA graphs for a multi-token batch on HIP\n", __func__);
+            }
+        }
+#endif // GGML_USE_HIP
+
         // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
         if (node->op == GGML_OP_MUL_MAT_ID) {
             const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
