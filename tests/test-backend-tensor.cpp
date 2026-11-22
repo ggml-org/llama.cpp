@@ -223,6 +223,19 @@ static bool test_tensor_n(ggml_backend_buffer_type_t buft) {
         }
     }
 
+    {
+        uint8_t expected[24], out[24] = {};
+        memset(expected, 0x5A, sizeof(expected));
+
+        // Verify that clear fills every byte with a nonzero value.
+        ggml_backend_buffer_clear(buf.get(), 0x5A);
+
+        ggml_backend_tensor_get(t_big, out, 0, sizeof(out));
+        if (memcmp(out, expected, sizeof(out)) != 0) {
+            return false;
+        }
+    }
+
     return true;
 }
 
