@@ -3,6 +3,8 @@ from __future__ import annotations
 from enum import Enum, IntEnum, auto
 from typing import Any
 
+import numpy as np
+
 #
 # constants
 #
@@ -7442,13 +7444,21 @@ class GGUFValueType(IntEnum):
             return GGUFValueType.STRING
         elif isinstance(val, list):
             return GGUFValueType.ARRAY
-        elif isinstance(val, float):
-            return GGUFValueType.FLOAT32
-        elif isinstance(val, bool):
+        elif isinstance(val, (bool, np.bool_)):
             return GGUFValueType.BOOL
-        elif isinstance(val, int):
-            return GGUFValueType.INT32
-        # TODO: need help with 64-bit types in Python
+        elif isinstance(val, (float, np.floating)):
+            return GGUFValueType.FLOAT32
+        elif isinstance(val, (int, np.integer)):
+            # Pick the narrowest signed type, then fall back to UINT64 for
+            # values that do not fit in INT64.
+            ival = int(val)
+            if -(2**31) <= ival < 2**31:
+                return GGUFValueType.INT32
+            elif -(2**63) <= ival < 2**63:
+                return GGUFValueType.INT64
+            elif 0 <= ival < 2**64:
+                return GGUFValueType.UINT64
+            raise ValueError(f"Integer {ival} is out of range for a GGUF metadata array")
         else:
             raise ValueError(f"Unknown type: {type(val)}")
 
