@@ -825,6 +825,10 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
             {
                 builder = std::make_unique<mtmd_graph_minimax_m3>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_INKLING2V:
+            {
+                builder = std::make_unique<mtmd_graph_inkling2v>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_MUSE_GLIMMER:
             {
                 builder = std::make_unique<mtmd_graph_muse_glimmer>(ctx, img);
@@ -866,6 +870,7 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_QWEN2A:
+        case PROJECTOR_TYPE_HIGGS_AUDIO:
         case PROJECTOR_TYPE_GLMA:
         case PROJECTOR_TYPE_MERALION:
         case PROJECTOR_TYPE_MUSIC_FLAMINGO:
@@ -875,6 +880,10 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
         case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
             {
                 builder = std::make_unique<mtmd_graph_muse_spark_audio>(ctx, img);
+            } break;
+        case PROJECTOR_TYPE_VIBEVOICE_ASR:
+            {
+                builder = std::make_unique<mtmd_graph_vibevoice_asr>(ctx, img);
             } break;
         case PROJECTOR_TYPE_KIMIVL:
             {
@@ -956,9 +965,21 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
             {
                 builder = std::make_unique<mtmd_graph_qwen3tts_spkenc>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_ZONOS3_SPKENC:
+            {
+                builder = std::make_unique<mtmd_graph_zonos3_spkenc>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_POCKETTTS_SPKENC:
             {
                 builder = std::make_unique<mtmd_graph_pockettts_spkenc>(ctx, img);
+            } break;
+        case PROJECTOR_TYPE_FISH_S2_SPKENC:
+            {
+                builder = std::make_unique<mtmd_graph_fish_s2_spkenc>(ctx, img);
+            } break;
+        case PROJECTOR_TYPE_VOXCPM2_SPKENC:
+            {
+                builder = std::make_unique<mtmd_graph_voxcpm2_spkenc>(ctx, img);
             } break;
         case PROJECTOR_TYPE_POCKETTTS_GEN:
             {
@@ -978,6 +999,24 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
         case PROJECTOR_TYPE_CHATTERBOX_SPKENC:
             {
                 builder = std::make_unique<mtmd_graph_chatterbox_spkenc>(ctx, img);
+            } break;
+        case PROJECTOR_TYPE_MOSHI:
+            {
+                builder = std::make_unique<mtmd_graph_moshi>(ctx, img);
+            } break;
+        case PROJECTOR_TYPE_MOSHI_GEN:
+            {
+                const auto    gen_process = params ? params->gen_process : MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;
+                const int64_t n_q         = ctx->model.gen_code_head_w->ne[2];
+                const bool    has_codes   = params && params->codes;
+                if (has_codes) {
+                    GGML_ASSERT(params->codes->size() % (size_t) n_q == 0);
+                }
+                const int   n_frames = has_codes ? (int) (params->codes->size() / n_q) : 1;
+                const int   top_k    = params ? params->top_k : 250;
+                const float temp     = params ? params->temp  : 0.8f;
+                const bool  fb_only  = gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_CODE && has_codes;
+                builder = std::make_unique<mtmd_graph_moshi_gen>(ctx, img, gen_process, fb_only, n_frames, top_k, temp);
             } break;
         case PROJECTOR_TYPE_CHATTERBOX:
             {
@@ -1011,14 +1050,80 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
                 }
                 builder = std::make_unique<mtmd_graph_lfm3a_gen>(ctx, img, gen_process, all_known, n_frames);
             } break;
+        case PROJECTOR_TYPE_ZONOS3_GEN:
+            {
+                const auto gen_process = params ? params->gen_process : MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;
+                const int64_t n_cb = mtmd_graph_zonos3_gen::n_codebooks;
+                // GEN_CODE with codes: only the backbone row of that frame is needed
+                const bool all_known = params && params->codes && gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;
+                const int  n_frames  = params && params->codes && gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_WAV
+                                     ? (int) (params->codes->size() / n_cb) : 1;
+                builder = std::make_unique<mtmd_graph_zonos3_gen>(ctx, img, gen_process, all_known, n_frames);
+            } break;
+        case PROJECTOR_TYPE_VOXCPM2_GEN:
+            {
+                using g = mtmd_graph_voxcpm2_gen;
+                // the default (warmup) graph is one frame of the flow
+                const auto gen_process = params ? params->gen_process : MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;
+                int n_rows = 1;
+                if (gen_process == MTMD_SUBCTX_GEN_PROCESS_RES_INP) {
+                    // hidden states in img, the input rows of audio rows in feats
+                    n_rows = img.ny();
+                } else if (params && params->feats && gen_process != MTMD_SUBCTX_GEN_PROCESS_GEN_CODE) {
+                    GGML_ASSERT(!params->feats->empty() && params->feats->size() % (g::n_latent * g::n_patch) == 0);
+                    n_rows = (int) (params->feats->size() / (g::n_latent * g::n_patch));
+                }
+                const bool  audio_row = gen_process == MTMD_SUBCTX_GEN_PROCESS_RES_INP && params->feats != nullptr;
+                const int   n_steps   = params && params->n_steps > 0 ? params->n_steps : g::n_steps_default;
+                const float cfg_scale = params && params->cfg_scale > 0.0f ? params->cfg_scale : g::cfg_default;
+                builder = std::make_unique<mtmd_graph_voxcpm2_gen>(ctx, img, gen_process, n_rows, audio_row, n_steps, cfg_scale);
+            } break;
+        case PROJECTOR_TYPE_YUE2_GEN:
+            {
+                const auto gen_process = params ? params->gen_process : MTMD_SUBCTX_GEN_PROCESS_LATENT_IN;
+                int n_rows = 1;
+                if (params && params->feats) {
+                    const size_t n_col = gen_process == MTMD_SUBCTX_GEN_PROCESS_LATENT_OUT ? ctx->model.yue2.out_w->ne[0] : mtmd_graph_yue2_gen::n_latent;
+                    GGML_ASSERT(!params->feats->empty() && params->feats->size() % n_col == 0);
+                    n_rows = (int) (params->feats->size() / n_col);
+                }
+                builder = std::make_unique<mtmd_graph_yue2_gen>(ctx, img, gen_process, n_rows);
+            } break;
+        case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
+            {
+                using g = mtmd_graph_music3_gen;
+                const auto gen_process = params ? params->gen_process : MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;
+                // row size of the input of each process; the reserve pass builds GEN_CODE with one row
+                size_t n_col = (size_t) ctx->model.hparams.n_embd;
+                if (gen_process == MTMD_SUBCTX_GEN_PROCESS_FLOW_STEP) {
+                    n_col = 2 * (size_t) ctx->model.music3.pre_w->ne[0];
+                } else if (gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_WAV) {
+                    n_col = g::n_latent;
+                }
+                int n_rows = 1;
+                if (params && params->feats) {
+                    GGML_ASSERT(!params->feats->empty() && params->feats->size() % n_col == 0);
+                    n_rows = (int) (params->feats->size() / n_col);
+                }
+                const int   n_out     = gen_process == MTMD_SUBCTX_GEN_PROCESS_FLOW_COND ? (int) g::latent_frames(n_rows) : 0;
+                const float cfg_scale = params ? params->cfg_scale : 1.0f;
+                const float temp      = params ? params->temp : 1.0f;
+                builder = std::make_unique<mtmd_graph_music3_gen>(ctx, img, gen_process, n_rows, n_out, cfg_scale, temp);
+            } break;
         case PROJECTOR_TYPE_DRAMA3_GEN:
+        case PROJECTOR_TYPE_FISH_S2_GEN:
             {
                 const auto gen_process = params ? params->gen_process : MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;
                 const int64_t n_cb = ctx->model.gen_code_embd_w->ne[2];
                 const int n_frames = params && params->codes ? (int) (params->codes->size() / n_cb) : 1;
-                builder = std::make_unique<mtmd_graph_drama3_gen>(ctx, img, gen_process, params ? params->gen_state : nullptr, n_frames,
-                                                                  params ? params->top_k : 30, params ? params->top_p : 0.9f,
-                                                                  params ? params->temp : 1.0f);
+                const int   top_k = params ? params->top_k : 30;
+                const float top_p = params ? params->top_p : 0.9f;
+                const float temp  = params ? params->temp  : 1.0f;
+                if (ctx->model.proj_type == PROJECTOR_TYPE_FISH_S2_GEN) {
+                    builder = std::make_unique<mtmd_graph_fish_s2_gen>(ctx, img, gen_process, params ? params->gen_state : nullptr, n_frames, top_k, top_p, temp);
+                } else {
+                    builder = std::make_unique<mtmd_graph_drama3_gen>(ctx, img, gen_process, params ? params->gen_state : nullptr, n_frames, top_k, top_p, temp);
+                }
             } break;
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
             {
@@ -1031,6 +1136,24 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
             {
                 const int n_frames = params && params->feats ? (int) (params->feats->size() / ctx->model.hparams.projection_dim) : 2;
                 builder = std::make_unique<mtmd_graph_soprano>(ctx, img, n_frames);
+            } break;
+        case PROJECTOR_TYPE_KOKORO:
+            {
+                // without a stage (warmup), a short decoder graph: 2 frames, 600 samples each, one STFT row per 5 samples
+                const auto * io = params ? params->kokoro : nullptr;
+                builder = io ? std::make_unique<mtmd_graph_kokoro>(ctx, img, (mtmd_graph_kokoro::stage_type) io->stage, io->n_tok, io->n_frames, io->n_har)
+                             : std::make_unique<mtmd_graph_kokoro>(ctx, img, mtmd_graph_kokoro::STAGE_DEC, 0, 2, 241);
+            } break;
+        case PROJECTOR_TYPE_TINY_VOCA:
+            {
+                const auto gen_process = params ? params->gen_process : MTMD_SUBCTX_GEN_PROCESS_LATENT_OUT;
+                int n_rows = 1;
+                if (params && params->feats) {
+                    const size_t n_embd = (size_t) ctx->model.hparams.n_embd;
+                    GGML_ASSERT(!params->feats->empty() && params->feats->size() % n_embd == 0);
+                    n_rows = (int) (params->feats->size() / n_embd);
+                }
+                builder = std::make_unique<mtmd_graph_tiny_voca>(ctx, img, gen_process, n_rows);
             } break;
         case PROJECTOR_TYPE_YOUTUVL:
             {

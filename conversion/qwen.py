@@ -493,6 +493,45 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
     interleaved repeat: [G0_v0, G1_v0, ..., G0_v1, G1_v1, ...].
     """
 
+    _SHARED_INPUT_MERGES: tuple[tuple[gguf.MODEL_TENSOR, tuple[gguf.MODEL_TENSOR, gguf.MODEL_TENSOR], bool], ...] = ()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._merge_parts: dict[tuple[int, gguf.MODEL_TENSOR], dict[int, Tensor]] = {}
+
+    # caches one half of a merged weight until the other half arrives, then yields [a | b]
+    def _merge_shared_input(self, new_name: str, data: Tensor, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # a pre-quantized checkpoint carries per-tensor scales, which one merged weight cannot hold
+        if not self._SHARED_INPUT_MERGES or bid is None or self.hparams.get("quantization_config") or self._fp8_e4m3_preserved or self.hadamard_folded_names() or hasattr(data, "get_lora_A_B"):
+            yield (new_name, data)
+            return
+
+        layer_types = self.hparams.get("layer_types")
+        if layer_types is None:
+            is_linear = bid < self.hparams["num_hidden_layers"] and (bid + 1) % self.hparams.get("full_attention_interval", 4) != 0
+        else:
+            is_linear = bid < len(layer_types) and layer_types[bid] == "linear_attention"
+
+        match = next(((merged, parts.index(part)) for merged, parts, linear_only in self._SHARED_INPUT_MERGES
+                      if merged in gguf.MODEL_TENSORS[self.model_arch]
+                      for part in parts
+                      if (is_linear or not linear_only) and self.match_model_tensor_name(new_name, part, bid)), None)
+        if match is None:
+            yield (new_name, data)
+            return
+
+        merged, idx = match
+        halves = self._merge_parts.setdefault((bid, merged), {})
+        halves[idx] = data
+        if len(halves) == 2:
+            del self._merge_parts[(bid, merged)]
+            yield (self.format_tensor_name(merged, bid), torch.cat([halves[0], halves[1]], dim=0))
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+        if self._merge_parts:
+            raise ValueError(f"merged weights missing a half: {sorted((bid, t.name) for bid, t in self._merge_parts)}")
+
     @staticmethod
     def _reorder_v_heads(tensor: Tensor, dim: int, num_k_heads: int, num_v_per_k: int, head_dim: int) -> Tensor:
         """Reorder V heads from grouped (by K head) to tiled order along the given dimension."""
@@ -672,7 +711,8 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
                     # Out projection weight: reorder columns (input dimension)
                     data_torch = self._reorder_v_heads(data_torch, 1, num_k_heads, num_v_per_k, head_v_dim)
 
-        yield from super().modify_tensors(data_torch, name, bid)
+        for new_name, data in super().modify_tensors(data_torch, name, bid):
+            yield from self._merge_shared_input(new_name, data, bid)
 
 
 class _Qwen35MRopeMixin:
@@ -695,6 +735,11 @@ class _Qwen35MRopeMixin:
 @ModelBase.example("Qwen/Qwen3.5-9B")
 class Qwen3_5TextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
+
+    _SHARED_INPUT_MERGES = (
+        (gguf.MODEL_TENSOR.ATTN_QKV_GATE,      (gguf.MODEL_TENSOR.ATTN_QKV, gguf.MODEL_TENSOR.ATTN_GATE), True),
+        (gguf.MODEL_TENSOR.SSM_BETA_ALPHA_CAT, (gguf.MODEL_TENSOR.SSM_BETA, gguf.MODEL_TENSOR.SSM_ALPHA), True),
+    )
 
     def __init__(self, dir_model, *args, **kwargs):
         # Inner TextModel does not own mtp.*. Set no_mtp before mixin bumps block_count.

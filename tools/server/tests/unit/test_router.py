@@ -934,22 +934,61 @@ def test_router_download_drops_stale_partials():
 def test_router_restricted_cors_same_origin_reaches_child():
     # same-origin request via LAN address must not be refused by the child
     global server
-    lan_ip = get_lan_ip()
-    if lan_ip is None:
-        pytest.skip("no non-loopback interface")  # ty: ignore[too-many-positional-arguments]
     server.cors_origins = "localhost"
     server.server_host = "0.0.0.0"
     server.start()
+    lan_ip = get_lan_ip(server)
+    if lan_ip is None:
+        pytest.skip("no LAN address reachable from this host")  # ty: ignore[too-many-positional-arguments]
     body = {
         "model": "ggml-org-dev/tinygemma3-GGUF:Q8_0",
         "max_tokens": 4,
         "messages": [{"role": "user", "content": "hello"}],
     }
-    res = requests.post(server.make_url("/chat/completions", host=lan_ip), json=body, headers={
+    res = server.make_request("POST", "/chat/completions", data=body, host=lan_ip, headers={
         "Origin": f"http://{lan_ip}:{server.server_port}",
         "Sec-Fetch-Site": "same-origin",
     })
-    assert res.status_code == 200, res.text
+    assert res.status_code == 200, res.body
 
-    res = requests.post(server.make_url("/chat/completions", host="127.0.0.1"), json=body, headers={"Origin": "http://evil.com"})
+    res = server.make_request("POST", "/chat/completions", data=body, host="127.0.0.1", headers={"Origin": "http://evil.com"})
     assert res.status_code == 403
+
+
+def test_router_child_refuses_browser_requests(tmp_path):
+    import re
+    global server
+    log_path = tmp_path / "router.log"
+    server.log_path = str(log_path)
+    server.start()
+    model_id = "ggml-org-dev/tinygemma3-GGUF:Q8_0"
+    _load_model_and_wait(model_id)
+
+    pattern = rf"spawning server instance with name={re.escape(model_id)} on port (\d+)"
+    match = None
+    for _ in range(50):
+        match = re.search(pattern, log_path.read_text())
+        if match:
+            break
+        time.sleep(0.1)
+    assert match, "child port not found in router log"
+    child_url = f"http://127.0.0.1:{match.group(1)}"
+
+    # non-browser clients can reach the child directly
+    assert requests.get(f"{child_url}/health").status_code == 200
+
+    for headers in [
+        {"Origin": "http://evil.com"},
+        {"Origin": child_url},
+        {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors"},
+        {"Sec-Fetch-Site": "same-origin"},
+    ]:
+        assert requests.get(f"{child_url}/health", headers=headers).status_code == 403, headers
+
+    # browser requests through the router still reach the child
+    res = requests.post(server.make_url("/chat/completions"), json={
+        "model": model_id,
+        "max_tokens": 4,
+        "messages": [{"role": "user", "content": "hello"}],
+    }, headers={"Origin": f"http://127.0.0.1:{server.server_port}", "Sec-Fetch-Site": "same-origin"})
+    assert res.status_code == 200, res.text

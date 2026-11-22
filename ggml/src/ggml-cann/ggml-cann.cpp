@@ -1793,7 +1793,6 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context & ctx, struct gg
             ggml_cann_dup(ctx, dst);
             break;
         case GGML_OP_ADD:
-        case GGML_OP_ADD1:
             ggml_cann_binary_op<aclnn_add>(ctx, dst);
             break;
         case GGML_OP_SUB:
@@ -1957,9 +1956,6 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context & ctx, struct gg
         case GGML_OP_VIEW:
         case GGML_OP_PERMUTE:
         case GGML_OP_TRANSPOSE:
-            break;
-        case GGML_OP_DIAG_MASK_INF:
-            ggml_cann_diag_mask(ctx, dst, -INFINITY);
             break;
         case GGML_OP_SOFT_MAX:
             ggml_cann_softmax(ctx, dst);
@@ -2505,6 +2501,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
             break;
         case GGML_OP_SET_ROWS:
             {
+                if (op->src[0]->type == GGML_TYPE_BF16) {
+                    return false;
+                }
                 switch (op->type) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
@@ -2557,6 +2556,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 if (((const int32_t *) op->op_params)[15] != 0) {
                     return false; // FIXME: support ggml_rope_set_offset
                 }
+                if (op->src[0]->type != GGML_TYPE_F32 && op->src[0]->type != GGML_TYPE_F16) {
+                    return false;
+                }
                 if (op->src[0]->ne[0] > 896) {
                     return false;
                 }
@@ -2605,6 +2607,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
             }
         case GGML_OP_SUM:
             return ggml_is_contiguous_rows(op->src[0]);
+        case GGML_OP_RMS_NORM:
+            // the cached gamma of ones does not track its type, so F32 and BF16 can not share it
+            return op->src[0]->type != GGML_TYPE_BF16;
         case GGML_OP_L2_NORM:
         case GGML_OP_CROSS_ENTROPY_LOSS:
         case GGML_OP_DUP:
@@ -2618,15 +2623,12 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
         case GGML_OP_TRANSPOSE:
         case GGML_OP_NORM:
         case GGML_OP_ADD:
-        case GGML_OP_ADD1:
         case GGML_OP_SUB:
         case GGML_OP_MUL:
         case GGML_OP_DIV:
-        case GGML_OP_RMS_NORM:
         case GGML_OP_SQR:
         case GGML_OP_SQRT:
         case GGML_OP_CLAMP:
-        case GGML_OP_DIAG_MASK_INF:
         case GGML_OP_SUM_ROWS:
         case GGML_OP_ARGSORT:
         case GGML_OP_ACC:

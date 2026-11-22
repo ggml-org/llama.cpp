@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from .base import ModelBase, TextModel, gguf
 
 
@@ -9,14 +11,7 @@ class DoryModel(TextModel):
     model_arch = gguf.MODEL_ARCH.DORY
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        if n_dims == 1 and any(self.match_model_tensor_name(new_name, key, bid) for key in (
-            gguf.MODEL_TENSOR.RESIDUAL_ALPHA,
-            gguf.MODEL_TENSOR.ATTN_QK_SCALE,
-            gguf.MODEL_TENSOR.ATTN_GATE_SCALE,
-            gguf.MODEL_TENSOR.FFN_GATE_SCALE,
-            gguf.MODEL_TENSOR.FFN_UP_SCALE,
-            gguf.MODEL_TENSOR.OUTPUT_SCALE,
-        )):
+        if n_dims == 1 and any(self.match_model_tensor_name(new_name, key, bid) for key in gguf.DORY_SCALE_TENSORS):
             return {
                 gguf.LlamaFileType.MOSTLY_BF16: gguf.GGMLQuantizationType.BF16,
                 gguf.LlamaFileType.MOSTLY_F16: gguf.GGMLQuantizationType.F16,
@@ -28,6 +23,17 @@ class DoryModel(TextModel):
 
     def set_gguf_parameters(self):
         h = self.hparams.copy()
+        counts = ("n_input_layers", "n_recurrent_layers", "n_output_layers", "n_recurrent_loops")
+        for key in counts:
+            if not isinstance(h.get(key), int) or isinstance(h[key], bool) or h[key] <= 0:
+                raise ValueError(f"Dory requires a positive integer {key}")
+        if h["n_recurrent_loops"] > 4:
+            raise ValueError("Dory supports 1-4 recurrent loops")
+        gate_init = h.get("attention_output_gate_logit_scale_init")
+        if gate_init is None:
+            gate_init = h["hidden_size"]**0.5
+        if not isinstance(gate_init, (int, float)) or not math.isfinite(gate_init) or gate_init <= 0:
+            raise ValueError("Dory requires a finite, positive attention_output_gate_logit_scale_init")
         public_config = "layer_types" in h
         if public_config:
             layer_types = h["layer_types"]
@@ -86,7 +92,7 @@ class DoryModel(TextModel):
         if len(profiles) != n or len(no_rope) != n or any(p not in (1, 2) for p in profiles) or any(no_rope):
             raise ValueError("Invalid Dory RoPE profile")
         if self.fuse_qkv:
-            raise ValueError("Dory Q4_K_M requires separate Q/K/V tensor roles; omit --fuse-qkv")
+            raise ValueError("Dory requires separate Q/K/V tensor roles; omit --fuse-qkv")
         super().set_gguf_parameters()
         w = self.gguf_writer
         w.add_key_length(h["attention_head_dim"])
@@ -104,7 +110,7 @@ class DoryModel(TextModel):
         w.add_rope_freq_base_2(h["rope_theta_2"])
         w.add_init_std(h["init_method_std"])
         w.add_alpha_init(h["ngpt_alpha_init"])
-        w.add_gate_init(h.get("attention_output_gate_logit_scale_init") or h["hidden_size"]**0.5)
+        w.add_gate_init(gate_init)
 
     def modify_tensors(self, data_torch, name, bid):
         # Scale vectors have no suffix in the HF export.

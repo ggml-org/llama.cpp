@@ -581,28 +581,11 @@ llama_model_kimi_k31::graph::build_dsa_layer(
                 iw->nb[1], iw->nb[2]/n_stream, iw->nb[2]/n_stream, 0);
 
         ggml_tensor * kq_mask_lid = inp_attn->self_attn_mask.raw;
-        if (cparams.fused_lid && kq_mask_lid->type != GGML_TYPE_F16) {
+        if (kq_mask_lid->type != GGML_TYPE_F16) {
             kq_mask_lid = ggml_cast(ctx0, kq_mask_lid, GGML_TYPE_F16);
         }
 
-        ggml_tensor * score;
-        if (cparams.fused_lid) {
-            score = ggml_lightning_indexer(ctx0, iq, ik, iw, kq_mask_lid);
-            res->add_fused_node({LLM_FUSED_OP_LIGHTNING_INDEXER, score, il});
-        } else {
-            ggml_tensor * q_p = ggml_permute(ctx0, iq, 0, 2, 1, 3); // [n_idx_dim, n_tokens, n_idx_head]
-            ggml_tensor * k_p = ggml_permute(ctx0, ik, 0, 2, 1, 3); // [n_idx_dim, n_kv, 1]
-
-            ggml_tensor * kq = ggml_mul_mat(ctx0, k_p, q_p);        // [n_kv, n_tokens, n_idx_head]
-            kq = ggml_cont(ctx0, ggml_permute(ctx0, kq, 2, 1, 0, 3)); // [n_idx_head, n_tokens, n_kv]
-
-            score = ggml_relu(ctx0, kq);
-            score = ggml_mul(ctx0, score, iw);
-            score = ggml_sum_rows(ctx0, score);                      // [1, n_tokens, n_kv]
-            score = ggml_cont(ctx0, ggml_permute(ctx0, score, 2, 1, 0, 3)); // [n_kv, n_tokens, 1]
-
-            score = ggml_add(ctx0, score, kq_mask_lid);
-        }
+        ggml_tensor * score = ggml_lightning_indexer(ctx0, iq, ik, iw, kq_mask_lid);
         cb(score, "indexer_score", il);
 
         const int64_t n_top_k = std::min<int64_t>(score->ne[0], hparams.indexer_top_k);

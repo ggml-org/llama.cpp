@@ -231,6 +231,7 @@ endif()
 
 llama_build(test-llama-archs.cpp)
 llama_test(test-llama-archs NAME test-llama-archs-dory LABEL "main behavior backend" ARGS -a dory -b CPU -s 1)
+set_tests_properties(test-llama-archs-dory PROPERTIES ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=1")
 if (GGML_CPU AND (NOT WIN32 OR NOT BUILD_SHARED_LIBS))
     llama_build(test-fp8.cpp)
     set(FP8_MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models-fp8")
@@ -368,6 +369,8 @@ endif()
 llama_build(test-backend-ops.cpp LINK ggml Threads::Threads)
 
 llama_build_and_test(test-backend-tensor.cpp LINK ggml)
+llama_build_and_test(test-sleep.cpp LINK ggml)
+llama_build_and_test(test-backend-sched.cpp LINK ggml)
 
 if (BUILD_SHARED_LIBS)
     llama_build_and_test(test-llama-mmap.cpp ${PROJECT_SOURCE_DIR}/src/llama-impl.cpp ${PROJECT_SOURCE_DIR}/src/llama-mmap.cpp LABEL behavior)
@@ -400,7 +403,7 @@ endif()
 # libmtmd
 llama_build_and_test(test-mtmd-c-api.c  LABEL behavior  LINK mtmd)
 
-llama_build_and_test(test-mtmd-impl.cpp  LABEL behavior  LINK mtmd)
+llama_build_and_test(test-mtmd-impl.cpp  LABEL behavior  LINK mtmd llama-common)
 
 # GGUF model data fetcher library for tests that need real model metadata
 # Only compile when cpp-httplib has SSL support (CPPHTTPLIB_OPENSSL_SUPPORT)
@@ -441,3 +444,10 @@ if (TARGET gguf-model-data)
     target_link_libraries(test-export-graph-ops PRIVATE gguf-model-data)
     target_compile_definitions(test-export-graph-ops PRIVATE LLAMA_HF_FETCH)
 endif()
+
+llama_test_cmd(python3
+    NAME test-conversion-dory
+    LABEL "python behavior"
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    ARGS -m unittest discover -s tests -p test_conversion_dory.py -v
+)

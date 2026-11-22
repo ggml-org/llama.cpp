@@ -116,6 +116,23 @@ void llama_model_dory::load_arch_tensors(llama_model_loader &) {
             s.gate = create_tensor(tn(LLM_TENSOR_ATTN_GATE_SCALE, "weight", p), {nq}, 0);
         }
     }
+    // F32 weights need F32 activation inputs through the recurrent normalization.
+    for (const auto & l : layers) {
+        for (auto * w : {l.wq, l.wk, l.wv, l.wo, l.wqkv_gate, l.ffn_gate, l.ffn_up, l.ffn_down, output}) {
+            if (w && w->type == GGML_TYPE_F32) {
+                prec_policy.prec_src1.emplace(w, GGML_PREC_F32);
+            }
+        }
+    }
+
+}
+
+llama_rope_params llama_model_dory::get_rope_params(const llama_cparams & cparams, int il) const {
+    auto res = llama_model::get_rope_params(cparams, il);
+    // RoPE profiles are independent of the attention window in legacy GGUFs.
+    res.freq_base = profile[physical[il]] == 2 ? theta_2 : cparams.rope_freq_base;
+    res.freq_scale = cparams.rope_freq_scale;
+    return res;
 }
 
 std::unique_ptr<llm_graph_context> llama_model_dory::build_arch_graph(const llm_graph_params & params) const {
@@ -155,11 +172,8 @@ llama_model_dory::graph::graph(const llama_model_dory & model, const llm_graph_p
             const auto nh = hparams.n_head(il);
             const auto nk = hparams.n_head_kv(il);
             auto [q, k, v] = build_qkv(l, cur, hd, nh, nk, il);
-            if (model.profile[p] != 0) {
-                const float theta = model.profile[p] == 2 ? model.theta_2 : model.theta_1;
-                q = ggml_rope_ext(ctx0, q, pos, nullptr, hd, rope_type, n_ctx_orig, theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-                k = ggml_rope_ext(ctx0, k, pos, nullptr, hd, rope_type, n_ctx_orig, theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-            }
+            q = build_rope(q, pos, il);
+            k = build_rope(k, pos, il);
             auto * sq = ggml_sqr(ctx0, ggml_scale(ctx0, f32(s.sqk), sqrtf(hd) / model.init_std));
             q = ggml_mul(ctx0, norm(q), ggml_reshape_3d(ctx0, sq, hd, nh, 1));
             k = norm(k);
@@ -189,12 +203,4 @@ llama_model_dory::graph::graph(const llama_model_dory & model, const llm_graph_p
     cur = ggml_mul(ctx0, cur, ggml_scale(ctx0, f32(model.logit_scale), 1.0f / model.init_std));
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-    ggml_build_forward_expand(gf, cur);
-    // Preserve F32 inputs through recurrent normalization; BF16 and quantized weights keep their normal kernels.
-    for (int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
-        auto * node = ggml_graph_node(gf, i);
-        if (node->op == GGML_OP_MUL_MAT && node->src[0]->type == GGML_TYPE_F32) {
-            ggml_prec_set_src(node, GGML_PREC_F32, 1);
-        }
-    }
 }

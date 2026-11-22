@@ -21,6 +21,25 @@ void quantize_mmq_q8_1_cuda(
         ggml_type type_src0, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
         int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
 
+// src1 of the few-row MMQ in the layout of the MMA fragments. Per channel, 256 values and group of MMQ_FEW_NCOLS columns:
+//   qs: int4[4][32], [j][lane] holds the B fragments of sub-blocks 2j and 2j+1 of lane (g, t): the values [4t, 4t + 4) and [16 + 4t, 16 + 4t + 4) of column g.
+//   ds: int4[4][4], [t][j] holds d (D4, float) or (d, sum) (DS4, half2) of the columns 2t and 2t+1 for sub-block 2j, then 2j+1.
+// The column groups of a unit are adjacent, columns beyond ne1 are zero.
+static constexpr int MMQ_FEW_NCOLS     = 8; // src1 columns per column group
+static constexpr int MMQ_FEW_Q8_1_INT4 = 4*WARP_SIZE + 4*4; // int4 per 256 values and column group
+
+void quantize_mmq_few_q8_1_cuda(
+        const float * x, void * vy, mmq_q8_1_ds_layout ds_layout, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
+        int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
+
+// MUL_MAT_ID: a pair is an expert and one column group of up to MMQ_FEW_NCOLS of its (token, slot) entries. The src1 of pair p is channel p above, its columns past the entries are not written.
+// A pair is MMQ_FEW_PAIR_INTS ints: expert, number of entries (0 for an unused pair), then the entries token*n_expert_used + slot.
+static constexpr int MMQ_FEW_PAIR_INTS = 2 + MMQ_FEW_NCOLS;
+
+void quantize_mmq_few_id_q8_1_cuda(
+        const float * x, const int32_t * ids, void * vy, int * pairs, mmq_q8_1_ds_layout ds_layout, int64_t ne00, int64_t s11, int64_t s12,
+        int64_t ne11, int64_t n_experts, int64_t n_expert_used, int64_t n_tokens, int64_t si1, int64_t npairs_max, cudaStream_t stream);
+
 void quantize_mmq_fp4_cuda(const float *   x,
                              const int32_t * ids,
                              void *          vy,

@@ -896,7 +896,7 @@ struct server_tool_read_file : server_tool {
         };
     }
 
-    json invoke(json params, server_tool::stream *) const override {
+    json invoke(json params, server_tool::stream *, const std::function<bool()> &) const override {
         std::string path  = params.at("path").get<std::string>();
         int  start_line   = json_value(params, "start_line", 1);
         int  end_line     = json_value(params, "end_line",  -1); // -1 = no limit
@@ -1013,7 +1013,7 @@ struct server_tool_file_glob_search : server_tool {
         };
     }
 
-    json invoke(json params, server_tool::stream *) const override {
+    json invoke(json params, server_tool::stream *, const std::function<bool()> &) const override {
         auto io = make_tools_io(params);
 
         const std::string path = params.at("path").get<std::string>();
@@ -1076,7 +1076,7 @@ struct server_tool_file_glob_search : server_tool {
         }
 
         // `base` is always absolute (resolve falls back to the server cwd), so
-        // API clients (e.g. the web UI picker) can join the relative entries
+        // API clients (e.g. the Llama Chat picker) can join the relative entries
         // into absolute paths. `plain_text_response` is what the model sees;
         // `entries` is the same data as structured JSON for the UI picker,
         // which reads `entries`/`base` instead of re-parsing the text.
@@ -1128,7 +1128,7 @@ struct server_tool_grep_search : server_tool {
         };
     }
 
-    json invoke(json params, server_tool::stream *) const override {
+    json invoke(json params, server_tool::stream *, const std::function<bool()> &) const override {
         std::string path        = params.at("path").get<std::string>();
         std::string pat_str     = params.at("pattern").get<std::string>();
         std::string include     = json_value(params, "include", std::string("**"));
@@ -1271,7 +1271,7 @@ struct server_tool_exec_shell_command : server_tool {
         };
     }
 
-    json invoke(json params, server_tool::stream * st) const override {
+    json invoke(json params, server_tool::stream * st, const std::function<bool()> &) const override {
         std::string command   = params.at("command").get<std::string>();
         int    timeout        = json_value(params, "timeout",         10);
         size_t max_output     = (size_t) json_value(params, "max_output_size", (int) SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
@@ -1348,7 +1348,7 @@ struct server_tool_write_file : server_tool {
         };
     }
 
-    json invoke(json params, server_tool::stream *) const override {
+    json invoke(json params, server_tool::stream *, const std::function<bool()> &) const override {
         std::string path    = params.at("path").get<std::string>();
         std::string content = params.at("content").get<std::string>();
 
@@ -1405,7 +1405,7 @@ struct server_tool_edit_file : server_tool {
         };
     }
 
-    json invoke(json params, server_tool::stream *) const override {
+    json invoke(json params, server_tool::stream *, const std::function<bool()> &) const override {
         std::string path = params.at("path").get<std::string>();
         const json & edits_json = params.at("edits");
 
@@ -1721,7 +1721,7 @@ struct server_tool_get_info : server_tool {
         };
     }
 
-    json invoke(json params, server_tool::stream *) const override {
+    json invoke(json params, server_tool::stream *, const std::function<bool()> &) const override {
         auto io = make_tools_io(params);
 
         // inside an isolate, we always use the linux command
@@ -1835,8 +1835,8 @@ struct server_mcp_tool : server_tool {
         };
     }
 
-    json invoke(json params, server_tool::stream *) const override {
-        return mcp_mgr.call_tool(server_name, tool_name, params);
+    json invoke(json params, server_tool::stream *, const std::function<bool()> & should_stop) const override {
+        return mcp_mgr.call_tool(server_name, tool_name, params, should_stop);
     }
 };
 
@@ -1953,7 +1953,7 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     // IMPORTANT: for contributors, please keep this array of tools as minimal as possible
     //            we only accept minimal i/o and shell command tools here
     //            for example, do not add: web search, get date time, etc.
-    //            high-level functionality should be added either via MCP or web UI
+    //            high-level functionality should be added either via MCP or Llama Chat
     std::vector<std::unique_ptr<server_tool>> tools;
     tools.push_back(std::make_unique<server_tool_read_file>());
     tools.push_back(std::make_unique<server_tool_file_glob_search>());
@@ -2133,7 +2133,7 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
 
                     auto done = std::make_unique<server_tool_stream_result>();
                     try {
-                        tool.invoke(params, &st);
+                        tool.invoke(params, &st, req.should_stop);
                     } catch (const std::exception & e) {
                         done->error_msg = e.what();
                     } catch (...) {
@@ -2158,7 +2158,7 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
                     return true;
                 };
             } else {
-                json result = tool.invoke(params, nullptr);
+                json result = tool.invoke(params, nullptr, req.should_stop);
                 res->status = 200;
                 res->data   = safe_json_to_str(result);
             }

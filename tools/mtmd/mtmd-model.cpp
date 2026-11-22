@@ -214,6 +214,7 @@ struct mtmd_model_loader {
                 hparams.image_size = 0;
                 hparams.patch_size = 1;
                 get_string(KEY_GEN_AUDIO_VARIANT, hparams.gen_model_variant, false);
+                get_string(KEY_GEN_AUDIO_DEFAULT_VOICE, hparams.gen_default_voice, false);
 
             } else {
                 GGML_ASSERT(false && "unknown modality");
@@ -662,6 +663,10 @@ struct mtmd_model_loader {
                         hparams.image_resize_pad  = PAD_NONE; // the HF processor resizes to the smart_resize size, no padding
                         hparams.image_round_half_even = true; // smart_resize uses Python round()
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
+                        if (hparams.n_merge != 2) {
+                            // the temporal merge input and the merger use a 2x2 patch grid
+                            throw std::runtime_error(mtmd_format("%s: spatial_merge_size (%d) must be 2\n", __func__, hparams.n_merge));
+                        }
                         get_u32(KEY_WIN_ATTN_PATTERN, hparams.n_wa_pattern, model.proj_type == PROJECTOR_TYPE_QWEN25VL); // only 2.5 requires it
                         // ref: https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/blob/main/preprocessor_config.json
                         hparams.set_limit_image_tokens(8, 4096);
@@ -780,6 +785,55 @@ struct mtmd_model_loader {
                         }
                         hparams.warmup_audio_size = hparams.audio_samples_per_token();
                     } break;
+                case PROJECTOR_TYPE_VIBEVOICE_ASR:
+                    {
+                        hparams.audio_sample_rate = 24000; // mono waveform, no frontend
+                        hparams.audio_chunk_len   = 30;    // in seconds, any length works as the convs are causal
+                        get_u32(KEY_A_CONV_KERNEL_SIZE, hparams.audio_conv_kernel_size, true);
+                        get_arr_int(KEY_A_PATCH_SIZES,  hparams.audio_patch_sizes,  true);
+                        get_arr_int(KEY_A_DEPTHS,       hparams.audio_depths,       true);
+
+                        // bounds keep the receptive field below from overflowing
+                        const size_t n_stage = hparams.audio_patch_sizes.size();
+                        if (n_stage == 0 || n_stage > 16 || hparams.audio_depths.size() != n_stage || hparams.n_mel_bins != 1 ||
+                                hparams.audio_conv_kernel_size < 1 || hparams.audio_conv_kernel_size > 64) {
+                            throw std::runtime_error(mtmd_format("%s: invalid vibevoice audio hparams\n", __func__));
+                        }
+
+                        // receptive field: stem conv (kernel), downsample convs (2 * stride), blocks (kernel), head conv (kernel)
+                        const int64_t k   = hparams.audio_conv_kernel_size;
+                        int64_t       hop = 1;
+                        int64_t       rf  = 0;
+                        int64_t n_blocks  = 0;
+                        for (size_t i = 0; i < n_stage; ++i) {
+                            const int64_t stride = hparams.audio_patch_sizes[i];
+                            if (stride < 1 || stride > 64 || hop * stride > (1 << 20) || hparams.audio_depths[i] < 0 || hparams.audio_depths[i] > 64) {
+                                throw std::runtime_error(mtmd_format("%s: invalid vibevoice audio hparams\n", __func__));
+                            }
+                            rf  += ((i == 0 ? k : 2 * stride) - 1) * hop;
+                            hop *= stride;
+                            rf  += hparams.audio_depths[i] * (k - 1) * hop;
+                            n_blocks += hparams.audio_depths[i];
+                        }
+                        rf += (k - 1) * hop;
+                        if (rf > 60 * hparams.audio_sample_rate) {
+                            throw std::runtime_error(mtmd_format("%s: vibevoice receptive field of %" PRId64 " samples is too long\n", __func__, rf));
+                        }
+                        if (n_blocks != hparams.n_layer) {
+                            throw std::runtime_error(mtmd_format("%s: sum of audio depths (%" PRId64 ") does not match n_layer (%d)\n", __func__, n_blocks, hparams.n_layer));
+                        }
+                        hparams.audio_n_ctx       = (int32_t) ((rf + hop - 1) / hop * hop);
+                        hparams.warmup_audio_size = (int32_t) ((int64_t) hparams.audio_chunk_len * hparams.audio_sample_rate / hop * hop) + hparams.audio_n_ctx;
+                    } break;
+                case PROJECTOR_TYPE_INKLING2V:
+                    {
+                        hparams.ffn_op = FFN_GELU_ERF;
+                        log_ffn_op = "gelu_erf";
+                        get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge);
+                        hparams.rope_theta = 10000.0f;
+                        hparams.set_limit_image_tokens(1, 4096);
+                        hparams.set_warmup_n_tokens(32*32); // avoid OOM on warmup
+                    } break;
                 case PROJECTOR_TYPE_MUSE_GLIMMER:
                     {
                         hparams.n_merge = 2; // pixel-shuffle downsample after the ViT
@@ -878,6 +932,7 @@ struct mtmd_model_loader {
                     } break;
                 case PROJECTOR_TYPE_ULTRAVOX:
                 case PROJECTOR_TYPE_QWEN2A:
+                case PROJECTOR_TYPE_HIGGS_AUDIO:
                 case PROJECTOR_TYPE_QWEN3A:
                 case PROJECTOR_TYPE_GLMA:
                 case PROJECTOR_TYPE_VOXTRAL:
@@ -898,6 +953,12 @@ struct mtmd_model_loader {
                         hparams.audio_n_fft        = 400;
                         hparams.audio_window_len   = 400;
                         hparams.audio_hop_len      = 160;
+
+                        if (model.proj_type == PROJECTOR_TYPE_HIGGS_AUDIO) {
+                            // each 4s chunk is encoded on its own
+                            hparams.audio_chunk_len   = 4;
+                            hparams.warmup_audio_size = 400;
+                        }
                     } break;
                 case PROJECTOR_TYPE_VOXTRAL_RT:
                     {
@@ -954,6 +1015,15 @@ struct mtmd_model_loader {
                                 "%s: mimo_audio: %s must be > 0\n", __func__, KEY_A_LOCAL_GROUP_SIZE));
                         }
                     } break;
+                case PROJECTOR_TYPE_ZONOS3_SPKENC:
+                    {
+                        // kaldi fbank front-end
+                        hparams.audio_sample_rate = 16000;
+                        hparams.audio_n_fft       = 512;
+                        hparams.audio_window_len  = 400;
+                        hparams.audio_hop_len     = 160;
+                        hparams.warmup_audio_size = 1000;
+                    } break;
                 case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
                     {
                         // ECAPA-TDNN speaker encoder, mel front-end uses the Slaney default (fmin=0, fmax=sr/2)
@@ -1005,6 +1075,14 @@ struct mtmd_model_loader {
                         // TODO: hardcoded for now, read from code_predictor_config instead
                         hparams.rope_theta = 1000000.0f;
 
+                        // reference encoder: mimi with the stride-2 downsample of the 12.5 Hz tokenizer
+                        // seanet ratios are [8,6,5,4] in the config, the encoder reverses them
+                        hparams.audio_sample_rate = 24000;
+                        hparams.seanet_ratios     = { 4, 5, 6, 8 };
+                        hparams.seanet_n_stage    = (int32_t) hparams.seanet_ratios.size();
+                        hparams.mimi_downsample   = 2;
+                        hparams.mimi_tfm_context  = 250;
+
                         // code2wav params
                         hparams.wav_tfm_n_layer      = 8;
                         hparams.wav_tfm_n_embd       = 512;
@@ -1019,8 +1097,30 @@ struct mtmd_model_loader {
                         // matches the reference decoder's sliding_window (speech_tokenizer/config.json)
                         hparams.wav_tfm_swa = 72;
                     } break;
-                case PROJECTOR_TYPE_DRAMA3_GEN:
+                case PROJECTOR_TYPE_ZONOS3_GEN:
                     {
+                        hparams.audio_sample_rate = 44100;
+                    } break;
+                case PROJECTOR_TYPE_YUE2_GEN:
+                    {
+                        hparams.audio_sample_rate = 48000;
+                    } break;
+                case PROJECTOR_TYPE_VOXCPM2_GEN:
+                    {
+                        hparams.audio_sample_rate = 48000;
+                        // the flow graph unrolls up to n_steps_max LocDiT passes
+                        model.max_nodes = 65536;
+                    } break;
+                case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
+                    {
+                        hparams.audio_sample_rate = 44100;
+                    } break;
+                case PROJECTOR_TYPE_DRAMA3_GEN:
+                case PROJECTOR_TYPE_FISH_S2_GEN:
+                    {
+                        // fish_s2 fast AR, drama3 hardcodes its tower RoPE in the graph
+                        hparams.rope_theta = 1000000.0f;
+
                         // Fish DAC decoder, codec.pth has no config
                         hparams.audio_sample_rate    = 44100;
                         hparams.wav_tfm_n_layer      = 8;
@@ -1051,6 +1151,45 @@ struct mtmd_model_loader {
                         hparams.flow_n_step       = 1;
                         hparams.gen_eos_threshold = -4.0f;
                     } break;
+                case PROJECTOR_TYPE_MOSHI:
+                case PROJECTOR_TYPE_MOSHI_GEN:
+                    {
+                        // mimi of the moshi family, see _seanet_kwargs and _transformer_kwargs of the reference
+                        hparams.audio_sample_rate = 24000;
+                        // seanet ratios are [8,6,5,4] in the config, the encoder reverses them
+                        hparams.seanet_ratios    = { 4, 5, 6, 8 };
+                        hparams.seanet_n_stage   = (int32_t) hparams.seanet_ratios.size();
+                        hparams.mimi_downsample  = 2;
+                        hparams.mimi_tfm_context = 250;
+                        hparams.rope_theta       = 10000.0f;
+                        // one step of the audio stream
+                        hparams.warmup_audio_size = 4 * mtmd_graph_moshi::n_samples_per_frame;
+                    } break;
+                case PROJECTOR_TYPE_VOXCPM2_SPKENC:
+                    {
+                        // AudioVAE encoder, one backbone row per patch of latents (checked against the strides at load)
+                        hparams.audio_sample_rate = 16000;
+                        hparams.audio_patch_sizes = { 2, 5, 8, 8, mtmd_graph_voxcpm2_gen::n_patch };
+                        // whole patches, about 10 s like a typical reference clip
+                        hparams.warmup_audio_size = hparams.audio_samples_per_token() * 63;
+                    } break;
+                case PROJECTOR_TYPE_FISH_S2_SPKENC:
+                    {
+                        // Fish DAC encoder, codec.pth has no config
+                        // one row per 2048 samples: encoder strides, then the quantizer downsample
+                        hparams.audio_sample_rate = 44100;
+                        hparams.audio_patch_sizes = { 2, 4, 8, 8, 2, 2 };
+                        // whole frames, about 10 s like a typical reference clip
+                        hparams.warmup_audio_size = hparams.audio_samples_per_token() * 215;
+                        hparams.wav_tfm_n_head     = 16;
+                        hparams.wav_tfm_n_head_kv  = 16;
+                        hparams.wav_tfm_eps        = 1e-5f;
+                        hparams.wav_tfm_rope_theta = 10000.0f;
+                        // drama3 shares the codec, only the backbone rows of a frame differ
+                        std::string gen_proj;
+                        get_string(KEY_GEN_AUDIO_PROJ_TYPE, gen_proj, false);
+                        hparams.spkenc_drama3_rows = projector_type_from_string(gen_proj) == PROJECTOR_TYPE_DRAMA3_GEN;
+                    } break;
                 case PROJECTOR_TYPE_CHATTERBOX:
                     {
                         // the classic cfm solver unrolls up to 10 steps x 2 cfg estimator evaluations in one graph
@@ -1064,6 +1203,11 @@ struct mtmd_model_loader {
                         // SopranoDecoder defaults, n_fft comes from the head tensor
                         hparams.audio_sample_rate = 32000;
                         hparams.audio_hop_len     = 512;
+                    } break;
+                case PROJECTOR_TYPE_KOKORO:
+                case PROJECTOR_TYPE_TINY_VOCA:
+                    {
+                        hparams.audio_sample_rate = 24000;
                     } break;
                 case PROJECTOR_TYPE_PADDLEOCR:
                     {
@@ -1297,7 +1441,11 @@ struct mtmd_model_loader {
                 // Muse Spark is encoder-free in the same sense: its conv pyramid reads the raw waveform, one channel takes the place of the mel bins
                 const bool fft_based = model.proj_type != PROJECTOR_TYPE_GEMMA4UA &&
                                        model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO &&
-                                       model.proj_type != PROJECTOR_TYPE_POCKETTTS_SPKENC;
+                                       model.proj_type != PROJECTOR_TYPE_VIBEVOICE_ASR &&
+                                       model.proj_type != PROJECTOR_TYPE_POCKETTTS_SPKENC &&
+                                       model.proj_type != PROJECTOR_TYPE_MOSHI &&
+                                       model.proj_type != PROJECTOR_TYPE_FISH_S2_SPKENC &&
+                                       model.proj_type != PROJECTOR_TYPE_VOXCPM2_SPKENC;
 
                 // Validate audio hparams loaded from GGUF metadata
                 if (hparams.n_mel_bins <= 0 || (fft_based && hparams.n_mel_bins > 256)) {
@@ -1394,6 +1542,29 @@ struct mtmd_model_loader {
             }
         };
 
+        // mimi decoder: upsample, transformer, SEANet decoder
+        auto load_mimi_decoder = [&](int n_tfm_layer) {
+            model.gen_upsample_w = get_tensor(mtmd_format(TN_A_GEN_WAV_UPSAMPLE, "weight"));
+            load_seanet(model.seanet, true);
+            model.gen_tfm_layers.resize(n_tfm_layer);
+            for (int il = 0; il < n_tfm_layer; il++) {
+                auto & layer = model.gen_tfm_layers[il];
+                const char * p = "a.gen.wav.tfm";
+                layer.ln_1_w    = get_tensor(mtmd_format(TN_LN_1,        p, il, "weight"));
+                layer.ln_1_b    = get_tensor(mtmd_format(TN_LN_1,        p, il, "bias"));
+                layer.q_w       = get_tensor(mtmd_format(TN_ATTN_Q,      p, il, "weight"));
+                layer.k_w       = get_tensor(mtmd_format(TN_ATTN_K,      p, il, "weight"));
+                layer.v_w       = get_tensor(mtmd_format(TN_ATTN_V,      p, il, "weight"));
+                layer.o_w       = get_tensor(mtmd_format(TN_ATTN_OUTPUT, p, il, "weight"));
+                layer.ls_1_w    = get_tensor(mtmd_format(TN_LS_1,        p, il, "weight"));
+                layer.ln_2_w    = get_tensor(mtmd_format(TN_LN_2,        p, il, "weight"));
+                layer.ln_2_b    = get_tensor(mtmd_format(TN_LN_2,        p, il, "bias"));
+                layer.ff_up_w   = get_tensor(mtmd_format(TN_FFN_UP,      p, il, "weight"));
+                layer.ff_down_w = get_tensor(mtmd_format(TN_FFN_DOWN,    p, il, "weight"));
+                layer.ls_2_w    = get_tensor(mtmd_format(TN_LS_2,        p, il, "weight"));
+            }
+        };
+
         auto get_vector = [&](const std::string & name) {
             std::vector<float> result;
             auto it = tensor_offset.find(name);
@@ -1444,8 +1615,15 @@ struct mtmd_model_loader {
         model.post_ln_w = get_tensor(mtmd_format(TN_LN_POST, prefix, "weight"), false);
         model.post_ln_b = get_tensor(mtmd_format(TN_LN_POST, prefix, "bias"),   false);
 
+        // every vision encoder starts with a patch embedding, except the ones with their own stem
+        const bool has_patch_embd = (
+            model.modality  == MTMD_MODALITY_VISION &&
+            model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
+            model.proj_type != PROJECTOR_TYPE_DEEPSEEKOCR &&
+            model.proj_type != PROJECTOR_TYPE_DEEPSEEKOCR2);
+
         model.patch_bias = get_tensor(TN_PATCH_BIAS, false);
-        model.patch_embeddings_0 = get_tensor(TN_PATCH_EMBD,   false);
+        model.patch_embeddings_0 = get_tensor(TN_PATCH_EMBD,   has_patch_embd);
         model.patch_embeddings_1 = get_tensor(TN_PATCH_EMBD_1, false);
 
         model.norm_embd_w = get_tensor(mtmd_format(TN_NORM_EMBD, "weight"), false);
@@ -1459,11 +1637,16 @@ struct mtmd_model_loader {
         const bool has_standard_layers = (
             model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
             model.proj_type != PROJECTOR_TYPE_QWEN3TTS_SPKENC &&
+            model.proj_type != PROJECTOR_TYPE_ZONOS3_SPKENC &&
             model.proj_type != PROJECTOR_TYPE_POCKETTTS_GEN &&
             model.proj_type != PROJECTOR_TYPE_SOPRANO &&
+            model.proj_type != PROJECTOR_TYPE_KOKORO &&
+            model.proj_type != PROJECTOR_TYPE_TINY_VOCA &&
             model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO &&
+            model.proj_type != PROJECTOR_TYPE_VIBEVOICE_ASR &&
             model.proj_type != PROJECTOR_TYPE_CHATTERBOX &&
-            model.proj_type != PROJECTOR_TYPE_CHATTERBOX_SPKENC);
+            model.proj_type != PROJECTOR_TYPE_CHATTERBOX_SPKENC &&
+            model.proj_type != PROJECTOR_TYPE_YUE2_GEN);
 
         // layers
         const int n_layers_to_load = has_standard_layers ? hparams.n_layer : 0;
@@ -1565,6 +1748,20 @@ struct mtmd_model_loader {
             }
         }
 
+        // DAC-style residual unit: Snake, dilated conv, Snake, conv k = 1 (voxcpm2 AudioVAE)
+        auto load_dac_res = [&](const std::string & q) {
+            mtmd_code2wav::dac_res ru;
+            ru.act1_alpha = get_tensor(q + ".snake1.alpha");
+            ru.act1_beta  = get_tensor(q + ".snake1.beta");
+            ru.conv1_w    = get_tensor(q + ".conv1.weight");
+            ru.conv1_b    = get_tensor(q + ".conv1.bias");
+            ru.act2_alpha = get_tensor(q + ".snake2.alpha");
+            ru.act2_beta  = get_tensor(q + ".snake2.beta");
+            ru.conv2_w    = get_tensor(q + ".conv2.weight");
+            ru.conv2_b    = get_tensor(q + ".conv2.bias");
+            return ru;
+        };
+
         // code2wav: RVQ codes -> raw PCM, drama3 has no quant/pre_conv/tfm projections
         auto load_code2wav = [&](bool with_proj) {
             auto & c2w = model.c2w;
@@ -1652,27 +1849,64 @@ struct mtmd_model_loader {
             c2w.dac_post_conv_b      = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_POST_CONV,  "bias"));
         };
 
+        // a.gen.vae.*, see mtmd_snake_vae
+        auto load_snake_vae = [&]() {
+            auto & vae = model.snake_vae;
+            const std::string p = "a.gen.vae";
+            auto load_snake = [&](const std::string & q) {
+                return mtmd_snake_vae::snake{ get_tensor(q + ".alpha"), get_tensor(q + ".beta") };
+            };
+            vae.in_proj_w = get_tensor(p + ".in_proj.weight", false);
+            vae.in_proj_b = get_tensor(p + ".in_proj.bias",   false);
+            vae.in_w      = get_tensor(p + ".conv_in.weight");
+            vae.in_b      = get_tensor(p + ".conv_in.bias");
+            for (int b = 0; gguf_find_tensor(ctx_gguf.get(), mtmd_format("%s.blk.%d.up.weight", p.c_str(), b).c_str()) >= 0; b++) {
+                const std::string q = p + ".blk." + std::to_string(b);
+                mtmd_snake_vae::block blk;
+                blk.act  = load_snake(q + ".snake");
+                blk.up_w = get_tensor(q + ".up.weight");
+                blk.up_b = get_tensor(q + ".up.bias");
+                for (int r = 0; r < 3; r++) {
+                    const std::string rq = q + ".res." + std::to_string(r);
+                    mtmd_snake_vae::res_unit ru;
+                    ru.act1    = load_snake(rq + ".snake1");
+                    ru.conv1_w = get_tensor(rq + ".conv1.weight");
+                    ru.conv1_b = get_tensor(rq + ".conv1.bias");
+                    ru.act2    = load_snake(rq + ".snake2");
+                    ru.conv2_w = get_tensor(rq + ".conv2.weight");
+                    ru.conv2_b = get_tensor(rq + ".conv2.bias");
+                    blk.res.push_back(ru);
+                }
+                vae.blocks.push_back(std::move(blk));
+            }
+            vae.post  = load_snake(p + ".post_snake");
+            vae.out_w = get_tensor(p + ".conv_out.weight");
+            vae.out_b = get_tensor(p + ".conv_out.bias", false);
+            if (vae.blocks.empty()) {
+                throw std::runtime_error(mtmd_format("%s: no VAE decoder blocks\n", __func__));
+            }
+        };
+
         switch (model.proj_type) {
             case PROJECTOR_TYPE_MLP:
             case PROJECTOR_TYPE_MLP_NORM:
                 {
-                    // LLaVA projection
-                    model.mm_0_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"), false);
-                    model.mm_0_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"), false);
-                    // Yi-type llava
-                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "weight"), false);
-                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "bias"), false);
-                    // missing in Yi-type llava
-                    model.mm_2_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"), false);
-                    model.mm_2_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"), false);
-                    // Yi-type llava
-                    model.mm_3_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 3, "weight"), false);
-                    model.mm_3_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 3, "bias"), false);
-                    model.mm_4_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 4, "weight"), false);
-                    model.mm_4_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 4, "bias"), false);
+                    // LLaVA projection: mm.0 -> gelu -> mm.2
+                    // Yi-type llava (MLP_NORM): mm.0 -> norm mm.1 -> gelu -> mm.3 -> norm mm.4
+                    model.mm_0_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"));
+                    model.mm_3_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 3, "weight"), model.proj_type == PROJECTOR_TYPE_MLP_NORM);
                     if (model.mm_3_w) {
                         // TODO: this is a hack to support Yi-type llava
                         model.proj_type = PROJECTOR_TYPE_MLP_NORM;
+                        model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "weight"));
+                        model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "bias"));
+                        model.mm_3_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 3, "bias"));
+                        model.mm_4_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 4, "weight"));
+                        model.mm_4_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 4, "bias"));
+                    } else {
+                        model.mm_2_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                        model.mm_2_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"));
                     }
                     model.image_newline = get_tensor(TN_IMAGE_NEWLINE, false);
                 } break;
@@ -1894,6 +2128,64 @@ struct mtmd_model_loader {
                     model.mm_fc_w   = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "weight"));
                     model.mm_fc_b   = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "bias"));
                 } break;
+            case PROJECTOR_TYPE_VIBEVOICE_ASR:
+                {
+                    const int n_stage = (int) hparams.audio_patch_sizes.size();
+                    for (int e = 0; e < 2; ++e) {
+                        auto & enc = model.cnx_enc[e];
+                        enc.conv_w.resize(n_stage + 1);
+                        enc.conv_b.resize(n_stage + 1);
+                        for (int i = 0; i <= n_stage; ++i) {
+                            enc.conv_w[i] = get_tensor(mtmd_format(TN_A_CNX_CONV, e, i, "weight"));
+                            enc.conv_b[i] = get_tensor(mtmd_format(TN_A_CNX_CONV, e, i, "bias"));
+                            // the receptive field in load_hparams assumes these kernel sizes
+                            const int64_t k_expected = (i == 0 || i == n_stage) ? hparams.audio_conv_kernel_size : 2 * hparams.audio_patch_sizes[i];
+                            if (enc.conv_w[i]->ne[0] != k_expected) {
+                                throw std::runtime_error(mtmd_format("%s: %s has kernel %" PRId64 ", expected %" PRId64 "\n", __func__, ggml_get_name(enc.conv_w[i]), enc.conv_w[i]->ne[0], k_expected));
+                            }
+                        }
+                        enc.blocks.resize(hparams.n_layer);
+                        for (int il = 0; il < hparams.n_layer; ++il) {
+                            auto & layer = enc.blocks[il];
+                            layer.ln_1_w    = get_tensor(mtmd_format(TN_A_CNX_NORM,     e, il, "weight"));
+                            layer.conv_w    = get_tensor(mtmd_format(TN_A_CNX_DW,       e, il, "weight"));
+                            layer.conv_b    = get_tensor(mtmd_format(TN_A_CNX_DW,       e, il, "bias"));
+                            layer.ls_1_w    = get_tensor(mtmd_format(TN_A_CNX_LS1,      e, il, "weight"));
+                            layer.ln_2_w    = get_tensor(mtmd_format(TN_A_CNX_FFN_NORM, e, il, "weight"));
+                            layer.ff_up_w   = get_tensor(mtmd_format(TN_A_CNX_FFN_UP,   e, il, "weight"));
+                            layer.ff_up_b   = get_tensor(mtmd_format(TN_A_CNX_FFN_UP,   e, il, "bias"));
+                            layer.ff_down_w = get_tensor(mtmd_format(TN_A_CNX_FFN_DOWN, e, il, "weight"));
+                            layer.ff_down_b = get_tensor(mtmd_format(TN_A_CNX_FFN_DOWN, e, il, "bias"));
+                            layer.ls_2_w    = get_tensor(mtmd_format(TN_A_CNX_LS2,      e, il, "weight"));
+                            if (layer.conv_w->ne[0] != hparams.audio_conv_kernel_size || layer.conv_w->type != GGML_TYPE_F32) {
+                                throw std::runtime_error(mtmd_format("%s: %s must be F32 with kernel %d\n", __func__, ggml_get_name(layer.conv_w), hparams.audio_conv_kernel_size));
+                            }
+                        }
+                    }
+                    // acoustic connector: mlp 0 -> norm -> mlp 1, semantic connector: mlp 2 -> norm -> mlp 3
+                    model.mm_0_w        = get_tensor(mtmd_format(TN_MM_AUDIO_MLP,      0, "weight"));
+                    model.mm_0_b        = get_tensor(mtmd_format(TN_MM_AUDIO_MLP,      0, "bias"));
+                    model.mm_norm_pre_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP_NORM, 0, "weight"));
+                    model.mm_1_w        = get_tensor(mtmd_format(TN_MM_AUDIO_MLP,      1, "weight"));
+                    model.mm_1_b        = get_tensor(mtmd_format(TN_MM_AUDIO_MLP,      1, "bias"));
+                    model.mm_2_w        = get_tensor(mtmd_format(TN_MM_AUDIO_MLP,      2, "weight"));
+                    model.mm_2_b        = get_tensor(mtmd_format(TN_MM_AUDIO_MLP,      2, "bias"));
+                    model.mm_norm_mid_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP_NORM, 2, "weight"));
+                    model.mm_3_w        = get_tensor(mtmd_format(TN_MM_AUDIO_MLP,      3, "weight"));
+                    model.mm_3_b        = get_tensor(mtmd_format(TN_MM_AUDIO_MLP,      3, "bias"));
+                } break;
+            case PROJECTOR_TYPE_INKLING2V:
+                {
+                    // these come from the generic path above, where they are optional
+                    if (!model.class_embedding || !model.position_embeddings || !model.pre_ln_w || !model.pre_ln_b) {
+                        throw std::runtime_error(mtmd_format("%s: missing class_embd, position_embd or pre_ln\n", __func__));
+                    }
+                    model.class_position_embedding = get_tensor(TN_CLASS_POS_EMBD);
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "bias"), false);
+                    model.mm_2_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"), false);
+                } break;
             case PROJECTOR_TYPE_MUSE_GLIMMER:
                 {
                     // 3-linear MLP: fc -> erf-GELU -> proj -> erf-GELU -> vision_proj (into LLM residual dim)
@@ -1921,7 +2213,6 @@ struct mtmd_model_loader {
                 {
                     // reuse tensors already loaded by the common section
                     // (TN_PATCH_EMBD and TN_PATCH_BIAS have the same tensor names)
-                    GGML_ASSERT(model.patch_embeddings_0 && "yasa2 requires v.patch_embd.weight");
                     model.yasa_patch_w = model.patch_embeddings_0;
                     model.yasa_patch_b = model.patch_bias;
                     model.yasa_patch_ln_w = get_tensor(TN_YASA_PATCH_LN_W, false);
@@ -2270,6 +2561,19 @@ struct mtmd_model_loader {
                     model.mm_fc_w = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "weight"));
                     model.mm_fc_b = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "bias"));
                 } break;
+            case PROJECTOR_TYPE_HIGGS_AUDIO:
+                {
+                    model.conv1d_1_w = get_tensor(mtmd_format(TN_CONV1D, 1, "weight"));
+                    model.conv1d_1_b = get_tensor(mtmd_format(TN_CONV1D, 1, "bias"));
+                    model.conv1d_2_w = get_tensor(mtmd_format(TN_CONV1D, 2, "weight"));
+                    model.conv1d_2_b = get_tensor(mtmd_format(TN_CONV1D, 2, "bias"));
+                    model.downsample_conv_w = get_tensor(mtmd_format(TN_A_DOWNSAMPLE_CONV, "weight"));
+                    model.downsample_conv_b = get_tensor(mtmd_format(TN_A_DOWNSAMPLE_CONV, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "bias"));
+                    model.mm_2_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 2, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 2, "bias"));
+                } break;
             case PROJECTOR_TYPE_QWEN3A:
                 {
                     model.conv2d_1_w = get_tensor(mtmd_format(TN_CONV2D, 1, "weight"));
@@ -2373,6 +2677,71 @@ struct mtmd_model_loader {
                     model.mm_fc_w = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "weight"));
                     model.mm_fc_b = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "bias"));
                 } break;
+            case PROJECTOR_TYPE_FISH_S2_SPKENC:
+                {
+                    // codec encoder in the code2wav structs: dac = encoder blocks, upsample = quantizer downsample
+                    // generic a.blk.* layers: 0..3 last encoder block, 4..11 quantizer pre_module
+                    auto & c2w = model.c2w;
+                    c2w.dac_entry_w = get_tensor(mtmd_format(TN_A_CODEC_ENC_ENTRY, "weight"));
+                    c2w.dac_entry_b = get_tensor(mtmd_format(TN_A_CODEC_ENC_ENTRY, "bias"));
+                    c2w.dac.resize(4);
+                    for (int il = 0; il < (int) c2w.dac.size(); il++) {
+                        auto & blk = c2w.dac[il];
+                        blk.snake_alpha = get_tensor(mtmd_format(TN_A_CODEC_ENC_SNAKE, il, "alpha"));
+                        blk.snake_beta  = get_tensor(mtmd_format(TN_A_CODEC_ENC_SNAKE, il, "beta"));
+                        blk.conv_w      = get_tensor(mtmd_format(TN_A_CODEC_ENC_CONV,  il, "weight"));
+                        blk.conv_b      = get_tensor(mtmd_format(TN_A_CODEC_ENC_CONV,  il, "bias"));
+                        blk.res.resize(3);
+                        for (int ir = 0; ir < (int) blk.res.size(); ir++) {
+                            auto & res = blk.res[ir];
+                            res.act1_alpha = get_tensor(mtmd_format(TN_A_CODEC_ENC_RES_ACT1,  il, ir, "alpha"));
+                            res.act1_beta  = get_tensor(mtmd_format(TN_A_CODEC_ENC_RES_ACT1,  il, ir, "beta"));
+                            res.conv1_w    = get_tensor(mtmd_format(TN_A_CODEC_ENC_RES_CONV1, il, ir, "weight"));
+                            res.conv1_b    = get_tensor(mtmd_format(TN_A_CODEC_ENC_RES_CONV1, il, ir, "bias"));
+                            res.act2_alpha = get_tensor(mtmd_format(TN_A_CODEC_ENC_RES_ACT2,  il, ir, "alpha"));
+                            res.act2_beta  = get_tensor(mtmd_format(TN_A_CODEC_ENC_RES_ACT2,  il, ir, "beta"));
+                            res.conv2_w    = get_tensor(mtmd_format(TN_A_CODEC_ENC_RES_CONV2, il, ir, "weight"));
+                            res.conv2_b    = get_tensor(mtmd_format(TN_A_CODEC_ENC_RES_CONV2, il, ir, "bias"));
+                        }
+                    }
+                    c2w.dac_post_snake_alpha = get_tensor(mtmd_format(TN_A_CODEC_ENC_POST_SNAKE, "alpha"));
+                    c2w.dac_post_snake_beta  = get_tensor(mtmd_format(TN_A_CODEC_ENC_POST_SNAKE, "beta"));
+                    c2w.dac_post_conv_w      = get_tensor(mtmd_format(TN_A_CODEC_ENC_POST_CONV,  "weight"));
+                    c2w.dac_post_conv_b      = get_tensor(mtmd_format(TN_A_CODEC_ENC_POST_CONV,  "bias"));
+
+                    c2w.upsample.resize(2);
+                    for (int il = 0; il < (int) c2w.upsample.size(); il++) {
+                        auto & down = c2w.upsample[il];
+                        down.conv_w   = get_tensor(mtmd_format(TN_A_CODEC_DOWN_CONV,   il, "weight"));
+                        down.conv_b   = get_tensor(mtmd_format(TN_A_CODEC_DOWN_CONV,   il, "bias"));
+                        down.dwconv_w = get_tensor(mtmd_format(TN_A_CODEC_DOWN_DWCONV, il, "weight"));
+                        down.dwconv_b = get_tensor(mtmd_format(TN_A_CODEC_DOWN_DWCONV, il, "bias"));
+                        down.norm_w   = get_tensor(mtmd_format(TN_A_CODEC_DOWN_NORM,   il, "weight"));
+                        down.norm_b   = get_tensor(mtmd_format(TN_A_CODEC_DOWN_NORM,   il, "bias"));
+                        down.pw1_w    = get_tensor(mtmd_format(TN_A_CODEC_DOWN_PW1,    il, "weight"));
+                        down.pw1_b    = get_tensor(mtmd_format(TN_A_CODEC_DOWN_PW1,    il, "bias"));
+                        down.pw2_w    = get_tensor(mtmd_format(TN_A_CODEC_DOWN_PW2,    il, "weight"));
+                        down.pw2_b    = get_tensor(mtmd_format(TN_A_CODEC_DOWN_PW2,    il, "bias"));
+                        down.gamma    = get_tensor(mtmd_format(TN_A_CODEC_DOWN_GAMMA,  il));
+                    }
+                    c2w.tfm_output_norm_w = get_tensor(mtmd_format(TN_A_CODEC_PRE_NORM, "weight"));
+                    if (hparams.n_layer != mtmd_graph_fish_s2_spkenc::n_tfm_layer) {
+                        throw std::runtime_error(mtmd_format("%s: fish_s2_spkenc expects %d transformer layers\n", __func__, mtmd_graph_fish_s2_spkenc::n_tfm_layer));
+                    }
+                    // VQ: search with the normalized codebooks, subtract the codec decoder's out_proj tables
+                    c2w.quant_first_in_w      = get_tensor(mtmd_format(TN_A_CODEC_VQ_FIRST_IN, "weight"));
+                    c2w.quant_first_in_b      = get_tensor(mtmd_format(TN_A_CODEC_VQ_FIRST_IN, "bias"));
+                    c2w.quant_first_cb_norm_w = get_tensor(mtmd_format(TN_A_CODEC_VQ_FIRST_CB, "weight"));
+                    c2w.quant_rest_in_w       = get_tensor(mtmd_format(TN_A_CODEC_VQ_REST_IN,  "weight"));
+                    c2w.quant_rest_in_b       = get_tensor(mtmd_format(TN_A_CODEC_VQ_REST_IN,  "bias"));
+                    c2w.quant_rest_cb_norm_w  = get_tensor(mtmd_format(TN_A_CODEC_VQ_REST_CB,  "weight"));
+                    c2w.quant_first_cb_w      = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_FIRST_CB, "weight"));
+                    c2w.quant_rest_cb_w       = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_REST_CB,  "weight"));
+
+                    // codes -> backbone rows, same tables as fish_s2_gen
+                    model.gen_code_embd_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_EMBD,     "weight"));
+                    model.gen_code_out_embd_w = get_tensor(mtmd_format(TN_A_GEN_CODE_OUT_EMBD, "weight"));
+                } break;
             case PROJECTOR_TYPE_POCKETTTS_SPKENC:
                 {
                     load_seanet(model.seanet, false);
@@ -2428,25 +2797,7 @@ struct mtmd_model_loader {
 
                     // mimi decoder
                     model.gen_quant_out_w = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_OUT, "weight"));
-                    model.gen_upsample_w  = get_tensor(mtmd_format(TN_A_GEN_WAV_UPSAMPLE, "weight"));
-                    load_seanet(model.seanet, true);
-                    model.gen_tfm_layers.resize(hparams.n_layer);
-                    for (int il = 0; il < hparams.n_layer; il++) {
-                        auto & layer = model.gen_tfm_layers[il];
-                        const char * p = "a.gen.wav.tfm";
-                        layer.ln_1_w    = get_tensor(mtmd_format(TN_LN_1,        p, il, "weight"));
-                        layer.ln_1_b    = get_tensor(mtmd_format(TN_LN_1,        p, il, "bias"));
-                        layer.q_w       = get_tensor(mtmd_format(TN_ATTN_Q,      p, il, "weight"));
-                        layer.k_w       = get_tensor(mtmd_format(TN_ATTN_K,      p, il, "weight"));
-                        layer.v_w       = get_tensor(mtmd_format(TN_ATTN_V,      p, il, "weight"));
-                        layer.o_w       = get_tensor(mtmd_format(TN_ATTN_OUTPUT, p, il, "weight"));
-                        layer.ls_1_w    = get_tensor(mtmd_format(TN_LS_1,        p, il, "weight"));
-                        layer.ln_2_w    = get_tensor(mtmd_format(TN_LN_2,        p, il, "weight"));
-                        layer.ln_2_b    = get_tensor(mtmd_format(TN_LN_2,        p, il, "bias"));
-                        layer.ff_up_w   = get_tensor(mtmd_format(TN_FFN_UP,      p, il, "weight"));
-                        layer.ff_down_w = get_tensor(mtmd_format(TN_FFN_DOWN,    p, il, "weight"));
-                        layer.ls_2_w    = get_tensor(mtmd_format(TN_LS_2,        p, il, "weight"));
-                    }
+                    load_mimi_decoder(hparams.n_layer);
 
                     for (int64_t i = 0; i < gguf_get_n_tensors(ctx_gguf.get()); ++i) {
                         const char * name = gguf_get_tensor_name(ctx_gguf.get(), i);
@@ -2467,6 +2818,43 @@ struct mtmd_model_loader {
                     if (!model.gen_voices.empty()) {
                         LOG_INF("%s: %zu predefined voices\n", __func__, model.gen_voices.size());
                     }
+                } break;
+            case PROJECTOR_TYPE_MOSHI:
+                {
+                    // streaming mimi encoder, its RVQ, then the backbone embeddings of the input codes
+                    load_seanet(model.seanet, false);
+                    model.downsample_w = get_tensor(mtmd_format(TN_A_DOWNSAMPLE_CONV, "weight"));
+                    auto & c2w = model.c2w;
+                    c2w.quant_first_in_w = get_tensor(mtmd_format(TN_A_CODEC_VQ_FIRST_IN, "weight"));
+                    c2w.quant_first_cb_w = get_tensor(mtmd_format(TN_A_CODEC_VQ_FIRST_CB, "weight"));
+                    c2w.quant_rest_in_w  = get_tensor(mtmd_format(TN_A_CODEC_VQ_REST_IN,  "weight"));
+                    c2w.quant_rest_cb_w  = get_tensor(mtmd_format(TN_A_CODEC_VQ_REST_CB,  "weight"));
+                    model.mm_a_code_embd = get_tensor(mtmd_format(TN_MM_A_CODE_EMBD, "weight"));
+                    if (model.mm_a_code_embd->ne[2] != c2w.quant_rest_cb_w->ne[2] + 1) {
+                        throw std::runtime_error(mtmd_format("%s: the input code embeddings do not match the codebooks\n", __func__));
+                    }
+                } break;
+            case PROJECTOR_TYPE_MOSHI_GEN:
+                {
+                    // depformer, the generic loop above loaded the a.gen.code.blk.* tensors (per-step weights on dim 2)
+                    model.gen_code_proj_in_w  = get_tensor(mtmd_format(TN_A_GEN_CODE_PROJ_IN,  "weight"));
+                    model.gen_code_tok_embd_w = get_tensor(mtmd_format(TN_A_GEN_CODE_TOK_EMBD, "weight"));
+                    model.gen_code_embd_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_EMBD,     "weight"));
+                    model.gen_code_head_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_HEAD,     "weight"));
+                    model.gen_code_out_embd_w = get_tensor(mtmd_format(TN_A_GEN_CODE_OUT_EMBD, "weight"));
+                    const int64_t n_q = model.gen_code_head_w->ne[2];
+                    if (model.gen_code_embd_w->ne[2] != n_q - 1 || model.gen_code_out_embd_w->ne[2] != n_q ||
+                            model.gen_code_proj_in_w->ne[2] > n_q || (int64_t) n_q > mtmd_graph_moshi_gen::n_q_max) {
+                        throw std::runtime_error(mtmd_format("%s: invalid depformer tensors\n", __func__));
+                    }
+
+                    // RVQ decode, then the mimi decoder
+                    auto & c2w = model.c2w;
+                    c2w.quant_first_out_w = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_FIRST_OUT, "weight"));
+                    c2w.quant_first_cb_w  = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_FIRST_CB,  "weight"));
+                    c2w.quant_rest_out_w  = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_REST_OUT,  "weight"));
+                    c2w.quant_rest_cb_w   = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_REST_CB,   "weight"));
+                    load_mimi_decoder(mtmd_graph_moshi_gen::mimi_n_layer);
                 } break;
             case PROJECTOR_TYPE_LFM3A_GEN:
                 {
@@ -2543,6 +2931,378 @@ struct mtmd_model_loader {
 
                     // code2wav: RVQ codes -> raw PCM, lives in the same ctx as code_predictor
                     load_code2wav(true);
+
+                    // reference encoder, absent from files converted before it was added
+                    model.ref_quant_rest_cb = get_tensor(mtmd_format(TN_A_GEN_ENC_QUANT_REST_CB, "weight"), false);
+                    if (model.ref_quant_rest_cb) {
+                        load_seanet(model.seanet, false);
+                        model.downsample_w = get_tensor(mtmd_format(TN_A_DOWNSAMPLE_CONV, "weight"));
+                        for (int il = 0; ; il++) {
+                            const char * p = "a.gen.enc.tfm";
+                            ggml_tensor * ln_1_w = get_tensor(mtmd_format(TN_LN_1, p, il, "weight"), false);
+                            if (!ln_1_w) {
+                                break;
+                            }
+                            mtmd_layer layer;
+                            layer.ln_1_w    = ln_1_w;
+                            layer.ln_1_b    = get_tensor(mtmd_format(TN_LN_1,        p, il, "bias"));
+                            layer.q_w       = get_tensor(mtmd_format(TN_ATTN_Q,      p, il, "weight"));
+                            layer.k_w       = get_tensor(mtmd_format(TN_ATTN_K,      p, il, "weight"));
+                            layer.v_w       = get_tensor(mtmd_format(TN_ATTN_V,      p, il, "weight"));
+                            layer.o_w       = get_tensor(mtmd_format(TN_ATTN_OUTPUT, p, il, "weight"));
+                            layer.ls_1_w    = get_tensor(mtmd_format(TN_LS_1,        p, il, "weight"));
+                            layer.ln_2_w    = get_tensor(mtmd_format(TN_LN_2,        p, il, "weight"));
+                            layer.ln_2_b    = get_tensor(mtmd_format(TN_LN_2,        p, il, "bias"));
+                            layer.ff_up_w   = get_tensor(mtmd_format(TN_FFN_UP,      p, il, "weight"));
+                            layer.ff_down_w = get_tensor(mtmd_format(TN_FFN_DOWN,    p, il, "weight"));
+                            layer.ls_2_w    = get_tensor(mtmd_format(TN_LS_2,        p, il, "weight"));
+                            model.ref_enc_layers.push_back(layer);
+                        }
+                        model.ref_quant_first_in_w = get_tensor(mtmd_format(TN_A_GEN_ENC_QUANT_FIRST_IN, "weight"));
+                        model.ref_quant_first_cb   = get_tensor(mtmd_format(TN_A_GEN_ENC_QUANT_FIRST_CB, "weight"));
+                        model.ref_quant_rest_in_w  = get_tensor(mtmd_format(TN_A_GEN_ENC_QUANT_REST_IN,  "weight"));
+
+                        // the codes index the code predictor tables, see build_ref_encoder()
+                        const int64_t n_acoustic = model.ref_quant_rest_cb->ne[2];
+                        if (model.ref_enc_layers.empty() ||
+                                n_acoustic != model.gen_code_head_w->ne[2] ||
+                                n_acoustic > model.gen_code_embd_w->ne[2] ||
+                                model.ref_quant_first_cb->ne[1] > model.gen_code_out_embd_w->ne[1] ||
+                                model.ref_quant_rest_cb->ne[1]  > model.gen_code_embd_w->ne[1]) {
+                            throw std::runtime_error(mtmd_format("%s: qwen3tts: unexpected reference encoder shape\n", __func__));
+                        }
+                    }
+                } break;
+            case PROJECTOR_TYPE_ZONOS3_GEN:
+                {
+                    model.gen_code_head_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_HEAD,     "weight"));
+                    model.gen_code_out_embd_w = get_tensor(mtmd_format(TN_A_GEN_CODE_OUT_EMBD, "weight"));
+                    if (model.gen_code_out_embd_w->ne[1] % mtmd_graph_zonos3_gen::n_codebooks != 0 ||
+                            model.gen_code_head_w->ne[1] != model.gen_code_out_embd_w->ne[1]) {
+                        throw std::runtime_error(mtmd_format("%s: zonos3: unexpected codebook table shape\n", __func__));
+                    }
+
+                    // voice.<name>: the voice rows of the prompt
+                    for (int64_t i = 0; i < gguf_get_n_tensors(ctx_gguf.get()); ++i) {
+                        const char * name = gguf_get_tensor_name(ctx_gguf.get(), i);
+                        if (strncmp(name, "voice.", 6) != 0) {
+                            continue;
+                        }
+                        const ggml_tensor * t = ggml_get_tensor(ctx_meta.get(), name);
+                        if (t->type != GGML_TYPE_F32 || ggml_n_dims(t) > 2 || t->ne[0] != model.gen_code_out_embd_w->ne[0]) {
+                            throw std::runtime_error(mtmd_format("%s: invalid voice tensor %s\n", __func__, name));
+                        }
+                        auto & embd = model.gen_voices[name + 6].rows;
+                        embd.resize(ggml_nelements(t));
+                        fin.seekg(tensor_offset.at(name), std::ios::beg);
+                        if (!fin.read(reinterpret_cast<char *>(embd.data()), ggml_nbytes(t))) {
+                            throw std::runtime_error(mtmd_format("%s: failed to read %s\n", __func__, name));
+                        }
+                    }
+                    LOG_INF("%s: %zu predefined voices\n", __func__, model.gen_voices.size());
+
+                    // ZAC codec decoder
+                    auto & z = model.zonos3;
+                    const std::string p = "a.gen.wav";
+                    auto has = [&](const std::string & name) {
+                        return gguf_find_tensor(ctx_gguf.get(), name.c_str()) >= 0;
+                    };
+                    auto load_convnext = [&](const std::string & q) {
+                        mtmd_zonos3_wav::convnext b;
+                        b.dw_w   = get_tensor(q + ".dw.weight");
+                        b.dw_b   = get_tensor(q + ".dw.bias");
+                        b.norm_w = get_tensor(q + ".norm.weight");
+                        b.norm_b = get_tensor(q + ".norm.bias");
+                        b.pw1_w  = get_tensor(q + ".pw1.weight");
+                        b.pw1_b  = get_tensor(q + ".pw1.bias");
+                        b.pw2_w  = get_tensor(q + ".pw2.weight");
+                        b.pw2_b  = get_tensor(q + ".pw2.bias");
+                        return b;
+                    };
+                    z.sem_table = get_tensor(p + ".sem.table");
+                    z.sem_bias  = get_tensor(p + ".sem.bias");
+                    for (int i = 0; has(mtmd_format("%s.sem.%d.dw.weight", p.c_str(), i)); i++) {
+                        z.sem.push_back(load_convnext(p + ".sem." + std::to_string(i)));
+                    }
+                    z.sem_out_w = get_tensor(p + ".sem.out.weight");
+                    z.sem_out_b = get_tensor(p + ".sem.out.bias");
+                    z.res_table = get_tensor(p + ".res.table");
+                    z.res_bias  = get_tensor(p + ".res.bias");
+                    for (int s = 0; has(mtmd_format("%s.stage.%d.in.weight", p.c_str(), s)); s++) {
+                        const std::string q = p + ".stage." + std::to_string(s);
+                        mtmd_zonos3_wav::stage st;
+                        st.in_w  = get_tensor(q + ".in.weight");
+                        st.out_w = get_tensor(q + ".out.weight", false);
+                        for (int il = 0; has(mtmd_format("%s.blk.%d.qkv.weight", q.c_str(), il)); il++) {
+                            const std::string b = q + ".blk." + std::to_string(il);
+                            mtmd_zonos3_wav::layer l;
+                            l.norm1_w    = get_tensor(b + ".norm1.weight");
+                            l.norm1_b    = get_tensor(b + ".norm1.bias");
+                            l.qkv_w      = get_tensor(b + ".qkv.weight");
+                            l.wo_w       = get_tensor(b + ".wo.weight");
+                            l.attn_scale = get_tensor(b + ".attn_scale");
+                            l.norm2_w    = get_tensor(b + ".norm2.weight");
+                            l.norm2_b    = get_tensor(b + ".norm2.bias");
+                            l.ffn1_w     = get_tensor(b + ".ffn1.weight");
+                            l.ffn2_w     = get_tensor(b + ".ffn2.weight");
+                            l.ffn_scale  = get_tensor(b + ".ffn_scale");
+                            st.layers.push_back(l);
+                        }
+                        z.stages.push_back(std::move(st));
+                    }
+                    for (int i = 0; has(mtmd_format("%s.head.%d.dw.weight", p.c_str(), i)); i++) {
+                        z.head.push_back(load_convnext(p + ".head." + std::to_string(i)));
+                    }
+                    z.head_norm_w = get_tensor(p + ".head.norm.weight");
+                    z.head_norm_b = get_tensor(p + ".head.norm.bias");
+                    z.head_out_w  = get_tensor(p + ".head.out.weight");
+                    z.head_out_b  = get_tensor(p + ".head.out.bias");
+                    if (z.stages.size() != mtmd_graph_zonos3_gen::n_stages || z.sem.empty() || z.head.empty() ||
+                            z.head_out_w->ne[1] != mtmd_graph_zonos3_gen::n_fft[0] + mtmd_graph_zonos3_gen::n_fft[1] + 4) {
+                        throw std::runtime_error(mtmd_format("%s: zonos3: unexpected codec decoder layout\n", __func__));
+                    }
+
+                    // read on the host
+                    auto read_host = [&](const std::string & name, std::vector<float> & dst) -> const ggml_tensor * {
+                        const ggml_tensor * t = ggml_get_tensor(ctx_meta.get(), name.c_str());
+                        if (!t || t->type != GGML_TYPE_F32 || ggml_n_dims(t) != 2) {
+                            throw std::runtime_error(mtmd_format("%s: invalid or missing tensor %s\n", __func__, name.c_str()));
+                        }
+                        dst.resize(ggml_nelements(t));
+                        fin.seekg(tensor_offset.at(name), std::ios::beg);
+                        if (!fin.read(reinterpret_cast<char *>(dst.data()), ggml_nbytes(t))) {
+                            throw std::runtime_error(mtmd_format("%s: failed to read %s\n", __func__, name.c_str()));
+                        }
+                        return t;
+                    };
+                    const ggml_tensor * mixer = read_host(p + ".mixer.weight", z.mixer);
+                    const ggml_tensor * rs    = read_host(p + ".resample.weight", z.resample);
+                    if (mixer->ne[1] != 2 || rs->ne[1] != mtmd_graph_zonos3_gen::rs_new ||
+                            rs->ne[0] < mtmd_graph_zonos3_gen::rs_orig || (rs->ne[0] - mtmd_graph_zonos3_gen::rs_orig) % 2 != 0) {
+                        throw std::runtime_error(mtmd_format("%s: zonos3: unexpected mixer or resampler shape\n", __func__));
+                    }
+                    z.fir_kernel    = mixer->ne[0];
+                    z.rs_new        = rs->ne[1];
+                    z.rs_kernel_len = rs->ne[0];
+                } break;
+            case PROJECTOR_TYPE_YUE2_GEN:
+                {
+                    auto & y = model.yue2;
+                    y.inp_w = get_tensor("a.gen.nar.inp.weight");
+                    y.inp_b = get_tensor("a.gen.nar.inp.bias");
+                    y.out_w = get_tensor("a.gen.nar.out.weight");
+                    y.out_b = get_tensor("a.gen.nar.out.bias");
+                    if (y.inp_w->ne[0] != mtmd_graph_yue2_gen::n_latent || y.out_w->ne[1] != mtmd_graph_yue2_gen::n_latent ||
+                            y.inp_w->ne[1] != hparams.n_embd || y.out_w->ne[0] != hparams.n_embd) {
+                        throw std::runtime_error(mtmd_format("%s: yue2: unexpected latent projection shape\n", __func__));
+                    }
+
+                    auto read_host = [&](const std::string & name, std::vector<float> & dst, int64_t ne0, int64_t ne1) {
+                        const ggml_tensor * t = ggml_get_tensor(ctx_meta.get(), name.c_str());
+                        if (!t || t->type != GGML_TYPE_F32 || t->ne[0] != ne0 || t->ne[1] != ne1 || ggml_n_dims(t) > 2) {
+                            throw std::runtime_error(mtmd_format("%s: invalid or missing tensor %s\n", __func__, name.c_str()));
+                        }
+                        dst.resize(ggml_nelements(t));
+                        fin.seekg(tensor_offset.at(name), std::ios::beg);
+                        if (!fin.read(reinterpret_cast<char *>(dst.data()), ggml_nbytes(t))) {
+                            throw std::runtime_error(mtmd_format("%s: failed to read %s\n", __func__, name.c_str()));
+                        }
+                    };
+                    const int64_t n_embd = hparams.n_embd;
+                    read_host("a.gen.nar.time.0.weight", y.time0_w, mtmd_graph_yue2_gen::n_freq, n_embd);
+                    read_host("a.gen.nar.time.0.bias",   y.time0_b, n_embd, 1);
+                    read_host("a.gen.nar.time.2.weight", y.time2_w, n_embd, n_embd);
+                    read_host("a.gen.nar.time.2.bias",   y.time2_b, n_embd, 1);
+
+                    // the tile cropping in mtmd_gen_wav_yue2() depends on the total stride
+                    load_snake_vae();
+                    const auto & vae = model.snake_vae;
+                    if (vae.ratio() != mtmd_graph_yue2_gen::vae_ratio || vae.n_latent() != mtmd_graph_yue2_gen::n_latent ||
+                            vae.out_w->ne[2] != mtmd_graph_yue2_gen::n_channels) {
+                        throw std::runtime_error(mtmd_format("%s: yue2: unexpected VAE decoder layout\n", __func__));
+                    }
+                } break;
+            case PROJECTOR_TYPE_VOXCPM2_GEN:
+                {
+                    // generic a.gen.code.blk.* tensors are the LocDiT layers, LocEnc has the same hparams
+                    using g = mtmd_graph_voxcpm2_gen;
+                    auto & v = model.voxcpm2;
+                    v.rope_factors = get_tensor("a.gen.rope_factors");
+
+                    v.enc_layers.resize(hparams.n_layer);
+                    for (int il = 0; il < hparams.n_layer; il++) {
+                        auto & layer = v.enc_layers[il];
+                        const char * p = "a.gen.enc";
+                        layer.ln_1_w    = get_tensor(mtmd_format(TN_LN_1,          p, il, "weight"));
+                        layer.q_w       = get_tensor(mtmd_format(TN_ATTN_Q,        p, il, "weight"));
+                        layer.k_w       = get_tensor(mtmd_format(TN_ATTN_K,        p, il, "weight"));
+                        layer.v_w       = get_tensor(mtmd_format(TN_ATTN_V,        p, il, "weight"));
+                        layer.o_w       = get_tensor(mtmd_format(TN_ATTN_OUTPUT,   p, il, "weight"));
+                        layer.ln_2_w    = get_tensor(mtmd_format(TN_LN_2,          p, il, "weight"));
+                        layer.ff_gate_w = get_tensor(mtmd_format(TN_FFN_GATE,      p, il, "weight"));
+                        layer.ff_up_w   = get_tensor(mtmd_format(TN_FFN_UP,        p, il, "weight"));
+                        layer.ff_down_w = get_tensor(mtmd_format(TN_FFN_DOWN,      p, il, "weight"));
+                    }
+                    v.enc_special = get_tensor("a.gen.enc.special_token");
+                    v.enc_in_w    = get_tensor("a.gen.enc.in_proj.weight");
+                    v.enc_in_b    = get_tensor("a.gen.enc.in_proj.bias");
+                    v.enc_norm_w  = get_tensor("a.gen.enc.post_ln.weight");
+                    v.enc_to_lm_w = get_tensor("a.gen.enc_to_lm.weight");
+                    v.enc_to_lm_b = get_tensor("a.gen.enc_to_lm.bias");
+
+                    v.dit_in_w     = get_tensor("a.gen.dit.in_proj.weight");
+                    v.dit_in_b     = get_tensor("a.gen.dit.in_proj.bias");
+                    v.dit_cond_w   = get_tensor("a.gen.dit.cond_proj.weight");
+                    v.dit_cond_b   = get_tensor("a.gen.dit.cond_proj.bias");
+                    v.dit_out_w    = get_tensor("a.gen.dit.out_proj.weight");
+                    v.dit_out_b    = get_tensor("a.gen.dit.out_proj.bias");
+                    v.time0_w      = get_tensor("a.gen.dit.time_mlp.0.weight");
+                    v.time0_b      = get_tensor("a.gen.dit.time_mlp.0.bias");
+                    v.time1_w      = get_tensor("a.gen.dit.time_mlp.1.weight");
+                    v.time1_b      = get_tensor("a.gen.dit.time_mlp.1.bias");
+                    v.lm_to_dit_w  = get_tensor("a.gen.lm_to_dit.weight");
+                    v.lm_to_dit_b  = get_tensor("a.gen.lm_to_dit.bias");
+                    v.res_to_dit_w = get_tensor("a.gen.res_to_dit.weight");
+                    v.res_to_dit_b = get_tensor("a.gen.res_to_dit.bias");
+
+                    v.fsq_in_w    = get_tensor("a.gen.fsq.in.weight");
+                    v.fsq_in_b    = get_tensor("a.gen.fsq.in.bias");
+                    v.fsq_out_w   = get_tensor("a.gen.fsq.out.weight");
+                    v.fsq_out_b   = get_tensor("a.gen.fsq.out.bias");
+                    v.fusion_w    = get_tensor("a.gen.fusion.weight");
+                    v.fusion_b    = get_tensor("a.gen.fusion.bias");
+                    v.stop_proj_w = get_tensor("a.gen.stop_proj.weight");
+                    v.stop_proj_b = get_tensor("a.gen.stop_proj.bias");
+                    v.stop_head_w = get_tensor("a.gen.stop_head.weight");
+
+                    const std::string p = "a.gen.vae";
+                    v.dec_in_dw_w = get_tensor(p + ".conv_in_dw.weight");
+                    v.dec_in_dw_b = get_tensor(p + ".conv_in_dw.bias");
+                    v.dec_in_w    = get_tensor(p + ".conv_in.weight");
+                    v.dec_in_b    = get_tensor(p + ".conv_in.bias");
+                    int64_t ratio = 1;
+                    for (int b = 0; gguf_find_tensor(ctx_gguf.get(), mtmd_format("%s.blk.%d.up.weight", p.c_str(), b).c_str()) >= 0; b++) {
+                        const std::string q = p + ".blk." + std::to_string(b);
+                        mtmd_code2wav::dac_block blk;
+                        blk.snake_alpha = get_tensor(q + ".snake.alpha");
+                        blk.snake_beta  = get_tensor(q + ".snake.beta");
+                        blk.conv_w      = get_tensor(q + ".up.weight");
+                        blk.conv_b      = get_tensor(q + ".up.bias");
+                        for (int r = 0; r < 3; r++) {
+                            blk.res.push_back(load_dac_res(q + ".res." + std::to_string(r)));
+                        }
+                        ratio *= blk.conv_w->ne[0] / 2;
+                        v.dec_sr_scale.push_back(get_tensor(q + ".sr_scale"));
+                        v.dec_sr_bias.push_back(get_tensor(q + ".sr_bias"));
+                        v.dec.push_back(std::move(blk));
+                    }
+                    v.dec_post_alpha = get_tensor(p + ".post_snake.alpha");
+                    v.dec_post_beta  = get_tensor(p + ".post_snake.beta");
+                    v.dec_out_w      = get_tensor(p + ".conv_out.weight");
+                    v.dec_out_b      = get_tensor(p + ".conv_out.bias");
+
+                    // the graphs hard-code these shapes
+                    if (v.rope_factors->ne[0] != g::head_dim / 2 || v.dit_in_w->ne[0] != g::n_latent ||
+                            v.dec_in_dw_w->ne[2] != g::n_latent || ratio != g::dec_ratio || v.dec_out_w->ne[2] != 1 ||
+                            model.layers.empty() || model.layers[0].q_w->ne[1] != (int64_t) g::head_dim * hparams.n_head) {
+                        throw std::runtime_error(mtmd_format("%s: voxcpm2: unexpected tensor shapes\n", __func__));
+                    }
+                } break;
+            case PROJECTOR_TYPE_VOXCPM2_SPKENC:
+                {
+                    using g = mtmd_graph_voxcpm2_gen;
+                    auto & v = model.voxcpm2;
+                    const std::string p = "a.vae.enc";
+                    v.enc_conv_in_w = get_tensor(p + ".conv_in.weight");
+                    v.enc_conv_in_b = get_tensor(p + ".conv_in.bias");
+                    int64_t hop = 1;
+                    for (int b = 0; gguf_find_tensor(ctx_gguf.get(), mtmd_format("%s.blk.%d.down.weight", p.c_str(), b).c_str()) >= 0; b++) {
+                        const std::string q = p + ".blk." + std::to_string(b);
+                        mtmd_code2wav::dac_block blk;
+                        for (int r = 0; r < 3; r++) {
+                            blk.res.push_back(load_dac_res(q + ".res." + std::to_string(r)));
+                        }
+                        blk.snake_alpha = get_tensor(q + ".snake.alpha");
+                        blk.snake_beta  = get_tensor(q + ".snake.beta");
+                        blk.conv_w      = get_tensor(q + ".down.weight");
+                        blk.conv_b      = get_tensor(q + ".down.bias");
+                        hop *= blk.conv_w->ne[0] / 2;
+                        v.enc.push_back(std::move(blk));
+                    }
+                    v.enc_mu_w = get_tensor(p + ".fc_mu.weight");
+                    v.enc_mu_b = get_tensor(p + ".fc_mu.bias");
+                    if (hop * g::n_patch != hparams.audio_samples_per_token() || v.enc_mu_w->ne[2] != g::n_latent) {
+                        throw std::runtime_error(mtmd_format("%s: voxcpm2: unexpected AudioVAE encoder layout\n", __func__));
+                    }
+                } break;
+            case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
+                {
+                    // generic a.gen.code.* tensors (depth decoder layers, position_embd, post_ln) are loaded above
+                    using g = mtmd_graph_music3_gen;
+                    model.gen_code_proj_in_w  = get_tensor(mtmd_format(TN_A_GEN_CODE_PROJ_IN,  "weight"));
+                    model.gen_code_embd_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_EMBD,     "weight"));
+                    model.gen_code_head_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_HEAD,     "weight"));
+                    model.gen_code_out_embd_w = get_tensor(mtmd_format(TN_A_GEN_CODE_OUT_EMBD, "weight"));
+                    // the depth decoder sees the backbone hidden, then one row per code (all but the last)
+                    const int64_t n_embd = hparams.n_embd;
+                    if (!model.post_ln_w || !model.position_embeddings || n_embd != hparams.projection_dim ||
+                            model.gen_code_proj_in_w->ne[0] != n_embd || model.gen_code_proj_in_w->ne[1] != n_embd ||
+                            model.gen_code_embd_w->ne[0] != n_embd || model.gen_code_head_w->ne[0] != n_embd ||
+                            model.gen_code_out_embd_w->ne[0] != n_embd || model.position_embeddings->ne[0] != n_embd ||
+                            model.gen_code_embd_w->ne[2] != model.gen_code_head_w->ne[2] ||
+                            model.gen_code_embd_w->ne[1] != model.gen_code_head_w->ne[1] ||
+                            model.position_embeddings->ne[1] < model.gen_code_head_w->ne[2] + 1) {
+                        throw std::runtime_error(mtmd_format("%s: minimax_music3: unexpected depth decoder layout\n", __func__));
+                    }
+
+                    auto & m = model.music3;
+                    m.cond_layer_w = get_tensor("a.gen.cond.layer_w");
+                    m.cond_w       = get_tensor("a.gen.cond.proj.weight");
+                    m.cond_b       = get_tensor("a.gen.cond.proj.bias");
+                    m.time_freq    = get_tensor("a.gen.flow.time_freq");
+                    m.time_in_w    = get_tensor("a.gen.flow.time_in.weight");
+                    m.time_in_b    = get_tensor("a.gen.flow.time_in.bias");
+                    m.time_out_w   = get_tensor("a.gen.flow.time_out.weight");
+                    m.time_out_b   = get_tensor("a.gen.flow.time_out.bias");
+                    m.pre_w        = get_tensor("a.gen.flow.pre.weight");
+                    m.proj_in_w    = get_tensor("a.gen.flow.proj_in.weight");
+                    m.proj_out_w   = get_tensor("a.gen.flow.proj_out.weight");
+                    m.post_w       = get_tensor("a.gen.flow.post.weight");
+                    for (int il = 0; gguf_find_tensor(ctx_gguf.get(), mtmd_format(TN_ATTN_Q, "a.gen.flow", il, "weight").c_str()) >= 0; il++) {
+                        const char * q = "a.gen.flow";
+                        mtmd_layer layer;
+                        layer.ln_1_w    = get_tensor(mtmd_format(TN_LN_1,        q, il, "weight"));
+                        layer.ln_1_b    = get_tensor(mtmd_format(TN_LN_1,        q, il, "bias"));
+                        layer.q_w       = get_tensor(mtmd_format(TN_ATTN_Q,      q, il, "weight"));
+                        layer.k_w       = get_tensor(mtmd_format(TN_ATTN_K,      q, il, "weight"));
+                        layer.v_w       = get_tensor(mtmd_format(TN_ATTN_V,      q, il, "weight"));
+                        layer.o_w       = get_tensor(mtmd_format(TN_ATTN_OUTPUT, q, il, "weight"));
+                        layer.ln_2_w    = get_tensor(mtmd_format(TN_LN_2,        q, il, "weight"));
+                        layer.ln_2_b    = get_tensor(mtmd_format(TN_LN_2,        q, il, "bias"));
+                        layer.ff_up_w   = get_tensor(mtmd_format(TN_FFN_UP,      q, il, "weight"));
+                        layer.ff_up_b   = get_tensor(mtmd_format(TN_FFN_UP,      q, il, "bias"));
+                        layer.ff_gate_w = get_tensor(mtmd_format(TN_FFN_GATE,    q, il, "weight"));
+                        layer.ff_gate_b = get_tensor(mtmd_format(TN_FFN_GATE,    q, il, "bias"));
+                        layer.ff_down_w = get_tensor(mtmd_format(TN_FFN_DOWN,    q, il, "weight"));
+                        layer.ff_down_b = get_tensor(mtmd_format(TN_FFN_DOWN,    q, il, "bias"));
+                        m.dit.push_back(layer);
+                    }
+
+                    load_snake_vae();
+                    const auto & vae = model.snake_vae;
+                    const int64_t n_dit_embd = m.proj_in_w->ne[1];
+                    const int64_t n_cond     = m.cond_w->ne[2];
+                    if (m.dit.empty() || m.cond_layer_w->ne[0] != model.gen_code_head_w->ne[2] + 1 ||
+                            m.cond_w->ne[0] != 3 || m.cond_w->ne[1] != hparams.n_embd ||
+                            m.pre_w->ne[0] != 2 * g::n_latent + n_cond || m.pre_w->ne[1] != m.pre_w->ne[0] ||
+                            m.proj_in_w->ne[0] != m.pre_w->ne[0] || m.proj_out_w->ne[0] != n_dit_embd || m.proj_out_w->ne[1] != g::n_latent ||
+                            m.post_w->ne[0] != g::n_latent || m.post_w->ne[1] != g::n_latent || m.cond_b->ne[0] != n_cond ||
+                            m.time_freq->ne[0] * 2 != m.time_in_w->ne[0] || m.time_in_w->ne[1] != m.time_out_w->ne[0] ||
+                            m.time_in_b->ne[0] != m.time_in_w->ne[1] || m.time_out_w->ne[1] != n_dit_embd || m.time_out_b->ne[0] != n_dit_embd ||
+                            n_dit_embd % g::dit_d_head != 0 ||
+                            vae.ratio() != g::vae_ratio || vae.n_latent() * 2 != g::n_latent || vae.out_w->ne[2] != 1) {
+                        throw std::runtime_error(mtmd_format("%s: minimax_music3: unexpected DiT or vocoder layout\n", __func__));
+                    }
                 } break;
             case PROJECTOR_TYPE_DRAMA3_GEN:
                 {
@@ -2561,6 +3321,20 @@ struct mtmd_model_loader {
                     model.gen_code_head_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_HEAD,     "weight")); // merged 3D, codebooks 1..
                     model.gen_code_out_embd_w = get_tensor(mtmd_format(TN_A_GEN_CODE_OUT_EMBD, "weight")); // backbone rows of the semantic band
                     load_code2wav(false);
+                } break;
+            case PROJECTOR_TYPE_FISH_S2_GEN:
+                {
+                    // generic a.gen.code.blk.* tensors are loaded by the loop above
+                    model.gen_code_tok_embd_w = get_tensor(mtmd_format(TN_A_GEN_CODE_TOK_EMBD, "weight")); // fast AR input
+                    model.gen_code_head_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_HEAD,     "weight")); // fast AR head, residual codebooks
+                    model.gen_code_norm_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_NORM,     "weight"));
+                    model.gen_code_embd_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_EMBD,     "weight")); // merged 3D, backbone input tables
+                    model.gen_code_out_embd_w = get_tensor(mtmd_format(TN_A_GEN_CODE_OUT_EMBD, "weight")); // backbone rows of the semantic band
+                    load_code2wav(false);
+                    // the graph reads model.layers[0]
+                    if (hparams.n_layer < 1) {
+                        throw std::runtime_error(mtmd_format("%s: fish_s2_gen has no fast AR layer\n", __func__));
+                    }
                 } break;
             case PROJECTOR_TYPE_CHATTERBOX:
                 {
@@ -2817,6 +3591,19 @@ struct mtmd_model_loader {
                         }
                     }
                 } break;
+            case PROJECTOR_TYPE_ZONOS3_SPKENC:
+                {
+                    // the graph reads the tensors by name
+                    for (int64_t i = 0; i < gguf_get_n_tensors(ctx_gguf.get()); ++i) {
+                        const char * name = gguf_get_tensor_name(ctx_gguf.get(), i);
+                        if (strncmp(name, "a.spk.", 6) == 0) {
+                            model.zonos3_spk[name] = get_tensor(name);
+                        }
+                    }
+                    if (!model.zonos3_spk.count("a.spk.proj.weight") || !model.zonos3_spk.count("a.spk.linear.weight")) {
+                        throw std::runtime_error(mtmd_format("%s: zonos3: missing speaker encoder tensors\n", __func__));
+                    }
+                } break;
             case PROJECTOR_TYPE_CHATTERBOX_SPKENC:
                 {
                     auto & c = model.cbx;
@@ -2881,6 +3668,112 @@ struct mtmd_model_loader {
                             model.cbx_tensors[name] = get_tensor(name);
                         }
                     }
+                } break;
+            case PROJECTOR_TYPE_KOKORO:
+                {
+                    // the graphs and the host code look the tensors up by name, see models/kokoro.cpp
+                    // a voice is a table of style rows, the audio pipeline reads the row it needs
+                    for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta.get()); t; t = ggml_get_next_tensor(ctx_meta.get(), t)) {
+                        const std::string name = t->name;
+                        if (name.rfind("a.gen.", 0) == 0) {
+                            model.cbx_tensors[name] = get_tensor(name);
+                        } else if (name.rfind("voice.", 0) == 0) {
+                            model.cbx_tensors[name] = get_tensor(name);
+                            model.gen_voices[name.substr(6)] = {};
+                        }
+                    }
+                    LOG_INF("%s: %zu predefined voices\n", __func__, model.gen_voices.size());
+                } break;
+            case PROJECTOR_TYPE_TINY_VOCA:
+                {
+                    using g = mtmd_graph_tiny_voca;
+                    auto & tv = model.tiny_voca;
+                    tv.dur_conv1_w = get_tensor("a.gen.dur.conv1.weight");
+                    tv.dur_conv1_b = get_tensor("a.gen.dur.conv1.bias");
+                    tv.dur_norm1_w = get_tensor("a.gen.dur.norm1.weight");
+                    tv.dur_norm1_b = get_tensor("a.gen.dur.norm1.bias");
+                    tv.dur_conv2_w = get_tensor("a.gen.dur.conv2.weight");
+                    tv.dur_conv2_b = get_tensor("a.gen.dur.conv2.bias");
+                    tv.dur_norm2_w = get_tensor("a.gen.dur.norm2.weight");
+                    tv.dur_norm2_b = get_tensor("a.gen.dur.norm2.bias");
+                    tv.dur_out_w   = get_tensor("a.gen.dur.out.weight");
+                    tv.dur_out_b   = get_tensor("a.gen.dur.out.bias");
+                    tv.harm_w      = get_tensor("a.gen.voc.harmonic.weight");
+                    tv.harm_b      = get_tensor("a.gen.voc.harmonic.bias");
+                    tv.noise_w     = get_tensor("a.gen.voc.noise.weight");
+                    tv.noise_b     = get_tensor("a.gen.voc.noise.bias");
+                    if (tv.harm_w->ne[0] != hparams.n_embd || tv.harm_w->ne[1] != g::n_cep_causal + g::n_cep_anti + g::harm_steps ||
+                            tv.noise_w->ne[0] != hparams.n_embd || tv.noise_w->ne[1] != g::n_noise_cep + g::noise_steps ||
+                            tv.dur_out_w->ne[1] != 2) {
+                        throw std::runtime_error(mtmd_format("%s: tiny_voca: unexpected head shape\n", __func__));
+                    }
+
+                    auto read_host = [&](const std::string & name, std::vector<float> & dst, int64_t ne0, int64_t ne1) {
+                        const ggml_tensor * t = ggml_get_tensor(ctx_meta.get(), name.c_str());
+                        if (!t || t->type != GGML_TYPE_F32 || t->ne[0] != ne0 || t->ne[1] != ne1 || ggml_n_dims(t) > 2) {
+                            throw std::runtime_error(mtmd_format("%s: invalid or missing tensor %s\n", __func__, name.c_str()));
+                        }
+                        dst.resize(ggml_nelements(t));
+                        fin.seekg(tensor_offset.at(name), std::ios::beg);
+                        if (!fin.read(reinterpret_cast<char *>(dst.data()), ggml_nbytes(t))) {
+                            throw std::runtime_error(mtmd_format("%s: failed to read %s\n", __func__, name.c_str()));
+                        }
+                    };
+                    const int64_t n_embd = hparams.n_embd;
+                    const ggml_tensor * tok = ggml_get_tensor(ctx_meta.get(), "a.gen.tok_embd.weight");
+                    if (!tok) {
+                        throw std::runtime_error(mtmd_format("%s: tiny_voca: missing token table\n", __func__));
+                    }
+                    read_host("a.gen.token_class",         tv.token_class,    tok->ne[1], 1);
+                    read_host("a.gen.frame_pos.weight",    tv.frame_pos_w,    3, n_embd);
+                    read_host("a.gen.frame_pos.bias",      tv.frame_pos_b,    n_embd, 1);
+                    read_host("a.gen.prosody_head.weight", tv.prosody_head_w, n_embd, 3);
+                    read_host("a.gen.prosody_head.bias",   tv.prosody_head_b, 3, 1);
+                    read_host("a.gen.prosody_proj.weight", tv.prosody_proj_w, 3, n_embd);
+                    read_host("a.gen.prosody_proj.bias",   tv.prosody_proj_b, n_embd, 1);
+
+                    // unknown-word model, optional
+                    if (const ggml_tensor * e = ggml_get_tensor(ctx_meta.get(), "a.gen.g2p.embed.weight")) {
+                        const ggml_tensor * hh = ggml_get_tensor(ctx_meta.get(), "a.gen.g2p.gru.weight_hh_l0");
+                        if (!hh || e->ne[1] != g::n_g2p_letter + 1) {
+                            throw std::runtime_error(mtmd_format("%s: tiny_voca: unexpected g2p model\n", __func__));
+                        }
+                        const int64_t w = e->ne[0];
+                        const int64_t h = hh->ne[0];
+                        tv.g2p_n_width  = w;
+                        tv.g2p_n_hidden = h;
+                        read_host("a.gen.g2p.embed.weight", tv.g2p_embd, w, g::n_g2p_letter + 1);
+                        read_host("a.gen.g2p.slot",         tv.g2p_slot, w, g::n_g2p_slot);
+                        for (int il = 0; ggml_get_tensor(ctx_meta.get(), ("a.gen.g2p.gru.weight_ih_l" + std::to_string(il)).c_str()); il++) {
+                            for (const char * dir : { "", "_reverse" }) {
+                                const std::string sfx = "_l" + std::to_string(il) + dir;
+                                mtmd_tiny_voca::g2p_gru gru;
+                                read_host("a.gen.g2p.gru.weight_ih" + sfx, gru.w_ih, il == 0 ? w : 2 * h, 3 * h);
+                                read_host("a.gen.g2p.gru.weight_hh" + sfx, gru.w_hh, h, 3 * h);
+                                read_host("a.gen.g2p.gru.bias_ih"   + sfx, gru.b_ih, 3 * h, 1);
+                                read_host("a.gen.g2p.gru.bias_hh"   + sfx, gru.b_hh, 3 * h, 1);
+                                tv.g2p_layers.push_back(std::move(gru));
+                            }
+                        }
+                        read_host("a.gen.g2p.out.weight", tv.g2p_out_w, 2 * h, g::n_g2p_symbol + 1);
+                        read_host("a.gen.g2p.out.bias",   tv.g2p_out_b, g::n_g2p_symbol + 1, 1);
+                    }
+
+                    // read by the audio pipeline: input tables and voices (encoder row, then frame row)
+                    for (const char * name : { "a.gen.tok_embd.weight", "a.gen.stress_embd.weight" }) {
+                        model.cbx_tensors[name] = get_tensor(name);
+                    }
+                    for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta.get()); t; t = ggml_get_next_tensor(ctx_meta.get(), t)) {
+                        const std::string name = t->name;
+                        if (name.rfind("voice.", 0) == 0) {
+                            if (t->ne[0] != 2 * n_embd) {
+                                throw std::runtime_error(mtmd_format("%s: tiny_voca: unexpected voice shape\n", __func__));
+                            }
+                            model.cbx_tensors[name] = get_tensor(name);
+                            model.gen_voices[name.substr(6)] = {};
+                        }
+                    }
+                    LOG_INF("%s: %zu predefined voices\n", __func__, model.gen_voices.size());
                 } break;
             case PROJECTOR_TYPE_SOPRANO:
                 {
@@ -2991,6 +3884,10 @@ struct mtmd_model_loader {
                     model.mm_img_end        = get_tensor(TN_MM_IMG_END);
                     model.image_newline     = get_tensor(TN_IMAGE_NEWLINE);
                     model.view_seperator    = get_tensor(TN_IMAGE_SEPERATOR, false);
+                    // the position embedding is resampled on the host as F32
+                    if (!model.position_embeddings || model.position_embeddings->type != GGML_TYPE_F32) {
+                        throw std::runtime_error(mtmd_format("%s: HunyuanVL requires an F32 %s\n", __func__, mtmd_format(TN_POS_EMBD, prefix).c_str()));
+                    }
                 } break;
             case PROJECTOR_TYPE_JANUS_PRO:
                 {
@@ -3722,6 +4619,10 @@ mtmd_models mtmd_model_load(const char * fname, const mtmd_model_params & params
         model->hparams.custom_image_max_tokens = params.image_max_tokens;
         loader.load_hparams(*model, modality);
         loader.load_tensors(*model, buft, params.no_alloc);
+        const std::string & def = model->hparams.gen_default_voice;
+        if (!def.empty() && model->gen_voices.find(def) == model->gen_voices.end()) {
+            throw std::runtime_error(mtmd_format("%s: default voice \"%s\" is not a predefined voice\n", __func__, def.c_str()));
+        }
         return model;
     };
 
@@ -3793,6 +4694,7 @@ int mtmd_model::n_output_tokens_x(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_MINICPMV4_6:
         case PROJECTOR_TYPE_MINICPMV4_7:
         case PROJECTOR_TYPE_MINICPM_OCR_1_0:
+        case PROJECTOR_TYPE_INKLING2V:
             return img->nx() / (params.patch_size * params.n_merge);
         case PROJECTOR_TYPE_DEEPSEEKOCR:
         case PROJECTOR_TYPE_DEEPSEEKOCR2:
@@ -3827,6 +4729,7 @@ int mtmd_model::n_output_tokens_y(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_MINICPMV4_6:
         case PROJECTOR_TYPE_MINICPMV4_7:
         case PROJECTOR_TYPE_MINICPM_OCR_1_0:
+        case PROJECTOR_TYPE_INKLING2V:
             return img->ny() / (params.patch_size * params.n_merge);
         default:
             break;
@@ -3918,6 +4821,7 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
                 n_patches = x_patch * y_patch;
             } break;
         case PROJECTOR_TYPE_STEP3VL:
+        case PROJECTOR_TYPE_INKLING2V:
             {
                 int x_patch = img->nx() / (params.patch_size * params.n_merge);
                 int y_patch = img->ny() / (params.patch_size * params.n_merge);
@@ -4006,6 +4910,10 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
                 const int64_t fold = hparams.audio_samples_per_token();
                 n_patches = (int) ((img->nx() + fold - 1) / fold);
             } break;
+        case PROJECTOR_TYPE_VIBEVOICE_ASR:
+            {
+                n_patches = (img->nx() - img->audio_n_ctx) / hparams.audio_samples_per_token();
+            } break;
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_QWEN2A:
@@ -4028,6 +4936,13 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
                     // divide by 2 because of nn.AvgPool1d(2, stride=2)
                     n_patches /= 2;
                 }
+            } break;
+        case PROJECTOR_TYPE_HIGGS_AUDIO:
+            {
+                // stride-2 conv1d, avgpool(2), stride-2 depthwise conv1d
+                n_patches = (img->nx() + 1) / 2;
+                n_patches = n_patches / 2;
+                n_patches = (n_patches + 1) / 2;
             } break;
         case PROJECTOR_TYPE_QWEN3A:
             {
@@ -4126,6 +5041,7 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
                 n_patches = ((img->nx() + ws - 1) / ws) * (ws / ds);
             } break;
         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
+        case PROJECTOR_TYPE_ZONOS3_SPKENC:
             {
                 // pooling gives one speaker embedding, whatever the clip length is
                 n_patches = 1;
@@ -4138,9 +5054,20 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
         case PROJECTOR_TYPE_LFM3A_GEN:
         case PROJECTOR_TYPE_DRAMA3_GEN:
+        case PROJECTOR_TYPE_ZONOS3_GEN:
+        case PROJECTOR_TYPE_YUE2_GEN:
+        case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
+        case PROJECTOR_TYPE_FISH_S2_GEN:
+        case PROJECTOR_TYPE_VOXCPM2_GEN:
             {
                 // one hidden-state vector fed back to the talker per call
                 n_patches = 1;
+            } break;
+        case PROJECTOR_TYPE_FISH_S2_SPKENC:
+        case PROJECTOR_TYPE_VOXCPM2_SPKENC:
+            {
+                // one backbone row per codec frame, the preprocessor pads to whole frames
+                n_patches = (int) (img->nx() / hparams.audio_samples_per_token());
             } break;
         case PROJECTOR_TYPE_POCKETTTS_SPKENC:
             {
@@ -4151,6 +5078,16 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_POCKETTTS_GEN:
             {
                 // one latent per call for GEN_CODE, GEN_WAV sizes its input from the caller
+                n_patches = 1;
+            } break;
+        case PROJECTOR_TYPE_MOSHI:
+            {
+                // one row per codebook and frame, then the rows of the initial codes, see mtmd_graph_moshi
+                const int n_q = (int) mm_a_code_embd->ne[2];
+                n_patches = n_q * (img->nx() / mtmd_graph_moshi::n_samples_per_frame + 1);
+            } break;
+        case PROJECTOR_TYPE_MOSHI_GEN:
+            {
                 n_patches = 1;
             } break;
         case PROJECTOR_TYPE_GRANITE4_VISION:
@@ -4224,7 +5161,7 @@ int mtmd_model::n_mmproj_embd() const {
         case PROJECTOR_TYPE_MLP_NORM:
             return mm_3_b->ne[0];
         case PROJECTOR_TYPE_MINICPMV:
-            return mm_model_proj->ne[0];
+            return mm_model_proj->ne[1];
         case PROJECTOR_TYPE_MINICPMV4_6:
         case PROJECTOR_TYPE_MINICPMV4_7:
         case PROJECTOR_TYPE_MINICPM_OCR_1_0:
@@ -4234,6 +5171,7 @@ int mtmd_model::n_mmproj_embd() const {
         case PROJECTOR_TYPE_MINIMAX_M3:
             return mm_merger_fc2_b->ne[0];
         case PROJECTOR_TYPE_MUSE_GLIMMER:
+        case PROJECTOR_TYPE_INKLING2V:
             return mm_2_w->ne[1];
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
@@ -4265,6 +5203,8 @@ int mtmd_model::n_mmproj_embd() const {
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
             return mm_fc_w->ne[1];
+        case PROJECTOR_TYPE_VIBEVOICE_ASR:
+            return mm_1_w->ne[1];
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_VOXTRAL_RT:
@@ -4282,6 +5222,7 @@ int mtmd_model::n_mmproj_embd() const {
         case PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE:
             return mm_fc_w->ne[1];
         case PROJECTOR_TYPE_QWEN3A:
+        case PROJECTOR_TYPE_HIGGS_AUDIO:
             return mm_2_w->ne[1];
         case PROJECTOR_TYPE_GLMA:
         case PROJECTOR_TYPE_LFM2:
@@ -4318,14 +5259,32 @@ int mtmd_model::n_mmproj_embd() const {
             return mm_2_w->ne[1];
         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
             return mm_fc_w->ne[2];
+        case PROJECTOR_TYPE_ZONOS3_SPKENC:
+            return zonos3_spk.at("a.spk.proj.weight")->ne[1];
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
         case PROJECTOR_TYPE_LFM3A_GEN:
         case PROJECTOR_TYPE_DRAMA3_GEN:
+        case PROJECTOR_TYPE_ZONOS3_GEN:
+        case PROJECTOR_TYPE_FISH_S2_GEN:
+        case PROJECTOR_TYPE_FISH_S2_SPKENC:
+            return gen_code_out_embd_w->ne[0];
+        case PROJECTOR_TYPE_YUE2_GEN:
+            return yue2.inp_w->ne[1];
+        case PROJECTOR_TYPE_VOXCPM2_GEN:
+            return voxcpm2.enc_to_lm_w->ne[1];
+        case PROJECTOR_TYPE_VOXCPM2_SPKENC:
+            // the rows come from LocEnc of the gen model, see voxcpm2_ref_encode()
+            return hparams.projection_dim;
+        case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
             return gen_code_out_embd_w->ne[0];
         case PROJECTOR_TYPE_POCKETTTS_SPKENC:
             return spk_proj_w->ne[1];
         case PROJECTOR_TYPE_POCKETTTS_GEN:
             return gen_input_lin_w->ne[1];
+        case PROJECTOR_TYPE_MOSHI:
+            return mm_a_code_embd->ne[0];
+        case PROJECTOR_TYPE_MOSHI_GEN:
+            return gen_code_out_embd_w->ne[0];
         case PROJECTOR_TYPE_CHATTERBOX:
             // talker width, carried by the speech table
             return cbx_tensors.at("a.gen.code.out_embd.weight")->ne[0];
@@ -4333,6 +5292,8 @@ int mtmd_model::n_mmproj_embd() const {
             // talker conditioning rows, the speaker projection carries their width
             return cbx_tensors.at("a.cenc.spkr_enc.weight")->ne[1];
         case PROJECTOR_TYPE_SOPRANO:
+        case PROJECTOR_TYPE_KOKORO:
+        case PROJECTOR_TYPE_TINY_VOCA:
             return hparams.projection_dim;
         case PROJECTOR_TYPE_PARAKEET:
             return mm_1_w->ne[1];

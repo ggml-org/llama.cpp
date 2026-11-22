@@ -712,8 +712,8 @@ static bool ggml_vk_buffer_host_read_direct(const vk_buffer & buf) {
     // If the device is not an UMA device the memory is host-accessible through rebar. While writing
     // through PCIe is sufficient fast reading back data from PCIe is slower than going through
     // the HW device to host copy path.
-    // AMD UMA: uncached host-visible memory is write-combined, CPU reads are slow
-    const bool slow_host_read = buf->device->vendor_id == VK_VENDOR_ID_AMD &&
+    // UMA: uncached host-visible memory is write-combined, CPU reads are slow (except Nvidia, based on benchmarks)
+    const bool slow_host_read = buf->device->vendor_id != VK_VENDOR_ID_NVIDIA &&
                                 !(buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached);
     return (buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) && buf->device->uma && !slow_host_read;
 }
@@ -809,9 +809,25 @@ void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, size_t siz
         return;
     }
 
+    // vkCmdFillBuffer requires a 4-byte aligned offset and size, so write the unaligned ends from the matching bytes of c
+    const size_t end           = offset + size;
+    const size_t begin_aligned = std::min(GGML_PAD(offset, 4), end);
+    const size_t end_aligned   = std::max(end - end % 4, begin_aligned);
+
+    const uint8_t * c_bytes = (const uint8_t *) &c;
+    if (begin_aligned > offset) {
+        ggml_vk_buffer_write(dst, offset, c_bytes + offset % 4, begin_aligned - offset);
+    }
+    if (end > end_aligned) {
+        ggml_vk_buffer_write(dst, end_aligned, c_bytes, end - end_aligned);
+    }
+    if (end_aligned == begin_aligned) {
+        return;
+    }
+
     std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
     vk_context subctx = ggml_vk_begin_sync_ctx(dst->device, dst->device->transfer_queue->cmd_pool);
-    subctx->s->buffer->buf.fillBuffer(dst->buffer, offset, size, c);
+    subctx->s->buffer->buf.fillBuffer(dst->buffer, begin_aligned, end_aligned - begin_aligned, c);
     ggml_vk_submit_sync(dst->device, subctx);
 }
 

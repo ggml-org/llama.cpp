@@ -1,5 +1,4 @@
 #include "llama.h"
-#include "../src/llama-ext.h"
 
 #include "arg.h"
 #include "common.h"

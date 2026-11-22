@@ -294,6 +294,8 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_MODELS_AUTOLOAD");
     preset.unset_option("LLAMA_ARG_CONNECT");
     preset.unset_option("LLAMA_ARG_CONNECT_CODE");
+    preset.unset_option("LLAMA_ARG_MCP_SERVERS_CONFIG");
+    preset.unset_option("LLAMA_ARG_MCP_SERVERS_JSON");
     if (unset_model_args) {
         preset.unset_option("LLAMA_ARG_MODEL");
         preset.unset_option("LLAMA_ARG_SHARD");
@@ -2056,7 +2058,7 @@ void server_models_routes::init_routes() {
             // main instance
             auto res = std::make_unique<server_http_res>();
             json props = {
-                // TODO: add support for this on web UI
+                // TODO: add support for this in Llama Chat
                 {"role",                 "router"},
                 {"max_instances",        params.models_max},
                 {"models_autoload",      params.models_autoload},
@@ -2656,7 +2658,8 @@ server_http_proxy::server_http_proxy(
         const std::map<std::string, uploaded_file> & files,
         const std::function<bool()> should_stop,
         int32_t timeout_read,
-        int32_t timeout_write
+        int32_t timeout_write,
+        const std::string & resolved_addr
         ) {
     // shared between reader and writer threads
     auto cli  = std::make_shared<httplib::ClientImpl>(host, port);
@@ -2671,7 +2674,11 @@ server_http_proxy::server_http_proxy(
     }
 
     // setup Client
-    cli->set_follow_location(true);
+    if (!resolved_addr.empty()) {
+        // pin the checked address; a redirect could lead to an unchecked one
+        cli->set_direct_hostname_addr_map({{host, resolved_addr}});
+    }
+    cli->set_follow_location(resolved_addr.empty());
     cli->set_connection_timeout(timeout_read, 0); // use --timeout value instead of hardcoded 5 s
     cli->set_write_timeout(timeout_read, 0); // reversed for cli (client) vs srv (server)
     cli->set_read_timeout(timeout_write, 0);
