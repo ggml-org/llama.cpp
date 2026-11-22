@@ -17,7 +17,7 @@ trap cleanup EXIT
 
 wait_for_port() {
     local port=$1
-    for _ in {1..600}; do
+    for _ in {1..2400}; do
         if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
             exec 3>&-
             exec 3<&-
@@ -28,7 +28,13 @@ wait_for_port() {
     return 1
 }
 
-"$server" --device CPU --host 127.0.0.1 --port "$port_a" >"$test_dir/server-a.log" 2>&1 &
+# NOTE: endpoint A must use a backend whose get_alloc_size() for GGML_OP_TOP_K
+# actually scales with nelements(src0) (e.g. Metal, CUDA) for the growing-src
+# alloc-size-cache regression check below to be meaningful. On a CPU-only backend
+# alloc_size defaults to ggml_nbytes(output) and does not depend on src at all, so
+# that check would pass trivially either way.
+# ref: https://github.com/ggml-org/llama.cpp/issues/30794
+"$server" --device "${TEST_RPC_DEVICE:-CPU}" --host 127.0.0.1 --port "$port_a" >"$test_dir/server-a.log" 2>&1 &
 pid_a=$!
 "$server" --device CPU --host 127.0.0.1 --port "$port_b" >"$test_dir/server-b.log" 2>&1 &
 pid_b=$!

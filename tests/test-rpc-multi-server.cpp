@@ -17,7 +17,7 @@ int main(int argc, char ** argv) {
     GGML_ASSERT(backend_b != nullptr);
 
     ggml_init_params params = {
-        /* .mem_size   = */ 3*ggml_tensor_overhead() + ggml_graph_overhead_custom(1, false),
+        /* .mem_size   = */ 10*ggml_tensor_overhead() + ggml_graph_overhead_custom(1, false),
         /* .mem_buffer = */ nullptr,
         /* .no_alloc   = */ true,
     };
@@ -61,6 +61,44 @@ int main(int argc, char ** argv) {
     // ask for the packed tensor first, so a cache keyed without nb[] holds the smaller size
     GGML_ASSERT(ggml_backend_buft_get_alloc_size(buft, packed)  >= ggml_nbytes(packed));
     GGML_ASSERT(ggml_backend_buft_get_alloc_size(buft, strided) >= ggml_nbytes(strided));
+
+    // A cached alloc_size for a small src must not be reused for a larger src of the
+    // same op/output-shape: the server-side allocation for TOP_K scales with
+    // nelements(src0), so a stale smaller cached size would cause a server-side
+    // buffer overrun.
+    // ref: https://github.com/ggml-org/llama.cpp/issues/30794
+    ggml_tensor * src_small = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 8);
+    ggml_tensor * top_k_small = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 4);
+    top_k_small->op = GGML_OP_TOP_K;
+    top_k_small->src[0] = src_small;
+
+    ggml_tensor * src_large = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4096*8);
+    ggml_tensor * top_k_large = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 4);
+    top_k_large->op = GGML_OP_TOP_K;
+    top_k_large->src[0] = src_large;
+
+    // baseline: learn the correct, uncached alloc_size for the large src. Use a
+    // distinct op_params value (which the Metal/CUDA get_alloc_size() for TOP_K
+    // ignores) so this hits a fresh cache entry rather than the one primed below,
+    // while still exercising the real backend's src-dependent size computation.
+    ggml_tensor * top_k_large_probe = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 4);
+    top_k_large_probe->op = GGML_OP_TOP_K;
+    top_k_large_probe->src[0] = src_large;
+    top_k_large_probe->op_params[0] = 1;
+    size_t size_large_uncached = ggml_backend_buft_get_alloc_size(buft, top_k_large_probe);
+
+    // prime the cache with the small src first, then ask again with a much larger src
+    // of the same op/output ne[]/nb[] - the second call must not reuse the stale,
+    // too-small cached size.
+    size_t size_small = ggml_backend_buft_get_alloc_size(buft, top_k_small);
+    size_t size_large = ggml_backend_buft_get_alloc_size(buft, top_k_large);
+    GGML_ASSERT(size_large >= size_large_uncached);
+    GGML_ASSERT(size_small <= size_large);
+
+    // a subsequent request with a src no larger than the recorded high-water mark
+    // must still hit the cache (and get a size that covers it).
+    size_t size_small_again = ggml_backend_buft_get_alloc_size(buft, top_k_small);
+    GGML_ASSERT(size_small_again >= size_small);
 
     ggml_free(ctx);
     ggml_backend_free(backend_b);
