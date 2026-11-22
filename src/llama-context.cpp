@@ -3113,6 +3113,7 @@ ggml_status llama_context::graph_compute(
     }
 
     copy_experts.reset();
+    copy_experts.gf = gf;
 
     auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
     if (status != GGML_STATUS_SUCCESS) {
@@ -3141,6 +3142,21 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
     const ggml_tensor * node = ggml_graph_node(graph, 0);
     if (node->op != GGML_OP_MUL_MAT_ID || node->src[0] != dst) {
         return false;
+    }
+
+    // the scheduler copies a weight once per graph, so a weight shared by several nodes (e.g. looped layers) needs all the experts
+    if (st.gf) {
+        for (int i = 0; i < ggml_graph_n_nodes(st.gf); i++) {
+            const ggml_tensor * other = ggml_graph_node(st.gf, i);
+            if (other == node) {
+                continue;
+            }
+            for (int j = 0; j < GGML_MAX_SRC; j++) {
+                if (other->src[j] == dst) {
+                    return false;
+                }
+            }
+        }
     }
 
     const ggml_tensor * ids = node->src[2];
