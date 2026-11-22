@@ -494,11 +494,16 @@ class DeepseekV2MTPModel(DeepseekV2Model):
             return None
         name, gen = titem
 
-        # MTP blocks are appended after the main layers.
+        # DeepSeek V3.2 appends the NextN/MTP block past num_hidden_layers
+        # (model.layers.61 -> blk.61 in the 62-block file).
         assert cls._n_main_layers is not None
         is_mtp = (m := re.match(r"model\.layers\.(\d+)\.", name)) is not None and int(m.group(1)) >= cls._n_main_layers
+
+        # --no-mtp: drop the appended NextN block entirely.
         if is_mtp and cls.no_mtp:
             return None
+        # --mtp: keep ONLY NextN-block tensors plus the shared embeddings/
+        # norm/lm_head (so the resulting GGUF carries just the draft head).
         if cls.mtp_only and not is_mtp and name not in cls.mtp_shared_tensors:
             return None
 
@@ -506,6 +511,8 @@ class DeepseekV2MTPModel(DeepseekV2Model):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
+
+        # NextN/MTP prediction layers
         if not self.no_mtp and (num_nextn_predict_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
             self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
 
@@ -535,6 +542,7 @@ class DeepseekV32Model(DeepseekV2MTPModel):
 class DeepseekV4Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK4
     supports_mtp_export = True
+    use_mtp_filename = True
     _skipped_mtp_tensors = 0
     _dsv4_main_layers: int | None = None
     _dsv4_nextn_layers: int = 0
@@ -909,19 +917,6 @@ class DeepseekV4Model(TextModel):
             return gguf.GGMLQuantizationType.BF16
 
         return False
-
-    def prepare_metadata(self, vocab_only: bool):
-        from_dir = self.fname_out.is_dir()
-        super().prepare_metadata(vocab_only=vocab_only)
-
-        if not self.mtp_only or not from_dir:
-            return
-
-        output_type: str = self.ftype.name.partition("_")[2]
-        fname_default: str = gguf.naming_convention(
-            self.metadata.name, self.metadata.basename, self.metadata.finetune,
-            self.metadata.version, size_label=None, output_type=output_type, model_type=None)
-        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
 
     def prepare_tensors(self):
         super().prepare_tensors()

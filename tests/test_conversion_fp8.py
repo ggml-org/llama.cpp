@@ -21,6 +21,7 @@ from safetensors.torch import save_file
 
 from conversion.base import LazyTorchTensor, gguf
 from conversion.deepseek import DeepseekV2Model
+from conversion.gigachat import GigaChat35Model
 from conversion.inkling2 import Inkling2Model, _E4M3, _E2M1
 from conversion.llama import LlamaModel
 from conversion.nemotron import NemotronHModel
@@ -313,6 +314,23 @@ class TestFP8Conversion(unittest.TestCase):
                         else:
                             result = self.convert(Qwen2MoeModel, tensors, **kwargs)
                             np.testing.assert_array_equal(result["blk.0.attn_q.scale"][1], [scale])
+
+    def test_gigachat35_recurrent_projections(self):
+        prefix = "model.layers.0.self_attn."
+        ba = torch.arange(32, dtype=torch.float32).reshape(8, 4).to(torch.float8_e4m3fn)
+        norm = torch.tensor([-1., 0., 0.5, 1.]).to(torch.float8_e4m3fn)
+        tensors = {
+            prefix + "in_proj_ba.weight": ba, prefix + "in_proj_ba.weight_scale": torch.tensor([0.5]),
+            prefix + "norm.weight": norm, prefix + "norm.weight_scale": torch.tensor([0.25]),
+        }
+        hparams = {"linear_num_key_heads": 2, "linear_num_value_heads": 4}
+        for eager in (False, True):
+            with self.subTest(eager=eager):
+                result = self.convert(GigaChat35Model, tensors, eager=eager, hparams_override=hparams)
+                for name, rows in (("ssm_beta", [0, 1, 4, 5]), ("ssm_alpha", [2, 3, 6, 7])):
+                    dtype, data = result[f"blk.0.{name}.weight"]
+                    np.testing.assert_array_equal(gguf.dequantize(data, dtype), ba.float()[rows].numpy() * 0.5)
+                np.testing.assert_array_equal(result["blk.0.ssm_norm.weight"][1], norm.float().numpy() * 0.25 + 1)
 
     def test_output_type_override(self):
         name = "model.layers.0.self_attn.q_proj.weight"

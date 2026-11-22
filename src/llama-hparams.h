@@ -175,7 +175,8 @@ struct llama_hparams {
     float    rope_scaling_alpha        = 0.0f;  // NTK-aware alpha for XDRoPE
 
     uint32_t n_ctx_orig_yarn;
-    float    rope_yarn_log_mul = 0.0f;
+    float    rope_yarn_log_mul     = 0.0f;
+    float    rope_yarn_log_mul_raw = 0.0f; // GGUF value before architecture-specific scaling [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]
 
     float    yarn_ext_factor  = -1.0f;
     float    yarn_attn_factor =  1.0f;

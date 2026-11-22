@@ -825,6 +825,8 @@ class MODEL_TENSOR(IntEnum):
     DENSE_2_OUT          = auto() # embeddinggemma 2_Dense
     DENSE_3_OUT          = auto() # embeddinggemma 3_Dense
     OUTPUT_NORM          = auto()
+    OUTPUT_NORM_GATE_UP   = auto()
+    OUTPUT_NORM_GATE_DOWN = auto()
     OUTPUT_RES_QUERY     = auto()
     HC_HEAD_FN           = auto()
     HC_HEAD_BASE         = auto()
@@ -832,8 +834,6 @@ class MODEL_TENSOR(IntEnum):
     HC_HEAD_NORM         = auto() # qwen4exp
     HC_HEAD_DOWN         = auto() # qwen4exp
     HC_HEAD_UP           = auto() # qwen4exp
-    OUTPUT_NORM_GATE_UP   = auto()
-    OUTPUT_NORM_GATE_DOWN = auto()
     ROPE_FREQS           = auto()
     ROPE_FACTORS_LONG    = auto()
     ROPE_FACTORS_SHORT   = auto()
@@ -1053,9 +1053,11 @@ class MODEL_TENSOR(IntEnum):
     ATTN_K_B             = auto()
     ATTN_V_B             = auto()
     ATTN_Q_A_NORM        = auto()
-    ATTN_Q_A_NORM_GATE_UP = auto()
+    ATTN_Q_A_NORM_GATE_UP   = auto()
     ATTN_Q_A_NORM_GATE_DOWN = auto()
     ATTN_KV_A_NORM       = auto()
+    ATTN_KV_A_NORM_GATE_UP   = auto()
+    ATTN_KV_A_NORM_GATE_DOWN = auto()
     ATTN_KV              = auto()
     ATTN_KV_NORM         = auto()
     ATTN_OUT_A           = auto()
@@ -1088,8 +1090,6 @@ class MODEL_TENSOR(IntEnum):
     ATTN_COMPRESSOR_WGATE = auto()
     ATTN_COMPRESSOR_APE  = auto()
     ATTN_COMPRESSOR_NORM = auto()
-    ATTN_KV_A_NORM_GATE_UP = auto()
-    ATTN_KV_A_NORM_GATE_DOWN = auto()
     FFN_SUB_NORM         = auto()
     ATTN_SUB_NORM        = auto()
     DEC_ATTN_NORM        = auto()
@@ -1551,11 +1551,11 @@ class MODEL_TENSOR(IntEnum):
     NEXTN_HNORM_GATE_DOWN  = auto()
     NEXTN_SHARED_HEAD_HEAD = auto()
     NEXTN_SHARED_HEAD_NORM = auto()
+    NEXTN_SHARED_HEAD_NORM_GATE_UP   = auto()
+    NEXTN_SHARED_HEAD_NORM_GATE_DOWN = auto()
     NEXTN_HC_HEAD_NORM     = auto()
     NEXTN_HC_HEAD_DOWN     = auto()
     NEXTN_HC_HEAD_UP       = auto()
-    NEXTN_SHARED_HEAD_NORM_GATE_UP   = auto()
-    NEXTN_SHARED_HEAD_NORM_GATE_DOWN = auto()
     # eagle3
     FC                     = auto()  # feature fusion layer
     D2T                    = auto()  # draft to target vocabulary mapping
@@ -2106,6 +2106,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ATTN_Q_A_NORM_GATE_UP:     "blk.{bid}.attn_q_a_norm_gate_up",
     MODEL_TENSOR.ATTN_Q_A_NORM_GATE_DOWN:   "blk.{bid}.attn_q_a_norm_gate_down",
     MODEL_TENSOR.ATTN_KV_A_NORM:            "blk.{bid}.attn_kv_a_norm",
+    MODEL_TENSOR.ATTN_KV_A_NORM_GATE_UP:    "blk.{bid}.attn_kv_a_norm_gate_up",
+    MODEL_TENSOR.ATTN_KV_A_NORM_GATE_DOWN:  "blk.{bid}.attn_kv_a_norm_gate_down",
     MODEL_TENSOR.ATTN_KV:                   "blk.{bid}.attn_kv",
     MODEL_TENSOR.ATTN_KV_NORM:              "blk.{bid}.attn_kv_a_norm",
     MODEL_TENSOR.ATTN_OUT_A:                "blk.{bid}.attn_output_a",
@@ -2138,8 +2140,6 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ATTN_COMPRESSOR_WGATE:     "blk.{bid}.attn_compressor_gate",
     MODEL_TENSOR.ATTN_COMPRESSOR_APE:       "blk.{bid}.attn_compressor_ape",
     MODEL_TENSOR.ATTN_COMPRESSOR_NORM:      "blk.{bid}.attn_compressor_norm",
-    MODEL_TENSOR.ATTN_KV_A_NORM_GATE_UP:    "blk.{bid}.attn_kv_a_norm_gate_up",
-    MODEL_TENSOR.ATTN_KV_A_NORM_GATE_DOWN:  "blk.{bid}.attn_kv_a_norm_gate_down",
     MODEL_TENSOR.ATTN_SUB_NORM:             "blk.{bid}.attn_sub_norm",
     MODEL_TENSOR.FFN_SUB_NORM:              "blk.{bid}.ffn_sub_norm",
     MODEL_TENSOR.DEC_ATTN_NORM:             "dec.blk.{bid}.attn_norm",
@@ -2644,11 +2644,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.NEXTN_HNORM_GATE_DOWN:     "blk.{bid}.nextn.hnorm_gate_down",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD:    "blk.{bid}.nextn.shared_head_head",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM:    "blk.{bid}.nextn.shared_head_norm",
+    MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM_GATE_UP:   "blk.{bid}.nextn.shared_head_norm_gate_up",
+    MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM_GATE_DOWN: "blk.{bid}.nextn.shared_head_norm_gate_down",
     MODEL_TENSOR.NEXTN_HC_HEAD_NORM:        "blk.{bid}.nextn.hc_head_norm",
     MODEL_TENSOR.NEXTN_HC_HEAD_DOWN:        "blk.{bid}.nextn.hc_head_down",
     MODEL_TENSOR.NEXTN_HC_HEAD_UP:          "blk.{bid}.nextn.hc_head_up",
-    MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM_GATE_UP:   "blk.{bid}.nextn.shared_head_norm_gate_up",
-    MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM_GATE_DOWN: "blk.{bid}.nextn.shared_head_norm_gate_down",
     MODEL_TENSOR.FC:                        "fc",
     MODEL_TENSOR.DSPARK_MARKOV_W1:          "markov_w1",
     MODEL_TENSOR.DSPARK_MARKOV_W2:          "markov_w2",

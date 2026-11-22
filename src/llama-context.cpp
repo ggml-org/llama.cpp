@@ -193,7 +193,7 @@ llama_context::llama_context(
     // delta-net rollback keeps one state and the inputs of the last ubatch; the gdn op replays the kept tokens before the new ones
     cparams.rs_replay = cparams.n_rs_seq > 0 && (
             model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_QWEN4EXP ||
-            model.arch == LLM_ARCH_CLOVER_MOE ||
+            model.arch == LLM_ARCH_CLOVER_MOE || model.arch == LLM_ARCH_GIGACHAT35 ||
             // KDA
             model.arch == LLM_ARCH_KIMI_K3 || model.arch == LLM_ARCH_KIMI_K31 || model.arch == LLM_ARCH_GLM5_NEXT ||
             model.arch == LLM_ARCH_BAILINGMOE3 || model.arch == LLM_ARCH_RAON1_MINI);

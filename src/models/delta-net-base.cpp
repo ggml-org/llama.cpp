@@ -50,6 +50,78 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
     return {output, new_state};
 }
 
+llm_graph_qkv llm_build_delta_net_base::build_recurrent_qkv(
+        ggml_tensor * conv_qkv_mix,
+        float         eps_norm,
+        int           il) {
+    const int64_t d_inner      = hparams.ssm_d_inner;
+    const int64_t n_seqs       = ubatch.n_seqs;
+    const int64_t head_k_dim   = hparams.ssm_d_state;
+    const int64_t num_k_heads  = hparams.ssm_n_group;
+    const int64_t num_v_heads  = hparams.ssm_dt_rank;
+    const int64_t head_v_dim   = d_inner / num_v_heads;
+    const int64_t n_seq_tokens = ubatch.n_seq_tokens;
+
+    int64_t qkv_dim = head_k_dim * num_k_heads * 2 + head_v_dim * num_v_heads;
+    int64_t nb1_qkv = ggml_row_size(conv_qkv_mix->type, qkv_dim);
+
+    ggml_tensor * q_conv = ggml_view_4d(ctx0, conv_qkv_mix, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
+            ggml_row_size(conv_qkv_mix->type, head_k_dim),
+            nb1_qkv,
+            nb1_qkv * n_seq_tokens,
+            0);
+
+    ggml_tensor * k_conv = ggml_view_4d(ctx0, conv_qkv_mix, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
+            ggml_row_size(conv_qkv_mix->type, head_k_dim),
+            nb1_qkv,
+            nb1_qkv * n_seq_tokens,
+            head_k_dim * num_k_heads * ggml_element_size(conv_qkv_mix));
+
+    ggml_tensor * v_conv = ggml_view_4d(ctx0, conv_qkv_mix, head_v_dim, num_v_heads, n_seq_tokens, n_seqs,
+            ggml_row_size(conv_qkv_mix->type, head_v_dim),
+            nb1_qkv,
+            nb1_qkv * n_seq_tokens,
+            ggml_row_size(conv_qkv_mix->type, 2 * head_k_dim * num_k_heads));
+
+    cb(q_conv, "q_conv", il);
+    cb(k_conv, "k_conv", il);
+    cb(v_conv, "v_conv", il);
+
+    if (model.arch == LLM_ARCH_GIGACHAT35 && model.split_mode() == LLAMA_SPLIT_MODE_TENSOR &&
+            num_k_heads == 1 && num_v_heads > 1) {
+        // Expand the single head before normalizing: the one-token view otherwise looks split inside the head.
+        auto repeat_head = [&](ggml_tensor * x) {
+            x = ggml_repeat_4d(ctx0, x, head_k_dim*num_v_heads, 1, n_seq_tokens, n_seqs);
+            x = ggml_reshape_4d(ctx0, x, head_k_dim, num_v_heads, n_seq_tokens, n_seqs);
+            return build_gdn_l2_norm(ctx0, x, eps_norm);
+        };
+        return { repeat_head(q_conv), repeat_head(k_conv), v_conv };
+    }
+
+    q_conv = build_gdn_l2_norm(ctx0, q_conv, eps_norm);
+    k_conv = build_gdn_l2_norm(ctx0, k_conv, eps_norm);
+
+    // TODO: avoid repeats for fused GDN, needs broadcast configuration for GDN op [TAG_GGML_GDN_BCAST]
+    if (num_k_heads != num_v_heads) {
+        GGML_ASSERT(num_v_heads % num_k_heads == 0);
+        int64_t repeat_factor = num_v_heads / num_k_heads;
+
+        // Insert the repeat dimension before the head index to keep each group together.
+        ggml_tensor * q_reshaped = ggml_reshape_4d(ctx0, q_conv, head_k_dim, 1, num_k_heads, n_seq_tokens * n_seqs);
+        ggml_tensor * k_reshaped = ggml_reshape_4d(ctx0, k_conv, head_k_dim, 1, num_k_heads, n_seq_tokens * n_seqs);
+
+        ggml_tensor * q_repeated =
+            ggml_repeat_4d(ctx0, q_reshaped, head_k_dim, repeat_factor, num_k_heads, n_seq_tokens * n_seqs);
+        ggml_tensor * k_repeated =
+            ggml_repeat_4d(ctx0, k_reshaped, head_k_dim, repeat_factor, num_k_heads, n_seq_tokens * n_seqs);
+
+        q_conv = ggml_reshape_4d(ctx0, q_repeated, head_k_dim, num_k_heads * repeat_factor, n_seq_tokens, n_seqs);
+        k_conv = ggml_reshape_4d(ctx0, k_repeated, head_k_dim, num_k_heads * repeat_factor, n_seq_tokens, n_seqs);
+    }
+
+    return { q_conv, k_conv, v_conv };
+}
+
 ggml_tensor * llm_build_delta_net_base::build_conv_state(
         llm_graph_input_rs * inp,
         ggml_tensor *        conv_states_all,
@@ -163,9 +235,15 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state_replay(
     }
     GGML_ASSERT(hist_rows->ne[0] == conv_states_all->ne[0] && hist_rows->ne[1] == n_seqs);
 
-    // channels first: [window | pending], the histories of a row one after the other
+    // GigaChat keeps each channel's history together so grouped Q, K and V split on whole heads.
+    // Other models store the window and pending tokens as consecutive columns, channels first.
+    const bool history_by_channel = model.arch == LLM_ARCH_GIGACHAT35;
     ggml_tensor * hist = nullptr;
-    if (n_blk == 1) {
+    if (history_by_channel) {
+        GGML_ASSERT(n_blk == 1);
+        hist = ggml_reshape_3d(ctx0, hist_rows, n_hist, channels, n_seqs);
+        hist = ggml_cont(ctx0, ggml_transpose(ctx0, hist));
+    } else if (n_blk == 1) {
         hist = ggml_reshape_3d(ctx0, hist_rows, channels, n_hist, n_seqs);
     } else {
         hist = ggml_reshape_4d(ctx0, hist_rows, channels, n_hist, n_blk, n_seqs);
@@ -188,11 +266,17 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state_replay(
 
     ggml_tensor * tail = ggml_view_3d(ctx0, cols, channels, n_dst, n_seqs, cols->nb[1], cols->nb[2],
             (n_conv + n_seq_tokens - n_dst)*cols->nb[1]);
-    // the rows as [channels, n_blk*n_hist, cells], so that the view of the ubatch cells keeps their strides (-sm tensor)
-    ggml_tensor * hist_all = ggml_reshape_3d(ctx0, conv_states_all, channels, n_blk*n_hist, conv_states_all->ne[1]);
-    ggml_tensor * hist_dst = ggml_view_3d(ctx0, hist_all, channels, n_dst, n_seqs, hist_all->nb[1], hist_all->nb[2],
-            kv_head*hist_all->nb[2] + blk*n_hist*hist_all->nb[1]);
-    ggml_build_forward_expand(gf, ggml_cpy(ctx0, tail, hist_dst));
+    if (history_by_channel) {
+        ggml_tensor * hist_dst = ggml_view_3d(ctx0, conv_states_all, n_dst, channels, n_seqs,
+                ggml_row_size(conv_states_all->type, n_hist), conv_states_all->nb[1], kv_head*conv_states_all->nb[1]);
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, ggml_transpose(ctx0, tail), hist_dst));
+    } else {
+        // the rows as [channels, n_blk*n_hist, cells], so that the view of the ubatch cells keeps their strides (-sm tensor)
+        ggml_tensor * hist_all = ggml_reshape_3d(ctx0, conv_states_all, channels, n_blk*n_hist, conv_states_all->ne[1]);
+        ggml_tensor * hist_dst = ggml_view_3d(ctx0, hist_all, channels, n_dst, n_seqs, hist_all->nb[1], hist_all->nb[2],
+                kv_head*hist_all->nb[2] + blk*n_hist*hist_all->nb[1]);
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, tail, hist_dst));
+    }
 
     return conv_input;
 }
@@ -282,61 +366,6 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn_replay(
     store_inputs();
 
     return output;
-}
-
-std::tuple<ggml_tensor *, ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_recurrent_qkv(
-        ggml_tensor * conv,
-        float         eps_norm,
-        int           il) {
-    const int64_t n_seqs       = ubatch.n_seqs;
-    const int64_t n_seq_tokens = ubatch.n_seq_tokens;
-    const int64_t head_k_dim   = hparams.ssm_d_state;
-    const int64_t num_k_heads  = hparams.ssm_n_group;
-    const int64_t num_v_heads  = hparams.ssm_dt_rank;
-    const int64_t head_v_dim   = hparams.ssm_d_inner / num_v_heads;
-
-    const int64_t key_dim = head_k_dim * num_k_heads;
-    const int64_t qkv_dim = 2 * key_dim + head_v_dim * num_v_heads;
-    const int64_t nb1_qkv = ggml_row_size(conv->type, qkv_dim);
-
-    ggml_tensor * q = ggml_view_4d(ctx0, conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
-            ggml_row_size(conv->type, head_k_dim), nb1_qkv, nb1_qkv * n_seq_tokens, 0);
-    ggml_tensor * k = ggml_view_4d(ctx0, conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
-            ggml_row_size(conv->type, head_k_dim), nb1_qkv, nb1_qkv * n_seq_tokens,
-            ggml_row_size(conv->type, key_dim));
-    ggml_tensor * v = ggml_view_4d(ctx0, conv, head_v_dim, num_v_heads, n_seq_tokens, n_seqs,
-            ggml_row_size(conv->type, head_v_dim), nb1_qkv, nb1_qkv * n_seq_tokens,
-            ggml_row_size(conv->type, 2 * key_dim));
-
-    cb(q, "q_conv", il);
-    cb(k, "k_conv", il);
-    cb(v, "v_conv", il);
-
-    q = build_gdn_l2_norm(ctx0, q, eps_norm);
-    k = build_gdn_l2_norm(ctx0, k, eps_norm);
-
-    // if head keys and value keys are different, repeat to force tensors into matching shapes
-    // TODO: avoid repeats for fused GDN, needs broadcast configuration for GDN op [TAG_GGML_GDN_BCAST]
-    if (num_k_heads != num_v_heads) {
-        GGML_ASSERT(num_v_heads % num_k_heads == 0);
-        const int64_t repeat_factor = num_v_heads / num_k_heads;
-
-        // repeat interleave: reshape to (repeat part, 1, remaining part...), do repeat, then reshape back
-        ggml_tensor * q_reshaped = ggml_reshape_4d(ctx0, q,
-                head_k_dim, 1, num_k_heads, n_seq_tokens * n_seqs);
-        ggml_tensor * k_reshaped = ggml_reshape_4d(ctx0, k,
-                head_k_dim, 1, num_k_heads, n_seq_tokens * n_seqs);
-
-        ggml_tensor * q_repeated = ggml_repeat_4d(ctx0, q_reshaped,
-                head_k_dim, repeat_factor, num_k_heads, n_seq_tokens * n_seqs);
-        ggml_tensor * k_repeated = ggml_repeat_4d(ctx0, k_reshaped,
-                head_k_dim, repeat_factor, num_k_heads, n_seq_tokens * n_seqs);
-
-        q = ggml_reshape_4d(ctx0, q_repeated, head_k_dim, num_v_heads, n_seq_tokens, n_seqs);
-        k = ggml_reshape_4d(ctx0, k_repeated, head_k_dim, num_v_heads, n_seq_tokens, n_seqs);
-    }
-
-    return {q, k, v};
 }
 
 ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(

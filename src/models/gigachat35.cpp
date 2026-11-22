@@ -1,18 +1,11 @@
 #include "models.h"
 #include "llama-memory-recurrent.h"
 
-#include <cmath>
-#include <stdexcept>
-
 void llama_model_gigachat35::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_NORM_GATE_RANK, hparams.n_norm_gate_rank);
-    if (hparams.n_norm_gate_rank == 0) {
-        throw std::runtime_error("GigaChat35: norm gate rank must be positive");
-    }
     ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT, hparams.n_layer_dense_lead, false);
 
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
     if (hparams.n_layer_nextn >= hparams.n_layer_all) {
         throw std::runtime_error("GigaChat35: nextn_predict_layers must be smaller than block_count");
     }
@@ -31,21 +24,24 @@ void llama_model_gigachat35::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,               hparams.n_expert_shared, false);
-    ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale, false);
+    ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm, false);
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func);
     if (hparams.expert_gating_func < LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX ||
         hparams.expert_gating_func > LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS) {
         throw std::runtime_error("GigaChat35: unsupported expert gating function");
     }
+    // the reference router runs in FP32 and normalizes the weights with sum + 1e-20
+    hparams.expert_router_f32       = true;
+    hparams.expert_weights_norm_eps = 1e-20f;
     for (uint32_t il = hparams.n_layer_dense_lead; il < hparams.n_layer(); ++il) {
         if (hparams.n_expert_used(il) == 0 || hparams.n_expert_used(il) > hparams.n_expert) {
             throw std::runtime_error("GigaChat35: active expert count must be positive and not exceed expert count");
         }
     }
 
-    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,   hparams.swiglu_clamp_exp,   hparams.n_layer_all, false);
-    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP, hparams.swiglu_clamp_shexp, hparams.n_layer_all, false);
+    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,   hparams.swiglu_clamp_exp,   hparams.n_layer_all);
+    ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP, hparams.swiglu_clamp_shexp, hparams.n_layer_all);
 
     ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
     ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
@@ -72,11 +68,7 @@ void llama_model_gigachat35::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key_or_arr(LLM_KV_ATTENTION_RECURRENT_LAYERS, hparams.is_recr_impl, hparams.n_layer_all);
 
-    if (ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL, hparams.rope_yarn_log_mul, false)) {
-        // [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]
-        // cancel the factor from the convert script
-        hparams.rope_yarn_log_mul /= 0.1f;
-    }
+    hparams.rope_yarn_log_mul = hparams.rope_yarn_log_mul_raw / 0.1f;
 
     switch (hparams.n_layer()) {
         case 40: type = LLM_TYPE_432B_A28B; break;
@@ -104,14 +96,7 @@ void llama_model_gigachat35::load_arch_tensors(llama_model_loader & ml) {
         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, TENSOR_DUPLICATED);
     }
 
-    const int64_t n_ff_exp   = hparams.n_ff_exp();
     const int64_t n_ff_shexp = hparams.n_ff_shexp;
-    if (n_ff_exp <= 0) {
-        throw std::runtime_error("GigaChat35: expert feed-forward length must be positive");
-    }
-    if (n_ff_shexp <= 0) {
-        throw std::runtime_error("GigaChat35: shared expert feed-forward length must be positive");
-    }
 
     const int64_t n_embd_head_k_mla      = hparams.n_embd_head_k_mla();
     const int64_t n_embd_head_v_mla      = hparams.n_embd_head_v_mla();
@@ -128,7 +113,6 @@ void llama_model_gigachat35::load_arch_tensors(llama_model_loader & ml) {
     }
 
     const int64_t head_k_dim = hparams.ssm_d_state;
-    // assumes linear_key_head_dim == linear_value_head_dim, ssm_inner_size would disagree otherwise
     const int64_t head_v_dim = hparams.ssm_d_state;
     const int64_t n_k_heads  = hparams.ssm_n_group;
     const int64_t n_v_heads  = hparams.ssm_dt_rank;
@@ -194,11 +178,12 @@ void llama_model_gigachat35::load_arch_tensors(llama_model_loader & ml) {
         }
 
         if (il < (int) hparams.n_layer_dense_lead || is_mtp) {
+            const int64_t n_ff = hparams.n_ff(il);
             layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", il), { n_embd, n_ff }, flags);
             layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", il), { n_embd, n_ff }, flags);
             layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", il), { n_ff,   n_embd }, flags);
         } else {
-            // MoE branch
+            const int64_t n_ff_exp = hparams.n_ff_exp(il);
             layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,    "weight", il), { n_embd, n_expert }, flags);
             layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias",   il), { n_expert }, flags);
             layer.ffn_down_exps   = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS,   "weight", il), { n_ff_exp, n_embd, n_expert }, flags);
@@ -241,8 +226,6 @@ std::unique_ptr<llm_graph_context> llama_model_gigachat35::build_arch_graph(cons
 }
 
 llama_model_gigachat35::graph::graph(const llm_graph_params & params) : llm_build_delta_net_base(params) {
-    GGML_ASSERT(hparams.is_mla());
-
     const float kq_scale = get_kq_scale();
 
     ggml_tensor * inpL = build_inp_embd(model.tok_embd);
@@ -336,12 +319,13 @@ llama_model_gigachat35::graph_mtp::graph_mtp(const llm_graph_params & params) : 
                 "nextn_layer_offset out of range [0, n_layer_nextn)");
     const auto & layer = model.layers[il];
 
-    GGML_ASSERT(layer.nextn.eh_proj && "GigaChat35 MTP block missing nextn.eh_proj");
-    GGML_ASSERT(layer.nextn.enorm   && "GigaChat35 MTP block missing nextn.enorm");
-    GGML_ASSERT(layer.nextn.hnorm   && "GigaChat35 MTP block missing nextn.hnorm");
+    GGML_ASSERT(layer.nextn.eh_proj && "MTP block missing nextn.eh_proj");
+    GGML_ASSERT(layer.nextn.enorm   && "MTP block missing nextn.enorm");
+    GGML_ASSERT(layer.nextn.hnorm   && "MTP block missing nextn.hnorm");
 
     const float kq_scale = get_kq_scale();
 
+    // TODO: extract in a common llm_graph_context::build_inp_embd_h()
     auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd_inp(), hparams.n_embd);
 
     inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
@@ -350,7 +334,10 @@ llama_model_gigachat35::graph_mtp::graph_mtp(const llm_graph_params & params) : 
     inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd_inp(), n_tokens);
     ggml_set_input(inp->embd);
 
+    // TODO: make static using `ggml_build_forward_select()`
+    //       see llm_graph_context::build_inp_embd() for reference
     ggml_tensor * tok_embd;
+    ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.token) {
         ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
         tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
@@ -421,24 +408,15 @@ llama_model_gigachat35::graph_mtp::graph_mtp(const llm_graph_params & params) : 
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
-    // pre-norm hidden state: seeds the next MTP draft step
+    // pre-norm hidden state is the input of the next MTP step
     res->t_h_nextn = cur;
-    cb(cur, "h_nextn", -1);
 
     if (layer.nextn.shared_head_norm) {
         cur = build_zero_centered_gated_norm(
-                cur,
-                layer.nextn.shared_head_norm,
-                layer.nextn.shared_head_norm_gate_up,
-                layer.nextn.shared_head_norm_gate_down,
-                -1);
+                cur, layer.nextn.shared_head_norm, layer.nextn.shared_head_norm_gate_up, layer.nextn.shared_head_norm_gate_down, -1);
     } else {
         cur = build_zero_centered_gated_norm(
-                cur,
-                model.output_norm,
-                model.output_norm_gate_up,
-                model.output_norm_gate_down,
-                -1);
+                cur, model.output_norm, model.output_norm_gate_up, model.output_norm_gate_down, -1);
     }
 
     if (crop_after_nextn(inp_out_ids)) {
@@ -456,13 +434,12 @@ llama_model_gigachat35::graph_mtp::graph_mtp(const llm_graph_params & params) : 
 
 float llama_model_gigachat35::graph::get_kq_scale() const {
     const int64_t n_embd_head_k_mla = hparams.n_embd_head_k_mla();
-    GGML_ASSERT(n_embd_head_k_mla > hparams.n_rot());
 
     // We have to pre-scale kq_scale and attn_factor to make the YaRN RoPE work correctly.
     // See https://github.com/ggml-org/llama.cpp/discussions/7416 for detailed explanation.
     // And also: https://github.com/ggml-org/llama.cpp/pull/17945 [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]
 
-    // first cancel the adjustment from llama_hparams::yarn_attn_factor_adjust to get the original attn_factor
+    // first cancel the attn_factor adjustment made in llama_context to get the original attn_factor
     GGML_ASSERT(ext_factor >= 0.0f);
     const float attn_factor_org = attn_factor * (1.0f + 0.1f * logf(1.0f / freq_scale));
 
@@ -477,9 +454,6 @@ ggml_tensor * llama_model_gigachat35::graph::build_zero_centered_gated_norm(
         ggml_tensor * gate_up,
         ggml_tensor * gate_down,
         int           il) {
-    GGML_ASSERT(gate_up   != nullptr);
-    GGML_ASSERT(gate_down != nullptr);
-
     ggml_tensor * cur = build_norm(input, weight, nullptr, LLM_NORM_RMS, il);
     ggml_tensor * gate = build_lora_mm(gate_up, cur);
     gate = ggml_silu(ctx0, gate);
@@ -538,7 +512,6 @@ ggml_tensor * llama_model_gigachat35::graph::build_layer_attn_linear(
     GGML_ASSERT(n_seqs != 0);
     GGML_ASSERT(ubatch.equal_seqs());
     GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
-    GGML_ASSERT(d_inner == head_v_dim * num_v_heads);
 
     auto qkvz = build_qkvz(cur, il);
     ggml_tensor * qkv = qkvz.first;
@@ -574,6 +547,7 @@ ggml_tensor * llama_model_gigachat35::graph::build_layer_attn_linear(
     conv = ggml_silu(ctx0, conv);
     cb(conv, "linear_attn_conv", il);
 
+    // the reference l2norm uses a fixed eps
     auto [q, k, v] = build_recurrent_qkv(conv, 1e-6f, il);
 
     cb(q, "linear_attn_q", il);
@@ -607,10 +581,6 @@ ggml_tensor * llama_model_gigachat35::graph::build_layer_attn_mla(
     const int64_t n_embd_head_qk_nope   = n_embd_head_k_mla - n_embd_head_qk_rope;
     const int64_t q_lora_rank           = hparams.n_lora_q;
     const int64_t kv_lora_rank          = hparams.n_lora_kv;
-
-    GGML_ASSERT(hparams.n_head_kv(il) == 1);
-    GGML_ASSERT(n_embd_head_qk_nope > 0);
-    GGML_ASSERT(kv_lora_rank > 0);
 
     ggml_tensor * gate = build_lora_mm(layer.wqkv_gate, cur);
     cb(gate, "attn_gate", il);

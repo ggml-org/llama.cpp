@@ -256,13 +256,13 @@ struct llama_layer_nextn {
     struct ggml_tensor * hnorm_gate_down       = nullptr;
     struct ggml_tensor * shared_head_head      = nullptr;
     struct ggml_tensor * shared_head_norm      = nullptr;
+    struct ggml_tensor * shared_head_norm_gate_up   = nullptr;
+    struct ggml_tensor * shared_head_norm_gate_down = nullptr;
 
     // qwen4exp: the MTP block collapses its hyper-connection streams with its own mixer
     struct ggml_tensor * hc_head_norm          = nullptr;
     struct ggml_tensor * hc_head_down          = nullptr;
     struct ggml_tensor * hc_head_up            = nullptr;
-    struct ggml_tensor * shared_head_norm_gate_up   = nullptr;
-    struct ggml_tensor * shared_head_norm_gate_down = nullptr;
 };
 
 struct llama_layer_switch_lora {
@@ -865,10 +865,10 @@ struct llama_model {
     struct ggml_tensor * tok_norm_b = nullptr;
 
     struct ggml_tensor * output_norm     = nullptr;
-    struct ggml_tensor * output_res_score = nullptr; // kimi-k3: final cross-layer residual mix
-    struct ggml_tensor * output_res_query = nullptr; // inkling2: query of the final attention-residual mix
     struct ggml_tensor * output_norm_gate_up   = nullptr;
     struct ggml_tensor * output_norm_gate_down = nullptr;
+    struct ggml_tensor * output_res_score = nullptr; // kimi-k3: final cross-layer residual mix
+    struct ggml_tensor * output_res_query = nullptr; // inkling2: query of the final attention-residual mix
     struct ggml_tensor * output_norm_b   = nullptr;
     struct ggml_tensor * output          = nullptr;
     struct ggml_tensor * output_b        = nullptr;

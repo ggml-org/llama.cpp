@@ -313,6 +313,7 @@ class _QwenMtpMixin:
     tensor_map handles them."""
 
     supports_mtp_export = True
+    use_mtp_filename = True
     hparams: dict[str, Any]
     model_arch: gguf.MODEL_ARCH
     gguf_writer: gguf.GGUFWriter
@@ -382,15 +383,6 @@ class _QwenMtpMixin:
             return
         if (n := self.block_count - self.hparams["num_hidden_layers"]) > 0:
             self.gguf_writer.add_nextn_predict_layers(n)
-
-    def prepare_metadata(self, vocab_only: bool):
-        from_dir = self.fname_out.is_dir()  # ty: ignore[missing-attribute]
-        super().prepare_metadata(vocab_only=vocab_only)  # ty: ignore[missing-attribute]
-
-        if not self.mtp_only or not from_dir:
-            return
-
-        self.set_mtp_filename()  # ty: ignore[missing-attribute]
 
 
 @ModelBase.register("Qwen3NextForCausalLM")

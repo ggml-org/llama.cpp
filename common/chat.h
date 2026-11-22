@@ -97,17 +97,13 @@ struct common_chat_msg {
     std::string                               tool_call_id;
     // non-OpenAI message keys as a JSON object string, only for templates that read them (DeepSeek V4.1)
     std::string                               extra_json;
-    // An explicit empty field must survive a parse/render round trip.
-    bool                                      reasoning_content_present = false;
 
     common_json to_json_oaicompat(bool concat_typed_text = false) const;
 
     std::string render_content(const std::string & delimiter = "\n\n") const;
 
-    bool has_reasoning_content() const { return reasoning_content_present || !reasoning_content.empty(); }
-
     bool empty() const {
-        return content.empty() && content_parts.empty() && tool_calls.empty() && !has_reasoning_content() &&
+        return content.empty() && content_parts.empty() && tool_calls.empty() && reasoning_content.empty() &&
                tool_name.empty() && tool_call_id.empty();
     }
 
@@ -137,8 +133,7 @@ struct common_chat_msg {
     bool operator==(const common_chat_msg & other) const {
         return role == other.role && content == other.content && content_parts == other.content_parts &&
                tool_calls == other.tool_calls && reasoning_content == other.reasoning_content &&
-               tool_name == other.tool_name && tool_call_id == other.tool_call_id &&
-               has_reasoning_content() == other.has_reasoning_content();
+               tool_name == other.tool_name && tool_call_id == other.tool_call_id;
     }
 
     bool operator!=(const common_chat_msg & other) const { return !(*this == other); }
@@ -149,17 +144,13 @@ struct common_chat_msg_diff {
     std::string           content_delta;
     size_t                tool_call_index = std::string::npos;
     common_chat_tool_call tool_call_delta;
-    bool                  reasoning_content_present = false;
-
-    bool has_reasoning_content() const { return reasoning_content_present || !reasoning_content_delta.empty(); }
 
     static std::vector<common_chat_msg_diff> compute_diffs(const common_chat_msg & msg_prv,
                                                            const common_chat_msg & msg_new);
 
     bool operator==(const common_chat_msg_diff & other) const {
-        return reasoning_content_delta == other.reasoning_content_delta && content_delta == other.content_delta &&
-               tool_call_index == other.tool_call_index &&
-               tool_call_delta == other.tool_call_delta && reasoning_content_present == other.reasoning_content_present;
+        return content_delta == other.content_delta && tool_call_index == other.tool_call_index &&
+               tool_call_delta == other.tool_call_delta;
     }
 };
 

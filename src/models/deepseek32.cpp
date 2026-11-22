@@ -31,11 +31,7 @@ void llama_model_deepseek32::load_arch_hparams(llama_model_loader & ml) {
     // Expert gating function
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC, hparams.expert_gating_func);
 
-    if (ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL, hparams.rope_yarn_log_mul, 0.0f)) {
-        // [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]
-        // cancel the factor from the convert script
-        hparams.rope_yarn_log_mul /= 0.1f;
-    }
+    hparams.rope_yarn_log_mul = hparams.rope_yarn_log_mul_raw / 0.1f;
 
     switch (hparams.n_layer()) {
         case 61: type = LLM_TYPE_685B_A37B; break;

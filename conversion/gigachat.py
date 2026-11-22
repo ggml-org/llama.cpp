@@ -13,8 +13,9 @@ from .deepseek import DeepseekV2MTPModel
 
 @ModelBase.register("GigaChat35ForCausalLM")
 @ModelBase.example("ai-sage/GigaChat3.5-432B-A28B")
-class Gigachat35Model(DeepseekV2MTPModel):
+class GigaChat35Model(DeepseekV2MTPModel):
     model_arch = gguf.MODEL_ARCH.GIGACHAT35
+    use_mtp_filename = True
     mtp_shared_tensors = DeepseekV2MTPModel.mtp_shared_tensors + (
         "model.norm.gate_up_projection.weight", "model.norm.gate_down_projection.weight",
     )
@@ -44,17 +45,17 @@ class Gigachat35Model(DeepseekV2MTPModel):
             "linear_use_short_conv": True,
             "linear_use_legacy_qkvz_layout": False,
             "final_logit_softcapping": None,
+            "scoring_func": "sigmoid",
+            "nextn_is_sparse": False,
         }.items():
             if self.hparams.get(key, value) != value:
                 raise ValueError(f"GigaChat35 requires {key}={value!r}")
         norm_eps = self.hparams.get("linear_attn_o_norm_eps")
-        # The base and Reasoning configs have different defaults for this key.
+        # the base and Reasoning configs have different defaults for this key
         if "linear_attn_o_norm_eps" not in self.hparams and self.hparams["rms_norm_eps"] != 1e-6:
             raise ValueError("GigaChat35 requires explicit linear_attn_o_norm_eps when rms_norm_eps differs from 1e-6")
         if norm_eps is not None and norm_eps != self.hparams["rms_norm_eps"]:
             raise ValueError("GigaChat35 requires linear_attn_o_norm_eps to match rms_norm_eps")
-        if not self.hparams.get("rope_scaling"):
-            raise ValueError("GigaChat35 requires an explicit rope_scaling configuration")
         if self.rope_parameters.get("rope_type") != "yarn":
             raise ValueError("GigaChat35 only supports YaRN RoPE scaling")
         rope_factor = self.rope_parameters.get("factor")
@@ -64,26 +65,27 @@ class Gigachat35Model(DeepseekV2MTPModel):
             raise ValueError("GigaChat35 requires RoPE mscale=1")
         if self.rope_parameters.get("mscale_all_dim") != 1.0:
             raise ValueError("GigaChat35 requires RoPE mscale_all_dim=1")
-        if self.hparams.get("n_group") is None or self.hparams.get("topk_group") is None:
-            raise ValueError("GigaChat35 requires explicit n_group and topk_group")
-        if self.hparams["linear_conv_kernel_dim"] < 2:
-            raise ValueError("GigaChat35 requires linear_conv_kernel_dim >= 2")
+        for key in ("n_group", "topk_group", "first_k_dense_replace", "routed_scaling_factor", "norm_topk_prob"):
+            if self.hparams.get(key) is None:
+                raise ValueError(f"GigaChat35 requires explicit {key}")
+        if "q_lora_rank" not in self.hparams:
+            raise ValueError("GigaChat35 requires explicit q_lora_rank")
 
         # drop head_dim (== qk_rope_head_dim) so the key/value lengths are not derived from it
         self.hparams.pop("head_dim", None)
-        self.hparams.setdefault("routed_scaling_factor", 2.5)
         if self.hparams["routed_scaling_factor"] == 0:
             raise ValueError("GigaChat35 does not support routed_scaling_factor=0")
-        self.hparams.setdefault("norm_topk_prob", True)
-        self.hparams.setdefault("first_k_dense_replace", 3)
-        if self.hparams.get("scoring_func") is None:
-            self.hparams["scoring_func"] = "sigmoid"
+        self.hparams["scoring_func"] = "sigmoid"
         if self.hparams["q_lora_rank"] is None:
             self.hparams["q_lora_rank"] = 0
         super().set_gguf_parameters()
         hparams = self.hparams
 
         self.gguf_writer.add_expert_shared_feed_forward_length(hparams["moe_intermediate_size"] * hparams["n_shared_experts"])
+
+        # the norm gate rank is only known from the weights, which a vocab-only conversion may not have
+        if (norm_gate := self.model_tensors.get("model.norm.gate_up_projection.weight")) is not None:
+            self.gguf_writer.add_norm_gate_rank(norm_gate().shape[0])
 
         # gated delta net
         self.gguf_writer.add_ssm_conv_kernel(hparams["linear_conv_kernel_dim"])
@@ -92,30 +94,16 @@ class Gigachat35Model(DeepseekV2MTPModel):
         self.gguf_writer.add_ssm_time_step_rank(hparams["linear_num_value_heads"])
         self.gguf_writer.add_ssm_inner_size(hparams["linear_value_head_dim"] * hparams["linear_num_value_heads"])
 
-        # main layers not listed in full_attention_layers are recurrent, the MTP layer is not
+        # main layers not listed in full_attention_layers are recurrent, the MTP layers are not
         full_attention_layers = set(hparams["full_attention_layers"])
         n_main_layers = hparams["num_hidden_layers"]
         self.gguf_writer.add_recurrent_layers(
             [il < n_main_layers and il not in full_attention_layers for il in range(self.block_count)])
 
+        # the reference clamps dense layers too, not only experts
         swiglu_limit = float(hparams["swiglu_limit"])
         self.gguf_writer.add_swiglu_clamp_exp([swiglu_limit] * self.block_count)
         self.gguf_writer.add_swiglu_clamp_shexp([swiglu_limit] * self.block_count)
-
-    def prepare_metadata(self, vocab_only: bool):
-        from_dir = self.fname_out.is_dir()
-        norm_gate_name = "model.norm.gate_up_projection.weight"
-        if not vocab_only or norm_gate_name in self.model_tensors:
-            norm_gate_shape = self.model_tensors[norm_gate_name]().shape
-            if len(norm_gate_shape) != 2 or norm_gate_shape[0] <= 0 or norm_gate_shape[1] != self.hparams["hidden_size"]:
-                raise ValueError(f"Invalid norm gate shape: {norm_gate_shape}")
-            self.gguf_writer.add_norm_gate_rank(norm_gate_shape[0])
-        super().prepare_metadata(vocab_only=vocab_only)
-
-        if not self.mtp_only or not from_dir:
-            return
-
-        self.set_mtp_filename()
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # all GigaChat norms are zero-centered, including self_attn.norm (unlike Qwen3-Next)

@@ -781,9 +781,17 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
                     return {{key_dim, 2}, {value_dim, 1}};
                 }
                 if (std::regex_match(tensor_name, pattern_r_cache)) {
-                    // the replay layouts need the Qwen 3.5 pattern, llama_context keeps Qwen 3 Next on snapshots
-                    GGML_ASSERT(tensor->ne[axis] == (2*key_dim + value_dim) * (hparams.ssm_d_conv - 1));
-                    return {{key_dim * (hparams.ssm_d_conv - 1), 2}, {value_dim * (hparams.ssm_d_conv - 1), 1}};
+                    const int64_t channels = 2*key_dim + value_dim;
+                    GGML_ASSERT(channels > 0 && tensor->ne[axis] % channels == 0);
+                    const int64_t n_hist = tensor->ne[axis] / channels;
+                    GGML_ASSERT(ud->model->arch == LLM_ARCH_GIGACHAT35 || n_hist == hparams.ssm_d_conv - 1);
+                    return {{key_dim*n_hist, 2}, {value_dim*n_hist, 1}};
+                }
+                if (ud->model->arch == LLM_ARCH_GIGACHAT35 && (std::regex_match(tensor_name, pattern_spk_cache) ||
+                        std::regex_match(tensor_name, pattern_spv_cache) || std::regex_match(tensor_name, pattern_spgb_cache))) {
+                    const int64_t width = std::regex_match(tensor_name, pattern_spgb_cache) ? n_v_heads : value_dim;
+                    GGML_ASSERT(tensor->ne[axis] % width == 0);
+                    return {{width, uint32_t(tensor->ne[axis] / width)}};
                 }
             } else {
                 const int64_t head_ratio = n_v_heads / n_k_heads;
@@ -918,7 +926,8 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
                     (std::regex_match(tensor_name, pattern_qkv_weight) || std::regex_match(tensor_name, pattern_ssm_conv1d) ||
                      std::regex_match(tensor_name, pattern_r_cache))) {
                 // keep each K head with its group of V heads, including when some devices receive no heads
-                const int64_t scale = std::regex_match(tensor_name, pattern_r_cache) ? hparams.ssm_d_conv - 1 : 1;
+                const int64_t channels = 2*hparams.ssm_n_group*hparams.ssm_d_state + hparams.ssm_d_inner;
+                const int64_t scale = std::regex_match(tensor_name, pattern_r_cache) ? tensor->ne[0] / channels : 1;
                 return {granularity_head * scale, granularity_qkv * scale};
             }
             if (std::regex_match(tensor_name, pattern_qkv_weight) || std::regex_match(tensor_name, pattern_attn_gate_weight) ||
@@ -1754,6 +1763,7 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ROPE_SCALING_YARN_ATTN_FACTOR, hparams.yarn_attn_factor,   false);
     ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_FAST,   hparams.yarn_beta_fast,     false);
     ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_SLOW,   hparams.yarn_beta_slow,     false);
+    ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL,     hparams.rope_yarn_log_mul_raw, false);
 
     // non-transformer models do not have attention heads
     if (hparams.n_head() > 0) {
@@ -2766,6 +2776,7 @@ void llama_model::print_info() const {
                 arch == LLM_ARCH_QWEN35MOE ||
                 arch == LLM_ARCH_CLOVER_MOE ||
                 arch == LLM_ARCH_ZONOS3 ||
+                arch == LLM_ARCH_GIGACHAT35 ||
                 arch == LLM_ARCH_NEMOTRON_H ||
                 arch == LLM_ARCH_NEMOTRON_H_MOE) {
             LLAMA_LOG_INFO("%s: ssm_d_conv            = %u\n",     __func__, hparams.ssm_d_conv);
@@ -2801,7 +2812,7 @@ void llama_model::print_info() const {
                 arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA ||
                 arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_MISTRAL4 ||
                 arch == LLM_ARCH_MISTRAL_LARGE4 || arch == LLM_ARCH_HY_V4 ||
-                arch == LLM_ARCH_HY_V4_FLASH) {
+                arch == LLM_ARCH_HY_V4_FLASH || arch == LLM_ARCH_GIGACHAT35) {
             LLAMA_LOG_INFO("%s: n_layer_dense_lead    = %d\n",     __func__, hparams.n_layer_dense_lead);
             LLAMA_LOG_INFO("%s: n_lora_q              = %d\n",     __func__, hparams.n_lora_q);
             LLAMA_LOG_INFO("%s: n_lora_kv             = %d\n",     __func__, hparams.n_lora_kv);

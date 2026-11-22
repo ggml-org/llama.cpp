@@ -80,25 +80,6 @@ class ModelType(IntEnum):
     MMPROJ = 2
 
 
-def split_gdn_qkvz(data_torch: Tensor, head_k_dim: int, head_v_dim: int,
-                   num_k_heads: int, num_v_heads: int) -> tuple[Tensor, Tensor]:
-    # original order: [q, k, v, z] * head_count
-    # corrected order: [q * head_count, k * head_count, v * head_count, z * head_count]
-    hidden_size = data_torch.shape[1]
-    value_group_dim = num_v_heads // num_k_heads * head_v_dim
-    split_sizes = [head_k_dim, head_k_dim, value_group_dim, value_group_dim]
-    data_torch = data_torch.permute(1, 0).contiguous()
-    data_torch = data_torch.view(hidden_size, num_k_heads, sum(split_sizes))
-    q, k, v, z = torch.split(data_torch, split_sizes, dim=-1)
-    q = q.contiguous().view(hidden_size, -1)
-    k = k.contiguous().view(hidden_size, -1)
-    v = v.contiguous().view(hidden_size, -1)
-    z = z.contiguous().view(hidden_size, -1)
-    qkv = torch.cat([q, k, v], dim=-1).permute(1, 0).contiguous()
-    z = z.permute(1, 0).contiguous()
-    return qkv, z
-
-
 class ModelBase:
     _model_classes: dict[ModelType, dict[str, type[ModelBase]]] = {
         ModelType.TEXT: {},
@@ -1925,6 +1906,7 @@ class ModelBase:
 
 class TextModel(ModelBase):
     model_type = ModelType.TEXT
+    use_mtp_filename = False
     hf_arch: str
 
     def __init__(self, *args, **kwargs):
@@ -2001,13 +1983,16 @@ class TextModel(ModelBase):
         # Filename Output
         if self.fname_out.is_dir():
             # Generate default filename based on model specification and available metadata
-            if not vocab_only:
-                fname_default: str = gguf.naming_convention(self.metadata.name, self.metadata.basename, self.metadata.finetune, self.metadata.version, self.metadata.size_label, output_type, model_type="LoRA" if total_params < 0 else None)
+            prefix = "ple-" if self.ple_only else "no-ple-" if self.no_ple else ""
+            if self.use_mtp_filename and self.mtp_only:
+                prefix = "mtp-"
+                fname_default = gguf.naming_convention(self.metadata.name, self.metadata.basename, self.metadata.finetune, self.metadata.version, size_label=None, output_type=output_type)
+            elif not vocab_only:
+                fname_default = gguf.naming_convention(self.metadata.name, self.metadata.basename, self.metadata.finetune, self.metadata.version, self.metadata.size_label, output_type, model_type="LoRA" if total_params < 0 else None)
             else:
                 fname_default: str = gguf.naming_convention(self.metadata.name, self.metadata.basename, self.metadata.finetune, self.metadata.version, size_label=None, output_type=None, model_type="vocab")
 
             # Use the default filename
-            prefix = "ple-" if self.ple_only else "no-ple-" if self.no_ple else ""
             self.fname_out = self.fname_out / f"{prefix}{fname_default}.gguf"
         else:
             # Output path is a custom defined templated filename
@@ -2020,13 +2005,6 @@ class TextModel(ModelBase):
         if not self.ple_only:
             logger.info("Set model tokenizer")
             self.set_vocab()
-
-    def set_mtp_filename(self):
-        output_type = self.ftype.name.partition("_")[2]
-        fname_default = gguf.naming_convention(
-            self.metadata.name, self.metadata.basename, self.metadata.finetune,
-            self.metadata.version, size_label=None, output_type=output_type, model_type=None)
-        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
 
     def set_gguf_parameters(self):
         self.gguf_writer.add_block_count(self.block_count)
@@ -3623,3 +3601,30 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     if arch is None:
         raise ValueError("Failed to detect model architecture")
     return arch
+
+
+def split_gdn_qkvz(data_torch: Tensor, head_k_dim: int, head_v_dim: int,
+                   num_k_heads: int, num_v_heads: int) -> tuple[Tensor, Tensor]:
+    # original order:  [q, k, v, z] * head_count
+    # corrected order: [q * head_count, k * head_count, v * head_count, z * head_count]
+    hidden_size = data_torch.shape[1]
+    split_arg_list_qkvz = [
+        head_k_dim, # q partition
+        head_k_dim, # k partition
+        (num_v_heads // num_k_heads * head_v_dim), # v partition
+        (num_v_heads // num_k_heads * head_v_dim), # z partition
+    ]
+    # view as (n_embd, head_count, [q+k+v+z])
+    data_torch = data_torch.permute(1, 0).contiguous()
+    data_torch = data_torch.view(-1, num_k_heads, sum(split_arg_list_qkvz))
+    # split into q, k, v, z
+    q, k, v, z = torch.split(data_torch, split_arg_list_qkvz, dim=-1)
+    # flatten dim + head_count
+    q = q.contiguous().view(hidden_size, -1)
+    k = k.contiguous().view(hidden_size, -1)
+    v = v.contiguous().view(hidden_size, -1)
+    z = z.contiguous().view(hidden_size, -1)
+    # stack back
+    qkv = torch.cat([q, k, v], dim=-1).permute(1, 0).contiguous()
+    z = z.permute(1, 0).contiguous()
+    return qkv, z

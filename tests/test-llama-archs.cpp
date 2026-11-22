@@ -202,7 +202,6 @@ static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32
 static bool host_experts_test(const llm_arch arch) {
     switch (arch) {
         case LLM_ARCH_DEEPSEEK2:
-        case LLM_ARCH_GIGACHAT35:
             return true;
         default:
             return false;
@@ -358,15 +357,14 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_layer   = 4;
     }
     n_layer = std::max(n_layer, n_layer_min);
-    const uint32_t n_embd_head   = n_embd / n_head;
-    const uint32_t n_layer_nextn = arch == LLM_ARCH_GIGACHAT35 ? 2 : 0;
+    const uint32_t n_embd_head = n_embd / n_head;
 
     ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE,      llama_arch_name(arch));
     ms.add_kv(LLM_KV_VOCAB_SIZE,                n_vocab);
     ms.add_kv(LLM_KV_CONTEXT_LENGTH,            n_ctx);
     ms.add_kv(LLM_KV_EMBEDDING_LENGTH,          n_embd);
     ms.add_kv(LLM_KV_FEATURES_LENGTH,           n_embd);
-    ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer + n_layer_nextn);
+    ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer);
     ms.add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT, uint32_t(1));
 
     if (arch == LLM_ARCH_K2_HORIZON) {
@@ -927,17 +925,26 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,        -5.0f);
 
     if (arch == LLM_ARCH_GIGACHAT35) {
-        ms.add_kv(LLM_KV_NEXTN_PREDICT_LAYERS, n_layer_nextn);
-        ms.add_kv(LLM_KV_NORM_GATE_RANK, uint32_t(16));
-        ms.add_kv(LLM_KV_SSM_INNER_SIZE, uint32_t(128) * n_head);
-        ms.add_kv(LLM_KV_SSM_GROUP_COUNT, uint32_t(4));
-        ms.add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS, std::vector<uint32_t>{1, 0, 1, 0, 0, 0});
-        ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP, 10.0f);
-        ms.add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, 10.0f);
-        ms.add_kv(LLM_KV_ROPE_SCALING_TYPE, "yarn");
-        ms.add_kv(LLM_KV_ROPE_SCALING_FACTOR, 8.0f);
-        ms.add_kv(LLM_KV_ROPE_SCALING_ORIG_CTX_LEN, n_ctx);
-        ms.add_kv(LLM_KV_ROPE_SCALING_YARN_LOG_MUL, 0.1f);
+        ms.add_kv(LLM_KV_NORM_GATE_RANK,             uint32_t(16));
+        ms.add_kv(LLM_KV_SSM_INNER_SIZE,             uint32_t(128) * n_head);
+        ms.add_kv(LLM_KV_SSM_GROUP_COUNT,            uint32_t(4));
+        ms.add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS, std::vector<uint32_t>{1, 0, 1, 0});
+        ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, std::vector<uint32_t>{0, n_ff / 2, n_ff, n_ff});
+        ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,           10.0f);
+        ms.add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP,         10.0f);
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,       2.5f);
+        ms.add_kv(LLM_KV_ROPE_SCALING_TYPE,          "yarn");
+        ms.add_kv(LLM_KV_ROPE_SCALING_FACTOR,        8.0f);
+        ms.add_kv(LLM_KV_ROPE_SCALING_YARN_LOG_MUL,  0.15625f);
+        ms.add_kv(LLM_KV_ROPE_SCALING_ORIG_CTX_LEN,  n_ctx);
+
+        ggml_tensor scale = {};
+        scale.type = GGML_TYPE_F32;
+        std::fill_n(scale.ne, GGML_MAX_DIMS, 1);
+        for (const char * name : {"blk.1.attn_v_b.scale", "output_norm_gate_up.scale"}) {
+            ggml_set_name(&scale, name);
+            gguf_add_tensor(ms.gguf_ctx, &scale);
+        }
     }
 
     for (uint32_t il = 0; il < n_layer; il++) {
@@ -966,7 +973,7 @@ static std::string get_tmp_gguf_path() {
 }
 
 static llama_model_ptr get_model(
-        struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev, bool load_mtp,
+        struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER,
         const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr) {
@@ -978,7 +985,6 @@ static llama_model_ptr get_model(
     model_params.devices = devs_copy.data();
     model_params.split_mode = split_mode;
     model_params.tensor_buft_overrides = tensor_buft_overrides;
-    model_params.load_mtp = load_mtp;
 
     tensor_data_params tensor_params = { seed, stdev };
     llama_model_ptr model(gguf_ctx != nullptr ?
@@ -991,11 +997,11 @@ static llama_model_ptr get_model(
 }
 
 static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
-        struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev, bool load_mtp,
+        struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
         const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0) {
-    llama_model_ptr model = get_model(gguf_ctx, file, seed, stdev, load_mtp, devs, split_mode, tensor_buft_overrides);
+    llama_model_ptr model = get_model(gguf_ctx, file, seed, stdev, devs, split_mode, tensor_buft_overrides);
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 0;
@@ -1383,7 +1389,7 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
                 continue;
             }
             gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
-            llama_model_ptr model = get_model(gguf_ctx.get(), nullptr, seed, stdev, arch == LLM_ARCH_GIGACHAT35, {});
+            llama_model_ptr model = get_model(gguf_ctx.get(), nullptr, seed, stdev, {});
             const std::string path = dir + "/" + llama_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
             LOG_INF("%s: '%s %s' -> %s ...", __func__, llama_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
             llama_model_save_to_file(model.get(), path.c_str());
@@ -1549,7 +1555,6 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                     continue;
                 }
                 const llama_model_tensor_buft_override * overrides = dc.host_experts ? host_experts_overrides : nullptr;
-                const size_t moe_cache_size = dc.moe_cache_size && arch == LLM_ARCH_GIGACHAT35 ? 24*1024*1024 : dc.moe_cache_size;
 
                 // print test config first; should anything fail during model loading or inference, at least we know which test case caused it
                 LOG(template_row_cfg.c_str(), llama_arch_name(arch), dc.label.c_str(), config_name.c_str());
@@ -1568,12 +1573,12 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                 bool test_ok = true;
                 if (!skip) {
                     if (logits_cpu.empty()) {
-                        model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, arch == LLM_ARCH_GIGACHAT35, {}, LLAMA_SPLIT_MODE_LAYER, encode);
+                        model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {}, LLAMA_SPLIT_MODE_LAYER, encode);
                         logits_cpu = get_logits(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens, encode);
                     }
                     if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llama_arch_supports_sm_tensor(arch)) {
                         test_executed = true;
-                        model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, arch == LLM_ARCH_GIGACHAT35, dc.devs, dc.split_mode, encode, overrides, moe_cache_size);
+                        model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
                         logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
                         const double nmse_val = nmse(logits_cpu, logits_dev);
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
@@ -1630,7 +1635,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
 
                         // the k-pool layout is updated in place when drafts are rejected
                         // TODO: the meta backend aborts with n_rs_seq > 0 (view of permuted tensor not implemented)
-                        if ((arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_GLM5_NEXT) && dc.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
+                        if ((arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_GLM5_NEXT || arch == LLM_ARCH_GIGACHAT35) && dc.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
                             const double nmse_rollback = check_draft_rollback(model_and_ctx_dev.first.get(), tokens, logits_dev);
                             if (!(nmse_rollback <= 1e-4)) {
                                 if (test_ok) {
@@ -1652,7 +1657,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         GGML_ASSERT(file != nullptr);
 
                         {
-                            auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, stdev, false, dc.devs, dc.split_mode, encode, overrides, moe_cache_size);
+                            auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
                             const std::vector<float> logits_roundtrip = get_logits(
                                 model_and_ctx_roundtrip.first.get(), model_and_ctx_roundtrip.second.get(), tokens, encode);
                             status_roundtrip = "\033[1;32mOK\033[0m";
@@ -1911,7 +1916,7 @@ static int test_kv_shift(const std::string & arch_filter, const size_t seed, con
 
             llama_model_ptr model;
             try {
-                model = get_model(gguf_ctx.get(), nullptr, seed, stdev, arch == LLM_ARCH_GIGACHAT35, {});
+                model = get_model(gguf_ctx.get(), nullptr, seed, stdev, {});
             } catch (const std::exception & err) {
                 LOG(template_row.c_str(), llama_arch_name(arch), config_name, "", "", "", "", "\033[1;31mERROR\033[0m (model load)");
                 n_tests++;

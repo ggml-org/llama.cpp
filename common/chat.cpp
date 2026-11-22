@@ -207,7 +207,7 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
     } else {
         jmsg["content"] = "";
     }
-    if (has_reasoning_content()) {
+    if (!reasoning_content.empty()) {
         jmsg["reasoning_content"] = reasoning_content;
     }
     if (!tool_name.empty()) {
@@ -251,11 +251,9 @@ std::vector<common_chat_msg_diff> common_chat_msg_diff::compute_diffs(const comm
     }
 
     // TODO: these can become expensive for long messages - how to optimize?
-    if (msg_prv.reasoning_content != msg_new.reasoning_content ||
-        (!msg_prv.has_reasoning_content() && msg_new.has_reasoning_content())) {
-        auto & diff                    = diffs.emplace_back();
-        diff.reasoning_content_delta   = string_diff(msg_prv.reasoning_content, msg_new.reasoning_content);
-        diff.reasoning_content_present = msg_new.has_reasoning_content();
+    if (msg_prv.reasoning_content != msg_new.reasoning_content) {
+        auto & diff                  = diffs.emplace_back();
+        diff.reasoning_content_delta = string_diff(msg_prv.reasoning_content, msg_new.reasoning_content);
     }
     if (msg_prv.content != msg_new.content) {
         auto & diff        = diffs.emplace_back();
@@ -487,9 +485,8 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                     "Expected 'content' or 'tool_calls' (ref: https://github.com/ggml-org/llama.cpp/issues/8367 & "
                     "https://github.com/ggml-org/llama.cpp/issues/12279)");
             }
-            if (message.contains("reasoning_content") && !message.at("reasoning_content").is_null()) {
+            if (message.contains("reasoning_content")) {
                 msg.reasoning_content = message.at("reasoning_content");
-                msg.reasoning_content_present = true;
             }
             if (message.contains("name")) {
                 msg.tool_name = message.at("name");
@@ -1464,15 +1461,6 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const 
         src.find("<|tool_list_start|>") == std::string::npos) {
         LOG_DBG("Using specialized template: LFM2.5\n");
         return common_chat_params_init_lfm2_5;
-    }
-
-    // GigaChat 3.5: role/message separators with GCML tool calls inside the assistant turn.
-    if (src.find("<|role_sep|>") != std::string::npos &&
-        src.find("<|message_sep|>") != std::string::npos &&
-        src.find("GCML") != std::string::npos &&
-        src.find("tool_calls") != std::string::npos) {
-        LOG_DBG("Using specialized template: GigaChat3.5\n");
-        return common_chat_params_init_gigachat35;
     }
 
     // GigaChatV3 format detection
