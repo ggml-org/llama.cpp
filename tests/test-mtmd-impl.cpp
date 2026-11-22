@@ -837,6 +837,47 @@ static double tone_amplitude(const std::vector<float> & x, double freq, int rate
     return 2.0 * std::sqrt(re * re + im * im) / (x.size() - 2 * skip);
 }
 
+MAKE_TEST(test_audio_fft) {
+    // the sizes in use: powers of two, and an odd part (400 = 16 * 25, 736 = 32 * 23, 1920 = 128 * 15)
+    const int sizes[] = { 1, 2, 3, 12, 256, 400, 512, 736, 1920 };
+    const double pi = 3.14159265358979323846;
+    for (int n : sizes) {
+        mtmd_audio_cache cache;
+        cache.fill_sin_cos_table(n);
+        std::vector<float> x(8 * n), in(8 * n), out(8 * n);
+        for (int i = 0; i < 2 * n; i++) {
+            x[i] = (float) std::sin(0.37 * i + 0.001 * i * i);
+        }
+        for (bool inv : { false, true }) {
+            std::copy(x.begin(), x.end(), in.begin());
+            if (inv) {
+                mtmd_audio_ifft(cache, in.data(), n, out.data());
+            } else {
+                mtmd_audio_fft(cache, in.data(), n, out.data());
+            }
+            double max_err = 0.0, max_ref = 0.0;
+            for (int k = 0; k < n; k++) {
+                double re = 0.0, im = 0.0;
+                for (int j = 0; j < n; j++) {
+                    const double t = (inv ? 2 : -2) * pi * (double) ((int64_t) j * k % n) / n;
+                    const double a = inv ? x[2 * j] : x[j];
+                    const double b = inv ? x[2 * j + 1] : 0.0;
+                    re += a * std::cos(t) - b * std::sin(t);
+                    im += a * std::sin(t) + b * std::cos(t);
+                }
+                if (inv) {
+                    re /= n;
+                    im /= n;
+                }
+                max_err = std::max({ max_err, std::fabs(re - out[2 * k]), std::fabs(im - out[2 * k + 1]) });
+                max_ref = std::max({ max_ref, std::fabs(re), std::fabs(im) });
+            }
+            t.assert_true(std::string(inv ? "ifft" : "fft") + " n = " + std::to_string(n) + ", relative error " + std::to_string(max_err / max_ref),
+                          max_err <= 1e-5 * max_ref);
+        }
+    }
+}
+
 static std::vector<float> resample_chunked(mtmd_helper_resampler * rs, const std::vector<float> & in, size_t chunk) {
     std::vector<float> res;
     for (size_t off = 0; off < in.size(); off += chunk) {
