@@ -373,8 +373,8 @@ kernel void kernel_mul_mm_id_tensor(
 
 typedef decltype(kernel_mul_mm_tensor<half, half, float4x4, 1, dequantize_f32, float, float>) mul_mm_tensor_t;
 
-template [[host_name("kernel_mul_mm_tensor_f32_f32")]]     kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, float4x4, 1, dequantize_f32, float, float>;
-template [[host_name("kernel_mul_mm_tensor_f16_f32")]]     kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, half4x4, 1, dequantize_f16, half, float>;
+template [[host_name("kernel_mul_mm_tensor_f32_f32")]] kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, float4x4, 1, dequantize_f32, float, float>;
+template [[host_name("kernel_mul_mm_tensor_f16_f32")]] kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, half4x4,  1, dequantize_f16, half,  float>;
 #if defined(GGML_METAL_HAS_BF16)
 template [[host_name("kernel_mul_mm_tensor_f32_f32_prec_bf16")]] kernel mul_mm_tensor_t kernel_mul_mm_tensor<bfloat, bfloat, float4x4, 1, dequantize_f32, float, float>;
 #endif
@@ -384,55 +384,55 @@ template [[host_name("kernel_mul_mm_tensor_f32_f32_prec_bf16")]] kernel mul_mm_t
 template [[host_name("kernel_mul_mm_tensor_bf16_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<bfloat, bfloat, bfloat4x4, 1, dequantize_bf16, bfloat, float>;
 template [[host_name("kernel_mul_mm_tensor_bf16_bf16")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<bfloat, bfloat, bfloat4x4, 1, dequantize_bf16, bfloat, bfloat>;
 #endif
-template [[host_name("kernel_mul_mm_tensor_q1_0_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q1_0, 8, dequantize_q1_0, float, float>;
-template [[host_name("kernel_mul_mm_tensor_q2_0_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q2_0, 4, dequantize_q2_0, float, float>;
-template [[host_name("kernel_mul_mm_tensor_q4_0_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q4_0, 2, dequantize_q4_0, float, float>;
-template [[host_name("kernel_mul_mm_tensor_q4_1_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q4_1, 2, dequantize_q4_1, float, float>;
-template [[host_name("kernel_mul_mm_tensor_q5_0_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q5_0, 2, dequantize_q5_0, float, float>;
-template [[host_name("kernel_mul_mm_tensor_q5_1_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q5_1, 2, dequantize_q5_1, float, float>;
-template [[host_name("kernel_mul_mm_tensor_q8_0_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q8_0, 2, dequantize_q8_0, float, float>;
-template [[host_name("kernel_mul_mm_tensor_mxfp4_f32")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_mxfp4, 2, dequantize_mxfp4, float, float>;
-template [[host_name("kernel_mul_mm_tensor_q2_K_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q2_K, QK_NL, dequantize_q2_K, float, float>;
-template [[host_name("kernel_mul_mm_tensor_q3_K_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q3_K, QK_NL, dequantize_q3_K, float, float>;
-template [[host_name("kernel_mul_mm_tensor_q4_K_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q4_K, QK_NL, dequantize_q4_K, float, float>;
-template [[host_name("kernel_mul_mm_tensor_q5_K_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q5_K, QK_NL, dequantize_q5_K, float, float>;
-template [[host_name("kernel_mul_mm_tensor_q6_K_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q6_K, QK_NL, dequantize_q6_K, float, float>;
+template [[host_name("kernel_mul_mm_tensor_q1_0_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q1_0,    8,     dequantize_q1_0,    float, float>;
+template [[host_name("kernel_mul_mm_tensor_q2_0_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q2_0,    4,     dequantize_q2_0,    float, float>;
+template [[host_name("kernel_mul_mm_tensor_q4_0_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q4_0,    2,     dequantize_q4_0,    float, float>;
+template [[host_name("kernel_mul_mm_tensor_q4_1_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q4_1,    2,     dequantize_q4_1,    float, float>;
+template [[host_name("kernel_mul_mm_tensor_q5_0_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q5_0,    2,     dequantize_q5_0,    float, float>;
+template [[host_name("kernel_mul_mm_tensor_q5_1_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q5_1,    2,     dequantize_q5_1,    float, float>;
+template [[host_name("kernel_mul_mm_tensor_q8_0_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q8_0,    2,     dequantize_q8_0,    float, float>;
+template [[host_name("kernel_mul_mm_tensor_mxfp4_f32")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_mxfp4,   2,     dequantize_mxfp4,   float, float>;
+template [[host_name("kernel_mul_mm_tensor_q2_K_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q2_K,    QK_NL, dequantize_q2_K,    float, float>;
+template [[host_name("kernel_mul_mm_tensor_q3_K_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q3_K,    QK_NL, dequantize_q3_K,    float, float>;
+template [[host_name("kernel_mul_mm_tensor_q4_K_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q4_K,    QK_NL, dequantize_q4_K,    float, float>;
+template [[host_name("kernel_mul_mm_tensor_q5_K_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q5_K,    QK_NL, dequantize_q5_K,    float, float>;
+template [[host_name("kernel_mul_mm_tensor_q6_K_f32")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q6_K,    QK_NL, dequantize_q6_K,    float, float>;
 template [[host_name("kernel_mul_mm_tensor_iq2_xxs_f32")]] kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq2_xxs, QK_NL, dequantize_iq2_xxs, float, float>;
-template [[host_name("kernel_mul_mm_tensor_iq2_xs_f32")]]  kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq2_xs, QK_NL, dequantize_iq2_xs, float, float>;
+template [[host_name("kernel_mul_mm_tensor_iq2_xs_f32")]]  kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq2_xs,  QK_NL, dequantize_iq2_xs,  float, float>;
 template [[host_name("kernel_mul_mm_tensor_iq3_xxs_f32")]] kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq3_xxs, QK_NL, dequantize_iq3_xxs, float, float>;
-template [[host_name("kernel_mul_mm_tensor_iq3_s_f32")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq3_s, QK_NL, dequantize_iq3_s, float, float>;
-template [[host_name("kernel_mul_mm_tensor_iq2_s_f32")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq2_s, QK_NL, dequantize_iq2_s, float, float>;
-template [[host_name("kernel_mul_mm_tensor_iq1_s_f32")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq1_s, QK_NL, dequantize_iq1_s, float, float>;
-template [[host_name("kernel_mul_mm_tensor_iq1_m_f32")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq1_m, QK_NL, dequantize_iq1_m, float, float>;
-template [[host_name("kernel_mul_mm_tensor_iq4_nl_f32")]]  kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq4_nl, 2, dequantize_iq4_nl, float, float>;
-template [[host_name("kernel_mul_mm_tensor_iq4_xs_f32")]]  kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq4_xs, QK_NL, dequantize_iq4_xs, float, float>;
-template [[host_name("kernel_mul_mm_tensor_tq2_0_f32")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_tq2_0, QK_NL, dequantize_tq2_0, float, float>;
+template [[host_name("kernel_mul_mm_tensor_iq3_s_f32")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq3_s,   QK_NL, dequantize_iq3_s,   float, float>;
+template [[host_name("kernel_mul_mm_tensor_iq2_s_f32")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq2_s,   QK_NL, dequantize_iq2_s,   float, float>;
+template [[host_name("kernel_mul_mm_tensor_iq1_s_f32")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq1_s,   QK_NL, dequantize_iq1_s,   float, float>;
+template [[host_name("kernel_mul_mm_tensor_iq1_m_f32")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq1_m,   QK_NL, dequantize_iq1_m,   float, float>;
+template [[host_name("kernel_mul_mm_tensor_iq4_nl_f32")]]  kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq4_nl,  2,     dequantize_iq4_nl,  float, float>;
+template [[host_name("kernel_mul_mm_tensor_iq4_xs_f32")]]  kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq4_xs,  QK_NL, dequantize_iq4_xs,  float, float>;
+template [[host_name("kernel_mul_mm_tensor_tq2_0_f32")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_tq2_0,   QK_NL, dequantize_tq2_0,   float, float>;
 
-template [[host_name("kernel_mul_mm_tensor_f32_f16")]]     kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, float4x4, 1, dequantize_f32, float, half>;
-template [[host_name("kernel_mul_mm_tensor_f16_f16")]]     kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, half4x4, 1, dequantize_f16, half, half>;
-template [[host_name("kernel_mul_mm_tensor_q1_0_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q1_0, 8, dequantize_q1_0, float, half>;
-template [[host_name("kernel_mul_mm_tensor_q2_0_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q2_0, 4, dequantize_q2_0, float, half>;
-template [[host_name("kernel_mul_mm_tensor_q4_0_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q4_0, 2, dequantize_q4_0, float, half>;
-template [[host_name("kernel_mul_mm_tensor_q4_1_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q4_1, 2, dequantize_q4_1, float, half>;
-template [[host_name("kernel_mul_mm_tensor_q5_0_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q5_0, 2, dequantize_q5_0, float, half>;
-template [[host_name("kernel_mul_mm_tensor_q5_1_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q5_1, 2, dequantize_q5_1, float, half>;
-template [[host_name("kernel_mul_mm_tensor_q8_0_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q8_0, 2, dequantize_q8_0, float, half>;
-template [[host_name("kernel_mul_mm_tensor_mxfp4_f16")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_mxfp4, 2, dequantize_mxfp4, float, half>;
-template [[host_name("kernel_mul_mm_tensor_q2_K_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q2_K, QK_NL, dequantize_q2_K, float, half>;
-template [[host_name("kernel_mul_mm_tensor_q3_K_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q3_K, QK_NL, dequantize_q3_K, float, half>;
-template [[host_name("kernel_mul_mm_tensor_q4_K_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q4_K, QK_NL, dequantize_q4_K, float, half>;
-template [[host_name("kernel_mul_mm_tensor_q5_K_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q5_K, QK_NL, dequantize_q5_K, float, half>;
-template [[host_name("kernel_mul_mm_tensor_q6_K_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q6_K, QK_NL, dequantize_q6_K, float, half>;
+template [[host_name("kernel_mul_mm_tensor_f32_f16")]]     kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, float4x4,      1,     dequantize_f32,     float, half>;
+template [[host_name("kernel_mul_mm_tensor_f16_f16")]]     kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, half4x4,       1,     dequantize_f16,     half,  half>;
+template [[host_name("kernel_mul_mm_tensor_q1_0_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q1_0,    8,     dequantize_q1_0,    float, half>;
+template [[host_name("kernel_mul_mm_tensor_q2_0_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q2_0,    4,     dequantize_q2_0,    float, half>;
+template [[host_name("kernel_mul_mm_tensor_q4_0_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q4_0,    2,     dequantize_q4_0,    float, half>;
+template [[host_name("kernel_mul_mm_tensor_q4_1_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q4_1,    2,     dequantize_q4_1,    float, half>;
+template [[host_name("kernel_mul_mm_tensor_q5_0_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q5_0,    2,     dequantize_q5_0,    float, half>;
+template [[host_name("kernel_mul_mm_tensor_q5_1_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q5_1,    2,     dequantize_q5_1,    float, half>;
+template [[host_name("kernel_mul_mm_tensor_q8_0_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q8_0,    2,     dequantize_q8_0,    float, half>;
+template [[host_name("kernel_mul_mm_tensor_mxfp4_f16")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_mxfp4,   2,     dequantize_mxfp4,   float, half>;
+template [[host_name("kernel_mul_mm_tensor_q2_K_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q2_K,    QK_NL, dequantize_q2_K,    float, half>;
+template [[host_name("kernel_mul_mm_tensor_q3_K_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q3_K,    QK_NL, dequantize_q3_K,    float, half>;
+template [[host_name("kernel_mul_mm_tensor_q4_K_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q4_K,    QK_NL, dequantize_q4_K,    float, half>;
+template [[host_name("kernel_mul_mm_tensor_q5_K_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q5_K,    QK_NL, dequantize_q5_K,    float, half>;
+template [[host_name("kernel_mul_mm_tensor_q6_K_f16")]]    kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_q6_K,    QK_NL, dequantize_q6_K,    float, half>;
 template [[host_name("kernel_mul_mm_tensor_iq2_xxs_f16")]] kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq2_xxs, QK_NL, dequantize_iq2_xxs, float, half>;
-template [[host_name("kernel_mul_mm_tensor_iq2_xs_f16")]]  kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq2_xs, QK_NL, dequantize_iq2_xs, float, half>;
+template [[host_name("kernel_mul_mm_tensor_iq2_xs_f16")]]  kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq2_xs,  QK_NL, dequantize_iq2_xs,  float, half>;
 template [[host_name("kernel_mul_mm_tensor_iq3_xxs_f16")]] kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq3_xxs, QK_NL, dequantize_iq3_xxs, float, half>;
-template [[host_name("kernel_mul_mm_tensor_iq3_s_f16")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq3_s, QK_NL, dequantize_iq3_s, float, half>;
-template [[host_name("kernel_mul_mm_tensor_iq2_s_f16")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq2_s, QK_NL, dequantize_iq2_s, float, half>;
-template [[host_name("kernel_mul_mm_tensor_iq1_s_f16")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq1_s, QK_NL, dequantize_iq1_s, float, half>;
-template [[host_name("kernel_mul_mm_tensor_iq1_m_f16")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq1_m, QK_NL, dequantize_iq1_m, float, half>;
-template [[host_name("kernel_mul_mm_tensor_iq4_nl_f16")]]  kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq4_nl, 2, dequantize_iq4_nl, float, half>;
-template [[host_name("kernel_mul_mm_tensor_iq4_xs_f16")]]  kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq4_xs, QK_NL, dequantize_iq4_xs, float, half>;
-template [[host_name("kernel_mul_mm_tensor_tq2_0_f16")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_tq2_0, QK_NL, dequantize_tq2_0, float, half>;
+template [[host_name("kernel_mul_mm_tensor_iq3_s_f16")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq3_s,   QK_NL, dequantize_iq3_s,   float, half>;
+template [[host_name("kernel_mul_mm_tensor_iq2_s_f16")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq2_s,   QK_NL, dequantize_iq2_s,   float, half>;
+template [[host_name("kernel_mul_mm_tensor_iq1_s_f16")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq1_s,   QK_NL, dequantize_iq1_s,   float, half>;
+template [[host_name("kernel_mul_mm_tensor_iq1_m_f16")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq1_m,   QK_NL, dequantize_iq1_m,   float, half>;
+template [[host_name("kernel_mul_mm_tensor_iq4_nl_f16")]]  kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq4_nl,  2,     dequantize_iq4_nl,  float, half>;
+template [[host_name("kernel_mul_mm_tensor_iq4_xs_f16")]]  kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_iq4_xs,  QK_NL, dequantize_iq4_xs,  float, half>;
+template [[host_name("kernel_mul_mm_tensor_tq2_0_f16")]]   kernel mul_mm_tensor_t kernel_mul_mm_tensor<half, half, block_tq2_0,   QK_NL, dequantize_tq2_0,   float, half>;
 
 //
 // indirect matrix-matrix multiplication
@@ -441,7 +441,7 @@ template [[host_name("kernel_mul_mm_tensor_tq2_0_f16")]]   kernel mul_mm_tensor_
 typedef decltype(kernel_mul_mm_id_tensor<half, half, float4x4, 1, dequantize_f32, float, float>) mul_mm_id_tensor_t;
 
 template [[host_name("kernel_mul_mm_id_tensor_f32_f32")]]     kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, float4x4, 1, dequantize_f32, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_f16_f32")]]     kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, half4x4, 1, dequantize_f16, half, float>;
+template [[host_name("kernel_mul_mm_id_tensor_f16_f32")]]     kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, half4x4,  1, dequantize_f16, half,  float>;
 #if defined(GGML_METAL_HAS_BF16)
 template [[host_name("kernel_mul_mm_id_tensor_bf16_f32")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<bfloat, bfloat, bfloat4x4, 1, dequantize_bf16, bfloat, float>;
 #endif
@@ -457,57 +457,54 @@ template [[host_name("kernel_mul_mm_id_tensor_mxfp4_f32")]]   kernel mul_mm_id_t
 #else
 template [[host_name("kernel_mul_mm_id_tensor_mxfp4_f32")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_mxfp4, 2, dequantize_mxfp4, float, float>;
 #endif
-template [[host_name("kernel_mul_mm_id_tensor_q2_K_f32")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q2_K, QK_NL, dequantize_q2_K, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_q3_K_f32")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q3_K, QK_NL, dequantize_q3_K, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_q4_K_f32")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q4_K, QK_NL, dequantize_q4_K, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_q5_K_f32")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q5_K, QK_NL, dequantize_q5_K, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_q6_K_f32")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q6_K, QK_NL, dequantize_q6_K, float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_q2_K_f32")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q2_K,    QK_NL, dequantize_q2_K,    float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_q3_K_f32")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q3_K,    QK_NL, dequantize_q3_K,    float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_q4_K_f32")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q4_K,    QK_NL, dequantize_q4_K,    float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_q5_K_f32")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q5_K,    QK_NL, dequantize_q5_K,    float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_q6_K_f32")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q6_K,    QK_NL, dequantize_q6_K,    float, float>;
 template [[host_name("kernel_mul_mm_id_tensor_iq2_xxs_f32")]] kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq2_xxs, QK_NL, dequantize_iq2_xxs, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_iq2_xs_f32")]]  kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq2_xs, QK_NL, dequantize_iq2_xs, float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_iq2_xs_f32")]]  kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq2_xs,  QK_NL, dequantize_iq2_xs,  float, float>;
 template [[host_name("kernel_mul_mm_id_tensor_iq3_xxs_f32")]] kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq3_xxs, QK_NL, dequantize_iq3_xxs, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_iq3_s_f32")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq3_s, QK_NL, dequantize_iq3_s, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_iq2_s_f32")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq2_s, QK_NL, dequantize_iq2_s, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_iq1_s_f32")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq1_s, QK_NL, dequantize_iq1_s, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_iq1_m_f32")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq1_m, QK_NL, dequantize_iq1_m, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_iq4_nl_f32")]]  kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq4_nl, 2, dequantize_iq4_nl, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_iq4_xs_f32")]]  kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq4_xs, QK_NL, dequantize_iq4_xs, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_tq2_0_f32")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_tq2_0, QK_NL, dequantize_tq2_0, float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_iq3_s_f32")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq3_s,   QK_NL, dequantize_iq3_s,   float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_iq2_s_f32")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq2_s,   QK_NL, dequantize_iq2_s,   float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_iq1_s_f32")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq1_s,   QK_NL, dequantize_iq1_s,   float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_iq1_m_f32")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq1_m,   QK_NL, dequantize_iq1_m,   float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_iq4_nl_f32")]]  kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq4_nl,  2,     dequantize_iq4_nl,  float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_iq4_xs_f32")]]  kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq4_xs,  QK_NL, dequantize_iq4_xs,  float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_tq2_0_f32")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_tq2_0,   QK_NL, dequantize_tq2_0,   float, float>;
 
 #if defined(GGML_METAL_HAS_BF16)
 template [[host_name("kernel_mul_mm_id_tensor_f32_f32_prec_bf16")]]     kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<bfloat, bfloat, float4x4, 1, dequantize_f32, float, float>;
 #endif
 
 #if defined(GGML_METAL_HAS_BF16)
-template [[host_name("kernel_mul_mm_id_tensor_f16_f32_prec_bf16")]]     kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, half4x4, 1, dequantize_f16, half, float>;
-template [[host_name("kernel_mul_mm_id_tensor_q1_0_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q1_0, 8, dequantize_q1_0, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_q2_0_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q2_0, 4, dequantize_q2_0, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_q4_0_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q4_0, 2, dequantize_q4_0, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_q4_1_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q4_1, 2, dequantize_q4_1, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_q5_0_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q5_0, 2, dequantize_q5_0, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_q5_1_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q5_1, 2, dequantize_q5_1, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_q8_0_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q8_0, 2, dequantize_q8_0, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_q2_K_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q2_K, QK_NL, dequantize_q2_K, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_q3_K_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q3_K, QK_NL, dequantize_q3_K, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_q4_K_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q4_K, QK_NL, dequantize_q4_K, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_q5_K_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q5_K, QK_NL, dequantize_q5_K, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_q6_K_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q6_K, QK_NL, dequantize_q6_K, float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_f16_f32_prec_bf16")]]     kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, half4x4,       1,     dequantize_f16,     half,  float>;
+template [[host_name("kernel_mul_mm_id_tensor_q1_0_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q1_0,    8,     dequantize_q1_0,    float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_q2_0_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q2_0,    4,     dequantize_q2_0,    float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_q4_0_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q4_0,    2,     dequantize_q4_0,    float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_q4_1_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q4_1,    2,     dequantize_q4_1,    float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_q5_0_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q5_0,    2,     dequantize_q5_0,    float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_q5_1_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q5_1,    2,     dequantize_q5_1,    float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_q8_0_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q8_0,    2,     dequantize_q8_0,    float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_q2_K_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q2_K,    QK_NL, dequantize_q2_K,    float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_q3_K_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q3_K,    QK_NL, dequantize_q3_K,    float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_q4_K_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q4_K,    QK_NL, dequantize_q4_K,    float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_q5_K_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q5_K,    QK_NL, dequantize_q5_K,    float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_q6_K_f32_prec_bf16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_q6_K,    QK_NL, dequantize_q6_K,    float, float>;
 template [[host_name("kernel_mul_mm_id_tensor_iq2_xxs_f32_prec_bf16")]] kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_iq2_xxs, QK_NL, dequantize_iq2_xxs, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_iq2_xs_f32_prec_bf16")]]  kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_iq2_xs, QK_NL, dequantize_iq2_xs, float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_iq2_xs_f32_prec_bf16")]]  kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_iq2_xs,  QK_NL, dequantize_iq2_xs,  float, float>;
 template [[host_name("kernel_mul_mm_id_tensor_iq3_xxs_f32_prec_bf16")]] kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_iq3_xxs, QK_NL, dequantize_iq3_xxs, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_iq3_s_f32_prec_bf16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_iq3_s, QK_NL, dequantize_iq3_s, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_iq2_s_f32_prec_bf16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_iq2_s, QK_NL, dequantize_iq2_s, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_iq1_s_f32_prec_bf16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_iq1_s, QK_NL, dequantize_iq1_s, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_iq1_m_f32_prec_bf16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_iq1_m, QK_NL, dequantize_iq1_m, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_iq4_nl_f32_prec_bf16")]]  kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_iq4_nl, 2, dequantize_iq4_nl, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_iq4_xs_f32_prec_bf16")]]  kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_iq4_xs, QK_NL, dequantize_iq4_xs, float, float>;
-template [[host_name("kernel_mul_mm_id_tensor_tq2_0_f32_prec_bf16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_tq2_0, QK_NL, dequantize_tq2_0, float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_iq3_s_f32_prec_bf16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_iq3_s,   QK_NL, dequantize_iq3_s,   float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_iq2_s_f32_prec_bf16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_iq2_s,   QK_NL, dequantize_iq2_s,   float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_iq1_s_f32_prec_bf16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_iq1_s,   QK_NL, dequantize_iq1_s,   float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_iq1_m_f32_prec_bf16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_iq1_m,   QK_NL, dequantize_iq1_m,   float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_iq4_nl_f32_prec_bf16")]]  kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_iq4_nl,  2,     dequantize_iq4_nl,  float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_iq4_xs_f32_prec_bf16")]]  kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_iq4_xs,  QK_NL, dequantize_iq4_xs,  float, float>;
+template [[host_name("kernel_mul_mm_id_tensor_tq2_0_f32_prec_bf16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, bfloat, block_tq2_0,   QK_NL, dequantize_tq2_0,   float, float>;
 #endif
 
-
-
-
-template [[host_name("kernel_mul_mm_id_tensor_f32_f16")]]     kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, float4x4, 1, dequantize_f32, float, half>;
-template [[host_name("kernel_mul_mm_id_tensor_f16_f16")]]     kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, half4x4, 1, dequantize_f16, half, half>;
+template [[host_name("kernel_mul_mm_id_tensor_f32_f16")]]     kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, float4x4,   1, dequantize_f32,  float, half>;
+template [[host_name("kernel_mul_mm_id_tensor_f16_f16")]]     kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, half4x4,    1, dequantize_f16,  half,  half>;
 template [[host_name("kernel_mul_mm_id_tensor_q1_0_f16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q1_0, 8, dequantize_q1_0, float, half>;
 template [[host_name("kernel_mul_mm_id_tensor_q2_0_f16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q2_0, 4, dequantize_q2_0, float, half>;
 template [[host_name("kernel_mul_mm_id_tensor_q4_0_f16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q4_0, 2, dequantize_q4_0, float, half>;
@@ -520,19 +517,19 @@ template [[host_name("kernel_mul_mm_id_tensor_mxfp4_f16")]]   kernel mul_mm_id_t
 #else
 template [[host_name("kernel_mul_mm_id_tensor_mxfp4_f16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_mxfp4, 2, dequantize_mxfp4, float, half>;
 #endif
-template [[host_name("kernel_mul_mm_id_tensor_q2_K_f16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q2_K, QK_NL, dequantize_q2_K, float, half>;
-template [[host_name("kernel_mul_mm_id_tensor_q3_K_f16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q3_K, QK_NL, dequantize_q3_K, float, half>;
-template [[host_name("kernel_mul_mm_id_tensor_q4_K_f16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q4_K, QK_NL, dequantize_q4_K, float, half>;
-template [[host_name("kernel_mul_mm_id_tensor_q5_K_f16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q5_K, QK_NL, dequantize_q5_K, float, half>;
-template [[host_name("kernel_mul_mm_id_tensor_q6_K_f16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q6_K, QK_NL, dequantize_q6_K, float, half>;
+template [[host_name("kernel_mul_mm_id_tensor_q2_K_f16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q2_K,    QK_NL, dequantize_q2_K,    float, half>;
+template [[host_name("kernel_mul_mm_id_tensor_q3_K_f16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q3_K,    QK_NL, dequantize_q3_K,    float, half>;
+template [[host_name("kernel_mul_mm_id_tensor_q4_K_f16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q4_K,    QK_NL, dequantize_q4_K,    float, half>;
+template [[host_name("kernel_mul_mm_id_tensor_q5_K_f16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q5_K,    QK_NL, dequantize_q5_K,    float, half>;
+template [[host_name("kernel_mul_mm_id_tensor_q6_K_f16")]]    kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_q6_K,    QK_NL, dequantize_q6_K,    float, half>;
 template [[host_name("kernel_mul_mm_id_tensor_iq2_xxs_f16")]] kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq2_xxs, QK_NL, dequantize_iq2_xxs, float, half>;
-template [[host_name("kernel_mul_mm_id_tensor_iq2_xs_f16")]]  kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq2_xs, QK_NL, dequantize_iq2_xs, float, half>;
+template [[host_name("kernel_mul_mm_id_tensor_iq2_xs_f16")]]  kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq2_xs,  QK_NL, dequantize_iq2_xs,  float, half>;
 template [[host_name("kernel_mul_mm_id_tensor_iq3_xxs_f16")]] kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq3_xxs, QK_NL, dequantize_iq3_xxs, float, half>;
-template [[host_name("kernel_mul_mm_id_tensor_iq3_s_f16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq3_s, QK_NL, dequantize_iq3_s, float, half>;
-template [[host_name("kernel_mul_mm_id_tensor_iq2_s_f16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq2_s, QK_NL, dequantize_iq2_s, float, half>;
-template [[host_name("kernel_mul_mm_id_tensor_iq1_s_f16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq1_s, QK_NL, dequantize_iq1_s, float, half>;
-template [[host_name("kernel_mul_mm_id_tensor_iq1_m_f16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq1_m, QK_NL, dequantize_iq1_m, float, half>;
-template [[host_name("kernel_mul_mm_id_tensor_iq4_nl_f16")]]  kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq4_nl, 2, dequantize_iq4_nl, float, half>;
-template [[host_name("kernel_mul_mm_id_tensor_iq4_xs_f16")]]  kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq4_xs, QK_NL, dequantize_iq4_xs, float, half>;
-template [[host_name("kernel_mul_mm_id_tensor_tq2_0_f16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_tq2_0, QK_NL, dequantize_tq2_0, float, half>;
+template [[host_name("kernel_mul_mm_id_tensor_iq3_s_f16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq3_s,   QK_NL, dequantize_iq3_s,   float, half>;
+template [[host_name("kernel_mul_mm_id_tensor_iq2_s_f16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq2_s,   QK_NL, dequantize_iq2_s,   float, half>;
+template [[host_name("kernel_mul_mm_id_tensor_iq1_s_f16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq1_s,   QK_NL, dequantize_iq1_s,   float, half>;
+template [[host_name("kernel_mul_mm_id_tensor_iq1_m_f16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq1_m,   QK_NL, dequantize_iq1_m,   float, half>;
+template [[host_name("kernel_mul_mm_id_tensor_iq4_nl_f16")]]  kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq4_nl,  2,     dequantize_iq4_nl,  float, half>;
+template [[host_name("kernel_mul_mm_id_tensor_iq4_xs_f16")]]  kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq4_xs,  QK_NL, dequantize_iq4_xs,  float, half>;
+template [[host_name("kernel_mul_mm_id_tensor_tq2_0_f16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_tq2_0,   QK_NL, dequantize_tq2_0,   float, half>;
 #endif // GGML_METAL_HAS_TENSOR

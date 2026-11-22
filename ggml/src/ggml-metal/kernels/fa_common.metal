@@ -47,17 +47,17 @@ void kernel_flash_attn_ext_impl(
         uint3   tgpig,
         ushort  tiisg,
         ushort  sgitg) {
-    using q4_t   = typename value_type_4   <q_t>::type;
-    using q8x8_t = typename value_type_8x8 <q_t>::type;
-    using k4x4_t = typename value_type_4x4 <k_t>::type;
-    using k8x8_t = typename value_type_8x8 <k_t>::type;
-    using v4x4_t = typename value_type_4x4 <v_t>::type;
-    using v8x8_t = typename value_type_8x8 <v_t>::type;
+    using q4_t    = typename value_type_4   <q_t>::type;
+    using q8x8_t  = typename value_type_8x8 <q_t>::type;
+    using k4x4_t  = typename value_type_4x4 <k_t>::type;
+    using k8x8_t  = typename value_type_8x8 <k_t>::type;
+    using v4x4_t  = typename value_type_4x4 <v_t>::type;
+    using v8x8_t  = typename value_type_8x8 <v_t>::type;
     using qk8x8_t = typename value_type_8x8<qk_t>::type;
-    using s2_t   = typename value_type_2   <s_t>::type;
-    using s8x8_t = typename value_type_8x8 <s_t>::type;
-    using o4_t   = typename value_type_4   <o_t>::type;
-    using o8x8_t = typename value_type_8x8 <o_t>::type;
+    using s2_t    = typename value_type_2   <s_t>::type;
+    using s8x8_t  = typename value_type_8x8 <s_t>::type;
+    using o4_t    = typename value_type_4   <o_t>::type;
+    using o8x8_t  = typename value_type_8x8 <o_t>::type;
 
     const ushort iq3 = tgpig[2];
     const ushort iq2 = tgpig[1];
