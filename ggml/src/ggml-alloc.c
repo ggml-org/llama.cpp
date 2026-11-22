@@ -80,7 +80,7 @@ enum ggml_status ggml_tallocr_alloc(struct ggml_tallocr * talloc, struct ggml_te
     if (align > 0 && raw_size > SIZE_MAX - (align - 1)) {
         GGML_LOG_ERROR("%s: tensor %s size %zu overflows padding alignment %zu\n",
                 __func__, tensor->name, raw_size, align);
-        return GGML_STATUS_ALLOC_FAILED;
+        GGML_ABORT("tensor size overflows padding alignment");
     }
     const size_t size = GGML_PAD(raw_size, align);
     const size_t buf_size = ggml_backend_buffer_get_size(talloc->buffer);
