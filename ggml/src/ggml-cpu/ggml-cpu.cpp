@@ -1,6 +1,7 @@
 #include "ggml-backend.h"
 #include "ggml-backend-impl.h"
 #include "ggml-cpu.h"
+#include "ggml-cpu-mem.h"
 #include "repack.h"
 #include "traits.h"
 #include "ggml-impl.h"
@@ -374,8 +375,19 @@ static void ggml_backend_cpu_device_get_memory(ggml_backend_dev_t dev, size_t * 
     long page_size = sysconf(_SC_PAGE_SIZE);
     *total = pages * page_size;
 
+#if defined(__linux__)
+    // report the actually available host memory instead of assuming that all of it is free, taking cgroup (container) memory limits into account
+    // keep the previous behavior when no estimate can be made
+    size_t host_free = 0;
+    if (ggml_cpu_host_free_estimate("/proc/meminfo", "/sys/fs/cgroup", *total, &host_free)) {
+        *free = host_free;
+    } else {
+        *free = *total;
+    }
+#else
     // "free" system memory is ill-defined, for practical purposes assume that all of it is free:
     *free = *total;
+#endif
 #endif // _WIN32
 
     GGML_UNUSED(dev);
