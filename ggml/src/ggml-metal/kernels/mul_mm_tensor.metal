@@ -2,12 +2,13 @@
 #include "dequantize.h"
 
 #ifdef GGML_METAL_HAS_TENSOR
-constant bool FC_mul_mm_bc_inp [[function_constant(FC_MUL_MM + 0)]];
-constant bool FC_mul_mm_bc_out [[function_constant(FC_MUL_MM + 1)]];
-constant short FC_mul_mm_ne12  [[function_constant(FC_MUL_MM + 2)]];
-constant short FC_mul_mm_ne13  [[function_constant(FC_MUL_MM + 3)]];
-constant short FC_mul_mm_r2    [[function_constant(FC_MUL_MM + 4)]];
-constant short FC_mul_mm_r3    [[function_constant(FC_MUL_MM + 5)]];
+
+constant bool    FC_mul_mm_bc_inp       [[function_constant(FC_MUL_MM + 0)]];
+constant bool    FC_mul_mm_bc_out       [[function_constant(FC_MUL_MM + 1)]];
+constant short   FC_mul_mm_ne12         [[function_constant(FC_MUL_MM + 2)]];
+constant short   FC_mul_mm_ne13         [[function_constant(FC_MUL_MM + 3)]];
+constant short   FC_mul_mm_r2           [[function_constant(FC_MUL_MM + 4)]];
+constant short   FC_mul_mm_r3           [[function_constant(FC_MUL_MM + 5)]];
 constant int32_t FC_mul_mm_id_map0_ne02 [[function_constant(FC_MUL_MM + 7)]];
 
 // each block_q contains 16*nl weights
@@ -532,4 +533,5 @@ template [[host_name("kernel_mul_mm_id_tensor_iq1_m_f16")]]   kernel mul_mm_id_t
 template [[host_name("kernel_mul_mm_id_tensor_iq4_nl_f16")]]  kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq4_nl,  2,     dequantize_iq4_nl,  float, half>;
 template [[host_name("kernel_mul_mm_id_tensor_iq4_xs_f16")]]  kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_iq4_xs,  QK_NL, dequantize_iq4_xs,  float, half>;
 template [[host_name("kernel_mul_mm_id_tensor_tq2_0_f16")]]   kernel mul_mm_id_tensor_t kernel_mul_mm_id_tensor<half, half, block_tq2_0,   QK_NL, dequantize_tq2_0,   float, half>;
+
 #endif // GGML_METAL_HAS_TENSOR
