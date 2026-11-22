@@ -5,6 +5,10 @@
 
 import subprocess
 import os
+import io
+import math
+import struct
+import wave
 
 TMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp")
 import re
@@ -126,7 +130,7 @@ class ServerProcess:
     no_cache_idle_slots: bool = False
     log_path: str | None = None
     ui_mcp_proxy: bool = False
-    debug_proxy_allow_private: bool = False # test-only: lets the CORS proxy reach local servers
+    ui_mcp_proxy_allow_private_urls: bool = False
     media_allow_private_urls: bool = False
     allow_unauthenticated_tools: bool = False
     backend_sampling: bool = False
@@ -155,8 +159,6 @@ class ServerProcess:
             **os.environ,
             "LLAMA_SERVER_DEBUG_FAKE_TIMING": "1",
         }
-        if self.debug_proxy_allow_private:
-            env["LLAMA_SERVER_DEBUG_PROXY_ALLOW_PRIVATE"] = "1"
         if self.llama_cache is not None:
             env["LLAMA_CACHE"] = self.llama_cache
         elif "LLAMA_CACHE" not in os.environ:
@@ -313,6 +315,8 @@ class ServerProcess:
             server_args.append("--no-cache-idle-slots")
         if self.ui_mcp_proxy:
             server_args.append("--ui-mcp-proxy")
+        if self.ui_mcp_proxy_allow_private_urls:
+            server_args.append("--ui-mcp-proxy-allow-private-urls")
         if self.media_allow_private_urls:
             server_args.append("--media-allow-private-urls")
         if self.allow_unauthenticated_tools:
@@ -562,6 +566,24 @@ class ServerProcess:
 
 server_instances: Set[ServerProcess] = set()
 
+# tiny decision models for the /v1/systemone tests, by decision type, see ServerPreset.tinydecision()
+TINY_DECISION_MODELS = {
+    "lfm3-d1":                 "ggml-org-dev/tiny-d1-2B-for-testing-GGUF:Q4_0",
+    "lfm3-d1-omni":            "ggml-org-dev/tiny-d1-Omni-2B-for-testing-GGUF:Q4_0",
+    "lfm2-d1":                 "ggml-org-dev/tiny-d1-3B-for-testing-GGUF:Q4_0",
+    "lfm2-d1-omni":            "ggml-org-dev/tiny-d1-omni-600M-for-testing-GGUF:Q4_0",
+    "lev":                     "ggml-org-dev/tiny-lev-for-testing-GGUF:Q4_0",
+    "kev":                     "ggml-org-dev/tiny-kev-4b-for-testing-GGUF:Q4_0",
+    "nimble":                  "ggml-org-dev/tiny-Bespoke-Nimble-9B-v3-for-testing-GGUF:Q4_0",
+    "pplx-decider":            "ggml-org-dev/tiny-pplx-decider-v1-27b-for-testing-GGUF:Q4_0",
+    "vllm-d3":                 "ggml-org-dev/tiny-d3-nano-for-testing-GGUF:Q4_0",
+    "h2o-lightning":           "ggml-org-dev/tiny-h2o-lightning-4b-for-testing-GGUF:Q4_0",
+    "vllm-decision2":          "ggml-org-dev/tiny-Decision-2.0-Kai-0.6B-for-testing-GGUF:Q4_0",
+    "granite-switch":          "ggml-org-dev/tiny-granite-switch-4.1-8b-for-testing-GGUF:Q4_0",
+    "clef":                    "ggml-org-dev/tiny-clef-for-testing-GGUF:Q4_0",
+    "openbmb-minicpm-ocr-jev": "ggml-org-dev/tiny-MiniCPM-OCR-Jev-for-testing-GGUF:Q4_0",
+}
+
 
 class ServerPreset:
     @staticmethod
@@ -570,8 +592,9 @@ class ServerPreset:
         servers: List[ServerProcess] = [
             method()
             for name, method in ServerPreset.__dict__.items()
-            if callable(method) and name != "load_all"
+            if callable(method) and name not in ("load_all", "tinydecision")
         ]
+        servers += [ServerPreset.tinydecision(decision_type) for decision_type in TINY_DECISION_MODELS]
         for server in servers:
             server.offline = False
             server.start()
@@ -698,6 +721,21 @@ class ServerPreset:
         return server
 
     @staticmethod
+    def tinydecision(decision_type: str) -> ServerProcess:
+        server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
+        # mmproj is already provided by HF registry API
+        server.model_hf_file = None
+        server.model_hf_repo = TINY_DECISION_MODELS[decision_type]
+        server.n_ctx = 4096
+        # non-causal models: the whole prompt must fit in one ubatch
+        server.n_batch = 1024
+        server.n_ubatch = 1024
+        server.n_slots = 2
+        server.seed = 42
+        return server
+
+    @staticmethod
     def tinygemma3() -> ServerProcess:
         server = ServerProcess()
         server.offline = True # will be downloaded by load_all()
@@ -720,6 +758,36 @@ class ServerPreset:
         server.model_hf_file = None
         server.model_hf_repo = "ggml-org-dev/tinyLFM3-Omni-for-testing-gguf:Q2_K"
         server.model_alias = "tinylfm3omni"
+        server.n_ctx = 1024
+        server.n_batch = 512
+        server.n_slots = 1
+        server.seed = 42
+        return server
+
+    @staticmethod
+    def tinypockettts() -> ServerProcess:
+        # tts only, with voice cloning
+        server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
+        # mmproj is already provided by HF registry API
+        server.model_hf_file = None
+        server.model_hf_repo = "ggml-org-dev/tinyPocketTTS-for-testing-gguf:Q8_0"
+        server.model_alias = "tinypockettts"
+        server.n_ctx = 1024
+        server.n_batch = 512
+        server.n_slots = 1
+        server.seed = 42
+        return server
+
+    @staticmethod
+    def tinyvoxtralrt() -> ServerProcess:
+        # live transcription only, no chat
+        server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
+        # mmproj is already provided by HF registry API
+        server.model_hf_file = None
+        server.model_hf_repo = "ggml-org-dev/tinyVoxtral-Realtime-for-testing-gguf:Q8_0"
+        server.model_alias = "tinyvoxtralrt"
         server.n_ctx = 1024
         server.n_batch = 512
         server.n_slots = 1
@@ -832,3 +900,24 @@ def get_lan_ip(server: ServerProcess) -> str | None:
 
 def is_slow_test_allowed():
     return os.environ.get("SLOW_TESTS") == "1" or os.environ.get("SLOW_TESTS") == "ON"
+
+
+# [TAG_MTMD_NO_REALLOC] TODO @ngxson : remove when mtmd side is fixed
+def is_no_realloc():
+    return os.environ.get("GGML_SCHED_NO_REALLOC") in ("1", "ON") or os.environ.get("GGML_SCHED_DEBUG_REALLOC", "0") != "0"
+
+
+def make_pcm16(seconds: float = 1.0, rate: int = 16000, freq: float = 440.0) -> bytes:
+    """ sine tone as raw PCM16 mono samples """
+    n = int(seconds * rate)
+    return struct.pack(f"<{n}h", *(int(0.3 * 32767 * math.sin(2 * math.pi * freq * i / rate)) for i in range(n)))
+
+
+def make_wav(seconds: float = 1.0, rate: int = 16000, freq: float = 440.0) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(make_pcm16(seconds, rate, freq))
+    return buf.getvalue()

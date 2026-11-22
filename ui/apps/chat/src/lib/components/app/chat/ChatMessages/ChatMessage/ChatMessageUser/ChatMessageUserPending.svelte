@@ -48,7 +48,7 @@
 			textColorClass="text-muted-foreground"
 		/>
 
-		<div class="max-w-[80%]">
+		<div class="max-w-4/5">
 			<div class="relative flex h-6 items-center justify-between">
 				<div class="right-0 flex items-center gap-2 opacity-100 transition-opacity">
 					<div

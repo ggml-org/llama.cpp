@@ -57,6 +57,7 @@ export const SETTINGS_KEYS = {
 	SHOW_AGENTIC_TURN_STATS: 'showAgenticTurnStats',
 	SHOW_BUILD_VERSION: 'showBuildVersion',
 	SHOW_FULL_PATH_IN_MENTIONS: 'showFullPathInMentions',
+	SHOW_MCP: 'showMcp',
 	// Display
 	SHOW_MESSAGE_STATS: 'showMessageStats',
 	SHOW_MODEL_CAPABILITIES_IN_SELECTOR: 'showModelCapabilitiesInSelector',
@@ -64,6 +65,7 @@ export const SETTINGS_KEYS = {
 	SHOW_MODEL_ORG_NAME_ON_MOBILE: 'showModelOrgNameOnMobile',
 	SHOW_MODEL_QUANTIZATION: 'showModelQuantization',
 	SHOW_MODEL_TAGS: 'showModelTags',
+	SHOW_MODELS_MANAGER: 'showModelsManager',
 	SHOW_RAW_MODEL_NAMES: 'showRawModelNames',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
 	SHOW_SYSTEM_MESSAGE: 'showSystemMessage',
@@ -85,6 +87,17 @@ export const SETTINGS_KEYS = {
 	TYP_P: 'typ_p',
 	// General
 	USE_HUGGING_FACE_HUB: 'useHuggingFaceHub',
+	// Voice
+	VOICE_AUTO_GAIN: 'voiceAutoGain',
+	VOICE_BOOST: 'voiceBoost',
+	VOICE_COLLAPSE_TRANSCRIPTS: 'voiceCollapseTranscripts',
+	VOICE_ECHO_CANCELLATION: 'voiceEchoCancellation',
+	VOICE_INPUT_MODE: 'voiceInputMode',
+	VOICE_MICROPHONE: 'voiceMicrophone',
+	VOICE_NOISE_SUPPRESSION: 'voiceNoiseSuppression',
+	VOICE_TRANSCRIBE_MESSAGES: 'voiceTranscribeMessages',
+	VOICE_TRANSCRIPTION_LANGUAGE: 'voiceTranscriptionLanguage',
+	VOICE_TRANSCRIPTION_MODEL: 'voiceTranscriptionModel',
 	XTC_PROBABILITY: 'xtc_probability',
 	XTC_THRESHOLD: 'xtc_threshold'
 } as const;

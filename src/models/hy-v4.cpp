@@ -393,24 +393,8 @@ ggml_tensor * llama_model_hy_v4::graph::build_indexer_top_k(
     // fold both reference scale factors into the weights before the big score tensor
     iw = ggml_scale(ctx0, iw, 1.0f / sqrtf(float(n_embd_indexer * n_indexer_head)));
 
-    ggml_tensor * score = nullptr;
-    if (cparams.fused_lid) {
-        score = ggml_lightning_indexer(ctx0, iq, ik, iw, inp_attn_dsa->self_attn_mask_lid.raw);
-        cb(score, "indexer_score", il);
-        res->add_fused_node({LLM_FUSED_OP_LIGHTNING_INDEXER, score, il});
-    } else {
-        iq = ggml_permute(ctx0, iq, 0, 2, 1, 3);
-        ik = ggml_permute(ctx0, ik, 0, 2, 1, 3);
-
-        score = ggml_mul_mat(ctx0, ik, iq);
-        score = ggml_cont(ctx0, ggml_permute(ctx0, score, 2, 1, 0, 3));
-        score = ggml_relu(ctx0, score);
-        score = ggml_mul(ctx0, score, iw);
-        score = ggml_sum_rows(ctx0, score);
-        score = ggml_cont(ctx0, ggml_permute(ctx0, score, 2, 1, 0, 3));
-        score = ggml_add(ctx0, score, inp_attn_dsa->self_attn_mask_lid.raw);
-        cb(score, "indexer_score", il);
-    }
+    ggml_tensor * score = ggml_lightning_indexer(ctx0, iq, ik, iw, inp_attn_dsa->self_attn_mask_lid.raw);
+    cb(score, "indexer_score", il);
 
     const uint32_t n_top_k = score->ne[0] < (int64_t) hparams.indexer_top_k ? score->ne[0] : hparams.indexer_top_k;
 

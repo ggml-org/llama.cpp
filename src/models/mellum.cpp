@@ -199,11 +199,7 @@ llama_model_mellum::graph<iswa>::graph(const llm_graph_params & params) : llm_gr
                     LLM_FFN_SILU, hparams.expert_weights_norm,
                     hparams.expert_weights_scale,
                     (llama_expert_gating_func_type) hparams.expert_gating_func,
-                    il,
-                    nullptr, nullptr,
-                    model.layers[il].ffn_up_exps_s,
-                    model.layers[il].ffn_gate_exps_s,
-                    model.layers[il].ffn_down_exps_s);
+                    il);
         cb(moe_out, "ffn_moe_out", il);
         cur = moe_out;
 
@@ -351,11 +347,7 @@ llama_model_mellum::graph_mtp<iswa>::graph_mtp(const llm_graph_params & params) 
             LLM_FFN_SILU, hparams.expert_weights_norm,
             hparams.expert_weights_scale,
             (llama_expert_gating_func_type) hparams.expert_gating_func,
-            il,
-            nullptr, nullptr,
-            layer.ffn_up_exps_s,
-            layer.ffn_gate_exps_s,
-            layer.ffn_down_exps_s);
+            il);
     cb(cur, "mtp_ffn_moe_out", il);
 
     cur = ggml_add(ctx0, cur, ffn_inp);

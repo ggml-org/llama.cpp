@@ -89,7 +89,7 @@
 	{#if safeUrl}
 		<HoverCard.Root closeDelay={100} openDelay={150}>
 			<HoverCard.Trigger
-				class="hover:bg-muted/80 focus-visible:ring-ring inline-flex max-w-full items-center gap-1.5 rounded-full border bg-muted px-2.5 py-1 text-xs transition-colors outline-none focus-visible:ring-2"
+				class="hover:bg-muted/80 focus-visible:ring-ring inline-flex max-w-full items-center gap-1.5 rounded-full border bg-muted px-2.5 py-1 text-caption transition-colors outline-none focus-visible:ring-2"
 				href={safeUrl}
 				rel="noopener noreferrer"
 				target="_blank"
@@ -114,14 +114,14 @@
 				<HoverCard.Content align="start" class="w-80 max-w-[90vw]" side="top" sideOffset={6}>
 					<div class="flex flex-col gap-2 px-2 py-1.5">
 						<a
-							class="line-clamp-3 text-sm font-medium leading-snug hover:underline"
+							class="line-clamp-3 text-label leading-snug hover:underline"
 							href={safeUrl}
 							rel="noopener noreferrer"
 							target="_blank">{result.title}</a
 						>
 
 						{#if publishDate || result.author}
-							<div class="text-muted-foreground flex items-center gap-1.5 text-[11px]">
+							<div class="text-muted-foreground flex items-center gap-1.5 text-caption">
 								{#if publishDate}
 									<span>{publishDate}</span>
 								{/if}
@@ -138,14 +138,14 @@
 
 						{#if result.highlights}
 							<p
-								class="text-popover-foreground/85 line-clamp-5 text-xs leading-relaxed whitespace-pre-line"
+								class="text-popover-foreground/85 line-clamp-5 text-caption leading-relaxed whitespace-pre-line"
 							>
 								{result.highlights}
 							</p>
 						{/if}
 
 						{#if host}
-							<div class="text-muted-foreground/80 truncate text-[11px]">{host}</div>
+							<div class="text-muted-foreground/80 truncate text-caption">{host}</div>
 						{/if}
 					</div>
 				</HoverCard.Content>
@@ -162,12 +162,12 @@
 			{/each}
 		</div>
 	{:else if showSpinner}
-		<div class="text-muted-foreground/70 flex items-center gap-2 py-1 text-xs italic">
+		<div class="text-muted-foreground/70 flex items-center gap-2 py-1 text-caption italic">
 			<Loader2 class="size-icon-xs animate-spin" />
 
 			<span>Searching...</span>
 		</div>
 	{:else}
-		<div class="text-muted-foreground/70 py-1 text-xs italic">No results</div>
+		<div class="text-muted-foreground/70 py-1 text-caption italic">No results</div>
 	{/if}
 </CollapsibleContentBlock>

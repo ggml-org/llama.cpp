@@ -24,13 +24,13 @@
 </svelte:head>
 
 <div
-	class="mx-auto flex h-[100dvh] w-full max-w-7xl flex-col gap-6 px-4 pt-(--page-top) md:px-8 md:pt-6"
+	class="mx-auto flex h-dvh w-full max-w-7xl flex-col gap-6 px-4 pt-(--page-top) md:px-8 md:pt-6"
 >
 	<div class="flex items-start gap-4">
 		<div class="flex min-w-0 flex-col gap-1">
-			<h1 class="text-2xl font-semibold tracking-tight">Models</h1>
+			<h1 class="text-heading tracking-tight">Models</h1>
 
-			<p class="text-sm text-muted-foreground">
+			<p class="text-body-sm text-muted-foreground">
 				Load, configure and remove the models this server can run.
 			</p>
 		</div>

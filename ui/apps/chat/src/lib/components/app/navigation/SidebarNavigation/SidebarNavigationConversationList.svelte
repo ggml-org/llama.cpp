@@ -212,7 +212,7 @@
 					isDragged && 'sidebar-drag-surface relative z-20 rounded-lg',
 					isDragged &&
 						sidebarDragStore.settling &&
-						'transition-transform duration-200 ease-[cubic-bezier(0.23,1,0.32,1)]'
+						'transition-transform duration-200 ease-out-quint'
 				]}
 				data-sidebar-slot={section.id}
 			>
@@ -368,7 +368,7 @@
 
 				{#if conversations.length === 0}
 					<li class="px-2 py-4 text-center">
-						<p class="mb-4 p-4 text-sm text-muted-foreground">No conversations yet</p>
+						<p class="mb-4 p-4 text-body-sm text-muted-foreground">No conversations yet</p>
 					</li>
 				{/if}
 

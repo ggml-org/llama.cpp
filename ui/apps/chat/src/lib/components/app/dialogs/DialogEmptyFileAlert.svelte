@@ -30,13 +30,13 @@
 			</AlertDialog.Description>
 		</AlertDialog.Header>
 
-		<div class="space-y-3 text-sm">
+		<div class="space-y-3 text-body-sm">
 			<div class="rounded-lg bg-muted p-3">
 				<div class="mb-2 font-medium">Empty Files:</div>
 
 				<ul class="list-inside list-disc space-y-1 text-muted-foreground">
 					{#each emptyFiles as fileName (fileName)}
-						<li class="font-mono text-sm">{fileName}</li>
+						<li class="font-mono text-body-sm">{fileName}</li>
 					{/each}
 				</ul>
 			</div>

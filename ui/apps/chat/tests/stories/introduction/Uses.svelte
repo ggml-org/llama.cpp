@@ -1,6 +1,7 @@
 <!--
 	What this Storybook is for, as four tiles: designing with the real system, building from the components, checking with
-	the accessibility addon and handing over to agents. Each has its icon, its name and one line.
+	the accessibility addon (its findings are shown, not yet enforced; see a11y in .storybook/preview.ts) and handing over
+	to agents. Each has its icon, its name and one line.
 -->
 <script lang="ts">
 	import { Blocks, CircleCheck, PenTool, Send } from '@lucide/svelte';
@@ -18,12 +19,12 @@
 		},
 		{
 			icon: CircleCheck,
-			line: 'Every story is the real code, checked for accessibility',
+			line: 'Every story is the real code; the Accessibility panel lists what it misses',
 			name: 'Checking'
 		},
 		{
 			icon: Send,
-			line: 'The rules are written for agents in DESIGN.md, from the tokens',
+			line: 'The rules are written for agents in DESIGN.md, its tokens generated from the CSS',
 			name: 'Handing over'
 		}
 	];
@@ -31,8 +32,8 @@
 
 <div class="uses">
 	{#each uses as use (use.name)}
-		<section class="use card-surface rounded-card">
-			<span class="glyph rounded-control bg-surface-lifted elevated-control">
+		<section class="use card-surface rounded-xl">
+			<span class="glyph rounded-md bg-(--surface-lifted) elevated-control">
 				<use.icon aria-hidden="true" size={18} />
 			</span>
 

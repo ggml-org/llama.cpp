@@ -7,6 +7,7 @@
 		SettingsChatImportExportTab,
 		SettingsChatMobileHeader,
 		SettingsChatToolsTab,
+		SettingsChatVoiceTab,
 		SettingsFooter,
 		SettingsResetButton
 	} from '#lib/components/app/settings/index.ts';
@@ -97,6 +98,10 @@
 		// unchecking it turns the hub back off, so the checkbox never lies
 		if (key === SETTINGS_KEYS.ENABLE_DISCOVER_MODELS) {
 			localConfig[SETTINGS_KEYS.USE_HUGGING_FACE_HUB] = value === true;
+
+			// it opens from the Models page, so checking it shows Models too; unchecking it
+			// leaves Models as it is, since Models is useful without it
+			if (value === true) localConfig[SETTINGS_KEYS.SHOW_MODELS_MANAGER] = true;
 		}
 	}
 
@@ -181,6 +186,12 @@
 						<SettingsChatToolsTab />
 					{:else if currentSection.slug === SETTINGS_SECTION_SLUGS.IMPORT_EXPORT}
 						<SettingsChatImportExportTab />
+					{:else if currentSection.slug === SETTINGS_SECTION_SLUGS.VOICE && currentSection.fields}
+						<SettingsChatVoiceTab
+							fields={currentSection.fields}
+							{localConfig}
+							onConfigChange={handleConfigChange}
+						/>
 					{:else if currentSection.fields}
 						<div class="space-y-6">
 							<SettingsChatFields
@@ -205,7 +216,9 @@
 				</div>
 
 				<div class="mt-8 border-t border-border/30 pt-6 pb-6">
-					<p class="text-xs text-muted-foreground">Settings are saved in browser's localStorage</p>
+					<p class="text-caption text-muted-foreground">
+						Settings are saved in browser's localStorage
+					</p>
 				</div>
 			</div>
 

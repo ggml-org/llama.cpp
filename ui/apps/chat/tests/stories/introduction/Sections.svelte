@@ -4,51 +4,28 @@
 -->
 <script lang="ts">
 	import { PATHS, SIZE } from '../brand/logo-showcase/lib/logo';
+	import { STORYBOOK_SECTIONS } from './sections';
 	import { BookOpen, Bot, LayoutGrid, MessageSquare } from '@lucide/svelte';
 
-	const sections = [
-		{
-			here: true,
-			holds: 'What this is, and how it fits together',
-			icon: BookOpen,
-			name: 'Introduction',
-			pages: []
-		},
-		{
-			holds: 'The rules, for agents',
-			icon: Bot,
-			name: 'Agents',
-			pages: ['Design guidelines']
-		},
-		{
-			holds: 'The library: its foundations, components and Model UI',
-			icon: LayoutGrid,
-			name: 'Llama UI',
-			pages: ['Foundations', 'Components', 'App components', 'Models', 'Mockups']
-		},
-		{
-			holds: 'The app: its screens and the parts they are built from',
-			icon: MessageSquare,
-			name: 'Llama Chat',
-			pages: [
-				'Foundations',
-				'Chat',
-				'Content',
-				'Models',
-				'MCP',
-				'Navigation',
-				'Settings',
-				'Dialogs'
-			]
-		}
-	];
+	const ICONS: Record<string, typeof BookOpen> = {
+		Agents: Bot,
+		Introduction: BookOpen,
+		'Llama Chat': MessageSquare,
+		'Llama UI': LayoutGrid
+	};
+
+	const sections = STORYBOOK_SECTIONS.map((section) => ({
+		...section,
+		here: section.name === 'Introduction',
+		icon: ICONS[section.name]
+	}));
 </script>
 
 <ol class="sections">
 	{#each sections as section (section.name)}
 		<li class="section">
 			<span
-				class={['glyph rounded-control bg-surface-lifted elevated-control', { here: section.here }]}
+				class={['glyph rounded-md bg-(--surface-lifted) elevated-control', { here: section.here }]}
 			>
 				{#if section.icon}
 					<section.icon aria-hidden="true" size={16} />
@@ -59,7 +36,7 @@
 				{/if}
 			</span>
 
-			<div class="body card-surface rounded-card">
+			<div class="body card-surface rounded-xl">
 				<p class="head">
 					<b>{section.name}</b>
 
@@ -71,7 +48,7 @@
 				{#if section.pages.length}
 					<ul class="pages">
 						{#each section.pages as page (page)}
-							<li class="page rounded-control">{page}</li>
+							<li class="page rounded-md">{page}</li>
 						{/each}
 					</ul>
 				{/if}

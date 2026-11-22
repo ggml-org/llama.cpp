@@ -15,7 +15,7 @@
 
 <div in:fade class="{marginClass} w-full max-w-3xl">
 	<div class="flex flex-col items-start gap-2">
-		<span class="shimmer-text text-sm">
+		<span class="shimmer-text text-body-sm">
 			{modelLoadingText ??
 				processingState.getPromptProgressText() ??
 				processingState.getProcessingMessage() ??

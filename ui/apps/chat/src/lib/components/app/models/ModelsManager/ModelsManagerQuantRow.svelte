@@ -59,13 +59,13 @@
 			style="padding-left: {indent}px"
 			type="button"
 		>
-			<Badge class="h-5 shrink-0 px-1.5 text-[10px]" variant="secondary">{quant}</Badge>
+			<Badge class="h-5 shrink-0 px-1.5 text-caption-sm" variant="secondary">{quant}</Badge>
 
 			<ModelDraftSidecars
 				draftSidecars={option.draftSidecars?.filter((badge) => !isAuxSidecar(badge.kind))}
 			/>
 
-			<span class="truncate text-sm text-muted-foreground">{option.model}</span>
+			<span class="truncate text-body-sm text-muted-foreground">{option.model}</span>
 		</button>
 
 		<ModelContext

@@ -1,8 +1,8 @@
 <script lang="ts" module>
-	import StateGallery from '../helpers/StateGallery.svelte';
-	import StateGalleryItem from '../helpers/StateGalleryItem.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import { HighlightedMatch } from '#lib/components/app/index.ts';
+	import StateGallery from '$llama-ui-stories/helpers/StateGallery.svelte';
+	import StateGalleryItem from '$llama-ui-stories/helpers/StateGalleryItem.svelte';
 
 	// how a search query is marked in the sidebar's, the model lists' and the pickers' results
 	const { Story } = defineMeta({

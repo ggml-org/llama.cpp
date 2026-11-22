@@ -1,8 +1,8 @@
 <script lang="ts" module>
-	import StateGallery from '../helpers/StateGallery.svelte';
-	import StateGalleryItem from '../helpers/StateGalleryItem.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import { TruncatedText } from '#lib/components/app/index.ts';
+	import StateGallery from '$llama-ui-stories/helpers/StateGallery.svelte';
+	import StateGalleryItem from '$llama-ui-stories/helpers/StateGalleryItem.svelte';
 
 	// one line of text that shows the full value in a tooltip only when it is cut off
 	const { Story } = defineMeta({

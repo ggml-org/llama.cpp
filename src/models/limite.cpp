@@ -18,6 +18,12 @@ void llama_model_limite::load_arch_hparams(llama_model_loader & ml) {
     std::fill(hparams.mudd_tap_idx.begin(), hparams.mudd_tap_idx.end(), -1);
     ml.get_key(LLM_KV_MUDD_TAP_COUNT, hparams.n_mudd_taps, false);
     if (hparams.n_mudd_taps > 0) {
+        // reject metadata where n_layer * n_mudd_taps would index past mudd_tap_idx
+        if (hparams.n_mudd_taps > LLAMA_MAX_LAYERS || (uint64_t) hparams.n_layer() * hparams.n_mudd_taps > LLAMA_MAX_LAYERS) {
+            throw std::runtime_error(format(
+                "invalid limite mudd config: n_layer (%u) * n_mudd_taps (%u) exceeds LLAMA_MAX_LAYERS (%d)",
+                hparams.n_layer(), hparams.n_mudd_taps, LLAMA_MAX_LAYERS));
+        }
         ml.get_key(LLM_KV_MUDD_FEED_FORWARD_LENGTH, hparams.n_mudd_ff);
         ml.get_arr(LLM_KV_MUDD_TAP_INDICES,         hparams.mudd_tap_idx);
     }

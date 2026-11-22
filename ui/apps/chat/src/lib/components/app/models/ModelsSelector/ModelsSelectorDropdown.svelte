@@ -1,5 +1,7 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
+	import ModelsSelectorReasoning from './ModelsSelectorReasoning.svelte';
+	import ModelsSelectorReasoningBadge from './ModelsSelectorReasoningBadge.svelte';
 	import * as DropdownMenu from '@ggml-org/llama-ui/ui/dropdown-menu';
 	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { ChevronDown, Loader2 } from '@lucide/svelte';
@@ -33,6 +35,8 @@
 		onManageModels?: () => void;
 		onModelKeyAction?: (modelId: string, unload: boolean) => void;
 		onSearchKeyDown?: (event: KeyboardEvent) => void;
+		/** The chat's reasoning effort in place of the manager entry at the foot. */
+		showReasoning?: boolean;
 	}
 
 	let {
@@ -45,7 +49,8 @@
 		onModelKeyAction,
 		onSearchKeyDown,
 		open = $bindable(false),
-		showOrgName = true
+		showOrgName = true,
+		showReasoning = false
 	}: Props = $props();
 
 	const selectedOption = $derived(ms.getDisplayOption());
@@ -107,6 +112,11 @@
 				hideQuantization
 				modelId={selectedOption.model}
 			/>
+
+			<!-- in the model's column: the trigger is a grid of icon, model and chevron -->
+			{#if showReasoning}
+				<ModelsSelectorReasoningBadge />
+			{/if}
 		{:else}
 			<span class="min-w-0 font-medium">Select model</span>
 		{/if}
@@ -154,7 +164,7 @@
 				<DropdownMenu.Trigger
 					{...props}
 					class={[
-						`relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-xs shadow-(--chat-form-key-shadow) transition hover:bg-muted-foreground/20 max-md:h-8 max-md:px-2.25 max-md:py-1.25 max-md:text-[13px] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
+						`relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-caption shadow-(--elevation-key) transition hover:bg-muted-foreground/20 max-md:h-8 max-md:px-2.25 max-md:py-1.25 max-md:text-body-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 						!ms.isCurrentModelInCache
 							? 'border-line-danger-soft bg-surface-danger !text-fg-danger hover:bg-surface-danger/80'
 							: 'text-foreground',
@@ -178,7 +188,7 @@
 	<!-- the details drawer opens over the menu: the menu stays open under its backdrop -->
 	<DropdownMenu.Content
 		align="end"
-		class="w-full md:min-w-80 md:w-md max-w-[calc(100vw-2rem)] p-0! max-h-[min(40rem,calc(var(--bits-dropdown-menu-content-available-height)-1rem))]"
+		class="flex w-full flex-col overflow-hidden md:min-w-80 md:w-md max-w-[calc(100vw-2rem)] p-0! max-h-[min(40rem,calc(var(--bits-dropdown-menu-content-available-height)-1rem))]"
 		data-under-details={uiStore.isModelDetailsOpen || undefined}
 		onCloseAutoFocus={(event) => {
 			// bits-ui re-mounts the focus scope when the drawer opens or closes, so this runs with the menu still open; trigger focus would show its tooltip
@@ -194,29 +204,37 @@
 	>
 		<DropdownMenuSearchable
 			emptyMessage={ms.emptyMessage}
+			footer={showReasoning || uiStore.isModelsManagerShown ? pickerFooter : undefined}
 			isEmpty={ms.isEmpty && ms.isCurrentModelInCache}
 			onSearchChange={(v) => ms.setSearchTerm(v)}
 			{onSearchKeyDown}
 			placeholder="Search models..."
+			scrollport
 			searchClass="bg-transparent"
 			searchValue={ms.searchTerm}
 		>
-			<!-- Option list; the search header sticks to the top and the actions
-		     footer to the bottom of the content scrollport. -->
+			<!-- Option list; the search header sticks to the top of the list's scrollport, and
+		     the footer stays under it. -->
 			{@render pickerContent('px-1.5')}
-
-			{#snippet footer()}
-				<DropdownMenu.Group class="px-2">
-					<DropdownMenu.Item class="gap-2" onSelect={handleManageModels}>
-						<MODEL_ICON class="size-icon-md shrink-0 text-muted-foreground" />
-
-						Manage models
-					</DropdownMenu.Item>
-				</DropdownMenu.Group>
-			{/snippet}
 		</DropdownMenuSearchable>
 	</DropdownMenu.Content>
 </DropdownMenu.Root>
+
+<!-- the reasoning effort when the model has one; otherwise the way into the full manager, which hides with the
+manager's other entry points -->
+{#snippet pickerFooter()}
+	{#if showReasoning}
+		<ModelsSelectorReasoning />
+	{:else}
+		<DropdownMenu.Group class="px-2">
+			<DropdownMenu.Item class="gap-2" onSelect={handleManageModels}>
+				<MODEL_ICON class="size-icon-md shrink-0 text-muted-foreground" />
+
+				Manage models
+			</DropdownMenu.Item>
+		</DropdownMenu.Group>
+	{/if}
+{/snippet}
 
 {#snippet pickerContent(listClass: string)}
 	<div class={['models-list', listClass]}>
@@ -225,7 +243,7 @@
 			<button
 				aria-disabled="true"
 				aria-selected="true"
-				class="flex w-full cursor-not-allowed items-center bg-surface-danger p-2 text-left text-sm text-fg-danger"
+				class="flex w-full cursor-not-allowed items-center bg-surface-danger p-2 text-left text-body-sm text-fg-danger"
 				disabled
 				role="option"
 				type="button"
@@ -237,12 +255,12 @@
 					modelId={currentModel}
 				/>
 
-				<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
+				<span class="ml-2 text-caption whitespace-nowrap opacity-70">(not available)</span>
 			</button>
 		{/if}
 
 		{#if ms.isEmpty}
-			<p class="px-4 py-3 text-sm text-muted-foreground">{ms.emptyMessage}</p>
+			<p class="px-4 py-3 text-body-sm text-muted-foreground">{ms.emptyMessage}</p>
 		{/if}
 
 		<ModelsSelectorList
@@ -253,7 +271,7 @@
 			loaded={ms.loadedItems}
 			onSelect={ms.handleSelect}
 			renderOption={modelOption}
-			sectionHeaderClass="[&:not(:first-child)]:mt-1 mb-1 px-2 py-2 text-[13px] font-semibold text-foreground/80 select-none"
+			sectionHeaderClass="[&:not(:first-child)]:mt-1 mb-1 px-2 py-2 text-body-sm font-semibold text-foreground/80 select-none"
 			{showOrgName}
 		/>
 	</div>

@@ -42,7 +42,7 @@
 				maxHeight={MAX_HEIGHT_CODE_BLOCK}
 			/>
 		{:else}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
+			<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">
 				Waiting for file content...
 			</div>
 		{/if}

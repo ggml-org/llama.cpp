@@ -1,6 +1,4 @@
 <script lang="ts" module>
-	import StateGallery from '../../helpers/StateGallery.svelte';
-	import StateGalleryItem from '../../helpers/StateGalleryItem.svelte';
 	import {
 		defaultToolMarkdownSection,
 		defaultToolPendingSection,
@@ -27,6 +25,8 @@
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatMessageToolCallBlock from '#lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlock.svelte';
 	import { AgenticSectionType } from '#lib/enums/index.ts';
+	import StateGallery from '$llama-ui-stories/helpers/StateGallery.svelte';
+	import StateGalleryItem from '$llama-ui-stories/helpers/StateGalleryItem.svelte';
 
 	const { Story } = defineMeta({
 		component: ChatMessageToolCallBlock,

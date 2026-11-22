@@ -80,7 +80,7 @@
 	<ModelsDiscoverDetailsSkeleton />
 {:else if error}
 	<div class="flex h-full items-center justify-center py-20">
-		<p class="text-sm text-destructive">{error}</p>
+		<p class="text-body-sm text-destructive">{error}</p>
 	</div>
 {:else if details}
 	<div class="@container space-y-6 p-6 pr-0">
