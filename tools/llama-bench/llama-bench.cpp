@@ -493,38 +493,6 @@ static void print_usage(int /* argc */, char ** argv) {
         "'first-last' or 'first-last+step' or 'first-last*mult'.\n");
 }
 
-static ggml_type ggml_type_from_name(const std::string & s) {
-    if (s == "f16") {
-        return GGML_TYPE_F16;
-    }
-    if (s == "bf16") {
-        return GGML_TYPE_BF16;
-    }
-    if (s == "f8_e4m3") {
-        return GGML_TYPE_F8_E4M3;
-    }
-    if (s == "q8_0") {
-        return GGML_TYPE_Q8_0;
-    }
-    if (s == "q4_0") {
-        return GGML_TYPE_Q4_0;
-    }
-    if (s == "q4_1") {
-        return GGML_TYPE_Q4_1;
-    }
-    if (s == "q5_0") {
-        return GGML_TYPE_Q5_0;
-    }
-    if (s == "q5_1") {
-        return GGML_TYPE_Q5_1;
-    }
-    if (s == "iq4_nl") {
-        return GGML_TYPE_IQ4_NL;
-    }
-
-    return GGML_TYPE_COUNT;
-}
-
 static cmd_params parse_cmd_params(int argc, char ** argv) {
     cmd_params        params;
     std::string       arg;
@@ -644,7 +612,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
 
                 std::vector<ggml_type> types;
                 for (const auto & t : p) {
-                    ggml_type gt = ggml_type_from_name(t);
+                    ggml_type gt = common_parse_kv_cache_type(t);
                     if (gt == GGML_TYPE_COUNT) {
                         invalid_param = true;
                         break;
@@ -664,7 +632,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
 
                 std::vector<ggml_type> types;
                 for (const auto & t : p) {
-                    ggml_type gt = ggml_type_from_name(t);
+                    ggml_type gt = common_parse_kv_cache_type(t);
                     if (gt == GGML_TYPE_COUNT) {
                         invalid_param = true;
                         break;

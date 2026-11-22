@@ -291,13 +291,21 @@ const std::vector<ggml_type> kv_cache_types = {
     GGML_TYPE_Q5_1,
 };
 
-static ggml_type kv_cache_type_from_str(const std::string & s) {
+ggml_type common_parse_kv_cache_type(const std::string & s) {
     for (const auto & type : kv_cache_types) {
         if (ggml_type_name(type) == s) {
             return type;
         }
     }
-    throw std::runtime_error("Unsupported cache type: " + s);
+    return GGML_TYPE_COUNT;
+}
+
+static ggml_type kv_cache_type_from_str(const std::string & s) {
+    const ggml_type type = common_parse_kv_cache_type(s);
+    if (type == GGML_TYPE_COUNT) {
+        throw std::runtime_error("Unsupported cache type: " + s);
+    }
+    return type;
 }
 
 static std::string get_all_kv_cache_types() {
