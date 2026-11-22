@@ -2903,6 +2903,7 @@ struct llama_model_clef : public llama_model_qwen35 {
     ggml_tensor * scorer_b             = nullptr;
     ggml_tensor * scorer_out           = nullptr;
     ggml_tensor * scorer_out_b         = nullptr;
+    ggml_tensor * output_lexical       = nullptr;
 
     class input_decision;
 
