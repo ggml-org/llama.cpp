@@ -383,10 +383,7 @@ llama_model_deepseek32::graph::graph(const llm_graph_params & params) :
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
                 il,
                 nullptr,
-                model.layers[il].ffn_gate_up_exps,
-                model.layers[il].ffn_up_exps_s,
-                model.layers[il].ffn_gate_exps_s,
-                model.layers[il].ffn_down_exps_s);
+                model.layers[il].ffn_gate_up_exps);
             cb(moe_out, "ffn_moe_out", il);
 
             // FFN shared expert
@@ -624,10 +621,7 @@ llama_model_deepseek32::graph_mtp::graph_mtp(const llm_graph_params & params)
         (llama_expert_gating_func_type) hparams.expert_gating_func,
         il,
         nullptr,
-        layer.ffn_gate_up_exps,
-        layer.ffn_up_exps_s,
-        layer.ffn_gate_exps_s,
-        layer.ffn_down_exps_s);
+        layer.ffn_gate_up_exps);
     cb(moe_out, "mtp_ffn_moe_out", il);
 
     // FFN shared expert
