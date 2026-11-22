@@ -212,23 +212,9 @@ void main() {
                     uint32_t r = (idx + tid) / Bc;
                     if (idx + tid < Bc * Br) {
                         uint32_t kcol;
-#ifdef KV_ROWS
-                        kcol = j * Bc + c;
-                        bool kv_active = kcol < KV;
-#else
                         bool kv_active = fa_kv_index(j * Bc + c, kcol);
-#endif
                         if (kv_active && (!nem1_bounds_check || i * Br + r < p.nem1)) {
                             FLOAT_TYPE m = FLOAT_TYPE(data_m[m_offset + (i * Br + r) * m_stride + kcol]);
-                            const uint n_bins = (Flags & 0x7fffffffu) >> 8;
-                            if (n_bins != 0) {
-                                uint query = iq3 * p.N + i * Br + r;
-                                uint bin = uint(data_sparse[query * KV + kcol]);
-                                if (bin < n_bins) {
-                                    float bias = uintBitsToFloat(data_mask_opt[(query * p.neq2 + iq2) * n_bins + bin]);
-                                    m = FLOAT_TYPE(float16_t(float(m) + bias));
-                                }
-                            }
                             masksh[c * masksh_stride + r] = m;
                             max_mask = max(max_mask, float(m));
                         } else {
