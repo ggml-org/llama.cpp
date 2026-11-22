@@ -2104,6 +2104,90 @@ static void test_convert_responses_to_chatcmpl() {
 
         assert_equals(input.at("extra_params").at("response_format").dump(), result_extra.at("response_format").dump());
     }
+
+    // Test namespaced Responses tools are flattened to ns_{namespace}___{tool}
+    {
+        json input = json::parse(R"({
+            "input": "Hello",
+            "model": "test-model",
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "browser",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "click",
+                            "description": "Click an element",
+                            "parameters": {"type": "object", "properties": {}}
+                        },
+                        {
+                            "type": "web_search"
+                        },
+                        {
+                            "type": "function",
+                            "name": "navigate",
+                            "description": "Navigate to a URL",
+                            "parameters": {"type": "object", "properties": {}}
+                        }
+                    ]
+                },
+                {
+                    "type": "function",
+                    "name": "get_weather",
+                    "description": "Get weather for a location",
+                    "parameters": {"type": "object", "properties": {}}
+                }
+            ]
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        assert_equals(true, result.contains("tools"));
+        assert_equals((size_t)3, result.at("tools").size());
+        assert_equals(std::string("ns_browser___click"), result.at("tools")[0].at("function").at("name").get<std::string>());
+        assert_equals(std::string("ns_browser___navigate"), result.at("tools")[1].at("function").at("name").get<std::string>());
+        assert_equals(std::string("get_weather"), result.at("tools")[2].at("function").at("name").get<std::string>());
+    }
+
+    // Test a function_call input item with a namespace flattens the same way
+    {
+        json input = json::parse(R"({
+            "input": [
+                {
+                    "type": "function_call",
+                    "namespace": "browser",
+                    "name": "click",
+                    "arguments": "{}",
+                    "call_id": "call_1"
+                }
+            ],
+            "model": "test-model"
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        const auto & calls = result.at("messages")[0].at("tool_calls");
+        assert_equals(std::string("ns_browser___click"), calls[0].at("function").at("name").get<std::string>());
+    }
+
+    // Test tool name flatten/split round-trip
+    {
+        assert_equals(std::string("read_file"), server_chat_responses_tool_name("", "read_file"));
+        assert_equals(std::string("ns_muse___read_file"), server_chat_responses_tool_name("muse", "read_file"));
+
+        const auto plain = server_chat_responses_split_tool_name("read_file");
+        assert_equals(std::string(""), plain.first);
+        assert_equals(std::string("read_file"), plain.second);
+
+        const auto flat = server_chat_responses_split_tool_name("ns_muse___read_file");
+        assert_equals(std::string("muse"), flat.first);
+        assert_equals(std::string("read_file"), flat.second);
+
+        const auto no_sep = server_chat_responses_split_tool_name("ns_muse");
+        assert_equals(std::string(""), no_sep.first);
+        assert_equals(std::string("ns_muse"), no_sep.second);
+    }
 }
 
 static void test_responses_tool_search_replay() {
@@ -2145,6 +2229,29 @@ static void test_responses_tool_search_replay() {
         rejected = true;
     }
     assert_equals(true, rejected);
+
+    const auto namespaced = common_json::parse(R"({
+        "tools":[{"type":"namespace","name":"fixture","tools":[{"type":"function","name":"alpha","description":"declared","parameters":{"type":"object","properties":{}}}]}],
+        "input":[
+            {"type":"tool_search_output","tools":[{"type":"namespace","name":"fixture","tools":[
+                {"type":"function","name":"alpha","description":"replace","parameters":{"type":"object","properties":{}}},
+                {"type":"function","name":"beta","description":"first","parameters":{"type":"object","properties":{}}}]}]},
+            {"type":"tool_search_output","tools":[{"type":"namespace","name":"fixture","tools":[
+                {"type":"function","name":"beta","description":"later","parameters":{"type":"object","properties":{}}},
+                {"type":"function","name":"gamma","parameters":{"type":"object","properties":{}}}]}]},
+            {"role":"user","content":"Use beta."},
+            {"type":"function_call","namespace":"fixture","name":"beta","arguments":"{}","call_id":"call_beta"},
+            {"type":"function_call_output","call_id":"call_beta","output":"OK"}
+        ]
+    })");
+    const auto merged = server_chat_convert_responses_to_chatcmpl(namespaced);
+    assert_equals(size_t(3), merged.at("tools").size());
+    assert_equals(std::string("ns_fixture___alpha"), merged.at("tools")[0].at("function").at("name").get<std::string>());
+    assert_equals(std::string("declared"), merged.at("tools")[0].at("function").at("description").get<std::string>());
+    assert_equals(std::string("ns_fixture___beta"), merged.at("tools")[1].at("function").at("name").get<std::string>());
+    assert_equals(std::string("first"), merged.at("tools")[1].at("function").at("description").get<std::string>());
+    assert_equals(std::string("ns_fixture___beta"), merged.at("messages")[1].at("tool_calls")[0].at("function").at("name").get<std::string>());
+    assert_equals(std::string("call_beta"), merged.at("messages")[2].at("tool_call_id").get<std::string>());
 }
 
 // Shared LFM2 parser cases - all variants use one output format and parser
@@ -8049,6 +8156,47 @@ static void test_minicpm5_xml_recovery() {
                 assert_equals(expected.tool_calls[1].arguments, result.tool_calls[1].arguments);
             }
         }
+    }
+
+    inputs.enable_thinking = false;
+    const std::string broken = "<function name='search'><param name='query'><![CDATA[first</param></function>";
+    const std::string following = "<function name='search'><param name='query'><![CDATA[second]]></param></function>";
+    for (const std::string & gap : {std::string(), std::string(" Next: ")}) {
+        const std::string text = broken + gap + following;
+        common_chat_session complete(tmpls.get(), nullptr, inputs);
+        const auto expected = complete.finish(common_chat_input(text));
+        assert_equals(size_t(2), expected.tool_calls.size());
+        assert_equals(gap, expected.content);
+        assert_equals(std::string("first"), common_json::parse(expected.tool_calls[0].arguments).at("query").get<std::string>());
+        assert_equals(std::string("second"), common_json::parse(expected.tool_calls[1].arguments).at("query").get<std::string>());
+        for (size_t chunk_size : {size_t(1), size_t(7), text.size()}) {
+            common_chat_session session(tmpls.get(), nullptr, inputs);
+            common_chat_msg previous;
+            for (size_t pos = 0; pos < text.size(); pos += chunk_size) {
+                const auto & next = session.feed(common_chat_input(text.substr(pos, chunk_size)));
+                assert_equals(previous.content, next.content.substr(0, previous.content.size()));
+                for (size_t i = 0; i < previous.tool_calls.size(); ++i) {
+                    assert_equals(previous.tool_calls[i].arguments, next.tool_calls[i].arguments);
+                }
+                previous = next;
+            }
+            const auto & result = session.finish();
+            assert_equals(size_t(2), result.tool_calls.size());
+            assert_equals(gap, result.content);
+            assert_equals(expected.tool_calls[0].arguments, result.tool_calls[0].arguments);
+            assert_equals(expected.tool_calls[1].arguments, result.tool_calls[1].arguments);
+        }
+    }
+    const std::string literal = "start </function><function name='search'><param name='query'>literal</param></function> end";
+    const std::string quoted = "<function name='search'><param name='query'><![CDATA[" + literal + "]]></param></function>";
+    for (size_t chunk_size : {size_t(1), quoted.size()}) {
+        common_chat_session session(tmpls.get(), nullptr, inputs);
+        for (size_t pos = 0; pos < quoted.size(); pos += chunk_size) {
+            session.feed(common_chat_input(quoted.substr(pos, chunk_size)));
+        }
+        const auto & result = session.finish();
+        assert_equals(size_t(1), result.tool_calls.size());
+        assert_equals(literal, common_json::parse(result.tool_calls[0].arguments).at("query").get<std::string>());
     }
 }
 

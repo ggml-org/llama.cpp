@@ -4,33 +4,86 @@
 #include <algorithm>
 #include <sstream>
 
+// Flattened namespaced tools as "ns_{namespace}___{tool_name}".
+static constexpr const char * RESPONSES_NS_PREFIX = "ns_";
+static constexpr const char * RESPONSES_NS_SEP    = "___";
+
+std::string server_chat_responses_tool_name(const std::string & ns, const std::string & name) {
+    if (ns.empty()) {
+        return name;
+    }
+    return std::string(RESPONSES_NS_PREFIX) + ns + RESPONSES_NS_SEP + name;
+}
+
+std::pair<std::string, std::string> server_chat_responses_split_tool_name(const std::string & name) {
+    const std::string prefix = RESPONSES_NS_PREFIX;
+    const std::string sep    = RESPONSES_NS_SEP;
+    if (name.compare(0, prefix.size(), prefix) != 0) {
+        return { std::string(), name };
+    }
+    const size_t pos = name.find(sep, prefix.size());
+    if (pos == std::string::npos) {
+        return { std::string(), name };
+    }
+    return { name.substr(prefix.size(), pos - prefix.size()), name.substr(pos + sep.size()) };
+}
+
 json server_chat_convert_responses_tools(const json & tools) {
     if (!tools.is_array()) {
         throw std::invalid_argument("'tools' must be an array of objects");
     }
     json chatcmpl_tools = json::array();
-    for (json resp_tool : tools) {
-        json chatcmpl_tool;
 
+    auto add_tool = [&](json fn_tool, const std::string & ns) {
+        fn_tool.erase("type");
+        if (!fn_tool.contains("strict")) {
+            fn_tool["strict"] = true;
+        }
+        if (!ns.empty()) {
+            if (!fn_tool.contains("name") || !fn_tool.at("name").is_string()) {
+                SRV_WRN("namespaced tool in namespace '%s' missing 'name' skipped\n", ns.c_str());
+                return;
+            }
+            fn_tool["name"] = server_chat_responses_tool_name(ns, fn_tool.at("name").get<std::string>());
+        }
+        chatcmpl_tools.push_back(json {
+            {"type",     "function"},
+            {"function", fn_tool},
+        });
+    };
+
+    for (json resp_tool : tools) {
         const std::string type = json_value(resp_tool, "type", std::string());
-        if (type != "function") {
+        if (type == "function") {
+            add_tool(std::move(resp_tool), "");
+        } else if (type == "namespace") {
+            const std::string ns = json_value(resp_tool, "name", std::string());
+            if (ns.empty() || !resp_tool.contains("tools") || !resp_tool.at("tools").is_array()) {
+                // Namespace without a name or tools array carries no functions;
+                // skip it like other non-function Responses tools.
+                SRV_WRN("unsupported Responses tool type 'namespace' (namespace '%s') without 'name' or 'tools' array skipped\n", ns.c_str());
+                continue;
+            }
+            for (json inner_tool : resp_tool.at("tools")) {
+                const std::string inner_type = json_value(inner_tool, "type", std::string());
+                if (inner_type != "function") {
+                    SRV_WRN("unsupported Responses tool type '%s' in namespace '%s' skipped\n", inner_type.c_str(), ns.c_str());
+                    continue;
+                }
+                add_tool(std::move(inner_tool), ns);
+            }
+        } else {
             // Non-function Responses tools have no Chat Completions equivalent.
             SRV_WRN("unsupported Responses tool type '%s' skipped\n", type.c_str());
-            continue;
         }
-        resp_tool.erase("type");
-        chatcmpl_tool["type"] = "function";
-
-        if (!resp_tool.contains("strict")) {
-            resp_tool["strict"] = true;
-        }
-        chatcmpl_tool["function"] = resp_tool;
-        chatcmpl_tools.push_back(chatcmpl_tool);
     }
     return chatcmpl_tools;
 }
 
-static void merge_responses_search_tools(json & tools, const json & discovered) {
+static void merge_responses_search_tools(json & tools, const json & discovered, size_t depth = 0) {
+    if (depth > COMMON_RECURSIVE_LIMIT) {
+        throw std::invalid_argument("Tool namespace nesting is too deep");
+    }
     if (!discovered.is_array()) {
         throw std::invalid_argument("'tool_search_output.tools' must be an array");
     }
@@ -53,7 +106,7 @@ static void merge_responses_search_tools(json & tools, const json & discovered) 
         if (existing == tools.end()) {
             tools.push_back(tool);
         } else if (type == "namespace") {
-            merge_responses_search_tools((*existing)["tools"], tool.at("tools"));
+            merge_responses_search_tools((*existing)["tools"], tool.at("tools"), depth + 1);
         }
     }
 }
@@ -240,7 +293,7 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                 json tool_call = {
                     {"function", json {
                         {"arguments", item.at("arguments")},
-                        {"name",      item.at("name")},
+                        {"name",      server_chat_responses_tool_name(item.value("namespace", ""), item.at("name").get<std::string>())},
                     }},
                     {"id",   item.at("call_id")},
                     {"type", "function"},

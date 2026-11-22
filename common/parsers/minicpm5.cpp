@@ -109,6 +109,24 @@ size_t find_function_close(std::string_view text, size_t begin, bool is_partial)
             return close;
         }
         const size_t end = text.find(cdata_close, cdata + cdata_open.size());
+        // A fresh CDATA parameter after a closed function marks a new call.
+        // Literal function markup without a fresh CDATA remains parameter text.
+        for (size_t next = text.find(function_open, close + function_close.size());
+             next != text.npos && (end == text.npos || next < end);
+             next = text.find(function_open, next + function_open.size())) {
+            const auto function = read_named_tag(text, function_open, next);
+            if (!function) {
+                continue;
+            }
+            const size_t param_pos = function->end + skip_space(text.substr(function->end));
+            const auto param = read_named_tag(text, param_open, param_pos);
+            if (param) {
+                const size_t value = param->end + skip_space(text.substr(param->end));
+                if ((end == text.npos || value < end) && starts_with(text.substr(value), cdata_open)) {
+                    return close;
+                }
+            }
+        }
         if (end == text.npos) {
             return is_partial ? text.npos : close;
         }
@@ -146,7 +164,10 @@ std::string_view read_param_value(std::string_view text, size_t & pos) {
     return value;
 }
 
-json get_schema_properties(const json & schema) {
+json get_schema_properties(const json & schema, size_t depth = 0) {
+    if (depth > COMMON_RECURSIVE_LIMIT) {
+        throw std::invalid_argument("Tool schema nesting is too deep");
+    }
     if (!schema.is_object()) {
         return json::object();
     }
@@ -160,7 +181,7 @@ json get_schema_properties(const json & schema) {
             continue;
         }
         for (const auto & branch : schema.at(keyword)) {
-            const auto nested = get_schema_properties(branch);
+            const auto nested = get_schema_properties(branch, depth + 1);
             for (const auto & item : nested.items()) {
                 if (!merged.contains(item.key())) {
                     merged[item.key()] = item.value();

@@ -1745,6 +1745,8 @@ curl http://localhost:9931/v1/responses \
 
 This endpoint works by converting Responses request into Chat Completions request.
 
+Namespaced function tools are converted to internal names and restored to `namespace` and `name` in Responses output, including streaming events. Client-side tool search remains responsible for discovery.
+
 Client-provided `tool_search_call` and `tool_search_output` history items are accepted. Function definitions in `tool_search_output.tools` are loaded before applying the chat template; explicitly declared tools and earlier discoveries keep their definitions. Search history items are omitted from the rendered conversation. Tool search runs on the client.
 
 
