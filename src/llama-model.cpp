@@ -38,6 +38,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params & params) {
@@ -4148,6 +4149,38 @@ const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_te
 
 int32_t llama_model_n_expert(const struct llama_model * model) {
     return model->hparams.n_expert;
+}
+
+std::vector<uint32_t> llama_model_layer_visits(const struct llama_model * model) {
+    const size_t n_layer = model->layers.size();
+    std::vector<uint32_t> visits(n_layer, 0);
+    std::unordered_map<const ggml_tensor *, size_t> owner;
+    owner.reserve(n_layer);
+
+    for (size_t il = 0; il < n_layer; ++il) {
+        const auto & l = model->layers[il];
+        const ggml_tensor * key =
+            l.ffn_up_exps      ? l.ffn_up_exps :
+            l.ffn_gate_up_exps ? l.ffn_gate_up_exps :
+            l.ffn_gate_exps    ? l.ffn_gate_exps :
+            l.ffn_down_exps    ? l.ffn_down_exps :
+            l.attn_norm        ? l.attn_norm :
+            l.ffn_norm         ? l.ffn_norm :
+            l.wq               ? l.wq :
+            l.wqkv             ? l.wqkv :
+            l.ffn_up           ? l.ffn_up :
+            l.ffn_gate         ? l.ffn_gate :
+            l.ffn_down         ? l.ffn_down :
+            nullptr;
+        if (!key) {
+            visits[il] = 1;
+            continue;
+        }
+        auto [it, inserted] = owner.emplace(key, il);
+        visits[it->second]++;
+    }
+
+    return visits;
 }
 
 int32_t llama_model_n_devices(const struct llama_model * model) {

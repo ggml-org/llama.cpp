@@ -7,6 +7,7 @@
 
 #include "../src/llama-ext.h"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <stdexcept>
@@ -64,7 +65,8 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data_impl(
         uint32_t & hp_ngl_skip,
         uint32_t & hp_n_ctx_train,
         uint32_t & hp_n_expert,
-        ggml_log_level log_level) {
+        ggml_log_level log_level,
+        std::vector<uint32_t> * hp_layer_visits = nullptr) {
     common_fit_log_scope log_scope(log_level);
 
     llama_model_params mparams_copy = *mparams;
@@ -157,6 +159,9 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data_impl(
     hp_ngl_skip    = mparams->load_mtp ? 0 : llama_model_n_layer_nextn(model);
     hp_n_ctx_train = llama_model_n_ctx_train(model);
     hp_n_expert    = llama_model_n_expert(model);
+    if (hp_layer_visits != nullptr) {
+        *hp_layer_visits = llama_model_layer_visits(model);
+    }
 
     common_memory_breakdown_print(ctx);
 
@@ -277,6 +282,7 @@ static void common_params_fit_impl(
     uint32_t hp_nsk = 0; // number of skipped NextN layers, counted by the model loader but not by hp_ngl
     uint32_t hp_nct = 0; // hparams.n_ctx_train
     uint32_t hp_nex = 0; // hparams.n_expert
+    std::vector<uint32_t> hp_layer_visits;
 
     // with non-unified kv, we need to take into account n_streams
     // for example, if memory can hold more than model's trained context size, we must extend the n_ctx to hold enough n_streams
@@ -348,7 +354,7 @@ static void common_params_fit_impl(
     // step 1: get data for default parameters and check whether any changes are necessary in the first place
 
     LOG_TRC("%s: getting device memory data for initial parameters:\n", __func__);
-    dmds_t dmds_full = common_get_device_memory_data_impl(paths_model, mparams, cparams, devs, hp_ngl, hp_nsk, hp_nct, hp_nex, log_level);
+    dmds_t dmds_full = common_get_device_memory_data_impl(paths_model, mparams, cparams, devs, hp_ngl, hp_nsk, hp_nct, hp_nex, log_level, &hp_layer_visits);
 
     // saturate instead of overflowing, this also preserves the UINT32_MAX sentinel of n_ctx_min:
     const uint32_t n_ctx_max       = (uint32_t) std::min<uint64_t>(uint64_t(hp_nct)    * n_streams, UINT32_MAX);
@@ -631,6 +637,42 @@ static void common_params_fit_impl(
 
     const size_t ntbo = llama_max_tensor_buft_overrides();
 
+    const bool has_looped_layers = std::any_of(
+        hp_layer_visits.begin(), hp_layer_visits.end(),
+        [](uint32_t v) { return v != 1; });
+
+    // For looped architectures (e.g. inkling2_loop), logical layers share physical weights across passes
+    // and extra KV slots have visits == 0. Rank physical layers by descending visit count so hot looped
+    // MoE layers stay in device memory before single-pass prelude/coda layers.
+    auto get_device_phys_layers = [&](const uint32_t dev_il0, const uint32_t dev_il1) -> std::vector<uint32_t> {
+        std::vector<uint32_t> phys;
+        const uint32_t limit = std::min(dev_il1, (uint32_t) hp_layer_visits.size());
+        for (uint32_t il = dev_il0; il < limit; ++il) {
+            if (hp_layer_visits[il] > 0) {
+                phys.push_back(il);
+            }
+        }
+        std::stable_sort(phys.begin(), phys.end(), [&](uint32_t a, uint32_t b) {
+            return hp_layer_visits[a] > hp_layer_visits[b];
+        });
+        return phys;
+    };
+
+    auto device_layer_slice = [&](const std::vector<ngl_t> & cfg, const size_t target_id) -> std::pair<uint32_t, uint32_t> {
+        uint32_t total_ngl = 0;
+        for (size_t id = 0; id < nd; ++id) {
+            total_ngl += cfg[id].n_layer;
+        }
+        uint32_t cur_il0 = hp_ngl + 1 - total_ngl;
+        for (size_t id = 0; id < target_id; ++id) {
+            cur_il0 += cfg[id].n_layer;
+        }
+        const uint32_t dev_n_tf = (target_id == nd - 1 && cfg[target_id].n_layer > 0)
+            ? cfg[target_id].n_layer - 1
+            : cfg[target_id].n_layer;
+        return { cur_il0, cur_il0 + dev_n_tf };
+    };
+
     // utility function to set n_gpu_layers and tensor_split
     auto set_ngl_tensor_split_tbo = [&](
             const std::vector<ngl_t> & ngl_per_device,
@@ -663,22 +705,45 @@ static void common_params_fit_impl(
         mparams.tensor_split = tensor_split;
 
         size_t itbo = 0;
-        for (size_t id = 0; id < nd; id++) {
-            il0 += ngl_per_device[id].n_full();
-            for (uint32_t il = il0; il < il0 + ngl_per_device[id].n_part; il++) {
-                if (itbo + 1 >= ntbo) {
-                    tensor_buft_overrides[itbo].pattern = nullptr;
-                    tensor_buft_overrides[itbo].buft    = nullptr;
-                    itbo++;
-                    mparams.tensor_buft_overrides = tensor_buft_overrides;
-                    throw common_params_fit_exception("llama_max_tensor_buft_overrides() == "
-                        + std::to_string(ntbo) + " is insufficient for model");
-                }
-                tensor_buft_overrides[itbo].pattern = get_overflow_pattern(il, il == il0 ? ngl_per_device[id].overflow_type : LAYER_FRACTION_MOE);
-                tensor_buft_overrides[itbo].buft = il == il0 ? overflow_bufts[id] : ggml_backend_cpu_buffer_type();
+        auto push_tbo = [&](const char * pattern, ggml_backend_buffer_type_t buft) {
+            if (itbo + 1 >= ntbo) {
+                tensor_buft_overrides[itbo].pattern = nullptr;
+                tensor_buft_overrides[itbo].buft    = nullptr;
                 itbo++;
+                mparams.tensor_buft_overrides = tensor_buft_overrides;
+                throw common_params_fit_exception("llama_max_tensor_buft_overrides() == "
+                    + std::to_string(ntbo) + " is insufficient for model");
             }
-            il0 += ngl_per_device[id].n_part;
+            tensor_buft_overrides[itbo].pattern = pattern;
+            tensor_buft_overrides[itbo].buft    = buft;
+            itbo++;
+        };
+
+        for (size_t id = 0; id < nd; id++) {
+            if (!has_looped_layers) {
+                il0 += ngl_per_device[id].n_full();
+                for (uint32_t il = il0; il < il0 + ngl_per_device[id].n_part; il++) {
+                    push_tbo(
+                        get_overflow_pattern(il, il == il0 ? ngl_per_device[id].overflow_type : LAYER_FRACTION_MOE),
+                        il == il0 ? overflow_bufts[id] : ggml_backend_cpu_buffer_type());
+                }
+                il0 += ngl_per_device[id].n_part;
+                continue;
+            }
+
+            const uint32_t dev_n_tf = (id == nd - 1 && ngl_per_device[id].n_layer > 0)
+                ? ngl_per_device[id].n_layer - 1
+                : ngl_per_device[id].n_layer;
+            const std::vector<uint32_t> phys = get_device_phys_layers(il0, il0 + dev_n_tf);
+            const uint32_t n_part_tf = std::min(dev_n_tf, ngl_per_device[id].n_part);
+            const uint32_t n_full_tf = dev_n_tf - n_part_tf;
+            for (size_t i = n_full_tf; i < phys.size(); ++i) {
+                const bool is_first = i == n_full_tf;
+                push_tbo(
+                    get_overflow_pattern(phys[i], is_first ? ngl_per_device[id].overflow_type : LAYER_FRACTION_MOE),
+                    is_first ? overflow_bufts[id] : ggml_backend_cpu_buffer_type());
+            }
+            il0 += ngl_per_device[id].n_layer;
         }
         tensor_buft_overrides[itbo].pattern = nullptr;
         tensor_buft_overrides[itbo].buft    = nullptr;
@@ -715,6 +780,7 @@ static void common_params_fit_impl(
     };
 
     int64_t global_surplus_cpu_moe = 0;
+    bool keep_looped_moe_in_step3 = false;
     if (hp_nex > 0) {
         const static std::string pattern_moe_all = "blk\\.\\d+\\.ffn_(up|down|gate_up|gate)_(ch|)exps"; // matches all MoE tensors
         ggml_backend_buffer_type_t cpu_buft = ggml_backend_cpu_buffer_type();
@@ -738,6 +804,43 @@ static void common_params_fit_impl(
         } else {
             LOG_TRC("%s: with only dense weights in device memory there is still a total deficit of %" PRId64 " MiB\n",
                 __func__, -global_surplus_cpu_moe/MiB);
+        }
+
+        // For looped MoE models (e.g. inkling2_loop), CPU-offloading repeated core layers can inflate the
+        // compute buffer enough that keeping looped experts on GPU uses less total VRAM than offloading all MoEs.
+        if (has_looped_layers) {
+            size_t itbo = 0;
+            bool overrides_fit = true;
+            for (uint32_t il = 0; il < hp_layer_visits.size(); ++il) {
+                if (hp_layer_visits[il] == 1) {
+                    if (itbo + 1 >= ntbo) {
+                        overrides_fit = false;
+                        break;
+                    }
+                    tensor_buft_overrides[itbo++] = {get_overflow_pattern(il, LAYER_FRACTION_MOE), cpu_buft};
+                }
+            }
+            if (overrides_fit && itbo > 0) {
+                tensor_buft_overrides[itbo] = {nullptr, nullptr};
+                mparams->tensor_buft_overrides = tensor_buft_overrides;
+
+                LOG_TRC("%s: getting device memory data with only non-looped MoE tensors moved to system memory:\n", __func__);
+                dmds_t dmds_looped_gpu = common_get_device_memory_data_impl(
+                    paths_model, mparams, cparams, devs, hp_ngl, hp_nsk, hp_nct, hp_nex, log_level);
+                add_extra_memory(dmds_looped_gpu);
+
+                int64_t surplus_looped_gpu = 0;
+                for (size_t id = 0; id < nd; id++) {
+                    surplus_looped_gpu += dmds_looped_gpu[id].free;
+                    surplus_looped_gpu -= int64_t(dmds_looped_gpu[id].mb.total()) + margins[id];
+                }
+                if (surplus_looped_gpu > 0 && surplus_looped_gpu >= global_surplus_cpu_moe) {
+                    LOG_TRC("%s: keeping looped MoE weights in device memory yields a larger surplus of %" PRId64 " MiB\n",
+                        __func__, surplus_looped_gpu/MiB);
+                    global_surplus_cpu_moe   = surplus_looped_gpu;
+                    keep_looped_moe_in_step3 = true;
+                }
+            }
         }
 
         // reset
@@ -784,6 +887,17 @@ static void common_params_fit_impl(
         ngl_per_device_high[id].n_layer = n_unassigned;
         if (hp_nex > 0) {
             ngl_per_device_high[id].n_part = size_t(id) < nd - 1 ? ngl_per_device_high[id].n_layer : ngl_per_device_high[id].n_layer - 1;
+            if (keep_looped_moe_in_step3) {
+                const auto [dev_il0, dev_il1] = device_layer_slice(ngl_per_device_high, id);
+                uint32_t n_hot = 0;
+                const uint32_t limit = std::min(dev_il1, (uint32_t) hp_layer_visits.size());
+                for (uint32_t il = dev_il0; il < limit; ++il) {
+                    if (hp_layer_visits[il] > 1) {
+                        n_hot++;
+                    }
+                }
+                ngl_per_device_high[id].n_part -= std::min(ngl_per_device_high[id].n_part, n_hot);
+            }
         }
         if (ngl_per_device_high[id].n_layer > 0) {
             std::vector<int64_t> mem_high = get_memory_for_layers(__func__, ngl_per_device_high, overflow_bufts);
@@ -858,6 +972,12 @@ static void common_params_fit_impl(
             ngl_per_device_high[jd].n_part = 0;
         }
         size_t id_dense_start_high = nd - 1;
+        if (has_looped_layers && id == id_dense_start && ngl_per_device_high[id].n_layer == ngl_per_device[id].n_layer) {
+            const auto [dev_il0, dev_il1] = device_layer_slice(ngl_per_device_high, id);
+            const uint32_t n_phys_dev = (uint32_t) get_device_phys_layers(dev_il0, dev_il1).size();
+            const uint32_t dev_n_tf   = dev_il1 - dev_il0;
+            ngl_per_device_high[id].n_part = dev_n_tf - std::min(dev_n_tf, n_phys_dev);
+        }
         std::vector<int64_t> mem_high = get_memory_for_layers(__func__, ngl_per_device_high, overflow_bufts);
 
         if (mem_high[id] > targets[id]) {
@@ -909,7 +1029,15 @@ static void common_params_fit_impl(
         }
 
         // try to fit at least part of one more layer
-        if (ngl_per_device[id_dense_start].n_layer > (id < nd - 1 ? 0 : 1)) {
+        bool can_fit_partial = ngl_per_device[id_dense_start].n_layer > (id < nd - 1 ? 0 : 1);
+        if (can_fit_partial && has_looped_layers && id == id_dense_start) {
+            const auto [dev_il0, dev_il1] = device_layer_slice(ngl_per_device, id);
+            const uint32_t n_phys_dev = (uint32_t) get_device_phys_layers(dev_il0, dev_il1).size();
+            const uint32_t dev_n_tf   = dev_il1 - dev_il0;
+            const uint32_t n_full_tf  = dev_n_tf - std::min(dev_n_tf, ngl_per_device[id].n_part);
+            can_fit_partial = n_full_tf < n_phys_dev;
+        }
+        if (can_fit_partial) {
             std::vector<ngl_t> ngl_per_device_test = ngl_per_device;
             size_t id_dense_start_test = id_dense_start;
             ngl_per_device_test[id_dense_start_test].n_layer--;
