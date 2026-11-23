@@ -104,3 +104,103 @@ cost:
 
 Until one of those exists, this branch carries the specification and the
 tensor/metadata mapping — deliberately not a guessed forward pass.
+
+---
+
+# CONFIRMED from the reference (2026-11-23, later the same day)
+
+The block above says the spec was blocked on a 401. That was a WRONG REPO NAME,
+not a gate. The public repository is `nvidia/NVIDIA-Nemotron-Labs-Dory1.0-4B-BF16`
+(config.json answers 200); the bare `...-4B` name does not exist. The reference
+implementation ships in **transformers itself** (no `trust_remote_code`), so
+`src/transformers/models/dory/modeling_dory.py` (653 lines) +
+`configuration_dory.py` (130 lines) are readable and authoritative. Local
+transformers 5.3.0 predates `models/dory`, so the source was read from
+`raw.githubusercontent.com/huggingface/transformers/main/...`.
+
+## config.json (public, verbatim values that matter)
+
+```
+architectures = ["DoryForCausalLM"]   model_type = "dory"
+hidden_size 2560   intermediate_size 7168   num_hidden_layers 72
+num_attention_heads 16   num_key_value_heads 4   head_dim 256
+n_input_layers 16   n_recurrent_layers 40   n_output_layers 16
+n_recurrent_loops 2 (runtime-elastic; the GGUF was exported with 4)
+recurrent_kv_cache_mode "per_loop"    sliding_window 1024
+ngpt_alpha_init 0.05   initializer_range 0.0177   hidden_act silu
+layer_types = 72 entries, alternating ("sliding_attention"|"full_attention", "mlp"),
+              full_attention every 4th attention slot
+rope_parameters.sliding_attention.rope_theta = 1e4
+rope_parameters.full_attention.rope_theta    = 1e7
+```
+
+So the 72 `blk.N` in the GGUF are 72 PHYSICAL MODULES: even = attention, odd =
+MLP. 16 + 40 + 16 = 72 is a module count; the README's 8 / 20 / 8 counts
+(attn+MLP) pairs. Both statements describe the same stack.
+
+## The forward pass, as the reference implements it
+
+nGPT normalisation is a **unit-sphere** projection, not RMS:
+`L2Norm(x) = x * rsqrt(sum(x²) + 1e-6)`; `eps = 1e-6`.
+
+A module (attention or MLP) is an **interpolation toward its output**, never a
+plain residual add:
+
+```
+rate = abs(lambda * lambda_scale)          # per-layer scalar x per-dim vector
+h = h + rate * (f(norm(h)) - h)
+```
+For attention modules `lambda`/`lambda_scale` come from `residual_alpha`
+(2560 values, one per hidden dim); the MLP module has its own.
+
+Attention (`DoryAttention.forward`):
+```
+q = q_proj(x) -> q_norm  (L2 over head_dim) -> RoPE(theta 1e4 for sliding, 1e7 for full)
+k = k_proj(x) -> k_norm  (L2)                -> RoPE(same profile)
+v = v_proj(x)
+q = q * square(sqk * sqk_scale)            # gguf: attn_qk_scale.weight[4096] = 16*256, folded
+attn = softmax(q k^T * scaling + mask) v   # mask = sliding window 1024 or full
+g = sigmoid( square(gate_proj(x) * (s_gate * s_gate_scale)) )
+out = o_proj( attn_sub_norm( attn * g ) )  # gguf: attn_gate.weight[2560,4096], attn_gate_scale[4096]
+```
+Note the square: the qk scale and the gate scale are applied SQUARED, and the
+gate is a sigmoid of that square. Both GGUF tensors are already the folded
+product (`s* *_scale`), so the port multiplies them once and squares.
+
+MLP (`DoryMLP.forward`) — SwiGLU with a scale on EACH branch:
+```
+gate = gate_proj(x) * (suv_gate * suv_scale)   # gguf: ffn_gate_scale[7168]
+up   = up_proj(x)   * (suv_up   * suv_scale)   # gguf: ffn_up_scale[7168]
+out  = down_proj( ffn_sub_norm( silu(gate) * up ) )
+```
+LM head: `logits = (h @ W).float() * (logit_scale * factor)` — matches
+`output_scale.weight [131072]`, one scalar per vocab entry.
+
+## The loop (DoryModel.forward)
+
+```
+h = embed(input)
+for layer in layers[0:16]:        h = layer(h)          # input phase, ONCE
+input_hidden = L2Norm(h)
+for loop_idx in range(n_loops):
+    h = L2Norm(h) + input_hidden                        # reinjection, every loop
+    for layer in layers[16:56]:   h = layer(h)          # the shared recurrent group
+for layer in layers[56:72]:       h = layer(h)          # output phase, ONCE
+h = L2Norm(h)
+```
+`per_loop` caching: loops 1..n-1 write into deep copies of the recurrent
+layers' caches (`cache.layers += [copy.deepcopy(c) for c in recurrent_cache *
+(n_loops - 1)]`); `last_loop` instead appends `DoryPastReader` wrappers so every
+loop before the last reads without writing, i.e. one KV set regardless of loop
+count.
+
+## What this changes for the port
+
+The remaining risk is gone: op order is no longer a hypothesis. The work is now
+mechanical but large — register the arch and 17 tensor kinds, implement the two
+nGPT ops (`L2Norm`, interpolated residual with per-dim rate), one attention
+builder with the gate and squared qk scale, one scaled-SwiGLU builder, and a
+graph loop over `[16,56)` with reinjection plus the per-loop KV offset. A
+validation harness still needs reference logits from `DoryForCausalLM` on a
+fixed prompt; that is now cheap to produce (`pip install transformers>=…` with
+`models/dory`, load the BF16 repo, greedy-decode 32 tokens, store token ids).
