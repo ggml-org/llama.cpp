@@ -244,7 +244,6 @@ static __device__ void soft_max_f32_parallelize_cols_single_row(const float * __
         g.sync();
 
         // Compute compute global max from CTA-level maxs
-        assert(gridDim.x < blockDim.x);  // currently we only support this case
         local_max = -INFINITY;
         for (int i = tid; i < (int) gridDim.x; i += blockDim.x) {
             local_max = fmaxf(local_max, tmp_maxs[i]);
