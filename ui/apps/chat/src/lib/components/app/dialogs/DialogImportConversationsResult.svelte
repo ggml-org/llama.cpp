@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { MessageSquarePlus } from '@lucide/svelte';
 	import { SearchInput } from '@ggml-org/llama-ui/app/forms';
 	import * as Dialog from '@ggml-org/llama-ui/ui/dialog';
 	import { ScrollArea } from '@ggml-org/llama-ui/ui/scroll-area';
+	import { MessageSquarePlus } from '@lucide/svelte';
 	import { UI_DATA_ATTRS } from '#lib/constants/index.ts';
 
 	interface Props {
@@ -73,7 +73,7 @@
 							<tbody>
 								{#if filteredConversations.length === 0}
 									<tr>
-										<td colspan="2" class="p-8 text-center text-sm text-muted-foreground">
+										<td class="p-8 text-center text-sm text-muted-foreground" colspan="2">
 											No conversations found matching "{searchQuery}"
 										</td>
 									</tr>

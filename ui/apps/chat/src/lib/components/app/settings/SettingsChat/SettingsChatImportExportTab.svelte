@@ -1,13 +1,13 @@
 <script lang="ts">
 	import SettingsChatImportExportSection from './SettingsChatImportExportSection.svelte';
 	import { Download, Trash2, Upload } from '@lucide/svelte';
+	import type { SettingsDiffEntry } from '#lib/components/app/dialogs/DialogSettingsImportPreview.svelte';
 	import {
 		DialogConfirmation,
 		DialogConversationSelection,
 		DialogExportSettings,
 		DialogSettingsImportPreview
 	} from '#lib/components/app/index.ts';
-	import type { SettingsDiffEntry } from '#lib/components/app/dialogs/DialogSettingsImportPreview.svelte';
 	import SettingsGroup from '#lib/components/app/settings/SettingsGroup.svelte';
 	import { ConversationSelectionMode, FileExtensionText, HtmlInputType } from '#lib/enums/index.ts';
 	import { computeSettingsDiff } from '#lib/hooks/use-drop-import.svelte.ts';

@@ -1,7 +1,7 @@
 <script lang="ts">
+	import * as AlertDialog from '@ggml-org/llama-ui/ui/alert-dialog';
 	import { MessageSquarePlus } from '@lucide/svelte';
 	import ChatMessages from '#lib/components/app/chat/ChatMessages/ChatMessages.svelte';
-	import * as AlertDialog from '@ggml-org/llama-ui/ui/alert-dialog';
 
 	interface Props {
 		open: boolean;
@@ -26,7 +26,7 @@
 	}
 </script>
 
-<AlertDialog.Root {open} onOpenChange={handleOpenChange}>
+<AlertDialog.Root onOpenChange={handleOpenChange} {open}>
 	<AlertDialog.Content class="sm:max-w-3xl">
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">

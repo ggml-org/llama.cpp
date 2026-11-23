@@ -8,19 +8,18 @@
  * selection dialog before asking whether to open the result.
  */
 
-import { goto } from '$app/navigation';
+import type { SettingsDiffEntry } from '#lib/components/app/dialogs/DialogSettingsImportPreview.svelte';
 import { SETTINGS_REGISTRY, ZIP_MAGIC } from '#lib/constants/index.ts';
 import { ConversationTransferService } from '#lib/services/conversation-transfer.service.ts';
 import { RouterService } from '#lib/services/router.service.ts';
 import { conversationsStore } from '#lib/stores/conversations/index.svelte.ts';
 import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
+import type { SettingsConfigType, SettingsExportType } from '#lib/types/index.ts';
 import { createMessageCountMap } from '#lib/utils/index.ts';
+import { goto } from '$app/navigation';
 import { strFromU8 } from 'fflate';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
-
-import type { SettingsDiffEntry } from '#lib/components/app/dialogs/DialogSettingsImportPreview.svelte';
-import type { SettingsConfigType, SettingsExportType } from '#lib/types/index.ts';
 
 type FileKind = 'settings' | 'conversations';
 

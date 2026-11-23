@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { ArrowRight, Settings as SettingsIcon } from '@lucide/svelte';
 	import * as AlertDialog from '@ggml-org/llama-ui/ui/alert-dialog';
+	import { ArrowRight, Settings as SettingsIcon } from '@lucide/svelte';
 
 	export interface SettingsDiffEntry {
 		key: string;
@@ -35,7 +35,7 @@
 	}
 </script>
 
-<AlertDialog.Root {open} onOpenChange={handleOpenChange}>
+<AlertDialog.Root onOpenChange={handleOpenChange} {open}>
 	<AlertDialog.Content class="sm:max-w-2xl">
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
