@@ -11719,9 +11719,10 @@ void ggml_vk_fill(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor
     const uint64_t n = ggml_nelements(dst);
     GGML_ASSERT(n > 0);
 
+    // dst can be a view at any offset: bind from the aligned offset below it, the shader skips KY elements
     vk_op_push_constants pc = {
         (uint32_t)n,
-        1,
+        get_misalign_bytes(ctx, dst) / (uint32_t)ggml_type_size(dst->type),
         ggml_get_op_params_f32(dst, 0),
         0.0f,
         0.0f, 0.0f,
@@ -11737,7 +11738,7 @@ void ggml_vk_fill(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor
     GGML_ASSERT(wg_y <= ctx->device->properties.limits.maxComputeWorkGroupCount[1]);
 
     ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
-    vk_subbuffer dst_buf = ggml_vk_tensor_subbuffer(ctx, dst, false);
+    vk_subbuffer dst_buf = ggml_vk_tensor_subbuffer(ctx, dst, true);
 
     std::array<uint32_t, 3> elements = { wg_x * pipeline->wg_denoms[0], wg_y * pipeline->wg_denoms[1], 1 };
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { dst_buf }, pc, elements);

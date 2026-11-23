@@ -9904,14 +9904,34 @@ struct test_fill : public test_case {
     const ggml_type              type;
     const std::array<int64_t, 4> ne;
     float                        c;
+    const int64_t                offset; // > 0: fill in place a view that starts offset elements into its buffer
 
-    std::string vars() override { return VARS_TO_STR3(type, ne, c); }
+    std::string vars() override {
+        std::string s = VARS_TO_STR3(type, ne, c);
+        if (offset != 0) {
+            s += "," + VAR_TO_STR(offset);
+        }
+        return s;
+    }
 
     test_fill(float c, ggml_type type = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne = { 10, 10, 4, 3 })
-        : type(type), ne(ne), c(c) {}
+            std::array<int64_t, 4> ne = { 10, 10, 4, 3 }, int64_t offset = 0)
+        : type(type), ne(ne), c(c), offset(offset) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
+        if (offset != 0) {
+            ggml_tensor * a = ggml_new_tensor_1d(ctx, type, offset + ne[0]*ne[1]*ne[2]*ne[3]);
+            ggml_set_name(a, "a");
+
+            ggml_tensor * v = ggml_view_4d(ctx, a, ne[0], ne[1], ne[2], ne[3],
+                    ne[0]*ggml_type_size(type), ne[0]*ne[1]*ggml_type_size(type), ne[0]*ne[1]*ne[2]*ggml_type_size(type),
+                    offset*ggml_type_size(type));
+
+            ggml_tensor * out = ggml_fill_inplace(ctx, v, c);
+            ggml_set_name(out, "out");
+            return out;
+        }
+
         ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
         ggml_set_param(a);
         ggml_set_name(a, "a");
@@ -13337,6 +13357,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_fill(2.0f, GGML_TYPE_F16, { 303, 207, 11, 3 }));
     test_cases.emplace_back(new test_fill(-152.0f, GGML_TYPE_F16, { 800, 600, 4, 4 }));
     test_cases.emplace_back(new test_fill(3.5f, GGML_TYPE_F16, { 2048, 512, 2, 2 }));
+    test_cases.emplace_back(new test_fill(0.0f, GGML_TYPE_F32, { 303, 7, 1, 1 }, 1));
+    test_cases.emplace_back(new test_fill(2.0f, GGML_TYPE_F32, { 96, 4, 1, 1 }, 37));
+    test_cases.emplace_back(new test_fill(2.0f, GGML_TYPE_F16, { 303, 7, 1, 1 }, 3));
 
     test_cases.emplace_back(new test_sleep(0));
     test_cases.emplace_back(new test_sleep(10, GGML_TYPE_F16, { 128, 4, 2, 2 }));
