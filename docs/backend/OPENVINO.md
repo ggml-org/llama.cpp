@@ -995,6 +995,16 @@ build\ReleaseOV\bin\llama-simple.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_K_M.
 
 **GPU-specific**
 
+- Muse-Glimmer-30B with a DFlash draft needs a 64 GB system (peak about 45 GB of RAM):
+
+  ```bash
+  export GGML_OPENVINO_DEVICE=GPU
+  export GGML_OPENVINO_SPILL_DIR=$HOME/ov_spill   # local disk, not tmpfs
+  export GGML_OPENVINO_ROPE_F32_ANGLE=1           # long prompts
+  mkdir -p $GGML_OPENVINO_SPILL_DIR
+  ./build/ReleaseOV/bin/llama-server -m Muse-Glimmer-30B-Q4_K_M.gguf -md <dflash-draft>.gguf \
+      --spec-type draft-dflash --spec-draft-n-max 4
+  ```
 - Multiple GPUs (`GGML_OPENVINO_DEVICE=GPU.0,GPU.1` with `-sm layer`):
   - `-sm tensor` is not supported.
   - Copies between GPUs go through host memory. There is no asynchronous copy and no peer-to-peer copy.

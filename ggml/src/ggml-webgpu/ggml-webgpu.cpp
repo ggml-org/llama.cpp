@@ -964,16 +964,18 @@ static webgpu_encoded_op ggml_webgpu_pad(webgpu_context & ctx, ggml_tensor * src
         (uint32_t) dst->ne[1],
         (uint32_t) dst->ne[2],
         (uint32_t) dst->ne[3],
-        // Pad sizes
-        (uint32_t) ggml_get_op_params_i32(dst, 0),
-        (uint32_t) ggml_get_op_params_i32(dst, 1),
-        (uint32_t) ggml_get_op_params_i32(dst, 2),
-        (uint32_t) ggml_get_op_params_i32(dst, 3),
-        (uint32_t) ggml_get_op_params_i32(dst, 4),
-        (uint32_t) ggml_get_op_params_i32(dst, 5),
-        (uint32_t) ggml_get_op_params_i32(dst, 6),
-        (uint32_t) ggml_get_op_params_i32(dst, 7),
     };
+    for (int i = 0; i < 4; i++) {
+        if (dst->op == GGML_OP_ROLL) {
+            // Circular padding with unchanged dimensions implements a roll.
+            const int64_t shift = ggml_get_op_params_i32(dst, i);
+            params.push_back((uint32_t) (shift < 0 ? shift + src->ne[i] : shift));
+            params.push_back(0);
+        } else {
+            params.push_back((uint32_t) ggml_get_op_params_i32(dst, 2 * i));
+            params.push_back((uint32_t) ggml_get_op_params_i32(dst, 2 * i + 1));
+        }
+    }
 
     std::vector<wgpu::BindGroupEntry> entries = {
         ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src),
@@ -3740,6 +3742,7 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_encode(webgpu_context ctx,
             return ggml_webgpu_pool2d(ctx, src0, node);
         case GGML_OP_COL2IM_1D:
             return ggml_webgpu_col2im_1d(ctx, src0, node);
+        case GGML_OP_ROLL:
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_PAD:
             return ggml_webgpu_pad(ctx, src0, node);
@@ -4066,7 +4069,7 @@ static void ggml_backend_webgpu_buffer_memset_tensor(ggml_backend_buffer_t buffe
 
     size_t total_offset = ggml_webgpu_tensor_offset(tensor) + offset;
 
-    // This is a trick to set all bytes of a u32 to the same 1 byte value.
+    // set all bytes of a u32 to the same 1 byte value
     uint32_t val32 = (uint32_t) value * 0x01010101;
     ggml_backend_webgpu_buffer_memset(buf_ctx->global_ctx, buf_ctx->buffer, val32, total_offset, size);
     WEBGPU_CPU_PROFILE_TOTAL_END(memset_tensor, buf_ctx->global_ctx);
@@ -4406,7 +4409,10 @@ static void ggml_backend_webgpu_buffer_clear(ggml_backend_buffer_t buffer, uint8
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_clear(" << buffer << ", " << (uint32_t) value << ")");
     WEBGPU_CPU_PROFILE_TOTAL_START(clear);
     ggml_backend_webgpu_buffer_context * buf_ctx = (ggml_backend_webgpu_buffer_context *) buffer->context;
-    ggml_backend_webgpu_buffer_memset(buf_ctx->global_ctx, buf_ctx->buffer, value, 0, buffer->size);
+
+    // set all bytes of a u32 to the same 1 byte value
+    uint32_t val32 = (uint32_t) value * 0x01010101;
+    ggml_backend_webgpu_buffer_memset(buf_ctx->global_ctx, buf_ctx->buffer, val32, 0, buffer->size);
     WEBGPU_CPU_PROFILE_TOTAL_END(clear, buf_ctx->global_ctx);
 }
 
@@ -5296,6 +5302,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
         case GGML_OP_PAD_REFLECT_1D:
             supports_op = op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32;
             break;
+        case GGML_OP_ROLL:
         case GGML_OP_PAD:
             supports_op = op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32;
             break;

@@ -67,3 +67,16 @@ export enum SearchChatsOrder {
 	ASC = 'asc',
 	DESC = 'desc'
 }
+
+/** Bucket a tool call counts in for a tool-call group's summary line. */
+export enum ToolCallSummaryKind {
+	COMMAND = 'command',
+	EDIT = 'edit',
+	LOAD_TOOLS = 'load_tools',
+	OTHER = 'other',
+	READ = 'read',
+	SCRIPT = 'script',
+	SEARCH = 'search',
+	VIEW = 'view',
+	WRITE = 'write'
+}

@@ -31,6 +31,7 @@
 #include <openvino/op/subtract.hpp>
 #include <openvino/op/transpose.hpp>
 #include <openvino/op/unsqueeze.hpp>
+#include <openvino/op/util/precision_sensitive_attribute.hpp>
 #include <string>
 
 namespace ov {
@@ -41,18 +42,6 @@ void num_inputs_check(const NodeContext & context, size_t min_inputs, size_t max
     auto input_size = context.get_input_size();
     FRONT_END_OP_CONVERSION_CHECK(input_size >= min_inputs, "Got less inputs than expected");
     FRONT_END_OP_CONVERSION_CHECK(input_size <= max_inputs, "Got more inputs than expected");
-}
-
-int non_cont_dim(std::vector<size_t> ne, std::vector<size_t> nb) {
-    int dim = nb.size() - 1;
-    size_t bytes = nb[dim];
-    for (int i = dim; i > 0; i--) {
-        bytes *= ne[i];
-        if (bytes != nb[i - 1]) {
-            return i;
-        }
-    }
-    return 0;
 }
 
 std::shared_ptr<ov::Node> get_dimensions(const std::shared_ptr<ov::op::v3::ShapeOf> & shape,
@@ -311,14 +300,77 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
         }
     }
 
-    Output<Node> cos_theta = std::make_shared<ov::op::v0::Cos>(theta);
-    Output<Node> sin_theta = std::make_shared<ov::op::v0::Sin>(theta);
+    // Keep the ROPE ANGLE in f32 even under INFERENCE_PRECISION_HINT=f16.
+    //
+    // Everything above builds theta = pos * freq_factors with a declared f32 type, but a declared
+    // element type is not an execution precision: under the f16 hint the GPU plugin compresses these
+    // subgraphs to f16 anyway. theta's magnitude IS the token position, so at position 6525 it lands
+    // where f16 spacing is 4 and the value is not even representable. Worse, a model whose freq_base
+    // and head_dim make factor[0] == 1.0 exactly feeds the raw position in as the top-frequency
+    // angle, so an absolute error of 1-2 becomes an error of 1-2 RADIANS -- up to a third of a cycle. Sin/Cos of an angle wrong by radians is not approximately
+    // right, it is arbitrary, and trig amplifies the error without bound.
+    //
+    // Measured on a large decoder-only model at inp_pos=6525, same device, f16 vs f32 execution: the
+    // whole Q/K projection chain is clean at rel ~1e-4, then Cos jumps to rel 0.124 and Sin to 0.155,
+    // and K right after the rotation carries rel 0.081. The error is depth-dependent because f16
+    // spacing grows with magnitude: sin rel is 0.006 at position 512 and 0.16 at 6525.
+    //
+    // mark_as_precision_sensitive disables fp16 compression of the subgraph feeding an input, which is
+    // exactly the guarantee needed. Marking Sin/Cos's input covers the whole theta chain back to the
+    // Convert of inp_pos. The cost is negligible: theta is a few dozen values per token, against the
+    // matmuls that dominate. The rotation itself and everything downstream stay f16.
+    //
+    // Off by default; GGML_OPENVINO_ROPE_F32_ANGLE=1 turns it on. It changes the RoPE of every model,
+    // it is validated on one model on the GPU only, and on an f32 path the round trip below makes
+    // cos and sin less accurate.
+    const bool pin_angle = ggml_openvino_getenv_int("GGML_OPENVINO_ROPE_F32_ANGLE") != 0;
+
+    auto cos_op = std::make_shared<ov::op::v0::Cos>(theta);
+    auto sin_op = std::make_shared<ov::op::v0::Sin>(theta);
+    if (pin_angle) {
+        ov::mark_as_precision_sensitive(cos_op->input(0));
+        ov::mark_as_precision_sensitive(sin_op->input(0));
+    }
+    Output<Node> cos_theta = cos_op;
+    Output<Node> sin_theta = sin_op;
 
     if (mscale != 1.0f) {
         auto mscale_node = ov::op::v0::Constant::create(ov::element::f32, Shape{}, {mscale});
 
-        cos_theta = std::make_shared<ov::op::v1::Multiply>(cos_theta, mscale_node);
-        sin_theta = std::make_shared<ov::op::v1::Multiply>(sin_theta, mscale_node);
+        auto cos_scaled = std::make_shared<ov::op::v1::Multiply>(cos_theta, mscale_node);
+        auto sin_scaled = std::make_shared<ov::op::v1::Multiply>(sin_theta, mscale_node);
+        // Mark this Constant's input too. Marking only Sin/Cos keeps those nodes f32 but leaves the
+        // sibling mscale Constant to be compressed to f16, and the pass does not reconcile the pair,
+        // so compilation fails with "Arguments do not have the same element type".
+        if (pin_angle) {
+            ov::mark_as_precision_sensitive(cos_scaled->input(1));
+            ov::mark_as_precision_sensitive(sin_scaled->input(1));
+        }
+        cos_theta = cos_scaled;
+        sin_theta = sin_scaled;
+    }
+
+    // Close the f32 island explicitly with an f16 round trip.
+    //
+    // ConvertPrecision does not insert the boundary Convert: with only the marking above, the f32
+    // region propagates forward through the shape-only ops of the cos/sin expansion and then collides
+    // with f16 data in the rotation, so the type mismatch just moves one step down the graph.
+    //
+    // Rounding the RESULT of the trig is harmless -- cos/sin are in [-1,1], where f16 spacing is ~6e-4,
+    // the ordinary f16 cost accepted everywhere else. What must not be rounded is the ANGLE, which the
+    // marking above protects. So this spends the cheap rounding to buy a type-consistent graph: the
+    // chain from inp_pos through Sin/Cos stays f32, everything downstream is f16, and the transition is
+    // a node we control rather than one the pass has to infer.
+    //
+    // Declared types are f32 on both sides at build time, so the frontend sees no type change. On an
+    // f32 path (the CPU device in test-backend-ops) the two Converts still round cos and sin to f16.
+    if (pin_angle) {
+        auto pin_boundary = [](Output<Node> x) -> Output<Node> {
+            auto down = std::make_shared<ov::op::v0::Convert>(x, ov::element::f16);
+            return std::make_shared<ov::op::v0::Convert>(down, ov::element::f32);
+        };
+        cos_theta = pin_boundary(cos_theta);
+        sin_theta = pin_boundary(sin_theta);
     }
 
     return std::make_pair(sin_theta, cos_theta);
@@ -784,20 +836,23 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
                         return split_node->output(static_cast<size_t>(split_index));
                     }
                     if (split_index >= 0 && split_index < num_splits && !dynamic_split) {
+                        // as above: a weak reference, and one Split per output port
                         auto src_node = input.get_node_shared_ptr();
-                        std::string rt_key = "split_dim_" + std::to_string(split_dim);
+                        std::string rt_key =
+                            "split_dim_static_" + std::to_string(split_dim) + "_" + std::to_string(input.get_index());
                         auto & rt_info = src_node->get_rt_info();
-
-                        if (rt_info.find(rt_key) == rt_info.end()) {
+                        std::shared_ptr<ov::Node> split_node;
+                        if (rt_info.count(rt_key) != 0) {
+                            split_node = rt_info[rt_key].as<std::weak_ptr<ov::Node>>().lock();
+                        }
+                        if (split_node == nullptr) {
                             auto axis_const =
                                 ov::op::v0::Constant::create(ov::element::i64, {}, {static_cast<int64_t>(split_dim)});
-                            auto split_node =
+                            split_node =
                                 std::make_shared<ov::op::v1::Split>(input, axis_const, static_cast<size_t>(num_splits));
                             split_node->set_friendly_name(src_node->get_friendly_name() + "_split");
-                            rt_info[rt_key] = split_node;
+                            rt_info[rt_key] = std::weak_ptr<ov::Node>(split_node);
                         }
-
-                        auto split_node = rt_info[rt_key].as<std::shared_ptr<ov::op::v1::Split>>();
                         return split_node->output(static_cast<size_t>(split_index));
                     }
                 }

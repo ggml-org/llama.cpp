@@ -29,6 +29,7 @@
 #include <cassert>
 #include <cfloat>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <cmath>
 #include <functional>
@@ -1405,19 +1406,24 @@ struct llama_model::impl {
     std::vector<float> tensor_split_owned;
 };
 
-bool llama_prec_policy::apply(ggml_tensor * res) const {
-    if (!res || !res->src[0]) {
+bool llama_prec_policy::apply(ggml_tensor * res, const ggml_tensor * w) const {
+    if (!res) {
+        return false;
+    }
+
+    const ggml_tensor * key = w ? w : res->src[0];
+    if (!key) {
         return false;
     }
 
     bool applied = false;
 
-    const auto it_acc = prec_acc.find(res->src[0]);
+    const auto it_acc = prec_acc.find(key);
     if (it_acc != prec_acc.end()) {
         applied |= ggml_prec_set_acc(res, it_acc->second);
     }
 
-    const auto it_src1 = prec_src1.find(res->src[0]);
+    const auto it_src1 = prec_src1.find(key);
     if (it_src1 != prec_src1.end()) {
         applied |= ggml_prec_set_src(res, it_src1->second, 1);
     }
@@ -1722,6 +1728,30 @@ void llama_model_base::load_vocab(llama_model_loader & ml) {
     const auto kv = LLM_KV(arch);
 
     vocab.load(ml, kv);
+}
+
+void llama_model_base::load_prec_policy(llama_model_loader & ml) {
+    // the reference computes the router in F32: https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/blob/60d8d70770c6776ff598c94bb586a859a38244f1/inference/model.py#L565
+    if (hparams.expert_gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS || hparams.expert_router_f32) {
+        for (const auto & layer : layers) {
+            prec_policy.set_acc(layer.ffn_gate_inp, GGML_PREC_F32);
+        }
+    }
+
+    if (getenv("LLAMA_MOE_AMAX_SKIP") != nullptr) {
+        LLAMA_LOG_WARN("LLAMA_MOE_AMAX_SKIP is set - the MoE amax rescaling is disabled\n");
+
+        if (llm_arch_mmid_down_bf16(arch)) {
+            for (const auto & layer : layers) {
+                if (layer.ffn_down_exps) {
+                    prec_policy.set_src1(layer.ffn_down_exps, GGML_PREC_BF16);
+                }
+            }
+        }
+    }
+
+    // per-tensor activation precision policy
+    prec_policy.load(ml, *this);
 }
 
 bool llama_model_base::load_tensors(llama_model_loader & ml) {
@@ -2080,15 +2110,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
-    // the reference computes the router in F32: https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/blob/60d8d70770c6776ff598c94bb586a859a38244f1/inference/model.py#L565
-    if (hparams.expert_gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS || hparams.expert_router_f32) {
-        for (const auto & layer : layers) {
-            prec_policy.set_acc(layer.ffn_gate_inp, GGML_PREC_F32);
-        }
-    }
-
-    // per-tensor activation precision policy
-    prec_policy.load(ml, *this);
+    load_prec_policy(ml);
 
     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
     pimpl->mappings.reserve(ml.mappings.size());

@@ -116,6 +116,8 @@ export interface ChatMessageAgenticTimings {
 	toolsMs: number;
 	toolCalls?: ChatMessageToolCallTiming[];
 	perTurn?: ChatMessageAgenticTurnStats[];
+	/** Wall time of the whole task, from the prompt to the last token, waits included. */
+	totalMs?: number;
 	llm: {
 		predicted_n: number;
 		predicted_ms: number;
