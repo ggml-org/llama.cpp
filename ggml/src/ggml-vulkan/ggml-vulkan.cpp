@@ -1688,6 +1688,55 @@ static uint32_t ggml_vk_gated_delta_net_shmem_size(uint32_t v, bool coopmat2) {
     return qk + state + p_inv + delta_solved + lower + scan;
 }
 
+// Specialization constants of ssm_scan_cm2.comp and ssm_scan_prefill.comp.
+#define GGML_VK_SSM_CM2_WG_SIZE 128u
+#define GGML_VK_SSM_CM2_D_STATE 128u
+#define GGML_VK_SSM_CM2_T 32u
+#define GGML_VK_SSM_CM2_ROWS 32u
+#define GGML_VK_SSM_CM2_PAD 8u
+#define GGML_VK_SSM_PREFILL_WG_SIZE 128u
+#define GGML_VK_SSM_PREFILL_LPR 16u
+#define GGML_VK_SSM_PREFILL_R 2u
+#define GGML_VK_SSM_PREFILL_ROWS (GGML_VK_SSM_PREFILL_WG_SIZE / GGML_VK_SSM_PREFILL_LPR * GGML_VK_SSM_PREFILL_R)
+// The prefill shader's tokens per chunk (T) are this divided by d_state, so a
+// chunk of B and C has the same size for every d_state.
+#define GGML_VK_SSM_PREFILL_CHUNK_VALUES 2048u
+
+// Shared memory of ssm_scan_cm2.comp: fp16 C, B [T x d_state],
+// S [rows x d_state], X_dt (two buffers) and X_w [T x rows], M [T x T], with
+// padded rows, and two float arrays.
+static uint32_t ggml_vk_ssm_scan_cm2_shmem_size() {
+    const uint32_t d_state = GGML_VK_SSM_CM2_D_STATE;
+    const uint32_t T = GGML_VK_SSM_CM2_T;
+    const uint32_t rows = GGML_VK_SSM_CM2_ROWS;
+    const uint32_t pad = GGML_VK_SSM_CM2_PAD;
+    const uint32_t f16_size = sizeof(ggml_fp16_t);
+
+    const uint32_t c_b = 2 * T * (d_state + pad) * f16_size;
+    const uint32_t s = rows * (d_state + pad) * f16_size;
+    const uint32_t x = 3 * T * (rows + pad) * f16_size;
+    const uint32_t m = T * (T + pad) * f16_size;
+    const uint32_t scan = 2 * T * sizeof(float);
+
+    return c_b + s + x + m + scan;
+}
+
+// Shared memory of ssm_scan_prefill.comp: two buffers of B, C [T x d_state],
+// x [T x ROWS] and dA [T].
+template <uint32_t d_state>
+static constexpr uint32_t ggml_vk_ssm_scan_prefill_shmem_size() {
+    constexpr uint32_t T = GGML_VK_SSM_PREFILL_CHUNK_VALUES / d_state;
+    constexpr uint32_t rows = GGML_VK_SSM_PREFILL_ROWS;
+    constexpr uint32_t wg = GGML_VK_SSM_PREFILL_WG_SIZE;
+    constexpr uint32_t lpr = GGML_VK_SSM_PREFILL_LPR;
+    static_assert((lpr & (lpr - 1)) == 0 && wg % lpr == 0);
+    static_assert(GGML_VK_SSM_PREFILL_CHUNK_VALUES % d_state == 0 && d_state % (4 * lpr) == 0);
+    static_assert((T * d_state / 4) % wg == 0 && rows % 4 == 0 && T * rows / 4 <= wg);
+    static_assert((T * GGML_VK_SSM_PREFILL_R) % lpr == 0);
+
+    return 2 * T * (2 * d_state + rows + 1) * sizeof(float);
+}
+
 static bool ggml_vk_matmul_shmem_support(const vk_device& device, const std::vector<uint32_t>& warptile, bool mul_mat_id, ggml_type src0_type) {
 
     uint32_t lut_size = 0;
@@ -4284,6 +4333,28 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_f32_d256, "ssm_scan_256_f32", ssm_scan_f32_len, ssm_scan_f32_data, "main", 8, sizeof(vk_op_ssm_scan_push_constants), {1, 1, 1}, {256, device->subgroup_size, 256}, 1, true, true);
     }
 
+    // Multi-token SSM scans. The prefill shader reduces over shuffle clusters.
+    if (device->subgroup_shuffle && device->subgroup_require_full_support &&
+        device->subgroup_size >= GGML_VK_SSM_PREFILL_LPR &&
+        device->properties.limits.maxComputeWorkGroupInvocations >= GGML_VK_SSM_PREFILL_WG_SIZE &&
+        device->properties.limits.maxComputeWorkGroupSize[0] >= GGML_VK_SSM_PREFILL_WG_SIZE) {
+        const uint32_t max_shmem = device->properties.limits.maxComputeSharedMemorySize;
+        if (ggml_vk_ssm_scan_prefill_shmem_size<128>() <= max_shmem) {
+            ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_prefill_f32_d128, "ssm_scan_prefill_d128_f32", ssm_scan_prefill_f32_len, ssm_scan_prefill_f32_data, "main", 8, sizeof(vk_op_ssm_scan_push_constants), {1, 1, 1},
+                {GGML_VK_SSM_PREFILL_WG_SIZE, 128, GGML_VK_SSM_PREFILL_CHUNK_VALUES / 128, GGML_VK_SSM_PREFILL_LPR, GGML_VK_SSM_PREFILL_R}, 1, true, true);
+        }
+        if (ggml_vk_ssm_scan_prefill_shmem_size<256>() <= max_shmem) {
+            ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_prefill_f32_d256, "ssm_scan_prefill_d256_f32", ssm_scan_prefill_f32_len, ssm_scan_prefill_f32_data, "main", 8, sizeof(vk_op_ssm_scan_push_constants), {1, 1, 1},
+                {GGML_VK_SSM_PREFILL_WG_SIZE, 256, GGML_VK_SSM_PREFILL_CHUNK_VALUES / 256, GGML_VK_SSM_PREFILL_LPR, GGML_VK_SSM_PREFILL_R}, 1, true, true);
+        }
+    }
+#if defined(VK_NV_cooperative_matrix2) && defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
+    if (device->coopmat2 && device->coopmat2_ssm_support) {
+        ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_cm2_f32, "ssm_scan_f32_cm2", ssm_scan_f32_cm2_len, ssm_scan_f32_cm2_data, "main", 8, sizeof(vk_op_ssm_scan_push_constants), {1, 1, 1},
+            {GGML_VK_SSM_CM2_WG_SIZE, GGML_VK_SSM_CM2_D_STATE, GGML_VK_SSM_CM2_T, GGML_VK_SSM_CM2_ROWS, GGML_VK_SSM_CM2_PAD}, 1, true, true, GGML_VK_SSM_CM2_T);
+    }
+#endif
+
     ggml_vk_create_pipeline(device, device->pipeline_ssm_conv_f32,           "ssm_conv_f32",           ssm_conv_f32_len, ssm_conv_f32_data, "main", 4, sizeof(vk_op_ssm_conv_push_constants), {32, 16, 1}, {32, 16, 0, 0}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_ssm_conv_silu_f32,      "ssm_conv_silu_f32",      ssm_conv_f32_len, ssm_conv_f32_data, "main", 4, sizeof(vk_op_ssm_conv_push_constants), {32, 16, 1}, {32, 16, 0, 1}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_ssm_conv_bias_silu_f32, "ssm_conv_bias_silu_f32", ssm_conv_f32_len, ssm_conv_f32_data, "main", 4, sizeof(vk_op_ssm_conv_push_constants), {32, 16, 1}, {32, 16, 1, 1}, 1);
@@ -5238,6 +5309,16 @@ vk_device ggml_vk_get_device(size_t idx) {
                                     found_fp32_128 = true;
                                 }
                             }
+                            // The SSM scan uses fp16 x fp16 -> fp32; every matrix dimension is N, L or P.
+                            const auto ssm_dims_ok = [](uint32_t g) {
+                                return g != 0 && GGML_VK_SSM_CM2_D_STATE % g == 0 && GGML_VK_SSM_CM2_T % g == 0 && GGML_VK_SSM_CM2_ROWS % g == 0;
+                            };
+                            if (prop.workgroupInvocations == GGML_VK_SSM_CM2_WG_SIZE &&
+                                prop.CType == VK_COMPONENT_TYPE_FLOAT32_KHR &&
+                                prop.ResultType == VK_COMPONENT_TYPE_FLOAT32_KHR &&
+                                ssm_dims_ok(prop.MGranularity) && ssm_dims_ok(prop.NGranularity) && ssm_dims_ok(prop.KGranularity)) {
+                                device->coopmat2_ssm_support = true;
+                            }
                             if (prop.workgroupInvocations == 256 &&
                                 prop.MGranularity <= 32 &&
                                 prop.NGranularity <= 32 &&
@@ -5283,6 +5364,14 @@ vk_device ggml_vk_get_device(size_t idx) {
 #endif
                     }
                 }
+                device->coopmat2_ssm_support = device->coopmat2_ssm_support &&
+                    coopmat2_props.cooperativeMatrixWorkgroupScopeMaxWorkgroupSize >= GGML_VK_SSM_CM2_WG_SIZE &&
+                    device->properties.limits.maxComputeWorkGroupInvocations >= GGML_VK_SSM_CM2_WG_SIZE &&
+                    device->properties.limits.maxComputeWorkGroupSize[0] >= GGML_VK_SSM_CM2_WG_SIZE &&
+                    device->subgroup_size_control &&
+                    device->subgroup_min_size <= GGML_VK_SSM_CM2_T && GGML_VK_SSM_CM2_T <= device->subgroup_max_size &&
+                    uint64_t(ggml_vk_ssm_scan_cm2_shmem_size()) + coopmat2_props.cooperativeMatrixWorkgroupScopeReservedSharedMemory <=
+                        device->properties.limits.maxComputeSharedMemorySize;
                 device->coopmat2_gdn_support = device->coopmat2_gdn_support &&
                     coopmat2_props.cooperativeMatrixWorkgroupScopeMaxWorkgroupSize >= 128 &&
                     device->properties.limits.maxComputeWorkGroupInvocations >= 128 &&
@@ -11500,7 +11589,43 @@ void ggml_vk_ssm_scan(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_te
     bool is_mamba2 = (src3->nb[1] == sizeof(float));
     GGML_ASSERT(is_mamba2);
 
+    // The sources can be views at any offset: each is bound at an aligned
+    // offset at or below its data, and the shaders add the difference.
+    vk_subbuffer dst_buf = ggml_vk_tensor_subbuffer(ctx, dst);
+    vk_subbuffer src_buf[7] = {};
+    uint32_t src_off[7] = {};
+    for (int i = 0; i < 7 && dst->src[i] != nullptr; i++) {
+        src_buf[i] = ggml_vk_tensor_subbuffer(ctx, dst->src[i], true);
+        src_off[i] = get_misalign_bytes(ctx, dst->src[i]);
+    }
+
+    const uint32_t d_state = src0->ne[0];
+    const uint32_t K = (uint32_t) ggml_get_op_params_i32(dst, 0);
+
+    // Multi-token scans without intermediate states use the prefill shaders,
+    // which read x, B and C as vec4: the chunked coopmat2 one from 32 tokens,
+    // the recurrent one from 8. Shorter scans, and x, B or C not aligned to
+    // 16 bytes, use the per-token shader.
+    auto vec4_aligned = [&](int i) {
+        const ggml_tensor * t = dst->src[i];
+        return src_buf[i].offset % 16 == 0 && src_off[i] % 16 == 0 && t->nb[2] % 16 == 0 && t->nb[3] % 16 == 0;
+    };
+    const bool vec4 = head_dim % 4 == 0 && vec4_aligned(1) && vec4_aligned(4) && vec4_aligned(5);
     vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, src0, src1, src2, dst, dst->op);
+    uint32_t prefill_rows = 0; // rows per workgroup of the prefill shaders
+    if (vec4 && K <= 1 && n_tok >= 8) {
+        if (n_tok >= GGML_VK_SSM_CM2_T && d_state == GGML_VK_SSM_CM2_D_STATE && ctx->device->pipeline_ssm_scan_cm2_f32) {
+            pipeline = ctx->device->pipeline_ssm_scan_cm2_f32;
+            prefill_rows = GGML_VK_SSM_CM2_ROWS;
+        } else {
+            vk_pipeline p = d_state == 128 ? ctx->device->pipeline_ssm_scan_prefill_f32_d128 :
+                            d_state == 256 ? ctx->device->pipeline_ssm_scan_prefill_f32_d256 : nullptr;
+            if (p) {
+                pipeline = p;
+                prefill_rows = GGML_VK_SSM_PREFILL_ROWS;
+            }
+        }
+    }
     GGML_ASSERT(pipeline != nullptr);
 
     ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
@@ -11514,24 +11639,19 @@ void ggml_vk_ssm_scan(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_te
         (uint32_t)src3->nb[1],
         (uint32_t)src4->nb[2], (uint32_t)src4->nb[3],
         (uint32_t)src5->nb[2], (uint32_t)src5->nb[3],
+        src_off[0], src_off[1], src_off[2], src_off[3], src_off[4], src_off[5], src_off[6],
         (uint32_t)s_off,
         n_head, head_dim, n_group, n_tok,
-        n_seq, (uint32_t) ggml_get_op_params_i32(dst, 0)
+        n_seq, K
     };
 
-    vk_subbuffer dst_buf = ggml_vk_tensor_subbuffer(ctx, dst);
-    vk_subbuffer src_buf[7] = {};
-    for (int i = 0; i < 7 && dst->src[i] != nullptr; i++) {
-        src_buf[i] = ggml_vk_tensor_subbuffer(ctx, dst->src[i]);
-    }
-
     std::array<uint32_t, 3> elements;
-
-    const uint32_t d_state = src0->ne[0];
-    uint32_t num_subgroups = (d_state == 96 ? 128 : d_state) / ctx->device->subgroup_size;
-    const uint32_t num_workgroups_x = CEIL_DIV(n_head * head_dim, num_subgroups);
-    const uint32_t num_workgroups_y = n_seq;
-    elements = { num_workgroups_x, num_workgroups_y, 1 };
+    if (prefill_rows) {
+        elements = { CEIL_DIV(head_dim, prefill_rows), n_head, n_seq };
+    } else {
+        const uint32_t num_subgroups = (d_state == 96 ? 128 : d_state) / ctx->device->subgroup_size;
+        elements = { CEIL_DIV(n_head * head_dim, num_subgroups), n_seq, 1 };
+    }
 
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
         {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5], src_buf[6], dst_buf},
@@ -17258,15 +17378,16 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
         case GGML_OP_SSM_SCAN:
             {
+                // The shaders read s, x, dt, A, B and C as float.
                 for (int i = 0; i < 6; i++) {
-                    if (op->src[i] && ggml_is_quantized(op->src[i]->type)) {
+                    if (op->src[i]->type != GGML_TYPE_F32) {
                         return false;
                     }
                 }
                 if (op->src[6] && op->src[6]->type != GGML_TYPE_I32) {
                     return false;
                 }
-                if (op->src[0]->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F32) {
+                if (op->type != GGML_TYPE_F32) {
                     return false;
                 }
 

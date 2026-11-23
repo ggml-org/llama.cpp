@@ -1,0 +1,215 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_shuffle : require
+
+// Mamba-2 selective scan over several tokens, one token at a time (fp32).
+//
+// A workgroup owns ROWS rows of one head of one sequence. Each thread keeps
+// R rows x S state values in registers, and the LPR consecutive lanes of a
+// row group cover the D_STATE values of its rows. The inputs of each chunk of
+// T tokens are staged in shared memory while the previous chunk is computed.
+// A chunk is fully unrolled and the per-lane sums are reduced only at its
+// end, so only the state update is a dependency from one token to the next.
+// B, C and x must be 16-byte aligned.
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+layout(constant_id = 0) const uint WG_SIZE = 128;
+layout(constant_id = 1) const uint D_STATE = 128;
+layout(constant_id = 2) const uint T = 16;      // tokens per chunk
+layout(constant_id = 3) const uint LPR = 16;    // lanes per row group
+layout(constant_id = 4) const uint R = 2;       // rows per thread
+
+const uint S = D_STATE / LPR;                   // state values per lane and row
+const uint ROWS = WG_SIZE / LPR * R;            // rows per workgroup
+const uint NB = T * D_STATE / 4 / WG_SIZE;      // vec4 of B (and C) per thread and chunk
+const uint NF = T * R / LPR;                    // reduced sums per lane per chunk
+
+layout(binding = 0) readonly buffer Src0 { float s0[]; };
+layout(binding = 1) readonly buffer Src1 { vec4 x[]; };
+layout(binding = 2) readonly buffer Src2 { float dt[]; };
+layout(binding = 3) readonly buffer Src3 { float A[]; };
+layout(binding = 4) readonly buffer Src4 { vec4 B[]; };
+layout(binding = 5) readonly buffer Src5 { vec4 C[]; };
+layout(binding = 6) readonly buffer Src6 { int ids[]; };
+layout(binding = 7) writeonly buffer Dst { float d[]; };
+
+// The nb* strides and offsets are in bytes: indices divide them by 4 for
+// floats and by 16 for vec4s (x, B and C are read as vec4). off0 .. off6 are
+// the offsets of the sources from their bindings, and s_off the offset of the
+// states in d.
+layout(push_constant) uniform PushConstants {
+    uint nb02; uint nb03; uint nb12; uint nb13;
+    uint nb21; uint nb22; uint nb31;
+    uint nb42; uint nb43; uint nb52; uint nb53;
+    uint off0; uint off1; uint off2; uint off3; uint off4; uint off5; uint off6;
+    uint s_off;
+    uint n_head;
+    uint d_head;
+    uint n_group;
+    uint n_tok;
+    uint n_seq;
+    uint K;
+};
+
+shared vec4 sh_b[2][T][D_STATE / 4];
+shared vec4 sh_c[2][T][D_STATE / 4];
+shared float sh_x[2][T][ROWS];      // x * dt
+shared float sh_da[2][T];           // exp(dt * A)
+
+float softplus(float v) {
+    return v <= 20.0 ? log(1.0 + exp(v)) : v;
+}
+
+// The next chunk's inputs, loaded into registers while the current chunk is
+// computed.
+vec4 next_b[NB], next_c[NB], next_x;
+float next_dt;
+
+// Loads the inputs of the chunk starting at token t0. Reads past the last
+// token or row clamp to the last valid one: store_chunk() gives tokens past
+// the end dt = 0 and dA = 1, so they leave the state unchanged, and rows past
+// the end are never stored.
+void load_chunk(const uint t0, const uint B_base, const uint C_base, const uint x_base, const uint dt_base, const uint row0) {
+    const uint tid = gl_LocalInvocationIndex;
+    [[unroll]] for (uint i = 0; i < NB; ++i) {
+        const uint e = tid + i * WG_SIZE;
+        const uint t = min(t0 + e / (D_STATE / 4), n_tok - 1);
+        next_b[i] = B[B_base + t * (nb42 / 16) + e % (D_STATE / 4)];
+        next_c[i] = C[C_base + t * (nb52 / 16) + e % (D_STATE / 4)];
+    }
+    // 4 rows of x of one token, and that token's dt.
+    if (tid < T * ROWS / 4) {
+        const uint t = min(t0 + tid / (ROWS / 4), n_tok - 1);
+        const uint q = min(row0 / 4 + tid % (ROWS / 4), d_head / 4 - 1);
+        next_x = x[x_base + t * (nb12 / 16) + q];
+        next_dt = dt[dt_base + t * (nb21 / 4)];
+    }
+}
+
+// Stores the loaded chunk into shared buffer b, with x scaled by its token's dt.
+void store_chunk(const uint b, const uint t0, const float a) {
+    const uint tid = gl_LocalInvocationIndex;
+    [[unroll]] for (uint i = 0; i < NB; ++i) {
+        const uint e = tid + i * WG_SIZE;
+        sh_b[b][e / (D_STATE / 4)][e % (D_STATE / 4)] = next_b[i];
+        sh_c[b][e / (D_STATE / 4)][e % (D_STATE / 4)] = next_c[i];
+    }
+    if (tid < T * ROWS / 4) {
+        const uint t = tid / (ROWS / 4), q = tid % (ROWS / 4);
+        const bool valid = t0 + t < n_tok;
+        const float dts = valid ? softplus(next_dt) : 0.0;
+        [[unroll]] for (uint k = 0; k < 4; ++k) {
+            sh_x[b][t][q * 4 + k] = next_x[k] * dts;
+        }
+        if (q == 0) {
+            sh_da[b][t] = valid ? exp(dts * a) : 1.0;
+        }
+    }
+}
+
+// Column of the k-th state value of a row kept by lane ln of a row group: each
+// lane keeps every LPR-th vec4 of the row, so the B and C reads of a row group
+// in the main loop are contiguous vec4s.
+uint state_col(const uint k, const uint ln) {
+    return ((k / 4) * LPR + ln) * 4 + k % 4;
+}
+
+void main() {
+    // Number row groups in subgroup lane order for the shuffle reduction.
+    const uint tid = gl_SubgroupID * gl_SubgroupSize + gl_SubgroupInvocationID;
+    const uint rg = tid / LPR;          // row group within the workgroup
+    const uint ln = tid % LPR;          // lane within the row group
+
+    const uint head = gl_WorkGroupID.y;
+    const uint seq = gl_WorkGroupID.z;
+    const uint row0 = gl_WorkGroupID.x * ROWS;
+    const uint group = head / (n_head / n_group);
+    const float a = A[(off3 + head * nb31) / 4];
+
+    const uint B_base = (off4 + seq * nb43 + group * D_STATE * 4) / 16;
+    const uint C_base = (off5 + seq * nb53 + group * D_STATE * 4) / 16;
+    const uint x_base = (off1 + seq * nb13 + head * d_head * 4) / 16;
+    const uint dt_base = (off2 + seq * nb22) / 4 + head;
+    const uint stride_y = n_head * d_head;
+    const uint y_base = seq * n_tok * stride_y + head * d_head + row0;
+
+    // state[j][k] is row row0 + rg * R + j, column state_col(k, ln).
+    float state[R][S];
+    const uint s0_base = (off0 + uint(ids[off6 / 4 + seq]) * nb03 + head * nb02) / 4;
+    const uint s_base = (s_off + seq * nb03 + head * nb02) / 4;
+    [[unroll]] for (uint j = 0; j < R; ++j) {
+        const uint row = row0 + rg * R + j;
+        [[unroll]] for (uint k = 0; k < S; ++k) {
+            state[j][k] = row < d_head ? s0[s0_base + row * D_STATE + state_col(k, ln)] : 0.0;
+        }
+    }
+
+    load_chunk(0, B_base, C_base, x_base, dt_base, row0);
+    store_chunk(0, 0, a);
+    barrier();
+
+    uint buf = 0;
+    for (uint t0 = 0; t0 < n_tok; t0 += T) {
+        const bool more = t0 + T < n_tok;
+        if (more) {
+            load_chunk(t0 + T, B_base, C_base, x_base, dt_base, row0);
+        }
+
+        float part[T * R];
+        [[unroll]] for (uint t = 0; t < T; ++t) {
+            const float dA = sh_da[buf][t];
+            vec4 bv[S / 4], cv[S / 4];
+            [[unroll]] for (uint q = 0; q < S / 4; ++q) {
+                bv[q] = sh_b[buf][t][q * LPR + ln];
+                cv[q] = sh_c[buf][t][q * LPR + ln];
+            }
+            [[unroll]] for (uint j = 0; j < R; ++j) {
+                const float xdt = sh_x[buf][t][rg * R + j];
+                float p = 0.0;
+                [[unroll]] for (uint k = 0; k < S; ++k) {
+                    state[j][k] = fma(state[j][k], dA, bv[k / 4][k % 4] * xdt);
+                    p = fma(state[j][k], cv[k / 4][k % 4], p);
+                }
+                part[t * R + j] = p;
+            }
+        }
+
+        // Reduce the T * R partial sums over the LPR lanes of the row group.
+        // Each butterfly step halves the values a lane keeps, so lane ln ends
+        // with the sums of entries ln * NF .. ln * NF + NF - 1 (t * R + j).
+        [[unroll]] for (uint l = 0; (LPR >> l) > 1; ++l) {
+            const uint m = LPR >> (l + 1);
+            const uint h = (T * R) >> (l + 1);
+            const bool upper = (ln & m) != 0;
+            [[unroll]] for (uint i = 0; i < h; ++i) {
+                const float keep = upper ? part[i + h] : part[i];
+                const float send = upper ? part[i] : part[i + h];
+                part[i] = keep + subgroupShuffleXor(send, m);
+            }
+        }
+        [[unroll]] for (uint i = 0; i < NF; ++i) {
+            const uint f = ln * NF + i;
+            const uint t = f / R, row = rg * R + f % R;
+            if (t0 + t < n_tok && row0 + row < d_head) {
+                d[y_base + (t0 + t) * stride_y + row] = part[i];
+            }
+        }
+
+        if (more) {
+            store_chunk(buf ^ 1, t0 + T, a);
+        }
+        barrier();
+        buf ^= 1;
+    }
+
+    [[unroll]] for (uint j = 0; j < R; ++j) {
+        const uint row = row0 + rg * R + j;
+        if (row < d_head) {
+            [[unroll]] for (uint k = 0; k < S; ++k) {
+                d[s_base + row * D_STATE + state_col(k, ln)] = state[j][k];
+            }
+        }
+    }
+}

@@ -804,6 +804,7 @@ struct vk_op_ssm_scan_push_constants {
     uint32_t nb02, nb03, nb12, nb13;
     uint32_t nb21, nb22, nb31;
     uint32_t nb42, nb43, nb52, nb53;
+    uint32_t off0, off1, off2, off3, off4, off5, off6; // bytes from each source's binding to its data
     uint32_t s_off;
     uint32_t n_head, d_head, n_group, n_tok;
     uint32_t n_seq, K;
