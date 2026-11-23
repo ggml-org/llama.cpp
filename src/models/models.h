@@ -2842,6 +2842,8 @@ struct llama_model_qwen35 : public llama_model_base {
         graph_mtp(const llm_graph_params & params);
     };
 
+    // if false, the derived model does not use the LM head and builds its own output
+    virtual bool has_lm_head() const { return true; }
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
@@ -2934,6 +2936,7 @@ struct llama_model_clef : public llama_model_qwen35 {
         const llama_model_clef & model;
     };
 
+    bool has_lm_head() const override { return false; }
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
