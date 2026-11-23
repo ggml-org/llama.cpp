@@ -5,22 +5,21 @@
 #include "ggml-openvino/openvino/node_context.h"
 #include "ggml-openvino/openvino/utils.h"
 #include "input_model.h"
-#include "pass/fuse_argsort_topk.h"
-#include "pass/fuse_moe_router.h"
-#include "pass/align_eltwise_ranks.h"
-#include "pass/fuse_moe_compressed.h"
-#include "pass/fuse_to_conv.h"
-#include "pass/kv_state_seq_axis.h"
+#ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
+#include "recurrent_cache_fusion.h"
+#endif
 #include "pass/mark_decompression_convert_constant_folding.h"
 #include "pass/mark_dequantization_subgraph.h"
-#include "pass/squeeze_matmul.h"
+#include "pass_registry/pipeline.h"
 #include "rt_info/weightless_caching_attributes.hpp"
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <map>
 #include <memory>
+#include <set>
 #include <openvino/core/node.hpp>
 #include <openvino/core/preprocess/pre_post_process.hpp>
 #include <openvino/core/shape.hpp>
@@ -44,6 +43,7 @@
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/result.hpp>
 #include <openvino/op/select.hpp>
+#include <openvino/op/shape_of.hpp>
 #include <openvino/op/sin.hpp>
 #include <openvino/op/slice.hpp>
 #include <openvino/op/squeeze.hpp>
@@ -53,8 +53,9 @@
 #include <openvino/op/unsqueeze.hpp>
 #include <openvino/pass/constant_folding.hpp>
 #include <openvino/pass/make_stateful.hpp>
-#include <limits>
 #include <sstream>
+#include <unordered_map>
+#include <vector>
 
 namespace ov {
 namespace frontend {
@@ -74,7 +75,12 @@ std::shared_ptr<ov::op::v0::Parameter> create_parameter(const std::string & name
 
 std::shared_ptr<ov::Node> create_extra_input(const std::string & name, const ModelExtraInputInfo & input_info) {
     if (input_info.is_parameter) {
-        auto param_node = std::make_shared<ov::op::v0::Parameter>(input_info.type, input_info.shape);
+        ov::PartialShape shape(input_info.shape);
+        // One SET_ROWS emits min(tokens, snapshot capacity) windows on each batch.
+        if (name.compare(0, 11, "rs_windows_") == 0) {
+            shape[2] = ov::Dimension::dynamic();
+        }
+        auto param_node = std::make_shared<ov::op::v0::Parameter>(input_info.type, shape);
         param_node->set_friendly_name(name);
         param_node->output(0).get_tensor().set_names({name});
         return param_node;
@@ -291,6 +297,15 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
     }
 
     for (const auto & it : ggml_model_decoder->get_model_extra_inputs()) {
+        auto source = tensor_map->find(it.second.shape_source);
+        if (!it.second.shape_source.empty() && source != tensor_map->end()) {
+            auto dim = std::make_shared<v8::Gather>(std::make_shared<v3::ShapeOf>(source->second, it.second.type),
+                                                    v0::Constant::create(element::i64, {1}, {it.second.shape_axis}),
+                                                    v0::Constant::create(element::i64, {}, {0}));
+            dim->set_friendly_name(it.first);
+            (*tensor_map)[it.first] = dim;
+            continue;
+        }
         auto input_node = create_extra_input(it.first, it.second);
         if (it.second.is_parameter) {
             params.push_back(ov::as_type_ptr<ov::op::v0::Parameter>(input_node));
@@ -302,6 +317,25 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
         (*tensor_map)[it.first] = it.second;
     }
 
+    if (tensor_map->count("sampling_rows")) {
+        // Match ComputeParams::sampling_rows ordering without one Parameter per sampling branch.
+        std::set<std::string> names;
+        ggml_model_decoder->visit_subgraph([&](const std::shared_ptr<GgmlDecoder> & decoder, int node_idx) {
+            if (decoder->get_op_type(node_idx) == "GGML_OP_VIEW" && decoder->get_op_case(node_idx) == 3) {
+                names.insert("sampling_row_" + decoder->get_op_name(node_idx));
+            }
+        });
+        int64_t index = 0;
+        for (const auto & name : names) {
+            (*tensor_map)[name] = std::make_shared<v8::Gather>(tensor_map->at("sampling_rows"),
+                v0::Constant::create(element::i64, {1}, {index++}),
+                v0::Constant::create(element::i64, {}, {0}));
+        }
+    }
+
+#ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
+    RecurrentCacheFusion recurrent_fusion(ggml_model_decoder, tensor_map);
+#endif
     auto translate_node = [&](const std::shared_ptr<GgmlDecoder> & decoder, int node_idx) {
         auto operation_type = decoder->get_op_type(node_idx);
         if (operation_type == "GGML_OP_NONE") {
@@ -322,7 +356,13 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
         FRONT_END_OP_CONVERSION_CHECK(it != m_translator_map.end(), "Translation for operation type ", operation_type,
                                       " is not implemented.");
         NodeContext node_context(decoder, tensor_map, node_idx, this);
-        ov::OutputVector converted_outputs = it->second(node_context);
+        ov::OutputVector converted_outputs;
+#ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
+        converted_outputs = recurrent_fusion.translate(node_idx, node_context);
+#endif
+        if (converted_outputs.empty()) {
+            converted_outputs = it->second(node_context);
+        }
 
         FRONT_END_OP_CONVERSION_CHECK(node_output_names.size() == converted_outputs.size(), "Number of ",
                                       operation_type, " outputs greater than number of converted outputs, which are ",
@@ -382,6 +422,12 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
     ggml_model_decoder->visit_subgraph(node_visitor);
 
     for (const auto & name : ggml_model_decoder->get_model_output_names()) {
+#ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
+        if (recurrent_fusion.is_inplace_output(name)) {
+            // The fused kernel updates the bound cache input; no cache Result is needed.
+            continue;
+        }
+#endif
         FRONT_END_GENERAL_CHECK(tensor_map->find(name) != tensor_map->end(),
                                 "Output name not found in tensor map: ", name);
         auto result = std::make_shared<v0::Result>(tensor_map->at(name));
@@ -453,19 +499,52 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
     // Each constant must have a distinct bin_offset, otherwise GPU's weightless cache
     // import will map multiple constants to the same data.
     //
+    // A cached blob is imported with this model as ov::hint::model and its constants are matched by key, so a
+    // model must get the same keys in every process, however it is built. Weight nodes are shared between models
+    // (the NPU prefill/decode pair, and the whole process through the tensor extras), so a number from this
+    // model's counter would depend on which model converted the weight first. Key weights by name instead, above
+    // the counter's range.
+    //
     // Small constants (< 16 elements) are excluded since they may be introduced by
     // optimization patterns and the overhead is negligible.
     //
     // Note: use shape_size() rather than byte_size()/element_type().size() - GatherMatmul's default
     // bias is a Constant(element::dynamic, Shape{0}), whose element_type().size() is 0 and would
     // divide by zero.
+    std::unordered_map<const ov::Node *, size_t> weight_keys;
+    for (const auto & [name, weight] : ggml_model_decoder->get_model_weights()) {
+        uint64_t name_hash = 0xcbf29ce484222325ULL;
+        for (const unsigned char c : name) {
+            name_hash = (name_hash ^ c) * 0x100000001b3ULL;
+        }
+        // A quantized weight is a subgraph: number its constants (data, scales, zero points) in input order.
+        size_t index = 0;
+        std::vector<const ov::Node *> stack;
+        if (weight) {
+            stack.push_back(weight.get());
+        }
+        while (!stack.empty()) {
+            const ov::Node * node = stack.back();
+            stack.pop_back();
+            if (ov::is_type<ov::op::v0::Constant>(node)) {
+                const uint64_t key = (name_hash + index++ * 0x9e3779b97f4a7c15ULL) & ((1ULL << 61) - 1);
+                weight_keys.emplace(node, static_cast<size_t>((1ULL << 61) | key));
+                continue;
+            }
+            for (size_t i = node->get_input_size(); i-- > 0;) {
+                stack.push_back(node->get_input_node_ptr(i));
+            }
+        }
+    }
     size_t offset = 0;
     for (auto & node : resulting_model->get_ordered_ops()) {
         if (auto cnst = ov::as_type_ptr<ov::op::v0::Constant>(node); cnst && ov::shape_size(cnst->get_shape()) >= 16) {
             auto & rt_info = cnst->get_rt_info();
             if (rt_info.find(ov::WeightlessCacheAttribute::get_type_info_static()) == rt_info.end()) {
-                rt_info[ov::WeightlessCacheAttribute::get_type_info_static()] =
-                    ov::WeightlessCacheAttribute(cnst->get_byte_size(), offset++, cnst->get_element_type());
+                const auto weight_key = weight_keys.find(cnst.get());
+                rt_info[ov::WeightlessCacheAttribute::get_type_info_static()] = ov::WeightlessCacheAttribute(
+                    cnst->get_byte_size(), weight_key != weight_keys.end() ? weight_key->second : offset++,
+                    cnst->get_element_type());
             }
         }
     }
@@ -477,52 +556,14 @@ std::shared_ptr<Model> TranslateSession::apply_transformations(std::shared_ptr<M
     {
         ov::pass::Manager manager;
         manager.set_per_pass_validation(true);
-        manager.register_pass<ov::pass::MarkCompressedFloatConstants>();
-        // Marks the Convert/Subtract/Multiply nodes of our GatherMatmul dequantization chain
-        // (make_int4_weights/make_int8_weights, for_gather_matmul=true) with disable_constant_folding,
-        // so it survives ConstantFolding regardless of whether the target plugin's own
-        // is_decompression_multiply() recognizes GatherMatmul as a valid consumer.
-        manager.register_pass<ov::pass::MarkDequantization>(
-            std::vector<ov::element::Type>{ov::element::u8, ov::element::i8, ov::element::u4, ov::element::i4});
-        manager.register_pass<pass::FuseToConv>();
-        manager.register_pass<pass::FuseArgsortTopK>();
-
-        // MOECompressed has no CPU plugin implementation, so enable it by default only on GPU.
-        // GGML_OPENVINO_MOE_OP=0 keeps the unfused GatherMatmul path for fallback/debugging.
-        if (ggml_openvino_is_gpu() &&
-            ggml_openvino_getenv_int("GGML_OPENVINO_MOE_OP", 1) != 0) {
-            manager.register_pass<pass::FuseMoeRouter>();
-            manager.register_pass<pass::FuseMoeCompressed>();
-            // Same fusion for models whose gate and up projections share one fused expert
-            // weight (gemma-4). It only matches that shape and only when the experts carry an
-            // integer zero point, so it is a no-op on the separate-gate/up models above.
-            manager.register_pass<pass::FuseMoeCompressedFusedGateUp>();
+        const auto traits = pipeline::analyze_graph(*ggml_model_decoder);
+        ov::pass::MakeStateful::ParamResPairs kv_param_res_pairs;
+        if (traits.is_stateful) {
+            kv_param_res_pairs = get_kv_param_res_pairs(model, ggml_model_decoder->get_kv_param_res_names());
         }
-
-        // Workaround for an OpenVINO GPU-plugin defect: an eltwise op whose operands differ in
-        // rank is computed wrongly once the plugin fuses it as a post-op into `rms`. gemma-4
-        // dense under stateful execution adds a rank-3 residual to the rank-4 norm output and
-        // decodes garbage on GPU while CPU is correct. Equalising the ranks is a no-op for
-        // NUMPY broadcasting and makes the fused path correct.
-        // Remove once the plugin guards that fusion. Opt out with
-        // GGML_OPENVINO_DISABLE_ELTWISE_RANK_ALIGN=1.
-        if (ggml_openvino_is_gpu() && !ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_ELTWISE_RANK_ALIGN")) {
-            manager.register_pass<pass::AlignEltwiseOperandRanks>();
-        }
-
-        if (ggml_model_decoder->is_stateful()) {
-            const auto kv_param_res_names = ggml_model_decoder->get_kv_param_res_names();
-            const auto kv_param_res_pairs = get_kv_param_res_pairs(model, kv_param_res_names);
-            manager.register_pass<ov::pass::MakeStateful>(kv_param_res_pairs);
-            // Must run after MakeStateful, which is what creates the ReadValue/Assign pairs.
-            if (!ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_KV_STATE_RELAYOUT")) {
-                manager.register_pass<pass::KVStateSeqAxis>();
-            }
-        }
-
-        if (ggml_model_decoder->is_static()) {
-            manager.register_pass<pass::SqueezeMatmul>();
-        }
+        pipeline::register_common_passes(manager, traits);
+        pipeline::register_device_passes(manager, traits);
+        pipeline::register_execution_passes(manager, traits, kv_param_res_pairs);
         manager.run_passes(model);
         if (ggml_model_decoder->is_stateful()) {
             ov::preprocess::PrePostProcessor ppp(model);

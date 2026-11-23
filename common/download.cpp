@@ -98,6 +98,9 @@ class ProgressBar : public common_download_callback {
     std::string filename;
     size_t len = 0;
 
+    // the caller's callback, if any, still receives every event
+    common_download_callback * next;
+
     static void cleanup(const ProgressBar * line) {
         lines.erase(line);
         if (lines.empty()) {
@@ -110,9 +113,12 @@ class ProgressBar : public common_download_callback {
     }
 
 public:
-    ProgressBar() = default;
+    ProgressBar(common_download_callback * next) : next(next) {}
 
     void on_start(const common_download_progress & p) override {
+        if (next) {
+            next->on_start(p);
+        }
         filename = url_get_filename(p.url);
 
         for (size_t i = 0; i < filename.size(); ++i) {
@@ -126,12 +132,22 @@ public:
         }
     }
 
-    void on_done(const common_download_progress &, bool) override {
+    void on_done(const common_download_progress & p, bool ok) override {
+        if (next) {
+            next->on_done(p, ok);
+        }
         std::lock_guard<std::mutex> lock(mutex);
         cleanup(this);
     }
 
+    bool is_cancelled() const override {
+        return next && next->is_cancelled();
+    }
+
     void on_update(const common_download_progress & p) override {
+        if (next) {
+            next->on_update(p);
+        }
         if (!p.total || !is_output_a_tty()) {
             return;
         }
@@ -461,38 +477,55 @@ static int common_download_file_single_online(const std::string & url,
     return finish(success ? head->status : -1);
 }
 
-std::pair<long, std::vector<char>> common_remote_get_content(const std::string          & url,
+std::pair<long, std::vector<char>> common_remote_get_content(const std::string          & url_in,
                                                              const common_remote_params & params) {
-    auto [cli, parts] = common_http_client(url);
+    static constexpr int max_redirects = 5;
+    std::string url = url_in;
+    for (int n_redirects = 0; ; n_redirects++) {
+        auto [cli, parts] = common_http_client(url);
 
-    httplib::Headers headers;
-    for (const auto & h : params.headers) {
-        headers.emplace(h.first, h.second);
+        httplib::Headers headers;
+        for (const auto & h : params.headers) {
+            headers.emplace(h.first, h.second);
+        }
+        if (headers.find("User-Agent") == headers.end()) {
+            headers.emplace("User-Agent", "llama-cpp/" + std::string(llama_build_info()));
+        }
+
+        if (params.timeout > 0) {
+            cli.set_read_timeout(params.timeout, 0);
+            cli.set_write_timeout(params.timeout, 0);
+        }
+        if (params.resolve_host) {
+            // pin checked address, follow redirects manually to check each hop
+            cli.set_direct_hostname_addr_map({{parts.host, params.resolve_host(parts.host)}});
+            cli.set_follow_location(false);
+        }
+
+        std::vector<char> buf;
+        auto res = cli.Get(parts.path, headers,
+            [&](const char *data, size_t len) {
+                buf.insert(buf.end(), data, data + len);
+                return params.max_size == 0 ||
+                       buf.size() <= static_cast<size_t>(params.max_size);
+            },
+            nullptr
+        );
+
+        if (!res) {
+            throw std::runtime_error("error: cannot make GET request");
+        }
+
+        if (params.resolve_host && res->status >= 300 && res->status < 400 && res->has_header("Location")) {
+            if (n_redirects >= max_redirects) {
+                throw std::runtime_error("error: too many redirects");
+            }
+            url = common_http_resolve_location(url, res->get_header_value("Location"));
+            continue;
+        }
+
+        return { res->status, std::move(buf) };
     }
-    if (headers.find("User-Agent") == headers.end()) {
-        headers.emplace("User-Agent", "llama-cpp/" + std::string(llama_build_info()));
-    }
-
-    if (params.timeout > 0) {
-        cli.set_read_timeout(params.timeout, 0);
-        cli.set_write_timeout(params.timeout, 0);
-    }
-
-    std::vector<char> buf;
-    auto res = cli.Get(parts.path, headers,
-        [&](const char *data, size_t len) {
-            buf.insert(buf.end(), data, data + len);
-            return params.max_size == 0 ||
-                   buf.size() <= static_cast<size_t>(params.max_size);
-        },
-        nullptr
-    );
-
-    if (!res) {
-        throw std::runtime_error("error: cannot make GET request");
-    }
-
-    return { res->status, std::move(buf) };
 }
 
 int common_download_file_single(const std::string & url,
@@ -502,11 +535,9 @@ int common_download_file_single(const std::string & url,
                                 const std::string & lock_path,
                                 const std::string & alt_path) {
     if (!opts.offline) {
-        ProgressBar tty_cb;
+        ProgressBar tty_cb(opts.callback);
         common_download_opts online_opts = opts;
-        if (!online_opts.callback) {
-            online_opts.callback = &tty_cb;
-        }
+        online_opts.callback = &tty_cb;
         return common_download_file_single_online(url, path, online_opts, skip_etag, lock_path, alt_path);
     }
 

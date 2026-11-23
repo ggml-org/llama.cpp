@@ -1,6 +1,7 @@
 datasets~=4.8.0
-matplotlib~=3.10.0
+matplotlib~=3.10.0; python_version < "3.11"
+matplotlib~=3.11.2; python_version >= "3.11"
 numpy~=2.2.6; python_version < "3.14"
-numpy~=2.4.6; python_version >= "3.14"
+numpy~=2.5.4; python_version >= "3.14"
 requests~=2.32.3
 tqdm~=4.67.1

@@ -2,7 +2,6 @@
 #include "log.h"
 #include "ggml.h"
 #include "ggml-backend.h"
-#include "ggml-cpu.h"
 #include "ggml-cpp.h"
 #include "gguf.h"
 #include "llama.h"
@@ -465,6 +464,13 @@ static void check_fp8_attention(llama_model * model, bool offload_kqv = true) {
 }
 
 static void check_fp8_context_shift(llama_model * model) {
+    ggml_backend_ptr backend(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
+    GGML_ASSERT(backend);
+    auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get()));
+    auto set_n_threads = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
+    GGML_ASSERT(set_n_threads);
+    set_n_threads(backend.get(), 1);
+
     ggml_context_ptr scale_ctx(ggml_init({ 4096, nullptr, true }));
     ggml_tensor * scale = ggml_new_tensor_1d(scale_ctx.get(), GGML_TYPE_F32, 1);
     ggml_backend_buffer_ptr scale_buf(ggml_backend_alloc_ctx_tensors_from_buft(scale_ctx.get(), ggml_backend_cpu_buffer_type()));
@@ -501,7 +507,7 @@ static void check_fp8_context_shift(llama_model * model) {
         ggml_tensor * keys = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, hp.n_embd_head_k(), hp.n_head_kv(), kv->get_size());
         ggml_get_type_traits(GGML_TYPE_F8_E4M3)->to_float(before.data(), (float *) keys->data, ggml_nelements(keys));
         ggml_tensor * shifts = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, kv->get_size());
-        ggml_set_i32(shifts, 0);
+        std::fill_n(static_cast<int32_t *>(shifts->data), ggml_nelements(shifts), 0);
         for (int i = 1; i < 4; ++i) {
             ((int32_t *) shifts->data)[i] = -1;
         }
@@ -510,7 +516,7 @@ static void check_fp8_context_shift(llama_model * model) {
                 cp.yarn_ext_factor, cp.yarn_attn_factor, cp.yarn_beta_fast, cp.yarn_beta_slow);
         ggml_cgraph * gf = ggml_new_graph(ctx.get());
         ggml_build_forward_expand(gf, expected_f32);
-        GGML_ASSERT(ggml_graph_compute_with_ctx(ctx.get(), gf, 1) == GGML_STATUS_SUCCESS);
+        GGML_ASSERT(ggml_backend_graph_compute(backend.get(), gf) == GGML_STATUS_SUCCESS);
         std::vector<uint8_t> expected(before.size());
         ggml_quantize_chunk(GGML_TYPE_F8_E4M3, (float *) expected_f32->data, expected.data(), 0,
                 ggml_nelements(expected_f32)/keys->ne[0], keys->ne[0], nullptr);

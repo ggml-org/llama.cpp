@@ -1,0 +1,4 @@
+{
+	"extends": "$app/tsconfig/service-worker",
+	"include": ["./**/*.ts"]
+}

@@ -84,7 +84,7 @@ const char * llama_ftype_name(llama_ftype ftype) {
 static std::vector<std::string> llama_get_list_splits(const std::string & path, const int idx, const int n_split) {
     std::vector<std::string> paths;
     std::string split_prefix;
-    std::vector<char> buf(llama_path_max(), 0);
+    std::vector<char> buf(path.size() + 1, 0);
 
     {
         int ret = llama_split_prefix(buf.data(), buf.size(), path.c_str(), idx, n_split);
@@ -610,7 +610,7 @@ llama_model_loader::llama_model_loader(
                 throw std::runtime_error(format("illegal split file idx: %d (file: %s), model must be loaded with the first split", idx, fname.c_str()));
             }
 
-            std::vector<char> prefix(llama_path_max(), 0);
+            std::vector<char> prefix(fname.size() + 1, 0);
             if (paths.empty() || llama_split_prefix(prefix.data(), prefix.size(), fname.c_str(), idx, n_split)) {
                 auto backbone = llama_get_list_splits(fname, idx, n_split);
                 auto file_name = [](const std::string & path) {
@@ -1776,7 +1776,8 @@ bool llama_model_loader::load_all_data(
     }
 
     // staging buffer for non-host buffers without async uploads, reused because a fresh allocation per tensor page faults on every load
-    std::vector<no_init<uint8_t>> read_buf;
+    // allocated from the CPU buffer type, which uses vm_allocate on Apple platforms, so freeing it returns its pages to the OS right away
+    ggml_backend_buffer_ptr read_buf;
     for (struct ggml_tensor * cur : tensors) {
         const auto * weight = get_weight(ggml_get_name(cur));
         if (weight == nullptr) {
@@ -1904,12 +1905,16 @@ bool llama_model_loader::load_all_data(
                     const size_t buf_size       = read_size + align - 1;
 
                     // tensors come biggest-first: shrink the buffer when it gets too large, so peak memory stays close to one tensor
-                    if (read_buf.size() < buf_size || read_buf.size() > 2*buf_size) {
-                        // free the old buffer first, `read_buf = {}` would keep its capacity
-                        read_buf = std::vector<no_init<uint8_t>>();
-                        read_buf.resize(buf_size);
+                    const size_t read_buf_size = read_buf ? ggml_backend_buffer_get_size(read_buf.get()) : 0;
+                    if (!read_buf || read_buf_size < buf_size || read_buf_size > 2*buf_size) {
+                        // free the old buffer first, so only one is alive
+                        read_buf.reset();
+                        read_buf.reset(ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), buf_size));
+                        if (!read_buf) {
+                            throw std::runtime_error(format("failed to allocate a %zu-byte staging buffer", buf_size));
+                        }
                     }
-                    uint8_t * read_dst = (uint8_t *) GGML_PAD((uintptr_t) read_buf.data(), align);
+                    uint8_t * read_dst = (uint8_t *) GGML_PAD((uintptr_t) ggml_backend_buffer_get_base(read_buf.get()), align);
                     file->seek(aligned_offset, SEEK_SET);
                     file->read_raw_unsafe(read_dst, read_size);
 

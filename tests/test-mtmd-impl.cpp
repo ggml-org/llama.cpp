@@ -7,12 +7,22 @@
 #include "mtmd-helper.h"
 #include "mtmd-image.h"
 #include "mtmd-internal.h"
+#include "models/models.h"
+
+#include "chat-tts-norm.h"
+#include "jinja/lexer.h"
+#include "jinja/parser.h"
+#include "jinja/runtime.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <iterator>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -267,6 +277,57 @@ MAKE_TEST(test_image_preprocessor_lfm2_torch_resize) {
     }
 }
 
+MAKE_TEST(test_image_preprocessor_inkling2v) {
+    mtmd_hparams hparams;
+    hparams.patch_size = 20;
+    hparams.n_merge = 2;
+    for (int c = 0; c < 3; ++c) {
+        hparams.image_mean[c] = hparams.image_std[c] = 0.5f;
+    }
+    mtmd_image_preprocessor_inkling2v preproc(hparams);
+    for (const auto & size : std::vector<mtmd_image_size>{{1, 1}, {40, 40}, {61, 43}, {83, 45}, {161, 21}}) {
+        mtmd_image_u8 image;
+        image.set_size(size, false);
+        for (int y = 0; y < size.height; ++y) {
+            for (int x = 0; x < size.width; ++x) {
+                image.set_pixel(x, y, {uint8_t(x % 256), uint8_t(y % 256), 255});
+            }
+        }
+        const auto result = preproc.preprocess(image);
+        t.assert_equal("one image", size_t(1), result.entries.size());
+        const auto & output = result.entries[0];
+        t.assert_equal("width ceil", ((size.width + 39) / 40) * 40, output.nx());
+        t.assert_equal("height ceil", ((size.height + 39) / 40) * 40, output.ny());
+        const auto & pixels = output.get_ro_buf();
+        bool exact = true;
+        for (int y = 0; y < output.ny(); ++y) {
+            for (int x = 0; x < output.nx(); ++x) {
+                const bool pad = x >= size.width || y >= size.height;
+                const float rgb[3] = {float(x % 256), float(y % 256), 255.0f};
+                for (int c = 0; c < 3; ++c) {
+                    const float expected = ((pad ? -1.0f : rgb[c]) - 127.5f) / 127.5f;
+                    exact = exact && pixels[3 * (size_t(y) * output.nx() + x) + c] == expected;
+                }
+            }
+        }
+        t.assert_true("pixels and negative padding", exact);
+        image.set_size(size, true);
+        const auto placeholder = preproc.preprocess(image);
+        t.assert_true("placeholder", placeholder.entries[0].is_placeholder());
+        t.assert_equal("placeholder width", output.nx(), placeholder.entries[0].nx());
+        t.assert_equal("placeholder height", output.ny(), placeholder.entries[0].ny());
+    }
+    // an image above image_max_pixels is resized down, the output stays aligned
+    hparams.image_max_pixels = 16 * 40 * 40;
+    mtmd_image_u8 large;
+    large.set_size({1000, 300}, false);
+    large.cpy_buf(std::vector<uint8_t>(1000 * 300 * 3, 17));
+    const auto capped = preproc.preprocess(large);
+    t.assert_true("capped area", capped.entries[0].nx() * capped.entries[0].ny() <= hparams.image_max_pixels);
+    t.assert_equal("capped width aligned", 0, capped.entries[0].nx() % 40);
+    t.assert_equal("capped height aligned", 0, capped.entries[0].ny() % 40);
+}
+
 //
 // mtmd temporal merge
 //
@@ -367,9 +428,19 @@ MAKE_TEST(test_video_config) {
 // n_frames source frames, each one starts with its index
 struct test_video_source : mtmd_helper_video_seq {
     int32_t n_frames;
-    int32_t n_read = 0;
+    int32_t n_read    = 0;
+    int32_t n_skipped = 0;
 
     test_video_source(int32_t n_frames) : n_frames(n_frames) {}
+
+    bool skip_raw_frame() override {
+        if (n_read >= n_frames) {
+            return false;
+        }
+        n_read++;
+        n_skipped++;
+        return true;
+    }
 
     bool read_raw_frame() override {
         if (n_read >= n_frames) {
@@ -412,17 +483,17 @@ MAKE_TEST(test_video_sequence_qwen3vl) {
     const mtmd_image_preprocessor_qwen3vl preproc(hparams);
 
     // { source video, expected frame size and sequence from Qwen3VLProcessor (transformers 4.57.1) }
-    const std::vector<std::tuple<mtmd_helper_video_src, mtmd_image_size, std::string>> cases = {
-        { {  720, 358, 24.0f, 240 }, { 704, 352 },
+    const std::vector<std::tuple<mtmd_helper_video_stream_info, mtmd_image_size, std::string>> cases = {
+        { {  720, 358, 24.0f, 240, -1.0f }, { 704, 352 },
             "<0.3 seconds>[0][13]<1.3 seconds>[25][38]<2.4 seconds>[50][63]<3.4 seconds>[75][88]<4.5 seconds>[101][113]"
             "<5.5 seconds>[126][138]<6.6 seconds>[151][164]<7.6 seconds>[176][189]<8.6 seconds>[201][214]<9.7 seconds>[226][239]" },
         // odd frame count: the last group repeats its last frame
-        { {  640, 480, 10.0f,  35 }, { 640, 480 },
+        { {  640, 480, 10.0f,  35, -1.0f }, { 640, 480 },
             "<0.3 seconds>[0][6]<1.4 seconds>[11][17]<2.5 seconds>[23][28]<3.4 seconds>[34]" },
         // fewer frames than the minimum of 4
-        { {  320, 240, 30.0f,   3 }, { 320, 256 },
+        { {  320, 240, 30.0f,   3, -1.0f }, { 320, 256 },
             "<0.0 seconds>[0][1]<0.1 seconds>[2]" },
-        { { 1280, 720, 30000.0f / 1001.0f, 300 }, { 1280, 704 },
+        { { 1280, 720, 30000.0f / 1001.0f, 300, -1.0f }, { 1280, 704 },
             "<0.3 seconds>[0][16]<1.3 seconds>[31][47]<2.4 seconds>[63][79]<3.4 seconds>[94][110]<4.5 seconds>[126][142]"
             "<5.5 seconds>[157][173]<6.6 seconds>[189][205]<7.6 seconds>[220][236]<8.7 seconds>[252][268]<9.7 seconds>[283][299]" },
     };
@@ -445,22 +516,142 @@ MAKE_TEST(test_video_sequence_lfm3_omni) {
     hparams.n_merge = 2;
     const mtmd_image_preprocessor_lfm3vl preproc(hparams);
 
-    const mtmd_helper_video_src src = { 64, 64, 2.0f, 9 };
+    const mtmd_helper_video_stream_info src = { 64, 64, 2.0f, 9, -1.0f };
     const mtmd_video_config cfg = mtmd_video_config_init(MTMD_VIDEO_TEMPLATE_LFM3_OMNI, &preproc, src.width, src.height, src.n_frames, src.fps);
     test_video_source video(src.n_frames);
     video.configure(cfg, src, 0.0f);
-    video.src_alive  = true;
-    video.audio_rate = 100;
-    video.soundtrack.assign(450, 0.0f);
+    video.src_alive = true;
+    // the video is 4.5 seconds long, the rest of the soundtrack is dropped
+    const std::vector<float> pcm(500, 0.0f);
+    video.set_soundtrack(pcm.data(), pcm.size(), 100);
 
     t.assert_equal("sequence",
         std::string("<0.2 seconds>[0][1]{100}<1.2 seconds>[2][3]{100}<2.2 seconds>[4][5]{100}<3.2 seconds>[6][7]{100}<4.0 seconds>[8]{50}"),
         video_sequence_to_str(t, video));
 }
 
+// a source that gives every frame: the frames of fps_target are picked by index
+MAKE_TEST(test_video_sequence_sample_by_index) {
+    const mtmd_video_config cfg = { MTMD_VIDEO_TEMPLATE_DEFAULT, 0.0f, 0, 0, 0 };
+
+    // { source video, frames in the source, expected sequence, expected number of skipped frames }
+    const std::vector<std::tuple<mtmd_helper_video_stream_info, int32_t, std::string, int32_t>> cases = {
+        { { 64, 64, 8.0f, 16, -1.0f }, 16, "Video:[0][0m0.00s][4][8][0m1.00s][12]", 9 },
+        // unknown length: every frame is kept
+        { { 64, 64, 8.0f, -1, -1.0f },  3, "Video:[0][0m0.00s][1][2]", 0 },
+    };
+
+    for (const auto & [src, n_frames, expected, expected_skipped] : cases) {
+        const std::string name = std::to_string(src.n_frames) + " frames";
+        test_video_source video(n_frames);
+        video.timestamp_interval_ms = 1000;
+        video.configure(cfg, src, 2.0f);
+        video.sample_by_index(src);
+        video.src_alive = true;
+        t.assert_equal(name + " sequence", expected, video_sequence_to_str(t, video));
+        t.assert_equal(name + " skipped", expected_skipped, video.n_skipped);
+    }
+}
+
 //
 // mtmd_audio
 //
+
+MAKE_TEST(test_audio_preprocessor_whisper_chunks) {
+    mtmd_hparams hparams;
+    hparams.n_mel_bins        = 128;
+    hparams.audio_sample_rate = 16000;
+    hparams.audio_n_fft       = 400;
+    hparams.audio_window_len  = 400;
+    hparams.audio_hop_len     = 160;
+
+    ggml_backend_ptr backend(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
+    ggml_backend_t backends[] = { backend.get() };
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends, nullptr, 1, 256, false, true));
+
+    mtmd_audio_preprocessor_whisper preproc(hparams, sched.get());
+    preproc.initialize();
+
+    // { sample count, expected chunks }, one chunk of 3000 frames covers 480000 samples
+    const std::vector<std::pair<size_t, size_t>> cases = {
+        {       0, 0 },
+        {       1, 1 },
+        {     200, 1 },
+        {     201, 1 },
+        {   32000, 1 },
+        {  479834, 1 },
+        {  479839, 1 },
+        {  479840, 1 },
+        {  479999, 1 },
+        {  480000, 1 },
+        {  480001, 2 },
+        {  480159, 2 },
+        {  480160, 2 },
+        {  959840, 2 },
+        {  959999, 2 },
+        {  960000, 2 },
+        {  960001, 3 },
+        { 1440000, 3 },
+    };
+
+    for (const auto & [n_samples, expected] : cases) {
+        const std::string name = std::to_string(n_samples) + " samples";
+        std::vector<float> samples(n_samples, 0.0f);
+        if (n_samples > 0) {
+            samples.back() = 0.5f;
+        }
+        mtmd_audio_preproc_out out = preproc.preprocess(samples.data(), samples.size());
+        t.assert_equal("chunks for " + name, expected, out.entries.size());
+        for (const auto & mel : out.entries) {
+            t.assert_equal("frames for " + name, 3000, mel.nx());
+            t.assert_equal("mel bins for " + name, 128, mel.ny());
+        }
+    }
+}
+
+MAKE_TEST(test_audio_preprocessor_qwen3a_tail) {
+    mtmd_hparams hparams;
+    hparams.n_mel_bins        = 128;
+    hparams.audio_sample_rate = 16000;
+    hparams.audio_n_fft       = 400;
+    hparams.audio_window_len  = 400;
+    hparams.audio_hop_len     = 160;
+
+    ggml_backend_ptr backend(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
+    ggml_backend_t backends[] = { backend.get() };
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends, nullptr, 1, 256, false, true));
+
+    mtmd_audio_preprocessor_qwen3a preproc(hparams, sched.get());
+    preproc.initialize();
+
+    // one 800-frame window covers 128000 samples (hop 160), so longer audio is split;
+    // the last window is emitted with its exact frame count, the graph pads the final 100-frame chunk
+    // { sample count, expected n_len of each output window }
+    const std::vector<std::pair<size_t, std::vector<int64_t>>> cases = {
+        {       0, {}          },
+        {       1, {1}         },
+        {   32000, {200}       },
+        {  128000, {800}       },
+        {  128160, {800, 1}    },
+        {  168000, {800, 250}  },
+        {  170080, {800, 263}  },
+        {  176000, {800, 300}  },
+    };
+
+    for (const auto & [n_samples, expected] : cases) {
+        const std::string name = std::to_string(n_samples) + " samples";
+        std::vector<float> samples(n_samples, 0.0f);
+        if (n_samples > 0) {
+            samples.back() = 0.5f;
+        }
+        mtmd_audio_preproc_out out = preproc.preprocess(samples.data(), samples.size());
+        t.assert_equal("windows for " + name, expected.size(), out.entries.size());
+        for (size_t i = 0; i < out.entries.size(); i++) {
+            t.assert_equal("frames for " + name, expected[i], out.entries[i].nx());
+            t.assert_equal("mel bins for " + name, 128, out.entries[i].ny());
+        }
+    }
+}
 
 MAKE_TEST(test_audio_preprocessor_conformer) {
     mtmd_hparams hparams;
@@ -690,6 +881,64 @@ static double tone_amplitude(const std::vector<float> & x, double freq, int rate
     return 2.0 * std::sqrt(re * re + im * im) / (x.size() - 2 * skip);
 }
 
+MAKE_TEST(test_audio_fft) {
+    // the sizes in use: powers of two, and an odd part (400 = 16 * 25, 736 = 32 * 23, 1920 = 128 * 15)
+    // plus small edge cases: 4 = gather + one stage, 6 = n_odd 3 with n_sub 2, 15 = odd composite with n_sub 1
+    const int sizes[] = { 1, 2, 3, 4, 6, 12, 15, 256, 400, 512, 736, 1920 };
+    const double pi = 3.14159265358979323846;
+    for (int n : sizes) {
+        mtmd_audio_cache cache;
+        cache.fill_sin_cos_table(n);
+        // phase offset so that x[0] != 0 (n = 1 would otherwise compare all zeros)
+        std::vector<float> x(2 * n);
+        for (int i = 0; i < 2 * n; i++) {
+            x[i] = (float) std::sin(0.37 * i + 0.001 * i * i + 0.5);
+        }
+        std::vector<float> out(8 * n);
+        for (bool inv : { false, true }) {
+            // input sized exactly as documented so that sanitizers catch any overread
+            const std::vector<float> in(x.begin(), x.begin() + (inv ? 2 * n : n));
+            if (inv) {
+                mtmd_audio_ifft(cache, in.data(), n, out.data());
+            } else {
+                mtmd_audio_fft(cache, in.data(), n, out.data());
+            }
+            double max_err = 0.0, max_ref = 0.0;
+            for (int k = 0; k < n; k++) {
+                double re = 0.0, im = 0.0;
+                for (int j = 0; j < n; j++) {
+                    const double theta = (inv ? 2 : -2) * pi * (double) ((int64_t) j * k % n) / n;
+                    const double a = inv ? x[2 * j] : x[j];
+                    const double b = inv ? x[2 * j + 1] : 0.0;
+                    re += a * std::cos(theta) - b * std::sin(theta);
+                    im += a * std::sin(theta) + b * std::cos(theta);
+                }
+                if (inv) {
+                    re /= n;
+                    im /= n;
+                }
+                max_err = std::max({ max_err, std::fabs(re - out[2 * k]), std::fabs(im - out[2 * k + 1]) });
+                max_ref = std::max({ max_ref, std::fabs(re), std::fabs(im) });
+            }
+            t.assert_true(std::string(inv ? "ifft" : "fft") + " n = " + std::to_string(n) + ", relative error " + std::to_string(max_err / max_ref),
+                          max_ref > 0.0 && max_err <= 1e-5 * max_ref);
+        }
+
+        // round trip: ifft(fft(x)) == x for real x
+        std::vector<float> spec(8 * n);
+        mtmd_audio_fft(cache, x.data(), n, spec.data());
+        const std::vector<float> spec_in(spec.begin(), spec.begin() + 2 * n);
+        mtmd_audio_ifft(cache, spec_in.data(), n, out.data());
+        double max_err = 0.0, max_ref = 0.0;
+        for (int k = 0; k < n; k++) {
+            max_err = std::max({ max_err, (double) std::fabs(out[2 * k] - x[k]), (double) std::fabs(out[2 * k + 1]) });
+            max_ref = std::max(max_ref, (double) std::fabs(x[k]));
+        }
+        t.assert_true("fft round trip n = " + std::to_string(n) + ", relative error " + std::to_string(max_err / max_ref),
+                      max_ref > 0.0 && max_err <= 1e-5 * max_ref);
+    }
+}
+
 static std::vector<float> resample_chunked(mtmd_helper_resampler * rs, const std::vector<float> & in, size_t chunk) {
     std::vector<float> res;
     for (size_t off = 0; off < in.size(); off += chunk) {
@@ -742,6 +991,198 @@ MAKE_TEST(test_helper_resampler) {
     }
 
     t.assert_true("invalid rate", mtmd_helper_resampler_init(0, rate_out) == nullptr);
+}
+
+//
+// kokoro
+//
+
+// a dictionary for tts_dict(): entries in any order, sorted here
+static common_tts_dict kokoro_dict(std::vector<std::pair<std::string, std::string>> entries) {
+    std::sort(entries.begin(), entries.end());
+    common_tts_dict dict;
+    for (auto & e : entries) {
+        dict.keys.push_back(e.first);
+        dict.values.push_back(e.second);
+    }
+    return dict;
+}
+
+// the "tts" template with small dictionaries: a few lexicon words, fixed tags, and a model for unknown words over the letters z a b i n g
+MAKE_TEST(test_kokoro_tts_template) {
+    std::string path = __FILE__;
+    const size_t pos = path.find_last_of("/\\");
+    path = (pos == std::string::npos ? std::string(".") : path.substr(0, pos)) + "/../models/templates/hexgrad-Kokoro-82M-tts.jinja";
+    std::ifstream fs(path, std::ios_base::binary);
+    if (!t.assert_true("template file is readable: " + path, fs.is_open())) {
+        return;
+    }
+    const std::string tmpl((std::istreambuf_iterator<char>(fs)), std::istreambuf_iterator<char>());
+
+    const auto dicts = std::make_shared<const common_tts_dicts>(common_tts_dicts{
+        {"gold", kokoro_dict({
+            {"hello", "\"h\xc9\x99l\xcb\x88O\""},
+            {"world", "\"w\xcb\x88\xc9\x9c\xc9\xb9ld\""},
+            {"I", "\"\xcb\x88I\""},
+            {"read", "{\"ADJ\":\"\xc9\xb9\xcb\x88\xc9\x9b" "d\",\"DEFAULT\":\"\xc9\xb9\xcb\x88id\",\"VBD\":\"\xc9\xb9\xcb\x88\xc9\x9b" "d\",\"VBN\":\"\xc9\xb9\xcb\x88\xc9\x9b" "d\",\"VBP\":\"\xc9\xb9\xcb\x88\xc9\x9b" "d\"}"},
+            {"it", "\"\xc9\xaat\""},
+            {"three", "\"\xce\xb8\xc9\xb9\xcb\x88i\""},
+            {"cat", "\"k\xcb\x88\xc3\xa6t\""},
+            {"walk", "\"w\xcb\x88\xc9\x94k\""},
+            {"the", "\"\xc3\xb0i\""},
+            {"Z", "\"z\xcb\x88i\""},
+            {"'s", "\"s\""},
+            {"a", "\"A\""},
+            {"and", "\"\xc3\xa6nd\""},
+            {"is", "\"\xc9\xaaz\""},
+        })},
+        {"silver", kokoro_dict({
+        })},
+        {"gold_gb", kokoro_dict({
+            {"hello", "\"h\xc9\x99l\xcb\x88Q\""},
+            {"world", "\"w\xcb\x88\xc9\x9c\xcb\x90ld\""},
+            {"walk", "\"w\xcb\x88\xc9\x94\xcb\x90k\""},
+        })},
+        {"silver_gb", kokoro_dict({
+        })},
+        {"pos_classes", kokoro_dict({
+            {"", "[\"NN\",\"NNP\",\"PRP\",\"VBD\"]"},
+        })},
+        {"pos_tagdict", kokoro_dict({
+            {"I", "\"PRP\""},
+            {"read", "\"VBD\""},
+            {"it", "\"PRP\""},
+            {".", "\".\""},
+            {",", "\",\""},
+        })},
+        {"pos_weights", kokoro_dict({
+            {"bias", "{\"c0\":1.0}"},
+        })},
+        {"lts", kokoro_dict({
+            {"z", "{\"z\":0.1}"},
+            {"b", "{\"b\":0.1}"},
+            {"i", "{\"\xc9\xaa\":0.1}"},
+            {"n", "{\"\xc5\x8b\":0.1}"},
+            {"g", "{\"\":0.1}"},
+            {"a", "{\"\xcb\x88\xc3\xa6\":0.1,\"\xc3\xa6\":0.06}"},
+            {"z:z a", "{\"\xcb\x88\xc3\xa6\":0.2,\"\xc3\xa6\":0.01}"},
+            {"$", "{\"\":0.2}"},
+        })},
+        {"lts_gb", kokoro_dict({
+            {"z", "{\"z\":0.1}"},
+            {"b", "{\"b\":0.1}"},
+            {"i", "{\"\xc9\xaa\":0.1}"},
+            {"n", "{\"\xc5\x8b\":0.1}"},
+            {"g", "{\"\":0.1}"},
+            {"a", "{\"\xcb\x88\xc9\x91\xcb\x90\":0.1,\"\xc9\x91\xcb\x90\":0.06}"},
+            {"z:z a", "{\"\xcb\x88\xc9\x91\xcb\x90\":0.2,\"\xc9\x91\xcb\x90\":0.01}"},
+            {"$", "{\"\":0.2}"},
+        })},
+    });
+
+    // voice, text, expected phonemes
+    const std::vector<std::array<std::string, 3>> cases = {
+        // words of the lexicon
+        { "af_heart", "Hello world.", "h\xc9\x99l\xcb\x88O w\xcb\x88\xc9\x9c\xc9\xb9ld." },
+        // the pronunciation depends on the part of speech
+        { "af_heart", "I read it.", "\xcb\x8cI \xc9\xb9\xcb\x88\xc9\x9b" "d \xc9\xaat." },
+        // a number, and the -s suffix rule
+        { "af_heart", "3 cats", "\xce\xb8\xc9\xb9\xcb\x88i k\xcb\x88\xc3\xa6ts" },
+        // the -ed and -ing suffix rules
+        { "af_heart", "walked, walking", "w\xcb\x88\xc9\x94kt, w\xcb\x88\xc9\x94k\xc9\xaa\xc5\x8b" },
+        // not in the lexicon: predicted from the spelling
+        { "af_heart", "zab", "z\xcb\x88\xc3\xa6" "b" },
+        // the free search gives two primary stresses, the stress pass keeps one
+        { "af_heart", "zaba", "z\xcb\x88\xc3\xa6" "b\xc3\xa6" },
+        // a doubled consonant says one sound
+        { "af_heart", "zabbing", "z\xcb\x88\xc3\xa6" "b\xc9\xaa\xc5\x8b" },
+        // an unknown word with 's
+        { "af_heart", "The zab's cat", "\xc3\xb0\xc9\x99 z\xcb\x88\xc3\xa6" "bs k\xcb\x88\xc3\xa6t" },
+        // no vowel: spelled out
+        { "af_heart", "zz", "z\xcb\x8ciz\xcb\x88i" },
+        // an accented letter is read as its base letter
+        { "af_heart", "H\xc3\xa9ll\xc3\xb3 world.", "h\xc9\x99l\xcb\x88O w\xcb\x88\xc9\x9c\xc9\xb9ld." },
+        // digits glued to letters are read as a number
+        { "af_heart", "3Z cats", "\xce\xb8\xc9\xb9\xcb\x88i z\xcb\x88i k\xcb\x88\xc3\xa6ts" },
+        // an unknown word in mixed case is read part by part
+        { "af_heart", "catWalk", "k\xcb\x88\xc3\xa6tw\xcb\x88\xc9\x94k" },
+        // a british voice uses the british lexicon
+        { "bf_emma", "Hello world.", "h\xc9\x99l\xcb\x88Q w\xcb\x88\xc9\x9c\xcb\x90ld." },
+        // and the british model for unknown words
+        { "bf_emma", "zaba", "z\xcb\x88\xc9\x91\xcb\x90" "b\xc9\x91\xcb\x90" },
+        // a voice of another language takes phonemes, they pass through
+        { "ef_dora", "\xcb\x88ola, m\xcb\x88undo.", "\xcb\x88ola, m\xcb\x88undo." },
+    };
+
+    jinja::lexer lexer;
+    const jinja::program ast = jinja::parse_from_tokens(lexer.tokenize(tmpl));
+    for (const auto & c : cases) {
+        std::string out;
+        try {
+            jinja::context ctx(tmpl);
+            common_chat_tts_norm_add_builtins(ctx, dicts);
+            auto msg = jinja::mk_val<jinja::value_object>();
+            msg->insert("role", jinja::mk_val<jinja::value_string>("user"));
+            msg->insert("content", jinja::mk_val<jinja::value_string>(c[1]));
+            auto msgs = jinja::mk_val<jinja::value_array>();
+            msgs->push_back(msg);
+            ctx.set_val("messages", msgs);
+            ctx.set_val("language", jinja::mk_val<jinja::value_string>(""));
+            ctx.set_val("voice", jinja::mk_val<jinja::value_string>(c[0]));
+            jinja::runtime runtime(ctx);
+            out = jinja::runtime::gather_string_parts(runtime.execute(ast))->as_string().str();
+        } catch (const std::exception & e) {
+            out = std::string("exception: ") + e.what();
+        }
+        if (!t.assert_true(c[0] + ": " + c[1], out == c[2])) {
+            t.log("Expected: " + c[2]);
+            t.log("Actual  : " + out);
+        }
+    }
+}
+
+// every frame is the constant 0.25 (only the DC bin, of magnitude n_fft * 0.25)
+// the overlap-add of hann windows at a quarter hop sums to 2, their squares to 1.5: the output is 0.25 * 2 / 1.5
+MAKE_TEST(test_kokoro_istft) {
+    const int n_fft = 20, hop = 5, n_frames = 9;
+    std::vector<float> spec((size_t) n_frames * (n_fft + 2), 0.0f);
+    for (int fr = 0; fr < n_frames; fr++) {
+        float * row = spec.data() + (size_t) fr * (n_fft + 2);
+        // the first half of a row is log magnitudes, the second half phases
+        for (int k = 0; k <= n_fft / 2; k++) {
+            row[k] = k == 0 ? logf(n_fft * 0.25f) : -100.0f;
+        }
+    }
+    std::vector<float> audio;
+    mtmd_graph_kokoro::istft(spec, audio);
+    t.assert_equal("samples", (size_t) (n_frames - 1) * hop, audio.size());
+    // the first and last hop are covered by fewer frames
+    float max_err = 0.0f;
+    for (size_t i = hop; i + hop < audio.size(); i++) {
+        max_err = std::max(max_err, std::fabs(audio[i] - 1.0f / 3.0f));
+    }
+    t.assert_true("constant signal, max error " + std::to_string(max_err), max_err < 1e-4f);
+}
+
+// 13 tokens per 100-frame chunk; the tail is ceil^3 (one halving per stride-2 conv layer)
+MAKE_TEST(test_qwen3a_tokens_for_frames) {
+    const std::vector<std::pair<int64_t, int64_t>> cases = {
+        {    0,   0 },
+        {    1,   1 },
+        {   99,  13 },
+        {  100,  13 },
+        {  101,  14 },
+        {  110,  15 },
+        {  200,  26 },
+        {  210,  28 },
+        { 1000, 130 },
+        { 1024, 133 },
+    };
+
+    for (const auto & [frames, expected] : cases) {
+        const std::string name = std::to_string(frames) + " frames";
+        t.assert_equal(name, expected, mtmd_graph_qwen3a::qwen3a_tokens_for_frames(frames));
+    }
 }
 
 //

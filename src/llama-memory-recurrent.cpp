@@ -666,7 +666,7 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
         const int32_t cell_id = s + min;
         auto & cell = cells[cell_id];
 
-        if (cell.pos >= 0 && last_pos != cell.pos + (llama_pos) n_seq_tokens) {
+        if (ubatch.n_pos == 1 && cell.pos >= 0 && last_pos != cell.pos + (llama_pos) n_seq_tokens) {
             // What should happen when the pos backtracks or skips a value?
             // Clearing the state mid-batch would require special-casing which isn't done.
             LLAMA_LOG_WARN("%s: non-consecutive token position %d after %d for sequence %d with %u new tokens\n",
@@ -1265,17 +1265,17 @@ void llama_memory_recurrent::state_clear(llama_seq_id seq_id, uint32_t cell_head
     for (uint32_t il = 0; il < n_layer; ++il) {
         if (r_l[il] != nullptr) {
             const size_t r_size_row = ggml_row_size(r_l[il]->type, hparams.n_embd_r());
-            llama_clear_tensor_data(r_l[il], cell_head * r_size_row, cell_count * r_size_row);
+            ggml_backend_tensor_memset(r_l[il], 0, cell_head * r_size_row, cell_count * r_size_row);
         }
 
         if (s_l[il] != nullptr) {
             const size_t s_size_row = ggml_row_size(s_l[il]->type, hparams.n_embd_s());
-            llama_clear_tensor_data(s_l[il], cell_head * s_size_row, cell_count * s_size_row);
+            ggml_backend_tensor_memset(s_l[il], 0, cell_head * s_size_row, cell_count * s_size_row);
         }
 
         if (p_l[il] != nullptr) {
             const size_t p_size_row = ggml_row_size(p_l[il]->type, hparams.ple_conv_state());
-            llama_clear_tensor_data(p_l[il], cell_head * p_size_row, cell_count * p_size_row);
+            ggml_backend_tensor_memset(p_l[il], 0, cell_head * p_size_row, cell_count * p_size_row);
         }
     }
 }

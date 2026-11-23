@@ -167,6 +167,8 @@ models = [
     {"name": "ufakzeka",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/ufakai/ufakzeka-1", },
     {"name": "mmbert",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/jhu-clsp/mmBERT-base", },
     {"name": "k2-horizon",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/IFM/K2-Horizon-36B", },
+    {"name": "inkling2",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/thinkingmachines/Inkling-2-Small", },
+    {"name": "domyn-edge",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/domyn/Domyn-Edge-Teacher-IF", },
 ]
 
 # some models are known to be broken upstream, so we will skip them as exceptions
@@ -226,8 +228,6 @@ def download_model(model):
     repo = model["repo"]
     tokt = model["tokt"]
 
-    os.makedirs(f"models/tokenizers/{name}", exist_ok=True)
-
     files = ["config.json", "tokenizer.json", "tokenizer_config.json"]
 
     if name == "gpt-4o":
@@ -242,6 +242,7 @@ def download_model(model):
 
     if os.path.isdir(repo):
         # If repo is a path on the file system, copy the directory
+        os.makedirs(f"models/tokenizers/{name}", exist_ok=True)
         for file in files:
             src_path = os.path.join(repo, file)
             dst_path = f"models/tokenizers/{name}/{file}"
@@ -325,7 +326,8 @@ for model in [*pre_computed_hashes, *all_models]:
         except Exception as e:
             raise OSError(f"Error loading tokenizer for model {name}.") from e
 
-        chktok = tokenizer.encode(CHK_TXT)  # ty: ignore[unresolved-attribute]
+        assert tokenizer is not None
+        chktok = tokenizer.encode(CHK_TXT)
         chkhsh = sha256(str(chktok).encode()).hexdigest()
 
         logger.info(f"model: {name}")
@@ -482,10 +484,11 @@ for model in models:
             tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}", use_fast=False)
         else:
             tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}")
-    except (OSError, TypeError) as e:
+    except (OSError, TypeError, ValueError) as e:
         logger.error(f"Failed to load tokenizer for model {name}. Error: {e}")
         continue  # Skip this model and continue with the next one in the loop
 
+    assert tokenizer is not None
     if not os.path.exists(f"models/ggml-vocab-{name}.gguf"):
         logger.info(f"Skip vocab files for model {name}, no GGUF file found")
         continue
@@ -497,7 +500,7 @@ for model in models:
 
     with open(f"models/ggml-vocab-{name}.gguf.out", "w") as f:
         for text in tests:
-            res = tokenizer.encode(text, add_special_tokens=False)  # ty: ignore[unresolved-attribute]
+            res = tokenizer.encode(text, add_special_tokens=False)
             for r in res:
                 f.write(f" {r}")
             f.write("\n")

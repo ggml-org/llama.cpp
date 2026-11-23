@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.65.0"
-#define CPPHTTPLIB_VERSION_NUM "0x004100"
+#define CPPHTTPLIB_VERSION "0.67.0"
+#define CPPHTTPLIB_VERSION_NUM "0x004300"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -1344,7 +1344,7 @@ public:
   size_type erase(const std::string &key) {
     auto before = entries_.size();
     entries_.erase(std::remove_if(entries_.begin(), entries_.end(),
-                                  [&](const value_type &entry) {
+                                  [key](const value_type &entry) {
                                     return keys_equal(entry.first, key);
                                   }),
                    entries_.end());
@@ -2443,6 +2443,8 @@ protected:
   }
 
   std::atomic<socket_t> svr_sock_{INVALID_SOCKET};
+  // stop() takes the listening socket away; listen() then waits for handlers
+  bool is_stopping() const { return svr_sock_ == INVALID_SOCKET; }
 
   std::vector<std::string> trusted_proxies_;
 
@@ -3023,17 +3025,24 @@ protected:
   //   shutdown_socket
   //   close_socket
   //   disconnect
-  // should ONLY be called when socket_mutex_ is locked, and only when
-  // no other thread is using the socket.
+  // should ONLY be called on socket_ with socket_mutex_ locked, or on a
+  // connection being opened, and only when no other thread is using it.
   virtual void shutdown_ssl(Socket &socket, bool shutdown_gracefully);
   void shutdown_socket(Socket &socket) const;
   void close_socket(Socket &socket);
   void disconnect(bool gracefully);
 
   // Under socket_mutex_: whether the connection kept alive can take another
-  // request. One the peer has closed, or one set up under TLS settings changed
-  // since, is closed instead.
+  // request. One with anything to read, or one set up under TLS settings
+  // changed since, is closed instead.
   bool socket_reusable();
+
+  // Makes socket_ ready for a request, with socket_mutex_ held by guard. A new
+  // connection is opened without the lock, so that stop() can end it.
+  bool
+  prepare_socket(std::unique_lock<std::mutex> &guard,
+                 std::chrono::time_point<std::chrono::steady_clock> start_time,
+                 Response &res, bool &success, Error &error);
 
   // TLS settings apply as a connection is set up, so a change makes the
   // connection kept alive unfit for the next request.
@@ -3060,16 +3069,21 @@ protected:
   // How many send() calls are running on this client, guarded by
   // request_mutex_
   size_t send_depth_ = 0;
+  // Also guarded by request_mutex_
+  size_t socket_tls_settings_version_ = 0;
 
   // These are all protected under socket_mutex
   size_t socket_requests_in_flight_ = 0;
   std::thread::id socket_requests_are_from_thread_ = std::thread::id();
   bool socket_should_be_closed_when_request_is_done_ = false;
-  size_t socket_tls_settings_version_ = 0;
 
-  // Set by stop() while a request is in flight. The request's reads poll it,
-  // because shutting the socket down does not wake a read on Windows.
+  // Set by stop(), cleared as a send() or an open_stream() starts. Its waits
+  // poll it: shutdown() does not reach a connection being opened, nor wake a
+  // read on Windows.
   std::atomic<bool> stop_requested_{false};
+  std::function<bool()> stop_interrupt() const {
+    return [this] { return stop_requested_.load(); };
+  }
 
   std::atomic<size_t> tls_settings_version_{0};
 
@@ -3866,15 +3880,14 @@ bool process_client_socket(
     std::chrono::time_point<std::chrono::steady_clock> start_time,
     std::function<bool(Stream &)> callback);
 
-socket_t create_client_socket(const std::string &host, const std::string &ip,
-                              int port, int address_family, bool tcp_nodelay,
-                              bool ipv6_v6only, SocketOptions socket_options,
-                              time_t connection_timeout_sec,
-                              time_t connection_timeout_usec,
-                              time_t read_timeout_sec, time_t read_timeout_usec,
-                              time_t write_timeout_sec,
-                              time_t write_timeout_usec,
-                              const std::string &intf, Error &error);
+socket_t create_client_socket(
+    const std::string &host, const std::string &ip, int port,
+    int address_family, bool tcp_nodelay, bool ipv6_v6only,
+    SocketOptions socket_options, time_t connection_timeout_sec,
+    time_t connection_timeout_usec, time_t read_timeout_sec,
+    time_t read_timeout_usec, time_t write_timeout_sec,
+    time_t write_timeout_usec, const std::string &intf, Error &error,
+    const std::function<bool()> &interrupted = nullptr);
 
 const char *get_header_value(const Headers &headers, const std::string &key,
                              const char *def, size_t id);
@@ -4542,8 +4555,6 @@ public:
   void stop();
 
 private:
-  bool parse_sse_line(const std::string &line, SSEMessage &msg, int &retry_ms,
-                      bool &has_data, bool &has_id);
   void run_event_loop();
   void dispatch_event(const SSEMessage &msg);
   bool should_reconnect(int count) const;
@@ -4577,6 +4588,40 @@ private:
 };
 
 } // namespace sse
+
+namespace detail {
+
+// Interprets an event stream fed in chunks of any size
+class SSEParser {
+public:
+  using EventHandler = std::function<void(const sse::SSEMessage &msg)>;
+  using IdHandler = std::function<void(const std::string &id)>;
+  using RetryHandler = std::function<void(int retry_ms)>;
+
+  SSEParser(EventHandler on_event, IdHandler on_id, RetryHandler on_retry,
+            size_t max_event_length = CPPHTTPLIB_SSE_MAX_EVENT_LENGTH);
+
+  // Returns false once the line and the event still waiting for their end
+  // exceed max_event_length. 0 means no limit.
+  bool parse(const char *buf, size_t n);
+
+private:
+  void parse_line(const std::string &line);
+
+  EventHandler on_event_;
+  IdHandler on_id_;
+  RetryHandler on_retry_;
+  size_t max_event_length_;
+
+  std::string buffer_;
+  sse::SSEMessage msg_;
+  bool has_data_ = false;
+  bool has_id_ = false;
+  bool first_line_ = true;
+  bool after_cr_ = false;
+};
+
+} // namespace detail
 
 namespace ws {
 
@@ -4689,23 +4734,33 @@ private:
   WebSocket(
       Stream &strm, const Request &req, bool is_server,
       time_t ping_interval_sec = CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND,
-      int max_missed_pongs = CPPHTTPLIB_WEBSOCKET_MAX_MISSED_PONGS)
+      int max_missed_pongs = CPPHTTPLIB_WEBSOCKET_MAX_MISSED_PONGS,
+      std::function<bool()> server_stopping = nullptr)
       : strm_(strm), req_(req), is_server_(is_server),
         ping_interval_sec_(ping_interval_sec),
-        max_missed_pongs_(max_missed_pongs) {
+        max_missed_pongs_(max_missed_pongs),
+        server_stopping_(std::move(server_stopping)) {
+    interrupt_reads();
     start_heartbeat();
   }
 
   WebSocket(
       std::unique_ptr<Stream> &&owned_strm, const Request &req, bool is_server,
       time_t ping_interval_sec = CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND,
-      int max_missed_pongs = CPPHTTPLIB_WEBSOCKET_MAX_MISSED_PONGS)
+      int max_missed_pongs = CPPHTTPLIB_WEBSOCKET_MAX_MISSED_PONGS,
+      std::function<bool()> server_stopping = nullptr)
       : strm_(*owned_strm), owned_strm_(std::move(owned_strm)), req_(req),
         is_server_(is_server), ping_interval_sec_(ping_interval_sec),
-        max_missed_pongs_(max_missed_pongs) {
+        max_missed_pongs_(max_missed_pongs),
+        server_stopping_(std::move(server_stopping)) {
+    interrupt_reads();
     start_heartbeat();
   }
 
+  void interrupt_reads();
+  bool server_stopping() const {
+    return server_stopping_ && server_stopping_();
+  }
   void start_heartbeat();
   bool send_frame(Opcode op, const char *data, size_t len, bool fin = true);
 
@@ -4719,6 +4774,8 @@ private:
   std::atomic<bool> closed_{false};
   // Set when the peer stopped answering pings, to end a read() waiting on it
   std::atomic<bool> pong_timed_out_{false};
+  // A server connection's view of Server::stop(), which ends its read() too
+  std::function<bool()> server_stopping_;
   // Set once the caller has bounded read() through set_read_timeout(). Until
   // then the timeout in effect is the compile-time default, and elapsing it
   // is a failure that closes the connection, not a Timeout.

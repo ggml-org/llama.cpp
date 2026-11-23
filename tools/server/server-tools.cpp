@@ -896,7 +896,7 @@ struct server_tool_read_file : server_tool {
         };
     }
 
-    json invoke(json params, server_tool::stream *) const override {
+    json invoke(json params, server_tool::stream *, const std::function<bool()> &) const override {
         std::string path  = params.at("path").get<std::string>();
         int  start_line   = json_value(params, "start_line", 1);
         int  end_line     = json_value(params, "end_line",  -1); // -1 = no limit
@@ -1013,7 +1013,7 @@ struct server_tool_file_glob_search : server_tool {
         };
     }
 
-    json invoke(json params, server_tool::stream *) const override {
+    json invoke(json params, server_tool::stream *, const std::function<bool()> &) const override {
         auto io = make_tools_io(params);
 
         const std::string path = params.at("path").get<std::string>();
@@ -1076,7 +1076,7 @@ struct server_tool_file_glob_search : server_tool {
         }
 
         // `base` is always absolute (resolve falls back to the server cwd), so
-        // API clients (e.g. the web UI picker) can join the relative entries
+        // API clients (e.g. the Llama Chat picker) can join the relative entries
         // into absolute paths. `plain_text_response` is what the model sees;
         // `entries` is the same data as structured JSON for the UI picker,
         // which reads `entries`/`base` instead of re-parsing the text.
@@ -1121,6 +1121,7 @@ struct server_tool_grep_search : server_tool {
                         {"literal",             {{"type", "boolean"}, {"description", "Treat pattern as a literal string instead of a regular expression (default: false)"}}},
                         {"ignore_case",         {{"type", "boolean"}, {"description", "Case-insensitive search (default: false)"}}},
                         {"context_lines",       {{"type", "integer"}, {"description", "Number of lines of context to show before and after each match (default: 0)"}}},
+                        {"offset",              {{"type", "integer"}, {"description", "Number of matching lines to skip (default: 0)"}}},
                     }},
                     {"required", json::array({"path", "pattern"})},
                 }},
@@ -1128,7 +1129,7 @@ struct server_tool_grep_search : server_tool {
         };
     }
 
-    json invoke(json params, server_tool::stream *) const override {
+    json invoke(json params, server_tool::stream *, const std::function<bool()> &) const override {
         std::string path        = params.at("path").get<std::string>();
         std::string pat_str     = params.at("pattern").get<std::string>();
         std::string include     = json_value(params, "include", std::string("**"));
@@ -1137,6 +1138,7 @@ struct server_tool_grep_search : server_tool {
         bool        literal     = json_value(params, "literal", false);
         bool        ignore_case = json_value(params, "ignore_case", false);
         int         ctx_lines   = std::max(0, json_value(params, "context_lines", 0));
+        uint64_t    offset      = std::max<int64_t>(0, json_value(params, "offset", int64_t{0}));
 
         std::string pattern_src = pat_str;
         if (literal) {
@@ -1164,6 +1166,7 @@ struct server_tool_grep_search : server_tool {
         // collect (absolute_path, display_path) pairs to search
         std::vector<std::pair<std::string, std::string>> files;
 
+        bool listing_truncated = false;
         const std::string abs_path = io->resolve(path);
         if (io->is_regular_file(abs_path)) {
             files.emplace_back(abs_path, path);
@@ -1172,6 +1175,7 @@ struct server_tool_grep_search : server_tool {
             if (!listing.err.empty()) {
                 return {{"error", listing.err + ": " + path}};
             }
+            listing_truncated = listing.truncated;
             for (const auto & entry : listing.entries) {
                 if (!path_glob_match(include, entry.rel)) continue;
                 if (!exclude.empty() && path_glob_match(exclude, entry.rel)) continue;
@@ -1180,14 +1184,18 @@ struct server_tool_grep_search : server_tool {
         } else {
             return {{"error", "path does not exist: " + path}};
         }
+        std::sort(files.begin(), files.end(), [](const auto & a, const auto & b) {
+            return a.second < b.second;
+        });
 
         std::ostringstream output_text;
+        uint64_t skipped = 0;
         size_t total = 0;
-        bool limit_reached = false;
+        bool has_more = false;
         bool show_num = show_lineno || ctx_lines > 0;
 
         for (const auto & file_entry : files) {
-            if (limit_reached) break;
+            if (has_more) break;
             const std::string & fpath        = file_entry.first;
             const std::string & display_path = file_entry.second;
 
@@ -1201,11 +1209,15 @@ struct server_tool_grep_search : server_tool {
             }
 
             for (size_t i = 0; i < lines.size(); i++) {
+                if (!std::regex_search(lines[i], pattern)) continue;
+                if (skipped < offset) {
+                    skipped++;
+                    continue;
+                }
                 if (total >= SERVER_TOOL_GREP_SEARCH_MAX_RESULTS) {
-                    limit_reached = true;
+                    has_more = true;
                     break;
                 }
-                if (!std::regex_search(lines[i], pattern)) continue;
 
                 long ctx_start = ctx_lines > 0 ? std::max<long>(0, (long) i - ctx_lines) : (long) i;
                 long ctx_end   = ctx_lines > 0 ? std::min<long>((long) lines.size() - 1, (long) i + ctx_lines) : (long) i;
@@ -1226,10 +1238,11 @@ struct server_tool_grep_search : server_tool {
         }
 
         output_text << "\n---\nTotal matches: " << total << "\n";
-        if (limit_reached) {
-            output_text << string_format(
-                "[%zu matches limit reached. Narrow the path/pattern/include to see more.]\n",
-                SERVER_TOOL_GREP_SEARCH_MAX_RESULTS);
+        if (has_more) {
+            output_text << "Continue with offset=" << offset + total << " and the same search arguments.\n";
+        }
+        if (listing_truncated) {
+            output_text << "[results truncated: time budget or unreadable directory]\n";
         }
 
         return {{"plain_text_response", output_text.str()}};
@@ -1271,7 +1284,7 @@ struct server_tool_exec_shell_command : server_tool {
         };
     }
 
-    json invoke(json params, server_tool::stream * st) const override {
+    json invoke(json params, server_tool::stream * st, const std::function<bool()> &) const override {
         std::string command   = params.at("command").get<std::string>();
         int    timeout        = json_value(params, "timeout",         10);
         size_t max_output     = (size_t) json_value(params, "max_output_size", (int) SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
@@ -1348,7 +1361,7 @@ struct server_tool_write_file : server_tool {
         };
     }
 
-    json invoke(json params, server_tool::stream *) const override {
+    json invoke(json params, server_tool::stream *, const std::function<bool()> &) const override {
         std::string path    = params.at("path").get<std::string>();
         std::string content = params.at("content").get<std::string>();
 
@@ -1405,7 +1418,7 @@ struct server_tool_edit_file : server_tool {
         };
     }
 
-    json invoke(json params, server_tool::stream *) const override {
+    json invoke(json params, server_tool::stream *, const std::function<bool()> &) const override {
         std::string path = params.at("path").get<std::string>();
         const json & edits_json = params.at("edits");
 
@@ -1721,7 +1734,7 @@ struct server_tool_get_info : server_tool {
         };
     }
 
-    json invoke(json params, server_tool::stream *) const override {
+    json invoke(json params, server_tool::stream *, const std::function<bool()> &) const override {
         auto io = make_tools_io(params);
 
         // inside an isolate, we always use the linux command
@@ -1835,8 +1848,8 @@ struct server_mcp_tool : server_tool {
         };
     }
 
-    json invoke(json params, server_tool::stream *) const override {
-        return mcp_mgr.call_tool(server_name, tool_name, params);
+    json invoke(json params, server_tool::stream *, const std::function<bool()> & should_stop) const override {
+        return mcp_mgr.call_tool(server_name, tool_name, params, should_stop);
     }
 };
 
@@ -1953,7 +1966,7 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     // IMPORTANT: for contributors, please keep this array of tools as minimal as possible
     //            we only accept minimal i/o and shell command tools here
     //            for example, do not add: web search, get date time, etc.
-    //            high-level functionality should be added either via MCP or web UI
+    //            high-level functionality should be added either via MCP or Llama Chat
     std::vector<std::unique_ptr<server_tool>> tools;
     tools.push_back(std::make_unique<server_tool_read_file>());
     tools.push_back(std::make_unique<server_tool_file_glob_search>());
@@ -2093,15 +2106,20 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
             }
 
             // accept x-tool-runtime header to route tool I/O through an isolate, e.g. "docker-container:<id>";
-            // falls back to the --tools-runtime isolate, if configured
+            // --tools-runtime wins: it is the sandbox, the client must not move tools out of it
             if (params.contains("runtime")) {
                 params.erase("runtime");
             }
             auto runtime_header = get_header(req.headers, "x-tool-runtime");
-            if (!runtime_header.empty()) {
-                params["runtime"] = runtime_header;
-            } else if (runtime) {
+            if (runtime) {
+                if (!runtime_header.empty()) {
+                    res->status = 403;
+                    res->data   = safe_json_to_str(format_error_response("x-tool-runtime is not allowed when --tools-runtime is set", ERROR_TYPE_PERMISSION));
+                    return res;
+                }
                 params["runtime"] = runtime->spec();
+            } else if (!runtime_header.empty()) {
+                params["runtime"] = runtime_header;
             }
 
             // x-resp-type header is only used by read_file for now
@@ -2128,7 +2146,7 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
 
                     auto done = std::make_unique<server_tool_stream_result>();
                     try {
-                        tool.invoke(params, &st);
+                        tool.invoke(params, &st, req.should_stop);
                     } catch (const std::exception & e) {
                         done->error_msg = e.what();
                     } catch (...) {
@@ -2153,7 +2171,7 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
                     return true;
                 };
             } else {
-                json result = tool.invoke(params, nullptr);
+                json result = tool.invoke(params, nullptr, req.should_stop);
                 res->status = 200;
                 res->data   = safe_json_to_str(result);
             }

@@ -362,24 +362,9 @@ static void unary_op_sqr_kernel(const T * x, T * dst, const int k, const sycl::n
 }
 
 template<typename T>
-static void unary_op_clamp_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1, float min_val, float max_val) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        dst[i] = op_clamp(x[i], min_val, max_val);
-    }
-}
-
-template<typename T>
 static void unary_op_ceil_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
         dst[i] = op_ceil(x[i]);
-    }
-}
-
-template<typename T>
-static void clamp(const T * x, T * dst, const float min, const float max, const int k,
-                      const sycl::nd_item<1> &item_ct1) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        dst[i] = x[i] < static_cast<T>(min) ? static_cast<T>(min) : (x[i] > static_cast<T>(max) ? static_cast<T>(max) : x[i]);
     }
 }
 
@@ -929,20 +914,11 @@ static inline void ggml_sycl_op_sqr(ggml_backend_sycl_context & ctx, ggml_tensor
 }
 
 static inline void ggml_sycl_op_clamp(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    float min_val;
-    float max_val;
-    memcpy(&min_val, dst->op_params, sizeof(float));
-    memcpy(&max_val, (float *) dst->op_params + 1, sizeof(float));
-    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream, float min_arg, float max_arg) {
-            const int num_blocks = ceil_div(k_elements, SYCL_CLAMP_BLOCK_SIZE);
-            stream->parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_CLAMP_BLOCK_SIZE),
-                                  sycl::range<1>(SYCL_CLAMP_BLOCK_SIZE)),
-                [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                    clamp(src, dst_ptr, min_arg, max_arg, k_elements, item_ct1);
-                });
-        }, min_val, max_val);
+    const float min_val = ggml_get_op_params_f32(dst, 0);
+    const float max_val = ggml_get_op_params_f32(dst, 1);
+    ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [min_val, max_val](auto x) {
+        return op_clamp(x, min_val, max_val);
+    });
 }
 
 static inline void ggml_sycl_op_xielu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
