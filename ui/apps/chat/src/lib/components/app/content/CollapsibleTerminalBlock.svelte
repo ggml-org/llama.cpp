@@ -95,13 +95,9 @@
 	</Collapsible.Trigger>
 
 	<Collapsible.Content>
-		<!-- See CollapsibleContentBlock: bits-ui keeps closed content mounted, which
-		     makes a collapsed tool result re-render on every streamed token. -->
-		{#if open}
-			<div class="terminal-body p-3 pt-1">
-				{@render children()}
-			</div>
-		{/if}
+		<div class="terminal-body p-3 pt-1">
+			{@render children()}
+		</div>
 	</Collapsible.Content>
 </Collapsible.Root>
 

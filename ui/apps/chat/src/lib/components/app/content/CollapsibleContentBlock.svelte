@@ -2,7 +2,6 @@
 	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
 	import { cn } from '@ggml-org/llama-ui/utils';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
-	import CollapsibleRegion from '#lib/components/app/misc/CollapsibleRegion.svelte';
 	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 	import type { Snippet } from 'svelte';
 	import type { Component } from 'svelte';
@@ -157,23 +156,16 @@
 	{/if}
 
 	{#if collapsible}
-		<!-- Content is force-mounted so the trigger keeps a real `aria-controls` target;
-		     the region owns opening and closing. It animates the height instead of
-		     snapping it, and unmounts the body once the collapse is over - a closed
-		     block still costs nothing, which matters while tokens stream past it. -->
-		<Collapsible.Content forceMount>
-			<CollapsibleRegion {open}>
-				<div class="pl-1.5 grid min-w-0" style="min-height: var(--min-message-height);">
-					<div
-						class={cn(
-							'min-w-0 pb-2 my-2',
-							!flushBody && 'border-l border-muted-foreground/20 pl-4'
-						)}
-					>
-						{@render children()}
-					</div>
+		<!-- The body unmounts once the collapse is over, so a closed block costs
+		     nothing while tokens stream past it. -->
+		<Collapsible.Content>
+			<div class="pl-1.5 grid min-w-0" style="min-height: var(--min-message-height);">
+				<div
+					class={cn('min-w-0 pb-2 my-2', !flushBody && 'border-l border-muted-foreground/20 pl-4')}
+				>
+					{@render children()}
 				</div>
-			</CollapsibleRegion>
+			</div>
 		</Collapsible.Content>
 	{/if}
 </Collapsible.Root>

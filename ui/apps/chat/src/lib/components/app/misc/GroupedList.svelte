@@ -16,7 +16,7 @@
 </script>
 
 <script generics="G, E" lang="ts">
-	import CollapsibleRegion from './CollapsibleRegion.svelte';
+	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
 	import type { Snippet } from 'svelte';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
@@ -151,19 +151,21 @@
 			</div>
 		{/if}
 
-		<CollapsibleRegion open={expanded}>
-			{#each entry.rows as row (keyOf(row))}
-				{@render item({ depth: 1, entry: row })}
-			{/each}
+		<Collapsible.Root open={expanded}
+			><Collapsible.Content>
+				{#each entry.rows as row (keyOf(row))}
+					{@render item({ depth: 1, entry: row })}
+				{/each}
 
-			{#if entry.hidden > 0 && more}
-				{@render more({
-					count: Math.min(groupWindow, entry.hidden),
-					onMore: () => growGroup(entry.key),
-					unit: GroupedListUnit.ENTRIES
-				})}
-			{/if}
-		</CollapsibleRegion>
+				{#if entry.hidden > 0 && more}
+					{@render more({
+						count: Math.min(groupWindow, entry.hidden),
+						onMore: () => growGroup(entry.key),
+						unit: GroupedListUnit.ENTRIES
+					})}
+				{/if}
+			</Collapsible.Content></Collapsible.Root
+		>
 	{/each}
 
 	{#if windowed.length < (groups?.length ?? 0) && more}
