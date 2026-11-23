@@ -4632,6 +4632,72 @@ static int ggml_cuda_match_ssm_conv_step_residual(const ggml_cgraph * cgraph, in
     return k;
 }
 
+// one token: a MoE weighted reduction whose result goes only into the one-token conv step right after it (as its
+// new column and its residual), optionally with the residual ADD after the step. Returns the index of the last node
+// (the step's SCALE or that ADD), or -1. match receives the reduction.
+static int ggml_cuda_match_moe_conv_step(const ggml_cgraph * cgraph, int i, ggml_cuda_moe_weighted_reduction_match & match,
+        bool check_memory = true) {
+    if (!ggml_cuda_match_moe_weighted_reduction(cgraph, i, match)) {
+        return -1;
+    }
+    const ggml_tensor * md = match.dst;
+    if (md->ne[0] != match.experts->ne[0] || ggml_nelements(md) != md->ne[0] || cgraph->nodes[i + match.node_count - 1] != md) {
+        return -1; // one token
+    }
+    // the [1, nc] view of the sum the concatenation takes sits between them
+    int k = i + match.node_count;
+    while (k < cgraph->n_nodes && (cgraph->nodes[k]->op == GGML_OP_RESHAPE || cgraph->nodes[k]->op == GGML_OP_TRANSPOSE ||
+                                   cgraph->nodes[k]->op == GGML_OP_VIEW || cgraph->nodes[k]->op == GGML_OP_PERMUTE)) {
+        ++k;
+    }
+    if (k >= cgraph->n_nodes || cgraph->nodes[k]->op != GGML_OP_CONCAT) {
+        return -1;
+    }
+    const int last = ggml_cuda_match_ssm_conv_step(cgraph, k, false);
+    if (last < 0) {
+        return -1;
+    }
+    const ggml_tensor * concat = cgraph->nodes[k];
+    const ggml_tensor * conv   = cgraph->nodes[k + 4];
+    const ggml_tensor * add    = cgraph->nodes[k + 6];
+    const ggml_tensor * x      = concat->src[1];
+    const ggml_tensor * res    = add->src[0]->op == GGML_OP_RESHAPE && add->src[0]->src[0] == conv ? add->src[1] : add->src[0];
+    // the step reads the sum as x (a [1, nc] view of it) and as the residual
+    if (x->data != md->data || x->nb[1] != sizeof(float) || res->data != md->data || !ggml_is_contiguous(res) ||
+            ggml_nelements(res) != ggml_nelements(md) || conv->src[1]->ne[1] != md->ne[0]) {
+        return -1;
+    }
+    int end = last;
+    const int last2 = ggml_cuda_match_ssm_conv_step_residual(cgraph, k, last, false);
+    if (last2 > 0) {
+        end = last2;
+    }
+    if (check_memory) {
+        // read across the step: experts, scale, weights, history, conv weights; written: the sum, the state, the output
+        const ggml_tensor * out  = cgraph->nodes[end];
+        const ggml_tensor * cell = cgraph->nodes[k + 3]->src[1];
+        const ggml_tensor * ins[] = { match.experts, match.expert_scale, match.weights, concat->src[0], conv->src[1] };
+        for (const ggml_tensor * o : { (const ggml_tensor *) md, cell, out }) {
+            for (const ggml_tensor * in : ins) {
+                if (in && ggml_cuda_fusion_overlap(o, in)) {
+                    return -1;
+                }
+            }
+        }
+        if (ggml_cuda_fusion_overlap(md, cell) || ggml_cuda_fusion_overlap(md, out) || ggml_cuda_fusion_overlap(cell, out)) {
+            return -1;
+        }
+        if (last2 > 0) {
+            const ggml_tensor * add2 = cgraph->nodes[last2];
+            const ggml_tensor * res2 = add2->src[0] == cgraph->nodes[last] ? add2->src[1] : add2->src[0];
+            if (!ggml_cuda_fusion_elementwise_ok(out, res2) || ggml_cuda_fusion_overlap(md, res2) || ggml_cuda_fusion_overlap(cell, res2)) {
+                return -1;
+            }
+        }
+    }
+    return end;
+}
+
 // the number of consecutive MUL_MAT nodes from i, at most 4, that one mmvf launch can compute: one F32 vector, the
 // same src1, 2D contiguous src0 of one type and row length, and no node reading another's result
 static int ggml_cuda_mul_mat_vec_f_group(const ggml_cgraph * cgraph, int i) {
@@ -4697,6 +4763,23 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
             fusion.shared_dst = shared;
             ggml_cuda_mul_mat_vec_q(*cuda_ctx, up->src[0], up->src[1], up->src[2], routed, &fusion);
             return 5;
+        }
+    }
+
+    if (node->op == GGML_OP_MUL) {
+        ggml_cuda_moe_weighted_reduction_match match;
+        const int last = ggml_cuda_match_moe_conv_step(cgraph, i, match);
+        if (last > 0) {
+            int k = i + match.node_count;
+            while (cgraph->nodes[k]->op != GGML_OP_CONCAT) {
+                ++k;
+            }
+            const int last_step = k + 7;
+            ggml_tensor * add2 = last > last_step ? cgraph->nodes[last] : nullptr;
+            ggml_cuda_op_ssm_conv_step_moe(*cuda_ctx, match.experts, match.expert_scale, match.weights, match.dst,
+                cgraph->nodes[k], cgraph->nodes[k + 3], cgraph->nodes[k + 4], cgraph->nodes[last_step],
+                add2 ? (add2->src[0] == cgraph->nodes[last_step] ? add2->src[1] : add2->src[0]) : nullptr, add2);
+            return last - i;
         }
     }
 
@@ -6093,6 +6176,14 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
             }
 
             ggml_cuda_moe_weighted_reduction_match match;
+            {
+                const int last = ggml_cuda_match_moe_conv_step(cgraph, i, match, false);
+                if (last > i) {
+                    add_alloc_deps(i, last);
+                    i = last;
+                    continue;
+                }
+            }
             if (ggml_cuda_match_moe_weighted_reduction(cgraph, i, match)) {
                 params->add_alloc_dep(params->user_data, const_cast<ggml_tensor *>(match.experts), match.dst);
                 params->add_alloc_dep(params->user_data, const_cast<ggml_tensor *>(match.weights), match.dst);

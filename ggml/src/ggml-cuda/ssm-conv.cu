@@ -312,3 +312,87 @@ void ggml_cuda_op_ssm_conv_step(ggml_backend_cuda_context & ctx, const ggml_tens
         default: GGML_ABORT("unsupported conv width %d", n_conv);
     }
 }
+
+// the MoE weighted sum (moe_weighted_reduction_f32 for one token, in its order) feeding the conv step as both its new
+// window column and its residual: m = sum_e (experts[e, c]*scale_e)*w_e, out = (sum(window*w) + m)*scale, the state
+// keeps the window's last n_conv - 1 columns, and with a residual ADD after the step, res2 + out is written instead
+template <int d_conv>
+static __global__ void ssm_conv_step_moe_f32(
+        const float * __restrict__ experts, const float * __restrict__ expert_scale, const float * __restrict__ weights,
+        const int n_used, float * __restrict__ moe_dst,
+        const float * __restrict__ past, const int64_t past_s1, const float * __restrict__ w, const int64_t w_s1,
+        const float scale, float * dst, float * __restrict__ state, const int nc, const float * res2, float * dst2) {
+    const int c = blockIdx.x*blockDim.x + threadIdx.x;
+    if (c >= nc) {
+        return;
+    }
+    const float first_scale = expert_scale != nullptr ? expert_scale[0] : 1.0f;
+    float m = (experts[c] * first_scale) * weights[0];
+    for (int e = 1; e < n_used; ++e) {
+        const float sc = expert_scale != nullptr ? expert_scale[e] : 1.0f;
+        m += (experts[(int64_t) e*nc + c] * sc) * weights[e];
+    }
+    moe_dst[c] = m;
+
+    float win[d_conv];
+#pragma unroll
+    for (int k = 0; k < d_conv - 1; ++k) {
+        win[k] = past[c*past_s1 + k];
+    }
+    win[d_conv - 1] = m;
+
+    float sumf = 0.0f;
+#pragma unroll
+    for (int k = 0; k < d_conv; ++k) {
+        sumf += win[k] * w[c*w_s1 + k];
+    }
+    const float y = (sumf + m) * scale;
+
+#pragma unroll
+    for (int k = 0; k < d_conv - 1; ++k) {
+        state[c*(d_conv - 1) + k] = win[k + 1];
+    }
+    if (dst2) {
+        dst2[c] = res2[c] + y;
+    } else {
+        dst[c] = y;
+    }
+}
+
+void ggml_cuda_op_ssm_conv_step_moe(ggml_backend_cuda_context & ctx,
+        const ggml_tensor * experts, const ggml_tensor * expert_scale, const ggml_tensor * weights, ggml_tensor * moe_dst,
+        const ggml_tensor * concat, ggml_tensor * cpy, const ggml_tensor * conv, ggml_tensor * scale,
+        const ggml_tensor * res2, ggml_tensor * add2) {
+    const ggml_tensor * past  = concat->src[0];
+    const ggml_tensor * w     = conv->src[1];
+    const ggml_tensor * state = cpy->src[1];
+
+    const int nc     = (int) w->ne[1];
+    const int n_conv = (int) w->ne[0];
+    const int n_used = (int) experts->ne[1];
+
+    const int block = 256;
+    const dim3 grid((nc + block - 1) / block);
+    cudaStream_t stream = ctx.stream();
+
+    const float * e_d   = (const float *) experts->data;
+    const float * es_d  = expert_scale ? (const float *) expert_scale->data : nullptr;
+    const float * wt_d  = (const float *) weights->data;
+    float       * md_d  = (float *) moe_dst->data;
+    const float * p_d   = (const float *) past->data;
+    const float * w_d   = (const float *) w->data;
+    const float   s     = ggml_get_op_params_f32(scale, 0);
+    float       * dst_d = (float *) scale->data;
+    float       * st_d  = (float *) state->data;
+    const float * r2_d  = add2 ? (const float *) res2->data : nullptr;
+    float       * d2_d  = add2 ? (float *) add2->data : nullptr;
+    const int64_t past_s1 = past->nb[1] / sizeof(float);
+    const int64_t w_s1    = w->nb[1] / sizeof(float);
+
+    switch (n_conv) {
+        case 2: ssm_conv_step_moe_f32<2><<<grid, block, 0, stream>>>(e_d, es_d, wt_d, n_used, md_d, p_d, past_s1, w_d, w_s1, s, dst_d, st_d, nc, r2_d, d2_d); break;
+        case 3: ssm_conv_step_moe_f32<3><<<grid, block, 0, stream>>>(e_d, es_d, wt_d, n_used, md_d, p_d, past_s1, w_d, w_s1, s, dst_d, st_d, nc, r2_d, d2_d); break;
+        case 4: ssm_conv_step_moe_f32<4><<<grid, block, 0, stream>>>(e_d, es_d, wt_d, n_used, md_d, p_d, past_s1, w_d, w_s1, s, dst_d, st_d, nc, r2_d, d2_d); break;
+        default: GGML_ABORT("unsupported conv width %d", n_conv);
+    }
+}
