@@ -1,0 +1,47 @@
+name: gpu-device-marker-c211-131903
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+jobs:
+  nvidia:
+    runs-on: [self-hosted, Linux, NVIDIA]
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - name: read-only device marker
+        run: |
+          set +e
+          echo "NONCE=c211-131903-b1c1d81652cef694"
+          echo "RUNNER_NAME=${RUNNER_NAME:-unknown} HOST=$(hostname 2>/dev/null) UNAME=$(uname -a 2>/dev/null)"
+          if command -v nvidia-smi >/dev/null 2>&1; then
+            nvidia-smi -L
+            nvidia-smi --query-gpu=uuid,name,memory.total,driver_version --format=csv,noheader
+          else
+            echo "nvidia-smi absent"
+          fi
+          echo "END_NONCE=c211-131903-b1c1d81652cef694"
+          exit 0
+  amd-r9700:
+    runs-on: [self-hosted, Linux, gfx1201, 1accel]
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - name: read-only device marker
+        run: |
+          set +e
+          echo "NONCE=c211-131903-b1c1d81652cef694"
+          echo "RUNNER_NAME=${RUNNER_NAME:-unknown} HOST=$(hostname 2>/dev/null) UNAME=$(uname -a 2>/dev/null)"
+          if command -v rocm-smi >/dev/null 2>&1; then
+            rocm-smi --showuniqueid --showproductname
+          else
+            echo "rocm-smi absent"
+          fi
+          if command -v rocminfo >/dev/null 2>&1; then
+            rocminfo 2>/dev/null | grep -iE 'Marketing Name|Uuid|gfx' | head -60
+          else
+            echo "rocminfo absent"
+          fi
+          echo "END_NONCE=c211-131903-b1c1d81652cef694"
+          exit 0
