@@ -2,10 +2,11 @@
 
 #ifdef GGML_METAL_HAS_TENSOR
 
-constant bool FC_flash_attn_ext_tensor_has_mask  [[function_constant(FC_FLASH_ATTN_EXT_TENSOR + 0)]];
-constant bool FC_flash_attn_ext_tensor_has_sinks [[function_constant(FC_FLASH_ATTN_EXT_TENSOR + 1)]];
-constant bool FC_flash_attn_ext_tensor_has_bias  [[function_constant(FC_FLASH_ATTN_EXT_TENSOR + 2)]];
-constant bool FC_flash_attn_ext_tensor_has_scap  [[function_constant(FC_FLASH_ATTN_EXT_TENSOR + 3)]];
+constant bool FC_flash_attn_ext_tensor_has_mask         [[function_constant(FC_FLASH_ATTN_EXT_TENSOR + 0)]];
+constant bool FC_flash_attn_ext_tensor_has_sinks        [[function_constant(FC_FLASH_ATTN_EXT_TENSOR + 1)]];
+constant bool FC_flash_attn_ext_tensor_has_bias         [[function_constant(FC_FLASH_ATTN_EXT_TENSOR + 2)]];
+constant bool FC_flash_attn_ext_tensor_has_scap         [[function_constant(FC_FLASH_ATTN_EXT_TENSOR + 3)]];
+constant bool FC_flash_attn_ext_tensor_has_indexed_bias [[function_constant(FC_FLASH_ATTN_EXT_TENSOR + 4)]];
 
 // ref: https://arxiv.org/pdf/2307.08691.pdf
 template<
@@ -24,6 +25,8 @@ kernel void kernel_flash_attn_ext_tensor(
         device const char * sinks,
         device const char * blk,
         device       char * dst,
+        device const float * bias_table,
+        device const int   * bias_indices,
         threadgroup  char * shmem [[threadgroup(0)]],
         uint3  tgpig [[threadgroup_position_in_grid]],
         ushort tiisg [[thread_index_in_simdgroup]],
@@ -180,9 +183,15 @@ kernel void kernel_flash_attn_ext_tensor(
                 }
             }
 
-            if (FC_flash_attn_ext_tensor_has_mask && blk_cur != 2 && iq1 + j < args.ne31) {
+            if (FC_flash_attn_ext_tensor_has_mask && (blk_cur != 2 || FC_flash_attn_ext_tensor_has_indexed_bias) && iq1 + j < args.ne31) {
+                const int64_t flat_q = (int64_t) iq3*args.ne01 + (iq1 + j);
                 FOR_UNROLL (short ii = 0; ii < NC; ++ii) {
-                    s[ii] += slope*(float) pm[jj][ic + ii*NW + tiisg];
+                    const int key = ic + ii*NW + tiisg;
+                    half m = blk_cur == 2 ? 0.0h : pm[jj][key];
+                    if (FC_flash_attn_ext_tensor_has_indexed_bias && iq1 + j < args.ne01 && key < args.ne11) {
+                        m = fa_add_indexed_bias(m, bias_table, bias_indices, flat_q, iq2, key, args.bias_n_bins, args.bias_n_keys, args.bias_query_stride);
+                    }
+                    s[ii] += slope*(float) m;
                 }
             }
 

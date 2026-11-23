@@ -12,8 +12,9 @@ constant int32_t FC_flash_attn_ext_vec_ns10 [[function_constant(FC_FLASH_ATTN_EX
 constant int32_t FC_flash_attn_ext_vec_ns20 [[function_constant(FC_FLASH_ATTN_EXT_VEC + 21)]];
 constant int32_t FC_flash_attn_ext_vec_nsg  [[function_constant(FC_FLASH_ATTN_EXT_VEC + 22)]];
 constant int32_t FC_flash_attn_ext_vec_nwg  [[function_constant(FC_FLASH_ATTN_EXT_VEC + 23)]];
-constant bool    FC_flash_attn_ext_vec_has_sparse [[function_constant(FC_FLASH_ATTN_EXT_VEC + 5)]];
-constant bool    FC_flash_attn_ext_vec_has_rows   [[function_constant(FC_FLASH_ATTN_EXT_VEC + 6)]];
+constant bool    FC_flash_attn_ext_vec_has_sparse       [[function_constant(FC_FLASH_ATTN_EXT_VEC + 5)]];
+constant bool    FC_flash_attn_ext_vec_has_rows         [[function_constant(FC_FLASH_ATTN_EXT_VEC + 6)]];
+constant bool    FC_flash_attn_ext_vec_has_indexed_bias [[function_constant(FC_FLASH_ATTN_EXT_VEC + 7)]];
 template<
     typename q_t,   // query types in shared memory
     typename k_t,   // key types in shared memory
@@ -43,6 +44,8 @@ kernel void kernel_flash_attn_ext_vec(
         device const char * pad,
         device       char * dst,
         device const char * idx,
+        device const float * bias_table,
+        device const int   * bias_indices,
         threadgroup  half * shmem_f16 [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]],
@@ -241,8 +244,9 @@ kernel void kernel_flash_attn_ext_vec(
             if (FC_flash_attn_ext_vec_has_sparse || FC_flash_attn_ext_vec_has_rows) {
                 FOR_UNROLL (short ii = 0; ii < C/NW; ++ii) {
                     const short i = ii*NW + tiisg;
+                    const int k_pos = ic + i;
 
-                    spidx[i] = FC_flash_attn_ext_vec_has_rows ? rows_list[ic + i] : pidx[ic + i];
+                    spidx[i] = FC_flash_attn_ext_vec_has_rows ? (k_pos < args.ne11 ? rows_list[k_pos] : -1) : pidx[k_pos];
                 }
                 simdgroup_barrier(mem_flags::mem_threadgroup);
             }
@@ -257,19 +261,21 @@ kernel void kernel_flash_attn_ext_vec(
                             sm[qq*C + tiisg] = -MAXHALF;
                         }
                     }
-                } else if (FC_flash_attn_ext_vec_has_rows) {
-                    // the mask is compact: column ic maps to cache row spidx[tiisg]
-                    FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
-                        if ((iq1*Q + qq) < args.ne01) {
-                            sm[qq*C + tiisg] = pm[qq][ic + tiisg];
-                        } else {
-                            sm[qq*C + tiisg] = -MAXHALF;
-                        }
-                    }
                 } else {
+                    const int k_idx = ic0*C + tiisg;
                     FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
-                        if ((iq1*Q + qq) < args.ne01) {
-                            sm[qq*C + tiisg] = pm[qq][ic + tiisg];
+                        const int q_row = iq1*Q + qq;
+                        if (q_row < args.ne01 && (!FC_flash_attn_ext_vec_has_rows || k_idx < args.ne11)) {
+                            half m = pm[qq][ic + tiisg];
+                            if (FC_flash_attn_ext_vec_has_indexed_bias) {
+                                if (FC_flash_attn_ext_vec_has_rows && spidx[tiisg] < 0) {
+                                    m = -INFINITY;
+                                } else if (k_idx < args.ne11) {
+                                    const int64_t flat_q = (int64_t) iq3*args.ne01 + q_row;
+                                    m = fa_add_indexed_bias(m, bias_table, bias_indices, flat_q, iq2, k_idx, args.bias_n_bins, args.bias_n_keys, args.bias_query_stride);
+                                }
+                            }
+                            sm[qq*C + tiisg] = m;
                         } else {
                             sm[qq*C + tiisg] = -MAXHALF;
                         }

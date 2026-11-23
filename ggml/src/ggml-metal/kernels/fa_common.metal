@@ -1,8 +1,9 @@
-constant bool FC_flash_attn_ext_has_mask  [[function_constant(FC_FLASH_ATTN_EXT + 0)]];
-constant bool FC_flash_attn_ext_has_sinks [[function_constant(FC_FLASH_ATTN_EXT + 1)]];
-constant bool FC_flash_attn_ext_has_bias  [[function_constant(FC_FLASH_ATTN_EXT + 2)]];
-constant bool FC_flash_attn_ext_has_scap  [[function_constant(FC_FLASH_ATTN_EXT + 3)]];
-constant bool FC_flash_attn_ext_has_kvpad [[function_constant(FC_FLASH_ATTN_EXT + 4)]];
+constant bool FC_flash_attn_ext_has_mask         [[function_constant(FC_FLASH_ATTN_EXT + 0)]];
+constant bool FC_flash_attn_ext_has_sinks        [[function_constant(FC_FLASH_ATTN_EXT + 1)]];
+constant bool FC_flash_attn_ext_has_bias         [[function_constant(FC_FLASH_ATTN_EXT + 2)]];
+constant bool FC_flash_attn_ext_has_scap         [[function_constant(FC_FLASH_ATTN_EXT + 3)]];
+constant bool FC_flash_attn_ext_has_kvpad        [[function_constant(FC_FLASH_ATTN_EXT + 4)]];
+constant bool FC_flash_attn_ext_has_indexed_bias [[function_constant(FC_FLASH_ATTN_EXT + 5)]];
 
 constant bool FC_flash_attn_ext_bc_mask [[function_constant(FC_FLASH_ATTN_EXT + 10)]];
 
@@ -43,6 +44,8 @@ void kernel_flash_attn_ext_impl(
         device const char * pad,
         device const char * blk,
         device       char * dst,
+        device const float * bias_table,
+        device const int   * bias_indices,
         threadgroup  half * shmem_f16,
         uint3   tgpig,
         ushort  tiisg,
@@ -243,15 +246,35 @@ void kernel_flash_attn_ext_impl(
                     continue;
                 }
 
-                if (blk_cur == 1) {
+                if (blk_cur == 1 || FC_flash_attn_ext_has_indexed_bias) {
+                    const int k_base = ic0*C;
+
                     FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
                         const short j = jj*NSG + sgitg;
 
-                        if (FC_flash_attn_ext_bc_mask) {
-                            sm2[j*SH + tiisg] = (iq1 + j) < args.ne31 ? pm2[jj][tiisg] : half2(-MAXHALF, -MAXHALF);
+                        half2 m2;
+                        if (blk_cur == 2) {
+                            m2 = half2(0.0h, 0.0h);
+                        } else if (FC_flash_attn_ext_bc_mask) {
+                            m2 = (iq1 + j) < args.ne31 ? pm2[jj][tiisg] : half2(-MAXHALF, -MAXHALF);
                         } else {
-                            sm2[j*SH + tiisg] = pm2[jj][tiisg];
+                            m2 = pm2[jj][tiisg];
                         }
+
+                        if (FC_flash_attn_ext_has_indexed_bias && (iq1 + j) < args.ne01) {
+                            const int64_t flat_q = (int64_t) iq3*args.ne01 + (iq1 + j);
+                            const int k0 = k_base + 2*tiisg;
+                            const int k1 = k0 + 1;
+
+                            if (k0 < args.ne11) {
+                                m2[0] = fa_add_indexed_bias(m2[0], bias_table, bias_indices, flat_q, iq2, k0, args.bias_n_bins, args.bias_n_keys, args.bias_query_stride);
+                            }
+                            if (k1 < args.ne11) {
+                                m2[1] = fa_add_indexed_bias(m2[1], bias_table, bias_indices, flat_q, iq2, k1, args.bias_n_bins, args.bias_n_keys, args.bias_query_stride);
+                            }
+                        }
+
+                        sm2[j*SH + tiisg] = m2;
 
                         pm2[jj] += NW;
                     }
@@ -423,7 +446,7 @@ void kernel_flash_attn_ext_impl(
                 }
 
                 // mqk = mqk + slope*mask
-                if (blk_cur != 2) {
+                if (blk_cur != 2 || FC_flash_attn_ext_has_indexed_bias) {
                     if (FC_flash_attn_ext_has_bias) {
                         s2 += s2_t(sm2[j*SH + tiisg])*slope;
                     } else {
@@ -682,12 +705,14 @@ kernel void kernel_flash_attn_ext(
         device const char * pad,
         device const char * blk,
         device       char * dst,
+        device const float * bias_table,
+        device const int   * bias_indices,
         threadgroup  half * shmem_f16 [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
 #define FWD_TMPL q_t, k_t, v_t, qk_t, s_t, o_t, kd4x4_t, nl_k, deq_k, vd4x4_t, nl_v, deq_v, DK, DV, Q, C
-#define FWD_ARGS args, q, k, v, mask, sinks, pad, blk, dst, shmem_f16, tgpig, tiisg, sgitg
+#define FWD_ARGS args, q, k, v, mask, sinks, pad, blk, dst, bias_table, bias_indices, shmem_f16, tgpig, tiisg, sgitg
     switch (FC_flash_attn_ext_nsg) {
       // note: disabled cases to reduce library load time
       //case 1: kernel_flash_attn_ext_impl<FWD_TMPL, 1>(FWD_ARGS); break;
