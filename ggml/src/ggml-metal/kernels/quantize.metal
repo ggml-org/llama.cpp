@@ -160,6 +160,48 @@ template [[host_name("kernel_cpy_q8_0_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<
 template [[host_name("kernel_cpy_tq2_0_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<half4x4, block_tq2_0, QK_NL, dequantize_tq2_0>;
 
 template<typename T>
+static void concat_copy(device const char * src, device char * dst, const int n, const int tid, const int nth) {
+    if (n <= 0) {
+        return;
+    }
+
+    constexpr int N = 16/sizeof(T);
+    typedef vec<T, N> T16;
+
+    device const T * x = (device const T *)src;
+    device       T * y = (device       T *)dst;
+
+    const size_t rx = (size_t)x % 16;
+
+    if (rx != (size_t)y % 16 || rx % sizeof(T) != 0) {
+        for (int i = tid; i < n; i += nth) {
+            y[i] = x[i];
+        }
+
+        return;
+    }
+
+    // peel the head to reach a 16-byte boundary, then copy in 16-byte chunks
+    const int np  = min((int)(((16 - rx) % 16)/sizeof(T)), n);
+    const int n16 = (n - np)/N;
+
+    for (int i = tid; i < np; i += nth) {
+        y[i] = x[i];
+    }
+
+    device const T16 * x16 = (device const T16 *)(x + np);
+    device       T16 * y16 = (device       T16 *)(y + np);
+
+    for (int i = tid; i < n16; i += nth) {
+        y16[i] = x16[i];
+    }
+
+    for (int i = np + n16*N + tid; i < n; i += nth) {
+        y[i] = x[i];
+    }
+}
+
+template<typename T>
 kernel void kernel_concat(
         constant ggml_metal_kargs_concat & args,
         device  const char * src0,
@@ -188,44 +230,21 @@ kernel void kernel_concat(
     const int i0b = ntg.y == 1 ? ic*n0 : 0;
     const int i0e = ntg.y == 1 ? min(args.ne0, (ic + 1)*n0) : args.ne0;
 
-    const bool from0 = i0b < args.ne00 && i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03;
+    if (args.nb0 == sizeof(T) && args.nb00 == sizeof(T) && args.nb10 == sizeof(T)) {
+        const bool in0 = i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03;
 
-    if (args.dim != 0 && args.nb0 == sizeof(T) && (from0 ? args.nb00 : args.nb10) == sizeof(T)) {
-        device const char * src_row = from0
-            ? src0 + i3*args.nb03 + i2*args.nb02 + i1*args.nb01
-            : src1 + (i3 - o3)*args.nb13 + (i2 - o2)*args.nb12 + (i1 - o1)*args.nb11;
-        device       char * dst_row = dst + i3*args.nb3 + i2*args.nb2 + i1*args.nb1;
+        // the row is a concatenation of a src0 part and a src1 part
+        const int na = in0 ? min(i0e - i0b, max(0, args.ne00 - i0b)) : 0;
+        const int nb = i0e - i0b - na;
 
-        typedef vec<T, 16/sizeof(T)> T16;
+        device const char * r0 = src0 + i3*args.nb03 + i2*args.nb02 + i1*args.nb01;
+        device const char * r1 = src1 + (i3 - o3)*args.nb13 + (i2 - o2)*args.nb12 + (i1 - o1)*args.nb11;
+        device       char * rd = dst  + i3*args.nb3  + i2*args.nb2  + i1*args.nb1;
 
-        device const T * x = (device const T *)(src_row + i0b*sizeof(T));
-        device       T * y = (device       T *)(dst_row + i0b*sizeof(T));
+        concat_copy<T>(r0 + i0b*sizeof(T), rd + i0b*sizeof(T), na, tpitg.x, ntg.x);
+        concat_copy<T>(r1 + (i0b + na - o0)*sizeof(T), rd + (i0b + na)*sizeof(T), nb, tpitg.x, ntg.x);
 
-        const int n = i0e - i0b;
-
-        const size_t rx = (size_t)x % 16;
-
-        if (rx == (size_t)y % 16 && rx % sizeof(T) == 0) {
-            const int np  = min((int)(((16 - rx) % 16)/sizeof(T)), n);
-            const int n16 = (n - np)/(16/sizeof(T));
-
-            for (int i = tpitg.x; i < np; i += ntg.x) {
-                y[i] = x[i];
-            }
-
-            device const T16 * x16 = (device const T16 *)(x + np);
-            device       T16 * y16 = (device       T16 *)(y + np);
-
-            for (int i = tpitg.x; i < n16; i += ntg.x) {
-                y16[i] = x16[i];
-            }
-
-            for (int i = np + n16*(16/sizeof(T)) + tpitg.x; i < n; i += ntg.x) {
-                y[i] = x[i];
-            }
-
-            return;
-        }
+        return;
     }
 
     for (int i0 = i0b + tpitg.x; i0 < i0e; i0 += ntg.x) {

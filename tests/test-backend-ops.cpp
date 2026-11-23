@@ -12984,7 +12984,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_concat(type, {64, 4, 512, 1}, 512, 2, 0));
         test_cases.emplace_back(new test_concat(type, {66, 4, 512, 1}, 512, 2, 0));
         test_cases.emplace_back(new test_concat(type, {128, 4, 512, 1}, 512, 2, 1));
+
+        for (int dim : { 0, 1, 3 }) {
+            test_cases.emplace_back(new test_concat(type, {300, 4, 5, 1}, 300, dim, 0));
+        }
+        test_cases.emplace_back(new test_concat(type, {1025, 4, 512, 1}, 1025, 0, 0));
+        test_cases.emplace_back(new test_concat(type, {3, 4, 512, 1}, 5, 0, 0));
     }
+
+    test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {98306, 8, 1, 1}, 286, 0, 0));
+    test_cases.emplace_back(new test_concat(GGML_TYPE_F16, {98306, 8, 1, 1}, 286, 0, 0));
 
     // GDN conv_input
     for (int64_t ne_b_d : { 31, 32, 33, 64 }) {
@@ -13963,6 +13972,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
         test_cases.emplace_back(new test_concat(type, {2050, 8, 256, 1}, 256, 2, 0));
         test_cases.emplace_back(new test_concat(type, {1024, 8, 2048, 1}, 2048, 2, 0));
+
+        for (int64_t ne0 : { 64, 1024, 4096, 16384 }) {
+            test_cases.emplace_back(new test_concat(type, {ne0, 8, 256, 1}, 256, 0, 0));
+        }
+        test_cases.emplace_back(new test_concat(type, {2050, 8, 256, 1}, 255, 0, 0));
     }
 
     // CONT of a 0<->2 permute at DeepSeek-V4 lightning-indexer shapes:
