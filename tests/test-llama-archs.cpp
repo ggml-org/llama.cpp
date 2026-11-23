@@ -16,6 +16,7 @@
 #include <cstring>
 #include <cstdint>
 #include <filesystem>
+#include <iterator>
 #include <memory>
 #include <random>
 #include <regex>
@@ -177,6 +178,7 @@ static void usage(char ** argv) {
     LOG("  -v <N>                   Set log verbosity level\n");
     LOG("  -b, --backend <backend>  Run only on the given backend device\n");
     LOG("  --kv-shift               Check K-shift against a decode at the shifted positions (CPU only)\n");
+    LOG("  --chunk <n>              Check that token chunks of n tokens (LLAMA_GRAPH_CHUNK) match the graph without chunks\n");
     LOG("  -h, --help               Show this help message\n\n");
     LOG("Examples:\n");
     LOG("  %s\n", argv[0]);
@@ -1904,6 +1906,125 @@ static int test_kv_shift(const std::string & arch_filter, const size_t seed, con
     return n_failed == 0 ? 0 : 1;
 }
 
+// the logits of all tokens, with token chunks of n_chunk tokens ("0": no chunks)
+// batches of n_ubatch/2, n_ubatch and n_ubatch/2 tokens give ubatches with different chunk counts
+static std::vector<float> get_logits_chunk(llama_model * model, const llama_context_params & ctx_params, const std::vector<llama_token> & tokens, const char * n_chunk) {
+    const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    const uint32_t n_ubatch = ctx_params.n_ubatch;
+
+    // the context reads the chunk size when it is created
+    common_set_env("LLAMA_GRAPH_CHUNK", n_chunk);
+    llama_context_ptr lctx(llama_init_from_model(model, ctx_params));
+    common_set_env("LLAMA_GRAPH_CHUNK", "");
+    if (!lctx) {
+        throw std::runtime_error("failed to create llama context");
+    }
+
+    GGML_ASSERT(tokens.size() == 2*n_ubatch);
+    const uint32_t bounds[] = { 0, n_ubatch/2, n_ubatch/2 + n_ubatch, 2*n_ubatch };
+
+    std::vector<float> ret;
+    ret.reserve(tokens.size()*n_vocab);
+    for (size_t c = 0; c + 1 < std::size(bounds); c++) {
+        const uint32_t n_tokens = bounds[c + 1] - bounds[c];
+        decode_range(lctx.get(), tokens.data() + bounds[c], n_tokens, bounds[c], 0, true);
+        for (uint32_t i = 0; i < n_tokens; i++) {
+            const float * logits_ith = llama_get_logits_ith(lctx.get(), i);
+            ret.insert(ret.end(), logits_ith, logits_ith + n_vocab);
+        }
+    }
+    return ret;
+}
+
+// the sparse attention of a token does not depend on the other tokens of the ubatch, so the token chunks
+// (LLAMA_GRAPH_CHUNK) match the graph without chunks
+// not bit-exact: a chunk changes the rounding, and the layers of the dummy models amplify it (to 1e-9 with 3 layers)
+// a different selection of one token gives 1e-3 or more
+static int test_chunk(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const char * n_chunk) {
+    struct user_data_t {
+        struct {
+            ggml_log_callback callback;
+            void * user_data;
+        } log_old;
+
+        int verbosity;
+
+        user_data_t(int verbosity) : verbosity(verbosity) {
+            llama_log_get(&log_old.callback, &log_old.user_data);
+        }
+    };
+    user_data_t ud(verbosity);
+
+    llama_log_set([](ggml_log_level level, const char * text, void * user_data) {
+        const user_data_t * ud = (const user_data_t *) user_data;
+        int verbosity = common_log_get_verbosity(level);
+        if (verbosity <= ud->verbosity) {
+            ud->log_old.callback(level, text, ud->log_old.user_data);
+        }
+    }, &ud);
+
+    const uint32_t n_ubatch = 64;
+    const std::vector<llama_token> tokens = get_tokens(2*n_ubatch, 128, seed);
+
+    size_t n_tests  = 0;
+    size_t n_failed = 0;
+    for (const llm_arch & arch : llama_arch_all()) {
+        if (!arch_matches(arch_filter, arch) || !arch_supported(arch) || !llama_arch_supports_chunks(arch)) {
+            continue;
+        }
+
+        std::string status;
+        n_tests++;
+        try {
+            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, true, 3);
+            // a realistic top-k, so that the selection depends on the indexer query
+            gguf_set_val_u32(gguf_ctx.get(), llama_arch_kv_name(arch, LLM_KV_ATTENTION_INDEXER_TOP_K).c_str(), 8);
+            // for the archs that read the types: layer 1 is recurrent, layer 2 shares the selection of layer 0
+            const uint32_t indexer_types[] = { 1, 0, 0 };
+            gguf_set_arr_data(gguf_ctx.get(), llama_arch_kv_name(arch, LLM_KV_ATTENTION_INDEXER_TYPES).c_str(), GGUF_TYPE_UINT32, indexer_types, std::size(indexer_types));
+            llama_model_ptr model = get_model(gguf_ctx.get(), nullptr, seed, stdev, {});
+
+            llama_context_params ctx_params = llama_context_default_params();
+            ctx_params.n_ctx           = 0;
+            ctx_params.n_threads       = 4;
+            ctx_params.n_threads_batch = 4;
+            ctx_params.n_ubatch        = n_ubatch;
+
+            // with flash attention the masks are F16, which the fused indexer and mask ops need
+            double nmse_val = 0.0;
+            for (const llama_flash_attn_type fa : { LLAMA_FLASH_ATTN_TYPE_DISABLED, LLAMA_FLASH_ATTN_TYPE_ENABLED }) {
+                ctx_params.flash_attn_type = fa;
+
+                const std::vector<float> logits_ref   = get_logits_chunk(model.get(), ctx_params, tokens, "0");
+                const std::vector<float> logits_chunk = get_logits_chunk(model.get(), ctx_params, tokens, n_chunk);
+
+                nmse_val = std::max(nmse_val, nmse(logits_ref, logits_chunk));
+            }
+            const bool ok = nmse_val <= 1e-7;
+            n_failed += ok ? 0 : 1;
+
+            char buf[96];
+            snprintf(buf, sizeof(buf), "%s (%.2e)", ok ? "\033[1;32mOK\033[0m" : "\033[1;31mFAIL\033[0m", nmse_val);
+            status = buf;
+        } catch (const std::exception & err) {
+            n_failed++;
+            status = std::string("\033[1;31mERROR\033[0m (") + err.what() + ")";
+        }
+        LOG("|%s|%s\n", llama_arch_name(arch), status.c_str());
+    }
+
+    if (n_tests == 0) {
+        LOG("Summary: no tests executed\n");
+    } else if (n_failed == 0) {
+        LOG("Summary: all %zu test(s) passed\n", n_tests);
+    } else {
+        LOG("Summary: %zu test(s) executed, %zu failed\n", n_tests, n_failed);
+    }
+
+    llama_log_set(ud.log_old.callback, ud.log_old.user_data);
+    return n_tests > 0 && n_failed == 0 ? 0 : 1;
+}
+
 int main(int argc, char ** argv) {
     // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
     common_log_set_verbosity_thold(LOG_LEVEL_DEBUG);
@@ -1918,6 +2039,7 @@ int main(int argc, char ** argv) {
     std::string out;
     const char * target_backend = nullptr;
     bool kv_shift = false;
+    const char * chunk = nullptr;
 
     int verbosity = LOG_LEVEL_ERROR;
 
@@ -1987,6 +2109,13 @@ int main(int argc, char ** argv) {
             }
         } else if (strcmp(argv[i], "--kv-shift") == 0) {
             kv_shift = true;
+        } else if (strcmp(argv[i], "--chunk") == 0) {
+            if (i + 1 < argc) {
+                chunk = argv[++i];
+            } else {
+                usage(argv);
+                return 1;
+            }
         } else {
             LOG_ERR("%s: unknown argument: %s\n", __func__, argv[i]);
             usage(argv);
@@ -2007,6 +2136,9 @@ int main(int argc, char ** argv) {
         }
         if (kv_shift) {
             return test_kv_shift(arch_filter, seed, stdev, verbosity);
+        }
+        if (chunk) {
+            return test_chunk(arch_filter, seed, stdev, verbosity, chunk);
         }
         return test_backends(arch_filter, seed, stdev, verbosity, target_backend);
     } catch (const std::exception & err) {

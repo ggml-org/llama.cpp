@@ -1065,6 +1065,10 @@ struct llama_model {
     // graph size budget: max graph nodes per model tensor
     virtual uint32_t graph_nodes_per_tensor() const { return 8; }
 
+    // graph size budget: max graph nodes that one token chunk adds to a layer
+    // 0: the graph does not use llm_graph_context::build_chunked
+    virtual uint32_t graph_nodes_per_chunk() const { return 0; }
+
     // apply Hadamard transform to the lightning indexer keys
     virtual bool lid_k_hdmd() const { return false; }
 

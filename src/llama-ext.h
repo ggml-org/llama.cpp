@@ -32,6 +32,9 @@ LLAMA_API bool llama_arch_supports_sm_tensor(llm_arch arch);
 
 LLAMA_API bool llama_arch_supports_mixed_batch(llm_arch arch);
 
+// the graph of the arch uses token chunks (llm_graph_context::build_chunked)
+LLAMA_API bool llama_arch_supports_chunks(llm_arch arch);
+
 // FIXME temporary function for better error messages
 LLAMA_API bool llama_arch_supports_save(llm_arch arch);
 

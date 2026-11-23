@@ -419,6 +419,12 @@ llama_model * llama_model_create(llm_arch arch, const llama_model_params & param
     return model;
 }
 
+bool llama_arch_supports_chunks(llm_arch arch) {
+    const std::unique_ptr<llama_model> model(llama_model_create(arch, llama_model_default_params()));
+
+    return model && model->graph_nodes_per_chunk() > 0;
+}
+
 llama_model * llama_model_create(llama_model_loader & ml, const llama_model_params & params) {
     llm_arch arch = ml.get_arch();
     if (arch == LLM_ARCH_UNKNOWN) {
