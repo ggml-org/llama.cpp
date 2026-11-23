@@ -5633,6 +5633,7 @@ struct test_ssm_conv_step : public test_case {
     const int64_t n_conv;
     const int64_t nc;
     const int64_t ch_offs; // channel offset of the history view in a wider history
+    const bool residual;   // a residual ADD after the step (Inkling 2 layer residual), fused into the step by CUDA
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -5642,10 +5643,11 @@ struct test_ssm_conv_step : public test_case {
     bool run_whole_graph() override { return true; }
 
     std::string vars() override {
-        return VARS_TO_STR3(n_conv, nc, ch_offs);
+        return VARS_TO_STR4(n_conv, nc, ch_offs, residual);
     }
 
-    test_ssm_conv_step(int64_t n_conv, int64_t nc, int64_t ch_offs) : n_conv(n_conv), nc(nc), ch_offs(ch_offs) {}
+    test_ssm_conv_step(int64_t n_conv, int64_t nc, int64_t ch_offs, bool residual = false)
+        : n_conv(n_conv), nc(nc), ch_offs(ch_offs), residual(residual) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * hist  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_conv - 1, nc + 2*ch_offs);
@@ -5666,6 +5668,11 @@ struct test_ssm_conv_step : public test_case {
 
         ggml_tensor * conv = ggml_reshape_2d(ctx, ggml_ssm_conv(ctx, x, w), nc, 1);
         ggml_tensor * y    = ggml_scale(ctx, ggml_add(ctx, cur, conv), 0.33f);
+        if (residual) {
+            ggml_tensor * res = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nc, 1);
+            ggml_set_name(res, "res");
+            y = ggml_add(ctx, res, y);
+        }
 
         // the store first, so that the graph keeps the step's nodes side by side
         ggml_tensor * out = ggml_concat(ctx, stored, y, 0);

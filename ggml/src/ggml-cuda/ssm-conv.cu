@@ -245,7 +245,7 @@ template <int d_conv>
 static __global__ void ssm_conv_step_f32(
         const float * __restrict__ past, const int64_t past_s1, const char * __restrict__ x, const int64_t x_s,
         const float * __restrict__ w, const int64_t w_s1, const float * res, const float scale,
-        float * dst, float * __restrict__ state, const int nc) {
+        float * dst, float * __restrict__ state, const int nc, const float * res2, float * dst2) {
     const int c = blockIdx.x*blockDim.x + threadIdx.x;
     if (c >= nc) {
         return;
@@ -269,11 +269,16 @@ static __global__ void ssm_conv_step_f32(
     for (int k = 0; k < d_conv - 1; ++k) {
         state[c*(d_conv - 1) + k] = win[k + 1];
     }
-    dst[c] = y;
+    // with a residual add fused after the step, only its sum is written (res2 + y, the ADD's operand order)
+    if (dst2) {
+        dst2[c] = res2[c] + y;
+    } else {
+        dst[c] = y;
+    }
 }
 
 void ggml_cuda_op_ssm_conv_step(ggml_backend_cuda_context & ctx, const ggml_tensor * concat, ggml_tensor * cpy,
-        const ggml_tensor * conv, const ggml_tensor * add, ggml_tensor * scale) {
+        const ggml_tensor * conv, const ggml_tensor * add, ggml_tensor * scale, const ggml_tensor * res2, ggml_tensor * add2) {
     const ggml_tensor * past  = concat->src[0];   // [n_conv - 1, nc]
     const ggml_tensor * x     = concat->src[1];   // [1, nc]
     const ggml_tensor * w     = conv->src[1];     // [n_conv, nc]
@@ -297,11 +302,13 @@ void ggml_cuda_op_ssm_conv_step(ggml_backend_cuda_context & ctx, const ggml_tens
     const float * res_d   = (const float *) res->data;
     float       * dst_d   = (float *) scale->data;
     float       * state_d = (float *) state->data;
+    const float * res2_d  = add2 ? (const float *) res2->data : nullptr;
+    float       * dst2_d  = add2 ? (float *) add2->data : nullptr;
 
     switch (n_conv) {
-        case 2: ssm_conv_step_f32<2><<<grid, block, 0, stream>>>(past_d, past_s1, x_d, x->nb[1], w_d, w_s1, res_d, s, dst_d, state_d, nc); break;
-        case 3: ssm_conv_step_f32<3><<<grid, block, 0, stream>>>(past_d, past_s1, x_d, x->nb[1], w_d, w_s1, res_d, s, dst_d, state_d, nc); break;
-        case 4: ssm_conv_step_f32<4><<<grid, block, 0, stream>>>(past_d, past_s1, x_d, x->nb[1], w_d, w_s1, res_d, s, dst_d, state_d, nc); break;
+        case 2: ssm_conv_step_f32<2><<<grid, block, 0, stream>>>(past_d, past_s1, x_d, x->nb[1], w_d, w_s1, res_d, s, dst_d, state_d, nc, res2_d, dst2_d); break;
+        case 3: ssm_conv_step_f32<3><<<grid, block, 0, stream>>>(past_d, past_s1, x_d, x->nb[1], w_d, w_s1, res_d, s, dst_d, state_d, nc, res2_d, dst2_d); break;
+        case 4: ssm_conv_step_f32<4><<<grid, block, 0, stream>>>(past_d, past_s1, x_d, x->nb[1], w_d, w_s1, res_d, s, dst_d, state_d, nc, res2_d, dst2_d); break;
         default: GGML_ABORT("unsupported conv width %d", n_conv);
     }
 }

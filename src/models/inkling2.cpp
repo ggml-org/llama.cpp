@@ -537,6 +537,8 @@ ggml_tensor * llama_model_inkling2::graph::build_layer(int il, int ip, ggml_tens
 
     cur = ggml_add(ctx0, ffn_inp, cur);
     cb(cur, "l_out", il);
+    // right after the FFN-out convolution, before the next layer's nodes: a backend can add it in the same step
+    ggml_build_forward_expand(gf, cur);
 
     return cur;
 }
