@@ -743,6 +743,12 @@ struct ggml_backend_opencl_context {
     // scratch copy of the router weights to avoid dst aliasing
     ggml_cl_buffer prealloc_moe_combine_w;
     ggml_cl_buffer prealloc_splitk_partial;  // [ksplit * M] partials for split-K GEMV
+    cl_mem coopk_c8_qa_image = nullptr;
+    cl_mem coopk_c8_qa_buffer = nullptr;
+    size_t coopk_c8_qa_image_bytes = 0;
+    cl_mem coopk_c8_ds_image = nullptr;
+    cl_mem coopk_c8_ds_buffer = nullptr;
+    size_t coopk_c8_ds_image_bytes = 0;
     ggml_cl_buffer iq2_s_grid_buffer;
     ggml_cl_buffer iq2_xs_grid_buffer;
     ggml_cl_buffer iq2_xxs_grid_buffer;
@@ -1033,6 +1039,22 @@ struct ggml_backend_opencl_context {
     }
 
     ~ggml_backend_opencl_context() {
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+        for (cl_kernel kernel : {
+                mul_mat.kernel_gemm_coopk_q4_k_q8_1_dp4a_bin_c8,
+                mul_mat.kernel_quant_a_q8_1_k4
+            }
+        ) {
+            if (kernel != nullptr) {
+                CL_CHECK(clReleaseKernel(kernel));
+            }
+        }
+        for (cl_mem image : {coopk_c8_qa_image, coopk_c8_ds_image}) {
+            if (image != nullptr) {
+                CL_CHECK(clReleaseMemObject(image));
+            }
+        }
+#endif
         for (cl_kernel kernel : {
                 fa.kernel_mul_mm_f16_f32_kq_p8,
                 fa.kernel_mul_mm_q8_f32_kqv,
