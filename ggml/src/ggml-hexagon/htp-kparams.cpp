@@ -289,7 +289,16 @@ static bool htp_flash_attn_is_hmx_eligible(
     const uint32_t S             = k->ne[1];
     const uint32_t total_threads = n_hvx * htp_session_mdev_count(sess);
 
-    if (DK > 256 || (DK == 256 && (DV > 256 || n_kv_heads < total_threads))) {
+    if (DK > 256 || DV > 256) {
+        return true;
+    }
+
+    // W8A8 HMX pads M=1 decode rows to 64, so HVX is much faster for Q8_0 KV decode.
+    if (k->type == GGML_TYPE_Q8_0 || v->type == GGML_TYPE_Q8_0) {
+        return false;
+    }
+
+    if (DK == 256 && n_kv_heads < total_threads) {
         return true;
     }
 
@@ -408,13 +417,23 @@ static bool htp_kparams_solve_flash_attn(
         const uint32_t DV_pad = hex_round_up(DV, 64);
         const bool use_w8a8 = (opt_fa_select >= 3 && k->type == GGML_TYPE_Q8_0 && v->type == GGML_TYPE_Q8_0 &&
                                DK % 32 == 0 && DV % 32 == 0 && DK <= 768);
-        size_t Br = 0, Bc = 0;
-        int ret = hmx_fa_find_chunk_size(&Br, &Bc, G, DK_pad, DV_pad, neq1, nek1, vtcm_size, n_hvx, (q->type == GGML_TYPE_F32), sinks != nullptr, n_head, fa_team_size, use_w8a8);
-        if (ret == 0) {
-            kparams->kernel_type = HTP_FA_KERNEL_HMX;
-            if (use_w8a8) {
-                kparams->flags |= HTP_FA_FLAG_W8A8;
-            }
+        const bool has_mask       = (mask != nullptr);
+        const bool mask_broadcast = (has_mask && mask->ne[2] == 1);
+
+        struct hmx_fa_layout_params lp = {};
+        lp.kernel_type    = use_w8a8 ? HTP_FA_KERNEL_HMX_W8A8 : HTP_FA_KERNEL_HMX_F16;
+        lp.q_type         = q->type;
+        lp.gqa_factor     = G;
+        lp.DK             = DK_pad;
+        lp.DV             = DV_pad;
+        lp.n_hvx          = n_hvx;
+        lp.n_heads        = n_head;
+        lp.has_mask       = has_mask;
+        lp.mask_broadcast = mask_broadcast;
+        lp.has_sinks      = (sinks != nullptr);
+
+        if (hmx_fa_find_chunk_size(&lp, neq1, nek1, vtcm_size, fa_team_size) == 0) {
+            kparams->kernel_type = lp.kernel_type;
             if (logit_softcap == 0.0f) {
                 kparams->scale         = scale * (float) M_LOG2E;
                 kparams->logit_softcap = 0.0f;
@@ -422,15 +441,18 @@ static bool htp_kparams_solve_flash_attn(
                 kparams->scale         = scale;
                 kparams->logit_softcap = logit_softcap * (float) M_LOG2E;
             }
-            kparams->Br                  = Br;
-            kparams->Bc                  = Bc;
-            kparams->n_kv_blocks         = (nek1 + Bc - 1) / Bc;
-            kparams->n_hvx               = (kparams->n_kv_blocks >= 3 && n_hvx >= 2) ? n_hvx : 1;
-            kparams->u.hmx.g_br          = hex_align_up(G * Br, use_w8a8 ? HMX_W8A8_ACT_TILE_N_ROWS : HMX_FP16_TILE_N_ROWS);
-            kparams->u.hmx.pipeline      = (kparams->n_kv_blocks >= 3 && n_hvx >= 2) ? 1 : 0;
-            kparams->vtcm_size           = hmx_fa_compute_vtcm_usage(G, DK_pad, DV_pad, Br, Bc, kparams->n_hvx, kparams->u.hmx.pipeline != 0, (q->type == GGML_TYPE_F32), sinks != nullptr, n_head, use_w8a8);
-            kparams->u.hmx.mask_broadcast = (mask != nullptr && mask->ne[2] == 1) ? 1 : 0;
-            kparams->u.hmx.div_G         = init_fastdiv_values(G);
+            kparams->Br                   = lp.Br;
+            kparams->Bc                   = lp.Bc;
+            kparams->n_kv_blocks          = (nek1 + lp.Bc - 1) / lp.Bc;
+            kparams->n_hvx                = (kparams->n_kv_blocks >= 3 && n_hvx >= 2) ? n_hvx : 1;
+            kparams->u.hmx.g_br           = hex_align_up(G * lp.Br, use_w8a8 ? HMX_W8A8_ACT_TILE_N_ROWS : HMX_FP16_TILE_N_ROWS);
+            kparams->u.hmx.mask_broadcast = mask_broadcast ? 1 : 0;
+            // vtcm_mask_buf is single-buffered for non-broadcast masks, so disable block pipelining.
+            kparams->u.hmx.pipeline       = (kparams->n_kv_blocks >= 3 && n_hvx >= 2 && (!has_mask || mask_broadcast)) ? 1 : 0;
+            lp.n_hvx                      = kparams->n_hvx;
+            lp.pipeline                   = (kparams->u.hmx.pipeline != 0);
+            kparams->vtcm_size            = hmx_fa_compute_vtcm_usage(&lp);
+            kparams->u.hmx.div_G          = init_fastdiv_values(G);
             if (mask) {
                 kparams->src3_div2 = init_fastdiv_values(mask->ne[2]);
                 kparams->src3_div3 = init_fastdiv_values(mask->ne[3]);
@@ -445,11 +467,20 @@ static bool htp_kparams_solve_flash_attn(
     kparams->n_kv_blocks = (k->ne[1] + 64 - 1) / 64;
     kparams->n_hvx       = n_hvx;
 
-    const size_t size_q_row_padded = hex_round_up(q->ne[0] * ((q->type == GGML_TYPE_F32) ? 4 : 2), 128);
+    const size_t size_q_row_padded = hex_round_up(htp_tensor_get_row_size(q->type, q->ne[0]), 128);
     const size_t size_k_row_padded = hex_round_up(k->ne[0] * 2, 128);
     const size_t size_v_row_padded = hex_round_up(v->ne[0] * 2, 128);
 
-    kparams->vtcm_size = hvx_fa_compute_vtcm_usage(DK, DV, (q->type == GGML_TYPE_F32), mask != nullptr, sinks != nullptr, n_head, n_hvx);
+    struct hvx_fa_layout_params hvx_lp = {};
+    hvx_lp.q_type    = q->type;
+    hvx_lp.DK        = DK;
+    hvx_lp.DV        = DV;
+    hvx_lp.n_heads   = n_head;
+    hvx_lp.n_hvx     = n_hvx;
+    hvx_lp.has_mask  = (mask != nullptr);
+    hvx_lp.has_sinks = (sinks != nullptr);
+
+    kparams->vtcm_size = hvx_fa_compute_vtcm_usage(&hvx_lp);
     if ((size_t) kparams->vtcm_size > vtcm_size) {
         HEX_VERBOSE("ggml-hex: skip flash_attn_ext because VTCM needed (%d) > budget (%zu)\n",
                     kparams->vtcm_size, vtcm_size);

@@ -168,8 +168,10 @@ static std::string format_kernel_params(const htp_opnode & node) {
         const auto * kparams = node.kparams<htp_fa_kernel_params>();
         const char * path = "unknown";
         int32_t type = kparams->kernel_type;
-        if (type == HTP_FA_KERNEL_HMX) {
-            path = kparams->u.hmx.pipeline ? "hmx-pipe" : "hmx-seq";
+        if (type == HTP_FA_KERNEL_HMX_F16) {
+            path = kparams->u.hmx.pipeline ? "hmx-f16-pipe" : "hmx-f16-seq";
+        } else if (type == HTP_FA_KERNEL_HMX_W8A8) {
+            path = kparams->u.hmx.pipeline ? "hmx-w8a8-pipe" : "hmx-w8a8-seq";
         } else if (type == HTP_FA_KERNEL_HVX) {
             path = "hvx";
         }
