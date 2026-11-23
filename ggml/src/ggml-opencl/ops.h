@@ -309,6 +309,11 @@ struct ggml_opencl_abs_kernels {
     cl_kernel kernel_abs_f16_nc;
 };
 
+struct ggml_opencl_xielu_kernels {
+    cl_kernel kernel_xielu_f32;
+    cl_kernel kernel_xielu_f16;
+};
+
 struct ggml_opencl_unary_ext_kernels {
     cl_kernel kernel_sgn_f32;
     cl_kernel kernel_sgn_f32_4;
@@ -905,6 +910,7 @@ void ggml_cl_neg(ggml_backend_t backend, const ggml_tensor * src0, const ggml_te
 void ggml_cl_exp(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_expm1(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_abs(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
+void ggml_cl_xielu(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_sgn(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_step(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_elu(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
@@ -1024,6 +1030,7 @@ void ggml_cl_load_kernels_neg(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_exp(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_expm1(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_abs(ggml_backend_opencl_context * backend_ctx);
+void ggml_cl_load_kernels_xielu(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_softplus(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_repeat(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_pad(ggml_backend_opencl_context * backend_ctx);

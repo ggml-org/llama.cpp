@@ -862,6 +862,7 @@ void load_cl_kernels(ggml_backend_opencl_context * backend_ctx) {
     ggml_cl_load_kernels_exp(backend_ctx);
     ggml_cl_load_kernels_expm1(backend_ctx);
     ggml_cl_load_kernels_abs(backend_ctx);
+    ggml_cl_load_kernels_xielu(backend_ctx);
     ggml_cl_load_kernels_softplus(backend_ctx);
     ggml_cl_load_kernels_upscale(backend_ctx);
     ggml_cl_load_kernels_concat(backend_ctx);

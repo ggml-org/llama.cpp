@@ -1249,6 +1249,14 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 case GGML_UNARY_OP_SILU:
                     return op->src[0]->type == op->type &&
                            (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16);
+                case GGML_UNARY_OP_XIELU:
+                    for (int64_t ne : op->src[0]->ne) {
+                        if (ne > INT_MAX) {
+                            return false;
+                        }
+                    }
+                    return op->src[0]->type == op->type &&
+                           (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16);
                 case GGML_UNARY_OP_GELU:
                 case GGML_UNARY_OP_RELU:
                 case GGML_UNARY_OP_GELU_ERF:
@@ -2454,6 +2462,12 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
                         return false;
                     }
                     func = ggml_cl_silu;
+                    break;
+                case GGML_UNARY_OP_XIELU:
+                    if (!any_on_device) {
+                        return false;
+                    }
+                    func = ggml_cl_xielu;
                     break;
                 case GGML_UNARY_OP_RELU:
                     if (!any_on_device) {

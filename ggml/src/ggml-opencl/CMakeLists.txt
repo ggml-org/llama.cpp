@@ -41,6 +41,7 @@ ggml_add_backend_library(${TARGET_NAME}
                          ops/exp.cpp
                          ops/expm1.cpp
                          ops/abs.cpp
+                         ops/xielu.cpp
                          ops/softplus.cpp
                          ops/repeat.cpp
                          ops/pad.cpp
@@ -470,6 +471,7 @@ set(GGML_OPENCL_KERNELS
     expm1
     abs
     unary_ext
+    xielu
     softplus
     pad
     repeat

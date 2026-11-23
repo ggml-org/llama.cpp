@@ -878,6 +878,7 @@ struct ggml_backend_opencl_context {
     ggml_opencl_exp_kernels exp = {};
     ggml_opencl_expm1_kernels expm1 = {};
     ggml_opencl_abs_kernels abs = {};
+    ggml_opencl_xielu_kernels xielu = {};
     ggml_opencl_unary_ext_kernels unary_ext = {};
     ggml_opencl_softplus_kernels softplus = {};
     ggml_opencl_upscale_kernels upscale = {};
@@ -1056,6 +1057,8 @@ struct ggml_backend_opencl_context {
         }
 #endif
         for (cl_kernel kernel : {
+                xielu.kernel_xielu_f32,
+                xielu.kernel_xielu_f16,
                 fa.kernel_mul_mm_f16_f32_kq_p8,
                 fa.kernel_mul_mm_q8_f32_kqv,
                 fa.kernel_fa_p8_fixup,
