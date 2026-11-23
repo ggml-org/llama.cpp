@@ -335,6 +335,26 @@ static void test_all(const std::string & title, std::function<void(const TestCas
 
     test({
         SUCCESS,
+        "boolean true (any value)",
+        "true",
+        R"""(
+            array ::= "[" space ( value ("," space value)* )? space "]"
+            boolean ::= ("true" | "false")
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            decimal-part ::= [0-9]{1,16}
+            integral-part ::= [0] | [1-9] [0-9]{0,15}
+            null ::= "null"
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
+            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? space "}"
+            root ::= value
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            string ::= "\"" char* "\""
+            value ::= object | array | string | number | boolean | null
+        )"""
+    });
+
+    test({
+        SUCCESS,
         "exotic formats",
         R"""({
             "items": [
@@ -1590,6 +1610,13 @@ static void test_all(const std::string & title, std::function<void(const TestCas
         ""
     });
 
+    test({
+        FAILURE,
+        "boolean false subschema",
+        R"""({"type": "object", "properties": {"value": false}})""",
+        ""
+    });
+
     // only the property with the bad pattern degrades
     test({
         SUCCESS,
@@ -1638,6 +1665,14 @@ int main() {
             }
         })""");
         assert(json_schema_to_grammar(common_chat_schema_from_json(schema)) == json_schema_to_grammar(schema, true));
+    }
+
+    // a boolean true compiles to the same grammar as the empty schema, nested included
+    {
+        fprintf(stderr, "- boolean true\n");
+        assert(json_schema_to_grammar(common_json::parse("true"), true) == json_schema_to_grammar(common_json::parse("{}"), true));
+        assert(json_schema_to_grammar(common_json::parse(R"""({"properties": {"a": true}})"""), true) ==
+               json_schema_to_grammar(common_json::parse(R"""({"properties": {"a": {}}})"""), true));
     }
 
     // a property node carries its $ref target, so its grammar names the ref rule
