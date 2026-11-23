@@ -334,16 +334,14 @@ static __device__ __forceinline__ uint32_t ggml_hip_perm(const uint32_t hi, cons
 #endif // __has_builtin(__builtin_amdgcn_is_invocable)
 }
 
-template<int width>
+template<int width, int warp_size>
 static __device__ __forceinline__ uint32_t ggml_cuda_ballot_subgroup(int x) {
-    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
-
     static_assert(width == 16 || width == 32, "unsupported subgroup width");
     static_assert(warp_size == 32 || warp_size == 64, "unsupported physical warp size");
     static_assert(width < warp_size && warp_size % width == 0, "subgroup width must divide the physical warp size");
     static_assert(sizeof(ggml_cuda_thread_mask_t) == sizeof(uint64_t), "ballot requires a 64-bit thread mask");
 
-    const uint64_t votes = ggml_cuda_ballot(x != 0);
+    const uint64_t votes = __ballot_sync(~uint64_t(0), x != 0);
     const uint32_t lane = __builtin_amdgcn_mbcnt_hi(~0u, __builtin_amdgcn_mbcnt_lo(~0u, 0u));
     const uint32_t mask = width == 16 ? 0xffffu : 0xffffffffu;
 

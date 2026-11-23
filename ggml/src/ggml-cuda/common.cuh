@@ -565,7 +565,7 @@ static __device__ __forceinline__ int warp_reduce_all(int x) {
         return ggml_cuda_all(x);
 #if defined(GGML_USE_HIP)
     } else if constexpr (width == 16 || width == 32) {
-        return ggml_cuda_ballot_subgroup<width>(x) == (width == 16 ? 0xffffu : 0xffffffffu);
+        return ggml_cuda_ballot_subgroup<width, ggml_cuda_get_physical_warp_size()>(x) == (width == 16 ? 0xffffu : 0xffffffffu);
 #endif
     } else {
 #pragma unroll
@@ -582,7 +582,7 @@ static __device__ __forceinline__ int warp_reduce_any(int x) {
         return ggml_cuda_any(x);
 #if defined(GGML_USE_HIP)
     } else if constexpr (width == 16 || width == 32) {
-        return ggml_cuda_ballot_subgroup<width>(x) != 0;
+        return ggml_cuda_ballot_subgroup<width, ggml_cuda_get_physical_warp_size()>(x) != 0;
 #endif
     } else {
 #pragma unroll
