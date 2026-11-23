@@ -9,6 +9,7 @@
 		type ModelQuantGroup,
 		type ModelsTableGroup
 	} from './utils';
+	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
 	import * as Empty from '@ggml-org/llama-ui/ui/empty';
 	import {
 		ArrowDown,
@@ -22,7 +23,6 @@
 	} from '@lucide/svelte';
 	import { DialogConfirmDownload } from '#lib/components/app/dialogs/index.ts';
 	import {
-		CollapsibleRegion,
 		GroupedList,
 		type GroupedListGroup,
 		GroupedListUnit,
@@ -235,18 +235,20 @@
 			onToggle={() => toggleQuants(entry.key)}
 		/>
 
-		<CollapsibleRegion open={!collapsedQuants.has(entry.key)}>
-			{#each entry.quants as quant (quant.id)}
-				<ModelsManagerQuantRow
-					indent={indent + 24}
-					{isFavorite}
-					onDelete={requestDelete}
-					{onSelect}
-					option={quant}
-					selected={selectedId === quant.id}
-				/>
-			{/each}
-		</CollapsibleRegion>
+		<Collapsible.Root open={!collapsedQuants.has(entry.key)}
+			><Collapsible.Content>
+				{#each entry.quants as quant (quant.id)}
+					<ModelsManagerQuantRow
+						indent={indent + 24}
+						{isFavorite}
+						onDelete={requestDelete}
+						{onSelect}
+						option={quant}
+						selected={selectedId === quant.id}
+					/>
+				{/each}
+			</Collapsible.Content></Collapsible.Root
+		>
 	{:else}
 		<ModelsManagerModelRow
 			{indent}
