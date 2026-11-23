@@ -335,6 +335,7 @@ private:
     //
 
     const llama_model & model;
+    const bool no_alloc;
 
     llama_cparams cparams;
 

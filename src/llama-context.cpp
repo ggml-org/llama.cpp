@@ -160,10 +160,22 @@ static const llm_fused_op_probe llm_fused_op_top_k_mask_probe = {
     /*.n_tokens_per_seq =*/ 1,
 };
 
+// a model loaded with no_alloc only attaches size-0 dummy weight buffers; if the caller
+// bound real buffers before creating the context, allocate context memory as usual
+static bool llama_model_has_allocated_tensors(const llama_model & model) {
+    for (const auto & [_, t] : model.tensors_by_name) {
+        if (t != nullptr && t->buffer != nullptr && ggml_backend_buffer_get_size(t->buffer) > 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 llama_context::llama_context(
         const llama_model & model,
               llama_context_params params) :
     model(model),
+    no_alloc(model.no_alloc() && !llama_model_has_allocated_tensors(model)),
     cvec(std::make_unique<llama_adapter_cvec>()),
     loras(std::make_unique<llama_adapter_loras>()),
     // MTP uses the embd input for the hidden state
@@ -536,7 +548,7 @@ llama_context::llama_context(
             /*.swa_full  =*/ params.swa_full,
             /*.ctx_type  =*/ cparams.ctx_type,
             /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
-            /*.no_alloc  =*/ model.no_alloc(),
+            /*.no_alloc  =*/ no_alloc,
         };
 
         memory.reset(model.create_memory(params_mem, cparams));
@@ -607,7 +619,7 @@ llama_context::llama_context(
         }
 
         if (cparams.moe_cache_size > 0) {
-            moe_cache = std::make_unique<llama_moe_cache>(model, model.no_alloc(), backend_ptrs, backend_buft, cparams.moe_cache_size, cparams.moe_cache_cpu_share);
+            moe_cache = std::make_unique<llama_moe_cache>(model, no_alloc, backend_ptrs, backend_buft, cparams.moe_cache_size, cparams.moe_cache_cpu_share);
         }
 
         sched_reserve();
@@ -635,7 +647,7 @@ llama_context::~llama_context() {
     synchronize();
 
     // when training, ggml_opt allocates extra buffers through the scheduler, so the sizes no longer match the expectation
-    if (!model.no_alloc() && !opt_ctx) {
+    if (!no_alloc && !opt_ctx) {
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
             ggml_backend_t             backend = backend_ptrs[i];
             ggml_backend_buffer_type_t buft    = backend_buft[i];
@@ -846,7 +858,7 @@ void llama_context::sched_reserve() {
     // reserve pp (prompt processing) graph first so that buffers are only allocated once
     {
         auto * gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get(),
-                model.no_alloc(), model.no_alloc() ? backend_buf_exp_size.data() : nullptr);
+                no_alloc, no_alloc ? backend_buf_exp_size.data() : nullptr);
         if (!gf) {
             if (cparams.pipeline_parallel) {
                 LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
@@ -877,7 +889,7 @@ void llama_context::sched_reserve() {
         n_splits_tg = n_splits_pp;
         n_nodes_tg  = n_nodes_pp;
     } else {
-        auto * gf = graph_reserve(n_seqs, n_seqs, n_seqs, mctx.get(), model.no_alloc());
+        auto * gf = graph_reserve(n_seqs, n_seqs, n_seqs, mctx.get(), no_alloc);
         if (!gf) {
             throw std::runtime_error("failed to allocate compute tg buffers");
         }
@@ -899,10 +911,10 @@ void llama_context::sched_reserve() {
                 // [TAG_RESERVE_DIAG_DECAY]
                 // the `inp_diag_decay` tensor size scales with `n_seq_tokens^2` which
                 // makes `n_seqs == 1` use more memory for the compute graph compared to `n_seqs > 1`
-                gf = graph_reserve(n_tokens, 1,      n_outputs_pp, mctx.get(), model.no_alloc());
+                gf = graph_reserve(n_tokens, 1,      n_outputs_pp, mctx.get(), no_alloc);
                 break;
             default:
-                gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get(), model.no_alloc());
+                gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get(), no_alloc);
         };
 
         if (!gf) {
@@ -913,7 +925,7 @@ void llama_context::sched_reserve() {
     for (size_t i = 0; i < backend_ptrs.size(); ++i) {
         ggml_backend_t             backend = backend_ptrs[i];
         ggml_backend_buffer_type_t buft    = backend_buft[i];
-        if (!model.no_alloc()) {
+        if (!no_alloc) {
             backend_buf_exp_size[i] = ggml_backend_sched_get_buffer_size(sched.get(), backend);
         }
         if (backend_buf_exp_size[i] > 1) {
@@ -4130,7 +4142,7 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
             ret[buft].context += size;
         }
     }
-    if (model.no_alloc()) {
+    if (no_alloc) {
         for (size_t i = 0; i < backends.size(); ++i) {
             ggml_backend_t             backend = backends[i].get();
             ggml_backend_buffer_type_t buft    = ggml_backend_sched_get_buffer_type(sched.get(), backend);
