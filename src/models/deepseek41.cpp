@@ -600,13 +600,15 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
                     // own scores, restricted to the source's candidate blocks: 0 inside them, -inf elsewhere
                     ggml_tensor * bsel = ggml_cont(ctx0, rows(cand_sel));
                     const int64_t k_b = bsel->ne[0];
-                    ggml_tensor * bm    = ggml_fill(ctx0, ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, n_blk, nc*n_stream, 1), -INFINITY);
-                    ggml_tensor * zeros = ggml_fill(ctx0, ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, k_b, nc*n_stream, 1), 0.0f);
+                    ggml_tensor * bm    = ggml_fill_inplace(ctx0, ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, n_blk, nc*n_stream, 1), -INFINITY);
+                    ggml_tensor * zeros = ggml_fill_inplace(ctx0, ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, k_b, nc*n_stream, 1), 0.0f);
                     bm = ggml_set_rows(ctx0, bm, zeros, ggml_reshape_3d(ctx0, bsel, k_b, nc*n_stream, 1));
-                    bm = ggml_reshape_2d(ctx0, ggml_repeat_4d(ctx0, bm, bs, n_blk, nc*n_stream, 1), bs*n_blk, nc*n_stream);
-                    bm = ggml_reshape_4d(ctx0, ggml_cont(ctx0, ggml_view_2d(ctx0, bm, n_comp, nc*n_stream, bm->nb[1], 0)), n_comp, nc, 1, n_stream);
-                    cb(bm, "cand_mask", il);
-                    score = ggml_add(ctx0, score, bm);
+                    // broadcast the per-block mask over the rows of each block instead of materializing the repeated mask
+                    ggml_tensor * s3 = ggml_reshape_3d(ctx0, score, bs, n_blk, nc*n_stream);
+                    s3 = ggml_add(ctx0, s3, bm);
+                    cb(s3, "cand_mask", il);
+                    score = ggml_reshape_2d(ctx0, s3, n_comp, nc*n_stream);
+                    score = ggml_reshape_4d(ctx0, score, n_comp, nc, 1, n_stream);
                 }
 
                 parts_top_k.push_back(ggml_top_k(ctx0, score, std::min<int64_t>(n_comp, hparams.indexer_top_k)));
@@ -625,6 +627,9 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
             if (pick_blk) {
                 cand_sel    = join(parts_sel);
                 cand_n_comp = n_comp;
+                // expand the selection here: otherwise the first use of cand_sel (a source layer much later)
+                // keeps this layer's full [n_comp, n_tokens] score alive across the layers in between
+                ggml_build_forward_expand(gf, cand_sel);
             }
             top_k = ggml_cont(ctx0, join(parts_top_k));
             cb(top_k, "idx_top_k", il);
