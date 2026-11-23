@@ -2,6 +2,9 @@
 #include "dequantize.h"
 #include "quantize.h"
 
+constant short FC_concat_dim   [[function_constant(FC_CONCAT + 0)]];
+constant bool  FC_concat_split [[function_constant(FC_CONCAT + 1)]];
+
 template<typename T0, typename T1>
 kernel void kernel_cpy_t_t(
         constant ggml_metal_kargs_cpy & args,
@@ -213,22 +216,22 @@ kernel void kernel_concat(
 
     const int i3 = tgpig.z;
     const int i2 = tgpig.y;
-    const int i1 = ntg.y == 1 ? tgpig.x/args.nc0 : tgpig.x*ntg.y + tpitg.y;
-    const int ic = ntg.y == 1 ? tgpig.x%args.nc0 : 0;
+    const int i1 = FC_concat_split ? tgpig.x/args.nc0 : tgpig.x*ntg.y + tpitg.y;
+    const int ic = FC_concat_split ? tgpig.x%args.nc0 : 0;
 
     if (i1 >= args.ne1) {
         return;
     }
 
-    const int o0 = args.dim == 0 ? args.ne00 : 0;
-    const int o1 = args.dim == 1 ? args.ne01 : 0;
-    const int o2 = args.dim == 2 ? args.ne02 : 0;
-    const int o3 = args.dim == 3 ? args.ne03 : 0;
+    const int o0 = FC_concat_dim == 0 ? args.ne00 : 0;
+    const int o1 = FC_concat_dim == 1 ? args.ne01 : 0;
+    const int o2 = FC_concat_dim == 2 ? args.ne02 : 0;
+    const int o3 = FC_concat_dim == 3 ? args.ne03 : 0;
 
     // chunk ic of nc0 along the row
     const int n0  = (args.ne0 + args.nc0 - 1)/args.nc0;
-    const int i0b = ntg.y == 1 ? ic*n0 : 0;
-    const int i0e = ntg.y == 1 ? min(args.ne0, (ic + 1)*n0) : args.ne0;
+    const int i0b = FC_concat_split ? ic*n0 : 0;
+    const int i0e = FC_concat_split ? min(args.ne0, (ic + 1)*n0) : args.ne0;
 
     if (args.nb0 == sizeof(T) && args.nb00 == sizeof(T) && args.nb10 == sizeof(T)) {
         const bool in0 = i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03;
@@ -287,17 +290,17 @@ kernel void kernel_concat_q(
     // note: for quantized types, the args are in units of blocks (nb0 == type_size)
     const int i3 = tgpig.z;
     const int i2 = tgpig.y;
-    const int i1 = ntg.y == 1 ? tgpig.x/args.nc0 : tgpig.x*ntg.y + tpitg.y;
-    const int ic = ntg.y == 1 ? tgpig.x%args.nc0 : 0;
+    const int i1 = FC_concat_split ? tgpig.x/args.nc0 : tgpig.x*ntg.y + tpitg.y;
+    const int ic = FC_concat_split ? tgpig.x%args.nc0 : 0;
 
     if (i1 >= args.ne1) {
         return;
     }
 
-    const int o0 = args.dim == 0 ? args.ne00 : 0;
-    const int o1 = args.dim == 1 ? args.ne01 : 0;
-    const int o2 = args.dim == 2 ? args.ne02 : 0;
-    const int o3 = args.dim == 3 ? args.ne03 : 0;
+    const int o0 = FC_concat_dim == 0 ? args.ne00 : 0;
+    const int o1 = FC_concat_dim == 1 ? args.ne01 : 0;
+    const int o2 = FC_concat_dim == 2 ? args.ne02 : 0;
+    const int o3 = FC_concat_dim == 3 ? args.ne03 : 0;
 
     // chunk ic of nc0 along the row
     const int n0  = (args.ne0 + args.nc0 - 1)/args.nc0;

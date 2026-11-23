@@ -216,16 +216,23 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repeat(ggml_meta
     return res;
 }
 
-ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_concat(ggml_metal_library_t lib, ggml_type tsrc) {
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_concat(ggml_metal_library_t lib, ggml_type tsrc, int32_t dim, bool split) {
     char base[256];
     char name[256];
 
     snprintf(base, 256, "kernel_concat_%s", ggml_type_name(tsrc));
-    snprintf(name, 256, "%s", base);
+    snprintf(name, 256, "%s_dim=%d_split=%d", base, dim, split ? 1 : 0);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
-        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+        ggml_metal_cv_t cv = ggml_metal_cv_init();
+
+        ggml_metal_cv_set_int16(cv, (int16_t) dim, FC_CONCAT + 0);
+        ggml_metal_cv_set_bool (cv, split,         FC_CONCAT + 1);
+
+        res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
+
+        ggml_metal_cv_free(cv);
     }
 
     return res;
