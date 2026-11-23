@@ -3244,6 +3244,10 @@ struct llama_model_glm5_next : public llama_model_base {
     void load_arch_tensors(llama_model_loader & ml) override;
     uint32_t graph_nodes_per_tensor() const override { return 64; }
 
+    // the nodes of one token chunk: 53 measured for all the layers of a 3-layer test model
+    static constexpr uint32_t GRAPH_NODES_PER_CHUNK = 56;
+    uint32_t graph_nodes_per_chunk() const override { return GRAPH_NODES_PER_CHUNK; }
+
     // k-pool indexer inputs on top of the generic hybrid input
     class llm_graph_input_kpool;
 
@@ -3300,18 +3304,35 @@ struct llama_model_glm5_next : public llama_model_base {
                                        int64_t qkv, ggml_tensor * x, ggml_tensor * proj_w, ggml_tensor * conv_w,
                                        int64_t d_conv, int64_t head_dim, int64_t n_head_kda, int64_t n_seq_tokens, int64_t n_seqs);
 
-        ggml_tensor * build_kpool_select(ggml_tensor * cur, ggml_tensor * qr, const llama_layer & layer,
-                                         const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_kpool * inp_kpool, int il);
+        // the indexer state that the selection of every token chunk reads
+        struct kpool_idx {
+            ggml_tensor * cur    = nullptr; // [n_embd, n_tokens]                         the layer input
+            ggml_tensor * iq     = nullptr; // [n_embd_indexer, n_indexer_head, n_tokens] the indexer queries
+            ggml_tensor * pooled = nullptr; // [n_embd_indexer, 1, n_pool]                the pooled keys
+        };
 
-        // attention output (cur) and the selection to carry to the next shared layer (sel)
+        kpool_idx build_kpool_idx(ggml_tensor * cur, ggml_tensor * qr, const llama_layer & layer,
+                                  const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_kpool * inp_kpool, int il);
+
+        // the pools that the tokens of a chunk picked
+        struct kpool_picks {
+            ggml_tensor * top_k = nullptr; // I32 [n_top_pool, n_tokens]
+            ggml_tensor * score = nullptr; // F32 [n_pool, n_tokens] -inf for a pool that a token cannot see, nullptr if top_k has no dead picks to skip by score
+        };
+
+        kpool_picks   build_kpool_picks(const llama_layer & layer, llm_graph_input_kpool * inp_kpool, const kpool_idx & idx, size_t ic, int il);
+        ggml_tensor * build_kpool_picks_shared(const kpool_picks & picks);
+        ggml_tensor * build_kpool_mask(llm_graph_input_kpool * inp_kpool, const kpool_picks & picks, size_t ic, int il);
+
+        // attention output (cur) and the picks of each token chunk, for the next shared layer (picks)
         struct dsa_out {
             ggml_tensor * cur;
-            ggml_tensor * sel;
+            std::vector<ggml_tensor *> picks;
         };
 
         dsa_out build_dsa_layer(ggml_tensor * cur, const llama_layer & layer,
                                 const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_attn_k * inp_attn,
-                                llm_graph_input_kpool * inp_kpool, ggml_tensor * prev_sel, int il);
+                                llm_graph_input_kpool * inp_kpool, const std::vector<ggml_tensor *> & prev_picks, int il);
 
     };
 
