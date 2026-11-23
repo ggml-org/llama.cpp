@@ -178,8 +178,10 @@ kernel void kernel_concat(
         return;
     }
 
-    int o[4] = {0, 0, 0, 0};
-    o[args.dim] = args.dim == 0 ? args.ne00 : (args.dim == 1 ? args.ne01 : (args.dim == 2 ? args.ne02 : args.ne03));
+    const int o0 = args.dim == 0 ? args.ne00 : 0;
+    const int o1 = args.dim == 1 ? args.ne01 : 0;
+    const int o2 = args.dim == 2 ? args.ne02 : 0;
+    const int o3 = args.dim == 3 ? args.ne03 : 0;
 
     // chunk ic of nc0 along the row
     const int n0  = (args.ne0 + args.nc0 - 1)/args.nc0;
@@ -191,7 +193,7 @@ kernel void kernel_concat(
     if (args.dim != 0 && args.nb0 == sizeof(T) && (from0 ? args.nb00 : args.nb10) == sizeof(T)) {
         device const char * src_row = from0
             ? src0 + i3*args.nb03 + i2*args.nb02 + i1*args.nb01
-            : src1 + (i3 - o[3])*args.nb13 + (i2 - o[2])*args.nb12 + (i1 - o[1])*args.nb11;
+            : src1 + (i3 - o3)*args.nb13 + (i2 - o2)*args.nb12 + (i1 - o1)*args.nb11;
         device       char * dst_row = dst + i3*args.nb3 + i2*args.nb2 + i1*args.nb1;
 
         typedef vec<T, 4> T4;
@@ -221,7 +223,7 @@ kernel void kernel_concat(
         if (i0 < args.ne00 && i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03) {
             x = (device const T *)(src0 + (i3       )*args.nb03 + (i2       )*args.nb02 + (i1       )*args.nb01 + (i0       )*args.nb00);
         } else {
-            x = (device const T *)(src1 + (i3 - o[3])*args.nb13 + (i2 - o[2])*args.nb12 + (i1 - o[1])*args.nb11 + (i0 - o[0])*args.nb10);
+            x = (device const T *)(src1 + (i3 - o3)*args.nb13 + (i2 - o2)*args.nb12 + (i1 - o1)*args.nb11 + (i0 - o0)*args.nb10);
         }
 
         device T * y = (device T *)(dst + i3*args.nb3 + i2*args.nb2 + i1*args.nb1 + i0*args.nb0);
@@ -262,8 +264,10 @@ kernel void kernel_concat_q(
         return;
     }
 
-    int o[4] = {0, 0, 0, 0};
-    o[args.dim] = args.dim == 0 ? args.ne00 : (args.dim == 1 ? args.ne01 : (args.dim == 2 ? args.ne02 : args.ne03));
+    const int o0 = args.dim == 0 ? args.ne00 : 0;
+    const int o1 = args.dim == 1 ? args.ne01 : 0;
+    const int o2 = args.dim == 2 ? args.ne02 : 0;
+    const int o3 = args.dim == 3 ? args.ne03 : 0;
 
     // chunk ic of nc0 along the row
     const int n0  = (args.ne0 + args.nc0 - 1)/args.nc0;
@@ -275,7 +279,7 @@ kernel void kernel_concat_q(
         if (i0 < args.ne00 && i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03) {
             x = (device const block_q *)(src0 + (i3       )*args.nb03 + (i2       )*args.nb02 + (i1       )*args.nb01 + (i0       )*args.nb00);
         } else {
-            x = (device const block_q *)(src1 + (i3 - o[3])*args.nb13 + (i2 - o[2])*args.nb12 + (i1 - o[1])*args.nb11 + (i0 - o[0])*args.nb10);
+            x = (device const block_q *)(src1 + (i3 - o3)*args.nb13 + (i2 - o2)*args.nb12 + (i1 - o1)*args.nb11 + (i0 - o0)*args.nb10);
         }
 
         device block_q * y = (device block_q *)(dst + i3*args.nb3 + i2*args.nb2 + i1*args.nb1 + i0*args.nb0);
