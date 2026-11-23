@@ -1406,7 +1406,7 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const 
     }
 
     // LFM2.5 format detection: template uses plain "List of tools: [...]" with no special tokens
-    if (src.find("List of tools: [") != std::string::npos &&
+    if (src.find("List of tools: ") != std::string::npos &&
         src.find("<|tool_list_start|>") == std::string::npos) {
         LOG_DBG("Using specialized template: LFM2.5\n");
         return common_chat_params_init_lfm2_5;
