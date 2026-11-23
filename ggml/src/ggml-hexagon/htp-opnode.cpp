@@ -149,17 +149,21 @@ static std::string format_kernel_params(const htp_opnode & node) {
         node.opcode == HTP_OP_MUL_MAT_NX || node.opcode == HTP_OP_MUL_MAT_ID_NX ||
         node.opcode == HTP_OP_MUL_MAT_ADD) {
         const auto * kparams = node.kparams<htp_mm_kernel_params>();
-        const char * path = "unknown";
         int32_t type = kparams->kernel_type;
-        if (type == HTP_MM_KERNEL_HMX_2D || type == HTP_MM_KERNEL_HMX_BATCHED) {
-            path = (kparams->tile_size > 0) ? "hmx-tiled" : "hmx-flat";
-        } else if (type == HTP_MM_KERNEL_HVX_F16_F16_VTCM || type == HTP_MM_KERNEL_HVX_F32_F32_VTCM ||
-                   type == HTP_MM_KERNEL_HVX_BF16_F32_VTCM) {
-            path = "hvx-flat";
-        } else if (type == HTP_MM_KERNEL_HVX_QUANT_ROW || type == HTP_MM_KERNEL_HVX_QUANT_BLOCK) {
-            path = "hvx-tiled";
+        if (htp_mm_kernel_is_hmx_w8a8(type)) {
+            snprintf(str, max_size, "hmx-w8a8 nhvx %u vtcm %u", (unsigned int) kparams->n_hvx, (unsigned int) kparams->vtcm_size);
+        } else {
+            const char * path = "unknown";
+            if (type == HTP_MM_KERNEL_HMX_2D || type == HTP_MM_KERNEL_HMX_BATCHED) {
+                path = (kparams->tile_size > 0) ? "hmx-tiled" : "hmx-flat";
+            } else if (type == HTP_MM_KERNEL_HVX_F16_F16_VTCM || type == HTP_MM_KERNEL_HVX_F32_F32_VTCM ||
+                       type == HTP_MM_KERNEL_HVX_BF16_F32_VTCM) {
+                path = "hvx-flat";
+            } else if (type == HTP_MM_KERNEL_HVX_QUANT_ROW || type == HTP_MM_KERNEL_HVX_QUANT_BLOCK) {
+                path = "hvx-tiled";
+            }
+            snprintf(str, max_size, "%s nhvx %u vtcm %u", path, (unsigned int) kparams->n_hvx, (unsigned int) kparams->vtcm_size);
         }
-        snprintf(str, max_size, "%s nhvx %u vtcm %u", path, (unsigned int) kparams->n_hvx, (unsigned int) kparams->vtcm_size);
     } else if (node.opcode == HTP_OP_FLASH_ATTN_EXT) {
         const auto * kparams = node.kparams<htp_fa_kernel_params>();
         const char * path = "unknown";
@@ -182,7 +186,10 @@ static std::string format_kernel_params(const htp_opnode & node) {
         snprintf(str, max_size, "seq 0x%x -> 0x%x", (uint32_t) node.node->op_params[0], (uint32_t) node.node->op_params[1]);
     } else if (node.opcode == HTP_OP_SSM_CONV) {
         const auto * kparams = node.kparams<htp_ssm_conv_kernel_params>();
-        snprintf(str, max_size, "%s nhvx %u vtcm %u", kparams->n_t == 1 ? "decode" : "prefill",
+        const char * mode = kparams->token_major
+            ? (kparams->n_t == 1 ? "tok-decode" : "tok-prefill")
+            : (kparams->n_t == 1 ? "decode"     : "prefill");
+        snprintf(str, max_size, "%s nhvx %u vtcm %u", mode,
                  (unsigned int) kparams->n_hvx, (unsigned int) kparams->vtcm_size);
     } else if (node.opcode == HTP_OP_SSM_SCAN) {
         const auto * kparams = node.kparams<htp_ssm_scan_kernel_params>();
@@ -240,10 +247,10 @@ static std::string format_kernel_params(const htp_opnode & node) {
         snprintf(str, max_size, "nhvx %u vtcm %u", (unsigned int) kparams->n_hvx, (unsigned int) kparams->vtcm_size);
     } else if (node.opcode == HTP_OP_PAD) {
         const auto * kparams = node.kparams<htp_pad_kernel_params>();
-        snprintf(str, max_size, "k%d nhvx %u vtcm %u", (int) kparams->kernel_type, (unsigned int) kparams->n_hvx, (unsigned int) kparams->vtcm_size);
+        snprintf(str, max_size, "k%d nhvx %u chunk %u vtcm %u", (int) kparams->kernel_type, (unsigned int) kparams->n_hvx, (unsigned int) kparams->chunk_elems, (unsigned int) kparams->vtcm_size);
     } else if (node.opcode == HTP_OP_CUMSUM) {
         const auto * kparams = node.kparams<htp_cumsum_kernel_params>();
-        snprintf(str, max_size, "%s nhvx %u vtcm %u", kparams->use_dma ? "dma" : "hvx", (unsigned int) kparams->n_hvx, (unsigned int) kparams->vtcm_size);
+        snprintf(str, max_size, "nhvx %u chunk %u vtcm %u", (unsigned int) kparams->n_hvx, (unsigned int) kparams->chunk_elems, (unsigned int) kparams->vtcm_size);
     } else if (node.opcode == HTP_OP_TOP_K_MASK) {
         const auto * kparams = node.kparams<htp_top_k_mask_kernel_params>();
         const char * ktype_str = "?";
@@ -260,7 +267,7 @@ static std::string format_kernel_params(const htp_opnode & node) {
         snprintf(str, max_size, "k%d nhvx %u", (int) kparams->kernel_type, (unsigned int) kparams->n_hvx);
     } else if (node.opcode == HTP_OP_DIAG) {
         const auto * kparams = node.kparams<htp_diag_kernel_params>();
-        snprintf(str, max_size, "%s nhvx %u vtcm %u", kparams->use_dma ? "dma" : "hvx", (unsigned int) kparams->n_hvx, (unsigned int) kparams->vtcm_size);
+        snprintf(str, max_size, "nhvx %u chunk %u vtcm %u", (unsigned int) kparams->n_hvx, (unsigned int) kparams->chunk_elems, (unsigned int) kparams->vtcm_size);
     } else if (node.opcode == HTP_OP_SOLVE_TRI) {
         const auto * kparams = node.kparams<htp_solve_tri_kernel_params>();
         snprintf(str, max_size, "%s nhvx %u", kparams->batched ? "batched" : "chunked", (unsigned int) kparams->n_hvx);
