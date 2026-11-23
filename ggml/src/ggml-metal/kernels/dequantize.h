@@ -378,6 +378,45 @@ void dequantize_mxfp4_t4(device const block_mxfp4 * xb, short il, thread type4 &
     reg[3] = d * kvalues_mxfp4_f[(q2[4*il4 + 3] >> shr) & 0x0F];
 }
 
+// NVFP4: 64 weights per block split into four 16-weight sub-blocks, each with its own UE4M3 scale.
+// the 16 weights of a sub-block are the low nibbles of its 8 bytes followed by the high nibbles
+template <typename type4x4>
+void dequantize_nvfp4(device const block_nvfp4 * xb, short il, thread type4x4 & reg) {
+    device const uint8_t * q = (device const uint8_t *)xb->qs + 8*il;
+
+    const float d = ue4m3_to_fp32(xb->d[il]);
+
+    float4x4 reg_f;
+
+    for (int i = 0; i < 4; ++i) {
+        device const uint8_t * qb = q + 4*(i % 2);
+        const uint8_t shr = i < 2 ? 0 : 4;
+
+        reg_f[i][0] = d * kvalues_mxfp4_f[(qb[0] >> shr) & 0x0F];
+        reg_f[i][1] = d * kvalues_mxfp4_f[(qb[1] >> shr) & 0x0F];
+        reg_f[i][2] = d * kvalues_mxfp4_f[(qb[2] >> shr) & 0x0F];
+        reg_f[i][3] = d * kvalues_mxfp4_f[(qb[3] >> shr) & 0x0F];
+    }
+
+    reg = (type4x4) reg_f;
+}
+
+template <typename type4>
+void dequantize_nvfp4_t4(device const block_nvfp4 * xb, short il, thread type4 & reg) {
+    const short s   = il/4; // sub-block
+    const short il4 = il%4; // 4-weight chunk within the sub-block
+
+    device const uint8_t * q = (device const uint8_t *)xb->qs + 8*s + 4*(il4 % 2);
+
+    const float d = ue4m3_to_fp32(xb->d[s]);
+    const uint8_t shr = il4 >= 2 ? 4 : 0;
+
+    reg[0] = d * kvalues_mxfp4_f[(q[0] >> shr) & 0x0F];
+    reg[1] = d * kvalues_mxfp4_f[(q[1] >> shr) & 0x0F];
+    reg[2] = d * kvalues_mxfp4_f[(q[2] >> shr) & 0x0F];
+    reg[3] = d * kvalues_mxfp4_f[(q[3] >> shr) & 0x0F];
+}
+
 template <typename type4x4>
 void dequantize_q2_K(device const block_q2_K *xb, short il, thread type4x4 & reg) {
     const float d = xb->d;
