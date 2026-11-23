@@ -1047,6 +1047,9 @@ struct llama_model {
 
     bool has_tensor_overrides() const;
 
+    // buffer type for a device copy of the LM head left with token_embd, nullptr if no copy is needed
+    ggml_backend_buffer_type_t lm_head_buft() const;
+
     const struct ggml_tensor * get_tensor(const char * name) const;
 
     // the RoPE of a layer, used by both the model graph and the K-shift

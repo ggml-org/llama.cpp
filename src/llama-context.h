@@ -264,6 +264,9 @@ private:
     // (re)allocate the device buffer for cparams.embeddings_nextn_dev, false if it does not fit
     bool h_nextn_dev_alloc();
 
+    // copy the LM head to the output device when the loader left it with token_embd, see llama_model::lm_head_buft
+    void lm_head_alloc();
+
     ggml_backend_t backend_from_dev(ggml_backend_dev_t dev) const;
 
     //
@@ -485,6 +488,10 @@ private:
     ggml_backend_event_ptr  ev_h_nextn_read;
     bool ev_h_nextn_written_recorded = false;
     bool ev_h_nextn_read_recorded    = false;
+
+    // device copy of the LM head, see lm_head_alloc
+    llama_memory_bufs lm_head_bufs;
+    ggml_tensor *     lm_head = nullptr;
 
     // keep copies of the per-sequence memory on the device
     std::map<llama_seq_id, llama_memory_buffers> mem_storage;

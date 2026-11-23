@@ -168,7 +168,8 @@ llama_context::llama_context(
     loras(std::make_unique<llama_adapter_loras>()),
     // MTP uses the embd input for the hidden state
     balloc(std::make_unique<llama_batch_allocr>(model.hparams.n_pos_per_embd(),
-                llm_arch_supports_mixed_batch(model.arch) && params.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT)) {
+                llm_arch_supports_mixed_batch(model.arch) && params.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT)),
+    lm_head_bufs(model.no_alloc()) {
     // TODO warning when creating llama_context with awkward ctx size that is not a power of 2,
     //     may need to be backend-dependent
     LLAMA_LOG_INFO("%s: constructing llama_context\n", __func__);
@@ -779,6 +780,50 @@ void llama_context::sched_new(const sched_params & params) {
     sched_params_cur = params;
 }
 
+void llama_context::lm_head_alloc() {
+    // a context that computes logits needs the copy (same condition as build_logits), and the fit measures it for any context
+    if (lm_head != nullptr || (cparams.embeddings && cparams.pooling_type != LLAMA_POOLING_TYPE_NONE && !model.no_alloc())) {
+        return;
+    }
+
+    ggml_backend_buffer_type_t buft = model.lm_head_buft();
+    if (buft == nullptr) {
+        return;
+    }
+
+    ggml_tensor * output = model.output;
+    ggml_init_params params = {
+        /*.mem_size   =*/ ggml_tensor_overhead(),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context_ptr ctx(ggml_init(params));
+    ggml_tensor * t = ggml_dup_tensor(ctx.get(), output);
+    ggml_format_name(t, "lm_head.%s", output->name);
+
+    // a device that can map host memory (Metal) maps the head instead of copying it
+    ggml_backend_dev_t dev = model.dev_output();
+    ggml_backend_dev_props props;
+    ggml_backend_dev_get_props(dev, &props);
+    ggml_backend_buffer_ptr buf;
+    if (props.caps.buffer_from_host_ptr && buft == ggml_backend_dev_buffer_type(dev) && !model.no_alloc()) {
+        buf.reset(ggml_backend_dev_buffer_from_host_ptr(dev, output->data, ggml_nbytes(output), ggml_nbytes(output)));
+    }
+    if (buf) {
+        ggml_backend_tensor_alloc(buf.get(), t, output->data);
+    } else {
+        buf = llama_memory_bufs::alloc_buf(ctx.get(), buft, model.no_alloc(), "LM head");
+        if (!model.no_alloc()) {
+            ggml_backend_tensor_copy(output, t);
+        }
+    }
+    LLAMA_LOG_INFO("%s: %10s LM head buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf.get()), ggml_backend_buffer_get_size(buf.get())/1024.0/1024.0);
+    ggml_backend_buffer_set_usage(buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+    lm_head_bufs.bufs.emplace_back(std::move(ctx), std::move(buf));
+    lm_head = t;
+}
+
 void llama_context::sched_reserve() {
     if (!sched_need_reserve) {
         return;
@@ -789,6 +834,8 @@ void llama_context::sched_reserve() {
     LLAMA_LOG_INFO("%s: reserving ...\n", __func__);
 
     synchronize();
+
+    lm_head_alloc();
 
     const int64_t t_start_us = ggml_time_us();
 
@@ -3063,6 +3110,7 @@ llm_graph_params llama_context::graph_params(
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
         /*.moe_cache   =*/ moe_cache.get(),
+        /*.lm_head       =*/ lm_head,
         /*.layer_inp_dev =*/ layer_inp_dev,
         /*.layer_inp_src =*/ supports_embd_row() ? cparams.ctx_other->get_layer_inp_dev() : nullptr,
         /*.h_nextn_dev   =*/ cparams.embeddings_nextn_dev ? h_nextn_dev : nullptr,
@@ -4129,6 +4177,9 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
         for (const auto & [buft, size] : moe_cache->memory_breakdown()) {
             ret[buft].context += size;
         }
+    }
+    for (const auto & [buft, size] : lm_head_bufs.memory_breakdown()) {
+        ret[buft].context += size;
     }
     if (model.no_alloc()) {
         for (size_t i = 0; i < backends.size(); ++i) {
