@@ -29,6 +29,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_SLOT_SAVE,
     SERVER_TASK_TYPE_SLOT_RESTORE,
     SERVER_TASK_TYPE_SLOT_ERASE,
+    SERVER_TASK_TYPE_PROMPT_CACHE_CLEAR,
     SERVER_TASK_TYPE_GET_LORA,
     SERVER_TASK_TYPE_SET_LORA,
     SERVER_TASK_TYPE_TTS,
@@ -659,6 +660,12 @@ struct server_task_result_slot_erase : server_task_result {
     size_t n_erased;
 
     virtual json to_json() override;
+};
+
+struct server_task_result_prompt_cache_clear : server_task_result {
+    virtual json to_json() override {
+        return json { { "success", true } };
+    }
 };
 
 struct server_task_result_control : server_task_result {

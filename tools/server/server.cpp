@@ -664,6 +664,7 @@ static int server_run_instance(common_params & params, server_role & role, commo
     }
 
     server_register_routes(ctx_http, routes);
+    ctx_http.post("/prompt-cache/clear", ex_wrapper(routes.post_prompt_cache_clear));
     server_register_stream_routes(ctx_http,
         server_stream_make_get_handler(),
         server_stream_make_lookup_handler(),
