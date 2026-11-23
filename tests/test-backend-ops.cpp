@@ -12803,6 +12803,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_ssm_conv_step(n_conv, 384, 7, true));
         test_cases.emplace_back(new test_ssm_conv_step(n_conv, 2304, 0, true, 8));
         test_cases.emplace_back(new test_ssm_conv_step(n_conv, 384, 7, false, 3));
+        test_cases.emplace_back(new test_ssm_conv_step(n_conv, 2304, 0, true, 0, 3072));
+        test_cases.emplace_back(new test_ssm_conv_step(n_conv, 2304, 0, false, 0, 3072));
     }
 
     // matrix-vector products on one vector, in one launch (Inkling 2 Q/gate/R/sink, K/V, loop controllers)
