@@ -1323,7 +1323,8 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
-    // scale_activations is an optional F32 quantization companion with ne[0] == 1 that broadcasts over b.
+    // scale_weight is F32, either a scalar or one value per output channel.
+    // scale_activations is an optional F32 scalar for activation quantization.
     // Divide activations by the scale before quantization, then multiply the matmul result by the scale.
     GGML_API struct ggml_tensor * ggml_mul_mat_ext(
             struct ggml_context * ctx,

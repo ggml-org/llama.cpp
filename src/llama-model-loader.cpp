@@ -1343,6 +1343,10 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                 throw std::runtime_error(format("tensor '%s' of type %s requires a weight scale, but '%s' is missing; re-convert the model",
                     tn.str().c_str(), ggml_type_name(t_meta->type), scale_name.c_str()));
             }
+            if (scale_meta && op == GGML_OP_MUL_MAT && !ggml_is_scalar(scale_meta) &&
+                    !(ggml_is_vector(scale_meta) && scale_meta->ne[0] == t_meta->ne[1])) {
+                throw std::runtime_error(format("weight scale tensor '%s' must be scalar or have one value per output channel", scale_name.c_str()));
+            }
         }
 
         if (is_lazy) {

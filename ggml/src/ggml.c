@@ -3428,13 +3428,12 @@ struct ggml_tensor * ggml_mul_mat_ext(
     result->src[1] = b;
 
     if (scale_weight) {
-        GGML_ASSERT(ggml_can_repeat(scale_weight, result));
+        GGML_ASSERT(ggml_is_scalar(scale_weight) || (ggml_is_vector(scale_weight) && scale_weight->ne[0] == a->ne[1]));
         result->src[2] = scale_weight;
     }
 
     if (scale_activations) {
-        GGML_ASSERT(scale_activations->ne[0] == 1);
-        GGML_ASSERT(ggml_can_repeat(scale_activations, b));
+        GGML_ASSERT(ggml_is_scalar(scale_activations));
         result->src[3] = scale_activations;
     }
 
