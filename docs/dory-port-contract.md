@@ -93,3 +93,40 @@ Two `rope.freq_base`s means per-layer-type theta: sliding layers use
   the attention sub-block), say so and cite the line of
   `transformers/models/dory/modeling_dory.py` — the fetched copy is at
   `/tmp/modeling_dory.py` on this host.
+
+## Addendum: the codebase already has the loop idiom — use it
+
+Found while prepping the model file, and it changes the design in a good way.
+`src/models/inkling2-loop.cpp` implements a LOOPED arch by modelling the loop as
+**extra KV cache slots**, not as a runtime for-loop inside the graph:
+
+```cpp
+int llama_model_inkling2_loop::layer_phys(int il) const {
+    return il < n_phys ? il : core_start + (il - n_phys) % (core_end - core_start);
+}
+...
+ml.get_key(LLM_KV_LOOP_START, core_start);
+ml.get_key(LLM_KV_LOOP_END,   core_end);
+ml.get_key(LLM_KV_LOOP_COUNT, n_passes);
+n_phys = hparams.n_layer();
+const size_t n_slot = n_phys + (size_t)(n_passes - 1)*(core_end - core_start);
+hparams.n_layer_all = n_slot;
+for (int il = n_phys; il < (int) n_slot; ++il) {
+    const int p = layer_phys(il);
+    hparams.n_head_arr[il] = hparams.n_head_arr[p];   // and n_head_kv, n_ff, is_swa, ...
+}
+```
+
+Consequences for dory:
+
+* `LLM_KV_LOOP_START` / `LLM_KV_LOOP_END` / `LLM_KV_LOOP_COUNT` ALREADY EXIST.
+  dory's GGUF names them `dory.input_layer_count` (start = 16),
+  `dory.recurrent_layer_count` (count = 40) and `dory.num_loops`; map those keys
+  onto the same three fields rather than inventing parallel machinery.
+* The loop is expressed by expanding `hparams.n_layer_all` to
+  `72 + (n_loops - 1) * 40` slots and mapping slot → physical layer with the
+  same modulo rule. That is what gives dory its `per_loop` KV cache: each extra
+  slot owns its own cache, exactly as the reference's deep-copied caches do.
+* The graph builder therefore walks slots, not a for-loop, and the reinjection
+  (`h = L2Norm(h) + input_hidden`) is the only truly novel graph op at the loop
+  boundary — plus one `L2Norm` and one interpolated-residual helper.
