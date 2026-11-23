@@ -514,3 +514,22 @@ void ggml_cuda_op_rel_bias_batch(ggml_backend_cuda_context & ctx, const ggml_cgr
         (const float *) mask->data, mask->nb[1]/sizeof(float), mask->nb[3]/sizeof(float),
         (half *) cpy->src[1]->data, n_kv, n_tps, n_head);
 }
+
+void ggml_cuda_op_rel_bias(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * table = dst->src[0];
+    const ggml_tensor * rel   = dst->src[1];
+    const ggml_tensor * mask  = dst->src[2];
+
+    const int n_kv     = (int) dst->ne[0];
+    const int n_tps    = (int) dst->ne[1];
+    const int n_head   = (int) dst->ne[2];
+    const int n_stream = (int) dst->ne[3];
+
+    constexpr int block_size = 256;
+    const dim3 grid((n_kv + block_size - 1)/block_size, n_tps, n_stream);
+    rel_bias_batch_f16<<<grid, block_size, 0, ctx.stream()>>>(
+        (const float *) table->data, table->nb[1]/sizeof(float), table->nb[2]/sizeof(float),
+        (const int32_t *) rel->data, rel->nb[1]/sizeof(int32_t),
+        (const float *) mask->data, mask->nb[1]/sizeof(float), mask->nb[3]/sizeof(float),
+        (half *) dst->data, n_kv, n_tps, n_head);
+}

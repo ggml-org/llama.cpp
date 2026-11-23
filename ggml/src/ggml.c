@@ -1118,9 +1118,11 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "SLEEP",
 
     "SIGMOID_BACK",
+
+    "REL_BIAS",
 };
 
-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
+static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1235,9 +1237,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "sleep(x)",
 
     "sigmoid_back(x)",
+
+    "rel_bias(x)",
 };
 
-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
+static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -5781,6 +5785,28 @@ struct ggml_tensor * ggml_get_rel_pos(
 
     result->op     = GGML_OP_GET_REL_POS;
     result->src[0] = a;
+
+    return result;
+}
+
+// ggml_rel_bias
+
+struct ggml_tensor * ggml_rel_bias(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * table,
+        struct ggml_tensor  * rel,
+        struct ggml_tensor  * mask) {
+    GGML_ASSERT(table->type == GGML_TYPE_F32 && table->ne[3] == 1);
+    GGML_ASSERT(rel->type == GGML_TYPE_I32 && rel->ne[1] == table->ne[2] && rel->ne[2] == 1 && rel->ne[3] == 1);
+    GGML_ASSERT(mask->type == GGML_TYPE_F32 && mask->ne[0] == rel->ne[0] && mask->ne[2] == 1);
+    GGML_ASSERT(mask->ne[1]*mask->ne[3] == rel->ne[1]);
+
+    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, rel->ne[0], mask->ne[1], table->ne[0], mask->ne[3]);
+
+    result->op     = GGML_OP_REL_BIAS;
+    result->src[0] = table;
+    result->src[1] = rel;
+    result->src[2] = mask;
 
     return result;
 }

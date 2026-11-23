@@ -4406,7 +4406,8 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_tensor * kq_b,
         ggml_tensor * sinks,
             float     kq_scale,
-            int       il) const {
+            int       il,
+        ggml_tensor * rel_table) const {
     const bool is_swa = hparams.is_swa(il);
 
     auto * inp_attn = inp->get_attn();
@@ -4426,9 +4427,17 @@ ggml_tensor * llm_graph_context::build_attn(
         }
         kq_mask = kq_mask_f32;
     }
-    kq_mask = ggml_add(ctx0, kq_b, kq_mask);
-    if (cparams.flash_attn) {
-        kq_mask = ggml_cast(ctx0, kq_mask, GGML_TYPE_F16);
+    if (rel_table) {
+        // gather, add the mask and cast in one op: only the F16 mask is n_kv x n_tokens x n_head, which is
+        // what lets a long context take large ubatches
+        GGML_ASSERT(cparams.flash_attn && kq_b == nullptr);
+        ggml_tensor * rel_pos = is_swa ? inp->self_rel_pos_swa : inp->self_rel_pos;
+        kq_mask = ggml_rel_bias(ctx0, rel_table, rel_pos, kq_mask);
+    } else {
+        kq_mask = ggml_add(ctx0, kq_b, kq_mask);
+        if (cparams.flash_attn) {
+            kq_mask = ggml_cast(ctx0, kq_mask, GGML_TYPE_F16);
+        }
     }
     cb(kq_mask, "kq_mask_rel_pos", il);
 

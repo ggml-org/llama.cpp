@@ -435,6 +435,8 @@ extern "C" {
 
         GGML_OP_SIGMOID_BACK,
 
+        GGML_OP_REL_BIAS,
+
         GGML_OP_COUNT,
     };
 
@@ -2353,6 +2355,18 @@ extern "C" {
             struct ggml_tensor  * a,
             int                   qh,
             int                   kh);
+
+    // a per-head attention mask from a relative-position bias table, in F16 for flash attention (Inkling 2):
+    //   dst[i, t, h, s] = f16(table[h, rel[i, tok], tok] + mask[i, t, 0, s]), tok = s*n_tps + t,
+    //   and -inf wherever the mask is -inf
+    // table: F32 [n_head, n_dist, n_tokens], rel: I32 [n_kv, n_tokens] (indices into n_dist),
+    // mask: F32 [n_kv, n_tps, 1, n_stream] with n_tps*n_stream == n_tokens
+    // result: F16 [n_kv, n_tps, n_head, n_stream]; only the result is n_kv x n_tokens x n_head
+    GGML_API struct ggml_tensor * ggml_rel_bias(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * table,
+            struct ggml_tensor  * rel,
+            struct ggml_tensor  * mask);
 
     // used in sam
     GGML_API struct ggml_tensor * ggml_add_rel_pos(

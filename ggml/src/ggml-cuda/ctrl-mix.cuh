@@ -45,3 +45,6 @@ void ggml_cuda_op_rel_bias(ggml_backend_cuda_context & ctx, const ggml_cgraph * 
 // the same bias for a prompt batch: GET_ROWS from the per-token table -> views -> CONT -> ADD(mask) -> CPY(F16)
 int  ggml_cuda_match_rel_bias_batch(const ggml_cgraph * cgraph, int i, bool check_memory = true);
 void ggml_cuda_op_rel_bias_batch(ggml_backend_cuda_context & ctx, const ggml_cgraph * cgraph, int i, int last);
+
+// GGML_OP_REL_BIAS: the same kernel as a graph op, so only its F16 result is ever allocated
+void ggml_cuda_op_rel_bias(ggml_backend_cuda_context & ctx, ggml_tensor * dst);

@@ -98,6 +98,7 @@ void ggml_compute_forward_win_unpart(const struct ggml_compute_params * params, 
 void ggml_compute_forward_unary(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_glu(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_get_rel_pos(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_rel_bias(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_add_rel_pos(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_rwkv_wkv6(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_rwkv_wkv7(const struct ggml_compute_params * params, struct ggml_tensor * dst);

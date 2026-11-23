@@ -10631,6 +10631,39 @@ void ggml_compute_forward_glu(
     }
 }
 
+// ggml_compute_forward_rel_bias
+
+void ggml_compute_forward_rel_bias(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * table = dst->src[0];
+    const ggml_tensor * rel   = dst->src[1];
+    const ggml_tensor * mask  = dst->src[2];
+
+    const int64_t n_kv     = dst->ne[0];
+    const int64_t n_tps    = dst->ne[1];
+    const int64_t n_head   = dst->ne[2];
+    const int64_t n_stream = dst->ne[3];
+
+    // one (token, stream) row per task
+    for (int64_t r = params->ith; r < n_tps*n_stream; r += params->nth) {
+        const int64_t t   = r % n_tps;
+        const int64_t s   = r / n_tps;
+        const int64_t tok = s*n_tps + t;
+        const float   * m  = (const float   *) ((const char *) mask->data + t*mask->nb[1] + s*mask->nb[3]);
+        const int32_t * rp = (const int32_t *) ((const char *) rel->data + tok*rel->nb[1]);
+        for (int64_t i = 0; i < n_kv; ++i) {
+            const float mi = m[i];
+            const float * th = (const float *) ((const char *) table->data + tok*table->nb[2] + (int64_t) rp[i]*table->nb[1]);
+            for (int64_t h = 0; h < n_head; ++h) {
+                const float v = mi == -INFINITY ? -INFINITY : *(const float *) ((const char *) th + h*table->nb[0]) + mi;
+                *(ggml_fp16_t *) ((char *) dst->data + i*dst->nb[0] + t*dst->nb[1] + h*dst->nb[2] + s*dst->nb[3]) =
+                    GGML_CPU_FP32_TO_FP16(v);
+            }
+        }
+    }
+}
+
 // ggml_compute_forward_get_rel_pos
 
 static void ggml_compute_forward_get_rel_pos_f16(

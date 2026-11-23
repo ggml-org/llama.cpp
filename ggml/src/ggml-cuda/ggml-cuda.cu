@@ -2828,6 +2828,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_GET_ROWS:
             ggml_cuda_op_get_rows(ctx, dst);
             break;
+        case GGML_OP_REL_BIAS:
+            ggml_cuda_op_rel_bias(ctx, dst);
+            break;
         case GGML_OP_GET_ROWS_BACK:
             ggml_cuda_op_get_rows_back(ctx, dst);
             break;
@@ -6737,6 +6740,10 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             }
         case GGML_OP_OUT_PROD:
             return op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
+        case GGML_OP_REL_BIAS:
+            // the kernel reads the table rows with a unit head stride and writes a contiguous result
+            return op->src[0]->nb[0] == sizeof(float) && op->src[1]->nb[0] == sizeof(int32_t) &&
+                op->src[2]->nb[0] == sizeof(float) && ggml_is_contiguous(op);
         case GGML_OP_GET_ROWS:
             {
                 switch (op->src[0]->type) {

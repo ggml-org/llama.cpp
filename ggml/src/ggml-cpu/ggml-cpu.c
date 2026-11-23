@@ -2107,6 +2107,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_get_rel_pos(params, tensor);
             } break;
+        case GGML_OP_REL_BIAS:
+            {
+                ggml_compute_forward_rel_bias(params, tensor);
+            } break;
         case GGML_OP_ADD_REL_POS:
             {
                 ggml_compute_forward_add_rel_pos(params, tensor);
@@ -2474,6 +2478,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_SSM_CONV:
         case GGML_OP_SSM_SCAN:
         case GGML_OP_LIGHTNING_INDEXER:
+        case GGML_OP_REL_BIAS:
             {
                 n_tasks = n_threads;
             } break;

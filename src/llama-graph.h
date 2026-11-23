@@ -1550,7 +1550,8 @@ struct llm_graph_context {
             ggml_tensor * kq_b,  // [n_kv, n_tokens/n_stream, n_head_q, n_stream]
             ggml_tensor * sinks, // [n_head_q]
                   float   kq_scale,
-                    int   il) const;
+                    int   il,
+            ggml_tensor * rel_table = nullptr) const; // instead of kq_b: [n_head_q, n_dist, n_tokens], gathered here
 
     //
     // pooling

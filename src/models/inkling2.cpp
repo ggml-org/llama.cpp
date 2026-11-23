@@ -451,7 +451,8 @@ ggml_tensor * llama_model_inkling2::graph::build_layer(int il, int ip, ggml_tens
             bias = ggml_pad(ctx0, layer.attn_rel_bias, 0, 1, 0, 0);
         }
 
-        ggml_tensor * kq_b;
+        ggml_tensor * kq_b      = nullptr;
+        ggml_tensor * rel_table = nullptr;
         if (n_tokens == 1) {
             // one token: the product gives the table as [n_head, n_extent + 1] with no copy
             ggml_tensor * table = ggml_mul_mat(ctx0, ggml_reshape_2d(ctx0, Rcur, hparams.n_relative, n_head), bias);
@@ -461,6 +462,13 @@ ggml_tensor * llama_model_inkling2::graph::build_layer(int il, int ip, ggml_tens
 
             kq_b = ggml_get_rows(ctx0, table, rel_pos);
             kq_b = ggml_cont(ctx0, ggml_permute(ctx0, ggml_reshape_4d(ctx0, kq_b, n_head, n_kv, 1, 1), 2, 0, 1, 3));
+        } else if (cparams.flash_attn) {
+            // the table [n_head, n_extent + 1, n_tokens] goes to build_attn, which gathers it straight into the F16 mask
+            ggml_tensor * table = ggml_mul_mat(ctx0, bias, Rcur);
+
+            table = ggml_sub(ctx0, table, ggml_reshape_3d(ctx0, sinks, 1, n_head, n_tokens));
+            rel_table = ggml_cont(ctx0, ggml_permute(ctx0, table, 1, 0, 2, 3));
+            GGML_UNUSED(n_stream);
         } else {
             ggml_tensor * table = ggml_mul_mat(ctx0, bias, Rcur);
 
@@ -471,7 +479,9 @@ ggml_tensor * llama_model_inkling2::graph::build_layer(int il, int ip, ggml_tens
             kq_b = ggml_reshape_4d(ctx0, kq_b, n_head, n_kv, n_tokens/n_stream, n_stream);
             kq_b = ggml_cont(ctx0, ggml_permute(ctx0, kq_b, 2, 0, 1, 3));
         }
-        cb(kq_b, "kq_b", il);
+        if (kq_b) {
+            cb(kq_b, "kq_b", il);
+        }
 
         auto & zero = zero_sinks[n_head];
         if (!zero) {
@@ -481,7 +491,7 @@ ggml_tensor * llama_model_inkling2::graph::build_layer(int il, int ip, ggml_tens
 
         cur = build_attn(inp,
                 nullptr, nullptr, nullptr,
-                Qcur, Kcur, Vcur, kq_b, sinks, hparams.f_qk_clip*hparams.f_qk_clip/sqrtf(n_embd_head), il);
+                Qcur, Kcur, Vcur, kq_b, sinks, hparams.f_qk_clip*hparams.f_qk_clip/sqrtf(n_embd_head), il, rel_table);
 
         cur = ggml_mul(ctx0, cur, ggml_sigmoid(ctx0, gate));
         cur = convolve(build_lora_mm(layer.wo, cur), layer.attn_post_conv, nullptr, state, history, recr, 2*n_embd_k_gqa);
