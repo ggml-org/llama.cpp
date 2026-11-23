@@ -477,7 +477,7 @@ fn copy_elements(src_base: u32, dst_base: u32, offset: u32) {
             let signs = get_byte(qs_vals[ib + 8], l);
             let dl = db[l/2];
             for (var j: u32 = 0; j < 8; j++) {
-                let g = get_byte(iq2s_grid[(ig + j) / 4], (ig + j) % 4);
+                let g = get_byte(get_iq2s_grid_word((ig + j) / 4), (ig + j) % 4);
                 let m = select(1.0, -1.0, (get_byte(kmask_iq2xs[j / 4], j % 4) & signs) != 0);
                 dst[dst_i] = dl * f32(g) * m;
                 dst_i++;

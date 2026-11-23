@@ -705,10 +705,10 @@ fn create_iq_gw4(ig: u32, grid_phase: u32) -> vec4<f32> {
 #if defined(INIT_SRC0_SHMEM_IQ2_S)
 fn create_iq_gw4(ig: u32, grid_phase: u32) -> vec4<f32> {
     return vec4<f32>(
-            f32(get_byte(iq2s_grid[(ig + grid_phase + 0u) / 4u], (ig + grid_phase + 0u) % 4u)),
-            f32(get_byte(iq2s_grid[(ig + grid_phase + 1u) / 4u], (ig + grid_phase + 1u) % 4u)),
-            f32(get_byte(iq2s_grid[(ig + grid_phase + 2u) / 4u], (ig + grid_phase + 2u) % 4u)),
-            f32(get_byte(iq2s_grid[(ig + grid_phase + 3u) / 4u], (ig + grid_phase + 3u) % 4u)),
+            f32(get_byte(get_iq2s_grid_word((ig + grid_phase + 0u) / 4u), (ig + grid_phase + 0u) % 4u)),
+            f32(get_byte(get_iq2s_grid_word((ig + grid_phase + 1u) / 4u), (ig + grid_phase + 1u) % 4u)),
+            f32(get_byte(get_iq2s_grid_word((ig + grid_phase + 2u) / 4u), (ig + grid_phase + 2u) % 4u)),
+            f32(get_byte(get_iq2s_grid_word((ig + grid_phase + 3u) / 4u), (ig + grid_phase + 3u) % 4u)),
         );
 }
 #endif

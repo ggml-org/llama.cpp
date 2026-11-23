@@ -1250,8 +1250,8 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
                         let grid_idx = qs_byte | (((qh_byte >> (2u * l)) & 3u) << 8u);
                         let sub_scale = (scales_byte >> (4u * (l / 2u))) & 0xFu;
                         let db = d * (0.5 + f32(sub_scale)) * 0.25;
-                        let gw_lo = iq2s_grid[grid_idx * 2u];
-                        let gw_hi = iq2s_grid[grid_idx * 2u + 1u];
+                        let gw_lo = get_iq2s_grid_word(grid_idx * 2u);
+                        let gw_hi = get_iq2s_grid_word(grid_idx * 2u + 1u);
                         for (var j = 0u; j < 8u; j++) {
                             let gw = select(gw_hi, gw_lo, j < 4u);
                             let b = f32((gw >> ((j & 3u) * 8u)) & 0xFFu);
