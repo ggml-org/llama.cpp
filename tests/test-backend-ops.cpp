@@ -5408,6 +5408,70 @@ struct test_situ : public test_case {
     }
 };
 
+// Inkling 2 loop controllers of one token, n_ctrl in a row (CUDA runs them as one batch, without the concatenation):
+// cur + (msg*tanh(Wg g) - tanh(Wf g)*cur) with g = W_down [rms(cur); rms(msg)]
+struct test_ctrl_batch : public test_case {
+    const int n_ctrl;
+    const int64_t n_embd;
+    const int64_t rank;
+    const bool shared_cur;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "CTRL_BATCH";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_nmse_err() override {
+        return 5e-4; // as test_mul_mat: the CPU rounds the activations of a BF16 product to BF16, the GPU does not
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR4(n_ctrl, n_embd, rank, shared_cur);
+    }
+
+    test_ctrl_batch(int n_ctrl = 3, int64_t n_embd = 2304, int64_t rank = 64, bool shared_cur = true)
+        : n_ctrl(n_ctrl), n_embd(n_embd), rank(rank), shared_cur(shared_cur) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * msgs  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, 4);
+        ggml_tensor * msgsn = ggml_rms_norm(ctx, msgs, 1e-6f);
+        ggml_tensor * out = nullptr;
+        ggml_tensor * cur0 = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_embd);
+        ggml_tensor * rn0  = ggml_rms_norm(ctx, cur0, 1e-6f);
+        for (int c = 0; c < n_ctrl; ++c) {
+            ggml_tensor * cur = cur0;
+            ggml_tensor * rn  = rn0;
+            if (!shared_cur && c > 0) {
+                cur = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_embd);
+                rn  = ggml_rms_norm(ctx, cur, 1e-6f);
+            }
+            ggml_tensor * msg  = ggml_view_1d(ctx, msgs,  n_embd, c*msgs->nb[1]);
+            ggml_tensor * msgn = ggml_view_1d(ctx, msgsn, n_embd, c*msgsn->nb[1]);
+            ggml_tensor * wd = ggml_new_tensor_2d(ctx, GGML_TYPE_BF16, 2*n_embd, rank);
+            ggml_tensor * wg = ggml_new_tensor_2d(ctx, GGML_TYPE_BF16, rank, n_embd);
+            ggml_tensor * wf = ggml_new_tensor_2d(ctx, GGML_TYPE_BF16, rank, n_embd);
+
+            ggml_tensor * g  = ggml_mul_mat(ctx, wd, ggml_concat(ctx, rn, msgn, 0));
+            ggml_tensor * gm = ggml_mul_mat(ctx, wg, g);
+            ggml_tensor * fm = ggml_mul_mat(ctx, wf, g);
+            if (gf) {
+                ggml_build_forward_expand(gf, fm);
+                ggml_build_forward_expand(gf, gm);
+            }
+            ggml_tensor * res = ggml_add(ctx, ggml_sub(ctx, cur, ggml_mul(ctx, ggml_tanh(ctx, fm), cur)),
+                                         ggml_mul(ctx, msg, ggml_tanh(ctx, gm)));
+            if (gf) {
+                ggml_build_forward_expand(gf, res);
+            }
+            out = out ? ggml_concat(ctx, out, res, 0) : res;
+        }
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // MUL(x, w) -> L2_NORM [-> SCALE] (Inkling 2 clipped Q and R, fused by CUDA)
 struct test_mul_l2_norm : public test_case {
     const std::array<int64_t, 4> ne;
@@ -12648,6 +12712,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_situ(1152, 8, 1));
     test_cases.emplace_back(new test_situ(1152, 8, 37));
     test_cases.emplace_back(new test_situ(100, 3, 5));
+    test_cases.emplace_back(new test_ctrl_batch(1));
+    test_cases.emplace_back(new test_ctrl_batch(3));
+    test_cases.emplace_back(new test_ctrl_batch(3, 2304, 64, false));
+    test_cases.emplace_back(new test_ctrl_batch(4, 512, 32));
 
     // per-channel scale, L2 norm with a clip threshold as eps, optional rescale (Inkling 2 Q and R)
     for (bool with_scale : { false, true }) {
