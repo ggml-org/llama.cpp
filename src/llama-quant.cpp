@@ -908,7 +908,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         GGML_TYPE_BF16,
     };
 
-    constexpr double EPSILON = 1e-12;
+    static constexpr double EPSILON = 1e-12;
     constexpr double INFINITE = std::numeric_limits<double>::infinity();
     constexpr uint64_t STATE_MAGIC = 0x4250572d5632; // "BPW-V2"
     constexpr uint64_t HASH_MAGIC = 0xeabada55cafed00d;
