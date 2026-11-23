@@ -5545,7 +5545,7 @@ void ggml_flash_attn_ext_add_sinks(
     a->src[4] = sinks;
 }
 
-bool ggml_flash_attn_ext_has_indexed_bias(const struct ggml_tensor * a) {    
+bool ggml_flash_attn_ext_has_indexed_bias(const struct ggml_tensor * a) {
     return a->op == GGML_OP_FLASH_ATTN_EXT && ggml_get_op_params_i32(a, 5) != 0;
 }
 
