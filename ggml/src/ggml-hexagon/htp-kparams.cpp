@@ -2133,10 +2133,24 @@ static bool htp_kparams_solve_rope(
         return false;
     }
 
-    kparams->n_hvx        = n_hvx;
-    kparams->vtcm_size    = (uint32_t) layout.total_bytes;
-    kparams->div_ne2_ne1  = init_fastdiv_values(dst->ne[2] * dst->ne[1]);
-    kparams->div_ne1      = init_fastdiv_values(dst->ne[1]);
+    const int n_ctx_orig = op_params[4];
+    float beta_fast, beta_slow;
+    memcpy(&beta_fast, op_params + 9,  sizeof(float));
+    memcpy(&beta_slow, op_params + 10, sizeof(float));
+
+    kparams->n_hvx          = n_hvx;
+    kparams->vtcm_size      = (uint32_t) layout.total_bytes;
+    kparams->theta_scale    = (n_dims > 0) ? std::pow(freq_base, -2.0f / n_dims) : 0.0f;
+    kparams->theta_scale_32 = (n_dims > 0) ? std::pow(freq_base, -64.0f / n_dims) : 0.0f;
+    {
+        const float inv_2log_fb = 1.0f / (2.0f * std::log(freq_base));
+        const float start       = std::floor(n_dims * std::log(n_ctx_orig / (beta_fast * 2.0f * (float) M_PI)) * inv_2log_fb);
+        const float end         = std::ceil(n_dims * std::log(n_ctx_orig / (beta_slow * 2.0f * (float) M_PI)) * inv_2log_fb);
+        kparams->corr_dims[0]   = std::max(0.0f, start);
+        kparams->corr_dims[1]   = std::min((float) (n_dims - 1), end);
+    }
+    kparams->div_ne2_ne1 = init_fastdiv_values(dst->ne[2] * dst->ne[1]);
+    kparams->div_ne1     = init_fastdiv_values(dst->ne[1]);
 
     return true;
 }
