@@ -279,6 +279,14 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: false,
+				dependsOn: SETTINGS_KEYS.SHOW_MESSAGE_STATS,
+				help: 'Keep the generation statistics under every message in view. When off, they show under the latest exchange and appear on earlier messages when you point at them. Message actions always work that way.',
+				key: SETTINGS_KEYS.ALWAYS_SHOW_MESSAGE_STATS,
+				label: 'Always show message statistics',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
 				help: 'Expand thought process by default when generating messages.',
 				key: SETTINGS_KEYS.SHOW_THOUGHT_IN_PROGRESS,
 				label: 'Show thought in progress',

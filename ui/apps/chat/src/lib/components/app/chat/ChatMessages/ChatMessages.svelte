@@ -244,7 +244,7 @@
 		{#each displayMessages as { isLastAssistantMessage, isLastUserMessage, message, nextAssistantMessage, siblingInfo, toolMessages }, index (message.id)}
 			<LazyChatMessage
 				{chatActions}
-				class="mx-auto mt-12 w-full max-w-3xl"
+				class="mx-auto mt-4 w-full max-w-3xl"
 				eager={index >= displayMessages.length - LANDING_EAGER_ROWS}
 				{isLastAssistantMessage}
 				{isLastUserMessage}
@@ -261,7 +261,7 @@
 
 			{#if pendingContent}
 				<ChatMessageUserPending
-					class="mx-auto mt-12 w-full max-w-3xl"
+					class="mx-auto mt-4 w-full max-w-3xl"
 					content={pendingContent}
 					extras={agenticStore.getPendingSteeringMessageExtras(convId)}
 					onDelete={() => agenticStore.clearSteeringMessage(convId)}
@@ -276,7 +276,7 @@
 
 			{#if pendingContent}
 				<ChatMessageUserPending
-					class="mx-auto mt-12 w-full max-w-3xl"
+					class="mx-auto mt-4 w-full max-w-3xl"
 					content={pendingContent}
 					extras={chatStore.getPendingMessageExtras(convId)}
 					onDelete={() => chatStore.clearPendingMessage(convId)}

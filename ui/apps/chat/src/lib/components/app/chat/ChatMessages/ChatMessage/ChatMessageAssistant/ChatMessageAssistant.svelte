@@ -9,6 +9,7 @@
 		ChatMessageContextMenu,
 		ChatMessageEditForm
 	} from '#lib/components/app/index.ts';
+	import { SETTINGS_KEYS } from '#lib/constants/index.ts';
 	import { getChatMessageEditContext } from '#lib/contexts/index.ts';
 	import { MessageRole } from '#lib/enums/index.ts';
 	import { useProcessingState } from '#lib/hooks/use-processing-state.svelte.ts';
@@ -79,6 +80,12 @@
 					processingState.getPromptProgressText() ||
 					processingState.getProcessingMessage()
 			: null
+	);
+
+	// the latest exchange keeps its stats and actions in view; earlier messages
+	// show them on hover, and the setting can keep their stats in view as well
+	let hidesStatsUntilHover = $derived(
+		!isLastAssistantMessage && !currentConfig[SETTINGS_KEYS.ALWAYS_SHOW_MESSAGE_STATS]
 	);
 
 	let assistantEl: HTMLDivElement | undefined = $state();
@@ -192,7 +199,7 @@
 	{/if}
 
 	{#if displayedModel}
-		<div class="info my-6 grid gap-4 tabular-nums">
+		<div class={['info my-4 grid gap-4 tabular-nums', hidesStatsUntilHover && 'message-meta']}>
 			<div class="inline-flex flex-wrap items-start gap-2 text-caption text-muted-foreground">
 				<ChatMessageAssistantModel
 					{displayedModel}
@@ -212,32 +219,41 @@
 	{/if}
 
 	{#if message.timestamp && !editCtx.isEditing}
-		<ChatMessageActionIcons
-			actionsPosition="left"
-			justify="start"
-			onContinue={currentConfig.enableContinueGeneration ? onContinue : undefined}
-			onRawOutputToggle={(enabled) => (showRawOutput = enabled)}
-			{onRegenerate}
-			rawOutputEnabled={showRawOutput}
-			showRawOutputSwitch={currentConfig.showRawOutputSwitch}
-		/>
+		<div class={isLastAssistantMessage ? undefined : 'message-meta'}>
+			<ChatMessageActionIcons
+				actionsPosition="left"
+				justify="start"
+				onContinue={currentConfig.enableContinueGeneration ? onContinue : undefined}
+				onRawOutputToggle={(enabled) => (showRawOutput = enabled)}
+				{onRegenerate}
+				rawOutputEnabled={showRawOutput}
+				showRawOutputSwitch={currentConfig.showRawOutputSwitch}
+			/>
+		</div>
 	{/if}
 </div>
 
 <style>
+	/* The reply's minimum height decides where a sent message rests once it
+	   glides up, and the top offset adds room above it. A phone's floating
+	   header covers the top of the page, so there it rests below the header. */
 	:global(.chat-message):last-child .chat-message-assistant {
+		--sent-message-top-offset: var(--page-top);
 		--assistant-min-height-offset: calc(
 			var(--last-user-message-height, 19rem) + var(--chat-form-height, 6rem) +
 				var(--chat-form-bottom-position, 0.5rem) + var(--chat-form-padding-top, 6rem) +
-				var(--assistant-margin-top, 3rem) + var(--chat-tabs-offset, 0px)
+				var(--assistant-margin-top, 1rem) + var(--chat-tabs-offset, 0px) +
+				var(--sent-message-top-offset)
 		);
 		min-height: calc(100dvh - var(--assistant-min-height-offset));
 
 		@media (width > 768px) {
+			--sent-message-top-offset: 0.5rem;
 			--assistant-min-height-offset: calc(
 				var(--last-user-message-height, 18rem) + var(--chat-form-height, 6rem) +
 					var(--chat-form-bottom-position, 1rem) + var(--chat-form-padding-top, 6rem) +
-					var(--assistant-margin-top, 3rem) + var(--chat-tabs-offset, 0px)
+					var(--assistant-margin-top, 1rem) + var(--chat-tabs-offset, 0px) +
+					var(--sent-message-top-offset)
 			);
 		}
 	}

@@ -391,6 +391,19 @@
 		width: 100%;
 	}
 
+	/* the answer stands a little apart from the work around it: trace rows keep
+	   their tight 0.5rem stack, text and a trace row get 0.75rem between them */
+	.agentic-content > :global(:not(.agentic-text) + .agentic-text),
+	.agentic-turn > :global(:not(.agentic-text) + .agentic-text) {
+		margin-top: 0.25rem;
+	}
+
+	/* on the text, not the row: the collapsible rows pin their own margins */
+	.agentic-content > :global(.agentic-text:has(+ :not(.agentic-text))),
+	.agentic-turn > :global(.agentic-text:has(+ :not(.agentic-text))) {
+		margin-bottom: 0.25rem;
+	}
+
 	.turn-stats {
 		border-top: 1px solid hsl(var(--surface-muted) / 0.5);
 	}
