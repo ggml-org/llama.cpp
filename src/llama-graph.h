@@ -807,9 +807,6 @@ public:
     ggml_tensor * self_rel_pos     = nullptr; // I32 [n_kv,     n_batch]
     ggml_tensor * self_rel_pos_swa = nullptr; // I32 [n_kv_swa, n_batch]
 
-    // 0, 1, ..., the query rows that the per-head KQ mask is written to
-    ggml_tensor * self_rows = nullptr; // I32 [n_batch]
-
     const uint32_t extent;
     const uint32_t extent_swa;
 
