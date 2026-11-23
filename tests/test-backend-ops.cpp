@@ -5285,6 +5285,86 @@ struct test_rel_bias_op : public test_case {
     }
 };
 
+// Inkling 2 one-token attention prep (fused by CUDA into one kernel): clipped Q [* tau], clipped K and RMS-normed V
+// stored in F16 caches, clipped and scaled R [* tau], in the graph order of the model
+struct test_attn_prep : public test_case {
+    const bool    tau;
+    const int64_t n_cells;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "ATTN_PREP";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_nmse_err() override {
+        return 1e-6;
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR2(tau, n_cells);
+    }
+
+    test_attn_prep(bool tau = false, int64_t n_cells = 16) : tau(tau), n_cells(n_cells) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t d = 128, n_head = 24, n_kv_head = 8, n_rel = 16;
+        const float   thr = 22.627417f, thr_r = 8.0f;
+        ggml_tensor * q   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d, n_head, 1);
+        ggml_tensor * wq  = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d, n_head, 1);
+        ggml_tensor * k   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d, n_kv_head, 1);
+        ggml_tensor * v   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, d, n_kv_head, 1);
+        ggml_tensor * r   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_rel, n_head, 1);
+        ggml_tensor * wr  = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_rel, n_head, 1);
+        ggml_tensor * t   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, 1, 1);
+        ggml_tensor * kc  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, d*n_kv_head, n_cells);
+        ggml_tensor * vc  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, d*n_kv_head, n_cells);
+        ggml_tensor * idx = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, 1);
+        ggml_set_name(t, "tau");
+        ggml_set_name(idx, "idx");
+
+        ggml_tensor * Q = ggml_l2_norm(ctx, ggml_mul(ctx, q, wq), thr);
+        if (tau) {
+            Q = ggml_mul(ctx, Q, t);
+        }
+        ggml_tensor * K  = ggml_l2_norm(ctx, k, thr);
+        ggml_tensor * V  = ggml_rms_norm(ctx, v, 1e-6f);
+        ggml_tensor * sk = ggml_set_rows(ctx, kc, ggml_reshape_2d(ctx, K, d*n_kv_head, 1), idx);
+        ggml_tensor * sv = ggml_set_rows(ctx, vc, ggml_reshape_2d(ctx, V, d*n_kv_head, 1), idx);
+        ggml_tensor * R  = ggml_scale(ctx, ggml_l2_norm(ctx, ggml_mul(ctx, r, wr), thr_r), thr_r);
+        if (tau) {
+            R = ggml_mul(ctx, R, t);
+        }
+        if (gf) {
+            for (ggml_tensor * x : { Q, K, V, sk, sv, R }) {
+                ggml_build_forward_expand(gf, x);
+            }
+        }
+        // everything that leaves the pattern, in one F32 vector
+        ggml_tensor * out = ggml_concat(ctx, ggml_reshape_1d(ctx, Q, ggml_nelements(Q)), ggml_reshape_1d(ctx, R, ggml_nelements(R)), 0);
+        out = ggml_concat(ctx, out, ggml_reshape_1d(ctx, ggml_cast(ctx, sk, GGML_TYPE_F32), ggml_nelements(sk)), 0);
+        out = ggml_concat(ctx, out, ggml_reshape_1d(ctx, ggml_cast(ctx, sv, GGML_TYPE_F32), ggml_nelements(sv)), 0);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        std::mt19937 rng(7);
+        for (ggml_tensor * x = ggml_get_first_tensor(ctx); x != NULL; x = ggml_get_next_tensor(ctx, x)) {
+            if (strcmp(x->name, "idx") == 0) {
+                const int64_t row = std::uniform_int_distribution<int64_t>(0, n_cells - 1)(rng);
+                ggml_backend_tensor_set(x, &row, 0, sizeof(row));
+            } else if (strcmp(x->name, "tau") == 0) {
+                const float tv = 1.37f;
+                ggml_backend_tensor_set(x, &tv, 0, sizeof(tv));
+            } else if (x->op == GGML_OP_NONE) {
+                init_tensor_uniform(x, -4.0f, 4.0f);
+            }
+        }
+    }
+};
+
 // MUL(x, w) -> L2_NORM [-> SCALE] (Inkling 2 clipped Q and R, fused by CUDA)
 struct test_mul_l2_norm : public test_case {
     const std::array<int64_t, 4> ne;
@@ -12520,6 +12600,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_rel_bias_op(24, 1025, 300, 5));
     test_cases.emplace_back(new test_rel_bias_op(24, 1025, 4096, 64));
     test_cases.emplace_back(new test_rel_bias_op(5, 101, 300, 3, 2));
+    test_cases.emplace_back(new test_attn_prep(false));
+    test_cases.emplace_back(new test_attn_prep(true));
 
     // per-channel scale, L2 norm with a clip threshold as eps, optional rescale (Inkling 2 Q and R)
     for (bool with_scale : { false, true }) {
