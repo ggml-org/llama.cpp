@@ -22,6 +22,7 @@ import LoadIcon from '@lucide/svelte/icons/power';
 import RetryIcon from '@lucide/svelte/icons/rotate-cw';
 import PromptCommandIcon from '@lucide/svelte/icons/sparkles';
 import VideoIcon from '@lucide/svelte/icons/video';
+import CancelLoadIcon from '@lucide/svelte/icons/x';
 import { ChatFormCommandAction, FileTypeCategory, ModelCapability } from '#lib/enums/index.ts';
 import type { ModelCapabilities } from '#lib/types/models.js';
 import type { Component } from 'svelte';
@@ -80,6 +81,7 @@ export const MODEL_DOWNLOAD_ICONS = {
 
 /** Icons the model load control shows for its states and actions. */
 export const MODEL_LOAD_ICONS = {
+	cancel: CancelLoadIcon,
 	failed: LoadFailedIcon,
 	load: LoadIcon,
 	loading: LoadingIcon,
