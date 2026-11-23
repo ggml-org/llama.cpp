@@ -1212,10 +1212,11 @@ void ggml_vk_wait_events(vk_context& ctx, std::vector<vk::Event>&& events) {
     );
 }
 
-static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type k_type, ggml_type v_type, bool f32acc) {
+static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type k_type, ggml_type v_type, bool f32acc, bool kv_rows) {
 
     vk_fa_tuning_params result{};
     result.path = FA_SCALAR;
+    result.kv_rows = kv_rows;
 
     if (device->vendor_id == VK_VENDOR_ID_INTEL) {
         // Disable subgroup use due to performance issues when enforcing subgroup sizes
@@ -1298,11 +1299,12 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
     return result;
 }
 
-static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type k_type, ggml_type v_type, bool f32acc, uint32_t qk_ratio, bool allow_flip) {
+static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type k_type, ggml_type v_type, bool f32acc, uint32_t qk_ratio, bool kv_rows, bool allow_flip) {
     GGML_UNUSED(n_kv);
 
     vk_fa_tuning_params result{};
     result.path = FA_COOPMAT1;
+    result.kv_rows = kv_rows;
 
     const uint32_t D = hsk | hsv;
 
@@ -1370,12 +1372,13 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device
     return result;
 }
 
-static vk_fa_tuning_params get_fa_tuning_params_coopmat2(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type k_type, ggml_type v_type, bool f32acc) {
+static vk_fa_tuning_params get_fa_tuning_params_coopmat2(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type k_type, ggml_type v_type, bool f32acc, bool kv_rows) {
     GGML_UNUSED(n_kv);
     GGML_UNUSED(f32acc);
 
     vk_fa_tuning_params result{};
     result.path = FA_COOPMAT2;
+    result.kv_rows = kv_rows;
 
     const uint32_t D = hsk | hsv;
 
@@ -1398,7 +1401,7 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat2(const vk_device& device
     return result;
 }
 
-vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type k_type, ggml_type v_type, bool f32acc, uint32_t qk_ratio, bool allow_flip) {
+vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type k_type, ggml_type v_type, bool f32acc, uint32_t qk_ratio, bool kv_rows, bool allow_flip) {
     FaCodePath path = device->coopmat2 ? FA_COOPMAT2 :
                       device->coopmat1_fa_support ? FA_COOPMAT1 : FA_SCALAR;
 
@@ -1417,11 +1420,11 @@ vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_t hsk, 
     if (path == FA_COOPMAT1) {
         bool shape_ok = (f32acc && device->coopmat_support_16x16x16_f32acc) ||
                         (!f32acc && device->coopmat_support_16x16x16_f16acc);
-        vk_fa_tuning_params params = get_fa_tuning_params_coopmat1(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc, qk_ratio, allow_flip);
+        vk_fa_tuning_params params = get_fa_tuning_params_coopmat1(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc, qk_ratio, kv_rows, allow_flip);
         bool shmem_ok = ggml_vk_flash_attn_coopmat_shmem_support(device, params, hsk, hsv, f32acc, k_type, v_type);
         if (!shmem_ok && params.flip) {
             allow_flip = false;
-            params = get_fa_tuning_params_coopmat1(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc, qk_ratio, allow_flip);
+            params = get_fa_tuning_params_coopmat1(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc, qk_ratio, kv_rows, allow_flip);
             shmem_ok = ggml_vk_flash_attn_coopmat_shmem_support(device, params, hsk, hsv, f32acc, k_type, v_type);
         }
 
@@ -1437,11 +1440,11 @@ vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_t hsk, 
 
     switch (path) {
     case FA_SCALAR:
-        return get_fa_tuning_params_scalar(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc);
+        return get_fa_tuning_params_scalar(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc, kv_rows);
     case FA_COOPMAT1:
-        return get_fa_tuning_params_coopmat1(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc, qk_ratio, allow_flip);
+        return get_fa_tuning_params_coopmat1(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc, qk_ratio, kv_rows, allow_flip);
     case FA_COOPMAT2:
-        return get_fa_tuning_params_coopmat2(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc);
+        return get_fa_tuning_params_coopmat2(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc, kv_rows);
     default:
         throw std::runtime_error("unsupported FaCodePath");
     }
@@ -8954,7 +8957,9 @@ bool ggml_vk_flash_attn_scalar_shmem_support(const vk_device& device, const vk_f
 
     const uint32_t occupancy_limiter = std::max(params.limit_occupancy_shmem, 1u) * 4 * sizeof(float);
 
-    const uint32_t total_size = tmpsh + tmpshv4 + masksh + iq_shmem + Qf + kvsh + kblocksh_size + occupancy_limiter;
+    const uint32_t kv_rows_sh = params.kv_rows ? std::max(Bc, 128u) * (uint32_t)sizeof(uint32_t) : 0;
+
+    const uint32_t total_size = tmpsh + tmpshv4 + masksh + iq_shmem + Qf + kvsh + kblocksh_size + occupancy_limiter + kv_rows_sh;
     const bool supported = total_size <= device->properties.limits.maxComputeSharedMemorySize;
 
     VK_LOG_DEBUG("ggml_vk_flash_attn_scalar_shmem_support(HSK=" << hsk << ", HSV=" << hsv << ", mmq=" << mmq << ", total_size=" << total_size << ", supported=" << supported);
@@ -9005,7 +9010,9 @@ bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_
         pvsh = Br * osh_stride * pvsh_elem_size;
     }
 
-    uint32_t total_size = tmpsh + iq_shmem + Qf + Psh + sfsh + ksh + pvsh + slope + params.limit_occupancy_shmem * 16;
+    const uint32_t kv_rows_sh = params.kv_rows ? std::max(Bc, 128u) * (uint32_t)sizeof(uint32_t) : 0;
+
+    uint32_t total_size = tmpsh + iq_shmem + Qf + Psh + sfsh + ksh + pvsh + slope + kv_rows_sh + params.limit_occupancy_shmem * 16;
 
     if (params.flip) {
         const uint32_t d_pad = std::max(hsk_pad, hsv_pad);
@@ -9101,7 +9108,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     const bool rows_compact = kv_rows && neq1 >= 64 &&
                               (ctx->device->vendor_id == VK_VENDOR_ID_AMD ||
                                (ctx->device->vendor_id == VK_VENDOR_ID_NVIDIA &&
-                                get_fa_tuning_params(ctx->device, HSK, HSV, neq1, KV, k->type, v->type, f32acc, qk_ratio).path == FA_COOPMAT2));
+                                get_fa_tuning_params(ctx->device, HSK, HSV, neq1, KV, k->type, v->type, f32acc, qk_ratio, kv_rows).path == FA_COOPMAT2));
     // gated to AMD, except RDNA4, which regressed in benchmarks
     const bool kv_raw_strided = (rows_compact && kv_raw && (HSK % 8) == 0 && (HSV % 8) == 0) ||
                                 (ctx->device->vendor_id == VK_VENDOR_ID_AMD &&
@@ -9149,7 +9156,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     const ggml_type v_type_eff = (use_dequant_kv && !kv_raw_strided) ? GGML_TYPE_F16 : v->type;
 
     // N=32 avoids the cm1 prefill block_rows doubling
-    vk_fa_tuning_params tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, 32, KV, k_type_eff, v_type_eff, f32acc, qk_ratio);
+    vk_fa_tuning_params tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, 32, KV, k_type_eff, v_type_eff, f32acc, qk_ratio, use_kv_rows);
     const uint32_t max_gqa = std::min(tuning_params.block_rows, 32u);
 
     if (N <= 8 && qk_ratio > 1 && qk_ratio <= max_gqa &&
@@ -9162,7 +9169,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
         workgroups_y /= gqa_ratio;
     }
 
-    tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, N, KV, k_type_eff, v_type_eff, f32acc, qk_ratio);
+    tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, N, KV, k_type_eff, v_type_eff, f32acc, qk_ratio, use_kv_rows);
 
     float scale         = 1.0f;
     float max_bias      = 0.0f;
@@ -9242,7 +9249,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
         const bool kv_16b = use_dequant_kv ||
             (((uintptr_t)k->data | (uintptr_t)v->data | nbk2_eff | nbk3_eff | nbv2_eff | nbv3_eff) % 16) == 0;
         if (!aligned || use_sparse || (use_kv_rows && tuning_params.flip_direct) || gqa_ratio != 1 || !kv_16b) {
-            tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, N, KV, k_type_eff, v_type_eff, f32acc, qk_ratio, false);
+            tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, N, KV, k_type_eff, v_type_eff, f32acc, qk_ratio, use_kv_rows, false);
             alignment = tuning_params.block_cols;
             aligned = fa_aligned(tuning_params);
         }

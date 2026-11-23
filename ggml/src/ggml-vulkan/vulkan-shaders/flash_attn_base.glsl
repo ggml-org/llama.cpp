@@ -161,6 +161,12 @@ uint32_t i, N, KV, split_k_index, Tr, start_j, end_j,
          gqa_iq1, iq2, iq3, rk2, rk3, rv2, rv3, ik2, ik3, iv2, iv3,
          q_stride, k_stride, v_stride, m_stride, kv_indices_base;
 
+#ifdef FA_KV_ROWS_SHMEM
+const uint32_t kv_rows_sh_size = !USE_KV_ROWS ? 4 : (Bc >= 128 ? Bc : 128);
+shared uint32_t kv_rows_sh[kv_rows_sh_size];
+uint32_t kv_rows_sh_base = 0x80000000u;
+#endif
+
 void init_indices()
 {
     N = p.N;
@@ -241,6 +247,12 @@ void init_indices()
 
 // Resolve an attention column to a K/V row; false for inactive (padding or out of range).
 bool fa_kv_index(uint lin, out uint kv_col) {
+#ifdef FA_KV_ROWS_SHMEM
+    if (USE_KV_ROWS) {
+        kv_col = kv_rows_sh[lin - kv_rows_sh_base];
+        return !KV_bounds_check || lin < KV;
+    }
+#endif
     if (GATHER_KV) {
         if (lin >= (USE_SPARSE ? p.split_kv : KV)) {
             kv_col = 0;
@@ -254,6 +266,26 @@ bool fa_kv_index(uint lin, out uint kv_col) {
     kv_col = lin;
     return !KV_bounds_check || lin < KV;
 }
+
+#ifdef FA_KV_ROWS_SHMEM
+// padding rows read row 0, their mask is -inf
+void fa_kv_rows_load(const uint32_t j) {
+    if (!USE_KV_ROWS || j * Bc - kv_rows_sh_base <= kv_rows_sh_size - Bc) {
+        return;
+    }
+    kv_rows_sh_base = j * Bc;
+    barrier();
+    [[unroll]] for (uint32_t c = 0; c < kv_rows_sh_size; c += gl_WorkGroupSize.x) {
+        const uint32_t idx = c + gl_LocalInvocationIndex;
+        if (idx < kv_rows_sh_size) {
+            const uint32_t lin = kv_rows_sh_base + idx;
+            const uint32_t row = lin < KV ? uint(data_kv_indices[kv_indices_base + lin]) : 0;
+            kv_rows_sh[idx] = row < p.n_kv_cache ? row : 0;
+        }
+    }
+    barrier();
+}
+#endif
 
 bool fa_mask_index(uint lin, out uint mask_col) {
     if (USE_SPARSE) {

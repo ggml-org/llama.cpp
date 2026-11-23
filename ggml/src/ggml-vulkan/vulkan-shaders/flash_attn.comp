@@ -22,6 +22,7 @@
 
 #include "types.glsl"
 #include "dot_product_funcs.glsl"
+#define FA_KV_ROWS_SHMEM
 #include "flash_attn_base.glsl"
 #include "flash_attn_dequant.glsl"
 
@@ -240,6 +241,8 @@ void main() {
                 }
             }
         }
+
+        fa_kv_rows_load(j);
 
         ACC_TYPE Sf[rows_per_thread][cols_per_thread];
         [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
