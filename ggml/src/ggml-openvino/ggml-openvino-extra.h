@@ -206,6 +206,9 @@ bool ggml_openvino_is_gpu();
 // Read n_seq_active and attention_size(_swa) from the KQ mask shape (off with GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK=1)
 bool ggml_openvino_shape_from_mask_enabled();
 
+// Manual GQA attention instead of SDPA (GGML_OPENVINO_MANUAL_GQA_ATTN, on GPU by default)
+bool ggml_openvino_manual_gqa_enabled();
+
 // GDN q pre-scale for eligible graphs on the NPU static path. On by default;
 // GGML_OPENVINO_GDN_Q_SCALE=0 (or a negative or non-numeric value) turns it off.
 bool ggml_openvino_gdn_prescale_enabled();
@@ -242,6 +245,7 @@ size_t ggml_openvino_max_alloc_size(const std::string & device);
 // release:  madvise(MADV_DONTNEED) all registered buffers, dropping their RSS.
 // released: true once release has run (used to fail-fast on post-release recompile).
 void ggml_openvino_register_weight_buffer(void * data, size_t size);
+void ggml_openvino_unregister_weight_buffer(const void * data);
 void ggml_openvino_release_weight_buffers();
 bool ggml_openvino_weight_buffers_released();
 

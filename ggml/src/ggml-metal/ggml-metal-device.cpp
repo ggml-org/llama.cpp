@@ -974,7 +974,15 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     constexpr int NRA = SZ_SIMDGROUP * N_MM_BLOCK_Y * N_MM_SIMD_GROUP_Y;
     constexpr int NRB = SZ_SIMDGROUP * N_MM_BLOCK_X * N_MM_SIMD_GROUP_X;
 
-    const bool has_tensor = ggml_metal_device_get_props(ggml_metal_library_get_device(lib))->has_tensor;
+    const ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ggml_metal_library_get_device(lib));
+
+    const bool has_tensor = props_dev->has_tensor;
+
+    const bool prec_bf16 = props_dev->has_bfloat &&
+        ggml_prec_get_src(op, 1) == GGML_PREC_BF16 && tsrc1 == GGML_TYPE_F32 &&
+        (has_tensor ? tsrc0 == GGML_TYPE_F32 : tsrc0 != GGML_TYPE_BF16);
+
+    const bool prec_f32 = ggml_prec_get_src(op, 1) == GGML_PREC_F32 && tsrc1 == GGML_TYPE_F32;
 
     const bool bc_out = has_tensor
         ? (op->ne[0] % NRA != 0 || op->ne[1] % NRB != 0)
@@ -986,7 +994,11 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     const int16_t r2   = (int16_t) (ne12 / op->src[0]->ne[2]);
     const int16_t r3   = (int16_t) (ne13 / op->src[0]->ne[3]);
 
-    snprintf(base, 256, "kernel_mul_mm_%s_%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1));
+    const bool use_tensor = has_tensor && !prec_f32;
+
+    const char * infix = use_tensor ? "_tensor" : "";
+    const char * suffix = prec_f32 ? "_prec_f32" : (prec_bf16 ? "_prec_bf16" : "");
+    snprintf(base, 256, "kernel_mul_mm%s_%s_%s%s", infix, ggml_type_name(tsrc0), ggml_type_name(tsrc1), suffix);
     snprintf(name, 256, "%s_bci=%d_bco=%d_ne12=%d_ne13=%d_r2=%d_r3=%d",
              base, bc_inp, bc_out, ne12, ne13, r2, r3);
 
@@ -1006,7 +1018,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
         ggml_metal_cv_free(cv);
     }
 
-    if (has_tensor) {
+    if (use_tensor) {
         res.nr0 = NRA;
         res.nr1 = NRB;
 
@@ -1016,7 +1028,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
         res.nr0 = 64;
         res.nr1 = 32;
 
-        res.smem = bc_out ? 8192 : (4096 + 2048);
+        res.smem = prec_f32 ? 12288 : (bc_out ? 8192 : (4096 + 2048));
     }
 
     res.nsg = N_MM_SIMD_GROUP_X * N_MM_SIMD_GROUP_Y;
@@ -1305,9 +1317,21 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_id(ggml_m
     const ggml_type tsrc0 = op->src[0]->type;
     const ggml_type tsrc1 = op->src[1]->type;
 
+    const ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ggml_metal_library_get_device(lib));
+
+    const bool prec_bf16 = props_dev->has_bfloat &&
+        ggml_prec_get_src(op, 1) == GGML_PREC_BF16 && tsrc1 == GGML_TYPE_F32 &&
+        tsrc0 != GGML_TYPE_BF16 && tsrc0 != GGML_TYPE_MXFP4;
+
+    const bool prec_f32 = ggml_prec_get_src(op, 1) == GGML_PREC_F32 && tsrc1 == GGML_TYPE_F32;
+
     const bool bc_inp = op->src[0]->ne[0] % 32 != 0;
 
-    snprintf(base, 256, "kernel_mul_mm_id_%s_%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1));
+    const bool use_tensor = props_dev->has_tensor && !prec_f32;
+
+    const char * infix = use_tensor ? "_tensor" : "";
+    const char * suffix = prec_f32 ? "_prec_f32" : (prec_bf16 ? "_prec_bf16" : "");
+    snprintf(base, 256, "kernel_mul_mm_id%s_%s_%s%s", infix, ggml_type_name(tsrc0), ggml_type_name(tsrc1), suffix);
     snprintf(name, 256, "%s_bci=%d", base, bc_inp);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
@@ -1321,7 +1345,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_id(ggml_m
         ggml_metal_cv_free(cv);
     }
 
-    res.smem = 8192;
+    res.smem = prec_f32 ? 12288 : 8192;
 
     return res;
 }

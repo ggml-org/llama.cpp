@@ -30,6 +30,10 @@ OutputVector translate_reshape(const NodeContext & context) {
     std::shared_ptr<ov::Node> new_shape_node;
     switch (op_case) {
     case 0:
+        // keep the tracked dynamic dim, e.g. the tokens of a reshape that only adds a trailing 1 (see translate_cont)
+        if (context.get_op_dynamic_dim() != -1) {
+            shape[3 - context.get_op_dynamic_dim()] = -1;
+        }
         break;
     case 1:
     case 9:

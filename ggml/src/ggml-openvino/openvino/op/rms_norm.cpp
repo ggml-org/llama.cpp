@@ -34,7 +34,7 @@ OutputVector translate_rms_norm(const NodeContext & context) {
         input_node = context.get_input(0);
     } else if (op_case == 1) {
         input_node = process_view_input_new(context, 0);
-    } else if (op_case == 2 || op_case == 3) {
+    } else if (op_case == 2 || op_case == 5) {
         auto ssm_state_size = context.get_ssm_state_size();
         // The GDN op packs [attn | new_state] along the row axis; the state occupies the last
         // ssm_state_size * n_seqs rows. Slice it off (scaling by the active sequence count) to keep
@@ -83,7 +83,7 @@ OutputVector translate_rms_norm(const NodeContext & context) {
     float eps;
     memcpy(&eps, context.get_output_op_params(), sizeof(float));
 
-    if (op_case == 3 && ggml_openvino_gdn_prescale_enabled()) {
+    if ((op_case == 3 || op_case == 5) && ggml_openvino_gdn_prescale_enabled()) {
         // input is the GDN output pre-scaled by ggml_openvino_gdn_q_scale(): rms_norm(s*x, s*s*eps) == rms_norm(x, eps)
         const float q_scale = ggml_openvino_gdn_q_scale();
         eps *= q_scale * q_scale;

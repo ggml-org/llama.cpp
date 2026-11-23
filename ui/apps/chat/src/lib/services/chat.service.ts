@@ -8,6 +8,7 @@
 
 import { getAudioInputFormat } from '../utils/audio-format';
 import { capImageDataURLSize } from '../utils/cap-img-size';
+import { dropIncompleteToolCalls } from '../utils/incomplete-tool-calls';
 import {
 	API_CHAT,
 	API_SLOTS,
@@ -851,8 +852,7 @@ export class ChatService {
 		model?: string | null
 	): Promise<ApiChatMessageData[]> {
 		const options = ChatService.conversionOptionsFor(model);
-
-		return (
+		const converted = (
 			await Promise.all(
 				messages.map((msg) => {
 					if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
@@ -875,6 +875,10 @@ export class ChatService {
 
 			return true;
 		});
+
+		// a tool call cut off by Stop can still sit on the message: the server
+		// would reject the whole request on its arguments
+		return dropIncompleteToolCalls(converted);
 	}
 
 	/**

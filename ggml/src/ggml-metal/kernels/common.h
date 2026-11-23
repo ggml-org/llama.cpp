@@ -124,3 +124,46 @@ template<> inline float4 elu_approx<float4>(float4 x) {
 
     return res;
 }
+
+template <typename T> struct value_type;
+template <> struct value_type<float4x4> { typedef float type; };
+template <> struct value_type<half4x4>  { typedef half  type; };
+#if defined(GGML_METAL_HAS_BF16)
+template <> struct value_type<bfloat4x4> { typedef bfloat type; };
+#endif
+
+template <typename T> struct value_type_4x4;
+template <> struct value_type_4x4<float>  { typedef float4x4 type; };
+template <> struct value_type_4x4<half>   { typedef half4x4  type; };
+#if defined(GGML_METAL_HAS_BF16)
+template <> struct value_type_4x4<bfloat> { typedef bfloat4x4 type; };
+#endif
+
+template <typename T> struct value_type_2x4;
+template <> struct value_type_2x4<float>  { typedef float2x4 type; };
+template <> struct value_type_2x4<half>   { typedef half2x4  type; };
+#if defined(GGML_METAL_HAS_BF16)
+template <> struct value_type_2x4<bfloat> { typedef bfloat2x4 type; };
+#endif
+
+template <typename T> struct value_type_8x8;
+template <> struct value_type_8x8<float>  { typedef simdgroup_float8x8 type; };
+template <> struct value_type_8x8<half>   { typedef simdgroup_half8x8  type; };
+#if defined(GGML_METAL_HAS_BF16)
+template <> struct value_type_8x8<bfloat> { typedef simdgroup_bfloat8x8 type; };
+#endif
+
+template <typename T> struct value_type_4;
+template <> struct value_type_4<float>  { typedef float4 type; };
+template <> struct value_type_4<half>   { typedef half4  type; };
+template <> struct value_type_4<int32_t> { typedef int4 type; };
+#if defined(GGML_METAL_HAS_BF16)
+template <> struct value_type_4<bfloat> { typedef bfloat4 type; };
+#endif
+
+template <typename T> struct value_type_2;
+template <> struct value_type_2<float>  { typedef float2 type; };
+template <> struct value_type_2<half>   { typedef half2  type; };
+#if defined(GGML_METAL_HAS_BF16)
+template <> struct value_type_2<bfloat> { typedef bfloat2 type; };
+#endif

@@ -691,6 +691,7 @@ class MCPStore implements McpHealthHost {
 	}
 
 	/**
+	 * @deprecated No caller any more: the tool call rows dropped their icons.
 	 * Resolve the favicon URL for an MCP server by one of its tool names.
 	 * Returns `null` if the tool is not provided by any configured MCP server,
 	 * or if the owning server has no icon to show.
