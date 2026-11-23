@@ -247,18 +247,22 @@ def test_vision_image_url_private_address(allow_private: bool):
         target.server_close()
 
 
+def get_ocr_image_part(name: str) -> dict:
+    response = requests.get(f"https://huggingface.co/ggml-org-dev/small-test/resolve/main/test/{name}.png")
+    response.raise_for_status()
+    return {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(response.content).decode("utf-8")}}
+
+
 @pytest.mark.parametrize("name,text", [("hello_world", "HELLO WORLD"), ("invoice_2026", "Invoice 2026")])
 def test_vision_ocr(name: str, text: str):
     # small-test reads black text on white in a common truetype font, the kind of image it is trained on
     global server
     server = ServerPreset.small_test()
     server.start()
-    response = requests.get(f"https://huggingface.co/ggml-org-dev/small-test/resolve/main/test/{name}.png")
-    response.raise_for_status()
     body = server.make_any_request("POST", "/v1/chat/completions", data={
         "max_tokens": 32,
         "messages": [{"role": "user", "content": [
-            {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(response.content).decode("utf-8")}},
+            get_ocr_image_part(name),
             {"type": "text", "text": "What is written in this image?"},
         ]}],
         "temperature": 0.0,
@@ -267,3 +271,24 @@ def test_vision_ocr(name: str, text: str):
     })
     content = body["choices"][0]["message"]["content"]
     assert text.lower() in content.lower(), f"expected {text!r} in {content!r}"
+
+
+def test_vision_ocr_two_images():
+    # both images in one message: small-test is trained on one image per message, so it only reads the year of the second one
+    # "2026" is only in the second image, which proves that both images reach the model
+    global server
+    server = ServerPreset.small_test()
+    server.start()
+    body = server.make_any_request("POST", "/v1/chat/completions", data={
+        "max_tokens": 64,
+        "messages": [{"role": "user", "content": [
+            get_ocr_image_part("hello_world"),
+            get_ocr_image_part("invoice_2026"),
+            {"type": "text", "text": "What is written in these two images?"},
+        ]}],
+        "temperature": 0.0,
+        "top_k": 1,
+        "top_p": 1.0,
+    })
+    content = body["choices"][0]["message"]["content"].lower()
+    assert "hello world" in content and "2026" in content, f"expected the text of both images in {content!r}"
