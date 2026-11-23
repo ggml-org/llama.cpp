@@ -174,6 +174,10 @@ AEEResult dspqueue_write(dspqueue_t               queue,
     return dspqueue_write_pfn(queue, flags, num_buffers, buffers, message_length, message, timeout_us);
 }
 
+bool htpdrv_has_read_noblock(void) {
+    return dspqueue_read_noblock_pfn != nullptr;
+}
+
 AEEResult dspqueue_read(dspqueue_t               queue,
                         uint32_t *               flags,
                         uint32_t                 max_buffers,
@@ -183,12 +187,10 @@ AEEResult dspqueue_read(dspqueue_t               queue,
                         uint32_t *               message_length,
                         uint8_t *                message,
                         uint32_t                 timeout_us) {
-#ifdef _WIN32
-    if (timeout_us == 0) {
+    if (timeout_us == 0 && dspqueue_read_noblock_pfn != nullptr) {
         return dspqueue_read_noblock_pfn(queue, flags, max_buffers, num_buffers, buffers, max_message_length,
-                                     message_length, message);
+                                         message_length, message);
     }
-#endif
     return dspqueue_read_pfn(queue, flags, max_buffers, num_buffers, buffers, max_message_length, message_length,
                              message, timeout_us);
 }
@@ -378,7 +380,7 @@ int htpdrv_init() {
     dlsym(handle.get(), dspqueue_export_pfn_t, dspqueue_export_pfn, dspqueue_export, false);
     dlsym(handle.get(), dspqueue_write_pfn_t, dspqueue_write_pfn, dspqueue_write, false);
     dlsym(handle.get(), dspqueue_read_pfn_t, dspqueue_read_pfn, dspqueue_read, false);
-    dlsym(handle.get(), dspqueue_read_noblock_pfn_t, dspqueue_read_noblock_pfn, dspqueue_read_noblock, false);
+    dlsym(handle.get(), dspqueue_read_noblock_pfn_t, dspqueue_read_noblock_pfn, dspqueue_read_noblock, true);
     dlsym(handle.get(), remote_handle64_open_pfn_t, remote_handle64_open_pfn, remote_handle64_open, false);
     dlsym(handle.get(), remote_handle64_invoke_pfn_t, remote_handle64_invoke_pfn, remote_handle64_invoke, false);
     dlsym(handle.get(), remote_handle_control_pfn_t, remote_handle_control_pfn, remote_handle_control, false);

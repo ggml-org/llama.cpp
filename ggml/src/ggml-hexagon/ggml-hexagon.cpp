@@ -362,7 +362,7 @@ struct ggml_hexagon_session {
     std::unordered_map<uint64_t, volatile uint32_t *> cpy_fence_slots;
 
     void enqueue_mdev_group();
-    void enqueue_op(const htp_opnode & node);
+    void enqueue_op(const htp_opnode & node, bool allow_fuse = true);
     void enqueue_cpy(const ggml_tensor * src, ggml_tensor * dst, const ggml_tensor * sync_tensor = nullptr, uint32_t fence_seq = 0);
     void enqueue_fence(const ggml_tensor * sync_tensor, uint32_t fence_seq = 0, bool wait = true);
     void enqueue_allreduce(const ggml_tensor * dst, const std::vector<const ggml_tensor *> & src_tensors,
@@ -1247,6 +1247,58 @@ static bool ggml_backend_buffer_is_hexagon(const struct ggml_backend_buffer * b)
     return b->buft->iface.get_alignment == ggml_backend_hexagon_buffer_type_get_alignment;
 }
 
+struct ggml_hexagon_tensor_map {
+    struct slot {
+        uint64_t key;
+        uint32_t gen;
+        int32_t  val;
+    };
+
+    std::vector<slot> slots;
+    uint32_t          mask = 0;
+    uint32_t          gen  = 1;
+
+    void init(size_t max_entries) {
+        size_t cap = 64;
+        while (cap < max_entries * 2) {
+            cap <<= 1;
+        }
+        slots.assign(cap, { 0, 0, 0 });
+        mask = (uint32_t) (cap - 1);
+        gen  = 1;
+    }
+
+    void clear() {
+        if (++gen == 0) {
+            for (auto & s : slots) { s.gen = 0; }
+            gen = 1;
+        }
+    }
+
+    bool contains(uint64_t key) const {
+        uint32_t i = (uint32_t) key & mask;
+        while (slots[i].gen == gen) {
+            if (slots[i].key == key) { return true; }
+            i = (i + 1) & mask;
+        }
+        return false;
+    }
+
+    int find_or_insert(uint64_t key, int new_val, bool & inserted) {
+        uint32_t i = (uint32_t) key & mask;
+        while (slots[i].gen == gen) {
+            if (slots[i].key == key) {
+                inserted = false;
+                return slots[i].val;
+            }
+            i = (i + 1) & mask;
+        }
+        slots[i] = { key, gen, new_val };
+        inserted = true;
+        return new_val;
+    }
+};
+
 struct ggml_hexagon_opbatch {
     ggml_hexagon_session*            sess;
 
@@ -1255,12 +1307,13 @@ struct ggml_hexagon_opbatch {
     std::vector<htp_tensor>          h_tens;    // htp tensor descriptors
     std::vector<htp_op_desc>         h_ops;     // htp op descriptors
 
-    std::unordered_map<uint64_t, int> t_map; // tensor hash to index
+    ggml_hexagon_tensor_map          t_map;     // tensor hash to index
 
     unsigned int n_bufs;     // num buffers in the batch
     unsigned int n_tens;     // num tensors ...
     unsigned int n_ops;      // num ops ...
     size_t       b_vmem;     // sum of non-extended buffer sizes
+    bool         last_op_fusable;
 
     unsigned int n_bufs_max;
     unsigned int n_tens_max;
@@ -1272,9 +1325,9 @@ struct ggml_hexagon_opbatch {
         n_tens = 0;
         n_ops  = 0;
         b_vmem = 0;
+        last_op_fusable = false;
 
         t_map.clear();
-        ops.resize(n_ops_max);
     }
 
     ggml_hexagon_opbatch(ggml_hexagon_session *sess, size_t batch_size, size_t max_vmem) {
@@ -1292,7 +1345,7 @@ struct ggml_hexagon_opbatch {
         h_tens.resize(n_tens_max);
         h_ops.resize(n_ops_max);
 
-        t_map.reserve(n_tens_max);
+        t_map.init(n_tens_max);
 
         GGML_LOG_INFO("ggml-hex: %s op batching: n-bufs %u n-tensors %u n-ops %u vmem %zu\n",
                 sess->c_name(), n_bufs_max, n_tens_max, n_ops_max, b_vmem_max);
@@ -1371,20 +1424,16 @@ struct ggml_hexagon_opbatch {
     }
 
     static uint64_t hash_tensor(const ggml_tensor * t, const htp_tensor & shape) {
-        uint64_t hash = 1469598103934665603ull;
-        auto hash_value = [&hash](uint64_t value) {
-            hash ^= value;
-            hash *= 1099511628211ull;
-        };
-
-        hash_value((uintptr_t) t->data);
-        hash_value(shape.type);
-        hash_value(shape.size);
-        hash_value(shape.flags);
-        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
-            hash_value(shape.ne[i]);
-            hash_value(shape.nb[i]);
-        }
+        uint64_t h1 = (uintptr_t) t->data ^ ((uint64_t) shape.type << 48) ^ ((uint64_t) shape.flags << 32) ^ shape.size;
+        uint64_t h2 = (uint64_t) shape.ne[0]
+                    ^ ((uint64_t) shape.ne[1] * 0x9e3779b97f4a7c15ull)
+                    ^ ((uint64_t) shape.ne[2] * 0xbf58476d1ce4e5b9ull)
+                    ^ ((uint64_t) shape.ne[3] * 0x94d049bb133111ebull);
+        uint64_t h3 = (uint64_t) shape.nb[0]
+                    ^ ((uint64_t) shape.nb[1] * 0x9e3779b97f4a7c15ull)
+                    ^ ((uint64_t) shape.nb[2] * 0xbf58476d1ce4e5b9ull)
+                    ^ ((uint64_t) shape.nb[3] * 0x94d049bb133111ebull);
+        uint64_t hash = (h1 * 0xff51afd7ed558ccdull) ^ (h2 * 0xc4ceb9fe1a85ec53ull) ^ h3;
 
         // avalanche high bits down to low bits for power-of-two table indexing
         hash ^= hash >> 33;
@@ -1400,19 +1449,16 @@ struct ggml_hexagon_opbatch {
         init_tensor_shape(shape, t);
 
         const uint64_t hash = hash_tensor(t, shape);
-        auto it = t_map.find(hash);
-        if (it != t_map.end()) {
-            return it->second;
+        bool inserted = false;
+        int ti = t_map.find_or_insert(hash, (int) n_tens, inserted);
+        if (!inserted) {
+            return ti;
         }
 
-        auto sbuf = static_cast<ggml_hexagon_shared_buffer *>(t->buffer->context);
-
-        // Add new tensor to the batch
-        int ti = n_tens++;
+        n_tens++;
         GGML_ASSERT(n_tens <= n_tens_max);
 
-        t_map[hash] = ti;
-
+        auto sbuf = static_cast<ggml_hexagon_shared_buffer *>(t->buffer->context);
         uint64_t t_offset = (uint8_t *) t->data - sbuf->base();
 
         htp_tensor & h = h_tens[ti];
@@ -1445,7 +1491,7 @@ struct ggml_hexagon_opbatch {
             if (check_tens) {
                 htp_tensor shape {};
                 init_tensor_shape(shape, t);
-                if (t_map.count(hash_tensor(t, shape))) return;
+                if (t_map.contains(hash_tensor(t, shape))) return;
                 extra_tens++;
             }
 
@@ -1479,8 +1525,7 @@ struct ggml_hexagon_opbatch {
         return true;
     }
 
-    void sync_op_desc(unsigned int n) {
-        const htp_opnode & node = ops[n];
+    void sync_op_desc(unsigned int n, const htp_opnode & node) {
         htp_op_desc & o = h_ops[n];
 
         memcpy(o.params,        node.params,        sizeof(o.params));
@@ -1499,24 +1544,29 @@ struct ggml_hexagon_opbatch {
     }
 
     // caller must ensure the op fits
-    void add_op(const htp_opnode & node) {
+    void add_op(const htp_opnode & node, bool save_op = true) {
         unsigned int n = n_ops++;
         GGML_ASSERT(n_ops <= n_ops_max);
 
-        ops[n] = node;
+        if (save_op) {
+            ops[n] = node;
+        }
+        last_op_fusable = save_op;
         h_ops[n].flags = 0;
 
-        ggml_hexagon_dump_op_exec(sess->c_name(), ops[n], h_ops[n].flags);
-        sync_op_desc(n);
+        if (opt_verbose) {
+            ggml_hexagon_dump_op_exec(sess->c_name(), node, h_ops[n].flags);
+        }
+        sync_op_desc(n, node);
     }
 
     void sort_buffers() {
         if (n_bufs <= 1) return;
 
-        std::vector<int> order(n_bufs);
+        int order[HTP_OP_MAX_BUFS];
         for (unsigned int i = 0; i < n_bufs; i++) { order[i] = (int) i; }
 
-        std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+        std::stable_sort(order, order + n_bufs, [&](int a, int b) {
             return h_bufs[a].size > h_bufs[b].size;
         });
 
@@ -1529,8 +1579,8 @@ struct ggml_hexagon_opbatch {
         }
         if (already_sorted) return;
 
-        std::vector<uint16_t> remap(n_bufs);
-        std::vector<htp_buf_desc> sorted_bufs(n_bufs);
+        uint16_t remap[HTP_OP_MAX_BUFS];
+        htp_buf_desc sorted_bufs[HTP_OP_MAX_BUFS];
         for (unsigned int new_bi = 0; new_bi < n_bufs; new_bi++) {
             int old_bi = order[new_bi];
             remap[old_bi] = (uint16_t) new_bi;
@@ -1553,7 +1603,7 @@ struct ggml_hexagon_opbatch {
     }
 
     bool try_fuse(const htp_opnode & node) {
-        if (n_ops == 0) {
+        if (n_ops == 0 || !last_op_fusable) {
             return false;
         }
 
@@ -1562,7 +1612,7 @@ struct ggml_hexagon_opbatch {
             return false;
         }
 
-        sync_op_desc(n_ops - 1);
+        sync_op_desc(n_ops - 1, last_node);
         HEX_VERBOSE("ggml-hex: %s fused %s (N=%zu, #%u)\n",
                     sess->c_name(), last_node.name().c_str(), last_node.fused.size() + 1, n_ops - 1);
         return true;
@@ -1776,12 +1826,20 @@ void ggml_hexagon_session::flush_pending(bool all) {
         struct dspqueue_buffer dbuf;
         uint32_t               n_dbufs;
 
-        // Read response packet from queue
-        const uint32_t timeo = opt_oppoll ? 0 : DSPQUEUE_TIMEOUT;
+        // opt_oppoll: 0 = block, 1 = poll, >1 = hybrid poll budget in ms
+        const auto poll_deadline = opt_oppoll > 1
+            ? std::chrono::steady_clock::now() + std::chrono::milliseconds(opt_oppoll)
+            : std::chrono::steady_clock::time_point::max();
 
-        int err = dspqueue_read(this->queue, &flags, 1, &n_dbufs, &dbuf, sizeof(rsp), &rsp_size, (uint8_t *) &rsp, timeo);
-        if (err == AEE_EEXPIRED || err == AEE_EWOULDBLOCK) {
-            continue;
+        int err = 0;
+        for (;;) {
+            const uint32_t timeo = (opt_oppoll == 1 || (opt_oppoll > 1 && std::chrono::steady_clock::now() < poll_deadline))
+                ? 0 : DSPQUEUE_TIMEOUT;
+
+            err = dspqueue_read(this->queue, &flags, 1, &n_dbufs, &dbuf, sizeof(rsp), &rsp_size, (uint8_t *) &rsp, timeo);
+            if (err != AEE_EEXPIRED && err != AEE_EWOULDBLOCK) {
+                break;
+            }
         }
 
         if (err != 0) {
@@ -1869,10 +1927,13 @@ void ggml_hexagon_session::flush_batch(size_t min_ops) {
     op_batch->reset();
 }
 
-void ggml_hexagon_session::enqueue_op(const htp_opnode & node) {
+void ggml_hexagon_session::enqueue_op(const htp_opnode & node, bool allow_fuse) {
     auto register_tensor = [&](const ggml_tensor * t) {
         if (!t) return;
         auto * sbuf = static_cast<ggml_hexagon_shared_buffer *>(t->buffer->context);
+        if (sbuf->sess == this && sbuf->mapped && this->mdev.sessions.empty()) {
+            return;
+        }
         if (ggml_backend_buffer_get_usage(t->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
             sbuf->extended = opt_dma64;
         }
@@ -1896,7 +1957,7 @@ void ggml_hexagon_session::enqueue_op(const htp_opnode & node) {
     }
 
     const bool fits_tensors = op_batch->fit_tensors(node);
-    if (opt_opfusion && fits_tensors && op_batch->try_fuse(node)) {
+    if (opt_opfusion && allow_fuse && fits_tensors && op_batch->try_fuse(node)) {
         return;
     }
 
@@ -1911,7 +1972,7 @@ void ggml_hexagon_session::enqueue_op(const htp_opnode & node) {
         }
     }
 
-    op_batch->add_op(node);
+    op_batch->add_op(node, opt_profile || (opt_opfusion && allow_fuse));
 }
 
 void ggml_hexagon_session::enqueue_mdev_group() {
@@ -2573,7 +2634,7 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
     }
 
     for (const auto & node : *nodes_ptr) {
-        sess->enqueue_op(node);
+        sess->enqueue_op(node, false);
     }
 
     if (sess->last_error > HTP_STATUS_OK) {
@@ -3595,7 +3656,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_opbatch   = str_opbatch  ? strtoul(str_opbatch, NULL, 0)          : opt_opbatch;
     opt_opqueue   = str_opqueue  ? strtoul(str_opqueue, NULL, 0)          : opt_opqueue;
     opt_optrace   = str_optrace  ? strtoul(str_optrace, NULL, 0)          : (opt_opbatch * HTP_TRACE_MAX_EVENTS + 131072);
-    opt_oppoll    = str_oppoll   ? strtoul(str_oppoll,  NULL, 0)          : opt_oppoll;
+    opt_oppoll    = str_oppoll   ? strtoul(str_oppoll,  NULL, 0)          : (htpdrv_has_read_noblock() ? 50 : 0);
     opt_opfusion  = str_opfusion ? atoi(str_opfusion)                     : opt_opfusion;
     opt_rt_repack = str_rt_repack ? atoi(str_rt_repack)                   : opt_rt_repack;
     opt_profile   = str_profile  ? atoi(str_profile)                      : 0;
