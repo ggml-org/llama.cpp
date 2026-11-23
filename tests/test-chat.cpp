@@ -6012,6 +6012,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
              "models/templates/LFM2-8B-A1B.jinja",
              "models/templates/LFM2.5-Instruct.jinja",
              "models/templates/LFM2.5-8B-A1B.jinja",
+             "models/templates/LFM2.5-VL.jinja",
          }) {
         test_lfm2_parser(tmpl, detailed_debug);
     }
@@ -8215,6 +8216,7 @@ static void test_template_generation_prompt() {
              "models/templates/LFM2-8B-A1B.jinja",
              "models/templates/LFM2.5-Instruct.jinja",
              "models/templates/LFM2.5-8B-A1B.jinja",
+             "models/templates/LFM2.5-VL.jinja",
          }) {
         auto tmpls = read_templates(tmpl);
         check(tmpls, basic(),                  "<|im_start|>assistant\n");
