@@ -1881,8 +1881,6 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         std::unordered_map<ggml_tensor *, std::vector<ggml_tensor *>> alloc_deps;
         // node -> scratch tensors allocated before the node is computed
         std::unordered_map<ggml_tensor *, std::vector<ggml_tensor *>> scratch;
-        // scratch tensors not yet added to graph_copy
-        std::unordered_set<ggml_tensor *> scratch_pending;
     } opt_state;
     opt_state.ctx = sched->ctx;
 
@@ -1898,9 +1896,9 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
             auto & state = *(optimize_state *) user_data;
             GGML_ASSERT(nbytes > 0);
             ggml_tensor * t = ggml_new_tensor_1d(state.ctx, GGML_TYPE_I8, (int64_t) nbytes);
-            ggml_format_name(t, "scratch-%zu (%s)", state.scratch_pending.size(), first->name);
-            state.scratch[first].push_back(t);
-            state.scratch_pending.insert(t);
+            std::vector<ggml_tensor *> & first_scratch = state.scratch[first];
+            ggml_format_name(t, "scratch-%zu (%s)", first_scratch.size(), first->name);
+            first_scratch.push_back(t);
             // the scratch tensor has no other users, the dep at `last` is what frees it
             state.alloc_deps[last].push_back(t);
             return t;
@@ -1924,7 +1922,12 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
     }
 
     // each scratch tensor is added to graph_copy as a GGML_OP_NONE node right before its first user
-    const int n_scratch_nodes = (int) opt_state.scratch_pending.size();
+    // scratch tensors not yet added to graph_copy
+    std::unordered_set<ggml_tensor *> scratch_pending;
+    for (const auto & it : opt_state.scratch) {
+        scratch_pending.insert(it.second.begin(), it.second.end());
+    }
+    const int n_scratch_nodes = (int) scratch_pending.size();
 
     int total_inputs = sched->n_graph_inputs;
     for (int i = 0; i < sched->n_splits; i++) {
@@ -1974,14 +1977,14 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
 
         for (int j = split->i_start; j < split->i_end; j++) {
             // add the scratch tensors first so that they are allocated before this node is computed
-            if (!opt_state.scratch_pending.empty()) {
+            if (!scratch_pending.empty()) {
                 auto it = opt_state.scratch.find(graph->nodes[j]);
                 if (it != opt_state.scratch.end()) {
                     for (ggml_tensor * t : it->second) {
                         assert(graph_copy->size > graph_copy->n_nodes);
                         sched->node_backend_ids[graph_copy->n_nodes] = split->backend_id;
                         graph_copy->nodes[graph_copy->n_nodes++] = t;
-                        opt_state.scratch_pending.erase(t);
+                        scratch_pending.erase(t);
                     }
                 }
             }
@@ -2002,7 +2005,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                     struct ggml_tensor * dep = ggml_view_tensor(sched->ctx, keep[k]);
                     for (size_t s = 0; s < GGML_MAX_SRC && k + s < keep.size(); s++) {
                         // a scratch tensor freed before it was allocated: its `last` comes before its `first`
-                        GGML_ASSERT(opt_state.scratch_pending.count(keep[k + s]) == 0 && "add_scratch: last is before first");
+                        GGML_ASSERT(scratch_pending.count(keep[k + s]) == 0 && "add_scratch: last is before first");
                         dep->src[s] = keep[k + s];
                     }
                     assert(graph_copy->size > graph_copy->n_nodes);
@@ -2017,7 +2020,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
     // a mismatch means a backend added a dep with an `until` tensor that is not a node of the optimized graph
     GGML_ASSERT(n_dep_nodes_added == n_dep_nodes);
     // a scratch tensor left over means a backend passed a `first` tensor that is not a node of the optimized graph
-    GGML_ASSERT(opt_state.scratch_pending.empty() && "add_scratch: first is not a node of the graph");
+    GGML_ASSERT(scratch_pending.empty() && "add_scratch: first is not a node of the graph");
 
     if (sched->n_copies > 1) {
         // add input copies as leafs so that they are allocated first
