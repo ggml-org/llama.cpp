@@ -30,6 +30,8 @@ const bool Q_IN_REGS       = (Flags & 32) != 0;
 // coopmat1: subgroups own Q rows, O in coopmat accumulators. K/V staged in LDS, or loaded from global memory with FLIP_DIRECT.
 const bool FLIP            = (Flags & 64) != 0;
 const bool FLIP_DIRECT     = (Flags & 128) != 0;
+// KV row lists (ggml_flash_attn_ext_rows): per-stream physical KV indices in binding 7.
+const bool KV_ROWS_ENABLE  = (Flags & 256) != 0;
 
 // Round up head sizes to a multiple of 16, for coopmat1/coopmat2 paths
 const uint32_t HSK_pad = (HSK + 15) & ~15;
@@ -158,6 +160,7 @@ ACC_TYPE perElemOpGetSink(const in uint32_t r, const in uint32_t c, const in ACC
 uint32_t i, N, KV, split_k_index, Tr, start_j, end_j,
          gqa_iq1, iq2, iq3, rk2, rk3, rv2, rv3, ik2, ik3, iv2, iv3,
          q_stride, k_stride, v_stride, m_stride, sparse_base;
+uint32_t fa_mask_col; // linear mask column (differs from physical KV column with row lists)
 
 void init_indices()
 {
@@ -237,6 +240,18 @@ void init_indices()
 
 // Resolve a linear KV slot to a real column; false for inactive (sparse padding/-1, or dense OOB).
 bool fa_kv_index(uint lin, out uint kv_col) {
+    fa_mask_col = lin;
+    if (KV_ROWS_ENABLE) {
+        // kv_rows is [KV, n_streams]; KV is the number of mask columns. The list
+        // is shared by all KV heads of a stream and clamped like the CPU path.
+        if (lin >= KV) {
+            kv_col = 0;
+            return false;
+        }
+        int idx = data_sparse[(iq3 % p.nem3) * KV + lin];
+        kv_col = idx >= 0 ? uint(idx) : 0;
+        return true;
+    }
     if (USE_SPARSE) {
         if (lin >= p.split_kv) {
             kv_col = 0;
