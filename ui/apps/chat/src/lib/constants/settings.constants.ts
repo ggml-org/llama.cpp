@@ -11,9 +11,7 @@ import { VOICE_MICROPHONE_AUTO } from '@ggml-org/llama-voice';
 import AudioLines from '@lucide/svelte/icons/audio-lines';
 import Code from '@lucide/svelte/icons/code';
 import Database from '@lucide/svelte/icons/database';
-import File from '@lucide/svelte/icons/file';
 import Funnel from '@lucide/svelte/icons/funnel';
-import GlassWater from '@lucide/svelte/icons/glass-water';
 import ListRestart from '@lucide/svelte/icons/list-restart';
 import Mic from '@lucide/svelte/icons/mic';
 import Monitor from '@lucide/svelte/icons/monitor';
@@ -22,7 +20,7 @@ import PencilRuler from '@lucide/svelte/icons/pencil-ruler';
 import SlidersVertical from '@lucide/svelte/icons/sliders-vertical';
 import Sun from '@lucide/svelte/icons/sun';
 import TextCursorInput from '@lucide/svelte/icons/text-cursor-input';
-import { SurfaceTheme, SyncableParameterType, VoiceInputMode } from '#lib/enums/index.ts';
+import { SyncableParameterType, VoiceInputMode } from '#lib/enums/index.ts';
 import { SettingsFieldType } from '#lib/enums/settings.enums.ts';
 import { ColorMode } from '#lib/enums/ui.enums.ts';
 import type {
@@ -81,17 +79,6 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 					{ icon: Monitor, label: 'System', value: ColorMode.SYSTEM },
 					{ icon: Sun, label: 'Light', value: ColorMode.LIGHT },
 					{ icon: Moon, label: 'Dark', value: ColorMode.DARK }
-				],
-				type: SettingsFieldType.SELECT
-			},
-			{
-				defaultValue: SurfaceTheme.PAPER,
-				help: 'Choose how the light theme draws its surfaces: Paper puts white panels, fields and buttons on a faint grey page; Matte puts grey glass on a white page. Dark mode is the same for both.',
-				key: SETTINGS_KEYS.SURFACE_THEME,
-				label: 'Light surfaces',
-				options: [
-					{ icon: File, label: 'Paper', value: SurfaceTheme.PAPER },
-					{ icon: GlassWater, label: 'Matte', value: SurfaceTheme.MATTE }
 				],
 				type: SettingsFieldType.SELECT
 			},
