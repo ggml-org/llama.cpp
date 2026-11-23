@@ -1500,11 +1500,6 @@ public:
                 continue;
             }
 
-            // the full block of a markov context draft has to fit in the draft context
-            if (has_markov_context && (uint64_t) dp.pos0 + block_size > llama_n_ctx_seq(ctx_dft)) {
-                continue;
-            }
-
             // the graph draws the block at the target's temperature, the verifier then does rejection sampling with q
             sampled[seq_id] = has_markov_context && params.probabilistic && dp.result_q && dp.temp > 0.0f;
             if (sampled[seq_id] && draw_seed[seq_id] != dp.seed) {
@@ -1517,9 +1512,14 @@ public:
 
             const int32_t n = (int32_t) dp.pos0;
 
-            // the block attention is non-causal: a draft with a markov context decodes the full trained block, then reads n_max of it
             const int32_t n_draft = params.n_max;
-            const int32_t n_block_tokens = has_markov_context ? block_size : n_draft + (sample_from_anchor ? 0 : 1);
+            const int32_t n_block_tokens = n_draft + (sample_from_anchor ? 0 : 1);
+
+            // all blocks share one decode: a block that does not fit in the draft context fails every sequence's draft
+            if ((uint64_t) dp.pos0 + n_block_tokens > llama_n_ctx_seq(ctx_dft)) {
+                continue;
+            }
+
             i_block_beg[seq_id] = batch.size();
             n_block    [seq_id] = n_block_tokens;
             for (int32_t i = 0; i < n_block_tokens; ++i) {
@@ -1570,13 +1570,12 @@ public:
 
             // bonus-anchor drafts read the mask positions only, like DFlash
             const int32_t i_draft_beg = sample_from_anchor ? 0 : 1;
-            const int32_t i_draft_end = std::min(n_block_tokens, i_draft_beg + params.n_max);
 
             if (sampled[seq_id]) {
                 // the tokens the graph drew, and the distribution q each one was drawn from
                 const float * draws = llama_get_embeddings_nextn(ctx_dft);
                 GGML_ASSERT(draws && "DSpark draws missing from h_nextn");
-                for (int32_t i = i_draft_beg; i < i_draft_end; ++i) {
+                for (int32_t i = i_draft_beg; i < n_block_tokens; ++i) {
                     const float * row = draws + (size_t) (beg + i) * n_embd_dec;
                     const int32_t n_cand = (int32_t) row[1];
 
@@ -1597,7 +1596,7 @@ public:
 
             // DSpark: read from the first draft slot, truncate below the confidence threshold
             const float * conf = params.p_min > 0.0f ? llama_get_embeddings_nextn(ctx_dft) : nullptr;
-            for (int32_t i = i_draft_beg; i < i_draft_end; ++i) {
+            for (int32_t i = i_draft_beg; i < n_block_tokens; ++i) {
                 const int32_t idx = beg + i;
 
                 if (conf && conf[(size_t) idx * n_embd_dec] < params.p_min) {
@@ -3268,19 +3267,6 @@ common_speculative_init_result::common_speculative_init_result(
         }
 
         pimpl->model.reset(model_dft);
-
-        // a draft with a markov context decodes its full trained block, whatever n_max is
-        {
-            char buf[32] = {};
-            if (llama_model_meta_val_str(model_dft, "dflash.has_markov_context", buf, sizeof(buf)) >= 0 && std::strcmp(buf, "true") == 0 &&
-                llama_model_meta_val_str(model_dft, "dflash.block_size",         buf, sizeof(buf)) >= 0) {
-                const uint32_t block_size = (uint32_t) std::max(1, std::atoi(buf));
-                cparams.n_outputs_max = std::max(cparams.n_outputs_max, cparams.n_seq_max * block_size);
-                if (cparams.n_outputs_max_per_seq > 1) {
-                    cparams.n_outputs_max_per_seq = std::max(cparams.n_outputs_max_per_seq, block_size);
-                }
-            }
-        }
 
         llama_context * ctx_dft = llama_init_from_model(model_dft, cparams);
         if (ctx_dft == nullptr) {

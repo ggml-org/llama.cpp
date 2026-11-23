@@ -142,7 +142,7 @@ llama-server -m Inkling-2-Mini.gguf -md Inkling-2-Mini-DSpark.gguf \
     --spec-type draft-dspark --spec-draft-n-max 3 -fa on --jinja
 ```
 
-The Inkling 2 drafter always decodes its full trained block. It also supports `--spec-draft-sampling probabilistic`:
+The Inkling 2 drafter supports `--spec-draft-sampling probabilistic`:
 at a positive request temperature, each drawn token conditions the next one, and the target verifies the draft by
 rejection sampling.
 
