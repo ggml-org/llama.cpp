@@ -1975,7 +1975,9 @@ void GgmlOvDecoder::compute_model_outputs() {
                     }
                 }
             }
-            if (input_use_count == cur_node_use_count) {
+            // op tests (the naive path) can read any node of the graph, e.g. the intermediate sum of a fused
+            // ADD + RMS_NORM + MUL, so every non-in-place node is a model output there
+            if (input_use_count == cur_node_use_count && (!m_naive || ::is_inplace_op(cur_node))) {
                 cur_node = nullptr;
             }
         }
