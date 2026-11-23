@@ -94,10 +94,20 @@ llama-cli -m model.gguf -sm tensor -ctk f16 -ctv f16
 
 ### 5. With NCCL
 
-There's no runtime flag for NCCL - it's selected at build time (`-DGGML_CUDA_NCCL=ON`, this is the default). Note that NCCL is **not** automatically distributed with CUDA and you may need to install it manually - when in doubt check the CMake log to see whether or not it can find the package. When llama.cpp is compiled with NCCL support it uses it automatically for cross-GPU reductions in `tensor` mode. When NCCL is missing on a multi-GPU build, you'll see this one-time warning and performance will be lower:
+NCCL support is enabled at build time (`-DGGML_CUDA_NCCL=ON`, this is the default). Note that NCCL is **not** automatically distributed with CUDA and you may need to install it manually - when in doubt check the CMake log to see whether or not it can find the package. See [Compilation with NCCL](build.md#compilation-with-nccl) for build commands.
 
-```
-NVIDIA Collective Communications Library (NCCL) is unavailable, multi GPU performance will be suboptimal
+The environment variable `GGML_CUDA_ALLREDUCE` selects the implementation for cross-GPU reductions in `tensor` mode:
+
+| Value | Behavior |
+|---|---|
+| `nccl` | Use NCCL (requires NCCL support at build time). If unavailable or initialization fails, fall back to `internal`. |
+| `internal` | Use the internal AllReduce implementation, which requires exactly two GPUs. If initialization fails, fall back to `none`. |
+| `none` | Use the generic meta-backend butterfly reduction. |
+
+When unset, the default is `nccl` on Linux and `internal` on other platforms. For example, to select NCCL explicitly:
+
+```bash
+GGML_CUDA_ALLREDUCE=nccl llama-cli -m model.gguf -sm tensor
 ```
 
 When using the "ROCm" backend (which is the ggml CUDA code translated for AMD via HIP), the AMD equivalent RCCL can be used by compiling with `-DGGML_HIP_RCCL=ON`. Note that RCCL is by default *disabled* because (unlike NCCL) it was not universally beneficial during testing.
