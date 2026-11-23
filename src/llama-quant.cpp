@@ -884,7 +884,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     };
 
     // Quantization types
-    constexpr ggml_type quant_types[] = {
+    static constexpr ggml_type quant_types[] = {
         GGML_TYPE_IQ1_S,
         GGML_TYPE_IQ1_M,
         GGML_TYPE_IQ2_XXS,
@@ -908,16 +908,16 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         GGML_TYPE_BF16,
     };
 
-    constexpr double EPSILON = 1e-12;
-    constexpr double INFINITE = std::numeric_limits<double>::infinity();
-    constexpr uint64_t STATE_MAGIC = 0x4250572d5632; // "BPW-V2"
-    constexpr uint64_t HASH_MAGIC = 0xeabada55cafed00d;
-    constexpr float ffn_down_boost = 6.0f;
-    constexpr float output_boost = 3.0f;
-    constexpr float tied_embd_boost = 2.5f;
-    constexpr float attn_v_boost = 1.25f;
-    constexpr float boost_taper = 2.2f; // boost starves other tensors below 2.2 bpw
-    constexpr double downward_threshold = 0.08; // potential gains smaller than 8% are not trusted
+    static constexpr double EPSILON = 1e-12;
+    static constexpr double INFINITE = std::numeric_limits<double>::infinity();
+    static constexpr uint64_t STATE_MAGIC = 0x4250572d5632; // "BPW-V2"
+    static constexpr uint64_t HASH_MAGIC = 0xeabada55cafed00d;
+    static constexpr float ffn_down_boost = 6.0f;
+    static constexpr float output_boost = 3.0f;
+    static constexpr float tied_embd_boost = 2.5f;
+    static constexpr float attn_v_boost = 1.25f;
+    static constexpr float boost_taper = 2.2f; // boost starves other tensors below 2.2 bpw
+    static constexpr double downward_threshold = 0.08; // potential gains smaller than 8% are not trusted
     const char * func = __func__;
 
     // --target-exclude must leave at least one quant type in the pool
