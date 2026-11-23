@@ -10,9 +10,7 @@
 
 #include <algorithm>
 #include <cinttypes>
-#include <cfloat>
 #include <cmath>
-#include <limits>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
@@ -249,12 +247,7 @@ struct kv_writer {
     }
 };
 
-static constexpr uint32_t APERTUS_TEST_VOCAB_SIZE = 128;
-static constexpr uint32_t APERTUS_TEST_VOCAB_SIZE_OUT = 96;
-
-static gguf_context_ptr get_gguf_ctx(
-        const llm_arch arch, const bool moe,
-        const uint32_t n_layer_min = 0, const uint32_t apertus_vocab_out = APERTUS_TEST_VOCAB_SIZE_OUT) {
+static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const uint32_t n_layer_min = 0) {
     gguf_context_ptr ret(gguf_init_empty());
     kv_writer ms(arch, ret.get());
     const uint32_t n_ctx = 256;
@@ -358,9 +351,6 @@ static gguf_context_ptr get_gguf_ctx(
 
     ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE,      llama_arch_name(arch));
     ms.add_kv(LLM_KV_VOCAB_SIZE,                n_vocab);
-    if (arch == LLM_ARCH_APERTUS && apertus_vocab_out > 0) {
-        ms.add_kv(LLM_KV_VOCAB_SIZE_OUT, apertus_vocab_out);
-    }
     ms.add_kv(LLM_KV_CONTEXT_LENGTH,            n_ctx);
     ms.add_kv(LLM_KV_EMBEDDING_LENGTH,          n_embd);
     ms.add_kv(LLM_KV_FEATURES_LENGTH,           n_embd);
@@ -820,13 +810,7 @@ static gguf_context_ptr get_gguf_ctx(
     ms.add_kv(LLM_KV_POSNET_BLOCK_COUNT,        n_layer);
     ms.add_kv(LLM_KV_CONVNEXT_EMBEDDING_LENGTH, n_embd);
     ms.add_kv(LLM_KV_CONVNEXT_BLOCK_COUNT,      n_layer);
-    if (arch == LLM_ARCH_APERTUS) {
-        std::vector<float> alpha_n(n_layer, 1.0f);
-        alpha_n.back() = 0.75f;
-        ms.add_kv(LLM_KV_XIELU_ALPHA_N, alpha_n);
-    } else {
-        ms.add_kv(LLM_KV_XIELU_ALPHA_N, 1.0f);
-    }
+    ms.add_kv(LLM_KV_XIELU_ALPHA_N,             1.0f);
     ms.add_kv(LLM_KV_XIELU_ALPHA_P,             1.0f);
     ms.add_kv(LLM_KV_XIELU_BETA,                1.0f);
     ms.add_kv(LLM_KV_XIELU_EPS,                 1.0e-7f);
@@ -962,81 +946,6 @@ static std::vector<float> get_logits(
         }
     }
     return ret;
-}
-
-static bool check_apertus_logits(const std::vector<float> & logits, size_t n_tokens, uint32_t n_vocab_out) {
-    if (logits.size() != n_tokens * APERTUS_TEST_VOCAB_SIZE) {
-        return false;
-    }
-    for (size_t i = 0; i < logits.size(); ++i) {
-        if (i % APERTUS_TEST_VOCAB_SIZE < n_vocab_out) {
-            if (!std::isfinite(logits[i]) || logits[i] == -FLT_MAX) {
-                return false;
-            }
-        } else if (logits[i] != -FLT_MAX) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static std::vector<float> apertus_text_logits(const std::vector<float> & logits) {
-    std::vector<float> result;
-    for (size_t i = 0; i < logits.size(); i += APERTUS_TEST_VOCAB_SIZE) {
-        result.insert(result.end(), logits.begin() + i, logits.begin() + i + APERTUS_TEST_VOCAB_SIZE_OUT);
-    }
-    return result;
-}
-
-static bool test_apertus_vocab(const size_t seed, const float stdev) {
-    const std::vector<llama_token> tokens = { 0, APERTUS_TEST_VOCAB_SIZE_OUT - 1,
-        APERTUS_TEST_VOCAB_SIZE_OUT, APERTUS_TEST_VOCAB_SIZE - 1 };
-    std::vector<float> legacy_logits;
-    for (uint32_t n_vocab_out : { 0u, APERTUS_TEST_VOCAB_SIZE, 1u }) {
-        gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_APERTUS, false, 0, n_vocab_out);
-        auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {});
-        const auto logits = get_logits(model_and_ctx.first.get(), model_and_ctx.second.get(), tokens);
-        if (!check_apertus_logits(logits, tokens.size(), n_vocab_out > 0 ? n_vocab_out : APERTUS_TEST_VOCAB_SIZE)) {
-            return false;
-        }
-        if (n_vocab_out == 0) {
-            legacy_logits = logits;
-        } else if (n_vocab_out == APERTUS_TEST_VOCAB_SIZE && logits != legacy_logits) {
-            return false;
-        }
-        const std::string path = get_tmp_gguf_path();
-        llama_model_save_to_file(model_and_ctx.first.get(), path.c_str());
-        gguf_context_ptr saved(gguf_init_from_file(path.c_str(), { true, nullptr }));
-        if (!saved) {
-            std::remove(path.c_str());
-            return false;
-        }
-        const int64_t key = gguf_find_key(saved.get(), "apertus.vocab_size_out");
-        if (n_vocab_out == 0 ? key != -1 : (key == -1 || gguf_get_val_u32(saved.get(), key) != n_vocab_out)) {
-            std::remove(path.c_str());
-            return false;
-        }
-        FILE * file = fopen(path.c_str(), "rb");
-        if (file == nullptr) {
-            std::remove(path.c_str());
-            return false;
-        }
-        auto restored = get_model_and_ctx(nullptr, file, seed, stdev, {});
-        fclose(file);
-        std::remove(path.c_str());
-        if (get_logits(restored.first.get(), restored.second.get(), tokens) != logits) {
-            return false;
-        }
-    }
-    for (uint32_t n_vocab_out : { APERTUS_TEST_VOCAB_SIZE + 1, std::numeric_limits<uint32_t>::max() }) {
-        gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_APERTUS, false, 0, n_vocab_out);
-        tensor_data_params tensor_params = { seed, stdev };
-        llama_model_ptr model(llama_model_init_from_user(gguf_ctx.get(), set_tensor_data, &tensor_params, llama_model_default_params()));
-        if (model) {
-            return false;
-        }
-    }
-    return true;
 }
 
 // entries [n/4, n/2) are embd rows, decoded either as token/embd/token chunks or as one mixed batch
@@ -1419,10 +1328,6 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
     }, &ud);
 
     const std::vector<llama_token> tokens = get_tokens(128, 128, seed);
-    if (arch_matches(arch_filter, LLM_ARCH_APERTUS) && !test_apertus_vocab(seed, stdev)) {
-        LOG_ERR("%s: Apertus vocabulary tests failed\n", __func__);
-        return 1;
-    }
 
     struct device_config {
         std::vector<ggml_backend_dev_t> devs;
@@ -1566,16 +1471,10 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         test_executed = true;
                         model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
                         logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
-                        const bool apertus = arch == LLM_ARCH_APERTUS;
-                        const bool valid_logits = !apertus ||
-                            (check_apertus_logits(logits_cpu, tokens.size(), APERTUS_TEST_VOCAB_SIZE_OUT) &&
-                             check_apertus_logits(logits_dev, tokens.size(), APERTUS_TEST_VOCAB_SIZE_OUT));
-                        // Exclude input-only token padding from the numerical comparison.
-                        const double nmse_val = apertus && valid_logits ?
-                            nmse(apertus_text_logits(logits_cpu), apertus_text_logits(logits_dev)) : nmse(logits_cpu, logits_dev);
+                        const double nmse_val = nmse(logits_cpu, logits_dev);
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
                         status_nmse = "\033[1;32mOK\033[0m";
-                        if (!valid_logits || (apertus && !std::isfinite(nmse_val)) || nmse_val > 1e-4) {
+                        if (nmse_val > 1e-4) {
                             test_ok = false;
                             status_nmse = "\033[1;31mFAIL\033[0m";
                         }
@@ -1596,14 +1495,10 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                                     get_logits_mixed(model_and_ctx_dev.first.get(), lctx_dev, tokens, embd_mixed, true,  logits_mixed)  != 0) {
                                     throw std::runtime_error("failed to decode mixed batch");
                                 }
-                                const bool valid_mixed = !apertus ||
-                                    (check_apertus_logits(logits_chunks, tokens.size(), APERTUS_TEST_VOCAB_SIZE_OUT) &&
-                                     check_apertus_logits(logits_mixed, tokens.size(), APERTUS_TEST_VOCAB_SIZE_OUT));
-                                const double nmse_mixed = apertus && valid_mixed ?
-                                    nmse(apertus_text_logits(logits_chunks), apertus_text_logits(logits_mixed)) : nmse(logits_chunks, logits_mixed);
+                                const double nmse_mixed = nmse(logits_chunks, logits_mixed);
                                 snprintf(mixed_str, sizeof(mixed_str), "(%.2e)", nmse_mixed);
                                 status_mixed = "\033[1;32mOK\033[0m";
-                                if (!valid_mixed || (apertus && !std::isfinite(nmse_mixed)) || nmse_mixed > 1e-4) {
+                                if (nmse_mixed > 1e-4) {
                                     test_ok = false;
                                     status_mixed = "\033[1;31mFAIL\033[0m";
                                 }

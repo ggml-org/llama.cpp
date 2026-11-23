@@ -7577,7 +7577,7 @@ class VisionProjectorType:
     GRANITE4_VISION = "granite4_vision"
     MUSE_GLIMMER   = "muse-glimmer"
     APERTUS_VISION = "apertus_vision"
-    APERTUS_AUDIO = "apertus_audio"
+    APERTUS_AUDIO  = "apertus_audio"
     COHERE2V       = "cohere2v"
     D1OMNI_V       = "d1omni_v"  # lfm2 vision, without separator tokens
     D1OMNI_A       = "d1omni_a"  # lfm2a audio, with a residual block after the projector

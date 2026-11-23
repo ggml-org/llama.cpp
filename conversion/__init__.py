@@ -22,9 +22,9 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "LagunaForCausalLM": "laguna",
     "RicursiveForCausalLM": "ricursive",
     "FlintForCausalLM": "flint",
-    "ApertusForCausalLM": "llama",
-    "Apertus1p5ForConditionalGeneration": "llama",
-    "Apertus1p5TextForCausalLM": "llama",
+    "ApertusForCausalLM": "apertus",
+    "Apertus1p5ForConditionalGeneration": "apertus",
+    "Apertus1p5TextForCausalLM": "apertus",
     "ArceeForCausalLM": "llama",
     "ArcticForCausalLM": "arctic",
     "AudioFlamingo3ForConditionalGeneration": "qwen",
@@ -355,7 +355,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
 
 
 MMPROJ_MODEL_MAP: dict[str, str] = {
-    "Apertus1p5ForConditionalGeneration": "llama",
+    "Apertus1p5ForConditionalGeneration": "apertus",
     "AudioFlamingo3ForConditionalGeneration": "ultravox",
     "ChatterboxModel": "chatterbox",
     "ClefModel": "clef",

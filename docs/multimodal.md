@@ -41,22 +41,6 @@ llama-server -hf ggml-org/gemma-3-4b-it-GGUF --no-mmproj-offload
 > - Dots.OCR: https://github.com/ggml-org/llama.cpp/pull/17575
 > - HunyuanOCR: https://github.com/ggml-org/llama.cpp/pull/21395
 
-## Apertus v1.5
-
-[Apertus v1.5 8B](https://huggingface.co/swiss-ai/Apertus-v1.5-8B) and [70B](https://huggingface.co/swiss-ai/Apertus-v1.5-70B) accept text, images and audio, and generate text. Convert the text model and both media encoders from the same local Hugging Face checkpoint directory, including its tokenizer and processor configuration files:
-
-```sh
-python convert_hf_to_gguf.py /path/to/Apertus-v1.5-8B --outfile Apertus-v1.5-8B-Q8_0.gguf --outtype q8_0
-python convert_hf_to_gguf.py /path/to/Apertus-v1.5-8B --mmproj --outfile mmproj-Apertus-v1.5-8B-f32.gguf --outtype f32
-
-llama-mtmd-cli -m Apertus-v1.5-8B-Q8_0.gguf --mmproj mmproj-Apertus-v1.5-8B-f32.gguf --jinja --reasoning off --image image.png -p "Describe this image."
-llama-mtmd-cli -m Apertus-v1.5-8B-Q8_0.gguf --mmproj mmproj-Apertus-v1.5-8B-f32.gguf --jinja --reasoning off --audio audio.wav -p "Transcribe this audio."
-
-llama-server -m Apertus-v1.5-8B-Q8_0.gguf --mmproj mmproj-Apertus-v1.5-8B-f32.gguf --jinja -c 4096
-```
-
-The mmproj file contains both encoders and uses F32 weights. The converter reads the image pixel limits from the checkpoint's processor configuration. Use `--reasoning on` to enable thinking in the CLI. For CPU-only inference, add `-ngl 0 --no-mmproj-offload`.
-
 ## Pre-quantized models
 
 These are ready-to-use models, most of them come with `Q4_K_M` quantization by default. They can be found at the Hugging Face page of the ggml-org: https://huggingface.co/collections/ggml-org/multimodal-ggufs-68244e01ff1f39e5bebeeedc
