@@ -1,8 +1,9 @@
-// Guards the exec_shell_command title while the call is still being
-// generated: the command must stream into the terminal title from the
-// first character (args arrive as partial JSON), with a blinking cursor
-// while the args are incomplete, and the conversation cwd standing in
-// for the x-tool-cwd value that only arrives with the result message.
+// Guards the exec_shell_command block while the call is still being
+// generated: the command must stream into the title and the terminal's
+// prompt line from the first character (args arrive as partial JSON), with
+// a blinking cursor while the args are incomplete, and the conversation cwd
+// standing in for the x-tool-cwd value that only arrives with the result
+// message.
 
 import ChatMessageToolCallBlockExecShellCommand from '#lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlockExecShellCommand.svelte';
 import ChatMessageAgenticContent from '#lib/components/app/chat/ChatMessages/ChatMessageAgenticContent.svelte';
@@ -55,6 +56,10 @@ function triggerText(container: Element): string {
 	return container.querySelector('[data-slot="collapsible-trigger"]')?.textContent ?? '';
 }
 
+function promptText(container: Element): string {
+	return container.querySelector('.exec-prompt-line')?.textContent ?? '';
+}
+
 function hasCursor(container: Element): boolean {
 	return container.querySelector('.exec-cursor') !== null;
 }
@@ -89,11 +94,10 @@ describe('exec_shell_command streaming title', () => {
 
 		await tick();
 
-		const title = triggerText(container);
-
-		expect(title).toContain('git sta');
-		expect(title).toContain('$');
-		expect(title).toContain(CWD);
+		expect(triggerText(container)).toContain('git sta');
+		expect(promptText(container)).toContain('git sta');
+		expect(promptText(container)).toContain('$');
+		expect(promptText(container)).toContain(CWD);
 		expect(hasCursor(container)).toBe(true);
 	});
 
@@ -131,7 +135,7 @@ describe('exec_shell_command streaming title', () => {
 
 		await tick();
 
-		expect(triggerText(screen.container)).toContain(CWD);
+		expect(promptText(screen.container)).toContain(CWD);
 
 		// Result message lands: its x-tool-cwd takes over the prompt.
 		screen.rerender({
@@ -142,8 +146,8 @@ describe('exec_shell_command streaming title', () => {
 		});
 		await tick();
 
-		expect(triggerText(screen.container)).toContain('/other/dir');
-		expect(triggerText(screen.container)).not.toContain(CWD);
+		expect(promptText(screen.container)).toContain('/other/dir');
+		expect(promptText(screen.container)).not.toContain(CWD);
 	});
 
 	it('shows the executing label only after the command finishes streaming', async () => {

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { parseReadMediaMeta } from './parsers/read-media';
 	import ToolCallBlock from './ToolCallBlock.svelte';
+	import ToolCallTitle from './ToolCallTitle.svelte';
 	import { ATTACHMENT_SAVED_REGEX } from '#lib/constants/agentic.constants.ts';
 	import { AttachmentType, MimeTypeAudio } from '#lib/enums/index.ts';
 	import type {
@@ -47,12 +48,8 @@
 </script>
 
 <ToolCallBlock {isStreaming} meta={readMediaMeta} {onToggle} {open} {section}>
-	{#snippet titleSnippet()}
-		<span class="flex min-w-0 flex-wrap items-baseline gap-x-1">
-			<span class="shrink-0 text-muted-foreground">Read media</span>
-
-			<span class="min-w-0 overflow-x-auto font-mono">{readMediaMeta?.fileName}</span>
-		</span>
+	{#snippet titleSnippet(phrase)}
+		<ToolCallTitle label={phrase.label} target={readMediaMeta?.fileName} />
 	{/snippet}
 
 	{#snippet children(_meta, _ctx)}

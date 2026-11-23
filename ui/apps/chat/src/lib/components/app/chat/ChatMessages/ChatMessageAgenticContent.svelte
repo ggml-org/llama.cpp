@@ -1,5 +1,12 @@
 <script lang="ts">
 	import ChatMessageToolCallBlock from './ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlock.svelte';
+	import ChatMessageToolCallGroup from './ChatMessage/ChatMessageToolCall/ChatMessageToolCallGroup.svelte';
+	import { parseExecShellCommandMeta } from './ChatMessage/ChatMessageToolCall/parsers/exec-shell-command';
+	import {
+		groupToolCallRuns,
+		isToolCallSection
+	} from './ChatMessage/ChatMessageToolCall/parsers/tool-call-phrasing';
+	import { setToolCallElapsedContext } from './ChatMessage/ChatMessageToolCall/tool-call-elapsed';
 	import ChatMessageReasoningBlock from './ChatMessageReasoningBlock.svelte';
 	import {
 		ChatMessageActionCardContinueRequest,
@@ -7,6 +14,7 @@
 		ChatMessageStatistics,
 		MarkdownContent
 	} from '#lib/components/app/index.ts';
+	import { TOOL_CALL_GROUP_MIN_CALLS } from '#lib/constants/index.ts';
 	import {
 		AgenticSectionType,
 		ChatMessageStatsView,
@@ -41,6 +49,8 @@
 	const isStreaming = $derived(isChatStreaming && isLastAssistantMessage);
 
 	let expandedStates: Record<number, boolean> = $state({});
+	// keyed by the flat index of the group's first call
+	let groupExpandedStates: Record<number, boolean> = $state({});
 
 	const showThoughtInProgress = $derived(Boolean(settingsStore.config.showThoughtInProgress));
 	const showToolCallInProgress = $derived(Boolean(settingsStore.config.showToolCallInProgress));
@@ -97,6 +107,17 @@
 
 	const sections = $derived(deriveAgenticSections(message, toolMessages, [], isStreaming));
 
+	// The command the pending call would run, for the permission card: the gate
+	// names the call it is asking about, so an earlier call of the same tool
+	// whose result has not landed yet cannot be mistaken for it.
+	const pendingCommand = $derived.by(() => {
+		if (!visiblePermission) return undefined;
+
+		const pending = sections.find((section) => section.toolCallId === visiblePermission.toolCallId);
+
+		return pending ? parseExecShellCommandMeta(pending)?.command : undefined;
+	});
+
 	const currentlyExecutingToolCallId = $derived(
 		isStreaming ? agenticStore.getExecutingToolCallId(message.convId) : null
 	);
@@ -109,47 +130,80 @@
 			: undefined
 	);
 
-	type TurnGroup = {
-		sections: AgenticSection[];
-		flatIndices: number[];
-	};
+	/** A single section by its index, or a run of them shown as one group row. */
+	type TraceItem = number | number[];
 
-	const turnGroups: TurnGroup[] = $derived.by(() => {
-		const groups: TurnGroup[] = [];
+	// The rows of the reply, as one list per turn. Per-turn stats sit between
+	// turns, so with them on each turn groups its own calls. Without them a
+	// run of calls spans turns ( a model that thinks before each call ) and
+	// the reply is a single list.
+	const turns: TraceItem[][] = $derived.by(() => {
+		if (!showAgenticTurnStats) {
+			return [
+				groupToolCallRuns(
+					sections,
+					sections.map((_, i) => i),
+					TOOL_CALL_GROUP_MIN_CALLS
+				)
+			];
+		}
 
-		let currentTurn: AgenticSection[] = [];
-		let currentIndices: number[] = [];
+		const result: TraceItem[][] = [];
+
+		let indices: number[] = [];
 		let prevWasTool = false;
 
-		for (let i = 0; i < sections.length; i++) {
-			const section = sections[i];
-			const isTool =
-				section.type === AgenticSectionType.TOOL_CALL ||
-				section.type === AgenticSectionType.TOOL_CALL_PENDING ||
-				section.type === AgenticSectionType.TOOL_CALL_STREAMING;
+		const pushTurn = () =>
+			result.push(groupToolCallRuns(sections, indices, TOOL_CALL_GROUP_MIN_CALLS));
 
-			if (!isTool && prevWasTool && currentTurn.length > 0) {
-				groups.push({ flatIndices: currentIndices, sections: currentTurn });
-				currentTurn = [];
-				currentIndices = [];
+		for (let i = 0; i < sections.length; i++) {
+			const isTool = isToolCallSection(sections[i]);
+
+			// a turn ends where its tool calls do
+			if (!isTool && prevWasTool && indices.length > 0) {
+				pushTurn();
+				indices = [];
 			}
 
-			currentTurn.push(section);
-			currentIndices.push(i);
+			indices.push(i);
 			prevWasTool = isTool;
 		}
 
-		if (currentTurn.length > 0) {
-			groups.push({ flatIndices: currentIndices, sections: currentTurn });
-		}
+		if (indices.length > 0) pushTurn();
 
-		return groups;
+		return result;
 	});
 
-	function isExpanded(index: number, section: AgenticSection): boolean {
+	// a single turn has no stats of its own to show
+	const showTurnStats = $derived(showAgenticTurnStats && turns.length > 1);
+
+	const lastItem = $derived(turns.at(-1)?.at(-1));
+
+	// The live task timer goes on the last row while it is a tool row: a group
+	// takes it as a prop, a single call reads it from context by its id.
+	const taskStartedAt = $derived(isStreaming ? agenticStore.getStartedAt(message.convId) : null);
+
+	setToolCallElapsedContext(() => {
+		if (taskStartedAt === null || lastItem === undefined || Array.isArray(lastItem)) return null;
+
+		const toolCallId = sections[lastItem]?.toolCallId;
+
+		return toolCallId ? { startedAt: taskStartedAt, toolCallId } : null;
+	});
+
+	const lastToolIndex = $derived(sections.findLastIndex((section) => isToolCallSection(section)));
+
+	function isExecutingCall(section: AgenticSection): boolean {
+		return section.toolCallId !== undefined && section.toolCallId === currentlyExecutingToolCallId;
+	}
+
+	function isExpanded(index: number, section: AgenticSection, inOpenGroup = false): boolean {
 		if (expandedStates[index] !== undefined) {
 			return expandedStates[index];
 		}
+
+		// opening a group while a call runs shows that call's live output
+		if (inOpenGroup && isExecutingCall(section)) return true;
 
 		return isSectionExpandedByDefault(section, {
 			alwaysShowToolCallContent,
@@ -159,10 +213,27 @@
 		});
 	}
 
-	function toggleExpanded(index: number, section: AgenticSection) {
-		const currentState = isExpanded(index, section);
+	function toggleExpanded(index: number, section: AgenticSection, inOpenGroup = false) {
+		const currentState = isExpanded(index, section, inOpenGroup);
 
 		expandedStates[index] = !currentState;
+	}
+
+	function isGroupExpanded(indices: number[]): boolean {
+		const state = groupExpandedStates[indices[0]];
+
+		if (state !== undefined) return state;
+
+		if (alwaysShowToolCallContent) return true;
+
+		// with "Show tool call in progress" the latest group stays open for the
+		// whole reply, so calls are seen as they happen, and folds into its
+		// summary once the reply is done
+		return showToolCallInProgress && isStreaming && indices.includes(lastToolIndex);
+	}
+
+	function toggleGroupExpanded(indices: number[]) {
+		groupExpandedStates[indices[0]] = !isGroupExpanded(indices);
 	}
 
 	function buildTurnAgenticTimings(stats: ChatMessageAgenticTurnStats): ChatMessageAgenticTimings {
@@ -176,7 +247,7 @@
 	}
 </script>
 
-{#snippet renderSection(section: AgenticSection, index: number)}
+{#snippet renderSection(section: AgenticSection, index: number, inOpenGroup = false)}
 	{#if section.type === AgenticSectionType.TEXT}
 		<div class="agentic-text">
 			<MarkdownContent attachments={message?.extra} content={section.content} />
@@ -194,27 +265,50 @@
 		<ChatMessageToolCallBlock
 			attachments={section.toolResultExtras}
 			{conversationCwd}
-			isExecuting={section.toolCallId !== undefined &&
-				section.toolCallId === currentlyExecutingToolCallId}
+			isExecuting={isExecutingCall(section)}
 			{isStreaming}
-			onToggle={() => toggleExpanded(index, section)}
-			open={isExpanded(index, section)}
+			onToggle={() => toggleExpanded(index, section, inOpenGroup)}
+			open={isExpanded(index, section, inOpenGroup)}
 			{section}
 		/>
 	{/if}
 {/snippet}
 
+{#snippet renderItem(item: TraceItem)}
+	{#if Array.isArray(item)}
+		{@const groupOpen = isGroupExpanded(item)}
+		<ChatMessageToolCallGroup
+			elapsedStartedAt={item === lastItem ? taskStartedAt : null}
+			executingToolCallId={currentlyExecutingToolCallId}
+			{isStreaming}
+			onToggle={() => toggleGroupExpanded(item)}
+			open={groupOpen}
+			sections={item.map((i) => sections[i])}
+		>
+			{#each item as index (index)}
+				{@render renderSection(sections[index], index, groupOpen)}
+			{/each}
+		</ChatMessageToolCallGroup>
+	{:else}
+		{@render renderSection(sections[item], item)}
+	{/if}
+{/snippet}
+
+{#snippet renderItems(items: TraceItem[])}
+	{#each items as item (Array.isArray(item) ? `g${item[0]}` : item)}
+		{@render renderItem(item)}
+	{/each}
+{/snippet}
+
 <div class="agentic-content gap-2">
-	{#if turnGroups.length > 1}
-		{#each turnGroups as turn, turnIndex (turnIndex)}
+	{#each turns as items, turnIndex (turnIndex)}
+		{#if showTurnStats}
 			{@const turnStats = message?.timings?.agentic?.perTurn?.[turnIndex]}
 
 			<div class="agentic-turn group/turn grid gap-2">
-				{#each turn.sections as section, sIdx (turn.flatIndices[sIdx])}
-					{@render renderSection(section, turn.flatIndices[sIdx])}
-				{/each}
+				{@render renderItems(items)}
 
-				{#if turnStats && showAgenticTurnStats}
+				{#if turnStats}
 					<div class="turn-stats transition-opacity duration-150 mt-1 mb-4">
 						<ChatMessageStatistics
 							agenticTimings={turnStats.toolCalls.length > 0
@@ -230,15 +324,14 @@
 					</div>
 				{/if}
 			</div>
-		{/each}
-	{:else}
-		{#each sections as section, index (index)}
-			{@render renderSection(section, index)}
-		{/each}
-	{/if}
+		{:else}
+			{@render renderItems(items)}
+		{/if}
+	{/each}
 
 	{#if visiblePermission}
 		<ChatMessageActionCardPermissionRequest
+			command={pendingCommand}
 			onDecision={handlePermission}
 			serverLabel={visiblePermission.serverLabel}
 			toolName={visiblePermission.toolName}

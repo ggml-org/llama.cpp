@@ -285,6 +285,7 @@ export {
 export { computeLineDiff, prefixFor, renderUnifiedDiff, type DiffLine } from './compute-line-diff';
 
 // Partial-incremental JSON parser for streaming tool arguments
+export { memoizeBounded } from './memoize-bounded';
 export { parsePartialJsonArgs } from './parse-partial-json-args';
 
 // `exec_shell_command` result parsing
@@ -337,6 +338,7 @@ export {
 // This module only carries the helpers that genuinely cross tool
 // boundaries (currently: parsing the tool-result blob into a JSON
 // object).
+export { parseToolCallShownArgOverrides, toolCallShownArg } from './tool-call-shown-arg';
 export { tryParseToolResultObject } from './tool-call-meta';
 
 // Per-tool UI metadata (label + icon) used by the tool-call chrome.
