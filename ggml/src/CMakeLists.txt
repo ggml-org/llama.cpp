@@ -202,6 +202,15 @@ add_library(ggml-base
             ggml-quants.h
             gguf.cpp)
 
+# the k-quant and i-quant scale search in ggml-quants.c is sensitive to floating point contraction: when the compiler
+# fuses a*b+c into an FMA, the selected scales and so the quantized output differ between compilers and architectures;
+# build this one file without contraction so that quantization gives the same output everywhere
+# (ref: https://github.com/ggml-org/llama.cpp/pull/25353)
+# a '#pragma STDC FP_CONTRACT OFF' in the source is not enough: GCC does not implement it
+if (CMAKE_C_COMPILER_ID MATCHES "GNU" OR CMAKE_C_COMPILER_ID MATCHES "Clang")
+    set_source_files_properties(ggml-quants.c PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+endif()
+
 set_target_properties(ggml-base PROPERTIES
     VERSION ${GGML_VERSION}
     SOVERSION ${GGML_VERSION_MAJOR}
