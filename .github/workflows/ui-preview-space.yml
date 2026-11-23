@@ -1,0 +1,107 @@
+name: UI Preview Space
+
+# Puts the Llama Chat build of a branch on a static Hugging Face Space, so a UI change can be tried from a link.
+# Opt-in: it runs only in a repository that sets the UI_PREVIEW_SPACE_OWNER variable (a Hugging Face user or organization)
+# and the HF_TOKEN secret, which is how a fork turns it on.
+# A push redeploys only a branch that already has a Space: create one with `npm run space` in ui/apps/chat, or run this workflow by hand on the branch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      visibility:
+        description: 'Visibility of the Space, if this run creates it'
+        type: choice
+        options:
+          - public
+          - protected
+        default: public
+  push:
+    branches-ignore:
+      - master
+    paths: [
+      '.github/workflows/ui-preview-space.yml',
+      'ui/apps/chat/**',
+      'ui/lib/**'
+    ]
+  delete:
+
+cache-mode: none
+permissions:
+  contents: read
+
+# only the newest push of a branch matters
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  UI_PREVIEW_SPACE_OWNER: ${{ vars.UI_PREVIEW_SPACE_OWNER }}
+
+jobs:
+  deploy:
+    name: Deploy the branch to its Space
+    if: vars.UI_PREVIEW_SPACE_OWNER != '' && github.event_name != 'delete'
+    runs-on: ubuntu-24.04
+
+    defaults:
+      run:
+        working-directory: ui/apps/chat
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Look for the Space of this branch
+        id: space
+        run: node scripts/space.ts status
+
+      - name: Install dependencies
+        if: steps.space.outputs.exists == 'true' || github.event_name == 'workflow_dispatch'
+        run: npm ci
+
+      - name: Install Hugging Face Hub CLI
+        if: steps.space.outputs.exists == 'true' || github.event_name == 'workflow_dispatch'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/hf"
+          "$RUNNER_TEMP/hf/bin/pip" install -U huggingface_hub==1.28.0
+          echo "$RUNNER_TEMP/hf/bin" >> "$GITHUB_PATH"
+
+      - name: Build and deploy
+        if: steps.space.outputs.exists == 'true' || github.event_name == 'workflow_dispatch'
+        env:
+          VISIBILITY: ${{ inputs.visibility || 'public' }}
+        run: node scripts/space.ts deploy --visibility "$VISIBILITY"
+
+  remove:
+    name: Delete the Space of a deleted branch
+    if: vars.UI_PREVIEW_SPACE_OWNER != '' && github.event_name == 'delete' && github.event.ref_type == 'branch'
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install Hugging Face Hub CLI
+        run: |
+          python3 -m venv "$RUNNER_TEMP/hf"
+          "$RUNNER_TEMP/hf/bin/pip" install -U huggingface_hub==1.28.0
+          echo "$RUNNER_TEMP/hf/bin" >> "$GITHUB_PATH"
+
+      - name: Delete the Space
+        working-directory: ui/apps/chat
+        env:
+          BRANCH: ${{ github.event.ref }}
+        run: node scripts/space.ts rm --branch "$BRANCH"
