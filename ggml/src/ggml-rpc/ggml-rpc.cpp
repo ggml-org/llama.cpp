@@ -1683,10 +1683,6 @@ bool rpc_server::memset_tensor(const rpc_msg_memset_tensor_req & request) {
         LOG_ERROR("[%s] tensor region out of buffer bounds\n", __func__);
         return false;
     }
-    if (tensor->buffer->iface.memset_tensor == nullptr) {
-        LOG_ERROR("[%s] memset not implemented by backend buffer\n", __func__);
-        return false;
-    }
 
     LOG_DBG2("[%s] tensor: %s, buffer: %p, data: %p, offset: %" PRIu64 ", size: %s, value: %u\n",
             __func__, rpc_log_format_tensor(tensor).c_str(), (void *) tensor->buffer, tensor->data, request.offset,
