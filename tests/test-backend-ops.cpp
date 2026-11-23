@@ -5642,6 +5642,7 @@ struct test_ssm_conv_step : public test_case {
     const int64_t nc;
     const int64_t ch_offs; // channel offset of the history view in a wider history
     const bool residual;   // a residual ADD after the step (Inkling 2 layer residual), fused into the step by CUDA
+    const int  n_moe;      // > 0: the step's input is a weighted sum of n_moe expert outputs, fused in as well
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -5651,15 +5652,41 @@ struct test_ssm_conv_step : public test_case {
     bool run_whole_graph() override { return true; }
 
     std::string vars() override {
-        return VARS_TO_STR4(n_conv, nc, ch_offs, residual);
+        return VARS_TO_STR5(n_conv, nc, ch_offs, residual, n_moe);
     }
 
-    test_ssm_conv_step(int64_t n_conv, int64_t nc, int64_t ch_offs, bool residual = false)
-        : n_conv(n_conv), nc(nc), ch_offs(ch_offs), residual(residual) {}
+    test_ssm_conv_step(int64_t n_conv, int64_t nc, int64_t ch_offs, bool residual = false, int n_moe = 0)
+        : n_conv(n_conv), nc(nc), ch_offs(ch_offs), residual(residual), n_moe(n_moe) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * hist  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_conv - 1, nc + 2*ch_offs);
-        ggml_tensor * cur   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nc, 1);
+        ggml_tensor * cur   = nullptr;
+        if (n_moe > 0) {
+            // as build_moe_ffn: (experts * per-expert scale) * router weights, then the views added in order
+            ggml_tensor * experts = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, nc, n_moe, 1);
+            ggml_tensor * escale  = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, n_moe, 1);
+            ggml_tensor * weights = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, n_moe, 1);
+            experts = ggml_mul(ctx, ggml_mul(ctx, experts, escale), weights);
+            if (gf) {
+                ggml_build_forward_expand(gf, experts);
+            }
+            ggml_tensor * views[16];
+            for (int e = 0; e < n_moe; ++e) {
+                views[e] = ggml_view_2d(ctx, experts, nc, 1, experts->nb[2], e*experts->nb[1]);
+                if (gf) {
+                    ggml_build_forward_expand(gf, views[e]);
+                }
+            }
+            cur = views[0];
+            for (int e = 1; e < n_moe; ++e) {
+                cur = ggml_add(ctx, cur, views[e]);
+                if (gf) {
+                    ggml_build_forward_expand(gf, cur);
+                }
+            }
+        } else {
+            cur = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nc, 1);
+        }
         ggml_tensor * w     = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_conv, nc);
         ggml_tensor * state = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, (n_conv - 1)*nc, 1);
         ggml_set_name(hist, "hist");
@@ -12765,6 +12792,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_ssm_conv_step(n_conv, 384, 7));
         test_cases.emplace_back(new test_ssm_conv_step(n_conv, 2304, 0, true));
         test_cases.emplace_back(new test_ssm_conv_step(n_conv, 384, 7, true));
+        test_cases.emplace_back(new test_ssm_conv_step(n_conv, 2304, 0, true, 8));
+        test_cases.emplace_back(new test_ssm_conv_step(n_conv, 384, 7, false, 3));
     }
 
     // matrix-vector products on one vector, in one launch (Inkling 2 Q/gate/R/sink, K/V, loop controllers)
