@@ -1823,7 +1823,7 @@ ggml_tensor * llm_graph_context::build_lora_mm(
     }
 
 
-    prec_policy.apply(res);
+    prec_policy.apply(res, w);
 
     if (w_s) {
         res = ggml_mul(ctx0, res, w_s);
@@ -1907,7 +1907,7 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
     }
 
     // after the NVFP4 default, so that the policy can request a higher precision
-    prec_policy.apply(res);
+    prec_policy.apply(res, w);
 
     if (w_s) {
         const int64_t n_expert = w_s->ne[0];
