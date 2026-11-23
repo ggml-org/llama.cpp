@@ -28,7 +28,7 @@
 		class={[
 			'md:size-8 size-9 rounded-full p-0',
 			showErrorState &&
-				'bg-surface-danger text-fg-danger hover:bg-surface-danger/80 hover:text-fg-danger disabled:opacity-100'
+				'[--key-edge:var(--button-danger-edge)] bg-surface-danger text-fg-danger hover:bg-surface-danger/80 hover:text-fg-danger disabled:opacity-100'
 		]}
 		disabled={isDisabled}
 		type="submit"
