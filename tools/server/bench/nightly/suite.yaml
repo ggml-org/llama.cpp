@@ -33,7 +33,7 @@ models:
     # flags from the RTX Spark recipes; {name} is replaced by the path of extras.<name>
     spec:
       mtp: [--spec-type, draft-mtp, --spec-draft-n-max, "3", --spec-draft-backend-sampling]
-      dflash: [-md, "{dflash}", --spec-type, draft-dflash, --spec-draft-n-max, "7", --spec-draft-backend-sampling]
+      dflash: [-md, "{dflash}", --spec-type, draft-dflash2, --spec-draft-n-max, "7", --spec-draft-backend-sampling]
     suites: [engine, speedbench, serving, agentic, quality]
 
   M5:
@@ -76,7 +76,7 @@ models:
     # MTP comes as a separate head, unlike M3's built-in one
     spec:
       mtp: [-md, "{mtp}", --spec-type, draft-mtp, --spec-draft-n-max, "3", --spec-draft-backend-sampling]
-      dflash: [-md, "{dflash}", --spec-type, draft-dflash, --spec-draft-n-max, "7", --spec-draft-backend-sampling]
+      dflash: [-md, "{dflash}", --spec-type, draft-dflash2, --spec-draft-n-max, "7", --spec-draft-backend-sampling]
     suites: [engine, speedbench, serving, agentic, quality]
 
   M4:
