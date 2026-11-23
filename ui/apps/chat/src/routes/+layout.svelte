@@ -33,7 +33,7 @@
 	} from '#lib/stores/index.ts';
 	import { initStores } from '#lib/stores/init.ts';
 	import { withBase } from '#lib/utils/base-path.ts';
-	import { applySurfaceTheme, hapticTap } from '#lib/utils/index.ts';
+	import { hapticTap } from '#lib/utils/index.ts';
 	import { browser } from '$app/env';
 	import { afterNavigate, goto } from '$app/navigation';
 	import { page } from '$app/state';
@@ -52,11 +52,6 @@
 	let innerWidth = $state(browser ? window.innerWidth : 0);
 
 	let chatSidebar: { editActiveConversation?: () => void } | undefined = $state();
-
-	// the light surface theme (Paper or Matte) follows the saved setting
-	$effect(() => {
-		applySurfaceTheme(settingsStore.config[SETTINGS_KEYS.SURFACE_THEME]);
-	});
 
 	let showBuildVersion = $derived(
 		settingsStore.config[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean
