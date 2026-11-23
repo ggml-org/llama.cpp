@@ -9087,17 +9087,18 @@ struct test_roll : public test_case {
     const int shift3;
     const int shift4;
     const bool permute;
+    const std::array<int64_t, 4> ne_a;
 
     std::string vars() override {
-        return VARS_TO_STR5(shift0, shift1, shift3, shift4, permute);
+        return VARS_TO_STR6(shift0, shift1, shift3, shift4, permute, ne_a);
     }
 
-    test_roll(int shift0 = 3, int shift1 = -2, int shift3 = 1, int shift4 = -1, bool permute = false)
-        : shift0(shift0), shift1(shift1), shift3(shift3), shift4(shift4), permute(permute) {}
+    test_roll(int shift0 = 3, int shift1 = -2, int shift3 = 1, int shift4 = -1, bool permute = false,
+            std::array<int64_t, 4> ne_a = {10, 5, 4, 3})
+        : shift0(shift0), shift1(shift1), shift3(shift3), shift4(shift4), permute(permute), ne_a(ne_a) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        int64_t ne[4] = {10, 5, 4, 3};
-        ggml_tensor * a = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+        ggml_tensor * a = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_a.data());
         ggml_set_name(a, "a");
 
         if (permute) {
@@ -13183,6 +13184,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {3000, 384, 4, 1}));
     test_cases.emplace_back(new test_roll());
     test_cases.emplace_back(new test_roll(3, -2, 1, -1, true));
+    test_cases.emplace_back(new test_roll(0, 0, 0, 0, false, {1, 1, 1, 1}));
+    test_cases.emplace_back(new test_roll(256, 0, 0, 0, false, {257, 1, 1, 1}));
+    test_cases.emplace_back(new test_roll(-16, 6, -2, 1, false, {17, 7, 3, 2}));
+    test_cases.emplace_back(new test_roll(4, 0, 0, 0, false, {42, 512, 1, 1}));
+    test_cases.emplace_back(new test_roll(4, 0, 0, 0, false, {380, 512, 1, 1}));
     test_cases.emplace_back(new test_arange());
     test_cases.emplace_back(new test_arange(GGML_TYPE_F32, 3.0f, 3.5f, 1.0f));
     test_cases.emplace_back(new test_arange(GGML_TYPE_F32, -10.0f, 10.0f, 0.3f));
@@ -13915,6 +13921,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     for (float n : {128.0f, 4096.0f, 32768.0f, 1048576.0f}) {
         test_cases.emplace_back(new test_arange(GGML_TYPE_F32, 0.0f, n, 1.0f));
     }
+
+    test_cases.emplace_back(new test_roll(4, 0, 0, 0, false, {42, 512, 1, 1}));
+    test_cases.emplace_back(new test_roll(4, 0, 0, 0, false, {380, 512, 1, 1}));
 
     // embedding lookups: one token (decode) and one batch of 2048 tokens (prefill)
     for (int r : {16, 32768}) {
