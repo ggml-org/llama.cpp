@@ -225,6 +225,24 @@ class HYV4FlashModel(HYV4Model):
                 "but only 'sparse_attention' draft blocks are supported")
         return t
 
+    def _write_rope_sections(self, sparse_rope: dict, window_rope: dict):
+        """Write the M-RoPE sections of the VL checkpoints. Text-only files keep the loader default."""
+        sections = sparse_rope.get("mrope_section")
+        if sections is None:
+            return
+        if window_rope.get("mrope_section") != sections:
+            raise ValueError(
+                f"HY_V4_FLASH needs one mrope_section for both layer types, but "
+                f"{window_rope.get('mrope_section')} != {sections}")
+        if not sparse_rope.get("mrope_interleaved", False):
+            raise NotImplementedError("HY_V4_FLASH expects mrope_interleaved = true")
+
+        rope_dim = self.hparams["qk_rope_head_dim"]
+        if len(sections) != 3 or 2 * sum(sections) != rope_dim:
+            raise ValueError(f"HY_V4_FLASH mrope_section {sections} must sum to qk_rope_head_dim / 2")
+
+        self.gguf_writer.add_rope_dimension_sections(list(sections) + [0])
+
     def _rope_for(self, layer_type: str) -> dict:
         params = self.hparams.get("rope_parameters")
         names = self.SPARSE_TYPES if layer_type == "sparse_attention" else (layer_type,)
@@ -264,6 +282,9 @@ class HYV4FlashModel(HYV4Model):
                 self.hparams["num_nextn_predict_layers"] = n_nextn
 
         self.gguf_writer.add_rope_freq_base(sparse_rope["rope_theta"])
+
+        # the graph reorders the rope rows itself, so the sections only say how to split them
+        self._write_rope_sections(sparse_rope, window_rope)
 
         # per-layer head count: the window layers carry swa_num_attention_heads
         n_head = hparams["num_attention_heads"]

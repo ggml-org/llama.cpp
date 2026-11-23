@@ -3926,7 +3926,8 @@ struct mtmd_model_loader {
                     model.image_newline     = get_tensor(TN_IMAGE_NEWLINE);
                     // the position embedding is resampled on the host as F32
                     if (!model.position_embeddings || model.position_embeddings->type != GGML_TYPE_F32 || !ggml_is_matrix(model.position_embeddings) || model.position_embeddings->ne[0] != hparams.n_embd) {
-                        throw std::runtime_error(mtmd_format("%s: hy_v4 requires a 2D F32 %s\n", __func__, mtmd_format(TN_POS_EMBD, prefix).c_str()));
+                        throw std::runtime_error(mtmd_format("%s: %s requires a 2D F32 %s\n", __func__,
+                                PROJECTOR_TYPE_NAMES[model.proj_type].c_str(), mtmd_format(TN_POS_EMBD, prefix).c_str()));
                     }
                 } break;
             case PROJECTOR_TYPE_JANUS_PRO:

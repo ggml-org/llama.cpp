@@ -1642,6 +1642,7 @@ private:
                 return piece;
             }
         }
+        LOG_WRN("%s: no token starts with '%s', images will have no marker around them\n", __func__, prefix.c_str());
         return "";
     }
 

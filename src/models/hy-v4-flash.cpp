@@ -66,7 +66,7 @@ void llama_model_hy_v4_flash::load_arch_hparams(llama_model_loader & ml) {
     hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
     ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
 
-    // the checkpoint uses interleaved M-RoPE; published files carry no sections, so default to the checkpoint's
+    // the conversion writes the sections; this default only keeps the already published files loadable
     hparams.rope_sections = { 12, 10, 10, 0 };
     ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, false);
     {
