@@ -335,7 +335,7 @@ void common_chat_foreach_tool(const common_json & tools, const common_chat_tool_
     }
 }
 
-common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const common_json & tool_choice) {
+common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const common_json & tool_choice, const std::vector<common_chat_tool> & tools) {
     if (tool_choice == "auto") {
         return COMMON_CHAT_TOOL_CHOICE_AUTO;
     }
@@ -345,20 +345,20 @@ common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const common_jso
     if (tool_choice == "required") {
         return COMMON_CHAT_TOOL_CHOICE_REQUIRED;
     }
-    if (tool_choice.value("type", json()) == "function") {
-        common_chat_tool_choice choice = COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+    common_chat_tool_choice choice;
+    const auto type = tool_choice.value("type", json());
+    if (type == "function") {
+        choice.mode = COMMON_CHAT_TOOL_CHOICE_REQUIRED;
         choice.allowed.push_back(tool_choice.at("function").at("name").get<std::string>());
-        return choice;
-    }
-    if (tool_choice.value("type", json()) == "allowed_tools") {
+    } else if (type == "allowed_tools") {
         const auto & allowed = tool_choice.at("allowed_tools");
         const auto & mode = allowed.at("mode");
-        const auto & tools = allowed.at("tools");
-        if ((mode != "auto" && mode != "required") || !tools.is_array()) {
+        const auto & allowed_tools = allowed.at("tools");
+        if ((mode != "auto" && mode != "required") || !allowed_tools.is_array()) {
             throw std::invalid_argument("allowed_tools requires mode auto or required and a tools array");
         }
-        common_chat_tool_choice choice = mode == "required" ? COMMON_CHAT_TOOL_CHOICE_REQUIRED : COMMON_CHAT_TOOL_CHOICE_AUTO;
-        for (const auto & tool : tools) {
+        choice.mode = mode == "required" ? COMMON_CHAT_TOOL_CHOICE_REQUIRED : COMMON_CHAT_TOOL_CHOICE_AUTO;
+        for (const auto & tool : allowed_tools) {
             if (tool.value("type", json()) != "function") {
                 throw std::invalid_argument("allowed_tools entries must have type function");
             }
@@ -370,9 +370,19 @@ common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const common_jso
             }
             choice.mode = COMMON_CHAT_TOOL_CHOICE_NONE;
         }
-        return choice;
+    } else {
+        throw std::invalid_argument("Invalid tool_choice: " + tool_choice.dump());
     }
-    throw std::invalid_argument("Invalid tool_choice: " + tool_choice.dump());
+
+    for (const auto & name : choice.allowed) {
+        const auto n_matching = std::count_if(tools.begin(), tools.end(), [&](const common_chat_tool & tool) {
+            return tool.name == name;
+        });
+        if (name.empty() || n_matching != 1) {
+            throw std::invalid_argument("tool_choice function name must match exactly one supplied tool: " + name);
+        }
+    }
+    return choice;
 }
 
 bool common_chat_templates_support_enable_thinking(const common_chat_templates * chat_templates) {

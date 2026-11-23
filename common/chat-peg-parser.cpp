@@ -650,12 +650,12 @@ static std::pair<std::string, std::string> parse_key_spec(const std::string & ke
 
 // Mode 1: function_is_key — parse {"function_name": {...}}
 common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
-    const ordered_json & tools,
+    const ordered_json &            tools,
     const common_chat_tool_choice & tool_choice,
-    const std::string &  args_key,
-    const std::string &  effective_args_key,
-    const std::string &  call_id_key,
-    const std::string &  gen_call_id_key) {
+    const std::string &             args_key,
+    const std::string &             effective_args_key,
+    const std::string &             call_id_key,
+    const std::string &             gen_call_id_key) {
 
     auto tool_choices = choice();
 
@@ -727,12 +727,12 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
 
 // Mode 2: Nested keys (dot notation like "function.name")
 common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
-    const ordered_json & tools,
+    const ordered_json &            tools,
     const common_chat_tool_choice & tool_choice,
-    const std::string &  effective_name_key,
-    const std::string &  effective_args_key,
-    const std::string &  call_id_key,
-    const std::string &  gen_call_id_key) {
+    const std::string &             effective_name_key,
+    const std::string &             effective_args_key,
+    const std::string &             call_id_key,
+    const std::string &             gen_call_id_key) {
 
     auto tool_choices = choice();
 
@@ -798,7 +798,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
 // Mode 3: Flat keys with optional ID fields and parameter ordering
 common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
     const ordered_json &             tools,
-    const common_chat_tool_choice & tool_choice,
+    const common_chat_tool_choice &  tool_choice,
     const std::string &              effective_name_key,
     const std::string &              effective_args_key,
     const std::string &              call_id_key,
@@ -934,7 +934,7 @@ common_peg_parser common_chat_peg_builder::standard_json_tools(
                                                        const std::string &              gen_call_id_key,
                                                        const std::vector<std::string> & parameters_order,
                                                        bool                             accept_openai_wrapper,
-                                                       const common_chat_tool_choice & tool_choice) {
+                                                       const common_chat_tool_choice &  tool_choice) {
     if (!tools.is_array() || tools.empty()) {
         return eps();
     }

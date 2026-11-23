@@ -475,7 +475,7 @@ class common_chat_session {
 const char *            common_reasoning_format_name(common_reasoning_format format);
 common_reasoning_format common_reasoning_format_from_name(const std::string & format);
 
-common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const common_json & tool_choice);
+common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const common_json & tool_choice, const std::vector<common_chat_tool> & tools);
 
 bool common_chat_templates_support_enable_thinking(const common_chat_templates * chat_templates);
 
