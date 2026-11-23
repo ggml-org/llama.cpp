@@ -56,6 +56,7 @@
 #include "ggml-cuda/attn-prep.cuh"
 #include "ggml-cuda/situ.cuh"
 #include "ggml-cuda/ctrl-batch.cuh"
+#include "ggml-cuda/wo-conv.cuh"
 #include "ggml-cuda/softmax.cuh"
 #include "ggml-cuda/ssm-conv.cuh"
 #include "ggml-cuda/ssm-scan.cuh"
@@ -4698,6 +4699,70 @@ static int ggml_cuda_match_moe_conv_step(const ggml_cgraph * cgraph, int i, ggml
     return end;
 }
 
+// one token: a BF16 MUL_MAT on one F32 vector (Inkling 2's attention output projection) whose result goes only into the
+// one-token conv step right after it, as its new column and residual, optionally with the residual ADD after the step.
+// Returns the index of the last node, or -1; k receives the step's CONCAT and step_last its SCALE.
+static int ggml_cuda_match_wo_conv(const ggml_cgraph * cgraph, int i, int & k, int & step_last, bool check_memory = true) {
+    const ggml_tensor * mm = cgraph->nodes[i];
+    const ggml_tensor * x  = mm->src[0];
+    const ggml_tensor * y  = mm->src[1];
+    if (mm->op != GGML_OP_MUL_MAT || x->type != GGML_TYPE_BF16 || !ggml_is_contiguous(x) || x->ne[2] != 1 || x->ne[3] != 1 ||
+            x->ne[0] % 2 != 0 || y->type != GGML_TYPE_F32 || !ggml_is_contiguous(y) || ggml_nrows(y) != 1 ||
+            mm->type != GGML_TYPE_F32 || !ggml_is_contiguous(mm) || ggml_nrows(mm) != 1 ||
+            (mm->flags & GGML_TENSOR_FLAG_OUTPUT) || !(mm->flags & GGML_TENSOR_FLAG_COMPUTE)) {
+        return -1;
+    }
+    k = i + 1;
+    while (k < cgraph->n_nodes && (cgraph->nodes[k]->op == GGML_OP_RESHAPE || cgraph->nodes[k]->op == GGML_OP_TRANSPOSE ||
+                                   cgraph->nodes[k]->op == GGML_OP_VIEW || cgraph->nodes[k]->op == GGML_OP_PERMUTE)) {
+        ++k;
+    }
+    if (k >= cgraph->n_nodes || cgraph->nodes[k]->op != GGML_OP_CONCAT) {
+        return -1;
+    }
+    step_last = ggml_cuda_match_ssm_conv_step(cgraph, k, false);
+    if (step_last < 0) {
+        return -1;
+    }
+    const ggml_tensor * concat = cgraph->nodes[k];
+    const ggml_tensor * conv   = cgraph->nodes[k + 4];
+    const ggml_tensor * add    = cgraph->nodes[k + 6];
+    const ggml_tensor * cx     = concat->src[1];
+    const ggml_tensor * res    = add->src[0]->op == GGML_OP_RESHAPE && add->src[0]->src[0] == conv ? add->src[1] : add->src[0];
+    if (cx->data != mm->data || cx->nb[1] != sizeof(float) || res->data != mm->data || !ggml_is_contiguous(res) ||
+            ggml_nelements(res) != ggml_nelements(mm) || conv->src[1]->ne[1] != mm->ne[0]) {
+        return -1;
+    }
+    int last = step_last;
+    const int last2 = ggml_cuda_match_ssm_conv_step_residual(cgraph, k, step_last, false);
+    if (last2 > 0) {
+        last = last2;
+    }
+    if (check_memory) {
+        const ggml_tensor * out  = cgraph->nodes[last];
+        const ggml_tensor * cell = cgraph->nodes[k + 3]->src[1];
+        const ggml_tensor * ins[] = { x, y, concat->src[0], conv->src[1] };
+        for (const ggml_tensor * o : { (const ggml_tensor *) mm, cell, out }) {
+            for (const ggml_tensor * in : ins) {
+                if (ggml_cuda_fusion_overlap(o, in)) {
+                    return -1;
+                }
+            }
+        }
+        if (ggml_cuda_fusion_overlap(cell, mm) || ggml_cuda_fusion_overlap(cell, out) || !ggml_cuda_fusion_elementwise_ok(out, mm)) {
+            return -1;
+        }
+        if (last2 > 0) {
+            const ggml_tensor * add2 = cgraph->nodes[last2];
+            const ggml_tensor * res2 = add2->src[0] == cgraph->nodes[step_last] ? add2->src[1] : add2->src[0];
+            if (!ggml_cuda_fusion_elementwise_ok(out, res2) || ggml_cuda_fusion_overlap(mm, res2) || ggml_cuda_fusion_overlap(cell, res2)) {
+                return -1;
+            }
+        }
+    }
+    return last;
+}
+
 // the number of consecutive MUL_MAT nodes from i, at most 4, that one mmvf launch can compute: one F32 vector, the
 // same src1, 2D contiguous src0 of one type and row length, and no node reading another's result
 static int ggml_cuda_mul_mat_vec_f_group(const ggml_cgraph * cgraph, int i) {
@@ -5680,6 +5745,18 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     }
 
     if (node->op == GGML_OP_MUL_MAT) {
+        int k = -1, step_last = -1;
+        const int last = ggml_cuda_match_wo_conv(cgraph, i, k, step_last);
+        if (last > 0) {
+            ggml_tensor * add2 = last > step_last ? cgraph->nodes[last] : nullptr;
+            ggml_cuda_op_wo_conv(*cuda_ctx, node, cgraph->nodes[k]->src[0], cgraph->nodes[k + 4]->src[1],
+                ggml_get_op_params_f32(cgraph->nodes[step_last], 0), cgraph->nodes[k + 3]->src[1], cgraph->nodes[step_last],
+                add2 ? (add2->src[0] == cgraph->nodes[step_last] ? add2->src[1] : add2->src[0]) : nullptr, add2);
+            return last - i;
+        }
+    }
+
+    if (node->op == GGML_OP_MUL_MAT) {
         const int last = ggml_cuda_match_ctrl_mix(cgraph, i);
         if (last > 0) {
             ggml_cuda_op_ctrl_mix(*cuda_ctx, cgraph, i, last);
@@ -6159,7 +6236,11 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
                         last = ggml_cuda_match_mul_l2_norm(cgraph, i, false);
                     }
                 } else if (op == GGML_OP_MUL_MAT) {
-                    last = ggml_cuda_match_rel_bias(cgraph, i, false);
+                    int wk = -1, ws = -1;
+                    last = ggml_cuda_match_wo_conv(cgraph, i, wk, ws, false);
+                    if (last < 0) {
+                        last = ggml_cuda_match_rel_bias(cgraph, i, false);
+                    }
                     if (last < 0) {
                         last = ggml_cuda_match_ctrl_mix(cgraph, i, false);
                     }

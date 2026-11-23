@@ -5643,6 +5643,7 @@ struct test_ssm_conv_step : public test_case {
     const int64_t ch_offs; // channel offset of the history view in a wider history
     const bool residual;   // a residual ADD after the step (Inkling 2 layer residual), fused into the step by CUDA
     const int  n_moe;      // > 0: the step's input is a weighted sum of n_moe expert outputs, fused in as well
+    const int64_t wo_k;    // > 0: the step's input is a BF16 product on a wo_k vector, fused in as well
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -5652,11 +5653,15 @@ struct test_ssm_conv_step : public test_case {
     bool run_whole_graph() override { return true; }
 
     std::string vars() override {
-        return VARS_TO_STR5(n_conv, nc, ch_offs, residual, n_moe);
+        return VARS_TO_STR6(n_conv, nc, ch_offs, residual, n_moe, wo_k);
     }
 
-    test_ssm_conv_step(int64_t n_conv, int64_t nc, int64_t ch_offs, bool residual = false, int n_moe = 0)
-        : n_conv(n_conv), nc(nc), ch_offs(ch_offs), residual(residual), n_moe(n_moe) {}
+    double max_nmse_err() override {
+        return wo_k > 0 ? 5e-4 : 1e-7; // a BF16 product: the CPU rounds its activations to BF16, the GPU does not
+    }
+
+    test_ssm_conv_step(int64_t n_conv, int64_t nc, int64_t ch_offs, bool residual = false, int n_moe = 0, int64_t wo_k = 0)
+        : n_conv(n_conv), nc(nc), ch_offs(ch_offs), residual(residual), n_moe(n_moe), wo_k(wo_k) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * hist  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_conv - 1, nc + 2*ch_offs);
@@ -5684,6 +5689,10 @@ struct test_ssm_conv_step : public test_case {
                     ggml_build_forward_expand(gf, cur);
                 }
             }
+        } else if (wo_k > 0) {
+            ggml_tensor * wo = ggml_new_tensor_2d(ctx, GGML_TYPE_BF16, wo_k, nc);
+            ggml_tensor * v  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, wo_k, 1);
+            cur = ggml_mul_mat(ctx, wo, v);
         } else {
             cur = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nc, 1);
         }
