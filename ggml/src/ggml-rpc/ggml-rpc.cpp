@@ -283,7 +283,7 @@ struct rpc_msg_set_tensor_req {
     uint64_t   offset;
 };
 
-// GRAPH_COMPUTE header, followed by | nodes (n_nodes * uint64_t) | n_tensors (uint32_t) | tensors (n_tensors * rpc_tensor) |
+// GRAPH_COMPUTE header, followed by the node ids and the tensors
 struct rpc_msg_graph_compute_req {
     uint32_t device;
     uint64_t uid;
@@ -293,8 +293,6 @@ struct rpc_msg_graph_compute_req {
 #pragma pack(pop)
 
 // request and response types of the commands with fixed-size requests, void when there is no response
-// not listed: HELLO and DEVICE_COUNT (handshake, empty request), and SET_TENSOR, SET_TENSOR_2D and
-// GRAPH_COMPUTE, whose header struct is followed by variable-size data
 template <rpc_cmd cmd> struct rpc_msg_types;
 
 #define RPC_MSG_TYPES(cmd, req_t, rsp_t) \
@@ -370,7 +368,7 @@ static uint64_t fnv_hash(const uint8_t * data, size_t len, uint64_t hash = 0xcbf
     return hash;
 }
 
-// builds a variable-size request; the buffer is shared with the dispatcher queue, so it must not change once queued
+// builds a variable-size request; the buffer must not change once queued
 struct rpc_writer {
     std::shared_ptr<std::vector<uint8_t>> buf = std::make_shared<std::vector<uint8_t>>();
 
@@ -634,7 +632,7 @@ public:
         }
     }
 
-    // queues the request of `cmd`; the response, if any, is written to *response before the command completes
+    // queues the request of `cmd`; *response, if given, is written when the command completes
     template <rpc_cmd cmd>
     void call_async(const typename rpc_msg_types<cmd>::req & request, typename rpc_msg_types<cmd>::rsp * response = nullptr) {
         using req_t = typename rpc_msg_types<cmd>::req;
@@ -966,8 +964,7 @@ static bool rpc_use_hash_cache(const rpc_dispatcher & dispatcher, const ggml_ten
     return dispatcher.get_send_tensor_hash() && size > HASH_THRESHOLD && tensor->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
 }
 
-// asks the server to load the data from its cache and returns true on a hit; on a miss, cache_flag
-// is set so that the server saves the data that is sent next
+// true if the server loaded the data from its cache; on a miss, cache_flag asks it to cache the data sent next
 static bool rpc_set_tensor_from_cache(rpc_dispatcher & dispatcher, const ggml_tensor * tensor, const rpc_tensor & wire,
                                       const void * data, size_t offset, size_t size, uint8_t & cache_flag) {
     cache_flag = 0;
@@ -992,7 +989,7 @@ static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggm
     if (rpc_set_tensor_from_cache(*ctx->dispatcher, tensor, wire, data, offset, size, cache_flag)) {
         return;
     }
-    // the data is sent as payload after the header, without copying it
+    // | rpc_msg_set_tensor_req | data (size bytes) |
     auto request = std::make_shared<rpc_msg_set_tensor_req>(rpc_msg_set_tensor_req{ wire, cache_flag, offset });
     ctx->dispatcher->send(RPC_CMD_SET_TENSOR, request, sizeof(*request), data, size, nullptr, 0);
 }
@@ -1499,23 +1496,20 @@ static bool rpc_tensor_nbytes(const rpc_tensor & tensor, uint64_t & nbytes) {
     return true;
 }
 
-// true if [addr, addr + size) lies inside the buffer
 static bool rpc_in_buffer(ggml_backend_buffer_t buffer, uint64_t addr, uint64_t size) {
     const uint64_t base     = (uint64_t) ggml_backend_buffer_get_base(buffer);
     const uint64_t buf_size = (uint64_t) ggml_backend_buffer_get_size(buffer);
     return addr >= base && addr - base <= buf_size && size <= buf_size - (addr - base);
 }
 
-// checks a request on [offset, offset + (n_copies - 1)*stride + size) of a deserialized tensor
-// ggml_backend_tensor_set/get assert that it lies inside the tensor, and deserialize_tensor checked that the
-// tensor lies inside its buffer
+// checks [offset, offset + (n_copies - 1)*stride + size) against the tensor size, which ggml_backend_tensor_set/get assert on
 static bool rpc_check_region(const char * func, const ggml_tensor * tensor, uint64_t offset, uint64_t size,
                              uint64_t n_copies = 1, uint64_t stride = 0) {
     if (tensor == nullptr || tensor->buffer == nullptr || tensor->data == nullptr) {
         LOG_ERROR("[%s] invalid or unallocated tensor\n", func);
         return false;
     }
-    // rows must not overlap, so the data sent or received (size * n_copies bytes) is not larger than the span
+    // rows must not overlap, so size * n_copies <= span
     if (n_copies == 0 || (n_copies > 1 && stride < size) ||
         (n_copies > 1 && stride != 0 && n_copies - 1 > (UINT64_MAX - size) / stride)) {
         LOG_ERROR("[%s] invalid region: size=%" PRIu64 ", n_copies=%" PRIu64 ", stride=%" PRIu64 "\n", func, size, n_copies, stride);
@@ -1544,7 +1538,7 @@ static bool rpc_check_view(const ggml_tensor * tensor) {
     return tensor->view_offs <= UINT64_MAX - addr && rpc_in_buffer(view_src->buffer, addr + tensor->view_offs, ggml_nbytes(tensor));
 }
 
-// a computed node writes itself and reads its sources, so they must all be allocated on this server
+// a computed node and its sources must be allocated on this server
 static bool rpc_check_node(const ggml_tensor * node) {
     if (ggml_op_is_empty(node->op)) {
         return true;
@@ -1808,7 +1802,7 @@ bool rpc_server::memset_tensor(const rpc_msg_memset_tensor_req & request) {
     return true;
 }
 
-// every value ggml_new_tensor or later code would assert on is checked here: a bad request must not abort the server
+// rejects the values that ggml_new_tensor or the backends would assert on
 ggml_tensor * rpc_server::deserialize_tensor(struct ggml_context * ctx, const rpc_tensor * tensor) {
     if (tensor->type >= GGML_TYPE_COUNT || ggml_blck_size((ggml_type) tensor->type) == 0) {
         LOG_ERROR("[%s] invalid tensor type: %u\n", __func__, tensor->type);
@@ -1869,7 +1863,7 @@ ggml_tensor * rpc_server::deserialize_tensor(struct ggml_context * ctx, const rp
 
 bool rpc_server::set_tensor(socket_ptr sock, uint64_t input_size) {
     sync_all_backends();
-    // | rpc_msg_set_tensor_req | data |, only the header is read here, the data is streamed from the socket below
+    // | rpc_msg_set_tensor_req | data (size bytes) |
     rpc_msg_set_tensor_req request;
     if (input_size < sizeof(request) || !sock->recv_data(&request, sizeof(request))) {
         return false;
@@ -2096,7 +2090,6 @@ bool rpc_server::get_tensor_2d(const rpc_msg_tensor_2d_req & request, std::vecto
             __func__, rpc_log_format_tensor(tensor).c_str(), (void*)tensor->buffer, tensor->data, request.offset,
             rpc_log_format_size(request.size).c_str(), request.n_copies, request.stride);
 
-    // rows do not overlap (checked above), so size * n_copies does not exceed the tensor size
     response.resize(request.size * request.n_copies, 0);
     ggml_backend_tensor_get_2d(tensor, response.data(), request.offset, request.size, request.n_copies, request.stride, request.size);
     return true;
@@ -2115,7 +2108,6 @@ bool rpc_server::copy_tensor(const rpc_msg_copy_tensor_req & request, rpc_msg_co
 
     ggml_tensor * src = deserialize_tensor(ctx, &request.src);
     ggml_tensor * dst = deserialize_tensor(ctx, &request.dst);
-    // the copy reads ggml_nbytes(src) bytes from src and writes as many to dst
     if (src == nullptr || src->buffer == nullptr || !rpc_check_region(__func__, dst, 0, ggml_nbytes(src))) {
         LOG_ERROR("[%s] invalid tensors\n", __func__);
         return false;
@@ -2176,9 +2168,8 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
     // observable here - the round trip is timed on the client
     const auto t_deserialize = std::chrono::steady_clock::now();
 
-    // tensors come in topological order (see add_tensor), so every source is created before its users and the
-    // graph is built in one pass; a source sent after its user (unknown id, cycle) is rejected, but a tensor may
-    // be its own source (ggml_cast sets src[1] to itself)
+    // tensors come in topological order (see add_tensor), so the graph is built in one pass and a source sent
+    // after its user is rejected; a tensor may be its own source (ggml_cast)
     std::unordered_map<uint64_t, uint32_t> tensor_idx;
     tensor_idx.reserve(n_tensors);
     std::vector<ggml_tensor *> created(n_tensors);
