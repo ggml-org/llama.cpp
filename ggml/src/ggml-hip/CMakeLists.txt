@@ -124,7 +124,7 @@ endif()
 # Workaround is to mimic `-ffast-math` options with `-fno-math-errno -fno-rounding-math` enabled.
 # By default `-funsafe-math-optimizations` already enable: -fapprox-func, -fassociative-math, -freciprocal-math, -fno-signed-zeros, -fno-trapping-math, -ffp-contract=fast
 # `-ffinite-math-only` is false by default and not enable by `-funsafe-math-optimizations`
-set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} -funsafe-math-optimizations -fno-associative-math -fno-math-errno -fno-rounding-math -fgpu-flush-denormals-to-zero -fsigned-zeros -fgpu-approx-transcendentals")
+set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} -funsafe-math-optimizations -fno-associative-math -fno-math-errno -fno-rounding-math -fsigned-zeros -fgpu-approx-transcendentals")
 
 if (NOT GGML_CUDA_FA)
     add_compile_definitions(GGML_CUDA_NO_FA)
