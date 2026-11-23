@@ -6,6 +6,7 @@
  */
 export const SETTINGS_KEYS = {
 	AGENTIC_MAX_TURNS: 'agenticMaxTurns',
+	ALWAYS_SHOW_MESSAGE_STATS: 'alwaysShowMessageStats',
 	ALWAYS_SHOW_SIDEBAR_ON_DESKTOP: 'alwaysShowSidebarOnDesktop',
 	ALWAYS_SHOW_TOOL_CALL_CONTENT: 'alwaysShowToolCallContent',
 	API_KEY: 'apiKey',
@@ -82,6 +83,8 @@ export const SETTINGS_KEYS = {
 	TITLE_GENERATION_PROMPT: 'titleGenerationPrompt',
 	TITLE_GENERATION_USE_FIRST_LINE: 'titleGenerationUseFirstLine',
 	TITLE_GENERATION_USE_LLM: 'titleGenerationUseLLM',
+	TOOL_CALL_SHOWN_ARG: 'toolCallShownArg',
+	TOOL_CALL_SHOWN_ARG_OVERRIDES: 'toolCallShownArgOverrides',
 	TOP_K: 'top_k',
 	TOP_P: 'top_p',
 	TYP_P: 'typ_p',
