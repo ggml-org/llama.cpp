@@ -462,6 +462,17 @@ static __device__ __forceinline__ int ggml_cuda_popc(ggml_cuda_thread_mask_t x) 
 }
 template<typename T> static __device__ __forceinline__ int ggml_cuda_popc(T x) = delete; // Makes implicit type casts result in an error.
 
+// Returns the number of set bits in ballot_mask at positions below lane, i.e. the rank of the current lane among the selected lanes.
+static __device__ __forceinline__ int ggml_cuda_ballot_rank(ggml_cuda_thread_mask_t ballot_mask, int lane) {
+#if defined(GGML_USE_HIP)
+    GGML_UNUSED(lane);
+    const int lo = __builtin_amdgcn_mbcnt_lo((uint32_t) ballot_mask, 0);
+    return __builtin_amdgcn_mbcnt_hi((uint32_t) (ballot_mask >> 32), lo);
+#else
+    return ggml_cuda_popc(ballot_mask & (((ggml_cuda_thread_mask_t) 1 << lane) - 1));
+#endif
+}
+
 static __device__ __forceinline__ int ggml_cuda_all(int predicate, ggml_cuda_thread_mask_t mask = GGML_CUDA_FULL_THREAD_MASK) {
     return __all_sync(mask, predicate);
 }

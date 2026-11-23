@@ -240,7 +240,7 @@ static __global__ void top_k_radix_gather(
         const bool    is_tie = col < warp_end && top_k_float_to_ordered(row_src[col]) == threshold;
 
         const ggml_cuda_thread_mask_t ties = ggml_cuda_ballot(is_tie);
-        const int tie_pos = pos + ggml_cuda_popc(ties & (((ggml_cuda_thread_mask_t) 1 << lane) - 1));
+        const int tie_pos = pos + ggml_cuda_ballot_rank(ties, lane);
         if (is_tie && tie_pos < pos_end) {
             row_dst[k - rank + tie_pos] = col;
         }

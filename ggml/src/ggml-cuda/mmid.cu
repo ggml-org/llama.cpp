@@ -34,8 +34,7 @@ static __device__ __forceinline__ void check_experts(
 
     if (write_to_store) {
         const ggml_cuda_thread_mask_t iex_used = ggml_cuda_ballot(expert_found == expert);
-        const ggml_cuda_thread_mask_t mask = (ggml_cuda_thread_mask_t(1) << threadIdx.x) - 1;
-        const int it_compact_offset = ggml_cuda_popc(iex_used & mask);
+        const int it_compact_offset = ggml_cuda_ballot_rank(iex_used, threadIdx.x);
 
         if (expert_found == expert) {
             store[it_compact + it_compact_offset] = mm_ids_helper_store(it, iex);
