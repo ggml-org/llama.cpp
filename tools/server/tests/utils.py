@@ -801,7 +801,7 @@ class ServerPreset:
         server.offline = True # will be downloaded by load_all()
         # mmproj is already provided by HF registry API
         server.model_hf_file = None
-        server.model_hf_repo = "Serveurperso/small-test:F16"
+        server.model_hf_repo = "ggml-org-dev/small-test:F16"
         server.model_alias = "small-test"
         server.jinja = True
         server.n_ctx = 8192
