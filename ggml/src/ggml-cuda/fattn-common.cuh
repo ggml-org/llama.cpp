@@ -1019,13 +1019,16 @@ static __global__ void flash_attn_combine_results(
     float VKQ_numerator   = 0.0f;
     float VKQ_denominator = 0.0f;
     for (int l = 0; l < parallel_blocks; ++l) {
+        if (meta[l].y <= 0.0f) {
+            continue;
+        }
         const float KQ_max_scale = expf(meta[l].x - kqmax);
 
         VKQ_numerator   += KQ_max_scale * VKQ_parts[l*D + tid];
         VKQ_denominator += KQ_max_scale * meta[l].y;
     }
 
-    dst[tid] = VKQ_numerator / VKQ_denominator;
+    dst[tid] = VKQ_denominator > 0.0f ? VKQ_numerator / VKQ_denominator : 0.0f;
 }
 
 template <int DV, int ncols1, int ncols2>
