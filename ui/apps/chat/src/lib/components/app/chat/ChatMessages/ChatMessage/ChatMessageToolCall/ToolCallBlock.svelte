@@ -19,8 +19,9 @@
 	import { AgenticSectionType } from '#lib/enums/index.ts';
 	import { settingsStore } from '#lib/stores/index.ts';
 	import type { AgenticSection, ToolCallDescription } from '#lib/types/index.ts';
-	import { toolCallShownArg } from '#lib/utils/index.ts';
+	import { imageExtras, toolCallShownArg } from '#lib/utils/index.ts';
 	import type { Snippet } from 'svelte';
+	import { fade } from 'svelte/transition';
 
 	type ToolCallBlockMetaWithError = TMeta & { errorMessage?: string };
 
@@ -104,6 +105,10 @@
 	const elapsedStartFor = useToolCallElapsed();
 	const elapsedStart = $derived(elapsedStartFor(section.toolCallId));
 
+	// images the call produced, as tiny thumbnails beside its title while the
+	// row is closed; opened, its body shows them in full
+	const images = $derived(imageExtras(section.toolResultExtras));
+
 	// what the call did, or is doing while it runs; described once here for
 	// every per-tool title
 	const phrase = $derived(
@@ -135,6 +140,24 @@
 	{#snippet titleSuffix()}
 		{#if elapsedStart !== null}
 			<ToolCallElapsed startedAt={elapsedStart} />
+		{/if}
+
+		{#if images.length > 0 && !open}
+			<span
+				transition:fade={{ duration: 150 }}
+				aria-label="{images.length} {images.length === 1 ? 'image' : 'images'}"
+				class="ml-1 inline-flex items-center gap-1 align-middle"
+				role="img"
+			>
+				{#each images as image, i (i)}
+					<img
+						alt=""
+						class="h-5 w-auto max-w-10 rounded-sm border border-border/60 object-cover"
+						loading="lazy"
+						src={image.base64Url}
+					/>
+				{/each}
+			</span>
 		{/if}
 	{/snippet}
 

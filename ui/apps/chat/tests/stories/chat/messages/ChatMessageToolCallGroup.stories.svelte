@@ -33,7 +33,10 @@
 			<ToolCallGroupStoryHost open sections={toolGroupSections} />
 		</StateGalleryItem>
 
-		<StateGalleryItem label="With images" note="thumbnails, +N past three">
+		<StateGalleryItem
+			label="With images"
+			note="a thumbnail per image under the title, a carousel when they overflow"
+		>
 			<ToolCallGroupStoryHost sections={toolGroupImageSections} />
 		</StateGalleryItem>
 

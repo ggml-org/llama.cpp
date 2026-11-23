@@ -17,9 +17,6 @@ export const TOOL_SEARCH_PHRASING_SELECT_PREFIX = 'select:';
 /** Longest target shown after the verb before it is cut with "...". */
 export const TOOL_CALL_TARGET_MAX_CHARS = 60;
 
-/** Max thumbnails a tool-call group shows before "+N". */
-export const TOOL_CALL_GROUP_MAX_THUMBNAILS = 3;
-
 /** Fewest consecutive tool calls that collapse into one group row. */
 export const TOOL_CALL_GROUP_MIN_CALLS = 2;
 
