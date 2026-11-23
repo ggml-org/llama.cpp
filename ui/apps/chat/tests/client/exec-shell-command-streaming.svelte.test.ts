@@ -6,7 +6,7 @@
 // message.
 
 import ChatMessageToolCallBlockExecShellCommand from '#lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlockExecShellCommand.svelte';
-import ChatMessageAgenticContent from '#lib/components/app/chat/ChatMessages/ChatMessageAgenticContent.svelte';
+import ChatMessageAgentTrace from '#lib/components/app/chat/ChatMessages/ChatMessageAgentTrace.svelte';
 import { SETTINGS_KEYS } from '#lib/constants/index.ts';
 import { AgenticSectionType, BuiltInTool, MessageRole, MessageType } from '#lib/enums/index.ts';
 import { conversationsStore, settingsStore } from '#lib/stores/index.ts';
@@ -85,7 +85,7 @@ describe('exec_shell_command streaming title', () => {
 	});
 
 	it('streams the partial command into the title with a cursor', async () => {
-		const { container } = render(ChatMessageAgenticContent, {
+		const { container } = render(ChatMessageAgentTrace, {
 			isLastAssistantMessage: true,
 			isStreaming: true,
 			message: messageWithArgs('{"command":"git sta'),
@@ -102,7 +102,7 @@ describe('exec_shell_command streaming title', () => {
 	});
 
 	it('drops the cursor once the args JSON is complete', async () => {
-		const screen = render(ChatMessageAgenticContent, {
+		const screen = render(ChatMessageAgentTrace, {
 			isLastAssistantMessage: true,
 			isStreaming: true,
 			message: messageWithArgs('{"command":"git sta'),
@@ -126,7 +126,7 @@ describe('exec_shell_command streaming title', () => {
 	});
 
 	it('switches the prompt from the conversation cwd to the persisted one', async () => {
-		const screen = render(ChatMessageAgenticContent, {
+		const screen = render(ChatMessageAgentTrace, {
 			isLastAssistantMessage: true,
 			isStreaming: true,
 			message: messageWithArgs('{"command":"git status"}'),
@@ -151,7 +151,7 @@ describe('exec_shell_command streaming title', () => {
 	});
 
 	it('shows the executing label only after the command finishes streaming', async () => {
-		const screen = render(ChatMessageAgenticContent, {
+		const screen = render(ChatMessageAgentTrace, {
 			isLastAssistantMessage: true,
 			isStreaming: true,
 			message: messageWithArgs('{"command":"git sta'),
@@ -202,7 +202,7 @@ describe('exec_shell_command streaming title', () => {
 		// writes growing toolCalls strings into the same store row per delta.
 		conversationsStore.activeMessages = [messageWithArgs('')];
 
-		const screen = render(ChatMessageAgenticContent, {
+		const screen = render(ChatMessageAgentTrace, {
 			isLastAssistantMessage: true,
 			isStreaming: true,
 			message: conversationsStore.activeMessages[0]!,
@@ -236,7 +236,7 @@ describe('exec_shell_command interrupted call', () => {
 	});
 
 	it('marks a call without a result as interrupted once streaming stops', async () => {
-		const { container } = render(ChatMessageAgenticContent, {
+		const { container } = render(ChatMessageAgentTrace, {
 			isLastAssistantMessage: true,
 			isStreaming: false,
 			message: messageWithArgs('{"command":"git status"}'),
@@ -253,7 +253,7 @@ describe('exec_shell_command interrupted call', () => {
 	it('marks a command stopped before any output as interrupted', async () => {
 		// exec_shell_command creates its result message before running, so a
 		// stop mid-run leaves an empty result rather than none.
-		const { container } = render(ChatMessageAgenticContent, {
+		const { container } = render(ChatMessageAgentTrace, {
 			isLastAssistantMessage: true,
 			isStreaming: false,
 			message: messageWithArgs('{"command":"sleep 40"}'),
@@ -267,7 +267,7 @@ describe('exec_shell_command interrupted call', () => {
 	});
 
 	it('does not keep spinning in an earlier message while a newer reply streams', async () => {
-		const { container } = render(ChatMessageAgenticContent, {
+		const { container } = render(ChatMessageAgentTrace, {
 			isLastAssistantMessage: false,
 			isStreaming: true,
 			message: messageWithArgs('{"command":"git status"}'),

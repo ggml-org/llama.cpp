@@ -275,7 +275,7 @@
 
 {#snippet renderSection(section: AgenticSection, index: number, inOpenGroup = false)}
 	{#if section.type === AgenticSectionType.TEXT}
-		<div class="agentic-text">
+		<div class="agent-trace-text">
 			<MarkdownContent attachments={message?.extra} content={section.content} />
 		</div>
 	{:else if section.type === AgenticSectionType.REASONING || section.type === AgenticSectionType.REASONING_PENDING}
@@ -327,12 +327,12 @@
 	{/each}
 {/snippet}
 
-<div class="agentic-content gap-2">
+<div class="agent-trace gap-2">
 	{#each turns as items, turnIndex (turnIndex)}
 		{#if showTurnStats}
 			{@const turnStats = message?.timings?.agentic?.perTurn?.[turnIndex]}
 
-			<div class="agentic-turn group/turn grid gap-2">
+			<div class="agent-trace-turn group/turn grid gap-2">
 				{@render renderItems(items)}
 
 				{#if turnStats}
@@ -375,32 +375,32 @@
 </div>
 
 <style>
-	.agentic-content {
+	.agent-trace {
 		display: flex;
 		flex-direction: column;
 		width: 100%;
 		max-width: 48rem;
 	}
 
-	.agentic-content > :global(*),
-	.agentic-turn > :global(*) {
+	.agent-trace > :global(*),
+	.agent-trace-turn > :global(*) {
 		min-width: 0;
 	}
 
-	.agentic-text {
+	.agent-trace-text {
 		width: 100%;
 	}
 
 	/* the answer stands a little apart from the work around it: trace rows keep
 	   their tight 0.5rem stack, text and a trace row get 0.75rem between them */
-	.agentic-content > :global(:not(.agentic-text) + .agentic-text),
-	.agentic-turn > :global(:not(.agentic-text) + .agentic-text) {
+	.agent-trace > :global(:not(.agent-trace-text) + .agent-trace-text),
+	.agent-trace-turn > :global(:not(.agent-trace-text) + .agent-trace-text) {
 		margin-top: 0.25rem;
 	}
 
 	/* on the text, not the row: the collapsible rows pin their own margins */
-	.agentic-content > :global(.agentic-text:has(+ :not(.agentic-text))),
-	.agentic-turn > :global(.agentic-text:has(+ :not(.agentic-text))) {
+	.agent-trace > :global(.agent-trace-text:has(+ :not(.agent-trace-text))),
+	.agent-trace-turn > :global(.agent-trace-text:has(+ :not(.agent-trace-text))) {
 		margin-bottom: 0.25rem;
 	}
 

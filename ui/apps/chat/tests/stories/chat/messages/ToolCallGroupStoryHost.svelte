@@ -1,6 +1,6 @@
 <script lang="ts">
 	// Story-only host: keeps the open state of a tool-call group and of each
-	// call in it, as ChatMessageAgenticContent does.
+	// call in it, as ChatMessageAgentTrace does.
 	import ChatMessageToolCallBlock from '#lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlock.svelte';
 	import ChatMessageToolCallGroup from '#lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/ChatMessageToolCallGroup.svelte';
 	import type { AgenticSection } from '#lib/types/index.ts';

@@ -1,10 +1,11 @@
 <script lang="ts">
 	import {
 		ChatMessageActionIcons,
-		ChatMessageAgenticContent,
+		ChatMessageAgentTrace,
 		ChatMessageAssistantModel,
 		ChatMessageAssistantProcessingInfo,
 		ChatMessageAssistantRawOutput,
+		ChatMessageAssistantResponse,
 		ChatMessageAssistantStatistics,
 		ChatMessageContextMenu,
 		ChatMessageEditForm
@@ -14,7 +15,7 @@
 	import { MessageRole } from '#lib/enums/index.ts';
 	import { useProcessingState } from '#lib/hooks/use-processing-state.svelte.ts';
 	import { chatStore, modelsStore, serverStore, settingsStore } from '#lib/stores/index.ts';
-	import { modelLoadProgressText } from '#lib/utils/index.ts';
+	import { hasAgenticContent, modelLoadProgressText } from '#lib/utils/index.ts';
 
 	interface Props {
 		class?: string;
@@ -45,6 +46,11 @@
 	let isRouter = $derived(serverStore.isRouterMode);
 
 	let showRawOutput = $state(false);
+
+	// A reply that ran the agentic loop ( it called tools ) is an Agent Trace;
+	// a basic chat reply is just its reasoning and its answer. A live reply
+	// becomes a trace the moment its first tool call streams in.
+	const isAgentTrace = $derived(hasAgenticContent(message, toolMessages));
 
 	let isCurrentlyLoading = $derived(chatStore.isLoading);
 	let isStreaming = $derived(chatStore.isStreaming());
@@ -186,13 +192,20 @@
 				{#if statusText}
 					<ChatMessageAssistantProcessingInfo text={statusText} />
 				{/if}
-			{:else}
-				<ChatMessageAgenticContent
+			{:else if isAgentTrace}
+				<ChatMessageAgentTrace
 					{isLastAssistantMessage}
 					isStreaming={chatStore.isStreaming()}
 					{message}
 					{statusText}
 					{toolMessages}
+				/>
+			{:else}
+				<ChatMessageAssistantResponse
+					{isLastAssistantMessage}
+					isStreaming={chatStore.isStreaming()}
+					{message}
+					{statusText}
 				/>
 			{/if}
 		</ChatMessageContextMenu>

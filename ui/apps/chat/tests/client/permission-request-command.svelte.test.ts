@@ -4,7 +4,7 @@
 // description.
 
 import ChatMessageActionCardPermissionRequest from '#lib/components/app/chat/ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardPermissionRequest.svelte';
-import ChatMessageAgenticContent from '#lib/components/app/chat/ChatMessages/ChatMessageAgenticContent.svelte';
+import ChatMessageAgentTrace from '#lib/components/app/chat/ChatMessages/ChatMessageAgentTrace.svelte';
 import { BuiltInTool, MessageRole, MessageType } from '#lib/enums/index.ts';
 import type { DatabaseMessage } from '#lib/types/index.ts';
 import { tick } from 'svelte';
@@ -51,7 +51,7 @@ describe('approving a shell command', () => {
 	});
 
 	it('keeps the command beside a model description in the collapsed row', async () => {
-		const { container } = render(ChatMessageAgenticContent, {
+		const { container } = render(ChatMessageAgentTrace, {
 			isLastAssistantMessage: true,
 			isStreaming: true,
 			message: shellCall()

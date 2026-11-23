@@ -2,7 +2,7 @@
 // time since the task started. A single call reads it from context by its id;
 // a group takes it as a prop; a finished reply shows none.
 
-import ChatMessageAgenticContent from '#lib/components/app/chat/ChatMessages/ChatMessageAgenticContent.svelte';
+import ChatMessageAgentTrace from '#lib/components/app/chat/ChatMessages/ChatMessageAgentTrace.svelte';
 import { MessageRole, MessageType } from '#lib/enums/index.ts';
 import { agenticStore } from '#lib/stores/index.ts';
 import type { DatabaseMessage } from '#lib/types/index.ts';
@@ -45,7 +45,7 @@ describe('task timer', () => {
 	afterEach(() => setStartedAt(null));
 
 	it('shows on a single running call', async () => {
-		const { container } = render(ChatMessageAgenticContent, {
+		const { container } = render(ChatMessageAgentTrace, {
 			isLastAssistantMessage: true,
 			isStreaming: true,
 			message: reply(1)
@@ -58,7 +58,7 @@ describe('task timer', () => {
 	});
 
 	it('shows once on a group, not on the calls inside it', async () => {
-		const { container } = render(ChatMessageAgenticContent, {
+		const { container } = render(ChatMessageAgentTrace, {
 			isLastAssistantMessage: true,
 			isStreaming: true,
 			message: reply(2)
@@ -71,7 +71,7 @@ describe('task timer', () => {
 	});
 
 	it('shows nothing once the reply is not streaming', async () => {
-		const { container } = render(ChatMessageAgenticContent, {
+		const { container } = render(ChatMessageAgentTrace, {
 			isLastAssistantMessage: true,
 			isStreaming: false,
 			message: reply(1)
