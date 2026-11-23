@@ -18,8 +18,11 @@
 	// svelte-ignore state_referenced_locally
 	let contentMounted = $state(open);
 
+	// bits-ui rebuilds the snippet args (with `open`) when its transition ends; the derived keeps that from restarting the unmount timer
+	const isOpen = $derived(open);
+
 	$effect(() => {
-		if (open) {
+		if (isOpen) {
 			contentMounted = true;
 
 			return;
@@ -31,7 +34,7 @@
 	});
 </script>
 
-<div {...restProps} class={cn('collapsible-region', className)} data-expanded={open}>
+<div {...restProps} class={cn('collapsible-region', className)} data-expanded={isOpen}>
 	{#if contentMounted}
 		<div class="collapsible-region-content">
 			{@render children?.()}
