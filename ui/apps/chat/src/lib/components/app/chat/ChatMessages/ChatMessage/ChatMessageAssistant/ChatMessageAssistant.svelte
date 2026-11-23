@@ -14,7 +14,6 @@
 	import { useProcessingState } from '#lib/hooks/use-processing-state.svelte.ts';
 	import { chatStore, modelsStore, serverStore, settingsStore } from '#lib/stores/index.ts';
 	import { modelLoadProgressText } from '#lib/utils/index.ts';
-	import { hasAgenticContent } from '#lib/utils/index.ts';
 
 	interface Props {
 		class?: string;
@@ -39,7 +38,6 @@
 	// Get edit context
 	const editCtx = getChatMessageEditContext();
 
-	const isAgentic = $derived(hasAgenticContent(message, toolMessages));
 	const processingState = useProcessingState();
 
 	let currentConfig = $derived(settingsStore.config);
@@ -47,11 +45,8 @@
 
 	let showRawOutput = $state(false);
 
-	let displayedModel = $derived(message.model ?? null);
-
 	let isCurrentlyLoading = $derived(chatStore.isLoading);
 	let isStreaming = $derived(chatStore.isStreaming());
-	let hasNoContent = $derived(!message?.content?.trim());
 	let isActivelyProcessing = $derived(isCurrentlyLoading || isStreaming);
 	// A compaction summary reports its own progress on the compaction row, so
 	// this turn stays quiet while it runs instead of duplicating the indicator.
@@ -67,21 +62,23 @@
 	);
 	let modelLoadingText = $derived(modelLoadProgressText(modelLoadProgress));
 
-	let showProcessingInfoTop = $derived(
-		message?.role === MessageRole.ASSISTANT &&
-			isActivelyProcessing &&
-			!isCompacting &&
-			hasNoContent &&
-			!isAgentic &&
-			isLastAssistantMessage
+	// The model badge shows from the start of a live reply, before the first
+	// chunk names the model, so the stats row does not pop in under the status
+	let displayedModel = $derived(
+		message.model ?? (isLastAssistantMessage && isActivelyProcessing ? loadTargetModel : null)
 	);
 
-	let showProcessingInfoBottom = $derived(
+	// What the server is doing while nothing is generated yet; null when this
+	// message is not the live one. Empty while tokens are streaming.
+	let statusText = $derived(
 		message?.role === MessageRole.ASSISTANT &&
 			isActivelyProcessing &&
 			!isCompacting &&
-			(!hasNoContent || isAgentic) &&
 			isLastAssistantMessage
+			? modelLoadingText ||
+					processingState.getPromptProgressText() ||
+					processingState.getProcessingMessage()
+			: null
 	);
 
 	let assistantEl: HTMLDivElement | undefined = $state();
@@ -151,7 +148,7 @@
 	});
 
 	$effect(() => {
-		if (showProcessingInfoTop || showProcessingInfoBottom) {
+		if (statusText !== null) {
 			processingState.startMonitoring();
 		}
 	});
@@ -167,10 +164,6 @@
 	class="chat-message-assistant text-md group w-full leading-7.5 {className}"
 	role="group"
 >
-	{#if showProcessingInfoTop}
-		<ChatMessageAssistantProcessingInfo {modelLoadingText} position="top" {processingState} />
-	{/if}
-
 	{#if editCtx.isEditing}
 		<ChatMessageEditForm />
 	{:else}
@@ -182,19 +175,20 @@
 		>
 			{#if showRawOutput}
 				<ChatMessageAssistantRawOutput {message} {toolMessages} />
+
+				{#if statusText}
+					<ChatMessageAssistantProcessingInfo text={statusText} />
+				{/if}
 			{:else}
 				<ChatMessageAgenticContent
 					{isLastAssistantMessage}
 					isStreaming={chatStore.isStreaming()}
 					{message}
+					{statusText}
 					{toolMessages}
 				/>
 			{/if}
 		</ChatMessageContextMenu>
-	{/if}
-
-	{#if showProcessingInfoBottom}
-		<ChatMessageAssistantProcessingInfo {modelLoadingText} position="bottom" {processingState} />
 	{/if}
 
 	{#if displayedModel}

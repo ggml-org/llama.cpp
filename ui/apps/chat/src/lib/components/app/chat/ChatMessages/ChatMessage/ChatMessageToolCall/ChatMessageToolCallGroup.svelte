@@ -4,16 +4,11 @@
 	// now ("Reading package.json"). Images the calls produced show as
 	// thumbnails on the right. Expanding it lists each call as its own row.
 
-	import {
-		describeToolActivity,
-		isToolCallRunning,
-		summarizeToolCalls
-	} from './parsers/tool-call-phrasing';
+	import { describeToolActivity, summarizeToolCalls } from './parsers/tool-call-phrasing';
 	import ToolCallElapsed from './ToolCallElapsed.svelte';
-	import { ChevronRight } from '@lucide/svelte';
 	import { CollapsibleContentBlock } from '#lib/components/app/index.ts';
 	import { TOOL_CALL_GROUP_MAX_THUMBNAILS } from '#lib/constants/index.ts';
-	import { AttachmentType, BuiltInTool } from '#lib/enums/index.ts';
+	import { AttachmentType } from '#lib/enums/index.ts';
 	import { settingsStore } from '#lib/stores/index.ts';
 	import type { AgenticSection, DatabaseMessageExtraImageFile } from '#lib/types/index.ts';
 	import { toolCallShownArg } from '#lib/utils/index.ts';
@@ -26,6 +21,11 @@
 		executingToolCallId?: string | null;
 		/** Task start (ms since epoch) for the live timer, or null for none. */
 		elapsedStartedAt?: number | null;
+		/**
+		 * What the server is doing while the reply waits on it ( "Processing 40%",
+		 * "Loading weights" ), shown as the live title when this is the last row.
+		 */
+		status?: string | null;
 		onToggle?: () => void;
 		children: Snippet;
 	}
@@ -37,26 +37,17 @@
 		isStreaming,
 		onToggle,
 		open,
-		sections
+		sections,
+		status = null
 	}: Props = $props();
 
 	const activity = $derived(
-		describeToolActivity(sections, isStreaming, executingToolCallId, (toolName) =>
-			toolCallShownArg(settingsStore.config, toolName)
-		)
+		status ||
+			describeToolActivity(sections, isStreaming, executingToolCallId, (toolName) =>
+				toolCallShownArg(settingsStore.config, toolName)
+			)
 	);
 	const summary = $derived(activity ?? summarizeToolCalls(sections));
-
-	// Live output exists for streaming tools only: the shell command that is
-	// executing right now.
-	const hasLiveOutput = $derived(
-		sections.some(
-			(section) =>
-				section.toolName === BuiltInTool.SERVER_EXEC_SHELL_COMMAND &&
-				((section.toolCallId !== undefined && section.toolCallId === executingToolCallId) ||
-					isToolCallRunning(section, isStreaming))
-		)
-	);
 
 	const images = $derived(
 		sections.flatMap((section) =>
@@ -78,17 +69,11 @@
 >
 	{#snippet titleSnippet()}
 		<span class="flex min-w-0 items-baseline gap-x-2">
-			<span class="min-w-0 truncate" title={summary}>{summary}</span>
-
-			{#if hasLiveOutput && !open}
-				<span
-					class="inline-flex shrink-0 items-center gap-0.5 text-caption font-normal whitespace-nowrap text-muted-foreground"
-				>
-					View live output
-
-					<ChevronRight class="size-3" />
-				</span>
-			{/if}
+			<!-- collapsed, the summary steps back behind the answer; a live title keeps its shimmer -->
+			<span
+				class={['min-w-0 truncate', !open && !activity && 'font-normal text-muted-foreground']}
+				title={summary}>{summary}</span
+			>
 		</span>
 	{/snippet}
 

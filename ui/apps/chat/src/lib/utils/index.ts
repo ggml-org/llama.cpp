@@ -277,6 +277,7 @@ export {
 	splitSearchSummaryList,
 	hasAgenticContent,
 	isSectionExpandedByDefault,
+	showsReplyStatus,
 	classifyToolResult,
 	classifyContinueIntent
 } from './agentic';

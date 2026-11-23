@@ -11,10 +11,11 @@
 	import {
 		ChatMessageActionCardContinueRequest,
 		ChatMessageActionCardPermissionRequest,
+		ChatMessageAssistantProcessingInfo,
 		ChatMessageStatistics,
 		MarkdownContent
 	} from '#lib/components/app/index.ts';
-	import { TOOL_CALL_GROUP_MIN_CALLS } from '#lib/constants/index.ts';
+	import { REPLY_STATUS_FALLBACK, TOOL_CALL_GROUP_MIN_CALLS } from '#lib/constants/index.ts';
 	import {
 		AgenticSectionType,
 		ChatMessageStatsView,
@@ -27,19 +28,29 @@
 		ChatMessageAgenticTurnStats,
 		DatabaseMessage
 	} from '#lib/types/index.ts';
-	import { deriveAgenticSections, isSectionExpandedByDefault } from '#lib/utils/index.ts';
+	import {
+		deriveAgenticSections,
+		isSectionExpandedByDefault,
+		showsReplyStatus
+	} from '#lib/utils/index.ts';
 
 	interface Props {
 		message: DatabaseMessage;
 		toolMessages?: DatabaseMessage[];
 		isStreaming?: boolean;
 		isLastAssistantMessage?: boolean;
+		/**
+		 * What the server is doing while this reply waits on it ( "Processing
+		 * 40%" ), empty while tokens stream, null when the reply is not live.
+		 */
+		statusText?: string | null;
 	}
 
 	let {
 		isLastAssistantMessage = false,
 		isStreaming: isChatStreaming = false,
 		message,
+		statusText = null,
 		toolMessages = []
 	}: Props = $props();
 
@@ -193,6 +204,21 @@
 
 	const lastToolIndex = $derived(sections.findLastIndex((section) => isToolCallSection(section)));
 
+	// The status row shows only while nothing else in the reply is moving: a
+	// running row, a permission card or streaming text already says what is
+	// happening. It sits where the next row will land, so that row replaces
+	// it and the stats below stay put.
+	const showStatus = $derived(
+		currentlyExecutingToolCallId === null &&
+			!visiblePermission &&
+			!showContinue &&
+			showsReplyStatus(statusText, sections.at(-1), isStreaming)
+	);
+
+	// a group closing the reply carries the status as its live title, so the
+	// waiting reads as part of the work instead of a line of its own
+	const statusInGroup = $derived(showStatus && Array.isArray(lastItem));
+
 	function isExecutingCall(section: AgenticSection): boolean {
 		return section.toolCallId !== undefined && section.toolCallId === currentlyExecutingToolCallId;
 	}
@@ -284,6 +310,7 @@
 			onToggle={() => toggleGroupExpanded(item)}
 			open={groupOpen}
 			sections={item.map((i) => sections[i])}
+			status={statusInGroup && item === lastItem ? statusText || REPLY_STATUS_FALLBACK : null}
 		>
 			{#each item as index (index)}
 				{@render renderSection(sections[index], index, groupOpen)}
@@ -340,6 +367,10 @@
 
 	{#if showContinue}
 		<ChatMessageActionCardContinueRequest onDecision={handleContinue} />
+	{/if}
+
+	{#if showStatus && !statusInGroup}
+		<ChatMessageAssistantProcessingInfo text={statusText || REPLY_STATUS_FALLBACK} />
 	{/if}
 </div>
 

@@ -96,8 +96,10 @@
 			</div>
 		{:else if showLiveReadingStats}
 			{@const liveStats = processingState.getLiveProcessingStats()}
-			{#if liveStats}
-				<div class="info my-2 grid w-full justify-items-end gap-4 tabular-nums">
+			<!-- The row's room is there from the moment the prompt is sent, so the
+			     reply below does not get pushed down when the first numbers arrive. -->
+			<div class="info my-2 grid min-h-5.5 w-full justify-items-end gap-4 tabular-nums">
+				{#if liveStats}
 					<div
 						class="inline-flex flex-wrap items-start justify-end gap-2 text-caption text-muted-foreground"
 					>
@@ -108,8 +110,8 @@
 							promptTokens={liveStats.tokensProcessed}
 						/>
 					</div>
-				</div>
-			{/if}
+				{/if}
+			</div>
 		{/if}
 
 		{#if message.timestamp}

@@ -144,7 +144,7 @@
 	{/if}
 
 	{#if titleSuffix}
-		<span class="shrink-0 self-center empty:hidden">{@render titleSuffix()}</span>
+		<span class="shrink-0 text-body-sm empty:hidden">{@render titleSuffix()}</span>
 	{/if}
 {/snippet}
 
