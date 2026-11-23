@@ -1181,9 +1181,9 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_conv_2d_f16_f32;
     cl_kernel kernel_conv2d_dw_f32_f32, kernel_conv2d_dwf16_f32;
     cl_kernel kernel_ssm_conv_f32_f32, kernel_ssm_conv_f32_f32_4;
-    // [size_idx][kda][tgpp] where size_idx: 0=S_V=16, 1=32, 2=64, 3=128; kda: 0 or 1.
+    // [size_idx][kda][tgpp][replay] where size_idx: 0=S_V=16, 1=32, 2=64, 3=128; kda: 0 or 1.
     // tgpp 0 = TG variant (COLS_PER_LANE_GROUP=1), tgpp 1 = prefill variant (COLS_PER_LANE_GROUP=4).
-    cl_kernel kernel_gated_delta_net_f32[4][2][2] = {};
+    cl_kernel kernel_gated_delta_net_f32[4][2][2][2] = {};
     cl_kernel kernel_ssm_scan_f32 = nullptr;
     cl_kernel kernel_ssm_scan_f32_mamba2_d128 = nullptr;
     cl_kernel kernel_ssm_scan_f32_mamba2_d256 = nullptr;
@@ -5170,7 +5170,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         GGML_LOG_CONT(".");
     }
 
-    // gated_delta_net: one kernel per (S_V, KDA, tgpp) triple.
+    // gated_delta_net: one kernel per (S_V, KDA, tgpp, replay).
     {
     #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
@@ -5238,11 +5238,14 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
                     // Please remember to implement code to handle it.
                     opts += " -DSUBGROUPS_PER_WG=" + std::to_string(spw);
 
-                    cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), opts);
+                    for (int replay = 0; replay < 2; replay++) {
+                        const std::string opts_rep = opts + " -DREPLAY=" + std::to_string(replay);
+                        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), opts_rep);
 
-                    CL_CHECK((backend_ctx->kernel_gated_delta_net_f32[si][kda][tgpp] =
-                                clCreateKernel(prog, "kernel_gated_delta_net", &err), err));
-                    CL_CHECK(clReleaseProgram(prog));
+                        CL_CHECK((backend_ctx->kernel_gated_delta_net_f32[si][kda][tgpp][replay] =
+                                    clCreateKernel(prog, "kernel_gated_delta_net", &err), err));
+                        CL_CHECK(clReleaseProgram(prog));
+                    }
                 }
             }
         }
@@ -40476,6 +40479,9 @@ static void ggml_cl_gated_delta_net(ggml_backend_t backend, ggml_tensor * dst) {
     const cl_uint n_tokens = (cl_uint) src_v->ne[2];
     const cl_uint n_seqs   = (cl_uint) src_v->ne[3];
     const cl_uint K        = (cl_uint) ggml_get_op_params_i32(dst, 0);
+    const bool replay      = dst->src[6] != nullptr;
+    const cl_uint n_pend   = replay ? (cl_uint) ggml_get_op_params_i32(dst, 1) : 0;
+    const cl_uint keep     = replay ? (cl_uint) ggml_get_op_params_i32(dst, 2) : 0;
 
     int si;
     switch (S_v) {
@@ -40509,7 +40515,7 @@ static void ggml_cl_gated_delta_net(ggml_backend_t backend, ggml_tensor * dst) {
     // spw needs adjustment when S_v != 128
     const int spw  = (tgpp == 0) ? 1 : 1;
 
-    cl_kernel kernel = backend_ctx->kernel_gated_delta_net_f32[si][kda][tgpp];
+    cl_kernel kernel = backend_ctx->kernel_gated_delta_net_f32[si][kda][tgpp][replay];
     GGML_ASSERT(kernel != nullptr);
 
     const cl_uint s_off = S_v * H_v * n_tokens * n_seqs;
@@ -40576,7 +40582,59 @@ static void ggml_cl_gated_delta_net(ggml_backend_t backend, ggml_tensor * dst) {
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &H_k));
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &rq3));
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(float),    &scale));
-    CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),    &K));
+
+    if (replay) {
+        const ggml_tensor * src_pk  = dst->src[6];
+        const ggml_tensor * src_pv  = dst->src[7];
+        const ggml_tensor * src_pgb = dst->src[8];
+        const ggml_tensor * src_rep = dst->src[9];
+
+        GGML_ASSERT(src_pk  && src_pk->extra);
+        GGML_ASSERT(src_pv  && src_pv->extra);
+        GGML_ASSERT(src_pgb && src_pgb->extra);
+        GGML_ASSERT(src_rep && src_rep->extra);
+
+        const ggml_tensor_extra_cl * extra_pk  = (const ggml_tensor_extra_cl *) src_pk->extra;
+        const ggml_tensor_extra_cl * extra_pv  = (const ggml_tensor_extra_cl *) src_pv->extra;
+        const ggml_tensor_extra_cl * extra_pgb = (const ggml_tensor_extra_cl *) src_pgb->extra;
+        const ggml_tensor_extra_cl * extra_rep = (const ggml_tensor_extra_cl *) src_rep->extra;
+
+        const cl_ulong off_pk  = extra_pk->offset  + src_pk->view_offs;
+        const cl_ulong off_pv  = extra_pv->offset  + src_pv->view_offs;
+        const cl_ulong off_pgb = extra_pgb->offset + src_pgb->view_offs;
+        const cl_ulong off_rep = extra_rep->offset + src_rep->view_offs;
+
+        const cl_ulong spk1 = src_pk->nb[1]  / sizeof(float);
+        const cl_ulong spk2 = src_pk->nb[2]  / sizeof(float);
+        const cl_ulong spk3 = src_pk->nb[3]  / sizeof(float);
+        const cl_ulong spv1 = src_pv->nb[1]  / sizeof(float);
+        const cl_ulong spv2 = src_pv->nb[2]  / sizeof(float);
+        const cl_ulong spv3 = src_pv->nb[3]  / sizeof(float);
+        const cl_ulong spg1 = src_pgb->nb[1] / sizeof(float);
+        const cl_ulong spg2 = src_pgb->nb[2] / sizeof(float);
+        const cl_ulong spg3 = src_pgb->nb[3] / sizeof(float);
+
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &n_pend));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &keep));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_mem),   &extra_pk->data_device));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_ulong), &off_pk));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_ulong), &spk1));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_ulong), &spk2));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_ulong), &spk3));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_mem),   &extra_pv->data_device));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_ulong), &off_pv));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_ulong), &spv1));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_ulong), &spv2));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_ulong), &spv3));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_mem),   &extra_pgb->data_device));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_ulong), &off_pgb));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_ulong), &spg1));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_ulong), &spg2));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_ulong), &spg3));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_mem),   &extra_rep->data_device));
+        CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_ulong), &off_rep));
+    }
+    CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint), &K));
 
     // Subgroup size is 64 for Adreno and 32 for Intel
     const int sg_size = backend_ctx->gpu_family == GPU_FAMILY::ADRENO ? 64 : backend_ctx->gpu_family == GPU_FAMILY::INTEL ? 32 : -1;
