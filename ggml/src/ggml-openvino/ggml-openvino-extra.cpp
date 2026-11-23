@@ -179,6 +179,9 @@ constexpr env_var env_vars[] = {
     {"GGML_OPENVINO_RELEASE_WEIGHTS", env_type::BOOL},
     {"GGML_OPENVINO_REDUCE_COMPILE_MEM", env_type::BOOL},
     {"GGML_OPENVINO_LOG_UNSUPPORTED_OPS", env_type::BOOL},
+    {"GGML_OPENVINO_LOG_SUPPORTS_OP", env_type::INT},
+    {"GGML_OPENVINO_DIAG_GRAPH_IO", env_type::BOOL},
+    {"GGML_OPENVINO_ROPE_F32_ANGLE", env_type::BOOL},
     {"GGML_OPENVINO_LOG_SWA_LAYERS", env_type::BOOL},
     {"GGML_OPENVINO_NATIVE_SOFTPLUS", env_type::BOOL},
     {"GGML_OPENVINO_DISABLE_REMOTE_OUTPUTS", env_type::BOOL},
@@ -541,6 +544,14 @@ std::string ggml_openvino_config_overrides_in_use() {
                                                  "GGML_OPENVINO_CPU_CONFIG";
     const char * value = ggml_openvino_getenv_str(name);
     return value ? std::string(name) + "=" + value : std::string();
+}
+
+bool ggml_openvino_manual_gqa_enabled() {
+    // set: a positive value enables it, 0 disables it; unset: on GPU only
+    if (ggml_openvino_getenv_str("GGML_OPENVINO_MANUAL_GQA_ATTN") != nullptr) {
+        return ggml_openvino_getenv_int("GGML_OPENVINO_MANUAL_GQA_ATTN") > 0;
+    }
+    return ggml_openvino_is_gpu();
 }
 
 bool ggml_openvino_gdn_prescale_enabled() {
@@ -997,6 +1008,10 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
     const bool sym128_all = is_opt("q4_sym128_all");
     const bool asym64_all = is_opt("q4_asym64_all");
     const bool asym64 = is_opt("q4_asym64");
+    // A group of 64 must fit within each row; other widths keep channel-wise INT8.
+    auto group64 = [tensor](ExtraQuantType type) {
+        return tensor->ne[0] % 64 == 0 ? type : ExtraQuantType::Q8_0_C;
+    };
 
     // TODO: temporary workaround for slow GPU-plugin GatherMatmul prefill above 16 tokens.
     // Q4_1_64 experts let the plugin fuse the MoE into MOECompressed.
@@ -1021,8 +1036,7 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
         return tensor->ne[0] % 64 == 0 ? ExtraQuantType::Q4_1_64 : ExtraQuantType::Q8_0_C;
     }
     if (tensor->type == GGML_TYPE_Q5_0) {
-        //return ExtraQuantType::Q4_0_128;
-        return ExtraQuantType::Q4_0_64;
+        return group64(ExtraQuantType::Q4_0_64);
     }
     // MoE expert weights (3D, ne[2] = n_expert) stored as Q5_1/Q8_0 are the expert-side
     // equivalent of Q6_K/Q5_K: kept at 8 bits by default while the rest of the model is at 4
@@ -1031,10 +1045,10 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
     // (704/64 = 11) and 128 does not.
     if (tensor->ne[2] > 1 && (tensor->type == GGML_TYPE_Q5_1 || tensor->type == GGML_TYPE_Q8_0)) {
         if (sym128 || sym128_all) {
-            return ExtraQuantType::Q4_0_64;
+            return group64(ExtraQuantType::Q4_0_64);
         }
         if (asym64 || asym64_all) {
-            return ExtraQuantType::Q4_1_64;
+            return group64(ExtraQuantType::Q4_1_64);
         }
         // TODO: temporary workaround for a known OpenVINO GPU-plugin bug -- remove once the
         // plugin computes grouped 8-bit GatherMatmulCompressed correctly. This costs accuracy
@@ -1049,7 +1063,7 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
         // avoids the broken layout and restores correct output.
         // Opt out with GGML_OPENVINO_REQUANT_KQUANT=native.
         if (ggml_openvino_is_gpu() && !is_opt("native")) {
-            return ExtraQuantType::Q4_0_64;
+            return group64(ExtraQuantType::Q4_0_64);
         }
     }
     switch (tensor->type) {
