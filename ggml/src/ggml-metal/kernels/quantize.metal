@@ -196,23 +196,34 @@ kernel void kernel_concat(
             : src1 + (i3 - o3)*args.nb13 + (i2 - o2)*args.nb12 + (i1 - o1)*args.nb11;
         device       char * dst_row = dst + i3*args.nb3 + i2*args.nb2 + i1*args.nb1;
 
-        typedef vec<T, 4> T4;
+        typedef vec<T, 16/sizeof(T)> T16;
 
-        const int n4 = (i0e - i0b)/4;
-        const int i04 = i0b;
+        device const T * x = (device const T *)(src_row + i0b*sizeof(T));
+        device       T * y = (device       T *)(dst_row + i0b*sizeof(T));
 
-        if (i04 % 4 == 0 &&
-                ((size_t)(src_row + i04*sizeof(T)) % sizeof(T4) == 0) &&
-                ((size_t)(dst_row + i04*sizeof(T)) % sizeof(T4) == 0)) {
-            device const T4 * x4 = (device const T4 *)(src_row + i04*sizeof(T));
-            device       T4 * y4 = (device       T4 *)(dst_row + i04*sizeof(T));
+        const int n = i0e - i0b;
 
-            for (int i = tpitg.x; i < n4; i += ntg.x) {
-                y4[i] = x4[i];
+        const size_t rx = (size_t)x % 16;
+
+        if (rx == (size_t)y % 16 && rx % sizeof(T) == 0) {
+            const int np  = min((int)(((16 - rx) % 16)/sizeof(T)), n);
+            const int n16 = (n - np)/(16/sizeof(T));
+
+            for (int i = tpitg.x; i < np; i += ntg.x) {
+                y[i] = x[i];
             }
-            for (int i = i04 + n4*4 + tpitg.x; i < i0e; i += ntg.x) {
-                ((device T *)(dst_row))[i] = ((device const T *)(src_row))[i];
+
+            device const T16 * x16 = (device const T16 *)(x + np);
+            device       T16 * y16 = (device       T16 *)(y + np);
+
+            for (int i = tpitg.x; i < n16; i += ntg.x) {
+                y16[i] = x16[i];
             }
+
+            for (int i = np + n16*(16/sizeof(T)) + tpitg.x; i < n; i += ntg.x) {
+                y[i] = x[i];
+            }
+
             return;
         }
     }
