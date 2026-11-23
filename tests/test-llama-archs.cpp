@@ -603,6 +603,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     } else if (arch == LLM_ARCH_HY_V4) {
         // text-only hy_v4 files carry no sections, keep the normal rope path
         ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({0, 0, 0, 0}));
+    } else if (arch == LLM_ARCH_HY_V4_FLASH) {
+        // published hy_v4_flash files carry no sections, the model defaults them to [12, 10, 10, 0] (IMROPE path)
     } else {
         ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
     }

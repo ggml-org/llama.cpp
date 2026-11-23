@@ -13,6 +13,20 @@ static constexpr int64_t HY_V4_FLASH_ENGRAM_DEAD = -1;
 // the reference Engram norms leave eps unset, so they use the fp32 machine epsilon, not rms_norm_eps
 static constexpr float HY_V4_FLASH_ENGRAM_EPS = 1.1920929e-07f;
 
+// the weights keep the reference's interleaved rope pairs, the M-RoPE kernels need NeoX halves
+// q and k get the same reorder, so their dot product does not change
+static ggml_tensor * hy_v4_flash_rope_to_neox(ggml_context * ctx, ggml_tensor * x) {
+    const int64_t n_rot = x->ne[0];
+    x = ggml_reshape_4d(ctx, ggml_cont(ctx, x), 2, n_rot/2, x->ne[1], x->ne[2]);
+    x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
+    return ggml_reshape_3d(ctx, x, n_rot, x->ne[2], x->ne[3]);
+}
+
+// IMROPE rotates the last pairs with the 4th position, the reference uses t there
+static ggml_tensor * hy_v4_flash_pos(ggml_context * ctx, ggml_tensor * pos, int64_t n_tokens) {
+    return ggml_concat(ctx, ggml_view_1d(ctx, pos, 3*n_tokens, 0), ggml_view_1d(ctx, pos, n_tokens, 0), 0);
+}
+
 static size_t hy_v4_flash_elem_offset(const ggml_tensor * t, int64_t i) {
     return ggml_row_size(t->type, i);
 }
@@ -51,6 +65,16 @@ void llama_model_hy_v4_flash::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,       hparams.rope_freq_base_train_swa);
     hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
     ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
+
+    // the checkpoint uses interleaved M-RoPE; published files carry no sections, so default to the checkpoint's
+    hparams.rope_sections = { 12, 10, 10, 0 };
+    ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, false);
+    {
+        const auto & s = hparams.rope_sections;
+        if (s[0] < 0 || s[1] < 0 || s[2] < 0 || s[3] < 0 || 2 * ((int64_t) s[0] + s[1] + s[2] + s[3]) != (int64_t) hparams.n_rot()) {
+            throw std::runtime_error("hy_v4_flash: rope sections must sum to n_rot / 2");
+        }
+    }
 
     // the indexer is optional, without it the sparse layers attend their whole context
     ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K, hparams.indexer_top_k, false);
@@ -635,7 +659,7 @@ public:
     ggml_tensor * sel_mask      = nullptr; // F32     [n_sel, 1, 1, n_tokens]
     ggml_tensor * new_pool_idxs = nullptr; // I32     [kpool*n_new]
     ggml_tensor * new_pool_rep  = nullptr; // I64     [n_new]
-    ggml_tensor * new_pool_pos  = nullptr; // I32     [n_new]          first member's position per new pool
+    ggml_tensor * new_pool_pos  = nullptr; // I32     [n_new] or [4*n_new] first member's position per new pool
 
     const llama_memory_idx_iswa_context * mctx;
     uint32_t n_new = 0;
@@ -690,7 +714,7 @@ llama_model_hy_v4_flash::llm_graph_input_kpool * llama_model_hy_v4_flash::graph:
     ggml_set_input(inp->new_pool_idxs);
     inp->new_pool_rep  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I64, n_new);
     ggml_set_input(inp->new_pool_rep);
-    inp->new_pool_pos  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_new);
+    inp->new_pool_pos  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, (int64_t) hparams.n_pos_per_embd()*n_new);
     ggml_set_input(inp->new_pool_pos);
     ggml_build_forward_expand(gf, inp->new_pool_pos);
 
@@ -709,8 +733,16 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_indexer_rope(
             x->nb[1], x->nb[2], ggml_row_size(x->type, n_nope));
 
     // the same base the layer's own attention uses, so a cparams override reaches the indexer too
-    back = ggml_rope_ext(ctx0, ggml_cont(ctx0, back), pos, nullptr, n_rot, rope_type, n_ctx_orig,
-            freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+    if (hparams.use_mrope()) {
+        int sections[GGML_MROPE_SECTIONS];
+        std::copy(hparams.rope_sections.begin(), hparams.rope_sections.end(), sections);
+
+        back = ggml_rope_multi(ctx0, hy_v4_flash_rope_to_neox(ctx0, back), pos, nullptr, n_rot, sections, rope_type, n_ctx_orig,
+                freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+    } else {
+        back = ggml_rope_ext(ctx0, ggml_cont(ctx0, back), pos, nullptr, n_rot, rope_type, n_ctx_orig,
+                freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+    }
     cb(back, "indexer_rope", il);
 
     return ggml_concat(ctx0, ggml_cont(ctx0, front), back, 0);
@@ -909,6 +941,10 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_attention(
             ggml_row_size(kv_cmpr_pe->type, kv_lora_rank + n_embd_head_qk_rope),
             ggml_row_size(kv_cmpr_pe->type, kv_lora_rank));
 
+    if (hparams.use_mrope()) {
+        q_pe = hy_v4_flash_rope_to_neox(ctx0, q_pe);
+        k_pe = hy_v4_flash_rope_to_neox(ctx0, k_pe);
+    }
     q_pe = build_rope(q_pe, inp_pos, il);
     cb(q_pe, "q_pe", il);
     k_pe = build_rope(k_pe, inp_pos, il);
@@ -1055,6 +1091,9 @@ llama_model_hy_v4_flash::graph::graph(const llama_model & model, const llm_graph
 
     ggml_tensor * inp = build_inp_embd(model.tok_embd);
     ggml_tensor * inp_pos = build_inp_pos();
+    if (hparams.use_mrope()) {
+        inp_pos = hy_v4_flash_pos(ctx0, inp_pos, n_tokens);
+    }
 
     // with an indexer the memory is an iSWA context plus the indexer cache
     const auto * mctx_idx = hparams.indexer_top_k > 0
@@ -1192,6 +1231,9 @@ llama_model_hy_v4_flash::graph_mtp::graph_mtp(const llama_model & model, const l
 
     ggml_tensor * inp_pos     = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
+    if (hparams.use_mrope()) {
+        inp_pos = hy_v4_flash_pos(ctx0, inp_pos, n_tokens);
+    }
 
     // the draft takes the next token embedding and the trunk's final normed hidden state
     auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd_inp(), n_embd);

@@ -1393,10 +1393,11 @@ struct mtmd_context {
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(models.v.get());
                 } break;
             case PROJECTOR_TYPE_HY_V4_VL:
+            case PROJECTOR_TYPE_HY_V4_FLASH:
                 {
                     // image start/end markers use fullwidth bar and U+2581 like hunyuanvl; the trailing hash follows the tokenizer revision, so take it from the vocab
                     if (text_model && pos_type != MTMD_POS_TYPE_MROPE) {
-                        throw std::runtime_error("hy_v4_vl needs a text model converted with rope sections (HYV4VLForConditionalGeneration)");
+                        throw std::runtime_error("hy_v4 VL projectors need a text model with M-RoPE rope sections");
                     }
                     img_beg = lookup_token_text_prefix("<｜hy_image▁start");
                     img_end = lookup_token_text_prefix("<｜hy_image▁end");

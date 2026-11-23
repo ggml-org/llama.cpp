@@ -1264,14 +1264,21 @@ struct mtmd_model_loader {
                         hparams.set_warmup_n_tokens(32*32);
                     } break;
                 case PROJECTOR_TYPE_HY_V4_VL:
+                case PROJECTOR_TYPE_HY_V4_FLASH:
                     {
                         // the HF processor runs torchvision bicubic (it replaces lanczos) and Python round()
                         hparams.n_merge = 2;
                         hparams.set_image_resize_algo(RESIZE_ALGO_BICUBIC, true);
                         hparams.image_round_half_even = true;
                         hparams.image_resize_pad = PAD_NONE;
-                        hparams.ffn_op = FFN_GELU_ERF;
-                        log_ffn_op = "gelu_erf";
+                        // hy_v4_flash fuses the encoder ffn bias with the tanh gelu (bias_activation_fusion)
+                        if (model.proj_type == PROJECTOR_TYPE_HY_V4_FLASH) {
+                            hparams.ffn_op = FFN_GELU;
+                            log_ffn_op = "gelu";
+                        } else {
+                            hparams.ffn_op = FFN_GELU_ERF;
+                            log_ffn_op = "gelu_erf";
+                        }
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         if (hparams.n_merge == 0) {
                             throw std::runtime_error(mtmd_format("%s: spatial_merge_size must be > 0\n", __func__));
@@ -3908,6 +3915,7 @@ struct mtmd_model_loader {
                     }
                 } break;
             case PROJECTOR_TYPE_HY_V4_VL:
+            case PROJECTOR_TYPE_HY_V4_FLASH:
                 {
                     // perceive.proj.0 -> mm.0 (conv1), perceive.proj.2 -> mm.2 (conv2)
                     model.mm_0_w            = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
@@ -4723,6 +4731,7 @@ int mtmd_model::n_output_tokens_x(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_LFM3VL:
             return (img->nx() / params.patch_size) / 2;
         case PROJECTOR_TYPE_HY_V4_VL:
+        case PROJECTOR_TYPE_HY_V4_FLASH:
             // the projector appends one newline embedding per token row
             return (img->nx() / params.patch_size) / params.n_merge + 1;
         case PROJECTOR_TYPE_STEP3VL:
@@ -4761,6 +4770,7 @@ int mtmd_model::n_output_tokens_y(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_LFM3VL:
             return (img->ny() / params.patch_size) / 2;
         case PROJECTOR_TYPE_HY_V4_VL:
+        case PROJECTOR_TYPE_HY_V4_FLASH:
             return (img->ny() / params.patch_size) / params.n_merge;
         case PROJECTOR_TYPE_STEP3VL:
         case PROJECTOR_TYPE_MINICPMV4_6:
@@ -5029,6 +5039,7 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
                 n_patches = (ow + 1) * oh + 2;
             } break;
         case PROJECTOR_TYPE_HY_V4_VL:
+        case PROJECTOR_TYPE_HY_V4_FLASH:
             {
                 // no begin/end embeddings, the prompt carries the image start/end tokens
                 int merge = hparams.n_merge;
@@ -5284,6 +5295,7 @@ int mtmd_model::n_mmproj_embd() const {
         case PROJECTOR_TYPE_HUNYUANVL:
             return mm_model_proj->ne[1];
         case PROJECTOR_TYPE_HY_V4_VL:
+        case PROJECTOR_TYPE_HY_V4_FLASH:
             return mm_1_w->ne[3]; // conv2d kernel is [1, 1, IC, OC]
         case PROJECTOR_TYPE_COGVLM:
             return mm_4h_to_h_w->ne[1];

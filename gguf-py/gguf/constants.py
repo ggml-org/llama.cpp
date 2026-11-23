@@ -7625,6 +7625,7 @@ class VisionProjectorType:
     TINY_VOCA = "tiny_voca" # audio generation: duration predictor, frame transformers, source-filter vocoder
     HUNYUANVL      = "hunyuanvl"
     HY_V4_VL       = "hy_v4_vl"
+    HY_V4_FLASH    = "hy_v4_flash"
     PARAKEET       = "parakeet"  # audio
     MINIMAXM3      = "minimax_m3"
     MINICPMV4_6    = "minicpmv4_6"

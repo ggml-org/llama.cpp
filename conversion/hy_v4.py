@@ -368,3 +368,10 @@ class HYV4VLVisionModel(MmprojModel):
         if ("mm.0." in new_name or "mm.2." in new_name) and new_name.endswith(".weight"):
             return gguf.GGMLQuantizationType.F16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+
+@ModelBase.register("HYV4FlashForConditionalGeneration")
+class HYV4FlashVisionModel(HYV4VLVisionModel):
+    """Vision tower of HY_V4_FLASH, the same as HY_V4 VL but the encoder ffn uses the tanh gelu (bias_activation_fusion)."""
+
+    projector_type = gguf.VisionProjectorType.HY_V4_FLASH

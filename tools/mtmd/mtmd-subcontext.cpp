@@ -2112,6 +2112,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
             } break;
         case PROJECTOR_TYPE_HUNYUANVL:
         case PROJECTOR_TYPE_HY_V4_VL:
+        case PROJECTOR_TYPE_HY_V4_FLASH:
             {
                 // Compute the 2D position embedding on CPU (with the custom sf=(target+0.1)/n_grid bilinear sampling that the reference implementation uses) and upload it to the graph input declared in mtmd_graph_hunyuanvl::build() / mtmd_graph_hy_v4::build().
                 GGML_ASSERT(model.position_embeddings != nullptr);

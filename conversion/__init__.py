@@ -393,6 +393,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "GraniteSpeechPlusForConditionalGeneration": "granite",
     "HiggsAudio3Model": "higgs_audio",
     "HunYuanVLForConditionalGeneration": "hunyuan",
+    "HYV4FlashForConditionalGeneration": "hy_v4",
     "HYV4VLForConditionalGeneration": "hy_v4",
     "Idefics3ForConditionalGeneration": "smolvlm",
     "Inkling2ForConditionalGeneration": "inkling2",
