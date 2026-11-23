@@ -425,7 +425,7 @@ llama_context::llama_context(
     }
 
     {
-        cparams.n_chunk = model.graph_nodes_per_chunk() > 0 ? llm_graph_n_chunk(cparams) : 0;
+        cparams.n_chunk = model.graph_nodes_per_chunk() > 0 ? llm_graph_n_chunk(cparams, model.graph_chunk_n_head_mask()) : 0;
 
         // for tests: the models of the tests are too small for chunks
         const char * LLAMA_GRAPH_CHUNK = getenv("LLAMA_GRAPH_CHUNK");

@@ -257,6 +257,14 @@ set_tests_properties(test-generate-models PROPERTIES
     FIXTURES_SETUP generate-models
 )
 
+# the sparse attention of large ubatches runs in token chunks, small chunks cover it with the dummy models
+llama_test(
+    test-llama-archs
+    NAME test-llama-archs-chunk
+    LABEL main
+    ARGS --chunk 24 -d 0.3
+)
+
 # Target model for test-speculative-rejection-sampling
 set(SPEC_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-speculative-models/target")
 file(MAKE_DIRECTORY "${SPEC_TARGET_DIR}")

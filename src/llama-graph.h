@@ -807,6 +807,10 @@ public:
     ggml_tensor * self_rel_pos     = nullptr; // I32 [n_kv,     n_batch]
     ggml_tensor * self_rel_pos_swa = nullptr; // I32 [n_kv_swa, n_batch]
 
+    // the rows of the full-attention mask and distances of each token chunk
+    std::vector<ggml_tensor *> chunks_attn_mask;
+    std::vector<ggml_tensor *> chunks_rel_pos;
+
     const uint32_t extent;
     const uint32_t extent_swa;
 
@@ -1097,7 +1101,8 @@ using llm_graph_chunk_fn = std::function<ggml_tensor * (size_t ic, const llm_gra
 // a tensor that a graph builds with n_ctx elements per token, such as a score or a selection, then has at most
 // 1 GiB of F32 elements; an input of the graph keeps the size of the ubatch
 // 0 for a split cache with several sequences and for a ubatch above 16384 tokens
-uint32_t llm_graph_n_chunk(const llama_cparams & cparams);
+// n_head_mask: the heads of an attention mask with a value per cell, token and head
+uint32_t llm_graph_n_chunk(const llama_cparams & cparams, uint32_t n_head_mask);
 
 struct llm_graph_context {
     const llama_model & model;
@@ -1562,17 +1567,24 @@ struct llm_graph_context {
             uint32_t extent,
             uint32_t extent_swa) const;
 
-    // kq_b is added to the KQ mask, after the KQ scale
+    // the KQ mask of the tokens of rel_pos: the bias by distance, gathered for each cell and added to mask
+    ggml_tensor * build_kq_mask_rel(
+            ggml_tensor * mask,     // [n_kv, n_tokens/n_stream, 1, n_stream]
+            ggml_tensor * rel_pos,  // [n_kv, n_tokens]
+            ggml_tensor * rel_bias, // [n_head_q, extent + 1, n_tokens]
+                    int   il) const;
+
+    // rel_bias is gathered by the distance to each cell and added to the KQ mask, after the KQ scale
     ggml_tensor * build_attn(
             llm_graph_input_mem_hybrid_iswa_rel * inp,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
             ggml_tensor * wo_s,
-            ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
-            ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
-            ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
-            ggml_tensor * kq_b,  // [n_kv, n_tokens/n_stream, n_head_q, n_stream]
-            ggml_tensor * sinks, // [n_head_q]
+            ggml_tensor * q_cur,    // [n_embd_head_q, n_head_q, n_tokens]
+            ggml_tensor * k_cur,    // [n_embd_head_k, n_head_k, n_tokens]
+            ggml_tensor * v_cur,    // [n_embd_head_v, n_head_v, n_tokens]
+            ggml_tensor * rel_bias, // [n_head_q, extent + 1, n_tokens]
+            ggml_tensor * sinks,    // [n_head_q]
                   float   kq_scale,
                     int   il) const;
 

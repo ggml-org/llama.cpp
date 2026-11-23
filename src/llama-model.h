@@ -1069,6 +1069,9 @@ struct llama_model {
     // 0: the graph does not use llm_graph_context::build_chunked
     virtual uint32_t graph_nodes_per_chunk() const { return 0; }
 
+    // the heads of an attention mask with a value per cell, token and head
+    virtual uint32_t graph_chunk_n_head_mask() const { return 1; }
+
     // apply Hadamard transform to the lightning indexer keys
     virtual bool lid_k_hdmd() const { return false; }
 

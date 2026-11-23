@@ -2504,6 +2504,11 @@ struct llama_model_inkling2 : public llama_model_base {
     void load_arch_tensors(llama_model_loader & ml) override;
     uint32_t graph_nodes_per_tensor() const override { return 32; }
 
+    // the nodes of one token chunk: 20 measured for one full-attention layer
+    static constexpr uint32_t GRAPH_NODES_PER_CHUNK = 24;
+    uint32_t graph_nodes_per_chunk() const override { return GRAPH_NODES_PER_CHUNK; }
+    uint32_t graph_chunk_n_head_mask() const override;
+
     // the layers stored in the file
     virtual int n_layer_phys() const { return hparams.n_layer(); }
 
@@ -2544,7 +2549,6 @@ struct llama_model_inkling2 : public llama_model_base {
         void build_output(ggml_tensor * cur, const std::vector<ggml_tensor *> & blocks);
 
         llm_graph_input_mem_hybrid_iswa_rel * inp  = nullptr;
-        llm_graph_input_attn_kv_iswa        * attn = nullptr;
         llm_graph_input_rs                  * recr = nullptr;
 
         ggml_tensor * inp_out_ids = nullptr;
