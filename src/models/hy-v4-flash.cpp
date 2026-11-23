@@ -83,6 +83,8 @@ void llama_model_hy_v4_flash::load_arch_hparams(llama_model_loader & ml) {
         ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,        hparams.indexer_head_size);
         ml.get_key(LLM_KV_ATTENTION_INDEXER_KPOOL,             hparams.indexer_kpool);
         ml.get_key(LLM_KV_ATTENTION_INDEXER_KPOOL_SELECT_TAIL, hparams.indexer_kpool_select_tail, false);
+        // pools group consecutive cells, not consecutive positions: with M-RoPE a whole image shares one position
+        hparams.indexer_kpool_by_order = true;
         ml.get_key_or_arr(LLM_KV_ATTENTION_INDEXER_TYPES, hparams.is_indexer_full_impl, hparams.n_layer(), false);
 
         // indexer.types says which layers own an indexer, none means no indexer
