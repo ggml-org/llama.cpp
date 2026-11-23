@@ -122,7 +122,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 static void usage(const char * executable) {
     printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights]\n", executable);
     printf("       [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--tensor-type] [--tensor-type-file]\n");
-    printf("       [--prune-layers] [--keep-split] [--override-kv] [--dry-run] [--max-buffer-size]\n");
+    printf("       [--prune-layers] [--keep-split] [--override-kv] [--dry-run] [--max-buffer-size] [--no-fallback]\n");
     printf("       model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
     printf("  --allow-requantize\n");
     printf("                                      allow requantizing tensors that have already been quantized\n");
@@ -164,7 +164,11 @@ static void usage(const char * executable) {
     printf("                                      example: llama-quantize --dry-run model-f32.gguf Q4_K\n");
     printf("  --max-buffer-size MiB\n");
     printf("                                      max amount of tensor rows kept in memory while quantizing one tensor (default: 8192)\n");
-    printf("                                      lower it to quantize models with very large tensors on a machine with little RAM\n\n");
+    printf("                                      lower it to quantize models with very large tensors on a machine with little RAM\n");
+    printf("  --no-fallback\n");
+    printf("                                      exit with an error instead of substituting a compatible type for tensors\n");
+    printf("                                      with shapes incompatible with the requested type. can be combined with\n");
+    printf("                                      --dry-run to validate a quantization before running it.\n\n");
     printf("note: --include-weights and --exclude-weights cannot be used together\n\n");
     printf("-----------------------------------------------------------------------------\n");
     printf(" allowed quantization types\n");
@@ -480,6 +484,8 @@ int llama_quantize(int argc, char ** argv) {
                 return 1;
             }
             params.max_buf_size = (size_t) mib * 1024 * 1024;
+        } else if (strcmp(argv[arg_idx], "--no-fallback") == 0) {
+            params.no_fallback = true;
         } else {
             usage(argv[0]);
         }
