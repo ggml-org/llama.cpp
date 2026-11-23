@@ -527,7 +527,7 @@ class common_peg_parser_builder {
     //   S -> C (D1 R1 | D2 R2 | ...)
     common_peg_parser through(const common_peg_parser & content, const std::vector<common_peg_until_branch> & branches, bool optional = false);
     common_peg_parser through(const common_peg_parser & content, std::initializer_list<common_peg_until_branch> branches, bool optional = false) { return through(content, std::vector<common_peg_until_branch>(branches), optional); }
-    common_peg_parser through(const common_peg_parser & content, const common_peg_parser & delimiter) { return through(content, { { delimiter } }); }
+    common_peg_parser through(const common_peg_parser & content, const common_peg_parser & delimiter) { return through(content, std::vector<common_peg_until_branch>{ common_peg_until_branch{ delimiter.id() } }); }
     common_peg_parser through(const common_peg_parser & content, const std::string & delimiter) { return through(content, literal(delimiter)); }
 
     // Matches between min and max repetitions of a parser (inclusive).
