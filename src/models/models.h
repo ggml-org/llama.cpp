@@ -3197,6 +3197,10 @@ struct llama_model_kimi_k31 : public llama_model_base {
     void load_arch_tensors(llama_model_loader & ml) override;
     uint32_t graph_nodes_per_tensor() const override { return 64; }
 
+    // the nodes of one token chunk: 42 measured for all the layers of a 3-layer test model
+    static constexpr uint32_t GRAPH_NODES_PER_CHUNK = 48;
+    uint32_t graph_nodes_per_chunk() const override { return GRAPH_NODES_PER_CHUNK; }
+
     struct graph : public llm_build_delta_net_base {
         graph(const llm_graph_params & params);
 
@@ -3220,13 +3224,14 @@ struct llama_model_kimi_k31 : public llama_model_base {
 
         struct dsa_out {
             ggml_tensor * out;
-            ggml_tensor * sel;
+            std::vector<ggml_tensor *> picks; // the top-k cells of each token chunk
         };
 
         dsa_out build_dsa_layer(ggml_tensor * cur, const llama_layer & layer,
                                 const llama_kv_cache_context * mctx_idx,
                                 llm_graph_input_attn_k * inp_attn,
-                                ggml_tensor * prev_sel,
+                                const std::vector<ggml_tensor *> & chunks_kq_mask,
+                                const std::vector<ggml_tensor *> & prev_picks,
                                 int64_t n_embd_head_k_mla, int64_t kv_lora_rank,
                                 int64_t n_embd_head_qk_rope,
                                 int64_t n_embd_head_qk_nope, float kq_scale, int il);
