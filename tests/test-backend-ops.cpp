@@ -5365,6 +5365,49 @@ struct test_attn_prep : public test_case {
     }
 };
 
+// Inkling 2 SITU on the two halves of a fused gate_up product (fused by CUDA into one element-wise kernel):
+// (tanh(g/beta)*beta * sigmoid(g)) * (tanh(u/lb)*lb)
+struct test_situ : public test_case {
+    const int64_t n_ff;
+    const int64_t n_used;
+    const int64_t n_tokens;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "SITU";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR3(n_ff, n_used, n_tokens);
+    }
+
+    test_situ(int64_t n_ff = 1152, int64_t n_used = 8, int64_t n_tokens = 1) : n_ff(n_ff), n_used(n_used), n_tokens(n_tokens) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const float beta = 4.0f, lb = 25.0f;
+        ggml_tensor * gu = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 2*n_ff, n_used, n_tokens);
+        ggml_tensor * g  = ggml_view_3d(ctx, gu, n_ff, n_used, n_tokens, gu->nb[1], gu->nb[2], 0);
+        ggml_tensor * u  = ggml_view_3d(ctx, gu, n_ff, n_used, n_tokens, gu->nb[1], gu->nb[2], n_ff*ggml_element_size(gu));
+
+        ggml_tensor * act = ggml_scale(ctx, ggml_tanh(ctx, ggml_scale(ctx, g, 1.0f/beta)), beta);
+        act = ggml_mul(ctx, act, ggml_sigmoid(ctx, g));
+        u = ggml_scale(ctx, ggml_tanh(ctx, ggml_scale(ctx, u, 1.0f/lb)), lb);
+        ggml_tensor * out = ggml_mul(ctx, act, u);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * x = ggml_get_first_tensor(ctx); x != NULL; x = ggml_get_next_tensor(ctx, x)) {
+            if (x->op == GGML_OP_NONE) {
+                init_tensor_uniform(x, -40.0f, 40.0f);
+            }
+        }
+    }
+};
+
 // MUL(x, w) -> L2_NORM [-> SCALE] (Inkling 2 clipped Q and R, fused by CUDA)
 struct test_mul_l2_norm : public test_case {
     const std::array<int64_t, 4> ne;
@@ -12602,6 +12645,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_rel_bias_op(5, 101, 300, 3, 2));
     test_cases.emplace_back(new test_attn_prep(false));
     test_cases.emplace_back(new test_attn_prep(true));
+    test_cases.emplace_back(new test_situ(1152, 8, 1));
+    test_cases.emplace_back(new test_situ(1152, 8, 37));
+    test_cases.emplace_back(new test_situ(100, 3, 5));
 
     // per-channel scale, L2 norm with a clip threshold as eps, optional rescale (Inkling 2 Q and R)
     for (bool with_scale : { false, true }) {

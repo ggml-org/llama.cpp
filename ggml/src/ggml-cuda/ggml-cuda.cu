@@ -54,6 +54,7 @@
 #include "ggml-cuda/depth-mix.cuh"
 #include "ggml-cuda/ctrl-mix.cuh"
 #include "ggml-cuda/attn-prep.cuh"
+#include "ggml-cuda/situ.cuh"
 #include "ggml-cuda/softmax.cuh"
 #include "ggml-cuda/ssm-conv.cuh"
 #include "ggml-cuda/ssm-scan.cuh"
@@ -5475,6 +5476,14 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         return 3;
     }
 
+    if (node->op == GGML_OP_SCALE) {
+        const int last = ggml_cuda_match_situ(cgraph, i);
+        if (last > 0) {
+            ggml_cuda_op_situ(*cuda_ctx, cgraph, i, last);
+            return last - i;
+        }
+    }
+
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SCALE, GGML_OP_UNARY, GGML_OP_SCALE }, { GGML_UNARY_OP_TANH })) {
         ggml_cuda_op_softcap(*cuda_ctx, cgraph->nodes[i + 2], node);
         return 2;
@@ -6002,6 +6011,8 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
                     }
                 } else if (op == GGML_OP_GET_ROWS) {
                     last = ggml_cuda_match_rel_bias_batch(cgraph, i, false);
+                } else if (op == GGML_OP_SCALE) {
+                    last = ggml_cuda_match_situ(cgraph, i, false);
                 }
                 if (last > i) {
                     add_alloc_deps(i, last);
