@@ -173,21 +173,21 @@ class common_chat_peg_builder : public common_peg_parser_builder {
     common_peg_parser python_or_json_value();
 
     // Implementation helpers for standard_json_tools — one per JSON tool call layout mode
-    common_peg_parser build_json_tools_function_is_key(const common_json &             tools,
+    common_peg_parser build_json_tools_function_is_key(const common_json & tools,
                                                        const common_chat_tool_choice & tool_choice,
                                                        const std::string &             args_key,
                                                        const std::string &             effective_args_key,
                                                        const std::string &             call_id_key,
                                                        const std::string &             gen_call_id_key);
 
-    common_peg_parser build_json_tools_nested_keys(const common_json &             tools,
+    common_peg_parser build_json_tools_nested_keys(const common_json & tools,
                                                    const common_chat_tool_choice & tool_choice,
                                                    const std::string &             effective_name_key,
                                                    const std::string &             effective_args_key,
                                                    const std::string &             call_id_key,
                                                    const std::string &             gen_call_id_key);
 
-    common_peg_parser build_json_tools_flat_keys(const common_json &              tools,
+    common_peg_parser build_json_tools_flat_keys(const common_json &   tools,
                                                  const common_chat_tool_choice &  tool_choice,
                                                  const std::string &              effective_name_key,
                                                  const std::string &              effective_args_key,
