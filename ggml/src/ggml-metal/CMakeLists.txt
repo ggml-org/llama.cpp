@@ -56,6 +56,7 @@ set(METALLIB_KERNEL_SOURCES
     kernels/mul_mv.metal
     kernels/mul_mv_mma.metal
     kernels/mul_mm.metal
+    kernels/mul_mm_tensor.metal
     kernels/quantize.metal
     kernels/softmax.metal
     kernels/norm.metal
@@ -223,21 +224,21 @@ else()
 
     # the tensor API kernels go in a separate metallib, loaded only where supported
     if (GGML_METAL_HAS_TENSOR_LIB)
-        set(AIR_MM_TENSOR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mul_mm_tensor.air")
+        set(AIR_MM_TENSOR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mul_mm_tensor_tensor.air")
         # the tensor API needs OS 26+
         set(XC_FLAGS_TENSOR ${XC_FLAGS} -mtargetos=${GGML_METAL_TARGET_OS}26.0${METAL_TARGET_SIM})
         add_custom_command(
             OUTPUT ${AIR_MM_TENSOR}
-            COMMAND xcrun -sdk ${METAL_SDK} metal ${XC_FLAGS_TENSOR} -DGGML_METAL_HAS_TENSOR -I ${CMAKE_RUNTIME_OUTPUT_DIRECTORY} -c ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/mul_mm.metal -o ${AIR_MM_TENSOR}
-            DEPENDS kernels/mul_mm.metal kernels/common.h kernels/dequantize.h ${METALLIB_COMMON} ggml-metal-impl.h
-            COMMENT "Compiling kernels/mul_mm.metal (tensor API)"
+            COMMAND xcrun -sdk ${METAL_SDK} metal ${XC_FLAGS_TENSOR} -DGGML_METAL_HAS_TENSOR -DGGML_METAL_HAS_BF16 -I ${CMAKE_RUNTIME_OUTPUT_DIRECTORY} -c ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/mul_mm_tensor.metal -o ${AIR_MM_TENSOR}
+            DEPENDS kernels/mul_mm_tensor.metal kernels/common.h kernels/dequantize.h ${METALLIB_COMMON} ggml-metal-impl.h
+            COMMENT "Compiling kernels/mul_mm_tensor.metal (tensor API)"
             VERBATIM
         )
 
         set(AIR_FA_TENSOR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/fa_tensor_tensor.air")
         add_custom_command(
             OUTPUT ${AIR_FA_TENSOR}
-            COMMAND xcrun -sdk ${METAL_SDK} metal ${XC_FLAGS_TENSOR} -DGGML_METAL_HAS_TENSOR -I ${CMAKE_RUNTIME_OUTPUT_DIRECTORY} -c ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/fa_tensor.metal -o ${AIR_FA_TENSOR}
+            COMMAND xcrun -sdk ${METAL_SDK} metal ${XC_FLAGS_TENSOR} -DGGML_METAL_HAS_TENSOR -DGGML_METAL_HAS_BF16 -I ${CMAKE_RUNTIME_OUTPUT_DIRECTORY} -c ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/fa_tensor.metal -o ${AIR_FA_TENSOR}
             DEPENDS kernels/fa_tensor.metal kernels/common.h ${METALLIB_COMMON} ggml-metal-impl.h
             COMMENT "Compiling kernels/fa_tensor.metal (tensor API)"
             VERBATIM

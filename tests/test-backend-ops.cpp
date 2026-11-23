@@ -6161,6 +6161,79 @@ struct test_mul_mat_id_w4a8 : public test_mul_mat_id {
     }
 };
 
+// src1 GGML_PREC_BF16: the implementation may keep src1 in F32 or BF16, but must not convert it down to F16
+struct test_mul_mat_id_prec_src1_bf16 : public test_mul_mat_id {
+    test_mul_mat_id_prec_src1_bf16(ggml_type type_a = GGML_TYPE_F32,
+            int n_mats = 8, int n_used = 2, bool b = false,
+            int64_t m = 32, int64_t n = 32, int64_t k = 256)
+        : test_mul_mat_id(type_a, GGML_TYPE_F32, n_mats, n_used, b, m, n, k) {}
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * out = test_mul_mat_id::build_graph(ctx);
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->op == GGML_OP_MUL_MAT_ID) {
+                ggml_prec_set_src(t, GGML_PREC_BF16, 1);
+            }
+        }
+        return out;
+    }
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_I32) {
+                continue;
+            }
+            if (strcmp(t->name, "b") == 0) {
+                init_tensor_uniform(t, -1e6f, 1e6f);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+        init_mul_mat_id_ids(ctx, n_mats, skip);
+    }
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_ID_PREC_SRC1_BF16";
+    }
+};
+
+struct test_mul_mat_id_prec_src1_f32 : public test_mul_mat_id {
+    test_mul_mat_id_prec_src1_f32(ggml_type type_a = GGML_TYPE_F32,
+            int n_mats = 8, int n_used = 2, bool b = false,
+            int64_t m = 32, int64_t n = 32, int64_t k = 256)
+        : test_mul_mat_id(type_a, GGML_TYPE_F32, n_mats, n_used, b, m, n, k) {}
+    double max_nmse_err() override {
+        if (type_a == GGML_TYPE_F32 || type_a == GGML_TYPE_F16) {
+            return 1e-10;
+        }
+        return test_mul_mat_id::max_nmse_err();
+    }
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * out = test_mul_mat_id::build_graph(ctx);
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->op == GGML_OP_MUL_MAT_ID) {
+                ggml_prec_set_src(t, GGML_PREC_F32, 1);
+            }
+        }
+        return out;
+    }
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_I32) {
+                continue;
+            }
+            if (strcmp(t->name, "b") == 0) {
+                init_tensor_uniform(t, -1e6f, 1e6f);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+        init_mul_mat_id_ids(ctx, n_mats, skip);
+    }
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_ID_PREC_SRC1_F32";
+    }
+};
+
 // FP4 native W4A4 path on the MoE path (default precision)
 struct test_mul_mat_id_w4a4 : public test_mul_mat_id {
     test_mul_mat_id_w4a4(ggml_type type_a = GGML_TYPE_NVFP4, ggml_type type_b = GGML_TYPE_F32,
@@ -12124,6 +12197,23 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_prec_src1_bf16_src0(GGML_TYPE_F32, 128, 512, 512));
     test_cases.emplace_back(new test_mul_mat_prec_src1_bf16_src0(GGML_TYPE_F32,  67,  33, 100));
     test_cases.emplace_back(new test_mul_mat_prec_src1_bf16_src0(GGML_TYPE_F32,  64,  32, 256, {2, 3}, {2, 1}));
+
+    // src1 precision on the MoE path: mm_id (n >= 32) and mv_id (n < 32), broadcast and partial K
+    for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_MXFP4}) {
+        test_cases.emplace_back(new test_mul_mat_id_prec_src1_bf16(type_a,  8, 2, false,  64,   1, 256));
+        test_cases.emplace_back(new test_mul_mat_id_prec_src1_bf16(type_a,  8, 2, false,  64,  32, 256));
+        test_cases.emplace_back(new test_mul_mat_id_prec_src1_bf16(type_a,  8, 2, false,  64, 512, 256));
+        test_cases.emplace_back(new test_mul_mat_id_prec_src1_bf16(type_a, 16, 4, true,   72,  33, 256));
+        test_cases.emplace_back(new test_mul_mat_id_prec_src1_bf16(type_a,  4, 2, false,  67, 100, 256));
+    }
+
+    for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_MXFP4}) {
+        test_cases.emplace_back(new test_mul_mat_id_prec_src1_f32(type_a,  8, 2, false,  64,   1, 256));
+        test_cases.emplace_back(new test_mul_mat_id_prec_src1_f32(type_a,  8, 2, false,  64,  32, 256));
+        test_cases.emplace_back(new test_mul_mat_id_prec_src1_f32(type_a,  8, 2, false,  64, 512, 256));
+        test_cases.emplace_back(new test_mul_mat_id_prec_src1_f32(type_a, 16, 4, true,   72,  33, 256));
+        test_cases.emplace_back(new test_mul_mat_id_prec_src1_f32(type_a,  4, 2, false,  67, 100, 256));
+    }
 
     // FP4 activation precision (default = native W4A4, src1 GGML_PREC_Q8 = W4A8)
     test_cases.emplace_back(new test_mul_mat_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32,  1, 256));
