@@ -223,7 +223,7 @@ function(emit_files dist_dir)
             set(gzip_dir  "${gzip_root}/_gzip")
             file(REMOVE_RECURSE "${gzip_root}")
             foreach(f IN LISTS assets)
-                get_filename_component(asset_path "${dist_dir}/${f}" REALPATH)
+                get_filename_component(asset_path "${dist_dir}/${f}" ABSOLUTE)
                 get_filename_component(dst_dir "${gzip_dir}/${f}" DIRECTORY)
                 file(MAKE_DIRECTORY "${dst_dir}")
                 file(ARCHIVE_CREATE
