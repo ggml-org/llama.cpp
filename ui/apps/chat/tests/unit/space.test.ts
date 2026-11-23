@@ -31,9 +31,16 @@ describe('spaceCard', () => {
 	const card = spaceCard({ branch: 'feat/voice-mode', repo: 'alice/llama.cpp', sha: '0123456789' });
 
 	it('is a static Space with the headers llama-server serves the UI with', () => {
+		expect(card).toContain('title: Llama Chat preview');
 		expect(card).toContain('sdk: static');
 		expect(card).toContain('cross-origin-embedder-policy: require-corp');
 		expect(card).toContain('cross-origin-opener-policy: same-origin');
+	});
+
+	it('takes another title', () => {
+		expect(
+			spaceCard({ branch: 'x', repo: '', sha: '0', title: 'Llama Connect preview' })
+		).toContain('title: Llama Connect preview');
 	});
 
 	it('carries the tag the script knows its Spaces by', () => {
@@ -68,6 +75,13 @@ describe('parseSpaceArgs', () => {
 			ifExists: true,
 			visibility: 'protected'
 		});
+	});
+
+	it('takes a Space by name', () => {
+		expect(parseSpaceArgs(['--space', 'alice/llama-chat-preview']).space).toBe(
+			'alice/llama-chat-preview'
+		);
+		expect(() => parseSpaceArgs(['--space', 'llama-chat-preview'])).toThrow();
 	});
 
 	it('refuses what it does not know', () => {

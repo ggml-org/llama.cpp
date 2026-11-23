@@ -94,6 +94,8 @@ npm run space -- status                   # print the address of this branch's S
 npm run space -- rm                       # delete it
 npm run space -- prune                    # delete the Spaces whose branch is gone from the remote
 npm run space -- --visibility protected   # when it creates the Space: public (default), protected or private
+npm run space -- --space <owner>/<name>   # a Space of that name, instead of the one named after the branch
+npm run space -- --title '<title>'        # the title on the Space's card
 ```
 
 It needs Node.js 24, the [`hf` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli) and its login (`hf auth login`, or `HF_TOKEN`). A deploy takes the branch as it is pushed: it refuses uncommitted UI changes and commits that are not on the remote, unless you pass `--wip`. It only touches Spaces it made, which it knows by their `llama-ui-preview` tag.

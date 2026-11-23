@@ -24,6 +24,8 @@ const HF_ENDPOINT = 'https://huggingface.co';
 const SPACE_PREFIX = 'llama-ui-';
 const SPACE_NAME_MAX_LENGTH = 96;
 const BRANCH_HASH_LENGTH = 8;
+const DEFAULT_SPACE_TITLE = 'Llama Chat preview';
+const SPACE_ID_REGEX = /^[\w.-]+\/[\w.-]+$/;
 // marks the Spaces this script made: it never deploys to or deletes any other
 const PREVIEW_TAG = 'llama-ui-preview';
 const VISIBILITIES = ['public', 'protected', 'private'];
@@ -39,6 +41,8 @@ export const USAGE = `Usage: npm run space -- [deploy|status|rm|prune] [options]
 Options:
   --branch <name>      the branch, instead of the one checked out
   --owner <name>       the Hugging Face user or organization (default: UI_PREVIEW_SPACE_OWNER, or the login)
+  --space <owner/name> a Space of that name, instead of the one named after the branch
+  --title <title>      the title on the Space's card (default: Llama Chat preview)
   --visibility <v>     ${VISIBILITIES.join(', ')}; used when the Space is created (default: public)
   --if-exists          deploy only if the branch already has a Space
   --wip                deploy the working tree as it is, even if it is not pushed
@@ -52,6 +56,8 @@ export interface SpaceOptions {
 	help: boolean;
 	ifExists: boolean;
 	owner?: string;
+	space?: string;
+	title?: string;
 	remote?: string;
 	visibility: string;
 	wip: boolean;
@@ -74,6 +80,8 @@ export function parseSpaceArgs(argv: string[]): SpaceOptions {
 			'if-exists': { default: false, type: 'boolean' },
 			owner: { type: 'string' },
 			remote: { type: 'string' },
+			space: { type: 'string' },
+			title: { type: 'string' },
 			visibility: { default: 'public', type: 'string' },
 			wip: { default: false, type: 'boolean' },
 			yes: { default: false, short: 'y', type: 'boolean' }
@@ -83,6 +91,10 @@ export function parseSpaceArgs(argv: string[]): SpaceOptions {
 
 	if (positionals.length > 1 || !COMMANDS.includes(command)) {
 		throw new Error(`unknown command: ${positionals.join(' ')}`);
+	}
+
+	if (values.space !== undefined && !SPACE_ID_REGEX.test(values.space)) {
+		throw new Error('--space is <owner>/<name>');
 	}
 
 	if (!VISIBILITIES.includes(values.visibility)) {
@@ -96,6 +108,8 @@ export function parseSpaceArgs(argv: string[]): SpaceOptions {
 		ifExists: values['if-exists'],
 		owner: values.owner,
 		remote: values.remote,
+		space: values.space,
+		title: values.title,
 		visibility: values.visibility,
 		wip: values.wip,
 		yes: values.yes
@@ -125,11 +139,16 @@ export function spaceName(branch: string, owner: string): string {
 }
 
 /** The README of the Space. Its headers are the ones llama-server serves the UI with (cross-origin isolation). */
-export function spaceCard(info: { branch: string; repo: string; sha: string }): string {
+export function spaceCard(info: {
+	branch: string;
+	repo: string;
+	sha: string;
+	title?: string;
+}): string {
 	const source = info.repo ? `[${info.repo}](https://github.com/${info.repo})` : 'llama.cpp';
 
 	return `---
-title: Llama UI preview
+title: ${info.title ?? DEFAULT_SPACE_TITLE}
 colorFrom: gray
 colorTo: gray
 sdk: static
@@ -215,6 +234,9 @@ function currentBranch(opts: SpaceOptions): string {
 /** The branch the command is about, and the id of its Space. */
 async function branchSpace(opts: SpaceOptions): Promise<{ branch: string; id: string }> {
 	const branch = currentBranch(opts);
+
+	if (opts.space) return { branch, id: opts.space };
+
 	const owner = await spaceOwner(opts);
 
 	return { branch, id: `${owner}/${spaceName(branch, owner)}` };
@@ -284,7 +306,7 @@ async function deploy(opts: SpaceOptions): Promise<void> {
 
 	try {
 		cpSync(DIST_DIR, staged, { recursive: true });
-		writeFileSync(join(staged, 'README.md'), spaceCard({ branch, repo, sha }));
+		writeFileSync(join(staged, 'README.md'), spaceCard({ branch, repo, sha, title: opts.title }));
 
 		if (!existing) {
 			exec('hf', [
