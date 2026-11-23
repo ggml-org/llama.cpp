@@ -5563,6 +5563,7 @@ struct test_depth_mix : public test_case {
     const int64_t ne;
     const int64_t n_blocks;
     const int64_t nq;
+    const int norm; // 0: none, 1: RMS_NORM of the output, 2: RMS_NORM * w (fused into the mix by CUDA, one query)
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -5576,10 +5577,10 @@ struct test_depth_mix : public test_case {
     }
 
     std::string vars() override {
-        return VARS_TO_STR3(ne, n_blocks, nq);
+        return VARS_TO_STR4(ne, n_blocks, nq, norm);
     }
 
-    test_depth_mix(int64_t ne, int64_t n_blocks, int64_t nq) : ne(ne), n_blocks(n_blocks), nq(nq) {}
+    test_depth_mix(int64_t ne, int64_t n_blocks, int64_t nq, int norm = 0) : ne(ne), n_blocks(n_blocks), nq(nq), norm(norm) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * blocks_s = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, ne, n_blocks, 1);
@@ -5599,6 +5600,13 @@ struct test_depth_mix : public test_case {
         scores = ggml_soft_max_ext(ctx, scores, nullptr, 1.0f/sqrtf(ne), 0.0f);
 
         ggml_tensor * out = ggml_mul_mat(ctx, states_t, scores);
+        if (norm) {
+            out = ggml_rms_norm(ctx, ggml_view_2d(ctx, out, ne, 1, out->nb[1], 0), 1e-6f);
+            if (norm == 2) {
+                ggml_tensor * w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne);
+                out = ggml_mul(ctx, out, w);
+            }
+        }
         ggml_set_name(out, "out");
         return out;
     }
@@ -12745,12 +12753,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
     test_cases.emplace_back(new test_depth_mix(1000, 3, 2));
+    for (int n_blocks : { 1, 3 }) {
+        test_cases.emplace_back(new test_depth_mix(2304, n_blocks, 1, 1));
+        test_cases.emplace_back(new test_depth_mix(2304, n_blocks, 1, 2));
+    }
 
     // one token of a short convolution with its state (Inkling 2)
     for (int64_t n_conv : {2, 3, 4}) {
         test_cases.emplace_back(new test_ssm_conv_step(n_conv, 1024, 0));
         test_cases.emplace_back(new test_ssm_conv_step(n_conv, 2304, 1024));
         test_cases.emplace_back(new test_ssm_conv_step(n_conv, 384, 7));
+        test_cases.emplace_back(new test_ssm_conv_step(n_conv, 2304, 0, true));
+        test_cases.emplace_back(new test_ssm_conv_step(n_conv, 384, 7, true));
     }
 
     // matrix-vector products on one vector, in one launch (Inkling 2 Q/gate/R/sink, K/V, loop controllers)
