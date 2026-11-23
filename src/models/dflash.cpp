@@ -41,7 +41,10 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
     const bool has_lilicorr = ml.get_key(LLM_KV_LILICORR_HIDDEN_SIZE, hparams.lilicorr_hidden_size, false);
     if (has_markov) {
         variant = VARIANT_DSPARK;
-        hparams.dspark_f_rnn = ml.get_tensor_meta("markov_ctx_norm.weight") != nullptr;
+        ml.get_key(LLM_KV_DFLASH_HAS_MARKOV_CONTEXT, hparams.dspark_f_rnn, false);
+        if (!hparams.dspark_f_rnn && ml.get_tensor_meta("markov_ctx_norm.weight")) {
+            throw std::runtime_error("DSpark model has 'markov_ctx_norm.weight' but 'has_markov_context' is not true in GGUF metadata");
+        }
     } else if (has_selector) {
         variant = VARIANT_DFLASH2;
     } else if (has_lilicorr) {

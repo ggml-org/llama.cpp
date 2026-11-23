@@ -447,11 +447,12 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_NORM_BEFORE_RESIDUAL,  "%s.norm_before_residual" },
     { LLM_KV_NORM_BEFORE_FC,        "%s.norm_before_fc"       },
 
-    { LLM_KV_DFLASH_BLOCK_SIZE,       "%s.block_size"       },
-    { LLM_KV_DFLASH_CONV_KERNEL_SIZE, "%s.conv_kernel_size" },
-    { LLM_KV_DFLASH_CONV_GROUP_SIZE,  "%s.conv_group_size"  },
-    { LLM_KV_DFLASH_SELECTOR_RANK,    "%s.selector_rank"    },
-    { LLM_KV_DFLASH_SELECTOR_TOP_K,   "%s.selector_top_k"   },
+    { LLM_KV_DFLASH_BLOCK_SIZE,         "%s.block_size"         },
+    { LLM_KV_DFLASH_CONV_KERNEL_SIZE,   "%s.conv_kernel_size"   },
+    { LLM_KV_DFLASH_CONV_GROUP_SIZE,    "%s.conv_group_size"    },
+    { LLM_KV_DFLASH_SELECTOR_RANK,      "%s.selector_rank"      },
+    { LLM_KV_DFLASH_SELECTOR_TOP_K,     "%s.selector_top_k"     },
+    { LLM_KV_DFLASH_HAS_MARKOV_CONTEXT, "%s.has_markov_context" },
 
     { LLM_KV_LILICORR_HIDDEN_SIZE,       "lilicorr.hidden_size"      },
     { LLM_KV_LILICORR_CANDIDATE_TOPK,    "lilicorr.candidate_topk"   },

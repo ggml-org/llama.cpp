@@ -459,7 +459,7 @@ class Inkling2DSparkModel(Inkling2Model):
         # slot 0 is the anchor, it does not predict a token
         w.add_sample_from_anchor(False)
         w.add_has_confidence_head(False)
-        w.add_has_markov_context(True)
+        w.add_has_markov_context(mtp["markov_head_type"] == "rnn_hidden")
         w.add_file_type(self.ftype)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
