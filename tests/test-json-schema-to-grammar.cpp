@@ -1611,6 +1611,46 @@ static void test_all(const std::string & title, std::function<void(const TestCas
             string ::= "\"" char* "\""
         )"""
     });
+
+    test({
+        SUCCESS,
+        "additionalProperties with special characters in property names",
+        R"""({
+            "type": "object",
+            "properties": {
+                "foo-bar": { "type": "integer" },
+                "foobar": { "type": "integer" },
+                "a]": { "type": "integer" },
+                "^k": { "type": "integer" }
+            },
+            "additionalProperties": true
+        })""",
+        R"""(
+            -k-kv ::= "\"^k\"" space ":" space integer
+            -k-rest ::= ( "," space additional-kv )*
+            a--kv ::= "\"a]\"" space ":" space integer
+            a--rest ::= ( "," space -k-kv )? -k-rest
+            additional-k ::= ["] ( [\x5E] ([k] char+ | [^"k] char*) | [a] ([\]] char+ | [^"\]] char*) | [f] ([o] ([o] ([\-] ([b] ([a] ([r] char+ | [^"r] char*) | [^"a] char*) | [^"b] char*) | [b] ([a] ([r] char+ | [^"r] char*) | [^"a] char*) | [^"\-b] char*) | [^"o] char*) | [^"o] char*) | [^"^af] char* )? ["]
+            additional-kv ::= additional-k ":" space value
+            array ::= "[" space ( value ("," space value)* )? space "]"
+            boolean ::= ("true" | "false")
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            decimal-part ::= [0-9]{1,16}
+            foo-bar-kv ::= "\"foo-bar\"" space ":" space integer
+            foo-bar-rest ::= ( "," space foobar-kv )? foobar-rest
+            foobar-kv ::= "\"foobar\"" space ":" space integer
+            foobar-rest ::= ( "," space a--kv )? a--rest
+            integer ::= ("-"? integral-part)
+            integral-part ::= [0] | [1-9] [0-9]{0,15}
+            null ::= "null"
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
+            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? space "}"
+            root ::= "{" space  (foo-bar-kv foo-bar-rest | foobar-kv foobar-rest | a--kv a--rest | -k-kv -k-rest | additional-kv ( "," space additional-kv )* )? space "}"
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            string ::= "\"" char* "\""
+            value ::= object | array | string | number | boolean | null
+        )"""
+    });
 }
 
 int main() {
