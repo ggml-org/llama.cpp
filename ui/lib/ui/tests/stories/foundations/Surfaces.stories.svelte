@@ -21,7 +21,7 @@
 		<StateGalleryItem label="matte-glass" note="focus within">
 			<div class="matte-glass flex h-28 items-center rounded-3xl px-4">
 				<input
-					class="w-full bg-transparent text-sm outline-none placeholder:engraved"
+					class="w-full bg-transparent text-body-sm outline-none placeholder:engraved"
 					placeholder="Click to see the focus edge"
 				/>
 			</div>
@@ -29,8 +29,8 @@
 
 		<StateGalleryItem label="inset-group-surface" note="rows grouped in a glass panel">
 			<!-- shown inside a sidebar-surface, the only place it reads as intended -->
-			<div class="sidebar-surface flex h-28 flex-col justify-end rounded-(--sidebar-radius) p-2">
-				<div class="inset-group-surface flex flex-col gap-1 p-1 text-sm">
+			<div class="sidebar-surface flex h-28 flex-col justify-end rounded-2xl p-2">
+				<div class="inset-group-surface flex flex-col gap-1 p-1 text-body-sm">
 					<span class="rounded-md px-2 py-1">Models</span>
 
 					<span class="rounded-md px-2 py-1">Settings</span>
@@ -57,13 +57,13 @@
 		</StateGalleryItem>
 
 		<StateGalleryItem label="matte-sheen" note="user message bubble">
-			<div class="matte-sheen flex h-28 items-center rounded-2xl bg-primary/5 px-4 text-sm">
+			<div class="matte-sheen flex h-28 items-center rounded-2xl bg-primary/5 px-4 text-body-sm">
 				A user message
 			</div>
 		</StateGalleryItem>
 
 		<StateGalleryItem label="engraved" note="placeholder text">
-			<div class="flex h-28 items-center text-sm text-muted-foreground engraved">
+			<div class="flex h-28 items-center text-body-sm text-muted-foreground engraved">
 				Ask anything...
 			</div>
 		</StateGalleryItem>

@@ -54,6 +54,8 @@
 
 #define UNUSED GGML_UNUSED
 
+static_assert(GGML_VERSION_MAJOR == 1, "major version update requires attending to all [TAG_GGML_VERSION_MAJOR_UPDATE] tags");
+
 uint64_t ggml_graph_next_uid(void) {
 #ifdef _MSC_VER
 #if defined(_WIN32)
@@ -1112,9 +1114,13 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_SGD",
 
     "GLU",
+
+    "SLEEP",
+
+    "SIGMOID_BACK",
 };
 
-static_assert(GGML_OP_COUNT == 99, "GGML_OP_COUNT != 99");
+static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1225,9 +1231,13 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "sgd(x)",
 
     "glu(x)",
+
+    "sleep(x)",
+
+    "sigmoid_back(x)",
 };
 
-static_assert(GGML_OP_COUNT == 99, "GGML_OP_COUNT != 99");
+static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -2860,6 +2870,21 @@ struct ggml_tensor * ggml_silu_back(
     return result;
 }
 
+// ggml_sigmoid_back
+
+struct ggml_tensor * ggml_sigmoid_back(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b) {
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    result->op     = GGML_OP_SIGMOID_BACK;
+    result->src[0] = a;
+    result->src[1] = b;
+
+    return result;
+}
+
 // ggml hardswish
 
 struct ggml_tensor * ggml_hardswish(
@@ -4015,7 +4040,7 @@ struct ggml_tensor * ggml_set_rows(
     GGML_ASSERT(b->ne[2] % c->ne[1] == 0);
     GGML_ASSERT(b->ne[3] % c->ne[2] == 0);
     GGML_ASSERT(c->ne[3] == 1);
-    GGML_ASSERT(b->type == GGML_TYPE_F32 || b->type == GGML_TYPE_F16);
+    GGML_ASSERT(b->type == GGML_TYPE_F32 || b->type == GGML_TYPE_F16 || b->type == GGML_TYPE_BF16);
     GGML_ASSERT(c->type == GGML_TYPE_I64 || c->type == GGML_TYPE_I32);
 
     GGML_ASSERT(ggml_is_contiguous_rows(a));
@@ -5280,7 +5305,7 @@ struct ggml_tensor * ggml_tri(
     struct ggml_context * ctx,
     struct ggml_tensor  * a,
     enum ggml_tri_type    type) {
-    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(a->type == GGML_TYPE_F32 || a->type == GGML_TYPE_F16 || a->type == GGML_TYPE_BF16);
 
     GGML_ASSERT(ggml_is_contiguous(a));
     GGML_ASSERT(a->ne[0] == a->ne[1]);
@@ -6176,6 +6201,27 @@ struct ggml_tensor * ggml_custom_inplace(
 
     return result;
 }
+
+// ggml_sleep
+
+// the result aliases a, the op only delays and never touches the data
+struct ggml_tensor * ggml_sleep(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int32_t               us) {
+    GGML_ASSERT(us >= 0);
+
+    struct ggml_tensor * result = ggml_view_tensor(ctx, a);
+    ggml_format_name(result, "%s (sleep)", a->name);
+
+    ggml_set_op_params_i32(result, 0, us);
+
+    result->op     = GGML_OP_SLEEP;
+    result->src[0] = a;
+
+    return result;
+}
+
 // ggml_cross_entropy_loss
 
 struct ggml_tensor * ggml_cross_entropy_loss(
@@ -7119,6 +7165,11 @@ static void ggml_compute_backward(
                 case GGML_UNARY_OP_SILU: {
                     if (src0_needs_grads) {
                         ggml_add_or_set(ctx, cgraph, isrc0, ggml_silu_back(ctx, grad, src0));
+                    }
+                } break;
+                case GGML_UNARY_OP_SIGMOID: {
+                    if (src0_needs_grads) {
+                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_sigmoid_back(ctx, grad, src0));
                     }
                 } break;
                 case GGML_UNARY_OP_EXP: {

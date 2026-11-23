@@ -6,7 +6,7 @@
  * scanner picks it up in both sources.
  */
 export const MENTION_BADGE_CLASSNAME =
-	'inline-flex w-fit shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-border/50 bg-foreground/5 px-1.5 py-0.5 text-xs font-mono text-foreground hover:bg-foreground/10 dark:bg-foreground/10 dark:text-secondary-foreground';
+	'inline-flex w-fit shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-border/50 bg-foreground/5 px-1.5 py-0.5 text-caption font-mono text-foreground hover:bg-foreground/10 dark:bg-foreground/10 dark:text-secondary-foreground';
 
 export const MENTION_BADGE_ICON_CLASSNAME = 'size-icon-xs shrink-0';
 

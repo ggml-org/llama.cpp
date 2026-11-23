@@ -49,7 +49,7 @@
 				<div class="flex flex-wrap items-center gap-1.5">
 					{#if transportType}
 						{@const TransportIcon = MCP_TRANSPORT_ICONS[transportType]}
-						<Badge class="h-5 gap-1 px-1.5 text-[10px]" variant="outline">
+						<Badge class="h-5 gap-1 px-1.5 text-caption-sm" variant="outline">
 							{#if TransportIcon}
 								<TransportIcon class="size-icon-xs" />
 							{/if}

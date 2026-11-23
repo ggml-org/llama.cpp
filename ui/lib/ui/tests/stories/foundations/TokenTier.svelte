@@ -11,35 +11,35 @@
 </script>
 
 <div class="w-[min(72rem,calc(100vw-2rem))] space-y-8 p-4">
-	<p class="max-w-2xl text-body-sm text-fg-muted">{intro}</p>
+	<p class="max-w-2xl text-body-sm text-muted-foreground">{intro}</p>
 
 	{#each groups as group (group.title)}
 		<section>
-			<h2 class="mb-3 text-label text-fg-muted first-letter:uppercase">{group.title}</h2>
+			<h2 class="mb-3 text-label text-muted-foreground first-letter:uppercase">{group.title}</h2>
 
 			<div class="grid grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] gap-4">
 				{#each group.tokens as token (token.name)}
 					<figure class="m-0 flex flex-col gap-2">
 						<div
 							style:background-color="var(--{token.name})"
-							class="h-14 rounded-control border border-line-default"
+							class="h-14 rounded-md border border-border"
 						></div>
 
-						<figcaption class="flex flex-col gap-0.5 font-mono text-[11px] leading-4">
-							<span class="text-fg-default">--{token.name}</span>
+						<figcaption class="flex flex-col gap-0.5 font-mono text-caption leading-4">
+							<span class="text-foreground">--{token.name}</span>
 
 							{#if showReference}
-								<span class="truncate text-fg-muted" title={token.light}
+								<span class="truncate text-muted-foreground" title={token.light}
 									>light: {reference(token.light)}</span
 								>
 
 								{#if token.dark}
-									<span class="truncate text-fg-muted" title={token.dark}
+									<span class="truncate text-muted-foreground" title={token.dark}
 										>dark: {reference(token.dark)}</span
 									>
 								{/if}
 							{:else}
-								<span class="truncate text-fg-muted" title={token.light}>{token.light}</span>
+								<span class="truncate text-muted-foreground" title={token.light}>{token.light}</span>
 							{/if}
 						</figcaption>
 					</figure>

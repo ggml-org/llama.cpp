@@ -477,6 +477,21 @@ public:
         return tensor->op == GGML_OP_GET_ROWS && op->op == GGML_OP_RMS_NORM;
     }
 
+    // Raw float input [n_embd, n_tokens]: DFlash/DSpark/EAGLE3 features into fc, or raw embd batch / EAGLE3 g-embd into RMS_NORM
+    // MUL_MAT needs a weight leaf as src[0], so inp_mean (src[0] is computed) does not match
+    static bool is_inp_embd_leaf(const ggml_tensor * tensor, const ggml_tensor * op) {
+        if (tensor->op != GGML_OP_NONE || !(tensor->flags & GGML_TENSOR_FLAG_INPUT) || tensor->type != GGML_TYPE_F32) {
+            return false;
+        }
+        if (op->op == GGML_OP_MUL_MAT) {
+            return op->src[1] == tensor && op->src[0] != nullptr && op->src[0]->op == GGML_OP_NONE;
+        }
+        return op->op == GGML_OP_RMS_NORM && op->src[0] == tensor;
+    }
+
+    // true if any node of the current graph uses tensor as a raw embd input (see is_inp_embd_leaf)
+    bool has_inp_embd_leaf_use(const ggml_tensor * tensor) const;
+
     static bool is_activation_input(const ggml_tensor * tensor, const ggml_tensor * op) {
         if (tensor == nullptr || op == nullptr || tensor->type != GGML_TYPE_F32 || tensor->ne[2] != 1 ||
             tensor->ne[3] != 1 || (tensor->buffer != nullptr && tensor->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS)) {
@@ -578,11 +593,11 @@ public:
 
     bool is_direct_gdn_view(const ggml_tensor * node) const;
 
-    inline static bool is_cache(const ggml_tensor * tensor, const ggml_tensor * op) {
+    static bool is_cache(const ggml_tensor * tensor, const ggml_tensor * op) {
         return is_recurrent_cache(tensor) || is_kvcache(tensor, op);
     }
 
-    inline static bool is_kvcache(const ggml_tensor * tensor, const ggml_tensor * op) {
+    static bool is_kvcache(const ggml_tensor * tensor, const ggml_tensor * op) {
         if (tensor == nullptr || is_recurrent_cache(tensor)) {
             return false;
         }
@@ -590,27 +605,68 @@ public:
                (op != nullptr && op->op == GGML_OP_SET_ROWS && op->src[2] == tensor);
     }
 
-    inline static bool is_conv_state_writeback(const ggml_tensor * node) {
+    static bool is_conv_state_writeback(const ggml_tensor * node) {
         return node->op == GGML_OP_CPY && node->view_src != nullptr && is_recurrent_cache(node->view_src) &&
                node->src[0] != nullptr && node->src[0]->op == GGML_OP_VIEW && node->src[0]->src[0] != nullptr &&
                node->src[0]->src[0]->op == GGML_OP_CONCAT && node->src[1] != nullptr &&
                node->src[1]->op == GGML_OP_VIEW && node->src[1]->view_src == node->view_src;
     }
 
+    // The final-state writeback of SSM_SCAN (K == 1): the state tail of the packed [y | state]
+    // output copied into a slot block of the recurrent cache.
+    static bool is_ssm_state_writeback(const ggml_tensor * node) {
+        if (!(node != nullptr && node->op == GGML_OP_CPY && node->view_src != nullptr && node->src[0] != nullptr &&
+              node->src[0]->op == GGML_OP_VIEW && node->src[0]->src[0] != nullptr &&
+              node->src[0]->src[0]->op == GGML_OP_SSM_SCAN && node->src[0]->src[0]->op_params[0] == 1 &&
+              node->src[1] != nullptr && node->src[1]->op == GGML_OP_VIEW &&
+              node->src[1]->view_src == node->view_src)) {
+            return false;
+        }
+        const auto * scan = node->src[0]->src[0];
+        const auto * src = node->src[0];
+        const auto * dst = node->src[1];
+        if (node->type != GGML_TYPE_F32 || src->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
+            src->ne[2] != 1 || src->ne[3] != 1) {
+            return false;
+        }
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            if (src->ne[i] != dst->ne[i]) {
+                return false;
+            }
+        }
+        return dst->nb[1] > 0 && dst->view_offs % dst->nb[1] == 0 &&
+               src->view_offs == (size_t) ggml_nelements(scan->src[1]) * ggml_type_size(scan->type);
+    }
+
     // build_conv_state_store writes overlapping [history, window, channel, seq] windows into newest-first rollback planes.
     // Match this layout separately from general SET_ROWS.
     static bool is_conv_state_snapshot_writeback(const ggml_tensor * node);
 
+    // SET_ROWS into a column range of each row of a plain 2-D buffer, e.g. build_layer_inp_dev(): every enabled layer
+    // input goes to view_2d(layer_inp_dev, n_embd, n_batch, nb1, col * n_embd * elem) at the batch rows of the ubatch.
+    // The buffer sits in a regular device buffer, so is_kvcache() matches it: check this first
+    static bool is_column_set_rows(const ggml_tensor * node) {
+        if (node == nullptr || node->op != GGML_OP_SET_ROWS || node->src[2] == nullptr ||
+            node->src[2]->op != GGML_OP_VIEW) {
+            return false;
+        }
+        const ggml_tensor * dst = node->src[2];
+        const ggml_tensor * buf = dst->view_src;
+        return buf != nullptr && buf->op == GGML_OP_NONE && !is_recurrent_cache(buf) && buf->ne[2] == 1 &&
+               buf->ne[3] == 1 && dst->ne[2] == 1 && dst->ne[3] == 1 && dst->ne[0] < buf->ne[0] &&
+               dst->nb[0] == buf->nb[0] && dst->nb[1] == buf->nb[1] && dst->ne[1] == buf->ne[1];
+    }
+
     // SET_ROWS into a KV cache, directly or through the [1, n] reshape of the transposed V cache with `-fa off`.
     // Other SET_ROWS write rows of a compute tensor, e.g. the MoE expert-group mask
-    inline static bool is_kvcache_write(const ggml_tensor * node) {
+    static bool is_kvcache_write(const ggml_tensor * node) {
         const ggml_tensor * dst = node->src[2];
         return dst != nullptr && is_kvcache(dst->view_src != nullptr ? dst->view_src : dst, nullptr);
     }
 
     // GET_ROWS batched over ggml dims 2 and 3, e.g. the MoE expert-group scores
     // ggml_get_rows(ggml_reshape_4d(groups, 1, n_exp_per_group, n_groups, n_tokens), top_groups)
-    inline static bool is_get_rows_batched_4d(const ggml_tensor * node) {
+    static bool is_get_rows_batched_4d(const ggml_tensor * node) {
         return node->op == GGML_OP_GET_ROWS && !ggml_is_quantized(node->src[0]->type) &&
                node->src[1]->ne[1] == node->src[0]->ne[2] && node->src[1]->ne[2] == node->src[0]->ne[3] &&
                node->src[1]->ne[3] == 1;

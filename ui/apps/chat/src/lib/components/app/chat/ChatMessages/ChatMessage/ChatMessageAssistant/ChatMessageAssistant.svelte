@@ -199,7 +199,7 @@
 
 	{#if displayedModel}
 		<div class="info my-6 grid gap-4 tabular-nums">
-			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
+			<div class="inline-flex flex-wrap items-start gap-2 text-caption text-muted-foreground">
 				<ChatMessageAssistantModel
 					{displayedModel}
 					isLoading={chatStore.isLoading}

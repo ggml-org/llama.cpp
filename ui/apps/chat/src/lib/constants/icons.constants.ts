@@ -4,25 +4,24 @@
  */
 
 import { MODALITY_FLAG_KEYS, MODALITY_ORDER } from '@ggml-org/llama-ui/models';
-import {
-	CircleAlert as LoadFailedIcon,
-	Compass as DiscoverIcon,
-	Eject as UnloadIcon,
-	File as FileIcon,
-	FileText as FileTextIcon,
-	FolderOpen as CwdCommandIcon,
-	FoldVertical as CompactCommandIcon,
-	Image as ImageIcon,
-	Loader2 as LoadingIcon,
-	Mic as AudioIcon,
-	Package as ModelIcon,
-	Pause as PauseDownloadIcon,
-	Play as ResumeDownloadIcon,
-	Power as LoadIcon,
-	RotateCw as RetryIcon,
-	Sparkles as PromptCommandIcon,
-	Video as VideoIcon
-} from '@lucide/svelte';
+import LoadFailedIcon from '@lucide/svelte/icons/circle-alert';
+import DiscoverIcon from '@lucide/svelte/icons/compass';
+import UnloadIcon from '@lucide/svelte/icons/eject';
+import FileIcon from '@lucide/svelte/icons/file';
+// not a microphone: that one is for recording and dictation
+import AudioIcon from '@lucide/svelte/icons/file-headphone';
+import FileTextIcon from '@lucide/svelte/icons/file-text';
+import CompactCommandIcon from '@lucide/svelte/icons/fold-vertical';
+import CwdCommandIcon from '@lucide/svelte/icons/folder-open';
+import ImageIcon from '@lucide/svelte/icons/image';
+import LoadingIcon from '@lucide/svelte/icons/loader-2';
+import ModelIcon from '@lucide/svelte/icons/package';
+import PauseDownloadIcon from '@lucide/svelte/icons/pause';
+import ResumeDownloadIcon from '@lucide/svelte/icons/play';
+import LoadIcon from '@lucide/svelte/icons/power';
+import RetryIcon from '@lucide/svelte/icons/rotate-cw';
+import PromptCommandIcon from '@lucide/svelte/icons/sparkles';
+import VideoIcon from '@lucide/svelte/icons/video';
 import { ChatFormCommandAction, FileTypeCategory, ModelCapability } from '#lib/enums/index.ts';
 import type { ModelCapabilities } from '#lib/types/models.js';
 import type { Component } from 'svelte';

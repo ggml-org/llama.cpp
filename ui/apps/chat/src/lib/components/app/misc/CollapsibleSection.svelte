@@ -67,7 +67,7 @@
 		<!-- A menu item (for keyboard nav) wrapping the trigger via `child`;
 		     closeOnSelect keeps the menu open while the section toggles. -->
 		<DropdownMenu.Item
-			class="group w-full min-w-0 cursor-pointer items-center gap-2 rounded-md text-left text-sm"
+			class="group w-full min-w-0 cursor-pointer items-center gap-2 rounded-md text-left text-body-sm"
 			closeOnSelect={false}
 		>
 			{#snippet child({ props })}

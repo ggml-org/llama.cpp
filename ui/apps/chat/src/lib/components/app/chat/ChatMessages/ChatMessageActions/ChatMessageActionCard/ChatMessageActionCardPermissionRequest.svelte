@@ -44,7 +44,7 @@
 				</DropdownMenu.Trigger>
 			</ButtonGroup.Root>
 
-			<DropdownMenu.Content align="start" class="min-w-[8rem]">
+			<DropdownMenu.Content align="start" class="min-w-32">
 				<DropdownMenu.Item onclick={() => onDecision(ToolPermissionDecision.ALWAYS)}>
 					Always allow <pre>{toolName}</pre>
 					tool

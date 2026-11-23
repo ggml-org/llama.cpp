@@ -69,9 +69,21 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     std::string trigger_marker = !autoparser.tools.format.section_start.empty() ? autoparser.tools.format.section_start :
                                                                                   autoparser.tools.format.per_call_start;
 
+    // bare JSON calls without a start marker (e.g. Llama 3.x): trigger the lazy grammar on the call's opening instead
+    std::string trigger_pattern;
+    {
+        const auto & fmt = autoparser.tools.format;
+        bool top_level_name = (fmt.function_field.empty() || fmt.function_field == "function") &&
+                              fmt.name_field.find('.') == std::string::npos;
+        if (trigger_marker.empty() && fmt.mode == tool_format::JSON_NATIVE && !fmt.fun_name_is_key &&
+            !fmt.tools_array_wrapped && top_level_name) {
+            trigger_pattern = "\\{\\s*\"" + regex_escape(fmt.name_field) + "\"\\s*:";
+        }
+    }
+
     bool has_response_format = !inputs.json_schema.empty() && inputs.json_schema.is_object();
     bool include_grammar = has_response_format || (has_tools &&
-            ((inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO && !trigger_marker.empty()) ||
+            ((inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO && (!trigger_marker.empty() || !trigger_pattern.empty())) ||
               inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
 
     if (include_grammar) {
@@ -82,9 +94,11 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
 
         // Set grammar triggers based on tool section markers (fall back to per-call markers)
         if (data.grammar_lazy) {
-            data.grammar_triggers = {
-                { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, trigger_marker }
-            };
+            if (!trigger_marker.empty()) {
+                data.grammar_triggers = { { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, trigger_marker } };
+            } else {
+                data.grammar_triggers = { { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, trigger_pattern } };
+            }
             if (autoparser.tools.format.openai_wrapper_trigger) {
                 // model emits the OpenAI function wrapper, trigger on it
                 data.grammar_triggers.push_back({ COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "{\"type\": \"function\"," });
@@ -359,7 +373,9 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
     auto &       p           = ctx.p;
     const auto & inputs      = ctx.inputs;
 
-    auto until_suffix = p.rule("until-suffix", p.until(arguments.value_suffix));
+    // A raw string value needs a suffix to end on, without one it is parsed as JSON
+    bool raw_strings  = !arguments.value_suffix.empty();
+    auto until_suffix = raw_strings ? p.rule("until-suffix", p.until(arguments.value_suffix)) : p.eps();
 
     common_peg_parser tool_choice = p.choice();
 
@@ -375,9 +391,9 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                 p.tool_arg(p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param.name)) +
                                            arguments.name_suffix) +
                            arguments.value_prefix +
-                           (param.schema->may_be_string() ?
-                                p.ac(p.tool_arg_string_value(until_suffix) +
-                                    p.tool_arg_close(p.literal(arguments.value_suffix)), arguments.value_suffix) :
+                           (raw_strings && param.schema->may_be_string() ?
+                                p.through(p.tool_arg_string_value(until_suffix),
+                                    p.tool_arg_close(p.literal(arguments.value_suffix))) :
                                 (p.tool_arg_json_value(p.schema(
                                     p.json(), "tool-" + std::to_string(tool_index) + "-arg-" + std::to_string(param_index) + "-schema", doc, *param.schema)) +
                                     p.tool_arg_close(p.literal(arguments.value_suffix)))));

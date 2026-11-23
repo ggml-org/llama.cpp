@@ -60,14 +60,14 @@
 	{#snippet children(meta, _ctx)}
 		{#if meta?.errorMessage}
 			<div
-				class="flex items-start gap-2 rounded bg-surface-danger p-2 text-xs text-fg-danger italic"
+				class="flex items-start gap-2 rounded bg-surface-danger p-2 text-caption text-fg-danger italic"
 			>
 				<XCircle class="mt-0.5 size-icon-xs shrink-0" />
 
 				<span>{meta.errorMessage}</span>
 			</div>
 		{:else if infoMeta.os || infoMeta.cwd}
-			<table class="w-full table-fixed border-collapse text-sm">
+			<table class="w-full table-fixed border-collapse text-body-sm">
 				<colgroup>
 					<col class="w-12" />
 
@@ -78,7 +78,7 @@
 					{#if infoMeta.os}
 						<tr>
 							<th
-								class="py-1 pr-3 text-left align-baseline text-[11px] font-medium tracking-wide text-muted-foreground/60 uppercase"
+								class="py-1 pr-3 text-left align-baseline text-label-sm tracking-wide text-muted-foreground/60 uppercase"
 								scope="row"
 							>
 								os
@@ -95,7 +95,7 @@
 					{#if infoMeta.cwd}
 						<tr>
 							<th
-								class="py-1 pr-3 text-left align-baseline text-[11px] font-medium tracking-wide text-muted-foreground/60 uppercase"
+								class="py-1 pr-3 text-left align-baseline text-label-sm tracking-wide text-muted-foreground/60 uppercase"
 								scope="row"
 							>
 								cwd
@@ -114,11 +114,11 @@
 				</tbody>
 			</table>
 		{:else if section.toolResult}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
+			<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">
 				{section.toolResult}
 			</div>
 		{:else}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
+			<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">
 				Waiting for runtime info...
 			</div>
 		{/if}

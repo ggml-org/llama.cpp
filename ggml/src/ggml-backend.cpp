@@ -761,7 +761,17 @@ void ggml_backend_tensor_memset(struct ggml_tensor * tensor, uint8_t value, size
     GGML_ASSERT(buf != NULL && "tensor buffer not set");
     GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
     GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
-    GGML_ASSERT(buf->iface.memset_tensor != NULL && "memset not implemented by backend buffer");
+
+    if (buf->iface.memset_tensor == NULL) {
+        GGML_ASSERT(buf->iface.set_tensor != NULL && "memset not implemented by backend buffer");
+
+        // fallback: write the value in chunks with set_tensor
+        const std::vector<uint8_t> chunk(std::min(size, (size_t) 1024*1024), value);
+        for (size_t chunk_offset = 0; chunk_offset < size; chunk_offset += chunk.size()) {
+            ggml_backend_tensor_set(tensor, chunk.data(), offset + chunk_offset, std::min(size - chunk_offset, chunk.size()));
+        }
+        return;
+    }
 
     buf->iface.memset_tensor(buf, tensor, value, offset, size);
 }
@@ -2584,6 +2594,7 @@ bool ggml_op_alloc_size_may_expand(enum ggml_op op) {
         case GGML_OP_ARGSORT:
         case GGML_OP_TOP_K:
         case GGML_OP_ARGMAX:
+        case GGML_OP_CONV_2D:
             return true;
         default:
             return false;

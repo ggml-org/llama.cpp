@@ -27,11 +27,15 @@
 
 	let { fields, localConfig, onConfigChange, onThemeChange }: Props = $props();
 
-	// discover needs the hub metadata reads, so its checkbox is read-only while discover is on
-	let hubLocked = $derived(Boolean(localConfig[SETTINGS_KEYS.ENABLE_DISCOVER_MODELS]));
+	// discover needs the hub metadata reads, and opens from the Models page, so both checkboxes
+	// are read-only while discover is on
+	let discoverOn = $derived(Boolean(localConfig[SETTINGS_KEYS.ENABLE_DISCOVER_MODELS]));
 
 	function isLockedField(key: string): boolean {
-		return hubLocked && key === SETTINGS_KEYS.USE_HUGGING_FACE_HUB;
+		return (
+			discoverOn &&
+			(key === SETTINGS_KEYS.USE_HUGGING_FACE_HUB || key === SETTINGS_KEYS.SHOW_MODELS_MANAGER)
+		);
 	}
 
 	let currentModelParams = $derived.by(() => {
@@ -78,7 +82,7 @@
 				})()}
 
 				<div class="flex items-center gap-2">
-					<Label class="flex items-center gap-1.5 text-sm font-medium" for={field.key}>
+					<Label class="flex items-center gap-1.5 text-label" for={field.key}>
 						{field.label}
 
 						{#if field.isExperimental}
@@ -128,13 +132,13 @@
 				</div>
 
 				{#if field.help || SETTING_CONFIG_INFO[field.key]}
-					<p class="mt-1 text-xs text-muted-foreground">
+					<p class="mt-1 text-caption text-muted-foreground">
 						{@html field.help || SETTING_CONFIG_INFO[field.key]}
 					</p>
 				{/if}
 			{:else if field.type === SettingsFieldType.TEXTAREA}
 				{#if field.label}
-					<Label class="block flex items-center gap-1.5 text-sm font-medium" for={field.key}>
+					<Label class="block flex items-center gap-1.5 text-label" for={field.key}>
 						{field.label}
 
 						{#if field.isExperimental}
@@ -144,7 +148,7 @@
 				{/if}
 
 				<Textarea
-					class="min-h-[10rem] w-full md:max-w-3xl"
+					class="min-h-40 w-full md:max-w-3xl"
 					id={field.key}
 					oninput={(e) => onConfigChange(field.key, e.currentTarget.value)}
 					placeholder=""
@@ -152,7 +156,7 @@
 				/>
 
 				{#if field.help || SETTING_CONFIG_INFO[field.key]}
-					<p class="mt-1 text-xs text-muted-foreground">
+					<p class="mt-1 text-caption text-muted-foreground">
 						{field.help || SETTING_CONFIG_INFO[field.key]}
 					</p>
 				{/if}
@@ -166,7 +170,7 @@
 								onConfigChange(SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE, Boolean(checked))}
 						/>
 
-						<Label class="cursor-pointer text-sm font-normal" for="showSystemMessage">
+						<Label class="cursor-pointer text-body-sm font-normal" for="showSystemMessage">
 							Show system message in conversations
 						</Label>
 					</div>
@@ -187,7 +191,7 @@
 				})()}
 
 				<div class="flex items-center gap-2">
-					<Label class="flex items-center gap-1.5 text-sm font-medium" for={field.key}>
+					<Label class="flex items-center gap-1.5 text-label" for={field.key}>
 						{field.label}
 
 						{#if field.isExperimental}
@@ -257,7 +261,7 @@
 				</Select.Root>
 
 				{#if field.help || SETTING_CONFIG_INFO[field.key]}
-					<p class="mt-1 text-xs text-muted-foreground">
+					<p class="mt-1 text-caption text-muted-foreground">
 						{field.help || SETTING_CONFIG_INFO[field.key]}
 					</p>
 				{/if}
@@ -267,7 +271,7 @@
 					radioOptions.find((o: { key: string }) => Boolean(localConfig[o.key]))?.value ??
 					radioOptions[0].value}
 
-				<Label class="flex items-center gap-1.5 text-sm font-medium mb-4">
+				<Label class="flex items-center gap-1.5 text-label mb-4">
 					{field.label}
 
 					{#if field.isExperimental}
@@ -290,7 +294,7 @@
 							<RadioGroup.Item id={itemId} value={opt.value} />
 
 							<Label
-								class="flex cursor-pointer items-center gap-1.5 text-sm font-normal"
+								class="flex cursor-pointer items-center gap-1.5 text-body-sm font-normal"
 								for={itemId}
 							>
 								{opt.label}
@@ -304,7 +308,7 @@
 				</RadioGroup.Root>
 
 				{#if field.help || SETTING_CONFIG_INFO[field.key]}
-					<p class="text-xs text-muted-foreground">
+					<p class="text-caption text-muted-foreground">
 						{field.help || SETTING_CONFIG_INFO[field.key]}
 					</p>
 				{/if}
@@ -320,7 +324,7 @@
 
 					<div class="space-y-1">
 						<label
-							class="flex items-center gap-1.5 pt-1 pb-0.5 text-sm leading-none font-medium {isLockedField(
+							class="flex items-center gap-1.5 pt-1 pb-0.5 text-label leading-none {isLockedField(
 								field.key
 							)
 								? 'cursor-default opacity-80'
@@ -335,7 +339,7 @@
 						</label>
 
 						{#if field.help || SETTING_CONFIG_INFO[field.key]}
-							<p class="text-xs text-muted-foreground">
+							<p class="text-caption text-muted-foreground">
 								{field.help || SETTING_CONFIG_INFO[field.key]}
 							</p>
 						{/if}

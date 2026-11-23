@@ -3,7 +3,7 @@
 	import type { VariantProps } from 'tailwind-variants';
 
 	export const toggleVariants = tv({
-		base: "focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive gap-2 rounded-control text-label font-medium outline-none transition-all focus-visible:ring-[3px] inline-flex items-center justify-center whitespace-nowrap disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 [&_svg:not([class*='size-'])]:size-icon-md [&_svg]:pointer-events-none [&_svg]:shrink-0 group/toggle hover:text-(--toggle-text) hover:bg-(--toggle-background-hover) data-[state=on]:bg-(--toggle-background-on) data-[state=on]:hover:bg-(--toggle-background-on) data-[state=on]:text-(--toggle-text)",
+		base: "focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive gap-2 rounded-md text-label font-medium outline-none transition-all focus-visible:ring-3 inline-flex items-center justify-center whitespace-nowrap disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 [&_svg:not([class*='size-'])]:size-icon-md [&_svg]:pointer-events-none [&_svg]:shrink-0 group/toggle hover:text-(--fg-default) hover:bg-(--action-ghost-hover) data-[state=on]:bg-(--surface-selected) data-[state=on]:hover:bg-(--surface-selected) data-[state=on]:text-(--fg-default)",
 		defaultVariants: {
 			size: 'default',
 			variant: 'default'
@@ -13,15 +13,14 @@
 			size: {
 				default: 'h-control-md px-4 has-[>svg]:px-3',
 				icon: 'size-(--height-control-md)',
-				'icon-lg': 'size-(--height-control-lg) rounded-panel',
+				'icon-lg': 'size-(--height-control-lg) rounded-lg',
 				'icon-sm': 'size-(--height-control-sm)',
-				lg: 'h-control-lg rounded-panel px-6 has-[>svg]:px-4',
+				lg: 'h-control-lg rounded-lg px-6 has-[>svg]:px-4',
 				sm: 'h-control-sm gap-1.5 px-3 has-[>svg]:px-2.5'
 			},
 			variant: {
 				default: 'bg-transparent backdrop-blur-sm',
-				outline:
-					'matte-key border border-(--button-outline-border) bg-(--button-outline-background)'
+				outline: 'matte-key border border-(--line-control) bg-(--field-background)'
 			}
 		}
 	});

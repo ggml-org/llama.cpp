@@ -10,7 +10,7 @@
 	let { details }: Props = $props();
 </script>
 
-<div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
+<div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-body-sm text-muted-foreground">
 	{#if typeof details.downloads === 'number'}
 		<span class="inline-flex items-center gap-1.5">
 			<Download class="size-icon-sm" />

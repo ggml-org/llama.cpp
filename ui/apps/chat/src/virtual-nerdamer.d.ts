@@ -1,4 +1,4 @@
 declare module 'virtual:nerdamer' {
-	const code: string;
-	export default code;
+	const loadNerdamer: () => Promise<string>;
+	export default loadNerdamer;
 }

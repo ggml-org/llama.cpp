@@ -28,7 +28,7 @@
      the way the load control does in the other sections -->
 <div class={['flex items-center justify-center', className]}>
 	<span
-		class="text-xs text-muted-foreground tabular-nums group-hover:hidden [@media(pointer:coarse)]:hidden"
+		class="text-caption text-muted-foreground tabular-nums group-hover:hidden [@media(pointer:coarse)]:hidden"
 	>
 		{percent !== null ? `${percent}%` : isPaused ? 'Paused' : ''}
 	</span>

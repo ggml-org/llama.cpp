@@ -478,8 +478,10 @@ enum mtmd_gen_audio_type {
     MTMD_GEN_AUDIO_TYPE_YUE2,
     MTMD_GEN_AUDIO_TYPE_MINIMAX_MUSIC3,
     MTMD_GEN_AUDIO_TYPE_FISH_S2,
+    MTMD_GEN_AUDIO_TYPE_MOSHI,
     MTMD_GEN_AUDIO_TYPE_KOKORO,
     MTMD_GEN_AUDIO_TYPE_TINY_VOCA,
+    MTMD_GEN_AUDIO_TYPE_VOXCPM2,
 };
 
 struct mtmd_gen_audio_info {
@@ -533,6 +535,7 @@ struct mtmd_gen_inp {
     // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
     // pass either codes (discrete) or feats (continuous), depending on the pipeline
     // lfm3a GEN_CODE also takes codes: the codes revealed so far, -1 for a masked codebook
+    // moshi GEN_CODE: code0 is the sampled text token; with codes (all of the frame), only their backbone embedding is built
     // zonos3 GEN_WAV: -1 for a residual code not known yet, the frame is decoded without it
     // kokoro GEN_WAV takes both: codes are the phoneme tokens, feats is the voice row (256 values) then the backbone state of each token
     int32_t * codes;
@@ -541,17 +544,20 @@ struct mtmd_gen_inp {
     size_t        n_feats;
     float speed; // kokoro: speaking speed, > 0 (default: 1.0)
 
+    // voxcpm2 GEN_CODE: embd is the hidden state of a backbone row and feats its input row (n_text_embd elements, null for a text row)
+    //                   code0 >= 0 makes the next frame; code0 < 0 for prompt rows, the residual LM only reads them,
+    //                   n_codes of them (1 if 0) in embd and feats, all text rows or all audio rows
     // yue2 GEN_CODE: n_codes is the frame count, codes is not read (the backbone state holds them)
     // backbone_state: llama_state_seq_get_data() of the backbone_n_past positions (prompt, codes, end token)
     const uint8_t * backbone_state;
     size_t          backbone_state_size;
     int32_t         backbone_n_past;
 
-    // flow matching: steps of the ODE solver, <= 0 = model default (yue2 GEN_CODE: 32, minimax_music3 GEN_WAV: 30)
+    // flow matching: steps of the ODE solver, <= 0 = model default (yue2 GEN_CODE: 32, minimax_music3 GEN_WAV: 30, voxcpm2 GEN_CODE: 10)
     int32_t n_steps;
 
     // minimax_music3 GEN_CODE: feats holds the backbone hidden rows, cond then uncond with guidance
-    // classifier-free guidance scale of the residual codes, <= 0 = model default (1.5)
+    // classifier-free guidance scale, <= 0 = model default (minimax_music3 residual codes: 1.5, voxcpm2 GEN_CODE: 2.0)
     float cfg_scale;
 };
 
@@ -588,6 +594,10 @@ MTMD_API void             mtmd_gen_state_reset(mtmd_gen_state * state);
 // copy the gen-side reference data of the last mtmd_encode_chunk() call into the state (speaker clip or predefined voice)
 // returns non-zero if the last encode produced no such data
 MTMD_API int32_t          mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state);
+
+// codes of the reference held by the state (frame-major, e.g. drama3: 10 per frame), NULL if it has none
+// valid until the next mtmd_gen_state_set_ref() / mtmd_gen_state_free() on this state
+MTMD_API const int32_t *  mtmd_gen_state_get_ref_codes(const mtmd_gen_state * state, size_t * n_codes);
 
 // defaults tuned for the loaded pipeline, callers override only what they care about
 MTMD_API struct mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx);

@@ -226,10 +226,7 @@ llama_model_cohere2moe::graph::graph(const llm_graph_params & params) : llm_grap
                     hparams.expert_weights_scale,
                     (llama_expert_gating_func_type) hparams.expert_gating_func,
                     il,
-                    nullptr, layer.ffn_gate_up_exps,
-                    layer.ffn_up_exps_s,
-                    layer.ffn_gate_exps_s,
-                    layer.ffn_down_exps_s);
+                    nullptr, layer.ffn_gate_up_exps);
             cb(cur, "ffn_moe_out", il);
 
             if (layer.ffn_up_shexp) {
@@ -371,10 +368,7 @@ llama_model_cohere2moe::graph_mtp::graph_mtp(const llm_graph_params & params) : 
             hparams.expert_weights_scale,
             (llama_expert_gating_func_type) hparams.expert_gating_func,
             il,
-            nullptr, layer.ffn_gate_up_exps,
-            layer.ffn_up_exps_s,
-            layer.ffn_gate_exps_s,
-            layer.ffn_down_exps_s);
+            nullptr, layer.ffn_gate_up_exps);
     cb(cur, "mtp_ffn_moe_out", il);
 
     if (layer.ffn_up_shexp) {

@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <string>
+#include <vector>
 
 // reference clip -> codec frames -> backbone input rows, see DAC.encode() and DownsampleResidualVectorQuantize.encode()
 // activations are [C, T]; a conv is a sum of matmuls over tap-shifted views: exact in F32, no im2col buffer
@@ -117,17 +118,35 @@ ggml_cgraph * mtmd_graph_fish_s2_spkenc::build() {
         return ggml_view_2d(ctx0, t, t->ne[0], t->ne[1], t->nb[1], (size_t) g * t->nb[2]);
     };
 
-    // backbone row: (E_lm[semantic] + sum of E_cb[g][code g]) / sqrt(n_cb + 1), same as fish_s2_gen
     const int64_t n_cb = model.gen_code_embd_w->ne[2];
-    ggml_tensor * idx = vq(c2w.quant_first_in_w, c2w.quant_first_in_b, c2w.quant_first_cb_norm_w, c2w.quant_first_cb_w);
-    ggml_tensor * out = ggml_add(ctx0, ggml_get_rows(ctx0, model.gen_code_out_embd_w, idx),
-                                       ggml_get_rows(ctx0, page(model.gen_code_embd_w, 0), idx));
+    std::vector<ggml_tensor *> idx(n_cb);
+    idx[0] = vq(c2w.quant_first_in_w, c2w.quant_first_in_b, c2w.quant_first_cb_norm_w, c2w.quant_first_cb_w);
     for (int64_t g = 1; g < n_cb; g++) {
         ggml_tensor * in_b = ggml_view_1d(ctx0, c2w.quant_rest_in_b, c2w.quant_rest_in_b->ne[0], (size_t) (g - 1) * c2w.quant_rest_in_b->nb[1]);
-        idx = vq(page(c2w.quant_rest_in_w, g - 1), in_b, page(c2w.quant_rest_cb_norm_w, g - 1), page(c2w.quant_rest_cb_w, g - 1));
-        out = ggml_add(ctx0, out, ggml_get_rows(ctx0, page(model.gen_code_embd_w, g), idx));
+        idx[g] = vq(page(c2w.quant_rest_in_w, g - 1), in_b, page(c2w.quant_rest_cb_norm_w, g - 1), page(c2w.quant_rest_cb_w, g - 1));
     }
-    out = ggml_scale(ctx0, out, 1.0f / sqrtf((float) (n_cb + 1)));
+    // codes of the clip, read back as the gen-side reference
+    for (int64_t g = 0; g < n_cb; g++) {
+        ggml_set_name(idx[g], ("out_ref_code_" + std::to_string(g)).c_str());
+        ggml_set_output(idx[g]);
+        ggml_build_forward_expand(gf, idx[g]);
+    }
+
+    ggml_tensor * out = nullptr;
+    if (hparams.spkenc_drama3_rows) {
+        // drama3 backbone row: (E_lm[semantic] + E_cb[1][code 1]) / sqrt(2), see mtmd_graph_drama3_gen::build_tower()
+        out = ggml_add(ctx0, ggml_get_rows(ctx0, model.gen_code_out_embd_w, idx[0]),
+                             ggml_get_rows(ctx0, page(model.gen_code_embd_w, 1), idx[1]));
+        out = ggml_scale(ctx0, out, 1.0f / sqrtf(2.0f));
+    } else {
+        // backbone row: (E_lm[semantic] + sum of E_cb[g][code g]) / sqrt(n_cb + 1), same as fish_s2_gen
+        out = ggml_add(ctx0, ggml_get_rows(ctx0, model.gen_code_out_embd_w, idx[0]),
+                             ggml_get_rows(ctx0, page(model.gen_code_embd_w, 0), idx[0]));
+        for (int64_t g = 1; g < n_cb; g++) {
+            out = ggml_add(ctx0, out, ggml_get_rows(ctx0, page(model.gen_code_embd_w, g), idx[g]));
+        }
+        out = ggml_scale(ctx0, out, 1.0f / sqrtf((float) (n_cb + 1)));
+    }
     cb(out, "spk_rows", -1);
     ggml_build_forward_expand(gf, out);
 

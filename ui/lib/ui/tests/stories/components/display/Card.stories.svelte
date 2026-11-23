@@ -20,7 +20,7 @@
 			<Card.Description>131k context, vision and tool use</Card.Description>
 		</Card.Header>
 
-		<Card.Content class="text-sm text-muted-foreground">
+		<Card.Content class="text-body-sm text-muted-foreground">
 			Loaded on the server and ready to answer.
 		</Card.Content>
 

@@ -20,13 +20,13 @@
 		{#if info.path === null}
 			<FolderX class="text-muted-foreground/60 size-icon-sm shrink-0" />
 
-			<span class="text-foreground/80 text-sm font-medium">Working directory cleared</span>
+			<span class="text-foreground/80 text-label">Working directory cleared</span>
 		{:else}
 			<Folder class="text-muted-foreground/60 h-3.5 w-3.5 shrink-0" />
 
-			<span class="text-foreground/80 text-sm font-medium">Set working directory to&nbsp;</span>
+			<span class="text-foreground/80 text-label">Set working directory to&nbsp;</span>
 
-			<span class="font-mono text-foreground/90 text-sm break-all" title={info.path}>
+			<span class="font-mono text-foreground/90 text-body-sm break-all" title={info.path}>
 				{info.display}
 			</span>
 		{/if}

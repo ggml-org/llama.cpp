@@ -30,7 +30,7 @@
 	/* phone sidebar width, which the page slides aside to reveal */
 	--sidebar-reveal: min(80dvw, 20rem);
 	/* the desktop sidebar's muted/60 over the page, made opaque so the slid page's corners can match it */
-	--sidebar-reveal-tint: color-mix(in oklab, var(--muted) 60%, var(--background));
+	--sidebar-reveal-tint: color-mix(in oklab, var(--surface-muted) 60%, var(--surface-page));
 	/* how far the phone sidebar is open, 0 to 1, stepped every frame by useSidebarReveal */
 	--sidebar-reveal-progress: 0;
 	/* the same on a log curve: the sidebar's contents hold on until the page nearly covers them */
@@ -39,7 +39,7 @@
 	--sidebar-reveal-bg: color-mix(
 		in oklab,
 		var(--sidebar-reveal-tint) calc(var(--sidebar-reveal-progress) * 100%),
-		var(--background)
+		var(--surface-page)
 	);
 	--layer-popover: 1000000;
 
@@ -63,7 +63,7 @@
 	/* the chat form's corners while its text and actions share one row */
 	--chat-form-single-row-radius: 1.25rem;
 	/* the card's translucent fill over the page, made opaque: the phone sheet, and the page and Safari's bars around it */
-	--chat-form-sheet-fill: color-mix(in oklab, var(--muted) 60%, var(--background));
+	--chat-form-sheet-fill: color-mix(in oklab, var(--surface-muted) 60%, var(--surface-page));
 	--max-message-height: max(24rem, min(80dvh, calc(100dvh - var(--chat-form-area-height) - 12rem)));
 }
 
@@ -91,7 +91,7 @@
 }
 
 .dark {
-	--chat-form-sheet-fill: color-mix(in oklab, var(--muted) 75%, var(--background));
+	--chat-form-sheet-fill: color-mix(in oklab, var(--surface-muted) 75%, var(--surface-page));
 }
 
 @layer base {
@@ -202,9 +202,9 @@
 	.chat-top-fade {
 		background: linear-gradient(
 			to bottom,
-			color-mix(in srgb, var(--background) 100%, transparent) 25%,
-			color-mix(in srgb, var(--background) 80%, transparent) 50%,
-			color-mix(in srgb, var(--background) 40%, transparent) 75%,
+			color-mix(in srgb, var(--surface-page) 100%, transparent) 25%,
+			color-mix(in srgb, var(--surface-page) 80%, transparent) 50%,
+			color-mix(in srgb, var(--surface-page) 40%, transparent) 75%,
 			transparent 100%
 		);
 	}
@@ -219,8 +219,8 @@
 		height: var(--page-top);
 		background: linear-gradient(
 			to bottom,
-			var(--background) calc(var(--corner-control-top) + 1.25rem),
-			color-mix(in srgb, var(--background) 55%, transparent)
+			var(--surface-page) calc(var(--corner-control-top) + 1.25rem),
+			color-mix(in srgb, var(--surface-page) 55%, transparent)
 				calc(var(--corner-control-top) + 2.5rem),
 			transparent 100%
 		);
@@ -234,14 +234,14 @@
 	   10px Safari ignores; what it covers sits under the fade's solid part anyway */
 	.status-bar-edge {
 		height: 0.75rem;
-		background-color: var(--background);
+		background-color: var(--surface-page);
 	}
 
 	/* The bottom edge's counterpart, which Safari takes for its bottom toolbar the same way:
 	   without it, it finds the chat form there and takes the form's colour */
 	.screen-bottom-edge {
 		height: 0.75rem;
-		background-color: var(--background);
+		background-color: var(--surface-page);
 	}
 
 	/* The same fade at the bottom of a phone's screen: solid behind the home indicator and
@@ -251,8 +251,9 @@
 		height: calc(var(--safe-area-bottom) + 3rem);
 		background: linear-gradient(
 			to top,
-			var(--background) var(--safe-area-bottom),
-			color-mix(in srgb, var(--background) 60%, transparent) calc(var(--safe-area-bottom) + 1.5rem),
+			var(--surface-page) var(--safe-area-bottom),
+			color-mix(in srgb, var(--surface-page) 60%, transparent)
+				calc(var(--safe-area-bottom) + 1.5rem),
 			transparent 100%
 		);
 	}
@@ -261,7 +262,7 @@
 	   panel's translucent muted tint, and a fade above it, like the one under
 	   the tab bar, so the rows scrolling beneath end softly */
 	.sidebar-show-more {
-		--sidebar-surface: color-mix(in oklab, var(--muted) 60%, var(--background));
+		--sidebar-surface: color-mix(in oklab, var(--surface-muted) 60%, var(--surface-page));
 		background: var(--sidebar-surface);
 
 		&::before {
@@ -284,14 +285,14 @@
 	   over the other sections while dragged */
 	.sidebar-drag-surface,
 	.sidebar-drag-overlay {
-		background: color-mix(in oklab, var(--muted) 60%, var(--background));
+		background: color-mix(in oklab, var(--surface-muted) 60%, var(--surface-page));
 	}
 
 	/* the copy of a chat row that follows the pointer, raised above the page */
 	.sidebar-drag-overlay {
 		box-shadow:
 			0 10px 30px -10px rgb(0 0 0 / 0.35),
-			0 0 0 1px color-mix(in srgb, var(--foreground) 12%, transparent);
+			0 0 0 1px color-mix(in srgb, var(--fg-default) 12%, transparent);
 	}
 
 	/* While something is dragged, what it passes over takes no hover: only the
@@ -329,12 +330,7 @@
 	}
 
 	.shimmer-text {
-		background: linear-gradient(
-			90deg,
-			var(--muted-foreground),
-			var(--foreground),
-			var(--muted-foreground)
-		);
+		background: linear-gradient(90deg, var(--fg-muted), var(--fg-default), var(--fg-muted));
 		background-size: 200% 100%;
 		background-clip: text;
 		-webkit-background-clip: text;
@@ -356,8 +352,22 @@
 	}
 }
 
-.mermaidTooltip {
-	display: none !important;
+/*
+ * Mermaid diagrams are drawn by Pele, which reads its colors from these. They sit on :root
+ * so the svg also inherits them inside the preview dialog's shadow root, and follow the theme.
+ */
+:root {
+	--pele-bg: var(--surface-code);
+	--pele-fg: var(--fg-code);
+	--pele-muted: var(--fg-muted);
+	--pele-line: var(--fg-muted);
+	--pele-surface: var(--surface-page);
+	--pele-surface-alt: var(--surface-muted);
+	--pele-border: var(--line-default);
+	--pele-accent: var(--action-primary);
+	--pele-critical: var(--fg-danger);
+	--pele-error: var(--fg-danger);
+	--pele-radius: calc(var(--radius) - 4px);
 }
 
 /*

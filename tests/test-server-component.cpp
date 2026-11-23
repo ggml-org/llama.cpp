@@ -699,7 +699,7 @@ static void test_decision_ocr_jev_validation(testing & t) {
     const auto reject_questions = [&](const char * name, const json & body, const std::string & expected) {
         std::string error;
         try {
-            ctx.parse_questions(body);
+            ctx.parse_questions(body, false);
         } catch (const std::invalid_argument & e) {
             error = e.what();
         }

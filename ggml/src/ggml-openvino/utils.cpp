@@ -657,6 +657,30 @@ ov::Tensor convert_ggml_input_to_ov(const std::shared_ptr<GgmlOvDecoder> & ggml_
         return *sliced;
     }
 
+    // KQ mask with fewer columns than the rounded KV length (see compute_llm_params): pad it with -inf
+    const auto & compute_params = ggml_decoder->get_compute_params();
+    if (!ggml_decoder->is_static() && name == compute_params.mask_name &&
+        compute_params.attention_size > ggml_tensor->ne[0] && ggml_is_contiguous(ggml_tensor)) {
+        const size_t rows = ggml_nrows(ggml_tensor);
+        const size_t cols = ggml_tensor->ne[0];
+        const size_t padded_cols = compute_params.attention_size;
+        ov::Shape shape = GgmlOvDecoder::get_shape(ggml_tensor);
+        shape.back() = padded_cols;
+        ov::Tensor padded(GgmlOvDecoder::get_ov_type(ggml_tensor), shape);
+        auto pad = [&](auto fill) {
+            using T = decltype(fill);
+            auto data = pad_input<T>((const T *) ggml_tensor->data, rows, cols, rows, padded_cols, fill);
+            std::memcpy(padded.data(), data.data(), padded.get_byte_size());
+        };
+        if (ggml_tensor->type == GGML_TYPE_F16) {
+            pad(GGML_FP32_TO_FP16(-INFINITY));
+        } else {
+            GGML_ASSERT(ggml_tensor->type == GGML_TYPE_F32);
+            pad(-INFINITY);
+        }
+        return padded;
+    }
+
     if (ggml_decoder->is_static() &&
         GgmlOvDecoder::is_kvcache(ggml_tensor, ggml_decoder->get_tensor_used_op(ggml_tensor))) {
         const auto type = ggml_decoder->get_ov_type(ggml_tensor);
@@ -2192,8 +2216,21 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
         old_m_params = ggml_decoder->get_model_params();
         cache_hit = old_m_params.can_reuse_statically(m_params);
         if (cache_hit && is_prefill && ggml_openvino_kv_slice_enabled()) {
-            cache_hit = entry->prefill_attention_size == c_params.attention_size &&
-                        entry->prefill_attention_size_swa == c_params.attention_size_swa;
+            // A larger compiled prefill also serves a smaller attended length: the extra KV rows are masked, as with
+            // the power-of-two rounding. Without this, a new prompt walks up the sizes again, and since only one
+            // prefill model is kept, every prompt longer than one chunk recompiles. Head-major KV is bound at the
+            // storage size, so it keeps the exact match.
+            // The output count is part of the static prefill shape (more than 1 only for llama-perplexity).
+            const bool reuse_larger = !ggml_openvino_npu_kv_head_major_enabled();
+            cache_hit = entry->prefill_output_len == c_params.output_len &&
+                        (reuse_larger ? entry->prefill_attention_size >= c_params.attention_size &&
+                                            entry->prefill_attention_size_swa >= c_params.attention_size_swa :
+                                        entry->prefill_attention_size == c_params.attention_size &&
+                                            entry->prefill_attention_size_swa == c_params.attention_size_swa);
+            if (cache_hit) {
+                c_params.attention_size = entry->prefill_attention_size;
+                c_params.attention_size_swa = entry->prefill_attention_size_swa;
+            }
             prefill_size_changed = !cache_hit;
         }
     }
@@ -2260,6 +2297,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             entry->ptr = ggml_decoder;
             entry->prefill_attention_size = c_params.attention_size;
             entry->prefill_attention_size_swa = c_params.attention_size_swa;
+            entry->prefill_output_len = c_params.output_len;
             entry->decode_attention_size = compiled.decode_attention_size;
             entry->shared_key = shared_key;
             entry->decode_window_requests.clear();
@@ -2274,6 +2312,10 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             r_ctx->ov_output_names_cache_prefill[key] = compiled.prefill_output_names;
             decoder_end_time = conversion_end_time = compile_end_time = ggml_time_us();
             GGML_LOG_DEBUG("ggml-openvino: shared compiled model HIT (static)\n");
+            if (prefill_size_changed) {
+                GGML_LOG_INFO("ggml-openvino: reuse the compiled prefill model of attention size %d\n",
+                              c_params.attention_size);
+            }
         } else {
             auto decode_c_params = c_params;
             if (ggml_openvino_kv_slice_enabled()) {
@@ -2600,6 +2642,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             entry->ptr = ggml_decoder;
             entry->prefill_attention_size = c_params.attention_size;
             entry->prefill_attention_size_swa = c_params.attention_size_swa;
+            entry->prefill_output_len = c_params.output_len;
             entry->decode_attention_size = decode_c_params.attention_size;
             entry->shared_key = shared_key;
             entry->decode_window_requests.clear();
@@ -3180,7 +3223,7 @@ enum ggml_status ov_graph_compute(ggml_cgraph * cgraph, ggml_backend_t backend) 
             GgmlOvDecoder::dump_cgraph(cgraph, filename);
         }
 
-        const auto is_static = ggml_openvino_is_npu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC");
+        const auto is_static = ggml_openvino_is_static();
 
         GGML_ASSERT(ctx->runtime_context != nullptr);
         std::shared_ptr<ov_runtime_context> r_ctx = std::static_pointer_cast<ov_runtime_context>(ctx->runtime_context);

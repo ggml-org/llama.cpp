@@ -32,7 +32,7 @@
 	<Collapsible.Root bind:open={isExpanded} class={className}>
 		<div class="space-y-2">
 			<Collapsible.Trigger
-				class="flex w-full items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+				class="flex w-full items-center gap-1 text-caption text-muted-foreground hover:text-foreground"
 			>
 				{#if isExpanded}
 					<ChevronDown class="size-icon-sm" />
@@ -50,7 +50,7 @@
 
 		<Collapsible.Content class="mt-2">
 			<div
-				class="max-h-64 space-y-0.5 overflow-y-auto rounded bg-muted/50 p-2 font-mono text-[10px]"
+				class="max-h-64 space-y-0.5 overflow-y-auto rounded bg-muted/50 p-2 font-mono text-caption-sm"
 			>
 				{#each logs as log (log.timestamp.getTime() + log.message)}
 					{@const IconComponent = getMcpLogLevelIcon(log.level)}
@@ -67,10 +67,12 @@
 
 					{#if log.details !== undefined}
 						<details class="ml-11">
-							<summary class="cursor-pointer text-[10px] text-muted-foreground"> details </summary>
+							<summary class="cursor-pointer text-caption-sm text-muted-foreground">
+								details
+							</summary>
 
 							<pre
-								class="mt-1 overflow-x-auto rounded bg-background/70 p-2 text-[10px] break-all whitespace-pre-wrap text-foreground/80">
+								class="mt-1 overflow-x-auto rounded bg-background/70 p-2 text-caption-sm break-all whitespace-pre-wrap text-foreground/80">
 {formatLogDetails(log.details)}</pre>
 						</details>
 					{/if}
