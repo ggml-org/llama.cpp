@@ -1555,6 +1555,51 @@ static bool rpc_check_node(const ggml_tensor * node) {
     return true;
 }
 
+// A computed node must satisfy the shape/stride contract that its op constructor asserts. graph_compute
+// builds nodes directly from the wire, bypassing those constructors, and the CPU kernels enforce the
+// contract only through assert(), which is compiled out under NDEBUG. Re-check it here so an
+// inconsistent node cannot drive a kernel to index outside the per-tensor buffer bounds that
+// deserialize_tensor validated. New ops are added as separate cases; the default is permissive so this
+// does not reject graphs that were already accepted.
+static bool rpc_check_op(const ggml_tensor * node) {
+    switch (node->op) {
+        case GGML_OP_GET_ROWS: {
+            // mirrors ggml_get_rows() and ggml_compute_forward_get_rows(). The index tensor src1 is i32
+            // with ne[3] == 1 and contiguous rows; src0 rows are contiguous (the kernel reads a whole
+            // src0->ne[0] row); the destination has the shape AND type ggml_get_rows() produces
+            // (F32, or I32 when src0 is I32) and is contiguous. The type matters: the kernel writes that
+            // element size and the server bounds the write by ggml_nbytes(dst), which depends on the
+            // declared type -- a smaller dst type (e.g. F16) would pass a shape-only check yet still
+            // overflow.
+            const ggml_tensor * src0 = node->src[0];
+            const ggml_tensor * src1 = node->src[1];
+            if (src0 == nullptr || src1 == nullptr) {
+                return false;
+            }
+            if (src1->type != GGML_TYPE_I32 || src1->ne[3] != 1 || src1->nb[0] != sizeof(int32_t)) {
+                return false;
+            }
+            if (src0->ne[2] != src1->ne[1] || src0->ne[3] != src1->ne[2]) {
+                return false;
+            }
+            if (src0->nb[0] != ggml_type_size(src0->type) ||
+                ggml_row_size(src0->type, src0->ne[0]) > src0->nb[1]) {
+                return false;
+            }
+            const ggml_type dst_type = src0->type == GGML_TYPE_I32 ? GGML_TYPE_I32 : GGML_TYPE_F32;
+            if (node->type != dst_type ||
+                node->ne[0] != src0->ne[0] || node->ne[1] != src1->ne[0] ||
+                node->ne[2] != src1->ne[1] || node->ne[3] != src1->ne[2] ||
+                !ggml_is_contiguous(node)) {
+                return false;
+            }
+            return true;
+        }
+        default:
+            return true;
+    }
+}
+
 class rpc_server {
 public:
     rpc_server(std::vector<ggml_backend_t> all_backends, const char * cache_dir)
@@ -2207,6 +2252,10 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
         result->view_offs = wire.view_offs;
         if (!rpc_check_view(result)) {
             LOG_ERROR("[%s] view %u (id=%" PRIu64 ", view_offs=%" PRIu64 ") out of view_src bounds\n", __func__, i, wire.id, wire.view_offs);
+            return false;
+        }
+        if (!rpc_check_op(result)) {
+            LOG_ERROR("[%s] tensor %u (id=%" PRIu64 ", op %s) violates its op shape contract\n", __func__, i, wire.id, ggml_op_name(result->op));
             return false;
         }
     }
