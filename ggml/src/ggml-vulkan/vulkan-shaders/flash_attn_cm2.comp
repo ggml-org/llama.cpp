@@ -203,7 +203,22 @@ ACC_TYPE faAddSparseMask(const uint32_t row, const uint32_t col, const ACC_TYPE 
     const uint32_t kvslot = jblk * Bc + col;
     if (kvslot >= p.split_kv) { return ACC_TYPE_NEG; }
     const int r = data_sparse[sparse_base + kvslot];
-    return r < 0 ? ACC_TYPE_NEG : elem + ACC_TYPE(data_mf16[g_m_off_elem + row * m_stride + uint(r)]);
+    if (r < 0) { return ACC_TYPE_NEG; }
+    ACC_TYPE mv = ACC_TYPE(data_mf16[g_m_off_elem + row * m_stride + uint(r)]);
+    uint32_t bq, bh;
+    if (USE_BIAS && fa_bias_row(row, bq, bh)) {
+        mv += ACC_TYPE(fa_bias(bq, bh, uint(r)));
+    }
+    return elem + mv;
+}
+
+ACC_TYPE faAddBias(const uint32_t row, const uint32_t col, const ACC_TYPE elem, const uint32_t jblk) {
+    const uint32_t kv_col = jblk * Bc + col;
+    uint32_t bq, bh;
+    if ((KV_bounds_check && kv_col >= KV) || !fa_bias_row(row, bq, bh)) {
+        return elem;
+    }
+    return elem + ACC_TYPE(fa_bias(bq, bh, kv_col));
 }
 
 ACC_TYPE maxReduce(const in ACC_TYPE x, const in ACC_TYPE y) {
@@ -435,7 +450,11 @@ void main() {
         if (MASK_ENABLE && USE_SPARSE) {
             coopMatPerElementNV(S, S, faAddSparseMask, j);
         } else if (MASK_ENABLE) {
-            S += slopeMat*coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator>(mv);
+            coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator> mva = coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator>(mv);
+            if (USE_BIAS) {
+                coopMatPerElementNV(mva, mva, faAddBias, j);
+            }
+            S += slopeMat*mva;
         }
 
         // Clear padding elements to -inf, so they don't contribute to rowmax
