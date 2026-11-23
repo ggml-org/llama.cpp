@@ -190,6 +190,40 @@ void llama_model_dflash::load_tensors_layers_mistral_large4() {
     }
 }
 
+// DSpark block [anchor, mask_1, ..., mask_k] per sequence: slot k > 0 uses mask row k - 1, the anchor uses its (normed) token embedding
+ggml_tensor * llama_model_dflash::build_dspark_inp_block(const llm_graph_context & g, const llama_model & model, ggml_tensor * inp_tokens) {
+    ggml_context * ctx0 = g.ctx0;
+
+    const int64_t n_embd   = g.n_embd;
+    const int64_t n_tokens = g.n_tokens;
+
+    ggml_tensor * tok_embd = get_tok_embd(g, model);
+
+    const int64_t n_blocks     = g.ubatch.n_seqs_unq;
+    const int64_t block_drafts = n_blocks > 0 ? n_tokens / n_blocks : 0;
+
+    if (block_drafts == 0 || n_tokens % n_blocks != 0 || block_drafts > (int64_t) g.hparams.dflash_block_size) {
+        // not a draft block (e.g. graph reserve)
+        return ggml_get_rows(ctx0, tok_embd, inp_tokens);
+    }
+
+    ggml_tensor * anchors = ggml_view_2d(ctx0, inp_tokens, 1, n_blocks, (size_t) block_drafts * inp_tokens->nb[0], 0);
+    anchors = ggml_get_rows(ctx0, tok_embd, ggml_cont_1d(ctx0, anchors, n_blocks));
+    if (model.tok_norm) {
+        anchors = g.build_norm(anchors, model.tok_norm, nullptr, LLM_NORM_RMS, -1);
+    }
+
+    ggml_tensor * cur = ggml_reshape_3d(ctx0, anchors, n_embd, 1, n_blocks);
+    if (block_drafts > 1) {
+        ggml_tensor * masks = ggml_view_3d(ctx0, model.dspark_mask_embd, n_embd, block_drafts - 1, 1,
+                model.dspark_mask_embd->nb[1], model.dspark_mask_embd->nb[2], 0);
+        masks = ggml_repeat_4d(ctx0, ggml_cast(ctx0, masks, GGML_TYPE_F32), n_embd, block_drafts - 1, n_blocks, 1);
+        cur = ggml_concat(ctx0, cur, masks, 1);
+    }
+
+    return ggml_reshape_2d(ctx0, cur, n_embd, n_tokens);
+}
+
 // DSpark (DFlash + Markov & Confidence head): Markov bias on the draft logits, chained per block position
 // rnn_state: [n_embd, n_tokens] per-token state of the Inkling2 rnn head (see llama_batch_ext_select_n_embd_state)
 //   anchor row: f_rnn, an extra rnn input; draft row i: [uniform | 1/temp | 0...] of its draw
@@ -873,8 +907,6 @@ llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llm_graph_p
         return;
     }
 
-    ggml_tensor * tok_embd = get_tok_embd(*this, model);
-
     auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
 
     inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
@@ -884,26 +916,7 @@ llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llm_graph_p
 
     res->add_input(std::move(inp));
 
-    const int64_t n_blocks     = ubatch.n_seqs_unq;
-    const int64_t block_drafts = n_blocks > 0 ? n_tokens / n_blocks : 0;
-
-    ggml_tensor * inpL;
-    if (block_drafts > 0 && n_tokens % n_blocks == 0 && block_drafts <= (int64_t) hparams.dflash_block_size) {
-        // slot k > 0 uses mask row k - 1
-        ggml_tensor * anchors = ggml_view_2d(ctx0, inp_tokens, 1, n_blocks, (size_t) block_drafts * inp_tokens->nb[0], 0);
-        anchors = ggml_get_rows(ctx0, tok_embd, ggml_cont_1d(ctx0, anchors, n_blocks));
-        inpL = ggml_reshape_3d(ctx0, anchors, n_embd, 1, n_blocks);
-        if (block_drafts > 1) {
-            ggml_tensor * masks = ggml_view_3d(ctx0, model.dspark_mask_embd, n_embd, block_drafts - 1, 1,
-                    model.dspark_mask_embd->nb[1], model.dspark_mask_embd->nb[2], 0);
-            masks = ggml_repeat_4d(ctx0, ggml_cast(ctx0, masks, GGML_TYPE_F32), n_embd, block_drafts - 1, n_blocks, 1);
-            inpL = ggml_concat(ctx0, inpL, masks, 1);
-        }
-        inpL = ggml_reshape_2d(ctx0, inpL, n_embd, n_tokens);
-    } else {
-        // not a draft block (e.g. graph reserve)
-        inpL = ggml_get_rows(ctx0, tok_embd, inp_tokens);
-    }
+    ggml_tensor * inpL = build_dspark_inp_block(*this, model, inp_tokens);
     cb(inpL, "inp_noise_embd", -1);
 
     // the whole block shares the mask row of its first query (the anchor)
