@@ -287,7 +287,7 @@ float replay_product(const in uint32_t r, const in uint32_t c, const in float s,
 float replay_store_partial(const in uint32_t r, const in uint32_t c, const in float partial, const in uint32_t dot_off) {
     if (r == 0) {
         // A matrix element can be replicated across lanes.
-        atomicExchange(sh_lower[dot_off + c], floatBitsToUint(partial));
+        atomicStore(sh_lower[dot_off + c], floatBitsToUint(partial), gl_ScopeWorkgroup, 0, 0);
     }
     return partial;
 }
