@@ -1502,6 +1502,10 @@ struct llama_model_deepseek41 : public llama_model_deepseek4 {
     void load_arch_tensors(llama_model_loader & ml) override;
     bool lid_k_hdmd() const override { return false; }
 
+    // the nodes of one token chunk: 88 measured for all the layers of a 3-layer test model
+    static constexpr uint32_t GRAPH_NODES_PER_CHUNK = 96;
+    uint32_t graph_nodes_per_chunk() const override { return GRAPH_NODES_PER_CHUNK; }
+
     // Engram: the hash constants are hparams.ple_* (one module per Engram layer), hashed on the host (ggml has no int64 mul/xor/mod)
     int engram_index(int il) const;
 
@@ -1539,6 +1543,12 @@ struct llama_model_deepseek41 : public llama_model_deepseek4 {
         std::map<std::pair<int32_t, int32_t>, ggml_tensor *> gather_k_of;
         std::map<int32_t, ggml_tensor *> gather_sel_of;
         std::map<int32_t, ggml_tensor *> gather_mask_of;
+
+        // the rows of the attention masks of each token chunk (see build_attention41)
+        // the views are made once per graph: each view of a host input is a separate upload
+        std::vector<ggml_tensor *> chunks_raw_mask;
+        std::vector<ggml_tensor *> chunks_csa_mask;
+        std::vector<ggml_tensor *> chunks_hca_mask;
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
