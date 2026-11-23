@@ -57,7 +57,7 @@ layout(binding = 4) readonly  buffer BetaBuf  { FLOAT_TYPE data_beta[];  };
 layout(binding = 5) readonly  buffer StateBuf { FLOAT_TYPE data_state[]; };
 layout(binding = 6)           buffer DstBuf   { FLOAT_TYPE data_dst[];   };
 
-// replay: pending tokens to run before the new ones (see ggml_gated_delta_net)
+// replay: pending tokens to run before the new ones (see ggml_gated_delta_net_ext)
 layout(binding = 7)  readonly buffer PKBuf    { FLOAT_TYPE data_pk[];    };
 layout(binding = 8)  readonly buffer PVBuf    { FLOAT_TYPE data_pv[];    };
 layout(binding = 9)  readonly buffer PGBBuf   { FLOAT_TYPE data_pgb[];   };

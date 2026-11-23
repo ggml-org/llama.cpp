@@ -11289,7 +11289,7 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
     // per-seq stride in floats (seq s starts at state + s * seq_stride)
     const int64_t state_seq_stride = src_state->nb[3] / sizeof(float);
 
-    // replay: pending tokens to run before the new ones (see ggml_gated_delta_net)
+    // replay: pending tokens to run before the new ones (see ggml_gated_delta_net_ext)
     const ggml_tensor * src_pk    = dst->src[6];
     const ggml_tensor * src_pv    = dst->src[7];
     const ggml_tensor * src_pgb   = dst->src[8];

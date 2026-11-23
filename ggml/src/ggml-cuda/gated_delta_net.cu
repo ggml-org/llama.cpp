@@ -6,7 +6,7 @@
 
 constexpr int gdn_cols_per_warp = 4;
 
-// replay: pending tokens to run before the new ones (see ggml_gated_delta_net)
+// replay: pending tokens to run before the new ones (see ggml_gated_delta_net_ext)
 struct gdn_replay_args {
     const float *   pk;    // [S_v, H_k, n_pend, n_seqs]
     const float *   pv;    // [S_v, H, n_pend, n_seqs]

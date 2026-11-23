@@ -97,7 +97,7 @@ public:
         int32_t   tail = -1;
 
         // largest rollback whose snapshot the last ubatch guarantees: a ubatch of n <= n_rs_seq + 1 tokens
-        // writes snapshots 0..n-1, a longer one only guarantees the final state (ggml_gated_delta_net)
+        // writes snapshots 0..n-1, a longer one only guarantees the final state (ggml_ssm_scan)
         uint32_t rs_max = 0;
 
         // rs_replay: valid tokens in the pending rows, and the pending tokens the current ubatch replays

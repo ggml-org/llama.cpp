@@ -77,7 +77,7 @@ kernel void kernel_gated_delta_net_impl(
     const device float * state_out = fused ? (device float *)dst_fuse : (device float *)dst + attn_size;
     const uint slot_stride = fused ? (uint)args.nb_out : state_size_per_snap;
 
-    // replay: pending tokens to run before the new ones (see ggml_gated_delta_net)
+    // replay: pending tokens to run before the new ones (see ggml_gated_delta_net_ext)
     if (FC_gated_delta_net_rep) {
         const int n_r = ((device const int32_t *) n_rep)[i23];
 

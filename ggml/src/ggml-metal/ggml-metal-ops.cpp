@@ -2104,7 +2104,7 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
         }
     }
 
-    // replay of pending tokens, see ggml_gated_delta_net
+    // replay of pending tokens, see ggml_gated_delta_net_ext
     const ggml_tensor * pk  = op->src[6];
     const ggml_tensor * pv  = op->src[7];
     const ggml_tensor * pgb = op->src[8];

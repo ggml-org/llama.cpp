@@ -1532,7 +1532,7 @@ static webgpu_encoded_op ggml_webgpu_gated_delta_net(webgpu_context & ctx,
     uint32_t       scale_u32;
     memcpy(&scale_u32, &scale, sizeof(scale_u32));
 
-    // replay of pending tokens, see ggml_gated_delta_net
+    // replay of pending tokens, see ggml_gated_delta_net_ext
     ggml_tensor * pend_k  = dst->src[6];
     ggml_tensor * pend_v  = dst->src[7];
     ggml_tensor * pend_gb = dst->src[8];

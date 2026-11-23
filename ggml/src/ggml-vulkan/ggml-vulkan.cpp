@@ -11415,7 +11415,7 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
         mirror_buf = vk_subbuffer{ ctx->prealloc_x, 0, ctx->prealloc_x->size };
     }
 
-    // replay of pending tokens, see ggml_gated_delta_net
+    // replay of pending tokens, see ggml_gated_delta_net_ext
     const ggml_tensor * src_pk  = dst->src[6];
     const ggml_tensor * src_pv  = dst->src[7];
     const ggml_tensor * src_pgb = dst->src[8];

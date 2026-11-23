@@ -752,7 +752,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_gated_delta_net(
     const int ne30 = op->src[3]->ne[0]; // G
     // state is src[5], 4D [S_v, S_v, H_v, n_seqs] (s0 only); K is op param 0.
     const int K = ggml_get_op_params_i32(op, 0);
-    // replay of pending tokens, see ggml_gated_delta_net
+    // replay of pending tokens, see ggml_gated_delta_net_ext
     const bool replay = op->src[6] != nullptr;
 
     const int nsg = op->src[2]->ne[0]/32;

@@ -30,7 +30,7 @@ var<storage, read_write> dst_fuse: array<f32>;
 #endif
 
 #ifdef REPLAY
-// pending tokens to run before the new ones (see ggml_gated_delta_net)
+// pending tokens to run before the new ones (see ggml_gated_delta_net_ext)
 @group(0) @binding(NEXT_BINDING)
 var<storage, read_write> pend_k: array<f32>;
 
