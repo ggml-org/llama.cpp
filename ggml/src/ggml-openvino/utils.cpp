@@ -2319,6 +2319,11 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                                   ggml_openvino_npu_decode_bucket() :
                                   0;
     int decode_window = m_params.ctx_per_seq;
+    // Weightless-bank model cache with sliced (not head-major) KV: prefill sizes follow the decode KV windows.
+    const bool prefill_window_aligned = decode_bucket > 0 && ggml_openvino_kv_slice_enabled() &&
+                                        !ggml_openvino_npu_kv_head_major_enabled() &&
+                                        ggml_openvino_npu_weightless_bank_enabled() &&
+                                        !ggml_openvino_model_cache_dir().empty();
     if (decode_bucket > 0 && m_params.ctx_per_seq > 0) {
         const int last_pos = static_cast<const int32_t *>(inp_pos->data)[std::max<int64_t>(input_tokens, 1) - 1];
         const int needed = last_pos + (is_prefill ? 2 : 1);
@@ -2331,6 +2336,10 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             // Head-major KV is bound whole, so prefill and decode both use the window of the storage capacity.
             decode_window = std::min(std::max(decode_window, kv_storage_rows(cgraph)), m_params.ctx_per_seq);
             c_params.attention_size = decode_window;
+        } else if (is_prefill && prefill_window_aligned && c_params.attention_size > 0) {
+            // Weightless-bank cache: a prefill attends at least the decode KV window, so the prefill sizes are
+            // the window sizes and the export can build them all up front (see the prefill window export below).
+            c_params.attention_size = std::min(std::max(c_params.attention_size, decode_window), m_params.ctx_per_seq);
         }
         if (!is_prefill) {
             c_params.attention_size = decode_window;
@@ -3010,10 +3019,12 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             GGML_LOG_INFO("ggml-openvino: prebuilt %zu decode KV window model(s) in %.1f ms\n",
                           graph.decode_windows.size(), (ggml_time_us() - t0) / 1000.0);
 
-            // With head-major KV a prefill also runs at a KV window, picked by prompt length. Export the prefill
-            // model of every other window too, so an import-only run has a pair for any prompt length.
+            // With head-major KV (or window-aligned prefill) a prefill also runs at a KV window, picked by prompt
+            // length. Export the prefill model of every other window too, so an import-only run has a pair for any
+            // prompt length.
             const std::string model_cache_dir = ggml_openvino_model_cache_dir();
-            if (graph.weightless_bank && graph.weights_layout && ggml_openvino_npu_kv_head_major_enabled() &&
+            if (graph.weightless_bank && graph.weights_layout &&
+                (ggml_openvino_npu_kv_head_major_enabled() || prefill_window_aligned) &&
                 ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_MMAP") == 0) {
                 const int64_t t1 = ggml_time_us();
                 size_t exported = 0;
