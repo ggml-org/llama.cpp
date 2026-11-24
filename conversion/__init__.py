@@ -146,6 +146,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "HrmTextForCausalLM": "hrm_text",
     "HYV3ForCausalLM": "hunyuan",
     "HYV4ForCausalLM": "hy_v4",
+    "HYV4FlashForCausalLM": "hy_v4_flash",
     "IQuestCoderForCausalLM": "llama",
     "Inkling2ForCausalLM": "inkling2",
     "Inkling2LoopForCausalLM": "inkling2",
