@@ -738,6 +738,13 @@ static __global__ void flash_attn_tile(
         NO_DEVICE_CODE;
         return;
     }
+#ifdef AMD_MFMA_AVAILABLE
+    if (ncols1 == 64 && ncols2 == 1) {
+        // The tile kernel is suffering from register spills for ncols1 == 64 && ncols2 == 1.
+        NO_DEVICE_CODE;
+        return;
+    }
+#endif // AMD_MFMA_AVAILABLE
 
     static_assert(ggml_cuda_fattn_tile_get_config(DKQ, DV, ncols1*ncols2) != 0, "kernel config not defined");
 
@@ -1060,7 +1067,7 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_cuda_context & ctx, ggm
 
 #ifdef GGML_USE_HIP
     if constexpr (DKQ <= 128) {
-        if (Q->ne[1] > 32/ncols2) {
+        if (!(amd_mfma_available(cc) && ncols2 == 1) && Q->ne[1] > 32/ncols2) {
             constexpr int cols_per_block = 64;
             const int nwarps    = ggml_cuda_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
             const int nbatch_fa = ggml_cuda_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
