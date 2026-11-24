@@ -441,6 +441,17 @@ bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11) {
                 return ne11 <= MMVQ_MAX_BATCH_SIZE;
         }
     }
+    // VEGA20 devices are the only devices with dense MMQ -> ggml_cuda_should_use_mmq()
+    if (cc == GGML_CUDA_CC_VEGA20) {
+        switch (type) { // tuned on MI50 (gfx906)
+            case GGML_TYPE_Q4_K:
+                return ne11 <= 7;
+            case GGML_TYPE_NVFP4:
+                return ne11 <= 6;
+            default:
+                return ne11 <= MMVQ_MAX_BATCH_SIZE;
+        }
+    }
     return ne11 <= MMVQ_MAX_BATCH_SIZE;
 }
 
