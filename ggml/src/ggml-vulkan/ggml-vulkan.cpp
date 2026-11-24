@@ -12371,23 +12371,19 @@ void ggml_vk_topk_moe(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_cg
     pc.n_expert_used = n_expert_used;
     pc.clamp_min = -std::numeric_limits<float>::infinity();
     pc.clamp_max = std::numeric_limits<float>::infinity();
-    if (mode == TOPK_MOE_EARLY_SOFTMAX_NORM) {
-        ggml_tensor * clamp = cgraph->nodes[node_idx + 7];
-        GGML_ASSERT(clamp->op == GGML_OP_CLAMP);
-        pc.clamp_min = ggml_get_op_params_f32(clamp, 0);
-        pc.clamp_max = ggml_get_op_params_f32(clamp, 1);
-    }
-    if (mode == TOPK_MOE_SIGMOID_NORM_BIAS) {
-        ggml_tensor * clamp = cgraph->nodes[node_idx + 8];
-        GGML_ASSERT(clamp->op == GGML_OP_CLAMP);
-        pc.clamp_min = ggml_get_op_params_f32(clamp, 0);
-        pc.clamp_max = ggml_get_op_params_f32(clamp, 1);
-    }
-    if (mode == TOPK_MOE_SQRT_SOFTPLUS_NORM_BIAS) {
-        ggml_tensor * clamp = cgraph->nodes[node_idx + 9];
-        GGML_ASSERT(clamp->op == GGML_OP_CLAMP);
-        pc.clamp_min = ggml_get_op_params_f32(clamp, 0);
-        pc.clamp_max = ggml_get_op_params_f32(clamp, 1);
+    const int denom_offset = mode == TOPK_MOE_EARLY_SOFTMAX_NORM      ? 7 :
+                             mode == TOPK_MOE_SIGMOID_NORM_BIAS       ? 8 :
+                             mode == TOPK_MOE_SQRT_SOFTPLUS_NORM_BIAS ? 9 : 0;
+    pc.with_norm = denom_offset != 0;
+    if (pc.with_norm) {
+        const ggml_tensor * denom = cgraph->nodes[node_idx + denom_offset];
+        if (denom->op == GGML_OP_SCALE) {
+            pc.norm_bias = ggml_get_op_params_f32(denom, 1);
+        } else {
+            GGML_ASSERT(denom->op == GGML_OP_CLAMP);
+            pc.clamp_min = ggml_get_op_params_f32(denom, 0);
+            pc.clamp_max = ggml_get_op_params_f32(denom, 1);
+        }
     }
 
 #define GATING_FUNC_SOFTMAX 0
@@ -12400,7 +12396,6 @@ void ggml_vk_topk_moe(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_cg
                      mode == TOPK_MOE_LATE_SOFTMAX             ? GATING_FUNC_SOFTMAX_WEIGHT :
                                                                  GATING_FUNC_SOFTMAX;
     pc.has_bias = has_bias;
-    pc.with_norm = mode == TOPK_MOE_EARLY_SOFTMAX_NORM || has_bias;
     if (ctx->fused_topk_moe_scale) {
         GGML_ASSERT(weights->op == GGML_OP_SCALE);
         pc.output_scale = ggml_get_op_params_f32(weights, 0);
@@ -15040,6 +15035,32 @@ bool ggml_vk_can_fuse_ssm_conv(const ggml_backend_vk_context * ctx, const struct
     return true;
 }
 
+static const std::initializer_list<ggml_op> & ggml_vk_topk_moe_norm_pattern(
+        const ggml_cgraph * cgraph, int node_idx, topk_moe_mode mode) {
+    const auto has_norm_bias = [&](int pattern_size) {
+        const int denom_idx = node_idx + pattern_size - 3;
+        if (denom_idx >= cgraph->n_nodes) {
+            return false;
+        }
+        const ggml_tensor * denom = cgraph->nodes[denom_idx];
+        return denom->op == GGML_OP_SCALE && ggml_get_op_params_f32(denom, 0) == 1.0f;
+    };
+
+    switch (mode) {
+    case TOPK_MOE_EARLY_SOFTMAX_NORM:
+        return has_norm_bias(topk_moe_early_softmax_norm<GGML_OP_CLAMP>.size())
+            ? topk_moe_early_softmax_norm<GGML_OP_SCALE> : topk_moe_early_softmax_norm<GGML_OP_CLAMP>;
+    case TOPK_MOE_SIGMOID_NORM_BIAS:
+        return has_norm_bias(topk_moe_sigmoid_norm_bias<GGML_OP_CLAMP>.size())
+            ? topk_moe_sigmoid_norm_bias<GGML_OP_SCALE> : topk_moe_sigmoid_norm_bias<GGML_OP_CLAMP>;
+    case TOPK_MOE_SQRT_SOFTPLUS_NORM_BIAS:
+        return has_norm_bias(topk_moe_sqrt_softplus_norm_bias<GGML_OP_CLAMP>.size())
+            ? topk_moe_sqrt_softplus_norm_bias<GGML_OP_SCALE> : topk_moe_sqrt_softplus_norm_bias<GGML_OP_CLAMP>;
+    default:
+        GGML_ABORT("invalid normalized top-k MoE mode");
+    }
+}
+
 bool ggml_vk_can_fuse_topk_moe(ggml_backend_vk_context * ctx, const struct ggml_cgraph * cgraph,
                                       int node_idx, topk_moe_mode mode) {
 
@@ -15775,28 +15796,28 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
                 ctx->fused_topk_qsa = true;
                 fusion_string = "TOPK_QSA";
                 std::fill_n(op_srcs_fused_elementwise, ctx->num_additional_fused_ops + 1, false);
-            } else if (ggml_can_fuse_subgraph(cgraph, i, topk_moe_early_softmax_norm, { i + 3, i + 9 }) &&
+            } else if (ggml_can_fuse_subgraph(cgraph, i, ggml_vk_topk_moe_norm_pattern(cgraph, i, TOPK_MOE_EARLY_SOFTMAX_NORM), { i + 3, i + 9 }) &&
                        ggml_check_edges(cgraph, i, topk_moe_early_softmax_norm_edges) &&
                        ggml_vk_can_fuse_topk_moe(ctx, cgraph, i, TOPK_MOE_EARLY_SOFTMAX_NORM)) {
-                ctx->num_additional_fused_ops = topk_moe_early_softmax_norm.size() - 1;
+                ctx->num_additional_fused_ops = topk_moe_early_softmax_norm<GGML_OP_CLAMP>.size() - 1;
                 // view of argsort writes to memory
                 ctx->fused_ops_write_mask |= 1 << 3;
                 ctx->fused_topk_moe_mode = TOPK_MOE_EARLY_SOFTMAX_NORM;
                 fusion_string = "TOPK_MOE_EARLY_SOFTMAX_NORM";
                 std::fill_n(op_srcs_fused_elementwise, ctx->num_additional_fused_ops + 1, false);
-            } else if (ggml_can_fuse_subgraph(cgraph, i, topk_moe_sigmoid_norm_bias, { i + 4, i + 10 }) &&
+            } else if (ggml_can_fuse_subgraph(cgraph, i, ggml_vk_topk_moe_norm_pattern(cgraph, i, TOPK_MOE_SIGMOID_NORM_BIAS), { i + 4, i + 10 }) &&
                        ggml_check_edges(cgraph, i, topk_moe_sigmoid_norm_bias_edges) &&
                        ggml_vk_can_fuse_topk_moe(ctx, cgraph, i, TOPK_MOE_SIGMOID_NORM_BIAS)) {
-                ctx->num_additional_fused_ops = topk_moe_sigmoid_norm_bias.size() - 1;
+                ctx->num_additional_fused_ops = topk_moe_sigmoid_norm_bias<GGML_OP_CLAMP>.size() - 1;
                 // view of argsort writes to memory
                 ctx->fused_ops_write_mask |= 1 << 4;
                 ctx->fused_topk_moe_mode = TOPK_MOE_SIGMOID_NORM_BIAS;
                 fusion_string = "TOPK_MOE_SIGMOID_NORM_BIAS";
                 std::fill_n(op_srcs_fused_elementwise, ctx->num_additional_fused_ops + 1, false);
-            } else if (ggml_can_fuse_subgraph(cgraph, i, topk_moe_sqrt_softplus_norm_bias, { i + 5, i + 11 }) &&
+            } else if (ggml_can_fuse_subgraph(cgraph, i, ggml_vk_topk_moe_norm_pattern(cgraph, i, TOPK_MOE_SQRT_SOFTPLUS_NORM_BIAS), { i + 5, i + 11 }) &&
                        ggml_check_edges(cgraph, i, topk_moe_sqrt_softplus_norm_bias_edges) &&
                        ggml_vk_can_fuse_topk_moe(ctx, cgraph, i, TOPK_MOE_SQRT_SOFTPLUS_NORM_BIAS)) {
-                ctx->num_additional_fused_ops = topk_moe_sqrt_softplus_norm_bias.size() - 1;
+                ctx->num_additional_fused_ops = topk_moe_sqrt_softplus_norm_bias<GGML_OP_CLAMP>.size() - 1;
                 // view of argsort writes to memory
                 ctx->fused_ops_write_mask |= 1 << 5;
                 ctx->fused_topk_moe_mode = TOPK_MOE_SQRT_SOFTPLUS_NORM_BIAS;
@@ -16114,13 +16135,13 @@ void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * graph, 
             return keep_pattern(pattern);
         };
 
-        if (keep_topk_moe_pattern(topk_moe_early_softmax_norm)) {
+        if (keep_topk_moe_pattern(ggml_vk_topk_moe_norm_pattern(graph, first_unused, TOPK_MOE_EARLY_SOFTMAX_NORM))) {
             continue;
         }
-        if (keep_topk_moe_pattern(topk_moe_sigmoid_norm_bias)) {
+        if (keep_topk_moe_pattern(ggml_vk_topk_moe_norm_pattern(graph, first_unused, TOPK_MOE_SIGMOID_NORM_BIAS))) {
             continue;
         }
-        if (keep_topk_moe_pattern(topk_moe_sqrt_softplus_norm_bias)) {
+        if (keep_topk_moe_pattern(ggml_vk_topk_moe_norm_pattern(graph, first_unused, TOPK_MOE_SQRT_SOFTPLUS_NORM_BIAS))) {
             continue;
         }
         if (keep_topk_moe_pattern(topk_moe_early_softmax)) {
@@ -16184,9 +16205,9 @@ void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * graph, 
                 }
                 return false;
             };
-            if (match_pattern(topk_moe_early_softmax_norm, j) ||
-                match_pattern(topk_moe_sigmoid_norm_bias, j) ||
-                match_pattern(topk_moe_sqrt_softplus_norm_bias, j) ||
+            if (match_pattern(ggml_vk_topk_moe_norm_pattern(graph, j, TOPK_MOE_EARLY_SOFTMAX_NORM), j) ||
+                match_pattern(ggml_vk_topk_moe_norm_pattern(graph, j, TOPK_MOE_SIGMOID_NORM_BIAS), j) ||
+                match_pattern(ggml_vk_topk_moe_norm_pattern(graph, j, TOPK_MOE_SQRT_SOFTPLUS_NORM_BIAS), j) ||
                 match_pattern(topk_moe_early_softmax, j) ||
                 match_pattern(topk_moe_late_softmax, j) ||
                 match_pattern(snake_pattern, j) ||

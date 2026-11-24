@@ -19,6 +19,7 @@ layout (push_constant) uniform parameter
     uint n_expert_used;
     float clamp_min;
     float clamp_max;
+    float norm_bias;
     uint gating_func;
     uint has_bias;
     uint with_norm;
@@ -198,7 +199,7 @@ void main() {
 
     if (with_norm != 0) {
         wt_sum              = subgroupAdd(wt_sum);
-        wt_sum              = clamp(wt_sum, clamp_min, clamp_max);
+        wt_sum              = clamp(wt_sum, clamp_min, clamp_max) + norm_bias;
         const float inv_sum = 1.0f / wt_sum;
 
         [[unroll]]
