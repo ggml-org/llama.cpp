@@ -3,6 +3,7 @@
 import argparse
 import ctypes
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -79,8 +80,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run test-llama-context repeatedly and capture hangs."
     )
-    parser.add_argument("--executable", required=True, type=Path)
-    parser.add_argument("--models", required=True, type=Path)
+    parser.add_argument("--runner", choices=("direct", "ctest"), default="direct")
+    parser.add_argument("--executable", type=Path)
+    parser.add_argument("--models", type=Path)
+    parser.add_argument("--build-dir", type=Path)
     parser.add_argument("--runs", required=True, type=int)
     parser.add_argument("--timeout", type=float, default=60, help="Timeout in seconds (default: 60)")
     parser.add_argument(
@@ -91,24 +94,40 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    executable = args.executable.resolve()
-    models = args.models.resolve()
     if args.runs < 1:
         parser.error("--runs must be at least 1")
     if args.timeout <= 0:
         parser.error("--timeout must be greater than 0")
-    if not executable.is_file():
-        parser.error(f"test executable not found: {executable}")
-    if not models.is_dir():
-        parser.error(f"models directory not found: {models}")
+
+    if args.runner == "direct":
+        if args.executable is None or args.models is None:
+            parser.error("direct runner requires --executable and --models")
+        executable = args.executable.resolve()
+        models = args.models.resolve()
+        if not executable.is_file():
+            parser.error(f"test executable not found: {executable}")
+        if not models.is_dir():
+            parser.error(f"models directory not found: {models}")
+        command = [str(executable), "--models", str(models)]
+        working_directory = None
+    else:
+        if args.build_dir is None:
+            parser.error("ctest runner requires --build-dir")
+        working_directory = args.build_dir.resolve()
+        if not (working_directory / "CTestTestfile.cmake").is_file():
+            parser.error(f"CTest build directory not found: {working_directory}")
+        ctest = shutil.which("ctest")
+        if ctest is None:
+            parser.error("ctest executable not found in PATH")
+        command = [ctest, "-C", "Release", "--output-on-failure", "-L", "main", "-E", "test-opt"]
 
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     hang_count = 0
+    failure_count = 0
 
     for run_number in range(1, args.runs + 1):
         log_path = output_dir / f"run-{run_number:03}.log"
-        command = [str(executable), "--models", str(models)]
         print(f"[{run_number}/{args.runs}] Starting; log: {log_path}", flush=True)
 
         with log_path.open("w", encoding="utf-8", errors="replace") as log_file:
@@ -119,6 +138,7 @@ def main() -> int:
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 text=True,
+                cwd=working_directory,
             )
             started_at = time.monotonic()
             try:
@@ -144,6 +164,10 @@ def main() -> int:
                 finally:
                     stop_process(process)
             else:
+                if return_code != 0:
+                    failure_count += 1
+                log_file.write(f"\nFinished with exit code {return_code}\n")
+                log_file.flush()
                 print(
                     f"[{run_number}/{args.runs}] Finished in "
                     f"{time.monotonic() - started_at:.2f} seconds "
@@ -151,8 +175,8 @@ def main() -> int:
                     flush=True,
                 )
 
-    print(f"Hangs: {hang_count}/{args.runs}")
-    return 0
+    print(f"Hangs: {hang_count}/{args.runs}; failed runs: {failure_count}/{args.runs}")
+    return 1 if hang_count or failure_count else 0
 
 
 if __name__ == "__main__":
