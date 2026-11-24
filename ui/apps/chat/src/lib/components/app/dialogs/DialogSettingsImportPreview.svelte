@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as AlertDialog from '@ggml-org/llama-ui/ui/alert-dialog';
-	import { ArrowRight, Settings as SettingsIcon } from '@lucide/svelte';
+	import { ArrowRight } from '@lucide/svelte';
 
 	export interface SettingsDiffEntry {
 		key: string;
@@ -19,7 +19,7 @@
 	let { diff = [], onCancel, onConfirm, open = $bindable() }: Props = $props();
 
 	function formatValue(value: SettingsConfigValue): string {
-		if (value === undefined) return '(unset)';
+		if (value === undefined) return 'default';
 
 		if (typeof value === 'string') {
 			return value || '(empty)';
@@ -38,22 +38,16 @@
 <AlertDialog.Root onOpenChange={handleOpenChange} {open}>
 	<AlertDialog.Content class="sm:max-w-2xl">
 		<AlertDialog.Header>
-			<AlertDialog.Title class="flex items-center gap-2">
-				<SettingsIcon class="h-5 w-5" />
-
-				Import settings?
-			</AlertDialog.Title>
-
-			<AlertDialog.Description>
-				Review the settings that would change before importing.
-			</AlertDialog.Description>
+			<AlertDialog.Title>Import settings?</AlertDialog.Title>
 		</AlertDialog.Header>
 
-		<div class="max-h-[60vh] overflow-y-auto rounded-md border">
+		<div
+			class="max-h-[60vh] overflow-y-auto rounded-md border border-border/30 bg-muted/50 matte-well dark:border-border/20 dark:bg-muted/80"
+		>
 			{#if diff.length === 0}
 				<p class="p-4 text-sm text-muted-foreground">No settings would change.</p>
 			{:else}
-				<div class="divide-y">
+				<div class="divide-y divide-border/30 dark:divide-border/20">
 					{#each diff as entry (entry.key)}
 						<div class="flex items-center gap-3 p-3">
 							<div class="min-w-0 flex-1">
