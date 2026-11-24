@@ -25,7 +25,6 @@
 #extension GL_EXT_null_initializer : enable
 
 #include "types.glsl"
-#define FA_KV_ROWS_SHMEM
 #include "flash_attn_base.glsl"
 #if !defined(BFLOAT16)
 #include "dequant_funcs_cm2.glsl"
@@ -404,7 +403,9 @@ void main() {
             }
         }
 
+#ifdef FA_KV_ROWS_SHMEM
         fa_kv_rows_load(j);
+#endif
 
         coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator> S = coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator>(0);
 

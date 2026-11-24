@@ -2441,24 +2441,28 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             const bool f32acc = fa.first.f32acc;
 
             const bool bf16_kv = fa.first.k_type == GGML_TYPE_BF16;
+            // the barriers in fa_kv_rows_load slow down dense pipelines on NVIDIA, even when skipped
+            const bool kv_rows = (fa.first.flags & 256) != 0;
             const void * spv_data;
             size_t spv_size;
             const char * name;
             if (bf16_kv) {
 #if defined(VK_KHR_shader_bfloat16) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
                 if (!device->coopmat2_bf16_support) continue;
-                spv_data = flash_attn_f32_f16_bf16_cm2_data;
-                spv_size = flash_attn_f32_f16_bf16_cm2_len;
+                spv_data = kv_rows ? flash_attn_f32_f16_bf16_cm2_rows_data : flash_attn_f32_f16_bf16_cm2_data;
+                spv_size = kv_rows ? flash_attn_f32_f16_bf16_cm2_rows_len  : flash_attn_f32_f16_bf16_cm2_len;
                 name = aligned ? "flash_attn_f32_bf16_aligned_cm2" : "flash_attn_f32_bf16_cm2";
 #else
                 continue;
 #endif
-            } else if (aligned) {
-                if (f32acc) { spv_data = flash_attn_f32_f16_cm2_data;        spv_size = flash_attn_f32_f16_cm2_len;        name = "flash_attn_f32_f16_aligned_f32acc_cm2"; }
-                else        { spv_data = flash_attn_f32_f16_f16acc_cm2_data; spv_size = flash_attn_f32_f16_f16acc_cm2_len; name = "flash_attn_f32_f16_aligned_f16acc_cm2"; }
+            } else if (f32acc) {
+                spv_data = kv_rows ? flash_attn_f32_f16_cm2_rows_data : flash_attn_f32_f16_cm2_data;
+                spv_size = kv_rows ? flash_attn_f32_f16_cm2_rows_len  : flash_attn_f32_f16_cm2_len;
+                name = aligned ? "flash_attn_f32_f16_aligned_f32acc_cm2" : "flash_attn_f32_f16_f32acc_cm2";
             } else {
-                if (f32acc) { spv_data = flash_attn_f32_f16_cm2_data;        spv_size = flash_attn_f32_f16_cm2_len;        name = "flash_attn_f32_f16_f32acc_cm2"; }
-                else        { spv_data = flash_attn_f32_f16_f16acc_cm2_data; spv_size = flash_attn_f32_f16_f16acc_cm2_len; name = "flash_attn_f32_f16_f16acc_cm2"; }
+                spv_data = kv_rows ? flash_attn_f32_f16_f16acc_cm2_rows_data : flash_attn_f32_f16_f16acc_cm2_data;
+                spv_size = kv_rows ? flash_attn_f32_f16_f16acc_cm2_rows_len  : flash_attn_f32_f16_f16acc_cm2_len;
+                name = aligned ? "flash_attn_f32_f16_aligned_f16acc_cm2" : "flash_attn_f32_f16_f16acc_cm2";
             }
             ggml_vk_create_pipeline(device, fa.second, name, spv_size, spv_data, "main", 8,
                                     sizeof(vk_flash_attn_push_constants), {Br, 1, 1},
