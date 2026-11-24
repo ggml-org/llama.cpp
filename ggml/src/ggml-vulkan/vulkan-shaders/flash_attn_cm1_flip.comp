@@ -307,6 +307,25 @@ void main() {
             }
         }
 
+        float bv[FL_CPL];
+        [[unroll]] for (uint32_t k = 0; k < FL_CPL; ++k) {
+            bv[k] = 0.0;
+        }
+        {
+            uint32_t bq, bh;
+            if (USE_BIAS && myrow < p.nem1 && fa_bias_row(sg * 16 + lr, bq, bh)) {
+                const uint32_t ioff = bq * p.KV + j * Bc + lc * FL_CPL;
+                const uint32_t toff = (bq * p.neq2 + bh) * BiasBins;
+                uint32_t bin[FL_CPL];
+                [[unroll]] for (uint32_t k = 0; k < FL_CPL; ++k) {
+                    bin[k] = uint32_t(data_bias_idx[ioff + k]);
+                }
+                [[unroll]] for (uint32_t k = 0; k < FL_CPL; ++k) {
+                    bv[k] = data_bias_table[toff + bin[k]];
+                }
+            }
+        }
+
         coopmat<ACC_TYPE, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> Sacc[Bc / 16];
         [[unroll]] for (uint32_t c = 0; c < Bc / 16; ++c) {
             Sacc[c] = coopmat<ACC_TYPE, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0);
@@ -344,14 +363,13 @@ void main() {
 
         if (MASK_ENABLE && (mask_bits != MASK_OPT_ALL_ZERO || USE_BIAS) && myrow < p.nem1) {
             const uint32_t moff = m_offset + myrow * KV + j * Bc + lc * FL_CPL;
-            uint32_t bq, bh;
-            const bool bias_row = USE_BIAS && fa_bias_row(sg * 16 + lr, bq, bh);
-            [[unroll]] for (uint32_t k = 0; k < FL_CPL; ++k) {
-                float mv = (!USE_BIAS || mask_bits != MASK_OPT_ALL_ZERO) ? float(data_m[moff + k]) : 0.0;
-                if (bias_row) {
-                    mv += fa_bias(bq, bh, j * Bc + lc * FL_CPL + k);
+            if (!USE_BIAS || mask_bits != MASK_OPT_ALL_ZERO) {
+                [[unroll]] for (uint32_t k = 0; k < FL_CPL; ++k) {
+                    bv[k] += float(data_m[moff + k]);
                 }
-                s[k] += slope_v * mv;
+            }
+            [[unroll]] for (uint32_t k = 0; k < FL_CPL; ++k) {
+                s[k] += slope_v * bv[k];
             }
         }
 
