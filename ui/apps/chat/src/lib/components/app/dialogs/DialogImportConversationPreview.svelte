@@ -25,7 +25,7 @@
 		</AlertDialog.Header>
 
 		<div
-			class="max-h-[60vh] overflow-y-auto rounded-md border border-border/30 p-4 dark:border-border/20"
+			class="max-h-[60vh] overflow-y-auto rounded-md border border-border/30 bg-muted/50 p-4 matte-well dark:border-border/20 dark:bg-muted/80"
 		>
 			<ChatMessages {messages} />
 		</div>
