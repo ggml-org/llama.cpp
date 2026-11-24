@@ -960,7 +960,6 @@ llama_model_hy_v4_flash::graph::graph(const llama_model & model, const llm_graph
 
     ggml_tensor * cur;
 
-    ggml_tensor * inp = build_inp_embd(model.tok_embd);
     ggml_tensor * inp_pos = build_inp_pos();
     if (hparams.use_mrope()) {
         inp_pos = hy_v4_flash_pos(ctx0, inp_pos, n_tokens);
@@ -973,7 +972,8 @@ llama_model_hy_v4_flash::graph::graph(const llama_model & model, const llm_graph
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    // Engram gathers go right after the token embeddings, so the lazily read table stays on the host
+    // Engram gathers go before the token embeddings, so the mixed embd copies after them land on the GPU
+    // and the host split keeps only small single threaded lookups
     auto inp_eng = std::make_unique<llm_graph_input_hy_v4_flash>(
             static_cast<const llama_model_hy_v4_flash &>(model), inp_attn->get_dsa()->mctx->get_mla());
     std::vector<ggml_tensor *> engram_rows;
@@ -1002,6 +1002,8 @@ llama_model_hy_v4_flash::graph::graph(const llama_model & model, const llm_graph
         engram_rows.push_back(rows);
     }
     res->add_input(std::move(inp_eng));
+
+    ggml_tensor * inp = build_inp_embd(model.tok_embd);
 
     // one embedding feeds hc parallel residual streams
     ggml_tensor * inpL = ggml_reshape_3d(ctx0, inp, n_embd, 1, n_tokens);
