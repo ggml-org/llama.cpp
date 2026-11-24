@@ -20,6 +20,7 @@
 	import { ToolsService } from '#lib/services/tools.service.ts';
 	import { conversationsStore, deviceStore, toolsStore } from '#lib/stores/index.ts';
 	import { abbreviateHome, runGlobSearchWithChildren } from '#lib/utils/index.ts';
+	import { page } from '$app/state';
 	import { slide } from 'svelte/transition';
 
 	// Microtask delay so the popover's focus scope tears down first.
@@ -312,10 +313,23 @@
 		if (directory) chipDirectory = directory;
 	});
 
+	// A route change swaps the chip along with the whole form, which fades on its own: only a
+	// directory set or cleared on the same route animates. The effect runs before the DOM
+	// update that adds or removes the chip, so the transition sees the change as it starts.
+	const ROUTE_SWAP_WINDOW_MS = 100;
+	let routeChangedAt = -Infinity;
+
+	$effect.pre(() => {
+		void page.params.id;
+
+		routeChangedAt = performance.now();
+	});
+
 	// two steps: the room opens first (the form below it follows), then the chip fades in;
 	// leaving runs the same curve backwards, so it fades out before the room closes
 	function chipTransition(node: Element) {
 		const height = slide(node);
+		const swappedWithRoute = performance.now() - routeChangedAt < ROUTE_SWAP_WINDOW_MS;
 
 		return {
 			css: (t: number) => {
@@ -325,7 +339,7 @@
 				return `${height.css?.(openness, 1 - openness) ?? ''}opacity: ${visibility};`;
 			},
 			delay: 0,
-			duration: CHAT_FORM_CHIP_TRANSITION_MS
+			duration: swappedWithRoute ? 0 : CHAT_FORM_CHIP_TRANSITION_MS
 		};
 	}
 
