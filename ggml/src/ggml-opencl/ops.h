@@ -410,7 +410,7 @@ struct ggml_opencl_ssm_conv_kernels {
 };
 
 struct ggml_opencl_gated_delta_net_kernels {
-    cl_kernel kernel_gated_delta_net_f32[4][2][2];
+    cl_kernel kernel_gated_delta_net_f32[4][2][2][2];
 };
 
 struct ggml_opencl_ssm_scan_kernels {
@@ -807,6 +807,9 @@ struct ggml_opencl_mul_mat_kernels {
     cl_kernel kernel_gemm_coopk_q6_k_q8_1_dp4a_c2;
     int       nsg_coopk_dp4a_q6_k  = 8;
     int       rows_coopk_dp4a_q6_k = 4;
+    cl_kernel kernel_gemm_coopk_q6_k_q8_1_dp4a_bin_c8 = nullptr;
+    cl_kernel kernel_quant_a_q8_1_k4h = nullptr;
+    int       nsg_coopk_dp4a_q6_k_bin_c8 = 4;
 #endif
 };
 

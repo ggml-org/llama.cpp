@@ -1043,7 +1043,9 @@ struct ggml_backend_opencl_context {
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         for (cl_kernel kernel : {
                 mul_mat.kernel_gemm_coopk_q4_k_q8_1_dp4a_bin_c8,
-                mul_mat.kernel_quant_a_q8_1_k4
+                mul_mat.kernel_quant_a_q8_1_k4,
+                mul_mat.kernel_gemm_coopk_q6_k_q8_1_dp4a_bin_c8,
+                mul_mat.kernel_quant_a_q8_1_k4h
             }
         ) {
             if (kernel != nullptr) {
