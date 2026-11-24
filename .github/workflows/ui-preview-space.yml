@@ -4,6 +4,8 @@ name: UI Preview Space
 # Opt-in: it runs only in a repository that sets the UI_PREVIEW_SPACE_OWNER variable (a Hugging Face user or organization)
 # and the HF_TOKEN secret, which is how a fork turns it on.
 # A push redeploys only a branch that already has a Space: create one with `npm run space` in ui/apps/chat, or run this workflow by hand on the branch.
+# Every hour it deletes the Spaces whose branch is gone, or whose pull request to ggml-org/llama.cpp is closed or merged
+# (a fork does not see that pull request close). Scheduled runs use this file on the fork's default branch.
 
 on:
   workflow_dispatch:
@@ -24,6 +26,8 @@ on:
       'ui/lib/**'
     ]
   delete:
+  schedule:
+    - cron: '17 * * * *'
 
 cache-mode: none
 permissions:
@@ -41,7 +45,7 @@ env:
 jobs:
   deploy:
     name: Deploy the branch to its Space
-    if: vars.UI_PREVIEW_SPACE_OWNER != '' && github.event_name != 'delete'
+    if: vars.UI_PREVIEW_SPACE_OWNER != '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
 
     defaults:
@@ -105,3 +109,31 @@ jobs:
         env:
           BRANCH: ${{ github.event.ref }}
         run: node scripts/space.ts rm --branch "$BRANCH"
+
+  prune:
+    name: Delete the Spaces of gone branches and closed pull requests
+    if: vars.UI_PREVIEW_SPACE_OWNER != '' && github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install Hugging Face Hub CLI
+        run: |
+          python3 -m venv "$RUNNER_TEMP/hf"
+          "$RUNNER_TEMP/hf/bin/pip" install -U huggingface_hub==1.28.0
+          echo "$RUNNER_TEMP/hf/bin" >> "$GITHUB_PATH"
+
+      - name: Delete the Spaces no longer wanted
+        working-directory: ui/apps/chat
+        env:
+          # reads pull requests of ggml-org/llama.cpp, which are public
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/space.ts prune --remote origin --yes

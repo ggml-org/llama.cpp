@@ -1,4 +1,11 @@
-import { parseSpaceArgs, spaceCard, spaceName } from '../../scripts/space.ts';
+import {
+	parseSpaceArgs,
+	pullRequestsState,
+	readSpaceSource,
+	sourceTag,
+	spaceCard,
+	spaceName
+} from '../../scripts/space.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('spaceName', () => {
@@ -28,7 +35,13 @@ describe('spaceName', () => {
 });
 
 describe('spaceCard', () => {
-	const card = spaceCard({ branch: 'feat/voice-mode', repo: 'alice/llama.cpp', sha: '0123456789' });
+	const sha = '0123456789abcdef0123456789abcdef01234567';
+	const card = spaceCard({
+		branch: 'feat/voice-mode',
+		repo: 'alice/llama.cpp',
+		server: 'http://localhost:9931',
+		sha
+	});
 
 	it('is a static Space with the headers llama-server serves the UI with', () => {
 		expect(card).toContain('title: Llama Chat preview');
@@ -44,7 +57,26 @@ describe('spaceCard', () => {
 	});
 
 	it('carries the tag the script knows its Spaces by', () => {
-		expect(card).toContain('tags:\n  - llama-ui-preview');
+		expect(card).toContain('tags:\n  - llama-ui-preview\n  - llama-ui-src-');
+	});
+
+	it('carries the source tag only when it knows the repository', () => {
+		expect(card).toContain(`  - ${sourceTag('alice/llama.cpp', 'feat/voice-mode')}`);
+		expect(spaceCard({ branch: 'x', repo: '', sha })).not.toContain('llama-ui-src-');
+	});
+
+	it('names the llama-server the preview talks to', () => {
+		expect(card).toContain('llama-server on http://localhost:9931');
+	});
+
+	it('can be read back for what it was built from', () => {
+		expect(readSpaceSource(card)).toEqual({
+			branch: 'feat/voice-mode',
+			repo: 'alice/llama.cpp',
+			sha
+		});
+		expect(readSpaceSource('---\ntitle: x\n---\n')).toBeNull();
+		expect(readSpaceSource('<!-- llama-ui-preview-source {nope} -->')).toBeNull();
 	});
 
 	it('says what it was built from', () => {
@@ -54,14 +86,46 @@ describe('spaceCard', () => {
 	});
 });
 
+describe('sourceTag', () => {
+	it('is what the upstream workflow computes: sha1 of "<repo, lowercase>:<branch>"', () => {
+		// printf '%s:%s' alice/llama.cpp feat/voice-mode | sha1sum | cut -c1-12
+		expect(sourceTag('Alice/llama.cpp', 'feat/voice-mode')).toBe('llama-ui-src-5e796d415769');
+	});
+
+	it('keeps the branch as it is', () => {
+		expect(sourceTag('alice/llama.cpp', 'Feat/X')).not.toBe(sourceTag('alice/llama.cpp', 'feat/x'));
+	});
+});
+
+describe('pullRequestsState', () => {
+	it('keeps a preview while a pull request is open, or when there is none', () => {
+		expect(pullRequestsState([])).toBe('none');
+		expect(pullRequestsState([{ state: 'closed' }, { state: 'open' }])).toBe('open');
+	});
+
+	it('lets it go once every pull request is closed or merged', () => {
+		expect(pullRequestsState([{ state: 'closed' }, { state: 'closed' }])).toBe('done');
+	});
+});
+
 describe('parseSpaceArgs', () => {
 	it('deploys a public Space by default', () => {
 		expect(parseSpaceArgs([])).toMatchObject({
 			command: 'deploy',
 			ifExists: false,
+			server: 'http://localhost:9931',
+			upstream: 'ggml-org/llama.cpp',
 			visibility: 'public',
 			wip: false
 		});
+	});
+
+	it('takes another server and upstream', () => {
+		expect(
+			parseSpaceArgs(['--server', 'https://llm.example.com', '--upstream', 'alice/llama.cpp'])
+		).toMatchObject({ server: 'https://llm.example.com', upstream: 'alice/llama.cpp' });
+		expect(() => parseSpaceArgs(['--server', 'localhost:9931'])).toThrow();
+		expect(() => parseSpaceArgs(['--upstream', 'llama.cpp'])).toThrow();
 	});
 
 	it('reads the command and its options', () => {

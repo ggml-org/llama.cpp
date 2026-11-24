@@ -86,23 +86,26 @@ Locally the browser tests run in your installed Google Chrome; CI uses Playwrigh
 
 ### Preview Spaces
 
-A branch can have a preview: its build on a static Hugging Face Space, so a reviewer opens a link and adds their own llama-server by URL, without a checkout or `npm install`. The Space is yours (`<you>/llama-ui-<branch>`), holds only the static files, and each branch gets its own address, so previews share no browser storage.
+A branch can have a preview: its build on a static Hugging Face Space, so a reviewer opens a link and tries it against their own llama-server, without a checkout or `npm install`. The Space is yours (`<you>/llama-ui-<branch>`), holds only the static files, and each branch gets its own address, so previews share no browser storage.
 
 ```bash
 npm run space                             # build this branch and deploy it, creating its Space if needed
 npm run space -- status                   # print the address of this branch's Space
 npm run space -- rm                       # delete it
-npm run space -- prune                    # delete the Spaces whose branch is gone from the remote
+npm run space -- prune                    # delete the Spaces whose branch is gone, or whose pull request is closed
 npm run space -- --visibility protected   # when it creates the Space: public (default), protected or private
 npm run space -- --space <owner>/<name>   # a Space of that name, instead of the one named after the branch
 npm run space -- --title '<title>'        # the title on the Space's card
+npm run space -- --server <url>           # the llama-server it talks to (default: http://localhost:9931)
 ```
 
-It needs Node.js 24, the [`hf` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli) and its login (`hf auth login`, or `HF_TOKEN`). A deploy takes the branch as it is pushed: it refuses uncommitted UI changes and commits that are not on the remote, unless you pass `--wip`. It only touches Spaces it made, which it knows by their `llama-ui-preview` tag.
+It needs Node.js 24, the [`hf` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli) and its login (`hf auth login`, or `HF_TOKEN`). A deploy takes the branch as it is pushed: it refuses uncommitted UI changes and commits that are not on the remote, unless you pass `--wip`. It only touches Spaces it made, which it knows by their `llama-ui-preview` tag. The Space's `config.json` names the llama-server the preview talks to: `http://localhost:9931` by default, the reviewer's own.
 
-To redeploy on every push, turn on the `UI Preview Space` workflow in your fork: set the repository variable `UI_PREVIEW_SPACE_OWNER` (your Hugging Face user or organization) and the secret `HF_TOKEN` (a token that can write to its Spaces). A push to a branch that has a Space then redeploys it, and deleting the branch deletes its Space. Without the variable the workflow does nothing, which is how it stays off in ggml-org/llama.cpp.
+To redeploy on every push, turn on the `UI Preview Space` workflow in your fork: set the repository variable `UI_PREVIEW_SPACE_OWNER` (your Hugging Face user or organization) and the secret `HF_TOKEN` (a token that can write to its Spaces). A push to a branch that has a Space then redeploys it, deleting the branch deletes its Space, and every hour it deletes the Spaces whose pull request to ggml-org/llama.cpp is closed or merged. Without the variable the workflow does nothing, which is how it stays off in ggml-org/llama.cpp.
 
-Reviewing a preview: open the link and add your llama-server in the app. The page is `https://`, so it reaches a server on `http://localhost` in Chrome, Edge and Firefox (Chrome asks once for local network access), and Safari needs the server on HTTPS. Start llama-server with `--cors-origins <the preview's address>` when it restricts origins, as it does with tools or MCP enabled. A preview runs the branch's code in your browser, with access to the server you add to it.
+The Spaces stay on your account: ggml-org hosts none and holds no Hugging Face token. On a pull request, the `UI Preview Space link` workflow finds your public or protected Space by the tag that names your fork and branch, and links it as a deployment with a View deployment button, retired when the pull request closes. A private Space gets no link.
+
+Reviewing a preview: start llama-server on its default port, 9931, and open the link. The page is `https://`, so it reaches a server on `http://localhost` in Chrome, Edge and Firefox (Chrome asks once for local network access), and Safari needs the server on HTTPS. Start llama-server with `--cors-origins <the preview's address>` when it restricts origins, as it does with tools or MCP enabled. A preview runs the branch's code in your browser, with access to the server you add to it.
 
 ## Architecture
 
