@@ -1624,6 +1624,7 @@ struct llama_model_dflash : public llama_model_base {
         VARIANT_DFLASH2,
         VARIANT_DSPARK,
         VARIANT_LILICORR,
+        VARIANT_DSPINE,
     };
 
     enum backbone_type {
@@ -1637,12 +1638,14 @@ struct llama_model_dflash : public llama_model_base {
     backbone_type backbone = BACKBONE_BASE;
 
     void load_hparams_lilicorr(llama_model_loader & ml);
+    void load_hparams_dspine(llama_model_loader & ml);
     void load_hparams_dsv4(llama_model_loader & ml);
     void load_hparams_mistral_large4(llama_model_loader & ml);
     void load_tensors_dflash2();
     void load_tensors_dflash2_conv();
     void load_tensors_dspark(int64_t n_vocab_draft);
     void load_tensors_lilicorr();
+    void load_tensors_dspine();
     void load_tensors_layers_base();
     void load_tensors_layers_dsv4();
     void load_tensors_layers_mistral_large4();
@@ -1672,6 +1675,9 @@ struct llama_model_dflash : public llama_model_base {
         ggml_tensor * build_layers(ggml_tensor * inp_tokens);
         ggml_tensor * build_logits(ggml_tensor * cur);
         ggml_tensor * build_rope(ggml_tensor * cur, ggml_tensor * pos, int il);
+
+        // a head can rewrite each layer's output, called by build_layers()
+        virtual ggml_tensor * build_layer_out(ggml_tensor * cur, int /*il*/) { return cur; }
     };
 
     struct graph_dflash : public graph_base {
@@ -1688,6 +1694,22 @@ struct llama_model_dflash : public llama_model_base {
 
     struct graph_lilicorr : public graph_base {
         graph_lilicorr(const llm_graph_params & params);
+    };
+
+    // DSpine: a code bridge after every layer, and the lattice of the refined last write
+    struct graph_dspine : public graph_base {
+        ggml_tensor * anchor_codes = nullptr; // [code_size, n_blocks], set only when the ubatch holds whole blocks
+
+        // the last layer's state before its code write, reused by the refinement
+        ggml_tensor * write_raw   = nullptr; // [n_embd, n_tokens]
+        ggml_tensor * write_rms   = nullptr; // [1, n_tokens]
+        ggml_tensor * write_query = nullptr; // [rank, n_tokens]
+
+        graph_dspine(const llm_graph_params & params);
+
+        ggml_tensor * build_layer_out(ggml_tensor * raw, int il) override;
+
+        void build_lattice(ggml_tensor * output, ggml_tensor * output_s);
     };
 
     struct graph_dsv4 : public llama_model_deepseek4::graph {

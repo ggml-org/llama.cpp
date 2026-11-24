@@ -39,6 +39,10 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
     const bool has_markov   = ml.get_tensor_meta("markov_w1.weight")       != nullptr;
     const bool has_selector = ml.get_tensor_meta("selector_hidden.weight") != nullptr;
     const bool has_lilicorr = ml.get_key(LLM_KV_LILICORR_HIDDEN_SIZE, hparams.lilicorr_hidden_size, false);
+    const bool has_dspine   = ml.get_key(LLM_KV_DSPINE_HEAD_TOPK, hparams.dspine_head_topk, false);
+    if (has_dspine && (has_markov || has_selector || has_lilicorr)) {
+        throw std::runtime_error("invalid DSpine DFlash metadata");
+    }
     if (has_markov) {
         variant = VARIANT_DSPARK;
     } else if (has_selector) {
@@ -46,6 +50,9 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
     } else if (has_lilicorr) {
         variant = VARIANT_LILICORR;
         load_hparams_lilicorr(ml);
+    } else if (has_dspine) {
+        variant = VARIANT_DSPINE;
+        load_hparams_dspine(ml);
     }
 
     if (!ml.get_arr(LLM_KV_TARGET_LAYERS, target_layer_ids, false)) {
@@ -104,6 +111,7 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         case VARIANT_DSPARK:   load_tensors_dspark(n_vocab_draft); break;
         case VARIANT_DFLASH2:  load_tensors_dflash2();             break;
         case VARIANT_LILICORR: load_tensors_lilicorr();            break;
+        case VARIANT_DSPINE:   load_tensors_dspine();              break;
         case VARIANT_DFLASH:                                       break;
     }
 
@@ -467,6 +475,8 @@ ggml_tensor * llama_model_dflash::graph_base::build_layers(ggml_tensor * inp_tok
         }
         cb(cur, "l_out", il);
 
+        cur = build_layer_out(cur, il);
+
         inpL = cur;
     }
 
@@ -546,6 +556,7 @@ std::unique_ptr<llm_graph_context> llama_model_dflash::build_arch_graph(const ll
                 case VARIANT_DFLASH2:  return std::make_unique<graph_dflash2>(params);
                 case VARIANT_DSPARK:   return std::make_unique<graph_dspark>(params);
                 case VARIANT_LILICORR: return std::make_unique<graph_lilicorr>(params);
+                case VARIANT_DSPINE:   return std::make_unique<graph_dspine>(params);
             }
             GGML_ABORT("invalid DFlash variant");
         default:
