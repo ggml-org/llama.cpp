@@ -192,6 +192,7 @@ static bool common_pull_file(httplib::Client & cli,
                              const std::string & resolve_path,
                              const std::string & path_tmp,
                              bool supports_ranges,
+                             std::string & etag,
                              common_download_progress & p,
                              common_download_callback * callback) {
     std::ofstream ofs(path_tmp, std::ios::binary | std::ios::app);
@@ -203,6 +204,7 @@ static bool common_pull_file(httplib::Client & cli,
     httplib::Headers headers;
     if (supports_ranges && p.downloaded > 0) {
         headers.emplace("Range", "bytes=" + std::to_string(p.downloaded) + "-");
+        headers.emplace("If-Range", etag);
     }
 
     const char * func = __func__; // avoid __func__ inside a lambda
@@ -210,6 +212,13 @@ static bool common_pull_file(httplib::Client & cli,
 
     auto res = cli.Get(resolve_path, headers,
         [&](const httplib::Response &response) {
+            const std::string response_etag = response.get_header_value("ETag");
+            if (p.downloaded > 0 && response.status == 206 && response_etag != etag) {
+                LOG_WRN("%s: resume response changed the etag, restarting\n", func);
+                ofs.close();
+                remove(path_tmp.c_str());
+                return false;
+            }
             if (p.downloaded > 0 && response.status != 206) {
                 LOG_WRN("%s: server did not respond with 206 Partial Content for a resume request. Status: %d\n", func, response.status);
                 if (response.status == 416 || response.status == 200) {
@@ -224,6 +233,11 @@ static bool common_pull_file(httplib::Client & cli,
             if (p.downloaded == 0 && response.status != 200) {
                 LOG_WRN("%s: download received non-successful status code: %d\n", func, response.status);
                 return false;
+            }
+            if (p.downloaded == 0) {
+                etag = response_etag;
+                write_etag(path_tmp, etag);
+                p.total = 0;
             }
             if (p.total == 0 && response.has_header("Content-Length")) {
                 try {
@@ -410,15 +424,15 @@ static int common_download_file_single_online(const std::string & url,
     bool success = false;
     int delay = retry_delay_seconds;
 
-    if (!skip_etag && !etag.empty()) {
-        if (std::filesystem::exists(path_temporary) && read_etag(path_temporary) != etag) {
+    if (std::filesystem::exists(path_temporary)) {
+        const auto partial_etag = read_etag(path_temporary);
+        if (partial_etag.empty() || partial_etag.front() != '"' || partial_etag != etag) {
             LOG_WRN("%s: partial file does not match the server etag, discarding it: %s\n", __func__, path_temporary.c_str());
             if (remove(path_temporary.c_str()) != 0) {
                 LOG_ERR("%s: unable to delete file: %s\n", __func__, path_temporary.c_str());
                 return finish(-1);
             }
         }
-        write_etag(path_temporary, etag);
     }
 
     if (opts.callback) {
@@ -441,7 +455,7 @@ static int common_download_file_single_online(const std::string & url,
         size_t existing_size = 0;
 
         if (std::filesystem::exists(path_temporary)) {
-            if (supports_ranges) {
+            if (supports_ranges && !etag.empty() && etag.front() == '"') {
                 existing_size = std::filesystem::file_size(path_temporary);
             } else if (remove(path_temporary.c_str()) != 0) {
                 LOG_ERR("%s: unable to delete file: %s\n", __func__, path_temporary.c_str());
@@ -455,7 +469,7 @@ static int common_download_file_single_online(const std::string & url,
                 __func__, common_http_show_masked_url(parts).c_str(),
                 path_temporary.c_str(), etag.c_str());
 
-        if (common_pull_file(cli, parts.path, path_temporary, supports_ranges, p, opts.callback)) {
+        if (common_pull_file(cli, parts.path, path_temporary, supports_ranges, etag, p, opts.callback)) {
             if (std::rename(path_temporary.c_str(), path.c_str()) != 0) {
                 LOG_ERR("%s: unable to rename file: %s to %s\n", __func__, path_temporary.c_str(), path.c_str());
                 break;
