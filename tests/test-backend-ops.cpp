@@ -12399,6 +12399,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 256, 64,  8, 2, 300, 2)); // Falcon-H1
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 16, 16, 2, 64, 2)); // head_dim 16
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 48, 16, 2, 64, 2)); // head_dim 48
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 96, 64, 16, 8, 16, 2)); // Nemotron-3-Puzzle
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 96, 48, 16, 8, 16, 2)); // head_dim 48
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 96, 48, 16, 8, 64, 2)); // head_dim 48
 
     // Mamba-2 with the inputs laid out like the model graph, then with unaligned offsets and strides.
     for (int64_t n_tok : {4, 16, 100}) {
@@ -12410,6 +12413,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 256, 64, 8, 2, 40, 2, false, 1, false, true, 1));        // Falcon-H1
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 80, 8, 1, 40, 2, false, 1, false, true, 1, 4, 4)); // Nemotron-9B
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 96, 64, 16, 8, 40, 2, false, 1, false, true, 1));        // Nemotron-3-Puzzle
 
     // ssm_scan + cache cpy fusion
     test_cases.emplace_back(new test_ssm_scan_cache_fusion(GGML_TYPE_F32, 128, 64, 16, 2, 4, 1, 4));

@@ -1688,25 +1688,41 @@ static uint32_t ggml_vk_gated_delta_net_shmem_size(uint32_t v, bool coopmat2) {
     return qk + state + p_inv + delta_solved + lower + scan;
 }
 
-// Specialization constants of ssm_scan_cm2.comp and ssm_scan_prefill.comp.
+// Specialization constants of ssm_scan_cm2.comp (for d_state 96 and 128) and
+// ssm_scan_prefill.comp.
 #define GGML_VK_SSM_CM2_WG_SIZE 128u
-#define GGML_VK_SSM_CM2_D_STATE 128u
 #define GGML_VK_SSM_CM2_T 32u
 #define GGML_VK_SSM_CM2_ROWS 32u
 #define GGML_VK_SSM_CM2_PAD 8u
 #define GGML_VK_SSM_PREFILL_WG_SIZE 128u
 #define GGML_VK_SSM_PREFILL_LPR 16u
 #define GGML_VK_SSM_PREFILL_R 2u
-#define GGML_VK_SSM_PREFILL_ROWS (GGML_VK_SSM_PREFILL_WG_SIZE / GGML_VK_SSM_PREFILL_LPR * GGML_VK_SSM_PREFILL_R)
-// The prefill shader's tokens per chunk (T) are this divided by d_state, so a
-// chunk of B and C has the same size for every d_state.
+// The prefill shader's tokens per chunk (T) are the largest power of two that
+// keeps a chunk of B and C within this many values.
 #define GGML_VK_SSM_PREFILL_CHUNK_VALUES 2048u
+
+// Lanes per row group of ssm_scan_prefill.comp. Each lane keeps whole vec4s of
+// a row's state, so d_state must be a multiple of 4 * LPR: 96 uses 8 lanes.
+static constexpr uint32_t ggml_vk_ssm_scan_prefill_lpr(uint32_t d_state) {
+    return d_state % (4 * GGML_VK_SSM_PREFILL_LPR) == 0 ? GGML_VK_SSM_PREFILL_LPR : GGML_VK_SSM_PREFILL_LPR / 2;
+}
+
+static constexpr uint32_t ggml_vk_ssm_scan_prefill_rows(uint32_t d_state) {
+    return GGML_VK_SSM_PREFILL_WG_SIZE / ggml_vk_ssm_scan_prefill_lpr(d_state) * GGML_VK_SSM_PREFILL_R;
+}
+
+static constexpr uint32_t ggml_vk_ssm_scan_prefill_tokens(uint32_t d_state) {
+    uint32_t T = 1;
+    while (2 * T * d_state <= GGML_VK_SSM_PREFILL_CHUNK_VALUES) {
+        T *= 2;
+    }
+    return T;
+}
 
 // Shared memory of ssm_scan_cm2.comp: fp16 C, B [T x d_state],
 // S [rows x d_state], X_dt (two buffers) and X_w [T x rows], M [T x T], with
 // padded rows, and two float arrays.
-static uint32_t ggml_vk_ssm_scan_cm2_shmem_size() {
-    const uint32_t d_state = GGML_VK_SSM_CM2_D_STATE;
+static uint32_t ggml_vk_ssm_scan_cm2_shmem_size(uint32_t d_state) {
     const uint32_t T = GGML_VK_SSM_CM2_T;
     const uint32_t rows = GGML_VK_SSM_CM2_ROWS;
     const uint32_t pad = GGML_VK_SSM_CM2_PAD;
@@ -1725,12 +1741,12 @@ static uint32_t ggml_vk_ssm_scan_cm2_shmem_size() {
 // x [T x ROWS] and dA [T].
 template <uint32_t d_state>
 static constexpr uint32_t ggml_vk_ssm_scan_prefill_shmem_size() {
-    constexpr uint32_t T = GGML_VK_SSM_PREFILL_CHUNK_VALUES / d_state;
-    constexpr uint32_t rows = GGML_VK_SSM_PREFILL_ROWS;
+    constexpr uint32_t T = ggml_vk_ssm_scan_prefill_tokens(d_state);
+    constexpr uint32_t rows = ggml_vk_ssm_scan_prefill_rows(d_state);
     constexpr uint32_t wg = GGML_VK_SSM_PREFILL_WG_SIZE;
-    constexpr uint32_t lpr = GGML_VK_SSM_PREFILL_LPR;
+    constexpr uint32_t lpr = ggml_vk_ssm_scan_prefill_lpr(d_state);
     static_assert((lpr & (lpr - 1)) == 0 && wg % lpr == 0);
-    static_assert(GGML_VK_SSM_PREFILL_CHUNK_VALUES % d_state == 0 && d_state % (4 * lpr) == 0);
+    static_assert(d_state % (4 * lpr) == 0);
     static_assert((T * d_state / 4) % wg == 0 && rows % 4 == 0 && T * rows / 4 <= wg);
     static_assert((T * GGML_VK_SSM_PREFILL_R) % lpr == 0);
 
@@ -4339,19 +4355,25 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         device->properties.limits.maxComputeWorkGroupInvocations >= GGML_VK_SSM_PREFILL_WG_SIZE &&
         device->properties.limits.maxComputeWorkGroupSize[0] >= GGML_VK_SSM_PREFILL_WG_SIZE) {
         const uint32_t max_shmem = device->properties.limits.maxComputeSharedMemorySize;
+        if (ggml_vk_ssm_scan_prefill_shmem_size<96>() <= max_shmem) {
+            ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_prefill_f32_d96, "ssm_scan_prefill_d96_f32", ssm_scan_prefill_f32_len, ssm_scan_prefill_f32_data, "main", 8, sizeof(vk_op_ssm_scan_push_constants), {1, 1, 1},
+                {GGML_VK_SSM_PREFILL_WG_SIZE, 96, ggml_vk_ssm_scan_prefill_tokens(96), ggml_vk_ssm_scan_prefill_lpr(96), GGML_VK_SSM_PREFILL_R}, 1, true, true);
+        }
         if (ggml_vk_ssm_scan_prefill_shmem_size<128>() <= max_shmem) {
             ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_prefill_f32_d128, "ssm_scan_prefill_d128_f32", ssm_scan_prefill_f32_len, ssm_scan_prefill_f32_data, "main", 8, sizeof(vk_op_ssm_scan_push_constants), {1, 1, 1},
-                {GGML_VK_SSM_PREFILL_WG_SIZE, 128, GGML_VK_SSM_PREFILL_CHUNK_VALUES / 128, GGML_VK_SSM_PREFILL_LPR, GGML_VK_SSM_PREFILL_R}, 1, true, true);
+                {GGML_VK_SSM_PREFILL_WG_SIZE, 128, ggml_vk_ssm_scan_prefill_tokens(128), ggml_vk_ssm_scan_prefill_lpr(128), GGML_VK_SSM_PREFILL_R}, 1, true, true);
         }
         if (ggml_vk_ssm_scan_prefill_shmem_size<256>() <= max_shmem) {
             ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_prefill_f32_d256, "ssm_scan_prefill_d256_f32", ssm_scan_prefill_f32_len, ssm_scan_prefill_f32_data, "main", 8, sizeof(vk_op_ssm_scan_push_constants), {1, 1, 1},
-                {GGML_VK_SSM_PREFILL_WG_SIZE, 256, GGML_VK_SSM_PREFILL_CHUNK_VALUES / 256, GGML_VK_SSM_PREFILL_LPR, GGML_VK_SSM_PREFILL_R}, 1, true, true);
+                {GGML_VK_SSM_PREFILL_WG_SIZE, 256, ggml_vk_ssm_scan_prefill_tokens(256), ggml_vk_ssm_scan_prefill_lpr(256), GGML_VK_SSM_PREFILL_R}, 1, true, true);
         }
     }
 #if defined(VK_NV_cooperative_matrix2) && defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
     if (device->coopmat2 && device->coopmat2_ssm_support) {
-        ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_cm2_f32, "ssm_scan_f32_cm2", ssm_scan_f32_cm2_len, ssm_scan_f32_cm2_data, "main", 8, sizeof(vk_op_ssm_scan_push_constants), {1, 1, 1},
-            {GGML_VK_SSM_CM2_WG_SIZE, GGML_VK_SSM_CM2_D_STATE, GGML_VK_SSM_CM2_T, GGML_VK_SSM_CM2_ROWS, GGML_VK_SSM_CM2_PAD}, 1, true, true, GGML_VK_SSM_CM2_T);
+        ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_cm2_f32_d96, "ssm_scan_cm2_d96_f32", ssm_scan_f32_cm2_len, ssm_scan_f32_cm2_data, "main", 8, sizeof(vk_op_ssm_scan_push_constants), {1, 1, 1},
+            {GGML_VK_SSM_CM2_WG_SIZE, 96, GGML_VK_SSM_CM2_T, GGML_VK_SSM_CM2_ROWS, GGML_VK_SSM_CM2_PAD}, 1, true, true, GGML_VK_SSM_CM2_T);
+        ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_cm2_f32_d128, "ssm_scan_cm2_d128_f32", ssm_scan_f32_cm2_len, ssm_scan_f32_cm2_data, "main", 8, sizeof(vk_op_ssm_scan_push_constants), {1, 1, 1},
+            {GGML_VK_SSM_CM2_WG_SIZE, 128, GGML_VK_SSM_CM2_T, GGML_VK_SSM_CM2_ROWS, GGML_VK_SSM_CM2_PAD}, 1, true, true, GGML_VK_SSM_CM2_T);
     }
 #endif
 
@@ -5309,9 +5331,10 @@ vk_device ggml_vk_get_device(size_t idx) {
                                     found_fp32_128 = true;
                                 }
                             }
-                            // The SSM scan uses fp16 x fp16 -> fp32; every matrix dimension is N, L or P.
+                            // The SSM scan uses fp16 x fp16 -> fp32; every matrix dimension is
+                            // d_state (96 or 128), T or ROWS.
                             const auto ssm_dims_ok = [](uint32_t g) {
-                                return g != 0 && GGML_VK_SSM_CM2_D_STATE % g == 0 && GGML_VK_SSM_CM2_T % g == 0 && GGML_VK_SSM_CM2_ROWS % g == 0;
+                                return g != 0 && 96 % g == 0 && 128 % g == 0 && GGML_VK_SSM_CM2_T % g == 0 && GGML_VK_SSM_CM2_ROWS % g == 0;
                             };
                             if (prop.workgroupInvocations == GGML_VK_SSM_CM2_WG_SIZE &&
                                 prop.CType == VK_COMPONENT_TYPE_FLOAT32_KHR &&
@@ -5364,13 +5387,14 @@ vk_device ggml_vk_get_device(size_t idx) {
 #endif
                     }
                 }
+                // The shared memory of d_state 128 also covers 96.
                 device->coopmat2_ssm_support = device->coopmat2_ssm_support &&
                     coopmat2_props.cooperativeMatrixWorkgroupScopeMaxWorkgroupSize >= GGML_VK_SSM_CM2_WG_SIZE &&
                     device->properties.limits.maxComputeWorkGroupInvocations >= GGML_VK_SSM_CM2_WG_SIZE &&
                     device->properties.limits.maxComputeWorkGroupSize[0] >= GGML_VK_SSM_CM2_WG_SIZE &&
                     device->subgroup_size_control &&
                     device->subgroup_min_size <= GGML_VK_SSM_CM2_T && GGML_VK_SSM_CM2_T <= device->subgroup_max_size &&
-                    uint64_t(ggml_vk_ssm_scan_cm2_shmem_size()) + coopmat2_props.cooperativeMatrixWorkgroupScopeReservedSharedMemory <=
+                    uint64_t(ggml_vk_ssm_scan_cm2_shmem_size(128)) + coopmat2_props.cooperativeMatrixWorkgroupScopeReservedSharedMemory <=
                         device->properties.limits.maxComputeSharedMemorySize;
                 device->coopmat2_gdn_support = device->coopmat2_gdn_support &&
                     coopmat2_props.cooperativeMatrixWorkgroupScopeMaxWorkgroupSize >= 128 &&
@@ -11614,16 +11638,17 @@ void ggml_vk_ssm_scan(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_te
     vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, src0, src1, src2, dst, dst->op);
     uint32_t prefill_rows = 0; // rows per workgroup of the prefill shaders
     if (vec4 && K <= 1 && n_tok >= 8) {
-        if (n_tok >= GGML_VK_SSM_CM2_T && d_state == GGML_VK_SSM_CM2_D_STATE && ctx->device->pipeline_ssm_scan_cm2_f32) {
-            pipeline = ctx->device->pipeline_ssm_scan_cm2_f32;
+        vk_pipeline cm2 = d_state == 96  ? ctx->device->pipeline_ssm_scan_cm2_f32_d96 :
+                          d_state == 128 ? ctx->device->pipeline_ssm_scan_cm2_f32_d128 : nullptr;
+        vk_pipeline prefill = d_state == 96  ? ctx->device->pipeline_ssm_scan_prefill_f32_d96 :
+                              d_state == 128 ? ctx->device->pipeline_ssm_scan_prefill_f32_d128 :
+                              d_state == 256 ? ctx->device->pipeline_ssm_scan_prefill_f32_d256 : nullptr;
+        if (n_tok >= GGML_VK_SSM_CM2_T && cm2) {
+            pipeline = cm2;
             prefill_rows = GGML_VK_SSM_CM2_ROWS;
-        } else {
-            vk_pipeline p = d_state == 128 ? ctx->device->pipeline_ssm_scan_prefill_f32_d128 :
-                            d_state == 256 ? ctx->device->pipeline_ssm_scan_prefill_f32_d256 : nullptr;
-            if (p) {
-                pipeline = p;
-                prefill_rows = GGML_VK_SSM_PREFILL_ROWS;
-            }
+        } else if (prefill) {
+            pipeline = prefill;
+            prefill_rows = ggml_vk_ssm_scan_prefill_rows(d_state);
         }
     }
     GGML_ASSERT(pipeline != nullptr);
