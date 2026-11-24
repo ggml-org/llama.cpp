@@ -590,6 +590,8 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_ATTN_V_CONV_PROJ,                       "blk.%d.attn_v_conv_proj" },
     { LLM_TENSOR_ATTN_POST_CONV,                         "blk.%d.attn_post_conv" },
     { LLM_TENSOR_ATTN_RES_QUERY,                         "blk.%d.attn_res_query" },
+    { LLM_TENSOR_POST_ATTN_NORM,                         "blk.%d.post_attn_norm" },
+    { LLM_TENSOR_POST_MLP_NORM,                          "blk.%d.post_mlp_norm" },
     { LLM_TENSOR_FFN_POST_NORM,                          "blk.%d.post_ffw_norm" },
     { LLM_TENSOR_FFN_POST_NORM_1,                        "blk.%d.post_ffw_norm_1" },
     { LLM_TENSOR_FFN_POST_NORM_2,                        "blk.%d.post_ffw_norm_2" },
