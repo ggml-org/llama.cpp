@@ -9,6 +9,7 @@
 # ggml-org/ggml-et          : marty1885
 # ggml-org/ggml-hexagon     : lhez, max-krasnyansky
 # ggml-org/ggml-hip         : IMbackK, thelittlefireman
+# ggml-org/ggml-hrx         : AaronStGeorge, Geramy, rsuderman
 # ggml-org/ggml-metal       : forforever73, ggerganov, jhen0409, masterFoad
 # ggml-org/ggml-opencl      : lhez, max-krasnyansky
 # ggml-org/ggml-openvino    : ravi9, wine99
@@ -56,6 +57,7 @@
 /ggml/src/ggml-cuda/vendors/hip.h       @IMbackK
 /ggml/src/ggml-hexagon/                 @ggml-org/ggml-hexagon
 /ggml/src/ggml-hip/                     @ggml-org/ggml-hip
+/ggml/src/ggml-hrx/                     @ggml-org/ggml-hrx
 /ggml/src/ggml-et/                      @marty1885
 /ggml/src/ggml-impl.h                   @ggerganov
 /ggml/src/ggml-metal/                   @ggml-org/ggml-metal

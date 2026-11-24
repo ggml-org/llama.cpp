@@ -447,16 +447,15 @@ static bool ggml_hrx_readback_reserve(ggml_backend_hrx_context * ctx, size_t siz
     return true;
 }
 
-static bool ggml_hrx_stream_finish(ggml_backend_hrx_context * ctx) {
+static void ggml_hrx_stream_finish(ggml_backend_hrx_context * ctx) {
     if (!GGML_HRX_CHECK(hrx_stream_synchronize(ctx->stream))) {
-        return false;
+        GGML_ABORT("%s: HRX synchronize failed", __func__);
     }
     for (const auto & c : ctx->readback_copies) {
         std::memcpy(c.dst, ctx->readback_host + c.offset, c.size);
     }
     ctx->readback_copies.clear();
     ctx->readback_used = 0;
-    return true;
 }
 
 static void ggml_backend_hrx_free(ggml_backend_t backend) {
@@ -542,12 +541,16 @@ static void ggml_backend_hrx_event_record(ggml_backend_t backend, ggml_backend_e
     if (!ctx->readback_copies.empty()) {
         ggml_hrx_stream_finish(ctx);
     }
-    GGML_HRX_CHECK(hrx_event_record((hrx_event_t) event->context, ctx->stream));
+    if (!GGML_HRX_CHECK(hrx_event_record((hrx_event_t) event->context, ctx->stream))) {
+        GGML_ABORT("%s: HRX event record failed", __func__);
+    }
 }
 
 static void ggml_backend_hrx_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
     auto * ctx = (ggml_backend_hrx_context *) backend->context;
-    GGML_HRX_CHECK(hrx_stream_wait_event(ctx->stream, (hrx_event_t) event->context));
+    if (!GGML_HRX_CHECK(hrx_stream_wait_event(ctx->stream, (hrx_event_t) event->context))) {
+        GGML_ABORT("%s: HRX event wait failed", __func__);
+    }
 }
 
 static bool ggml_hrx_compute_node(ggml_backend_hrx_context * ctx, const ggml_tensor * node) {
@@ -712,7 +715,9 @@ static void ggml_backend_hrx_device_event_free(ggml_backend_dev_t dev, ggml_back
 
 static void ggml_backend_hrx_device_event_synchronize(ggml_backend_dev_t dev, ggml_backend_event_t event) {
     GGML_UNUSED(dev);
-    GGML_HRX_CHECK(hrx_event_synchronize((hrx_event_t) event->context));
+    if (!GGML_HRX_CHECK(hrx_event_synchronize((hrx_event_t) event->context))) {
+        GGML_ABORT("%s: HRX event synchronize failed", __func__);
+    }
 }
 
 static const ggml_backend_device_i ggml_backend_hrx_device_interface = {
