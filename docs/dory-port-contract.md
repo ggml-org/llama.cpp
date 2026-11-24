@@ -213,7 +213,14 @@ So the PORT applies the folds itself, from `dory.init_std` (0.0177) and
 `dory.alpha_init` (0.05). The earlier claim in this file that they were
 "already the folded product" was wrong; applying the fold twice is ~4e4× off.
 
-## `dory.layer_pattern` is 36 entries, not 72
+## `dory.layer_pattern` is 72 entries, one per PHYSICAL module
+
+The artifact and the converter both emit 72 characters: 36 attention markers
+(`S` sliding, `*` full) interleaved with 36 MLP markers (`-`). The earlier
+"36 entries" phrasing in this file was a shorthand for "36 ATTENTION entries",
+which is also true after skipping the MLP markers -- `src/models/dory.cpp` skips
+`-` and reads the 36 attention positions. The two readings encode the same
+stack; the drift worth fixing is the impression that the file carries only 36.
 
 One character per ATTENTION module (`S` sliding, `*` full); physical module `2k`
 is attention module `k`, and MLP slots carry `is_swa = 0`. Cross-checked against
