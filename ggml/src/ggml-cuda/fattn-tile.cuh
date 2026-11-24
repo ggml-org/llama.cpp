@@ -818,8 +818,7 @@ static __global__ void flash_attn_tile(
             if (i0 + np*warp_size*cpy_ne_D <= DKQ || i0 + (threadIdx.y % np)*(warp_size*cpy_ne_D) + threadIdx.x*cpy_ne_D < DKQ) {
                 __align__(16) float tmp_f[cpy_ne_D] = {0.0f};
                 ggml_cuda_memcpy_1<sizeof(tmp_f)>
-                    (tmp_f, &Q_f2[c*s02 + fastmodulo(col_Q_0 + j, ne01)*s01]
-                                 + i0 + (threadIdx.y % np)*(warp_size*cpy_ne_D) + threadIdx.x*cpy_ne_D);
+                    (tmp_f, Q_f2 + c*s02 + fastmodulo(col_Q_0 + j, ne01)*s01 + i0/2 + (threadIdx.y % np)*(warp_size*(cpy_ne_D/2)) + threadIdx.x*(cpy_ne_D/2));
 
 #pragma unroll
                 for (int i1 = 0; i1 < cpy_ne_D; ++i1) {
