@@ -17,6 +17,24 @@ static void init_model(llama_model & model, uint32_t n_layer) {
 }
 
 int main() {
+    {
+        llama_kv_cells cells;
+        cells.resize(1);
+        cells.pos_set(0, 8);
+        cells.seq_add(0, 0);
+        cells.pos_div(0, 2);
+        GGML_ASSERT(cells.pos_get(0) == 4);
+        GGML_ASSERT(cells.get_shift(0) == -4);
+        cells.pos_add(0, 6);
+        cells.pos_div(0, 3);
+        GGML_ASSERT(cells.pos_get(0) == 3);
+        GGML_ASSERT(8 + cells.get_shift(0) == cells.pos_get(0));
+        cells.reset_shift();
+        cells.pos_div(0, 2);
+        GGML_ASSERT(cells.pos_get(0) == 1);
+        GGML_ASSERT(cells.get_shift(0) == -2);
+    }
+
     for (int bit = 0; bit < 64; ++bit) {
         GGML_ASSERT(ctz64(uint64_t{1} << bit) == bit);
         GGML_ASSERT(ctz64(UINT64_MAX << bit) == bit);

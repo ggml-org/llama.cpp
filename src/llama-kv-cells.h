@@ -606,7 +606,7 @@ public:
         seq_pos_rm(i);
 
         pos[i]   /= d;
-        shift[i] += p_old - pos[i];
+        shift[i] += pos[i] - p_old;
 
         seq_pos_add(i);
 
