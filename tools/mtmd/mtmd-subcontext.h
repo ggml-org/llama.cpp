@@ -46,12 +46,6 @@ struct mtmd_backends {
     // its buffers fit the largest graph reserved by the subcontexts
     ggml_backend_sched_ptr sched;
 
-    int max_nodes;
-    ggml_backend_sched_eval_callback cb_eval;
-    void * cb_eval_user_data;
-
-    void ensure_graph_capacity(int required_nodes);
-
     // device nullptr means CPU
     mtmd_backends(ggml_backend_dev_t device, int n_threads, int max_nodes,
                   ggml_backend_sched_eval_callback cb_eval, void * cb_eval_user_data);
@@ -141,7 +135,6 @@ struct mtmd_subctx_encode_params {
     int n_threads = 1;
     const mtmd_image_f32_batch * imgs = nullptr;
     std::vector<float> * out_embd = nullptr;
-    std::vector<int32_t> * out_tokens = nullptr;
 
     // for audio gen, imgs has exactly one entry: hidden state from backbone (GEN_CODE) or unused (GEN_WAV)
     mtmd_subctx_gen_process gen_process = MTMD_SUBCTX_GEN_PROCESS_GEN_UNKNOWN;
@@ -207,8 +200,8 @@ struct mtmd_subcontext {
     void warmup(const mtmd_image_f32_batch & batch);
 
     // TODO: remove encode_image() and always use batched version
-    bool encode_image(int n_threads, const mtmd_image_f32 * img, std::vector<float> & out_vec, std::vector<int32_t> * out_tokens = nullptr);
-    bool encode_batch(int n_threads, const mtmd_image_f32_batch * imgs, std::vector<float> & out_batch_embd, std::vector<int32_t> * out_tokens = nullptr);
+    bool encode_image(int n_threads, const mtmd_image_f32 * img, std::vector<float> & out_vec);
+    bool encode_batch(int n_threads, const mtmd_image_f32_batch * imgs, std::vector<float> & out_batch_embd);
 
     // n_frames_max is the maximum number of encoder frames per encode() call, free the result with delete
     mtmd_subctx_enc_state * enc_state_init(int32_t n_frames_max);
@@ -217,8 +210,6 @@ struct mtmd_subcontext {
     mtmd_subctx_gen_state * gen_state_init(uint32_t seed);
 
 private:
-    void ensure_graph_capacity(int required_nodes);
-
     struct support_info_op {
         ggml_tensor * op;
 

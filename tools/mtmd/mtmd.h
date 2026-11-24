@@ -200,7 +200,6 @@ MTMD_API const char * mtmd_get_marker(const mtmd_context * ctx);
 //     you can pass the bitmap via mtmd_tokenize(), then call mtmd_*_get_n_tokens() to count the tokens
 //     note: passing a placeholder bitmap to mtmd_encode() will return an error
 MTMD_API mtmd_bitmap *         mtmd_bitmap_init           (uint32_t nx, uint32_t ny, const unsigned char * data);
-// Returns nullptr if the sample count or byte size exceeds the internal storage limits.
 MTMD_API mtmd_bitmap *         mtmd_bitmap_init_from_audio(size_t n_samples,         const float         * data);
 MTMD_API uint32_t              mtmd_bitmap_get_nx     (const mtmd_bitmap * bitmap);
 MTMD_API uint32_t              mtmd_bitmap_get_ny     (const mtmd_bitmap * bitmap);
@@ -367,10 +366,6 @@ MTMD_API int32_t mtmd_encode_chunk(mtmd_context * ctx,
 // llama_model_n_embd_inp(model) * mtmd_input_chunk_get_n_tokens(chunk) * sizeof(float)
 MTMD_API float * mtmd_get_output_embd(mtmd_context * ctx);
 
-// Get decoder token IDs from the last encode pass. The pointer is valid until the next encode.
-// Returns nullptr when the encoder produces embeddings.
-MTMD_API const llama_token * mtmd_get_output_tokens(mtmd_context * ctx, size_t * n_tokens_output);
-
 
 // batch encoding API
 // chunks are not owned by the batch, they will not be freed by mtmd_batch_free()
@@ -390,9 +385,6 @@ MTMD_API int32_t mtmd_batch_add_chunk(mtmd_batch * batch, const mtmd_input_chunk
 // returns 1 on generic error
 MTMD_API int32_t mtmd_batch_encode(mtmd_batch * batch);
 MTMD_API float * mtmd_batch_get_output_embd(mtmd_batch * batch, const mtmd_input_chunk * chunk);
-MTMD_API const llama_token * mtmd_batch_get_output_tokens(mtmd_batch * batch,
-                                                          const mtmd_input_chunk * chunk,
-                                                          size_t * n_tokens_output);
 
 
 // Set callback for all future logging events.

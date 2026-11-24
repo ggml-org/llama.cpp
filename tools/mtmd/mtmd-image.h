@@ -162,14 +162,6 @@ struct mtmd_image_preprocessor_qwen3vl : mtmd_image_preprocessor_dyn_size {
                                         int n_frames = 1, int temporal_factor = 1);
 };
 
-mtmd_image_size mtmd_apertus_image_calc_size(mtmd_image_size original_size, int spatial_factor, int min_pixels, int max_pixels);
-mtmd_image_f32 mtmd_apertus_image_prepare(const mtmd_image_u8 & image, mtmd_image_size target_size);
-
-struct mtmd_image_preprocessor_apertus : mtmd_image_preprocessor {
-    mtmd_image_preprocessor_apertus(const mtmd_model * model) : mtmd_image_preprocessor(model) {}
-    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
-};
-
 // LFM3-VL, same as qwen3vl but images are sized exactly as the transformers Qwen2-VL smart_resize
 struct mtmd_image_preprocessor_lfm3vl : mtmd_image_preprocessor_qwen3vl {
     using mtmd_image_preprocessor_qwen3vl::mtmd_image_preprocessor_qwen3vl;

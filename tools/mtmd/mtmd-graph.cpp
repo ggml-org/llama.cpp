@@ -1175,14 +1175,6 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
             {
                 builder = std::make_unique<mtmd_graph_granite4_vision>(ctx, img);
             } break;
-        case PROJECTOR_TYPE_APERTUS_VISION:
-            {
-                builder = std::make_unique<mtmd_graph_apertus_vision>(ctx, img);
-            } break;
-        case PROJECTOR_TYPE_APERTUS_AUDIO:
-            {
-                builder = std::make_unique<mtmd_graph_apertus_audio>(ctx, img);
-            } break;
         default:
             GGML_ABORT("missing cgraph builder");
     }

@@ -153,29 +153,12 @@ struct mtmd_hparams {
     int32_t proj_stack_factor = 0; // ultravox
     int32_t subsampling_factor = 0; // parakeet
 
-    // discrete media tokenizers
-    int32_t codebook_size = 0;
-    int32_t codebook_dim = 0;
-    int32_t token_offset = 0;
-
-    // Apertus vision tokenizer
-    int32_t vision_spatial_factor = 0;
-    int32_t vision_residual_block_count = 0;
-    std::vector<int32_t> vision_channel_multipliers;
-    std::vector<int32_t> vision_attention_levels;
-
     int32_t audio_chunk_size           = 0;
     int32_t audio_conv_kernel_size     = 0;
     int32_t audio_max_pos_emb          = 0;
     int32_t audio_proj_window_size     = 0;
     int32_t audio_proj_downsample_rate = 0;
     int32_t audio_proj_head_count      = 0;
-
-    // Apertus audio tokenizer
-    int32_t audio_residual_block_count = 0;
-    int32_t audio_dilation_growth_rate = 0;
-    int32_t audio_lstm_block_count    = 0;
-    std::vector<int32_t> audio_downsample_ratios;
 
     // audio pyramid (muse-spark, vibevoice): widths, folded samples (vibevoice: conv strides) and blocks per stage
     std::vector<int32_t> audio_hidden_sizes;
@@ -673,57 +656,6 @@ struct mtmd_code2wav {
     ggml_tensor * dac_post_snake_beta  = nullptr;
     ggml_tensor * dac_post_conv_w      = nullptr;
     ggml_tensor * dac_post_conv_b      = nullptr;
-};
-
-struct apertus_vision_resblock {
-    ggml_tensor * norm1_w = nullptr;
-    ggml_tensor * norm1_b = nullptr;
-    ggml_tensor * conv1_w = nullptr;
-    ggml_tensor * conv1_b = nullptr;
-    ggml_tensor * norm2_w = nullptr;
-    ggml_tensor * norm2_b = nullptr;
-    ggml_tensor * conv2_w = nullptr;
-    ggml_tensor * conv2_b = nullptr;
-    ggml_tensor * shortcut_w = nullptr;
-    ggml_tensor * shortcut_b = nullptr;
-};
-
-struct apertus_vision_attention {
-    ggml_tensor * norm_w = nullptr;
-    ggml_tensor * norm_b = nullptr;
-    ggml_tensor * q_w = nullptr;
-    ggml_tensor * q_b = nullptr;
-    ggml_tensor * k_w = nullptr;
-    ggml_tensor * k_b = nullptr;
-    ggml_tensor * v_w = nullptr;
-    ggml_tensor * v_b = nullptr;
-    ggml_tensor * out_w = nullptr;
-    ggml_tensor * out_b = nullptr;
-};
-
-struct apertus_vision_stage {
-    std::vector<apertus_vision_resblock> blocks;
-    std::vector<apertus_vision_attention> attentions;
-    ggml_tensor * downsample_w = nullptr;
-    ggml_tensor * downsample_b = nullptr;
-};
-
-struct apertus_audio_conv {
-    ggml_tensor * w = nullptr;
-    ggml_tensor * b = nullptr;
-};
-
-struct apertus_audio_resblock {
-    apertus_audio_conv conv1;
-    apertus_audio_conv conv2;
-    apertus_audio_conv shortcut;
-};
-
-struct apertus_audio_lstm_layer {
-    ggml_tensor * weight_ih = nullptr;
-    ggml_tensor * weight_hh = nullptr;
-    ggml_tensor * bias_ih = nullptr;
-    ggml_tensor * bias_hh = nullptr;
 };
 
 struct mtmd_chatterbox {
@@ -1240,27 +1172,6 @@ struct mtmd_model {
     ggml_tensor * norm_embd_w = nullptr;
     ggml_tensor * norm_embd_b = nullptr;
 
-    // Apertus discrete vision tokenizer
-    ggml_tensor * apertus_v_conv_in_w = nullptr;
-    ggml_tensor * apertus_v_conv_in_b = nullptr;
-    ggml_tensor * apertus_v_conv_out_w = nullptr;
-    ggml_tensor * apertus_v_conv_out_b = nullptr;
-    ggml_tensor * apertus_v_norm_out_w = nullptr;
-    ggml_tensor * apertus_v_norm_out_b = nullptr;
-    ggml_tensor * apertus_v_quant_conv_w = nullptr;
-    ggml_tensor * apertus_v_quant_conv_b = nullptr;
-    ggml_tensor * apertus_v_codebook = nullptr;
-    std::vector<apertus_vision_stage> apertus_v_stages;
-    apertus_vision_resblock apertus_v_mid_block_1;
-    apertus_vision_attention apertus_v_mid_attention;
-    apertus_vision_resblock apertus_v_mid_block_2;
-
-    // Apertus discrete audio tokenizer
-    std::vector<apertus_audio_conv> apertus_a_convs;
-    std::vector<apertus_audio_resblock> apertus_a_resblocks;
-    std::vector<apertus_audio_lstm_layer> apertus_a_lstm_layers;
-    ggml_tensor * apertus_a_codebook = nullptr;
-
     // "indexed" patch embedding norms
     ggml_tensor * patch_norm_1_w = nullptr;
     ggml_tensor * patch_norm_1_b = nullptr;
@@ -1665,10 +1576,6 @@ struct mtmd_model {
     }
 
     // this should be equal to the embedding dimension of the text model
-    bool outputs_tokens() const {
-        return proj_type == PROJECTOR_TYPE_APERTUS_VISION || proj_type == PROJECTOR_TYPE_APERTUS_AUDIO;
-    }
-
     int n_mmproj_embd() const;
 
     int n_output_tokens(const mtmd_image_f32 * img) const;

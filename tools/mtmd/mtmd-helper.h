@@ -209,20 +209,6 @@ MTMD_API int32_t mtmd_helper_decode_image_chunk(mtmd_context * ctx,
                                                 mtmd_helper_post_decode_callback callback,
                                                 void * user_data);
 
-// Decode media that an encoder represents as decoder token IDs.
-// The callback receives each successfully decoded sub-batch; its token pointer is only valid during the call.
-MTMD_API int32_t mtmd_helper_decode_tokens_chunk(mtmd_context * ctx,
-                                                 struct llama_context * lctx,
-                                                 const mtmd_input_chunk * chunk,
-                                                 const llama_token * encoded_tokens,
-                                                 size_t n_encoded_tokens,
-                                                 llama_pos n_past,
-                                                 llama_seq_id seq_id,
-                                                 int32_t n_batch,
-                                                 llama_pos * new_n_past,
-                                                 int32_t (*callback)(const llama_token * tokens, int32_t n_tokens, llama_pos pos, llama_seq_id seq_id, void * user_data),
-                                                 void * user_data);
-
 //
 // video input helpers (requires ffmpeg/ffprobe installed on the system, or a mtmd_helper_video_decoder)
 // the notion of video only exists at the helper level, it is not visible to the core mtmd library

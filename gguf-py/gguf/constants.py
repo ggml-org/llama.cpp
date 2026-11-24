@@ -496,13 +496,6 @@ class Keys:
         WINDOW_SIZE           = "clip.vision.window_size"
         FEATURE_LAYERS        = "clip.vision.feature_layer" # Granite4 Vision
         IMAGE_GRID_PINPOINTS  = "clip.vision.image_grid_pinpoints" # Granite4 Vision
-        CODEBOOK_SIZE         = "clip.vision.codebook_size"
-        CODEBOOK_DIM          = "clip.vision.codebook_dim"
-        TOKEN_OFFSET          = "clip.vision.token_offset"
-        SPATIAL_FACTOR        = "clip.vision.spatial_factor"
-        CHANNEL_MULTIPLIERS   = "clip.vision.channel_multipliers"
-        RESIDUAL_BLOCK_COUNT  = "clip.vision.residual_block_count"
-        ATTENTION_LEVELS      = "clip.vision.attention_levels"
 
         class Attention:
             HEAD_COUNT      = "clip.vision.attention.head_count"
@@ -523,15 +516,6 @@ class Keys:
 
     class ClipAudio:
         PROJECTOR_TYPE      = "clip.audio.projector_type" # for mixed modality models
-        CODEBOOK_SIZE       = "clip.audio.codebook_size"
-        CODEBOOK_DIM        = "clip.audio.codebook_dim"
-        TOKEN_OFFSET        = "clip.audio.token_offset"
-        SAMPLE_RATE         = "clip.audio.sample_rate"
-        HOP_LENGTH          = "clip.audio.hop_length"
-        DOWNSAMPLE_RATIOS    = "clip.audio.downsample_ratios"
-        RESIDUAL_BLOCK_COUNT = "clip.audio.residual_block_count"
-        DILATION_GROWTH_RATE = "clip.audio.dilation_growth_rate"
-        LSTM_BLOCK_COUNT     = "clip.audio.lstm_block_count"
         NUM_MEL_BINS        = "clip.audio.num_mel_bins"
         EMBEDDING_LENGTH    = "clip.audio.embedding_length"
         FEED_FORWARD_LENGTH = "clip.audio.feed_forward_length"
@@ -7576,8 +7560,6 @@ class VisionProjectorType:
     MIMO_AUDIO     = "mimo_audio"
     GRANITE4_VISION = "granite4_vision"
     MUSE_GLIMMER   = "muse-glimmer"
-    APERTUS_VISION = "apertus_vision"
-    APERTUS_AUDIO  = "apertus_audio"
     COHERE2V       = "cohere2v"
     D1OMNI_V       = "d1omni_v"  # lfm2 vision, without separator tokens
     D1OMNI_A       = "d1omni_a"  # lfm2a audio, with a residual block after the projector

@@ -11,11 +11,9 @@
 
 #include <algorithm>
 #include <cfloat>
-#include <cinttypes>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
-#include <limits>
 #include <map>
 #include <memory>
 #include <random>
@@ -66,8 +64,7 @@ ggml_backend_dev_t mtmd_select_device(bool use_gpu, ggml_backend_dev_t device) {
 }
 
 mtmd_backends::mtmd_backends(ggml_backend_dev_t device, int n_threads, int max_nodes,
-                             ggml_backend_sched_eval_callback cb_eval, void * cb_eval_user_data) :
-        max_nodes(max_nodes), cb_eval(cb_eval), cb_eval_user_data(cb_eval_user_data) {
+                             ggml_backend_sched_eval_callback cb_eval, void * cb_eval_user_data) {
     threadpool = mtmd_threadpool_init(n_threads);
 
     backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
@@ -106,18 +103,6 @@ mtmd_backends::mtmd_backends(ggml_backend_dev_t device, int n_threads, int max_n
     if (cb_eval != nullptr) {
         ggml_backend_sched_set_eval_callback(sched.get(), cb_eval, cb_eval_user_data);
     }
-}
-
-void mtmd_backends::ensure_graph_capacity(int required_nodes) {
-    if (required_nodes <= max_nodes) {
-        return;
-    }
-    ggml_backend_sched_synchronize(sched.get());
-    sched.reset(ggml_backend_sched_new(ptrs.data(), bufts.data(), ptrs.size(), required_nodes, false, true));
-    if (cb_eval != nullptr) {
-        ggml_backend_sched_set_eval_callback(sched.get(), cb_eval, cb_eval_user_data);
-    }
-    max_nodes = required_nodes;
 }
 
 mtmd_backends::~mtmd_backends() {
@@ -160,16 +145,6 @@ mtmd_subcontext::mtmd_subcontext(const mtmd_model & model, mtmd_backends & backe
     }
 }
 
-void mtmd_subcontext::ensure_graph_capacity(int required_nodes) {
-    if (required_nodes <= max_nodes) {
-        return;
-    }
-    backends.ensure_graph_capacity(required_nodes);
-    buf_compute_meta.resize(required_nodes * ggml_tensor_overhead() + ggml_graph_overhead_custom(required_nodes, false));
-    max_nodes = required_nodes;
-    is_allocated = false;
-}
-
 mtmd_image_f32_batch mtmd_subcontext::get_dummy_batch() const {
     // create a fake batch
     const auto & hparams = model.hparams;
@@ -187,8 +162,7 @@ mtmd_image_f32_batch mtmd_subcontext::get_dummy_batch() const {
     } else {
         // GEMMA4UA uses n_mel_bins as a raw-waveform frame size (640), not a mel-bin count,
         // so the [1, 256] bound only applies to FFT-based models.
-        const bool fft_based = model.proj_type != PROJECTOR_TYPE_GEMMA4UA &&
-                               model.proj_type != PROJECTOR_TYPE_APERTUS_AUDIO;
+        const bool fft_based = model.proj_type != PROJECTOR_TYPE_GEMMA4UA;
         if (hparams.n_mel_bins <= 0 || (fft_based && hparams.n_mel_bins > 256)) {
             throw std::runtime_error(mtmd_format("%s: invalid n_mel_bins (%d), must be in [1, 256]\n", __func__, hparams.n_mel_bins));
         }
@@ -391,21 +365,19 @@ bool mtmd_audio_log_mel(const mtmd_audio_mel_config & config, const float * samp
     return true;
 }
 
-bool mtmd_subcontext::encode_image(int n_threads, const mtmd_image_f32 * img, std::vector<float> & out_vec, std::vector<int32_t> * out_tokens) {
+bool mtmd_subcontext::encode_image(int n_threads, const mtmd_image_f32 * img, std::vector<float> & out_vec) {
     mtmd_image_f32_batch imgs;
-    imgs.is_audio = model.modality == MTMD_MODALITY_AUDIO;
     mtmd_image_f32 img_copy = *img;
     imgs.entries.push_back(std::move(img_copy));
 
-    return encode_batch(n_threads, &imgs, out_vec, out_tokens);
+    return encode_batch(n_threads, &imgs, out_vec);
 }
 
-bool mtmd_subcontext::encode_batch(int n_threads, const mtmd_image_f32_batch * imgs_c_ptr, std::vector<float> & out_batch_embd, std::vector<int32_t> * out_tokens) {
+bool mtmd_subcontext::encode_batch(int n_threads, const mtmd_image_f32_batch * imgs_c_ptr, std::vector<float> & out_batch_embd) {
     mtmd_subctx_encode_params params;
     params.imgs = imgs_c_ptr;
     params.n_threads = n_threads;
     params.out_embd = &out_batch_embd;
-    params.out_tokens = out_tokens;
 
     if (model.proj_type == PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE) {
         return mtmd_graph_nemotron_transcribe::encode_windows(this, model, &params);
@@ -638,16 +610,6 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
     const mtmd_image_f32_batch & imgs = *params->imgs;
     int n_batch_cur = imgs.entries.size();
 
-    if (model.proj_type == PROJECTOR_TYPE_APERTUS_AUDIO && !imgs.entries.empty()) {
-        const int64_t n_audio_tokens = model.n_output_tokens(&imgs.entries.front());
-        const int64_t required_nodes = std::max<int64_t>(8192, 2048 + 32 * int64_t(model.hparams.audio_lstm_block_count) * n_audio_tokens);
-        if (required_nodes > std::numeric_limits<int>::max()) {
-            LOG_ERR("%s: Apertus audio graph is too large (%" PRId64 " nodes)\n", __func__, required_nodes);
-            return false;
-        }
-        ensure_graph_capacity((int) required_nodes);
-    }
-
     // [QWEN_VIDEO] for video models, the batch dimension is used as temporal dimension for merged frames
     if (!support_batch && n_batch_cur > model.n_temporal_merge()) {
         LOG_ERR("%s: batch size %d exceeds maximum supported batch/temporal-merge size %d\n", __func__, n_batch_cur, model.n_temporal_merge());
@@ -685,8 +647,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
 
     // the last node is the embedding tensor, code2wav has no out_embd
     // read it before scheduling: backends may reorder the nodes of graphs with several outputs (Metal)
-    ggml_tensor * output = ggml_graph_node(gf, -1);
-    ggml_tensor * embeddings = params->out_embd && !model.outputs_tokens() ? output : nullptr;
+    ggml_tensor * embeddings = params->out_embd ? ggml_graph_node(gf, -1) : nullptr;
 
     if (!ggml_backend_sched_alloc_graph(backends.sched.get(), gf)) {
         LOG_ERR("%s: failed to allocate compute graph\n", __func__);
@@ -2647,9 +2608,6 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                     }
                 }
             } break;
-        case PROJECTOR_TYPE_APERTUS_VISION:
-        case PROJECTOR_TYPE_APERTUS_AUDIO:
-            break;
         default:
             GGML_ABORT("Unknown projector type");
     }
@@ -2661,41 +2619,6 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         LOG_ERR("%s: ggml_backend_sched_graph_compute failed with error %d\n", __func__, status);
         return false;
     }
-
-    if (model.outputs_tokens()) {
-        if (output->type != GGML_TYPE_I32) {
-            LOG_ERR("%s: expected token ID output, got %s\n", __func__, ggml_type_name(output->type));
-            return false;
-        }
-
-        const int expected_n_tokens_out = model.n_output_tokens(&imgs.entries[0]) * n_batch_cur;
-        if (ggml_nelements(output) != expected_n_tokens_out) {
-            LOG_ERR("%s: expected %d output tokens, got %zu\n", __func__, expected_n_tokens_out,
-                    (size_t) ggml_nelements(output));
-            return false;
-        }
-        if (params->out_tokens == nullptr) {
-            LOG_ERR("%s: token output buffer was not provided\n", __func__);
-            return false;
-        }
-
-        if (params->out_embd != nullptr) {
-            params->out_embd->clear();
-        }
-        params->out_tokens->resize(expected_n_tokens_out);
-        ggml_backend_tensor_get(output, params->out_tokens->data(), 0, ggml_nbytes(output));
-        for (int32_t & token : *params->out_tokens) {
-            if (token < 0 || token >= hparams.codebook_size) {
-                LOG_ERR("%s: image code is outside the codebook\n", __func__);
-                params->out_tokens->clear();
-                return false;
-            }
-            token += hparams.token_offset;
-        }
-        LOG_DBG("%s: output token shape [%d]\n", __func__, expected_n_tokens_out);
-        return true;
-    }
-
 
     if (model.proj_type == PROJECTOR_TYPE_KOKORO) {
         const auto * io = params->kokoro;

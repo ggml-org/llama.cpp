@@ -18,7 +18,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cinttypes>
-#include <limits>
 #include <climits>
 #include <vector>
 
@@ -193,63 +192,6 @@ int32_t mtmd_helper_decode_image_chunk(
     return 0;
 }
 
-int32_t mtmd_helper_decode_tokens_chunk(
-        mtmd_context * ctx,
-        struct llama_context * lctx,
-        const mtmd_input_chunk * chunk,
-        const llama_token * encoded_tokens,
-        size_t n_encoded_tokens,
-        llama_pos n_past,
-        llama_seq_id seq_id,
-        int32_t n_batch,
-        llama_pos * new_n_past,
-        int32_t (*callback)(const llama_token * tokens, int32_t n_tokens, llama_pos pos, llama_seq_id seq_id, void * user_data),
-        void * user_data) {
-    if (!chunk || !new_n_past || n_batch <= 0 || n_past < 0 || !encoded_tokens ||
-        n_encoded_tokens == 0 || n_encoded_tokens > size_t(std::numeric_limits<llama_pos>::max() - n_past) ||
-        n_encoded_tokens != mtmd_input_chunk_get_n_tokens(chunk) ||
-        llama_pos(n_encoded_tokens) != mtmd_input_chunk_get_n_pos(chunk)) {
-        LOG_ERR("%s: invalid media token output\n", __func__);
-        return -1;
-    }
-    if (mtmd_decode_use_mrope(ctx)) {
-        LOG_ERR("%s: discrete media tokens with M-RoPE are not supported\n", __func__);
-        return -1;
-    }
-
-    llama_batch_ext_ptr batch(llama_batch_ext_init(lctx));
-    const bool use_non_causal = mtmd_decode_use_non_causal(ctx, chunk);
-    const scope_non_causal non_causal(lctx, use_non_causal);
-
-    size_t offset = 0;
-    while (offset < n_encoded_tokens) {
-        llama_batch_ext_clear(batch.get());
-        const int32_t n_tokens = std::min(size_t(n_batch), n_encoded_tokens - offset);
-        const llama_pos pos_0 = n_past + llama_pos(offset);
-        for (int32_t i = 0; i < n_tokens; ++i) {
-            const int32_t idx = llama_batch_ext_add_token(batch.get(), seq_id, encoded_tokens[offset + i]);
-            const llama_pos pos = pos_0 + i;
-            if (idx < 0 || !llama_batch_ext_set_pos(batch.get(), idx, &pos)) {
-                LOG_ERR("%s: failed to add media token to batch\n", __func__);
-                return -1;
-            }
-        }
-
-        int32_t ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
-        if (ret == 0 && callback != nullptr) {
-            ret = callback(encoded_tokens + offset, n_tokens, pos_0, seq_id, user_data);
-        }
-        if (ret != 0) {
-            LOG_ERR("%s: failed to decode media tokens\n", __func__);
-            return ret;
-        }
-        offset += n_tokens;
-    }
-
-    *new_n_past = n_past + mtmd_input_chunk_get_n_pos(chunk);
-    return 0;
-}
-
 int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         struct llama_context * lctx,
         const mtmd_input_chunk * chunk,
@@ -305,16 +247,8 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
 
         LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
 
-        size_t n_media_tokens = 0;
-        const llama_token * media_tokens = mtmd_get_output_tokens(ctx, &n_media_tokens);
-        if (media_tokens != nullptr) {
-            ret = mtmd_helper_decode_tokens_chunk(ctx, lctx, chunk, media_tokens, n_media_tokens,
-                                                  n_past, seq_id, n_batch, new_n_past, nullptr, nullptr);
-        } else {
-            float * embd = mtmd_get_output_embd(ctx);
-            ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch,
-                                                 new_n_past, nullptr, nullptr);
-        }
+        float * embd = mtmd_get_output_embd(ctx);
+        ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past, nullptr, nullptr);
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);
             return ret;

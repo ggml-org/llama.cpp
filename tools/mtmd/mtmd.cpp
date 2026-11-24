@@ -116,7 +116,7 @@ void mtmd_serialization::write<std::string>(std::string value) {
 template <>
 std::string mtmd_serialization::read<std::string>() {
     uint64_t len = read<uint64_t>();
-    if (len > data.size() - read_pos) {
+    if (read_pos + len > data.size()) {
         throw std::runtime_error("read_string OOB");
     }
     std::string str(data.data() + read_pos, len);
@@ -177,7 +177,7 @@ void mtmd_image_f32_batch::serialize(mtmd_serialization & ser) const {
 void mtmd_image_f32_batch::deserialize(mtmd_serialization & ser) {
     is_audio = ser.read<bool>();
     uint64_t n = ser.read<uint64_t>();
-    constexpr size_t min_entry_bytes = sizeof(uint8_t) * 2 + sizeof(int32_t) * 3;
+    constexpr size_t min_entry_bytes = sizeof(uint8_t) * 2 + sizeof(int32_t) * 2;
     if (n > (ser.data.size() - ser.read_pos) / min_entry_bytes) {
         throw std::runtime_error("entries count exceeds buffer size");
     }
@@ -370,21 +370,6 @@ struct mtmd_image_tokens {
         n_temporal_merge = ser.read<uint32_t>();
         id = ser.read<std::string>();
         batch_f32.deserialize(ser);
-        if (nx == 0 || ny == 0 || n_temporal_merge == 0 || batch_f32.entries.empty()) {
-            throw std::runtime_error("invalid image token geometry");
-        }
-        const uint64_t grid = pos == MTMD_POS_TYPE_HUNYUANVL ? (uint64_t(nx) + 1) * ny + 2 : uint64_t(nx) * ny;
-        const uint64_t frames = pos == MTMD_POS_TYPE_HUNYUANVL ? 1 :
-            (batch_f32.entries.size() + uint64_t(n_temporal_merge) - 1) / n_temporal_merge;
-        if (grid > INT32_MAX || frames > INT32_MAX / grid) {
-            throw std::runtime_error("image token count exceeds supported position range");
-        }
-        for (const auto & entry : batch_f32.entries) {
-            // Empty placeholders can omit both pixel dimensions.
-            if (entry.nx() < 0 || entry.ny() < 0 || (entry.nx() == 0) != (entry.ny() == 0) || entry.lead_pad < 0) {
-                throw std::runtime_error("invalid preprocessed image geometry");
-            }
-        }
     }
 };
 using mtmd_image_tokens_ptr = std::unique_ptr<mtmd_image_tokens>;
@@ -569,7 +554,6 @@ struct mtmd_batch {
     mtmd_context * ctx;
     std::vector<const mtmd_input_chunk *> entries;
     std::vector<float> output_embd; // aggregated output embedding for the whole batch
-    std::vector<llama_token> output_tokens; // aggregated decoder token IDs for the whole batch
     mtmd_batch(mtmd_context * ctx): ctx(ctx) {}
     int32_t n_tokens() const {
         int32_t n = 0;
@@ -843,7 +827,6 @@ struct mtmd_context {
     std::unique_ptr<mtmd_subcontext> ctx_v; // vision
     std::unique_ptr<mtmd_subcontext> ctx_a; // audio
     std::vector<float> out_embd; // image embedding vector
-    std::vector<llama_token> out_tokens; // decoder token IDs produced by a discrete media encoder
 
     // generation context
     std::unique_ptr<mtmd_subcontext> ctx_gen_a; // audio
@@ -1018,7 +1001,7 @@ struct mtmd_context {
         }
 
         // if both vision and audio mmproj are present, we need to validate their n_embd
-        if (ctx_v && ctx_a && !ctx_v->model.outputs_tokens() && !ctx_a->model.outputs_tokens()) {
+        if (ctx_v && ctx_a) {
             int n_embd_v = ctx_v->model.n_mmproj_embd();
             int n_embd_a = ctx_a->model.n_mmproj_embd();
             if (n_embd_v != n_embd_a) {
@@ -1028,38 +1011,16 @@ struct mtmd_context {
             }
         }
 
-        auto validate_embedding_width = [&](const mtmd_subcontext * sctx, const char * modality) {
-            if (!sctx || sctx->model.outputs_tokens()) {
-                return;
-            }
-            const int n_embd_mmproj = sctx->model.n_mmproj_embd();
-            if (n_embd_text > 0 && n_embd_text != n_embd_mmproj) {
-                throw std::runtime_error(mtmd_format(
-                    "mismatch between text model (n_embd = %d) and %s mmproj (n_embd = %d)\n"
-                    "hint: you may be using wrong mmproj\n",
-                    n_embd_text, modality, n_embd_mmproj));
-            }
-        };
-        validate_embedding_width(ctx_v.get(), "vision");
-        validate_embedding_width(ctx_a.get(), "audio");
-        auto validate_token_vocabulary = [&](const mtmd_subcontext * sctx, const char * token_name) {
-            if (!sctx || !sctx->model.outputs_tokens() || !vocab) {
-                return;
-            }
-            const auto * hp = &sctx->model.hparams;
-            if (int64_t(hp->token_offset) + hp->codebook_size > llama_vocab_n_tokens(vocab) ||
-                pos_type != MTMD_POS_TYPE_NORMAL) {
-                throw std::runtime_error("Apertus tokenizer is incompatible with the text model");
-            }
-            const auto first = std::string("<|") + token_name + " token 0|>";
-            const auto last = std::string("<|") + token_name + " token " + std::to_string(hp->codebook_size - 1) + "|>";
-            if (std::strcmp(llama_vocab_get_text(vocab, hp->token_offset), first.c_str()) != 0 ||
-                std::strcmp(llama_vocab_get_text(vocab, hp->token_offset + hp->codebook_size - 1), last.c_str()) != 0) {
-                throw std::runtime_error("Apertus codebook does not match the text vocabulary");
-            }
-        };
-        validate_token_vocabulary(ctx_v.get(), "visual");
-        validate_token_vocabulary(ctx_a.get(), "audio");
+        // since we already validate n_embd of vision and audio mmproj,
+        // we can safely assume that they are the same
+        // a gen-only mmproj is validated below
+        int n_embd_mmproj = ctx_v || ctx_a ? (ctx_v ? ctx_v : ctx_a)->model.n_mmproj_embd() : n_embd_text;
+        if (n_embd_text > 0 && n_embd_text != n_embd_mmproj) {
+            throw std::runtime_error(mtmd_format(
+                "mismatch between text model (n_embd = %d) and mmproj (n_embd = %d)\n"
+                "hint: you may be using wrong mmproj\n",
+                n_embd_text, n_embd_mmproj));
+        }
         if (ctx_gen_a) {
             int n_embd_gen = ctx_gen_a->model.n_mmproj_embd();
             if (n_embd_text > 0 && n_embd_text != n_embd_gen) {
@@ -1168,10 +1129,6 @@ struct mtmd_context {
                     img_beg = "<|vision_start|>";
                     img_end = "<|vision_end|>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(models.v.get());
-                } break;
-            case PROJECTOR_TYPE_APERTUS_VISION:
-                {
-                    image_preproc = std::make_unique<mtmd_image_preprocessor_apertus>(models.v.get());
                 } break;
             case PROJECTOR_TYPE_MINIMAX_M3:
                 {
@@ -1600,12 +1557,6 @@ struct mtmd_context {
             case PROJECTOR_TYPE_CHATTERBOX_SPKENC:
                 {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_chatterbox_ref>(models.a.get(), cbx_is_mtl(*models.a));
-                } break;
-            case PROJECTOR_TYPE_APERTUS_AUDIO:
-                {
-                    aud_beg = "<|audio_start|>";
-                    aud_end = "<|audio_end|>";
-                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_apertus>(models.a.get());
                 } break;
             default:
                 throw std::runtime_error(mtmd_format("%s: unexpected audio projector type %d\n", __func__, proj));
@@ -2164,14 +2115,6 @@ struct mtmd_tokenizer {
                     image_tokens->nx = n_tokens;
                     image_tokens->ny = 1;
                 }
-                if (ctx->proj_type_v() == PROJECTOR_TYPE_APERTUS_VISION) {
-                    if (preproc_out.entries.size() != 1) {
-                        throw std::runtime_error("Apertus vision does not support batched media encoding");
-                    }
-                    image_tokens->nx = apertus_frame(vocab, preproc_out.entries[0],
-                        ctx->ctx_v->model.hparams.vision_spatial_factor, nullptr);
-                    image_tokens->ny = 1;
-                }
                 image_tokens->pos = ctx->pos_type;
                 // U1 uses M-RoPE, but unlike Qwen its image H/W coordinates are
                 // zero-based and the whole image occupies one temporal position.
@@ -2264,7 +2207,7 @@ struct mtmd_tokenizer {
                     n_samples = dummy.size();
                 } else {
                     const auto & buf = bitmap->get_ro_buf();
-                    GGML_ASSERT(buf.size() >= sizeof(float));
+                    GGML_ASSERT(buf.size() > sizeof(float));
                     GGML_ASSERT(buf.size() % sizeof(float) == 0);
 
                     samples = (const float *)buf.data();
@@ -2566,47 +2509,6 @@ struct mtmd_tokenizer {
         return result;
     }
 
-    static uint32_t apertus_frame(const llama_vocab * vocab, const mtmd_image_f32 & image,
-                                  int factor, std::vector<llama_token> * output) {
-        if (factor <= 0 || image.nx() <= 0 || image.ny() <= 0 ||
-            image.nx() % factor != 0 || image.ny() % factor != 0) {
-            throw std::runtime_error("invalid Apertus image grid");
-        }
-        const uint32_t nx = image.nx() / factor;
-        const uint32_t ny = image.ny() / factor;
-        auto prefix = mtmd_tokenize_text_internal(vocab, "<|img_start|>", false, true);
-        const auto size = mtmd_tokenize_text_internal(vocab, std::to_string(ny) + "*" + std::to_string(nx), false, false);
-        const auto start = mtmd_tokenize_text_internal(vocab, "<|img_token_start|>", false, true);
-        const auto separator = mtmd_tokenize_text_internal(vocab, "<|img_end_of_row|>", false, true);
-        const auto suffix = mtmd_tokenize_text_internal(vocab, "<|img_end|>", false, true);
-        for (const auto * marker : std::initializer_list<const std::vector<llama_token> *>{&prefix, &start, &separator, &suffix}) {
-            if (marker->size() != 1 || !llama_vocab_is_control(vocab, (*marker)[0])) {
-                throw std::runtime_error("Apertus image marker is missing from the text vocabulary");
-            }
-        }
-        prefix.insert(prefix.end(), size.begin(), size.end());
-        prefix.insert(prefix.end(), start.begin(), start.end());
-        const uint64_t n_codes = uint64_t(nx) * ny;
-        const uint64_t total = prefix.size() + n_codes + uint64_t(ny - 1) * separator.size() + suffix.size();
-        if (total > INT32_MAX || (output && output->size() != n_codes)) {
-            throw std::runtime_error("invalid Apertus image token count");
-        }
-        if (output) {
-            const auto codes = std::move(*output);
-            *output = std::move(prefix);
-            output->reserve(total);
-            for (uint32_t row = 0; row < ny; ++row) {
-                const size_t offset = size_t(row) * nx;
-                output->insert(output->end(), codes.begin() + offset, codes.begin() + offset + nx);
-                if (row + 1 < ny) {
-                    output->insert(output->end(), separator.begin(), separator.end());
-                }
-            }
-            output->insert(output->end(), suffix.begin(), suffix.end());
-        }
-        return total;
-    }
-
     // copied from common_tokenize
     static std::vector<llama_token> mtmd_tokenize_text_internal(
         const struct llama_vocab * vocab,
@@ -2672,7 +2574,7 @@ int32_t mtmd_tokenize_from_parts(const mtmd_context * ctx,
     }
 }
 
-static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * image_tokens, std::vector<float> & out_embd, std::vector<llama_token> & out_tokens) {
+static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * image_tokens, std::vector<float> & out_embd) {
     mtmd_subcontext * sctx = ctx->ctx_v.get();
     if (!sctx) {
         LOG_ERR("%s: this API does not support non-vision input, please use mtmd_encode_chunk instead\n", __func__);
@@ -2681,11 +2583,7 @@ static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * im
 
     int n_embd_out = ctx->n_embd_out();
     auto n_tokens_out = image_tokens->n_tokens();
-    out_embd.clear();
-    out_tokens.clear();
-    if (!sctx->model.outputs_tokens()) {
-        out_embd.resize((size_t)n_embd_out * n_tokens_out);
-    }
+    out_embd.resize((size_t)n_embd_out * n_tokens_out);
 
     if (image_tokens->is_placeholder()) {
         LOG_ERR("%s: image tokens batch is placeholder\n", __func__);
@@ -2712,20 +2610,7 @@ static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * im
 
     bool ok = sctx->encode_batch(ctx->n_threads,
         &image_tokens->batch_f32,
-        out_embd,
-        &out_tokens);
-
-    if (ok && sctx->model.outputs_tokens()) {
-        if (image_tokens->batch_f32.entries.size() != 1) {
-            throw std::runtime_error("Apertus vision requires one preprocessed image");
-        }
-        const auto total = mtmd_tokenizer::apertus_frame(ctx->vocab, image_tokens->batch_f32.entries[0],
-            sctx->model.hparams.vision_spatial_factor, &out_tokens);
-        if (total != image_tokens->n_tokens()) {
-            LOG_ERR("%s: invalid discrete image token layout\n", __func__);
-            return 1;
-        }
-    }
+        out_embd);
 
     return ok ? 0 : 1;
 }
@@ -2747,9 +2632,9 @@ static bool mtmd_audio_batch_prepare(mtmd_context * ctx, const mtmd_image_f32_ba
     return true;
 }
 
-static bool mtmd_audio_batch_encode(mtmd_context * ctx, const mtmd_image_f32_batch & batch_f32, mtmd_audio_preproc_out * source, uint32_t idx, std::vector<float> & out_embd, std::vector<int32_t> * out_tokens = nullptr) {
+static bool mtmd_audio_batch_encode(mtmd_context * ctx, const mtmd_image_f32_batch & batch_f32, mtmd_audio_preproc_out * source, uint32_t idx, std::vector<float> & out_embd) {
     mtmd_image_f32_batch batch;
-    return mtmd_audio_batch_prepare(ctx, batch_f32, source, idx, batch) && ctx->ctx_a->encode_batch(ctx->n_threads, &batch, out_embd, out_tokens);
+    return mtmd_audio_batch_prepare(ctx, batch_f32, source, idx, batch) && ctx->ctx_a->encode_batch(ctx->n_threads, &batch, out_embd);
 }
 
 // fish_s2_spkenc: one backbone row per reference frame, the codes go to ctx->gen_ref, see mtmd_gen_state_set_ref()
@@ -2823,7 +2708,7 @@ static int32_t mtmd_qwen3tts_ref_encode(mtmd_context * ctx, const mtmd_audio_tok
     return 0;
 }
 
-static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk * chunk, std::vector<float> & out_embd, std::vector<llama_token> & out_tokens) {
+static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk * chunk, std::vector<float> & out_embd) {
     ctx->gen_ref = {}; // see mtmd_gen_state_set_ref()
     if (chunk->type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
         LOG_WRN("mtmd_encode_chunk has no effect for text chunks\n");
@@ -2841,7 +2726,7 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
             LOG_ERR("%s: image tokens batch is placeholder\n", __func__);
             return 1;
         }
-        return mtmd_encode_impl(ctx, chunk->tokens_image.get(), out_embd, out_tokens);
+        return mtmd_encode_impl(ctx, chunk->tokens_image.get(), out_embd);
     } else if (chunk->type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
         if (chunk->tokens_audio == nullptr) {
             LOG_ERR("%s: audio tokens are null\n", __func__);
@@ -2851,8 +2736,6 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
             LOG_ERR("%s: audio tokens batch is placeholder\n", __func__);
             return 1;
         }
-        out_embd.clear();
-        out_tokens.clear();
         const auto & track = chunk->tokens_audio->track;
         // a filled track (e.g. a voice) needs no audio encoder
         if (!ctx->ctx_a && (!track || track->embd.empty())) {
@@ -2888,10 +2771,8 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
         if (ctx->ctx_a->model.proj_type == PROJECTOR_TYPE_QWEN3TTS_SPKENC && chunk->tokens_audio->batch_f32.entries.size() == 2) {
             return mtmd_qwen3tts_ref_encode(ctx, chunk->tokens_audio.get(), out_embd);
         }
-        if (!ctx->ctx_a->model.outputs_tokens()) {
-            out_embd.resize((size_t)chunk->tokens_audio->n_tokens * ctx->n_embd_out());
-        }
-        bool ok = mtmd_audio_batch_encode(ctx, chunk->tokens_audio->batch_f32, chunk->tokens_audio->source.get(), chunk->tokens_audio->source_idx, out_embd, &out_tokens);
+        out_embd.resize((size_t)chunk->tokens_audio->n_tokens * ctx->n_embd_out());
+        bool ok = mtmd_audio_batch_encode(ctx, chunk->tokens_audio->batch_f32, chunk->tokens_audio->source.get(), chunk->tokens_audio->source_idx, out_embd);
         return ok ? 0 : 1;
     }
 
@@ -2903,7 +2784,7 @@ int32_t mtmd_encode_chunk(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
     // this is the non-batching version
     std::lock_guard<std::mutex> lock(ctx->compute_mutex);
     try {
-        return mtmd_encode_chunk_impl(ctx, chunk, ctx->out_embd, ctx->out_tokens);
+        return mtmd_encode_chunk_impl(ctx, chunk, ctx->out_embd);
     } catch (const std::exception & e) {
         LOG_ERR("%s: error: %s\n", __func__, e.what());
         return 1;
@@ -2913,7 +2794,7 @@ int32_t mtmd_encode_chunk(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
 int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) {
     std::lock_guard<std::mutex> lock(ctx->compute_mutex);
     try {
-        return mtmd_encode_impl(ctx, image_tokens, ctx->out_embd, ctx->out_tokens);
+        return mtmd_encode_impl(ctx, image_tokens, ctx->out_embd);
     } catch (const std::exception & e) {
         LOG_ERR("%s: error: %s\n", __func__, e.what());
         return 1;
@@ -2921,12 +2802,7 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
 }
 
 float * mtmd_get_output_embd(mtmd_context * ctx) {
-    return ctx->out_embd.empty() ? nullptr : ctx->out_embd.data();
-}
-
-const llama_token * mtmd_get_output_tokens(mtmd_context * ctx, size_t * n_tokens_output) {
-    *n_tokens_output = ctx->out_tokens.size();
-    return ctx->out_tokens.empty() ? nullptr : ctx->out_tokens.data();
+    return ctx->out_embd.data();
 }
 
 //
@@ -4747,8 +4623,7 @@ static int32_t mtmd_batch_encode_impl(mtmd_batch * batch) {
     int32_t res = mtmd_encode_chunk_impl(
         batch->ctx,
         batch_chunk.get(),
-        batch->output_embd,
-        batch->output_tokens);
+        batch->output_embd);
     return res;
 }
 
@@ -4764,6 +4639,7 @@ int32_t mtmd_batch_encode(mtmd_batch * batch) {
 
 float * mtmd_batch_get_output_embd(mtmd_batch * batch, const mtmd_input_chunk * chunk) {
     if (batch->output_embd.empty()) {
+        LOG_ERR("%s: batch has not been encoded yet\n", __func__);
         return nullptr;
     }
     size_t offset = 0;
@@ -4779,29 +4655,6 @@ float * mtmd_batch_get_output_embd(mtmd_batch * batch, const mtmd_input_chunk * 
         }
     }
     return nullptr; // not found
-}
-
-const llama_token * mtmd_batch_get_output_tokens(mtmd_batch * batch,
-                                                  const mtmd_input_chunk * chunk,
-                                                  size_t * n_tokens_output) {
-    *n_tokens_output = 0;
-    if (batch->output_tokens.empty()) {
-        return nullptr;
-    }
-    size_t offset = 0;
-    for (const auto * c : batch->entries) {
-        const size_t n_tokens = mtmd_input_chunk_get_n_tokens(c);
-        if (offset > batch->output_tokens.size() || n_tokens > batch->output_tokens.size() - offset) {
-            LOG_ERR("%s: invalid discrete media batch output size\n", __func__);
-            return nullptr;
-        }
-        if (c == chunk) {
-            *n_tokens_output = n_tokens;
-            return batch->output_tokens.data() + offset;
-        }
-        offset += n_tokens;
-    }
-    return nullptr;
 }
 
 bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk * chunk) {
@@ -4910,10 +4763,6 @@ mtmd_bitmap * mtmd_bitmap_init(uint32_t nx,
 
 mtmd_bitmap * mtmd_bitmap_init_from_audio(size_t n_samples,
                                           const float * data) {
-    if (n_samples > UINT32_MAX || n_samples > SIZE_MAX / sizeof(float)) {
-        LOG_ERR("%s: audio length exceeds the supported dimension range\n", __func__);
-        return nullptr;
-    }
     mtmd_bitmap * bitmap = new mtmd_bitmap((const unsigned char *)data, n_samples);
     GGML_ASSERT(bitmap->is_audio);
     if (!bitmap->is_placeholder()) {
@@ -5391,23 +5240,12 @@ static void mtmd_debug_encode_impl(mtmd_context * ctx, mtmd_subcontext * sctx, m
     sctx->debug_output_embeddings = true;
     int n_mmproj_embd = sctx->model.n_mmproj_embd();
     int n_tokens = sctx->model.n_output_tokens(&image);
-    std::vector<float> embd_output;
-    std::vector<int32_t> token_output;
-    if (!sctx->model.outputs_tokens()) {
-        embd_output.resize(n_tokens * n_mmproj_embd, 0.0f);
-    }
+    std::vector<float> embd_output(n_tokens * n_mmproj_embd, 0.0f);
     bool ok = sctx->encode_image(ctx->n_threads,
         &image,
-        embd_output,
-        &token_output);
+        embd_output);
     if (!ok) {
         LOG_ERR("%s: failed to encode image\n", __func__);
-    } else if (!token_output.empty()) {
-        std::string output_tokens;
-        for (int32_t token : token_output) {
-            output_tokens += " " + std::to_string(token);
-        }
-        LOG_INF("%s: output tokens:%s\n", __func__, output_tokens.c_str());
     }
 }
 

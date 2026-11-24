@@ -53,9 +53,7 @@ A typical pipeline of the core libmtmd is as follows:
     - Depending on the model itself, special tokens will be injected to separate image chunks (i.e. llava-uhd-style models)
 - Multiple bitmaps may be batched together to form a larger `mtmd_batch()`
 - Single image or batch is encoded, via `mtmd_encode()` or `mtmd_batch_encode()`
-- Get the output embeddings, or decoder token IDs for a discrete media encoder
-
-Discrete encoders, such as Apertus v1.5, return IDs in the text model's input vocabulary. Use `mtmd_get_output_tokens()` or `mtmd_batch_get_output_tokens()` to retrieve them; these return null for embedding encoders. Pass the IDs through `mtmd_helper_decode_tokens_chunk()` so that positions and decode callbacks follow the same path as other media chunks. Existing embedding accessors remain available for embedding encoders.
+- Get the output embeddings
 
 ## Helper
 

@@ -355,7 +355,6 @@ TEXT_MODEL_MAP: dict[str, str] = {
 
 
 MMPROJ_MODEL_MAP: dict[str, str] = {
-    "Apertus1p5ForConditionalGeneration": "apertus",
     "AudioFlamingo3ForConditionalGeneration": "ultravox",
     "ChatterboxModel": "chatterbox",
     "ClefModel": "clef",

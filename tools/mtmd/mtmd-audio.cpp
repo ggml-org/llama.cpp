@@ -1916,46 +1916,6 @@ bool mtmd_audio_preprocessor_gemma4ua::process(const float *                 sam
     return true;
 }
 
-// mtmd_audio_preprocessor_apertus
-//
-
-void mtmd_audio_preprocessor_apertus::initialize() {
-}
-
-bool mtmd_apertus_audio_prepare(const float * samples, size_t n_samples, mtmd_audio_mel & output) {
-    if (samples == nullptr || n_samples == 0 || n_samples > INT32_MAX) {
-        return false;
-    }
-
-    float peak = 0.0f;
-    for (size_t i = 0; i < n_samples; ++i) {
-        if (!std::isfinite(samples[i])) {
-            return false;
-        }
-        peak = std::max(peak, std::abs(samples[i]));
-    }
-    output.n_len = n_samples;
-    output.n_len_org = n_samples;
-    output.n_mel = 1;
-    output.data.assign(samples, samples + n_samples);
-    const float target_peak = std::pow(10.0f, -3.0f / 20.0f);
-    const float scale = target_peak / std::max(peak, 1e-10f);
-    for (float & sample : output.data) {
-        sample *= scale;
-    }
-    return true;
-}
-
-bool mtmd_audio_preprocessor_apertus::process(const float * samples, size_t n_samples,
-                                             std::vector<mtmd_audio_mel> & output, bool /*shape_only*/) const {
-    mtmd_audio_mel waveform;
-    if (!mtmd_apertus_audio_prepare(samples, n_samples, waveform)) {
-        return false;
-    }
-    output.push_back(std::move(waveform));
-    return true;
-}
-
 //
 // mtmd_audio_preprocessor_zonos3_spk
 //

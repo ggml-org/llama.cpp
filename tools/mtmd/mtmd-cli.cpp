@@ -451,20 +451,17 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
         } else {
             // media chunk: try to get embd from existing batch, or create a new batch
             float * embd = nullptr;
-            const llama_token * media_tokens = nullptr;
-            size_t n_media_tokens = 0;
             if (mbatch) {
                 embd = mtmd_batch_get_output_embd(mbatch.get(), chunk);
-                media_tokens = mtmd_batch_get_output_tokens(mbatch.get(), chunk, &n_media_tokens);
 
-                if (embd || media_tokens) {
-                    LOG_DBG("found encoded output for media chunk %zu in existing batch\n", i);
+                if (embd) {
+                    LOG_DBG("found embd for media chunk %zu in existing batch\n", i);
                 } else {
                     LOG_DBG("media chunk %zu not found in existing batch, creating new batch\n", i);
                 }
             }
 
-            if (!embd && !media_tokens) {
+            if (!embd) {
                 // create and encode a new batch with as many media chunks as possible
                 mbatch.reset(mtmd_batch_init(ctx.ctx_vision.get()));
                 res = mtmd_batch_add_chunk(mbatch.get(), chunk);
@@ -495,27 +492,22 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
                 LOG_INF("mtmd batch encoding done in %d ms\n", (int)(ggml_time_ms() - time_start));
 
                 embd = mtmd_batch_get_output_embd(mbatch.get(), chunk);
-                media_tokens = mtmd_batch_get_output_tokens(mbatch.get(), chunk, &n_media_tokens);
             }
 
+            GGML_ASSERT(embd != nullptr);
+
             llama_pos new_n_past = ctx.n_past;
-            if (media_tokens) {
-                res = mtmd_helper_decode_tokens_chunk(ctx.ctx_vision.get(), ctx.lctx, chunk,
-                        media_tokens, n_media_tokens, ctx.n_past, 0, ctx.n_batch, &new_n_past, nullptr, nullptr);
-            } else {
-                GGML_ASSERT(embd != nullptr);
-                res = mtmd_helper_decode_image_chunk(ctx.ctx_vision.get(),
-                            ctx.lctx,
-                            chunk,
-                            embd,
-                            ctx.n_past,
-                            0, // seq_id
-                            ctx.n_batch,
-                            &new_n_past,
-                            nullptr, // callback
-                            nullptr  // user_data
-                        );
-            }
+            res = mtmd_helper_decode_image_chunk(ctx.ctx_vision.get(),
+                        ctx.lctx,
+                        chunk,
+                        embd,
+                        ctx.n_past,
+                        0, // seq_id
+                        ctx.n_batch,
+                        &new_n_past,
+                        nullptr, // callback
+                        nullptr  // user_data
+                    );
             if (res != 0) {
                 LOG_ERR("Unable to decode media chunk %zu\n", i);
                 return 1;

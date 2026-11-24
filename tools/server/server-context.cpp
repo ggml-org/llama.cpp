@@ -936,32 +936,6 @@ static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch
     auto try_decode = [&]() -> int32_t {
         if (mbatch) {
             float * embd = mtmd_batch_get_output_embd(mbatch.get(), chunk.get());
-            size_t n_media_tokens = 0;
-            const auto * media_tokens = mtmd_batch_get_output_tokens(mbatch.get(), chunk.get(), &n_media_tokens);
-            if (media_tokens) {
-                struct cb_data_t {
-                    common_speculative * spec;
-                    llama_context * ctx;
-                } cb_data = { slot.spec, slot.ctx_tgt };
-
-                static auto cb = [](const llama_token * tokens, int32_t n_tokens, llama_pos pos, llama_seq_id seq_id, void * user_data) {
-                    const auto * data = static_cast<cb_data_t *>(user_data);
-                    common_batch batch(data->ctx);
-                    for (int32_t i = 0; i < n_tokens; ++i) {
-                        batch.add(tokens[i], pos + i, seq_id, false);
-                    }
-                    return common_speculative_process(data->spec, batch) ? 0 : 1;
-                };
-                llama_pos new_n_past;
-                res = mtmd_helper_decode_tokens_chunk(mctx, slot.ctx_tgt, chunk.get(), media_tokens, n_media_tokens,
-                    slot.prompt.tokens.pos_next(), slot.id, llama_n_batch(slot.ctx_tgt), &new_n_past, cb, &cb_data);
-                if (res != 0) {
-                    SLT_ERR(slot, "failed to decode mtmd chunk, idx = %zu, res = %d\n", idx, res);
-                    return -1;
-                }
-                n_tokens_out = mtmd_input_chunk_get_n_tokens(chunk.get());
-                return 0;
-            }
             if (embd) {
                 struct cb_data_t {
                     common_speculative * spec;

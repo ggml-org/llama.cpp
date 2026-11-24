@@ -1015,76 +1015,6 @@ struct mtmd_model_loader {
                                 "%s: mimo_audio: %s must be > 0\n", __func__, KEY_A_LOCAL_GROUP_SIZE));
                         }
                     } break;
-                case PROJECTOR_TYPE_APERTUS_VISION:
-                    {
-                        hparams.n_merge = 1;
-                        hparams.image_resize_algo = static_cast<resize_algo>(RESIZE_ALGO_BICUBIC | RESIZE_ALGO_FLAG_TORCH);
-                        hparams.image_resize_pad = PAD_NONE;
-                        get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
-                        get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
-                        get_u32(KEY_V_CODEBOOK_SIZE, hparams.codebook_size);
-                        get_u32(KEY_V_CODEBOOK_DIM, hparams.codebook_dim);
-                        get_u32(KEY_V_TOKEN_OFFSET, hparams.token_offset);
-                        get_u32(KEY_V_SPATIAL_FACTOR, hparams.vision_spatial_factor);
-                        get_u32(KEY_V_RESIDUAL_BLOCK_COUNT, hparams.vision_residual_block_count);
-                        get_arr_int(KEY_V_CHANNEL_MULTIPLIERS, hparams.vision_channel_multipliers, true);
-                        get_arr_int(KEY_V_ATTENTION_LEVELS, hparams.vision_attention_levels, true);
-                        const size_t n_stages = hparams.vision_channel_multipliers.size();
-                        if (n_stages == 0 || n_stages > 31 ||
-                            hparams.vision_spatial_factor != (int64_t(1) << (n_stages - 1)) ||
-                            hparams.patch_size != hparams.vision_spatial_factor ||
-                            hparams.image_size <= 0 || hparams.image_size % hparams.vision_spatial_factor != 0 ||
-                            hparams.image_min_pixels <= 0 || hparams.image_max_pixels < hparams.image_min_pixels ||
-                            hparams.vision_residual_block_count <= 0 ||
-                            int64_t(hparams.vision_residual_block_count) > gguf_get_n_tensors(ctx_gguf.get()) / 12 / int64_t(n_stages) ||
-                            hparams.codebook_size <= 0 || hparams.codebook_dim <= 0 ||
-                            int64_t(hparams.token_offset) + hparams.codebook_size > INT32_MAX ||
-                            hparams.n_embd <= 0 || hparams.n_embd % 32 != 0) {
-                            throw std::runtime_error("invalid Apertus vision metadata");
-                        }
-                        for (int32_t multiplier : hparams.vision_channel_multipliers) {
-                            if (multiplier <= 0 || int64_t(multiplier) * hparams.n_embd > INT32_MAX) {
-                                throw std::runtime_error("invalid Apertus vision channel multiplier");
-                            }
-                        }
-                        for (int32_t level : hparams.vision_attention_levels) {
-                            if (level < 0 || size_t(level) >= n_stages) {
-                                throw std::runtime_error("invalid Apertus vision attention level");
-                            }
-                        }
-                        hparams.warmup_image_size = hparams.image_size;
-                    } break;
-                case PROJECTOR_TYPE_APERTUS_AUDIO:
-                    {
-                        get_u32(KEY_A_CODEBOOK_SIZE, hparams.codebook_size);
-                        get_u32(KEY_A_CODEBOOK_DIM, hparams.codebook_dim);
-                        get_u32(KEY_A_TOKEN_OFFSET, hparams.token_offset);
-                        get_u32(KEY_A_SAMPLE_RATE, hparams.audio_sample_rate);
-                        get_u32(KEY_A_HOP_LENGTH, hparams.audio_hop_len);
-                        get_u32(KEY_A_RESIDUAL_BLOCK_COUNT, hparams.audio_residual_block_count);
-                        get_u32(KEY_A_DILATION_GROWTH_RATE, hparams.audio_dilation_growth_rate);
-                        get_u32(KEY_A_LSTM_BLOCK_COUNT, hparams.audio_lstm_block_count);
-                        get_arr_int(KEY_A_DOWNSAMPLE_RATIOS, hparams.audio_downsample_ratios, true);
-                        if (hparams.codebook_size <= 0 || hparams.codebook_dim <= 0 || hparams.token_offset < 0 ||
-                            int64_t(hparams.token_offset) + hparams.codebook_size > INT32_MAX ||
-                            hparams.audio_sample_rate <= 0 || hparams.audio_hop_len <= 0 ||
-                            hparams.audio_downsample_ratios.size() != 4 || hparams.audio_residual_block_count != 1 ||
-                            hparams.audio_dilation_growth_rate <= 0 || hparams.audio_lstm_block_count <= 0 ||
-                            hparams.audio_lstm_block_count > gguf_get_n_tensors(ctx_gguf.get()) / 4) {
-                            throw std::runtime_error("invalid Apertus audio metadata");
-                        }
-                        int64_t hop_length = 1;
-                        for (int32_t ratio : hparams.audio_downsample_ratios) {
-                            if (ratio <= 0 || hop_length > INT32_MAX / ratio) {
-                                throw std::runtime_error("invalid Apertus audio downsample ratio");
-                            }
-                            hop_length *= ratio;
-                        }
-                        if (hop_length != hparams.audio_hop_len) {
-                            throw std::runtime_error("Apertus audio hop length does not match downsample ratios");
-                        }
-                        hparams.audio_chunk_len = 0;
-                } break;
                 case PROJECTOR_TYPE_ZONOS3_SPKENC:
                     {
                         // kaldi fbank front-end
@@ -1510,7 +1440,6 @@ struct mtmd_model_loader {
                 // pocket-tts is encoder-free in the same sense: mimi convolves the raw waveform
                 // Muse Spark is encoder-free in the same sense: its conv pyramid reads the raw waveform, one channel takes the place of the mel bins
                 const bool fft_based = model.proj_type != PROJECTOR_TYPE_GEMMA4UA &&
-                                       model.proj_type != PROJECTOR_TYPE_APERTUS_AUDIO &&
                                        model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO &&
                                        model.proj_type != PROJECTOR_TYPE_VIBEVOICE_ASR &&
                                        model.proj_type != PROJECTOR_TYPE_POCKETTTS_SPKENC &&
@@ -1689,7 +1618,6 @@ struct mtmd_model_loader {
         // every vision encoder starts with a patch embedding, except the ones with their own stem
         const bool has_patch_embd = (
             model.modality  == MTMD_MODALITY_VISION &&
-            model.proj_type != PROJECTOR_TYPE_APERTUS_VISION &&
             model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
             model.proj_type != PROJECTOR_TYPE_DEEPSEEKOCR &&
             model.proj_type != PROJECTOR_TYPE_DEEPSEEKOCR2);
@@ -1711,8 +1639,6 @@ struct mtmd_model_loader {
             model.proj_type != PROJECTOR_TYPE_QWEN3TTS_SPKENC &&
             model.proj_type != PROJECTOR_TYPE_ZONOS3_SPKENC &&
             model.proj_type != PROJECTOR_TYPE_POCKETTTS_GEN &&
-            model.proj_type != PROJECTOR_TYPE_APERTUS_VISION &&
-            model.proj_type != PROJECTOR_TYPE_APERTUS_AUDIO &&
             model.proj_type != PROJECTOR_TYPE_SOPRANO &&
             model.proj_type != PROJECTOR_TYPE_KOKORO &&
             model.proj_type != PROJECTOR_TYPE_TINY_VOCA &&
@@ -4460,120 +4386,6 @@ struct mtmd_model_loader {
                     }
 
                 } break;
-            case PROJECTOR_TYPE_APERTUS_VISION:
-                {
-                    auto load_resblock = [&](apertus_vision_resblock & block, const std::string & stem) {
-                        block.norm1_w = get_tensor(stem + ".norm1.weight");
-                        block.norm1_b = get_tensor(stem + ".norm1.bias");
-                        block.conv1_w = get_tensor(stem + ".conv1.weight");
-                        block.conv1_b = get_tensor(stem + ".conv1.bias");
-                        block.norm2_w = get_tensor(stem + ".norm2.weight");
-                        block.norm2_b = get_tensor(stem + ".norm2.bias");
-                        block.conv2_w = get_tensor(stem + ".conv2.weight");
-                        block.conv2_b = get_tensor(stem + ".conv2.bias");
-                        block.shortcut_w = get_tensor(stem + ".nin_shortcut.weight", false);
-                        block.shortcut_b = get_tensor(stem + ".nin_shortcut.bias", false);
-                    };
-                    auto load_attention = [&](apertus_vision_attention & attention, const std::string & stem) {
-                        attention.norm_w = get_tensor(stem + ".norm.weight");
-                        attention.norm_b = get_tensor(stem + ".norm.bias");
-                        attention.q_w = get_tensor(stem + ".q.weight");
-                        attention.q_b = get_tensor(stem + ".q.bias");
-                        attention.k_w = get_tensor(stem + ".k.weight");
-                        attention.k_b = get_tensor(stem + ".k.bias");
-                        attention.v_w = get_tensor(stem + ".v.weight");
-                        attention.v_b = get_tensor(stem + ".v.bias");
-                        attention.out_w = get_tensor(stem + ".proj_out.weight");
-                        attention.out_b = get_tensor(stem + ".proj_out.bias");
-                    };
-
-                    model.apertus_v_conv_in_w = get_tensor(mtmd_format(TN_APERTUS_V_CONV_IN, "weight"));
-                    model.apertus_v_conv_in_b = get_tensor(mtmd_format(TN_APERTUS_V_CONV_IN, "bias"));
-                    model.apertus_v_stages.resize(hparams.vision_channel_multipliers.size());
-                    for (size_t stage_id = 0; stage_id < model.apertus_v_stages.size(); ++stage_id) {
-                        auto & stage = model.apertus_v_stages[stage_id];
-                        stage.blocks.resize(hparams.vision_residual_block_count);
-                        for (int block_id = 0; block_id < hparams.vision_residual_block_count; ++block_id) {
-                            const std::string stem = "v.encoder.down." + std::to_string(stage_id) +
-                                ".block." + std::to_string(block_id);
-                            load_resblock(stage.blocks[block_id], stem);
-                        }
-                        const bool has_attention = std::find(
-                            hparams.vision_attention_levels.begin(),
-                            hparams.vision_attention_levels.end(),
-                            (int32_t) stage_id) != hparams.vision_attention_levels.end();
-                        if (has_attention) {
-                            stage.attentions.resize(hparams.vision_residual_block_count);
-                            for (int block_id = 0; block_id < hparams.vision_residual_block_count; ++block_id) {
-                                const std::string stem = "v.encoder.down." + std::to_string(stage_id) +
-                                    ".attn." + std::to_string(block_id);
-                                load_attention(stage.attentions[block_id], stem);
-                            }
-                        }
-                        if (stage_id + 1 < model.apertus_v_stages.size()) {
-                            stage.downsample_w = get_tensor(mtmd_format(
-                                TN_APERTUS_V_DOWNSAMPLE, (int) stage_id, "weight"));
-                            stage.downsample_b = get_tensor(mtmd_format(
-                                TN_APERTUS_V_DOWNSAMPLE, (int) stage_id, "bias"));
-                        }
-                    }
-
-                    load_resblock(model.apertus_v_mid_block_1, "v.encoder.mid.block_1");
-                    load_attention(model.apertus_v_mid_attention, "v.encoder.mid.attn_1");
-                    load_resblock(model.apertus_v_mid_block_2, "v.encoder.mid.block_2");
-                    model.apertus_v_norm_out_w = get_tensor(mtmd_format(TN_APERTUS_V_NORM_OUT, "weight"));
-                    model.apertus_v_norm_out_b = get_tensor(mtmd_format(TN_APERTUS_V_NORM_OUT, "bias"));
-                    model.apertus_v_conv_out_w = get_tensor(mtmd_format(TN_APERTUS_V_CONV_OUT, "weight"));
-                    model.apertus_v_conv_out_b = get_tensor(mtmd_format(TN_APERTUS_V_CONV_OUT, "bias"));
-                    model.apertus_v_quant_conv_w = get_tensor(mtmd_format(TN_APERTUS_V_QUANT_CONV, "weight"));
-                    model.apertus_v_quant_conv_b = get_tensor(mtmd_format(TN_APERTUS_V_QUANT_CONV, "bias"));
-                    model.apertus_v_codebook = get_tensor(TN_APERTUS_V_CODEBOOK);
-                    if (model.apertus_v_codebook->ne[0] != hparams.codebook_dim ||
-                        model.apertus_v_codebook->ne[1] != hparams.codebook_size) {
-                        throw std::runtime_error(mtmd_format(
-                            "%s: Apertus vision codebook shape does not match metadata\n", __func__));
-                    }
-                } break;
-            case PROJECTOR_TYPE_APERTUS_AUDIO:
-                {
-                    static constexpr int conv_layer_ids[] = { 0, 3, 6, 9, 12, 15 };
-                    static constexpr int resblock_layer_ids[] = { 1, 4, 7, 10 };
-
-                    model.apertus_a_convs.resize(std::size(conv_layer_ids));
-                    for (size_t i = 0; i < model.apertus_a_convs.size(); ++i) {
-                        auto & conv = model.apertus_a_convs[i];
-                        conv.w = get_tensor(mtmd_format(TN_APERTUS_A_CONV, conv_layer_ids[i], "weight"));
-                        conv.b = get_tensor(mtmd_format(TN_APERTUS_A_CONV, conv_layer_ids[i], "bias"));
-                    }
-
-                    model.apertus_a_resblocks.resize(std::size(resblock_layer_ids));
-                    for (size_t i = 0; i < model.apertus_a_resblocks.size(); ++i) {
-                        const int layer_id = resblock_layer_ids[i];
-                        auto & block = model.apertus_a_resblocks[i];
-                        block.conv1.w = get_tensor(mtmd_format(TN_APERTUS_A_RESBLOCK_CONV, layer_id, 1, "weight"));
-                        block.conv1.b = get_tensor(mtmd_format(TN_APERTUS_A_RESBLOCK_CONV, layer_id, 1, "bias"));
-                        block.conv2.w = get_tensor(mtmd_format(TN_APERTUS_A_RESBLOCK_CONV, layer_id, 3, "weight"));
-                        block.conv2.b = get_tensor(mtmd_format(TN_APERTUS_A_RESBLOCK_CONV, layer_id, 3, "bias"));
-                        block.shortcut.w = get_tensor(mtmd_format(TN_APERTUS_A_SHORTCUT, layer_id, "weight"));
-                        block.shortcut.b = get_tensor(mtmd_format(TN_APERTUS_A_SHORTCUT, layer_id, "bias"));
-                    }
-
-                    model.apertus_a_lstm_layers.resize(hparams.audio_lstm_block_count);
-                    for (int layer_id = 0; layer_id < hparams.audio_lstm_block_count; ++layer_id) {
-                        auto & layer = model.apertus_a_lstm_layers[layer_id];
-                        layer.weight_ih = get_tensor(mtmd_format(TN_APERTUS_A_LSTM, "weight_ih", layer_id));
-                        layer.weight_hh = get_tensor(mtmd_format(TN_APERTUS_A_LSTM, "weight_hh", layer_id));
-                        layer.bias_ih = get_tensor(mtmd_format(TN_APERTUS_A_LSTM, "bias_ih", layer_id));
-                        layer.bias_hh = get_tensor(mtmd_format(TN_APERTUS_A_LSTM, "bias_hh", layer_id));
-                    }
-
-                    model.apertus_a_codebook = get_tensor(TN_APERTUS_A_CODEBOOK);
-                    if (model.apertus_a_codebook->ne[0] != hparams.codebook_dim ||
-                        model.apertus_a_codebook->ne[1] != hparams.codebook_size) {
-                        throw std::runtime_error(mtmd_format(
-                            "%s: Apertus audio codebook shape does not match metadata\n", __func__));
-                    }
-                } break;
             case PROJECTOR_TYPE_SENSENOVA_U1:
                 {
                     model.mm_0_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
@@ -4884,8 +4696,6 @@ int mtmd_model::n_output_tokens_x(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_MINICPM_OCR_1_0:
         case PROJECTOR_TYPE_INKLING2V:
             return img->nx() / (params.patch_size * params.n_merge);
-        case PROJECTOR_TYPE_APERTUS_VISION:
-            return img->nx() / params.vision_spatial_factor;
         case PROJECTOR_TYPE_DEEPSEEKOCR:
         case PROJECTOR_TYPE_DEEPSEEKOCR2:
             return (img->nx() / params.patch_size) / 4;
@@ -4921,8 +4731,6 @@ int mtmd_model::n_output_tokens_y(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_MINICPM_OCR_1_0:
         case PROJECTOR_TYPE_INKLING2V:
             return img->ny() / (params.patch_size * params.n_merge);
-        case PROJECTOR_TYPE_APERTUS_VISION:
-            return img->ny() / params.vision_spatial_factor;
         default:
             break;
     }
@@ -5301,15 +5109,6 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
                     n_patches += h * (w + 1);
                 }
             } break;
-        case PROJECTOR_TYPE_APERTUS_VISION:
-            {
-                n_patches = (img->nx() / params.vision_spatial_factor) *
-                            (img->ny() / params.vision_spatial_factor);
-            } break;
-        case PROJECTOR_TYPE_APERTUS_AUDIO:
-            {
-                n_patches = (int64_t(img->nx()) + params.audio_hop_len - 1) / params.audio_hop_len;
-            } break;
         default:
             GGML_ABORT("unsupported projector type");
     }
@@ -5493,8 +5292,6 @@ int mtmd_model::n_mmproj_embd() const {
             // talker conditioning rows, the speaker projection carries their width
             return cbx_tensors.at("a.cenc.spkr_enc.weight")->ne[1];
         case PROJECTOR_TYPE_SOPRANO:
-        case PROJECTOR_TYPE_APERTUS_VISION:
-        case PROJECTOR_TYPE_APERTUS_AUDIO:
         case PROJECTOR_TYPE_KOKORO:
         case PROJECTOR_TYPE_TINY_VOCA:
             return hparams.projection_dim;

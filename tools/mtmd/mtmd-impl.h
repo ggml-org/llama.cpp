@@ -68,13 +68,6 @@
 #define KEY_PROJ_SAMPLE_WINDOW_SIDE "clip.vision.projector.window_side"
 #define KEY_PROJ_SPATIAL_OFFSETS    "clip.vision.projector.spatial_offsets"
 #define KEY_SPATIAL_MERGE_SIZE      "clip.vision.spatial_merge_size"
-#define KEY_V_CODEBOOK_SIZE         "clip.vision.codebook_size"
-#define KEY_V_CODEBOOK_DIM          "clip.vision.codebook_dim"
-#define KEY_V_TOKEN_OFFSET          "clip.vision.token_offset"
-#define KEY_V_SPATIAL_FACTOR        "clip.vision.spatial_factor"
-#define KEY_V_CHANNEL_MULTIPLIERS   "clip.vision.channel_multipliers"
-#define KEY_V_RESIDUAL_BLOCK_COUNT  "clip.vision.residual_block_count"
-#define KEY_V_ATTENTION_LEVELS      "clip.vision.attention_levels"
 #define KEY_SWIGLU_CLAMP            "clip.vision.swiglu_clamp"
 
 #define KEY_MM_PATCH_MERGE_TYPE    "clip.vision.mm_patch_merge_type"
@@ -120,15 +113,6 @@
 #define KEY_GEN_AUDIO_PENALTY_REPEAT "clip.gen.audio.sampling.penalty_repeat"
 #define KEY_GEN_AUDIO_PENALTY_LAST_N "clip.gen.audio.sampling.penalty_last_n"
 #define KEY_AUDIO_SUBSMPL_FACTOR   "clip.audio.subsampling_factor"
-#define KEY_A_CODEBOOK_SIZE          "clip.audio.codebook_size"
-#define KEY_A_CODEBOOK_DIM           "clip.audio.codebook_dim"
-#define KEY_A_TOKEN_OFFSET           "clip.audio.token_offset"
-#define KEY_A_SAMPLE_RATE            "clip.audio.sample_rate"
-#define KEY_A_HOP_LENGTH             "clip.audio.hop_length"
-#define KEY_A_DOWNSAMPLE_RATIOS      "clip.audio.downsample_ratios"
-#define KEY_A_RESIDUAL_BLOCK_COUNT   "clip.audio.residual_block_count"
-#define KEY_A_DILATION_GROWTH_RATE   "clip.audio.dilation_growth_rate"
-#define KEY_A_LSTM_BLOCK_COUNT       "clip.audio.lstm_block_count"
 
 // nemotron transcribe
 #define KEY_A_ROPE_DIMS            "clip.audio.rope_dims"
@@ -542,18 +526,6 @@
 #define TN_CONV_NORM_MEAN        "%s.blk.%d.conv_norm_mean"
 #define TN_CONV_NORM_VAR         "%s.blk.%d.conv_norm_var"
 
-// Apertus discrete media tokenizers
-#define TN_APERTUS_V_CONV_IN       "v.encoder.conv_in.%s"
-#define TN_APERTUS_V_CONV_OUT      "v.encoder.conv_out.%s"
-#define TN_APERTUS_V_NORM_OUT      "v.encoder.norm_out.%s"
-#define TN_APERTUS_V_DOWNSAMPLE    "v.encoder.down.%d.downsample.conv.%s"
-#define TN_APERTUS_V_QUANT_CONV    "v.quant_conv.%s"
-#define TN_APERTUS_V_CODEBOOK      "v.codebook.weight"
-#define TN_APERTUS_A_CONV          "a.encoder.layers.%d.conv.%s"
-#define TN_APERTUS_A_RESBLOCK_CONV "a.encoder.layers.%d.block.%d.conv.%s"
-#define TN_APERTUS_A_SHORTCUT      "a.encoder.layers.%d.shortcut.conv.%s"
-#define TN_APERTUS_A_LSTM          "a.encoder.layers.13.lstm.%s_l%d"
-#define TN_APERTUS_A_CODEBOOK      "a.codebook.weight"
 // nemotron transcribe
 #define TN_A_SPK_INP_PROJ        "a.spk.input_projection.%s"
 #define TN_A_SPK_HEAD            "a.spk.head.%s.%s" // proj, upsample, fc1, fc2
@@ -658,8 +630,6 @@ enum projector_type {
     PROJECTOR_TYPE_FISH_S2_GEN,
     PROJECTOR_TYPE_FISH_S2_SPKENC,
     PROJECTOR_TYPE_MUSE_GLIMMER,
-    PROJECTOR_TYPE_APERTUS_VISION,
-    PROJECTOR_TYPE_APERTUS_AUDIO,
     PROJECTOR_TYPE_SENSENOVA_U1,
     PROJECTOR_TYPE_COHERE2V,
     PROJECTOR_TYPE_MUSE_SPARK_AUDIO,
@@ -762,8 +732,6 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_FISH_S2_GEN,       "fish_s2_gen"},
     { PROJECTOR_TYPE_FISH_S2_SPKENC,    "fish_s2_spkenc"},
     { PROJECTOR_TYPE_MUSE_GLIMMER,      "muse-glimmer"},
-    { PROJECTOR_TYPE_APERTUS_VISION,    "apertus_vision"},
-    { PROJECTOR_TYPE_APERTUS_AUDIO,     "apertus_audio"},
     { PROJECTOR_TYPE_SENSENOVA_U1,      "sensenova_u1"},
     { PROJECTOR_TYPE_COHERE2V,          "cohere2v"},
     { PROJECTOR_TYPE_MUSE_SPARK_AUDIO,  "muse-spark-audio"},

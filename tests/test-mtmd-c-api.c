@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#undef NDEBUG
 #include <assert.h>
 
 #include "mtmd.h"
@@ -10,15 +9,6 @@
 int main(void) {
     printf("\n\nTesting libmtmd C API...\n");
     printf("--------\n\n");
-
-    const float audio_sample = 0.0f;
-#if SIZE_MAX > UINT32_MAX
-    assert(mtmd_bitmap_init_from_audio((size_t) UINT32_MAX + 1, &audio_sample) == NULL);
-#endif
-    assert(mtmd_bitmap_init_from_audio(SIZE_MAX, NULL) == NULL);
-    mtmd_bitmap * audio_bitmap = mtmd_bitmap_init_from_audio(1, &audio_sample);
-    assert(audio_bitmap != NULL && mtmd_bitmap_get_n_bytes(audio_bitmap) == sizeof(float));
-    mtmd_bitmap_free(audio_bitmap);
 
     struct mtmd_context_params params = mtmd_context_params_default();
     printf("Default image marker: %s\n", params.image_marker);

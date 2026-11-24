@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 #include <vector>
 
 void mtmd_image_preproc_out::append(const mtmd_hparams & hparams, const mtmd_image_u8 & img, bool normalized) {
@@ -997,57 +996,6 @@ mtmd_image_preproc_out mtmd_image_preprocessor_glm5v::preprocess(const mtmd_imag
 //
 // mtmd_image_preprocessor_longest_edge
 //
-
-mtmd_image_size mtmd_apertus_image_calc_size(mtmd_image_size original_size, int spatial_factor, int min_pixels, int max_pixels) {
-    if (original_size.width <= 0 || original_size.height <= 0 || spatial_factor <= 0 ||
-        min_pixels <= 0 || max_pixels < min_pixels) {
-        throw std::runtime_error("invalid Apertus image dimensions or pixel limits");
-    }
-    const double height = original_size.height;
-    const double width = original_size.width;
-    if (std::max(height, width) / std::min(height, width) > 200.0) {
-        throw std::runtime_error("Apertus image aspect ratio exceeds 200");
-    }
-    double h_bar = std::nearbyint(height / spatial_factor) * spatial_factor;
-    double w_bar = std::nearbyint(width / spatial_factor) * spatial_factor;
-    if (h_bar * w_bar > max_pixels) {
-        const double beta = std::sqrt(height * width / max_pixels);
-        h_bar = std::max(double(spatial_factor), std::floor(height / beta / spatial_factor) * spatial_factor);
-        w_bar = std::max(double(spatial_factor), std::floor(width / beta / spatial_factor) * spatial_factor);
-    } else if (h_bar * w_bar < min_pixels) {
-        const double beta = std::sqrt(min_pixels / (height * width));
-        h_bar = std::ceil(height * beta / spatial_factor) * spatial_factor;
-        w_bar = std::ceil(width * beta / spatial_factor) * spatial_factor;
-    }
-    if (h_bar <= 0 || w_bar <= 0 || h_bar > std::numeric_limits<int>::max() ||
-        w_bar > std::numeric_limits<int>::max()) {
-        throw std::runtime_error("Apertus image dimension exceeds supported range");
-    }
-    return {int(w_bar), int(h_bar)};
-}
-
-mtmd_image_f32 mtmd_apertus_image_prepare(const mtmd_image_u8 & image, mtmd_image_size target_size) {
-    mtmd_image_u8 resized;
-    img_tool::resize(image, resized, target_size, static_cast<resize_algo>(RESIZE_ALGO_BICUBIC | RESIZE_ALGO_FLAG_TORCH), PAD_NONE);
-    std::vector<float> pixels;
-    pixels.reserve(resized.n_elements());
-    for (uint8_t pixel : resized.get_ro_buf()) {
-        pixels.push_back((float(pixel) - 127.5f) / 127.5f);
-    }
-    mtmd_image_f32 normalized;
-    normalized.set_size(target_size, false, false);
-    normalized.cpy_buf(pixels);
-    return normalized;
-}
-
-mtmd_image_preproc_out mtmd_image_preprocessor_apertus::preprocess(const mtmd_image_u8 & img) const {
-    const auto size = mtmd_apertus_image_calc_size(img.get_size(), hparams.vision_spatial_factor,
-        hparams.image_min_pixels, hparams.image_max_pixels);
-    auto normalized = mtmd_apertus_image_prepare(img, size);
-    mtmd_image_preproc_out output;
-    output.append(hparams, normalized, false);
-    return output;
-}
 
 mtmd_image_size mtmd_image_preprocessor_longest_edge::get_target_size(const mtmd_hparams & hparams, const mtmd_image_size & original_size) {
     GGML_ASSERT(hparams.image_longest_edge > 0);

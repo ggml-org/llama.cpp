@@ -206,14 +206,6 @@ struct mtmd_audio_preprocessor_gemma4ua : mtmd_audio_preprocessor {
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 };
 
-bool mtmd_apertus_audio_prepare(const float * samples, size_t n_samples, mtmd_audio_mel & output);
-
-struct mtmd_audio_preprocessor_apertus : mtmd_audio_preprocessor {
-    mtmd_audio_preprocessor_apertus(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
-    void initialize() override;
-    bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
-};
-
 struct mtmd_audio_preprocessor_qwen3a : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_qwen3a(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     void initialize() override;

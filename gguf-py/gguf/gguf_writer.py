@@ -1698,27 +1698,6 @@ class GGUFWriter:
     def add_vision_image_grid_pinpoints(self, layers: Sequence[Sequence[int]]) -> None:
         self.add_array(Keys.ClipVision.IMAGE_GRID_PINPOINTS, layers)
 
-    def add_vision_codebook_size(self, value: int) -> None:
-        self.add_uint32(Keys.ClipVision.CODEBOOK_SIZE, value)
-
-    def add_vision_codebook_dim(self, value: int) -> None:
-        self.add_uint32(Keys.ClipVision.CODEBOOK_DIM, value)
-
-    def add_vision_token_offset(self, value: int) -> None:
-        self.add_uint32(Keys.ClipVision.TOKEN_OFFSET, value)
-
-    def add_vision_spatial_factor(self, value: int) -> None:
-        self.add_uint32(Keys.ClipVision.SPATIAL_FACTOR, value)
-
-    def add_vision_channel_multipliers(self, values: Sequence[int]) -> None:
-        self.add_array(Keys.ClipVision.CHANNEL_MULTIPLIERS, values)
-
-    def add_vision_residual_block_count(self, value: int) -> None:
-        self.add_uint32(Keys.ClipVision.RESIDUAL_BLOCK_COUNT, value)
-
-    def add_vision_attention_levels(self, values: Sequence[int]) -> None:
-        self.add_array(Keys.ClipVision.ATTENTION_LEVELS, values)
-
     def add_vision_sam_layers_count(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.SAM.BLOCK_COUNT, value)
 
@@ -1729,33 +1708,6 @@ class GGUFWriter:
         self.add_uint32(Keys.ClipVision.SAM.HEAD_COUNT, value)
 
     # audio models
-
-    def add_audio_codebook_size(self, value: int) -> None:
-        self.add_uint32(Keys.ClipAudio.CODEBOOK_SIZE, value)
-
-    def add_audio_codebook_dim(self, value: int) -> None:
-        self.add_uint32(Keys.ClipAudio.CODEBOOK_DIM, value)
-
-    def add_audio_token_offset(self, value: int) -> None:
-        self.add_uint32(Keys.ClipAudio.TOKEN_OFFSET, value)
-
-    def add_audio_sample_rate(self, value: int) -> None:
-        self.add_uint32(Keys.ClipAudio.SAMPLE_RATE, value)
-
-    def add_audio_hop_length(self, value: int) -> None:
-        self.add_uint32(Keys.ClipAudio.HOP_LENGTH, value)
-
-    def add_audio_downsample_ratios(self, values: Sequence[int]) -> None:
-        self.add_array(Keys.ClipAudio.DOWNSAMPLE_RATIOS, values)
-
-    def add_audio_residual_block_count(self, value: int) -> None:
-        self.add_uint32(Keys.ClipAudio.RESIDUAL_BLOCK_COUNT, value)
-
-    def add_audio_dilation_growth_rate(self, value: int) -> None:
-        self.add_uint32(Keys.ClipAudio.DILATION_GROWTH_RATE, value)
-
-    def add_audio_lstm_block_count(self, value: int) -> None:
-        self.add_uint32(Keys.ClipAudio.LSTM_BLOCK_COUNT, value)
 
     def add_clip_audio_projector_type(self, value: str) -> None:
         self.add_string(Keys.ClipAudio.PROJECTOR_TYPE, value)

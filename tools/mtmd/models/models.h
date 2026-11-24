@@ -1037,16 +1037,6 @@ struct mtmd_graph_muse_glimmer : mtmd_graph {
     ggml_cgraph * build() override;
 };
 
-struct mtmd_graph_apertus_vision : mtmd_graph {
-    mtmd_graph_apertus_vision(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
-    ggml_cgraph * build() override;
-};
-
-struct mtmd_graph_apertus_audio : mtmd_graph {
-    mtmd_graph_apertus_audio(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
-    ggml_cgraph * build() override;
-};
-
 struct mtmd_graph_inkling2v : mtmd_graph {
     using mtmd_graph::mtmd_graph;
     ggml_cgraph * build() override;
