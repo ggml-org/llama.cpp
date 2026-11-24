@@ -2,12 +2,9 @@
 	import ChatMessageToolCallBlock from './ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlock.svelte';
 	import ChatMessageToolCallGroup from './ChatMessage/ChatMessageToolCall/ChatMessageToolCallGroup.svelte';
 	import { parseExecShellCommandMeta } from './ChatMessage/ChatMessageToolCall/parsers/exec-shell-command';
-	import {
-		groupToolCallRuns,
-		isToolCallSection
-	} from './ChatMessage/ChatMessageToolCall/parsers/tool-call-phrasing';
 	import { setToolCallElapsedContext } from './ChatMessage/ChatMessageToolCall/tool-call-elapsed';
 	import ChatMessageReasoningBlock from './ChatMessageReasoningBlock.svelte';
+	import { groupToolCallRuns, isToolCallStep } from '@ggml-org/llama-harness';
 	import {
 		ChatMessageActionCardContinueRequest,
 		ChatMessageActionCardPermissionRequest,
@@ -168,7 +165,7 @@
 			result.push(groupToolCallRuns(sections, indices, TOOL_CALL_GROUP_MIN_CALLS));
 
 		for (let i = 0; i < sections.length; i++) {
-			const isTool = isToolCallSection(sections[i]);
+			const isTool = isToolCallStep(sections[i]);
 
 			// a turn ends where its tool calls do
 			if (!isTool && prevWasTool && indices.length > 0) {
@@ -202,7 +199,7 @@
 		return toolCallId ? { startedAt: taskStartedAt, toolCallId } : null;
 	});
 
-	const lastToolIndex = $derived(sections.findLastIndex((section) => isToolCallSection(section)));
+	const lastToolIndex = $derived(sections.findLastIndex((section) => isToolCallStep(section)));
 
 	// The status row shows only while nothing else in the reply is moving: a
 	// running row, a permission card or streaming text already says what is

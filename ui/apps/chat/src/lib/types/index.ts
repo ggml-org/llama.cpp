@@ -245,8 +245,6 @@ export type {
 	EditFileEdit,
 	EditFileMeta,
 	EditFileTitleMeta,
-	ToolCallDescription,
-	ToolCallPhrasing,
 	ToolEntry,
 	ToolGroup,
 	ToolUiEntry,

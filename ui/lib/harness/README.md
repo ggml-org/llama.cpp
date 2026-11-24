@@ -44,6 +44,25 @@ interface Harness {
 
 An app can put another loop behind the same `Harness` interface. What sits above the loop is the same for every loop: the tools, and whatever an app wraps around `execute`, such as a permission prompt.
 
+## Traces
+
+A run's steps also read as an agent trace: what each tool call did, in plain words. That part is headless too, so any app on the harness can show the same lines.
+
+```ts
+import { createTracePhraser, formatToolCallLine, groupToolCallRuns } from "@ggml-org/llama-harness";
+
+const { describeToolCall, summarizeToolCalls, describeToolActivity } = createTracePhraser();
+
+formatToolCallLine(describeToolCall("read_file", '{"path":"src/app.ts"}'));  // "Read app.ts"
+summarizeToolCalls(steps);                                                    // "Ran 3 commands, read 2 files"
+describeToolActivity(steps, true);                                            // "Running npm test", or "Thinking"
+```
+
+- **Steps** are anything with a `type` from `TraceStepType` (text, reasoning, or a tool call that is done, pending or still streaming) plus the call's name and arguments.
+- **Phrasing** knows llama-server's built-in tools. An app adds its own tools with `resolvers` (a function per tool or family of tools) and `phrasings` (a table by name); any other tool reads as "Used <tool>" with its main argument. A call whose arguments carry `description` shows the model's own words instead.
+- **Streaming:** arguments are read while they stream (`parsePartialJsonArgs`), and arguments that hold whole files are read for their path only (`extractToolArgString`).
+- **Grouping:** `groupToolCallRuns` folds the calls and the reasoning around them into one row, up to the next text.
+
 ## What the app keeps
 
 Llama Chat (`ui/apps/chat`) is the first app on it. Its agentic store gives the harness:

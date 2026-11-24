@@ -118,7 +118,6 @@ export {
 	GlobSearchType,
 	SearchChatsMessageSelection,
 	SearchChatsOrder,
-	ToolCallSummaryKind,
 	ToolSource,
 	ToolPermissionDecision,
 	ToolResponseField
