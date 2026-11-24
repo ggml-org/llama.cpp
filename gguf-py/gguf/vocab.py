@@ -42,9 +42,14 @@ except ImportError:
 
 import gguf
 
+from .constants import Keys
 from .gguf_writer import GGUFWriter
 
 logger = logging.getLogger(__name__)
+
+# tokenizer.ggml.model values that llama.cpp loads as BPE vocabs
+# ref: llama_vocab::impl::load() in src/llama-vocab.cpp
+BPE_TOKENIZER_MODELS = frozenset(('gpt2', 'hybriddna', 'whitespace', 'gemma4'))
 
 
 class SpecialVocab:
@@ -129,9 +134,16 @@ class SpecialVocab:
                 logger.info(f'Setting clean_spaces to {self.clean_spaces}')
             gw.add_clean_spaces(self.clean_spaces)
         if self.metaspace_prepend_scheme is not None:
-            if not quiet:
-                logger.info(f'Setting metaspace_prepend_scheme to {self.metaspace_prepend_scheme}')
-            gw.add_metaspace_prepend_scheme(self.metaspace_prepend_scheme)
+            # llama.cpp rejects prepend_scheme "always" for BPE vocabs, so writing it makes the
+            # model unloadable, see https://github.com/ggml-org/llama.cpp/issues/32882
+            tokenizer_model = gw.kv_data[0].get(Keys.Tokenizer.MODEL)
+            is_bpe = tokenizer_model is not None and tokenizer_model.value in BPE_TOKENIZER_MODELS
+            if self.metaspace_prepend_scheme == 'always' and is_bpe:
+                logger.warning('Skipping metaspace_prepend_scheme "always": not supported for BPE vocab')
+            else:
+                if not quiet:
+                    logger.info(f'Setting metaspace_prepend_scheme to {self.metaspace_prepend_scheme}')
+                gw.add_metaspace_prepend_scheme(self.metaspace_prepend_scheme)
 
     def _load(self, path: Path) -> None:
         self._try_load_from_tokenizer_json(path)
