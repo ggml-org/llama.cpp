@@ -33,6 +33,18 @@ describe('llama-chat CLI arguments', () => {
 		expect(options).toMatchObject({ host: '0.0.0.0', open: false, port: 3001 });
 	});
 
+	it('reads --server for serving and for build, without a trailing slash', () => {
+		expect(parseCliArgs([]).server).toBe('');
+		expect(parseCliArgs(['--server', 'http://localhost:8080/']).server).toBe(
+			'http://localhost:8080'
+		);
+		expect(parseCliArgs(['build', '--server', 'https://llm.example.com/llama/']).server).toBe(
+			'https://llm.example.com/llama'
+		);
+		expect(() => parseCliArgs(['--server', 'localhost:8080'])).toThrow(/invalid --server/);
+		expect(() => parseCliArgs(['--server', 'not a url'])).toThrow(/invalid --server/);
+	});
+
 	it('accepts start as a verb that changes nothing', () => {
 		expect(parseCliArgs(['start', '--no-open']).open).toBe(false);
 	});
@@ -42,8 +54,6 @@ describe('llama-chat CLI arguments', () => {
 		expect(() => parseCliArgs(['--nope'])).toThrow();
 		expect(() => parseCliArgs(['--port', 'abc'])).toThrow(/invalid --port/);
 		expect(() => parseCliArgs(['--port', '70000'])).toThrow(/invalid --port/);
-		// it forwards nothing, so there is no llama-server to name
-		expect(() => parseCliArgs(['--server', 'http://127.0.0.1:9931'])).toThrow();
 	});
 
 	it('reads build with its own flags, and keeps serving flags out of it', () => {
@@ -103,6 +113,18 @@ describe('llama-chat build', () => {
 			join('_app', 'app.js'),
 			'index.html'
 		]);
+	});
+
+	it('names the llama-server in config.json when given one', async () => {
+		const out = await buildStatic({
+			distDir: dist,
+			out: join(work, 'pointed'),
+			server: 'http://localhost:8080'
+		});
+
+		expect(JSON.parse(await readFile(join(out, 'config.json'), 'utf8'))).toEqual({
+			server: 'http://localhost:8080'
+		});
 	});
 
 	it('refuses a folder that is not empty unless forced', async () => {
@@ -179,6 +201,26 @@ describe('llama-chat server', () => {
 		const worker = await fetch(`${chatUrl}/service-worker.js`);
 
 		expect(worker.headers.get('cache-control')).toBe('no-cache');
+	});
+
+	it('answers config.json with the llama-server it was given, revalidated', async () => {
+		expect((await fetch(`${chatUrl}/config.json`)).status).toBe(404);
+
+		const pointed = createChatServer({ distDir: dist, server: 'http://localhost:8080' });
+		const pointedUrl = await listen(pointed);
+
+		try {
+			const response = await fetch(`${pointedUrl}/config.json`);
+
+			expect(response.headers.get('cache-control')).toBe('no-cache');
+			expect(await response.json()).toEqual({ server: 'http://localhost:8080' });
+
+			// naming a llama-server must not turn this into a proxy for it
+			expect((await fetch(`${pointedUrl}/tools`)).status).toBe(404);
+			expect((await fetch(`${pointedUrl}/props`, { method: 'POST' })).status).toBe(405);
+		} finally {
+			await close(pointed);
+		}
 	});
 
 	it('forwards nothing: API paths are not found and other methods are refused', async () => {

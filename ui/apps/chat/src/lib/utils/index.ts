@@ -11,6 +11,7 @@
 export { getAuthHeaders, getJsonHeaders, sanitizeHeaders } from './api-headers';
 export { ApiError, apiDelete, apiFetch, apiFetchWithParams, apiPost } from './api-fetch';
 export { withBase } from './base-path';
+export { getServerBase, loadServerConfig, serverUrl, setServerBase } from './server-config';
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities

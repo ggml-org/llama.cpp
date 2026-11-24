@@ -32,8 +32,8 @@
 		versionStore
 	} from '#lib/stores/index.ts';
 	import { initStores } from '#lib/stores/init.ts';
-	import { withBase } from '#lib/utils/base-path.ts';
 	import { hapticTap } from '#lib/utils/index.ts';
+	import { serverUrl } from '#lib/utils/server-config.ts';
 	import { browser } from '$app/env';
 	import { afterNavigate, goto } from '$app/navigation';
 	import { page } from '$app/state';
@@ -184,7 +184,7 @@
 					[HEADERS.AUTHORIZATION]: `${HEADERS.BEARER}${apiKey.trim()}`
 				};
 
-				fetch(withBase('/props'), { headers })
+				fetch(serverUrl('/props'), { headers })
 					.then((response) => {
 						if (response.status === 401 || response.status === 403) {
 							window.location.reload();
