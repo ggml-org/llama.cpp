@@ -290,6 +290,14 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?| ?[\\p{P}\\p{S}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_FALCON_H1:
+                regex_exprs = {
+                    // tokenizer.json isolates contiguous punctuation (ASCII punctuation and \p{P}) first
+                    "[\\p{P}$+<=>^`|~]+",
+                    // then a Llama-3-style regex
+                    "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+                };
+                break;
             case LLAMA_VOCAB_PRE_TYPE_LLAMA3:
                 regex_exprs = {
                     // original regex from tokenizer.json
@@ -2460,11 +2468,15 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 ignore_merges = true;
                 clean_spaces = false;
             } else if (
+                    tokenizer_pre == "falcon-h1") {
+                // tokenizer.json: Punctuation(Contiguous) runs before the regex, ignore_merges is false
+                pre_type = LLAMA_VOCAB_PRE_TYPE_FALCON_H1;
+                add_bos = true;
+            } else if (
                     tokenizer_pre == "llama3"   ||
                     tokenizer_pre == "llama-v3" ||
                     tokenizer_pre == "llama-bpe"||
                     tokenizer_pre == "falcon3"  ||
-                    tokenizer_pre == "falcon-h1" ||
                     tokenizer_pre == "midm-2.0" ||
                     tokenizer_pre == "jina-v5-nano") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_LLAMA3;
