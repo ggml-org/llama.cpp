@@ -40664,6 +40664,9 @@ static void ggml_cl_gated_delta_net(ggml_backend_t backend, ggml_tensor * dst) {
     const cl_uint sq1 = (cl_uint)(src_q->nb[1]    / sizeof(float));
     const cl_uint sq2 = (cl_uint)(src_q->nb[2]    / sizeof(float));
     const cl_uint sq3 = (cl_uint)(src_q->nb[3]    / sizeof(float));
+    const cl_uint sk1 = (cl_uint)(src_k->nb[1]    / sizeof(float));
+    const cl_uint sk2 = (cl_uint)(src_k->nb[2]    / sizeof(float));
+    const cl_uint sk3 = (cl_uint)(src_k->nb[3]    / sizeof(float));
     const cl_uint sv1 = (cl_uint)(src_v->nb[1]    / sizeof(float));
     const cl_uint sv2 = (cl_uint)(src_v->nb[2]    / sizeof(float));
     const cl_uint sv3 = (cl_uint)(src_v->nb[3]    / sizeof(float));
@@ -40714,6 +40717,9 @@ static void ggml_cl_gated_delta_net(ggml_backend_t backend, ggml_tensor * dst) {
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &sq1));
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &sq2));
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &sq3));
+    CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &sk1));
+    CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &sk2));
+    CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &sk3));
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &sv1));
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &sv2));
     CL_CHECK(clSetKernelArg(kernel, idx++, sizeof(cl_uint),  &sv3));
