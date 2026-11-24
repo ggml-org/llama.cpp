@@ -205,17 +205,25 @@ float replay_update(const in uint32_t r, const in uint32_t c, const in float s, 
     return s + data_pk[k_off + c] * (beta * (data_pv[v_off + r] - dot));
 }
 
-void replay(inout coopmat<float, WG, V, D, MACC> state, uint seq_id, uint head_id, uint iq1, uint v0) {
+// The products of the state blocks with their slices of k are summed per
+// element first, so one row reduction gives the dot product over all of D.
+void replay(inout coopmat<float, WG, V, KT, MACC> state[D / KT], uint seq_id, uint head_id, uint iq1, uint v0) {
     const uint n_rep = replay_count(seq_id);
     [[dont_unroll]] for (uint t = 0; t < n_rep; ++t) {
         uint k_off, v_off;
         float decay, beta;
         replay_inputs(seq_id, head_id, iq1, t, k_off, v_off, decay, beta);
-        state *= decay;
-        coopmat<float, WG, V, D, MACC> dot;
-        coopMatPerElementNV(dot, state, replay_product, k_off);
+        coopmat<float, WG, V, KT, MACC> dot = coopmat<float, WG, V, KT, MACC>(0.0);
+        [[unroll]] for (uint b = 0; b < D / KT; ++b) {
+            state[b] *= decay;
+            coopmat<float, WG, V, KT, MACC> prod;
+            coopMatPerElementNV(prod, state[b], replay_product, k_off + b * KT);
+            dot += prod;
+        }
         coopMatReduceNV(dot, dot, gl_CooperativeMatrixReduceRowNV, replay_sum);
-        coopMatPerElementNV(state, state, replay_update, dot, k_off, v_off + v0, beta);
+        [[unroll]] for (uint b = 0; b < D / KT; ++b) {
+            coopMatPerElementNV(state[b], state[b], replay_update, dot, k_off + b * KT, v_off + v0, beta);
+        }
     }
 }
 #endif
