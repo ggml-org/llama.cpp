@@ -97,6 +97,9 @@ class TensorNameMap:
         MODEL_TENSOR.DENSE_2_OUT: (
             "dense_2_out",  # embeddinggemma
         ),
+        MODEL_TENSOR.OUTPUT_SCALE: (
+            "lm_head.logit_scale",  # dory
+        ),
         MODEL_TENSOR.DENSE_3_OUT: (
             "dense_3_out",  # embeddinggemma
         ),
@@ -468,6 +471,20 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.linear_gate",  # hy-v4
             "model.layers.{bid}.self_attn.attn_gate_proj",  # k2-horizon
             "model.layers.{bid}.attn.gate_attn",         # inkling2
+            "backbone.layers.{bid}.mixer.g_proj",        # dory
+        ),
+
+        MODEL_TENSOR.ATTN_QK_SCALE: (
+            "backbone.layers.{bid}.mixer.sqk",  # dory
+        ),
+
+        MODEL_TENSOR.ATTN_GATE_SCALE: (
+            "backbone.layers.{bid}.mixer.s_gate",  # dory
+        ),
+
+        MODEL_TENSOR.RESIDUAL_ALPHA: (
+            "backbone.layers.{bid}.attn_alpha",  # dory
+            "backbone.layers.{bid}.mlp_alpha",   # dory
         ),
 
         MODEL_TENSOR.ATTN_VRES_LAMBDA: (
@@ -821,6 +838,15 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.language_mlp.gate_proj",  # cogvlm
             "model.blocks.{bid}.mlp.mlp_gate",                # talkie
             "model.layers.{bid}.feedforward.gate_proj",       # domynedge
+            "backbone.layers.{bid}.mixer.gate_proj",          # dory
+        ),
+
+        MODEL_TENSOR.FFN_GATE_SCALE: (
+            "backbone.layers.{bid}.mixer.suv_gate",  # dory
+        ),
+
+        MODEL_TENSOR.FFN_UP_SCALE: (
+            "backbone.layers.{bid}.mixer.suv_up",  # dory
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (

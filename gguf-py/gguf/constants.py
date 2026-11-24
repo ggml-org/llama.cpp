@@ -181,6 +181,16 @@ class Keys:
         NORM_BEFORE_FC                    = "{arch}.norm_before_fc"
         REALTIME_DELAY_TOKENS             = "{arch}.realtime_delay_tokens"
         CLASSIFIER_FREE_GUIDANCE          = "{arch}.classifier_free_guidance"
+        # dory: a looped stack of physical modules, input group + shared recurrent group + output group
+        INPUT_LAYER_COUNT                 = "{arch}.input_layer_count"
+        RECURRENT_LAYER_COUNT             = "{arch}.recurrent_layer_count"
+        OUTPUT_LAYER_COUNT                = "{arch}.output_layer_count"
+        LAYER_PATTERN                     = "{arch}.layer_pattern"
+        RECURRENT_KV_CACHE_MODE           = "{arch}.recurrent_kv_cache_mode"
+        # dory: nGPT fold constants, the *_scale tensors hold the raw learned parameters
+        INIT_STD                          = "{arch}.init_std"
+        ALPHA_INIT                        = "{arch}.alpha_init"
+        GATE_INIT                         = "{arch}.gate_init"
 
     class Adapters:
         COUNT                = "{arch}.adapters.count"
@@ -290,6 +300,8 @@ class Keys:
         FREQ_BASE                 = "{arch}.rope.freq_base"
         FREQ_BASE_SPATIAL         = "{arch}.rope.freq_base_spatial"
         FREQ_BASE_SWA             = "{arch}.rope.freq_base_swa"
+        FREQ_BASE_2               = "{arch}.rope.freq_base_2"
+        PROFILE                   = "{arch}.rope.profile"
         SCALING_TYPE              = "{arch}.rope.scaling.type"
         SCALING_FACTOR            = "{arch}.rope.scaling.factor"
         SCALING_ALPHA             = "{arch}.rope.scaling.alpha"
@@ -788,6 +800,7 @@ class MODEL_ARCH(IntEnum):
     INKLING2         = auto()
     INKLING2_LOOP    = auto()
     DOMYN_EDGE       = auto()
+    DORY             = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -1621,6 +1634,13 @@ class MODEL_TENSOR(IntEnum):
     A_QF_FFN_UP            = auto()
     A_QF_FFN_DOWN          = auto()
     A_QF_FFN_NORM          = auto()
+    # dory (nGPT looped): raw learned per-channel scale parameters
+    OUTPUT_SCALE           = auto() # per-vocab logit scale
+    ATTN_QK_SCALE          = auto() # sqk: rescales q after rope, applied squared
+    ATTN_GATE_SCALE        = auto() # s_gate: inside the output-gate sigmoid, applied squared
+    FFN_GATE_SCALE         = auto() # suv_gate
+    FFN_UP_SCALE           = auto() # suv_up
+    RESIDUAL_ALPHA         = auto() # lambda: per-channel residual interpolation rate
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -1804,6 +1824,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.INKLING2:         "inkling2",
     MODEL_ARCH.INKLING2_LOOP:    "inkling2_loop",
     MODEL_ARCH.DOMYN_EDGE:       "domynedge",
+    MODEL_ARCH.DORY:             "dory",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -2625,6 +2646,12 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.D2T:                       "d2t",
     MODEL_TENSOR.ATTN_V_GATE:               "blk.{bid}.attn_v_gate",
     MODEL_TENSOR.ATTN_V_EXP:                "blk.{bid}.attn_v_exps",
+    MODEL_TENSOR.OUTPUT_SCALE:              "output_scale",
+    MODEL_TENSOR.ATTN_QK_SCALE:             "blk.{bid}.attn_qk_scale",
+    MODEL_TENSOR.ATTN_GATE_SCALE:           "blk.{bid}.attn_gate_scale",
+    MODEL_TENSOR.FFN_GATE_SCALE:            "blk.{bid}.ffn_gate_scale",
+    MODEL_TENSOR.FFN_UP_SCALE:              "blk.{bid}.ffn_up_scale",
+    MODEL_TENSOR.RESIDUAL_ALPHA:            "blk.{bid}.residual_alpha",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -7202,6 +7229,25 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP,
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.OUTPUT_NORM,
+    ],
+    MODEL_ARCH.DORY: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.OUTPUT_SCALE,
+        # even physical modules are attention, odd ones are MLP
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_QK_SCALE,
+        MODEL_TENSOR.ATTN_GATE_SCALE,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_GATE_SCALE,
+        MODEL_TENSOR.FFN_UP_SCALE,
+        MODEL_TENSOR.RESIDUAL_ALPHA,
     ],
 }
 
