@@ -1276,6 +1276,7 @@ class ggml_webgpu_shader_lib {
     std::unordered_map<int, webgpu_pipeline> arange_pipelines;              // key is fixed, no variants yet
     std::unordered_map<int, webgpu_pipeline> count_equal_pipelines;         // key is src_overlap
     std::unordered_map<int, webgpu_pipeline> timestep_embedding_pipelines;  // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> pool1d_pipelines;
     std::unordered_map<int, webgpu_pipeline> pool2d_pipelines;              // key is ggml_op_pool
     std::unordered_map<ggml_webgpu_row_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_row_norm_pipeline_key_hash>
         row_norm_pipelines;                                                 // op/inplace
@@ -2076,6 +2077,26 @@ class ggml_webgpu_shader_lib {
         pipeline.context         = decisions;
         arange_pipelines[1]      = pipeline;
         return arange_pipelines[1];
+    }
+
+    webgpu_pipeline get_pool1d_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        const int key = ggml_get_op_params_i32(context.dst, 0);
+
+        auto it = pool1d_pipelines.find(key);
+        if (it != pool1d_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines = { "WG_SIZE=" + std::to_string(context.max_wg_size) };
+        const char *             variant = "pool1d_avg";
+        if (key == GGML_OP_POOL_MAX) {
+            defines.emplace_back("POOL_MAX");
+            variant = "pool1d_max";
+        }
+
+        auto pipeline = ggml_webgpu_create_pipeline(device, preprocessor.preprocess(wgsl_pool1d, defines), variant);
+        pool1d_pipelines.emplace(key, pipeline);
+        return pipeline;
     }
 
     webgpu_pipeline get_pool2d_pipeline(const ggml_webgpu_shader_lib_context & context) {
