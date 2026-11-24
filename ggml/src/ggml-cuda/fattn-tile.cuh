@@ -1174,7 +1174,7 @@ static void launch_fattn_tile_switch_ncols2(ggml_backend_cuda_context & ctx, ggm
     const bool use_gqa_opt = mask && mask->ne[2] == 1 && max_bias == 0.0f && Q->ne[1] <= gqa_limit && K->ne[1] % FATTN_KQ_STRIDE == 0;
 
     if constexpr (DKQ == 64 || DKQ == 128) {
-        if (dst->src[6]) {
+        if (ggml_flash_attn_ext_has_indexed_bias(dst)) {
             launch_fattn_tile_switch_ncols1<DKQ, DV, 1, use_logit_softcap, type_K, type_V, true>(ctx, dst);
             return;
         }

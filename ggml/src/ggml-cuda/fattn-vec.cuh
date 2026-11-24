@@ -272,7 +272,7 @@ static __global__ void flash_attn_ext_vec(
     }
 
     const int k_VKQ_max = KV_max ? KV_max[sequence*gridDim.x + blockIdx.x] : ne11;
-    const int32_t * rows = KV_rows_ptr ? KV_rows_ptr + int64_t(sequence)*ne11 : nullptr;
+    const int32_t * rows = indexed_bias && KV_rows_ptr ? KV_rows_ptr + int64_t(sequence)*ne11 : nullptr;
     if (!rows) {
         K += blockIdx.y*nthreads * s11;
         V += blockIdx.y*nthreads * s21;
@@ -323,7 +323,7 @@ static __global__ void flash_attn_ext_vec(
         for (int j = 0; j < ncols; ++j) {
             if constexpr (indexed_bias) {
                 const int k = k_VKQ_0 + tid;
-                const float m = rows && rows[k] < 0 ? -INFINITY : head_bias.add(__half2float(maskh[j*ne11 + tid]), ic0 + j, k);
+                const float m = head_bias.add(__half2float(maskh[j*ne11 + tid]), ic0 + j, k);
                 KQ_reg[j] += slope*m;
                 KQ_max_new[j] = fmaxf(KQ_max[j], KQ_reg[j] + FATTN_KQ_MAX_OFFSET);
             }
@@ -576,7 +576,7 @@ void ggml_cuda_flash_attn_ext_vec_case_impl(ggml_backend_cuda_context & ctx, ggm
     const int nwarps   = nthreads / WARP_SIZE;
     fattn_kernel_t fattn_kernel = flash_attn_ext_vec<D, cols_per_block, type_K, type_V, use_logit_softcap, false>;
     if constexpr (cols_per_block == 1 && (D == 64 || D == 128) && !use_logit_softcap) {
-        if (dst->src[6]) {
+        if (ggml_flash_attn_ext_has_indexed_bias(dst)) {
             fattn_kernel = flash_attn_ext_vec<D, cols_per_block, type_K, type_V, use_logit_softcap, true>;
         }
     }

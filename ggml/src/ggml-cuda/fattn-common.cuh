@@ -1320,6 +1320,10 @@ void launch_fattn(
     const ggml_tensor * sinks   = dst->src[4];
     const ggml_tensor * kv_rows = dst->src[5];
 
+    const bool has_bias = ggml_flash_attn_ext_has_indexed_bias(dst);
+    const ggml_tensor * bias_table   = has_bias ? dst->src[6] : nullptr;
+    const ggml_tensor * bias_indices = has_bias ? dst->src[7] : nullptr;
+
     // with kv_rows the kernel iterates over the mask columns and reads K/V rows through kv_rows
     const int64_t n_kv_cols = kv_rows ? kv_rows->ne[0] : K->ne[1];
     GGML_ASSERT(!kv_rows || !use_sparse);
@@ -1452,7 +1456,7 @@ void launch_fattn(
     // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
     // Only worth the overhead if there is at lease one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
     //     multiple sequences of possibly different lengths, or kv_rows lists that end with padding.
-    const bool scan_mask = !dst->src[6] && !use_sparse && mask && mask->ne[2] == 1 && n_kv_cols % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1 || kv_rows);
+    const bool scan_mask = !use_sparse && mask && mask->ne[2] == 1 && n_kv_cols % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1 || kv_rows);
     if (scan_mask) {
         const int64_t s31 = mask->nb[1] / sizeof(half2);
         const int64_t s33 = mask->nb[3] / sizeof(half2);
@@ -1611,11 +1615,11 @@ void launch_fattn(
         mask ? int32_t(mask->nb[1] / sizeof(half)) : 0,
         mask ? int64_t(mask->nb[2] / sizeof(half)) : 0,
         mask ? int64_t(mask->nb[3] / sizeof(half)) : 0,
-        fattn_indexed_bias{dst->src[6] ? (const float   *) dst->src[6]->data : nullptr,
-                           dst->src[7] ? (const int32_t *) dst->src[7]->data : nullptr,
-                           dst->src[6] ? dst->src[6]->ne[0] : 0,
-                           dst->src[7] ? dst->src[7]->ne[0] : 0,
-                           dst->src[6] ? dst->src[6]->ne[0]*dst->src[6]->ne[1] : 0}
+        fattn_indexed_bias{has_bias ? (const float   *) bias_table->data : nullptr,
+                           has_bias ? (const int32_t *) bias_indices->data : nullptr,
+                           has_bias ? bias_table->ne[0] : 0,
+                           has_bias ? bias_indices->ne[0] : 0,
+                           has_bias ? bias_table->ne[0]*bias_table->ne[1] : 0}
     );
     CUDA_CHECK(cudaGetLastError());
 
