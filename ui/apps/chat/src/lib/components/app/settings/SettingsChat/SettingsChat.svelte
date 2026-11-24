@@ -21,7 +21,6 @@
 	import { ColorMode } from '#lib/enums/ui.enums.ts';
 	import { modelsStore, serverStore, settingsStore } from '#lib/stores/index.ts';
 	import type { SettingsSection, SettingsSectionTitle } from '#lib/types/index.ts';
-	import { applySurfaceTheme } from '#lib/utils/index.ts';
 	import { setMode } from 'mode-watcher';
 	import { fade } from 'svelte/transition';
 	interface Props {
@@ -91,9 +90,6 @@
 	function handleConfigChange(key: string, value: string | boolean) {
 		localConfig[key] = value;
 
-		// the surface theme previews at once, like the colour theme
-		if (key === SETTINGS_KEYS.SURFACE_THEME) applySurfaceTheme(value);
-
 		// discover needs the hub metadata reads: checking it turns the hub on,
 		// unchecking it turns the hub back off, so the checkbox never lies
 		if (key === SETTINGS_KEYS.ENABLE_DISCOVER_MODELS) {
@@ -108,7 +104,6 @@
 	function handleReset() {
 		localConfig = { ...settingsStore.config };
 		setMode(localConfig.theme as ColorMode);
-		applySurfaceTheme(localConfig[SETTINGS_KEYS.SURFACE_THEME]);
 		mobileHeader?.updateCarousel();
 	}
 

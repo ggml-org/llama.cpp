@@ -13,11 +13,10 @@ import McpLogo from '#lib/components/app/mcp/McpLogo.svelte';
 import { SidebarAction, ToolSource } from '#lib/enums/index.ts';
 import type { DesktopIconStripItem } from '#lib/types/index.ts';
 
+export { COLLAPSIBLE_TRANSITION_MS } from '@ggml-org/llama-ui/constants';
+
 /** Delay before a copied affordance resets from its check to the copy icon. */
 export const COPY_FEEDBACK_RESET_MS = 1500;
-
-/** How long a collapsible block's body takes to expand or collapse. */
-export const COLLAPSIBLE_TRANSITION_MS = 200;
 
 /**
  * Parts of a message where right-click keeps the browser's own menu (open or

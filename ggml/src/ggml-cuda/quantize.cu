@@ -607,13 +607,13 @@ static __device__ __forceinline__ void quantize_mmq_few_store(const float4 xi, i
     float amax = fmaxf(fmaxf(fabsf(xi.x), fabsf(xi.y)), fmaxf(fabsf(xi.z), fabsf(xi.w)));
     amax = warp_reduce_max<8>(amax);
 
-    const float d_inv = 127.0f / amax;
+    const float d_inv = amax == 0.0f ? 0.0f : 127.0f / amax;
     char4 q;
     q.x = roundf(xi.x*d_inv);
     q.y = roundf(xi.y*d_inv);
     q.z = roundf(xi.z*d_inv);
     q.w = roundf(xi.w*d_inv);
-    const float d = 1.0f / d_inv;
+    const float d = amax == 0.0f ? 0.0f : 1.0f / d_inv;
 
     // as in quantize_mmq_q8_1: the sum of the quantized values; the int warp_reduce_sum reduces the whole warp on Ampere+
     [[maybe_unused]] float sum = 0.0f;

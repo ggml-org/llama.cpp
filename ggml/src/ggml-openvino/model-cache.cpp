@@ -186,6 +186,7 @@ static const char * cache_settings[] = {
     "GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK",
     "GGML_OPENVINO_KV_SCATTER_ELEMENTS",
     "GGML_OPENVINO_DISABLE_ELTWISE_RANK_ALIGN",
+    "GGML_OPENVINO_ROPE_F32_ANGLE",
 };
 
 void ggml_openvino_model_cache_init() {
@@ -368,7 +369,8 @@ uint64_t ggml_openvino_model_fingerprint(const ggml_cgraph * cgraph,
     // Version 6 clears recurrent-cache slots with Select, so a NaN in a cleared slot does not survive.
     // Version 7 reads ROPE frequency factors named other than rope_freqs.weight as a Constant, not a Parameter.
     // Version 8 drops result_norm from the outputs when it has a consumer, and hashes the output flags.
-    h = fnv1a_u64(h, 8);
+    // Version 9 hashes GGML_OPENVINO_ROPE_F32_ANGLE, which became opt-in.
+    h = fnv1a_u64(h, 9);
     h = fnv1a(h, graph_signature.data(), graph_signature.size());
     for (const char * name : cache_settings) {
         const char * value = ggml_openvino_getenv_str(name, "");
@@ -548,8 +550,10 @@ static bool read_weights_hash(const std::string & path, uint64_t & hash) {
     std::string key, value;
     while (meta >> key >> value) {
         if (key == "hash") {
-            hash = std::stoull(value, nullptr, 16);
-            return true;
+            // a damaged record counts as no hash, so the caller rewrites the file
+            char * end = nullptr;
+            hash = std::strtoull(value.c_str(), &end, 16);
+            return end != value.c_str() && *end == '\0';
         }
     }
     return false;

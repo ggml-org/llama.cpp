@@ -105,7 +105,6 @@ export {
 	ScrollCarouselVariant,
 	SidebarAction,
 	SidebarSectionKind,
-	SurfaceTheme,
 	TooltipSide,
 	UrlProtocol
 } from './ui.enums';
@@ -117,6 +116,7 @@ export {
 	GlobSearchType,
 	SearchChatsMessageSelection,
 	SearchChatsOrder,
+	ToolCallSummaryKind,
 	ToolSource,
 	ToolPermissionDecision,
 	ToolResponseField

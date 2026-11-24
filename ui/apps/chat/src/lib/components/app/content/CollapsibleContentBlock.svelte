@@ -2,7 +2,6 @@
 	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
 	import { cn } from '@ggml-org/llama-ui/utils';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
-	import CollapsibleRegion from '#lib/components/app/misc/CollapsibleRegion.svelte';
 	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 	import type { Snippet } from 'svelte';
 	import type { Component } from 'svelte';
@@ -32,6 +31,15 @@
 		 * message width on its own.
 		 */
 		flushBody?: boolean;
+		/** Shown at the end of the header row, before the chevron. */
+		trailing?: Snippet;
+		/** Shown right after the title, e.g. a live timer. */
+		titleSuffix?: Snippet;
+		/**
+		 * Put the chevron right after the title and keep it visible, for rows
+		 * that read as a line of text ( the tool call trace ) instead of a bar.
+		 */
+		inlineChevron?: boolean;
 		onToggle?: () => void;
 		children: Snippet;
 	}
@@ -44,12 +52,15 @@
 		icon: IconComponent,
 		iconClass = ICON_CLASS_DEFAULT,
 		iconUrl = null,
+		inlineChevron = false,
 		onToggle,
 		open = $bindable(false),
 		shimmerTitle = false,
 		subtitle,
 		title = '',
 		titleSnippet,
+		titleSuffix,
+		trailing,
 		variant = 'default'
 	}: Props = $props();
 
@@ -92,6 +103,22 @@
 	<span aria-hidden="true" class="h-px min-w-4 flex-1 bg-current opacity-25"></span>
 {/snippet}
 
+<!-- Beside the title it is always visible and points right until open; at the
+     end of the row it appears on hover and flips. -->
+{#snippet chevron()}
+	<ChevronDown
+		class={cn(
+			'shrink-0 text-muted-foreground/60 duration-150 ease-out',
+			inlineChevron
+				? ['size-3.5 self-center transition-transform', !open && '-rotate-90']
+				: [
+						'mt-0.75 size-4 opacity-0 transition-all group-hover/collapsible:opacity-100',
+						open && 'rotate-180'
+					]
+		)}
+	/>
+{/snippet}
+
 {#snippet toggleTitle(layoutClass: string)}
 	<span
 		class={cn(
@@ -109,6 +136,15 @@
 
 	{#if subtitle}
 		<span class="text-caption italic text-muted-foreground/70">{subtitle}</span>
+	{/if}
+
+	{#if shimmerTitle}
+		<!-- the shimmer is the only sign that this is still running -->
+		<span class="sr-only">in progress</span>
+	{/if}
+
+	{#if titleSuffix}
+		<span class="shrink-0 text-body-sm empty:hidden">{@render titleSuffix()}</span>
 	{/if}
 {/snippet}
 
@@ -143,37 +179,38 @@
 				{@render toggleIcon('mt-0.75')}
 
 				{@render toggleTitle('overflow-x-auto text-body-sm')}
+
+				{#if inlineChevron}
+					{@render chevron()}
+				{/if}
 			</div>
 
-			<ChevronDown
-				class={cn(
-					'size-4 shrink-0 text-muted-foreground/60 transition-all duration-150 ease-out opacity-0 group-hover/collapsible:opacity-100 mt-0.75',
-					open && 'rotate-180'
-				)}
-			/>
+			{#if trailing}
+				<div class="ml-auto flex shrink-0 items-center">
+					{@render trailing()}
+				</div>
+			{/if}
+
+			{#if !inlineChevron}
+				{@render chevron()}
+			{/if}
 
 			<span class="sr-only">Toggle content</span>
 		</Collapsible.Trigger>
 	{/if}
 
 	{#if collapsible}
-		<!-- Content is force-mounted so the trigger keeps a real `aria-controls` target;
-		     the region owns opening and closing. It animates the height instead of
-		     snapping it, and unmounts the body once the collapse is over - a closed
-		     block still costs nothing, which matters while tokens stream past it. -->
-		<Collapsible.Content forceMount>
-			<CollapsibleRegion {open}>
-				<div class="pl-1.5 grid min-w-0" style="min-height: var(--min-message-height);">
-					<div
-						class={cn(
-							'min-w-0 pb-2 my-2',
-							!flushBody && 'border-l border-muted-foreground/20 pl-4'
-						)}
-					>
-						{@render children()}
-					</div>
+		<!-- The body unmounts once the collapse is over, so a closed block costs
+		     nothing while tokens stream past it. -->
+		<Collapsible.Content>
+			<div class="pl-1.5 grid min-w-0" style="min-height: var(--min-message-height);">
+				<div
+					class={cn('min-w-0 pb-2 my-2', !flushBody && 'border-l border-muted-foreground/20 pl-4')}
+					data-slot="collapsible-body"
+				>
+					{@render children()}
 				</div>
-			</CollapsibleRegion>
+			</div>
 		</Collapsible.Content>
 	{/if}
 </Collapsible.Root>

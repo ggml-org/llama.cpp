@@ -6,8 +6,14 @@
 		ScrollCarousel
 	} from '#lib/components/app/index.ts';
 	import { ScrollCarouselVariant } from '#lib/enums/index.ts';
+	import { mediaGalleryStore } from '#lib/stores/index.ts';
 	import type { DatabaseMessageExtraMcpResource } from '#lib/types/index.ts';
-	import { getAttachmentDisplayItems, isMcpPrompt, isMcpResource } from '#lib/utils/index.ts';
+	import {
+		getAttachmentDisplayItems,
+		isMcpPrompt,
+		isMcpResource,
+		isMediaExtra
+	} from '#lib/utils/index.ts';
 
 	interface Props {
 		class?: string;
@@ -26,12 +32,15 @@
 		limitToSingleRow?: boolean;
 		// For vision modality check
 		activeModelId?: string;
+		/** A message's attachments: media opens the conversation's slideshow at it */
+		conversationGallery?: boolean;
 	}
 
 	let {
 		activeModelId,
 		attachments = [],
 		class: className = '',
+		conversationGallery = false,
 		// Default to small size for form previews
 		imageClass = '',
 		imageHeight = 'h-24',
@@ -54,6 +63,12 @@
 	function openPreview(item: ChatAttachmentDisplayItem, event?: MouseEvent) {
 		event?.stopPropagation();
 		event?.preventDefault();
+
+		if (conversationGallery && item.attachment && isMediaExtra(item.attachment)) {
+			mediaGalleryStore.show(item.attachment);
+
+			return;
+		}
 
 		// Find the index of the clicked item among non-MCP attachments
 		const nonMcpItems = displayItems.filter((i) => !isMcpPrompt(i) && !isMcpResource(i));
