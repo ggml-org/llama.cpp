@@ -1017,11 +1017,12 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
 
 // Output tile index t -> tile indices it, wt, zt, jt.
-// ntizw.z == 0: jt is the fastest index. Else jt is the slowest index and ntizw holds nti*nsamples*nchannels.
+// jt_outermost: jt is the slowest index and ntizw holds nti*nsamples*nchannels. Else jt is the fastest index.
+template <bool jt_outermost>
 static __device__ __forceinline__ void mmq_get_tile_indices(
         const int t, const uint3 ntj, const uint3 nchannels_y, const uint3 nsamples_y, const uint3 ntizw, int & it, int & wt, int & zt, int & jt) {
     uint2 tmp2;
-    if (ntizw.z != 0) {
+    if constexpr (jt_outermost) {
         tmp2 = fast_div_modulo(t, ntizw);
         jt   = tmp2.x;
         tmp2 = fast_div_modulo(tmp2.y, nchannels_y);
@@ -1039,7 +1040,7 @@ static __device__ __forceinline__ void mmq_get_tile_indices(
 // The mul_mat_q kernel implements "stream-k" work partitioning as described in https://arxiv.org/abs/2301.03598
 // force_tiling lets the host use the native tiled path for configs that normally use Stream-K.
 
-template <ggml_type type, int J, bool fallback, ggml_prec prec_src1, bool has_fusion, bool force_tiling = false>
+template <ggml_type type, int J, bool fallback, ggml_prec prec_src1, bool has_fusion, bool force_tiling = false, bool jt_outermost = false>
 __launch_bounds__(ggml_cuda_mmq_get_nthreads(type, J, fallback, prec_src1), ggml_cuda_mmq_get_occupancy(type, J, fallback, prec_src1))
 static __global__ void mul_mat_q(
         const char * __restrict__ x, const char * __restrict__ x_gate, const int * __restrict__ y, const int32_t * __restrict__ ids_dst,
@@ -1181,7 +1182,7 @@ static __global__ void mul_mat_q(
     int kb0_stop  = min(blocks_per_ne00.z, uint32_t(kb0_start + kbc_stop - kbc));
     while (kbc < kbc_stop && kb0_stop == int(blocks_per_ne00.z)) {
         int it, wt, zt, jt;
-        mmq_get_tile_indices(fastdiv(kbc, blocks_per_ne00), ntj, nchannels_y, nsamples_y, ntizw, it, wt, zt, jt);
+        mmq_get_tile_indices<jt_outermost>(fastdiv(kbc, blocks_per_ne00), ntj, nchannels_y, nsamples_y, ntizw, it, wt, zt, jt);
 
         // Defaults for regular matrix multiplication:
         int col_low        = jt*J;
@@ -1254,7 +1255,7 @@ static __global__ void mul_mat_q(
     }
 
     int it, wt, zt, jt;
-    mmq_get_tile_indices(fastdiv(kbc, blocks_per_ne00), ntj, nchannels_y, nsamples_y, ntizw, it, wt, zt, jt);
+    mmq_get_tile_indices<jt_outermost>(fastdiv(kbc, blocks_per_ne00), ntj, nchannels_y, nsamples_y, ntizw, it, wt, zt, jt);
 
     // Defaults for regular matrix multiplication:
     int col_low        = jt*J;
@@ -1396,7 +1397,11 @@ static __global__ void mul_mat_q_stream_k_fixup(
     }
 
     int it, wt, zt, jt;
-    mmq_get_tile_indices(fastdiv(kbc0, blocks_per_ne00), ntj, nchannels_y, nsamples_y, ntizw, it, wt, zt, jt);
+    if (ntizw.z != 0) {
+        mmq_get_tile_indices<true>(fastdiv(kbc0, blocks_per_ne00), ntj, nchannels_y, nsamples_y, ntizw, it, wt, zt, jt);
+    } else {
+        mmq_get_tile_indices<false>(fastdiv(kbc0, blocks_per_ne00), ntj, nchannels_y, nsamples_y, ntizw, it, wt, zt, jt);
+    }
 
     if (!ids_dst) {
         const int64_t offset_dst = (int64_t) wt*stride_sample_dst + (int64_t) zt*stride_channel_dst + (int64_t) jt*J*stride_col_dst + it*I;
@@ -1567,7 +1572,8 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
 
     // If a block works on several tiles, the column tiles go outermost.
     // Then the blocks that work on the same rows of x run at the same time and share x in L2.
-    const bool jt_outermost = GGML_CUDA_CC_IS_NVIDIA(cc) && args.ids_dst == nullptr && ntiles_dst > nblocks_stream_k;
+    // Only the widest tiles get this kernel variant, to limit the compile time.
+    const bool jt_outermost = J == 128 && GGML_CUDA_CC_IS_NVIDIA(cc) && args.ids_dst == nullptr && ntiles_dst > nblocks_stream_k;
     const uint3 ntizw_fd = jt_outermost ? init_fastdiv_values(nti*ntzw) : make_uint3(0, 0, 0);
 
     const bool fixup_needed = ntiles_dst % block_nums_stream_k.x != 0;
@@ -1584,7 +1590,16 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     const int nwarps_fixup = GGML_CUDA_CC_IS_GCN(cc) ? nwarps : nwarps/2;
     const dim3 block_dims_fixup(block_dims.x, nwarps_fixup, block_dims.z);
 
-    mul_mat_q<type, J, fallback, prec_src1, has_fusion><<<block_nums_stream_k, block_dims, nbytes_shared, stream>>>
+    auto kernel = mul_mat_q<type, J, fallback, prec_src1, has_fusion>;
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    if constexpr (!has_fusion && J == 128) {
+        if (jt_outermost) {
+            CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<type, J, fallback, prec_src1, false, false, true>), nbytes_shared);
+            kernel = mul_mat_q<type, J, fallback, prec_src1, false, false, true>;
+        }
+    }
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    kernel<<<block_nums_stream_k, block_dims, nbytes_shared, stream>>>
         (args.x, (const char *) args.fusion.gate, args.y, args.ids_dst, args.tile_spec, args.dst, tmp_fixup.ptr,
          args.y_scale, args.fusion.glu_op, args.fusion.glu_limit, (const float *) args.fusion.x_scale, (const float *) args.fusion.gate_scale,
          blocks_per_ne00_fd, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
