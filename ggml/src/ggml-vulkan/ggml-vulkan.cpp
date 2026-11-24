@@ -9271,7 +9271,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                 prefill_state.unaligned_seq_len = nek1 % 32 != 0;
                 prefill_state.unaligned_q = head_stride_q % 8 != 0 || q_stride % 8 != 0 || batch_stride_q % 8 != 0;
                 prefill_state.partial_row_mask = neq1 > nem1;
-                prefill_state.multi_head_mask = nem2 > 1 || has_bias;
+                prefill_state.multi_head_mask = nem2 > 1;
                 xe_fa_params = get_xe_fa_tuning_params(vk_dev, prefill_state, true);
                 if (xe_fa_params.shmem_sz <= vk_dev->properties.limits.maxComputeSharedMemorySize) {
                     auto& xe_fa_pipelines = ctx->device->pipeline_xe_fa_prefill;
