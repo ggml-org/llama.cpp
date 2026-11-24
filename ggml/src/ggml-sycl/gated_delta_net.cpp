@@ -89,6 +89,11 @@ struct gdn_replay_args {
     int64_t         sg1, sg2, sg3;
     int             n_pend;
     bool            keep;  // write the state after the replay, not the final one
+
+    // optional (not KDA): store the k, v, g, beta inputs of the new tokens as pending (fused cpys)
+    float *         st[4];
+    int64_t         st2[4]; // token stride in floats
+    int64_t         st3[4]; // seq stride in floats
 };
 
 // C is the number of state columns per warp: a token's q/k shard is loaded once and shared by these columns.
@@ -271,6 +276,31 @@ void gated_delta_net_sycl(const float *     q,
             v_reg[c] = vp[c];
         }
         vp += sv2;
+
+        if constexpr (replay && !KDA) {
+            if (rep.st[0] != nullptr) {
+                // keep the inputs of this token pending: one work-group per k head writes k, each warp its v columns
+                const bool first_wg = item_ct1.get_group(0) == 0 && item_ct1.get_local_id(1) == 0;
+                if (first_wg && h_idx < neqk1_magic.z()) {
+                    float * dk = rep.st[0] + sequence * rep.st3[0] + t * rep.st2[0] + h_idx * S_v + lane;
+#pragma unroll
+                    for (int r = 0; r < rows_per_lane; r++) {
+                        dk[r * warp_size] = k_reg[r];
+                    }
+                }
+                if (lane == 0) {
+                    float * dv = rep.st[1] + sequence * rep.st3[1] + t * rep.st2[1] + h_idx * S_v + col0;
+#pragma unroll
+                    for (int c = 0; c < C; c++) {
+                        dv[c] = v_reg[c];
+                    }
+                    if (first_wg) {
+                        rep.st[2][sequence * rep.st3[2] + t * rep.st2[2] + h_idx] = *g_t;
+                        rep.st[3][sequence * rep.st3[3] + t * rep.st2[3] + h_idx] = beta_val;
+                    }
+                }
+            }
+        }
 
         // attn[col] = g * (S^T q)[col] + delta[col] * (k . q), so no reduction waits for delta
         float kq_shard = 0.0f;
@@ -547,6 +577,11 @@ static void ggml_sycl_op_gated_delta_net_impl(ggml_backend_sycl_context & ctx, g
         rep.sg3    = src_pgb->nb[3] / sizeof(float);
         rep.n_pend = ggml_get_op_params_i32(dst, 1);
         rep.keep   = ggml_get_op_params_i32(dst, 2) != 0;
+        for (int i = 0; i < 4; ++i) {
+            rep.st[i]  = cache != nullptr ? cache->in_dst[i] : nullptr;
+            rep.st2[i] = cache != nullptr ? cache->in_nb2[i] : 0;
+            rep.st3[i] = cache != nullptr ? cache->in_nb3[i] : 0;
+        }
     }
 
 #ifdef GGML_SYCL_DMMV_HAS_ESIMD

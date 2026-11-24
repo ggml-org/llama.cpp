@@ -6638,11 +6638,6 @@ static int ggml_sycl_try_gdn_cache_fusion(const ggml_cgraph * cgraph, int node_i
     }
 
     const ggml_tensor * gdn = cgraph->nodes[node_idx];
-    // pending inputs may alias the cache destination
-    if (gdn->op == GGML_OP_GATED_DELTA_NET && gdn->src[6] != nullptr) {
-        return 0;
-    }
-
     // the kernel skips the snapshot tail, so the gdn output must not be a graph output, and the cpy
     // found below is taken to be its only reader, as it is in every graph that builds this op
     if (gdn->op != GGML_OP_GATED_DELTA_NET || gdn->type != GGML_TYPE_F32 ||
@@ -6700,8 +6695,62 @@ static int ggml_sycl_try_gdn_cache_fusion(const ggml_cgraph * cgraph, int node_i
         return 0;
     }
 
+    // replay: the kernel reads the pending inputs (src[6..8]) while it writes the cache, so they must not share memory
+    const auto overlaps = [](const ggml_tensor * x, const ggml_tensor * y) {
+        const char * x0 = (const char *) x->data;
+        const char * y0 = (const char *) y->data;
+        return x0 < y0 + ggml_nbytes(y) && y0 < x0 + ggml_nbytes(x);
+    };
+    for (int s = 6; s <= 8; ++s) {
+        if (gdn->src[s] != nullptr && overlaps(gdn->src[s], dst)) {
+            return 0;
+        }
+    }
+
     fused_state_cpy.data        = (float *) dst->data; // rollback group 0 (newest)
     fused_state_cpy.slot_stride = K > 1 ? (int64_t) (dst->nb[2] / sizeof(float)) : 0;
+
+    // replay (not KDA): the next 4 real nodes may store the k, v, g, beta inputs into the pending rows
+    if (gdn->src[6] != nullptr && gdn->src[3]->ne[0] == 1) {
+        float * in_dst[4];
+        int64_t in_nb2[4];
+        int64_t in_nb3[4];
+        int     skip_in = skip;
+        int     n_in    = 0;
+        for (int j = node_idx + skip + 1; n_in < 4 && j < cgraph->n_nodes; ++j) {
+            const ggml_tensor * n = cgraph->nodes[j];
+            if (ggml_sycl_is_view_or_noop(n) || (n->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+                continue;
+            }
+            const ggml_tensor * in = gdn->src[1 + n_in];
+            const ggml_tensor * s0 = n->src[0];
+            const ggml_tensor * d  = n->src[1];
+            // the cpy reads the whole input, directly or through a view of the same data
+            const bool whole_in = s0 == in || (s0 != nullptr && s0->data == in->data && ggml_are_same_shape(s0, in) &&
+                                               ggml_are_same_stride(s0, in));
+            if (n->op != GGML_OP_CPY || (n->flags & GGML_TENSOR_FLAG_OUTPUT) || !whole_in ||
+                d->type != GGML_TYPE_F32 || d->data == nullptr || !ggml_are_same_shape(d, in) ||
+                d->nb[0] != sizeof(float) || d->nb[1] != d->ne[0]*sizeof(float) ||
+                d->nb[2] != d->ne[0]*d->ne[1]*sizeof(float) ||
+                overlaps(d, gdn->src[6]) || overlaps(d, gdn->src[7]) || overlaps(d, gdn->src[8])) {
+                break;
+            }
+            in_dst[n_in] = (float *) d->data;
+            in_nb2[n_in] = d->nb[2] / sizeof(float);
+            in_nb3[n_in] = d->nb[3] / sizeof(float);
+            skip_in      = j - node_idx;
+            ++n_in;
+        }
+        if (n_in == 4) {
+            for (int c = 0; c < 4; ++c) {
+                fused_state_cpy.in_dst[c] = in_dst[c];
+                fused_state_cpy.in_nb2[c] = in_nb2[c];
+                fused_state_cpy.in_nb3[c] = in_nb3[c];
+            }
+            skip = skip_in;
+        }
+    }
+
     return skip;
 }
 
