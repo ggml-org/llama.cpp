@@ -2003,87 +2003,102 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch 
 }
 
 void llama_kv_cache::set_input_kpool(ggml_tensor * pool_idxs, ggml_tensor * pool_pos, ggml_tensor * pool_mask, ggml_tensor * tail_idxs,
-        const llama_ubatch * ubatch, uint32_t kpool, uint32_t n_kv) const {
+        const llama_ubatch * ubatch, const slot_info & sinfo, uint32_t kpool, uint32_t n_kv) const {
     GGML_ASSERT(n_stream == 1 && "TODO: support multiple streams");
     GGML_ASSERT(pool_idxs->ne[0] == kpool && tail_idxs->ne[0] == kpool);
     GGML_ASSERT(pool_mask->type == GGML_TYPE_F16);
+    GGML_ASSERT(sinfo.idxs.size() == 1 && sinfo.idxs[0].size() == ubatch->n_tokens);
 
     const auto & cells = v_cells[0];
 
-    const int64_t n_tokens = ubatch->n_tokens;
-    const int64_t n_pool   = pool_idxs->ne[1];
-    GGML_ASSERT(pool_mask->ne[0] == n_pool && n_kv <= cells.size());
+    const int64_t  n_tokens = ubatch->n_tokens;
+    const int64_t  n_pool   = pool_idxs->ne[1];
+    const uint32_t n_planes = hparams.n_pos_per_embd();
+    GGML_ASSERT(pool_mask->ne[0] == n_pool && pool_pos->ne[0] == n_pool*n_planes && n_kv <= cells.size());
 
-    // one pool per complete group of each sequence of the ubatch; sequences that share a prefix share its pools
+    // one pool per kpool consecutive tokens of each sequence of the ubatch, in sequence order
+    // the order is the position, then the cell: the tokens of an image share their position with M-RoPE
+    // sequences that share a prefix share its pools
     struct pool_seq {
         llama_seq_id seq_id;
-        llama_pos    group;
+        int32_t      group;
     };
     std::vector<int32_t>               idxs;
-    std::vector<int32_t>               poss;
+    std::vector<int32_t>               first;
     std::vector<std::vector<pool_seq>> owners;
     std::map<std::vector<int32_t>, int32_t> pool_of;
 
-    // cell of each position of each sequence, from the first position of the sequence
-    std::vector<std::vector<int32_t>> cell_of(ubatch->n_seqs_unq);
-    std::vector<llama_pos>            pos_min(ubatch->n_seqs_unq);
+    // the cells of each sequence in order, and the rank of each cell in its sequence
+    std::vector<std::vector<int32_t>> order(ubatch->n_seqs_unq);
+    std::vector<std::vector<int32_t>> rank (ubatch->n_seqs_unq);
 
+    std::vector<std::pair<llama_pos, int32_t>> seq_cells;
     std::vector<int32_t> members(kpool);
     for (uint32_t s = 0; s < ubatch->n_seqs_unq; ++s) {
         const llama_seq_id seq_id = ubatch->seq_id_unq[s];
-        const llama_pos p0 = cells.seq_pos_min(seq_id);
-        const llama_pos p1 = cells.seq_pos_max(seq_id);
-        pos_min[s] = p0;
-        if (p0 < 0) {
-            continue;
-        }
-        auto & cs = cell_of[s];
-        cs.assign(p1 - p0 + 1, -1);
+
+        seq_cells.clear();
         for (uint32_t j = 0; j < n_kv; ++j) {
             if (!cells.is_empty(j) && cells.seq_has(j, seq_id)) {
-                cs[cells.pos_get(j) - p0] = j;
+                seq_cells.emplace_back(cells.pos_get(j), (int32_t) j);
             }
         }
-        for (llama_pos g = 0; (g + 1)*(llama_pos) kpool <= (llama_pos) cs.size(); ++g) {
-            bool complete = true;
-            for (uint32_t m = 0; m < kpool; ++m) {
-                members[m] = cs[g*kpool + m];
-                complete = complete && members[m] >= 0;
-            }
-            if (!complete) {
-                continue;
-            }
+        std::sort(seq_cells.begin(), seq_cells.end());
+
+        auto & ord = order[s];
+        auto & rnk = rank[s];
+        ord.resize(seq_cells.size());
+        rnk.assign(n_kv, -1);
+        for (size_t r = 0; r < seq_cells.size(); ++r) {
+            ord[r] = seq_cells[r].second;
+            rnk[ord[r]] = (int32_t) r;
+        }
+
+        for (int32_t g = 0; (size_t) (g + 1)*kpool <= ord.size(); ++g) {
+            std::copy(ord.begin() + g*kpool, ord.begin() + (g + 1)*kpool, members.begin());
             auto it = pool_of.find(members);
             if (it == pool_of.end()) {
-                it = pool_of.emplace(members, (int32_t) poss.size()).first;
+                it = pool_of.emplace(members, (int32_t) first.size()).first;
                 idxs.insert(idxs.end(), members.begin(), members.end());
-                poss.push_back(p0 + g*kpool);
+                first.push_back(members[0]);
                 owners.emplace_back();
             }
             owners[it->second].push_back({ seq_id, g });
         }
     }
 
-    if ((int64_t) poss.size() > n_pool) {
-        GGML_ABORT("the ubatch has %zu pools, the graph has room for %lld", poss.size(), (long long) n_pool);
+    if ((int64_t) first.size() > n_pool) {
+        GGML_ABORT("the ubatch has %zu pools, the graph has room for %lld", first.size(), (long long) n_pool);
     }
 
     // an unused pool is never picked, its score is -inf, but its members are still gathered: any cell does
     std::vector<int32_t> pool_idxs_data(kpool*n_pool, 0);
-    std::vector<int32_t> pool_pos_data(n_pool, 0);
     std::copy(idxs.begin(), idxs.end(), pool_idxs_data.begin());
-    std::copy(poss.begin(), poss.end(), pool_pos_data.begin());
+
+    // the pooled key is rotated at the position of its first member, the M-RoPE planes are t, y, x, t
+    std::vector<int32_t> pool_pos_data(n_pool*n_planes, 0);
+    for (size_t k = 0; k < first.size(); ++k) {
+        const llama_pos t = cells.pos_get(first[k]);
+        pool_pos_data[k] = t;
+        if (n_planes == 4) {
+            const auto & e = cells.ext_get(first[k]);
+            pool_pos_data[1*n_pool + k] = e.y;
+            pool_pos_data[2*n_pool + k] = e.x;
+            pool_pos_data[3*n_pool + k] = t;
+        }
+    }
 
     std::vector<ggml_fp16_t> pool_mask_data(n_pool*n_tokens, ggml_fp32_to_fp16(-INFINITY));
-    std::vector<int32_t>     tail_idxs_data(kpool*n_tokens, n_kv);
+    std::vector<int32_t>     tail_idxs_data(kpool*n_tokens, 0);
 
     const ggml_fp16_t zero = ggml_fp32_to_fp16(0.0f);
     for (int64_t i = 0; i < n_tokens; ++i) {
         // a token shared by several sequences has the same history in each, so its first one stands for all
         const llama_seq_id seq_id = ubatch->seq_id[i][0];
         const uint32_t     s      = ubatch->seq_idx[seq_id];
-        const llama_pos    rel    = ubatch->pos[i] - pos_min[s];
-        const llama_pos    group  = rel/kpool;
+        const int32_t      r      = rank[s][sinfo.idxs[0][i]];
+        GGML_ASSERT(r >= 0);
+        const int32_t      group  = r/kpool;
 
         for (size_t k = 0; k < owners.size(); ++k) {
             for (const auto & o : owners[k]) {
@@ -2094,12 +2109,10 @@ void llama_kv_cache::set_input_kpool(ggml_tensor * pool_idxs, ggml_tensor * pool
             }
         }
 
-        const auto & cs = cell_of[s];
-        for (uint32_t m = 0; m < kpool; ++m) {
-            const llama_pos r = group*kpool + m;
-            if (r <= rel && cs[r] >= 0) {
-                tail_idxs_data[i*kpool + m] = cs[r];
-            }
+        // the token's own pool, up to the token itself, the token's cell again for the members it does not have yet
+        for (int32_t m = 0; m < (int32_t) kpool; ++m) {
+            const int32_t rm = group*(int32_t) kpool + m;
+            tail_idxs_data[i*kpool + m] = rm <= r ? order[s][rm] : (int32_t) sinfo.idxs[0][i];
         }
     }
 
@@ -3233,7 +3246,7 @@ void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama
 
 void llama_kv_cache_context::set_input_kpool(ggml_tensor * pool_idxs, ggml_tensor * pool_pos, ggml_tensor * pool_mask, ggml_tensor * tail_idxs,
         const llama_ubatch * ubatch, uint32_t kpool) const {
-    kv->set_input_kpool(pool_idxs, pool_pos, pool_mask, tail_idxs, ubatch, kpool, n_kv);
+    kv->set_input_kpool(pool_idxs, pool_pos, pool_mask, tail_idxs, ubatch, sinfos[i_cur], kpool, n_kv);
 }
 
 void llama_kv_cache_context::set_input_relative_pos(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const {

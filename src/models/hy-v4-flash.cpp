@@ -15,6 +15,20 @@ static constexpr int64_t HY_V4_FLASH_ENGRAM_DEAD = -1;
 // the reference Engram norms leave eps unset, so they use the fp32 machine epsilon, not rms_norm_eps
 static constexpr float HY_V4_FLASH_ENGRAM_EPS = 1.1920929e-07f;
 
+// the weights keep the reference's interleaved rope pairs, the M-RoPE kernels need NeoX halves
+// q and k get the same reorder, so their dot product does not change
+static ggml_tensor * hy_v4_flash_rope_to_neox(ggml_context * ctx, ggml_tensor * x) {
+    const int64_t n_rot = x->ne[0];
+    x = ggml_reshape_4d(ctx, ggml_cont(ctx, x), 2, n_rot/2, x->ne[1], x->ne[2]);
+    x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
+    return ggml_reshape_3d(ctx, x, n_rot, x->ne[2], x->ne[3]);
+}
+
+// IMROPE rotates the last pairs with the 4th position, the reference uses t there
+static ggml_tensor * hy_v4_flash_pos(ggml_context * ctx, ggml_tensor * pos, int64_t n_tokens) {
+    return ggml_concat(ctx, ggml_view_1d(ctx, pos, 3*n_tokens, 0), ggml_view_1d(ctx, pos, n_tokens, 0), 0);
+}
+
 static size_t hy_v4_flash_elem_offset(const ggml_tensor * t, int64_t i) {
     return ggml_row_size(t->type, i);
 }
@@ -53,6 +67,15 @@ void llama_model_hy_v4_flash::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,       hparams.rope_freq_base_train_swa);
     hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
     ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
+
+    // the sections are only used by the VL path (M-RoPE), a text-only file runs the normal rope
+    ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, false);
+    if (hparams.use_mrope()) {
+        const auto & s = hparams.rope_sections;
+        if (s[0] < 0 || s[1] < 0 || s[2] < 0 || s[3] < 0 || 2 * ((int64_t) s[0] + s[1] + s[2] + s[3]) != (int64_t) hparams.n_rot()) {
+            throw std::runtime_error("hy_v4_flash: rope sections must sum to n_rot / 2");
+        }
+    }
 
     // the sparse layers select their context with a pooled indexer
     ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K, hparams.indexer_top_k);
@@ -631,7 +654,7 @@ public:
     }
 
     ggml_tensor * pool_idxs = nullptr; // I32 [kpool, n_pool]
-    ggml_tensor * pool_pos  = nullptr; // I32 [n_pool]
+    ggml_tensor * pool_pos  = nullptr; // I32 [n_pool*n_pos_per_embd]
     ggml_tensor * pool_mask = nullptr; // F16 [n_pool, n_tokens]
     ggml_tensor * tail_idxs = nullptr; // I32 [kpool, n_tokens]
 
@@ -649,7 +672,7 @@ llama_model_hy_v4_flash::llm_graph_input_pool * llama_model_hy_v4_flash::graph::
     auto inp = std::make_unique<llm_graph_input_pool>(mctx_lid, kpool);
 
     inp->pool_idxs = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, kpool, n_pool);
-    inp->pool_pos  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pool);
+    inp->pool_pos  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pool*hparams.n_pos_per_embd());
     inp->pool_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, n_pool, n_tokens);
     inp->tail_idxs = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, kpool, n_tokens);
 
@@ -673,8 +696,16 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_indexer_rope(
             x->nb[1], x->nb[2], ggml_row_size(x->type, n_nope));
 
     // the same base the layer's own attention uses, so a cparams override reaches the indexer too
-    back = ggml_rope_ext(ctx0, ggml_cont(ctx0, back), pos, nullptr, n_rot, rope_type, n_ctx_orig,
-            freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+    if (hparams.use_mrope()) {
+        int sections[GGML_MROPE_SECTIONS];
+        std::copy(hparams.rope_sections.begin(), hparams.rope_sections.end(), sections);
+
+        back = ggml_rope_multi(ctx0, hy_v4_flash_rope_to_neox(ctx0, back), pos, nullptr, n_rot, sections, rope_type, n_ctx_orig,
+                freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+    } else {
+        back = ggml_rope_ext(ctx0, ggml_cont(ctx0, back), pos, nullptr, n_rot, rope_type, n_ctx_orig,
+                freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+    }
     cb(back, "indexer_rope", il);
 
     return ggml_concat(ctx0, ggml_cont(ctx0, front), back, 0);
@@ -753,13 +784,27 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_pool_select(
     const int64_t n_top_pool = std::min<int64_t>(n_pool, hparams.indexer_top_k / kpool - hparams.indexer_kpool_select_tail);
     ggml_tensor * top_k = ggml_top_k(ctx0, score, n_top_pool); // [n_top_pool, n_tokens], unordered
 
-    // a pick scored -inf (another sequence, a later or unused pool) is dropped, a tail cell the token does not have yet is skipped
     ggml_tensor * tail = hparams.indexer_kpool_select_tail ? inp_pool->tail_idxs : nullptr;
 
-    GGML_ASSERT(cparams.fused_top_k_mask && "hy_v4_flash: the pooled selection needs a backend with GGML_OP_TOP_K_MASK");
+    if (cparams.fused_top_k_mask) {
+        // a pick scored -inf (another sequence, a later or unused pool) is dropped
+        ggml_tensor * sel = ggml_top_k_mask(ctx0, kq_mask, top_k, score, inp_pool->pool_idxs, tail);
+        res->add_fused_node({LLM_FUSED_OP_TOP_K_MASK, sel, il});
+        cb(sel, "indexer_sel", il);
 
-    ggml_tensor * sel = ggml_top_k_mask(ctx0, kq_mask, top_k, score, inp_pool->pool_idxs, tail);
-    res->add_fused_node({LLM_FUSED_OP_TOP_K_MASK, sel, il});
+        return sel;
+    }
+
+    // without the fused op, the picks are expanded to their cells
+    // a pick scored -inf is only taken once every visible pool is, so its cells are either hidden by the kq_mask or already kept
+    ggml_tensor * cells = ggml_get_rows(ctx0, inp_pool->pool_idxs,
+            ggml_reshape_1d(ctx0, ggml_cont(ctx0, top_k), n_top_pool*n_tokens)); // [kpool, n_top_pool*n_tokens]
+    cells = ggml_reshape_2d(ctx0, cells, kpool*n_top_pool, n_tokens);
+    if (tail) {
+        cells = ggml_concat(ctx0, cells, tail, 0);
+    }
+
+    ggml_tensor * sel = build_top_k_mask(kq_mask, cells, il);
     cb(sel, "indexer_sel", il);
 
     return sel;
@@ -803,6 +848,10 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_attention(
             ggml_row_size(kv_cmpr_pe->type, kv_lora_rank + n_embd_head_qk_rope),
             ggml_row_size(kv_cmpr_pe->type, kv_lora_rank));
 
+    if (hparams.use_mrope()) {
+        q_pe = hy_v4_flash_rope_to_neox(ctx0, q_pe);
+        k_pe = hy_v4_flash_rope_to_neox(ctx0, k_pe);
+    }
     q_pe = build_rope(q_pe, inp_pos, il);
     cb(q_pe, "q_pe", il);
     k_pe = build_rope(k_pe, inp_pos, il);
@@ -913,6 +962,9 @@ llama_model_hy_v4_flash::graph::graph(const llama_model & model, const llm_graph
 
     ggml_tensor * inp = build_inp_embd(model.tok_embd);
     ggml_tensor * inp_pos = build_inp_pos();
+    if (hparams.use_mrope()) {
+        inp_pos = hy_v4_flash_pos(ctx0, inp_pos, n_tokens);
+    }
 
     // the sparse layers are in the DSA cache with their indexer, the sliding-window layers in the SWA cache
     llm_graph_input_attn_k_dsa_iswa * inp_attn = build_attn_inp_k_dsa_iswa();

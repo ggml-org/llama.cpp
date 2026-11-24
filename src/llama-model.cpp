@@ -3952,8 +3952,10 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
             return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_MROPE : LLAMA_ROPE_TYPE_NORM;
         // HY_V4 rotates consecutive pairs, matching the reference implementation
         case LLM_ARCH_HY_V4:
-        case LLM_ARCH_HY_V4_FLASH:
             return LLAMA_ROPE_TYPE_NORM;
+        // HY_V4_FLASH keeps the interleaved rope rows and reorders them in the graph for M-RoPE (see src/models/hy-v4-flash.cpp)
+        case LLM_ARCH_HY_V4_FLASH:
+            return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_IMROPE : LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2
         case LLM_ARCH_FALCON:

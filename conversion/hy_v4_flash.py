@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Iterable, cast
+from typing import Callable, Iterable, cast
 
 import numpy as np
 import torch
 
-from .base import LazyTorchTensor, ModelBase, gguf, logger
+from .base import LazyTorchTensor, MmprojModel, ModelBase, gguf, logger
 from .deepseek41 import _StreamedBytes
 from .hy_v4 import HYV4Model
 
@@ -586,3 +586,65 @@ class HYV4FlashModel(HYV4Model):
             return
 
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("HYV4FlashForCausalLM", "HYV4FlashForConditionalGeneration")
+class HYV4FlashVisionModel(MmprojModel):
+    """Vision tower of HY_V4_FLASH: a SigLIP-shaped encoder with a rmsnorm_mlp_adapter projector.
+
+    Positions come from a learned grid, resampled to the patch grid. The projector merges 2x2 patches with a strided conv2d, runs a 1x1 conv2d and appends a newline embedding to every row.
+    """
+
+    projector_type = gguf.VisionProjectorType.HY_V4_FLASH
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        # there is no image_size, the position-embedding grid is max_image_size / patch_size
+        self.hparams_vision["image_size"] = self.hparams_vision.get("max_image_size", 2048)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        assert self.hparams_vision is not None
+        vcfg = self.hparams_vision
+        projector_type = vcfg.get("projector_type")
+        if projector_type != "rmsnorm_mlp_adapter":
+            raise ValueError(f"unsupported projector_type {projector_type!r}")
+        # the graph implements the plain variant only
+        unsupported = {
+            "use_2d_rope": bool(vcfg.get("use_2d_rope", False)),
+            "cat_extra_token": bool(vcfg.get("cat_extra_token", False)),
+            "use_image_newline_token": not vcfg.get("use_image_newline_token", True),
+            "perceive_post_norm": bool(vcfg.get("perceive_post_norm", False)),
+            "hidden_act": vcfg.get("hidden_act", "gelu") != "gelu",
+            "interpolate_mode": vcfg.get("interpolate_mode", "bilinear") != "bilinear",
+        }
+        for key, bad in unsupported.items():
+            if bad:
+                raise NotImplementedError(f"HY_V4_FLASH vision config {key}={vcfg.get(key)!r} is not supported")
+        self.gguf_writer.add_clip_projector_type(self.projector_type)
+        self.gguf_writer.add_vision_use_gelu(True)
+        # rms_norm_eps is also the LayerNorm eps of the encoder blocks
+        self.gguf_writer.add_vision_attention_layernorm_eps(vcfg.get("rms_norm_eps", 1e-5))
+        self.gguf_writer.add_vision_spatial_merge_size(vcfg.get("spatial_merge_size", 2))
+        self.gguf_writer.add_vision_min_pixels(int(self.preprocessor_config["min_pixels"]))
+        self.gguf_writer.add_vision_max_pixels(int(self.preprocessor_config["max_pixels"]))
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], torch.Tensor]]) -> tuple[str, Callable[[], torch.Tensor]] | None:
+        if not item[0].startswith("vit."):
+            return None
+
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: torch.Tensor, name: str, bid: int | None) -> Iterable[tuple[str, torch.Tensor]]:
+        # row 0 of the position embedding is an unused CLS slot, the reference resamples rows 1:
+        if "position_embedding" in name:
+            data_torch = data_torch[1:]
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        # conv weights in F32 or F16, BF16 IM2COL is not supported on Metal
+        if ("mm.0." in new_name or "mm.2." in new_name) and new_name.endswith(".weight"):
+            return gguf.GGMLQuantizationType.F16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
