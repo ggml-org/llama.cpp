@@ -25,8 +25,9 @@ import {
 } from '#lib/enums/index.ts';
 import { ChatService } from '#lib/services/chat.service.ts';
 import { DatabaseService } from '#lib/services/database.service.ts';
-// direct imports between stores, not via the barrel, to avoid circular deps
 import { agenticStore } from '#lib/stores/agentic/index.svelte.ts';
+// direct imports between stores, not via the barrel, to avoid circular deps
+import { agenticMode } from '#lib/stores/agentic-mode.svelte.ts';
 import { chatActivityStore } from '#lib/stores/chat/activity.svelte.ts';
 import { type ChatFlowsHost, ChatMessageFlows } from '#lib/stores/chat/flows.svelte.ts';
 import { chatProcessingStore } from '#lib/stores/chat/processing.svelte.ts';
@@ -1258,7 +1259,8 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		};
 		const toolPolicy = this.toolPolicy();
 
-		{
+		// a plain chat sends the classic request below
+		if (agenticMode.enabled) {
 			const agenticResult = await agenticStore.runAgenticFlow({
 				callbacks: streamCallbacks,
 				conversationId: convId,

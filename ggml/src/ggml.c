@@ -5545,7 +5545,7 @@ void ggml_flash_attn_ext_add_sinks(
     a->src[4] = sinks;
 }
 
-bool ggml_flash_attn_ext_has_indexed_bias(const struct ggml_tensor * a) {    
+bool ggml_flash_attn_ext_has_indexed_bias(const struct ggml_tensor * a) {
     return a->op == GGML_OP_FLASH_ATTN_EXT && ggml_get_op_params_i32(a, 5) != 0;
 }
 
@@ -6373,7 +6373,7 @@ struct ggml_tensor * ggml_solve_tri(
 
 // ggml_gated_delta_net
 
-struct ggml_tensor * ggml_gated_delta_net(
+static struct ggml_tensor * ggml_gated_delta_net_impl(
         struct ggml_context * ctx,
         struct ggml_tensor  * q,
         struct ggml_tensor  * k,
@@ -6381,7 +6381,12 @@ struct ggml_tensor * ggml_gated_delta_net(
         struct ggml_tensor  * g,
         struct ggml_tensor  * beta,
         struct ggml_tensor  * state,
-        int64_t               K) {
+        struct ggml_tensor  * pend_k,
+        struct ggml_tensor  * pend_v,
+        struct ggml_tensor  * pend_gb,
+        struct ggml_tensor  * n_rep,
+        int64_t               K,
+        bool                  keep) {
     GGML_ASSERT(ggml_is_contiguous_rows(q));
     GGML_ASSERT(ggml_is_contiguous_rows(k));
     GGML_ASSERT(ggml_is_contiguous_rows(v));
@@ -6425,7 +6430,59 @@ struct ggml_tensor * ggml_gated_delta_net(
     result->src[4] = beta;
     result->src[5] = state;
 
+    const bool replay = pend_k != NULL;
+    GGML_ASSERT((pend_v != NULL) == replay && (pend_gb != NULL) == replay && (n_rep != NULL) == replay);
+    GGML_ASSERT(replay || !keep);
+    if (replay) {
+        const int64_t n_pend = pend_k->ne[2];
+
+        GGML_ASSERT(K == 1);
+        GGML_ASSERT(pend_k->type == GGML_TYPE_F32 && pend_v->type == GGML_TYPE_F32 && pend_gb->type == GGML_TYPE_F32);
+        GGML_ASSERT(n_rep->type == GGML_TYPE_I32);
+        GGML_ASSERT(pend_k->nb[0] == sizeof(float) && pend_v->nb[0] == sizeof(float) && pend_gb->nb[0] == sizeof(float));
+        GGML_ASSERT(pend_k->ne[0]  == k->ne[0] && pend_k->ne[1]  == k->ne[1] && pend_k->ne[3]  == n_seqs);
+        GGML_ASSERT(pend_v->ne[0]  == S_v      && pend_v->ne[1]  == H        && pend_v->ne[2]  == n_pend   && pend_v->ne[3]  == n_seqs);
+        GGML_ASSERT(pend_gb->ne[0] == g->ne[0] && pend_gb->ne[1] == H        && pend_gb->ne[2] == 2*n_pend && pend_gb->ne[3] == n_seqs);
+        GGML_ASSERT(ggml_is_contiguous(n_rep) && ggml_nelements(n_rep) == n_seqs);
+
+        ggml_set_op_params_i32(result, 1, (int32_t) n_pend);
+        ggml_set_op_params_i32(result, 2, keep ? 1 : 0);
+
+        result->src[6] = pend_k;
+        result->src[7] = pend_v;
+        result->src[8] = pend_gb;
+        result->src[9] = n_rep;
+    }
+
     return result;
+}
+
+struct ggml_tensor * ggml_gated_delta_net_ext(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * g,
+        struct ggml_tensor  * beta,
+        struct ggml_tensor  * state,
+        struct ggml_tensor  * pend_k,
+        struct ggml_tensor  * pend_v,
+        struct ggml_tensor  * pend_gb,
+        struct ggml_tensor  * n_rep,
+        bool                  keep) {
+    return ggml_gated_delta_net_impl(ctx, q, k, v, g, beta, state, pend_k, pend_v, pend_gb, n_rep, 1, keep);
+}
+
+struct ggml_tensor * ggml_gated_delta_net(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * g,
+        struct ggml_tensor  * beta,
+        struct ggml_tensor  * state,
+        int64_t               K) {
+    return ggml_gated_delta_net_impl(ctx, q, k, v, g, beta, state, NULL, NULL, NULL, NULL, K, false);
 }
 
 // ggml_lightning_indexer

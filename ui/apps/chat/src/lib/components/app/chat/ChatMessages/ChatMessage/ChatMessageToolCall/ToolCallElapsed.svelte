@@ -29,7 +29,7 @@
 </script>
 
 <span
-	class="text-caption font-normal text-muted-foreground tabular-nums"
+	class="text-body-sm font-normal text-muted-foreground tabular-nums"
 	title="Time since the task started"
 >
 	{label}

@@ -41,6 +41,7 @@ constexpr constant static float kvalues_iq4nl_f[16] = {
     -127.f, -104.f, -83.f, -65.f, -49.f, -35.f, -22.f, -10.f, 1.f, 13.f, 25.f, 38.f, 53.f, 69.f, 89.f, 113.f
 };
 
+// E2M1 values, shared by MXFP4 and NVFP4
 constexpr constant static float kvalues_mxfp4_f[16] = {
     0, .5f, 1.f, 1.5f, 2.f, 3.f, 4.f, 6.f, -0, -.5f, -1.f, -1.5f, -2.f, -3.f, -4.f, -6.f
 };
@@ -66,6 +67,18 @@ static inline float e8m0_to_fp32(uint8_t x) {
     }
 
     return as_type<float>(bits);
+}
+
+// UE4M3: unsigned, 4 exponent bits with bias 7, 3 mantissa bits - the NVFP4 sub-block scale
+static inline float ue4m3_to_fp32(uint8_t x) {
+    if (x == 0x7F) {
+        return 0.0f;
+    }
+
+    const int e = (x >> 3) & 0xF;
+    const int m = x & 0x7;
+
+    return e == 0 ? m*(1.0f/512.0f) : as_type<float>((uint32_t) (((e + 120) << 23) | (m << 20)));
 }
 
 static inline float dot(float x, float y) {

@@ -311,7 +311,7 @@ static size_t ggml_backend_metal_buffer_type_get_alloc_size(ggml_backend_buffer_
             } break;
         case GGML_OP_TOP_K:
             {
-                res = 2*sizeof(int32_t)*ggml_nelements(tensor->src[0]);
+                res += ggml_metal_op_top_k_extra(tensor);
             } break;
         case GGML_OP_CONV_2D:
             {

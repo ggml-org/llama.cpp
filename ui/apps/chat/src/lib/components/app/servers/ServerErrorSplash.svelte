@@ -6,7 +6,7 @@
 	import { HEADERS, ICON_CLASS_DEFAULT, ROUTES, SETTINGS_KEYS } from '#lib/constants/index.ts';
 	import { KeyboardKey } from '#lib/enums/index.ts';
 	import { serverStore, settingsStore } from '#lib/stores/index.ts';
-	import { withBase } from '#lib/utils/base-path.ts';
+	import { serverUrl } from '#lib/utils/server-config.ts';
 	import { goto } from '$app/navigation';
 	import { fade, fly, scale } from 'svelte/transition';
 
@@ -67,7 +67,7 @@
 			settingsStore.updateConfig(SETTINGS_KEYS.API_KEY, apiKeyInput.trim());
 
 			// Test the API key by making a real request to the server
-			const response = await fetch(withBase('/props'), {
+			const response = await fetch(serverUrl('/props'), {
 				headers: {
 					'Content-Type': 'application/json',
 					[HEADERS.AUTHORIZATION]: `${HEADERS.BEARER}${apiKeyInput.trim()}`

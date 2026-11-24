@@ -19,6 +19,7 @@ import {
 } from '#lib/constants/index.ts';
 import { ColorMode, HealthCheckStatus, MCPConnectionPhase, MCPRefType } from '#lib/enums/index.ts';
 import { MCPService } from '#lib/services/mcp.service.ts';
+import { agenticMode } from '#lib/stores/agentic-mode.svelte.ts';
 import { serverStore } from '#lib/stores/llama-server.svelte.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { MCPHealthCheckManager, type McpHealthHost } from '#lib/stores/mcp/health.svelte.ts';
@@ -736,6 +737,9 @@ class MCPStore implements McpHealthHost {
 	}
 
 	getServers(): MCPServerSettingsEntry[] {
+		// a plain chat keeps the saved servers and connects to none
+		if (!agenticMode.enabled) return [];
+
 		const raw = settingsStore.config.mcpServers;
 
 		// cache the parse: the config string rarely changes and getServers is

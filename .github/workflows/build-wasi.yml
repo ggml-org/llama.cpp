@@ -49,18 +49,18 @@ env:
 
 jobs:
   ubuntu-webgpu:
-    runs-on: ubuntu-26.04-arm
+    runs-on: [self-hosted, Linux, gb10]
+    container: "ubuntu:26.04"
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.24
-        with:
-          restore: false
-          save: false
+      - name: Install dependencies
+        run: |
+          apt update
+          apt install -y build-essential cmake ninja-build git curl python3 python-is-python3
 
       - name: Install wasi-sdk
         uses: bytecodealliance/setup-wasi-sdk-action@77d09f3df1e8da344d8403cf8631af8977938b4c # v1.0.0
@@ -92,15 +92,6 @@ jobs:
               INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/dawn-headers/include/webgpu_upstream;${_wasi_webgpu}")
           EOF
 
-      - name: ccache-buckets-restore
-        uses: ./.github/actions/ccache-buckets
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
-        with:
-          key: webgpu-ubuntu-26.04-arm-wasi
-          folder: llama.cpp
-          hf_bucket: ggml-org/cache
-
       # llama-common does not build for WASI, so the executables are linked by hand
       - name: Build
         id: cmake_build
@@ -120,7 +111,7 @@ jobs:
             -DDawn_DIR=$PWD/wasi-webgpu \
             -DLLAMA_BUILD_COMMON=OFF
 
-          time cmake --build build-wasi --config Release --target llama -j $(nproc)
+          cmake --build build-wasi --config Release --target llama -j $(nproc)
 
           LIBS="build-wasi/ggml/src/libggml.a build-wasi/ggml/src/ggml-webgpu/libggml-webgpu.a build-wasi/ggml/src/libggml-cpu.a build-wasi/ggml/src/libggml-base.a"
           LDFLAGS="-lunwind -ldl -Wl,-z,stack-size=8388608"
@@ -128,15 +119,3 @@ jobs:
 
           $CXX examples/simple/simple.cpp build-wasi/src/libllama.a $LIBS $LDFLAGS -o build-wasi/llama-simple.wasm
           $CXX tests/test-backend-ops.cpp $LIBS $LDFLAGS -o build-wasi/test-backend-ops.wasm
-
-      - name: ccache-buckets-save
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-        uses: ./.github/actions/ccache-buckets
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
-        with:
-          key: webgpu-ubuntu-26.04-arm-wasi
-          folder: llama.cpp
-          evict-old-files: 1d
-          hf_bucket: ggml-org/cache
-          save: true

@@ -10,7 +10,7 @@
  *   @import '@ggml-org/llama-brand/css/colors.css';
  *   @import '@ggml-org/llama-ui/theme.css';
  *
- * Dark mode is the `dark` class on <html>; the Matte light surfaces are the `theme-matte` class.
+ * Dark mode is the `dark` class on <html>.
  */
 
 @import './fonts.css';

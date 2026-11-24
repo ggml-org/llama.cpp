@@ -4,16 +4,14 @@ import { COMPACTION } from './compaction.constants';
 import { DEFAULT_MCP_CONFIG } from './mcp.constants';
 import { SETTINGS_KEYS } from './settings-keys.constants';
 import { TITLE_GENERATION } from './title-generation.constants';
-import { TOOL_CALL_SHOWN_ARG_DEFAULT } from './tool-call-phrasing.constants';
 import { VOICE_TRANSCRIPTION_MODEL_AUTO } from './voice.constants';
 import { FILE_GLOB_SEARCH_PICKERS } from './working-directory.constants';
+import { TOOL_CALL_SHOWN_ARG_DEFAULT } from '@ggml-org/llama-harness';
 import { VOICE_MICROPHONE_AUTO } from '@ggml-org/llama-voice';
 import AudioLines from '@lucide/svelte/icons/audio-lines';
 import Code from '@lucide/svelte/icons/code';
 import Database from '@lucide/svelte/icons/database';
-import File from '@lucide/svelte/icons/file';
 import Funnel from '@lucide/svelte/icons/funnel';
-import GlassWater from '@lucide/svelte/icons/glass-water';
 import ListRestart from '@lucide/svelte/icons/list-restart';
 import Mic from '@lucide/svelte/icons/mic';
 import Monitor from '@lucide/svelte/icons/monitor';
@@ -22,7 +20,7 @@ import PencilRuler from '@lucide/svelte/icons/pencil-ruler';
 import SlidersVertical from '@lucide/svelte/icons/sliders-vertical';
 import Sun from '@lucide/svelte/icons/sun';
 import TextCursorInput from '@lucide/svelte/icons/text-cursor-input';
-import { SurfaceTheme, SyncableParameterType, VoiceInputMode } from '#lib/enums/index.ts';
+import { SyncableParameterType, VoiceInputMode } from '#lib/enums/index.ts';
 import { SettingsFieldType } from '#lib/enums/settings.enums.ts';
 import { ColorMode } from '#lib/enums/ui.enums.ts';
 import type {
@@ -81,17 +79,6 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 					{ icon: Monitor, label: 'System', value: ColorMode.SYSTEM },
 					{ icon: Sun, label: 'Light', value: ColorMode.LIGHT },
 					{ icon: Moon, label: 'Dark', value: ColorMode.DARK }
-				],
-				type: SettingsFieldType.SELECT
-			},
-			{
-				defaultValue: SurfaceTheme.PAPER,
-				help: 'Choose how the light theme draws its surfaces: Paper puts white panels, fields and buttons on a faint grey page; Matte puts grey glass on a white page. Dark mode is the same for both.',
-				key: SETTINGS_KEYS.SURFACE_THEME,
-				label: 'Light surfaces',
-				options: [
-					{ icon: File, label: 'Paper', value: SurfaceTheme.PAPER },
-					{ icon: GlassWater, label: 'Matte', value: SurfaceTheme.MATTE }
 				],
 				type: SettingsFieldType.SELECT
 			},
@@ -173,13 +160,6 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Fetch model display data (avatars, context length, chat template) and everything in the Discover Models view from the Hugging Face Hub API. Locked on while Discover Models is enabled; can be turned on alone for just the display data.',
 				key: SETTINGS_KEYS.USE_HUGGING_FACE_HUB,
 				label: 'Use the Hugging Face Hub API',
-				type: SettingsFieldType.CHECKBOX
-			},
-			{
-				defaultValue: false,
-				help: 'Show MCP in the sidebar, to add and manage MCP servers. Servers already added keep working while it is hidden.',
-				key: SETTINGS_KEYS.SHOW_MCP,
-				label: 'Show MCP',
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -544,6 +524,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 		icon: ListRestart,
 		settings: [
 			{
+				defaultValue: false,
+				help: 'Show MCP in the sidebar, to add and manage MCP servers. Servers already added keep working while it is hidden.',
+				key: SETTINGS_KEYS.SHOW_MCP,
+				label: 'Show MCP',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
 				defaultValue: DEFAULT_AGENTIC_CONFIG.maxTurns,
 				help: 'Maximum number of tool execution cycles before stopping (prevents infinite loops).',
 				isPositiveInteger: true,
@@ -894,6 +881,17 @@ function toSettingsSection(section: SettingsSectionEntry): SettingsSection {
 
 /** Sidebar sections in custom display order (the registry array order). */
 export const SETTINGS_CHAT_SECTIONS: SettingsSection[] = SETTINGS_REGISTRY.map(toSettingsSection);
+
+/** The sections to show: without the agentic features there are no tools, no loop and no MCP to set up, which are all in Tools and Agentic. */
+export function settingsChatSections(agentic: boolean): SettingsSection[] {
+	if (agentic) return SETTINGS_CHAT_SECTIONS;
+
+	return SETTINGS_CHAT_SECTIONS.filter(
+		(section) =>
+			section.slug !== SETTINGS_SECTION_SLUGS.TOOLS &&
+			section.slug !== SETTINGS_SECTION_SLUGS.AGENTIC
+	);
+}
 
 /** INPUT-type settings whose value is a number. */
 export const NUMERIC_FIELDS = getAllSettings()
