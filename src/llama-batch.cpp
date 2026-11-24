@@ -145,16 +145,14 @@ bool llama_batch_allocr::init(
         }
     }
 
-    if (mixed) {
+    if (has_embd) {
         embd_vec.assign((size_t) n_tok*n_embd, 0.0f);
         for (int32_t i = 0; i < n_tok; ++i) {
-            if (is_embd_vec[i]) {
+            if (!mixed || is_embd_vec[i]) {
                 const float * src = batch_inp.embd.data() + batch_inp.tokens[i].embd_off;
                 std::copy(src, src + n_embd, embd_vec.data() + (size_t) i*n_embd);
             }
         }
-    } else if (has_embd) {
-        embd_vec = batch_inp.embd;
     }
 
     if (has_state) {
