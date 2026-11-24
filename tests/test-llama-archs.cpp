@@ -291,6 +291,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_embd = 160; // exercise per-head tensor split granularity with head size 80
     } else if (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_AFMOE || arch == LLM_ARCH_RICURSIVE) {
         n_head = 4;
+    } else if (arch == LLM_ARCH_QWEN3NEXT) {
+        n_layer = 3; // recurrent, full attention, MTP
+        ms.add_kv(LLM_KV_NEXTN_PREDICT_LAYERS, uint32_t(1));
     } else if (arch == LLM_ARCH_LIMITE) {
         n_head  = 4;
         n_layer = 4; // dense connections on the last two layers
@@ -956,6 +959,7 @@ static llama_model_ptr get_model(
     std::vector<ggml_backend_dev_t> devs_copy = devs;
     devs_copy.push_back(nullptr);
     model_params.devices = devs_copy.data();
+    model_params.load_mtp = true;
     model_params.split_mode = split_mode;
     model_params.tensor_buft_overrides = tensor_buft_overrides;
 
