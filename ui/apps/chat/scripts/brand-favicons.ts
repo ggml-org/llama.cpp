@@ -23,6 +23,6 @@ export function writeBrandFavicons(outDir: string = DEFAULT_OUT_DIR): void {
 
 	for (const [fileName, specifier] of Object.entries(BRAND_FAVICONS)) {
 		copyFileSync(require.resolve(specifier), resolve(outDir, fileName));
-        chmodSync(resolve(outDir, fileName), 0o644);
+		chmodSync(resolve(outDir, fileName), 0o644);
 	}
 }
