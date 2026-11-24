@@ -796,6 +796,8 @@ static void * ggml_backend_cuda_buffer_get_base(ggml_backend_buffer_t buffer) {
     return ctx->dev_ptr;
 }
 
+// this one craps out with quantized kv cache in tensor parallel mode!
+/*
 static enum ggml_status ggml_backend_cuda_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
@@ -817,6 +819,49 @@ static enum ggml_status ggml_backend_cuda_buffer_init_tensor(ggml_backend_buffer
     }
     return GGML_STATUS_SUCCESS;
 }
+*/
+
+// Fix: avoid padding initialization on unallocated quantized tensors (see issues/23567 magic fix is tensor->data != nullptr && )
+// (tensor-parallel meta-backend KV cache allocation).
+static enum ggml_status ggml_backend_cuda_buffer_init_tensor(
+        ggml_backend_buffer_t buffer,
+        ggml_tensor * tensor) {
+
+    ggml_backend_cuda_buffer_context * ctx =
+        (ggml_backend_cuda_buffer_context *) buffer->context;
+
+    if (tensor->view_src != NULL) {
+        assert(tensor->view_src->buffer->buft == buffer->buft);
+        return GGML_STATUS_SUCCESS;
+    }
+
+    if (ggml_is_quantized(tensor->type) &&
+        tensor->view_src == nullptr &&
+        tensor->data != nullptr &&
+        ggml_backend_buffer_get_usage(buffer) != GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
+
+        // Initialize padding to 0 to avoid possible NaN values.
+        const size_t original_size = ggml_nbytes(tensor);
+        const size_t padded_size =
+            ggml_backend_buft_get_alloc_size(buffer->buft, tensor);
+
+        if (padded_size > original_size) {
+            ggml_cuda_set_device(ctx->device);
+
+            CUDA_CHECK(cudaMemsetAsync(
+                (char *) tensor->data + original_size,
+                0,
+                padded_size - original_size,
+                cudaStreamPerThread));
+
+            CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+        }
+    }
+
+    return GGML_STATUS_SUCCESS;
+}
+
+
 
 static void ggml_backend_cuda_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *) buffer->context;
