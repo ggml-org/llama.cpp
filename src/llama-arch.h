@@ -191,6 +191,7 @@ enum llm_arch {
     LLM_ARCH_INKLING2,
     LLM_ARCH_INKLING2_LOOP,
     LLM_ARCH_DOMYN_EDGE,
+    LLM_ARCH_DORY,
     LLM_ARCH_UNKNOWN,
 };
 
@@ -549,6 +550,7 @@ enum llm_tensor {
     LLM_TENSOR_DENSE_2_OUT,
     LLM_TENSOR_DENSE_3_OUT,
     LLM_TENSOR_OUTPUT,
+    LLM_TENSOR_OUTPUT_SCALE, // dory: per-vocab logit scale
     LLM_TENSOR_OUTPUT_NORM,
     LLM_TENSOR_OUTPUT_NORM_LFM2, // fix for wrong tensor name
     LLM_TENSOR_OUTPUT_RES_QUERY,
@@ -568,6 +570,9 @@ enum llm_tensor {
     LLM_TENSOR_ATTN_SINKS,
     LLM_TENSOR_ATTN_SSMAX,
     LLM_TENSOR_ATTN_GATE,
+    LLM_TENSOR_ATTN_GATE_SCALE,  // dory: per-channel gate scale (folded)
+    LLM_TENSOR_ATTN_QK_SCALE,    // dory: per-channel qk scale (folded)
+    LLM_TENSOR_RESIDUAL_ALPHA,   // dory: per-hidden-dim residual interpolation rate (attention and ffn modules)
     LLM_TENSOR_ATTN_RESID_ALPHA,
     LLM_TENSOR_ATTN_RESID_BETA,
     LLM_TENSOR_ATTN_REL,
@@ -596,6 +601,8 @@ enum llm_tensor {
     LLM_TENSOR_FFN_GATE,
     LLM_TENSOR_FFN_DOWN,
     LLM_TENSOR_FFN_UP,
+    LLM_TENSOR_FFN_GATE_SCALE,   // dory: per-intermediate-channel gate scale (folded)
+    LLM_TENSOR_FFN_UP_SCALE,     // dory: per-intermediate-channel up scale (folded)
     LLM_TENSOR_FFN_ACT,
     LLM_TENSOR_FFN_DOWN_EXP,  // split experts for backward compatibility
     LLM_TENSOR_FFN_GATE_EXP,

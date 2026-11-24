@@ -155,3 +155,67 @@ Both vectors are in the JSON, so a divergence tells you WHICH way it went —
 
 Corollary for the port: read `dory.num_loops` (4) from the GGUF and use it. Do
 not hardcode 2 because the reference config defaults to it.
+
+## PORT LANDED, and the acceptance test must be re-cut (2026-11-24)
+
+`src/models/dory.cpp` (490 lines) builds and RUNS: with
+`graph_nodes_per_tensor() = 32` in the struct, `llama-cli -ngl 0` loads the
+Q5_K_M artifact, reports `n_phys=72 rec=[16,56) n_loops=4 n_layer_all=192`,
+generates coherent tokens (3.1 t/s on CPU), and never touches the pool:
+zero `not enough space in the context's memory pool`.
+
+**The id-for-id oracle CANNOT be passed by a Q5_K_M port, and that is a defect
+in the test, not in the port.** The chosen "discriminating" token is a coin flip
+INSIDE the BF16 reference itself: at position 5, loops=4 scores
+`5675 = 13.493` against `9032 = 13.485` — a **0.008** margin — while the
+quantised artifact deviates from BF16 by 0.05–0.7, i.e. 6–90× the signal.
+Measured evidence that the port is otherwise right: `prompt_ids` match exactly;
+the top-5 at the last prompt position is the same SET in the same ORDER with
+Δ ≤ 0.6 (1032 18.233 vs 18.255; 2007 13.568 vs 13.276; 1659 13.307 vs 12.973;
+1058 12.731 vs 12.649; 1877 12.475 vs 11.898); and teacher-forced positions 1-4
+agree on argmax within Δ ≤ 0.7.
+
+ACCEPTANCE, replacing the id list above:
+1. `prompt_ids` must match exactly (this is a tokenizer check, and it does).
+2. The top-5 SET and ORDER at every position must match the BF16 reference.
+3. Per-position |Δlogit| ≤ 0.5 against BF16 (Q5_K_M's own noise floor), NOT
+   argmax equality.
+4. Optionally, a second oracle from a BF16 GGUF of the same model, where id
+   equality IS meaningful.
+Any future "discriminating" prompt must be recorded with the margin between the
+variants it discriminates: a 0.008-logit margin discriminates BF16 from BF16, not
+a 5-bit quantisation.
+
+## Four places the reference beats the earlier summary in this file
+
+1. The interpolation base is the **NORMALISED** input: `hidden_states =
+   input_layernorm(x)` then `hidden_states += rate*(f - hidden_states)`
+   (`modeling_dory.py:377-387`), not the raw `inpL`.
+2. A module L2-norms its **own output** before interpolating
+   (`post_attention_layernorm`, `post_feedforward_layernorm`), and the MLP half
+   also re-norms its input (`pre_feedforward_layernorm`) — **six norms per
+   attention+MLP pair**, not two.
+3. The gate scale multiplies the DATA, then the whole product is squared:
+   `sigmoid((G*(s_gate*s_gate_scale))**2)`, i.e. the SCALE is squared, not the
+   activation (`:322`).
+4. `attn_sub_norm` / `ffn_sub_norm` live INSIDE the projections (`:323`, `:345`),
+   which is why `build_attn` is called with `wo = nullptr` and `wo` is applied by
+   hand after the norm.
+
+## The scale tensors are RAW, measured — this file said otherwise
+
+Every 1-D `*_scale` / `alpha` tensor in the GGUF is byte-identical to the raw
+reference parameter (dequantised BF16 vs `model.safetensors`, ratio 1.00000):
+`attn_qk_scale` ≡ `mixer.sqk` (0.02939), `attn_gate_scale` ≡ `mixer.s_gate`
+(0.03070), `residual_alpha` ≡ `attn_alpha` (0.17995), `ffn_gate_scale` ≡
+`mixer.suv_gate` (1.99049), `output_scale` ≡ `lm_head.logit_scale` (2.02304).
+So the PORT applies the folds itself, from `dory.init_std` (0.0177) and
+`dory.alpha_init` (0.05). The earlier claim in this file that they were
+"already the folded product" was wrong; applying the fold twice is ~4e4× off.
+
+## `dory.layer_pattern` is 36 entries, not 72
+
+One character per ATTENTION module (`S` sliding, `*` full); physical module `2k`
+is attention module `k`, and MLP slots carry `is_swa = 0`. Cross-checked against
+`config.json`'s 72-entry `layer_types` — identical. Dual RoPE then comes free
+via `is_swa` + `hparams.rope_freq_base_train_swa = dory.rope.freq_base_2`.

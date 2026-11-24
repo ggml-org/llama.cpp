@@ -2305,6 +2305,39 @@ struct llama_model_beam : public llama_model_base {
 };
 
 
+// dory: looped (latent-recurrent) normalised-GPT. The recurrent group is
+// expressed as EXTRA CACHE SLOTS after the physical layers (see
+// docs/dory-port-contract.md), the same idiom inkling2_loop uses, so the
+// per-loop KV cache falls out of the slot mapping instead of a graph loop.
+struct llama_model_dory : public llama_model_base {
+    llama_model_dory(const struct llama_model_params & params) : llama_model_base(params) {}
+
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    // slot -> physical layer: the first n_layer_phys slots are the physical
+    // layers, later slots repeat the recurrent core [rec_start, rec_end).
+    int layer_phys(int il) const;
+
+    struct graph : public llm_graph_context {
+        graph(const llm_graph_params & params);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+
+    int      n_phys    = 0;
+    uint32_t rec_start = 0;   // first module of the recurrent group (16)
+    uint32_t rec_end   = 0;   // one past the last (56)
+    uint32_t n_input   = 0;   // modules before the recurrent group (16)
+
+    // The slot expansion multiplies the layer count (72 physical -> 192 slots at
+    // dory.num_loops=4), and the default 8 nodes/tensor budget cannot hold that
+    // graph: measured `ggml_new_object: not enough space in the context's memory
+    // pool` inside build_rope. 22 other archs raise this the same way; 32 clears
+    // it with margin. This is NOT visible as a build error -- only at runtime.
+    uint32_t graph_nodes_per_tensor() const override { return 32; }
+};
+
 struct llama_model_ricursive : public llama_model_base {
     llama_model_ricursive(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;

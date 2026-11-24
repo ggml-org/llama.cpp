@@ -331,6 +331,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_inkling2(params);
         case LLM_ARCH_INKLING2_LOOP:
             return new llama_model_inkling2_loop(params);
+        case LLM_ARCH_DORY:
+            return new llama_model_dory(params);
         case LLM_ARCH_LFM2:
             return new llama_model_lfm2(params);
         case LLM_ARCH_LFM2MOE:
@@ -4036,6 +4038,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_BEAM:
         case LLM_ARCH_KOLIBRI1:
         case LLM_ARCH_DOMYN_EDGE:
+        case LLM_ARCH_DORY:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_DFLASH:
