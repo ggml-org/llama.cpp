@@ -1,5 +1,5 @@
 import type { OpenAIToolDefinition } from './mcp';
-import type { ToolSource } from '#lib/enums/index.ts';
+import type { ToolCallSummaryKind, ToolSource } from '#lib/enums/index.ts';
 import type { Component } from 'svelte';
 
 /**
@@ -80,4 +80,33 @@ export interface EditFileTitleMeta {
 	resultMessage?: string;
 	editsApplied?: number;
 	errorMessage?: string;
+}
+
+/** How a tool call reads in the chat trace; see TOOL_CALL_PHRASING. */
+export interface ToolCallPhrasing {
+	/** Verb once the call is done, e.g. "Read". */
+	past: string;
+	/** Verb while the call runs, e.g. "Reading". */
+	present: string;
+	/** Words after the verb when the call has no target, e.g. "a file". */
+	object: string;
+	/** Words between the verb and the target, e.g. "for". */
+	targetObject?: string;
+	/** Show the target in quotes, for search terms. */
+	quoteTarget?: boolean;
+	summary: ToolCallSummaryKind;
+}
+
+/** A tool call as one plain sentence: label, then an optional target. */
+export interface ToolCallDescription {
+	/** Verb and object, e.g. "Read a file" or "Searched for". */
+	label: string;
+	/** What the call acted on, e.g. a file name or a search term. */
+	target?: string;
+	quoted: boolean;
+	summary: ToolCallSummaryKind;
+	/** How many things the call counts as in the group summary. */
+	count: number;
+	/** True when the label is the model's own description of the call. */
+	described?: boolean;
 }

@@ -388,3 +388,27 @@
 .stick-to-bottom-pin {
 	height: 1px;
 }
+
+/*
+ * A message's stats and actions stay out of the way until the reader points at
+ * it or tabs into it. Only opacity changes, so their room is kept and nothing
+ * moves when they appear. Touch screens have no hover, so they keep them shown.
+ */
+@media (hover: hover) {
+	.message-meta {
+		opacity: 0;
+		transition: opacity 150ms ease-out;
+	}
+
+	.chat-message-user:hover .message-meta,
+	.chat-message-assistant:hover .message-meta,
+	.message-meta:focus-within {
+		opacity: 1;
+	}
+}
+
+@media (hover: hover) and (prefers-reduced-motion: reduce) {
+	.message-meta {
+		transition: none;
+	}
+}

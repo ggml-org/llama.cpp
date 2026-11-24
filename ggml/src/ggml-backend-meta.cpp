@@ -152,6 +152,10 @@ static ggml_backend_buffer_type_t ggml_backend_meta_device_get_buffer_type(ggml_
 static ggml_backend_buffer_type_t ggml_backend_meta_device_get_host_buffer_type(ggml_backend_dev_t dev);
 
 static bool ggml_backend_meta_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    if (ggml_flash_attn_ext_has_indexed_bias(op)) {
+        return false;
+    }
+
     GGML_ASSERT(ggml_backend_dev_is_meta(dev));
     const ggml_backend_meta_device_context * meta_dev_ctx = (const ggml_backend_meta_device_context *) dev->context;
     return std::all_of(meta_dev_ctx->simple_devs.begin(), meta_dev_ctx->simple_devs.end(),
@@ -871,10 +875,21 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
     };
 
     auto handle_gated_delta_net = [&](const std::vector<ggml_backend_meta_split_state> & src_ss) -> ggml_backend_meta_split_state {
+        // replay (src 6..9): the pending k, v and gates/betas are split by heads like k, v and g, n_rep is per seq
+        const bool replay = tensor->src[6] != nullptr;
         if (src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED && src_ss[1].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED &&
                 src_ss[2].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED && src_ss[3].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED &&
                 src_ss[4].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED && src_ss[5].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
+            for (int i = 6; replay && i < 10; i++) {
+                GGML_ASSERT(src_ss[i].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED);
+            }
             return src_ss[0];
+        }
+        if (replay) {
+            GGML_ASSERT(src_ss[6].axis == GGML_BACKEND_SPLIT_AXIS_1);
+            GGML_ASSERT(src_ss[7].axis == GGML_BACKEND_SPLIT_AXIS_1);
+            GGML_ASSERT(src_ss[8].axis == GGML_BACKEND_SPLIT_AXIS_1);
+            GGML_ASSERT(src_ss[9].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED);
         }
         GGML_ASSERT(src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_1);
         GGML_ASSERT(src_ss[1].axis == GGML_BACKEND_SPLIT_AXIS_1);

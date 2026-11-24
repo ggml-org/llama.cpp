@@ -48,9 +48,9 @@
 			</Collapsible.Trigger>
 		</div>
 
-		<Collapsible.Content class="mt-2">
+		<Collapsible.Content>
 			<div
-				class="max-h-64 space-y-0.5 overflow-y-auto rounded bg-muted/50 p-2 font-mono text-caption-sm"
+				class="mt-2 max-h-64 space-y-0.5 overflow-y-auto rounded bg-muted/50 p-2 font-mono text-caption-sm"
 			>
 				{#each logs as log (log.timestamp.getTime() + log.message)}
 					{@const IconComponent = getMcpLogLevelIcon(log.level)}

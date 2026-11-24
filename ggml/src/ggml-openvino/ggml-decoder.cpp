@@ -9,9 +9,11 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <map>
@@ -31,9 +33,26 @@
 #include <set>
 #include <stdexcept>
 #include <string>
-#include <cstring>
 #include <unordered_map>
 #include <vector>
+
+static std::set<std::string> collect_graph_output_names(const ggml_cgraph * cgraph) {
+    std::set<std::string> outputs;
+    for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
+        auto * node = cgraph->nodes[node_n];
+        if (node->flags & GGML_TENSOR_FLAG_OUTPUT) {
+            outputs.insert(node->name);
+        }
+    }
+    return outputs;
+}
+
+bool GgmlOvDecoder::has_same_graph_io(const ggml_cgraph * cgraph) const {
+    if (m_built_output_names.empty()) {
+        return true;  // no snapshot (naive / test decoders): nothing to compare against
+    }
+    return collect_graph_output_names(cgraph) == m_built_output_names;
+}
 
 GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
                              ModelParams & model_params,
@@ -64,6 +83,8 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
 
     validate_cgraph();
 
+    m_built_output_names = collect_graph_output_names(cgraph);
+
     set_input_output();
     compute_node_dynamic_dims();
     compute_model_inputs();
@@ -79,6 +100,7 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
 
 void GgmlOvDecoder::update_io(ggml_cgraph * cgraph) {
     m_cgraph = cgraph;
+    m_built_output_names = collect_graph_output_names(cgraph);
     m_model_inputs.clear();
     m_model_outputs.clear();
     m_node_info_list.clear();
@@ -694,45 +716,6 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
             op_case = 1;
             break;
         }
-        if (node->src[0]->op == GGML_OP_VIEW) {
-            auto * src = node->src[0];
-            if (ggml_nelements(node) != ggml_nelements(src)) {
-                // throw std::runtime_error("Unsupported VIEW case");
-            }
-            op_case = 0;
-            if (m_model_is_splitted && m_model_inputs.find(get_tensor_ov_name(m_cgraph, src)) != m_model_inputs.end()) {
-                op_case = 0;
-            }
-        }
-        {
-            auto * src = node->src[0];
-            if (ggml_nelements(node) != ggml_nelements(src)) {
-                // Case 4: select one slice on src dim1 (via view offset), keep src dim2 as output dim1.
-                // Typical pattern:
-                //   src: ne=[N, M, K, 1], nb=[b0, b1, b2, b3]
-                //   dst: ne=[N, K, 1, 1], nb=[b0, b2, b3, b3]
-                if (node->ne[0] == src->ne[0] && node->ne[1] == src->ne[2] && node->ne[2] == 1 &&
-                    node->nb[0] == src->nb[0] && node->nb[1] == src->nb[2] && src->ne[1] > 1) {
-                    op_case = 0;
-                    break;
-                }
-
-                // General case 3: shape differs from source (one or more dims) and is handled as VIEW slicing.
-                int diff_count = 0;
-                for (int i = 0; i < GGML_MAX_DIMS; i++) {
-                    if (node->ne[i] != src->ne[i]) {
-                        diff_count++;
-                    }
-                    // if node ne[i] > src ne[i], case = 0
-                    if (node->ne[i] > src->ne[i]) {
-                        return 0;
-                    }
-                }
-                if (diff_count >= 1) {
-                    op_case = 0;
-                }
-            }
-        }
         break;
     }
     case GGML_OP_RMS_NORM: {
@@ -744,7 +727,8 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
                 // pre-scaled, and the norm then scales its eps to match; 4: it is not.
                 op_case = is_gdn_out_prescaled(node->src[0]->src[0]) ? 3 : 4;
             } else if (node->src[0]->src[0]->op == GGML_OP_GATED_DELTA_NET) {
-                op_case = is_gdn_out_prescaled(node->src[0]->src[0]) ? 3 : 2;
+                // packed [attn | state] output, sliced by the norm. 5: pre-scaled, as in 3; 2: not.
+                op_case = is_gdn_out_prescaled(node->src[0]->src[0]) ? 5 : 2;
             }
         }
         break;
@@ -897,13 +881,10 @@ std::optional<int> extract_layer_from_name(const std::string & name) {
         return std::nullopt;
     }
     pos1 += 2;
-    size_t pos2 = name.find(' ', pos1);
-    if (pos2 == std::string::npos) {
-        pos2 = name.length();
+    if (pos1 >= name.size() || !std::isdigit(static_cast<unsigned char>(name[pos1]))) {
+        return std::nullopt;
     }
-    std::string layer_str = name.substr(pos1, pos2 - pos1);
-    int layer = std::stoi(layer_str);
-    return layer;
+    return std::stoi(name.substr(pos1));
 }
 
 // Recover the sliding window width from ggml's own SWA mask. llama.cpp never passes n_swa to a
@@ -1202,7 +1183,11 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             }
 
             ggml_tensor * cache_k = cache_k_view->src[0];
-            int layer = extract_layer_from_name(cache_k->name).value();
+            const auto layer_opt = extract_layer_from_name(cache_k->name);
+            if (!layer_opt) {
+                continue;
+            }
+            const int layer = *layer_opt;
 
             // Classified by the pre-pass above, which groups layers by mask tensor identity. The
             // mask NAME cannot be used: build_attn_inp_kq_mask() gives both masks the same name.
@@ -1372,7 +1357,9 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
                 compute_params.rs_writebacks[get_tensor_ov_name(cgraph, node)] = writeback;
             }
             if (is_conv || is_gdn) {
-                compute_params.s_copy_active_slot_len = (int) dest_view->ne[1];
+                // One cache row per active sequence: [conv_state_size, n_seqs] (qwen35) or, with the q/k/v conv
+                // states packed in one row, [d_conv - 1, d_inner, n_seqs] (bailingmoe3), so count the rows spanned.
+                compute_params.s_copy_active_slot_len = (int) ((ggml_nbytes(dest_view) + row_bytes - 1) / row_bytes);
             }
         }
     }
@@ -1573,7 +1560,10 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
     else {
         input_shape = ov::PartialShape{get_shape(input)};
     }
-    if (dynamic_dim_index != -1 && m_model_is_splitted) {
+    // A static graph (NPU) keeps the fixed token count set above; only a split static graph, whose parts are
+    // fed by other backends, marks the dimension dynamic. Without this the token dimension of inp_tokens becomes
+    // dynamic in the NPU graph (and, for example, the GATED_DELTA_NET pad masking fails).
+    if (dynamic_dim_index != -1 && (!m_is_static || m_model_is_splitted)) {
         input_shape[3 - dynamic_dim_index] = -1;
     }
     if (op->op == GGML_OP_SOFT_MAX && op->src[1] != nullptr && op->src[1]->op == GGML_OP_NONE &&
@@ -1985,7 +1975,9 @@ void GgmlOvDecoder::compute_model_outputs() {
                     }
                 }
             }
-            if (input_use_count == cur_node_use_count) {
+            // op tests (the naive path) can read any node of the graph, e.g. the intermediate sum of a fused
+            // ADD + RMS_NORM + MUL, so every non-in-place node is a model output there
+            if (input_use_count == cur_node_use_count && (!m_naive || ::is_inplace_op(cur_node))) {
                 cur_node = nullptr;
             }
         }
@@ -2774,11 +2766,14 @@ size_t GgmlOvDecoder::get_output_op_offset(int node_idx) const {
 }
 
 void GgmlOvDecoder::visit_subgraph(std::function<void(std::shared_ptr<GgmlDecoder>, int node_idx)> node_visitor) const {
+    // One copy for the whole walk: translators only read the decoder, and a copy per node costs a full
+    // copy of the node list for every node.
+    auto decoder = std::make_shared<GgmlOvDecoder>(*this);
     for (int node_idx = 0; node_idx < m_cgraph->n_nodes; node_idx++) {
         if (m_cgraph->nodes[node_idx]->op == GGML_OP_NONE) {
             continue;
         }
-        node_visitor(std::make_shared<GgmlOvDecoder>(*this), node_idx);
+        node_visitor(decoder, node_idx);
     }
 }
 
@@ -2848,6 +2843,10 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                 // a view of a model weight (BERT's token type row) has no token dim
                 if (node->op == GGML_OP_VIEW && src->op == GGML_OP_NONE && !is_stateful() && !m_model_is_splitted &&
                     !(src->buffer != nullptr && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS)) {
+                    m_node_dynamic_dims[src] = 1;
+                    continue;
+                }
+                if (is_inp_embd_2d(src, node)) {
                     m_node_dynamic_dims[src] = 1;
                     continue;
                 }
@@ -2921,10 +2920,22 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                 m_node_dynamic_dims[node] = node->view_offs == 0 ? 2 : -1;
                 break;
             }
+
+            // A VIEW that does not change the shape is a pass-through for dynamic-dim purposes.
+            if (is_same_shape(node->src[0], node)) {
+                m_node_dynamic_dims[node] = m_node_dynamic_dims[node->src[0]];
+                break;
+            }
             // Use stride-based matching: the stride of a VIEW dimension directly
             // encodes which source dimension it indexes into, so it uniquely
             // identifies the dynamic dim even when two dims share the same size.
             m_node_dynamic_dims[node] = -1;
+            if (!m_model_params.has_rs_rollback && node->src[0]->op == GGML_OP_GATED_DELTA_NET) {
+                // The GDN translator publishes attention [S_v, H_v, n_tokens, n_seqs] and state directly under these
+                // VIEW names (get_output_names), not the packed [attention | state] the strides describe.
+                m_node_dynamic_dims[node] = node->view_offs == 0 ? 2 : -1;
+                break;
+            }
             if (m_node_dynamic_dims[node->src[0]] != -1) {
                 auto dynamic_dim_idx = m_node_dynamic_dims[node->src[0]];
                 auto dynamic_dim_value = node->src[0]->ne[dynamic_dim_idx];

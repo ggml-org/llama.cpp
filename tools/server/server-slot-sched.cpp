@@ -211,7 +211,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
         const int64_t t_start = ggml_time_us();
 
         {
-            auto & data = it_best->data.main;
+            const auto & data = it_best->data.main;
 
             const size_t size = data.size();
             const size_t n = llama_state_seq_set_data_ext(ctx_tgt, data.data(), size, id_slot, 0);
@@ -220,13 +220,10 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
                 return false;
             }
-
-            data.clear();
-            data.shrink_to_fit();
         }
 
         {
-            auto & data = it_best->data.drft;
+            const auto & data = it_best->data.drft;
 
             if (!data.empty()) {
                 GGML_ASSERT(ctx_dft);
@@ -238,9 +235,6 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
                     return false;
                 }
-
-                data.clear();
-                data.shrink_to_fit();
             }
         }
 

@@ -118,16 +118,41 @@ static OutputVector translate_column_set_rows(const NodeContext & context) {
     if (data.get_element_type() != context.get_output_type()) {
         data = std::make_shared<v0::Convert>(data, context.get_output_type());
     }
-    Output<Node> rows = std::make_shared<v1::Reshape>(process_view_input_new(context, 1), i64_const({-1}), false);
+    auto row_ids = process_view_input_new(context, 1);
+    Output<Node> rows = std::make_shared<v1::Reshape>(row_ids, i64_const({-1}), false);
     if (rows.get_element_type() != ov::element::i64) {
         rows = std::make_shared<v0::Convert>(rows, ov::element::i64);
     }
 
     auto axis = v0::Constant::create(ov::element::i64, {}, {2});
-    auto buffer = std::make_shared<v1::Reshape>(base, i64_const({1, 1, -1, row_size}), false);
+    Output<Node> buffer = std::make_shared<v1::Reshape>(base, i64_const({1, 1, -1, row_size}), false);
+    Output<Node> base_shape_of = std::make_shared<v3::ShapeOf>(base, ov::element::i64);
+    Output<Node> existing;
+
+    // Every write copies the whole buffer, so fold this one into the previous column write when both use the same
+    // rows (DFlash writes every target layer at the same batch rows): splice into its rows and scatter once
+    auto rows_source = [](Output<Node> r) {
+        if (ov::as_type_ptr<v0::Convert>(r.get_node_shared_ptr())) {
+            r = r.get_node()->input_value(0);
+        }
+        return ov::as_type_ptr<v1::Reshape>(r.get_node_shared_ptr()) ? r.get_node()->input_value(0) : Output<Node>();
+    };
+    auto prev_res = ov::as_type_ptr<v1::Reshape>(base.get_node_shared_ptr());
+    auto prev = prev_res ? ov::as_type_ptr<v3::ScatterUpdate>(prev_res->get_input_node_shared_ptr(0)) : nullptr;
+    if (prev && rows_source(prev->input_value(1)) == row_ids &&
+        prev->input_value(2).get_partial_shape().rank().is_static() &&
+        prev->input_value(2).get_partial_shape()[3] == row_size) {
+        buffer = prev->input_value(0);
+        rows = prev->input_value(1);
+        existing = prev->input_value(2);
+        base_shape_of = prev_res->input_value(1);
+    }
+
     Output<Node> updates = data;
     if (width < row_size) {
-        auto existing = std::make_shared<v8::Gather>(buffer, rows, axis);
+        if (!existing.get_node_shared_ptr()) {
+            existing = std::make_shared<v8::Gather>(buffer, rows, axis);
+        }
         auto col_axis = i64_const({3});
         OutputVector parts;
         if (col_begin > 0) {
@@ -142,7 +167,7 @@ static OutputVector translate_column_set_rows(const NodeContext & context) {
         updates = std::make_shared<v0::Concat>(parts, 3);
     }
     auto updated = std::make_shared<v3::ScatterUpdate>(buffer, rows, updates, axis);
-    auto res = std::make_shared<v1::Reshape>(updated, std::make_shared<v3::ShapeOf>(base, ov::element::i64), false);
+    auto res = std::make_shared<v1::Reshape>(updated, base_shape_of, false);
     return rename_outputs_with_suffix({res}, context.get_name());
 }
 

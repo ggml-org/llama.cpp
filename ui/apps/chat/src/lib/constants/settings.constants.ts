@@ -4,15 +4,14 @@ import { COMPACTION } from './compaction.constants';
 import { DEFAULT_MCP_CONFIG } from './mcp.constants';
 import { SETTINGS_KEYS } from './settings-keys.constants';
 import { TITLE_GENERATION } from './title-generation.constants';
+import { TOOL_CALL_SHOWN_ARG_DEFAULT } from './tool-call-phrasing.constants';
 import { VOICE_TRANSCRIPTION_MODEL_AUTO } from './voice.constants';
 import { FILE_GLOB_SEARCH_PICKERS } from './working-directory.constants';
 import { VOICE_MICROPHONE_AUTO } from '@ggml-org/llama-voice';
 import AudioLines from '@lucide/svelte/icons/audio-lines';
 import Code from '@lucide/svelte/icons/code';
 import Database from '@lucide/svelte/icons/database';
-import File from '@lucide/svelte/icons/file';
 import Funnel from '@lucide/svelte/icons/funnel';
-import GlassWater from '@lucide/svelte/icons/glass-water';
 import ListRestart from '@lucide/svelte/icons/list-restart';
 import Mic from '@lucide/svelte/icons/mic';
 import Monitor from '@lucide/svelte/icons/monitor';
@@ -21,7 +20,7 @@ import PencilRuler from '@lucide/svelte/icons/pencil-ruler';
 import SlidersVertical from '@lucide/svelte/icons/sliders-vertical';
 import Sun from '@lucide/svelte/icons/sun';
 import TextCursorInput from '@lucide/svelte/icons/text-cursor-input';
-import { SurfaceTheme, SyncableParameterType, VoiceInputMode } from '#lib/enums/index.ts';
+import { SyncableParameterType, VoiceInputMode } from '#lib/enums/index.ts';
 import { SettingsFieldType } from '#lib/enums/settings.enums.ts';
 import { ColorMode } from '#lib/enums/ui.enums.ts';
 import type {
@@ -80,17 +79,6 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 					{ icon: Monitor, label: 'System', value: ColorMode.SYSTEM },
 					{ icon: Sun, label: 'Light', value: ColorMode.LIGHT },
 					{ icon: Moon, label: 'Dark', value: ColorMode.DARK }
-				],
-				type: SettingsFieldType.SELECT
-			},
-			{
-				defaultValue: SurfaceTheme.PAPER,
-				help: 'Choose how the light theme draws its surfaces: Paper puts white panels, fields and buttons on a faint grey page; Matte puts grey glass on a white page. Dark mode is the same for both.',
-				key: SETTINGS_KEYS.SURFACE_THEME,
-				label: 'Light surfaces',
-				options: [
-					{ icon: File, label: 'Paper', value: SurfaceTheme.PAPER },
-					{ icon: GlassWater, label: 'Matte', value: SurfaceTheme.MATTE }
 				],
 				type: SettingsFieldType.SELECT
 			},
@@ -277,14 +265,22 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
-				defaultValue: true,
+				defaultValue: false,
+				dependsOn: SETTINGS_KEYS.SHOW_MESSAGE_STATS,
+				help: 'Keep the generation statistics under every message in view. When off, they show under the latest exchange and appear on earlier messages when you point at them. Message actions always work that way.',
+				key: SETTINGS_KEYS.ALWAYS_SHOW_MESSAGE_STATS,
+				label: 'Always show message statistics',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
 				help: 'Expand thought process by default when generating messages.',
 				key: SETTINGS_KEYS.SHOW_THOUGHT_IN_PROGRESS,
 				label: 'Show thought in progress',
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
-				defaultValue: true,
+				defaultValue: false,
 				help: 'Expand tool call details while the call is being generated and executed, and collapse them again once its result is in. Mirrors "Show thought in progress". Tool calls you expand or collapse by hand keep your choice.',
 				key: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS,
 				label: 'Show tool call in progress',
@@ -296,6 +292,14 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				key: SETTINGS_KEYS.ALWAYS_SHOW_TOOL_CALL_CONTENT,
 				label: 'Always show tool call content',
 				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: TOOL_CALL_SHOWN_ARG_DEFAULT,
+				help: 'A tool call\'s line shows this argument when the call has it, for any tool, built-in or MCP. Calls without it read as a plain sentence, e.g. "Read package.json". Settings > Tools can pick another argument for each tool. Leave it empty to always use the sentence.',
+				key: SETTINGS_KEYS.TOOL_CALL_SHOWN_ARG,
+				label: 'Tool call argument to show',
+				placeholder: 'None',
+				type: SettingsFieldType.INPUT
 			},
 			{
 				defaultValue: true,
@@ -507,6 +511,14 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Configure MCP servers as a JSON list. Use the form in the MCP Client settings section to edit.',
 				key: SETTINGS_KEYS.MCP_SERVERS,
 				label: 'MCP servers',
+				standaloneField: false,
+				type: SettingsFieldType.INPUT
+			},
+			{
+				defaultValue: '{}',
+				help: 'Argument shown in the line of each tool, by tool name, as a JSON object. Use the Tools tab to edit.',
+				key: SETTINGS_KEYS.TOOL_CALL_SHOWN_ARG_OVERRIDES,
+				label: 'Tool call argument to show, per tool',
 				standaloneField: false,
 				type: SettingsFieldType.INPUT
 			}
