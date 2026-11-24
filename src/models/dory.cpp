@@ -5,32 +5,12 @@
 #include <cmath>
 #include <cstring>
 
-// dory: NVIDIA Dory1.0-4B, "Looped (latent-recurrent) normalized-GPT".
-//
-// A 72-module stack (16 input / 40 recurrent / 16 output). Modules alternate
-// attention (even blk.N) and MLP (odd blk.N); there are 36 of each, and every
-// module carries its own `residual_alpha`. The recurrent group is applied
-// `num_loops` times (GGUF: 4) with the input-phase output reinjected before each
-// pass, and each pass writes to its OWN KV cache.
-//
-// The loop is modelled as extra KV cache SLOTS after the physical modules
-// (see docs/dory-port-contract.md, the inkling2-loop idiom): weights are shared
-// through layer_phys(), caches are not.
-//
-// Arithmetic is taken from the reference, src/transformers/models/dory/
-// modeling_dory.py (a copy lives at docs/modeling_dory.py). Line numbers below
-// refer to that file.
+// Dory1.0 alternates attention and MLP modules at even and odd blk.N indices.
+// Recurrent modules share weights across loop passes but use separate KV cache slots.
+// Reference: src/transformers/models/dory/modeling_dory.py.
 
-// ---------------------------------------------------------------------------
-// metadata helpers
-//
-// The dory.* keys have no LLM_KV enum. The loader's
-// `get_key(const std::string &, T&, bool)` overload is declared in
-// llama-model-loader.h but its definition lives in llama-model-loader.cpp and
-// is only explicitly instantiated for the `enum llm_kv` form, so calling it with
-// a literal key from this TU does not link. Reading the gguf metadata directly
-// (llama_model_loader::metadata is public) is the linkable equivalent.
-// ---------------------------------------------------------------------------
+// Read dory.* metadata directly: the string-key get_key overload is only
+// instantiated for enum llm_kv keys, so calling it here would not link.
 
 namespace {
 
@@ -77,17 +57,9 @@ std::string dory_meta_str(llama_model_loader & ml, const char * key, bool requir
     return std::string(gguf_get_val_str(ml.metadata, id));
 }
 
-// ---------------------------------------------------------------------------
-// nGPT ops
-// ---------------------------------------------------------------------------
-
-// L2Norm(x) = x * rsqrt(sum(x^2) + eps), eps = 1e-6: the projection onto the unit
-// sphere, NOT RMS normalisation (modeling_dory.py:59-63). `ggml_l2_norm` guards
-// the denominator instead (1/max(sqrt(sum), eps)), which is a different function
-// for small sums, so the reference form is built explicitly here:
-//   x / sqrt(sum_rows(x^2) + 1e-6)
-// ggml_scale_bias is `s*a + b`, i.e. the additive eps without needing a constant
-// tensor (this ggml has no scalar-constant constructor).
+// L2Norm projects onto the unit sphere: x / sqrt(sum_rows(x^2) + 1e-6), not RMS.
+// ggml_l2_norm clamps the denominator instead, so use the reference form.
+// ggml_scale_bias supplies the additive epsilon without a constant tensor.
 ggml_tensor * dory_l2_norm(ggml_context * ctx0, ggml_tensor * x) {
     static constexpr float eps = 1e-6f;
 
@@ -97,45 +69,32 @@ ggml_tensor * dory_l2_norm(ggml_context * ctx0, ggml_tensor * x) {
     return ggml_div(ctx0, x, s);
 }
 
-// The per-channel scale vectors are stored as BF16 in the GGUF (they are 1-D
-// tensors, so the quantiser left them at 16 bits), and ggml's binary ops do not
-// mix bf16 with f32 activations: they are read as f32 here.
+// GGUF scale vectors are BF16; ggml binary ops do not mix BF16 with F32 activations.
 ggml_tensor * dory_f32(ggml_context * ctx0, ggml_tensor * t) {
     return t->type == GGML_TYPE_F32 ? t : ggml_cast(ctx0, t, GGML_TYPE_F32);
 }
 
-// rate = |lambda * lambda_scale|, one value per hidden channel
-// (modeling_dory.py:386, 391)
 ggml_tensor * dory_residual_rate(ggml_context * ctx0, ggml_tensor * alpha, float lambda_scale) {
     return ggml_abs(ctx0, ggml_scale(ctx0, dory_f32(ctx0, alpha), lambda_scale));
 }
 
-// the residual of a module is an INTERPOLATION towards its output, and its base
-// is the NORMALISED input, not the module input:
-//   h = h_norm + rate * (f(h_norm) - h_norm)      (modeling_dory.py:387, 392)
+// Interpolate from the normalized input: h_norm + rate * (cur - h_norm).
 ggml_tensor * dory_residual(ggml_context * ctx0, ggml_tensor * h_norm, ggml_tensor * cur, ggml_tensor * rate) {
-    // note the operand order: ggml takes the result shape from the first operand,
-    // so the [n_embd, n_tokens] difference has to come before the [n_embd] rate
+    // ggml takes the result shape from the first operand, so the token-shaped
+    // difference must precede the per-channel rate.
     ggml_tensor * delta = ggml_sub(ctx0, cur, h_norm);
     return ggml_add(ctx0, h_norm, ggml_mul(ctx0, delta, rate));
 }
 
 } // namespace
 
-// ---------------------------------------------------------------------------
-// slot <-> physical module
-// ---------------------------------------------------------------------------
-
+// Map extra KV cache slots to their shared physical recurrent module.
 int llama_model_dory::layer_phys(int il) const {
     return il < n_phys ? il : (int) rec_start + (il - n_phys) % (int) (rec_end - rec_start);
 }
 
-// ---------------------------------------------------------------------------
-// hparams
-// ---------------------------------------------------------------------------
-
 void llama_model_dory::load_arch_hparams(llama_model_loader & ml) {
-    // block_count counts PHYSICAL modules: 16 input + 40 recurrent + 16 output
+    // block_count counts physical modules: input + recurrent + output.
     n_phys = (int) hparams.n_layer_all;
 
     n_input = dory_meta_u32(ml, "dory.input_layer_count",     true, 0);
@@ -161,39 +120,27 @@ void llama_model_dory::load_arch_hparams(llama_model_loader & ml) {
         throw std::runtime_error(format("dory: block_count(%d) must be even (attention/MLP alternate)", n_phys));
     }
 
-    // the nGPT fold constants. Every `*_scale` tensor in the GGUF is the RAW
-    // learned parameter, verified byte-exact against the BF16 reference
-    // parameters (see the report): the port applies the fold itself.
-    //   sqk_scale        = sqrt(head_dim)      / initializer_range
-    //   s_gate_scale     = hidden_size^(1/4)   / initializer_range
-    //   suv_scale        = sqrt(hidden_size)
-    //   lambda_scale     = ngpt_alpha_init     / initializer_range
-    //   logit_scale_factor= 1                  / initializer_range
-    // dory has no LayerNorm/RMSNorm (its L2Norm eps is the fixed 1e-6), so the
-    // two eps hparams are free to carry initializer_range and ngpt_alpha_init
-    // into the graph; the graph reads them as norm_eps / norm_rms_eps.
+    // GGUF scale tensors are raw learned parameters; the graph applies the nGPT folds.
+    // Dory has no LayerNorm/RMSNorm, so the eps hparams carry init_std and alpha_init.
     hparams.f_norm_eps     = dory_meta_f32(ml, "dory.init_std",   true,  0.0f);
     hparams.f_norm_rms_eps = dory_meta_f32(ml, "dory.alpha_init", true,  0.0f);
     if (!(hparams.f_norm_eps > 0.0f)) {
         throw std::runtime_error(format("dory: init_std must be > 0, got %g", hparams.f_norm_eps));
     }
 
-    // dual RoPE: sliding modules use freq_base_2 (1e4), full modules freq_base
-    // (1e7); llama_model::get_rope_freq_base picks between them by is_swa(il)
+    // Sliding modules use freq_base_2; full-attention modules use freq_base.
     hparams.rope_freq_base_train_swa = dory_meta_f32(ml, "dory.rope.freq_base_2", false,
             hparams.rope_freq_base_train_swa);
 
-    // sliding window (1024), standard causal window
+    // Standard causal sliding window.
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
     if (hparams.n_swa == 0) {
         throw std::runtime_error("dory: sliding_window must be > 0");
     }
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
 
-    // dory.layer_pattern is one character per ATTENTION module (36 of them, the
-    // 72 physical modules alternate attention/MLP): 'S' = sliding, '*' = full.
-    // Verified against config.json layer_types: full_attention falls on the
-    // attention modules 3, 7, ... 35, i.e. physical modules 6, 14, ... 70.
+    // layer_pattern has one entry per attention module, mapped to even physical indices:
+    // 'S' = sliding, '*' = full.
     const std::string pattern = dory_meta_str(ml, "dory.layer_pattern", false);
     const uint32_t n_attn_module = (uint32_t) n_phys / 2;
     if (!pattern.empty()) {
@@ -217,7 +164,7 @@ void llama_model_dory::load_arch_hparams(llama_model_loader & ml) {
             hparams.is_swa_impl[2*ia] = entries[ia] == 'S' ? 1 : 0;
         }
     } else {
-        // config.json rule: full_attention on every 4th attention module
+        // Default to full attention on every fourth attention module.
         for (uint32_t ia = 0; ia < n_attn_module; ++ia) {
             hparams.is_swa_impl[2*ia] = ia % 4 == 3 ? 0 : 1;
         }
@@ -227,8 +174,7 @@ void llama_model_dory::load_arch_hparams(llama_model_loader & ml) {
         throw std::runtime_error("dory: no sliding-window module");
     }
 
-    // expand the loop into KV cache slots, exactly as inkling2-loop does: the
-    // file holds the physical modules, the extra slots reuse them
+    // Expand loop passes into KV cache slots; weights remain shared.
     const size_t n_slot = (size_t) n_phys + (size_t) (n_loops - 1)*(rec_end - rec_start);
     if (n_slot > LLAMA_MAX_LAYERS) {
         throw std::runtime_error(format("dory: %zu cache slots exceed the maximum of %d", n_slot, LLAMA_MAX_LAYERS));
@@ -249,24 +195,18 @@ void llama_model_dory::load_arch_hparams(llama_model_loader & ml) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// tensors
-// ---------------------------------------------------------------------------
-
 void llama_model_dory::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
     output   = create_tensor(tn(LLM_TENSOR_OUTPUT,       "weight"), {n_embd, n_vocab}, 0);
-    // per-vocab logit scale (DoryLMHead.logit_scale); the fold factor is applied
-    // in the graph, so this tensor holds the raw learned scale
+    // Raw per-vocab logit scale; the graph applies logit_scale_factor.
     output_s = create_tensor(tn(LLM_TENSOR_OUTPUT_SCALE, "weight"), {n_vocab},         0);
 
     const int64_t n_embd_q = n_embd_head_k * n_head;
 
-    // only the PHYSICAL modules are in the file (n_layer == n_layer_all == 192
-    // here, the slots are copies made below)
+    // Only physical modules have tensors in the file.
     for (int i = 0; i < n_phys; ++i) {
         auto & layer = layers[i];
 
@@ -280,13 +220,10 @@ void llama_model_dory::load_arch_tensors(llama_model_loader &) {
             // gate_proj of the output gate, [n_embd -> n_embd_q]
             layer.wqkv_gate = create_tensor(tn(LLM_TENSOR_ATTN_GATE, "weight", i), {n_embd, n_embd_q}, 0);
 
-            // raw per-channel scales (the fold is applied in the graph):
-            //   attn_qk_scale   -> sqk      (multiplies q after rope, squared)
-            //   attn_gate_scale -> s_gate   (inside the sigmoid, squared)
+            // attn_ssmax_s is sqk and attn_q_norm is s_gate; both are raw per-channel scales.
             layer.attn_ssmax_s = create_tensor(tn(LLM_TENSOR_ATTN_QK_SCALE,   "weight", i), {n_embd_q}, 0);
             layer.attn_q_norm  = create_tensor(tn(LLM_TENSOR_ATTN_GATE_SCALE, "weight", i), {n_embd_q}, 0);
 
-            // per-hidden-channel interpolation rate (nGPT residual)
             layer.attn_resid_alpha = create_tensor(tn(LLM_TENSOR_RESIDUAL_ALPHA, "weight", i), {n_embd}, 0);
         } else {
             // MLP module
@@ -294,9 +231,7 @@ void llama_model_dory::load_arch_tensors(llama_model_loader &) {
             layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, 0);
             layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
 
-            // raw per-branch scales (suv_gate / suv_up, folded with suv_scale in
-            // the graph). They are NOT the generic per-tensor weight scales, so
-            // they are never passed to build_lora_mm.
+            // suv_gate/suv_up scales, not generic weight scales; never pass them to build_lora_mm.
             layer.ffn_gate_s = create_tensor(tn(LLM_TENSOR_FFN_GATE_SCALE, "weight", i), {n_ff}, 0);
             layer.ffn_up_s   = create_tensor(tn(LLM_TENSOR_FFN_UP_SCALE,   "weight", i), {n_ff}, 0);
 
@@ -304,15 +239,11 @@ void llama_model_dory::load_arch_tensors(llama_model_loader &) {
         }
     }
 
-    // the loop slots share the physical weights and own only their KV cache
+    // Loop slots share physical weights and own only their KV cache.
     for (int il = n_phys; il < (int) hparams.n_layer_all; ++il) {
         layers[il] = layers[layer_phys(il)];
     }
 }
-
-// ---------------------------------------------------------------------------
-// graph
-// ---------------------------------------------------------------------------
 
 std::unique_ptr<llm_graph_context> llama_model_dory::build_arch_graph(const llm_graph_params & params) const {
     return std::make_unique<graph>(params);
@@ -321,22 +252,20 @@ std::unique_ptr<llm_graph_context> llama_model_dory::build_arch_graph(const llm_
 llama_model_dory::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const auto & m = static_cast<const llama_model_dory &>(model);
 
-    // number of loop passes, recovered from the slot expansion:
-    //   n_layer_all = n_phys + (n_loops - 1) * |recurrent group|
+    // Recover the loop count from the expanded KV cache slots.
     const int n_recurrent = (int) (m.rec_end - m.rec_start);
     const int n_loops     = 1 + (int) (hparams.n_layer_all - m.n_phys) / n_recurrent;
-    // nGPT fold constants (all `*_scale` tensors are raw, see load_arch_hparams)
-    const float init_std  = norm_eps;       // dory.init_std     (initializer_range)
-    const float alpha     = norm_rms_eps;   // dory.alpha_init   (ngpt_alpha_init)
+    // The eps hparams carry dory.init_std and dory.alpha_init.
+    const float init_std  = norm_eps;
+    const float alpha     = norm_rms_eps;
 
-    const float sqk_scale    = sqrtf((float) n_embd_head_k) / init_std;   // DoryAttention.sqk_scale
-    const float s_gate_scale = powf((float) n_embd, 0.25f) / init_std;    // DoryAttention.s_gate_scale
-    const float suv_scale    = sqrtf((float) n_embd);                     // DoryMLP.suv_scale
-    const float lambda_scale = alpha / init_std;                          // DoryDecoderLayer.lambda_scale
-    const float logit_factor = 1.0f / init_std;                           // DoryLMHead.logit_scale_factor
+    const float sqk_scale    = sqrtf((float) n_embd_head_k) / init_std;
+    const float s_gate_scale = powf((float) n_embd, 0.25f) / init_std;
+    const float suv_scale    = sqrtf((float) n_embd);
+    const float lambda_scale = alpha / init_std;
+    const float logit_factor = 1.0f / init_std;
 
-    // attention scaling is head_dim^-0.5 (DoryAttention.scaling), applied to the
-    // q.k dot product; q itself was already rescaled by (sqk*sqk_scale)^2
+    // Attention uses head_dim^-0.5 after q was scaled by (sqk * sqk_scale)^2.
     const float kq_scale = 1.0f / sqrtf((float) n_embd_head_k);
 
     ggml_tensor * inpL = build_inp_embd(model.tok_embd);
@@ -347,9 +276,8 @@ llama_model_dory::graph::graph(const llm_graph_params & params) : llm_graph_cont
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    // one physical module = one op. `il` is the SLOT (it owns the KV cache and
-    // selects the sliding/full mask + rope base); `ip` is the PHYSICAL module
-    // (it owns the weights).
+    // il selects the KV cache slot, attention mask, and RoPE base;
+    // ip selects the shared physical weights.
     auto build_module = [&](int il, int ip, ggml_tensor * inp) -> ggml_tensor * {
         if (il >= m.n_phys) {
             GGML_ASSERT(m.layer_phys(il) == ip);
@@ -359,7 +287,6 @@ llama_model_dory::graph::graph(const llm_graph_params & params) : llm_graph_cont
 
         const auto & layer = model.layers[ip];
 
-        // input layernorm (modeling_dory.py:377): inside the attention module
         ggml_tensor * h = dory_l2_norm(ctx0, inp);
         cb(h, "module_inp_norm", il);
 
@@ -367,7 +294,6 @@ llama_model_dory::graph::graph(const llm_graph_params & params) : llm_graph_cont
         ggml_tensor * rate;
 
         if (ip % 2 == 0) {
-            // ---------------- attention module (DoryAttention.forward) --------
             ggml_tensor * Qcur = build_lora_mm(layer.wq, h);
             ggml_tensor * Kcur = build_lora_mm(layer.wk, h);
             ggml_tensor * Vcur = build_lora_mm(layer.wv, h);
@@ -377,7 +303,7 @@ llama_model_dory::graph::graph(const llm_graph_params & params) : llm_graph_cont
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head_k, n_head_kv, n_tokens);
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head_v, n_head_kv, n_tokens);
 
-            // unit-norm q/k over head_dim, BEFORE rope (modeling_dory.py:293-294)
+            // Unit-normalize q/k over head_dim before RoPE.
             Qcur = dory_l2_norm(ctx0, Qcur);
             Kcur = dory_l2_norm(ctx0, Kcur);
 
@@ -387,7 +313,7 @@ llama_model_dory::graph::graph(const llm_graph_params & params) : llm_graph_cont
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
 
-            // q = q * (sqk * sqk_scale)^2, per (head, channel) (modeling_dory.py:299-300)
+            // q = q * (sqk * sqk_scale)^2, per (head, channel).
             {
                 ggml_tensor * qk_scale = ggml_scale(ctx0, dory_f32(ctx0, layer.attn_ssmax_s), sqk_scale);
                 qk_scale = ggml_reshape_2d(ctx0, qk_scale, n_embd_head_k, n_head);
@@ -396,13 +322,12 @@ llama_model_dory::graph::graph(const llm_graph_params & params) : llm_graph_cont
                 cb(Qcur, "Qcur_scaled", il);
             }
 
-            // no output projection here: the attn_sub_norm sits between
+            // Output projection is applied after gating and attn_sub_norm.
             cur = build_attn(inp_attn, nullptr, nullptr, nullptr, Qcur, Kcur, Vcur,
                     nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
 
-            // gate = sigmoid(gate_proj(x) * (s_gate * s_gate_scale)^2)
-            // (modeling_dory.py:322). Note: the SCALE is squared, not the product.
+            // gate = sigmoid(gate_proj(x) * (s_gate * s_gate_scale)^2); the scale is squared.
             {
                 ggml_tensor * gate_scale = ggml_scale(ctx0, dory_f32(ctx0, layer.attn_q_norm), s_gate_scale);
                 gate_scale = ggml_sqr(ctx0, gate_scale);
@@ -412,14 +337,13 @@ llama_model_dory::graph::graph(const llm_graph_params & params) : llm_graph_cont
                 cb(cur, "attn_gated", il);
             }
 
-            cur = dory_l2_norm(ctx0, cur);            // attn_sub_norm (line 323)
+            cur = dory_l2_norm(ctx0, cur);            // attn_sub_norm
             cur = build_lora_mm(layer.wo, cur);       // o_proj
-            cur = dory_l2_norm(ctx0, cur);            // post_attention_layernorm (line 385)
+            cur = dory_l2_norm(ctx0, cur);            // post_attention_layernorm
             cb(cur, "attn_out_norm", il);
 
             rate = dory_residual_rate(ctx0, layer.attn_resid_alpha, lambda_scale);
         } else {
-            // ---------------- MLP module (DoryMLP.forward) --------------------
             ggml_tensor * gate = build_lora_mm(layer.ffn_gate, h);
             gate = ggml_mul(ctx0, gate, ggml_scale(ctx0, dory_f32(ctx0, layer.ffn_gate_s), suv_scale));
             ggml_tensor * up = build_lora_mm(layer.ffn_up, h);
@@ -428,35 +352,32 @@ llama_model_dory::graph::graph(const llm_graph_params & params) : llm_graph_cont
             cur = ggml_swiglu_split(ctx0, gate, up);  // silu(gate) * up
             cb(cur, "ffn_swiglu", il);
 
-            cur = dory_l2_norm(ctx0, cur);            // ffn_sub_norm (line 345)
+            cur = dory_l2_norm(ctx0, cur);            // ffn_sub_norm
             cur = build_lora_mm(layer.ffn_down, cur);
-            cur = dory_l2_norm(ctx0, cur);            // post_feedforward_layernorm (line 390)
+            cur = dory_l2_norm(ctx0, cur);            // post_feedforward_layernorm
             cb(cur, "ffn_out", il);
 
             rate = dory_residual_rate(ctx0, layer.ffn_resid_alpha, lambda_scale);
         }
 
-        // the residual is an interpolation whose base is the NORMALISED input
         ggml_tensor * out = dory_residual(ctx0, h, cur, rate);
         cb(out, "l_out", il);
         return out;
     };
 
-    // input phase, applied once
+    // Input phase, applied once.
     for (int ip = 0; ip < (int) m.rec_start; ++ip) {
         inpL = build_module(ip, ip, inpL);
     }
 
-    // the loops restart from the input section's output (modeling_dory.py:541)
+    // Each loop restarts from the input phase output.
     ggml_tensor * input_hidden = dory_l2_norm(ctx0, inpL);
     cb(input_hidden, "input_hidden", -1);
 
     for (int pass = 0; pass < n_loops; ++pass) {
-        // reinjection, once per pass and before ANY slot of that pass, INCLUDING
-        // the first one (modeling_dory.py:542-543):
-        //   for loop_idx in range(n_loops):
-        //       hidden_states = norm(hidden_states) + input_hidden_states
-        // so at pass 0 the recurrent group already sees 2 * input_hidden
+        // Reinject before every pass, including the first:
+        // hidden = L2Norm(hidden) + input_hidden.
+        // Pass 0 therefore sees 2 * input_hidden.
         inpL = ggml_add(ctx0, dory_l2_norm(ctx0, inpL), input_hidden);
         cb(inpL, "loop_reinject", pass);
 
@@ -468,7 +389,7 @@ llama_model_dory::graph::graph(const llm_graph_params & params) : llm_graph_cont
         }
     }
 
-    // output phase, applied once
+    // Output phase, applied once.
     for (int ip = (int) m.rec_end; ip < m.n_phys; ++ip) {
         inpL = build_module(ip, ip, inpL);
     }
@@ -477,12 +398,12 @@ llama_model_dory::graph::graph(const llm_graph_params & params) : llm_graph_cont
         inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
     }
 
-    // final L2Norm (modeling_dory.py:566)
+    // Final L2Norm.
     ggml_tensor * cur = dory_l2_norm(ctx0, inpL);
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    // logits = (h @ W) * (logit_scale * logit_scale_factor) (modeling_dory.py:404-406)
+    // logits = (h @ W) * (logit_scale * logit_scale_factor)
     cur = build_lora_mm(model.output, cur);
     cur = ggml_mul(ctx0, cur, ggml_scale(ctx0, dory_f32(ctx0, model.output_s), logit_factor));
     cb(cur, "result_output", -1);
