@@ -1445,6 +1445,7 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
     }
     const std::string name = input != nullptr ? std::string(input->name) : std::string();
     ov::PartialShape input_shape;
+    bool kv_layout_4d = false;
 
     if (is_inp_tok(input, op) || is_inp_pos(input, op)) {
         // tokens or positions
@@ -1539,6 +1540,7 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
             const int64_t combined_dim = input_shape[3].get_length();  // n_heads_kv * head_size
             const int64_t head_size = combined_dim / n_heads_kv;
             input_shape = {input_shape[0], ov::Dimension::dynamic(), n_heads_kv, head_size};
+            kv_layout_4d = true;
         }
 
     } else if (is_kv_idx(input, op)) {
@@ -1563,7 +1565,8 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
     // A static graph (NPU) keeps the fixed token count set above; only a split static graph, whose parts are
     // fed by other backends, marks the dimension dynamic. Without this the token dimension of inp_tokens becomes
     // dynamic in the NPU graph (and, for example, the GATED_DELTA_NET pad masking fails).
-    if (dynamic_dim_index != -1 && (!m_is_static || m_model_is_splitted)) {
+    // the 4-D KV layout already has its ctx axis (1) dynamic; 3 - dynamic_dim_index would hit the head axis
+    if (dynamic_dim_index != -1 && (!m_is_static || m_model_is_splitted) && !kv_layout_4d) {
         input_shape[3 - dynamic_dim_index] = -1;
     }
     if (op->op == GGML_OP_SOFT_MAX && op->src[1] != nullptr && op->src[1]->op == GGML_OP_NONE &&
