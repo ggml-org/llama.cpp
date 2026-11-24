@@ -1,6 +1,13 @@
 <script lang="ts">
 	import { SettingsMcpServers } from '#lib/components/app/settings/index.ts';
-	import { APP_NAME } from '#lib/constants/index.ts';
+	import { APP_NAME, ROUTES } from '#lib/constants/index.ts';
+	import { agenticMode } from '#lib/stores/agentic-mode.svelte.ts';
+	import { goto } from '$app/navigation';
+
+	// a server without the agentic features has no MCP
+	$effect(() => {
+		if (agenticMode.settled && !agenticMode.enabled) void goto(ROUTES.START);
+	});
 </script>
 
 <svelte:head>

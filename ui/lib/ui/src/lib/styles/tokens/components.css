@@ -71,11 +71,6 @@
 	/* status lamps and orbs read the status tokens through orb-danger and friends */
 }
 
-/* Matte: dialogs on the page colour (white), like the page under them */
-.theme-matte:not(.dark) {
-	--float-panel-background-modal: var(--surface-page);
-}
-
 .dark {
 	/* in dark the keys stay frosted glass and quiet fills, lighter than the page */
 	--button-secondary-background: var(--surface-glass);

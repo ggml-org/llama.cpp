@@ -28,10 +28,7 @@ const SOURCES = {
 	theme: fileURLToPath(new URL('theme.css', styles))
 };
 // the selectors of the themes a semantic token may change in, and the suffix its twin takes here
-const THEMES = [
-	{ selector: '.theme-matte:not(.dark)', suffix: '-matte' },
-	{ selector: '.dark', suffix: '-dark' }
-];
+const THEMES = [{ selector: '.dark', suffix: '-dark' }];
 // the type roles, by the @theme names Tailwind turns into text-body, text-label-sm, ...: a size with a line height
 const TYPE_ROLE = /^--text-([a-z]+(?:-[a-z]+)*)$/;
 // body and caption text takes the weight around it, which is regular unless a parent says otherwise

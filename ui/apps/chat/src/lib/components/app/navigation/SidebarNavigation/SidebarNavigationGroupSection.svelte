@@ -2,10 +2,10 @@
 	import SidebarNavigationDropZone from './SidebarNavigationDropZone.svelte';
 	import SidebarNavigationSectionHeading from './SidebarNavigationSectionHeading.svelte';
 	import SidebarNavigationShowMore from './SidebarNavigationShowMore.svelte';
+	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
 	import { MoreHorizontal, Pencil, Plus, SquarePen, Trash2 } from '@lucide/svelte';
 	import {
 		ActionIcon,
-		CollapsibleRegion,
 		ContextMenuActions,
 		DialogConfirmation,
 		DropdownMenuActions
@@ -134,35 +134,37 @@
 		</ContextMenuActions>
 	{/snippet}
 
-	<CollapsibleRegion {open}>
-		<ul class="flex w-full min-w-0 flex-col md:gap-0.5 {className}">
-			{#each shownItems as { conversation, depth } (conversation.id)}
-				<li transition:slide={{ duration: SIDEBAR_ROW_SLIDE_MS }} class="group/item relative p-0">
-					{@render conversationRow(conversation, depth)}
-				</li>
-			{:else}
-				<li>
-					<button
-						class="w-full rounded-lg px-2 py-1.5 text-left text-caption text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
-						onclick={() => void startChat()}
-						type="button"
-					>
-						Start a chat in this group
-					</button>
-				</li>
-			{/each}
+	<Collapsible.Root {open}
+		><Collapsible.Content>
+			<ul class="flex w-full min-w-0 flex-col md:gap-0.5 {className}">
+				{#each shownItems as { conversation, depth } (conversation.id)}
+					<li transition:slide={{ duration: SIDEBAR_ROW_SLIDE_MS }} class="group/item relative p-0">
+						{@render conversationRow(conversation, depth)}
+					</li>
+				{:else}
+					<li>
+						<button
+							class="w-full rounded-lg px-2 py-1.5 text-left text-caption text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+							onclick={() => void startChat()}
+							type="button"
+						>
+							Start a chat in this group
+						</button>
+					</li>
+				{/each}
 
-			{#if items.length > SIDEBAR_SECTION_PREVIEW_COUNT}
-				<!-- only an opened section is long enough for its row to need to stick -->
-				<li class={expanded ? SIDEBAR_SHOW_MORE_ROW_CLASS : 'p-0'}>
-					<SidebarNavigationShowMore
-						{expanded}
-						onToggle={() => uiStore.toggleSidebarSectionExpanded(sectionId)}
-					/>
-				</li>
-			{/if}
-		</ul>
-	</CollapsibleRegion>
+				{#if items.length > SIDEBAR_SECTION_PREVIEW_COUNT}
+					<!-- only an opened section is long enough for its row to need to stick -->
+					<li class={expanded ? SIDEBAR_SHOW_MORE_ROW_CLASS : 'p-0'}>
+						<SidebarNavigationShowMore
+							{expanded}
+							onToggle={() => uiStore.toggleSidebarSectionExpanded(sectionId)}
+						/>
+					</li>
+				{/if}
+			</ul>
+		</Collapsible.Content></Collapsible.Root
+	>
 </SidebarNavigationDropZone>
 
 <DialogConfirmation

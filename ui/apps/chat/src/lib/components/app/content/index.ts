@@ -119,6 +119,10 @@ export { default as CollapsibleContentBlock } from './CollapsibleContentBlock.sv
  *   <pre>{output}</pre>
  * </CollapsibleTerminalBlock>
  * ```
+ *
+ * @deprecated No component uses it any more: the shell tool call draws its
+ * terminal frame inside a CollapsibleContentBlock row. Kept for its story and
+ * the lazy-body test until those move over.
  */
 export { default as CollapsibleTerminalBlock } from './CollapsibleTerminalBlock.svelte';
 

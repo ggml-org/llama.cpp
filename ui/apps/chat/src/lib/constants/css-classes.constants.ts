@@ -66,6 +66,3 @@ export const ICON_CLASS_SM = 'size-icon-sm';
 
 /** Extra-small Tailwind size class for inline icons. */
 export const ICON_CLASS_XS = 'size-icon-xs';
-
-/** Icon size + spinning animation; used for live-streaming tool indicators. */
-export const ICON_CLASS_SPIN = 'size-icon-md animate-spin';

@@ -1,6 +1,6 @@
 // Tier 1 perf harness for the agentic thread.
 //
-// Drives ChatMessageAgenticContent the way the real streaming pipeline does:
+// Drives ChatMessageAgentTrace the way the real streaming pipeline does:
 // chat.svelte.ts -> conversations.svelte.ts:184 replaces the message object per
 // SSE chunk (`{ ...old, ...updates }`), which changes prop identity and cascades
 // through deriveAgenticSections into every tool-call block in the message.
