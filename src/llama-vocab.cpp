@@ -2167,7 +2167,7 @@ struct llama_vocab::impl {
     impl(const llama_vocab & vocab) : vocab(vocab) {
     }
 
-    impl(const impl &) = delete; 
+    impl(const impl &) = delete;
 
     ~impl() = default;
 
