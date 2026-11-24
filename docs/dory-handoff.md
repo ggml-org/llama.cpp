@@ -85,10 +85,12 @@ D. **llama-cli `--emit-token-ids`** (entry 2125613507) is being written by an
 
 ## Successor result, measured 2026-11-24 after the rebase
 
-The upstream dory PR is **ggml-org/llama.cpp#32970**, OPEN and non-draft:
-https://github.com/ggml-org/llama.cpp/pull/32970 . Its head is `e0a67bbac` on
-`darkhipo:dory-arch`; the local and remote hashes were compared after push. The
-older enum-only PR #32963 remains separate and unmerged.
+The upstream dory PR is **ggml-org/llama.cpp#32970**, OPEN:
+https://github.com/ggml-org/llama.cpp/pull/32970 . The upstream
+`convert-to-draft` workflow has since marked it draft. Its branch is
+`darkhipo:dory-arch`; the initial pushed head `e0a67bbac` was compared equal to
+the remote, and later handoff commits were pushed to the same PR. The older
+enum-only PR #32963 remains separate and unmerged.
 
 A. Converter is landed in the branch. A fresh conversion of the BF16 checkpoint
 completed with exit 0 in 130.65 s and produced
@@ -127,3 +129,26 @@ visible generated text. Verification: `/private/tmp/dory-emit-ids-verdict.json`.
 The durable body-lane progress and exact gate logs are indexed in
 `/private/tmp/dory-successor-progress.md`. A queued body commit is not called
 landed until its lane's `git log` contains it.
+
+## Body follow-through completed in the lanes
+
+* `soul-pointer` commit `d260d1ca7d` contains all eight soul/window paths.
+  `prompt_builder.py` remains at 1999 lines and the 61-test selection passes
+  after the commit. The two gate failures in the measurement script (docstrings,
+  then the direct-PROJECT_ROOT mypy error) and its silent `OSError` handler were
+  fixed before landing; mypy, audit hygiene, the silent-except ratchet and the
+  script smoke run all pass.
+* `envelope-fix` commit `b16a704430` contains dispatch, the 11-pin test and the
+  regenerated manifest. The scoped growth reason is in the commit body and the
+  11 tests pass after the commit. The unrelated two-line pressure-guard change
+  was deliberately kept OUT of the commit and is preserved at
+  `/private/tmp/dory-body-followthrough/envelope-fix/pressure-hunk.patch`.
+* `tty-stop-fix` commit `40590efe86` contains the SIGTTOU ignore, its order pin
+  and the manifest. The two tests pass after the commit.
+
+All three exact subjects are now rows in `~/.multiaim/land_queue.jsonl` with the
+hashes above. **Queued is still not origin/main-landed.** The pointer-doc commit
+`04e406f938` also remains queued. R2125613507 and R2125613508 are closed `done`
+with `/Users/dmitri.arkhipov/llama.cpp` + `dory-arch` + PR #32970 as their
+provenance; the broader port entry R2125613392 remains open because the strict
+top-5 verdict is not a pass.
