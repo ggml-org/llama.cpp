@@ -606,6 +606,16 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_head_kv    (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_swa        (const struct llama_model * model);
 
+    // Per-layer KV geometry (0 <= il < llama_model_n_layer); returns -1 if model is NULL or il is out of range
+    LLAMA_API int32_t llama_model_n_head_kv_layer    (const struct llama_model * model, int32_t il);
+    LLAMA_API int32_t llama_model_n_embd_head_k_layer(const struct llama_model * model, int32_t il);
+    LLAMA_API int32_t llama_model_n_embd_head_v_layer(const struct llama_model * model, int32_t il);
+
+    // Enumerate model weight tensors (e.g. for binding external buffers when no_alloc = true)
+    // Returns 0 / NULL if model is NULL or index i is out of range
+    LLAMA_API int32_t               llama_model_n_tensors (const struct llama_model * model);
+    LLAMA_API struct ggml_tensor *  llama_model_get_tensor(      struct llama_model * model, int32_t i);
+
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
 
