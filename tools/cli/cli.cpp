@@ -6,6 +6,9 @@
 
 #include <signal.h>
 
+#include <string>
+#include <vector>
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #ifndef NOMINMAX
@@ -27,6 +30,14 @@ static void signal_handler(int) {
 }
 #endif
 
+static void llama_cli_print_usage(int, char **) {
+    printf(
+        "--emit-token-ids                     print each generated token to stderr as TOKEN<TAB>{\"id\":N,\"text\":\"...\"};\n"
+        "                                        token text is JSON-escaped (default: false)\n"
+        "                                        for tokenization without BOS, also use --override-kv\n"
+        "                                        tokenizer.ggml.add_bos_token=bool:false\n");
+}
+
 // satisfies -Wmissing-declarations
 int llama_cli(int argc, char ** argv);
 
@@ -37,7 +48,19 @@ int llama_cli(int argc, char ** argv) {
 
     common_init();
 
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_CLI)) {
+    bool emit_token_ids = false;
+    std::vector<char *> args;
+    args.reserve(argc);
+    for (int i = 0; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--emit-token-ids" || arg == "--emit_token_ids") {
+            emit_token_ids = true;
+            continue;
+        }
+        args.push_back(argv[i]);
+    }
+
+    if (!common_params_parse(static_cast<int>(args.size()), args.data(), params, LLAMA_EXAMPLE_CLI, llama_cli_print_usage)) {
         return 1;
     }
 
@@ -58,7 +81,7 @@ int llama_cli(int argc, char ** argv) {
     SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
 #endif
 
-    cli_context ctx_cli(params);
+    cli_context ctx_cli(params, emit_token_ids);
 
     if (!ctx_cli.init()) {
         return 1;

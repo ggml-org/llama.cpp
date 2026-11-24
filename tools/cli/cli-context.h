@@ -35,7 +35,7 @@ struct cli_context {
 
     std::optional<std::ofstream> output_file;
 
-    cli_context(const common_params & params);
+    cli_context(const common_params & params, bool emit_token_ids);
     ~cli_context();
 
     // connect to --server-base or spawn a local llama-server child;
@@ -52,6 +52,8 @@ struct cli_context {
     static std::atomic<bool> & interrupted();
 
 private:
+    bool emit_token_ids;
+
     struct generated_content {
         std::string reasoning;
         std::string content;

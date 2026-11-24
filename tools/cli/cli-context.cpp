@@ -22,7 +22,8 @@ struct cli_context_impl {
     json pending_media = json::array(); // staged multimodal content parts
 };
 
-cli_context::cli_context(const common_params & params) : params(params), impl(new cli_context_impl()) {}
+cli_context::cli_context(const common_params & params, bool emit_token_ids)
+    : params(params), emit_token_ids(emit_token_ids), impl(new cli_context_impl()) {}
 
 cli_context::~cli_context() {
     shutdown();
@@ -357,6 +358,9 @@ bool cli_context::generate_completion(generated_content & content_out, cli_timin
     if (!client.model.empty()) {
         body["model"] = client.model;
     }
+    if (emit_token_ids) {
+        body["n_probs"] = 1;
+    }
 
     bool stream_error = false;
 
@@ -381,6 +385,23 @@ bool cli_context::generate_completion(generated_content & content_out, cli_timin
             return;
         }
         const auto & choice = chunk.at("choices").at(0);
+        if (emit_token_ids && choice.contains("logprobs") && choice.at("logprobs").is_object()) {
+            const auto & logprobs = choice.at("logprobs");
+            if (logprobs.contains("content") && logprobs.at("content").is_array()) {
+                for (const auto & token : logprobs.at("content")) {
+                    if (!token.is_object() || !token.contains("id") || !token.at("id").is_number_integer() ||
+                            !token.contains("token") || !token.at("token").is_string()) {
+                        continue;
+                    }
+                    json record = {
+                        {"id",   token.at("id")},
+                        {"text", token.at("token")},
+                    };
+                    fprintf(stderr, "TOKEN\t%s\n", record.dump_safe().c_str());
+                    fflush(stderr);
+                }
+            }
+        }
         if (!choice.contains("delta")) {
             return;
         }
