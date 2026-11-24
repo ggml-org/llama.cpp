@@ -106,12 +106,16 @@ export function useDropImport() {
 		bulkMessageCountMap: new SvelteMap() as SvelteMap<string, number>,
 		fullImportData: [] as ExportedConversation[],
 		importedConversations: [] as DatabaseConversation[],
+		// The single conversation just imported, offered to open right away.
+		openImported: null as { alreadyInLibrary: boolean; conv: DatabaseConversation } | null,
 		previewData: null as ExportedConversation | null,
 		selectionMessageCountMap: new SvelteMap() as SvelteMap<string, number>,
 		settingsData: null as SettingsExportType | null,
 		settingsDiff: [] as SettingsDiffEntry[],
 		// Bulk result dialog: pick one of the imported conversations to open.
 		showOpenBulk: false,
+		// Asks whether to open the single conversation that was just imported.
+		showOpenImported: false,
 		// Single conversation preview dialog (confirm before importing).
 		showPreview: false,
 		// Selection dialog (the existing import flow) for multiple conversations.
@@ -242,10 +246,11 @@ export function useDropImport() {
 		const data = $state.snapshot(ui.previewData) as ExportedConversation;
 
 		try {
-			await conversationsStore.importConversationsData([data]);
+			const { skipped } = await conversationsStore.importConversationsData([data]);
 
 			ui.showPreview = false;
-			goto(RouterService.chat(data.conv.id));
+			ui.openImported = { alreadyInLibrary: skipped.length > 0, conv: data.conv };
+			ui.showOpenImported = true;
 		} catch (err) {
 			console.error('Failed to import conversation:', err);
 			toast.error('Failed to import conversation');
@@ -276,6 +281,18 @@ export function useDropImport() {
 		goto(RouterService.chat(conversation.id));
 	}
 
+	function confirmOpenImported() {
+		const imported = ui.openImported;
+
+		ui.showOpenImported = false;
+
+		if (imported) goto(RouterService.chat(imported.conv.id));
+	}
+
+	function cancelOpenImported() {
+		ui.showOpenImported = false;
+	}
+
 	function cancelPreview() {
 		ui.showPreview = false;
 	}
@@ -290,10 +307,12 @@ export function useDropImport() {
 
 	return {
 		cancelBulk,
+		cancelOpenImported,
 		cancelPreview,
 		cancelSelection,
 		cancelSettingsImport,
 		confirmImportSingle,
+		confirmOpenImported,
 		confirmSettingsImport,
 		dragHandlers: {
 			dragenter: handleDragEnter,

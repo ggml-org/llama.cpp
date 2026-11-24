@@ -2,6 +2,7 @@
 	import '../app.css';
 	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import {
+		DialogConfirmation,
 		DialogConversationSelection,
 		DialogImportConversationPreview,
 		DialogImportConversationsResult,
@@ -486,6 +487,20 @@
 		messages={dropImport.ui.previewData?.messages}
 		onCancel={dropImport.cancelPreview}
 		onConfirm={dropImport.confirmImportSingle}
+	/>
+
+	<DialogConfirmation
+		bind:open={dropImport.ui.showOpenImported}
+		cancelText="Not now"
+		confirmText="Open"
+		description={dropImport.ui.openImported?.alreadyInLibrary
+			? `"${dropImport.ui.openImported.conv.name}" was already in your library. Open it now?`
+			: `"${dropImport.ui.openImported?.conv.name ?? ''}" is now in your library. Open it now?`}
+		onCancel={dropImport.cancelOpenImported}
+		onConfirm={dropImport.confirmOpenImported}
+		title={dropImport.ui.openImported?.alreadyInLibrary
+			? 'Already in your library'
+			: 'Conversation imported'}
 	/>
 
 	<DialogImportConversationsResult
