@@ -76,6 +76,59 @@ def stop_process(process: subprocess.Popen) -> None:
         process.wait()
 
 
+def find_descendant_process(parent_pid: int, executable_name: str):
+    if sys.platform != "win32":
+        return None
+
+    class ProcessEntry32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", ctypes.c_ulong),
+            ("cntUsage", ctypes.c_ulong),
+            ("th32ProcessID", ctypes.c_ulong),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", ctypes.c_ulong),
+            ("cntThreads", ctypes.c_ulong),
+            ("th32ParentProcessID", ctypes.c_ulong),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", ctypes.c_ulong),
+            ("szExeFile", ctypes.c_wchar * 260),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.argtypes = [ctypes.c_ulong, ctypes.c_ulong]
+    kernel32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+    kernel32.Process32FirstW.argtypes = [ctypes.c_void_p, ctypes.POINTER(ProcessEntry32W)]
+    kernel32.Process32FirstW.restype = ctypes.c_int
+    kernel32.Process32NextW.argtypes = [ctypes.c_void_p, ctypes.POINTER(ProcessEntry32W)]
+    kernel32.Process32NextW.restype = ctypes.c_int
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel32.CloseHandle.restype = ctypes.c_int
+
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
+    if snapshot == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+
+    processes = []
+    try:
+        entry = ProcessEntry32W()
+        entry.dwSize = ctypes.sizeof(entry)
+        has_entry = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while has_entry:
+            processes.append((entry.th32ProcessID, entry.th32ParentProcessID, entry.szExeFile))
+            has_entry = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snapshot)
+
+    descendant_pids = {parent_pid}
+    for _ in range(len(processes)):
+        for process_pid, process_parent_pid, process_name in processes:
+            if process_parent_pid in descendant_pids and process_pid not in descendant_pids:
+                if process_name.casefold() == executable_name.casefold():
+                    return process_pid
+                descendant_pids.add(process_pid)
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run test-llama-context repeatedly and capture hangs."
@@ -163,9 +216,17 @@ def main() -> int:
                     flush=True,
                 )
                 try:
-                    write_memory_dump(process.pid, dump_path)
-                    log_file.write(f"Memory dump: {dump_path}\n")
-                    print(f"[{run_number}/{args.runs}] Memory dump saved", flush=True)
+                    dump_pid = process.pid
+                    if args.runner == "ctest":
+                        dump_pid = find_descendant_process(process.pid, "test-llama-context.exe")
+                    if dump_pid is None:
+                        message = "test-llama-context process not found; no memory dump captured"
+                        log_file.write(f"{message}\n")
+                        print(f"[{run_number}/{args.runs}] {message}", flush=True)
+                    else:
+                        write_memory_dump(dump_pid, dump_path)
+                        log_file.write(f"Memory dump for PID {dump_pid}: {dump_path}\n")
+                        print(f"[{run_number}/{args.runs}] Memory dump for PID {dump_pid} saved", flush=True)
                 except Exception as error:
                     log_file.write(f"Memory dump failed: {error}\n")
                     print(f"[{run_number}/{args.runs}] Memory dump failed: {error}", flush=True)
