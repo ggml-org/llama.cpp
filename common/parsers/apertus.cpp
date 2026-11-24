@@ -67,8 +67,8 @@ common_chat_params common_chat_params_init_apertus_1_5(
     common_chat_params data;
 
     auto adjusted_messages = apertus_1_5_adjust_messages(inputs.messages);
-    data.prompt = common_chat_template_direct_apply_impl(tmpl, inputs, adjusted_messages);
-    data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs, adjusted_messages);
+    data.prompt             = common_chat_template_direct_apply_impl(tmpl, inputs, adjusted_messages);
+    data.generation_prompt  = common_chat_template_generation_prompt_impl(tmpl, inputs, adjusted_messages);
     data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking  = true;
     data.thinking_start_tag = INNER_START;
@@ -80,10 +80,10 @@ common_chat_params common_chat_params_init_apertus_1_5(
         TOOLS_END,
     };
     data.message_delimiters = {
-        { COMMON_CHAT_ROLE_ASSISTANT, ASSISTANT_START     },
+        { COMMON_CHAT_ROLE_ASSISTANT, ASSISTANT_START         },
         { COMMON_CHAT_ROLE_TOOL,      "<|tool_output_start|>" },
-        { COMMON_CHAT_ROLE_USER,      "<|user_start|>"   },
-        { COMMON_CHAT_ROLE_SYSTEM,    "<|system_start|>" },
+        { COMMON_CHAT_ROLE_USER,      "<|user_start|>"        },
+        { COMMON_CHAT_ROLE_SYSTEM,    "<|system_start|>"      },
     };
 
     if (inputs.has_continuation()) {
@@ -106,8 +106,8 @@ common_chat_params common_chat_params_init_apertus_1_5(
     const bool has_tools = inputs.tools.is_array() && !inputs.tools.empty() &&
                            inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
     const bool has_response_format = inputs.json_schema.is_object() && !inputs.json_schema.empty();
-    const bool extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    const bool include_grammar = has_response_format || has_tools;
+    const bool extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    const bool include_grammar     = has_response_format || has_tools;
 
     data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto generation_prompt = p.literal(ASSISTANT_START);

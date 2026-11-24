@@ -166,7 +166,7 @@ llama_model_apertus::graph::graph(const llm_graph_params & params) : llm_graph_c
     cur = build_lora_mm(model.output, cur, model.output_s);
 
     if (hparams.n_vocab_out_impl > 0 && hparams.n_vocab_out_impl < model.vocab.n_tokens()) {
-        const int64_t n_vocab = model.vocab.n_tokens();
+        const int64_t n_vocab     = model.vocab.n_tokens();
         const int64_t n_vocab_out = hparams.n_vocab_out_impl;
 
         ggml_tensor * output_padding = ggml_fill(
