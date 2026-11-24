@@ -934,14 +934,13 @@ static void launch_mul_mat_q_few_switch_ncg(const ggml_tensor * src0, const ggml
 }
 
 // NVFP4: whether src1 is 4-bit (the native FP4 MMA) or 8-bit.
-// A requested precision is used, else the one of the kernel that few-row replaces: 8-bit for MMVQ, the precision of MMQ above.
-// 4-bit src1 changes the results much more, so by default few-row keeps the precision.
-static bool mmq_few_use_fp4(const ggml_type type, const ggml_prec prec_requested, const int64_t ncols, const int cc) {
+// 8-bit unless 4-bit is requested (GGML_CUDA_MMQ_PREC=q4 or by the graph): few-row batches are decode batches (one or more sequences,
+// draft tokens), whose precision should not depend on how many tokens are in the batch. 4-bit src1 changes the results much more.
+static bool mmq_few_use_fp4(const ggml_type type, const ggml_prec prec_requested, const int cc) {
     if (type != GGML_TYPE_NVFP4) {
         return false;
     }
-    const bool mmvq = prec_requested == GGML_PREC_UNDEFINED && ggml_cuda_should_use_mmvq(type, cc, ncols);
-    return ggml_cuda_mmq_get_prec_src1(type, mmvq ? GGML_PREC_Q8 : prec_requested, cc) == GGML_PREC_Q4;
+    return ggml_cuda_mmq_get_prec_src1(type, prec_requested == GGML_PREC_UNDEFINED ? GGML_PREC_Q8 : prec_requested, cc) == GGML_PREC_Q4;
 }
 
 void ggml_cuda_mul_mat_q_few(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
@@ -967,7 +966,7 @@ void ggml_cuda_mul_mat_q_few(ggml_backend_cuda_context & ctx, const ggml_tensor 
     const int nunits = ne00 / QK_K;
     const int ncg    = ids ? 1 : mmq_few_ncg(ne11);
     const int cc     = ggml_cuda_info().devices[ctx.device].cc;
-    const bool fp4   = !ids && mmq_few_use_fp4(src0->type, fusion ? fusion->prec_src1 : ggml_prec_get_src(dst, 1), ne11, cc);
+    const bool fp4   = !ids && mmq_few_use_fp4(src0->type, fusion ? fusion->prec_src1 : ggml_prec_get_src(dst, 1), cc);
 
     if (fp4) {
         GGML_ASSERT(ne11 <= MMQ_FEW_MAX_NCG*MMQ_FEW_NCOLS);
@@ -1043,7 +1042,7 @@ void ggml_cuda_mul_mat_q_few(ggml_backend_cuda_context & ctx, const ggml_tensor 
 }
 
 // Min. number of src1 columns (MUL_MAT_ID: tokens) for the few-row MMQ, 0 if it is not used for this type, GPU and row length.
-// fp4: NVFP4 with 4-bit src1.
+// fp4: NVFP4 with 4-bit src1 (only when requested, see mmq_few_use_fp4).
 static int ggml_cuda_mmq_few_min_ncols(const ggml_type type, const int cc, const int64_t ne00, const bool has_ids, const bool fp4) {
 #ifdef GGML_CUDA_FORCE_CUBLAS
     return 0;
@@ -1100,7 +1099,7 @@ bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * 
     if (src0->type == GGML_TYPE_NVFP4 && !ggml_cuda_mmq_prec_src1_supported(prec_requested)) {
         return false;
     }
-    const bool fp4       = !ids && mmq_few_use_fp4(src0->type, prec_requested, ncols, cc);
+    const bool fp4       = !ids && mmq_few_use_fp4(src0->type, prec_requested, cc);
     const int  min_ncols = ggml_cuda_mmq_few_min_ncols(src0->type, cc, src0->ne[0], ids != nullptr, fp4);
     if (min_ncols == 0 || ncols < min_ncols || ncols > MMQ_FEW_MAX_NCG*MMQ_FEW_NCOLS) {
         return false;

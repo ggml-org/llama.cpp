@@ -313,7 +313,7 @@ Currently supported values: `auto`, `q8`, `q4`.
 
 NVFP4 and MXFP4 layers marked as W4A16 request 8-bit activations, so on Blackwell those layers run through the W4A8 path instead of the native W4A4 path. Set `q4` to keep the native W4A4 path for faster prompt processing at the cost of accuracy, or `q8` to use the W4A8 path for every layer, `auto` uses per-tensor prec metadata (this is the same behavior as when the environment variable is not set).
 
-For dense NVFP4 layers with batches of up to 24 tokens on Blackwell GPUs with compute capability 12.x (RTX 50xx, RTX PRO Blackwell, DGX Spark), the few-row MMQ path keeps the activation precision of the kernel that it replaces: W4A8 where MMVQ would run (up to 8 tokens), else W4A4, or W4A8 for the layers marked as W4A16. With `q4` it uses W4A4 from 6 tokens (DGX Spark: 8 tokens). MoE experts and the dense layers that the few-row MMQ path does not support keep MMVQ (W4A8) up to 8 tokens and MMQ above.
+For dense NVFP4 layers with batches of up to 24 tokens on Blackwell GPUs with compute capability 12.x (RTX 50xx, RTX PRO Blackwell, DGX Spark), the few-row MMQ path uses W4A8 at every batch size, so that the precision of a decode batch does not depend on how many sequences or draft tokens it holds. With `q4` it uses W4A4 from 6 tokens (DGX Spark: 8 tokens). MoE experts and the dense layers that the few-row MMQ path does not support keep MMVQ (W4A8) up to 8 tokens and MMQ above.
 
 ### Unified Memory
 
