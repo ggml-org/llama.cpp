@@ -50,6 +50,24 @@ async function classifyFile(file: File): Promise<FileKind> {
 	return 'conversations';
 }
 
+/**
+ * Collapses several exports of the same conversation (e.g. the same chat
+ * exported twice) to the most recently modified one, keeping the drop order.
+ */
+function keepNewestPerConversation(items: ExportedConversation[]): ExportedConversation[] {
+	const newest: Record<string, ExportedConversation> = {};
+
+	for (const item of items) {
+		const current = newest[item.conv.id];
+
+		if (!current || item.conv.lastModified > current.conv.lastModified) {
+			newest[item.conv.id] = item;
+		}
+	}
+
+	return items.filter((item) => newest[item.conv.id] === item);
+}
+
 export function computeSettingsDiff(
 	current: SettingsConfigType,
 	imported: SettingsConfigType
@@ -176,21 +194,32 @@ export function useDropImport() {
 			return;
 		}
 
-		if (allConversations.length === 1) {
-			ui.previewData = allConversations[0];
+		const conversations = keepNewestPerConversation(allConversations);
+		const duplicates = allConversations.length - conversations.length;
+
+		if (duplicates > 0) {
+			toast.info(
+				duplicates === 1
+					? 'The same conversation was dropped twice, keeping the newest copy'
+					: `${duplicates} conversations were dropped more than once, keeping the newest copies`
+			);
+		}
+
+		if (conversations.length === 1) {
+			ui.previewData = conversations[0];
 			ui.showPreview = true;
 		} else {
-			ui.fullImportData = allConversations;
-			ui.availableConversations = allConversations.map((item) => item.conv);
-			ui.selectionMessageCountMap = new SvelteMap(createMessageCountMap(allConversations));
+			ui.fullImportData = conversations;
+			ui.availableConversations = conversations.map((item) => item.conv);
+			ui.selectionMessageCountMap = new SvelteMap(createMessageCountMap(conversations));
 			ui.showSelection = true;
 		}
 	}
 
 	async function confirmSettingsImport() {
-		const data = ui.settingsData;
+		if (!ui.settingsData) return;
 
-		if (!data) return;
+		const data = $state.snapshot(ui.settingsData) as SettingsExportType;
 
 		try {
 			settingsStore.importSettings(data);
@@ -207,9 +236,10 @@ export function useDropImport() {
 	}
 
 	async function confirmImportSingle() {
-		const data = ui.previewData;
+		if (!ui.previewData) return;
 
-		if (!data) return;
+		// IndexedDB cannot clone the reactive proxy, so store a plain copy.
+		const data = $state.snapshot(ui.previewData) as ExportedConversation;
 
 		try {
 			await conversationsStore.importConversationsData([data]);
