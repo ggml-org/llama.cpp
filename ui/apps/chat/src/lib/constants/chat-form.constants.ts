@@ -65,3 +65,9 @@ export const CHAT_FORM_EASE_OUT = 'cubic-bezier(0.32, 0.72, 0, 1)';
 
 /** The phone's corner keys and header stepping aside for the expanded form, and back. */
 export const CHAT_FORM_CHROME_FADE_MS = 150;
+
+/** The working directory chip's enter and exit, in two steps: room first, then the fade. */
+export const CHAT_FORM_CHIP_TRANSITION_MS = 250;
+
+/** Share of the chip's transition spent on the room; the fade takes the rest. */
+export const CHAT_FORM_CHIP_SPLIT = 0.5;
