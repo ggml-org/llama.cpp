@@ -42,29 +42,14 @@ const uint NQK = C * D / WGS;
 
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
-layout(push_constant) uniform Parameters {
-    uint H;
-    uint n_tokens;
-    uint n_seqs;
-    uint s_off;
-    uint sq1, sq2, sq3;
-    uint sk1, sk2, sk3;
-    uint sv1, sv2, sv3;
-    uint sb1, sb2, sb3;
-    uint neq1, rq3;
-    float scale;
-    uint K;
-} p;
+#include "gated_delta_net_cm.glsl"
 
-layout(binding = 0) readonly  buffer QBuf     { float data_q[];     };
-layout(binding = 1) readonly  buffer KBuf     { float data_k[];     };
-layout(binding = 2) readonly  buffer VBuf     { float data_v[];     };
-layout(binding = 3) readonly  buffer GBuf     { float data_g[];     };
-layout(binding = 4) readonly  buffer BetaBuf  { float data_beta[];  };
-layout(binding = 5) readonly  buffer StateBuf { float data_state[]; };
-layout(binding = 6)           buffer DstBuf   { float data_dst[];   };
 #ifdef GMEM_MIRROR
-layout(binding = 7) coherent  buffer MirrorBuf { OPD data_mirror[]; };
+#ifdef GDN_REPLAY
+layout(binding = 11) coherent buffer MirrorBuf { OPD data_mirror[]; };
+#else
+layout(binding = 7)  coherent buffer MirrorBuf { OPD data_mirror[]; };
+#endif
 #endif
 
 shared OPD sh_qh[C * LDP], sh_ql[C * LDP];   // q*scale hi/lo (D padded)
@@ -76,7 +61,12 @@ shared OPD sh_dh[C * V], sh_dl[C * V];   // delta (pre-inv) / delta2 [C x V] row
 shared OPD sh_soh[C * V], sh_sol[C * V]; // solved [C x V] row-major
 shared OPD sh_ph[C * C], sh_pl[C * C];   // decayed P
 shared OPD sh_ih[C * C], sh_il[C * C];   // (I + L)^-1
-shared float sh_lower[C * C];            // strictly-lower decayed L
+#ifdef GDN_REPLAY
+// Replay partial dots and the triangular solve use this scratch at different times.
+shared uint sh_lower[(D / TM) * V];
+#else
+shared uint sh_lower[C * C];
+#endif
 
 shared float sh_prefix[C], sh_beta[C], sh_ep[C], sh_carry[C];
 
@@ -197,7 +187,7 @@ float StoreLower(const in uint32_t r, const in uint32_t c, const in float elem,
                  const in uint32_t c_o) {
     const uint cc = c_o + c;
     if (cc < r) {
-        sh_lower[r * C + cc] = elem * exp(sh_prefix[r] - sh_prefix[cc]) * sh_beta[r];
+        sh_lower[r * C + cc] = floatBitsToUint(elem * exp(sh_prefix[r] - sh_prefix[cc]) * sh_beta[r]);
     }
     return elem;
 }
@@ -268,11 +258,11 @@ void gram_pmat(const uint sg) {
 void invert(const uint sg) {
     const uint col = gl_SubgroupInvocationID;
     [[unroll]] for (uint row = sg; row < C; row += NSUB) {
-        float x = col < C ? (col == row ? 1.0 : (col < row ? -sh_lower[row * C + col] : 0.0)) : 0.0;
+        float x = col < C ? (col == row ? 1.0 : (col < row ? -uintBitsToFloat(sh_lower[row * C + col]) : 0.0)) : 0.0;
         for (int pivot = int(row) - 1; pivot > 0; pivot--) {
             const float xp = subgroupShuffle(x, uint(pivot));
             if (col < uint(pivot)) {
-                x -= xp * sh_lower[uint(pivot) * C + col];
+                x -= xp * uintBitsToFloat(sh_lower[uint(pivot) * C + col]);
             }
         }
         if (col < C) {
@@ -288,6 +278,59 @@ float carry_decay(const uint valid) {
     }
     return exp(plast);
 }
+
+#ifdef GDN_REPLAY
+float replay_product(const in uint32_t r, const in uint32_t c, const in float s, const in uint32_t k_off) {
+    return s * data_pk[k_off + r];
+}
+
+float replay_store_partial(const in uint32_t r, const in uint32_t c, const in float partial, const in uint32_t dot_off) {
+    if (r == 0) {
+        // A matrix element can be replicated across lanes.
+        atomicStore(sh_lower[dot_off + c], floatBitsToUint(partial), gl_ScopeWorkgroup, 0, 0);
+    }
+    return partial;
+}
+
+float replay_update(const in uint32_t r, const in uint32_t c, const in float s,
+                    const in uint32_t k_off, const in uint32_t col) {
+    return s + data_pk[k_off + r] * uintBitsToFloat(sh_lower[col + c]);
+}
+
+void replay(inout coopmat<float, SG, TM, TN, MACC> state[PER_WARP],
+            uint seq_id, uint head_id, uint iq1, uint v0) {
+    const uint sg = gl_SubgroupID;
+    const uint tid = gl_LocalInvocationID.x;
+    const uint n_rep = replay_count(seq_id);
+    [[dont_unroll]] for (uint t = 0; t < n_rep; ++t) {
+        uint k_off, v_off;
+        float decay, beta;
+        replay_inputs(seq_id, head_id, iq1, t, k_off, v_off, decay, beta);
+        [[unroll]] for (uint j = 0; j < PER_WARP; ++j) {
+            const uint ti = sg + j * NSUB;
+            state[j] *= decay;
+            coopmat<float, SG, TM, TN, MACC> dot;
+            coopMatPerElementEXT(dot, state[j], replay_product, k_off + TILE_R(ti));
+            coopMatReduceEXT(dot, dot, gl_CooperativeMatrixReduceColumnEXT, replay_sum);
+            coopMatPerElementEXT(dot, dot, replay_store_partial, (ti / VT) * V + TILE_C(ti));
+        }
+        barrier();
+        if (tid < V) {
+            float dot = 0.0;
+            [[unroll]] for (uint i = 0; i < D / TM; ++i) {
+                dot += uintBitsToFloat(sh_lower[i * V + tid]);
+            }
+            sh_lower[tid] = floatBitsToUint(beta * (data_pv[v_off + v0 + tid] - dot));
+        }
+        barrier();
+        [[unroll]] for (uint j = 0; j < PER_WARP; ++j) {
+            const uint ti = sg + j * NSUB;
+            coopMatPerElementEXT(state[j], state[j], replay_update, k_off + TILE_R(ti), TILE_C(ti));
+        }
+        barrier();
+    }
+}
+#endif
 
 void main() {
     const uint head_id = gl_WorkGroupID.z;
@@ -313,6 +356,10 @@ void main() {
         const uint ti = sg + j * NSUB;
         coopMatLoad(state[j], data_state, state_base + (v0 + TILE_C(ti)) * D + TILE_R(ti), D, COL);
     }
+
+#ifdef GDN_REPLAY
+    replay(state, seq_id, head_id, iq1, v0);
+#endif
 
     float qreg[NQK], kreg[NQK], greg, breg;
     prefetch(0u, iq1, iq3, seq_id, head_id, qreg, kreg, greg, breg);

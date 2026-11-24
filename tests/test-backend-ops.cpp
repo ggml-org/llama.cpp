@@ -5537,17 +5537,20 @@ struct test_gated_delta_net_replay : public test_case {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
             if (ggml_is_view_op(t->op)) { continue; }
             if (strcmp(t->name, "g") == 0) {
-                init_tensor_uniform(t, -20.0f, -1e-4f);
+                // Keep the effect of replay visible in the first chunk.
+                init_tensor_uniform(t, n_seq_tokens >= 64 ? -0.125f : -20.0f, -1e-4f);
             } else if (strcmp(t->name, "beta") == 0) {
                 init_tensor_uniform(t, 0.0f, 1.0f);
             } else if (strcmp(t->name, "v") == 0) {
                 init_tensor_uniform(t, -0.3f, 5.0f);
             } else if (strcmp(t->name, "n_rep") == 0) {
                 std::vector<int32_t> data(n_seqs);
-                for (auto & x : data) {
-                    x = std::uniform_int_distribution<int32_t>(0, n_pend)(rng);
+                for (int64_t i = 0; i < n_seqs; ++i) {
+                    data[i] = n_seq_tokens >= 64
+                        ? (i % 2 == 0 ? n_pend : 0)
+                        : std::uniform_int_distribution<int32_t>(0, n_pend)(rng);
                 }
-                ggml_backend_tensor_set(t, data.data(), 0, data.size()*sizeof(int32_t));
+                ggml_backend_tensor_set(t, data.data(), 0, data.size() * sizeof(int32_t));
             } else if (strcmp(t->name, "pend_k") == 0) {
                 // unit rows, as the l2 norm leaves them
                 std::vector<float> data(ggml_nelements(t));
@@ -14165,11 +14168,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_gated_delta_net_replay(4, 32,  1, 2, 2, false, 3, keep));
         test_cases.emplace_back(new test_gated_delta_net_replay(4, 64,  3, 2, 1, true,  4, keep));
     }
-    // prefill sized: the replay runs before the chunked kernels (CUDA from 64 tokens, HIP from 2048)
+    // Prefill sized to exercise chunked kernels that support replay.
     test_cases.emplace_back(new test_gated_delta_net_replay(16, 128,   65, 1, 1, false, 4, false));
     test_cases.emplace_back(new test_gated_delta_net_replay(16, 128,  257, 1, 3, false, 4, false));
     test_cases.emplace_back(new test_gated_delta_net_replay(16, 128,  513, 2, 2, false, 8, false));
     test_cases.emplace_back(new test_gated_delta_net_replay(16, 128, 2048, 1, 3, false, 4, false));
+    // RDNA3 needs at least 4096 tokens for the chunked kernel.
+    test_cases.emplace_back(new test_gated_delta_net_replay( 4, 128, 4097, 2, 1, false, 4, false));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1, 1, true, true));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1, 1, false, true));
