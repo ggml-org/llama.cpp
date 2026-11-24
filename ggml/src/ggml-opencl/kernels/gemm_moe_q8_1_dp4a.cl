@@ -62,7 +62,7 @@ inline uint SIGN6(uint q6p){ uint x=q6p^0x20202020u; uint s=x&0x20202020u; retur
         const uint qoff1 = row + ((ne01*((step)+16))>>3) + ((expert_id*ne00*ne01)>>3); \
         const uint r0=read_imageui(src0_q,qoff0+lid).x, r1=read_imageui(src0_q,qoff0+lid+ne01).x; \
         const uint r2=read_imageui(src0_q,qoff1+lid).x, r3=read_imageui(src0_q,qoff1+lid+ne01).x; \
-        const uint h = src0_qh[row_idx + (sub)*ne01 + expert_id*(ne00>>5)*ne01]; \
+        const uint h = src0_qh[row_ld + (sub)*ne01 + expert_id*(ne00>>5)*ne01]; \
         qw[0]=EXP4(r0)|EXP1(h);        qw[1]=EXP4(r0>>16)|EXP1(h>>4); \
         qw[2]=EXP4(r1)|EXP1(h>>8);     qw[3]=EXP4(r1>>16)|EXP1(h>>12); \
         qw[4]=EXP4(r2)|EXP1(h>>16);    qw[5]=EXP4(r2>>16)|EXP1(h>>20); \
@@ -76,7 +76,7 @@ inline uint SIGN6(uint q6p){ uint x=q6p^0x20202020u; uint s=x&0x20202020u; retur
         const uint qoff1 = row + ((ne01*((step)+16))>>3) + ((expert_id*ne00*ne01)>>3); \
         const uint r0=read_imageui(src0_ql,qoff0+lid).x, r1=read_imageui(src0_ql,qoff0+lid+ne01).x; \
         const uint r2=read_imageui(src0_ql,qoff1+lid).x, r3=read_imageui(src0_ql,qoff1+lid+ne01).x; \
-        const uint qhb = row + ((sub)*2)*ne01 + expert_id*((ne00>>5)*2)*ne01 + lid; \
+        const uint qhb = row_ld + ((sub)*2)*ne01 + expert_id*((ne00>>5)*2)*ne01; \
         const uint qh1=src0_qh[qhb], qh2=src0_qh[qhb+ne01]; \
         qw[0]=SIGN6(EXP4(r0)|EXP2(qh1&0xFFu));        qw[1]=SIGN6(EXP4(r0>>16)|EXP2((qh1>>8)&0xFFu)); \
         qw[2]=SIGN6(EXP4(r1)|EXP2((qh1>>16)&0xFFu));  qw[3]=SIGN6(EXP4(r1>>16)|EXP2((qh1>>24)&0xFFu)); \
@@ -89,7 +89,7 @@ inline uint SIGN6(uint q6p){ uint x=q6p^0x20202020u; uint s=x&0x20202020u; retur
   #define WEIGHT_PARAMS __global uint * src0_q8,
   #define LOAD_QW(step, sub) \
       uint qw[8]; { \
-        const uint qb = (expert_id*ne01 + row_idx)*(ne00>>2) + (sub)*8; \
+        const uint qb = (expert_id*ne01 + row_ld)*(ne00>>2) + (sub)*8; \
         qw[0]=src0_q8[qb+0]; qw[1]=src0_q8[qb+1]; qw[2]=src0_q8[qb+2]; qw[3]=src0_q8[qb+3]; \
         qw[4]=src0_q8[qb+4]; qw[5]=src0_q8[qb+5]; qw[6]=src0_q8[qb+6]; qw[7]=src0_q8[qb+7]; }
 #else
@@ -143,6 +143,12 @@ kernel void kernel_gemm_moe_q8_1_dp4a(
     const uint   row = block_id_m * TILESIZE_M;
     const uint   col = block_id_n * TILESIZE_N;
     const uint   row_idx = row + lid;
+    // A tile is 64 rows; when ne01 is not a multiple of 64 the lanes past it still run the
+    // K loop (they share its barriers) but load row ne01-1 rather than reading past the
+    // expert's rows, and skip the write. Buffer reads past the last expert fault, and the
+    // fault can hang the GPU.
+    const bool   row_ok  = row_idx < ne01;
+    const uint   row_ld  = row_ok ? row_idx : ne01 - 1;
 
     // Scale/min are laid out FLAT per-32-block (2 per-16-segment scales + 1 min per
     // 32-block), so K only needs to be a multiple of 32 — works for the 32-block
@@ -194,11 +200,11 @@ kernel void kernel_gemm_moe_q8_1_dp4a(
         const uint sub = step >> 5;        // 32-block index along K
 
         // uniform pre-decoded scale (2 per-16-seg) + min (1) for this row, this 32-block
-        __global half * scl = src0_scale + (expert_id*ne01 + row_idx)*sc_per_row + sub*2;
+        __global half * scl = src0_scale + (expert_id*ne01 + row_ld)*sc_per_row + sub*2;
         const float sc0 = (float)scl[0];
         const float sc1 = (float)scl[1];
         float mn = 0.0f;
-        if (has_min) mn = (float)src0_min[(expert_id*ne01 + row_idx)*mn_per_row + sub];
+        if (has_min) mn = (float)src0_min[(expert_id*ne01 + row_ld)*mn_per_row + sub];
 
         LOAD_QW(step, sub)
 
@@ -226,8 +232,7 @@ kernel void kernel_gemm_moe_q8_1_dp4a(
         barrier(CLK_LOCAL_MEM_FENCE);
     }
 
-    if (row_idx >= ne01) return;
-
+    // No early return for the lanes past ne01: the whole workgroup reaches every barrier.
     __local uint out_idx[TILESIZE_N];
     if (lid < TILESIZE_N) {
         uint idx = sh_src2[lid];
@@ -238,11 +243,13 @@ kernel void kernel_gemm_moe_q8_1_dp4a(
 
     const uint m_offset = row + lid;
     if (n_real == TILESIZE_N) {
-        #pragma unroll
-        for (int t = 1; t < TILESIZE_N; ++t) write_imagef(dst, out_idx[t] + m_offset, acc[t]);
+        if (row_ok) {
+            #pragma unroll
+            for (int t = 1; t < TILESIZE_N; ++t) write_imagef(dst, out_idx[t] + m_offset, acc[t]);
+        }
         barrier(CLK_GLOBAL_MEM_FENCE);
-        write_imagef(dst, out_idx[0] + m_offset, acc[0]);
-    } else {
+        if (row_ok) write_imagef(dst, out_idx[0] + m_offset, acc[0]);
+    } else if (row_ok) {
         for (int t = 0; t < n_real; ++t) write_imagef(dst, out_idx[t] + m_offset, acc[t]);
     }
 }
