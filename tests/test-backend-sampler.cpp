@@ -2060,6 +2060,47 @@ static void test_multi_output_cpu_suffix(const test_params & params) {
     printf("backend multi-output CPU suffix test PASSED\n");
 }
 
+static void test_common_sampler_clone(const test_params & params) {
+    std::vector<llama_sampler_seq_config> configs;
+    test_context test_ctx(params, configs, 1);
+    common_batch batch(test_ctx.ctx.get());
+    batch.add(0, 0, 0, true);
+    GGML_ASSERT(llama_process(test_ctx.ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0);
+
+    for (bool filtered : { false, true }) {
+        common_params_sampling sampling;
+        sampling.seed = 42;
+        sampling.backend_sampling = false;
+        sampling.temp = 10.0f;
+        sampling.samplers = { COMMON_SAMPLER_TYPE_TEMPERATURE };
+        if (filtered) {
+            sampling.samplers.push_back(COMMON_SAMPLER_TYPE_XTC);
+            sampling.xtc_probability = 1.0f;
+            sampling.xtc_threshold = 0.0f;
+        }
+        common_sampler_ptr original(common_sampler_init(params.model.get(), sampling));
+        common_sampler_ptr empty(common_sampler_clone(original.get()));
+        GGML_ASSERT(common_sampler_get_candidates(empty.get(), false)->size == 0);
+
+        common_sampler_sample(original.get(), test_ctx.ctx.get(), 0);
+        const auto * before = common_sampler_get_candidates(original.get(), false);
+        std::vector<llama_token_data> expected(before->data, before->data + before->size);
+        const int64_t selected = before->selected;
+        common_sampler_ptr clone(common_sampler_clone(original.get()));
+        const auto * after = common_sampler_get_candidates(clone.get(), false);
+        GGML_ASSERT(after->data != before->data);
+        original.reset();
+        GGML_ASSERT(after->size == expected.size());
+        GGML_ASSERT(after->selected == selected);
+        for (size_t i = 0; i < expected.size(); ++i) {
+            GGML_ASSERT(after->data[i].id == expected[i].id);
+            GGML_ASSERT(after->data[i].logit == expected[i].logit);
+            GGML_ASSERT(after->data[i].p == expected[i].p);
+        }
+    }
+    printf("common sampler clone test PASSED\n");
+}
+
 struct backend_test_case {
     std::string name;
     void (*fn)(const test_params &);
@@ -2068,6 +2109,7 @@ struct backend_test_case {
 
 // note: test names are "test_<suffix>" and match the function implementing them
 static const backend_test_case BACKEND_TESTS[] = {
+    { "test_common_sampler_clone",   test_common_sampler_clone,   true },
     // single sampler
     { "test_greedy",                 test_greedy,                 true },
     { "test_greedy_filtered",        test_greedy_filtered,        true },
