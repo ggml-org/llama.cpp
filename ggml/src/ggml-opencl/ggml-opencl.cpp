@@ -1241,6 +1241,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_mul_mv_id_mxfp4_f32_flat;
     cl_kernel kernel_mul_mm_f32_f32_l4_lm;
     cl_kernel kernel_gemv_f32_f32_mc;  // multi-column (small-N) f32 GEMV for spec/MTP verify
+    cl_kernel kernel_gemv_f32_f32_mcr = nullptr;
     cl_kernel kernel_mul_mm_f16_f32_l4_lm;
     cl_kernel kernel_mul_mm_f16_f32_l4_lm_n8;
     cl_kernel kernel_mul_mm_q1_0_f32_l4_lm;
@@ -1563,6 +1564,7 @@ struct ggml_backend_opencl_context {
         }
 #endif
         for (cl_kernel kernel : {
+                kernel_gemv_f32_f32_mcr,
                 kernel_xielu_f32,
                 kernel_xielu_f16,
                 kernel_mul_mm_f16_f32_kq_p8,
@@ -4274,6 +4276,16 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 
         CL_CHECK((backend_ctx->kernel_mul_mm_f32_f32_l4_lm = clCreateKernel(backend_ctx->program_mul_mm_f32_f32_l4_lm, "kernel_mul_mm_f32_f32_l4_lm", &err), err));
         CL_CHECK((backend_ctx->kernel_gemv_f32_f32_mc = clCreateKernel(backend_ctx->program_mul_mm_f32_f32_l4_lm, "kernel_gemv_f32_f32_mc", &err), err));
+
+        cl_kernel mcr = clCreateKernel(backend_ctx->program_mul_mm_f32_f32_l4_lm, "kernel_gemv_f32_f32_mcr", &err);
+        if (err == CL_SUCCESS) {
+            if (backend_ctx->get_kernel_workgroup_size(mcr) >= 64) {
+                backend_ctx->kernel_gemv_f32_f32_mcr = mcr;
+            } else {
+                CL_CHECK(clReleaseKernel(mcr));
+            }
+        }
+
         GGML_LOG_CONT(".");
     }
 
@@ -32854,6 +32866,20 @@ static void ggml_cl_fwht(ggml_backend_t backend, const ggml_tensor * src, ggml_t
     backend_ctx->enqueue_ndrange_kernel(kernel, 2, global, local, dst);
 }
 
+// reduce lanes per row for short K, down to four lanes.
+static int ggml_cl_mcr_lpr_log2(int ne00) {
+    int lpr_log2 = 6;
+    while (lpr_log2 > 2 && ((ne00 / 4) >> lpr_log2) < 4) {
+        lpr_log2--;
+    }
+    return lpr_log2;
+}
+
+static bool ggml_cl_mcr_wide_enough(int ne00, int ne01) {
+    const int rows_per_wg = 64 >> ggml_cl_mcr_lpr_log2(ne00);
+    return ne01 > 512 || CEIL_DIV((size_t) ne01, rows_per_wg) >= 256;
+}
+
 static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_ASSERT(src0);
     GGML_ASSERT(src0->extra);
@@ -33448,8 +33474,63 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 // under-occupied WG at ~2.3% tile utilization. Route to a per-output
                 // (m,n) GEMV (64-thread WG, K-split + __local reduce) instead.
                 // 2D contiguous, small N + skinny M only. Default on for X2E, GGML_OPENCL_F32_MC=0/1 forces it.
-                static const char * f32_mc_env = getenv("GGML_OPENCL_F32_MC");
-                const bool f32_mc = f32_mc_env ? atoi(f32_mc_env) != 0 : backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E;
+                static const int f32_mc_env = [] {
+                    const char * env = getenv("GGML_OPENCL_F32_MC");
+                    return env ? atoi(env) : -1;
+                }();
+                const bool f32_mc = f32_mc_env >= 0 ? f32_mc_env != 0 : backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E;
+
+                static const int f32_mcr_env = [] {
+                    const char * env = getenv("GGML_OPENCL_F32_MCR");
+                    return env && *env ? atoi(env) : -1;
+                }();
+                const bool f32_mcr = f32_mcr_env >= 0 ? f32_mcr_env != 0 :
+                    (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E || backend_ctx->adreno_gen == ADRENO_GPU_GEN::A8X);
+                const bool f32_mcr_allowed = f32_mc_env >= 0 ? f32_mc_env != 0 : !adreno_e17_compiler_quirks(backend_ctx);
+
+                if (f32_mcr && f32_mcr_allowed && backend_ctx->kernel_gemv_f32_f32_mcr != nullptr &&
+                    ne11 >= 2 && ne11 <= 8 && ne00 > 0 && ne00 <= INT_MAX && ne01 > 0 && ne01 <= INT_MAX &&
+                    (size_t) ne01 <= SIZE_MAX / 64 && (ne00 % 4 == 0) &&
+                    ne02 == 1 && ne03 == 1 && ne12 == 1 && ne13 == 1 &&
+                    dst->ne[2] == 1 && dst->ne[3] == 1 &&
+                    ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst) &&
+                    offset0 % 16 == 0 && offset1 % 16 == 0 && offsetd % sizeof(float) == 0 &&
+                    ggml_cl_mcr_wide_enough((int) ne00, (int) ne01)
+                ) {
+                    const int K = (int) ne00;
+                    const int M = (int) ne01;
+                    const int N = (int) ne11;
+
+                    const int stride_a = K;
+                    const int stride_b = K;
+                    const int stride_d = M;
+
+                    const int lpr_log2 = ggml_cl_mcr_lpr_log2(K);
+                    const int rows_per_wg = 64 >> lpr_log2;
+
+                    cl_kernel mcr = backend_ctx->kernel_gemv_f32_f32_mcr;
+
+                    CL_CHECK(clSetKernelArg(mcr,  0, sizeof(cl_mem),   &extra0->data_device));
+                    CL_CHECK(clSetKernelArg(mcr,  1, sizeof(cl_ulong), &offset0));
+                    CL_CHECK(clSetKernelArg(mcr,  2, sizeof(cl_mem),   &extra1->data_device));
+                    CL_CHECK(clSetKernelArg(mcr,  3, sizeof(cl_ulong), &offset1));
+                    CL_CHECK(clSetKernelArg(mcr,  4, sizeof(cl_mem),   &extrad->data_device));
+                    CL_CHECK(clSetKernelArg(mcr,  5, sizeof(cl_ulong), &offsetd));
+                    CL_CHECK(clSetKernelArg(mcr,  6, sizeof(int),      &K));
+                    CL_CHECK(clSetKernelArg(mcr,  7, sizeof(int),      &M));
+                    CL_CHECK(clSetKernelArg(mcr,  8, sizeof(int),      &N));
+                    CL_CHECK(clSetKernelArg(mcr,  9, sizeof(int),      &stride_a));
+                    CL_CHECK(clSetKernelArg(mcr, 10, sizeof(int),      &stride_b));
+                    CL_CHECK(clSetKernelArg(mcr, 11, sizeof(int),      &stride_d));
+                    CL_CHECK(clSetKernelArg(mcr, 12, sizeof(int),      &lpr_log2));
+
+                    size_t global[] = {CEIL_DIV((size_t) M, rows_per_wg) * 64, 1, 1};
+                    size_t local[] = {64, 1, 1};
+
+                    backend_ctx->enqueue_ndrange_kernel(mcr, 3, global, local, dst);
+                    return;
+                }
+
                 if (f32_mc && ne11 >= 2 && ne11 <= 8 && ne01 <= 512 && (ne00 % 4 == 0) &&
                     ne02 == 1 && ne12 == 1 && ne13 == 1 &&
                     ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
