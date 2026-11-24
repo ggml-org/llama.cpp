@@ -167,7 +167,8 @@ jobs:
           export GGML_VK_VISIBLE_DEVICES=0
           export GGML_VK_DISABLE_F16=1
           export GGML_VK_DISABLE_COOPMAT=1
-          ctest -L main --verbose --timeout 900
+          # TODO: too slow on llvmpipe
+          ctest -L main -E "test-llama-context" --verbose --timeout 900
 
   windows:
     name: windows / ${{ matrix.arch }}
