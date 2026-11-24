@@ -82,3 +82,48 @@ D. **llama-cli `--emit-token-ids`** (entry 2125613507) is being written by an
   artifacts exist, and regenerating them under load costs ~100 s/position.
 * The register's close guard rejects a sha it cannot resolve, so cite the checkout
   path + branch instead of a bare hex sha for anything in llama.cpp.
+
+## Successor result, measured 2026-11-24 after the rebase
+
+The upstream dory PR is **ggml-org/llama.cpp#32970**, OPEN and non-draft:
+https://github.com/ggml-org/llama.cpp/pull/32970 . Its head is `e0a67bbac` on
+`darkhipo:dory-arch`; the local and remote hashes were compared after push. The
+older enum-only PR #32963 remains separate and unmerged.
+
+A. Converter is landed in the branch. A fresh conversion of the BF16 checkpoint
+completed with exit 0 in 130.65 s and produced
+`/private/tmp/dory-successor-20261124-090121-bf16.gguf`. Reading that file and the
+shipped Q5_K_M back through `GGUFReader` gave 507 tensors, no missing or extra
+tensor names, and no shape mismatches. Metadata keys absent from the conversion
+are `general.basename` and `general.finetune`; the 15 extra keys are HF dataset,
+license, language, tag, sampling and `tokenizer.ggml.clean_spaces` provenance.
+The HF config's `dory.num_loops=2` is preserved; the shipped artifact has 4.
+
+B. The oracle traceback was a data-pairing bug followed by an empty-set crash.
+The default oracle is `The capital of France is`; the supplied reference is
+`What is 17 multiplied by 23? The answer is`. Their top-k sets did not intersect,
+so `deltas={}` and the unguarded `max()` crashed. The harness now rejects a
+prompt/expected-id mismatch before starting the server, returns exit 3 for an
+empty comparison (including zero rows), and does not skip teacher-forced
+positions after an argmax flip. Six new pins plus the three structural pins pass.
+The original mismatched command now exits 3 with the two prompts named.
+
+The matched run used `--oracle /Volumes/Widekeep/oracle/discriminating-prompt.json`.
+It finished with exit 1, not a tool error, in 630.24 s. All 16 positions compared,
+none skipped. **Loop agreement: 15/16 against loops=4, 6/16 against loops=1**;
+only position 5 (the documented BF16 tie) flipped. The strict top-5 SET/ORDER/
+0.5 verdict is FAIL at 9 positions (7 pass); position 3's maximum delta is 0.591.
+This is recorded in the PR rather than presented as unqualified acceptance. Log:
+`/private/tmp/dory-oracle-matched-20261124-085828.log`.
+
+C. The 411-line style commit is in the branch. A post-rebase
+`cmake --build build --target llama-cli -j8` returned 0.
+
+D. `--emit-token-ids` is committed in the branch. Off/on runs both returned 0;
+the generated transcript at `--temp 0` was identical, no TOKEN records appeared
+with the flag off, and the eight emitted token texts joined exactly to the
+visible generated text. Verification: `/private/tmp/dory-emit-ids-verdict.json`.
+
+The durable body-lane progress and exact gate logs are indexed in
+`/private/tmp/dory-successor-progress.md`. A queued body commit is not called
+landed until its lane's `git log` contains it.
