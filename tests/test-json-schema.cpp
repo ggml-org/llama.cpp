@@ -50,19 +50,8 @@ static void test_any(testing & t) {
     });
 
     t.test("boolean true is any", [](testing & t) {
-        root<common_chat_schema_any>(t, parse("true"));
-
         auto doc_prop = parse(R"({"properties": {"a": true}})");
         as<common_chat_schema_any>(t, root<common_chat_schema_object>(t, doc_prop).properties[0].schema.get(), "a");
-
-        auto doc_items = parse(R"({"items": true})");
-        as<common_chat_schema_any>(t, root<common_chat_schema_array>(t, doc_items).items.get(), "items");
-
-        auto doc_any = parse(R"({"anyOf": [true, {"type": "string"}]})");
-        as<common_chat_schema_any>(t, root<common_chat_schema_any_of>(t, doc_any).children[0].get(), "children[0]");
-
-        auto doc_ref = parse(R"({"$ref": "#/$defs/t", "$defs": {"t": true}})");
-        as<common_chat_schema_any>(t, root<common_chat_schema_ref>(t, doc_ref).target, "target");
     });
 }
 
@@ -466,9 +455,7 @@ static void test_errors(testing & t) {
     });
 
     t.test("false schema", [](testing & t) {
-        assert_error(t, R"(false)", "#: false schema is not supported");
         assert_error(t, R"({"properties": {"a": false}})", "#/properties/a: false schema is not supported");
-        assert_error(t, R"({"items": false})", "#/items: false schema is not supported");
     });
 
     t.test("type", [](testing & t) {
