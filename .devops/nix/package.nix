@@ -117,6 +117,7 @@ let
 
   cudaBuildInputs = with cudaPackages; [
     cuda_cudart
+    cuda_nvml_dev
     cccl # <nv/target>
     libcublas
   ];
