@@ -123,6 +123,13 @@ def main() -> int:
 
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    process_env = os.environ.copy()
+    for proxy_name in ("http_proxy", "https_proxy"):
+        proxy_value = process_env.get(proxy_name) or process_env.get(proxy_name.upper())
+        if proxy_value:
+            process_env[proxy_name] = proxy_value
+            process_env[proxy_name.upper()] = proxy_value
+
     hang_count = 0
     failure_count = 0
 
@@ -139,6 +146,7 @@ def main() -> int:
                 stderr=subprocess.STDOUT,
                 text=True,
                 cwd=working_directory,
+                env=process_env,
             )
             started_at = time.monotonic()
             try:
