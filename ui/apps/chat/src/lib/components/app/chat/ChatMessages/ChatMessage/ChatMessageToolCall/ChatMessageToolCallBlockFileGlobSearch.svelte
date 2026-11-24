@@ -20,11 +20,9 @@
 </script>
 
 <ToolCallBlock {isStreaming} meta={fileGlobMeta} {onToggle} {open} {section}>
-	{#snippet titleSnippet()}
+	{#snippet titleSnippet(phrase)}
 		{#if fileGlobMeta}
-			<span class="text-muted-foreground"
-				>{fileGlobMeta.include === '**' ? 'List files' : 'Search files'}&nbsp;</span
-			>
+			<span class="text-muted-foreground">{phrase.label}&nbsp;</span>
 
 			{#if fileGlobMeta.include !== '**'}
 				<span class="font-mono">{fileGlobMeta.include}</span>
@@ -40,12 +38,12 @@
 
 	{#snippet children(meta, ctx)}
 		{#if ctx.isPending}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
+			<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">
 				Searching...
 			</div>
 		{:else if meta?.errorMessage}
 			<div
-				class="flex items-start gap-2 rounded bg-surface-danger p-2 text-xs text-fg-danger italic"
+				class="flex items-start gap-2 rounded bg-surface-danger p-2 text-caption text-fg-danger italic"
 			>
 				<XCircle class="mt-0.5 size-icon-xs shrink-0" />
 
@@ -54,17 +52,17 @@
 		{:else if meta && meta.matches.length > 0}
 			<div class="max-h-96 overflow-auto">
 				{#each meta.matches as match, i (i)}
-					<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{match}</div>
+					<div class="font-mono text-caption leading-relaxed whitespace-pre-wrap">{match}</div>
 				{/each}
 			</div>
 
-			<div class="mt-1.5 text-xs text-muted-foreground/70 italic">
+			<div class="mt-1.5 text-caption text-muted-foreground/70 italic">
 				Total matches: <span class="font-mono">{meta.totalMatches ?? meta.matches.length}</span>
 			</div>
 		{:else}
-			<div class="text-xs text-muted-foreground/70 italic">No matches</div>
+			<div class="text-caption text-muted-foreground/70 italic">No matches</div>
 
-			<div class="mt-1.5 text-xs text-muted-foreground/70 italic">
+			<div class="mt-1.5 text-caption text-muted-foreground/70 italic">
 				Total matches: <span class="font-mono">{meta?.totalMatches ?? 0}</span>
 			</div>
 		{/if}

@@ -19,7 +19,7 @@ export const DIALOG_SUBMENU_CONTENT = 'w-60';
 
 /** Shape of a chat tab, shared with the breadcrumb items next to the project tabs. */
 export const TAB_SURFACE_CLASS =
-	'flex h-8 items-center rounded-lg border text-sm whitespace-nowrap backdrop-blur-xl';
+	'flex h-8 items-center rounded-lg border text-body-sm whitespace-nowrap backdrop-blur-xl';
 
 /** Tab surface at rest: invisible until hovered. */
 export const TAB_SURFACE_IDLE_CLASS =
@@ -28,7 +28,7 @@ export const TAB_SURFACE_IDLE_CLASS =
 /** A round matte glass key (see GlassKey): white glass over the page, a faint hairline, and
  *  matte-key's blur and saturation with its small shadow, so what scrolls under it softens. */
 export const GLASS_KEY_CLASS =
-	'matte-key flex shrink-0 cursor-pointer items-center justify-center rounded-full border border-border/20 bg-surface-glass text-accent-foreground outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50';
+	'matte-key flex shrink-0 cursor-pointer items-center justify-center rounded-full border border-border/20 bg-(--surface-glass) text-accent-foreground outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50';
 
 /** Tab surface of the open tab. */
 export const TAB_SURFACE_ACTIVE_CLASS =
@@ -44,7 +44,7 @@ export const DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR = '[data-slot="dropdown-menu-
 /**
  * Sticky offset of a model-list group heading under the dropdown's search block:
  * the search header exposes its height as `--dropdown-sticky-height`, and one
- * section-header row (`py-2` over `text-[13px]` line height) minus the header's
+ * section-header row (`py-2` over `text-body-sm` line height) minus the header's
  * bottom border stacks the two sticky rows without a gap or an overlap.
  */
 export const SELECTOR_GROUP_STICKY_OFFSET =
@@ -66,6 +66,3 @@ export const ICON_CLASS_SM = 'size-icon-sm';
 
 /** Extra-small Tailwind size class for inline icons. */
 export const ICON_CLASS_XS = 'size-icon-xs';
-
-/** Icon size + spinning animation; used for live-streaming tool indicators. */
-export const ICON_CLASS_SPIN = 'size-icon-md animate-spin';

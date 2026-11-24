@@ -221,9 +221,11 @@
 	{#each [shown] as panel (panel.key)}
 		<section class="grid gap-4">
 			<div class="grid gap-1">
-				<h3 class="text-sm font-medium">{panel.label}</h3>
+				<h3 class="text-label">{panel.label}</h3>
 
-				<p class={['fade-note text-xs text-muted-foreground', measured && 'shown']}>{panel.note}</p>
+				<p class={['fade-note text-caption text-muted-foreground', measured && 'shown']}>
+					{panel.note}
+				</p>
 			</div>
 
 			<div class="flex flex-wrap items-center gap-8">
@@ -247,7 +249,7 @@
 
 				<div class="w-full sm:ml-8 sm:w-[calc((100%-3rem)/3)]">
 					<svg
-						class="block aspect-square w-full overflow-hidden rounded-card border border-border/60"
+						class="block aspect-square w-full overflow-hidden rounded-xl border border-border/60"
 						viewBox="0 0 {placement.size} {placement.size}"
 					>
 						<rect fill="#FAFAFA" height={placement.size} width={placement.size} />
@@ -440,7 +442,7 @@
 		{/each}
 	</Figures>
 
-	<figcaption class="text-xs text-muted-foreground">
+	<figcaption class="text-caption text-muted-foreground">
 		The icon fills {Math.round((side / placement.size) * 100)}% of the side; the numbers are pixels
 		at {placement.size}
 		× {placement.size}. Each circle fills the gap between the circle crop and one of the icon’s

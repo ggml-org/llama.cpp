@@ -242,7 +242,7 @@ static bool decision_is_payload(const json & val) {
     return val.is_string() || val.is_object() || val.is_array();
 }
 
-std::vector<server_decision_question> server_decision_context::parse_questions(const json & body) const {
+std::vector<server_decision_question> server_decision_context::parse_questions(const json & body, bool support_audio_input) const {
     // lfm2-d1, lfm2-d1-omni, lfm3-d1 and vllm-d3 accept a null state, for example to ask about images only
     const bool null_state = type == COMMON_DECISION_TYPE_LFM2_D1 || type == COMMON_DECISION_TYPE_LFM2_D1_OMNI || type == COMMON_DECISION_TYPE_VLLM_D3 || type == COMMON_DECISION_TYPE_LFM3_D1 || type == COMMON_DECISION_TYPE_LFM3_D1_OMNI;
     if (!body.contains("state") || (body.at("state").is_null() && !null_state)) {
@@ -278,8 +278,8 @@ std::vector<server_decision_question> server_decision_context::parse_questions(c
         if (strict_payload && (!decision_is_payload(instructions) || instructions == "")) {
             throw err("\"instructions\" must be non-empty text, an object or an array");
         }
-        if (type == COMMON_DECISION_TYPE_LFM3_D1 && decision_is_spoken(instructions)) {
-            throw err("spoken instructions need a model with audio input");
+        if ((type != COMMON_DECISION_TYPE_LFM3_D1_OMNI || !support_audio_input) && decision_is_spoken(instructions)) {
+            throw err("spoken instructions are only supported by lfm3-d1-omni with audio input");
         }
 
         server_decision_question question;

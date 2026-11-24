@@ -15,7 +15,7 @@
 {#if instructions}
 	<Collapsible.Root bind:open={isExpanded} class={className}>
 		<Collapsible.Trigger
-			class="flex w-full items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+			class="flex w-full items-center gap-1 text-caption text-muted-foreground hover:text-foreground"
 		>
 			{#if isExpanded}
 				<ChevronDown class="size-icon-sm" />
@@ -26,8 +26,8 @@
 			<span>Server instructions</span>
 		</Collapsible.Trigger>
 
-		<Collapsible.Content class="mt-2">
-			<p class="rounded bg-muted/50 p-2 text-xs text-muted-foreground">
+		<Collapsible.Content>
+			<p class="mt-2 rounded bg-muted/50 p-2 text-caption text-muted-foreground">
 				{instructions}
 			</p>
 		</Collapsible.Content>

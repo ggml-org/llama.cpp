@@ -307,6 +307,10 @@ export { SandboxService } from './sandbox.service';
  * @see utils/search-chats - parameter parsing, matching and formatting
  */
 export { SearchChatsService } from './search-chats.service';
+export {
+	type ConversationContentMatch,
+	ConversationSearchService
+} from './conversation-search.service';
 
 /**
  * **RouterService** — Dynamic route URL construction utility
@@ -367,3 +371,15 @@ export { MigrationService } from './migration.service';
  * @see settingsStore in stores/settings/index.svelte.ts - reactive state + business logic
  */
 export { SettingsService } from './settings.service';
+
+/**
+ * **VoiceService** - Wiring between the voice engine and this app
+ *
+ * Builds what the engine (@ggml-org/llama-voice) is handed from outside: how it reaches the active
+ * server (routes, API key, whether realtime can be used) and the capture and transcribe
+ * options the Voice settings ask for. Every feature that records starts its session with
+ * these, so they all reach the server the same way and follow the same settings.
+ *
+ * @see voice.service.ts
+ */
+export { VoiceService } from './voice.service';

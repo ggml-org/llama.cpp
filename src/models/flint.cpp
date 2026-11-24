@@ -158,10 +158,7 @@ llama_model_flint::graph::graph(const llm_graph_params & params) :
                 LLM_FFN_SILU, hparams.expert_weights_norm,
                 hparams.expert_weights_scale,
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
-                il, nullptr, nullptr,
-                model.layers[il].ffn_up_exps_s,
-                model.layers[il].ffn_gate_exps_s,
-                model.layers[il].ffn_down_exps_s);
+                il);
             cb(moe_out, "ffn_moe_out", il);
 
             {

@@ -57,6 +57,7 @@ export type {
 export type {
 	AttachmentMenuItem,
 	ChatUploadedFile,
+	ChatUploadedVoice,
 	ChatAttachmentDisplayItem,
 	ChatMessageSiblingInfo,
 	ChatMessageActions,
@@ -230,6 +231,7 @@ export type {
 	AgenticFlowParams,
 	AgenticFlowResult,
 	SteeringMessage,
+	PendingPermissionRequest,
 	AgenticSection,
 	ToolResultLine,
 	ContinueIntent
@@ -243,6 +245,8 @@ export type {
 	EditFileEdit,
 	EditFileMeta,
 	EditFileTitleMeta,
+	ToolCallDescription,
+	ToolCallPhrasing,
 	ToolEntry,
 	ToolGroup,
 	ToolUiEntry,

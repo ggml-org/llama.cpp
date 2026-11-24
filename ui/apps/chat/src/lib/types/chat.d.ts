@@ -48,6 +48,14 @@ export interface ChatUploadedFile {
 	};
 	isLoading?: boolean;
 	loadError?: string;
+	/** A voice message recorded in the chat form. */
+	voice?: ChatUploadedVoice;
+}
+
+/** What a voice message recorded in the chat form carries besides its WAV file. */
+export interface ChatUploadedVoice {
+	durationMs: number;
+	peaks: number[];
 }
 
 export interface ChatAttachmentDisplayItem {
@@ -108,6 +116,8 @@ export interface ChatMessageAgenticTimings {
 	toolsMs: number;
 	toolCalls?: ChatMessageToolCallTiming[];
 	perTurn?: ChatMessageAgenticTurnStats[];
+	/** Wall time of the whole task, from the prompt to the last token, waits included. */
+	totalMs?: number;
 	llm: {
 		predicted_n: number;
 		predicted_ms: number;

@@ -99,7 +99,7 @@
 					title={option.model}
 				/>
 
-				<p class="mt-1 flex items-center gap-x-2 text-xs text-muted-foreground">
+				<p class="mt-1 flex items-center gap-x-2 text-caption text-muted-foreground">
 					<span class="flex shrink-0 items-center gap-1">
 						<span class="size-2 shrink-0 rounded-full {statusDot}"></span>
 

@@ -23,7 +23,7 @@
 						<span class="text-label">Pinned</span>
 					{/snippet}
 
-					<ul class="space-y-1 pt-2 text-body-sm text-fg-muted">
+					<ul class="space-y-1 pt-2 text-body-sm text-muted-foreground">
 						<li>Explain quantization</li>
 
 						<li>Rust borrow checker notes</li>

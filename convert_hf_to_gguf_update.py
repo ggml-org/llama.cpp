@@ -168,6 +168,7 @@ models = [
     {"name": "mmbert",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/jhu-clsp/mmBERT-base", },
     {"name": "k2-horizon",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/IFM/K2-Horizon-36B", },
     {"name": "inkling2",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/thinkingmachines/Inkling-2-Small", },
+    {"name": "domyn-edge",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/domyn/Domyn-Edge-Teacher-IF", },
 ]
 
 # some models are known to be broken upstream, so we will skip them as exceptions
@@ -227,8 +228,6 @@ def download_model(model):
     repo = model["repo"]
     tokt = model["tokt"]
 
-    os.makedirs(f"models/tokenizers/{name}", exist_ok=True)
-
     files = ["config.json", "tokenizer.json", "tokenizer_config.json"]
 
     if name == "gpt-4o":
@@ -243,6 +242,7 @@ def download_model(model):
 
     if os.path.isdir(repo):
         # If repo is a path on the file system, copy the directory
+        os.makedirs(f"models/tokenizers/{name}", exist_ok=True)
         for file in files:
             src_path = os.path.join(repo, file)
             dst_path = f"models/tokenizers/{name}/{file}"
@@ -484,7 +484,7 @@ for model in models:
             tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}", use_fast=False)
         else:
             tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}")
-    except (OSError, TypeError) as e:
+    except (OSError, TypeError, ValueError) as e:
         logger.error(f"Failed to load tokenizer for model {name}. Error: {e}")
         continue  # Skip this model and continue with the next one in the loop
 

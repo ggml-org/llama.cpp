@@ -32,9 +32,9 @@
 </script>
 
 <div class="grid gap-1 {wrapperClass ?? ''}">
-	<h4 class="mt-0 mb-2 text-sm font-medium {titleClass ?? ''}">{title}</h4>
+	<h4 class="mt-0 mb-2 text-label {titleClass ?? ''}">{title}</h4>
 
-	<p class="mb-4 text-sm text-muted-foreground">{description}</p>
+	<p class="mb-4 text-body-sm text-muted-foreground">{description}</p>
 
 	<Button class={sectionButtonClass} {onclick} variant={sectionButtonVariant}>
 		<IconComponent class="mr-2 {ICON_CLASS_DEFAULT}" />
@@ -44,12 +44,12 @@
 
 	{#if summary && summary.show && summary.items.length > 0}
 		<div class="mt-4 grid overflow-x-auto rounded-lg border border-border/50 bg-muted/30 p-4">
-			<h5 class="mb-2 text-sm font-medium">
+			<h5 class="mb-2 text-label">
 				{summary.verb}
 				{summary.items.length} conversation{summary.items.length === 1 ? '' : 's'}
 			</h5>
 
-			<ul class="space-y-1 text-sm text-muted-foreground">
+			<ul class="space-y-1 text-body-sm text-muted-foreground">
 				{#each summary.items.slice(0, 10) as conv (conv.id)}
 					<li class="truncate">• {conv.name || 'Untitled conversation'}</li>
 				{/each}

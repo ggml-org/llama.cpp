@@ -24,7 +24,7 @@
 				<ScrollCarousel alwaysShowArrows class="w-[min(32rem,calc(100vw-4rem))]" {variant}>
 					{#each items as item (item)}
 						<div
-							class="flex h-16 w-24 shrink-0 items-center justify-center rounded-card border border-line-default bg-surface-muted text-label-sm text-fg-muted"
+							class="flex h-16 w-24 shrink-0 items-center justify-center rounded-xl border border-border bg-muted text-label-sm text-muted-foreground"
 						>
 							{item}
 						</div>

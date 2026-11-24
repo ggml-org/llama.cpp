@@ -1642,16 +1642,7 @@ private:
             SRV_TRC("%s", "context checkpoints disabled\n");
         }
 
-        if (!params_base.model_alias.empty()) {
-            // backward compat: use first alias as model name
-            model_name = *params_base.model_alias.begin();
-        } else if (!params_base.model.get_name().empty()) {
-            model_name = params_base.model.get_name();
-        } else {
-            // fallback: derive model name from file name
-            auto model_path = std::filesystem::path(params_base.model.path);
-            model_name = model_path.filename().string();
-        }
+        model_name = server_get_model_name(params_base);
 
         model_aliases = params_base.model_alias;
         model_tags    = params_base.model_tags;
@@ -4285,7 +4276,9 @@ private:
 
                     if (!slot.can_split()) {
                         // cannot fit the prompt in the current batch - will try next iter
-                        if (batch.size() + slot.task->n_tokens() > n_batch) {
+                        // with non-causal attention the whole batch must fit in one ubatch, see llama_decode
+                        const int32_t n_batch_max = llama_get_causal_attn(ctx_tgt) ? n_batch : std::min(n_batch, n_ubatch);
+                        if (batch.size() + slot.task->n_tokens() > n_batch_max) {
                             return;
                         }
                     }
@@ -6132,7 +6125,7 @@ void server_routes::init_routes() {
         // models that answer after the audio hold a conversation, see server-realtime.h
         // live transcription: Voxtral Realtime (no chat), or an "asr" model in a session opened with ?intent=transcription
         const bool live_asr = !ctx_server.asr_prompt.empty() && req.get_param("intent") == "transcription";
-        if (ctx_server.mtmd_cap.audio_stream && ctx_server.mtmd_cap.chat && !live_asr) {
+        if (ctx_server.mtmd_cap.audio_duplex || (ctx_server.mtmd_cap.audio_stream && ctx_server.mtmd_cap.chat && !live_asr)) {
             server_realtime_conversation({queue_tasks, queue_results, *meta, params, ctx_server.mctx, ctx_server.mtmd_cap, ctx_server.vocab}, conn);
             return;
         }
@@ -6488,7 +6481,7 @@ void server_routes::init_routes() {
         }
 
         const json body = json::parse(req.body);
-        const auto questions = decision.parse_questions(body);
+        const auto questions = decision.parse_questions(body, meta->has_inp_audio);
         const size_t set_size = decision.set_size(questions);
 
         std::vector<raw_buffer> files;

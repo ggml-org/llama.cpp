@@ -35,7 +35,7 @@ def test_mcp_proxy():
 def test_mcp_proxy_custom_port():
     global server
     server.ui_mcp_proxy = True
-    server.debug_proxy_allow_private = True
+    server.ui_mcp_proxy_allow_private_urls = True
     server.start()
 
     # try getting the server's models API via the proxy
@@ -61,7 +61,7 @@ def test_mcp_proxy_no_content():
     try:
         global server
         server.ui_mcp_proxy = True
-        server.debug_proxy_allow_private = True
+        server.ui_mcp_proxy_allow_private_urls = True
         server.start()
 
         res = server.make_request("POST", f"/cors-proxy?url=http://127.0.0.1:{target.server_port}/", data={})
@@ -116,7 +116,7 @@ def test_mcp_proxy_redirect_goes_through_proxy():
     try:
         global server
         server.ui_mcp_proxy = True
-        server.debug_proxy_allow_private = True
+        server.ui_mcp_proxy_allow_private_urls = True
         server.start()
 
         url = server.make_url(f"/cors-proxy?url=http://127.0.0.1:{target.server_port}/start")

@@ -58,7 +58,7 @@
 			{#each capabilities as capability (capability)}
 				{@const Icon = CAPABILITY_ICONS[capability]}
 
-				<Badge class="h-5 gap-1 px-1.5 text-[10px]" variant="outline">
+				<Badge class="h-5 gap-1 px-1.5 text-caption-sm" variant="outline">
 					<Icon class="size-icon-xs text-muted-foreground" />
 
 					{CAPABILITY_LABELS[capability]}
@@ -70,7 +70,7 @@
 			{#each shownModalities as modality (modality)}
 				{@const Icon = MODALITY_ICONS[modality]}
 
-				<Badge class="h-5 gap-1 px-1.5 text-[10px]" variant="outline">
+				<Badge class="h-5 gap-1 px-1.5 text-caption-sm" variant="outline">
 					<Icon class="size-icon-xs text-muted-foreground" />
 
 					{MODALITY_LABELS[modality]}

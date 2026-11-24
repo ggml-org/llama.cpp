@@ -140,7 +140,7 @@
 
 <div class="grid gap-2">
 	<div class="mb-4">
-		<label class="mb-2 block text-xs font-medium select-none" for="server-url-{id}">
+		<label class="mb-2 block text-label-sm select-none" for="server-url-{id}">
 			Server URL <span class="text-destructive">*</span>
 		</label>
 
@@ -155,12 +155,12 @@
 		/>
 
 		{#if urlError}
-			<p class="mt-1.5 text-xs text-destructive">{urlError}</p>
+			<p class="mt-1.5 text-caption text-destructive">{urlError}</p>
 		{/if}
 	</div>
 
 	<div class="mb-4">
-		<label class="mb-2 block text-xs font-medium select-none" for="server-name-{id}">
+		<label class="mb-2 block text-label-sm select-none" for="server-name-{id}">
 			Display name
 		</label>
 
@@ -181,7 +181,7 @@
 			onCheckedChange={setUseAuthorization}
 		/>
 
-		<span class="text-xs text-muted-foreground">
+		<span class="text-caption text-muted-foreground">
 			Authorization{#if required}
 				<span class="text-destructive">*</span>{/if}
 		</span>
@@ -201,7 +201,7 @@
 			/>
 
 			<span
-				class="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm font-medium text-foreground"
+				class="pointer-events-none absolute inset-y-0 left-3 flex items-center text-label text-foreground"
 			>
 				Bearer
 			</span>
@@ -241,12 +241,12 @@
 			/>
 
 			<span>
-				<span class="text-xs text-muted-foreground">Use llama-server proxy</span>
+				<span class="text-caption text-muted-foreground">Use llama-server proxy</span>
 
 				<br />
 
 				{#if !mcpStore.isProxyAvailable}
-					<span class="inline-flex gap-0.75 text-xs text-muted-foreground/60"
+					<span class="inline-flex gap-0.75 text-caption text-muted-foreground/60"
 						>(Run <pre>llama-server</pre>
 						with
 						<pre>{CLI_FLAGS.MCP_PROXY}</pre>

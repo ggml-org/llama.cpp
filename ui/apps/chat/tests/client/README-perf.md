@@ -4,7 +4,7 @@ Two tiers, both reusing the existing vitest projects (see `vite.config.ts`).
 
 ## Tier 1 - `agentic-stream.perf.svelte.test.ts` (project: `client`, real Chromium)
 
-Mounts `ChatMessageAgenticContent` and replays a stream, replacing the message
+Mounts `ChatMessageAgentTrace` and replays a stream, replacing the message
 object on each chunk exactly as the real pipeline does:
 
 - `chat.svelte.ts` `updateStreamingUI()` runs per SSE chunk

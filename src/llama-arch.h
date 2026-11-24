@@ -177,6 +177,7 @@ enum llm_arch {
     LLM_ARCH_NANBEIGE,
     LLM_ARCH_QWEN3TTS,
     LLM_ARCH_POCKETTTS,
+    LLM_ARCH_MOSHI,
     LLM_ARCH_ZONOS3,
     LLM_ARCH_KOKORO,
     LLM_ARCH_TINY_VOCA,
@@ -188,6 +189,8 @@ enum llm_arch {
     LLM_ARCH_LIMITE,
     LLM_ARCH_RICURSIVE,
     LLM_ARCH_INKLING2,
+    LLM_ARCH_INKLING2_LOOP,
+    LLM_ARCH_DOMYN_EDGE,
     LLM_ARCH_UNKNOWN,
 };
 
@@ -288,6 +291,11 @@ enum llm_kv {
     LLM_KV_HRM_H_CYCLES,
     LLM_KV_HRM_L_CYCLES,
     LLM_KV_HRM_PREFIX_LM,
+    LLM_KV_LOOP_START,
+    LLM_KV_LOOP_END,
+    LLM_KV_LOOP_COUNT,
+    LLM_KV_LOOP_GATE_RANK,
+    LLM_KV_LOOP_VARYING,
     LLM_KV_METIS_PASS_COUNT,
     LLM_KV_METIS_MEMORY_LENGTH,
     LLM_KV_METIS_ROUTE_LENGTH,
@@ -609,6 +617,19 @@ enum llm_tensor {
     LLM_TENSOR_FFN_LATENT_UP,
     LLM_TENSOR_FFN_POST_CONV,
     LLM_TENSOR_FFN_RES_QUERY,
+    LLM_TENSOR_LOOP_MSG_QUERY,
+    LLM_TENSOR_LOOP_Q_CTRL_DOWN,
+    LLM_TENSOR_LOOP_Q_CTRL_GAIN,
+    LLM_TENSOR_LOOP_Q_CTRL_FORGET,
+    LLM_TENSOR_LOOP_K_CTRL_DOWN,
+    LLM_TENSOR_LOOP_K_CTRL_GAIN,
+    LLM_TENSOR_LOOP_K_CTRL_FORGET,
+    LLM_TENSOR_LOOP_V_CTRL_DOWN,
+    LLM_TENSOR_LOOP_V_CTRL_GAIN,
+    LLM_TENSOR_LOOP_V_CTRL_FORGET,
+    LLM_TENSOR_LOOP_FFN_CTRL_DOWN,
+    LLM_TENSOR_LOOP_FFN_CTRL_GAIN,
+    LLM_TENSOR_LOOP_FFN_CTRL_FORGET,
     LLM_TENSOR_STREAM_EMBD,
     LLM_TENSOR_DEPTH_MEM_STATE_WRITE,
     LLM_TENSOR_DEPTH_MEM_META_WRITE,
@@ -1016,3 +1037,4 @@ bool llm_arch_is_diffusion      (const llm_arch & arch);
 bool llm_arch_supports_sm_tensor(const llm_arch & arch);
 bool llm_arch_supports_rs_rollback(const llm_arch & arch);
 bool llm_arch_supports_mixed_batch(const llm_arch & arch);
+bool llm_arch_mmid_down_bf16(const llm_arch & arch);

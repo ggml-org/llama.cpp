@@ -450,9 +450,11 @@ struct ggml_webgpu_gated_delta_net_pipeline_key {
     int  s_v;
     int  kda;
     bool fused_cache;
+    bool replay;
 
     bool operator==(const ggml_webgpu_gated_delta_net_pipeline_key & other) const {
-        return type == other.type && s_v == other.s_v && kda == other.kda && fused_cache == other.fused_cache;
+        return type == other.type && s_v == other.s_v && kda == other.kda && fused_cache == other.fused_cache &&
+               replay == other.replay;
     }
 };
 
@@ -462,6 +464,7 @@ struct ggml_webgpu_gated_delta_net_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.type);
         ggml_webgpu_hash_combine(seed, key.s_v);
         ggml_webgpu_hash_combine(seed, key.kda);
+        ggml_webgpu_hash_combine(seed, key.replay);
         return seed;
     }
 };
@@ -1269,6 +1272,7 @@ class ggml_webgpu_shader_lib {
     std::unordered_map<int, webgpu_pipeline> argsort_pipelines;             // key is order
     std::unordered_map<int, webgpu_pipeline> argsort_merge_pipelines;       // key is order
     std::unordered_map<int, webgpu_pipeline> cumsum_pipelines;              // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> col2im_1d_pipelines;           // key is fixed, no variants yet
     std::unordered_map<int, webgpu_pipeline> arange_pipelines;              // key is fixed, no variants yet
     std::unordered_map<int, webgpu_pipeline> count_equal_pipelines;         // key is src_overlap
     std::unordered_map<int, webgpu_pipeline> timestep_embedding_pipelines;  // key is fixed, no variants yet
@@ -2014,6 +2018,7 @@ class ggml_webgpu_shader_lib {
         key.s_v                                      = (int) context.src2->ne[0];
         key.kda                                      = context.src3->ne[0] == context.src2->ne[0];
         key.fused_cache                              = context.dst_fuse != nullptr;
+        key.replay                                   = context.dst->src[6] != nullptr;
 
         auto it = gated_delta_net_pipelines.find(key);
         if (it != gated_delta_net_pipelines.end()) {
@@ -2039,6 +2044,11 @@ class ggml_webgpu_shader_lib {
         if (key.fused_cache) {
             defines.push_back("FUSED_CACHE");
             variant += "_fused_cache";
+        }
+
+        if (key.replay) {
+            defines.push_back("REPLAY");
+            variant += "_replay";
         }
 
         defines.push_back("S_V=" + std::to_string(key.s_v) + "u");
@@ -2096,10 +2106,27 @@ class ggml_webgpu_shader_lib {
         return pool2d_pipelines[key];
     }
 
+    webgpu_pipeline get_col2im_1d_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        auto it = col2im_1d_pipelines.find(1);
+        if (it != col2im_1d_pipelines.end()) {
+            return it->second;
+        }
+
+        const uint32_t           wg_size   = std::min(256u, context.max_wg_size);
+        std::vector<std::string> defines   = { "WG_SIZE=" + std::to_string(wg_size) };
+        auto                     processed = preprocessor.preprocess(wgsl_col2im_1d, defines);
+        auto                     decisions = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size                 = wg_size;
+        webgpu_pipeline pipeline           = ggml_webgpu_create_pipeline(device, processed, "col2im_1d");
+        pipeline.context                   = decisions;
+        col2im_1d_pipelines[1]             = pipeline;
+        return pipeline;
+    }
+
     webgpu_pipeline get_pad_pipeline(const ggml_webgpu_shader_lib_context & context) {
         ggml_webgpu_pad_pipeline_key key = {};
         key.reflect                      = context.dst->op == GGML_OP_PAD_REFLECT_1D;
-        key.circular                     = !key.reflect && ggml_get_op_params_i32(context.dst, 8) != 0;
+        key.circular = context.dst->op == GGML_OP_ROLL || (!key.reflect && ggml_get_op_params_i32(context.dst, 8) != 0);
 
         auto it = pad_pipelines.find(key);
         if (it != pad_pipelines.end()) {

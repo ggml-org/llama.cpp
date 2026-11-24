@@ -4,6 +4,7 @@
  */
 
 import {
+	CODE_BLOCK,
 	CODE_BLOCK_CLASS,
 	CODE_ICON_SVG,
 	COPY_ICON_SVG,
@@ -100,7 +101,9 @@ export function createSourceView(
 ): Element {
 	const code: Element = codeElement ?? {
 		children: [{ type: 'text', value: source }],
-		properties: { className: ['hljs', `language-${language}`] },
+		properties: {
+			className: [CODE_BLOCK_CLASS.HLJS, `${CODE_BLOCK.LANGUAGE_CLASS_PREFIX}${language}`]
+		},
 		tagName: 'code',
 		type: 'element'
 	};

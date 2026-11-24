@@ -42,7 +42,7 @@
 
 		{#if command}
 			<ChevronDown
-				class="size-icon-xs shrink-0 transition-transform duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] {commandOpen
+				class="size-icon-xs shrink-0 transition-transform duration-200 ease-out-quint {commandOpen
 					? 'rotate-180'
 					: ''}"
 			/>
@@ -50,7 +50,7 @@
 	</span>
 
 	{#if memGb}
-		<span class="text-[10px] whitespace-nowrap text-muted-foreground/60 @max-lg:whitespace-normal">
+		<span class="text-caption-sm whitespace-nowrap text-muted-foreground/60 @max-lg:whitespace-normal">
 			needs at least {memGb}{GIGABYTE_LABEL} memory
 		</span>
 	{/if}
@@ -62,7 +62,7 @@
 			<!-- the row's own label opens its command -->
 			<button
 				aria-expanded={commandOpen}
-				class="flex w-fit cursor-pointer flex-col items-start gap-0.5 text-left text-sm tabular-nums text-muted-foreground transition-colors hover:text-foreground @max-lg:flex-row @max-lg:items-baseline @max-lg:gap-2"
+				class="flex w-fit cursor-pointer flex-col items-start gap-0.5 text-left text-body-sm tabular-nums text-muted-foreground transition-colors hover:text-foreground @max-lg:flex-row @max-lg:items-baseline @max-lg:gap-2"
 				onclick={() => (commandOpen = !commandOpen)}
 				type="button"
 			>
@@ -70,7 +70,7 @@
 			</button>
 		{:else}
 			<span
-				class="flex w-fit flex-col items-start gap-0.5 text-sm tabular-nums text-muted-foreground @max-lg:flex-row @max-lg:items-baseline @max-lg:gap-2"
+				class="flex w-fit flex-col items-start gap-0.5 text-body-sm tabular-nums text-muted-foreground @max-lg:flex-row @max-lg:items-baseline @max-lg:gap-2"
 			>
 				{@render labelBody()}
 			</span>
