@@ -20,6 +20,13 @@ if (NOT ZENDNN_ROOT OR ZENDNN_ROOT STREQUAL "" OR ZENDNN_ROOT STREQUAL "OFF")
 
     include(ExternalProject)
 
+    # zendnn-2026-WW46, 2026-11-12; override with -DGGML_ZENDNN_GIT_REPOSITORY/_GIT_TAG if needed
+    set(GGML_ZENDNN_GIT_REPOSITORY "https://github.com/amd/ZenDNN.git"
+        CACHE STRING "ggml: ZenDNN git repository to download and build")
+    set(GGML_ZENDNN_GIT_TAG "446726984d243e6c5b1055e811d446245e2388a1"
+        CACHE STRING "ggml: ZenDNN git commit/tag to download and build")
+    message(STATUS "ZenDNN source: ${GGML_ZENDNN_GIT_REPOSITORY} @ ${GGML_ZENDNN_GIT_TAG}")
+
     set(ZENDNN_PREFIX      ${CMAKE_BINARY_DIR}/_deps/zendnn-prefix)
     set(ZENDNN_SOURCE_DIR  ${ZENDNN_PREFIX}/src/zendnn)
     set(ZENDNN_BUILD_DIR   ${ZENDNN_PREFIX}/build)
@@ -27,8 +34,8 @@ if (NOT ZENDNN_ROOT OR ZENDNN_ROOT STREQUAL "" OR ZENDNN_ROOT STREQUAL "OFF")
 
     ExternalProject_Add(
         zendnn
-        GIT_REPOSITORY https://github.com/amd/ZenDNN.git
-        GIT_TAG 1f399a75cc0993778374a51bea49b64a57879595    # ZenDNN-2026-WW28
+        GIT_REPOSITORY ${GGML_ZENDNN_GIT_REPOSITORY}
+        GIT_TAG        ${GGML_ZENDNN_GIT_TAG}
         PREFIX      ${ZENDNN_PREFIX}
         SOURCE_DIR  ${ZENDNN_SOURCE_DIR}
         BINARY_DIR  ${ZENDNN_BUILD_DIR}

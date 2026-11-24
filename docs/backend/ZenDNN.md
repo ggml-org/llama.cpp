@@ -73,11 +73,13 @@ The ZenDNN backend accelerates **matrix multiplication (MUL_MAT)** and **expert-
 | FP32                   | Support | Full precision floating point                 |
 | BF16                   | Support | BFloat16 (best performance on Zen 4/Zen 5)    |
 | Q8_0                   | Support | 8-bit quantized weights via [dynamic quantization](https://github.com/amd/ZenDNN/blob/main/docs/operator/lowoha_matmul_operator.md) |
+| Q4_0                   | Support | 4-bit quantized weights via dynamic quantization |
 
 *Notes:*
 
 - **BF16** provides best performance on Zen 4 and Zen 5 EPYC™ processors (Genoa, Turin).
 - **Q8_0** is available for quantized model weights since ZenDNN supports dynamic quantization [LowOHA MatMul operator](https://github.com/amd/ZenDNN/blob/main/docs/operator/lowoha_matmul_operator.md).
+- **Q4_0** is available for quantized model weights via the same dynamic quantization as Q8_0.
 - Other quantization formats fall back to the standard CPU backend unless explicitly supported by the ZenDNN backend.
 
 ## Linux
@@ -98,6 +100,8 @@ cmake --build build --config Release -j $(nproc)
 
 No manual ZenDNN installation required. CMake will handle everything automatically.
 
+The source is selected by `GGML_ZENDNN_GIT_REPOSITORY` and `GGML_ZENDNN_GIT_TAG`, defaulting to `https://github.com/amd/ZenDNN.git` @ `446726984d243e6c5b1055e811d446245e2388a1` (zendnn-2026-WW46).
+
 #### Option 2: Use Custom ZenDNN Installation
 
 If you want to build ZenDNN yourself or use a specific version:
@@ -108,6 +112,7 @@ If you want to build ZenDNN yourself or use a specific version:
 # Clone ZenDNN repository
 git clone https://github.com/amd/ZenDNN.git
 cd ZenDNN
+git checkout 446726984d243e6c5b1055e811d446245e2388a1
 
 # Build and install (requires CMake >= 3.25)
 mkdir build && cd build
@@ -200,7 +205,7 @@ For detailed profiling and logging options, refer to the [ZenDNN Logging Documen
 
 - **Limited operation support**: Currently matrix multiplication (MUL_MAT) and expert-based matrix multiplication (MUL_MAT_ID) are accelerated via ZenDNN. Other operations fall back to the standard CPU backend. Future updates may expand supported operations.
 - **BF16 support**: BF16 operations require AMD Zen 4 or Zen 5 architecture (EPYC 9004/9005 series). On older CPUs, operations will use FP32.
-- **Q8_0 support scope**: Q8_0 acceleration is available for supported matrix multiplication paths. Other quantization formats still fall back to the standard CPU backend.
+- **Q8_0 / Q4_0 support scope**: Q8_0 and Q4_0 acceleration is available for supported matrix multiplication paths. The ZenDNN backend requires the ZenDNN commit listed in [Setup Environment](#i-setup-environment) or newer. Other quantization formats still fall back to the standard CPU backend.
 - **NUMA awareness**: For multi-socket systems, manual NUMA binding may be required for optimal performance.
 
 ## Q&A
@@ -219,7 +224,7 @@ A: ZenDNN is optimized specifically for AMD processors. While it may work on oth
 
 **Q: Does ZenDNN support quantized models?**
 
-A: Yes. The ZenDNN backend supports Q8_0 quantized models for supported matrix multiplication operations. FP32 and BF16 are also supported. Other quantization formats may fall back to the standard CPU backend unless explicitly supported by the ZenDNN backend.
+A: Yes. The ZenDNN backend supports Q8_0 and Q4_0 quantized models for supported matrix multiplication operations. FP32 and BF16 are also supported. Other quantization formats may fall back to the standard CPU backend unless explicitly supported by the ZenDNN backend.
 
 **Q: Why is my inference not faster with ZenDNN?**
 

@@ -25,30 +25,73 @@ zendnnl::common::data_type_t ggml_to_zendnn_type() {
         return zendnnl::common::data_type_t::bf16;
     } else if constexpr (std::is_same_v<T, block_q8_0>) {
         return zendnnl::common::data_type_t::s8;
+    } else if constexpr (std::is_same_v<T, block_q4_0>) {
+        return zendnnl::common::data_type_t::s4;
     } else {
         return zendnnl::common::data_type_t::none;
     }
 }
 
+// true for ggml-cpu's CPU_REPACK buffer type (repack.cpp), matched by name since it has no other public marker
+static bool ggml_zendnn_buft_is_cpu_repack(ggml_backend_buffer_type_t buft) {
+    if (!buft) {
+        return false;
+    }
+    const char * name = ggml_backend_buft_name(buft);
+    return name != nullptr && std::strcmp(name, "CPU_REPACK") == 0;
+}
+
+// weight types whose x86 CPU_REPACK layout ZenDNN reads directly (packing.is_superblock)
+static bool ggml_zendnn_supports_cpu_repack(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q4_0: // block_q4_0x8 (x86 AVX2)
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool ggml_zendnn_is_quantized_type(ggml_type type) {
+    return type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q4_0;
+}
+
+template <typename TA>
+inline constexpr bool ggml_zendnn_is_quantized_v = std::is_same_v<TA, block_q8_0> || std::is_same_v<TA, block_q4_0>;
+
+template <typename TA> struct ggml_zendnn_block_size;
+template <> struct ggml_zendnn_block_size<block_q8_0> { static constexpr int64_t value = QK8_0; };
+template <> struct ggml_zendnn_block_size<block_q4_0> { static constexpr int64_t value = QK4_0; };
+
+// true when src0 is in a CPU_REPACK layout that ZenDNN reads directly
+static bool ggml_zendnn_is_cpu_repacked(const ggml_tensor * src0) {
+    return src0->buffer != nullptr &&
+           ggml_zendnn_buft_is_cpu_repack(src0->buffer->buft) &&
+           ggml_zendnn_supports_cpu_repack(src0->type);
+}
+
 /**
  * Builds the matmul_params shared by ggml_zendnn_matmul() and ggml_zendnn_group_matmul():
- * dtype selection plus, for Q8_0 weights, dynamic-quant setup. Callers still need to set
+ * dtype selection plus, for Q8_0/Q4_0 weights, dynamic-quant setup. Callers still need to set
  * quant_params.src_scale.dims themselves, since that depends on the batch size(s) in use.
  */
 template <typename TA, typename TB, typename TC>
-static zendnnl::lowoha::matmul::matmul_params ggml_zendnn_make_matmul_params(ggml_backend_zendnn_context * ctx) {
+static zendnnl::lowoha::matmul::matmul_params ggml_zendnn_make_matmul_params(ggml_backend_zendnn_context * ctx, bool cpu_repacked = true) {
     zendnnl::lowoha::matmul::matmul_params params;
     params.dtypes.src = ggml_to_zendnn_type<TB>();
     params.dtypes.wei = ggml_to_zendnn_type<TA>();
     params.dtypes.dst = ggml_to_zendnn_type<TC>();
     params.num_threads = ctx->n_threads;
+    params.weight_cache_type = 1;
 
-    if constexpr (std::is_same_v<TA, block_q8_0>) {
+    if constexpr (ggml_zendnn_is_quantized_v<TA>) {
         params.dtypes.compute = zendnnl::common::data_type_t::s8;
         params.dynamic_quant = true;
         params.quant_params.src_scale.buff = nullptr;
         params.quant_params.src_scale.dt   = zendnnl::common::data_type_t::bf16;
         params.packing.pack_format_b = 1;
+        if constexpr (std::is_same_v<TA, block_q4_0>) {
+            params.packing.is_superblock = cpu_repacked;
+        }
     }
     return params;
 }
@@ -68,14 +111,14 @@ static zendnnl::lowoha::matmul::matmul_params ggml_zendnn_make_matmul_params(ggm
 template <typename TA, typename TB, typename TC>
 static bool ggml_zendnn_matmul(ggml_backend_zendnn_context * ctx, int64_t m, int64_t n, int64_t k,
                                const TA * A, int64_t lda, const TB * B, int64_t ldb, TC * C,
-                               int64_t ldc) {
+                               int64_t ldc, bool cpu_repacked = true) {
 
-    zendnnl::lowoha::matmul::matmul_params params = ggml_zendnn_make_matmul_params<TA, TB, TC>(ctx);
+    zendnnl::lowoha::matmul::matmul_params params = ggml_zendnn_make_matmul_params<TA, TB, TC>(ctx, cpu_repacked);
 
     zendnnl::lowoha::matmul::matmul_batch_params_t batch_params;
 
-    if constexpr (std::is_same_v<TA, block_q8_0>) {
-        params.quant_params.src_scale.dims = {n, k / QK8_0};
+    if constexpr (ggml_zendnn_is_quantized_v<TA>) {
+        params.quant_params.src_scale.dims = {n, k / ggml_zendnn_block_size<TA>::value};
     }
 
     zendnnl::error_handling::status_t status = zendnnl::lowoha::matmul::matmul_direct(
@@ -103,7 +146,7 @@ static bool ggml_zendnn_matmul(ggml_backend_zendnn_context * ctx, int64_t m, int
 
 static bool ggml_zendnn_gemm(ggml_backend_zendnn_context * ctx, int64_t m, int64_t n, int64_t k,
                               const void * A, int64_t lda, const void * B, int64_t ldb, void * C,
-                              int64_t ldc, int Atype, int Btype, int Ctype) {
+                              int64_t ldc, int Atype, int Btype, int Ctype, bool cpu_repacked = true) {
 
     assert(m >= 0);
     assert(n >= 0);
@@ -146,6 +189,14 @@ static bool ggml_zendnn_gemm(ggml_backend_zendnn_context * ctx, int64_t m, int64
                 (const block_q8_0 *)A, lda,
                 (const float *)B, ldb,
                 (float *)C, ldc);
+        case GGML_TYPE_Q4_0:
+            if (Btype != GGML_TYPE_F32 || Ctype != GGML_TYPE_F32)
+                return false;
+            return ggml_zendnn_matmul<block_q4_0, float, float>(
+                ctx, m, n, k,
+                (const block_q4_0 *)A, lda,
+                (const float *)B, ldb,
+                (float *)C, ldc, cpu_repacked);
         default:
             return false; // unsupported type
     }
@@ -184,8 +235,10 @@ static void ggml_zendnn_compute_forward_mul_mat(
 
     void * work_data = ctx->work_data.get();
 
+    const bool cpu_repacked = ggml_zendnn_is_cpu_repacked(src0);
+
     // ZenDNN requires FP32 for dynamic quantization, so conversion is skipped
-    if (src1->type != vec_dot_type && src0->type != GGML_TYPE_Q8_0) {
+    if (src1->type != vec_dot_type && !ggml_zendnn_is_quantized_type(src0->type)) {
         const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
         const size_t nbw2 = nbw1 * ne11;
         const size_t nbw3 = nbw2 * ne12;
@@ -209,10 +262,13 @@ static void ggml_zendnn_compute_forward_mul_mat(
         }
     }
 
+    // wdata is src1 directly unless it still needed the f32->vec_dot_type conversion above
+    const bool   src1_direct = src1->type == vec_dot_type || ggml_zendnn_is_quantized_type(src0->type);
+    const void * wdata       = src1_direct ? src1->data : work_data;
+    const size_t row_size    = ggml_row_size(src1_direct ? src1->type : vec_dot_type, ne10);
+
     for (int64_t i13 = 0; i13 < ne13; i13++) {
         for (int64_t i12 = 0; i12 < ne12; i12++) {
-            const void* wdata = (src1->type == vec_dot_type || src0->type == GGML_TYPE_Q8_0) ? src1->data : work_data;
-            const size_t row_size = ggml_row_size(vec_dot_type, ne10);
             if (!ggml_zendnn_gemm(ctx,
                                   ne01,     // m
                                   ne11,     // n
@@ -224,8 +280,9 @@ static void ggml_zendnn_compute_forward_mul_mat(
                                   static_cast<char *>(dst->data) + i12*nb2 + i13*nb3,
                                   ne01,     // ldc
                                   src0->type,
-                                  src0->type == GGML_TYPE_Q8_0 ? GGML_TYPE_F32 : vec_dot_type,
-                                  dst->type))
+                                  ggml_zendnn_is_quantized_type(src0->type) ? GGML_TYPE_F32 : vec_dot_type,
+                                  dst->type,
+                                  cpu_repacked))
                 GGML_ABORT("%s: ZenDNN gemm failed\n", __func__);
         }
     }
@@ -247,11 +304,12 @@ static bool ggml_zendnn_group_matmul(ggml_backend_zendnn_context * ctx, int64_t 
                                      const std::vector<int64_t> & n,
                                      const std::vector<const void *> & A, int64_t lda,
                                      const std::vector<const void *> & B, int64_t ldb,
-                                     const std::vector<void *> & C, int64_t ldc) {
+                                     const std::vector<void *> & C, int64_t ldc,
+                                     bool cpu_repacked = true) {
 
     const int n_experts = n.size();
 
-    zendnnl::lowoha::matmul::matmul_params base_params = ggml_zendnn_make_matmul_params<TA, TB, TC>(ctx);
+    zendnnl::lowoha::matmul::matmul_params base_params = ggml_zendnn_make_matmul_params<TA, TB, TC>(ctx, cpu_repacked);
 
     std::vector<char>         layout(n_experts, 'r');
     std::vector<bool>         trans_a(n_experts, false);
@@ -272,8 +330,8 @@ static bool ggml_zendnn_group_matmul(ggml_backend_zendnn_context * ctx, int64_t 
         batch_m[i] = n[i];
 
         // src_scale.dims depends on this expert's row count, unlike the rest of base_params
-        if constexpr (std::is_same_v<TA, block_q8_0>) {
-            params[i].quant_params.src_scale.dims = {n[i], k / QK8_0};
+        if constexpr (ggml_zendnn_is_quantized_v<TA>) {
+            params[i].quant_params.src_scale.dims = {n[i], k / ggml_zendnn_block_size<TA>::value};
         }
     }
 
@@ -294,7 +352,7 @@ static bool ggml_zendnn_group_gemm(ggml_backend_zendnn_context * ctx, int64_t m,
                                     const std::vector<const void *> & A, int64_t lda,
                                     const std::vector<const void *> & B, int64_t ldb,
                                     const std::vector<void *> & C, int64_t ldc,
-                                    int Atype, int Btype, int Ctype) {
+                                    int Atype, int Btype, int Ctype, bool cpu_repacked = true) {
 
     assert(m >= 0);
     for (size_t i = 0; i < n.size(); i++) {
@@ -324,6 +382,10 @@ static bool ggml_zendnn_group_gemm(ggml_backend_zendnn_context * ctx, int64_t m,
             if (Btype != GGML_TYPE_F32 || Ctype != GGML_TYPE_F32)
                 return false;
             return ggml_zendnn_group_matmul<block_q8_0, float, float>(ctx, m, k, n, A, lda, B, ldb, C, ldc);
+        case GGML_TYPE_Q4_0:
+            if (Btype != GGML_TYPE_F32 || Ctype != GGML_TYPE_F32)
+                return false;
+            return ggml_zendnn_group_matmul<block_q4_0, float, float>(ctx, m, k, n, A, lda, B, ldb, C, ldc, cpu_repacked);
         default:
             return false; // unsupported type
     }
@@ -346,6 +408,8 @@ static void ggml_zendnn_compute_forward_mul_mat_id(
 
     ggml_type         const vec_dot_type = src0->type;
     ggml_from_float_t const from_float = ggml_get_type_traits(vec_dot_type)->from_float_ref;
+
+    const bool cpu_repacked = ggml_zendnn_is_cpu_repacked(src0);
 
     // we don't support permuted src0 or src1
     GGML_ASSERT(nb00 == ggml_type_size(src0->type));
@@ -397,12 +461,11 @@ static void ggml_zendnn_compute_forward_mul_mat_id(
 
     const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
-    // For Q8_0, src1 is always F32; the gather buffer must hold F32 rows (ne10*4 bytes),
-    // not Q8_0-encoded rows (row_size ≈ ne10/32*34 bytes) — they differ by ~4x.
+    // For quantized weights, src1 is always F32; the gather buffer must hold F32 rows
     const size_t f32_row_size = (size_t)ne10 * sizeof(float);
-    const size_t gather_row_size = (src0->type == GGML_TYPE_Q8_0) ? f32_row_size : row_size;
+    const size_t gather_row_size = ggml_zendnn_is_quantized_type(src0->type) ? f32_row_size : row_size;
 
-    if (src1->type != vec_dot_type && src0->type != GGML_TYPE_Q8_0) {
+    if (src1->type != vec_dot_type && !ggml_zendnn_is_quantized_type(src0->type)) {
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
     }
 
@@ -470,10 +533,10 @@ static void ggml_zendnn_compute_forward_mul_mat_id(
             const char * src_row = (const char *) src1->data + i11*nb11 + i12*nb12;
             void *       dst_row = wdata_cur + w_off + ir1 * gather_row_size;
 
-            if (src1->type != vec_dot_type && src0->type != GGML_TYPE_Q8_0) {
+            if (src1->type != vec_dot_type && !ggml_zendnn_is_quantized_type(src0->type)) {
                 from_float((const float *) src_row, dst_row, ne10);
             } else {
-                // no conversion: src1 already matches vec_dot_type, or src0 is Q8_0, whose
+                // no conversion: src1 already matches vec_dot_type, or src0 is quantized, whose
                 // ZenDNN dynamic quantization requires the row to stay in F32
                 std::memcpy(dst_row, src_row, gather_row_size);
             }
@@ -493,8 +556,9 @@ static void ggml_zendnn_compute_forward_mul_mat_id(
                                 batch_src, ne10,  // B: input, ldb
                                 batch_dst, ne01,  // C: output, ldc
                                 src0->type,
-                                src0->type == GGML_TYPE_Q8_0 ? GGML_TYPE_F32 : vec_dot_type,
-                                dst->type))
+                                ggml_zendnn_is_quantized_type(src0->type) ? GGML_TYPE_F32 : vec_dot_type,
+                                dst->type,
+                                cpu_repacked))
         GGML_ABORT("%s: ZenDNN group gemm failed\n", __func__);
 
     // scatter output rows to destination
@@ -724,6 +788,12 @@ static bool ggml_backend_zendnn_device_supports_op(ggml_backend_dev_t dev, const
                 return false;
             }
 
+            // ZenDNN reads only some CPU_REPACK layouts
+            if (weights->buffer && ggml_zendnn_buft_is_cpu_repack(weights->buffer->buft) &&
+                !ggml_zendnn_supports_cpu_repack(weights->type)) {
+                return false;
+            }
+
             if (ggml_zendnn_adaptive_fallback_enabled()) {
                 const int64_t K = inputs->ne[0];
                 const int64_t N = (inputs->ne[1]*inputs->ne[2]*inputs->ne[3]);
@@ -751,11 +821,19 @@ static bool ggml_backend_zendnn_device_supports_op(ggml_backend_dev_t dev, const
                 return false;
             }
 
+            // ZenDNN needs more than one quant block in K
+            if (ggml_zendnn_is_quantized_type(weights->type) && ne10 <= ggml_blck_size(weights->type)) {
+                return false;
+            }
+
             switch (weights->type) {
                 case GGML_TYPE_F32:
+                    return inputs->type == GGML_TYPE_F32;
                 case GGML_TYPE_BF16:
+                    return inputs->type == GGML_TYPE_F32 || inputs->type == GGML_TYPE_BF16;
                 case GGML_TYPE_Q8_0:
-                    return true;
+                case GGML_TYPE_Q4_0:
+                    return inputs->type == GGML_TYPE_F32;
                 default:
                     return false;
             }
@@ -769,7 +847,7 @@ static bool ggml_backend_zendnn_device_supports_op(ggml_backend_dev_t dev, const
 }
 
 static bool ggml_backend_zendnn_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
-    return ggml_backend_buft_is_host(buft);
+    return ggml_backend_buft_is_host(buft) || ggml_zendnn_buft_is_cpu_repack(buft);
 
     GGML_UNUSED(dev);
 }
