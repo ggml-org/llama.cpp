@@ -30,6 +30,10 @@ OutputVector translate_reshape(const NodeContext & context) {
     std::shared_ptr<ov::Node> new_shape_node;
     switch (op_case) {
     case 0:
+        // keep the tracked dynamic dim, e.g. the tokens of a reshape that only adds a trailing 1 (see translate_cont)
+        if (context.get_op_dynamic_dim() != -1) {
+            shape[3 - context.get_op_dynamic_dim()] = -1;
+        }
         break;
     case 1:
     case 9:
@@ -69,6 +73,21 @@ OutputVector translate_reshape(const NodeContext & context) {
         break;
     case 8:
         shape[0] = -1;
+        break;
+    case 10:
+        if (context.has_input("s_copy_active_slot_len")) {
+            new_shape_node = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{
+                context.get_input("s_copy_active_slot_len"),
+                ov::op::v0::Constant::create(ov::element::i64, {3},
+                    std::vector<int64_t>{-1, shape[2], shape[3]})}, 0);
+        } else {
+            shape[1] = -1;
+        }
+        break;
+    case 11:
+        // ROPE positions keep the layout of inp_pos. gemma-4 reshapes the positions of its output rows, and a
+        // batch can have no output rows, so the size checks of the other cases cannot place the dim.
+        shape = {1, 1, 1, -1};
         break;
     default:
         FRONT_END_OP_CONVERSION_CHECK(false, "Unsupported RESHAPE case: ", op_case);

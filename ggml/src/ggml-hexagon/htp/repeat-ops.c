@@ -13,7 +13,7 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "hex-common.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "htp-ops.h"
 #include "htp-tensor.h"
 #include "repeat-ops.h"
@@ -22,14 +22,14 @@ struct htp_repeat_context {
     struct htp_ops_context *               octx;
     const struct htp_repeat_kernel_params * kparams;
 
-    uint32_t nrows_per_thread;
+    uint32_t nrows_per_hvx;
     uint32_t total_dst_rows;  // ne1 * ne2 * ne3
     uint32_t row_start;
 
     size_t   type_size;
 };
 
-static void repeat_job_per_thread(unsigned int nth, unsigned int ith, void * data) {
+static void repeat_job_per_hvx(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     const struct htp_repeat_context * rctx = (const struct htp_repeat_context *) data;
     struct htp_ops_context * octx = rctx->octx;
     const struct htp_repeat_kernel_params * kparams = rctx->kparams;
@@ -60,13 +60,13 @@ static void repeat_job_per_thread(unsigned int nth, unsigned int ith, void * dat
 
     const size_t row_bytes = ne00 * rctx->type_size;
 
-    const uint32_t row_start = rctx->row_start + rctx->nrows_per_thread * ith;
-    const uint32_t row_end   = MIN(row_start + rctx->nrows_per_thread, rctx->row_start + rctx->total_dst_rows);
+    const uint32_t row_start = rctx->row_start + rctx->nrows_per_hvx * ith;
+    const uint32_t row_end   = MIN(row_start + rctx->nrows_per_hvx, rctx->row_start + rctx->total_dst_rows);
     if (row_start >= row_end) {
         return;
     }
 
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    struct htp_thread_trace * tr = th->trace;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, row_start);
 
     for (uint32_t dst_row = row_start; dst_row < row_end; dst_row++) {
@@ -119,7 +119,7 @@ int op_repeat(struct htp_ops_context * octx) {
     const struct htp_repeat_kernel_params * kparams =
         (const struct htp_repeat_kernel_params *) octx->kernel_params;
 
-    if (!htp_ops_context_set_n_threads(octx, kparams->n_threads)) {
+    if (!htp_ops_context_set_n_hvx(octx, kparams->n_hvx)) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
@@ -141,12 +141,12 @@ int op_repeat(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    const uint32_t n_threads = octx->n_threads;
+    const uint32_t n_hvx = octx->n_hvx;
 
     struct htp_repeat_context rctx = {
         .octx             = octx,
         .kparams          = kparams,
-        .nrows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div),
+        .nrows_per_hvx    = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div),
         .total_dst_rows   = nrows,
         .row_start        = row_start,
         .type_size        = type_size,
@@ -157,7 +157,7 @@ int op_repeat(struct htp_ops_context * octx) {
          dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
          kparams->nr0, kparams->nr1, kparams->nr2, kparams->nr3);
 
-    work_queue_run(octx->ctx->work_queue, repeat_job_per_thread, &rctx, n_threads);
+    work_queue_run(octx->ctx->hvx_queue, repeat_job_per_hvx, &rctx, n_hvx);
 
     return HTP_STATUS_OK;
 }

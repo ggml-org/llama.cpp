@@ -1,0 +1,81 @@
+#pragma once
+
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+// TTS normalization patterns: a small, fully specified matching language for TTS text normalization templates
+//
+// it is NOT a regex engine: the semantics are defined by llama.cpp (see docs/tts-norm-patterns.md), so that this
+// implementation and the python reference (scripts/chat_tts_norm.py) give the same result for every input
+//
+// functions exposed to task templates (e.g. "tts") via common_chat_tts_norm_add_builtins():
+//   tts_norm_scan(text, rules)        -> list of segments {rule, text, groups}
+//   tts_norm_sub(text, pattern, repl) -> string
+//   tts_dict(name, key)               -> value of key in a dictionary of the model, or none
+
+namespace jinja {
+struct context;
+}
+
+struct tts_norm_pattern_node;
+
+class common_tts_norm_pattern {
+public:
+    // throws std::runtime_error on invalid pattern
+    explicit common_tts_norm_pattern(const std::string & src);
+    ~common_tts_norm_pattern();
+    common_tts_norm_pattern(common_tts_norm_pattern &&) noexcept;
+    common_tts_norm_pattern & operator=(common_tts_norm_pattern &&) noexcept;
+
+    // match anchored at codepoint index pos; on success, end is the codepoint index after the match
+    // groups[i] holds [start, end) codepoint indices of capture i+1, or {-1, -1} if the group did not participate
+    bool match_at(const std::vector<uint32_t> & cpts, size_t pos, size_t & end, std::vector<std::pair<int64_t, int64_t>> & groups) const;
+
+    size_t n_groups() const;
+
+private:
+    std::unique_ptr<tts_norm_pattern_node> root;
+    size_t n_caps = 0;
+    bool icase = false;
+};
+
+// segment produced by common_tts_norm_scan(); byte offsets into the input text
+struct common_tts_norm_segment {
+    int    rule  = -1; // index of the matched rule, -1 for unmatched text
+    size_t start = 0;
+    size_t end   = 0;
+    std::vector<std::pair<size_t, size_t>> groups; // byte offsets; {npos, npos} for groups that did not participate
+};
+
+// split text into matched and unmatched segments
+// at each position, rules are tried in order and the first non-empty match wins; otherwise one codepoint is skipped
+std::vector<common_tts_norm_segment> common_tts_norm_scan(const std::string & text, const std::vector<const common_tts_norm_pattern *> & rules);
+
+// replace every non-overlapping match of pattern with repl
+// repl references: %0 (whole match), %1..%9 (groups), %% (literal percent)
+std::string common_tts_norm_sub(const std::string & text, const common_tts_norm_pattern & pattern, const std::string & repl);
+
+// a dictionary of the model, e.g. a pronunciation lexicon
+struct common_tts_dict {
+    std::vector<std::string> keys;   // sorted by their bytes
+    std::vector<std::string> values; // the JSON document of each key
+};
+
+using common_tts_dicts = std::map<std::string, common_tts_dict>;
+
+// binary search of key in a dictionary; on success, value is set to the JSON document
+bool common_tts_dict_find(const common_tts_dict & dict, const std::string & key, std::string & value);
+
+// pronunciation of a word by a letter-to-sound model, as phonemes separated by spaces (e.g. CMUdict notation)
+// empty when there is none; the notation is the one of the model, its "tts" template knows it
+using common_tts_g2p = std::function<std::string(const std::string & word)>;
+
+// add tts_norm_scan(), tts_norm_sub(), tts_dict() and tts_g2p() to the context of a task template
+// they are not jinja global builtins on purpose: chat templates are not affected
+void common_chat_tts_norm_add_builtins(jinja::context & ctx, std::shared_ptr<const common_tts_dicts> dicts = nullptr,
+                                       common_tts_g2p g2p = nullptr);

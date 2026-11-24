@@ -2,7 +2,7 @@
 #include "../mtmd-audio.h"
 
 // Soprano Vocos: normalized Qwen3 hidden states -> STFT coefficients.
-ggml_cgraph * clip_graph_soprano::build() {
+ggml_cgraph * mtmd_graph_soprano::build() {
     const auto & v = model.vocos;
     const int n_inp = hparams.projection_dim;
     const int n_up = upscale * (n_frames - 1) + 1;
@@ -59,7 +59,7 @@ ggml_cgraph * clip_graph_soprano::build() {
     return gf;
 }
 
-void clip_graph_soprano::decode_spectrum(const clip_model & model, const std::vector<float> & spectrum, std::vector<float> & pcm) {
+void mtmd_graph_soprano::decode_spectrum(const mtmd_model & model, const std::vector<float> & spectrum, std::vector<float> & pcm) {
     const int n_frame_vals = model.vocos.output_w->ne[1];
     const int n_fft = n_frame_vals - 2;
     const int hop_length = model.hparams.audio_hop_len;

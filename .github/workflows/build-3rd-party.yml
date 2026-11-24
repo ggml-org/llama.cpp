@@ -31,8 +31,8 @@ env:
   LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
-  ubuntu-24-llguidance:
-    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+  ubuntu-26-llguidance:
+    runs-on: ${{ 'ubuntu-26.04-arm' || 'ubuntu-26.04' }}
 
     steps:
       - name: Clone

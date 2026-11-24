@@ -372,6 +372,9 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
                                                      const std::string &        bos_token_override = "",
                                                      const std::string &        eos_token_override = "");
 
+// override special tokens for testing
+void        common_chat_templates_set_specials(struct common_chat_templates * tmpls, common_peg_tokens specials);
+
 bool        common_chat_templates_was_explicit(const struct common_chat_templates * tmpls);
 std::string common_chat_templates_source(const struct common_chat_templates * tmpls, const std::string & variant = "");
 
@@ -397,6 +400,9 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena & src_parser, const
 struct common_chat_session_params {
     bool echo  = false; // include the assistant prefill in the output when continuing a message
     bool debug = false; // enable debug output for the PEG parser
+
+    // tokenize the generation prompt when there is no vocab for testing
+    std::function<common_chat_input(const std::string &)> tokenize;
 };
 
 class common_chat_session {
@@ -491,12 +497,24 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
 struct common_chat_prompt_preset {
     std::string system;
     std::string user;
-    bool has_language = false; // the preset already names the requested language
+    bool has_language       = false; // the preset already names the requested language
+    bool has_context        = false; // the user text already holds the context
+    bool media_first        = false; // the media goes before the user text
+    bool needs_audio_length = false; // the user text depends on the audio length, call again with it
 };
 
-common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates, const std::string & language = "");
+// audio_length: in seconds, 0 if unknown
+// context: extra info from the user (e.g. names, hotwords), only used by some presets, see has_context
+common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates, const std::string & language = "",
+                                                     double audio_length = 0.0, const std::string & context = "");
 
 // prompt of the model's "tts" chat template for the text to speak, empty if the model has none
 // language and voice are optional, the template defines their defaults
+// g2p (optional): the letter-to-sound model of the template's tts_g2p(), e.g. mtmd_gen_audio_g2p()
 std::string common_chat_get_tts_prompt(const common_chat_templates * chat_templates, const std::string & text,
-                                       const std::string & language = "", const std::string & voice = "");
+                                       const std::string & language = "", const std::string & voice = "",
+                                       const std::function<std::string(const std::string & word)> & g2p = nullptr);
+
+// system prompt line for the speech language and voice (e.g. LFM3-Audio), empty if not used
+std::string common_chat_get_speech_system_prompt(const common_chat_templates * chat_templates,
+                                                 const std::string & language, const std::string & voice);

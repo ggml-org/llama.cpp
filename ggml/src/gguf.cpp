@@ -322,24 +322,6 @@ struct gguf_reader {
         return true;
     }
 
-    bool read(enum ggml_type & dst) const {
-        int32_t tmp = -1;
-        if (!read(tmp)) {
-            return false;
-        }
-        dst = ggml_type(tmp);
-        return true;
-    }
-
-    bool read(enum gguf_type & dst) const {
-        int32_t tmp = -1;
-        if (!read(tmp)) {
-            return false;
-        }
-        dst = gguf_type(tmp);
-        return true;
-    }
-
     bool read(std::string & dst) const {
         uint64_t size = 0;
         if (!read(size)) {
@@ -555,7 +537,7 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
 
         for (int64_t i = 0; ok && i < n_kv; ++i) {
             std::string key;
-            gguf_type   type     = gguf_type(-1);
+            int32_t     type     = -1;
             bool        is_array = false;
             uint64_t    n        = 1;
 
@@ -724,15 +706,20 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
 
         // tensor type
         {
-            ok = ok && gr.read(info.t.type);
+            int32_t type = -1;
+            ok = ok && gr.read(type);
+            if (!ok) {
+                break;
+            }
 
             // check that tensor type is within defined range
-            if (info.t.type < 0 || info.t.type >= GGML_TYPE_COUNT) {
+            if (type < 0 || type >= GGML_TYPE_COUNT) {
                 GGML_LOG_ERROR("%s: tensor '%s' has invalid ggml type %d. should be in [0, %d)\n",
-                    __func__, info.t.name, info.t.type, GGML_TYPE_COUNT);
+                    __func__, info.t.name, type, GGML_TYPE_COUNT);
                 ok = false;
                 break;
             }
+            info.t.type = ggml_type(type);
             const size_t  type_size = ggml_type_size(info.t.type);
             const int64_t blck_size = ggml_blck_size(info.t.type);
 
@@ -1463,6 +1450,7 @@ struct gguf_writer_base {
     // we bet on devirtualization
     virtual void write(int8_t val) = 0;
     virtual void write(const std::vector<int8_t> & val) = 0;
+    virtual void write(const void * data, size_t size) = 0;
     virtual void write_tensor_data(const struct gguf_tensor_info & info, size_t offset_data, size_t alignment) = 0;
 
     template <typename T>
@@ -1579,21 +1567,31 @@ struct gguf_writer_buf final : public gguf_writer_base {
         written_bytes += val.size();
     }
 
+    void write(const void * data, const size_t size) override {
+        buf.insert(buf.end(), (const int8_t *) data, (const int8_t *) data + size);
+        written_bytes += size;
+    }
+
     void write_tensor_data(const struct gguf_tensor_info & info, const size_t offset_data, const size_t alignment) override {
         GGML_ASSERT(buf.size() - offset_data == info.offset);
 
         GGML_ASSERT(ggml_is_contiguous(&info.t));
-        const size_t offset = buf.size();
         const size_t nbytes = ggml_nbytes(&info.t);
 
-        buf.resize(offset + nbytes);
-        if (info.t.buffer) {
-            ggml_backend_tensor_get(&info.t, buf.data() + offset, 0, nbytes);
+        if (info.t.buffer && ggml_backend_buffer_is_host(info.t.buffer)) {
+            GGML_ASSERT(info.t.data != NULL && "tensor not allocated");
+            write(info.t.data, nbytes);
         } else {
-            GGML_ASSERT(info.t.data);
-            memcpy(buf.data() + offset, info.t.data, nbytes);
+            const size_t offset = buf.size();
+            buf.resize(offset + nbytes);
+            if (info.t.buffer) {
+                ggml_backend_tensor_get(&info.t, buf.data() + offset, 0, nbytes);
+            } else {
+                GGML_ASSERT(info.t.data);
+                memcpy(buf.data() + offset, info.t.data, nbytes);
+            }
+            written_bytes += nbytes;
         }
-        written_bytes += nbytes;
 
         pad(alignment);
     }
@@ -1624,20 +1622,33 @@ struct gguf_writer_file final : public gguf_writer_base {
         }
     }
 
+    void write(const void * data, const size_t size) override {
+        const auto ret = fwrite(data, 1, size, file);
+        written_bytes += size;
+        if (ret != size) {
+            throw std::runtime_error("unexpected fwrite number of bytes written, '" + std::to_string(ret) + "' instead of '" + std::to_string(size) + "'");
+        }
+    }
+
     void write_tensor_data(const struct gguf_tensor_info & info, const size_t offset_data, const size_t alignment) override {
         GGML_ASSERT(written_bytes - offset_data == info.offset);
 
         GGML_ASSERT(ggml_is_contiguous(&info.t));
         const size_t nbytes = ggml_nbytes(&info.t);
 
-        std::vector<int8_t> buf(nbytes);
-        if (info.t.buffer) {
-            ggml_backend_tensor_get(&info.t, buf.data(), 0, nbytes);
+        if (info.t.buffer && ggml_backend_buffer_is_host(info.t.buffer)) {
+            GGML_ASSERT(info.t.data != NULL && "tensor not allocated");
+            write(info.t.data, nbytes);
         } else {
-            GGML_ASSERT(info.t.data);
-            memcpy(buf.data(), info.t.data, nbytes);
+            std::vector<int8_t> buf(nbytes);
+            if (info.t.buffer) {
+                ggml_backend_tensor_get(&info.t, buf.data(), 0, nbytes);
+            } else {
+                GGML_ASSERT(info.t.data);
+                memcpy(buf.data(), info.t.data, nbytes);
+            }
+            write(buf);
         }
-        write(buf);
 
         pad(alignment);
     }

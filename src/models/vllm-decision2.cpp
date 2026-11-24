@@ -39,7 +39,7 @@ void llama_model_vllm_decision2::load_arch_tensors(llama_model_loader & ml) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_vllm_decision2::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // output rows read by the head: the last token of each option span and the last token of the question span
@@ -99,13 +99,19 @@ static decision2_rows decision2_get_rows(const llama_ubatch & ubatch) {
     return res;
 }
 
+// no decision order (e.g. reserve): use the max number of options
+static size_t decision2_n_options(const llama_ubatch & ubatch, uint32_t n_outputs) {
+    return ubatch.decision_order ? decision2_get_rows(ubatch).options.size() : std::max<uint32_t>(n_outputs, 1);
+}
+
 class llama_model_vllm_decision2::input_decision : public llm_graph_input_i {
 public:
-    input_decision(const llama_ubatch & ubatch) : n_options(decision2_get_rows(ubatch).options.size()) {}
+    input_decision(const llama_ubatch & ubatch, uint32_t n_outputs) : n_options(decision2_n_options(ubatch, n_outputs)) {}
 
     void set_input(const llama_ubatch * ubatch) override {
-        const auto rows = decision2_get_rows(*ubatch);
-        GGML_ASSERT(rows.options.size() == n_options);
+        auto rows = decision2_get_rows(*ubatch);
+        GGML_ASSERT(rows.options.size() <= n_options);
+        rows.options.resize(n_options, 0);
 
         // the scores are NaN if the batch has a decision order that cannot be used
         const float status_data = rows.valid || ubatch->decision_order == nullptr ? 0.0f : NAN;
@@ -117,7 +123,7 @@ public:
 
     bool can_reuse(const llm_graph_params & params) override {
         // the values are computed again in set_input(), only the shapes must match
-        return decision2_get_rows(params.ubatch).options.size() == n_options;
+        return decision2_n_options(params.ubatch, params.n_outputs) == n_options;
     }
 
     ggml_tensor * options = nullptr; // I32 [n_options]
@@ -127,13 +133,13 @@ public:
     const size_t n_options;
 };
 
-llama_model_vllm_decision2::graph::graph(const llama_model & model_base, const llm_graph_params & params) :
-    llama_model_qwen3::graph(params, no_build()), model(static_cast<const llama_model_vllm_decision2 &>(model_base)) {
-    auto inp_decision_ptr = std::make_unique<input_decision>(ubatch);
+llama_model_vllm_decision2::graph::graph(const llm_graph_params & params) :
+    llama_model_qwen3::graph(params, no_build()), model(static_cast<const llama_model_vllm_decision2 &>(*params.model)) {
+    auto inp_decision_ptr = std::make_unique<input_decision>(ubatch, n_outputs);
     auto * inp_decision   = inp_decision_ptr.get();
     res->add_input(std::move(inp_decision_ptr));
 
-    ggml_tensor * cur = build_backbone(model);
+    ggml_tensor * cur = build_backbone();
 
     // the head is always evaluated, so that the graph has the same nodes for every batch
     cur = build_head(cur, inp_decision);

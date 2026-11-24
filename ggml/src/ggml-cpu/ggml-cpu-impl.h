@@ -345,7 +345,7 @@ static inline int32x4_t ggml_nvfp4_dot8(const int8x8_t q4_lo, const int8x8_t q8_
 #include <immintrin.h>
 #endif
 
-#ifdef __riscv_v_intrinsic
+#if defined(__riscv_v)
 #include <riscv_vector.h>
 #endif
 

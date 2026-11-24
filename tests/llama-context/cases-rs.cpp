@@ -357,7 +357,7 @@ struct case_rollback_bound : ctx_test {
         const llm_arch arch = llama_arch_from_string(arch_name);
 
         // the DSV4 cache rebuilds snapshot d from the state before the ubatch, so d <= n is exact;
-        // the recurrent memory gets snapshots 0..n-1 from ggml_gated_delta_net, only for n <= n_rs_seq + 1
+        // the recurrent memory gets snapshots 0..n-1 from ggml_ssm_scan, only for n <= n_rs_seq + 1
         const bool from_ubatch_start = arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41;
 
         const auto make_ctx = [&]() {

@@ -52,6 +52,7 @@ struct llama_ubatch {
     llama_token  *  token;      // [n_tokens]               | i   | id, token
     float        *  embd;       // [n_embd, n_tokens]       | i   | embd
     float        *  embd_state; // [n_embd_state, n_tokens] | i   | hidden state carried over from a previous stage (e.g. MTP)
+    int32_t      *  embd_row;   // [n_tokens]               | i   | embd is this row of ctx_other's layer input device buffer
     llama_pos    *  pos;        // [n_tokens*n_pos]         | i   | pos
     int32_t      *  n_seq_id;   // [n_tokens]         | i   | -
     llama_seq_id ** seq_id;     // [n_tokens]         | s   | s0, s1, seq_id
@@ -60,11 +61,14 @@ struct llama_ubatch {
     int8_t       *  output;     // [n_tokens]         | i   | -
     int8_t       *  type;       // [n_tokens]         | i   | -     (mixed ubatch only, 0 - token, 1 - embd)
     int32_t      *  decision_order; // [n_tokens], NULL if no entry has one, see llama_batch_ext_set_decision_order()
+    int32_t      *  decision_group; // [n_tokens], NULL if no entry has one, see llama_batch_ext_set_decision_group()
 
     struct data_t {
         std::vector<llama_token>    token;
         std::vector<float>          embd;
         std::vector<float>          embd_state;
+        std::vector<int32_t>        embd_row;
+        std::vector<int32_t>        embd_state_row; // the state is this row of ctx_state_src's h_nextn device buffer, empty if none
         std::vector<llama_pos>      pos;
         std::vector<int32_t>        n_seq_id;
         std::vector<llama_seq_id *> seq_id;      // these point into the seq_id_data below
@@ -74,6 +78,7 @@ struct llama_ubatch {
         std::vector<int8_t>         type;
         std::vector<int32_t>        batch_idxs;  // original batch index for each token
         std::vector<int32_t>        decision_order;
+        std::vector<int32_t>        decision_group;
 
         std::vector<llama_seq_id> seq_id_data;
     };
@@ -114,8 +119,11 @@ struct llama_batch_ext {
         size_t       embd_off = 0; // index offset in the embd array
         bool         has_state = false; // whether state_off is set
         size_t       state_off = 0; // index offset in the state array
+        int32_t      embd_row = -1; // row of ctx_other's layer input device buffer used as embd, -1 if none
+        int32_t      state_row = -1; // row of ctx_state_src's h_nextn device buffer used as state, -1 if none
         bool         output = false; // TODO: have dedicated output flags
         int32_t      decision_order = 0; // see llama_batch_ext_set_decision_order()
+        int32_t      decision_group = 0; // see llama_batch_ext_set_decision_group()
         std::unordered_set<llama_seq_id> seq_ids;
         std::array<llama_pos, GGML_MROPE_SECTIONS> pos = {0, 0, 0, 0};
     };
@@ -145,9 +153,12 @@ struct llama_batch_ext {
     bool set_token_id(int32_t idx, llama_token id);
     bool set_token_embd(int32_t idx, llama_embd embd_in);
     bool set_token_state(int32_t idx, llama_embd state_in);
+    bool set_token_embd_row(int32_t idx, int32_t row);
+    bool set_token_state_row(int32_t idx, int32_t row);
     bool set_token_pos(int32_t idx, const llama_pos * pos_in);
     bool set_output(int32_t idx, bool output_last);
     bool set_decision_order(int32_t idx, int32_t order);
+    bool set_decision_group(int32_t idx, int32_t group);
 };
 
 // a helper for sanitizing, fulfilling and splitting a batch
@@ -223,6 +234,8 @@ private:
     std::vector<float>          embd_vec;     // owned embeddings built from llama_batch_ext
     std::vector<int8_t>         is_embd_vec;  // mixed batch only (= 1 if embd, 0 if text token)
     std::vector<float>          state_vec;    // owned state embeddings built from llama_batch_ext, llama_batch has no slot for them
+    std::vector<int32_t>        embd_row_vec; // owned embd rows built from llama_batch_ext, llama_batch has no slot for them
+    std::vector<int32_t>        state_row_vec; // owned state rows built from llama_batch_ext, llama_batch has no slot for them
     std::vector<llama_seq_id>   seq_id_data;  // flat storage for seq_id pointers below
 
     std::vector<llama_pos>      pos;
@@ -232,6 +245,7 @@ private:
     std::vector<int32_t>        seq_idx;
     std::vector<int8_t>         output;
     std::vector<int32_t>        decision_order; // empty if no entry has one
+    std::vector<int32_t>        decision_group; // empty if no entry has one
 
     using pos_set_t = std::set<llama_pos>;
     using seq_cpl_t = std::vector<bool>;

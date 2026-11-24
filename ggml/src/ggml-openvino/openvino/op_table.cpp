@@ -33,8 +33,8 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
     using namespace ov::op;
     return {
         {"GGML_OP_ADD",             op::translate_add                              },
-        {"GGML_OP_ADD1",            op::translate_1to1_match_2_inputs<v1::Add>     },
         {"GGML_OP_ADD_ID",          op::translate_add_id                           },
+        {"GGML_OP_ARANGE",          op::translate_arange                           },
         {"GGML_OP_CONCAT",          op::translate_concat                           },
         {"GGML_OP_CONT",            op::translate_cont                             },
         {"GGML_OP_DUP",             op::translate_cont                             },
@@ -57,6 +57,7 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
         {"GGML_OP_SQR",             op::translate_sqr                              },
         {"GGML_OP_SQRT",            op::translate_sqrt                             },
         {"GGML_OP_SOFT_MAX",        op::translate_soft_max                         },
+        {"GGML_OP_ARGMAX",          op::translate_argmax                           },
         {"GGML_OP_ARGSORT",         op::translate_argsort                          },
         {"GGML_OP_SUB",             op::translate_1to1_match_2_inputs<v1::Subtract>},
         {"GGML_OP_TRANSPOSE",       op::translate_transpose                        },
@@ -96,14 +97,16 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
         {"GGML_OP_FLASH_ATTN_EXT",  op::translate_flash_attn_ext                   },
         {"GGML_OP_CLAMP",           op::translate_clamp                            },
         {"GGML_OP_PAD",             op::translate_pad                              },
+        {"GGML_OP_TOP_K",           op::translate_top_k                            },
         {"GGML_OP_SSM_CONV",        op::translate_ssm_conv                         },
+        {"GGML_OP_SSM_SCAN",        op::translate_ssm_scan                         },
         {"GGML_OP_GATED_DELTA_NET", op::translate_gated_delta_net                  },
         {"GGML_OP_REPEAT",          op::translate_repeat                           },
         {"GGML_OP_CUMSUM",          op::translate_cumsum                           },
-        {"GGML_OP_FILL",            op::translate_fill                             },
         {"GGML_OP_DIAG",            op::translate_diag                             },
         {"GGML_OP_TRI",             op::translate_tri                              },
         {"GGML_OP_SET",             op::translate_set                              },
+        {"GGML_OP_POOL_1D",         op::translate_pool_1d                          },
         {"GGML_OP_POOL_2D",         op::translate_pool_2d                          },
         {"GGML_OP_ROLL",            op::translate_roll                             },
         {"GGML_OP_UPSCALE",         op::translate_upscale                          },
@@ -112,8 +115,6 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
         {"GGML_OP_CONV_TRANSPOSE_1D", op::translate_conv_transpose_1d             },
         {"GGML_OP_CONV_TRANSPOSE_2D", op::translate_conv_transpose_2d             },
         {"GGML_OP_CONV_3D",         op::translate_conv_3d                          },
-        // solve_tri has accuracy issues on GPU
-        // {"GGML_OP_SOLVE_TRI",       op::translate_solve_tri                        },
     };
 }
 

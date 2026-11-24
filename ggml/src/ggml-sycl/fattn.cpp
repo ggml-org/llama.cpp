@@ -134,7 +134,7 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     // XMX-accelerated path: oneDNN SDPA (native F16 and dequant+non-F16).
     // ONEDNN requires min 32 query tokens — short-circuit decode to avoid
     // calling _supported() on every decode FA call.
-    if (Q->ne[1] >= 32
+    if (Q->ne[1] >= 32 && !ggml_sycl_flash_attn_ext_onednn_failed(device)
         && ggml_sycl_flash_attn_ext_onednn_supported(dst)) {
         return BEST_FATTN_KERNEL_ONEDNN;
     }
@@ -259,7 +259,7 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
 
     // Fused-XMX path: oneDNN Graph SDPA (flash attention). Strictly
     // additive -- taken only when statically supported, otherwise falls through to VEC/TILE below.
-    if (ggml_sycl_flash_attn_ext_onednn_supported(dst)) {
+    if (!ggml_sycl_flash_attn_ext_onednn_failed(device) && ggml_sycl_flash_attn_ext_onednn_supported(dst)) {
         return BEST_FATTN_KERNEL_ONEDNN;
     }
 
