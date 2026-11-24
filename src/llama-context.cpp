@@ -546,7 +546,7 @@ llama_context::llama_context(
 
     // init the memory module
     if (!hparams.vocab_only) {
-        llama_memory_params params_mem = {
+        params_mem = {
             /*.type_k    =*/ params.type_k,
             /*.type_v    =*/ params.type_v,
             /*.swa_full  =*/ params.swa_full,
@@ -844,7 +844,22 @@ void llama_context::sched_reserve() {
 
     LLAMA_LOG_DEBUG("%s: worst-case: n_tokens = %d, n_seqs = %d, n_outputs = %d\n", __func__, n_tokens, n_seqs, n_outputs);
 
+    const bool fa_was_auto = cparams.auto_fa;
+
     resolve_fused_ops(mctx.get(), n_seqs);
+
+    // the memory was created before auto flash attention was resolved, with V laid out for flash attention;
+    // without it that layout costs a full V transpose per layer and token, so recreate the (still empty) memory
+    if (fa_was_auto && !cparams.flash_attn && memory) {
+        LLAMA_LOG_INFO("%s: flash attention disabled, recreating the memory with transposed V\n", __func__);
+        mctx.reset();
+        memory.reset();
+        memory.reset(model.create_memory(params_mem, cparams));
+        mctx = memory->init_full();
+        if (!mctx) {
+            throw std::runtime_error("failed to initialize memory module");
+        }
+    }
 
     // reserve worst-case graph
     int n_splits_pp        = -1;
