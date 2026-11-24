@@ -1212,8 +1212,8 @@ static __dpct_inline__ float vec_dot_nvfp4_q8_1(const void * __restrict__ vbq,
         const int32_t iqs0 = iqs + 2*i;
         const int32_t iqs1 = iqs0 + 1;
         const int32_t is = iqs0 >> 1;
-        const sycl::int2   v0   = get_int_from_table_16(get_int_b4(bq4->qs, iqs0), kvalues_mxfp4);
-        const sycl::int2   v1   = get_int_from_table_16(get_int_b4(bq4->qs, iqs1), kvalues_mxfp4);
+        const sycl::int2   v0   = get_int_from_mxfp4(get_int_b4(bq4->qs, iqs0));
+        const sycl::int2   v1   = get_int_from_mxfp4(get_int_b4(bq4->qs, iqs1));
         const block_q8_1 * bq8 = bq8_1 + (is >> 1);
         const int32_t i8 = ((is & 1) << 2);
 

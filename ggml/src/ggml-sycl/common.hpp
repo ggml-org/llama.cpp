@@ -97,6 +97,7 @@ enum ggml_sycl_xmx_gather_type {
     GGML_SYCL_XMX_GATHER_Q6_K     = 1 << 12,
     GGML_SYCL_XMX_GATHER_Q2_K     = 1 << 13,
     GGML_SYCL_XMX_GATHER_Q3_K     = 1 << 14,
+    GGML_SYCL_XMX_GATHER_NVFP4    = 1 << 15,
 };
 static constexpr int GGML_SYCL_XMX_GATHER_TYPES_DEFAULT = ~0;
 extern int g_ggml_sycl_xmx_gather_types;
@@ -1193,15 +1194,13 @@ static __dpct_inline__ float ggml_sycl_ue4m3_to_fp32(uint8_t x) {
     if (x == 0 || x == 0x7F) {
         return 0.0f;
     }
-    const int exp = (x >> 3) & 0xF;
-    const int man = x & 0x7;
-    float raw;
+    // built from bits since pow() is slow here; the * 0.5f that halves the doubled e2m1 values of kvalues_mxfp4 is folded in
+    const uint32_t exp = (x >> 3) & 0xF;
+    const uint32_t man = x & 0x7;
     if (exp == 0) {
-        raw = man * (1.0f / 8.0f) * sycl::pow(2.0f, -6.0f);
-    } else {
-        raw = (1.0f + man / 8.0f) * sycl::pow(2.0f, (float) exp - 7.0f);
+        return (float) man * (1.0f / 1024.0f);
     }
-    return raw * 0.5f;
+    return sycl::bit_cast<float>(((exp + 119u) << 23) | (man << 20));
 }
 
 #endif // GGML_SYCL_COMMON_HPP

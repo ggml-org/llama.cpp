@@ -53,6 +53,10 @@ constexpr bool ggml_sycl_fused_dequant_gemm_type_ok(ggml_type src0_type, int64_t
     if (src0_type == GGML_TYPE_IQ4_NL || src0_type == GGML_TYPE_Q8_0) {
         return K % 32 == 0;
     }
+    // nvfp4 stores 64 values per block, walked in two steps of 32
+    if (src0_type == GGML_TYPE_NVFP4) {
+        return K % 64 == 0;
+    }
     const bool superblock =
            src0_type == GGML_TYPE_Q2_K ||
            src0_type == GGML_TYPE_Q3_K ||
@@ -103,6 +107,7 @@ inline bool ggml_sycl_xmx_gather_type_enabled(ggml_type src0_type) {
         case GGML_TYPE_Q4_K:    return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_Q4_K    ) != 0;
         case GGML_TYPE_Q5_K:    return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_Q5_K    ) != 0;
         case GGML_TYPE_Q6_K:    return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_Q6_K    ) != 0;
+        case GGML_TYPE_NVFP4:   return (g_ggml_sycl_xmx_gather_types & GGML_SYCL_XMX_GATHER_NVFP4   ) != 0;
         default:          return false;
     }
 }

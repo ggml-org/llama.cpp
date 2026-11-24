@@ -19,7 +19,8 @@ constexpr bool ggml_sycl_grouped_gemm_esimd_has = std::is_same_v<block_q_t, bloc
                                                   std::is_same_v<block_q_t, block_q3_K> ||
                                                   std::is_same_v<block_q_t, block_q4_K> ||
                                                   std::is_same_v<block_q_t, block_q5_K> ||
-                                                  std::is_same_v<block_q_t, block_q6_K>;
+                                                  std::is_same_v<block_q_t, block_q6_K> ||
+                                                  std::is_same_v<block_q_t, block_nvfp4>;
 
 template <typename block_q_t, typename T, int NW>
 bool ggml_sycl_grouped_gemm_esimd(const char * src0_dd, size_t expert_stride, const ggml_sycl_grouped_gemm_tile * tiles,
