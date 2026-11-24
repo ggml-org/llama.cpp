@@ -4835,12 +4835,18 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
         struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *) (matrix_row_counts + n_as); // [n_as][ne12]
 
         // src1: float32 => param type
-        for (int64_t i12 = 0; i12 < ne12; ++i12) {
-            for (int64_t i11 = ith; i11 < ne11; i11 += nth) {
-                from_float((float *)((char *) src1->data + i12 * nb12 + i11 * nb11),
-                           (void *)               (wdata + i12 * nbw2 + i11 * nbw1),
-                           ne10);
-            }
+        // split all rows of src1 in contiguous ranges, ne11 can be 1 (e.g. gate/up of MoE)
+        const int64_t n_rows = ne11 * ne12;
+        const int64_t r0 = (n_rows *  ith     ) / nth;
+        const int64_t r1 = (n_rows * (ith + 1)) / nth;
+
+        for (int64_t r = r0; r < r1; ++r) {
+            const int64_t i12 = r / ne11;
+            const int64_t i11 = r % ne11;
+
+            from_float((float *)((char *) src1->data + i12 * nb12 + i11 * nb11),
+                       (void *)               (wdata + i12 * nbw2 + i11 * nbw1),
+                       ne10);
         }
 
 #define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id) * ne12 + (i1)]
