@@ -402,5 +402,115 @@ int main()
 
     llama_grammar_free_impl(grammar);
 
+    // Test lazy grammar trigger replay rollback on false triggers (e.g. tool markup in code/prose)
+    {
+        const char * grammar_str =
+            "root ::= \"<function=python_repl>\\n<parameter=code>\\n\" [a-z]+ \"\\n</parameter>\\n</function>\"";
+        const char * trigger_pattern = "<function=python_repl>";
+
+        llama_grammar * lazy_g = llama_grammar_init_impl(
+            nullptr, grammar_str, "root", true, &trigger_pattern, 1, nullptr, 0);
+        assert(lazy_g != nullptr);
+        assert(lazy_g->awaiting_trigger);
+
+        const size_t initial_stacks = lazy_g->stacks.size();
+
+        // 1. False trigger inside code example: token ">\\" completes pattern match with invalid suffix
+        llama_grammar_accept_piece_impl(*lazy_g, 1, "assert xml == '''");
+        assert(lazy_g->awaiting_trigger);
+        llama_grammar_accept_piece_impl(*lazy_g, 2, "<function=python_repl");
+        assert(lazy_g->awaiting_trigger);
+        llama_grammar_accept_piece_impl(*lazy_g, 3, ">\\");
+        assert(lazy_g->awaiting_trigger);
+        assert(lazy_g->stacks.size() == initial_stacks);
+        assert(lazy_g->partial_utf8.n_remain == 0);
+
+        // 2. Subsequent valid trigger should still activate the grammar cleanly
+        llama_grammar_accept_piece_impl(*lazy_g, 4, "print(1)'''\n");
+        assert(lazy_g->awaiting_trigger);
+        llama_grammar_accept_piece_impl(*lazy_g, 5, "<function=python_repl");
+        assert(lazy_g->awaiting_trigger);
+        llama_grammar_accept_piece_impl(*lazy_g, 6, ">\n<parameter=code>\n");
+        assert(!lazy_g->awaiting_trigger);
+        assert(lazy_g->trigger_buffer.empty());
+        assert(lazy_g->trigger_buffer_positions.empty());
+
+        llama_grammar_accept_piece_impl(*lazy_g, 7, "abc\n</parameter>\n</function>");
+        bool completed = false;
+        for (const auto & s : lazy_g->stacks) {
+            if (s.empty()) {
+                completed = true;
+                break;
+            }
+        }
+        assert(completed);
+        llama_grammar_free_impl(lazy_g);
+    }
+
+    // Test false trigger followed by valid trigger within the same buffered sequence & UTF-8 safety
+    {
+        const char * grammar_str = "root ::= \"<function=ok>\\n\" [a-z]+";
+        const char * trigger_pattern = "<function=";
+
+        llama_grammar * lazy_g = llama_grammar_init_impl(
+            nullptr, grammar_str, "root", true, &trigger_pattern, 1, nullptr, 0);
+        assert(lazy_g != nullptr);
+
+        // Multi-byte UTF-8 character in false trigger prefix must not be split
+        llama_grammar_accept_piece_impl(*lazy_g, 1, "<function=中");
+        assert(lazy_g->awaiting_trigger);
+
+        // False trigger immediately followed by valid trigger in the same token
+        llama_grammar_accept_piece_impl(*lazy_g, 2, "<function=bad><function=ok>\n");
+        assert(!lazy_g->awaiting_trigger);
+        assert(lazy_g->trigger_buffer.empty());
+
+        llama_grammar_accept_piece_impl(*lazy_g, 3, "xyz");
+        bool completed = false;
+        for (const auto & s : lazy_g->stacks) {
+            if (s.empty()) {
+                completed = true;
+                break;
+            }
+        }
+        assert(completed);
+        llama_grammar_free_impl(lazy_g);
+    }
+
+    // Test lazy trigger_tokens rollback when trigger token does not match grammar root
+    {
+        const char * grammar_str = "root ::= \"<tool>\" [a-z]+ \"</tool>\"";
+        const llama_token trig_tok = 42;
+
+        llama_grammar * lazy_g = llama_grammar_init_impl(
+            nullptr, grammar_str, "root", true, nullptr, 0, &trig_tok, 1);
+        assert(lazy_g != nullptr);
+        assert(lazy_g->awaiting_trigger);
+
+        llama_grammar_accept_piece_impl(*lazy_g, 1, "hello ");
+        assert(lazy_g->awaiting_trigger);
+
+        // Rejected trigger token stays awaiting_trigger without throwing
+        llama_grammar_accept_piece_impl(*lazy_g, trig_tok, "<bad>");
+        assert(lazy_g->awaiting_trigger);
+
+        // Accepted trigger token activates grammar and clears buffers
+        llama_grammar_accept_piece_impl(*lazy_g, trig_tok, "<tool>");
+        assert(!lazy_g->awaiting_trigger);
+        assert(lazy_g->trigger_buffer.empty());
+        assert(lazy_g->trigger_buffer_positions.empty());
+
+        llama_grammar_accept_piece_impl(*lazy_g, 2, "hi</tool>");
+        bool completed = false;
+        for (const auto & s : lazy_g->stacks) {
+            if (s.empty()) {
+                completed = true;
+                break;
+            }
+        }
+        assert(completed);
+        llama_grammar_free_impl(lazy_g);
+    }
+
     return 0;
 }

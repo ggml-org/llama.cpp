@@ -1718,88 +1718,19 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
     }
 }
 
-void llama_grammar_accept_impl(struct llama_grammar & grammar, llama_token token) {
-    GGML_ASSERT(grammar.vocab != nullptr);
-
-    const auto & piece = grammar.vocab->token_to_piece(token);
-
-    if (grammar.awaiting_trigger) {
-        if (std::find(grammar.trigger_tokens.begin(), grammar.trigger_tokens.end(), token) != grammar.trigger_tokens.end()) {
-            grammar.awaiting_trigger = false;
-            grammar.trigger_buffer.clear();
-            llama_grammar_accept_token(grammar, token, piece);
-            LLAMA_LOG_DEBUG("Grammar triggered on token %u (`%s`)", token, piece.c_str());
-            return;
-        } else {
-            auto position = std::make_pair(grammar.trigger_buffer.size(), grammar.trigger_buffer.size() + piece.size());
-            grammar.trigger_buffer_positions.push_back(std::make_pair(token, position));
-            grammar.trigger_buffer += piece;
-
-            for (const auto & trigger_pattern : grammar.trigger_patterns) {
-                auto start = trigger_pattern.find(grammar.trigger_buffer);
-                if (start != std::string::npos) {
-                    grammar.awaiting_trigger = false;
-
-                    // replay tokens that overlap with [start, end)
-                    for (const auto & [tok, tok_pos] : grammar.trigger_buffer_positions) {
-                        auto [tok_start, tok_end] = tok_pos;
-                        if (tok_end <= start) {
-                            continue;
-                        }
-
-                        size_t piece_start = (tok_start < start) ? start : tok_start; // allow for partial token pieces
-                        size_t piece_len = tok_end - piece_start;
-                        auto tok_piece = grammar.trigger_buffer.substr(piece_start, piece_len);
-                        llama_grammar_accept_token(grammar, tok, tok_piece);
-                    }
-
-                    auto constrained_str = grammar.trigger_buffer.substr(start);
-                    grammar.trigger_buffer.clear();
-                    grammar.trigger_buffer_positions.clear();
-                    LLAMA_LOG_DEBUG("Grammar triggered on regex: '%s'\n", constrained_str.c_str());
-                    return;
-                }
-            }
-            LLAMA_LOG_DEBUG("Grammar still awaiting trigger after token %d (`%s`)\n", token, piece.c_str());
-            return;
-        }
-    }
-
-    if (grammar.vocab->is_eog(token)) {
-        for (const auto & stack : grammar.stacks) {
-            if (stack.empty()) {
-                return;
-            }
-        }
-        GGML_ABORT("fatal error");
-    }
-
-    llama_grammar_accept_token(grammar, token, piece);
-}
-
-void llama_grammar_accept_str(struct llama_grammar & grammar, const std::string & piece) {
-    // Note terminating 0 in decoded string
-    const auto   decoded     = llama_grammar_decode_utf8(piece, grammar.partial_utf8);
-    const auto & code_points = decoded.first;
-
-    for (auto it = code_points.begin(), end = code_points.end() - 1; it != end; ++it) {
-        llama_grammar_accept(&grammar, *it);
-    }
-
-    grammar.partial_utf8 = decoded.second;
-    if (grammar.stacks.empty()) {
-        throw std::runtime_error("Unexpected empty grammar stack after accepting piece: " + piece);
-    }
-}
-
-void llama_grammar_accept_token(struct llama_grammar & grammar, llama_token token, const std::string & piece) {
+static bool llama_grammar_try_accept_token(
+        struct llama_grammar & grammar,
+        llama_token            token,
+        const std::string    & piece,
+        std::string          & err) {
     // Note terminating 0 in decoded string
     const auto   decoded     = llama_grammar_decode_utf8(piece, grammar.partial_utf8);
     const auto & code_points = decoded.first;
 
     // the mask rejects a piece that does not continue a partial character, so accepting one has to fail too
     if (decoded.second.n_remain < 0) {
-        throw std::runtime_error("Invalid UTF-8 continuation in piece: " + piece + " (" + std::to_string(token) + ")");
+        err = "Invalid UTF-8 continuation in piece: " + piece + " (" + std::to_string(token) + ")";
+        return false;
     }
 
     const bool opaque = llama_grammar_is_opaque(grammar, token);
@@ -1847,11 +1778,160 @@ void llama_grammar_accept_token(struct llama_grammar & grammar, llama_token toke
         }
     }
 
+    if (stacks_new.empty()) {
+        err = "Unexpected empty grammar stack after accepting piece: " + piece + " (" + std::to_string(token) + ")";
+        return false;
+    }
+
     grammar.stacks = std::move(stacks_new);
     grammar.partial_utf8 = decoded.second;
+    return true;
+}
 
+static void llama_grammar_discard_trigger_prefix(struct llama_grammar & grammar, size_t start) {
+    size_t discard = std::min(start + 1, grammar.trigger_buffer.size());
+    while (discard < grammar.trigger_buffer.size() &&
+           (static_cast<unsigned char>(grammar.trigger_buffer[discard]) & 0xC0) == 0x80) {
+        ++discard;
+    }
+    grammar.trigger_buffer.erase(0, discard);
+
+    std::vector<llama_grammar::token_pos> remaining;
+    remaining.reserve(grammar.trigger_buffer_positions.size());
+    for (const auto & [tok, tok_pos] : grammar.trigger_buffer_positions) {
+        auto [tok_start, tok_end] = tok_pos;
+        if (tok_end <= discard) {
+            continue;
+        }
+        remaining.push_back({
+            tok,
+            { tok_start < discard ? 0 : tok_start - discard, tok_end - discard }
+        });
+    }
+    grammar.trigger_buffer_positions = std::move(remaining);
+}
+
+void llama_grammar_accept_piece_impl(
+        struct llama_grammar & grammar,
+        llama_token            token,
+        const std::string    & piece,
+        bool                   is_eog) {
+    if (grammar.awaiting_trigger) {
+        if (std::find(grammar.trigger_tokens.begin(), grammar.trigger_tokens.end(), token) != grammar.trigger_tokens.end()) {
+            std::string err;
+            if (llama_grammar_try_accept_token(grammar, token, piece, err)) {
+                grammar.awaiting_trigger = false;
+                grammar.trigger_buffer.clear();
+                grammar.trigger_buffer_positions.clear();
+                LLAMA_LOG_DEBUG("Grammar triggered on token %u (`%s`)", token, piece.c_str());
+            } else {
+                LLAMA_LOG_DEBUG("Grammar trigger token %u (`%s`) rejected: %s; remaining in awaiting_trigger\n",
+                                token, piece.c_str(), err.c_str());
+            }
+            return;
+        } else {
+            auto position = std::make_pair(grammar.trigger_buffer.size(), grammar.trigger_buffer.size() + piece.size());
+            grammar.trigger_buffer_positions.push_back(std::make_pair(token, position));
+            grammar.trigger_buffer += piece;
+
+            while (!grammar.trigger_buffer.empty()) {
+                bool matched_any = false;
+                for (const auto & trigger_pattern : grammar.trigger_patterns) {
+                    auto start = trigger_pattern.find(grammar.trigger_buffer);
+                    if (start == std::string::npos) {
+                        continue;
+                    }
+                    matched_any = true;
+
+                    const auto stacks_backup       = grammar.stacks;
+                    const auto partial_utf8_backup = grammar.partial_utf8;
+
+                    bool ok = true;
+                    std::string err;
+                    // replay tokens that overlap with [start, end)
+                    for (const auto & [tok, tok_pos] : grammar.trigger_buffer_positions) {
+                        auto [tok_start, tok_end] = tok_pos;
+                        if (tok_end <= start) {
+                            continue;
+                        }
+
+                        size_t piece_start = (tok_start < start) ? start : tok_start; // allow for partial token pieces
+                        size_t piece_len = tok_end - piece_start;
+                        auto tok_piece = grammar.trigger_buffer.substr(piece_start, piece_len);
+                        if (!llama_grammar_try_accept_token(grammar, tok, tok_piece, err)) {
+                            ok = false;
+                            break;
+                        }
+                    }
+
+                    if (ok) {
+                        grammar.awaiting_trigger = false;
+                        auto constrained_str = grammar.trigger_buffer.substr(start);
+                        grammar.trigger_buffer.clear();
+                        grammar.trigger_buffer_positions.clear();
+                        LLAMA_LOG_DEBUG("Grammar triggered on regex: '%s'\n", constrained_str.c_str());
+                        return;
+                    }
+
+                    // False trigger: buffered text did not match the grammar root.
+                    // Roll back grammar state and discard the falsified prefix so generation continues as plain text.
+                    grammar.stacks       = stacks_backup;
+                    grammar.partial_utf8 = partial_utf8_backup;
+                    LLAMA_LOG_DEBUG("Grammar trigger pattern mismatch at offset %zu (%s); remaining in awaiting_trigger\n",
+                                    start, err.c_str());
+                    llama_grammar_discard_trigger_prefix(grammar, start);
+                    break;
+                }
+                if (!matched_any) {
+                    break;
+                }
+            }
+            LLAMA_LOG_DEBUG("Grammar still awaiting trigger after token %d (`%s`)\n", token, piece.c_str());
+            return;
+        }
+    }
+
+    if (is_eog) {
+        for (const auto & stack : grammar.stacks) {
+            if (stack.empty()) {
+                return;
+            }
+        }
+        GGML_ABORT("fatal error");
+    }
+
+    llama_grammar_accept_token(grammar, token, piece);
+}
+
+void llama_grammar_accept_impl(struct llama_grammar & grammar, llama_token token) {
+    GGML_ASSERT(grammar.vocab != nullptr);
+
+    llama_grammar_accept_piece_impl(
+        grammar,
+        token,
+        grammar.vocab->token_to_piece(token),
+        grammar.vocab->is_eog(token));
+}
+
+void llama_grammar_accept_str(struct llama_grammar & grammar, const std::string & piece) {
+    // Note terminating 0 in decoded string
+    const auto   decoded     = llama_grammar_decode_utf8(piece, grammar.partial_utf8);
+    const auto & code_points = decoded.first;
+
+    for (auto it = code_points.begin(), end = code_points.end() - 1; it != end; ++it) {
+        llama_grammar_accept(&grammar, *it);
+    }
+
+    grammar.partial_utf8 = decoded.second;
     if (grammar.stacks.empty()) {
-        throw std::runtime_error("Unexpected empty grammar stack after accepting piece: " + piece + " (" + std::to_string(token) + ")");
+        throw std::runtime_error("Unexpected empty grammar stack after accepting piece: " + piece);
+    }
+}
+
+void llama_grammar_accept_token(struct llama_grammar & grammar, llama_token token, const std::string & piece) {
+    std::string err;
+    if (!llama_grammar_try_accept_token(grammar, token, piece, err)) {
+        throw std::runtime_error(err);
     }
 }
 

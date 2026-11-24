@@ -200,6 +200,12 @@ void llama_grammar_accept_impl(
               struct llama_grammar & grammar,
                        llama_token   token);
 
+void llama_grammar_accept_piece_impl(
+              struct llama_grammar & grammar,
+                       llama_token   token,
+                 const std::string & piece,
+                              bool   is_eog = false);
+
 void llama_grammar_accept_str(
               struct llama_grammar & grammar,
                  const std::string & piece);
