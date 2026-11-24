@@ -1,10 +1,12 @@
 import {
-	describeToolActivity,
-	describeToolCall,
 	formatToolCallLine,
 	groupToolCallRuns,
 	humanizeArgKey,
-	simpleToolArgFields,
+	simpleToolArgFields
+} from '@ggml-org/llama-harness';
+import {
+	describeToolActivity,
+	describeToolCall,
 	summarizeToolCalls
 } from '#lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/tool-call-phrasing.ts';
 import { AgenticSectionType, BuiltInTool } from '#lib/enums/index.ts';

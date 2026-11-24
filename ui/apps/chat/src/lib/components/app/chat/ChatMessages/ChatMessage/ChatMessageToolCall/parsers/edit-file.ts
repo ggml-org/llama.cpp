@@ -4,12 +4,8 @@
 // `error` fields. The path is display-only (block title), so a call
 // that has not streamed one still shows its diffs.
 
-import {
-	extractToolArgPath,
-	extractToolArgString,
-	fileNameFromPath,
-	parseToolArgs
-} from './_shared';
+import { extractToolArgPath, parseToolArgs } from './_shared';
+import { extractToolArgString, fileNameFromPath } from '@ggml-org/llama-harness';
 import { TOOL_ARG_PATH_KEYS } from '#lib/constants/index.ts';
 import { BuiltInTool, DiffLineKind } from '#lib/enums/index.ts';
 import type {

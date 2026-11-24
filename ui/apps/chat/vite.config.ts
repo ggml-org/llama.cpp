@@ -17,6 +17,8 @@ import { defineConfig, loadEnv, searchForWorkspaceRoot } from 'vite';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LLAMA_VOICE_SOURCE = resolve(__dirname, '../../lib/voice/src');
+// the harness has no build step in the repo: the app compiles it from source
+const LLAMA_HARNESS_ENTRY = resolve(__dirname, '../../lib/harness/src/index.ts');
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const browserBaseConfig: any = {
 	enabled: true,
@@ -85,6 +87,7 @@ export default defineConfig(({ mode }) => {
 					replacement: resolve(LLAMA_VOICE_SOURCE, 'svelte/index.ts')
 				},
 				{ find: /^@ggml-org\/llama-voice$/, replacement: resolve(LLAMA_VOICE_SOURCE, 'index.ts') },
+				{ find: /^@ggml-org\/llama-harness$/, replacement: LLAMA_HARNESS_ENTRY },
 				{ find: 'katex-fonts', replacement: resolve('node_modules/katex/dist/fonts') }
 			]
 		},
@@ -94,7 +97,8 @@ export default defineConfig(({ mode }) => {
 				allow: [
 					searchForWorkspaceRoot(process.cwd()),
 					resolve(__dirname, 'tests'),
-					LLAMA_VOICE_SOURCE
+					LLAMA_VOICE_SOURCE,
+					resolve(__dirname, '../../lib/harness')
 				]
 			},
 			headers: {

@@ -295,7 +295,6 @@ export { computeLineDiff, prefixFor, renderUnifiedDiff, type DiffLine } from './
 
 // Partial-incremental JSON parser for streaming tool arguments
 export { memoizeBounded } from './memoize-bounded';
-export { parsePartialJsonArgs } from './parse-partial-json-args';
 
 // `exec_shell_command` result parsing
 export { parseExecShellCommandError } from './parse-exec-shell-error';

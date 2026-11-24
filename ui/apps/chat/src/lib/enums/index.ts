@@ -10,6 +10,8 @@ export {
 	AgenticSectionType,
 	ContinueIntentKind,
 	DiffLineKind,
+	HarnessEventType,
+	InferenceEventType,
 	ToolResultKind,
 	ToolCallType
 } from './agentic.enums';
@@ -116,7 +118,6 @@ export {
 	GlobSearchType,
 	SearchChatsMessageSelection,
 	SearchChatsOrder,
-	ToolCallSummaryKind,
 	ToolSource,
 	ToolPermissionDecision,
 	ToolResponseField

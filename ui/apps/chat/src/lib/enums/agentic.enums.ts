@@ -43,3 +43,35 @@ export enum DiffLineKind {
 	CONTEXT = 'context',
 	REMOVE = 'remove'
 }
+
+/**
+ * Events of a harness run. The values mirror `HarnessEvent` of `@ggml-org/llama-harness`.
+ */
+export enum HarnessEventType {
+	COMPLETION_ID = 'completion_id',
+	DONE = 'done',
+	ERROR = 'error',
+	MESSAGE = 'message',
+	MODEL = 'model',
+	REASONING = 'reasoning',
+	TEXT = 'text',
+	TIMINGS = 'timings',
+	TOOL_CALL = 'tool_call',
+	TOOL_CALL_DELTA = 'tool_call_delta',
+	TOOL_RESULT = 'tool_result',
+	TOOL_UPDATE = 'tool_update',
+	TURN_END = 'turn_end',
+	TURN_START = 'turn_start'
+}
+
+/**
+ * Events of one streamed completion. The values mirror `InferenceEvent` of `@ggml-org/llama-harness`.
+ */
+export enum InferenceEventType {
+	COMPLETION_ID = 'completion_id',
+	MODEL = 'model',
+	REASONING = 'reasoning',
+	TEXT = 'text',
+	TIMINGS = 'timings',
+	TOOL_CALLS = 'tool_calls'
+}

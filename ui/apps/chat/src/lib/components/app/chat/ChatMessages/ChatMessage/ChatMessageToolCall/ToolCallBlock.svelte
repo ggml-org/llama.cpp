@@ -8,17 +8,18 @@
 	// Components supply only their `meta`, a title snippet, and a body
 	// snippet - everything around them is this single source of truth.
 
-	import {
-		describeToolCall,
-		formatToolCallLine,
-		isToolCallRunning
-	} from './parsers/tool-call-phrasing';
+	import { describeToolCall } from './parsers/tool-call-phrasing';
 	import { useToolCallElapsed } from './tool-call-elapsed';
 	import ToolCallElapsed from './ToolCallElapsed.svelte';
+	import {
+		formatToolCallLine,
+		isToolCallRunning,
+		type ToolCallDescription
+	} from '@ggml-org/llama-harness';
 	import { CollapsibleContentBlock } from '#lib/components/app/index.ts';
 	import { AgenticSectionType } from '#lib/enums/index.ts';
 	import { settingsStore } from '#lib/stores/index.ts';
-	import type { AgenticSection, ToolCallDescription } from '#lib/types/index.ts';
+	import type { AgenticSection } from '#lib/types/index.ts';
 	import { imageExtras, toolCallShownArg } from '#lib/utils/index.ts';
 	import type { Snippet } from 'svelte';
 	import { fade } from 'svelte/transition';
