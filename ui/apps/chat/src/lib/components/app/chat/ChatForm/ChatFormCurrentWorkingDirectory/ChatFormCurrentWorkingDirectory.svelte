@@ -6,7 +6,8 @@
 	import * as Popover from '@ggml-org/llama-ui/ui/popover';
 	import { FolderOpen, X } from '@lucide/svelte';
 	import {
-		CHAT_FORM_CHROME_FADE_MS,
+		CHAT_FORM_CHIP_SPLIT,
+		CHAT_FORM_CHIP_TRANSITION_MS,
 		DEFAULT_MOBILE_BREAKPOINT,
 		HOME_TILDE,
 		SEARCH,
@@ -19,7 +20,7 @@
 	import { ToolsService } from '#lib/services/tools.service.ts';
 	import { conversationsStore, deviceStore, toolsStore } from '#lib/stores/index.ts';
 	import { abbreviateHome, runGlobSearchWithChildren } from '#lib/utils/index.ts';
-	import { fade, slide } from 'svelte/transition';
+	import { slide } from 'svelte/transition';
 
 	// Microtask delay so the popover's focus scope tears down first.
 	const FOCUS_DELAY_MS = 0;
@@ -311,15 +312,20 @@
 		if (directory) chipDirectory = directory;
 	});
 
-	// height eases (the form below it follows) while the chip fades
+	// two steps: the room opens first (the form below it follows), then the chip fades in;
+	// leaving runs the same curve backwards, so it fades out before the room closes
 	function chipTransition(node: Element) {
-		const height = slide(node, { duration: CHAT_FORM_CHROME_FADE_MS * 2 });
-		const opacity = fade(node, { duration: CHAT_FORM_CHROME_FADE_MS });
+		const height = slide(node);
 
 		return {
-			css: (t: number, u: number) => `${height.css?.(t, u) ?? ''}${opacity.css?.(t, u) ?? ''}`,
+			css: (t: number) => {
+				const openness = Math.min(t / CHAT_FORM_CHIP_SPLIT, 1);
+				const visibility = Math.max((t - CHAT_FORM_CHIP_SPLIT) / (1 - CHAT_FORM_CHIP_SPLIT), 0);
+
+				return `${height.css?.(openness, 1 - openness) ?? ''}opacity: ${visibility};`;
+			},
 			delay: 0,
-			duration: CHAT_FORM_CHROME_FADE_MS * 2
+			duration: CHAT_FORM_CHIP_TRANSITION_MS
 		};
 	}
 
