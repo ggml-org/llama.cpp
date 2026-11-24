@@ -3825,9 +3825,11 @@ static struct llama_sampler * llama_sampler_adaptive_p_clone(const struct llama_
     auto * result     = llama_sampler_init_adaptive_p(ctx->target, ctx->decay, ctx->seed);
     auto * result_ctx = (llama_sampler_adaptive_p *) result->ctx;
 
-    // copy everything (target, decay, seed, and RNG are already set)
+    result_ctx->seed_cur          = ctx->seed_cur;
+    result_ctx->rng               = ctx->rng;
     result_ctx->weighted_sum      = ctx->weighted_sum;
     result_ctx->total_weight      = ctx->total_weight;
+    result_ctx->original_probs    = ctx->original_probs;
     result_ctx->pending_token_id  = ctx->pending_token_id;
     result_ctx->pending_token_idx = ctx->pending_token_idx;
 
