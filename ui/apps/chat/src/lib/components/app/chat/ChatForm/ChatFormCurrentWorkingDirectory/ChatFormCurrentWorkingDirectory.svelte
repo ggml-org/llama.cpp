@@ -6,6 +6,7 @@
 	import * as Popover from '@ggml-org/llama-ui/ui/popover';
 	import { FolderOpen, X } from '@lucide/svelte';
 	import {
+		CHAT_FORM_CHROME_FADE_MS,
 		DEFAULT_MOBILE_BREAKPOINT,
 		HOME_TILDE,
 		SEARCH,
@@ -18,6 +19,7 @@
 	import { ToolsService } from '#lib/services/tools.service.ts';
 	import { conversationsStore, deviceStore, toolsStore } from '#lib/stores/index.ts';
 	import { abbreviateHome, runGlobSearchWithChildren } from '#lib/utils/index.ts';
+	import { fade, slide } from 'svelte/transition';
 
 	// Microtask delay so the popover's focus scope tears down first.
 	const FOCUS_DELAY_MS = 0;
@@ -302,12 +304,32 @@
 		}
 	}
 
+	// the chip leaves with the directory it showed, instead of emptying while it fades out
+	let chipDirectory = $state<string | null>(null);
+
+	$effect(() => {
+		if (directory) chipDirectory = directory;
+	});
+
+	// height eases (the form below it follows) while the chip fades
+	function chipTransition(node: Element) {
+		const height = slide(node, { duration: CHAT_FORM_CHROME_FADE_MS * 2 });
+		const opacity = fade(node, { duration: CHAT_FORM_CHROME_FADE_MS });
+
+		return {
+			css: (t: number, u: number) => `${height.css?.(t, u) ?? ''}${opacity.css?.(t, u) ?? ''}`,
+			delay: 0,
+			duration: CHAT_FORM_CHROME_FADE_MS * 2
+		};
+	}
+
 	let innerWidth = $state(0);
 	const showTooltip = $derived(innerWidth > DEFAULT_MOBILE_BREAKPOINT);
 </script>
 
 {#if showChip}
 	<button
+		transition:chipTransition
 		class={[
 			'justify-self-start flex min-w-0 w-auto items-center gap-1 mt-1.5 py-1 px-2 backdrop-blur-2xl rounded-md',
 			className
@@ -317,7 +339,7 @@
 		type="button"
 	>
 		<ChatFormCurrentWorkingDirectoryChip
-			{directory}
+			directory={directory ?? chipDirectory}
 			{disabled}
 			{homeBase}
 			onClear={handleDismiss}
