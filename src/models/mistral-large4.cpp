@@ -148,11 +148,20 @@ void llama_model_mistral_large4::load_arch_tensors(llama_model_loader &) {
     }
 }
 
-std::unique_ptr<llm_graph_context> llama_model_mistral_large4::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+llama_rope_params llama_model_mistral_large4::get_rope_params_indexer(const llama_cparams & cparams, int il) const {
+    auto res = llama_model::get_rope_params_indexer(cparams, il);
+
+    res.type    = hparams.rope_type;
+    res.factors = get_rope_factors(cparams, il);
+
+    return res;
 }
 
-llama_model_mistral_large4::graph::graph(const llama_model & model, const llm_graph_params & params) :
+std::unique_ptr<llm_graph_context> llama_model_mistral_large4::build_arch_graph(const llm_graph_params & params) const {
+    return std::make_unique<graph>(params);
+}
+
+llama_model_mistral_large4::graph::graph(const llm_graph_params & params) :
     llm_graph_context(params) {
     GGML_ASSERT(hparams.is_mla());
 
@@ -216,8 +225,6 @@ llama_model_mistral_large4::graph::graph(const llama_model & model, const llm_gr
         const int64_t n_rot_l             = use_rope ? n_rot : 0;
         const int64_t n_embd_head_qk_nope = n_embd_head_k - n_rot_l;
 
-        ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
-
         ggml_tensor * inpSA = inpL;
 
         cur = build_norm(inpL, layer.attn_norm, NULL, LLM_NORM_RMS, il);
@@ -250,14 +257,10 @@ llama_model_mistral_large4::graph::graph(const llama_model & model, const llm_gr
                 indexer_k = ggml_reshape_3d(ctx0, indexer_k, n_embd_indexer_head, 1, n_tokens);
 
                 if (use_rope) {
-                    indexer_q = ggml_rope_ext(ctx0, indexer_q, inp_pos, rope_factors, n_rot,
-                                         rope_type, n_ctx_orig, freq_base, freq_scale,
-                                         ext_factor, attn_factor, beta_fast, beta_slow);
+                    indexer_q = build_rope_indexer(indexer_q, inp_pos, il);
                     cb(indexer_q, "indexer_q", il);
 
-                    indexer_k = ggml_rope_ext(ctx0, indexer_k, inp_pos, rope_factors, n_rot,
-                                         rope_type, n_ctx_orig, freq_base, freq_scale,
-                                         ext_factor, attn_factor, beta_fast, beta_slow);
+                    indexer_k = build_rope_indexer(indexer_k, inp_pos, il);
                     cb(indexer_k, "indexer_k", il);
                 }
 
@@ -287,46 +290,8 @@ llama_model_mistral_large4::graph::graph(const llama_model & model, const llm_gr
                 indexer_weights = ggml_scale(ctx0, indexer_weights, 1.0f / sqrtf(float(n_embd_indexer_head * n_indexer_head)));
                 cb(indexer_weights, "indexer_weights", il);
 
-                ggml_tensor * indexer_score = nullptr;
-                if (cparams.fused_lid) {
-                    indexer_score = ggml_lightning_indexer(ctx0, indexer_q, indexer_k, indexer_weights, inp_attn_dsa->self_attn_mask_lid.raw);
-                    cb(indexer_score, "indexer_score", il);
-                    res->add_fused_node({LLM_FUSED_OP_LIGHTNING_INDEXER, indexer_score, il});
-                } else {
-                    // calculate indexer kq
-                    indexer_q = ggml_permute(ctx0, indexer_q, 0, 2, 1, 3);
-                    cb(indexer_q, "indexer_q", il);
-                    indexer_k = ggml_permute(ctx0, indexer_k, 0, 2, 1, 3);
-                    cb(indexer_k, "indexer_k", il);
-
-                    ggml_tensor * indexer_kq = ggml_mul_mat(ctx0, indexer_k, indexer_q);
-                    cb(indexer_kq, "indexer_kq", il);
-
-                    // ReLU requires contiguous tensors
-                    indexer_kq = ggml_cont(ctx0, ggml_permute(ctx0, indexer_kq, 2, 1, 0, 3));
-                    cb(indexer_kq, "indexer_kq", il);
-
-                    // apply ReLU
-                    indexer_score = ggml_relu(ctx0, indexer_kq);
-                    cb(indexer_score, "indexer_score", il);
-
-                    // multiply scores by indexer weights
-                    indexer_score = ggml_mul(ctx0, indexer_score, indexer_weights);
-                    cb(indexer_score, "indexer_score", il);
-
-                    // sum by q n_indexer_head dimension
-                    indexer_score = ggml_sum_rows(ctx0, indexer_score);
-                    cb(indexer_score, "indexer_score", il);
-
-                    // permute result to match KQ mask
-                    indexer_score = ggml_cont(ctx0, ggml_permute(ctx0, indexer_score, 2, 1, 0, 3));
-                    cb(indexer_score, "indexer_score", il);
-
-                    // mask indexer scores
-                    ggml_tensor * indexer_kq_mask = inp_attn_dsa->self_attn_mask_lid.raw;
-                    indexer_score = ggml_add(ctx0, indexer_score, indexer_kq_mask);
-                    cb(indexer_score, "indexer_score", il);
-                }
+                ggml_tensor * indexer_score = ggml_lightning_indexer(ctx0, indexer_q, indexer_k, indexer_weights, inp_attn_dsa->self_attn_mask_lid.raw);
+                cb(indexer_score, "indexer_score", il);
 
                 // get indices of top k indexer scores
                 uint32_t n_top_k = indexer_score->ne[0] < n_indexer_top_k ? indexer_score->ne[0] : n_indexer_top_k;
@@ -368,8 +333,7 @@ llama_model_mistral_large4::graph::graph(const llama_model & model, const llm_gr
                         ggml_row_size(q->type, n_embd_head_k),
                         ggml_row_size(q->type, n_embd_head_k) * n_head,
                         ggml_row_size(q->type, n_embd_head_qk_nope));
-                q_pe = ggml_rope_ext(ctx0, q_pe, inp_pos, rope_factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                                     ext_factor, attn_factor, beta_fast, beta_slow);
+                q_pe = build_rope(q_pe, inp_pos, il);
                 cb(q_pe, "q_pe", il);
 
                 Qcur = ggml_concat(ctx0, q_nope_absorbed, q_pe, 0);
@@ -406,8 +370,7 @@ llama_model_mistral_large4::graph::graph(const llama_model & model, const llm_gr
                             ggml_row_size(kv_cmpr_pe->type, kv_lora_rank + n_rot),
                             ggml_row_size(kv_cmpr_pe->type, kv_lora_rank + n_rot),
                             ggml_row_size(kv_cmpr_pe->type, kv_lora_rank));
-                    k_pe = ggml_rope_ext(ctx0, k_pe, inp_pos, rope_factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                                         ext_factor, attn_factor, beta_fast, beta_slow);
+                    k_pe = build_rope(k_pe, inp_pos, il);
                     cb(k_pe, "k_pe", il);
 
                     Kcur = ggml_concat(ctx0, kv_cmpr, k_pe, 0);
@@ -457,10 +420,7 @@ llama_model_mistral_large4::graph::graph(const llama_model & model, const llm_gr
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
                 il,
                 nullptr,
-                layer.ffn_gate_up_exps,
-                layer.ffn_up_exps_s,
-                layer.ffn_gate_exps_s,
-                layer.ffn_down_exps_s);
+                layer.ffn_gate_up_exps);
             cb(moe_out, "ffn_moe_out", il);
 
             ggml_tensor * ffn_shexp = build_ffn(cur,

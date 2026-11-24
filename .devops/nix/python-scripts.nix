@@ -22,10 +22,6 @@ let
     gitpython
     tabulate
 
-    # for examples/pydantic-models-to-grammar-examples.py
-    docstring-parser
-    pydantic
-
   ];
 
   llama-python-test-deps = with python3Packages; [

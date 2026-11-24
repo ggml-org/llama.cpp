@@ -1,0 +1,47 @@
+<script lang="ts">
+	import { Badge } from '@ggml-org/llama-ui/ui/badge';
+	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
+	import { ChevronDown, ChevronRight } from '@lucide/svelte';
+
+	interface Tool {
+		name: string;
+		description?: string;
+	}
+
+	interface Props {
+		tools: Tool[];
+	}
+
+	let { tools }: Props = $props();
+
+	let isExpanded = $state(false);
+	let toolsCount = $derived(tools.length);
+</script>
+
+<Collapsible.Root bind:open={isExpanded}>
+	<Collapsible.Trigger
+		class="flex w-full items-center gap-1 text-caption text-muted-foreground hover:text-foreground"
+	>
+		{#if isExpanded}
+			<ChevronDown class="size-icon-sm" />
+		{:else}
+			<ChevronRight class="size-icon-sm" />
+		{/if}
+
+		<span>{toolsCount} tools available · Show details</span>
+	</Collapsible.Trigger>
+
+	<Collapsible.Content>
+		<div class="mt-2 max-h-64 space-y-3 overflow-y-auto">
+			{#each tools as tool (tool.name)}
+				<div>
+					<Badge variant="secondary">{tool.name}</Badge>
+
+					{#if tool.description}
+						<p class="mt-1 text-caption text-muted-foreground">{tool.description}</p>
+					{/if}
+				</div>
+			{/each}
+		</div>
+	</Collapsible.Content>
+</Collapsible.Root>

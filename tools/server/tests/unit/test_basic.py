@@ -98,8 +98,8 @@ def test_server_slots():
 def test_load_split_model():
     global server
     server.offline = False
-    server.model_hf_repo = "ggml-org/models"
-    server.model_hf_file = "tinyllamas/split/stories15M-q8_0-00001-of-00003.gguf"
+    server.model_hf_repo = "ggml-org-dev/stories15M"
+    server.model_hf_file = "split/stories15M-q8_0-00001-of-00003.gguf"
     server.model_alias = "tinyllama-split"
     server.start()
     res = server.make_request("POST", "/completion", data={
@@ -143,3 +143,19 @@ def test_server_model_aliases_and_tags():
     assert set(model["tags"]) == {"chat", "fim", "small"}
     # id is derived from first alias (alphabetical order from std::set)
     assert model["id"] == "code"
+
+
+def test_server_models_sse_single_model():
+    global server
+    server.start()
+    # a client connecting after the load gets the last status replayed
+    with requests.get(server.make_url("/models/sse"), stream=True, timeout=10) as res:
+        assert res.status_code == 200
+        assert res.headers["Content-Type"].startswith("text/event-stream")
+        line = next(x for x in res.iter_lines() if x)
+    event = json.loads(line.decode("utf-8").removeprefix("data: "))
+    model_id = server.make_request("GET", "/models").body["data"][0]["id"]
+    assert event["model"] == model_id
+    assert event["event"] == "status_change"
+    assert event["data"]["status"] == "loaded"
+    assert event["data"]["info"]["id"] == model_id

@@ -256,7 +256,17 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
     // NOTE: if you change conditions here, be sure to update the corresponding supports_op condition!
     if (src3_nb1 == sizeof(float)) {
         // Mamba-2
-        if (d_state == 96) {
+        if (d_state == 64) { // Zamba2
+            constexpr int threads   = 64;
+            constexpr int num_warps = threads/WARP_SIZE;
+
+            const dim3 blocks((n_head * head_dim + (num_warps - 1)) / num_warps, n_seq, 1);
+            const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks, threads, 0, stream);
+            ggml_cuda_kernel_launch(ssm_scan_f32_group<64/WARP_SIZE, 64>, launch_params,
+                    src0, src1, src2, src3, src4, src5, src6, dst,
+                    src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
+                    src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_base, s_slot_bytes, n_head, head_dim, n_group, n_tok, K);
+        } else if (d_state == 96) {
             constexpr int threads   = 96;
             constexpr int num_warps = threads/WARP_SIZE;
 
@@ -287,7 +297,7 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
                     src0_nb2, src0_nb3, src1_nb2, src1_nb3, src2_nb1, src2_nb2, src3_nb1,
                     src4_nb2, src4_nb3, src5_nb2, src5_nb3, s_base, s_slot_bytes, n_head, head_dim, n_group, n_tok, K);
         } else {
-            GGML_ABORT("doesn't support d_state!=(96, 128 or 256).");
+            GGML_ABORT("doesn't support d_state!=(64, 96, 128 or 256).");
         }
     } else {
         // Mamba-1

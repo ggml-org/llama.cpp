@@ -1,4 +1,5 @@
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -23,6 +24,20 @@ bool ggml_sycl_fattn_onednn_binds_kv(const ggml_tensor * K, const ggml_tensor * 
                t->nb[2] % sizeof(sycl::half) == 0 && t->nb[3] % sizeof(sycl::half) == 0;
     };
     return bindable(K) && bindable(V);
+}
+
+#if GGML_SYCL_DNNL
+// per device: set once a oneDNN SDPA execute throws, so dispatch stops picking oneDNN there
+static std::atomic<bool> g_ggml_sycl_fa_onednn_failed[GGML_SYCL_MAX_DEVICES] = {};
+#endif
+
+bool ggml_sycl_flash_attn_ext_onednn_failed(int device) {
+#if GGML_SYCL_DNNL
+    return g_ggml_sycl_fa_onednn_failed[device].load(std::memory_order_relaxed);
+#else
+    GGML_UNUSED(device);
+    return false;
+#endif
 }
 
 bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst, bool use_shape_limit) {
@@ -69,17 +84,6 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst, bool use
             }
         }
     }
-    // This is the improved SPDA gate. Rather than gating Alchemist GPUs from all SPDA features, we instead target only the failing shapes.
-    // If the GPU being assessed isn't in the grouping below, it has full access to all SPDA shapes. Otherwise, if it's an Alchemist GPU, we block only the shapes with head sizes that fail.
-    // It is much easier to compare the device to a small list of failing cases than to define all the passing ones.
-    const gpu_arch arch = ggml_sycl_info().devices[ggml_sycl_get_device()].hw_info.arch;
-    bool support_spda = !(arch == gpu_arch::intel_gpu_dg2_g10 ||
-                         arch == gpu_arch::intel_gpu_dg2_g11 ||
-                         arch == gpu_arch::intel_gpu_dg2_g12);
-
-    if (!support_spda && K->ne[0] == 64) {
-        return false;
-    }
     // Optional KV-length ceiling (GGML_SYCL_FA_ONEDNN_MAX_KV, 0 = unlimited). Escape hatch:
     // very long sequences make the fused SDPA slow enough to risk the xe driver watchdog on
     // some stacks; past the cap we fall back to the native FA kernel instead.
@@ -87,11 +91,14 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst, bool use
         return false;
     }
     // gate for the following cases
-    // 1. if the oneDNN graph Add node has no input --> skip
+    // 1. the mask is optional: without one the SDPA graph has no Add node (e.g. vision encoders)
     // 2. types other than f16 need different logical_tensor declaration
     // 3. the mask must be shape [1, 1, q, seq]
     // 4. sinks: excludes attention sink (Xiao et al., 2024) that can't be modeled by oneDNN graph
-    if (!mask || mask->type != GGML_TYPE_F16 || mask->ne[2] != 1 || mask->ne[3] != 1 || sinks) {
+    if (mask && (mask->type != GGML_TYPE_F16 || mask->ne[2] != 1 || mask->ne[3] != 1)) {
+        return false;
+    }
+    if (sinks) {
         return false;
     }
     float max_bias = 0.0f, logit_softcap = 0.0f;
@@ -157,17 +164,10 @@ static void permute_sdpa_out_sycl(const sycl::half * out, float * dst,
     });
 }
 
-struct sdpa_partition {
-    compiled_partition          cp;
-    std::vector<logical_tensor> ins;
-    logical_tensor              out;
-    size_t id_q = 0, id_k = 0, id_v = 0, id_scale = 0, id_mask = 0;
-    bool   ok = false;
-};
-
-// Build + compile the contiguous-input GQA SDPA graph (MatMul->Divide->Add->SoftMax->MatMul), f32 out.
+// Build + compile the contiguous-input GQA SDPA graph (MatMul->Divide->[Add]->SoftMax->MatMul), f32 out.
+// The Add node is only present with a mask.
 // Mirrors the hardware-verified scratch/onednn_sdpa_probe.cpp build_gqa (partitions=1, sdp_primitive_kernel_t).
-static sdpa_partition build_sdpa(const engine & eng, int H, int Hkv, int q, int seq, int d,
+static sdpa_partition build_sdpa(const engine & eng, int H, int Hkv, int q, int seq, int d, bool has_mask,
                                  const std::array<int64_t, 5> & k_str, const std::array<int64_t, 5> & v_str) try {
     using ltype = logical_tensor::layout_type;
     using dt    = logical_tensor::data_type;
@@ -192,16 +192,22 @@ static sdpa_partition build_sdpa(const engine & eng, int H, int Hkv, int q, int 
     auto sdiv   = op(id++, op::kind::Divide, "scale_div");     // score / (1/kq_scale) == score * kq_scale
     sdiv.add_inputs({score, scale}); sdiv.add_outputs({scaled});
 
-    auto mask   = logical_tensor(id++, t,  msk,  ltype::strided);
-    auto masked = logical_tensor(id++, fi, s_sz, ltype::strided);
-    auto madd   = op(id++, op::kind::Add, "mask_add");
-    madd.add_inputs({scaled, mask}); madd.add_outputs({masked});
+    // without a mask the scaled scores feed the softmax directly
+    logical_tensor    mask;
+    logical_tensor    smax_in = scaled;
+    std::optional<op> madd;
+    if (has_mask) {
+        mask    = logical_tensor(id++, t,  msk,  ltype::strided);
+        smax_in = logical_tensor(id++, fi, s_sz, ltype::strided);
+        madd.emplace(id++, op::kind::Add, "mask_add");
+        madd->add_inputs({scaled, mask}); madd->add_outputs({smax_in});
+    }
 
     auto probs  = logical_tensor(id++, t,  s_sz, ltype::strided);
     auto smax   = op(id++, op::kind::SoftMax, "softmax");
     smax.set_attr<int64_t>(op::attr::axis, -1);
     smax.set_attr<std::string>(op::attr::mode, "inf_as_zero");
-    smax.add_inputs({masked}); smax.add_outputs({probs});
+    smax.add_inputs({smax_in}); smax.add_outputs({probs});
 
     auto value  = logical_tensor(id++, t,  kv_sz, v_st);
     // f16 output is REQUIRED to hit sdp_primitive_kernel_t (the systolic micro-kernel); an f32 output
@@ -212,7 +218,11 @@ static sdpa_partition build_sdpa(const engine & eng, int H, int Hkv, int q, int 
     bmm2.add_inputs({probs, value}); bmm2.add_outputs({output});
 
     dnnl::graph::graph g(eng.get_kind());
-    g.add_op(bmm1); g.add_op(sdiv); g.add_op(madd); g.add_op(smax); g.add_op(bmm2);
+    g.add_op(bmm1); g.add_op(sdiv);
+    if (madd) {
+        g.add_op(*madd);
+    }
+    g.add_op(smax); g.add_op(bmm2);
     g.finalize();
 
     auto parts = g.get_partitions();
@@ -225,7 +235,9 @@ static sdpa_partition build_sdpa(const engine & eng, int H, int Hkv, int q, int 
     E.cp       = parts[0].compile(E.ins, {E.out}, eng);
     E.out      = E.cp.query_logical_tensor(E.out.get_id());
     E.id_q     = query.get_id(); E.id_k = key.get_id(); E.id_v = value.get_id();
-    E.id_scale = scale.get_id(); E.id_mask = mask.get_id();
+    E.id_scale = scale.get_id();
+    E.id_mask  = has_mask ? mask.get_id() : 0;
+    E.has_mask = has_mask;
     E.ok       = true;
     return E;
 }
@@ -372,17 +384,17 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
         outf_ptr = outf_pool->get();
     }
 
-    // compile once per (device, shape, KV strides), reuse across layers/calls. Stride 2 always
-    // repeats stride 1 and stride 4 is always 1, so the key covers every entry that can differ.
-    static std::unordered_map<std::string, sdpa_partition> cache;
+    // compile once per (shape, mask presence, KV strides) in this device's context, reuse across layers/calls.
+    // Stride 2 always repeats stride 1 and stride 4 is always 1, so the key covers every entry that can differ.
+    const bool has_mask = mask != nullptr;
     char keyb[256];
-    snprintf(keyb, sizeof(keyb), "%d:%lld:%lld:%lld:%lld:%lld:%lld:%lld:%lld:%lld:%lld:%lld", ggml_sycl_get_device(),
-             (long long) H, (long long) Hkv, (long long) q, (long long) seq, (long long) d,
+    snprintf(keyb, sizeof(keyb), "%lld:%lld:%lld:%lld:%lld:%d:%lld:%lld:%lld:%lld:%lld:%lld",
+             (long long) H, (long long) Hkv, (long long) q, (long long) seq, (long long) d, (int) has_mask,
              (long long) k_str[0], (long long) k_str[1], (long long) k_str[3],
              (long long) v_str[0], (long long) v_str[1], (long long) v_str[3]);
-    auto it = cache.find(keyb);
-    if (it == cache.end()) {
-        it = cache.emplace(keyb, build_sdpa(eng, (int) H, (int) Hkv, (int) q, (int) seq, (int) d, k_str, v_str)).first;
+    auto it = ctx.sdpa_partitions.find(keyb);
+    if (it == ctx.sdpa_partitions.end()) {
+        it = ctx.sdpa_partitions.emplace(keyb, build_sdpa(eng, (int) H, (int) Hkv, (int) q, (int) seq, (int) d, has_mask, k_str, v_str)).first;
     }
     sdpa_partition & E = it->second;
     if (!E.ok) {
@@ -396,7 +408,7 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
         if (r == E.id_k)     return K_ptr;
         if (r == E.id_v)     return V_ptr;
         if (r == E.id_scale) return scale_dev;
-        if (r == E.id_mask)  return (void *) mask->data;
+        if (E.has_mask && r == E.id_mask) return (void *) mask->data;
         return nullptr;
     };
     std::vector<tensor> ti;
@@ -418,8 +430,10 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
     }
 }
 catch (const std::exception & e) {
-    // any oneDNN/SYCL failure is non-fatal: fall back to the existing kernel (strictly additive).
-    GGML_LOG_WARN("%s: oneDNN SDPA failed (%s); falling back to TILE kernel\n", __func__, e.what());
+    // any oneDNN/SYCL failure is non-fatal: warn once, stop picking oneDNN on this device, run TILE instead
+    if (!g_ggml_sycl_fa_onednn_failed[ctx.device].exchange(true)) {
+        GGML_LOG_WARN("%s: oneDNN SDPA failed (%s); falling back to TILE kernel\n", __func__, e.what());
+    }
     ggml_sycl_flash_attn_ext_tile(ctx, dst);
 }
 

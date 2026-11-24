@@ -157,6 +157,25 @@ private:
     void delete_partials(const std::vector<common_download_partial> & parts);
 };
 
+// broadcasts model events to the clients of GET /models/sse, used by both router and single-model mode
+struct server_models_sse {
+    // send the last event to each new client, for single-model mode where GET /models is unavailable while loading
+    const bool replay_last;
+
+    server_models_sse(bool replay_last = false) : replay_last(replay_last) {}
+
+    // thread-safe
+    void notify(const std::string & event, const std::string & model_id, const json & data = nullptr);
+
+    // handler for GET /models/sse, a client is disconnected once should_stop() returns true
+    server_http_context::handler_t make_handler(std::function<bool()> should_stop);
+
+private:
+    std::mutex      mutex;
+    json            last_event;
+    server_response queue;
+};
+
 struct server_models_routes;
 struct server_monitor; // defined in server-models.cpp
 
@@ -170,6 +189,7 @@ private:
         std::shared_ptr<server_subproc> subproc; // shared with the monitor thread
         server_model_meta meta;
         int req_count = 0; // number of active proxy requests
+        bool download_stop_requested = false; // a client asked the download to stop (pause or cancel)
 
         // ask the child to exit (it handles the command on its stdin, see server_role::setup)
         void request_exit() const;
@@ -288,7 +308,7 @@ public:
     server_models(const common_params & params, int argc, char ** argv);
     ~server_models();
 
-    server_response sse; // for real-time updates via SSE endpoint
+    server_models_sse sse; // for real-time updates via SSE endpoint
 
     // (re-)load the list of models from various sources and prepare the metadata mapping
     // - if this is called the first time, simply populate the metadata
@@ -443,7 +463,8 @@ struct server_http_proxy : server_http_res {
                       const std::map<std::string, uploaded_file> & files,
                       const std::function<bool()> should_stop,
                       int32_t timeout_read,
-                      int32_t timeout_write
+                      int32_t timeout_write,
+                      const std::string & resolved_addr = "" // if set: connect to this address only, do not follow redirects
                       );
     ~server_http_proxy() {
         if (cleanup_pipes) {

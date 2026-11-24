@@ -38,7 +38,7 @@ bool ggml_metal_op_mul_mat_use_mm(const struct ggml_tensor * op, bool has_simdgr
 
     return !ggml_is_transposed(op->src[0]) &&
            !ggml_is_transposed(op->src[1]) &&
-           has_simdgroup_mm && ne00 >= 64 && ne11 > 8;
+           has_simdgroup_mm && ne11 > 8 && ne00 >= 32;
 }
 
 bool ggml_metal_op_mul_mat_id_use_mm(const struct ggml_tensor * op, bool has_simdgroup_mm) {
@@ -85,6 +85,7 @@ static bool ggml_metal_mul_mv_mma_type_supported(enum ggml_type type) {
         case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q2_0:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_NVFP4:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_IQ2_XXS:
@@ -134,6 +135,7 @@ static int64_t ggml_metal_mul_mv_mma_rows_min(enum ggml_type type) {
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_NVFP4:
             return 3;
         default:
             return 2;

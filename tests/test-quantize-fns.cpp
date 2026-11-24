@@ -37,7 +37,7 @@ static const char* RESULT_STR[] = {"ok", "FAILED"};
 // Generate synthetic data
 static void generate_data(float offset, size_t n, float * dst, float amplitude = 2.0f) {
     for (size_t i = 0; i < n; i++) {
-        dst[i] = 0.1 + amplitude*cosf(i + offset);
+        dst[i] = 0.1 + amplitude*std::cos(i + offset);
     }
 }
 
@@ -48,7 +48,7 @@ static float array_rmse(const float * a1, const float * a2, size_t n) {
         double diff = a1[i] - a2[i];
         sum += diff * diff;
     }
-    return sqrtf(sum) / n;
+    return std::sqrt(sum) / n;
 }
 
 // Total quantization error on test data
@@ -106,7 +106,7 @@ static float dot_product_error(const ggml_type_traits_cpu * qfns_cpu, ggml_type 
         qfns_cpu->vec_dot(test_size, &result, 0, tmp_q1.data(), 0, tmp_q2.data(), 0, 1);
 
         const float dot_ref = dot_product(test_data1, test_data2, test_size);
-        return fabsf(result - dot_ref) / test_size;
+        return std::fabs(result - dot_ref) / test_size;
     }
 
     // nrc == 2: kernel computes a 2x2 dot product matrix
@@ -125,7 +125,7 @@ static float dot_product_error(const ggml_type_traits_cpu * qfns_cpu, ggml_type 
     const float ref11 = dot_product(test_data3, test_data4, test_size);
 
     const auto err = [test_size](float val, float ref) {
-        const float e = fabsf(val - ref) / test_size;
+        const float e = std::fabs(val - ref) / test_size;
         return std::isfinite(e) ? e : INFINITY;
     };
 
@@ -144,7 +144,7 @@ static int test_vec_dot_f32(bool verbose) {
         float result = 0.0f;
         f32->vec_dot(n, &result, 0, a.data(), 0, b.data(), 0, 1);
         const float ref = dot_product(a.data(), b.data(), n);
-        const float error = fabsf(result - ref) / n;
+        const float error = std::fabs(result - ref) / n;
 
         const bool failed = !(error < MAX_QUANTIZATION_REFERENCE_ERROR);
         num_failed += failed;
@@ -177,18 +177,18 @@ static const float F8_E4M3_VALUES[] = {
 };
 
 static uint8_t fp32_to_f8_e4m3_ref(float value) {
-    if (isnan(value)) {
+    if (std::isnan(value)) {
         return 0x7F;
     }
-    const uint8_t sign = signbit(value) ? 0x80 : 0;
-    const double magnitude = fabs((double) value);
+    const uint8_t sign = std::signbit(value) ? 0x80 : 0;
+    const double magnitude = std::fabs((double) value);
     if (magnitude >= F8_E4M3_VALUES[126]) {
         return sign | 126;
     }
     int nearest = 0;
     double distance = magnitude;
     for (int i = 1; i < 127; ++i) {
-        const double candidate = fabs(magnitude - F8_E4M3_VALUES[i]);
+        const double candidate = std::fabs(magnitude - F8_E4M3_VALUES[i]);
         if (candidate < distance || (candidate == distance && (i & 1) == 0)) {
             nearest = i;
             distance = candidate;
@@ -221,9 +221,9 @@ static int test_f8_e4m3(bool verbose) {
 
     for (int i = 0; i < 256; ++i) {
         const bool is_nan = (i & 0x7F) == 0x7F;
-        const float expected = is_nan ? NAN : copysignf(F8_E4M3_VALUES[i & 0x7F], i & 0x80 ? -1.0f : 1.0f);
-        const bool decode_failed = is_nan ? !isnan(decoded[i])
-            : decoded[i] != expected || (expected == 0.0f && signbit(decoded[i]) != signbit(expected));
+        const float expected = is_nan ? NAN : std::copysign(F8_E4M3_VALUES[i & 0x7F], i & 0x80 ? -1.0f : 1.0f);
+        const bool decode_failed = is_nan ? !std::isnan(decoded[i])
+            : decoded[i] != expected || (expected == 0.0f && std::signbit(decoded[i]) != std::signbit(expected));
         const bool encode_failed = !is_nan && roundtrip[i] != encoded[i];
         if (decode_failed || encode_failed) {
             num_failed++;
@@ -241,14 +241,14 @@ static int test_f8_e4m3(bool verbose) {
     }
     for (int i = 0; i < 126; ++i) {
         const float midpoint = (F8_E4M3_VALUES[i] + F8_E4M3_VALUES[i + 1]) / 2.0f;
-        for (float value : {nextafterf(midpoint, -INFINITY), midpoint, nextafterf(midpoint, INFINITY)}) {
+        for (float value : {std::nextafter(midpoint, -INFINITY), midpoint, std::nextafter(midpoint, INFINITY)}) {
             inputs.push_back(value);
             inputs.push_back(-value);
         }
     }
     for (float value : {std::numeric_limits<float>::denorm_min(), std::numeric_limits<float>::max(),
-                       nextafterf(448.0f, INFINITY), nextafterf(464.0f, -INFINITY), 464.0f,
-                       nextafterf(464.0f, INFINITY), INFINITY, NAN}) {
+                       std::nextafter(448.0f, INFINITY), std::nextafter(464.0f, -INFINITY), 464.0f,
+                       std::nextafter(464.0f, INFINITY), INFINITY, NAN}) {
         inputs.push_back(value);
         inputs.push_back(-value);
     }
@@ -276,11 +276,11 @@ static int test_f8_e4m3(bool verbose) {
             const uint8_t code = (uint8_t) (i % 254 + (i % 254 >= 127));
             x[i + 1] = code;
             y[i + 1] = (i % 7 - 3) * 0.125f;
-            expected += copysignf(F8_E4M3_VALUES[code & 0x7F], code & 0x80 ? -1.0f : 1.0f) * y[i + 1];
+            expected += std::copysign(F8_E4M3_VALUES[code & 0x7F], code & 0x80 ? -1.0f : 1.0f) * y[i + 1];
         }
         float actual;
         traits_cpu->vec_dot(n, &actual, 0, x.data() + 1, 0, y.data() + 1, 0, 1);
-        const bool failed = fabs(actual - expected) > 1e-5 * std::max(1.0, fabs(expected));
+        const bool failed = std::fabs(actual - expected) > 1e-5 * std::max(1.0, std::fabs(expected));
         num_failed += failed;
         if (verbose || failed) {
             printf("f8_e4m3 dot n=%d:                  %s (ref=%f got=%f)\n", n, RESULT_STR[failed], expected, actual);
@@ -293,7 +293,7 @@ static int test_f8_e4m3(bool verbose) {
         x[0] = x.back() = code;
         float actual;
         traits_cpu->vec_dot(x.size(), &actual, 0, x.data(), 0, y.data(), 0, 1);
-        num_failed += !isnan(actual);
+        num_failed += !std::isnan(actual);
     }
 
     if (verbose || num_failed) {

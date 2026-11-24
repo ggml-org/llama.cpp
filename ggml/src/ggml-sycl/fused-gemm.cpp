@@ -1,4 +1,6 @@
 #include "fused-gemm.hpp"
+#include "fused-gemm-esimd.hpp"
+#include "quants.hpp"
 
 #include <sycl/ext/oneapi/matrix/matrix.hpp>
 
@@ -17,7 +19,6 @@ namespace mx = sycl::ext::oneapi::experimental::matrix;
 // superblock into steps of this width. The sub-groups of a work-group each walk their own K range
 // and are summed at the end.
 static constexpr int FG_BK     = QK4_NL;
-static constexpr int FG_KSPLIT = 4;
 
 // Element traits of one joint_matrix operand type. The A stage and the B pack compute in f32 and
 // convert once, in registers, when they write the element, so any type costs the same one pass.
@@ -113,6 +114,15 @@ using fg_half = sycl::half;
 using fg_bf16 = sycl::ext::oneapi::bfloat16;
 using fg_tf32 = mx::precision::tf32;
 
+// The combinations the ESIMD grouped GEMM (fused-gemm-esimd.cpp) stands in for: 8 x SG x 16 with f16
+// or bf16 operands, the shape of one dpas, on sub-group 16 (Xe2, Xe-HPC) or 8 (Xe-HPG). Its B is
+// packed and tiled as theirs is.
+template <typename S> static constexpr bool fg_esimd_combo() {
+    return S::TM == 8 && S::TN == S::SG && S::TK == 16 && (S::SG == 16 || S::SG == 8) &&
+           std::is_same_v<typename S::ta, typename S::tb> &&
+           (std::is_same_v<typename S::ta, fg_half> || std::is_same_v<typename S::ta, fg_bf16>);
+}
+
 // One bit of GGML_SYCL_XMX_GATHER_SHAPES per combination. Only combinations some device lists in
 // matrix_combinations are built (appendix of sycl_ext_oneapi_matrix and the runtime's own list).
 template <typename F> static void fg_visit_combo(int idx, F && f);
@@ -152,29 +162,7 @@ template <typename F> static void fg_visit_combo(int idx, F && f) {
 // size, since IGC fails on the other ones. A JIT build keeps them all, but each combination lands in
 // its own device image (joint_matrix is an optional kernel feature) and only a combination the
 // device reports is launched, so the runtime never asks IGC for the others.
-#if defined(__SYCL_DEVICE_ONLY__)
-#    if __SYCL_TARGET_INTEL_GPU_ACM_G10__ || __SYCL_TARGET_INTEL_GPU_ACM_G11__ || __SYCL_TARGET_INTEL_GPU_ACM_G12__ || \
-        __SYCL_TARGET_INTEL_GPU_ARL_H__
-#        define FG_AOT_SG 8
-#    elif __SYCL_TARGET_INTEL_GPU_PVC__ || __SYCL_TARGET_INTEL_GPU_PVC_VG__ || __SYCL_TARGET_INTEL_GPU_BMG_G21__ || \
-        __SYCL_TARGET_INTEL_GPU_BMG_G31__ || __SYCL_TARGET_INTEL_GPU_LNL_M__ || __SYCL_TARGET_INTEL_GPU_PTL_H__ ||   \
-        __SYCL_TARGET_INTEL_GPU_PTL_U__ || __SYCL_TARGET_INTEL_GPU_WCL__ || __SYCL_TARGET_INTEL_GPU_NVL_S__ ||       \
-        __SYCL_TARGET_INTEL_GPU_NVL_U__ || __SYCL_TARGET_INTEL_GPU_NVL_P__
-#        define FG_AOT_SG 16
-#    elif __SYCL_TARGET_INTEL_GPU_TGLLP__ || __SYCL_TARGET_INTEL_GPU_RKL__ || __SYCL_TARGET_INTEL_GPU_ADL_S__ || \
-        __SYCL_TARGET_INTEL_GPU_ADL_P__ || __SYCL_TARGET_INTEL_GPU_ADL_N__ || __SYCL_TARGET_INTEL_GPU_DG1__ ||   \
-        __SYCL_TARGET_INTEL_GPU_MTL_U__ || __SYCL_TARGET_INTEL_GPU_MTL_H__
-#        define FG_AOT_SG 0 // no XMX
-#    endif
-#endif
-
-template <int SG> static constexpr bool fg_built() {
-#if defined(FG_AOT_SG)
-    return SG == FG_AOT_SG;
-#else
-    return true;
-#endif
-}
+// (FG_AOT_SG is defined in fused-gemm.hpp, which the ESIMD kernels share)
 
 // Upper bound on the tile count when total_rows rows are routed to n_as experts: the worst case gives
 // each expert one row and fills whole tiles with the rest. The bound depends only on the shape, not
@@ -411,6 +399,8 @@ template <> struct fg_block_traits<block_iq2_s>   { static constexpr int qk = QK
 template <> struct fg_block_traits<block_iq1_s>   { static constexpr int qk = QK_K; };
 template <> struct fg_block_traits<block_iq1_m>   { static constexpr int qk = QK_K; };
 template <> struct fg_block_traits<block_q8_0>    { static constexpr int qk = QK8_0; };
+template <> struct fg_block_traits<block_q2_K>    { static constexpr int qk = QK_K; };
+template <> struct fg_block_traits<block_q3_K>    { static constexpr int qk = QK_K; };
 template <> struct fg_block_traits<block_q4_K>    { static constexpr int qk = QK_K; };
 template <> struct fg_block_traits<block_q5_K>    { static constexpr int qk = QK_K; };
 template <> struct fg_block_traits<block_q6_K>    { static constexpr int qk = QK_K; };
@@ -432,19 +422,23 @@ static __dpct_inline__ void fg_pack_quarter(const float * __restrict__ t, typena
     }
 }
 
+// 32 values from 16 qs bytes, as in IQ4_NL blocks and IQ4_XS sub-blocks: the low nibbles fill the
+// first half of the step and the high nibbles the second, so the halves land at a[0..7] and a[8..15]
 template <typename E>
-static __dpct_inline__ void fg_stage_a(const block_iq4_xs * __restrict__ xrow, const int kb, typename E::pair * a) {
-    FG_SUPERBLOCK(block_iq4_xs);
-    // low nibbles fill the first half of the step, high nibbles the second, so the two halves
-    // land at a[0..7] and a[8..15] and no quarter loop is needed
-    const float d = (float) blk->d *
-        ((((blk->scales_l[ib / 2] >> (4 * (ib % 2))) & 0xf) | (((blk->scales_h >> (2 * ib)) & 3) << 4)) - 32);
-    const uint8_t * q4 = blk->qs + 16 * ib;
+static __dpct_inline__ void fg_decode_iq4(const uint8_t * __restrict__ q4, const float d, typename E::pair * a) {
 #pragma unroll
     for (int j = 0; j < 8; ++j) {
         a[j]     = E::make(d * kvalues_iq4nl[q4[2 * j] & 0xf], d * kvalues_iq4nl[q4[2 * j + 1] & 0xf]);
         a[8 + j] = E::make(d * kvalues_iq4nl[q4[2 * j] >> 4],  d * kvalues_iq4nl[q4[2 * j + 1] >> 4]);
     }
+}
+
+template <typename E>
+static __dpct_inline__ void fg_stage_a(const block_iq4_xs * __restrict__ xrow, const int kb, typename E::pair * a) {
+    FG_SUPERBLOCK(block_iq4_xs);
+    const float d = (float) blk->d *
+        ((((blk->scales_l[ib / 2] >> (4 * (ib % 2))) & 0xf) | (((blk->scales_h >> (2 * ib)) & 3) << 4)) - 32);
+    fg_decode_iq4<E>(blk->qs + 16 * ib, d, a);
 }
 
 template <typename E>
@@ -595,6 +589,49 @@ static __dpct_inline__ void fg_scale_min_k4(const int j, const uint8_t * __restr
     }
 }
 
+template <typename E>
+static __dpct_inline__ void fg_decode_q2_K(const uint8_t * __restrict__ qs, const uint8_t * __restrict__ scales,
+                                           const float d, const float dmin, const int ib, typename E::pair * a) {
+    const uint8_t * q = qs + 32 * (ib / 4);
+    const int shift = 2 * (ib % 4);
+#pragma unroll
+    for (int j = 0; j < 16; ++j) {
+        const uint8_t sc = scales[2 * ib + j / 8];
+        const float dl = d * (sc & 0xF);
+        const float ml = dmin * (sc >> 4);
+        a[j] = E::make(dl * ((q[2 * j] >> shift) & 3) - ml,
+                       dl * ((q[2 * j + 1] >> shift) & 3) - ml);
+    }
+}
+
+// scales of the two 16-value halves of sub-block ib
+static __dpct_inline__ void fg_q3_K_dl(const uint8_t * __restrict__ scales, const float d, const int ib, float * dl) {
+#pragma unroll
+    for (int i = 0; i < 2; ++i) {
+        const int s  = 2 * ib + i;
+        const int sc = ((scales[s % 8] >> (4 * (s / 8))) & 0xF) | (((scales[8 + s % 4] >> (2 * (s / 4))) & 3) << 4);
+        dl[i] = d * (sc - 32);
+    }
+}
+
+template <typename E>
+static __dpct_inline__ void fg_decode_q3_K(const uint8_t * __restrict__ qs, const uint8_t * __restrict__ hmask,
+                                           const uint8_t * __restrict__ scales, const float d, const int ib,
+                                           typename E::pair * a) {
+    // block_q3_K is 110 bytes, so qs and hmask are only 2-byte aligned
+    const uint16_t * q = (const uint16_t *) (qs + 32 * (ib / 4));
+    const uint16_t * h = (const uint16_t *) hmask;
+    const int shift = 2 * (ib % 4);
+    float dl[2];
+    fg_q3_K_dl(scales, d, ib, dl);
+#pragma unroll
+    for (int j = 0; j < 16; ++j) {
+        // per byte: 2 low bits, plus 4 if the hmask bit is set, minus 4
+        const uint32_t v = ((q[j] >> shift) & 0x0303u) | (((h[j] >> ib) & 0x0101u) << 2);
+        a[j] = E::make(dl[j / 8] * ((int) (v & 0xFF) - 4), dl[j / 8] * ((int) (v >> 8) - 4));
+    }
+}
+
 // q4_K sub-block ib (0..7) uses scale/min pair ib and the low (even ib) or high (odd ib) nibbles of
 // qs[32 * (ib / 2) ...], as in dequantize_row_q4_K
 template <typename E>
@@ -659,6 +696,18 @@ static __dpct_inline__ void fg_stage_a(const block_q8_0 * __restrict__ xrow, con
 }
 
 template <typename E>
+static __dpct_inline__ void fg_stage_a(const block_q2_K * __restrict__ xrow, const int kb, typename E::pair * a) {
+    FG_SUPERBLOCK(block_q2_K);
+    fg_decode_q2_K<E>(blk->qs, blk->scales, (float) blk->dm[0], (float) blk->dm[1], ib, a);
+}
+
+template <typename E>
+static __dpct_inline__ void fg_stage_a(const block_q3_K * __restrict__ xrow, const int kb, typename E::pair * a) {
+    FG_SUPERBLOCK(block_q3_K);
+    fg_decode_q3_K<E>(blk->qs, blk->hmask, blk->scales, (float) blk->d, ib, a);
+}
+
+template <typename E>
 static __dpct_inline__ void fg_stage_a(const block_q4_K * __restrict__ xrow, const int kb, typename E::pair * a) {
     FG_SUPERBLOCK(block_q4_K);
     fg_decode_q4_K<E>(blk->qs, blk->scales, blk->dm, ib, a);
@@ -690,6 +739,50 @@ template <> struct fg_soa<block_q8_0> {
                                       typename E::pair * a) {
         const float d = (float) ((const sycl::half *) (x + nblocks * QK8_0))[ib];
         fg_decode_q8_0<E>((const int8_t *) x + ib * QK8_0, d, a);
+    }
+};
+
+template <> struct fg_soa<block_q2_K> {
+    static constexpr bool supported = true;
+
+    // [qs][scales][dm]
+    template <typename E>
+    static __dpct_inline__ void stage(const uint8_t * x, const size_t nblocks, const size_t ib, const int kb,
+                                      typename E::pair * a) {
+        const uint8_t * scales = x + nblocks * (QK_K / 4);
+        const sycl::half2 dm = ((const sycl::half2 *) (scales + nblocks * (QK_K / 16)))[ib];
+        fg_decode_q2_K<E>(x + ib * (QK_K / 4), scales + ib * (QK_K / 16), (float) dm[0], (float) dm[1],
+                          kb % (QK_K / 32), a);
+    }
+};
+
+template <> struct fg_soa<block_q3_K> {
+    static constexpr bool supported = true;
+
+    // [qs][hmask][scales][d]
+    template <typename E>
+    static __dpct_inline__ void stage(const uint8_t * x, const size_t nblocks, const size_t ib, const int kb,
+                                      typename E::pair * a) {
+        const uint8_t * hmask = x + nblocks * (QK_K / 4);
+        const uint8_t * scales = hmask + nblocks * (QK_K / 8);
+        const float d = (float) ((const sycl::half *) (scales + nblocks * 12))[ib];
+        const int sub = kb % (QK_K / 32);
+        // 16-byte aligned, see opt_for_reorder_id
+        using v4 = sycl::vec<uint32_t, 4>;
+        const v4 * q = (const v4 *) (x + ib * (QK_K / 4) + 32 * (sub / 4));
+        const v4 * h = (const v4 *) (hmask + ib * (QK_K / 8));
+        const v4 qv[2] = { q[0], q[1] };
+        const v4 hv[2] = { h[0], h[1] };
+        const int shift = 2 * (sub % 4);
+        float dl[2];
+        fg_q3_K_dl(scales + ib * 12, d, sub, dl);
+#pragma unroll
+        for (int w = 0; w < 8; ++w) {
+            const uint32_t v = ((qv[w / 4][w % 4] >> shift) & 0x03030303u) | (((hv[w / 4][w % 4] >> sub) & 0x01010101u) << 2);
+            const float    f = dl[w / 4];
+            a[2 * w]     = E::make(f * ((int) (v & 0xFF) - 4), f * ((int) ((v >> 8) & 0xFF) - 4));
+            a[2 * w + 1] = E::make(f * ((int) ((v >> 16) & 0xFF) - 4), f * ((int) (v >> 24) - 4));
+        }
     }
 };
 
@@ -733,6 +826,22 @@ template <> struct fg_soa<block_q6_K> {
     }
 };
 
+template <ggml_type type> struct fg_soa_iq4 {
+    static constexpr bool supported = true;
+    // [qs][per-block records]; k step kb is 32-value group kb % groups of block ib
+    template <typename E>
+    static __dpct_inline__ void stage(const uint8_t * x, const size_t nblocks, const size_t ib, const int kb,
+                                      typename E::pair * a) {
+        constexpr int groups = ggml_sycl_reordered::block_q_t<type>::traits::qk / QK4_NL;
+        const int64_t g      = (int64_t) ib * groups + kb % groups;
+        fg_decode_iq4<E>(x + 16 * g, ggml_sycl_reordered::iq4_group_scale<type>(x + nblocks * groups * 16, g), a);
+    }
+};
+
+template <> struct fg_soa<block_iq4_nl> : fg_soa_iq4<GGML_TYPE_IQ4_NL> {};
+
+template <> struct fg_soa<block_iq4_xs> : fg_soa_iq4<GGML_TYPE_IQ4_XS> {};
+
 
 // one SG_ROWS x BN output tile: B columns [b0, b0 + BN) of packed_b go to dst columns [n0, n1),
 // n1 - n0 <= BN
@@ -745,7 +854,7 @@ static void fused_dequant_gemm_tile(
     const int b0, const int n0, const int n1,
     sycl::local_accessor<typename S::tsa, 1> tile_a,
     sycl::local_accessor<float, 1> tile_c,
-    const sycl::nd_item<2> & item) {
+    const sycl::nd_item<2> & item, ggml_sycl_grouped_gemm_rows dst_rows = {}) {
     if constexpr (fg_built<S::SG>()) {
         using EA = typename S::EA;
         using TA = typename S::ta;
@@ -854,7 +963,13 @@ static void fused_dequant_gemm_tile(
                 for (int s = 0; s < FG_KSPLIT; ++s) {
                     sum += tile_c[s * S::SG_ROWS * S::BN + r * S::BN + c];
                 }
-                dst[(size_t) n * ldd + m] = sum;
+                if (dst_rows.map) {
+                    const mmid_row_mapping row = dst_rows.map[n];
+                    float * out = (float *) (dst_rows.base + (row.i1 % dst_rows.ne1) * dst_rows.nb1 + row.i2 * dst_rows.nb2);
+                    out[m] = sum;
+                } else {
+                    dst[(size_t) n * ldd + m] = sum;
+                }
             }
         }
     }
@@ -880,20 +995,33 @@ static void fused_dequant_gemm_launch(const void * src0, const typename S::tsb *
 // grouped: work-group (t, mt) is tile t of the schedule; its B columns sit at t * BN
 template <typename S, typename block_q_t, bool reordered>
 static void grouped_dequant_gemm_launch(const char * src0_dd, const size_t expert_stride,
-                                        const ggml_sycl_gg_tile * tiles_ptr, const typename S::tsb * packed, float * dst,
-                                        const int M, const int Npad, const int K, const int64_t n_tiles,
-                                        const int64_t groups_m, dpct::queue_ptr stream) {
+                                        const ggml_sycl_grouped_gemm_tile * tiles_ptr, const typename S::tsb * packed,
+                                        float * dst, const int M, const int Npad, const int K, const int64_t n_tiles,
+                                        const int64_t groups_m, dpct::queue_ptr stream,
+                                        ggml_sycl_grouped_gemm_rows dst_rows = {}) {
+    if constexpr (fg_esimd_combo<S>() && ggml_sycl_grouped_gemm_esimd_has<block_q_t>) {
+        // the register-operand ESIMD kernel, either weight layout: no SLM A image (GGML_SYCL_MMID_ESIMD)
+        if (ggml_sycl_grouped_gemm_esimd_enabled() &&
+            ggml_sycl_grouped_gemm_esimd<block_q_t, typename S::tsb, S::SG>(src0_dd, expert_stride, tiles_ptr, packed,
+                                                                            dst, M, Npad, K, dst_rows, reordered,
+                                                                            n_tiles, stream)) {
+            return;
+        }
+    }
     stream->submit([&](sycl::handler & cgh) {
         sycl::local_accessor<typename S::tsa, 1> tile_a(FG_KSPLIT * S::SG_ROWS * FG_BK, cgh);
         sycl::local_accessor<float, 1>          tile_c(FG_KSPLIT * S::SG_ROWS * S::BN, cgh);
         cgh.parallel_for(
             sycl::nd_range<2>(sycl::range<2>(n_tiles, groups_m * S::WG_SIZE), sycl::range<2>(1, S::WG_SIZE)),
             [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(S::SG)]] {
-                const int               t    = item.get_group(0);
-                const ggml_sycl_gg_tile tile = tiles_ptr[t];
+                const int                         t    = item.get_group(0);
+                const ggml_sycl_grouped_gemm_tile tile = tiles_ptr[t];
+                if (tile.n0 == tile.n1) {
+                    return;
+                }
                 const block_q_t *       x    = (const block_q_t *) (src0_dd + (size_t) tile.expert * expert_stride);
                 fused_dequant_gemm_tile<S, block_q_t, reordered>(x, packed, dst, M, Npad, K, M, t * S::BN, tile.n0,
-                                                                 tile.n1, tile_a, tile_c, item);
+                                                                 tile.n1, tile_a, tile_c, item, dst_rows);
             });
     });
 }
@@ -901,17 +1029,17 @@ static void grouped_dequant_gemm_launch(const char * src0_dd, const size_t exper
 // src1 f32 rows -> packed [K/V][n_tiles*BN][V], tile t holds its rows [n0, n1) at columns t*BN..,
 // zero past n1. The column runs fastest so a sub-group writes one contiguous run.
 template <typename S>
-static void grouped_gemm_pack_b(const float * y, typename S::tsb * packed, const ggml_sycl_gg_tile * tiles, int Npad,
-                                int K, dpct::queue_ptr stream) {
+static void grouped_gemm_pack_b(const float * y, typename S::tsb * packed, const ggml_sycl_grouped_gemm_tile * tiles,
+                                int Npad, int K, dpct::queue_ptr stream) {
     using E        = typename S::EB;
     constexpr int V = S::VNNI;
     const int kqs   = K / V;
     stream->parallel_for(sycl::range<1>((size_t) Npad * kqs), [=](sycl::id<1> id) {
-        const size_t idx = id[0];
-        const int    kq  = idx / Npad;
-        const int    n   = idx - (size_t) kq * Npad;
-        const ggml_sycl_gg_tile tile = tiles[n / S::BN];
-        const int    row = tile.n0 + n % S::BN;
+        const size_t                      idx  = id[0];
+        const int                         kq   = idx / Npad;
+        const int                         n    = idx - (size_t) kq * Npad;
+        const ggml_sycl_grouped_gemm_tile tile = tiles[n / S::BN];
+        const int                         row  = tile.n0 + n % S::BN;
         // one guarded load run per work-item, as a per-element select costs ~1.5% prefill
         typename S::tsb vals[V] = {};
         if (row < tile.n1) {
@@ -932,7 +1060,8 @@ static void grouped_gemm_pack_b(const float * y, typename S::tsb * packed, const
 // q8_0 and the k-quants take only the grouped path. The plain kernel decodes A again for every BN columns
 // of a dense batch, and for these formats that costs more than the one dequantization of the library GEMM.
 template <typename T> static constexpr bool fg_plain_ok() {
-    return !std::is_same_v<T, block_q8_0> && !std::is_same_v<T, block_q4_K> && !std::is_same_v<T, block_q5_K> &&
+    return !std::is_same_v<T, block_q8_0> && !std::is_same_v<T, block_q2_K> && !std::is_same_v<T, block_q3_K> &&
+           !std::is_same_v<T, block_q4_K> && !std::is_same_v<T, block_q5_K> &&
            !std::is_same_v<T, block_q6_K>;
 }
 
@@ -966,11 +1095,52 @@ template <typename F> static bool fg_visit_type(ggml_type type, bool reordered, 
         case GGML_TYPE_IQ1_S:   return fg_visit_layout<block_iq1_s>(reordered, f);
         case GGML_TYPE_IQ1_M:   return fg_visit_layout<block_iq1_m>(reordered, f);
         case GGML_TYPE_Q8_0:    return fg_visit_layout<block_q8_0>(reordered, f);
+        case GGML_TYPE_Q2_K:    return fg_visit_layout<block_q2_K>(reordered, f);
+        case GGML_TYPE_Q3_K:    return fg_visit_layout<block_q3_K>(reordered, f);
         case GGML_TYPE_Q4_K:    return fg_visit_layout<block_q4_K>(reordered, f);
         case GGML_TYPE_Q5_K:    return fg_visit_layout<block_q5_K>(reordered, f);
         case GGML_TYPE_Q6_K:    return fg_visit_layout<block_q6_K>(reordered, f);
         default:                return false;
     }
+}
+
+// The ESIMD grouped GEMM loads A straight into its dpas operands, so the joint_matrix tile shape
+// means nothing to it; it runs on the fg_esimd_combo of the picked operand type and sub-group size. A
+// grouped call whose weight it covers is moved there from any other shape of that type and sub-group
+// size, if the device lists it, whatever GGML_SYCL_XMX_GATHER_SHAPES allows: the shape bits choose
+// among joint_matrix tiles.
+// A call the ESIMD kernel then declines (a shape it does not take) runs that combination's joint_matrix
+// kernel.
+static int fg_esimd_remap(dpct::queue_ptr stream, int combo, ggml_type src0_type, bool reordered) {
+    if (combo < 0 || !ggml_sycl_grouped_gemm_esimd_enabled()) {
+        return combo;
+    }
+    bool covered = false;
+    fg_visit_type(src0_type, reordered, [&](auto tag) {
+        using T = decltype(tag);
+        covered = ggml_sycl_grouped_gemm_esimd_has<typename T::type>;
+    });
+    if (!covered) {
+        return combo;
+    }
+    int target = -1;
+    fg_visit_combo(combo, [&](auto s) {
+        using S = decltype(s);
+        if constexpr (std::is_same_v<typename S::ta, typename S::tb>) {
+            for (int idx = 0; idx < FG_N_COMBOS; ++idx) {
+                fg_visit_combo(idx, [&](auto t) {
+                    using U = decltype(t);
+                    if constexpr (fg_esimd_combo<U>() && U::SG == S::SG && std::is_same_v<typename U::ta, typename S::ta>) {
+                        target = idx;
+                    }
+                });
+            }
+        }
+    });
+    if (target < 0 || target == combo || !(fg_device_combos(stream->get_device()) & (1 << target))) {
+        return combo;
+    }
+    return target;
 }
 
 template <typename S>
@@ -1037,7 +1207,7 @@ bool ggml_sycl_fused_dequant_gemm(ggml_type src0_type, bool src0_reordered, cons
 template <typename S>
 static bool fg_grouped_run(ggml_type src0_type, bool reordered, const void * src0_base, size_t expert_stride,
                            const float * src1, float * dst, const int64_t * expert_row_offsets, int64_t n_as, int64_t M,
-                           int64_t K, std::vector<ggml_sycl_gg_tile> & tiles, ggml_sycl_pool & pool,
+                           int64_t K, std::vector<ggml_sycl_grouped_gemm_tile> & tiles, ggml_sycl_pool & pool,
                            dpct::queue_ptr stream) {
     // the host knows every slice, so it lays out the work-groups: no search on the device
     tiles.clear();
@@ -1053,15 +1223,16 @@ static bool fg_grouped_run(ggml_type src0_type, bool reordered, const void * src
 
     const int64_t max_tiles = grouped_gemm_max_tiles(expert_row_offsets[n_as], n_as, S::BN);
     GGML_ASSERT(n_tiles <= max_tiles);
-    ggml_sycl_pool_alloc<ggml_sycl_gg_tile> tiles_dev(pool, max_tiles);
-    SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(tiles_dev.get(), tiles.data(), n_tiles * sizeof(ggml_sycl_gg_tile))));
+    ggml_sycl_pool_alloc<ggml_sycl_grouped_gemm_tile> tiles_dev(pool, max_tiles);
+    SYCL_CHECK(CHECK_TRY_ERROR(
+        stream->memcpy(tiles_dev.get(), tiles.data(), n_tiles * sizeof(ggml_sycl_grouped_gemm_tile))));
 
     ggml_sycl_pool_alloc<typename S::tsb> packed_b(pool, (size_t) K * max_tiles * S::BN);
     grouped_gemm_pack_b<S>(src1, packed_b.get(), tiles_dev.get(), Npad, (int) K, stream);
 
-    const typename S::tsb *   packed    = packed_b.get();
-    const ggml_sycl_gg_tile * tiles_ptr = tiles_dev.get();
-    const char *              src0_dd   = (const char *) src0_base;
+    const typename S::tsb *             packed    = packed_b.get();
+    const ggml_sycl_grouped_gemm_tile * tiles_ptr = tiles_dev.get();
+    const char *                        src0_dd   = (const char *) src0_base;
     return fg_visit_type(src0_type, reordered, [&](auto tag) {
         using T = decltype(tag);
         grouped_dequant_gemm_launch<S, typename T::type, T::reordered>(src0_dd, expert_stride, tiles_ptr, packed, dst,
@@ -1073,7 +1244,7 @@ static bool fg_grouped_run(ggml_type src0_type, bool reordered, const void * src
 bool ggml_sycl_grouped_dequant_gemm(ggml_type src0_type, bool reordered, const void * src0_base, size_t expert_stride,
                                     const float * src1, int32_t src1_prec, float * dst,
                                     const int64_t * expert_row_offsets, int64_t n_as, int64_t M, int64_t K,
-                                    int64_t total_rows, std::vector<ggml_sycl_gg_tile> & tiles,
+                                    int64_t total_rows, std::vector<ggml_sycl_grouped_gemm_tile> & tiles,
                                     ggml_sycl_pool & pool, dpct::queue_ptr stream) {
     int64_t n_active = 0;
     for (int64_t e = 0; e < n_as; ++e) {
@@ -1086,7 +1257,7 @@ bool ggml_sycl_grouped_dequant_gemm(ggml_type src0_type, bool reordered, const v
     if (!ggml_sycl_grouped_dequant_gemm_shape_ok(src0_type, M, K, total_rows, n_active)) {
         return false;
     }
-    const int combo = fg_pick_combo(stream, GGML_TYPE_F32, src1_prec);
+    const int combo = fg_esimd_remap(stream, fg_pick_combo(stream, GGML_TYPE_F32, src1_prec), src0_type, reordered);
     if (combo < 0) {
         return false;
     }
@@ -1094,6 +1265,230 @@ bool ggml_sycl_grouped_dequant_gemm(ggml_type src0_type, bool reordered, const v
     fg_visit_combo(combo, [&](auto s) {
         launched = fg_grouped_run<decltype(s)>(src0_type, reordered, src0_base, expert_stride, src1, dst,
                                                expert_row_offsets, n_as, M, K, tiles, pool, stream);
+    });
+    return launched;
+}
+
+// One work-group sorts routes by expert and builds the tile table.
+static constexpr int MMID_SCHED_WG = 256;
+
+using mmid_sched_atomic = sycl::atomic_ref<uint32_t, sycl::memory_order::relaxed,
+                                           sycl::memory_scope::work_group,
+                                           sycl::access::address_space::local_space>;
+
+bool ggml_sycl_build_mmid_schedule(const int32_t * ids_dev, size_t ids_token_stride, int64_t n_as, int64_t n_ids,
+                                   int64_t n_tokens, int64_t n_tiles_max, mmid_row_mapping * row_mapping,
+                                   ggml_sycl_grouped_gemm_tile * tiles, uint32_t * expert_offsets,
+                                   dpct::queue_ptr stream) {
+    if (n_as <= 0 || n_as > GGML_SYCL_MMID_SCHED_MAX_EXPERTS || n_ids <= 0 || n_tokens <= 0 || n_ids > INT32_MAX / n_tokens) {
+        return false;
+    }
+    const int64_t n_routes = n_tokens * n_ids;
+    if (n_tiles_max < grouped_gemm_max_tiles(n_routes, n_as, GGML_SYCL_FG_BN)) {
+        return false;
+    }
+
+    stream->submit([&](sycl::handler & cgh) {
+        // l_cnt is reused: route counts, then the write cursors, then the tile count per expert
+        sycl::local_accessor<uint32_t, 1> l_cnt(n_as + 1, cgh);
+        sycl::local_accessor<uint32_t, 1> l_off(n_as + 1, cgh);
+        sycl::local_accessor<uint32_t, 1> l_toff(n_as + 1, cgh);
+        cgh.parallel_for(
+            sycl::nd_range<1>(MMID_SCHED_WG, MMID_SCHED_WG),
+            [=](sycl::nd_item<1> item) {
+                const auto     grp = item.get_group();
+                const int64_t  tid = item.get_local_id(0);
+                uint32_t * cnt  = l_cnt.get_multi_ptr<sycl::access::decorated::no>().get();
+                uint32_t * off  = l_off.get_multi_ptr<sycl::access::decorated::no>().get();
+                uint32_t * toff = l_toff.get_multi_ptr<sycl::access::decorated::no>().get();
+
+                for (int64_t e = tid; e < n_as; e += MMID_SCHED_WG) {
+                    cnt[e] = 0;
+                }
+                // a dropped route must leave a row that names (0, 0) rather than stale memory
+                for (int64_t r = tid; r < n_routes; r += MMID_SCHED_WG) {
+                    row_mapping[r] = { 0, 0 };
+                }
+                sycl::group_barrier(grp);
+
+                for (int64_t r = tid; r < n_routes; r += MMID_SCHED_WG) {
+                    const int64_t   token  = r / n_ids;
+                    const int64_t   slot   = r - token * n_ids;
+                    const int32_t * id_row = (const int32_t *) ((const char *) ids_dev + token * ids_token_stride);
+                    const int32_t   e      = id_row[slot];
+                    if (e >= 0 && e < n_as) {
+                        mmid_sched_atomic(cnt[e]).fetch_add(1u);
+                    }
+                }
+                sycl::group_barrier(grp);
+
+                sycl::joint_exclusive_scan(grp, cnt, cnt + n_as, off, 0u, sycl::plus<uint32_t>());
+                sycl::group_barrier(grp);
+                if (tid == 0) {
+                    off[n_as] = off[n_as - 1] + cnt[n_as - 1];
+                }
+                sycl::group_barrier(grp);
+
+                for (int64_t e = tid; e < n_as; e += MMID_SCHED_WG) {
+                    cnt[e] = off[e];
+                }
+                sycl::group_barrier(grp);
+
+                // Atomic arrival order can differ from the host sort; each expert gets the same rows.
+                for (int64_t r = tid; r < n_routes; r += MMID_SCHED_WG) {
+                    const int64_t   token  = r / n_ids;
+                    const int64_t   slot   = r - token * n_ids;
+                    const int32_t * id_row = (const int32_t *) ((const char *) ids_dev + token * ids_token_stride);
+                    const int32_t   e      = id_row[slot];
+                    if (e >= 0 && e < n_as) {
+                        const uint32_t pos = mmid_sched_atomic(cnt[e]).fetch_add(1u);
+                        row_mapping[pos]   = { (int32_t) slot, (int32_t) token };
+                    }
+                }
+                sycl::group_barrier(grp);
+
+                for (int64_t e = tid; e < n_as; e += MMID_SCHED_WG) {
+                    cnt[e] = (off[e + 1] - off[e] + GGML_SYCL_FG_BN - 1) / GGML_SYCL_FG_BN;
+                }
+                sycl::group_barrier(grp);
+
+                sycl::joint_exclusive_scan(grp, cnt, cnt + n_as, toff, 0u, sycl::plus<uint32_t>());
+                sycl::group_barrier(grp);
+                if (tid == 0) {
+                    toff[n_as] = toff[n_as - 1] + cnt[n_as - 1];
+                }
+                sycl::group_barrier(grp);
+
+                const uint32_t n_tiles = toff[n_as];
+                for (int64_t e = tid; e < n_as; e += MMID_SCHED_WG) {
+                    const uint32_t base = off[e];
+                    const uint32_t end  = off[e + 1];
+                    for (uint32_t j = 0; j < cnt[e]; ++j) {
+                        const uint32_t n0 = base + j * GGML_SYCL_FG_BN;
+                        const uint32_t n1 = n0 + GGML_SYCL_FG_BN < end ? n0 + GGML_SYCL_FG_BN : end;
+                        tiles[toff[e] + j] = { (int32_t) e, (int32_t) n0, (int32_t) n1 };
+                    }
+                }
+                // the launch is bounded, so the unused tail must be tiles the GEMM skips
+                for (int64_t t = n_tiles + tid; t < n_tiles_max; t += MMID_SCHED_WG) {
+                    tiles[t] = { 0, 0, 0 };
+                }
+                for (int64_t e = tid; e <= n_as; e += MMID_SCHED_WG) {
+                    expert_offsets[e] = off[e];
+                }
+            });
+    });
+    return true;
+}
+
+template <typename S>
+static bool fg_grouped_device_run(ggml_type src0_type, bool reordered, const void * src0_base, size_t expert_stride,
+                                   ggml_sycl_grouped_gemm_rows src1, ggml_sycl_grouped_gemm_rows dst,
+                                   const int32_t * ids_dev, size_t ids_token_stride, int64_t n_as, int64_t n_ids,
+                                   int64_t n_tokens, int64_t M, int64_t K, ggml_sycl_pool & pool,
+                                   dpct::queue_ptr stream) {
+    if constexpr (S::BN != GGML_SYCL_FG_BN) {
+        return false;
+    } else {
+        const int64_t total_rows = n_tokens * n_ids;
+        const int64_t max_tiles = grouped_gemm_max_tiles(total_rows, n_as, S::BN);
+        if (max_tiles > INT32_MAX / S::BN) {
+            return false;
+        }
+        const int Npad = (int) (max_tiles * S::BN);
+        ggml_sycl_pool_alloc<mmid_row_mapping> rows(pool, total_rows);
+        ggml_sycl_pool_alloc<ggml_sycl_grouped_gemm_tile> tiles(pool, max_tiles);
+        ggml_sycl_pool_alloc<uint32_t> offsets(pool, n_as + 1);
+        if (!ggml_sycl_build_mmid_schedule(ids_dev, ids_token_stride, n_as, n_ids, n_tokens, max_tiles,
+                                           rows.get(), tiles.get(), offsets.get(), stream)) {
+            return false;
+        }
+        src1.map = rows.get();
+        dst.map = rows.get();
+        ggml_sycl_pool_alloc<typename S::tsb> packed_b(pool, (size_t) K * Npad);
+        const ggml_sycl_grouped_gemm_tile * tile_ptr = tiles.get();
+        typename S::tsb * packed = packed_b.get();
+        using E = typename S::EB;
+        constexpr int V = S::VNNI;
+        stream->parallel_for(sycl::range<1>((size_t) Npad * (K / V)), [=](sycl::id<1> id) {
+            const size_t idx = id[0];
+            const int kq = idx / Npad;
+            const int n = idx - (size_t) kq * Npad;
+            const ggml_sycl_grouped_gemm_tile tile = tile_ptr[n / S::BN];
+            const int row = tile.n0 + n % S::BN;
+            typename S::tsb vals[V] = {};
+            if (row < tile.n1) {
+                const mmid_row_mapping mapping = src1.map[row];
+                const float * in = (const float *) (src1.base + (mapping.i1 % src1.ne1) * src1.nb1 + mapping.i2 * src1.nb2) + V * kq;
+#pragma unroll
+                for (int v = 0; v < V; ++v) {
+                    vals[v] = E::cvt(in[v]);
+                }
+            }
+            typename S::tsb * out = packed + ((size_t) kq * Npad + n) * V;
+#pragma unroll
+            for (int v = 0; v < V; ++v) {
+                out[v] = vals[v];
+            }
+        });
+        const int64_t groups_m = (M + S::SG_ROWS - 1) / S::SG_ROWS;
+        return fg_visit_type(src0_type, reordered, [&](auto tag) {
+            using T = decltype(tag);
+            grouped_dequant_gemm_launch<S, typename T::type, T::reordered>((const char *) src0_base, expert_stride,
+                tile_ptr, packed, (float *) dst.base, (int) M, Npad, (int) K, max_tiles, groups_m, stream, dst);
+        });
+    }
+}
+
+bool ggml_sycl_grouped_dequant_gemm_device_supported(ggml_type src0_type, bool reordered, int32_t src1_prec,
+                                                      int64_t n_as, int64_t n_ids, int64_t n_tokens,
+                                                      int64_t M, int64_t K, dpct::queue_ptr stream) {
+    if (n_as <= 0 || n_as > GGML_SYCL_MMID_SCHED_MAX_EXPERTS || n_ids <= 0 || n_tokens <= 0 ||
+        n_ids > INT32_MAX / n_tokens) {
+        return false;
+    }
+    const int64_t total_rows = n_ids * n_tokens;
+    // The active expert count is unknown until the GPU builds the schedule.
+    if (g_ggml_sycl_dynamic_precision == GGML_SYCL_DYNAMIC_PRECISION_F32 ||
+        !ggml_sycl_xmx_gather_type_enabled(src0_type) || !fg_visit_type(src0_type, reordered, [](auto) {}) ||
+        !ggml_sycl_grouped_dequant_gemm_shape_ok(src0_type, M, K, total_rows, std::min(n_as, total_rows),
+                                                (g_ggml_sycl_mmid_sched & GGML_SYCL_MMID_SCHED_UNBOUNDED) != 0)) {
+        return false;
+    }
+    const sycl::device device = stream->get_device();
+    if (device.get_info<sycl::info::device::max_work_group_size>() < MMID_SCHED_WG ||
+        device.get_info<sycl::info::device::local_mem_size>() < 3 * (n_as + 1) * sizeof(uint32_t)) {
+        return false;
+    }
+    if (grouped_gemm_max_tiles(total_rows, n_as, GGML_SYCL_FG_BN) > INT32_MAX / GGML_SYCL_FG_BN) {
+        return false;
+    }
+    const int combo = fg_esimd_remap(stream, fg_pick_combo(stream, GGML_TYPE_F32, src1_prec), src0_type, reordered);
+    if (combo < 0) {
+        return false;
+    }
+    // the device schedule is built for GGML_SYCL_FG_BN-wide tiles, see fg_grouped_device_run()
+    bool bn_ok = false;
+    fg_visit_combo(combo, [&](auto s) { bn_ok = decltype(s)::BN == GGML_SYCL_FG_BN; });
+    return bn_ok;
+}
+
+bool ggml_sycl_grouped_dequant_gemm_device(ggml_type src0_type, bool reordered, const void * src0_base,
+                                           size_t expert_stride, const ggml_sycl_grouped_gemm_rows & src1,
+                                           int32_t src1_prec, const ggml_sycl_grouped_gemm_rows & dst,
+                                           const int32_t * ids_dev, size_t ids_token_stride, int64_t n_as,
+                                           int64_t n_ids, int64_t n_tokens, int64_t M, int64_t K, ggml_sycl_pool & pool,
+                                           dpct::queue_ptr stream) {
+    if (src1.ne1 <= 0 || dst.ne1 <= 0 ||
+        !ggml_sycl_grouped_dequant_gemm_device_supported(src0_type, reordered, src1_prec, n_as, n_ids,
+                                                        n_tokens, M, K, stream)) {
+        return false;
+    }
+    const int combo = fg_esimd_remap(stream, fg_pick_combo(stream, GGML_TYPE_F32, src1_prec), src0_type, reordered);
+    bool launched = false;
+    fg_visit_combo(combo, [&](auto s) {
+        launched = fg_grouped_device_run<decltype(s)>(src0_type, reordered, src0_base, expert_stride, src1, dst,
+            ids_dev, ids_token_stride, n_as, n_ids, n_tokens, M, K, pool, stream);
     });
     return launched;
 }

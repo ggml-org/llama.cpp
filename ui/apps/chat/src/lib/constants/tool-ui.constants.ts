@@ -1,0 +1,64 @@
+// Registry of server and browser tools whose renderer
+// shows a recognizable icon and friendly label inline in the chat UI.
+//
+// To add a new tool, add an entry to TOOL_UI. To give a
+// tool a custom title or body renderer, add a dedicated component under
+// ChatMessageToolCall/ and route it in ChatMessageToolCallBlock.svelte
+// (see ChatMessageToolCallBlockGetDatetime and
+// ChatMessageToolCallBlockSearchResults for prior art).
+
+import Braces from '@lucide/svelte/icons/braces';
+import Clock from '@lucide/svelte/icons/clock';
+import Eye from '@lucide/svelte/icons/eye';
+import FilePen from '@lucide/svelte/icons/file-pen';
+import FilePlus from '@lucide/svelte/icons/file-plus';
+import FileSearch from '@lucide/svelte/icons/file-search';
+import FileText from '@lucide/svelte/icons/file-text';
+import Info from '@lucide/svelte/icons/info';
+import MessagesSquare from '@lucide/svelte/icons/messages-square';
+import SearchCode from '@lucide/svelte/icons/search-code';
+import Terminal from '@lucide/svelte/icons/terminal';
+import { BuiltInTool, ToolSource } from '#lib/enums/index.ts';
+import type { ToolUiEntry } from '#lib/types/index.ts';
+
+export const TOOL_UI: Readonly<Record<BuiltInTool, ToolUiEntry>> = {
+	[BuiltInTool.BROWSER_GET_DATETIME]: {
+		icon: Clock,
+		label: 'Current time',
+		source: ToolSource.BROWSER
+	},
+	[BuiltInTool.BROWSER_READ_MEDIA]: { icon: Eye, label: 'Read media', source: ToolSource.BROWSER },
+	[BuiltInTool.BROWSER_RUN_JAVASCRIPT]: {
+		icon: Braces,
+		label: 'Run JavaScript',
+		source: ToolSource.BROWSER
+	},
+	[BuiltInTool.BROWSER_SEARCH_CHATS]: {
+		icon: MessagesSquare,
+		label: 'Search chats',
+		source: ToolSource.BROWSER
+	},
+	[BuiltInTool.SERVER_EDIT_FILE]: { icon: FilePen, label: 'Edit file', source: ToolSource.SERVER },
+	[BuiltInTool.SERVER_EXEC_SHELL_COMMAND]: {
+		icon: Terminal,
+		label: 'Run command',
+		source: ToolSource.SERVER
+	},
+	[BuiltInTool.SERVER_FILE_GLOB_SEARCH]: {
+		icon: FileSearch,
+		label: 'Search files',
+		source: ToolSource.SERVER
+	},
+	[BuiltInTool.SERVER_GET_INFO]: { icon: Info, label: 'Runtime info', source: ToolSource.SERVER },
+	[BuiltInTool.SERVER_GREP_SEARCH]: {
+		icon: SearchCode,
+		label: 'Search in files',
+		source: ToolSource.SERVER
+	},
+	[BuiltInTool.SERVER_READ_FILE]: { icon: FileText, label: 'Read file', source: ToolSource.SERVER },
+	[BuiltInTool.SERVER_WRITE_FILE]: {
+		icon: FilePlus,
+		label: 'Write file',
+		source: ToolSource.SERVER
+	}
+} as const;
