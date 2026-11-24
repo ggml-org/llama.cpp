@@ -384,6 +384,23 @@ class ModelBase:
 
         if (quant_config := self.hparams.get("quantization_config")) and isinstance(quant_config, dict):
             quant_method = quant_config.get("quant_method")
+            source_names = {filtered: source for source, filtered in getattr(self, "_source_tensor_names", {}).items() if filtered is not None} if quant_method in ("modelopt", "modelopt_mixed") else {}
+
+            def modelopt_mxfp8_group_size(weight_name: str) -> int | None:
+                layers = quant_config.get("quantized_layers") or {}
+                config = quant_config
+                module = source_names.get(weight_name, weight_name).removesuffix(".weight")
+                while module:
+                    if module in layers and isinstance(layers[module], dict):
+                        config = quant_config | layers[module]
+                        break
+                    module = module.rpartition(".")[0]
+                if config.get("quant_algo") != "MXFP8":
+                    return None
+                group_size = config.get("group_size", 32)
+                if type(group_size) is not int or group_size != 32:
+                    raise ValueError(f"MXFP8 weight {weight_name!r} requires group_size=32")
+                return group_size
 
             def dequant_bitnet(weight: Tensor, scale: Tensor) -> Tensor:
                 weight = weight.view(torch.uint8)
@@ -400,7 +417,7 @@ class ModelBase:
             def dequant_simple(weight: Tensor, scale: Tensor, block_size: Sequence[int] | None = None) -> Tensor:
                 if scale.dtype == torch.uint8:
                     # E8M0 exponent stored as raw bytes (MXFP8)
-                    scale = (scale.float() - 127.0).exp2()
+                    scale = torch.where(scale == 255, float("nan"), (scale.float() - 127.0).exp2())
                 scale = scale.float()
 
                 # ModelOpt block scales are pre-shaped for broadcasting, e.g. [out/128, 1, in/128, 1]
@@ -510,9 +527,19 @@ class ModelBase:
                         s = self.model_tensors[name]
                         block_size = None
                         is_fp8_weight = False
-                        if self._fp8_as_q8 or fp8_configs is not None:
+                        group_size = modelopt_mxfp8_group_size(weight_name) if quant_method in ("modelopt", "modelopt_mixed") else None
+                        if self._fp8_as_q8 or fp8_configs is not None or group_size is not None:
                             weight = w()
                             is_fp8_weight = weight.dtype in (torch.float8_e4m3fn, torch.float8_e5m2)
+                        if group_size is not None:
+                            scale = s()
+                            scale_dtypes = (torch.uint8, getattr(torch, "float8_e8m0fnu", torch.uint8))
+                            if not is_fp8_weight or weight.ndim < 2 or scale.dtype not in scale_dtypes:
+                                raise ValueError(f"MXFP8 weight {weight_name!r} requires FP8 weights and E8M0 group scales")
+                            expected = (*weight.shape[:-1], (weight.shape[-1] + group_size - 1) // group_size)
+                            if tuple(scale.shape) != expected:
+                                raise ValueError(f"MXFP8 scale for {weight_name!r} has shape {tuple(scale.shape)}, expected {expected}")
+                            block_size = (1,) * (weight.ndim - 1) + (group_size,)
                         if fp8_configs is not None:
                             if not is_fp8_weight:
                                 raise ValueError(f"Expected remaining weight {weight_name!r} to be FP8, got {weight.dtype}")
@@ -729,6 +756,8 @@ class ModelBase:
                 continue
 
             scale = self.model_tensors[scale_name]()
+            if scale.dtype in (torch.uint8, getattr(torch, "float8_e8m0fnu", torch.uint8)):
+                continue
             if prod(scale.shape) != 1:
                 continue
 
@@ -1307,6 +1336,70 @@ class ModelBase:
         return any(g.get("format") == "nvfp4-pack-quantized" for g in groups.values() if isinstance(g, dict))
 
     @staticmethod
+    def _decode_nvfp4_csf(fixed: Tensor, exceptions: Tensor) -> Tensor:
+        if fixed.dtype != torch.uint8 or fixed.ndim != 2 or fixed.shape[0] == 0 or fixed.shape[1] <= 16 or fixed.shape[1] % 16:
+            raise ValueError(f"Invalid NVFP4 CSF fixed stream: {fixed.dtype}, {tuple(fixed.shape)}")
+        if exceptions.dtype != torch.uint32 or exceptions.ndim != 1:
+            raise ValueError("NVFP4 CSF exceptions must be a one-dimensional U32 tensor")
+        rows = fixed.shape[0] * 16
+        cols = (fixed.shape[1] // 16 - 1) * 2
+        if rows * cols > 1 << 24:
+            raise ValueError("NVFP4 CSF scales exceed the 24-bit exception position range")
+
+        stream = fixed.numpy()
+        bases = stream[:, :16].reshape(rows, 1)
+        if np.any(bases > 240):
+            raise ValueError("NVFP4 CSF row bases must not exceed 240")
+        codes = stream[:, 16:].reshape(rows, cols // 2)
+        scales = np.empty((rows, cols), dtype=np.uint8)
+        scales[:, 0::2] = bases + (codes & 15)
+        scales[:, 1::2] = bases + (codes >> 4)
+
+        # Each exception stores a 24-bit flat position and an 8-bit replacement scale.
+        words = exceptions.numpy()
+        positions = words & 0xFFFFFF
+        if positions.size and (positions[-1] >= scales.size or np.any(positions[1:] <= positions[:-1])):
+            raise ValueError("NVFP4 CSF exception positions must be increasing and in range")
+        scales.reshape(-1)[positions] = (words >> 24).astype(np.uint8)
+        return torch.from_numpy(scales).view(torch.float8_e4m3fn)
+
+    def _prepare_nvfp4_csf_scales(self):
+        suffixes = (".nvfp4_csf_fixed", ".nvfp4_csf_exceptions")
+        scale_names = dict.fromkeys(name.removesuffix(suffix) for name in self.model_tensors for suffix in suffixes if name.endswith(".weight_scale" + suffix))
+        for name in scale_names:
+            stream_names = [name + suffix for suffix in suffixes]
+            if any(stream not in self.model_tensors for stream in stream_names):
+                raise ValueError(f"Incomplete NVFP4 CSF streams for {name!r}")
+            if name in self.model_tensors:
+                raise ValueError(f"NVFP4 scale {name!r} has both compressed and uncompressed tensors")
+            weight_name = name.removesuffix("_scale")
+            if weight_name not in self.model_tensors:
+                raise ValueError(f"NVFP4 CSF scale {name!r} has no weight tensor")
+            weight = self.model_tensors[weight_name]()
+            if weight.dtype != torch.uint8 or weight.ndim != 2 or weight.shape[1] % 8:
+                raise ValueError(f"Invalid packed NVFP4 weight for CSF scale {name!r}")
+            shape = (weight.shape[0], weight.shape[1] // 8)
+            fixed, exceptions = (self.model_tensors[stream] for stream in stream_names)
+            fixed_tensor = fixed()
+            if fixed_tensor.ndim != 2 or (fixed_tensor.shape[0] * 16, (fixed_tensor.shape[1] // 16 - 1) * 2) != shape:
+                raise ValueError(f"NVFP4 CSF fixed stream for {name!r} does not match expected scale shape {shape}")
+
+            def load(fixed=fixed, exceptions=exceptions, shape=shape, name=name):
+                scales = ModelBase._decode_nvfp4_csf(LazyTorchTensor.to_eager(fixed()), LazyTorchTensor.to_eager(exceptions()))
+                if tuple(scales.shape) != shape:
+                    raise ValueError(f"NVFP4 CSF scale {name!r} has shape {tuple(scales.shape)}, expected {shape}")
+                return scales
+
+            if self.lazy:
+                meta = LazyTorchTensor.meta_with_dtype_and_shape(torch.float8_e4m3fn, shape)
+                lazy = LazyTorchTensor(meta=meta, args=(), func=load)
+                self.model_tensors[name] = lambda lazy=lazy: cast(torch.Tensor, lazy)
+            else:
+                self.model_tensors[name] = load
+            for stream in stream_names:
+                del self.model_tensors[stream]
+
+    @staticmethod
     def _nvfp4_pack(weight: Tensor, scale: Tensor) -> tuple[np.ndarray, list[int]]:
         """Repack NVFP4 ModelOpt tensors into ggml super-block layout.
         Preserves original E4M3 scale bits as UE4M3 (strip sign bit).
@@ -1352,7 +1445,8 @@ class ModelBase:
         n_experts = self.find_hparam(["num_local_experts", "num_experts", "n_routed_experts"], optional=True) or 0
         consumed: list[str] = []
 
-        for name in self.model_tensors.keys():
+        # Checkpoint files can interleave layers; finish each layer before buffering another.
+        for name in sorted(self.model_tensors):
             if not name.endswith(".weight"):
                 continue
             scale_name = name.replace(".weight", ".weight_scale")
@@ -1450,6 +1544,10 @@ class ModelBase:
         self._has_ple |= is_ple
         return is_ple if self.ple_only else not is_ple
 
+    def _validate_quantized_layers(self, quant_layers: dict[str, Any], matched: set[str]):
+        unmatched = {name for name, config in quant_layers.items() if isinstance(config, dict)} - matched
+        assert not unmatched, f"quantized_layers entries not in the model tensors: {sorted(unmatched)}"
+
     def prepare_tensors(self):
         # detect NVFP4 quantization (ModelOpt and Compressed-tensors formats)
         quantization_config = self.hparams.get("quantization_config") or {}
@@ -1474,6 +1572,8 @@ class ModelBase:
                 quant_format = quant_config.get("format", quant_format)
                 quant_groups = quant_config.get("config_groups", quant_groups) or {}
                 quant_layers = quant_config.get("quantized_layers", quant_layers) or {}
+                if quant_method in ("modelopt", "modelopt_mixed"):
+                    self.hparams["quantization_config"] = {**quantization_config, "quant_method": quant_method, "quant_algo": quant_algo, "quantized_layers": quant_layers, "group_size": quant_config.get("group_size", quantization_config.get("group_size", 32))}
 
         nvfp4_compressed_tensors = self._is_nvfp4_compressed_tensors(quant_method, quant_format, quant_groups)
         # e.g. MXFP8 dense weights with compressed-tensors NVFP4 experts
@@ -1510,8 +1610,7 @@ class ModelBase:
                 if filtered_name is not None:
                     self._nvfp4_layer_algo[filtered_name.removesuffix(".weight").removesuffix(".bias")] = layer_algo[module]
 
-            unmatched = layer_algo.keys() - matched
-            assert not unmatched, f"quantized_layers entries not in the model tensors: {sorted(unmatched)}"
+            self._validate_quantized_layers(quant_layers, matched)
 
         self._prepare_kv_cache_scales()
 
@@ -1541,6 +1640,7 @@ class ModelBase:
                         input_scale_name = name.replace(".input_global_scale", ".input_scale")
                         if input_scale_name not in self.model_tensors:
                             self.model_tensors[input_scale_name] = inverse_scale(self.model_tensors.pop(name))
+            self._prepare_nvfp4_csf_scales()
             self._generate_nvfp4_tensors()
 
         self._prepare_fp8_e4m3_tensors()
@@ -3361,11 +3461,12 @@ class LazyTorchTensor(gguf.LazyBase):
         torch.float16: np.float16,
         torch.float32: np.float32,
         torch.uint8: np.uint8,
+        torch.uint32: np.uint32,
         torch.int64: np.int64,
     }
 
     # only used when byteswapping data. Only correct size is needed
-    # TODO: uncomment uint64, uint32, and uint16, ref: https://github.com/pytorch/pytorch/issues/58734
+    # TODO: uncomment uint64 and uint16, ref: https://github.com/pytorch/pytorch/issues/58734
     _dtype_byteswap_map: dict[torch.dtype, type] = {
         torch.float64: np.float64,
         torch.float32: np.float32,
@@ -3374,7 +3475,7 @@ class LazyTorchTensor(gguf.LazyBase):
         torch.int64: np.int64,
         # torch.uint64: np.uint64,
         torch.int32: np.int32,
-        # torch.uint32: np.uint32,
+        torch.uint32: np.uint32,
         torch.int16: np.int16,
         # torch.uint16: np.uint16,
         torch.int8: np.int8,
@@ -3386,7 +3487,7 @@ class LazyTorchTensor(gguf.LazyBase):
 
     # used for safetensors slices
     # ref: https://github.com/huggingface/safetensors/blob/079781fd0dc455ba0fe851e2b4507c33d0c0d407/bindings/python/src/lib.rs#L1046
-    # TODO: uncomment U64, U32, and U16, ref: https://github.com/pytorch/pytorch/issues/58734
+    # TODO: uncomment U64 and U16, ref: https://github.com/pytorch/pytorch/issues/58734
     _dtype_str_map: dict[str, torch.dtype] = {
         "F64": torch.float64,
         "F32": torch.float32,
@@ -3394,7 +3495,7 @@ class LazyTorchTensor(gguf.LazyBase):
         "F16": torch.float16,
         # "U64": torch.uint64,
         "I64": torch.int64,
-        # "U32": torch.uint32,
+        "U32": torch.uint32,
         "I32": torch.int32,
         # "U16": torch.uint16,
         "I16": torch.int16,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Iterable, cast
+from math import prod
+from typing import Any, Callable, Iterable, cast
 
 import torch
 from torch import Tensor
@@ -8,9 +9,12 @@ from torch import Tensor
 import gguf
 import numpy as np
 
-from .base import LazyTorchTensor, ModelBase
+from .base import LazyTorchTensor, ModelBase, logger
 from .qwen import _LinearAttentionVReorderBase, _Qwen35MRopeMixin
 from .qwen3vl import Qwen3VLVisionModel
+
+
+_NVFP4_PLE_CHUNK_ROWS = 8192
 
 
 @ModelBase.register("Qwen4ExpForConditionalGeneration", "Qwen4ExpForCausalLM")
@@ -40,6 +44,7 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         # only the shard names, so the table itself is never held
         self._ple_shards: dict[int, str] = {}
         self._ple_row_dim: int | None = None
+        self._nvfp4_ple_shards: dict[str, tuple[Callable[[], Tensor], Callable[[], Tensor], Callable[[], Tensor]]] = {}
         self._mtp_fc: dict[str, Tensor] = {}
         self._ple_scale: float | None = None
 
@@ -65,6 +70,26 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
             rest = name.split(".", 2)[2]
             return f"model.layers.{cls._original_block_count}.{cls._MTP_EXTRA[part]}.{rest}", gen
         return super().filter_tensors(item)
+
+    def _validate_quantized_layers(self, quant_layers: dict[str, Any], matched: set[str]):
+        redundant = set()
+        n_layer = self.hparams["num_hidden_layers"]
+        n_mtp = self.hparams.get("mtp_num_hidden_layers", 0)
+        for name in quant_layers.keys() - matched:
+            parts = name.split(".", 3)
+            if len(parts) != 4 or parts[:2] != ["mtp", "layers"] or not parts[2].isdecimal():
+                continue
+            mtp_idx = int(parts[2]) - n_layer
+            if not 0 <= mtp_idx < n_mtp:
+                continue
+            if any(source.startswith(name + ".") for source in self._source_tensor_names):
+                continue
+            canonical = f"mtp.layers.{mtp_idx}.{parts[3]}"
+            # Some ModelOpt exports repeat MTP metadata with trunk-offset indices.
+            if canonical in matched and quant_layers[name] == quant_layers[canonical]:
+                redundant.add(name)
+                logger.warning("Ignoring redundant MTP quantization metadata %r (same settings as %r)", name, canonical)
+        super()._validate_quantized_layers({name: config for name, config in quant_layers.items() if name not in redundant}, matched)
 
     def _read_hash_constants(self, suffix: str) -> list[int]:
         """Read an int64 PLE constant straight from the checkpoint.
@@ -192,15 +217,68 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         (gguf.MODEL_TENSOR.SSM_BETA_ALPHA_CAT,  (gguf.MODEL_TENSOR.SSM_BETA,     gguf.MODEL_TENSOR.SSM_ALPHA),      True),
     )
 
+    def _generate_nvfp4_tensors(self):
+        consumed = set()
+        for name, weight_gen in self.model_tensors.items():
+            if ".ngram_embedding.shard_" not in name or not name.endswith(".weight"):
+                continue
+            weight = weight_gen()
+            if weight.dtype != torch.uint8:
+                continue
+            scale_name = name + "_scale"
+            scale2_name = name.rpartition(".shard_")[0] + ".weight_scale_2"
+            if scale_name not in self.model_tensors or scale2_name not in self.model_tensors:
+                raise ValueError(f"NVFP4 PLE shard {name!r} requires block scales and a shared weight_scale_2")
+            scale_gen = self.model_tensors[scale_name]
+            scale2_gen = self.model_tensors[scale2_name]
+            scale, scale2 = scale_gen(), scale2_gen()
+            if weight.ndim != 2 or min(weight.shape) <= 0 or weight.shape[1] % 8 or scale.dtype != torch.float8_e4m3fn or tuple(scale.shape) != (weight.shape[0], weight.shape[1] // 8):
+                raise ValueError(f"Invalid NVFP4 PLE weight/block scale layout for {name!r}")
+            if prod(scale2.shape) != 1 or scale2.dtype not in (torch.float16, torch.bfloat16, torch.float32):
+                raise ValueError(f"NVFP4 PLE shared scale {scale2_name!r} must be a floating-point scalar")
+            self._nvfp4_ple_shards[name] = (weight_gen, scale_gen, scale2_gen)
+            consumed.update((scale_name, scale2_name))
+        for name in consumed:
+            del self.model_tensors[name]
+        super()._generate_nvfp4_tensors()
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if self._nvfp4_ple_shards and new_name == gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD] + ".weight":
+            return gguf.GGMLQuantizationType.F16
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def _load_nvfp4_ple_shard(self, name: str, rows: slice):
+        weight_gen, scale_gen, scale2_gen = self._nvfp4_ple_shards[name]
+
+        def load() -> np.ndarray:
+            packed = LazyTorchTensor.to_eager(weight_gen()[rows]).numpy()
+            scales = LazyTorchTensor.to_eager(scale_gen()[rows]).float().numpy()
+            scale2 = float(LazyTorchTensor.to_eager(scale2_gen()).float().item())
+            if not np.isfinite(scale2) or scale2 < 0 or not np.isfinite(scales).all() or np.any(scales < 0):
+                raise ValueError(f"NVFP4 PLE shard {name!r} has invalid scales")
+            levels = np.array([0, 0.5, 1, 1.5, 2, 3, 4, 6, -0.0, -0.5, -1, -1.5, -2, -3, -4, -6], dtype=np.float32)
+            values = np.empty((packed.shape[0], packed.shape[1] * 2), dtype=np.float32)
+            values[:, 0::2] = levels[packed & 15]
+            values[:, 1::2] = levels[packed >> 4]
+            values.reshape(values.shape[0], -1, 16)[:] *= scales[:, :, None]
+            values *= scale2
+            if not np.isfinite(values).all():
+                raise ValueError(f"NVFP4 PLE shard {name!r} has non-finite decoded values")
+            return values
+
+        return load
+
     # the shards concatenate into a tensor of well over 100 GB
     # use LazyChunkedTensor here, a single shard resident at a time
     def _place_ple_shard(self, data_torch: Tensor, name: str) -> Iterable[tuple[str, Tensor]]:
 
         idx = int(name.rpartition(".shard_")[2].partition(".")[0])
         n_parts = self.hparams["split_ngram_parts"]
+        if not 0 <= idx < n_parts:
+            raise ValueError(f"PLE shard index {idx} is outside the expected range 0..{n_parts - 1}")
 
         self._ple_shards[idx] = name
-        self._ple_row_dim = int(data_torch.shape[-1])
+        self._ple_row_dim = int(data_torch.shape[-1]) * (2 if name in self._nvfp4_ple_shards else 1)
 
         if len(self._ple_shards) < n_parts:
             return []
@@ -210,15 +288,23 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         rows = 0
         for shard in shards:
             shape = self.model_tensors[shard]().shape
-            if int(shape[-1]) != self._ple_row_dim:
+            row_dim = int(shape[-1]) * (2 if shard in self._nvfp4_ple_shards else 1)
+            if row_dim != self._ple_row_dim:
                 raise ValueError(
-                    f"PLE shard {shard} has row dim {int(shape[-1])}, expected {self._ple_row_dim}")
+                    f"PLE shard {shard} has row dim {row_dim}, expected {self._ple_row_dim}")
             rows += int(shape[0])
 
         # an FP8 table keeps its bytes and gets a scale tensor, any other type has the scale folded in
         keep_fp8 = name in self._fp8_e4m3_preserved
+        chunks = []
+        for shard in shards:
+            if shard in self._nvfp4_ple_shards:
+                # Match the bounded row decoding used by packed expert conversion.
+                chunks.extend(self._load_nvfp4_ple_shard(shard, slice(start, start + _NVFP4_PLE_CHUNK_ROWS)) for start in range(0, int(self.model_tensors[shard]().shape[0]), _NVFP4_PLE_CHUNK_ROWS))
+            else:
+                chunks.append(self._load_ple_shard(shard, keep_fp8))
         table = gguf.LazyChunkedTensor(
-            [self._load_ple_shard(shard, keep_fp8) for shard in shards],
+            chunks,
             shape=(rows, self._ple_row_dim),
             dtype=np.uint8 if keep_fp8 else np.float32,
         )
