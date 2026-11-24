@@ -304,6 +304,7 @@ struct llama_hparams {
     uint32_t dflash_conv_group_size  = 0;
     uint32_t dflash_selector_rank    = 0;
     uint32_t dflash_selector_top_k   = 0;
+    bool     is_spark_dspark         = false;
     uint32_t lilicorr_hidden_size    = 0;
     uint32_t lilicorr_candidate_topk = 0;
     uint32_t lilicorr_num_heads      = 0;

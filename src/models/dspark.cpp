@@ -79,6 +79,10 @@ void llama_model_dflash::load_hparams_mistral_large4(llama_model_loader & ml) {
 void llama_model_dflash::load_tensors_dspark(int64_t n_vocab_draft) {
     LLAMA_LOAD_LOCALS;
 
+    if (hparams.is_spark_dspark) {
+        fc_norm = create_tensor(tn(LLM_TENSOR_FC_NORM, "weight"), { n_embd, (int64_t) target_layer_ids.size() }, 0);
+    }
+
     const int64_t dspark_markov_rank = ml->get_tensor_meta("markov_w1.weight")->ne[0];
 
     dspark_markov_w1   = create_tensor(tn(LLM_TENSOR_DSPARK_MARKOV_W1, "weight"), { dspark_markov_rank, n_vocab }, 0);
@@ -325,6 +329,10 @@ llama_model_dflash::graph_dspark::graph_dspark(const llm_graph_params & params) 
     if (ubatch.embd || ubatch.embd_row) {
         build_inject();
         return;
+    }
+
+    if (use_iswa && hparams.is_spark_dspark) {
+        inp_attn_iswa->self_attn_mask_swa.block_uniform = true;
     }
 
     ggml_tensor * inp_tokens = build_inp_tokens();
