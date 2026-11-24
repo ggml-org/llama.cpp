@@ -48,7 +48,7 @@ add_library(${HTP_LIB} SHARED
     argsort-ops.c
     im2col-ops.c
     conv2d-ops.c
-    conv2d-dw5-ops.c
+    conv2d-dw-ops.c
     roll-ops.c
     pool-ops.c
     upscale-ops.c
