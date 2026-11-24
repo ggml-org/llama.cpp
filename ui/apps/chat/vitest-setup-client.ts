@@ -1,6 +1,7 @@
 /// <reference types="@vitest/browser/matchers" />
 /// <reference types="@vitest/browser/providers/playwright" />
 
+import { agenticMode } from '#lib/stores/agentic-mode.svelte.ts';
 import { beforeEach, vi } from 'vitest';
 
 // Mock fetch for API calls during client tests.
@@ -13,6 +14,9 @@ import { beforeEach, vi } from 'vitest';
 const originalFetch = globalThis.fetch.bind(globalThis);
 
 beforeEach(() => {
+	// the tests run as against a llama-server started with --agent
+	agenticMode.serverHasTools = true;
+
 	vi.spyOn(globalThis, 'fetch').mockImplementation(
 		async (input: RequestInfo | URL, init?: RequestInit) => {
 			const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;

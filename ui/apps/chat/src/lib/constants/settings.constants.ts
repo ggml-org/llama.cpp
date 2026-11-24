@@ -163,13 +163,6 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
-				defaultValue: false,
-				help: 'Show MCP in the sidebar, to add and manage MCP servers. Servers already added keep working while it is hidden.',
-				key: SETTINGS_KEYS.SHOW_MCP,
-				label: 'Show MCP',
-				type: SettingsFieldType.CHECKBOX
-			},
-			{
 				defaultValue: true,
 				help: 'Choose how conversation titles are generated. The first non-empty line uses a fast deterministic rule; the LLM option uses a model-generated title from the first message exchange.',
 				key: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
@@ -531,6 +524,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 		icon: ListRestart,
 		settings: [
 			{
+				defaultValue: false,
+				help: 'Show MCP in the sidebar, to add and manage MCP servers. Servers already added keep working while it is hidden.',
+				key: SETTINGS_KEYS.SHOW_MCP,
+				label: 'Show MCP',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
 				defaultValue: DEFAULT_AGENTIC_CONFIG.maxTurns,
 				help: 'Maximum number of tool execution cycles before stopping (prevents infinite loops).',
 				isPositiveInteger: true,
@@ -881,6 +881,17 @@ function toSettingsSection(section: SettingsSectionEntry): SettingsSection {
 
 /** Sidebar sections in custom display order (the registry array order). */
 export const SETTINGS_CHAT_SECTIONS: SettingsSection[] = SETTINGS_REGISTRY.map(toSettingsSection);
+
+/** The sections to show: without the agentic features there are no tools, no loop and no MCP to set up, which are all in Tools and Agentic. */
+export function settingsChatSections(agentic: boolean): SettingsSection[] {
+	if (agentic) return SETTINGS_CHAT_SECTIONS;
+
+	return SETTINGS_CHAT_SECTIONS.filter(
+		(section) =>
+			section.slug !== SETTINGS_SECTION_SLUGS.TOOLS &&
+			section.slug !== SETTINGS_SECTION_SLUGS.AGENTIC
+	);
+}
 
 /** INPUT-type settings whose value is a number. */
 export const NUMERIC_FIELDS = getAllSettings()

@@ -188,5 +188,12 @@ export const SIDEBAR_FOOTER_ITEMS: DesktopIconStripItem[] = [
 	}
 ];
 
+/** The footer items to show: without the agentic features there is no MCP. */
+export function sidebarFooterItems(agentic: boolean): DesktopIconStripItem[] {
+	return agentic
+		? SIDEBAR_FOOTER_ITEMS
+		: SIDEBAR_FOOTER_ITEMS.filter((item) => item.action !== SidebarAction.MCP);
+}
+
 /** A light haptic tap's length where the browser vibrates (Android): a click, not a buzz. */
 export const HAPTIC_TAP_MS = 8;

@@ -154,6 +154,10 @@ llama-server serves the UI with `Cross-Origin-Embedder-Policy: require-corp` and
 
 llama-server embeds it: when llama-server is built, `scripts/ui-assets.cmake` takes `ui/apps/chat/dist` if it exists, runs `npm run build` if `LLAMA_BUILD_UI` is on, or downloads the release's prebuilt `dist.tar.gz` from Hugging Face, and compiles every file into the binary. The same `dist` is what `npx @ggml-org/llama-chat` serves.
 
+**Plain chat and agent mode.** Llama Chat is a plain chat, a message and its reply with reasoning when the model gives it, unless llama-server offers the agentic features: its built-in tools or its proxy, which `llama-server --agent` turns on together. The app reads this from `/props` and `/tools`. With them it shows the tools menu, the working folder, MCP and the Tools and Agentic settings, and runs the agentic loop; without them it shows none of these and sends the classic request. Tool calls in earlier conversations still display.
+
+**Chat-only build.** `VITE_PUBLIC_AGENTIC=false npm run build` builds an app that is a plain chat for every server, and `npm run dev:chat-only` runs the dev server the same way. Llama Harness's loop is left out of its bundle.
+
 ```text
 ui/apps/chat/
 ├── src/
