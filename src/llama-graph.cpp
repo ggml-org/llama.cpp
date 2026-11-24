@@ -1702,10 +1702,18 @@ uint32_t llm_graph_n_chunk(const llama_cparams & cparams, uint32_t n_head_mask) 
 
     const uint64_t n_chunk = LLM_GRAPH_CHUNK_BYTES/sizeof(float)/std::max<uint32_t>(1, cparams.n_ctx)/n_head_mask;
 
-    // a mask per head makes small chunks: at most 64 chunks per layer limit the graph nodes
-    const uint64_t n_chunk_min = n_head_mask > 1 ? (cparams.n_ubatch + 63)/64 : 1;
+    // no chunks if the mask of a full ubatch is in the budget
+    if (n_head_mask == 1 || n_chunk >= cparams.n_ubatch) {
+        return std::max<uint64_t>(1, n_chunk);
+    }
 
-    return std::max<uint64_t>({ 1, n_chunk, n_chunk_min });
+    // a mask per head: 16 chunks per layer keep the buffer small at short context
+    const uint64_t n_chunk_target = std::max<uint64_t>(32, (cparams.n_ubatch + 15)/16);
+
+    // at most 64 chunks per layer limit the graph nodes
+    const uint64_t n_chunk_min = (cparams.n_ubatch + 63)/64;
+
+    return std::max<uint64_t>({ 1, std::min(n_chunk, n_chunk_target), n_chunk_min });
 }
 
 // n_tokens tokens in chunks of n_chunk tokens, the last chunk has the remainder
