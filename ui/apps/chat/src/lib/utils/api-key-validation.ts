@@ -1,4 +1,4 @@
-import { withBase } from './base-path';
+import { serverUrl } from './server-config';
 import { error } from '@sveltejs/kit';
 import { HEADERS } from '#lib/constants/index.ts';
 import { MimeTypeApplication } from '#lib/enums/index.ts';
@@ -28,7 +28,7 @@ export async function validateApiKey(fetch: typeof globalThis.fetch): Promise<vo
 			headers[HEADERS.AUTHORIZATION] = `${HEADERS.BEARER}${apiKey}`;
 		}
 
-		const response = await fetch(withBase('/props'), { headers });
+		const response = await fetch(serverUrl('/props'), { headers });
 
 		if (!response.ok) {
 			if (response.status === 401 || response.status === 403) {
