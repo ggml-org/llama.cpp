@@ -130,8 +130,8 @@ struct llm_build_rwkv7_base : public llm_graph_context {
 // models
 //
 
-struct llama_model_nemotron3_6_academia : public llama_model_base {
-    llama_model_nemotron3_6_academia(const llama_model_params & params) : llama_model_base(params) {}
+struct llama_model_dory1_5 : public llama_model_base {
+    llama_model_dory1_5(const llama_model_params & params) : llama_model_base(params) {}
 
     struct linear {
         ggml_tensor * weight = nullptr;
@@ -164,9 +164,9 @@ struct llama_model_nemotron3_6_academia : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 
     struct graph : public llm_build_delta_net_base {
-        const llama_model_nemotron3_6_academia & model;
+        const llama_model_dory1_5 & model;
 
-        graph(const llama_model_nemotron3_6_academia & model, const llm_graph_params & params);
+        graph(const llama_model_dory1_5 & model, const llm_graph_params & params);
         ggml_tensor * build_linear(const linear & layer, ggml_tensor * cur);
         ggml_tensor * build_condition(float progress, float budget);
         ggml_tensor * build_layer(llm_graph_input_mem_hybrid * inp, ggml_tensor * cur, ggml_tensor * condition, int il);

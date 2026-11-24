@@ -4,7 +4,7 @@
 #include <limits>
 #include <stdexcept>
 
-void llama_model_nemotron3_6_academia::load_arch_hparams(llama_model_loader & ml) {
+void llama_model_dory1_5::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_INPUT_LAYER_COUNT, n_input);
     ml.get_key(LLM_KV_RECURRENT_LAYER_COUNT, n_recurrent);
     ml.get_key(LLM_KV_OUTPUT_LAYER_COUNT, n_output);
@@ -24,7 +24,7 @@ void llama_model_nemotron3_6_academia::load_arch_hparams(llama_model_loader & ml
     std::string cache_mode;
     ml.get_key(LLM_KV_RECURRENT_KV_CACHE_MODE, cache_mode);
     if (cache_mode != "per_loop" && cache_mode != "last_loop") {
-        throw std::runtime_error("Nemotron3_6Academia recurrent_kv_cache_mode must be per_loop or last_loop");
+        throw std::runtime_error("Dory 1.5 recurrent_kv_cache_mode must be per_loop or last_loop");
     }
 
     const uint64_t n_physical = uint64_t(n_input) + n_recurrent + n_output;
@@ -33,7 +33,7 @@ void llama_model_nemotron3_6_academia::load_arch_hparams(llama_model_loader & ml
             n_physical != hparams.n_layer_all || pattern.size() != n_physical ||
             pattern.find_first_not_of("M*-") != std::string::npos ||
             !n_cond || n_cond % 2 || n_cond > hparams.n_embd || adapter_rank > hparams.n_embd) {
-        throw std::runtime_error("invalid Nemotron3_6Academia recurrence metadata");
+        throw std::runtime_error("invalid Dory 1.5 recurrence metadata");
     }
     const uint32_t nh = hparams.n_head(0);
     const uint32_t nk = hparams.n_head_kv(0);
@@ -47,12 +47,12 @@ void llama_model_nemotron3_6_academia::load_arch_hparams(llama_model_loader & ml
             hparams.n_embd_head_k() != hparams.n_embd_head_v() || !hv || !hk || hv % hk ||
             !inner || inner % hv || !sk || !m || m > 16 || hparams.ssm_d_conv < 2 ||
             !(hparams.f_norm_rms_eps > 0 && std::isfinite(hparams.f_norm_rms_eps))) {
-        throw std::runtime_error("invalid Nemotron3_6Academia attention dimensions");
+        throw std::runtime_error("invalid Dory 1.5 attention dimensions");
     }
     const uint64_t conv_dim = uint64_t(m)*inner + uint64_t(m + 1)*hk*sk;
     if (conv_dim > std::numeric_limits<uint32_t>::max() / (hparams.ssm_d_conv - 1) ||
             uint64_t(sk)*inner > std::numeric_limits<uint32_t>::max()) {
-        throw std::runtime_error("Nemotron3_6Academia recurrent state dimensions overflow");
+        throw std::runtime_error("Dory 1.5 recurrent state dimensions overflow");
     }
 
     for (uint32_t i = 0; i < n_input; ++i) {
@@ -81,7 +81,7 @@ void llama_model_nemotron3_6_academia::load_arch_hparams(llama_model_loader & ml
     type = LLM_TYPE_4B;
 }
 
-void llama_model_nemotron3_6_academia::load_arch_tensors(llama_model_loader &) {
+void llama_model_dory1_5::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
@@ -156,15 +156,15 @@ void llama_model_nemotron3_6_academia::load_arch_tensors(llama_model_loader &) {
     }
 }
 
-std::unique_ptr<llm_graph_context> llama_model_nemotron3_6_academia::build_arch_graph(const llm_graph_params & params) const {
+std::unique_ptr<llm_graph_context> llama_model_dory1_5::build_arch_graph(const llm_graph_params & params) const {
     return std::make_unique<graph>(*this, params);
 }
 
-ggml_tensor * llama_model_nemotron3_6_academia::graph::build_linear(const linear & layer, ggml_tensor * cur) {
+ggml_tensor * llama_model_dory1_5::graph::build_linear(const linear & layer, ggml_tensor * cur) {
     return ggml_add(ctx0, build_lora_mm(layer.weight, cur), layer.bias);
 }
 
-ggml_tensor * llama_model_nemotron3_6_academia::graph::build_condition(float progress, float budget) {
+ggml_tensor * llama_model_dory1_5::graph::build_condition(float progress, float budget) {
     const int half = model.n_cond / 2;
     auto * freq = ggml_exp(ctx0, ggml_scale(ctx0, ggml_arange(ctx0, 0, half, 1), -logf(100.0f)/half));
     const auto embed = [&](float value) {
@@ -176,7 +176,7 @@ ggml_tensor * llama_model_nemotron3_6_academia::graph::build_condition(float pro
     return build_linear(model.cond_down, ggml_silu(ctx0, cur));
 }
 
-llama_model_nemotron3_6_academia::graph::graph(const llama_model_nemotron3_6_academia & model, const llm_graph_params & params) :
+llama_model_dory1_5::graph::graph(const llama_model_dory1_5 & model, const llm_graph_params & params) :
     llm_build_delta_net_base(params), model(model) {
     auto * cur = build_inp_embd(model.tok_embd);
     auto * out_ids = build_inp_out_ids();
@@ -227,7 +227,7 @@ llama_model_nemotron3_6_academia::graph::graph(const llama_model_nemotron3_6_aca
     cb(res->t_logits, "result_output", -1);
 }
 
-ggml_tensor * llama_model_nemotron3_6_academia::graph::build_layer(llm_graph_input_mem_hybrid * inp, ggml_tensor * cur, ggml_tensor * condition, int il) {
+ggml_tensor * llama_model_dory1_5::graph::build_layer(llm_graph_input_mem_hybrid * inp, ggml_tensor * cur, ggml_tensor * condition, int il) {
     const auto & l = model.layers[il];
     const auto & c = model.cond[il];
     auto * residual = cur;
@@ -263,7 +263,7 @@ ggml_tensor * llama_model_nemotron3_6_academia::graph::build_layer(llm_graph_inp
     return cur;
 }
 
-ggml_tensor * llama_model_nemotron3_6_academia::graph::build_gdp(llm_graph_input_rs * inp, ggml_tensor * cur, int il) {
+ggml_tensor * llama_model_dory1_5::graph::build_gdp(llm_graph_input_rs * inp, ggml_tensor * cur, int il) {
     const auto & l = model.layers[il];
     const int64_t sk = hparams.ssm_d_state;
     const int64_t hk = hparams.ssm_n_group;

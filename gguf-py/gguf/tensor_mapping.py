@@ -7,15 +7,15 @@ from .constants import MODEL_ARCH, MODEL_TENSOR, MODEL_TENSORS, TENSOR_NAMES
 
 class TensorNameMap:
     mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
-        MODEL_TENSOR.LOOP_COND_UP: ("model.loop_conditioner.mlp.0",),  # nemotron3_6_academia
-        MODEL_TENSOR.LOOP_COND_DOWN: ("model.loop_conditioner.mlp.2",),  # nemotron3_6_academia
-        MODEL_TENSOR.LOOP_ENTRY_NORM: ("model.loop_seam.entry_norm",),  # nemotron3_6_academia
-        MODEL_TENSOR.LOOP_ENTRY_GAMMA: ("model.loop_seam.entry_gamma",),  # nemotron3_6_academia
-        MODEL_TENSOR.LOOP_ENTRY_BETA: ("model.loop_seam.entry_beta",),  # nemotron3_6_academia
-        MODEL_TENSOR.LOOP_EXIT_GATE: ("model.loop_seam.exit_gate",),  # nemotron3_6_academia
-        MODEL_TENSOR.LOOP_INPUT_MIX: ("model.loop_seam.input_mix",),  # nemotron3_6_academia
-        MODEL_TENSOR.STATE_UPDATE: ("model.state_update.proj",),  # nemotron3_6_academia
-        MODEL_TENSOR.STATE_ALPHA: ("model.state_update.base_alpha_raw",),  # nemotron3_6_academia
+        MODEL_TENSOR.LOOP_COND_UP: ("model.loop_conditioner.mlp.0",),  # dory1_5
+        MODEL_TENSOR.LOOP_COND_DOWN: ("model.loop_conditioner.mlp.2",),  # dory1_5
+        MODEL_TENSOR.LOOP_ENTRY_NORM: ("model.loop_seam.entry_norm",),  # dory1_5
+        MODEL_TENSOR.LOOP_ENTRY_GAMMA: ("model.loop_seam.entry_gamma",),  # dory1_5
+        MODEL_TENSOR.LOOP_ENTRY_BETA: ("model.loop_seam.entry_beta",),  # dory1_5
+        MODEL_TENSOR.LOOP_EXIT_GATE: ("model.loop_seam.exit_gate",),  # dory1_5
+        MODEL_TENSOR.LOOP_INPUT_MIX: ("model.loop_seam.input_mix",),  # dory1_5
+        MODEL_TENSOR.STATE_UPDATE: ("model.state_update.proj",),  # dory1_5
+        MODEL_TENSOR.STATE_ALPHA: ("model.state_update.base_alpha_raw",),  # dory1_5
 
         # Token embeddings
         MODEL_TENSOR.TOKEN_EMBD: (
@@ -244,12 +244,12 @@ class TensorNameMap:
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
-        MODEL_TENSOR.LOOP_GAMMA: ("model.layers.{bid}.loop_conditioning.gamma_head",),  # nemotron3_6_academia
-        MODEL_TENSOR.LOOP_BETA: ("model.layers.{bid}.loop_conditioning.beta_head",),  # nemotron3_6_academia
-        MODEL_TENSOR.LOOP_GATE: ("model.layers.{bid}.loop_conditioning.gate_head",),  # nemotron3_6_academia
-        MODEL_TENSOR.LOOP_ADAPTER_GATE: ("model.layers.{bid}.loop_conditioning.adapter_gate",),  # nemotron3_6_academia
-        MODEL_TENSOR.LOOP_ADAPTER_UP: ("model.layers.{bid}.loop_conditioning.up_proj",),  # nemotron3_6_academia
-        MODEL_TENSOR.LOOP_ADAPTER_DOWN: ("model.layers.{bid}.loop_conditioning.down_proj",),  # nemotron3_6_academia
+        MODEL_TENSOR.LOOP_GAMMA: ("model.layers.{bid}.loop_conditioning.gamma_head",),  # dory1_5
+        MODEL_TENSOR.LOOP_BETA: ("model.layers.{bid}.loop_conditioning.beta_head",),  # dory1_5
+        MODEL_TENSOR.LOOP_GATE: ("model.layers.{bid}.loop_conditioning.gate_head",),  # dory1_5
+        MODEL_TENSOR.LOOP_ADAPTER_GATE: ("model.layers.{bid}.loop_conditioning.adapter_gate",),  # dory1_5
+        MODEL_TENSOR.LOOP_ADAPTER_UP: ("model.layers.{bid}.loop_conditioning.up_proj",),  # dory1_5
+        MODEL_TENSOR.LOOP_ADAPTER_DOWN: ("model.layers.{bid}.loop_conditioning.down_proj",),  # dory1_5
 
         # Attention norm
         MODEL_TENSOR.ATTN_NORM: (
@@ -331,7 +331,7 @@ class TensorNameMap:
 
         # Attention query
         MODEL_TENSOR.ATTN_Q: (
-            "model.layers.{bid}.mixer.q_proj",                           # nemotron3_6_academia
+            "model.layers.{bid}.mixer.q_proj",                           # dory1_5
             "model.layers.{bid}.self_attn.q_proj",                       # llama-hf nemotron olmoe olmo2 phimoe
             "model.layers.{bid}.attention.q_proj",                       # bailingmoe3
             "layers.{bid}.self_attn.q_proj",                             # embeddinggemma
@@ -354,7 +354,7 @@ class TensorNameMap:
 
         # Attention key
         MODEL_TENSOR.ATTN_K: (
-            "model.layers.{bid}.mixer.k_proj",                         # nemotron3_6_academia
+            "model.layers.{bid}.mixer.k_proj",                         # dory1_5
             "model.layers.{bid}.self_attn.k_proj",                     # llama-hf nemotron olmoe olmo2 phimoe
             "model.layers.{bid}.attention.k_proj",                     # bailingmoe3
             "layers.{bid}.self_attn.k_proj",                           # embeddinggemma
@@ -378,7 +378,7 @@ class TensorNameMap:
 
         # Attention value
         MODEL_TENSOR.ATTN_V: (
-            "model.layers.{bid}.mixer.v_proj",                           # nemotron3_6_academia
+            "model.layers.{bid}.mixer.v_proj",                           # dory1_5
             "model.layers.{bid}.self_attn.v_proj",                       # llama-hf nemotron olmoe olmo2 phimoe
             "model.layers.{bid}.attention.v_proj",                       # bailingmoe3
             "layers.{bid}.self_attn.v_proj",                             # embeddinggemma
@@ -401,7 +401,7 @@ class TensorNameMap:
 
         # Attention output
         MODEL_TENSOR.ATTN_OUT: (
-            "model.layers.{bid}.mixer.o_proj",                              # nemotron3_6_academia
+            "model.layers.{bid}.mixer.o_proj",                              # dory1_5
             "model.lilicorr.layers.{bid}.attn.out_proj",                    # lilicorr
             "gpt_neox.layers.{bid}.attention.dense",                        # gptneox
             "transformer.h.{bid}.attn.c_proj",                              # gpt2 refact qwen jais
@@ -481,7 +481,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.ATTN_GATE: (
-            "model.layers.{bid}.mixer.z_proj",        # nemotron3_6_academia
+            "model.layers.{bid}.mixer.z_proj",        # dory1_5
             "model.layers.{bid}.self_attn.gate_proj", # afmoe muse-glimmer
             "model.layers.{bid}.linear_attn.in_proj_z",  # qwen3.5
             "layers.{bid}.linear_attn.in_proj_z",        # qwen3.5 text
@@ -744,7 +744,7 @@ class TensorNameMap:
 
         # Feed-forward up
         MODEL_TENSOR.FFN_UP: (
-            "model.layers.{bid}.mixer.up_proj",                       # nemotron3_6_academia
+            "model.layers.{bid}.mixer.up_proj",                       # dory1_5
             "model.lilicorr.layers.{bid}.mlp.up_proj",                # lilicorr
             "model.lilicorr.feature_mlp.{bid}.up_proj",               # lilicorr
             "gpt_neox.layers.{bid}.mlp.dense_h_to_4h",                # gptneox
@@ -983,7 +983,7 @@ class TensorNameMap:
 
         # Feed-forward down
         MODEL_TENSOR.FFN_DOWN: (
-            "model.layers.{bid}.mixer.down_proj",                     # nemotron3_6_academia
+            "model.layers.{bid}.mixer.down_proj",                     # dory1_5
             "model.lilicorr.layers.{bid}.mlp.down_proj",              # lilicorr
             "model.lilicorr.feature_mlp.{bid}.down_proj",             # lilicorr
             "gpt_neox.layers.{bid}.mlp.dense_4h_to_h",                # gptneox
@@ -1190,7 +1190,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.SSM_CONV1D: (
-            "model.layers.{bid}.mixer.conv1d",         # nemotron3_6_academia
+            "model.layers.{bid}.mixer.conv1d",         # dory1_5
             "model.layers.{bid}.conv1d",               # mamba-hf
             "backbone.layers.{bid}.mixer.conv1d",      # mamba
             "model.layers.{bid}.mamba.conv1d",         # jamba falcon-h1 granite-hybrid
@@ -1208,7 +1208,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.SSM_DT: (
-            "model.layers.{bid}.mixer.dt_bias",         # nemotron3_6_academia
+            "model.layers.{bid}.mixer.dt_bias",         # dory1_5
             "layers.{bid}.mixer.impl.mixer.dt_bias",    # metis16
             "model.layers.{bid}.dt_proj",               # mamba-hf
             "backbone.layers.{bid}.mixer.dt_proj",      # mamba
@@ -1227,7 +1227,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.SSM_A: (
-            "model.layers.{bid}.mixer.A_log",         # nemotron3_6_academia
+            "model.layers.{bid}.mixer.A_log",         # dory1_5
             "layers.{bid}.mixer.impl.mixer.A_log",    # metis16
             "model.layers.{bid}.A_log",               # mamba-hf
             "backbone.layers.{bid}.mixer.A_log",      # mamba
@@ -1260,7 +1260,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.SSM_NORM: (
-            "model.layers.{bid}.mixer.norm",        # nemotron3_6_academia
+            "model.layers.{bid}.mixer.norm",        # dory1_5
             "layers.{bid}.mixer.impl.mixer.norm",   # metis16
             "model.layers.{bid}.mamba.norm",        # falcon-h1 granite-hybrid
             "model.layers.{bid}.linear_attn.norm",  # qwen3next
@@ -1271,7 +1271,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.SSM_OUT: (
-            "model.layers.{bid}.mixer.out_proj",         # nemotron3_6_academia
+            "model.layers.{bid}.mixer.out_proj",         # dory1_5
             "model.layers.{bid}.out_proj",               # mamba-hf
             "backbone.layers.{bid}.mixer.out_proj",      # mamba
             "model.layers.{bid}.mamba.out_proj",         # jamba falcon-h1 granite-hybrid
@@ -1282,7 +1282,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.SSM_ALPHA: (
-            "model.layers.{bid}.mixer.a_proj",           # nemotron3_6_academia
+            "model.layers.{bid}.mixer.a_proj",           # dory1_5
             "model.layers.{bid}.linear_attn.in_proj_a",  # qwen3.5
             "layers.{bid}.linear_attn.in_proj_a",        # qwen3.5 text
         ),
@@ -1311,7 +1311,7 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.f_b_proj",
         ),
         MODEL_TENSOR.SSM_BETA: (
-            "model.layers.{bid}.mixer.b_proj",           # nemotron3_6_academia
+            "model.layers.{bid}.mixer.b_proj",           # dory1_5
             "model.layers.{bid}.linear_attn.in_proj_b",  # qwen3.5
             "layers.{bid}.linear_attn.in_proj_b",        # qwen3.5 text
             "model.layers.{bid}.self_attn.b_proj",       # Kimi Linear

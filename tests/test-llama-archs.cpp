@@ -258,7 +258,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     uint32_t n_head  = 2;
     uint32_t n_ff    = 384;
     uint32_t n_layer = 2;
-    if (arch == LLM_ARCH_NEMOTRON3_6_ACADEMIA) {
+    if (arch == LLM_ARCH_DORY1_5) {
         n_layer = 5;
     } else if (arch == LLM_ARCH_LLAMA4) {
         n_layer = 4; // hparams.n_no_rope_layer_step is hard-coded to 4
@@ -845,7 +845,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, 25.0f);
     ms.add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,        -5.0f);
 
-    if (arch == LLM_ARCH_NEMOTRON3_6_ACADEMIA) {
+    if (arch == LLM_ARCH_DORY1_5) {
         ms.add_kv(LLM_KV_INPUT_LAYER_COUNT, uint32_t(1));
         ms.add_kv(LLM_KV_RECURRENT_LAYER_COUNT, uint32_t(3));
         ms.add_kv(LLM_KV_OUTPUT_LAYER_COUNT, uint32_t(1));
@@ -1325,7 +1325,7 @@ static std::string get_device_label(ggml_backend_dev_t dev) {
     return std::string(desc) + " (" + name + ")";
 }
 
-static bool check_academia_cache(const size_t seed, const float stdev, const std::vector<ggml_backend_dev_t> & devs) {
+static bool check_dory1_5_cache(const size_t seed, const float stdev, const std::vector<ggml_backend_dev_t> & devs) {
     const auto tokens = get_tokens(16, 128, seed);
     struct config {
         uint32_t loops;
@@ -1340,8 +1340,8 @@ static bool check_academia_cache(const size_t seed, const float stdev, const std
         { 4, "last_loop", GGML_TYPE_Q8_0, -1 },
     };
     for (const auto & cfg : configs) {
-        auto metadata = get_gguf_ctx(LLM_ARCH_NEMOTRON3_6_ACADEMIA, false);
-        const LLM_KV kv(LLM_ARCH_NEMOTRON3_6_ACADEMIA);
+        auto metadata = get_gguf_ctx(LLM_ARCH_DORY1_5, false);
+        const LLM_KV kv(LLM_ARCH_DORY1_5);
         gguf_set_val_u32(metadata.get(), kv(LLM_KV_NUM_LOOPS).c_str(), cfg.loops);
         gguf_set_val_str(metadata.get(), kv(LLM_KV_RECURRENT_KV_CACHE_MODE).c_str(), cfg.cache_mode);
         const auto run = [&](bool cpu, uint32_t n_ubatch) {
@@ -1362,13 +1362,13 @@ static bool check_academia_cache(const size_t seed, const float stdev, const std
             params.n_ubatch = n_ubatch;
             llama_context_ptr ctx(llama_init_from_model(model.get(), params));
             if (!ctx) {
-                throw std::runtime_error("failed to create Academia cache context");
+                throw std::runtime_error("failed to create Dory 1.5 cache context");
             }
             auto logits = get_logits(model.get(), ctx.get(), tokens);
             common_batch batch(ctx.get());
             batch.add(tokens.front(), tokens.size(), 0, true);
             if (llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
-                throw std::runtime_error("failed to decode after Academia prefill");
+                throw std::runtime_error("failed to decode after Dory 1.5 prefill");
             }
             const float * next = llama_get_logits_ith(ctx.get(), 0);
             logits.insert(logits.end(), next, next + llama_vocab_n_tokens(llama_model_get_vocab(model.get())));
@@ -1379,7 +1379,7 @@ static bool check_academia_cache(const size_t seed, const float stdev, const std
         const auto actual = run(false, 4);
         const double error = nmse(reference, actual);
         if (!(error <= 1e-4)) {
-            LOG_ERR("Academia loops=%u cache=%s type=%s ngl=%d: NMSE %.2e\n", cfg.loops, cfg.cache_mode, ggml_type_name(cfg.type_kv), cfg.n_gpu_layers, error);
+            LOG_ERR("Dory 1.5 loops=%u cache=%s type=%s ngl=%d: NMSE %.2e\n", cfg.loops, cfg.cache_mode, ggml_type_name(cfg.type_kv), cfg.n_gpu_layers, error);
             return false;
         }
         if (cfg.loops == 3 && strcmp(cfg.cache_mode, "last_loop") == 0) {
@@ -1391,7 +1391,7 @@ static bool check_academia_cache(const size_t seed, const float stdev, const std
             const size_t n_vocab = reference.size() / (tokens.size() + 1);
             if (std::equal(reference.end() - n_vocab, reference.end(), per_loop.end() - n_vocab) ||
                     !std::equal(per_loop_full.begin(), per_loop_full.end() - n_vocab, last_loop_full.begin())) {
-                LOG_ERR("Academia cache modes must agree for a whole prompt and differ after chunked prefill\n");
+                LOG_ERR("Dory 1.5 cache modes must agree for a whole prompt and differ after chunked prefill\n");
                 return false;
             }
         }
@@ -1617,7 +1617,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                             test_ok = false;
                         }
 
-                        if (arch == LLM_ARCH_NEMOTRON3_6_ACADEMIA && !check_academia_cache(seed, stdev, dc.devs)) {
+                        if (arch == LLM_ARCH_DORY1_5 && !check_dory1_5_cache(seed, stdev, dc.devs)) {
                             test_ok = false;
                             status_nmse = "\033[1;31mFAIL\033[0m (cache)";
                         }

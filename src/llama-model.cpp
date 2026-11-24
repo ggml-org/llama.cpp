@@ -44,8 +44,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
     switch (arch) {
         case LLM_ARCH_CLIP:
             return new llama_model_clip(params);
-        case LLM_ARCH_NEMOTRON3_6_ACADEMIA:
-            return new llama_model_nemotron3_6_academia(params);
+        case LLM_ARCH_DORY1_5:
+            return new llama_model_dory1_5(params);
         case LLM_ARCH_LLAMA:
             return new llama_model_llama(params);
         case LLM_ARCH_LLAMA4:
@@ -3447,9 +3447,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     } else if (arch == LLM_ARCH_FALCON_H1 || arch == LLM_ARCH_INKLING2 || arch == LLM_ARCH_INKLING2_LOOP || arch == LLM_ARCH_ZAYA1) {
                         filter_attn = [&](uint32_t) { return true; };
                         filter_recr = [&](uint32_t) { return true; };
-                    } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE || arch == LLM_ARCH_NEMOTRON3_6_ACADEMIA) {
+                    } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE || arch == LLM_ARCH_DORY1_5) {
                         filter_attn = [&](uint32_t il) {
-                            if (arch == LLM_ARCH_NEMOTRON3_6_ACADEMIA && static_cast<const llama_model_nemotron3_6_academia &>(*this).cache_layer[il] != il) {
+                            if (arch == LLM_ARCH_DORY1_5 && static_cast<const llama_model_dory1_5 &>(*this).cache_layer[il] != il) {
                                 return false;
                             }
                             return !hparams.is_recr(il) && hparams.n_ff(il) == 0;
@@ -3796,7 +3796,7 @@ const char * llama_model_decision_label(const struct llama_model * model, uint32
 llama_rope_type llama_model_rope_type(const llama_model * model) {
     switch (model->arch) {
         // these models do not use RoPE
-        case LLM_ARCH_NEMOTRON3_6_ACADEMIA:
+        case LLM_ARCH_DORY1_5:
         case LLM_ARCH_CLIP:
         case LLM_ARCH_GPT2:
         case LLM_ARCH_GPTJ:

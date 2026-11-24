@@ -798,7 +798,7 @@ class MODEL_ARCH(IntEnum):
     INKLING2         = auto()
     INKLING2_LOOP    = auto()
     DOMYN_EDGE       = auto()
-    NEMOTRON3_6_ACADEMIA              = auto()
+    DORY1_5          = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -1831,7 +1831,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.INKLING2:         "inkling2",
     MODEL_ARCH.INKLING2_LOOP:    "inkling2_loop",
     MODEL_ARCH.DOMYN_EDGE:       "domynedge",
-    MODEL_ARCH.NEMOTRON3_6_ACADEMIA:              "nemotron3_6_academia",
+    MODEL_ARCH.DORY1_5:          "dory1_5",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -2672,7 +2672,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
-    MODEL_ARCH.NEMOTRON3_6_ACADEMIA: [
+    MODEL_ARCH.DORY1_5: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.OUTPUT,

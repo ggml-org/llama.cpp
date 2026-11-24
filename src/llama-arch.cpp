@@ -187,7 +187,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_INKLING2,         "inkling2"         },
     { LLM_ARCH_INKLING2_LOOP,    "inkling2_loop"    },
     { LLM_ARCH_DOMYN_EDGE,       "domynedge"        },
-    { LLM_ARCH_NEMOTRON3_6_ACADEMIA,              "nemotron3_6_academia"              },
+    { LLM_ARCH_DORY1_5,          "dory1_5"          },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -1496,7 +1496,7 @@ bool llm_arch_is_recurrent(const llm_arch & arch) {
 
 bool llm_arch_is_hybrid(const llm_arch & arch) {
     switch (arch) {
-        case LLM_ARCH_NEMOTRON3_6_ACADEMIA:
+        case LLM_ARCH_DORY1_5:
         case LLM_ARCH_JAMBA:
         case LLM_ARCH_FALCON_H1:
         case LLM_ARCH_PLAMO2:
@@ -1588,7 +1588,7 @@ bool llm_arch_supports_mixed_batch(const llm_arch & arch) {
 
 bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
     switch (arch) {
-        case LLM_ARCH_NEMOTRON3_6_ACADEMIA:
+        case LLM_ARCH_DORY1_5:
         case LLM_ARCH_CLOVER_MOE:
         case LLM_ARCH_ZAYA1:
         case LLM_ARCH_GROK:
@@ -1637,7 +1637,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
 
 bool llama_arch_supports_save(llm_arch arch) {
     switch (arch) {
-        case LLM_ARCH_NEMOTRON3_6_ACADEMIA:
+        case LLM_ARCH_DORY1_5:
         case LLM_ARCH_SENSENOVA_U1:
         case LLM_ARCH_GEMMA3N:
         case LLM_ARCH_BITNET:

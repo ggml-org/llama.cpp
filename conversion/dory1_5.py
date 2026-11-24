@@ -5,18 +5,19 @@ import torch
 from .base import ModelBase, TextModel, gguf
 
 
-@ModelBase.register("Nemotron3_6AcademiaForCausalLM")
-class Nemotron3_6AcademiaModel(TextModel):
-    model_arch = gguf.MODEL_ARCH.NEMOTRON3_6_ACADEMIA
+@ModelBase.register("Dory1_5ForCausalLM")
+@ModelBase.example("nvidia/NVIDIA-Nemotron-Labs-Dory1.5-4B-BF16")
+class Dory1_5Model(TextModel):
+    model_arch = gguf.MODEL_ARCH.DORY1_5
 
     def set_vocab(self):
         self._set_vocab_gpt2()
 
     def set_gguf_parameters(self):
         if self.find_hparam(["hidden_act"]) != "relu2":
-            raise ValueError("Nemotron3_6Academia requires relu2 activation")
+            raise ValueError("Dory 1.5 requires relu2 activation")
         if self.fuse_qkv:
-            raise ValueError("Nemotron3_6Academia requires separate Q/K/V projections")
+            raise ValueError("Dory 1.5 requires separate Q/K/V projections")
 
         super().set_gguf_parameters()
         w = self.gguf_writer
