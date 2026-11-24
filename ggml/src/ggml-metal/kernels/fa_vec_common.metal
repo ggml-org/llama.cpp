@@ -24,7 +24,29 @@ constant bool    FC_flash_attn_ext_vec_has_rows   [[function_constant(FC_FLASH_A
     ((DK)/4) %  4 == 0 && ((DV)/4) %  4 == 0 ?  4 :                                      \
     ((DK)/4) %  2 == 0 && ((DV)/4) %  2 == 0 ?  2 : 1)
 
-#define FA_VEC_NE(DK, DV) (N_SIMDWIDTH / FA_VEC_NL(DK, DV))
+// NE (head elements per thread) for the baseline instantiation, derived from the simdgroup width so
+// that one instantiation list serves every width: NL = N_SIMDWIDTH/NE lanes split the row over head
+// blocks, so NL must divide both dk/4 and dv/4. Take the largest power-of-two NL that divides them,
+// capped at the width (equivalently the SMALLEST NE = N_SIMDWIDTH/NL). Written as a constexpr
+// function (not a macro ternary) so the result is a constant expression Metal accepts for the array
+// sizes and static_asserts in the kernel. ggml_metal_tuning::fa_vec_baseline_ne mirrors this.
+//
+// Search NE from small to large (NL from large to small) and return the first/smallest NE whose
+// NL divides both dk/4 and dv/4. The previous version searched NE from nw down, whose first
+// candidate (ne = nw -> nl = 1) always divides, so it always returned nw and forced NL = 1,
+// producing wrong attention (garbage PPL) for every shape.
+constexpr short fa_vec_ne_base(short dk, short dv, short nw) {
+    const short dk4 = dk / 4;
+    const short dv4 = dv / 4;
+    for (short ne = 1; ne <= nw; ne <<= 1) {
+        const short nl = nw / ne;
+        if (dk4 % nl == 0 && dv4 % nl == 0) {
+            return ne;
+        }
+    }
+    return nw; // fallback: NL = 1 (nothing larger divides both)
+}
+#define FA_VEC_NE(DK, DV) fa_vec_ne_base((short)(DK), (short)(DV), (short)N_SIMDWIDTH)
 
 
 template<
