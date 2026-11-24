@@ -21,7 +21,7 @@
 	import { conversationsStore, deviceStore, toolsStore } from '#lib/stores/index.ts';
 	import { abbreviateHome, runGlobSearchWithChildren } from '#lib/utils/index.ts';
 	import { page } from '$app/state';
-	import { slide } from 'svelte/transition';
+	import { cubicInOut } from 'svelte/easing';
 
 	// Microtask delay so the popover's focus scope tears down first.
 	const FOCUS_DELAY_MS = 0;
@@ -319,27 +319,29 @@
 	const ROUTE_SWAP_WINDOW_MS = 100;
 	let routeChangedAt = -Infinity;
 
+	const routeJustChanged = () => performance.now() - routeChangedAt < ROUTE_SWAP_WINDOW_MS;
+
 	$effect.pre(() => {
 		void page.params.id;
 
 		routeChangedAt = performance.now();
 	});
 
-	// two steps: the room opens first (the form below it follows), then the chip fades in;
-	// leaving runs the same curve backwards, so it fades out before the room closes
+	// two steps: the box that holds the chip resizes to its full height first (the form below
+	// it follows), then the chip fades in; leaving runs the same curve backwards, so it fades
+	// out before the box closes
 	function chipTransition(node: Element) {
-		const height = slide(node);
-		const swappedWithRoute = performance.now() - routeChangedAt < ROUTE_SWAP_WINDOW_MS;
+		const height = node.getBoundingClientRect().height;
 
 		return {
 			css: (t: number) => {
-				const openness = Math.min(t / CHAT_FORM_CHIP_SPLIT, 1);
-				const visibility = Math.max((t - CHAT_FORM_CHIP_SPLIT) / (1 - CHAT_FORM_CHIP_SPLIT), 0);
+				const resize = cubicInOut(Math.min(t / CHAT_FORM_CHIP_SPLIT, 1));
+				const fade = Math.max((t - CHAT_FORM_CHIP_SPLIT) / (1 - CHAT_FORM_CHIP_SPLIT), 0);
 
-				return `${height.css?.(openness, 1 - openness) ?? ''}opacity: ${visibility};`;
+				return `overflow: hidden; height: ${height * resize}px; opacity: ${fade};`;
 			},
 			delay: 0,
-			duration: swappedWithRoute ? 0 : CHAT_FORM_CHIP_TRANSITION_MS
+			duration: routeJustChanged() ? 0 : CHAT_FORM_CHIP_TRANSITION_MS
 		};
 	}
 
@@ -348,24 +350,25 @@
 </script>
 
 {#if showChip}
-	<button
-		transition:chipTransition
-		class={[
-			'justify-self-start flex min-w-0 w-auto items-center gap-1 mt-1.5 py-1 px-2 backdrop-blur-2xl rounded-md',
-			className
-		]}
-		{disabled}
-		onclick={onOpen}
-		type="button"
-	>
-		<ChatFormCurrentWorkingDirectoryChip
-			directory={directory ?? chipDirectory}
+	<div transition:chipTransition class="grid">
+		<button
+			class={[
+				'justify-self-start flex min-w-0 w-auto items-center gap-1 mt-1.5 py-1 px-2 backdrop-blur-2xl rounded-md',
+				className
+			]}
 			{disabled}
-			{homeBase}
-			onClear={handleDismiss}
-			{showTooltip}
-		/>
-	</button>
+			onclick={onOpen}
+			type="button"
+		>
+			<ChatFormCurrentWorkingDirectoryChip
+				directory={directory ?? chipDirectory}
+				{disabled}
+				{homeBase}
+				onClear={handleDismiss}
+				{showTooltip}
+			/>
+		</button>
+	</div>
 {/if}
 
 <!-- the drawer's version is roomier: the header's inset, rows spaced for a finger and
