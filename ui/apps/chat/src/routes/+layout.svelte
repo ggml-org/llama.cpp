@@ -483,7 +483,6 @@
 
 	<DialogImportConversationPreview
 		bind:open={dropImport.ui.showPreview}
-		conversationName={dropImport.ui.previewData?.conv.name}
 		messages={dropImport.ui.previewData?.messages}
 		onCancel={dropImport.cancelPreview}
 		onConfirm={dropImport.confirmImportSingle}

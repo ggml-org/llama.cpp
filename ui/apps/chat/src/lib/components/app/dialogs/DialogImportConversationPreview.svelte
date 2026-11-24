@@ -1,23 +1,15 @@
 <script lang="ts">
 	import * as AlertDialog from '@ggml-org/llama-ui/ui/alert-dialog';
-	import { MessageSquarePlus } from '@lucide/svelte';
 	import ChatMessages from '#lib/components/app/chat/ChatMessages/ChatMessages.svelte';
 
 	interface Props {
 		open: boolean;
-		conversationName?: string;
 		messages?: DatabaseMessage[];
 		onConfirm: () => void;
 		onCancel: () => void;
 	}
 
-	let {
-		conversationName = '',
-		messages = [],
-		onCancel,
-		onConfirm,
-		open = $bindable()
-	}: Props = $props();
+	let { messages = [], onCancel, onConfirm, open = $bindable() }: Props = $props();
 
 	function handleOpenChange(newOpen: boolean) {
 		if (!newOpen) {
@@ -29,20 +21,12 @@
 <AlertDialog.Root onOpenChange={handleOpenChange} {open}>
 	<AlertDialog.Content class="sm:max-w-3xl">
 		<AlertDialog.Header>
-			<AlertDialog.Title class="flex items-center gap-2">
-				<MessageSquarePlus class="h-5 w-5" />
-
-				Import conversation?
-			</AlertDialog.Title>
-
-			<AlertDialog.Description>
-				Preview of
-				<span class="font-medium">"{conversationName || 'Untitled conversation'}"</span>. Confirm to
-				import it into your library.
-			</AlertDialog.Description>
+			<AlertDialog.Title>Import conversation?</AlertDialog.Title>
 		</AlertDialog.Header>
 
-		<div class="max-h-[60vh] overflow-y-auto rounded-md border">
+		<div
+			class="max-h-[60vh] overflow-y-auto rounded-md border border-border/30 p-4 dark:border-border/20"
+		>
 			<ChatMessages {messages} />
 		</div>
 

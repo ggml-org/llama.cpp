@@ -477,7 +477,6 @@ export { default as DialogSettingsImportPreview } from './DialogSettingsImportPr
  * ```svelte
  * <DialogImportConversationPreview
  *   bind:open={showPreview}
- *   conversationName={conv?.name}
  *   messages={conv?.messages}
  *   onConfirm={handleConfirm}
  *   onCancel={() => (showPreview = false)}
