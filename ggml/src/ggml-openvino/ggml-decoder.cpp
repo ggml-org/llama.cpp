@@ -1976,9 +1976,15 @@ void GgmlOvDecoder::compute_model_outputs() {
                 }
             }
             // op tests (the naive path) can read any node of the graph, e.g. the intermediate sum of a fused
-            // ADD + RMS_NORM + MUL, so every non-in-place node is a model output there
-            if (input_use_count == cur_node_use_count && (!m_naive || ::is_inplace_op(cur_node))) {
-                cur_node = nullptr;
+            // ADD + RMS_NORM + MUL, so every node is a model output there. An in-place node is written back
+            // through its view_src, as when it has no consumer.
+            if (input_use_count == cur_node_use_count) {
+                if (!m_naive) {
+                    cur_node = nullptr;
+                } else if (::is_inplace_op(cur_node)) {
+                    cur_node =
+                        cur_node->view_src != nullptr && ggml_nbytes(cur_node) > 0 ? cur_node->view_src : nullptr;
+                }
             }
         }
         if (cur_node != nullptr) {
