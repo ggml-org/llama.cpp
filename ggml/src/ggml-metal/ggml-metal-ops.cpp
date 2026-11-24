@@ -6265,19 +6265,39 @@ int ggml_metal_op_moe_reduce(ggml_metal_op_t ctx, int idx) {
     return n_fuse;
 }
 
+static int ggml_metal_op_top_k_bitonic_ncols_thold(void) {
+    return 128;
+}
+
+bool ggml_metal_op_top_k_use_radix(const ggml_tensor * op) {
+    GGML_ASSERT(op->op == GGML_OP_TOP_K);
+
+    const int ncols = op->src[0]->ne[0];
+
+    return ncols > ggml_metal_op_top_k_bitonic_ncols_thold();
+}
+
+size_t ggml_metal_op_top_k_extra(const ggml_tensor * op) {
+    GGML_ASSERT(op->op == GGML_OP_TOP_K);
+
+    const int64_t nrows = ggml_nrows(op->src[0]);
+    const size_t tensor_bytes = ggml_nbytes(op);
+
+    size_t total;
+    if (ggml_metal_op_top_k_use_radix(op)) {
+        const size_t bitonic = 2*sizeof(int32_t)*ggml_metal_op_top_k_bitonic_ncols_thold()*nrows;
+        total = tensor_bytes > bitonic ? tensor_bytes : bitonic;
+    } else {
+        total = 2*sizeof(int32_t)*ggml_nelements(op->src[0]);
+    }
+
+    return total - tensor_bytes;
+}
+
 int ggml_metal_op_top_k(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
-    // radix-select has a fixed single-workgroup-per-row cost (~50-60us) that is only
-    // amortized for long rows, many rows, or a large k; otherwise the bitonic path wins
-    const int ncols = op->src[0]->ne[0];
-    const int k     = op->ne[0];
-    const int nrows = ggml_nrows(op->src[0]);
-
-    const bool use_radix =
-        ncols > 2048 && (k > 64 || (nrows > 4 && ncols >= 8192));
-
-    if (use_radix) {
+    if (ggml_metal_op_top_k_use_radix(op)) {
         ggml_metal_op_top_k_radix(ctx, idx);
     } else {
         ggml_metal_op_top_k_bitonic(ctx, idx);
