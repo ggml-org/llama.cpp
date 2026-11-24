@@ -2973,7 +2973,7 @@ private:
 
                     const int id_task = task.id;
 
-                    const auto plan = slot_sched.select(get_slot_infos(), task, get_task_lora(task));
+                    const auto plan = slot_sched.select(get_slot_infos(), task, get_task_lora(task), prompt_cache.get());
 
                     server_slot * slot = plan.id_slot == -1 ? nullptr : get_slot_by_id(plan.id_slot);
 
@@ -3008,12 +3008,7 @@ private:
                     }
 
                     // the task is not deferred past this point
-                    // the plan only tells if the outgoing state is worth saving
-                    // the cache can still hold a better start for this task, so ask it
-                    const bool update_cache = prompt_cache && !task.is_stateless() &&
-                        (plan.update_cache || prompt_cache->has_better(slot->prompt, task.tokens, get_task_lora(task)));
-
-                    if (update_cache) {
+                    if (plan.update_cache && prompt_cache) {
                         update_prompt_cache(*slot, task);
                     }
 
