@@ -2921,7 +2921,7 @@ struct test_rope_set_rows : public test_case {
     }
 
     double max_nmse_err() override {
-        if (type_a != GGML_TYPE_BF16) {
+        if (type != GGML_TYPE_BF16 && type_a != GGML_TYPE_BF16) {
             return 1e-7;
         }
         // into F16 the reference rounds the BF16 rope result to BF16 first, the fused rope + set_rows does not
@@ -3153,6 +3153,10 @@ struct test_rms_norm_mul_rope : public test_case {
         if (type == GGML_TYPE_BF16) {
             // the fused kernel rounds to BF16 once, the CPU rounds after each op
             return 1e-4;
+        }
+        if (set_rows && set_rows_type == GGML_TYPE_BF16) {
+            // CPU and CUDA RoPE can round to adjacent BF16 values.
+            return 5e-7;
         }
         if (ne[0] == 8192) {
             return 5e-6;
@@ -12311,6 +12315,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+    for (int mode : { GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX, GGML_ROPE_TYPE_MROPE, GGML_ROPE_TYPE_IMROPE }) {
+        test_cases.emplace_back(new test_rope_set_rows(GGML_TYPE_BF16, GGML_TYPE_I64, { 128, 32, 1, 1 }, mode));
+        test_cases.emplace_back(new test_rope_set_rows(GGML_TYPE_BF16, GGML_TYPE_I64, { 256, 4, 8, 3 }, mode, 64, true, false));
+    }
     // partial rotation
     for (int mode : { GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX, GGML_ROPE_TYPE_MROPE, GGML_ROPE_TYPE_IMROPE }) {
         for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
@@ -13214,10 +13222,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_rms_norm_mul_rope({4, 1, 65536, 1}, 1e-6f, false, true,  false, GGML_ROPE_TYPE_NEOX));
 
     for (int mode : {GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX, GGML_ROPE_TYPE_MROPE, GGML_ROPE_TYPE_IMROPE}) {
+        test_cases.emplace_back(new test_rms_norm_mul_rope({128, 4, 3, 1}, 1e-6f, false, true, false, mode, true, true, GGML_TYPE_BF16));
         for (int64_t n : {64, 128, 256, 1024}) {
             for (bool truncate : {false, true}) {
                 test_cases.emplace_back(new test_rms_norm_mul_rope({n, 2, 3, 1}, 1e-6f, false, false, true, mode, true, true, GGML_TYPE_F16, true, truncate));
-                for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+                for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16}) {
                     test_cases.emplace_back(new test_rms_norm_mul_rope({n, 2, 3, 1}, 1e-6f, false, true, true, mode, true, true, type, true, truncate));
                 }
             }

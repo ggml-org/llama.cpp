@@ -369,8 +369,8 @@ static bool ggml_cuda_should_fuse_rope_set_rows(const ggml_tensor * rope,
         return false;
     }
 
-    // BF16 rope fuses into an F16 or BF16 cache, other ropes not into a BF16 cache
-    if (rope->type == GGML_TYPE_BF16 ? set_rows->type == GGML_TYPE_F32 : set_rows->type == GGML_TYPE_BF16) {
+    if ((rope->type == GGML_TYPE_F16 && set_rows->type != GGML_TYPE_F16) ||
+        (rope->type == GGML_TYPE_BF16 && set_rows->type == GGML_TYPE_F32)) {
         return false;
     }
 
@@ -385,6 +385,15 @@ static bool ggml_cuda_should_fuse_rope_set_rows(const ggml_tensor * rope,
 
     // Only norm/neox/multi shaders have the fusion code
     const int mode = ((const int32_t *) rope->op_params)[2];
+    if (rope->type == GGML_TYPE_F32 && set_rows->type == GGML_TYPE_BF16) {
+        if (!ggml_is_matrix(view) || view->view_offs != 0 || view->ne[1] != rope->ne[2]) {
+            return false;
+        }
+        // Normal RoPE writes two BF16 values with a single 4-byte store.
+        if (mode == GGML_ROPE_TYPE_NORMAL && !ggml_cuda_is_aligned(set_rows, 2*sizeof(nv_bfloat16))) {
+            return false;
+        }
+    }
     if (mode != GGML_ROPE_TYPE_NORMAL && mode != GGML_ROPE_TYPE_NEOX &&
         mode != GGML_ROPE_TYPE_MROPE && mode != GGML_ROPE_TYPE_IMROPE) {
         return false;
