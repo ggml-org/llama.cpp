@@ -2360,9 +2360,9 @@ const slot_info_vec_t *   sinfos_in) {
         slot_info sinfo;
 
         bool res = true;
-        res = res && state_read_meta(io, strm, cell_count, sinfo, seq_id, sinfos_in ? &(*sinfos_in)[s] : nullptr);
 
         try {
+            res = res && state_read_meta(io, strm, cell_count, sinfo, seq_id, sinfos_in ? &(*sinfos_in)[s] : nullptr);
             res = res && state_read_data(io, strm, cell_count, sinfo);
         } catch (...) {
             res = false;
