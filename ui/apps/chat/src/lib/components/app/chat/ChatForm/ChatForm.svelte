@@ -13,6 +13,7 @@
 		ChatFormInputFileInputInvisible,
 		ChatFormMcpResourcesList,
 		ChatFormPickers,
+		ChatFormSystemMessageChip,
 		DialogMcpResourcesBrowser
 	} from '#lib/components/app/index.ts';
 	import {
@@ -22,12 +23,14 @@
 		INITIAL_FILE_SIZE,
 		PROMPT_CONTENT_SEPARATOR,
 		SETTING_CONFIG_DEFAULT,
+		SETTINGS_KEYS,
 		VOICE_EDITOR_SELECTOR
 	} from '#lib/constants/index.ts';
 	import {
 		ContentPartType,
 		FileExtensionText,
 		KeyboardKey,
+		MessageRole,
 		MimeTypeText,
 		SpecialFileType,
 		ToolSource
@@ -150,6 +153,11 @@
 
 	let cwd = $derived(
 		conversationsStore.activeConversation?.cwd ?? conversationsStore.preferences.pendingCwd
+	);
+
+	let showSystemMessage = $derived(settingsStore.config[SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE] ?? true);
+	let systemMessage = $derived(
+		conversationsStore.activeMessages.find((m) => m.role === MessageRole.SYSTEM)
 	);
 
 	let showWorkingDirectory = $derived(conversationsStore.preferences.hasEnabledCwdTools());
@@ -902,21 +910,27 @@
 		></div>
 	{/if}
 
-	{#if showWorkingDirectory}
-		<!-- opened from the chip, the + menu, a phone chat's header or `/cwd` -->
-		<ChatFormCurrentWorkingDirectory
-			bind:query={pickers.workingDirectoryQuery}
-			class="self-start"
-			customAnchor={activePickerAnchor}
-			directory={cwd}
-			{disabled}
-			isOpen={pickers.isWorkingDirectoryPickerOpen}
-			onChange={handleWorkingDirectoryChange}
-			onClose={pickers.handleWorkingDirectoryClose}
-			onOpen={pickers.handleWorkingDirectoryOpen}
-			showChip={showWorkingDirectoryChip}
-		/>
-	{/if}
+	<div class="flex flex-wrap items-center gap-x-1 self-start">
+		{#if showWorkingDirectory}
+			<!-- opened from the chip, the + menu, a phone chat's header or `/cwd` -->
+			<ChatFormCurrentWorkingDirectory
+				bind:query={pickers.workingDirectoryQuery}
+				class="self-start"
+				customAnchor={activePickerAnchor}
+				directory={cwd}
+				{disabled}
+				isOpen={pickers.isWorkingDirectoryPickerOpen}
+				onChange={handleWorkingDirectoryChange}
+				onClose={pickers.handleWorkingDirectoryClose}
+				onOpen={pickers.handleWorkingDirectoryOpen}
+				showChip={showWorkingDirectoryChip}
+			/>
+		{/if}
+
+		{#if !showSystemMessage && systemMessage}
+			<ChatFormSystemMessageChip content={systemMessage.content} {disabled} />
+		{/if}
+	</div>
 </form>
 
 <DialogMcpResourcesBrowser

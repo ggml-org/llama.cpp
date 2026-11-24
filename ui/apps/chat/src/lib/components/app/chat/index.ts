@@ -714,3 +714,9 @@ export { default as ChatScreenServerError } from './ChatScreen/ChatScreenServerE
  * Renders nothing otherwise. Shown inside ChatScreen only on an active conversation route.
  */
 export { default as ChatScreenStreamResumeStatus } from './ChatScreen/ChatScreenStreamResumeStatus.svelte';
+
+/**
+ * Chip under the chat form that opens the conversation's system message for editing.
+ * Shown when system messages are hidden in the conversation.
+ */
+export { default as ChatFormSystemMessageChip } from './ChatForm/ChatFormSystemMessageChip.svelte';
