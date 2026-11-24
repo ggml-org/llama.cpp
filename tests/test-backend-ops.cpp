@@ -12258,6 +12258,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32,   GGML_TYPE_BF16,   1, 16, 2048, {1, 1}, {1, 1}));
     // FP8 weights with more tokens than MMVF takes: src1 quantized to FP8 for cuBLASLt
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F8_E4M3, GGML_TYPE_BF16, 16, 16, 64, {1, 1}, {1, 1}));
+    // BF16 src1 as a permuted view (rows 4*k values apart, channels k apart): MMVQ, few-row MMQ, MMQ with the Q8_1 and the FP4 src1, FP8, MMVF
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K,     GGML_TYPE_BF16, 16,  3,  256, {1, 1}, {4, 2}, {0, 2, 1, 3}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K,     GGML_TYPE_BF16, 64, 13, 4608, {1, 1}, {4, 2}, {0, 2, 1, 3}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K,     GGML_TYPE_BF16, 16, 64,  256, {1, 1}, {4, 2}, {0, 2, 1, 3}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4,    GGML_TYPE_BF16, 16, 64,  256, {1, 1}, {4, 2}, {0, 2, 1, 3}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F8_E4M3,  GGML_TYPE_BF16, 16, 16,   64, {1, 1}, {4, 2}, {0, 2, 1, 3}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16,      GGML_TYPE_BF16, 16,  3,  256, {1, 1}, {4, 2}, {0, 2, 1, 3}));
     // MUL_MAT_ID: MMVQ, MMQ without and with a broadcast src1 (quantized once per token), MMVF with several tokens
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K,     GGML_TYPE_BF16, 8, 2, true,  256,  1, 1024));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K,     GGML_TYPE_BF16, 8, 2, false, 256, 32, 1024));

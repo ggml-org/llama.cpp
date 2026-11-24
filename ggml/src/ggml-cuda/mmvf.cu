@@ -54,7 +54,7 @@ static __global__ void mul_mat_vec_f(
     constexpr int warp_size   = ggml_cuda_get_physical_warp_size();
 
     int64_t offset_y = int64_t(sample_y)*stride_sample_y + channel_y*stride_channel_y;
-    x   += int64_t(sample_x)  *stride_sample_x   + int64_t(channel_x)*stride_channel_x + row*stride_row;
+    x   += int64_t(sample_x)  *stride_sample_x   + channel_x  *stride_channel_x   + row*stride_row;
     dst += int64_t(sample_dst)*stride_sample_dst + channel_dst*stride_channel_dst;
     if constexpr (is_multi_token_id) {
         offset_y += token_idx*stride_col_y2*2;
@@ -113,7 +113,7 @@ static __global__ void mul_mat_vec_f(
     }
 
     if (use_gate) {
-        gate_x += int64_t(sample_x)  *stride_sample_x   + int64_t(channel_x)*stride_channel_x + row*stride_row;
+        gate_x += int64_t(sample_x)  *stride_sample_x   + channel_x  *stride_channel_x   + row*stride_row;
     }
 
     if constexpr (has_fusion) {

@@ -6446,7 +6446,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                         return false;
                     }
                     if (GGML_CUDA_CC_IS_QY2(cc) && op->op == GGML_OP_MUL_MAT_ID &&
-                            a->type == GGML_TYPE_Q2_K) {
+                            a->type == GGML_TYPE_Q2_K && (b->type == GGML_TYPE_F32 || b->type == GGML_TYPE_BF16)) {
                         return false;
                     }
                 }
