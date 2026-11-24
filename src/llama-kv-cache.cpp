@@ -2018,15 +2018,14 @@ void llama_kv_cache::set_input_kpool(ggml_tensor * pool_idxs, ggml_tensor * pool
 
     // one pool per kpool consecutive tokens of each sequence of the ubatch, in sequence order
     // the order is the position, then the cell: the tokens of an image share their position with M-RoPE
-    // sequences that share a prefix share its pools
-    struct pool_seq {
-        llama_seq_id seq_id;
-        int32_t      group;
-    };
-    std::vector<int32_t>               idxs;
-    std::vector<int32_t>               first;
-    std::vector<std::vector<pool_seq>> owners;
+    // sequences that share a prefix share its pools, a lone sequence has nothing to share
+    std::vector<int32_t> idxs;
+    std::vector<int32_t> first;
     std::map<std::vector<int32_t>, int32_t> pool_of;
+    const bool dedup = ubatch->n_seqs_unq > 1;
+
+    // the pool of each group of each sequence
+    std::vector<std::vector<int32_t>> seq_pools(ubatch->n_seqs_unq);
 
     // the cells of each sequence in order, and the rank of each cell in its sequence
     std::vector<std::vector<int32_t>> order(ubatch->n_seqs_unq);
@@ -2043,7 +2042,9 @@ void llama_kv_cache::set_input_kpool(ggml_tensor * pool_idxs, ggml_tensor * pool
                 seq_cells.emplace_back(cells.pos_get(j), (int32_t) j);
             }
         }
-        std::sort(seq_cells.begin(), seq_cells.end());
+        if (!std::is_sorted(seq_cells.begin(), seq_cells.end())) {
+            std::sort(seq_cells.begin(), seq_cells.end());
+        }
 
         auto & ord = order[s];
         auto & rnk = rank[s];
@@ -2055,15 +2056,18 @@ void llama_kv_cache::set_input_kpool(ggml_tensor * pool_idxs, ggml_tensor * pool
         }
 
         for (int32_t g = 0; (size_t) (g + 1)*kpool <= ord.size(); ++g) {
-            std::copy(ord.begin() + g*kpool, ord.begin() + (g + 1)*kpool, members.begin());
-            auto it = pool_of.find(members);
-            if (it == pool_of.end()) {
-                it = pool_of.emplace(members, (int32_t) first.size()).first;
-                idxs.insert(idxs.end(), members.begin(), members.end());
-                first.push_back(members[0]);
-                owners.emplace_back();
+            const auto beg = ord.begin() + g*kpool;
+            const auto end = beg + kpool;
+            int32_t k = (int32_t) first.size();
+            if (dedup) {
+                members.assign(beg, end);
+                k = pool_of.try_emplace(members, k).first->second;
             }
-            owners[it->second].push_back({ seq_id, g });
+            if (k == (int32_t) first.size()) {
+                idxs.insert(idxs.end(), beg, end);
+                first.push_back(*beg);
+            }
+            seq_pools[s].push_back(k);
         }
     }
 
@@ -2100,13 +2104,9 @@ void llama_kv_cache::set_input_kpool(ggml_tensor * pool_idxs, ggml_tensor * pool
         GGML_ASSERT(r >= 0);
         const int32_t      group  = r/kpool;
 
-        for (size_t k = 0; k < owners.size(); ++k) {
-            for (const auto & o : owners[k]) {
-                if (o.seq_id == seq_id && o.group < group) {
-                    pool_mask_data[i*n_pool + k] = zero;
-                    break;
-                }
-            }
+        // the token sees the full pools of its sequence before its own
+        for (int32_t g = 0; g < group; ++g) {
+            pool_mask_data[i*n_pool + seq_pools[s][g]] = zero;
         }
 
         // the token's own pool, up to the token itself, the token's cell again for the members it does not have yet
