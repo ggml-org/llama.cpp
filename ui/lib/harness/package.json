@@ -19,6 +19,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./trace": {
+      "types": "./dist/trace/index.d.ts",
+      "default": "./dist/trace/index.js"
     }
   },
   "scripts": {

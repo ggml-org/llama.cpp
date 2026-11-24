@@ -1,11 +1,15 @@
 import '../src/app.css';
 import { MEDIA_QUERIES } from '#lib/constants/pwa.constants.ts';
+import { agenticMode } from '#lib/stores/agentic-mode.svelte.ts';
 // the docs pages' styles, shared with the library's Storybook
 import '../../../lib/ui/.storybook/docs.css';
 import { applyColorScheme } from './color-scheme';
 import ModeWatcherDecorator from './decorators/ModeWatcherDecorator.svelte';
 import TooltipProviderDecorator from './decorators/TooltipProviderDecorator.svelte';
 import type { Preview } from '@storybook/sveltekit';
+
+// the stories show the app as with a llama-server started with --agent
+agenticMode.serverHasTools = true;
 
 applyColorScheme();
 window.matchMedia(MEDIA_QUERIES.PREFERS_DARK).addEventListener('change', applyColorScheme);

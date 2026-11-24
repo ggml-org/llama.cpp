@@ -22,7 +22,7 @@
 		ICON_CLASS_SM,
 		ICON_CLASS_XS,
 		SIDEBAR_ACTIONS_ITEMS,
-		SIDEBAR_FOOTER_ITEMS
+		sidebarFooterItems
 	} from '#lib/constants/index.ts';
 	import { KeyboardKey, SidebarAction } from '#lib/enums/index.ts';
 	import { useDebouncedSearch } from '#lib/hooks/use-debounced-search.svelte.ts';
@@ -32,6 +32,7 @@
 		HuggingFaceService
 	} from '#lib/services/index.ts';
 	import { RouterService } from '#lib/services/router.service.ts';
+	import { agenticMode } from '#lib/stores/agentic-mode.svelte.ts';
 	import {
 		conversationsStore,
 		deviceStore,
@@ -248,7 +249,7 @@
 	const actionEntries = $derived.by((): SearchEntry[] =>
 		// every sidebar action the sidebar shows but Search itself, which is what opened this
 		// dialog, and the models manager on a phone, which picks its models in the selector
-		[...SIDEBAR_ACTIONS_ITEMS, ...SIDEBAR_FOOTER_ITEMS]
+		[...SIDEBAR_ACTIONS_ITEMS, ...sidebarFooterItems(agenticMode.enabled)]
 			.filter(
 				(item) =>
 					item.action &&
