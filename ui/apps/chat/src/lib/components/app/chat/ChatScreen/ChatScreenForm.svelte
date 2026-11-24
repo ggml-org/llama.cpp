@@ -124,7 +124,11 @@
 		const existing = conversationsStore.activeMessages.find((m) => m.role === MessageRole.SYSTEM);
 
 		stashedDraft = { files: uploadedFiles, message };
-		message = existing && existing.content !== SYSTEM_MESSAGE_PLACEHOLDER ? existing.content : '';
+		const current = conversationsStore.activeConversation
+			? existing?.content
+			: chatStore.pendingSystemMessage;
+
+		message = current && current !== SYSTEM_MESSAGE_PLACEHOLDER ? current : '';
 		uploadedFiles = [];
 		isSystemMode = true;
 		void tick().then(() => chatFormRef?.focus());
@@ -154,7 +158,7 @@
 		message = draft.message;
 		uploadedFiles = draft.files;
 
-		await chatStore.saveSystemPrompt(content, draft);
+		await chatStore.saveSystemPrompt(content);
 	}
 
 	function handleUploadedFileRemove(fileId: string) {

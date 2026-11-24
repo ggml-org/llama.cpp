@@ -76,6 +76,8 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		this.chatReasoningStates.get(conversationsStore.activeConversation?.id ?? '') ?? false
 	);
 	pendingEditMessageId = $state<string | null>(null);
+	/** A system message written on the new-chat screen, stored with the conversation on its first send. */
+	pendingSystemMessage = $state<string | null>(null);
 	// resumable stream connection state for the active conversation
 	// streaming -> bytes flowing normally, resuming -> waiting on /v1/stream reconnect, lost -> unrecoverable
 	streamConnectionState = $state<StreamConnectionState>(StreamConnectionState.STREAMING);
@@ -685,6 +687,21 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		return this.flows.regenerateMessageWithBranching(messageId, modelOverride);
 	}
 
+	/** Removes the system message from the new chat, or from the active conversation. */
+	async removeSystemPrompt(): Promise<void> {
+		if (!conversationsStore.activeConversation) {
+			this.pendingSystemMessage = null;
+
+			return;
+		}
+
+		const systemMessage = conversationsStore.activeMessages.find(
+			(m) => m.role === MessageRole.SYSTEM
+		);
+
+		if (systemMessage) await this.removeSystemPromptPlaceholder(systemMessage.id);
+	}
+
 	async removeSystemPromptPlaceholder(messageId: string): Promise<boolean> {
 		const activeConv = conversationsStore.activeConversation;
 
@@ -734,12 +751,18 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		}
 	}
 
-	/** Saves the conversation's system message straight from the chat form, creating it if needed. */
-	async saveSystemPrompt(
-		content: string,
-		draft?: { message: string; files: ChatUploadedFile[] }
-	): Promise<void> {
-		await this.addSystemPrompt(draft);
+	/**
+	 * Saves the system message written in the chat form or its dialog. A new chat keeps it
+	 * pending until the first message is sent, so no empty conversation is created.
+	 */
+	async saveSystemPrompt(content: string): Promise<void> {
+		if (!conversationsStore.activeConversation) {
+			this.pendingSystemMessage = content;
+
+			return;
+		}
+
+		await this.addSystemPrompt();
 
 		const id = this.pendingEditMessageId;
 
@@ -800,7 +823,11 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			if (isNewConversation) {
 				const rootId = await DatabaseService.createRootMessage(currentConv.id);
 				const currentConfig = settingsStore.config;
-				const systemPrompt = currentConfig.systemMessage?.toString().trim();
+				const systemPrompt = (
+					this.pendingSystemMessage ?? currentConfig.systemMessage?.toString()
+				)?.trim();
+
+				this.pendingSystemMessage = null;
 
 				let sysOrRootId = rootId;
 

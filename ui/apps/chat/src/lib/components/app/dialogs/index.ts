@@ -529,7 +529,7 @@ export { default as DialogDiscoverModels } from './DialogDiscoverModels.svelte';
 /**
  * **DialogSystemMessageEdit** - Edit the conversation's system message
  *
- * Modal dialog with a textarea, opened from the chat form's "Custom system message"
- * chip when system messages are hidden in the conversation.
+ * Modal dialog with a textarea, opened from the custom system message attachment
+ * in the chat form.
  */
 export { default as DialogSystemMessageEdit } from './DialogSystemMessageEdit.svelte';
