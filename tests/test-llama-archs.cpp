@@ -263,7 +263,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_head = 4;
         n_layer = 4; // dense and MoE layers, each with local and full attention
     } else if (arch == LLM_ARCH_GEMMA4) {
-        // TODO: expand coverage to both GQA and MQA (see https://github.com/ggml-org/llama.cpp/pull/31401#pullrequestreview-5710165130)
         n_head = 4;
         n_layer = 10; // last 5 layers reuse KV, both SWA and full attention
     } else if (arch == LLM_ARCH_GEMMA3N) {
@@ -407,6 +406,15 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_head_kv_per_layer.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
             n_head_kv_per_layer.push_back(il % 2 == 0 ? n_head_kv : 0);
+        }
+        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
+        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_kv_per_layer);
+    } else if (arch == LLM_ARCH_GEMMA4) {
+        // GQA on sliding-window layers, MQA on full-attention layers (matches 12B)
+        std::vector<uint32_t> n_head_kv_per_layer;
+        n_head_kv_per_layer.reserve(n_layer);
+        for (uint32_t il = 0; il < n_layer; il++) {
+            n_head_kv_per_layer.push_back((il + 1) % 5 != 0 ? n_head_kv : 1);
         }
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_kv_per_layer);
@@ -1327,7 +1335,8 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
         }
     }, &ud);
 
-    const std::vector<llama_token> tokens = get_tokens(128, 128, seed);
+    // 129 = 2*64 + 1 so n_ubatch = 64 also exercises the n_tokens = 1 decode path
+    const std::vector<llama_token> tokens = get_tokens(129, 128, seed);
 
     struct device_config {
         std::vector<ggml_backend_dev_t> devs;
