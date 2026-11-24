@@ -1128,7 +1128,8 @@ static __global__ void flash_attn_stream_k_fixup_uniform(
     }
 
     // Write back final result:
-    *dst = dst_val / rowsum;
+    // An all-masked query row has a zero sum, ggml-cpu returns zeros for it.
+    *dst = rowsum == 0.0f ? 0.0f : dst_val/rowsum;
 }
 
 // General fixup kernel for the case where the number of blocks per tile is not uniform across tiles
@@ -1239,7 +1240,7 @@ static __global__ void flash_attn_stream_k_fixup_general(
     }
 
     // Write back final result:
-    *dst = dst_val / rowsum;
+    *dst = rowsum == 0.0f ? 0.0f : dst_val/rowsum;
 }
 
 template<int D> // D == head size
@@ -1297,7 +1298,7 @@ static __global__ void flash_attn_combine_results(
         VKQ_denominator += KQ_max_scale * meta[l].y;
     }
 
-    dst[tid] = VKQ_numerator / VKQ_denominator;
+    dst[tid] = VKQ_denominator == 0.0f ? 0.0f : VKQ_numerator/VKQ_denominator;
 }
 
 template <int DV, int ncols1, int ncols2, typename T_K_stride, typename T_V_stride>
