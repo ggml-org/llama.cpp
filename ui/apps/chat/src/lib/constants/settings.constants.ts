@@ -4,19 +4,23 @@ import { COMPACTION } from './compaction.constants';
 import { DEFAULT_MCP_CONFIG } from './mcp.constants';
 import { SETTINGS_KEYS } from './settings-keys.constants';
 import { TITLE_GENERATION } from './title-generation.constants';
+import { VOICE_TRANSCRIPTION_MODEL_AUTO } from './voice.constants';
 import { FILE_GLOB_SEARCH_PICKERS } from './working-directory.constants';
+import { TOOL_CALL_SHOWN_ARG_DEFAULT } from '@ggml-org/llama-harness';
+import { VOICE_MICROPHONE_AUTO } from '@ggml-org/llama-voice';
+import AudioLines from '@lucide/svelte/icons/audio-lines';
 import Code from '@lucide/svelte/icons/code';
 import Database from '@lucide/svelte/icons/database';
-import File from '@lucide/svelte/icons/file';
 import Funnel from '@lucide/svelte/icons/funnel';
-import GlassWater from '@lucide/svelte/icons/glass-water';
 import ListRestart from '@lucide/svelte/icons/list-restart';
+import Mic from '@lucide/svelte/icons/mic';
 import Monitor from '@lucide/svelte/icons/monitor';
 import Moon from '@lucide/svelte/icons/moon';
 import PencilRuler from '@lucide/svelte/icons/pencil-ruler';
 import SlidersVertical from '@lucide/svelte/icons/sliders-vertical';
 import Sun from '@lucide/svelte/icons/sun';
-import { SurfaceTheme, SyncableParameterType } from '#lib/enums/index.ts';
+import TextCursorInput from '@lucide/svelte/icons/text-cursor-input';
+import { SyncableParameterType, VoiceInputMode } from '#lib/enums/index.ts';
 import { SettingsFieldType } from '#lib/enums/settings.enums.ts';
 import { ColorMode } from '#lib/enums/ui.enums.ts';
 import type {
@@ -35,7 +39,8 @@ export const SETTINGS_SECTIONS = {
 	GENERAL: { slug: 'general', title: 'General' },
 	IMPORT_EXPORT: { slug: 'import-export', title: 'Import/Export' },
 	SAMPLING_PENALTIES: { slug: 'sampling-penalties', title: 'Sampling & Penalties' },
-	TOOLS: { slug: 'tools', title: 'Tools' }
+	TOOLS: { slug: 'tools', title: 'Tools' },
+	VOICE: { slug: 'voice', title: 'Voice' }
 } as const;
 
 export const SETTINGS_SECTION_SLUGS = {
@@ -45,7 +50,8 @@ export const SETTINGS_SECTION_SLUGS = {
 	GENERAL: SETTINGS_SECTIONS.GENERAL.slug,
 	IMPORT_EXPORT: SETTINGS_SECTIONS.IMPORT_EXPORT.slug,
 	SAMPLING_PENALTIES: SETTINGS_SECTIONS.SAMPLING_PENALTIES.slug,
-	TOOLS: SETTINGS_SECTIONS.TOOLS.slug
+	TOOLS: SETTINGS_SECTIONS.TOOLS.slug,
+	VOICE: SETTINGS_SECTIONS.VOICE.slug
 } as const;
 
 export const SETTINGS_SECTION_TITLES = {
@@ -55,7 +61,8 @@ export const SETTINGS_SECTION_TITLES = {
 	GENERAL: SETTINGS_SECTIONS.GENERAL.title,
 	IMPORT_EXPORT: SETTINGS_SECTIONS.IMPORT_EXPORT.title,
 	SAMPLING_PENALTIES: SETTINGS_SECTIONS.SAMPLING_PENALTIES.title,
-	TOOLS: SETTINGS_SECTIONS.TOOLS.title
+	TOOLS: SETTINGS_SECTIONS.TOOLS.title,
+	VOICE: SETTINGS_SECTIONS.VOICE.title
 } as const;
 
 export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
@@ -72,17 +79,6 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 					{ icon: Monitor, label: 'System', value: ColorMode.SYSTEM },
 					{ icon: Sun, label: 'Light', value: ColorMode.LIGHT },
 					{ icon: Moon, label: 'Dark', value: ColorMode.DARK }
-				],
-				type: SettingsFieldType.SELECT
-			},
-			{
-				defaultValue: SurfaceTheme.PAPER,
-				help: 'Choose how the light theme draws its surfaces: Paper puts white panels, fields and buttons on a faint grey page; Matte puts grey glass on a white page. Dark mode is the same for both.',
-				key: SETTINGS_KEYS.SURFACE_THEME,
-				label: 'Light surfaces',
-				options: [
-					{ icon: File, label: 'Paper', value: SurfaceTheme.PAPER },
-					{ icon: GlassWater, label: 'Matte', value: SurfaceTheme.MATTE }
 				],
 				type: SettingsFieldType.SELECT
 			},
@@ -132,7 +128,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: true,
-				help: 'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
+				help: 'Show the microphone beside the send button while the message is empty, whenever voice input is available (see Voice).',
 				key: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
 				label: 'Show microphone on empty input',
 				type: SettingsFieldType.CHECKBOX
@@ -269,14 +265,22 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
-				defaultValue: true,
+				defaultValue: false,
+				dependsOn: SETTINGS_KEYS.SHOW_MESSAGE_STATS,
+				help: 'Keep the generation statistics under every message in view. When off, they show under the latest exchange and appear on earlier messages when you point at them. Message actions always work that way.',
+				key: SETTINGS_KEYS.ALWAYS_SHOW_MESSAGE_STATS,
+				label: 'Always show message statistics',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
 				help: 'Expand thought process by default when generating messages.',
 				key: SETTINGS_KEYS.SHOW_THOUGHT_IN_PROGRESS,
 				label: 'Show thought in progress',
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
-				defaultValue: true,
+				defaultValue: false,
 				help: 'Expand tool call details while the call is being generated and executed, and collapse them again once its result is in. Mirrors "Show thought in progress". Tool calls you expand or collapse by hand keep your choice.',
 				key: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS,
 				label: 'Show tool call in progress',
@@ -288,6 +292,14 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				key: SETTINGS_KEYS.ALWAYS_SHOW_TOOL_CALL_CONTENT,
 				label: 'Always show tool call content',
 				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: TOOL_CALL_SHOWN_ARG_DEFAULT,
+				help: 'A tool call\'s line shows this argument when the call has it, for any tool, built-in or MCP. Calls without it read as a plain sentence, e.g. "Read package.json". Settings > Tools can pick another argument for each tool. Leave it empty to always use the sentence.',
+				key: SETTINGS_KEYS.TOOL_CALL_SHOWN_ARG,
+				label: 'Tool call argument to show',
+				placeholder: 'None',
+				type: SettingsFieldType.INPUT
 			},
 			{
 				defaultValue: true,
@@ -405,6 +417,91 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 		slug: SETTINGS_SECTION_SLUGS.DISPLAY,
 		title: SETTINGS_SECTION_TITLES.DISPLAY
 	},
+	// Voice: the transcription model picker lists the server's models (SettingsChatVoiceTab)
+	{
+		icon: Mic,
+		settings: [
+			{
+				defaultValue: VoiceInputMode.AUTO,
+				help: 'Automatic sends your voice to a model that understands audio, as a voice message with its transcript, and turns it into text in the message input for any other model. Always dictate turns it into text for every model, so only the text reaches the chat.',
+				key: SETTINGS_KEYS.VOICE_INPUT_MODE,
+				label: 'Voice input',
+				options: [
+					{ icon: AudioLines, label: 'Automatic', value: VoiceInputMode.AUTO },
+					{ icon: TextCursorInput, label: 'Always dictate', value: VoiceInputMode.DICTATION }
+				],
+				type: SettingsFieldType.SELECT
+			},
+			{
+				defaultValue: VOICE_TRANSCRIPTION_MODEL_AUTO,
+				help: 'The model that turns speech into text when the chat model has no audio input. Automatic uses a model with audio input that is already loaded, so dictating loads nothing.',
+				key: SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL,
+				label: 'Transcription model',
+				standaloneField: false,
+				type: SettingsFieldType.SELECT
+			},
+			{
+				defaultValue: VOICE_MICROPHONE_AUTO,
+				help: "The microphone you record from. Automatic takes the system's default one, unless that is a Bluetooth headset's: recording from it switches the headset to its call mode, which plays music in low quality, so the built-in microphone is used instead.",
+				key: SETTINGS_KEYS.VOICE_MICROPHONE,
+				label: 'Microphone',
+				standaloneField: false,
+				type: SettingsFieldType.SELECT
+			},
+			{
+				defaultValue: true,
+				help: 'Write down what was said in each voice message, to read under its waveform. The chat model writes it, and a model without audio input gets it in place of the audio.',
+				key: SETTINGS_KEYS.VOICE_TRANSCRIBE_MESSAGES,
+				label: 'Transcribe voice messages',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
+				help: 'Show the transcript of a voice message folded under its waveform, to open on hover or with a tap, instead of open.',
+				key: SETTINGS_KEYS.VOICE_COLLAPSE_TRANSCRIPTS,
+				label: 'Collapse transcripts',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: true,
+				help: 'Raise quiet speech to a level the model hears well, up to eight times louder, so a quiet microphone or a voice from afar is still understood. Only speech is measured, never the silence around it, and loud speech is left as it is.',
+				key: SETTINGS_KEYS.VOICE_BOOST,
+				label: 'Boost quiet speech',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
+				help: 'Let the browser filter background noise out of what the microphone records. Off, the model gets the raw signal, which speech models take well.',
+				key: SETTINGS_KEYS.VOICE_NOISE_SUPPRESSION,
+				label: 'Noise suppression',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
+				help: 'Let the browser remove what your speakers play from the recording. It makes the system treat a recording as a call, which can lower or pause music and other sound while you record.',
+				key: SETTINGS_KEYS.VOICE_ECHO_CANCELLATION,
+				label: 'Echo cancellation',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
+				help: 'Let the browser even out how loud you sound. It fades the microphone in, so the first words of a recording can come out quiet.',
+				key: SETTINGS_KEYS.VOICE_AUTO_GAIN,
+				label: 'Automatic gain',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: '',
+				help: 'The language you speak, as a two-letter code such as en or de, passed to the transcription. Leave it empty to let the model tell.',
+				key: SETTINGS_KEYS.VOICE_TRANSCRIPTION_LANGUAGE,
+				label: 'Transcription language',
+				placeholder: 'Automatic',
+				type: SettingsFieldType.INPUT
+			}
+		],
+		slug: SETTINGS_SECTION_SLUGS.VOICE,
+		title: SETTINGS_SECTION_TITLES.VOICE
+	},
 	// MCP Servers (non-UI config object)
 	{
 		icon: PencilRuler,
@@ -414,6 +511,14 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Configure MCP servers as a JSON list. Use the form in the MCP Client settings section to edit.',
 				key: SETTINGS_KEYS.MCP_SERVERS,
 				label: 'MCP servers',
+				standaloneField: false,
+				type: SettingsFieldType.INPUT
+			},
+			{
+				defaultValue: '{}',
+				help: 'Argument shown in the line of each tool, by tool name, as a JSON object. Use the Tools tab to edit.',
+				key: SETTINGS_KEYS.TOOL_CALL_SHOWN_ARG_OVERRIDES,
+				label: 'Tool call argument to show, per tool',
 				standaloneField: false,
 				type: SettingsFieldType.INPUT
 			}

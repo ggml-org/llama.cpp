@@ -328,7 +328,7 @@
 			isSelected && 'bg-primary/10 hover:bg-primary/15',
 			isSelectionMode && 'is-selection-mode',
 			// the row sinks while a finger holds it, and stays lit while its menu is open
-			longPress.isPressing && 'scale-[0.97] bg-foreground/10 duration-(--row-hold-ms) ease-out',
+			longPress.isPressing && 'scale-97 bg-foreground/10 duration-(--row-hold-ms) ease-out',
 			deviceStore.isMobile && dropdownOpen && 'bg-foreground/10'
 		]}
 		{...{ [UI_DATA_ATTRS.CONVERSATION_ROW]: conversation.id }}
@@ -423,7 +423,7 @@
 			{/if}
 
 			<TruncatedText
-				class="text-sm max-md:text-[17px]"
+				class="text-body-sm max-md:text-body"
 				showTooltip={false}
 				text={conversation.name}
 			/>

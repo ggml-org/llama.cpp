@@ -8,24 +8,23 @@
 		ChevronRight,
 		File,
 		Folder,
-		Image,
 		MessageSquare,
-		Mic,
-		PencilRuler,
-		Video
+		PencilRuler
 	} from '@lucide/svelte';
 	import {
 		ATTACHMENT_FILE_ITEMS,
 		ATTACHMENT_MENU_TEXT,
 		ATTACHMENT_MODALITY_TEXT,
-		ICON_CLASS_DEFAULT
+		ICON_CLASS_DEFAULT,
+		MODALITY_ICONS
 	} from '#lib/constants/index.ts';
 	import { getChatFormActionsContext } from '#lib/contexts/index.ts';
 	import { AttachmentAction, AttachmentItemEnabledWhen } from '#lib/enums/attachment.enums.ts';
+	import { ModelModality } from '#lib/enums/index.ts';
 	import { useAttachmentMenu } from '#lib/hooks/use-attachment-menu.svelte.ts';
 	import { useToolsPanel } from '#lib/hooks/use-tools-panel.svelte.ts';
 	import type { ToolGroup } from '#lib/types/index.ts';
-	import type { Snippet } from 'svelte';
+	import type { Component, Snippet } from 'svelte';
 
 	interface Props {
 		class?: string;
@@ -54,17 +53,17 @@
 		}
 	);
 
-	const FILE_MODALITY_ICONS: Record<string, { icon: typeof Image; label: string }> = {
+	const FILE_MODALITY_ICONS: Record<string, { icon: Component; label: string }> = {
 		[AttachmentItemEnabledWhen.HAS_AUDIO_MODALITY]: {
-			icon: Mic,
+			icon: MODALITY_ICONS[ModelModality.AUDIO],
 			label: ATTACHMENT_MODALITY_TEXT[AttachmentItemEnabledWhen.HAS_AUDIO_MODALITY]
 		},
 		[AttachmentItemEnabledWhen.HAS_VIDEO_MODALITY]: {
-			icon: Video,
+			icon: MODALITY_ICONS[ModelModality.VIDEO],
 			label: ATTACHMENT_MODALITY_TEXT[AttachmentItemEnabledWhen.HAS_VIDEO_MODALITY]
 		},
 		[AttachmentItemEnabledWhen.HAS_VISION_MODALITY]: {
-			icon: Image,
+			icon: MODALITY_ICONS[ModelModality.VISION],
 			label: ATTACHMENT_MODALITY_TEXT[AttachmentItemEnabledWhen.HAS_VISION_MODALITY]
 		}
 	};
@@ -78,10 +77,10 @@
 	const toolsPanel = useToolsPanel();
 
 	const itemClass =
-		'flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent active:bg-accent disabled:cursor-not-allowed disabled:opacity-50';
+		'flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-body-sm transition-colors hover:bg-accent active:bg-accent disabled:cursor-not-allowed disabled:opacity-50';
 
 	const itemRowClass =
-		'flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent';
+		'flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-body-sm transition-colors hover:bg-accent';
 </script>
 
 <div class="flex items-center gap-1 {className}">
@@ -205,9 +204,9 @@
 			/>
 		{/if}
 
-		<span class="min-w-0 flex-1 truncate text-sm font-medium">{group.label}</span>
+		<span class="min-w-0 flex-1 truncate text-label">{group.label}</span>
 
-		<span class="shrink-0 text-xs text-muted-foreground">
+		<span class="shrink-0 text-caption text-muted-foreground">
 			{enabledCount}/{group.tools.length}
 		</span>
 

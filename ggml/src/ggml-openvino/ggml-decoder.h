@@ -458,6 +458,11 @@ public:
     void update_io(ggml_cgraph * cgraph);
     bool is_bound_to(const ggml_cgraph * cgraph) const;
 
+    // Was this decoder built for a graph with the same OUTPUT set as `cgraph`? The cache key is
+    // only (n_nodes, first/last node name), which cannot see a change in which tensors are marked
+    // as outputs, and the compiled model's Results are fixed at compile time.
+    bool has_same_graph_io(const ggml_cgraph * cgraph) const;
+
     static bool is_inp_tok(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op == GGML_OP_NONE;
     }
@@ -499,6 +504,16 @@ public:
         }
         return (op->op == GGML_OP_RMS_NORM || op->op == GGML_OP_L2_NORM) && op->src[0] == tensor &&
                (tensor->op == GGML_OP_NONE || tensor->op == GGML_OP_CPY);
+    }
+
+    // A 2-D float graph input feeding a matmul as src[1]. Speculative decoding hands the draft the
+    // target's hidden features this way ([n_embd, n_tokens], with no GET_ROWS lookup, so none of the
+    // other seeds match it) and the token count differs between the prompt pass and the shorter
+    // draft blocks, so its token dim must stay dynamic.
+    static bool is_inp_embd_2d(const ggml_tensor * tensor, const ggml_tensor * op) {
+        return (tensor->flags & GGML_TENSOR_FLAG_INPUT) && tensor->op == GGML_OP_NONE &&
+               tensor->type == GGML_TYPE_F32 && tensor->ne[2] == 1 && tensor->ne[3] == 1 &&
+               op->op == GGML_OP_MUL_MAT && tensor == op->src[1];
     }
 
     static bool is_inp_mask(const ggml_tensor * tensor, const ggml_tensor * op) {
@@ -759,6 +774,8 @@ private:
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_weights;
     std::map<std::string, ggml_tensor *> m_model_outputs;
     std::set<std::string> m_model_output_names;
+    // The output set the compiled model was built from, for has_same_graph_io().
+    std::set<std::string> m_built_output_names;
     std::vector<NodeInfo> m_node_info_list;
     std::map<ggml_tensor *, int> m_node_dynamic_dims;
     std::set<const ggml_tensor *> m_kvcache_4d;

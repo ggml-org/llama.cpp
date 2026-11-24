@@ -16,6 +16,9 @@ import { fileURLToPath } from 'url';
 import { defineConfig, loadEnv, searchForWorkspaceRoot } from 'vite';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const LLAMA_VOICE_SOURCE = resolve(__dirname, '../../lib/voice/src');
+// the harness has no build step in the repo: the app compiles it from source
+const LLAMA_HARNESS_ENTRY = resolve(__dirname, '../../lib/harness/src/index.ts');
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const browserBaseConfig: any = {
 	enabled: true,
@@ -76,14 +79,27 @@ export default defineConfig(({ mode }) => {
 		],
 
 		resolve: {
-			alias: {
-				'katex-fonts': resolve('node_modules/katex/dist/fonts')
-			}
+			alias: [
+				// Llama Voice has no build step in the repo: the app compiles it from source. Exact
+				// matches, so the package's root does not swallow its ./svelte entry
+				{
+					find: /^@ggml-org\/llama-voice\/svelte$/,
+					replacement: resolve(LLAMA_VOICE_SOURCE, 'svelte/index.ts')
+				},
+				{ find: /^@ggml-org\/llama-voice$/, replacement: resolve(LLAMA_VOICE_SOURCE, 'index.ts') },
+				{ find: /^@ggml-org\/llama-harness$/, replacement: LLAMA_HARNESS_ENTRY },
+				{ find: 'katex-fonts', replacement: resolve('node_modules/katex/dist/fonts') }
+			]
 		},
 
 		server: {
 			fs: {
-				allow: [searchForWorkspaceRoot(process.cwd()), resolve(__dirname, 'tests')]
+				allow: [
+					searchForWorkspaceRoot(process.cwd()),
+					resolve(__dirname, 'tests'),
+					LLAMA_VOICE_SOURCE,
+					resolve(__dirname, '../../lib/harness')
+				]
 			},
 			headers: {
 				'Cross-Origin-Embedder-Policy': 'require-corp',
@@ -95,7 +111,8 @@ export default defineConfig(({ mode }) => {
 				'/props': SERVER_ORIGIN,
 				'/slots': SERVER_ORIGIN,
 				'/tools': SERVER_ORIGIN,
-				'/v1': SERVER_ORIGIN
+				// ws: realtime transcription (/v1/realtime) is a WebSocket
+				'/v1': { target: SERVER_ORIGIN, ws: true }
 			}
 		},
 

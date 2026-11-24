@@ -9,12 +9,15 @@
 			"@ggml-org/llama-ui/enums": ["../../lib/ui/src/lib/enums/index.ts"],
 			"@ggml-org/llama-ui/code": ["../../lib/ui/src/lib/utils/index.ts"],
 			"@ggml-org/llama-ui/utils": ["../../lib/ui/src/lib/components/ui/utils.ts"],
+			"@ggml-org/llama-ui/voice": ["../../lib/ui/src/lib/components/voice/index.ts"],
 			"@ggml-org/llama-ui/styles/*": ["../../lib/ui/src/lib/styles/*"],
 			"@ggml-org/llama-ui/theme.css": ["../../lib/ui/src/lib/styles/theme.css"],
 			"@ggml-org/llama-ui/tokens.css": ["../../lib/ui/src/lib/styles/tokens.css"],
 			"@ggml-org/llama-ui/fonts.css": ["../../lib/ui/src/lib/styles/fonts.css"],
 			"@ggml-org/llama-ui/surfaces.css": ["../../lib/ui/src/lib/styles/surfaces.css"],
 			"@ggml-org/llama-ui": ["../../lib/ui/src/lib/index.ts"],
+			"@ggml-org/llama-voice": ["../../lib/voice/src/index.ts"],
+			"@ggml-org/llama-voice/svelte": ["../../lib/voice/src/svelte/index.ts"],
 			"$llama-ui-stories/*": ["../../lib/ui/tests/stories/*"],
 			"@internationalized/date": ["./node_modules/@internationalized/date"],
 			"@internationalized/date/*": ["./node_modules/@internationalized/date/*"],
@@ -44,7 +47,8 @@
 			"tw-animate-css/*": ["./node_modules/tw-animate-css/*"],
 			"vaul-svelte": ["./node_modules/vaul-svelte"],
 			"vaul-svelte/*": ["./node_modules/vaul-svelte/*"],
-			"@lucide/svelte/icons/*": ["./node_modules/@lucide/svelte/dist/icons/*"]
+			"@lucide/svelte/icons/*": ["./node_modules/@lucide/svelte/dist/icons/*"],
+			"@ggml-org/llama-harness": ["../../lib/harness/src/index.ts"]
 		},
 		"sourceMap": true,
 		"strict": true

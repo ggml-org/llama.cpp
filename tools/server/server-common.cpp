@@ -1,3 +1,4 @@
+#include "arg.h"
 #include "common.h"
 #include "download.h"
 #include "log.h"
@@ -1641,13 +1642,18 @@ json oaicompat_chat_params_parse(
     // Parse the OAI "reasoning_effort" field; "none" disables reasoning.
     if (body.contains("reasoning_effort")) {
         auto reasoning_effort = json_value(body, "reasoning_effort", std::string(""));
+        const auto levels = caps.at("reasoning_effort_levels").get<std::vector<std::string>>();
         if (reasoning_effort == "none") {
             inputs.enable_thinking = false;
-            inputs.chat_template_kwargs.erase("reasoning_effort");
+            // Some models use reasoning_effort = none and some throw an exception, so check the model's list of effort levels first
+            if (std::find(levels.begin(), levels.end(), reasoning_effort) != levels.end()) {
+                inputs.chat_template_kwargs["reasoning_effort"] = json(reasoning_effort).dump();
+            } else {
+                inputs.chat_template_kwargs.erase("reasoning_effort");
+            }
         } else if (!reasoning_effort.empty()) {
             const auto rejected = caps.at("reasoning_effort_rejected").get<std::vector<std::string>>();
             if (std::find(rejected.begin(), rejected.end(), reasoning_effort) != rejected.end()) {
-                const auto levels = caps.at("reasoning_effort_levels").get<std::vector<std::string>>();
                 throw std::invalid_argument("reasoning_effort \"" + reasoning_effort + "\" is not supported by the chat template, supported levels: " + string_join(levels, ", "));
             }
             inputs.chat_template_kwargs["reasoning_effort"] = json(reasoning_effort).dump();
@@ -2379,6 +2385,22 @@ server_role::~server_role() {
     if (cmd_out) {
         fclose(cmd_out);
     }
+}
+
+std::string server_get_model_name(const common_params & params) {
+    if (!params.model_alias.empty()) {
+        // backward compat: use first alias as model name
+        return *params.model_alias.begin();
+    }
+    if (!params.model.get_name().empty()) {
+        return params.model.get_name();
+    }
+    if (!params.model.url.empty()) {
+        // -mu before the download: the path the model will be stored at
+        return common_get_default_local_path(params.model.url);
+    }
+    // fallback: derive model name from file name
+    return std::filesystem::path(params.model.path).filename().string();
 }
 
 bool server_role::is_managed_by_router() {

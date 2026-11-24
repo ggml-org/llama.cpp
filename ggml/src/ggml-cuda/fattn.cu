@@ -582,6 +582,10 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     return BEST_FATTN_KERNEL_NONE;
 #endif// FLASH_ATTN_AVAILABLE
 
+    if (ggml_flash_attn_ext_has_indexed_bias(dst)) {
+        return BEST_FATTN_KERNEL_NONE;
+    }
+
     const ggml_tensor * KQV   = dst;
     const ggml_tensor * Q     = dst->src[0];
     const ggml_tensor * K     = dst->src[1];

@@ -8,6 +8,7 @@
 
 import { getAudioInputFormat } from '../utils/audio-format';
 import { capImageDataURLSize } from '../utils/cap-img-size';
+import { dropIncompleteToolCalls } from '../utils/incomplete-tool-calls';
 import {
 	API_CHAT,
 	API_SLOTS,
@@ -49,6 +50,12 @@ import { ApiError } from '#lib/utils/api-fetch.ts';
 import { getAuthHeaders, getJsonHeaders } from '#lib/utils/api-headers.ts';
 import { formatAttachmentText } from '#lib/utils/formatters.ts';
 import { streamIdentity } from '#lib/utils/stream-identity.ts';
+
+/** How stored messages are shaped for the model a request goes to. */
+export interface ApiMessageConversionOptions {
+	/** False when the model has no audio input: voice messages go as their transcript. */
+	audioInput?: boolean;
+}
 
 interface ResumableStreamState {
 	bytesReceived: number;
@@ -134,12 +141,23 @@ export class ChatService {
 	}
 
 	/**
+	 * How messages are shaped for `model`: whether it takes audio, known only once its
+	 * modalities are. Unknown modalities keep the audio, as before voice messages.
+	 */
+	static conversionOptionsFor(model?: string | null): ApiMessageConversionOptions {
+		const modalities = modelsStore.props.getModelModalities(model ?? '');
+
+		return modalities ? { audioInput: modalities.audio } : {};
+	}
+
+	/**
 	 * Converts a database message with attachments to API chat message format.
 	 * Processes various attachment types (images, text files, PDFs) and formats them
 	 * as content parts suitable for the chat completion API.
 	 */
 	static async convertDbMessageToApiChatMessageData(
-		message: DatabaseMessage & { extra?: DatabaseMessageExtra[] }
+		message: DatabaseMessage & { extra?: DatabaseMessageExtra[] },
+		options: ApiMessageConversionOptions = {}
 	): Promise<ApiChatMessageData> {
 		// Handle tool result messages (role: 'tool')
 		if (message.role === MessageRole.TOOL && message.toolCallId) {
@@ -231,6 +249,20 @@ export class ChatService {
 		);
 
 		for (const audio of audioFiles) {
+			// a model that cannot hear reads what was said instead; one that can gets the audio alone
+			if (options.audioInput === false && audio.transcript) {
+				contentParts.push({
+					text: formatAttachmentText(
+						AttachmentLabel.VOICE_TRANSCRIPT,
+						audio.name,
+						audio.transcript
+					),
+					type: ContentPartType.TEXT
+				});
+
+				continue;
+			}
+
 			contentParts.push({
 				input_audio: {
 					data: audio.base64Data,
@@ -816,14 +848,17 @@ export class ChatService {
 	 * messages. Shared by sendMessage, preEncode and the agentic flow.
 	 */
 	static async normalizeMessagesForApi(
-		messages: ApiChatMessageData[] | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[]
+		messages: ApiChatMessageData[] | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[],
+		model?: string | null
 	): Promise<ApiChatMessageData[]> {
-		return (
+		const options = ChatService.conversionOptionsFor(model);
+		const converted = (
 			await Promise.all(
 				messages.map((msg) => {
 					if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
 						return ChatService.convertDbMessageToApiChatMessageData(
-							msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] }
+							msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] },
+							options
 						);
 					}
 
@@ -840,6 +875,10 @@ export class ChatService {
 
 			return true;
 		});
+
+		// a tool call cut off by Stop can still sit on the message: the server
+		// would reject the whole request on its arguments
+		return dropIncompleteToolCalls(converted);
 	}
 
 	/**
@@ -855,8 +894,10 @@ export class ChatService {
 		signal?: AbortSignal,
 		tools?: OpenAIToolDefinition[]
 	): Promise<ChatMessageTimings | null> {
-		const normalizedMessages: ApiChatMessageData[] =
-			await ChatService.normalizeMessagesForApi(messages);
+		const normalizedMessages: ApiChatMessageData[] = await ChatService.normalizeMessagesForApi(
+			messages,
+			model
+		);
 		const requestBody: Record<string, unknown> = {
 			messages: normalizedMessages.map((msg: ApiChatMessageData) => {
 				const mapped: Record<string, unknown> = {
@@ -1106,8 +1147,10 @@ export class ChatService {
 			xtc_probability,
 			xtc_threshold
 		} = options;
-		const normalizedMessages: ApiChatMessageData[] =
-			await ChatService.normalizeMessagesForApi(messages);
+		const normalizedMessages: ApiChatMessageData[] = await ChatService.normalizeMessagesForApi(
+			messages,
+			options.model
+		);
 
 		// Filter out image attachments if the model doesn't support vision
 		if (options.model && !modelsStore.props.modelSupportsVision(options.model)) {

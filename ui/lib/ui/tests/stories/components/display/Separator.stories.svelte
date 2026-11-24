@@ -12,7 +12,7 @@
 </script>
 
 <Story asChild name="Default">
-	<div class="w-80 text-sm">
+	<div class="w-80 text-body-sm">
 		<p class="font-medium">Qwen3.8-27B</p>
 
 		<p class="text-muted-foreground">Loaded, 131k context</p>

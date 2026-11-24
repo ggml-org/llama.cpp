@@ -1,3 +1,4 @@
+import { CODE_BLOCK } from '#lib/constants/index.ts';
 import type { Element, ElementContent, Root, Text } from 'hast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
@@ -50,7 +51,7 @@ export function createPreTransform(
 	contentGuard?: (text: string) => boolean
 ): Plugin<[], Root> {
 	const codeClasses = (Array.isArray(languages) ? languages : [languages]).map(
-		(language) => `language-${language}`
+		(language) => `${CODE_BLOCK.LANGUAGE_CLASS_PREFIX}${language}`
 	);
 
 	return () => {

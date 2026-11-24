@@ -478,6 +478,7 @@ enum mtmd_gen_audio_type {
     MTMD_GEN_AUDIO_TYPE_YUE2,
     MTMD_GEN_AUDIO_TYPE_MINIMAX_MUSIC3,
     MTMD_GEN_AUDIO_TYPE_FISH_S2,
+    MTMD_GEN_AUDIO_TYPE_MOSHI,
     MTMD_GEN_AUDIO_TYPE_KOKORO,
     MTMD_GEN_AUDIO_TYPE_TINY_VOCA,
     MTMD_GEN_AUDIO_TYPE_VOXCPM2,
@@ -534,6 +535,7 @@ struct mtmd_gen_inp {
     // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
     // pass either codes (discrete) or feats (continuous), depending on the pipeline
     // lfm3a GEN_CODE also takes codes: the codes revealed so far, -1 for a masked codebook
+    // moshi GEN_CODE: code0 is the sampled text token; with codes (all of the frame), only their backbone embedding is built
     // zonos3 GEN_WAV: -1 for a residual code not known yet, the frame is decoded without it
     // kokoro GEN_WAV takes both: codes are the phoneme tokens, feats is the voice row (256 values) then the backbone state of each token
     int32_t * codes;
@@ -592,6 +594,10 @@ MTMD_API void             mtmd_gen_state_reset(mtmd_gen_state * state);
 // copy the gen-side reference data of the last mtmd_encode_chunk() call into the state (speaker clip or predefined voice)
 // returns non-zero if the last encode produced no such data
 MTMD_API int32_t          mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state);
+
+// codes of the reference held by the state (frame-major, e.g. drama3: 10 per frame), NULL if it has none
+// valid until the next mtmd_gen_state_set_ref() / mtmd_gen_state_free() on this state
+MTMD_API const int32_t *  mtmd_gen_state_get_ref_codes(const mtmd_gen_state * state, size_t * n_codes);
 
 // defaults tuned for the loaded pipeline, callers override only what they care about
 MTMD_API struct mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx);

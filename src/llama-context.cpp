@@ -136,12 +136,6 @@ static const llm_fused_op_probe llm_fused_op_flash_attn_kv_rows_probe = {
     /*.n_tokens_per_seq =*/ 1,
 };
 
-static const llm_fused_op_probe llm_fused_op_lid_probe = {
-    /*.op               =*/ LLM_FUSED_OP_LIGHTNING_INDEXER,
-    /*.name             =*/ "Lightning Indexer",
-    /*.n_tokens_per_seq =*/ 1,
-};
-
 static const llm_fused_op_probe llm_fused_op_dsv4_hc_pre_probe = {
     /*.op               =*/ LLM_FUSED_OP_DSV4_HC_PRE,
     /*.name             =*/ "fused DeepSeek V4 HC pre",
@@ -195,6 +189,14 @@ llama_context::llama_context(
                         __func__, cparams.n_rs_seq);
         cparams.n_rs_seq = 0;
     }
+
+    // delta-net rollback keeps one state and the inputs of the last ubatch; the gdn op replays the kept tokens before the new ones
+    cparams.rs_replay = cparams.n_rs_seq > 0 && (
+            model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_QWEN4EXP ||
+            model.arch == LLM_ARCH_CLOVER_MOE ||
+            // KDA
+            model.arch == LLM_ARCH_KIMI_K3 || model.arch == LLM_ARCH_KIMI_K31 || model.arch == LLM_ARCH_GLM5_NEXT ||
+            model.arch == LLM_ARCH_BAILINGMOE3);
 
     cparams.n_threads               = params.n_threads;
     cparams.n_threads_batch         = params.n_threads_batch;
@@ -334,9 +336,6 @@ llama_context::llama_context(
         cparams.auto_fa    = false;
     }
 
-    cparams.fused_lid = true;
-    cparams.auto_flid = false;
-
     cparams.fused_dsv4_hc_pre  = true;
     cparams.fused_dsv4_hc_comb = true;
     cparams.fused_dsv4_hc_post = true;
@@ -444,6 +443,7 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: freq_base             = %.1f\n", __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale            = %g\n",   __func__, cparams.rope_freq_scale);
     LLAMA_LOG_INFO("%s: n_rs_seq              = %u\n",   __func__, cparams.n_rs_seq);
+    LLAMA_LOG_INFO("%s: rs_replay             = %s\n",   __func__, cparams.rs_replay ? "true" : "false");
     LLAMA_LOG_INFO("%s: n_outputs_max         = %u\n",   __func__, cparams.n_outputs_max);
     LLAMA_LOG_INFO("%s: n_outputs_max_per_seq = %u\n",   __func__, cparams.n_outputs_max_per_seq);
 
@@ -723,12 +723,6 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
         cparams.fused_kv_rows = cparams.flash_attn;
         resolve(llm_fused_op_flash_attn_kv_rows_probe, cparams.fused_kv_rows);
         cparams.auto_fkvr = false;
-    }
-
-    if (cparams.auto_flid) {
-        LLAMA_LOG_INFO("%s: resolving fused Lightning Indexer support:\n", func);
-        resolve(llm_fused_op_lid_probe, cparams.fused_lid);
-        cparams.auto_flid = false;
     }
 
     if (cparams.auto_fhc) {
@@ -3155,6 +3149,12 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
     }
     const ggml_tensor * node = ggml_graph_node(graph, 0);
     if (node->op != GGML_OP_MUL_MAT_ID || node->src[0] != dst) {
+        return false;
+    }
+
+    // Later loop passes can select different experts from the same device copy.
+    // TODO: copy only the experts needed by each pass (see #32807 and #32809).
+    if (lctx->model.arch == LLM_ARCH_INKLING2_LOOP) {
         return false;
     }
 

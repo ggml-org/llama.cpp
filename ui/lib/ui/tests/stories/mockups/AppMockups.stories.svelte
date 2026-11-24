@@ -17,7 +17,7 @@
 
 {#snippet number(part: string)}
 	<span
-		class="flex size-6 items-center justify-center rounded-full bg-foreground text-[13px] font-semibold text-background ring-2 ring-background"
+		class="flex size-6 items-center justify-center rounded-full bg-foreground text-body-sm font-semibold text-background ring-2 ring-background"
 		title={part}>{part[0].toUpperCase()}</span
 	>
 {/snippet}

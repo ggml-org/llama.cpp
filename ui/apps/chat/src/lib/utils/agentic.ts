@@ -620,3 +620,34 @@ export function classifyContinueIntent(messages: DatabaseMessage[], idx: number)
 
 	return { kind: ContinueIntentKind.RERUN_TURN, truncateAfter: idx - 1 };
 }
+
+/**
+ * Whether a live reply shows its status row ( "Processing 40%" ) after its
+ * sections. The row shows only while nothing else in the reply is moving: a
+ * section that is still streaming already says what is happening, and text
+ * keeps streaming without a status. After a finished row the reply is waiting
+ * on the next turn, so the row shows even before a finer status is known.
+ *
+ * @param statusText - What the server is doing, empty while tokens stream, null when the reply is not live
+ * @param last - The reply's last section, if it has any
+ * @param isStreaming - Whether this reply is the one streaming
+ */
+export function showsReplyStatus(
+	statusText: string | null,
+	last: AgenticSection | undefined,
+	isStreaming: boolean
+): boolean {
+	if (statusText === null) return false;
+
+	if (!last) return true;
+
+	if (last.type === AgenticSectionType.REASONING_PENDING) return false;
+
+	const isToolCallInFlight =
+		last.type === AgenticSectionType.TOOL_CALL_PENDING ||
+		last.type === AgenticSectionType.TOOL_CALL_STREAMING;
+
+	if (isStreaming && isToolCallInFlight) return false;
+
+	return statusText !== '' || last.type !== AgenticSectionType.TEXT;
+}

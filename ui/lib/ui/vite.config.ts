@@ -50,6 +50,7 @@ export default defineConfig({
         "@ggml-org/llama-ui/ui/*": "src/lib/components/ui/*",
         "@ggml-org/llama-ui/app/*": "src/lib/components/app/*",
         "@ggml-org/llama-ui/models": "src/lib/components/models/index.ts",
+        "@ggml-org/llama-ui/voice": "src/lib/components/voice/index.ts",
         "@ggml-org/llama-ui/constants": "src/lib/constants/index.ts",
         "@ggml-org/llama-ui/enums": "src/lib/enums/index.ts",
         "@ggml-org/llama-ui/code": "src/lib/utils/index.ts",
@@ -91,8 +92,7 @@ export default defineConfig({
               },
             ],
           },
-          include: ["src/**/*.svelte.{test,spec}.{js,ts}"],
-          exclude: ["src/lib/server/**"],
+          include: ["tests/client/**/*.svelte.{test,spec}.{js,ts}"],
         },
       },
       {
@@ -100,8 +100,7 @@ export default defineConfig({
         test: {
           name: "server",
           environment: "node",
-          include: ["src/**/*.{test,spec}.{js,ts}"],
-          exclude: ["src/**/*.svelte.{test,spec}.{js,ts}"],
+          include: ["tests/unit/**/*.{test,spec}.{js,ts}"],
         },
       },
       {

@@ -17,7 +17,7 @@ export const FILTER_TRIGGER_CLASS = `
     gap-1.5
     rounded-md
     px-3
-    text-sm
+    text-body-sm
     font-medium
     transition-colors
     hover:bg-muted/80 dark:hover:bg-muted

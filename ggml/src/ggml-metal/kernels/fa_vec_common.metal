@@ -15,19 +15,18 @@ constant int32_t FC_flash_attn_ext_vec_nwg  [[function_constant(FC_FLASH_ATTN_EX
 constant bool    FC_flash_attn_ext_vec_has_sparse [[function_constant(FC_FLASH_ATTN_EXT_VEC + 5)]];
 constant bool    FC_flash_attn_ext_vec_has_rows   [[function_constant(FC_FLASH_ATTN_EXT_VEC + 6)]];
 template<
-    typename q4_t,  // query types in shared memory
-    typename k4_t,  // key types in shared memory
-    typename v4_t,  // value types in shared memory
+    typename q_t,   // query types in shared memory
+    typename k_t,   // key types in shared memory
+    typename v_t,   // value types in shared memory
     typename qk_t,  // Q*K types
     typename s_t,   // soft-max types
-    typename s4_t,
-    typename o4_t,  // attention accumulation types
+    typename o_t,   // attention accumulation types
     typename kd4_t, // key type in device memory
     short nl_k,
-    void (*deq_k_t4)(device const kd4_t *, short, thread k4_t &),
+    void (*deq_k_t4)(device const kd4_t *, short, thread typename value_type_4<k_t>::type &),
     typename vd4_t, // value type in device memory
     short nl_v,
-    void (*deq_v_t4)(device const vd4_t *, short, thread v4_t &),
+    void (*deq_v_t4)(device const vd4_t *, short, thread typename value_type_4<v_t>::type &),
     short DK,       // K head size
     short DV,       // V head size
     short NE = 4,   // head elements per thread
@@ -48,6 +47,12 @@ kernel void kernel_flash_attn_ext_vec(
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
+    using q4_t = typename value_type_4<q_t>::type;
+    using k4_t = typename value_type_4<k_t>::type;
+    using v4_t = typename value_type_4<v_t>::type;
+    using s4_t = typename value_type_4<s_t>::type;
+    using o4_t = typename value_type_4<o_t>::type;
+
     static_assert(DK % 32 == 0, "DK must be divisible by 32");
     static_assert(DV % 32 == 0, "DV must be divisible by 32");
 

@@ -1,0 +1,39 @@
+{
+  "name": "@ggml-org/llama-harness",
+  "version": "0.1.0",
+  "description": "Headless agentic loop for llama.cpp frontend apps.",
+  "homepage": "https://github.com/ggml-org/llama.cpp/tree/master/ui/lib/harness",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ggml-org/llama.cpp.git",
+    "directory": "ui/lib/harness"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc --noEmit",
+    "prepack": "npm run build && publint",
+    "test": "vitest --run"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "publint": "^0.3.21",
+    "typescript": "^6.0.3",
+    "vitest": "5.0.5"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
