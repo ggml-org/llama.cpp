@@ -246,7 +246,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			this.preEncodeAbortController = null;
 		}
 	}
-
 	/**
 	 * Whether the branch holds a step to summarize before the steps a
 	 * compaction preserves.
@@ -264,6 +263,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		this.clearChatStreaming(convId);
 		this.processing.setState(convId, null);
 	}
+
 	clearChatStreaming(convId: string, messageId?: string): void {
 		// session aware: a stale generation must not wipe a newer one's streaming state on the
 		// same conversation, that would drop the frozen stop identity and stop the wrong session
@@ -279,7 +279,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		this.isEditModeActive = false;
 		this.addFilesHandler = null;
 	}
-
 	clearPendingEditMessageId(): void {
 		this.pendingEditMessageId = null;
 	}
@@ -733,6 +732,26 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 			return false;
 		}
+	}
+
+	/** Saves the conversation's system message straight from the chat form, creating it if needed. */
+	async saveSystemPrompt(
+		content: string,
+		draft?: { message: string; files: ChatUploadedFile[] }
+	): Promise<void> {
+		await this.addSystemPrompt(draft);
+
+		const id = this.pendingEditMessageId;
+
+		this.pendingEditMessageId = null;
+
+		if (!id) return;
+
+		await DatabaseService.updateMessage(id, { content });
+
+		const index = conversationsStore.findMessageIndex(id);
+
+		if (index !== -1) conversationsStore.updateMessageAtIndex(index, { content });
 	}
 
 	async sendMessage(content: string, extras?: DatabaseMessageExtra[]): Promise<void> {

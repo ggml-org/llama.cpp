@@ -87,6 +87,8 @@
 		placeholder?: string;
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
+		/** Writing the system message: the form takes the system message's dashed, muted look. */
+		systemMode?: boolean;
 
 		// Event Handlers
 		onAttachmentRemove?: (index: number) => void;
@@ -120,6 +122,7 @@
 		showAddButton = true,
 		showModelSelector = true,
 		singleRow = false,
+		systemMode = false,
 		uploadedFiles = $bindable([]),
 		value = $bindable(''),
 		voiceRecorder
@@ -758,6 +761,7 @@
 				'max-md:border-transparent max-md:focus-within:border-transparent max-md:dark:border-transparent max-md:dark:focus-within:border-transparent',
 				EXPANDED_SHEET_FILL
 			],
+			systemMode && '!border-2 !border-dashed !border-border/50 !bg-muted',
 			disabled && 'cursor-not-allowed opacity-60'
 		]}
 		data-single-row={isSingleRow || undefined}
