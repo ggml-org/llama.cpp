@@ -169,6 +169,12 @@ int32_t mtmd_helper_decode_image_chunk(
         int32_t ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch_embd.render(lctx, pos_offset, n_tokens_batch));
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);
+            if (chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE && llama_model_n_swa(llama_get_model(lctx)) > 0) {
+                // the whole image must stay in the sliding-window cache until it is decoded, see docs
+                LOG_ERR("the image has %d tokens, but -b is %d and -ub is %d. with sliding-window attention "
+                        "the batch and ubatch must each cover the image, use -b and -ub of at least %d\n",
+                        n_tokens, n_batch, llama_n_ubatch(lctx), n_tokens + 512);
+            }
             return ret;
         }
 
