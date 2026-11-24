@@ -21,11 +21,13 @@ set(DIST_DIR     "${UI_BINARY_DIR}/dist")
 set(SRC_DIST_DIR "${UI_SOURCE_DIR}/dist")
 # The stage keeps the layout of ui/: the app in apps/chat, with the sources of
 # Llama UI that it compiles next to it in lib/ui (see ui/apps/chat/scripts/llama-ui.js),
-# and those of Llama Voice in lib/voice (see ui/apps/chat/vite.config.ts).
+# and those of Llama Voice and the harness in lib/voice and lib/harness (see
+# ui/apps/chat/vite.config.ts).
 set(STAGE_DIR    "${UI_BINARY_DIR}/ui-src")
 set(WORK_DIR     "${STAGE_DIR}/apps/chat")
 set(UI_LIB_DIR   "${UI_SOURCE_DIR}/../../lib/ui")
 set(UI_VOICE_DIR "${UI_SOURCE_DIR}/../../lib/voice")
+set(HARNESS_DIR  "${UI_SOURCE_DIR}/../../lib/harness")
 set(STAMP_FILE   "${UI_BINARY_DIR}/.ui-stamp")
 set(EMBED_STAMP  "${UI_BINARY_DIR}/.ui-embed.sha256")
 set(UI_CPP       "${UI_BINARY_DIR}/ui.cpp")
@@ -223,7 +225,10 @@ function(emit_files dist_dir)
             set(gzip_dir  "${gzip_root}/_gzip")
             file(REMOVE_RECURSE "${gzip_root}")
             foreach(f IN LISTS assets)
-                get_filename_component(asset_path "${dist_dir}/${f}" REALPATH)
+                get_filename_component(asset_path "${dist_dir}/${f}" ABSOLUTE)
+                if(IS_SYMLINK "${asset_path}")
+                    get_filename_component(asset_path "${asset_path}" REALPATH)
+                endif()
                 get_filename_component(dst_dir "${gzip_dir}/${f}" DIRECTORY)
                 file(MAKE_DIRECTORY "${dst_dir}")
                 file(ARCHIVE_CREATE
@@ -325,7 +330,7 @@ function(npm_build_should_skip out_var)
 endfunction()
 
 function(stage_sources)
-    # everything but the app goes: the library, restaged below, and what a stage
+    # everything but the app goes: the packages, restaged below, and what a stage
     # from before this layout left at the top, its node_modules included
     if(EXISTS "${STAGE_DIR}")
         file(GLOB staged RELATIVE "${STAGE_DIR}" "${STAGE_DIR}/*")
@@ -349,7 +354,8 @@ function(stage_sources)
         PATTERN "node_modules" EXCLUDE
     )
 
-    # what the app reads of the library: its sources and the dependency list
+    # what the app reads of the packages: Llama UI's sources and dependency list,
+    # and the harness's sources
     file(COPY "${UI_LIB_DIR}/package.json"
         DESTINATION "${STAGE_DIR}/lib/ui"
         NO_SOURCE_PERMISSIONS
@@ -362,6 +368,10 @@ function(stage_sources)
     # and of Llama Voice, its sources only: they import nothing from outside them
     file(COPY "${UI_VOICE_DIR}/src"
         DESTINATION "${STAGE_DIR}/lib/voice"
+        NO_SOURCE_PERMISSIONS
+    )
+    file(COPY "${HARNESS_DIR}/src"
+        DESTINATION "${STAGE_DIR}/lib/harness"
         NO_SOURCE_PERMISSIONS
     )
 endfunction()

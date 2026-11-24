@@ -15,7 +15,15 @@ export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities
 export { getAttachmentDisplayItems, isMcpPrompt, isMcpResource } from './attachment-display';
-export { isTextFile, isImageFile, isPdfFile, isAudioFile, isVideoFile } from './attachment-type';
+export {
+	imageExtras,
+	isAudioFile,
+	isImageFile,
+	isMediaExtra,
+	isPdfFile,
+	isTextFile,
+	isVideoFile
+} from './attachment-type';
 
 // Textarea utilities
 export { default as autoResizeTextarea } from './autoresize-textarea';
@@ -277,6 +285,7 @@ export {
 	splitSearchSummaryList,
 	hasAgenticContent,
 	isSectionExpandedByDefault,
+	showsReplyStatus,
 	classifyToolResult,
 	classifyContinueIntent
 } from './agentic';
@@ -285,7 +294,7 @@ export {
 export { computeLineDiff, prefixFor, renderUnifiedDiff, type DiffLine } from './compute-line-diff';
 
 // Partial-incremental JSON parser for streaming tool arguments
-export { parsePartialJsonArgs } from './parse-partial-json-args';
+export { memoizeBounded } from './memoize-bounded';
 
 // `exec_shell_command` result parsing
 export { parseExecShellCommandError } from './parse-exec-shell-error';
@@ -337,6 +346,7 @@ export {
 // This module only carries the helpers that genuinely cross tool
 // boundaries (currently: parsing the tool-result blob into a JSON
 // object).
+export { parseToolCallShownArgOverrides, toolCallShownArg } from './tool-call-shown-arg';
 export { tryParseToolResultObject } from './tool-call-meta';
 
 // Per-tool UI metadata (label + icon) used by the tool-call chrome.
@@ -379,7 +389,7 @@ export { type GgufMetadata, type GgufValue, readGgufMetadata } from './gguf-meta
 export { uuid } from './uuid';
 
 // CSS utilities
-export { applySurfaceTheme, remToPx } from './css';
+export { remToPx } from './css';
 
 // Audio format helper (used by agentic store and chat service)
 export { getAudioInputFormat } from './audio-format';

@@ -5,8 +5,7 @@ description: >-
   Llama UI, the design system and components of Llama Chat, the chat client llama-server
   bundles. Neutral and quiet: frosted matte surfaces with faint
   blue-grey hairlines, near-flat fills, and status colours for success, warning, error and info. Tokens come in
-  three tiers: primitives, semantic tokens (with a "-dark" twin where dark mode differs and a
-  "-matte" twin where the Matte light theme does) and components. The colors, typography and
+  three tiers: primitives, semantic tokens (with a "-dark" twin where dark mode differs) and components. The colors, typography and
   rounded sections are generated from ui/lib/ui/src/lib/styles by `npm run design:tokens` in
   ui/apps/chat; spacing, components and the prose are kept in sync with the CSS by hand.
 colors:
@@ -123,14 +122,6 @@ colors:
   highlight-inverse: '{colors.white-a12}'
   sheen-start: '{colors.white-a20}'
   elevation-ring: '{colors.black-a5}'
-  surface-page-matte: '{colors.neutral-0}'
-  surface-glass-matte: 'oklch(0.97 0 0 / 0.6)'
-  surface-code-matte: '{colors.neutral-50}'
-  surface-success-matte: 'color-mix(in oklab, {colors.fill-success} 11%, {colors.surface-page-matte})'
-  surface-warning-matte: 'color-mix(in oklab, {colors.fill-warning} 11%, {colors.surface-page-matte})'
-  surface-danger-matte: 'color-mix(in oklab, {colors.fill-danger} 11%, {colors.surface-page-matte})'
-  surface-info-matte: 'color-mix(in oklab, {colors.fill-info} 11%, {colors.surface-page-matte})'
-  field-background-matte: '{colors.surface-page-matte}'
   surface-page-dark: '{colors.neutral-925}'
   surface-muted-dark: '{colors.neutral-800}'
   surface-emphasis-dark: '{colors.neutral-750}'
@@ -815,9 +806,8 @@ here. The `spacing` and `components` sections and the prose are written by hand;
 disagree with the CSS, the CSS wins and this file is updated to match. Storybook shows every
 tier under **Llama UI › Foundations › Colors**.
 
-Paper light mode is the base. A semantic token that resolves differently in dark mode has a
-`-dark` twin here, and one that resolves differently in Matte a `-matte` twin; components list
-a `-dark` entry wherever their colours change. Translucent component
+Light mode is the base. A semantic token that resolves differently in dark mode has a
+`-dark` twin here; components list a `-dark` entry wherever their colours change. Translucent component
 fills are given as they render over the page, so contrast checks see the real colour.
 
 ## Colors
@@ -841,12 +831,8 @@ creative (a shape, a numeral, an illustration). Artwork takes its colours from t
 the `art-*` primitives: the day sky and the night sky (llama.app's light and dark hero grounds) and
 cinder, the accent orange; never from the status colours, and never red.
 
-Light mode has two surface themes, which share everything else (the palette, buttons, fields,
-badges, shadows and dark mode): **Paper**, the default, sets white panels, fields and keys on a
-faint grey page (`neutral-25`); **Matte** sets grey glass on a white page. Matte is the
-`theme-matte` class on `<html>`, chosen with the Light surfaces setting (Settings → General) or
-the Surface switch in Storybook's toolbar, and only its surface tokens differ: `surface-page`,
-`surface-glass`, `surface-code`, `field-background` and `float-panel-background-modal`.
+Light mode sets white panels, fields and keys on a faint grey page (`neutral-25`). Dark mode shares the
+palette, buttons, fields, badges and shadows.
 
 - **Surfaces:** `surface-page` for the page, `surface-muted` for quiet panels,
   `surface-emphasis` and `surface-selected` for stronger fills and hover or selected rows,

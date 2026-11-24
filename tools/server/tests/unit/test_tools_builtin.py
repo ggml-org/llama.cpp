@@ -191,6 +191,23 @@ def test_tools_builtin_edit_file_rejects_non_unique_old_text(tmp_path):
             os.remove(log_path)
 
 
+def test_tools_builtin_exec_shell_command_asks_for_a_description():
+    global server
+    server.start()
+
+    res = server.make_request("GET", "/tools")
+    assert res.status_code == 200, res.body
+    tool = next(t for t in res.body if t["tool"] == "exec_shell_command")
+    params = tool["definition"]["function"]["parameters"]
+    # first, so a client can show it while the command still streams
+    assert list(params["properties"])[0] == "description"
+    assert "description" in params["required"]
+
+    # the tool runs without it, as before
+    res = call_tool("exec_shell_command", {"command": "echo hi"})
+    assert "hi" in res["plain_text_response"]
+
+
 def test_tools_builtin_exec_shell_command_stream():
     global server
     server.start()

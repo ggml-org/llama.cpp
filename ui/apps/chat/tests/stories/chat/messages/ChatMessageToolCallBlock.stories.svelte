@@ -20,6 +20,7 @@
 		runJavascriptSection,
 		searchResultsSection,
 		seedChatStory,
+		toolSearchSection,
 		writeFileSection
 	} from './fixtures';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
@@ -123,6 +124,10 @@
 
 		<StateGalleryItem label="Read media">
 			<ChatMessageToolCallBlock isStreaming={false} open section={readMediaSection} />
+		</StateGalleryItem>
+
+		<StateGalleryItem label="Load tools on demand" note="tool_search select query">
+			<ChatMessageToolCallBlock isStreaming={false} open section={toolSearchSection} />
 		</StateGalleryItem>
 
 		<StateGalleryItem label="Search results">

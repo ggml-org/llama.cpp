@@ -12,16 +12,28 @@
 	interface Props {
 		toolName: string;
 		serverLabel: string;
+		/**
+		 * The shell command the call would run, shown in full: the trace row may
+		 * show the model's own description of it, which is not what gets executed.
+		 */
+		command?: string;
 		onDecision: (decision: ToolPermissionDecision) => void;
 	}
 
-	let { onDecision, serverLabel, toolName }: Props = $props();
+	let { command, onDecision, serverLabel, toolName }: Props = $props();
 </script>
 
 <ChatMessageActionCard icon={ShieldQuestion}>
 	{#snippet message()}
 		Allow use of <span class="font-semibold">{toolName}</span>{#if serverLabel}
 			&nbsp;from <span class="font-semibold">{serverLabel}</span>{/if}?
+	{/snippet}
+
+	{#snippet detail()}
+		{#if command}
+			<pre
+				class="mb-3 max-h-40 overflow-auto rounded-md bg-(--surface-code) px-3 py-2 font-mono text-caption whitespace-pre-wrap break-words">{command}</pre>
+		{/if}
 	{/snippet}
 
 	{#snippet actions()}

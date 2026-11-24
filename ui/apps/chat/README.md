@@ -84,16 +84,17 @@ Llama Chat is the first app on Llama UI, and the reference for the line between 
 
 The app imports the library as `@ggml-org/llama-ui/ui/<name>` and compiles its sources in its own build, with no install of the library (see `scripts/vite-plugin-llama-ui.ts`). Data flows one way, through these layers:
 
-| Layer          | Lives in                  | What it holds                                                                                       |
-| -------------- | ------------------------- | --------------------------------------------------------------------------------------------------- |
-| Routes         | `src/routes`              | `/`, `/chat/[id]`, `/models`, `/mcp-servers`, `/settings`, `/search`                                |
-| App components | `src/lib/components/app`  | Chat, navigation, models, MCP, settings and dialogs, grouped by area                                |
-| UI components  | `ui/lib/ui`               | shadcn-svelte on bits-ui, from Llama UI                                                             |
-| Voice          | `ui/lib/voice`            | Microphone capture, transcription and dictation, from Llama Voice (`@ggml-org/llama-voice`)         |
-| Hooks          | `src/lib/hooks`           | View logic between components and stores: scroll, drag and drop, pickers, keyboard                  |
-| Stores         | `src/lib/stores`          | Application state as Svelte 5 runes: chat, conversations, the agentic loop, tools, models, settings |
-| Services       | `src/lib/services`        | Stateless I/O: the llama-server API, IndexedDB, MCP, the Hugging Face Hub, the tool sandbox         |
-| Storage + API  | the browser, llama-server | IndexedDB and localStorage; llama-server's `/v1`, `/props`, `/models`, `/tools`, `/slots`           |
+| Layer          | Lives in                  | What it holds                                                                                        |
+| -------------- | ------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Routes         | `src/routes`              | `/`, `/chat/[id]`, `/models`, `/mcp-servers`, `/settings`, `/search`                                 |
+| App components | `src/lib/components/app`  | Chat, navigation, models, MCP, settings and dialogs, grouped by area                                 |
+| UI components  | `ui/lib/ui`               | shadcn-svelte on bits-ui, from Llama UI                                                              |
+| Voice          | `ui/lib/voice`            | Microphone capture, transcription and dictation, from Llama Voice (`@ggml-org/llama-voice`)          |
+| Hooks          | `src/lib/hooks`           | View logic between components and stores: scroll, drag and drop, pickers, keyboard                   |
+| Stores         | `src/lib/stores`          | Application state as Svelte 5 runes: chat, conversations, the agentic loop, tools, models, settings  |
+| Agentic loop   | `ui/lib/harness`          | Llama Harness: streams a turn, runs the tools the model called, repeats until it answers without one |
+| Services       | `src/lib/services`        | Stateless I/O: the llama-server API, IndexedDB, MCP, the Hugging Face Hub, the tool sandbox          |
+| Storage + API  | the browser, llama-server | IndexedDB and localStorage; llama-server's `/v1`, `/props`, `/models`, `/tools`, `/slots`            |
 
 ```mermaid
 flowchart LR
@@ -152,6 +153,10 @@ llama-server serves the UI with `Cross-Origin-Embedder-Policy: require-corp` and
 `npm run build` generates the PWA icons, bundles the app with Vite and writes it to `dist/` (or to `LLAMA_UI_OUT_DIR`) as static files: `index.html`, one JS and one CSS bundle under `_app/`, the service worker, the web manifest and `build.json` with the version (`LLAMA_BUILD_NUMBER`, `b0000` locally). Paths are relative and routing uses the URL hash, so `dist` works from any path.
 
 llama-server embeds it: when llama-server is built, `scripts/ui-assets.cmake` takes `ui/apps/chat/dist` if it exists, runs `npm run build` if `LLAMA_BUILD_UI` is on, or downloads the release's prebuilt `dist.tar.gz` from Hugging Face, and compiles every file into the binary. The same `dist` is what `npx @ggml-org/llama-chat` serves.
+
+**Plain chat and agent mode.** Llama Chat is a plain chat, a message and its reply with reasoning when the model gives it, unless llama-server offers the agentic features: its built-in tools or its proxy, which `llama-server --agent` turns on together. The app reads this from `/props` and `/tools`. With them it shows the tools menu, the working folder, MCP and the Tools and Agentic settings, and runs the agentic loop; without them it shows none of these and sends the classic request. Tool calls in earlier conversations still display.
+
+**Chat-only build.** `VITE_PUBLIC_AGENTIC=false npm run build` builds an app that is a plain chat for every server, and `npm run dev:chat-only` runs the dev server the same way. Llama Harness's loop is left out of its bundle.
 
 ```text
 ui/apps/chat/

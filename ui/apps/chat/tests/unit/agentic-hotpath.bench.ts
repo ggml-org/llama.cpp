@@ -6,6 +6,7 @@
 //
 // Run: npx vitest bench --project=unit tests/unit/agentic-hotpath.bench.ts
 
+import { parsePartialJsonArgs } from '@ggml-org/llama-harness';
 import { classifyToolResult, parseToolResultWithMedia } from '#lib/utils/agentic.ts';
 import {
 	detectIncompleteCodeBlock,
@@ -14,7 +15,6 @@ import {
 } from '#lib/utils/code.ts';
 import { computeLineDiff } from '#lib/utils/compute-line-diff.ts';
 import { preprocessLaTeX } from '#lib/utils/latex-protection.ts';
-import { parsePartialJsonArgs } from '#lib/utils/parse-partial-json-args.ts';
 import { extractSearchQuery, extractSearchResults } from '#lib/utils/search-results.ts';
 import { all as lowlightAll } from 'lowlight';
 import rehypeHighlight from 'rehype-highlight';
