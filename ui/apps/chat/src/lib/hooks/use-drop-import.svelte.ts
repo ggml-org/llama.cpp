@@ -9,7 +9,7 @@
  */
 
 import type { SettingsDiffEntry } from '#lib/components/app/dialogs/DialogSettingsImportPreview.svelte';
-import { SETTINGS_REGISTRY, ZIP_MAGIC } from '#lib/constants/index.ts';
+import { SETTING_CONFIG_DEFAULT, SETTINGS_REGISTRY, ZIP_MAGIC } from '#lib/constants/index.ts';
 import { ConversationTransferService } from '#lib/services/conversation-transfer.service.ts';
 import { RouterService } from '#lib/services/router.service.ts';
 import { conversationsStore } from '#lib/stores/conversations/index.svelte.ts';
@@ -80,12 +80,14 @@ export function computeSettingsDiff(
 		}
 	}
 
-	const keys = new SvelteSet([...Object.keys(current), ...Object.keys(imported)]);
+	// importing applies the file over the defaults, so a key the file leaves out goes back to its default
+	const next: SettingsConfigType = { ...SETTING_CONFIG_DEFAULT, ...imported };
+	const keys = new SvelteSet([...Object.keys(current), ...Object.keys(next)]);
 	const diff: SettingsDiffEntry[] = [];
 
 	for (const key of keys) {
 		const from = current[key];
-		const to = imported[key];
+		const to = next[key];
 
 		if (from !== to) {
 			diff.push({ from, key, label: labels.get(key) ?? key, to });
