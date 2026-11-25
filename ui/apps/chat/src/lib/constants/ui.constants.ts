@@ -26,6 +26,18 @@ export const NATIVE_CONTEXT_MENU_SELECTOR =
 	'a, img, video, audio, pre, code, input, textarea, [contenteditable="true"]';
 
 /**
+ * Open overlays that take Escape themselves, so what is under them leaves the key alone.
+ * Not tooltips and hover cards, which only close on it.
+ */
+export const OPEN_OVERLAY_SELECTOR = [
+	'[role="dialog"][data-state="open"]',
+	'[role="alertdialog"][data-state="open"]',
+	'[role="menu"][data-state="open"]',
+	'[role="listbox"][data-state="open"]',
+	'[data-slot="popover-content"][data-state="open"]'
+].join(', ');
+
+/**
  * A sidebar section under a dragged chat, or one being moved: the faint tint
  * of the sidebar's resize handle, edged like the handle while it is dragged.
  */

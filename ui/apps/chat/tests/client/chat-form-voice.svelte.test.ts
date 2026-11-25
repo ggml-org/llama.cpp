@@ -43,7 +43,7 @@ function seed(
 
 async function renderForm({ isLoading = false } = {}) {
 	const recorder = new FakeVoiceRecorder();
-	const state = $state({ files: [] as ChatUploadedFile[], sent: 0, value: '' });
+	const state = $state({ files: [] as ChatUploadedFile[], sent: 0, stopped: 0, value: '' });
 	const screen = render(ChatFormVoiceTestWrapper, { isLoading, state, voiceRecorder: recorder });
 
 	await tick();
@@ -286,6 +286,20 @@ describe('while a reply streams', () => {
 		await expect
 			.element(screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last())
 			.toBeEnabled();
+	});
+
+	it('drops the recording on Escape, and the reply goes on', async () => {
+		seed(true, VoiceInputMode.DICTATION);
+
+		const { recorder, recordingRow, screen, state } = await renderForm({ isLoading: true });
+
+		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
+		await expect.poll(recordingRow).toBeTruthy();
+
+		await userEvent.keyboard('{Escape}');
+		await expect.poll(recordingRow).toBeNull();
+		expect(recorder.cancelled).toBe(1);
+		expect(state.stopped).toBe(0);
 	});
 });
 
