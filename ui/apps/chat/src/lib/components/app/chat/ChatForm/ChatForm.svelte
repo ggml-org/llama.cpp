@@ -313,6 +313,7 @@
 	// wrapped, as the wider row of its own would fit it again and flip it straight back
 	let textHeight = $state<number | null>(null);
 	let wrappedAtLength = Infinity;
+	let lastLength = 0;
 	let canBeSingleRow = $derived(
 		singleRow &&
 			!deviceStore.isMobile &&
@@ -337,8 +338,10 @@
 		const fitsOneLine = lines < CHAT_FORM_SINGLE_ROW_MAX_TEXT_LINES;
 		const length = value.length;
 
-		// a placeholder that wrapped (at length 0) can not get shorter: keep the two rows
-		if (!length && wrappedAtLength) wrappedAtLength = Infinity;
+		// an emptied form tries the one row again; one that wraps while empty keeps the two rows
+		if (!length && lastLength) wrappedAtLength = Infinity;
+
+		lastLength = length;
 
 		if (!canBeSingleRow) {
 			isSingleRow = false;

@@ -98,6 +98,23 @@ describe('ChatForm single row', () => {
 		expect(isSingleRow()).toBe(false);
 	});
 
+	it('tries the one row again once a form that wrapped while empty is emptied', async () => {
+		await page.viewport(DESKTOP.width, DESKTOP.height);
+		document.body.style.width = '4rem';
+
+		const { isSingleRow, write } = await renderForm();
+
+		await nextLayout();
+		expect(isSingleRow()).toBe(false);
+
+		document.body.style.width = '';
+		await write('short');
+		expect(isSingleRow()).toBe(false);
+
+		await write('');
+		expect(isSingleRow()).toBe(true);
+	});
+
 	it('keeps the two rows on a phone', async () => {
 		await page.viewport(PHONE.width, PHONE.height);
 
