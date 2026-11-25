@@ -953,7 +953,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - ROCM_VERSION: "10.0.0"
+          - ROCM_VERSION: "10.2.0"
             gpu_targets: "gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201"
             build: x64
 
@@ -1070,11 +1070,22 @@ jobs:
           # copy the matching version too. amd_comgr is copied as well to keep it
           # in sync with the bundled amdhip64, avoiding a version mismatch with a
           # amd_comgr from System32.
-          # rocblas/hipblaslt kernels resolve fine via PATH and are not copied.
+          # rocblas/hipblaslt/hipRTC are NOT resolvable via PATH on an end-user
+          # machine: rocm-sdk --bin points into the CI runner's venv, which does
+          # not exist for the person who downloads the zip. ggml-hip.dll resolves
+          # its kernels through hipRTC and initializes with rocBLAS/hipBLASLt, so
+          # if those DLLs + their Tensile/hipBLASLt codeobject directories are
+          # missing the backend init fails and surfaces as the misleading
+          # "no ROCm-capable device is detected" followed by silent CPU fallback
+          # (issue #33039). Bundle the full ROCm runtime side-by-side with the
+          # binaries. DLL names are version-suffixed (e.g. hiprtc0717.dll) and
+          # vary across ROCm releases, so copy by glob rather than a fixed list.
           $binPath = (rocm-sdk path --bin).Trim()
           if (-not $binPath) { throw "rocm-sdk path --bin returned empty" }
           write-host "ROCm bin path: $binPath"
 
+          # HIP runtime + loader (matching versions, kept in sync to avoid a
+          # version mismatch with any amdhip64_7.dll from System32).
           $patterns = @("amdhip64_7.dll", "rocm_kpack.dll", "amd_comgr.dll")
           foreach ($pattern in $patterns) {
             $files = Get-ChildItem -Path $binPath -Filter $pattern -ErrorAction SilentlyContinue
@@ -1085,13 +1096,44 @@ jobs:
             }
           }
 
+          # Remaining ROCm runtime DLLs: rocBLAS, hipBLASLt, hipRTC (runtime
+          # compiler), and the blas/solver/sparse/fft/rand/dnn/backends that the
+          # HIP backend and rocBLAS load at init. Copy every DLL shipped in the
+          # devel bin dir so none is left behind on a version bump.
+          $runtimeDlls = Get-ChildItem -Path $binPath -Filter *.dll -ErrorAction SilentlyContinue
+          if (-not $runtimeDlls) { throw "no runtime DLLs found in $binPath" }
+          foreach ($f in $runtimeDlls) {
+            Copy-Item $f.FullName -Destination build\bin\Release -Force
+            write-host "  copied $($f.Name)"
+          }
+
+          # Tensile / hipBLASLt codeobject libraries live in sibling directories
+          # (rocblas/, hipblaslt/) that rocblas.dll and libhipblaslt.dll load at
+          # runtime. Without them rocBLAS cannot find kernels for the device arch.
+          $codeobjDirs = @("rocblas", "hipblaslt")
+          foreach ($d in $codeobjDirs) {
+            $src = Join-Path $binPath $d
+            if (Test-Path $src) {
+              Copy-Item $src -Destination build\bin\Release -Recurse -Force
+              write-host "  copied codeobject dir $d/"
+            } else {
+              write-host "  note: no $d/ codeobject dir in $binPath (skipping)"
+            }
+          }
+
       - name: Pack artifacts
         run: |
+          # ggml-hip.dll plus the full ROCm runtime it needs at init: the loader
+          # DLLs, every version-suffixed runtime DLL (rocBLAS, hipBLASLt, hipRTC,
+          # blas/solver/sparse/fft/rand/dnn), and the rocblas/ + hipblaslt/
+          # codeobject directories. Bundling only amdhip64_7/rocm_kpack/amd_comgr
+          # left the backend unable to initialize on an end-user machine, which
+          # surfaced as "no ROCm-capable device is detected" + CPU fallback (#33039).
           7z a -snl llama-bin-win-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.zip `
             .\build\bin\Release\ggml-hip.dll `
-            .\build\bin\Release\amdhip64_7.dll `
-            .\build\bin\Release\rocm_kpack.dll `
-            .\build\bin\Release\amd_comgr.dll
+            .\build\bin\Release\*.dll `
+            .\build\bin\Release\rocblas `
+            .\build\bin\Release\hipblaslt
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
