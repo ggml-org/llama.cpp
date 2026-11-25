@@ -14027,6 +14027,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // single-column gate fusion with K around the CUDA small-K limit, n is not a multiple of the rows per block
+    for (ggml_type type : {GGML_TYPE_Q4_0, GGML_TYPE_Q4_K}) {
+        for (int64_t k : {1792, 2048, 2304}) {
+            test_cases.emplace_back(new test_mul_mat_fusion(type, GGML_GLU_OP_SWIGLU, 1, 30, k,
+                false, 1, 1, false, false, true, false, {1, 1}));
+        }
+    }
+
     for (bool b : {false, true}) {
         test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_IQ2_S, GGML_GLU_OP_SWIGLU_CLAMP, 1, 32, 256,
             true, 16, 8, b, false, true, false));

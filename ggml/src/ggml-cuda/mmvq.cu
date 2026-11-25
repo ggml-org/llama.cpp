@@ -856,8 +856,26 @@ static __global__ void mul_mat_vec_q(
             for (int i = 0; i < rows_per_cuda_block; ++i) {
                 tmp[j][i] += vec_dot_q_cuda(
                     vx, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
-                if constexpr (has_fusion) {
+                if constexpr (has_fusion && !small_k) {
                     if (use_gate) {
+                        tmp_gate[j][i] += vec_dot_q_cuda(
+                            vgate, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
+                    }
+                }
+            }
+        }
+    }
+
+    // With several rows per block (small_k), it is faster to read the gate weights in a separate loop
+    if constexpr (has_fusion && small_k) {
+        if (use_gate) {
+            for (int kbx = tid / (qi/vdr); kbx < blocks_per_row_x; kbx += blocks_per_iter) {
+                const int kby = kbx * (qk/QK8_1);
+                const int kqs = vdr * (tid % (qi/vdr));
+#pragma unroll
+                for (int j = 0; j < ncols_dst; ++j) {
+#pragma unroll
+                    for (int i = 0; i < rows_per_cuda_block; ++i) {
                         tmp_gate[j][i] += vec_dot_q_cuda(
                             vgate, &y[j*stride_col_y + kby], kbx_offset + i*stride_row_x + kbx, kqs);
                     }
@@ -1224,9 +1242,9 @@ static void mul_mat_vec_q_switch_ncols_dst(
 
     const auto should_use_small_k = [&](int c_ncols_dst) {
         // When K is small, increase rows_per_block to match nwarps so each warp has more work to do
-        // Trigger when the full thread block covers all K blocks in a single loop iteration and few threads remain idle.
+        // Trigger when the full thread block covers all K blocks in a single loop iteration.
         const int  nwarps = calc_nwarps(type, c_ncols_dst, table_id);
-        bool       use    = nwarps > 1 && blocks_per_row_x < nwarps * blocks_per_iter_1warp;
+        bool       use    = nwarps > 1 && blocks_per_row_x <= nwarps * blocks_per_iter_1warp;
 
         constexpr std::array<ggml_type, 2> iq_slow_turing = {
             GGML_TYPE_IQ3_XXS,
