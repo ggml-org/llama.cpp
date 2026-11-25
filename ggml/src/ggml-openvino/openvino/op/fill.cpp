@@ -51,7 +51,9 @@ OutputVector translate_fill(const NodeContext & context) {
         const size_t count = ov::shape_size(out_shape);
         const size_t begin = context.get_output_op_offset() / elem;
         if (contiguous && count < total && begin <= total - count) {
-            auto i64 = [](int64_t v) { return ov::op::v0::Constant::create(ov::element::i64, {1}, {v}); };
+            auto i64 = [](int64_t v) {
+                return ov::op::v0::Constant::create(ov::element::i64, {1}, {v});
+            };
             auto flat = std::make_shared<ov::op::v1::Reshape>(base, i64(-1), false);
             auto head = std::make_shared<ov::op::v8::Slice>(flat, i64(0), i64(begin), i64(1), i64(0));
             auto body = std::make_shared<ov::op::v1::Reshape>(res, i64(-1), false);

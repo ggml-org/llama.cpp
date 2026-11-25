@@ -130,7 +130,9 @@ OutputVector translate_unary_softplus(const NodeContext & context) {
     auto y = std::make_shared<ov::op::v0::Exp>(neg_abs);
     // log1p(y) for y in (0, 1]. log(1 + y) loses a small y to rounding in 1 + y (all of it below x = -16 in f32),
     // so y < 0.01 takes the series y - y^2/2 + y^3/3 - y^4/4, whose relative error there is below 2e-9.
-    auto c = [&](float v) { return ov::op::v0::Constant::create(element_type, ov::Shape{}, {v}); };
+    auto c = [&](float v) {
+        return ov::op::v0::Constant::create(element_type, ov::Shape{}, {v});
+    };
     std::shared_ptr<ov::Node> series = std::make_shared<ov::op::v1::Multiply>(y, c(0.25f));
     series = std::make_shared<ov::op::v1::Subtract>(c(1.0f / 3), series);
     series = std::make_shared<ov::op::v1::Subtract>(c(0.5f), std::make_shared<ov::op::v1::Multiply>(y, series));
