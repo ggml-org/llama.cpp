@@ -536,7 +536,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
                     comp_all->nb[1], comp_all->nb[2], comp_all->nb[3], ggml_row_size(comp_all->type, n_embd_head));
             // the fused indexer reads the strided view in place, the unfused path needs it contiguous; CUDA has no same-type copy of quantized views, so dequantize them
             const bool fused_idx = sparse && ci.kq_mask->type == GGML_TYPE_F16;
-            if (ggml_is_quantized(ik->type)) {
+            if (ggml_is_quantized(ik->type) && !fused_idx) {
                 ik = ggml_cast(ctx0, ik, GGML_TYPE_F32);
             } else if (!fused_idx) {
                 ik = ggml_cont(ctx0, ik);
