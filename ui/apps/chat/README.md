@@ -55,7 +55,7 @@ The app reaches the llama-server on its own origin by default (llama-server serv
 - **Rendering** - Markdown (GFM), code highlighting, KaTeX math and Mermaid diagrams
 - **Models** - in ROUTER mode, a selector and a models manager: load and unload, downloads, Discover from the Hugging Face Hub, favorites and hidden models
 - **Tools** - built-in browser tools, llama-server's tools and MCP servers, each behind a permission prompt
-- **Everywhere** - light and dark themes, phone layouts, installable as a PWA, keyboard shortcuts (`Ctrl/Cmd+K` search, `Shift+Ctrl/Cmd+O` new chat, `Ctrl/Cmd+B` sidebar)
+- **Everywhere** - light and dark themes, phone layouts, installable as a PWA, keyboard shortcuts (`Ctrl/Cmd+K` search, `Shift+Ctrl/Cmd+O` new chat, `Ctrl/Cmd+B` sidebar, `Esc` stop the reply)
 
 ## Development
 
