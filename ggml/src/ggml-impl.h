@@ -223,6 +223,7 @@ struct ggml_custom_sched {
     int n_tasks;       // CPU
     int n_groups[3];   // other backends
     int group_size[3];
+    bool async;        // can run next to the nodes after it, until the first node that takes it
 };
 
 struct ggml_custom_kernel {

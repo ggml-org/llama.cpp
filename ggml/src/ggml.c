@@ -6302,6 +6302,10 @@ void ggml_custom_sched_set_group_size(struct ggml_custom_sched * sched, int n0, 
     sched->group_size[2] = n2;
 }
 
+void ggml_custom_sched_set_async(struct ggml_custom_sched * sched, bool async) {
+    sched->async = async;
+}
+
 struct ggml_tensor * ggml_custom_op_4d(
         struct ggml_context         * ctx,
         enum ggml_type                type,

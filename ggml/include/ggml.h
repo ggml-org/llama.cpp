@@ -2683,6 +2683,10 @@ extern "C" {
     // Other backends: number of workgroups and threads of a workgroup, in each dimension
     GGML_API void ggml_custom_sched_set_n_groups  (struct ggml_custom_sched * sched, int n0, int n1, int n2);
     GGML_API void ggml_custom_sched_set_group_size(struct ggml_custom_sched * sched, int n0, int n1, int n2);
+    // A hint: the node can run next to the nodes after it, until the first node that takes it as an argument
+    // The nodes in between must not need what the kernel writes. A backend can ignore it
+    // With ggml_backend_sched the node and its arguments stay allocated until then
+    GGML_API void ggml_custom_sched_set_async(struct ggml_custom_sched * sched, bool async);
 
     // A node of the op: the kernels of the op are set before, the op must outlive the graph, params is copied
     GGML_API struct ggml_tensor * ggml_custom_op_4d(
