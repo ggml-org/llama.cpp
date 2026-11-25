@@ -449,11 +449,12 @@ class TestInkling2PackedConversion(unittest.TestCase):
         decoded = packed.float() * torch.exp2(scales.float() - 127).repeat_interleave(32, -1)
         return {"": packed, "_scale": scales}, decoded
 
-    def packed_checkpoint(self):
+    def packed_checkpoint(self, n_ff=None):
         """Layer 0 is NVFP4, layer 1 is MXFP8. Returns the checkpoint tensors, the hf_quant_config groups and the expected GGUF tensors."""
+        n_ff = self.N_FF if n_ff is None else n_ff
         tensors, quant_groups, expected = {}, [], {}
-        w13_shape = (self.N_EXPERT, 2 * self.N_FF, self.N_EMBD)
-        w2_shape = (self.N_EXPERT, self.N_EMBD, self.N_FF)
+        w13_shape = (self.N_EXPERT, 2 * n_ff, self.N_EMBD)
+        w2_shape = (self.N_EXPERT, self.N_EMBD, n_ff)
         for layer, scheme in enumerate(("nvfp4_nearest", "mxfp8_nearest")):
             names = []
             for projection, shape, target in (("w13", w13_shape, "gate_up"), ("w2", w2_shape, "down")):
@@ -473,13 +474,16 @@ class TestInkling2PackedConversion(unittest.TestCase):
             quant_groups.append({"tensors": names, "weight_transform": scheme, "weight_scale_format": "amax_denominator", "weight_block_shape": block_shape})
         return tensors, quant_groups, expected
 
-    def converter(self, path, tensors, quant_groups, ftype=gguf.LlamaFileType.ALL_F32, eager=False):
+    def converter(self, path, tensors, quant_groups, ftype=gguf.LlamaFileType.ALL_F32, eager=False, n_ff=None, fp8_as_q8=False, quant_config=None):
         """Writes the checkpoint to path and returns an Inkling2Model on it."""
-        hp = {"model_type": "inkling2_text", "architectures": ["Inkling2ForCausalLM"], "num_hidden_layers": 2, "hidden_size": self.N_EMBD, "moe_intermediate_size": self.N_FF, "n_routed_experts": self.N_EXPERT, "layer_types": ["hybrid_sliding", "hybrid"]}
+        n_ff = self.N_FF if n_ff is None else n_ff
+        hp = {"model_type": "inkling2_text", "architectures": ["Inkling2ForCausalLM"], "num_hidden_layers": 2, "hidden_size": self.N_EMBD, "moe_intermediate_size": n_ff, "n_routed_experts": self.N_EXPERT, "layer_types": ["hybrid_sliding", "hybrid"]}
+        if quant_config is not None:
+            hp["quantization_config"] = quant_config
         (path / "config.json").write_text(json.dumps(hp))
         (path / "hf_quant_config.json").write_text(json.dumps({"model": {"parameter_groups": quant_groups}}))
         save_file(tensors, path / "model.safetensors")
-        return Inkling2Model(path, ftype, path / "unused.gguf", hparams=hp, eager=eager)
+        return Inkling2Model(path, ftype, path / "unused.gguf", hparams=hp, eager=eager, fp8_as_q8=fp8_as_q8)
 
     def test_lookup_semantics(self):
         """The converter decode tables agree with torch.float8_e4m3fn; bytes 127 and 255 are NaN; E2M1 code 8 is -0."""
@@ -489,22 +493,24 @@ class TestInkling2PackedConversion(unittest.TestCase):
         self.assertTrue(np.signbit(_E2M1[8]))
 
     def test_mixed_schemes_and_streaming_outtypes(self):
-        """Both schemes convert bit-exact to every outtype, lazily, in chunks of at most 128 rows."""
+        """Explicit outtypes dequantize both schemes bit-exact, lazily, in chunks of at most 128 rows."""
         tensors, quant_groups, expected = self.packed_checkpoint()
         outtypes = (
-            (gguf.LlamaFileType.GUESSED, gguf.GGMLQuantizationType.F16),
             (gguf.LlamaFileType.ALL_F32, gguf.GGMLQuantizationType.F32),
             (gguf.LlamaFileType.MOSTLY_F16, gguf.GGMLQuantizationType.F16),
             (gguf.LlamaFileType.MOSTLY_BF16, gguf.GGMLQuantizationType.BF16),
+            (gguf.LlamaFileType.MOSTLY_Q8_0, gguf.GGMLQuantizationType.Q8_0),
         )
+        quant_config = {"quant_method": "modelopt", "quant_algo": "NVFP4"}
         for eager in (False, True):
             for ftype, qtype in outtypes:
                 with self.subTest(eager=eager, outtype=qtype), tempfile.TemporaryDirectory() as directory:
                     path = Path(directory)
-                    model = self.converter(path, tensors, quant_groups, ftype, eager)
+                    model = self.converter(path, tensors, quant_groups, ftype, eager, quant_config=quant_config)
                     with self.assertLogs("hf-to-gguf", level="WARNING") as logs:
                         model.prepare_tensors()
                     self.assertTrue(any("[32, 32]" in m and "[1, 32]" in m for m in logs.output))
+                    self.assertFalse(model._is_nvfp4)
                     infos = model.gguf_writer.tensors[0]
                     self.assertEqual(infos.keys(), expected.keys())
                     for name, info in infos.items():
@@ -518,6 +524,83 @@ class TestInkling2PackedConversion(unittest.TestCase):
                             self.assertLessEqual(load_chunk().shape[0], 128)
                         reference = gguf.quantize(expected[name], qtype)
                         self.assertEqual(self.written_bytes(info.tensor, path / "tensor.bin"), reference.tobytes(), name)
+
+    def test_auto_preserves_nvfp4_and_fp8_as_q8(self):
+        """--outtype auto repacks NVFP4 experts lazily with per-expert scales; --fp8-as-q8 stores MXFP8 as Q8_0."""
+        n_ff = 192
+        tensors, quant_groups, expected = self.packed_checkpoint(n_ff=n_ff)
+        for eager in (False, True):
+            for fp8_as_q8 in (False, True):
+                with self.subTest(eager=eager, fp8_as_q8=fp8_as_q8), tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory)
+                    model = self.converter(path, tensors, quant_groups, gguf.LlamaFileType.GUESSED, eager, n_ff=n_ff, fp8_as_q8=fp8_as_q8)
+                    with self.assertLogs("hf-to-gguf", level="WARNING"):
+                        model.prepare_tensors()
+                    self.assertTrue(model._is_nvfp4)
+                    infos = model.gguf_writer.tensors[0]
+                    expected_keys = set(expected.keys()) | {"blk.0.ffn_gate_up_exps.scale", "blk.0.ffn_down_exps.scale"}
+                    self.assertEqual(infos.keys(), expected_keys)
+                    for target in ("gate_up", "down"):
+                        w_name = f"blk.0.ffn_{target}_exps.weight"
+                        s_name = f"blk.0.ffn_{target}_exps.scale"
+                        w_info, s_info = infos[w_name], infos[s_name]
+                        self.assertEqual(w_info.dtype, gguf.GGMLQuantizationType.NVFP4)
+                        self.assertEqual(tuple(w_info.shape), expected[w_name].shape)
+                        self.assertIsInstance(w_info.tensor, gguf.LazyChunkedTensor)
+                        self.assertEqual(len(w_info.tensor._chunks), self.N_EXPERT)
+                        with self.assertRaises(TypeError):
+                            np.asarray(w_info.tensor)
+                        raw = np.frombuffer(self.written_bytes(w_info.tensor, path / "tensor.bin"), dtype=np.uint8)
+                        byte_shape = (expected[w_name].shape[0], expected[w_name].shape[1], expected[w_name].shape[2] // 64 * 36)
+                        dequant = gguf.dequantize(raw.reshape(byte_shape), gguf.GGMLQuantizationType.NVFP4)
+                        scale = np.asarray(s_info.tensor, dtype=np.float32)
+                        self.assertEqual(s_info.dtype, gguf.GGMLQuantizationType.F32)
+                        self.assertEqual(tuple(s_info.shape), (self.N_EXPERT,))
+                        np.testing.assert_array_equal(dequant * scale[:, None, None], expected[w_name])
+
+                        mxfp8_name = f"blk.1.ffn_{target}_exps.weight"
+                        mxfp8_info = infos[mxfp8_name]
+                        expected_qtype = gguf.GGMLQuantizationType.Q8_0 if fp8_as_q8 else gguf.GGMLQuantizationType.F16
+                        self.assertEqual(mxfp8_info.dtype, expected_qtype)
+                        reference = gguf.quantize(expected[mxfp8_name], expected_qtype)
+                        self.assertEqual(self.written_bytes(mxfp8_info.tensor, path / "tensor.bin"), reference.tobytes(), mxfp8_name)
+
+    def test_auto_falls_back_when_nvfp4_cols_not_multiple_of_64(self):
+        """NVFP4 projections whose row width is not a multiple of 64 fall back to dequantization on --outtype auto."""
+        tensors, quant_groups, _ = self.packed_checkpoint(n_ff=160)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            model = self.converter(path, tensors, quant_groups, gguf.LlamaFileType.GUESSED, n_ff=160)
+            with self.assertLogs("hf-to-gguf", level="WARNING") as logs:
+                model.prepare_tensors()
+            self.assertTrue(any("not a multiple of 64" in m for m in logs.output))
+            infos = model.gguf_writer.tensors[0]
+            self.assertEqual(infos["blk.0.ffn_gate_up_exps.weight"].dtype, gguf.GGMLQuantizationType.NVFP4)
+            self.assertIn("blk.0.ffn_gate_up_exps.scale", infos)
+            self.assertEqual(infos["blk.0.ffn_down_exps.weight"].dtype, gguf.GGMLQuantizationType.F16)
+            self.assertNotIn("blk.0.ffn_down_exps.scale", infos)
+
+    def test_auto_nvfp4_rejects_invalid_scales(self):
+        """Native NVFP4 preservation rejects negative or NaN block scales and invalid outer scales."""
+        for bad_byte in (0x80, 0x7F, 0xFF):
+            tensors, quant_groups, _ = self.packed_checkpoint(n_ff=192)
+            name = quant_groups[0]["tensors"][0]
+            tensors[name + "_scale"].view(torch.uint8)[1, 0, 0] = bad_byte
+            with self.subTest(bad_byte=hex(bad_byte)), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)
+                model = self.converter(path, tensors, quant_groups, gguf.LlamaFileType.GUESSED, n_ff=192)
+                model.prepare_tensors()
+                tensor = model.gguf_writer.tensors[0]["blk.0.ffn_gate_up_exps.weight"].tensor
+                with self.assertRaisesRegex(ValueError, r"w13_weight_scale expert 1"):
+                    self.written_bytes(tensor, path / "tensor.bin")
+        for suffix, bad_val in (("_amax", -1.0), ("_amax", float("nan")), ("_outer_scale_denominator", 0.0)):
+            tensors, quant_groups, _ = self.packed_checkpoint(n_ff=192)
+            name = quant_groups[0]["tensors"][0]
+            tensors[name + suffix][-1] = bad_val
+            with self.subTest(suffix=suffix, bad_val=bad_val), tempfile.TemporaryDirectory() as directory:
+                model = self.converter(Path(directory), tensors, quant_groups, gguf.LlamaFileType.GUESSED, n_ff=192)
+                with self.assertRaisesRegex(ValueError, "Inkling2:"):
+                    model.prepare_tensors()
 
     def test_projection_and_companions_in_separate_shards(self):
         """A packed weight and its scale, amax and denominator can be in different safetensors shards."""
