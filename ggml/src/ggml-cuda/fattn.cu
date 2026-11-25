@@ -238,7 +238,7 @@ static int ggml_cuda_flash_attn_ext_mma_f16_get_ncols2(const int cc, const ggml_
     const int ncols2_max = Q->ne[0] == 320 ? 32 : ((Q->ne[0] == 576 || Q->ne[0] == 192) ? 16 : 8);
 
     // On Volta and RDNA it is preferable to minimize wasted compute vs. duplicate I/O for the mask:
-    if (cc == GGML_CUDA_CC_VOLTA || amd_wmma_available(cc)) {
+    if (cc == GGML_CUDA_CC_VOLTA || (amd_wmma_available(cc) && gqa_ratio % 2 == 0)) {
         int ncols2 = 1;
         while (gqa_ratio % (2*ncols2) == 0 && ncols2 < ncols2_max) {
             ncols2 *= 2;
