@@ -492,7 +492,12 @@ static void rms_norm_f32_dispatch(
         } else if (n4 <= 512) {
             RMS_NORM_LAUNCH(512,  1, true);
         } else if (n4 <= 1024) {
-            RMS_NORM_LAUNCH(1024, 1, true);
+            if constexpr (std::is_same_v<T, nv_bfloat16>) {
+                // an SM with 1536 threads holds only one 1024-thread block, too few BF16 loads in flight
+                RMS_NORM_LAUNCH(512,  2, true);
+            } else {
+                RMS_NORM_LAUNCH(1024, 1, true);
+            }
         } else if (n4 <= 4096) {
             RMS_NORM_LAUNCH(1024, 4, true);
         } else {
