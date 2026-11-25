@@ -35,6 +35,10 @@ LLAMA_API bool llama_arch_supports_mixed_batch(llm_arch arch);
 // FIXME temporary function for better error messages
 LLAMA_API bool llama_arch_supports_save(llm_arch arch);
 
+// number of layers that hold weights, the unit of n_gpu_layers and tensor_split
+// smaller than llama_model_n_layer() for looped architectures whose extra cache slots alias other layers
+LLAMA_API int32_t llama_model_n_layer_offload(const struct llama_model * model);
+
 // Reserve a new compute graph. It is valid until the next call to llama_graph_reserve.
 LLAMA_API struct ggml_cgraph * llama_graph_reserve(
         struct llama_context * ctx,
