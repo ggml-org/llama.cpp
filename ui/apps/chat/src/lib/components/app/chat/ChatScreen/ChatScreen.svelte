@@ -148,8 +148,9 @@
 			return false;
 		}
 
-		// Sending re-arms following: the reply streams in under the message.
-		stick.scrollToBottom();
+		// Sending re-arms following: the message glides to the top of the screen
+		// and the reply streams in under it.
+		stick.glideToBottom();
 
 		await chatStore.sendMessage(message, result?.extras);
 

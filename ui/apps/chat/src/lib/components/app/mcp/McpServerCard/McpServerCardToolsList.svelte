@@ -31,8 +31,8 @@
 		<span>{toolsCount} tools available · Show details</span>
 	</Collapsible.Trigger>
 
-	<Collapsible.Content class="mt-2">
-		<div class="max-h-64 space-y-3 overflow-y-auto">
+	<Collapsible.Content>
+		<div class="mt-2 max-h-64 space-y-3 overflow-y-auto">
 			{#each tools as tool (tool.name)}
 				<div>
 					<Badge variant="secondary">{tool.name}</Badge>

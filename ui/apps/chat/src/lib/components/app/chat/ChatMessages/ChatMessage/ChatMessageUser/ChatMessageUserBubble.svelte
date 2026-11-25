@@ -56,6 +56,7 @@
 	<div class="mb-2 max-w-4/5">
 		<ChatAttachmentsList
 			{attachments}
+			conversationGallery
 			imageHeight="max-h-40"
 			imageWidth="w-auto max-w-full"
 			readonly

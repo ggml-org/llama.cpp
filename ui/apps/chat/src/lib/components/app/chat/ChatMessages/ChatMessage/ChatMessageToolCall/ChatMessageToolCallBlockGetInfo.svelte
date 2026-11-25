@@ -48,15 +48,7 @@
 	const cwdDisplay = $derived(abbreviateHome(infoMeta.cwd ?? '', home));
 </script>
 
-<ToolCallBlock
-	{isStreaming}
-	meta={infoMeta}
-	{onToggle}
-	{open}
-	{section}
-	spinIconWhenActive
-	title="Runtime info"
->
+<ToolCallBlock {isStreaming} meta={infoMeta} {onToggle} {open} {section}>
 	{#snippet children(meta, _ctx)}
 		{#if meta?.errorMessage}
 			<div

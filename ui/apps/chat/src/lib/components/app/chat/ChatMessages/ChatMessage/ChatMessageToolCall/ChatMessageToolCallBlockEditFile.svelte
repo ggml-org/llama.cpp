@@ -1,10 +1,15 @@
 <script lang="ts">
-	import { parseEditFileMeta, parseEditFileTitleMeta } from './parsers/edit-file';
+	import {
+		editFileDiffStats,
+		parseEditFileMeta,
+		parseEditFileTitleMeta
+	} from './parsers/edit-file';
 	import ToolCallBlock from './ToolCallBlock.svelte';
+	import ToolCallTitle from './ToolCallTitle.svelte';
 	import { XCircle } from '@lucide/svelte';
 	import { SyntaxHighlightedCode } from '#lib/components/app/index.ts';
 	import { MAX_HEIGHT_CODE_BLOCK, RESULT_STAT_SEPARATOR } from '#lib/constants/index.ts';
-	import { FileTypeText } from '#lib/enums/index.ts';
+	import { AgenticSectionType, FileTypeText } from '#lib/enums/index.ts';
 	import { toolsStore } from '#lib/stores/index.ts';
 	import type { AgenticSection } from '#lib/types/index.ts';
 	import {
@@ -24,7 +29,7 @@
 	let { isStreaming, onToggle, open, section }: Props = $props();
 
 	const editFileMeta = $derived(parseEditFileTitleMeta(section));
-	// body-only: the full meta parses the embedded edit strings, and these
+	// body-only: the full meta parses the embedded edit strings, and these two
 	// deriveds are read solely from the children snippet, which renders only
 	// while the block is expanded
 	const editFileBody = $derived(parseEditFileMeta(section));
@@ -32,23 +37,36 @@
 	const editDiffs = $derived(
 		(editFileBody?.edits ?? []).map((edit) => computeLineDiff(edit.oldText, edit.newText))
 	);
+
+	// Lines added and removed, for the title once the edit has applied. The
+	// title always renders and sections are rebuilt on every streamed chunk,
+	// so the parse and diff are remembered per call instead of re-run each time.
+	const diffStats = $derived(
+		section.type === AgenticSectionType.TOOL_CALL && section.toolResult
+			? editFileDiffStats(section)
+			: null
+	);
 </script>
 
 <ToolCallBlock {isStreaming} meta={editFileMeta} {onToggle} {open} {section}>
-	{#snippet titleSnippet()}
-		<span class="flex min-w-0 flex-wrap items-baseline gap-x-1">
-			<span class="shrink-0 text-muted-foreground">Edit file</span>
+	{#snippet titleSnippet(phrase)}
+		<ToolCallTitle
+			label={phrase.label}
+			target={abbreviateHome(editFileMeta?.filePath ?? '', home)}
+			targetTitle={editFileMeta?.filePath}
+		>
+			{#if diffStats}
+				<span class="shrink-0 font-mono text-caption">
+					<span class="text-fg-success">+{diffStats.added}</span>
 
-			<span class="flex min-w-0 items-baseline gap-1.5">
-				<span class="min-w-0 overflow-x-auto font-mono" title={editFileMeta?.filePath}>
-					{abbreviateHome(editFileMeta?.filePath ?? '', home)}
+					<span class="text-fg-danger">-{diffStats.removed}</span>
 				</span>
+			{/if}
 
-				{#if editFileMeta?.errorMessage}
-					<span class="shrink-0 text-caption italic text-muted-foreground/70">(failed)</span>
-				{/if}
-			</span>
-		</span>
+			{#if editFileMeta?.errorMessage}
+				<span class="shrink-0 text-caption italic text-muted-foreground/70">(failed)</span>
+			{/if}
+		</ToolCallTitle>
 	{/snippet}
 
 	{#snippet children(_meta, ctx)}

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import CollapsibleRegion from './CollapsibleRegion.svelte';
+	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
 	import * as DropdownMenu from '@ggml-org/llama-ui/ui/dropdown-menu';
 	import { ChevronDown, ChevronUp } from '@lucide/svelte';
 	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
@@ -95,9 +95,11 @@
 {/snippet}
 
 {#snippet region()}
-	<!-- Custom expand region instead of bits-ui Collapsible (whose conditional
-	     rendering kills the transition). -->
-	<CollapsibleRegion {open}>{@render children()}</CollapsibleRegion>
+	<Collapsible.Root {open}>
+		<Collapsible.Content>
+			{@render children()}
+		</Collapsible.Content>
+	</Collapsible.Root>
 {/snippet}
 
 {#if triggerPosition === 'top'}

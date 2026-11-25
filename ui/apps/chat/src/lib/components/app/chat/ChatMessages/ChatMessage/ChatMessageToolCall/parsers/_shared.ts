@@ -4,14 +4,10 @@
 // args-present check, JSON parse), plus the same path aliases - keeping
 // them here lets each parser stay focused on its own format quirks.
 
-import {
-	FILE_PATH_SEPARATOR_REGEX,
-	TOOL_ARG_PATH_KEYS,
-	TOOL_ARG_STRING_FIELD_PATTERN_TEMPLATE
-} from '#lib/constants/index.ts';
+import { parsePartialJsonArgs } from '@ggml-org/llama-harness';
+import { TOOL_ARG_PATH_KEYS } from '#lib/constants/index.ts';
 import { BuiltInTool } from '#lib/enums/index.ts';
 import type { AgenticSection } from '#lib/types/agentic.js';
-import { parsePartialJsonArgs } from '#lib/utils/parse-partial-json-args.ts';
 
 /**
  * Strict (final-state) JSON parser for a tool-args blob. Mirrors the
@@ -31,55 +27,6 @@ function parseFinalToolArgs(blob: string): Record<string, unknown> | null {
 	} catch {
 		return null;
 	}
-}
-
-// Compiled per key on first use; the key set is tiny and fixed.
-const toolArgStringRegexes = new Map<string, RegExp>();
-
-/**
- * Extract a string field from a JSON tool-args blob without parsing the
- * whole document. write_file and edit_file args embed full file contents,
- * yet the block title needs only the path; a targeted key match plus a
- * JSON.parse of the captured string literal alone keeps title rendering
- * O(path) instead of O(blob). Returns undefined when the key is missing
- * or its value is not a string; callers fall back to the full parse.
- */
-export function extractToolArgString(
-	toolArgs: string,
-	keys: readonly string[]
-): string | undefined {
-	for (const key of keys) {
-		let pattern = toolArgStringRegexes.get(key);
-
-		if (!pattern) {
-			pattern = new RegExp(TOOL_ARG_STRING_FIELD_PATTERN_TEMPLATE.replace('{key}', key));
-			toolArgStringRegexes.set(key, pattern);
-		}
-
-		const match = pattern.exec(toolArgs);
-
-		if (!match) continue;
-
-		try {
-			const value: unknown = JSON.parse(`"${match[1]}"`);
-
-			if (typeof value === 'string') return value;
-		} catch {
-			// fall through to the next key; the full parse is the fallback
-		}
-	}
-
-	return undefined;
-}
-
-/**
- * File name shown in a block title, from a tool-call path. Undefined when
- * the call carries no path; the title then shows the tool label alone.
- */
-export function fileNameFromPath(filePath: string | undefined): string | undefined {
-	if (!filePath) return undefined;
-
-	return filePath.split(FILE_PATH_SEPARATOR_REGEX).pop() || filePath;
 }
 
 /**

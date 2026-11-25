@@ -450,7 +450,7 @@ export { default as ChatMessages } from './ChatMessages/ChatMessages.svelte';
  * - Edit creates new branch or preserves responses
  *
  * **Assistant Messages:**
- * - Renders content via MarkdownContent or ChatMessageAgenticContent
+ * - Renders a plain reply via ChatMessageAssistantResponse, an agentic one via ChatMessageAgentTrace
  * - Shows model info badge (when enabled)
  * - Regenerate creates sibling with optional model override
  * - Continue action for incomplete responses
@@ -476,39 +476,26 @@ export { default as ChatMessages } from './ChatMessages/ChatMessages.svelte';
 export { default as ChatMessage } from './ChatMessages/ChatMessage/ChatMessage.svelte';
 
 /**
- * **ChatMessageAgenticContent** - Agentic workflow output display
+ * **ChatMessageAgentTrace** - An assistant reply that ran the agentic loop
  *
- * Specialized renderer for assistant messages with tool calls and reasoning.
- * Derives display sections from structured message data (toolCalls, reasoningContent,
- * and child tool result messages) and renders them as interactive collapsible sections.
+ * Shows what the agent did as a log: tool calls and the reasoning around them
+ * fold into one group row whose title sums them up ("Ran 2 commands, read 1
+ * file"), or says what is happening now while the reply is live, followed by
+ * the answer. A reply without tool calls renders through
+ * ChatMessageAssistantResponse instead.
  *
  * **Architecture:**
  * - Uses `deriveAgenticSections()` from `#lib/utils/index.ts` to build sections from structured data
- * - Renders sections as CollapsibleContentBlock components
- * - Handles streaming state for progressive content display
- * - Falls back to MarkdownContent for plain text sections
- *
- * **Execution States:**
- * - **Streaming**: Animated spinner, block expanded, auto-scroll enabled
- * - **Pending**: Waiting indicator for queued tool calls
- * - **Completed**: Static display, block collapsed by default
- *
- * **Features:**
- * - JSON arguments syntax highlighting via SyntaxHighlightedCode
- * - Tool results display with formatting
- * - Plain text sections between markers rendered as markdown
- * - Smart collapse defaults (expanded while streaming, collapsed when done)
+ * - Groups runs of calls and reasoning with `groupToolCallRuns()` into ChatMessageToolCallGroup rows
+ * - Renders each call through ChatMessageToolCallBlock, text through MarkdownContent
+ * - Carries the live status, the task timer and the permission and continue cards
  *
  * @example
  * ```svelte
- * <ChatMessageAgenticContent
- *   content={message.content}
- *   {message}
- *   isStreaming={isGenerating}
- * />
+ * <ChatMessageAgentTrace {message} {toolMessages} isStreaming={isGenerating} />
  * ```
  */
-export { default as ChatMessageAgenticContent } from './ChatMessages/ChatMessageAgenticContent.svelte';
+export { default as ChatMessageAgentTrace } from './ChatMessages/ChatMessageAgentTrace.svelte';
 export { default as ChatMessageActionCardPermissionRequest } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardPermissionRequest.svelte';
 export { default as ChatMessageActionCard } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCard.svelte';
 export { default as ChatMessageActionCardContinueRequest } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardContinueRequest.svelte';
@@ -583,14 +570,20 @@ export { default as ChatMessageMcpPromptContent } from './ChatMessages/ChatMessa
 
 /**
  * Assistant message display component. Renders assistant responses with left-aligned styling.
- * Supports both plain markdown content (via MarkdownContent) and agentic content with tool calls
- * (via ChatMessageAgenticContent). Shows model info badge, statistics, and action buttons.
+ * A basic chat reply renders as reasoning and text (via ChatMessageAssistantResponse); a reply
+ * that ran the agentic loop renders as an Agent Trace (via ChatMessageAgentTrace). Shows model
+ * info badge, statistics, and action buttons.
  * Handles streaming state with real-time content updates.
  */
 export { default as ChatMessageAssistant } from './ChatMessages/ChatMessage/ChatMessageAssistant/ChatMessageAssistant.svelte';
 export { default as ChatMessageAssistantModel } from './ChatMessages/ChatMessage/ChatMessageAssistant/ChatMessageAssistantModel.svelte';
 export { default as ChatMessageAssistantProcessingInfo } from './ChatMessages/ChatMessage/ChatMessageAssistant/ChatMessageAssistantProcessingInfo.svelte';
 export { default as ChatMessageAssistantRawOutput } from './ChatMessages/ChatMessage/ChatMessageAssistant/ChatMessageAssistantRawOutput.svelte';
+/**
+ * A basic chat reply: the model's reasoning, if any, and its answer. Replies
+ * that ran the agentic loop render as ChatMessageAgentTrace instead.
+ */
+export { default as ChatMessageAssistantResponse } from './ChatMessages/ChatMessage/ChatMessageAssistant/ChatMessageAssistantResponse.svelte';
 export { default as ChatMessageAssistantStatistics } from './ChatMessages/ChatMessage/ChatMessageAssistant/ChatMessageAssistantStatistics.svelte';
 
 /**
