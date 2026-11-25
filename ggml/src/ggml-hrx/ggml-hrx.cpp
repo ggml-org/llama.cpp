@@ -134,9 +134,6 @@ static void ggml_backend_hrx_buffer_set_tensor(ggml_backend_buffer_t buffer, ggm
 
 static void ggml_backend_hrx_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data,
                                                size_t offset, size_t size) {
-    if (size == 0) {
-        return;
-    }
     auto *       ctx = (ggml_hrx_buffer_context *) buffer->context;
     const size_t src = ggml_hrx_tensor_offset(tensor) + offset;
     GGML_ASSERT(src <= buffer->size && size <= buffer->size - src);
