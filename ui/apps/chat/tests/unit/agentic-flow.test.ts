@@ -7,7 +7,20 @@ vi.mock('#lib/services/database.service.ts', () => ({
 	DatabaseService: {}
 }));
 
-import { BuiltInTool, MessageRole, ToolPermissionDecision, ToolSource } from '#lib/enums/index.ts';
+// the cap draws on a canvas, which the unit tests do not have
+let capImage: (url: string) => Promise<string>;
+
+vi.mock('#lib/utils/cap-img-size.ts', () => ({
+	capImageDataURLSize: (url: string) => capImage(url)
+}));
+
+import {
+	BuiltInTool,
+	ContentPartType,
+	MessageRole,
+	ToolPermissionDecision,
+	ToolSource
+} from '#lib/enums/index.ts';
 import { ChatService } from '#lib/services/chat.service.ts';
 import { ToolsService } from '#lib/services/tools.service.ts';
 import { agenticStore } from '#lib/stores/agentic/index.svelte.ts';
@@ -80,7 +93,6 @@ function recorder() {
 		onAssistantTurnComplete: async (...args) => {
 			calls.push(['onAssistantTurnComplete', ...args]);
 		},
-		onAttachments: log('onAttachments'),
 		onChunk: log('onChunk'),
 		onError: log('onError'),
 		onFlowComplete: log('onFlowComplete'),
@@ -111,6 +123,7 @@ function runFlow(callbacks: AgenticFlowCallbacks, signal?: AbortSignal) {
 
 beforeEach(() => {
 	vi.restoreAllMocks();
+	capImage = async (url) => url;
 	agenticStore.clearSession(CONV_ID);
 	vi.spyOn(console, 'log').mockImplementation(() => {});
 	vi.spyOn(ChatService, 'normalizeMessagesForApi').mockImplementation(
@@ -296,7 +309,6 @@ describe('agentic flow', () => {
 
 		expect(content).toMatch(/^saved\n\[Attachment saved: .+\.png\]$/);
 		expect(extras).toMatchObject([{ base64Url: IMAGE_DATA_URI, type: 'IMAGE' }]);
-		expect(named('onAttachments')[0].slice(1)).toEqual(['msg_0', extras]);
 		expect(requests[1][2]).toEqual({
 			content: [
 				{ text: content, type: 'text' },
@@ -305,6 +317,71 @@ describe('agentic flow', () => {
 			role: 'tool',
 			tool_call_id: 'call_0'
 		});
+	});
+
+	it('caps the image of a tool result for the model and stores it as it came', async () => {
+		const capped = 'data:image/png;base64,BBBB';
+
+		capImage = async () => capped;
+		mockTools(ToolSource.SERVER, 'screenshot');
+		vi.spyOn(ToolsService, 'executeTool').mockResolvedValue({
+			content: IMAGE_DATA_URI,
+			isError: false
+		});
+		vi.spyOn(modelsStore.props, 'modelSupportsVision').mockReturnValue(true);
+
+		const requests = mockTurns(
+			(options) => options.onToolCallChunk?.(toolCalls('screenshot')),
+			(options) => options.onChunk?.('here')
+		);
+		const { callbacks, named } = recorder();
+
+		await runFlow(callbacks);
+
+		expect(named('createToolResultMessage')[0][3]).toMatchObject([{ base64Url: IMAGE_DATA_URI }]);
+		expect(requests[1][2].content).toMatchObject([{}, { image_url: { url: capped } }]);
+	});
+
+	it('sends the image of a tool result as it is when the cap fails', async () => {
+		capImage = async () => {
+			throw new Error('Unsupported image MIME type');
+		};
+		mockTools(ToolSource.SERVER, 'screenshot');
+		vi.spyOn(ToolsService, 'executeTool').mockResolvedValue({
+			content: IMAGE_DATA_URI,
+			isError: false
+		});
+		vi.spyOn(modelsStore.props, 'modelSupportsVision').mockReturnValue(true);
+
+		const requests = mockTurns(
+			(options) => options.onToolCallChunk?.(toolCalls('screenshot')),
+			(options) => options.onChunk?.('here')
+		);
+
+		await runFlow(recorder().callbacks);
+
+		expect(requests[1][2].content).toMatchObject([{}, { image_url: { url: IMAGE_DATA_URI } }]);
+	});
+
+	it('sends the media of an earlier tool result along in a later request', async () => {
+		const earlier: ApiChatMessageData[] = [
+			...USER_MESSAGES,
+			{ content: '', role: MessageRole.ASSISTANT, tool_calls: JSON.parse(toolCalls('screenshot')) },
+			{
+				content: [
+					{ text: 'saved', type: ContentPartType.TEXT },
+					{ image_url: { url: IMAGE_DATA_URI }, type: ContentPartType.IMAGE_URL }
+				],
+				role: MessageRole.TOOL,
+				tool_call_id: 'call_0'
+			}
+		];
+
+		mockTools(ToolSource.SERVER, 'screenshot');
+
+		const request = await agenticStore.requestFor(earlier);
+
+		expect(request.messages[2]).toEqual(earlier[2]);
 	});
 
 	it('leaves the flow when a steering message is queued, skipping the tool calls left', async () => {

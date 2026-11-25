@@ -11,7 +11,6 @@
  */
 
 import {
-	type ContentPart,
 	createHarness,
 	type InferenceClient,
 	type InferenceEvent,
@@ -21,7 +20,7 @@ import {
 	type ToolContext,
 	type ToolResult
 } from '@ggml-org/llama-harness';
-import { DEFAULT_AGENTIC_CONFIG, NEWLINE } from '#lib/constants/index.ts';
+import { DEFAULT_AGENTIC_CONFIG, NEWLINE, SETTINGS_KEYS } from '#lib/constants/index.ts';
 import {
 	AUDIO_MIME_TO_EXTENSION,
 	DATA_URI_BASE64_REGEX,
@@ -34,7 +33,6 @@ import {
 import { BuiltInTool, ToolPermissionDecision, ToolSource } from '#lib/enums/index.ts';
 import {
 	AttachmentType,
-	ContentPartType,
 	HarnessEventType,
 	InferenceEventType,
 	MessageRole,
@@ -63,11 +61,7 @@ import type {
 } from '#lib/types/agentic.js';
 import type { ApiChatMessageData } from '#lib/types/api.js';
 import type { ChatMessagePromptProgress, ChatMessageTimings } from '#lib/types/chat.js';
-import type {
-	DatabaseMessageExtra,
-	DatabaseMessageExtraAudioFile,
-	DatabaseMessageExtraImageFile
-} from '#lib/types/database.js';
+import type { DatabaseMessageExtra } from '#lib/types/database.js';
 import type {
 	AgenticConfig,
 	AgenticFlowParams,
@@ -82,10 +76,10 @@ import { createAsyncQueue } from '#lib/utils/async-queue.ts';
 import {
 	executeBrowserInfoTool,
 	executeGetDatetimeTool,
-	getAudioInputFormat,
 	isAbortError,
 	throwIfAborted
 } from '#lib/utils/index.ts';
+import { toolResultMediaParts } from '#lib/utils/media-content-parts.ts';
 import { SvelteMap } from 'svelte/reactivity';
 
 function createDefaultSession(): AgenticSession {
@@ -136,7 +130,8 @@ function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 
 		if (message.role === MessageRole.TOOL && message.tool_call_id) {
 			return {
-				content: typeof message.content === 'string' ? message.content : '',
+				// a stored tool result can hold media parts after its text
+				content: message.content,
 				role: MessageRole.TOOL,
 				tool_call_id: message.tool_call_id
 			} satisfies AgenticMessage;
@@ -433,45 +428,6 @@ class AgenticStore {
 	}
 
 	/**
-	 * The media of a tool result as content parts, only what the model can read.
-	 */
-	private buildContentParts(
-		attachments: DatabaseMessageExtra[],
-		effectiveModel: string
-	): ContentPart[] {
-		const contentParts: ContentPart[] = [];
-
-		for (const attachment of attachments) {
-			if (attachment.type === AttachmentType.AUDIO) {
-				if (modelsStore.props.modelSupportsAudio(effectiveModel)) {
-					contentParts.push({
-						input_audio: {
-							data: (attachment as DatabaseMessageExtraAudioFile).base64Data,
-							format: getAudioInputFormat((attachment as DatabaseMessageExtraAudioFile).mimeType)
-						},
-						type: ContentPartType.INPUT_AUDIO
-					});
-				}
-			} else if (attachment.type === AttachmentType.IMAGE) {
-				if (modelsStore.props.modelSupportsVision(effectiveModel)) {
-					contentParts.push({
-						image_url: {
-							url: (attachment as DatabaseMessageExtraImageFile).base64Url
-						},
-						type: ContentPartType.IMAGE_URL
-					});
-				} else {
-					console.info(
-						`[AgenticStore] Skipping image attachment (model "${effectiveModel}" does not support vision)`
-					);
-				}
-			}
-		}
-
-		return contentParts;
-	}
-
-	/**
 	 * Run a tool call where its source runs it: on llama-server, in the
 	 * browser or on an MCP server. Throws when the call fails.
 	 */
@@ -582,7 +538,6 @@ class AgenticStore {
 			createAssistantMessage,
 			createToolResultMessage,
 			onAssistantTurnComplete,
-			onAttachments,
 			onChunk,
 			onCompletionId,
 			onFlowComplete,
@@ -745,22 +700,15 @@ class AgenticStore {
 					const extras = attachments.length > 0 ? attachments : undefined;
 					const streamed = streamedResults.get(event.toolCall.id);
 
-					let toolResultMessageId: string | undefined;
-
 					if (streamed) {
-						toolResultMessageId = streamed.messageId;
-
 						// the message already shows the streamed output: rewrite it only when the result differs
 						if (extras || content !== streamed.content) {
 							await updateToolResultMessage?.(streamed.messageId, content, extras);
 						}
 					} else if (createToolResultMessage) {
-						toolResultMessageId = (
-							await createToolResultMessage(event.toolCall.id, content, extras)
-						).id;
+						// the extras go in with the message: appending them again would show each image twice
+						await createToolResultMessage(event.toolCall.id, content, extras);
 					}
-
-					if (extras && toolResultMessageId) onAttachments?.(toolResultMessageId, extras);
 
 					break;
 				}
@@ -850,7 +798,14 @@ class AgenticStore {
 			details: attachments,
 			durationMs,
 			isError: execution.isError,
-			parts: this.buildContentParts(attachments, effectiveModel)
+			parts: await toolResultMediaParts(
+				attachments,
+				{
+					audio: modelsStore.props.modelSupportsAudio(effectiveModel),
+					vision: modelsStore.props.modelSupportsVision(effectiveModel)
+				},
+				settingsStore.getConfig(SETTINGS_KEYS.MAX_IMAGE_RESOLUTION)
+			)
 		};
 	}
 
