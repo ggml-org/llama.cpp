@@ -443,7 +443,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_DECISION_LABELS,              "%s.decision.labels"              },
 
     { LLM_KV_TARGET_LAYERS,         "%s.target_layers"        },
-    { LLM_KV_TARGET_VISITS,         "%s.target_visits"        },
+    { LLM_KV_TARGET_VISITS,         "%s.target_visits"        }, // execution indices distinguish repeated visits to the same target layer
     { LLM_KV_TARGET_HIDDEN_SIZE,    "%s.target_hidden_size"   },
     { LLM_KV_NORM_BEFORE_RESIDUAL,  "%s.norm_before_residual" },
     { LLM_KV_NORM_BEFORE_FC,        "%s.norm_before_fc"       },

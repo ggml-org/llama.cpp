@@ -2,6 +2,18 @@
 
 #include "llama-impl.h"
 
+void llama_model_dflash::load_hparams_dflash2(llama_model_loader & ml) {
+    ml.get_key(LLM_KV_DFLASH_SELECTOR_SOFTCAP_POST, hparams.dflash_selector_softcap_post, false);
+
+    std::vector<int32_t> target_visits;
+    if (ml.get_arr(LLM_KV_TARGET_VISITS, target_visits, false)) {
+        if (target_visits.empty() || target_visits.size() != target_layer_ids.size()) {
+            throw std::runtime_error("DFlash 'target_visits' must have the same nonzero length as 'target_layers'");
+        }
+        target_layer_ids = std::move(target_visits);
+    }
+}
+
 void llama_model_dflash::load_tensors_dflash2() {
     LLAMA_LOAD_LOCALS;
 
@@ -48,6 +60,18 @@ void llama_model_dflash::load_tensors_dflash2_conv() {
         layer.dflash_ffn_conv_base  = create_tensor(tn(LLM_TENSOR_DFLASH_FFN_CONV_BASE, i), { n_embd, kernel, 2 }, 0);
         layer.dflash_ffn_conv_proj  = create_tensor(tn(LLM_TENSOR_DFLASH_FFN_CONV_PROJ,  "weight", i), { n_embd, projected }, 0);
     }
+}
+
+ggml_tensor * llama_model_dflash::graph_base::apply_dflash2_target_norm(ggml_tensor * embd) {
+    if (!model.tok_embd) {
+        const auto * target = llama_get_model(cparams.ctx_other);
+        // Borrowed embeddings need the same RMS normalization as the Inkling target.
+        if (target->arch == LLM_ARCH_INKLING2 || target->arch == LLM_ARCH_INKLING2_LOOP) {
+            embd = ggml_rms_norm(ctx0, embd, target->hparams.f_norm_rms_eps);
+            embd = ggml_mul(ctx0, embd, target->tok_norm);
+        }
+    }
+    return embd;
 }
 
 ggml_tensor * llama_model_dflash::build_dflash2_conv(
