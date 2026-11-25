@@ -1,0 +1,12 @@
+#include "../cl-common.h"
+#include "../ops.h"
+
+void ggml_cl_load_kernels_dup(ggml_backend_opencl_context * backend_ctx) {
+    const std::string & compile_opts = backend_ctx->kernel_compile_opts;
+    GGML_UNUSED(compile_opts);
+}
+
+void ggml_cl_dup(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_cl_cpy(backend, src0, dst, nullptr);
+    UNUSED(src1);
+}
