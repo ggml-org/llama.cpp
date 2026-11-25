@@ -30,6 +30,14 @@ extern "C" {
 #define HTP_MM_ACT_TILE_SIZE_Q8_1      1280
 #define HTP_MM_ACT_TILE_SIZE_F16       2048
 
+// q8 activation rows whose amax would make the fp16 block scale amax / Q8_MAX subnormal are re-quantized pre-scaled
+// by 2^e so the row amax lands in [2^LOG2, 2^(LOG2+1)); the splatted f32 2^-e (1.0 otherwise) follows the row's blocks
+#define HTP_MM_ACT_Q8_MAX              127.0f
+#define HTP_MM_FP16_MIN_NORMAL         6.103515625e-05f  // 2^-14
+#define HTP_MM_ACT_ROW_AMAX_MIN        (HTP_MM_ACT_Q8_MAX * HTP_MM_FP16_MIN_NORMAL)
+#define HTP_MM_ACT_ROW_AMAX_LOG2       6
+#define HTP_MM_ACT_ROW_SCALE_SIZE      128
+
 #define HTP_MM_MAX_PREFETCH 16
 
 // --- Solver Cost Model Penalty Weights (HMX-specific) ---
@@ -39,6 +47,8 @@ extern "C" {
 // --- DMA Activation Transfer Configuration ---
 #define HTP_MM_DMA_ACT_ROWS_PER_STEP 2
 #define HTP_MM_DMA_ACT_MULTIPLIER    (2 * HTP_MM_DMA_ACT_ROWS_PER_STEP)
+
+#define HTP_MM_OUT_SCALE_ONE         0x3c00  // 1.0 in FP16
 
 enum htp_mm_kernel_type {
     HTP_MM_KERNEL_UNSUPPORTED = 0,
@@ -61,7 +71,7 @@ enum htp_mm_kernel_type {
 struct htp_mm_kernel_params {
     uint8_t  kernel_type;        // enum htp_mm_kernel_type
     uint8_t  pipeline;           // 1 = pipelined execution, 0 = standard
-    uint8_t  unused;             // reserved
+    uint8_t  iq2xxs_grid_copies; // IQ2_XXS grid copies in VTCM (power of 2, 1..HTP_IQ2XXS_GRID_COPIES; 1 = single grid)
     uint8_t  n_hmx;              // 1 = use HMX, 0 = use HVX
 
     uint8_t  n_hvx;              // Number of threads to spawn
@@ -85,6 +95,8 @@ struct htp_mm_kernel_params {
     struct fastdiv_values div_ne12;
     struct fastdiv_values div_n_act_hvx;
     struct fastdiv_values div_ne00_padded;
+
+    uint16_t out_scale;          // HMX output scale (FP16 bits), applied before the FP16 output tile
 };
 
 #if defined(__cplusplus)
@@ -192,13 +204,13 @@ static inline bool htp_mm_weight_has_offset(int weight_type) {
 static inline size_t htp_mm_q8_0_tiled_row_size(uint32_t ne) {
     const uint32_t ne_padded = hex_round_up(ne, HTP_MM_ACT_BLOCK_K);
     const uint32_t nb_32 = ne_padded / 32;
-    return nb_32 * HTP_MM_ACT_TILE_SIZE_Q8_0;
+    return nb_32 * HTP_MM_ACT_TILE_SIZE_Q8_0 + HTP_MM_ACT_ROW_SCALE_SIZE;
 }
 
 static inline size_t htp_mm_q8_1_tiled_row_size(uint32_t ne) {
     const uint32_t ne_padded = hex_round_up(ne, HTP_MM_ACT_BLOCK_K);
     const uint32_t nb_32 = ne_padded / 32;
-    return nb_32 * HTP_MM_ACT_TILE_SIZE_Q8_1;
+    return nb_32 * HTP_MM_ACT_TILE_SIZE_Q8_1 + HTP_MM_ACT_ROW_SCALE_SIZE;
 }
 
 static inline size_t htp_mm_f16_tiled_row_size(uint32_t ne) {
