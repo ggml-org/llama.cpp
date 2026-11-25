@@ -419,7 +419,9 @@ static __device__ __forceinline__ void flash_attn_tile_iter_KQ(
     constexpr int np    = nwarps > ncols ? nwarps/ncols : 1; // number of parallel warps per Q column
 
     constexpr int stride_tile_K = std::is_same_v<T_vec_dot, half2> ? nbatch_K/2 + cpy_ne : nbatch_K + cpy_ne;
-    // rows of a block_q8_0 tensor are addressed in QK8_0-element blocks, half2 rows in element pairs
+    // rows of a block_q8_0 tensor are addressed in QK8_0-element blocks, half2 rows in element pairs.
+    // The q8_0 reader only dequantizes to half2, so on fp32 (pre-Volta) builds the raw path is never
+    // selected at run time, see ggml_cuda_flash_attn_ext_tile().
     constexpr int K_elems_per_value = std::is_same_v<T_K, block_q8_0> ? QK8_0 : 2;
     flash_attn_load_tile<warp_size, nwarps, nbatch_fa, nbatch_K, stride_tile_K, false, oob_check, false, false, false, T_K, T_vec_dot>
         (K_h2 + k_KQ_0/K_elems_per_value, KV_tmp, nbatch_K/2, stride_K2, k_VKQ_0, k_VKQ_sup, nullptr);
@@ -1089,13 +1091,16 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_cuda_context & ctx, ggm
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
 
-    // q8_0 K/V are read directly by the kernel, so the f16 scratch must not be requested. Must match
-    // ggml_cuda_flash_attn_ext_get_alloc_size().
-    const bool need_f16_K = !ggml_cuda_fattn_kv_native_q8_0(K, V);
-    const bool need_f16_V = !ggml_cuda_fattn_kv_native_v_q8_0(K, V);
+    const int id  = ggml_cuda_get_device();
+    const int cc  = ggml_cuda_info().devices[id].cc;
 
-    const int id        = ggml_cuda_get_device();
-    const int cc        = ggml_cuda_info().devices[id].cc;
+    // q8_0 K/V are read directly by the kernel, so the f16 scratch must not be requested. The raw readers
+    // produce half2, so pre-Volta NVIDIA keeps the f16 scratch. Must match
+    // ggml_cuda_flash_attn_ext_get_alloc_size().
+    const bool fast_fp16 = fast_fp16_available(cc);
+    const bool need_f16_K = !(fast_fp16 && ggml_cuda_fattn_kv_native_q8_0(K, V));
+    const bool need_f16_V = !(fast_fp16 && ggml_cuda_fattn_kv_native_v_q8_0(K, V));
+
     const int warp_size = 32;
 
     constexpr size_t nbytes_shared = 0;
