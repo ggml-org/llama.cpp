@@ -259,6 +259,11 @@ llama_context::llama_context(
         }
     }
 
+    // a context with a partner (the target of a draft context: MTP, DFlash, a draft model) runs after it and never at the same time
+    if (params.ctx_other != nullptr && cparams.n_seq_max == 1 && params.ctx_other->n_seq_max() == 1) {
+        ctx_compute = params.ctx_other;
+    }
+
     if (cparams.rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED) {
         cparams.rope_scaling_type = hparams.rope_scaling_type_train;
     }
@@ -790,6 +795,32 @@ void llama_context::sched_new(const sched_params & params) {
 
     ggml_backend_sched_set_copy_callback(sched.get(), sched_copy_experts, this);
     ggml_backend_sched_set_realloc_callback(sched.get(), sched_graph_realloc, this);
+
+    // share the compute buffers of the partner context, only the contexts that run one after the other on one CUDA device
+    if (ctx_compute != nullptr) {
+        ggml_backend_sched_t src = ctx_compute->get_sched();
+        bool ok = src != nullptr && !cparams.pipeline_parallel && !ctx_compute->get_cparams().pipeline_parallel &&
+                ggml_backend_sched_get_n_backends(src) == (int) backend_ptrs.size();
+        int n_devices = 0;
+        bool is_cuda = true;
+        for (size_t i = 0; ok && i < backend_ptrs.size(); i++) {
+            ggml_backend_t other = ggml_backend_sched_get_backend(src, (int) i);
+            ggml_backend_dev_t dev = ggml_backend_get_device(backend_ptrs[i]);
+            ok = dev == ggml_backend_get_device(other) &&
+                    ggml_backend_sched_get_buffer_type(sched.get(), backend_ptrs[i]) == ggml_backend_sched_get_buffer_type(src, other);
+            if (ok && dev != nullptr && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+                is_cuda = is_cuda && reg != nullptr && strcmp(ggml_backend_reg_name(reg), "CUDA") == 0;
+                n_devices++;
+            }
+        }
+        if (ok && n_devices == 1 && is_cuda) {
+            ggml_backend_sched_share_buffers(sched.get(), src);
+            LLAMA_LOG_INFO("%s: sharing compute buffers with the partner context\n", __func__);
+        } else {
+            LLAMA_LOG_INFO("%s: compute buffer sharing unavailable; using independent buffers\n", __func__);
+        }
+    }
 
     sched_params_cur = params;
 }
