@@ -20,13 +20,7 @@ import {
 	type ToolContext,
 	type ToolResult
 } from '@ggml-org/llama-harness';
-import {
-	DEFAULT_AGENTIC_CONFIG,
-	IMAGE_EVICTION,
-	NEWLINE,
-	READ_MEDIA_TOOL_NAME,
-	SETTINGS_KEYS
-} from '#lib/constants/index.ts';
+import { DEFAULT_AGENTIC_CONFIG, NEWLINE, SETTINGS_KEYS } from '#lib/constants/index.ts';
 import {
 	AUDIO_MIME_TO_EXTENSION,
 	DATA_URI_BASE64_REGEX,
@@ -67,7 +61,7 @@ import type {
 } from '#lib/types/agentic.js';
 import type { ApiChatMessageData } from '#lib/types/api.js';
 import type { ChatMessagePromptProgress, ChatMessageTimings } from '#lib/types/chat.js';
-import type { DatabaseMessage, DatabaseMessageExtra } from '#lib/types/database.js';
+import type { DatabaseMessageExtra } from '#lib/types/database.js';
 import type {
 	AgenticConfig,
 	AgenticFlowParams,
@@ -79,7 +73,6 @@ import type {
 } from '#lib/types/index.ts';
 import type { OpenAIToolDefinition } from '#lib/types/mcp.js';
 import { createAsyncQueue } from '#lib/utils/async-queue.ts';
-import { evictOldImages } from '#lib/utils/image-eviction.ts';
 import {
 	executeBrowserInfoTool,
 	executeGetDatetimeTool,
@@ -204,19 +197,6 @@ class AgenticStore {
 	 */
 	consumePendingSteeringMessage(conversationId: string): SteeringMessage | null {
 		return this.gates.consumePendingSteeringMessage(conversationId);
-	}
-
-	/**
-	 * A branch as a request under this tool policy reads it: the images of old
-	 * turns are left out when the model can load them again with read_media.
-	 * Every request of the chat reads this list, so they share the prefix the server cached.
-	 */
-	async contextFor<T extends ApiChatMessageData | DatabaseMessage>(
-		messages: T[],
-		model?: string | null,
-		toolPolicy?: AgenticToolPolicy
-	): Promise<T[]> {
-		return this.withoutOldImages(messages, await this.toolsFor(toolPolicy), model);
 	}
 
 	getActiveSessions(): Array<{ conversationId: string; session: AgenticSession }> {
@@ -377,7 +357,7 @@ class AgenticStore {
 		console.log(`[AgenticStore] Starting agentic flow with ${tools.length} tools`);
 
 		const normalizedMessages: ApiChatMessageData[] = await ChatService.normalizeMessagesForApi(
-			this.withoutOldImages(messages, tools, options.model),
+			messages,
 			options.model
 		);
 
@@ -515,8 +495,7 @@ class AgenticStore {
 						vision: modelsStore.props.modelSupportsVision(effectiveModel)
 					},
 					signal,
-					conversationsStore.activeConversation?.cwd,
-					() => conversationsStore.getConversationMessages(conversationId)
+					conversationsStore.activeConversation?.cwd
 				);
 			}
 
@@ -969,20 +948,6 @@ class AgenticStore {
 		const session = this.getSession(conversationId);
 
 		this.sessions.set(conversationId, { ...session, ...update });
-	}
-
-	private withoutOldImages<T extends ApiChatMessageData | DatabaseMessage>(
-		messages: T[],
-		tools: OpenAIToolDefinition[],
-		model?: string | null
-	): T[] {
-		const effectiveModel = model || modelsStore.models[0]?.model || '';
-		// without read_media an image that left the context is lost
-		const canLoadAgain =
-			tools.some((tool) => tool.function.name === READ_MEDIA_TOOL_NAME) &&
-			modelsStore.props.modelSupportsVision(effectiveModel);
-
-		return canLoadAgain ? evictOldImages(messages, IMAGE_EVICTION.KEEP_TURNS) : messages;
 	}
 }
 

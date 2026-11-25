@@ -116,15 +116,6 @@ describe('describeToolCall', () => {
 	});
 });
 
-describe('read_media', () => {
-	it('names the file it reads, and no file for an attachment reference', () => {
-		expect(line(BuiltInTool.BROWSER_READ_MEDIA, { path: '/tmp/x/cat.png' })).toBe('Viewed cat.png');
-		expect(line(BuiltInTool.BROWSER_READ_MEDIA, { path: 'attachment:cd4952ad/1' })).toBe(
-			'Viewed media'
-		);
-	});
-});
-
 describe('the shown argument', () => {
 	const args = { command: 'git status', description: 'Check which files changed.' };
 
