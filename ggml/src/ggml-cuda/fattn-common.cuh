@@ -85,6 +85,28 @@ static inline ggml_cuda_flash_attn_ext_f16_extra_data ggml_cuda_flash_attn_ext_g
     return data;
 }
 
+// The partial max reduction starts with one value per nthreads_KQ-lane subgroup.
+template<int nthreads_KQ>
+static __device__ __forceinline__ float ggml_cuda_fattn_vec_reduce_max(float x) {
+#if defined(GGML_USE_HIP)
+    static_assert(nthreads_KQ == 2 || nthreads_KQ == 4 || nthreads_KQ == 8, "unsupported nthreads_KQ");
+    if constexpr (nthreads_KQ == 2) {
+        asm("v_nop\n\tv_nop\n\tv_max_f32_dpp %0, %0, %0 quad_perm:[2,3,0,1]" : "+v"(x));
+    }
+    if constexpr (nthreads_KQ <= 4) {
+        asm("v_nop\n\tv_nop\n\tv_max_f32_dpp %0, %0, %0 row_ror:4" : "+v"(x));
+    }
+    asm("v_nop\n\tv_nop\n\tv_max_f32_dpp %0, %0, %0 row_ror:8" : "+v"(x));
+    return fmaxf(x, __builtin_bit_cast(float, __builtin_amdgcn_ds_swizzle(__builtin_bit_cast(int, x), 0x401F)));
+#else
+#pragma unroll
+    for (int offset = nthreads_KQ; offset < WARP_SIZE; offset <<= 1) {
+        x = fmaxf(x, ggml_cuda_shfl_xor(x, offset, WARP_SIZE));
+    }
+    return x;
+#endif // defined(GGML_USE_HIP)
+}
+
 template <int D, int nthreads>
 static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_f16(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds_v) {
@@ -374,10 +396,10 @@ static __device__ __forceinline__ void quantize_q8_1_to_shared(
         amax = fmaxf(amax, fabsf(vals[l]));
         sum += vals[l];
     }
+    amax = warp_reduce_max<QI8_1>(amax);
 #pragma unroll
     for (int mask = QI8_1/2; mask > 0; mask >>= 1) {
-        amax = fmaxf(amax, ggml_cuda_shfl_xor(amax, mask, 32));
-        sum +=             ggml_cuda_shfl_xor(sum,  mask, 32);
+        sum += ggml_cuda_shfl_xor(sum, mask, 32);
     }
 
     const float d = amax / 127;
