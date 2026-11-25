@@ -90,16 +90,13 @@ These options are off by default. They are not validated for general use: some h
 | `GGML_OPENVINO_REDUCE_COMPILE_MEM` | all | Boolean | value of `GGML_OPENVINO_MEMORY_OPTIMIZE` | Create fewer weight nodes during compilation, to lower the host memory in use. |
 | `GGML_OPENVINO_RELEASE_WEIGHTS` | GPU | Boolean | value of `GGML_OPENVINO_MEMORY_OPTIMIZE` | Release the host weight buffers when the compiled model holds its own copy. Needs stable graph shapes; do not use it for workloads that compile again. |
 | `GGML_OPENVINO_SPILL_DIR` | all | String | `not set` | Directory for a disk-backed weight buffer, so its pages can be reclaimed under memory pressure. It must be on real storage, not on tmpfs (`/tmp` on many systems). It is not part of the key of the compiled model cache and is ignored in cache-only mode. |
-| `GGML_OPENVINO_SELF_CONTAINED_BLOB` | NPU | Boolean | `0` | Requires `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR`. Write the prefill and decode graphs as blobs with the weights inside; each blob takes about the size of the model on disk. Decode then attends the whole context. `GGML_OPENVINO_NPU_WEIGHTLESS_BANK` is the recommended cache layout for the NPU. |
-| `GGML_OPENVINO_NPU_SHARED_BANK` | NPU | Boolean | `0` | With `GGML_OPENVINO_SELF_CONTAINED_BLOB=1`: one weights bank for the prefill and decode blobs. With OpenVINO 2026.4.1 the blobs cannot be read back, so decode is compiled again. |
 | `GGML_OPENVINO_LAZY_HOST_THRESHOLD_MB` | NPU | Integer | `2048` | With `GGML_OPENVINO_SELF_CONTAINED_MMAP=1`: buffers of at least this size get demand-zero host memory instead of Level Zero host memory. |
 
 ```bash
-# NPU cache with the weights inside the blobs (experimental). Keep all other NPU settings the same in both runs.
+# NPU cache: weightless blobs plus one shared weights file. Keep all other NPU settings the same in both runs.
 export GGML_OPENVINO_DEVICE=NPU
 export GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR=/tmp/ov_cache
-export GGML_OPENVINO_SELF_CONTAINED_BLOB=1
-./build/ReleaseOV/bin/llama-cli -m model.gguf -c 512 -lv 4   # first run: log shows "model cache WROTE"
+./build/ReleaseOV/bin/llama-cli -m model.gguf -c 512 -lv 4   # first run: warns "no usable cached blobs", exports
 
 export GGML_OPENVINO_SELF_CONTAINED_MMAP=1
 ./build/ReleaseOV/bin/llama-cli -m model.gguf -c 512 -lv 4   # later runs: log shows "model cache HIT"
@@ -141,7 +138,6 @@ export GGML_OPENVINO_REDUCE_COMPILE_MEM=1
 # NPU: weightless cache, then use the memory-mapped GGUF as the model buffer.
 export GGML_OPENVINO_DEVICE=NPU
 export GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR=$HOME/ov_cache
-export GGML_OPENVINO_NPU_WEIGHTLESS_BANK=1
 ./build/ReleaseOV/bin/llama-cli -m model.gguf -c 512      # first run writes the cache
 export GGML_OPENVINO_SELF_CONTAINED_MMAP=1
 ./build/ReleaseOV/bin/llama-cli -m model.gguf -c 512      # later runs

@@ -195,11 +195,8 @@ constexpr env_var env_vars[] = {
     {"GGML_OPENVINO_NPU_HFA_PREFILL", env_type::BOOL},
     {"GGML_OPENVINO_NPU_DECODE_UNFOLD", env_type::BOOL},
     {"GGML_OPENVINO_NPU_PARALLEL_COMPILE", env_type::BOOL},
-    {"GGML_OPENVINO_SELF_CONTAINED_BLOB", env_type::BOOL},
     {"GGML_OPENVINO_SELF_CONTAINED_MMAP", env_type::BOOL},
-    {"GGML_OPENVINO_NPU_SHARED_BANK", env_type::BOOL},
     {"GGML_OPENVINO_KV_ONLY_PREFILL", env_type::BOOL},
-    {"GGML_OPENVINO_NPU_WEIGHTLESS_BANK", env_type::BOOL},
     {"GGML_OPENVINO_NPU_HOST_GATHER", env_type::BOOL},
     // Build the precise (but O(n_nodes)) graph cache key. Needed by op tests.
     {"GGML_OPENVINO_FULL_GRAPH_KEY", env_type::BOOL},
@@ -676,13 +673,6 @@ int ggml_openvino_npu_decode_bucket() {
     if (!ggml_openvino_is_npu()) {
         return 0;
     }
-    // A self-contained blob embeds its weights bank, and NPUW cannot load a blob into a bank that already holds
-    // weights, so a decode model per KV window cannot be imported next to the decode model of the pair.
-    if (ggml_openvino_getenv_str("GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR") &&
-        ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_BLOB") != 0 &&
-        !ggml_openvino_npu_weightless_bank_enabled()) {
-        return 0;
-    }
     return ggml_openvino_getenv_int("GGML_OPENVINO_NPU_BLOB_PREBUILD", 1) != 0 ? ggml_openvino_kv_slice_base() : 0;
 }
 
@@ -724,13 +714,8 @@ bool ggml_openvino_kv_only_prefill_enabled() {
     return ggml_openvino_getenv_int("GGML_OPENVINO_KV_ONLY_PREFILL", 1) != 0;
 }
 
-bool ggml_openvino_npu_raw_weight_cache_enabled() {
-    return ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_BLOB") != 0 ||
-           ggml_openvino_npu_weightless_bank_enabled();
-}
-
-bool ggml_openvino_npu_weightless_bank_enabled() {
-    return ggml_openvino_getenv_int("GGML_OPENVINO_NPU_WEIGHTLESS_BANK") != 0;
+bool ggml_openvino_npu_weightless_cache_enabled() {
+    return ggml_openvino_is_npu() && ggml_openvino_getenv_str("GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR") != nullptr;
 }
 
 namespace {

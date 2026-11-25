@@ -1658,13 +1658,12 @@ bool GgmlOvDecoder::is_host_gather_rows(const ggml_tensor * node) {
     const ggml_tensor * table = node->src[0];
     const ggml_tensor * ids = node->src[1];
     // The table must hold raw ggml rows in host memory. OpenVINO buffers store weights in the extracted layout, except
-    // in the raw-weight cache modes, where they keep (or, with SELF_CONTAINED_MMAP, wrap) the raw GGUF bytes.
+    // with the NPU weightless cache, where they keep (or, with SELF_CONTAINED_MMAP, wrap) the raw GGUF bytes.
     constexpr size_t min_table_bytes = 64ull * 1024 * 1024;
     if (table == nullptr || ids == nullptr || table->view_src != nullptr || table->buffer == nullptr) {
         return false;
     }
-    const bool raw_cache = ggml_openvino_npu_raw_weight_cache_enabled() &&
-                           ggml_openvino_getenv_str("GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR") != nullptr;
+    const bool raw_cache = ggml_openvino_npu_weightless_cache_enabled();
     const bool raw_rows = ggml_backend_buffer_is_openvino(table->buffer) ? raw_cache :
                                                                            ggml_backend_buffer_is_host(table->buffer);
     return table->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS && raw_rows &&
@@ -2324,9 +2323,9 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor
     // pointer to avoid re-extracting on every recompile. Opt-in via
     // GGML_OPENVINO_REDUCE_COMPILE_MEM or GGML_OPENVINO_MEMORY_OPTIMIZE. Skip
     // for `naive` (test/naive path) since use_bias changes the produced node.
-    // Self-contained decode-window models are built after the pair; reusing the node keeps e.g. the
+    // Cached decode-window models are built after the pair; reusing the node keeps e.g. the
     // token_embd vocab on the pair's NPUW bank uid instead of embedding and importing a second copy.
-    const bool keep_for_windows = ggml_openvino_npu_raw_weight_cache_enabled() && ggml_openvino_npu_decode_bucket() > 0;
+    const bool keep_for_windows = ggml_openvino_npu_weightless_cache_enabled() && ggml_openvino_npu_decode_bucket() > 0;
     const bool cacheable_nonov = (ggml_openvino_reduce_compile_mem_enabled() || keep_for_windows) && !is_ov_buffer &&
                                  !naive && tensor->data != nullptr;
     if (cacheable_nonov) {
@@ -2355,10 +2354,10 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor
     if (ggml_is_quantized(tensor->type)) {
         auto use_bias = naive;
         if (is_ov_buffer) {
-            const bool preserve_raw = ggml_openvino_npu_raw_weight_cache_enabled();
+            const bool preserve_raw = ggml_openvino_npu_weightless_cache_enabled();
             if (preserve_raw) {
                 // A later context must fingerprint the same raw GGUF bytes before importing its
-                // self-contained blob, so keep the model buffer immutable in this mode.
+                // cached blob, so keep the model buffer immutable in this mode.
                 ov_weight = process_weight_tensor(tensor, tensor->data, nullptr, use_bias);
             } else {
                 // The regular path stores extracted weights in the model buffer. Copy raw data

@@ -199,11 +199,10 @@ bool ggml_openvino_npu_kv_on_demand_enabled();
 // as [1, heads, rows, head_size] / [1, heads, head_size, rows], and attention uses V^T.
 bool ggml_openvino_npu_kv_head_major_enabled();
 
-// NPU blob cache modes that keep the raw GGUF weights and skip requantization on a warm hit:
-// GGML_OPENVINO_SELF_CONTAINED_BLOB (weights embedded in each blob) or
-// GGML_OPENVINO_NPU_WEIGHTLESS_BANK (weightless blobs plus one shared weights file).
-bool ggml_openvino_npu_raw_weight_cache_enabled();
-bool ggml_openvino_npu_weightless_bank_enabled();
+// NPU with GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR: graphs with a KV cache are cached as weightless blobs plus one
+// shared weights file. Valid blobs are imported; otherwise the models are compiled and exported. The raw GGUF
+// weights are kept, and requantization is skipped on a warm hit.
+bool ggml_openvino_npu_weightless_cache_enabled();
 void ggml_openvino_kv_storage_register(void * data, size_t row_bytes, size_t rows);
 void ggml_openvino_kv_storage_unregister(const void * base, size_t size);
 // Storage address backing ggml address `ptr` with at least `bytes` valid (grown if needed);

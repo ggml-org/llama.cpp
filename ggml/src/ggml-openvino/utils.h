@@ -129,10 +129,9 @@ struct ov_compiled_graph {
     // Model cache fingerprints of the pair's prefill and decode models (0 without a model cache).
     uint64_t prefill_fp = 0;
     uint64_t decode_fp = 0;
-    bool self_contained = false;
     bool decode_unfold = false;
-    // GGML_OPENVINO_NPU_WEIGHTLESS_BANK: the pair's weights file, and its layout when the pair was compiled in
-    // this process (window models then resolve the shared weights through the same file).
+    // NPU with GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR: the pair's weights file, and its layout when the pair was
+    // compiled in this process (window models then resolve the shared weights through the same file).
     bool weightless_bank = false;
     std::string weights_path;
     std::shared_ptr<ggml_openvino_weights_layout> weights_layout;
