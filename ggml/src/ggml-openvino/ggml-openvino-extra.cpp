@@ -681,6 +681,18 @@ int ggml_openvino_static_kv_window(int rows, int ctx) {
     return std::min(window, ctx);
 }
 
+int ggml_openvino_gpu_kv_window(int rows, int ctx, int n_tokens) {
+    if (n_tokens > 16) {
+        return ggml_openvino_static_kv_window(rows, ctx);
+    }
+    // a multiple of 256 and of 2^k / 4, where 2^k <= rows < 2^(k+1)
+    int step = 256;
+    while (step * 8 <= rows) {
+        step *= 2;
+    }
+    return std::min((rows + step - 1) / step * step, ctx);
+}
+
 bool ggml_openvino_npu_kv_on_demand_enabled() {
     return ggml_openvino_is_npu() && ggml_openvino_getenv_int("GGML_OPENVINO_NPU_KV_ON_DEMAND") != 0;
 }
