@@ -277,7 +277,8 @@ public:
     llm_graph_result * get_gf_res_reserve() const;
 
     // returns the result of ggml_backend_sched_graph_compute_async execution
-    ggml_status graph_compute(ggml_cgraph * gf, bool batched);
+    // sched: the scheduler the graph is allocated in, nullptr for the main one
+    ggml_status graph_compute(ggml_cgraph * gf, bool batched, ggml_backend_sched_t sched = nullptr);
 
     // reserve a graph with a dummy ubatch of the specified size
     ggml_cgraph * graph_reserve(
@@ -286,15 +287,18 @@ public:
     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
 
 private:
-    llm_graph_result * get_gf_res_prev(uint32_t n_tokens = 0);
+    struct gf_res_arena;
+
+    gf_res_arena & get_gf_res_prev(uint32_t n_tokens);
 
     llm_graph_params graph_params(
                         llm_graph_result * res,
                       const llama_ubatch & ubatch,
             const llama_memory_context_i * mctx,
-                          llm_graph_type   gtype) const;
+                          llm_graph_type   gtype,
+                    ggml_backend_sched_t   sched) const;
 
-    llm_graph_cb graph_get_cb() const;
+    llm_graph_cb graph_get_cb(ggml_backend_sched_t sched) const;
 
     // parameters defining the backend scheduler instance
     struct sched_params {
@@ -453,26 +457,22 @@ private:
     // Separate arenas give batches with and without outputs distinct CUDA graph cache keys.
     // Small batches also get one arena per token count, so speculative verify batches of varying
     // size keep their own CUDA graphs instead of re-capturing one graph at every size change.
-    std::vector<std::pair<uint32_t, llm_graph_result_ptr>> gf_res_prev;
+    // With LLAMA_SCHED_PER_SIZE=1 a small batch arena also gets its own scheduler, which shares the compute buffers
+    // of the main one, so alternating batch sizes keep their graphs allocated and reuse them instead of rebuilding
+    // and re-splitting them at every size change.
+    struct gf_res_arena {
+        uint32_t               key;
+        llm_graph_result_ptr   res;
+        ggml_backend_sched_ptr sched;             // nullptr: the main scheduler
+        bool                   allocated = false; // res is allocated in sched
+    };
+    std::vector<gf_res_arena> gf_res_prev;
     llm_graph_result_ptr gf_res_reserve;
 
+    // the graph allocated in the main scheduler
     llm_graph_result * gf_res_prev_active = nullptr;
 
-    // [TAG_SCHED_PER_SIZE] wip: with LLAMA_SCHED_PER_SIZE=1 the arenas of batches of up to 8 tokens get their own
-    // scheduler, so alternating batch sizes (the MTP catch-up and draft steps) keep their graphs allocated and reuse
-    // them, instead of rebuilding and re-splitting one graph in the shared scheduler at every size change
-    struct sched_small_entry {
-        uint32_t               key;
-        ggml_backend_sched_ptr sched;
-        llm_graph_result     * ready; // the graph allocated in this scheduler, nullptr when it has to be rebuilt
-    };
-    std::vector<sched_small_entry> sched_small;
     bool sched_per_size = false;
-
-    // scheduler of the graph of the last process_ubatch(), nullptr for the shared one
-    ggml_backend_sched_t sched_active = nullptr;
-
-    ggml_backend_sched_t sched_res() const { return sched_active ? sched_active : sched.get(); }
 
     uint32_t gf_res_key(uint32_t n_tokens) const;
 

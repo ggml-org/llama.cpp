@@ -1033,6 +1033,9 @@ public:
 
     void set_params(const llm_graph_params & params);
 
+    // the scheduler the graph was built for
+    ggml_backend_sched_t get_sched() const { return params.sched; }
+
     // important graph nodes
     ggml_tensor * t_inp_tokens  = nullptr;
     ggml_tensor * t_inp_embd    = nullptr; // [n_embd_inp, n_tokens]
