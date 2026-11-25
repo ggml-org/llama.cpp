@@ -3,13 +3,16 @@
  *
  * Tracks pointer enter/leave nesting so the overlay stays visible while the
  * cursor traverses child elements, then routes dropped files to the right
- * importer: settings files (JSON with a `config` key) are restored directly,
- * while conversation files (JSONL/ZIP/JSON) go through the existing
- * selection dialog before asking whether to open the result.
+ * importer: settings files (JSON with a `config` key) get a diff preview,
+ * while conversation files (JSONL/ZIP/JSON) get a preview or the selection
+ * dialog before asking whether to open the result. The chat screen hands its
+ * drops over through the drop-import context and attaches what is left.
  */
 
 import type { SettingsDiffEntry } from '#lib/components/app/dialogs/DialogSettingsImportPreview.svelte';
 import { SETTING_CONFIG_DEFAULT, SETTINGS_REGISTRY, ZIP_MAGIC } from '#lib/constants/index.ts';
+import { setDropImportContext } from '#lib/contexts/index.ts';
+import { FileExtensionText } from '#lib/enums/index.ts';
 import { ConversationTransferService } from '#lib/services/conversation-transfer.service.ts';
 import { RouterService } from '#lib/services/router.service.ts';
 import { conversationsStore } from '#lib/stores/conversations/index.svelte.ts';
@@ -21,33 +24,58 @@ import { strFromU8 } from 'fflate';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
-type FileKind = 'settings' | 'conversations';
+// only these can hold an export; anything else is never read
+const IMPORT_FILE_EXTENSIONS: string[] = [
+	FileExtensionText.JSON,
+	FileExtensionText.JSONL,
+	FileExtensionText.ZIP
+];
+
+type DroppedExport =
+	| { data: ExportedConversation[]; file: File; kind: 'conversations' }
+	| { data: SettingsExportType; file: File; kind: 'settings' };
+
+function isExportedConversation(item: unknown): item is ExportedConversation {
+	const candidate = item as Partial<ExportedConversation> | null;
+
+	return Boolean(candidate?.conv?.id) && Array.isArray(candidate?.messages);
+}
 
 /**
- * Detects whether a dropped file holds settings or conversations.
- * Settings files are JSON objects carrying a `config` key; everything else
- * (ZIP archives, JSONL sessions, legacy JSON) is treated as conversations.
+ * Reads a dropped file as a Llama Chat export: a settings file (a JSON object
+ * with a `config` key) or conversations (a ZIP archive, JSONL sessions or
+ * legacy JSON). Returns null for anything else, which stays a plain file.
  */
-async function classifyFile(file: File): Promise<FileKind> {
+async function readExport(file: File): Promise<DroppedExport | null> {
+	const name = file.name.toLowerCase();
+
+	if (!IMPORT_FILE_EXTENSIONS.some((extension) => name.endsWith(extension))) return null;
+
 	const bytes = new Uint8Array(await file.arrayBuffer());
 
-	if (ZIP_MAGIC.every((byte, index) => bytes[index] === byte)) {
-		return 'conversations';
-	}
+	if (!ZIP_MAGIC.every((byte, index) => bytes[index] === byte)) {
+		try {
+			const parsed = JSON.parse(strFromU8(bytes));
 
-	const text = strFromU8(bytes);
+			if (parsed && typeof parsed === 'object' && parsed.config) {
+				return { data: parsed as SettingsExportType, file, kind: 'settings' };
+			}
+		} catch {
+			// Not a single JSON value: JSONL sessions are checked below.
+		}
+	}
 
 	try {
-		const parsed = JSON.parse(text);
+		const data = await ConversationTransferService.parseImportFile(file);
 
-		if (parsed && typeof parsed === 'object' && 'config' in parsed) {
-			return 'settings';
+		if (data.length > 0 && data.every(isExportedConversation)) {
+			return { data, file, kind: 'conversations' };
 		}
 	} catch {
-		// Not a JSON object, so not a settings file.
+		// Not a conversation export either.
 	}
 
-	return 'conversations';
+	return null;
 }
 
 /**
@@ -126,6 +154,8 @@ export function useDropImport() {
 		showSettingsPreview: false
 	});
 
+	setDropImportContext({ importExports });
+
 	function handleDragEnter(event: DragEvent) {
 		event.preventDefault();
 		dragCounter++;
@@ -155,51 +185,38 @@ export function useDropImport() {
 
 		if (!event.dataTransfer?.files) return;
 
-		const files = Array.from(event.dataTransfer.files);
+		const rest = await importExports(Array.from(event.dataTransfer.files));
 
-		await processFiles(files);
+		for (const file of rest) {
+			toast.error(`${file.name} is not a Llama Chat export`);
+		}
 	}
 
-	async function processFiles(files: File[]) {
+	async function importExports(files: File[]): Promise<File[]> {
+		const exports = await Promise.all(files.map(readExport));
 		const allConversations: ExportedConversation[] = [];
 
-		for (const file of files) {
-			const kind = await classifyFile(file);
-
-			if (kind === 'settings') {
-				try {
-					const data = JSON.parse(await file.text());
-
-					if (data?.config) {
-						ui.settingsData = data as SettingsExportType;
-						ui.settingsDiff = computeSettingsDiff(
-							$state.snapshot(settingsStore.config) as SettingsConfigType,
-							data.config
-						);
-						ui.showSettingsPreview = true;
-					} else {
-						toast.error(`Invalid settings file: ${file.name}`);
-					}
-				} catch (err) {
-					console.error('Failed to import settings:', err);
-					toast.error(`Failed to import settings from ${file.name}`);
-				}
-			} else {
-				try {
-					const parsed = await ConversationTransferService.parseImportFile(file);
-
-					allConversations.push(...parsed);
-				} catch (err) {
-					console.error('Failed to parse file:', err);
-					toast.error(`Failed to parse ${file.name}`);
-				}
+		for (const dropped of exports) {
+			if (dropped?.kind === 'settings') {
+				ui.settingsData = dropped.data;
+				ui.settingsDiff = computeSettingsDiff(
+					$state.snapshot(settingsStore.config) as SettingsConfigType,
+					dropped.data.config
+				);
+				ui.showSettingsPreview = true;
+			} else if (dropped?.kind === 'conversations') {
+				allConversations.push(...dropped.data);
 			}
 		}
 
-		if (allConversations.length === 0) {
-			return;
+		if (allConversations.length > 0) {
+			showConversations(allConversations);
 		}
 
+		return files.filter((_, index) => !exports[index]);
+	}
+
+	function showConversations(allConversations: ExportedConversation[]) {
 		const conversations = keepNewestPerConversation(allConversations);
 		const duplicates = allConversations.length - conversations.length;
 

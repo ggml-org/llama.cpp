@@ -2,13 +2,14 @@
  * Drag-and-drop state machine for the ChatScreen.
  *
  * Tracks pointer enter/leave nesting so the overlay stays visible while the
- * cursor traverses child elements, then routes the dropped files either to
- * the active message-edit handler (if a message is being edited) or to the
- * caller's onDrop callback.
+ * cursor traverses child elements. Dropped Llama Chat exports go to the
+ * importer; the other files go either to the active message-edit handler (if
+ * a message is being edited) or to the caller's onDrop callback. Every drag
+ * event stops here, so the app-wide import overlay stays out of the chat.
  */
 
+import { getDropImportContext } from '#lib/contexts/index.ts';
 import { chatStore } from '#lib/stores/index.ts';
-import { isImportFileByExtension } from '#lib/utils/import-file.utils.ts';
 
 interface UseChatScreenDragAndDropOptions {
 	/** Called when the user drops files and no message is being edited. */
@@ -19,8 +20,11 @@ export function useChatScreenDragAndDrop(options: UseChatScreenDragAndDropOption
 	let dragCounter = $state(0);
 	let isDragOver = $state(false);
 
+	const dropImport = getDropImportContext();
+
 	function handleDragEnter(event: DragEvent) {
 		event.preventDefault();
+		event.stopPropagation();
 		dragCounter++;
 
 		if (event.dataTransfer?.types.includes('Files')) {
@@ -30,6 +34,7 @@ export function useChatScreenDragAndDrop(options: UseChatScreenDragAndDropOption
 
 	function handleDragLeave(event: DragEvent) {
 		event.preventDefault();
+		event.stopPropagation();
 		dragCounter--;
 
 		if (dragCounter === 0) {
@@ -39,30 +44,21 @@ export function useChatScreenDragAndDrop(options: UseChatScreenDragAndDropOption
 
 	function handleDragOver(event: DragEvent) {
 		event.preventDefault();
+		event.stopPropagation();
 	}
 
 	async function handleDrop(event: DragEvent) {
 		event.preventDefault();
+		event.stopPropagation();
 		isDragOver = false;
 		dragCounter = 0;
 
 		if (!event.dataTransfer?.files) return;
 
-		const files = Array.from(event.dataTransfer.files);
+		const dropped = Array.from(event.dataTransfer.files);
+		const files = dropImport ? await dropImport.importExports(dropped) : dropped;
 
-		// Defer import files (conversation/settings exports) to the global
-		// drag-and-drop import handler instead of attaching them to a message.
-		if (files.some(isImportFileByExtension)) {
-			console.log(
-				'[chat-drop] deferring import files:',
-				files.map((f) => f.name)
-			);
-
-			return;
-		}
-
-		// Stop bubbling so the global import handler ignores this attachment.
-		event.stopPropagation();
+		if (files.length === 0) return;
 
 		if (chatStore.isEditing()) {
 			const handler = chatStore.getAddFilesHandler();
