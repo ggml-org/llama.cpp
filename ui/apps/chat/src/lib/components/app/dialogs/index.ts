@@ -19,10 +19,9 @@
 export { default as DialogMcpServerAddNew } from './DialogMcpServerAddNew.svelte';
 
 /**
- * **DialogMcpServers** - MCP servers dialog shown from the chat form
+ * **DialogMcpServers** - MCP servers dialog, opened with `uiStore.openMcpServers`
  *
- * Shows the same MCP server list as the `/mcp-servers` route inside a modal
- * dialog.
+ * Lists the MCP servers, to add, edit, turn on and remove them.
  */
 export { default as DialogMcpServers } from './DialogMcpServers.svelte';
 

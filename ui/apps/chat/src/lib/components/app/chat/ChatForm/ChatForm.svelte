@@ -197,7 +197,7 @@
 		hasPrompts: () => {
 			const prefs = conversationsStore.preferences;
 
-			if (!prefs.isCategoryEnabled(ToolSource.MCP)) return false;
+			if (!mcpStore.isFeatureEnabled || !prefs.isCategoryEnabled(ToolSource.MCP)) return false;
 
 			return mcpStore
 				.getServers()
@@ -897,6 +897,7 @@
 						isVoiceRefining={voice.isRefining}
 						micWarning={micUnavailableReason ?? micError}
 						onFileUpload={handleFileUpload}
+						onFilesSelect={handleFileSelect}
 						onMicClick={handleMicClick}
 						{onStop}
 						onSystemPromptClick={() =>

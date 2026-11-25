@@ -5,11 +5,10 @@ import {
 	SHORTCUT_SEARCH,
 	SHORTCUT_SETTINGS
 } from './keyboard-shortcuts.constants';
-import { MCP_SERVERS_ROUTE_ID, MODELS_ROUTE_ID, SETTINGS_ROUTE_ID } from './routes.constants';
+import { MODELS_ROUTE_ID, SETTINGS_ROUTE_ID } from './routes.constants';
 import Search from '@lucide/svelte/icons/search';
 import Settings from '@lucide/svelte/icons/settings';
 import SquarePen from '@lucide/svelte/icons/square-pen';
-import McpLogo from '#lib/components/app/mcp/McpLogo.svelte';
 import { SidebarAction, ToolSource } from '#lib/enums/index.ts';
 import type { DesktopIconStripItem } from '#lib/types/index.ts';
 
@@ -40,9 +39,12 @@ export const SIDEBAR_SECTION_PREVIEW_COUNT = 6;
 /**
  * The "Show less" row of an opened section stays at the bottom of the sidebar
  * while the section scrolls under it, with room below it and a fade above
- * (see app.css). "Show more" is a plain row.
+ * (see app.css). "Show more" is a plain row. A phone's list keeps 1.5rem clear at
+ * its end for the fade above the pinned keys, which a sticky row stops short of, so
+ * there the row sticks into it and its surface fills it to the edge.
  */
-export const SIDEBAR_SHOW_MORE_ROW_CLASS = 'sidebar-show-more sticky bottom-0 z-10 pb-2';
+export const SIDEBAR_SHOW_MORE_ROW_CLASS =
+	'sidebar-show-more sticky bottom-0 z-10 pb-2 max-md:-bottom-6 max-md:pb-6';
 
 /** Ids of the sidebar's conversation sections, for their folded state. */
 export const SIDEBAR_SECTION_IDS = {
@@ -174,12 +176,6 @@ export const SIDEBAR_FOOTER_ITEMS: DesktopIconStripItem[] = [
 		tooltip: 'Models'
 	},
 	{
-		action: SidebarAction.MCP,
-		activeRouteId: MCP_SERVERS_ROUTE_ID,
-		icon: McpLogo,
-		tooltip: 'MCP'
-	},
-	{
 		action: SidebarAction.SETTINGS,
 		activeRouteId: SETTINGS_ROUTE_ID,
 		icon: Settings,
@@ -187,13 +183,6 @@ export const SIDEBAR_FOOTER_ITEMS: DesktopIconStripItem[] = [
 		tooltip: 'Settings'
 	}
 ];
-
-/** The footer items to show: without the agentic features there is no MCP. */
-export function sidebarFooterItems(agentic: boolean): DesktopIconStripItem[] {
-	return agentic
-		? SIDEBAR_FOOTER_ITEMS
-		: SIDEBAR_FOOTER_ITEMS.filter((item) => item.action !== SidebarAction.MCP);
-}
 
 /** A light haptic tap's length where the browser vibrates (Android): a click, not a buzz. */
 export const HAPTIC_TAP_MS = 8;

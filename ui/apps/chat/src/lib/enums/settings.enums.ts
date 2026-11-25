@@ -16,6 +16,16 @@ export enum SyncableParameterType {
 }
 
 /**
+ * Where a setting applies: every device, or only a desktop or tablet layout, or only a phone's.
+ * A setting is listed only where it applies.
+ */
+export enum SettingsPlatform {
+	ALL = 'all',
+	DESKTOP = 'desktop',
+	MOBILE = 'mobile'
+}
+
+/**
  * Settings field type - defines the input type for settings fields
  */
 export enum SettingsFieldType {
@@ -24,4 +34,13 @@ export enum SettingsFieldType {
 	RADIO = 'radio',
 	SELECT = 'select',
 	TEXTAREA = 'textarea'
+}
+
+/**
+ * How a phone's settings list lays a field out: as a row of a group it shares with its
+ * neighbours, or as a group of its own (a prompt, a choice of one).
+ */
+export enum SettingsFieldBlock {
+	OWN = 'own',
+	ROWS = 'rows'
 }

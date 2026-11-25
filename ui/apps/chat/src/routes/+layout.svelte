@@ -294,7 +294,7 @@
 
 	// Background MCP server health checks on app load.
 	// Health-check every configured server with a URL - including disabled ones -
-	// so the /mcp-servers page can display health metadata for servers that are
+	// so the MCP servers dialog can display health metadata for servers that are
 	// currently turned off. Disabled servers never get promoted to active
 	// connections (see runHealthCheck), so their tools/prompts/resources stay
 	// out of the chat-side stores.
@@ -303,6 +303,13 @@
 	// every other card back through skeleton state.
 	$effect(() => {
 		if (!browser) return;
+
+		// Enable MCP off: no server is checked or connected, open connections close
+		if (!mcpStore.isFeatureEnabled) {
+			untrack(() => void mcpStore.shutdown());
+
+			return;
+		}
 
 		const mcpServers = mcpStore.getServers();
 		const serversWithUrls = mcpServers.filter((s) => s.url.trim());
