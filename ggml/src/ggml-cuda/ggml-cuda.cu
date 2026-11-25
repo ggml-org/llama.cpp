@@ -485,8 +485,14 @@ static ggml_cuda_device_info ggml_cuda_init() {
             GGML_LOG_INFO(
                 "  Device %d: %s\n", turing_devices_without_mma[device_pos].first, turing_devices_without_mma[device_pos].second.c_str());
         }
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 13000
+        // CUDA 13 dropped compute_61, so the Pascal code can only be compiled with an older toolkit
         GGML_LOG_INFO(
-            "Consider compiling with CMAKE_CUDA_ARCHITECTURES=61-virtual;80-virtual and DGGML_CUDA_FORCE_MMQ to force the use of the Pascal code for Turing.\n");
+            "Consider compiling with CUDA 12, -DCMAKE_CUDA_ARCHITECTURES=\"61-virtual;80-virtual\" and -DGGML_CUDA_FORCE_MMQ=ON to force the use of the Pascal code for Turing (CUDA 13 cannot compile for compute_61).\n");
+#else
+        GGML_LOG_INFO(
+            "Consider compiling with -DCMAKE_CUDA_ARCHITECTURES=\"61-virtual;80-virtual\" and -DGGML_CUDA_FORCE_MMQ=ON to force the use of the Pascal code for Turing.\n");
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 13000
     }
 
     for (int id = 0; id < info.device_count; ++id) {
