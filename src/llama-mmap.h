@@ -41,6 +41,7 @@ struct llama_file {
     bool has_direct_io() const;
 
     // drop the page cache copy of a byte range that was read with buffered I/O
+    // does nothing with direct I/O, and on systems other than Linux
     void drop_cache(size_t offset, size_t len) const;
 private:
     struct impl;

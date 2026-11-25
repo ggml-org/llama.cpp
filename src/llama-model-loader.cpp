@@ -1933,6 +1933,13 @@ bool llama_model_loader::load_all_data(
         size_done += n_size;
     }
 
+    // read-ahead past a tensor brings back pages of tensors that were released before, release what is left
+    if (!use_mmap) {
+        for (const auto & file : files) {
+            file->drop_cache(0, file->size());
+        }
+    }
+
     // free temporary resources used for async uploads
     for (auto * event : events) {
         ggml_backend_event_synchronize(event);
