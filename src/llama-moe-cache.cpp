@@ -44,9 +44,10 @@ struct moe_cache_lru {
     std::vector<int8_t>  list_of; // [n_slots] class list of the slot
     int32_t n_filled = 0;         // slots that hold an expert
 
-    std::vector<float>   crf;      // [n_layer*n_expert]
-    std::vector<int64_t> last_use; // [n_layer*n_expert] layer clock at the last use, -1 if not used
-    std::vector<int64_t> clock;    // [n_layer] tokens seen by the layer (as added by plan() for each ubatch)
+    std::vector<float>   crf;         // [n_layer*n_expert]
+    std::vector<float>   loop_weight; // [n_layer] visit count per token (e.g. 3.0f for 3x-looped core layers)
+    std::vector<int64_t> last_use;    // [n_layer*n_expert] layer clock at the last use, -1 if not used
+    std::vector<int64_t> clock;       // [n_layer] tokens seen by the layer (as added by plan() for each ubatch)
 
     std::vector<uint32_t> seen; // [n_expert] seen[e] == seen_gen if expert e is selected by the current plan()
     uint32_t seen_gen = 0;
@@ -75,6 +76,7 @@ struct moe_cache_lru {
         tail[0] = n_slots - 1;
         list_of.assign(n_slots, 0);
         crf.assign((size_t) n_layer*n_expert, 0.0f);
+        loop_weight.assign(n_layer, 1.0f);
         last_use.assign((size_t) n_layer*n_expert, -1);
         clock.assign(n_layer, 0);
         seen.assign(n_expert, 0);
@@ -123,9 +125,9 @@ struct moe_cache_lru {
         return crf[key]*std::exp2(-(clock[il] - last_use[key])/crf_half_life);
     }
 
-    // an unused key gets 1 because crf[key] is 0 prior to first use
+    // an unused key gets loop_weight[il] (e.g. 3.0x for 3-pass looped layers)
     void use(int32_t il, int32_t key) {
-        crf[key]      = decayed_crf(il, key) + 1.0f;
+        crf[key]      = decayed_crf(il, key) + loop_weight[il];
         last_use[key] = clock[il];
     }
 
@@ -162,8 +164,9 @@ struct moe_cache_lru {
             if (key < 0) {
                 return s; // unused slot
             }
-            const int64_t age   = clock[key_layer(key)] - last_use[key];
-            const double  score = std::ldexp((double) age, -c); // age/2^class
+            const int32_t owner_il = key_layer(key);
+            const int64_t age      = clock[owner_il] - last_use[key];
+            const double  score    = std::ldexp((double) age, -c) / (double) loop_weight[owner_il];
             if (score > res_score) {
                 res       = s;
                 res_score = score;
@@ -345,6 +348,8 @@ struct llama_moe_cache::impl {
 
     struct layer {
         int32_t ig = -1;                    // -1 if the layer is not cached
+        int32_t phys_il = -1;               // canonical physical layer index (deduplicates looped virtual layers)
+        int32_t loop_visits = 1;            // number of times this physical layer executes per token
         ggml_tensor * slot_map = nullptr;   // I32 [1, n_expert] in host memory
         ggml_tensor * slot_map_cpu = nullptr; // looked up in place of slot_map by the graphs with a CPU part, if cpu_share > 0, its data is not used
         ggml_tensor * cpu_map  = nullptr;   // I32 [1, n_expert] in host memory, if cpu_share > 0
@@ -419,12 +424,22 @@ struct llama_moe_cache::impl {
             throw std::runtime_error("MoE cache requires a MoE model");
         }
 
-        // only cache layers that keep all of their experts in host memory, on the device the layer is assigned to
+        // Deduplicate physical expert weight tensors across looped virtual layers (e.g. inkling2_loop)
+        std::unordered_map<const ggml_tensor *, int32_t> phys_owner;
         for (size_t il = 0; il < model.layers.size(); ++il) {
             auto experts = llama_moe_cache_layer_experts(model.layers[il]);
             if (experts.empty() || !std::all_of(experts.begin(), experts.end(), llama_moe_cache_is_host_weight)) {
                 continue;
             }
+            auto it_owner = phys_owner.find(experts[0]);
+            if (it_owner != phys_owner.end()) {
+                layers[il].phys_il = it_owner->second;
+                layers[it_owner->second].loop_visits++;
+                continue;
+            }
+            phys_owner[experts[0]] = (int32_t) il;
+            layers[il].phys_il     = (int32_t) il;
+            layers[il].loop_visits = 1;
             const auto it_dev = std::find_if(devices.begin(), devices.end(), [&](const device & d) { return ggml_backend_get_device(d.backend) == model.dev_layer(il); });
             if (it_dev == devices.end()) {
                 continue;
@@ -605,8 +620,19 @@ struct llama_moe_cache::impl {
                     if (layers[il].slot_map != nullptr) {
                         int32_t * slots = (int32_t *) layers[il].slot_map->data;
                         std::fill(slots, slots + layers[il].slot_map->ne[1], g.lru.empty);
-                        g.lru.slot_map[il] = slots;
+                        g.lru.slot_map[il]    = slots;
+                        g.lru.loop_weight[il] = (float) layers[il].loop_visits;
                     }
+                }
+            }
+            // Alias virtual loop layers to their canonical physical layer's slot maps
+            for (size_t il = 0; il < layers.size(); ++il) {
+                const int32_t pil = layers[il].phys_il;
+                if (pil >= 0 && pil != (int32_t) il && layers[pil].ig >= 0) {
+                    layers[il].ig           = layers[pil].ig;
+                    layers[il].slot_map     = layers[pil].slot_map;
+                    layers[il].slot_map_cpu = layers[pil].slot_map_cpu;
+                    layers[il].cpu_map      = layers[pil].cpu_map;
                 }
             }
         }
@@ -816,8 +842,9 @@ struct llama_moe_cache::impl {
             l.cpu_acc = acc & 0xffff;
             return (size_t) (acc >> 16);
         };
+        const int32_t pil = l.phys_il >= 0 ? l.phys_il : il;
         size_t n_hit = 0;
-        if (!g.lru.plan(il, ids.data(), ids.size(), sel->src[0]->ne[1], n_used, n_zero, n_cpu, fills, cpu, n_hit)) {
+        if (!g.lru.plan(pil, ids.data(), ids.size(), sel->src[0]->ne[1], n_used, n_zero, n_cpu, fills, cpu, n_hit)) {
             GGML_ABORT("the MoE cache is too small for the experts selected in layer %d", il);
         }
         if (has_cpu) {
