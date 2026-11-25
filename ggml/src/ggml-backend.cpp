@@ -1263,7 +1263,7 @@ struct ggml_backend_sched {
     bool                 prefetch_tried [GGML_SCHED_MAX_BACKENDS];
 
     // backends that take host inputs with set_tensor_async, see ggml_backend_dev_caps
-    bool async_host_input[GGML_SCHED_MAX_BACKENDS];
+    bool fast_async_host_input[GGML_SCHED_MAX_BACKENDS];
     struct ggml_tensor * prefetched[GGML_SCHED_MAX_SPLIT_INPUTS];
     int n_prefetched;
     int prefetch_split;     // the split that reads the prefetched inputs
@@ -2110,7 +2110,7 @@ static bool ggml_backend_sched_is_host_weight(const struct ggml_tensor * t) {
         ggml_backend_buffer_is_host(t->buffer);
 }
 
-// returns true if the copy may still be reading host memory, the split backend must then be synchronized before the host data is overwritten
+// returns true if the copy is reading asynchronously from host memory, to safely write to the memory a synchronization on the split backend is then needed
 static bool ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggml_backend_sched_split * split, struct ggml_tensor * input) {
     const int split_backend_id = split->backend_id;
     ggml_backend_t split_backend = sched->backends[split_backend_id];
@@ -2129,9 +2129,9 @@ static bool ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
 
     // without pipeline parallelism the input copy has a single slot, so it can be written in order on the split backend
     ggml_backend_buffer_t input_buf = input->view_src ? input->view_src->buffer : input->buffer;
-    if (sched->async_host_input[split_backend_id] && sched->events[split_backend_id][sched->cur_copy] == NULL &&
-        ggml_backend_dev_type(ggml_backend_get_device(input_backend)) == GGML_BACKEND_DEVICE_TYPE_CPU &&
-        ggml_backend_buffer_is_host(input_buf) && !ggml_backend_sched_is_host_weight(input) && ggml_nbytes(input) > 0) {
+    if (sched->fast_async_host_input[split_backend_id] && sched->events[split_backend_id][sched->cur_copy] == NULL &&
+            ggml_backend_dev_type(ggml_backend_get_device(input_backend)) == GGML_BACKEND_DEVICE_TYPE_CPU &&
+            ggml_backend_buffer_is_host(input_buf) && !ggml_backend_sched_is_host_weight(input) && ggml_nbytes(input) > 0) {
         ggml_backend_tensor_set_async(split_backend, input_cpy, input->data, 0, ggml_nbytes(input));
         return true;
     }
@@ -2388,7 +2388,7 @@ ggml_backend_sched_t ggml_backend_sched_new(
 
         struct ggml_backend_dev_props props;
         ggml_backend_dev_get_props(ggml_backend_get_device(backends[b]), &props);
-        sched->async_host_input[b] = props.caps.async_host_input && backends[b]->iface.set_tensor_async != NULL && !ggml_backend_is_meta(backends[b]);
+        sched->fast_async_host_input[b] = props.caps.fast_async_host_input && backends[b]->iface.set_tensor_async != NULL && !ggml_backend_is_meta(backends[b]);
 
         if (sched->n_copies > 1) {
             for (int c = 0; c < sched->n_copies; c++) {
