@@ -54,7 +54,7 @@
 </script>
 
 <div class="tool-call-group min-w-0">
-	<CollapsibleContentBlock inlineChevron {onToggle} {open} shimmerTitle={Boolean(activity)}>
+	<CollapsibleContentBlock {onToggle} {open} pinnedChevron shimmerTitle={Boolean(activity)}>
 		{#snippet titleSnippet()}
 			<span class="flex min-w-0 items-baseline gap-x-2">
 				<!-- collapsed, the summary steps back behind the answer; a live title keeps its shimmer -->
@@ -65,7 +65,7 @@
 			</span>
 		{/snippet}
 
-		{#snippet titleSuffix()}
+		{#snippet trailing()}
 			{#if elapsedStartedAt !== null}
 				<ToolCallElapsed startedAt={elapsedStartedAt} />
 			{/if}
