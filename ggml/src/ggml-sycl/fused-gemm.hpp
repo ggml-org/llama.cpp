@@ -2,6 +2,7 @@
 #define GGML_SYCL_FUSED_GEMM_HPP
 
 #include "common.hpp"
+#include "layout.hpp"
 
 
 // Routed row n is at base + (map[n].i1 % ne1)*nb1 + map[n].i2*nb2.
