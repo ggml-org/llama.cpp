@@ -1470,7 +1470,8 @@ bool llama_memory_recurrent_context::get_rs_in_place() const {
     }
 
     for (uint32_t i = 0; i < mem->n; ++i) {
-        if (s_copy(i) != (int32_t) (mem->head + i)) {
+        // s_copy() would also reset the rollback idx, which set_input reads later
+        if (mem->cells[mem->head + i].src0 != (int32_t) (mem->head + i)) {
             return false;
         }
     }

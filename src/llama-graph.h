@@ -1500,6 +1500,7 @@ struct llm_graph_context {
     //       when moving, avoid passing `ggml_cgraph` - only pass `ggml_context`. would likely need to split the
     //         implementation in 2 separate methods. the goal is to avoid calling `ggml_build_forward_expand` in
     //         `llama_memory_recurrent`
+    // note: same rules as the build_rs overload below (readers before the store, one call per state tensor per graph)
     ggml_tensor * build_rs(
             ggml_tensor * s,
             ggml_tensor * state_copy,
@@ -1516,6 +1517,9 @@ struct llm_graph_context {
 
     llm_graph_input_rs * build_rs_inp() const;
 
+    // the returned states can be a view of the cache, so callers must follow 2 rules:
+    // - expand every reader of the returned tensor before the store into s (the rwkv token shift gets this only from the expand order)
+    // - call it once per state tensor per graph: a second call would gather rows that the first already moved into [head, head + n_seqs)
     ggml_tensor * build_rs(
             llm_graph_input_rs * inp,
             ggml_tensor * s,
