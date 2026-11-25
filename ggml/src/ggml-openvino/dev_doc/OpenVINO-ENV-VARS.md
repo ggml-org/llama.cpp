@@ -182,6 +182,27 @@ export GGML_OPENVINO_DEVICE=NPU
 export GGML_OPENVINO_NPU_CONFIG="NPU_COMPILER_TYPE=PLUGIN,COMPILATION_NUM_THREADS=1,LOG_LEVEL=LOG_INFO"
 ```
 
+```bash
+# gemma-4 E2B on the NPU, first run.
+# The backend compiles the model for the NPU and saves it in GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR, so this start
+# takes longer than later ones (with -lv 4 the log shows "no usable cached blobs ... compiling and exporting").
+# Use the model as usual, exit with /exit, then start it again as in the next block.
+export GGML_OPENVINO_DEVICE=NPU
+export GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR=$HOME/ov_cache
+export GGML_OPENVINO_NPU_HOST_GATHER=1              # optional: faster generation, less memory and disk; the output can differ slightly
+export GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT=q4_0_128  # optional: slightly less memory; may lower accuracy
+export GGML_OPENVINO_PREFILL_CHUNK_SIZE=512         # optional: can make long prompts faster; makes the first run longer
+./build/ReleaseOV/bin/llama-cli -m google_gemma-4-E2B-it-Q4_K_M.gguf -c 4096
+```
+
+```bash
+# Second and later runs: the same exports (repeat them in a new shell) and the same command.
+# The backend loads the compiled model from the cache instead of compiling it, so the model starts much faster
+# (with -lv 4 the log shows "model cache HIT"). A changed setting or -c value compiles and saves again.
+export GGML_OPENVINO_SELF_CONTAINED_MMAP=1          # optional, later runs only: slightly shorter start; fails without the cache of a first run
+./build/ReleaseOV/bin/llama-cli -m google_gemma-4-E2B-it-Q4_K_M.gguf -c 4096
+```
+
 ```cpp
 // List the properties of the installed NPU plugin with their current values
 ov::Core core;
