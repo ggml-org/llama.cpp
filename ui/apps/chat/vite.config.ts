@@ -17,6 +17,8 @@ import { defineConfig, loadEnv, searchForWorkspaceRoot } from 'vite';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LLAMA_VOICE_SOURCE = resolve(__dirname, '../../lib/voice/src');
+// Llama Hugging Face has no build step in the repo either: the app compiles it from source
+const LLAMA_HUGGINGFACE_ROOT = resolve(__dirname, '../../lib/huggingface');
 // the harness has no build step in the repo: the app compiles it from source
 const LLAMA_HARNESS_ENTRY = resolve(__dirname, '../../lib/harness/src/index.ts');
 const LLAMA_HARNESS_TRACE_ENTRY = resolve(__dirname, '../../lib/harness/src/trace/index.ts');
@@ -93,6 +95,14 @@ export default defineConfig(({ mode }) => {
 					replacement: resolve(LLAMA_VOICE_SOURCE, 'svelte/index.ts')
 				},
 				{ find: /^@ggml-org\/llama-voice$/, replacement: resolve(LLAMA_VOICE_SOURCE, 'index.ts') },
+				{
+					find: /^@ggml-org\/llama-huggingface\/svelte$/,
+					replacement: resolve(LLAMA_HUGGINGFACE_ROOT, 'src/svelte/index.ts')
+				},
+				{
+					find: /^@ggml-org\/llama-huggingface$/,
+					replacement: resolve(LLAMA_HUGGINGFACE_ROOT, 'src/index.ts')
+				},
 				{ find: /^@ggml-org\/llama-harness\/trace$/, replacement: LLAMA_HARNESS_TRACE_ENTRY },
 				{
 					find: /^@ggml-org\/llama-harness$/,
@@ -111,6 +121,7 @@ export default defineConfig(({ mode }) => {
 					searchForWorkspaceRoot(process.cwd()),
 					resolve(__dirname, 'tests'),
 					LLAMA_VOICE_SOURCE,
+					LLAMA_HUGGINGFACE_ROOT,
 					resolve(__dirname, '../../lib/harness')
 				]
 			},

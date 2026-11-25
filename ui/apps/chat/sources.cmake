@@ -8,6 +8,8 @@ set(UI_SOURCE_GLOBS
     # Llama Voice, also compiled from source
     ../../lib/voice/src/*
     ../../lib/harness/src/*
+    # and Llama Hugging Face
+    ../../lib/huggingface/src/*
 )
 
 set(UI_SOURCE_FILES

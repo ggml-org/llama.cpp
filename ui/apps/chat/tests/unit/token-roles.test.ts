@@ -6,7 +6,13 @@ import { describe, expect, it } from 'vitest';
 // Type is set through the roles in ui/lib/ui/src/lib/styles/tokens/semantic.css (text-body-sm, text-label,
 // text-caption ...), never Tailwind's own sizes or a size in brackets: see Typography in DESIGN.md.
 const ui = fileURLToPath(new URL('../../../../', import.meta.url));
-const ROOTS = ['apps/chat/src', 'apps/chat/tests/stories', 'lib/ui/src', 'lib/ui/tests/stories'];
+const ROOTS = [
+	'apps/chat/src',
+	'apps/chat/tests/stories',
+	'lib/huggingface/src',
+	'lib/ui/src',
+	'lib/ui/tests/stories'
+];
 const SOURCE = /\.(svelte|ts|js|css|svx)$/;
 const TAILWIND_SIZE = /(?<![\w-])text-(?:xs|sm|base|lg|xl|[2-9]xl)(?![\w-])/g;
 // a size relative to the text around it (text-[0.875em]) is not one off the scale

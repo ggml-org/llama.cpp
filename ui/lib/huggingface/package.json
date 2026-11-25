@@ -1,0 +1,51 @@
+{
+  "name": "@ggml-org/llama-huggingface",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A Hugging Face account for llama.cpp frontend apps: sign in from the browser and share conversations as agent traces.",
+  "homepage": "https://github.com/ggml-org/llama.cpp/tree/master/ui/lib/huggingface",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ggml-org/llama.cpp.git",
+    "directory": "ui/lib/huggingface"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./svelte": {
+      "svelte": "./src/svelte/index.ts",
+      "default": "./src/svelte/index.ts"
+    }
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest --run"
+  },
+  "peerDependencies": {
+    "@ggml-org/llama-ui": "^0.7.0",
+    "@lucide/svelte": "^1.0.0",
+    "svelte": "^5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@ggml-org/llama-ui": {
+      "optional": true
+    },
+    "@lucide/svelte": {
+      "optional": true
+    },
+    "svelte": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "svelte": "5.57.3",
+    "typescript": "6.0.3",
+    "vitest": "5.0.5"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
