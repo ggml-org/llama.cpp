@@ -22,7 +22,6 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
-#include <future>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -2660,7 +2659,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             const auto dump_ir_timestamp = static_cast<long long>(ggml_time_us());
 
             // Both decoders share the weight nodes, and converting attaches each new graph to them. ov::Node is not
-            // thread-safe, so the models are always converted one at a time; only compilation can run in parallel.
+            // thread-safe, so the models are converted one at a time.
             const static_build_args build_args{&core,           device,          dump_ir,      dump_ir_timestamp,
                                                model_cache_dir, cgraph,          weightless_bank, skip_weights,
                                                weights_path};
@@ -2695,10 +2694,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             int64_t decode_compile_end_time = 0;
 
             // Convert decode before compiling prefill: a decode model converted after the prefill compile gives
-            // wrong output on some NPU models (Bonsai-8B). Compiling both in parallel raises the host memory peak,
-            // so it is opt-in.
-            const bool parallel_compile =
-                !weightless_bank && !no_kv_cache && !decode_source && ggml_openvino_npu_parallel_compile_enabled();
+            // wrong output on some NPU models (Bonsai-8B).
             auto model_prefill = convert_static_model(ggml_decoder_prefill, "prefill", prefill_conversion_end_time);
             std::shared_ptr<ov::Model> model_decode;
             if (!no_kv_cache && !decode_source) {
@@ -2742,45 +2738,27 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                     prefill_fp = decode_fp = 0;
                 }
             }
-            if (parallel_compile) {
-                auto prefill_future = std::async(std::launch::async, build_static_model, ggml_decoder_prefill, "prefill",
-                                                 std::move(model_prefill), std::cref(mc_config), prefill_fp,
-                                                 std::ref(compiled_model_prefill), std::ref(infer_request_prefill),
-                                                 std::ref(names_in_prefill), std::ref(names_out_prefill),
-                                                 std::ref(prefill_conversion_end_time),
-                                                 std::ref(prefill_compile_end_time));
-                auto decode_future = std::async(std::launch::async, build_static_model, ggml_decoder_decode, "decode",
-                                                std::move(model_decode), std::cref(mc_decode_config), decode_fp,
-                                                std::ref(compiled_model_decode), std::ref(infer_request_decode),
-                                                std::ref(names_in_decode), std::ref(names_out_decode),
-                                                std::ref(decode_conversion_end_time),
-                                                std::ref(decode_compile_end_time));
-                prefill_future.get();
-                decode_future.get();
+            build_static_model(ggml_decoder_prefill, "prefill", std::move(model_prefill), mc_config, prefill_fp,
+                               compiled_model_prefill, infer_request_prefill, names_in_prefill, names_out_prefill,
+                               prefill_conversion_end_time, prefill_compile_end_time);
+            if (no_kv_cache) {
+                compiled_model_decode = compiled_model_prefill;
+                infer_request_decode = infer_request_prefill;
+                names_in_decode = names_in_prefill;
+                names_out_decode = names_out_prefill;
+                decode_conversion_end_time = prefill_conversion_end_time;
+                decode_compile_end_time = prefill_compile_end_time;
+            } else if (decode_source) {
+                compiled_model_decode = decode_source->decode;
+                infer_request_decode = std::make_shared<ov::InferRequest>(compiled_model_decode.create_infer_request());
+                names_in_decode = decode_source->input_names;
+                names_out_decode = decode_source->output_names;
+                decode_conversion_end_time = prefill_conversion_end_time;
+                decode_compile_end_time = prefill_compile_end_time;
             } else {
-                build_static_model(ggml_decoder_prefill, "prefill", std::move(model_prefill), mc_config, prefill_fp,
-                                   compiled_model_prefill, infer_request_prefill, names_in_prefill, names_out_prefill,
-                                   prefill_conversion_end_time, prefill_compile_end_time);
-                if (no_kv_cache) {
-                    compiled_model_decode = compiled_model_prefill;
-                    infer_request_decode = infer_request_prefill;
-                    names_in_decode = names_in_prefill;
-                    names_out_decode = names_out_prefill;
-                    decode_conversion_end_time = prefill_conversion_end_time;
-                    decode_compile_end_time = prefill_compile_end_time;
-                } else if (decode_source) {
-                    compiled_model_decode = decode_source->decode;
-                    infer_request_decode =
-                        std::make_shared<ov::InferRequest>(compiled_model_decode.create_infer_request());
-                    names_in_decode = decode_source->input_names;
-                    names_out_decode = decode_source->output_names;
-                    decode_conversion_end_time = prefill_conversion_end_time;
-                    decode_compile_end_time = prefill_compile_end_time;
-                } else {
-                    build_static_model(ggml_decoder_decode, "decode", std::move(model_decode), mc_decode_config,
-                                       decode_fp, compiled_model_decode, infer_request_decode, names_in_decode,
-                                       names_out_decode, decode_conversion_end_time, decode_compile_end_time);
-                }
+                build_static_model(ggml_decoder_decode, "decode", std::move(model_decode), mc_decode_config, decode_fp,
+                                   compiled_model_decode, infer_request_decode, names_in_decode, names_out_decode,
+                                   decode_conversion_end_time, decode_compile_end_time);
             }
             conversion_end_time = std::max(prefill_conversion_end_time, decode_conversion_end_time);
             compile_end_time = std::max(prefill_compile_end_time, decode_compile_end_time);

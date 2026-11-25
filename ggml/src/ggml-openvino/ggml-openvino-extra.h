@@ -159,7 +159,6 @@ bool ggml_openvino_npu_fast_mask_enabled();
 // env-var name lives in one place; see docs/backend/OPENVINO.md for semantics.
 bool ggml_openvino_npu_hfa_prefill_enabled();
 bool ggml_openvino_npu_decode_unfold_enabled();
-bool ggml_openvino_npu_parallel_compile_enabled();
 // Static path (NPU, or any device with GGML_OPENVINO_FORCE_STATIC): prefill only the KV-writing part of the model
 // and compute the logits with one decode step. Pays off for models whose tail layers share earlier layers' KV
 // (Gemma 3n/4 E-series), where it skips those layers for prompt tokens. On by default (it only applies to graphs

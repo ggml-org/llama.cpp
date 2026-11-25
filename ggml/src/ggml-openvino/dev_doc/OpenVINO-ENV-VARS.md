@@ -75,7 +75,6 @@ These options are off by default. They are not validated for general use: some h
 | Variable | Device | Type | Default | Description |
 |---|---|---|---|---|
 | `GGML_OPENVINO_NPU_DECODE_UNFOLD` | NPU | Boolean | `0` | Set `NPUW_UNFOLD_IREQS=YES` on the decode graph only. An explicit `GGML_OPENVINO_NPUW_UNFOLD_IREQS` or `GGML_OPENVINO_NPU_CONFIG` value takes precedence. |
-| `GGML_OPENVINO_NPU_PARALLEL_COMPILE` | NPU | Boolean | `0` | Compile the prefill and decode graphs in parallel. The load is shorter and the host memory peak during compilation is higher. |
 | `GGML_OPENVINO_NPU_KV_ON_DEMAND` | NPU | Boolean | `0` | Keep the ggml KV buffer non-resident and bind storage for each layer that grows with the rows in use, so a large `-c` costs memory only for the context that is reached. K is stored head-major and V transposed, as OpenVINO GenAI does. `llama-perplexity` fails with it. |
 | `GGML_OPENVINO_NPU_REQUANT_POLICY` | NPU | String | `group-128` | Layout of requantized weights: `group-128` (`Q4_0_128`) or `channel-wise` (`Q4_0_C`, lower accuracy). |
 | `GGML_OPENVINO_GDN_DECOMPOSE_CHUNK` | all | Integer | `16` | Tokens in one chunk when `GGML_OPENVINO_GDN_DECOMPOSE` is on. A power of 2 from 2 to 128; other values use `16`. |
