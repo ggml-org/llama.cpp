@@ -4,10 +4,19 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
                                                               const autoparser::generation_params & inputs) {
     common_chat_params data;
 
-    const std::string GEN_PREFIX = "<|im_start|>assistant\n";
-
     data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
     data.generation_prompt = common_chat_template_generation_prompt_impl(tmpl, inputs);
+
+    // the turn marker in front of the role: <|im_start|> in the Qwen family, renamed by some models
+    // (Maxwell: <|maxwell_start|>); taken from the assistant header the template renders
+    std::string turn_start = "<|im_start|>";
+    {
+        const size_t pos = data.generation_prompt.find("assistant\n");
+        if (pos != std::string::npos && pos > 0) {
+            turn_start = data.generation_prompt.substr(0, pos);
+        }
+    }
+    const std::string GEN_PREFIX = turn_start + "assistant\n";
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
 
     auto supports_reasoning = tmpl.source().find("<think>") != std::string::npos;
@@ -30,11 +39,11 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
     }
 
     data.message_delimiters = {
-        { COMMON_CHAT_ROLE_ASSISTANT, "<|im_start|>assistant"             },
-        { COMMON_CHAT_ROLE_TOOL,      "<|im_start|>user\n<tool_response>" }, // Qwen3-Coder, Qwen3.5, Nemotron Nano 3
-        { COMMON_CHAT_ROLE_TOOL,      "<|im_start|>tool_response"         }, // StepFun-3.5-Flash
-        { COMMON_CHAT_ROLE_USER,      "<|im_start|>user"                  },
-        { COMMON_CHAT_ROLE_SYSTEM,    "<|im_start|>system"                },
+        { COMMON_CHAT_ROLE_ASSISTANT, turn_start + "assistant"             },
+        { COMMON_CHAT_ROLE_TOOL,      turn_start + "user\n<tool_response>" }, // Qwen3-Coder, Qwen3.5, Nemotron Nano 3
+        { COMMON_CHAT_ROLE_TOOL,      turn_start + "tool_response"         }, // StepFun-3.5-Flash
+        { COMMON_CHAT_ROLE_USER,      turn_start + "user"                  },
+        { COMMON_CHAT_ROLE_SYSTEM,    turn_start + "system"                },
     };
 
     auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();

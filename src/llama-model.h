@@ -259,6 +259,11 @@ struct llama_layer_nextn {
     struct ggml_tensor * hc_head_norm          = nullptr;
     struct ggml_tensor * hc_head_down          = nullptr;
     struct ggml_tensor * hc_head_up            = nullptr;
+
+    // maxwell-moe: the MTP block carries a full hyper-connection head
+    struct ggml_tensor * hc_head_fn            = nullptr;
+    struct ggml_tensor * hc_head_base          = nullptr;
+    struct ggml_tensor * hc_head_scale         = nullptr;
 };
 
 struct llama_layer_switch_lora {

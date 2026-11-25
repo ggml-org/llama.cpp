@@ -1193,6 +1193,88 @@ static std::vector<size_t> unicode_regex_split_custom_afmoe(const std::string & 
 }
 
 // regex: [^\n]+|[\n]+
+// Maxwell: [^\p{L}\p{N}]?[\p{Han}]+ -- a Han run with one optional preceding non-letter/non-number char
+static std::vector<size_t> unicode_regex_split_custom_maxwell_han(const std::string & text, const std::vector<size_t> & offsets) {
+    std::vector<size_t> bpe_offsets;
+    bpe_offsets.reserve(offsets.size());
+
+    const auto cpts = unicode_cpts_from_utf8(text);
+
+    size_t start = 0;
+    for (auto offset : offsets) {
+        const size_t offset_ini = start;
+        const size_t offset_end = start + offset;
+        assert(offset_end <= cpts.size());
+        start = offset_end;
+
+        size_t flush = offset_ini;
+        size_t pos = offset_ini;
+        while (pos < offset_end) {
+            size_t p = pos;
+            if (!unicode_cpt_is_han(cpts[p])) {
+                const auto flags = unicode_cpt_flags_from_cpt(cpts[p]);
+                if (flags.is_letter || flags.is_number) {
+                    pos++;
+                    continue;
+                }
+                p++;
+            }
+            const size_t han_start = p;
+            while (p < offset_end && unicode_cpt_is_han(cpts[p])) {
+                p++;
+            }
+            if (p > han_start) {
+                if (pos > flush) {
+                    bpe_offsets.push_back(pos - flush);
+                }
+                bpe_offsets.push_back(p - pos);
+                flush = p;
+                pos = p;
+            } else {
+                pos++;
+            }
+        }
+        if (offset_end > flush) {
+            bpe_offsets.push_back(offset_end - flush);
+        }
+    }
+
+    return bpe_offsets;
+}
+
+// Maxwell: [\u0E00-\u0E7F\u0E80-\u0EFF\u1000-\u109F\u1780-\u17FF]+ -- Thai/Lao/Myanmar/Khmer runs
+static bool unicode_cpt_is_maxwell_sea(uint32_t cpt) {
+    return (cpt >= 0x0E00 && cpt <= 0x0E7F) || (cpt >= 0x0E80 && cpt <= 0x0EFF) ||
+           (cpt >= 0x1000 && cpt <= 0x109F) || (cpt >= 0x1780 && cpt <= 0x17FF);
+}
+
+static std::vector<size_t> unicode_regex_split_custom_maxwell_sea(const std::string & text, const std::vector<size_t> & offsets) {
+    std::vector<size_t> bpe_offsets;
+    bpe_offsets.reserve(offsets.size());
+
+    const auto cpts = unicode_cpts_from_utf8(text);
+
+    size_t start = 0;
+    for (auto offset : offsets) {
+        const size_t offset_ini = start;
+        const size_t offset_end = start + offset;
+        assert(offset_end <= cpts.size());
+        start = offset_end;
+
+        size_t pos = offset_ini;
+        while (pos < offset_end) {
+            const bool is_sea = unicode_cpt_is_maxwell_sea(cpts[pos]);
+            const size_t run_start = pos;
+            while (pos < offset_end && unicode_cpt_is_maxwell_sea(cpts[pos]) == is_sea) {
+                pos++;
+            }
+            bpe_offsets.push_back(pos - run_start);
+        }
+    }
+
+    return bpe_offsets;
+}
+
 // splits text into runs of non-newline characters and runs of newline characters
 static std::vector<size_t> unicode_regex_split_custom_newlines(const std::string & text, const std::vector<size_t> & offsets) {
     std::vector<size_t> bpe_offsets;
@@ -1241,6 +1323,12 @@ static std::vector<size_t> unicode_regex_split_custom(const std::string & text, 
         // K2-Horizon: llama3 splitter with marks + ZWNJ/ZWJ inside letter runs
         // (the generic std::regex fallback cannot parse \p{..} on MSVC)
         bpe_offsets = unicode_regex_split_custom_k2_horizon(text, offsets);
+    } else if (regex_expr == "[^\\p{L}\\p{N}]?[\\p{Han}]+") {
+        // Maxwell: Han run with one optional preceding non-letter/non-number char
+        bpe_offsets = unicode_regex_split_custom_maxwell_han(text, offsets);
+    } else if (regex_expr == "[\\u0E00-\\u0E7F\\u0E80-\\u0EFF\\u1000-\\u109F\\u1780-\\u17FF]+") {
+        // Maxwell: Thai/Lao/Myanmar/Khmer runs
+        bpe_offsets = unicode_regex_split_custom_maxwell_sea(text, offsets);
     } else if (regex_expr == "\\p{Han}+") {
         // K2's first pattern - handle all K2 patterns together
         bpe_offsets = unicode_regex_split_custom_kimi_k2(text, offsets);
