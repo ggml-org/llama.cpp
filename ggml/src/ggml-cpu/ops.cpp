@@ -7969,24 +7969,33 @@ static void ggml_compute_forward_conv_2d_dw_whcn(
         float * dst_data = (float *)dst->data + i * p.dst_w * p.dst_h;
 
         for (int64_t dst_y = 0; dst_y < p.dst_h; ++dst_y) {
-            for (int64_t dst_x = 0; dst_x < p.dst_w; ++dst_x) {
+            float * dst_row = dst_data + dst_y * p.dst_w;
+            memset(dst_row, 0, p.dst_w * sizeof(float));
 
-                float sum = 0.0f;
-                for (int64_t knl_y = 0; knl_y < p.knl_h; ++knl_y) {
-                    const int64_t src_y = dst_y * p.stride_y + knl_y * p.dilation_y - p.pad_y;
-                    if (src_y < 0 || src_y >= p.src_h) {
+            for (int64_t knl_y = 0; knl_y < p.knl_h; ++knl_y) {
+                const int64_t src_y = dst_y * p.stride_y + knl_y * p.dilation_y - p.pad_y;
+                if (src_y < 0 || src_y >= p.src_h) {
+                    continue;
+                }
+                const float * src_row = src_data + src_y * p.src_w;
+                for (int64_t knl_x = 0; knl_x < p.knl_w; ++knl_x) {
+                    const float k = ggml_conv_2d_dw_knl_f32(knl_base, knl_offset + knl_y * p.knl_w + knl_x, knl_type);
+
+                    // range of dst_x where src_x = dst_x * stride_x + off is inside the row
+                    const int64_t off = knl_x * p.dilation_x - p.pad_x;
+                    const int64_t x0 = off < 0 ? (-off + p.stride_x - 1) / p.stride_x : 0;
+                    const int64_t x1 = off < p.src_w ? MIN(p.dst_w, (p.src_w - 1 - off) / p.stride_x + 1) : 0;
+                    if (x0 >= x1) {
                         continue;
                     }
-                    for (int64_t knl_x = 0; knl_x < p.knl_w; ++knl_x) {
-                        const int64_t src_x = dst_x * p.stride_x + knl_x * p.dilation_x - p.pad_x;
-                        if (src_x < 0 || src_x >= p.src_w) {
-                            continue;
+                    if (p.stride_x == 1) {
+                        ggml_vec_mad_f32(x1 - x0, dst_row + x0, src_row + x0 + off, k);
+                    } else {
+                        for (int64_t x = x0; x < x1; ++x) {
+                            dst_row[x] += k * src_row[x * p.stride_x + off];
                         }
-                        sum += ggml_conv_2d_dw_knl_f32(knl_base, knl_offset + knl_y * p.knl_w + knl_x, knl_type)
-                             * src_data[src_y * p.src_w + src_x];
                     }
                 }
-                dst_data[dst_y * p.dst_w + dst_x] = sum;
             }
         }
     }
