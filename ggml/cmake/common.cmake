@@ -56,8 +56,8 @@ function(ggml_get_system_arch)
     endif()
 endfunction()
 
-# Determines which FlashAttention vector kernel template instances to compile, returns them in OUT_SRCS.
-function(ggml_cuda_fattn_vec_instances DIR OUT_SRCS)
+# Determines which FlashAttention vector and tile kernel template instances to compile, returns them in OUT_SRCS.
+function(ggml_cuda_fattn_instances DIR OUT_SRCS)
     set(FA_TYPES q4_0 q4_1 q5_0 q5_1 q8_0 bf16 f16 f8_e4m3)
 
     string(TOLOWER "${GGML_CUDA_FA_QUANTS}" FA_QUANTS)
@@ -99,8 +99,41 @@ function(ggml_cuda_fattn_vec_instances DIR OUT_SRCS)
     endif()
     list(REMOVE_DUPLICATES FA_COMBINATIONS)
 
+    # Pairs in GGML_CUDA_FA_TILE_NATIVE_KV get tile instances. Which GPUs use them is decided by
+    # ggml_cuda_fattn_tile_get_config_quant. An empty list compiles f16 tile instances only.
+    # Each pair gets its own GGML_CUDA_FA_TILE_<K>_<V> macro. The aggregate macro stays 0/1 for the host early-out.
+    set(TILE_NATIVE_KV_PAIRS "")
+    string(TOLOWER "${GGML_CUDA_FA_TILE_NATIVE_KV}" FA_TILE_QUANTS)
+    string(STRIP "${FA_TILE_QUANTS}" FA_TILE_QUANTS)
+    string(REPLACE "," ";" FA_TILE_SELECTED "${FA_TILE_QUANTS}")
+    set(TILE_NATIVE_KV_CHECKED "")
+    foreach (COMBINATION IN LISTS FA_TILE_SELECTED)
+        string(STRIP "${COMBINATION}" COMBINATION)
+        if (COMBINATION STREQUAL "")
+            continue()
+        endif()
+        if (NOT COMBINATION MATCHES "^([a-z0-9_]+)-([a-z0-9_]+)$")
+            message(FATAL_ERROR "GGML_CUDA_FA_TILE_NATIVE_KV: \"${COMBINATION}\" is not a <type_K>-<type_V> combination")
+        endif()
+        set(TYPE_K ${CMAKE_MATCH_1})
+        set(TYPE_V ${CMAKE_MATCH_2})
+        foreach (TYPE ${TYPE_K} ${TYPE_V})
+            if (NOT TYPE IN_LIST FA_TYPES)
+                message(FATAL_ERROR
+                    "GGML_CUDA_FA_TILE_NATIVE_KV: unknown type \"${TYPE}\" in \"${COMBINATION}\", must be one of: ${FA_TYPES}")
+            endif()
+        endforeach()
+        list(APPEND TILE_NATIVE_KV_CHECKED ${TYPE_K}-${TYPE_V})
+        if (NOT "${TYPE_K}-${TYPE_V}" IN_LIST FA_COMBINATIONS)
+            message(WARNING
+                "GGML_CUDA_FA_TILE_NATIVE_KV: \"${TYPE_K}-${TYPE_V}\" is not in GGML_CUDA_FA_QUANTS, so no tile instances are compiled for it")
+        endif()
+    endforeach()
+    set(TILE_NATIVE_KV_PAIRS "${TILE_NATIVE_KV_CHECKED}")
+
     string(REPLACE ";" "," FA_QUANTS_DEFINE "${FA_QUANTS}")
     add_compile_definitions(GGML_CUDA_FA_QUANTS="${FA_QUANTS_DEFINE}")
+    set(TILE_NATIVE_KV 0)
     foreach (TYPE_V IN LISTS FA_TYPES)
         foreach (TYPE_K IN LISTS FA_TYPES)
             if ("${TYPE_K}-${TYPE_V}" IN_LIST FA_COMBINATIONS)
@@ -110,8 +143,21 @@ function(ggml_cuda_fattn_vec_instances DIR OUT_SRCS)
             endif()
             string(TOUPPER "GGML_CUDA_FA_${TYPE_K}_${TYPE_V}" COMBINATION_DEF)
             add_compile_definitions(${COMBINATION_DEF}=${COMPILED})
+
+            if (COMPILED AND "${TYPE_K}-${TYPE_V}" IN_LIST TILE_NATIVE_KV_PAIRS)
+                set(TILE_NATIVE_KV 1)
+            endif()
+            # f16 is always a tile pair. A quant pair is one only when it is in the list.
+            if (COMPILED AND ("${TYPE_K}-${TYPE_V}" STREQUAL "f16-f16" OR "${TYPE_K}-${TYPE_V}" IN_LIST TILE_NATIVE_KV_PAIRS))
+                set(TILE_COMPILED 1)
+            else()
+                set(TILE_COMPILED 0)
+            endif()
+            string(TOUPPER "GGML_CUDA_FA_TILE_${TYPE_K}_${TYPE_V}" TILE_DEF)
+            add_compile_definitions(${TILE_DEF}=${TILE_COMPILED})
         endforeach()
     endforeach()
+    add_compile_definitions(GGML_CUDA_FA_TILE_NATIVE_KV=${TILE_NATIVE_KV})
 
     message(STATUS "FlashAttention K-V type combinations: ${FA_COMBINATIONS}")
 
@@ -122,6 +168,17 @@ function(ggml_cuda_fattn_vec_instances DIR OUT_SRCS)
             message(FATAL_ERROR "FlashAttention template instance \"${SRC}\" does not exist")
         endif()
         list(APPEND SRCS "${SRC}")
+
+        # Other K/V types have no tile instance and are converted to f16 before the tile kernel runs.
+        if (COMBINATION STREQUAL "f16-f16" OR COMBINATION IN_LIST TILE_NATIVE_KV_PAIRS)
+            file(GLOB TILE_SRCS "${DIR}/template-instances/fattn-tile-instance-*-${COMBINATION}.cu")
+            if (NOT TILE_SRCS)
+                message(FATAL_ERROR "FlashAttention tile template instances for \"${COMBINATION}\" do not exist")
+            endif()
+            if (TILE_SRCS)
+                list(APPEND SRCS ${TILE_SRCS})
+            endif()
+        endif()
     endforeach()
 
     set(${OUT_SRCS} ${SRCS} PARENT_SCOPE)
