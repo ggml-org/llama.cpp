@@ -870,7 +870,7 @@ void ggml_cuda_op_mul_mat_vec_f(
     GGML_UNUSED_VARS(ctx, src1, dst, src1_ddq_i, src1_ncols, src1_padded_row_size);
 }
 
-bool ggml_cuda_should_use_mmvf(const ggml_tensor * src0, int cc, int warp_size, int64_t ne11) {
+bool ggml_cuda_should_use_mmvf(const ggml_tensor * src0, ggml_type type_src1, int cc, int warp_size, int64_t ne11, bool mul_mat_id) {
     const ggml_type type = src0->type;
     const int64_t * src0_ne = src0->ne;
     const size_t * src0_nb = src0->nb;
@@ -886,6 +886,21 @@ bool ggml_cuda_should_use_mmvf(const ggml_tensor * src0, int cc, int warp_size, 
 
     if (!ggml_cuda_is_aligned(src0, 2*ts)) {
         return false;
+    }
+
+    if (mul_mat_id) {
+        // FP8 experts on all GPUs, F32/F16/BF16 experts on AMD and with a BF16 src1, which MMF can not read
+        // (with an F32 src1 NVIDIA takes MMF where it supports the experts, otherwise the sorted fallback)
+        switch (type) {
+            case GGML_TYPE_F32:
+            case GGML_TYPE_F16:
+            case GGML_TYPE_BF16:
+                return ne11 <= MMVF_MAX_BATCH_SIZE && (GGML_CUDA_CC_IS_AMD(cc) || type_src1 == GGML_TYPE_BF16);
+            case GGML_TYPE_F8_E4M3:
+                return ne11 <= MMVF_MAX_BATCH_SIZE;
+            default:
+                return false;
+        }
     }
 
     switch (type) {

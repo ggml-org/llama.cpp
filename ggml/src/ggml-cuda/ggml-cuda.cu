@@ -2300,15 +2300,6 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up,
     return true;
 }
 
-// MUL_MAT_ID with F32/F16/BF16 experts takes MMVF (up to MMVF_MAX_BATCH_SIZE tokens) on AMD, and on NVIDIA for a BF16 src1,
-// which MMF can not read. On NVIDIA an F32 src1 takes MMF where MMF supports the experts, otherwise the sorted fallback.
-// MMVF reads src0 in pairs of values, so it needs an even number of columns and rows aligned to a pair.
-static bool ggml_cuda_mul_mat_id_use_mmvf_float(const ggml_tensor * src0, const ggml_tensor * src1, const int cc) {
-    return (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16) &&
-        (GGML_CUDA_CC_IS_AMD(cc) || src1->type == GGML_TYPE_BF16) &&
-        src0->ne[0] % 2 == 0 && ggml_cuda_is_aligned(src0, 2*ggml_type_size(src0->type));
-}
-
 static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor, const ggml_tensor * gate = nullptr) {
     ggml_tensor *       src0 = tensor->src[0];
     ggml_tensor *       src1 = tensor->src[1];
@@ -2324,14 +2315,12 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor, cons
     const int cc        = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
     const int64_t ne11  = is_mul_mat_id ? src1->ne[2] : src1->ne[1];
-    // with a BF16 src1, ggml_cuda_mul_mat_id runs MMVF for float experts of any size, so the fusion may as well
-    const auto use_mmvf = [&](const ggml_tensor * x) {
-        return ggml_cuda_should_use_mmvf(x, cc, warp_size, ne11) ||
-            (is_mul_mat_id && src1->type == GGML_TYPE_BF16 && ggml_cuda_mul_mat_id_use_mmvf_float(x, src1, cc));
-    };
-    use_mul_mat_vec_f = use_mul_mat_vec_f && use_mmvf(src0);
+    // a MUL_MAT_ID with an F32 src1 keeps the MUL_MAT rule here, with a BF16 src1 it takes MMVF where
+    // ggml_cuda_mul_mat_id does, since MMF can not read a BF16 src1
+    const bool mul_mat_id_rule = is_mul_mat_id && src1->type == GGML_TYPE_BF16;
+    use_mul_mat_vec_f = use_mul_mat_vec_f && ggml_cuda_should_use_mmvf(src0, src1->type, cc, warp_size, ne11, mul_mat_id_rule);
 
-    if (gate && !use_mmvf(gate->src[0])) {
+    if (gate && !ggml_cuda_should_use_mmvf(gate->src[0], src1->type, cc, warp_size, ne11, mul_mat_id_rule)) {
         return false;
     }
 
@@ -2569,7 +2558,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     const int cc        = ggml_cuda_info().devices[ctx.device].cc;
     const int warp_size = ggml_cuda_info().devices[ctx.device].warp_size;
 
-    if (ggml_cuda_should_use_mmvf(src0, cc, warp_size, ne11)) {
+    if (ggml_cuda_should_use_mmvf(src0, src1->type, cc, warp_size, ne11, /*mul_mat_id =*/ false)) {
         // The custom vector kernel can be used over batched cuBLAS GEMM.
         // But this is only faster for GPUs without tensor cores or with a thin src0 matrix (particularly KQV in attention)
         ggml_cuda_mul_mat_vec_f(ctx, src0, src1, nullptr, dst);
@@ -2579,7 +2568,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     if (ne01 == 1 && ne11 > MMVF_MAX_BATCH_SIZE && ne2 == 1 && ne3 == 1
             && src0->type == GGML_TYPE_F32
             && ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst)
-            && ggml_cuda_should_use_mmvf(src1, cc, warp_size, /*ne11 =*/ 1)) {
+            && ggml_cuda_should_use_mmvf(src1, src0->type, cc, warp_size, /*ne11 =*/ 1, /*mul_mat_id =*/ false)) {
         ggml_tensor dst_vec = *dst;
         dst_vec.ne[0] = ne11;
         dst_vec.ne[1] = 1;
@@ -2629,10 +2618,7 @@ static bool ggml_cuda_mul_mat_id_needs_sync(const ggml_tensor * dst, const int c
             if (dst->ne[2] <= get_mmvq_mmid_max_batch(src0->type, cc)) {
                 return false;
             }
-        } else if (src0->type == GGML_TYPE_F8_E4M3 &&
-                ggml_cuda_should_use_mmvf(src0, cc, warp_size, dst->ne[2])) {
-            return false;
-        } else if (ggml_cuda_mul_mat_id_use_mmvf_float(src0, src1, cc)) {
+        } else if (ggml_cuda_should_use_mmvf(src0, src1->type, cc, warp_size, dst->ne[2], /*mul_mat_id =*/ true)) {
             return false;
         }
     }
@@ -2678,11 +2664,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
                     ggml_cuda_mul_mat_vec_q(ctx, src0, src1, ids, dst);
                     return;
                 }
-            } else if (src0->type == GGML_TYPE_F8_E4M3 &&
-                    ggml_cuda_should_use_mmvf(src0, cc, warp_size, ne2)) {
-                ggml_cuda_mul_mat_vec_f(ctx, src0, src1, ids, dst);
-                return;
-            } else if (ggml_cuda_mul_mat_id_use_mmvf_float(src0, src1, cc)) {
+            } else if (ggml_cuda_should_use_mmvf(src0, src1->type, cc, warp_size, ne2, /*mul_mat_id =*/ true)) {
                 ggml_cuda_mul_mat_vec_f(ctx, src0, src1, ids, dst);
                 return;
             }
@@ -6431,7 +6413,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 const enum ggml_prec prec_src1 = ggml_prec_get_src(op, 1);
                 const bool fp8_id_mmvf = op->op == GGML_OP_MUL_MAT_ID &&
                     a->type == GGML_TYPE_F8_E4M3 && (b->type == GGML_TYPE_F32 || b->type == GGML_TYPE_BF16) && op->type == GGML_TYPE_F32 &&
-                    ggml_cuda_should_use_mmvf(a, cc_dev, ggml_cuda_info().devices[dev_ctx->device].warp_size, b->ne[2]);
+                    ggml_cuda_should_use_mmvf(a, b->type, cc_dev, ggml_cuda_info().devices[dev_ctx->device].warp_size, b->ne[2],
+                        /*mul_mat_id =*/ true);
                 if (prec_src1 == GGML_PREC_F32 && !fp8_id_mmvf && (op->op == GGML_OP_MUL_MAT_ID || !f32_src1_ok || a->type != GGML_TYPE_F32)) {
                     return false;
                 }
