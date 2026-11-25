@@ -7,18 +7,21 @@
 
 import { ToolsService } from './tools.service';
 import {
+	BASE64_IMAGE_URI_REGEX,
 	FILE_EXTENSION_SEPARATOR,
 	FILE_PATH_SEPARATOR_REGEX,
 	NEWLINE,
 	PREFIX_FILE,
 	PREFIX_MIME,
 	PREFIX_SIZE,
+	READ_MEDIA_ATTACHMENT_PREFIX,
 	READ_MEDIA_AUDIO_MIME,
 	READ_MEDIA_IMAGE_MIME,
 	RESP_TYPE_BASE64
 } from '#lib/constants/index.ts';
 import { BuiltInTool, ToolResponseField } from '#lib/enums/index.ts';
-import type { ToolExecutionResult } from '#lib/types/index.ts';
+import type { DatabaseMessage, ToolExecutionResult } from '#lib/types/index.ts';
+import { findReferencedImage } from '#lib/utils/image-eviction.ts';
 
 /** Modalities of the model the tool call runs for. */
 export interface ReadMediaCapabilities {
@@ -43,6 +46,9 @@ function fileExtension(path: string): string {
  * an image or audio attachment on the tool result message, which is what makes
  * the model perceive the file instead of reading a wall of base64.
  *
+ * An `attachment:` path names an image attached to the conversation. The
+ * browser holds its bytes, so no call goes to the server.
+ *
  * Living in the browser is what lets it exist only for models that can
  * actually use the result - the server has no idea which model is selected.
  *
@@ -54,12 +60,17 @@ export class ReadMediaService {
 		params: Record<string, unknown>,
 		capabilities: ReadMediaCapabilities,
 		signal?: AbortSignal,
-		cwd?: string
+		cwd?: string,
+		loadMessages?: () => Promise<DatabaseMessage[]>
 	): Promise<ToolExecutionResult> {
 		const path = typeof params.path === 'string' ? params.path : '';
 
 		if (!path) {
 			return { content: 'Error: missing "path" argument.', isError: true };
+		}
+
+		if (path.startsWith(READ_MEDIA_ATTACHMENT_PREFIX)) {
+			return ReadMediaService.readAttachment(path, capabilities, (await loadMessages?.()) ?? []);
 		}
 
 		const extension = fileExtension(path);
@@ -112,6 +123,33 @@ export class ReadMediaService {
 			`${PREFIX_SIZE}${sizeBytes} bytes`,
 			`${PREFIX_MIME}${resolvedMime}`,
 			`data:${resolvedMime};base64,${base64}`
+		].join(NEWLINE);
+
+		return { content, isError: false };
+	}
+
+	/** An image attached to the conversation, in the same result shape as a file. */
+	private static readAttachment(
+		reference: string,
+		capabilities: ReadMediaCapabilities,
+		messages: DatabaseMessage[]
+	): ToolExecutionResult {
+		if (!capabilities.vision) {
+			return { content: 'Error: the current model cannot perceive images.', isError: true };
+		}
+
+		const image = findReferencedImage(reference, messages);
+		const mimeType = image?.base64Url.match(BASE64_IMAGE_URI_REGEX)?.[1];
+
+		if (!image || !mimeType) {
+			return { content: `Error: no image attachment found for ${reference}.`, isError: true };
+		}
+
+		const content = [
+			`${PREFIX_FILE}${image.name}`,
+			`${PREFIX_SIZE}${image.size ?? 0} bytes`,
+			`${PREFIX_MIME}${mimeType}`,
+			image.base64Url
 		].join(NEWLINE);
 
 		return { content, isError: false };

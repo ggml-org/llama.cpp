@@ -21,7 +21,13 @@ import {
 	type ToolContext,
 	type ToolResult
 } from '@ggml-org/llama-harness';
-import { DEFAULT_AGENTIC_CONFIG, NEWLINE } from '#lib/constants/index.ts';
+import {
+	DEFAULT_AGENTIC_CONFIG,
+	IMAGE_EVICTION,
+	NEWLINE,
+	READ_MEDIA_TOOL_NAME,
+	SETTINGS_KEYS
+} from '#lib/constants/index.ts';
 import {
 	AUDIO_MIME_TO_EXTENSION,
 	DATA_URI_BASE64_REGEX,
@@ -63,11 +69,7 @@ import type {
 } from '#lib/types/agentic.js';
 import type { ApiChatMessageData } from '#lib/types/api.js';
 import type { ChatMessagePromptProgress, ChatMessageTimings } from '#lib/types/chat.js';
-import type {
-	DatabaseMessageExtra,
-	DatabaseMessageExtraAudioFile,
-	DatabaseMessageExtraImageFile
-} from '#lib/types/database.js';
+import type { DatabaseMessage, DatabaseMessageExtra } from '#lib/types/database.js';
 import type {
 	AgenticConfig,
 	AgenticFlowParams,
@@ -79,13 +81,14 @@ import type {
 } from '#lib/types/index.ts';
 import type { OpenAIToolDefinition } from '#lib/types/mcp.js';
 import { createAsyncQueue } from '#lib/utils/async-queue.ts';
+import { evictOldImages } from '#lib/utils/image-eviction.ts';
 import {
 	executeBrowserInfoTool,
 	executeGetDatetimeTool,
-	getAudioInputFormat,
 	isAbortError,
 	throwIfAborted
 } from '#lib/utils/index.ts';
+import { audioContentPart, imageContentPart } from '#lib/utils/media-content-parts.ts';
 import { SvelteMap } from 'svelte/reactivity';
 
 function createDefaultSession(): AgenticSession {
@@ -203,6 +206,19 @@ class AgenticStore {
 	 */
 	consumePendingSteeringMessage(conversationId: string): SteeringMessage | null {
 		return this.gates.consumePendingSteeringMessage(conversationId);
+	}
+
+	/**
+	 * A branch as a request under this tool policy reads it: the images of old
+	 * turns are left out when the model can load them again with read_media.
+	 * Every request of the chat reads this list, so they share the prefix the server cached.
+	 */
+	async contextFor<T extends ApiChatMessageData | DatabaseMessage>(
+		messages: T[],
+		model?: string | null,
+		toolPolicy?: AgenticToolPolicy
+	): Promise<T[]> {
+		return this.withoutOldImages(messages, await this.toolsFor(toolPolicy), model);
 	}
 
 	getActiveSessions(): Array<{ conversationId: string; session: AgenticSession }> {
@@ -363,7 +379,7 @@ class AgenticStore {
 		console.log(`[AgenticStore] Starting agentic flow with ${tools.length} tools`);
 
 		const normalizedMessages: ApiChatMessageData[] = await ChatService.normalizeMessagesForApi(
-			messages,
+			this.withoutOldImages(messages, tools, options.model),
 			options.model
 		);
 
@@ -427,31 +443,27 @@ class AgenticStore {
 	/**
 	 * The media of a tool result as content parts, only what the model can read.
 	 */
-	private buildContentParts(
+	private async buildContentParts(
 		attachments: DatabaseMessageExtra[],
 		effectiveModel: string
-	): ContentPart[] {
+	): Promise<ContentPart[]> {
 		const contentParts: ContentPart[] = [];
+		const maxMegapixels = settingsStore.getConfig(SETTINGS_KEYS.MAX_IMAGE_RESOLUTION);
 
 		for (const attachment of attachments) {
 			if (attachment.type === AttachmentType.AUDIO) {
 				if (modelsStore.props.modelSupportsAudio(effectiveModel)) {
-					contentParts.push({
-						input_audio: {
-							data: (attachment as DatabaseMessageExtraAudioFile).base64Data,
-							format: getAudioInputFormat((attachment as DatabaseMessageExtraAudioFile).mimeType)
-						},
-						type: ContentPartType.INPUT_AUDIO
-					});
+					contentParts.push(audioContentPart(attachment));
 				}
 			} else if (attachment.type === AttachmentType.IMAGE) {
 				if (modelsStore.props.modelSupportsVision(effectiveModel)) {
-					contentParts.push({
-						image_url: {
-							url: (attachment as DatabaseMessageExtraImageFile).base64Url
-						},
-						type: ContentPartType.IMAGE_URL
-					});
+					contentParts.push(
+						// a tool can return a format the cap cannot draw: send it as it is
+						await imageContentPart(attachment, maxMegapixels).catch(() => ({
+							image_url: { url: attachment.base64Url },
+							type: ContentPartType.IMAGE_URL
+						}))
+					);
 				} else {
 					console.info(
 						`[AgenticStore] Skipping image attachment (model "${effectiveModel}" does not support vision)`
@@ -540,7 +552,8 @@ class AgenticStore {
 						vision: modelsStore.props.modelSupportsVision(effectiveModel)
 					},
 					signal,
-					conversationsStore.activeConversation?.cwd
+					conversationsStore.activeConversation?.cwd,
+					() => conversationsStore.getConversationMessages(conversationId)
 				);
 			}
 
@@ -832,7 +845,7 @@ class AgenticStore {
 			details: attachments,
 			durationMs,
 			isError: execution.isError,
-			parts: this.buildContentParts(attachments, effectiveModel)
+			parts: await this.buildContentParts(attachments, effectiveModel)
 		};
 	}
 
@@ -994,6 +1007,20 @@ class AgenticStore {
 		const session = this.getSession(conversationId);
 
 		this.sessions.set(conversationId, { ...session, ...update });
+	}
+
+	private withoutOldImages<T extends ApiChatMessageData | DatabaseMessage>(
+		messages: T[],
+		tools: OpenAIToolDefinition[],
+		model?: string | null
+	): T[] {
+		const effectiveModel = model || modelsStore.models[0]?.model || '';
+		// without read_media an image that left the context is lost
+		const canLoadAgain =
+			tools.some((tool) => tool.function.name === READ_MEDIA_TOOL_NAME) &&
+			modelsStore.props.modelSupportsVision(effectiveModel);
+
+		return canLoadAgain ? evictOldImages(messages, IMAGE_EVICTION.KEEP_TURNS) : messages;
 	}
 }
 

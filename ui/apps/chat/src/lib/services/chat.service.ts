@@ -6,8 +6,6 @@
  * warming. No reactive state; consumed by chatStore and its managers.
  */
 
-import { getAudioInputFormat } from '../utils/audio-format';
-import { capImageDataURLSize } from '../utils/cap-img-size';
 import { dropIncompleteToolCalls } from '../utils/incomplete-tool-calls';
 import {
 	API_CHAT,
@@ -49,6 +47,7 @@ import { isAbortError } from '#lib/utils/abort.ts';
 import { ApiError } from '#lib/utils/api-fetch.ts';
 import { getAuthHeaders, getJsonHeaders } from '#lib/utils/api-headers.ts';
 import { formatAttachmentText } from '#lib/utils/formatters.ts';
+import { audioContentPart, imageContentPart } from '#lib/utils/media-content-parts.ts';
 import { streamIdentity } from '#lib/utils/stream-identity.ts';
 
 /** How stored messages are shaped for the model a request goes to. */
@@ -232,15 +231,9 @@ export class ChatService {
 		);
 
 		for (const image of imageFiles) {
-			const maxImageResolution = settingsStore.getConfig(SETTINGS_KEYS.MAX_IMAGE_RESOLUTION);
-			// Caps the resolution and bakes the jpeg exif orientation in one pass,
-			// untouched images pass through as is
-			const base64Url = await capImageDataURLSize(image.base64Url, maxImageResolution);
-
-			contentParts.push({
-				image_url: { url: base64Url },
-				type: ContentPartType.IMAGE_URL
-			});
+			contentParts.push(
+				await imageContentPart(image, settingsStore.getConfig(SETTINGS_KEYS.MAX_IMAGE_RESOLUTION))
+			);
 		}
 
 		const audioFiles = message.extra.filter(
@@ -263,13 +256,7 @@ export class ChatService {
 				continue;
 			}
 
-			contentParts.push({
-				input_audio: {
-					data: audio.base64Data,
-					format: getAudioInputFormat(audio.mimeType)
-				},
-				type: ContentPartType.INPUT_AUDIO
-			});
+			contentParts.push(audioContentPart(audio));
 		}
 
 		if (message.content) {

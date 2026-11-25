@@ -365,6 +365,7 @@ export {
 	lastContextBearingMessage,
 	sliceAtLastCompaction
 } from './compaction';
+export { evictOldImages, findReferencedImage } from './image-eviction';
 
 // Sandbox tool definition
 // SANDBOX_TOOL_DEFINITION is deprecated; kept for backward compatibility.

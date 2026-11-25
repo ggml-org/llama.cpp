@@ -1481,9 +1481,15 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 	): Promise<ChatMessageTimings | null> {
 		const allMessages = await conversationsStore.getConversationMessages(convId);
 		const branchPath = [...filterByLeafNodeId(allMessages, leafId, false)];
+		const toolPolicy = this.toolPolicy();
+		const context = await agenticStore.contextFor(
+			sliceAtLastCompaction(branchPath),
+			model,
+			toolPolicy
+		);
 		const request = await agenticStore.requestFor(
-			await ChatService.normalizeMessagesForApi(sliceAtLastCompaction(branchPath), model),
-			this.toolPolicy()
+			await ChatService.normalizeMessagesForApi(context, model),
+			toolPolicy
 		);
 
 		return ChatService.preEncode(
@@ -1647,9 +1653,12 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			// The request is the one the chat sends, its options, tools and
 			// message shaping, cut before the preserved steps: the server
 			// reuses the prefix it cached and only the instruction is new.
+			const toolPolicy = this.toolPolicy();
+			// which images are out depends on the whole list, so they go before the cut
+			const context = await agenticStore.contextFor(source, effectiveModel, toolPolicy);
 			const request = await agenticStore.requestFor(
-				await ChatService.normalizeMessagesForApi(source.slice(0, cut), effectiveModel),
-				this.toolPolicy()
+				await ChatService.normalizeMessagesForApi(context.slice(0, cut), effectiveModel),
+				toolPolicy
 			);
 			const configValue = settingsStore.config;
 			const compactionPrompt =

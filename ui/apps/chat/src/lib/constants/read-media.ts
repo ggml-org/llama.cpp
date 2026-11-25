@@ -32,6 +32,31 @@ export const READ_MEDIA_AUDIO_MIME: Record<string, string> = {
 } as const;
 
 /**
+ * A `path` with this prefix names an image attached to the conversation, not a file on the server.
+ * The image leaves the context once its turn is old, and this is how the model loads it again.
+ */
+export const READ_MEDIA_ATTACHMENT_PREFIX = 'attachment:';
+
+/** `attachment:<start of the message id>/<position among the attachments of the message, from 1>` */
+export const READ_MEDIA_ATTACHMENT_REGEX = new RegExp(
+	`^${READ_MEDIA_ATTACHMENT_PREFIX}([^/]+)/(\\d+)$`
+);
+
+// short, so a small model copies the reference without a mistake
+export const READ_MEDIA_ATTACHMENT_ID_LENGTH = 8;
+
+export const IMAGE_EVICTION = {
+	// Turns whose images stay in the context. The cut moves once per this many
+	// turns, not every turn: each move makes the server process the turns after it again.
+	KEEP_TURNS: 4
+} as const;
+
+/** What the model reads in place of an image that left the context. */
+export function buildEvictedImageNote(name: string, reference: string): string {
+	return `[Image "${name}" is no longer in the context. To view it again, call ${READ_MEDIA_TOOL_NAME} with path "${reference}".]`;
+}
+
+/**
  * Build the read_media tool definition for the modalities the active model has.
  * At least one of the two flags must be true, otherwise the tool is not offered
  * at all - a model that cannot see or hear has nothing to do with the bytes.
@@ -53,7 +78,7 @@ export function buildReadMediaToolDefinition(
 			parameters: {
 				properties: {
 					path: {
-						description: 'Path to the media file',
+						description: `Path to the media file, or the "${READ_MEDIA_ATTACHMENT_PREFIX}" reference of an image that left the context`,
 						type: JsonSchemaType.STRING
 					}
 				},

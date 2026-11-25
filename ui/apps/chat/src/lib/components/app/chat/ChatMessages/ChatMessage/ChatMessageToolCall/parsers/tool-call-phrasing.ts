@@ -10,6 +10,7 @@ import {
 	type ToolCallResolver
 } from '@ggml-org/llama-harness';
 import {
+	READ_MEDIA_ATTACHMENT_PREFIX,
 	TOOL_CALL_PHRASING,
 	TOOL_SEARCH_LOAD_PHRASING,
 	TOOL_SEARCH_PHRASING_NAME,
@@ -28,11 +29,15 @@ function stringArg(args: Record<string, unknown> | null, key: string): string | 
 
 const chatToolResolver: ToolCallResolver = (call) => {
 	switch (call.name) {
-		case BuiltInTool.BROWSER_READ_MEDIA:
+		case BuiltInTool.BROWSER_READ_MEDIA: {
+			const path = toolCallPath(call);
+
 			return {
 				phrasing: TOOL_CALL_PHRASING[call.name],
-				target: fileNameFromPath(toolCallPath(call))
+				// an attachment reference holds no file name
+				target: path?.startsWith(READ_MEDIA_ATTACHMENT_PREFIX) ? undefined : fileNameFromPath(path)
 			};
+		}
 
 		case BuiltInTool.BROWSER_SEARCH_CHATS: {
 			const byMatches = call.args()?.by_matches;

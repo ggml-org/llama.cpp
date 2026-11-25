@@ -7,7 +7,22 @@ vi.mock('#lib/services/database.service.ts', () => ({
 	DatabaseService: {}
 }));
 
-import { BuiltInTool, MessageRole, ToolPermissionDecision, ToolSource } from '#lib/enums/index.ts';
+// the cap draws on a canvas, which the unit tests do not have
+let capImage: (url: string) => Promise<string>;
+
+vi.mock('#lib/utils/cap-img-size.ts', () => ({
+	capImageDataURLSize: (url: string) => capImage(url)
+}));
+
+import { IMAGE_EVICTION } from '#lib/constants/index.ts';
+import {
+	AttachmentType,
+	BuiltInTool,
+	MessageRole,
+	MessageType,
+	ToolPermissionDecision,
+	ToolSource
+} from '#lib/enums/index.ts';
 import { ChatService } from '#lib/services/chat.service.ts';
 import { ToolsService } from '#lib/services/tools.service.ts';
 import { agenticStore } from '#lib/stores/agentic/index.svelte.ts';
@@ -109,8 +124,27 @@ function runFlow(callbacks: AgenticFlowCallbacks, signal?: AbortSignal) {
 	});
 }
 
+// enough turns for the first one to be far behind; its user message holds an image
+function storedTurns(): DatabaseMessage[] {
+	return Array.from({ length: 2 * IMAGE_EVICTION.KEEP_TURNS }, (_, i) => ({
+		children: [],
+		content: `question ${i}`,
+		convId: CONV_ID,
+		extra:
+			i === 0
+				? [{ base64Url: IMAGE_DATA_URI, name: 'cat.png', type: AttachmentType.IMAGE }]
+				: undefined,
+		id: `user-${i}-id`,
+		parent: null,
+		role: MessageRole.USER,
+		timestamp: 0,
+		type: MessageType.TEXT
+	})) as DatabaseMessage[];
+}
+
 beforeEach(() => {
 	vi.restoreAllMocks();
+	capImage = async (url) => url;
 	agenticStore.clearSession(CONV_ID);
 	vi.spyOn(console, 'log').mockImplementation(() => {});
 	vi.spyOn(ChatService, 'normalizeMessagesForApi').mockImplementation(
@@ -305,6 +339,82 @@ describe('agentic flow', () => {
 			role: 'tool',
 			tool_call_id: 'call_0'
 		});
+	});
+
+	it('caps the image of a tool result for the model and stores it as it came', async () => {
+		const capped = 'data:image/png;base64,BBBB';
+
+		capImage = async () => capped;
+		mockTools(ToolSource.SERVER, 'screenshot');
+		vi.spyOn(ToolsService, 'executeTool').mockResolvedValue({
+			content: IMAGE_DATA_URI,
+			isError: false
+		});
+		vi.spyOn(modelsStore.props, 'modelSupportsVision').mockReturnValue(true);
+
+		const requests = mockTurns(
+			(options) => options.onToolCallChunk?.(toolCalls('screenshot')),
+			(options) => options.onChunk?.('here')
+		);
+		const { callbacks, named } = recorder();
+
+		await runFlow(callbacks);
+
+		expect(named('createToolResultMessage')[0][3]).toMatchObject([{ base64Url: IMAGE_DATA_URI }]);
+		expect(requests[1][2].content).toMatchObject([{}, { image_url: { url: capped } }]);
+	});
+
+	it('sends the image of a tool result as it is when the cap fails', async () => {
+		capImage = async () => {
+			throw new Error('Unsupported image MIME type');
+		};
+		mockTools(ToolSource.SERVER, 'screenshot');
+		vi.spyOn(ToolsService, 'executeTool').mockResolvedValue({
+			content: IMAGE_DATA_URI,
+			isError: false
+		});
+		vi.spyOn(modelsStore.props, 'modelSupportsVision').mockReturnValue(true);
+
+		const requests = mockTurns(
+			(options) => options.onToolCallChunk?.(toolCalls('screenshot')),
+			(options) => options.onChunk?.('here')
+		);
+
+		await runFlow(recorder().callbacks);
+
+		expect(requests[1][2].content).toMatchObject([{}, { image_url: { url: IMAGE_DATA_URI } }]);
+	});
+
+	it('leaves the images of old turns out when read_media can load them again', async () => {
+		mockTools(ToolSource.BROWSER, BuiltInTool.BROWSER_READ_MEDIA);
+		vi.spyOn(modelsStore.props, 'modelSupportsVision').mockReturnValue(true);
+		mockTurns((options) => options.onChunk?.('ok'));
+
+		await agenticStore.runAgenticFlow({
+			callbacks: recorder().callbacks,
+			conversationId: CONV_ID,
+			messages: storedTurns()
+		});
+
+		const [sent] = vi.mocked(ChatService.normalizeMessagesForApi).mock.calls[0];
+
+		expect(sent[0]).toMatchObject({ extra: [] });
+		expect(sent[0].content).toContain('attachment:user-0-i/1');
+		expect(await agenticStore.contextFor(storedTurns(), 'model')).toEqual(sent);
+	});
+
+	it('keeps the images of old turns when nothing can load them again', async () => {
+		const messages = storedTurns();
+
+		mockTools(ToolSource.SERVER, 'screenshot');
+		vi.spyOn(modelsStore.props, 'modelSupportsVision').mockReturnValue(true);
+
+		expect(await agenticStore.contextFor(messages, 'model')).toBe(messages);
+
+		mockTools(ToolSource.BROWSER, BuiltInTool.BROWSER_READ_MEDIA);
+		vi.spyOn(modelsStore.props, 'modelSupportsVision').mockReturnValue(false);
+
+		expect(await agenticStore.contextFor(messages, 'model')).toBe(messages);
 	});
 
 	it('leaves the flow when a steering message is queued, skipping the tool calls left', async () => {
