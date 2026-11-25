@@ -869,7 +869,8 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_sub, kernel_sub_row, kernel_sub_f16, kernel_sub_row_f16;
     cl_kernel kernel_add_id;
     cl_kernel kernel_add_id_add_id_swiglu_oai;
-    cl_kernel kernel_scale_f32, kernel_scale_f32_4;
+    cl_kernel kernel_scale_f32, kernel_scale_f32_4, kernel_scale_f32_nc;
+    cl_kernel kernel_scale_f16, kernel_scale_f16_4, kernel_scale_f16_nc;
     cl_kernel kernel_sqr_cont_f32, kernel_sqr_cont_f32_4, kernel_sqr_cont_f16, kernel_sqr_cont_f16_4;
     cl_kernel kernel_sqrt_cont_f32, kernel_sqrt_cont_f32_4, kernel_sqrt_cont_f16, kernel_sqrt_cont_f16_4;
     cl_kernel kernel_mean_f32, kernel_mean_f32_4;
@@ -4690,8 +4691,12 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_scale_f32   = clCreateKernel(prog, "kernel_scale_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_scale_f32_4 = clCreateKernel(prog, "kernel_scale_f32_4", &err), err));
+        CL_CHECK((backend_ctx->kernel_scale_f32    = clCreateKernel(prog, "kernel_scale_f32", &err), err));
+        CL_CHECK((backend_ctx->kernel_scale_f32_4  = clCreateKernel(prog, "kernel_scale_f32_4", &err), err));
+        CL_CHECK((backend_ctx->kernel_scale_f32_nc = clCreateKernel(prog, "kernel_scale_f32_nc", &err), err));
+        CL_CHECK((backend_ctx->kernel_scale_f16    = clCreateKernel(prog, "kernel_scale_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_scale_f16_4  = clCreateKernel(prog, "kernel_scale_f16_4", &err), err));
+        CL_CHECK((backend_ctx->kernel_scale_f16_nc = clCreateKernel(prog, "kernel_scale_f16_nc", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -12826,7 +12831,8 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                     op->type == op->src[1]->type;
         }
         case GGML_OP_SCALE:
-            return op->src[0]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]);
+            return (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
+                   op->src[0]->type == op->type && ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_ADD:
             if (op->type == GGML_TYPE_F16) {
                 const bool src0_ok = op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32;
@@ -39796,54 +39802,75 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
 }
 
 static void ggml_cl_scale(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-    GGML_ASSERT(src0);
-    GGML_ASSERT(src0->extra);
-    GGML_ASSERT(dst);
-    GGML_ASSERT(dst->extra);
+    GGML_ASSERT(src0 && src0->extra);
+    GGML_ASSERT(dst && dst->extra);
     GGML_UNUSED(src1);
 
-    GGML_ASSERT(ggml_is_contiguous(src0));
+    auto * backend_ctx = (ggml_backend_opencl_context *) backend->context;
+    const auto * extra0 = (const ggml_tensor_extra_cl *) src0->extra;
+    const auto * extrad = (const ggml_tensor_extra_cl *) dst->extra;
 
-    ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-
-    float scale;
-    float bias;
-    memcpy(&scale, ((int32_t *) dst->op_params) + 0, sizeof(float));
-    memcpy(&bias,  ((int32_t *) dst->op_params) + 1, sizeof(float));
-
-    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
-    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
-
-    cl_ulong offset0 = extra0->offset + src0->view_offs;
-    cl_ulong offsetd = extrad->offset + dst->view_offs;
+    const cl_ulong offset0 = extra0->offset + src0->view_offs;
+    const cl_ulong offsetd = extrad->offset + dst->view_offs;
+    const float scale = ggml_get_op_params_f32(dst, 0);
+    const float bias  = ggml_get_op_params_f32(dst, 1);
+    const bool is_f16 = src0->type == GGML_TYPE_F16;
 
     cl_kernel kernel;
 
-    int n = ggml_nelements(dst);
+    if (ggml_is_contiguous(src0) && ggml_is_contiguous(dst)) {
+        size_t n = ggml_nelements(dst);
+        const size_t alignment = 4 * ggml_element_size(src0);
+        if (n % 4 == 0 && offset0 % alignment == 0 && offsetd % alignment == 0) {
+            kernel = is_f16 ? backend_ctx->kernel_scale_f16_4 : backend_ctx->kernel_scale_f32_4;
+            n /= 4;
+        } else {
+            kernel = is_f16 ? backend_ctx->kernel_scale_f16 : backend_ctx->kernel_scale_f32;
+        }
 
-    if (n % 4 == 0) {
-        kernel = backend_ctx->kernel_scale_f32_4;
-        n /= 4;
+        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
+        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));
+        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extrad->data_device));
+        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_ulong), &offsetd));
+        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(float),    &scale));
+        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(float),    &bias));
+
+        size_t global_work_size[] = {n, 1, 1};
+        size_t local_work_size[]  = {64, 1, 1};
+        size_t * local_work_size_ptr = local_work_size;
+        if (n % local_work_size[0] != 0 && !backend_ctx->non_uniform_workgroups) {
+            local_work_size_ptr = nullptr;
+        }
+
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size_ptr, dst);
     } else {
-        kernel = backend_ctx->kernel_scale_f32;
+        kernel = is_f16 ? backend_ctx->kernel_scale_f16_nc : backend_ctx->kernel_scale_f32_nc;
+        const cl_ulong ne00 = src0->ne[0];
+        GGML_TENSOR_LOCALS(cl_ulong, nb0, src0, nb);
+        GGML_TENSOR_LOCALS(cl_ulong, nb,  dst,  nb);
+
+        CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
+        CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
+        CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extrad->data_device));
+        CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offsetd));
+        CL_CHECK(clSetKernelArg(kernel,  4, sizeof(float),    &scale));
+        CL_CHECK(clSetKernelArg(kernel,  5, sizeof(float),    &bias));
+        CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_ulong), &ne00));
+        CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &nb00));
+        CL_CHECK(clSetKernelArg(kernel,  8, sizeof(cl_ulong), &nb01));
+        CL_CHECK(clSetKernelArg(kernel,  9, sizeof(cl_ulong), &nb02));
+        CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong), &nb03));
+        CL_CHECK(clSetKernelArg(kernel, 11, sizeof(cl_ulong), &nb0));
+        CL_CHECK(clSetKernelArg(kernel, 12, sizeof(cl_ulong), &nb1));
+        CL_CHECK(clSetKernelArg(kernel, 13, sizeof(cl_ulong), &nb2));
+        CL_CHECK(clSetKernelArg(kernel, 14, sizeof(cl_ulong), &nb3));
+
+        const size_t nth = 64;
+        size_t global_work_size[] = {(size_t)src0->ne[1] * nth, (size_t)src0->ne[2], (size_t)src0->ne[3]};
+        size_t local_work_size[]  = {nth, 1, 1};
+
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
     }
-
-    CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
-    CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));
-    CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extrad->data_device));
-    CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_ulong), &offsetd));
-    CL_CHECK(clSetKernelArg(kernel, 4, sizeof(float),    &scale));
-    CL_CHECK(clSetKernelArg(kernel, 5, sizeof(float),    &bias));
-
-    size_t global_work_size[] = {(size_t)n, 1, 1};
-    size_t local_work_size[] = {64, 1, 1};
-
-    size_t * local_work_size_ptr = local_work_size;
-    if (n % 64 != 0 && !backend_ctx->non_uniform_workgroups) {
-        local_work_size_ptr = nullptr;  // Let driver choose the work-group sizes.
-    }
-
-    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size_ptr, dst);
 }
 
 static void ggml_cl_cpy(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
