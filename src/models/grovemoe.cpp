@@ -145,10 +145,13 @@ llama_model_grovemoe::graph::graph(const llm_graph_params & params) :
                 il,
                 probs);
         cb(moe_out, "ffn_moe_out", il);
+
+        // the adjugate experts take the same input as the experts above, not their output
+        ggml_tensor * moe_inp = cur;
         cur = moe_out;
 
         // TODO: Only do the expert selection and weights once
-        moe_out = build_moe_ffn(cur,
+        moe_out = build_moe_ffn(moe_inp,
                     nullptr,
                     model.layers[il].ffn_up_chexps,
                     model.layers[il].ffn_gate_chexps,
