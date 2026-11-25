@@ -63,6 +63,21 @@ describe('agentic mode', () => {
 		expect(agenticMode.enabled).toBe(true);
 	});
 
+	it('is on with the browser tools alone for a server started with --ui-agent', async () => {
+		vi.resetModules();
+
+		const { agenticMode } = await import('#lib/stores/agentic-mode.svelte.ts');
+		const { ToolSource } = await import('#lib/enums/index.ts');
+		const { serverStore } = await import('#lib/stores/llama-server.svelte.ts');
+		const { toolsStore } = await import('#lib/stores/tools.svelte.ts');
+
+		serverStore.props = { ui_agent: true } as typeof serverStore.props;
+
+		expect(agenticMode.enabled).toBe(true);
+		expect(toolsStore.allTools.length).toBeGreaterThan(0);
+		expect(toolsStore.allTools.every((tool) => tool.source === ToolSource.BROWSER)).toBe(true);
+	});
+
 	it('leaves the Tools and Agentic settings and the MCP entry out when it is off', async () => {
 		const c = await loadConstants();
 		const slugs = (agentic: boolean) => c.settingsChatSections(agentic).map((s) => s.slug);

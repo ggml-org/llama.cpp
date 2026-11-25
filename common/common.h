@@ -701,6 +701,7 @@ struct common_params {
 
     // UI configs
     bool ui = true;
+    bool ui_agent = false; // agent mode in Llama Chat, no server tools and no MCP proxy
     bool ui_mcp_proxy = false;
     bool ui_mcp_proxy_allow_private_urls = false; // allow the MCP CORS proxy to reach local or private addresses
     std::string ui_config_json;
