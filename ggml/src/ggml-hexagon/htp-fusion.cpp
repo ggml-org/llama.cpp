@@ -336,6 +336,96 @@ static bool fuse_mul_mat_nx(const ggml_hexagon_session * sess, htp_opnode & prev
     return true;
 }
 
+static bool htp_is_fuseable_mmnx_glu_op(uint32_t op) {
+    return op == HTP_OP_GLU_SWIGLU || op == HTP_OP_GLU_GEGLU ||
+           op == HTP_OP_GLU_GEGLU_QUICK || op == HTP_OP_GLU_REGLU;
+}
+
+static bool fuse_mul_mat_nx_glu(const ggml_hexagon_session * sess, htp_opnode & prev, const htp_opnode & cur) {
+    if (prev.opcode != HTP_OP_MUL_MAT_NX || prev.outputs.size() != 2 || prev.inputs.size() != 3) {
+        return false;
+    }
+    if (!htp_is_fuseable_mmnx_glu_op(cur.opcode) || cur.inputs.size() != 2 || cur.outputs.size() != 1 || !cur.src1()) {
+        return false;
+    }
+    if (prev.fused.size() + 1 + cur.fused.size() > HTP_OP_MAX_FUSED) {
+        return false;
+    }
+
+    const auto * orig_kparams = prev.kparams<htp_mm_kernel_params>();
+    if (!orig_kparams->n_hmx || !htp_mm_kernel_is_hmx_2d(orig_kparams->kernel_type)) {
+        return false;
+    }
+
+    const ggml_tensor * out0 = prev.outputs[0];
+    const ggml_tensor * out1 = prev.outputs[1];
+    if (!ggml_hexagon_tensor_is_fuseable(out0) || !ggml_hexagon_tensor_is_fuseable(out1) ||
+        (out0->flags & GGML_TENSOR_FLAG_OUTPUT) || (out1->flags & GGML_TENSOR_FLAG_OUTPUT)) {
+        return false;
+    }
+    if (ggml_prec_get_acc(out0) == GGML_PREC_F32 || ggml_prec_get_acc(out1) == GGML_PREC_F32) {
+        return false;
+    }
+
+    const ggml_tensor * w_gate   = nullptr;
+    const ggml_tensor * w_up     = nullptr;
+    const ggml_tensor * out_gate = nullptr;
+    const ggml_tensor * out_up   = nullptr;
+    if (htp_same_tensor_data(cur.src0(), out0) && htp_same_tensor_data(cur.src1(), out1)) {
+        w_gate   = prev.inputs[0];
+        w_up     = prev.inputs[1];
+        out_gate = out0;
+        out_up   = out1;
+    } else if (htp_same_tensor_data(cur.src0(), out1) && htp_same_tensor_data(cur.src1(), out0)) {
+        w_gate   = prev.inputs[1];
+        w_up     = prev.inputs[0];
+        out_gate = out1;
+        out_up   = out0;
+    } else {
+        return false;
+    }
+
+    const ggml_tensor * act = prev.inputs[2];
+    const ggml_tensor * dst = cur.dst();
+    if (w_gate->ne[1] != w_up->ne[1] || w_gate->ne[0] != w_up->ne[0] ||
+        !ggml_is_contiguous(out_gate) || !ggml_is_contiguous(out_up) || !ggml_is_contiguous(dst) ||
+        out_gate->type != cur.src0()->type || out_up->type != cur.src1()->type ||
+        !ggml_are_same_shape(out_gate, cur.src0()) || !ggml_are_same_stride(out_gate, cur.src0()) ||
+        !ggml_are_same_shape(out_up,   cur.src1()) || !ggml_are_same_stride(out_up,   cur.src1()) ||
+        !ggml_are_same_shape(out_gate, dst)) {
+        return false;
+    }
+    if (dst->type != GGML_TYPE_F16 && dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (htp_tensors_overlap(dst, w_gate) || htp_tensors_overlap(dst, w_up) || htp_tensors_overlap(dst, act)) {
+        return false;
+    }
+
+    const bool collapse = htp_matmul_can_collapse(w_gate, act, dst) && htp_matmul_can_collapse(w_up, act, dst);
+    if (!ggml_is_matrix(act) && !collapse) {
+        return false;
+    }
+
+    const ggml_tensor x_collapsed = collapse ? htp_tensor_collapse_rows(act) : *act;
+    const ggml_tensor d_collapsed = collapse ? htp_tensor_collapse_rows(dst) : *dst;
+
+    struct htp_mm_kernel_params kparams;
+    if (!htp_kparams_solve_mmnx_glu(sess, w_gate, w_up, &x_collapsed, &d_collapsed, (uint8_t) cur.opcode, &kparams)) {
+        return false;
+    }
+
+    prev.opcode  = HTP_OP_MUL_MAT_NX_GLU;
+    prev.inputs  = { w_gate, w_up, act };
+    prev.outputs = { dst };
+    prev.fused.push_back(cur.node);
+    for (const ggml_tensor * f : cur.fused) {
+        prev.fused.push_back(f);
+    }
+    prev.set_kparams(kparams);
+    return true;
+}
+
 static bool fuse_mul_mat_id_nx(const ggml_hexagon_session * sess, htp_opnode & prev, const htp_opnode & cur) {
     if (prev.opcode != HTP_OP_MUL_MAT_ID && prev.opcode != HTP_OP_MUL_MAT_ID_NX) return false;
 
@@ -817,6 +907,11 @@ bool htp_fusion_try_fuse(const struct ggml_hexagon_session * sess, struct htp_op
             return htp_fusion_enabled(HTP_FUSE_MUL_MAT_NX) && fuse_mul_mat_nx(sess, prev, cur);
         case HTP_OP_MUL_MAT_ID:
             return htp_fusion_enabled(HTP_FUSE_MUL_MAT_ID_NX) && fuse_mul_mat_id_nx(sess, prev, cur);
+        case HTP_OP_GLU_SWIGLU:
+        case HTP_OP_GLU_GEGLU:
+        case HTP_OP_GLU_GEGLU_QUICK:
+        case HTP_OP_GLU_REGLU:
+            return htp_fusion_enabled(HTP_FUSE_MUL_MAT_NX_GLU) && fuse_mul_mat_nx_glu(sess, prev, cur);
         default:
             return false;
     }
@@ -1122,9 +1217,82 @@ static void htp_fuse_concat_ssm_conv(const struct ggml_hexagon_session * sess, s
     }
 }
 
+static void htp_fuse_mul_mat_nx_glu(const struct ggml_hexagon_session * sess, std::vector<struct htp_opnode> & nodes) {
+    for (size_t c = 0; c < nodes.size(); ++c) {
+        if (!htp_is_fuseable_mmnx_glu_op(nodes[c].opcode) || nodes[c].inputs.size() != 2 ||
+            nodes[c].outputs.size() != 1 || !nodes[c].src1()) {
+            continue;
+        }
+
+        const ggml_tensor * s0 = nodes[c].src0();
+        const ggml_tensor * s1 = nodes[c].src1();
+
+        size_t p = c;
+        for (size_t i = 0; i < c; ++i) {
+            if (nodes[i].opcode != HTP_OP_MUL_MAT_NX || nodes[i].outputs.size() != 2 || nodes[i].inputs.size() != 3) {
+                continue;
+            }
+            const ggml_tensor * o0 = nodes[i].outputs[0];
+            const ggml_tensor * o1 = nodes[i].outputs[1];
+            if ((htp_same_tensor_data(s0, o0) && htp_same_tensor_data(s1, o1)) ||
+                (htp_same_tensor_data(s0, o1) && htp_same_tensor_data(s1, o0))) {
+                p = i;
+                break;
+            }
+        }
+        if (p == c) {
+            continue;
+        }
+
+        const ggml_tensor * w0  = nodes[p].inputs[0];
+        const ggml_tensor * w1  = nodes[p].inputs[1];
+        const ggml_tensor * act = nodes[p].inputs[2];
+        const ggml_tensor * o0  = nodes[p].outputs[0];
+        const ggml_tensor * o1  = nodes[p].outputs[1];
+
+        bool safe = true;
+        for (size_t k = 0; k < nodes.size() && safe; ++k) {
+            if (k == p || k == c) {
+                continue;
+            }
+            for (const ggml_tensor * in : nodes[k].inputs) {
+                if (htp_tensor_reads_from(in, o0) || htp_tensor_reads_from(in, o1)) {
+                    safe = false;
+                    break;
+                }
+            }
+            if (safe && k > p && k < c) {
+                for (const ggml_tensor * out : nodes[k].outputs) {
+                    if (out && (htp_tensors_overlap(out, w0) || htp_tensors_overlap(out, w1) ||
+                                htp_tensors_overlap(out, act) || htp_tensors_overlap(out, o0) ||
+                                htp_tensors_overlap(out, o1))) {
+                        safe = false;
+                        break;
+                    }
+                }
+            }
+        }
+        if (!safe) {
+            continue;
+        }
+
+        htp_opnode cand = nodes[p];
+        if (!fuse_mul_mat_nx_glu(sess, cand, nodes[c])) {
+            continue;
+        }
+
+        nodes[c] = std::move(cand);
+        nodes.erase(nodes.begin() + (ptrdiff_t) p);
+        --c;
+    }
+}
+
 void htp_fusion_optimize_nodes(const struct ggml_hexagon_session * sess, const struct ggml_cgraph * graph, std::vector<struct htp_opnode> & nodes) {
     GGML_UNUSED(graph);
 
+    if (htp_fusion_enabled(HTP_FUSE_MUL_MAT_NX_GLU)) {
+        htp_fuse_mul_mat_nx_glu(sess, nodes);
+    }
     if (htp_fusion_enabled(HTP_FUSE_GDN_STATE)) {
         htp_fuse_gdn_state(sess, nodes);
     }

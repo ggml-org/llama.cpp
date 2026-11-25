@@ -2894,11 +2894,11 @@ static void rescale_int_weight_worker_loop(const htp_thread_t * th, unsigned int
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
 }
 
-static void rescale_int_weight_chunk_to_int8_tiles(
+static void rescale_int_weight_chunk_to_int8_tiles_scales(
         struct htp_ops_context * octx,
         void * vtcm_weight_buf,
         size_t weight_bias_offset,
-        size_t weight_scales_offset,
+        float * dst_scales,
         const void * weight_src_raw,
         int n_cols,
         int k_block,
@@ -2923,7 +2923,7 @@ static void rescale_int_weight_chunk_to_int8_tiles(
     resolve_int_weight_rescale_fns(weight_type, &state.rescale_2k_fn, &state.rescale_tail_fn);
     state.dst_wt_base       = (uint8_t *) vtcm_weight_buf;
     state.dst_bias_base     = (uint8_t *) vtcm_weight_buf + weight_bias_offset;
-    state.dst_scales_base   = (float *) ((uint8_t *) vtcm_weight_buf + weight_scales_offset);
+    state.dst_scales_base   = dst_scales;
     state.src_raw           = (const uint8_t *) weight_src_raw;
     state.n_col_tiles       = n_col_tiles;
     state.n_k_tiles         = n_k_tiles;
@@ -2938,6 +2938,24 @@ static void rescale_int_weight_chunk_to_int8_tiles(
     state.n_groups_div      = *n_groups_div;
 
     work_queue_run(octx->ctx->hvx_queue, rescale_int_weight_worker_loop, &state, (int) state.n_tasks);
+}
+
+static void rescale_int_weight_chunk_to_int8_tiles(
+        struct htp_ops_context * octx,
+        void * vtcm_weight_buf,
+        size_t weight_bias_offset,
+        size_t weight_scales_offset,
+        const void * weight_src_raw,
+        int n_cols,
+        int k_block,
+        int n_groups,
+        const struct fastdiv_values * n_groups_div,
+        int aligned_tile_size,
+        int32_t weight_type) {
+    float * dst_scales = (float *) ((uint8_t *) vtcm_weight_buf + weight_scales_offset);
+    rescale_int_weight_chunk_to_int8_tiles_scales(
+        octx, vtcm_weight_buf, weight_bias_offset, dst_scales,
+        weight_src_raw, n_cols, k_block, n_groups, n_groups_div, aligned_tile_size, weight_type);
 }
 
 typedef void (*int_act_dma_pipelined_fn_t)(
@@ -3248,6 +3266,101 @@ static void transfer_output_chunk_int_threaded(
 
     const int actual_hvx = hex_smin(n_hvx, (n_rows + 3) >> 2);
     work_queue_run(octx->ctx->hvx_queue, transfer_output_chunk_int_worker_fn, &state, actual_hvx);
+}
+
+static void transfer_output_chunk_int_glu_col_chunk_task(const htp_thread_t * th, unsigned int n, unsigned int i, void * data) {
+    (void) n;
+    hmx_output_glu_state_t * st = (hmx_output_glu_state_t *) data;
+    struct htp_thread_trace * tr = th->trace;
+
+    const uint32_t n_blocks = hmx_ceil_div(st->n_cols, 32);
+    uint32_t b_first;
+    uint32_t b_last;
+    if (st->dst_elem_size == sizeof(__fp16)) {
+        const uint32_t n_pairs = hmx_ceil_div(n_blocks, 2);
+        b_first = fastdiv(n_pairs * i, &st->n_hvx_div) * 2;
+        b_last  = MIN(n_blocks, fastdiv(n_pairs * (i + 1), &st->n_hvx_div) * 2);
+    } else {
+        b_first = fastdiv(n_blocks * i, &st->n_hvx_div);
+        b_last  = fastdiv(n_blocks * (i + 1), &st->n_hvx_div);
+    }
+    if (b_first >= b_last) {
+        return;
+    }
+    const uint32_t c_first        = b_first * 32;
+    const uint32_t c_len          = (b_last - b_first) * 32;
+    const int      chunk_dst_cols = (int) st->dst_cols - (int) c_first;
+    if (chunk_dst_cols <= 0) {
+        return;
+    }
+
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, c_first);
+    void * dst = (uint8_t *) st->dst + (size_t) c_first * st->dst_elem_size;
+    const uint32_t eff_dst_cols = (uint32_t) hex_smin((size_t) c_len, (size_t) chunk_dst_cols);
+    st->col_chunk_fn(st, dst, 0, st->n_rows, c_first, (c_len << 16) | eff_dst_cols);
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, c_first);
+}
+
+static void transfer_output_chunk_int_glu_row_task(const htp_thread_t * th, unsigned int n, unsigned int i, void * data) {
+    hmx_output_glu_state_t * st = (hmx_output_glu_state_t *) data;
+    struct htp_thread_trace * tr = th->trace;
+
+    const uint32_t n_quads   = (st->n_rows + 3u) >> 2;
+    const uint32_t q_first   = (n_quads <= n) ? i : fastdiv(n_quads * i, &st->n_hvx_div);
+    const uint32_t q_last    = (n_quads <= n) ? (i + 1u) : fastdiv(n_quads * (i + 1u), &st->n_hvx_div);
+    const uint32_t row_start = q_first << 2;
+    const uint32_t row_end   = hex_smin(st->n_rows, q_last << 2);
+    if (row_start >= row_end) {
+        return;
+    }
+
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, row_start);
+    const uint32_t eff_dst_cols = (uint32_t) hex_smin((size_t) st->n_cols, (size_t) st->dst_cols);
+    const uint32_t c_packed     = (st->n_cols << 16) | eff_dst_cols;
+    const uint32_t chunk_size   = row_end - row_start;
+    void *         dst          = (uint8_t *) st->dst + (size_t) row_start * st->dst_stride * st->dst_elem_size;
+    st->col_chunk_fn(st, dst, row_start, chunk_size, 0, c_packed);
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, row_start);
+}
+
+static void transfer_output_chunk_int_glu_threaded(
+        struct htp_ops_context * octx,
+        hmx_output_glu_state_t * state,
+        void * dst,
+        const void * vtcm_gate,
+        const void * vtcm_up,
+        const float * vtcm_wt_scales_gate,
+        const float * vtcm_wt_scales_up,
+        int n_rows,
+        int n_cols,
+        int dst_cols) {
+
+    if (n_rows <= 0 || dst_cols <= 0) {
+        return;
+    }
+
+    const int n_hvx            = (int) octx->n_hvx;
+    state->dst                 = dst;
+    state->vtcm_gate           = (const uint8_t *) vtcm_gate;
+    state->vtcm_up             = (const uint8_t *) vtcm_up;
+    state->vtcm_wt_scales_gate = vtcm_wt_scales_gate;
+    state->vtcm_wt_scales_up   = vtcm_wt_scales_up;
+    state->n_rows              = (uint32_t) n_rows;
+    state->mc_pad              = hex_align_up((uint32_t) n_rows, 64u);
+    state->n_cols              = (uint32_t) n_cols;
+    state->dst_cols            = (uint32_t) dst_cols;
+    state->n_hvx_div           = octx->n_hvx_div;
+
+    const uint32_t n_blocks         = hmx_ceil_div((uint32_t) n_cols, 32);
+    const uint32_t n_units          = (state->dst_elem_size == sizeof(__fp16)) ? hmx_ceil_div(n_blocks, 2) : n_blocks;
+    const bool     prefer_row_chunk = ((uint32_t) n_rows >= (uint32_t) n_hvx * 64u);
+    if (n_hvx > 1 && !prefer_row_chunk && n_units >= (uint32_t) n_hvx) {
+        work_queue_run(octx->ctx->hvx_queue, transfer_output_chunk_int_glu_col_chunk_task, state, n_hvx);
+        return;
+    }
+
+    const int actual_hvx = hex_smin(n_hvx, (n_rows + 3) >> 2);
+    work_queue_run(octx->ctx->hvx_queue, transfer_output_chunk_int_glu_row_task, state, actual_hvx);
 }
 
 typedef struct {
@@ -3988,6 +4101,711 @@ static int hmx_mm_2d_f32(struct htp_ops_context *octx,
     }
 
     return 0;
+}
+
+static int hmx_mm_nx_glu_int_2d(struct htp_ops_context * octx, const struct htp_mm_kernel_params * kparams) {
+    struct htp_context * ctx = octx->ctx;
+    struct htp_thread_trace * tr = &ctx->trace[0];
+    htp_trace_event_start(tr, HTP_TRACE_EVT_INIT, 0);
+
+    const struct htp_tensor * restrict src_gate = octx->src[0];
+    const struct htp_tensor * restrict src_up   = octx->src[1];
+    const struct htp_tensor * restrict act      = octx->src[2];
+    const struct htp_tensor * restrict dst      = octx->dst;
+
+    const int        weight_type   = (int) src_gate->type;
+    const int        k             = (int) act->ne[0];
+    const int        k_valid       = (int) act->ne[0];
+    const size_t     n             = (size_t) src_gate->ne[1];
+    const int        m             = (int) (act->ne[1] * act->ne[2] * act->ne[3]);
+    const uint32_t   act_elem_size = (act->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
+    const size_t     dst_elem_size = (dst->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
+    const int        act_stride    = (int) (act->nb[1] / act_elem_size);
+    const dma_addr_t act_dma_addr  = act->data;
+
+    const int32_t kernel_type = kparams->kernel_type;
+    const int     n_groups    = kparams->hmx_n_groups;
+    const int     tile_k      = htp_tensor_get_tile_k(weight_type);
+
+    if (tile_k <= 0 || (k % tile_k) != 0 || (k & 31) != 0 || !htp_mm_kernel_is_hmx_int(kernel_type)) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+    if (n == 0) {
+        return HTP_STATUS_OK;
+    }
+
+    hmx_output_glu_state_t glu_state;
+    if (!resolve_int_output_glu_fns((uint32_t) n_groups, kparams->glu_op, dst_elem_size,
+                                    &glu_state.col_chunk_fn, &glu_state.store_quad_fn,
+                                    &glu_state.store_tail_fn, &glu_state.store_strip_fn)) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+
+    const struct fastdiv_values n_groups_div  = kparams->div_hmx_n_groups;
+    const hmx_queue_func        hmx_worker_fn = hmx_get_matmul_worker_fn(kernel_type);
+
+    const int n_k_tiles         = k >> 5;
+    const int n_weight_tiles    = (weight_type == HTP_TYPE_Q4_0) ? n_k_tiles : (k / tile_k);
+    const int tile_size         = kparams->tile_size;
+    const int aligned_tile_size = kparams->aligned_tile_size;
+    if (tile_size <= 0) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+
+    const size_t vtcm_budget                  = ctx->vtcm_size;
+    const int    m_chunk_n_rows               = kparams->m_chunk;
+    const int    n_chunk_n_cols               = kparams->n_chunk;
+    const int    pipeline                     = kparams->pipeline;
+    const int    act_hvx                      = kparams->n_act_hvx;
+    const struct fastdiv_values * act_hvx_div = &kparams->div_n_act_hvx;
+
+    struct htp_mm_hmx_vtcm_layout L;
+    htp_mm_hmx_vtcm_layout_build_glu(&L, kernel_type, weight_type, k,
+                                     m_chunk_n_rows, n_chunk_n_cols, pipeline, act_hvx, aligned_tile_size,
+                                     dst_elem_size);
+    if (L.total_bytes > vtcm_budget) {
+        FARF(ERROR, "hmx-mm-nx-glu: VTCM overflow: used %zu budget %zu, m %d k %d n %zu mc %d nc %d",
+             L.total_bytes, vtcm_budget, m, k, n, m_chunk_n_rows, n_chunk_n_cols);
+        return HTP_STATUS_VTCM_TOO_SMALL;
+    }
+
+    uint8_t * const base = (uint8_t *) ctx->vtcm_base;
+    void * vtcm_weight_raw[2] = {
+        VTCM_LAYOUT_PTR(void, base, L.off_weight[0]),
+        VTCM_LAYOUT_PTR_OPTIONAL(void, base, L.off_weight[1], pipeline)
+    };
+    uint8_t * vtcm_act        = VTCM_LAYOUT_PTR(uint8_t, base, L.off_act);
+    float   * vtcm_f32_act    = VTCM_LAYOUT_PTR(float, base, L.off_act_f32);
+    float   * vtcm_act_scales = VTCM_LAYOUT_PTR(float, base, L.off_act_scales);
+    void    * vtcm_gate[2]    = {
+        VTCM_LAYOUT_PTR(void, base, L.off_dst[0]),
+        VTCM_LAYOUT_PTR_OPTIONAL(void, base, L.off_dst[1], pipeline)
+    };
+    void    * vtcm_up[2]      = {
+        VTCM_LAYOUT_PTR(void, base, L.off_dst_up[0]),
+        VTCM_LAYOUT_PTR_OPTIONAL(void, base, L.off_dst_up[1], pipeline)
+    };
+    void    * vtcm_scratch[2] = {
+        VTCM_LAYOUT_PTR(void, base, L.off_scratch[0]),
+        VTCM_LAYOUT_PTR_OPTIONAL(void, base, L.off_scratch[1], pipeline)
+    };
+    float   * vtcm_wt_scales_gate[2] = {
+        VTCM_LAYOUT_PTR(float, base, L.off_wt_scales_gate[0]),
+        VTCM_LAYOUT_PTR_OPTIONAL(float, base, L.off_wt_scales_gate[1], pipeline)
+    };
+    float   * vtcm_wt_scales_up[2] = {
+        VTCM_LAYOUT_PTR(float, base, L.off_wt_scales_up[0]),
+        VTCM_LAYOUT_PTR_OPTIONAL(float, base, L.off_wt_scales_up[1], pipeline)
+    };
+    void    * vtcm_res_out[2]   = {
+        VTCM_LAYOUT_PTR(void, base, L.off_res_out[0]),
+        VTCM_LAYOUT_PTR_OPTIONAL(void, base, L.off_res_out[1], pipeline)
+    };
+
+    if (L.lut_bytes > 0) {
+        iq2xxs_lut_copy(base + L.off_lut);
+    }
+
+    int m_start = 0;
+    int m_rows  = m;
+    if (octx->ctx->mdev.count > 1) {
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition((uint32_t) m, 1, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        m_start = (int) range.start;
+        m_rows  = (int) range.count;
+    }
+    if (m_rows == 0) {
+        return HTP_STATUS_OK;
+    }
+
+    FARF(HIGH, "hmx-mm-nx-glu: glu %u ktype %d m %d (%d..%d) k %d n %zu wtype %d mc %d nc %d vtcm %zu/%zu",
+         (unsigned) kparams->glu_op, (int) kernel_type, m, m_start, m_start + m_rows, k, n, weight_type,
+         m_chunk_n_rows, n_chunk_n_cols, L.total_bytes, vtcm_budget);
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_INIT, 0);
+
+    const size_t     mr_end               = (size_t) (m_start + m_rows);
+    const dma_addr_t w_gate               = src_gate->data;
+    const dma_addr_t w_up                 = src_up->data;
+    const size_t     w_gate_stride        = src_gate->nb[1];
+    const size_t     w_up_stride          = src_up->nb[1];
+    const dma_addr_t dst_dma_addr         = dst->data;
+    const size_t     dst_stride           = dst->nb[1] / dst_elem_size;
+    const size_t     dst_row_bytes        = dst->nb[1];
+    const int        dst_cols             = (int) dst->ne[0];
+    const size_t     res_out_stride_bytes = hex_align_up((size_t) n_chunk_n_cols * dst_elem_size, 128);
+    const int        res_out_stride_elems = (int) (res_out_stride_bytes / dst_elem_size);
+    const int        n_chunk_cnt          = hmx_ceil_div(n, n_chunk_n_cols);
+    dma_queue *      weight_dma           = octx->ctx->dma[0];
+
+    glu_state.vtcm_act_scales = vtcm_act_scales;
+    glu_state.n_groups        = (uint32_t) n_groups;
+    glu_state.dst_stride      = (uint32_t) res_out_stride_elems;
+    glu_state.dst_elem_size   = dst_elem_size;
+
+    if (pipeline) {
+        // 4-buffer HMX output pipeline: vtcm_gate[2] + vtcm_up[2] (GLU(s-1) overlaps both HMX(gate_s) and HMX(up_s))
+        hmx_matmul_task_t task_gate[2];
+        hmx_matmul_task_t task_up[2];
+        const bool preissue_gate0 = L.can_preissue_weight && n > 0;
+
+        for (size_t mr = (size_t) m_start; mr < mr_end; mr += m_chunk_n_rows) {
+            const size_t n_rows      = hex_smin(mr_end - mr, m_chunk_n_rows);
+            const size_t n_row_tiles = hmx_ceil_div(n_rows, 64u);
+
+            if (preissue_gate0) {
+                const size_t   n_cols0 = hex_smin(n, (size_t) n_chunk_n_cols);
+                const uint32_t height0 = hmx_ceil_div(n_cols0, 32) * n_weight_tiles;
+                dma_proxy_push(ctx->dma_proxy, dma_make_data(vtcm_weight_raw[0], w_gate),
+                               aligned_tile_size, tile_size, tile_size, height0);
+            }
+
+            transfer_activation_chunk_int_threaded(
+                ctx, vtcm_act, vtcm_act_scales,
+                act_dma_addr + (size_t) mr * act_stride * act_elem_size,
+                (int) n_rows, k, act_stride, k_valid, n_groups,
+                act_hvx, act_hvx_div, vtcm_f32_act, L.act_f32_bytes, act_elem_size);
+
+            // Prologue: push gate_0 (if not preissued) and up_0
+            {
+                const size_t   n_cols0 = hex_smin(n, (size_t) n_chunk_n_cols);
+                const uint32_t height0 = hmx_ceil_div(n_cols0, 32) * n_weight_tiles;
+                if (!preissue_gate0) {
+                    dma_queue_push(weight_dma, dma_make_data(vtcm_weight_raw[0], w_gate),
+                                   aligned_tile_size, tile_size, tile_size, height0);
+                }
+                dma_queue_push(weight_dma, dma_make_data(vtcm_weight_raw[1], w_up),
+                               aligned_tile_size, tile_size, tile_size, height0);
+            }
+
+            for (int s = 0; s < n_chunk_cnt; ++s) {
+                const int    cur         = s & 1;
+                const int    prev        = (s - 1) & 1;
+                const size_t nc          = (size_t) s * n_chunk_n_cols;
+                const size_t n_cols      = hex_smin(n - nc, (size_t) n_chunk_n_cols);
+                const size_t n_col_tiles = hmx_ceil_div(n_cols, HTP_MM_HMX_TILE_N_COLS);
+
+                // 1. Pop gate_s, wait HMX(gate_{s-1}) so vtcm_scratch[0] is free, rescale and submit HMX(gate_s)
+                if (s == 0 && preissue_gate0) {
+                    dma_proxy_pop(ctx->dma_proxy);
+                } else {
+                    dma_queue_pop(weight_dma);
+                }
+                if (s > 0) {
+                    hmx_queue_pop(ctx->hmx_queue);
+                }
+                rescale_int_weight_chunk_to_int8_tiles_scales(
+                    octx, vtcm_scratch[0], L.weight_bias_offset, vtcm_wt_scales_gate[cur],
+                    vtcm_weight_raw[0], (int) n_cols, k, n_groups, &n_groups_div, aligned_tile_size, weight_type);
+
+                hmx_matmul_task_init_int(&task_gate[cur], vtcm_gate[cur],
+                                        vtcm_act, vtcm_scratch[0], L.weight_bias_offset,
+                                        n_row_tiles, n_col_tiles, (uint32_t) n_k_tiles, (uint32_t) n_groups);
+                hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_worker_fn, &task_gate[cur]));
+
+                if (s + 1 < n_chunk_cnt) {
+                    const size_t   nc_n     = (size_t) (s + 1) * n_chunk_n_cols;
+                    const size_t   n_cols_n = hex_smin(n - nc_n, (size_t) n_chunk_n_cols);
+                    const uint32_t height_n = hmx_ceil_div(n_cols_n, 32) * n_weight_tiles;
+                    dma_queue_push(weight_dma, dma_make_data(vtcm_weight_raw[0], w_gate + nc_n * w_gate_stride),
+                                   aligned_tile_size, tile_size, tile_size, height_n);
+                }
+
+                // 2. Pop up_s, wait HMX(up_{s-1}) so vtcm_scratch[1] and GLU(s-1) inputs are ready, rescale and submit HMX(up_s)
+                dma_queue_pop(weight_dma);
+                if (s > 0) {
+                    hmx_queue_pop(ctx->hmx_queue);
+                }
+                rescale_int_weight_chunk_to_int8_tiles_scales(
+                    octx, vtcm_scratch[1], L.weight_bias_offset, vtcm_wt_scales_up[cur],
+                    vtcm_weight_raw[1], (int) n_cols, k, n_groups, &n_groups_div, aligned_tile_size, weight_type);
+
+                hmx_matmul_task_init_int(&task_up[cur], vtcm_up[cur],
+                                        vtcm_act, vtcm_scratch[1], L.weight_bias_offset,
+                                        n_row_tiles, n_col_tiles, (uint32_t) n_k_tiles, (uint32_t) n_groups);
+                hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_worker_fn, &task_up[cur]));
+
+                if (s + 1 < n_chunk_cnt) {
+                    const size_t   nc_n     = (size_t) (s + 1) * n_chunk_n_cols;
+                    const size_t   n_cols_n = hex_smin(n - nc_n, (size_t) n_chunk_n_cols);
+                    const uint32_t height_n = hmx_ceil_div(n_cols_n, 32) * n_weight_tiles;
+                    dma_queue_push(weight_dma, dma_make_data(vtcm_weight_raw[1], w_up + nc_n * w_up_stride),
+                                   aligned_tile_size, tile_size, tile_size, height_n);
+                }
+
+                // 3. Run HVX GLU(s-1) in parallel with HMX(gate_s) + HMX(up_s) + out_{s-2} DMA, then drain out_{s-2} and push out_{s-1}
+                if (s > 0) {
+                    const size_t nc_prev        = (size_t) (s - 1) * n_chunk_n_cols;
+                    const size_t n_cols_p       = hex_smin(n - nc_prev, (size_t) n_chunk_n_cols);
+                    const int    chunk_dst_cols = dst_cols - (int) nc_prev;
+                    if (chunk_dst_cols > 0) {
+                        transfer_output_chunk_int_glu_threaded(
+                            octx, &glu_state, vtcm_res_out[prev], vtcm_gate[prev], vtcm_up[prev],
+                            vtcm_wt_scales_gate[prev], vtcm_wt_scales_up[prev],
+                            (int) n_rows, (int) n_cols_p, chunk_dst_cols);
+                    }
+                    if (s >= 2) {
+                        dma_queue_pop(weight_dma);
+                    }
+                    const int    vcols_o = hex_smin((int) n_cols_p, chunk_dst_cols);
+                    const size_t cbytes  = (vcols_o > 0) ? (size_t) vcols_o * dst_elem_size : 0;
+                    dma_queue_push(weight_dma,
+                                   dma_make_data(dst_dma_addr + (mr * dst_stride + nc_prev) * dst_elem_size, vtcm_res_out[prev]),
+                                   dst_row_bytes, res_out_stride_bytes, cbytes, cbytes ? n_rows : 0);
+                }
+            }
+
+            // Epilogue: wait HMX(gate_{last}) + HMX(up_{last}), drain out_{last-1}, run GLU(last), push+pop out_{last}
+            {
+                const int    last           = (n_chunk_cnt - 1) & 1;
+                const size_t nc_last        = (size_t) (n_chunk_cnt - 1) * n_chunk_n_cols;
+                const size_t n_cols_last    = hex_smin(n - nc_last, (size_t) n_chunk_n_cols);
+                const int    chunk_dst_cols = dst_cols - (int) nc_last;
+
+                hmx_queue_pop(ctx->hmx_queue);
+                hmx_queue_pop(ctx->hmx_queue);
+                if (n_chunk_cnt >= 2) {
+                    dma_queue_pop(weight_dma);
+                }
+
+                if (chunk_dst_cols > 0) {
+                    transfer_output_chunk_int_glu_threaded(
+                        octx, &glu_state, vtcm_res_out[last], vtcm_gate[last], vtcm_up[last],
+                        vtcm_wt_scales_gate[last], vtcm_wt_scales_up[last],
+                        (int) n_rows, (int) n_cols_last, chunk_dst_cols);
+                }
+
+                const int    vcols_o = hex_smin((int) n_cols_last, chunk_dst_cols);
+                const size_t cbytes  = (vcols_o > 0) ? (size_t) vcols_o * dst_elem_size : 0;
+                dma_queue_push(weight_dma,
+                               dma_make_data(dst_dma_addr + (mr * dst_stride + nc_last) * dst_elem_size, vtcm_res_out[last]),
+                               dst_row_bytes, res_out_stride_bytes, cbytes, cbytes ? n_rows : 0);
+                dma_queue_pop(weight_dma);
+            }
+        }
+    } else {
+        // Non-pipelined 2-buffer path (m <= 32)
+        hmx_matmul_task_t task;
+
+        for (size_t mr = (size_t) m_start; mr < mr_end; mr += m_chunk_n_rows) {
+            const size_t n_rows      = hex_smin(mr_end - mr, m_chunk_n_rows);
+            const size_t n_row_tiles = hmx_ceil_div(n_rows, 64u);
+
+            transfer_activation_chunk_int_threaded(
+                ctx, vtcm_act, vtcm_act_scales,
+                act_dma_addr + (size_t) mr * act_stride * act_elem_size,
+                (int) n_rows, k, act_stride, k_valid, n_groups,
+                act_hvx, act_hvx_div, vtcm_f32_act, L.act_f32_bytes, act_elem_size);
+
+            for (int s = 0; s < n_chunk_cnt; ++s) {
+                const size_t   nc          = (size_t) s * n_chunk_n_cols;
+                const size_t   n_cols      = hex_smin(n - nc, (size_t) n_chunk_n_cols);
+                const size_t   n_col_tiles = hmx_ceil_div(n_cols, HTP_MM_HMX_TILE_N_COLS);
+                const uint32_t height      = hmx_ceil_div(n_cols, 32) * n_weight_tiles;
+
+                dma_queue_push(weight_dma, dma_make_data(vtcm_weight_raw[0], w_gate + nc * w_gate_stride),
+                               aligned_tile_size, tile_size, tile_size, height);
+                dma_queue_pop(weight_dma);
+                rescale_int_weight_chunk_to_int8_tiles_scales(
+                    octx, vtcm_scratch[0], L.weight_bias_offset, vtcm_wt_scales_gate[0],
+                    vtcm_weight_raw[0], (int) n_cols, k, n_groups, &n_groups_div, aligned_tile_size, weight_type);
+                hmx_matmul_task_init_int(&task, vtcm_gate[0], vtcm_act, vtcm_scratch[0], L.weight_bias_offset,
+                                        n_row_tiles, n_col_tiles, (uint32_t) n_k_tiles, (uint32_t) n_groups);
+                hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_worker_fn, &task));
+                hmx_queue_pop(ctx->hmx_queue);
+
+                dma_queue_push(weight_dma, dma_make_data(vtcm_weight_raw[0], w_up + nc * w_up_stride),
+                               aligned_tile_size, tile_size, tile_size, height);
+                dma_queue_pop(weight_dma);
+                rescale_int_weight_chunk_to_int8_tiles_scales(
+                    octx, vtcm_scratch[0], L.weight_bias_offset, vtcm_wt_scales_up[0],
+                    vtcm_weight_raw[0], (int) n_cols, k, n_groups, &n_groups_div, aligned_tile_size, weight_type);
+                hmx_matmul_task_init_int(&task, vtcm_up[0], vtcm_act, vtcm_scratch[0], L.weight_bias_offset,
+                                        n_row_tiles, n_col_tiles, (uint32_t) n_k_tiles, (uint32_t) n_groups);
+                hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_worker_fn, &task));
+                hmx_queue_pop(ctx->hmx_queue);
+
+                const int chunk_dst_cols = dst_cols - (int) nc;
+                if (chunk_dst_cols > 0) {
+                    transfer_output_chunk_int_glu_threaded(
+                        octx, &glu_state, vtcm_res_out[0], vtcm_gate[0], vtcm_up[0],
+                        vtcm_wt_scales_gate[0], vtcm_wt_scales_up[0],
+                        (int) n_rows, (int) n_cols, chunk_dst_cols);
+                }
+                const int    vcols_o = hex_smin((int) n_cols, chunk_dst_cols);
+                const size_t cbytes  = (vcols_o > 0) ? (size_t) vcols_o * dst_elem_size : 0;
+                dma_queue_push(weight_dma,
+                               dma_make_data(dst_dma_addr + (mr * dst_stride + nc) * dst_elem_size, vtcm_res_out[0]),
+                               dst_row_bytes, res_out_stride_bytes, cbytes, cbytes ? n_rows : 0);
+                dma_queue_pop(weight_dma);
+            }
+        }
+    }
+
+    return HTP_STATUS_OK;
+}
+
+static int hmx_mm_nx_glu_fp16_2d(struct htp_ops_context * octx, const struct htp_mm_kernel_params * kparams) {
+    struct htp_context * ctx = octx->ctx;
+    struct htp_thread_trace * tr = &ctx->trace[0];
+    htp_trace_event_start(tr, HTP_TRACE_EVT_INIT, 0);
+
+    const struct htp_tensor * restrict src_gate = octx->src[0];
+    const struct htp_tensor * restrict src_up   = octx->src[1];
+    const struct htp_tensor * restrict act      = octx->src[2];
+    const struct htp_tensor * restrict dst      = octx->dst;
+
+    const int        weight_type   = (int) src_gate->type;
+    const int        k             = (int) act->ne[0];
+    const int        k_valid       = (int) act->ne[0];
+    const size_t     n             = (size_t) src_gate->ne[1];
+    const int        m             = (int) (act->ne[1] * act->ne[2] * act->ne[3]);
+    const uint32_t   act_elem_size = (act->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
+    const size_t     dst_elem_size = (dst->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
+    const int        act_stride    = (int) (act->nb[1] / act_elem_size);
+    const dma_addr_t act_dma_addr  = act->data;
+
+    const int32_t kernel_type = kparams->kernel_type;
+    const int     tile_size   = kparams->tile_size;
+    const int     aligned_tile_size = kparams->aligned_tile_size;
+    const bool    is_tiled    = (tile_size > 0);
+    const int     tile_k      = htp_tensor_get_tile_k(weight_type);
+
+    if ((k & 31) != 0 || (is_tiled && (tile_k <= 0 || (k % tile_k) != 0)) || kernel_type != HTP_MM_KERNEL_HMX_2D) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+    if (n == 0) {
+        return HTP_STATUS_OK;
+    }
+
+    const size_t row_stride = htp_tensor_get_row_size(weight_type, k);
+    if (row_stride == 0) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+
+    hmx_output_glu_state_t glu_state;
+    if (!resolve_fp16_output_glu_fns(kparams->glu_op, dst_elem_size,
+                                     &glu_state.col_chunk_fn, &glu_state.store_quad_fn,
+                                     &glu_state.store_tail_fn, &glu_state.store_strip_fn)) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+
+    const hmx_queue_func        hmx_worker_fn     = hmx_get_matmul_worker_fn(kernel_type);
+    const int                   n_k_tiles         = k >> 5;
+    const int                   n_weight_tiles    = is_tiled ? ((weight_type == HTP_TYPE_Q4_0) ? n_k_tiles : (k / tile_k)) : 0;
+    const struct fastdiv_values n_k_tiles_div     = kparams->div_n_k_tiles;
+    tiled_dequant_task_fn_t     dequant_worker_fn = hmx_get_dequant_worker_fn(weight_type, is_tiled);
+
+    const size_t vtcm_budget                  = ctx->vtcm_size;
+    const int    m_chunk_n_rows               = kparams->m_chunk;
+    const int    n_chunk_n_cols               = kparams->n_chunk;
+    const int    pipeline                     = kparams->pipeline;
+    const int    act_hvx                      = kparams->n_act_hvx;
+    const struct fastdiv_values * act_hvx_div = &kparams->div_n_act_hvx;
+    const struct fastdiv_values * k_div       = &kparams->div_ne00_padded;
+
+    struct htp_mm_hmx_vtcm_layout L;
+    htp_mm_hmx_vtcm_layout_build_glu(&L, kernel_type, weight_type, k,
+                                     m_chunk_n_rows, n_chunk_n_cols, pipeline, act_hvx, aligned_tile_size,
+                                     dst_elem_size);
+    if (L.total_bytes > vtcm_budget) {
+        FARF(ERROR, "hmx-mm-nx-glu-fp16: VTCM overflow: used %zu budget %zu, m %d k %d n %zu mc %d nc %d",
+             L.total_bytes, vtcm_budget, m, k, n, m_chunk_n_rows, n_chunk_n_cols);
+        return HTP_STATUS_VTCM_TOO_SMALL;
+    }
+
+    uint8_t * const base = (uint8_t *) ctx->vtcm_base;
+    void * vtcm_weight_raw[2] = {
+        VTCM_LAYOUT_PTR(void, base, L.off_weight[0]),
+        VTCM_LAYOUT_PTR_OPTIONAL(void, base, L.off_weight[1], pipeline)
+    };
+    __fp16 * vtcm_f16_act = VTCM_LAYOUT_PTR(__fp16, base, L.off_act);
+    float  * vtcm_f32_act = VTCM_LAYOUT_PTR(float, base, L.off_act_f32);
+    __fp16 * vtcm_scales  = VTCM_LAYOUT_PTR(__fp16, base, L.off_scales);
+    __fp16 * vtcm_gate[2] = {
+        VTCM_LAYOUT_PTR(__fp16, base, L.off_dst[0]),
+        VTCM_LAYOUT_PTR_OPTIONAL(__fp16, base, L.off_dst[1], pipeline)
+    };
+    __fp16 * vtcm_up[2]   = {
+        VTCM_LAYOUT_PTR(__fp16, base, L.off_dst_up[0]),
+        VTCM_LAYOUT_PTR_OPTIONAL(__fp16, base, L.off_dst_up[1], pipeline)
+    };
+    void   * vtcm_scratch[2] = {
+        VTCM_LAYOUT_PTR(void, base, L.off_scratch[0]),
+        VTCM_LAYOUT_PTR_OPTIONAL(void, base, L.off_scratch[1], pipeline)
+    };
+    void   * vtcm_res_out[2] = {
+        VTCM_LAYOUT_PTR(void, base, L.off_res_out[0]),
+        VTCM_LAYOUT_PTR_OPTIONAL(void, base, L.off_res_out[1], pipeline)
+    };
+
+    hmx_init_column_scales(vtcm_scales, Q6_V_vsplat_R(0x3c00)); // scale: 1.0, bias: 0.0 in FP16
+    if (L.lut_bytes > 0) {
+        iq2xxs_lut_copy(base + L.off_lut);
+    }
+
+    int m_start = 0;
+    int m_rows  = m;
+    if (octx->ctx->mdev.count > 1) {
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition((uint32_t) m, 1, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        m_start = (int) range.start;
+        m_rows  = (int) range.count;
+    }
+    if (m_rows == 0) {
+        return HTP_STATUS_OK;
+    }
+
+    FARF(HIGH, "hmx-mm-nx-glu-fp16: glu %u m %d (%d..%d) k %d n %zu wtype %d mc %d nc %d vtcm %zu/%zu",
+         (unsigned) kparams->glu_op, m, m_start, m_start + m_rows, k, n, weight_type,
+         m_chunk_n_rows, n_chunk_n_cols, L.total_bytes, vtcm_budget);
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_INIT, 0);
+
+    const size_t     mr_end               = (size_t) (m_start + m_rows);
+    const dma_addr_t w_gate               = src_gate->data;
+    const dma_addr_t w_up                 = src_up->data;
+    const size_t     w_gate_stride        = src_gate->nb[1];
+    const size_t     w_up_stride          = src_up->nb[1];
+    const dma_addr_t dst_dma_addr         = dst->data;
+    const size_t     dst_stride           = dst->nb[1] / dst_elem_size;
+    const size_t     dst_row_bytes        = dst->nb[1];
+    const int        dst_cols             = (int) dst->ne[0];
+    const size_t     res_out_stride_bytes = hex_align_up((size_t) n_chunk_n_cols * dst_elem_size, 128);
+    const int        res_out_stride_elems = (int) (res_out_stride_bytes / dst_elem_size);
+    const int        n_chunk_cnt          = hmx_ceil_div(n, n_chunk_n_cols);
+    const uint32_t   dma_dst_stride       = is_tiled ? (uint32_t) aligned_tile_size : (uint32_t) row_stride;
+    const uint32_t   dma_width_bytes      = is_tiled ? (uint32_t) tile_size : (uint32_t) row_stride;
+    const uint32_t   dma_src_stride_g     = is_tiled ? (uint32_t) tile_size : (uint32_t) w_gate_stride;
+    const uint32_t   dma_src_stride_u     = is_tiled ? (uint32_t) tile_size : (uint32_t) w_up_stride;
+    dma_queue *      weight_dma           = octx->ctx->dma[0];
+
+    glu_state.vtcm_act_scales   = NULL;
+    glu_state.vtcm_wt_scales_up = NULL;
+    glu_state.n_groups          = 1u;
+    glu_state.dst_stride        = (uint32_t) res_out_stride_elems;
+    glu_state.dst_elem_size     = dst_elem_size;
+
+    if (pipeline) {
+        // When dequant_worker_fn is NULL (pre-tiled F16), ping-pong raw/HMX across {weight_raw, scratch}.
+        void * gate_raw_buf[2] = { vtcm_weight_raw[0], dequant_worker_fn ? vtcm_weight_raw[0] : vtcm_scratch[0] };
+        void * up_raw_buf[2]   = { vtcm_weight_raw[1], dequant_worker_fn ? vtcm_weight_raw[1] : vtcm_scratch[1] };
+        void * gate_hmx_buf[2] = { dequant_worker_fn ? vtcm_scratch[0] : vtcm_weight_raw[0], vtcm_scratch[0] };
+        void * up_hmx_buf[2]   = { dequant_worker_fn ? vtcm_scratch[1] : vtcm_weight_raw[1], vtcm_scratch[1] };
+
+        hmx_matmul_task_t task_gate[2];
+        hmx_matmul_task_t task_up[2];
+
+        for (size_t mr = (size_t) m_start; mr < mr_end; mr += m_chunk_n_rows) {
+            const size_t n_rows      = hex_smin(mr_end - mr, m_chunk_n_rows);
+            const size_t n_row_tiles = hmx_ceil_div(n_rows, HTP_MM_HMX_TILE_N_ROWS);
+
+            struct activation_transfer_params act_params = {
+                .ctx                = ctx,
+                .dst                = vtcm_f16_act,
+                .act_dma_addr       = act_dma_addr + (size_t) mr * act_stride * act_elem_size,
+                .n_rows             = (int) n_rows,
+                .k_block            = k,
+                .k_stride           = act_stride,
+                .n_hvx              = act_hvx,
+                .act_hvx_div        = act_hvx_div,
+                .k_div              = k_div,
+                .k_valid            = k_valid,
+                .vtcm_f32_act       = vtcm_f32_act,
+                .vtcm_f32_act_bytes = L.act_f32_bytes,
+                .act_elem_size      = act_elem_size,
+            };
+            transfer_activation_chunk_threaded(&act_params);
+
+            // Prologue: push gate_0 and up_0
+            {
+                const size_t   n_cols0 = hex_smin(n, (size_t) n_chunk_n_cols);
+                const uint32_t height0 = is_tiled ? (hmx_ceil_div(n_cols0, 32) * n_weight_tiles) : (uint32_t) n_cols0;
+                dma_queue_push(weight_dma, dma_make_data(gate_raw_buf[0], w_gate),
+                               dma_dst_stride, dma_src_stride_g, dma_width_bytes, height0);
+                dma_queue_push(weight_dma, dma_make_data(up_raw_buf[0], w_up),
+                               dma_dst_stride, dma_src_stride_u, dma_width_bytes, height0);
+            }
+
+            for (int s = 0; s < n_chunk_cnt; ++s) {
+                const int    cur         = s & 1;
+                const int    next        = (s + 1) & 1;
+                const int    prev        = (s - 1) & 1;
+                const size_t nc          = (size_t) s * n_chunk_n_cols;
+                const size_t n_cols      = hex_smin(n - nc, (size_t) n_chunk_n_cols);
+                const size_t n_col_tiles = hmx_ceil_div(n_cols, HTP_MM_HMX_TILE_N_COLS);
+
+                // 1. Pop gate_s, wait HMX(gate_{s-1}) so gate_hmx_buf[cur] is free, dequant and submit HMX(gate_s)
+                dma_queue_pop(weight_dma);
+                if (s > 0) {
+                    hmx_queue_pop(ctx->hmx_queue);
+                }
+                if (dequant_worker_fn) {
+                    dequantize_tiled_weight_chunk_to_fp16_tiles(
+                        octx, gate_hmx_buf[cur], gate_raw_buf[cur],
+                        n_cols, k, row_stride, weight_type,
+                        n_k_tiles, n_k_tiles_div, dequant_worker_fn);
+                }
+
+                hmx_matmul_task_init(&task_gate[cur], vtcm_gate[cur], vtcm_f16_act, (__fp16 *) gate_hmx_buf[cur],
+                                    vtcm_scales, n_row_tiles, n_col_tiles, (uint32_t) n_k_tiles);
+                hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_worker_fn, &task_gate[cur]));
+
+                if (s + 1 < n_chunk_cnt) {
+                    const size_t   nc_n     = (size_t) (s + 1) * n_chunk_n_cols;
+                    const size_t   n_cols_n = hex_smin(n - nc_n, (size_t) n_chunk_n_cols);
+                    const uint32_t height_n = is_tiled ? (hmx_ceil_div(n_cols_n, 32) * n_weight_tiles) : (uint32_t) n_cols_n;
+                    dma_queue_push(weight_dma, dma_make_data(gate_raw_buf[next], w_gate + nc_n * w_gate_stride),
+                                   dma_dst_stride, dma_src_stride_g, dma_width_bytes, height_n);
+                }
+
+                // 2. Pop up_s, wait HMX(up_{s-1}) so up_hmx_buf[cur] and GLU(s-1) inputs are ready, dequant and submit HMX(up_s)
+                dma_queue_pop(weight_dma);
+                if (s > 0) {
+                    hmx_queue_pop(ctx->hmx_queue);
+                }
+                if (dequant_worker_fn) {
+                    dequantize_tiled_weight_chunk_to_fp16_tiles(
+                        octx, up_hmx_buf[cur], up_raw_buf[cur],
+                        n_cols, k, row_stride, weight_type,
+                        n_k_tiles, n_k_tiles_div, dequant_worker_fn);
+                }
+
+                hmx_matmul_task_init(&task_up[cur], vtcm_up[cur], vtcm_f16_act, (__fp16 *) up_hmx_buf[cur],
+                                    vtcm_scales, n_row_tiles, n_col_tiles, (uint32_t) n_k_tiles);
+                hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_worker_fn, &task_up[cur]));
+
+                if (s + 1 < n_chunk_cnt) {
+                    const size_t   nc_n     = (size_t) (s + 1) * n_chunk_n_cols;
+                    const size_t   n_cols_n = hex_smin(n - nc_n, (size_t) n_chunk_n_cols);
+                    const uint32_t height_n = is_tiled ? (hmx_ceil_div(n_cols_n, 32) * n_weight_tiles) : (uint32_t) n_cols_n;
+                    dma_queue_push(weight_dma, dma_make_data(up_raw_buf[next], w_up + nc_n * w_up_stride),
+                                   dma_dst_stride, dma_src_stride_u, dma_width_bytes, height_n);
+                }
+
+                // 3. Run HVX GLU(s-1) in parallel with HMX(gate_s) + HMX(up_s) + out_{s-2} DMA, then drain out_{s-2} and push out_{s-1}
+                if (s > 0) {
+                    const size_t nc_prev        = (size_t) (s - 1) * n_chunk_n_cols;
+                    const size_t n_cols_p       = hex_smin(n - nc_prev, (size_t) n_chunk_n_cols);
+                    const int    chunk_dst_cols = dst_cols - (int) nc_prev;
+                    if (chunk_dst_cols > 0) {
+                        transfer_output_chunk_int_glu_threaded(
+                            octx, &glu_state, vtcm_res_out[prev], vtcm_gate[prev], vtcm_up[prev],
+                            NULL, NULL, (int) n_rows, (int) n_cols_p, chunk_dst_cols);
+                    }
+                    if (s >= 2) {
+                        dma_queue_pop(weight_dma);
+                    }
+                    const int    vcols_o = hex_smin((int) n_cols_p, chunk_dst_cols);
+                    const size_t cbytes  = (vcols_o > 0) ? (size_t) vcols_o * dst_elem_size : 0;
+                    dma_queue_push(weight_dma,
+                                   dma_make_data(dst_dma_addr + (mr * dst_stride + nc_prev) * dst_elem_size, vtcm_res_out[prev]),
+                                   dst_row_bytes, res_out_stride_bytes, cbytes, cbytes ? n_rows : 0);
+                }
+            }
+
+            // Epilogue: wait HMX(gate_{last}) + HMX(up_{last}), drain out_{last-1}, run GLU(last), push+pop out_{last}
+            {
+                const int    last           = (n_chunk_cnt - 1) & 1;
+                const size_t nc_last        = (size_t) (n_chunk_cnt - 1) * n_chunk_n_cols;
+                const size_t n_cols_last    = hex_smin(n - nc_last, (size_t) n_chunk_n_cols);
+                const int    chunk_dst_cols = dst_cols - (int) nc_last;
+
+                hmx_queue_pop(ctx->hmx_queue);
+                hmx_queue_pop(ctx->hmx_queue);
+                if (n_chunk_cnt >= 2) {
+                    dma_queue_pop(weight_dma);
+                }
+
+                if (chunk_dst_cols > 0) {
+                    transfer_output_chunk_int_glu_threaded(
+                        octx, &glu_state, vtcm_res_out[last], vtcm_gate[last], vtcm_up[last],
+                        NULL, NULL, (int) n_rows, (int) n_cols_last, chunk_dst_cols);
+                }
+
+                const int    vcols_o = hex_smin((int) n_cols_last, chunk_dst_cols);
+                const size_t cbytes  = (vcols_o > 0) ? (size_t) vcols_o * dst_elem_size : 0;
+                dma_queue_push(weight_dma,
+                               dma_make_data(dst_dma_addr + (mr * dst_stride + nc_last) * dst_elem_size, vtcm_res_out[last]),
+                               dst_row_bytes, res_out_stride_bytes, cbytes, cbytes ? n_rows : 0);
+                dma_queue_pop(weight_dma);
+            }
+        }
+    } else {
+        // Non-pipelined 2-buffer path (m <= 32)
+        void * w_hmx = dequant_worker_fn ? vtcm_scratch[0] : vtcm_weight_raw[0];
+        hmx_matmul_task_t task;
+
+        for (size_t mr = (size_t) m_start; mr < mr_end; mr += m_chunk_n_rows) {
+            const size_t n_rows      = hex_smin(mr_end - mr, m_chunk_n_rows);
+            const size_t n_row_tiles = hmx_ceil_div(n_rows, HTP_MM_HMX_TILE_N_ROWS);
+
+            struct activation_transfer_params act_params = {
+                .ctx                = ctx,
+                .dst                = vtcm_f16_act,
+                .act_dma_addr       = act_dma_addr + (size_t) mr * act_stride * act_elem_size,
+                .n_rows             = (int) n_rows,
+                .k_block            = k,
+                .k_stride           = act_stride,
+                .n_hvx              = act_hvx,
+                .act_hvx_div        = act_hvx_div,
+                .k_div              = k_div,
+                .k_valid            = k_valid,
+                .vtcm_f32_act       = vtcm_f32_act,
+                .vtcm_f32_act_bytes = L.act_f32_bytes,
+                .act_elem_size      = act_elem_size,
+            };
+            transfer_activation_chunk_threaded(&act_params);
+
+            for (int s = 0; s < n_chunk_cnt; ++s) {
+                const size_t   nc          = (size_t) s * n_chunk_n_cols;
+                const size_t   n_cols      = hex_smin(n - nc, (size_t) n_chunk_n_cols);
+                const size_t   n_col_tiles = hmx_ceil_div(n_cols, HTP_MM_HMX_TILE_N_COLS);
+                const uint32_t height      = is_tiled ? (hmx_ceil_div(n_cols, 32) * n_weight_tiles) : (uint32_t) n_cols;
+
+                dma_queue_push(weight_dma, dma_make_data(vtcm_weight_raw[0], w_gate + nc * w_gate_stride),
+                               dma_dst_stride, dma_src_stride_g, dma_width_bytes, height);
+                dma_queue_pop(weight_dma);
+                if (dequant_worker_fn) {
+                    dequantize_tiled_weight_chunk_to_fp16_tiles(
+                        octx, w_hmx, vtcm_weight_raw[0],
+                        n_cols, k, row_stride, weight_type,
+                        n_k_tiles, n_k_tiles_div, dequant_worker_fn);
+                }
+                hmx_matmul_task_init(&task, vtcm_gate[0], vtcm_f16_act, (__fp16 *) w_hmx,
+                                    vtcm_scales, n_row_tiles, n_col_tiles, (uint32_t) n_k_tiles);
+                hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_worker_fn, &task));
+                hmx_queue_pop(ctx->hmx_queue);
+
+                dma_queue_push(weight_dma, dma_make_data(vtcm_weight_raw[0], w_up + nc * w_up_stride),
+                               dma_dst_stride, dma_src_stride_u, dma_width_bytes, height);
+                dma_queue_pop(weight_dma);
+                if (dequant_worker_fn) {
+                    dequantize_tiled_weight_chunk_to_fp16_tiles(
+                        octx, w_hmx, vtcm_weight_raw[0],
+                        n_cols, k, row_stride, weight_type,
+                        n_k_tiles, n_k_tiles_div, dequant_worker_fn);
+                }
+                hmx_matmul_task_init(&task, vtcm_up[0], vtcm_f16_act, (__fp16 *) w_hmx,
+                                    vtcm_scales, n_row_tiles, n_col_tiles, (uint32_t) n_k_tiles);
+                hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_worker_fn, &task));
+                hmx_queue_pop(ctx->hmx_queue);
+
+                const int chunk_dst_cols = dst_cols - (int) nc;
+                if (chunk_dst_cols > 0) {
+                    transfer_output_chunk_int_glu_threaded(
+                        octx, &glu_state, vtcm_res_out[0], vtcm_gate[0], vtcm_up[0],
+                        NULL, NULL, (int) n_rows, (int) n_cols, chunk_dst_cols);
+                }
+                const int    vcols_o = hex_smin((int) n_cols, chunk_dst_cols);
+                const size_t cbytes  = (vcols_o > 0) ? (size_t) vcols_o * dst_elem_size : 0;
+                dma_queue_push(weight_dma,
+                               dma_make_data(dst_dma_addr + (mr * dst_stride + nc) * dst_elem_size, vtcm_res_out[0]),
+                               dst_row_bytes, res_out_stride_bytes, cbytes, cbytes ? n_rows : 0);
+                dma_queue_pop(weight_dma);
+            }
+        }
+    }
+
+    return HTP_STATUS_OK;
 }
 
 static int hmx_mm_nx_2d_f32(struct htp_ops_context * octx, const struct htp_mm_kernel_params * kparams) {
@@ -6043,6 +6861,12 @@ static int op_matmul_nx_impl(struct htp_ops_context * octx) {
     const int status = htp_mm_init_context(octx, kparams);
     if (status != HTP_STATUS_OK) {
         return status;
+    }
+
+    if (octx->op == HTP_OP_MUL_MAT_NX_GLU) {
+        return htp_mm_kernel_is_hmx_int(kparams->kernel_type)
+            ? hmx_mm_nx_glu_int_2d(octx, kparams)
+            : hmx_mm_nx_glu_fp16_2d(octx, kparams);
     }
 
     if (kparams->n_hmx) {

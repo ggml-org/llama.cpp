@@ -515,6 +515,15 @@ void htp_lower_opnode(const struct ggml_hexagon_session * sess, htp_opnode & nod
                 }
             }
         }
+    } else if (node.opcode == HTP_OP_MUL_MAT_NX_GLU) {
+        if (n_in == 3 && n_out == 1 &&
+            htp_matmul_can_collapse(&in_mat[0], &in_mat[2], &out_mat[0]) &&
+            htp_matmul_can_collapse(&in_mat[1], &in_mat[2], &out_mat[0])) {
+            in_mat[2]    = htp_tensor_collapse_rows(&in_mat[2]);
+            in_dirty[2]  = true;
+            out_mat[0]   = htp_tensor_collapse_rows(&out_mat[0]);
+            out_dirty[0] = true;
+        }
     } else if (node.opcode == HTP_OP_UPSCALE) {
         if (n_in >= 1 && n_out >= 1) {
             if ((in_mat[0].ne[3] > 1 || out_mat[0].ne[3] > 1) &&
@@ -702,7 +711,7 @@ static bool htp_lower_inplace_types_ok(const htp_opnode & node) {
 static bool htp_lower_is_mm_opcode(uint32_t opcode) {
     return opcode == HTP_OP_MUL_MAT || opcode == HTP_OP_MUL_MAT_ADD ||
            opcode == HTP_OP_MUL_MAT_ID || opcode == HTP_OP_MUL_MAT_NX ||
-           opcode == HTP_OP_MUL_MAT_ID_NX;
+           opcode == HTP_OP_MUL_MAT_NX_GLU || opcode == HTP_OP_MUL_MAT_ID_NX;
 }
 
 static const ggml_tensor * htp_lower_orig_mm_for_output(const htp_opnode & node, const ggml_tensor * tensor) {
@@ -747,6 +756,13 @@ static bool htp_lower_respect_prec_hints(
         if (htp_lower_mm_blocks_output_f16(orig_mm)) {
             return false;
         }
+        if (owner.opcode == HTP_OP_MUL_MAT_NX_GLU) {
+            for (const ggml_tensor * f : owner.fused) {
+                if (f && f->op == GGML_OP_MUL_MAT && htp_lower_mm_blocks_output_f16(f)) {
+                    return false;
+                }
+            }
+        }
     }
     if (owner.opcode == HTP_OP_SOFTMAX && !owner.inputs.empty() && owner.inputs[0]) {
         const ggml_tensor * in_root = htp_tensor_root(owner.inputs[0]);
@@ -770,7 +786,7 @@ static bool htp_lower_respect_prec_hints(
         }
         const size_t act_idx = (node.opcode == HTP_OP_MUL_MAT_NX || node.opcode == HTP_OP_MUL_MAT_ID_NX)
                                    ? node.outputs.size()
-                                   : 1;
+                                   : (node.opcode == HTP_OP_MUL_MAT_NX_GLU ? 2 : 1);
         if (act_idx >= node.inputs.size()) {
             continue;
         }
@@ -795,7 +811,7 @@ static bool htp_lower_respect_prec_hints(
         if (blocks_src1(node.node)) {
             return false;
         }
-        if (node.opcode == HTP_OP_MUL_MAT_NX || node.opcode == HTP_OP_MUL_MAT_ID_NX) {
+        if (node.opcode == HTP_OP_MUL_MAT_NX || node.opcode == HTP_OP_MUL_MAT_NX_GLU || node.opcode == HTP_OP_MUL_MAT_ID_NX) {
             for (const ggml_tensor * f : node.fused) {
                 if (f && (f->op == GGML_OP_MUL_MAT || f->op == GGML_OP_MUL_MAT_ID) && blocks_src1(f)) {
                     return false;

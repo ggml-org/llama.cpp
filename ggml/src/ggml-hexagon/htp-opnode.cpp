@@ -36,8 +36,18 @@ std::string htp_opnode::name() const {
         case HTP_OP_ALLREDUCE:     return "ALLREDUCE";
         case HTP_OP_ALLREDUCE_ADD: return "ALLREDUCE+ADD";
         case HTP_OP_HADAMARD:      return "MUL_MAT_HADAMARD";
-        case HTP_OP_MUL_MAT_NX:    return "MUL_MAT_NX";
-        case HTP_OP_MUL_MAT_ID_NX: return "MUL_MAT_ID_NX";
+        case HTP_OP_MUL_MAT_NX:     return "MUL_MAT_NX";
+        case HTP_OP_MUL_MAT_NX_GLU: {
+            const auto * kp = kparams<htp_mm_kernel_params>();
+            switch (kp->glu_op) {
+                case HTP_OP_GLU_SWIGLU:      return "MUL_MAT_NX_SWIGLU";
+                case HTP_OP_GLU_GEGLU:       return "MUL_MAT_NX_GEGLU";
+                case HTP_OP_GLU_GEGLU_QUICK: return "MUL_MAT_NX_GEGLU_QUICK";
+                case HTP_OP_GLU_REGLU:       return "MUL_MAT_NX_REGLU";
+                default:                     return "MUL_MAT_NX_GLU";
+            }
+        }
+        case HTP_OP_MUL_MAT_ID_NX:  return "MUL_MAT_ID_NX";
         case HTP_OP_ADD:
         case HTP_OP_SUB:
         case HTP_OP_MUL:
@@ -146,8 +156,8 @@ static std::string format_kernel_params(const htp_opnode & node) {
     const size_t max_size = sizeof(str);
 
     if (node.opcode == HTP_OP_MUL_MAT || node.opcode == HTP_OP_MUL_MAT_ID ||
-        node.opcode == HTP_OP_MUL_MAT_NX || node.opcode == HTP_OP_MUL_MAT_ID_NX ||
-        node.opcode == HTP_OP_MUL_MAT_ADD) {
+        node.opcode == HTP_OP_MUL_MAT_NX || node.opcode == HTP_OP_MUL_MAT_NX_GLU ||
+        node.opcode == HTP_OP_MUL_MAT_ID_NX || node.opcode == HTP_OP_MUL_MAT_ADD) {
         const auto * kparams = node.kparams<htp_mm_kernel_params>();
         int32_t type = kparams->kernel_type;
         if (htp_mm_kernel_is_hmx_w8a8(type)) {

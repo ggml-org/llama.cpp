@@ -115,6 +115,16 @@ bool htp_kparams_solve_mmnx(
     struct htp_mm_kernel_params * kparams
 );
 
+bool htp_kparams_solve_mmnx_glu(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * w_gate,
+    const struct ggml_tensor * w_up,
+    const struct ggml_tensor * act,
+    const struct ggml_tensor * dst,
+    uint8_t glu_op,
+    struct htp_mm_kernel_params * kparams
+);
+
 bool htp_kparams_solve_mmidnx(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,

@@ -2972,3 +2972,493 @@ static inline int_output_col_chunk_fn_t resolve_int_output_col_chunk_fn(
     return HMX_SELECT_INT_COL_FN(fp32, chunked, bias, bias_f16, dst_aligned_nt);
 }
 
+// --- Fused W8A8 GLU Epilogue (paired gate/up -> f(gate) * up) ---
+
+typedef struct {
+    const float * act_scales_blk_base;
+    uint32_t (*da_ptr)[32];
+    size_t        group_stride;
+    uint32_t      mc_pad;
+    uint32_t      n_groups;
+    uint32_t      lane;
+} w8a8_sm_chunked_eval_args_t;
+
+// Thin noinline wrappers around w8a8_sm_eval_tile_quad_*_none to bound live ranges in GLU loops.
+static __attribute__((noinline)) void w8a8_sm_glu_eval_1g_quad(
+        const uint8_t * restrict  tp,
+        const float * restrict    dwp,
+        const uint32_t * restrict da0,
+        HVX_Vector * restrict     out) {
+    w8a8_sm_eval_tile_quad_1g_none(tp, dwp, 0, da0, NULL, 0, 4, 0, true, &out[0], &out[1], &out[2], &out[3]);
+}
+
+static __attribute__((noinline)) void w8a8_sm_glu_eval_1g_pair_hf(
+        const uint8_t * restrict  tp,
+        const float * restrict    dwp,
+        const uint32_t * restrict da0,
+        HVX_Vector * restrict     out_hf) {
+    HVX_Vector lo0, lo1, lo2, lo3, hi0, hi1, hi2, hi3;
+    w8a8_sm_eval_tile_quad_1g_none(tp, dwp, 0,  da0, NULL, 0, 4, 0, true, &lo0, &lo1, &lo2, &lo3);
+    w8a8_sm_eval_tile_quad_1g_none(tp, dwp, 32, da0, NULL, 0, 4, 0, true, &hi0, &hi1, &hi2, &hi3);
+    out_hf[0] = hmx_pack_f32_to_f16_clamped(lo0, hi0);
+    out_hf[1] = hmx_pack_f32_to_f16_clamped(lo1, hi1);
+    out_hf[2] = hmx_pack_f32_to_f16_clamped(lo2, hi2);
+    out_hf[3] = hmx_pack_f32_to_f16_clamped(lo3, hi3);
+}
+
+static __attribute__((noinline)) void w8a8_sm_glu_eval_1g_strip_hf(
+        const uint8_t * restrict  tp,
+        const float * restrict    dwp,
+        const uint32_t * restrict da0,
+        __fp16 * restrict         dst,
+        size_t                    dst_stride,
+        size_t                    n_pairs) {
+    _Pragma("clang loop unroll(disable)")
+    for (size_t p = 0; p < n_pairs; ++p) {
+        const size_t c = p << 6;
+        HVX_Vector lo0, lo1, lo2, lo3, hi0, hi1, hi2, hi3;
+        w8a8_sm_eval_tile_quad_1g_none(tp, dwp, c,      da0, NULL, 0, 4, 0, true, &lo0, &lo1, &lo2, &lo3);
+        w8a8_sm_eval_tile_quad_1g_none(tp, dwp, c + 32, da0, NULL, 0, 4, 0, true, &hi0, &hi1, &hi2, &hi3);
+        hvx_vmem(dst + c + 0 * dst_stride) = hmx_pack_f32_to_f16_clamped(lo0, hi0);
+        hvx_vmem(dst + c + 1 * dst_stride) = hmx_pack_f32_to_f16_clamped(lo1, hi1);
+        hvx_vmem(dst + c + 2 * dst_stride) = hmx_pack_f32_to_f16_clamped(lo2, hi2);
+        hvx_vmem(dst + c + 3 * dst_stride) = hmx_pack_f32_to_f16_clamped(lo3, hi3);
+    }
+}
+
+static __attribute__((noinline)) void w8a8_sm_glu_eval_2g_quad(
+        const uint8_t * restrict  tp0,
+        const uint8_t * restrict  tp1,
+        const float * restrict    dwp,
+        const uint32_t * restrict da0,
+        const uint32_t * restrict da1,
+        HVX_Vector * restrict     out) {
+    w8a8_sm_eval_tile_quad_2g_none(tp0, tp1, dwp, 0, da0, da1, NULL, 0, 4, 0, true, &out[0], &out[1], &out[2], &out[3]);
+}
+
+static __attribute__((noinline)) void w8a8_sm_glu_eval_2g_pair_hf(
+        const uint8_t * restrict  tp0,
+        const uint8_t * restrict  tp1,
+        const float * restrict    dwp,
+        const uint32_t * restrict da0,
+        const uint32_t * restrict da1,
+        HVX_Vector * restrict     out_hf) {
+    HVX_Vector lo0, lo1, lo2, lo3, hi0, hi1, hi2, hi3;
+    w8a8_sm_eval_tile_quad_2g_none(tp0, tp1, dwp, 0,  da0, da1, NULL, 0, 4, 0, true, &lo0, &lo1, &lo2, &lo3);
+    w8a8_sm_eval_tile_quad_2g_none(tp0, tp1, dwp, 32, da0, da1, NULL, 0, 4, 0, true, &hi0, &hi1, &hi2, &hi3);
+    out_hf[0] = hmx_pack_f32_to_f16_clamped(lo0, hi0);
+    out_hf[1] = hmx_pack_f32_to_f16_clamped(lo1, hi1);
+    out_hf[2] = hmx_pack_f32_to_f16_clamped(lo2, hi2);
+    out_hf[3] = hmx_pack_f32_to_f16_clamped(lo3, hi3);
+}
+
+static __attribute__((noinline)) void w8a8_sm_glu_eval_2g_strip_hf(
+        const uint8_t * restrict  tp0,
+        const uint8_t * restrict  tp1,
+        const float * restrict    dwp,
+        const uint32_t * restrict da0,
+        const uint32_t * restrict da1,
+        __fp16 * restrict         dst,
+        size_t                    dst_stride,
+        size_t                    n_pairs) {
+    _Pragma("clang loop unroll(disable)")
+    for (size_t p = 0; p < n_pairs; ++p) {
+        const size_t c = p << 6;
+        HVX_Vector lo0, lo1, lo2, lo3, hi0, hi1, hi2, hi3;
+        w8a8_sm_eval_tile_quad_2g_none(tp0, tp1, dwp, c,      da0, da1, NULL, 0, 4, 0, true, &lo0, &lo1, &lo2, &lo3);
+        w8a8_sm_eval_tile_quad_2g_none(tp0, tp1, dwp, c + 32, da0, da1, NULL, 0, 4, 0, true, &hi0, &hi1, &hi2, &hi3);
+        hvx_vmem(dst + c + 0 * dst_stride) = hmx_pack_f32_to_f16_clamped(lo0, hi0);
+        hvx_vmem(dst + c + 1 * dst_stride) = hmx_pack_f32_to_f16_clamped(lo1, hi1);
+        hvx_vmem(dst + c + 2 * dst_stride) = hmx_pack_f32_to_f16_clamped(lo2, hi2);
+        hvx_vmem(dst + c + 3 * dst_stride) = hmx_pack_f32_to_f16_clamped(lo3, hi3);
+    }
+}
+
+static __attribute__((noinline)) void w8a8_sm_glu_eval_ng_quad(
+        const uint8_t * restrict  tp,
+        const float * restrict    dw,
+        size_t                    group_stride,
+        uint32_t                  n_groups,
+        const uint32_t * restrict da,
+        HVX_Vector * restrict     out) {
+    const HVX_Vector sign_80 = Q6_Vb_vsplat_R(0x80);
+    w8a8_sm_eval_tile_quad_ng_none(tp, dw, group_stride, n_groups, da, sign_80, NULL, 0, 0, 4, 0, true,
+                                   &out[0], &out[1], &out[2], &out[3]);
+}
+
+static __attribute__((noinline)) void w8a8_sm_glu_eval_chunked_quad(
+        const uint8_t * restrict            tp,
+        const float * restrict              dw,
+        const w8a8_sm_chunked_eval_args_t * args,
+        HVX_Vector * restrict               out) {
+    const HVX_Vector sign_80 = Q6_Vb_vsplat_R(0x80);
+    w8a8_sm_eval_tile_quad_chunked_none(tp, dw, args->act_scales_blk_base, args->group_stride, args->mc_pad,
+                                        args->n_groups, args->lane, args->da_ptr, sign_80, NULL, 0, 0, 4, 0, true,
+                                        &out[0], &out[1], &out[2], &out[3]);
+}
+
+static __attribute__((noinline)) void w8a8_sm_glu_pack_quad_hf(const HVX_Vector * restrict q, HVX_Vector * restrict out_hf) {
+    out_hf[0] = hmx_pack_f32_to_f16_clamped(q[0], q[4]);
+    out_hf[1] = hmx_pack_f32_to_f16_clamped(q[1], q[5]);
+    out_hf[2] = hmx_pack_f32_to_f16_clamped(q[2], q[6]);
+    out_hf[3] = hmx_pack_f32_to_f16_clamped(q[3], q[7]);
+}
+
+static __attribute__((noinline)) void w8a8_sm_glu_pack_and_store_tail_fp16(
+        const hmx_output_glu_state_t * st,
+        __fp16 * restrict dst,
+        size_t dst_stride,
+        const HVX_Vector * restrict g_q,
+        const HVX_Vector * restrict u_q,
+        uint32_t valid_rows,
+        size_t valid_c) {
+    HVX_Vector g_hf[4] __attribute__((aligned(128)));
+    HVX_Vector u_hf[4] __attribute__((aligned(128)));
+    if (valid_c > 32) {
+        g_hf[0] = hmx_pack_f32_to_f16_clamped(g_q[0], g_q[4]);
+        g_hf[1] = hmx_pack_f32_to_f16_clamped(g_q[1], g_q[5]);
+        g_hf[2] = hmx_pack_f32_to_f16_clamped(g_q[2], g_q[6]);
+        g_hf[3] = hmx_pack_f32_to_f16_clamped(g_q[3], g_q[7]);
+        u_hf[0] = hmx_pack_f32_to_f16_clamped(u_q[0], u_q[4]);
+        u_hf[1] = hmx_pack_f32_to_f16_clamped(u_q[1], u_q[5]);
+        u_hf[2] = hmx_pack_f32_to_f16_clamped(u_q[2], u_q[6]);
+        u_hf[3] = hmx_pack_f32_to_f16_clamped(u_q[3], u_q[7]);
+    } else {
+        const HVX_Vector z = Q6_V_vzero();
+        g_hf[0] = hmx_pack_f32_to_f16_clamped(g_q[0], z);
+        g_hf[1] = hmx_pack_f32_to_f16_clamped(g_q[1], z);
+        g_hf[2] = hmx_pack_f32_to_f16_clamped(g_q[2], z);
+        g_hf[3] = hmx_pack_f32_to_f16_clamped(g_q[3], z);
+        u_hf[0] = hmx_pack_f32_to_f16_clamped(u_q[0], z);
+        u_hf[1] = hmx_pack_f32_to_f16_clamped(u_q[1], z);
+        u_hf[2] = hmx_pack_f32_to_f16_clamped(u_q[2], z);
+        u_hf[3] = hmx_pack_f32_to_f16_clamped(u_q[3], z);
+    }
+    const uint32_t valid_bytes = (uint32_t) (valid_c * sizeof(__fp16));
+    st->store_tail_fn(dst, dst_stride, g_hf, u_hf, (valid_rows << 16) | valid_bytes);
+}
+
+#define W8A8_GLU_EVAL_TILE_1G(tp_g, tp_u, dw_g, dw_u, out_g, out_u)              \
+    w8a8_sm_glu_eval_1g_quad((tp_g), (dw_g), da0, (out_g));                      \
+    w8a8_sm_glu_eval_1g_quad((tp_u), (dw_u), da0, (out_u));
+
+#define W8A8_GLU_EVAL_TILE_2G(tp_g, tp_u, dw_g, dw_u, out_g, out_u)                         \
+    w8a8_sm_glu_eval_2g_quad((tp_g), (tp_g) + group_stride, (dw_g), da0, da1, (out_g));     \
+    w8a8_sm_glu_eval_2g_quad((tp_u), (tp_u) + group_stride, (dw_u), da0, da1, (out_u));
+
+#define W8A8_GLU_EVAL_TILE_NG(tp_g, tp_u, dw_g, dw_u, out_g, out_u)                              \
+    w8a8_sm_glu_eval_ng_quad((tp_g), (dw_g), group_stride, n_groups, da_quad_base, (out_g));     \
+    w8a8_sm_glu_eval_ng_quad((tp_u), (dw_u), group_stride, n_groups, da_quad_base, (out_u));
+
+#define W8A8_GLU_EVAL_TILE_CHK(tp_g, tp_u, dw_g, dw_u, out_g, out_u)             \
+    w8a8_sm_glu_eval_chunked_quad((tp_g), (dw_g), &cargs, (out_g));              \
+    w8a8_sm_glu_eval_chunked_quad((tp_u), (dw_u), &cargs, (out_u));
+
+#define W8A8_GLU_EVAL_PAIR_1G(tp_g, tp_u, dw_g, dw_u, out_g, out_u)              \
+    w8a8_sm_glu_eval_1g_pair_hf((tp_g), (dw_g), da0, (out_g));                   \
+    w8a8_sm_glu_eval_1g_pair_hf((tp_u), (dw_u), da0, (out_u));
+
+#define W8A8_GLU_EVAL_PAIR_2G(tp_g, tp_u, dw_g, dw_u, out_g, out_u)                            \
+    w8a8_sm_glu_eval_2g_pair_hf((tp_g), (tp_g) + group_stride, (dw_g), da0, da1, (out_g));     \
+    w8a8_sm_glu_eval_2g_pair_hf((tp_u), (tp_u) + group_stride, (dw_u), da0, da1, (out_u));
+
+#define W8A8_GLU_EVAL_STRIP_1G(tp_g, tp_u, dw_g, dw_u, dst_g, dst_s, dst_u, u_s, n_p)                         \
+    w8a8_sm_glu_eval_1g_strip_hf((tp_g), (dw_g), da0, (dst_g), (dst_s), (n_p));                               \
+    w8a8_sm_glu_eval_1g_strip_hf((tp_u), (dw_u), da0, (dst_u), (u_s), (n_p));
+
+#define W8A8_GLU_EVAL_STRIP_2G(tp_g, tp_u, dw_g, dw_u, dst_g, dst_s, dst_u, u_s, n_p)                         \
+    w8a8_sm_glu_eval_2g_strip_hf((tp_g), (tp_g) + group_stride, (dw_g), da0, da1, (dst_g), (dst_s), (n_p));   \
+    w8a8_sm_glu_eval_2g_strip_hf((tp_u), (tp_u) + group_stride, (dw_u), da0, da1, (dst_u), (u_s), (n_p));
+
+#define W8A8_GLU_TAIL_FP16(EVAL_TILE, DW_STRIDE_ELEMS)                                                     \
+    if (limit_c_aligned < limit_c) {                                                                       \
+        HVX_Vector   g_q[8] __attribute__((aligned(128)));                                                 \
+        HVX_Vector   u_q[8] __attribute__((aligned(128)));                                                 \
+        const size_t c       = limit_c_aligned;                                                            \
+        const size_t c0      = c >> 5;                                                                     \
+        const size_t off0    = c0 * 2 * HTP_MM_HMX_TILE_SIZE;                                              \
+        const size_t dw0     = c0 * (DW_STRIDE_ELEMS);                                                     \
+        const size_t valid_c = limit_c - c;                                                                \
+        EVAL_TILE(g_base + off0, u_base + off0, dw_g_base + dw0, dw_u_base + dw0, &g_q[0], &u_q[0])        \
+        if (valid_c > 32) {                                                                                \
+            const size_t off1 = off0 + 2 * HTP_MM_HMX_TILE_SIZE;                                           \
+            const size_t dw1  = dw0 + (DW_STRIDE_ELEMS);                                                   \
+            EVAL_TILE(g_base + off1, u_base + off1, dw_g_base + dw1, dw_u_base + dw1, &g_q[4], &u_q[4])    \
+        }                                                                                                  \
+        w8a8_sm_glu_pack_and_store_tail_fp16(st, out_row0 + c, dst_stride, g_q, u_q, valid_rows, valid_c); \
+    }
+
+#define W8A8_GLU_LOOP_FP16_PAIR(EVAL_STRIP, EVAL_PAIR, EVAL_TILE, DW_STRIDE_ELEMS)                               \
+    {                                                                                                            \
+        const uint32_t valid_rows = (uint32_t) hex_smin((size_t) 4u, (size_t) n_rows - r);                       \
+        if (valid_rows == 4u) {                                                                                  \
+            __fp16 u_buf[4 * 256] __attribute__((aligned(128)));                                                 \
+            _Pragma("clang loop unroll(disable)")                                                                \
+            for (size_t c = 0; c < limit_c_aligned; c += 256) {                                                  \
+                const size_t n_pairs = hex_smin((limit_c_aligned - c) >> 6, (size_t) 4u);                        \
+                const size_t c0      = c >> 5;                                                                   \
+                const size_t off0    = c0 * 2 * HTP_MM_HMX_TILE_SIZE;                                            \
+                const size_t dw0     = c0 * (DW_STRIDE_ELEMS);                                                   \
+                EVAL_STRIP(g_base + off0, u_base + off0, dw_g_base + dw0, dw_u_base + dw0,                       \
+                           out_row0 + c, dst_stride, u_buf, 256, n_pairs)                                        \
+                st->store_strip_fn(out_row0 + c, dst_stride, u_buf, 256, n_pairs);                               \
+            }                                                                                                    \
+        } else {                                                                                                 \
+            HVX_Vector g_hf[4] __attribute__((aligned(128)));                                                    \
+            HVX_Vector u_hf[4] __attribute__((aligned(128)));                                                    \
+            _Pragma("clang loop unroll(disable)")                                                                \
+            for (size_t c = 0; c < limit_c_aligned; c += 64) {                                                   \
+                const size_t c0   = c >> 5;                                                                      \
+                const size_t off0 = c0 * 2 * HTP_MM_HMX_TILE_SIZE;                                               \
+                const size_t dw0  = c0 * (DW_STRIDE_ELEMS);                                                      \
+                EVAL_PAIR(g_base + off0, u_base + off0, dw_g_base + dw0, dw_u_base + dw0, g_hf, u_hf)            \
+                st->store_quad_fn(out_row0 + c, dst_stride, g_hf, u_hf, valid_rows);                             \
+            }                                                                                                    \
+        }                                                                                                        \
+        W8A8_GLU_TAIL_FP16(EVAL_TILE, DW_STRIDE_ELEMS)                                                           \
+    }
+
+#define W8A8_GLU_LOOP_FP16_GEN(EVAL_TILE, DW_STRIDE_ELEMS)                                                 \
+    {                                                                                                      \
+        const uint32_t valid_rows = (uint32_t) hex_smin((size_t) 4u, (size_t) n_rows - r);                 \
+        HVX_Vector     g_q[8]  __attribute__((aligned(128)));                                              \
+        HVX_Vector     u_q[8]  __attribute__((aligned(128)));                                              \
+        HVX_Vector     g_hf[4] __attribute__((aligned(128)));                                              \
+        HVX_Vector     u_hf[4] __attribute__((aligned(128)));                                              \
+        _Pragma("clang loop unroll(disable)")                                                              \
+        for (size_t c = 0; c < limit_c_aligned; c += 64) {                                                 \
+            const size_t c0   = c >> 5;                                                                    \
+            const size_t off0 = c0 * 2 * HTP_MM_HMX_TILE_SIZE;                                             \
+            const size_t off1 = off0 + 2 * HTP_MM_HMX_TILE_SIZE;                                           \
+            const size_t dw0  = c0 * (DW_STRIDE_ELEMS);                                                    \
+            const size_t dw1  = dw0 + (DW_STRIDE_ELEMS);                                                   \
+            EVAL_TILE(g_base + off0, u_base + off0, dw_g_base + dw0, dw_u_base + dw0, &g_q[0], &u_q[0])    \
+            EVAL_TILE(g_base + off1, u_base + off1, dw_g_base + dw1, dw_u_base + dw1, &g_q[4], &u_q[4])    \
+            w8a8_sm_glu_pack_quad_hf(g_q, g_hf);                                                           \
+            w8a8_sm_glu_pack_quad_hf(u_q, u_hf);                                                           \
+            st->store_quad_fn(out_row0 + c, dst_stride, g_hf, u_hf, valid_rows);                           \
+        }                                                                                                  \
+        W8A8_GLU_TAIL_FP16(EVAL_TILE, DW_STRIDE_ELEMS)                                                     \
+    }
+
+#define W8A8_GLU_LOOP_FP32(EVAL_TILE, DW_STRIDE_ELEMS)                                                     \
+    {                                                                                                      \
+        const uint32_t valid_rows = (uint32_t) hex_smin((size_t) 4u, (size_t) n_rows - r);                 \
+        HVX_Vector     g_q[4] __attribute__((aligned(128)));                                               \
+        HVX_Vector     u_q[4] __attribute__((aligned(128)));                                               \
+        _Pragma("clang loop unroll(disable)")                                                              \
+        for (size_t c = 0; c < limit_c_aligned; c += 32) {                                                 \
+            const size_t c0   = c >> 5;                                                                    \
+            const size_t off0 = c0 * 2 * HTP_MM_HMX_TILE_SIZE;                                             \
+            const size_t dw0  = c0 * (DW_STRIDE_ELEMS);                                                    \
+            EVAL_TILE(g_base + off0, u_base + off0, dw_g_base + dw0, dw_u_base + dw0, &g_q[0], &u_q[0])    \
+            st->store_quad_fn(out_row0 + c, dst_stride, g_q, u_q, valid_rows);                             \
+        }                                                                                                  \
+        if (limit_c_aligned < limit_c) {                                                                   \
+            const size_t   c           = limit_c_aligned;                                                  \
+            const size_t   c0          = c >> 5;                                                           \
+            const size_t   off0        = c0 * 2 * HTP_MM_HMX_TILE_SIZE;                                    \
+            const size_t   dw0         = c0 * (DW_STRIDE_ELEMS);                                           \
+            const uint32_t valid_bytes = (uint32_t) ((limit_c - c) * sizeof(float));                       \
+            EVAL_TILE(g_base + off0, u_base + off0, dw_g_base + dw0, dw_u_base + dw0, &g_q[0], &u_q[0])    \
+            st->store_tail_fn(out_row0 + c, dst_stride, g_q, u_q, (valid_rows << 16) | valid_bytes);       \
+        }                                                                                                  \
+    }
+
+#define W8A8_GLU_LOOP_FP16_1G  W8A8_GLU_LOOP_FP16_PAIR(W8A8_GLU_EVAL_STRIP_1G, W8A8_GLU_EVAL_PAIR_1G, W8A8_GLU_EVAL_TILE_1G, 32)
+#define W8A8_GLU_LOOP_FP16_2G  W8A8_GLU_LOOP_FP16_PAIR(W8A8_GLU_EVAL_STRIP_2G, W8A8_GLU_EVAL_PAIR_2G, W8A8_GLU_EVAL_TILE_2G, 64)
+#define W8A8_GLU_LOOP_FP16_NG  W8A8_GLU_LOOP_FP16_GEN(W8A8_GLU_EVAL_TILE_NG,  dw_tile_elems)
+#define W8A8_GLU_LOOP_FP16_CHK W8A8_GLU_LOOP_FP16_GEN(W8A8_GLU_EVAL_TILE_CHK, dw_tile_elems)
+
+#define W8A8_GLU_LOOP_FP32_1G  W8A8_GLU_LOOP_FP32(W8A8_GLU_EVAL_TILE_1G,  32)
+#define W8A8_GLU_LOOP_FP32_2G  W8A8_GLU_LOOP_FP32(W8A8_GLU_EVAL_TILE_2G,  64)
+#define W8A8_GLU_LOOP_FP32_NG  W8A8_GLU_LOOP_FP32(W8A8_GLU_EVAL_TILE_NG,  dw_tile_elems)
+#define W8A8_GLU_LOOP_FP32_CHK W8A8_GLU_LOOP_FP32(W8A8_GLU_EVAL_TILE_CHK, dw_tile_elems)
+
+#define DEFINE_W8A8_GLU_COL_CHUNKS(DST_SFX, DST_T, ALIGN_MASK, LOOP_1G, LOOP_2G, LOOP_NG, LOOP_CHK)                \
+static __attribute__((noinline)) void transfer_output_chunk_w8a8_sm_glu_##DST_SFX##_1g(                            \
+        const void * st_void, void * restrict dst_ptr,                                                             \
+        uint32_t start_row, uint32_t n_rows, uint32_t c_first, uint32_t c_len_and_dst_cols) {                      \
+    const hmx_output_glu_state_t * st = (const hmx_output_glu_state_t *) st_void;                                  \
+    DST_T * restrict dst              = (DST_T *) dst_ptr;                                                         \
+    const size_t total_col_tiles      = hmx_ceil_div(st->n_cols, 32);                                              \
+    const size_t row_tile_stride      = total_col_tiles * 2 * HTP_MM_HMX_TILE_SIZE;                                \
+    const size_t c0_first             = c_first >> 5;                                                              \
+    const size_t limit_c              = hex_smin(c_len_and_dst_cols >> 16, c_len_and_dst_cols & 0xffffu);          \
+    const size_t limit_c_aligned      = limit_c & (ALIGN_MASK);                                                    \
+    const size_t dst_stride           = st->dst_stride;                                                            \
+    const float * dw_g_base           = st->vtcm_wt_scales_gate + c0_first * 32;                                   \
+    const float * dw_u_base           = st->vtcm_wt_scales_up + c0_first * 32;                                     \
+    uint32_t da_buf[1][32] __attribute__((aligned(128)));                                                          \
+    for (size_t r_base = 0; r_base < n_rows; ) {                                                                   \
+        const size_t r_idx_base = start_row + r_base;                                                              \
+        const size_t r_blk      = r_idx_base >> 5;                                                                 \
+        const size_t r0         = r_idx_base >> 6;                                                                 \
+        const size_t r_step     = hex_smin((size_t) n_rows - r_base, (size_t) (32u - (r_idx_base & 31u)));         \
+        const size_t r_end      = r_base + r_step;                                                                 \
+        uint32_t (*da_ptr)[32]  = stage_act_scales_to_l1d(da_buf, st->vtcm_act_scales + (r_blk << 5), 0, 1);       \
+        for (size_t r = r_base; r < r_end; r += 4) {                                                               \
+            const size_t     r_idx0   = start_row + r;                                                             \
+            const size_t     rg       = (r_idx0 & 63u) >> 2;                                                       \
+            const size_t     lane     = r_idx0 & 31u;                                                              \
+            const uint32_t * da0      = &da_ptr[0][lane];                                                          \
+            const size_t     tile_off = r0 * row_tile_stride + c0_first * 2 * HTP_MM_HMX_TILE_SIZE + rg * 128;     \
+            const uint8_t *  g_base   = st->vtcm_gate + tile_off;                                                  \
+            const uint8_t *  u_base   = st->vtcm_up + tile_off;                                                    \
+            DST_T *          out_row0 = dst + r * dst_stride;                                                      \
+            LOOP_1G                                                                                                \
+        }                                                                                                          \
+        r_base = r_end;                                                                                            \
+    }                                                                                                              \
+}                                                                                                                  \
+static __attribute__((noinline)) void transfer_output_chunk_w8a8_sm_glu_##DST_SFX##_2g(                            \
+        const void * st_void, void * restrict dst_ptr,                                                             \
+        uint32_t start_row, uint32_t n_rows, uint32_t c_first, uint32_t c_len_and_dst_cols) {                      \
+    const hmx_output_glu_state_t * st = (const hmx_output_glu_state_t *) st_void;                                  \
+    DST_T * restrict dst              = (DST_T *) dst_ptr;                                                         \
+    const size_t total_col_tiles      = hmx_ceil_div(st->n_cols, 32);                                              \
+    const size_t n_row_tiles_64       = st->mc_pad >> 6;                                                           \
+    const size_t row_tile_stride      = total_col_tiles * 2 * HTP_MM_HMX_TILE_SIZE;                                \
+    const size_t group_stride         = n_row_tiles_64 * row_tile_stride;                                          \
+    const size_t c0_first             = c_first >> 5;                                                              \
+    const size_t limit_c              = hex_smin(c_len_and_dst_cols >> 16, c_len_and_dst_cols & 0xffffu);          \
+    const size_t limit_c_aligned      = limit_c & (ALIGN_MASK);                                                    \
+    const size_t dst_stride           = st->dst_stride;                                                            \
+    const float * dw_g_base           = st->vtcm_wt_scales_gate + c0_first * 64;                                   \
+    const float * dw_u_base           = st->vtcm_wt_scales_up + c0_first * 64;                                     \
+    uint32_t da_buf[2][32] __attribute__((aligned(128)));                                                          \
+    for (size_t r_base = 0; r_base < n_rows; ) {                                                                   \
+        const size_t r_idx_base = start_row + r_base;                                                              \
+        const size_t r_blk      = r_idx_base >> 5;                                                                 \
+        const size_t r0         = r_idx_base >> 6;                                                                 \
+        const size_t r_step     = hex_smin((size_t) n_rows - r_base, (size_t) (32u - (r_idx_base & 31u)));         \
+        const size_t r_end      = r_base + r_step;                                                                 \
+        const float * sc_base   = st->vtcm_act_scales + (r_blk << 5);                                              \
+        uint32_t (*da_ptr)[32]  = stage_act_scales_to_l1d(da_buf, sc_base, st->mc_pad, 2);                         \
+        for (size_t r = r_base; r < r_end; r += 4) {                                                               \
+            const size_t     r_idx0   = start_row + r;                                                             \
+            const size_t     rg       = (r_idx0 & 63u) >> 2;                                                       \
+            const size_t     lane     = r_idx0 & 31u;                                                              \
+            const uint32_t * da0      = &da_ptr[0][lane];                                                          \
+            const uint32_t * da1      = &da_ptr[1][lane];                                                          \
+            const size_t     tile_off = r0 * row_tile_stride + c0_first * 2 * HTP_MM_HMX_TILE_SIZE + rg * 128;     \
+            const uint8_t *  g_base   = st->vtcm_gate + tile_off;                                                  \
+            const uint8_t *  u_base   = st->vtcm_up + tile_off;                                                    \
+            DST_T *          out_row0 = dst + r * dst_stride;                                                      \
+            LOOP_2G                                                                                                \
+        }                                                                                                          \
+        r_base = r_end;                                                                                            \
+    }                                                                                                              \
+}                                                                                                                  \
+static __attribute__((noinline)) void transfer_output_chunk_w8a8_sm_glu_##DST_SFX##_ng(                            \
+        const void * st_void, void * restrict dst_ptr,                                                             \
+        uint32_t start_row, uint32_t n_rows, uint32_t c_first, uint32_t c_len_and_dst_cols) {                      \
+    const hmx_output_glu_state_t * st = (const hmx_output_glu_state_t *) st_void;                                  \
+    DST_T * restrict dst              = (DST_T *) dst_ptr;                                                         \
+    const uint32_t n_groups           = st->n_groups;                                                              \
+    const size_t total_col_tiles      = hmx_ceil_div(st->n_cols, 32);                                              \
+    const size_t n_row_tiles_64       = st->mc_pad >> 6;                                                           \
+    const size_t row_tile_stride      = total_col_tiles * 2 * HTP_MM_HMX_TILE_SIZE;                                \
+    const size_t group_stride         = n_row_tiles_64 * row_tile_stride;                                          \
+    const size_t dw_tile_elems        = (size_t) n_groups * 32;                                                    \
+    const size_t c0_first             = c_first >> 5;                                                              \
+    const size_t limit_c              = hex_smin(c_len_and_dst_cols >> 16, c_len_and_dst_cols & 0xffffu);          \
+    const size_t limit_c_aligned      = limit_c & (ALIGN_MASK);                                                    \
+    const size_t dst_stride           = st->dst_stride;                                                            \
+    const float * dw_g_base           = st->vtcm_wt_scales_gate + c0_first * dw_tile_elems;                        \
+    const float * dw_u_base           = st->vtcm_wt_scales_up + c0_first * dw_tile_elems;                          \
+    uint32_t da_buf[16][32] __attribute__((aligned(128)));                                                         \
+    for (size_t r_base = 0; r_base < n_rows; ) {                                                                   \
+        const size_t r_idx_base = start_row + r_base;                                                              \
+        const size_t r_blk      = r_idx_base >> 5;                                                                 \
+        const size_t r0         = r_idx_base >> 6;                                                                 \
+        const size_t r_step     = hex_smin((size_t) n_rows - r_base, (size_t) (32u - (r_idx_base & 31u)));         \
+        const size_t r_end      = r_base + r_step;                                                                 \
+        const float * sc_base   = st->vtcm_act_scales + (r_blk << 5);                                              \
+        uint32_t (*da_ptr)[32]  = stage_act_scales_to_l1d(da_buf, sc_base, st->mc_pad, n_groups);                  \
+        for (size_t r = r_base; r < r_end; r += 4) {                                                               \
+            const size_t     r_idx0       = start_row + r;                                                         \
+            const size_t     rg           = (r_idx0 & 63u) >> 2;                                                   \
+            const size_t     lane         = r_idx0 & 31u;                                                          \
+            const uint32_t * da_quad_base = &da_ptr[0][lane];                                                      \
+            const size_t     tile_off     = r0 * row_tile_stride + c0_first * 2 * HTP_MM_HMX_TILE_SIZE + rg * 128; \
+            const uint8_t *  g_base       = st->vtcm_gate + tile_off;                                              \
+            const uint8_t *  u_base       = st->vtcm_up + tile_off;                                                \
+            DST_T *          out_row0     = dst + r * dst_stride;                                                  \
+            LOOP_NG                                                                                                \
+        }                                                                                                          \
+        r_base = r_end;                                                                                            \
+    }                                                                                                              \
+}                                                                                                                  \
+static __attribute__((noinline)) void transfer_output_chunk_w8a8_sm_glu_##DST_SFX##_chunked(                       \
+        const void * st_void, void * restrict dst_ptr,                                                             \
+        uint32_t start_row, uint32_t n_rows, uint32_t c_first, uint32_t c_len_and_dst_cols) {                      \
+    const hmx_output_glu_state_t * st = (const hmx_output_glu_state_t *) st_void;                                  \
+    DST_T * restrict dst              = (DST_T *) dst_ptr;                                                         \
+    const uint32_t n_groups           = st->n_groups;                                                              \
+    const size_t total_col_tiles      = hmx_ceil_div(st->n_cols, 32);                                              \
+    const size_t n_row_tiles_64       = st->mc_pad >> 6;                                                           \
+    const size_t row_tile_stride      = total_col_tiles * 2 * HTP_MM_HMX_TILE_SIZE;                                \
+    const size_t group_stride         = n_row_tiles_64 * row_tile_stride;                                          \
+    const size_t dw_tile_elems        = (size_t) n_groups * 32;                                                    \
+    const size_t c0_first             = c_first >> 5;                                                              \
+    const size_t limit_c              = hex_smin(c_len_and_dst_cols >> 16, c_len_and_dst_cols & 0xffffu);          \
+    const size_t limit_c_aligned      = limit_c & (ALIGN_MASK);                                                    \
+    const size_t dst_stride           = st->dst_stride;                                                            \
+    const float * dw_g_base           = st->vtcm_wt_scales_gate + c0_first * dw_tile_elems;                        \
+    const float * dw_u_base           = st->vtcm_wt_scales_up + c0_first * dw_tile_elems;                          \
+    uint32_t da_buf[16][32] __attribute__((aligned(128)));                                                         \
+    for (size_t r_base = 0; r_base < n_rows; ) {                                                                   \
+        const size_t r_idx_base = start_row + r_base;                                                              \
+        const size_t r_blk      = r_idx_base >> 5;                                                                 \
+        const size_t r0         = r_idx_base >> 6;                                                                 \
+        const size_t r_step     = hex_smin((size_t) n_rows - r_base, (size_t) (32u - (r_idx_base & 31u)));         \
+        const size_t r_end      = r_base + r_step;                                                                 \
+        w8a8_sm_chunked_eval_args_t cargs;                                                                         \
+        cargs.act_scales_blk_base = st->vtcm_act_scales + (r_blk << 5);                                            \
+        cargs.da_ptr              = da_buf;                                                                        \
+        cargs.group_stride        = group_stride;                                                                  \
+        cargs.mc_pad              = st->mc_pad;                                                                    \
+        cargs.n_groups            = n_groups;                                                                      \
+        for (size_t r = r_base; r < r_end; r += 4) {                                                               \
+            const size_t    r_idx0   = start_row + r;                                                              \
+            const size_t    rg       = (r_idx0 & 63u) >> 2;                                                        \
+            cargs.lane               = (uint32_t) (r_idx0 & 31u);                                                  \
+            const size_t    tile_off = r0 * row_tile_stride + c0_first * 2 * HTP_MM_HMX_TILE_SIZE + rg * 128;      \
+            const uint8_t * g_base   = st->vtcm_gate + tile_off;                                                   \
+            const uint8_t * u_base   = st->vtcm_up + tile_off;                                                     \
+            DST_T *         out_row0 = dst + r * dst_stride;                                                       \
+            LOOP_CHK                                                                                               \
+        }                                                                                                          \
+        r_base = r_end;                                                                                            \
+    }                                                                                                              \
+}
+
+DEFINE_W8A8_GLU_COL_CHUNKS(fp16, __fp16, ~63u, W8A8_GLU_LOOP_FP16_1G, W8A8_GLU_LOOP_FP16_2G, W8A8_GLU_LOOP_FP16_NG, W8A8_GLU_LOOP_FP16_CHK)
+DEFINE_W8A8_GLU_COL_CHUNKS(fp32, float,  ~31u, W8A8_GLU_LOOP_FP32_1G, W8A8_GLU_LOOP_FP32_2G, W8A8_GLU_LOOP_FP32_NG, W8A8_GLU_LOOP_FP32_CHK)
+
+static inline bool resolve_int_output_glu_fns(
+        uint32_t n_groups,
+        uint8_t glu_op,
+        size_t dst_elem_size,
+        hmx_output_glu_col_chunk_fn_t * col_chunk_fn,
+        hmx_glu_store_quad_fn_t * store_quad_fn,
+        hmx_glu_store_tail_fn_t * store_tail_fn,
+        hmx_glu_store_strip_fn_t * store_strip_fn) {
+    if (!resolve_hmx_glu_store_fns(glu_op, dst_elem_size, store_quad_fn, store_tail_fn, store_strip_fn)) {
+        return false;
+    }
+    if (dst_elem_size == sizeof(__fp16)) {
+        if (n_groups <= 1u)       *col_chunk_fn = transfer_output_chunk_w8a8_sm_glu_fp16_1g;
+        else if (n_groups == 2u)  *col_chunk_fn = transfer_output_chunk_w8a8_sm_glu_fp16_2g;
+        else if (n_groups <= 16u) *col_chunk_fn = transfer_output_chunk_w8a8_sm_glu_fp16_ng;
+        else                      *col_chunk_fn = transfer_output_chunk_w8a8_sm_glu_fp16_chunked;
+    } else {
+        if (n_groups <= 1u)       *col_chunk_fn = transfer_output_chunk_w8a8_sm_glu_fp32_1g;
+        else if (n_groups == 2u)  *col_chunk_fn = transfer_output_chunk_w8a8_sm_glu_fp32_2g;
+        else if (n_groups <= 16u) *col_chunk_fn = transfer_output_chunk_w8a8_sm_glu_fp32_ng;
+        else                      *col_chunk_fn = transfer_output_chunk_w8a8_sm_glu_fp32_chunked;
+    }
+    return true;
+}
+

@@ -1512,3 +1512,524 @@ static inline HVX_Vector hvx_vec_load_u(const void * restrict src, uint32_t n) {
     return Q6_V_vand_QV(Q6_Q_vsetq2_R(n), v);
 }
 
+// --- Shared HMX GLU Store Helpers & FP16-HMX GLU Epilogue ---
+
+static inline HVX_Vector hmx_glu_geglu_arg_f16(HVX_Vector x) {
+    // 0.5 * x * (1 + tanh(inner)) = x * sigmoid(2 * inner)
+    const HVX_Vector v_c0 = hvx_vec_splat_f16(2.0f * 0.7978845608028654f * 0.044715f);
+    const HVX_Vector v_c1 = hvx_vec_splat_f16(2.0f * 0.7978845608028654f);
+    const HVX_Vector x2   = hvx_vec_mul_f16_f16(x, x);
+    const HVX_Vector poly = hvx_vec_add_f16_f16(hvx_vec_mul_f16_f16(x2, v_c0), v_c1);
+    return hvx_vec_mul_f16_f16(x, poly);
+}
+
+static inline HVX_Vector hmx_glu_geglu_arg_f32(HVX_Vector x) {
+    const HVX_Vector v_c0 = hvx_vec_splat_f32(2.0f * 0.7978845608028654f * 0.044715f);
+    const HVX_Vector v_c1 = hvx_vec_splat_f32(2.0f * 0.7978845608028654f);
+    const HVX_Vector x2   = hvx_vec_mul_f32_f32(x, x);
+    const HVX_Vector poly = hvx_vec_add_f32_f32(hvx_vec_mul_f32_f32(x2, v_c0), v_c1);
+    return hvx_vec_mul_f32_f32(x, poly);
+}
+
+#define HMX_GLU_ARG_SWIGLU_F16(x)       (x)
+#define HMX_GLU_ARG_SWIGLU_F32(x)       (x)
+#define HMX_GLU_ARG_GEGLU_F16(x)        hmx_glu_geglu_arg_f16(x)
+#define HMX_GLU_ARG_GEGLU_F32(x)        hmx_glu_geglu_arg_f32(x)
+#define HMX_GLU_ARG_GEGLU_QUICK_F16(x)  hvx_vec_mul_f16_f16((x), hvx_vec_splat_f16(1.702f))
+#define HMX_GLU_ARG_GEGLU_QUICK_F32(x)  hvx_vec_mul_f32_f32((x), hvx_vec_splat_f32(1.702f))
+
+// Sigmoid-based GLU stores: out = g * sigmoid(ARG(g)) * u (vtcm_res_out is always 128B aligned).
+#define DEFINE_HMX_SIG_GLU_STORE(NAME, ARG_F16, ARG_F32)                                                         \
+static __attribute__((noinline)) void hmx_glu_##NAME##_store_tail_fp16(                                          \
+        void * restrict dst_ptr,                                                                                 \
+        size_t dst_stride,                                                                                       \
+        const HVX_Vector * restrict g_hf,                                                                        \
+        const HVX_Vector * restrict u_hf,                                                                        \
+        uint32_t rows_and_bytes) {                                                                               \
+    __fp16 * restrict dst         = (__fp16 *) dst_ptr;                                                          \
+    const uint32_t    valid_rows  = rows_and_bytes >> 16;                                                        \
+    const size_t      valid_bytes = rows_and_bytes & 0xffffu;                                                    \
+    _Pragma("clang loop pipeline(disable) unroll(disable)")                                                      \
+    for (uint32_t k = 0; k < valid_rows; ++k) {                                                                  \
+        const HVX_Vector g   = g_hf[k];                                                                          \
+        const HVX_Vector sig = hvx_vec_fast_sigmoid_f16(ARG_F16(g));                                             \
+        const HVX_Vector out = hvx_vec_mul_f16_f16(hvx_vec_mul_f16_f16(g, sig), u_hf[k]);                        \
+        hvx_vec_store_u(dst + k * dst_stride, valid_bytes, out);                                                 \
+    }                                                                                                            \
+}                                                                                                                \
+static __attribute__((noinline)) void hmx_glu_##NAME##_store_quad_fp16(                                          \
+        void * restrict dst_ptr,                                                                                 \
+        size_t dst_stride,                                                                                       \
+        const HVX_Vector * restrict g_hf,                                                                        \
+        const HVX_Vector * restrict u_hf,                                                                        \
+        uint32_t valid_rows) {                                                                                   \
+    __fp16 * restrict dst = (__fp16 *) dst_ptr;                                                                  \
+    if (valid_rows == 4u) {                                                                                      \
+        const HVX_Vector     g0  = g_hf[0];                                                                      \
+        const HVX_Vector     g1  = g_hf[1];                                                                      \
+        const HVX_VectorPair s01 = hvx_vec_fast_sigmoid_f16_pair(ARG_F16(g0), ARG_F16(g1));                      \
+        hvx_vmem(dst + 0 * dst_stride) = hvx_vec_mul_f16_f16(hvx_vec_mul_f16_f16(g0, Q6_V_lo_W(s01)), u_hf[0]);  \
+        hvx_vmem(dst + 1 * dst_stride) = hvx_vec_mul_f16_f16(hvx_vec_mul_f16_f16(g1, Q6_V_hi_W(s01)), u_hf[1]);  \
+        const HVX_Vector     g2  = g_hf[2];                                                                      \
+        const HVX_Vector     g3  = g_hf[3];                                                                      \
+        const HVX_VectorPair s23 = hvx_vec_fast_sigmoid_f16_pair(ARG_F16(g2), ARG_F16(g3));                      \
+        hvx_vmem(dst + 2 * dst_stride) = hvx_vec_mul_f16_f16(hvx_vec_mul_f16_f16(g2, Q6_V_lo_W(s23)), u_hf[2]);  \
+        hvx_vmem(dst + 3 * dst_stride) = hvx_vec_mul_f16_f16(hvx_vec_mul_f16_f16(g3, Q6_V_hi_W(s23)), u_hf[3]);  \
+        return;                                                                                                  \
+    }                                                                                                            \
+    hmx_glu_##NAME##_store_tail_fp16(dst, dst_stride, g_hf, u_hf, (valid_rows << 16) | 128u);                    \
+}                                                                                                                \
+static __attribute__((noinline)) void hmx_glu_##NAME##_store_tail_fp32(                                          \
+        void * restrict dst_ptr,                                                                                 \
+        size_t dst_stride,                                                                                       \
+        const HVX_Vector * restrict g_q,                                                                         \
+        const HVX_Vector * restrict u_q,                                                                         \
+        uint32_t rows_and_bytes) {                                                                               \
+    float * restrict dst         = (float *) dst_ptr;                                                            \
+    const uint32_t   valid_rows  = rows_and_bytes >> 16;                                                         \
+    const size_t     valid_bytes = rows_and_bytes & 0xffffu;                                                     \
+    const HVX_Vector v_one       = hvx_vec_splat_f32(1.0f);                                                      \
+    const HVX_Vector v_max_exp   = hvx_vec_splat_f32(87.0f);                                                     \
+    const HVX_Vector v_min_exp   = hvx_vec_splat_f32(-87.0f);                                                    \
+    _Pragma("clang loop unroll(disable)")                                                                        \
+    for (uint32_t k = 0; k < valid_rows; ++k) {                                                                  \
+        const HVX_Vector g   = g_q[k];                                                                           \
+        const HVX_Vector sig = hvx_vec_fast_sigmoid_f32_guard(ARG_F32(g), v_one, v_max_exp, v_min_exp);          \
+        const HVX_Vector out = hvx_vec_mul_f32_f32(hvx_vec_mul_f32_f32(g, sig), u_q[k]);                         \
+        hvx_vec_store_u(dst + k * dst_stride, valid_bytes, out);                                                 \
+    }                                                                                                            \
+}                                                                                                                \
+static __attribute__((noinline)) void hmx_glu_##NAME##_store_quad_fp32(                                          \
+        void * restrict dst_ptr,                                                                                 \
+        size_t dst_stride,                                                                                       \
+        const HVX_Vector * restrict g_q,                                                                         \
+        const HVX_Vector * restrict u_q,                                                                         \
+        uint32_t valid_rows) {                                                                                   \
+    float * restrict dst       = (float *) dst_ptr;                                                              \
+    const HVX_Vector v_one     = hvx_vec_splat_f32(1.0f);                                                        \
+    const HVX_Vector v_max_exp = hvx_vec_splat_f32(87.0f);                                                       \
+    const HVX_Vector v_min_exp = hvx_vec_splat_f32(-87.0f);                                                      \
+    if (valid_rows == 4u) {                                                                                      \
+        const HVX_Vector     g0  = g_q[0];                                                                       \
+        const HVX_Vector     g1  = g_q[1];                                                                       \
+        const HVX_VectorPair s01 = hvx_vec_fast_sigmoid_f32_guard_pair(ARG_F32(g0), ARG_F32(g1),                 \
+                                                                       v_one, v_max_exp, v_min_exp);             \
+        hvx_vmem(dst + 0 * dst_stride) = hvx_vec_mul_f32_f32(hvx_vec_mul_f32_f32(g0, Q6_V_lo_W(s01)), u_q[0]);   \
+        hvx_vmem(dst + 1 * dst_stride) = hvx_vec_mul_f32_f32(hvx_vec_mul_f32_f32(g1, Q6_V_hi_W(s01)), u_q[1]);   \
+        const HVX_Vector     g2  = g_q[2];                                                                       \
+        const HVX_Vector     g3  = g_q[3];                                                                       \
+        const HVX_VectorPair s23 = hvx_vec_fast_sigmoid_f32_guard_pair(ARG_F32(g2), ARG_F32(g3),                 \
+                                                                       v_one, v_max_exp, v_min_exp);             \
+        hvx_vmem(dst + 2 * dst_stride) = hvx_vec_mul_f32_f32(hvx_vec_mul_f32_f32(g2, Q6_V_lo_W(s23)), u_q[2]);   \
+        hvx_vmem(dst + 3 * dst_stride) = hvx_vec_mul_f32_f32(hvx_vec_mul_f32_f32(g3, Q6_V_hi_W(s23)), u_q[3]);   \
+        return;                                                                                                  \
+    }                                                                                                            \
+    hmx_glu_##NAME##_store_tail_fp32(dst, dst_stride, g_q, u_q, (valid_rows << 16) | 128u);                      \
+}
+
+DEFINE_HMX_SIG_GLU_STORE(swiglu,      HMX_GLU_ARG_SWIGLU_F16,      HMX_GLU_ARG_SWIGLU_F32)
+DEFINE_HMX_SIG_GLU_STORE(geglu,       HMX_GLU_ARG_GEGLU_F16,       HMX_GLU_ARG_GEGLU_F32)
+DEFINE_HMX_SIG_GLU_STORE(geglu_quick, HMX_GLU_ARG_GEGLU_QUICK_F16, HMX_GLU_ARG_GEGLU_QUICK_F32)
+
+#define DEFINE_HMX_SIG_GLU_STRIP_FP16(NAME, ARG_F16)                                                 \
+static __attribute__((noinline)) void hmx_glu_##NAME##_store_strip_fp16(                             \
+        void * restrict dst_ptr,                                                                     \
+        size_t dst_stride,                                                                           \
+        const __fp16 * restrict u_buf,                                                               \
+        size_t u_stride,                                                                             \
+        size_t n_pairs) {                                                                            \
+    __fp16 * restrict dst = (__fp16 *) dst_ptr;                                                      \
+    _Pragma("clang loop unroll(disable)")                                                            \
+    for (size_t p = 0; p < n_pairs; ++p) {                                                           \
+        __fp16 *       d0        = dst + (p << 6);                                                   \
+        const __fp16 * u0        = u_buf + (p << 6);                                                 \
+        const HVX_Vector     g0  = hvx_vmem(d0 + 0 * dst_stride);                                    \
+        const HVX_Vector     g1  = hvx_vmem(d0 + 1 * dst_stride);                                    \
+        const HVX_VectorPair s01 = hvx_vec_fast_sigmoid_f16_pair(ARG_F16(g0), ARG_F16(g1));          \
+        hvx_vmem(d0 + 0 * dst_stride) = hvx_vec_mul_f16_f16(hvx_vec_mul_f16_f16(g0, Q6_V_lo_W(s01)), \
+                                                            hvx_vmem(u0 + 0 * u_stride));            \
+        hvx_vmem(d0 + 1 * dst_stride) = hvx_vec_mul_f16_f16(hvx_vec_mul_f16_f16(g1, Q6_V_hi_W(s01)), \
+                                                            hvx_vmem(u0 + 1 * u_stride));            \
+        const HVX_Vector     g2  = hvx_vmem(d0 + 2 * dst_stride);                                    \
+        const HVX_Vector     g3  = hvx_vmem(d0 + 3 * dst_stride);                                    \
+        const HVX_VectorPair s23 = hvx_vec_fast_sigmoid_f16_pair(ARG_F16(g2), ARG_F16(g3));          \
+        hvx_vmem(d0 + 2 * dst_stride) = hvx_vec_mul_f16_f16(hvx_vec_mul_f16_f16(g2, Q6_V_lo_W(s23)), \
+                                                            hvx_vmem(u0 + 2 * u_stride));            \
+        hvx_vmem(d0 + 3 * dst_stride) = hvx_vec_mul_f16_f16(hvx_vec_mul_f16_f16(g3, Q6_V_hi_W(s23)), \
+                                                            hvx_vmem(u0 + 3 * u_stride));            \
+    }                                                                                                \
+}
+
+DEFINE_HMX_SIG_GLU_STRIP_FP16(swiglu,      HMX_GLU_ARG_SWIGLU_F16)
+DEFINE_HMX_SIG_GLU_STRIP_FP16(geglu,       HMX_GLU_ARG_GEGLU_F16)
+DEFINE_HMX_SIG_GLU_STRIP_FP16(geglu_quick, HMX_GLU_ARG_GEGLU_QUICK_F16)
+
+static __attribute__((noinline)) void hmx_glu_reglu_store_tail_fp16(
+        void * restrict dst_ptr,
+        size_t dst_stride,
+        const HVX_Vector * restrict g_hf,
+        const HVX_Vector * restrict u_hf,
+        uint32_t rows_and_bytes) {
+    __fp16 * restrict dst         = (__fp16 *) dst_ptr;
+    const uint32_t    valid_rows  = rows_and_bytes >> 16;
+    const size_t      valid_bytes = rows_and_bytes & 0xffffu;
+    const HVX_Vector  v_zero      = Q6_V_vzero();
+    for (uint32_t k = 0; k < valid_rows; ++k) {
+        const HVX_Vector out = hvx_vec_mul_f16_f16(Q6_Vhf_vmax_VhfVhf(g_hf[k], v_zero), u_hf[k]);
+        hvx_vec_store_u(dst + k * dst_stride, valid_bytes, out);
+    }
+}
+
+static __attribute__((noinline)) void hmx_glu_reglu_store_quad_fp16(
+        void * restrict dst_ptr,
+        size_t dst_stride,
+        const HVX_Vector * restrict g_hf,
+        const HVX_Vector * restrict u_hf,
+        uint32_t valid_rows) {
+    __fp16 * restrict dst    = (__fp16 *) dst_ptr;
+    const HVX_Vector  v_zero = Q6_V_vzero();
+    for (uint32_t k = 0; k < valid_rows; ++k) {
+        hvx_vmem(dst + k * dst_stride) = hvx_vec_mul_f16_f16(Q6_Vhf_vmax_VhfVhf(g_hf[k], v_zero), u_hf[k]);
+    }
+}
+
+static __attribute__((noinline)) void hmx_glu_reglu_store_strip_fp16(
+        void * restrict dst_ptr,
+        size_t dst_stride,
+        const __fp16 * restrict u_buf,
+        size_t u_stride,
+        size_t n_pairs) {
+    __fp16 * restrict dst    = (__fp16 *) dst_ptr;
+    const HVX_Vector  v_zero = Q6_V_vzero();
+    _Pragma("clang loop unroll(disable)")
+    for (size_t p = 0; p < n_pairs; ++p) {
+        __fp16 *       d0 = dst + (p << 6);
+        const __fp16 * u0 = u_buf + (p << 6);
+        hvx_vmem(d0 + 0 * dst_stride) = hvx_vec_mul_f16_f16(Q6_Vhf_vmax_VhfVhf(hvx_vmem(d0 + 0 * dst_stride), v_zero), hvx_vmem(u0 + 0 * u_stride));
+        hvx_vmem(d0 + 1 * dst_stride) = hvx_vec_mul_f16_f16(Q6_Vhf_vmax_VhfVhf(hvx_vmem(d0 + 1 * dst_stride), v_zero), hvx_vmem(u0 + 1 * u_stride));
+        hvx_vmem(d0 + 2 * dst_stride) = hvx_vec_mul_f16_f16(Q6_Vhf_vmax_VhfVhf(hvx_vmem(d0 + 2 * dst_stride), v_zero), hvx_vmem(u0 + 2 * u_stride));
+        hvx_vmem(d0 + 3 * dst_stride) = hvx_vec_mul_f16_f16(Q6_Vhf_vmax_VhfVhf(hvx_vmem(d0 + 3 * dst_stride), v_zero), hvx_vmem(u0 + 3 * u_stride));
+    }
+}
+
+static __attribute__((noinline)) void hmx_glu_reglu_store_tail_fp32(
+        void * restrict dst_ptr,
+        size_t dst_stride,
+        const HVX_Vector * restrict g_q,
+        const HVX_Vector * restrict u_q,
+        uint32_t rows_and_bytes) {
+    float * restrict dst         = (float *) dst_ptr;
+    const uint32_t   valid_rows  = rows_and_bytes >> 16;
+    const size_t     valid_bytes = rows_and_bytes & 0xffffu;
+    const HVX_Vector v_zero      = Q6_V_vzero();
+    for (uint32_t k = 0; k < valid_rows; ++k) {
+        const HVX_Vector out = hvx_vec_mul_f32_f32(Q6_Vsf_vmax_VsfVsf(g_q[k], v_zero), u_q[k]);
+        hvx_vec_store_u(dst + k * dst_stride, valid_bytes, out);
+    }
+}
+
+static __attribute__((noinline)) void hmx_glu_reglu_store_quad_fp32(
+        void * restrict dst_ptr,
+        size_t dst_stride,
+        const HVX_Vector * restrict g_q,
+        const HVX_Vector * restrict u_q,
+        uint32_t valid_rows) {
+    float * restrict dst    = (float *) dst_ptr;
+    const HVX_Vector v_zero = Q6_V_vzero();
+    for (uint32_t k = 0; k < valid_rows; ++k) {
+        hvx_vmem(dst + k * dst_stride) = hvx_vec_mul_f32_f32(Q6_Vsf_vmax_VsfVsf(g_q[k], v_zero), u_q[k]);
+    }
+}
+
+typedef void (*hmx_glu_store_quad_fn_t)(
+        void * restrict dst_ptr,
+        size_t dst_stride,
+        const HVX_Vector * restrict g_vec,
+        const HVX_Vector * restrict u_vec,
+        uint32_t valid_rows);
+
+typedef void (*hmx_glu_store_tail_fn_t)(
+        void * restrict dst_ptr,
+        size_t dst_stride,
+        const HVX_Vector * restrict g_vec,
+        const HVX_Vector * restrict u_vec,
+        uint32_t rows_and_bytes);
+
+typedef void (*hmx_glu_store_strip_fn_t)(
+        void * restrict dst_ptr,
+        size_t dst_stride,
+        const __fp16 * restrict u_buf,
+        size_t u_stride,
+        size_t n_pairs);
+
+typedef void (*hmx_output_glu_col_chunk_fn_t)(
+        const void * st_void,
+        void * restrict dst_ptr,
+        uint32_t start_row,
+        uint32_t n_rows,
+        uint32_t c_first,
+        uint32_t c_len_and_dst_cols);
+
+typedef struct {
+    void *                        dst;
+    const uint8_t *               vtcm_gate;
+    const uint8_t *               vtcm_up;
+    const float *                 vtcm_act_scales;
+    const float *                 vtcm_wt_scales_gate;
+    const float *                 vtcm_wt_scales_up;
+    uint32_t                      n_rows;
+    uint32_t                      mc_pad;
+    uint32_t                      n_cols;
+    uint32_t                      n_groups;
+    uint32_t                      dst_stride;
+    uint32_t                      dst_cols;
+    size_t                        dst_elem_size;
+    uint32_t                      n_tasks;
+    uint32_t                      n_chunks_per_task;
+    struct fastdiv_values         n_hvx_div;
+    hmx_output_glu_col_chunk_fn_t col_chunk_fn;
+    hmx_glu_store_quad_fn_t       store_quad_fn;
+    hmx_glu_store_tail_fn_t       store_tail_fn;
+    hmx_glu_store_strip_fn_t      store_strip_fn;
+} hmx_output_glu_state_t;
+
+static inline bool resolve_hmx_glu_store_fns(
+        uint8_t glu_op,
+        size_t dst_elem_size,
+        hmx_glu_store_quad_fn_t * store_quad_fn,
+        hmx_glu_store_tail_fn_t * store_tail_fn,
+        hmx_glu_store_strip_fn_t * store_strip_fn) {
+    if (dst_elem_size == sizeof(__fp16)) {
+        switch (glu_op) {
+            case HTP_OP_GLU_SWIGLU:
+                *store_quad_fn  = hmx_glu_swiglu_store_quad_fp16;
+                *store_tail_fn  = hmx_glu_swiglu_store_tail_fp16;
+                *store_strip_fn = hmx_glu_swiglu_store_strip_fp16;
+                return true;
+            case HTP_OP_GLU_GEGLU:
+                *store_quad_fn  = hmx_glu_geglu_store_quad_fp16;
+                *store_tail_fn  = hmx_glu_geglu_store_tail_fp16;
+                *store_strip_fn = hmx_glu_geglu_store_strip_fp16;
+                return true;
+            case HTP_OP_GLU_GEGLU_QUICK:
+                *store_quad_fn  = hmx_glu_geglu_quick_store_quad_fp16;
+                *store_tail_fn  = hmx_glu_geglu_quick_store_tail_fp16;
+                *store_strip_fn = hmx_glu_geglu_quick_store_strip_fp16;
+                return true;
+            case HTP_OP_GLU_REGLU:
+                *store_quad_fn  = hmx_glu_reglu_store_quad_fp16;
+                *store_tail_fn  = hmx_glu_reglu_store_tail_fp16;
+                *store_strip_fn = hmx_glu_reglu_store_strip_fp16;
+                return true;
+            default:
+                return false;
+        }
+    }
+    *store_strip_fn = NULL;
+    switch (glu_op) {
+        case HTP_OP_GLU_SWIGLU:
+            *store_quad_fn = hmx_glu_swiglu_store_quad_fp32;
+            *store_tail_fn = hmx_glu_swiglu_store_tail_fp32;
+            return true;
+        case HTP_OP_GLU_GEGLU:
+            *store_quad_fn = hmx_glu_geglu_store_quad_fp32;
+            *store_tail_fn = hmx_glu_geglu_store_tail_fp32;
+            return true;
+        case HTP_OP_GLU_GEGLU_QUICK:
+            *store_quad_fn = hmx_glu_geglu_quick_store_quad_fp32;
+            *store_tail_fn = hmx_glu_geglu_quick_store_tail_fp32;
+            return true;
+        case HTP_OP_GLU_REGLU:
+            *store_quad_fn = hmx_glu_reglu_store_quad_fp32;
+            *store_tail_fn = hmx_glu_reglu_store_tail_fp32;
+            return true;
+        default:
+            return false;
+    }
+}
+
+static __attribute__((noinline)) void transfer_output_chunk_fp16_glu_fp16(
+        const void * st_void,
+        void * restrict dst_ptr,
+        uint32_t start_row,
+        uint32_t n_rows,
+        uint32_t c_first,
+        uint32_t c_len_and_dst_cols) {
+    const hmx_output_glu_state_t * st = (const hmx_output_glu_state_t *) st_void;
+    __fp16 * restrict dst             = (__fp16 *) dst_ptr;
+    const __fp16 * vtcm_gate          = (const __fp16 *) st->vtcm_gate;
+    const __fp16 * vtcm_up            = (const __fp16 *) st->vtcm_up;
+    const size_t tile_row_stride      = hmx_ceil_div(st->n_cols, HTP_MM_HMX_TILE_N_COLS) * HTP_MM_HMX_TILE_N_ELMS;
+    const size_t c0_first             = c_first >> 5;
+    const size_t limit_c              = hex_smin(c_len_and_dst_cols >> 16, c_len_and_dst_cols & 0xffffu);
+    const size_t limit_c_aligned      = limit_c & ~63u;
+    const size_t dst_stride           = st->dst_stride;
+
+    HVX_Vector g_hf[4] __attribute__((aligned(128)));
+    HVX_Vector u_hf[4] __attribute__((aligned(128)));
+
+    for (size_t r_base = 0; r_base < n_rows; ) {
+        const size_t r_idx_base = start_row + r_base;
+        const size_t r_step     = hex_smin((size_t) n_rows - r_base, (size_t) (32u - (r_idx_base & 31u)));
+        const size_t r_end      = r_base + r_step;
+        const size_t tile_off   = (r_idx_base >> 5) * tile_row_stride + c0_first * HTP_MM_HMX_TILE_N_ELMS;
+        const __fp16 * g_row    = vtcm_gate + tile_off;
+        const __fp16 * u_row    = vtcm_up + tile_off;
+
+        for (size_t r = r_base; r < r_end; r += 4) {
+            const size_t   r_idx0     = start_row + r;
+            const size_t   r1         = (r_idx0 & 31u) >> 1;
+            const uint32_t valid_rows = (uint32_t) hex_smin((size_t) 4u, r_end - r);
+            __fp16 *       out_row0   = dst + r * dst_stride;
+
+            #pragma clang loop unroll(disable)
+            for (size_t c = 0; c < limit_c_aligned; c += 64) {
+                const size_t c0   = c >> 5;
+                const size_t off0 = c0 * HTP_MM_HMX_TILE_N_ELMS;
+                const size_t off1 = off0 + HTP_MM_HMX_TILE_N_ELMS;
+                const HVX_VectorPair gp0 = Q6_W_vdeal_VVR(((const HVX_Vector *) (g_row + off1))[r1],
+                                                          ((const HVX_Vector *) (g_row + off0))[r1], -2);
+                const HVX_VectorPair up0 = Q6_W_vdeal_VVR(((const HVX_Vector *) (u_row + off1))[r1],
+                                                          ((const HVX_Vector *) (u_row + off0))[r1], -2);
+                g_hf[0] = Q6_V_lo_W(gp0);
+                g_hf[1] = Q6_V_hi_W(gp0);
+                u_hf[0] = Q6_V_lo_W(up0);
+                u_hf[1] = Q6_V_hi_W(up0);
+                if (valid_rows > 2u) {
+                    const HVX_VectorPair gp1 = Q6_W_vdeal_VVR(((const HVX_Vector *) (g_row + off1))[r1 + 1],
+                                                              ((const HVX_Vector *) (g_row + off0))[r1 + 1], -2);
+                    const HVX_VectorPair up1 = Q6_W_vdeal_VVR(((const HVX_Vector *) (u_row + off1))[r1 + 1],
+                                                              ((const HVX_Vector *) (u_row + off0))[r1 + 1], -2);
+                    g_hf[2] = Q6_V_lo_W(gp1);
+                    g_hf[3] = Q6_V_hi_W(gp1);
+                    u_hf[2] = Q6_V_lo_W(up1);
+                    u_hf[3] = Q6_V_hi_W(up1);
+                }
+                st->store_quad_fn(out_row0 + c, dst_stride, g_hf, u_hf, valid_rows);
+            }
+            if (limit_c_aligned < limit_c) {
+                const size_t   c           = limit_c_aligned;
+                const size_t   c0          = c >> 5;
+                const size_t   off0        = c0 * HTP_MM_HMX_TILE_N_ELMS;
+                const size_t   off1        = off0 + HTP_MM_HMX_TILE_N_ELMS;
+                const size_t   valid_c     = limit_c - c;
+                const uint32_t valid_bytes = (uint32_t) (valid_c * sizeof(__fp16));
+                const HVX_Vector g_t1_0 = (valid_c > 32) ? ((const HVX_Vector *) (g_row + off1))[r1] : Q6_V_vzero();
+                const HVX_Vector u_t1_0 = (valid_c > 32) ? ((const HVX_Vector *) (u_row + off1))[r1] : Q6_V_vzero();
+                const HVX_VectorPair gp0 = Q6_W_vdeal_VVR(g_t1_0, ((const HVX_Vector *) (g_row + off0))[r1], -2);
+                const HVX_VectorPair up0 = Q6_W_vdeal_VVR(u_t1_0, ((const HVX_Vector *) (u_row + off0))[r1], -2);
+                g_hf[0] = Q6_V_lo_W(gp0);
+                g_hf[1] = Q6_V_hi_W(gp0);
+                u_hf[0] = Q6_V_lo_W(up0);
+                u_hf[1] = Q6_V_hi_W(up0);
+                if (valid_rows > 2u) {
+                    const HVX_Vector g_t1_1 = (valid_c > 32) ? ((const HVX_Vector *) (g_row + off1))[r1 + 1] : Q6_V_vzero();
+                    const HVX_Vector u_t1_1 = (valid_c > 32) ? ((const HVX_Vector *) (u_row + off1))[r1 + 1] : Q6_V_vzero();
+                    const HVX_VectorPair gp1 = Q6_W_vdeal_VVR(g_t1_1, ((const HVX_Vector *) (g_row + off0))[r1 + 1], -2);
+                    const HVX_VectorPair up1 = Q6_W_vdeal_VVR(u_t1_1, ((const HVX_Vector *) (u_row + off0))[r1 + 1], -2);
+                    g_hf[2] = Q6_V_lo_W(gp1);
+                    g_hf[3] = Q6_V_hi_W(gp1);
+                    u_hf[2] = Q6_V_lo_W(up1);
+                    u_hf[3] = Q6_V_hi_W(up1);
+                }
+                st->store_tail_fn(out_row0 + c, dst_stride, g_hf, u_hf, (valid_rows << 16) | valid_bytes);
+            }
+        }
+        r_base = r_end;
+    }
+}
+
+static __attribute__((noinline)) void transfer_output_chunk_fp16_glu_fp32(
+        const void * st_void,
+        void * restrict dst_ptr,
+        uint32_t start_row,
+        uint32_t n_rows,
+        uint32_t c_first,
+        uint32_t c_len_and_dst_cols) {
+    const hmx_output_glu_state_t * st = (const hmx_output_glu_state_t *) st_void;
+    float * restrict dst              = (float *) dst_ptr;
+    const __fp16 * vtcm_gate          = (const __fp16 *) st->vtcm_gate;
+    const __fp16 * vtcm_up            = (const __fp16 *) st->vtcm_up;
+    const size_t tile_row_stride      = hmx_ceil_div(st->n_cols, HTP_MM_HMX_TILE_N_COLS) * HTP_MM_HMX_TILE_N_ELMS;
+    const size_t c0_first             = c_first >> 5;
+    const size_t limit_c              = hex_smin(c_len_and_dst_cols >> 16, c_len_and_dst_cols & 0xffffu);
+    const size_t limit_c_aligned      = limit_c & ~31u;
+    const size_t dst_stride           = st->dst_stride;
+    const HVX_Vector one              = hvx_vec_splat_f16(1.0f);
+
+    HVX_Vector g_q[4] __attribute__((aligned(128)));
+    HVX_Vector u_q[4] __attribute__((aligned(128)));
+
+    for (size_t r_base = 0; r_base < n_rows; ) {
+        const size_t r_idx_base = start_row + r_base;
+        const size_t r_step     = hex_smin((size_t) n_rows - r_base, (size_t) (32u - (r_idx_base & 31u)));
+        const size_t r_end      = r_base + r_step;
+        const size_t tile_off   = (r_idx_base >> 5) * tile_row_stride + c0_first * HTP_MM_HMX_TILE_N_ELMS;
+        const __fp16 * g_row    = vtcm_gate + tile_off;
+        const __fp16 * u_row    = vtcm_up + tile_off;
+
+        for (size_t r = r_base; r < r_end; r += 4) {
+            const size_t   r_idx0     = start_row + r;
+            const size_t   r1         = (r_idx0 & 31u) >> 1;
+            const uint32_t valid_rows = (uint32_t) hex_smin((size_t) 4u, r_end - r);
+            float *        out_row0   = dst + r * dst_stride;
+
+            #pragma clang loop unroll(disable)
+            for (size_t c = 0; c < limit_c_aligned; c += 32) {
+                const size_t off0 = (c >> 5) * HTP_MM_HMX_TILE_N_ELMS;
+                const HVX_VectorPair gp0 = Q6_Wqf32_vmpy_VhfVhf(((const HVX_Vector *) (g_row + off0))[r1], one);
+                const HVX_VectorPair up0 = Q6_Wqf32_vmpy_VhfVhf(((const HVX_Vector *) (u_row + off0))[r1], one);
+                g_q[0] = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(gp0));
+                g_q[1] = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(gp0));
+                u_q[0] = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(up0));
+                u_q[1] = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(up0));
+                if (valid_rows > 2u) {
+                    const HVX_VectorPair gp1 = Q6_Wqf32_vmpy_VhfVhf(((const HVX_Vector *) (g_row + off0))[r1 + 1], one);
+                    const HVX_VectorPair up1 = Q6_Wqf32_vmpy_VhfVhf(((const HVX_Vector *) (u_row + off0))[r1 + 1], one);
+                    g_q[2] = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(gp1));
+                    g_q[3] = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(gp1));
+                    u_q[2] = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(up1));
+                    u_q[3] = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(up1));
+                }
+                st->store_quad_fn(out_row0 + c, dst_stride, g_q, u_q, valid_rows);
+            }
+            if (limit_c_aligned < limit_c) {
+                const size_t   c           = limit_c_aligned;
+                const size_t   off0        = (c >> 5) * HTP_MM_HMX_TILE_N_ELMS;
+                const uint32_t valid_bytes = (uint32_t) ((limit_c - c) * sizeof(float));
+                const HVX_VectorPair gp0 = Q6_Wqf32_vmpy_VhfVhf(((const HVX_Vector *) (g_row + off0))[r1], one);
+                const HVX_VectorPair up0 = Q6_Wqf32_vmpy_VhfVhf(((const HVX_Vector *) (u_row + off0))[r1], one);
+                g_q[0] = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(gp0));
+                g_q[1] = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(gp0));
+                u_q[0] = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(up0));
+                u_q[1] = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(up0));
+                if (valid_rows > 2u) {
+                    const HVX_VectorPair gp1 = Q6_Wqf32_vmpy_VhfVhf(((const HVX_Vector *) (g_row + off0))[r1 + 1], one);
+                    const HVX_VectorPair up1 = Q6_Wqf32_vmpy_VhfVhf(((const HVX_Vector *) (u_row + off0))[r1 + 1], one);
+                    g_q[2] = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(gp1));
+                    g_q[3] = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(gp1));
+                    u_q[2] = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(up1));
+                    u_q[3] = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(up1));
+                }
+                st->store_tail_fn(out_row0 + c, dst_stride, g_q, u_q, (valid_rows << 16) | valid_bytes);
+            }
+        }
+        r_base = r_end;
+    }
+}
+
+static inline bool resolve_fp16_output_glu_fns(
+        uint8_t glu_op,
+        size_t dst_elem_size,
+        hmx_output_glu_col_chunk_fn_t * col_chunk_fn,
+        hmx_glu_store_quad_fn_t * store_quad_fn,
+        hmx_glu_store_tail_fn_t * store_tail_fn,
+        hmx_glu_store_strip_fn_t * store_strip_fn) {
+    if (!resolve_hmx_glu_store_fns(glu_op, dst_elem_size, store_quad_fn, store_tail_fn, store_strip_fn)) {
+        return false;
+    }
+    *col_chunk_fn = (dst_elem_size == sizeof(__fp16)) ? transfer_output_chunk_fp16_glu_fp16
+                                                      : transfer_output_chunk_fp16_glu_fp32;
+    return true;
+}
+

@@ -745,7 +745,8 @@ static bool htp_kparams_solve_hmx_mm(
     bool is_matmul_id,
     bool is_batched,
     size_t vtcm_budget,
-    struct htp_mm_kernel_params * kparams
+    struct htp_mm_kernel_params * kparams,
+    bool is_glu = false
 ) {
     const bool     bias_is_2d        = bias && (bias->ne[1] > 1);
     const bool     bias_batched      = bias && (bias->ne[2] > 1 || bias->ne[3] > 1);
@@ -783,9 +784,13 @@ static bool htp_kparams_solve_hmx_mm(
         kernel_type = (is_batched && !is_matmul_id) ? HTP_MM_KERNEL_HMX_W8A8_BATCHED : HTP_MM_KERNEL_HMX_W8A8_2D;
     }
 
+    if (is_glu && !htp_mm_kernel_is_hmx_2d(kernel_type)) {
+        return false;
+    }
+
     size_t bias_size = bias ? hex_round_up(ggml_nbytes(bias), 128) : 0;
     const size_t res_out_elem_size = dst ? ggml_type_size(dst->type) : sizeof(float);
-    if (is_batched_val && wtype == GGML_TYPE_F16 && !is_tiled && group_size > 1 && !bias_batched) {
+    if (!is_glu && is_batched_val && wtype == GGML_TYPE_F16 && !is_tiled && group_size > 1 && !bias_batched) {
         if (htp_mm_hmx_solve_batched_params(wtype, ne00_padded, ne01_padded, m_for_solver, group_size, n_hvx, pipeline, bias_size, res_out_elem_size, vtcm_budget, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
             use_grouped = true;
         }
@@ -811,7 +816,18 @@ static bool htp_kparams_solve_hmx_mm(
         const uint32_t cost_m = is_matmul_id ? (uint32_t) m_id_rows : (uint32_t) m_for_solver;
         // Non-grouped HMX_BATCHED dispatches to hmx_mm_2d_f32 (full 2D layout, not grouped-batched layout).
         const uint8_t solve_ktype = htp_mm_kernel_is_hmx_int(kernel_type) ? kernel_type : HTP_MM_KERNEL_HMX_2D;
-        if (!htp_mm_hmx_solve_2d_params_ex(solve_ktype, wtype, ne00_padded, m_id_rows, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, is_matmul_id, aligned_tile_size, bias_size, res_in_elem_size, res_out_elem_size, vtcm_budget, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
+        if (is_glu) {
+            if (!htp_mm_hmx_solve_2d_params_glu(solve_ktype, wtype, ne00_padded, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, aligned_tile_size, res_out_elem_size, vtcm_budget, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
+                if (htp_mm_kernel_is_hmx_int(kernel_type)) {
+                    kernel_type = HTP_MM_KERNEL_HMX_2D;
+                    if (!htp_mm_hmx_solve_2d_params_glu(HTP_MM_KERNEL_HMX_2D, wtype, ne00_padded, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, aligned_tile_size, res_out_elem_size, vtcm_budget, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            }
+        } else if (!htp_mm_hmx_solve_2d_params_ex(solve_ktype, wtype, ne00_padded, m_id_rows, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, is_matmul_id, aligned_tile_size, bias_size, res_in_elem_size, res_out_elem_size, vtcm_budget, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
             if (htp_mm_kernel_is_hmx_int(kernel_type)) {
                 kernel_type = fp16_kernel_type;
                 if (!htp_mm_hmx_solve_2d_params_ex(HTP_MM_KERNEL_HMX_2D, wtype, ne00_padded, m_id_rows, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, is_matmul_id, aligned_tile_size, bias_size, res_in_elem_size, res_out_elem_size, vtcm_budget, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
@@ -1270,6 +1286,67 @@ finalize:
     kparams->div_r3       = init_fastdiv_values(ne03 > 0 ? ne13 / ne03 : 1);
     kparams->div_ne12     = init_fastdiv_values(ne12);
     return (size_t) kparams->vtcm_size <= vtcm_budget;
+}
+
+bool htp_kparams_solve_mmnx_glu(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * w_gate,
+    const struct ggml_tensor * w_up,
+    const struct ggml_tensor * act,
+    const struct ggml_tensor * dst,
+    uint8_t glu_op,
+    struct htp_mm_kernel_params * kparams
+) {
+    if (htp_session_n_hmx(sess) == 0 || opt_mm_select < 2) {
+        return false;
+    }
+    if (w_gate->type != w_up->type || w_gate->ne[0] != w_up->ne[0] || w_gate->ne[1] != w_up->ne[1] ||
+        !ggml_is_matrix(w_gate) || !ggml_is_matrix(w_up) ||
+        !ggml_is_contiguous(w_up) || w_gate->nb[1] != w_up->nb[1] ||
+        ggml_hexagon_tensor_will_tile(w_gate) != ggml_hexagon_tensor_will_tile(w_up)) {
+        return false;
+    }
+    if (!htp_matmul_check_types(w_gate, act, dst) || !htp_matmul_check_types(w_up, act, dst)) {
+        return false;
+    }
+
+    const size_t vtcm_budget = htp_session_vtcm_size(sess);
+    memset(kparams, 0, sizeof(*kparams));
+    kparams->n_hvx = htp_session_n_hvx(sess);
+
+    const int ne00 = w_gate->ne[0];
+    const int ne01 = w_gate->ne[1];
+    const int ne02 = w_gate->ne[2];
+    const int ne03 = w_gate->ne[3];
+    const int ne11 = act->ne[1];
+    const int ne12 = act->ne[2];
+    const int ne13 = act->ne[3];
+
+    const bool is_tiled    = ggml_hexagon_tensor_will_tile(w_gate);
+    const int  wtype       = (is_tiled && (w_gate->type == GGML_TYPE_F32 || w_gate->type == GGML_TYPE_BF16)) ? GGML_TYPE_F16 : w_gate->type;
+    const int  tile_k      = htp_tensor_get_tile_k(wtype);
+    const int  ne00_padded = is_tiled ? hex_round_up(ne00, tile_k) : ne00;
+    const int  ne11_padded = hex_round_up(ne11, 32);
+    const int  ne01_tiled  = hex_round_up(ne01, 32);
+    const bool is_batched  = (ne02 * ne03 > 1 || ne12 * ne13 > 1);
+
+    const bool k_ok = is_tiled ? (tile_k > 0 && (ne00 % tile_k) == 0) : ((ne00 & 31) == 0);
+    if (is_batched || !k_ok ||
+        !htp_matmul_is_hmx_eligible(w_gate, act, dst, false, false)) {
+        return false;
+    }
+    if (!htp_kparams_solve_hmx_mm(sess, w_gate, act, nullptr, dst, wtype, ne00_padded, ne01_tiled, ne02, ne11, ne12, ne11_padded, false, false, vtcm_budget, kparams, /*is_glu=*/ true)) {
+        return false;
+    }
+
+    kparams->n_weights    = 2;
+    kparams->glu_op       = glu_op;
+    kparams->div_ne12_ne1 = init_fastdiv_values(ne12 * ne11);
+    kparams->div_ne1      = init_fastdiv_values(ne11);
+    kparams->div_r2       = init_fastdiv_values(ne02 > 0 ? ne12 / ne02 : 1);
+    kparams->div_r3       = init_fastdiv_values(ne03 > 0 ? ne13 / ne03 : 1);
+    kparams->div_ne12     = init_fastdiv_values(ne12);
+    return kparams->n_hmx == 1 && htp_mm_kernel_is_hmx_2d(kparams->kernel_type) && (size_t) kparams->vtcm_size <= vtcm_budget;
 }
 
 bool htp_kparams_solve_mmidnx(
@@ -5830,6 +5907,13 @@ bool htp_kparams_solve(
                                   : (ggml_hexagon_tensor_is_tiled(tmp.inputs[0]) &&
                                      (kp->kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW || kp->kernel_type == HTP_MM_KERNEL_HVX_QUANT_BLOCK));
         return commit(ok);
+    }
+    if (tmp.opcode == HTP_OP_MUL_MAT_NX_GLU) {
+        if (tmp.inputs.size() != 3 || tmp.outputs.size() != 1) {
+            return false;
+        }
+        const uint8_t glu_op = tmp.kparams<htp_mm_kernel_params>()->glu_op;
+        return commit(htp_kparams_solve_mmnx_glu(sess, tmp.inputs[0], tmp.inputs[1], tmp.inputs[2], tmp.outputs[0], glu_op, tmp.kparams<htp_mm_kernel_params>()));
     }
     if (tmp.opcode == HTP_OP_MUL_MAT_ID_NX) {
         const size_t n_w = tmp.outputs.size();

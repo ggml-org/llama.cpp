@@ -958,6 +958,7 @@ static int execute_op(struct htp_ops_context * octx) {
             return op_matmul_id_nx(octx);
 
         case HTP_OP_MUL_MAT_NX:
+        case HTP_OP_MUL_MAT_NX_GLU:
             return op_matmul_nx(octx);
 
         case HTP_OP_MUL:
