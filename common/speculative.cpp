@@ -230,6 +230,8 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
 
     std::vector<common_params_sampling> smpls_cfg;
 
+    std::vector<llama_sampler *> backend_chains;
+
     common_speculative_impl_draft_simple(const common_params_speculative & params, uint32_t n_seq)
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE, n_seq, params.draft.n_max)
         , params(params.draft)
@@ -296,6 +298,36 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
 
             throw std::runtime_error("the draft model number of sequences is incompatible with the speculative n_seq");
         }
+
+        // top-k on the backend, so only 10 candidates are copied to the host
+        backend_chains.assign(n_seq, nullptr);
+        if (this->params.backend_sampling) {
+            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+                llama_sampler * chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
+                llama_sampler_chain_add(chain, llama_sampler_init_top_k(10));
+
+                if (!llama_set_sampler(ctx_dft, seq_id, chain)) {
+                    SPC_WRN("backend offload failed for seq_id=%d; using CPU sampler\n", (int) seq_id);
+                    llama_sampler_free(chain);
+                    chain = nullptr;
+                }
+                backend_chains[seq_id] = chain;
+            }
+        }
+    }
+
+    ~common_speculative_impl_draft_simple() override {
+        auto * ctx_dft = this->params.ctx_dft;
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) backend_chains.size(); ++seq_id) {
+            if (backend_chains[seq_id] == nullptr) {
+                continue;
+            }
+            if (ctx_dft) {
+                llama_set_sampler(ctx_dft, seq_id, nullptr);
+            }
+            llama_sampler_free(backend_chains[seq_id]);
+        }
+        backend_chains.clear();
     }
 
     void begin(llama_seq_id seq_id, const llama_tokens & /*prompt*/) override {
