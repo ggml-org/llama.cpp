@@ -909,7 +909,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     };
 
     static constexpr double EPSILON = 1e-12;
-    static constexpr double INFINITE = std::numeric_limits<double>::infinity();
+    static constexpr double LQ_INFINITE = std::numeric_limits<double>::infinity();
     static constexpr uint64_t STATE_MAGIC = 0x4250572d5632; // "BPW-V2"
     static constexpr uint64_t HASH_MAGIC = 0xeabada55cafed00d;
     static constexpr float ffn_down_boost = 6.0f;
@@ -1467,7 +1467,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
                 const double rsn = (* ptr_row_sq_norm)[row_idx];
                 const double m_norm = rsn > EPSILON ? w_err / rsn : 0.0;
-                slice_mse_norm.push_back(std::isfinite(m_norm) ? m_norm : INFINITE);
+                slice_mse_norm.push_back(std::isfinite(m_norm) ? m_norm : LQ_INFINITE);
 
                 off += (size_t)n_per_row;
             }
@@ -1673,7 +1673,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         constexpr float eps_norm = 1e-8f;
         constexpr float eps_eig = EPSILON;
         constexpr int jacobi_sweeps = 20;
-        if (total_rows_sampled < 1 || n_per_row < 1) { return INFINITE; }
+        if (total_rows_sampled < 1 || n_per_row < 1) { return LQ_INFINITE; }
 
         const int64_t m = total_rows_sampled;
         const int64_t n = n_per_row;
@@ -1824,7 +1824,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
 
         const int64_t valid_m = (int64_t)norm_matrix.size() / n;
-        if (valid_m < 2) { return INFINITE; }
+        if (valid_m < 2) { return LQ_INFINITE; }
         const bool hmt_direct = valid_m >= target_rank;
         const bool hmt_transpose = !hmt_direct && n >= target_rank;
 
@@ -1834,10 +1834,10 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         // Estimate the condition number (kappa)
         auto condition_number = [&](const std::vector<float> & eigenvalues) -> float {
-            if ((int64_t)eigenvalues.size() < k) { return INFINITE; }
+            if ((int64_t)eigenvalues.size() < k) { return LQ_INFINITE; }
             const float sigma_max = std::sqrt(std::max(0.0f, eigenvalues[0]));
             const float sigma_min = std::sqrt(std::max(0.0f, eigenvalues[k - 1]));
-            if (sigma_min <= eps_eig) { return INFINITE; }
+            if (sigma_min <= eps_eig) { return LQ_INFINITE; }
 
             return sigma_max / sigma_min;
         };
@@ -2381,7 +2381,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 [](const auto & a, const auto &b) { return a.bytes == b.bytes; }), candidates.end());
 
             std::vector<type_scores> hull;
-            double min_err = INFINITE;
+            double min_err = LQ_INFINITE;
             for(const auto & c : candidates) {
                 if (c.error < min_err) {
                     min_err = c.error;
@@ -2734,8 +2734,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             mu_hi *= 2.0;
         } while(++safety < 60);
 
-        double gap_under = INFINITE;
-        double gap_over = INFINITE;
+        double gap_under = LQ_INFINITE;
+        double gap_over = LQ_INFINITE;
 
         for(int i = 0; i < 40; ++i) {
             double mu = 0.5 * (mu_lo + mu_hi);
@@ -2846,7 +2846,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         size_t cb = current_bytes();
         while (cb > budget) {
             int best = -1;
-            double best_score = INFINITE;
+            double best_score = LQ_INFINITE;
             for (size_t i = 0; i < all_tensors.size(); ++i) {
                 const auto & tn = all_tensors[i];
                 if (tn.choice == 0) { continue; }
@@ -2912,7 +2912,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 };
 
                 ggml_type fill = GGML_TYPE_Q8_0;
-                double fill_bpw = INFINITE;
+                double fill_bpw = LQ_INFINITE;
                 int fill_rank = 3;
                 for (const ggml_type t : quant_types) {
                     if (!ggml_is_quantized(t)) { continue; }
@@ -2927,7 +2927,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                     }
                 }
 
-                if (fill_bpw == INFINITE && qs.ignored_types[fill]) {
+                if (fill_bpw == LQ_INFINITE && qs.ignored_types[fill]) {
                     LLAMA_LOG_WARN("\t%s: ffn_down type %s is ignored by --target-exclude, keeping the auto-selected type\n", func, ggml_type_name(fill));
                 } else {
                     size_t locked_bytes = 0;
