@@ -177,6 +177,7 @@ static void usage(char ** argv) {
     LOG("  -v <N>                   Set log verbosity level\n");
     LOG("  -b, --backend <backend>  Run only on the given backend device\n");
     LOG("  --kv-shift               Check K-shift against a decode at the shifted positions (CPU only)\n");
+    LOG("  --yarn-beta              Check GGUF YaRN beta_fast/beta_slow loading and context overrides (CPU only)\n");
     LOG("  -h, --help               Show this help message\n\n");
     LOG("Examples:\n");
     LOG("  %s\n", argv[0]);
@@ -1904,6 +1905,162 @@ static int test_kv_shift(const std::string & arch_filter, const size_t seed, con
     return n_failed == 0 ? 0 : 1;
 }
 
+static int test_yarn_beta(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity) {
+    struct user_data_t {
+        struct {
+            ggml_log_callback callback;
+            void * user_data;
+        } log_old;
+
+        int verbosity;
+
+        user_data_t(int verbosity) : verbosity(verbosity) {
+            llama_log_get(&log_old.callback, &log_old.user_data);
+        }
+    };
+    user_data_t ud(verbosity);
+
+    llama_log_set([](ggml_log_level level, const char * text, void * user_data) {
+        const user_data_t * ud = (const user_data_t *) user_data;
+        int verbosity = common_log_get_verbosity(level);
+        if (verbosity <= ud->verbosity) {
+            ud->log_old.callback(level, text, ud->log_old.user_data);
+        }
+    }, &ud);
+
+    const std::vector<llama_token> tokens = get_tokens(64, 128, seed);
+
+    auto make_yarn_gguf = [](const llm_arch arch, const bool moe, const bool with_betas, const float beta_fast, const float beta_slow) {
+        gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
+        kv_writer ms(arch, gguf_ctx.get());
+        ms.add_kv(LLM_KV_ROPE_FREQ_BASE,            10000.0f);
+        ms.add_kv(LLM_KV_ROPE_SCALING_TYPE,         "yarn");
+        ms.add_kv(LLM_KV_ROPE_SCALING_FACTOR,       32.0f);
+        ms.add_kv(LLM_KV_ROPE_SCALING_ORIG_CTX_LEN, uint32_t(256));
+        if (arch == LLM_ARCH_DEEPSEEK2) {
+            ms.add_kv(LLM_KV_ROPE_SCALING_YARN_LOG_MUL, 0.1f);
+        }
+        const std::string key_fast = llama_arch_kv_name(arch, LLM_KV_ROPE_SCALING_YARN_BETA_FAST);
+        const std::string key_slow = llama_arch_kv_name(arch, LLM_KV_ROPE_SCALING_YARN_BETA_SLOW);
+        if (with_betas) {
+            ms.add_kv(LLM_KV_ROPE_SCALING_YARN_BETA_FAST, beta_fast);
+            ms.add_kv(LLM_KV_ROPE_SCALING_YARN_BETA_SLOW, beta_slow);
+        } else {
+            gguf_remove_key(gguf_ctx.get(), key_fast.c_str());
+            gguf_remove_key(gguf_ctx.get(), key_slow.c_str());
+        }
+        return gguf_ctx;
+    };
+
+    auto eval_logits = [&](struct gguf_context * gguf_ctx, const float beta_fast, const float beta_slow) {
+        llama_model_ptr model = get_model(gguf_ctx, nullptr, seed, stdev, {});
+        llama_context_params ctx_params = llama_context_default_params();
+        ctx_params.n_ctx           = 0;
+        ctx_params.n_threads       = 1;
+        ctx_params.n_threads_batch = 1;
+        ctx_params.type_k          = GGML_TYPE_F32;
+        ctx_params.type_v          = GGML_TYPE_F32;
+        ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+        ctx_params.yarn_beta_fast  = beta_fast;
+        ctx_params.yarn_beta_slow  = beta_slow;
+
+        llama_context_ptr lctx(llama_init_from_model(model.get(), ctx_params));
+        if (!lctx) {
+            throw std::runtime_error("failed to create llama context");
+        }
+        return get_logits(model.get(), lctx.get(), tokens);
+    };
+
+    size_t max_arch_name_length = 0;
+    for (const llm_arch & arch : llama_arch_all()) {
+        max_arch_name_length = std::max(max_arch_name_length, strlen(llama_arch_name(arch)));
+    }
+    const std::string template_row = "|%" + std::to_string(max_arch_name_length) + "s|%6s|%10s|%10s|%10s|%10s|%s\n";
+
+    size_t n_tests  = 0;
+    size_t n_failed = 0;
+    common_log_flush(common_log_main());
+    LOG(template_row.c_str(), "Model arch.", "Config", "GGUF 1/1", "Override", "Legacy", "Control", "Status");
+
+    for (const llm_arch & arch : llama_arch_all()) {
+        if (arch == LLM_ARCH_UNKNOWN || !arch_matches(arch_filter, arch) || !arch_supported(arch)) {
+            continue;
+        }
+        for (bool moe : {false, true}) {
+            if (moe && !moe_implemented(arch)) {
+                continue;
+            }
+            if (!moe && moe_mandatory(arch)) {
+                continue;
+            }
+            const char * config_name = moe ? "MoE" : "Dense";
+            n_tests++;
+
+            char meta_str[16]     = "";
+            char override_str[16] = "";
+            char legacy_str[16]   = "";
+            char ctrl_str[16]     = "";
+            std::string status;
+
+            try {
+                gguf_context_ptr gguf_legacy = make_yarn_gguf(arch, moe, false, 0.0f, 0.0f);
+                gguf_context_ptr gguf_meta   = make_yarn_gguf(arch, moe, true,  1.0f, 1.0f);
+
+                const std::vector<float> logits_legacy_default = eval_logits(gguf_legacy.get(), -1.0f, -1.0f);
+                const std::vector<float> logits_legacy_32_1    = eval_logits(gguf_legacy.get(), 32.0f,  1.0f);
+                const std::vector<float> logits_legacy_1_1     = eval_logits(gguf_legacy.get(),  1.0f,  1.0f);
+                const std::vector<float> logits_meta_default   = eval_logits(gguf_meta.get(),   -1.0f, -1.0f);
+                const std::vector<float> logits_meta_override  = eval_logits(gguf_meta.get(),   16.0f,  2.0f);
+                const std::vector<float> logits_legacy_16_2    = eval_logits(gguf_legacy.get(), 16.0f,  2.0f);
+
+                const double err_meta     = nmse(logits_legacy_1_1,  logits_meta_default);
+                const double err_override = nmse(logits_legacy_16_2, logits_meta_override);
+                const double err_legacy   = nmse(logits_legacy_32_1, logits_legacy_default);
+                const double diff_ctrl    = nmse(logits_legacy_32_1, logits_legacy_1_1);
+                const double diff_ovr     = nmse(logits_meta_default, logits_meta_override);
+
+                snprintf(meta_str,     sizeof(meta_str),     "%.2e", err_meta);
+                snprintf(override_str, sizeof(override_str), "%.2e", err_override);
+                snprintf(legacy_str,   sizeof(legacy_str),   "%.2e", err_legacy);
+                snprintf(ctrl_str,     sizeof(ctrl_str),     "%.2e", diff_ctrl);
+
+                if (!(diff_ctrl > 1e-6)) {
+                    n_failed++;
+                    status = "\033[1;31mFAIL\033[0m (low sensitivity)";
+                } else if (logits_meta_default != logits_legacy_1_1) {
+                    n_failed++;
+                    status = "\033[1;31mFAIL\033[0m (gguf beta ignored)";
+                } else if (logits_meta_override != logits_legacy_16_2 || !(diff_ovr > 1e-6)) {
+                    n_failed++;
+                    status = "\033[1;31mFAIL\033[0m (context override)";
+                } else if (logits_legacy_default != logits_legacy_32_1) {
+                    n_failed++;
+                    status = "\033[1;31mFAIL\033[0m (legacy default)";
+                } else {
+                    status = "\033[1;32mOK\033[0m";
+                }
+            } catch (const std::exception & err) {
+                n_failed++;
+                status = std::string("\033[1;31mERROR\033[0m (") + err.what() + ")";
+            }
+            LOG(template_row.c_str(), llama_arch_name(arch), config_name, meta_str, override_str, legacy_str, ctrl_str, status.c_str());
+        }
+    }
+
+    if (n_tests == 0) {
+        LOG("Summary: no tests executed\n");
+        llama_log_set(ud.log_old.callback, ud.log_old.user_data);
+        return 1;
+    } else if (n_failed == 0) {
+        LOG("Summary: all %zu test(s) passed\n", n_tests);
+    } else {
+        LOG("Summary: %zu test(s) executed, %zu failed\n", n_tests, n_failed);
+    }
+
+    llama_log_set(ud.log_old.callback, ud.log_old.user_data);
+    return n_failed == 0 ? 0 : 1;
+}
+
 int main(int argc, char ** argv) {
     // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
     common_log_set_verbosity_thold(LOG_LEVEL_DEBUG);
@@ -1918,6 +2075,7 @@ int main(int argc, char ** argv) {
     std::string out;
     const char * target_backend = nullptr;
     bool kv_shift = false;
+    bool yarn_beta = false;
 
     int verbosity = LOG_LEVEL_ERROR;
 
@@ -1987,6 +2145,8 @@ int main(int argc, char ** argv) {
             }
         } else if (strcmp(argv[i], "--kv-shift") == 0) {
             kv_shift = true;
+        } else if (strcmp(argv[i], "--yarn-beta") == 0) {
+            yarn_beta = true;
         } else {
             LOG_ERR("%s: unknown argument: %s\n", __func__, argv[i]);
             usage(argv);
@@ -2007,6 +2167,9 @@ int main(int argc, char ** argv) {
         }
         if (kv_shift) {
             return test_kv_shift(arch_filter, seed, stdev, verbosity);
+        }
+        if (yarn_beta) {
+            return test_yarn_beta(arch_filter, seed, stdev, verbosity);
         }
         return test_backends(arch_filter, seed, stdev, verbosity, target_backend);
     } catch (const std::exception & err) {
