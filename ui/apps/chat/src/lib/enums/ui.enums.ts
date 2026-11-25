@@ -1,11 +1,5 @@
 export { ColorMode, MouseButton, PointerType, TooltipSide } from '@ggml-org/llama-ui/enums';
 
-/** The light surface theme: Paper (white panels on a faint grey page) or Matte (grey glass on white). */
-export enum SurfaceTheme {
-	MATTE = 'matte',
-	PAPER = 'paper'
-}
-
 /**
  * ScrollCarousel arrow placement.
  */

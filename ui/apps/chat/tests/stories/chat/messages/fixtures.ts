@@ -592,6 +592,73 @@ export const searchResultsSection = toolSection(
 	].join('\n')
 );
 
+export const toolSearchSection = toolSection(
+	'tool_search',
+	{ max_results: 1, query: 'select:Monitor' },
+	'Loaded 1 tool: Monitor'
+);
+
+/* Tool call groups: runs of consecutive calls shown as one row */
+
+function withId(section: AgenticSection, toolCallId: string): AgenticSection {
+	return { ...section, toolCallId };
+}
+
+const IMAGE_SECTION_COUNT = 4;
+
+export const toolGroupSections: AgenticSection[] = [
+	withId(getInfoSection, 'group-info'),
+	withId(readFileSection, 'group-read'),
+	withId(grepSearchSection, 'group-grep'),
+	withId(editFileSection, 'group-edit'),
+	withId(execShellSection, 'group-exec'),
+	withId(writeFileSection, 'group-write')
+];
+
+export const toolGroupImageSections: AgenticSection[] = [
+	withId(execShellSection, 'image-exec'),
+	...Array.from({ length: IMAGE_SECTION_COUNT }, (_, i) => ({
+		...readMediaSection,
+		toolArgs: JSON.stringify({ path: `/home/user/charts/chart-${i + 1}.svg` }),
+		toolCallId: `image-media-${i}`,
+		toolResultExtras: [
+			{
+				base64Url: i % 2 === 0 ? CHART_IMAGE_URL : SVG_IMAGE_URL,
+				name: 'mcp-attachment-usage.svg',
+				type: AttachmentType.IMAGE as const
+			}
+		]
+	}))
+];
+
+export const toolGroupRunningSections: AgenticSection[] = [
+	withId(readFileSection, 'running-read'),
+	withId(grepSearchSection, 'running-grep'),
+	toolSection(
+		BuiltInTool.SERVER_READ_FILE,
+		{ path: 'package.json' },
+		undefined,
+		AgenticSectionType.TOOL_CALL_PENDING
+	)
+];
+
+export const TOOL_GROUP_EXECUTING_ID = 'running-exec';
+
+export const toolGroupShellRunningSections: AgenticSection[] = [
+	withId(readFileSection, 'shell-read'),
+	{
+		...withId(execShellPendingSection, TOOL_GROUP_EXECUTING_ID),
+		toolResult: '> app@0.1.0 build\n> vite build\n\nvite v7.0.0 building for production...\n',
+		type: AgenticSectionType.TOOL_CALL
+	}
+];
+
+export const toolGroupMcpSections: AgenticSection[] = [
+	withId(toolSearchSection, 'mcp-search'),
+	withId(defaultToolSection, 'mcp-weather'),
+	withId(defaultToolMarkdownSection, 'mcp-issue')
+];
+
 /* Reasoning sections */
 
 export const reasoningSection: AgenticSection = {

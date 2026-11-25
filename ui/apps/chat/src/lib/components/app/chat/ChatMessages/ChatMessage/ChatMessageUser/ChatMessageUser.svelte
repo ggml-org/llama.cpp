@@ -6,6 +6,7 @@
 		ChatMessageStatistics,
 		ChatMessageUserBubble
 	} from '#lib/components/app/chat/index.ts';
+	import { SETTINGS_KEYS } from '#lib/constants/index.ts';
 	import { getChatMessageEditContext } from '#lib/contexts/index.ts';
 	import { ChatMessageStatisticsMode, MessageRole } from '#lib/enums/index.ts';
 	import { useProcessingState } from '#lib/hooks/use-processing-state.svelte.ts';
@@ -50,6 +51,12 @@
 		};
 	});
 
+	// the latest exchange keeps its stats and actions in view; earlier messages
+	// show them on hover, and the setting can keep their stats in view as well
+	let hidesStatsUntilHover = $derived(
+		!isLastUserMessage && !currentConfig[SETTINGS_KEYS.ALWAYS_SHOW_MESSAGE_STATS]
+	);
+
 	let showStoredReadingStats = $derived(
 		Boolean(currentConfig.showMessageStats) && storedReadingStats !== null
 	);
@@ -67,7 +74,7 @@
 
 <div
 	aria-label="User message with actions"
-	class="chat-message-user group flex flex-col items-end gap-3 md:gap-2 {className}"
+	class="chat-message-user group flex flex-col items-end gap-2 {className}"
 	role="group"
 >
 	{#if editCtx.isEditing}
@@ -83,7 +90,12 @@
 
 		{#if showStoredReadingStats}
 			<!-- Reading stats sourced from the assistant message that followed this turn -->
-			<div class="info my-2 grid w-full justify-items-end gap-4 tabular-nums">
+			<div
+				class={[
+					'info grid w-full justify-items-end gap-4 tabular-nums',
+					hidesStatsUntilHover && 'message-meta'
+				]}
+			>
 				<div
 					class="inline-flex flex-wrap items-start justify-end gap-2 text-caption text-muted-foreground"
 				>
@@ -96,8 +108,10 @@
 			</div>
 		{:else if showLiveReadingStats}
 			{@const liveStats = processingState.getLiveProcessingStats()}
-			{#if liveStats}
-				<div class="info my-2 grid w-full justify-items-end gap-4 tabular-nums">
+			<!-- The row's room is there from the moment the prompt is sent, so the
+			     reply below does not get pushed down when the first numbers arrive. -->
+			<div class="info grid min-h-5.5 w-full justify-items-end gap-4 tabular-nums">
+				{#if liveStats}
 					<div
 						class="inline-flex flex-wrap items-start justify-end gap-2 text-caption text-muted-foreground"
 					>
@@ -108,12 +122,12 @@
 							promptTokens={liveStats.tokensProcessed}
 						/>
 					</div>
-				</div>
-			{/if}
+				{/if}
+			</div>
 		{/if}
 
 		{#if message.timestamp}
-			<div class="max-w-4/5">
+			<div class={['max-w-4/5', !isLastUserMessage && 'message-meta']}>
 				<ChatMessageActionIcons actionsPosition="right" justify="end" />
 			</div>
 		{/if}

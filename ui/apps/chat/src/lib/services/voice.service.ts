@@ -15,7 +15,7 @@ import {
 } from '#lib/constants/index.ts';
 import type { SettingsConfigType } from '#lib/types/index.ts';
 import { getAuthHeaders } from '#lib/utils/api-headers.ts';
-import { withBase } from '#lib/utils/base-path.ts';
+import { serverUrl } from '#lib/utils/server-config.ts';
 
 /** What a feature asks of the voice wiring, besides the settings. */
 export interface VoiceSessionRequest {
@@ -97,7 +97,7 @@ export class VoiceService {
 		return {
 			context: {
 				getHeaders: () => getAuthHeaders(),
-				resolveUrl: (path) => withBase(path.replace(VOICE_RELATIVE_PATH_PATTERN, ''))
+				resolveUrl: (path) => serverUrl(path.replace(VOICE_RELATIVE_PATH_PATTERN, ''))
 			},
 			realtime: !hasAuth
 		};

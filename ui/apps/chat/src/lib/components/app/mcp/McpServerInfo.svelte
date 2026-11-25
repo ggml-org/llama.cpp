@@ -26,8 +26,8 @@
 			<span>Server instructions</span>
 		</Collapsible.Trigger>
 
-		<Collapsible.Content class="mt-2">
-			<p class="rounded bg-muted/50 p-2 text-caption text-muted-foreground">
+		<Collapsible.Content>
+			<p class="mt-2 rounded bg-muted/50 p-2 text-caption text-muted-foreground">
 				{instructions}
 			</p>
 		</Collapsible.Content>

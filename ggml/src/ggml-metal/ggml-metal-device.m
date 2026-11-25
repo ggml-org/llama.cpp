@@ -129,6 +129,7 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
     X(MUL_MV,          mul_mv)         \
     X(MUL_MV_MMA,      mul_mv_mma)     \
     X(MUL_MM,          mul_mm)         \
+    X(MUL_MM_TENSOR,   mul_mm_tensor)  \
     X(QUANTIZE,        quantize)       \
     X(SOFTMAX,         softmax)        \
     X(NORM,            norm)           \
@@ -1510,14 +1511,16 @@ void ggml_metal_device_get_memory(ggml_metal_device_t dev, size_t * free, size_t
     }
 }
 
-static bool ggml_metal_supports_mul_mat_src1_prec(const struct ggml_tensor * op, bool has_tensor) {
+static bool ggml_metal_supports_mul_mat_src1_prec(const struct ggml_tensor * op, bool has_bfloat) {
+    GGML_ASSERT(op->op == GGML_OP_MUL_MAT || op->op == GGML_OP_MUL_MAT_ID);
+
     const enum ggml_prec prec = ggml_prec_get_src(op, 1);
 
     if (prec == GGML_PREC_F32) {
-        return false;
+        return true;
     }
     if (prec == GGML_PREC_BF16) {
-        return has_tensor && op->op == GGML_OP_MUL_MAT && op->src[0]->type != GGML_TYPE_F32;
+        return has_bfloat && op->src[1]->type == GGML_TYPE_F32;
     }
     return true;
 }
@@ -1529,7 +1532,6 @@ static bool ggml_metal_supports_mul_mat_op(
         bool mm_path) {
     if (!has_simdgroup_reduction ||
         op->src[0]->type == GGML_TYPE_F8_E4M3 ||
-        op->src[0]->type == GGML_TYPE_NVFP4 ||
         op->src[0]->type == GGML_TYPE_TQ1_0) {
         return false;
     }
@@ -1744,6 +1746,9 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_ROLL:
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_FLASH_ATTN_EXT:
+            if (ggml_flash_attn_ext_has_indexed_bias(op)) {
+                return false;
+            }
             // K/V row lists (ggml_flash_attn_ext_rows): one list of cache rows per q slice
             if (op->src[5] != NULL) {
                 const struct ggml_tensor * kv_rows = op->src[5];
@@ -1907,7 +1912,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_SOLVE_TRI:
             return has_simdgroup_reduction && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_MUL_MAT:
-            if (!ggml_metal_supports_mul_mat_src1_prec(op, dev->props.has_tensor)) {
+            if (!ggml_metal_supports_mul_mat_src1_prec(op, dev->props.has_bfloat)) {
                 return false;
             }
             // the FWHT kernels read an F16 source directly; every other F16 src1 path
@@ -1920,7 +1925,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                     has_simdgroup_reduction, op, true,
                     ggml_metal_op_mul_mat_use_mm(op, has_simdgroup_mm));
         case GGML_OP_MUL_MAT_ID:
-            if (!ggml_metal_supports_mul_mat_src1_prec(op, dev->props.has_tensor)) {
+            if (!ggml_metal_supports_mul_mat_src1_prec(op, dev->props.has_bfloat)) {
                 return false;
             }
             return ggml_metal_supports_mul_mat_op(
@@ -1975,6 +1980,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                     case GGML_TYPE_Q5_1:
                     case GGML_TYPE_Q8_0:
                     case GGML_TYPE_TQ2_0:
+                    case GGML_TYPE_NVFP4:
                         switch (op->type) {
                             case GGML_TYPE_F32:
                             case GGML_TYPE_F16:
@@ -1989,8 +1995,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 };
             }
         case GGML_OP_GET_ROWS:
-            return op->src[0]->type != GGML_TYPE_NVFP4 &&
-                   op->src[0]->type != GGML_TYPE_TQ1_0 &&
+            return op->src[0]->type != GGML_TYPE_TQ1_0 &&
                    op->src[0]->type != GGML_TYPE_F8_E4M3;
         case GGML_OP_SET_ROWS:
             {

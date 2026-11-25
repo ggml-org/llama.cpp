@@ -176,11 +176,9 @@ static __device__ void soft_max_f32_parallelize_cols_single_row(const float * __
         }
         g.sync();
 
-        assert(gridDim.x < blockDim.x);
-        if (tid < gridDim.x) {
-            local_max = tmp_maxs[tid];
-        } else {
-            local_max = -INFINITY;
+        local_max = -INFINITY;
+        for (int i = tid; i < (int) gridDim.x; i += blockDim.x) {
+            local_max = fmaxf(local_max, tmp_maxs[i]);
         }
         local_max = block_reduce<block_reduce_method::MAX>(local_max, shared_vals_max);
 
@@ -202,10 +200,9 @@ static __device__ void soft_max_f32_parallelize_cols_single_row(const float * __
         }
         g.sync();
 
-        if (tid < gridDim.x) {
-            tmp_expf = tmp_sums[tid];
-        } else {
-            tmp_expf = 0.0f;
+        tmp_expf = 0.0f;
+        for (int i = tid; i < (int) gridDim.x; i += blockDim.x) {
+            tmp_expf += tmp_sums[i];
         }
         tmp_expf = block_reduce<block_reduce_method::SUM>(tmp_expf, shared_vals_sum);
 
@@ -247,11 +244,9 @@ static __device__ void soft_max_f32_parallelize_cols_single_row(const float * __
         g.sync();
 
         // Compute compute global max from CTA-level maxs
-        assert(gridDim.x < blockDim.x);  // currently we only support this case
-        if (tid < gridDim.x) {
-            local_max = tmp_maxs[tid];
-        } else {
-            local_max = -INFINITY;
+        local_max = -INFINITY;
+        for (int i = tid; i < (int) gridDim.x; i += blockDim.x) {
+            local_max = fmaxf(local_max, tmp_maxs[i]);
         }
         local_max = block_reduce<block_reduce_method::MAX>(local_max, shared_vals_max);
 
@@ -285,10 +280,9 @@ static __device__ void soft_max_f32_parallelize_cols_single_row(const float * __
         g.sync();
 
         // Compute global sum from CTA-level sums
-        if (tid < gridDim.x) {
-            tmp_expf = tmp_sums[tid];
-        } else {
-            tmp_expf = 0.0f;
+        tmp_expf = 0.0f;
+        for (int i = tid; i < (int) gridDim.x; i += blockDim.x) {
+            tmp_expf += tmp_sums[i];
         }
         tmp_expf = block_reduce<block_reduce_method::SUM>(tmp_expf, shared_vals_sum);
 

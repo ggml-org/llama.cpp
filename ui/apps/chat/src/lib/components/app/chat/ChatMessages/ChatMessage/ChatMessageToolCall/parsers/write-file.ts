@@ -4,12 +4,8 @@
 // result blob. The path is display-only (title + highlight language),
 // so a call that has not streamed one still shows its content.
 
-import {
-	extractToolArgPath,
-	extractToolArgString,
-	fileNameFromPath,
-	parseToolArgs
-} from './_shared';
+import { extractToolArgPath, parseToolArgs } from './_shared';
+import { extractToolArgString, fileNameFromPath } from '@ggml-org/llama-harness';
 import { CODE_BLOCK, TOOL_ARG_PATH_KEYS } from '#lib/constants/index.ts';
 import { BuiltInTool } from '#lib/enums/index.ts';
 import type { AgenticSection, WriteFileMeta, WriteFileTitleMeta } from '#lib/types/index.ts';
