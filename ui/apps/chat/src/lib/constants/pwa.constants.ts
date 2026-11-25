@@ -3,7 +3,7 @@
  * definitions across the codebase.
  */
 
-import { APP_NAME } from './app.constants';
+import { APP_NAME } from './app.constants.ts';
 
 export const MEDIA_QUERIES = {
 	COARSE_POINTER: '(pointer: coarse)',

@@ -1,9 +1,9 @@
-import { buildInfoPlugin } from './scripts/vite-plugin-build-info';
-import { llamaUiPlugin } from './scripts/vite-plugin-llama-ui';
-import { nerdamerPlugin } from './scripts/vite-plugin-nerdamer';
-import { pwaManifestPlugin } from './scripts/vite-plugin-pwa-manifest';
-import { relativizeBasePlugin } from './scripts/vite-plugin-relativize-base';
-import { splashScreenPlugin } from './scripts/vite-plugin-splash-screen';
+import { buildInfoPlugin } from './scripts/vite-plugin-build-info.ts';
+import { llamaUiPlugin } from './scripts/vite-plugin-llama-ui.ts';
+import { nerdamerPlugin } from './scripts/vite-plugin-nerdamer.ts';
+import { pwaManifestPlugin } from './scripts/vite-plugin-pwa-manifest.ts';
+import { relativizeBasePlugin } from './scripts/vite-plugin-relativize-base.ts';
+import { splashScreenPlugin } from './scripts/vite-plugin-splash-screen.ts';
 import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
 import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
