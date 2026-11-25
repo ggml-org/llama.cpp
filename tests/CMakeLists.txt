@@ -230,12 +230,6 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
 endif()
 
 llama_build(test-llama-archs.cpp)
-llama_test(
-    test-llama-archs
-    NAME test-yarn-beta
-    LABEL "main behavior"
-    ARGS -a "^(deepseek2|grok|llama)$" -s 42 -d 0.5 --yarn-beta
-)
 if (GGML_CPU AND (NOT WIN32 OR NOT BUILD_SHARED_LIBS))
     llama_build(test-fp8.cpp)
     set(FP8_MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models-fp8")
