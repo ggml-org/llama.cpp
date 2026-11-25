@@ -2820,7 +2820,7 @@ static bool ggml_backend_rpc_device_supports_op(ggml_backend_dev_t dev, const st
     GGML_UNUSED(dev);
     GGML_UNUSED(op);
     //TODO: call the remote backend and cache the results
-    return false;
+    return true;
 }
 
 static bool ggml_backend_rpc_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
