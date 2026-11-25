@@ -153,10 +153,8 @@ R,S=KH,KW
 P,Q=OH,OW
 */
 
-// With split_k > 1, each workgroup runs one contiguous part of the CRS loop
-// and writes its partial sums to its own copy of the output, and a reduce pass
-// adds the copies up. Neighboring workgroups take different channel tiles of
-// the same split, so they read the same inputs at about the same time.
+// Each split covers a contiguous part of CRS and writes a separate partial output.
+// Keep the split constant across neighboring channel tiles so they can reuse input loads.
 uint32_t B_idx_K     = split_k > 1 ? gl_WorkGroupID.x % splitWork(K, BS_K) : gl_WorkGroupID.x;
 uint32_t B_idx_split = split_k > 1 ? gl_WorkGroupID.x / splitWork(K, BS_K) : 0;
 uint32_t B_idx_NPQ   = gl_WorkGroupID.y + gl_WorkGroupID.z * 512;
@@ -176,8 +174,7 @@ const uint32_t BrpWg = WG_SIZE / BS_NPQ;
 #ifdef COOPMAT2
 #define ACC_TYPE float16_t
 
-// Stores one element of the result. The tile's position is passed in because
-// reading globals here is slow with current drivers.
+// Pass the tile position explicitly to avoid slow private-variable loads in the callback.
 ACC_TYPE perElemOpStore(const in uint32_t r, const in uint32_t c, const in ACC_TYPE elem,
                         const in uint32_t K_base, const in uint32_t NPQ_base, const in uint32_t split_base)
 {

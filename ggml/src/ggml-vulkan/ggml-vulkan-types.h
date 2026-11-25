@@ -472,7 +472,7 @@ struct vk_xe_fa_pipeline_state {
     }
 };
 
-// Spec constants of a conv_halo.comp pipeline; see vk_conv_halo_params::key().
+// See vk_conv_halo_params::key() for the order of the specialization values.
 typedef std::array<uint32_t, 12> vk_conv_halo_key;
 
 struct vk_conv2d_pipeline_state {
@@ -1035,7 +1035,6 @@ struct vk_device_struct {
     vk_pipeline pipeline_opt_step_sgd_f32;
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv2d_f32[CONV_SHAPE_COUNT];
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv2d_f16_f32[CONV_SHAPE_COUNT];
-    // conv_halo.comp for CONV_2D and CONV_3D, keyed by vk_conv_halo_params::key().
     std::map<vk_conv_halo_key, vk_pipeline> pipeline_conv2d_halo_f16_f32;
     std::map<vk_conv_halo_key, vk_pipeline> pipeline_conv3d_halo_f16_f32;
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv_transpose_2d_f32[CONV_SHAPE_COUNT];

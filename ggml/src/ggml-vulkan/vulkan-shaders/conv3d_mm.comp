@@ -175,8 +175,7 @@ void split_npq(uint32_t npq_idx, out uint32_t n, out uint32_t od, out uint32_t o
 #ifdef COOPMAT2
 #define ACC_TYPE float16_t
 
-// Stores one element of the result. The tile's position is passed in because
-// reading globals here is slow with current drivers.
+// Pass the tile position explicitly to avoid slow private-variable loads in the callback.
 ACC_TYPE perElemOpStore(const in uint32_t r, const in uint32_t c, const in ACC_TYPE elem,
                         const in uint32_t K_base, const in uint32_t NPQ_base, const in uint32_t split_base)
 {

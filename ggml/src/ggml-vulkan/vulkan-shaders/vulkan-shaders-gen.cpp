@@ -1189,7 +1189,6 @@ void process_shaders() {
             }
         }
     }
-    // Direct convolution that reuses each input pixel across all filter taps.
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
     string_to_spv("conv2d_halo_f16_f32", "conv_halo.comp", {}, true, true, false);
     string_to_spv("conv3d_halo_f16_f32", "conv_halo.comp", {{"CONV3D", "1"}}, true, true, false);

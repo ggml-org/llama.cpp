@@ -1963,9 +1963,7 @@ static bool ggml_vk_amd_large_tile_supported(const vk_device& device) {
     return major > 2 || (major == 2 && build >= 416);
 }
 
-// Whether the device can run the halo convolution, which uses KHR cooperative
-// matrices (coopmat1): the same requirements as conv2d_mm's coopmat1 path.
-// Devices with coopmat2 use it too; a coopmat2 version was slower overall.
+// Use KHR cooperative matrices on coopmat2 devices too. The coopmat2 shader measured slower overall.
 static bool ggml_vk_conv_halo_cm1(const vk_device & device) {
 #if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
     return device->coopmat_support && device->coopmat_support_16x16x16_f16acc &&
@@ -1986,8 +1984,6 @@ static void ggml_vk_conv_halo_cm1_tile(uint32_t bs_k, uint32_t nt, uint32_t fn, 
     const uint32_t frag_rows = bs_k / 16;
     const uint32_t frag_cols = nt / fn;
     uint32_t best_busy = 0, best_loads = 0;
-    // Split the channels into a divisor of frag_rows, and the columns as many
-    // ways as the remaining subgroups allow while dividing them evenly.
     for (uint32_t row_splits = 1; row_splits <= frag_rows; ++row_splits) {
         if (frag_rows % row_splits != 0 || row_splits > subgroups) {
             continue;
@@ -4557,7 +4553,6 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     }
 
 #if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
-    // conv_halo.comp, one pipeline per vk_conv_halo_params::key().
     if (ggml_vk_conv_halo_cm1(device)) {
         // spv: { 16-pixel fragments, 8-pixel fragments }
         auto create_halo = [&](std::map<vk_conv_halo_key, vk_pipeline> & pipelines, const char * name,
@@ -9773,8 +9768,7 @@ static vk_conv_shapes ggml_vk_conv_base_shape(ggml_backend_vk_context * ctx, uin
     }
 }
 
-// Picks the conv2d_mm/conv3d_mm tile. With coopmat2, a layer with too few
-// tiles keeps a large tile and uses split-K instead of a small one.
+// On coopmat2, use split-K to fill the GPU while keeping larger tiles.
 static vk_conv_shapes ggml_vk_conv_select_shape(ggml_backend_vk_context * ctx, const ggml_tensor * kernel, const ggml_tensor * dst, uint32_t & split_k) {
     split_k = 1;
     const bool is_3d = dst->op == GGML_OP_CONV_3D;
@@ -9829,7 +9823,6 @@ static vk_conv_shapes ggml_vk_conv_select_shape(ggml_backend_vk_context * ctx, c
             return fallback;
         }
         shape = K % 256 == 0 && large_ok ? CONV_SHAPE_256x128 : CONV_SHAPE_128x128;
-        // Keep full channel tiles when the grid already fills the GPU.
         if (n_tiles(shape) >= shader_core_count) {
             return K % vk_conv_block_sizes[shape].K == 0 ? shape : fallback;
         }
@@ -9919,21 +9912,15 @@ static vk_pipeline ggml_vk_float_pipeline(const vk_pipeline (&pipelines)[3], con
     return pipelines[ggml_vk_float_type_idx(dst->type)];
 }
 
-// Halo convolution (conv_halo.comp) for CONV_2D and CONV_3D, with coopmat2 or
-// KHR cooperative matrices. conv2d_mm/conv3d_mm gather the input again for every filter tap;
-// this shader loads each input pixel into shared memory once and reuses it for
-// all taps. Setting GGML_VK_DISABLE_CONV_HALO turns it off.
-//
 // Each workgroup computes bs_k output channels for an out_rows x out_cols tile
 // of one output depth slice.
 struct vk_conv_halo_params {
-    // The shader's spec constants, in the order they are passed.
     uint32_t bs_k, out_rows, out_cols, KW, KH, a_pad, pad_w, pad_h;
-    uint32_t filter_copy; // 1: read the host's f16 copy of the filter (output channels innermost); 0: read the f16 filter in place (2D only)
+    uint32_t filter_copy; // transpose filter to make output channels contiguous
     uint32_t KD, pad_d;
     uint32_t fn;        // accumulator fragment width in pixels: 16, or 8 (FRAG_N8)
     uint32_t tiles;     // number of output tiles, over all batches and depth slices
-    uint32_t split_k;   // workgroups the input channel passes of a tile are split across
+    uint32_t split_k;
 
     vk_conv_halo_key key() const {
         return { bs_k, out_rows, out_cols, KW, KH, a_pad, pad_w, pad_h, filter_copy, KD, pad_d, fn };
@@ -9992,8 +9979,7 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
     hp.pad_w = (uint32_t)pd[0];
     hp.pad_h = (uint32_t)pd[1];
     hp.pad_d = (uint32_t)pd[2];
-    // The filter slices of all taps (up to 16) must fit in shared memory at
-    // once.
+    // All spatial taps in the pass must fit in shared memory together.
     const uint32_t taps = hp.KW * hp.KH;
     if (Cin % 16 != 0 || taps > 16 || hp.KW > 9) {
         return false;
@@ -10003,33 +9989,17 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
         return false;
     }
     const uint32_t OW = (uint32_t)dst->ne[0], OH = (uint32_t)dst->ne[1];
-    // Filter staging. Copying the filter (filter_copy) is an extra
-    // pass over the whole filter, which only pays off when the layer has
-    // enough outputs, about 8K or more. Smaller 2D layers read the filter in
-    // place and reorder it in registers instead. 3D always copies, because
-    // its filter slices are not 8-byte aligned.
+    // The transpose pays for itself at about 8K output positions. 3D also needs it to align filter slices to 8 bytes.
     const uint64_t npq = (uint64_t)N * OD * OH * OW;
     hp.filter_copy = is_3d || npq >= 8192 ? 1 : 0;
-    // Reading in place takes 8-byte packets of f16 values. f32 filters always
-    // use the copy, which converts them to f16.
+    // The in-place path loads 8-byte packets of f16 weights.
     if (!hp.filter_copy && (src0->type != GGML_TYPE_F16 || get_misalign_bytes(ctx, src0) % 8 != 0)) {
         hp.filter_copy = 1;
     }
-    // The copy, with its output channels padded to a multiple of 8, is bound
-    // as one storage buffer.
     if (hp.filter_copy && (uint64_t)Cin * ROUNDUP_POW2(Cout, 8) * taps * hp.KD * sizeof(ggml_fp16_t) > ctx->device->properties.limits.maxStorageBufferRange) {
         return false;
     }
-    // Shared memory holds the filter slices of all taps and the box (pixels of
-    // 24 halves). The same memory stages the output tile at the end, in rows
-    // of out_rows * out_cols + 8 halves. The filter is padded against bank
-    // conflicts:
-    //  - The copy is stored as columns of bs_k output channels plus 8 halves.
-    //    Unpadded, all 8 rows of a matrix load would hit the same banks, so
-    //    if the tile doesn't fit, halve the output channels instead.
-    //  - Read in place, it is stored as rows of 16 input channels plus 8
-    //    halves. Unpadded rows conflict only 2 ways, so drop the padding
-    //    first, then halve the output channels; 16-tap filters need that.
+    // Match conv_halo.comp: the filter and input box share storage with the output staging tile.
     const size_t limit = ctx->device->properties.limits.maxComputeSharedMemorySize;
     auto shmem = [&](uint32_t cols, uint32_t rows, uint32_t bs_k, uint32_t pad) {
         const size_t filter = hp.filter_copy ? (size_t)taps * 16 * (bs_k + pad) * 2 : (size_t)taps * bs_k * (16 + pad) * 2;
@@ -10037,11 +10007,7 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
         const size_t out = (size_t)bs_k * (rows * cols + 8) * 2;
         return std::max(pass, out);
     };
-    // Picks bs_k and a_pad for a tile: 32 or 64 output channels per
-    // workgroup, the fewest that cover Cout, or 32 if 64 doesn't fit. With 64
-    // to 128 output channels, not a multiple of 64 (96 would pad to 128), all
-    // of them on tiles of up to 128 pixels, where that fits. Returns false if
-    // the tile doesn't fit at all.
+    // A small spatial tile can fit all channels in one workgroup and avoid padding to a multiple of 64.
     const uint32_t bs_k_all = Cout > 64 && Cout <= 128 && Cout % 64 != 0 ? ROUNDUP_POW2(Cout, 16) : 0;
     auto fit = [&](uint32_t cols, uint32_t rows, uint32_t & bs_k, uint32_t & a_pad) {
         if (bs_k_all && cols * rows <= 128) {
@@ -10053,6 +10019,7 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
         }
         bs_k = Cout <= 32 ? 32 : 64;
         for (;;) {
+            // Padding avoids up to eight-way bank conflicts in the copied layout. The in-place layout can tolerate two-way conflicts.
             a_pad = hp.filter_copy || shmem(cols, rows, bs_k, 8) <= limit ? 8 : 0;
             if (shmem(cols, rows, bs_k, a_pad) <= limit) {
                 return true;
@@ -10064,11 +10031,7 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
         }
     };
     // Output tile: the shape with the lowest padded area (output pixels and
-    // channels) times its cost per output. Tiles of 192 pixels or more
-    // (32 x 8, 16 x 16, 56 x 4) cost least; 8-pixel fragments cost about 15%
-    // more, 128-pixel tiles 20%, 64-pixel tiles 40%, and 32 output channels
-    // per workgroup 15%. 56 x 4 fits outputs 49 to 56 wide, but not on layers
-    // with few workgroups.
+    // channels) times its cost per output.
     const uint32_t sms = ctx->device->shader_core_count > 0 ? ctx->device->shader_core_count : 32;
     double best = 0;
     const uint32_t shapes[10][2] = { { 32, 8 }, { 16, 16 }, { 8, 32 }, { 56, 4 }, { 16, 8 }, { 8, 16 }, { 32, 4 }, { 8, 8 }, { 16, 4 }, { 32, 2 } };
@@ -10077,6 +10040,7 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
         if (shape[0] % 16 != 0 && !ctx->device->coopmat_support_16x8x16_f16acc) {
             continue;
         }
+        // The 56 x 4 tile saves padding for widths 49 to 56 when the grid is large enough.
         if (shape[0] == 56 && (uint64_t)CEIL_DIV(Cout, 64) * N * OD * CEIL_DIV(OH, shape[1]) * CEIL_DIV(OW, shape[0]) < sms / 2) {
             continue;
         }
@@ -10103,19 +10067,12 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
     auto tiles_for = [&](uint32_t rows) {
         return (uint64_t)CEIL_DIV(Cout, hp.bs_k) * slices * CEIL_DIV(OH, rows) * CEIL_DIV(OW, hp.out_cols);
     };
-    // With fewer workgroups than two per SM (two fit on an SM) and the filter
-    // read in place, first use 32 output channels per workgroup, if there are
-    // enough passes to split: twice the workgroups without split-K's partial
-    // outputs. (With the filter copy, and for 1x1 filters, that was slower.)
+    // For in-place filters, a smaller channel tile can fill the SMs without writing split-K partials.
     if (tiles_for(hp.out_rows) < 2 * sms && hp.bs_k == 64 && !hp.filter_copy && taps * hp.KD > 1 && Cin / 16 * hp.KD >= 8) {
         hp.bs_k = 32;
         hp.a_pad = shmem(hp.out_cols, hp.out_rows, 32, 8) <= limit ? 8 : 0;
     }
-    // Then, with still fewer workgroups than two per SM, split the input
-    // channel passes of each tile between workgroups (split-K), up to one
-    // wave of them, with at least 4 passes per split. With still fewer
-    // workgroups than half the SMs, use fewer rows, down to 2, and then with
-    // fewer than SMs, 32 output channels per workgroup.
+    // Use split-K to target two workgroups per SM, then shrink the tiles if the grid is still too small.
     const uint32_t stages = Cin / 16 * hp.KD;
     hp.split_k = 1;
     if (tiles_for(hp.out_rows) < 2 * sms) {
@@ -10128,7 +10085,7 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
             hp.a_pad = hp.filter_copy || shmem(hp.out_cols, hp.out_rows, 32, 8) <= limit ? 8 : 0;
         }
     }
-    // The splits are written to scratch as copies of the whole output.
+    // Split-K scratch uses the dense output layout with no descriptor offset.
     if (hp.split_k > 1 && (!ggml_is_contiguous(dst) || get_misalign_bytes(ctx, dst) != 0)) {
         hp.split_k = 1;
     }
@@ -10140,8 +10097,6 @@ static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_t
 #endif
 }
 
-// Returns the halo pipeline for these parameters. A new one is added to the
-// map here and compiled by ggml_vk_load_shaders when it is first requested.
 static vk_pipeline ggml_vk_conv_halo_pipeline(ggml_backend_vk_context * ctx, const vk_conv_halo_params & hp, bool is_3d) {
     std::lock_guard<std::mutex> guard(ctx->device->compile_mutex);
     auto & pipelines = is_3d ? ctx->device->pipeline_conv3d_halo_f16_f32 : ctx->device->pipeline_conv2d_halo_f16_f32;
@@ -11032,7 +10987,6 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         if constexpr (std::is_same_v<PC, vk_op_conv2d_push_constants>) {
             vk_conv_halo_params hp;
             if (ggml_vk_conv_halo_params(ctx, src0, src1, dst, hp)) {
-                // One workgroup per bs_k output channels, out_rows x out_cols output tile and split.
                 elements = { CEIL_DIV(pc.Cout, hp.bs_k) * hp.bs_k * hp.split_k, hp.tiles, 1 };
             } else {
                 const uint32_t NPQ = pc.N * pc.OH * pc.OW;
@@ -11197,8 +11151,6 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     if constexpr (std::is_same_v<PC, vk_op_conv3d_push_constants> || std::is_same_v<PC, vk_op_conv2d_push_constants>) {
         vk_conv_halo_params hp;
         if (ggml_vk_conv_halo_params(ctx, src0, src1, dst, hp)) {
-            // With split-K, each split writes its own copy of the output to
-            // scratch, and a reduce pass adds them up into dst.
             vk_subbuffer out_buf = dst_buf;
             if (hp.split_k > 1) {
                 const size_t scratch_size = ggml_nbytes(dst) * hp.split_k;
@@ -11227,14 +11179,8 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
                 reduce();
                 return;
             }
-            // Copy the filter into prealloc_x as f16, output channels innermost,
-            // then run the halo shader on the copy. Outermost dimension first
-            // (KD = 1 for CONV_2D):
-            //   src: [OC][IC][KD][KH][KW]  = [OC][IC * taps]
-            //   dst: [IC][KD][KH][KW][OCP] = [IC * taps][OCP]
-            // OCP is OC rounded up to 8, so that every row starts 16-byte
-            // aligned; the padding is left unwritten. The copy is a transpose,
-            // done with the tiled transpose shader.
+            // Transpose [OC][IC][KD][KH][KW] to f16 [IC][KD][KH][KW][OCP].
+            // Round OC up to 8 to align each row to 16 bytes. The transpose leaves the padding unwritten.
             uint32_t IC, OC;
             if constexpr (std::is_same_v<PC, vk_op_conv3d_push_constants>) {
                 IC = pc.IC;
@@ -11243,7 +11189,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
                 IC = pc.Cin;
                 OC = pc.Cout;
             }
-            const uint32_t rows = IC * hp.KW * hp.KH * hp.KD;  // (input channel, tap)
+            const uint32_t rows = IC * hp.KW * hp.KH * hp.KD;
             const uint32_t ocp = ROUNDUP_POW2(OC, 8);
             const uint64_t size = (uint64_t)rows * ocp * sizeof(ggml_fp16_t);
             if (ctx->prealloc_size_x < size) {
@@ -11257,14 +11203,13 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
             }
             vk_op_unary_push_constants cp{};
             cp.ne = OC * rows;
-            // Dimension 0 is the output channel, dimension 1 the (input channel, tap) pair.
             cp.ne00 = OC; cp.ne01 = rows; cp.ne02 = 1; cp.ne03 = 1;
             cp.nb00 = rows; cp.nb01 = 1;
             cp.ne10 = OC; cp.ne11 = rows; cp.ne12 = 1; cp.ne13 = 1;
             cp.nb10 = 1; cp.nb11 = ocp;
             cp.misalign_offsets = pc.knl_offset << 16;
             init_pushconst_fastdiv(cp);
-            // One workgroup per 32x32 tile; the shader loops over tiles beyond the grid limit.
+            // The transpose loops over tiles beyond the grid limit.
             const auto & max_groups = ctx->device->properties.limits.maxComputeWorkGroupCount;
             const std::array<uint32_t, 3> cpy_elements = { std::min(CEIL_DIV(OC, 32u), max_groups[0]),
                                                            std::min(CEIL_DIV(rows, 32u), max_groups[1]), 1 };
