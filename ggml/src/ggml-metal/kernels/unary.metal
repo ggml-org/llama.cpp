@@ -21,6 +21,25 @@ inline bfloat4 ggml_metal_unary_cast<bfloat4, float>(float x) {
 }
 #endif
 
+template <typename T>
+inline T ggml_metal_log1p(T x) {
+    const T y = x / (T(2.0f) + x);
+    const T y2 = y * y;
+    T p = T(1.0f / 13.0f);
+    p = p * y2 + T(1.0f / 11.0f);
+    p = p * y2 + T(1.0f / 9.0f);
+    p = p * y2 + T(1.0f / 7.0f);
+    p = p * y2 + T(1.0f / 5.0f);
+    p = p * y2 + T(1.0f / 3.0f);
+    p = p * y2 + T(1.0f);
+    const T s = T(2.0f) * y * p;
+    const T l = precise::log(T(1.0f) + x);
+    const auto in_series = (x >= T(-0.5f)) & (x <= T(1.0f));
+    const auto tiny = fabs(x) < T(2.5e-38f);
+    const T r = select(l, s, in_series);
+    return select(r, x, tiny);
+}
+
 template <typename T0, typename T, typename TC>
 kernel void kernel_unary_impl(
         constant ggml_metal_kargs_unary & args,
@@ -166,7 +185,7 @@ kernel void kernel_unary_impl(
         }
 
         if (FC_OP == OP_UNARY_NUM_SOFTPLUS) {
-            dst_ptr[i0] = ggml_metal_unary_cast<T>(select(log(1 + exp(x)), x, x > 20));
+            dst_ptr[i0] = ggml_metal_unary_cast<T>(select(ggml_metal_log1p(precise::exp(x)), x, x > TC(20.0f)));
         }
 
         if (FC_OP == OP_UNARY_NUM_EXPM1) {

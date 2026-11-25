@@ -10,7 +10,9 @@ const RESOLVED_ID = '\0' + VIRTUAL_ID;
 
 /**
  * Bundle the vendored nerdamer-prime source into a minified IIFE string,
- * exposed as the `virtual:nerdamer` module. Flags mirror the upstream
+ * loaded through the `virtual:nerdamer` module. In the client build it is
+ * its own file, fetched on first use, so it stays out of the app bundle.
+ * Flags mirror the upstream
  * build (esbuild --bundle --minify --format=iife --global-name=nerdamer),
  * so only human readable source lives in the repo and minification is a
  * build artifact. Vendored under src/lib/vendors/, upstream snapshot:
@@ -41,7 +43,13 @@ export function nerdamerPlugin(): Plugin {
 				bundled = result.outputFiles[0].text;
 			}
 
-			return `export default ${JSON.stringify(bundled)};`;
+			if (this.environment.mode === 'build' && this.environment.name === 'client') {
+				const ref = this.emitFile({ name: 'nerdamer.js', source: bundled, type: 'asset' });
+
+				return `export default () => fetch(import.meta.ROLLUP_FILE_URL_${ref}).then((res) => res.text());`;
+			}
+
+			return `export default async () => ${JSON.stringify(bundled)};`;
 		},
 		name: 'llamacpp:nerdamer',
 		resolveId(id) {

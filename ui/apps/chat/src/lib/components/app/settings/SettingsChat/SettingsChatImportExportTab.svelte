@@ -1,140 +1,96 @@
 <script lang="ts">
+	import SettingsChatImportDropZone from './SettingsChatImportDropZone.svelte';
 	import SettingsChatImportExportSection from './SettingsChatImportExportSection.svelte';
-	import { Download, Trash2, Upload } from '@lucide/svelte';
-	import {
-		DialogConfirmation,
-		DialogConversationSelection,
-		DialogExportSettings
-	} from '#lib/components/app/index.ts';
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import { Checkbox } from '@ggml-org/llama-ui/ui/checkbox';
+	import { Label } from '@ggml-org/llama-ui/ui/label';
+	import * as RadioGroup from '@ggml-org/llama-ui/ui/radio-group';
+	import { Download, Trash2 } from '@lucide/svelte';
+	import { DialogConfirmation, DialogConversationSelection } from '#lib/components/app/index.ts';
 	import SettingsGroup from '#lib/components/app/settings/SettingsGroup.svelte';
-	import { ConversationSelectionMode, FileExtensionText, HtmlInputType } from '#lib/enums/index.ts';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
+	import { ConversationSelectionMode, DataExportScope } from '#lib/enums/index.ts';
 	import { ConversationTransferService } from '#lib/services/index.ts';
-	import { conversationsStore, groupsStore, settingsStore } from '#lib/stores/index.ts';
+	import { conversationsStore, settingsStore } from '#lib/stores/index.ts';
 	import { createMessageCountMap } from '#lib/utils/index.ts';
 	import { fade } from 'svelte/transition';
 	import { toast } from 'svelte-sonner';
 
-	let exportedConversations = $state<DatabaseConversation[]>([]);
-	let importedConversations = $state<DatabaseConversation[]>([]);
-	let showExportSummary = $state(false);
-	let showImportSummary = $state(false);
+	const EXPORT_OPTIONS = [
+		{
+			description: 'Pick which ones: one is saved as a JSONL file, several as a ZIP.',
+			label: 'Conversations',
+			value: DataExportScope.CONVERSATIONS
+		},
+		{
+			description: 'Your chat settings and preferences as a JSON file.',
+			label: 'Settings',
+			value: DataExportScope.SETTINGS
+		},
+		{
+			description: 'All conversations and settings in one ZIP, to restore in one drop.',
+			label: 'Everything',
+			value: DataExportScope.ALL
+		}
+	];
+
+	let exportScope = $state(DataExportScope.CONVERSATIONS);
+	let includeSensitiveData = $state(false);
+	let exportsSettings = $derived(exportScope !== DataExportScope.CONVERSATIONS);
 
 	let showExportDialog = $state(false);
-	let showImportDialog = $state(false);
 	let availableConversations = $state<DatabaseConversation[]>([]);
 	let messageCountMap = $state<Map<string, number>>(new Map());
-	let fullImportData = $state<Array<{ conv: DatabaseConversation; messages: DatabaseMessage[] }>>(
-		[]
-	);
 
-	// Delete functionality state
 	let showDeleteDialog = $state(false);
 
-	// Settings import/export state
-	let showSettingsExportSummary = $state(false);
-	let showSettingsImportSummary = $state(false);
-	let showSettingsExportDialog = $state(false);
-	let includeSensitiveData = $state(false);
-
-	function handleSettingsExport() {
-		showSettingsExportDialog = true;
-		includeSensitiveData = false;
-	}
-
-	function handleSettingsExportConfirm() {
-		showSettingsExportDialog = false;
-
+	async function handleExport() {
 		try {
-			const data = settingsStore.exportSettings(includeSensitiveData);
-			const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-			const url = URL.createObjectURL(blob);
-			const a = document.createElement('a');
+			if (exportScope === DataExportScope.SETTINGS) {
+				ConversationTransferService.downloadSettingsFile(
+					settingsStore.exportSettings(includeSensitiveData)
+				);
+				toast.success('Settings exported');
+			} else if (exportScope === DataExportScope.ALL) {
+				const data = await conversationsStore.getConversationsForExport(
+					conversationsStore.conversations.map((conv) => conv.id)
+				);
 
-			a.href = url;
-			a.download = `llama_settings_${new Date().toISOString().split('T')[0]}.json`;
-			document.body.appendChild(a);
-			a.click();
-			document.body.removeChild(a);
-			URL.revokeObjectURL(url);
-
-			showSettingsExportSummary = true;
-			showSettingsImportSummary = false;
-			toast.success('Settings exported');
-		} catch (err) {
-			console.error('Failed to export settings:', err);
-			toast.error('Failed to export settings');
-		}
-	}
-
-	function handleSettingsExportCancel() {
-		showSettingsExportDialog = false;
-	}
-
-	function handleSettingsImport() {
-		try {
-			const input = document.createElement('input');
-
-			input.type = HtmlInputType.FILE;
-			input.accept = FileExtensionText.JSON;
-
-			input.onchange = async (e) => {
-				const file = (e.target as HTMLInputElement)?.files?.[0];
-
-				if (!file) return;
-
-				try {
-					const text = await file.text();
-					const data = JSON.parse(text);
-
-					if (!data || typeof data !== 'object' || !data.config) {
-						toast.error('Invalid settings file: missing config');
-
-						return;
-					}
-
-					settingsStore.importSettings(data);
-
-					showSettingsImportSummary = true;
-					showSettingsExportSummary = false;
-					toast.success('Settings imported successfully');
-				} catch (err) {
-					console.error('Failed to import settings:', err);
-					toast.error('Failed to import settings');
-				}
-			};
-
-			input.click();
-		} catch (err) {
-			console.error('Failed to open file picker:', err);
-			toast.error('Failed to open file picker');
-		}
-	}
-
-	async function handleExportClick() {
-		try {
-			const allConversations = conversationsStore.conversations;
-
-			if (allConversations.length === 0) {
-				toast.info('No conversations to export');
-
-				return;
+				ConversationTransferService.downloadConversationsArchive(
+					data,
+					settingsStore.exportSettings(includeSensitiveData)
+				);
+				toast.success(
+					`Exported ${data.length} conversation${data.length === 1 ? '' : 's'} and settings`
+				);
+			} else {
+				await openConversationPicker();
 			}
-
-			const conversationsWithMessages = await Promise.all(
-				allConversations.map(async (conv: DatabaseConversation) => {
-					const messages = await conversationsStore.getConversationMessages(conv.id);
-
-					return { conv, messages };
-				})
-			);
-
-			messageCountMap = createMessageCountMap(conversationsWithMessages);
-			availableConversations = allConversations;
-			showExportDialog = true;
 		} catch (err) {
-			console.error('Failed to load conversations:', err);
-			alert('Failed to load conversations');
+			console.error('Export failed:', err);
+			toast.error('Export failed');
 		}
+	}
+
+	async function openConversationPicker() {
+		const allConversations = conversationsStore.conversations;
+
+		if (allConversations.length === 0) {
+			toast.info('No conversations to export');
+
+			return;
+		}
+
+		const conversationsWithMessages = await Promise.all(
+			allConversations.map(async (conv: DatabaseConversation) => ({
+				conv,
+				messages: await conversationsStore.getConversationMessages(conv.id)
+			}))
+		);
+
+		messageCountMap = createMessageCountMap(conversationsWithMessages);
+		availableConversations = allConversations;
+		showExportDialog = true;
 	}
 
 	async function handleExportConfirm(selectedConversations: DatabaseConversation[]) {
@@ -149,100 +105,22 @@
 				ConversationTransferService.downloadConversationsArchive(allData);
 			}
 
-			exportedConversations = selectedConversations;
-			showExportSummary = true;
-			showImportSummary = false;
 			showExportDialog = false;
+			toast.success(`Exported ${allData.length} conversation${allData.length === 1 ? '' : 's'}`);
 		} catch (err) {
 			console.error('Export failed:', err);
-			alert('Failed to export conversations');
+			toast.error('Failed to export conversations');
 		}
 	}
 
-	async function handleImportClick() {
-		try {
-			const input = document.createElement('input');
+	function handleDeleteAllClick() {
+		if (conversationsStore.conversations.length === 0) {
+			toast.info('No conversations to delete');
 
-			// No `accept` filter: iOS resolves each entry to a UTI and has none for
-			// `.jsonl`, which greys out exported conversations in the file picker.
-			// `parseImportFile` detects the format from the file contents instead.
-			input.type = HtmlInputType.FILE;
-
-			input.onchange = async (e) => {
-				const file = (e.target as HTMLInputElement)?.files?.[0];
-
-				if (!file) return;
-
-				try {
-					const importedData = await ConversationTransferService.parseImportFile(file);
-
-					if (importedData.length === 0) {
-						throw new Error('No conversations found in file');
-					}
-
-					fullImportData = importedData;
-					availableConversations = importedData.map((item) => item.conv);
-					messageCountMap = createMessageCountMap(importedData);
-					showImportDialog = true;
-				} catch (err: unknown) {
-					const message = err instanceof Error ? err.message : 'Unknown error';
-
-					console.error('Failed to parse file:', err);
-					alert(`Failed to parse file: ${message}`);
-				}
-			};
-
-			input.click();
-		} catch (err) {
-			console.error('Import failed:', err);
-			alert('Failed to import conversations');
+			return;
 		}
-	}
 
-	async function handleImportConfirm(selectedConversations: DatabaseConversation[]) {
-		try {
-			const selectedIds = new Set(selectedConversations.map((c) => c.id));
-			const selectedData = $state
-				.snapshot(fullImportData)
-				.filter((item) => selectedIds.has(item.conv.id));
-			const { imported, skipped } = await conversationsStore.importConversationsData(selectedData);
-
-			// an import can add the groups its chats were in
-			await groupsStore.reload();
-
-			// A conversation already in the database is left untouched, so the summary
-			// lists what was written and the toast accounts for the rest.
-			if (skipped.length > 0) {
-				toast.info(
-					`Skipped ${skipped.length} conversation${skipped.length === 1 ? '' : 's'} already in your library`
-				);
-			}
-
-			importedConversations = imported;
-			showImportSummary = true;
-			showExportSummary = false;
-			showImportDialog = false;
-		} catch (err) {
-			console.error('Import failed:', err);
-			alert('Failed to import conversations. Please check the file format.');
-		}
-	}
-
-	async function handleDeleteAllClick() {
-		try {
-			const allConversations = conversationsStore.conversations;
-
-			if (allConversations.length === 0) {
-				toast.info('No conversations to delete');
-
-				return;
-			}
-
-			showDeleteDialog = true;
-		} catch (err) {
-			console.error('Failed to load conversations for deletion:', err);
-			toast.error('Failed to load conversations');
-		}
+		showDeleteDialog = true;
 	}
 
 	async function handleDeleteAllConfirm() {
@@ -261,25 +139,64 @@
 </script>
 
 <div in:fade={{ duration: 150 }} class="space-y-12">
-	<SettingsGroup title="Conversations">
-		<SettingsChatImportExportSection
-			IconComponent={Download}
-			buttonText="Export conversations"
-			description="Download your conversations as a ZIP of JSONL files. This includes all messages, attachments, and conversation history."
-			onclick={handleExportClick}
-			summary={{ items: exportedConversations, show: showExportSummary, verb: 'Exported' }}
-			title="Export"
-		/>
+	<SettingsGroup title="Import">
+		<p class="text-body-sm text-muted-foreground">
+			Bring in one or more conversations, your settings, or both at once. You see what each file
+			holds before anything changes; conversations already in your library are left as they are.
+		</p>
 
-		<SettingsChatImportExportSection
-			IconComponent={Upload}
-			buttonText="Import conversations"
-			description="Import one or more conversations from a previously exported ZIP or JSONL file. This will merge with your existing conversations."
-			onclick={handleImportClick}
-			summary={{ items: importedConversations, show: showImportSummary, verb: 'Imported' }}
-			title="Import"
-		/>
+		<SettingsChatImportDropZone />
+	</SettingsGroup>
 
+	<SettingsGroup title="Export">
+		<RadioGroup.Root
+			class="gap-3"
+			onValueChange={(value) => (exportScope = value as DataExportScope)}
+			value={exportScope}
+		>
+			{#each EXPORT_OPTIONS as option (option.value)}
+				{@const id = `export-${option.value}`}
+
+				<div class="flex items-start gap-3">
+					<RadioGroup.Item class="mt-0.5" {id} value={option.value} />
+
+					<Label class="grid cursor-pointer gap-0.5" for={id}>
+						<span class="text-label">{option.label}</span>
+
+						<span class="text-caption font-normal text-muted-foreground">{option.description}</span>
+					</Label>
+				</div>
+			{/each}
+		</RadioGroup.Root>
+
+		{#if exportsSettings}
+			<div transition:fade={{ duration: 150 }} class="grid gap-1">
+				<div class="flex items-center gap-2">
+					<Checkbox bind:checked={includeSensitiveData} id="export-sensitive" />
+
+					<Label class="text-body-sm font-normal" for="export-sensitive">
+						Include API keys and MCP server headers
+					</Label>
+				</div>
+
+				<p
+					class="text-caption {includeSensitiveData ? 'text-destructive' : 'text-muted-foreground'}"
+				>
+					{includeSensitiveData
+						? 'The file will hold your credentials: share it with no one you do not trust.'
+						: 'Left out by default to keep your credentials safe.'}
+				</p>
+			</div>
+		{/if}
+
+		<Button class="justify-self-start" onclick={handleExport} variant="outline">
+			<Download class="mr-2 {ICON_CLASS_DEFAULT}" />
+
+			Export
+		</Button>
+	</SettingsGroup>
+
+	<SettingsGroup title="Delete">
 		<SettingsChatImportExportSection
 			IconComponent={Trash2}
 			buttonClass="justify-start justify-self-start md:w-auto"
@@ -291,34 +208,7 @@
 			titleClass="text-destructive"
 		/>
 	</SettingsGroup>
-
-	<SettingsGroup title="Settings">
-		<SettingsChatImportExportSection
-			IconComponent={Download}
-			buttonText="Export settings"
-			description="Export your chat settings and preferences as a JSON file."
-			onclick={handleSettingsExport}
-			summary={{ items: [], show: showSettingsExportSummary, verb: 'Exported' }}
-			title="Export"
-		/>
-
-		<SettingsChatImportExportSection
-			IconComponent={Upload}
-			buttonText="Import settings"
-			description="Import chat settings from a previously exported JSON file. This will merge with your existing settings."
-			onclick={handleSettingsImport}
-			summary={{ items: [], show: showSettingsImportSummary, verb: 'Imported' }}
-			title="Import"
-		/>
-	</SettingsGroup>
 </div>
-
-<DialogExportSettings
-	bind:includeSensitiveData
-	bind:open={showSettingsExportDialog}
-	onCancel={handleSettingsExportCancel}
-	onConfirm={handleSettingsExportConfirm}
-/>
 
 <DialogConversationSelection
 	bind:open={showExportDialog}
@@ -327,15 +217,6 @@
 	mode={ConversationSelectionMode.EXPORT}
 	onCancel={() => (showExportDialog = false)}
 	onConfirm={handleExportConfirm}
-/>
-
-<DialogConversationSelection
-	bind:open={showImportDialog}
-	conversations={availableConversations}
-	{messageCountMap}
-	mode={ConversationSelectionMode.IMPORT}
-	onCancel={() => (showImportDialog = false)}
-	onConfirm={handleImportConfirm}
 />
 
 <DialogConfirmation

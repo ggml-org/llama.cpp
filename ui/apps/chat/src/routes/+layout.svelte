@@ -1,7 +1,17 @@
 <script lang="ts">
 	import '../app.css';
 	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
-	import { GlassKey, MenuIcon, SidebarNavigation } from '#lib/components/app/index.ts';
+	import {
+		DialogConfirmation,
+		DialogConversationSelection,
+		DialogImportConversationPreview,
+		DialogImportConversationsResult,
+		DialogSettingsImportPreview,
+		DropImportOverlay,
+		GlassKey,
+		MenuIcon,
+		SidebarNavigation
+	} from '#lib/components/app/index.ts';
 	import { PwaMetaTags, PwaRefreshAlert } from '#lib/components/pwa/index.ts';
 	import {
 		BOX_BORDER,
@@ -15,6 +25,7 @@
 		SETTINGS_KEYS,
 		TOOLTIP_DELAY_DURATION
 	} from '#lib/constants/index.ts';
+	import { useDropImport } from '#lib/hooks/use-drop-import.svelte.ts';
 	import { useKeyboardShortcuts } from '#lib/hooks/use-keyboard-shortcuts.svelte.ts';
 	import { usePwa } from '#lib/hooks/use-pwa.svelte.ts';
 	import { useSidebarReveal } from '#lib/hooks/use-sidebar-reveal.svelte.ts';
@@ -32,8 +43,8 @@
 		versionStore
 	} from '#lib/stores/index.ts';
 	import { initStores } from '#lib/stores/init.ts';
-	import { withBase } from '#lib/utils/base-path.ts';
-	import { applySurfaceTheme, hapticTap } from '#lib/utils/index.ts';
+	import { hapticTap } from '#lib/utils/index.ts';
+	import { serverUrl } from '#lib/utils/server-config.ts';
 	import { browser } from '$app/env';
 	import { afterNavigate, goto } from '$app/navigation';
 	import { page } from '$app/state';
@@ -52,11 +63,6 @@
 	let innerWidth = $state(browser ? window.innerWidth : 0);
 
 	let chatSidebar: { editActiveConversation?: () => void } | undefined = $state();
-
-	// the light surface theme (Paper or Matte) follows the saved setting
-	$effect(() => {
-		applySurfaceTheme(settingsStore.config[SETTINGS_KEYS.SURFACE_THEME]);
-	});
 
 	let showBuildVersion = $derived(
 		settingsStore.config[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean
@@ -157,6 +163,9 @@
 		uiStore.rememberModelsReturnRoute();
 	});
 
+	// Global drag-and-drop import (works on any route)
+	const dropImport = useDropImport();
+
 	// Global keyboard shortcuts
 	const { handleKeydown } = useKeyboardShortcuts({
 		editActiveConversation: () => chatSidebar?.editActiveConversation?.(),
@@ -189,7 +198,7 @@
 					[HEADERS.AUTHORIZATION]: `${HEADERS.BEARER}${apiKey.trim()}`
 				};
 
-				fetch(withBase('/props'), { headers })
+				fetch(serverUrl('/props'), { headers })
 					.then((response) => {
 						if (response.status === 401 || response.status === 403) {
 							window.location.reload();
@@ -323,7 +332,13 @@
 </svelte:head>
 
 <svelte:window bind:innerHeight bind:innerWidth onkeydown={handleKeydown} />
-<svelte:document onvisibilitychange={handleVisibilityChange} />
+<svelte:document
+	ondragenter={dropImport.dragHandlers.dragenter}
+	ondragleave={dropImport.dragHandlers.dragleave}
+	ondragover={dropImport.dragHandlers.dragover}
+	ondrop={dropImport.dragHandlers.drop}
+	onvisibilitychange={handleVisibilityChange}
+/>
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
 	<!-- clip, not hide: the page slid aside for the phone sidebar must not widen the document,
@@ -346,7 +361,7 @@
 					(sidebarReveal.isRevealed ? 'min-h-[calc(100dvh+var(--safe-area-top))]' : 'min-h-dvh'),
 				deviceStore.isMobile &&
 					sidebarReveal.dragOffset === null &&
-					'transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
+					'transition-transform duration-300 ease-sheet',
 				// slid aside: nothing inside scrolls or takes a tap, which lands on the page itself and
 				// closes the sidebar; forced on every descendant, as the fixed bars opt back into events
 				sidebarReveal.isRevealed && 'touch-none [&_*]:pointer-events-none!'
@@ -376,14 +391,14 @@
 					<!-- under the chat form, which keeps its taps where the two overlap -->
 					<div
 						aria-hidden="true"
-						class="screen-bottom-edge sidebar-reveal-pin-bottom fixed inset-x-0 bottom-0 z-[6]"
+						class="screen-bottom-edge sidebar-reveal-pin-bottom fixed inset-x-0 bottom-0 z-6"
 					></div>
 				{/if}
 
 				<!-- over the content, under the chat form (see its wrapper in ChatScreen) -->
 				<div
 					aria-hidden="true"
-					class="screen-bottom-fade sidebar-reveal-pin-bottom pointer-events-none fixed inset-x-0 bottom-0 z-[5]"
+					class="screen-bottom-fade sidebar-reveal-pin-bottom pointer-events-none fixed inset-x-0 bottom-0 z-5"
 				></div>
 			{/if}
 
@@ -413,10 +428,10 @@
 				style:transform={revealTransform}
 				aria-hidden="true"
 				class={[
-					'pointer-events-none fixed inset-0 z-[25] rounded-[2.5rem]',
+					'pointer-events-none fixed inset-0 z-25 rounded-[2.5rem]',
 					'shadow-[-0.5rem_0_2rem_-0.25rem_rgb(0_0_0/0.12)] dark:shadow-[-0.5rem_0_2rem_-0.25rem_rgb(0_0_0/0.45)]',
 					sidebarReveal.dragOffset === null &&
-						'transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
+						'transition-[transform,opacity] duration-300 ease-sheet',
 					isRevealed
 						? 'opacity-100'
 						: 'opacity-0 [transition-delay:0ms,150ms] [transition-duration:300ms,150ms]'
@@ -429,7 +444,7 @@
 				class={[
 					'pointer-events-none fixed inset-0 z-20 overflow-hidden',
 					sidebarReveal.dragOffset === null &&
-						'transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
+						'transition-[transform,opacity] duration-300 ease-sheet',
 					// on close the corners hold until the page is nearly home, then fade
 					isRevealed
 						? 'opacity-100'
@@ -447,6 +462,55 @@
 
 	<Toaster closeButton richColors />
 
+	{#if dropImport.isDragOver}
+		<DropImportOverlay />
+	{/if}
+
+	<DialogConversationSelection
+		bind:open={dropImport.ui.showSelection}
+		conversations={dropImport.ui.availableConversations}
+		messageCountMap={dropImport.ui.selectionMessageCountMap}
+		mode="import"
+		onCancel={dropImport.cancelSelection}
+		onConfirm={dropImport.handleSelectionConfirm}
+	/>
+
+	<DialogSettingsImportPreview
+		bind:open={dropImport.ui.showSettingsPreview}
+		diff={dropImport.ui.settingsDiff}
+		onCancel={dropImport.cancelSettingsImport}
+		onConfirm={dropImport.confirmSettingsImport}
+	/>
+
+	<DialogImportConversationPreview
+		bind:open={dropImport.ui.showPreview}
+		messages={dropImport.ui.previewData?.messages}
+		onCancel={dropImport.cancelPreview}
+		onConfirm={dropImport.confirmImportSingle}
+	/>
+
+	<DialogConfirmation
+		bind:open={dropImport.ui.showOpenImported}
+		cancelText="Not now"
+		confirmText="Open"
+		description={dropImport.ui.openImported?.alreadyInLibrary
+			? `"${dropImport.ui.openImported.conv.name}" was already in your library. Open it now?`
+			: `"${dropImport.ui.openImported?.conv.name ?? ''}" is now in your library. Open it now?`}
+		onCancel={dropImport.cancelOpenImported}
+		onConfirm={dropImport.confirmOpenImported}
+		title={dropImport.ui.openImported?.alreadyInLibrary
+			? 'Already in your library'
+			: 'Conversation imported'}
+	/>
+
+	<DialogImportConversationsResult
+		bind:open={dropImport.ui.showOpenBulk}
+		conversations={dropImport.ui.importedConversations}
+		messageCountMap={dropImport.ui.bulkMessageCountMap}
+		onClose={dropImport.cancelBulk}
+		onOpen={dropImport.openConversation}
+	/>
+
 	<!-- a debug tool, kept with the tests and loaded on demand, so it stays out of the production bundle -->
 	{#if import.meta.env.DEV && import.meta.env.VITE_DEBUG}
 		{#await import('../../tests/debug/ViewportProbe.svelte') then { default: ViewportProbe }}
@@ -458,7 +522,7 @@
 <!-- PWA update prompt + version -->
 <div class="fixed right-4 bottom-4 z-9999 flex flex-col items-end gap-1">
 	{#if showBuildVersion && versionStore.build}
-		<span class="text-[10px] tabular-nums text-muted-foreground">{versionStore.build}</span>
+		<span class="text-caption-sm tabular-nums text-muted-foreground">{versionStore.build}</span>
 	{/if}
 
 	<PwaRefreshAlert needRefresh={pwa.needRefresh} updateServiceWorker={pwa.updateServiceWorker} />

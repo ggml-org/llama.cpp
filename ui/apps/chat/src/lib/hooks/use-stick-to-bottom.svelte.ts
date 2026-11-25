@@ -26,6 +26,38 @@ const FAR_FROM_BOTTOM_PX = 240;
  * opening a preview), so it must not drag the viewport down with it.
  */
 const INTERACTION_GRACE_MS = 400;
+/**
+ * How fast a glide closes the distance to the bottom: the time constant of an
+ * exponential ease, so it starts quickly and settles softly, and a target that
+ * moves mid-way ( late layout, the first tokens ) bends the motion instead of
+ * restarting it.
+ */
+const GLIDE_TIME_CONSTANT_MS = 90;
+/** A glide animates at least this long, to still be running when the new rows land. */
+const GLIDE_MIN_MS = 450;
+/** A glide that has not settled after animating this long ends with a jump. */
+const GLIDE_MAX_MS = 2000;
+/**
+ * After a glide, corrections this soon are glided too: measured heights and
+ * fonts settle a moment after the rows land, and a jump there reads as a glitch.
+ */
+const GLIDE_SETTLE_MS = 2500;
+/** A late frame advances the glide by no more than this, about two frames. */
+const GLIDE_MAX_FRAME_MS = 34;
+/** A glide ends once it has rested at the bottom this long. */
+const GLIDE_SETTLED_MS = 150;
+/** Close enough to the bottom for a glide to stop. */
+const GLIDE_DONE_PX = 0.5;
+const GLIDE_CANCEL_EVENTS = ['wheel', 'touchstart', 'keydown'] as const;
+const GLIDE_SCROLL_KEYS: readonly string[] = [
+	' ',
+	'ArrowDown',
+	'ArrowUp',
+	'End',
+	'Home',
+	'PageDown',
+	'PageUp'
+];
 /** Set on the scroller while the pin is its only scroll anchor. */
 const STICK_ATTRIBUTE = 'data-stick-to-bottom';
 const NATIVE_ANCHORING = typeof CSS !== 'undefined' && CSS.supports('overflow-anchor', 'none');
@@ -38,8 +70,25 @@ export class StickToBottom {
 	/** The reader is at the bottom, so new content should follow. */
 	stick = $state(true);
 
+	private cancelGlide = (event?: Event): void => {
+		if (this.glideFrame === null) return;
+
+		// typing the next message is not scrolling; only scroll keys outside a field are
+		if (event instanceof KeyboardEvent) {
+			const target = event.target as HTMLElement | null;
+			const typing = target?.isContentEditable || target?.matches?.('input, textarea, select');
+
+			if (typing || !GLIDE_SCROLL_KEYS.includes(event.key)) return;
+		}
+
+		this.stopGlide();
+		this.glideSettleUntil = 0;
+		this.measure();
+	};
 	private container: HTMLElement | undefined;
 	private enabled = true;
+	private glideFrame: number | null = null;
+	private glideSettleUntil = 0;
 	private graceTimer: ReturnType<typeof setTimeout> | undefined;
 	private lastScrollHeight = 0;
 	private lastScrollTop = 0;
@@ -51,10 +100,11 @@ export class StickToBottom {
 	};
 	private native = false;
 	private observer: ResizeObserver | null = null;
-
 	// -Infinity, not 0: performance.now() starts at page load, so 0 would read
 	// as a press during the first moments after a refresh, when a chat lands
 	private pressedAt = -Infinity;
+
+	private settleTimer: ReturnType<typeof setTimeout> | undefined;
 
 	/**
 	 * Binds the scroller and the element whose growth should be followed.
@@ -90,6 +140,9 @@ export class StickToBottom {
 	}
 
 	detach(): void {
+		this.stopGlide();
+		this.glideSettleUntil = 0;
+		clearTimeout(this.settleTimer);
 		this.observer?.disconnect();
 		this.observer = null;
 		clearTimeout(this.graceTimer);
@@ -109,6 +162,48 @@ export class StickToBottom {
 		observer.observe(element);
 
 		return () => observer.disconnect();
+	}
+
+	/**
+	 * Carries the reader to the bottom with a short eased scroll, for the moment
+	 * a message is sent: the rows that land after this call slide into place
+	 * instead of appearing there. The target is read again every frame, so
+	 * content that is still settling bends the motion and never ends it with a
+	 * jump. Any scroll input from the reader takes over at once.
+	 *
+	 * Why not `scrollToBottom('smooth')`: this is called before the new rows
+	 * exist, so a native smooth scroll aims at the old bottom and ends there.
+	 * When the rows land, `follow()` and the anchoring pin then snap to the new
+	 * bottom in one frame, which is the jump this replaces; native smooth
+	 * scrolling cannot be retargeted mid-flight, and it cannot hold either of
+	 * those off. The press reset mirrors `scrollToBottom`: asking for the
+	 * bottom outranks the press that led here.
+	 */
+	glideToBottom(): void {
+		const el = this.container;
+
+		if (!el) return;
+
+		this.stick = true;
+		this.pressedAt = -Infinity;
+
+		if (
+			!this.enabled ||
+			typeof requestAnimationFrame === 'undefined' ||
+			window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+		) {
+			this.scrollToBottom();
+
+			return;
+		}
+
+		this.atBottom = true;
+		this.farFromBottom = false;
+		this.glideSettleUntil = performance.now() + GLIDE_SETTLE_MS;
+		// once the window is over the pin anchors again, without waiting for a scroll
+		clearTimeout(this.settleTimer);
+		this.settleTimer = setTimeout(() => this.syncAnchor(), GLIDE_SETTLE_MS + 1);
+		this.startGlide();
 	}
 
 	/** Reader scrolls are the only thing that re-arms or stops following. */
@@ -143,18 +238,28 @@ export class StickToBottom {
 	 * window's own height is the room it really shows.
 	 */
 	private distanceFromBottom(el: HTMLElement): number {
-		const shown =
-			el === document.documentElement
-				? Math.max(el.clientHeight, window.innerHeight)
-				: el.clientHeight;
-
-		return Math.max(0, el.scrollHeight - shown - el.scrollTop);
+		return Math.max(0, el.scrollHeight - this.shownHeight(el) - el.scrollTop);
 	}
 
 	private follow(ignoreGrace = false): void {
 		const el = this.container;
 
 		if (!el) return;
+
+		// a running glide reads the new bottom on its next frame
+		if (this.glideFrame !== null) return;
+
+		// shortly after a send, late layout is glided to as well
+		if (
+			this.enabled &&
+			this.stick &&
+			performance.now() < this.glideSettleUntil &&
+			this.distanceFromBottom(el) > GLIDE_DONE_PX
+		) {
+			this.startGlide();
+
+			return;
+		}
 
 		const pressedRecently =
 			!ignoreGrace && performance.now() - this.pressedAt < INTERACTION_GRACE_MS;
@@ -192,6 +297,14 @@ export class StickToBottom {
 		const height = el.scrollHeight;
 		const distance = this.distanceFromBottom(el);
 
+		// a glide is on its way to the bottom: its own steps are not the reader's
+		if (this.glideFrame !== null) {
+			this.lastScrollHeight = height;
+			this.lastScrollTop = top;
+
+			return;
+		}
+
 		this.atBottom = distance <= AT_BOTTOM_PX;
 		this.farFromBottom = distance > FAR_FROM_BOTTOM_PX;
 
@@ -206,13 +319,86 @@ export class StickToBottom {
 		this.syncAnchor();
 	}
 
-	/** The pin anchors only while following, so a reader who scrolled up keeps their rows anchored. */
+	private shownHeight(el: HTMLElement): number {
+		return el === document.documentElement
+			? Math.max(el.clientHeight, window.innerHeight)
+			: el.clientHeight;
+	}
+
+	private startGlide(): void {
+		const el = this.container;
+
+		if (!el || this.glideFrame !== null) return;
+
+		let previous = performance.now();
+		// time spent animating: a frame that arrives late ( the page was busy
+		// rendering the new rows ) counts as one frame, not as the wait before it
+		let elapsed = 0;
+		let settledFor = 0;
+		// kept apart from scrollTop, which rounds: steps under a pixel still add up
+		let position = el.scrollTop;
+
+		const step = (now: number): void => {
+			const dt = Math.min(now - previous, GLIDE_MAX_FRAME_MS);
+			const target = el.scrollHeight - this.shownHeight(el);
+
+			previous = now;
+			elapsed += dt;
+
+			// the browser moved the page itself ( its own anchoring, a clamp ): go on from there
+			if (Math.abs(el.scrollTop - position) > 1) position = el.scrollTop;
+
+			const remaining = target - position;
+
+			settledFor = Math.abs(remaining) <= GLIDE_DONE_PX ? settledFor + dt : 0;
+
+			if (elapsed >= GLIDE_MAX_MS || (elapsed >= GLIDE_MIN_MS && settledFor >= GLIDE_SETTLED_MS)) {
+				this.stopGlide();
+				el.scrollTop = el.scrollHeight;
+				this.measure();
+
+				return;
+			}
+
+			position += remaining * (1 - Math.exp(-dt / GLIDE_TIME_CONSTANT_MS));
+			el.scrollTop = position;
+			this.glideFrame = requestAnimationFrame(step);
+		};
+
+		for (const type of GLIDE_CANCEL_EVENTS) {
+			window.addEventListener(type, this.cancelGlide, { capture: true, passive: true });
+		}
+
+		this.glideFrame = requestAnimationFrame(step);
+		// no pin anchoring while gliding: the browser would jump to it
+		this.syncAnchor();
+	}
+
+	private stopGlide(): void {
+		if (this.glideFrame === null) return;
+
+		cancelAnimationFrame(this.glideFrame);
+		this.glideFrame = null;
+
+		for (const type of GLIDE_CANCEL_EVENTS) {
+			window.removeEventListener(type, this.cancelGlide, { capture: true });
+		}
+
+		this.syncAnchor();
+	}
+
+	/**
+	 * The pin anchors only while following, so a reader who scrolled up keeps their rows
+	 * anchored. Not during a glide or the settle window after it either: there the glide
+	 * does the following, and the pin would get there first with a jump.
+	 */
 	private syncAnchor(): void {
 		const pressedRecently = performance.now() - this.pressedAt < INTERACTION_GRACE_MS;
+		const gliding = this.glideFrame !== null || performance.now() < this.glideSettleUntil;
 
 		this.container?.toggleAttribute(
 			STICK_ATTRIBUTE,
-			this.native && this.enabled && this.stick && !pressedRecently
+			this.native && this.enabled && this.stick && !pressedRecently && !gliding
 		);
 	}
 }

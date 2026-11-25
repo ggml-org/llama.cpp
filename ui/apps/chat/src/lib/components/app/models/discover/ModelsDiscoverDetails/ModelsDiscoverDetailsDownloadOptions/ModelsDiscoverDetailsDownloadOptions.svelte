@@ -211,7 +211,7 @@
 		     readonly. -->
 		{#if draftKinds.length}
 			<div
-				class="flex flex-wrap items-center justify-start gap-x-1.5 gap-y-1 border-t border-border/50 px-4 py-2.5 text-xs text-muted-foreground dark:border-border/35"
+				class="flex flex-wrap items-center justify-start gap-x-1.5 gap-y-1 border-t border-border/50 px-4 py-2.5 text-caption text-muted-foreground dark:border-border/35"
 			>
 				<label class="flex cursor-pointer items-center gap-2" for="discover-draft-sidecars">
 					<Checkbox bind:checked={withDraft} id="discover-draft-sidecars" />
@@ -235,9 +235,9 @@
 						{draftKindLabel}
 					</Select.Trigger>
 
-					<Select.Content class="font-mono text-xs">
+					<Select.Content class="font-mono text-caption">
 						{#each draftKinds as kind (kind)}
-							<Select.Item class="text-xs" label={kind.toUpperCase()} value={kind}>
+							<Select.Item class="text-caption" label={kind.toUpperCase()} value={kind}>
 								{kind.toUpperCase()}
 							</Select.Item>
 						{/each}

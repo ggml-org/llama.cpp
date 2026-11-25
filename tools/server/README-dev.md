@@ -203,7 +203,7 @@ Headers:
 - `x-tool-cwd`: optional; if set, use as the CWD for tool; this is not part of tool's params because it's meant to be set by the runtime, not the LLM itself
 - `x-tool-runtime`: optional; if set, run the tool inside this isolate instead of on the host. Either `docker-container:<id>` or `podman-container:<id>`, using an already-running container, or `ssh:<target>`, running the tool on a remote host. Refused with 403 when the server is started with `--tools-runtime`, so clients cannot move tools out of that sandbox
 
-Returns JSON object. There are two response formats (MCP tools use the same two formats: their result content is concatenated into `plain_text_response`, and RPC or tool errors are surfaced as the `error` string):
+Returns JSON object. There are two response formats (MCP tools use the same two formats: their text parts are concatenated into `plain_text_response`, image and audio parts are rendered there as `data:<mime>;base64,...` lines, and RPC or tool errors are surfaced as the `error` string):
 
 Format 1: Plain text. The text will be placed into a field called `plain_text_response`, example:
 
@@ -322,6 +322,8 @@ Call stack on waking up:
 - `sleeping = false` --> `notify_all` unblocks the HTTP thread, the request is handled as usual
 
 Endpoints created with `create_response(true)` (`/health`, `/props`, `/models`, `/metrics`) skip `wait_until_no_sleep`, so they answer from the cached responses instead of waking the server.
+
+IMPORTANT: any handler that touches the model or contexts (`ctx_server.mctx`, `ctx_server.vocab`, etc.) must call `create_response()` before that access, and keep the returned object alive until it is done with them. While sleeping, these pointers are freed, so using them before waking up leads to a crash. The returned object also holds an inflight count (released in its destructor) that prevents the server from going back to sleep. This applies to every route type, not only HTTP routes: for example, the `/v1/realtime` websocket handler calls `create_response()` first and holds it for the whole session.
 
 ### Notable Related PRs
 

@@ -7,7 +7,7 @@
 // finished calls open and wins on its own. A manual toggle always overrides the
 // default, in both directions.
 
-import ChatMessageAgenticContent from '#lib/components/app/chat/ChatMessages/ChatMessageAgenticContent.svelte';
+import ChatMessageAgentTrace from '#lib/components/app/chat/ChatMessages/ChatMessageAgentTrace.svelte';
 import { COLLAPSIBLE_TRANSITION_MS, SETTINGS_KEYS } from '#lib/constants/index.ts';
 import { MessageRole, MessageType } from '#lib/enums/index.ts';
 import { settingsStore } from '#lib/stores/index.ts';
@@ -94,7 +94,7 @@ describe('Show tool call in progress', () => {
 	it('expands a call that is still executing when the setting is on', async () => {
 		setSettings({ alwaysShow: false, inProgress: true });
 
-		const { container } = render(ChatMessageAgenticContent, {
+		const { container } = render(ChatMessageAgentTrace, {
 			isLastAssistantMessage: true,
 			isStreaming: true,
 			message: assistantMessage(),
@@ -107,7 +107,7 @@ describe('Show tool call in progress', () => {
 	});
 
 	it('keeps the call collapsed while executing when the setting is off', async () => {
-		const { container } = render(ChatMessageAgenticContent, {
+		const { container } = render(ChatMessageAgentTrace, {
 			isLastAssistantMessage: true,
 			isStreaming: true,
 			message: assistantMessage(),
@@ -124,7 +124,7 @@ describe('Show tool call in progress', () => {
 	it('folds the call back when its result arrives', async () => {
 		setSettings({ alwaysShow: false, inProgress: true });
 
-		const screen = render(ChatMessageAgenticContent, {
+		const screen = render(ChatMessageAgentTrace, {
 			isLastAssistantMessage: true,
 			isStreaming: true,
 			message: assistantMessage(),
@@ -153,7 +153,7 @@ describe('Show tool call in progress', () => {
 	it('keeps the manual choice once the result arrives', async () => {
 		setSettings({ alwaysShow: false, inProgress: true });
 
-		const screen = render(ChatMessageAgenticContent, {
+		const screen = render(ChatMessageAgentTrace, {
 			isLastAssistantMessage: true,
 			isStreaming: true,
 			message: assistantMessage(),
@@ -180,7 +180,7 @@ describe('Show tool call in progress', () => {
 	it('still expands a finished call when "always show" is on', async () => {
 		setSettings({ alwaysShow: true, inProgress: false });
 
-		const { container } = render(ChatMessageAgenticContent, {
+		const { container } = render(ChatMessageAgentTrace, {
 			isLastAssistantMessage: true,
 			isStreaming: true,
 			message: assistantMessage(),
@@ -195,7 +195,7 @@ describe('Show tool call in progress', () => {
 	it('lets a manual collapse win over the in-progress default', async () => {
 		setSettings({ alwaysShow: false, inProgress: true });
 
-		const screen = render(ChatMessageAgenticContent, {
+		const screen = render(ChatMessageAgentTrace, {
 			isLastAssistantMessage: true,
 			isStreaming: true,
 			message: assistantMessage(),
@@ -213,7 +213,7 @@ describe('Show tool call in progress', () => {
 	});
 
 	it('lets a manual expand win over the collapsed default', async () => {
-		const screen = render(ChatMessageAgenticContent, {
+		const screen = render(ChatMessageAgentTrace, {
 			isLastAssistantMessage: true,
 			isStreaming: true,
 			message: assistantMessage(),

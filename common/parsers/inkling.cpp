@@ -100,18 +100,18 @@ common_chat_params common_chat_params_init_inkling(const common_chat_template & 
     auto use_tools           = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
     auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
 
-    data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        auto header = p.literal(HEADER);
-        auto end    = p.literal(END);
+    data.parser = build_chat_peg_parser(inputs.specials, [&](common_chat_peg_builder & p) {
+        auto header = p.token(HEADER);
+        auto end    = p.token(END);
 
-        auto think    = p.literal(THINK);
-        auto thinking = p.rule("thinking", extract_reasoning ? think + p.reasoning(p.until(END)) + end :
-                                                               p.atomic(p.content(think)) + p.content(p.until(END) + end));
-        auto text     = p.rule("text", p.literal(TEXT) + p.content(p.until(END)) + end);
+        auto think    = p.token(THINK);
+        auto thinking = p.rule("thinking", extract_reasoning ? think + p.reasoning(p.until(end)) + end :
+                                                               p.atomic(p.content(think)) + p.content(p.until(end) + end));
+        auto text     = p.rule("text", p.token(TEXT) + p.content(p.until(end)) + end);
 
         if (has_response_format) {
             auto response_format = p.rule("response-format", p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)));
-            return p.zero_or_more(header + thinking) + header + p.literal(TEXT) + response_format + end;
+            return p.zero_or_more(header + thinking) + header + p.token(TEXT) + response_format + end;
         }
 
         auto blocks = p.zero_or_more(header + (thinking | text));
@@ -120,45 +120,43 @@ common_chat_params common_chat_params_init_inkling(const common_chat_template & 
             return blocks;
         }
 
-        auto tool_choice = p.choice();
-        foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
-            const auto & function = tool.at("function");
-            std::string  name     = function.at("name");
-
-            auto open = p.tool_name(p.literal(name)) + p.literal(TOOL_JSON) + p.literal("{\"name\":" + json(name).dump() + ",\"args\":");
-            auto args = p.tool_args(p.json());
-
-            tool_choice |= p.rule("tool-" + std::to_string(tool_index), p.tool(p.tool_open(open) + args + p.tool_close(p.literal("}")) + end));
-        });
-
-        // tool calls are the last blocks of the turn
-        auto calls      = inputs.parallel_tool_calls ? tool_choice + p.zero_or_more(header + tool_choice) : tool_choice;
-        auto tool_calls = header + p.trigger_rule("tool-calls", calls);
+        // the call takes the name in the JSON
+        auto tool_json = p.token(TOOL_JSON);
+        auto tool_body = [&](const common_peg_parser & json_name) {
+            return p.tool_open(p.literal("{")) << p.json_member("name", p.literal("\"") + p.tool_name(json_name) + p.literal("\"")) << p.literal(",")
+                                               << p.json_member("args", p.tool_args(p.json())) << p.tool_close(p.literal("}")) + end;
+        };
 
         if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
-            return blocks + tool_calls;
+            auto tool_choice = p.choice();
+            foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
+                const auto & function = tool.at("function");
+                std::string  name     = function.at("name");
+                std::string  quoted   = json(name).dump();
+
+                // The research model does not generate a tool name before the tool call token
+                auto json_name = p.literal(quoted.substr(1, quoted.size() - 2));
+                tool_choice |= p.rule("tool-" + std::to_string(tool_index), p.tool(p.optional(p.literal(name)) + tool_json + tool_body(json_name)));
+            });
+
+            auto calls = inputs.parallel_tool_calls ? tool_choice + p.zero_or_more(header + tool_choice) : tool_choice;
+            return blocks + header + calls;
         }
 
-        return blocks + p.optional(tool_calls);
+        auto name  = p.until(tool_json);
+        auto body  = tool_body(p.string_content('"'));
+        auto next  = p.rule("tool-call", header + p.tool(name + tool_json + body));
+        auto more  = inputs.parallel_tool_calls ? p.zero_or_more(next) : p.eps();
+        auto calls = header + name + p.trigger_rule("tool-calls", tool_json, body + more);
+
+        return blocks + p.optional(calls);
     });
 
     if (has_response_format || use_tools) {
-        data.grammar_lazy = !has_response_format && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        data.grammar_lazy = false;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            data.parser.build_grammar(builder, data.grammar_lazy);
+            data.parser.build_grammar(builder, !has_response_format && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO);
         });
-
-        if (data.grammar_lazy) {
-            // a header followed by text and not by a content token is a tool call, the grammar starts at the name
-            data.grammar_triggers = {
-                { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "<\\|message_model\\|>([^<])" },
-            };
-            // Inkling 1: the first header is in the generation prompt, and a lazy grammar does not get the prompt.
-            // an output that starts with no content token is a tool call. not for a continuation, it starts with text
-            if (!inputs.has_continuation()) {
-                data.grammar_triggers.push_back({ COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL, "[^<]+" });
-            }
-        }
     }
 
     return data;

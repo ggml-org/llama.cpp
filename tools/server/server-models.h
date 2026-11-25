@@ -157,6 +157,25 @@ private:
     void delete_partials(const std::vector<common_download_partial> & parts);
 };
 
+// broadcasts model events to the clients of GET /models/sse, used by both router and single-model mode
+struct server_models_sse {
+    // send the last event to each new client, for single-model mode where GET /models is unavailable while loading
+    const bool replay_last;
+
+    server_models_sse(bool replay_last = false) : replay_last(replay_last) {}
+
+    // thread-safe
+    void notify(const std::string & event, const std::string & model_id, const json & data = nullptr);
+
+    // handler for GET /models/sse, a client is disconnected once should_stop() returns true
+    server_http_context::handler_t make_handler(std::function<bool()> should_stop);
+
+private:
+    std::mutex      mutex;
+    json            last_event;
+    server_response queue;
+};
+
 struct server_models_routes;
 struct server_monitor; // defined in server-models.cpp
 
@@ -289,7 +308,7 @@ public:
     server_models(const common_params & params, int argc, char ** argv);
     ~server_models();
 
-    server_response sse; // for real-time updates via SSE endpoint
+    server_models_sse sse; // for real-time updates via SSE endpoint
 
     // (re-)load the list of models from various sources and prepare the metadata mapping
     // - if this is called the first time, simply populate the metadata

@@ -97,7 +97,7 @@
 			{/if}
 		{:else if items && items.length === 0}
 			{#if emptyMessage}
-				<div class="py-6 text-center text-sm text-muted-foreground">{emptyMessage}</div>
+				<div class="py-6 text-center text-body-sm text-muted-foreground">{emptyMessage}</div>
 			{/if}
 		{:else}
 			{#each items as itemData, index (itemKey(itemData, index))}

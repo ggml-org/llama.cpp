@@ -2,8 +2,8 @@ import { type ClassValue, clsx } from 'clsx';
 import { extendTailwindMerge } from 'tailwind-merge';
 import { createTV } from 'tailwind-variants';
 
-// the type, corner, icon and height roles from src/lib/styles/tokens/semantic.css, so text-label is
-// merged as a font size and rounded-control as a radius rather than dropped or kept twice
+// the type, motion, icon and height roles from src/lib/styles/tokens/semantic.css, so text-label is merged as a
+// font size and ease-sheet as an easing rather than dropped or kept twice
 const mergeConfig = {
 	extend: {
 		classGroups: {
@@ -11,8 +11,8 @@ const mergeConfig = {
 			size: [{ size: ['icon-xs', 'icon-sm', 'icon-md', 'icon-lg'] }]
 		},
 		theme: {
-			radius: ['control', 'panel', 'card', 'container', 'surface', 'surface-lg'],
-			text: ['body', 'body-sm', 'label', 'label-sm', 'caption', 'title', 'heading']
+			ease: ['out-quint', 'sheet'],
+			text: ['body', 'body-sm', 'label', 'label-sm', 'caption', 'caption-sm', 'title', 'heading', 'display']
 		}
 	}
 };

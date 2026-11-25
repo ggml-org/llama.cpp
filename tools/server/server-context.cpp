@@ -353,6 +353,8 @@ struct server_slot {
             return false;
         }
 
+        const int64_t t_start = ggml_time_us();
+
         const size_t cur_size_tgt =           llama_state_seq_get_size_ext(ctx_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
         const size_t cur_size_dft = ctx_dft ? llama_state_seq_get_size_ext(ctx_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE) : 0;
 
@@ -373,6 +375,8 @@ struct server_slot {
             prompt_cache.states.pop_back();
             return false;
         }
+
+        SLT_TRC(*this, "prompt cache save took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
 
         return true;
     }
@@ -1638,16 +1642,7 @@ private:
             SRV_TRC("%s", "context checkpoints disabled\n");
         }
 
-        if (!params_base.model_alias.empty()) {
-            // backward compat: use first alias as model name
-            model_name = *params_base.model_alias.begin();
-        } else if (!params_base.model.get_name().empty()) {
-            model_name = params_base.model.get_name();
-        } else {
-            // fallback: derive model name from file name
-            auto model_path = std::filesystem::path(params_base.model.path);
-            model_name = model_path.filename().string();
-        }
+        model_name = server_get_model_name(params_base);
 
         model_aliases = params_base.model_alias;
         model_tags    = params_base.model_tags;
@@ -1829,6 +1824,29 @@ private:
         return res;
     }
 
+    // save idle slots (except id_slot_keep) to the prompt cache; with a unified KV cache, also clear them
+    void cache_idle_slots(int32_t id_slot_keep = -1) {
+        if (!params_base.cache_idle_slots) {
+            return;
+        }
+
+        for (auto & slot : slots) {
+            if (slot.id != id_slot_keep && !slot.is_processing()) {
+                SLT_TRC(slot, "%s", "saving idle slot to prompt cache\n");
+
+                if (slot.prompt_save(*prompt_cache)) {
+                    SLT_DBG(slot, "%s", "__TEST_TAG_CACHE_IDLE_SLOT__\n");
+                    prompt_cache->update();
+                }
+
+                if (params_base.kv_unified) {
+                    // [TAG_IDLE_SLOT_CLEAR]
+                    slot.prompt_clear();
+                }
+            }
+        }
+    }
+
     // call only when the task is sure to launch on the slot
     void update_prompt_cache(server_slot & slot, const server_task & task) {
         SRV_TRC("%s", "updating prompt cache\n");
@@ -1837,8 +1855,22 @@ private:
 
         slot.prompt_save(*prompt_cache);
 
-        if (!slot.prompt_load(*prompt_cache, task.tokens, get_task_lora(task))) {
+        const auto lora = get_task_lora(task);
+
+        if (!slot.prompt_load(*prompt_cache, task.tokens, lora)) {
             slot.prompt_clear();
+
+            // with a unified KV cache, the restore can fail because idle slots still hold the cells it needs
+            // the cache entry is kept on failure, so free those slots and retry once
+            if (params_base.kv_unified && params_base.cache_idle_slots) {
+                cache_idle_slots(slot.id);
+
+                SLT_INF(slot, "%s", "retrying prompt restore after clearing idle slots\n");
+
+                if (!slot.prompt_load(*prompt_cache, task.tokens, lora)) {
+                    slot.prompt_clear();
+                }
+            }
         }
 
         prompt_cache->update();
@@ -2978,7 +3010,7 @@ private:
 
                     const int id_task = task.id;
 
-                    const auto plan = slot_sched.select(get_slot_infos(), task, get_task_lora(task));
+                    const auto plan = slot_sched.select(get_slot_infos(), task, get_task_lora(task), prompt_cache.get());
 
                     server_slot * slot = plan.id_slot == -1 ? nullptr : get_slot_by_id(plan.id_slot);
 
@@ -3027,23 +3059,7 @@ private:
                         break; // drop the task
                     }
 
-                    if (params_base.cache_idle_slots) {
-                        for (auto & slot : slots) {
-                            if (!slot.is_processing()) {
-                                SLT_TRC(slot, "%s", "saving idle slot to prompt cache\n");
-
-                                if (slot.prompt_save(*prompt_cache)) {
-                                    SLT_DBG(slot, "%s", "__TEST_TAG_CACHE_IDLE_SLOT__\n");
-                                    prompt_cache->update();
-                                }
-
-                                if (params_base.kv_unified) {
-                                    // [TAG_IDLE_SLOT_CLEAR]
-                                    slot.prompt_clear();
-                                }
-                            }
-                        }
-                    }
+                    cache_idle_slots();
                 } break;
             case SERVER_TASK_TYPE_CANCEL:
                 {
@@ -4281,7 +4297,9 @@ private:
 
                     if (!slot.can_split()) {
                         // cannot fit the prompt in the current batch - will try next iter
-                        if (batch.size() + slot.task->n_tokens() > n_batch) {
+                        // with non-causal attention the whole batch must fit in one ubatch, see llama_decode
+                        const int32_t n_batch_max = llama_get_causal_attn(ctx_tgt) ? n_batch : std::min(n_batch, n_ubatch);
+                        if (batch.size() + slot.task->n_tokens() > n_batch_max) {
                             return;
                         }
                     }
@@ -5663,6 +5681,7 @@ static json get_res_props(const server_context_meta & meta, const common_params 
         { "build_info",                  meta.build_info },
         { "is_sleeping",                 is_sleeping },
         { "cors_proxy_enabled",          params.ui_mcp_proxy },
+        { "ui_agent",                    params.ui_agent },
     };
 
     if (!params.server_connect_code.empty()) {
@@ -6106,6 +6125,9 @@ void server_routes::init_routes() {
     // audio is PCM16 mono at the model sample rate, sent as base64 in input_audio_buffer.append events
     // input_audio_buffer.commit with "final": true ends the input, closing the socket also ends it
     this->ws_realtime = [this](const server_http_req & req, server_http_context::ws_conn & conn) {
+        // make sure sleep state is handled by create_response()
+        auto res = create_response();
+
         auto send_event = [&conn](json ev) {
             ev["event_id"] = "event_" + random_string();
             conn.send(safe_json_to_str(ev));
@@ -6125,7 +6147,7 @@ void server_routes::init_routes() {
         // models that answer after the audio hold a conversation, see server-realtime.h
         // live transcription: Voxtral Realtime (no chat), or an "asr" model in a session opened with ?intent=transcription
         const bool live_asr = !ctx_server.asr_prompt.empty() && req.get_param("intent") == "transcription";
-        if (ctx_server.mtmd_cap.audio_stream && ctx_server.mtmd_cap.chat && !live_asr) {
+        if (ctx_server.mtmd_cap.audio_duplex || (ctx_server.mtmd_cap.audio_stream && ctx_server.mtmd_cap.chat && !live_asr)) {
             server_realtime_conversation({queue_tasks, queue_results, *meta, params, ctx_server.mctx, ctx_server.mtmd_cap, ctx_server.vocab}, conn);
             return;
         }
@@ -6150,7 +6172,6 @@ void server_routes::init_routes() {
             }}}},
         };
 
-        auto res = create_response();
         auto & rd = res->rd;
         {
             server_task task(SERVER_TASK_TYPE_TRANSCRIBE_RT);
@@ -6482,7 +6503,7 @@ void server_routes::init_routes() {
         }
 
         const json body = json::parse(req.body);
-        const auto questions = decision.parse_questions(body);
+        const auto questions = decision.parse_questions(body, meta->has_inp_audio);
         const size_t set_size = decision.set_size(questions);
 
         std::vector<raw_buffer> files;

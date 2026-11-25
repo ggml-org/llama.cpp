@@ -13,7 +13,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <climits>
+#include <condition_variable>
 #include <cmath>
 #include <cstring>
 #include <map>
@@ -95,7 +97,7 @@ bool parse_tool_choice(const json & j, common_chat_tool_choice & choice, std::st
         return false;
     }
     try {
-        choice = common_chat_tool_choice_parse_oaicompat(j.get<std::string>());
+        choice = common_chat_tool_choice_parse_oaicompat(j, {});
     } catch (const std::exception & e) {
         err = e.what();
         return false;
@@ -104,7 +106,7 @@ bool parse_tool_choice(const json & j, common_chat_tool_choice & choice, std::st
 }
 
 const char * tool_choice_str(common_chat_tool_choice choice) {
-    switch (choice) {
+    switch (choice.mode) {
         case COMMON_CHAT_TOOL_CHOICE_NONE:     return "none";
         case COMMON_CHAT_TOOL_CHOICE_REQUIRED: return "required";
         default:                               return "auto";
@@ -180,8 +182,14 @@ struct realtime_conversation {
 
     std::atomic<bool> closed{false};
 
+    // full duplex: no turns, the first audio opens a response that runs until response.cancel
+    const bool              duplex;
+    bool                    duplex_open = false; // guarded by mutex
+    std::condition_variable duplex_done;         // the cancelled response is done
+
     realtime_conversation(const server_realtime_deps & deps, server_http_context::ws_conn & conn)
-        : deps(deps), conn(conn), out_language(deps.params.tts_lang), out_voice(deps.params.tts_voice) {}
+        : deps(deps), conn(conn), out_language(deps.params.tts_lang), out_voice(deps.params.tts_voice),
+          duplex(deps.cap.audio_duplex) {}
 
     //
     // events
@@ -395,6 +403,23 @@ struct realtime_conversation {
         if (samples.empty()) {
             return;
         }
+        if (duplex) {
+            if (!resample(samples) || samples.empty()) {
+                return;
+            }
+            bool open = false;
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                open = !duplex_open;
+                duplex_open = true;
+            }
+            if (open) {
+                started = true;
+                open_response(MTMD_HELPER_GEN_AUDIO_OUT_MIXED);
+            }
+            control(SERVER_CONTROL_ACTION_AUDIO_APPEND, {}, std::move(samples));
+            return;
+        }
         if (!resample(samples) || samples.empty() || !ensure_turn()) {
             return;
         }
@@ -449,6 +474,10 @@ struct realtime_conversation {
     }
 
     void on_commit() {
+        if (duplex) {
+            send_error("input_audio_buffer.commit: the model answers while it listens, there is no turn to commit");
+            return;
+        }
         const int64_t n_audio = n_turn_samples;
         if (!commit() || type != "transcription") {
             return;
@@ -480,6 +509,10 @@ struct realtime_conversation {
     }
 
     void on_item_create(const json & ev) {
+        if (duplex) {
+            send_error("conversation.item.create: the model only takes audio");
+            return;
+        }
         if (type == "transcription") {
             send_error("conversation.item.create: not supported in a transcription session");
             return;
@@ -537,6 +570,10 @@ struct realtime_conversation {
     }
 
     void on_response_create(const json & ev) {
+        if (duplex) {
+            send_error("response.create: the model answers while it listens, its response opens with the first audio");
+            return;
+        }
         if (type == "transcription") {
             send_error("response.create: not supported in a transcription session");
             return;
@@ -606,24 +643,7 @@ struct realtime_conversation {
         }
         response.sampling = response_sampling(chat ? &*chat : nullptr);
 
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            response_id      = "resp_" + random_string();
-            response_item_id = "item_" + random_string();
-            response_text.clear();
-            parts       = json::array();
-            idx_text    = -1;
-            idx_audio   = -1;
-            output      = json::array();
-            idx_message = -1;
-            call_items.clear();
-            parse.reset();
-            if (chat) {
-                parse.emplace(std::move(*chat));
-            }
-            send_event({{"type", "response.created"}, {"response", {{"id", response_id}, {"object", "realtime.response"},
-                        {"status", "in_progress"}, {"output_modalities", output_modalities_json(mode)}, {"output", json::array()}}}});
-        }
+        open_response(mode, chat ? &*chat : nullptr);
         if (!control(SERVER_CONTROL_ACTION_RESPONSE_CREATE, prompt, {}, response)) {
             return;
         }
@@ -632,6 +652,26 @@ struct realtime_conversation {
         turn_open    = false;
         tool_results = false;
         n_turns++;
+    }
+
+    // the results that follow belong to a new response
+    void open_response(mtmd_helper_gen_audio_out_mode mode, common_chat_session * chat = nullptr) {
+        std::lock_guard<std::mutex> lock(mutex);
+        response_id      = "resp_" + random_string();
+        response_item_id = "item_" + random_string();
+        response_text.clear();
+        parts       = json::array();
+        idx_text    = -1;
+        idx_audio   = -1;
+        output      = json::array();
+        idx_message = -1;
+        call_items.clear();
+        parse.reset();
+        if (chat) {
+            parse.emplace(std::move(*chat));
+        }
+        send_event({{"type", "response.created"}, {"response", {{"id", response_id}, {"object", "realtime.response"},
+                    {"status", "in_progress"}, {"output_modalities", output_modalities_json(mode)}, {"output", json::array()}}}});
     }
 
     void on_session_update(const json & ev) {
@@ -644,6 +684,10 @@ struct realtime_conversation {
             const std::string t = session["type"];
             if (t != "realtime" && t != "transcription") {
                 send_error("session.update: unknown session type " + t);
+                return;
+            }
+            if (duplex) {
+                send_error("session.update: the model only holds \"realtime\" sessions");
                 return;
             }
             if (started) {
@@ -726,7 +770,7 @@ struct realtime_conversation {
             out_voice    = voice;
             out_language = lang;
         }
-        if (!started && !configure()) {
+        if (!duplex && !started && !configure()) {
             send_error("the chat template does not fit the realtime turn format", "server_error");
             return;
         }
@@ -774,6 +818,11 @@ struct realtime_conversation {
             on_response_create(ev);
         } else if (t == "response.cancel") {
             control(SERVER_CONTROL_ACTION_RESPONSE_CANCEL);
+            if (duplex) {
+                // the next audio opens another response, once the results of this one are out
+                std::unique_lock<std::mutex> lock(mutex);
+                duplex_done.wait_for(lock, std::chrono::seconds(10), [this]() { return !duplex_open || closed.load(); });
+            }
         } else {
             send_error("unknown event type: " + t);
         }
@@ -918,6 +967,8 @@ struct realtime_conversation {
         send_event({{"type", "response.done"}, {"response", {{"id", response_id}, {"object", "realtime.response"}, {"status", status},
                     {"output", output}, {"usage", {{"output_tokens", res.n_decoded}}}}}});
         parse.reset();
+        duplex_open = false;
+        duplex_done.notify_all();
     }
 
     //
@@ -929,7 +980,7 @@ struct realtime_conversation {
         if (deps.cap.audio_gen) {
             output_rate = mtmd_gen_audio_get_info(deps.mctx).sample_rate;
         }
-        if (!configure()) {
+        if (!duplex && !configure()) {
             send_error("the chat template does not fit the realtime turn format", "server_error");
             conn.close();
             return;
@@ -1015,6 +1066,7 @@ server_realtime_slot::server_realtime_slot(llama_context * ctx, mtmd_context * m
     if (mtmd_gen_audio_get_info(mctx).type != MTMD_GEN_AUDIO_TYPE_NONE) {
         gen.init(ctx, mctx);
     }
+    duplex = mtmd_helper_get_capabilities(model, mctx).audio_duplex;
 }
 
 void server_realtime_slot::push(server_realtime_op && op) {
@@ -1022,10 +1074,19 @@ void server_realtime_slot::push(server_realtime_op && op) {
 }
 
 void server_realtime_slot::cancel() {
+    if (duplex) {
+        // in order with the audio: the response of a full duplex model may still be opening
+        ops.push_back({SERVER_CONTROL_ACTION_RESPONSE_CANCEL, {}, {}, {}});
+        return;
+    }
     cancelled = responding;
 }
 
 bool server_realtime_slot::is_idle() const {
+    if (duplex) {
+        // a full duplex response waits for the next audio
+        return ops.empty() && !(responding && duplex_pending);
+    }
     return ops.empty() && !responding;
 }
 
@@ -1051,7 +1112,8 @@ void server_realtime_slot::send_result(common_chat_input content, std::vector<fl
 bool server_realtime_slot::decode(const llama_token * tokens, const float * rows, int32_t n, bool logits_last) {
     const int32_t n_embd  = llama_model_n_embd_inp(model);
     const int32_t n_batch = llama_n_batch(ctx);
-    if (n_past + n >= n_ctx) {
+    // a full duplex model attends to a sliding window, its stream has no end
+    if (!duplex && n_past + n >= n_ctx) {
         return fail("the conversation does not fit in the context", ERROR_TYPE_EXCEED_CONTEXT_SIZE);
     }
     common_batch batch(ctx);
@@ -1220,15 +1282,148 @@ bool server_realtime_slot::response_step() {
             // the pipeline decoded the response, the sequence ends where it stopped
             n_past = llama_memory_seq_pos_max(llama_get_memory(ctx), seq_id) + 1;
         }
-        send_result({}, {}, true);
-        responding = false;
-        cancelled  = false;
+        response_end();
     }
     return true;
 }
 
+void server_realtime_slot::response_end() {
+    send_result({}, {}, true);
+    responding = false;
+    cancelled  = false;
+}
+
+//
+// full duplex (e.g. Hibiki): one row per frame of input audio, the model speaks while it listens
+// row = the stream row (input audio + previous text token) + the embedding of the audio generated at the previous frame
+//
+
+bool server_realtime_slot::duplex_start() {
+    // the cells past the window are reused, the window itself must fit
+    const int32_t n_swa = llama_model_n_swa(model);
+    if (n_ctx < n_swa) {
+        return fail("the context of a slot (" + std::to_string(n_ctx) + ") must hold the attention window of the model (" +
+                    std::to_string(n_swa) + "), see -c and -np");
+    }
+    stream.reset(mtmd_audio_stream_init(mctx, mtmd_audio_stream_params_default()));
+    if (!stream) {
+        return fail("failed to initialize the audio stream");
+    }
+    mtmd_helper::gen_audio::inp inp;
+    inp.data.seq_id   = seq_id;
+    inp.data.seed     = sampling.seed;
+    inp.data.stream   = true;
+    inp.data.out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM;
+    if (gen.set_input(inp.get()) != 0 || gen.step_prompt(llama_n_batch(ctx)) != 0) {
+        return fail("failed to start the response");
+    }
+    llama_memory_seq_rm(llama_get_memory(ctx), seq_id, -1, -1);
+    n_past    = 0;
+    n_decoded = 0;
+    sampled   = LLAMA_TOKEN_NULL;
+    h_state.assign(llama_model_n_embd_inp(model), 0.0f);
+    smpl.reset(common_sampler_init(model, sampling));
+    responding = true;
+    cancelled  = false;
+    return true;
+}
+
+bool server_realtime_slot::duplex_frame() {
+    const int32_t n = mtmd_audio_stream_step(stream.get(), sampled);
+    if (n == -2) {
+        return fail("audio stream error");
+    }
+    if (n <= 0) {
+        duplex_pending = false;
+        return true;
+    }
+    GGML_ASSERT(n == 1);
+
+    // the model was trained on streams no longer than its window, so it always saw their start (it acts as an attention sink)
+    // once the window is full: the first rows stay, the oldest rows after them go and the rest shifts back, like StreamingLLM
+    llama_memory_t mem   = llama_get_memory(ctx);
+    const int32_t  n_swa = llama_model_n_swa(model);
+    if (n_swa > 0 && n_past >= n_swa && llama_memory_can_shift(mem)) {
+        const int32_t n_discard = n_swa / duplex_discard_div;
+        llama_memory_seq_rm (mem, seq_id, duplex_n_keep, duplex_n_keep + n_discard);
+        llama_memory_seq_add(mem, seq_id, duplex_n_keep + n_discard, -1, -n_discard);
+        n_past -= n_discard;
+    }
+
+    const float * row = mtmd_audio_stream_get_output_embd(stream.get());
+    std::vector<float> inp(row, row + h_state.size());
+    for (size_t i = 0; i < inp.size(); i++) {
+        inp[i] += h_state[i];
+    }
+    if (!decode(nullptr, inp.data(), 1, true)) {
+        return false;
+    }
+    sampled = common_sampler_sample(smpl.get(), ctx, -1);
+    common_sampler_accept(smpl.get(), sampled, true);
+
+    // copy the hidden state before any other slot decodes
+    const float * h = llama_get_embeddings_ith(ctx, -1);
+    std::vector<float> h_cur(h, h + llama_model_n_embd(model));
+    const float * fb = nullptr;
+    if (gen.step_gen(sampled, h_cur.data(), &fb) != 0 || fb == nullptr) {
+        return fail("response generation failed");
+    }
+    h_state.assign(fb, fb + h_state.size());
+    n_decoded++;
+
+    common_chat_input content;
+    content.append(piece(sampled), sampled);
+    std::vector<float> audio;
+    int32_t sample_rate = 0;
+    const char * data   = nullptr;
+    size_t data_len     = 0;
+    if (gen.get_output(&sample_rate, &data, &data_len) == 0 && data_len > 0) {
+        audio.assign((const float *) data, (const float *) data + data_len / sizeof(float));
+    }
+    if (!content.empty() || !audio.empty()) {
+        send_result(std::move(content), std::move(audio));
+    }
+    return true;
+}
+
+bool server_realtime_slot::duplex_update() {
+    while (!ops.empty()) {
+        server_realtime_op op = std::move(ops.front());
+        ops.pop_front();
+        switch (op.action) {
+            case SERVER_CONTROL_ACTION_AUDIO_APPEND:
+                {
+                    // the first audio opens the response
+                    if (!responding && !duplex_start()) {
+                        return false;
+                    }
+                    mtmd_audio_stream_push(stream.get(), op.audio.data(), op.audio.size());
+                    duplex_pending = true;
+                } break;
+            case SERVER_CONTROL_ACTION_RESPONSE_CANCEL:
+                {
+                    // the audio after it opens another response
+                    if (responding) {
+                        stream.reset();
+                        gen.reset();
+                        duplex_pending = false;
+                        cancelled      = true;
+                        response_end();
+                    }
+                } break;
+            default:
+                break;
+        }
+    }
+    return !responding || !duplex_pending || duplex_frame();
+}
+
 bool server_realtime_slot::update() {
     llama_set_embeddings(ctx, gen.valid());
+
+    if (duplex) {
+        return duplex_update();
+    }
 
     if (responding) {
         return response_step();

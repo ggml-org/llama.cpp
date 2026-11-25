@@ -9,11 +9,13 @@
 {#if needRefresh}
 	<Card.Root class="overflow-hidden gap-1 py-5">
 		<Card.Header class="px-5">
-			<Card.Title class="text-sm font-medium">Update available</Card.Title>
+			<Card.Title class="text-label">Update available</Card.Title>
 		</Card.Header>
 
 		<Card.Content class="gap-6 grid px-5">
-			<p class="text-xs text-muted-foreground">A new version is available. Reload to update.</p>
+			<p class="text-caption text-muted-foreground">
+				A new version is available. Reload to update.
+			</p>
 
 			<Button
 				class="justify-self-end-safe"

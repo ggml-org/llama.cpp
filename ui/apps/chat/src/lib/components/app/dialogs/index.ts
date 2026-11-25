@@ -36,37 +36,6 @@ export { default as DialogMcpServers } from './DialogMcpServers.svelte';
 export { default as DialogSettingsChat } from './DialogSettingsChat.svelte';
 
 /**
- * **DialogExportSettings** - Settings export dialog with sensitive data warning
- *
- * Dialog for exporting settings with an option to include or exclude
- * sensitive data (API keys, MCP server custom headers). Defaults to excluding
- * sensitive data for security. User must explicitly opt-in to include them.
- *
- * **Architecture:**
- * - Uses ShadCN AlertDialog
- * - Checkbox to toggle sensitive data inclusion (defaults to false)
- * - Warning icon and message when sensitive data is included
- * - Destructive variant for the action button when exporting with sensitive data
- *
- * **Features:**
- * - Secure default: sensitive data excluded by default
- * - User must explicitly opt-in to include sensitive data
- * - Visual warning (ShieldOff icon) when sensitive data is included
- * - Different action text based on sensitive data state
- *
- * @example
- * ```svelte
- * <DialogExportSettings
- *   bind:open={showExportSettings}
- *   bind:includeSensitiveData
- *   onConfirm={handleSettingsExport}
- *   onCancel={() => showExportSettings = false}
- * />
- * ```
- */
-export { default as DialogExportSettings } from './DialogExportSettings.svelte';
-
-/**
  *
  * CONFIRMATION DIALOGS
  *
@@ -448,6 +417,64 @@ export { default as DialogModelNotAvailable } from './DialogModelNotAvailable.sv
 export { default as DialogConversationSelection } from './DialogConversationSelection.svelte';
 
 /**
+ * **DialogSettingsImportPreview** - Review the settings diff before importing
+ *
+ * Alert dialog shown when a settings file is imported via drag-and-drop.
+ * Lists each setting that would change (old value -> new value) so the user
+ * can review before confirming the import.
+ *
+ * @example
+ * ```svelte
+ * <DialogSettingsImportPreview
+ *   bind:open={showSettingsPreview}
+ *   diff={settingsDiff}
+ *   onConfirm={handleConfirm}
+ *   onCancel={() => (showSettingsPreview = false)}
+ * />
+ * ```
+ */
+export { default as DialogSettingsImportPreview } from './DialogSettingsImportPreview.svelte';
+
+/**
+ * **DialogImportConversationPreview** - Preview a single conversation before importing
+ *
+ * Alert dialog shown when a single conversation is imported via drag-and-drop.
+ * Renders the conversation's messages (via ChatMessages) so the user can review
+ * it before confirming the import.
+ *
+ * @example
+ * ```svelte
+ * <DialogImportConversationPreview
+ *   bind:open={showPreview}
+ *   messages={conv?.messages}
+ *   onConfirm={handleConfirm}
+ *   onCancel={() => (showPreview = false)}
+ * />
+ * ```
+ */
+export { default as DialogImportConversationPreview } from './DialogImportConversationPreview.svelte';
+
+/**
+ * **DialogImportConversationsResult** - Pick one imported conversation to open
+ *
+ * Dialog shown after multiple conversations are imported via drag-and-drop.
+ * Lists the imported conversations in a table (with search) and lets the user
+ * click one to open it.
+ *
+ * @example
+ * ```svelte
+ * <DialogImportConversationsResult
+ *   bind:open={showOpenBulk}
+ *   conversations={imported}
+ *   messageCountMap={countMap}
+ *   onOpen={handleOpen}
+ *   onClose={() => (showOpenBulk = false)}
+ * />
+ * ```
+ */
+export { default as DialogImportConversationsResult } from './DialogImportConversationsResult.svelte';
+
+/**
  * **DialogMcpResourcesBrowser** - MCP resources browser dialog
  *
  * Dialog for browsing and attaching MCP resources to chat context.
@@ -502,26 +529,16 @@ export { default as DialogMcpResourcesBrowser } from './DialogMcpResourcesBrowse
 export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.svelte';
 
 /**
- * **DialogMermaidPreview** - Full-screen Mermaid diagram preview with zoom and pan
+ * **DialogMermaidPreview** - Full-screen diagram preview with zoom and pan
  *
- * Full-screen dialog for previewing Mermaid diagrams with interactive controls.
- * Supports mouse wheel zoom, drag-to-pan, and toolbar buttons for zoom in/out,
- * fit to view, and reset.
- *
- * **Architecture:**
- * - Uses UI dialog components (`Dialog.Root`, `Dialog.Overlay`, `Dialog.Content`)
- *   for consistent styling, animations, and accessibility
- * - CSS transform-based zoom and pan (no external dependencies)
- * - Pointer events for cross-device drag support (mouse + touch)
- * - Wheel events for zoom-to-cursor functionality
+ * Opens a diagram in a dialog that fills the window on every device, with
+ * `MermaidPreview` inside it for zooming and panning.
  *
  * **Features:**
- * - Scroll wheel zoom centered on cursor position
- * - Click and drag to pan the diagram
- * - Toolbar with zoom in, zoom out, fit to view, reset controls
- * - Zoom percentage indicator
- * - Keyboard accessible close button
- * - Dark/light theme support
+ * - Full screen, keeping clear of the status bar and home indicator on phones
+ * - Zoom around the pointer or the middle of the screen, pan by drag or pinch
+ * - Zoom percentage, reset (fit) and download controls
+ * - Keyboard accessible close button, Escape closes
  *
  * @example
  * ```svelte
@@ -535,3 +552,11 @@ export { default as DialogMermaidPreview } from './DialogMermaidPreview.svelte';
 
 /** **DialogDiscoverModels** - shell for the Hugging Face model discovery view. */
 export { default as DialogDiscoverModels } from './DialogDiscoverModels.svelte';
+
+/**
+ * **DialogSystemMessageEdit** - Edit the conversation's system message
+ *
+ * Modal dialog with a textarea, opened from the custom system message attachment
+ * in the chat form.
+ */
+export { default as DialogSystemMessageEdit } from './DialogSystemMessageEdit.svelte';

@@ -15,8 +15,10 @@ Supported models:
 - [Fish Audio S2 Pro](#fish-audio-s2-pro)
 - [YuE2](#yue2) (songs)
 - [MiniMax Music 3](#minimax-music-3) (songs)
+- [Hibiki](#hibiki) (speech translation, `llama-server` realtime endpoint only)
 - [Kokoro](#kokoro)
 - [tiny-voca](#tiny-voca)
+- [VoxCPM2](#voxcpm2)
 
 The sections below list the params supported by each model, with `llama-tts` examples. In `llama-server`, the same options are set with `--tts-lang` and `--tts-voice`, or per request (see the [`/tts` endpoint](../../tools/server/README.md#post-tts-generate-speech-audio-from-text)).
 
@@ -174,7 +176,7 @@ python convert_hf_to_gguf.py path/to/chatterbox --mmproj --outfile mmproj-chatte
 Available params:
 - Speaker tags `<|speaker:0|>` to `<|speaker:15|>` in the text give each character its own voice, a text without a tag starts with `<|speaker:0|>`
 - The language is the one of the text, `--tts-lang` is not used
-- Note: `--tts-speaker-file` is not supported yet (voice cloning)
+- Voice cloning: `--tts-speaker-file` with the reference clip and `--tts-speaker-text` with its transcript (a transcript without a speaker tag is speaker 0). The clip is encoded by the codec encoder half of `codec.pth` and its codes are put in the prompt as one reference, as the reference does; the clip is truncated to the first 30 s. It needs an mmproj converted with the codec encoder
 - Note: `--top-k` and `--top-p` are not used, frames are sampled with the settings of the reference (main token: temperature 1.0, top-p 0.9, repetition-aware redraw over the last 16 frames; other codes: temperature 1.0, top-k 30, top-p 0.9)
 - Each frame is 2048 samples (about 46 ms), generation stops at the end-of-speech token
 - The codebook tower keeps the whole sequence in its KV cache, the prompt and the generated frames are limited to 4096 positions
@@ -191,7 +193,7 @@ llama-tts -m drama3.gguf \
 
 **Note for GGUF conversion:**
 
-The routed experts of the checkpoint are FP8, they are dequantized at conversion. The mmproj holds the codebook tower and the decoder half of `codec.pth`, it is best kept in BF16:
+The routed experts of the checkpoint are FP8, they are dequantized at conversion. The mmproj holds the codebook tower and `codec.pth` (the encoder half for voice cloning, the decoder half for the audio), it is best kept in BF16; the codec encoder is always stored in F16/F32:
 
 ```sh
 python convert_hf_to_gguf.py path/to/drama-3 --outtype q8_0 --outfile drama3.gguf
@@ -366,6 +368,22 @@ python convert_hf_to_gguf.py MiniMax-Music3 --mmproj --outfile mmproj-minimax-mu
 
 The mmproj holds the depth decoder and the DiT layers (in the `--outtype` type), and the condition encoder, the small DiT projections and the DAC decoder, always in F32.
 
+## Hibiki
+
+Hibiki (Kyutai) translates French speech to English speech in real time. It is a full duplex model: it only runs through the [realtime endpoint](../../tools/server/README.md#full-duplex) of `llama-server`, the audio goes in and comes out every 80 ms.
+
+The checkpoint is not in the HF layout, the converter reads its `config.json` and the LM and mimi files it names (Hibiki-1B `kyutai/hibiki-1b-pytorch-bf16`, Hibiki-2B `kyutai/hibiki-2b-pytorch-bf16`):
+
+```sh
+python convert_hf_to_gguf.py path/to/hibiki-1b-pytorch-bf16 --outfile hibiki-1b.gguf
+python convert_hf_to_gguf.py path/to/hibiki-1b-pytorch-bf16 --mmproj --outfile mmproj-hibiki-1b.gguf
+
+llama-server -m hibiki-1b.gguf --mmproj mmproj-hibiki-1b.gguf -c 1500
+```
+
+- The voice of the output is conditioned like the reference (`very_good`), classifier-free guidance is not supported yet
+- The audio codes are sampled with the settings of the checkpoint (temperature 0.8, top-k 250), so is the text (temperature 0.8, top-k 50) unless the server sampling options override it
+
 ## Kokoro
 
 Available params:
@@ -466,4 +484,46 @@ pip install git+https://github.com/n4ze3m/dizione
 ```sh
 python convert_hf_to_gguf.py path/to/tiny-voca --outfile tiny-voca.gguf
 python convert_hf_to_gguf.py path/to/tiny-voca --mmproj --outfile mmproj-tiny-voca.gguf
+```
+
+## VoxCPM2
+
+[VoxCPM2](https://huggingface.co/openbmb/VoxCPM2): a MiniCPM4 backbone (2B) makes one hidden state per frame, without an audio token. The mmproj turns it into a patch of 4 continuous latents: FSQ, an 8-layer residual LM (run with libllama, one context per sequence), then the LocDiT flow matching. The causal AudioVAE decodes the latents to 48 kHz audio.
+
+Available params:
+- The language is the one of the text, `--tts-lang` is not used. A voice description in parentheses at the start of the text designs the voice, for example `(A young woman, gentle and warm)Hello!`
+- Voice cloning: `--tts-speaker-file` with the reference clip (resampled to 16 kHz, truncated to the first 30 s). `--tts-speaker-text` is not used, the transcript of the clip is not needed
+- `--temp` scales the noise of the flow matching (default 1.0), `--top-k` and `--top-p` are not used
+- The flow matching uses 10 Euler steps and classifier-free guidance with scale 2.0, like the reference. `llama-server` takes `flow_steps` (2 to 32) and `cfg_scale` to change them
+- Each frame is 4 latents, 7680 samples (160 ms). Generation stops on the stop head of the model, at least 4 frames, at most 6 frames per text token + 10 (the limit of the reference)
+- Not supported yet: the continuation mode of the reference (prompt audio with its transcript)
+- Not supported yet: the bad case retry of the reference (`retry_badcase`, a new seed when the audio reaches 6 frames per text token). Short prompts may then run long and repeat some words, try another seed
+
+Example usage:
+
+```sh
+llama-tts -m VoxCPM2.gguf \
+    -mm mmproj-VoxCPM2.gguf \
+    -p "(A calm male narrator)The quick brown fox jumps over the lazy dog." \
+    --output out.wav
+```
+
+Voice cloning:
+
+```sh
+llama-tts -m VoxCPM2.gguf \
+    -mm mmproj-VoxCPM2.gguf \
+    --tts-speaker-file reference.wav \
+    -p "Hello, this is a cloned voice." \
+    --output out.wav
+```
+
+**Note for GGUF conversion:**
+
+The mmproj holds LocEnc, LocDiT and the residual LM layers (loaded with libllama as a Granite text model with RoPE off) in the `--outtype` type, and the AudioVAE (`audiovae.pth`, encoder for voice cloning, decoder for the audio) always in F32:
+
+```sh
+hf download openbmb/VoxCPM2 --local-dir VoxCPM2
+python convert_hf_to_gguf.py VoxCPM2 --outfile VoxCPM2.gguf
+python convert_hf_to_gguf.py VoxCPM2 --mmproj --outfile mmproj-VoxCPM2.gguf
 ```

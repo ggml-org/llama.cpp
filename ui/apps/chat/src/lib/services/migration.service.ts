@@ -867,6 +867,40 @@ const searchChatsDefaultDisabledMigration: Migration = {
 		}
 	}
 };
+const IN_PROGRESS_COLLAPSED_MIGRATION_ID = 'in-progress-collapsed-default-v1';
+/**
+ * Thoughts and tool calls now stay collapsed while a reply generates. The
+ * persisted config carries every key, so a saved `true` cannot be told apart
+ * from the old default: both keys are dropped once so the new default
+ * applies. That also resets anyone who had left them on by choice, which is
+ * the known cost of the change; they turn them back on in Settings.
+ */
+const inProgressCollapsedMigration: Migration = {
+	description: 'Collapse thoughts and tool calls while generating by default',
+	id: IN_PROGRESS_COLLAPSED_MIGRATION_ID,
+
+	async run(): Promise<void> {
+		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+
+		if (configRaw === null) return;
+
+		let config: Record<string, unknown>;
+
+		try {
+			config = JSON.parse(configRaw);
+		} catch {
+			// an unreadable config has no saved default to drop; without this
+			// the migration would fail and run again on every start
+			return;
+		}
+
+		if (!config || typeof config !== 'object') return;
+
+		delete config[SETTINGS_KEYS.SHOW_THOUGHT_IN_PROGRESS];
+		delete config[SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS];
+		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+	}
+};
 const migrations: Migration[] = [
 	localStorageMigration,
 	idxdbMigration,
@@ -879,7 +913,8 @@ const migrations: Migration[] = [
 	renderKeysMigration,
 	modelOrgNameKeyMigration,
 	mcpServerOverridesToToolPolicyMigration,
-	searchChatsDefaultDisabledMigration
+	searchChatsDefaultDisabledMigration,
+	inProgressCollapsedMigration
 ];
 
 export const MigrationService = {

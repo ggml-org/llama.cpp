@@ -51,7 +51,7 @@ LLAMA_API quantize_state_impl * llama_quant_init(
         const llama_model * model,
         const llama_model_quantize_params * params);
 
-LLAMA_API void llama_quant_free(quantize_state_impl * qs);
+LLAMA_API void llama_quant_free(const quantize_state_impl * qs);
 
 // Descriptor for constructing a mock model for quantization testing.
 struct llama_quant_model_desc {
@@ -115,6 +115,8 @@ LLAMA_API int32_t llama_model_n_devices(const struct llama_model * model);
 LLAMA_API ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int i);
 
 LLAMA_API llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx);
+
+LLAMA_API std::vector<ggml_tensor *> llama_memory_get_tensors(const llama_memory_t mem);
 
 // the backend buffers that a state write of this memory would touch - empty caches report none
 LLAMA_API std::vector<ggml_backend_buffer_t> llama_memory_get_buffers(const llama_memory_t mem);

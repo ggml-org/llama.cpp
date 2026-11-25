@@ -11,7 +11,7 @@
 
 import { spawn } from 'node:child_process';
 import { createReadStream, readFileSync } from 'node:fs';
-import { cp, readdir, stat } from 'node:fs/promises';
+import { cp, readdir, stat, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import { extname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,8 +36,11 @@ const NO_CACHE = new Set([
 	'/sw.js',
 	'/manifest.webmanifest',
 	'/_app/version.json',
-	'/build.json'
+	'/build.json',
+	'/config.json'
 ]);
+// the file next to index.html that tells the app where llama-server is
+const CONFIG_PATH = '/config.json';
 const CACHE_IMMUTABLE = 'public, max-age=31536000, immutable';
 const CACHE_REVALIDATE = 'no-cache';
 /** @type {Record<string, string>} */
@@ -68,10 +71,13 @@ export const USAGE = `Usage: llama-chat [options]
        llama-chat build [--out <dir>] [--force]
 
 Serves Llama Chat on localhost as static files, or, with build, writes them to
-a folder for any HTTP server. The browser talks to llama-server directly: start
-it with --cors-origins set to this page's address when it restricts origins.
+a folder for any HTTP server. The browser talks to llama-server directly: name
+it with --server, and start it with --cors-origins set to this page's address
+when it restricts origins.
 
 Options:
+  --server <url>   the llama-server the app talks to, e.g. http://localhost:8080
+                   (also for build; default: the address the app is served on)
   --port <n>       port to listen on (default: ${DEFAULTS.port})
   --host <addr>    address to listen on, 0.0.0.0 for the LAN (default: ${DEFAULTS.host})
   --open           open the browser once it listens (default)
@@ -84,9 +90,9 @@ Build options:
   --force          write into a folder that is not empty
 
 Examples:
-  npx @ggml-org/llama-chat
+  npx @ggml-org/llama-chat --server http://localhost:8080
   npx @ggml-org/llama-chat --host 0.0.0.0 --port 3000 --no-open
-  npx @ggml-org/llama-chat build --out ./public`;
+  npx @ggml-org/llama-chat build --out ./public --server https://llm.example.com`;
 
 /** The version in this package's package.json. */
 export function packageVersion() {
@@ -97,7 +103,7 @@ export function packageVersion() {
  * Reads the command line. No verb serves the app, `start` means the same, and `build` writes it
  * to a folder.
  * @param {string[]} argv the arguments after the command
- * @returns {{ command: 'build' | 'serve', force: boolean, help: boolean, host: string, open: boolean, out: string, port: number, version: boolean }}
+ * @returns {{ command: 'build' | 'serve', force: boolean, help: boolean, host: string, open: boolean, out: string, port: number, server: string, version: boolean }}
  */
 export function parseCliArgs(argv) {
 	const { positionals, values } = parseArgs({
@@ -111,6 +117,7 @@ export function parseCliArgs(argv) {
 			open: { type: 'boolean' },
 			out: { type: 'string' },
 			port: { type: 'string' },
+			server: { type: 'string' },
 			version: { short: 'v', type: 'boolean' }
 		},
 		strict: true
@@ -138,6 +145,24 @@ export function parseCliArgs(argv) {
 		throw new Error(`invalid --port: ${values.port}`);
 	}
 
+	let server = '';
+
+	if (values.server !== undefined) {
+		let parsed;
+
+		try {
+			parsed = new URL(values.server);
+		} catch {
+			parsed = null;
+		}
+
+		if (!parsed || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) {
+			throw new Error(`invalid --server, expected an http(s) URL: ${values.server}`);
+		}
+
+		server = `${parsed.origin}${parsed.pathname.replace(/\/+$/, '')}`;
+	}
+
 	return {
 		command,
 		force: values.force ?? false,
@@ -146,6 +171,7 @@ export function parseCliArgs(argv) {
 		open: values.open ?? true,
 		out: values.out ?? DEFAULTS.out,
 		port,
+		server,
 		version: values.version ?? false
 	};
 }
@@ -224,10 +250,19 @@ function sendError(res, status, message) {
 }
 
 /**
- * The HTTP server: the files of `dist`, read-only.
- * @param {{ distDir?: string }} [options]
+ * The app's config.json for a llama-server at `server`.
+ * @param {string} server
  */
-export function createChatServer({ distDir = DIST_DIR } = {}) {
+function configJson(server) {
+	return `${JSON.stringify({ server })}\n`;
+}
+
+/**
+ * The HTTP server: the files of `dist`, read-only. With `server`, it answers config.json
+ * itself, so the app talks to that llama-server instead of this address.
+ * @param {{ distDir?: string, server?: string }} [options]
+ */
+export function createChatServer({ distDir = DIST_DIR, server = '' } = {}) {
 	const root = normalize(distDir);
 
 	return http.createServer(async (req, res) => {
@@ -236,6 +271,19 @@ export function createChatServer({ distDir = DIST_DIR } = {}) {
 		if (req.method !== 'GET' && req.method !== 'HEAD') {
 			res.setHeader('Allow', 'GET, HEAD');
 			sendError(res, 405, 'Method Not Allowed');
+
+			return;
+		}
+
+		if (server && pathname === CONFIG_PATH) {
+			const body = configJson(server);
+
+			res.writeHead(200, {
+				'Cache-Control': CACHE_REVALIDATE,
+				'Content-Length': Buffer.byteLength(body),
+				'Content-Type': MIME_TYPES['.json']
+			});
+			res.end(req.method === 'HEAD' ? undefined : body);
 
 			return;
 		}
@@ -256,10 +304,11 @@ export function createChatServer({ distDir = DIST_DIR } = {}) {
 /**
  * Writes the app to a folder: the files of `dist` without source maps, ready for any static
  * file server. Refuses a folder that is not empty unless `force` is set, and a folder in `dist`.
- * @param {{ distDir?: string, force?: boolean, out: string }} options
+ * With `server`, its config.json names that llama-server.
+ * @param {{ distDir?: string, force?: boolean, out: string, server?: string }} options
  * @returns {Promise<string>} the absolute path of the folder
  */
-export async function buildStatic({ distDir = DIST_DIR, force = false, out }) {
+export async function buildStatic({ distDir = DIST_DIR, force = false, out, server = '' }) {
 	const source = resolve(distDir);
 	const target = resolve(out);
 	const inside = relative(source, target);
@@ -275,6 +324,8 @@ export async function buildStatic({ distDir = DIST_DIR, force = false, out }) {
 	}
 
 	await cp(source, target, { filter: (file) => !file.endsWith('.map'), recursive: true });
+
+	if (server) await writeFile(join(target, CONFIG_PATH), configJson(server));
 
 	return target;
 }
@@ -339,7 +390,11 @@ export async function main(argv) {
 
 	if (options.command === 'build') {
 		try {
-			const target = await buildStatic({ force: options.force, out: options.out });
+			const target = await buildStatic({
+				force: options.force,
+				out: options.out,
+				server: options.server
+			});
 			const shown = relative(process.cwd(), target) || '.';
 
 			console.log(`Llama Chat ${packageVersion()} written to ${target}`);
@@ -352,7 +407,7 @@ export async function main(argv) {
 		return;
 	}
 
-	const server = createChatServer();
+	const server = createChatServer({ server: options.server });
 
 	return new Promise((resolve) => {
 		server.on('error', (error) => {
@@ -373,6 +428,9 @@ export async function main(argv) {
 			const url = `http://${shown.includes(':') ? `[${shown}]` : shown}:${address.port}/`;
 
 			console.log(`Llama Chat ${packageVersion()} on ${url}`);
+
+			if (options.server) console.log(`Talking to llama-server on ${options.server}`);
+
 			console.log(
 				`If llama-server restricts origins (tools or MCP on), start it with --cors-origins ${url.slice(0, -1)}`
 			);

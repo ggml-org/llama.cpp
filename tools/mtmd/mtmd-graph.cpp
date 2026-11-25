@@ -977,6 +977,10 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
             {
                 builder = std::make_unique<mtmd_graph_fish_s2_spkenc>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_VOXCPM2_SPKENC:
+            {
+                builder = std::make_unique<mtmd_graph_voxcpm2_spkenc>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_POCKETTTS_GEN:
             {
                 const auto gen_process = params ? params->gen_process : MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;
@@ -995,6 +999,24 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
         case PROJECTOR_TYPE_CHATTERBOX_SPKENC:
             {
                 builder = std::make_unique<mtmd_graph_chatterbox_spkenc>(ctx, img);
+            } break;
+        case PROJECTOR_TYPE_MOSHI:
+            {
+                builder = std::make_unique<mtmd_graph_moshi>(ctx, img);
+            } break;
+        case PROJECTOR_TYPE_MOSHI_GEN:
+            {
+                const auto    gen_process = params ? params->gen_process : MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;
+                const int64_t n_q         = ctx->model.gen_code_head_w->ne[2];
+                const bool    has_codes   = params && params->codes;
+                if (has_codes) {
+                    GGML_ASSERT(params->codes->size() % (size_t) n_q == 0);
+                }
+                const int   n_frames = has_codes ? (int) (params->codes->size() / n_q) : 1;
+                const int   top_k    = params ? params->top_k : 250;
+                const float temp     = params ? params->temp  : 0.8f;
+                const bool  fb_only  = gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_CODE && has_codes;
+                builder = std::make_unique<mtmd_graph_moshi_gen>(ctx, img, gen_process, fb_only, n_frames, top_k, temp);
             } break;
         case PROJECTOR_TYPE_CHATTERBOX:
             {
@@ -1037,6 +1059,24 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
                 const int  n_frames  = params && params->codes && gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_WAV
                                      ? (int) (params->codes->size() / n_cb) : 1;
                 builder = std::make_unique<mtmd_graph_zonos3_gen>(ctx, img, gen_process, all_known, n_frames);
+            } break;
+        case PROJECTOR_TYPE_VOXCPM2_GEN:
+            {
+                using g = mtmd_graph_voxcpm2_gen;
+                // the default (warmup) graph is one frame of the flow
+                const auto gen_process = params ? params->gen_process : MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;
+                int n_rows = 1;
+                if (gen_process == MTMD_SUBCTX_GEN_PROCESS_RES_INP) {
+                    // hidden states in img, the input rows of audio rows in feats
+                    n_rows = img.ny();
+                } else if (params && params->feats && gen_process != MTMD_SUBCTX_GEN_PROCESS_GEN_CODE) {
+                    GGML_ASSERT(!params->feats->empty() && params->feats->size() % (g::n_latent * g::n_patch) == 0);
+                    n_rows = (int) (params->feats->size() / (g::n_latent * g::n_patch));
+                }
+                const bool  audio_row = gen_process == MTMD_SUBCTX_GEN_PROCESS_RES_INP && params->feats != nullptr;
+                const int   n_steps   = params && params->n_steps > 0 ? params->n_steps : g::n_steps_default;
+                const float cfg_scale = params && params->cfg_scale > 0.0f ? params->cfg_scale : g::cfg_default;
+                builder = std::make_unique<mtmd_graph_voxcpm2_gen>(ctx, img, gen_process, n_rows, audio_row, n_steps, cfg_scale);
             } break;
         case PROJECTOR_TYPE_YUE2_GEN:
             {

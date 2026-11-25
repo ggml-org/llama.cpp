@@ -90,7 +90,7 @@
 		</div>
 
 		{#if extraServersCount > 0}
-			<span class="text-xs text-muted-foreground">+{extraServersCount}</span>
+			<span class="text-caption text-muted-foreground">+{extraServersCount}</span>
 		{/if}
 	</button>
 {/if}

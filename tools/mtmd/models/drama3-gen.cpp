@@ -130,9 +130,19 @@ ggml_cgraph * mtmd_graph_drama3_gen::build_tower() {
     ggml_set_name(inp_pos, "inp_pos");
     ggml_set_input(inp_pos);
 
-    ggml_tensor * inp_rand = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_heads);
-    ggml_set_name(inp_rand, "inp_rand");
-    ggml_set_input(inp_rand);
+    // teacher forcing (reference rows of a voice clone): codes 1.. of the frame are given, nothing is sampled
+    const bool forced = n_frames == 2;
+    ggml_tensor * inp_rand  = nullptr;
+    ggml_tensor * inp_force = nullptr;
+    if (forced) {
+        inp_force = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_heads);
+        ggml_set_name(inp_force, "inp_force");
+        ggml_set_input(inp_force);
+    } else {
+        inp_rand = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_heads);
+        ggml_set_name(inp_rand, "inp_rand");
+        ggml_set_input(inp_rand);
+    }
 
     ggml_tensor * mask     = ggml_view_1d(ctx0, inp_scale, 1, 0);
     ggml_tensor * extra_on = ggml_view_1d(ctx0, inp_scale, 1, sizeof(float));
@@ -152,6 +162,11 @@ ggml_cgraph * mtmd_graph_drama3_gen::build_tower() {
             continue;
         }
         const int ih = il - n_shared;
+        if (forced) {
+            code = ggml_view_1d(ctx0, inp_force, 1, (size_t) ih * sizeof(int32_t));
+            out_codes = cg.cache_set(out_codes, ih + 1, code);
+            continue;
+        }
         ggml_tensor * head   = ggml_view_2d(ctx0, model.gen_code_head_w, model.gen_code_head_w->ne[0], model.gen_code_head_w->ne[1],
                                             model.gen_code_head_w->nb[1], (size_t) ih * model.gen_code_head_w->nb[2]);
         ggml_tensor * logits = ggml_mul_mat(ctx0, head, x);

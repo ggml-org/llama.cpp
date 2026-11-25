@@ -29,7 +29,7 @@
 						<Drawer.Description>Used on phones in place of the dropdown.</Drawer.Description>
 					</Drawer.Header>
 
-					<div class="space-y-1 px-4 text-sm">
+					<div class="space-y-1 px-4 text-body-sm">
 						<div class="rounded-md bg-accent px-3 py-2">Qwen3.8-27B</div>
 
 						<div class="rounded-md px-3 py-2">Llama-3.2-3B</div>

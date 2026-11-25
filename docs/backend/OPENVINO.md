@@ -195,6 +195,7 @@ The models below were tested with `llama-cli` and `Q4_K_M` files on an Intel® C
 | [bartowski/prism-ml_Bonsai-8B-unpacked-Q4_K_M](https://huggingface.co/bartowski/prism-ml_Bonsai-8B-unpacked-GGUF) | ✓ | ✓ | ✓ |
 | [LiquidAI/LFM2.5-2.6B-Q4_K_M](https://huggingface.co/LiquidAI/LFM2.5-2.6B-GGUF) | ✓ | ✓ | ✗ |
 | [bartowski/inclusionAI_Ling-mini-2.0-Q4_K_M](https://huggingface.co/bartowski/inclusionAI_Ling-mini-2.0-GGUF) | ✓ | ✓ | ✗ |
+| [tiiuae/Falcon-H1-0.5B-Instruct-Q4_K_M](https://huggingface.co/tiiuae/Falcon-H1-0.5B-Instruct-GGUF) | ✓ | ✓ | ✗ |
 |  |  |  |  |
 | [Qwen/Qwen3-Embedding-0.6B-Q8_0](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF) | ✓ | ✓ | ✗ |
 | [ggml-org/bge-m3-Q8_0](https://huggingface.co/ggml-org/bge-m3-Q8_0-GGUF) | ✓ | ✓ | ✗ |
@@ -990,9 +991,20 @@ build\ReleaseOV\bin\llama-simple.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_K_M.
 - Multimodal features (audio/image/video) are a work in progress.
 - Embedding models: reranking models are not validated.
 - Llama.cpp tool coverage across CPU/GPU/NPU is not uniform.
+- Mamba-based models (e.g. Falcon-H1): `llama-perplexity` with several sequences per batch fails; set `-b` to the same value as `-c`. GPU accuracy is slightly lower than CPU.
 
 **GPU-specific**
 
+- Muse-Glimmer-30B with a DFlash draft needs a 64 GB system (peak about 45 GB of RAM):
+
+  ```bash
+  export GGML_OPENVINO_DEVICE=GPU
+  export GGML_OPENVINO_SPILL_DIR=$HOME/ov_spill   # local disk, not tmpfs
+  export GGML_OPENVINO_ROPE_F32_ANGLE=1           # long prompts
+  mkdir -p $GGML_OPENVINO_SPILL_DIR
+  ./build/ReleaseOV/bin/llama-server -m Muse-Glimmer-30B-Q4_K_M.gguf -md <dflash-draft>.gguf \
+      --spec-type draft-dflash --spec-draft-n-max 4
+  ```
 - Multiple GPUs (`GGML_OPENVINO_DEVICE=GPU.0,GPU.1` with `-sm layer`):
   - `-sm tensor` is not supported.
   - Copies between GPUs go through host memory. There is no asynchronous copy and no peer-to-peer copy.
@@ -1012,6 +1024,7 @@ build\ReleaseOV\bin\llama-simple.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_K_M.
 - `llama-perplexity`: requires `-b 512` or smaller.
 - Flash attention must stay on, which is the default (`-fa auto`). With `-fa off`, the run fails on the NPU.
 - `llama-embedding` fails on the NPU.
+- Mamba-based models (e.g. Falcon-H1) fail on the NPU with `Failed to set tensor` (element type mismatch).
 - Lunar Lake NPU: decode slows down sharply when the context is large. The context size at which this starts depends on the model.
   - **Workaround:** Pass the smallest context that fits the use, e.g. `-c 512`, or `-c 256` for larger models.
 - Panther Lake NPU: the load of a Qwen3.5 model can end with a segmentation fault in the NPU compiler of OpenVINO 2026.4.1.

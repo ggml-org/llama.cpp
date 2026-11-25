@@ -544,9 +544,34 @@ static void ggml_backend_hrx_event_wait(ggml_backend_t backend, ggml_backend_eve
     }
 }
 
+// llama.cpp runs FILL in place on recurrent state in device buffers. The CPU cannot run it there.
+static bool ggml_hrx_supports_fill(const ggml_tensor * op) {
+    return (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) && ggml_is_contiguous(op);
+}
+
+static bool ggml_hrx_op_fill(ggml_backend_hrx_context * ctx, const ggml_tensor * node) {
+    const size_t size = ggml_nbytes(node);
+    if (size == 0) {
+        return true;
+    }
+    const float c = ggml_get_op_params_f32(node, 0);
+    uint32_t    pattern;
+    size_t      pattern_size;
+    if (node->type == GGML_TYPE_F32) {
+        std::memcpy(&pattern, &c, sizeof(c));
+        pattern_size = sizeof(float);
+    } else {
+        pattern      = ggml_fp32_to_fp16(c);
+        pattern_size = sizeof(ggml_fp16_t);
+    }
+    auto * bctx = (ggml_hrx_buffer_context *) ggml_hrx_tensor_buffer(node)->context;
+    return GGML_HRX_CHECK(
+        hrx_stream_fill_buffer(ctx->stream, bctx->buffer, ggml_hrx_tensor_offset(node), size, &pattern, pattern_size));
+}
+
 static bool ggml_hrx_compute_node(ggml_backend_hrx_context * ctx, const ggml_tensor * node) {
     switch (node->op) {
-        case GGML_OP_SCALE:    return ggml_hrx_op_scale(ctx, node);
+        case GGML_OP_FILL:     return ggml_hrx_op_fill(ctx, node);
         case GGML_OP_CPY:
         case GGML_OP_DUP:
         case GGML_OP_CONT:     return ggml_hrx_op_cpy(ctx, node);
@@ -646,6 +671,7 @@ static void ggml_backend_hrx_device_get_props(ggml_backend_dev_t dev, ggml_backe
         /* .buffer_from_host_ptr = */ false,
         /* .events               = */ true,
         /* .mmap_support         = */ true,
+        /* .fast_async_host_input = */ false,
     };
 }
 
@@ -676,7 +702,7 @@ static bool ggml_backend_hrx_device_supports_op(ggml_backend_dev_t dev, const gg
         case GGML_OP_RESHAPE:
         case GGML_OP_PERMUTE:
         case GGML_OP_TRANSPOSE: return true;
-        case GGML_OP_SCALE:     return ggml_hrx_supports_scale(ctx, op);
+        case GGML_OP_FILL:      return ggml_hrx_supports_fill(op);
         case GGML_OP_CPY:
         case GGML_OP_DUP:
         case GGML_OP_CONT:      return ggml_hrx_supports_cpy(ctx, op);

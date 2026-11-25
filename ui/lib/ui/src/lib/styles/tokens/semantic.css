@@ -1,13 +1,18 @@
 /*
- * Tier 2: semantic tokens. Named by purpose, they point at primitives and are the
- * only tier that changes between light and dark. Pattern: [category]-[role]-[state].
+ * Tier 2: semantic tokens. Named by purpose, they are the only tier that changes between light and
+ * dark. Pattern: [category]-[role]-[state].
  *
- * Light mode comes in two surface themes that share everything else (colours, buttons, fields,
- * shadows): Paper, the default, puts white panels, fields and keys on a faint grey page; Matte
- * (the theme-matte class on <html>) puts grey glass on a white page.
+ * A token here is one of two things: a pick, which names a primitive per theme, or a derivation, which is
+ * mixed from another semantic token by a fixed rule and so follows it through every theme. The rules:
+ * soft text is the text colour at 70%; a hover fill is the fill at 90%; a status surface is its fill mixed
+ * into the page and a status line its fill mixed into the default line; a dark shadow is the light one,
+ * --elevation-strength times as dense. Derivations are declared once, in :root: .dark sits on the
+ * same element, so they resolve from that theme's picks.
+ *
+ * The light surfaces are paper: white panels, fields and keys on a faint grey page.
  */
 :root {
-	/* surfaces: what a region of the page sits on. Paper: the page a faint grey, so glass, fields
+	/* surfaces: what a region of the page sits on. The page a faint grey, so glass, fields
 	   and keys, white, sit lighter than it */
 	--surface-page: var(--neutral-25);
 	--surface-muted: var(--neutral-100);
@@ -22,6 +27,8 @@
 
 	/* foreground: text and icons */
 	--fg-default: var(--neutral-950);
+	/* the label of an option that is not the picked one: a tab, a key of a toggle group */
+	--fg-soft: color-mix(in oklch, var(--fg-default) 70%, transparent);
 	--fg-muted: var(--neutral-500);
 	--fg-on-action: var(--neutral-50);
 	--fg-on-danger: var(--neutral-0);
@@ -39,101 +46,89 @@
 	--line-danger: var(--fill-danger);
 
 	/* status: a fill per meaning (dots, lamps, solid marks), brighter than its text colour, and a soft surface and
-	   line mixed from the fill (in oklab, so the hue holds) */
+	   line mixed from the fill (in oklab, so the hue holds). The two shares are the only part a theme sets */
 	--fill-success: var(--green-550);
 	--fill-warning: var(--amber-400);
 	--fill-danger: var(--red-550);
 	--fill-info: var(--blue-550);
-	--surface-success: color-mix(in oklab, var(--fill-success) 11%, var(--surface-page));
-	--surface-warning: color-mix(in oklab, var(--fill-warning) 11%, var(--surface-page));
-	--surface-danger: color-mix(in oklab, var(--fill-danger) 11%, var(--surface-page));
-	--surface-info: color-mix(in oklab, var(--fill-info) 11%, var(--surface-page));
-	--line-success-soft: color-mix(in oklab, var(--fill-success) 34%, var(--line-default));
-	--line-warning-soft: color-mix(in oklab, var(--fill-warning) 34%, var(--line-default));
-	--line-danger-soft: color-mix(in oklab, var(--fill-danger) 34%, var(--line-default));
-	--line-info-soft: color-mix(in oklab, var(--fill-info) 34%, var(--line-default));
+	--status-surface-share: 11%;
+	--status-line-share: 34%;
+	--surface-success: color-mix(in oklab, var(--fill-success) var(--status-surface-share), var(--surface-page));
+	--surface-warning: color-mix(in oklab, var(--fill-warning) var(--status-surface-share), var(--surface-page));
+	--surface-danger: color-mix(in oklab, var(--fill-danger) var(--status-surface-share), var(--surface-page));
+	--surface-info: color-mix(in oklab, var(--fill-info) var(--status-surface-share), var(--surface-page));
+	--line-success-soft: color-mix(in oklab, var(--fill-success) var(--status-line-share), var(--line-default));
+	--line-warning-soft: color-mix(in oklab, var(--fill-warning) var(--status-line-share), var(--line-default));
+	--line-danger-soft: color-mix(in oklab, var(--fill-danger) var(--status-line-share), var(--line-default));
+	--line-info-soft: color-mix(in oklab, var(--fill-info) var(--status-line-share), var(--line-default));
 
-	/* edges: hairlines of matte surfaces, darker at the sides than in the middle */
-	--edge-rest-side: var(--cool-gray-200);
-	--edge-rest-mid: var(--cool-gray-100);
-	--edge-focus-side: var(--cool-gray-400);
-	--edge-focus-mid: var(--cool-gray-300);
-	--edge-ambient-side: var(--cool-gray-100);
-	--edge-ambient-mid: var(--cool-gray-50);
-	--edge-faint: var(--cool-gray-100);
+	/* edges: hairlines of matte surfaces. Each names the shade at the sides; matte-glass fades it towards the
+	   middle itself (see surfaces.css) */
+	--edge-rest: var(--cool-gray-200);
+	--edge-focus: var(--cool-gray-400);
+	--edge-ambient: var(--cool-gray-100);
 	--edge-raised: var(--cool-gray-200);
 
 	/* actions: fills of interactive controls */
 	--action-primary: var(--neutral-900);
-	--action-primary-hover: color-mix(in oklch, var(--neutral-900) 90%, transparent);
+	--action-primary-hover: color-mix(in oklch, var(--action-primary) 90%, transparent);
 	/* one red for every danger state: the danger action is the status fill itself, the alerts' red */
 	--action-danger: var(--fill-danger);
-	--action-danger-hover: color-mix(in oklch, var(--fill-danger) 90%, transparent);
+	--action-danger-hover: color-mix(in oklch, var(--action-danger) 90%, transparent);
 	--action-quiet: color-mix(in oklch, var(--neutral-100) 30%, transparent);
 	--action-quiet-hover: var(--neutral-100);
 	--action-ghost-hover: color-mix(in oklch, var(--neutral-500) 10%, transparent);
 
 	/* fields: editable controls */
 	--field-background: var(--neutral-0);
-	--field-shade: var(--black-a6);
-
-	/* status lamps: the status fill, a lighter rim and a darker glyph */
-	--status-danger: var(--fill-danger);
-	--status-danger-rim: var(--red-400);
-	--status-danger-glyph: var(--red-800);
-	--status-warning: var(--fill-warning);
-	--status-warning-rim: var(--yellow-300);
-	--status-warning-glyph: var(--yellow-800);
-	--status-success: var(--fill-success);
-	--status-success-rim: var(--green-400);
-	--status-success-glyph: var(--green-800);
-	--status-info: var(--fill-info);
-	--status-info-rim: var(--blue-400);
-	--status-info-glyph: var(--blue-800);
 
 	/* light effects */
 	--highlight-inner: var(--white-a50);
 	--highlight-inverse: var(--white-a12);
 	--sheen-start: var(--white-a20);
-	--sheen-end: transparent;
 	--text-shadow-engraved: 0 1px 0 var(--white-a85);
 
-	/* elevation: smooth stacks (a few soft layers rather than one hard one) that reach no further than upstream's
-	   Tailwind shadows do: a surface about 20px, like shadow-lg, a raised one about 38px, like shadow-xl; a control
-	   keeps to three tight layers (nothing past 4px), so buttons sit close to the page */
+	/* elevation: the only shadows. Smooth stacks, a few soft layers rather than one hard one: the closest the darkest
+	   and smallest, each further layer about twice the offset and blur and fainter, pulled in with a negative spread,
+	   so the shadow fades out the way light does. A surface reaches about 20px and a raised one about 38px; a control
+	   keeps to three tight layers (nothing past 4px), so buttons sit close to the page. Tailwind's own shadow sizes
+	   are not used: they would not follow the theme. Every layer's density is
+	   multiplied by --elevation-strength, which is all a theme sets: 1 in light, 5 in dark, where a shadow has to be
+	   that much denser to read on the page */
+	--elevation-strength: 1;
 	--elevation-surface:
-		0 1px 2px rgb(0 0 0 / 0.04), 0 3px 6px -2px rgb(0 0 0 / 0.05), 0 8px 16px -4px rgb(0 0 0 / 0.06);
+		0 1px 2px rgb(0 0 0 / calc(0.04 * var(--elevation-strength))),
+		0 3px 6px -2px rgb(0 0 0 / calc(0.05 * var(--elevation-strength))),
+		0 8px 16px -4px rgb(0 0 0 / calc(0.06 * var(--elevation-strength)));
 	--elevation-control:
-		0 0.5px 1px rgb(0 0 0 / 0.05), 0 1px 2px rgb(0 0 0 / 0.05), 0 2px 4px -1px rgb(0 0 0 / 0.05);
+		0 0.5px 1px rgb(0 0 0 / calc(0.05 * var(--elevation-strength))),
+		0 1px 2px rgb(0 0 0 / calc(0.05 * var(--elevation-strength))),
+		0 2px 4px -1px rgb(0 0 0 / calc(0.05 * var(--elevation-strength)));
 	--elevation-raised:
-		0 2px 4px rgb(0 0 0 / 0.04), 0 6px 12px -3px rgb(0 0 0 / 0.06),
-		0 16px 28px -6px rgb(0 0 0 / 0.08);
+		0 2px 4px rgb(0 0 0 / calc(0.04 * var(--elevation-strength))),
+		0 6px 12px -3px rgb(0 0 0 / calc(0.06 * var(--elevation-strength))),
+		0 16px 28px -6px rgb(0 0 0 / calc(0.08 * var(--elevation-strength)));
 	/* a key on a white surface, like the chat form's: a hairline all round and a drop of 1px, so it stands apart
 	   without the control elevation's soft spread, which blends into the white */
 	--elevation-key: 0 0 0 0.5px rgb(0 0 0 / 0.08), 0 1px 1.5px rgb(0 0 0 / 0.08);
 	/* softer steps: the chat form floats only a little, its shadow close and tight (smooth near layers, nothing
 	   reaching past 6px); a message bubble barely lifts */
 	--elevation-soft:
-		0 0.5px 1px rgb(0 0 0 / 0.04), 0 1px 3px rgb(0 0 0 / 0.05), 0 2px 6px -2px rgb(0 0 0 / 0.05),
-		0 6px 16px -10px rgb(0 0 0 / 0.08);
-	--elevation-faint: 0 2px 4px rgb(0 0 0 / 0.025), 0 0.5px 1.5px rgb(0 0 0 / 0.03);
-	--elevation-inset: inset 0 1px 2px var(--field-shade);
-	--elevation-pressed: inset 0 1px 2px var(--black-a12);
-	--elevation-tooltip: var(--elevation-surface);
+		0 0.5px 1px rgb(0 0 0 / calc(0.04 * var(--elevation-strength))),
+		0 1px 3px rgb(0 0 0 / calc(0.05 * var(--elevation-strength))),
+		0 2px 6px -2px rgb(0 0 0 / calc(0.05 * var(--elevation-strength))),
+		0 6px 16px -10px rgb(0 0 0 / calc(0.08 * var(--elevation-strength)));
+	--elevation-faint:
+		0 2px 4px rgb(0 0 0 / calc(0.025 * var(--elevation-strength))),
+		0 0.5px 1.5px rgb(0 0 0 / calc(0.03 * var(--elevation-strength)));
+	/* the shade inside a recessed field, and inside a key held down */
+	--elevation-inset: inset 0 1px 2px rgb(0 0 0 / calc(0.06 * var(--elevation-strength)));
+	--elevation-pressed: inset 0 1px 2px rgb(0 0 0 / calc(0.08 * var(--elevation-strength)));
 	/* the hairline an elevated surface carries as the last layer of its shadow (elevated-*, matte-float), so its edge
 	   melts into the shadow instead of sitting beside it as a border that reads washed out */
 	--elevation-ring: var(--black-a5);
-	--elevation-ring-width: 1px;
-	--blur-surface: var(--length-24);
-	--blur-control: var(--length-12);
-}
-
-/* Matte, the alternative light theme: grey glass on a white page, fields on the page colour */
-.theme-matte:not(.dark) {
-	--surface-page: var(--neutral-0);
-	--surface-glass: color-mix(in oklch, var(--neutral-100) 60%, transparent);
-	--surface-code: var(--neutral-50);
-	--field-background: var(--surface-page);
+	--blur-surface: 1.5rem;
+	--blur-control: 0.75rem;
 }
 
 .dark {
@@ -151,46 +146,31 @@
 	--fg-muted: var(--neutral-400);
 	--fg-on-action: var(--neutral-900);
 	--fg-code: var(--neutral-300);
-	--fg-danger: var(--red-450);
-	--fg-success: var(--green-450);
-	--fg-warning: var(--amber-250);
-	--fg-info: var(--blue-400);
+	/* on a dark page the status fills are bright enough to read as text */
+	--fg-danger: var(--fill-danger);
+	--fg-success: var(--fill-success);
+	--fg-warning: var(--fill-warning);
+	--fg-info: var(--fill-info);
 
 	--line-default: var(--white-a30);
 	--line-field: var(--white-a30);
 	--line-control: var(--white-a12);
 	--line-focus: var(--neutral-500);
-	--line-danger: var(--fill-danger);
 
-	/* the status fills, and the mixes and lamps again, from the dark fills */
+	/* the dark status fills, and a larger share of them in the soft surfaces and lines */
 	--fill-success: var(--green-450);
 	--fill-warning: var(--amber-250);
 	--fill-danger: var(--red-450);
 	--fill-info: var(--blue-450);
-	--surface-success: color-mix(in oklab, var(--fill-success) 16%, var(--surface-page));
-	--surface-warning: color-mix(in oklab, var(--fill-warning) 16%, var(--surface-page));
-	--surface-danger: color-mix(in oklab, var(--fill-danger) 16%, var(--surface-page));
-	--surface-info: color-mix(in oklab, var(--fill-info) 16%, var(--surface-page));
-	--line-success-soft: color-mix(in oklab, var(--fill-success) 38%, var(--line-default));
-	--line-warning-soft: color-mix(in oklab, var(--fill-warning) 38%, var(--line-default));
-	--line-danger-soft: color-mix(in oklab, var(--fill-danger) 38%, var(--line-default));
-	--line-info-soft: color-mix(in oklab, var(--fill-info) 38%, var(--line-default));
-	--status-danger: var(--fill-danger);
-	--status-warning: var(--fill-warning);
-	--status-success: var(--fill-success);
-	--status-info: var(--fill-info);
+	--status-surface-share: 16%;
+	--status-line-share: 38%;
 
-	--edge-rest-side: var(--white-a6);
-	--edge-rest-mid: var(--white-a4);
-	--edge-focus-side: var(--white-a18);
-	--edge-focus-mid: var(--white-a12);
-	--edge-ambient-side: var(--white-a4);
-	--edge-ambient-mid: var(--white-a2);
-	--edge-faint: var(--white-a4);
+	--edge-rest: var(--white-a6);
+	--edge-focus: var(--white-a18);
+	--edge-ambient: var(--white-a4);
 	--edge-raised: var(--white-a9);
 
 	--action-primary: var(--neutral-200);
-	--action-primary-hover: color-mix(in oklch, var(--neutral-200) 90%, transparent);
 	/* the same red as every danger state, as matte glass: the status fill, frosted and translucent over the page */
 	--action-danger: color-mix(in oklch, var(--fill-danger) 58%, transparent);
 	--action-danger-hover: color-mix(in oklch, var(--fill-danger) 68%, transparent);
@@ -199,105 +179,72 @@
 	--action-ghost-hover: color-mix(in oklch, var(--neutral-400) 10%, transparent);
 
 	--field-background: var(--white-a9);
-	--field-shade: var(--black-a30);
 
 	--highlight-inner: var(--white-a4);
 	--sheen-start: var(--white-a2);
 	--text-shadow-engraved: 0 -1px 0 var(--black-a55);
 
-	/* the same stacks, deeper, so they still read on a dark page */
-	--elevation-surface:
-		0 1px 2px rgb(0 0 0 / 0.25), 0 3px 6px -2px rgb(0 0 0 / 0.25), 0 8px 16px -4px rgb(0 0 0 / 0.3);
-	--elevation-control:
-		0 0.5px 1px rgb(0 0 0 / 0.3), 0 1px 2px rgb(0 0 0 / 0.25), 0 2px 4px -1px rgb(0 0 0 / 0.25);
-	--elevation-raised:
-		0 2px 4px rgb(0 0 0 / 0.25), 0 6px 12px -3px rgb(0 0 0 / 0.3), 0 16px 28px -6px rgb(0 0 0 / 0.4);
+	--elevation-strength: 5;
+	/* on a dark surface the hairline of the light key vanishes: the control stack instead */
 	--elevation-key: var(--elevation-control);
-	--elevation-soft:
-		0 0.5px 1px rgb(0 0 0 / 0.25), 0 1px 3px rgb(0 0 0 / 0.25), 0 2px 6px -2px rgb(0 0 0 / 0.25),
-		0 6px 16px -10px rgb(0 0 0 / 0.35);
-	--elevation-faint: 0 2px 4px rgb(0 0 0 / 0.175), 0 0.5px 1.5px rgb(0 0 0 / 0.21);
-	--elevation-pressed: inset 0 1px 2px var(--black-a40);
 	/* a black hairline vanishes on a dark page; the ring paints on the page behind the surface, so white needs 18% to
 	   stay lighter than a raised surface's own colour */
 	--elevation-ring: var(--white-a18);
 }
 
-/*
- * Tailwind's shadow-{size} scale, smooth: each step is a few soft layers rather than one hard one, the closest the
- * darkest and smallest, each further layer about twice the offset and blur and fainter, the far ones pulled in with a
- * negative spread. Stacked like that, the shadow fades out the way light does instead of ending in a visible blur
- * edge. Each step reaches about as far as Tailwind's default for it, so the shadows stay as close as upstream's:
- * xs about 3px, sm 5px, md 10px, lg 20px, xl 38px, 2xl 64px. The elevation tokens above are built the same way.
- */
-@theme {
-	--shadow-xs: 0 0.5px 1px rgb(0 0 0 / 0.04), 0 1px 2px rgb(0 0 0 / 0.03);
-	--shadow-sm:
-		0 0.5px 1px rgb(0 0 0 / 0.04), 0 1px 2px rgb(0 0 0 / 0.04), 0 2px 4px -1px rgb(0 0 0 / 0.05);
-	--shadow-md:
-		0 1px 2px rgb(0 0 0 / 0.04), 0 2px 4px -1px rgb(0 0 0 / 0.05), 0 4px 8px -2px rgb(0 0 0 / 0.06);
-	--shadow-lg:
-		0 1px 2px rgb(0 0 0 / 0.04), 0 3px 6px -2px rgb(0 0 0 / 0.05), 0 8px 16px -4px rgb(0 0 0 / 0.07);
-	--shadow-xl:
-		0 2px 4px rgb(0 0 0 / 0.04), 0 6px 12px -3px rgb(0 0 0 / 0.06),
-		0 16px 28px -6px rgb(0 0 0 / 0.08);
-	--shadow-2xl:
-		0 4px 8px -2px rgb(0 0 0 / 0.05), 0 12px 24px -6px rgb(0 0 0 / 0.08),
-		0 28px 48px -12px rgb(0 0 0 / 0.14);
-}
-
 /* roles that do not change with the theme, exposed as Tailwind utilities */
 @theme inline {
-	/* type roles: text-body, text-label-sm, ... set size, line height and weight */
-	--text-body: var(--font-size-16);
-	--text-body--line-height: var(--line-height-24);
-	--text-body--font-weight: var(--font-weight-400);
-	--text-body-sm: var(--font-size-14);
-	--text-body-sm--line-height: var(--line-height-20);
-	--text-body-sm--font-weight: var(--font-weight-400);
-	--text-label: var(--font-size-14);
-	--text-label--line-height: var(--line-height-20);
-	--text-label--font-weight: var(--font-weight-500);
-	--text-label-sm: var(--font-size-12);
-	--text-label-sm--line-height: var(--line-height-16);
-	--text-label-sm--font-weight: var(--font-weight-500);
-	--text-caption: var(--font-size-12);
-	--text-caption--line-height: var(--line-height-16);
-	--text-caption--font-weight: var(--font-weight-400);
-	--text-title: var(--font-size-18);
-	--text-title--line-height: var(--line-height-28);
-	--text-title--font-weight: var(--font-weight-600);
-	--text-heading: var(--font-size-24);
-	--text-heading--line-height: var(--line-height-32);
-	--text-heading--font-weight: var(--font-weight-600);
+	/* type roles: text-body, text-label-sm, ... set size and line height. Labels, the title and the heading set
+	   their weight too; body and caption text takes the weight around it, regular unless a parent says otherwise.
+	   Sizes are 10, 12, 14, 16, 18, 24 and 30px; a line height is written as Tailwind writes its own, the line in rem
+	   over the size, so text nested in a role keeps the same proportion */
+	--text-body: 1rem;
+	--text-body--line-height: calc(1.5 / 1);
+	--text-body-sm: 0.875rem;
+	--text-body-sm--line-height: calc(1.25 / 0.875);
+	--text-label: 0.875rem;
+	--text-label--line-height: calc(1.25 / 0.875);
+	--text-label--font-weight: 500;
+	--text-label-sm: 0.75rem;
+	--text-label-sm--line-height: calc(1 / 0.75);
+	--text-label-sm--font-weight: 500;
+	--text-caption: 0.75rem;
+	--text-caption--line-height: calc(1 / 0.75);
+	/* the smallest text: a tag, a compact badge, a count */
+	--text-caption-sm: 0.625rem;
+	--text-caption-sm--line-height: calc(0.875 / 0.625);
+	--text-title: 1.125rem;
+	--text-title--line-height: calc(1.75 / 1.125);
+	--text-title--font-weight: 600;
+	--text-heading: 1.5rem;
+	--text-heading--line-height: calc(2 / 1.5);
+	--text-heading--font-weight: 600;
+	/* the biggest headline: a greeting, a splash */
+	--text-display: 1.875rem;
+	--text-display--line-height: calc(2.25 / 1.875);
+	--text-display--font-weight: 600;
 
-	/* icon sizes: size-icon-xs ... size-icon-lg */
-	--size-icon-xs: var(--length-12);
-	--size-icon-sm: var(--length-14);
-	--size-icon-md: var(--length-16);
-	--size-icon-lg: var(--length-20);
+	/* motion: ease-out-quint for what enters or answers a press, quick off the mark and settling softly; ease-sheet
+	   for a sheet or a page that slides, the curve iOS moves its own with */
+	--ease-out-quint: cubic-bezier(0.23, 1, 0.32, 1);
+	--ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
 
-	/* control heights and corner roles */
-	--height-control-sm: var(--length-32);
-	--height-control-md: var(--length-36);
-	--height-control-lg: var(--length-40);
-	--radius-control: var(--length-8);
-	--radius-panel: var(--length-10);
-	--radius-card: var(--length-14);
-	--radius-container: var(--length-16);
-	--radius-surface: var(--length-24);
-	--radius-surface-lg: var(--length-32);
+	/* icon sizes: size-icon-xs ... size-icon-lg (12, 14, 16 and 20px) */
+	--size-icon-xs: 0.75rem;
+	--size-icon-sm: 0.875rem;
+	--size-icon-md: 1rem;
+	--size-icon-lg: 1.25rem;
 
-	/* colours: bg-surface-*, text-fg-*, border-line-* and border-edge-* */
-	--background-color-surface-page: var(--surface-page);
-	--background-color-surface-muted: var(--surface-muted);
-	--background-color-surface-emphasis: var(--surface-emphasis);
-	--background-color-surface-selected: var(--surface-selected);
-	--background-color-surface-raised: var(--surface-raised);
-	--background-color-surface-lifted: var(--surface-lifted);
-	--background-color-surface-glass: var(--surface-glass);
-	--background-color-surface-code: var(--surface-code);
-	--background-color-surface-overlay: var(--surface-overlay);
+	/* control heights (32, 36 and 40px). Corners are Tailwind's rounded-sm ... rounded-4xl, one scale computed from
+	   --radius in theme.css */
+	--height-control-sm: 2rem;
+	--height-control-md: 2.25rem;
+	--height-control-lg: 2.5rem;
+
+	/* colours. The neutral roles are reached through shadcn's utility names (bg-background, bg-muted,
+	   text-muted-foreground, border-border: see theme.css) or as bg-(--surface-lifted); only the status roles, which
+	   shadcn has no names for, get utilities of their own: bg-surface-danger, bg-fill-danger, text-fg-danger,
+	   border-line-danger-soft and the same for success, warning and info */
 	--background-color-surface-success: var(--surface-success);
 	--background-color-surface-warning: var(--surface-warning);
 	--background-color-surface-danger: var(--surface-danger);
@@ -306,24 +253,12 @@
 	--background-color-fill-warning: var(--fill-warning);
 	--background-color-fill-danger: var(--fill-danger);
 	--background-color-fill-info: var(--fill-info);
-	--text-color-fg-default: var(--fg-default);
-	--text-color-fg-muted: var(--fg-muted);
-	--text-color-fg-on-action: var(--fg-on-action);
 	--text-color-fg-danger: var(--fg-danger);
 	--text-color-fg-success: var(--fg-success);
 	--text-color-fg-warning: var(--fg-warning);
 	--text-color-fg-info: var(--fg-info);
-	--border-color-line-default: var(--line-default);
-	--border-color-line-field: var(--line-field);
-	--border-color-line-control: var(--line-control);
-	--border-color-line-focus: var(--line-focus);
-	--border-color-line-danger: var(--line-danger);
 	--border-color-line-success-soft: var(--line-success-soft);
 	--border-color-line-warning-soft: var(--line-warning-soft);
 	--border-color-line-danger-soft: var(--line-danger-soft);
 	--border-color-line-info-soft: var(--line-info-soft);
-	--color-status-danger: var(--status-danger);
-	--color-status-warning: var(--status-warning);
-	--color-status-success: var(--status-success);
-	--color-status-info: var(--status-info);
 }

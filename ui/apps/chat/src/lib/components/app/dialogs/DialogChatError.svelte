@@ -51,11 +51,11 @@
 			</AlertDialog.Description>
 		</AlertDialog.Header>
 
-		<div class={`rounded-lg border px-4 py-3 text-sm ${badgeClass}`}>
+		<div class={`rounded-lg border px-4 py-3 text-body-sm ${badgeClass}`}>
 			<p class="font-medium">{message}</p>
 
 			{#if contextInfo}
-				<div class="mt-2 space-y-1 text-xs opacity-80">
+				<div class="mt-2 space-y-1 text-caption opacity-80">
 					<p>
 						<span class="font-medium">Prompt tokens:</span>
 

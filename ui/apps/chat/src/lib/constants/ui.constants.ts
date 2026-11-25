@@ -6,16 +6,17 @@ import {
 	SHORTCUT_SETTINGS
 } from './keyboard-shortcuts.constants';
 import { MCP_SERVERS_ROUTE_ID, MODELS_ROUTE_ID, SETTINGS_ROUTE_ID } from './routes.constants';
-import { Search, Settings, SquarePen } from '@lucide/svelte';
+import Search from '@lucide/svelte/icons/search';
+import Settings from '@lucide/svelte/icons/settings';
+import SquarePen from '@lucide/svelte/icons/square-pen';
 import McpLogo from '#lib/components/app/mcp/McpLogo.svelte';
 import { SidebarAction, ToolSource } from '#lib/enums/index.ts';
 import type { DesktopIconStripItem } from '#lib/types/index.ts';
 
+export { COLLAPSIBLE_TRANSITION_MS } from '@ggml-org/llama-ui/constants';
+
 /** Delay before a copied affordance resets from its check to the copy icon. */
 export const COPY_FEEDBACK_RESET_MS = 1500;
-
-/** How long a collapsible block's body takes to expand or collapse. */
-export const COLLAPSIBLE_TRANSITION_MS = 200;
 
 /**
  * Parts of a message where right-click keeps the browser's own menu (open or
@@ -186,6 +187,13 @@ export const SIDEBAR_FOOTER_ITEMS: DesktopIconStripItem[] = [
 		tooltip: 'Settings'
 	}
 ];
+
+/** The footer items to show: without the agentic features there is no MCP. */
+export function sidebarFooterItems(agentic: boolean): DesktopIconStripItem[] {
+	return agentic
+		? SIDEBAR_FOOTER_ITEMS
+		: SIDEBAR_FOOTER_ITEMS.filter((item) => item.action !== SidebarAction.MCP);
+}
 
 /** A light haptic tap's length where the browser vibrates (Android): a click, not a buzz. */
 export const HAPTIC_TAP_MS = 8;

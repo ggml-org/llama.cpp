@@ -69,6 +69,6 @@
 
 <pre
 	aria-hidden="true"
-	class="pointer-events-none fixed top-1/3 left-2 z-[99999] rounded bg-black/80 p-2 text-[10px] leading-tight whitespace-pre-wrap text-lime-300">{lines.join(
+	class="pointer-events-none fixed top-1/3 left-2 z-99999 rounded bg-black/80 p-2 text-caption-sm leading-tight whitespace-pre-wrap text-lime-300">{lines.join(
 		'\n'
 	)}</pre>

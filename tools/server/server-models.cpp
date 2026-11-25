@@ -734,16 +734,7 @@ bool server_models::remove_sidecar(const std::string & name, const std::string &
 }
 
 void server_models::notify_sse(const std::string & event, const std::string & model_id, const json & data) {
-    std::unique_ptr<server_task_result_router> result = std::make_unique<server_task_result_router>();
-    result->data = {
-        {"model", model_id},
-        {"event", event},
-    };
-    if (!data.is_null()) {
-        result->data["data"] = data;
-    }
-    SRV_DBG("notifying SSE clients about event '%s' for model '%s': %s\n", event.c_str(), model_id.c_str(), safe_json_to_str(result->data).c_str());
-    sse.broadcast(std::move(result));
+    sse.notify(event, model_id, data);
 }
 
 void server_models::load_models() {
@@ -1931,7 +1922,7 @@ void server_models::handle_child_state(const std::string & name, const std::stri
 }
 
 //
-// server_models_routes
+// server_models_sse
 //
 
 // RAII wrapper similar to server_response_reader, but doesn't use server_queue
@@ -1969,6 +1960,61 @@ struct server_models_sse_client {
         // should not reach here
     }
 };
+
+void server_models_sse::notify(const std::string & event, const std::string & model_id, const json & data) {
+    std::unique_ptr<server_task_result_router> result = std::make_unique<server_task_result_router>();
+    result->data = {
+        {"model", model_id},
+        {"event", event},
+    };
+    if (!data.is_null()) {
+        result->data["data"] = data;
+    }
+    SRV_DBG("notifying SSE clients about event '%s' for model '%s': %s\n", event.c_str(), model_id.c_str(), safe_json_to_str(result->data).c_str());
+    // under the lock, so that a client connecting meanwhile gets this event either replayed or queued, not both
+    std::lock_guard<std::mutex> lk(mutex);
+    if (replay_last) {
+        last_event = result->data;
+    }
+    queue.broadcast(std::move(result));
+}
+
+server_http_context::handler_t server_models_sse::make_handler(std::function<bool()> should_stop) {
+    return [this, should_stop = std::move(should_stop)](const server_http_req & req) {
+        auto res = std::make_unique<server_http_res>();
+        res->status = 200;
+        res->content_type = "text/event-stream";
+        std::shared_ptr<server_models_sse_client> sse_client;
+        std::string pending; // the replayed event, sent first
+        {
+            std::lock_guard<std::mutex> lk(mutex);
+            sse_client = std::make_shared<server_models_sse_client>(queue);
+            if (replay_last && !last_event.is_null()) {
+                pending = "data: " + safe_json_to_str(last_event) + "\n\n";
+            }
+        }
+        res->next = [should_stop, sse_client, pending = std::move(pending), &req](std::string & output) mutable -> bool {
+            if (!pending.empty()) {
+                output = std::move(pending);
+                pending.clear();
+                return true;
+            }
+            auto result = sse_client->next([&]() {
+                return should_stop() || req.should_stop();
+            });
+            if (result == nullptr) {
+                return false; // client disconnected or should_stop
+            }
+            output = "data: " + safe_json_to_str(result->to_json()) + "\n\n";
+            return true; // listen for the next event
+        };
+        return res;
+    };
+}
+
+//
+// server_models_routes
+//
 
 static void res_ok(std::unique_ptr<server_http_res> & res, const json & response_data) {
     res->status = 200;
@@ -2073,6 +2119,7 @@ void server_models_routes::init_routes() {
                 {"ui_settings",          ui_settings},
                 {"build_info",           std::string(llama_build_info())},
                 {"cors_proxy_enabled",   params.ui_mcp_proxy},
+                {"ui_agent",             params.ui_agent},
             };
             if (!params.server_connect_code.empty()) {
                 props["connect_code"] = params.server_connect_code;
@@ -2312,23 +2359,9 @@ void server_models_routes::init_routes() {
         return res;
     };
 
-    this->get_router_models_sse = [this](const server_http_req & req) {
-        auto res = std::make_unique<server_http_res>();
-        res->status = 200;
-        res->content_type = "text/event-stream";
-        auto sse_client = std::make_shared<server_models_sse_client>(models.sse);
-        res->next = [this, sse_client, &req](std::string & output) -> bool {
-            auto result = sse_client->next([&]() {
-                return stopping.load(std::memory_order_relaxed) || req.should_stop();
-            });
-            if (result == nullptr) {
-                return false; // client disconnected or should_stop
-            }
-            output = "data: " + safe_json_to_str(result->to_json()) + "\n\n";
-            return true; // listen for the next event
-        };
-        return res;
-    };
+    this->get_router_models_sse = models.sse.make_handler([this]() {
+        return stopping.load(std::memory_order_relaxed);
+    });
 
     this->post_router_models = [this](const server_http_req & req) {
         auto res = std::make_unique<server_http_res>();
