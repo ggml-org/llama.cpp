@@ -52,6 +52,8 @@ namespace autoparser {
 // ============================================================================
 
 struct generation_params {
+    const llama_vocab *                   vocab = nullptr;
+    std::string                           tool_choice_name;
     json                                  messages;
     json                                  tools;
     common_chat_tool_choice               tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;

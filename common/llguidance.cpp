@@ -5,6 +5,7 @@
 
 #    include "llguidance.h"
 #    include <cmath>
+#    include <stdexcept>
 
 struct llama_sampler_llg {
     const llama_vocab * vocab;
@@ -70,7 +71,12 @@ static void llama_sampler_llg_apply(llama_sampler * smpl, llama_token_data_array
 static void llama_sampler_llg_reset(llama_sampler * smpl) {
     auto * ctx = (llama_sampler_llg *) smpl->ctx;
     if (ctx->grammar) {
-        llg_matcher_reset(ctx->grammar);
+        // llguidance v1.0.1 can fail to roll back explicit special tokens on reset.
+        llg_free_matcher(ctx->grammar);
+        ctx->grammar = llama_sampler_llg_new(ctx->tokenizer, ctx->grammar_kind.c_str(), ctx->grammar_data.c_str());
+        if (!ctx->grammar) {
+            throw std::invalid_argument("Failed to reset llguidance grammar");
+        }
     }
 }
 
@@ -231,6 +237,11 @@ llama_sampler * llama_sampler_init_llg(const llama_vocab * vocab, const char * g
             /* .tokenizer    = */ tokenizer,
             /* .grammar      = */ llama_sampler_llg_new(tokenizer, grammar_kind, grammar_data),
         };
+        if (!ctx->grammar) {
+            llg_free_tokenizer(tokenizer);
+            delete ctx;
+            throw std::invalid_argument("Failed to compile llguidance grammar");
+        }
         if (ctx->grammar) {
             GGML_ASSERT(((size_t) llama_vocab_n_tokens(vocab) + 31) / 32 * 4 ==
                         llg_matcher_get_mask_byte_size(ctx->grammar));
