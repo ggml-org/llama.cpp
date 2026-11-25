@@ -212,6 +212,7 @@ struct llama_hparams {
     uint32_t ssm_d_state = 0;
     uint32_t ssm_dt_rank = 0;
     uint32_t ssm_n_group = 0;
+    uint32_t ssm_n_householder = 1;
     float    ssm_norm_eps = 0.0f; // 0 = use f_norm_rms_eps
 
     // for MiniMax-Text-01 linear attention

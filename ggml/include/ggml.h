@@ -2428,14 +2428,14 @@ extern "C" {
     // TODO: add ggml_gated_delta_net_set_bcast() to be able to configure Q, K broadcast type: tiled vs interleaved [TAG_GGML_GDN_BCAST]
     // ref: https://github.com/ggml-org/llama.cpp/pull/19468#discussion_r2786394306
     //
-    // tensor shapes (S_k == S_v, H_v % H_k == 0):
+    // tensor shapes (H_v % H_k == 0):
     //   q, k  : [S_k, H_k, n_tokens, n_seqs]
     //   v     : [S_v, H_v, n_tokens, n_seqs]
-    //   g     : [1, H_v, n_tokens, n_seqs] (scalar gate) or [S_v, H_v, n_tokens, n_seqs] (KDA)
+    //   g     : [1, H_v, n_tokens, n_seqs] (scalar gate) or [S_k, H_v, n_tokens, n_seqs] (KDA)
     //   beta  : [1, H_v, n_tokens, n_seqs]
-    //   state : [S_v, S_v, H_v, n_seqs] -- initial recurrent state s0
+    //   state : [S_k, S_v, H_v, n_seqs] -- initial recurrent state s0
     //
-    // the output packs the attention scores [S_v, H_v, n_tokens, n_seqs] followed by the final state [S_v, S_v, H_v, n_seqs]
+    // the output packs the attention scores [S_v, H_v, n_tokens, n_seqs] followed by the final state [S_k, S_v, H_v, n_seqs]
     //
     // replay (optional, set all of pend_k, pend_v, pend_gb and n_rep, or none): first runs the pending tokens of the
     // previous ubatch, so that a rollback only drops pending tokens instead of restoring a snapshot

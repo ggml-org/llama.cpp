@@ -10,6 +10,8 @@ You can use any `llama.cpp`-compatible model from [Hugging Face](https://hugging
 llama cli -hf ggml-org/gemma-3-1b-it-GGUF
 ```
 
+For NVIDIA-Nemotron-Labs-Dory1.5-4B, use `-hf nvidia/NVIDIA-Nemotron-Labs-Dory1.5-4B-GGUF`.
+
 You can use the same CLI invocation to download from other sites, by pointing the `MODEL_ENDPOINT` environment variable to an endpoint compatible with the Hugging Face API.
 `llama.cpp` can also run models you have downloaded locally to your filesystem.
 
