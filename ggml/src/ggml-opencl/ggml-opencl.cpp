@@ -1172,6 +1172,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_ceil_f32, kernel_ceil_f32_4, kernel_ceil_f32_nc, kernel_ceil_f16, kernel_ceil_f16_4, kernel_ceil_f16_nc;
     cl_kernel kernel_round_f32, kernel_round_f32_4, kernel_round_f32_nc, kernel_round_f16, kernel_round_f16_4, kernel_round_f16_nc;
     cl_kernel kernel_trunc_f32, kernel_trunc_f32_4, kernel_trunc_f32_nc, kernel_trunc_f16, kernel_trunc_f16_4, kernel_trunc_f16_nc;
+    cl_kernel kernel_log_f32, kernel_log_f32_4, kernel_log_f32_nc, kernel_log_f16, kernel_log_f16_4, kernel_log_f16_nc;
     cl_kernel kernel_softplus_f32, kernel_softplus_f32_4, kernel_softplus_f32_nc;
     cl_kernel kernel_softplus_f16, kernel_softplus_f16_4, kernel_softplus_f16_nc;
     cl_kernel kernel_upscale;
@@ -5194,6 +5195,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         CL_UNARY_EXT_K(ceil)
         CL_UNARY_EXT_K(round)
         CL_UNARY_EXT_K(trunc)
+        CL_UNARY_EXT_K(log)
 #undef CL_UNARY_EXT_K
         CL_CHECK((backend_ctx->kernel_xielu_f32 = clCreateKernel(prog, "kernel_xielu_f32", &err), err));
         CL_CHECK((backend_ctx->kernel_xielu_f16 = clCreateKernel(prog, "kernel_xielu_f16", &err), err));
@@ -12849,6 +12851,8 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                    (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16);
         case GGML_OP_ADD_ID:
             return op->src[0]->type == GGML_TYPE_F32;
+        case GGML_OP_LOG:
+            return op->src[0]->type == op->type && (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16);
         case GGML_OP_SQR:
         case GGML_OP_SQRT:
             return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
@@ -21896,6 +21900,7 @@ GGML_CL_UNARY_EXT_WRAP(ggml_cl_floor,       floor)
 GGML_CL_UNARY_EXT_WRAP(ggml_cl_ceil,        ceil)
 GGML_CL_UNARY_EXT_WRAP(ggml_cl_round,       round)
 GGML_CL_UNARY_EXT_WRAP(ggml_cl_trunc,       trunc)
+GGML_CL_UNARY_EXT_WRAP(ggml_cl_log,         log)
 
 #undef GGML_CL_UNARY_EXT_WRAP
 
@@ -41818,6 +41823,12 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
                 return false;
             }
             func = ggml_cl_sub;
+            break;
+        case GGML_OP_LOG:
+            if (!any_on_device) {
+                return false;
+            }
+            func = ggml_cl_log;
             break;
         case GGML_OP_SQR:
             if (!any_on_device) {
