@@ -74,6 +74,14 @@ export const IMAGE_FILE_TYPES = {
 	}
 } as const;
 
+/** Rendering defaults for PDF pages converted to images. PDF.js maps 1.0 scale to 72 DPI. */
+export const PDF_RENDERING = {
+	DEFAULT_DPI: 108,
+	MAX_DPI: 600,
+	MIN_DPI: 72,
+	POINTS_PER_INCH: 72
+} as const;
+
 /** `content` that messages stored before the text was kept carry for a PDF sent as images. */
 export const PDF_AS_IMAGES_LEGACY_CONTENT_REGEX = /^PDF file with \d+ pages$/;
 

@@ -1,3 +1,4 @@
+import { clampPdfDpi } from './pdf-dpi';
 import { convertPDFToImage, convertPDFToText } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isLikelyTextFile, readFileAsText } from './text-files';
@@ -152,7 +153,7 @@ export async function parseFilesToMessageExtras(
 				if (shouldProcessAsImages) {
 					// Process PDF as images (only for vision models)
 					try {
-						const images = await convertPDFToImage(file.file);
+						const images = await convertPDFToImage(file.file, clampPdfDpi(currentConfig.pdfDpi));
 						// kept for the preview's Text view; the model only receives the images
 						const content = file.textContent ?? (await convertPDFToText(file.file).catch(() => ''));
 
