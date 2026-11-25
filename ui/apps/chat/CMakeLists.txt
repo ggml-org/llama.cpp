@@ -17,6 +17,11 @@ if(DEFINED LLAMA_WEBUI_HF_BUCKET)
     message(DEPRECATION "LLAMA_WEBUI_HF_BUCKET is deprecated, use LLAMA_UI_HF_BUCKET instead")
 endif()
 
+# a name without a namespace is the old default kept by the CMake cache: it is in ggml-org
+if(NOT LLAMA_UI_HF_BUCKET MATCHES "/")
+    set(LLAMA_UI_HF_BUCKET "ggml-org/${LLAMA_UI_HF_BUCKET}")
+endif()
+
 # Resolve HF asset version: explicit env var > derived from build number > unset
 if(DEFINED ENV{HF_WEBUI_VERSION})
     set(HF_UI_VERSION "$ENV{HF_WEBUI_VERSION}")
