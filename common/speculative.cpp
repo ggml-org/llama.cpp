@@ -1047,14 +1047,6 @@ protected:
         target_layer_ids_n = llama_model_target_layer_ids_n(model_dft);
         GGML_ASSERT(target_layer_ids_n > 0 && "DFlash model has no target_layer_ids");
 
-        const int32_t n_layer_tgt = llama_model_n_layer(model_tgt);
-        for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
-            const int32_t id = target_layer_ids[k];
-            if (id < 0 || id > n_layer_tgt) {
-                throw std::runtime_error("DFlash target layer or visit is out of range: " + std::to_string(id));
-            }
-        }
-
         n_embd_tgt    = llama_model_n_embd(model_tgt);
         n_embd_dec    = llama_model_n_embd(model_dft);
         n_embd_enc    = (int32_t) target_layer_ids_n * n_embd_tgt;
