@@ -11,7 +11,6 @@
  */
 
 import {
-	type ContentPart,
 	createHarness,
 	type InferenceClient,
 	type InferenceEvent,
@@ -40,7 +39,6 @@ import {
 import { BuiltInTool, ToolPermissionDecision, ToolSource } from '#lib/enums/index.ts';
 import {
 	AttachmentType,
-	ContentPartType,
 	HarnessEventType,
 	InferenceEventType,
 	MessageRole,
@@ -88,7 +86,7 @@ import {
 	isAbortError,
 	throwIfAborted
 } from '#lib/utils/index.ts';
-import { audioContentPart, imageContentPart } from '#lib/utils/media-content-parts.ts';
+import { toolResultMediaParts } from '#lib/utils/media-content-parts.ts';
 import { SvelteMap } from 'svelte/reactivity';
 
 function createDefaultSession(): AgenticSession {
@@ -438,41 +436,6 @@ class AgenticStore {
 			: (IMAGE_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_IMAGE_EXTENSION);
 
 		return `${MCP_ATTACHMENT_NAME_PREFIX}-${Date.now()}-${index}.${extension}`;
-	}
-
-	/**
-	 * The media of a tool result as content parts, only what the model can read.
-	 */
-	private async buildContentParts(
-		attachments: DatabaseMessageExtra[],
-		effectiveModel: string
-	): Promise<ContentPart[]> {
-		const contentParts: ContentPart[] = [];
-		const maxMegapixels = settingsStore.getConfig(SETTINGS_KEYS.MAX_IMAGE_RESOLUTION);
-
-		for (const attachment of attachments) {
-			if (attachment.type === AttachmentType.AUDIO) {
-				if (modelsStore.props.modelSupportsAudio(effectiveModel)) {
-					contentParts.push(audioContentPart(attachment));
-				}
-			} else if (attachment.type === AttachmentType.IMAGE) {
-				if (modelsStore.props.modelSupportsVision(effectiveModel)) {
-					contentParts.push(
-						// a tool can return a format the cap cannot draw: send it as it is
-						await imageContentPart(attachment, maxMegapixels).catch(() => ({
-							image_url: { url: attachment.base64Url },
-							type: ContentPartType.IMAGE_URL
-						}))
-					);
-				} else {
-					console.info(
-						`[AgenticStore] Skipping image attachment (model "${effectiveModel}" does not support vision)`
-					);
-				}
-			}
-		}
-
-		return contentParts;
 	}
 
 	/**
@@ -837,7 +800,14 @@ class AgenticStore {
 			details: attachments,
 			durationMs,
 			isError: execution.isError,
-			parts: await this.buildContentParts(attachments, effectiveModel)
+			parts: await toolResultMediaParts(
+				attachments,
+				{
+					audio: modelsStore.props.modelSupportsAudio(effectiveModel),
+					vision: modelsStore.props.modelSupportsVision(effectiveModel)
+				},
+				settingsStore.getConfig(SETTINGS_KEYS.MAX_IMAGE_RESOLUTION)
+			)
 		};
 	}
 

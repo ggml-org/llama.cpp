@@ -47,13 +47,19 @@ import { isAbortError } from '#lib/utils/abort.ts';
 import { ApiError } from '#lib/utils/api-fetch.ts';
 import { getAuthHeaders, getJsonHeaders } from '#lib/utils/api-headers.ts';
 import { formatAttachmentText } from '#lib/utils/formatters.ts';
-import { audioContentPart, imageContentPart } from '#lib/utils/media-content-parts.ts';
+import {
+	audioContentPart,
+	imageContentPart,
+	toolResultMediaParts
+} from '#lib/utils/media-content-parts.ts';
 import { streamIdentity } from '#lib/utils/stream-identity.ts';
 
 /** How stored messages are shaped for the model a request goes to. */
 export interface ApiMessageConversionOptions {
 	/** False when the model has no audio input: voice messages go as their transcript. */
 	audioInput?: boolean;
+	/** False when the model has no vision: the images of tool results stay out. */
+	visionInput?: boolean;
 }
 
 interface ResumableStreamState {
@@ -140,13 +146,13 @@ export class ChatService {
 	}
 
 	/**
-	 * How messages are shaped for `model`: whether it takes audio, known only once its
-	 * modalities are. Unknown modalities keep the audio, as before voice messages.
+	 * How messages are shaped for `model`: whether it takes audio and images, known only
+	 * once its modalities are. Unknown modalities keep the audio, as before voice messages.
 	 */
 	static conversionOptionsFor(model?: string | null): ApiMessageConversionOptions {
 		const modalities = modelsStore.props.getModelModalities(model ?? '');
 
-		return modalities ? { audioInput: modalities.audio } : {};
+		return modalities ? { audioInput: modalities.audio, visionInput: modalities.vision } : {};
 	}
 
 	/**
@@ -160,8 +166,17 @@ export class ChatService {
 	): Promise<ApiChatMessageData> {
 		// Handle tool result messages (role: 'tool')
 		if (message.role === MessageRole.TOOL && message.toolCallId) {
+			// the media goes along as in the run that called the tool, the model reads it the same way
+			const mediaParts = await toolResultMediaParts(
+				message.extra ?? [],
+				{ audio: options.audioInput === true, vision: options.visionInput === true },
+				settingsStore.getConfig(SETTINGS_KEYS.MAX_IMAGE_RESOLUTION)
+			);
+
 			return {
-				content: message.content,
+				content: mediaParts.length
+					? [{ text: message.content, type: ContentPartType.TEXT }, ...mediaParts]
+					: message.content,
 				role: MessageRole.TOOL,
 				tool_call_id: message.toolCallId
 			};

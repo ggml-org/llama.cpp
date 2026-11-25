@@ -8,8 +8,12 @@ import {
 import { AttachmentType, MessageRole, MessageType } from '#lib/enums/index.ts';
 import type { ApiChatMessageData } from '#lib/types/api.js';
 import type { DatabaseMessage, DatabaseMessageExtraImageFile } from '#lib/types/database.js';
+import { withoutRepeatedAttachments } from '#lib/utils/media-content-parts.ts';
 
 type ContextMessage = ApiChatMessageData | DatabaseMessage;
+
+// the roles whose messages hold images the model reads
+const MEDIA_ROLES: ReadonlySet<string> = new Set([MessageRole.USER, MessageRole.TOOL]);
 
 function isStored(message: ContextMessage): message is DatabaseMessage {
 	return 'convId' in message;
@@ -40,10 +44,14 @@ export function findReferencedImage(
 function withImageNotes(message: DatabaseMessage): DatabaseMessage {
 	const notes: string[] = [];
 	const extra = [];
+	const kept = new Set(withoutRepeatedAttachments(message.extra ?? []));
 
 	for (const [index, attachment] of (message.extra ?? []).entries()) {
 		if (attachment.type === AttachmentType.IMAGE) {
-			notes.push(buildEvictedImageNote(attachment.name, attachmentReference(message, index)));
+			// a repeated copy is the same image, one note covers it
+			if (kept.has(attachment)) {
+				notes.push(buildEvictedImageNote(attachment.name, attachmentReference(message, index)));
+			}
 		} else {
 			extra.push(attachment);
 		}
@@ -59,7 +67,8 @@ function withImageNotes(message: DatabaseMessage): DatabaseMessage {
 }
 
 /**
- * Takes the images out of the user turns that are far behind. A note stays in
+ * Takes the images out of the turns that are far behind: the user's attachments and
+ * the images of tool results, read_media's own included. A note stays in
  * the place of each one and tells the model how to load it again with read_media.
  * Only the copy sent to the model changes, the stored messages keep their images.
  *
@@ -83,6 +92,6 @@ export function evictOldImages<T extends ContextMessage>(messages: T[], keepTurn
 	const cut = turnStarts[steps * keepTurns];
 
 	return messages.map((m, i) =>
-		i < cut && isStored(m) && m.role === MessageRole.USER ? (withImageNotes(m) as T) : m
+		i < cut && isStored(m) && MEDIA_ROLES.has(m.role) ? (withImageNotes(m) as T) : m
 	);
 }

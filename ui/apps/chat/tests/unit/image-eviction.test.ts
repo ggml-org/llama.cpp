@@ -64,6 +64,24 @@ describe('evictOldImages', () => {
 		expect(messages[0].extra).toEqual([image('cat.png')]);
 	});
 
+	it('takes the images of an old tool result out too, one note for a repeated copy', () => {
+		const messages = turns(2 * KEEP_TURNS);
+		const toolResult = makeMessage('tool-0-id', MessageRole.TOOL, 'File: shot.png', [
+			image('shot.png'),
+			image('shot.png')
+		]);
+
+		messages.splice(2, 0, toolResult);
+
+		const evicted = evictOldImages(messages, KEEP_TURNS)[2];
+
+		expect(evicted.extra).toEqual([]);
+		expect(evicted.content).toBe(
+			`File: shot.png\n${buildEvictedImageNote('shot.png', 'attachment:tool-0-i/1')}`
+		);
+		expect(findReferencedImage('attachment:tool-0-i/1', messages)).toEqual(image('shot.png'));
+	});
+
 	it('moves the cut once per keepTurns turns, not every turn', () => {
 		const withImageAt = (count: number, at: number) => {
 			const messages = turns(count);
