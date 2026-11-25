@@ -74,7 +74,7 @@ static bool can_reuse_attn_mask(
         const llama_kv_cache_context * mctx,
         const llama_ubatch & ubatch,
         const llama_cparams & cparams) {
-    const uint32_t n_kv_rows = cparams.fused_kv_rows ? mctx->get_n_kv_rows() : 0;
+    const uint32_t n_kv_rows = cparams.fused_kv_rows && cparams.kv_unified ? mctx->get_n_kv_rows() : 0;
     const uint32_t n_slices  = llama_kv_cache::get_n_kv_slices(ubatch);
     const auto     n_tokens  = ubatch.n_tokens;
 
@@ -111,7 +111,7 @@ static llm_attn_mask build_attn_inp_attn_mask(
 
     attn_mask.n_kv = mctx->get_n_kv();
 
-    const uint32_t n_kv_rows = cparams.fused_kv_rows ? mctx->get_n_kv_rows() : 0;
+    const uint32_t n_kv_rows = cparams.fused_kv_rows && cparams.kv_unified ? mctx->get_n_kv_rows() : 0;
 
     if (n_kv_rows == 0) {
         attn_mask.rows = nullptr;

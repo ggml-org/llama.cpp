@@ -11928,6 +11928,175 @@ void ggml_compute_forward_top_k_mask(
     }
 }
 
+// ggml_compute_forward_top_k_rows
+
+// one list per group of n_group rows: the picks live in any row of the group, then the extra cells of each row
+// the rows past ne1 that complete the last group have no picks and no extra cells
+static void ggml_compute_forward_top_k_rows_grouped(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * top_k  = dst->src[0];
+    const ggml_tensor * score  = dst->src[1];
+    const ggml_tensor * blocks = dst->src[2];
+    const ggml_tensor * extra  = dst->src[3];
+
+    const int64_t n_kv    = ggml_get_op_params_i32(dst, 0);
+    const int64_t n_group = ggml_get_op_params_i32(dst, 1);
+    const int64_t n_res   = dst->ne[0];
+    const int64_t n_top   = top_k->ne[0];
+    const int64_t ne1     = top_k->ne[1];
+    const int64_t ne2     = top_k->ne[2];
+    const int64_t ne3     = top_k->ne[3];
+    const int64_t n_grp1  = (ne1 + n_group - 1)/n_group;
+    const int64_t n_blk   = blocks ? blocks->ne[0] : 1;
+    const int64_t n_pick  = blocks ? blocks->ne[1] : score ? score->ne[0] : n_kv;
+    const int64_t n_extra = extra ? extra->ne[0] : 0;
+    const bool    is_list = dst->type == GGML_TYPE_I32;
+
+    // bit j: the pick is live in row j of the group
+    std::vector<uint32_t> rows_of(n_pick);
+
+    auto store = [&](int64_t i1, int64_t i2, int64_t i3, int64_t e, int32_t c, bool keep) {
+        char * dst_row = (char *) dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3];
+        switch (dst->type) {
+            case GGML_TYPE_I32: ((int32_t     *) dst_row)[e] = c; break;
+            case GGML_TYPE_F16: ((ggml_fp16_t *) dst_row)[e] = GGML_CPU_FP32_TO_FP16(keep ? 0.0f : -INFINITY); break;
+            case GGML_TYPE_F32: ((float       *) dst_row)[e] = keep ? 0.0f : -INFINITY; break;
+            default: GGML_ABORT("unsupported type");
+        }
+    };
+
+    const int64_t n_groups = n_grp1*ne2*ne3;
+    for (int64_t ig = params->ith; ig < n_groups; ig += params->nth) {
+        const int64_t g  = ig % n_grp1;
+        const int64_t i2 = (ig / n_grp1) % ne2;
+        const int64_t i3 = ig / (n_grp1*ne2);
+
+        std::fill(rows_of.begin(), rows_of.end(), 0);
+        for (int64_t j = 0; j < n_group && g*n_group + j < ne1; ++j) {
+            const int64_t i1 = g*n_group + j;
+            const char * top_k_row = (const char *) top_k->data + i1*top_k->nb[1] + i2*top_k->nb[2] + i3*top_k->nb[3];
+            for (int64_t k = 0; k < n_top; ++k) {
+                const int32_t p = *(const int32_t *) (top_k_row + k*top_k->nb[0]);
+                if (p < 0 || p >= n_pick) {
+                    continue;
+                }
+                if (score) {
+                    const float s = *(const float *) ((const char *) score->data
+                        + p*score->nb[0] + i1*score->nb[1] + i2*score->nb[2] + i3*score->nb[3]);
+                    if (!(s > -INFINITY)) {
+                        continue;
+                    }
+                }
+                rows_of[p] |= 1u << j;
+            }
+        }
+
+        // the list stores the cell once, the mask stores each row's visibility of it
+        auto emit = [&](int64_t e, int32_t c, uint32_t rows) {
+            c = c >= 0 && c < n_kv ? c : -1;
+            if (is_list) {
+                store(g, i2, i3, e, c, false);
+                return;
+            }
+            for (int64_t j = 0; j < n_group; ++j) {
+                store(g*n_group + j, i2, i3, e, c, c >= 0 && ((rows >> j) & 1));
+            }
+        };
+
+        int64_t e = 0;
+        for (int64_t p = 0; p < n_pick; ++p) {
+            if (rows_of[p] == 0) {
+                continue;
+            }
+            for (int64_t i = 0; i < n_blk; ++i) {
+                const int32_t c = blocks ? *(const int32_t *) ((const char *) blocks->data + i*blocks->nb[0] + p*blocks->nb[1]) : (int32_t) p;
+                emit(e++, c, rows_of[p]);
+            }
+        }
+        for (int64_t j = 0; j < n_group; ++j) {
+            const int64_t i1 = g*n_group + j;
+            for (int64_t i = 0; i < n_extra; ++i) {
+                const int32_t c = i1 < ne1 ? *(const int32_t *) ((const char *) extra->data
+                    + i*extra->nb[0] + i1*extra->nb[1] + i2*extra->nb[2] + i3*extra->nb[3]) : -1;
+                emit(e++, c, 1u << j);
+            }
+        }
+        GGML_ASSERT(e <= n_res);
+        for (; e < n_res; ++e) {
+            emit(e, -1, 0);
+        }
+    }
+}
+
+void ggml_compute_forward_top_k_rows(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * top_k  = dst->src[0];
+    const ggml_tensor * score  = dst->src[1];
+    const ggml_tensor * blocks = dst->src[2];
+    const ggml_tensor * extra  = dst->src[3];
+
+    GGML_ASSERT(dst->nb[0] == ggml_type_size(dst->type));
+
+    if (ggml_get_op_params_i32(dst, 1) > 1) {
+        ggml_compute_forward_top_k_rows_grouped(params, dst);
+        return;
+    }
+
+    const int64_t n_kv    = ggml_get_op_params_i32(dst, 0);
+    const int64_t n_res   = dst->ne[0];
+    const int64_t ne1     = dst->ne[1];
+    const int64_t ne2     = dst->ne[2];
+    const int64_t n_rows  = ggml_nrows(dst);
+    const int64_t n_top   = top_k->ne[0];
+    const int64_t n_blk   = blocks ? blocks->ne[0] : 1;
+    const int64_t n_pick  = blocks ? blocks->ne[1] : score ? score->ne[0] : n_kv;
+    const int64_t n_extra = extra ? extra->ne[0] : 0;
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    for (int64_t ir = ith; ir < n_rows; ir += nth) {
+        const int64_t i1 = ir % ne1;
+        const int64_t i2 = (ir / ne1) % ne2;
+        const int64_t i3 = ir / (ne1*ne2);
+
+        char * dst_row = (char *) dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3];
+
+        const char * top_k_row = (const char *) top_k->data + i1*top_k->nb[1] + i2*top_k->nb[2] + i3*top_k->nb[3];
+        const char * extra_row = extra ? (const char *) extra->data + i1*extra->nb[1] + i2*extra->nb[2] + i3*extra->nb[3] : nullptr;
+
+        for (int64_t e = 0; e < n_res; ++e) {
+            int32_t c = -1;
+            if (e < n_top*n_blk) {
+                const int32_t p = *(const int32_t *) (top_k_row + (e / n_blk)*top_k->nb[0]);
+                bool live = p >= 0 && p < n_pick;
+                if (live && score) {
+                    const float s = *(const float *) ((const char *) score->data
+                        + p*score->nb[0] + i1*score->nb[1] + i2*score->nb[2] + i3*score->nb[3]);
+                    live = s > -INFINITY;
+                }
+                if (live) {
+                    c = blocks ? *(const int32_t *) ((const char *) blocks->data + (e % n_blk)*blocks->nb[0] + p*blocks->nb[1]) : p;
+                }
+            } else if (e < n_top*n_blk + n_extra) {
+                c = *(const int32_t *) (extra_row + (e - n_top*n_blk)*extra->nb[0]);
+            }
+            if (c < 0 || c >= n_kv) {
+                c = -1;
+            }
+
+            switch (dst->type) {
+                case GGML_TYPE_I32: ((int32_t     *) dst_row)[e] = c; break;
+                case GGML_TYPE_F16: ((ggml_fp16_t *) dst_row)[e] = GGML_CPU_FP32_TO_FP16(c >= 0 ? 0.0f : -INFINITY); break;
+                case GGML_TYPE_F32: ((float       *) dst_row)[e] = c >= 0 ? 0.0f : -INFINITY; break;
+                default: GGML_ABORT("unsupported type");
+            }
+        }
+    }
+}
+
 // ggml_compute_forward_rwkv_wkv7
 
 static void ggml_compute_forward_rwkv_wkv7_f32(

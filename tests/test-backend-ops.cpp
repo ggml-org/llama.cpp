@@ -10475,6 +10475,54 @@ struct test_top_k_mask : public test_case {
     }
 };
 
+// GGML_OP_TOP_K_ROWS: the inputs of test_top_k_mask, the result is a list of cells per group of n_group rows
+struct test_top_k_rows : public test_top_k_mask {
+    const ggml_type type_res;
+    const int64_t   n_pad;
+    const int64_t   n_group;
+
+    std::string vars() override {
+        return VARS_TO_STR11(type_res, n_kv, n_blk, n_pick, n_top, n_extra, score, nb, ns, n_pad, n_group);
+    }
+
+    test_top_k_rows(ggml_type type_res = GGML_TYPE_I32, int64_t n_kv = 256, int64_t n_blk = 4, int64_t n_pick = 64,
+            int64_t n_top = 16, int64_t n_extra = 3, bool score = true, int64_t nb = 32, int64_t ns = 1, int64_t n_pad = 5,
+            bool real = false, int64_t n_group = 1)
+        : test_top_k_mask(GGML_TYPE_F16, n_kv, n_blk, n_pick, n_top, n_extra, score, nb, 1, ns, real), type_res(type_res), n_pad(n_pad),
+          n_group(n_group) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * top_k = ggml_new_tensor_4d(ctx, GGML_TYPE_I32, n_top, nb, 1, ns);
+        ggml_set_name(top_k, "top_k");
+
+        ggml_tensor * s = nullptr;
+        if (score) {
+            s = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, n_pick, nb, 1, ns);
+            ggml_set_name(s, "score");
+        }
+
+        ggml_tensor * blocks = nullptr;
+        if (n_blk > 0) {
+            blocks = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_blk, n_pick);
+            ggml_set_name(blocks, "blocks");
+        }
+
+        ggml_tensor * extra = nullptr;
+        if (n_extra > 0) {
+            extra = ggml_new_tensor_4d(ctx, GGML_TYPE_I32, n_extra, nb, 1, ns);
+            ggml_set_name(extra, "extra");
+        }
+
+        const int64_t n_list = n_group == 1 ? n_top : std::min(n_pick, n_group*n_top);
+        const int64_t n_res  = n_list*std::max<int64_t>(n_blk, 1) + n_group*n_extra + n_pad;
+
+        ggml_tensor * out = ggml_top_k_rows(ctx, top_k, s, blocks, extra, n_kv, n_res, n_group, type_res);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 // Deserializable generic test case
 struct input_tensor {
     ggml_type type;
@@ -11292,6 +11340,32 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         // one mask row for all rows and streams (QSA)
         test_cases.emplace_back(new test_top_k_mask(type, 1001, 4, 70, 16, 3, true, 7, 1, 1, false, true));
         test_cases.emplace_back(new test_top_k_mask(type, 512, 8, 16, 32, 7, true, 5, 1, 4, false, true));
+    }
+
+    for (ggml_type type : {GGML_TYPE_I32, GGML_TYPE_F16, GGML_TYPE_F32}) {
+        test_cases.emplace_back(new test_top_k_rows(type));
+        test_cases.emplace_back(new test_top_k_rows(type, 1001, 4, 70, 16, 3, true, 7, 1, 0));
+        test_cases.emplace_back(new test_top_k_rows(type, 512, 8, 16, 32, 7, true, 5, 4, 37));
+        test_cases.emplace_back(new test_top_k_rows(type, 256, 0, 0, 16, 0, false, 32, 1, 0));
+        test_cases.emplace_back(new test_top_k_rows(type, 1024, 4, 200, 32, 5, false, 3, 2, 11));
+        // QSA decode: 512 pools of 4 cells and 3 tail cells, padded to 2304
+        test_cases.emplace_back(new test_top_k_rows(type, 8192, 4, 2048, 512, 3, true, 1, 1, 253, true));
+        test_cases.emplace_back(new test_top_k_rows(type, 8192, 4, 2048, 512, 3, true, 4, 1, 253));
+        // one list per group of rows
+        test_cases.emplace_back(new test_top_k_rows(type, 256, 4, 64, 16, 3, true, 32, 1, 5, false, 8));
+        test_cases.emplace_back(new test_top_k_rows(type, 1001, 4, 70, 16, 3, true, 8, 1, 0, false, 4));
+        test_cases.emplace_back(new test_top_k_rows(type, 512, 8, 16, 32, 7, true, 10, 4, 37, false, 2));
+        test_cases.emplace_back(new test_top_k_rows(type, 256, 0, 0, 16, 0, false, 32, 1, 0, false, 8));
+        test_cases.emplace_back(new test_top_k_rows(type, 1024, 4, 200, 32, 5, false, 6, 2, 11, false, 3));
+        test_cases.emplace_back(new test_top_k_rows(type, 4096, 4, 1024, 16, 3, true, 64, 1, 7, false, 32));
+        // a partial last group
+        test_cases.emplace_back(new test_top_k_rows(type, 256, 4, 64, 16, 3, true, 10, 1, 5, false, 4));
+        test_cases.emplace_back(new test_top_k_rows(type, 1001, 4, 70, 16, 3, true, 13, 2, 0, false, 8));
+        test_cases.emplace_back(new test_top_k_rows(type, 256, 0, 0, 16, 2, false, 3, 1, 1, false, 8));
+        // QSA prefill: 8 tokens per list
+        test_cases.emplace_back(new test_top_k_rows(type, 32768, 4, 8192, 512, 3, true, 64, 1, 232, false, 8));
+        test_cases.emplace_back(new test_top_k_rows(type, 32768, 4, 8192, 512, 3, true, 16, 1, 232, true, 8));
+        test_cases.emplace_back(new test_top_k_rows(type, 32768, 4, 8192, 512, 3, true, 21, 1, 232, true, 8));
     }
 
     // glu ops
@@ -13828,6 +13902,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_flash_attn_ext_kv_rows( 64, 4, 2, 3000, 768,  nb, n_slices, GGML_TYPE_Q8_0));
             test_cases.emplace_back(new test_flash_attn_ext_kv_rows(512, 2, 8, 4096, 1024, nb, n_slices));
             test_cases.emplace_back(new test_flash_attn_ext_kv_rows(256, 8, 2, 4096, 1280, nb, n_slices));
+        }
+    }
+    // decode: one token per slice, non-f16 K/V take the vec kernel
+    for (ggml_type type_KV : {GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
+        for (int64_t n_slices : {1, 3, 8}) {
+            test_cases.emplace_back(new test_flash_attn_ext_kv_rows(256, 2, 12, 8192, 2304, 1, n_slices, type_KV));
+            test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 4, 4, 5000, 512, 2, n_slices, type_KV));
+        }
+    }
+    // QSA prefill: a few tokens per slice over their group's cells
+    for (ggml_type type_KV : {GGML_TYPE_F16, GGML_TYPE_Q8_0}) {
+        for (int64_t nb : {2, 7, 8}) {
+            test_cases.emplace_back(new test_flash_attn_ext_kv_rows(256, 2, 12, 32768, nb*2304, nb, 4, type_KV));
         }
     }
 
