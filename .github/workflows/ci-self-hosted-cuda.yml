@@ -187,7 +187,7 @@ jobs:
           hf_bucket: ggml-org/cache
           save: true
 
-  gpu-rocm-gfx1201:
+  gpu-rocm-7_2:
     runs-on: [self-hosted, Linux, gfx1201, 1accel]
     container: "rocm/dev-ubuntu-24.04:7.2.4-complete"
 
@@ -210,7 +210,7 @@ jobs:
       - name: ccache-buckets-restore
         uses: ./.github/actions/ccache-buckets
         with:
-          key: self-hosted-gpu-rocm-gfx1201
+          key: self-hosted-gpu-rocm-7_2-gfx1201
           folder: llama.cpp
           hf_bucket: ggml-org/cache
 
@@ -226,7 +226,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
         with:
-          key: self-hosted-gpu-rocm-gfx1201
+          key: self-hosted-gpu-rocm-7_2-gfx1201
           folder: llama.cpp
           evict-old-files: 1d
           hf_bucket: ggml-org/cache
