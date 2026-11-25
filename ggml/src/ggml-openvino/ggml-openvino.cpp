@@ -1141,7 +1141,6 @@ static void ggml_backend_openvino_free(ggml_backend_t backend) {
             // reuses it instead of recompiling against zeroed weights.
             if (!ggml_openvino_weight_buffers_released()) {
                 cache->graphs.clear();
-                ov_clear_imported_blobs();
                 std::lock_guard<std::mutex> fingerprints_lock(g_fallback_fingerprints_mutex);
                 g_fallback_fingerprints.clear();
             }

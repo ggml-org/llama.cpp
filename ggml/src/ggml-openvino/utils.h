@@ -13,6 +13,7 @@
 #include <openvino/runtime/core.hpp>
 #include <openvino/runtime/infer_request.hpp>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -96,48 +97,55 @@ struct graph_key_hash {
     }
 };
 
+// One compiled model of a static graph: its phase, KV window, SWA window and output count.
+struct ov_static_variant_key {
+    bool prefill = false;
+    int attention_size = -1;
+    int attention_size_swa = -1;
+    int output_len = 1;
+
+    bool operator<(const ov_static_variant_key & other) const {
+        return std::tie(prefill, output_len, attention_size_swa, attention_size) <
+               std::tie(other.prefill, other.output_len, other.attention_size_swa, other.attention_size);
+    }
+
+    bool operator==(const ov_static_variant_key & other) const { return !(*this < other) && !(other < *this); }
+};
+
+struct ov_static_variant {
+    ov::CompiledModel model;
+    // Created on first use, so only the requests a run needs hold NPU memory.
+    std::shared_ptr<ov::InferRequest> request;
+    std::vector<std::string> input_names;
+    std::vector<std::string> output_names;
+};
+
 struct decoder_runtime_ctx {
     decoder_runtime_ctx(std::shared_ptr<std::mutex> mutex) : mutex(std::move(mutex)) {}
 
     std::shared_ptr<std::mutex> mutex;
     std::shared_ptr<GgmlOvDecoder> ptr;
-    // Attention sizes and output count the cached prefill model was built with; decode calls overwrite the
-    // decoder's.
-    int prefill_attention_size = -1;
-    int prefill_attention_size_swa = -1;
-    int prefill_output_len = -1;
-    // KV window of the decode model in the compiled pair (GGML_OPENVINO_NPU_BLOB_PREBUILD).
-    int decode_attention_size = -1;
-    std::string shared_key;
-    std::map<int, std::shared_ptr<ov::InferRequest>> decode_window_requests;
-    // The prefill model only writes the KV cache; logits come from one decode step (GGML_OPENVINO_KV_ONLY_PREFILL).
+
+    // Static path: the compiled models of this graph with their requests (ov_graph_compute_static).
+    std::map<ov_static_variant_key, ov_static_variant> variants;
+    // The prefill models only write the KV cache; logits come from one decode step (GGML_OPENVINO_KV_ONLY_PREFILL).
     bool kv_only_prefill = false;
+    bool decode_unfold = false;
+    uint64_t cache_base_extra = 0;
+    // With a model cache, every window of a phase is exported (or imported) on the first call of that phase.
+    bool prefill_prepared = false;
+    bool decode_prepared = false;
+    // NPU weightless bank: the weights file and NPUW bank of every blob of this graph, and the file's layout once
+    // it is known in this process (new blobs resolve their weights through it).
+    std::string weights_path;
+    std::string weights_bank;
+    std::shared_ptr<ggml_openvino_weights_layout> weights_layout;
 };
 
 struct ov_compiled_graph {
     ov::CompiledModel decode;
-    ov::CompiledModel prefill;
     std::vector<std::string> input_names;
     std::vector<std::string> output_names;
-    std::vector<std::string> prefill_input_names;
-    std::vector<std::string> prefill_output_names;
-    // Extra decode models for other KV windows, built on first use with the pair's settings.
-    int decode_attention_size = -1;
-    std::map<int, ov::CompiledModel> decode_windows;
-    ov::AnyMap decode_config;
-    uint64_t cache_base_extra = 0;
-    // Model cache fingerprints of the pair's prefill and decode models (0 without a model cache).
-    uint64_t prefill_fp = 0;
-    uint64_t decode_fp = 0;
-    bool decode_unfold = false;
-    // NPU with GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR: the pair's weights file, and its layout when the pair was
-    // compiled in this process (window models then resolve the shared weights through the same file).
-    bool weightless_bank = false;
-    std::string weights_path;
-    std::shared_ptr<ggml_openvino_weights_layout> weights_layout;
-    // Compute params the pair's decode model was built with; window models derive from them.
-    ComputeParams decode_c_params;
-    bool kv_only_prefill = false;
 };
 
 // Only compilation and cache publication use this mutex. Requests, decoders and
@@ -159,11 +167,8 @@ struct ov_runtime_context {
     bool stateful;
     std::unordered_map<graph_key, std::shared_ptr<decoder_runtime_ctx>, graph_key_hash> decoder_cache;
     std::unordered_map<graph_key, std::shared_ptr<ov::InferRequest>, graph_key_hash> infer_request_cache;
-    std::unordered_map<graph_key, std::shared_ptr<ov::InferRequest>, graph_key_hash> infer_request_cache_prefill;
     std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_input_names_cache;
     std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_output_names_cache;
-    std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_input_names_cache_prefill;
-    std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_output_names_cache_prefill;
     // LRU order of decoder_cache's keys, oldest (least recently used) at the front. A pipeline
     // that interleaves distinct graph shapes every call -- e.g. DFlash cycling target/draft/
     // injection graphs every round -- needs a slot per shape open at once; a single-entry cache
@@ -198,11 +203,8 @@ struct ov_runtime_context {
         lru_keys.pop_front();
         decoder_cache.erase(victim);
         infer_request_cache.erase(victim);
-        infer_request_cache_prefill.erase(victim);
         ov_input_names_cache.erase(victim);
         ov_output_names_cache.erase(victim);
-        ov_input_names_cache_prefill.erase(victim);
-        ov_output_names_cache_prefill.erase(victim);
     }
 
     // Make room for one more graph shape if the cache is at capacity, then mark `key` as most
@@ -217,11 +219,8 @@ struct ov_runtime_context {
     void clear_caches_locked() {
         decoder_cache.clear();
         infer_request_cache.clear();
-        infer_request_cache_prefill.clear();
         ov_input_names_cache.clear();
         ov_output_names_cache.clear();
-        ov_input_names_cache_prefill.clear();
-        ov_output_names_cache_prefill.clear();
         lru_keys.clear();
         kv_state_input_name_map.clear();
         stateful_kv_size = 0;
@@ -234,9 +233,6 @@ struct ov_runtime_context {
 };
 
 enum ggml_status ov_graph_compute(struct ggml_cgraph * cgraph, ggml_backend_t backend);
-
-// Releases the cached blobs this process imported (GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR).
-void ov_clear_imported_blobs();
 
 void print_input_tensor_info(const std::string & name, const ov::Tensor & tensor);
 
