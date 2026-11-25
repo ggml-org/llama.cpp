@@ -7,16 +7,28 @@
 
 #if !defined(GGML_USE_MUSA)
 
+// columns per thread and pass of flash_attn_mask_to_sparse_indices, fewer for 8 queries to limit the registers for the loads
+static constexpr __host__ __device__ int flash_attn_mask_to_sparse_indices_cpt(const int ncols1) {
+    return ncols1 == 1 ? 64 : 16;
+}
+
 // one list per group of ncols1 queries: a column is selected if any query of the group can see it
-template <int ncols1, bool oob>
-__launch_bounds__(256, 1)
+// coalesced loads of 8 columns, a thread then compacts cpt contiguous columns
+// aligned: ne30, s31, s33 are multiples of 8 and the mask is 16 byte aligned, else the 8 columns are loaded one by one
+template <int ncols1, bool oob, bool aligned, int nthreads>
+__launch_bounds__(nthreads, 1)
 static __global__ void flash_attn_mask_to_sparse_indices(
         const half * mask_ptr, int32_t * indices_ptr, int32_t * counts_ptr, const int ne30, const int n_queries,
         const int n_kv_max, const int64_t s31, const int64_t s33) {
     ggml_cuda_pdl_sync();
 
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
-    constexpr int values_per_lane = 8;
+    constexpr int nwarps    = nthreads/warp_size;
+    constexpr int cpt       = flash_attn_mask_to_sparse_indices_cpt(ncols1);
+    constexpr int nload     = cpt/8;
+    using sel_t = std::conditional_t<nload == 8, uint64_t, std::conditional_t<nload == 4, uint32_t, uint16_t>>;
+    static_assert(nload == 8 || nload == 4 || nload == 2, "bad nload");
+
     const int tid      = threadIdx.x;
     const int warp     = tid / warp_size;
     const int lane     = tid % warp_size;
@@ -29,70 +41,81 @@ static __global__ void flash_attn_mask_to_sparse_indices(
     const half * mask = mask_ptr + sequence*s33 + q0*s31;
     int32_t * indices = indices_ptr + (int64_t(sequence)*gridDim.x + group)*n_kv_max;
 
-    __shared__ int warp_offsets[256/warp_size];
-    __shared__ int row_count;
-    __shared__ int chunk_count;
+    __shared__ int warp_counts[nwarps];
+    // one byte per 8 columns: bit e is set if column 8*c + e is selected
+    __shared__ __align__(8) uint8_t sel_lds[nthreads*nload];
 
-    if (tid == 0) {
-        row_count = 0;
-    }
-    __syncthreads();
-
-    for (int i0 = 0; i0 < ne30; i0 += blockDim.x*values_per_lane) {
-        ggml_cuda_thread_mask_t selected_warp[values_per_lane];
-        int warp_count = 0;
+    int row_count = 0;
+    for (int i0 = 0; i0 < ne30; i0 += nthreads*cpt) {
+        // -inf has all exponent bits set, as does any other non-finite value
+        int4 tmp[ncols1][nload];
 #pragma unroll
-        for (int item = 0; item < values_per_lane; ++item) {
-            const int i = i0 + (warp*values_per_lane + item)*warp_size + lane;
-            bool selected = false;
-            if (i < ne30) {
+        for (int q = 0; q < ncols1; ++q) {
 #pragma unroll
-                for (int q = 0; q < ncols1; ++q) {
-                    selected |= (!oob || q < q1 - q0) && isfinite(__half2float(mask[q*s31 + i]));
+            for (int l = 0; l < nload; ++l) {
+                const int i = i0 + 8*(l*nthreads + tid);
+                tmp[q][l] = make_int4(0x7c007c00, 0x7c007c00, 0x7c007c00, 0x7c007c00);
+                if (oob && q >= q1 - q0) {
+                    continue;
+                }
+                if constexpr (aligned) {
+                    if (i < ne30) {
+                        ggml_cuda_memcpy_1<16>(&tmp[q][l], mask + q*s31 + i);
+                    }
+                } else {
+                    __align__(16) half h[8];
+#pragma unroll
+                    for (int e = 0; e < 8; ++e) {
+                        h[e] = i + e < ne30 ? mask[q*s31 + i + e] : __ushort_as_half(0x7c00);
+                    }
+                    ggml_cuda_memcpy_1<16>(&tmp[q][l], h);
                 }
             }
-            selected_warp[item] = ggml_cuda_ballot((int) selected);
-            warp_count += ggml_cuda_popc(selected_warp[item]);
         }
-
-        if (lane == 0) {
-            warp_offsets[warp] = warp_count;
-        }
-        __syncthreads();
-
-        if (tid == 0) {
-            int offset = 0;
 #pragma unroll
-            for (int iw = 0; iw < 256/warp_size; ++iw) {
-                const int count = warp_offsets[iw];
-                warp_offsets[iw] = offset;
-                offset += count;
-            }
-            chunk_count = offset;
-        }
-        __syncthreads();
-
-        const ggml_cuda_thread_mask_t lane_mask = lane == 0 ? 0 : ((ggml_cuda_thread_mask_t)1 << lane) - 1;
-        int warp_item_offset = 0;
+        for (int l = 0; l < nload; ++l) {
+            uint32_t sel_l = 0;
 #pragma unroll
-        for (int item = 0; item < values_per_lane; ++item) {
-            const int i = i0 + (warp*values_per_lane + item)*warp_size + lane;
-            const int dst = row_count + warp_offsets[warp] + warp_item_offset + ggml_cuda_popc(selected_warp[item] & lane_mask);
-            if ((selected_warp[item] & ((ggml_cuda_thread_mask_t)1 << lane)) && dst < n_kv_max) {
-                indices[dst] = i;
+            for (int q = 0; q < ncols1; ++q) {
+                const int w[4] = {tmp[q][l].x, tmp[q][l].y, tmp[q][l].z, tmp[q][l].w};
+#pragma unroll
+                for (int k = 0; k < 4; ++k) {
+                    sel_l |= uint32_t((w[k] & 0x00007c00) != 0x00007c00) << (2*k + 0);
+                    sel_l |= uint32_t((w[k] & 0x7c000000) != 0x7c000000) << (2*k + 1);
+                }
             }
-            warp_item_offset += ggml_cuda_popc(selected_warp[item]);
+            sel_lds[l*nthreads + tid] = sel_l;
         }
         __syncthreads();
 
-        if (tid == 0) {
-            row_count += chunk_count;
+        const int i_t = i0 + tid*cpt;
+        uint64_t sel = ((const sel_t *) sel_lds)[tid];
+
+        const int cnt  = __popcll(sel);
+        const int incl = warp_prefix_inclusive_sum<int, warp_size>(cnt);
+        if (lane == warp_size - 1) {
+            warp_counts[warp] = incl;
         }
+        __syncthreads();
+
+        int dst   = row_count + incl - cnt;
+        int total = 0;
+#pragma unroll
+        for (int w = 0; w < nwarps; ++w) {
+            const int c = warp_counts[w];
+            dst   += w < warp ? c : 0;
+            total += c;
+        }
+        while (sel != 0 && dst < n_kv_max) {
+            indices[dst++] = i_t + __ffsll((unsigned long long) sel) - 1;
+            sel &= sel - 1;
+        }
+        row_count += total;
         __syncthreads();
     }
 
     const int count = min(row_count, n_kv_max);
-    for (int i = count + tid; i < n_kv_max; i += blockDim.x) {
+    for (int i = count + tid; i < n_kv_max; i += nthreads) {
         indices[i] = -1;
     }
     if (tid == 0) {
@@ -102,6 +125,34 @@ static __global__ void flash_attn_mask_to_sparse_indices(
 
     // the dependent grid reads indices, signal once the row is complete
     ggml_cuda_pdl_lc();
+}
+
+template <bool aligned, int nthreads>
+static void launch_mask_to_sparse_indices(
+        const ggml_tensor * mask, int32_t * indices, int32_t * counts, const int32_t n_queries, const int32_t ncols1, const int32_t n_kv_max,
+        const int64_t s31, const int64_t s33, const dim3 blocks_num, cudaStream_t stream) {
+    const ggml_cuda_kernel_launch_params launch_params(blocks_num, dim3(nthreads, 1, 1), 0, stream);
+    const auto kernel = ncols1 == 1       ? flash_attn_mask_to_sparse_indices<1, false, aligned, nthreads> :
+                        n_queries % 8 != 0 ? flash_attn_mask_to_sparse_indices<8, true,  aligned, nthreads> :
+                                             flash_attn_mask_to_sparse_indices<8, false, aligned, nthreads>;
+    ggml_cuda_kernel_launch(kernel, launch_params,
+        (const half *) mask->data, indices, counts, int(mask->ne[0]), n_queries, n_kv_max, s31, s33);
+    CUDA_CHECK(cudaGetLastError());
+}
+
+template <bool aligned>
+static void launch_mask_to_sparse_indices(
+        const ggml_tensor * mask, int32_t * indices, int32_t * counts, const int32_t n_queries, const int32_t ncols1, const int32_t n_kv_max,
+        const int64_t s31, const int64_t s33, const dim3 blocks_num, cudaStream_t stream) {
+    // the smallest block that scans the row in one pass
+    const int64_t cpt = flash_attn_mask_to_sparse_indices_cpt(ncols1);
+    if (mask->ne[0] <= 256*cpt) {
+        launch_mask_to_sparse_indices<aligned, 256>(mask, indices, counts, n_queries, ncols1, n_kv_max, s31, s33, blocks_num, stream);
+    } else if (mask->ne[0] <= 512*cpt) {
+        launch_mask_to_sparse_indices<aligned, 512>(mask, indices, counts, n_queries, ncols1, n_kv_max, s31, s33, blocks_num, stream);
+    } else {
+        launch_mask_to_sparse_indices<aligned, 1024>(mask, indices, counts, n_queries, ncols1, n_kv_max, s31, s33, blocks_num, stream);
+    }
 }
 #endif // !defined(GGML_USE_MUSA)
 
@@ -114,18 +165,82 @@ void ggml_cuda_flash_attn_ext_compact_mask(
     const int64_t s31 = mask->nb[1] / sizeof(half);
     const int64_t s33 = mask->nb[3] / sizeof(half);
     const dim3 blocks_num((n_queries + ncols1 - 1)/ncols1, mask->ne[3], 1);
-    const dim3 block_dim(256, 1, 1);
-    const ggml_cuda_kernel_launch_params launch_params(blocks_num, block_dim, 0, stream);
     // the last group of queries is partial only if ncols1 does not divide n_queries
     GGML_ASSERT(ncols1 == 1 || ncols1 == 8);
-    const auto kernel = ncols1 == 1       ? flash_attn_mask_to_sparse_indices<1, false> :
-                        n_queries % 8 != 0 ? flash_attn_mask_to_sparse_indices<8, true>  :
-                                             flash_attn_mask_to_sparse_indices<8, false>;
-    ggml_cuda_kernel_launch(kernel, launch_params,
-        (const half *) mask->data, indices, counts, int(mask->ne[0]), n_queries, n_kv_max, s31, s33);
-    CUDA_CHECK(cudaGetLastError());
+
+    if (mask->ne[0] % 8 == 0 && s31 % 8 == 0 && s33 % 8 == 0 && (uintptr_t) mask->data % 16 == 0) {
+        launch_mask_to_sparse_indices<true>(mask, indices, counts, n_queries, ncols1, n_kv_max, s31, s33, blocks_num, stream);
+    } else {
+        launch_mask_to_sparse_indices<false>(mask, indices, counts, n_queries, ncols1, n_kv_max, s31, s33, blocks_num, stream);
+    }
 #endif // !defined(GGML_USE_MUSA)
 }
+
+#ifdef GGML_USE_HIP
+bool ggml_cuda_flash_attn_ext_tile_shall_use_sparse(const int cc, const ggml_tensor * dst, const int DKQ, const int DV) {
+    const ggml_tensor * Q    = dst->src[0];
+    const ggml_tensor * K    = dst->src[1];
+    const ggml_tensor * mask = dst->src[3];
+
+    const int n_kv_max = ggml_get_op_params_i32(dst, 4);
+    const int64_t n_kv = K->ne[1];
+
+    float max_bias = 0.0f;
+    memcpy(&max_bias, (const float *) dst->op_params + 1, sizeof(float));
+
+    if (!mask || mask->ne[0] != n_kv || mask->ne[1] < Q->ne[1] ||
+        mask->ne[2] != 1 || dst->src[5] || n_kv_max <= 0 || max_bias != 0.0f) {
+        return false;
+    }
+
+    // CDNA and RDNA: the cost of the sparse kernel grows with the number of gathered rows nq*n_kv_max,
+    // the break even depends on the fraction of selected positions n_kv_max/n_kv. Tuned on gfx908, gfx1100 and gfx1201.
+    const int64_t n_gather = Q->ne[1]*int64_t(n_kv_max);
+    if (GGML_CUDA_CC_IS_CDNA(cc)) {
+        if (4*int64_t(n_kv_max) > n_kv) {
+            return 2*n_gather <= n_kv;
+        }
+        return n_gather <= (8*int64_t(n_kv_max) > n_kv ? 4 : 8)*n_kv;
+    }
+    if (GGML_CUDA_CC_IS_RDNA2(cc) || GGML_CUDA_CC_IS_RDNA3(cc)) {
+        if (2*int64_t(n_kv_max) > n_kv) {
+            return false;
+        }
+        return 4*int64_t(n_kv_max) > n_kv ? n_gather <= 4*n_kv : true;
+    }
+    if (GGML_CUDA_CC_IS_RDNA4(cc)) {
+        if (2*int64_t(n_kv_max) > n_kv) {
+            return false;
+        }
+        if (4*int64_t(n_kv_max) > n_kv) {
+            return n_gather <= n_kv;
+        }
+        return 8*int64_t(n_kv_max) > n_kv ? n_gather <= 2*n_kv : true;
+    }
+
+    if (GGML_CUDA_CC_IS_GCN(cc)) {
+        // Sparse compaction is not beneficial when the selected positions exceed 25% of the KV cache.
+        if (n_kv_max > n_kv/4) {
+            return false;
+        }
+
+        const int gqa_ratio = Q->ne[2] / K->ne[2];
+
+        if (DKQ == 72  && DV == 72)  return n_kv >= 8192;
+        if (DKQ == 80  && DV == 80)  return n_kv >= 16384;
+        if (DKQ == 96  && DV == 96)  return n_kv >= 16384;
+        if (DKQ == 112 && DV == 112) return n_kv >= 16384;
+        if (DKQ == 128 && DV == 128) return n_kv >= 8192;
+        if (DKQ == 192 && DV == 128) return n_kv >= 16384;
+        if (DKQ == 256 && DV == 256) return n_kv >= (gqa_ratio == 2 ? 32768 : 4096);
+        if (DKQ == 320 && DV == 256) return n_kv >= 65536 && gqa_ratio >= 64;
+        if (DKQ == 512 && DV == 512) return n_kv >= 16384 && gqa_ratio >= 16;
+        if (DKQ == 576 && DV == 512) return n_kv >= 32768 && gqa_ratio >= 32;
+    }
+
+    return false;
+}
+#endif // GGML_USE_HIP
 
 bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(const int cc, const ggml_tensor * dst, const int ncols1, const int ncols2) {
 #ifdef GGML_USE_MUSA
@@ -746,6 +861,16 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     if (amd_mfma_available(cc) && ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, 1, 16)) {
         return BEST_FATTN_KERNEL_MMA_F16;
     }
+
+#ifdef GGML_USE_HIP
+    // the sparse tile kernel needs ncols2 > 1, it also handles quantized K/V by converting them to f16
+    // the conversion of all of K/V is slower than the vector kernel at small batch sizes unless the GQA ratio is large
+    const bool quantized_kv = ggml_is_quantized(K->type) || ggml_is_quantized(V->type);
+    if (gqa_opt_applies && gqa_ratio % 2 == 0 && (!quantized_kv || Q->ne[1] > 2 || gqa_ratio >= 12) &&
+            ggml_cuda_flash_attn_ext_tile_shall_use_sparse(cc, dst, Q->ne[0], V->ne[0])) {
+        return BEST_FATTN_KERNEL_TILE;
+    }
+#endif // GGML_USE_HIP
 
     // AMD MFMA needs a certain minimum batch size to outscale the tile kernel for large head sizes.
     if (amd_mfma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
