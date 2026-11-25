@@ -45,18 +45,18 @@
 			class="max-h-[60vh] overflow-y-auto rounded-md border border-border/30 bg-muted/50 matte-well dark:border-border/20 dark:bg-muted/80"
 		>
 			{#if diff.length === 0}
-				<p class="p-4 text-sm text-muted-foreground">No settings would change.</p>
+				<p class="p-4 text-body-sm text-muted-foreground">No settings would change.</p>
 			{:else}
 				<div class="divide-y divide-border/30 dark:divide-border/20">
 					{#each diff as entry (entry.key)}
 						<div class="flex items-center gap-3 p-3">
 							<div class="min-w-0 flex-1">
-								<p class="truncate text-sm font-medium">{entry.label}</p>
+								<p class="truncate text-label">{entry.label}</p>
 
-								<p class="truncate text-xs text-muted-foreground">{entry.key}</p>
+								<p class="truncate text-caption text-muted-foreground">{entry.key}</p>
 							</div>
 
-							<div class="flex shrink-0 items-center gap-2 text-sm">
+							<div class="flex shrink-0 items-center gap-2 text-body-sm">
 								<span class="line-through text-muted-foreground">{formatValue(entry.from)}</span>
 
 								<ArrowRight class="h-4 w-4 text-muted-foreground" />
