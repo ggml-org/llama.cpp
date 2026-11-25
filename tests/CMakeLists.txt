@@ -165,6 +165,13 @@ if (NOT WIN32)
     )
 endif()
 
+# grammar prefill past the generation prompt: SentencePiece (space after special tokens) and byte-level BPE vocabs
+llama_build(test-grammar-prefill.cpp)
+llama_test(test-grammar-prefill NAME test-grammar-prefill-llama-spm  LABEL behavior  ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-spm.gguf)
+llama_test(test-grammar-prefill NAME test-grammar-prefill-phi-3      LABEL behavior  ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-phi-3.gguf)
+llama_test(test-grammar-prefill NAME test-grammar-prefill-qwen2      LABEL behavior  ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-qwen2.gguf)
+llama_test(test-grammar-prefill NAME test-grammar-prefill-gemma-4    LABEL behavior  ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-gemma-4.gguf)
+
 if (LLAMA_LLGUIDANCE)
     llama_build_and_test(test-grammar-llguidance.cpp  LABEL "main behavior"  ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-bpe.gguf)
 endif ()
