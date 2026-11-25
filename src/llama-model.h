@@ -424,6 +424,13 @@ struct llama_layer {
     struct ggml_tensor * dflash_ffn_conv_base  = nullptr;
     struct ggml_tensor * dflash_ffn_conv_proj  = nullptr;
 
+    // per-layer context K/V from mixed target features (Inkling2 DSpark)
+    struct ggml_tensor * dflash_ctx_mix         = nullptr;
+    struct ggml_tensor * dflash_ctx_norm        = nullptr;
+    struct ggml_tensor * dflash_wk_ctx          = nullptr;
+    struct ggml_tensor * dflash_wv_ctx          = nullptr;
+    struct ggml_tensor * dflash_attn_k_ctx_norm = nullptr;
+
     struct ggml_tensor * lilicorr_attn_norm       = nullptr;
     struct ggml_tensor * lilicorr_mlp_norm        = nullptr;
     struct ggml_tensor * lilicorr_attn_in_proj    = nullptr;
@@ -743,12 +750,23 @@ struct llama_prec_policy {
     // the key is the weight tensor `res->src[0]`, stores the recommended activation precision type
     std::unordered_map<const ggml_tensor *, ggml_prec> prec_src1;
 
-    bool apply(ggml_tensor * res) const;
+    bool apply(ggml_tensor * res, const ggml_tensor * w = nullptr) const;
 
     void set_acc(const ggml_tensor * w, ggml_prec prec) {
         if (w) {
             prec_acc[w] = prec;
         }
+    }
+
+    void set_src1(const ggml_tensor * w, ggml_prec prec) {
+        if (w) {
+            prec_src1[w] = prec;
+        }
+    }
+
+    ggml_prec get_src1(const ggml_tensor * w) const {
+        const auto it = prec_src1.find(w);
+        return it != prec_src1.end() ? it->second : GGML_PREC_UNDEFINED;
     }
 
     void load(llama_model_loader & ml, const llama_model & model);
@@ -939,6 +957,9 @@ struct llama_model {
     struct ggml_tensor * dspark_joint_proj   = nullptr; // rnn markov head
     struct ggml_tensor * dspark_joint_proj_b = nullptr;
     struct ggml_tensor * dspark_mask_embd    = nullptr; // per-slot mask embeddings
+    struct ggml_tensor * dspark_markov_w2_b      = nullptr;
+    struct ggml_tensor * dspark_markov_ctx_mix   = nullptr; // rnn markov head: f_rnn from target features
+    struct ggml_tensor * dspark_markov_ctx_norm  = nullptr;
 
     // zaya1
     struct ggml_tensor * res_scale_in   = nullptr;
@@ -1146,6 +1167,7 @@ struct llama_model_base : public llama_model {
     void load_hparams(llama_model_loader & ml) override;
     void load_vocab  (llama_model_loader & ml) override;
     bool load_tensors(llama_model_loader & ml) override;
+    void load_prec_policy(llama_model_loader & ml);
 
     // model must define these
     void load_arch_hparams(llama_model_loader & ml) override = 0;

@@ -17,6 +17,14 @@ import { defineConfig, loadEnv, searchForWorkspaceRoot } from 'vite';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LLAMA_VOICE_SOURCE = resolve(__dirname, '../../lib/voice/src');
+// the harness has no build step in the repo: the app compiles it from source
+const LLAMA_HARNESS_ENTRY = resolve(__dirname, '../../lib/harness/src/index.ts');
+const LLAMA_HARNESS_TRACE_ENTRY = resolve(__dirname, '../../lib/harness/src/trace/index.ts');
+// what a chat-only build (VITE_PUBLIC_AGENTIC=false) gets in place of the harness: its trace phrasing, no loop
+const LLAMA_HARNESS_CHAT_ONLY_ENTRY = resolve(
+	__dirname,
+	'src/lib/stores/agentic/harness-chat-only.ts'
+);
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const browserBaseConfig: any = {
 	enabled: true,
@@ -85,6 +93,14 @@ export default defineConfig(({ mode }) => {
 					replacement: resolve(LLAMA_VOICE_SOURCE, 'svelte/index.ts')
 				},
 				{ find: /^@ggml-org\/llama-voice$/, replacement: resolve(LLAMA_VOICE_SOURCE, 'index.ts') },
+				{ find: /^@ggml-org\/llama-harness\/trace$/, replacement: LLAMA_HARNESS_TRACE_ENTRY },
+				{
+					find: /^@ggml-org\/llama-harness$/,
+					replacement:
+						env.VITE_PUBLIC_AGENTIC === 'false'
+							? LLAMA_HARNESS_CHAT_ONLY_ENTRY
+							: LLAMA_HARNESS_ENTRY
+				},
 				{ find: 'katex-fonts', replacement: resolve('node_modules/katex/dist/fonts') }
 			]
 		},
@@ -94,7 +110,8 @@ export default defineConfig(({ mode }) => {
 				allow: [
 					searchForWorkspaceRoot(process.cwd()),
 					resolve(__dirname, 'tests'),
-					LLAMA_VOICE_SOURCE
+					LLAMA_VOICE_SOURCE,
+					resolve(__dirname, '../../lib/harness')
 				]
 			},
 			headers: {

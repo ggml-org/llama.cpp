@@ -2,7 +2,6 @@
 	import * as HoverCard from '@ggml-org/llama-ui/ui/hover-card';
 	import { Globe, Loader2 } from '@lucide/svelte';
 	import { CollapsibleContentBlock } from '#lib/components/app/index.ts';
-	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '#lib/constants/index.ts';
 	import { AgenticSectionType } from '#lib/enums/index.ts';
 	import { mcpStore } from '#lib/stores/index.ts';
 	import type { AgenticSection, SearchResult } from '#lib/types/index.ts';
@@ -29,13 +28,6 @@
 
 	const results = $derived(extractSearchResults(section.toolResult));
 	const query = $derived(extractSearchQuery(section.toolArgs));
-
-	// Same icon-resolution chain as ChatMessageToolCallBlockDefault so
-	// MCP-server branding is consistent across both views. Spinner wins
-	// while the call is in flight so the user sees execution status.
-	const iconUrl = $derived(showSpinner ? null : mcpStore.getServerFaviconForTool(section.toolName));
-	const icon = $derived(showSpinner ? Loader2 : undefined);
-	const iconClass = $derived(showSpinner ? ICON_CLASS_SPIN : ICON_CLASS_DEFAULT);
 
 	// Verb reflects state: "Searching" while the call is in flight, "Searched"
 	// once results (or a definitive empty response) have arrived. Lets the
@@ -154,7 +146,14 @@
 	{/if}
 {/snippet}
 
-<CollapsibleContentBlock class="my-2" {icon} {iconClass} {iconUrl} {onToggle} {open} {title}>
+<CollapsibleContentBlock
+	class="my-2"
+	inlineChevron
+	{onToggle}
+	{open}
+	shimmerTitle={showSpinner}
+	{title}
+>
 	{#if results.length > 0}
 		<div class="flex flex-wrap items-center gap-2 pb-1">
 			{#each results as result (result.url)}

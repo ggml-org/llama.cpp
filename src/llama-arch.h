@@ -498,6 +498,7 @@ enum llm_kv {
     LLM_KV_DFLASH_CONV_GROUP_SIZE,
     LLM_KV_DFLASH_SELECTOR_RANK,
     LLM_KV_DFLASH_SELECTOR_TOP_K,
+    LLM_KV_DFLASH_HAS_MARKOV_CONTEXT,
     LLM_KV_LILICORR_HIDDEN_SIZE,
     LLM_KV_LILICORR_CANDIDATE_TOPK,
     LLM_KV_LILICORR_NUM_HEADS,
@@ -918,6 +919,8 @@ enum llm_tensor {
     LLM_TENSOR_DSPARK_CONF_PROJ,
     LLM_TENSOR_DSPARK_JOINT_PROJ,
     LLM_TENSOR_DSPARK_MASK_EMBD,
+    LLM_TENSOR_DSPARK_MARKOV_CTX_MIX,
+    LLM_TENSOR_DSPARK_MARKOV_CTX_NORM,
     LLM_TENSOR_ENGRAM_KV,
     LLM_TENSOR_ENGRAM_GATE,
     LLM_TENSOR_DFLASH_ATTN_CONV_BASE,
@@ -927,6 +930,11 @@ enum llm_tensor {
     LLM_TENSOR_DFLASH_SELECTOR_PREV,
     LLM_TENSOR_DFLASH_SELECTOR_NEXT,
     LLM_TENSOR_DFLASH_SELECTOR_HIDDEN,
+    LLM_TENSOR_DFLASH_CTX_MIX,
+    LLM_TENSOR_DFLASH_CTX_NORM,
+    LLM_TENSOR_DFLASH_ATTN_K_CTX,
+    LLM_TENSOR_DFLASH_ATTN_V_CTX,
+    LLM_TENSOR_DFLASH_ATTN_K_CTX_NORM,
     LLM_TENSOR_LILICORR_TOKEN_PROJ,
     LLM_TENSOR_LILICORR_PASS_HIDDEN_PROJ,
     LLM_TENSOR_LILICORR_SLOT_EMBD,
@@ -1037,3 +1045,4 @@ bool llm_arch_is_diffusion      (const llm_arch & arch);
 bool llm_arch_supports_sm_tensor(const llm_arch & arch);
 bool llm_arch_supports_rs_rollback(const llm_arch & arch);
 bool llm_arch_supports_mixed_batch(const llm_arch & arch);
+bool llm_arch_mmid_down_bf16(const llm_arch & arch);

@@ -447,11 +447,12 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_NORM_BEFORE_RESIDUAL,  "%s.norm_before_residual" },
     { LLM_KV_NORM_BEFORE_FC,        "%s.norm_before_fc"       },
 
-    { LLM_KV_DFLASH_BLOCK_SIZE,       "%s.block_size"       },
-    { LLM_KV_DFLASH_CONV_KERNEL_SIZE, "%s.conv_kernel_size" },
-    { LLM_KV_DFLASH_CONV_GROUP_SIZE,  "%s.conv_group_size"  },
-    { LLM_KV_DFLASH_SELECTOR_RANK,    "%s.selector_rank"    },
-    { LLM_KV_DFLASH_SELECTOR_TOP_K,   "%s.selector_top_k"   },
+    { LLM_KV_DFLASH_BLOCK_SIZE,         "%s.block_size"         },
+    { LLM_KV_DFLASH_CONV_KERNEL_SIZE,   "%s.conv_kernel_size"   },
+    { LLM_KV_DFLASH_CONV_GROUP_SIZE,    "%s.conv_group_size"    },
+    { LLM_KV_DFLASH_SELECTOR_RANK,      "%s.selector_rank"      },
+    { LLM_KV_DFLASH_SELECTOR_TOP_K,     "%s.selector_top_k"     },
+    { LLM_KV_DFLASH_HAS_MARKOV_CONTEXT, "%s.has_markov_context" },
 
     { LLM_KV_LILICORR_HIDDEN_SIZE,       "lilicorr.hidden_size"      },
     { LLM_KV_LILICORR_CANDIDATE_TOPK,    "lilicorr.candidate_topk"   },
@@ -913,6 +914,8 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_DSPARK_CONF_PROJ,                       "conf_proj" },
     { LLM_TENSOR_DSPARK_JOINT_PROJ,                      "joint_proj" },
     { LLM_TENSOR_DSPARK_MASK_EMBD,                       "mask_embd" },
+    { LLM_TENSOR_DSPARK_MARKOV_CTX_MIX,                  "markov_ctx_mix" },
+    { LLM_TENSOR_DSPARK_MARKOV_CTX_NORM,                 "markov_ctx_norm" },
     { LLM_TENSOR_ENGRAM_KV,                              "blk.%d.engram_kv" },
     { LLM_TENSOR_ENGRAM_GATE,                            "blk.%d.engram_gate" },
     { LLM_TENSOR_DFLASH_ATTN_CONV_BASE,                  "blk.%d.attn_conv_base" },
@@ -922,6 +925,11 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_DFLASH_SELECTOR_PREV,                   "selector_predecessor" },
     { LLM_TENSOR_DFLASH_SELECTOR_NEXT,                   "selector_successor" },
     { LLM_TENSOR_DFLASH_SELECTOR_HIDDEN,                 "selector_hidden" },
+    { LLM_TENSOR_DFLASH_CTX_MIX,                         "blk.%d.ctx_mix" },
+    { LLM_TENSOR_DFLASH_CTX_NORM,                        "blk.%d.ctx_norm" },
+    { LLM_TENSOR_DFLASH_ATTN_K_CTX,                      "blk.%d.attn_k_ctx" },
+    { LLM_TENSOR_DFLASH_ATTN_V_CTX,                      "blk.%d.attn_v_ctx" },
+    { LLM_TENSOR_DFLASH_ATTN_K_CTX_NORM,                 "blk.%d.attn_k_ctx_norm" },
     { LLM_TENSOR_LILICORR_TOKEN_PROJ,                    "lilicorr.token_proj" },
     { LLM_TENSOR_LILICORR_PASS_HIDDEN_PROJ,              "lilicorr.pass_hidden_proj" },
     { LLM_TENSOR_LILICORR_SLOT_EMBD,                     "lilicorr.slot_embedding" },
@@ -1340,6 +1348,8 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_DSPARK_CONF_PROJ,           {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
     {LLM_TENSOR_DSPARK_JOINT_PROJ,          {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
     {LLM_TENSOR_DSPARK_MASK_EMBD,           {LLM_TENSOR_LAYER_INPUT,     GGML_OP_GET_ROWS}},
+    {LLM_TENSOR_DSPARK_MARKOV_CTX_MIX,      {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_DSPARK_MARKOV_CTX_NORM,     {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
     {LLM_TENSOR_ENGRAM_KV,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_ENGRAM_GATE,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_DFLASH_ATTN_CONV_BASE,      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
@@ -1349,6 +1359,11 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_DFLASH_SELECTOR_PREV,       {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_GET_ROWS}},
     {LLM_TENSOR_DFLASH_SELECTOR_NEXT,       {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_GET_ROWS}},
     {LLM_TENSOR_DFLASH_SELECTOR_HIDDEN,     {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_DFLASH_CTX_MIX,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_DFLASH_CTX_NORM,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_DFLASH_ATTN_K_CTX,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_DFLASH_ATTN_V_CTX,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_DFLASH_ATTN_K_CTX_NORM,     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_LILICORR_TOKEN_PROJ,        {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
     {LLM_TENSOR_LILICORR_PASS_HIDDEN_PROJ,  {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
     {LLM_TENSOR_LILICORR_SLOT_EMBD,         {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_ADD}},
@@ -1589,6 +1604,18 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
             return false;
         default:
             return true;
+    }
+}
+
+bool llm_arch_mmid_down_bf16(const llm_arch & arch) {
+    switch (arch) {
+        case LLM_ARCH_MISTRAL4:
+        case LLM_ARCH_MELLUM:
+        case LLM_ARCH_FLINT:
+        case LLM_ARCH_LAGUNA:
+            return true;
+        default:
+            return false;
     }
 }
 

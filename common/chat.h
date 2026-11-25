@@ -232,11 +232,34 @@ struct common_chat_tool {
     bool defer_loading = false;
 };
 
-enum common_chat_tool_choice {
+enum common_chat_tool_choice_mode {
     COMMON_CHAT_TOOL_CHOICE_AUTO,
     COMMON_CHAT_TOOL_CHOICE_REQUIRED,
     COMMON_CHAT_TOOL_CHOICE_NONE,
 };
+
+struct common_chat_tool_choice {
+    common_chat_tool_choice_mode mode = COMMON_CHAT_TOOL_CHOICE_AUTO;
+
+    // Names of the tools the model may call, every tool when empty.
+    std::vector<std::string> allowed;
+
+    common_chat_tool_choice() = default;
+    common_chat_tool_choice(common_chat_tool_choice_mode mode) : mode(mode) {}
+
+    bool operator==(common_chat_tool_choice_mode other) const { return mode == other; }
+    bool operator!=(common_chat_tool_choice_mode other) const { return mode != other; }
+
+    bool allows(const std::string & name) const;
+
+    bool is_auto() const { return mode == COMMON_CHAT_TOOL_CHOICE_AUTO; }
+    bool is_required() const { return mode == COMMON_CHAT_TOOL_CHOICE_REQUIRED; }
+    bool is_none() const { return mode == COMMON_CHAT_TOOL_CHOICE_NONE; }
+};
+
+// Keep the original tool indices when restricting the parser's tool set.
+void common_chat_foreach_tool(const common_json & tools, const common_chat_tool_choice & tool_choice,
+                              const std::function<void(size_t, const common_json &)> & fn);
 
 enum common_chat_format {
     COMMON_CHAT_FORMAT_CONTENT_ONLY,
@@ -372,6 +395,9 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
                                                      const std::string &        bos_token_override = "",
                                                      const std::string &        eos_token_override = "");
 
+// override special tokens for testing
+void        common_chat_templates_set_specials(struct common_chat_templates * tmpls, common_peg_tokens specials);
+
 bool        common_chat_templates_was_explicit(const struct common_chat_templates * tmpls);
 std::string common_chat_templates_source(const struct common_chat_templates * tmpls, const std::string & variant = "");
 
@@ -397,6 +423,9 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena & src_parser, const
 struct common_chat_session_params {
     bool echo  = false; // include the assistant prefill in the output when continuing a message
     bool debug = false; // enable debug output for the PEG parser
+
+    // tokenize the generation prompt when there is no vocab for testing
+    std::function<common_chat_input(const std::string &)> tokenize;
 };
 
 class common_chat_session {
@@ -452,7 +481,7 @@ class common_chat_session {
 const char *            common_reasoning_format_name(common_reasoning_format format);
 common_reasoning_format common_reasoning_format_from_name(const std::string & format);
 
-common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice);
+common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const common_json & tool_choice, const std::vector<common_chat_tool> & tools);
 
 bool common_chat_templates_support_enable_thinking(const common_chat_templates * chat_templates);
 

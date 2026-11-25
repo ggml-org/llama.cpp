@@ -315,13 +315,28 @@ struct common_chat_templates {
     bool add_bos;
     bool add_eos;
     bool has_explicit_template;  // Model had builtin template or template overridden was specified.
+    common_peg_tokens specials;
     std::unique_ptr<common_chat_template> template_default;  // always set (defaults to chatml)
     std::unique_ptr<common_chat_template> template_tool_use;
     std::unique_ptr<common_chat_template> template_tts;  // the prompt of a text to speak
     std::shared_ptr<common_tts_dicts> tts_dicts;         // dictionaries of the model for tts_dict(), by name
 };
 
-common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice) {
+bool common_chat_tool_choice::allows(const std::string & name) const {
+    return !is_none() && (allowed.empty() || std::find(allowed.begin(), allowed.end(), name) != allowed.end());
+}
+
+void common_chat_foreach_tool(const common_json & tools, const common_chat_tool_choice & tool_choice,
+                              const std::function<void(size_t, const common_json &)> & fn) {
+    for (size_t i = 0; i < tools.size(); i++) {
+        const auto & tool = tools[i];
+        if (tool_choice.allows(tool.at("function").at("name").get<std::string>())) {
+            fn(i, tool);
+        }
+    }
+}
+
+common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const common_json & tool_choice, const std::vector<common_chat_tool> & tools) {
     if (tool_choice == "auto") {
         return COMMON_CHAT_TOOL_CHOICE_AUTO;
     }
@@ -331,7 +346,44 @@ common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::strin
     if (tool_choice == "required") {
         return COMMON_CHAT_TOOL_CHOICE_REQUIRED;
     }
-    throw std::invalid_argument("Invalid tool_choice: " + tool_choice);
+    common_chat_tool_choice choice;
+    const auto type = tool_choice.value("type", json());
+    if (type == "function") {
+        choice.mode = COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        choice.allowed.push_back(tool_choice.at("function").at("name").get<std::string>());
+    } else if (type == "allowed_tools") {
+        const auto & allowed = tool_choice.at("allowed_tools");
+        const auto & mode = allowed.at("mode");
+        const auto & allowed_tools = allowed.at("tools");
+        if ((mode != "auto" && mode != "required") || !allowed_tools.is_array()) {
+            throw std::invalid_argument("allowed_tools requires mode auto or required and a tools array");
+        }
+        choice.mode = mode == "required" ? COMMON_CHAT_TOOL_CHOICE_REQUIRED : COMMON_CHAT_TOOL_CHOICE_AUTO;
+        for (const auto & tool : allowed_tools) {
+            if (tool.value("type", json()) != "function") {
+                throw std::invalid_argument("allowed_tools entries must have type function");
+            }
+            choice.allowed.push_back(tool.at("function").at("name").get<std::string>());
+        }
+        if (choice.allowed.empty()) {
+            if (choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
+                throw std::invalid_argument("Required allowed_tools must contain at least one function");
+            }
+            choice.mode = COMMON_CHAT_TOOL_CHOICE_NONE;
+        }
+    } else {
+        throw std::invalid_argument("Invalid tool_choice: " + tool_choice.dump());
+    }
+
+    for (const auto & name : choice.allowed) {
+        const auto n_matching = std::count_if(tools.begin(), tools.end(), [&](const common_chat_tool & tool) {
+            return tool.name == name;
+        });
+        if (name.empty() || n_matching != 1) {
+            throw std::invalid_argument("tool_choice function name must match exactly one supplied tool: " + name);
+        }
+    }
+    return choice;
 }
 
 bool common_chat_templates_support_enable_thinking(const common_chat_templates * chat_templates) {
@@ -802,6 +854,10 @@ void common_chat_templates_free(struct common_chat_templates * tmpls) {
     delete tmpls;
 }
 
+void common_chat_templates_set_specials(struct common_chat_templates * tmpls, common_peg_tokens specials) {
+    tmpls->specials = std::move(specials);
+}
+
 bool common_chat_templates_was_explicit(const struct common_chat_templates * tmpls) {
     return tmpls->has_explicit_template;
 }
@@ -978,6 +1034,7 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
     std::string token_eos = eos_token_override;
     bool        add_bos   = false;
     bool        add_eos   = false;
+    common_peg_tokens specials;
     if (model) {
         const auto * vocab     = llama_model_get_vocab(model);
         const auto   get_token = [&](llama_token token, const char * name, const char * jinja_variable_name) {
@@ -997,11 +1054,13 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
         token_eos = get_token(llama_vocab_eos(vocab), "EOS", "eos_token");
         add_bos   = llama_vocab_get_add_bos(vocab);
         add_eos   = llama_vocab_get_add_eos(vocab);
+        specials  = common_peg_tokens(vocab);
     }
     common_chat_templates_ptr tmpls(new common_chat_templates());
     tmpls->has_explicit_template = has_explicit_template;
     tmpls->add_bos               = add_bos;
     tmpls->add_eos               = add_eos;
+    tmpls->specials              = std::move(specials);
     try {
         tmpls->template_default = std::make_unique<common_chat_template>(default_template_src, token_bos, token_eos);
     } catch (const std::exception & e) {
@@ -1398,7 +1457,7 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const 
     }
 
     // LFM2.5 format detection: template uses plain "List of tools: [...]" with no special tokens
-    if (src.find("List of tools: [") != std::string::npos &&
+    if (src.find("List of tools: ") != std::string::npos &&
         src.find("<|tool_list_start|>") == std::string::npos) {
         LOG_DBG("Using specialized template: LFM2.5\n");
         return common_chat_params_init_lfm2_5;
@@ -1543,6 +1602,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     params.add_generation_prompt = inputs.add_generation_prompt;
     params.add_bos               = tmpls->add_bos;
     params.add_eos               = tmpls->add_eos;
+    params.specials              = tmpls->specials;
 
     params.continue_final_message = inputs.continue_final_message;
     if (params.continue_final_message != COMMON_CHAT_CONTINUATION_NONE) {
@@ -1825,6 +1885,7 @@ common_chat_input common_chat_input_tokenize(const llama_vocab * vocab, const st
     }
     if (input.text != text) {
         // the pieces do not give back the same text, keep the text without tokens
+        LOG_WRN("%s: token pieces do not match the text, parsing without token ids\n", __func__);
         return common_chat_input(text);
     }
     return input;
@@ -1935,10 +1996,16 @@ common_chat_session::common_chat_session(const common_chat_templates *        tm
     thinking_ends          = std::move(applied.thinking_end_tags);
 
     parser_params.format            = applied.format;
-    parser_params.generation_prompt = vocab ? common_chat_input_tokenize(vocab, applied.generation_prompt)
-                                            : common_chat_input(applied.generation_prompt);
     parser_params.debug             = params.debug;
     parser_params.parser            = std::move(applied.parser);
+
+    if (vocab) {
+        parser_params.generation_prompt = common_chat_input_tokenize(vocab, applied.generation_prompt);
+    } else if (params.tokenize) {
+        parser_params.generation_prompt = params.tokenize(applied.generation_prompt);
+    } else {
+        parser_params.generation_prompt = common_chat_input(applied.generation_prompt);
+    }
 
     delimiters = std::move(applied.message_delimiters);
 

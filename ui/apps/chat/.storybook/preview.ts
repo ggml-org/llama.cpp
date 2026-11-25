@@ -1,13 +1,15 @@
 import '../src/app.css';
 import { MEDIA_QUERIES } from '#lib/constants/pwa.constants.ts';
-import { SurfaceTheme } from '#lib/enums/ui.enums.ts';
-import { applySurfaceTheme } from '#lib/utils/css.ts';
+import { agenticMode } from '#lib/stores/agentic-mode.svelte.ts';
 // the docs pages' styles, shared with the library's Storybook
 import '../../../lib/ui/.storybook/docs.css';
 import { applyColorScheme } from './color-scheme';
 import ModeWatcherDecorator from './decorators/ModeWatcherDecorator.svelte';
 import TooltipProviderDecorator from './decorators/TooltipProviderDecorator.svelte';
 import type { Preview } from '@storybook/sveltekit';
+
+// the stories show the app as with a llama-server started with --agent
+agenticMode.serverHasTools = true;
 
 applyColorScheme();
 window.matchMedia(MEDIA_QUERIES.PREFERS_DARK).addEventListener('change', applyColorScheme);
@@ -97,31 +99,12 @@ const preview: Preview = {
 				],
 				title: 'Interaction pace'
 			}
-		},
-		// the light surface theme: Paper (white panels on a grey page) or Matte (grey glass on white)
-		surface: {
-			description: 'Light surface theme',
-			toolbar: {
-				dynamicTitle: true,
-				icon: 'paintbrush',
-				items: [
-					{ title: 'Paper', value: SurfaceTheme.PAPER },
-					{ title: 'Matte', value: SurfaceTheme.MATTE }
-				],
-				title: 'Surface'
-			}
 		}
 	},
 	initialGlobals: {
-		interactionPace: 'human',
-		surface: SurfaceTheme.PAPER
+		interactionPace: 'human'
 	},
 	decorators: [
-		(story, context) => {
-			applySurfaceTheme(context.globals.surface);
-
-			return story();
-		},
 		// `parameters.colorScheme` fixes a story to light or dark, whatever the viewer chose (a scene in a store screenshot)
 		(story, context) => ({
 			Component: ModeWatcherDecorator,

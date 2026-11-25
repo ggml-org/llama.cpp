@@ -1,21 +1,28 @@
 <script lang="ts">
-	import { COLLAPSIBLE_TRANSITION_MS } from '#lib/constants/index.ts';
+	import { cn } from '../utils';
+	import { COLLAPSIBLE_TRANSITION_MS } from '../../../constants';
 	import type { Snippet } from 'svelte';
+	import type { HTMLAttributes } from 'svelte/elements';
 
-	interface Props {
-		children: Snippet;
+	interface Props extends HTMLAttributes<HTMLDivElement> {
+		children?: Snippet;
 		open: boolean;
 	}
 
-	let { children, open }: Props = $props();
+	let { children, class: className, open, ...restProps }: Props = $props();
 
-	// rows stay mounted through the collapse transition so it can play; this is
-	// only the initial state, the effect below owns it afterwards
+	// The body stays mounted through the collapse so it can play, and unmounts once
+	// it is over: a closed collapsible costs nothing, even while its content would
+	// re-render on every streamed token. This is only the initial state, the effect
+	// below owns it afterwards.
 	// svelte-ignore state_referenced_locally
 	let contentMounted = $state(open);
 
+	// bits-ui rebuilds the snippet args (with `open`) when its transition ends; the derived keeps that from restarting the unmount timer
+	const isOpen = $derived(open);
+
 	$effect(() => {
-		if (open) {
+		if (isOpen) {
 			contentMounted = true;
 
 			return;
@@ -27,10 +34,10 @@
 	});
 </script>
 
-<div class="collapsible-region" data-expanded={open}>
+<div {...restProps} class={cn('collapsible-region', className)} data-expanded={isOpen}>
 	{#if contentMounted}
 		<div class="collapsible-region-content">
-			{@render children()}
+			{@render children?.()}
 		</div>
 	{/if}
 </div>
@@ -78,6 +85,12 @@
 			min-height: 0;
 			min-width: 0;
 			overflow: clip;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.collapsible-region {
+			transition: none;
 		}
 	}
 </style>

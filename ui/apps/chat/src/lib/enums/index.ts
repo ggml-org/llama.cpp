@@ -10,6 +10,8 @@ export {
 	AgenticSectionType,
 	ContinueIntentKind,
 	DiffLineKind,
+	HarnessEventType,
+	InferenceEventType,
 	ToolResultKind,
 	ToolCallType
 } from './agentic.enums';
@@ -29,7 +31,7 @@ export {
 	FileMentionEntryType
 } from './chat.enums';
 
-export { SessionRecordType } from './conversation-import.enums';
+export { DataExportScope, SessionRecordType } from './conversation-import.enums';
 
 export { BooleanString } from './boolean-string.enums';
 
@@ -105,7 +107,6 @@ export {
 	ScrollCarouselVariant,
 	SidebarAction,
 	SidebarSectionKind,
-	SurfaceTheme,
 	TooltipSide,
 	UrlProtocol
 } from './ui.enums';

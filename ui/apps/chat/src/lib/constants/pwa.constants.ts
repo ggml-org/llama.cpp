@@ -45,6 +45,10 @@ export const APPLE_ASSETS = {
 	TOUCH_ICON: 'apple-touch-icon-180x180.png'
 } as const;
 
+/**
+ * The web app manifest. In the browser APP_NAME follows the env; the manifest plugin runs in
+ * Node, where import.meta.env is not set, so it names the manifest with pwaManifest().
+ */
 export const PWA_MANIFEST = {
 	background_color: THEME_COLORS.BACKGROUND_LIGHT,
 	description: 'Local AI chat interface powered by llama.cpp',
@@ -67,6 +71,13 @@ export const PWA_MANIFEST = {
 	start_url: './',
 	theme_color: THEME_COLORS.BACKGROUND_LIGHT
 };
+
+/** PWA_MANIFEST with the name a build sets (VITE_PUBLIC_APP_NAME) */
+export function pwaManifest(env: Record<string, string | undefined>) {
+	const name = env.VITE_PUBLIC_APP_NAME || PWA_MANIFEST.name;
+
+	return { ...PWA_MANIFEST, name, short_name: name };
+}
 
 export const PWA_ICON_PATHS = {
 	MASKABLE_512: '/maskable-icon-512x512.png',

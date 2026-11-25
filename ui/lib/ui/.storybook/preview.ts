@@ -49,30 +49,7 @@ const preview: Preview = {
 			test: 'todo'
 		}
 	},
-	globalTypes: {
-		// the light surface theme: Paper (white panels on a grey page) or Matte (grey glass on white)
-		surface: {
-			description: 'Light surface theme',
-			toolbar: {
-				dynamicTitle: true,
-				icon: 'paintbrush',
-				items: [
-					{ title: 'Paper', value: 'paper' },
-					{ title: 'Matte', value: 'matte' }
-				],
-				title: 'Surface'
-			}
-		}
-	},
-	initialGlobals: {
-		surface: 'paper'
-	},
 	decorators: [
-		(story, context) => {
-			document.documentElement.classList.toggle('theme-matte', context.globals.surface === 'matte');
-
-			return story();
-		},
 		// `parameters.colorScheme` fixes a story to light or dark, whatever the viewer chose (a scene in a store screenshot)
 		(story, context) => ({
 			Component: ModeWatcherDecorator,

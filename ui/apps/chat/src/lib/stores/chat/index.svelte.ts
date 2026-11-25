@@ -25,8 +25,9 @@ import {
 } from '#lib/enums/index.ts';
 import { ChatService } from '#lib/services/chat.service.ts';
 import { DatabaseService } from '#lib/services/database.service.ts';
-// direct imports between stores, not via the barrel, to avoid circular deps
 import { agenticStore } from '#lib/stores/agentic/index.svelte.ts';
+// direct imports between stores, not via the barrel, to avoid circular deps
+import { agenticMode } from '#lib/stores/agentic-mode.svelte.ts';
 import { chatActivityStore } from '#lib/stores/chat/activity.svelte.ts';
 import { type ChatFlowsHost, ChatMessageFlows } from '#lib/stores/chat/flows.svelte.ts';
 import { chatProcessingStore } from '#lib/stores/chat/processing.svelte.ts';
@@ -75,6 +76,8 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		this.chatReasoningStates.get(conversationsStore.activeConversation?.id ?? '') ?? false
 	);
 	pendingEditMessageId = $state<string | null>(null);
+	/** A system message written on the new-chat screen, stored with the conversation on its first send. */
+	pendingSystemMessage = $state<string | null>(null);
 	// resumable stream connection state for the active conversation
 	// streaming -> bytes flowing normally, resuming -> waiting on /v1/stream reconnect, lost -> unrecoverable
 	streamConnectionState = $state<StreamConnectionState>(StreamConnectionState.STREAMING);
@@ -245,7 +248,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			this.preEncodeAbortController = null;
 		}
 	}
-
 	/**
 	 * Whether the branch holds a step to summarize before the steps a
 	 * compaction preserves.
@@ -263,6 +265,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		this.clearChatStreaming(convId);
 		this.processing.setState(convId, null);
 	}
+
 	clearChatStreaming(convId: string, messageId?: string): void {
 		// session aware: a stale generation must not wipe a newer one's streaming state on the
 		// same conversation, that would drop the frozen stop identity and stop the wrong session
@@ -278,7 +281,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		this.isEditModeActive = false;
 		this.addFilesHandler = null;
 	}
-
 	clearPendingEditMessageId(): void {
 		this.pendingEditMessageId = null;
 	}
@@ -685,6 +687,21 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		return this.flows.regenerateMessageWithBranching(messageId, modelOverride);
 	}
 
+	/** Removes the system message from the new chat, or from the active conversation. */
+	async removeSystemPrompt(): Promise<void> {
+		if (!conversationsStore.activeConversation) {
+			this.pendingSystemMessage = null;
+
+			return;
+		}
+
+		const systemMessage = conversationsStore.activeMessages.find(
+			(m) => m.role === MessageRole.SYSTEM
+		);
+
+		if (systemMessage) await this.removeSystemPromptPlaceholder(systemMessage.id);
+	}
+
 	async removeSystemPromptPlaceholder(messageId: string): Promise<boolean> {
 		const activeConv = conversationsStore.activeConversation;
 
@@ -734,6 +751,32 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		}
 	}
 
+	/**
+	 * Saves the system message written in the chat form or its dialog. A new chat keeps it
+	 * pending until the first message is sent, so no empty conversation is created.
+	 */
+	async saveSystemPrompt(content: string): Promise<void> {
+		if (!conversationsStore.activeConversation) {
+			this.pendingSystemMessage = content;
+
+			return;
+		}
+
+		await this.addSystemPrompt();
+
+		const id = this.pendingEditMessageId;
+
+		this.pendingEditMessageId = null;
+
+		if (!id) return;
+
+		await DatabaseService.updateMessage(id, { content });
+
+		const index = conversationsStore.findMessageIndex(id);
+
+		if (index !== -1) conversationsStore.updateMessageAtIndex(index, { content });
+	}
+
 	async sendMessage(content: string, extras?: DatabaseMessageExtra[]): Promise<void> {
 		if (!content.trim() && (!extras || extras.length === 0)) return;
 
@@ -780,7 +823,11 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			if (isNewConversation) {
 				const rootId = await DatabaseService.createRootMessage(currentConv.id);
 				const currentConfig = settingsStore.config;
-				const systemPrompt = currentConfig.systemMessage?.toString().trim();
+				const systemPrompt = (
+					this.pendingSystemMessage ?? currentConfig.systemMessage?.toString()
+				)?.trim();
+
+				this.pendingSystemMessage = null;
 
 				let sysOrRootId = rootId;
 
@@ -1258,7 +1305,8 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		};
 		const toolPolicy = this.toolPolicy();
 
-		{
+		// a plain chat sends the classic request below
+		if (agenticMode.enabled) {
 			const agenticResult = await agenticStore.runAgenticFlow({
 				callbacks: streamCallbacks,
 				conversationId: convId,
