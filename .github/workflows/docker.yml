@@ -120,9 +120,6 @@ jobs:
             mv build-matrix.json.tmp build-matrix.json
           fi
 
-          jq 'map(select(.tag != "musa"))' build-matrix.json > build-matrix.json.tmp
-          mv build-matrix.json.tmp build-matrix.json
-
           BUILD_MATRIX="$(jq -c . build-matrix.json)"
           MERGE_MATRIX="$(jq -c '
             reduce .[] as $entry ({}; .[$entry.tag] |= (
