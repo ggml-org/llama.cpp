@@ -191,7 +191,7 @@ constexpr env_var env_vars[] = {
     {"GGML_OPENVINO_GDN_NATIVE_STATE", env_type::BOOL},
     {"GGML_OPENVINO_GDN_DECOMPOSE", env_type::BOOL},
     {"GGML_OPENVINO_NPU_L0_HOST_TENSORS", env_type::BOOL},
-    {"GGML_OPENVINO_KV_SLICE", env_type::BOOL},
+    {"GGML_OPENVINO_KV_SLICE", env_type::INT},
     {"GGML_OPENVINO_NPU_HFA_PREFILL", env_type::BOOL},
     {"GGML_OPENVINO_NPU_DECODE_UNFOLD", env_type::BOOL},
     {"GGML_OPENVINO_NPU_PARALLEL_COMPILE", env_type::BOOL},
@@ -261,6 +261,12 @@ std::string checked_env_value(const env_var & var, const char * value) {
     case env_type::INT:
         if (!parse_env_int(value, number)) {
             GGML_ABORT("ggml-openvino: %s=%s is not valid, use a whole number", var.name, value);
+        }
+        if (std::strcmp(var.name, "GGML_OPENVINO_KV_SLICE") == 0 && number != 0 && number != 1 &&
+            (number < 0 || number % 256 != 0)) {
+            GGML_ABORT("ggml-openvino: %s=%s is not valid, use 0 (off), 1 (on) or a KV window size that is a multiple "
+                       "of 256",
+                       var.name, value);
         }
         return std::to_string(number);
     case env_type::FLOAT: {
@@ -637,8 +643,13 @@ bool ggml_openvino_is_gpu() {
     return has_prefix(ggml_openvino_get_device_name(), "GPU");
 }
 
+int ggml_openvino_kv_slice_base() {
+    const int value = ggml_openvino_getenv_int("GGML_OPENVINO_KV_SLICE", 1);
+    return value <= 0 ? 0 : value == 1 ? 1024 : value;
+}
+
 bool ggml_openvino_kv_slice_enabled() {
-    return ggml_openvino_getenv_int("GGML_OPENVINO_KV_SLICE", 1) != 0;
+    return ggml_openvino_kv_slice_base() > 0;
 }
 
 bool ggml_openvino_npu_fast_mask_enabled() {
@@ -672,11 +683,11 @@ int ggml_openvino_npu_decode_bucket() {
         !ggml_openvino_npu_weightless_bank_enabled()) {
         return 0;
     }
-    return ggml_openvino_getenv_int("GGML_OPENVINO_NPU_BLOB_PREBUILD", 1) != 0 ? 1024 : 0;
+    return ggml_openvino_getenv_int("GGML_OPENVINO_NPU_BLOB_PREBUILD", 1) != 0 ? ggml_openvino_kv_slice_base() : 0;
 }
 
-int ggml_openvino_static_kv_window(int rows, int ctx) {
-    int window = 1;
+int ggml_openvino_static_kv_window(int rows, int ctx, int base) {
+    int window = std::max(base, 1);
     while (window < rows && window < ctx) {
         window *= 2;
     }
@@ -685,7 +696,7 @@ int ggml_openvino_static_kv_window(int rows, int ctx) {
 
 int ggml_openvino_gpu_kv_window(int rows, int ctx, int n_tokens) {
     if (n_tokens > 16) {
-        return ggml_openvino_static_kv_window(rows, ctx);
+        return ggml_openvino_static_kv_window(rows, ctx, 1);
     }
     // a multiple of 256 and of 2^k / 4, where 2^k <= rows < 2^(k+1)
     int step = 256;
@@ -779,8 +790,8 @@ bool kv_grow_locked(kv_storage_entry & e, size_t rows, size_t heads) {
     if (rows <= e.cap_rows) {
         return false;
     }
-    const int bucket = ggml_openvino_npu_decode_bucket();
-    size_t cap = bucket > 0 ? static_cast<size_t>(bucket) : 1024;
+    const int base = ggml_openvino_kv_slice_base();
+    size_t cap = base > 0 ? static_cast<size_t>(base) : 1024;
     while (cap < rows) {
         cap *= 2;
     }

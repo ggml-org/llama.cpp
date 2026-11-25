@@ -313,6 +313,17 @@ static std::string get_tensor_graph_input_ov_name(const GgmlOvDecoder * decoder,
     if (GgmlOvDecoder::is_inp_emb(tensor, op)) {
         return "embd";
     }
+    const auto & model_params = decoder->get_model_params();
+    if (tensor == model_params.prune_ids) {
+        return "inp_prune_ids";
+    }
+    if (tensor == model_params.prune_keep) {
+        return "inp_prune_keep";
+    }
+    if (auto it = model_params.pruned_masks.find(tensor); it != model_params.pruned_masks.end()) {
+        // not a graph input: get_kq_mask_input() gathers the rows from the input mask of this name
+        return get_tensor_graph_input_ov_name(decoder, cgraph, it->second, op) + "_pruned";
+    }
     // gemma-4's KV-shared layers read the mask rows of their output tokens through GET_ROWS, which is not a mask
     // consumer, so match the masks by identity too
     if (GgmlOvDecoder::is_inp_mask(tensor, op) || decoder->is_kq_mask(tensor)) {
@@ -1075,7 +1086,32 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             layer_mask.emplace(layer.value(), mask);
             max_extent = std::max(max_extent, leaf->ne[1]);
             if (mask->op == GGML_OP_NONE) {
-                model_params.kq_masks.insert(mask);
+                const ggml_tensor * layer_input_mask = layer_mask[layer.value()];
+                if (layer_input_mask != mask && layer_input_mask->op == GGML_OP_NONE) {
+                    // a second input mask on the cache of a layer: the mask rows of gemma-4's KV-shared layers
+                    model_params.pruned_masks.emplace(mask, layer_input_mask);
+                } else {
+                    model_params.kq_masks.insert(mask);
+                }
+            }
+        }
+
+        if (!model_params.pruned_masks.empty()) {
+            // The first output row index list gathers the rows of the KV-shared layers, a later one the output rows
+            // among them
+            for (int i = 0; i < cgraph->n_nodes; i++) {
+                const ggml_tensor * node = cgraph->nodes[i];
+                if (node->op != GGML_OP_GET_ROWS || !is_output_idx(node->src[1], node)) {
+                    continue;
+                }
+                if (model_params.prune_ids == nullptr) {
+                    model_params.prune_ids = node->src[1];
+                } else if (node->src[1] != model_params.prune_ids) {
+                    model_params.prune_keep = node->src[1];
+                }
+            }
+            if (model_params.prune_ids == nullptr) {
+                throw std::runtime_error("OpenVINO: masks of KV-shared layers without their row index list");
             }
         }
 
@@ -1210,7 +1246,8 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             compute_params.seq_active_start = offset / seq_size;
 
             // a mask that is itself a graph input has the shape of its OV parameter
-            const std::string mask_name = mask->op != GGML_OP_NONE      ? std::string() :
+            const std::string mask_name = mask->op != GGML_OP_NONE || model_params.pruned_masks.count(mask) ?
+                                              std::string() :
                                           mask == model_params.swa_mask ? get_tensor_ov_name(cgraph, mask) + "_swa" :
                                                                           get_tensor_ov_name(cgraph, mask);
             // gemma-4's KV-shared layers come last and take their mask rows from the input masks with GET_ROWS: keep
@@ -1229,7 +1266,8 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
                 }
             }
             if (is_static) {
-                const bool slice_prefill = ggml_openvino_kv_slice_enabled() && compute_params.input_len > 1;
+                const bool slice_prefill =
+                    ggml_openvino_kv_slice_enabled() && compute_params.input_len > 1;
                 if (!slice_prefill) {
                     compute_params.attention_size = model_params.ctx_per_seq;
                 }
@@ -1402,13 +1440,13 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
     if (is_static && compute_params.output_len == 0) {
         compute_params.output_len = 1;
     }
-    // A sliced static prefill attends a power-of-two number of KV rows: every attended size needs its own compiled
-    // prefill model, so a growing sequence compiles one when the attended length doubles, not for each ubatch.
-    // Rounding up adds masked rows, which cost prefill time, so it stops at the next power of two.
+    // A sliced static prefill attends base*2^k KV rows (base from GGML_OPENVINO_KV_SLICE): every attended size needs
+    // its own compiled prefill model, so a growing sequence compiles one when the attended length doubles, not for
+    // each ubatch. Rounding up adds masked rows, which cost prefill time, so it stops at the next window.
     if (is_static && ggml_openvino_kv_slice_enabled() && compute_params.input_len > 1 &&
         !model_params.is_cacheless_attn && compute_params.attention_size > 0 && model_params.ctx_per_seq > 0) {
-        compute_params.attention_size =
-            ggml_openvino_static_kv_window(compute_params.attention_size, model_params.ctx_per_seq);
+        compute_params.attention_size = ggml_openvino_static_kv_window(
+            compute_params.attention_size, model_params.ctx_per_seq, ggml_openvino_kv_slice_base());
     }
     // The GPU plugin keeps device memory for each KV length it sees, and llama.cpp grows the KV length in steps of
     // 256. Round it up (ggml_openvino_gpu_kv_window), so that a long context uses a few lengths and not one per step.
@@ -1478,8 +1516,8 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
             // Both masks are named "attn_inp_kq_mask", so tell them apart by tensor identity.
             const bool swa_mask = is_swa_mask(input);
             int attention_size = swa_mask ? m_model_params.ctx_per_seq_swa * m_model_params.n_seq : m_model_params.ctx;
-            const bool kv_window =
-                m_is_prefill ? ggml_openvino_kv_slice_enabled() : ggml_openvino_npu_decode_bucket() > 0;
+            const bool kv_window = m_is_prefill ? ggml_openvino_kv_slice_enabled() :
+                                                  ggml_openvino_npu_decode_bucket() > 0;
             if (kv_window) {
                 attention_size = swa_mask ? m_compute_params.attention_size_swa : m_compute_params.attention_size;
             }
@@ -1920,6 +1958,9 @@ void GgmlOvDecoder::compute_model_inputs() {
                 continue;
             }
             if (m_model_inputs.find(src_name) != m_model_inputs.end()) {
+                continue;
+            }
+            if (is_pruned_mask(src)) {
                 continue;
             }
 

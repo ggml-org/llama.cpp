@@ -294,9 +294,9 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     const bool v_transposed = ggml_openvino_npu_kv_head_major_enabled() && context.is_static() &&
                               context.get_input_names()[2].find("cache_v_l") != std::string::npos;
 
-    // the HFA prefill path has no sinks
-    const bool use_hfa_gate =
-        ggml_openvino_npu_hfa_prefill_enabled() && context.is_static() && context.is_prefill() && has_mask && !has_sink;
+    // the HFA prefill path has no sinks, and attends the rows of a whole chunk (not those of gemma-4's KV-shared layers)
+    const bool use_hfa_gate = ggml_openvino_npu_hfa_prefill_enabled() && context.is_static() && context.is_prefill() &&
+                              has_mask && !has_sink && !is_pruned_mask_name(context.get_input_names()[3]);
     if (use_hfa_gate) {
         const int layer = extract_layer(context.get_input_names()[1]);
         auto past_k = context.get_input("ggml_hfa_past_cache_k_l" + std::to_string(layer));

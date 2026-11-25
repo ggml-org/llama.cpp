@@ -140,10 +140,14 @@ bool ggml_openvino_is_static();
 // KV-cache slicing: bind the KV cache, and size the KQ masks, at the attended length instead of the full context.
 // One mechanism, two modes:
 //   dynamic graphs (CPU/GPU): the KV input is a view over the cache; the graph is not recompiled.
-//   static graphs (NPU, or any device with GGML_OPENVINO_FORCE_STATIC): the prefill graph is compiled at the aligned
-//   attended length and recompiled when it changes; decode keeps the full context.
-// On by default for all devices; GGML_OPENVINO_KV_SLICE=0 turns it off.
+//   static graphs (NPU, or any device with GGML_OPENVINO_FORCE_STATIC): the prefill graph is compiled at a KV window of
+//   base*2^k rows (clamped to ctx) covering the attended length and recompiled when it changes; decode keeps the
+//   full context unless NPU decode KV windows are on (see ggml_openvino_npu_decode_bucket).
+// GGML_OPENVINO_KV_SLICE: unset or 1 = on with window base 1024, N (a multiple of 256) = on with window base N,
+// 0 = off. CPU/GPU dynamic graphs only use it as on/off.
 bool ggml_openvino_kv_slice_enabled();
+// Static KV window base of GGML_OPENVINO_KV_SLICE, 0 = off.
+int ggml_openvino_kv_slice_base();
 
 // On by default: back NPU buffers with Level Zero host memory; GGML_OPENVINO_NPU_L0_HOST_TENSORS=0 turns it off.
 bool ggml_openvino_npu_l0_host_tensors_enabled();
@@ -159,7 +163,7 @@ bool ggml_openvino_npu_parallel_compile_enabled();
 // Static path (NPU, or any device with GGML_OPENVINO_FORCE_STATIC): prefill only the KV-writing part of the model
 // and compute the logits with one decode step. Pays off for models whose tail layers share earlier layers' KV
 // (Gemma 3n/4 E-series), where it skips those layers for prompt tokens. On by default (it only applies to graphs
-// with KV-shared attention, at most one output token per batch, and no HFA prefill or decode KV windows);
+// with KV-shared attention, at most one output token per batch, and no HFA prefill);
 // GGML_OPENVINO_KV_ONLY_PREFILL=0 turns it off.
 bool ggml_openvino_kv_only_prefill_enabled();
 // Gather the rows of large embedding tables on the host and feed them to the static graph as an input, instead of
@@ -167,15 +171,17 @@ bool ggml_openvino_kv_only_prefill_enabled();
 // costs about as much as streaming the table).
 bool ggml_openvino_npu_host_gather_enabled();
 
-// GGML_OPENVINO_NPU_BLOB_PREBUILD (default 1): static NPU graphs attend a KV window of 1024*2^k rows (clamped to ctx)
-// instead of the whole ctx, with one decode model per window, all built/imported with the prefill/decode pair;
-// with head-major KV the prefill models of every window are also exported and preloaded.
-// Returns the window base (1024), 0 = off (GGML_OPENVINO_NPU_BLOB_PREBUILD=0).
+// GGML_OPENVINO_NPU_BLOB_PREBUILD (default 1), with GGML_OPENVINO_KV_SLICE on: static NPU decode also attends a KV
+// window of base*2^k rows (clamped to ctx, base from GGML_OPENVINO_KV_SLICE) instead of the whole ctx, with one
+// decode model per window, all built/imported with the prefill/decode pair.
+// The prefill windows are aligned to the decode windows, and with the weightless bank the prefill models of every
+// window are exported too (and preloaded with head-major KV).
+// Returns the window base, 0 = off (GGML_OPENVINO_NPU_BLOB_PREBUILD=0 or GGML_OPENVINO_KV_SLICE=0: decode attends
+// the full ctx).
 int ggml_openvino_npu_decode_bucket();
 
-// Rows a static prefill attends with GGML_OPENVINO_KV_SLICE: the attended length rounded up to a power of two,
-// clamped to ctx.
-int ggml_openvino_static_kv_window(int rows, int ctx);
+// Smallest base*2^k covering rows, clamped to ctx.
+int ggml_openvino_static_kv_window(int rows, int ctx, int base);
 
 // Rows the dynamic GPU graph attends for a batch of n_tokens tokens per sequence, clamped to ctx. The GPU plugin keeps
 // memory for each attended length, so a long context should use a few lengths:
@@ -186,7 +192,7 @@ int ggml_openvino_static_kv_window(int rows, int ctx);
 int ggml_openvino_gpu_kv_window(int rows, int ctx, int n_tokens);
 
 // On-demand NPU KV cache (GGML_OPENVINO_NPU_KV_ON_DEMAND): the ggml KV buffer stays non-resident and the
-// NPU binds per-tensor L0 storage that grows (base*2^k rows, base = decode bucket or 1024) with the rows in use.
+// NPU binds per-tensor L0 storage that grows (base*2^k rows, base = KV_SLICE window base or 1024) with the rows in use.
 bool ggml_openvino_npu_kv_on_demand_enabled();
 // On-demand KV with BLOB_PREBUILD and KV_SLICE: K storage is [heads][rows][head_size] and V storage is
 // [heads][head_size][rows] (head-major with heads * head_size channels); every static graph binds the whole storage

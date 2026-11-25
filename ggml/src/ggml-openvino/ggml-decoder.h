@@ -47,6 +47,15 @@ struct ModelParams {
     // The attention masks that are graph inputs, by identity: gemma-4's KV-shared layers also read them through
     // GET_ROWS, which must resolve to the same OV parameter as the attention ops
     std::set<const ggml_tensor *> kq_masks;
+    // gemma-4's KV-shared layers attend for the output rows only (prune_shared in src/models/gemma4.cpp): llama.cpp
+    // copies their mask rows from the input masks on the host into separate inputs (out_mask, out_mask_swa), and
+    // gathers their activations, positions and per-layer embeddings with an index list (inp_prune_ids). The static
+    // models bind the input masks per prefill chunk, so these masks are not graph inputs: each maps to the input
+    // mask it copies, and the OV model gathers its rows from that mask with inp_prune_ids instead.
+    std::map<const ggml_tensor *, const ggml_tensor *> pruned_masks;
+    const ggml_tensor * prune_ids = nullptr;
+    // the output rows among the gathered rows (inp_prune_keep)
+    const ggml_tensor * prune_keep = nullptr;
 
     std::vector<std::string> kv_names;
     size_t kv_buffer_ctx_id = 0;
@@ -722,6 +731,8 @@ public:
     }
 
     bool is_kq_mask(const ggml_tensor * tensor) const { return m_model_params.kq_masks.count(tensor) != 0; }
+
+    bool is_pruned_mask(const ggml_tensor * tensor) const { return m_model_params.pruned_masks.count(tensor) != 0; }
 
     // A graph-input index list of GET_ROWS: out_ids, or the inp->s_copy leaf when build_rs gathers
     // every recurrent state at once.
