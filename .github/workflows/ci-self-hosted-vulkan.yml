@@ -220,7 +220,7 @@ jobs:
         id: ggml-ci
         run: |
           vulkaninfo --summary
-          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/cache/llama.cpp
 
       - name: ccache-buckets-save
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
