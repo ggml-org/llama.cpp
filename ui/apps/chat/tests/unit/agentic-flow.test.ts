@@ -14,7 +14,13 @@ vi.mock('#lib/utils/cap-img-size.ts', () => ({
 	capImageDataURLSize: (url: string) => capImage(url)
 }));
 
-import { BuiltInTool, MessageRole, ToolPermissionDecision, ToolSource } from '#lib/enums/index.ts';
+import {
+	BuiltInTool,
+	ContentPartType,
+	MessageRole,
+	ToolPermissionDecision,
+	ToolSource
+} from '#lib/enums/index.ts';
 import { ChatService } from '#lib/services/chat.service.ts';
 import { ToolsService } from '#lib/services/tools.service.ts';
 import { agenticStore } from '#lib/stores/agentic/index.svelte.ts';
@@ -355,6 +361,27 @@ describe('agentic flow', () => {
 		await runFlow(recorder().callbacks);
 
 		expect(requests[1][2].content).toMatchObject([{}, { image_url: { url: IMAGE_DATA_URI } }]);
+	});
+
+	it('sends the media of an earlier tool result along in a later request', async () => {
+		const earlier: ApiChatMessageData[] = [
+			...USER_MESSAGES,
+			{ content: '', role: MessageRole.ASSISTANT, tool_calls: JSON.parse(toolCalls('screenshot')) },
+			{
+				content: [
+					{ text: 'saved', type: ContentPartType.TEXT },
+					{ image_url: { url: IMAGE_DATA_URI }, type: ContentPartType.IMAGE_URL }
+				],
+				role: MessageRole.TOOL,
+				tool_call_id: 'call_0'
+			}
+		];
+
+		mockTools(ToolSource.SERVER, 'screenshot');
+
+		const request = await agenticStore.requestFor(earlier);
+
+		expect(request.messages[2]).toEqual(earlier[2]);
 	});
 
 	it('leaves the flow when a steering message is queued, skipping the tool calls left', async () => {

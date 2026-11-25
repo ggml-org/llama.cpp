@@ -129,7 +129,8 @@ function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 
 		if (message.role === MessageRole.TOOL && message.tool_call_id) {
 			return {
-				content: typeof message.content === 'string' ? message.content : '',
+				// a stored tool result can hold media parts after its text
+				content: message.content,
 				role: MessageRole.TOOL,
 				tool_call_id: message.tool_call_id
 			} satisfies AgenticMessage;
