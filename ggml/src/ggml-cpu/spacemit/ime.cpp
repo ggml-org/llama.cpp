@@ -1157,7 +1157,7 @@ class tensor_traits_common : public tensor_traits_base {
                 return true;
             case GGML_OP_GATED_DELTA_NET:
                 // the generic kernel does the replay of pending tokens (op param 1)
-                if (params->use_ref || ggml_get_op_params_i32(op, 1) != 0) {
+                if (params->use_ref || op->src[0]->ne[0] != op->src[2]->ne[0] || ggml_get_op_params_i32(op, 1) != 0) {
                     return false;
                 }
                 switch (op->src[0]->type) {

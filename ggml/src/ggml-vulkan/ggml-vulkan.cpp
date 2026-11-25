@@ -17270,7 +17270,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_GATED_DELTA_NET:
             {
                 const uint32_t S_v = op->src[2]->ne[0];
-                if (S_v != 16 && S_v != 32 && S_v != 64 && S_v != 128) {
+                if (op->src[0]->ne[0] != S_v || (S_v != 16 && S_v != 32 && S_v != 64 && S_v != 128)) {
                     return false;
                 }
                 for (int i = 0; i < 6; i++) {
