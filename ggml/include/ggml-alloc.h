@@ -73,6 +73,15 @@ GGML_API bool ggml_gallocr_alloc_graph(ggml_gallocr_t galloc, struct ggml_cgraph
 
 GGML_API size_t ggml_gallocr_get_buffer_size(ggml_gallocr_t galloc, int buffer_id);
 
+// allocate the graphs of galloc in the buffers of src, the buffer types must match
+// the buffers grow to fit the graphs of every allocator that shares them, and are freed with the last of these allocators
+// graphs of allocators that share buffers must not be computed at the same time
+GGML_API void ggml_gallocr_share_buffers(ggml_gallocr_t galloc, ggml_gallocr_t src);
+
+// false if there is no graph allocated by ggml_gallocr_alloc_graph, or if an allocator that shares the buffers
+// reallocated them (or reset them, when the reset frees tensor state) after it
+GGML_API bool ggml_gallocr_alloc_is_valid(ggml_gallocr_t galloc);
+
 // Utils
 // Create a buffer and allocate all the tensors in a ggml_context
 

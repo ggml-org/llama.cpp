@@ -25,6 +25,8 @@ struct dummy_backend_context {
     bool custom_alloc_buffer_n_called   = false;
     bool custom_get_alloc_size_n_called = false;
 
+    size_t peak = 0; // largest allocated_total() after an allocation
+
     size_t allocated_total() const {
         size_t n = 0;
         for (ggml_backend_buffer_t buf : buffers) {
@@ -44,6 +46,7 @@ static ggml_backend_buffer_t dummy_backend_buffer_type_alloc_buffer(ggml_backend
     dummy_backend_context * ctx    = (dummy_backend_context *) buft->context;
     ggml_backend_buffer_t & buffer = ctx->buffers.emplace_back();
     buffer                         = ggml_backend_buffer_init(buft, ctx->buffer_interface, ctx, size);
+    ctx->peak                      = std::max(ctx->peak, ctx->allocated_total());
     return buffer;
 }
 
@@ -1174,6 +1177,154 @@ static void run(const char * name, void (*f)()) {
     printf("PASSED\n");
 }
 
+//
+// schedulers that share compute buffers
+
+static ggml_tensor * make_scale_graph(ggml_context * ctx, ggml_cgraph * graph, size_t size_bytes) {
+    ggml_tensor * out = ggml_scale(ctx, make_input_with_size(ctx, size_bytes), 2.0f);
+    ggml_set_output(out);
+    ggml_build_forward_expand(graph, out);
+    return out;
+}
+
+static ggml_backend_sched_ptr make_sched(ggml_backend_t backend, ggml_backend_buffer_type_t buft) {
+    return ggml_backend_sched_ptr(ggml_backend_sched_new(&backend, &buft, 1, 16, false, false));
+}
+
+static void test_sched_share_buffers() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+    ggml_backend_t             backend_ptr = &backend.context->backend;
+    ggml_backend_buffer_type_t buft        = &backend.buffer_type;
+
+    auto [ctx_a, graph_a, ctx_a_ptr] = make_context();
+    ggml_tensor * out_a = make_scale_graph(ctx_a, graph_a, 64);
+
+    ggml_backend_sched_ptr sched_a = make_sched(backend_ptr, buft);
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(sched_a.get(), graph_a));
+    const size_t size_a = backend.context->allocated_total();
+    GGML_ASSERT(size_a > 0);
+
+    // a smaller graph is allocated in the buffers of A
+    auto [ctx_b, graph_b, ctx_b_ptr] = make_context();
+    ggml_tensor * out_b = make_scale_graph(ctx_b, graph_b, 16);
+
+    ggml_backend_sched_ptr sched_b = make_sched(backend_ptr, buft);
+    ggml_backend_sched_share_buffers(sched_b.get(), sched_a.get());
+    GGML_ASSERT(!ggml_backend_sched_acquire(sched_b.get()));
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(sched_b.get(), graph_b));
+    GGML_ASSERT(backend.context->allocated_total() == size_a);
+    GGML_ASSERT(out_b->buffer == out_a->buffer);
+
+    // both graphs stay allocated
+    GGML_ASSERT(ggml_backend_sched_acquire(sched_a.get()));
+    GGML_ASSERT(ggml_backend_sched_acquire(sched_b.get()));
+
+    // a larger graph grows the shared buffer: the old one is freed first, and the graph of A is no longer allocated
+    auto [ctx_c, graph_c, ctx_c_ptr] = make_context();
+    ggml_tensor * out_c = make_scale_graph(ctx_c, graph_c, 256);
+
+    ggml_backend_sched_reset(sched_b.get());
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(sched_b.get(), graph_c));
+    const size_t size_c = backend.context->allocated_total();
+    GGML_ASSERT(size_c > size_a);
+    GGML_ASSERT(backend.context->buffers.size() == 1);
+    GGML_ASSERT(backend.context->peak == size_c);
+    GGML_ASSERT(!ggml_backend_sched_acquire(sched_a.get()));
+    GGML_ASSERT(ggml_backend_sched_acquire(sched_b.get()));
+
+    // A allocates its graph again in the grown buffer, B keeps its graph
+    ggml_backend_sched_reset(sched_a.get());
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(sched_a.get(), graph_a));
+    GGML_ASSERT(backend.context->allocated_total() == size_c);
+    GGML_ASSERT(out_a->buffer == out_c->buffer);
+    GGML_ASSERT(ggml_backend_sched_acquire(sched_b.get()));
+
+    // the buffer is freed with the last scheduler that uses it
+    sched_a.reset();
+    GGML_ASSERT(backend.context->allocated_total() == size_c);
+    GGML_ASSERT(ggml_backend_sched_acquire(sched_b.get()));
+    sched_b.reset();
+    GGML_ASSERT(backend.context->allocated_total() == 0);
+}
+
+static int test_n_sync[2];
+
+static void test_backend_synchronize_0(ggml_backend_t /*backend*/) {
+    test_n_sync[0]++;
+}
+
+static void test_backend_synchronize_1(ggml_backend_t /*backend*/) {
+    test_n_sync[1]++;
+}
+
+// a scheduler that starts to use the shared buffers synchronizes the backends of the previous one,
+// which can be different backends (e.g. other streams) of the same device
+static void test_sched_share_buffers_sync() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+    ggml_backend_buffer_type_t buft = &backend.buffer_type;
+
+    ggml_backend backend_0 = backend.context->backend;
+    ggml_backend backend_1 = backend.context->backend;
+    backend_0.iface.synchronize = test_backend_synchronize_0;
+    backend_1.iface.synchronize = test_backend_synchronize_1;
+
+    auto [ctx_a, graph_a, ctx_a_ptr] = make_context();
+    make_scale_graph(ctx_a, graph_a, 64);
+    auto [ctx_b, graph_b, ctx_b_ptr] = make_context();
+    make_scale_graph(ctx_b, graph_b, 16);
+
+    ggml_backend_sched_ptr sched_a = make_sched(&backend_0, buft);
+    ggml_backend_sched_ptr sched_b = make_sched(&backend_1, buft);
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(sched_a.get(), graph_a));
+
+    ggml_backend_sched_share_buffers(sched_b.get(), sched_a.get());
+    test_n_sync[0] = test_n_sync[1] = 0;
+
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(sched_b.get(), graph_b));
+    GGML_ASSERT(test_n_sync[0] == 1);
+
+    // B is the user already
+    GGML_ASSERT(ggml_backend_sched_acquire(sched_b.get()));
+    GGML_ASSERT(test_n_sync[0] == 1 && test_n_sync[1] == 0);
+
+    GGML_ASSERT(ggml_backend_sched_acquire(sched_a.get()));
+    GGML_ASSERT(test_n_sync[0] == 1 && test_n_sync[1] == 1);
+
+    // after the user is freed, the next user has nothing to wait for
+    sched_a.reset();
+    GGML_ASSERT(ggml_backend_sched_acquire(sched_b.get()));
+    GGML_ASSERT(test_n_sync[0] == 1 && test_n_sync[1] == 1);
+}
+
+static void dummy_backend_buffer_reset(ggml_backend_buffer_t /*buffer*/) {}
+
+// when a reset of the buffer frees tensor state (e.g. extras), allocating a graph invalidates the graphs of the other schedulers
+static void test_sched_share_buffers_reset() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+    backend.context->buffer_interface.reset = dummy_backend_buffer_reset;
+    ggml_backend_t             backend_ptr = &backend.context->backend;
+    ggml_backend_buffer_type_t buft        = &backend.buffer_type;
+
+    auto [ctx_a, graph_a, ctx_a_ptr] = make_context();
+    make_scale_graph(ctx_a, graph_a, 64);
+    auto [ctx_b, graph_b, ctx_b_ptr] = make_context();
+    make_scale_graph(ctx_b, graph_b, 16);
+
+    ggml_backend_sched_ptr sched_a = make_sched(backend_ptr, buft);
+    ggml_backend_sched_ptr sched_b = make_sched(backend_ptr, buft);
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(sched_a.get(), graph_a));
+    ggml_backend_sched_share_buffers(sched_b.get(), sched_a.get());
+
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(sched_b.get(), graph_b));
+    GGML_ASSERT(!ggml_backend_sched_acquire(sched_a.get()));
+    GGML_ASSERT(ggml_backend_sched_acquire(sched_b.get()));
+
+    ggml_backend_sched_reset(sched_a.get());
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(sched_a.get(), graph_a));
+    GGML_ASSERT(ggml_backend_sched_acquire(sched_a.get()));
+    GGML_ASSERT(!ggml_backend_sched_acquire(sched_b.get()));
+}
+
 int main() {
     run("test_max_size_too_many_tensors", test_max_size_too_many_tensors);
     run("test_max_size_tensor_too_large", test_max_size_tensor_too_large);
@@ -1190,6 +1341,9 @@ int main() {
     run("test_reallocation", test_reallocation);
     run("test_graph_optimize_alloc_dep", test_graph_optimize_alloc_dep);
     run("test_graph_optimize_scratch", test_graph_optimize_scratch);
+    run("test_sched_share_buffers", test_sched_share_buffers);
+    run("test_sched_share_buffers_sync", test_sched_share_buffers_sync);
+    run("test_sched_share_buffers_reset", test_sched_share_buffers_reset);
     run("test_buft_alloc_buffer_n_single_buffer", test_buft_alloc_buffer_n_single_buffer);
     run("test_buft_alloc_buffer_n_multi_buffer", test_buft_alloc_buffer_n_multi_buffer);
     run("test_buft_alloc_buffer_n_zero_size", test_buft_alloc_buffer_n_zero_size);

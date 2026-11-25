@@ -359,6 +359,19 @@ extern "C" {
     GGML_API void                 ggml_backend_sched_reserve_size(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph, size_t * sizes);
     GGML_API bool                 ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph); // returns success
 
+    // Allocate the graphs of sched in the compute buffers of src, the backends must use the same devices and buffer types
+    // The buffers grow to fit the graphs of every scheduler that shares them, a graph that fits is not a reallocation of sched
+    // Only one of the schedulers uses the buffers at a time: when another scheduler starts to use them, it first synchronizes
+    // the backends of the previous one. ggml_backend_sched_reserve, ggml_backend_sched_alloc_graph and
+    // ggml_backend_sched_graph_compute_async do this, call ggml_backend_sched_acquire before setting the inputs of a graph
+    // that is already allocated. Synchronize a scheduler before freeing it, the buffers can outlive it
+    GGML_API void                 ggml_backend_sched_share_buffers(ggml_backend_sched_t sched, ggml_backend_sched_t src);
+
+    // Make sched the user of its compute buffers, see ggml_backend_sched_share_buffers
+    // Returns true if the graph allocated by the last ggml_backend_sched_alloc_graph is still allocated, false if there is none,
+    // or if a scheduler that shares the buffers reallocated them since
+    GGML_API bool                 ggml_backend_sched_acquire(ggml_backend_sched_t sched);
+
     GGML_API int                  ggml_backend_sched_get_n_backends(ggml_backend_sched_t sched);
     GGML_API ggml_backend_t       ggml_backend_sched_get_backend(ggml_backend_sched_t sched, int i);
 

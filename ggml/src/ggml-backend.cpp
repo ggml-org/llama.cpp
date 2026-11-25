@@ -1194,6 +1194,12 @@ struct ggml_backend_sched_split {
     struct ggml_cgraph graph;
 };
 
+// the schedulers that share their compute buffers, see ggml_backend_sched_share_buffers
+struct ggml_backend_sched_shared {
+    int n_refs;
+    ggml_backend_sched_t user; // the scheduler that used the buffers last
+};
+
 struct ggml_backend_sched {
     bool is_reset; // true if the scheduler has been reset since the last graph split
     bool is_alloc;
@@ -1269,6 +1275,11 @@ struct ggml_backend_sched {
     int n_prefetched;
     int prefetch_split;     // the split that reads the prefetched inputs
     int prefetch_backend_id; // the backend that copies them
+
+    // set when the compute buffers are shared with other schedulers, see ggml_backend_sched_share_buffers
+    struct ggml_backend_sched_shared * shared;
+    // the compute buffers were taken from another scheduler, which reserved them
+    bool buffers_borrowed;
 };
 
 #define hash_id(tensor) ggml_hash_find_or_insert(&sched->hash_set, tensor)
@@ -2088,6 +2099,46 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
     }
 }
 
+static void ggml_backend_sched_on_realloc(ggml_backend_sched_t sched, bool backend_ids_changed, bool graph_size_changed) {
+    if (sched->callback_realloc != NULL) {
+        sched->callback_realloc(sched, &sched->graph, backend_ids_changed, graph_size_changed, sched->callback_realloc_user_data);
+    }
+
+    if (sched->debug_realloc > 0) {
+        // we are interested only in situations where the graph was reallocated even though its size remained the same [GGML_SCHED_DEBUG_REALLOC]
+        // example: https://github.com/ggml-org/llama.cpp/pull/17143
+        const bool unexpected = !backend_ids_changed && !graph_size_changed;
+
+        if (unexpected || sched->debug_realloc > 1) {
+            GGML_ABORT("%s: unexpected graph reallocation (graph size = %d, nodes = %d, leafs = %d), debug_realloc = %d\n", __func__,
+                    sched->graph_size, sched->graph.n_nodes, sched->graph.n_leafs, sched->debug_realloc);
+        }
+    }
+}
+
+static size_t ggml_backend_sched_get_buffers_size(ggml_backend_sched_t sched) {
+    size_t size = 0;
+    for (int i = 0; i < sched->n_backends; i++) {
+        size += ggml_gallocr_get_buffer_size(sched->galloc, i);
+    }
+    return size;
+}
+
+// make sched the user of the compute buffers it shares with other schedulers
+// the previous user may still compute its graph, or copy split inputs from the buffers
+static void ggml_backend_sched_use_buffers(ggml_backend_sched_t sched) {
+    struct ggml_backend_sched_shared * shared = sched->shared;
+    if (shared == NULL || shared->user == sched) {
+        return;
+    }
+    if (shared->user != NULL) {
+        for (int i = 0; i < shared->user->n_backends; i++) {
+            ggml_backend_synchronize(shared->user->backends[i]);
+        }
+    }
+    shared->user = sched;
+}
+
 static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
     bool backend_ids_changed = false;
     for (int i = 0; i < sched->graph.n_nodes; i++) {
@@ -2116,19 +2167,10 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
         // a reallocation with an unchanged graph size means that the previous reservation was not sufficient
         const bool graph_size_changed = sched->prev_graph_size != sched->graph_size;
 
-        if (sched->callback_realloc != NULL) {
-            sched->callback_realloc(sched, &sched->graph, backend_ids_changed, graph_size_changed, sched->callback_realloc_user_data);
-        }
-
-        if (sched->debug_realloc > 0) {
-            // we are interested only in situations where the graph was reallocated even though its size remained the same [GGML_SCHED_DEBUG_REALLOC]
-            // example: https://github.com/ggml-org/llama.cpp/pull/17143
-            const bool unexpected = !backend_ids_changed && !graph_size_changed;
-
-            if (unexpected || sched->debug_realloc > 1) {
-                GGML_ABORT("%s: unexpected graph reallocation (graph size = %d, nodes = %d, leafs = %d), debug_realloc = %d\n", __func__,
-                        sched->graph_size, sched->graph.n_nodes, sched->graph.n_leafs, sched->debug_realloc);
-            }
+        // a scheduler with borrowed buffers plans each new graph in the buffers reserved by another scheduler,
+        // so only a growth of the buffers is a reallocation
+        if (!sched->buffers_borrowed) {
+            ggml_backend_sched_on_realloc(sched, backend_ids_changed, graph_size_changed);
         }
 
         // the re-allocation may cause the split inputs to be moved to a different address
@@ -2137,9 +2179,15 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
             ggml_backend_synchronize(sched->backends[i]);
         }
 
+        const size_t size_prev = sched->buffers_borrowed ? ggml_backend_sched_get_buffers_size(sched) : 0;
+
         if (!ggml_gallocr_reserve_n(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids)) {
             GGML_LOG_ERROR("%s: failed to reserve graph buffers\n", __func__);
             return false;
+        }
+
+        if (sched->buffers_borrowed && ggml_backend_sched_get_buffers_size(sched) > size_prev) {
+            ggml_backend_sched_on_realloc(sched, backend_ids_changed, graph_size_changed);
         }
         if (!ggml_gallocr_alloc_graph(sched->galloc, &sched->graph)) {
             GGML_LOG_ERROR("%s: failed to allocate graph\n", __func__);
@@ -2455,6 +2503,15 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
     if (sched == NULL) {
         return;
     }
+    if (sched->shared != NULL) {
+        // the backends can be freed before the scheduler, so the graph of the scheduler must be done already
+        if (sched->shared->user == sched) {
+            sched->shared->user = NULL;
+        }
+        if (--sched->shared->n_refs == 0) {
+            free(sched->shared);
+        }
+    }
     for (int b = 0; b < sched->n_backends; b++) {
         for (int c = 0; c < sched->n_copies; c++) {
             ggml_backend_event_free(sched->events[b][c]);
@@ -2513,6 +2570,7 @@ bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph *
     GGML_ASSERT(sched);
     GGML_ASSERT((int)sched->hash_set.size >= measure_graph->n_nodes + measure_graph->n_leafs);
 
+    ggml_backend_sched_use_buffers(sched);
     ggml_backend_sched_synchronize(sched);
 
     ggml_backend_sched_split_graph(sched, measure_graph);
@@ -2526,10 +2584,45 @@ bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph *
     return true;
 }
 
+void ggml_backend_sched_share_buffers(ggml_backend_sched_t sched, ggml_backend_sched_t src) {
+    GGML_ASSERT(sched && src && sched != src);
+    GGML_ASSERT(sched->n_backends == src->n_backends);
+    for (int i = 0; i < sched->n_backends; i++) {
+        GGML_ASSERT(ggml_backend_get_device(sched->backends[i]) == ggml_backend_get_device(src->backends[i]));
+    }
+
+    if (src->shared == NULL) {
+        src->shared = (struct ggml_backend_sched_shared *) calloc(1, sizeof(struct ggml_backend_sched_shared));
+        GGML_ASSERT(src->shared != NULL);
+        src->shared->n_refs = 1;
+        src->shared->user   = src;
+    }
+    if (sched->shared == src->shared) {
+        return;
+    }
+    GGML_ASSERT(sched->shared == NULL && "the scheduler already shares its buffers");
+
+    ggml_backend_sched_synchronize(sched);
+    ggml_gallocr_share_buffers(sched->galloc, src->galloc);
+
+    sched->shared = src->shared;
+    sched->shared->n_refs++;
+    sched->buffers_borrowed = true;
+    sched->is_alloc = false;
+}
+
+bool ggml_backend_sched_acquire(ggml_backend_sched_t sched) {
+    GGML_ASSERT(sched);
+    ggml_backend_sched_use_buffers(sched);
+    return sched->is_alloc && ggml_gallocr_alloc_is_valid(sched->galloc);
+}
+
 bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
     GGML_ASSERT(sched);
     GGML_ASSERT((int)sched->hash_set.size >= graph->n_nodes + graph->n_leafs);
     GGML_ASSERT(!sched->is_alloc);
+
+    ggml_backend_sched_use_buffers(sched);
 
     sched->cur_copy = sched->next_copy;
     sched->next_copy = (sched->next_copy + 1) % sched->n_copies;
@@ -2562,6 +2655,8 @@ enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sch
             return GGML_STATUS_ALLOC_FAILED;
         }
     }
+
+    ggml_backend_sched_use_buffers(sched);
 
     return ggml_backend_sched_compute_splits(sched);
 }
