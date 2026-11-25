@@ -2006,17 +2006,19 @@ static int test_yarn_beta(const std::string & arch_filter, const size_t seed, co
                 gguf_context_ptr gguf_legacy = make_yarn_gguf(arch, moe, false, 0.0f, 0.0f);
                 gguf_context_ptr gguf_meta   = make_yarn_gguf(arch, moe, true,  1.0f, 1.0f);
 
-                const std::vector<float> logits_legacy_default = eval_logits(gguf_legacy.get(), -1.0f, -1.0f);
-                const std::vector<float> logits_legacy_32_1    = eval_logits(gguf_legacy.get(), 32.0f,  1.0f);
-                const std::vector<float> logits_legacy_1_1     = eval_logits(gguf_legacy.get(),  1.0f,  1.0f);
-                const std::vector<float> logits_meta_default   = eval_logits(gguf_meta.get(),   -1.0f, -1.0f);
-                const std::vector<float> logits_meta_override  = eval_logits(gguf_meta.get(),   16.0f,  2.0f);
-                const std::vector<float> logits_legacy_16_2    = eval_logits(gguf_legacy.get(), 16.0f,  2.0f);
+                const float default_beta_fast = arch == LLM_ARCH_GROK ? 8.0f : 32.0f;
+
+                const std::vector<float> logits_legacy_default = eval_logits(gguf_legacy.get(), -1.0f,             -1.0f);
+                const std::vector<float> logits_legacy_ref     = eval_logits(gguf_legacy.get(), default_beta_fast,  1.0f);
+                const std::vector<float> logits_legacy_1_1     = eval_logits(gguf_legacy.get(),  1.0f,              1.0f);
+                const std::vector<float> logits_meta_default   = eval_logits(gguf_meta.get(),   -1.0f,             -1.0f);
+                const std::vector<float> logits_meta_override  = eval_logits(gguf_meta.get(),   16.0f,              2.0f);
+                const std::vector<float> logits_legacy_16_2    = eval_logits(gguf_legacy.get(), 16.0f,              2.0f);
 
                 const double err_meta     = nmse(logits_legacy_1_1,  logits_meta_default);
                 const double err_override = nmse(logits_legacy_16_2, logits_meta_override);
-                const double err_legacy   = nmse(logits_legacy_32_1, logits_legacy_default);
-                const double diff_ctrl    = nmse(logits_legacy_32_1, logits_legacy_1_1);
+                const double err_legacy   = nmse(logits_legacy_ref,  logits_legacy_default);
+                const double diff_ctrl    = nmse(logits_legacy_ref,  logits_legacy_1_1);
                 const double diff_ovr     = nmse(logits_meta_default, logits_meta_override);
 
                 snprintf(meta_str,     sizeof(meta_str),     "%.2e", err_meta);
@@ -2033,7 +2035,7 @@ static int test_yarn_beta(const std::string & arch_filter, const size_t seed, co
                 } else if (logits_meta_override != logits_legacy_16_2 || !(diff_ovr > 1e-6)) {
                     n_failed++;
                     status = "\033[1;31mFAIL\033[0m (context override)";
-                } else if (logits_legacy_default != logits_legacy_32_1) {
+                } else if (logits_legacy_default != logits_legacy_ref) {
                     n_failed++;
                     status = "\033[1;31mFAIL\033[0m (legacy default)";
                 } else {

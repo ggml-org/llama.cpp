@@ -1706,8 +1706,12 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     }
     hparams.rope_freq_scale_train = ropescale == 0.0f ? 1.0f : 1.0f/ropescale;
 
-    ml.get_key(LLM_KV_ROPE_SCALING_ATTN_FACTOR, hparams.rope_attn_factor, false);
-    ml.get_key(LLM_KV_ROPE_SCALING_ALPHA,       hparams.rope_scaling_alpha, false);
+    ml.get_key(LLM_KV_ROPE_SCALING_ATTN_FACTOR,      hparams.rope_attn_factor,   false);
+    ml.get_key(LLM_KV_ROPE_SCALING_ALPHA,            hparams.rope_scaling_alpha, false);
+    ml.get_key(LLM_KV_ROPE_SCALING_YARN_EXT_FACTOR,  hparams.yarn_ext_factor,    false);
+    ml.get_key(LLM_KV_ROPE_SCALING_YARN_ATTN_FACTOR, hparams.yarn_attn_factor,   false);
+    ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_FAST,   hparams.yarn_beta_fast,     false);
+    ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_SLOW,   hparams.yarn_beta_slow,     false);
 
     // non-transformer models do not have attention heads
     if (hparams.n_head() > 0) {
