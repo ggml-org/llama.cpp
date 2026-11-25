@@ -318,6 +318,7 @@
 			!isExpanded &&
 			!voice.isActive &&
 			!hasAttachments &&
+			!systemMessageAttachment &&
 			!mcpStore.resources.hasAttachments &&
 			!value.includes('\n')
 	);
