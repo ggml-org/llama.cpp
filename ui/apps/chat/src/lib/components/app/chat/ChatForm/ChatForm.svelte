@@ -903,7 +903,7 @@
 						voice={{
 							action: voice.label,
 							hint: voice.hint,
-							prepare: () => void voice.prepare(),
+							prepare: voice.prepare,
 							show: voice.showButton,
 							unavailableReason: voice.unavailableReason,
 							unprepare: voice.unprepare

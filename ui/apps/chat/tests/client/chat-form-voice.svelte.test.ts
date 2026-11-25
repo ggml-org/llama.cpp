@@ -8,7 +8,7 @@ import ChatFormVoiceTestWrapper from './components/ChatFormVoiceTestWrapper.svel
 import { EditorView } from '@codemirror/view';
 import { VoiceTranscriptStatus } from '@ggml-org/llama-ui/voice';
 import { VoiceRecorderStatus } from '@ggml-org/llama-voice';
-import { SETTINGS_KEYS, VOICE_MODE_MESSAGE } from '#lib/constants/index.ts';
+import { SETTINGS_KEYS, VOICE_MODE_MESSAGE, VOICE_WARMUP_REST_MS } from '#lib/constants/index.ts';
 import { ServerRole, VoiceInputMode } from '#lib/enums/index.ts';
 import { voiceTranscriptsStore } from '#lib/stores/index.ts';
 import { parseFilesToMessageExtras } from '#lib/utils/browser-only.ts';
@@ -569,5 +569,61 @@ describe('a voice message', () => {
 		});
 
 		voiceTranscriptsStore.forget(file.name);
+	});
+});
+
+// the microphone opens ahead of a press only once the pointer rests on the button
+describe('the microphone warm-up', () => {
+	function grantMicrophone() {
+		const getUserMedia = vi.fn(async () => new MediaStream());
+		const spies = [
+			vi
+				.spyOn(navigator.permissions, 'query')
+				.mockResolvedValue({ state: 'granted' } as PermissionStatus),
+			vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockImplementation(getUserMedia)
+		];
+
+		return { getUserMedia, restore: () => spies.forEach((spy) => spy.mockRestore()) };
+	}
+
+	const pointer = (type: string) =>
+		new PointerEvent(type, { bubbles: type !== 'pointerenter', pointerType: 'mouse' });
+
+	it('opens nothing for a pointer only passing over the button', async () => {
+		seed(true);
+
+		const mic = grantMicrophone();
+		const { screen } = await renderForm();
+		const button = screen
+			.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage })
+			.last()
+			.element();
+
+		button.dispatchEvent(pointer('pointerenter'));
+		button.dispatchEvent(pointer('pointermove'));
+		await new Promise((resolve) => setTimeout(resolve, VOICE_WARMUP_REST_MS / 2));
+		button.dispatchEvent(pointer('pointerleave'));
+		await new Promise((resolve) => setTimeout(resolve, VOICE_WARMUP_REST_MS * 2));
+
+		expect(mic.getUserMedia).not.toHaveBeenCalled();
+		mic.restore();
+	});
+
+	it('opens the microphone once the pointer rests on the button', async () => {
+		seed(true);
+
+		const mic = grantMicrophone();
+		const { screen } = await renderForm();
+		const button = screen
+			.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage })
+			.last()
+			.element();
+
+		button.dispatchEvent(pointer('pointerenter'));
+
+		await expect.poll(() => mic.getUserMedia.mock.calls.length).toBe(1);
+
+		button.dispatchEvent(pointer('pointerleave'));
+		mic.restore();
 	});
 });
