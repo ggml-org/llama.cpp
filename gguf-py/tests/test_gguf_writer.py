@@ -54,7 +54,7 @@ def test_ternary_tensor_payload_roundtrip(tmp_path, qtype):
 def test_ptq1_quantize_cli_roundtrip(tmp_path, width, qtype):
     binary = os.environ.get("LLAMA_TEST_QUANTIZE_BIN")
     if binary is None:
-        pytest.skip("set LLAMA_TEST_QUANTIZE_BIN to a CPU llama-quantize executable")
+        pytest.skip("set LLAMA_TEST_QUANTIZE_BIN to a CPU llama-quantize executable")  # ty: ignore[too-many-positional-arguments]
     source = tmp_path / "source.gguf"
     target = tmp_path / "ptq1.gguf"
     copied = tmp_path / "copied.gguf"
