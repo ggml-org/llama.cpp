@@ -2549,7 +2549,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     // Therefore, in such cases use cuBLAS.
     const bool bad_padding_clear = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE
         && ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) && src0->view_src;
-    // MMVF, MMVQ and MMQ also read a BF16 src1, MMF only an F32 src1
+    // MMVQ, MMQ and MMVF (BF16 and FP8 weights) also read a BF16 src1, MMF only an F32 src1
     if (bad_padding_clear || (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_BF16) || dst->type != GGML_TYPE_F32) {
         ggml_cuda_mul_mat_cublas(ctx, src0, src1, dst);
         return;

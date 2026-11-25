@@ -12244,7 +12244,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_BF16, 16, 1, 256, {3, 2}, {2, 2}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_BF16, 16, 8, 256, {1, 1}, {1, 1}));
 
-    // BF16 in src1 (activations): MMVQ, few-row MMQ, MMQ with each layout of the Q8_1 src1 and the FP4 src1, MMVF
+    // BF16 in src1 (activations): MMVQ, few-row MMQ, MMQ with each layout of the Q8_1 src1 and the FP4 src1,
+    // cuBLAS for F16 weights, MMVF for BF16 weights and the transposed F32 vector
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0,  GGML_TYPE_BF16, 256,  1, 4096, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0,  GGML_TYPE_BF16, 256,  8, 4096, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K,  GGML_TYPE_BF16, 256,  8, 4096, {1, 1}, {1, 1}));
@@ -12258,13 +12259,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32,   GGML_TYPE_BF16,   1, 16, 2048, {1, 1}, {1, 1}));
     // FP8 weights with more tokens than MMVF takes: src1 quantized to FP8 for cuBLASLt
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F8_E4M3, GGML_TYPE_BF16, 16, 16, 64, {1, 1}, {1, 1}));
-    // BF16 src1 as a permuted view (rows 4*k values apart, channels k apart): MMVQ, few-row MMQ, MMQ with the Q8_1 and the FP4 src1, FP8, MMVF
+    // BF16 src1 as a permuted view (rows 4*k values apart, channels k apart): MMVQ, few-row MMQ, MMQ with the Q8_1 and the FP4 src1,
+    // FP8 on cuBLASLt, MMVF for BF16 and FP8 weights
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K,     GGML_TYPE_BF16, 16,  3,  256, {1, 1}, {4, 2}, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K,     GGML_TYPE_BF16, 64, 13, 4608, {1, 1}, {4, 2}, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K,     GGML_TYPE_BF16, 16, 64,  256, {1, 1}, {4, 2}, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4,    GGML_TYPE_BF16, 16, 64,  256, {1, 1}, {4, 2}, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F8_E4M3,  GGML_TYPE_BF16, 16, 16,   64, {1, 1}, {4, 2}, {0, 2, 1, 3}));
-    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16,      GGML_TYPE_BF16, 16,  3,  256, {1, 1}, {4, 2}, {0, 2, 1, 3}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16,     GGML_TYPE_BF16, 16,  3,  256, {1, 1}, {4, 2}, {0, 2, 1, 3}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F8_E4M3,  GGML_TYPE_BF16, 16,  3,  256, {1, 1}, {4, 2}, {0, 2, 1, 3}));
     // MUL_MAT_ID: MMVQ, MMQ without and with a broadcast src1 (quantized once per token), MMVF with several tokens
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K,     GGML_TYPE_BF16, 8, 2, true,  256,  1, 1024));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K,     GGML_TYPE_BF16, 8, 2, false, 256, 32, 1024));
@@ -12274,9 +12277,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_NVFP4,    GGML_TYPE_BF16, 8, 2, true,  256, 32, 1024));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_MXFP4,    GGML_TYPE_BF16, 8, 2, true,  256, 32, 1024));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F8_E4M3,  GGML_TYPE_BF16, 8, 2, false, 256,  4, 1024));
-    // F16 weights (MMF reads only an F32 src1): MMVF up to 8 tokens, then the fallback that sorts src1 by expert
-    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16,      GGML_TYPE_BF16, 8, 2, false, 256,  1, 1024));
-    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16,      GGML_TYPE_BF16, 8, 2, false, 256,  4, 1024));
+    // float experts (MMF reads only an F32 src1): MMVF for BF16 experts up to 8 tokens, the fallback that sorts src1 by expert for F16
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16,     GGML_TYPE_BF16, 8, 2, false, 256,  1, 1024));
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_BF16,     GGML_TYPE_BF16, 8, 2, false, 256,  4, 1024));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16,      GGML_TYPE_BF16, 8, 2, false, 256, 32, 1024));
 
     // token-tile boundary coverage. With n_used == n_mats every token routes to every expert, so
@@ -13574,12 +13577,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K,   GGML_GLU_OP_SWIGLU,         9,   128, 2048, false, 1, 1, false, false, true, false, { 1, 1 }));
     // on DGX Spark also the expert gate and up matmuls at 8 tokens, instead of the fused MMVQ path
     test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K,   GGML_GLU_OP_SWIGLU,         8,   128, 2048, true, 16, 4, true));
-    // BF16 input to MUL_MAT_ID: fused gate/up + GLU on MMVF (F16 experts with more than 512 rows) and on MMQ (broadcast input)
-    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_F16,    GGML_GLU_OP_SWIGLU,         1,  1024,  256, true, 16, 8, false, false, true, false, { 1, 1 }, false, GGML_TYPE_BF16));
+    // BF16 input to MUL_MAT_ID: fused gate/up + GLU on MMVF (BF16 experts with more than 512 rows) and on MMQ (broadcast input)
+    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_BF16,   GGML_GLU_OP_SWIGLU,         1,  1024,  256, true, 16, 8, false, false, true, false, { 1, 1 }, false, GGML_TYPE_BF16));
     test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K,   GGML_GLU_OP_SWIGLU,        17,  5120,  256, true, 16, 8, true,  false, true, false, { 4, 2 }, false, GGML_TYPE_BF16));
     // BF16 input: fused gate/up + GLU on MMVQ, MMVF and MMQ (NVFP4 with weight scales), and the NVFP4 weight scale on MMQ
     test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K,   GGML_GLU_OP_SWIGLU,         1,    32,  256, false, 1, 1, false, false, true, false, { 1, 1 }, false, GGML_TYPE_BF16));
-    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_F16,    GGML_GLU_OP_SWIGLU,         1,    32,  256, false, 1, 1, false, false, true, false, { 1, 1 }, false, GGML_TYPE_BF16));
+    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_BF16,   GGML_GLU_OP_SWIGLU,         1,    32,  256, false, 1, 1, false, false, true, false, { 1, 1 }, false, GGML_TYPE_BF16));
     test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_NVFP4,  GGML_GLU_OP_SWIGLU,       150,  6912,  256, false, 1, 1, false, false, true, true,  { 2, 3 }, false, GGML_TYPE_BF16));
     test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_NVFP4,  GGML_GLU_OP_SWIGLU,       150,  2560,  256, false, 1, 1, false, false, false, true, { 1, 1 }, false, GGML_TYPE_BF16));
 
