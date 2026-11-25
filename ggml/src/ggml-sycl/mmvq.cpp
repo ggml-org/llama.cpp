@@ -1779,7 +1779,8 @@ template <ggml_type type>
 static void reorder_mul_mat_vec_iq_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
                                              const int nrows, dpct::queue_ptr stream) {
     static_assert(type == GGML_TYPE_IQ3_XXS || type == GGML_TYPE_IQ3_S || type == GGML_TYPE_IQ4_NL ||
-                  type == GGML_TYPE_IQ4_XS);
+                  type == GGML_TYPE_IQ4_XS || type == GGML_TYPE_IQ2_XXS || type == GGML_TYPE_IQ2_XS ||
+                  type == GGML_TYPE_IQ2_S);
     GGML_ASSERT(ncols % ggml_sycl_reordered::block_q_t<type>::traits::qk == 0);
     constexpr size_t num_subgroups = WARP_SIZE;
     const int block_num_y = ceil_div(nrows, GGML_SYCL_MMV_Y * (int) num_subgroups);
@@ -1802,7 +1803,8 @@ static void reorder_mul_mat_vec_iq_q8_1_sycl_ncols(
         const int stride_col_y_bytes, const int stride_col_dst,
         dpct::queue_ptr stream) {
     static_assert(type == GGML_TYPE_IQ3_XXS || type == GGML_TYPE_IQ3_S || type == GGML_TYPE_IQ4_NL ||
-                  type == GGML_TYPE_IQ4_XS);
+                  type == GGML_TYPE_IQ4_XS || type == GGML_TYPE_IQ2_XXS || type == GGML_TYPE_IQ2_XS ||
+                  type == GGML_TYPE_IQ2_S);
     GGML_ASSERT(ncols % ggml_sycl_reordered::block_q_t<type>::traits::qk == 0);
     constexpr size_t num_subgroups = WARP_SIZE;
     const int block_num_y = ceil_div(nrows, GGML_SYCL_MMV_Y * (int) num_subgroups);
@@ -2230,10 +2232,25 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
     // the main device has a larger memory buffer to hold the results from all GPUs
     // nrows_dst == nrows of the matrix that the kernel writes into
 
+    const auto * src0_extra = static_cast<const ggml_tensor_extra_gpu *>(dst->src[0]->extra);
+    const bool   reordered  = src0_extra && src0_extra->optimized_feature.reorder;
+
     for (int i = 0; i < src1_ncols; i++) {
         const size_t src1_ddq_i_offset = i * src1_padded_col_size * q8_1_ts / q8_1_bs;
         const char * src1_ddq_i_bs     = src1_ddq_i + src1_ddq_i_offset;
         float *      dst_dd_i_bs       = dst_dd_i + i * dst->ne[0];
+        // a reordered iq2 weight (MoE experts): true when it did every column at once
+        auto reorder_iq = [&](auto tc) {
+            constexpr ggml_type type = decltype(tc)::value;
+            if (i == 0 && src1_ncols > 1 && src1_ncols <= 8) {
+                const int stride_col_y_bytes = src1_padded_col_size * q8_1_ts / q8_1_bs;
+                reorder_mul_mat_vec_iq_q8_1_sycl_switch_ncols<type>(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff,
+                                                                     src1_ncols, stride_col_y_bytes, dst->ne[0], stream);
+                return true;
+            }
+            reorder_mul_mat_vec_iq_q8_1_sycl<type>(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+            return false;
+        };
         switch (src0->type) {
             case GGML_TYPE_Q4_0:
                 if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
@@ -2505,13 +2522,31 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
                 mul_mat_vec_iq1_m_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                 break;
             case GGML_TYPE_IQ2_XXS:
-                mul_mat_vec_iq2_xxs_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                if (reordered) {
+                    if (reorder_iq(std::integral_constant<ggml_type, GGML_TYPE_IQ2_XXS>{})) {
+                        return;
+                    }
+                } else {
+                    mul_mat_vec_iq2_xxs_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                }
                 break;
             case GGML_TYPE_IQ2_XS:
-                mul_mat_vec_iq2_xs_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                if (reordered) {
+                    if (reorder_iq(std::integral_constant<ggml_type, GGML_TYPE_IQ2_XS>{})) {
+                        return;
+                    }
+                } else {
+                    mul_mat_vec_iq2_xs_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                }
                 break;
             case GGML_TYPE_IQ2_S:
-                mul_mat_vec_iq2_s_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                if (reordered) {
+                    if (reorder_iq(std::integral_constant<ggml_type, GGML_TYPE_IQ2_S>{})) {
+                        return;
+                    }
+                } else {
+                    mul_mat_vec_iq2_s_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                }
                 break;
             case GGML_TYPE_IQ3_XXS:
                 if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
@@ -2777,6 +2812,10 @@ bool ggml_sycl_mul_mat_vec_q_id_reorder_supports_type(enum ggml_type src0_type) 
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_IQ3_XXS:
         case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q6_K:
@@ -3061,6 +3100,26 @@ bool ggml_sycl_mul_mat_vec_q_id_reorder(
             return true;
         case GGML_TYPE_IQ3_S:
             launch_mul_mat_vec_q_moe_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_IQ3_S>>(
+                vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
+                expert_weight_stride, dst_row_stride, src1_row_stride, stream);
+            return true;
+        case GGML_TYPE_IQ2_XXS:
+            launch_mul_mat_vec_q_moe_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_IQ2_XXS>>(
+                vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
+                expert_weight_stride, dst_row_stride, src1_row_stride, stream);
+            return true;
+        case GGML_TYPE_IQ2_XS:
+            launch_mul_mat_vec_q_moe_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_IQ2_XS>>(
+                vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
+                expert_weight_stride, dst_row_stride, src1_row_stride, stream);
+            return true;
+        case GGML_TYPE_IQ2_S:
+            launch_mul_mat_vec_q_moe_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_IQ2_S>>(
+                vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
+                expert_weight_stride, dst_row_stride, src1_row_stride, stream);
+            return true;
+        case GGML_TYPE_IQ4_XS:
+            launch_mul_mat_vec_q_moe_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_IQ4_XS>>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;

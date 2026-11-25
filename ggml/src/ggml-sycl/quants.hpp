@@ -19,6 +19,7 @@
 
 #include "ggml-common.h"
 #include "ggml.h"
+#include "layout.hpp"
 
 namespace ggml_sycl_reordered {
 
@@ -282,6 +283,30 @@ template <> struct block_q_t<GGML_TYPE_IQ4_XS> {
     static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
 };
 
+// The formats whose reorder layout is their ggml_sycl_layout table (layout.hpp): the reordered dot product
+// reads up to four fields of a block, F0 and F1 at get_block_offset, F2 and F3 at get_d_offset.
+template <typename block_t, int F0, int F1, int F2 = F0, int F3 = F0> struct block_q_layout {
+    using L = ggml_sycl_layout<block_t>;
+
+    struct traits {
+        static constexpr uint32_t qk       = QK_K;
+        static constexpr uint32_t qi       = QK_K / QK8_1; // one dot product a 32-value sub-block
+        static constexpr uint32_t qr       = 1;
+        static constexpr uint32_t vdr_mmvq = 1;
+    };
+
+    static constexpr std::pair<int, int> get_block_offset(const int ib, const int nblocks) {
+        return { ggml_sycl_layout_at<L>(F0, ib, nblocks), ggml_sycl_layout_at<L>(F1, ib, nblocks) };
+    }
+
+    static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int ib) {
+        const int nblocks = nrows * (ncols / QK_K);
+        return { ggml_sycl_layout_at<L>(F2, ib, nblocks), ggml_sycl_layout_at<L>(F3, ib, nblocks) };
+    }
+
+    static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
+};
+
 // IQ4_NL blocks and IQ4_XS sub-blocks are 32-value groups of 16 qs bytes, so in both layouts the qs of
 // group g start at 16 * g; tail is the first byte after all qs, where the per-block records start
 template <ggml_type type> inline float iq4_group_scale(const uint8_t * tail, const int64_t g) {
@@ -289,6 +314,19 @@ template <ggml_type type> inline float iq4_group_scale(const uint8_t * tail, con
     constexpr int64_t groups = block_t::traits::qk / QK4_NL;
     return block_t::group_scale(tail + g / groups * block_t::record_size, (int) (g % groups));
 }
+
+using iq2_xxs_layout = ggml_sycl_layout<block_iq2_xxs>;
+using iq2_xs_layout  = ggml_sycl_layout<block_iq2_xs>;
+using iq2_s_layout   = ggml_sycl_layout<block_iq2_s>;
+
+template <>
+struct block_q_t<GGML_TYPE_IQ2_XXS> : block_q_layout<block_iq2_xxs, iq2_xxs_layout::QS, iq2_xxs_layout::D> {};
+template <>
+struct block_q_t<GGML_TYPE_IQ2_XS>
+    : block_q_layout<block_iq2_xs, iq2_xs_layout::QS, iq2_xs_layout::SC, iq2_xs_layout::D> {};
+template <>
+struct block_q_t<GGML_TYPE_IQ2_S>
+    : block_q_layout<block_iq2_s, iq2_s_layout::QS, iq2_s_layout::QH, iq2_s_layout::SC, iq2_s_layout::D> {};
 
 template <> struct block_q_t<GGML_TYPE_Q8_0> {
     struct traits {
