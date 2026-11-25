@@ -13,6 +13,7 @@ export enum ModelsSheetPage {
 
 /** Pages of the phone's settings sheet. */
 export enum SettingsSheetPage {
+	ADVANCED = 'advanced',
 	MCP_SERVERS = 'mcp-servers',
 	ROOT = 'root',
 	SECTION = 'section',

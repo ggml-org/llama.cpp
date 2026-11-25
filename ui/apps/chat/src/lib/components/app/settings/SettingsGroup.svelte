@@ -2,7 +2,7 @@
 	import type { Snippet } from 'svelte';
 
 	interface Props {
-		title: string;
+		title?: string;
 		children: Snippet;
 	}
 
@@ -10,7 +10,9 @@
 </script>
 
 <div>
-	<h3 class="mb-6 text-body font-semibold">{title}</h3>
+	{#if title}
+		<h3 class="mb-6 text-body font-semibold">{title}</h3>
+	{/if}
 
 	<div class="space-y-8">
 		{@render children()}

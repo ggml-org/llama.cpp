@@ -68,3 +68,40 @@ export function isSettingShownOn(
 
 	return true;
 }
+
+/**
+ * Split a section's fields into its subgroups, in registry order
+ */
+export function groupSettingsFields(
+	fields: SettingsFieldConfig[]
+): Array<{ title?: string; fields: SettingsFieldConfig[] }> {
+	const groups: Array<{ title?: string; fields: SettingsFieldConfig[] }> = [];
+
+	for (const field of fields) {
+		const last = groups.at(-1);
+
+		if (last && last.title === field.group) {
+			last.fields.push(field);
+		} else {
+			groups.push({ fields: [field], title: field.group });
+		}
+	}
+
+	return groups;
+}
+
+/**
+ * The API key field is listed only when the server wants a key: one is stored or typed, or the server answered 401/403
+ */
+export function isApiKeyFieldShown(input: {
+	storedKey: unknown;
+	draftKey: unknown;
+	status: number;
+}): boolean {
+	return (
+		Boolean(input.storedKey) ||
+		Boolean(input.draftKey) ||
+		input.status === 401 ||
+		input.status === 403
+	);
+}

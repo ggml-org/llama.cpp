@@ -82,7 +82,7 @@
 	const searchUnavailableMessage = $derived(
 		fileSearchKey === null
 			? 'File search is unavailable on this server - type a full path and press Enter'
-			: 'File search is disabled - type a full path and press Enter, or enable "Search files" in Settings > Tools'
+			: 'File search is disabled - type a full path and press Enter, or enable "Search files" in Settings > Agent'
 	);
 
 	let searchInputRef: HTMLInputElement | null = $state(null);

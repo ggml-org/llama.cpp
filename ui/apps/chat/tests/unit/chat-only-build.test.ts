@@ -79,16 +79,15 @@ describe('agentic mode', () => {
 		expect(toolsStore.allTools.every((tool) => tool.source === ToolSource.BROWSER)).toBe(true);
 	});
 
-	it('leaves the Tools and Agentic settings, Enable MCP among them, out when it is off', async () => {
+	it('leaves the Agent settings, Enable MCP among them, out when it is off', async () => {
 		const c = await loadConstants();
 		const slugs = (agentic: boolean) => c.settingsChatSections(agentic).map((s) => s.slug);
 		const keys = (agentic: boolean) =>
 			c.settingsChatSections(agentic).flatMap((s) => (s.fields ?? []).map((field) => field.key));
-		const { AGENTIC, TOOLS } = c.SETTINGS_SECTION_SLUGS;
+		const { AGENT } = c.SETTINGS_SECTION_SLUGS;
 
-		expect(slugs(true)).toEqual(expect.arrayContaining([TOOLS, AGENTIC]));
-		expect(slugs(false)).not.toContain(TOOLS);
-		expect(slugs(false)).not.toContain(AGENTIC);
+		expect(slugs(true)).toContain(AGENT);
+		expect(slugs(false)).not.toContain(AGENT);
 		expect(slugs(false).length).toBeGreaterThan(0);
 
 		expect(keys(true)).toContain(c.SETTINGS_KEYS.ENABLE_MCP);

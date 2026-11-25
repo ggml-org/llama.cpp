@@ -1,4 +1,4 @@
-// Guards the two Settings > Display toggles that drive the default expansion of
+// Guards the two Settings > Chat toggles that drive the default expansion of
 // a tool call block.
 //
 // "Show tool call in progress" mirrors "Show thought in progress": a call is

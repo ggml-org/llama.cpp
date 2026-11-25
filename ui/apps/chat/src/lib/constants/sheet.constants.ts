@@ -46,6 +46,7 @@ export const MODELS_SHEET_TEXT = {
 } as const;
 
 export const SETTINGS_SHEET_TEXT = {
+	ADVANCED: 'Advanced',
 	APP: 'App',
 	APPEARANCE: 'Appearance',
 	CANCEL: 'Cancel',

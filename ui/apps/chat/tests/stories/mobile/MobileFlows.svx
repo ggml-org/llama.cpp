@@ -32,13 +32,13 @@ Story: `Llama Chat/Navigation/SidebarNavigation`.
 
 ## Settings
 
-<Figure n={1} caption="Settings: the first page, a section, and the MCP servers from the Agentic section.">
+<Figure n={1} caption="Settings: the first page, a section, and its Advanced page.">
 	<SheetFlow flow={SETTINGS_FLOW} />
 </Figure>
 
-The first page has the theme as three tiles, then one row per section. A section's page lists its fields in groups: switches, pickers and numbers as rows, a prompt or a choice of one as a group of its own, with the help text under the label. Back returns to where the page below was scrolled.
+The first page has the theme as three tiles, then one row per section: General, Chat, Model, Agent, Voice and Data. A section's page lists its fields in titled groups: switches, pickers and numbers as rows, a prompt or a choice of one as a group of its own, with the help text under the label. What few people need waits on the section's Advanced page. Back returns to where the page below was scrolled.
 
-<Figure n={2} caption="The Tools section is three pages deep: the groups, one group's tools, one tool.">
+<Figure n={2} caption="Tools are in the Agent section, three pages deep: the groups, one group's tools, one tool. Manage MCP servers opens from the same section.">
 	<SheetFlow flow={SETTINGS_TOOLS_FLOW} />
 </Figure>
 

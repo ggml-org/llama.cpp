@@ -133,7 +133,7 @@
 		}
 
 		if (!fileSearchEnabled) {
-			return 'File search is disabled - enable "Search files" in Settings > Tools to use @-mentions';
+			return 'File search is disabled - enable "Search files" in Settings > Agent to use @-mentions';
 		}
 
 		return searchError ? `Search failed - ${searchError}` : 'No matching files or folders';

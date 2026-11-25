@@ -15,20 +15,20 @@ export interface Flow {
 export const SETTINGS_FLOW: Flow = {
 	pages: [
 		{ note: 'Theme tiles, then a row per section', title: 'Settings' },
-		{ note: 'Switches, pickers and numbers in groups', title: 'A section' },
-		{ note: 'From Enable MCP, in Agentic', title: 'MCP servers' }
+		{ note: 'Titled groups of switches, pickers and numbers', title: 'A section' },
+		{ note: 'The settings few people need', title: 'Advanced' }
 	],
 	trigger: 'Settings key, bottom left of the sidebar'
 };
 
 export const SETTINGS_TOOLS_FLOW: Flow = {
 	pages: [
-		{ note: 'The Tools row', title: 'Settings' },
+		{ note: 'The Tools row, and Enable MCP', title: 'Agent' },
 		{ note: 'A row and a switch per group', title: 'Tools' },
 		{ note: "The group's tools, each with a switch", title: 'A tool group' },
 		{ note: 'Enabled, Always allow, Shown argument', title: 'A tool' }
 	],
-	trigger: 'Settings key, then Tools'
+	trigger: 'Settings key, then Agent'
 };
 
 export const ADD_FLOW: Flow = {

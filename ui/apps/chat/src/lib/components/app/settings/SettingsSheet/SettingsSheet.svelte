@@ -1,7 +1,7 @@
 <!--
 	A phone's settings: a full-height sheet. Its first page has the theme and a row per section; a row
-	pushes the section's page, and the Tools row the tools. A change applies as it is made, the native
-	way, so there is nothing to save.
+	pushes the section's page, whose rows push its advanced settings and the tools. A change applies as
+	it is made, the native way, so there is nothing to save.
 -->
 <script lang="ts">
 	import SettingsSheetTools, { type SettingsToolsView } from './SettingsSheetTools.svelte';
@@ -15,7 +15,7 @@
 	import { SHEET_CONTENT_CLASS } from '@ggml-org/llama-ui/constants';
 	import * as AlertDialog from '@ggml-org/llama-ui/ui/alert-dialog';
 	import * as Drawer from '@ggml-org/llama-ui/ui/drawer';
-	import { RefreshCw, RotateCcw } from '@lucide/svelte';
+	import { PencilRuler, RefreshCw, RotateCcw, SlidersHorizontal } from '@lucide/svelte';
 	import {
 		SettingsChatFieldsInset,
 		SettingsChatImportExportTab,
@@ -44,7 +44,13 @@
 		settingsStore,
 		toolsStore
 	} from '#lib/stores/index.ts';
-	import { getToolDisplay, isSettingShownOn } from '#lib/utils/index.ts';
+	import {
+		getToolDisplay,
+		groupSettingsFields,
+		isApiKeyFieldShown,
+		isSettingShownOn
+	} from '#lib/utils/index.ts';
+	import { page as appPage } from '$app/state';
 	import { setMode } from 'mode-watcher';
 	import { tick } from 'svelte';
 	import { toast } from 'svelte-sonner';
@@ -58,6 +64,7 @@
 	type Page =
 		| { id: SettingsSheetPage.ROOT }
 		| { id: SettingsSheetPage.SECTION; slug: string }
+		| { id: SettingsSheetPage.ADVANCED; slug: string }
 		| { id: SettingsSheetPage.MCP_SERVERS }
 		| SettingsToolsView;
 
@@ -77,22 +84,37 @@
 	let showResetDialog = $state(false);
 
 	let section = $derived(
-		page.id === SettingsSheetPage.SECTION
+		page.id === SettingsSheetPage.SECTION || page.id === SettingsSheetPage.ADVANCED
 			? SETTINGS_CHAT_SECTIONS.find((entry) => entry.slug === page.slug)
 			: undefined
+	);
+
+	let showApiKey = $derived(
+		isApiKeyFieldShown({
+			draftKey: config[SETTINGS_KEYS.API_KEY],
+			status: appPage.status,
+			storedKey: config[SETTINGS_KEYS.API_KEY]
+		})
 	);
 
 	// the theme has the first page's tiles, so a section does not list it again
 	let sectionFields = $derived(
 		(section?.fields ?? []).filter(
-			(field) => field.key !== SETTINGS_KEYS.THEME && isSettingShownOn(field, deviceStore.isMobile)
+			(field) =>
+				field.key !== SETTINGS_KEYS.THEME &&
+				(field.key !== SETTINGS_KEYS.API_KEY || showApiKey) &&
+				isSettingShownOn(field, deviceStore.isMobile)
 		)
 	);
+	let basicFields = $derived(sectionFields.filter((field) => !field.advanced));
+	let advancedFields = $derived(sectionFields.filter((field) => field.advanced));
 
 	const title = $derived.by(() => {
 		switch (page.id) {
 			case SettingsSheetPage.SECTION:
 				return section?.title ?? SETTINGS_SHEET_TEXT.TITLE;
+			case SettingsSheetPage.ADVANCED:
+				return SETTINGS_SHEET_TEXT.ADVANCED;
 			case SettingsSheetPage.MCP_SERVERS:
 				return SETTINGS_SHEET_TEXT.MCP_SERVERS;
 			case SettingsSheetPage.TOOLS:
@@ -237,6 +259,8 @@
 				{#if section}
 					{@render sectionPage(section.slug)}
 				{/if}
+			{:else if page.id === SettingsSheetPage.ADVANCED}
+				{@render fieldGroups(advancedFields)}
 			{:else if page.id === SettingsSheetPage.MCP_SERVERS}
 				<SettingsMcpServers />
 			{:else}
@@ -323,12 +347,7 @@
 			<InsetListRow
 				chevron
 				icon={entry.icon}
-				onclick={() =>
-					openPage(
-						entry.slug === SETTINGS_SECTION_SLUGS.TOOLS
-							? { id: SettingsSheetPage.TOOLS }
-							: { id: SettingsSheetPage.SECTION, slug: entry.slug }
-					)}
+				onclick={() => openPage({ id: SettingsSheetPage.SECTION, slug: entry.slug })}
 			>
 				<span class="flex-1">{entry.title}</span>
 			</InsetListRow>
@@ -336,42 +355,69 @@
 	</InsetList>
 {/snippet}
 
-{#snippet sectionPage(slug: string)}
-	{#if slug === SETTINGS_SECTION_SLUGS.IMPORT_EXPORT}
-		<SettingsChatImportExportTab inset />
-	{:else if slug === SETTINGS_SECTION_SLUGS.VOICE}
-		<SettingsChatVoiceTab
-			fields={sectionFields}
-			inset
-			localConfig={config}
-			onConfigChange={commit}
-		/>
-	{:else}
+{#snippet fieldGroups(fields: SettingsFieldConfig[])}
+	{#each groupSettingsFields(fields) as group (group.title)}
 		<SettingsChatFieldsInset
-			fields={sectionFields}
+			fields={group.fields}
 			localConfig={config}
 			onConfigChange={commit}
 			onManageMcpServers={() => openPage({ id: SettingsSheetPage.MCP_SERVERS })}
 			onThemeChange={setTheme}
+			title={group.title}
 		/>
+	{/each}
+{/snippet}
 
-		{#if slug === SETTINGS_SECTION_SLUGS.GENERAL}
-			<InsetList title={SETTINGS_SHEET_TEXT.APP}>
-				<InsetListRow icon={RefreshCw} onclick={() => window.location.reload()}>
-					{SETTINGS_SHEET_TEXT.RELOAD_APP}
+{#snippet navRow(icon: typeof PencilRuler, label: string, onclick: () => void)}
+	<InsetList>
+		<InsetListRow chevron {icon} {onclick}>
+			<span class="flex-1">{label}</span>
+		</InsetListRow>
+	</InsetList>
+{/snippet}
+
+{#snippet sectionPage(slug: string)}
+	{#if slug === SETTINGS_SECTION_SLUGS.DATA}
+		<SettingsChatImportExportTab inset />
+
+		<InsetList title={SETTINGS_SHEET_TEXT.APP}>
+			<InsetListRow icon={RefreshCw} onclick={() => window.location.reload()}>
+				{SETTINGS_SHEET_TEXT.RELOAD_APP}
+			</InsetListRow>
+
+			{#if settingsStore.hasCustomSettings}
+				<InsetListRow
+					bodyClass="text-destructive"
+					icon={RotateCcw}
+					iconClass="text-destructive"
+					onclick={() => (showResetDialog = true)}
+				>
+					{SETTINGS_SHEET_TEXT.RESET}
 				</InsetListRow>
+			{/if}
+		</InsetList>
+	{:else}
+		{#if slug === SETTINGS_SECTION_SLUGS.AGENT}
+			{@render navRow(PencilRuler, SETTINGS_SHEET_TEXT.TOOLS, () =>
+				openPage({ id: SettingsSheetPage.TOOLS })
+			)}
+		{/if}
 
-				{#if settingsStore.hasCustomSettings}
-					<InsetListRow
-						bodyClass="text-destructive"
-						icon={RotateCcw}
-						iconClass="text-destructive"
-						onclick={() => (showResetDialog = true)}
-					>
-						{SETTINGS_SHEET_TEXT.RESET}
-					</InsetListRow>
-				{/if}
-			</InsetList>
+		{#if slug === SETTINGS_SECTION_SLUGS.VOICE}
+			<SettingsChatVoiceTab
+				fields={basicFields}
+				inset
+				localConfig={config}
+				onConfigChange={commit}
+			/>
+		{:else}
+			{@render fieldGroups(basicFields)}
+		{/if}
+
+		{#if advancedFields.length > 0}
+			{@render navRow(SlidersHorizontal, SETTINGS_SHEET_TEXT.ADVANCED, () =>
+				openPage({ id: SettingsSheetPage.ADVANCED, slug })
+			)}
 		{/if}
 	{/if}
 {/snippet}

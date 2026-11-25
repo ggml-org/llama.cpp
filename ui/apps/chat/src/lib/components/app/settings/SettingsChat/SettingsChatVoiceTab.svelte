@@ -1,5 +1,5 @@
 <!--
-	Voice section of the settings: the registry's fields, with the microphone and the transcription model between them.
+	Voice section of the settings: the registry's fields in their subgroups, with the microphone and the transcription model pickers.
 	Those list this device's microphones and the server's models with audio input, which a static field cannot, so they
 	are drawn here.
 -->
@@ -16,16 +16,19 @@
 	} from '@ggml-org/llama-voice';
 	import {
 		SettingsChatFields,
-		SettingsChatFieldsInset
+		SettingsChatFieldsInset,
+		SettingsGroup
 	} from '#lib/components/app/settings/index.ts';
 	import {
 		SETTING_CONFIG_INFO,
 		SETTINGS_KEYS,
+		SETTINGS_REGISTRY,
 		VOICE_GGUF_EXTENSION_PATTERN,
 		VOICE_SETTINGS_LABEL,
 		VOICE_TRANSCRIPTION_MODEL_AUTO
 	} from '#lib/constants/index.ts';
 	import { modelsStore, serverStore } from '#lib/stores/index.ts';
+	import { groupSettingsFields } from '#lib/utils/index.ts';
 	import { isTranscriptionOnlyModel } from '#lib/utils/voice-mode.ts';
 	import { onMount, type Snippet } from 'svelte';
 
@@ -60,8 +63,18 @@
 
 	const KEY = SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL;
 
-	// the pickers sit right after the Voice input field
-	let splitAt = $derived(fields.findIndex((f) => f.key === SETTINGS_KEYS.VOICE_INPUT_MODE) + 1);
+	let groups = $derived(groupSettingsFields(fields));
+
+	// the pickers have no standalone field, so their registry entries say which subgroup they go in
+	function groupOf(key: string): string | undefined {
+		return SETTINGS_REGISTRY.flatMap((section) => section.settings).find((s) => s.key === key)
+			?.group;
+	}
+
+	// the model picker goes right after Voice input, the microphone picker opens its subgroup
+	function splitAt(group: SettingsFieldConfig[]): number {
+		return group.findIndex((f) => f.key === SETTINGS_KEYS.VOICE_INPUT_MODE) + 1;
+	}
 	let isRouter = $derived(serverStore.isRouterMode);
 	let current = $derived(String(localConfig[KEY] ?? VOICE_TRANSCRIPTION_MODEL_AUTO));
 
@@ -288,46 +301,86 @@
 
 {#if inset}
 	<div class="flex flex-col gap-8">
-		<SettingsChatFieldsInset fields={fields.slice(0, splitAt)} {localConfig} {onConfigChange} />
+		{#each groups as group (group.title)}
+			{@const split = splitAt(group.fields)}
 
-		{@render insetPicker(
-			VOICE_TAB_TEXT.MICROPHONE,
-			micCurrent,
-			micLabel,
-			(value) => onConfigChange(MIC_KEY, value),
-			micOptions,
-			[],
-			microphoneNote,
-			VOICE_TAB_SLOTS.MICROPHONE
-		)}
+			<div class="flex flex-col gap-1.5">
+				{#if group.title}
+					<h3 class="inset-list-title">{group.title}</h3>
+				{/if}
 
-		{#if isRouter}
-			{@render insetPicker(
-				VOICE_TAB_TEXT.TRANSCRIPTION_MODEL,
-				current,
-				selectedLabel,
-				(value) => onConfigChange(KEY, value),
-				[{ label: VOICE_SETTINGS_LABEL.automatic, value: VOICE_TRANSCRIPTION_MODEL_AUTO }],
-				optionGroups,
-				transcriptionNote,
-				VOICE_TAB_SLOTS.TRANSCRIPTION_MODEL
-			)}
-		{:else}
-			<p class="inset-list-caption" data-slot={VOICE_TAB_SLOTS.TRANSCRIPTION_MODEL}>
-				{@render singleModelNote()}
-			</p>
-		{/if}
+				<div class="flex flex-col gap-6">
+					{#if group.title === groupOf(MIC_KEY)}
+						{@render insetPicker(
+							VOICE_TAB_TEXT.MICROPHONE,
+							micCurrent,
+							micLabel,
+							(value) => onConfigChange(MIC_KEY, value),
+							micOptions,
+							[],
+							microphoneNote,
+							VOICE_TAB_SLOTS.MICROPHONE
+						)}
+					{/if}
 
-		<SettingsChatFieldsInset fields={fields.slice(splitAt)} {localConfig} {onConfigChange} />
+					<SettingsChatFieldsInset
+						fields={group.fields.slice(0, split)}
+						{localConfig}
+						{onConfigChange}
+					/>
+
+					{#if group.title === groupOf(KEY)}
+						{#if isRouter}
+							{@render insetPicker(
+								VOICE_TAB_TEXT.TRANSCRIPTION_MODEL,
+								current,
+								selectedLabel,
+								(value) => onConfigChange(KEY, value),
+								[{ label: VOICE_SETTINGS_LABEL.automatic, value: VOICE_TRANSCRIPTION_MODEL_AUTO }],
+								optionGroups,
+								transcriptionNote,
+								VOICE_TAB_SLOTS.TRANSCRIPTION_MODEL
+							)}
+						{:else}
+							<p class="inset-list-caption" data-slot={VOICE_TAB_SLOTS.TRANSCRIPTION_MODEL}>
+								{@render singleModelNote()}
+							</p>
+						{/if}
+					{/if}
+
+					<SettingsChatFieldsInset
+						fields={group.fields.slice(split)}
+						{localConfig}
+						{onConfigChange}
+					/>
+				</div>
+			</div>
+		{/each}
 	</div>
 {:else}
-	<div class="space-y-6">
-		<SettingsChatFields fields={fields.slice(0, splitAt)} {localConfig} {onConfigChange} />
+	<div class="space-y-12">
+		{#each groups as group (group.title)}
+			{@const split = splitAt(group.fields)}
 
-		{@render microphonePicker()}
+			<SettingsGroup title={group.title}>
+				<div class="space-y-6">
+					{#if group.title === groupOf(MIC_KEY)}
+						{@render microphonePicker()}
+					{/if}
 
-		{@render transcriptionModelPicker()}
+					<SettingsChatFields
+						fields={group.fields.slice(0, split)}
+						{localConfig}
+						{onConfigChange}
+					/>
 
-		<SettingsChatFields fields={fields.slice(splitAt)} {localConfig} {onConfigChange} />
+					{#if group.title === groupOf(KEY)}
+						{@render transcriptionModelPicker()}
+					{/if}
+
+					<SettingsChatFields fields={group.fields.slice(split)} {localConfig} {onConfigChange} />
+				</div>
+			</SettingsGroup>
+		{/each}
 	</div>
 {/if}
