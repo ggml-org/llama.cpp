@@ -3310,7 +3310,8 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                             step_request = get_decode_window_request(decode_window);
                         }
                     }
-                    const auto & compiled_inputs = step_request->get_compiled_model().inputs();
+                    const auto step_model = step_request->get_compiled_model();
+                    const auto & compiled_inputs = step_model.inputs();
                     for (size_t i = 0; i < decode_input_names_for_outputs.size(); i++) {
                         const auto & name = decode_input_names_for_outputs[i];
                         auto input_tensor = get_ov_input_tensor_static_decode(ggml_decoder, name, row);
