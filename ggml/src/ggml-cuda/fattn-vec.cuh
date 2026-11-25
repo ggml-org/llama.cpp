@@ -40,7 +40,8 @@ static __global__ void flash_attn_ext_vec(
                             const int32_t s11,  const int32_t s12,  const int64_t s13,
                             const int32_t s21,  const int32_t s22,  const int64_t s23,
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
-                            const int32_t s31,  const int64_t s32,  const int64_t s33) {
+                            const int32_t s31,  const int64_t s32,  const int64_t s33,
+        const fattn_indexed_bias bias) {
     ggml_cuda_pdl_lc();
 #ifdef FLASH_ATTN_AVAILABLE
     const float2 * GGML_CUDA_RESTRICT Q        = Q_ptr;

@@ -470,7 +470,10 @@ static __device__ __forceinline__ void flash_attn_tile_iter(
         T_acc * const VKQ,
         const int k_VKQ_0,
         const int k_VKQ_max,
-        const int col_Q_0) {
+        const int col_Q_0,
+        const fattn_indexed_bias bias,
+        const int head0,
+        const int sequence) {
     constexpr int cpy_nb = 16;
     constexpr int cpy_ne = cpy_nb / 4;
 
@@ -531,8 +534,22 @@ static __device__ __forceinline__ void flash_attn_tile_iter(
             }
 
             if (!oob_check || i_KQ < k_VKQ_sup) {
-                KQ_acc[(i_KQ_0/(np*warp_size))*cpw + jc0] += (ncols2 > 1 || mask) ?
-                    slope*__half2float(mask[j*stride_mask + k_VKQ_0 + i_KQ]) : 0.0f;
+                float m = (ncols2 > 1 || mask) ?
+                    __half2float(mask[j*stride_mask + k_VKQ_0 + i_KQ]) : 0.0f;
+
+                if (bias.table) {
+                    // the queries of all streams are flattened, as in the CPU reference;
+                    // a column belongs to the head head0 + col % ncols2 of the query group
+                    const int64_t query = (int64_t) sequence*bias.n_queries + j;
+                    const int64_t head  = head0 + (jc0 + (threadIdx.y / np)*cpw) % ncols2;
+                    const int64_t k     = k_VKQ_0 + i_KQ;
+                    const int32_t bin   = bias.indices[query*bias.n_stride_indices + k];
+                    if ((uint32_t) bin < bias.n_bins) {
+                        m = __half2float(__float2half(m + bias.table[(query*bias.n_heads + head)*bias.n_bins + bin]));
+                    }
+                }
+
+                KQ_acc[(i_KQ_0/(np*warp_size))*cpw + jc0] += slope*m;
 
                 KQ_max_new[jc0] = fmaxf(KQ_max_new[jc0], KQ_acc[(i_KQ_0/(np*warp_size))*cpw + jc0] + FATTN_KQ_MAX_OFFSET);
             }
@@ -708,7 +725,8 @@ static __global__ void flash_attn_tile(
                             const int32_t s11,  const int32_t s12,  const int64_t s13,
                             const int32_t s21,  const int32_t s22,  const int64_t s23,
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
-                            const int32_t s31,  const int64_t s32,  const int64_t s33) {
+                            const int32_t s31,  const int64_t s32,  const int64_t s33,
+        const fattn_indexed_bias bias) {
 #ifdef FLASH_ATTN_AVAILABLE
     using T_K = decltype(ggml_cuda_fattn_kv_dtype<type_K>());
     using T_V = decltype(ggml_cuda_fattn_kv_dtype<type_V>());
@@ -734,7 +752,8 @@ static __global__ void flash_attn_tile(
                   s11,  s12,  s13,
                   s21,  s22,  s23,
                   ne31, ne32, ne33,
-                  s31,  s32,  s33);
+                  s31,  s32,  s33,
+            bias);
         NO_DEVICE_CODE;
         return;
     }
@@ -866,14 +885,16 @@ static __global__ void flash_attn_tile(
             constexpr bool oob_check = false;
             flash_attn_tile_iter<warp_size, nwarps, ncols1, ncols2, DKQ, DV, nbatch_fa, nbatch_K, use_logit_softcap, oob_check>
                 (Q_tmp, K_h2, V_h2, maskh, ne01, logit_softcap, slope, KQ, KV_tmp,
-                stride_K2, stride_V2, stride_mask, KQ_max, KQ_sum, VKQ, k_VKQ_0, k_VKQ_max, col_Q_0);
+                stride_K2, stride_V2, stride_mask, KQ_max, KQ_sum, VKQ, k_VKQ_0, k_VKQ_max, col_Q_0,
+                bias, head0, sequence);
             k_VKQ_0 += gridDim.y*nbatch_fa;
         }
         if (k_VKQ_0 < k_VKQ_max) {
             constexpr bool oob_check = true;
             flash_attn_tile_iter<warp_size, nwarps, ncols1, ncols2, DKQ, DV, nbatch_fa, nbatch_K, use_logit_softcap, oob_check>
                 (Q_tmp, K_h2, V_h2, maskh, ne01, logit_softcap, slope, KQ, KV_tmp,
-                stride_K2, stride_V2, stride_mask, KQ_max, KQ_sum, VKQ, k_VKQ_0, k_VKQ_max, col_Q_0);
+                stride_K2, stride_V2, stride_mask, KQ_max, KQ_sum, VKQ, k_VKQ_0, k_VKQ_max, col_Q_0,
+                bias, head0, sequence);
         }
     } else {
         // Branch without out-of-bounds checks.
@@ -881,7 +902,8 @@ static __global__ void flash_attn_tile(
             constexpr bool oob_check = false;
             flash_attn_tile_iter<warp_size, nwarps, ncols1, ncols2, DKQ, DV, nbatch_fa, nbatch_K, use_logit_softcap, oob_check>
                 (Q_tmp, K_h2, V_h2, maskh, ne01, logit_softcap, slope, KQ, KV_tmp,
-                stride_K2, stride_V2, stride_mask, KQ_max, KQ_sum, VKQ, k_VKQ_0, k_VKQ_max, col_Q_0);
+                stride_K2, stride_V2, stride_mask, KQ_max, KQ_sum, VKQ, k_VKQ_0, k_VKQ_max, col_Q_0,
+                bias, head0, sequence);
         }
     }
 

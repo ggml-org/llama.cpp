@@ -600,7 +600,30 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 #endif// FLASH_ATTN_AVAILABLE
 
     if (ggml_flash_attn_ext_has_indexed_bias(dst)) {
-        return BEST_FATTN_KERNEL_NONE;
+        // The indexed bias is implemented in the tile kernel.
+        const ggml_tensor * Q            = dst->src[0];
+        const ggml_tensor * mask         = dst->src[3];
+        const ggml_tensor * bias_table   = dst->src[6];
+        const ggml_tensor * bias_indices = dst->src[7];
+
+        if (!mask || !bias_table || !bias_indices ||
+            bias_table->type != GGML_TYPE_F32 || !ggml_is_contiguous(bias_table) ||
+            bias_indices->type != GGML_TYPE_I32 || !ggml_is_contiguous(bias_indices)) {
+            return BEST_FATTN_KERNEL_NONE;
+        }
+
+        // a mask with a head dimension is not shared by the Q heads of a K/V head
+        if (mask->ne[2] != 1) {
+            return BEST_FATTN_KERNEL_NONE;
+        }
+
+        // the tile kernel does not read K/V through a row list
+        if (dst->src[5]) {
+            return BEST_FATTN_KERNEL_NONE;
+        }
+
+        const float softcap = ggml_get_op_params_f32(dst, 2);
+        return (Q->ne[0] == 128 || (Q->ne[0] == 64 && softcap == 0.0f)) ? BEST_FATTN_KERNEL_TILE : BEST_FATTN_KERNEL_NONE;
     }
 
     const ggml_tensor * KQV   = dst;
