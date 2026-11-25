@@ -18,7 +18,7 @@
 		DialogMcpResourcesBrowser
 	} from '#lib/components/app/index.ts';
 	import {
-		CHAT_FORM_SINGLE_ROW_MAX_TEXT_PX,
+		CHAT_FORM_SINGLE_ROW_MAX_TEXT_LINES,
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
 		ICON_CLASS_DEFAULT,
 		INITIAL_FILE_SIZE,
@@ -331,11 +331,14 @@
 	$effect(() => {
 		void textHeight;
 
-		const height = inputRef?.getContentDOM()?.offsetHeight ?? 0;
-		const fitsOneLine = height < CHAT_FORM_SINGLE_ROW_MAX_TEXT_PX;
+		const content = inputRef?.getContentDOM();
+		const lineHeight = content ? parseFloat(getComputedStyle(content).lineHeight) : 0;
+		const lines = content && lineHeight ? content.offsetHeight / lineHeight : 0;
+		const fitsOneLine = lines < CHAT_FORM_SINGLE_ROW_MAX_TEXT_LINES;
 		const length = value.length;
 
-		if (!length) wrappedAtLength = Infinity;
+		// a placeholder that wrapped (at length 0) can not get shorter: keep the two rows
+		if (!length && wrappedAtLength) wrappedAtLength = Infinity;
 
 		if (!canBeSingleRow) {
 			isSingleRow = false;
