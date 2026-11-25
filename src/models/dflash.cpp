@@ -36,10 +36,6 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_DFLASH_SELECTOR_RANK,    hparams.dflash_selector_rank,    false);
     ml.get_key(LLM_KV_DFLASH_SELECTOR_TOP_K,   hparams.dflash_selector_top_k,   false);
 
-    if (!ml.get_arr(LLM_KV_TARGET_LAYERS, target_layer_ids, false)) {
-        throw std::runtime_error("DFlash model requires 'target_layers' in GGUF metadata");
-    }
-
     const bool has_markov   = ml.get_tensor_meta("markov_w1.weight")       != nullptr;
     const bool has_selector = ml.get_tensor_meta("selector_hidden.weight") != nullptr;
     const bool has_lilicorr = ml.get_key(LLM_KV_LILICORR_HIDDEN_SIZE, hparams.lilicorr_hidden_size, false);
@@ -51,10 +47,17 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         }
     } else if (has_selector) {
         variant = VARIANT_DFLASH2;
-        load_hparams_dflash2(ml);
     } else if (has_lilicorr) {
         variant = VARIANT_LILICORR;
         load_hparams_lilicorr(ml);
+    }
+
+    if (!ml.get_arr(LLM_KV_TARGET_LAYERS, target_layer_ids, false)) {
+        throw std::runtime_error("DFlash model requires 'target_layers' in GGUF metadata");
+    }
+
+    if (variant == VARIANT_DFLASH2) {
+        load_hparams_dflash2(ml);
     }
 
     hparams.n_embd_inp_enc_impl = (uint32_t) target_layer_ids.size() * hparams.n_embd;
