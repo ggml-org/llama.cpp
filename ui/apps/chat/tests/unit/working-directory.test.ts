@@ -5,7 +5,8 @@ import {
 	highlightMatch,
 	joinPath,
 	rankEntries,
-	splitPathQuery
+	splitPathQuery,
+	toHomeRelativeQuery
 } from '#lib/utils/index.ts';
 import { describe, expect, it } from 'vitest';
 
@@ -169,5 +170,44 @@ describe('buildGlobSearchArgs', () => {
 		expect(args.maxDepth).toBe(SEARCH.PATH_NAV_MAX_DEPTH);
 		expect(args.rankQuery).toBe('bin');
 		expect(args.last).toBe('bin');
+	});
+});
+
+describe('toHomeRelativeQuery', () => {
+	it('anchors a plain query in home as if typed after `~/`', () => {
+		expect(toHomeRelativeQuery('docs')).toBe('~/docs');
+		expect(toHomeRelativeQuery('git/llama')).toBe('~/git/llama');
+	});
+
+	it('anchors a plain query under the resolved home when known', () => {
+		expect(toHomeRelativeQuery('docs', '/Users/al')).toBe('/Users/al/docs');
+		expect(toHomeRelativeQuery('docs', '/Users/al/')).toBe('/Users/al/docs');
+	});
+
+	it('keeps queries that start from a root or `~`', () => {
+		for (const q of [
+			'/',
+			'/usr/local',
+			'~',
+			'~/docs',
+			'C:\\repos',
+			'D:/repos',
+			'\\\\host\\share'
+		]) {
+			expect(toHomeRelativeQuery(q, '/Users/al')).toBe(q);
+		}
+	});
+
+	it('keeps an empty query empty', () => {
+		expect(toHomeRelativeQuery('', '/Users/al')).toBe('');
+	});
+
+	it('navigates home children for a plain query', () => {
+		const args = buildGlobSearchArgs(toHomeRelativeQuery('proj'), '/home', 6);
+
+		expect(args.path).toBe('~');
+		expect(args.include).toBe(buildCaseInsensitiveGlob('proj'));
+		expect(args.maxDepth).toBe(SEARCH.PATH_NAV_MAX_DEPTH);
+		expect(args.last).toBe('proj');
 	});
 });
