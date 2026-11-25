@@ -78,3 +78,30 @@ export const WEB_SEARCH_PHRASING: ToolCallPhrasing = {
 
 /** Per-tool choice that turns the shown arg off and keeps the sentence. */
 export const TOOL_CALL_SHOWN_ARG_NONE = '';
+
+/**
+ * Picks of a tool's shown argument that are not an argument's name: the tool follows the global
+ * setting, or shows none.
+ */
+export const TOOL_SHOWN_ARG_PICK = {
+	DEFAULT: '__default__',
+	NONE: '__none__'
+} as const;
+
+/** Text of the Tools settings, on the desktop's table and the phone sheet's pages. */
+export const TOOL_SETTINGS_TEXT = {
+	ALL_TOOLS: 'All tools',
+	ALWAYS_ALLOW: 'Always allow',
+	ALWAYS_ALLOW_NOTE: 'An always allowed tool runs without asking first.',
+	ALWAYS_ALLOWED: 'Always allowed',
+	ENABLED: 'Enabled',
+	GROUP_TOOLS: (group: string) => `${group} tools`,
+	NO_TOOLS: 'No tools available',
+	SCOPE_CONVERSATION: 'Applies to this conversation.',
+	SCOPE_NEW: 'Applies to new conversations. Tool picks inside a chat only affect that chat.',
+	SHOWN_ARG: 'Shown argument',
+	SHOWN_ARG_DEFAULT: 'Default',
+	SHOWN_ARG_DEFAULT_OF: (arg: string) => `Default (${arg})`,
+	SHOWN_ARG_NONE: 'None',
+	SHOWN_ARG_NOTE: "The argument a call's line shows when the call has it."
+} as const;

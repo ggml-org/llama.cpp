@@ -3,9 +3,10 @@
 export { cn, tv, type WithElementRef, type WithoutChild, type WithoutChildren, type WithoutChildrenOrChild } from './components/ui/utils.js';
 export { ActionIcon } from './components/app/actions/index.js';
 export { SyntaxHighlightedCode } from './components/app/content/index.js';
-export { SearchInput } from './components/app/forms/index.js';
+export { NativeSelect, SearchInput } from './components/app/forms/index.js';
 export { Logo } from './components/app/misc/index.js';
-export { FILTER_TOGGLE_ITEM_CLASS, FILTER_TRIGGER_CLASS, PANEL_CLOSE_MOBILE_CLASS } from './constants/index.js';
+export { InsetList, InsetListRow, InsetListSplitRow, SheetHeader, SheetPages, type SheetPagesState, useSheetPages } from './components/app/sheets/index.js';
+export { FILTER_TOGGLE_ITEM_CLASS, FILTER_TRIGGER_CLASS, PANEL_CLOSE_MOBILE_CLASS, SHEET_CONTENT_CLASS } from './constants/index.js';
 export { ColorMode, TooltipSide } from './enums/index.js';
 export { highlightCode, isHighlightLanguageLoaded, loadHighlightLanguages, resolveHighlightLanguage } from './utils/index.js';
 export * as Alert from './components/ui/alert/index.js';
