@@ -170,7 +170,7 @@ static bool ggml_backend_hrx_buffer_cpy_tensor(ggml_backend_buffer_t buffer, con
 
 static void ggml_backend_hrx_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     auto * ctx = (ggml_hrx_buffer_context *) buffer->context;
-    if (buffer->size == 0 || ctx->buffer == nullptr) {
+    if (ctx->buffer == nullptr) {
         return;
     }
     if (!ggml_hrx_fill(ctx->dev, { ctx->buffer, 0, buffer->size, value })) {
