@@ -2,7 +2,7 @@
 
 // Helpers for MobileNetV5 Blocks
 // RMS Norm 2D - normalizes over channels for each spatial position
-ggml_tensor * clip_graph_mobilenetv5::rms_norm_2d(ggml_tensor * inp, ggml_tensor * weight, float eps) {
+ggml_tensor * mtmd_graph_mobilenetv5::rms_norm_2d(ggml_tensor * inp, ggml_tensor * weight, float eps) {
     // inp: [W, H, C, B]
 
     ggml_tensor * cur = ggml_permute(ctx0, inp, 2, 1, 0, 3);
@@ -20,7 +20,7 @@ ggml_tensor * clip_graph_mobilenetv5::rms_norm_2d(ggml_tensor * inp, ggml_tensor
 }
 
 // Conv2dSame padding - asymmetric SAME padding like PyTorch/TF
-ggml_tensor* clip_graph_mobilenetv5::pad_same_2d(ggml_tensor* inp, int kernel_h, int kernel_w, int stride_h, int stride_w, int dilation_h, int dilation_w) {
+ggml_tensor* mtmd_graph_mobilenetv5::pad_same_2d(ggml_tensor* inp, int kernel_h, int kernel_w, int stride_h, int stride_w, int dilation_h, int dilation_w) {
     const int64_t ih = inp->ne[1];  // height
     const int64_t iw = inp->ne[0];  // width
 
@@ -54,7 +54,7 @@ ggml_tensor* clip_graph_mobilenetv5::pad_same_2d(ggml_tensor* inp, int kernel_h,
 
 
 // Edge Residual Block (Stage 0)
-ggml_tensor * clip_graph_mobilenetv5::build_edge_residual(ggml_tensor * inp, const mobilenetv5_block & block, int stride) {
+ggml_tensor * mtmd_graph_mobilenetv5::build_edge_residual(ggml_tensor * inp, const mobilenetv5_block & block, int stride) {
     ggml_tensor * cur = inp;
 
     // 1. Expansion Conv (3x3)
@@ -88,7 +88,7 @@ ggml_tensor * clip_graph_mobilenetv5::build_edge_residual(ggml_tensor * inp, con
 }
 
 // Universal Inverted Residual Block (Stage 1+)
-ggml_tensor * clip_graph_mobilenetv5::build_inverted_residual(ggml_tensor * inp, const mobilenetv5_block & block, int stride) {
+ggml_tensor * mtmd_graph_mobilenetv5::build_inverted_residual(ggml_tensor * inp, const mobilenetv5_block & block, int stride) {
     ggml_tensor * cur = inp;
 
     // 1. Depthwise Start (Optional)
@@ -149,7 +149,7 @@ ggml_tensor * clip_graph_mobilenetv5::build_inverted_residual(ggml_tensor * inp,
 }
 
 // Attention Block (MQA)
-ggml_tensor * clip_graph_mobilenetv5::build_mobilenet_attn(ggml_tensor * inp, const mobilenetv5_block & block) {
+ggml_tensor * mtmd_graph_mobilenetv5::build_mobilenet_attn(ggml_tensor * inp, const mobilenetv5_block & block) {
     ggml_tensor * cur = inp;
 
     // Norm
@@ -245,7 +245,7 @@ ggml_tensor * clip_graph_mobilenetv5::build_mobilenet_attn(ggml_tensor * inp, co
     return cur;
 }
 
-ggml_cgraph * clip_graph_mobilenetv5::build() {
+ggml_cgraph * mtmd_graph_mobilenetv5::build() {
     ggml_tensor * inp = build_inp_raw();
 
     // 1. Stem - Conv2dSame(3, 64, kernel_size=(3, 3), stride=(2, 2))

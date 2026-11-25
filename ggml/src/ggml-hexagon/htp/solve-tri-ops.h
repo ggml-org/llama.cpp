@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 struct htp_solve_tri_kernel_params {
-    uint32_t n_threads;
+    uint32_t n_hvx;
     uint32_t total_batches;
     uint32_t total_jobs;
     uint32_t k_chunks;

@@ -244,6 +244,12 @@ class common_chat_schema_builder {
     }
 
     common_chat_schema_ptr build_node_impl(const common_json & schema, const std::string & path) {
+        if (schema.is_boolean()) {
+            if (schema.get<bool>()) {
+                return std::make_unique<common_chat_schema_any>(); // true matches any value, like {}
+            }
+            fail(path, "false schema is not supported"); // false matches nothing, the grammar cannot express it
+        }
         if (!schema.is_object()) {
             fail(path, "schema must be an object");
         }

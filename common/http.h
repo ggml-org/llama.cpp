@@ -99,6 +99,26 @@ static common_http_url common_http_parse_url(const std::string & url) {
     return parts;
 }
 
+// resolve a redirect Location against the URL it came from
+static std::string common_http_resolve_location(const std::string & base_url, const std::string & location) {
+    if (location.find("://") != std::string::npos) {
+        return location;
+    }
+    const common_http_url base = common_http_parse_url(base_url);
+    if (location.compare(0, 2, "//") == 0) {
+        return base.scheme + ":" + location;
+    }
+    const std::string origin = base.scheme + "://" + common_http_format_host(base.host) + ":" + std::to_string(base.port);
+    const std::string path = base.path.substr(0, base.path.find('?'));
+    if (!location.empty() && location[0] == '/') {
+        return origin + location;
+    }
+    if (!location.empty() && location[0] == '?') {
+        return origin + path + location;
+    }
+    return origin + path.substr(0, path.rfind('/') + 1) + location;
+}
+
 // match a loopback destination: a remote proxy can never reach the client machine's own
 // loopback, so these hosts are always contacted directly, before NO_PROXY is consulted
 // (similar to Go's net/http)

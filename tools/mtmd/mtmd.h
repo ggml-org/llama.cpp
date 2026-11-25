@@ -218,6 +218,8 @@ MTMD_API void         mtmd_bitmap_set_mergeable(mtmd_bitmap * bitmap, bool merge
 // on a lazy bitmap: the expanded chunks are one video, wrapped by the model's video begin/end tokens
 //                   with MTMD_VIDEO_TEMPLATE_LFM3_OMNI, its audio bitmaps are the pieces of one soundtrack, in order
 MTMD_API void         mtmd_bitmap_set_is_video(mtmd_bitmap * bitmap, bool is_video);
+// transcript of an audio bitmap is optional, some TTS models use it to clone the speaker voice more closely (--tts-speaker-text)
+MTMD_API void         mtmd_bitmap_set_transcript(mtmd_bitmap * bitmap, const char * transcript);
 
 // mtmd_bitmap lazy
 //
@@ -353,6 +355,7 @@ DEPRECATED(MTMD_API int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tok
            "use mtmd_encode_chunk() instead");
 
 // text chunk will be ignored silently, only media chunk will be encoded
+// the output is stored in ctx: do not call it from several threads at once
 // returns 0 on success
 // returns 1 on generic error
 MTMD_API int32_t mtmd_encode_chunk(mtmd_context * ctx,
@@ -377,6 +380,7 @@ MTMD_API void         mtmd_batch_free(mtmd_batch * batch);
 // returns 3 if it cannot be batched with the existing chunks in the batch
 MTMD_API int32_t mtmd_batch_add_chunk(mtmd_batch * batch, const mtmd_input_chunk * chunk);
 
+// thread-safe, the output is stored in the batch
 // returns 0 on success
 // returns 1 on generic error
 MTMD_API int32_t mtmd_batch_encode(mtmd_batch * batch);
@@ -431,11 +435,13 @@ MTMD_API int32_t mtmd_audio_stream_push(mtmd_audio_stream * stream, const float 
 // pad the stream so that all pending rows can be produced
 // end = false: the stream stays open (use it on a pause, to get a partial transcript)
 // end = true:  no more push() is accepted
+// thread-safe across streams
 // returns 0 on success, 1 if the stream has ended
 MTMD_API int32_t mtmd_audio_stream_flush(mtmd_audio_stream * stream, bool end);
 
 // produce the next decoder rows
 // last_token is the token sampled from the previous row, LLAMA_TOKEN_NULL before the first sample
+// thread-safe across streams
 // return value:
 //   > 0 number of rows ready, read them with mtmd_audio_stream_get_output_embd()
 //   0   more audio is needed
@@ -467,11 +473,21 @@ enum mtmd_gen_audio_type {
     MTMD_GEN_AUDIO_TYPE_SOPRANO,
     MTMD_GEN_AUDIO_TYPE_LFM3A,
     MTMD_GEN_AUDIO_TYPE_CHATTERBOX,
+    MTMD_GEN_AUDIO_TYPE_DRAMA3,
+    MTMD_GEN_AUDIO_TYPE_ZONOS3,
+    MTMD_GEN_AUDIO_TYPE_YUE2,
+    MTMD_GEN_AUDIO_TYPE_MINIMAX_MUSIC3,
+    MTMD_GEN_AUDIO_TYPE_FISH_S2,
+    MTMD_GEN_AUDIO_TYPE_MOSHI,
+    MTMD_GEN_AUDIO_TYPE_KOKORO,
+    MTMD_GEN_AUDIO_TYPE_TINY_VOCA,
+    MTMD_GEN_AUDIO_TYPE_VOXCPM2,
 };
 
 struct mtmd_gen_audio_info {
     enum mtmd_gen_audio_type type;
     int32_t sample_rate; // in Hz, for example 24000 for qwen3tts
+    int32_t n_channels;  // 1 = mono, 2 = stereo (mtmd_gen_out::audio is interleaved)
     const char * model_variant; // name of the weight variant, can be nullptr if not applicable
     int32_t n_voices; // predefined voices, see mtmd_gen_audio_voice_name()
 };
@@ -480,8 +496,14 @@ MTMD_API struct mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context *
 
 // read a named tensor of the gen audio model as F32, returns the element count (0 if not found), out may be null to query the size
 MTMD_API size_t mtmd_gen_audio_read_tensor(mtmd_context * ctx, const char * name, float * out, size_t n_max);
-// name of the idx-th predefined voice, nullptr when idx is out of range
+// name of the idx-th predefined voice, nullptr when idx is out of range; idx 0 is the default voice
 MTMD_API const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_t idx);
+
+// pronunciation of a word by the letter-to-sound model of the mmproj, for the tts_g2p() of the "tts" chat template
+// (see common_chat_get_tts_prompt()); the phonemes are separated by spaces, in the notation of the model (tiny-voca: CMUdict)
+// returns the length written to buf (NUL terminated), 0 if the model has no letter-to-sound model or no pronunciation,
+// -1 if buf is too small; does not run a graph, can be called from any thread
+MTMD_API int32_t mtmd_gen_audio_g2p(const mtmd_context * ctx, const char * word, char * buf, size_t buf_size);
 
 // predefined voice with this name as a voice bitmap, to pass as speaker reference
 // returns nullptr if there is no such voice, the caller must free it
@@ -494,6 +516,8 @@ enum mtmd_gen_process_type {
                                     // for qwen3tts, this is code2wav
                                     // for pocket-tts, this is mimi decoder
                                     // for lfm3a, this is the codec decoder + ISTFT, n_codes == 0 flushes the tail
+                                    // for yue2, this is one VAE pass, the caller splits a long song into tiles
+                                    // for minimax_music3, this is one window: flow matching + vocoder
 };
 
 struct mtmd_gen_inp {
@@ -504,17 +528,37 @@ struct mtmd_gen_inp {
     float * embd;   // the hidden state from backbone, must have n_text_embd elements
     int32_t top_k;
     float   top_p;
-    float   temp; // sampling temperature, or noise scale for flow-matching decoders
+    float   temp; // sampling temperature, or noise scale for flow-matching decoders (0 = no noise)
     float   penalty_repeat; // repetition penalty of the sampled codes, <= 1 is off
     int32_t penalty_last_n; // frames the repetition penalty looks back on
 
     // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
     // pass either codes (discrete) or feats (continuous), depending on the pipeline
     // lfm3a GEN_CODE also takes codes: the codes revealed so far, -1 for a masked codebook
+    // moshi GEN_CODE: code0 is the sampled text token; with codes (all of the frame), only their backbone embedding is built
+    // zonos3 GEN_WAV: -1 for a residual code not known yet, the frame is decoded without it
+    // kokoro GEN_WAV takes both: codes are the phoneme tokens, feats is the voice row (256 values) then the backbone state of each token
     int32_t * codes;
     size_t    n_codes;
     const float * feats;
     size_t        n_feats;
+    float speed; // kokoro: speaking speed, > 0 (default: 1.0)
+
+    // voxcpm2 GEN_CODE: embd is the hidden state of a backbone row and feats its input row (n_text_embd elements, null for a text row)
+    //                   code0 >= 0 makes the next frame; code0 < 0 for prompt rows, the residual LM only reads them,
+    //                   n_codes of them (1 if 0) in embd and feats, all text rows or all audio rows
+    // yue2 GEN_CODE: n_codes is the frame count, codes is not read (the backbone state holds them)
+    // backbone_state: llama_state_seq_get_data() of the backbone_n_past positions (prompt, codes, end token)
+    const uint8_t * backbone_state;
+    size_t          backbone_state_size;
+    int32_t         backbone_n_past;
+
+    // flow matching: steps of the ODE solver, <= 0 = model default (yue2 GEN_CODE: 32, minimax_music3 GEN_WAV: 30, voxcpm2 GEN_CODE: 10)
+    int32_t n_steps;
+
+    // minimax_music3 GEN_CODE: feats holds the backbone hidden rows, cond then uncond with guidance
+    // classifier-free guidance scale, <= 0 = model default (minimax_music3 residual codes: 1.5, voxcpm2 GEN_CODE: 2.0)
+    float cfg_scale;
 };
 
 struct mtmd_gen_out {
@@ -531,7 +575,7 @@ struct mtmd_gen_out {
 
     // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
     const float * audio;
-    size_t        n_samples;
+    size_t        n_samples; // total over all channels
 };
 
 struct mtmd_gen_state_params {
@@ -551,11 +595,16 @@ MTMD_API void             mtmd_gen_state_reset(mtmd_gen_state * state);
 // returns non-zero if the last encode produced no such data
 MTMD_API int32_t          mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state);
 
+// codes of the reference held by the state (frame-major, e.g. drama3: 10 per frame), NULL if it has none
+// valid until the next mtmd_gen_state_set_ref() / mtmd_gen_state_free() on this state
+MTMD_API const int32_t *  mtmd_gen_state_get_ref_codes(const mtmd_gen_state * state, size_t * n_codes);
+
 // defaults tuned for the loaded pipeline, callers override only what they care about
 MTMD_API struct mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx);
 
 // run one step and update the state in place
 // the caller drives the backbone and collects the audio frames
+// thread-safe across gen states
 MTMD_API int32_t mtmd_gen_audio_process(mtmd_context * ctx,
                                 mtmd_gen_state * state,
                                 const struct mtmd_gen_inp * inp,

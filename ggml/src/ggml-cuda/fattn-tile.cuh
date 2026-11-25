@@ -373,133 +373,28 @@ static constexpr __device__ int ggml_cuda_fattn_tile_get_nbatch_K(const int DKQ,
     return (ggml_cuda_fattn_tile_get_config(DKQ, DV, ncols) >> 23) & ((1 << 9) - 1);
 }
 
-// TODO: deduplicate with mma-f16
-template<int warp_size, int nwarps, int I, int J, int J_padding, bool oob_check>
-static __device__ __forceinline__ void flash_attn_tile_load_tile(
-        const half2 * const __restrict__ KV, half2 * const __restrict__ tile_KV, const int stride_KV, const int i_sup) {
-    constexpr int cpy_nb = ggml_cuda_get_max_cpy_bytes();
-    constexpr int cpy_ne = cpy_nb / 4;
-
-    auto load = [&] __device__ (const int n) {
-        const int stride_j = warp_size >> n;
-
-        if (stride_j == 0) {
-            return;
-        }
-
-        const int j0_start = stride_j == warp_size ? 0 : ((J/2)/cpy_ne) - ((J/2)/cpy_ne) % (2*stride_j);
-        const int j0_stop  =                             ((J/2)/cpy_ne) - ((J/2)/cpy_ne) % (1*stride_j);
-        const int stride_i = warp_size / stride_j;
-
-        if (j0_start == j0_stop) {
-            return;
-        }
-
-#pragma unroll
-        for (int i0 = 0; i0 < I; i0 += nwarps*stride_i) {
-            const int i = i0 + threadIdx.y*stride_i + (stride_j == warp_size ? 0 : threadIdx.x / stride_j);
-
-            if (i0 + nwarps*stride_i <= I || i < I) {
-#pragma unroll
-                for (int j0 = j0_start; j0 < j0_stop; j0 += stride_j) {
-                    const int j = j0*cpy_ne + (stride_j == warp_size ? threadIdx.x : threadIdx.x % stride_j)*cpy_ne;
-
-                    const __align__(16) half2 zero[cpy_ne] = {{0.0f, 0.0f}};
-                    ggml_cuda_memcpy_1<cpy_nb>(
-                        tile_KV + i*(J/2 + J_padding) + j,
-                        !oob_check || i < i_sup ? KV + i*stride_KV + j : zero);
-                }
-            }
-        }
-    };
-    // 1: max 64*16=512 bytes, 512 half
-    // 2: max 32*16=512 bytes, 256 half
-    // 3: max 16*16=256 bytes, 128 half
-    // 4: max  8*16=128 bytes,  64 half
-    // 5: max  4*16= 64 bytes,  32 half
-    // 6: max  2*16= 32 bytes,  16 half
-    // 7: max  1*16= 16 bytes,   8 half
-    static_assert(J % 8 == 0, "bad J");
-    static_assert((J/2) % cpy_ne == 0, "bad J");
-    ggml_cuda_unroll<7>{}(load);
-}
-
-template<int warp_size, int nwarps, int I, int J, int J_padding, bool oob_check>
-static __device__ __forceinline__ void flash_attn_tile_load_tile(
-        const half2 * const __restrict__ KV, float * const __restrict__ tile_KV, const int stride_KV, const int i_sup) {
-    constexpr int cpy_nb = ggml_cuda_get_max_cpy_bytes();
-    constexpr int cpy_ne = cpy_nb / 4;
-
-    auto load = [&] __device__ (const int n) {
-        const int stride_j = warp_size >> n;
-
-        if (stride_j == 0) {
-            return;
-        }
-
-        const int j0_start = stride_j == warp_size ? 0 : (J/cpy_ne) - (J/cpy_ne) % (2*stride_j);
-        const int j0_stop  =                             (J/cpy_ne) - (J/cpy_ne) % (1*stride_j);
-        const int stride_i = warp_size / stride_j;
-
-        if (j0_start == j0_stop) {
-            return;
-        }
-
-#pragma unroll
-        for (int i0 = 0; i0 < I; i0 += nwarps*stride_i) {
-            const int i = i0 + threadIdx.y*stride_i + (stride_j == warp_size ? 0 : threadIdx.x / stride_j);
-
-            if (i0 + nwarps*stride_i <= I || i < I) {
-#pragma unroll
-                for (int j0 = j0_start; j0 < j0_stop; j0 += stride_j) {
-                    const int j = j0*(cpy_ne/2) + (stride_j == warp_size ? threadIdx.x : threadIdx.x % stride_j)*(cpy_ne/2);
-
-                    const half2 zero[cpy_ne/2] = {{0.0f, 0.0f}};
-                    __align__(16) half2 tmp_h2[cpy_ne/2];
-                    ggml_cuda_memcpy_1<sizeof(tmp_h2)>(
-                        tmp_h2, !oob_check || i < i_sup ? KV + i*stride_KV + j : zero);
-
-                    __align__(16) float2 tmp_f2[cpy_ne/2];
-#pragma unroll
-                    for (int l = 0; l < cpy_ne/2; ++l) {
-                        tmp_f2[l] = __half22float2(tmp_h2[l]);
-                    }
-                    ggml_cuda_memcpy_1<sizeof(tmp_f2)>(tile_KV + i*(J + J_padding) + 2*j, tmp_f2);
-                }
-            }
-        }
-    };
-    // 1: max 32*16=512 bytes, 128 float
-    // 2: max 16*16=256 bytes,  64 float
-    // 3: max  8*16=128 bytes,  32 float
-    // 4: max  4*16= 64 bytes,  16 float
-    // 5: max  2*16= 32 bytes,   8 float
-    static_assert(J % 8 == 0, "bad J");
-    static_assert(J % cpy_ne == 0, "bad J");
-    ggml_cuda_unroll<5>{}(load);
-}
-
 // Function that performs a single iteration in for the KQ matrix multiplication:
 template <int warp_size, int nwarps, int ncols1, int ncols2, int DKQ, int nbatch_fa, int nbatch_K,
-    bool use_logit_softcap, bool oob_check, typename T_vec_dot>
+    bool use_logit_softcap, bool oob_check, typename T_vec_dot, typename T_K>
 static __device__ __forceinline__ void flash_attn_tile_iter_KQ(
         T_vec_dot   * const Q_tmp,
-        const half2 * const __restrict__ K_h2,
+        const T_K   * const __restrict__ K_h2,
         T_vec_dot   * const KV_tmp,
         const int stride_K2,
         const int k_VKQ_0,
         const int k_VKQ_sup,
         const int k_KQ_0,
         float * KQ_acc) {
-    constexpr int cpy_nb = ggml_cuda_get_max_cpy_bytes();
+    constexpr int cpy_nb = 16;
     constexpr int cpy_ne = cpy_nb / 4;
 
     constexpr int ncols = ncols1*ncols2;
     constexpr int cpw   = ncols > nwarps ? ncols/nwarps : 1; // Q columns per warp
     constexpr int np    = nwarps > ncols ? nwarps/ncols : 1; // number of parallel warps per Q column
 
-    flash_attn_tile_load_tile<warp_size, nwarps, nbatch_fa, nbatch_K, cpy_ne, oob_check>
-        (K_h2 + int64_t(k_VKQ_0)*stride_K2 + k_KQ_0/2, KV_tmp, stride_K2, k_VKQ_sup);
+    constexpr int stride_tile_K = std::is_same_v<T_vec_dot, half2> ? nbatch_K/2 + cpy_ne : nbatch_K + cpy_ne;
+    flash_attn_load_tile<warp_size, nwarps, nbatch_fa, nbatch_K, stride_tile_K, false, oob_check, false, false, false, T_K, T_vec_dot>
+        (K_h2 + k_KQ_0/2, KV_tmp, nbatch_K/2, stride_K2, k_VKQ_0, k_VKQ_sup, nullptr);
     __syncthreads();
 
 #ifdef FAST_FP16_AVAILABLE
@@ -556,11 +451,11 @@ static __device__ __forceinline__ void flash_attn_tile_iter_KQ(
 
 // Function that performs a single iteration of the main loop over up to nbatch_fa tokens.
 template <int warp_size, int nwarps, int ncols1, int ncols2, int DKQ, int DV, int nbatch_fa, int nbatch_K,
-    bool use_logit_softcap, bool oob_check, typename T_vec_dot, typename T_KQ, typename T_acc>
+    bool use_logit_softcap, bool oob_check, typename T_vec_dot, typename T_KQ, typename T_acc, typename T_K, typename T_V>
 static __device__ __forceinline__ void flash_attn_tile_iter(
         T_vec_dot * const Q_tmp,
-        const half2 * const __restrict__ K_h2,
-        const half2 * const __restrict__ V_h2,
+        const T_K * const __restrict__ K_h2,
+        const T_V * const __restrict__ V_h2,
         const half  * const __restrict__ mask,
         const uint3 ne01,
         const float logit_softcap,
@@ -576,7 +471,7 @@ static __device__ __forceinline__ void flash_attn_tile_iter(
         const int k_VKQ_0,
         const int k_VKQ_max,
         const int col_Q_0) {
-    constexpr int cpy_nb = ggml_cuda_get_max_cpy_bytes();
+    constexpr int cpy_nb = 16;
     constexpr int cpy_ne = cpy_nb / 4;
 
     constexpr int ncols = ncols1*ncols2;
@@ -716,10 +611,11 @@ static __device__ __forceinline__ void flash_attn_tile_iter(
     constexpr int nbatch_V = (DV % nbatch_K == 0 ? nbatch_K : nbatch_K*2/3) * nbatch_fa / DV; // Number of V columns that fit in SRAM for K.
     static_assert(nbatch_fa % nbatch_V == 0, "bad nbatch_V");
     static_assert(nbatch_V % np == 0, "bad nbatch_V");
+    constexpr int stride_tile_V = std::is_same_v<T_vec_dot, half2> ? DV/2 : DV;
 #pragma unroll
     for (int k0 = 0; k0 < nbatch_fa; k0 += nbatch_V) {
-        flash_attn_tile_load_tile<warp_size, nwarps, nbatch_V, DV, 0, oob_check>
-            (V_h2 + int64_t(k_VKQ_0 + k0)*stride_V2, KV_tmp, stride_V2, k_VKQ_sup - k0);
+        flash_attn_load_tile<warp_size, nwarps, nbatch_V, DV, stride_tile_V, false, oob_check, false, false, false, T_V, T_vec_dot>
+            (V_h2, KV_tmp, DV/2, stride_V2, k_VKQ_0 + k0, k_VKQ_sup - k0, nullptr);
         __syncthreads();
 
 #ifdef FAST_FP16_AVAILABLE
@@ -788,18 +684,18 @@ static __device__ __forceinline__ void flash_attn_tile_iter(
     }
 }
 
-template<int DKQ, int DV, int ncols1, int ncols2, bool use_logit_softcap> // D == head size
+template<int DKQ, int DV, int ncols1, int ncols2, bool use_logit_softcap, ggml_type type_K, ggml_type type_V> // D == head size
 __launch_bounds__(ggml_cuda_fattn_tile_get_nthreads(DKQ, DV, ncols1*ncols2), ggml_cuda_fattn_tile_get_occupancy(DKQ, DV, ncols1*ncols2))
 static __global__ void flash_attn_tile(
-        const char * Q_ptr,
-        const char * K_ptr,
-        const char * V_ptr,
-        const char * mask_ptr,
-        const char * sinks_ptr,
-        const int  * KV_max_ptr,
-        const int  * KV_rows_ptr,
-        float      * dst_ptr,
-        float2     * dst_meta_ptr,
+        const float2 * Q_ptr,
+        const char   * K_ptr,
+        const char   * V_ptr,
+        const half   * mask_ptr,
+        const float * sinks_ptr,
+        const int   * KV_max_ptr,
+        const int   * KV_rows_ptr,
+        float       * dst_ptr,
+        float2      * dst_meta_ptr,
         const float scale,
         const float max_bias,
         const float m0,
@@ -807,21 +703,24 @@ static __global__ void flash_attn_tile(
         const uint32_t n_head_log2,
         const float logit_softcap,
         const int32_t ne00, const uint3   ne01, const int32_t ne02, const int32_t ne03,
-                            const int32_t nb01, const int32_t nb02, const int32_t nb03,
+                            const int32_t s01,  const int32_t s02,  const int32_t s03,
         const int32_t ne10, const int32_t ne11, const int32_t ne12, const int32_t ne13,
-                            const int32_t nb11, const int32_t nb12, const int64_t nb13,
-                            const int32_t nb21, const int32_t nb22, const int64_t nb23,
+                            const int32_t s11,  const int32_t s12,  const int64_t s13,
+                            const int32_t s21,  const int32_t s22,  const int64_t s23,
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
-                            const int32_t nb31, const int32_t nb32, const int64_t nb33) {
+                            const int32_t s31,  const int64_t s32,  const int64_t s33) {
 #ifdef FLASH_ATTN_AVAILABLE
-    const char * GGML_CUDA_RESTRICT Q        = Q_ptr;
-    const char * GGML_CUDA_RESTRICT K        = K_ptr;
-    const char * GGML_CUDA_RESTRICT V        = V_ptr;
-    const char * GGML_CUDA_RESTRICT mask     = mask_ptr;
-    const char * GGML_CUDA_RESTRICT sinks    = sinks_ptr;
-    const int  * GGML_CUDA_RESTRICT KV_max   = KV_max_ptr;
-    float      * GGML_CUDA_RESTRICT dst      = dst_ptr;
-    float2     * GGML_CUDA_RESTRICT dst_meta = dst_meta_ptr;
+    using T_K = decltype(ggml_cuda_fattn_kv_dtype<type_K>());
+    using T_V = decltype(ggml_cuda_fattn_kv_dtype<type_V>());
+
+    const float2 * GGML_CUDA_RESTRICT Q        = Q_ptr;
+    const T_K    * GGML_CUDA_RESTRICT K        = (const T_K *) K_ptr;
+    const T_V    * GGML_CUDA_RESTRICT V        = (const T_V *) V_ptr;
+    const half   * GGML_CUDA_RESTRICT mask     = mask_ptr;
+    const float  * GGML_CUDA_RESTRICT sinks    = sinks_ptr;
+    const int    * GGML_CUDA_RESTRICT KV_max   = KV_max_ptr;
+    float        * GGML_CUDA_RESTRICT dst      = dst_ptr;
+    float2       * GGML_CUDA_RESTRICT dst_meta = dst_meta_ptr;
     GGML_UNUSED(KV_rows_ptr);
 
     // Skip unused kernel variants for faster compilation:
@@ -830,15 +729,22 @@ static __global__ void flash_attn_tile(
         GGML_UNUSED_VARS(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
             max_bias, m0, m1, n_head_log2, logit_softcap,
             ne00, ne01, ne02, ne03,
-                  nb01, nb02, nb03,
+                  s01,  s02,  s03,
             ne10, ne11, ne12, ne13,
-                  nb11, nb12, nb13,
-                  nb21, nb22, nb23,
+                  s11,  s12,  s13,
+                  s21,  s22,  s23,
                   ne31, ne32, ne33,
-                  nb31, nb32, nb33);
+                  s31,  s32,  s33);
         NO_DEVICE_CODE;
         return;
     }
+#ifdef AMD_MFMA_AVAILABLE
+    if (ncols1 == 64 && ncols2 == 1) {
+        // The tile kernel is suffering from register spills for ncols1 == 64 && ncols2 == 1.
+        NO_DEVICE_CODE;
+        return;
+    }
+#endif // AMD_MFMA_AVAILABLE
 
     static_assert(ggml_cuda_fattn_tile_get_config(DKQ, DV, ncols1*ncols2) != 0, "kernel config not defined");
 
@@ -855,19 +761,19 @@ static __global__ void flash_attn_tile(
     const int sequence = blockIdx.z / (ne02/ncols2);
     const int head0 = blockIdx.z*ncols2 - sequence*ne02; // == blockIdx.z % (ne02/ncols2)
     const int gqa_ratio = ne02 / ne12; // With grouped query attention there are > 1 Q matrices per K, V matrix.
-    const float * Q_f  = (const float *) (Q + nb03*sequence + nb02* head0);
-    const half2 * K_h2 = (const half2 *) (K + nb13*sequence + nb12*(head0 / gqa_ratio));
-    const half2 * V_h2 = (const half2 *) (V + nb23*sequence + nb22*(head0 / gqa_ratio)); // K and V have same shape
+    const float2 * Q_f2 = Q + s03*sequence + s02* head0;
+    const T_K   * K_h2 = K + s13*sequence + s12*(head0 / gqa_ratio);
+    const T_V   * V_h2 = V + s23*sequence + s22*(head0 / gqa_ratio); // K and V have same shape
 
-    const half * maskh = mask ? (const half *) (mask + nb33*(sequence % ne33)) : nullptr;
+    const half * maskh = mask ? mask + s33*(sequence % ne33) + s32*(head0 % ne32) : nullptr;
 
-    const int stride_K2   = nb11 / sizeof(half2);
-    const int stride_V2   = nb21 / sizeof(half2);
-    const int stride_mask = nb31 / sizeof(half);
+    const int stride_K2   = s11;
+    const int stride_V2   = s21;
+    const int stride_mask = s31;
 
     const float slope = ncols2 == 1 ? get_alibi_slope(max_bias, head0, n_head_log2, m0, m1) : 1.0f;
 
-    constexpr int cpy_nb = ggml_cuda_get_max_cpy_bytes();
+    constexpr int cpy_nb = 16;
     constexpr int cpy_ne = cpy_nb / 4;
 
     constexpr int cpw = ncols > nwarps ? ncols/nwarps : 1; // Q columns per warp.
@@ -919,8 +825,7 @@ static __global__ void flash_attn_tile(
             if (i0 + np*warp_size*cpy_ne_D <= DKQ || i0 + (threadIdx.y % np)*(warp_size*cpy_ne_D) + threadIdx.x*cpy_ne_D < DKQ) {
                 __align__(16) float tmp_f[cpy_ne_D] = {0.0f};
                 ggml_cuda_memcpy_1<sizeof(tmp_f)>
-                    (tmp_f, &Q_f[c*(nb02/sizeof(float)) + fastmodulo(col_Q_0 + j, ne01)*(nb01/sizeof(float))
-                                 + i0 + (threadIdx.y % np)*(warp_size*cpy_ne_D) + threadIdx.x*cpy_ne_D]);
+                    (tmp_f, Q_f2 + c*s02 + fastmodulo(col_Q_0 + j, ne01)*s01 + i0/2 + (threadIdx.y % np)*(warp_size*(cpy_ne_D/2)) + threadIdx.x*(cpy_ne_D/2));
 
 #pragma unroll
                 for (int i1 = 0; i1 < cpy_ne_D; ++i1) {
@@ -1056,7 +961,7 @@ static __global__ void flash_attn_tile(
 #pragma unroll
         for (int jc0 = 0; jc0 < cpw; ++jc0) {
             const int jc = jc0 + (threadIdx.y/np)*cpw;
-            const float sink = ((const float *) sinks)[head0 + jc % ncols2];
+            const float sink = sinks[head0 + jc % ncols2];
 
             float KQ_max_new_j = fmaxf(KQ_max[jc0], sink);
             const float KQ_max_scale = expf(KQ_max[jc0] - KQ_max_new_j);
@@ -1137,18 +1042,21 @@ static __global__ void flash_attn_tile(
     GGML_UNUSED_VARS(Q_ptr, K_ptr, V_ptr, mask_ptr, sinks_ptr, KV_max_ptr, KV_rows_ptr, dst_ptr, dst_meta_ptr, scale,
         max_bias, m0, m1, n_head_log2, logit_softcap,
         ne00, ne01, ne02, ne03,
-              nb01, nb02, nb03,
+              s01,  s02,  s03,
         ne10, ne11, ne12, ne13,
-              nb11, nb12, nb13,
-              nb21, nb22, nb23,
+              s11,  s12,  s13,
+              s21,  s22,  s23,
               ne31, ne32, ne33,
-              nb31, nb32, nb33);
+              s31,  s32,  s33);
     NO_DEVICE_CODE;
 #endif // FLASH_ATTN_AVAILABLE
 }
 
-template <int DKQ, int DV, int ncols2, bool use_logit_softcap>
+template <int DKQ, int DV, int ncols2, bool use_logit_softcap, ggml_type type_K, ggml_type type_V>
 static void launch_fattn_tile_switch_ncols1(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    using T_K = decltype(ggml_cuda_fattn_kv_dtype<type_K>());
+    using T_V = decltype(ggml_cuda_fattn_kv_dtype<type_V>());
+
     const ggml_tensor * Q = dst->src[0];
 
     const int id        = ggml_cuda_get_device();
@@ -1159,12 +1067,12 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_cuda_context & ctx, ggm
 
 #ifdef GGML_USE_HIP
     if constexpr (DKQ <= 128) {
-        if (Q->ne[1] > 32/ncols2) {
+        if (!(amd_mfma_available(cc) && ncols2 == 1) && Q->ne[1] > 32/ncols2) {
             constexpr int cols_per_block = 64;
             const int nwarps    = ggml_cuda_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
             const int nbatch_fa = ggml_cuda_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
-            fattn_kernel_t fattn_kernel = flash_attn_tile<DKQ, DV, cols_per_block/ncols2, ncols2, use_logit_softcap>;
-            launch_fattn<DV, cols_per_block/ncols2, ncols2>
+            fattn_kernel_t fattn_kernel = flash_attn_tile<DKQ, DV, cols_per_block/ncols2, ncols2, use_logit_softcap, type_K, type_V>;
+            launch_fattn<DV, cols_per_block/ncols2, ncols2, T_K, T_V>
                 (ctx, dst, fattn_kernel, nwarps, nbytes_shared, nbatch_fa, true, true, false, false, warp_size);
             return;
         }
@@ -1179,8 +1087,8 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_cuda_context & ctx, ggm
             constexpr int cols_per_block = 32;
             const int nwarps    = ggml_cuda_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
             const int nbatch_fa = ggml_cuda_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
-            fattn_kernel_t fattn_kernel = flash_attn_tile<DKQ, DV, cols_per_block/ncols2, ncols2, use_logit_softcap>;
-            launch_fattn<DV, cols_per_block/ncols2, ncols2>
+            fattn_kernel_t fattn_kernel = flash_attn_tile<DKQ, DV, cols_per_block/ncols2, ncols2, use_logit_softcap, type_K, type_V>;
+            launch_fattn<DV, cols_per_block/ncols2, ncols2, T_K, T_V>
                 (ctx, dst, fattn_kernel, nwarps, nbytes_shared, nbatch_fa, true, true, false, false, warp_size);
             return;
         }
@@ -1191,8 +1099,8 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_cuda_context & ctx, ggm
             constexpr int cols_per_block = 16;
             const int nwarps    = ggml_cuda_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
             const int nbatch_fa = ggml_cuda_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
-            fattn_kernel_t fattn_kernel = flash_attn_tile<DKQ, DV, cols_per_block/ncols2, ncols2, use_logit_softcap>;
-            launch_fattn<DV, cols_per_block/ncols2, ncols2>
+            fattn_kernel_t fattn_kernel = flash_attn_tile<DKQ, DV, cols_per_block/ncols2, ncols2, use_logit_softcap, type_K, type_V>;
+            launch_fattn<DV, cols_per_block/ncols2, ncols2, T_K, T_V>
                 (ctx, dst, fattn_kernel, nwarps, nbytes_shared, nbatch_fa, true, true, false, false, warp_size);
             return;
         }
@@ -1203,8 +1111,8 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_cuda_context & ctx, ggm
             constexpr int cols_per_block = 8;
             const int nwarps    = ggml_cuda_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
             const int nbatch_fa = ggml_cuda_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
-            fattn_kernel_t fattn_kernel = flash_attn_tile<DKQ, DV, cols_per_block/ncols2, ncols2, use_logit_softcap>;
-            launch_fattn<DV, cols_per_block/ncols2, ncols2>
+            fattn_kernel_t fattn_kernel = flash_attn_tile<DKQ, DV, cols_per_block/ncols2, ncols2, use_logit_softcap, type_K, type_V>;
+            launch_fattn<DV, cols_per_block/ncols2, ncols2, T_K, T_V>
                 (ctx, dst, fattn_kernel, nwarps, nbytes_shared, nbatch_fa, true, true, false, false, warp_size);
             return;
         }
@@ -1215,8 +1123,8 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_cuda_context & ctx, ggm
             constexpr int cols_per_block = 4;
             const int nwarps    = ggml_cuda_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
             const int nbatch_fa = ggml_cuda_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
-            fattn_kernel_t fattn_kernel = flash_attn_tile<DKQ, DV, cols_per_block/ncols2, ncols2, use_logit_softcap>;
-            launch_fattn<DV, cols_per_block/ncols2, ncols2>
+            fattn_kernel_t fattn_kernel = flash_attn_tile<DKQ, DV, cols_per_block/ncols2, ncols2, use_logit_softcap, type_K, type_V>;
+            launch_fattn<DV, cols_per_block/ncols2, ncols2, T_K, T_V>
                 (ctx, dst, fattn_kernel, nwarps, nbytes_shared, nbatch_fa, true, true, false, false, warp_size);
             return;
         }
@@ -1226,8 +1134,8 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_cuda_context & ctx, ggm
         constexpr int cols_per_block = 2;
         const int nwarps    = ggml_cuda_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
         const int nbatch_fa = ggml_cuda_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
-        fattn_kernel_t fattn_kernel = flash_attn_tile<DKQ, DV, cols_per_block/ncols2, ncols2, use_logit_softcap>;
-        launch_fattn<DV, cols_per_block/ncols2, ncols2>
+        fattn_kernel_t fattn_kernel = flash_attn_tile<DKQ, DV, cols_per_block/ncols2, ncols2, use_logit_softcap, type_K, type_V>;
+        launch_fattn<DV, cols_per_block/ncols2, ncols2, T_K, T_V>
             (ctx, dst, fattn_kernel, nwarps, nbytes_shared, nbatch_fa, true, true, false, false, warp_size);
         return;
     }
@@ -1235,7 +1143,7 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_cuda_context & ctx, ggm
     GGML_ABORT("fatal error");
 }
 
-template <int DKQ, int DV, bool use_logit_softcap>
+template <int DKQ, int DV, bool use_logit_softcap, ggml_type type_K, ggml_type type_V>
 static void launch_fattn_tile_switch_ncols2(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * KQV  = dst;
     const ggml_tensor * Q    = dst->src[0];
@@ -1252,7 +1160,8 @@ static void launch_fattn_tile_switch_ncols2(ggml_backend_cuda_context & ctx, ggm
     // However, for DKQ == 576, DV == 512 only the kernel variant with GQA optimizations is implemented.
     const bool nvidia = GGML_CUDA_CC_IS_NVIDIA(ggml_cuda_info().devices[ggml_cuda_get_device()].cc);
     const int gqa_limit = nvidia && gqa_ratio <= 4 && DV <= 256 ? 16 : INT_MAX;
-    const bool use_gqa_opt = mask && max_bias == 0.0f && Q->ne[1] <= gqa_limit && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    // a mask with a head dimension is not shared by the Q heads of a K/V head
+    const bool use_gqa_opt = mask && mask->ne[2] == 1 && max_bias == 0.0f && Q->ne[1] <= gqa_limit && K->ne[1] % FATTN_KQ_STRIDE == 0;
 
     if constexpr (DKQ == 320) {
         // This branch is only used for Mistral Small 4 which has a GQA ratio of 32.
@@ -1261,12 +1170,12 @@ static void launch_fattn_tile_switch_ncols2(ggml_backend_cuda_context & ctx, ggm
         // Therefore, use a GQA ratio of 16 with 16 columns / block to stay below 48 kiB of SRAM / block.
 #ifdef GGML_USE_HIP
         if (use_gqa_opt && gqa_ratio % 32 == 0) {
-            launch_fattn_tile_switch_ncols1<DKQ, DV, 32, use_logit_softcap>(ctx, dst);
+            launch_fattn_tile_switch_ncols1<DKQ, DV, 32, use_logit_softcap, type_K, type_V>(ctx, dst);
             return;
         }
 #else
         if (use_gqa_opt && gqa_ratio % 16 == 0) {
-            launch_fattn_tile_switch_ncols1<DKQ, DV, 16, use_logit_softcap>(ctx, dst);
+            launch_fattn_tile_switch_ncols1<DKQ, DV, 16, use_logit_softcap, type_K, type_V>(ctx, dst);
             return;
         }
 #endif // GGML_USE_HIP
@@ -1275,11 +1184,11 @@ static void launch_fattn_tile_switch_ncols2(ggml_backend_cuda_context & ctx, ggm
 
     if constexpr (DKQ == 576) {
         if (use_gqa_opt && gqa_ratio % 16 == 0) {
-            launch_fattn_tile_switch_ncols1<DKQ, DV, 16, use_logit_softcap>(ctx, dst);
+            launch_fattn_tile_switch_ncols1<DKQ, DV, 16, use_logit_softcap, type_K, type_V>(ctx, dst);
             return;
         }
         if (use_gqa_opt && gqa_ratio % 4 == 0) {
-            launch_fattn_tile_switch_ncols1<DKQ, DV, 4, use_logit_softcap>(ctx, dst);
+            launch_fattn_tile_switch_ncols1<DKQ, DV, 4, use_logit_softcap, type_K, type_V>(ctx, dst);
             return;
         }
     }
@@ -1287,11 +1196,11 @@ static void launch_fattn_tile_switch_ncols2(ggml_backend_cuda_context & ctx, ggm
     if constexpr (DKQ == 192) {
         // MiMo-V2.5 / V2.5-Pro / V2-Flash: gqa_ratio is 8 (SWA) or 16 (full attn)
         if (use_gqa_opt && gqa_ratio % 16 == 0) {
-            launch_fattn_tile_switch_ncols1<DKQ, DV, 16, use_logit_softcap>(ctx, dst);
+            launch_fattn_tile_switch_ncols1<DKQ, DV, 16, use_logit_softcap, type_K, type_V>(ctx, dst);
             return;
         }
         if (use_gqa_opt && gqa_ratio % 8 == 0) {
-            launch_fattn_tile_switch_ncols1<DKQ, DV,  8, use_logit_softcap>(ctx, dst);
+            launch_fattn_tile_switch_ncols1<DKQ, DV,  8, use_logit_softcap, type_K, type_V>(ctx, dst);
             return;
         }
         GGML_ABORT("flash-attn tile (192/128): expected GQA ratio multiple of 8");
@@ -1299,29 +1208,29 @@ static void launch_fattn_tile_switch_ncols2(ggml_backend_cuda_context & ctx, ggm
 
     if constexpr (DKQ <= 512 && DKQ != 320 && DKQ != 192) {
         if (use_gqa_opt && gqa_ratio % 8 == 0) {
-            launch_fattn_tile_switch_ncols1<DKQ, DV, 8, use_logit_softcap>(ctx, dst);
+            launch_fattn_tile_switch_ncols1<DKQ, DV, 8, use_logit_softcap, type_K, type_V>(ctx, dst);
             return;
         }
 
         if (use_gqa_opt && gqa_ratio % 4 == 0) {
-            launch_fattn_tile_switch_ncols1<DKQ, DV, 4, use_logit_softcap>(ctx, dst);
+            launch_fattn_tile_switch_ncols1<DKQ, DV, 4, use_logit_softcap, type_K, type_V>(ctx, dst);
             return;
         }
 
         if (use_gqa_opt && gqa_ratio % 2 == 0) {
-            launch_fattn_tile_switch_ncols1<DKQ, DV, 2, use_logit_softcap>(ctx, dst);
+            launch_fattn_tile_switch_ncols1<DKQ, DV, 2, use_logit_softcap, type_K, type_V>(ctx, dst);
             return;
         }
 
         if constexpr (DV <= 256) {
-            launch_fattn_tile_switch_ncols1<DKQ, DV, 1, use_logit_softcap>(ctx, dst);
+            launch_fattn_tile_switch_ncols1<DKQ, DV, 1, use_logit_softcap, type_K, type_V>(ctx, dst);
             return;
         }
     }
     GGML_ABORT("fatal error");
 }
 
-template <int DKQ, int DV>
+template <int DKQ, int DV, ggml_type type_K, ggml_type type_V>
 void ggml_cuda_flash_attn_ext_tile_case(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * KQV = dst;
 
@@ -1330,28 +1239,28 @@ void ggml_cuda_flash_attn_ext_tile_case(ggml_backend_cuda_context & ctx, ggml_te
 
     if (logit_softcap == 0.0f) {
         constexpr bool use_logit_softcap = false;
-        launch_fattn_tile_switch_ncols2<DKQ, DV, use_logit_softcap>(ctx, dst);
+        launch_fattn_tile_switch_ncols2<DKQ, DV, use_logit_softcap, type_K, type_V>(ctx, dst);
     } else {
         constexpr bool use_logit_softcap = true;
-        launch_fattn_tile_switch_ncols2<DKQ, DV, use_logit_softcap>(ctx, dst);
+        launch_fattn_tile_switch_ncols2<DKQ, DV, use_logit_softcap, type_K, type_V>(ctx, dst);
     }
 }
 
 void ggml_cuda_flash_attn_ext_tile(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
-#define DECL_FATTN_TILE_CASE(DKQ, DV)                             \
-    template void ggml_cuda_flash_attn_ext_tile_case              \
-    <DKQ, DV>(ggml_backend_cuda_context & ctx, ggml_tensor * dst) \
+#define DECL_FATTN_TILE_CASE(DKQ, DV, type_K, type_V)                         \
+    template void ggml_cuda_flash_attn_ext_tile_case                          \
+    <DKQ, DV, type_K, type_V>(ggml_backend_cuda_context & ctx, ggml_tensor * dst) \
 
-extern DECL_FATTN_TILE_CASE( 40,  40);
-extern DECL_FATTN_TILE_CASE( 64,  64);
-extern DECL_FATTN_TILE_CASE( 72,  72);
-extern DECL_FATTN_TILE_CASE( 80,  80);
-extern DECL_FATTN_TILE_CASE( 96,  96);
-extern DECL_FATTN_TILE_CASE(112, 112);
-extern DECL_FATTN_TILE_CASE(128, 128);
-extern DECL_FATTN_TILE_CASE(192, 128);
-extern DECL_FATTN_TILE_CASE(256, 256);
-extern DECL_FATTN_TILE_CASE(320, 256);
-extern DECL_FATTN_TILE_CASE(512, 512);
-extern DECL_FATTN_TILE_CASE(576, 512);
+extern DECL_FATTN_TILE_CASE( 40,  40, GGML_TYPE_F16, GGML_TYPE_F16);
+extern DECL_FATTN_TILE_CASE( 64,  64, GGML_TYPE_F16, GGML_TYPE_F16);
+extern DECL_FATTN_TILE_CASE( 72,  72, GGML_TYPE_F16, GGML_TYPE_F16);
+extern DECL_FATTN_TILE_CASE( 80,  80, GGML_TYPE_F16, GGML_TYPE_F16);
+extern DECL_FATTN_TILE_CASE( 96,  96, GGML_TYPE_F16, GGML_TYPE_F16);
+extern DECL_FATTN_TILE_CASE(112, 112, GGML_TYPE_F16, GGML_TYPE_F16);
+extern DECL_FATTN_TILE_CASE(128, 128, GGML_TYPE_F16, GGML_TYPE_F16);
+extern DECL_FATTN_TILE_CASE(192, 128, GGML_TYPE_F16, GGML_TYPE_F16);
+extern DECL_FATTN_TILE_CASE(256, 256, GGML_TYPE_F16, GGML_TYPE_F16);
+extern DECL_FATTN_TILE_CASE(320, 256, GGML_TYPE_F16, GGML_TYPE_F16);
+extern DECL_FATTN_TILE_CASE(512, 512, GGML_TYPE_F16, GGML_TYPE_F16);
+extern DECL_FATTN_TILE_CASE(576, 512, GGML_TYPE_F16, GGML_TYPE_F16);

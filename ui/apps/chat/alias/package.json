@@ -1,0 +1,33 @@
+{
+	"name": "llama-chat",
+	"version": "0.2.0",
+	"description": "npx llama-chat: runs Llama Chat, the chat app for llama.cpp. Same as npx @ggml-org/llama-chat.",
+	"keywords": [
+		"llama.cpp",
+		"llama-server",
+		"llm",
+		"chat",
+		"local-ai"
+	],
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/ggml-org/llama.cpp.git",
+		"directory": "ui/apps/chat/alias"
+	},
+	"homepage": "https://github.com/ggml-org/llama.cpp/tree/master/ui/apps/chat#readme",
+	"bugs": "https://github.com/ggml-org/llama.cpp/issues",
+	"type": "module",
+	"bin": {
+		"llama-chat": "cli.js"
+	},
+	"files": [
+		"cli.js"
+	],
+	"engines": {
+		"node": ">=20"
+	},
+	"dependencies": {
+		"@ggml-org/llama-chat": "0.2.0"
+	}
+}

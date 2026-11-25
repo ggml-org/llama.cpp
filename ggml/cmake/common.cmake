@@ -56,9 +56,9 @@ function(ggml_get_system_arch)
     endif()
 endfunction()
 
-# Determines which FlashAttention vector kernel template instances to compile, returns them in OUT_SRCS.
-function(ggml_cuda_fattn_vec_instances DIR OUT_SRCS)
-    set(FA_TYPES q4_0 q4_1 q5_0 q5_1 q8_0 bf16 f16)
+# Determines which FlashAttention kernel template instances to compile, returns them in OUT_SRCS.
+function(ggml_cuda_fattn_instances DIR OUT_SRCS)
+    set(FA_TYPES q4_0 q4_1 q5_0 q5_1 q8_0 bf16 f16 f8_e4m3)
 
     string(TOLOWER "${GGML_CUDA_FA_QUANTS}" FA_QUANTS)
     string(STRIP   "${FA_QUANTS}" FA_QUANTS)
@@ -122,6 +122,12 @@ function(ggml_cuda_fattn_vec_instances DIR OUT_SRCS)
             message(FATAL_ERROR "FlashAttention template instance \"${SRC}\" does not exist")
         endif()
         list(APPEND SRCS "${SRC}")
+
+        file(GLOB TILE_SRCS "${DIR}/template-instances/fattn-tile-instance-${COMBINATION}-*.cu")
+        list(APPEND SRCS ${TILE_SRCS})
+
+        file(GLOB MMA_SRCS "${DIR}/template-instances/fattn-mma-f16-instance-${COMBINATION}-*.cu")
+        list(APPEND SRCS ${MMA_SRCS})
     endforeach()
 
     set(${OUT_SRCS} ${SRCS} PARENT_SCOPE)

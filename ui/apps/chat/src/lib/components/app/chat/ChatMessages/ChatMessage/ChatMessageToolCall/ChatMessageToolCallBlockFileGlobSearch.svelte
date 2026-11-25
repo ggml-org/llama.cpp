@@ -1,0 +1,70 @@
+<script lang="ts">
+	import { parseFileGlobSearchMeta } from './parsers/file-glob-search';
+	import ToolCallBlock from './ToolCallBlock.svelte';
+	import { XCircle } from '@lucide/svelte';
+	import { toolsStore } from '#lib/stores/index.ts';
+	import type { AgenticSection } from '#lib/types/index.ts';
+	import { abbreviateHome } from '#lib/utils/index.ts';
+
+	interface Props {
+		section: AgenticSection;
+		open: boolean;
+		isStreaming: boolean;
+		onToggle?: () => void;
+	}
+
+	let { isStreaming, onToggle, open, section }: Props = $props();
+
+	const fileGlobMeta = $derived(parseFileGlobSearchMeta(section));
+	const home = $derived(toolsStore.serverHome);
+</script>
+
+<ToolCallBlock {isStreaming} meta={fileGlobMeta} {onToggle} {open} {section}>
+	{#snippet titleSnippet(phrase)}
+		{#if fileGlobMeta}
+			<span class="text-muted-foreground">{phrase.label}&nbsp;</span>
+
+			{#if fileGlobMeta.include !== '**'}
+				<span class="font-mono">{fileGlobMeta.include}</span>
+			{/if}
+
+			<span class="text-muted-foreground">&nbsp;in&nbsp;</span>
+
+			<span class="font-mono" title={fileGlobMeta.path}
+				>{abbreviateHome(fileGlobMeta.path, home)}</span
+			>
+		{/if}
+	{/snippet}
+
+	{#snippet children(meta, ctx)}
+		{#if ctx.isPending}
+			<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">
+				Searching...
+			</div>
+		{:else if meta?.errorMessage}
+			<div
+				class="flex items-start gap-2 rounded bg-surface-danger p-2 text-caption text-fg-danger italic"
+			>
+				<XCircle class="mt-0.5 size-icon-xs shrink-0" />
+
+				<span>{meta.errorMessage}</span>
+			</div>
+		{:else if meta && meta.matches.length > 0}
+			<div class="max-h-96 overflow-auto">
+				{#each meta.matches as match, i (i)}
+					<div class="font-mono text-caption leading-relaxed whitespace-pre-wrap">{match}</div>
+				{/each}
+			</div>
+
+			<div class="mt-1.5 text-caption text-muted-foreground/70 italic">
+				Total matches: <span class="font-mono">{meta.totalMatches ?? meta.matches.length}</span>
+			</div>
+		{:else}
+			<div class="text-caption text-muted-foreground/70 italic">No matches</div>
+
+			<div class="mt-1.5 text-caption text-muted-foreground/70 italic">
+				Total matches: <span class="font-mono">{meta?.totalMatches ?? 0}</span>
+			</div>
+		{/if}
+	{/snippet}
+</ToolCallBlock>

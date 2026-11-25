@@ -51,8 +51,8 @@ if (GGML_HIP_RCCL)
     find_package(rccl REQUIRED)
 endif()
 
-if (${hip_VERSION} VERSION_LESS 6.1)
-    message(FATAL_ERROR "At least ROCM/HIP V6.1 is required")
+if (${hip_VERSION} VERSION_LESS 6.3)
+    message(FATAL_ERROR "At least ROCM/HIP V6.3 is required")
 endif()
 
 message(STATUS "HIP and hipBLAS found")
@@ -61,16 +61,12 @@ file(GLOB   GGML_HEADERS_ROCM "../ggml-cuda/*.cuh")
 list(APPEND GGML_HEADERS_ROCM "../../include/ggml-cuda.h")
 
 file(GLOB   GGML_SOURCES_ROCM "../ggml-cuda/*.cu")
-file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-tile*.cu")
-list(APPEND GGML_SOURCES_ROCM ${SRCS})
-file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-mma*.cu")
-list(APPEND GGML_SOURCES_ROCM ${SRCS})
 file(GLOB   SRCS "../ggml-cuda/template-instances/mmq*.cu")
 list(APPEND GGML_SOURCES_ROCM ${SRCS})
 file(GLOB   SRCS "../ggml-cuda/template-instances/mmf*.cu")
 list(APPEND GGML_SOURCES_ROCM ${SRCS})
 
-ggml_cuda_fattn_vec_instances(${CMAKE_CURRENT_SOURCE_DIR}/../ggml-cuda SRCS)
+ggml_cuda_fattn_instances(${CMAKE_CURRENT_SOURCE_DIR}/../ggml-cuda SRCS)
 list(APPEND GGML_SOURCES_ROCM ${SRCS})
 
 ggml_add_backend_library(ggml-hip
