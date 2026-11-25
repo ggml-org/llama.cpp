@@ -457,7 +457,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     }
 
     static const std::regex pattern_q_weight        ("blk\\.\\d*\\.attn_q.weight");
-    static const std::regex pattern_kv_weight       ("blk\\.\\d*\\.attn_(k|v)(_conv)?\\.weight");
+    static const std::regex pattern_kv_weight       ("blk\\.\\d*\\.attn_(k|v)(_conv|_ctx)?\\.weight");
     static const std::regex pattern_v_exps_weight   ("blk\\.\\d*\\.attn_v_exps.weight"); // K2 Horizon MoVA
     static const std::regex pattern_qkv_weight      ("blk\\.\\d*\\.attn_qkv.weight");
     static const std::regex pattern_qkv_gate_weight ("blk\\.\\d*\\.attn_qkv_gate.weight");
