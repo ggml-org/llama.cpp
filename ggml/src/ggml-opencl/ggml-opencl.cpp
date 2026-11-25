@@ -1215,6 +1215,14 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_gemm_moe_q4_0_q8_1_dp4a = nullptr;    // dp4a (int8) q4_0 MoE prefill GEMM
     cl_kernel kernel_gemm_moe_mxfp4_q8_1_dp4a_bin = nullptr;   // binary dp4a (int8) mxfp4 MoE prefill GEMM
     cl_kernel kernel_gemm_moe_mxfp4_q8_1_dp4a_ldck_bin = nullptr;   // binary dp4a (int8) mxfp4 MoE prefill GEMM using ldck
+    cl_kernel kernel_gemm_moe_mxfp4_q8_1_dp4a_malu_bin = nullptr;   // binary malu int8 mxfp4 MoE prefill GEMM (A850)
+    cl_kernel kernel_gemm_moe_q4_0_q8_1_dp4a_malu_bin = nullptr;   // binary malu int8 q4_0 MoE prefill GEMM (A850)
+    cl_kernel kernel_gemm_moe_q4_1_q8_1_dp4a_malu_bin = nullptr;   // binary malu int8 q4_1 MoE prefill GEMM (A850)
+    cl_kernel kernel_gemm_moe_q5_0_q8_1_dp4a_malu_bin = nullptr;   // binary malu int8 q5_0 MoE prefill GEMM (A850)
+    cl_kernel kernel_gemm_moe_q5_1_q8_1_dp4a_malu_bin = nullptr;   // binary malu int8 q5_1 MoE prefill GEMM (A850)
+    cl_kernel kernel_gemm_moe_q4_k_q8_1_dp4a_malu_bin = nullptr;   // binary malu int8 q4_k MoE prefill GEMM (A850)
+    cl_kernel kernel_gemm_moe_q5_k_q8_1_dp4a_malu_bin = nullptr;   // binary malu int8 q5_k MoE prefill GEMM (A850)
+    cl_kernel kernel_gemm_moe_q6_k_q8_1_dp4a_malu_bin = nullptr;   // binary malu int8 q6_k MoE prefill GEMM (A850)
     cl_kernel kernel_gemm_moe_q4_0_q8_1_dp4a_bin = nullptr;    // binary dp4a (int8) q4_0 MoE prefill GEMM
     cl_kernel kernel_gemm_moe_q4_k_q8_1_dp4a_bin = nullptr;   // binary dp4a (int8) q4_k MoE prefill GEMM
     cl_kernel kernel_gemm_moe_q6_k_q8_1_dp4a_bin = nullptr;    // binary dp4a (int8) q6_k MoE prefill GEMM
@@ -7808,6 +7816,150 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         }
     }
 
+    // gemm_moe_mxfp4_q8_1_dp4a_malu_bin (malu int8 prefill GEMM, A850)
+    if (backend_ctx->has_integer_dot) {
+        size_t bin_size = 0;
+        backend_ctx->kernel_gemm_moe_mxfp4_q8_1_dp4a_malu_bin = nullptr;
+
+        if (use_adreno_bin_kernels(backend_ctx)) {
+            const char * kernel_bin = (const char *)backend_ctx->get_adreno_bin_kernel("gemm_moe_mxfp4_q8_1_dp4a_ila_malu", &bin_size);
+            if (kernel_bin && bin_size > 0) {
+                cl_program prog =
+                    build_program_from_binary(backend_ctx->context, backend_ctx->device, kernel_bin, CL_moe_compile_opts, bin_size);
+
+                CL_CHECK((backend_ctx->kernel_gemm_moe_mxfp4_q8_1_dp4a_malu_bin = clCreateKernel(prog, "kernel_gemm_moe_mxfp4_q8_1_dp4a_ila_malu", &err), err));
+                CL_CHECK(clReleaseProgram(prog));
+                GGML_LOG_CONT(".");
+            }
+        }
+    }
+
+    // gemm_moe_q4_0_q8_1_dp4a_malu_bin (malu int8 prefill GEMM, A850)
+    if (backend_ctx->has_integer_dot) {
+        size_t bin_size = 0;
+        backend_ctx->kernel_gemm_moe_q4_0_q8_1_dp4a_malu_bin = nullptr;
+
+        if (use_adreno_bin_kernels(backend_ctx)) {
+            const char * kernel_bin = (const char *)backend_ctx->get_adreno_bin_kernel("gemm_moe_q4_0_q8_1_dp4a_ila_malu", &bin_size);
+            if (kernel_bin && bin_size > 0) {
+                cl_program prog =
+                    build_program_from_binary(backend_ctx->context, backend_ctx->device, kernel_bin, CL_moe_compile_opts, bin_size);
+
+                CL_CHECK((backend_ctx->kernel_gemm_moe_q4_0_q8_1_dp4a_malu_bin = clCreateKernel(prog, "kernel_gemm_moe_q4_0_q8_1_dp4a_ila_malu", &err), err));
+                CL_CHECK(clReleaseProgram(prog));
+                GGML_LOG_CONT(".");
+            }
+        }
+    }
+
+    // gemm_moe_q4_1_q8_1_dp4a_malu_bin (malu int8 prefill GEMM, A850)
+    if (backend_ctx->has_integer_dot) {
+        size_t bin_size = 0;
+        backend_ctx->kernel_gemm_moe_q4_1_q8_1_dp4a_malu_bin = nullptr;
+
+        if (use_adreno_bin_kernels(backend_ctx)) {
+            const char * kernel_bin = (const char *)backend_ctx->get_adreno_bin_kernel("gemm_moe_q4_1_q8_1_dp4a_ila_malu", &bin_size);
+            if (kernel_bin && bin_size > 0) {
+                cl_program prog =
+                    build_program_from_binary(backend_ctx->context, backend_ctx->device, kernel_bin, CL_moe_compile_opts, bin_size);
+
+                CL_CHECK((backend_ctx->kernel_gemm_moe_q4_1_q8_1_dp4a_malu_bin = clCreateKernel(prog, "kernel_gemm_moe_q4_1_q8_1_dp4a_ila_malu", &err), err));
+                CL_CHECK(clReleaseProgram(prog));
+                GGML_LOG_CONT(".");
+            }
+        }
+    }
+
+    // gemm_moe_q5_0_q8_1_dp4a_malu_bin (malu int8 prefill GEMM, A850)
+    if (backend_ctx->has_integer_dot) {
+        size_t bin_size = 0;
+        backend_ctx->kernel_gemm_moe_q5_0_q8_1_dp4a_malu_bin = nullptr;
+
+        if (use_adreno_bin_kernels(backend_ctx)) {
+            const char * kernel_bin = (const char *)backend_ctx->get_adreno_bin_kernel("gemm_moe_q5_0_q8_1_dp4a_ila_malu", &bin_size);
+            if (kernel_bin && bin_size > 0) {
+                cl_program prog =
+                    build_program_from_binary(backend_ctx->context, backend_ctx->device, kernel_bin, CL_moe_compile_opts, bin_size);
+
+                CL_CHECK((backend_ctx->kernel_gemm_moe_q5_0_q8_1_dp4a_malu_bin = clCreateKernel(prog, "kernel_gemm_moe_q5_0_q8_1_dp4a_ila_malu", &err), err));
+                CL_CHECK(clReleaseProgram(prog));
+                GGML_LOG_CONT(".");
+            }
+        }
+    }
+
+    // gemm_moe_q5_1_q8_1_dp4a_malu_bin (malu int8 prefill GEMM, A850)
+    if (backend_ctx->has_integer_dot) {
+        size_t bin_size = 0;
+        backend_ctx->kernel_gemm_moe_q5_1_q8_1_dp4a_malu_bin = nullptr;
+
+        if (use_adreno_bin_kernels(backend_ctx)) {
+            const char * kernel_bin = (const char *)backend_ctx->get_adreno_bin_kernel("gemm_moe_q5_1_q8_1_dp4a_ila_malu", &bin_size);
+            if (kernel_bin && bin_size > 0) {
+                cl_program prog =
+                    build_program_from_binary(backend_ctx->context, backend_ctx->device, kernel_bin, CL_moe_compile_opts, bin_size);
+
+                CL_CHECK((backend_ctx->kernel_gemm_moe_q5_1_q8_1_dp4a_malu_bin = clCreateKernel(prog, "kernel_gemm_moe_q5_1_q8_1_dp4a_ila_malu", &err), err));
+                CL_CHECK(clReleaseProgram(prog));
+                GGML_LOG_CONT(".");
+            }
+        }
+    }
+
+    // gemm_moe_q4_k_q8_1_dp4a_malu_bin (malu int8 prefill GEMM, A850)
+    if (backend_ctx->has_integer_dot) {
+        size_t bin_size = 0;
+        backend_ctx->kernel_gemm_moe_q4_k_q8_1_dp4a_malu_bin = nullptr;
+
+        if (use_adreno_bin_kernels(backend_ctx)) {
+            const char * kernel_bin = (const char *)backend_ctx->get_adreno_bin_kernel("gemm_moe_q4_k_q8_1_dp4a_ila_malu", &bin_size);
+            if (kernel_bin && bin_size > 0) {
+                cl_program prog =
+                    build_program_from_binary(backend_ctx->context, backend_ctx->device, kernel_bin, CL_moe_compile_opts, bin_size);
+
+                CL_CHECK((backend_ctx->kernel_gemm_moe_q4_k_q8_1_dp4a_malu_bin = clCreateKernel(prog, "kernel_gemm_moe_q4_k_q8_1_dp4a_ila_malu", &err), err));
+                CL_CHECK(clReleaseProgram(prog));
+                GGML_LOG_CONT(".");
+            }
+        }
+    }
+
+    // gemm_moe_q5_k_q8_1_dp4a_malu_bin (malu int8 prefill GEMM, A850)
+    if (backend_ctx->has_integer_dot) {
+        size_t bin_size = 0;
+        backend_ctx->kernel_gemm_moe_q5_k_q8_1_dp4a_malu_bin = nullptr;
+
+        if (use_adreno_bin_kernels(backend_ctx)) {
+            const char * kernel_bin = (const char *)backend_ctx->get_adreno_bin_kernel("gemm_moe_q5_k_q8_1_dp4a_ila_malu", &bin_size);
+            if (kernel_bin && bin_size > 0) {
+                cl_program prog =
+                    build_program_from_binary(backend_ctx->context, backend_ctx->device, kernel_bin, CL_moe_compile_opts, bin_size);
+
+                CL_CHECK((backend_ctx->kernel_gemm_moe_q5_k_q8_1_dp4a_malu_bin = clCreateKernel(prog, "kernel_gemm_moe_q5_k_q8_1_dp4a_ila_malu", &err), err));
+                CL_CHECK(clReleaseProgram(prog));
+                GGML_LOG_CONT(".");
+            }
+        }
+    }
+
+    // gemm_moe_q6_k_q8_1_dp4a_malu_bin (malu int8 prefill GEMM, A850)
+    if (backend_ctx->has_integer_dot) {
+        size_t bin_size = 0;
+        backend_ctx->kernel_gemm_moe_q6_k_q8_1_dp4a_malu_bin = nullptr;
+
+        if (use_adreno_bin_kernels(backend_ctx)) {
+            const char * kernel_bin = (const char *)backend_ctx->get_adreno_bin_kernel("gemm_moe_q6_k_q8_1_dp4a_ila_malu", &bin_size);
+            if (kernel_bin && bin_size > 0) {
+                cl_program prog =
+                    build_program_from_binary(backend_ctx->context, backend_ctx->device, kernel_bin, CL_moe_compile_opts, bin_size);
+
+                CL_CHECK((backend_ctx->kernel_gemm_moe_q6_k_q8_1_dp4a_malu_bin = clCreateKernel(prog, "kernel_gemm_moe_q6_k_q8_1_dp4a_ila_malu", &err), err));
+                CL_CHECK(clReleaseProgram(prog));
+                GGML_LOG_CONT(".");
+            }
+        }
+    }
+
     // gemm_moe_q4_0_q8_1_dp4a (dp4a prefill GEMM)
     if (backend_ctx->has_integer_dot) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
@@ -11078,6 +11230,76 @@ static bool ggml_opencl_can_fuse_moe_bias_glu(const struct ggml_cgraph * cgraph,
         return false;
     }
     return true;
+}
+
+// Run a malu int8 (dp4a ila malu bin) MoE GEMM: fused reorder + q8_1 quant of the activations, then the GEMM.
+// The weight buffers come first in the kernel args, in the order of the ns kernel of the same type.
+// use_sa: the kernel takes the q8_1 block sums (min types), or an unused buffer in that slot (q4_0).
+static void ggml_cl_moe_gemm_malu_bin(
+        ggml_backend_opencl_context * backend_ctx, cl_kernel kernel, std::initializer_list<cl_mem> weights, bool use_sa,
+        cl_mem sub_buf_src1_pre, cl_mem buf_src2, cl_mem buf_src2_emap,
+        cl_mem dst_data, cl_ulong offsetd, size_t n_dst, const ggml_tensor * dst,
+        int ne00, int ne01, unsigned short map_ratio, int max_post_router_tile, int n_tile_size) {
+    cl_int status;
+
+    const size_t tok_slots = (size_t)max_post_router_tile * n_tile_size;
+    const size_t n_blocks  = tok_slots * (ne00 / 32);
+    backend_ctx->prealloc_moe_qa.allocate(backend_ctx->context, tok_slots * ne00 * sizeof(cl_char));
+    backend_ctx->prealloc_moe_da.allocate(backend_ctx->context, n_blocks * sizeof(cl_half));
+    backend_ctx->prealloc_moe_sa.allocate(backend_ctx->context, n_blocks * sizeof(cl_half));
+
+    const cl_uint n_kblocks = (cl_uint)(ne00 / 32);
+    cl_uint ne00_u = ne00;
+    cl_uint tile_u = n_tile_size;
+    cl_kernel rq = backend_ctx->kernel_moe_reorder_quant_a_q8_1;
+    CL_CHECK(clSetKernelArg(rq, 0, sizeof(cl_mem),         &sub_buf_src1_pre));
+    CL_CHECK(clSetKernelArg(rq, 1, sizeof(cl_mem),         &buf_src2));
+    CL_CHECK(clSetKernelArg(rq, 2, sizeof(cl_mem),         &backend_ctx->prealloc_moe_qa.buffer));
+    CL_CHECK(clSetKernelArg(rq, 3, sizeof(cl_mem),         &backend_ctx->prealloc_moe_da.buffer));
+    CL_CHECK(clSetKernelArg(rq, 4, sizeof(cl_mem),         &backend_ctx->prealloc_moe_sa.buffer));
+    CL_CHECK(clSetKernelArg(rq, 5, sizeof(cl_mem),         &(backend_ctx->prealloc_total_tiles.buffer)));
+    CL_CHECK(clSetKernelArg(rq, 6, sizeof(cl_uint),        &ne00_u));
+    CL_CHECK(clSetKernelArg(rq, 7, sizeof(unsigned short), &map_ratio));
+    CL_CHECK(clSetKernelArg(rq, 8, sizeof(cl_uint),        &tile_u));
+    CL_CHECK(clSetKernelArg(rq, 9, sizeof(cl_uint),        &n_kblocks));
+    size_t rq_local[2]  = { 32, 1 };
+    size_t rq_global[2] = { (size_t)(((n_kblocks + 31) / 32) * 32), tok_slots };
+    backend_ctx->enqueue_ndrange_kernel(rq, 2, rq_global, rq_local, dst);
+
+    // dst as an image
+    cl_buffer_region region;
+    region.origin = offsetd;
+    region.size = n_dst * sizeof(float);
+    cl_mem sub_buf_dst = clCreateSubBuffer(dst_data, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
+    CL_CHECK(status);
+    cl_image_format image_format_buf_dst = {CL_R, CL_FLOAT};
+    cl_image_desc image_desc_buf_dst = {CL_MEM_OBJECT_IMAGE1D_BUFFER, n_dst, 0,0,0,0,0,0,0, {sub_buf_dst}};
+    cl_mem buf_dst_image = clCreateImage(backend_ctx->context, CL_MEM_WRITE_ONLY, &image_format_buf_dst, &image_desc_buf_dst, NULL, &status);
+    CL_CHECK(status);
+
+    int aidx = 0;
+    for (cl_mem w : weights) {
+        CL_CHECK(clSetKernelArg(kernel, aidx++, sizeof(cl_mem), &w));
+    }
+    CL_CHECK(clSetKernelArg(kernel, aidx++, sizeof(cl_mem), &backend_ctx->prealloc_moe_qa.buffer));
+    CL_CHECK(clSetKernelArg(kernel, aidx++, sizeof(cl_mem), &backend_ctx->prealloc_moe_da.buffer));
+    if (use_sa) {
+        CL_CHECK(clSetKernelArg(kernel, aidx++, sizeof(cl_mem), &backend_ctx->prealloc_moe_sa.buffer));
+    }
+    CL_CHECK(clSetKernelArg(kernel, aidx++, sizeof(cl_mem), &buf_src2));
+    CL_CHECK(clSetKernelArg(kernel, aidx++, sizeof(cl_mem), &buf_src2_emap));
+    CL_CHECK(clSetKernelArg(kernel, aidx++, sizeof(cl_mem), &buf_dst_image));
+    CL_CHECK(clSetKernelArg(kernel, aidx++, sizeof(cl_mem), &(backend_ctx->prealloc_total_tiles.buffer)));
+    CL_CHECK(clSetKernelArg(kernel, aidx++, sizeof(int),    &ne00));
+    CL_CHECK(clSetKernelArg(kernel, aidx++, sizeof(int),    &ne01));
+    CL_CHECK(clSetKernelArg(kernel, aidx++, sizeof(int),    &backend_ctx->adreno_use_moe_ragged_dp4));
+
+    size_t dp_global[3] = { 64, (size_t)((ne01 + 63) / 64), (size_t)max_post_router_tile };
+    size_t dp_local[3]  = { 64, 1, 1 };
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, dp_global, dp_local, dst);
+
+    clReleaseMemObject(sub_buf_dst);
+    clReleaseMemObject(buf_dst_image);
 }
 
 // Run a cl_qcom_kernel_cooperative_matrix MoE GEMM: f16 reorder of the activations, then the GEMM.
@@ -36917,6 +37139,24 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     unsigned short map_ratio = ne20 / ne11;
                     GGML_ASSERT(((map_ratio == 1) || (map_ratio == ne20)) && "Map ratio not supported\n");
 
+                    // binary malu int8 GEMM (A850), same enable rule as the ldck bin kernel: dp4a not disabled by the env var
+                    {
+                        static const char * q4_0_moe_malu_env = getenv("GGML_OPENCL_Q4_0_MOE_DP4A");
+                        if (backend_ctx->has_integer_dot && (!q4_0_moe_malu_env || atoi(q4_0_moe_malu_env) != 0) &&
+                                backend_ctx->kernel_gemm_moe_q4_0_q8_1_dp4a_malu_bin != nullptr) {
+                            unsigned short malu_map_ratio = ne20 / ne11;
+                            GGML_ASSERT(((malu_map_ratio == 1) || (malu_map_ratio == ne20)) && "Map ratio not supported\n");
+                            ggml_cl_moe_gemm_malu_bin(backend_ctx, backend_ctx->kernel_gemm_moe_q4_0_q8_1_dp4a_malu_bin,
+                                    { extra0_q4_0->q_img, extra0_q4_0->d }, true,
+                                    sub_buf_src1_pre, buf_src2, buf_src2_emap, extrad->data_device, offsetd, (size_t)ne0 * ne1 * ne2, dst,
+                                    ne00, ne01, malu_map_ratio, max_post_router_tile, n_tile_size);
+                            clReleaseMemObject(sub_buf_src1_pre);
+                            clReleaseMemObject(buf_src2);
+                            clReleaseMemObject(buf_src2_emap);
+                            return;
+                        }
+                    }
+
                     // cl_qcom_kernel_cooperative_matrix GEMM (A850 only) takes precedence over the bin and Adreno clc kernels
                     {
                         static const char * q4_0_moe_coopmat_env = getenv("GGML_OPENCL_Q4_0_MOE_COOPMAT");
@@ -37221,6 +37461,24 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     sub_buf_src1_pre = clCreateSubBuffer(extra1->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
                     CL_CHECK(status);
 
+                    // binary malu int8 GEMM (A850), same enable rule as the ldck bin kernel: dp4a not disabled by the env var
+                    {
+                        static const char * q4_1_moe_malu_env = getenv("GGML_OPENCL_Q4_1_MOE_DP4A");
+                        if (backend_ctx->has_integer_dot && (!q4_1_moe_malu_env || atoi(q4_1_moe_malu_env) != 0) &&
+                                backend_ctx->kernel_gemm_moe_q4_1_q8_1_dp4a_malu_bin != nullptr) {
+                            unsigned short malu_map_ratio = ne20 / ne11;
+                            GGML_ASSERT(((malu_map_ratio == 1) || (malu_map_ratio == ne20)) && "Map ratio not supported\n");
+                            ggml_cl_moe_gemm_malu_bin(backend_ctx, backend_ctx->kernel_gemm_moe_q4_1_q8_1_dp4a_malu_bin,
+                                    { extra0_q4_1->q_img, extra0_q4_1->d, extra0_q4_1->m }, true,
+                                    sub_buf_src1_pre, buf_src2, buf_src2_emap, extrad->data_device, offsetd, (size_t)ne0 * ne1 * ne2, dst,
+                                    ne00, ne01, malu_map_ratio, max_post_router_tile, n_tile_size);
+                            clReleaseMemObject(sub_buf_src1_pre);
+                            clReleaseMemObject(buf_src2);
+                            clReleaseMemObject(buf_src2_emap);
+                            return;
+                        }
+                    }
+
                     // cl_qcom_kernel_cooperative_matrix GEMM (A850 only) takes precedence over the bin and Adreno clc kernels
                     {
                         static const char * q4_1_moe_coopmat_env = getenv("GGML_OPENCL_Q4_1_MOE_COOPMAT");
@@ -37500,6 +37758,24 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                         }
                     }
 
+                    // binary malu int8 GEMM (A850), same enable rule as the ldck bin kernel: dp4a not disabled by the env var
+                    {
+                        static const char * q5_0_moe_malu_env = getenv("GGML_OPENCL_Q5_MOE_DP4A");
+                        if (backend_ctx->has_integer_dot && (!q5_0_moe_malu_env || atoi(q5_0_moe_malu_env) != 0) &&
+                                backend_ctx->kernel_gemm_moe_q5_0_q8_1_dp4a_malu_bin != nullptr) {
+                            unsigned short malu_map_ratio = ne20 / ne11;
+                            GGML_ASSERT(((malu_map_ratio == 1) || (malu_map_ratio == ne20)) && "Map ratio not supported\n");
+                            ggml_cl_moe_gemm_malu_bin(backend_ctx, backend_ctx->kernel_gemm_moe_q5_0_q8_1_dp4a_malu_bin,
+                                    { extra0_q5_0->qs_img, extra0_q5_0->qh, extra0_q5_0->d }, false,
+                                    sub_buf_src1_pre, buf_src2, buf_src2_emap, extrad->data_device, offsetd, (size_t)ne0 * ne1 * ne2, dst,
+                                    ne00, ne01, malu_map_ratio, max_post_router_tile, n_tile_size);
+                            clReleaseMemObject(sub_buf_src1_pre);
+                            clReleaseMemObject(buf_src2);
+                            clReleaseMemObject(buf_src2_emap);
+                            return;
+                        }
+                    }
+
                     // cl_qcom_kernel_cooperative_matrix GEMM (A850 only) takes precedence over the bin and Adreno clc kernels
                     {
                         static const char * q5_0_moe_coopmat_env = getenv("GGML_OPENCL_Q5_0_MOE_COOPMAT");
@@ -37698,6 +37974,24 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     region.size = ne10 * ne11 * ne12 * sizeof(float);
                     sub_buf_src1_pre = clCreateSubBuffer(extra1->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
                     CL_CHECK(status);
+
+                    // binary malu int8 GEMM (A850), same enable rule as the ldck bin kernel: dp4a not disabled by the env var
+                    {
+                        static const char * q5_1_moe_malu_env = getenv("GGML_OPENCL_Q5_1_MOE_DP4A");
+                        if (backend_ctx->has_integer_dot && (!q5_1_moe_malu_env || atoi(q5_1_moe_malu_env) != 0) &&
+                                backend_ctx->kernel_gemm_moe_q5_1_q8_1_dp4a_malu_bin != nullptr) {
+                            unsigned short malu_map_ratio = ne20 / ne11;
+                            GGML_ASSERT(((malu_map_ratio == 1) || (malu_map_ratio == ne20)) && "Map ratio not supported\n");
+                            ggml_cl_moe_gemm_malu_bin(backend_ctx, backend_ctx->kernel_gemm_moe_q5_1_q8_1_dp4a_malu_bin,
+                                    { extra0_q5_1->qs_img, extra0_q5_1->qh, extra0_q5_1->d, extra0_q5_1->m }, true,
+                                    sub_buf_src1_pre, buf_src2, buf_src2_emap, extrad->data_device, offsetd, (size_t)ne0 * ne1 * ne2, dst,
+                                    ne00, ne01, malu_map_ratio, max_post_router_tile, n_tile_size);
+                            clReleaseMemObject(sub_buf_src1_pre);
+                            clReleaseMemObject(buf_src2);
+                            clReleaseMemObject(buf_src2_emap);
+                            return;
+                        }
+                    }
 
                     // cl_qcom_kernel_cooperative_matrix GEMM (A850 only) takes precedence over the bin and Adreno clc kernels
                     {
@@ -38183,6 +38477,24 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     unsigned short map_ratio = ne20 / ne11;
                     GGML_ASSERT(((map_ratio == 1) || (map_ratio == ne20)) && "Map ratio not supported\n");
 
+                    // binary malu int8 GEMM (A850), same enable rule as the ldck bin kernel: dp4a not disabled by the env var
+                    {
+                        static const char * q4_k_moe_malu_env = getenv("GGML_OPENCL_Q4K_MOE_DP4A");
+                        if (backend_ctx->has_integer_dot && (!q4_k_moe_malu_env || atoi(q4_k_moe_malu_env) != 0) &&
+                                backend_ctx->kernel_gemm_moe_q4_k_q8_1_dp4a_malu_bin != nullptr) {
+                            unsigned short malu_map_ratio = ne20 / ne11;
+                            GGML_ASSERT(((malu_map_ratio == 1) || (malu_map_ratio == ne20)) && "Map ratio not supported\n");
+                            ggml_cl_moe_gemm_malu_bin(backend_ctx, backend_ctx->kernel_gemm_moe_q4_k_q8_1_dp4a_malu_bin,
+                                    { extra0_q4_K->q_img, extra0_q4_K->d, extra0_q4_K->dm, extra0_q4_K->s }, true,
+                                    sub_buf_src1_pre, buf_src2, buf_src2_emap, extrad->data_device, offsetd, (size_t)ne0 * ne1 * ne2, dst,
+                                    ne00, ne01, malu_map_ratio, max_post_router_tile, n_tile_size);
+                            clReleaseMemObject(sub_buf_src1_pre);
+                            clReleaseMemObject(buf_src2);
+                            clReleaseMemObject(buf_src2_emap);
+                            return;
+                        }
+                    }
+
                     // cl_qcom_kernel_cooperative_matrix GEMM (A850 only) takes precedence over the bin and Adreno clc kernels
                     {
                         static const char * q4_k_moe_coopmat_env = getenv("GGML_OPENCL_Q4K_MOE_COOPMAT");
@@ -38522,6 +38834,24 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                         }
                     }
 
+                    // binary malu int8 GEMM (A850), same enable rule as the ldck bin kernel: dp4a not disabled by the env var
+                    {
+                        static const char * q5_k_moe_malu_env = getenv("GGML_OPENCL_Q5K_MOE_DP4A");
+                        if (backend_ctx->has_integer_dot && (!q5_k_moe_malu_env || atoi(q5_k_moe_malu_env) != 0) &&
+                                backend_ctx->kernel_gemm_moe_q5_k_q8_1_dp4a_malu_bin != nullptr) {
+                            unsigned short malu_map_ratio = ne20 / ne11;
+                            GGML_ASSERT(((malu_map_ratio == 1) || (malu_map_ratio == ne20)) && "Map ratio not supported\n");
+                            ggml_cl_moe_gemm_malu_bin(backend_ctx, backend_ctx->kernel_gemm_moe_q5_k_q8_1_dp4a_malu_bin,
+                                    { extra0_q5_K->q_img, extra0_q5_K->qh, extra0_q5_K->s, extra0_q5_K->d, extra0_q5_K->dm }, true,
+                                    sub_buf_src1_pre, buf_src2, buf_src2_emap, extrad->data_device, offsetd, (size_t)ne0 * ne1 * ne2, dst,
+                                    ne00, ne01, malu_map_ratio, max_post_router_tile, n_tile_size);
+                            clReleaseMemObject(sub_buf_src1_pre);
+                            clReleaseMemObject(buf_src2);
+                            clReleaseMemObject(buf_src2_emap);
+                            return;
+                        }
+                    }
+
                     // cl_qcom_kernel_cooperative_matrix GEMM (A850 only) takes precedence over the bin and Adreno clc kernels
                     {
                         static const char * q5_k_moe_coopmat_env = getenv("GGML_OPENCL_Q5K_MOE_COOPMAT");
@@ -38741,6 +39071,24 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
 
                     unsigned short map_ratio = ne20 / ne11;
                     GGML_ASSERT(((map_ratio == 1) || (map_ratio == ne20)) && "Map ratio not supported\n");
+
+                    // binary malu int8 GEMM (A850), same enable rule as the ldck bin kernel: dp4a not disabled by the env var
+                    {
+                        static const char * q6_k_moe_malu_env = getenv("GGML_OPENCL_Q6K_MOE_DP4A");
+                        if (backend_ctx->has_integer_dot && (!q6_k_moe_malu_env || atoi(q6_k_moe_malu_env) != 0) &&
+                                backend_ctx->kernel_gemm_moe_q6_k_q8_1_dp4a_malu_bin != nullptr) {
+                            unsigned short malu_map_ratio = ne20 / ne11;
+                            GGML_ASSERT(((malu_map_ratio == 1) || (malu_map_ratio == ne20)) && "Map ratio not supported\n");
+                            ggml_cl_moe_gemm_malu_bin(backend_ctx, backend_ctx->kernel_gemm_moe_q6_k_q8_1_dp4a_malu_bin,
+                                    { extra0_q6_K->ql_img, extra0_q6_K->qh, extra0_q6_K->s, extra0_q6_K->d }, false,
+                                    sub_buf_src1_pre, buf_src2, buf_src2_emap, extrad->data_device, offsetd, (size_t)ne0 * ne1 * ne2, dst,
+                                    ne00, ne01, malu_map_ratio, max_post_router_tile, n_tile_size);
+                            clReleaseMemObject(sub_buf_src1_pre);
+                            clReleaseMemObject(buf_src2);
+                            clReleaseMemObject(buf_src2_emap);
+                            return;
+                        }
+                    }
 
                     // cl_qcom_kernel_cooperative_matrix GEMM (A850 only) takes precedence over the bin and Adreno clc kernels
                     {
@@ -39041,6 +39389,24 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
 
                     unsigned short map_ratio = ne20 / ne11;
                     GGML_ASSERT(((map_ratio == 1) || (map_ratio == ne20)) && "Map ratio not supported\n");
+
+                    // binary malu int8 GEMM (A850), same enable rule as the ldck bin kernel: dp4a not disabled by the env var
+                    {
+                        static const char * mxfp4_moe_malu_env = getenv("GGML_OPENCL_MXFP4_MOE_DP4A");
+                        if (backend_ctx->has_integer_dot && (!mxfp4_moe_malu_env || atoi(mxfp4_moe_malu_env) != 0) &&
+                                backend_ctx->kernel_gemm_moe_mxfp4_q8_1_dp4a_malu_bin != nullptr) {
+                            unsigned short malu_map_ratio = ne20 / ne11;
+                            GGML_ASSERT(((malu_map_ratio == 1) || (malu_map_ratio == ne20)) && "Map ratio not supported\n");
+                            ggml_cl_moe_gemm_malu_bin(backend_ctx, backend_ctx->kernel_gemm_moe_mxfp4_q8_1_dp4a_malu_bin,
+                                    { extra0_mxfp4->q_img, extra0_mxfp4->e }, false,
+                                    sub_buf_src1_pre, buf_src2, buf_src2_emap, extrad->data_device, offsetd, (size_t)ne0 * ne1 * ne2, dst,
+                                    ne00, ne01, malu_map_ratio, max_post_router_tile, n_tile_size);
+                            clReleaseMemObject(sub_buf_src1_pre);
+                            clReleaseMemObject(buf_src2);
+                            clReleaseMemObject(buf_src2_emap);
+                            return;
+                        }
+                    }
 
                     if (use_moe_coopmat) {
                         // f16 reordered activations, read by the coopmat kernel as a buffer
