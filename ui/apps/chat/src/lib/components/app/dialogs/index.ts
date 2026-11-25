@@ -525,3 +525,11 @@ export { default as DialogMermaidPreview } from './DialogMermaidPreview.svelte';
 
 /** **DialogDiscoverModels** - shell for the Hugging Face model discovery view. */
 export { default as DialogDiscoverModels } from './DialogDiscoverModels.svelte';
+
+/**
+ * **DialogSystemMessageEdit** - Edit the conversation's system message
+ *
+ * Modal dialog with a textarea, opened from the custom system message attachment
+ * in the chat form.
+ */
+export { default as DialogSystemMessageEdit } from './DialogSystemMessageEdit.svelte';
