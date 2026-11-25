@@ -26,3 +26,7 @@ struct mtmd_image_preprocessor;
 mtmd_video_config mtmd_video_config_init(mtmd_video_template tmpl, const mtmd_image_preprocessor * preproc,
                                          int32_t src_width, int32_t src_height,
                                          int32_t src_n_frames, float src_fps);
+
+// MiniCPM-V 4.7 canvas chunk with no pixels, for decoder-position tests.
+// n_col * n_row == 0 means overview only.
+mtmd_input_chunk * mtmd_test_create_canvas_chunk(int ov_nx, int ov_ny, int n_col, int n_row, int nx, int ny);
