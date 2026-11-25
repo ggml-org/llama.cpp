@@ -32877,7 +32877,7 @@ static int ggml_cl_mcr_lpr_log2(int ne00) {
 
 static bool ggml_cl_mcr_wide_enough(int ne00, int ne01) {
     const int rows_per_wg = 64 >> ggml_cl_mcr_lpr_log2(ne00);
-    return ne01 > 512 || CEIL_DIV((size_t) ne01, rows_per_wg) >= 256;
+    return CEIL_DIV((size_t) ne01, rows_per_wg) >= 256;
 }
 
 static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -33489,7 +33489,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 const bool f32_mcr_allowed = f32_mc_env >= 0 ? f32_mc_env != 0 : !adreno_e17_compiler_quirks(backend_ctx);
 
                 if (f32_mcr && f32_mcr_allowed && backend_ctx->kernel_gemv_f32_f32_mcr != nullptr &&
-                    ne11 >= 2 && ne11 <= 8 && ne00 > 0 && ne00 <= INT_MAX && ne01 > 0 && ne01 <= INT_MAX &&
+                    ne11 >= 2 && ne11 <= 8 && ne00 > 0 && ne00 <= INT_MAX && ne01 > 0 && ne01 <= 512 &&
                     (size_t) ne01 <= SIZE_MAX / 64 && (ne00 % 4 == 0) &&
                     ne02 == 1 && ne03 == 1 && ne12 == 1 && ne13 == 1 &&
                     dst->ne[2] == 1 && dst->ne[3] == 1 &&
