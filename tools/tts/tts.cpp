@@ -1,4 +1,5 @@
 #include "arg.h"
+#include "chat.h"
 #include "common.h"
 #include "sampling.h"
 #include "log.h"
@@ -36,9 +37,9 @@ static void print_usage(int, char ** argv) {
     LOG("\nexample usage:\n");
     LOG("\n    %s -m backbone.gguf -mm mmproj.gguf -p \"text to speak\" -o output.wav", argv[0]);
     LOG("\n    %s -hf user/model -p \"text to speak\" -o output.wav\n", argv[0]);
-    LOG("\nnote: --tts-lang and --tts-speaker-file may not be supported in all models");
+    LOG("\nnote: --tts-lang, --tts-voice and --tts-speaker-file may not be supported in all models");
     LOG("\n      use -n to limit the output length");
-    LOG("\n      see tts/README.md for per-model usage notes");
+    LOG("\n      see docs/multimodal/tts.md for per-model usage notes");
     LOG("\n\n");
 }
 
@@ -85,8 +86,9 @@ int main(int argc, char ** argv) {
     }
 
     mtmd_context_params mtmd_params = mtmd_context_params_default();
-    mtmd_params.use_gpu = params.mmproj_use_gpu;
-    mtmd_params.device  = params.mmproj_device;
+    mtmd_params.use_gpu   = params.mmproj_use_gpu;
+    mtmd_params.device    = params.mmproj_device;
+    mtmd_params.n_threads = params.cpuparams.n_threads;
     mtmd::context_ptr mctx(mtmd_init_from_file(params.mmproj.path.c_str(), model, mtmd_params));
     if (!mctx) {
         LOG_ERR("failed to load mmproj %s\n", params.mmproj.path.c_str());
@@ -111,17 +113,63 @@ int main(int argc, char ** argv) {
         speaker_bitmap.reset(wrapper.bitmap);
     }
 
-    mtmd_helper::gen_audio gen(lctx, mctx.get());
-    mtmd_helper_gen_audio_inp inp{};
+    // a model with predefined voices needs one, the first by default; other models name the voice in the prompt
+    if (mtmd_gen_audio_get_info(mctx.get()).n_voices > 0 && (!params.tts_voice.empty() || !speaker_bitmap)) {
+        if (speaker_bitmap) {
+            LOG_ERR("--tts-voice and --tts-speaker-file cannot be used together\n");
+            return 1;
+        }
+        if (params.tts_voice.empty()) {
+            params.tts_voice = mtmd_gen_audio_voice_name(mctx.get(), 0);
+            LOG_WRN("no --tts-voice given, speaking with \"%s\"\n", params.tts_voice.c_str());
+        }
+        speaker_bitmap.reset(mtmd_gen_audio_get_voice(mctx.get(), params.tts_voice.c_str()));
+        if (!speaker_bitmap) {
+            LOG_ERR("unknown voice \"%s\", the model has:", params.tts_voice.c_str());
+            for (int32_t i = 0; const char * name = mtmd_gen_audio_voice_name(mctx.get(), i); i++) {
+                LOG(" %s", name);
+            }
+            LOG("\n");
+            return 1;
+        }
+    }
+
+    // a model with a "tts" chat template (e.g. LFM3-Audio) speaks the prompt rendered from it
+    auto tmpls = common_chat_templates_init(model, "");
+    std::string prompt;
+    try {
+        prompt = common_chat_get_tts_prompt(tmpls.get(), params.prompt, params.tts_lang, params.tts_voice, [&](const std::string & word) {
+            char buf[512];
+            return mtmd_gen_audio_g2p(mctx.get(), word.c_str(), buf, sizeof(buf)) > 0 ? std::string(buf) : std::string();
+        });
+    } catch (const std::exception & e) {
+        LOG_ERR("failed to prepare the text to speak: %s\n", e.what());
+        return 1;
+    }
+    if (prompt.empty()) {
+        prompt = params.prompt;
+    }
+
+    mtmd_helper::gen_audio gen;
+    gen.init(lctx, mctx.get());
+    if (!gen.valid()) {
+        LOG_ERR("the context cannot run the audio generation of this model\n");
+        return 1;
+    }
+    mtmd_helper_gen_audio_inp inp = mtmd_helper_gen_audio_inp_default();
     inp.seq_id      = 0;
-    inp.prompt      = params.prompt.c_str();
-    inp.prompt_len  = params.prompt.size();
+    inp.prompt      = prompt.c_str();
+    inp.prompt_len  = prompt.size();
     inp.speaker_ref = speaker_bitmap.get();
+    inp.speaker_ref_text = params.tts_speaker_text.empty() ? nullptr : params.tts_speaker_text.c_str();
     inp.lang        = params.tts_lang.c_str();
     inp.top_k       = params.sampling.top_k;
     inp.top_p       = params.sampling.top_p;
     inp.seed        = params.sampling.seed;
-    inp.out_type    = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
+    // without --temp the audio frames keep the model default, not the CLI default
+    if (params.sampling.user_sampling_config & common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_TEMP) {
+        inp.temp    = params.sampling.temp;
+    }
 
     //
     // stage 1: process prompt via backbone model, generate semantic representation
@@ -135,7 +183,7 @@ int main(int argc, char ** argv) {
     const int64_t t_prompt_start_us = ggml_time_us();
 
     for (;;) {
-        int32_t ret = gen.step_prompt(params.n_batch);
+        int32_t ret = gen.step_prompt(llama_n_batch(lctx));
         if (ret < 0) {
             LOG_ERR("prompt processing failed\n");
             return 1;
@@ -152,7 +200,7 @@ int main(int argc, char ** argv) {
         return t;
     };
 
-    const int max_new = params.n_predict > 0 ? params.n_predict : 512;
+    const int max_new = gen.max_frames(params.n_predict);
     int n_frames = 0;
     llama_token sampled = sample_semantic_code();
     const float * h_state = llama_get_embeddings_ith(lctx, -1);

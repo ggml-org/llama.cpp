@@ -60,4 +60,4 @@ jobs:
       - name: Test
         id: ggml-ci
         run: |
-          GG_BUILD_METAL=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+          GG_BUILD_METAL=1 bash ./ci/run.sh ~/results/llama.cpp/$RUNNER_NAME ~/mnt/llama.cpp

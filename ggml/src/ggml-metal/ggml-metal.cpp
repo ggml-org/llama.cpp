@@ -9,6 +9,8 @@
 #include "ggml-metal-ops.h"
 #include "ggml-metal-tuning.h"
 
+#include <TargetConditionals.h>
+
 #include <mutex>
 #include <string>
 
@@ -68,6 +70,22 @@ static void ggml_backend_metal_buffer_shared_get_tensor(ggml_backend_buffer_t bu
     ggml_metal_buffer_get_tensor(ctx, tensor, data, offset, size);
 }
 
+static void ggml_backend_metal_buffer_shared_set_tensor_n(ggml_backend_buffer_t buffer, struct ggml_tensor * const * tensors, const void * const * data, const size_t * offsets, const size_t * sizes, size_t n_tensors) {
+    ggml_metal_buffer_t ctx = (ggml_metal_buffer_t)buffer->context;
+
+    GGML_ASSERT(ggml_metal_buffer_is_shared(ctx));
+
+    ggml_metal_buffer_set_tensor_n(ctx, tensors, data, offsets, sizes, n_tensors);
+}
+
+static void ggml_backend_metal_buffer_shared_get_tensor_n(ggml_backend_buffer_t buffer, const struct ggml_tensor * const * tensors, void * const * data, const size_t * offsets, const size_t * sizes, size_t n_tensors) {
+    ggml_metal_buffer_t ctx = (ggml_metal_buffer_t)buffer->context;
+
+    GGML_ASSERT(ggml_metal_buffer_is_shared(ctx));
+
+    ggml_metal_buffer_get_tensor_n(ctx, tensors, data, offsets, sizes, n_tensors);
+}
+
 static bool ggml_backend_metal_buffer_shared_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
     ggml_metal_buffer_t ctx = (ggml_metal_buffer_t)buffer->context;
 
@@ -78,6 +96,20 @@ static bool ggml_backend_metal_buffer_shared_cpy_tensor(ggml_backend_buffer_t bu
     }
 
     return ggml_metal_buffer_cpy_tensor(ctx, src, dst);
+}
+
+static bool ggml_backend_metal_buffer_shared_cpy_tensor_n(ggml_backend_buffer_t buffer, const struct ggml_tensor * const * srcs, struct ggml_tensor * const * dsts, size_t n_tensors) {
+    ggml_metal_buffer_t ctx = (ggml_metal_buffer_t)buffer->context;
+
+    GGML_ASSERT(ggml_metal_buffer_is_shared(ctx));
+
+    for (size_t i = 0; i < n_tensors; ++i) {
+        if (!ggml_backend_buffer_is_metal(srcs[i]->buffer)) {
+            return false;
+        }
+    }
+
+    return ggml_metal_buffer_cpy_tensor_n(ctx, srcs, dsts, n_tensors);
 }
 
 static void ggml_backend_metal_buffer_shared_clear(ggml_backend_buffer_t buffer, uint8_t value) {
@@ -100,6 +132,9 @@ static ggml_backend_buffer_i ggml_backend_metal_buffer_shared_i = {
     /* .cpy_tensor    = */ ggml_backend_metal_buffer_shared_cpy_tensor,
     /* .clear         = */ ggml_backend_metal_buffer_shared_clear,
     /* .reset         = */ NULL,
+    /* .set_tensor_n  = */ ggml_backend_metal_buffer_shared_set_tensor_n,
+    /* .get_tensor_n  = */ ggml_backend_metal_buffer_shared_get_tensor_n,
+    /* .cpy_tensor_n  = */ ggml_backend_metal_buffer_shared_cpy_tensor_n,
 };
 
 // private buffer
@@ -144,6 +179,22 @@ static void ggml_backend_metal_buffer_private_get_tensor(ggml_backend_buffer_t b
     ggml_metal_buffer_get_tensor(ctx, tensor, data, offset, size);
 }
 
+static void ggml_backend_metal_buffer_private_set_tensor_n(ggml_backend_buffer_t buffer, struct ggml_tensor * const * tensors, const void * const * data, const size_t * offsets, const size_t * sizes, size_t n_tensors) {
+    ggml_metal_buffer_t ctx = (ggml_metal_buffer_t)buffer->context;
+
+    GGML_ASSERT(!ggml_metal_buffer_is_shared(ctx));
+
+    ggml_metal_buffer_set_tensor_n(ctx, tensors, data, offsets, sizes, n_tensors);
+}
+
+static void ggml_backend_metal_buffer_private_get_tensor_n(ggml_backend_buffer_t buffer, const struct ggml_tensor * const * tensors, void * const * data, const size_t * offsets, const size_t * sizes, size_t n_tensors) {
+    ggml_metal_buffer_t ctx = (ggml_metal_buffer_t)buffer->context;
+
+    GGML_ASSERT(!ggml_metal_buffer_is_shared(ctx));
+
+    ggml_metal_buffer_get_tensor_n(ctx, tensors, data, offsets, sizes, n_tensors);
+}
+
 static bool ggml_backend_metal_buffer_private_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
     ggml_metal_buffer_t ctx = (ggml_metal_buffer_t)buffer->context;
 
@@ -154,6 +205,20 @@ static bool ggml_backend_metal_buffer_private_cpy_tensor(ggml_backend_buffer_t b
     }
 
     return ggml_metal_buffer_cpy_tensor(ctx, src, dst);
+}
+
+static bool ggml_backend_metal_buffer_private_cpy_tensor_n(ggml_backend_buffer_t buffer, const struct ggml_tensor * const * srcs, struct ggml_tensor * const * dsts, size_t n_tensors) {
+    ggml_metal_buffer_t ctx = (ggml_metal_buffer_t)buffer->context;
+
+    GGML_ASSERT(!ggml_metal_buffer_is_shared(ctx));
+
+    for (size_t i = 0; i < n_tensors; ++i) {
+        if (!ggml_backend_buffer_is_metal(srcs[i]->buffer)) {
+            return false;
+        }
+    }
+
+    return ggml_metal_buffer_cpy_tensor_n(ctx, srcs, dsts, n_tensors);
 }
 
 static void ggml_backend_metal_buffer_private_clear(ggml_backend_buffer_t buffer, uint8_t value) {
@@ -176,6 +241,9 @@ static ggml_backend_buffer_i ggml_backend_metal_buffer_private_i = {
     /* .cpy_tensor    = */ ggml_backend_metal_buffer_private_cpy_tensor,
     /* .clear         = */ ggml_backend_metal_buffer_private_clear,
     /* .reset         = */ NULL,
+    /* .set_tensor_n  = */ ggml_backend_metal_buffer_private_set_tensor_n,
+    /* .get_tensor_n  = */ ggml_backend_metal_buffer_private_get_tensor_n,
+    /* .cpy_tensor_n  = */ ggml_backend_metal_buffer_private_cpy_tensor_n,
 };
 
 static bool ggml_backend_buffer_is_metal(ggml_backend_buffer_t buffer) {
@@ -226,7 +294,6 @@ static size_t ggml_backend_metal_buffer_type_get_alloc_size(ggml_backend_buffer_
             {
                 res += ggml_metal_op_mul_mat_id_extra_tpe(tensor);
                 res += ggml_metal_op_mul_mat_id_extra_ids(tensor);
-                res += ggml_metal_op_mul_mat_id_extra_amax(tensor);
             } break;
         case GGML_OP_FLASH_ATTN_EXT:
             {
@@ -235,6 +302,7 @@ static size_t ggml_backend_metal_buffer_type_get_alloc_size(ggml_backend_buffer_
                 res += ggml_metal_op_flash_attn_ext_extra_tmp(tensor);
                 res += ggml_metal_op_flash_attn_ext_extra_kv_f16(tensor);
                 res += ggml_metal_op_flash_attn_ext_extra_idx(tensor);
+                res += ggml_metal_op_flash_attn_ext_extra_rows(tensor);
             } break;
         case GGML_OP_CUMSUM:
         case GGML_OP_ARGSORT:
@@ -243,7 +311,15 @@ static size_t ggml_backend_metal_buffer_type_get_alloc_size(ggml_backend_buffer_
             } break;
         case GGML_OP_TOP_K:
             {
-                res = 2*sizeof(int32_t)*ggml_nelements(tensor->src[0]);
+                res += ggml_metal_op_top_k_extra(tensor);
+            } break;
+        case GGML_OP_CONV_2D:
+            {
+                res += ggml_metal_op_conv_2d_extra_tmp(tensor);
+            } break;
+        case GGML_OP_ARGMAX:
+            {
+                res += ggml_metal_op_argmax_extra(tensor);
             } break;
         default:
             break;
@@ -579,6 +655,13 @@ static void ggml_backend_metal_graph_optimize(ggml_backend_t backend, ggml_cgrap
     ggml_metal_graph_optimize(ctx, cgraph);
 }
 
+// iOS can stop a command buffer that runs for more than a few seconds, so split the graph into shorter ones there
+#if TARGET_OS_IPHONE
+#define GGML_METAL_DEFAULT_N_CB 8
+#else
+#define GGML_METAL_DEFAULT_N_CB 1
+#endif // TARGET_OS_IPHONE
+
 static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
     GGML_ASSERT(ggml_backend_is_metal(backend));
 
@@ -630,7 +713,7 @@ ggml_backend_t ggml_backend_metal_init(void) {
         /* .context   = */ ctx,
     };
 
-    ggml_backend_metal_set_n_cb(backend, 1);
+    ggml_backend_metal_set_n_cb(backend, GGML_METAL_DEFAULT_N_CB);
 
     return backend;
 }
@@ -699,11 +782,12 @@ static void ggml_backend_metal_device_get_props(ggml_backend_dev_t dev, ggml_bac
     ggml_backend_metal_device_get_memory(dev, &props->memory_free, &props->memory_total);
 
     props->caps = {
-        /* .async                = */ true,
-        /* .host_buffer          = */ false,
-        /* .buffer_from_host_ptr = */ true,
-        /* .events               = */ true,
-        /* .mmap_support         = */ true,
+        /* .async                 = */ true,
+        /* .host_buffer           = */ false,
+        /* .buffer_from_host_ptr  = */ true,
+        /* .events                = */ true,
+        /* .mmap_support          = */ true,
+        /* .fast_async_host_input = */ false,
     };
 }
 
@@ -725,7 +809,7 @@ static ggml_backend_t ggml_backend_metal_device_init_backend(ggml_backend_dev_t 
         /* .context   = */ ctx,
     };
 
-    ggml_backend_metal_set_n_cb(backend, 1);
+    ggml_backend_metal_set_n_cb(backend, GGML_METAL_DEFAULT_N_CB);
 
     return backend;
 

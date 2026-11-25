@@ -11,6 +11,8 @@ struct topk_moe_config {
     bool use_sqrt_softplus;
     bool with_norm;
     bool delayed_softmax;
+    int  n_groups;
+    int  n_group_used;
 };
 
 // Warp-local softmax used for both the pre-top-k logits and the post-top-k delayed path.
@@ -18,22 +20,24 @@ template <int experts_per_thread, bool use_limit>
 __device__ void softmax_warp_inplace(float (&vals)[experts_per_thread], const int limit, const int lane) {
     float max_val = -INFINITY;
 
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+
 #pragma unroll
     for (int i = 0; i < experts_per_thread; i++) {
-        const int  idx    = lane + i * WARP_SIZE;
+        const int  idx    = lane + i * warp_size;
         const bool active = !use_limit || (idx < limit);
         if (active) {
             max_val = max(max_val, vals[i]);
         }
     }
 
-    max_val = warp_reduce_max(max_val);
+    max_val = warp_reduce_max<warp_size>(max_val);
 
     float sum = 0.f;
 
 #pragma unroll
     for (int i = 0; i < experts_per_thread; i++) {
-        const int  idx    = lane + i * WARP_SIZE;
+        const int  idx    = lane + i * warp_size;
         const bool active = !use_limit || (idx < limit);
         if (active) {
             const float val = expf(vals[i] - max_val);
@@ -44,13 +48,13 @@ __device__ void softmax_warp_inplace(float (&vals)[experts_per_thread], const in
         }
     }
 
-    sum = warp_reduce_sum(sum);
+    sum = warp_reduce_sum<warp_size>(sum);
 
     const float inv_sum = 1.0f / sum;
 
 #pragma unroll
     for (int i = 0; i < experts_per_thread; i++) {
-        const int  idx    = lane + i * WARP_SIZE;
+        const int  idx    = lane + i * warp_size;
         const bool active = !use_limit || (idx < limit);
         if (active) {
             vals[i] *= inv_sum;
@@ -60,9 +64,10 @@ __device__ void softmax_warp_inplace(float (&vals)[experts_per_thread], const in
 
 template <int experts_per_thread, bool use_limit>
 __device__ void sigmoid_warp_inplace(float (&vals)[experts_per_thread], const int limit, const int lane) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 #pragma unroll
     for (int i = 0; i < experts_per_thread; i++) {
-        const int  idx    = lane + i * WARP_SIZE;
+        const int  idx    = lane + i * warp_size;
         const bool active = !use_limit || (idx < limit);
         vals[i]           = active ? 1.f / (1.f + expf(-vals[i])) : -INFINITY;
     }
@@ -70,12 +75,71 @@ __device__ void sigmoid_warp_inplace(float (&vals)[experts_per_thread], const in
 
 template <int experts_per_thread, bool use_limit>
 __device__ void sqrt_softplus_warp_inplace(float (&vals)[experts_per_thread], const int limit, const int lane) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 #pragma unroll
     for (int i = 0; i < experts_per_thread; i++) {
-        const int  idx    = lane + i * WARP_SIZE;
+        const int  idx    = lane + i * warp_size;
         const bool active = !use_limit || (idx < limit);
-        vals[i]           = active ? sqrtf(vals[i] > 20.0f ? vals[i] : logf(1.0f + expf(vals[i]))) : -INFINITY;
+        vals[i]           = active ? sqrtf(vals[i] > 20.0f ? vals[i] : log1pf(expf(vals[i]))) : -INFINITY;
     }
+}
+
+// Set -inf for experts outside the top n_group_used groups. Group score is the sum of its top-2 experts (DeepSeek V3).
+template <int n_experts, int experts_per_thread>
+__device__ void group_mask_warp_inplace(float (&vals)[experts_per_thread], const int n_groups, const int n_group_used, const int lane) {
+    const int n_per_group = n_experts / n_groups;
+
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+
+    float score = -INFINITY; // lane g holds the score of group g
+    for (int g = 0; g < n_groups; g++) {
+        float top1 = -INFINITY;
+        float top2 = -INFINITY;
+#pragma unroll
+        for (int i = 0; i < experts_per_thread; i++) {
+            if ((i * warp_size + lane) / n_per_group == g) {
+                top2 = fmaxf(top2, fminf(top1, vals[i]));
+                top1 = fmaxf(top1, vals[i]);
+            }
+        }
+#pragma unroll
+        for (int offset = warp_size / 2; offset > 0; offset >>= 1) {
+            const float o1 = ggml_cuda_shfl_xor(top1, offset, warp_size);
+            const float o2 = ggml_cuda_shfl_xor(top2, offset, warp_size);
+            top2 = fmaxf(fminf(top1, o1), fmaxf(top2, o2));
+            top1 = fmaxf(top1, o1);
+        }
+        if (lane == g) {
+            score = top1 + top2;
+        }
+    }
+
+    // rank of each group, lower index wins ties
+    int rank = 0;
+    for (int g = 0; g < n_groups; g++) {
+        const float other = ggml_cuda_shfl(score, g, warp_size);
+        rank += other > score || (other == score && g < lane);
+    }
+    const auto keep = ggml_cuda_ballot(lane < n_groups && rank < n_group_used);
+
+#pragma unroll
+    for (int i = 0; i < experts_per_thread; i++) {
+        const int g = (i * warp_size + lane) / n_per_group;
+        if (g >= n_groups || !((keep >> g) & 1)) {
+            vals[i] = -INFINITY;
+        }
+    }
+}
+
+static __device__ constexpr int calc_experts_per_thread(int n_experts, int warp_size)
+{
+    if(n_experts <= warp_size) {
+        return 1;
+    }
+    if(n_experts % warp_size == 0) {
+        return n_experts / warp_size;
+    }
+    return n_experts / warp_size + 1;
 }
 
 /*
@@ -88,7 +152,7 @@ __device__ void sqrt_softplus_warp_inplace(float (&vals)[experts_per_thread], co
     It is intended as fusion of softmax->top-k->get_rows pipeline for MoE models
 */
 template <int n_experts, bool has_bias>
-__launch_bounds__(TOPK_MOE_ROWS_PER_BLOCK * WARP_SIZE, 1)
+__launch_bounds__(TOPK_MOE_ROWS_PER_BLOCK * ggml_cuda_get_physical_warp_size(), 1)
 __global__ void topk_moe_cuda(const float *         logits,
                               float *               weights,
                               int32_t *             ids,
@@ -98,6 +162,8 @@ __global__ void topk_moe_cuda(const float *         logits,
                               const float           clamp_val,
                               const float           scale_val,
                               const topk_moe_config config) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+
 #if defined(GGML_USE_MUSA)
     // MUSA: every warp of a partially filled block must reach the barrier below.
     const int row = MIN(blockIdx.x * blockDim.y + threadIdx.y, n_rows - 1);
@@ -112,7 +178,7 @@ __global__ void topk_moe_cuda(const float *         logits,
     weights += n_expert_used * row;
     ids += n_experts * row;
 
-    constexpr int experts_per_thread = (n_experts > WARP_SIZE) ? n_experts / WARP_SIZE : 1;
+    constexpr int experts_per_thread = calc_experts_per_thread(n_experts, warp_size);
 
     float wt[experts_per_thread];
 
@@ -124,9 +190,9 @@ __global__ void topk_moe_cuda(const float *         logits,
 
     ggml_cuda_pdl_sync();
 #pragma unroll
-    for (int i = 0; i < n_experts; i += WARP_SIZE) {
+    for (int i = 0; i < n_experts; i += warp_size) {
         const int expert  = i + threadIdx.x;
-        wt[i / WARP_SIZE] = (n_experts % WARP_SIZE == 0 || expert < n_experts) ? logits[expert] : -INFINITY;
+        wt[i / warp_size] = (n_experts % warp_size == 0 || expert < n_experts) ? logits[expert] : -INFINITY;
     }
 
     // Weights and IDs can alias logits, so wait until every row in the block reads its logits.
@@ -164,10 +230,22 @@ __global__ void topk_moe_cuda(const float *         logits,
             selection_wt[i] = -INFINITY;
         }
 #pragma unroll
-        for (int i = 0; i < n_experts; i += WARP_SIZE) {
+        for (int i = 0; i < n_experts; i += warp_size) {
             const int expert = i + threadIdx.x;
-            selection_wt[i / WARP_SIZE] =
-                (n_experts % WARP_SIZE == 0 || expert < n_experts) ? wt[i / WARP_SIZE] + bias[expert] : -INFINITY;
+            selection_wt[i / warp_size] =
+                (n_experts % warp_size == 0 || expert < n_experts) ? wt[i / warp_size] + bias[expert] : -INFINITY;
+            if (__isnanf(selection_wt[i / warp_size])) {
+                selection_wt[i / warp_size] = -FLT_MAX;
+            }
+        }
+    }
+
+    // without bias, masking wt is safe: the matcher ensures the kept groups hold all used experts
+    if (config.n_groups > 0) {
+        if constexpr (has_bias) {
+            group_mask_warp_inplace<n_experts>(selection_wt, config.n_groups, config.n_group_used, threadIdx.x);
+        } else {
+            group_mask_warp_inplace<n_experts>(wt, config.n_groups, config.n_group_used, threadIdx.x);
         }
     }
 
@@ -194,8 +272,8 @@ __global__ void topk_moe_cuda(const float *         logits,
 
 #pragma unroll
             for (int i = 1; i < experts_per_thread; i++) {
-                const int expert = threadIdx.x + i * WARP_SIZE;
-                if ((n_experts % WARP_SIZE == 0 || expert < n_experts) && selection_wt[i] > max_val_s) {
+                const int expert = threadIdx.x + i * warp_size;
+                if ((n_experts % warp_size == 0 || expert < n_experts) && selection_wt[i] > max_val_s) {
                     max_val    = wt[i];
                     max_val_s  = selection_wt[i];
                     max_expert = expert;
@@ -203,10 +281,10 @@ __global__ void topk_moe_cuda(const float *         logits,
             }
 
 #pragma unroll
-            for (int mask = WARP_SIZE / 2; mask > 0; mask /= 2) {
-                const float val    = __shfl_xor_sync(0xFFFFFFFF, max_val, mask, WARP_SIZE);
-                const float val_s  = __shfl_xor_sync(0xFFFFFFFF, max_val_s, mask, WARP_SIZE);
-                const int   expert = __shfl_xor_sync(0xFFFFFFFF, max_expert, mask, WARP_SIZE);
+            for (int mask = warp_size / 2; mask > 0; mask /= 2) {
+                const float val    = ggml_cuda_shfl_xor(max_val, mask, warp_size);
+                const float val_s  = ggml_cuda_shfl_xor(max_val_s, mask, warp_size);
+                const int   expert = ggml_cuda_shfl_xor(max_expert, mask, warp_size);
                 if (val_s > max_val_s || (val_s == max_val_s && expert < max_expert)) {
                     max_val    = val;
                     max_val_s  = val_s;
@@ -214,39 +292,39 @@ __global__ void topk_moe_cuda(const float *         logits,
                 }
             }
 
-            if ((max_expert & (WARP_SIZE - 1)) == threadIdx.x) {
-                selection_wt[max_expert / WARP_SIZE] = -INFINITY;
+            if ((max_expert & (warp_size - 1)) == threadIdx.x) {
+                selection_wt[max_expert / warp_size] = -INFINITY;
             }
         } else {
 #pragma unroll
             for (int i = 1; i < experts_per_thread; i++) {
-                const int expert = threadIdx.x + i * WARP_SIZE;
-                if ((n_experts % WARP_SIZE == 0 || expert < n_experts) && wt[i] > max_val) {
+                const int expert = threadIdx.x + i * warp_size;
+                if ((n_experts % warp_size == 0 || expert < n_experts) && wt[i] > max_val) {
                     max_val    = wt[i];
                     max_expert = expert;
                 }
             }
 
 #pragma unroll
-            for (int mask = WARP_SIZE / 2; mask > 0; mask /= 2) {
-                const float val    = __shfl_xor_sync(0xFFFFFFFF, max_val, mask, WARP_SIZE);
-                const int   expert = __shfl_xor_sync(0xFFFFFFFF, max_expert, mask, WARP_SIZE);
+            for (int mask = warp_size / 2; mask > 0; mask /= 2) {
+                const float val    = ggml_cuda_shfl_xor(max_val, mask, warp_size);
+                const int   expert = ggml_cuda_shfl_xor(max_expert, mask, warp_size);
                 if (val > max_val || (val == max_val && expert < max_expert)) {
                     max_val    = val;
                     max_expert = expert;
                 }
             }
 
-            if ((max_expert & (WARP_SIZE - 1)) == threadIdx.x) {
-                wt[max_expert / WARP_SIZE] = -INFINITY;
+            if ((max_expert & (warp_size - 1)) == threadIdx.x) {
+                wt[max_expert / warp_size] = -INFINITY;
             }
         }
 
-        if ((k & (WARP_SIZE - 1)) == threadIdx.x) {
-            output_weights[k / WARP_SIZE] = max_val;
+        if ((k & (warp_size - 1)) == threadIdx.x) {
+            output_weights[k / warp_size] = max_val;
         }
 
-        if ((max_expert & (WARP_SIZE - 1)) == threadIdx.x) {
+        if ((max_expert & (warp_size - 1)) == threadIdx.x) {
             ids[k] = max_expert;
             if (config.with_norm) {
                 wt_sum += max_val;
@@ -255,7 +333,7 @@ __global__ void topk_moe_cuda(const float *         logits,
     }
 
     if (config.with_norm) {
-        wt_sum              = warp_reduce_sum(wt_sum);
+        wt_sum              = warp_reduce_sum<warp_size>(wt_sum);
         wt_sum              = max(wt_sum, clamp_val);
         const float inv_sum = 1.0f / wt_sum;
 
@@ -270,7 +348,7 @@ __global__ void topk_moe_cuda(const float *         logits,
 
 #pragma unroll
     for (int i = 0; i < experts_per_thread; i++) {
-        const int idx = i * WARP_SIZE + threadIdx.x;
+        const int idx = i * warp_size + threadIdx.x;
         if (idx < n_expert_used) {
             weights[idx] = output_weights[i] * scale_val;
         }
@@ -292,8 +370,9 @@ static void launch_topk_moe_cuda(ggml_backend_cuda_context & ctx,
     GGML_ASSERT(!(config.with_norm && config.delayed_softmax) &&
                 "delayed softmax is not supported with weight normalization");
     const int    rows_per_block = TOPK_MOE_ROWS_PER_BLOCK;
+    const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
     dim3         grid_dims((n_rows + rows_per_block - 1) / rows_per_block, 1, 1);
-    dim3         block_dims(WARP_SIZE, rows_per_block, 1);
+    dim3         block_dims(warp_size, rows_per_block, 1);
     cudaStream_t stream = ctx.stream();
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(grid_dims, block_dims, 0, stream);
 
@@ -336,6 +415,10 @@ static void launch_topk_moe_cuda(ggml_backend_cuda_context & ctx,
             break;
         case 288: // StepFun 3.7
             ggml_cuda_kernel_launch(topk_moe_cuda<288, has_bias>, launch_params,
+                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config);
+            break;
+        case 384: // DeepSeek V4.1
+            ggml_cuda_kernel_launch(topk_moe_cuda<384, has_bias>, launch_params,
                 logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config);
             break;
         case 512:
@@ -389,6 +472,8 @@ void ggml_cuda_op_topk_moe(ggml_backend_cuda_context &     ctx,
     config.use_sqrt_softplus = args.sqrt_softplus;
     config.with_norm         = with_norm;
     config.delayed_softmax   = args.delayed_softmax;
+    config.n_groups          = args.n_groups;
+    config.n_group_used      = args.n_group_used;
 
     if (bias) {
         launch_topk_moe_cuda<true>(ctx, logits_d, weights_d, ids_d, bias_d, n_rows, n_experts, n_expert_used, clamp_val,
@@ -406,7 +491,7 @@ bool ggml_cuda_should_use_topk_moe(const ggml_tensor * gating_op,
     // must match an instantiation of launch_topk_moe_cuda: a power of 2 up to 512,
     // or one of the non-power-of-2 expert counts of supported models
     const int n_expert = ids->nb[1] / ids->nb[0];
-    if (((n_expert & (n_expert - 1)) != 0 || n_expert > 512) && n_expert != 288 && n_expert != 576) {
+    if (((n_expert & (n_expert - 1)) != 0 || n_expert > 512) && n_expert != 288 && n_expert != 384 && n_expert != 576) {
         return false;
     }
 

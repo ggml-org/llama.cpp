@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_kimivl::build() {
+ggml_cgraph * mtmd_graph_kimivl::build() {
     // 2D input positions
     ggml_tensor * pos_h = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches);
     ggml_set_name(pos_h, "pos_h");
@@ -13,7 +13,7 @@ ggml_cgraph * clip_graph_kimivl::build() {
     ggml_tensor * learned_pos_embd = resize_position_embeddings();
 
     // build ViT with 2D position embeddings
-    auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+    auto add_pos = [&](ggml_tensor * cur, const mtmd_layer &) {
         // first half is X axis and second half is Y axis
         return build_rope_2d(ctx0, cur, pos_w, pos_h, hparams.rope_theta, false);
     };

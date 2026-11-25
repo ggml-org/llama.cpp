@@ -2,6 +2,8 @@
 
 #include "json-schema-to-grammar.h"
 
+#include <unordered_set>
+
 namespace server_schema {
 
 //
@@ -246,6 +248,23 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             if (ctx.params.sampling.dry_sequence_breakers.empty()) {
                 throw std::runtime_error("Error: dry_sequence_breakers must be a non-empty array of strings");
             }
+
+            // each distinct breaker costs a full vocabulary scan at sampler init, so dedupe before counting
+            std::unordered_set<std::string> seen;
+            std::vector<std::string> unique_breakers;
+
+            for (const auto & breaker : ctx.params.sampling.dry_sequence_breakers) {
+                if (seen.insert(breaker).second) {
+                    unique_breakers.push_back(breaker);
+                }
+            }
+
+            if (unique_breakers.size() > LLAMA_DRY_MAX_SEQ_BREAKERS) {
+                throw std::runtime_error(string_format(
+                    "Error: dry_sequence_breakers must contain at most %d distinct entries", LLAMA_DRY_MAX_SEQ_BREAKERS));
+            }
+
+            ctx.params.sampling.dry_sequence_breakers = std::move(unique_breakers);
         }));
 
     // handle both "json_schema" and "grammar"
@@ -439,9 +458,9 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             const auto & stop = data.at("stop");
             if (stop.is_array()) {
                 for (const auto & word : stop) {
-                    if (!word.empty()) ctx.params.antiprompt.push_back(word);
+                    if (!word.empty() && word != "") ctx.params.antiprompt.push_back(word);
                 }
-            } else if (stop.is_string()) {
+            } else if (stop.is_string() && stop != "") {
                 ctx.params.antiprompt.push_back(stop.get<std::string>());
             }
             // fall back to CLI defaults if the request provided no effective stop strings
@@ -509,6 +528,76 @@ task_params eval_llama_cmpl_schema(
     }
 
     return params;
+}
+
+//
+// TTS schema
+//
+
+std::vector<std::unique_ptr<field>> make_tts_schema(server_task & task) {
+    std::vector<std::unique_ptr<field>> fields;
+    auto add = [&](field * f) {
+        fields.emplace_back(f);
+    };
+
+    add((new field_num("top_k", task.tts_inp.data.top_k))
+        ->set_limits(0, INT32_MAX)
+        ->set_desc("Top-k for the backbone sampler and the acoustic code predictor, 0 to use the defaults"));
+
+    add((new field_num("top_p", task.tts_inp.data.top_p))
+        ->set_limits(0.0f, 1.0f)
+        ->set_desc("Top-p for the backbone sampler and the acoustic code predictor, 0.0 to use the defaults"));
+
+    add((new field_num("temperature", task.tts_inp.data.temp))
+        ->set_limits(0.0f, std::numeric_limits<float>::infinity())
+        ->set_desc("Temperature for the backbone sampler and the audio frames, for models that support it, 0.0 = greedy"));
+
+    add((new field_num("seed", task.tts_inp.data.seed))
+        ->set_desc("RNG seed for the backbone sampler and the codec/vocoder (-1 = random)"));
+
+    add((new field_num("speed", task.tts_inp.data.speed))
+        ->set_desc("Speaking speed relative to a typical pace, for models that support it (1.0 = model default)"));
+
+    add((new field_num("loudness", task.tts_inp.data.loudness))
+        ->set_desc("Target loudness in LUFS, for models that support it (0.0 = model default)"));
+
+    add((new field_num("cfg_scale", task.tts_inp.data.cfg_scale))
+        ->set_desc("Classifier-free guidance scale of the audio codes, for models that support it (0.0 = model default, 1.0 = no guidance)"));
+
+    add((new field_num("flow_steps", task.tts_inp.data.flow_steps))
+        ->set_hard_limits(0, 1024)
+        ->set_desc("Steps of the flow-matching ODE solver, for models that support it (0 = model default); fewer is faster, less accurate"));
+
+    add((new field_num("n_predict", task.params.n_predict))
+        ->set_hard_limits(-1, INT32_MAX)
+        ->add_alias("max_tokens")
+        ->set_desc("Max number of audio frames to generate"));
+
+    add((new field_num("repeat_penalty", task.params.sampling.penalty_repeat))
+        ->set_desc("Repetition penalty applied to the backbone sampler over the whole generation"));
+
+    add((new field_bool("stream", task.params.stream))
+        ->set_desc("Stream the audio as it becomes available instead of waiting for the full generation"));
+
+    return fields;
+}
+
+void eval_tts_schema(const common_params & params_base, server_task & task, const json & data) {
+    // baseline defaults, individual requests can override them
+    // TODO @ngxson : change the default values based on model
+    task.params.sampling = params_base.sampling;
+    task.params.sampling.penalty_repeat = 1.05f;
+    task.params.n_predict = -1;
+    task.tts_inp.data.top_k = 0;
+    task.tts_inp.data.top_p = 0.0f;
+    task.tts_inp.data.temp  = -1.0f; // not given: --temp for the backbone, model default for the audio
+    task.tts_inp.data.seed  = params_base.sampling.seed;
+
+    field_eval_context ctx(task.params);
+
+    for (const auto & f : make_tts_schema(task)) {
+        f->eval(ctx, data);
+    }
 }
 
 //

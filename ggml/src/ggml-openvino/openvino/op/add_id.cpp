@@ -9,8 +9,12 @@
 #include <openvino/op/constant.hpp>
 #include <openvino/op/convert.hpp>
 #include <openvino/op/gather.hpp>
+#include <openvino/op/greater_eq.hpp>
+#include <openvino/op/maximum.hpp>
+#include <openvino/op/multiply.hpp>
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/shape_of.hpp>
+#include <openvino/op/unsqueeze.hpp>
 
 namespace ov {
 namespace frontend {
@@ -52,8 +56,16 @@ OutputVector translate_add_id(const NodeContext & context) {
         ids = std::make_shared<ov::op::v0::Convert>(ids, ov::element::i32);
     }
 
+    // an id of -1 marks a skipped slot: gather row 0 for it and zero the bias with a mask
+    auto zero = ov::op::v0::Constant::create(ids.get_element_type(), ov::Shape{}, {0});
+    ov::Output<ov::Node> keep = std::make_shared<ov::op::v1::GreaterEqual>(ids, zero);
+    keep = std::make_shared<ov::op::v0::Convert>(keep, bias.get_element_type());
+    keep = std::make_shared<ov::op::v0::Unsqueeze>(keep, ov::op::v0::Constant::create(ov::element::i64, ov::Shape{1}, {-1}));
+    ids = std::make_shared<ov::op::v1::Maximum>(ids, zero);
+
     auto gather_axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {0});
     ov::Output<ov::Node> selected_bias = std::make_shared<ov::op::v8::Gather>(bias, ids, gather_axis);
+    selected_bias = std::make_shared<ov::op::v1::Multiply>(selected_bias, keep);
     selected_bias = std::make_shared<ov::op::v1::Reshape>(
         selected_bias, std::make_shared<ov::op::v3::ShapeOf>(input, ov::element::i64), false);
 

@@ -1,0 +1,585 @@
+{#- Kokoro "tts" template: english text -> phonemes, a port of the english path of misaki (the reference G2P)
+    functions: tts_norm_scan(), tts_norm_sub(), tts_dict(), see docs/tts-norm-patterns.md
+    dictionaries, written by conversion/kokoro.py:
+    - gold / silver (US), gold_gb / silver_gb (british): the misaki lexicon, a value is a string or {DEFAULT, <tag>...}
+    - pos_weights / pos_tagdict / pos_classes: the nltk averaged perceptron tagger
+    - lts / lts_gb: model for the words missing from the lexicon, see lts_search()
+    a voice of another language takes phonemes, its prompt passes through -#}
+{%- set unk = unk if unk is defined else '' -%}
+{#- british english: the voices named b*, or language en-gb; it has its own lexicon and a few suffix rules -#}
+{%- set lang = (language if language is defined and language else '') | lower | replace('_', '-') -%}
+{%- set GB = lang in ['en-gb', 'british'] or (not lang and voice is defined and voice and voice[:1] == 'b') -%}
+{%- set GOLD = 'gold_gb' if GB else 'gold' -%}
+{%- set SILVER = 'silver_gb' if GB else 'silver' -%}
+{%- set LTS = 'lts_gb' if GB else 'lts' -%}
+{%- set V   = 'AIOQWYaiuæɑɒɔəɛɜɪʊʌᵻ' -%}
+{%- set C   = 'bdfhjklmnpstvwzðŋɡɹɾʃʒʤʧθ' -%}
+{%- set NQP = ';:,.!?—…' -%}
+{%- set TAUS = 'AIOWYiuæɑəɛɪɹʊʌ' -%}
+{%- set SYMBOLS = {'%': 'percent', '&': 'and', '+': 'plus', '@': 'at'} -%}
+{#- the lexicon has only ASCII keys: an accented letter is read as its base letter -#}
+{%- set FOLD = [['[àáâãäåāă]', 'a'], ['[ÀÁÂÃÄÅĀĂ]', 'A'], ['[çćč]', 'c'], ['[ÇĆČ]', 'C'], ['[èéêëēėęě]', 'e'], ['[ÈÉÊËĒĖĘĚ]', 'E'],
+    ['[ìíîïīı]', 'i'], ['[ÌÍÎÏĪİ]', 'I'], ['[ñńň]', 'n'], ['[ÑŃŇ]', 'N'], ['[òóôõöøōő]', 'o'], ['[ÒÓÔÕÖØŌŐ]', 'O'],
+    ['[ùúûüūůű]', 'u'], ['[ÙÚÛÜŪŮŰ]', 'U'], ['[ýÿ]', 'y'], ['[ÝŸ]', 'Y'], ['[śšș]', 's'], ['[ŚŠȘ]', 'S'], ['[źżž]', 'z'], ['[ŹŻŽ]', 'Z'],
+    ['ł', 'l'], ['Ł', 'L'], ['ß', 'ss'], ['æ', 'ae'], ['Æ', 'AE'], ['œ', 'oe'], ['Œ', 'OE']] -%}
+{%- set CURRENCIES = {'$': ['dollar', 'cent'], '£': ['pound', 'pence'], '€': ['euro', 'cent']} -%}
+
+{#- ---------- small helpers ---------- -#}
+{%- macro full(s, pat) -%}{%- set segs = tts_norm_scan(s, '^(?:' ~ pat ~ ')$') -%}{{ '1' if segs | length == 1 and segs[0].rule else '' }}{%- endmacro -%}
+{#- key of w in a lexicon, or ''; like misaki's grow_dictionary(), a lowercase entry also answers for Capitalized and vice versa -#}
+{%- macro dkey(name, w) -%}
+{%- if tts_dict(name, w) is not none -%}{{ w }}
+{%- elif w | length > 1 -%}
+  {%- set l = w | lower -%}{%- set c = l | capitalize -%}
+  {%- if w == c and w != l and tts_dict(name, l) is not none -%}{{ l }}
+  {%- elif w == l and w != c and tts_dict(name, c) is not none -%}{{ c }}
+  {%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+{%- macro has(w) -%}{{ '1' if dkey(GOLD, w) or dkey(SILVER, w) else '' }}{%- endmacro -%}
+{#- default pronunciation in gold, or '' -#}
+{%- macro gold(w) -%}
+{%- set k = dkey(GOLD, w) -%}
+{%- if k -%}{%- set e = tts_dict(GOLD, k) -%}{{ e.DEFAULT if e is mapping else e }}{%- endif -%}
+{%- endmacro -%}
+
+{#- ---------- words missing from the lexicon ---------- -#}
+{#- beam search over the letters with an n-gram model of units "letter:sounds"
+    tts_dict(LTS, "<0 to 4 units before> <letter>") -> {sounds: probability}; "<s>" pads the start, the letter "$" is the end
+    a unit takes its score from the longest context that has it, times 0.4 for each unit dropped
+    fixed is none, or the sounds of each letter without stress: then only the stress is searched, with exactly one primary stress
+    returns the sounds of each letter, joined by "|" -#}
+{%- macro lts_search(word, fixed) -%}
+{%- set bm = namespace(l=[{'p': 1.0, 'h': ['<s>', '<s>', '<s>', '<s>'], 'o': [], 's': false}]) -%}
+{%- for ch in (tts_norm_scan(word, '.') | map(attribute='text') | list) + ['$'] -%}
+  {%- set i = loop.index0 -%}
+  {%- set nx = namespace(l=[]) -%}
+  {%- for hyp in bm.l -%}
+    {%- set st = namespace(f=1.0, seen=[]) -%}
+    {%- for n in range(4, -1, -1) -%}
+      {%- set d = tts_dict(LTS, (hyp.h[4 - n:] + [ch]) | join(' ')) -%}
+      {%- if d is not none -%}
+        {%- for o, p in d | items -%}
+          {%- if o not in st.seen -%}
+            {%- set _ = st.seen.append(o) -%}
+            {%- set prim = 'ˈ' in o -%}
+            {%- set match = fixed is none or ch == '$' or (o | replace('ˈ', '') | replace('ˌ', '')) == fixed[i] -%}
+            {%- if match and not (fixed is not none and prim and hyp.s) -%}
+              {%- set _ = nx.l.append({'p': hyp.p * st.f * p, 'h': (hyp.h + [ch ~ ':' ~ o])[-4:], 'o': hyp.o + [o], 's': hyp.s or prim}) -%}
+            {%- endif -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endif -%}
+      {%- set st.f = st.f * 0.4 -%}
+    {%- endfor -%}
+  {%- endfor -%}
+  {%- set srt = nx.l | sort(attribute='p', reverse=true) -%}
+  {%- if fixed is none -%}{%- set bm.l = srt[:16] -%}
+  {%- else -%}{%- set bm.l = (srt | selectattr('s') | list)[:8] + (srt | rejectattr('s') | list)[:8] -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- set done = (bm.l | selectattr('s') | list) or bm.l -%}
+{%- if done -%}{{ (done | sort(attribute='p', reverse=true))[0].o[:-1] | join('|') }}{%- endif -%}
+{%- endmacro -%}
+
+{#- pronunciation of a word that is not in the lexicon, '' if it cannot be read -#}
+{%- macro lts(word) -%}
+{%- set w = namespace(s=word | lower | replace('’', "'")) -%}
+{#- doubled consonants and "ck" say one sound -#}
+{%- for c in ['b', 'c', 'd', 'f', 'g', 'h', 'j', 'k', 'l', 'm', 'n', 'p', 'q', 'r', 's', 't', 'v', 'w', 'x', 'y', 'z'] -%}{%- set w.s = w.s | replace(c ~ c, c) -%}{%- endfor -%}
+{%- set w.s = w.s | replace('ck', 'k') -%}
+{%- if w.s | length >= 2 and full(w.s, "[a-z']+") -%}
+  {#- first the sounds, then the stress marks on those sounds -#}
+  {%- set first = lts_search(w.s, none) -%}
+  {%- if first or w.s | length == 0 -%}
+    {%- set sounds = first.split('|') | map('replace', 'ˈ', '') | map('replace', 'ˌ', '') | list -%}
+    {%- if sounds | length == w.s | length -%}{{ lts_search(w.s, sounds) | replace('|', '') }}{%- endif -%}
+  {%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- a word missing from the lexicon: the predicted pronunciation; a word that cannot be read (e.g. "cpp") is spelled out -#}
+{%- macro fallback(word) -%}
+{%- set ps = lts(word) if tts_norm_scan(word, '[aeiouyAEIOUY]') | selectattr('rule') | list else '' -%}
+{%- if ps and tts_norm_scan(ps, '[' ~ V ~ ']') | selectattr('rule') | list -%}{{ ps }}
+{%- else -%}{{ get_nnp(word) or unk }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro parent_tag(tag) -%}
+{%- if tag.startswith('VB') -%}VERB
+{%- elif tag.startswith('NN') -%}NOUN
+{%- elif tag.startswith('ADV') or tag.startswith('RB') -%}ADV
+{%- elif tag.startswith('ADJ') or tag.startswith('JJ') -%}ADJ
+{%- else -%}{{ tag }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro apply_stress(ps, stress) -%}
+{%- if stress is none or not ps -%}{{ ps }}
+{%- elif stress < -1 -%}{{ ps | replace('ˈ', '') | replace('ˌ', '') }}
+{%- elif stress == -1 or ((stress == 0 or stress == -0.5) and 'ˈ' in ps) -%}{{ ps | replace('ˌ', '') | replace('ˈ', 'ˌ') }}
+{%- elif (stress == 0 or stress == 0.5 or stress == 1) and 'ˈ' not in ps and 'ˌ' not in ps -%}{{ tts_norm_sub(ps, '^([^' ~ V ~ ']*)([' ~ V ~ '])', '%1ˌ%2') }}
+{%- elif stress >= 1 and 'ˈ' not in ps and 'ˌ' in ps -%}{{ ps | replace('ˌ', 'ˈ') }}
+{%- elif stress > 1 and 'ˈ' not in ps and 'ˌ' not in ps -%}{{ tts_norm_sub(ps, '^([^' ~ V ~ ']*)([' ~ V ~ '])', '%1ˈ%2') }}
+{%- else -%}{{ ps }}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- spell out letters: "NASA" -> N A S A, "e.g." -> E G -#}
+{%- macro get_nnp(word) -%}
+{%- set ns = namespace(ps='', ok=true) -%}
+{%- for c in tts_norm_scan(word, '%a') -%}
+  {%- if c.rule -%}
+    {%- set p = gold(c.text | upper) -%}
+    {%- if not p -%}{%- set ns.ok = false -%}{%- else -%}{%- set ns.ps = ns.ps ~ p -%}{%- endif -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- if ns.ok and ns.ps -%}{{ tts_norm_sub(apply_stress(ns.ps, 0), 'ˌ([^ˌ]*)$', 'ˈ%1') }}{%- endif -%}
+{%- endmacro -%}
+
+{#- tag: Penn tag or '' ; fv = future vowel context: 'none' (end / punctuation follows), 'v', 'c', or '' (no context) -#}
+{%- macro lookup(word, tag, stress, fv) -%}
+{%- set ns = namespace(w=word, nnp=false, ps=none, t='') -%}
+{%- if word == word | upper and not dkey(GOLD, word) -%}{%- set ns.w = word | lower -%}{%- set ns.nnp = tag == 'NNP' -%}{%- endif -%}
+{%- set k = dkey(GOLD, ns.w) -%}
+{%- if k -%}
+  {%- set e = tts_dict(GOLD, k) -%}
+  {%- if e is mapping -%}
+    {#- POS variants: misaki's ps.get(tag) with 'None' (no following vowel context) and parent tag fallback -#}
+    {%- if fv == 'none' and 'None' in e -%}{%- set ns.t = 'None' -%}
+    {%- elif tag and tag in e -%}{%- set ns.t = tag -%}
+    {%- else -%}{%- set ns.t = parent_tag(tag) -%}
+    {%- endif -%}
+    {#- a null variant means "no pronunciation for this tag": spell the word out -#}
+    {%- set ns.ps = (e[ns.t] or '') if ns.t and ns.t in e else e.DEFAULT -%}
+  {%- else -%}{%- set ns.ps = e -%}
+  {%- endif -%}
+{%- elif not ns.nnp -%}
+  {%- set k = dkey(SILVER, ns.w) -%}
+  {%- set ns.ps = tts_dict(SILVER, k) if k else none -%}
+{%- endif -%}
+{%- set r = get_nnp(ns.w) if (not ns.ps or (ns.nnp and 'ˈ' not in ns.ps)) else '' -%}
+{%- if r -%}{{ r }}{%- else -%}{{ apply_stress(ns.ps or '', stress) }}{%- endif -%}
+{%- endmacro -%}
+
+{%- macro is_known(word) -%}
+{%- if has(word) or word in SYMBOLS -%}1
+{%- elif not full(word, '[A-Za-z]+') -%}
+{%- elif word | length == 1 -%}1
+{%- elif word == word | upper and dkey(GOLD, word | lower) -%}1
+{%- elif word[1:] == word[1:] | upper -%}1
+{%- endif -%}
+{%- endmacro -%}
+
+{#- ---------- suffixes ---------- -#}
+{%- macro sfx_s(stem) -%}
+{%- if not stem -%}
+{%- elif stem[-1:] in 'ptkfθ' -%}{{ stem }}s
+{%- elif stem[-1:] in 'szʃʒʧʤ' -%}{{ stem }}{{ 'ɪ' if GB else 'ᵻ' }}z
+{%- else -%}{{ stem }}z
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro stem_s(word, tag, stress, fv) -%}
+{%- set n = word | length -%}
+{%- if n < 3 or not word.endswith('s') -%}
+{%- elif not word.endswith('ss') and is_known(word[:-1]) -%}{{ sfx_s(lookup(word[:-1], tag, stress, fv)) }}
+{%- elif (word.endswith("'s") or (n > 4 and word.endswith('es') and not word.endswith('ies'))) and is_known(word[:-2]) -%}{{ sfx_s(lookup(word[:-2], tag, stress, fv)) }}
+{%- elif n > 4 and word.endswith('ies') and is_known(word[:-3] ~ 'y') -%}{{ sfx_s(lookup(word[:-3] ~ 'y', tag, stress, fv)) }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro sfx_ed(stem) -%}
+{%- if not stem -%}
+{%- elif stem[-1:] in 'pkfθʃsʧ' -%}{{ stem }}t
+{%- elif stem[-1:] == 'd' -%}{{ stem }}{{ 'ɪ' if GB else 'ᵻ' }}d
+{%- elif stem[-1:] != 't' -%}{{ stem }}d
+{%- elif GB or stem | length < 2 -%}{{ stem }}ɪd
+{%- elif stem[-2:-1] in TAUS -%}{{ stem[:-1] }}ɾᵻd
+{%- else -%}{{ stem }}ᵻd
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro stem_ed(word, tag, stress, fv) -%}
+{%- set n = word | length -%}
+{%- if n < 4 or not word.endswith('d') -%}
+{%- elif not word.endswith('dd') and is_known(word[:-1]) -%}{{ sfx_ed(lookup(word[:-1], tag, stress, fv)) }}
+{%- elif n > 4 and word.endswith('ed') and not word.endswith('eed') and is_known(word[:-2]) -%}{{ sfx_ed(lookup(word[:-2], tag, stress, fv)) }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro sfx_ing(stem) -%}
+{%- if not stem -%}
+{%- elif GB -%}{%- if stem[-1:] not in 'əː' -%}{{ stem }}ɪŋ{%- endif -%}
+{%- elif stem | length > 1 and stem[-1:] == 't' and stem[-2:-1] in TAUS -%}{{ stem[:-1] }}ɾɪŋ
+{%- else -%}{{ stem }}ɪŋ
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro stem_ing(word, tag, stress, fv) -%}
+{%- set n = word | length -%}
+{%- if n < 5 or not word.endswith('ing') -%}
+{%- elif n > 5 and is_known(word[:-3]) -%}{{ sfx_ing(lookup(word[:-3], tag, stress, fv)) }}
+{%- elif is_known(word[:-3] ~ 'e') -%}{{ sfx_ing(lookup(word[:-3] ~ 'e', tag, stress, fv)) }}
+{%- elif n > 5 and tts_norm_scan(word, '(?:bb|cc|dd|gg|kk|ll|mm|nn|pp|rr|ss|tt|vv|xx|zz|ck)ing$') | selectattr('rule') | list and is_known(word[:-4]) -%}{{ sfx_ing(lookup(word[:-4], tag, stress, fv)) }}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- ---------- words ---------- -#}
+{#- misaki Lexicon.get_special_case(); fto = the next word is "to" (for "used to") -#}
+{%- macro special(word, tag, stress, fv, fto) -%}
+{%- if word in SYMBOLS -%}{{ lookup(SYMBOLS[word], '', none, fv) }}
+{%- elif word == 'a' or word == 'A' -%}{{ 'ɐ' if tag == 'DT' else 'ˈA' }}
+{%- elif word in ['am', 'Am', 'AM'] -%}
+  {%- if tag.startswith('NN') -%}{{ get_nnp(word) }}
+  {%- elif fv == 'none' or word != 'am' or (stress is not none and stress > 0) -%}{{ gold('am') }}
+  {%- else -%}ɐm{%- endif -%}
+{%- elif word in ['an', 'An', 'AN'] -%}{{ get_nnp(word) if (word == 'AN' and tag.startswith('NN')) else 'ɐn' }}
+{%- elif word == 'I' and tag == 'PRP' -%}ˌI
+{%- elif word in ['by', 'By', 'BY'] and parent_tag(tag) == 'ADV' -%}bˈI
+{%- elif word in ['to', 'To'] or (word == 'TO' and tag in ['TO', 'IN']) -%}{{ {'v': 'tʊ', 'c': 'tə'}.get(fv, gold('to')) }}
+{%- elif word in ['in', 'In'] or (word == 'IN' and tag != 'NNP') -%}{{ 'ˈ' if (fv == 'none' or tag != 'IN') else '' }}ɪn
+{%- elif word in ['the', 'The'] or (word == 'THE' and tag == 'DT') -%}{{ 'ði' if fv == 'v' else 'ðə' }}
+{%- elif tag == 'IN' and full(word, '[Vv][Ss]%.?') -%}{{ lookup('versus', '', none, fv) }}
+{%- elif word in ['used', 'Used', 'USED'] -%}{{ tts_dict(GOLD, 'used').VBD if (tag in ['VBD', 'JJ'] and fto) else gold('used') }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro get_word(word0, tag, stress, fv, fto) -%}
+{%- set sp = special(word0, tag, stress, fv, fto) -%}
+{%- if sp -%}{{ sp }}{%- else -%}
+{%- set ns = namespace(word=word0) -%}
+{%- set wl = word0 | lower -%}
+{%- if word0 | length > 1 and full(word0 | replace("'", ''), '%a+') and word0 != wl and (tag != 'NNP' or word0 | length > 7) and not has(word0)
+      and (word0 == word0 | upper or word0[1:] == word0[1:] | lower)
+      and (has(wl) or stem_s(wl, tag, stress, fv) or stem_ed(wl, tag, stress, fv) or stem_ing(wl, tag, stress, fv)) -%}
+  {%- set ns.word = wl -%}
+{%- endif -%}
+{%- set w = ns.word -%}
+{%- if is_known(w) -%}{{ lookup(w, tag, stress, fv) }}
+{%- elif w.endswith("s'") and is_known(w[:-2] ~ "'s") -%}{{ lookup(w[:-2] ~ "'s", tag, stress, fv) }}
+{%- elif w.endswith("'") and is_known(w[:-1]) -%}{{ lookup(w[:-1], tag, stress, fv) }}
+{%- else -%}
+  {%- set r = stem_s(w, tag, stress, fv) -%}
+  {%- if not r -%}{%- set r = stem_ed(w, tag, stress, fv) -%}{%- endif -%}
+  {%- if not r -%}{%- set r = stem_ing(w, tag, 0.5 if stress is none else stress, fv) -%}{%- endif -%}
+  {{- r -}}
+{%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro lex_word(word0, tag, fv, fto=false) -%}
+{%- set w = word0 | replace('‘', "'") | replace('’', "'") -%}
+{%- set stress = none if w == w | lower else (2 if w == w | upper else 0.5) -%}
+{{- get_word(w, tag, stress, fv, fto) -}}
+{%- endmacro -%}
+
+{#- ---------- numbers (num2words-compatible word lists, "and" dropped like misaki) ---------- -#}
+{%- set ONES = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve',
+                'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'] -%}
+{%- set TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'] -%}
+{%- set SCALES = [[1000000000000, 'trillion'], [1000000000, 'billion'], [1000000, 'million'], [1000, 'thousand']] -%}
+{%- macro card(n) -%}
+{%- if n < 20 -%}{{ ONES[n] }}
+{%- elif n < 100 -%}{{ TENS[n // 10] }}{{ ' ' ~ ONES[n % 10] if n % 10 else '' }}
+{%- elif n < 1000 -%}{{ ONES[n // 100] }} hundred{{ ' ' ~ card(n % 100) if n % 100 else '' }}
+{%- else -%}
+  {%- set ns = namespace(done=false) -%}
+  {%- for sc in SCALES -%}
+    {%- if not ns.done and n >= sc[0] -%}
+      {{- card(n // sc[0]) }} {{ sc[1] }}{{ ' ' ~ card(n % sc[0]) if n % sc[0] else '' -}}
+      {%- set ns.done = true -%}
+    {%- endif -%}
+  {%- endfor -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro ordw(n) -%}
+{%- set ws = card(n).split(' ') -%}
+{%- set last = ws[-1] -%}
+{%- set IRR = {'one': 'first', 'two': 'second', 'three': 'third', 'five': 'fifth', 'eight': 'eighth', 'nine': 'ninth', 'twelve': 'twelfth'} -%}
+{%- if last in IRR -%}{%- set last = IRR[last] -%}{%- elif last.endswith('y') -%}{%- set last = last[:-1] ~ 'ieth' -%}{%- else -%}{%- set last = last ~ 'th' -%}{%- endif -%}
+{{- (ws[:-1] + [last]) | join(' ') -}}
+{%- endmacro -%}
+
+{%- macro yearw(n) -%}
+{%- set hi = n // 100 -%}{%- set lo = n % 100 -%}
+{%- if hi == 0 or (hi % 10 == 0 and lo < 10) or hi >= 100 -%}{{ card(n) }}
+{%- else -%}{{ card(hi) }} {{ 'hundred' if lo == 0 else ('oh ' ~ card(lo) if lo < 10 else card(lo)) }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro say(words) -%}
+{%- set ns = namespace(out=[]) -%}
+{%- for w in words.split(' ') -%}
+  {%- if w -%}{%- set ns.out = ns.out + [lookup(w, '', -2 if w == 'point' else none, '')] -%}{%- endif -%}
+{%- endfor -%}
+{{- ns.out | join(' ') -}}
+{%- endmacro -%}
+
+{%- macro digits(s) -%}{%- set ns = namespace(out=[]) -%}{%- for c in tts_norm_scan(s, '%d') -%}{%- if c.rule -%}{%- set ns.out = ns.out + [ONES[c.text | int]] -%}{%- endif -%}{%- endfor -%}{{ ns.out | join(' ') }}{%- endmacro -%}
+
+{#- num: digits with optional ,### groups and .decimals ; sfx: st/nd/rd/th/s/'s/ed/ing ; cur: currency symbol or '' -#}
+{%- macro get_number(neg, num, sfx, cur) -%}
+{%- set plain = num | replace(',', '') -%}
+{%- set ns = namespace(w='') -%}
+{%- if sfx in ['st', 'nd', 'rd', 'th'] and '.' not in plain -%}{%- set ns.w = ordw(plain | int) -%}
+{%- elif not neg and not cur and full(num, '%d%d%d%d') -%}{%- set ns.w = yearw(plain | int) -%}
+{%- elif cur and cur in CURRENCIES and full(plain, '%d*(?:%.%d%d?)?') -%}
+  {%- set parts = plain.split('.') -%}
+  {%- set units = CURRENCIES[cur] -%}
+  {%- set a = parts[0] | int if parts[0] else 0 -%}
+  {%- set b = parts[1] | int if parts | length > 1 and parts[1] else 0 -%}
+  {%- set out = namespace(l=[]) -%}
+  {%- for pair in [[a, units[0]], [b, units[1]]] -%}
+    {%- if pair[0] or (loop.first and not b) -%}
+      {%- set uw = lookup(pair[1], '', none, '') if pair[0] == 1 or pair[1] == 'pence' else stem_s(pair[1] ~ 's', '', none, '') -%}
+      {%- set out.l = out.l + [say(card(pair[0])) ~ ' ' ~ uw] -%}
+    {%- endif -%}
+  {%- endfor -%}
+  {%- set ns.w = '@' ~ (out.l | join(' ' ~ lookup('and', '', none, '') ~ ' ')) -%}
+{%- elif '.' in plain -%}
+  {%- set ip, fp = plain.split('.') -%}
+  {%- set ns.w = ((card(ip | int) ~ ' ') if ip else '') ~ 'point ' ~ digits(fp) -%}
+{%- else -%}{%- set ns.w = card(plain | int) -%}
+{%- endif -%}
+{%- set r = ns.w[1:] if ns.w.startswith('@') else say(ns.w | replace('-', ' ')) -%}
+{%- if neg -%}{%- set r = lookup('minus', '', none, '') ~ ' ' ~ r -%}{%- endif -%}
+{%- if sfx in ['s', "'s"] -%}{{ sfx_s(r) }}
+{%- elif sfx in ['ed', "'d"] -%}{{ sfx_ed(r) }}
+{%- elif sfx == 'ing' -%}{{ sfx_ing(r) }}
+{%- else -%}{{ r }}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- ---------- context ---------- -#}
+{%- macro next_fv(ps, fv) -%}
+{%- set ns = namespace(r=fv, done=false) -%}
+{%- for s in tts_norm_scan(ps, [['v', '[' ~ V ~ ']'], ['c', '[' ~ C ~ ']'], ['p', '[' ~ NQP ~ ']']]) -%}
+  {%- if s.rule and not ns.done -%}{%- set ns.r = 'none' if s.rule == 'p' else s.rule -%}{%- set ns.done = true -%}{%- endif -%}
+{%- endfor -%}
+{{- ns.r -}}
+{%- endmacro -%}
+
+{#- ---------- POS tagger: nltk averaged perceptron, weights in the pos_* dictionaries ---------- -#}
+{%- macro pos_norm(w) -%}
+{%- if '-' in w and w[:1] != '-' -%}!HYPHEN
+{%- elif full(w, '%d%d%d%d') -%}!YEAR
+{%- elif full(w[:1], '%d') -%}!DIGITS
+{%- else -%}{{ w | lower }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- set POS_CLASSES = tts_dict('pos_classes', '') -%}
+
+{#- features -> best label; nltk: max(classes, key=(score, label)); classes are sorted, so >= keeps the larger label on ties -#}
+{%- macro pos_predict(feats) -%}
+{%- set ns = namespace(ws=[], best='', best_s=none) -%}
+{%- for f in feats -%}
+  {%- set w = tts_dict('pos_weights', f) -%}
+  {%- if w -%}{%- set ns.ws = ns.ws + [w] -%}{%- endif -%}
+{%- endfor -%}
+{%- for c in POS_CLASSES -%}
+  {%- set s = ns.ws | map(attribute='c' ~ loop.index0, default=0.0) | sum -%}
+  {%- if ns.best_s is none or s >= ns.best_s -%}{%- set ns.best = c -%}{%- set ns.best_s = s -%}{%- endif -%}
+{%- endfor -%}
+{{- ns.best -}}
+{%- endmacro -%}
+
+{#- tokens: list of strings (PTB-style) -> space-separated tags -#}
+{%- macro pos_tag(tokens) -%}
+{%- set cn = namespace(l=['-START-', '-START2-']) -%}
+{%- for t in tokens -%}{%- set cn.l = cn.l + [pos_norm(t)] -%}{%- endfor -%}
+{%- set c = cn.l + ['-END-', '-END2-'] -%}
+{%- set ns = namespace(prev='-START-', prev2='-START2-', out=[]) -%}
+{%- for w in tokens -%}
+  {%- set i = loop.index0 + 2 -%}
+  {%- set tag = tts_dict('pos_tagdict', w) -%}
+  {%- if not tag -%}
+    {%- set tag = pos_predict([
+        'bias',
+        'i suffix ' ~ w[-3:],
+        'i pref1 ' ~ w[:1],
+        'i-1 tag ' ~ ns.prev,
+        'i-2 tag ' ~ ns.prev2,
+        'i tag+i-2 tag ' ~ ns.prev ~ ' ' ~ ns.prev2,
+        'i word ' ~ c[i],
+        'i-1 tag+i word ' ~ ns.prev ~ ' ' ~ c[i],
+        'i-1 word ' ~ c[i - 1],
+        'i-1 suffix ' ~ c[i - 1][-3:],
+        'i-2 word ' ~ c[i - 2],
+        'i+1 word ' ~ c[i + 1],
+        'i+1 suffix ' ~ c[i + 1][-3:],
+        'i+2 word ' ~ c[i + 2],
+    ]) -%}
+  {%- endif -%}
+  {%- set ns.out = ns.out + [tag] -%}
+  {%- set ns.prev2 = ns.prev -%}{%- set ns.prev = tag -%}
+{%- endfor -%}
+{{- ns.out | join(' ') -}}
+{%- endmacro -%}
+
+{%- macro weight(ps) -%}{{ (ps | length) + (tts_norm_scan(ps, '[AIOQWYʤʧ]') | selectattr('rule') | list | length) }}{%- endmacro -%}
+
+{#- hyphenated compound: per-part lookup (right to left), joined without space, misaki's stress demotion -#}
+{%- macro compound(text, tag, fv) -%}
+{%- if has(text) -%}{{ lex_word(text, tag, fv) }}{%- else -%}
+{%- set ns = namespace(fv=fv, parts=[], bad=false) -%}
+{%- for s in tts_norm_scan(text, '%a+(?:[\'’]%a+)*') | reverse -%}
+  {%- if s.rule -%}
+    {%- set p = lex_word(s.text, tag, ns.fv) -%}
+    {%- if not p -%}{%- set ns.bad = true -%}{%- endif -%}
+    {%- set ns.parts = [{'t': s.text, 'p': p}] + ns.parts -%}
+    {%- set ns.fv = next_fv(p, ns.fv) -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- set n = ns.parts | length -%}
+{%- set d = namespace(demote=[]) -%}
+{#- a part is missing from the lexicon: read the compound part by part -#}
+{%- if ns.bad -%}
+  {%- for x in ns.parts -%}{{ x.p or fallback(x.t) }}{%- endfor -%}
+{%- else -%}
+{%- if not ns.bad -%}
+  {%- set k = namespace(keys=[]) -%}
+  {%- for x in ns.parts -%}
+    {%- set pr = 1 if 'ˈ' in x.p else 0 -%}
+    {#- misaki: sorted((has_primary, weight, index)) -#}
+    {%- set k.keys = k.keys + [{'pr': pr, 'key': pr * 1000000 + (weight(x.p) | int) * 100 + loop.index0, 'i': loop.index0}] -%}
+  {%- endfor -%}
+  {%- set prim = k.keys | sum(attribute='pr') -%}
+  {%- if n == 2 and ns.parts[0].t | length == 1 -%}{%- set d.demote = [1] -%}
+  {%- elif n >= 2 and prim > (n + 1) // 2 -%}{%- set d.demote = (k.keys | sort(attribute='key'))[:n // 2] | map(attribute='i') | list -%}
+  {%- endif -%}
+{%- endif -%}
+{%- for x in ns.parts -%}{{ apply_stress(x.p, -0.5) if loop.index0 in d.demote else x.p }}{%- endfor -%}
+{%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- unknown word in mixed case, read part by part: "OneAPI" -> One + API, '' if the word has one part -#}
+{%- macro camel(text, tag, fv) -%}
+{%- set parts = tts_norm_scan(text, '(?:%u(?!%l))+|%u?%l+') | selectattr('rule') | map(attribute='text') | list -%}
+{%- if parts | length > 1 and parts | join('') == text -%}
+  {%- for p in parts -%}
+    {{- get_nnp(p) if p | length == 1 else (lex_word(p, tag, fv) or fallback(p)) -}}
+  {%- endfor -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- nxt: next token text ('' at end) -#}
+{%- macro word_tok(text, tag, fv, fto, nxt) -%}
+{%- set w = text | replace('‘', "'") | replace('’', "'") -%}
+{%- set ps = lex_word(w, tag, fv, fto) -%}
+{%- if ps -%}{{ ps }}
+{#- "etc" + "." -> dictionary entry "etc." (the dot is kept as punctuation) -#}
+{%- elif nxt[:1] == '.' and has(w ~ '.') -%}{{ lookup(w ~ '.', tag, none, fv) }}
+{#- trailing closing quote, e.g. after a plural possessive -#}
+{%- elif w.endswith("'") and lex_word(w[:-1], tag, fv) -%}{{ lex_word(w[:-1], tag, fv) }}”
+{#- unknown name + 's -#}
+{%- elif w.endswith("'s") -%}{{ (lex_word(w[:-2], tag, fv) or fallback(w[:-2])) ~ gold("'s") }}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- ---------- main ---------- -#}
+{#- only english has a text to phonemes step: the prompt of the other voices is already phonemes -#}
+{%- set lc = lang[:2] if lang else ('en' if not (voice is defined and voice) or voice[:1] in 'ab' else 'other') -%}
+{%- if lc != 'en' -%}
+  {{- messages[-1].content | trim -}}
+{%- else -%}
+{%- set text = messages[-1].content | trim -%}
+{%- set t = namespace(s=tts_norm_sub(text, '%s+', ' ')) -%}
+{%- for f in FOLD -%}{%- set t.s = tts_norm_sub(t.s, f[0], f[1]) -%}{%- endfor -%}
+{%- set text = t.s -%}
+{%- set segs = tts_norm_scan(text, [
+    ['abbr',  '(?<!%w)%a%a?(?:%.%a%a?)+%.?(?!%w)'],
+    ['money', '([$£€]) ?(%d+(?:,%d%d%d)*(?:%.%d+)?)(?!%d)'],
+    ['num',   '((?<!%w)%-)?(%d+(?:,%d%d%d)*(?:%.%d+)?|%.%d+)(st|nd|rd|th|\'s|s|ed|ing)?(?!%w)'],
+    ['dig',   '%d+(?:,%d%d%d)*(?:%.%d+)?'],
+    ['cmpd',  '%a+(?:[\'’]%a+)*(?:[%-_]%a+(?:[\'’]%a+)*)+'],
+    ['wdot',  '%a+%.(?= [%u%d]|$)'],
+    ['word',  '%a+(?:[\'’‘]%a+)*[\'’‘]?'],
+    ['dash',  '(?<= )%-(?= )|–|%-%-'],
+    ['qopen', '(?<!%S)"'],
+    ['quote', '"'],
+    ['punct', '[;:,.!?—…“”()]'],
+    ['sym',   '[%%&+@]'],
+]) -%}
+{%- set nseg = segs | length -%}
+
+{#- 1. PTB-style tokens for the tagger; first[i] = index of the first token of segment i (-1 if none) -#}
+{%- set PTB_PUNCT = {'“': '``', '”': "''", '—': '--'} -%}
+{%- set tk = namespace(toks=[], first=[]) -%}
+{%- for s in segs -%}
+  {%- set n0 = tk.toks | length -%}
+  {%- if s.rule is none -%}
+  {%- elif s.rule == 'word' -%}
+    {#- split clitics like PTB: do|n't, I|'m, dog|'s -#}
+    {%- set w = s.text | replace('’', "'") | replace('‘', "'") -%}
+    {%- set m = tts_norm_scan(w, '^(%a+)(\'(?:s|m|re|ll|ve|d))$') -%}
+    {%- if (w | lower).endswith("n't") and w | length > 3 -%}{%- set tk.toks = tk.toks + [w[:-3], w[-3:]] -%}
+    {%- elif m | length == 1 and m[0].rule -%}{%- set tk.toks = tk.toks + [m[0].groups[0], m[0].groups[1]] -%}
+    {%- else -%}{%- set tk.toks = tk.toks + [w] -%}{%- endif -%}
+  {%- elif s.rule == 'wdot' -%}
+    {%- set tk.toks = tk.toks + ([s.text] if has(s.text) else [s.text[:-1], '.']) -%}
+  {%- elif s.rule == 'money' -%}{%- set tk.toks = tk.toks + [s.groups[0], s.groups[1]] -%}
+  {%- elif s.rule == 'qopen' -%}{%- set tk.toks = tk.toks + ['``'] -%}
+  {%- elif s.rule == 'quote' -%}{%- set tk.toks = tk.toks + ["''"] -%}
+  {%- elif s.rule == 'dash' -%}{%- set tk.toks = tk.toks + ['--'] -%}
+  {%- elif s.rule == 'punct' -%}{%- set tk.toks = tk.toks + [PTB_PUNCT.get(s.text, s.text)] -%}
+  {%- else -%}{%- set tk.toks = tk.toks + [s.text] -%}
+  {%- endif -%}
+  {%- set tk.first = tk.first + [n0 if (tk.toks | length) > n0 else -1] -%}
+{%- endfor -%}
+{%- set tags = pos_tag(tk.toks).split(' ') if tk.toks else [] -%}
+
+{#- 2. G2P right to left (misaki's future-vowel context) -#}
+{%- set GLUE = ['abbr', 'money', 'num', 'dig', 'cmpd', 'wdot', 'word', 'sym'] -%}
+{%- set ns = namespace(fv='none', fto=false, out=[], next='', next_text='') -%}
+{%- for s in segs | reverse -%}
+  {%- set i = nseg - 1 - loop.index0 -%}
+  {%- set tag = tags[tk.first[i]] if tk.first[i] >= 0 else '' -%}
+  {%- if s.rule == 'wdot' and has(s.text) -%}
+    {%- set ps = lex_word(s.text, tag, ns.fv) -%}
+  {%- elif s.rule == 'wdot' -%}
+    {%- set w = lex_word(s.text[:-1], tag, 'none') or fallback(s.text[:-1]) -%}
+    {%- set ps = w ~ '.' -%}
+  {%- elif s.rule is none -%}
+    {%- set ps = tts_norm_sub(s.text, '%S', '') -%}
+  {%- elif s.rule == 'abbr' -%}
+    {%- set ps = get_nnp(s.text) -%}
+  {%- elif s.rule == 'money' -%}
+    {%- set ps = get_number('', s.groups[1], '', s.groups[0]) -%}
+  {%- elif s.rule == 'num' -%}
+    {%- set ps = get_number(s.groups[0], s.groups[1], s.groups[2], '') -%}
+  {%- elif s.rule == 'dig' -%}
+    {#- digits glued to letters, e.g. "221B" -#}
+    {%- set ps = get_number('', s.text, '', '') -%}
+  {%- elif s.rule == 'cmpd' -%}
+    {%- set ps = compound(s.text, tag, ns.fv) -%}
+  {%- elif s.rule == 'word' -%}
+    {%- set ps = word_tok(s.text, tag, ns.fv, ns.fto, ns.next_text) or camel(s.text, tag, ns.fv) or fallback(s.text) -%}
+  {%- elif s.rule == 'sym' -%}
+    {%- set ps = lex_word(s.text, tag, ns.fv) or unk -%}
+  {%- elif s.rule == 'dash' -%}
+    {%- set ps = '—' -%}
+  {%- elif s.rule == 'qopen' -%}
+    {%- set ps = '“' -%}
+  {%- elif s.rule == 'quote' -%}
+    {%- set ps = '”' -%}
+  {%- else -%}
+    {%- set ps = s.text -%}
+  {%- endif -%}
+  {%- if s.rule is not none -%}
+    {%- set ns.fv = next_fv(ps, ns.fv) -%}
+    {%- set ns.fto = s.text in ['to', 'To'] or (s.text == 'TO' and tag in ['TO', 'IN']) -%}
+  {%- endif -%}
+  {#- misaki puts a space between glued tokens of mixed kinds, e.g. "20%" -#}
+  {%- if s.rule in GLUE and ns.next in GLUE and ps -%}{%- set ps = ps ~ ' ' -%}{%- endif -%}
+  {%- set ns.next = s.rule if s.rule is not none else '' -%}
+  {%- if s.rule is not none -%}{%- set ns.next_text = s.text -%}{%- endif -%}
+  {%- set ns.out = [ps] + ns.out -%}
+{%- endfor -%}
+
+{{- (ns.out | join('') | replace('ɾ', 'T') | replace('ʔ', 't')) | trim -}}
+{%- endif -%}

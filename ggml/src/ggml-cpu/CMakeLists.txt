@@ -635,7 +635,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
         set(GGML_CPU_KLEIDIAI_AARCH64 OFF)
         if (GGML_SYSTEM_ARCH STREQUAL "ARM" AND
-            (APPLE OR WIN32 OR CMAKE_SYSTEM_NAME MATCHES "^(Linux|Android)$") AND
+            (APPLE OR WIN32 OR CMAKE_SYSTEM_NAME MATCHES "^(Linux|Android|OHOS)$") AND
             (CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64|arm64-v8a)$" OR
              CMAKE_OSX_ARCHITECTURES MATCHES "arm64" OR
              CMAKE_GENERATOR_PLATFORM_LWR STREQUAL "arm64" OR
@@ -650,9 +650,9 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
         # Fetch KleidiAI sources:
         include(FetchContent)
-        set(KLEIDIAI_COMMIT_TAG "v1.31.0")
+        set(KLEIDIAI_COMMIT_TAG "v1.32.0")
         set(KLEIDIAI_DOWNLOAD_URL "https://github.com/ARM-software/kleidiai/releases/download/${KLEIDIAI_COMMIT_TAG}/kleidiai-${KLEIDIAI_COMMIT_TAG}-src.tar.gz")
-        set(KLEIDIAI_RELEASE_ARCHIVE_MD5  "930495f3aeb16b25dc18a2bde45924f4")
+        set(KLEIDIAI_RELEASE_ARCHIVE_MD5  "05f1953428ffe8e8c7f585dc6d508887")
 
         set(KLEIDIAI_FETCH_ARGS
             URL ${KLEIDIAI_DOWNLOAD_URL}

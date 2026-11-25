@@ -74,6 +74,20 @@ struct server_http_context {
     using handler_t = std::function<server_http_res_ptr(const server_http_req & req)>;
     mutable std::unordered_map<std::string, handler_t> handlers;
 
+    // websocket connection, see ws()
+    struct ws_conn {
+        // blocking read, returns 1 for a text message, 2 for a binary message, 0 when the connection is closed
+        virtual int  read(std::string & msg) = 0;
+        // thread-safe, can be called while another thread is in read()
+        virtual bool send(const std::string & msg) = 0;
+        virtual bool send_binary(const std::string & msg) = 0;
+        virtual bool is_open() const = 0;
+        virtual void close() = 0;
+        virtual ~ws_conn() = default;
+    };
+    // the handler runs on its own HTTP thread for the whole lifetime of the connection
+    using ws_handler_t = std::function<void(const server_http_req & req, ws_conn & conn)>;
+
     std::string path_prefix;
     int port    = 9931;
     bool is_ssl = false;
@@ -89,6 +103,7 @@ struct server_http_context {
     void get(const std::string & path, const handler_t & handler) const;
     void post(const std::string & path, const handler_t & handler) const;
     void del(const std::string & path, const handler_t & handler) const;
+    void ws(const std::string & path, const ws_handler_t & handler) const;
 
     // Register the Google Cloud Platform (Vertex AI) compat (AIP_PREDICT_ROUTE env var, or /predict)
     // Must be called AFTER all other API routes are registered

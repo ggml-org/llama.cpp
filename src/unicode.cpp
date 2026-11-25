@@ -37,8 +37,13 @@ uint32_t unicode_cpt_from_utf8(const std::string & utf8, size_t & offset) {
     if (!(utf8[offset + 0] & 0x40)) {
         throw std::invalid_argument("invalid character");
     }
+
+    auto is_not_cont = [&](size_t pos) {
+        return (utf8[offset + pos] & 0xc0) != 0x80;
+    };
+
     if (!(utf8[offset + 0] & 0x20)) {
-        if (offset + 1 >= utf8.size() || ! ((utf8[offset + 1] & 0xc0) == 0x80)) {
+        if (offset + 1 >= utf8.size() || is_not_cont(1)) {
             throw std::invalid_argument("invalid character");
         }
         auto result = ((utf8[offset + 0] & 0x1f) << 6) | (utf8[offset + 1] & 0x3f);
@@ -49,7 +54,7 @@ uint32_t unicode_cpt_from_utf8(const std::string & utf8, size_t & offset) {
         return result;
     }
     if (!(utf8[offset + 0] & 0x10)) {
-        if (offset + 2 >= utf8.size() || ! ((utf8[offset + 1] & 0xc0) == 0x80) || ! ((utf8[offset + 2] & 0xc0) == 0x80)) {
+        if (offset + 2 >= utf8.size() || is_not_cont(1) || is_not_cont(2)) {
             throw std::invalid_argument("invalid character");
         }
         auto result = ((utf8[offset + 0] & 0x0f) << 12) | ((utf8[offset + 1] & 0x3f) << 6) | (utf8[offset + 2] & 0x3f);
@@ -60,7 +65,7 @@ uint32_t unicode_cpt_from_utf8(const std::string & utf8, size_t & offset) {
         return result;
     }
     if (!(utf8[offset + 0] & 0x08)) {
-        if (offset + 3 >= utf8.size() || ! ((utf8[offset + 1] & 0xc0) == 0x80) || ! ((utf8[offset + 2] & 0xc0) == 0x80) || !((utf8[offset + 3] & 0xc0) == 0x80)) {
+        if (offset + 3 >= utf8.size() || is_not_cont(1) || is_not_cont(2) || is_not_cont(3)) {
             throw std::invalid_argument("invalid character");
         }
         auto result = ((utf8[offset + 0] & 0x07) << 18) | ((utf8[offset + 1] & 0x3f) << 12) | ((utf8[offset + 2] & 0x3f) << 6) | (utf8[offset + 3] & 0x3f);
@@ -198,6 +203,19 @@ static std::unordered_map<std::string, uint8_t> unicode_utf8_to_byte_map() {
             map[unicode_cpt_to_utf8(256 + n)] = ch;
             ++n;
         }
+    }
+    return map;
+}
+
+static std::vector<int> unicode_cpt_to_byte_map() {
+    std::vector<int> map;
+    for (int ch = 0; ch < 256; ++ch) {
+        size_t offset = 0;
+        const uint32_t cpt = unicode_cpt_from_utf8(unicode_byte_to_utf8(ch), offset);
+        if (cpt >= map.size()) {
+            map.resize(cpt + 1, -1);
+        }
+        map[cpt] = ch;
     }
     return map;
 }
@@ -1414,6 +1432,14 @@ std::string unicode_byte_to_utf8(uint8_t byte) {
 uint8_t unicode_utf8_to_byte(const std::string & utf8) {
     static std::unordered_map<std::string, uint8_t> map = unicode_utf8_to_byte_map();
     return map.at(utf8);
+}
+
+uint8_t unicode_cpt_to_byte(uint32_t cpt) {
+    static const std::vector<int> map = unicode_cpt_to_byte_map();
+    if (cpt >= map.size() || map[cpt] < 0) {
+        throw std::out_of_range("unicode_cpt_to_byte: not a byte token code point");
+    }
+    return map[cpt];
 }
 
 uint32_t unicode_tolower(uint32_t cpt) {

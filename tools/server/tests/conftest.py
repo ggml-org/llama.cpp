@@ -7,9 +7,9 @@ from utils import *
 @pytest.fixture(scope="session", autouse=True)
 def configure_worker_port(request):
     worker_id = getattr(request.config, "workerinput", {}).get("workerid", "master")
-    if worker_id != "master":
-        worker_num = int(worker_id[2:])
-        os.environ["PORT"] = str(8080 + worker_num * 10)
+    worker_num = 0 if worker_id == "master" else int(worker_id[2:])
+    port_base = int(os.environ.get("LLAMA_SERVER_TEST_PORT_BASE", "8080"))
+    os.environ["PORT"] = str(port_base + worker_num * 10)
 
 
 # ref: https://stackoverflow.com/questions/22627659/run-code-before-and-after-each-test-in-py-test

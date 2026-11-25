@@ -1,15 +1,18 @@
 #pragma once
 
-#define HIP_DISABLE_WARP_SYNC_BUILTINS 1
+#define HIP_ENABLE_WARP_SYNC_BUILTINS 1
 #include <hip/hip_runtime.h>
 #include <hipblas/hipblas.h>
 #include <hip/hip_fp16.h>
 #include <hip/hip_bf16.h>
+#include <hip/hip_fp8.h>
+#include <cstdint>
 
 #ifdef GGML_USE_NCCL
 #include <rccl/rccl.h>
 #endif // GGML_USE_NCCL
 
+typedef uint64_t ggml_cuda_thread_mask_t;
 
 #define CUBLAS_GEMM_DEFAULT HIPBLAS_GEMM_DEFAULT
 #define CUBLAS_GEMM_DEFAULT_TENSOR_OP HIPBLAS_GEMM_DEFAULT
@@ -29,11 +32,6 @@
 #define CU_MEM_LOCATION_TYPE_DEVICE hipMemLocationTypeDevice
 #define CU_MEM_ACCESS_FLAGS_PROT_READWRITE hipMemAccessFlagsProtReadWrite
 #define CU_CHECK(fn) {hipError_t err = fn; if(err != hipSuccess) { GGML_ABORT("HipVMM Failure: %s\n", hipGetErrorString(err)); }}
-#define __shfl_sync(mask, var, laneMask, width) __shfl(var, laneMask, width)
-#define __shfl_up_sync(mask, var, laneMask, width) __shfl_up(var, laneMask, width)
-#define __shfl_xor_sync(mask, var, laneMask, width) __shfl_xor(var, laneMask, width)
-#define __all_sync(mask, var) __all(var)
-#define __any_sync(mask, var) __any(var)
 #define cublasStrsmBatched hipblasStrsmBatched
 #define cublasCreate hipblasCreate
 #define cublasDestroy hipblasDestroy
@@ -43,6 +41,9 @@
 #define cublasHandle_t hipblasHandle_t
 #define cublasSetMathMode(handle, mode) CUBLAS_STATUS_SUCCESS
 #define cublasSetStream hipblasSetStream
+#if HIP_VERSION >= 70000000
+#define cublasSetWorkspace hipblasSetWorkspace
+#endif // HIP_VERSION >= 70000000
 #define cublasSgemm hipblasSgemm
 #define cublasSgemmBatched hipblasSgemmBatched
 #define cublasSgemmStridedBatched hipblasSgemmStridedBatched
@@ -57,7 +58,9 @@
 #define cudaDeviceProp hipDeviceProp_t
 #define cudaDeviceSynchronize hipDeviceSynchronize
 #define cudaError_t hipError_t
+#define CUresult hipError_t
 #define cudaErrorMemoryAllocation hipErrorOutOfMemory
+#define CUDA_ERROR_OUT_OF_MEMORY hipErrorOutOfMemory
 #define cudaErrorPeerAccessAlreadyEnabled hipErrorPeerAccessAlreadyEnabled
 #define cudaErrorPeerAccessNotEnabled hipErrorPeerAccessNotEnabled
 #define cudaEventCreateWithFlags hipEventCreateWithFlags
@@ -216,9 +219,13 @@
 #define RDNA4
 #endif // defined(__GFX12__)
 
-#if defined(__GFX11__)
+#if defined(__gfx1170__) || defined(__gfx1171__)
+#define RDNA4_M
+#endif // defined(__gfx1170__) || defined(__gfx1171__)
+
+#if defined(__GFX11__) && !defined(RDNA4_M)
 #define RDNA3
-#endif // defined(__GFX11__)
+#endif // defined(__GFX11__) && !defined(RDNA4_M)
 
 #if defined(__gfx1150__) || defined(__gfx1151__) || defined(__gfx1152__) || defined(__gfx1153__)
 #define RDNA3_5
@@ -233,13 +240,13 @@
 #define RDNA2
 #endif
 
-#if defined(__gfx1010__) || defined(__gfx1012__)
+#if defined(__gfx1010__) || defined(__gfx1012__) || defined(__gfx1013__)
 #define RDNA1
-#endif // defined(__gfx1010__) || defined(__gfx1012__)
+#endif // defined(__gfx1010__) || defined(__gfx1012__) || defined(__gfx1013__)
 
-#if defined(RDNA4) || defined(RDNA3) || defined(RDNA2) || defined(RDNA1)
+#if defined(RDNA4) || defined(RDNA4_M) || defined(RDNA3) || defined(RDNA2) || defined(RDNA1)
 #define RDNA // For the entire family
-#endif // defined(RDNA4) || defined(RDNA3) || defined(RDNA2) || defined(RDNA1)
+#endif // defined(RDNA4) || defined(RDNA4_M) || defined(RDNA3) || defined(RDNA2) || defined(RDNA1)
 
 #ifndef __has_builtin
     #define __has_builtin(x) 0
@@ -247,12 +254,8 @@
 
 typedef __hip_bfloat16 nv_bfloat16;
 typedef __hip_bfloat162 nv_bfloat162;
-
-#if HIP_VERSION >= 60300000
-#include <hip/hip_fp8.h>
 typedef __hip_fp8_e4m3 __nv_fp8_e4m3;
 #define FP8_AVAILABLE
-#endif // HIP_VERSION >= 60300000
 
 typedef int8_t int8x4_t __attribute__((ext_vector_type(4)));
 typedef uint8_t uint8x4_t __attribute__((ext_vector_type(4)));
@@ -310,4 +313,23 @@ static __device__ __forceinline__ unsigned int __vcmpne4(unsigned int a, unsigne
     const unsigned int ne_any_bit = ne_low_7bits | ne_high_1bit;
 
     return (ne_any_bit >> 7) * 0xff;
+}
+
+// v_perm_b32 with selector bytes in [0, 7]: 0-3 pick bytes of lo, 4-7 pick bytes of hi.
+static __device__ __forceinline__ uint32_t ggml_hip_perm(const uint32_t hi, const uint32_t lo, const uint32_t sel) {
+#if __has_builtin(__builtin_amdgcn_is_invocable)
+    if (__builtin_amdgcn_is_invocable(__builtin_amdgcn_perm)) {
+        return __builtin_amdgcn_perm(hi, lo, sel);
+    }
+    const uint64_t src = ((uint64_t) hi << 32) | lo;
+    uint32_t res = 0;
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        const uint32_t byte_sel = (sel >> (8 * i)) & 0x07;
+        res |= (uint32_t) ((src >> (8 * byte_sel)) & 0xFF) << (8 * i);
+    }
+    return res;
+#else
+    return __builtin_amdgcn_perm(hi, lo, sel);
+#endif // __has_builtin(__builtin_amdgcn_is_invocable)
 }

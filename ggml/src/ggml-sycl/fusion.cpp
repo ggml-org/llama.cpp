@@ -4,7 +4,7 @@
 #include <algorithm>
 
 // mul_mat(gate) + mul_mat(up) + GLU: graph shape and tensor properties only. Backend state
-// (weight layout, split buffers, DMMV) is checked by ggml_sycl_mul_mat_glu_mmvq_fused().
+// (weight layout, split buffers, DMMV) is checked by ggml_sycl_op_mul_mat_glu_fused().
 static bool ggml_sycl_should_fuse_mul_mat_glu(const ggml_tensor * gate, const ggml_tensor * up,
                                               const ggml_tensor * glu) {
     // the fused epilogue implements these two; the rest fall back to the standalone GLU kernels
@@ -32,12 +32,29 @@ static bool ggml_sycl_should_fuse_mul_mat_glu(const ggml_tensor * gate, const gg
         return false;
     }
 
-    // fused GEMVs walk whole QK_K super-blocks: the reorder kernel covers same-type
+    // fused K-quant GEMVs walk whole QK_K super-blocks: the reorder kernel covers same-type
     // q4_K, the plain-layout kernel covers q5_K / iq4_xs pairs incl. mixed gate/up types
     const bool reorder_pair = wu->type == GGML_TYPE_Q4_K && wg->type == GGML_TYPE_Q4_K;
     const bool plain_pair   = (wu->type == GGML_TYPE_Q5_K || wu->type == GGML_TYPE_IQ4_XS) &&
                             (wg->type == GGML_TYPE_Q5_K || wg->type == GGML_TYPE_IQ4_XS);
-    if ((!reorder_pair && !plain_pair) || wu->ne[0] % QK_K != 0) {
+#ifdef GGML_SYCL_MMVQ_HAS_XMX
+    // same-type pairs of the types of the XMX kernels, which also take a few more columns
+    // (the XMX kernels walk whole QK_K super-blocks, so they need rows of a multiple of QK_K)
+    const bool xmx_pair = wu->type == wg->type && ggml_sycl_xmx_supports_type(wu->type) && wu->ne[0] % QK_K == 0;
+#else
+    const bool xmx_pair = false;
+#endif // GGML_SYCL_MMVQ_HAS_XMX
+    // the ESIMD kernel covers same-type q2_K..q6_K and q8_0, single column only (as unfused DMMV)
+#ifdef GGML_SYCL_DMMV_HAS_ESIMD
+    const bool esimd_pair   = g_ggml_sycl_enable_esimd && wu->type == wg->type && act->ne[1] == 1 &&
+                            (wu->type == GGML_TYPE_Q2_K || wu->type == GGML_TYPE_Q3_K || wu->type == GGML_TYPE_Q4_K ||
+                             wu->type == GGML_TYPE_Q5_K || wu->type == GGML_TYPE_Q6_K || wu->type == GGML_TYPE_Q8_0);
+#else
+    const bool esimd_pair   = false;
+#endif
+    // q8_0 rows are walked in 32-wide blocks, so they only need to be a multiple of QK8_0
+    const int64_t row_align = esimd_pair && wu->type == GGML_TYPE_Q8_0 ? QK8_0 : QK_K;
+    if ((!reorder_pair && !plain_pair && !xmx_pair && !esimd_pair) || wu->ne[0] % row_align != 0) {
         return false;
     }
 
@@ -57,7 +74,8 @@ static bool ggml_sycl_should_fuse_mul_mat_glu(const ggml_tensor * gate, const gg
         return false;
     }
     // mat-vec only: one column per decoded token, up to the batch the reorder kernels cover
-    if (act->ne[1] > MMVQ_MAX_BATCH_SIZE) {
+    const int max_cols = xmx_pair ? std::max(MMVQ_MAX_BATCH_SIZE, g_ggml_sycl_xmx_glu_max_cols) : MMVQ_MAX_BATCH_SIZE;
+    if (act->ne[1] > max_cols) {
         return false;
     }
 
@@ -101,6 +119,28 @@ bool ggml_sycl_can_fuse(const ggml_cgraph * cgraph, int node_idx, std::initializ
         }
 
         return ggml_sycl_should_fuse_mul_mat_glu(gate, up, glu);
+    }
+
+    // the residual sum stays materialised (a later residual add reads it), so ggml_can_fuse cannot
+    // express this either: the add and the mul are the subgraph's outputs
+    if (ops.size() == 3 && ops.begin()[0] == GGML_OP_ADD && ops.begin()[1] == GGML_OP_RMS_NORM &&
+        ops.begin()[2] == GGML_OP_MUL) {
+        if (!ggml_can_fuse_subgraph(cgraph, node_idx, ops, { node_idx, node_idx + 2 })) {
+            return false;
+        }
+
+        const ggml_tensor * add = cgraph->nodes[node_idx];
+        if (cgraph->nodes[node_idx + 1]->src[0] != add) {
+            return false;
+        }
+
+        // the fused kernel does not broadcast the add
+        if (add->src[0]->type != GGML_TYPE_F32 || add->src[1]->type != GGML_TYPE_F32 || add->type != GGML_TYPE_F32 ||
+            !ggml_are_same_shape(add->src[0], add) || !ggml_are_same_shape(add->src[1], add)) {
+            return false;
+        }
+
+        return ggml_sycl_can_fuse(cgraph, node_idx + 1, { GGML_OP_RMS_NORM, GGML_OP_MUL }, {});
     }
 
     if (!ggml_can_fuse(cgraph, node_idx, ops)) {

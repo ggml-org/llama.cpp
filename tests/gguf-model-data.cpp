@@ -566,7 +566,7 @@ static std::optional<gguf_remote_model> fetch_and_parse(
 
 static std::filesystem::path get_cache_file_path(const std::filesystem::path & cdir, const std::string & repo_part, const std::string & filename) {
     std::string fname_part = sanitize_for_path(filename);
-    return cdir / std::filesystem::u8path(repo_part + "--" + fname_part + ".partial");
+    return cdir / std::filesystem::path(repo_part + "--" + fname_part + ".partial");
 }
 
 // Try cache first, then fetch and parse a single GGUF shard.
@@ -584,7 +584,7 @@ static std::optional<gguf_remote_model> fetch_or_cached(
             auto result = gguf_parse_meta(cached);
             if (result.has_value()) {
                 if (verbose) {
-                    fprintf(stderr, "gguf_fetch: loaded from cache: %s\n", fs_path_to_utf8(cache_path).c_str());
+                    fprintf(stderr, "gguf_fetch: loaded from cache: %s\n", cache_path.string().c_str());
                 }
                 return result;
             }
@@ -601,7 +601,7 @@ std::optional<gguf_remote_model> gguf_fetch_model_meta(
         const std::string & quant,
         const std::string & cache_dir,
         bool verbose) {
-    const std::filesystem::path cdir = cache_dir.empty() ? get_default_cache_dir() : std::filesystem::u8path(cache_dir);
+    const std::filesystem::path cdir = cache_dir.empty() ? get_default_cache_dir() : std::filesystem::path(cache_dir);
     std::string repo_part = sanitize_for_path(repo);
 
     std::string split_prefix;
@@ -662,7 +662,7 @@ gguf_context_ptr gguf_fetch_gguf_ctx(
         const std::string & quant,
         const std::string & cache_dir,
         bool verbose) {
-    const std::filesystem::path cdir = cache_dir.empty() ? get_default_cache_dir() : std::filesystem::u8path(cache_dir);
+    const std::filesystem::path cdir = cache_dir.empty() ? get_default_cache_dir() : std::filesystem::path(cache_dir);
     std::string repo_part = sanitize_for_path(repo);
 
     std::string split_prefix;
@@ -685,7 +685,7 @@ gguf_context_ptr gguf_fetch_gguf_ctx(
     ggml_context_ptr ggml_ctx_ptr;
     ggml_context * ggml_ctx{};
     gguf_init_params params{true, &ggml_ctx};
-    gguf_context_ptr ctx{gguf_init_from_file(fs_path_to_utf8(cache_path).c_str(), params)};
+    gguf_context_ptr ctx{gguf_init_from_file(cache_path.string().c_str(), params)};
     ggml_ctx_ptr.reset(ggml_ctx);
 
     if (ctx == nullptr) {
@@ -723,7 +723,7 @@ gguf_context_ptr gguf_fetch_gguf_ctx(
             ggml_context_ptr shard_ggml_ctx_ptr;
             ggml_context * shard_ggml_ctx{};
             gguf_init_params shard_params{true, &shard_ggml_ctx};
-            gguf_context_ptr shard_ctx{gguf_init_from_file(fs_path_to_utf8(shard_path).c_str(), shard_params)};
+            gguf_context_ptr shard_ctx{gguf_init_from_file(shard_path.string().c_str(), shard_params)};
             shard_ggml_ctx_ptr.reset(shard_ggml_ctx);
 
             if (shard_ctx == nullptr) {

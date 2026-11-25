@@ -17,40 +17,29 @@
 #define HTP_TENSOR_TILE_SIZE_F16    2048
 #define HTP_TENSOR_TILE_SIZE_Q4_0   576
 #define HTP_TENSOR_TILE_SIZE_Q4_1   640
+#define HTP_TENSOR_TILE_SIZE_Q5_0   704
+#define HTP_TENSOR_TILE_SIZE_Q5_1   768
 #define HTP_TENSOR_TILE_SIZE_Q8_0   1088
 #define HTP_TENSOR_TILE_SIZE_IQ4_NL 576
 #define HTP_TENSOR_TILE_SIZE_MXFP4  544
+#define HTP_TENSOR_TILE_SIZE_NVFP4  576
+#define HTP_TENSOR_TILE_SIZE_IQ2_XXS 264
+#define HTP_TENSOR_TILE_SCRATCH_IQ2_XXS 256
+#define HTP_IQ2XXS_NIBBLE_BYTES         128   // 16 words for vlut16, padded to a vector
+#define HTP_IQ2XXS_GRID_BYTES           512   // 256 entries x 8 elements x 2-bit magnitude code
+#define HTP_IQ2XXS_LUT_BYTES            (HTP_IQ2XXS_NIBBLE_BYTES + HTP_IQ2XXS_GRID_BYTES)
 #define HTP_TENSOR_TILE_SIZE_Q4_K   640
 #define HTP_TENSOR_TILE_SIZE_Q5_K   768
 #define HTP_TENSOR_TILE_SIZE_Q6_K   896
 #define HTP_TENSOR_TILE_SIZE_Q3_K   512
 #define HTP_TENSOR_TILE_SIZE_Q2_K   336
+#define HTP_TENSOR_TILE_K_Q1_0      128
+#define HTP_TENSOR_TILE_SIZE_Q1_0   576
+#define HTP_TENSOR_TILE_K_Q2_0      64
+#define HTP_TENSOR_TILE_SIZE_Q2_0   576
 
-// Q2_K, Q3_K, Q6_K use vrmpy byte order within each 128B HVX vector:
-//   k = 0..31 is split into 8 groups g = k/4 of 4 k each; byte 4*r + (k%4) holds row r
-//
-// Q2_K (336B, lossless tiling with same size as block_q2_K):
-//   bytes   0..255 (vec 0..1): unsigned 2-bit quants, vec m holds groups 4m..4m+3 at bit offsets 0,2,4,6
-//   bytes 256..319:            raw scales[] bytes (min << 4 | sc): [0..31] for k 0..15, [32..63] for k 16..31
-//   bytes 320..335:            8 fp16 in tile j (0..7) of super-block: d (j < 4) or -dmin (j >= 4) for rows 8*(j%4)..8*(j%4)+7
-//
-// Q3_K (512B):
-//   bytes   0..255 (vec 0..1): low 2 bits, vec m holds groups 4m..4m+3 at bit offsets 0,2,4,6
-//   bytes 256..383 (vec 2):    sign mask, bit g set when hmask is 0 (quant = low2 - 4)
-//   bytes 384..511 (vec 3):    fp16 scales d * (scales[] - 32): fp16[0..31] for k 0..15, fp16[32..63] for k 16..31
-//
-// Q4_K (640B, same layout as Q4_1 tile; each 256-k super-block splits into 8 tiles of 32 k):
-//   bytes   0..511 (vec 0..3): 4-bit quants, byte 32*cp + r holds k = 2*cp (low nibble) and 2*cp + 1 (high nibble)
-//   bytes 512..639 (vec 4):    32x2 fp16 per row: (d * sc, -dmin * m)
-//
-// Q5_K (768B):
-//   bytes   0..639 (vec 0..4): Q4_K tile (low 4 bits + fp16 scale/min pairs)
-//   bytes 640..767 (vec 5):    5th-bit plane; byte l holds the 8 high bits for lane l across vec i = 0..3 (bit 2i = lo, 2i+1 = hi)
-//
-// Q6_K (896B):
-//   bytes   0..511 (vec 0..3): low 4 bits, vec i holds group 2i (low nibble) and 2i+1 (high nibble)
-//   bytes 512..767 (vec 4..5): high 2 bits, vec 4+m holds groups 4m..4m+3 at bit offsets 0,2,4,6
-//   bytes 768..895 (vec 6):    fp16 scales d * scales[]: fp16[0..31] for k 0..15, fp16[32..63] for k 16..31
+// Tiled weight tensor layouts (Q4_0, Q5_0, Q5_1, Q8_0, IQ4_NL, MXFP4, NVFP4, IQ2_XXS, Q1_0, Q2_0, K-quants):
+// See docs/backend/snapdragon/developer.md ("Tiled Weight Formats").
 
 struct htp_tensor_mdev_range {
     uint32_t start;
@@ -162,20 +151,36 @@ static inline uint32_t htp_tensor_get_tile_size(int type) {
         case HTP_TYPE_Q4_0:   return HTP_TENSOR_TILE_SIZE_Q4_0;
         case HTP_TYPE_IQ4_NL: return HTP_TENSOR_TILE_SIZE_IQ4_NL;
         case HTP_TYPE_Q4_1:   return HTP_TENSOR_TILE_SIZE_Q4_1;
+        case HTP_TYPE_Q5_0:   return HTP_TENSOR_TILE_SIZE_Q5_0;
+        case HTP_TYPE_Q5_1:   return HTP_TENSOR_TILE_SIZE_Q5_1;
         case HTP_TYPE_Q4_K:   return HTP_TENSOR_TILE_SIZE_Q4_K;
         case HTP_TYPE_Q8_0:   return HTP_TENSOR_TILE_SIZE_Q8_0;
         case HTP_TYPE_Q5_K:   return HTP_TENSOR_TILE_SIZE_Q5_K;
         case HTP_TYPE_Q6_K:   return HTP_TENSOR_TILE_SIZE_Q6_K;
         case HTP_TYPE_Q3_K:   return HTP_TENSOR_TILE_SIZE_Q3_K;
         case HTP_TYPE_Q2_K:   return HTP_TENSOR_TILE_SIZE_Q2_K;
+        case HTP_TYPE_Q1_0:   return HTP_TENSOR_TILE_SIZE_Q1_0;
+        case HTP_TYPE_Q2_0:   return HTP_TENSOR_TILE_SIZE_Q2_0;
         case HTP_TYPE_MXFP4:  return HTP_TENSOR_TILE_SIZE_MXFP4;
+        case HTP_TYPE_NVFP4:  return HTP_TENSOR_TILE_SIZE_NVFP4;
+        case HTP_TYPE_IQ2_XXS: return HTP_TENSOR_TILE_SIZE_IQ2_XXS;
         case HTP_TYPE_F16:    return HTP_TENSOR_TILE_SIZE_F16;
         default:              return 0;
     }
 }
 
+static inline uint32_t htp_tensor_get_tile_k(int type) {
+    switch (type) {
+        case HTP_TYPE_Q1_0: return HTP_TENSOR_TILE_K_Q1_0;
+        case HTP_TYPE_Q2_0: return HTP_TENSOR_TILE_K_Q2_0;
+        default:            return 32;
+    }
+}
+
 static inline uint32_t htp_tensor_get_tile_padded_size(int type) {
-    return (htp_tensor_get_tile_size(type) + 127u) & ~127u;
+    // IQ2_XXS: the last 256 B of the padded tile are the vgather scratch of its vec-dot
+    const uint32_t scratch = (type == HTP_TYPE_IQ2_XXS) ? HTP_TENSOR_TILE_SCRATCH_IQ2_XXS : 0u;
+    return (htp_tensor_get_tile_size(type) + scratch + 127u) & ~127u;
 }
 
 static inline bool htp_tensor_is_tiled(const struct htp_tensor * t) {
@@ -191,12 +196,18 @@ static inline uint32_t htp_tensor_get_row_size(int type, uint32_t ne00) {
         case HTP_TYPE_Q4_0:
         case HTP_TYPE_IQ4_NL: return (ne00 / 32) * 18;
         case HTP_TYPE_Q4_1:   return (ne00 / 32) * 20;
+        case HTP_TYPE_Q5_0:   return (ne00 / 32) * 22;
+        case HTP_TYPE_Q5_1:   return (ne00 / 32) * 24;
         case HTP_TYPE_MXFP4:  return (ne00 / 32) * 17;
+        case HTP_TYPE_NVFP4:  return (ne00 / 64) * 36;
+        case HTP_TYPE_IQ2_XXS: return (ne00 / 256) * 66;
         case HTP_TYPE_Q2_K:   return (ne00 / 256) * 84;
+        case HTP_TYPE_Q2_0:   return (ne00 / 64) * 18;
         case HTP_TYPE_Q3_K:   return (ne00 / 256) * 110;
         case HTP_TYPE_Q4_K:   return (ne00 / 256) * 144;
         case HTP_TYPE_Q5_K:   return (ne00 / 256) * 176;
         case HTP_TYPE_Q6_K:   return (ne00 / 256) * 210;
+        case HTP_TYPE_Q1_0:   return (ne00 / HTP_TENSOR_TILE_K_Q1_0) * 18;
         case HTP_TYPE_I32:    return ne00 * 4;
         case HTP_TYPE_I64:    return ne00 * 8;
         default:              return 0;

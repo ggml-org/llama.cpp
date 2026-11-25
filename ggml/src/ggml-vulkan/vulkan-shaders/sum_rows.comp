@@ -19,6 +19,8 @@ void main() {
     const uint col = gl_LocalInvocationID.x;
     const float weight = p.weight;
 
+    if (row >= p.ne01 * p.ne02 * p.ne03) { return; }
+
     const uint i03 = fastdiv(row, p.ne0_12mp, p.ne0_12L);
     const uint i03_offset = i03 * p.ne01*p.ne02;
     const uint i02 = fastdiv(row - i03_offset, p.ne0_1mp, p.ne0_1L);

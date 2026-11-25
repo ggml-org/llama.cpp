@@ -4855,7 +4855,12 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
                     const int32_t i02 =
                         *(const int32_t *) ((const char *) ids->data + iid1 * ids->nb[1] + id * ids->nb[0]);
 
-                    GGML_ASSERT(i02 >= 0 && i02 < n_as);
+                    GGML_ASSERT(i02 == -1 || (i02 >= 0 && i02 < n_as));
+
+                    if (i02 == -1) {
+                        memset((char *) dst->data + id*nb1 + iid1*nb2, 0, ne0*sizeof(float));
+                        continue;
+                    }
 
                     MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = { id, iid1 };
                     matrix_row_counts[i02] += 1;
@@ -4987,6 +4992,15 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
                 return &q4_0_4x4_q8_0;
             }
         }
+#if defined(__aarch64__) && !defined(__APPLE__)
+        // no dotprod (e.g. Cortex-A53): AArch64 only, on 32-bit ARM the 4x8 kernels run scalar code
+        // not on Apple: repacked weights cannot go to BLAS (Accelerate), which is faster there for large batches
+        if (ggml_cpu_has_neon() && !ggml_cpu_has_dotprod()) {
+            if (cur->ne[1] % 4 == 0) {
+                return &q4_0_4x8_q8_0;
+            }
+        }
+#endif
         if (ggml_cpu_has_vxe()) {
             if (cur->ne[1] % 4 == 0) {
                 return &q4_0_4x4_q8_0;
@@ -5113,6 +5127,15 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
                 return &q8_0_4x4_q8_0;
             }
         }
+#if defined(__aarch64__) && !defined(__APPLE__)
+        // no dotprod (e.g. Cortex-A53): AArch64 only, on 32-bit ARM the 4x8 kernels run scalar code
+        // not on Apple: repacked weights cannot go to BLAS (Accelerate), which is faster there for large batches
+        if (ggml_cpu_has_neon() && !ggml_cpu_has_dotprod()) {
+            if (cur->ne[1] % 4 == 0) {
+                return &q8_0_4x8_q8_0;
+            }
+        }
+#endif
         if (ggml_cpu_has_riscv_v()) {
             #if defined __riscv_zvfh
             switch (__riscv_vlenb() * 8) {

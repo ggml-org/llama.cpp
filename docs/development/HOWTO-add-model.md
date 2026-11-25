@@ -128,7 +128,7 @@ Note: to debug the inference graph: you can use [llama-eval-callback](/examples/
 If the new model supports multimodal inputs, you will need to add a new encoder definition in `libmtmd`. You can find more information about llama.cpp's multimodal support in [the docs](../multimodal.md) and in the `tools/mtmd` source directory.
 
 1. In the conversion script, make sure you add a subclass that extends `MmprojModel` or another class that inherits from the same base class.
-2. Add the encoder definition in `clip.cpp`.
+2. Add the encoder definition: hparams and tensor loading in `mtmd-model.cpp`, graph inputs in `mtmd-subcontext.cpp`.
 3. Implement the preprocessor in `mtmd.cpp`. In most cases, you can reuse an existing preprocessor.
 4. Implement the encoder GGML graph, either in a dedicated file if the model is truly different from existing ones, or by reusing an existing implementation (for example: siglip, pixtral, or qwen) and adding a model-specific projector.
 

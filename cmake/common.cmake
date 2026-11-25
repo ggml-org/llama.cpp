@@ -2,7 +2,7 @@ include("ggml/cmake/common.cmake")
 
 function(llama_add_compile_flags)
     if (LLAMA_FATAL_WARNINGS)
-        if (CMAKE_CXX_COMPILER_ID MATCHES "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        if (CMAKE_CXX_COMPILER_ID MATCHES "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM")
             list(APPEND C_FLAGS   -Werror)
             list(APPEND CXX_FLAGS -Werror)
         elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")

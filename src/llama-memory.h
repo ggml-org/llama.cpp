@@ -6,6 +6,7 @@
 #include <map>
 #include <memory>
 #include <functional>
+#include <vector>
 
 struct llama_ubatch;
 
@@ -25,6 +26,36 @@ struct llama_memory_params {
     llama_context_type ctx_type;
 
     llama_memory_t mem_other;
+
+    // only simulate the memory allocations
+    bool no_alloc;
+};
+
+// the tensor contexts and backend buffers of a memory instance
+// with no_alloc, dummy buffers are attached instead of allocating the tensor data, so the memory use can still be measured
+struct llama_memory_bufs {
+    explicit llama_memory_bufs(bool no_alloc) : no_alloc(no_alloc) {}
+
+    // allocate the tensors of ctx on buft, or attach a dummy buffer if no_alloc is set
+    // returns the buffer, for logging
+    ggml_backend_buffer_t emplace(ggml_context_ptr ctx, ggml_backend_buffer_type_t buft, const char * name);
+
+    // the memory used by the tensors: the buffer sizes, or the simulated sizes if no_alloc is set
+    std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
+
+    // allocate a single ctx buffer - for the memory instances that keep their own buffer layout
+    static ggml_backend_buffer_ptr alloc_buf(ggml_context * ctx, ggml_backend_buffer_type_t buft, bool no_alloc, const char * name);
+
+    bool empty() const { return bufs.empty(); }
+
+    auto begin()       { return bufs.begin(); }
+    auto end()         { return bufs.end();   }
+    auto begin() const { return bufs.begin(); }
+    auto end()   const { return bufs.end();   }
+
+    std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> bufs;
+
+    const bool no_alloc;
 };
 
 enum llama_memory_status {

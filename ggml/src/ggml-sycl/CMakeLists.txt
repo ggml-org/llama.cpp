@@ -44,7 +44,7 @@ if (WIN32)
         if(DEFINED ENV{LEVEL_ZERO_V1_SDK_PATH})
             set(LEVEL_ZERO_V1_SDK_PATH $ENV{LEVEL_ZERO_V1_SDK_PATH})
             if(EXISTS "${LEVEL_ZERO_V1_SDK_PATH}")
-                target_include_directories(ggml-sycl PRIVATE "${LEVEL_ZERO_V1_SDK_PATH}/include")
+                target_include_directories(ggml-sycl SYSTEM PRIVATE "${LEVEL_ZERO_V1_SDK_PATH}/include")
                 set(LEVEL_ZERO_V1_SDK_LIB_PATH "${LEVEL_ZERO_V1_SDK_PATH}/lib")
             else()
                 message(WARNING "LEVEL_ZERO_V1_SDK_PATH set but folder not found: ${LEVEL_ZERO_V1_SDK_PATH}")
@@ -107,24 +107,36 @@ target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing")
 
 message(STATUS "GGML_SYCL_SUPPORT_LEVEL_ZERO_API ${GGML_SYCL_SUPPORT_LEVEL_ZERO_API}")
 if (GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
-    # Link against Level Zero loader for direct device memory allocation.
-    # Avoids sycl::malloc_device triggering DMA-buf/TTM system RAM staging
-    # in the xe kernel driver during multi-GPU inference.
-    find_path(LEVEL_ZERO_DEV_INCLUDE_DIR level_zero/ze_api.h HINTS ${ONEAPI_ROOT}/include ${LEVEL_ZERO_V1_SDK_PATH}/include)
-    find_library(ZE_LOADER_LIB ze_loader HINTS ${ONEAPI_ROOT}/lib ${LEVEL_ZERO_V1_SDK_LIB_PATH} ENV LD_LIBRARY_PATH)
-    if(ZE_LOADER_LIB AND LEVEL_ZERO_DEV_INCLUDE_DIR)
-        target_link_libraries(ggml-sycl PRIVATE ${ZE_LOADER_LIB})
-        target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
-        message(STATUS "Level Zero loader found: ${ZE_LOADER_LIB}")
-        message(STATUS "Level Zero development headers found: ${LEVEL_ZERO_DEV_INCLUDE_DIR}")
+    find_package(PkgConfig)
+    if (PkgConfig_FOUND)
+        pkg_check_modules(LEVEL_ZERO level-zero)
+        if (LEVEL_ZERO_FOUND)
+            target_include_directories(ggml-sycl PRIVATE ${LEVEL_ZERO_INCLUDE_DIRS})
+            target_link_libraries(ggml-sycl PRIVATE ${LEVEL_ZERO_LINK_LIBRARIES})
+            target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
+            message(STATUS "Level Zero loader found: ${LEVEL_ZERO_LINK_LIBRARIES}")
+            message(STATUS "Level Zero development headers found: ${LEVEL_ZERO_INCLUDE_DIRS}")
+        endif()
     else()
-        message(WARNING "Level Zero loader or development headers not found, "
-                        "Level Zero API support disabled. "
-                        "Please install the Level Zero SDK/development package "
-                        "to support Level Zero API features. "
-                        "Level Zero API is not mandatory for SYCL backend, "
-                        "but it is required by the special features for better "
-                        "function & performance on Intel GPUs.")
+        # Link against Level Zero loader for direct device memory allocation.
+        # Avoids sycl::malloc_device triggering DMA-buf/TTM system RAM staging
+        # in the xe kernel driver during multi-GPU inference.
+        find_path(LEVEL_ZERO_DEV_INCLUDE_DIR level_zero/ze_api.h HINTS ${ONEAPI_ROOT}/include ${LEVEL_ZERO_V1_SDK_PATH}/include)
+        find_library(ZE_LOADER_LIB ze_loader HINTS ${ONEAPI_ROOT}/lib ${LEVEL_ZERO_V1_SDK_LIB_PATH} ENV LD_LIBRARY_PATH)
+        if(ZE_LOADER_LIB AND LEVEL_ZERO_DEV_INCLUDE_DIR)
+            target_link_libraries(ggml-sycl PRIVATE ${ZE_LOADER_LIB})
+            target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
+            message(STATUS "Level Zero loader found: ${ZE_LOADER_LIB}")
+            message(STATUS "Level Zero development headers found: ${LEVEL_ZERO_DEV_INCLUDE_DIR}")
+        else()
+            message(WARNING "Level Zero loader or development headers not found, "
+                            "Level Zero API support disabled. "
+                            "Please install the Level Zero SDK/development package "
+                            "to support Level Zero API features. "
+                            "Level Zero API is not mandatory for SYCL backend, "
+                            "but it is required by the special features for better "
+                            "function & performance on Intel GPUs.")
+        endif()
     endif()
 endif()
 
@@ -200,12 +212,18 @@ if (GGML_SYCL_F16)
     add_compile_definitions(GGML_SYCL_F16)
 endif()
 
+if (GGML_SYCL_SUPPORT_XMX)
+    add_compile_definitions(GGML_SYCL_SUPPORT_XMX)
+endif()
+
 if (GGML_SYCL_TARGET STREQUAL "INTEL")
     add_compile_definitions(GGML_SYCL_WARP_SIZE=16)
+    # With AOT the option goes to ocloc inside -options (see GGML_SYCL_DEVICE_ARCH below): a bare
+    # -Xs hands it to ocloc as a command-line flag, which fails the device link.
     if (NOT GGML_SYCL_DEVICE_ARCH)
         target_link_options(ggml-sycl PRIVATE -Xs -ze-intel-greater-than-4GB-buffer-required)
     else()
-        message(STATUS "Skipping -ze-intel-greater-than-4GB-buffer-required for spir64_gen AOT")
+        message(STATUS "spir64_gen AOT: -ze-intel-greater-than-4GB-buffer-required passed to ocloc")
     endif()
 
     # Link against Intel oneMKL
@@ -232,10 +250,18 @@ endif()
 
 if (GGML_SYCL_DEVICE_ARCH)
     message(STATUS "GGML_SYCL_DEVICE_ARCH=${GGML_SYCL_DEVICE_ARCH} (AOT via spir64_gen)")
+    # AOT (oneAPI 2026.2) ignores the grf_size<256> kernel property on ESIMD kernels and builds them
+    # with 128 registers, which made the ESIMD MoE GEMM 1.7-3.9x slower than under JIT; SPMD kernels
+    # keep honouring the property. A module-wide -doubleGRF also moves the ESIMD kernels that ask for
+    # 128 to 256, and a server built with it hung on its first request, so IGC picks the size per
+    # kernel from its register pressure instead (ESIMD kernels too; -ze-opt-large-grf-kernel does not
+    # reach them).
+    set(GGML_SYCL_AOT_BACKEND_OPTIONS
+        "-device ${GGML_SYCL_DEVICE_ARCH} -options '-ze-intel-greater-than-4GB-buffer-required -ze-opt-enable-auto-large-GRF-mode'")
     target_compile_options(
         ggml-sycl PRIVATE
         -fsycl-targets=spir64_gen
-        "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_DEVICE_ARCH}\""
+        "SHELL:-Xsycl-target-backend=spir64_gen \"${GGML_SYCL_AOT_BACKEND_OPTIONS}\""
     )
 
     # Pass through parallel job (process) count for parallelising the
@@ -250,7 +276,7 @@ if (GGML_SYCL_DEVICE_ARCH)
     target_link_options(
         ggml-sycl PRIVATE
         -fsycl-targets=spir64_gen
-        "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_DEVICE_ARCH}\""
+        "SHELL:-Xsycl-target-backend=spir64_gen \"${GGML_SYCL_AOT_BACKEND_OPTIONS}\""
         -fsycl-max-parallel-link-jobs=${GGML_SYCL_MAX_PARALLEL_LINK_JOBS}
     )
 

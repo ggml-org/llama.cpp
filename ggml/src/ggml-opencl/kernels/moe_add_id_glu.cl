@@ -57,13 +57,17 @@ kernel void kernel_add_id_add_id_swiglu_oai(
 
     global const float * g_row  = (global const float *)(src_g  + i1*nb01_g + i2*nb02_g);
     global const float * u_row  = (global const float *)(src_u  + i1*nb01_u + i2*nb02_u);
-    global const float * gb_row = (global const float *)(src_gb + i11*nb11_g);
-    global const float * ub_row = (global const float *)(src_ub + i11*nb11_u);
     global       float * d_row  = (global       float *)(dst    + i1*nbd1   + i2*nbd2);
 
     for (int i0 = get_local_id(0); i0 < ne0; i0 += get_local_size(0)) {
-        float x0 = g_row[i0] + gb_row[i0];
-        float x1 = u_row[i0] + ub_row[i0];
+        float x0 = g_row[i0];
+        float x1 = u_row[i0];
+        if (i11 != -1) {
+            global const float * gb_row = (global const float *)(src_gb + i11*nb11_g);
+            global const float * ub_row = (global const float *)(src_ub + i11*nb11_u);
+            x0 += gb_row[i0];
+            x1 += ub_row[i0];
+        }
 
         x0 = min(x0, limit);
         x1 = max(min(x1, limit), -limit);

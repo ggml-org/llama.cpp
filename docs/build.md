@@ -132,7 +132,10 @@ Full steps, threading notes, and a fallback for older CMake: [AOCL.md](./backend
 
 ### Intel oneMKL
 
-Building through oneAPI compilers will make avx_vnni instruction set available for intel processors that do not support avx512 and avx512_vnni. Please note that this build config **does not support Intel GPU**. For Intel GPU support, please refer to [llama.cpp for SYCL](./backend/SYCL.md).
+Building through oneAPI compilers will make avx_vnni instruction set available for intel processors that do not support avx512 and avx512_vnni.
+> Note: This build config **does not support Intel GPU and NPU**.
+>  - For Intel GPU support, refer to [OpenVINO](#openvino), [SYCL](#sycl) and [Vulkan](#vulkan) backends.
+>  - For Intel NPU support, refer to [OpenVINO](#openvino) backend.
 
 - Using manual oneAPI installation:
   By default, `GGML_BLAS_VENDOR` is set to `Generic`, so if you already sourced intel environment script and assign `-DGGML_BLAS=ON` in cmake, the mkl version of Blas will automatically been selected. Otherwise please install oneAPI and follow the below steps:
@@ -444,9 +447,9 @@ Launch `w64devkit.exe` and run the following commands to copy Vulkan dependencie
 ```sh
 SDK_VERSION=1.3.283.0
 cp /VulkanSDK/$SDK_VERSION/Bin/glslc.exe $W64DEVKIT_HOME/bin/
-cp /VulkanSDK/$SDK_VERSION/Lib/vulkan-1.lib $W64DEVKIT_HOME/x86_64-w64-mingw32/lib/
-cp -r /VulkanSDK/$SDK_VERSION/Include/* $W64DEVKIT_HOME/x86_64-w64-mingw32/include/
-cat > $W64DEVKIT_HOME/x86_64-w64-mingw32/lib/pkgconfig/vulkan.pc <<EOF
+cp /VulkanSDK/$SDK_VERSION/Lib/vulkan-1.lib $W64DEVKIT_HOME/lib/
+cp -r /VulkanSDK/$SDK_VERSION/Include/* $W64DEVKIT_HOME/include/
+cat > $W64DEVKIT_HOME/lib/pkgconfig/vulkan.pc <<EOF
 Name: Vulkan-Loader
 Description: Vulkan Loader
 Version: $SDK_VERSION
@@ -481,7 +484,7 @@ cmake --build build --config Release
 Now you can load the model in conversation mode using `Vulkan`
 
 ```sh
-build/bin/Release/llama-cli -m "[PATH TO MODEL]" -ngl 100 -c 16384 -t 10 -n -2 -cnv
+build/bin/Release/llama-cli -m "[PATH TO MODEL]" -ngl 100 -c 16384 -t 10 -n -2
 ```
 
 **MSYS2**
@@ -608,7 +611,7 @@ You can test with:
 If the following info is output on screen, you are using `llama.cpp` with the CANN backend:
 ```bash
 llm_load_tensors:       CANN model buffer size = 13313.00 MiB
-llama_new_context_with_model:       CANN compute buffer size =  1260.81 MiB
+llama_init_from_model:       CANN compute buffer size =  1260.81 MiB
 ```
 
 For detailed info, such as model/device supports, CANN install, please refer to [llama.cpp for CANN](./backend/CANN.md).
@@ -852,6 +855,36 @@ WebGPU allows cross-platform access to the GPU from supported browsers. We utili
 
 Follow the instructions [here](https://dawn.googlesource.com/dawn/+/refs/heads/main/src/emdawnwebgpu/) to download or build the emdawnwebgpu package (Note that it might be safer to build the emdawnwebgpu package locally, so that it stays in sync with the version of Dawn you have installed above). When building using CMake, the path to the emdawnwebgpu port file needs to be set with the flag `EMDAWNWEBGPU_DIR`.
 
+## WASI
+
+Requires [wasi-sdk](https://github.com/WebAssembly/wasi-sdk) 34+ with `WASI_SDK_PATH` set. Only the libraries build (`llama-common` does not support WASI yet), so link your program against them:
+
+```bash
+FLAGS="-msimd128 -D_WASI_EMULATED_SIGNAL -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false"
+cmake -B build-wasi -DCMAKE_TOOLCHAIN_FILE=$WASI_SDK_PATH/share/cmake/wasi-sdk-p2.cmake \
+    -DCMAKE_C_FLAGS="$FLAGS" -DCMAKE_CXX_FLAGS="$FLAGS" -DCMAKE_HAVE_LIBC_PTHREAD=1 \
+    -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DLLAMA_BUILD_COMMON=OFF
+cmake --build build-wasi --target llama
+
+$WASI_SDK_PATH/bin/clang++ --target=wasm32-wasip3 -O3 $FLAGS -I include -I ggml/include examples/simple/simple.cpp \
+    build-wasi/src/libllama.a build-wasi/ggml/src/libggml*.a -lunwind -ldl -Wl,-z,stack-size=8388608 -o llama-simple.wasm
+wasmtime run -W exceptions=y --dir models llama-simple.wasm -m models/model.gguf "Hello"
+```
+
+### wasi:webgpu
+
+The WebGPU backend can target [wasi:webgpu](https://github.com/WebAssembly/wasi-webgpu) via [wasi-webgpu-headers](https://github.com/wasi-gfx/wasi-webgpu-headers) (with its submodule) and Dawn's `dawn-headers` release. Point `Dawn_DIR` at a directory containing this `DawnConfig.cmake` next to both:
+
+```cmake
+set(_wasi_webgpu "${CMAKE_CURRENT_LIST_DIR}/wasi-webgpu-headers")
+add_library(dawn::webgpu_dawn INTERFACE IMPORTED)
+set_target_properties(dawn::webgpu_dawn PROPERTIES
+    INTERFACE_SOURCES "${_wasi_webgpu}/webgpu.c;${_wasi_webgpu}/async_futures.c;${_wasi_webgpu}/imports.c;${_wasi_webgpu}/imports_component_type.o"
+    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/dawn-headers/include/webgpu_upstream;${_wasi_webgpu}")
+```
+
+Then build as above, but with `wasi-sdk-p3.cmake` / `--target=wasm32-wasip3`, `-DGGML_WEBGPU=ON -DDawn_DIR=...` at configure, and `build-wasi/ggml/src/ggml-webgpu/libggml-webgpu.a` added at link. See `.github/workflows/build-wasi.yml` for a more complete example.
+
 ## IBM Z & LinuxONE
 
 To read documentation for how to build on IBM Z & LinuxONE, [click here](./build-s390x.md)
@@ -860,9 +893,14 @@ To read documentation for how to build on IBM Z & LinuxONE, [click here](./build
 
 [OpenVINO](https://docs.openvino.ai/) is an open-source toolkit for optimizing and deploying high-performance AI inference, specifically designed for Intel hardware (CPUs, GPUs, and NPUs).
 
+Use this backend when you want to:
+
+- Accelerate execution across Intel CPU, GPU and NPU with one runtime, selected at run time with `GGML_OPENVINO_DEVICE`. OpenVINO is the only backend with support for Intel NPU.
+- Let the runtime repack weights: GGUF quantized weights are repacked, or re-quantized where needed, to match OpenVINO's optimized low-bit kernels.
+
 For build instructions and usage examples, refer to [OPENVINO.md](backend/OPENVINO.md).
 
-### Hexagon
+## Hexagon
 
 Check [README.md](./backend/snapdragon/README.md) for target specific build and run info.
 
