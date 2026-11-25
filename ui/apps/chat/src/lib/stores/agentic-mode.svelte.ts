@@ -4,8 +4,9 @@
  * They are on when the build has them (see AGENTIC_ENABLED) and llama-server
  * asks for them: with its built-in tools or its proxy, which `--agent` turns
  * on together, or with `--ui-agent`, which offers neither and leaves the
- * tools that run in the browser. Without them Llama Chat is a plain chat: a
- * message and its reply, with no tools, no MCP and no agentic loop.
+ * tools that run in the browser and the MCP servers the browser reaches
+ * itself. Without them Llama Chat is a plain chat: a message and its reply,
+ * with no tools, no MCP and no agentic loop.
  *
  * The server says so in two places: `/props` reports the proxy and
  * `--ui-agent`, and `/tools` lists the built-in tools, which the tools store
