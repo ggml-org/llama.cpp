@@ -118,6 +118,8 @@ static enum ggml_backend_dev_type dummy_backend_device_get_type(ggml_backend_dev
     return GGML_BACKEND_DEVICE_TYPE_CPU;
 }
 
+static void dummy_backend_device_get_props(ggml_backend_dev_t /*dev*/, ggml_backend_dev_props * /*props*/) {}
+
 static bool dummy_backend_device_supports_op(ggml_backend_dev_t /*dev*/, const ggml_tensor * /*x*/) {
     return true;
 }
@@ -155,6 +157,7 @@ static dummy_backend dummy_backend_init(size_t max_buffer_size, size_t alignment
 
     b.context->device.context             = b.context.get();
     b.context->device.iface.get_type      = dummy_backend_device_get_type;
+    b.context->device.iface.get_props     = dummy_backend_device_get_props;
     b.context->device.iface.supports_op   = dummy_backend_device_supports_op;
     b.context->device.iface.supports_buft = dummy_backend_device_supports_buft;
 

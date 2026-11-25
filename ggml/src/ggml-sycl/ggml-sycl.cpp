@@ -7279,6 +7279,7 @@ static void ggml_backend_sycl_device_get_props(ggml_backend_dev_t dev, ggml_back
         /* .buffer_from_host_ptr  = */ false,
         /* .events                = */ events,
         /* .mmap_support          = */ true,
+        /* .fast_async_host_input = */ false,
     };
 }
 

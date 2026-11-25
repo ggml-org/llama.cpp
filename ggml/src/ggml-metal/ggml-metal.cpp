@@ -782,11 +782,12 @@ static void ggml_backend_metal_device_get_props(ggml_backend_dev_t dev, ggml_bac
     ggml_backend_metal_device_get_memory(dev, &props->memory_free, &props->memory_total);
 
     props->caps = {
-        /* .async                = */ true,
-        /* .host_buffer          = */ false,
-        /* .buffer_from_host_ptr = */ true,
-        /* .events               = */ true,
-        /* .mmap_support         = */ true,
+        /* .async                 = */ true,
+        /* .host_buffer           = */ false,
+        /* .buffer_from_host_ptr  = */ true,
+        /* .events                = */ true,
+        /* .mmap_support          = */ true,
+        /* .fast_async_host_input = */ false,
     };
 }
 
