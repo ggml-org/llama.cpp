@@ -667,6 +667,18 @@ int llama_file::file_id() const {
 #endif
 }
 
+void llama_file::drop_cache(size_t offset, size_t len) const {
+#ifdef __linux__
+    // only a hint, so a failure is ignored
+    if (!has_direct_io()) {
+        posix_fadvise(file_id(), offset, len, POSIX_FADV_DONTNEED);
+    }
+#else
+    (void) offset;
+    (void) len;
+#endif
+}
+
 void llama_file::seek(size_t offset, int whence) const { pimpl->seek(offset, whence); }
 void llama_file::read_raw(void * ptr, size_t len) { pimpl->read_raw(ptr, len); }
 void llama_file::read_raw_unsafe(void * ptr, size_t len) { pimpl->read_raw_unsafe(ptr, len); }

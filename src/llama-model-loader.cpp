@@ -1925,6 +1925,9 @@ bool llama_model_loader::load_all_data(
                     }
                 }
             }
+
+            // the tensor has its own memory now, release the page cache copy of its bytes
+            file->drop_cache(weight->offs, n_size);
         }
 
         size_done += n_size;
