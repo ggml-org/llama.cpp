@@ -13185,7 +13185,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // GQA with 2-8 query tokens (speculative decoding verify); Vulkan puts several tokens in one GQA row tile
     for (int nr2 : { 2, 3, 4, 5, 8 }) {
         for (int nb : { 5, 8 }) {
-            test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {nr2, 1}, 1024, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));       
+            test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {nr2, 1}, 1024, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
         }
     }
     // folded tiles without a mask, with ALiBi, with sinks
