@@ -239,8 +239,7 @@ ggml_tensor * llama_model_inkling2::graph::convolve(
     if (dynamic) {
         const int64_t n_heads = dynamic->ne[0]/n_conv;
 
-        // cont required here so lag taps stay in one split slab
-        dynamic = ggml_cont_3d(ctx0, dynamic, n_conv, n_heads, n_tokens);
+        dynamic = ggml_reshape_3d(ctx0, dynamic, n_conv, n_heads, n_tokens);
 
         for (int64_t lag = 0; lag < n_conv; ++lag) {
             ggml_tensor * tap    = ggml_view_3d(ctx0, dynamic, 1, n_heads, n_tokens, dynamic->nb[1], dynamic->nb[2], lag*dynamic->nb[0]);
