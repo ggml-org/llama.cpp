@@ -2579,6 +2579,12 @@ struct llama_model_inkling2 : public llama_model_base {
 
         ggml_tensor * inp_out_ids = nullptr;
         ggml_tensor * tau         = nullptr; // log-scaled positions
+
+        // the normalized state stacks of mix(), keyed by their tensors
+        ggml_tensor * mix_stack(const std::vector<ggml_tensor *> & list);
+        std::map<std::vector<ggml_tensor *>, ggml_tensor *> mix_stacks;
+
+        std::map<int64_t, ggml_tensor *> zero_sinks; // by head count
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
