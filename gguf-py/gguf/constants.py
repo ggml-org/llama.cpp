@@ -740,6 +740,7 @@ class MODEL_ARCH(IntEnum):
     HUNYUAN_VL       = auto()
     HY_V3            = auto()
     HY_V4            = auto()
+    HY_V4_FLASH      = auto()
     SMOLLM3          = auto()
     GPT_OSS          = auto()
     LFM2             = auto()
@@ -1159,6 +1160,7 @@ class MODEL_TENSOR(IntEnum):
     INDEXER_COMPRESSOR_NORM = auto()
     INDEXER_KPOOL_GATE   = auto()
     INDEXER_KPOOL_APE    = auto()
+    INDEXER_KPOOL_VALUE  = auto()
     ATTN_V_GATE          = auto() # k2-horizon MoVA router
     ATTN_V_EXP           = auto() # k2-horizon MoVA value experts
     # vision
@@ -1541,6 +1543,10 @@ class MODEL_TENSOR(IntEnum):
     DSPARK_MARKOV_CTX_NORM = auto()  # rnn markov head: target feature norm
     ENGRAM_KV              = auto()
     ENGRAM_GATE            = auto()
+    ENGRAM_KV_B            = auto()
+    ENGRAM_LOOKUP_NORM     = auto()
+    ENGRAM_PRE_GAMMA       = auto()
+    ENGRAM_HC_SCALE        = auto()
     DFLASH_ATTN_CONV_BASE  = auto()
     DFLASH_ATTN_CONV_PROJ  = auto()
     DFLASH_FFN_CONV_BASE   = auto()
@@ -1763,6 +1769,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.HUNYUAN_VL:       "hunyuan_vl",
     MODEL_ARCH.HY_V3:            "hy_v3",
     MODEL_ARCH.HY_V4:            "hy_v4",
+    MODEL_ARCH.HY_V4_FLASH:      "hy_v4_flash",
     MODEL_ARCH.SMOLLM3:          "smollm3",
     MODEL_ARCH.GPT_OSS:          "gpt-oss",
     MODEL_ARCH.LFM2:             "lfm2",
@@ -2180,6 +2187,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.INDEXER_COMPRESSOR_NORM:   "blk.{bid}.indexer_compressor_norm",
     MODEL_TENSOR.INDEXER_KPOOL_GATE:        "blk.{bid}.indexer_compressor_gate",
     MODEL_TENSOR.INDEXER_KPOOL_APE:         "blk.{bid}.indexer_compressor_ape",
+    MODEL_TENSOR.INDEXER_KPOOL_VALUE:       "blk.{bid}.indexer_compressor_value",
     # vision
     MODEL_TENSOR.V_MMPROJ:                  "mm.{bid}",
     MODEL_TENSOR.V_MMPROJ_FC:               "mm.model.fc",
@@ -2602,6 +2610,10 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.DSPARK_MARKOV_CTX_NORM:    "markov_ctx_norm",
     MODEL_TENSOR.ENGRAM_KV:                 "blk.{bid}.engram_kv",
     MODEL_TENSOR.ENGRAM_GATE:               "blk.{bid}.engram_gate",
+    MODEL_TENSOR.ENGRAM_KV_B:               "blk.{bid}.engram_kv_b",
+    MODEL_TENSOR.ENGRAM_LOOKUP_NORM:        "blk.{bid}.engram_lookup_norm",
+    MODEL_TENSOR.ENGRAM_PRE_GAMMA:          "blk.{bid}.engram_pre_gamma",
+    MODEL_TENSOR.ENGRAM_HC_SCALE:           "blk.{bid}.engram_hc_scale",
     MODEL_TENSOR.DFLASH_ATTN_CONV_BASE:     "blk.{bid}.attn_conv_base",
     MODEL_TENSOR.DFLASH_ATTN_CONV_PROJ:     "blk.{bid}.attn_conv_proj",
     MODEL_TENSOR.DFLASH_FFN_CONV_BASE:      "blk.{bid}.ffn_conv_base",
@@ -6102,6 +6114,67 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN_SHEXP,
         MODEL_TENSOR.FFN_UP_SHEXP,
     ],
+    MODEL_ARCH.HY_V4_FLASH: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.HC_HEAD_FN,
+        MODEL_TENSOR.HC_HEAD_BASE,
+        MODEL_TENSOR.HC_HEAD_SCALE,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_SINKS,
+        MODEL_TENSOR.ATTN_Q_A,
+        MODEL_TENSOR.ATTN_Q_A_NORM,
+        MODEL_TENSOR.ATTN_Q_B,
+        MODEL_TENSOR.ATTN_KV_A_MQA,
+        MODEL_TENSOR.ATTN_KV_A_NORM,
+        MODEL_TENSOR.ATTN_K_B,
+        MODEL_TENSOR.ATTN_V_B,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.INDEXER_K_NORM,
+        MODEL_TENSOR.INDEXER_PROJ,
+        MODEL_TENSOR.INDEXER_ATTN_K,
+        MODEL_TENSOR.INDEXER_ATTN_Q_B,
+        MODEL_TENSOR.HC_ATTN_FN,
+        MODEL_TENSOR.HC_ATTN_BASE,
+        MODEL_TENSOR.HC_ATTN_SCALE,
+        MODEL_TENSOR.HC_FFN_FN,
+        MODEL_TENSOR.HC_FFN_BASE,
+        MODEL_TENSOR.HC_FFN_SCALE,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.FFN_POST_NORM,
+        MODEL_TENSOR.FFN_ROUTED_DOWN,
+        MODEL_TENSOR.FFN_ROUTED_UP,
+        MODEL_TENSOR.PER_LAYER_TOKEN_EMBD,
+        MODEL_TENSOR.ENGRAM_KV,
+        MODEL_TENSOR.ENGRAM_GATE,
+        MODEL_TENSOR.ENGRAM_KV_B,
+        MODEL_TENSOR.ENGRAM_LOOKUP_NORM,
+        MODEL_TENSOR.ENGRAM_PRE_GAMMA,
+        MODEL_TENSOR.ENGRAM_HC_SCALE,
+        MODEL_TENSOR.INDEXER_KPOOL_GATE,
+        MODEL_TENSOR.INDEXER_KPOOL_APE,
+        MODEL_TENSOR.INDEXER_KPOOL_VALUE,
+        MODEL_TENSOR.INDEXER_COMPRESSOR_NORM,
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+    ],
     MODEL_ARCH.SMOLLM3: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -7282,6 +7355,10 @@ MODEL_TENSOR_SKIP: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.ATTN_ROT_EMBD,
     ],
+    MODEL_ARCH.HY_V4_FLASH: [
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_ROT_EMBD,
+    ],
     MODEL_ARCH.XING4_0: [
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.ATTN_ROT_EMBD,
@@ -7570,6 +7647,7 @@ class VisionProjectorType:
     KOKORO = "kokoro" # audio generation: StyleTTS2 prosody predictor + iSTFTNet decoder
     TINY_VOCA = "tiny_voca" # audio generation: duration predictor, frame transformers, source-filter vocoder
     HUNYUANVL      = "hunyuanvl"
+    HY_V4_FLASH    = "hy_v4_flash"
     PARAKEET       = "parakeet"  # audio
     MINIMAXM3      = "minimax_m3"
     MINICPMV4_6    = "minicpmv4_6"

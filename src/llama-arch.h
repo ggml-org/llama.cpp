@@ -138,6 +138,7 @@ enum llm_arch {
     LLM_ARCH_HUNYUAN_VL,
     LLM_ARCH_HY_V3,
     LLM_ARCH_HY_V4,
+    LLM_ARCH_HY_V4_FLASH,
     LLM_ARCH_SMOLLM3,
     LLM_ARCH_OPENAI_MOE,
     LLM_ARCH_LFM2,
@@ -897,6 +898,7 @@ enum llm_tensor {
     LLM_TENSOR_INDEXER_COMPRESSOR_NORM,
     LLM_TENSOR_INDEXER_KPOOL_GATE,   // glm5-next: k-pool gate scores
     LLM_TENSOR_INDEXER_KPOOL_APE,    // glm5-next: k-pool position bias
+    LLM_TENSOR_INDEXER_KPOOL_VALUE,  // hy_v4_flash: what the k-pool actually pools
     LLM_TENSOR_FFN_GATE_TID2EID,
     LLM_TENSOR_NEXTN_PROJ_PRE,
     LLM_TENSOR_NEXTN_PROJ_POST,
@@ -923,6 +925,10 @@ enum llm_tensor {
     LLM_TENSOR_DSPARK_MARKOV_CTX_NORM,
     LLM_TENSOR_ENGRAM_KV,
     LLM_TENSOR_ENGRAM_GATE,
+    LLM_TENSOR_ENGRAM_KV_B,          // hy_v4_flash: bias on the fused key/value projections
+    LLM_TENSOR_ENGRAM_LOOKUP_NORM,   // hy_v4_flash: per-head RMSNorm of the looked-up rows
+    LLM_TENSOR_ENGRAM_PRE_GAMMA,     // hy_v4_flash: scales the normed value before the gate
+    LLM_TENSOR_ENGRAM_HC_SCALE,      // hy_v4_flash: per-hc per-channel additive gate offset
     LLM_TENSOR_DFLASH_ATTN_CONV_BASE,
     LLM_TENSOR_DFLASH_ATTN_CONV_PROJ,
     LLM_TENSOR_DFLASH_FFN_CONV_BASE,

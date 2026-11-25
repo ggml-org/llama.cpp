@@ -2469,6 +2469,100 @@ struct llama_model_hy_v4 : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
+// hy_v4 iHC, gated MLA and sinks, with sparse and sliding-window layers, sandwich norms and latent routed experts
+struct llama_model_hy_v4_flash : public llama_model_base {
+    llama_model_hy_v4_flash(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+    uint32_t graph_nodes_per_tensor() const override { return 32; }
+
+    // -1 when the layer has no Engram module, else its index among the Engram layers
+    int engram_index(int il) const;
+
+    // n-gram hash of module e: one row id and one validity per (token, column)
+    void engram_hash(int e, const llama_ubatch & ubatch, const std::vector<llama_token> & prev,
+            std::vector<int32_t> & ids, std::vector<float> & valid) const;
+
+    class llm_graph_input_pool;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
+
+        // iHC, same layout as hy_v4
+        struct hc_pre {
+            ggml_tensor * cur;
+            ggml_tensor * post;
+        };
+
+        // reduce the hc streams to one, weighted by the pre gates
+        ggml_tensor * build_hc_reduce(
+                ggml_tensor * x,
+                ggml_tensor * weights,
+                int il) const;
+
+        hc_pre build_hc_pre(
+                ggml_tensor * x,
+                ggml_tensor * hc_fn,
+                ggml_tensor * hc_scale,
+                ggml_tensor * hc_base,
+                int il) const;
+
+        ggml_tensor * build_hc_post(
+                ggml_tensor * x,
+                ggml_tensor * residual,
+                ggml_tensor * post,
+                int il) const;
+
+        ggml_tensor * build_hc_head(
+                ggml_tensor * x,
+                ggml_tensor * hc_fn,
+                ggml_tensor * hc_scale,
+                ggml_tensor * hc_base) const;
+
+        ggml_tensor * build_attention(
+                const llama_model & model,
+                llm_graph_input_attn_k_dsa_iswa * inp_attn,
+                llm_graph_input_pool * inp_pool,
+                ggml_tensor * cur,
+                ggml_tensor * inp_pos,
+                int il);
+
+        llm_graph_input_pool * build_inp_pool(llm_graph_input_attn_k_dsa_iswa * inp_attn);
+
+        // rotate only the trailing n_rot of each indexer head
+        ggml_tensor * build_indexer_rope(ggml_tensor * x, ggml_tensor * pos, int64_t n_idx,
+                float freq_base, int il) const;
+
+        // the kq_mask of the sparse layer, opened on the best scored pools plus the token's own pool
+        ggml_tensor * build_pool_select(
+                ggml_tensor * cur,
+                ggml_tensor * qr,
+                ggml_tensor * inp_pos,
+                float freq_base,
+                const llama_layer & layer,
+                llm_graph_input_attn_k_dsa_iswa * inp_attn,
+                llm_graph_input_pool * inp_pool,
+                ggml_tensor * kq_mask,
+                int il);
+
+        // routed experts run at n_expert_latent, the router and the shared expert at n_embd
+        ggml_tensor * build_latent_moe(
+                const llama_model & model,
+                ggml_tensor * cur,
+                int il) const;
+
+        // Engram adds its delta to the hc streams before the attention
+        ggml_tensor * build_engram(
+                const llama_model & model,
+                ggml_tensor * x,
+                ggml_tensor * rows,
+                ggml_tensor * valid,
+                int il) const;
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
 struct llama_model_hunyuan_vl : public llama_model_base {
     llama_model_hunyuan_vl(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;

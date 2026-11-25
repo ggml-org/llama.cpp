@@ -442,6 +442,7 @@ class TensorNameMap:
             "model.layers.layers.{bid}.post_mixer_norm.weight",  # plamo2
             "model.layers.{bid}.post_operator_norm",             # lfm3
             "model.layers.{bid}.post_attention_norm",            # domynedge
+            "model.layers.{bid}.self_attn.post_proj_norm",       # hy-v4-flash
         ),
 
         # Rotary embeddings
@@ -663,6 +664,8 @@ class TensorNameMap:
             "model.layers.{bid}.post_mlp_layernorm",          # glm-4-0414
             "model.layers.{bid}.post_ffn_norm",               # kolibri1
             "model.layers.layers.{bid}.post_mlp_norm.weight", # plamo2
+            "model.layers.{bid}.mlp.combine_output_norm",     # hy-v4-flash (MoE layers)
+            "model.layers.{bid}.mlp.post_fc2_norm",           # hy-v4-flash (dense layers)
             "model.layers.{bid}.feed_forward.up_proj",
             "model.layers.{bid}.post_moe_norm",               # grok-2
             "model.layers.{bid}.post_ffn_norm",               # lfm3
@@ -1289,10 +1292,12 @@ class TensorNameMap:
         # Kimi K3 latent MoE: routed experts operate in a down-projected space
         MODEL_TENSOR.FFN_ROUTED_DOWN: (
             "model.layers.{bid}.block_sparse_moe.routed_expert_down_proj",
+            "model.layers.{bid}.mlp.routed_expert_down_proj",  # hy-v4-flash
         ),
 
         MODEL_TENSOR.FFN_ROUTED_UP: (
             "model.layers.{bid}.block_sparse_moe.routed_expert_up_proj",
+            "model.layers.{bid}.mlp.routed_expert_up_proj",  # hy-v4-flash
         ),
 
         MODEL_TENSOR.FFN_ROUTED_NORM: (
@@ -2707,6 +2712,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MM_PRE_NORM: (
             "vit.perceive.before_rms", # HunyuanVL
+            "vit.perceive.norm",       # hy-v4-flash
         ),
 
         MODEL_TENSOR.V_TOK_IMG_BEGIN: (
