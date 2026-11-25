@@ -937,6 +937,7 @@ ggml_backend_reg_t ggml_backend_hrx_reg(void) {
 ggml_backend_t ggml_backend_hrx_init(size_t device) {
     ggml_backend_reg_t reg = ggml_backend_hrx_reg();
     if (device >= ggml_backend_reg_dev_count(reg)) {
+        GGML_LOG_ERROR("%s: invalid device %zu\n", __func__, device);
         return nullptr;
     }
     return ggml_backend_dev_init(ggml_backend_reg_dev_get(reg, device), nullptr);
