@@ -248,6 +248,12 @@ class Inkling2Model(TextModel):
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # PEFT names the wrapped projections (self_attn.k_proj.linear.weight) and the attention
+        # output gate (self_attn.o_proj.gate_proj.weight); neither is in the tensor map.
+        name = name.replace(".linear.", ".")
+        if name.endswith(".o_proj.gate_proj.weight"):
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_GATE, bid), data_torch
+            return
         if name in self._packed_experts:
             target = name.replace(".w13_weight", ".gate_up_proj").replace(".w2_weight", ".down_proj")
             yield self.map_tensor_name(target, try_suffixes=()) + ".weight", cast("Tensor", self._packed_experts[name])
