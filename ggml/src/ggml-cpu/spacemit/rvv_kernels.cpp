@@ -3234,11 +3234,18 @@ static void forward_gated_delta_net_one_chunk(
     GGML_ASSERT(K >= 1);
     const int64_t state_seq_stride = src_state->nb[3] / sizeof(float);
 
-    const int64_t per_thread = S_v + (K > 1 ? S_v * S_v : 0);
+    const ggml_tensor * src_pk    = dst->src[6];
+    const ggml_tensor * src_pv    = dst->src[7];
+    const ggml_tensor * src_pgb   = dst->src[8];
+    const ggml_tensor * src_n_rep = dst->src[9];
+    const int64_t n_pend = src_pk ? ggml_get_op_params_i32(dst, 1) : 0;
+    const bool    keep   = src_pk && ggml_get_op_params_i32(dst, 2) != 0;
+
+    const int64_t per_thread = S_v + ((K > 1 || keep) ? S_v * S_v : 0);
     const int ith = params->ith;
 
     float * delta      = (float *) params->wdata + ith * per_thread + CACHE_LINE_SIZE_F32;
-    float * state_work = K > 1 ? (delta + S_v) : nullptr;
+    float * state_work = K > 1 || keep ? (delta + S_v) : nullptr;
 
     const int64_t attn_score_elems    = S_v * H * n_tokens * n_seqs;
     const int64_t state_size_per_snap = S_v * S_v * H * n_seqs;
@@ -3262,12 +3269,87 @@ static void forward_gated_delta_net_one_chunk(
         const int64_t iq3 = iv3 / rq3;
         const int64_t ik3 = iv3 / rk3;
 
-        float * s_out = (K > 1)
+        float * s_out = (K > 1 || keep)
             ? state_work
             : state_out_base + (iv3 * H + iv1) * S_v * S_v;
 
         const float * s_in = state_in_base + iv3 * state_seq_stride + iv1 * S_v * S_v;
         memcpy(s_out, s_in, S_v * S_v * sizeof(float));
+
+        if (src_pk) {
+            const int64_t n_r = ((const int32_t *) src_n_rep->data)[iv3];
+            GGML_ASSERT(n_r >= 0 && n_r <= n_pend);
+
+            const char * pk  = (const char *) src_pk->data  + iv3 * src_pk->nb[3]  + ik1 * src_pk->nb[1];
+            const char * pv  = (const char *) src_pv->data  + iv3 * src_pv->nb[3]  + iv1 * src_pv->nb[1];
+            const char * pgb = (const char *) src_pgb->data + iv3 * src_pgb->nb[3] + iv1 * src_pgb->nb[1];
+
+            for (int64_t t = 0; t < n_r; t++) {
+                const float * k_d    = (const float *) (pk  + t * src_pk->nb[2]);
+                const float * v_d    = (const float *) (pv  + t * src_pv->nb[2]);
+                const float * g_d    = (const float *) (pgb + t * src_pgb->nb[2]);
+                const float beta_val = *(const float *) (pgb + (n_pend + t) * src_pgb->nb[2]);
+
+                if (kda) {
+                    for (int64_t i = 0; i < S_v; ++i) {
+                        delta[i] = expf(g_d[i]);
+                    }
+                    for (int64_t j = 0; j < S_v; ++j) {
+                        float * row = s_out + j * S_v;
+                        const float * d = delta;
+                        int64_t remaining = S_v;
+                        while (remaining > 0) {
+                            const size_t vl = __riscv_vsetvl_e32m4(remaining);
+                            vfloat32m4_t vr = __riscv_vle32_v_f32m4(row, vl);
+                            vfloat32m4_t vd = __riscv_vle32_v_f32m4(d, vl);
+                            vr = __riscv_vfmul_vv_f32m4(vr, vd, vl);
+                            __riscv_vse32_v_f32m4(row, vr, vl);
+                            row += vl;
+                            d += vl;
+                            remaining -= vl;
+                        }
+                    }
+                } else {
+                    const float gate = expf(g_d[0]);
+                    float * p = s_out;
+                    int64_t remaining = S_v * S_v;
+                    while (remaining > 0) {
+                        const size_t vl = __riscv_vsetvl_e32m4(remaining);
+                        vfloat32m4_t v = __riscv_vle32_v_f32m4(p, vl);
+                        v = __riscv_vfmul_vf_f32m4(v, gate, vl);
+                        __riscv_vse32_v_f32m4(p, v, vl);
+                        p += vl;
+                        remaining -= vl;
+                    }
+                }
+
+                for (int64_t j = 0; j < S_v; ++j) {
+                    const float sum = rvv_dot_f32(s_out + j * S_v, k_d, S_v);
+                    delta[j] = (v_d[j] - sum) * beta_val;
+                }
+
+                for (int64_t j = 0; j < S_v; ++j) {
+                    float * row = s_out + j * S_v;
+                    const float * k = k_d;
+                    const float dj = delta[j];
+                    int64_t remaining = S_v;
+                    while (remaining > 0) {
+                        const size_t vl = __riscv_vsetvl_e32m4(remaining);
+                        vfloat32m4_t vr = __riscv_vle32_v_f32m4(row, vl);
+                        vfloat32m4_t vk = __riscv_vle32_v_f32m4(k, vl);
+                        vr = __riscv_vfmacc_vf_f32m4(vr, dj, vk, vl);
+                        __riscv_vse32_v_f32m4(row, vr, vl);
+                        row += vl;
+                        k += vl;
+                        remaining -= vl;
+                    }
+                }
+            }
+
+            if (keep) {
+                memcpy(state_out_base + (iv3 * H + iv1) * S_v * S_v, s_out, S_v * S_v * sizeof(float));
+            }
+        }
 
         float * attn_data = attn_out_base + (iv3 * n_tokens * H + iv1) * S_v;
 
