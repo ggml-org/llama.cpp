@@ -14,11 +14,13 @@
 #include <openvino/op/gelu.hpp>
 #include <openvino/op/greater.hpp>
 #include <openvino/op/hard_sigmoid.hpp>
+#include <openvino/op/less.hpp>
 #include <openvino/op/log.hpp>
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/negative.hpp>
 #include <openvino/op/relu.hpp>
 #include <openvino/op/round.hpp>
+#include <openvino/op/select.hpp>
 #include <openvino/op/sigmoid.hpp>
 #include <openvino/op/softplus.hpp>
 #include <openvino/op/subtract.hpp>
@@ -125,8 +127,20 @@ OutputVector translate_unary_softplus(const NodeContext & context) {
     auto positive = std::make_shared<ov::op::v0::Relu>(input);
     auto abs = std::make_shared<ov::op::v0::Abs>(input);
     auto neg_abs = std::make_shared<ov::op::v0::Negative>(abs);
-    auto exp_neg_abs = std::make_shared<ov::op::v0::Exp>(neg_abs);
-    auto log_term = std::make_shared<ov::op::v0::Log>(std::make_shared<ov::op::v1::Add>(one, exp_neg_abs));
+    auto y = std::make_shared<ov::op::v0::Exp>(neg_abs);
+    // log1p(y) for y in (0, 1]. log(1 + y) loses a small y to rounding in 1 + y (all of it below x = -16 in f32),
+    // so y < 0.01 takes the series y - y^2/2 + y^3/3 - y^4/4, whose relative error there is below 2e-9.
+    auto c = [&](float v) {
+        return ov::op::v0::Constant::create(element_type, ov::Shape{}, {v});
+    };
+    std::shared_ptr<ov::Node> series = std::make_shared<ov::op::v1::Multiply>(y, c(0.25f));
+    series = std::make_shared<ov::op::v1::Subtract>(c(1.0f / 3), series);
+    series = std::make_shared<ov::op::v1::Subtract>(c(0.5f), std::make_shared<ov::op::v1::Multiply>(y, series));
+    series = std::make_shared<ov::op::v1::Subtract>(one, std::make_shared<ov::op::v1::Multiply>(y, series));
+    series = std::make_shared<ov::op::v1::Multiply>(y, series);
+    auto log_direct = std::make_shared<ov::op::v0::Log>(std::make_shared<ov::op::v1::Add>(one, y));
+    auto small = std::make_shared<ov::op::v1::Less>(y, c(0.01f));
+    auto log_term = std::make_shared<ov::op::v1::Select>(small, series, log_direct);
     auto res = std::make_shared<ov::op::v1::Add>(positive, log_term);
 
     return rename_outputs_with_suffix({res}, context.get_name());

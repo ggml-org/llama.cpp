@@ -272,6 +272,7 @@ class TensorNameMap:
             "model.layers.{bid}.pre_attention_layernorm",           # kormo
             "head.layers.{bid}.norm1",  # laya
             "model.layers.{bid}.attn_norm",                         # inkling2
+            "model.layers.{bid}.pre_attention_norm",                # domynedge
         ),
 
         # Attention norm 2
@@ -440,6 +441,8 @@ class TensorNameMap:
             "model.layers.{bid}.post_attn_norm",                 # kolibri1
             "model.layers.layers.{bid}.post_mixer_norm.weight",  # plamo2
             "model.layers.{bid}.post_operator_norm",             # lfm3
+            "model.layers.{bid}.post_attention_norm",            # domynedge
+            "model.layers.{bid}.self_attn.post_proj_norm",       # hy-v4-flash
         ),
 
         # Rotary embeddings
@@ -541,6 +544,66 @@ class TensorNameMap:
             "model.layers.{bid}.attention_input.query",  # inkling2
         ),
 
+        MODEL_TENSOR.LOOP_Q_CTRL_DOWN: (
+            "model.layers.{bid}.q_controller.down_proj",       # inkling2_loop
+            "model.layers.{bid}.controllers.attn.down_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_Q_CTRL_GAIN: (
+            "model.layers.{bid}.q_controller.gain_proj",       # inkling2_loop
+            "model.layers.{bid}.controllers.attn.gain_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_Q_CTRL_FORGET: (
+            "model.layers.{bid}.q_controller.forget_proj",       # inkling2_loop
+            "model.layers.{bid}.controllers.attn.forget_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_K_CTRL_DOWN: (
+            "model.layers.{bid}.k_controller.down_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.k.down_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_K_CTRL_GAIN: (
+            "model.layers.{bid}.k_controller.gain_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.k.gain_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_K_CTRL_FORGET: (
+            "model.layers.{bid}.k_controller.forget_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.k.forget_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_V_CTRL_DOWN: (
+            "model.layers.{bid}.v_controller.down_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.v.down_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_V_CTRL_GAIN: (
+            "model.layers.{bid}.v_controller.gain_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.v.gain_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_V_CTRL_FORGET: (
+            "model.layers.{bid}.v_controller.forget_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.v.forget_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_FFN_CTRL_DOWN: (
+            "model.layers.{bid}.mlp_controller.down_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.mlp.down_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_FFN_CTRL_GAIN: (
+            "model.layers.{bid}.mlp_controller.gain_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.mlp.gain_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_FFN_CTRL_FORGET: (
+            "model.layers.{bid}.mlp_controller.forget_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.mlp.forget_weight",  # inkling2_loop
+        ),
+
         # Feed-forward norm
         MODEL_TENSOR.FFN_NORM: (
             "layers.{bid}.moe_connection.norm",                              # metis16
@@ -579,6 +642,7 @@ class TensorNameMap:
             "layers.{bid}.pre_feedforward_layernorm",       # embeddinggemma
             "model.layers.{bid}.pre_ff_layernorm.weight",
             "model.layers.{bid}.pre_mlp_layernorm",        # afmoe
+            "model.layers.{bid}.pre_feedforward_norm",     # domynedge
         ),
 
         MODEL_TENSOR.FFN_PRE_NORM_2: (
@@ -600,9 +664,12 @@ class TensorNameMap:
             "model.layers.{bid}.post_mlp_layernorm",          # glm-4-0414
             "model.layers.{bid}.post_ffn_norm",               # kolibri1
             "model.layers.layers.{bid}.post_mlp_norm.weight", # plamo2
+            "model.layers.{bid}.mlp.combine_output_norm",     # hy-v4-flash (MoE layers)
+            "model.layers.{bid}.mlp.post_fc2_norm",           # hy-v4-flash (dense layers)
             "model.layers.{bid}.feed_forward.up_proj",
             "model.layers.{bid}.post_moe_norm",               # grok-2
             "model.layers.{bid}.post_ffn_norm",               # lfm3
+            "model.layers.{bid}.post_feedforward_norm",       # domynedge
         ),
 
         MODEL_TENSOR.FFN_POST_NORM_1: (
@@ -693,6 +760,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.mlp.dense_h_to_4h",                 # chatglm
             "transformer.h.{bid}.mlp.c_fc_1",                         # exaone
             "model.layers.{bid}.feed_forward.up_proj",                # llama4 jamba granite-hybrid
+            "model.layers.{bid}.feedforward.up_proj",                 # domynedge
             "transformer_encoder.{bid}.ffn.w12",                      # neobert
             "model.layers.{bid}.block_sparse_moe.up",                 # smallthinker
             "model.transformer.blocks.{bid}.up_proj",                 # llada
@@ -757,6 +825,7 @@ class TensorNameMap:
             "layers.{bid}.mlp.gate_proj",                     # qwen3-embedding
             "model.layers.{bid}.mlp.language_mlp.gate_proj",  # cogvlm
             "model.blocks.{bid}.mlp.mlp_gate",                # talkie
+            "model.layers.{bid}.feedforward.gate_proj",       # domynedge
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
@@ -926,6 +995,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.mlp.dense_4h_to_h",                 # chatglm
             "model.layers.h.{bid}.mlp.c_proj",                        # exaone
             "model.layers.{bid}.feed_forward.down_proj",              # llama4 jamba granite-hybrid
+            "model.layers.{bid}.feedforward.down_proj",               # domynedge
             "transformer_encoder.{bid}.ffn.w3",                       # neobert
             "model.layers.{bid}.block_sparse_moe.down",               # smallthinker
             "model.transformer.blocks.{bid}.ff_out",                  # llada
@@ -1001,6 +1071,7 @@ class TensorNameMap:
             "layers.{bid}.self_attn.k_norm",                                  # qwen3-embedding
             "model.layers.{bid}.self_attn.k_rope_only_layernorm",             # dots3note
             "model.layers.{bid}.attention.key_layernorm",                     # apertus
+            "model.layers.{bid}.attention.k_norm",                            # domynedge
         ),
 
         MODEL_TENSOR.ROPE_FREQS: (
@@ -1229,10 +1300,12 @@ class TensorNameMap:
         # Kimi K3 latent MoE: routed experts operate in a down-projected space
         MODEL_TENSOR.FFN_ROUTED_DOWN: (
             "model.layers.{bid}.block_sparse_moe.routed_expert_down_proj",
+            "model.layers.{bid}.mlp.routed_expert_down_proj",  # hy-v4-flash
         ),
 
         MODEL_TENSOR.FFN_ROUTED_UP: (
             "model.layers.{bid}.block_sparse_moe.routed_expert_up_proj",
+            "model.layers.{bid}.mlp.routed_expert_up_proj",  # hy-v4-flash
         ),
 
         MODEL_TENSOR.FFN_ROUTED_NORM: (
@@ -2647,6 +2720,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MM_PRE_NORM: (
             "vit.perceive.before_rms", # HunyuanVL
+            "vit.perceive.norm",       # hy-v4-flash
         ),
 
         MODEL_TENSOR.V_TOK_IMG_BEGIN: (

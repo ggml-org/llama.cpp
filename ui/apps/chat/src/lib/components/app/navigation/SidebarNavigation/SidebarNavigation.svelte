@@ -22,18 +22,19 @@
 		SIDEBAR_COLLAPSE_WIDTH,
 		SIDEBAR_COLLAPSED_WIDTH,
 		SIDEBAR_CONTENT_FADE_MS,
-		SIDEBAR_FOOTER_ITEMS,
 		SIDEBAR_MAX_WIDTH,
 		SIDEBAR_MIN_WIDTH,
 		SIDEBAR_OVERSTRETCH_PX,
 		SIDEBAR_REVEAL_ACTION_DELAY_MS,
 		SIDEBAR_SETTLE_MS,
-		SIDEBAR_TOGGLE_MS
+		SIDEBAR_TOGGLE_MS,
+		sidebarFooterItems
 	} from '#lib/constants/index.ts';
 	import { SidebarAction, TooltipSide } from '#lib/enums/index.ts';
 	import { useKeyboardShortcuts } from '#lib/hooks/use-keyboard-shortcuts.svelte.ts';
 	import { useMarqueeSelection } from '#lib/hooks/use-marquee-selection.svelte.ts';
 	import { RouterService } from '#lib/services/router.service.ts';
+	import { agenticMode } from '#lib/stores/agentic-mode.svelte.ts';
 	import {
 		chatStore,
 		conversationsStore,
@@ -568,7 +569,7 @@
 			'h-dvh md:h-[calc(100dvh-1.125rem)]',
 			// phone: it stays put under the page, which slides aside to uncover it
 			isOnMobile && 'bg-(--sidebar-reveal-bg)',
-			'md:rounded-(--sidebar-radius)',
+			'md:rounded-2xl',
 			'flex flex-col justify-between',
 			// desktop only: on a phone the background follows the reveal frame by frame
 			'md:transition-[width,padding,margin,background-color,box-shadow,backdrop-filter] md:duration-200 md:ease-out',
@@ -621,7 +622,7 @@
 								: 'Go to start'}
 						class="pointer-events-auto size-10 rounded-full! md:size-9 {isStripHidden
 							? 'bg-transparent! hover:bg-transparent!'
-							: 'matte-key bg-surface-raised! hover:bg-surface-raised! dark:bg-muted-foreground/15! dark:hover:bg-muted-foreground/15!'}"
+							: 'matte-key bg-card! hover:bg-card! dark:bg-muted-foreground/15! dark:hover:bg-muted-foreground/15!'}"
 						href={uiStore.isSidebarExpanded && !isLogoToggle ? ROUTES.START : undefined}
 						icon={isLogoToggle && logoHovered
 							? uiStore.isSidebarExpanded
@@ -645,7 +646,7 @@
 				{#if isOnMobile}
 					<ActionIcon
 						ariaLabel="Search"
-						class="matte-key size-10 rounded-full! bg-surface-raised! hover:bg-surface-raised! dark:bg-muted-foreground/15! dark:hover:bg-muted-foreground/15!"
+						class="matte-key size-10 rounded-full! bg-card! hover:bg-card! dark:bg-muted-foreground/15! dark:hover:bg-muted-foreground/15!"
 						icon={Search}
 						iconSize="size-4.5"
 						onclick={() => handleSidebarAction(SidebarAction.SEARCH)}
@@ -668,7 +669,9 @@
 				<!-- a phone has no footer: its items join these -->
 				<SidebarNavigationActions
 					class="px-2 md:my-3"
-					items={isOnMobile ? [...SIDEBAR_ACTIONS_ITEMS, ...SIDEBAR_FOOTER_ITEMS] : undefined}
+					items={isOnMobile
+						? [...SIDEBAR_ACTIONS_ITEMS, ...sidebarFooterItems(agenticMode.enabled)]
+						: undefined}
 					onAction={handleSidebarAction}
 					onNavigate={navigateBehind}
 				/>

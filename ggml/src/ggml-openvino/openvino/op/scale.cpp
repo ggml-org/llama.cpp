@@ -4,6 +4,7 @@
 
 #include <openvino/op/add.hpp>
 #include <openvino/op/constant.hpp>
+#include <openvino/op/convert.hpp>
 #include <openvino/op/multiply.hpp>
 #include <vector>
 
@@ -26,15 +27,20 @@ OutputVector translate_scale(const NodeContext & context) {
         return translate_recurrent_cache_reset(context);
     }
 
-    auto scaled = std::make_shared<ov::op::v1::Multiply>(process_view_input_new(context, 0), scale_node);
-
-    std::shared_ptr<ov::Node> res;
+    // Multiply and Add need matching types; compute f16 input in f32 and round once, as the CPU backend does.
+    auto input = process_view_input_new(context, 0);
+    const auto input_type = input.get_element_type();
+    if (input_type != ov::element::f32) {
+        input = std::make_shared<ov::op::v0::Convert>(input, ov::element::f32);
+    }
+    ov::Output<ov::Node> res = std::make_shared<ov::op::v1::Multiply>(input, scale_node);
     if (bias != 0.0f) {
         auto bias_node =
             std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{}, std::vector<float>{bias});
-        res = std::make_shared<ov::op::v1::Add>(scaled, bias_node);
-    } else {
-        res = scaled;
+        res = std::make_shared<ov::op::v1::Add>(res, bias_node);
+    }
+    if (input_type != ov::element::f32) {
+        res = std::make_shared<ov::op::v0::Convert>(res, input_type);
     }
 
     return rename_outputs_with_suffix({res}, context.get_name());

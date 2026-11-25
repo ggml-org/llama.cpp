@@ -7,20 +7,21 @@
 		SettingsChatImportExportTab,
 		SettingsChatMobileHeader,
 		SettingsChatToolsTab,
+		SettingsChatVoiceTab,
 		SettingsFooter,
 		SettingsResetButton
 	} from '#lib/components/app/settings/index.ts';
 	import {
 		NUMERIC_FIELDS,
 		POSITIVE_INTEGER_FIELDS,
-		SETTINGS_CHAT_SECTIONS,
 		SETTINGS_KEYS,
-		SETTINGS_SECTION_SLUGS
+		SETTINGS_SECTION_SLUGS,
+		settingsChatSections
 	} from '#lib/constants/index.ts';
 	import { ColorMode } from '#lib/enums/ui.enums.ts';
+	import { agenticMode } from '#lib/stores/agentic-mode.svelte.ts';
 	import { modelsStore, serverStore, settingsStore } from '#lib/stores/index.ts';
 	import type { SettingsSection, SettingsSectionTitle } from '#lib/types/index.ts';
-	import { applySurfaceTheme } from '#lib/utils/index.ts';
 	import { setMode } from 'mode-watcher';
 	import { fade } from 'svelte/transition';
 	interface Props {
@@ -33,10 +34,12 @@
 
 	let { initialSection, mobileHeaderClass, onClose, onSectionChange }: Props = $props();
 
+	const sections = $derived(settingsChatSections(agenticMode.enabled));
+
 	let activeSlug = $derived(initialSection ?? 'general');
 
 	function handleSectionChange(section: SettingsSectionTitle) {
-		const found = SETTINGS_CHAT_SECTIONS.find((s) => s.title === section);
+		const found = sections.find((s) => s.title === section);
 
 		if (found) {
 			activeSlug = found.slug;
@@ -46,8 +49,7 @@
 	}
 
 	let currentSection = $derived(
-		SETTINGS_CHAT_SECTIONS.find((section) => section.slug === activeSlug) ||
-			SETTINGS_CHAT_SECTIONS[0]
+		sections.find((section) => section.slug === activeSlug) || sections[0]
 	);
 
 	let localConfig: SettingsConfigType = $state({ ...settingsStore.config });
@@ -90,9 +92,6 @@
 	function handleConfigChange(key: string, value: string | boolean) {
 		localConfig[key] = value;
 
-		// the surface theme previews at once, like the colour theme
-		if (key === SETTINGS_KEYS.SURFACE_THEME) applySurfaceTheme(value);
-
 		// discover needs the hub metadata reads: checking it turns the hub on,
 		// unchecking it turns the hub back off, so the checkbox never lies
 		if (key === SETTINGS_KEYS.ENABLE_DISCOVER_MODELS) {
@@ -107,7 +106,6 @@
 	function handleReset() {
 		localConfig = { ...settingsStore.config };
 		setMode(localConfig.theme as ColorMode);
-		applySurfaceTheme(localConfig[SETTINGS_KEYS.SURFACE_THEME]);
 		mobileHeader?.updateCarousel();
 	}
 
@@ -135,9 +133,9 @@
 
 				if (!isNaN(numValue)) {
 					if ((POSITIVE_INTEGER_FIELDS as readonly string[]).includes(field)) {
-						const entryByMinMax = SETTINGS_CHAT_SECTIONS.flatMap(
-							(section) => section.fields ?? []
-						).find((entry) => entry.key === field);
+						const entryByMinMax = sections
+							.flatMap((section) => section.fields ?? [])
+							.find((entry) => entry.key === field);
 						const lo = entryByMinMax?.min ?? 1;
 						const hi = entryByMinMax?.max ?? Number.POSITIVE_INFINITY;
 
@@ -167,7 +165,7 @@
 		<SettingsChatDesktopSidebar
 			isActive={(section: SettingsSection) => section.slug === activeSlug}
 			onSectionChange={handleSectionChange}
-			sections={SETTINGS_CHAT_SECTIONS}
+			{sections}
 		/>
 
 		<SettingsChatMobileHeader
@@ -175,7 +173,7 @@
 			class={mobileHeaderClass}
 			isActive={(section: SettingsSection) => section.slug === activeSlug}
 			onSectionChange={handleSectionChange}
-			sections={SETTINGS_CHAT_SECTIONS}
+			{sections}
 		/>
 
 		<div class="mx-auto max-w-2xl px-4 flex-1 md:mt-4">
@@ -185,6 +183,12 @@
 						<SettingsChatToolsTab />
 					{:else if currentSection.slug === SETTINGS_SECTION_SLUGS.IMPORT_EXPORT}
 						<SettingsChatImportExportTab />
+					{:else if currentSection.slug === SETTINGS_SECTION_SLUGS.VOICE && currentSection.fields}
+						<SettingsChatVoiceTab
+							fields={currentSection.fields}
+							{localConfig}
+							onConfigChange={handleConfigChange}
+						/>
 					{:else if currentSection.fields}
 						<div class="space-y-6">
 							<SettingsChatFields
@@ -209,7 +213,9 @@
 				</div>
 
 				<div class="mt-8 border-t border-border/30 pt-6 pb-6">
-					<p class="text-xs text-muted-foreground">Settings are saved in browser's localStorage</p>
+					<p class="text-caption text-muted-foreground">
+						Settings are saved in browser's localStorage
+					</p>
 				</div>
 			</div>
 

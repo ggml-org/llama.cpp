@@ -197,14 +197,14 @@ ggml_tensor * llama_model_raon1_mini::graph::build_rda_layer(
     const int64_t n_seqs       = ubatch.n_seqs;
 
     ggml_tensor * conv_states_all = inp_rs->mctx->get_r_l(il);
-    ggml_tensor * conv_states_seq = build_rs(inp_rs, conv_states_all, hparams.n_embd_r(), n_seqs);
+    ggml_tensor * conv_states_seq = build_rs(inp_rs, conv_states_all, conv_states_all->ne[0], n_seqs);
 
     ggml_tensor * Qcur = build_kda_conv1d(inp_rs, conv_states_all, conv_states_seq, 0, build_lora_mm(layer.wq, cur),
-            layer.ssm_q_conv, d_conv, head_dim, n_head, n_seq_tokens, n_seqs);
+            layer.ssm_q_conv, d_conv, head_dim, n_head, n_seq_tokens, n_seqs, il);
     ggml_tensor * Kcur = build_kda_conv1d(inp_rs, conv_states_all, conv_states_seq, 1, build_lora_mm(layer.wk, cur),
-            layer.ssm_k_conv, d_conv, head_dim, n_head, n_seq_tokens, n_seqs);
+            layer.ssm_k_conv, d_conv, head_dim, n_head, n_seq_tokens, n_seqs, il);
     ggml_tensor * Vcur = build_kda_conv1d(inp_rs, conv_states_all, conv_states_seq, 2, build_lora_mm(layer.wv, cur),
-            layer.ssm_v_conv, d_conv, head_dim, n_head, n_seq_tokens, n_seqs);
+            layer.ssm_v_conv, d_conv, head_dim, n_head, n_seq_tokens, n_seqs, il);
     cb(Qcur, "rda_q_conv", il);
     cb(Kcur, "rda_k_conv", il);
     cb(Vcur, "rda_v_conv", il);

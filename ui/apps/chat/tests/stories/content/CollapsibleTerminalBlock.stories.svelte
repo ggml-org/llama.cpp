@@ -15,7 +15,7 @@
 <Story asChild name="Default">
 	<div class="w-[36rem]">
 		<CollapsibleTerminalBlock icon={SquareTerminal} open subtitle="exit 0" title="cargo test">
-			<pre class="p-3 font-mono text-xs">running 3 tests
+			<pre class="p-3 font-mono text-caption">running 3 tests
 test borrow::longest ... ok
 test borrow::shorter ... ok
 test borrow::equal ... ok

@@ -38,11 +38,11 @@
 			class="flex-row items-center gap-2 border-b border-border/40 p-4"
 			showCloseButton={false}
 		>
-			<Dialog.Title class="text-sm font-semibold">Chat template</Dialog.Title>
+			<Dialog.Title class="text-body-sm font-semibold">Chat template</Dialog.Title>
 
 			<Button
 				aria-label="Copy chat template"
-				class="h-auto gap-1.5 px-2 py-1 text-xs"
+				class="h-auto gap-1.5 px-2 py-1 text-caption"
 				onclick={() => void copy()}
 				size="sm"
 				variant="secondary"

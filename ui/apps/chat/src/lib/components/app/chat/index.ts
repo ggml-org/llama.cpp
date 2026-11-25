@@ -80,6 +80,14 @@ export { default as ChatAttachmentsListItemMcpResource } from './ChatAttachments
 export { default as ChatAttachmentsListItemThumbnailFile } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItemThumbnailFile.svelte';
 
 /**
+ * An audio attachment drawn as a clip: a playable waveform (peaks computed from
+ * the audio when it was stored without them) and, for a voice message, its
+ * transcript under it on hover, focus or a tap, with the transcribing and failed
+ * states. `sm` in the chat form, removable; `md` in a sent message.
+ */
+export { default as ChatAttachmentsListItemVoice } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItemVoice.svelte';
+
+/**
  * Thumbnail for image attachments with lazy loading and error fallback.
  * Displays image preview with configurable dimensions. Falls back to placeholder
  * on load error.
@@ -170,11 +178,19 @@ export { default as ChatForm } from './ChatForm/ChatForm.svelte';
 export { default as ChatFormActionsAdd } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionsAdd.svelte';
 
 /**
- * Audio recording button with real-time recording indicator. Records audio
- * and converts to WAV format for upload. Only visible when the active model
- * supports audio modality and setting for automatic audio input is enabled. Shows recording duration while active.
+ * Microphone button: starts a voice message or a dictation (its label says which),
+ * or, disabled, says why no model can take a recording; while recording it is the
+ * stop button. Shown on an empty message when voice input is available and the
+ * setting for the microphone on empty input is on.
  */
 export { default as ChatFormActionRecord } from './ChatForm/ChatFormActions/ChatFormActionRecord.svelte';
+
+/**
+ * The actions row while the chat form records: cancel, the live waveform and the
+ * elapsed time, and stop, with a voice message's streaming text under the waveform
+ * and a waiting state while dictated text is transcribed after recording.
+ */
+export { default as ChatFormActionsRecording } from './ChatForm/ChatFormActions/ChatFormActionsRecording.svelte';
 
 /**
  * Container for chat form action buttons. Arranges file attachment, audio record,
@@ -434,7 +450,7 @@ export { default as ChatMessages } from './ChatMessages/ChatMessages.svelte';
  * - Edit creates new branch or preserves responses
  *
  * **Assistant Messages:**
- * - Renders content via MarkdownContent or ChatMessageAgenticContent
+ * - Renders a plain reply via ChatMessageAssistantResponse, an agentic one via ChatMessageAgentTrace
  * - Shows model info badge (when enabled)
  * - Regenerate creates sibling with optional model override
  * - Continue action for incomplete responses
@@ -460,39 +476,26 @@ export { default as ChatMessages } from './ChatMessages/ChatMessages.svelte';
 export { default as ChatMessage } from './ChatMessages/ChatMessage/ChatMessage.svelte';
 
 /**
- * **ChatMessageAgenticContent** - Agentic workflow output display
+ * **ChatMessageAgentTrace** - An assistant reply that ran the agentic loop
  *
- * Specialized renderer for assistant messages with tool calls and reasoning.
- * Derives display sections from structured message data (toolCalls, reasoningContent,
- * and child tool result messages) and renders them as interactive collapsible sections.
+ * Shows what the agent did as a log: tool calls and the reasoning around them
+ * fold into one group row whose title sums them up ("Ran 2 commands, read 1
+ * file"), or says what is happening now while the reply is live, followed by
+ * the answer. A reply without tool calls renders through
+ * ChatMessageAssistantResponse instead.
  *
  * **Architecture:**
  * - Uses `deriveAgenticSections()` from `#lib/utils/index.ts` to build sections from structured data
- * - Renders sections as CollapsibleContentBlock components
- * - Handles streaming state for progressive content display
- * - Falls back to MarkdownContent for plain text sections
- *
- * **Execution States:**
- * - **Streaming**: Animated spinner, block expanded, auto-scroll enabled
- * - **Pending**: Waiting indicator for queued tool calls
- * - **Completed**: Static display, block collapsed by default
- *
- * **Features:**
- * - JSON arguments syntax highlighting via SyntaxHighlightedCode
- * - Tool results display with formatting
- * - Plain text sections between markers rendered as markdown
- * - Smart collapse defaults (expanded while streaming, collapsed when done)
+ * - Groups runs of calls and reasoning with `groupToolCallRuns()` into ChatMessageToolCallGroup rows
+ * - Renders each call through ChatMessageToolCallBlock, text through MarkdownContent
+ * - Carries the live status, the task timer and the permission and continue cards
  *
  * @example
  * ```svelte
- * <ChatMessageAgenticContent
- *   content={message.content}
- *   {message}
- *   isStreaming={isGenerating}
- * />
+ * <ChatMessageAgentTrace {message} {toolMessages} isStreaming={isGenerating} />
  * ```
  */
-export { default as ChatMessageAgenticContent } from './ChatMessages/ChatMessageAgenticContent.svelte';
+export { default as ChatMessageAgentTrace } from './ChatMessages/ChatMessageAgentTrace.svelte';
 export { default as ChatMessageActionCardPermissionRequest } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardPermissionRequest.svelte';
 export { default as ChatMessageActionCard } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCard.svelte';
 export { default as ChatMessageActionCardContinueRequest } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardContinueRequest.svelte';
@@ -567,14 +570,20 @@ export { default as ChatMessageMcpPromptContent } from './ChatMessages/ChatMessa
 
 /**
  * Assistant message display component. Renders assistant responses with left-aligned styling.
- * Supports both plain markdown content (via MarkdownContent) and agentic content with tool calls
- * (via ChatMessageAgenticContent). Shows model info badge, statistics, and action buttons.
+ * A basic chat reply renders as reasoning and text (via ChatMessageAssistantResponse); a reply
+ * that ran the agentic loop renders as an Agent Trace (via ChatMessageAgentTrace). Shows model
+ * info badge, statistics, and action buttons.
  * Handles streaming state with real-time content updates.
  */
 export { default as ChatMessageAssistant } from './ChatMessages/ChatMessage/ChatMessageAssistant/ChatMessageAssistant.svelte';
 export { default as ChatMessageAssistantModel } from './ChatMessages/ChatMessage/ChatMessageAssistant/ChatMessageAssistantModel.svelte';
 export { default as ChatMessageAssistantProcessingInfo } from './ChatMessages/ChatMessage/ChatMessageAssistant/ChatMessageAssistantProcessingInfo.svelte';
 export { default as ChatMessageAssistantRawOutput } from './ChatMessages/ChatMessage/ChatMessageAssistant/ChatMessageAssistantRawOutput.svelte';
+/**
+ * A basic chat reply: the model's reasoning, if any, and its answer. Replies
+ * that ran the agentic loop render as ChatMessageAgentTrace instead.
+ */
+export { default as ChatMessageAssistantResponse } from './ChatMessages/ChatMessage/ChatMessageAssistant/ChatMessageAssistantResponse.svelte';
 export { default as ChatMessageAssistantStatistics } from './ChatMessages/ChatMessage/ChatMessageAssistant/ChatMessageAssistantStatistics.svelte';
 
 /**
@@ -705,3 +714,16 @@ export { default as ChatScreenServerError } from './ChatScreen/ChatScreenServerE
  * Renders nothing otherwise. Shown inside ChatScreen only on an active conversation route.
  */
 export { default as ChatScreenStreamResumeStatus } from './ChatScreen/ChatScreenStreamResumeStatus.svelte';
+
+/**
+ * A new chat's custom system message as an attachment in the chat form, with the system
+ * message's dashed look, until the first message. Clicking it opens the message in a dialog
+ * to edit; it can be removed.
+ */
+export { default as ChatFormSystemMessageAttachment } from './ChatForm/ChatFormSystemMessageAttachment.svelte';
+
+/**
+ * Chip under the chat form that opens the conversation's system message for editing.
+ * Shown whenever the conversation has one.
+ */
+export { default as ChatFormSystemMessageChip } from './ChatForm/ChatFormSystemMessageChip.svelte';

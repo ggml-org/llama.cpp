@@ -43,23 +43,25 @@ GGML_OP_CONVERTER(translate_glu_geglu);
 GGML_OP_CONVERTER(translate_glu_geglu_quick);
 GGML_OP_CONVERTER(translate_set_rows);
 GGML_OP_CONVERTER(translate_cpy);
+GGML_OP_CONVERTER(translate_argmax);
 GGML_OP_CONVERTER(translate_argsort);
 GGML_OP_CONVERTER(translate_top_k);
 GGML_OP_CONVERTER(translate_flash_attn_ext);
 GGML_OP_CONVERTER(translate_clamp);
 GGML_OP_CONVERTER(translate_pad);
 GGML_OP_CONVERTER(translate_ssm_conv);
+GGML_OP_CONVERTER(translate_ssm_scan);
 GGML_OP_CONVERTER(translate_gated_delta_net);
+// The device runs GatedDeltaNet with a gate per key dimension; otherwise the translator falls back to its reference loop
+bool gdn_per_key_gate_supported();
 #ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
 OutputVector translate_recurrent_gated_delta_net(const NodeContext & context, const OutputVector & cache_inputs);
 #endif
 GGML_OP_CONVERTER(translate_repeat);
 GGML_OP_CONVERTER(translate_cumsum);
-GGML_OP_CONVERTER(translate_fill);
 GGML_OP_CONVERTER(translate_set);
 GGML_OP_CONVERTER(translate_diag);
 GGML_OP_CONVERTER(translate_tri);
-GGML_OP_CONVERTER(translate_solve_tri);
 GGML_OP_CONVERTER(translate_pool_1d);
 GGML_OP_CONVERTER(translate_pool_2d);
 GGML_OP_CONVERTER(translate_roll);

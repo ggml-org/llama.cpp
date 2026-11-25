@@ -3,18 +3,21 @@
 	import * as DropdownMenu from '@ggml-org/llama-ui/ui/dropdown-menu';
 	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { cn } from '@ggml-org/llama-ui/utils';
-	import { File, Folder, Image, MessageSquare, Mic, Plus, Video } from '@lucide/svelte';
+	import { File, Folder, MessageSquare, Plus } from '@lucide/svelte';
 	import { ChatFormActionAddToolsSubmenu } from '#lib/components/app/index.ts';
 	import {
 		ATTACHMENT_FILE_ITEMS,
 		ATTACHMENT_MENU_TEXT,
 		ATTACHMENT_MODALITY_TEXT,
-		ATTACHMENT_TOOLTIP_TEXT,
-		ICON_CLASS_DEFAULT
+		attachmentTooltipText,
+		ICON_CLASS_DEFAULT,
+		MODALITY_ICONS
 	} from '#lib/constants/index.ts';
 	import { getChatFormActionsContext } from '#lib/contexts/index.ts';
-	import { AttachmentAction, AttachmentItemEnabledWhen } from '#lib/enums/index.ts';
+	import { AttachmentAction, AttachmentItemEnabledWhen, ModelModality } from '#lib/enums/index.ts';
 	import { useAttachmentMenu } from '#lib/hooks/use-attachment-menu.svelte.ts';
+	import { agenticMode } from '#lib/stores/agentic-mode.svelte.ts';
+	import type { Component } from 'svelte';
 
 	interface Props {
 		class?: string;
@@ -44,17 +47,17 @@
 		}
 	);
 
-	const FILE_MODALITY_ICONS: Record<string, { icon: typeof Image; label: string }> = {
+	const FILE_MODALITY_ICONS: Record<string, { icon: Component; label: string }> = {
 		[AttachmentItemEnabledWhen.HAS_AUDIO_MODALITY]: {
-			icon: Mic,
+			icon: MODALITY_ICONS[ModelModality.AUDIO],
 			label: ATTACHMENT_MODALITY_TEXT[AttachmentItemEnabledWhen.HAS_AUDIO_MODALITY]
 		},
 		[AttachmentItemEnabledWhen.HAS_VIDEO_MODALITY]: {
-			icon: Video,
+			icon: MODALITY_ICONS[ModelModality.VIDEO],
 			label: ATTACHMENT_MODALITY_TEXT[AttachmentItemEnabledWhen.HAS_VIDEO_MODALITY]
 		},
 		[AttachmentItemEnabledWhen.HAS_VISION_MODALITY]: {
-			icon: Image,
+			icon: MODALITY_ICONS[ModelModality.VISION],
 			label: ATTACHMENT_MODALITY_TEXT[AttachmentItemEnabledWhen.HAS_VISION_MODALITY]
 		}
 	};
@@ -78,11 +81,11 @@
 						class={cn(
 							// ghost brings no fill of its own for the muted composer surface to fight over
 							buttonVariants({ variant: 'ghost' }),
-							'file-upload-button matte-key size-8 [--button-shadow:var(--chat-form-key-shadow)] cursor-pointer rounded-full bg-background p-0 dark:bg-muted-foreground/15'
+							'file-upload-button matte-key size-8 [--button-shadow:var(--elevation-key)] cursor-pointer rounded-full bg-background p-0 dark:bg-muted-foreground/15'
 						)}
 						disabled={chatFormActions.disabled}
 					>
-						<span class="sr-only">{ATTACHMENT_TOOLTIP_TEXT}</span>
+						<span class="sr-only">{attachmentTooltipText(agenticMode.enabled)}</span>
 
 						<Plus class={ICON_CLASS_DEFAULT} />
 					</DropdownMenu.Trigger>
@@ -90,7 +93,7 @@
 			</Tooltip.Trigger>
 
 			<Tooltip.Content>
-				<p>{ATTACHMENT_TOOLTIP_TEXT}</p>
+				<p>{attachmentTooltipText(agenticMode.enabled)}</p>
 			</Tooltip.Content>
 		</Tooltip.Root>
 
@@ -158,7 +161,9 @@
 				</DropdownMenu.Item>
 			{/if}
 
-			<ChatFormActionAddToolsSubmenu />
+			{#if agenticMode.enabled}
+				<ChatFormActionAddToolsSubmenu />
+			{/if}
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
 </div>

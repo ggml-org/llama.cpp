@@ -182,13 +182,7 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     // Manual GQA attention: enabled by default on GPU in stateless mode.
     // Set GGML_OPENVINO_MANUAL_GQA_ATTN to a positive value (e.g. 1) to force-enable,
     // or to 0 to force-disable. Unset falls back to the device-based default.
-    static const bool manual_gqa_enabled = []() {
-        const char * env = ggml_openvino_getenv_str("GGML_OPENVINO_MANUAL_GQA_ATTN");
-        if (env != nullptr) {
-            return ggml_openvino_getenv_int("GGML_OPENVINO_MANUAL_GQA_ATTN") > 0;
-        }
-        return ggml_openvino_is_gpu();
-    }();
+    static const bool manual_gqa_enabled = ggml_openvino_manual_gqa_enabled();
     // The manual path reshapes Q, K, V and the output with one head size; models whose K/V head sizes differ
     // from Q's (e.g. MLA) take the SDPA path.
     const bool same_head_size = k_shape[3] == q_shape[3] && v_shape[3] == q_shape[3];

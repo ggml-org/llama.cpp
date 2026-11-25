@@ -452,6 +452,16 @@ static __device__ __forceinline__ ggml_cuda_thread_mask_t ggml_cuda_ballot(int p
     return __ballot_sync(mask, predicate);
 }
 
+static __device__ __forceinline__ int ggml_cuda_popc(ggml_cuda_thread_mask_t x) {
+    static_assert(sizeof(ggml_cuda_thread_mask_t) == 4 || sizeof(ggml_cuda_thread_mask_t) == 8, "unsupported thread mask type");
+    if constexpr (sizeof(ggml_cuda_thread_mask_t) == 4) {
+        return __popc(x);
+    } else {
+        return __popcll(x);
+    }
+}
+template<typename T> static __device__ __forceinline__ int ggml_cuda_popc(T x) = delete; // Makes implicit type casts result in an error.
+
 static __device__ __forceinline__ int ggml_cuda_all(int predicate, ggml_cuda_thread_mask_t mask = GGML_CUDA_FULL_THREAD_MASK) {
     return __all_sync(mask, predicate);
 }
@@ -901,7 +911,7 @@ static __device__ __forceinline__ float ggml_cuda_ue4m3_to_fp32(uint8_t x) {
     // but CDNA3 supports only e4m3_fnuz (no inf).
     const uint32_t bits = x * (x != 0x7F && x != 0xFF); // Convert NaN to 0.0f to match CPU implementation.
     const __hip_fp8_e4m3_fnuz xf = *reinterpret_cast<const __hip_fp8_e4m3_fnuz *>(&bits);
-    return static_cast<float>(xf) / 2;
+    return static_cast<float>(xf);
 #else
 #if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP)
     const uint32_t bits = x * (x != 0x7F && x != 0xFF); // Convert NaN to 0.0f to match CPU implementation.
@@ -1036,6 +1046,12 @@ static const uint3 init_fastdiv_values(uint64_t d_64) {
     uint32_t L = 0;
     while (L < 32 && (uint32_t{ 1 } << L) < d) {
         L++;
+        if (L == 32) {
+            // Shifting uint32_t by 32 to the right is undefined behavior.
+            // On NVIDIA it will produce 0.
+            // On AMD the value by which is shifted is masked with & 31 so it is shifting by 0 bits.
+            GGML_ABORT("undefined behavior in fastdiv");
+        }
     }
 
     uint32_t mp = (uint32_t) ((uint64_t{ 1 } << 32) * ((uint64_t{ 1 } << L) - d) / d + 1);

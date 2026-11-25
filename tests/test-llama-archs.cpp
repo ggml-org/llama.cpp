@@ -304,12 +304,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             || arch == LLM_ARCH_MISTRAL4
             || arch == LLM_ARCH_MISTRAL_LARGE4
             || arch == LLM_ARCH_HY_V4
+            || arch == LLM_ARCH_HY_V4_FLASH
             || arch == LLM_ARCH_XING4_0) {
         n_embd = 128;
         n_head = 1;
         n_ff   = 192;
         if (arch == LLM_ARCH_MISTRAL_LARGE4) {
             n_layer = 4; // cover NoPE, shared indexer and KV sharing layers
+        }
+        if (arch == LLM_ARCH_HY_V4_FLASH) {
+            n_layer = 4; // dense + MoE across both sparse and sliding attention layers
         }
     } else if (arch == LLM_ARCH_GLM5_NEXT) {
         // several heads so that -sm tensor can split them and the MLA flash attention has GQA > 1
@@ -327,7 +331,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_vocab = 3072; // TODO: should be 4096, but user code cannot get `n_vocab_out` yet [TAG_LLAMA_N_VOCAB_OUT]
     } else if (arch == LLM_ARCH_HRM_TEXT) {
         n_layer = 6; // 1 layer per stack x 2 h-cycles x (2 l-cycles + 1) cache slots
-    } else if (arch == LLM_ARCH_INKLING2) {
+    } else if (arch == LLM_ARCH_INKLING2 || arch == LLM_ARCH_INKLING2_LOOP) {
         n_embd  = 128;
         n_head  = 4;
         n_ff    = 24;
@@ -383,13 +387,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     if (arch == LLM_ARCH_PLAMO2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE ||
             arch == LLM_ARCH_GRANITE_HYBRID || arch == LLM_ARCH_LFM2 || arch == LLM_ARCH_LFM2MOE || arch == LLM_ARCH_LFM3 ||
             arch == LLM_ARCH_KIMI_LINEAR || arch == LLM_ARCH_BAILINGMOE3 || arch == LLM_ARCH_KIMI_K3 || arch == LLM_ARCH_KIMI_K31 ||
-            arch == LLM_ARCH_GLM5_NEXT || arch == LLM_ARCH_RAON1_MINI
+            arch == LLM_ARCH_GLM5_NEXT || arch == LLM_ARCH_HY_V4_FLASH || arch == LLM_ARCH_RAON1_MINI
             ) {
         GGML_ASSERT(n_layer >= 2);
         std::vector<uint32_t> n_head_per_layer;
         n_head_per_layer.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
-            n_head_per_layer.push_back(il == 1 ? 0 : n_head);
+            // hy_v4_flash: the odd layers are sliding-window, with twice the heads
+            n_head_per_layer.push_back(arch == LLM_ARCH_HY_V4_FLASH
+                    ? (il % 2 ? 2*n_head : n_head)
+                    : (il == 1 ? 0 : n_head));
         }
         // GLM5 next KDA heads come from the uniform head count, only head_count_kv is per layer.
         if (arch == LLM_ARCH_GLM5_NEXT || arch == LLM_ARCH_RAON1_MINI) {
@@ -401,7 +408,12 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         } else {
             ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head_per_layer);
         }
-        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_per_layer);
+        if (arch == LLM_ARCH_HY_V4_FLASH) {
+            // MLA-as-MQA: one latent KV head on every layer, whatever the query head count
+            ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, uint32_t(1));
+        } else {
+            ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_per_layer);
+        }
     } else if (arch == LLM_ARCH_METIS16) {
         // the layer types repeat in every pass
         std::vector<uint32_t> n_head_kv_per_layer;
@@ -432,6 +444,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             || arch == LLM_ARCH_RAON1_MINI
             || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_HY_V4
+            || arch == LLM_ARCH_HY_V4_FLASH
             || arch == LLM_ARCH_MISTRAL4
             || arch == LLM_ARCH_MISTRAL_LARGE4
             || arch == LLM_ARCH_XING4_0) {
@@ -499,15 +512,22 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern);
     } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_SPARK2_5 ||
             arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_GRANITE_SWA || arch == LLM_ARCH_DOTS3NOTE ||
-            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_FLINT || arch == LLM_ARCH_BEAM || arch == LLM_ARCH_RICURSIVE) {
+            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_FLINT || arch == LLM_ARCH_BEAM || arch == LLM_ARCH_RICURSIVE || arch == LLM_ARCH_DOMYN_EDGE ||
+            arch == LLM_ARCH_HY_V4_FLASH) {
         std::vector<uint32_t> pattern;
         pattern.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
             pattern.push_back(il % 2);
         }
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern);
-        if (arch == LLM_ARCH_FLINT) {
+        if (arch == LLM_ARCH_FLINT || arch == LLM_ARCH_DOMYN_EDGE) {
             ms.add_kv(LLM_KV_ATTENTION_ROPE_PATTERN, pattern);
+        }
+        if (arch == LLM_ARCH_DOMYN_EDGE) {
+            // SWA (rope) layers use a smaller head dim than the full-attention (nope) layers
+            ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH_SWA,   n_embd_head/2);
+            ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_SWA, n_embd_head/2);
+            ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT_SWA, n_embd_head/2);
         }
     } else if (arch == LLM_ARCH_LFM3) {
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, std::vector<uint32_t>({0, 0, 1}));
@@ -591,6 +611,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     // summing to n_rot / 2 (n_rot is 64 in this fixture)
     if (arch == LLM_ARCH_BAILINGMOE3) {
         ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({8, 12, 12, 0}));
+    } else if (arch == LLM_ARCH_HY_V4_FLASH) {
+        // the published files carry the VL sections, so the text model runs the M-RoPE path
+        ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({12, 10, 10, 0}));
     } else {
         ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
     }
@@ -609,6 +632,53 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             indexer_types.push_back(il % 2 ? 0 : 1);
         }
         ms.add_kv(LLM_KV_ATTENTION_INDEXER_TYPES, indexer_types);
+    }
+
+    if (arch == LLM_ARCH_HY_V4_FLASH) {
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,     uint32_t(4));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,   1.0e-6f);
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_MAGNITUDE, 2.0f);
+        ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,           10.0f);
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,       1.0f);
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM,        true);
+        ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,         10000.0f);
+        // the indexer lives on the non-SWA layers, the even ones here
+        {
+            std::vector<uint32_t> indexer_types;
+            indexer_types.reserve(n_layer);
+            for (uint32_t il = 0; il < n_layer; il++) {
+                indexer_types.push_back(il % 2 ? 0 : 1);
+            }
+            ms.add_kv(LLM_KV_ATTENTION_INDEXER_TYPES, indexer_types);
+        }
+        ms.add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, uint32_t(2));
+        ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, uint32_t(96));
+
+        // one Engram module on layer 1, the head offsets are the running sum of the bucket counts
+        {
+            // the loader reads the bucket ranges as u64 arrays
+            const std::vector<uint64_t> primes = {7, 11, 13, 17};
+            std::vector<uint64_t> offsets;
+            uint64_t base = 0;
+            for (uint64_t p : primes) {
+                offsets.push_back(base);
+                base += p;
+            }
+            ms.add_kv(LLM_KV_PLE_LAYERS,                  std::vector<uint32_t>({1}));
+            ms.add_kv(LLM_KV_PLE_NGRAM_SIZE,              uint32_t(3));
+            ms.add_kv(LLM_KV_PLE_HEADS_PER_NGRAM,         uint32_t(2));
+            ms.add_kv(LLM_KV_EMBEDDING_LENGTH_PER_LAYER,  uint32_t(32));
+            // n_modules * ngram_size multipliers, odd as the reference derives them
+            ms.add_kv(LLM_KV_PLE_LAYER_MULTIPLIERS,       std::vector<uint64_t>({3, 5, 7}));
+            ms.add_kv(LLM_KV_PLE_HEAD_OFFSETS,            offsets);
+            ms.add_kv(LLM_KV_PLE_HEAD_VOCAB_SIZES,        primes);
+            ms.add_kv(LLM_KV_ENGRAM_PAD_TOKEN_ID,         uint32_t(1));
+            std::vector<int32_t> token_map(n_vocab);
+            for (uint32_t t = 0; t < n_vocab; t++) {
+                token_map[t] = (int32_t) t;
+            }
+            ms.add_kv(LLM_KV_ENGRAM_TOKEN_MAP,            token_map);
+        }
     }
 
     if (arch == LLM_ARCH_MISTRAL_LARGE4) {
@@ -708,7 +778,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_MUDD_TAP_INDICES,            std::vector<int32_t>({-1, -1, -1, -1, 0, 2, 1, 3}));
     }
 
-    if (arch == LLM_ARCH_INKLING2) {
+    if (arch == LLM_ARCH_INKLING2 || arch == LLM_ARCH_INKLING2_LOOP) {
+        const bool loop = arch == LLM_ARCH_INKLING2_LOOP;
         ms.add_kv(LLM_KV_ATTENTION_RELATIVE_LENGTH,   uint32_t(4));
         ms.add_kv(LLM_KV_ATTENTION_RELATIVE_EXTENT,   uint32_t(16));
         ms.add_kv(LLM_KV_ATTENTION_QK_CLIP,           0.25f);
@@ -716,6 +787,14 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_ATTENTION_LOG_SCALE_FLOOR,   uint32_t(4));
         ms.add_kv(LLM_KV_ATTENTION_LOG_SCALE_ALPHA,   0.1f);
         ms.add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,         uint32_t(2));
+        if (loop) {
+            // prelude 0, core 1, coda 2; the loader adds slot 3 for the second pass over the core
+            ms.add_kv(LLM_KV_LOOP_START,     uint32_t(1));
+            ms.add_kv(LLM_KV_LOOP_END,       uint32_t(2));
+            ms.add_kv(LLM_KV_LOOP_COUNT,     uint32_t(2));
+            ms.add_kv(LLM_KV_LOOP_GATE_RANK, uint32_t(8));
+            ms.add_kv(LLM_KV_LOOP_VARYING,   false);
+        }
         ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,           uint32_t(4));
         ms.add_kv(LLM_KV_VOCAB_SIZE,                  n_vocab + 2);
         ms.add_kv(LLM_KV_VOCAB_SIZE_UNPADDED,         n_vocab);
@@ -752,7 +831,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     if (moe) {
         ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, n_ff);
         ms.add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, n_ff / 2);  // distinct from n_ff so a saver key-clobber surfaces on reload
-        ms.add_kv(LLM_KV_EXPERT_LATENT_LENGTH,       n_ff);
+        // a latent width distinct from n_ff_exp catches a transposed routed_down / routed_up
+        ms.add_kv(LLM_KV_EXPERT_LATENT_LENGTH,       arch == LLM_ARCH_HY_V4_FLASH ? uint32_t(64) : n_ff);
         ms.add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,  uint32_t(2));
         // with more experts than a ubatch uses, the copy of the used experts in host memory skips some of them
         ms.add_kv(LLM_KV_EXPERT_COUNT,               uint32_t(host_experts_test(arch) ? 64 : arch == LLM_ARCH_CLOVER_MOE ? 4 : 2));
@@ -832,7 +912,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_WKV_HEAD_SIZE,               n_embd/n_head);
     ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,           uint32_t(3));
     ms.add_kv(LLM_KV_RESIDUAL_SCALE,              3.5565588200778455f);
-    ms.add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,         uint32_t(12));
+    // the inkling2_loop core boundaries must be multiples of the block size
+    ms.add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,         uint32_t(arch == LLM_ARCH_INKLING2_LOOP ? 1 : 12));
     ms.add_kv(LLM_KV_ACTIVATION_SITU_BETA,        4.0f);
     ms.add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, 25.0f);
     ms.add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,        -5.0f);
@@ -1124,6 +1205,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_HUNYUAN_MOE:
         case LLM_ARCH_HY_V3:
         case LLM_ARCH_HY_V4:
+        case LLM_ARCH_HY_V4_FLASH:
         case LLM_ARCH_OPENAI_MOE:
         case LLM_ARCH_LFM2MOE:
         case LLM_ARCH_SMALLTHINKER:
@@ -1151,6 +1233,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_METIS16:
         case LLM_ARCH_ZONOS3:
         case LLM_ARCH_INKLING2:
+        case LLM_ARCH_INKLING2_LOOP:
             return true;
         default:
             return false;
@@ -1214,7 +1297,7 @@ static bool arch_supported(const llm_arch arch) {
     // FIXME: these hit scheduler/view-backed-output issues with WebGPU on CI.
 #ifdef GGML_USE_WEBGPU
     if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_QWEN4EXP ||
-            arch == LLM_ARCH_HY_V4) {
+            arch == LLM_ARCH_HY_V4 || arch == LLM_ARCH_HY_V4_FLASH) {
         return false;
     }
 #endif // GGML_USE_WEBGPU

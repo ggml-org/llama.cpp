@@ -2,7 +2,6 @@
 	import * as HoverCard from '@ggml-org/llama-ui/ui/hover-card';
 	import { Globe, Loader2 } from '@lucide/svelte';
 	import { CollapsibleContentBlock } from '#lib/components/app/index.ts';
-	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '#lib/constants/index.ts';
 	import { AgenticSectionType } from '#lib/enums/index.ts';
 	import { mcpStore } from '#lib/stores/index.ts';
 	import type { AgenticSection, SearchResult } from '#lib/types/index.ts';
@@ -29,13 +28,6 @@
 
 	const results = $derived(extractSearchResults(section.toolResult));
 	const query = $derived(extractSearchQuery(section.toolArgs));
-
-	// Same icon-resolution chain as ChatMessageToolCallBlockDefault so
-	// MCP-server branding is consistent across both views. Spinner wins
-	// while the call is in flight so the user sees execution status.
-	const iconUrl = $derived(showSpinner ? null : mcpStore.getServerFaviconForTool(section.toolName));
-	const icon = $derived(showSpinner ? Loader2 : undefined);
-	const iconClass = $derived(showSpinner ? ICON_CLASS_SPIN : ICON_CLASS_DEFAULT);
 
 	// Verb reflects state: "Searching" while the call is in flight, "Searched"
 	// once results (or a definitive empty response) have arrived. Lets the
@@ -89,7 +81,7 @@
 	{#if safeUrl}
 		<HoverCard.Root closeDelay={100} openDelay={150}>
 			<HoverCard.Trigger
-				class="hover:bg-muted/80 focus-visible:ring-ring inline-flex max-w-full items-center gap-1.5 rounded-full border bg-muted px-2.5 py-1 text-xs transition-colors outline-none focus-visible:ring-2"
+				class="hover:bg-muted/80 focus-visible:ring-ring inline-flex max-w-full items-center gap-1.5 rounded-full border bg-muted px-2.5 py-1 text-caption transition-colors outline-none focus-visible:ring-2"
 				href={safeUrl}
 				rel="noopener noreferrer"
 				target="_blank"
@@ -114,14 +106,14 @@
 				<HoverCard.Content align="start" class="w-80 max-w-[90vw]" side="top" sideOffset={6}>
 					<div class="flex flex-col gap-2 px-2 py-1.5">
 						<a
-							class="line-clamp-3 text-sm font-medium leading-snug hover:underline"
+							class="line-clamp-3 text-label leading-snug hover:underline"
 							href={safeUrl}
 							rel="noopener noreferrer"
 							target="_blank">{result.title}</a
 						>
 
 						{#if publishDate || result.author}
-							<div class="text-muted-foreground flex items-center gap-1.5 text-[11px]">
+							<div class="text-muted-foreground flex items-center gap-1.5 text-caption">
 								{#if publishDate}
 									<span>{publishDate}</span>
 								{/if}
@@ -138,14 +130,14 @@
 
 						{#if result.highlights}
 							<p
-								class="text-popover-foreground/85 line-clamp-5 text-xs leading-relaxed whitespace-pre-line"
+								class="text-popover-foreground/85 line-clamp-5 text-caption leading-relaxed whitespace-pre-line"
 							>
 								{result.highlights}
 							</p>
 						{/if}
 
 						{#if host}
-							<div class="text-muted-foreground/80 truncate text-[11px]">{host}</div>
+							<div class="text-muted-foreground/80 truncate text-caption">{host}</div>
 						{/if}
 					</div>
 				</HoverCard.Content>
@@ -154,7 +146,14 @@
 	{/if}
 {/snippet}
 
-<CollapsibleContentBlock class="my-2" {icon} {iconClass} {iconUrl} {onToggle} {open} {title}>
+<CollapsibleContentBlock
+	class="my-2"
+	{onToggle}
+	{open}
+	pinnedChevron
+	shimmerTitle={showSpinner}
+	{title}
+>
 	{#if results.length > 0}
 		<div class="flex flex-wrap items-center gap-2 pb-1">
 			{#each results as result (result.url)}
@@ -162,12 +161,12 @@
 			{/each}
 		</div>
 	{:else if showSpinner}
-		<div class="text-muted-foreground/70 flex items-center gap-2 py-1 text-xs italic">
+		<div class="text-muted-foreground/70 flex items-center gap-2 py-1 text-caption italic">
 			<Loader2 class="size-icon-xs animate-spin" />
 
 			<span>Searching...</span>
 		</div>
 	{:else}
-		<div class="text-muted-foreground/70 py-1 text-xs italic">No results</div>
+		<div class="text-muted-foreground/70 py-1 text-caption italic">No results</div>
 	{/if}
 </CollapsibleContentBlock>

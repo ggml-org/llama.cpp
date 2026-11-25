@@ -4,15 +4,20 @@
 	import ModelContext from '../ModelContext.svelte';
 	import ModelDraftSubline from '../ModelDraftSubline.svelte';
 	import ModelId from '../ModelId.svelte';
+	import ModelVoiceRole from '../ModelVoiceRole.svelte';
 	import ModelsManagerStatusCell from './ModelsManagerStatusCell.svelte';
 	import { modelRowActions } from './row-actions';
 	import { configuredContext, downloadProgressFor, isRowControlClick } from './utils';
 	import { ModelDownloadProgressBar } from '@ggml-org/llama-ui/models';
-	import { Heart, MoreHorizontal } from '@lucide/svelte';
+	import { Heart, Mic, MoreHorizontal } from '@lucide/svelte';
 	import { ContextMenuActions, DropdownMenuActions } from '#lib/components/app/index.ts';
-	import { MODEL_ROW_GRID_CLASS, MODEL_ROW_TRAILING_CELL_CLASS } from '#lib/constants/index.ts';
+	import {
+		MODEL_ROW_GRID_CLASS,
+		MODEL_ROW_TRAILING_CELL_CLASS,
+		VOICE_DICTATION_MODEL_LABEL
+	} from '#lib/constants/index.ts';
 	import { ModelRowDownloadState } from '#lib/enums/index.ts';
-	import { deviceStore, modelsStore } from '#lib/stores/index.ts';
+	import { deviceStore, modelsStore, voiceStore } from '#lib/stores/index.ts';
 	import type { ModelOption, ModelSidecarBadge } from '#lib/types/models.js';
 
 	interface Props {
@@ -38,6 +43,7 @@
 	}: Props = $props();
 
 	let favorite = $derived(isFavorite(option));
+	let dictates = $derived(voiceStore.isDictationModel(option.model));
 	let isHidden = $derived(modelsStore.isHidden(option.id));
 	// live while the download runs, frozen while it is paused
 	let downloadProgress = $derived(downloadProgressFor(option.model));
@@ -91,7 +97,7 @@
 				<span class="flex min-w-0 items-center gap-1.25">
 					<ModelId
 						aliases={option.aliases}
-						class="min-w-0 flex-1 max-md:text-sm"
+						class="min-w-0 flex-1 max-md:text-body-sm"
 						draftSidecars={option.draftSidecars}
 						hideCapabilities
 						hideModalities
@@ -101,8 +107,17 @@
 						title={option.model}
 					/>
 
+					<ModelVoiceRole model={option.model} />
+
 					<!-- a phone has no width for the modality icons, the id needs it more -->
 					<ModelCapabilities hideModalities={deviceStore.isMobile} {option} />
+
+					{#if dictates}
+						<!-- decorative like the heart: the text carries the state -->
+						<Mic aria-hidden="true" class="size-icon-sm shrink-0 text-destructive" />
+
+						<span class="sr-only">{VOICE_DICTATION_MODEL_LABEL.current}</span>
+					{/if}
 
 					{#if favorite}
 						<!-- the heart is decorative, the button's text carries the state -->

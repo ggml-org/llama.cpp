@@ -65,6 +65,22 @@ fn erf_approx(x: TYPE) -> TYPE {
     return TYPE(s * y);
 }
 
+fn log1p(x: f32) -> f32 {
+    let y  = x / (2.0f + x);
+    let y2 = y * y;
+    var p = 1.0f / 13.0f;
+    p = p * y2 + 1.0f / 11.0f;
+    p = p * y2 + 1.0f / 9.0f;
+    p = p * y2 + 1.0f / 7.0f;
+    p = p * y2 + 1.0f / 5.0f;
+    p = p * y2 + 1.0f / 3.0f;
+    p = p * y2 + 1.0f;
+    let s = 2.0f * y * p;
+    let l = log(1.0f + x);
+    let r = select(l, s, (x >= -0.5f) & (x <= 1.0f));
+    return select(r, x, abs(x) < 2.5e-38f);
+}
+
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>,
     @builtin(num_workgroups)       num_wg:  vec3<u32>) {
@@ -156,7 +172,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>,
 #endif
 #ifdef SOFTPLUS
     let src_f32 = f32(src[params.offset_src + src_idx]);
-    let res = TYPE(select(log(1.0 + exp(src_f32)), src_f32, src_f32 > 20.0));
+    let res = TYPE(select(log1p(exp(src_f32)), src_f32, src_f32 > 20.0));
 #endif
 #ifdef EXPM1
     let src_f32 = f32(src[params.offset_src + src_idx]);

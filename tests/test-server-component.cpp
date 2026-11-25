@@ -520,7 +520,8 @@ static void test_server_pipe(testing & t) {
         server_pipe<int> p;
         std::thread producer([&]() {
             for (int i = 0; i < n; i++) {
-                p.write(int(i));
+                int x = i;
+                p.write(std::move(x));
             }
             p.close_write();
         });
@@ -699,7 +700,7 @@ static void test_decision_ocr_jev_validation(testing & t) {
     const auto reject_questions = [&](const char * name, const json & body, const std::string & expected) {
         std::string error;
         try {
-            ctx.parse_questions(body);
+            ctx.parse_questions(body, false);
         } catch (const std::invalid_argument & e) {
             error = e.what();
         }

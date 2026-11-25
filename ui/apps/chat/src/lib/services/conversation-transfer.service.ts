@@ -6,13 +6,20 @@
  * DB access and store refreshes stay in conversationsStore.
  */
 
-import { EXPORT_CONV, NEWLINE, ZIP_MAGIC } from '#lib/constants/index.ts';
+import {
+	BACKUP_ARCHIVE_NAME,
+	EXPORT_CONV,
+	NEWLINE,
+	SETTINGS_ARCHIVE_ENTRY,
+	ZIP_MAGIC
+} from '#lib/constants/index.ts';
 import {
 	FileExtensionText,
 	MimeTypeApplication,
 	MimeTypeText,
 	SessionRecordType
 } from '#lib/enums/index.ts';
+import type { SettingsExportType } from '#lib/types/index.ts';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 
 export class ConversationTransferService {
@@ -40,11 +47,15 @@ export class ConversationTransferService {
 
 	/**
 	 * Triggers a browser download of multiple conversations as a `.zip`, one
-	 * `.jsonl` file per conversation.
+	 * `.jsonl` file per conversation, plus the settings when given (a full backup).
 	 * @param data - The conversations to export
+	 * @param settings - Settings to add as {@link SETTINGS_ARCHIVE_ENTRY}
 	 */
-	static downloadConversationsArchive(data: ExportedConversation[]): void {
-		if (data.length === 0) {
+	static downloadConversationsArchive(
+		data: ExportedConversation[],
+		settings?: SettingsExportType
+	): void {
+		if (data.length === 0 && !settings) {
 			console.error('Invalid data: no conversations to export');
 
 			return;
@@ -74,11 +85,30 @@ export class ConversationTransferService {
 			files[entryName] = strToU8(ConversationTransferService.serializeSessionToJsonl(session));
 		}
 
-		const archiveName = `${new Date().toISOString().split(EXPORT_CONV.ISO_DATE_TIME_SEPARATOR)[0]}_conversations${FileExtensionText.ZIP}`;
+		if (settings) {
+			files[SETTINGS_ARCHIVE_ENTRY] = strToU8(JSON.stringify(settings, null, 2));
+		}
+
+		const date = new Date().toISOString().split(EXPORT_CONV.ISO_DATE_TIME_SEPARATOR)[0];
+		const archiveName = `${date}_${settings ? BACKUP_ARCHIVE_NAME : 'conversations'}${FileExtensionText.ZIP}`;
 		const zipped = zipSync(files);
 		const blob = new Blob([zipped], { type: MimeTypeApplication.ZIP });
 
 		ConversationTransferService.triggerDownload(blob, archiveName);
+	}
+
+	/**
+	 * Triggers a browser download of the settings as a `.json` file.
+	 * @param settings - The settings export
+	 */
+	static downloadSettingsFile(settings: SettingsExportType): void {
+		const date = new Date().toISOString().split(EXPORT_CONV.ISO_DATE_TIME_SEPARATOR)[0];
+		const blob = new Blob([JSON.stringify(settings, null, 2)], { type: MimeTypeApplication.JSON });
+
+		ConversationTransferService.triggerDownload(
+			blob,
+			`llama_settings_${date}${FileExtensionText.JSON}`
+		);
 	}
 
 	/**
@@ -107,6 +137,27 @@ export class ConversationTransferService {
 		const trimmedConvId = conversation.id?.slice(0, EXPORT_CONV.ID_TRIM_LENGTH) ?? '';
 
 		return `${formattedDate}_conv_${trimmedConvId}_${sanitizedName}${FileExtensionText.JSONL}`;
+	}
+
+	/**
+	 * Reads the settings of a full backup ZIP, if the file is one.
+	 * @param file - A dropped or picked file
+	 * @returns The settings export, or null when the file is no ZIP or has none
+	 */
+	static async parseArchiveSettings(file: File): Promise<SettingsExportType | null> {
+		const bytes = new Uint8Array(await file.arrayBuffer());
+
+		if (!ZIP_MAGIC.every((byte, index) => bytes[index] === byte)) return null;
+
+		const entry = unzipSync(bytes, { filter: ({ name }) => name === SETTINGS_ARCHIVE_ENTRY })[
+			SETTINGS_ARCHIVE_ENTRY
+		];
+
+		if (!entry) return null;
+
+		const parsed = JSON.parse(strFromU8(entry));
+
+		return parsed?.config ? (parsed as SettingsExportType) : null;
 	}
 
 	/**

@@ -31,6 +31,9 @@ export { contextStatsStore } from './chat/context-stats.svelte';
 // AGENTIC (multi-turn tool orchestration)
 export { agenticStore } from './agentic/index.svelte';
 
+// CONVERSATION MEDIA (one slideshow of the thread's images, audio and video)
+export { mediaGalleryStore } from './media-gallery.svelte';
+
 // CONVERSATIONS
 export { sidebarDragStore } from './sidebar-drag.svelte';
 export { conversationsStore } from './conversations/index.svelte';
@@ -60,6 +63,10 @@ export { permissionsStore } from './permissions.svelte';
 
 // TOOLS
 export { toolsStore } from './tools.svelte';
+
+// VOICE (which model does what, and transcripts of voice messages on their way)
+export { voiceStore } from './voice.svelte';
+export { voiceTranscriptsStore } from './voice-transcripts.svelte';
 
 // ENVIRONMENT / META
 export { versionStore } from './version.svelte';

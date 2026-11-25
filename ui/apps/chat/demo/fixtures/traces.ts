@@ -47,6 +47,17 @@ class Trace {
 		this.push({ content: '', role: 'system', type: 'root' });
 	}
 
+	/** An assistant turn whose tool call was stopped mid-stream: cut-off arguments and no result. */
+	stoppedTool(name: string, cutArguments: string, content = ''): this {
+		const id = uuid(this.name, `call-${this.calls++}`).replaceAll('-', '');
+
+		return this.push({
+			content,
+			role: 'assistant',
+			toolCalls: [{ function: { arguments: cutArguments, name }, id, type: 'function' }]
+		});
+	}
+
 	toJsonl(): string {
 		const last = this.messages.at(-1)!;
 		const session = {
@@ -301,10 +312,67 @@ function agenticDebugging(): Trace {
 	return trace;
 }
 
+/** A reply with a diagram, for diagram preview demos. */
+function diagrams(): Trace {
+	const trace = new Trace('How a request flows through llama-server');
+
+	trace.user('Can you draw how a chat request flows through llama-server?');
+	trace.assistant(
+		[
+			'Here is the path a request takes:',
+			'',
+			'```mermaid',
+			'flowchart LR',
+			'    U[Browser] -->|POST /v1/chat/completions| S(llama-server)',
+			'    S --> Q{Slot free?}',
+			'    Q -->|yes| P[Prompt processing]',
+			'    Q -->|no| W[Queue]',
+			'    W --> P',
+			'    P --> G[Sample token]',
+			'    G -->|more| G',
+			'    G -->|SSE tokens| U',
+			'    click S href "https://github.com/ggml-org/llama.cpp" "llama.cpp on GitHub" _blank',
+			'```',
+			'',
+			'Requests wait in the queue until a slot is free, then tokens stream back as they are sampled.'
+		].join('\n')
+	);
+
+	return trace;
+}
+
+/** A chat whose last tool call was stopped while its arguments were still streaming. */
+function stoppedToolCall(): Trace {
+	const trace = new Trace('Smoke test for the slides page');
+
+	trace.user('Write a quick Playwright smoke test for slides.html and run it.');
+	trace.stoppedTool(
+		'exec_shell_command',
+		JSON.stringify({
+			command: [
+				"cat > /tmp/slides-smoke.mjs <<'EOF'",
+				"import { chromium } from 'playwright';",
+				'',
+				'const browser = await chromium.launch();',
+				'const page = await browser.newPage();',
+				'',
+				"await page.goto('file:///tmp/slides.html');",
+				'EOF',
+				'node /tmp/slides-smoke.mjs'
+			].join('\n')
+		}).slice(0, 160),
+		'I will write the script to a file and run it.'
+	);
+
+	return trace;
+}
+
 /** Built-in traces, by name. */
 export const DEMO_TRACES: Record<string, () => Trace> = {
 	'agentic-debugging': agenticDebugging,
-	'long-chat': longChat
+	diagrams,
+	'long-chat': longChat,
+	'stopped-tool-call': stoppedToolCall
 };
 
 export function generateTrace(name: string): null | string {

@@ -70,4 +70,3 @@ export {
 	type GroupedListGroup,
 	GroupedListUnit
 } from './GroupedList.svelte';
-export { default as CollapsibleRegion } from './CollapsibleRegion.svelte';

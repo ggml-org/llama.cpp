@@ -5,7 +5,6 @@
 #include "ggml.h"
 
 #include <cstring>
-#include <climits>
 #include <cstdlib>
 #include <stdexcept>
 #include <cerrno>
@@ -32,9 +31,6 @@
     #endif
     #include <malloc.h>
     #include <windows.h>
-    #ifndef PATH_MAX
-        #define PATH_MAX MAX_PATH
-    #endif
     #include <io.h>
 #endif
 
@@ -513,7 +509,7 @@ struct llama_file::impl {
                     if (errno == EINTR) {
                         continue;
                     }
-                    if (errno == EFAULT || errno == EINVAL) {
+                    if (errno == EFAULT || errno == EINVAL || errno == EIO) {
                         LLAMA_LOG_WARN("%s: file '%s' falling back to buffered I/O due to %s\n",
                                        __func__, fname.c_str(), strerror(errno));
                         const size_t read_offset = tell();
@@ -522,7 +518,7 @@ struct llama_file::impl {
                         alignment = 1;
                         init_fp("rb");
                         seek(read_offset, SEEK_SET);
-                        read_raw_unsafe(ptr, len);
+                        read_raw_unsafe(static_cast<char *>(ptr) + bytes_read, to_read);
                         return;
                     }
                     throw std::runtime_error(format("read error: %s", strerror(errno)));
@@ -1139,8 +1135,4 @@ void llama_prefetch(llama_memory_ranges mr) {
 #else
     GGML_UNUSED(mr);
 #endif
-}
-
-size_t llama_path_max() {
-    return PATH_MAX;
 }

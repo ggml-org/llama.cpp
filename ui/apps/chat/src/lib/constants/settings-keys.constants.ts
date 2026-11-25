@@ -6,6 +6,7 @@
  */
 export const SETTINGS_KEYS = {
 	AGENTIC_MAX_TURNS: 'agenticMaxTurns',
+	ALWAYS_SHOW_MESSAGE_STATS: 'alwaysShowMessageStats',
 	ALWAYS_SHOW_SIDEBAR_ON_DESKTOP: 'alwaysShowSidebarOnDesktop',
 	ALWAYS_SHOW_TOOL_CALL_CONTENT: 'alwaysShowToolCallContent',
 	API_KEY: 'apiKey',
@@ -72,7 +73,6 @@ export const SETTINGS_KEYS = {
 	SHOW_THOUGHT_IN_PROGRESS: 'showThoughtInProgress',
 	SHOW_TOOL_CALL_IN_PROGRESS: 'showToolCallInProgress',
 	SINGLE_ROW_CHAT_FORM: 'singleRowChatForm',
-	SURFACE_THEME: 'surfaceTheme',
 	SYMBOLIC_MATH_ENABLED: 'symbolicMathEnabled',
 	SYSTEM_MESSAGE: 'systemMessage',
 	// Sampling
@@ -82,11 +82,24 @@ export const SETTINGS_KEYS = {
 	TITLE_GENERATION_PROMPT: 'titleGenerationPrompt',
 	TITLE_GENERATION_USE_FIRST_LINE: 'titleGenerationUseFirstLine',
 	TITLE_GENERATION_USE_LLM: 'titleGenerationUseLLM',
+	TOOL_CALL_SHOWN_ARG: 'toolCallShownArg',
+	TOOL_CALL_SHOWN_ARG_OVERRIDES: 'toolCallShownArgOverrides',
 	TOP_K: 'top_k',
 	TOP_P: 'top_p',
 	TYP_P: 'typ_p',
 	// General
 	USE_HUGGING_FACE_HUB: 'useHuggingFaceHub',
+	// Voice
+	VOICE_AUTO_GAIN: 'voiceAutoGain',
+	VOICE_BOOST: 'voiceBoost',
+	VOICE_COLLAPSE_TRANSCRIPTS: 'voiceCollapseTranscripts',
+	VOICE_ECHO_CANCELLATION: 'voiceEchoCancellation',
+	VOICE_INPUT_MODE: 'voiceInputMode',
+	VOICE_MICROPHONE: 'voiceMicrophone',
+	VOICE_NOISE_SUPPRESSION: 'voiceNoiseSuppression',
+	VOICE_TRANSCRIBE_MESSAGES: 'voiceTranscribeMessages',
+	VOICE_TRANSCRIPTION_LANGUAGE: 'voiceTranscriptionLanguage',
+	VOICE_TRANSCRIPTION_MODEL: 'voiceTranscriptionModel',
 	XTC_PROBABILITY: 'xtc_probability',
 	XTC_THRESHOLD: 'xtc_threshold'
 } as const;
