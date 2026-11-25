@@ -1017,21 +1017,20 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
 
 // Output tile index t -> tile indices it, wt, zt, jt.
-// jt_outermost: jt is the slowest index and ntizw holds nti*nsamples*nchannels. Else jt is the fastest index.
 enum mmq_iter_order {
-    JT_INNERMOST=0,
-    JT_OUTERMOST=1
+    IWZJ=0,
+    JIWZ=1
 };
 
 template <mmq_iter_order iter_order>
 static __device__ __forceinline__ void mmq_get_tile_indices(
         const int t, const uint3 ntj, const uint3 nchannels_y, const uint3 nsamples_y, const uint3 ntizw, int & it, int & wt, int & zt, int & jt) {
     uint2 tmp2;
-    if constexpr (iter_order == JT_OUTERMOST) {
+    if constexpr (iter_order == JIWZ) {
         tmp2 = fast_div_modulo(t, ntizw);
         jt   = tmp2.x;
         tmp2 = fast_div_modulo(tmp2.y, nchannels_y);
-    } else if (iter_order == JT_INNERMOST) {
+    } else if (iter_order == IWZJ) {
         tmp2 = fast_div_modulo(t, ntj);
         jt   = tmp2.y;
         tmp2 = fast_div_modulo(tmp2.x, nchannels_y);
@@ -1045,7 +1044,7 @@ static __device__ __forceinline__ void mmq_get_tile_indices(
 // The mul_mat_q kernel implements "stream-k" work partitioning as described in https://arxiv.org/abs/2301.03598
 // force_tiling lets the host use the native tiled path for configs that normally use Stream-K.
 
-template <ggml_type type, int J, bool fallback, ggml_prec prec_src1, bool has_fusion, bool force_tiling = false, mmq_iter_order iter_order = JT_INNERMOST>
+template <ggml_type type, int J, bool fallback, ggml_prec prec_src1, bool has_fusion, bool force_tiling = false, mmq_iter_order iter_order = IWZJ>
 __launch_bounds__(ggml_cuda_mmq_get_nthreads(type, J, fallback, prec_src1), ggml_cuda_mmq_get_occupancy(type, J, fallback, prec_src1))
 static __global__ void mul_mat_q(
         const char * __restrict__ x, const char * __restrict__ x_gate, const int * __restrict__ y, const int32_t * __restrict__ ids_dst,
@@ -1403,9 +1402,9 @@ static __global__ void mul_mat_q_stream_k_fixup(
 
     int it, wt, zt, jt;
     if (ntizw.z != 0) {
-        mmq_get_tile_indices<mmq_iter_order::JT_OUTERMOST>(fastdiv(kbc0, blocks_per_ne00), ntj, nchannels_y, nsamples_y, ntizw, it, wt, zt, jt);
+        mmq_get_tile_indices<mmq_iter_order::JIWZ>(fastdiv(kbc0, blocks_per_ne00), ntj, nchannels_y, nsamples_y, ntizw, it, wt, zt, jt);
     } else {
-        mmq_get_tile_indices<mmq_iter_order::JT_INNERMOST>(fastdiv(kbc0, blocks_per_ne00), ntj, nchannels_y, nsamples_y, ntizw, it, wt, zt, jt);
+        mmq_get_tile_indices<mmq_iter_order::IWZJ>(fastdiv(kbc0, blocks_per_ne00), ntj, nchannels_y, nsamples_y, ntizw, it, wt, zt, jt);
     }
 
     if (!ids_dst) {
@@ -1578,8 +1577,8 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     // If a block works on several tiles, the column tiles go outermost.
     // Then the blocks that work on the same rows of x run at the same time and share x in L2.
     // Only the widest tiles get this kernel variant, to limit the compile time.
-    const mmq_iter_order iter_order = (J == 128 && GGML_CUDA_CC_IS_NVIDIA(cc) && args.ids_dst == nullptr && ntiles_dst > nblocks_stream_k) ? mmq_iter_order::JT_OUTERMOST : mmq_iter_order::JT_INNERMOST;
-    const uint3 ntizw_fd = (iter_order == mmq_iter_order::JT_OUTERMOST) ? init_fastdiv_values(nti*ntzw) : make_uint3(0, 0, 0);
+    const mmq_iter_order iter_order = (J == 128 && GGML_CUDA_CC_IS_NVIDIA(cc) && args.ids_dst == nullptr && ntiles_dst > nblocks_stream_k) ? mmq_iter_order::JIWZ : mmq_iter_order::IWZJ;
+    const uint3 ntizw_fd = (iter_order == mmq_iter_order::JIWZ) ? init_fastdiv_values(nti*ntzw) : make_uint3(0, 0, 0);
 
     const bool fixup_needed = ntiles_dst % block_nums_stream_k.x != 0;
 
@@ -1598,9 +1597,9 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     auto kernel = mul_mat_q<type, J, fallback, prec_src1, has_fusion>;
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     if constexpr (!has_fusion && J == 128) {
-        if (iter_order == mmq_iter_order::JT_OUTERMOST) {
-            CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<type, J, fallback, prec_src1, false, false, mmq_iter_order::JT_OUTERMOST>), nbytes_shared);
-            kernel = mul_mat_q<type, J, fallback, prec_src1, false, false, mmq_iter_order::JT_OUTERMOST>;
+        if (iter_order == mmq_iter_order::JIWZ) {
+            CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<type, J, fallback, prec_src1, false, false, mmq_iter_order::JIWZ>), nbytes_shared);
+            kernel = mul_mat_q<type, J, fallback, prec_src1, false, false, mmq_iter_order::JIWZ>;
         }
     }
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
