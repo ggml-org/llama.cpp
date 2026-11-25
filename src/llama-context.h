@@ -406,6 +406,7 @@ private:
     std::vector<swap_info> output_swaps;
 
     ggml_backend_sched_ptr sched;
+    llama_context * ctx_compute = nullptr; // the context whose compute buffers sched shares, nullptr if not shared
 
     sched_params sched_params_cur;
 
