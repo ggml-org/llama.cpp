@@ -182,6 +182,7 @@ set(LLAMA_CONTEXT_TEST_SRC
 llama_build(${LLAMA_CONTEXT_TEST_SRC})
 
 if (WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND GGML_OPENMP_ENABLED)
+    # We enable the clean up macro for OpenMP on Windows + GCC to avoid hanging on test exit
     find_package(OpenMP REQUIRED COMPONENTS CXX)
     target_link_libraries(test-llama-context PRIVATE OpenMP::OpenMP_CXX)
     target_compile_definitions(test-llama-context PRIVATE LLAMA_TEST_OPENMP_CLEANUP)

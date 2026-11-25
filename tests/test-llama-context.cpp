@@ -31,7 +31,8 @@
 
 static int finish_test(int result) {
 #ifdef LLAMA_TEST_OPENMP_CLEANUP
-    // Release OpenMP workers before Windows starts DLL teardown.
+    // Release OpenMP workers to avoid hanging on test exit.
+    // Refer to https://github.com/ggml-org/llama.cpp/issues/32446
     const int status = omp_pause_resource_all(omp_pause_hard);
     if (status != 0) {
         fprintf(stderr, "failed to release OpenMP resources: %d\n", status);
