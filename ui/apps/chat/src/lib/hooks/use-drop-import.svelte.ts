@@ -16,6 +16,7 @@ import { FileExtensionText } from '#lib/enums/index.ts';
 import { ConversationTransferService } from '#lib/services/conversation-transfer.service.ts';
 import { RouterService } from '#lib/services/router.service.ts';
 import { conversationsStore } from '#lib/stores/conversations/index.svelte.ts';
+import { groupsStore } from '#lib/stores/groups.svelte.ts';
 import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
 import type { SettingsConfigType, SettingsExportType } from '#lib/types/index.ts';
 import { createMessageCountMap } from '#lib/utils/index.ts';
@@ -32,8 +33,8 @@ const IMPORT_FILE_EXTENSIONS: string[] = [
 ];
 
 type DroppedExport =
-	| { data: ExportedConversation[]; file: File; kind: 'conversations' }
-	| { data: SettingsExportType; file: File; kind: 'settings' };
+	| { data: ExportedConversation[]; kind: 'conversations' }
+	| { data: SettingsExportType; kind: 'settings' };
 
 function isExportedConversation(item: unknown): item is ExportedConversation {
 	const candidate = item as Partial<ExportedConversation> | null;
@@ -42,40 +43,42 @@ function isExportedConversation(item: unknown): item is ExportedConversation {
 }
 
 /**
- * Reads a dropped file as a Llama Chat export: a settings file (a JSON object
- * with a `config` key) or conversations (a ZIP archive, JSONL sessions or
- * legacy JSON). Returns null for anything else, which stays a plain file.
+ * Reads a dropped file as Llama Chat exports: a settings file (a JSON object
+ * with a `config` key), conversations (JSONL sessions or legacy JSON) or a ZIP
+ * of conversations, which a full backup adds the settings to. Returns nothing
+ * for any other file, which stays a plain file.
  */
-async function readExport(file: File): Promise<DroppedExport | null> {
+async function readExports(file: File): Promise<DroppedExport[]> {
 	const name = file.name.toLowerCase();
 
-	if (!IMPORT_FILE_EXTENSIONS.some((extension) => name.endsWith(extension))) return null;
+	if (!IMPORT_FILE_EXTENSIONS.some((extension) => name.endsWith(extension))) return [];
 
+	const exports: DroppedExport[] = [];
 	const bytes = new Uint8Array(await file.arrayBuffer());
 
-	if (!ZIP_MAGIC.every((byte, index) => bytes[index] === byte)) {
-		try {
-			const parsed = JSON.parse(strFromU8(bytes));
+	try {
+		const settings = ZIP_MAGIC.every((byte, index) => bytes[index] === byte)
+			? await ConversationTransferService.parseArchiveSettings(file)
+			: JSON.parse(strFromU8(bytes));
 
-			if (parsed && typeof parsed === 'object' && parsed.config) {
-				return { data: parsed as SettingsExportType, file, kind: 'settings' };
-			}
-		} catch {
-			// Not a single JSON value: JSONL sessions are checked below.
+		if (settings && typeof settings === 'object' && settings.config) {
+			exports.push({ data: settings as SettingsExportType, kind: 'settings' });
 		}
+	} catch {
+		// Not a single JSON value: JSONL sessions are checked below.
 	}
 
 	try {
 		const data = await ConversationTransferService.parseImportFile(file);
 
 		if (data.length > 0 && data.every(isExportedConversation)) {
-			return { data, file, kind: 'conversations' };
+			exports.push({ data, kind: 'conversations' });
 		}
 	} catch {
-		// Not a conversation export either.
+		// Not a conversation export.
 	}
 
-	return null;
+	return exports;
 }
 
 /**
@@ -96,7 +99,7 @@ function keepNewestPerConversation(items: ExportedConversation[]): ExportedConve
 	return items.filter((item) => newest[item.conv.id] === item);
 }
 
-export function computeSettingsDiff(
+function computeSettingsDiff(
 	current: SettingsConfigType,
 	imported: SettingsConfigType
 ): SettingsDiffEntry[] {
@@ -154,6 +157,9 @@ export function useDropImport() {
 		showSettingsPreview: false
 	});
 
+	// conversations of a full backup, shown once its settings preview closes
+	let pendingConversations: ExportedConversation[] | null = null;
+
 	setDropImportContext({ importExports });
 
 	function handleDragEnter(event: DragEvent) {
@@ -193,27 +199,30 @@ export function useDropImport() {
 	}
 
 	async function importExports(files: File[]): Promise<File[]> {
-		const exports = await Promise.all(files.map(readExport));
+		const exports = await Promise.all(files.map(readExports));
 		const allConversations: ExportedConversation[] = [];
 
-		for (const dropped of exports) {
-			if (dropped?.kind === 'settings') {
+		for (const dropped of exports.flat()) {
+			if (dropped.kind === 'settings') {
 				ui.settingsData = dropped.data;
 				ui.settingsDiff = computeSettingsDiff(
 					$state.snapshot(settingsStore.config) as SettingsConfigType,
 					dropped.data.config
 				);
 				ui.showSettingsPreview = true;
-			} else if (dropped?.kind === 'conversations') {
+			} else {
 				allConversations.push(...dropped.data);
 			}
 		}
 
-		if (allConversations.length > 0) {
+		// a full backup holds both: its conversations wait until the settings preview is closed
+		if (allConversations.length > 0 && ui.showSettingsPreview) {
+			pendingConversations = allConversations;
+		} else if (allConversations.length > 0) {
 			showConversations(allConversations);
 		}
 
-		return files.filter((_, index) => !exports[index]);
+		return files.filter((_, index) => exports[index].length === 0);
 	}
 
 	function showConversations(allConversations: ExportedConversation[]) {
@@ -246,7 +255,7 @@ export function useDropImport() {
 
 		try {
 			settingsStore.importSettings(data);
-			ui.showSettingsPreview = false;
+			closeSettingsPreview();
 			toast.success('Settings imported successfully');
 		} catch (err) {
 			console.error('Failed to import settings:', err);
@@ -255,7 +264,16 @@ export function useDropImport() {
 	}
 
 	function cancelSettingsImport() {
+		closeSettingsPreview();
+	}
+
+	function closeSettingsPreview() {
 		ui.showSettingsPreview = false;
+
+		if (pendingConversations) {
+			showConversations(pendingConversations);
+			pendingConversations = null;
+		}
 	}
 
 	async function confirmImportSingle() {
@@ -266,6 +284,9 @@ export function useDropImport() {
 
 		try {
 			const { skipped } = await conversationsStore.importConversationsData([data]);
+
+			// an import can add the groups its chats were in
+			await groupsStore.reload();
 
 			ui.showPreview = false;
 			ui.openImported = { alreadyInLibrary: skipped.length > 0, conv: data.conv };
@@ -282,13 +303,21 @@ export function useDropImport() {
 			const selectedData = ($state.snapshot(ui.fullImportData) as ExportedConversation[]).filter(
 				(item) => selectedIds.has(item.conv.id)
 			);
+			const { imported, skipped } = await conversationsStore.importConversationsData(selectedData);
 
-			await conversationsStore.importConversationsData(selectedData);
+			await groupsStore.reload();
 
-			ui.importedConversations = selectedConversations;
+			// a conversation already in the library is left untouched, so the list shows what was written
+			if (skipped.length > 0) {
+				toast.info(
+					`Skipped ${skipped.length} conversation${skipped.length === 1 ? '' : 's'} already in your library`
+				);
+			}
+
+			ui.importedConversations = imported;
 			ui.bulkMessageCountMap = new SvelteMap(createMessageCountMap(selectedData));
 			ui.showSelection = false;
-			ui.showOpenBulk = true;
+			ui.showOpenBulk = imported.length > 0;
 		} catch (err) {
 			console.error('Import failed:', err);
 			toast.error('Failed to import conversations');
