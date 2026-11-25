@@ -693,8 +693,8 @@ struct llm_tokenizer_bpe_session {
 
         symbols_final.clear();
 
-        if (tok_pre == LLAMA_VOCAB_PRE_TYPE_MMBERT) {
-            // Metaspace pre-tokenizer: a text starts with an escaped space, and each escaped space starts a new word
+        if (vocab.get_metaspace_prepend_scheme() == LLAMA_METASPACE_PREPEND_SCHEME_ALWAYS) {
+            // Metaspace pre-tokenizer (prepend_scheme = "always"): each non-newline chunk starts with an escaped space, and each escaped space starts a new word
             std::vector<std::string> words;
             for (auto & word : word_collection) {
                 if (word.find_first_not_of('\n') == std::string::npos) {
@@ -2530,6 +2530,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     tokenizer_pre == "mmbert") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_MMBERT;
                 escape_whitespaces = true;
+                metaspace_prepend_scheme = LLAMA_METASPACE_PREPEND_SCHEME_ALWAYS;
             } else if (
                     tokenizer_pre == "sarvam-moe") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_SARVAM_MOE;
@@ -3021,9 +3022,6 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     metaspace_prepend_scheme = LLAMA_METASPACE_PREPEND_SCHEME_ALWAYS;
                 } else {
                     throw std::runtime_error(format("unknown metaspace prepend_scheme: '%s'", scheme.c_str()));
-                }
-                if (type == LLAMA_VOCAB_TYPE_BPE && metaspace_prepend_scheme == LLAMA_METASPACE_PREPEND_SCHEME_ALWAYS) {
-                    throw std::runtime_error("metaspace prepend_scheme 'always' is not supported for BPE vocab");
                 }
             }
         }
@@ -4585,6 +4583,10 @@ bool llama_vocab::get_escape_whitespaces() const {
 
 bool llama_vocab::get_treat_whitespace_as_suffix() const {
     return pimpl->treat_whitespace_as_suffix;
+}
+
+enum llama_metaspace_prepend_scheme llama_vocab::get_metaspace_prepend_scheme() const {
+    return pimpl->metaspace_prepend_scheme;
 }
 
 const llama_vocab::normalizer_options & llama_vocab::get_normalizer_opts() const {
