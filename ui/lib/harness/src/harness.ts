@@ -13,6 +13,7 @@ import type {
   Timings,
   Tool,
   ToolCall,
+  ToolCallTiming,
   ToolResult,
   TurnStats,
 } from "./types.js";
@@ -267,6 +268,7 @@ async function* run(
 
       const tool = toolsByName.get(toolCall.function.name);
       const startTime = performance.now();
+      const startedAt = Date.now();
 
       let result: ToolResult;
 
@@ -327,9 +329,12 @@ async function* run(
       }
 
       const durationMs = Math.round(result.durationMs ?? performance.now() - startTime);
-      const timing = {
+      const timing: ToolCallTiming = {
         duration_ms: durationMs,
+        endedAt: Date.now(),
+        id: toolCall.id,
         name: toolCall.function.name,
+        startedAt,
         success: !result.isError,
       };
 

@@ -101,6 +101,8 @@ export interface AgenticSession {
 	flowRootMessageId: string | null;
 	/** When the running flow started (ms since epoch); null when idle. */
 	startedAt: number | null;
+	/** When each call of the running flow started (ms since epoch), by tool call id. */
+	toolCallStartedAt: Record<string, number>;
 }
 
 /**

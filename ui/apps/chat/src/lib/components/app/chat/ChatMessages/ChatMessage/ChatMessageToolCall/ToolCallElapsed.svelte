@@ -1,36 +1,30 @@
 <script lang="ts">
-	// Time since the task started, ticking once a second.
+	// Time a loop of tool calls took, or since it started while it runs.
 
-	import { MS_PER_SECOND, SECONDS_PER_MINUTE } from '#lib/constants/index.ts';
-	import { formatPerformanceTime } from '#lib/utils/index.ts';
+	import { useNow } from '#lib/hooks/use-now.svelte.ts';
+	import { formatElapsedTime, formatPerformanceTime } from '#lib/utils/index.ts';
 
 	interface Props {
-		/** Task start (ms since epoch). */
+		/** Loop start (ms since epoch). */
 		startedAt: number;
+		/** Loop end (ms since epoch), or null while it runs. */
+		endedAt?: number | null;
 	}
 
-	let { startedAt }: Props = $props();
+	let { endedAt = null, startedAt }: Props = $props();
 
-	let now = $state(Date.now());
+	const now = useNow(() => endedAt === null);
 
-	$effect(() => {
-		const timer = setInterval(() => (now = Date.now()), MS_PER_SECOND);
-
-		return () => clearInterval(timer);
-	});
-
-	const elapsedMs = $derived(Math.max(0, now - startedAt));
-	// whole seconds while short, so the label does not flicker every tick
 	const label = $derived(
-		elapsedMs < SECONDS_PER_MINUTE * MS_PER_SECOND
-			? `${Math.floor(elapsedMs / MS_PER_SECOND)}s`
-			: formatPerformanceTime(elapsedMs)
+		endedAt === null
+			? formatElapsedTime(now.current - startedAt)
+			: formatPerformanceTime(endedAt - startedAt)
 	);
 </script>
 
 <span
 	class="text-body-sm font-normal text-muted-foreground tabular-nums"
-	title="Time since the task started"
+	title={endedAt === null ? 'Time since the loop started' : 'Time the loop took'}
 >
 	{label}
 </span>

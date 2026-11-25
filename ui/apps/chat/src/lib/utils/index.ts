@@ -112,6 +112,7 @@ export {
 	formatJsonPretty,
 	formatTime,
 	formatLocalIso,
+	formatElapsedTime,
 	formatPerformanceTime,
 	formatRelativeTime,
 	formatAttachmentText

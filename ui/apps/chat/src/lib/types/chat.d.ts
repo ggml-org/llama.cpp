@@ -139,9 +139,14 @@ export interface ChatMessageAgenticTurnStats {
 }
 
 export interface ChatMessageToolCallTiming {
+	/** The call's id; older messages lack it and the wall-clock times. */
+	id?: string;
 	name: string;
 	duration_ms: number;
 	success: boolean;
+	/** Wall-clock start and end (ms since epoch), waits for approval included. */
+	startedAt?: number;
+	endedAt?: number;
 }
 
 /**

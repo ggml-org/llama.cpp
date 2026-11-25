@@ -20,8 +20,10 @@
 		open: boolean;
 		isStreaming: boolean;
 		executingToolCallId?: string | null;
-		/** Task start (ms since epoch) for the live timer, or null for none. */
+		/** Start of the group's loop (ms since epoch), or null for no timer. */
 		elapsedStartedAt?: number | null;
+		/** End of the group's loop (ms since epoch), or null while it runs. */
+		elapsedEndedAt?: number | null;
 		/**
 		 * What the server is doing while the reply waits on it ( "Processing 40%",
 		 * "Loading weights" ), shown as the live title when this is the last row.
@@ -33,6 +35,7 @@
 
 	let {
 		children,
+		elapsedEndedAt = null,
 		elapsedStartedAt = null,
 		executingToolCallId,
 		isStreaming,
@@ -67,7 +70,7 @@
 
 		{#snippet titleSuffix()}
 			{#if elapsedStartedAt !== null}
-				<ToolCallElapsed startedAt={elapsedStartedAt} />
+				<ToolCallElapsed endedAt={elapsedEndedAt} startedAt={elapsedStartedAt} />
 			{/if}
 		{/snippet}
 

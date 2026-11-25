@@ -99,6 +99,7 @@ function createDefaultSession(): AgenticSession {
 		pendingPermissionRequest: null,
 		startedAt: null,
 		streamingToolCall: null,
+		toolCallStartedAt: {},
 		totalToolCalls: 0
 	};
 }
@@ -287,6 +288,11 @@ class AgenticStore {
 		return this.sessions.get(conversationId)?.streamingToolCall ?? null;
 	}
 
+	/** When a call of the running flow started (ms since epoch), or null when it has not. */
+	getToolCallStartedAt(conversationId: string, toolCallId: string): number | null {
+		return this.sessions.get(conversationId)?.toolCallStartedAt[toolCallId] ?? null;
+	}
+
 	getTotalToolCalls(conversationId: string): number {
 		return this.sessions.get(conversationId)?.totalToolCalls ?? 0;
 	}
@@ -374,6 +380,7 @@ class AgenticStore {
 			lastError: null,
 			liveLlm: null,
 			startedAt: Date.now(),
+			toolCallStartedAt: {},
 			totalToolCalls: 0
 		});
 
@@ -403,7 +410,8 @@ class AgenticStore {
 				flowRootMessageId: null,
 				isRunning: false,
 				liveLlm: null,
-				startedAt: null
+				startedAt: null,
+				toolCallStartedAt: {}
 			});
 
 			if (hasMcpServers) {
@@ -695,6 +703,16 @@ class AgenticStore {
 					);
 
 					break;
+
+				case HarnessEventType.TOOL_CALL: {
+					const started = this.sessions.get(conversationId)?.toolCallStartedAt ?? {};
+
+					this.updateSession(conversationId, {
+						toolCallStartedAt: { ...started, [event.toolCall.id]: Date.now() }
+					});
+
+					break;
+				}
 
 				case HarnessEventType.TOOL_UPDATE: {
 					if (!createToolResultMessage || !updateToolResultMessage) break;
