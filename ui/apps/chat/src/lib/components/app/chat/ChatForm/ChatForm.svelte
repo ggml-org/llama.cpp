@@ -18,7 +18,7 @@
 		DialogMcpResourcesBrowser
 	} from '#lib/components/app/index.ts';
 	import {
-		CHAT_FORM_SINGLE_ROW_MAX_TEXT_PX,
+		CHAT_FORM_SINGLE_ROW_MAX_TEXT_LINES,
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
 		ICON_CLASS_DEFAULT,
 		INITIAL_FILE_SIZE,
@@ -313,6 +313,7 @@
 	// wrapped, as the wider row of its own would fit it again and flip it straight back
 	let textHeight = $state<number | null>(null);
 	let wrappedAtLength = Infinity;
+	let lastLength = 0;
 	let canBeSingleRow = $derived(
 		singleRow &&
 			!deviceStore.isMobile &&
@@ -331,11 +332,16 @@
 	$effect(() => {
 		void textHeight;
 
-		const height = inputRef?.getContentDOM()?.offsetHeight ?? 0;
-		const fitsOneLine = height < CHAT_FORM_SINGLE_ROW_MAX_TEXT_PX;
+		const content = inputRef?.getContentDOM();
+		const lineHeight = content ? parseFloat(getComputedStyle(content).lineHeight) : 0;
+		const lines = content && lineHeight ? content.offsetHeight / lineHeight : 0;
+		const fitsOneLine = lines < CHAT_FORM_SINGLE_ROW_MAX_TEXT_LINES;
 		const length = value.length;
 
-		if (!length) wrappedAtLength = Infinity;
+		// an emptied form tries the one row again; one that wraps while empty keeps the two rows
+		if (!length && lastLength) wrappedAtLength = Infinity;
+
+		lastLength = length;
 
 		if (!canBeSingleRow) {
 			isSingleRow = false;
