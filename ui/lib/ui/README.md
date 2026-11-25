@@ -27,7 +27,7 @@ beside the apps built on it in `ui/apps`.
   `tw-animate-css` (both peer dependencies) and `@ggml-org/llama-brand`'s `css/colors.css` imported before it.
 - `tokens.css`: the three tiers of tokens only, also after `@ggml-org/llama-brand`'s `css/colors.css`. `fonts.css`: Llama Sans and Llama Mono. `surfaces.css`: the matte
   surface utilities.
-- Dark mode is the `dark` class on `<html>`; the Matte light surfaces are the `theme-matte` class.
+- Dark mode is the `dark` class on `<html>`.
 
 ## What's in it
 

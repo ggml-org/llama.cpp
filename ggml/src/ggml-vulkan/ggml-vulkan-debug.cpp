@@ -1370,9 +1370,10 @@ void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph
         } else if (tensor->op == GGML_OP_LIGHTNING_INDEXER) {
             tensor_clone = ggml_lightning_indexer(ggml_ctx, src_clone[0], src_clone[1], src_clone[2], src_clone[3]);
         } else if (tensor->op == GGML_OP_GATED_DELTA_NET) {
-            tensor_clone = ggml_gated_delta_net(ggml_ctx, src_clone[0], src_clone[1],
-            src_clone[2], src_clone[3], src_clone[4], src_clone[5],
-            ggml_get_op_params_i32(tensor, 0));
+            GGML_ASSERT(ggml_get_op_params_i32(tensor, 0) == 1); // K > 1 comes from the deprecated ggml_gated_delta_net
+            tensor_clone = ggml_gated_delta_net_ext(ggml_ctx, src_clone[0], src_clone[1],
+            src_clone[2], src_clone[3], src_clone[4], src_clone[5], src_clone[6], src_clone[7], src_clone[8], src_clone[9],
+            ggml_get_op_params_i32(tensor, 2) != 0);
         } else if (tensor->op == GGML_OP_OPT_STEP_ADAMW) {
             src_clone[0]->flags = tensor->src[0]->flags;
             tensor_clone = ggml_opt_step_adamw(ggml_ctx, src_clone[0], src_clone[1],

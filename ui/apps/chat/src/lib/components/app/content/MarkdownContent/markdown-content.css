@@ -17,7 +17,7 @@
 	overflow-x: visible;
 	border-radius: 0;
 	border: none;
-	font-size: 0.875rem;
+	font-size: 1em;
 }
 
 /* Base typography styles */
@@ -92,13 +92,14 @@
 	opacity: 0.7;
 }
 
-/* Inline code */
+/* Inline code. Code is set at the size of the text around it, here and in the blocks below: Llama Mono
+   has Llama Sans's x-height, so the two read as one size without the mono being scaled down. */
 .markdown-content :global(code:not(pre code)) {
 	background: var(--surface-muted);
 	color: var(--fg-muted);
 	padding: 0.125rem 0.375rem;
 	border-radius: 0.375rem;
-	font-size: 0.875rem;
+	font-size: 1em;
 }
 
 .markdown-content :global(pre) {
@@ -358,7 +359,7 @@ div.markdown-user-content :global(.table-wrapper) {
 	margin: 0;
 	border-radius: 0;
 	border: none;
-	font-size: 0.875rem;
+	font-size: 1em;
 }
 
 /* Mentions and hashtags */
@@ -761,7 +762,7 @@ div.markdown-user-content :global(.table-wrapper) {
 	margin: 0;
 	border-radius: 0;
 	border: none;
-	font-size: 0.875rem;
+	font-size: 1em;
 }
 
 .markdown-content :global([data-view-mode='source'] .mermaid-scroll-container),

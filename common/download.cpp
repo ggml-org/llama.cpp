@@ -98,6 +98,9 @@ class ProgressBar : public common_download_callback {
     std::string filename;
     size_t len = 0;
 
+    // the caller's callback, if any, still receives every event
+    common_download_callback * next;
+
     static void cleanup(const ProgressBar * line) {
         lines.erase(line);
         if (lines.empty()) {
@@ -110,9 +113,12 @@ class ProgressBar : public common_download_callback {
     }
 
 public:
-    ProgressBar() = default;
+    ProgressBar(common_download_callback * next) : next(next) {}
 
     void on_start(const common_download_progress & p) override {
+        if (next) {
+            next->on_start(p);
+        }
         filename = url_get_filename(p.url);
 
         for (size_t i = 0; i < filename.size(); ++i) {
@@ -126,12 +132,22 @@ public:
         }
     }
 
-    void on_done(const common_download_progress &, bool) override {
+    void on_done(const common_download_progress & p, bool ok) override {
+        if (next) {
+            next->on_done(p, ok);
+        }
         std::lock_guard<std::mutex> lock(mutex);
         cleanup(this);
     }
 
+    bool is_cancelled() const override {
+        return next && next->is_cancelled();
+    }
+
     void on_update(const common_download_progress & p) override {
+        if (next) {
+            next->on_update(p);
+        }
         if (!p.total || !is_output_a_tty()) {
             return;
         }
@@ -519,11 +535,9 @@ int common_download_file_single(const std::string & url,
                                 const std::string & lock_path,
                                 const std::string & alt_path) {
     if (!opts.offline) {
-        ProgressBar tty_cb;
+        ProgressBar tty_cb(opts.callback);
         common_download_opts online_opts = opts;
-        if (!online_opts.callback) {
-            online_opts.callback = &tty_cb;
-        }
+        online_opts.callback = &tty_cb;
         return common_download_file_single_online(url, path, online_opts, skip_etag, lock_path, alt_path);
     }
 

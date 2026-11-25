@@ -1,20 +1,21 @@
 <script lang="ts">
 	import {
 		ChatMessageActionIcons,
-		ChatMessageAgenticContent,
+		ChatMessageAgentTrace,
 		ChatMessageAssistantModel,
 		ChatMessageAssistantProcessingInfo,
 		ChatMessageAssistantRawOutput,
+		ChatMessageAssistantResponse,
 		ChatMessageAssistantStatistics,
 		ChatMessageContextMenu,
 		ChatMessageEditForm
 	} from '#lib/components/app/index.ts';
+	import { SETTINGS_KEYS } from '#lib/constants/index.ts';
 	import { getChatMessageEditContext } from '#lib/contexts/index.ts';
 	import { MessageRole } from '#lib/enums/index.ts';
 	import { useProcessingState } from '#lib/hooks/use-processing-state.svelte.ts';
 	import { chatStore, modelsStore, serverStore, settingsStore } from '#lib/stores/index.ts';
-	import { modelLoadProgressText } from '#lib/utils/index.ts';
-	import { hasAgenticContent } from '#lib/utils/index.ts';
+	import { hasAgenticContent, modelLoadProgressText } from '#lib/utils/index.ts';
 
 	interface Props {
 		class?: string;
@@ -39,7 +40,6 @@
 	// Get edit context
 	const editCtx = getChatMessageEditContext();
 
-	const isAgentic = $derived(hasAgenticContent(message, toolMessages));
 	const processingState = useProcessingState();
 
 	let currentConfig = $derived(settingsStore.config);
@@ -47,11 +47,13 @@
 
 	let showRawOutput = $state(false);
 
-	let displayedModel = $derived(message.model ?? null);
+	// A reply that ran the agentic loop ( it called tools ) is an Agent Trace;
+	// a basic chat reply is just its reasoning and its answer. A live reply
+	// becomes a trace the moment its first tool call streams in.
+	const isAgentTrace = $derived(hasAgenticContent(message, toolMessages));
 
 	let isCurrentlyLoading = $derived(chatStore.isLoading);
 	let isStreaming = $derived(chatStore.isStreaming());
-	let hasNoContent = $derived(!message?.content?.trim());
 	let isActivelyProcessing = $derived(isCurrentlyLoading || isStreaming);
 	// A compaction summary reports its own progress on the compaction row, so
 	// this turn stays quiet while it runs instead of duplicating the indicator.
@@ -67,21 +69,29 @@
 	);
 	let modelLoadingText = $derived(modelLoadProgressText(modelLoadProgress));
 
-	let showProcessingInfoTop = $derived(
-		message?.role === MessageRole.ASSISTANT &&
-			isActivelyProcessing &&
-			!isCompacting &&
-			hasNoContent &&
-			!isAgentic &&
-			isLastAssistantMessage
+	// The model badge shows from the start of a live reply, before the first
+	// chunk names the model, so the stats row does not pop in under the status
+	let displayedModel = $derived(
+		message.model ?? (isLastAssistantMessage && isActivelyProcessing ? loadTargetModel : null)
 	);
 
-	let showProcessingInfoBottom = $derived(
+	// What the server is doing while nothing is generated yet; null when this
+	// message is not the live one. Empty while tokens are streaming.
+	let statusText = $derived(
 		message?.role === MessageRole.ASSISTANT &&
 			isActivelyProcessing &&
 			!isCompacting &&
-			(!hasNoContent || isAgentic) &&
 			isLastAssistantMessage
+			? modelLoadingText ||
+					processingState.getPromptProgressText() ||
+					processingState.getProcessingMessage()
+			: null
+	);
+
+	// the latest exchange keeps its stats and actions in view; earlier messages
+	// show them on hover, and the setting can keep their stats in view as well
+	let hidesStatsUntilHover = $derived(
+		!isLastAssistantMessage && !currentConfig[SETTINGS_KEYS.ALWAYS_SHOW_MESSAGE_STATS]
 	);
 
 	let assistantEl: HTMLDivElement | undefined = $state();
@@ -151,7 +161,7 @@
 	});
 
 	$effect(() => {
-		if (showProcessingInfoTop || showProcessingInfoBottom) {
+		if (statusText !== null) {
 			processingState.startMonitoring();
 		}
 	});
@@ -167,10 +177,6 @@
 	class="chat-message-assistant text-md group w-full leading-7.5 {className}"
 	role="group"
 >
-	{#if showProcessingInfoTop}
-		<ChatMessageAssistantProcessingInfo {modelLoadingText} position="top" {processingState} />
-	{/if}
-
 	{#if editCtx.isEditing}
 		<ChatMessageEditForm />
 	{:else}
@@ -182,23 +188,31 @@
 		>
 			{#if showRawOutput}
 				<ChatMessageAssistantRawOutput {message} {toolMessages} />
-			{:else}
-				<ChatMessageAgenticContent
+
+				{#if statusText}
+					<ChatMessageAssistantProcessingInfo text={statusText} />
+				{/if}
+			{:else if isAgentTrace}
+				<ChatMessageAgentTrace
 					{isLastAssistantMessage}
 					isStreaming={chatStore.isStreaming()}
 					{message}
+					{statusText}
 					{toolMessages}
+				/>
+			{:else}
+				<ChatMessageAssistantResponse
+					{isLastAssistantMessage}
+					isStreaming={chatStore.isStreaming()}
+					{message}
+					{statusText}
 				/>
 			{/if}
 		</ChatMessageContextMenu>
 	{/if}
 
-	{#if showProcessingInfoBottom}
-		<ChatMessageAssistantProcessingInfo {modelLoadingText} position="bottom" {processingState} />
-	{/if}
-
 	{#if displayedModel}
-		<div class="info my-6 grid gap-4 tabular-nums">
+		<div class={['info my-4 grid gap-4 tabular-nums', hidesStatsUntilHover && 'message-meta']}>
 			<div class="inline-flex flex-wrap items-start gap-2 text-caption text-muted-foreground">
 				<ChatMessageAssistantModel
 					{displayedModel}
@@ -218,32 +232,41 @@
 	{/if}
 
 	{#if message.timestamp && !editCtx.isEditing}
-		<ChatMessageActionIcons
-			actionsPosition="left"
-			justify="start"
-			onContinue={currentConfig.enableContinueGeneration ? onContinue : undefined}
-			onRawOutputToggle={(enabled) => (showRawOutput = enabled)}
-			{onRegenerate}
-			rawOutputEnabled={showRawOutput}
-			showRawOutputSwitch={currentConfig.showRawOutputSwitch}
-		/>
+		<div class={isLastAssistantMessage ? undefined : 'message-meta'}>
+			<ChatMessageActionIcons
+				actionsPosition="left"
+				justify="start"
+				onContinue={currentConfig.enableContinueGeneration ? onContinue : undefined}
+				onRawOutputToggle={(enabled) => (showRawOutput = enabled)}
+				{onRegenerate}
+				rawOutputEnabled={showRawOutput}
+				showRawOutputSwitch={currentConfig.showRawOutputSwitch}
+			/>
+		</div>
 	{/if}
 </div>
 
 <style>
+	/* The reply's minimum height decides where a sent message rests once it
+	   glides up, and the top offset adds room above it. A phone's floating
+	   header covers the top of the page, so there it rests below the header. */
 	:global(.chat-message):last-child .chat-message-assistant {
+		--sent-message-top-offset: var(--page-top);
 		--assistant-min-height-offset: calc(
 			var(--last-user-message-height, 19rem) + var(--chat-form-height, 6rem) +
 				var(--chat-form-bottom-position, 0.5rem) + var(--chat-form-padding-top, 6rem) +
-				var(--assistant-margin-top, 3rem) + var(--chat-tabs-offset, 0px)
+				var(--assistant-margin-top, 1rem) + var(--chat-tabs-offset, 0px) +
+				var(--sent-message-top-offset)
 		);
 		min-height: calc(100dvh - var(--assistant-min-height-offset));
 
 		@media (width > 768px) {
+			--sent-message-top-offset: 0.5rem;
 			--assistant-min-height-offset: calc(
 				var(--last-user-message-height, 18rem) + var(--chat-form-height, 6rem) +
 					var(--chat-form-bottom-position, 1rem) + var(--chat-form-padding-top, 6rem) +
-					var(--assistant-margin-top, 3rem) + var(--chat-tabs-offset, 0px)
+					var(--assistant-margin-top, 1rem) + var(--chat-tabs-offset, 0px) +
+					var(--sent-message-top-offset)
 			);
 		}
 	}

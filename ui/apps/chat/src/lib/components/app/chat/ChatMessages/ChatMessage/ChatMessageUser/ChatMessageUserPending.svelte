@@ -34,7 +34,7 @@
 
 <div
 	aria-label="Pending user message"
-	class="group flex flex-col items-end gap-3 transition-opacity hover:opacity-80 md:gap-2 {className} sticky bottom-32"
+	class="group flex flex-col items-end gap-3 transition-opacity hover:opacity-80 md:gap-2 {className}"
 	role="group"
 >
 	{#if editCtx.isEditing}

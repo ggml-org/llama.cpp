@@ -593,7 +593,7 @@ caps caps_get(jinja::program & prog) {
     if (result.supports_reasoning_effort) {
         JJ_DEBUG("%s\n", ">>> Running capability check: reasoning effort levels");
 
-        static const std::vector<std::string> candidates = { "minimal", "low", "medium", "high", "xhigh", "max" };
+        static const std::vector<std::string> candidates = { "none", "minimal", "low", "medium", "high", "xhigh", "max" };
 
         // renders a single user turn with the given effort, nothing when the template raises
         const auto render = [&](const std::string & effort) {
@@ -631,7 +631,10 @@ caps caps_get(jinja::program & prog) {
         for (const auto & level : candidates) {
             const auto rendered = render(level);
             if (!rendered) {
-                rejected.push_back(level);
+                // "none" also turns thinking off, so the server does not answer it with an error
+                if (level != "none") {
+                    rejected.push_back(level);
+                }
                 continue;
             }
             if (rendered == unknown) {

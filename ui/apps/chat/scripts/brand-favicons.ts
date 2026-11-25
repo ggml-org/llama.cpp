@@ -1,5 +1,5 @@
 import { FAVICON_PATHS } from '../src/lib/constants/pwa.constants';
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,5 +23,6 @@ export function writeBrandFavicons(outDir: string = DEFAULT_OUT_DIR): void {
 
 	for (const [fileName, specifier] of Object.entries(BRAND_FAVICONS)) {
 		copyFileSync(require.resolve(specifier), resolve(outDir, fileName));
+		chmodSync(resolve(outDir, fileName), 0o644);
 	}
 }

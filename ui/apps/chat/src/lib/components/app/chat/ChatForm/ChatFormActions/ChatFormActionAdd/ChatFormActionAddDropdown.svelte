@@ -9,13 +9,14 @@
 		ATTACHMENT_FILE_ITEMS,
 		ATTACHMENT_MENU_TEXT,
 		ATTACHMENT_MODALITY_TEXT,
-		ATTACHMENT_TOOLTIP_TEXT,
+		attachmentTooltipText,
 		ICON_CLASS_DEFAULT,
 		MODALITY_ICONS
 	} from '#lib/constants/index.ts';
 	import { getChatFormActionsContext } from '#lib/contexts/index.ts';
 	import { AttachmentAction, AttachmentItemEnabledWhen, ModelModality } from '#lib/enums/index.ts';
 	import { useAttachmentMenu } from '#lib/hooks/use-attachment-menu.svelte.ts';
+	import { agenticMode } from '#lib/stores/agentic-mode.svelte.ts';
 	import type { Component } from 'svelte';
 
 	interface Props {
@@ -84,7 +85,7 @@
 						)}
 						disabled={chatFormActions.disabled}
 					>
-						<span class="sr-only">{ATTACHMENT_TOOLTIP_TEXT}</span>
+						<span class="sr-only">{attachmentTooltipText(agenticMode.enabled)}</span>
 
 						<Plus class={ICON_CLASS_DEFAULT} />
 					</DropdownMenu.Trigger>
@@ -92,7 +93,7 @@
 			</Tooltip.Trigger>
 
 			<Tooltip.Content>
-				<p>{ATTACHMENT_TOOLTIP_TEXT}</p>
+				<p>{attachmentTooltipText(agenticMode.enabled)}</p>
 			</Tooltip.Content>
 		</Tooltip.Root>
 
@@ -160,7 +161,9 @@
 				</DropdownMenu.Item>
 			{/if}
 
-			<ChatFormActionAddToolsSubmenu />
+			{#if agenticMode.enabled}
+				<ChatFormActionAddToolsSubmenu />
+			{/if}
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
 </div>

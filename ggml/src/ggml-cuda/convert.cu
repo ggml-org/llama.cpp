@@ -385,7 +385,7 @@ static __global__ void dequantize_block_nvfp4(
         const void * __restrict__ vx,
         dst_t * __restrict__ yy,
         const int64_t ne) {
-    const int64_t i = blockIdx.x;
+    const int64_t i = (int64_t) blockIdx.x*blockDim.y + threadIdx.y;
     const int     tid = threadIdx.x;
 
     const int64_t base = i * QK_NVFP4;
@@ -417,7 +417,7 @@ static void dequantize_row_nvfp4_cuda(
         cudaStream_t stream) {
     GGML_ASSERT(k % QK_NVFP4 == 0);
     const int nb = k / QK_NVFP4;
-    dequantize_block_nvfp4<<<nb, 32, 0, stream>>>(vx, y, k);
+    dequantize_block_nvfp4<<<(nb + 7)/8, dim3(32, 8), 0, stream>>>(vx, y, k);
 }
 template <typename src_t, typename dst_t>
 static __global__ void convert_unary(
