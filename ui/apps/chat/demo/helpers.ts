@@ -519,10 +519,21 @@ async function importTraces(page: Page, file: string): Promise<void> {
 
 	const chooser = page.waitForEvent('filechooser');
 
-	await scope.getByRole('button', { name: 'Import conversations' }).click();
+	await scope.getByRole('button', { name: /^Drop files here/ }).click();
 	await (await chooser).setFiles(file);
-	await page.getByRole('button', { name: /^Import \(\d+\)$/ }).click();
-	await page.getByRole('heading', { name: /^Imported \d+ conversation/ }).waitFor();
+
+	// one conversation gets a preview, then a prompt to open it; several get a picker, then a list
+	const notNow = page.getByRole('button', { exact: true, name: 'Not now' });
+	const importedList = page.getByRole('heading', { name: 'Imported Conversations' });
+
+	await page
+		.getByRole('button', { name: /^Import \(\d+\)$/ })
+		.or(page.getByRole('alertdialog').getByRole('button', { exact: true, name: 'Import' }))
+		.click();
+	await notNow.or(importedList).waitFor();
+
+	if (await notNow.isVisible()) await notNow.click();
+	else await page.keyboard.press('Escape');
 
 	// the app remembers the sidebar the import expanded; a demo starts with it collapsed, as on a
 	// first visit
