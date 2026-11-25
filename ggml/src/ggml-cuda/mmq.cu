@@ -273,7 +273,7 @@ void ggml_cuda_mul_mat_q(
         ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), nbytes_src1_q8_1);
         ggml_cuda_pool_alloc<float> src1_scale(ctx.pool());
         if (src0->type == GGML_TYPE_NVFP4 && use_native_fp4) {
-            src1_scale.alloc(ne13*ne12*ne11);
+            src1_scale.alloc(ne13*ne12*ne11 + J_best-1); // Needs to be padded for unconditional memory access.
         }
 
         {
@@ -343,7 +343,7 @@ void ggml_cuda_mul_mat_q(
     ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), nbytes_src1_q8_1);
     ggml_cuda_pool_alloc<float> src1_scale(ctx.pool());
     if (src0->type == GGML_TYPE_NVFP4 && use_native_fp4) {
-        src1_scale.alloc(ne12*n_expert_used);
+        src1_scale.alloc(ne12*n_expert_used + J_best-1); // Needs to be padded for unconditional memory access.
     }
 
     const int64_t ne11_flat = ne12*n_expert_used;
