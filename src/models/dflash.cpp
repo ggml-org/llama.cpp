@@ -47,6 +47,7 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         }
     } else if (has_selector) {
         variant = VARIANT_DFLASH2;
+        ml.get_key(LLM_KV_DFLASH_SELECTOR_SOFTCAP_POST, hparams.dflash_selector_softcap_post, false);
     } else if (has_lilicorr) {
         variant = VARIANT_LILICORR;
         load_hparams_lilicorr(ml);
@@ -54,6 +55,15 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
 
     if (!ml.get_arr(LLM_KV_TARGET_LAYERS, target_layer_ids, false)) {
         throw std::runtime_error("DFlash model requires 'target_layers' in GGUF metadata");
+    }
+
+    // Looped targets can visit the same physical layer more than once.
+    std::vector<int32_t> target_visits;
+    if (variant == VARIANT_DFLASH2 && ml.get_arr(LLM_KV_TARGET_VISITS, target_visits, false)) {
+        if (target_visits.empty() || target_visits.size() != target_layer_ids.size()) {
+            throw std::runtime_error("DFlash 'target_visits' must have the same nonzero length as 'target_layers'");
+        }
+        target_layer_ids = std::move(target_visits);
     }
 
     hparams.n_embd_inp_enc_impl = (uint32_t) target_layer_ids.size() * hparams.n_embd;
@@ -447,6 +457,14 @@ ggml_tensor * llama_model_dflash::graph_base::build_layers(ggml_tensor * inp_tok
     ggml_tensor * inpL = model.dspark_mask_embd
         ? build_dspark_inp_block(*this, model, inp_tokens)
         : ggml_get_rows(ctx0, get_tok_embd(*this, model), inp_tokens);
+    if (model.dflash_selector_hidden && !model.tok_embd) {
+        const auto * target = llama_get_model(cparams.ctx_other);
+        // Inkling RMS-normalizes token embeddings before using them.
+        if (target->arch == LLM_ARCH_INKLING2 || target->arch == LLM_ARCH_INKLING2_LOOP) {
+            inpL = ggml_rms_norm(ctx0, inpL, target->hparams.f_norm_rms_eps);
+            inpL = ggml_mul(ctx0, inpL, target->tok_norm);
+        }
+    }
     if (hparams.f_embedding_scale != 0.0f) {
         inpL = ggml_scale(ctx0, inpL, hparams.f_embedding_scale);
     }
@@ -569,7 +587,7 @@ ggml_tensor * llama_model_dflash::graph_base::build_logits(ggml_tensor * cur) {
         if (hparams.f_logit_scale != 0.0f) {
             cur = ggml_scale(ctx0, cur, hparams.f_logit_scale);
         }
-        if (hparams.f_final_logit_softcapping > 0.0f) {
+        if (hparams.f_final_logit_softcapping > 0.0f && !hparams.dflash_selector_softcap_post) {
             cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);
             cur = ggml_tanh(ctx0, cur);
             cur = ggml_scale(ctx0, cur, hparams.f_final_logit_softcapping);
