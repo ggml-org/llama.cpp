@@ -2,6 +2,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 
 import pytest
 from utils import *
@@ -224,6 +225,18 @@ def test_tools_builtin_exec_shell_command_stream():
     chunks = "".join(e["chunk"] for e in events[:-1])
     assert "hello" in chunks
     assert "[exit code: 0]" in chunks
+
+
+def test_tools_builtin_exec_shell_command_double_quotes():
+    global server
+    server.start()
+
+    # a quoted program path and a quoted argument must reach the program as written (on Windows, cmd.exe got them as \")
+    command = f"\"{sys.executable}\" -c \"print('quoted arg')\""
+    res = call_tool("exec_shell_command", {"command": command})
+    text = res["plain_text_response"]
+    assert "quoted arg" in text
+    assert "[exit code: 0]" in text
 
 
 def test_tools_builtin_cwd_header(tmp_path):
@@ -519,3 +532,28 @@ def test_tools_builtin_cwd_relative_paths(tmp_path):
     (other / "abs.txt").write_text("absolute-content")
     res = call_tool("read_file", {"path": str(other / "abs.txt")}, headers=headers)
     assert "absolute-content" in res["plain_text_response"]
+
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows cmd.exe")
+def test_tools_builtin_exec_shell_command_preserves_quoted_paths(tmp_path):
+    global server
+    server.start()
+
+    # Regression: quotes must survive the Windows process creation layer.
+    windows_dir = os.environ.get("WINDIR", r"C:\Windows")
+    res = call_tool(
+        "exec_shell_command",
+        {"command": f'dir "{windows_dir}"'},
+    )
+    assert "[exit code: 0]" in res["plain_text_response"], res
+
+    # Also verify a path containing spaces.
+    quoted_dir = tmp_path / "directory with spaces"
+    quoted_dir.mkdir()
+    (quoted_dir / "marker.txt").write_text("test")
+
+    res = call_tool(
+        "exec_shell_command",
+        {"command": f'dir "{quoted_dir}"'},
+    )
+    assert "[exit code: 0]" in res["plain_text_response"], res
+    assert "marker.txt" in res["plain_text_response"]

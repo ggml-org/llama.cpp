@@ -176,11 +176,13 @@ public:
     virtual list_result list_entries(const std::string & base, int max_depth, list_kind kind) const = 0;
     // on_chunk, if set, is called with each chunk of output as it is read (before truncation cuts in);
     // returning false terminates the process early (e.g. the client disconnected)
+    // verbatim: on Windows, pass args as written, without C runtime quoting (for cmd.exe)
     virtual exec_result run(
             const std::vector<std::string> & args,
             size_t max_output,
             int timeout_secs,
-            const std::function<bool(const std::string &)> & on_chunk = nullptr) const = 0;
+            const std::function<bool(const std::string &)> & on_chunk = nullptr,
+            bool verbatim = false) const = 0;
 };
 
 // shared subprocess execution helper, used by both the local and the isolate-backed tools_io implementations.
@@ -192,7 +194,8 @@ static tools_io::exec_result run_subprocess(
         const std::function<bool(const std::string &)> & on_chunk,
         bool combine_stderr,
         const std::string & cwd = "",
-        const std::string * stdin_data = nullptr) {
+        const std::string * stdin_data = nullptr,
+        bool verbatim = false) {
     tools_io::exec_result res;
 
     common_subproc proc;
@@ -202,6 +205,9 @@ static tools_io::exec_result run_subprocess(
                 | subprocess_option_search_user_path;
     if (combine_stderr) {
         options |= subprocess_option_combined_stdout_stderr;
+    }
+    if (verbatim) {
+        options |= subprocess_option_windows_verbatim_arguments;
     }
 
     if (!proc.create(args, options, {}, cwd.empty() ? nullptr : cwd.c_str())) {
@@ -406,8 +412,9 @@ public:
             const std::vector<std::string> & args,
             size_t max_output,
             int timeout_secs,
-            const std::function<bool(const std::string &)> & on_chunk = nullptr) const override {
-        return run_subprocess(args, max_output, timeout_secs, on_chunk, /*combine_stderr=*/true, cwd);
+            const std::function<bool(const std::string &)> & on_chunk = nullptr,
+            bool verbatim = false) const override {
+        return run_subprocess(args, max_output, timeout_secs, on_chunk, /*combine_stderr=*/true, cwd, nullptr, verbatim);
     }
 
 private:
@@ -617,7 +624,8 @@ public:
             const std::vector<std::string> & args,
             size_t max_output,
             int timeout_secs,
-            const std::function<bool(const std::string &)> & on_chunk = nullptr) const override {
+            const std::function<bool(const std::string &)> & on_chunk = nullptr,
+            bool /*verbatim*/ = false) const override {
         std::vector<std::string> inner = {"timeout", std::to_string(timeout_secs) + "s"};
         inner.insert(inner.end(), args.begin(), args.end());
         // small buffer over timeout_secs so the in-isolate `timeout` has a chance to exit cleanly
@@ -1296,10 +1304,13 @@ struct server_tool_exec_shell_command : server_tool {
 
         // an isolate is always POSIX regardless of host OS, so it always gets `sh -c`
 #ifdef _WIN32
-        std::vector<std::string> args = !json_value(params, "runtime", std::string()).empty()
-            ? std::vector<std::string>{"sh", "-c", command}
-            : std::vector<std::string>{"cmd", "/c", command};
+        // cmd.exe does not use the C runtime quoting rules, so it gets the command as written; /s removes only the outer quotes
+        const bool verbatim = json_value(params, "runtime", std::string()).empty();
+        std::vector<std::string> args = verbatim
+            ? std::vector<std::string>{"cmd", "/d", "/s", "/c", "\"" + command + "\""}
+            : std::vector<std::string>{"sh", "-c", command};
 #else
+        const bool verbatim = false;
         std::vector<std::string> args = {"sh", "-c", command};
 #endif
 
@@ -1309,7 +1320,7 @@ struct server_tool_exec_shell_command : server_tool {
             auto res = io->run(args, max_output, timeout, [st](const std::string & chunk) {
                 st->push(chunk);
                 return !st->alive || st->alive();
-            });
+            }, verbatim);
             if (st->alive && !st->alive()) {
                 return json();
             }
@@ -1321,7 +1332,7 @@ struct server_tool_exec_shell_command : server_tool {
             return json();
         }
 
-        auto res = io->run(args, max_output, timeout);
+        auto res = io->run(args, max_output, timeout, nullptr, verbatim);
 
         std::string text_output = res.output;
         text_output += string_format("\n[exit code: %d]", res.exit_code);
