@@ -1,9 +1,9 @@
 #include "../node_context.h"
 #include "../op_table.h"
 #include "../utils.h"
+
 #include <climits>
 #include <cstdint>
-#include <cstdio>
 #include <memory>
 #include <numeric>
 #include <openvino/frontend/exception.hpp>

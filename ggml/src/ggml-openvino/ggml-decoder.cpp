@@ -12,7 +12,6 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iomanip>
@@ -1299,10 +1298,8 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
                 compute_params.token_len_per_seq = ggml_nelements(node->src[1]);
             }
 
-            // When multiple ROPE ops in the graph disagree on op_params (e.g. gemma4's
-            // mixed SWA/non-SWA layers with different n_dims or freq_base), we cannot
-            // share a single precomputed rope_sin/rope_cos. Track divergence so the
-            // translator falls back to per-op make_sin_cos in that case.
+            // Multiple ROPE ops can disagree on op_params (e.g. gemma4's mixed SWA/non-SWA layers with different
+            // n_dims or freq_base). Track divergence for the graph key and for decoder reuse.
             static_assert(sizeof(model_params.rope_params) == sizeof(int32_t) * 16, "rope_params size");
             if (!rope_seen) {
                 memcpy(model_params.rope_params, node->op_params, sizeof(int32_t) * 16);
@@ -1753,7 +1750,6 @@ void GgmlOvDecoder::add_extra_inputs() {
         m_model_extra_inputs["ggml_hfa_mask"] = {
             ov::element::f16, ov::Shape{1, 1, chunk_size, past_capacity + chunk_size}, 0, true, {}, -1};
     }
-    // create_1d_input("token_len", m_compute_params.token_len_per_seq * m_compute_params.n_seq_active);
 
     // n_seq_active and attention_size(_swa) are dimensions of the KQ masks. Read them from the mask shape inside the
     // model: the GPU plugin then gets the Q Reshape and KV Slice shapes from shape inference instead of waiting for
@@ -2162,22 +2158,6 @@ bool GgmlOvDecoder::is_kvcache_token_rows(const ggml_tensor * cache) const {
         }
     }
     return true;
-}
-
-const ggml_tensor * GgmlOvDecoder::get_tensor_from_name(const std::string & name) const {
-    for (int i = 0; i < m_cgraph->n_nodes; i++) {
-        const auto * node = m_cgraph->nodes[i];
-        for (int j = 0; j < GGML_MAX_SRC; j++) {
-            const auto * src = node->src[j];
-            if (src == nullptr) {
-                break;
-            }
-            if (get_tensor_ov_name(m_cgraph, src) == name) {
-                return src;
-            }
-        }
-    }
-    return nullptr;
 }
 
 std::string GgmlOvDecoder::get_hfa_history_input_name() const {
@@ -2905,43 +2885,29 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             if (src == nullptr) {
                 continue;
             }
-            struct ggml_tensor * root_src = nullptr;
-            // if (src->org_src) {
-            //     root_src = src->org_src;
-            // }
-            if (root_src) {
-                if (is_inp_tok(root_src, node) || is_inp_pos(root_src, node) || is_get_rows_input_idx(root_src, node)) {
-                    m_node_dynamic_dims[root_src] = 0;
-                    m_node_dynamic_dims[src] = m_node_dynamic_dims[root_src];
-                    continue;
-                }
-                self(self, root_src);
-                m_node_dynamic_dims[src] = m_node_dynamic_dims[root_src];
-            } else {
-                if (is_inp_tok(src, node) || is_inp_pos(src, node) || is_get_rows_input_idx(src, node)) {
-                    m_node_dynamic_dims[src] = 0;
-                    continue;
-                }
-                if (is_inp_scale_rows(src, node) || is_inp_embd_leaf(src, node)) {
-                    m_node_dynamic_dims[src] = 1;
-                    continue;
-                }
-                if (!m_is_static && is_activation_input(src, node)) {
-                    m_node_dynamic_dims[src] = 1;
-                    continue;
-                }
-                // a view of a model weight (BERT's token type row) has no token dim
-                if (node->op == GGML_OP_VIEW && src->op == GGML_OP_NONE && !is_stateful() && !m_model_is_splitted &&
-                    !(src->buffer != nullptr && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS)) {
-                    m_node_dynamic_dims[src] = 1;
-                    continue;
-                }
-                if (is_inp_embd_2d(src, node)) {
-                    m_node_dynamic_dims[src] = 1;
-                    continue;
-                }
-                self(self, src);
+            if (is_inp_tok(src, node) || is_inp_pos(src, node) || is_get_rows_input_idx(src, node)) {
+                m_node_dynamic_dims[src] = 0;
+                continue;
             }
+            if (is_inp_scale_rows(src, node) || is_inp_embd_leaf(src, node)) {
+                m_node_dynamic_dims[src] = 1;
+                continue;
+            }
+            if (!m_is_static && is_activation_input(src, node)) {
+                m_node_dynamic_dims[src] = 1;
+                continue;
+            }
+            // a view of a model weight (BERT's token type row) has no token dim
+            if (node->op == GGML_OP_VIEW && src->op == GGML_OP_NONE && !is_stateful() && !m_model_is_splitted &&
+                !(src->buffer != nullptr && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS)) {
+                m_node_dynamic_dims[src] = 1;
+                continue;
+            }
+            if (is_inp_embd_2d(src, node)) {
+                m_node_dynamic_dims[src] = 1;
+                continue;
+            }
+            self(self, src);
         }
         switch (node->op) {
         case GGML_OP_NONE:
@@ -2966,9 +2932,6 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                         }
                     }
                 }
-                // OPENVINO_ASSERT(dynamic_dim_value == node->ne[m_node_dynamic_dims[node]],
-                //                 "Dynamic dim value mismatch for node: " + std::string(node->name) +
-                //                     " and its src[1]: " + std::string(node->src[1]->name));
             }
             break;
         case GGML_OP_MUL:
@@ -2985,7 +2948,6 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             m_node_dynamic_dims[node] = -1;
             if (m_node_dynamic_dims[node->src[0]] != -1) {
                 auto dynamic_dim_idx = m_node_dynamic_dims[node->src[0]];
-                // auto dynamic_dim_value = node->src[0]->ne[dynamic_dim_idx];
                 // src dim i moves to dim op_params[i]
                 if (dynamic_dim_idx >= 0 && dynamic_dim_idx < GGML_MAX_DIMS) {
                     m_node_dynamic_dims[node] = node->op_params[dynamic_dim_idx];
@@ -3308,47 +3270,5 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
     for (int i = 0; i < m_cgraph->n_nodes; i++) {
         ggml_tensor * node = m_cgraph->nodes[i];
         visit_node(visit_node, node);
-    }
-
-    // print the nodes in m_cgraph name & shape with the dynamic dim (the dynamic dim is the dimension with -1 in m_node_dynamic_dims) for debugging
-    if (0) {
-        for (int i = 0; i < m_cgraph->n_nodes; i++) {
-            ggml_tensor * node = m_cgraph->nodes[i];
-            int dynamic_dim = m_node_dynamic_dims[node];
-            std::cout << "[" << i << "] " << "node_name: " << node->name << " op: " << ggml_op_name(node->op)
-                      << " shape: [";
-            for (int j = 0; j < 4; j++) {
-                if (j == dynamic_dim) {
-                    std::cout << "*";
-                } else {
-                    std::cout << node->ne[j];
-                }
-                if (j < 3) {
-                    std::cout << ", ";
-                }
-            }
-            std::cout << "]" << '\n';
-            // print the src name & shape with the dynamic dim for debugging
-            for (int j = 0; j < GGML_MAX_SRC; j++) {
-                ggml_tensor * src = node->src[j];
-                if (src == nullptr) {
-                    continue;
-                }
-                int src_dynamic_dim = m_node_dynamic_dims[src];
-                std::cout << "    [" << j << "] src_name: " << src->name << " [";
-                for (int k = 0; k < 4; k++) {
-                    if (k == src_dynamic_dim) {
-                        std::cout << "*";
-                    } else {
-                        std::cout << src->ne[k];
-                    }
-                    if (k < 3) {
-                        std::cout << ", ";
-                    }
-                }
-                std::cout << "]" << '\n';
-            }
-            std::cout << '\n';
-        }
     }
 }

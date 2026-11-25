@@ -95,7 +95,6 @@ struct ComputeParams {
     int swa_window = -1;
     int input_len = -1;
     int token_len_per_seq = -1;
-    int past_kv_len = -1;
     int output_len = 1;
 
     int cache_rs_reset_idx = -1;
@@ -329,10 +328,6 @@ public:
 
     virtual int get_ctx_per_seq() const { return m_model_params.ctx_per_seq; }
 
-    virtual int get_ctx_per_seq_swa() const { return m_model_params.ctx_per_seq_swa; }
-
-    virtual int get_n_seq() const { return m_model_params.n_seq; }
-
     virtual int is_swa_layer(int layer) const override {
         return std::find(m_model_params.swa_layers.begin(), m_model_params.swa_layers.end(), layer) !=
                m_model_params.swa_layers.end();
@@ -353,13 +348,9 @@ public:
         return m_model_params.n_heads_kv;
     }
 
-    int get_past_kv_len() const { return m_compute_params.past_kv_len; }
-
     int get_input_len() const { return m_compute_params.input_len; }
 
     virtual int32_t * get_rope_params() const override { return const_cast<int32_t *>(m_model_params.rope_params); }
-
-    virtual bool has_mixed_rope_params() const override { return m_model_params.mixed_rope_params; }
 
     virtual int get_ssm_state_size() const override { return m_model_params.state_size; }
 
@@ -451,8 +442,6 @@ public:
         }
         return v;
     }
-
-    const ggml_tensor * get_tensor_from_name(const std::string & name) const;
 
     std::string get_hfa_history_input_name() const;
 
@@ -643,10 +632,6 @@ public:
 
     bool is_direct_gdn_view(const ggml_tensor * node) const;
 
-    static bool is_cache(const ggml_tensor * tensor, const ggml_tensor * op) {
-        return is_recurrent_cache(tensor) || is_kvcache(tensor, op);
-    }
-
     static bool is_kvcache(const ggml_tensor * tensor, const ggml_tensor * op) {
         if (tensor == nullptr || is_recurrent_cache(tensor)) {
             return false;
@@ -757,33 +742,6 @@ public:
     static bool is_inp_s_copy(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] &&
                op->src[0]->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY;
-    }
-
-    std::string get_graph_input_ov_name(const ggml_tensor * tensor, const ggml_tensor * op) const {
-        if (is_inp_pos(tensor, op)) {
-            return "inp_pos";
-        }
-        if (is_inp_emb(tensor, op)) {
-            return "embd";
-        }
-        if (is_inp_mask(tensor, op)) {
-            // Give the two attention masks distinct OV parameter names.
-            //
-            // An interleaved-SWA model builds one full-attention mask and one sliding-window mask,
-            // but build_attn_inp_kq_mask() names them identically, so keying a parameter off
-            // tensor->name alone makes the second mask OVERWRITE the first in m_model_inputs: both
-            // attention types then read a single parameter, and the windowed layers silently run
-            // against an unbanded mask. Disambiguate using the SWA layer set computed in
-            // compute_llm_params(), which classifies by mask tensor identity rather than by name.
-            //
-            // When no SWA layer was found there is only one mask in play, so the plain name is
-            // correct and no _swa parameter is created.
-            if (m_model_params.swa_layers.empty()) {
-                return "self_kq_mask";
-            }
-            return is_swa_mask(tensor) ? "self_kq_mask_swa" : "self_kq_mask";
-        }
-        return tensor->name;
     }
 
 private:

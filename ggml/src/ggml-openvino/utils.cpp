@@ -13,11 +13,9 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -461,6 +459,12 @@ static std::string ov_profiling_csv_field(const std::string & value) {
     return escaped;
 }
 
+// GGML_OPENVINO_DEBUG_OUTPUT, or GGML_OPENVINO_DEBUG_NODE (its extra outputs)
+static bool debug_output_enabled() {
+    return ggml_openvino_getenv_int("GGML_OPENVINO_DEBUG_OUTPUT") ||
+           ggml_openvino_getenv_str("GGML_OPENVINO_DEBUG_NODE");
+}
+
 static void dump_ov_profiling_info(const ov::InferRequest & infer_request) {
     if (ggml_openvino_getenv_int("GGML_OPENVINO_PROFILING") < 2) {
         return;
@@ -703,13 +707,11 @@ ov::Tensor convert_ggml_input_to_ov(const std::shared_ptr<GgmlOvDecoder> & ggml_
     if (ggml_tensor->extra != nullptr && !ggml_decoder->is_splited_model()) {
         auto * extra_base = static_cast<ggml_openvino_extra_base *>(ggml_tensor->extra);
         if (extra_base->type == ggml_openvino_extra_base::Type::TENSOR) {
-            // GGML_LOG_DEBUG("Using ggml_tensor->extra as ov::Tensor for input: %s\n", name.c_str());
             auto * tensor_extra = static_cast<ggml_openvino_tensor_extra *>(extra_base);
             return *tensor_extra->tensor;
         }
     }
 
-    // GGML_LOG_DEBUG("Converting ggml tensor to ov::Tensor for input: %s\n", name.c_str());
     auto * input_data = ggml_tensor->data;
     ov::Shape input_shape;
     if (ggml_tensor->op == GGML_OP_VIEW && !ggml_decoder->is_splited_model()) {
@@ -1166,8 +1168,7 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
         auto model_output_it = model_outputs.find(output_names[i]);
         if (model_output_it == model_outputs.end()) {
             // Debug-only output added via GGML_OPENVINO_DEBUG_NODE; nothing to copy into.
-            if (ggml_openvino_getenv_int("GGML_OPENVINO_DEBUG_OUTPUT") ||
-                ggml_openvino_getenv_str("GGML_OPENVINO_DEBUG_NODE")) {
+            if (debug_output_enabled()) {
                 print_output_tensor_info(output_names[i], output_tensor, nullptr);
             }
             continue;
@@ -1239,7 +1240,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
     auto & core = ov_singleton_core();
     const auto & config = ggml_openvino_get_compile_config();
     const auto & device = r_ctx->device;
-    static auto is_static = false;
+    constexpr bool is_static = false;
 
     static const bool cache_disabled = ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_CACHE");
 
@@ -1914,8 +1915,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
         }
         dump_ov_profiling_info(*infer_request);
 
-        if (ggml_openvino_getenv_int("GGML_OPENVINO_DEBUG_OUTPUT") ||
-            ggml_openvino_getenv_str("GGML_OPENVINO_DEBUG_NODE")) {
+        if (debug_output_enabled()) {
             for (size_t i = 0; i < ov_output_names.size(); i++) {
                 const auto output_tensor = infer_request->get_output_tensor(i);
                 print_output_tensor_info(ov_output_names[i], output_tensor, nullptr);
@@ -2242,8 +2242,8 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
     // Normally NPU, but honors GGML_OPENVINO_DEVICE so GGML_OPENVINO_FORCE_STATIC can run the
     // static-shape path on CPU/GPU to isolate translation bugs from NPUW/NPU-driver issues.
     const auto & device = r_ctx->device;
-    static auto is_static = true;
-    static auto stateful = false;
+    constexpr bool is_static = true;
+    constexpr bool stateful = false;
 
     auto prefill_chunk_size = get_prefill_chunk_size();
     const auto & config = ggml_openvino_get_compile_config();
@@ -2606,8 +2606,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                        ggml_openvino_model_cache_verify_manifest(
                            ggml_openvino_model_cache_manifest_path(model_cache_dir, fp), cgraph, fp, inputs, outputs);
             };
-            const bool self_contained_mmap =
-                weightless_bank && ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_MMAP") != 0;
+            const bool self_contained_mmap = weightless_bank && ggml_openvino_self_contained_mmap_enabled();
             const bool skip_weights = weightless_bank && blob_valid(prefill_fp) && blob_valid(decode_fp) &&
                                       ggml_openvino_model_cache_weights_valid(weights_path);
             if (self_contained_mmap && !skip_weights) {
@@ -2862,7 +2861,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
         const bool skip_weights = graph.weightless_bank && static_blob_valid(model_cache_dir, fp, cgraph) &&
                                   (own_weights_valid || pair_weights_usable());
         if (graph.weightless_bank && !skip_weights) {
-            if (ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_MMAP") != 0) {
+            if (ggml_openvino_self_contained_mmap_enabled()) {
                 throw std::runtime_error("GGML_OPENVINO_SELF_CONTAINED_MMAP: no cached decode model for KV window " +
                                          std::to_string(window) + " in " + model_cache_dir +
                                          "; rerun with GGML_OPENVINO_SELF_CONTAINED_MMAP=0");
@@ -2963,7 +2962,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             const std::string model_cache_dir = ggml_openvino_model_cache_dir();
             if (graph.weightless_bank && graph.weights_layout &&
                 (ggml_openvino_npu_kv_head_major_enabled() || prefill_window_aligned) &&
-                ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_MMAP") == 0) {
+                !ggml_openvino_self_contained_mmap_enabled()) {
                 const int64_t t1 = ggml_time_us();
                 size_t exported = 0;
                 for (int window = decode_bucket;; window *= 2) {
@@ -3207,8 +3206,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                         static_cast<long long>(chunk_start), chunk_infer_us / 1000.0);
             }
 
-            if (ggml_openvino_getenv_int("GGML_OPENVINO_DEBUG_OUTPUT") ||
-                ggml_openvino_getenv_str("GGML_OPENVINO_DEBUG_NODE")) {
+            if (debug_output_enabled()) {
                 for (size_t i = 0; i < ov_output_names_local.size(); i++) {
                     const auto output_tensor = infer_request->get_output_tensor(i);
                     print_output_tensor_info(ov_output_names_local[i], output_tensor, nullptr);
@@ -3351,8 +3349,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
         infer_end_time = ggml_time_us();
         ov_raw_infer_total = infer_end_time - ov_raw_infer_start;
 
-        if (ggml_openvino_getenv_int("GGML_OPENVINO_DEBUG_OUTPUT") ||
-            ggml_openvino_getenv_str("GGML_OPENVINO_DEBUG_NODE")) {
+        if (debug_output_enabled()) {
             for (size_t i = 0; i < ov_output_names_local.size(); i++) {
                 const auto output_tensor = infer_request->get_output_tensor(i);
                 print_output_tensor_info(ov_output_names_local[i], output_tensor, nullptr);

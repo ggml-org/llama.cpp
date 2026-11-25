@@ -552,10 +552,7 @@ std::string ggml_openvino_config_overrides_in_use() {
 
 bool ggml_openvino_manual_gqa_enabled() {
     // set: a positive value enables it, 0 disables it; unset: on GPU only
-    if (ggml_openvino_getenv_str("GGML_OPENVINO_MANUAL_GQA_ATTN") != nullptr) {
-        return ggml_openvino_getenv_int("GGML_OPENVINO_MANUAL_GQA_ATTN") > 0;
-    }
-    return ggml_openvino_is_gpu();
+    return ggml_openvino_getenv_int("GGML_OPENVINO_MANUAL_GQA_ATTN", ggml_openvino_is_gpu() ? 1 : 0) > 0;
 }
 
 bool ggml_openvino_gdn_prescale_enabled() {
@@ -584,10 +581,7 @@ bool ggml_openvino_npu_is_4000() {
 }
 
 bool ggml_openvino_gdn_decompose_enabled() {
-    if (ggml_openvino_getenv_str("GGML_OPENVINO_GDN_DECOMPOSE") != nullptr) {
-        return ggml_openvino_getenv_int("GGML_OPENVINO_GDN_DECOMPOSE") > 0;
-    }
-    return ggml_openvino_npu_is_4000();
+    return ggml_openvino_getenv_int("GGML_OPENVINO_GDN_DECOMPOSE", ggml_openvino_npu_is_4000() ? 1 : 0) > 0;
 }
 
 int ggml_openvino_gdn_decompose_chunk() {
@@ -611,19 +605,14 @@ float ggml_openvino_gdn_q_scale() {
 }
 
 bool ggml_openvino_reduce_compile_mem_enabled() {
-    const char * reduce_compile_mem = ggml_openvino_getenv_str("GGML_OPENVINO_REDUCE_COMPILE_MEM");
-    if (reduce_compile_mem != nullptr) {
-        return ggml_openvino_getenv_int("GGML_OPENVINO_REDUCE_COMPILE_MEM") != 0;
-    }
-    return ggml_openvino_getenv_int("GGML_OPENVINO_MEMORY_OPTIMIZE") != 0;
+    return ggml_openvino_getenv_int("GGML_OPENVINO_REDUCE_COMPILE_MEM",
+                                    ggml_openvino_getenv_int("GGML_OPENVINO_MEMORY_OPTIMIZE")) != 0;
 }
 
 bool ggml_openvino_release_weights_enabled() {
-    const char * release_weights = ggml_openvino_getenv_str("GGML_OPENVINO_RELEASE_WEIGHTS");
-    if (release_weights != nullptr) {
-        return ggml_openvino_is_gpu() && ggml_openvino_getenv_int("GGML_OPENVINO_RELEASE_WEIGHTS") != 0;
-    }
-    return ggml_openvino_is_gpu() && ggml_openvino_getenv_int("GGML_OPENVINO_MEMORY_OPTIMIZE") != 0;
+    return ggml_openvino_is_gpu() &&
+           ggml_openvino_getenv_int("GGML_OPENVINO_RELEASE_WEIGHTS",
+                                    ggml_openvino_getenv_int("GGML_OPENVINO_MEMORY_OPTIMIZE")) != 0;
 }
 
 // Check if running on NPU
@@ -711,6 +700,11 @@ bool ggml_openvino_kv_only_prefill_enabled() {
 
 bool ggml_openvino_npu_weightless_cache_enabled() {
     return ggml_openvino_is_npu() && ggml_openvino_getenv_str("GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR") != nullptr;
+}
+
+bool ggml_openvino_self_contained_mmap_enabled() {
+    return ggml_openvino_npu_weightless_cache_enabled() &&
+           ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_MMAP") != 0;
 }
 
 namespace {

@@ -6,7 +6,6 @@
 #define CL_TARGET_OPENCL_VERSION 300
 #include <CL/cl.h>
 
-#include <cstdlib>
 #include <map>
 #include <memory>
 #include <openvino/core/node.hpp>
@@ -202,6 +201,8 @@ bool ggml_openvino_npu_kv_head_major_enabled();
 // shared weights file. Valid blobs are imported; otherwise the models are compiled and exported. The raw GGUF
 // weights are kept, and requantization is skipped on a warm hit.
 bool ggml_openvino_npu_weightless_cache_enabled();
+// GGML_OPENVINO_SELF_CONTAINED_MMAP=1 with the NPU weightless cache
+bool ggml_openvino_self_contained_mmap_enabled();
 void ggml_openvino_kv_storage_register(void * data, size_t row_bytes, size_t rows);
 void ggml_openvino_kv_storage_unregister(const void * base, size_t size);
 // Storage address backing ggml address `ptr` with at least `bytes` valid (grown if needed);

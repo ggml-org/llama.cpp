@@ -23,11 +23,8 @@ OutputVector translate_ssm_conv(const NodeContext & context) {
     auto sx_shape = context.get_input_shape(0).to_shape();  // [1, n_s, d_inner, ncs]
     auto c_shape = context.get_input_shape(1).to_shape();   // [1, 1, d_inner, d_conv]
 
-    // int64_t n_s  = sx_shape[1];
     int64_t d_inner = sx_shape[2];
-    // int64_t ncs  = sx_shape[3];  // d_conv - 1 + n_t
-    int64_t d_conv  = c_shape[3];
-    // int64_t n_t  = ncs - d_conv + 1;
+    int64_t d_conv = c_shape[3];
 
     // Reshape sx from [1, n_s, d_inner, ncs] to [n_s, d_inner, ncs] for 1D GroupConvolution
     auto sx_reshaped =
