@@ -12520,6 +12520,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F32, GGML_TYPE_F32, 4, 2, false, 64, 33792, 64));
     // kernel_mul_mm_id: > 2^31-element dst (8.7 GB), about 45 GB peak memory. Tokens 32514+ have a dst offset past INT32_MAX, tokens 32768+ also need a 32-bit token index.
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F32, GGML_TYPE_F32, 16, 8, false, 8256, 32832, 64));
+    // CUDA mul_mat_f_ids: 160 F16 experts of 4096 x 7168 (9.4 GB), about 36 GB peak memory. Experts 147-159 start past INT32_MAX half2 values, 32 tokens x 8 random experts.
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 160, 8, true, 4096, 32, 7168));
 #endif
 
 #if 0
