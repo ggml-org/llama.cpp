@@ -698,21 +698,39 @@ void ggml_vec_dot_q1_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 #endif
 }
 
-#if defined(__AVX2__)
+#if defined(__AVX2__) || defined(__AVX512F__)
 // four consecutive Q2_0 weights per byte: byte b becomes b & 3, (b >> 2) & 3, (b >> 4) & 3, (b >> 6) & 3 (OR, never add: the overlapping copies only touch masked-off bits)
 static inline __m256i q2_0_unpack_32_avx2(const uint8_t * qs) {
+#if defined(__AVX512VBMI__) && defined(__AVX512VL__)
+    const __m256i shifts = _mm256_setr_epi8(
+            0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30,
+            32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 62);
+    const __m256i bits = _mm256_broadcastq_epi64(_mm_loadl_epi64((const __m128i *) qs));
+    return _mm256_and_si256(_mm256_multishift_epi64_epi8(shifts, bits), _mm256_set1_epi8(3));
+#else
     __m256i v = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *) qs));
     v = _mm256_or_si256(v, _mm256_slli_epi32(v, 12));
     v = _mm256_or_si256(v, _mm256_slli_epi32(v,  6));
     return _mm256_and_si256(v, _mm256_set1_epi32(0x03030303));
+#endif
 }
 
 // 32 weights against one Q8_0 block: sum((v - 1) * y) = sum(v * y) - sum(y), exact for every int8 y
 static inline __m256 q2_0_dot_32_avx2(const uint8_t * qs, const int8_t * qy) {
     const __m256i v = q2_0_unpack_32_avx2(qs);
     const __m256i y = _mm256_loadu_si256((const __m256i *) qy);
+#if defined(__AVX512VNNI__) && defined(__AVX512VL__)
+    const __m256i p = _mm256_dpbusd_epi32(_mm256_setzero_si256(), v, y);
+    const __m256i s = _mm256_dpbusd_epi32(_mm256_setzero_si256(), _mm256_set1_epi8(1), y);
+    return _mm256_cvtepi32_ps(_mm256_sub_epi32(p, s));
+#elif defined(__AVXVNNI__)
+    const __m256i p = _mm256_dpbusd_avx_epi32(_mm256_setzero_si256(), v, y);
+    const __m256i s = _mm256_dpbusd_avx_epi32(_mm256_setzero_si256(), _mm256_set1_epi8(1), y);
+    return _mm256_cvtepi32_ps(_mm256_sub_epi32(p, s));
+#else
     const __m256i p = _mm256_sub_epi16(_mm256_maddubs_epi16(v, y), _mm256_maddubs_epi16(_mm256_set1_epi8(1), y));
     return _mm256_cvtepi32_ps(_mm256_madd_epi16(p, _mm256_set1_epi16(1)));
+#endif
 }
 
 static inline __m256 q2_0_acc_block_avx2(const block_q2_0 * x, const block_q8_0 * y, __m256 acc) {
@@ -843,8 +861,8 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     __m128 acc_3 = _mm_setzero_ps();
 
     for (; ib + 1 < nb; ib += 2) {
-        _mm_prefetch(&x[ib] + sizeof(block_q4_0), _MM_HINT_T0);
-        _mm_prefetch(&y[ib] + sizeof(block_q8_0), _MM_HINT_T0);
+        _mm_prefetch((const char *) (&x[ib] + sizeof(block_q4_0)), _MM_HINT_T0);
+        _mm_prefetch((const char *) (&y[ib] + sizeof(block_q8_0)), _MM_HINT_T0);
 
         // Compute combined scale for the block 0 and 1
         const __m128 d_0_1 = _mm_set1_ps( GGML_CPU_FP16_TO_FP32(x[ib].d) * GGML_CPU_FP16_TO_FP32(y[ib].d) );
@@ -861,8 +879,8 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
         bx_1 = _mm_sub_epi8(bx_1, off);
         const __m128i i32_1 = mul_sum_i8_pairs(bx_1, by_1);
 
-        _mm_prefetch(&x[ib] + 2 * sizeof(block_q4_0), _MM_HINT_T0);
-        _mm_prefetch(&y[ib] + 2 * sizeof(block_q8_0), _MM_HINT_T0);
+        _mm_prefetch((const char *) (&x[ib] + 2 * sizeof(block_q4_0)), _MM_HINT_T0);
+        _mm_prefetch((const char *) (&y[ib] + 2 * sizeof(block_q8_0)), _MM_HINT_T0);
 
         // Compute combined scale for the block 2 and 3
         const __m128 d_2_3 = _mm_set1_ps( GGML_CPU_FP16_TO_FP32(x[ib + 1].d) * GGML_CPU_FP16_TO_FP32(y[ib + 1].d) );

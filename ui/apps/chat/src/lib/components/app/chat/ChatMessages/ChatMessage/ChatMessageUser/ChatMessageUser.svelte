@@ -1,0 +1,135 @@
+<script lang="ts">
+	import {
+		ChatMessageActionIcons,
+		ChatMessageContextMenu,
+		ChatMessageEditForm,
+		ChatMessageStatistics,
+		ChatMessageUserBubble
+	} from '#lib/components/app/chat/index.ts';
+	import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+	import { getChatMessageEditContext } from '#lib/contexts/index.ts';
+	import { ChatMessageStatisticsMode, MessageRole } from '#lib/enums/index.ts';
+	import { useProcessingState } from '#lib/hooks/use-processing-state.svelte.ts';
+	import { chatStore, settingsStore } from '#lib/stores/index.ts';
+
+	interface Props {
+		class?: string;
+		message: DatabaseMessage;
+		isLastUserMessage?: boolean;
+		nextAssistantMessage?: DatabaseMessage | null;
+	}
+
+	let {
+		class: className = '',
+		isLastUserMessage = false,
+		message,
+		nextAssistantMessage = null
+	}: Props = $props();
+
+	// Get contexts
+	const editCtx = getChatMessageEditContext();
+	const processingState = useProcessingState();
+
+	const currentConfig = $derived(settingsStore.config);
+	// A compaction summary reports its own progress on the compaction row, so
+	// the summarized turn does not show live reading stats while it runs.
+	const isActivelyProcessing = $derived(
+		isLastUserMessage && chatStore.isLoading && !chatStore.isCompacting(message.convId)
+	);
+
+	// For agentic turns, prefer the cumulative agentic.llm totals over per-call timings.
+	let storedReadingStats = $derived.by(() => {
+		const timings = nextAssistantMessage?.timings;
+
+		if (!timings?.prompt_n || !timings?.prompt_ms) return null;
+
+		const agentic = timings.agentic;
+
+		return {
+			promptMs: agentic ? agentic.llm.prompt_ms : timings.prompt_ms,
+			promptTokens: agentic ? agentic.llm.prompt_n : timings.prompt_n
+		};
+	});
+
+	// the latest exchange keeps its stats and actions in view; earlier messages
+	// show them on hover, and the setting can keep their stats in view as well
+	let hidesStatsUntilHover = $derived(
+		!isLastUserMessage && !currentConfig[SETTINGS_KEYS.ALWAYS_SHOW_MESSAGE_STATS]
+	);
+
+	let showStoredReadingStats = $derived(
+		Boolean(currentConfig.showMessageStats) && storedReadingStats !== null
+	);
+
+	let showLiveReadingStats = $derived(
+		Boolean(currentConfig.showMessageStats) && isActivelyProcessing && storedReadingStats === null
+	);
+
+	$effect(() => {
+		if (showLiveReadingStats) {
+			processingState.startMonitoring();
+		}
+	});
+</script>
+
+<div
+	aria-label="User message with actions"
+	class="chat-message-user group flex flex-col items-end gap-2 {className}"
+	role="group"
+>
+	{#if editCtx.isEditing}
+		<ChatMessageEditForm />
+	{:else}
+		<ChatMessageContextMenu disabled={!message.timestamp} role={MessageRole.USER}>
+			<ChatMessageUserBubble
+				attachments={message.extra}
+				content={message.content}
+				renderMarkdown={true}
+			/>
+		</ChatMessageContextMenu>
+
+		{#if showStoredReadingStats}
+			<!-- Reading stats sourced from the assistant message that followed this turn -->
+			<div
+				class={[
+					'info grid w-full justify-items-end gap-4 tabular-nums',
+					hidesStatsUntilHover && 'message-meta'
+				]}
+			>
+				<div
+					class="inline-flex flex-wrap items-start justify-end gap-2 text-caption text-muted-foreground"
+				>
+					<ChatMessageStatistics
+						mode={ChatMessageStatisticsMode.READING}
+						promptMs={storedReadingStats!.promptMs}
+						promptTokens={storedReadingStats!.promptTokens}
+					/>
+				</div>
+			</div>
+		{:else if showLiveReadingStats}
+			{@const liveStats = processingState.getLiveProcessingStats()}
+			<!-- The row's room is there from the moment the prompt is sent, so the
+			     reply below does not get pushed down when the first numbers arrive. -->
+			<div class="info grid min-h-5.5 w-full justify-items-end gap-4 tabular-nums">
+				{#if liveStats}
+					<div
+						class="inline-flex flex-wrap items-start justify-end gap-2 text-caption text-muted-foreground"
+					>
+						<ChatMessageStatistics
+							isLive
+							mode={ChatMessageStatisticsMode.READING}
+							promptMs={liveStats.timeMs}
+							promptTokens={liveStats.tokensProcessed}
+						/>
+					</div>
+				{/if}
+			</div>
+		{/if}
+
+		{#if message.timestamp}
+			<div class={['max-w-4/5', !isLastUserMessage && 'message-meta']}>
+				<ChatMessageActionIcons actionsPosition="right" justify="end" />
+			</div>
+		{/if}
+	{/if}
+</div>

@@ -130,7 +130,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
@@ -196,7 +196,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Dependencies
         id: depends
@@ -274,7 +274,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Dependencies
         id: depends
@@ -381,7 +381,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Dependencies
         id: depends
@@ -479,7 +479,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Set up JDK
         uses: actions/setup-java@v5
@@ -571,7 +571,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Build
         id: cmake_build
@@ -624,7 +624,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Build
         id: cmake_build
@@ -672,7 +672,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
@@ -894,11 +894,16 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Install Ninja
         run: |
           choco install ninja
+
+      - name: Install LLVM
+        run: |
+          choco install llvm --version=22.1.8
+          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
@@ -1124,7 +1129,7 @@ jobs:
             target: 'ggml-vulkan'
           - backend: 'opencl-adreno'
             arch: 'arm64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" -DGGML_OPENCL=ON -DGGML_OPENCL_USE_ADRENO_KERNELS=ON'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" -DGGML_OPENCL=ON -DGGML_OPENCL_USE_ADRENO_KERNELS=ON -DGGML_OPENCL_ADRENO_BIN_KERNELS_FETCH=OFF'
             target: 'ggml-opencl'
 
     steps:
@@ -1145,6 +1150,11 @@ jobs:
         id: install_ninja
         run: |
           choco install ninja
+
+      - name: Install LLVM
+        run: |
+          choco install llvm --version=22.1.8
+          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
 
       # TODO: these jobs need to use llvm toolchain in order to utilize the ccache
       #- name: ccache
@@ -1460,7 +1470,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Dependencies
         id: depends
@@ -1532,7 +1542,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Free up disk space
         uses: ggml-org/free-disk-space@v1.3.1
@@ -1647,7 +1657,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Dependencies
         id: depends

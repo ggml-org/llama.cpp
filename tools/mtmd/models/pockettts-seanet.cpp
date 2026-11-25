@@ -33,12 +33,26 @@ ggml_tensor * mtmd_graph_pockettts_seanet::conv1d(ggml_tensor * x, ggml_tensor *
         ggml_tensor * first = ggml_view_2d(ctx0, x, 1, x->ne[1], x->nb[1], 0);
         ggml_tensor * left  = ggml_repeat_4d(ctx0, first, p_total, x->ne[1], 1, 1);
         x = ggml_concat(ctx0, left, x, 0);
-        x = ggml_pad_ext(ctx0, x, 0, p_extra, 0, 0, 0, 0, 0, 0);
+        if (pad_replicate_end && p_extra > 0) {
+            ggml_tensor * last  = ggml_view_2d(ctx0, x, 1, x->ne[1], x->nb[1], (size_t) (x->ne[0] - 1) * x->nb[0]);
+            ggml_tensor * right = ggml_repeat_4d(ctx0, last, p_extra, x->ne[1], 1, 1);
+            x = ggml_concat(ctx0, x, right, 0);
+        } else {
+            x = ggml_pad_ext(ctx0, x, 0, p_extra, 0, 0, 0, 0, 0, 0);
+        }
     } else {
         x = ggml_pad_ext(ctx0, x, p_total, p_extra, 0, 0, 0, 0, 0, 0);
     }
 
-    ggml_tensor * y = ggml_conv_1d(ctx0, w, x, stride, 0, dilation);
+    ggml_tensor * y;
+    if (f32_im2col) {
+        // ggml_conv_1d() with an F32 im2col, the kernel must be F32
+        ggml_tensor * col = ggml_im2col(ctx0, w, x, stride, 0, 0, 0, dilation, 0, false, GGML_TYPE_F32);
+        y = ggml_mul_mat(ctx0, ggml_reshape_2d(ctx0, col, col->ne[0], col->ne[2] * col->ne[1]),
+                         ggml_reshape_2d(ctx0, w, w->ne[0] * w->ne[1], w->ne[2]));
+    } else {
+        y = ggml_conv_1d(ctx0, w, x, stride, 0, dilation);
+    }
     y = ggml_reshape_2d(ctx0, y, y->ne[0], y->ne[1]);
     if (b) {
         y = ggml_add(ctx0, y, ggml_reshape_2d(ctx0, b, 1, b->ne[0]));
@@ -111,22 +125,27 @@ ggml_tensor * mtmd_graph_pockettts_seanet::res_unit(ggml_tensor * x, const mtmd_
 
 ggml_tensor * mtmd_graph_pockettts_seanet::encode(ggml_tensor * x) const {
     const auto & seanet = model.seanet;
+    const bool   stream = !state_in.empty();
 
-    ggml_tensor * cur = conv1d(x, seanet.conv_in_w, seanet.conv_in_b, 1, 1);
+    ggml_tensor * cur = conv1d(x, seanet.conv_in_w, seanet.conv_in_b, 1, 1, false,
+                               stream ? "enc_in" : "");
     cb(cur, "seanet_enc_in", -1);
 
     for (int i = 0; i < hparams.seanet_n_stage; i++) {
         const auto & stage  = seanet.stages[i];
         const int    stride = hparams.seanet_ratios[i];
+        const std::string id = std::to_string(i);
 
-        cur = res_unit(cur, stage, 1);
+        cur = res_unit(cur, stage, 1, stream ? "enc_res_" + id : "");
         cur = ggml_elu(ctx0, cur);
-        cur = conv1d(cur, stage.scale_conv_w, stage.scale_conv_b, stride, 1);
+        cur = conv1d(cur, stage.scale_conv_w, stage.scale_conv_b, stride, 1, false,
+                     stream ? "enc_down_" + id : "");
         cb(cur, "seanet_enc_stage", i);
     }
 
     cur = ggml_elu(ctx0, cur);
-    cur = conv1d(cur, seanet.conv_out_w, seanet.conv_out_b, 1, 1);
+    cur = conv1d(cur, seanet.conv_out_w, seanet.conv_out_b, 1, 1, false,
+                 stream ? "enc_out" : "");
     cb(cur, "seanet_enc_out", -1);
 
     return cur;
@@ -159,4 +178,113 @@ ggml_tensor * mtmd_graph_pockettts_seanet::decode(ggml_tensor * x) const {
     cb(cur, "seanet_dec_out", -1);
 
     return cur;
+}
+
+// pre-norm blocks with layer scale on both residual paths, see mimi_transformer.py
+// causal over a window of mimi_tfm_context frames, streams through the slots pos, tfm_k_<il>, tfm_v_<il>
+// x: [dim, n_pos] -> [dim, n_pos]
+ggml_tensor * mtmd_graph_pockettts_seanet::transformer(ggml_tensor * cur, const std::vector<mtmd_layer> & layers, int n_head, float eps) const {
+    const int64_t n_pos  = cur->ne[1];
+    const int64_t d_head = cur->ne[0] / n_head;
+    const int64_t prefix = hparams.mimi_tfm_context - 1;
+    const int64_t n_kv   = prefix + n_pos;
+    const float   scale  = 1.0f / sqrtf((float) d_head);
+
+    // positions continue across calls, the counter lives in the state
+    ggml_tensor * base    = ggml_reshape_1d(ctx0, state_in.at("pos"), 1);
+    ggml_tensor * inp_pos = ggml_cast(ctx0, ggml_add(ctx0, ggml_arange(ctx0, 0.0f, (float) n_pos, 1.0f), base),
+                                      GGML_TYPE_I32);
+    state_out.push_back({"pos", ggml_scale_bias(ctx0, state_in.at("pos"), 1.0f, (float) n_pos)});
+
+    // banded causal mask over [cached prefix | this chunk]
+    // the last factor masks out cache rows that hold no real frame yet
+    ggml_tensor * pos_k = ggml_reshape_2d(ctx0, ggml_arange(ctx0, 0.0f, (float) n_kv, 1.0f), n_kv, 1);
+    ggml_tensor * pos_q = ggml_reshape_2d(ctx0, ggml_arange(ctx0, (float) prefix, (float) (prefix + n_pos), 1.0f), 1, n_pos);
+    ggml_tensor * diff  = ggml_sub(ctx0, ggml_repeat_4d(ctx0, pos_q, n_kv, n_pos, 1, 1), pos_k);
+
+    ggml_tensor * keep = ggml_mul(ctx0,
+        ggml_step(ctx0, ggml_scale_bias(ctx0, diff, 1.0f, 0.5f)),                                     // delta >= 0
+        ggml_step(ctx0, ggml_scale_bias(ctx0, diff, -1.0f, (float) hparams.mimi_tfm_context - 0.5f))); // delta < context
+    keep = ggml_mul(ctx0, keep,
+        ggml_step(ctx0, ggml_scale_bias(ctx0, ggml_add(ctx0, pos_k, base), 1.0f, 0.5f - (float) prefix)));
+    ggml_tensor * kq_mask = ggml_reshape_4d(ctx0, ggml_log(ctx0, keep), n_kv, n_pos, 1, 1);
+    if (flash_attn_type == MTMD_FLASH_ATTN_TYPE_ENABLED) {
+        kq_mask = ggml_cast(ctx0, kq_mask, GGML_TYPE_F16);
+    }
+
+    for (size_t il = 0; il < layers.size(); il++) {
+        const auto & layer = layers[il];
+        ggml_tensor * inp = cur;
+
+        cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, NORM_TYPE_NORMAL, eps, il);
+
+        ggml_tensor * Qcur = build_mm(layer.q_w, cur);
+        ggml_tensor * Kcur = build_mm(layer.k_w, cur);
+        ggml_tensor * Vcur = build_mm(layer.v_w, cur);
+
+        Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_pos);
+        Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_pos);
+
+        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, d_head, GGML_ROPE_TYPE_NORMAL, 0,
+                             hparams.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, d_head, GGML_ROPE_TYPE_NORMAL, 0,
+                             hparams.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+
+        // prepend the cached window, then keep this chunk's tail for the next call
+        const std::string k_name = "tfm_k_" + std::to_string(il);
+        const std::string v_name = "tfm_v_" + std::to_string(il);
+        ggml_tensor * k_full = ggml_concat(ctx0, state_in.at(k_name),
+                                           ggml_reshape_2d(ctx0, Kcur, d_head * n_head, n_pos), 1);
+        ggml_tensor * v_full = ggml_concat(ctx0, state_in.at(v_name), Vcur, 1);
+        state_out.push_back({k_name, ggml_cont(ctx0, ggml_view_2d(ctx0, k_full, k_full->ne[0], prefix,
+                                                                  k_full->nb[1], (size_t) n_pos * k_full->nb[1]))});
+        state_out.push_back({v_name, ggml_cont(ctx0, ggml_view_2d(ctx0, v_full, v_full->ne[0], prefix,
+                                                                  v_full->nb[1], (size_t) n_pos * v_full->nb[1]))});
+
+        ggml_tensor * q_cur = ggml_reshape_4d(ctx0, Qcur,   d_head, n_head, n_pos, 1);
+        ggml_tensor * k_cur = ggml_reshape_4d(ctx0, k_full, d_head, n_head, n_kv,  1);
+        ggml_tensor * v_cur = ggml_reshape_4d(ctx0, v_full, d_head, n_head, n_kv,  1);
+
+        cur = build_attn(layer.o_w, nullptr, q_cur, k_cur, v_cur, kq_mask, scale, il);
+        cur = ggml_mul(ctx0, cur, layer.ls_1_w);
+        cur = ggml_add(ctx0, cur, inp);
+
+        inp = cur;
+        cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, NORM_TYPE_NORMAL, eps, il);
+        cur = build_ffn(cur, layer.ff_up_w, nullptr, nullptr, nullptr, layer.ff_down_w, nullptr, FFN_GELU, il);
+        cur = ggml_mul(ctx0, cur, layer.ls_2_w);
+        cur = ggml_add(ctx0, cur, inp);
+    }
+    return cur;
+}
+
+ggml_tensor * mtmd_graph_pockettts_seanet::mimi_decode(ggml_tensor * x, int n_head, float eps) const {
+    // model frame rate -> encoder frame rate, depthwise transposed conv
+    ggml_tensor * cur = ggml_cont(ctx0, ggml_transpose(ctx0, x));
+    cur = conv_transpose1d(cur, model.gen_upsample_w, nullptr, hparams.mimi_downsample, "up");
+    cb(cur, "mimi_upsample", -1);
+
+    cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
+    cur = transformer(cur, model.gen_tfm_layers, n_head, eps);
+    cb(cur, "mimi_dec_tfm", -1);
+
+    cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
+    return decode(cur);
+}
+
+void mtmd_graph_pockettts_seanet::state_inputs(const std::vector<c2w_state_slot> & slots) {
+    for (const auto & slot : slots) {
+        ggml_tensor * t = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, slot.ne0, slot.ne1);
+        ggml_set_name(t, ("state_in_" + slot.name).c_str());
+        ggml_set_input(t);
+        state_in[slot.name] = t;
+    }
+}
+
+void mtmd_graph_pockettts_seanet::state_outputs(ggml_cgraph * graph) const {
+    for (const auto & s : state_out) {
+        ggml_set_name(s.second, ("state_out_" + s.first).c_str());
+        ggml_set_output(s.second);
+        ggml_build_forward_expand(graph, s.second);
+    }
 }

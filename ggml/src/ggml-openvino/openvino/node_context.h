@@ -107,6 +107,8 @@ public:
 
     size_t get_output_op_offset() const { return m_decoder->get_output_op_offset(m_node_idx); }
 
+    std::string get_inplace_op_src() const { return m_decoder->get_inplace_op_src(m_node_idx); }
+
     ov::element::Type get_output_type() const { return m_decoder->get_output_type(m_node_idx); }
 
     std::vector<size_t> get_output_stride() const { return m_decoder->get_output_stride(m_node_idx); }
@@ -161,6 +163,8 @@ public:
     bool is_static() const { return m_decoder->is_static(); }
 
     bool is_stateful() const { return m_decoder->is_stateful(); }
+
+    bool is_prefill() const { return m_decoder->is_prefill(); }
 
     int get_ssm_state_size() const { return m_decoder->get_ssm_state_size(); }
 

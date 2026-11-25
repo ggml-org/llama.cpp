@@ -62,10 +62,11 @@ Use `SPEC_METHODS=nightly` for DFlash2 and LiLiCorr, or a comma-separated subset
 verified compact DFlash2 GGUF or compact LiLiCorr checkpoint is available. `SPEC_METHODS=all` runs both
 tiers and downloads about 47.693 GiB.
 
-The `Server (speculative decoding)` workflow runs only by explicit manual dispatch on the dedicated
-DGX Spark runner. It does not use the GitHub Actions cache. Set the `SPEC_METHOD_MODEL_DIR` repository
-variable to the runner's persistent model directory when its mount path is confirmed. Heavyweight
-DFlash2 and LiLiCorr measurements belong in the internal nightly performance/quality runs.
+The `Server (speculative decoding)` workflow runs the compact suite on the dedicated DGX Spark runner for pull requests and pushes to master that change the speculative decoding code, the model files of the speculative methods, the test or the workflow.
+A manual dispatch runs the suite selected by its `spec_methods` input: `compact` (default), `nightly` or `all`.
+It does not use the GitHub Actions cache: the models are kept in the directory of the `SPEC_METHOD_MODEL_DIR` repository variable.
+Pull requests from forks do not get repository variables, so their runs use `/mnt/cache/spec-models`, the persistent model directory of the runner.
+Heavyweight DFlash2 and LiLiCorr measurements belong in the internal nightly performance/quality runs.
 
 The acceptance floors use one-sided regression checks: improvements do not fail. Three identical
 runs on the GB10 runner against the PR merged with current master produced MTP `0.6640 / 2.9766`,

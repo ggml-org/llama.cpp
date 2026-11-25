@@ -50,18 +50,18 @@ env:
 
 jobs:
   ubuntu-webgpu:
-    runs-on: ubuntu-26.04-arm
+    runs-on: [self-hosted, Linux, gb10]
+    container: "ubuntu:26.04"
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.24
-        with:
-          restore: false
-          save: false
+      - name: Install dependencies
+        run: |
+          apt update
+          apt install -y build-essential cmake ninja-build git curl unzip python3
 
       - name: Install Emscripten
         run: |
@@ -72,23 +72,15 @@ jobs:
 
       - name: Fetch emdawnwebgpu
         run: |
-          DAWN_TAG="v20260908.214631"
+          DAWN_TAG="v20261120.121236"
           EMDAWN_PKG="emdawnwebgpu_pkg-${DAWN_TAG}.zip"
           echo "Downloading ${EMDAWN_PKG}"
           curl -L -o emdawn.zip \
             "https://github.com/google/dawn/releases/download/${DAWN_TAG}/${EMDAWN_PKG}"
           unzip emdawn.zip
 
-      - name: ccache-buckets-restore
-        uses: ./.github/actions/ccache-buckets
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
-        with:
-          key: webgpu-ubuntu-26.04-arm-wasm
-          folder: llama.cpp
-          hf_bucket: ggml-org/cache
-
       - name: Build WASM WebGPU
+        shell: bash
         run: |
           source emsdk/emsdk_env.sh
           emcmake cmake -B build-wasm \
@@ -99,16 +91,4 @@ jobs:
             -DLLAMA_OPENSSL=OFF \
             -DEMDAWNWEBGPU_DIR=emdawnwebgpu_pkg
 
-          time cmake --build build-wasm --config Release --target test-backend-ops -j $(nproc)
-
-      - name: ccache-buckets-save
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-        uses: ./.github/actions/ccache-buckets
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
-        with:
-          key: webgpu-ubuntu-26.04-arm-wasm
-          folder: llama.cpp
-          evict-old-files: 1d
-          hf_bucket: ggml-org/cache
-          save: true
+          cmake --build build-wasm --config Release --target test-backend-ops -j $(nproc)

@@ -398,6 +398,9 @@ class ModelBase:
                 return data / scale.float()
 
             def dequant_simple(weight: Tensor, scale: Tensor, block_size: Sequence[int] | None = None) -> Tensor:
+                if scale.dtype == torch.uint8:
+                    # E8M0 exponent stored as raw bytes (MXFP8)
+                    scale = (scale.float() - 127.0).exp2()
                 scale = scale.float()
 
                 # ModelOpt block scales are pre-shaped for broadcasting, e.g. [out/128, 1, in/128, 1]
@@ -538,7 +541,7 @@ class ModelBase:
                         s = self.model_tensors[name]
                         self.model_tensors[weight_name] = lambda w=w, s=s: dequant_bitnet(w(), s())
                         tensors_to_remove.append(name)
-            elif quant_method in ("fp8", "bsgemm-moe"):  # bsgemm-moe: drama-3, same block layout
+            elif quant_method in ("fp8", "bsgemm-moe", "mxfp8"):  # bsgemm-moe: drama-3, same block layout
                 block_size = quant_config.get("weight_block_size")
                 for name in self.model_tensors.keys():
                     if name.endswith("_scale_inv"):
@@ -650,6 +653,28 @@ class ModelBase:
                     raise NotImplementedError(f"Quant format {quant_format!r} for method {quant_method!r} is not yet supported")
             elif quant_method in ("modelopt", "modelopt_mixed"):
                 dequant_fp8()
+                # FP8_PB_WO: one scale per block, the block size follows from the two shapes
+                for name in self.model_tensors.keys():
+                    if not name.endswith(".weight_scale_inv"):
+                        continue
+                    weight_name = name.removesuffix("_scale_inv")
+                    if weight_name not in self.model_tensors:
+                        tensors_to_remove.append(name)
+                        continue
+                    w = self.model_tensors[weight_name]
+                    s = self.model_tensors[name]
+                    if w().dtype != torch.float8_e4m3fn:
+                        continue
+                    w_shape, s_shape = w().shape, s().shape
+                    block_size = None
+                    if prod(s_shape) != 1:
+                        if len(s_shape) != len(w_shape) or any(ws % ss for ws, ss in zip(w_shape, s_shape)):
+                            raise ValueError(f"FP8 weight {weight_name!r} {list(w_shape)} is not tiled by its scale {list(s_shape)}")
+                        block_size = [ws // ss for ws, ss in zip(w_shape, s_shape)]
+                    self.model_tensors[weight_name] = lambda w=w, s=s, bs=block_size: dequant_simple(w(), s(), bs)
+                    tensors_to_remove.append(name)
+                    if self._fp8_as_q8:
+                        self._fp8_dequantized.add(weight_name)
             elif quant_method is not None:
                 raise NotImplementedError(f"Quant method is not yet supported: {quant_method!r}")
 
@@ -1357,10 +1382,10 @@ class ModelBase:
                 consumed.append(input_scale_name)
 
             # Check if this is a per-expert tensor
-            m = re.search(r'\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.weight$', name)
+            m = re.search(r'\.experts\.(\d+)\.(gate_proj|up_proj|down_proj|w1|w2|w3)\.weight$', name)
             if m:
                 expert_id = int(m.group(1))
-                proj_type = m.group(2)
+                proj_type = {"w1": "gate_proj", "w2": "down_proj", "w3": "up_proj"}.get(m.group(2), m.group(2))
                 bid_m = re.search(r'\.layers\.(\d+)\.', name)
                 bid = int(bid_m.group(1)) if bid_m else 0
                 key = (bid, proj_type)
@@ -1451,6 +1476,8 @@ class ModelBase:
                 quant_layers = quant_config.get("quantized_layers", quant_layers) or {}
 
         nvfp4_compressed_tensors = self._is_nvfp4_compressed_tensors(quant_method, quant_format, quant_groups)
+        # e.g. MXFP8 dense weights with compressed-tensors NVFP4 experts
+        nvfp4_compressed_tensors |= quantization_config.get("moe_quant_format") == "nvfp4-pack-quantized"
 
         self._nvfp4_global_algo = quant_algo
 
@@ -1979,6 +2006,14 @@ class TextModel(ModelBase):
         if (local_rope_theta := self.rope_parameters.get("sliding_attention", {}).get("rope_theta")) is not None:
             self.gguf_writer.add_rope_freq_base_swa(local_rope_theta)
             logger.info(f"gguf: rope theta swa = {local_rope_theta}")
+        # Add rope_pattern from no_rope_layers
+        if no_rope_layers := self.hparams.get("no_rope_layers"):
+            if len(no_rope_layers) == self.block_count:  # "no_rope_layers": [0, 0, 0, 1]
+                rope_pattern = [bool(x) for x in no_rope_layers]
+            else:  # "no_rope_layers": [3]
+                rope_pattern = [i not in no_rope_layers for i in range(self.block_count)]
+            self.gguf_writer.add_rope_pattern(rope_pattern)
+            logger.info(f"gguf: rope_pattern = {sum(rope_pattern)} RoPE layers / {len(rope_pattern)} total")
         if (f_rms_eps := self.find_hparam(["rms_norm_eps", "norm_eps"], optional=True)) is not None:
             self.gguf_writer.add_layer_norm_rms_eps(f_rms_eps)
             logger.info(f"gguf: rms norm epsilon = {f_rms_eps}")
@@ -2435,6 +2470,9 @@ class TextModel(ModelBase):
         if chkhsh == "5635e1c8d621dff7b4825f41f2f97b6ceb39bcf2d5c541db28577080d6efd5e5":
             # ref: https://huggingface.co/thinkingmachines/Inkling-2-Small
             res = "inkling2"
+        if chkhsh == "32d85c31273f8019248f2559fed492d929ea28b17e51d81d3bb36fff23ca72b3":
+            # ref: https://huggingface.co/domyn/Domyn-Edge-Teacher-IF
+            res = "domyn-edge"
 
         if res is None:
             logger.warning("\n")
@@ -3464,7 +3502,7 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # Kimi-K3's text_config reports "KimiLinearForCausalLM", which is the older
     # Kimi-Linear-48B architecture and cannot load K3 (no attention residuals,
     # latent MoE, situ, ...). Route on the top-level architecture instead.
-    if model_type == ModelType.TEXT and arch in ("NEOChatModel", "StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration", "KimiK3ForConditionalGeneration", "KimiK31ForConditionalGeneration", "Nemotron3_5TranscribeForConditionalGeneration"):
+    if model_type == ModelType.TEXT and arch in ("NEOChatModel", "StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration", "KimiK3ForConditionalGeneration", "KimiK31ForConditionalGeneration", "Nemotron3_5TranscribeForConditionalGeneration", "HiggsAudio3Model"):
         return arch
 
     # if "architectures" is found in the sub-config, use that instead
@@ -3475,6 +3513,9 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # some models (llava_onevision2) only declare the architecture inside text_config
     if arch is None and text_config.get("architectures") is not None:
         arch = text_config["architectures"][0]
+    # some configs only have a model_type (fishaudio/s2-pro)
+    if arch is None:
+        arch = hparams.get("model_type")
     if arch is None:
         raise ValueError("Failed to detect model architecture")
     return arch

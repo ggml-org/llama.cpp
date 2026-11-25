@@ -135,17 +135,15 @@ static bool ggml_metal_fusion_check_norm(
     }
 
     for (int j = 1; j < (int) fusion->ops.size(); j++) {
-        // the fused MUL/ADD must read the previous node as src0
-        if (nodes[j]->src[0] != nodes[j - 1]) {
-            return false;
-        }
+        // MUL/ADD are commutative, the previous node can be either operand
+        const ggml_tensor * src = nodes[j]->src[0] == nodes[j - 1] ? nodes[j]->src[1] : nodes[j]->src[0];
 
         // the weight/bias must have the same row width as the norm input
-        if (nodes[j]->src[1]->ne[0] != nodes[0]->ne[0]) {
+        if (src->ne[0] != nodes[0]->ne[0]) {
             return false;
         }
 
-        if (!ggml_is_contiguous_rows(nodes[j]->src[1])) {
+        if (!ggml_is_contiguous_rows(src)) {
             return false;
         }
 
