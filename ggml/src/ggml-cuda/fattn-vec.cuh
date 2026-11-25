@@ -16,7 +16,7 @@ static constexpr __device__ int ggml_cuda_fattn_vec_get_nthreads_device() {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wpass-failed"
 #endif // __clang__
-template<int D, int ncols, ggml_type type_K, ggml_type type_V, bool use_logit_softcap, bool indexed_bias> // D == head size
+template<int D, int ncols, ggml_type type_K, ggml_type type_V, bool use_logit_softcap, bool indexed_bias, bool use_kv_rows = false> // D == head size
 __launch_bounds__(ggml_cuda_fattn_vec_get_nthreads_device(), 1)
 static __global__ void flash_attn_ext_vec(
         const float2 * Q_ptr,
@@ -75,7 +75,7 @@ static __global__ void flash_attn_ext_vec(
 
 #ifdef GGML_USE_HIP
 #ifdef RDNA
-    constexpr int nthreads_KQ_q = indexed_bias && type_K == GGML_TYPE_F8_E4M3 ? 8 : 2;
+    constexpr int nthreads_KQ_q = indexed_bias && type_K == GGML_TYPE_F8_E4M3 ? 16 : 2;
 #else
     constexpr int nthreads_KQ_q = type_K == GGML_TYPE_F8_E4M3 && D == 256 && ncols == 2 ? 16 : 4;
 #endif // RDNA
@@ -113,7 +113,7 @@ static __global__ void flash_attn_ext_vec(
     K += s13*sequence + s12*(head / gqa_ratio);
     V += s23*sequence + s22*(head / gqa_ratio);
 
-    const half * maskh  = mask ? mask + s33*(sequence % ne33) + s32*(head % ne32) + s31*ic0 : nullptr;
+    const half * maskh  = indexed_bias || mask ? mask + s33*(sequence % ne33) + s32*(head % ne32) + s31*ic0 : nullptr;
 
     const float slope = get_alibi_slope(max_bias, head, n_head_log2, m0, m1);
 
@@ -272,15 +272,15 @@ static __global__ void flash_attn_ext_vec(
     }
 
     const int k_VKQ_max = KV_max ? KV_max[sequence*gridDim.x + blockIdx.x] : ne11;
-    const int32_t * rows = indexed_bias && KV_rows_ptr ? KV_rows_ptr + int64_t(sequence)*ne11 : nullptr;
-    if (!rows) {
+    const int32_t * rows = use_kv_rows ? KV_rows_ptr + int64_t(sequence)*ne11 : nullptr;
+    if constexpr (!use_kv_rows) {
         K += blockIdx.y*nthreads * s11;
         V += blockIdx.y*nthreads * s21;
     }
     maskh += blockIdx.y*nthreads;
     for (int k_VKQ_0 = blockIdx.y*nthreads; k_VKQ_0 < k_VKQ_max; k_VKQ_0 += gridDim.y*nthreads,
              // Increment pointers after each loop:
-             K += rows ? 0 : gridDim.y*nthreads*s11, V += rows ? 0 : gridDim.y*nthreads*s21, maskh += gridDim.y*nthreads) {
+             K += use_kv_rows ? 0 : gridDim.y*nthreads*s11, V += use_kv_rows ? 0 : gridDim.y*nthreads*s21, maskh += gridDim.y*nthreads) {
 
         // Calculate KQ tile and keep track of new maximum KQ values:
         float KQ_reg[ncols]; // KQ in registers.
@@ -294,7 +294,7 @@ static __global__ void flash_attn_ext_vec(
 #pragma unroll
         for (int i_KQ_0 = 0; i_KQ_0 < nthreads_KQ; ++i_KQ_0) {
             const int i_KQ = threadIdx.y*WARP_SIZE + (nthreads_KQ == WARP_SIZE ? 0 : (threadIdx.x & ~(nthreads_KQ-1))) + i_KQ_0;
-            const char * K_row = rows ? K + int64_t(max(rows[k_VKQ_0 + i_KQ], 0))*s11 : K + i_KQ*s11;
+            const char * K_row = use_kv_rows ? K + int64_t(max(rows[k_VKQ_0 + i_KQ], 0))*s11 : K + i_KQ*s11;
 
 #pragma unroll
             for (int j = 0; j < ncols; ++j) {
@@ -358,7 +358,7 @@ static __global__ void flash_attn_ext_vec(
 #pragma unroll
         for (int k0 = 0; k0 < WARP_SIZE; k0 += V_cols_per_iter) {
             const int k = threadIdx.y*WARP_SIZE + k0 + (nthreads_V == WARP_SIZE ? 0 : threadIdx.x / nthreads_V);
-            const char * V_row = V + (rows ? int64_t(max(rows[k_VKQ_0 + k], 0))*s21 : k*s21);
+            const char * V_row = V + (use_kv_rows ? int64_t(max(rows[k_VKQ_0 + k], 0))*s21 : k*s21);
 
 #ifdef V_DOT2_F32_F16_AVAILABLE
             half2 KQ_k[ncols];
@@ -535,8 +535,7 @@ static __global__ void flash_attn_ext_vec(
                     }
                 }
                 if (gridDim.y == 1) {
-                    // An all-masked query row has a zero sum, ggml-cpu returns zeros for it.
-                    dst_val = KQ_sum[j_VKQ] == 0.0f ? 0.0f : dst_val/KQ_sum[j_VKQ];
+                    dst_val = fattn_normalize(dst_val, KQ_sum[j_VKQ]);
                 }
                 dst[(((sequence*int(ne01.z) + ic0 + j_VKQ)*ne02 + head)*gridDim.y + blockIdx.y)*D + i0 + tid] = dst_val;
             }
@@ -577,7 +576,8 @@ void ggml_cuda_flash_attn_ext_vec_case_impl(ggml_backend_cuda_context & ctx, ggm
     fattn_kernel_t fattn_kernel = flash_attn_ext_vec<D, cols_per_block, type_K, type_V, use_logit_softcap, false>;
     if constexpr (cols_per_block == 1 && (D == 64 || D == 128) && !use_logit_softcap) {
         if (ggml_flash_attn_ext_has_indexed_bias(dst)) {
-            fattn_kernel = flash_attn_ext_vec<D, cols_per_block, type_K, type_V, use_logit_softcap, true>;
+            fattn_kernel = dst->src[5] ? flash_attn_ext_vec<D, cols_per_block, type_K, type_V, use_logit_softcap, true, true>
+                                       : flash_attn_ext_vec<D, cols_per_block, type_K, type_V, use_logit_softcap, true, false>;
         }
     }
     const bool need_f16_K = type_K == GGML_TYPE_F16;

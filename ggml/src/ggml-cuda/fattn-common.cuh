@@ -33,9 +33,14 @@ struct fattn_indexed_bias {
 
     __device__ float add(float mask, int query, int key) const {
         const int bin = indices[query*n_keys + key];
-        return uint32_t(bin) < n_bins ? mask + table[query*query_stride + bin] : mask;
+        return bin >= 0 && bin < n_bins ? mask + table[query*query_stride + bin] : mask;
     }
 };
+
+// ggml-cpu returns zero for the 0/0 of a fully masked query.
+static __device__ __forceinline__ float fattn_normalize(float value, float rowsum) {
+    return value == 0.0f && rowsum == 0.0f ? 0.0f : value/rowsum;
+}
 
 using fattn_kernel_t = void (*)(
         const float2 * __restrict__ Q,
@@ -1128,8 +1133,7 @@ static __global__ void flash_attn_stream_k_fixup_uniform(
     }
 
     // Write back final result:
-    // An all-masked query row has a zero sum, ggml-cpu returns zeros for it.
-    *dst = rowsum == 0.0f ? 0.0f : dst_val/rowsum;
+    *dst = fattn_normalize(dst_val, rowsum);
 }
 
 // General fixup kernel for the case where the number of blocks per tile is not uniform across tiles
@@ -1240,7 +1244,7 @@ static __global__ void flash_attn_stream_k_fixup_general(
     }
 
     // Write back final result:
-    *dst = rowsum == 0.0f ? 0.0f : dst_val/rowsum;
+    *dst = fattn_normalize(dst_val, rowsum);
 }
 
 template<int D> // D == head size
@@ -1298,7 +1302,7 @@ static __global__ void flash_attn_combine_results(
         VKQ_denominator += KQ_max_scale * meta[l].y;
     }
 
-    dst[tid] = VKQ_denominator == 0.0f ? 0.0f : VKQ_numerator/VKQ_denominator;
+    dst[tid] = fattn_normalize(VKQ_numerator, VKQ_denominator);
 }
 
 template <int DV, int ncols1, int ncols2, typename T_K_stride, typename T_V_stride>
@@ -1456,6 +1460,7 @@ void launch_fattn(
     // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
     // Only worth the overhead if there is at lease one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
     //     multiple sequences of possibly different lengths, or kv_rows lists that end with padding.
+    // The scan reads ncols1 mask rows per tile, including the last tile. Indexed bias masks have no query padding.
     const bool scan_mask = !use_sparse && mask && mask->ne[2] == 1 && mask->ne[1]/ncols1 >= ntiles_x &&
         n_kv_cols % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1 || kv_rows);
     if (scan_mask) {

@@ -1807,8 +1807,8 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 
                         if (!needs_fixup && !is_fixup) {
                             const float KQ_rowsum_j = meta_j[1];
-                            dstk_val.x = KQ_rowsum_j == 0.0f ? 0.0f : dstk_val.x/KQ_rowsum_j;
-                            dstk_val.y = KQ_rowsum_j == 0.0f ? 0.0f : dstk_val.y/KQ_rowsum_j;
+                            dstk_val.x = fattn_normalize(dstk_val.x, KQ_rowsum_j);
+                            dstk_val.y = fattn_normalize(dstk_val.y, KQ_rowsum_j);
                         }
 
                         if (is_fixup) {
