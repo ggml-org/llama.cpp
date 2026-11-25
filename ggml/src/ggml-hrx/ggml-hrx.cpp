@@ -108,9 +108,6 @@ static void ggml_backend_hrx_buffer_memset_tensor(ggml_backend_buffer_t buffer, 
 
 static void ggml_backend_hrx_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data,
                                                size_t offset, size_t size) {
-    if (size == 0) {
-        return;
-    }
     auto *       ctx = (ggml_hrx_buffer_context *) buffer->context;
     const size_t dst = ggml_hrx_tensor_offset(tensor) + offset;
     GGML_ASSERT(dst <= buffer->size && size <= buffer->size - dst);
