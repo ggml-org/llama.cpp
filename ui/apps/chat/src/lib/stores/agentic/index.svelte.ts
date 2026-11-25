@@ -587,7 +587,6 @@ class AgenticStore {
 			createAssistantMessage,
 			createToolResultMessage,
 			onAssistantTurnComplete,
-			onAttachments,
 			onChunk,
 			onCompletionId,
 			onFlowComplete,
@@ -740,22 +739,15 @@ class AgenticStore {
 					const extras = attachments.length > 0 ? attachments : undefined;
 					const streamed = streamedResults.get(event.toolCall.id);
 
-					let toolResultMessageId: string | undefined;
-
 					if (streamed) {
-						toolResultMessageId = streamed.messageId;
-
 						// the message already shows the streamed output: rewrite it only when the result differs
 						if (extras || content !== streamed.content) {
 							await updateToolResultMessage?.(streamed.messageId, content, extras);
 						}
 					} else if (createToolResultMessage) {
-						toolResultMessageId = (
-							await createToolResultMessage(event.toolCall.id, content, extras)
-						).id;
+						// the extras go in with the message: appending them again would show each image twice
+						await createToolResultMessage(event.toolCall.id, content, extras);
 					}
-
-					if (extras && toolResultMessageId) onAttachments?.(toolResultMessageId, extras);
 
 					break;
 				}

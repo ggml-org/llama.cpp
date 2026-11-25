@@ -95,7 +95,6 @@ function recorder() {
 		onAssistantTurnComplete: async (...args) => {
 			calls.push(['onAssistantTurnComplete', ...args]);
 		},
-		onAttachments: log('onAttachments'),
 		onChunk: log('onChunk'),
 		onError: log('onError'),
 		onFlowComplete: log('onFlowComplete'),
@@ -330,7 +329,6 @@ describe('agentic flow', () => {
 
 		expect(content).toMatch(/^saved\n\[Attachment saved: .+\.png\]$/);
 		expect(extras).toMatchObject([{ base64Url: IMAGE_DATA_URI, type: 'IMAGE' }]);
-		expect(named('onAttachments')[0].slice(1)).toEqual(['msg_0', extras]);
 		expect(requests[1][2]).toEqual({
 			content: [
 				{ text: content, type: 'text' },

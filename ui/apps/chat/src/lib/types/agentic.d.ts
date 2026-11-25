@@ -120,8 +120,6 @@ export interface AgenticFlowCallbacks {
 	onReasoningChunk?: (chunk: string) => void;
 	/** Tool calls being streamed (partial, accumulating) for the current turn */
 	onToolCallsStreaming?: (toolCalls: ApiChatCompletionToolCall[]) => void;
-	/** Attachments extracted from tool results */
-	onAttachments?: (messageId: string, extras: DatabaseMessageExtra[]) => void;
 	/** Model name detected from response */
 	onModel?: (model: string) => void;
 	onCompletionId?: (id: string) => void;
