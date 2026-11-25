@@ -306,6 +306,70 @@ def test_anthropic_tool_use_basic():
         assert isinstance(tool_block["input"], dict)
 
 
+def test_anthropic_named_tool_choice():
+    """Test tool_choice {"type": "tool", "name": ...} forces a call to that tool
+
+    https://github.com/ggml-org/llama.cpp/issues/30369
+    The name must be passed through instead of silently forcing every tool.
+    """
+    server.jinja = True
+    server.offline = False
+    server.n_ctx = 8192
+    server.model_hf_repo = "bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M"
+    server.model_hf_file = None
+    server.chat_template_file = '../../../models/templates/meta-llama-Llama-3.2-3B-Instruct.jinja'
+    server.start(timeout_seconds=15 * 60)
+
+    res = server.make_request("POST", "/v1/messages", data={
+        "model": "test",
+        "max_tokens": 512,
+        "tools": [
+            {
+                "name": "get_weather",
+                "description": "Get the current weather in a location",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "City name"
+                        }
+                    },
+                    "required": ["location"]
+                }
+            },
+            {
+                "name": "get_time",
+                "description": "Get the current time in a location",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "City name"
+                        }
+                    },
+                    "required": ["location"]
+                }
+            },
+        ],
+        "tool_choice": {"type": "tool", "name": "get_time"},
+        "messages": [
+            {"role": "user", "content": "What's the weather in Paris?"}
+        ]
+    })
+
+    assert res.status_code == 200, f"Expected 200, got {res.status_code}: {res.body}"
+    assert res.body["type"] == "message"
+    tool_blocks = [b for b in res.body["content"] if b.get("type") == "tool_use"]
+    assert tool_blocks, f'Expected at least 1 tool_use block in {res.body["content"]}'
+    for tool_block in tool_blocks:
+        assert tool_block["name"] == "get_time", \
+            f'Expected tool call to get_time, got {tool_block["name"]}'
+    assert res.body["stop_reason"] == "tool_use", \
+        f'Expected stop_reason tool_use, got {res.body["stop_reason"]}'
+
+
 def test_anthropic_tool_result():
     """Test sending tool results back
 
