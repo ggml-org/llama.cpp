@@ -1265,13 +1265,11 @@ struct mtmd_model_loader {
                     } break;
                     case PROJECTOR_TYPE_HY_V4_FLASH:
                     {
-                        // the HF processor runs torchvision bicubic (it replaces lanczos) and Python round()
                         hparams.n_merge = 2;
-                        hparams.set_image_resize_algo(RESIZE_ALGO_BICUBIC, true);
+                        hparams.set_image_resize_algo(RESIZE_ALGO_BICUBIC, true); // HF processor replaces lanczos with bicubic
                         hparams.image_round_half_even = true;
                         hparams.image_resize_pad = PAD_NONE;
-                        // the encoder fuses its ffn bias with the tanh gelu (bias_activation_fusion)
-                        hparams.ffn_op = FFN_GELU;
+                        hparams.ffn_op = FFN_GELU; // tanh gelu (bias_activation_fusion)
                         log_ffn_op = "gelu";
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         if (hparams.n_merge == 0) {
@@ -1280,7 +1278,7 @@ struct mtmd_model_loader {
                         hparams.set_limit_image_tokens(4, 4096);
                         get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels, false);
                         get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels, false);
-                        hparams.set_warmup_n_tokens(32*32); // vision_config.min_image_size
+                        hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_LFM2A:
                 case PROJECTOR_TYPE_D1OMNI_A:
@@ -3910,14 +3908,12 @@ struct mtmd_model_loader {
                 } break;
             case PROJECTOR_TYPE_HY_V4_FLASH:
                 {
-                    // perceive.proj.0 -> mm.0 (conv1), perceive.proj.2 -> mm.2 (conv2)
                     model.mm_0_w            = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
                     model.mm_0_b            = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"));
                     model.mm_1_w            = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
                     model.mm_1_b            = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"));
                     model.mm_pre_norm_w     = get_tensor(mtmd_format(TN_MM_PRE_NORM, "weight"));
                     model.image_newline     = get_tensor(TN_IMAGE_NEWLINE);
-                    // the position embedding is resampled on the host as F32
                     if (!model.position_embeddings || model.position_embeddings->type != GGML_TYPE_F32 || !ggml_is_matrix(model.position_embeddings) || model.position_embeddings->ne[0] != hparams.n_embd) {
                         throw std::runtime_error(mtmd_format("%s: %s requires a 2D F32 %s\n", __func__,
                                 PROJECTOR_TYPE_NAMES[model.proj_type].c_str(), mtmd_format(TN_POS_EMBD, prefix).c_str()));
@@ -4725,8 +4721,7 @@ int mtmd_model::n_output_tokens_x(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_LFM3VL:
             return (img->nx() / params.patch_size) / 2;
         case PROJECTOR_TYPE_HY_V4_FLASH:
-            // the projector appends one newline embedding per token row
-            return (img->nx() / params.patch_size) / params.n_merge + 1;
+            return (img->nx() / params.patch_size) / params.n_merge + 1; // +1 for newline
         case PROJECTOR_TYPE_STEP3VL:
         case PROJECTOR_TYPE_MINICPMV4_6:
         case PROJECTOR_TYPE_MINICPMV4_7:
@@ -5039,7 +5034,6 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
             } break;
         case PROJECTOR_TYPE_HY_V4_FLASH:
             {
-                // no begin/end embeddings, the prompt carries the image start/end tokens
                 int merge = hparams.n_merge;
                 int ow = (img->nx() / patch_size) / merge;
                 int oh = (img->ny() / patch_size) / merge;
@@ -5293,7 +5287,7 @@ int mtmd_model::n_mmproj_embd() const {
         case PROJECTOR_TYPE_HUNYUANVL:
             return mm_model_proj->ne[1];
         case PROJECTOR_TYPE_HY_V4_FLASH:
-            return mm_1_w->ne[3]; // conv2d kernel is [1, 1, IC, OC]
+            return mm_1_w->ne[3];
         case PROJECTOR_TYPE_COGVLM:
             return mm_4h_to_h_w->ne[1];
         case PROJECTOR_TYPE_DEEPSEEKOCR:
