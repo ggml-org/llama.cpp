@@ -12602,6 +12602,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 #endif
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 31, 509, 2051, {1, 1}, {1, 1}));
+
+    // a few rows of a few columns against many rows, batched (the weighted sum over the depth states of Inkling 2)
+    for (int64_t m : {1, 3, 8, 33}) {
+        for (int64_t k : {2, 5, 24, 31}) {
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, m, 2304, k, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, m, 97, k, {7, 2}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, m, 33, k, {2, 3}, {2, 1}));
+        }
+    }
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 32, 509, 2112, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 32, 509, 2112, {1, 1}, {1, 1}));
 
