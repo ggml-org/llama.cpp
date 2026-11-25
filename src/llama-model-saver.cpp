@@ -5,6 +5,7 @@
 
 #include "llama-arch.h"
 #include "llama-ext.h"
+#include "llama-impl.h"
 #include "llama.h"
 #include "llama-hparams.h"
 #include "llama-model.h"
@@ -57,10 +58,26 @@ void llama_model_saver::add_kv(const enum llm_kv key, const char value) {
     GGML_ABORT("fatal error"); // this should never be called, only needed to make the template below compile
 }
 
+static uint32_t saved_nextn_layers(const llama_model & model) {
+    const auto & hparams = model.hparams;
+    const uint32_t first_nextn = hparams.n_layer();
+    if (model.arch == LLM_ARCH_SENSENOVA_LOOP && hparams.n_layer_nextn > 0 &&
+            (first_nextn >= model.layers.size() || !model.layers[first_nextn].nextn.eh_proj)) {
+        return 0;
+    }
+    return hparams.n_layer_nextn;
+}
+
 template <typename Container>
 void llama_model_saver::add_kv(const enum llm_kv key, const Container & value, const bool per_layer) {
     GGML_ASSERT(model != nullptr || !per_layer);
-    const size_t n_values = per_layer ? size_t(model->hparams.n_layer()) : value.size();
+    size_t n_values = value.size();
+    if (per_layer) {
+        n_values = model->hparams.n_layer();
+        if (model->arch == LLM_ARCH_SENSENOVA_LOOP) {
+            n_values += saved_nextn_layers(*model);
+        }
+    }
     GGML_ASSERT(n_values <= value.size());
 
     if (n_values == 0) {
@@ -196,7 +213,9 @@ void llama_model_saver::add_kv_from_model() {
     if (hparams.n_embd_per_layer > 0) {
         add_kv(LLM_KV_EMBEDDING_LENGTH_PER_LAYER,    hparams.n_embd_per_layer);
     }
-    add_kv(LLM_KV_BLOCK_COUNT,                       hparams.n_layer_all);
+    const uint32_t n_layer_nextn = saved_nextn_layers(*model);
+    const uint32_t n_layer_saved = hparams.n_layer() + n_layer_nextn;
+    add_kv(LLM_KV_BLOCK_COUNT,                       n_layer_saved);
     add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT,         hparams.n_layer_dense_lead);
     add_kv(LLM_KV_FEED_FORWARD_LENGTH,               hparams.n_ff_arr, true);
     add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp_arr, true);
@@ -205,11 +224,11 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
     add_kv(LLM_KV_EXPERT_CHUNK_FEED_FORWARD_LENGTH,  hparams.n_ff_chexp);
     add_kv(LLM_KV_SWIGLU_CLAMP, std::vector<float>(
-            hparams.swiglu_clamp.begin(), hparams.swiglu_clamp.begin() + hparams.n_layer_all));
+            hparams.swiglu_clamp.begin(), hparams.swiglu_clamp.begin() + n_layer_saved));
     add_kv(LLM_KV_SWIGLU_CLAMP_EXP, std::vector<float>(
-            hparams.swiglu_clamp_exp.begin(), hparams.swiglu_clamp_exp.begin() + hparams.n_layer_all));
+            hparams.swiglu_clamp_exp.begin(), hparams.swiglu_clamp_exp.begin() + n_layer_saved));
     add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, std::vector<float>(
-            hparams.swiglu_clamp_shexp.begin(), hparams.swiglu_clamp_shexp.begin() + hparams.n_layer_all));
+            hparams.swiglu_clamp_shexp.begin(), hparams.swiglu_clamp_shexp.begin() + n_layer_saved));
     add_kv(LLM_KV_USE_PARALLEL_RESIDUAL,             hparams.use_par_res);
     // add_kv(LLM_KV_TENSOR_DATA_LAYOUT,                ???);
     add_kv(LLM_KV_EXPERT_COUNT,                      hparams.n_expert);
@@ -223,7 +242,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_EXPERT_GROUP_SCALE,                hparams.expert_group_scale);
     add_kv(LLM_KV_EXPERTS_PER_GROUP,                 hparams.n_group_experts);
     add_kv(LLM_KV_MOE_EVERY_N_LAYERS,                hparams.moe_every_n_layers);
-    add_kv(LLM_KV_NEXTN_PREDICT_LAYERS,              hparams.n_layer_nextn);
+    add_kv(LLM_KV_NEXTN_PREDICT_LAYERS,              n_layer_nextn);
     add_kv(LLM_KV_NUM_DEEPSTACK_LAYERS,              hparams.n_deepstack_layers);
     add_kv(LLM_KV_DEEPSTACK_MAPPING,                 hparams.deepstack_mapping_arr);
     add_kv(LLM_KV_POOLING_TYPE,                      uint32_t(hparams.pooling_type));
@@ -338,7 +357,7 @@ void llama_model_saver::add_kv_from_model() {
     if (model->arch == LLM_ARCH_DEEPSEEK4 || (hparams.dsv4_hc_mult > 0 && model->arch != LLM_ARCH_XING4_0)) {
         // the loader requires one compress ratio per layer, including nextn layers
         const std::vector<uint32_t> compress_ratios(
-                hparams.dsv4_compress_ratios.begin(), hparams.dsv4_compress_ratios.begin() + hparams.n_layer_all);
+                hparams.dsv4_compress_ratios.begin(), hparams.dsv4_compress_ratios.begin() + n_layer_saved);
         add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,         compress_ratios);
     } else {
         add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,         hparams.dsv4_compress_ratios, true);
@@ -595,7 +614,9 @@ void llama_model_saver::add_tensors_from_model() {
     // tensor once. a different tensor with an existing name still asserts below
     std::unordered_set<const struct ggml_tensor *> seen;
 
-    for (const struct llama_layer & layer : model->layers) {
+    const size_t n_layer_saved = model->hparams.n_layer() + saved_nextn_layers(*model);
+    for (size_t il = 0; il < std::min(model->layers.size(), n_layer_saved); ++il) {
+        const struct llama_layer & layer = model->layers[il];
         for (size_t i = 0; i < sizeof(layer)/sizeof(struct ggml_tensor *); ++i) {
             const struct ggml_tensor * tensor = reinterpret_cast<const struct ggml_tensor * const *>(&layer)[i];
             if (tensor == nullptr || !seen.insert(tensor).second) {
@@ -622,5 +643,10 @@ void llama_model_saver::add_tensors_from_model() {
 }
 
 void llama_model_saver::save(const std::string & path_model) {
+    if (model->arch == LLM_ARCH_SENSENOVA_LOOP && model->hparams.n_layer_nextn > 0 && saved_nextn_layers(*model) == 0 &&
+            (model->layers.empty() || !model->layers.front().attn_norm)) {
+        LLAMA_LOG_ERROR("%s: no SenseNova Loop trunk or MTP weights loaded\n", __func__);
+        return;
+    }
     gguf_write_to_file(gguf_ctx, path_model.c_str(), false);
 }

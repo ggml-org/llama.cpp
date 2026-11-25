@@ -1449,7 +1449,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     };
 
     if (files.empty()) {
-        if (flags & TENSOR_SKIP_IF_VIRTUAL) {
+        if (flags & (TENSOR_SKIP | TENSOR_SKIP_IF_VIRTUAL)) {
             return nullptr;
         }
         ggml_type type = GGML_TYPE_F32;

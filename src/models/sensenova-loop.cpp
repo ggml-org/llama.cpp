@@ -84,6 +84,16 @@ void llama_model_sensenova_loop::load_arch_tensors(llama_model_loader & ml) {
     }
     llama_model_qwen35::load_arch_tensors(ml);
     LLAMA_LOAD_LOCALS;
+    if (hparams.n_layer_nextn > 0 && !ml.load_mtp) {
+        // The shared scale loader only visits tensors whose weights were loaded.
+        const int skip = TENSOR_NOT_REQUIRED | TENSOR_SKIP;
+        for (llm_tensor weight : {LLM_TENSOR_ATTN_Q, LLM_TENSOR_ATTN_K, LLM_TENSOR_ATTN_V, LLM_TENSOR_ATTN_QKV,
+                LLM_TENSOR_ATTN_OUT, LLM_TENSOR_FFN_GATE, LLM_TENSOR_FFN_DOWN, LLM_TENSOR_FFN_UP,
+                LLM_TENSOR_NEXTN_EH_PROJ, LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD}) {
+            create_tensor(tn(weight, "scale", n_layer), {1}, skip);
+            create_tensor(tn(weight, "input_scale", n_layer), {1}, skip);
+        }
+    }
     const int flags = nextn_flags(ml).trunk;
     for (int il = 0; il < n_layer; ++il) {
         const uint32_t physical = physical_layer(il);
@@ -110,7 +120,13 @@ void llama_model_sensenova_loop::load_arch_tensors(llama_model_loader & ml) {
 
 std::unique_ptr<llm_graph_context> llama_model_sensenova_loop::build_arch_graph(const llm_graph_params & params) const {
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
+        if (!layers[hparams.n_layer()].nextn.eh_proj) {
+            throw std::runtime_error("SenseNova Loop MTP weights are not loaded");
+        }
         return std::make_unique<llama_model_qwen35::graph_mtp>(params);
+    }
+    if (layers.empty() || !layers.front().attn_norm) {
+        throw std::runtime_error("SenseNova Loop main model weights are not loaded");
     }
     return std::make_unique<graph>(params);
 }
