@@ -221,6 +221,31 @@ ACC_TYPE faAddBias(const uint32_t row, const uint32_t col, const ACC_TYPE elem, 
     return elem + ACC_TYPE(fa_bias(bq, bh, kv_col));
 }
 
+#ifdef FA_BIAS_STAGE
+const uint32_t BIAS_ROW_STEP = WorkGroupSize / Bc;
+const uint32_t BIAS_ROWS = Br / BIAS_ROW_STEP;
+shared ACC_TYPE bias_sh[Br * Bc];
+
+// Subgroups read contiguous columns of one row, so the index and table loads coalesce.
+void faStageBias(const uint32_t jblk) {
+    const uint32_t col = gl_LocalInvocationIndex % Bc;
+    const uint32_t r0 = gl_LocalInvocationIndex / Bc;
+    const uint32_t kv_col = jblk * Bc + col;
+    int32_t bins[BIAS_ROWS];
+    uint32_t boff[BIAS_ROWS];
+    bool ok[BIAS_ROWS];
+    [[unroll]] for (uint32_t k = 0; k < BIAS_ROWS; ++k) {
+        uint32_t bq, bh;
+        ok[k] = (!KV_bounds_check || kv_col < KV) && fa_bias_row(r0 + k * BIAS_ROW_STEP, bq, bh);
+        boff[k] = (bq * p.neq2 + bh) * BiasBins;
+        bins[k] = ok[k] ? data_bias_idx[bq * p.KV + kv_col] : 0;
+    }
+    [[unroll]] for (uint32_t k = 0; k < BIAS_ROWS; ++k) {
+        bias_sh[(r0 + k * BIAS_ROW_STEP) * Bc + col] = ok[k] ? ACC_TYPE(data_bias_table[boff[k] + uint32_t(bins[k])]) : ACC_TYPE(0);
+    }
+}
+#endif
+
 ACC_TYPE maxReduce(const in ACC_TYPE x, const in ACC_TYPE y) {
     return max(x, y);
 }
@@ -423,6 +448,14 @@ void main() {
             }
         }
 
+#ifdef FA_BIAS_STAGE
+        if (MASK_ENABLE) {
+            barrier();
+            faStageBias(j);
+            barrier();
+        }
+#endif
+
         coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator> S = coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator>(0);
 
         coopmat<FLOAT_TYPE, gl_ScopeWorkgroup, HSK_pad, Bc, gl_MatrixUseB> K_T;
@@ -451,9 +484,15 @@ void main() {
             coopMatPerElementNV(S, S, faAddSparseMask, j);
         } else if (MASK_ENABLE) {
             coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator> mva = coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator>(mv);
+#ifdef FA_BIAS_STAGE
+            coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator> bias;
+            coopMatLoad(bias, bias_sh, 0, Bc, gl_CooperativeMatrixLayoutRowMajor);
+            mva += bias;
+#else
             if (USE_BIAS) {
                 coopMatPerElementNV(mva, mva, faAddBias, j);
             }
+#endif
             S += slopeMat*mva;
         }
 

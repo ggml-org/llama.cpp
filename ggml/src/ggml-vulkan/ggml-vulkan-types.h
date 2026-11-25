@@ -812,6 +812,7 @@ struct vk_device_struct {
     bool coopmat2_bf16_support {};
     bool coopmat2_gdn_support {};
     bool coopmat2_decode_vector;
+    uint32_t coopmat2_reserved_shmem {};
 
     bool dot2_f16 {};
     bool ocp_fp4 {};

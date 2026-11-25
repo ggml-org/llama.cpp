@@ -1446,6 +1446,9 @@ vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_t hsk, 
     }
 }
 
+// cm2 only: selects the flash_attn_cm2 SPIR-V built with FA_BIAS_STAGE
+static constexpr uint32_t FA_FLAG_BIAS_STAGE = 256;
+
 vk_fa_pipeline_state get_fa_pipeline_state(const vk_device& device, const vk_fa_tuning_params& params, uint32_t hsk, uint32_t hsv, bool aligned, bool f32acc,
                                                   bool use_mask, bool use_mask_opt, bool use_logit_softcap, bool use_sparse, ggml_type k_type, ggml_type v_type,
                                                   uint32_t bias_bins) {
@@ -2438,18 +2441,23 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             const bool f32acc = fa.first.f32acc;
 
             const bool bf16_kv = fa.first.k_type == GGML_TYPE_BF16;
+            const bool bias_stage = (fa.first.flags & FA_FLAG_BIAS_STAGE) != 0;
             const void * spv_data;
             size_t spv_size;
             const char * name;
             if (bf16_kv) {
 #if defined(VK_KHR_shader_bfloat16) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
                 if (!device->coopmat2_bf16_support) continue;
-                spv_data = flash_attn_f32_f16_bf16_cm2_data;
-                spv_size = flash_attn_f32_f16_bf16_cm2_len;
-                name = aligned ? "flash_attn_f32_bf16_aligned_cm2" : "flash_attn_f32_bf16_cm2";
+                spv_data = bias_stage ? flash_attn_f32_f16_bf16_cm2_bias_data : flash_attn_f32_f16_bf16_cm2_data;
+                spv_size = bias_stage ? flash_attn_f32_f16_bf16_cm2_bias_len  : flash_attn_f32_f16_bf16_cm2_len;
+                name = bias_stage ? (aligned ? "flash_attn_f32_bf16_aligned_cm2_bias" : "flash_attn_f32_bf16_cm2_bias") :
+                                    (aligned ? "flash_attn_f32_bf16_aligned_cm2" : "flash_attn_f32_bf16_cm2");
 #else
                 continue;
 #endif
+            } else if (bias_stage) {
+                if (f32acc) { spv_data = flash_attn_f32_f16_cm2_bias_data;        spv_size = flash_attn_f32_f16_cm2_bias_len;        name = aligned ? "flash_attn_f32_f16_aligned_f32acc_cm2_bias" : "flash_attn_f32_f16_f32acc_cm2_bias"; }
+                else        { spv_data = flash_attn_f32_f16_f16acc_cm2_bias_data; spv_size = flash_attn_f32_f16_f16acc_cm2_bias_len; name = aligned ? "flash_attn_f32_f16_aligned_f16acc_cm2_bias" : "flash_attn_f32_f16_f16acc_cm2_bias"; }
             } else if (aligned) {
                 if (f32acc) { spv_data = flash_attn_f32_f16_cm2_data;        spv_size = flash_attn_f32_f16_cm2_len;        name = "flash_attn_f32_f16_aligned_f32acc_cm2"; }
                 else        { spv_data = flash_attn_f32_f16_f16acc_cm2_data; spv_size = flash_attn_f32_f16_f16acc_cm2_len; name = "flash_attn_f32_f16_aligned_f16acc_cm2"; }
@@ -5315,6 +5323,7 @@ vk_device ggml_vk_get_device(size_t idx) {
                     device->coopmat2 = true;
                     device->coopmat2_bf16_support = found_bf16_128 && found_bf16_256;
                     device->coopmat2_decode_vector = coopmat2_decode_vector_support && coopmat2_decode_vector_features.cooperativeMatrixDecodeVector;
+                    device->coopmat2_reserved_shmem = coopmat2_props.cooperativeMatrixWorkgroupScopeReservedSharedMemory;
                 }
             }
 #endif
@@ -9027,6 +9036,15 @@ bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_
     return supported;
 }
 
+static bool ggml_vk_flash_attn_cm2_bias_stage_shmem_support(const vk_device& device, const vk_fa_tuning_params& params, bool f32acc) {
+    // Needs to be kept up to date on shader changes
+    const uint32_t acctype = f32acc ? 4 : 2;
+    const uint32_t bias_sh = params.block_rows * params.block_cols * acctype;
+    const uint32_t iq_shmem = 16 * sizeof(ggml_fp16_t);
+
+    return uint64_t(bias_sh) + iq_shmem + device->coopmat2_reserved_shmem <= device->properties.limits.maxComputeSharedMemorySize;
+}
+
 void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * q, const ggml_tensor * k, const ggml_tensor * v, const ggml_tensor * mask, const ggml_tensor * sinks, ggml_tensor * dst) {
     VK_LOG_DEBUG("ggml_vk_flash_attn((" << q << ", name=" << q->name << ", type=" << q->type << ", ne0=" << q->ne[0] << ", ne1=" << q->ne[1] << ", ne2=" << q->ne[2] << ", ne3=" << q->ne[3] << ", nb0=" << q->nb[0] << ", nb1=" << q->nb[1] << ", nb2=" << q->nb[2] << ", nb3=" << q->nb[3];
     std::cerr << "), (" << k << ", name=" << k->name << ", type=" << k->type << ", ne0=" << k->ne[0] << ", ne1=" << k->ne[1] << ", ne2=" << k->ne[2] << ", ne3=" << k->ne[3] << ", nb0=" << k->nb[0] << ", nb1=" << k->nb[1] << ", nb2=" << k->nb[2] << ", nb3=" << k->nb[3];
@@ -9236,6 +9254,11 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     vk_fa_pipeline_state fa_pipeline_state = get_fa_pipeline_state(ctx->device, tuning_params, HSK, HSV, aligned, f32acc,
                                                                    mask != nullptr, use_mask_opt, logit_softcap != 0, use_sparse, k_type_eff, v_type_eff,
                                                                    bias_bins);
+    // GQA rows share one index row, the per-element bias is cheaper there
+    if (bias_bins && gqa_ratio == 1 && tuning_params.path == FA_COOPMAT2 &&
+        ggml_vk_flash_attn_cm2_bias_stage_shmem_support(ctx->device, tuning_params, f32acc)) {
+        fa_pipeline_state.flags |= FA_FLAG_BIAS_STAGE;
+    }
 
     vk_pipeline pipeline = nullptr;
 

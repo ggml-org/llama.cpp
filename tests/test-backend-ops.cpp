@@ -10542,6 +10542,15 @@ struct test_flash_attn_ext_indexed_bias : public test_case {
             }
         }
 
+        visible.assign(nb*n_stream, kv);
+        if (causal) {
+            for (int64_t s = 0; s < n_stream; ++s) {
+                for (int64_t j = 0; j < nb; ++j) {
+                    visible[s*nb + j] = kv/2 + (j + 1)*(kv/2)/nb - 37*s;
+                }
+            }
+        }
+
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (strcmp(t->name, "r") == 0) {
                 ggml_backend_tensor_set(t, rows.data(), 0, rows.size()*sizeof(int32_t));
@@ -10550,12 +10559,8 @@ struct test_flash_attn_ext_indexed_bias : public test_case {
             } else if (strcmp(t->name, "m") == 0) {
                 std::vector<float> f(ggml_nelements(t));
                 std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
-                visible.assign(nb*n_stream, kv);
                 for (int64_t s = 0; s < n_stream; ++s) {
                     for (int64_t j = 0; j < nb; ++j) {
-                        if (causal) {
-                            visible[s*nb + j] = kv/2 + (j + 1)*(kv/2)/nb - 37*s;
-                        }
                         for (int64_t i = 0; i < kv; ++i) {
                             const bool masked = (kv_rows && rows[s*kv + i] < 0) || (mask_row && j == 0);
                             if (causal) {
