@@ -466,7 +466,7 @@ static __device__ __forceinline__ void flash_attn_tile_iter(
         T_vec_dot * const KV_tmp,
         const int stride_K2,
         const int stride_V2,
-        const int stride_mask,
+        const uint32_t stride_mask,
         float * const KQ_max,
         float * const KQ_sum,
         T_acc * const VKQ,
@@ -536,8 +536,8 @@ static __device__ __forceinline__ void flash_attn_tile_iter(
 
             if (!oob_check || i_KQ < k_VKQ_sup) {
                 if (ncols2 > 1 || mask) {
-                    const int   k = k_VKQ_0 + i_KQ;
-                    const float m = __half2float(mask[int64_t(j)*stride_mask + k]);
+                    const uint32_t k = k_VKQ_0 + i_KQ;
+                    const float m = __half2float(mask[uint64_t(j)*stride_mask + k]);
                     KQ_acc[(i_KQ_0/(np*warp_size))*cpw + jc0] += slope*(indexed_bias ? bias.add(m, j, k) : m);
                 }
 
@@ -1076,7 +1076,7 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_cuda_context & ctx, ggm
     constexpr size_t nbytes_shared = 0;
 
 #ifdef GGML_USE_HIP
-    if constexpr (DKQ <= 128) {
+    if constexpr (DKQ <= 128 && !indexed_bias) {
         if (!(amd_mfma_available(cc) && ncols2 == 1) && Q->ne[1] > 32/ncols2) {
             constexpr int cols_per_block = 64;
             const int nwarps    = ggml_cuda_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
@@ -1089,9 +1089,11 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_cuda_context & ctx, ggm
     }
 #endif // GGML_USE_HIP
 
-#ifndef GGML_USE_HIP
+#ifdef GGML_USE_HIP
+    if constexpr (!indexed_bias || DKQ == 64)
+#else
     if constexpr (DKQ <= 256)
-#endif // GGML_USE_HIP
+#endif
     {
         if (Q->ne[1] > 16/ncols2) {
             constexpr int cols_per_block = 32;
