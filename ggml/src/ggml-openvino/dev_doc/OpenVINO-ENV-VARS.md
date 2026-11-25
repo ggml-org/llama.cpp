@@ -177,31 +177,14 @@ Other properties that are useful with `GGML_OPENVINO_NPU_CONFIG`. The backend do
 | `NPUW_UNFOLD_IREQS` | Boolean | `not set` | `NO` | One infer request for each part, also for repeating blocks. |
 | `LOG_LEVEL` | String | `not set` | `LOG_ERROR` | Log level of the NPU plugin, for example `LOG_INFO`. |
 
+Set properties with `GGML_OPENVINO_NPU_CONFIG`:
+
 ```bash
 export GGML_OPENVINO_DEVICE=NPU
 export GGML_OPENVINO_NPU_CONFIG="NPU_COMPILER_TYPE=PLUGIN,COMPILATION_NUM_THREADS=1,LOG_LEVEL=LOG_INFO"
 ```
 
-```bash
-# gemma-4 E2B on the NPU, first run.
-# The backend compiles the model for the NPU and saves it in GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR, so this start
-# takes longer than later ones (with -lv 4 the log shows "no usable cached blobs ... compiling and exporting").
-# Use the model as usual, exit with /exit, then start it again as in the next block.
-export GGML_OPENVINO_DEVICE=NPU
-export GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR=$HOME/ov_cache
-export GGML_OPENVINO_NPU_HOST_GATHER=1              # optional: faster generation, less memory and disk; the output can differ slightly
-export GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT=q4_0_128  # optional: slightly less memory; may lower accuracy
-export GGML_OPENVINO_PREFILL_CHUNK_SIZE=512         # optional: can make long prompts faster; makes the first run longer
-./build/ReleaseOV/bin/llama-cli -m google_gemma-4-E2B-it-Q4_K_M.gguf -c 4096
-```
-
-```bash
-# Second and later runs: the same exports (repeat them in a new shell) and the same command.
-# The backend loads the compiled model from the cache instead of compiling it, so the model starts much faster
-# (with -lv 4 the log shows "model cache HIT"). A changed setting or -c value compiles and saves again.
-export GGML_OPENVINO_SELF_CONTAINED_MMAP=1          # optional, later runs only: slightly shorter start; fails without the cache of a first run
-./build/ReleaseOV/bin/llama-cli -m google_gemma-4-E2B-it-Q4_K_M.gguf -c 4096
-```
+List the properties of the installed NPU plugin:
 
 ```cpp
 // List the properties of the installed NPU plugin with their current values
@@ -214,6 +197,34 @@ for (const auto & name : core.get_property("NPU", ov::supported_properties)) {
 - All NPU properties: [OpenVINO NPU device](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/npu-device.html).
 - `NPUW_*` options, with type and default: `src/plugins/intel_npu/src/al/include/intel_npu/config/npuw_option_defs.inc` in the OpenVINO source.
 - Graphs without a KV cache compile without NPUW: the backend removes `NPU_USE_NPUW` and the `NPUW_*` keys for them.
+
+### Example: gemma-4 E2B with the model cache
+
+`GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR` saves the model compiled for the NPU, so only the first start compiles it. Run step 1 once, then start the model as in step 2 every later time.
+
+#### Step 1: first run, compile and save the model
+
+```bash
+# This start takes longer: the backend compiles the model for the NPU and saves it in the cache directory
+# (with -lv 4 the log shows "no usable cached blobs ... compiling and exporting").
+# Use the model as usual, then exit with /exit.
+export GGML_OPENVINO_DEVICE=NPU
+export GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR=$HOME/ov_cache
+export GGML_OPENVINO_NPU_HOST_GATHER=1              # optional: faster generation, less memory and disk; the output can differ slightly
+export GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT=q4_0_128  # optional: slightly less memory; may lower accuracy
+export GGML_OPENVINO_PREFILL_CHUNK_SIZE=512         # optional: can make long prompts faster; makes the first run longer
+./build/ReleaseOV/bin/llama-cli -m google_gemma-4-E2B-it-Q4_K_M.gguf -c 4096
+```
+
+#### Step 2: later runs, load the model from the cache
+
+```bash
+# Use the same exports as in step 1 (repeat them in a new shell) and the same command.
+# The backend loads the compiled model instead of compiling it, so the model starts much faster
+# (with -lv 4 the log shows "model cache HIT"). A changed setting or -c value compiles and saves again.
+export GGML_OPENVINO_SELF_CONTAINED_MMAP=1          # optional, later runs only: slightly shorter start; fails without the cache of step 1
+./build/ReleaseOV/bin/llama-cli -m google_gemma-4-E2B-it-Q4_K_M.gguf -c 4096
+```
 
 ## GPU and CPU plugin properties
 
