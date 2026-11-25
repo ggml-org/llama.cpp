@@ -6,7 +6,6 @@
 	import { MAX_HEIGHT_CODE_BLOCK } from '#lib/constants/index.ts';
 	import { FileTypeText } from '#lib/enums/index.ts';
 	import type { AgenticSection } from '#lib/types/index.ts';
-	import { getToolUi } from '#lib/utils/index.ts';
 
 	interface Props {
 		section: AgenticSection;
@@ -18,10 +17,9 @@
 	let { isStreaming, onToggle, open, section }: Props = $props();
 
 	const runJsMeta = $derived(parseRunJavascriptMeta(section));
-	const title = $derived(getToolUi(section.toolName)?.label ?? section.toolName ?? '');
 </script>
 
-<ToolCallBlock {isStreaming} meta={runJsMeta} {onToggle} {open} {section} {title}>
+<ToolCallBlock {isStreaming} meta={runJsMeta} {onToggle} {open} {section}>
 	{#snippet children(meta, ctx)}
 		{#if ctx.isPending}
 			<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">

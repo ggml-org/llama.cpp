@@ -375,6 +375,30 @@ def test_systemone_d1_parallel():
             assert_answers_close(a[qid], b[qid], 1e-6)
 
 
+def test_systemone_noncausal_parallel():
+    global server
+    server = ServerPreset.tinydecision("vllm-d3")
+    # n_batch > n_ubatch: each prompt fits in one ubatch, but several of them do not
+    server.n_batch = 2048
+    server.n_ubatch = 512
+    server.n_slots = 4
+    server.start()
+    state = " ".join(f"The order {i} arrived damaged and the customer wants a replacement." for i in range(14))
+    questions = {"angry": TEST_QUESTIONS["angry"]}
+
+    def decide():
+        res = server.make_request("POST", "/v1/systemone", data={"state": state, "questions": questions})
+        assert res.status_code == 200
+        assert res.body["usage"]["input_tokens"] > 512 // 2
+        return res.body["answers"]
+
+    # a non-causal batch is evaluated in one ubatch, the concurrent prompts are spread over several batches
+    single = decide()
+    parallel = parallel_function_calls([(decide, ()) for _ in range(4)])
+    for answers in parallel:
+        assert_answers_close(single["angry"], answers["angry"], 1e-6)
+
+
 def test_systemone_d1_special_tokens():
     global server
     server = ServerPreset.tinydecision("lfm3-d1-omni")

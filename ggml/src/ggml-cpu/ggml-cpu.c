@@ -1884,6 +1884,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_silu_back(params, tensor);
             } break;
+        case GGML_OP_SIGMOID_BACK:
+            {
+                ggml_compute_forward_sigmoid_back(params, tensor);
+            } break;
         case GGML_OP_NORM:
             {
                 ggml_compute_forward_norm(params, tensor);
@@ -2392,6 +2396,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             }
             break;
         case GGML_OP_SILU_BACK:
+        case GGML_OP_SIGMOID_BACK:
         case GGML_OP_MUL:
         case GGML_OP_DIV:
         case GGML_OP_NORM:
@@ -3063,9 +3068,10 @@ struct ggml_cplan ggml_graph_plan(
                     } break;
                 case GGML_OP_GATED_DELTA_NET:
                     {
-                        const int64_t S_v = node->src[2]->ne[0];
-                        const int64_t K   = ggml_get_op_params_i32(node, 0);
-                        const int64_t per_thread = S_v + (K > 1 ? S_v * S_v : 0);
+                        const int64_t S_v  = node->src[2]->ne[0];
+                        const int64_t K    = ggml_get_op_params_i32(node, 0);
+                        const bool    keep = node->src[6] && ggml_get_op_params_i32(node, 2) != 0;
+                        const int64_t per_thread = S_v + (K > 1 || keep ? S_v * S_v : 0);
                         cur = per_thread * sizeof(float) * n_tasks;
                     } break;
                 case GGML_OP_COUNT:

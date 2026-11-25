@@ -13,6 +13,8 @@
 		ChatFormInputFileInputInvisible,
 		ChatFormMcpResourcesList,
 		ChatFormPickers,
+		ChatFormSystemMessageAttachment,
+		ChatFormSystemMessageChip,
 		DialogMcpResourcesBrowser
 	} from '#lib/components/app/index.ts';
 	import {
@@ -22,12 +24,14 @@
 		INITIAL_FILE_SIZE,
 		PROMPT_CONTENT_SEPARATOR,
 		SETTING_CONFIG_DEFAULT,
+		SYSTEM_MESSAGE_PLACEHOLDER,
 		VOICE_EDITOR_SELECTOR
 	} from '#lib/constants/index.ts';
 	import {
 		ContentPartType,
 		FileExtensionText,
 		KeyboardKey,
+		MessageRole,
 		MimeTypeText,
 		SpecialFileType,
 		ToolSource
@@ -87,6 +91,8 @@
 		placeholder?: string;
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
+		/** Writing the system message: the form takes the system message's dashed, muted look. */
+		systemMode?: boolean;
 
 		// Event Handlers
 		onAttachmentRemove?: (index: number) => void;
@@ -120,6 +126,7 @@
 		showAddButton = true,
 		showModelSelector = true,
 		singleRow = false,
+		systemMode = false,
 		uploadedFiles = $bindable([]),
 		value = $bindable(''),
 		voiceRecorder
@@ -147,6 +154,23 @@
 
 	let cwd = $derived(
 		conversationsStore.activeConversation?.cwd ?? conversationsStore.preferences.pendingCwd
+	);
+
+	let systemMessage = $derived(
+		conversationsStore.activeMessages.find((m) => m.role === MessageRole.SYSTEM)
+	);
+	// A new chat shows the system message written for it as an attachment, until the first
+	// message sends it. A conversation with one offers it in a chip under the form.
+	// A placeholder is one nobody has written yet
+	let systemMessageAttachment = $derived.by(() => {
+		if (conversationsStore.activeConversation) return null;
+
+		const content = chatStore.pendingSystemMessage;
+
+		return content && content.trim() && content !== SYSTEM_MESSAGE_PLACEHOLDER ? content : null;
+	});
+	let systemMessageChip = $derived(
+		conversationsStore.activeConversation ? systemMessage?.content : undefined
 	);
 
 	let showWorkingDirectory = $derived(conversationsStore.preferences.hasEnabledCwdTools());
@@ -295,6 +319,7 @@
 			!isExpanded &&
 			!voice.isActive &&
 			!hasAttachments &&
+			!systemMessageAttachment &&
 			!mcpStore.resources.hasAttachments &&
 			!value.includes('\n')
 	);
@@ -680,6 +705,12 @@
 
 <svelte:window onkeydown={handleWindowKeydown} />
 
+{#snippet systemMessageLeading()}
+	{#if systemMessageAttachment}
+		<ChatFormSystemMessageAttachment content={systemMessageAttachment} {disabled} />
+	{/if}
+{/snippet}
+
 <ChatFormInputFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
 
 <form
@@ -758,6 +789,7 @@
 				'max-md:border-transparent max-md:focus-within:border-transparent max-md:dark:border-transparent max-md:dark:focus-within:border-transparent',
 				EXPANDED_SHEET_FILL
 			],
+			systemMode && '!border-2 !border-dashed !border-border/50 !bg-muted',
 			disabled && 'cursor-not-allowed opacity-60'
 		]}
 		data-single-row={isSingleRow || undefined}
@@ -779,6 +811,7 @@
 			activeModelId={activeModelId ?? undefined}
 			{attachments}
 			class={isExpanded ? 'py-5 max-md:px-(--chat-form-side-inset)' : 'py-5'}
+			leading={systemMessageAttachment ? systemMessageLeading : undefined}
 			limitToSingleRow
 			onFileRemove={handleFileRemove}
 			style="scroll-padding: 1rem;"
@@ -898,21 +931,27 @@
 		></div>
 	{/if}
 
-	{#if showWorkingDirectory}
-		<!-- opened from the chip, the + menu, a phone chat's header or `/cwd` -->
-		<ChatFormCurrentWorkingDirectory
-			bind:query={pickers.workingDirectoryQuery}
-			class="self-start"
-			customAnchor={activePickerAnchor}
-			directory={cwd}
-			{disabled}
-			isOpen={pickers.isWorkingDirectoryPickerOpen}
-			onChange={handleWorkingDirectoryChange}
-			onClose={pickers.handleWorkingDirectoryClose}
-			onOpen={pickers.handleWorkingDirectoryOpen}
-			showChip={showWorkingDirectoryChip}
-		/>
-	{/if}
+	<div class="flex flex-wrap items-center gap-x-1 self-start">
+		{#if showWorkingDirectory}
+			<!-- opened from the chip, the + menu, a phone chat's header or `/cwd` -->
+			<ChatFormCurrentWorkingDirectory
+				bind:query={pickers.workingDirectoryQuery}
+				class="self-start"
+				customAnchor={activePickerAnchor}
+				directory={cwd}
+				{disabled}
+				isOpen={pickers.isWorkingDirectoryPickerOpen}
+				onChange={handleWorkingDirectoryChange}
+				onClose={pickers.handleWorkingDirectoryClose}
+				onOpen={pickers.handleWorkingDirectoryOpen}
+				showChip={showWorkingDirectoryChip}
+			/>
+		{/if}
+
+		{#if systemMessageChip}
+			<ChatFormSystemMessageChip content={systemMessageChip} {disabled} />
+		{/if}
+	</div>
 </form>
 
 <DialogMcpResourcesBrowser

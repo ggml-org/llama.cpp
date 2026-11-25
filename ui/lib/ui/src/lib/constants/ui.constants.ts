@@ -7,3 +7,6 @@ export const UI_DATA_ATTRS = {
 
 /** How close to the bottom (px) a streaming code block counts as at the bottom. */
 export const SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX = 32;
+
+/** How long a collapsible's body takes to expand or collapse; matches the region's CSS transition. */
+export const COLLAPSIBLE_TRANSITION_MS = 200;

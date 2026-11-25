@@ -49,6 +49,11 @@ size_t ggml_metal_op_flash_attn_ext_extra_rows(const struct ggml_tensor * op);
 
 size_t ggml_metal_op_argmax_extra(const struct ggml_tensor * op);
 
+// return true if the top-k op uses the radix path
+bool ggml_metal_op_top_k_use_radix(const struct ggml_tensor * op);
+
+size_t ggml_metal_op_top_k_extra(const struct ggml_tensor * op);
+
 size_t ggml_metal_op_conv_2d_extra_tmp(const struct ggml_tensor * op);
 
 int ggml_metal_op_concat            (ggml_metal_op_t ctx, int idx);

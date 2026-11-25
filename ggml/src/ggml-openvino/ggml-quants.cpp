@@ -154,19 +154,22 @@ void extract_q4_1_data(const ggml_tensor * tensor,
         });
     } else {
         auto * zp = static_cast<uint8_t *>(zp_arr.data());
-        ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
-            float scale = static_cast<float>(ov::float16::from_bits(*((uint16_t *) (data + i * bytes_per_block))));
-            float min = static_cast<float>(ov::float16::from_bits(*((uint16_t *) (data + i * bytes_per_block + 2))));
-            scales[i] = ov::float16(scale);
-            // zp = -min / scale (bias = min, so zp = -bias/scale)
-            uint8_t zp_val = (scale != 0.0f) ? (uint8_t) std::round(-min / scale) : 0;
-            // Pack two 4-bit zero points per byte
-            if (i % 2 == 0) {
-                zp[i / 2] = zp_val & 0x0F;   // Lower nibble
-            } else {
-                zp[i / 2] |= (zp_val << 4);  // Upper nibble
+        const size_t n_blocks = scales_arr.get_size();
+        // One iteration per zero point byte: the two blocks that share a byte are packed together, so no two
+        // threads write the same byte.
+        ov::parallel_for((n_blocks + 1) / 2, [&](size_t pair) {
+            uint8_t packed = 0;
+            for (size_t i = 2 * pair; i < std::min(2 * pair + 2, n_blocks); i++) {
+                float scale = static_cast<float>(ov::float16::from_bits(*((uint16_t *) (data + i * bytes_per_block))));
+                float min =
+                    static_cast<float>(ov::float16::from_bits(*((uint16_t *) (data + i * bytes_per_block + 2))));
+                scales[i] = ov::float16(scale);
+                // zp = -min / scale (bias = min, so zp = -bias/scale), in the u4 range
+                const uint8_t zp_val = (scale != 0.0f) ? (uint8_t) std::clamp(std::lround(-min / scale), 0L, 15L) : 0;
+                packed |= (i % 2 == 0) ? zp_val : (uint8_t) (zp_val << 4);
+                unpack_32_4(data + i * bytes_per_block + 4, weights + i * 16);
             }
-            unpack_32_4(data + i * bytes_per_block + 4, weights + i * 16);
+            zp[pair] = packed;
         });
     }
 }
@@ -259,7 +262,7 @@ void extract_q5_1_data(const ggml_tensor * tensor,
             float min = static_cast<float>(ov::float16::from_bits(read_u16(block + 2)));
             scales[i] = ov::float16(scale);
             // zp = -min / scale (dequant: (w - zp) * s == w*s + min)
-            zp[i] = (scale != 0.0f) ? (uint8_t) std::lround(-min / scale) : 0;
+            zp[i] = (scale != 0.0f) ? (uint8_t) std::clamp(std::lround(-min / scale), 0L, 255L) : 0;
             unpack_block(block, weights + i * qk);
         });
     }
@@ -378,7 +381,9 @@ void extract_q4_k_data(const ggml_tensor * tensor,
                 bias_f16[i * 8 + j] = ov::float16(-min_vals[j]);
             } else {
                 // zp = min / scale (since bias = -min and zp = -bias/scale)
-                uint8_t zp_val = (scale_vals[j] != 0.0f) ? (uint8_t) std::round(min_vals[j] / scale_vals[j]) : 0;
+                uint8_t zp_val = (scale_vals[j] != 0.0f) ?
+                                     (uint8_t) std::clamp(std::lround(min_vals[j] / scale_vals[j]), 0L, 15L) :
+                                     0;
                 // Pack two 4-bit zero points per byte
                 size_t idx = i * 8 + j;
                 if (idx % 2 == 0) {

@@ -231,6 +231,7 @@ export type {
 	AgenticFlowParams,
 	AgenticFlowResult,
 	SteeringMessage,
+	PendingPermissionRequest,
 	AgenticSection,
 	ToolResultLine,
 	ContinueIntent

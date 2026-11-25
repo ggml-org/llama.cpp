@@ -53,9 +53,9 @@ static __global__ void mul_mat_vec_f(
 
     constexpr int warp_size   = ggml_cuda_get_physical_warp_size();
 
-    x   += int64_t(sample_x)  *stride_sample_x   + channel_x  *stride_channel_x   + row*stride_row;
-    y   += int64_t(sample_y)  *stride_sample_y   + channel_y  *stride_channel_y;
-    dst += int64_t(sample_dst)*stride_sample_dst + channel_dst*stride_channel_dst;
+    x   += int64_t(sample_x)  *stride_sample_x   + int64_t(channel_x)  *stride_channel_x   + int64_t(row)*stride_row;
+    y   += int64_t(sample_y)  *stride_sample_y   + int64_t(channel_y)  *stride_channel_y;
+    dst += int64_t(sample_dst)*stride_sample_dst + int64_t(channel_dst)*stride_channel_dst;
     if constexpr (is_multi_token_id) {
         y   += token_idx*stride_col_y2*2;
         dst += token_idx*stride_col_dst;
@@ -106,16 +106,16 @@ static __global__ void mul_mat_vec_f(
     }
 
     if (use_gate) {
-        gate_x += int64_t(sample_x)  *stride_sample_x   + channel_x  *stride_channel_x   + row*stride_row;
+        gate_x += int64_t(sample_x)  *stride_sample_x   + int64_t(channel_x)  *stride_channel_x   + int64_t(row)*stride_row;
     }
 
     if constexpr (has_fusion) {
         const int channel_bias = ids ? channel_x : channel_dst;
         if (use_bias) {
-            x_bias += int64_t(sample_dst)*stride_sample_dst + channel_bias*stride_channel_dst;
+            x_bias += int64_t(sample_dst)*stride_sample_dst + int64_t(channel_bias)*stride_channel_dst;
         }
         if (use_gate_bias) {
-            gate_bias += int64_t(sample_dst)*stride_sample_dst + channel_bias*stride_channel_dst;
+            gate_bias += int64_t(sample_dst)*stride_sample_dst + int64_t(channel_bias)*stride_channel_dst;
         }
     }
 

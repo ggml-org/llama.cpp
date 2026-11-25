@@ -21,7 +21,7 @@ bool ggml_zdnn_supports_flash_attn_ext(const ggml_backend_zdnn_device_context * 
     memcpy(&logit_softcap, (const float *) op->op_params + 2, sizeof(float));
 
     // sinks, alibi, softcap, sparse k/v sets and k/v row lists are not implemented
-    if (op->src[4] != nullptr || op->src[5] != nullptr || max_bias != 0.0f || logit_softcap != 0.0f || ggml_get_op_params_i32(op, 4) != 0) {
+    if (op->src[4] != nullptr || op->src[5] != nullptr || ggml_flash_attn_ext_has_indexed_bias(op) || max_bias != 0.0f || logit_softcap != 0.0f || ggml_get_op_params_i32(op, 4) != 0) {
         return false;
     }
 

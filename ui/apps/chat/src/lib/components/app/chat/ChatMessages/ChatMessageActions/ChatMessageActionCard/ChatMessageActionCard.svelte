@@ -5,10 +5,12 @@
 	interface Props {
 		icon: Component<{ class?: string }>;
 		message: Snippet;
+		/** What the decision is about, shown in full between the question and the actions. */
+		detail?: Snippet;
 		actions: Snippet;
 	}
 
-	let { actions, icon: IconComponent, message }: Props = $props();
+	let { actions, detail, icon: IconComponent, message }: Props = $props();
 </script>
 
 <div class="my-2 rounded-lg border border-(--action-card-border) bg-card p-3">
@@ -19,6 +21,12 @@
 			{@render message()}
 		</span>
 	</div>
+
+	{#if detail}
+		<div class="min-w-0">
+			{@render detail()}
+		</div>
+	{/if}
 
 	<div class="flex flex-wrap items-center gap-2">
 		{@render actions()}

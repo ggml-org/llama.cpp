@@ -1,4 +1,5 @@
 import { AttachmentType, FileTypeCategory } from '#lib/enums/index.ts';
+import type { DatabaseMessageExtraImageFile } from '#lib/types/index.ts';
 import { getFileTypeCategory, getFileTypeCategoryByExtension } from '#lib/utils/index.ts';
 
 /**
@@ -123,4 +124,22 @@ export function isVideoFile(
 	}
 
 	return false;
+}
+
+/** The image attachments among `extras`, e.g. the images a tool call produced. */
+export function imageExtras(
+	extras: readonly DatabaseMessageExtra[] | undefined
+): DatabaseMessageExtraImageFile[] {
+	return (extras ?? []).filter(
+		(extra): extra is DatabaseMessageExtraImageFile => extra.type === AttachmentType.IMAGE
+	);
+}
+
+/** True for an attachment the media preview can show: an image, audio clip or video. */
+export function isMediaExtra(extra: DatabaseMessageExtra): boolean {
+	return (
+		extra.type === AttachmentType.IMAGE ||
+		extra.type === AttachmentType.AUDIO ||
+		extra.type === AttachmentType.VIDEO
+	);
 }
