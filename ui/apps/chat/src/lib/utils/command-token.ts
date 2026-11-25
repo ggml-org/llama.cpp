@@ -1,3 +1,9 @@
+import {
+	CWD_COMMAND_LINE_BREAK,
+	CWD_COMMAND_NAME,
+	CWD_COMMAND_PREFIX
+} from '#lib/constants/index.ts';
+
 /**
  * Slash-command token detection for the chat form. Valid only at offset 0.
  */
@@ -30,4 +36,40 @@ export function takeCommandDismissSnapshot(value: string): CommandDismissSnapsho
 	if (!token) return null;
 
 	return { args: token.args, name: token.name };
+}
+
+/**
+ * The `/cwd` line at the top of the chat input: the path being typed after `/cwd `, and the
+ * message below it, which the command leaves alone. Null when the input does not start with
+ * the command.
+ */
+export interface CwdCommandLine {
+	/** The path typed after `/cwd `, up to the end of the first line. */
+	query: string;
+	/** The text after the first line, without the newline between them. */
+	message: string;
+}
+
+export function parseCwdCommandLine(value: string): CwdCommandLine | null {
+	const token = findCommandToken(value);
+
+	if (!token || token.name !== CWD_COMMAND_NAME) return null;
+
+	const lineEnd = value.indexOf(CWD_COMMAND_LINE_BREAK);
+	const line = lineEnd === -1 ? value : value.slice(0, lineEnd);
+	const message = lineEnd === -1 ? '' : value.slice(lineEnd + 1);
+
+	return { message, query: line.slice(CWD_COMMAND_PREFIX.length) };
+}
+
+/** The input with a `/cwd <query>` line above `message`. */
+export function composeCwdCommandLine(query: string, message: string): string {
+	const line = `${CWD_COMMAND_PREFIX}${query}`;
+
+	return message ? `${line}${CWD_COMMAND_LINE_BREAK}${message}` : line;
+}
+
+/** Where the caret goes to edit the path: the end of the `/cwd` line. */
+export function cwdCommandCaretOffset(query: string): number {
+	return CWD_COMMAND_PREFIX.length + query.length;
 }

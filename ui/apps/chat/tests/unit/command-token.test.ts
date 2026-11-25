@@ -1,4 +1,10 @@
-import { findCommandToken, takeCommandDismissSnapshot } from '#lib/utils/index.ts';
+import {
+	composeCwdCommandLine,
+	cwdCommandCaretOffset,
+	findCommandToken,
+	parseCwdCommandLine,
+	takeCommandDismissSnapshot
+} from '#lib/utils/index.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('findCommandToken', () => {
@@ -47,5 +53,43 @@ describe('takeCommandDismissSnapshot', () => {
 			args: 'rev',
 			name: 'prompt'
 		});
+	});
+});
+
+describe('parseCwdCommandLine', () => {
+	it('returns null without a /cwd command', () => {
+		expect(parseCwdCommandLine('hello')).toBeNull();
+		expect(parseCwdCommandLine('/cwdx docs')).toBeNull();
+		expect(parseCwdCommandLine('/prompt docs')).toBeNull();
+	});
+
+	it('splits the path on the first line from the message below it', () => {
+		expect(parseCwdCommandLine('/cwd ~/docs\nfix the\nbuild')).toEqual({
+			message: 'fix the\nbuild',
+			query: '~/docs'
+		});
+	});
+
+	it('reads a bare command as an empty path', () => {
+		expect(parseCwdCommandLine('/cwd')).toEqual({ message: '', query: '' });
+		expect(parseCwdCommandLine('/cwd\nhi')).toEqual({ message: 'hi', query: '' });
+	});
+});
+
+describe('composeCwdCommandLine', () => {
+	it('puts the /cwd line above the message', () => {
+		expect(composeCwdCommandLine('docs', 'hi')).toBe('/cwd docs\nhi');
+		expect(composeCwdCommandLine('docs', '')).toBe('/cwd docs');
+	});
+
+	it('round-trips through parseCwdCommandLine', () => {
+		expect(parseCwdCommandLine(composeCwdCommandLine('a b', 'c\nd'))).toEqual({
+			message: 'c\nd',
+			query: 'a b'
+		});
+	});
+
+	it('places the caret at the end of the path', () => {
+		expect(cwdCommandCaretOffset('docs')).toBe('/cwd docs'.length);
 	});
 });

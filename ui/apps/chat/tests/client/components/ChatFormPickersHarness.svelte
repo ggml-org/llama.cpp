@@ -4,17 +4,25 @@
 		type UseChatFormPickersReturn
 	} from '#lib/hooks/use-chat-form-pickers.svelte.ts';
 
+	interface Props {
+		cwd?: string | null;
+		serverHome?: string | null;
+	}
+
+	let { cwd = null, serverHome = null }: Props = $props();
+
 	let value = $state('');
 	let caretOffset = $state(0);
 	const calls: string[] = [];
 
 	const pickers = useChatFormPickers({
 		canCompact: () => true,
+		editsCwdInline: () => true,
 		focusInput: () => {},
 		getCaretOffset: () => caretOffset,
-		getCwd: () => null,
+		getCwd: () => cwd,
 		getPickersRef: () => undefined,
-		getServerHome: () => null,
+		getServerHome: () => serverHome,
 		getShowModelSelector: () => true,
 		getValue: () => value,
 		hasCwdTools: () => true,
@@ -40,6 +48,10 @@
 		value = text;
 		caretOffset = text.length;
 		pickers.handleInput();
+	}
+
+	export function getCaretOffset() {
+		return caretOffset;
 	}
 
 	export function getValue() {

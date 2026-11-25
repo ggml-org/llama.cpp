@@ -1,12 +1,16 @@
-import { PROMPT_TRIGGER_PREFIX } from '#lib/constants/index.ts';
+import { CWD_COMMAND_LINE_BREAK, PROMPT_TRIGGER_PREFIX } from '#lib/constants/index.ts';
 import { ChatFormCommandAction, KeyboardKey } from '#lib/enums/index.ts';
 import type { ChatFormCommand } from '#lib/types/index.ts';
-import { getChatCommands } from '#lib/utils/index.ts';
 import {
+	abbreviateHome,
 	type CommandDismissSnapshot,
+	composeCwdCommandLine,
+	cwdCommandCaretOffset,
 	findCommandToken,
 	findMentionToken,
+	getChatCommands,
 	type MentionDismissSnapshot,
+	parseCwdCommandLine,
 	takeCommandDismissSnapshot,
 	takeMentionDismissSnapshot
 } from '#lib/utils/index.ts';
@@ -22,6 +26,11 @@ export interface UseChatFormPickersOptions {
 	focusInput: () => void;
 	/** Whether typing `/` or `@` opens a picker at all. */
 	opensOnInput: () => boolean;
+	/**
+	 * Whether the working directory is typed in the chat input, on a `/cwd` line above the
+	 * message, instead of in the picker's own search field.
+	 */
+	editsCwdInline: () => boolean;
 	/** Gates `/model`. */
 	getShowModelSelector: () => boolean;
 	/** Gates `/prompt`. */
@@ -54,6 +63,9 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	let mentionQuery = $state('');
 	let isWorkingDirectoryPickerOpen = $state(false);
 	let workingDirectoryQuery = $state('');
+	// The open picker searches the `/cwd` line of the chat input, not a field of its own. Set
+	// on every open and kept after a close, so the picker fades out the way it looked
+	let isWorkingDirectoryInline = $state(false);
 	// Last dismissed `@`-mention token; while intact, the picker does not
 	// reopen, so an escaped `@<query>` stays literal until edited.
 	let mentionDismissedSnapshot: MentionDismissSnapshot | null = null;
@@ -95,17 +107,16 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 
 				break;
 			case ChatFormCommandAction.CWD: {
-				// Keep `/cwd <args>` in the input so the search field and the
-				// token stay two-way bound; normalize partial tokens (`/cw foo`).
-				const trimmed = args.trim();
-				const newValue = `/cwd ${trimmed}`;
+				// Keep `/cwd <path>` on the input's first line, the message below it, so the
+				// path and the picker's search stay two-way bound; normalize partial tokens
+				// (`/cw foo`)
+				const lineEnd = args.indexOf(CWD_COMMAND_LINE_BREAK);
+				const query = (lineEnd === -1 ? args : args.slice(0, lineEnd)).trim();
+				const message = lineEnd === -1 ? '' : args.slice(lineEnd + 1);
 
-				if (opts.getValue() !== newValue) {
-					opts.setValue(newValue);
-					queueMicrotask(() => opts.setCaretOffset(newValue.length));
-				}
-
-				workingDirectoryQuery = trimmed;
+				isWorkingDirectoryInline = opts.editsCwdInline();
+				showCwdLine(query, message);
+				workingDirectoryQuery = query;
 				isWorkingDirectoryPickerOpen = true;
 
 				break;
@@ -146,8 +157,10 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 				isCommandPickerOpen = false;
 				commandQuery = '';
 
-				if (token.name === 'cwd') {
-					workingDirectoryQuery = token.args.trim();
+				const cwdLine = parseCwdCommandLine(value);
+
+				if (cwdLine) {
+					workingDirectoryQuery = cwdLine.query.trim();
 				} else {
 					isWorkingDirectoryPickerOpen = false;
 					workingDirectoryQuery = '';
@@ -286,33 +299,71 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		opts.focusInput();
 	}
 
+	/**
+	 * Puts `/cwd <query>` above the message. Inline, the caret goes to the end of the path;
+	 * otherwise the picker's own field keeps the focus.
+	 */
+	function showCwdLine(query: string, message: string) {
+		const next = composeCwdCommandLine(query, message);
+
+		if (opts.getValue() !== next) opts.setValue(next);
+
+		if (isWorkingDirectoryInline) {
+			queueMicrotask(() => opts.setCaretOffset(cwdCommandCaretOffset(query)));
+		}
+	}
+
+	/** Drops the `/cwd` line, leaving the message written below it. */
+	function consumeCwdCommand() {
+		const cwdLine = parseCwdCommandLine(opts.getValue());
+
+		if (!cwdLine) return;
+
+		opts.setValue(cwdLine.message);
+		queueMicrotask(() => opts.setCaretOffset(cwdLine.message.length));
+	}
+
+	// Opened from the + menu or the chip. Inline, the current directory (or the path already
+	// on a `/cwd` line) goes on a `/cwd` line above the message, to be edited there
 	function handleWorkingDirectoryOpen() {
-		workingDirectoryQuery = opts.getCwd() ?? '';
+		const cwd = opts.getCwd();
+		const seed = cwd ? abbreviateHome(cwd, opts.getServerHome()) : '';
+
+		isWorkingDirectoryInline = opts.editsCwdInline();
+
+		if (isWorkingDirectoryInline) {
+			const value = opts.getValue();
+			const cwdLine = parseCwdCommandLine(value);
+			const query = cwdLine ? cwdLine.query.trim() : seed;
+
+			showCwdLine(query, cwdLine ? cwdLine.message : value);
+			workingDirectoryQuery = query;
+		} else {
+			workingDirectoryQuery = seed;
+		}
+
 		isWorkingDirectoryPickerOpen = true;
 	}
 
+	// A closed picker leaves no `/cwd` line behind: committing a directory or dismissing the
+	// picker gives the message back as it was
 	function handleWorkingDirectoryClose() {
 		isWorkingDirectoryPickerOpen = false;
 		workingDirectoryQuery = '';
+		consumeCwdCommand();
 		opts.focusInput();
 	}
 
-	// Two-way bind the text after `/cwd ` and the picker search input; the
-	// reverse direction is handled by handleInput.
+	// Two-way bind the text after `/cwd ` and the picker's own search field; the reverse
+	// direction is handled by handleInput. Inline, the `/cwd` line is the only field
 	$effect(() => {
-		if (!isWorkingDirectoryPickerOpen) return;
+		if (!isWorkingDirectoryPickerOpen || isWorkingDirectoryInline) return;
 
-		const value = opts.getValue();
-		const token = findCommandToken(value);
+		const cwdLine = parseCwdCommandLine(opts.getValue());
 
-		if (!token || token.name !== 'cwd') return;
+		if (!cwdLine || cwdLine.query === workingDirectoryQuery) return;
 
-		const newValue = `/cwd ${workingDirectoryQuery}`;
-
-		if (newValue === value) return;
-
-		opts.setValue(newValue);
-		queueMicrotask(() => opts.setCaretOffset(newValue.length));
+		showCwdLine(workingDirectoryQuery, cwdLine.message);
 	});
 
 	return {
@@ -329,6 +380,7 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		set commandQuery(v: string) {
 			commandQuery = v;
 		},
+		consumeCwdCommand,
 		dispatchCommand,
 		handleCommandPickerClose,
 		handleCommandSelect,
@@ -356,6 +408,9 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		},
 		set isPromptPickerOpen(v: boolean) {
 			isPromptPickerOpen = v;
+		},
+		get isWorkingDirectoryInline() {
+			return isWorkingDirectoryInline;
 		},
 		get isWorkingDirectoryPickerOpen() {
 			return isWorkingDirectoryPickerOpen;

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as Popover from '@ggml-org/llama-ui/ui/popover';
+	import { CHAT_FORM_PICKER_WIDTH_CLASS } from '#lib/constants/index.ts';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
@@ -42,7 +43,7 @@
 
 	<Popover.Content
 		align="start"
-		class="w-[var(--bits-popover-anchor-width)] max-w-none rounded-xl p-0 {className}"
+		class={[CHAT_FORM_PICKER_WIDTH_CLASS, 'rounded-xl p-0', className]}
 		{customAnchor}
 		onOpenAutoFocus={(event) => event.preventDefault()}
 		onkeydown={onKeydown}

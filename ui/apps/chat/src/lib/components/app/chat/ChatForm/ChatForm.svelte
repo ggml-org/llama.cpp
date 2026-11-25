@@ -64,7 +64,6 @@
 	} from '#lib/types/index.ts';
 	import {
 		buildMentionInsertion,
-		findCommandToken,
 		findMentionToken,
 		getConversationModel,
 		isIMEComposing,
@@ -140,6 +139,7 @@
 	let pickersRef: { handleKeydown: (event: KeyboardEvent) => boolean } | undefined =
 		$state(undefined);
 	let inputRef: ChatFormInput | undefined = $state(undefined);
+	let workingDirectoryRef: ChatFormCurrentWorkingDirectory | undefined = $state(undefined);
 
 	// Voice input
 	const recorder: VoiceRecorderLike = untrack(() => voiceRecorder) ?? new VoiceRecorder();
@@ -148,8 +148,8 @@
 	/** Why the last start failed (denied, no microphone, busy); the next tap tries again. */
 	let micError = $state<string | null>(null);
 
-	// Invisible anchor the pickers' popovers float above: the form's top edge, or in the
-	// expanded editor the line being written
+	// Invisible anchor the pickers' popovers float above: the line being written, or on a
+	// phone the form's top edge
 	let pickerAnchor: HTMLDivElement | null = $state(null);
 	let pickerAnchorBox = $state({ height: 1, top: 0 });
 
@@ -185,6 +185,9 @@
 
 	const pickers = useChatFormPickers({
 		canCompact: () => chatStore.canCompact(conversationsStore.activeMessages),
+		// a phone picks in a drawer with its own search field, and a touch screen opens no
+		// typed pickers (see opensOnInput)
+		editsCwdInline: () => !deviceStore.isMobile && !deviceStore.isTouch,
 		focusInput: refocusInput,
 		getCaretOffset: () => inputRef?.getCaretOffset(),
 		getCwd: () => cwd,
@@ -210,7 +213,11 @@
 		// the page its own way as it opens, so a list by the form can not stay clear of the
 		// text. A drawer with its own search field (as the directory picker is) could.
 		opensOnInput: () => !deviceStore.isTouch,
-		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
+		setCaretOffset: (offset) => {
+			inputRef?.setCaretOffset(offset);
+			// the caret moved without typing, e.g. onto the `/cwd` line the + menu just added
+			measurePickerAnchor();
+		},
 		setValue: (v) => {
 			value = v;
 			onValueChange?.(v);
@@ -237,14 +244,9 @@
 	});
 
 	async function handleWorkingDirectoryChange(newDir: string | null) {
-		// Committing a directory consumes the `/cwd` token; the chip's
-		// clear-X path has no token to consume.
-		const token = findCommandToken(value);
-
-		if (token && token.name === 'cwd') {
-			value = '';
-			onValueChange?.('');
-		}
+		// Committing a directory consumes the `/cwd` line and keeps the message below it; the
+		// chip's clear-X path has no line to consume.
+		pickers.consumeCwdCommand();
 
 		await conversationsStore.preferences.setCwd(newDir);
 
@@ -365,18 +367,30 @@
 		isExpanded && deviceStore.isMobile ? (actionsEl ?? null) : pickerAnchor
 	);
 
+	// The anchor covers the caret's line, kept within the form when the line is scrolled out
+	// of the editor's view; on a phone the form's top edge
+	function measurePickerAnchor() {
+		const line = deviceStore.isMobile ? null : inputRef?.getCaretRect();
+		const form = pickerAnchor?.parentElement?.getBoundingClientRect();
+
+		if (!line || !form) {
+			pickerAnchorBox = { height: 1, top: 0 };
+
+			return;
+		}
+
+		const top = Math.min(Math.max(line.top - form.top, 0), form.height);
+
+		pickerAnchorBox = { height: Math.max(line.bottom - line.top, 1), top };
+	}
+
 	// before the popover is drawn, and again as the query is typed and the line moves
 	$effect.pre(() => {
 		if (!isPickerOpen) return;
 
 		void value;
 
-		const line = isExpanded && !deviceStore.isMobile ? inputRef?.getCaretRect() : null;
-		const formTop = pickerAnchor?.parentElement?.getBoundingClientRect().top ?? 0;
-
-		pickerAnchorBox = line
-			? { height: line.bottom - line.top, top: line.top - formTop }
-			: { height: 1, top: 0 };
+		measurePickerAnchor();
 	});
 	// shown on hover (always on touch screens) while collapsed, always while expanded: on
 	// the phone sheet it keeps the collapsed card's place, below the status bar
@@ -447,7 +461,7 @@
 	function handleKeydown(event: KeyboardEvent) {
 		// Pickers consume navigation/escape keys first; when consumed, skip
 		// the enter-to-submit logic below and keep the key from the editor.
-		if (pickers.handleKeydown(event)) {
+		if (workingDirectoryRef?.handleKeydown(event) || pickers.handleKeydown(event)) {
 			event.preventDefault();
 
 			return;
@@ -957,10 +971,12 @@
 			<!-- opened from the chip, the + menu, a phone chat's header or `/cwd` -->
 			<ChatFormCurrentWorkingDirectory
 				bind:query={pickers.workingDirectoryQuery}
+				bind:this={workingDirectoryRef}
 				class="self-start"
 				customAnchor={activePickerAnchor}
 				directory={cwd}
 				{disabled}
+				inline={pickers.isWorkingDirectoryInline}
 				isOpen={pickers.isWorkingDirectoryPickerOpen}
 				onChange={handleWorkingDirectoryChange}
 				onClose={pickers.handleWorkingDirectoryClose}

@@ -2,6 +2,18 @@ export const INITIAL_FILE_SIZE = 0;
 export const PROMPT_CONTENT_SEPARATOR = '\n\n';
 export const CLIPBOARD_CONTENT_QUOTE_PREFIX = '"';
 export const PROMPT_TRIGGER_PREFIX = '/';
+/** The slash command that sets the working directory, typed as `/cwd <path>`. */
+export const CWD_COMMAND_NAME = 'cwd';
+/** What the input starts with while a working directory is typed. */
+export const CWD_COMMAND_PREFIX = `${PROMPT_TRIGGER_PREFIX}${CWD_COMMAND_NAME} `;
+/**
+ * The chat form's pickers fit their suggestions: as wide as the longest one, between a
+ * floor that keeps short lists readable and a cap no wider than the form.
+ */
+export const CHAT_FORM_PICKER_WIDTH_CLASS =
+	'w-max min-w-64 max-w-[min(36rem,var(--bits-popover-anchor-width))]';
+/** Ends the `/cwd` line: the message goes on below it. */
+export const CWD_COMMAND_LINE_BREAK = '\n';
 export const NEW_CHAT_DRAFT_KEY = '__new_chat__';
 /** Lines of text from which the main chat form expands into its large editor. */
 export const CHAT_FORM_EXPAND_MIN_LINES = 4;

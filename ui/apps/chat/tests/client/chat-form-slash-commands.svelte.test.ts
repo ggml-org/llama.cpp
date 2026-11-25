@@ -137,3 +137,89 @@ describe('slash command dispatch', () => {
 		expect(pickers.isWorkingDirectoryPickerOpen).toBe(false);
 	});
 });
+
+describe('/cwd line in the chat input', () => {
+	it('puts the current directory on a /cwd line above the message', async () => {
+		const screen = render(ChatFormPickersHarness, {
+			cwd: '/home/me/projects/app',
+			serverHome: '/home/me'
+		});
+
+		await tick();
+
+		screen.component.type('fix the build');
+
+		const pickers = screen.component.getPickers();
+
+		pickers.handleWorkingDirectoryOpen();
+		await tick();
+		await Promise.resolve();
+
+		expect(screen.component.getValue()).toBe('/cwd ~/projects/app\nfix the build');
+		expect(screen.component.getCaretOffset()).toBe('/cwd ~/projects/app'.length);
+		expect(pickers.isWorkingDirectoryPickerOpen).toBe(true);
+		expect(pickers.isWorkingDirectoryInline).toBe(true);
+		expect(pickers.workingDirectoryQuery).toBe('~/projects/app');
+	});
+
+	it('searches what is typed on the /cwd line, not the message', async () => {
+		const screen = render(ChatFormPickersHarness);
+
+		await tick();
+
+		screen.component.type('fix the build');
+
+		const pickers = screen.component.getPickers();
+
+		pickers.handleWorkingDirectoryOpen();
+		await tick();
+
+		expect(screen.component.getValue()).toBe('/cwd \nfix the build');
+
+		screen.component.type('/cwd docs\nfix the build');
+		await tick();
+
+		expect(pickers.workingDirectoryQuery).toBe('docs');
+		expect(pickers.isWorkingDirectoryPickerOpen).toBe(true);
+		expect(screen.component.getValue()).toBe('/cwd docs\nfix the build');
+	});
+
+	it('gives the message back when the picker closes', async () => {
+		const screen = render(ChatFormPickersHarness);
+
+		await tick();
+
+		screen.component.type('fix the build');
+
+		const pickers = screen.component.getPickers();
+
+		pickers.handleWorkingDirectoryOpen();
+		await tick();
+		screen.component.type('/cwd docs\nfix the build');
+		pickers.handleWorkingDirectoryClose();
+		await tick();
+
+		expect(screen.component.getValue()).toBe('fix the build');
+		expect(pickers.isWorkingDirectoryPickerOpen).toBe(false);
+	});
+
+	it('keeps the message below a typed /cwd command on selection', async () => {
+		const screen = render(ChatFormPickersHarness);
+
+		await tick();
+
+		screen.component.type('/cw docs\nfix the build');
+		await tick();
+
+		const pickers = screen.component.getPickers();
+		const cwd = pickers.availableCommands.find((c) => c.name === 'cwd');
+
+		if (!cwd) throw new Error('cwd command missing');
+
+		pickers.handleCommandSelect(cwd);
+		await tick();
+
+		expect(screen.component.getValue()).toBe('/cwd docs\nfix the build');
+		expect(pickers.workingDirectoryQuery).toBe('docs');
+	});
+});

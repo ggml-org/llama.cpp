@@ -8,6 +8,7 @@
 	import {
 		CHAT_FORM_CHIP_SPLIT,
 		CHAT_FORM_CHIP_TRANSITION_MS,
+		CHAT_FORM_PICKER_WIDTH_CLASS,
 		DEFAULT_MOBILE_BREAKPOINT,
 		HOME_TILDE,
 		SEARCH,
@@ -37,6 +38,9 @@
 		/** Controlled open state; the host owns it so the chip, the + menu and the
 		 * `/cwd` slash command open the picker through the same path. */
 		isOpen: boolean;
+		/** The path is typed on the chat input's `/cwd` line: no search field of its own, and
+		 * the host forwards the input's keys through `handleKeydown`. */
+		inline?: boolean;
 		/** Two-way bound query, kept in sync with the text after `/cwd `. */
 		query: string;
 		/** Anchor at the form's top edge so the popover floats above the box. */
@@ -55,6 +59,7 @@
 		customAnchor = null,
 		directory = null,
 		disabled = false,
+		inline = false,
 		isOpen,
 		onChange,
 		onClose,
@@ -109,7 +114,7 @@
 
 	// HTML `autofocus` is unreliable on dynamically shown elements.
 	$effect(() => {
-		if (!isOpen) return;
+		if (!isOpen || inline) return;
 
 		setTimeout(() => searchInputRef?.focus(), FOCUS_DELAY_MS);
 	});
@@ -261,25 +266,57 @@
 		closePicker();
 	}
 
-	function handleKeydown(event: KeyboardEvent) {
-		if (event.key === KeyboardKey.ENTER) {
+	/** True when the key was the picker's: the chat input then leaves it alone. */
+	function handlePickerKeydown(event: KeyboardEvent): boolean {
+		// Enter picks a suggestion, never the typed text: before the results arrive it does
+		// nothing. Only without file search, where nothing is suggested, does it take the path
+		// as typed
+		if (event.key === KeyboardKey.ENTER && !event.shiftKey) {
 			event.preventDefault();
 
 			if (nav.hoveredIndex >= 0 && queryResults[nav.hoveredIndex]) {
 				commit(queryResults[nav.hoveredIndex]);
-			} else if (queryResults.length === 0) {
+			} else if (!fileSearchEnabled) {
 				handleSubmit();
 			}
-		} else if (event.key === KeyboardKey.ARROW_DOWN) {
-			if (queryResults.length > 0) {
-				event.preventDefault();
-				nav.move(1);
-			}
-		} else if (event.key === KeyboardKey.ARROW_UP) {
-			if (queryResults.length > 0) {
-				event.preventDefault();
-				nav.move(-1);
-			}
+
+			return true;
+		}
+
+		if (
+			(event.key === KeyboardKey.ARROW_DOWN || event.key === KeyboardKey.ARROW_UP) &&
+			queryResults.length > 0
+		) {
+			event.preventDefault();
+			nav.move(event.key === KeyboardKey.ARROW_DOWN ? 1 : -1);
+
+			return true;
+		}
+
+		if (inline && event.key === KeyboardKey.ESCAPE) {
+			event.preventDefault();
+			closePicker();
+
+			return true;
+		}
+
+		return false;
+	}
+
+	/** The chat input's keys while the path is typed on its `/cwd` line. */
+	export function handleKeydown(event: KeyboardEvent): boolean {
+		if (!isOpen || !inline) return false;
+
+		return handlePickerKeydown(event);
+	}
+
+	// Inline, the chat input is the picker's field: pressing in the form (to move the caret,
+	// say) keeps the picker open
+	function handleInteractOutside(event: PointerEvent) {
+		const target = event.target;
+
+		if (inline && target instanceof Node && customAnchor?.closest('form')?.contains(target)) {
+			event.preventDefault();
 		}
 	}
 
@@ -380,14 +417,27 @@
 <!-- the drawer's version is roomier: the header's inset, rows spaced for a finger and
      lined up with the search results, and text sized for a phone -->
 {#snippet picker(inDrawer: boolean)}
-	<div class={inDrawer ? 'flex flex-col gap-1 px-4' : 'p-2 min-h-22 flex flex-col justify-between'}>
-		<SearchInput
-			bind:ref={searchInputRef}
-			bind:value={query}
-			class="w-full"
-			onClose={closePicker}
-			placeholder="Choose working directory"
-		/>
+	<!-- inline there is no search field to keep room for, only the rows below the line -->
+	<div
+		class={inDrawer
+			? 'flex flex-col gap-1 px-4'
+			: ['flex flex-col justify-between p-2', !inline && 'min-h-22']}
+	>
+		{#if inline}
+			{#if fileSearchEnabled && !query.trim()}
+				<div class="px-2 py-1.5 text-body-sm text-muted-foreground">
+					Type a folder name or path after <span class="font-mono">/cwd</span>
+				</div>
+			{/if}
+		{:else}
+			<SearchInput
+				bind:ref={searchInputRef}
+				bind:value={query}
+				class="w-full"
+				onClose={closePicker}
+				placeholder="Choose working directory"
+			/>
+		{/if}
 
 		{#if !fileSearchEnabled}
 			<div class="px-2 py-1.5 text-body-sm text-muted-foreground">{searchUnavailableMessage}</div>
@@ -460,7 +510,7 @@
 <!-- a phone picks in a drawer from the screen's bottom; elsewhere a popover above the form -->
 {#if deviceStore.isMobile}
 	<Drawer.Root onOpenChange={handleOpenChange} open={isOpen}>
-		<Drawer.Content class="gap-0" onkeydown={handleKeydown}>
+		<Drawer.Content class="gap-0" onkeydown={handlePickerKeydown}>
 			<Drawer.Header>
 				<Drawer.Title>Working directory</Drawer.Title>
 
@@ -484,16 +534,20 @@
 			<span class="sr-only">Open working directory picker</span>
 		</Popover.Trigger>
 
+		<!-- inline, the focus stays in the chat input, where the path is typed: a trap would
+		     pull it into the list as the + menu closes -->
 		<Popover.Content
 			align="start"
-			class="w-[var(--bits-popover-anchor-width)] max-w-none rounded-xl p-0"
+			class={[CHAT_FORM_PICKER_WIDTH_CLASS, 'rounded-xl p-0']}
 			{customAnchor}
 			onCloseAutoFocus={(event) => event.preventDefault()}
+			onInteractOutside={handleInteractOutside}
 			onOpenAutoFocus={(event) => event.preventDefault()}
-			onkeydown={handleKeydown}
+			onkeydown={handlePickerKeydown}
 			preventScroll={false}
 			side="top"
 			sideOffset={12}
+			trapFocus={!inline}
 		>
 			{@render picker(false)}
 		</Popover.Content>
