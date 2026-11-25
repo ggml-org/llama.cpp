@@ -13559,6 +13559,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_roll());
     test_cases.emplace_back(new test_roll(3, -2, 1, -1, true));
     test_cases.emplace_back(new test_roll(0, 0, 0, 0, false, {1, 1, 1, 1}));
+    test_cases.emplace_back(new test_roll(0, 0, 0, 0, true));
     test_cases.emplace_back(new test_roll(256, 0, 0, 0, false, {257, 1, 1, 1}));
     test_cases.emplace_back(new test_roll(-16, 6, -2, 1, false, {17, 7, 3, 2}));
     test_cases.emplace_back(new test_roll(4, 0, 0, 0, false, {42, 512, 1, 1}));
