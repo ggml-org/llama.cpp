@@ -8,7 +8,7 @@ from torch import Tensor
 import gguf
 import numpy as np
 
-from .base import ModelBase
+from .base import LazyTorchTensor, ModelBase
 from .qwen import _LinearAttentionVReorderBase, _Qwen35MRopeMixin
 from .qwen3vl import Qwen3VLVisionModel
 
@@ -41,6 +41,18 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         self._ple_shards: dict[int, str] = {}
         self._ple_row_dim: int | None = None
         self._mtp_fc: dict[str, Tensor] = {}
+        self._ple_scale: float | None = None
+
+    def dequant_model(self):
+        # FP8 checkpoints: all n-gram shards share one scale, stored under the parent module name
+        # there is no "ngram_embedding.weight", so the generic FP8 pass drops it or cannot map it
+        for name in list(self.model_tensors):
+            if name.endswith(".ngram_embedding.weight_scale"):
+                scale = LazyTorchTensor.to_eager(self.model_tensors.pop(name)()).float().flatten()
+                if scale.numel() != 1:
+                    raise ValueError(f"PLE scale {name!r} must be a scalar, got {scale.numel()} values")
+                self._ple_scale = float(scale[0])
+        super().dequant_model()
 
     @classmethod
     def filter_tensors(cls, item):
@@ -203,21 +215,31 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
                     f"PLE shard {shard} has row dim {int(shape[-1])}, expected {self._ple_row_dim}")
             rows += int(shape[0])
 
+        # an FP8 table keeps its bytes and gets a scale tensor, any other type has the scale folded in
+        keep_fp8 = name in self._fp8_e4m3_preserved
         table = gguf.LazyChunkedTensor(
-            [self._load_ple_shard(shard) for shard in shards],
+            [self._load_ple_shard(shard, keep_fp8) for shard in shards],
             shape=(rows, self._ple_row_dim),
-            dtype=np.float32,
+            dtype=np.uint8 if keep_fp8 else np.float32,
         )
         gguf_name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD]
-        return [(gguf_name + ".weight", cast(Tensor, table))]
+        out = [(gguf_name + ".weight", cast(Tensor, table))]
+        if keep_fp8 and self._ple_scale is not None:
+            out.append((gguf_name + ".scale", torch.tensor([self._ple_scale], dtype=torch.float32)))
+        return out
 
-    def _load_ple_shard(self, name: str):
+    def _load_ple_shard(self, name: str, keep_fp8: bool):
         def load() -> np.ndarray:
-            from .base import LazyTorchTensor
-
             # a fresh lazy tensor every call, or to_eager() memoizes every shard
             eager = LazyTorchTensor.to_eager(self.model_tensors[name]())
-            return eager.to(torch.float32).contiguous().numpy()
+            if keep_fp8:
+                if eager.dtype != torch.float8_e4m3fn:
+                    raise ValueError(f"PLE shard {name} is {eager.dtype}, expected FP8 like the other shards")
+                return eager.contiguous().view(torch.uint8).numpy()
+            data = eager.to(torch.float32)
+            if self._ple_scale is not None:
+                data = data * self._ple_scale
+            return data.contiguous().numpy()
         return load
 
     def prepare_tensors(self):

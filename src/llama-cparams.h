@@ -14,6 +14,7 @@ struct llama_cparams {
     uint32_t n_ubatch;
     uint32_t n_seq_max;
     uint32_t n_rs_seq;        // number of recurrent-state snapshots per seq for rollback
+    bool     rs_replay;       // roll back by replaying kept tokens instead of keeping n_rs_seq snapshots
     uint32_t n_outputs_max;   // max outputs supported by the context
     uint32_t n_outputs_max_per_seq;
     int32_t  n_threads;       // number of threads to use for generation
@@ -39,8 +40,6 @@ struct llama_cparams {
     bool offload_kqv;
     bool flash_attn;
     bool auto_fa;
-    bool fused_lid;          // use fused lightning indexer
-    bool auto_flid;
     bool fused_dsv4_hc_pre;
     bool fused_dsv4_hc_comb;
     bool fused_dsv4_hc_post;
@@ -54,6 +53,7 @@ struct llama_cparams {
     bool kv_unified;
     bool pipeline_parallel;
     bool training;           // set by llama_opt_init()
+    bool moe_random_routing; // benchmark only: random expert ids in the MoE GEMMs
 
     size_t moe_cache_size;
     float  moe_cache_cpu_share;

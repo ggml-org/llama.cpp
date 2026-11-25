@@ -48,6 +48,11 @@ static void test_any(testing & t) {
         auto doc = parse(R"({"description": "x", "format": "email", "additionalProperties": true})");
         root<common_chat_schema_any>(t, doc);
     });
+
+    t.test("boolean true is any", [](testing & t) {
+        auto doc_prop = parse(R"({"properties": {"a": true}})");
+        as<common_chat_schema_any>(t, root<common_chat_schema_object>(t, doc_prop).properties[0].schema.get(), "a");
+    });
 }
 
 static void test_primitives(testing & t) {
@@ -447,6 +452,10 @@ static void test_value_types(testing & t) {
 static void test_errors(testing & t) {
     t.test("not a schema", [](testing & t) {
         assert_error(t, R"([])", "#: schema must be an object");
+    });
+
+    t.test("false schema", [](testing & t) {
+        assert_error(t, R"({"properties": {"a": false}})", "#/properties/a: false schema is not supported");
     });
 
     t.test("type", [](testing & t) {

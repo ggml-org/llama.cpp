@@ -58,6 +58,10 @@ void llama_model_glm4::load_arch_tensors(llama_model_loader &) {
             layer.nextn.shared_head_head = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", i), { n_embd, n_vocab }, flags | TENSOR_NOT_REQUIRED);
             layer.nextn.shared_head_norm = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", i), { n_embd }, flags | TENSOR_NOT_REQUIRED);
         }
+
+        // numerical issues with F16 accumulators
+        prec_policy.set_acc(layer.wo,       GGML_PREC_BF16);
+        prec_policy.set_acc(layer.ffn_down, GGML_PREC_BF16);
     }
 }
 

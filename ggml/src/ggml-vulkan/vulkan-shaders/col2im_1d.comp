@@ -15,10 +15,12 @@ layout (push_constant) uniform parameter {
     uint32_t K;
     int32_t  stride;
     int32_t  p0;
+    uint32_t src_offset;
 } p;
 
 // Load A_TYPE to float
 float load_col(uint32_t idx) {
+    idx += p.src_offset;
 #if defined(DATA_A_BF16)
     return bf16_to_fp32(uint32_t(data_a[idx]));
 #else
@@ -36,7 +38,7 @@ void store_dst(uint32_t idx, float v) {
 }
 
 void main() {
-    const uint32_t t_out = gl_GlobalInvocationID.x;
+    const uint32_t t_out = gl_GlobalInvocationID.x + gl_GlobalInvocationID.z * gl_NumWorkGroups.x * gl_WorkGroupSize.x;
     const uint32_t oc    = gl_GlobalInvocationID.y;
     if (t_out >= p.T_out || oc >= p.OC) return;
 

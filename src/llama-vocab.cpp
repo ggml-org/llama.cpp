@@ -15,16 +15,21 @@
 #include <cstdarg>
 #include <cstring>
 #include <cstdlib>
+#include <deque>
 #include <forward_list>
 #include <limits>
 #include <map>
 #include <queue>
 #include <set>
+#include <string_view>
 #include <unordered_map>
 
 //
 // helpers
 //
+
+// escaped space symbol - U+2581 (Lower One Eighth Block)
+static const std::string escaped_space = "\xE2\x96\x81";
 
 struct naive_trie {
     naive_trie() : has_value(false), value(0) {
@@ -273,7 +278,6 @@ struct llm_bigram_bpe {
     using queue = llama_priority_queue<llm_bigram_bpe, queue_storage, comparator>;
     llm_symbol::index left;
     llm_symbol::index right;
-    std::string text;
     int rank;
     size_t size;
 };
@@ -584,6 +588,12 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                 regex_exprs = { "\\p{N}", "\\s+|[\\p{L}\\p{N}_]+|[^\\p{L}\\p{N}_\\s]+" };
                 byte_encode = false;
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_ZONOS3:
+                // SuperBPE: no split on whitespace, tokens can span several words
+                regex_exprs = {
+                    "\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]{2,}[\\r\\n/]*| +(?!\\S)",
+                };
+                break;
             case LLAMA_VOCAB_PRE_TYPE_WHITESPACE:
                 // whitespace pre-tokenizer (jinaai/jina-embeddings-v2-base-zh)
                 regex_exprs = {
@@ -683,21 +693,20 @@ struct llm_tokenizer_bpe_session {
 
         symbols_final.clear();
 
-        if (tok_pre == LLAMA_VOCAB_PRE_TYPE_MMBERT) {
-            // Metaspace pre-tokenizer: a text starts with an escaped space, and each escaped space starts a new word
-            static const std::string space = "\xe2\x96\x81";
+        if (vocab.get_metaspace_prepend_scheme() == LLAMA_METASPACE_PREPEND_SCHEME_ALWAYS) {
+            // Metaspace pre-tokenizer (prepend_scheme = "always"): each non-newline chunk starts with an escaped space, and each escaped space starts a new word
             std::vector<std::string> words;
             for (auto & word : word_collection) {
                 if (word.find_first_not_of('\n') == std::string::npos) {
                     words.push_back(word);
                     continue;
                 }
-                if (word.compare(0, space.size(), space) != 0) {
-                    word = space + word;
+                if (word.compare(0, escaped_space.size(), escaped_space) != 0) {
+                    word = escaped_space + word;
                 }
                 size_t start = 0;
                 while (start < word.size()) {
-                    size_t end = word.find(space, start + space.size());
+                    size_t end = word.find(escaped_space, start + escaped_space.size());
                     end = end == std::string::npos ? word.size() : end;
                     words.push_back(word.substr(start, end - start));
                     start = end;
@@ -748,13 +757,9 @@ struct llm_tokenizer_bpe_session {
                 auto & left_symbol = symbols[bigram.left];
                 auto & right_symbol = symbols[bigram.right];
 
-                if (left_symbol.n == 0 || right_symbol.n == 0) {
+                if (left_symbol.n == 0 || right_symbol.n == 0 ||
+                    left_symbol.n + right_symbol.n != bigram.size) {
                     continue;
-                }
-                std::string left_token = std::string(left_symbol.text, left_symbol.n);
-                std::string right_token = std::string(right_symbol.text, right_symbol.n);
-                if (left_token + right_token != bigram.text) {
-                    continue;  // Skip this bigram if it's outdated
                 }
 
                 // merge the right sym into the left one
@@ -828,12 +833,9 @@ private:
         if (left == -1 || right == -1) {
             return;
         }
-        std::string left_token  = std::string(symbols[left].text,  symbols[left].n);
-        std::string right_token = std::string(symbols[right].text, symbols[right].n);
-
-        int rank_found = -1;
-
-        rank_found = vocab.find_bpe_rank(left_token, right_token);
+        int rank_found = vocab.find_bpe_rank(
+                std::string_view(symbols[left].text,  symbols[left].n),
+                std::string_view(symbols[right].text, symbols[right].n));
 
         if (rank_found < 0) {
             return;
@@ -843,8 +845,7 @@ private:
 
         bigram.left  = left;
         bigram.right = right;
-        bigram.text  = left_token + right_token;
-        bigram.size  = left_token.size() + right_token.size();
+        bigram.size  = symbols[left].n + symbols[right].n;
         bigram.rank  = rank_found;
 
         work_queue.push(bigram);
@@ -882,7 +883,7 @@ struct llm_tokenizer_wpm_session {
             }
 
             // prepend phantom space
-            const std::string word1 = "\xe2\x96\x81" + word;
+            const std::string word1 = escaped_space + word;
             const int n = word1.size();
 
             const size_t current_tokens = output.size();
@@ -1029,9 +1030,6 @@ struct llm_tokenizer_ugm : llm_tokenizer {
         unknown_token_score = min_score - unknown_token_score_penalty;
     }
 
-    // escaped space symbol - U+2581 (Lower One Eighth Block)
-    const std::string escaped_space = "\xE2\x96\x81";
-
     const char * prefix_replacements = NULL;
     size_t prefix_replacements_size = 0;
 
@@ -1177,7 +1175,7 @@ private:
         normalized->clear();
         normalized->reserve(input.size() * 3);
 
-        const std::string space = vocab.get_escape_whitespaces() ? tokenizer.escaped_space : " ";
+        const std::string space = vocab.get_escape_whitespaces() ? escaped_space : " ";
 
         const bool shall_prepend_space = !vocab.get_treat_whitespace_as_suffix() && vocab.get_add_space_prefix();
         const bool shall_append_space  =  vocab.get_treat_whitespace_as_suffix() && vocab.get_add_space_prefix();
@@ -1474,9 +1472,16 @@ struct llm_tokenizer_plamo2 : llm_tokenizer {
         to_suffix_id_.clear();
         table_.clear();
 
-        // Build token list and byte mapping
-        std::unordered_map<std::string, float> suffix_to_score;
-        std::unordered_map<std::string, llama_token> token_to_id;
+        // Suffixes and pieces are views into the token texts of the vocab, so no strings are built
+        std::unordered_map<std::string_view, float> suffix_to_score;
+        std::unordered_map<std::string_view, llama_token> token_to_id;
+        suffix_to_score.reserve(vocab.n_tokens() * 4);
+        token_to_id.reserve(vocab.n_tokens());
+
+        // Byte offset of the next code point
+        auto next_cpt = [](std::string_view s, size_t offset) -> size_t {
+            return offset + std::min(s.size() - offset, unicode_len_utf8(s[offset]));
+        };
 
         for (size_t token_id = 0; token_id < vocab.n_tokens(); ++token_id) {
             const auto & entry = vocab.get_token_data(token_id);
@@ -1496,18 +1501,10 @@ struct llm_tokenizer_plamo2 : llm_tokenizer {
             }
 
             // Add token and all its suffixes to suffix_to_score
-            suffix_to_score[entry.text] = entry.score;
-
-            // Extract suffixes character by character (UTF-8 aware)
-            std::vector<uint32_t> cpts = unicode_cpts_from_utf8(entry.text);
-            for (size_t i = 1; i < cpts.size(); ++i) {
-                std::string suffix;
-                for (size_t j = i; j < cpts.size(); ++j) {
-                    suffix += unicode_cpt_to_utf8(cpts[j]);
-                }
-                if (suffix_to_score.find(suffix) == suffix_to_score.end()) {
-                    suffix_to_score[suffix] = std::numeric_limits<float>::quiet_NaN();
-                }
+            const std::string_view text = entry.text;
+            suffix_to_score[text] = entry.score;
+            for (size_t i = text.empty() ? 0 : next_cpt(text, 0); i < text.size(); i = next_cpt(text, i)) {
+                suffix_to_score.try_emplace(text.substr(i), std::numeric_limits<float>::quiet_NaN());
             }
         }
 
@@ -1519,44 +1516,47 @@ struct llm_tokenizer_plamo2 : llm_tokenizer {
         }
 
         // Build suffix list in lexicographical order of reversed strings
-        std::vector<std::string> suffixes;
+        std::vector<std::string_view> suffixes;
         suffixes.reserve(suffix_to_score.size() + 1);
         for (const auto & pair : suffix_to_score) {
             suffixes.push_back(pair.first);
         }
         suffixes.push_back("");  // Empty suffix
 
-        std::sort(suffixes.begin(), suffixes.end(), [](const std::string & a, const std::string & b) {
-            std::string rev_a(a.rbegin(), a.rend());
-            std::string rev_b(b.rbegin(), b.rend());
-            return rev_a < rev_b;
+        std::sort(suffixes.begin(), suffixes.end(), [](std::string_view a, std::string_view b) {
+            return std::lexicographical_compare(a.rbegin(), a.rend(), b.rbegin(), b.rend(), [](char x, char y) {
+                return static_cast<unsigned char>(x) < static_cast<unsigned char>(y);
+            });
         });
 
+        // Byte length of each prefix of the suffix, by code point
+        std::vector<size_t> prefix_ends;
+        auto get_prefix_ends = [&](std::string_view suffix) {
+            prefix_ends.clear();
+            for (size_t i = 0; i < suffix.size();) {
+                i = next_cpt(suffix, i);
+                prefix_ends.push_back(i);
+            }
+        };
+
         // Build suffix_to_id and to_suffix_id_
-        std::unordered_map<std::string, int32_t> suffix_to_id;
+        std::unordered_map<std::string_view, int32_t> suffix_to_id;
+        suffix_to_id.reserve(suffixes.size());
         int32_t num_pieces = 0;
 
         for (const auto & suffix : suffixes) {
             suffix_to_id[suffix] = num_pieces;
             if (!suffix.empty()) {
-                std::vector<uint32_t> cpts = unicode_cpts_from_utf8(suffix);
+                get_prefix_ends(suffix);
+                const uint32_t first_cpt = unicode_cpts_from_utf8(std::string(suffix.substr(0, prefix_ends[0])))[0];
 
-                std::string remaining;
-                for (size_t i = 1; i < cpts.size(); ++i) {
-                    remaining += unicode_cpt_to_utf8(cpts[i]);
-                }
-
-                int64_t piece_code = (static_cast<int64_t>(cpts[0]) << 32) | suffix_to_id[remaining];
+                int64_t piece_code = (static_cast<int64_t>(first_cpt) << 32) | suffix_to_id[suffix.substr(prefix_ends[0])];
                 to_suffix_id_[piece_code] = num_pieces;
 
                 // Count number of pieces for this suffix
                 int32_t pieces_for_suffix = 1; // sentinel row
-                for (int32_t piece_length = static_cast<int32_t>(cpts.size()); piece_length > 0; --piece_length) {
-                    std::string piece;
-                    for (int32_t i = 0; i < piece_length; ++i) {
-                        piece += unicode_cpt_to_utf8(cpts[i]);
-                    }
-                    if (suffix_to_score.find(piece) != suffix_to_score.end()) {
+                for (size_t end : prefix_ends) {
+                    if (suffix_to_score.find(suffix.substr(0, end)) != suffix_to_score.end()) {
                         pieces_for_suffix++;
                     }
                 }
@@ -1572,12 +1572,9 @@ struct llm_tokenizer_plamo2 : llm_tokenizer {
 
         for (const auto & suffix : suffixes) {
             // Add all prefixes of the suffix to the table (in decreasing order of length)
-            std::vector<uint32_t> cpts = unicode_cpts_from_utf8(suffix);
-            for (int32_t piece_length = static_cast<int32_t>(cpts.size()); piece_length > 0; --piece_length) {
-                std::string piece;
-                for (int32_t i = 0; i < piece_length; ++i) {
-                    piece += unicode_cpt_to_utf8(cpts[i]);
-                }
+            get_prefix_ends(suffix);
+            for (int32_t piece_length = static_cast<int32_t>(prefix_ends.size()); piece_length > 0; --piece_length) {
+                const std::string_view piece = suffix.substr(0, prefix_ends[piece_length - 1]);
 
                 auto score_it = suffix_to_score.find(piece);
                 if (score_it == suffix_to_score.end()) {
@@ -2147,13 +2144,15 @@ struct llama_vocab::impl {
 
     std::vector<llama_token> cache_special_tokens;
     std::vector<std::string> cache_token_to_piece; // llama_token_to_piece(special = true);
+    using bpe_rank_key = std::pair<std::string_view, std::string_view>;
     struct pair_hash {
-        size_t operator()(const std::pair<std::string, std::string> & p) const {
-            return std::hash<std::string>{}(p.first) ^  //create some hash for pair
-                   (std::hash<std::string>{}(p.second) << 1);
+        size_t operator()(const bpe_rank_key & p) const {
+            return std::hash<std::string_view>{}(p.first) ^
+                   (std::hash<std::string_view>{}(p.second) << 1);
         }
     };
-    std::unordered_map<std::pair<std::string, std::string>, int, pair_hash> bpe_ranks;
+    std::deque<std::string> bpe_rank_strs; // stable backing storage for bpe_ranks keys
+    std::unordered_map<bpe_rank_key, int, pair_hash> bpe_ranks;
 
     // set of all tokens that cause "end of generation"
     std::set<llama_token> special_eog_ids;
@@ -2166,6 +2165,8 @@ struct llama_vocab::impl {
 
     impl(const llama_vocab & vocab) : vocab(vocab) {
     }
+
+    impl(const impl &) = delete;
 
     ~impl() = default;
 
@@ -2235,8 +2236,35 @@ struct llama_vocab::impl {
     void print_info() const;
 
 private:
+    bool load_bpe_ranks(const gguf_context * ctx, const LLM_KV & kv);
+
     const llama_vocab & vocab;
 };
+
+bool llama_vocab::impl::load_bpe_ranks(const gguf_context * ctx, const LLM_KV & kv) {
+    const int merges_keyidx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_MERGES).c_str());
+    if (merges_keyidx == -1) {
+        return false;
+    }
+
+    if (gguf_get_kv_type(ctx, merges_keyidx) != GGUF_TYPE_ARRAY ||
+        gguf_get_arr_type(ctx, merges_keyidx) != GGUF_TYPE_STRING) {
+        throw std::runtime_error(format("invalid gguf type for %s", kv(LLM_KV_TOKENIZER_MERGES).c_str()));
+    }
+
+    const int n_merges = gguf_get_arr_n(ctx, merges_keyidx);
+    bpe_ranks.reserve(n_merges);
+    for (int i = 0; i < n_merges; i++) {
+        const char * word = gguf_get_arr_str(ctx, merges_keyidx, i);
+
+        const char * sep = *word ? strchr(word + 1, ' ') : nullptr;
+
+        auto & left  = bpe_rank_strs.emplace_back(word, sep ? sep - word : 0);
+        auto & right = bpe_rank_strs.emplace_back(sep ? sep + 1 : "");
+        bpe_ranks.emplace(bpe_rank_key(left, right), i);
+    }
+    return true;
+}
 
 void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
     struct gguf_context * ctx = ml.metadata;
@@ -2295,40 +2323,16 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         } else if (tokenizer_model == "gpt2" || tokenizer_model == "hybriddna" || tokenizer_model == "whitespace") {
             type = LLAMA_VOCAB_TYPE_BPE;
 
-            // read bpe merges and populate bpe ranks
-            const int merges_keyidx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_MERGES).c_str());
             // Kimi-K2 uses custom tokenization without traditional BPE merges
             const bool is_kimi_k2 = (tokenizer_pre == "kimi-k2");
 
-            if (merges_keyidx == -1) {
+            // read bpe merges and populate bpe ranks
+            if (!load_bpe_ranks(ctx, kv)) {
                 if (!is_kimi_k2) {
                     throw std::runtime_error("cannot find tokenizer merges in model file\n");
                 }
                 // Kimi-K2 doesn't need merges, skip
                 LLAMA_LOG_INFO("%s: Kimi-K2 tokenizer detected, skipping BPE merges\n", __func__);
-            } else {
-                if (gguf_get_kv_type(ctx, merges_keyidx) != GGUF_TYPE_ARRAY ||
-                    gguf_get_arr_type(ctx, merges_keyidx) != GGUF_TYPE_STRING) {
-                    throw std::runtime_error(format("invalid gguf type for %s", kv(LLM_KV_TOKENIZER_MERGES).c_str()));
-                }
-                const int n_merges = gguf_get_arr_n(ctx, merges_keyidx);
-                bpe_ranks.reserve(n_merges);
-                for (int i = 0; i < n_merges; i++) {
-                    const char * word = gguf_get_arr_str(ctx, merges_keyidx, i);
-                    //GGML_ASSERT(unicode_cpts_from_utf8(word).size() > 0);
-
-                    std::string first;
-                    std::string second;
-
-                    const char * sep = *word ? strchr(word + 1, ' ') : nullptr;
-
-                    if (sep) {
-                        first.assign(word, sep - word);
-                        second.assign(sep + 1);
-                    }
-
-                    bpe_ranks.emplace(std::make_pair(std::move(first), std::move(second)), i);
-                }
             }
 
             // default special tokens
@@ -2414,32 +2418,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             type = LLAMA_VOCAB_TYPE_BPE;
 
             // read bpe merges and populate bpe ranks
-            const int merges_keyidx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_MERGES).c_str());
-            if (merges_keyidx == -1) {
+            if (!load_bpe_ranks(ctx, kv)) {
                 throw std::runtime_error("cannot find tokenizer merges in model file\n");
-            }
-            {
-                if (gguf_get_kv_type(ctx, merges_keyidx) != GGUF_TYPE_ARRAY ||
-                    gguf_get_arr_type(ctx, merges_keyidx) != GGUF_TYPE_STRING) {
-                    throw std::runtime_error(format("invalid gguf type for %s", kv(LLM_KV_TOKENIZER_MERGES).c_str()));
-                }
-                const int n_merges = gguf_get_arr_n(ctx, merges_keyidx);
-                bpe_ranks.reserve(n_merges);
-                for (int i = 0; i < n_merges; i++) {
-                    const char * word = gguf_get_arr_str(ctx, merges_keyidx, i);
-
-                    std::string first;
-                    std::string second;
-
-                    const char * sep = *word ? strchr(word + 1, ' ') : nullptr;
-
-                    if (sep) {
-                        first.assign(word, sep - word);
-                        second.assign(sep + 1);
-                    }
-
-                    bpe_ranks.emplace(std::make_pair(std::move(first), std::move(second)), i);
-                }
             }
 
             // default special tokens (to be read from GGUF)
@@ -2550,6 +2530,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     tokenizer_pre == "mmbert") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_MMBERT;
                 escape_whitespaces = true;
+                metaspace_prepend_scheme = LLAMA_METASPACE_PREPEND_SCHEME_ALWAYS;
             } else if (
                     tokenizer_pre == "sarvam-moe") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_SARVAM_MOE;
@@ -2576,7 +2557,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     tokenizer_pre == "qwen2" ||
                     tokenizer_pre == "deepseek-r1-qwen" ||
                     tokenizer_pre == "kormo" ||
-                    tokenizer_pre == "f2llmv2") {
+                    tokenizer_pre == "f2llmv2" ||
+                    tokenizer_pre == "domyn-edge") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_QWEN2;
                 clean_spaces = false;
             } else if (
@@ -2682,6 +2664,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_GPT4O;
                 special_bos_id = LLAMA_TOKEN_NULL;
                 clean_spaces = false;
+                ignore_merges = true;
             } else if (
                 tokenizer_pre == "granite-embed-multi-97m") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_GRANITE_EMB_MULTI;
@@ -2774,6 +2757,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             } else if (
                 tokenizer_pre == "soprano") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_SOPRANO;
+            } else if (
+                tokenizer_pre == "zonos3") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_ZONOS3;
+                clean_spaces = false;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
             }
@@ -3035,9 +3022,6 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     metaspace_prepend_scheme = LLAMA_METASPACE_PREPEND_SCHEME_ALWAYS;
                 } else {
                     throw std::runtime_error(format("unknown metaspace prepend_scheme: '%s'", scheme.c_str()));
-                }
-                if (type == LLAMA_VOCAB_TYPE_BPE && metaspace_prepend_scheme == LLAMA_METASPACE_PREPEND_SCHEME_ALWAYS) {
-                    throw std::runtime_error("metaspace prepend_scheme 'always' is not supported for BPE vocab");
                 }
             }
         }
@@ -3783,11 +3767,11 @@ std::string llama_vocab::impl::token_to_piece_for_cache(llama_token token, bool 
 }
 
 static void llama_escape_whitespace(std::string & text) {
-    replace_all(text, " ", "\xe2\x96\x81");
+    replace_all(text, " ", escaped_space);
 }
 
 static void llama_unescape_whitespace(std::string & word) {
-    replace_all(word, "\xe2\x96\x81", " ");
+    replace_all(word, escaped_space, " ");
 }
 
 static std::string llama_decode_text(const std::string & text) {
@@ -3833,36 +3817,32 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                 // tokenizer.encode('', add_special_tokens=True)  returns [1]
                 // tokenizer.encode('', add_special_tokens=False) returns []
 
-                // TODO: honor metaspace_prepend_scheme (add_space_prefix currently behaves like "always")
-                bool is_prev_special = true;  // prefix with space if first token
+                const bool prepend_first = metaspace_prepend_scheme == LLAMA_METASPACE_PREPEND_SCHEME_FIRST;
+                bool prepend_space = add_space_prefix;
 
                 if (add_special && add_bos) {
                     GGML_ASSERT(special_bos_id != LLAMA_TOKEN_NULL);
                     output.push_back(special_bos_id);
-                    is_prev_special = true;
                 }
 
                 for (const auto & fragment : fragment_buffer) {
                     if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT) {
-                        std::string text;
+                        std::string text = fragment.raw_text.substr(fragment.offset, fragment.length);
+                        llama_escape_whitespace(text);
 
-                        // prefix with space if previous is special
-                        if (add_space_prefix && is_prev_special) {
-                            text = ' ';
+                        if (prepend_space && (!prepend_first || text.rfind(escaped_space, 0) != 0)) {
+                            text.insert(0, escaped_space);
                         }
-
-                        text += fragment.raw_text.substr(fragment.offset, fragment.length);
 
 #ifdef PRETOKENIZERDEBUG
                         LLAMA_LOG_WARN("TT: (%ld %ld %ld) '%s'\n", text.length(), fragment.offset, fragment.length, text.c_str());
 #endif
-                        llama_escape_whitespace(text);
                         llm_tokenizer_spm_session session(vocab);
                         session.tokenize(text, output);
-                        is_prev_special = false;
+                        prepend_space = false;
                     } else { // if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_TOKEN)
                         output.push_back(fragment.token);
-                        is_prev_special = true;
+                        prepend_space = add_space_prefix && !prepend_first;
                     }
                 }
 
@@ -3905,7 +3885,6 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                         }
 
                         // Metaspace prepend_scheme "first": add U+2581 only at the start of the input
-                        static const std::string escaped_space = "\xE2\x96\x81";
                         if (metaspace_prepend_scheme == LLAMA_METASPACE_PREPEND_SCHEME_FIRST &&
                             &fragment == &fragment_buffer.front() && text.rfind(escaped_space, 0) != 0) {
                             text.insert(0, escaped_space);
@@ -4247,7 +4226,8 @@ int32_t llama_vocab::impl::detokenize(
 
     // Metaspace prepend_scheme "first": remove the leading space of the first rendered piece, so a skipped BOS does not consume it
     // TODO: honor metaspace_prepend_scheme for the other vocab types
-    bool remove_first_space = type == LLAMA_VOCAB_TYPE_BPE && metaspace_prepend_scheme == LLAMA_METASPACE_PREPEND_SCHEME_FIRST;
+    bool remove_first_space = (type == LLAMA_VOCAB_TYPE_BPE || type == LLAMA_VOCAB_TYPE_SPM) &&
+        metaspace_prepend_scheme == LLAMA_METASPACE_PREPEND_SCHEME_FIRST;
 
     for (int32_t i = 0; i < n_tokens; ++i) {
         GGML_ASSERT(avail >= 0);
@@ -4605,6 +4585,10 @@ bool llama_vocab::get_treat_whitespace_as_suffix() const {
     return pimpl->treat_whitespace_as_suffix;
 }
 
+enum llama_metaspace_prepend_scheme llama_vocab::get_metaspace_prepend_scheme() const {
+    return pimpl->metaspace_prepend_scheme;
+}
+
 const llama_vocab::normalizer_options & llama_vocab::get_normalizer_opts() const {
     return pimpl->normalizer_opts;
 }
@@ -4617,9 +4601,9 @@ int llama_vocab::max_token_len() const {
     return pimpl->max_token_len;
 }
 
-int llama_vocab::find_bpe_rank(const std::string & token_left, const std::string & token_right) const {
-    GGML_ASSERT(token_left.find(' ')   == std::string::npos);
-    GGML_ASSERT(token_right.find(' ')  == std::string::npos);
+int llama_vocab::find_bpe_rank(std::string_view token_left, std::string_view token_right) const {
+    GGML_ASSERT(token_left.find(' ')  == std::string_view::npos);
+    GGML_ASSERT(token_right.find(' ') == std::string_view::npos);
 
     auto it = pimpl->bpe_ranks.find(std::make_pair(token_left, token_right));
     if (it == pimpl->bpe_ranks.end()) {
@@ -4637,7 +4621,7 @@ std::vector<std::string> llama_vocab::get_bpe_merges() const {
     std::vector<std::string> result(max_rank + 1);
 
     for (const auto & pair : pimpl->bpe_ranks) {
-        result[pair.second] = pair.first.first + " " + pair.first.second;
+        result[pair.second] = std::string(pair.first.first) + " " + std::string(pair.first.second);
     }
 
     return result;

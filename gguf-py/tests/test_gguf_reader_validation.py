@@ -5,7 +5,7 @@ import pytest
 from gguf.gguf_reader import GGUFReader
 
 
-def _write_gguf(path, n_dims_field, dims):
+def _write_gguf(path, n_dims_field, dims, offset=0):
     buf = b'GGUF' + struct.pack('<IQQ', 3, 1, 0)  # version 3, 1 tensor, 0 kv
     name = b'bad_tensor'
     buf += struct.pack('<Q', len(name)) + name
@@ -13,7 +13,7 @@ def _write_gguf(path, n_dims_field, dims):
     for d in dims:
         buf += struct.pack('<Q', d)
     buf += struct.pack('<I', 0)  # dtype F32
-    buf += struct.pack('<Q', 0)  # tensor offset
+    buf += struct.pack('<Q', offset)  # tensor offset
     buf += b'\x00' * 64
     path.write_bytes(buf)
 
@@ -34,4 +34,12 @@ def test_dims_product_no_uint64_wraparound(tmp_path):
     p = tmp_path / 'evil_overflow.gguf'
     _write_gguf(p, len(dims), dims)
     with pytest.raises(ValueError):
+        GGUFReader(p)
+
+
+def test_tensor_offset_no_uint64_wraparound(tmp_path):
+    # offset 2**64 - 1 must be rejected, not wrap around
+    p = tmp_path / 'evil_offset.gguf'
+    _write_gguf(p, 1, [4], offset=2**64 - 1)
+    with pytest.raises(ValueError, match='exceeds file size'):
         GGUFReader(p)

@@ -7,12 +7,22 @@
 #include "mtmd-helper.h"
 #include "mtmd-image.h"
 #include "mtmd-internal.h"
+#include "models/models.h"
+
+#include "chat-tts-norm.h"
+#include "jinja/lexer.h"
+#include "jinja/parser.h"
+#include "jinja/runtime.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <iterator>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -599,6 +609,50 @@ MAKE_TEST(test_audio_preprocessor_whisper_chunks) {
     }
 }
 
+MAKE_TEST(test_audio_preprocessor_qwen3a_tail) {
+    mtmd_hparams hparams;
+    hparams.n_mel_bins        = 128;
+    hparams.audio_sample_rate = 16000;
+    hparams.audio_n_fft       = 400;
+    hparams.audio_window_len  = 400;
+    hparams.audio_hop_len     = 160;
+
+    ggml_backend_ptr backend(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
+    ggml_backend_t backends[] = { backend.get() };
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends, nullptr, 1, 256, false, true));
+
+    mtmd_audio_preprocessor_qwen3a preproc(hparams, sched.get());
+    preproc.initialize();
+
+    // one 800-frame window covers 128000 samples (hop 160), so longer audio is split;
+    // the last window is emitted with its exact frame count, the graph pads the final 100-frame chunk
+    // { sample count, expected n_len of each output window }
+    const std::vector<std::pair<size_t, std::vector<int64_t>>> cases = {
+        {       0, {}          },
+        {       1, {1}         },
+        {   32000, {200}       },
+        {  128000, {800}       },
+        {  128160, {800, 1}    },
+        {  168000, {800, 250}  },
+        {  170080, {800, 263}  },
+        {  176000, {800, 300}  },
+    };
+
+    for (const auto & [n_samples, expected] : cases) {
+        const std::string name = std::to_string(n_samples) + " samples";
+        std::vector<float> samples(n_samples, 0.0f);
+        if (n_samples > 0) {
+            samples.back() = 0.5f;
+        }
+        mtmd_audio_preproc_out out = preproc.preprocess(samples.data(), samples.size());
+        t.assert_equal("windows for " + name, expected.size(), out.entries.size());
+        for (size_t i = 0; i < out.entries.size(); i++) {
+            t.assert_equal("frames for " + name, expected[i], out.entries[i].nx());
+            t.assert_equal("mel bins for " + name, 128, out.entries[i].ny());
+        }
+    }
+}
+
 MAKE_TEST(test_audio_preprocessor_conformer) {
     mtmd_hparams hparams;
     hparams.n_mel_bins        = 128;
@@ -827,6 +881,64 @@ static double tone_amplitude(const std::vector<float> & x, double freq, int rate
     return 2.0 * std::sqrt(re * re + im * im) / (x.size() - 2 * skip);
 }
 
+MAKE_TEST(test_audio_fft) {
+    // the sizes in use: powers of two, and an odd part (400 = 16 * 25, 736 = 32 * 23, 1920 = 128 * 15)
+    // plus small edge cases: 4 = gather + one stage, 6 = n_odd 3 with n_sub 2, 15 = odd composite with n_sub 1
+    const int sizes[] = { 1, 2, 3, 4, 6, 12, 15, 256, 400, 512, 736, 1920 };
+    const double pi = 3.14159265358979323846;
+    for (int n : sizes) {
+        mtmd_audio_cache cache;
+        cache.fill_sin_cos_table(n);
+        // phase offset so that x[0] != 0 (n = 1 would otherwise compare all zeros)
+        std::vector<float> x(2 * n);
+        for (int i = 0; i < 2 * n; i++) {
+            x[i] = (float) std::sin(0.37 * i + 0.001 * i * i + 0.5);
+        }
+        std::vector<float> out(8 * n);
+        for (bool inv : { false, true }) {
+            // input sized exactly as documented so that sanitizers catch any overread
+            const std::vector<float> in(x.begin(), x.begin() + (inv ? 2 * n : n));
+            if (inv) {
+                mtmd_audio_ifft(cache, in.data(), n, out.data());
+            } else {
+                mtmd_audio_fft(cache, in.data(), n, out.data());
+            }
+            double max_err = 0.0, max_ref = 0.0;
+            for (int k = 0; k < n; k++) {
+                double re = 0.0, im = 0.0;
+                for (int j = 0; j < n; j++) {
+                    const double theta = (inv ? 2 : -2) * pi * (double) ((int64_t) j * k % n) / n;
+                    const double a = inv ? x[2 * j] : x[j];
+                    const double b = inv ? x[2 * j + 1] : 0.0;
+                    re += a * std::cos(theta) - b * std::sin(theta);
+                    im += a * std::sin(theta) + b * std::cos(theta);
+                }
+                if (inv) {
+                    re /= n;
+                    im /= n;
+                }
+                max_err = std::max({ max_err, std::fabs(re - out[2 * k]), std::fabs(im - out[2 * k + 1]) });
+                max_ref = std::max({ max_ref, std::fabs(re), std::fabs(im) });
+            }
+            t.assert_true(std::string(inv ? "ifft" : "fft") + " n = " + std::to_string(n) + ", relative error " + std::to_string(max_err / max_ref),
+                          max_ref > 0.0 && max_err <= 1e-5 * max_ref);
+        }
+
+        // round trip: ifft(fft(x)) == x for real x
+        std::vector<float> spec(8 * n);
+        mtmd_audio_fft(cache, x.data(), n, spec.data());
+        const std::vector<float> spec_in(spec.begin(), spec.begin() + 2 * n);
+        mtmd_audio_ifft(cache, spec_in.data(), n, out.data());
+        double max_err = 0.0, max_ref = 0.0;
+        for (int k = 0; k < n; k++) {
+            max_err = std::max({ max_err, (double) std::fabs(out[2 * k] - x[k]), (double) std::fabs(out[2 * k + 1]) });
+            max_ref = std::max(max_ref, (double) std::fabs(x[k]));
+        }
+        t.assert_true("fft round trip n = " + std::to_string(n) + ", relative error " + std::to_string(max_err / max_ref),
+                      max_ref > 0.0 && max_err <= 1e-5 * max_ref);
+    }
+}
+
 static std::vector<float> resample_chunked(mtmd_helper_resampler * rs, const std::vector<float> & in, size_t chunk) {
     std::vector<float> res;
     for (size_t off = 0; off < in.size(); off += chunk) {
@@ -879,6 +991,198 @@ MAKE_TEST(test_helper_resampler) {
     }
 
     t.assert_true("invalid rate", mtmd_helper_resampler_init(0, rate_out) == nullptr);
+}
+
+//
+// kokoro
+//
+
+// a dictionary for tts_dict(): entries in any order, sorted here
+static common_tts_dict kokoro_dict(std::vector<std::pair<std::string, std::string>> entries) {
+    std::sort(entries.begin(), entries.end());
+    common_tts_dict dict;
+    for (auto & e : entries) {
+        dict.keys.push_back(e.first);
+        dict.values.push_back(e.second);
+    }
+    return dict;
+}
+
+// the "tts" template with small dictionaries: a few lexicon words, fixed tags, and a model for unknown words over the letters z a b i n g
+MAKE_TEST(test_kokoro_tts_template) {
+    std::string path = __FILE__;
+    const size_t pos = path.find_last_of("/\\");
+    path = (pos == std::string::npos ? std::string(".") : path.substr(0, pos)) + "/../models/templates/hexgrad-Kokoro-82M-tts.jinja";
+    std::ifstream fs(path, std::ios_base::binary);
+    if (!t.assert_true("template file is readable: " + path, fs.is_open())) {
+        return;
+    }
+    const std::string tmpl((std::istreambuf_iterator<char>(fs)), std::istreambuf_iterator<char>());
+
+    const auto dicts = std::make_shared<const common_tts_dicts>(common_tts_dicts{
+        {"gold", kokoro_dict({
+            {"hello", "\"h\xc9\x99l\xcb\x88O\""},
+            {"world", "\"w\xcb\x88\xc9\x9c\xc9\xb9ld\""},
+            {"I", "\"\xcb\x88I\""},
+            {"read", "{\"ADJ\":\"\xc9\xb9\xcb\x88\xc9\x9b" "d\",\"DEFAULT\":\"\xc9\xb9\xcb\x88id\",\"VBD\":\"\xc9\xb9\xcb\x88\xc9\x9b" "d\",\"VBN\":\"\xc9\xb9\xcb\x88\xc9\x9b" "d\",\"VBP\":\"\xc9\xb9\xcb\x88\xc9\x9b" "d\"}"},
+            {"it", "\"\xc9\xaat\""},
+            {"three", "\"\xce\xb8\xc9\xb9\xcb\x88i\""},
+            {"cat", "\"k\xcb\x88\xc3\xa6t\""},
+            {"walk", "\"w\xcb\x88\xc9\x94k\""},
+            {"the", "\"\xc3\xb0i\""},
+            {"Z", "\"z\xcb\x88i\""},
+            {"'s", "\"s\""},
+            {"a", "\"A\""},
+            {"and", "\"\xc3\xa6nd\""},
+            {"is", "\"\xc9\xaaz\""},
+        })},
+        {"silver", kokoro_dict({
+        })},
+        {"gold_gb", kokoro_dict({
+            {"hello", "\"h\xc9\x99l\xcb\x88Q\""},
+            {"world", "\"w\xcb\x88\xc9\x9c\xcb\x90ld\""},
+            {"walk", "\"w\xcb\x88\xc9\x94\xcb\x90k\""},
+        })},
+        {"silver_gb", kokoro_dict({
+        })},
+        {"pos_classes", kokoro_dict({
+            {"", "[\"NN\",\"NNP\",\"PRP\",\"VBD\"]"},
+        })},
+        {"pos_tagdict", kokoro_dict({
+            {"I", "\"PRP\""},
+            {"read", "\"VBD\""},
+            {"it", "\"PRP\""},
+            {".", "\".\""},
+            {",", "\",\""},
+        })},
+        {"pos_weights", kokoro_dict({
+            {"bias", "{\"c0\":1.0}"},
+        })},
+        {"lts", kokoro_dict({
+            {"z", "{\"z\":0.1}"},
+            {"b", "{\"b\":0.1}"},
+            {"i", "{\"\xc9\xaa\":0.1}"},
+            {"n", "{\"\xc5\x8b\":0.1}"},
+            {"g", "{\"\":0.1}"},
+            {"a", "{\"\xcb\x88\xc3\xa6\":0.1,\"\xc3\xa6\":0.06}"},
+            {"z:z a", "{\"\xcb\x88\xc3\xa6\":0.2,\"\xc3\xa6\":0.01}"},
+            {"$", "{\"\":0.2}"},
+        })},
+        {"lts_gb", kokoro_dict({
+            {"z", "{\"z\":0.1}"},
+            {"b", "{\"b\":0.1}"},
+            {"i", "{\"\xc9\xaa\":0.1}"},
+            {"n", "{\"\xc5\x8b\":0.1}"},
+            {"g", "{\"\":0.1}"},
+            {"a", "{\"\xcb\x88\xc9\x91\xcb\x90\":0.1,\"\xc9\x91\xcb\x90\":0.06}"},
+            {"z:z a", "{\"\xcb\x88\xc9\x91\xcb\x90\":0.2,\"\xc9\x91\xcb\x90\":0.01}"},
+            {"$", "{\"\":0.2}"},
+        })},
+    });
+
+    // voice, text, expected phonemes
+    const std::vector<std::array<std::string, 3>> cases = {
+        // words of the lexicon
+        { "af_heart", "Hello world.", "h\xc9\x99l\xcb\x88O w\xcb\x88\xc9\x9c\xc9\xb9ld." },
+        // the pronunciation depends on the part of speech
+        { "af_heart", "I read it.", "\xcb\x8cI \xc9\xb9\xcb\x88\xc9\x9b" "d \xc9\xaat." },
+        // a number, and the -s suffix rule
+        { "af_heart", "3 cats", "\xce\xb8\xc9\xb9\xcb\x88i k\xcb\x88\xc3\xa6ts" },
+        // the -ed and -ing suffix rules
+        { "af_heart", "walked, walking", "w\xcb\x88\xc9\x94kt, w\xcb\x88\xc9\x94k\xc9\xaa\xc5\x8b" },
+        // not in the lexicon: predicted from the spelling
+        { "af_heart", "zab", "z\xcb\x88\xc3\xa6" "b" },
+        // the free search gives two primary stresses, the stress pass keeps one
+        { "af_heart", "zaba", "z\xcb\x88\xc3\xa6" "b\xc3\xa6" },
+        // a doubled consonant says one sound
+        { "af_heart", "zabbing", "z\xcb\x88\xc3\xa6" "b\xc9\xaa\xc5\x8b" },
+        // an unknown word with 's
+        { "af_heart", "The zab's cat", "\xc3\xb0\xc9\x99 z\xcb\x88\xc3\xa6" "bs k\xcb\x88\xc3\xa6t" },
+        // no vowel: spelled out
+        { "af_heart", "zz", "z\xcb\x8ciz\xcb\x88i" },
+        // an accented letter is read as its base letter
+        { "af_heart", "H\xc3\xa9ll\xc3\xb3 world.", "h\xc9\x99l\xcb\x88O w\xcb\x88\xc9\x9c\xc9\xb9ld." },
+        // digits glued to letters are read as a number
+        { "af_heart", "3Z cats", "\xce\xb8\xc9\xb9\xcb\x88i z\xcb\x88i k\xcb\x88\xc3\xa6ts" },
+        // an unknown word in mixed case is read part by part
+        { "af_heart", "catWalk", "k\xcb\x88\xc3\xa6tw\xcb\x88\xc9\x94k" },
+        // a british voice uses the british lexicon
+        { "bf_emma", "Hello world.", "h\xc9\x99l\xcb\x88Q w\xcb\x88\xc9\x9c\xcb\x90ld." },
+        // and the british model for unknown words
+        { "bf_emma", "zaba", "z\xcb\x88\xc9\x91\xcb\x90" "b\xc9\x91\xcb\x90" },
+        // a voice of another language takes phonemes, they pass through
+        { "ef_dora", "\xcb\x88ola, m\xcb\x88undo.", "\xcb\x88ola, m\xcb\x88undo." },
+    };
+
+    jinja::lexer lexer;
+    const jinja::program ast = jinja::parse_from_tokens(lexer.tokenize(tmpl));
+    for (const auto & c : cases) {
+        std::string out;
+        try {
+            jinja::context ctx(tmpl);
+            common_chat_tts_norm_add_builtins(ctx, dicts);
+            auto msg = jinja::mk_val<jinja::value_object>();
+            msg->insert("role", jinja::mk_val<jinja::value_string>("user"));
+            msg->insert("content", jinja::mk_val<jinja::value_string>(c[1]));
+            auto msgs = jinja::mk_val<jinja::value_array>();
+            msgs->push_back(msg);
+            ctx.set_val("messages", msgs);
+            ctx.set_val("language", jinja::mk_val<jinja::value_string>(""));
+            ctx.set_val("voice", jinja::mk_val<jinja::value_string>(c[0]));
+            jinja::runtime runtime(ctx);
+            out = jinja::runtime::gather_string_parts(runtime.execute(ast))->as_string().str();
+        } catch (const std::exception & e) {
+            out = std::string("exception: ") + e.what();
+        }
+        if (!t.assert_true(c[0] + ": " + c[1], out == c[2])) {
+            t.log("Expected: " + c[2]);
+            t.log("Actual  : " + out);
+        }
+    }
+}
+
+// every frame is the constant 0.25 (only the DC bin, of magnitude n_fft * 0.25)
+// the overlap-add of hann windows at a quarter hop sums to 2, their squares to 1.5: the output is 0.25 * 2 / 1.5
+MAKE_TEST(test_kokoro_istft) {
+    const int n_fft = 20, hop = 5, n_frames = 9;
+    std::vector<float> spec((size_t) n_frames * (n_fft + 2), 0.0f);
+    for (int fr = 0; fr < n_frames; fr++) {
+        float * row = spec.data() + (size_t) fr * (n_fft + 2);
+        // the first half of a row is log magnitudes, the second half phases
+        for (int k = 0; k <= n_fft / 2; k++) {
+            row[k] = k == 0 ? logf(n_fft * 0.25f) : -100.0f;
+        }
+    }
+    std::vector<float> audio;
+    mtmd_graph_kokoro::istft(spec, audio);
+    t.assert_equal("samples", (size_t) (n_frames - 1) * hop, audio.size());
+    // the first and last hop are covered by fewer frames
+    float max_err = 0.0f;
+    for (size_t i = hop; i + hop < audio.size(); i++) {
+        max_err = std::max(max_err, std::fabs(audio[i] - 1.0f / 3.0f));
+    }
+    t.assert_true("constant signal, max error " + std::to_string(max_err), max_err < 1e-4f);
+}
+
+// 13 tokens per 100-frame chunk; the tail is ceil^3 (one halving per stride-2 conv layer)
+MAKE_TEST(test_qwen3a_tokens_for_frames) {
+    const std::vector<std::pair<int64_t, int64_t>> cases = {
+        {    0,   0 },
+        {    1,   1 },
+        {   99,  13 },
+        {  100,  13 },
+        {  101,  14 },
+        {  110,  15 },
+        {  200,  26 },
+        {  210,  28 },
+        { 1000, 130 },
+        { 1024, 133 },
+    };
+
+    for (const auto & [frames, expected] : cases) {
+        const std::string name = std::to_string(frames) + " frames";
+        t.assert_equal(name, expected, mtmd_graph_qwen3a::qwen3a_tokens_for_frames(frames));
+    }
 }
 
 //

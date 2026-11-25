@@ -83,22 +83,35 @@ Since common quantizations are supported now, it is recommanded to download GGUF
 A prebuilt binary kernel library has been introduced for Adreno GPUs.
 It currently targets X2 GPUs (X2-90, X2-85 and X2-45) found in Snapdragon X2 SoC.
 The library currently contains kernels for MUL_MAT_ID with Q4_0, Q4_1, Q4_K, MXFP4.
-The library must be manually downloaded from https://softwarecenter.qualcomm.com/catalog/item/Adreno_Kernel_Library_GGML.
+The library is published at https://softwarecenter.qualcomm.com/catalog/item/Adreno_Kernel_Library_GGML.
+Its use is subject to the license in the `license.txt` file shipped with it.
 
-To allow using the kernel library, add `-DGGML_OPENCL_USE_ADRENO_BIN_KERNELS=ON` when configuring with CMake.
-Then, extract `adreno-opencl-kernels.dll` from the zip file downloaded from the above URL and put it alongside the executables.
+The library is enabled by default (`GGML_OPENCL_USE_ADRENO_BIN_KERNELS=ON`).
+On Windows on ARM64, CMake downloads the library version pinned in `ggml/src/ggml-opencl/CMakeLists.txt` during configuration (`GGML_OPENCL_ADRENO_BIN_KERNELS_FETCH=ON`).
+The download is verified against a SHA256 hash, and the build copies `adreno-opencl-kernels.dll` and `LICENSE-adreno-opencl-kernels.txt` alongside the executables.
+If the download fails, configuration continues with a warning.
+To skip the download, add `-DGGML_OPENCL_ADRENO_BIN_KERNELS_FETCH=OFF`, then extract `adreno-opencl-kernels.dll` from the zip file downloaded from the above URL and put it alongside the executables yourself.
 If kernels compatible with the current GPU are found in the library, they will be loaded and used.
+If the library is missing, the builtin kernels are used.
+Add `-DGGML_OPENCL_USE_ADRENO_BIN_KERNELS=OFF` to disable the library entirely.
 
 
 ## CMake Options
 
 The OpenCL backend has the following CMake options that control the behavior of the backend.
 
-| CMake options                        | Default value  | Description                               |
-|:------------------------------------:|:--------------:|:------------------------------------------|
-| `GGML_OPENCL_EMBED_KERNELS`          | `ON`           | Embed OpenCL kernels into the executable. |
-| `GGML_OPENCL_USE_ADRENO_KERNELS`     | `ON`           | Use kernels optimized for Adreno.         |
-| `GGML_OPENCL_USE_ADRENO_BIN_KERNELS` | `OFF`          | Allow using binary kernel lib for Adreno. |
+| CMake options                          | Default value  | Description                                             |
+|:--------------------------------------:|:--------------:|:--------------------------------------------------------|
+| `GGML_OPENCL_EMBED_KERNELS`            | `ON`           | Embed OpenCL kernels into the executable.               |
+| `GGML_OPENCL_USE_ADRENO_KERNELS`       | `ON`           | Use kernels optimized for Adreno.                       |
+| `GGML_OPENCL_USE_ADRENO_BIN_KERNELS`   | `ON`           | Allow using binary kernel lib for Adreno.               |
+| `GGML_OPENCL_ADRENO_BIN_KERNELS_FETCH` | `ON`           | Download the binary kernel lib for Adreno (Windows ARM64). |
+
+## Decomposed Flash Attention
+
+The P8 path rounds scratch row pitches for P and transposed V up to a multiple of 32 KiB before adding the existing 64-byte padding. This reduces cache conflicts when the KV length exceeds 16384 and the V head size is at most 256. Larger V heads keep the previous layout. The extra scratch space is less than 32 KiB per row at the default granule.
+
+`GGML_OPENCL_FA_KV_PITCH_ROUND` sets the rounding granule in bytes to a positive power of two; `0` restores the previous layout. `GGML_OPENCL_FA_KV_PITCH_ROUND_MIN` sets the KV-length threshold (default `16384`), and `GGML_OPENCL_FA_KV_PITCH_ROUND_MAX_DV` sets the largest V head size to round (default `256`). These settings do not change the existing attention dispatch conditions.
 
 ## Program Binary Cache
 

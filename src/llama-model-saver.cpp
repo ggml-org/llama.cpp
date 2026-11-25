@@ -173,18 +173,6 @@ void llama_model_saver::add_kv_from_model() {
     // add_kv(LLM_KV_GENERAL_SAMPLING_MIROSTAT_ETA,     ???);
     add_kv(LLM_KV_GENERAL_NAME,                      model->name);
 
-    if (!model->prec_policy.prec_src1.empty()) {
-        std::vector<std::string> tensor_names;
-        std::vector<int8_t> values;
-        tensor_names.reserve(model->prec_policy.prec_src1.size());
-        values.reserve(model->prec_policy.prec_src1.size());
-        for (const auto & [w, prec] : model->prec_policy.prec_src1) {
-            tensor_names.push_back(ggml_get_name(w));
-            values.push_back(prec == GGML_PREC_Q8 ? 0 : 1);
-        }
-        add_kv(LLM_KV_GENERAL_TENSOR_EXTRA_NAME, tensor_names);
-        gguf_set_arr_data(gguf_ctx, llm_kv(LLM_KV_GENERAL_TENSOR_EXTRA_PREC_A4).c_str(), GGUF_TYPE_BOOL, values.data(), values.size());
-    }
     // add_kv(LLM_KV_GENERAL_AUTHOR,                    ???);
     // add_kv(LLM_KV_GENERAL_VERSION,                   ???);
     // add_kv(LLM_KV_GENERAL_URL,                       ???);
@@ -241,6 +229,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_DECODER_BLOCK_COUNT,               hparams.dec_n_layer);
     add_kv(LLM_KV_ATTN_LOGIT_SOFTCAPPING,            hparams.f_attn_logit_softcapping);
     add_kv(LLM_KV_ROUTER_LOGIT_SOFTCAPPING,          hparams.f_router_logit_softcapping);
+    add_kv(LLM_KV_ROUTER_HIDDEN_SIZE,                hparams.n_router_hidden);
     add_kv(LLM_KV_FINAL_LOGIT_SOFTCAPPING,           hparams.f_final_logit_softcapping);
     add_kv(LLM_KV_SWIN_NORM,                         hparams.swin_norm);
     add_kv(LLM_KV_RESCALE_EVERY_N_LAYERS,            hparams.rescale_every_n_layers);
@@ -571,12 +560,15 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->hc_head_base);
     add_tensor(model->hc_head_scale);
     add_tensor(model->per_layer_tok_embd);
+    add_tensor(model->per_layer_tok_embd_s);
     add_tensor(model->per_layer_model_proj);
     add_tensor(model->per_layer_proj_norm);
     add_tensor(model->value_embd);
     add_tensor(model->hc_head_norm);
     add_tensor(model->hc_head_down);
     add_tensor(model->hc_head_up);
+    add_tensor(model->res_scale_in);
+    add_tensor(model->res_scale_in_b);
 
     // looped architectures alias physical tensors across cache slots; save each
     // tensor once. a different tensor with an existing name still asserts below

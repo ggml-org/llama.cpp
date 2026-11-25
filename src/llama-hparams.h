@@ -221,6 +221,12 @@ struct llama_hparams {
     uint32_t n_embd_head_kda = 0;
     bool     kda_safe_gate = false;
 
+    // for ZAYA1 CCA layers: q + k channels in the conv state
+    uint32_t n_cca_qk = 0;
+
+    // for ZAYA1: width of the router MLP
+    uint32_t n_router_hidden = 0;
+
     // kimi-k3
     uint32_t n_expert_latent      = 0;      // routed_expert_hidden_size (0 = experts run at n_embd)
     uint32_t attn_res_block_size  = 0;      // 0 = no cross-layer attention residuals
@@ -298,6 +304,7 @@ struct llama_hparams {
     uint32_t dflash_conv_group_size  = 0;
     uint32_t dflash_selector_rank    = 0;
     uint32_t dflash_selector_top_k   = 0;
+    bool     dspark_f_rnn            = false; // rnn markov head reads f_rnn from embd_state
     uint32_t lilicorr_hidden_size    = 0;
     uint32_t lilicorr_candidate_topk = 0;
     uint32_t lilicorr_num_heads      = 0;

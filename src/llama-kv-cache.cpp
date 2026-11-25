@@ -314,11 +314,8 @@ llama_kv_cache::llama_kv_cache(
             ggml_is_quantized(type_k) &&
             hparams.n_embd_head_k() % 64 == 0;
 
-        // always create Hadamard rotation tensors for DeepSeek lightning indexers
-        if ((model.arch == LLM_ARCH_DEEPSEEK32 || model.arch == LLM_ARCH_DEEPSEEK4 ||
-                model.arch == LLM_ARCH_GLM_DSA || model.arch == LLM_ARCH_DOTS3NOTE ||
-                model.arch == LLM_ARCH_MISTRAL_LARGE4) &&
-                hparams.n_embd_head_k_full == hparams.indexer_head_size) {
+        // always create Hadamard rotation tensors for lightning indexer keys
+        if (model.lid_k_hdmd() && hparams.n_embd_head_k_full == hparams.indexer_head_size) {
             attn_rot_k = true;
         }
 
@@ -458,19 +455,7 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
         auto & cells = v_cells[seq_to_stream[seq_id]];
         auto & head  = v_heads[seq_to_stream[seq_id]];
 
-        uint32_t new_head = cells.size();
-
-        for (uint32_t i = 0; i < cells.size(); ++i) {
-            if (!cells.pos_in(i, p0, p1)) {
-                continue;
-            }
-
-            if (cells.seq_has(i, seq_id) && cells.seq_rm(i, seq_id)) {
-                if (new_head == cells.size()) {
-                    new_head = i;
-                }
-            }
-        }
+        const uint32_t new_head = cells.seq_rm(seq_id, p0, p1);
 
         // If we freed up a slot, set head to it so searching can start there.
         if (new_head != cells.size() && new_head < head) {
@@ -2934,10 +2919,10 @@ void llama_kv_cache::state_clear(llama_seq_id seq_id, uint32_t strm, const slot_
         const size_t k_size_row = ggml_row_size(k->type, n_embd_k_gqa);
 
         if (is_contiguous) {
-            llama_clear_tensor_data(k, sinfo.head() * k_size_row, cell_count * k_size_row);
+            ggml_backend_tensor_memset(k, 0, sinfo.head() * k_size_row, cell_count * k_size_row);
         } else {
             for (uint32_t i = 0; i < cell_count; ++i) {
-                llama_clear_tensor_data(k, sinfo.idxs[0][i] * k_size_row, k_size_row);
+                ggml_backend_tensor_memset(k, 0, sinfo.idxs[0][i] * k_size_row, k_size_row);
             }
         }
     }
@@ -2956,10 +2941,10 @@ void llama_kv_cache::state_clear(llama_seq_id seq_id, uint32_t strm, const slot_
             const size_t v_size_row = ggml_row_size(v->type, n_embd_v_gqa);
 
             if (is_contiguous) {
-                llama_clear_tensor_data(v, sinfo.head() * v_size_row, cell_count * v_size_row);
+                ggml_backend_tensor_memset(v, 0, sinfo.head() * v_size_row, cell_count * v_size_row);
             } else {
                 for (uint32_t i = 0; i < cell_count; ++i) {
-                    llama_clear_tensor_data(v, sinfo.idxs[0][i] * v_size_row, v_size_row);
+                    ggml_backend_tensor_memset(v, 0, sinfo.idxs[0][i] * v_size_row, v_size_row);
                 }
             }
         } else {
@@ -2969,12 +2954,12 @@ void llama_kv_cache::state_clear(llama_seq_id seq_id, uint32_t strm, const slot_
                 const uint32_t h = sinfo.head();
 
                 for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
-                    llama_clear_tensor_data(v, (h + j * cells.size()) * v_size_el, cell_count * v_size_el);
+                    ggml_backend_tensor_memset(v, 0, (h + j * cells.size()) * v_size_el, cell_count * v_size_el);
                 }
             } else {
                 for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
                     for (uint32_t i = 0; i < cell_count; ++i) {
-                        llama_clear_tensor_data(v, (sinfo.idxs[0][i] + j * cells.size()) * v_size_el, v_size_el);
+                        ggml_backend_tensor_memset(v, 0, (sinfo.idxs[0][i] + j * cells.size()) * v_size_el, v_size_el);
                     }
                 }
             }

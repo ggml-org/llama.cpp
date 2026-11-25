@@ -105,7 +105,7 @@ static inline bool ggml_impl_is_view(const struct ggml_tensor * t) {
 }
 
 static inline float ggml_compute_softplus_f32(float input) {
-    return (input > 20.0f) ? input : logf(1 + expf(input));
+    return (input > 20.0f) ? input : log1pf(expf(input));
 }
 
 // compute correction dims for YaRN RoPE scaling
@@ -580,13 +580,15 @@ static inline float ggml_f8_e4m3_to_fp32(uint8_t x) {
         return NAN;
     }
 
-    const int exp = (ax >> 3) & 0xF;
-    const int man = ax & 0x7;
+    const uint32_t exp = (ax >> 3) & 0xF;
+    const uint32_t man = ax & 0x7;
     // OCP FP8 rev. 1.1, section 5.1: subnormal magnitude = M * 2^-9; normal magnitude = (1 + M / 8) * 2^(E - 7).
+    // a normal value maps to fp32 exponent E + 120 and the top 3 mantissa bits
     const float value = exp == 0
-        ? ldexpf((float) man, -9)
-        : ldexpf(1.0f + (float) man / 8.0f, exp - 7);
-    return x & 0x80 ? -value : value;
+        ? (float) man * (1.0f / 512.0f)
+        : fp32_from_bits(((exp + 120) << 23) | (man << 20));
+    // set the sign bit without a branch, the sign of real data is random
+    return fp32_from_bits(fp32_to_bits(value) | ((uint32_t) (x & 0x80) << 24));
 }
 
 static inline int ggml_round_to_nearest_even(float x) {

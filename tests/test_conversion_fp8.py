@@ -25,6 +25,7 @@ from conversion.llama import LlamaModel
 from conversion.nemotron import NemotronHModel
 from conversion.phi import PhiMoeModel
 from conversion.qwen import Qwen2MoeModel, Qwen3NextModel
+from conversion.qwen4exp import Qwen4ExpTextModel
 
 
 class ForcedF16Model(Qwen2MoeModel):
@@ -366,6 +367,27 @@ class TestFP8Conversion(unittest.TestCase):
         self.assertEqual(dtype, gguf.GGMLQuantizationType.Q8_0)
         np.testing.assert_allclose(gguf.dequantize(data, dtype), np.full((4, 32), 0.25), atol=1e-4)
 
+    def test_modelopt_block_scale_inv(self):
+        name = "model.layers.0.self_attn.q_proj.weight"
+        weight = (torch.arange(32, dtype=torch.float32).reshape(4, 8) - 16).to(torch.float8_e4m3fn)
+        scale = torch.tensor([[0.25, 0.5], [1.0, 2.0]])
+        expected = weight.float() * scale.repeat_interleave(2, 0).repeat_interleave(4, 1)
+        for eager in (False, True):
+            with self.subTest(eager=eager):
+                result = self.convert(Qwen2MoeModel, {name: weight, name + "_scale_inv": scale}, eager=eager, check_lazy=not eager)
+                self.assertEqual(set(result), {"blk.0.attn_q.weight"})
+                dtype, data = result["blk.0.attn_q.weight"]
+                self.assertEqual(dtype, gguf.GGMLQuantizationType.F16)
+                np.testing.assert_array_equal(data, expected.numpy())
+
+        with self.assertRaisesRegex(ValueError, "not tiled"):
+            self.convert(Qwen2MoeModel, {name: weight, name + "_scale_inv": torch.ones((3, 2))})
+
+        # a scalar scale keeps the FP8 bytes, as with weight_scale
+        result = self.convert(Qwen2MoeModel, {name: weight, name + "_scale_inv": torch.tensor([0.25])}, check_lazy=True)
+        self.assertEqual(result["blk.0.attn_q.weight"][0], gguf.GGMLQuantizationType.F8_E4M3)
+        np.testing.assert_array_equal(result["blk.0.attn_q.scale"][1], [0.25])
+
 
 class TestInkling2PackedConversion(unittest.TestCase):
     """Conversion of the packed Inkling2 expert weights (see _dequant_expert_chunk in conversion/inkling2.py).
@@ -673,6 +695,85 @@ class TestInkling2TextNames(unittest.TestCase):
         self.assertEqual(renamed.keys(), actual.keys())
         for name in actual:
             np.testing.assert_array_equal(renamed[name], actual[name], name)
+
+
+class TestQwen4ExpPleScale(unittest.TestCase):
+    """FP8 checkpoints store the n-gram table as shards with one shared scale under the parent module name."""
+
+    PREFIX = "model.language_model.layers.1.ple.ple_embedding.ngram_embedding."
+    SHARDS = (torch.tensor([[1., -2.], [3., 4.]]), torch.tensor([[5., 6.], [-7., 8.]]))
+    TABLE = "per_layer_token_embd.weight"
+    SCALE = "per_layer_token_embd.scale"
+
+    def convert(self, ftype=gguf.LlamaFileType.GUESSED, scaled=True, quant_method="modelopt", **kwargs):
+        # shard 1 first: the row order must follow the shard index
+        tensors = {self.PREFIX + f"shard_{i}.weight": self.SHARDS[i].to(torch.float8_e4m3fn) for i in (1, 0)}
+        if scaled:
+            tensors[self.PREFIX + "weight_scale"] = torch.tensor([0.25], dtype=torch.bfloat16)
+        hparams = {
+            "model_type": "qwen4exp",
+            "architectures": ["Qwen4ExpForCausalLM"],
+            "num_hidden_layers": 2,
+            "mtp_num_hidden_layers": 1,
+            "split_ngram_parts": 2,
+            "quantization_config": {"quant_method": quant_method},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            (path / "config.json").write_text(json.dumps(hparams))
+            save_file(tensors, str(path / "model.safetensors"))
+            model = Qwen4ExpTextModel(path, ftype, path / "out.gguf", hparams=hparams, **kwargs)
+            model.prepare_tensors()
+            result = {}
+            for name, info in model.gguf_writer.tensors[0].items():
+                if isinstance(info.tensor, gguf.LazyChunkedTensor):
+                    # written like the GGUF writer does, a chunked tensor has no other read path
+                    with (path / "tensor.bin").open("wb") as f:
+                        info.tensor.tofile(f)
+                    data = np.frombuffer((path / "tensor.bin").read_bytes(), dtype=info.tensor.dtype).reshape(info.tensor.shape)
+                else:
+                    data = np.asarray(gguf.LazyNumpyTensor.to_eager(info.tensor))
+                result[name] = (info.dtype, data)
+            return result
+
+    def test_fp8_table_keeps_bytes_and_scale(self):
+        raw = torch.cat(self.SHARDS).to(torch.float8_e4m3fn).view(torch.uint8).numpy()
+        for kwargs, names in (
+            ({}, {self.TABLE, self.SCALE}),
+            ({"quant_method": "fp8"}, {self.TABLE, self.SCALE}),
+            ({"ple_only": True}, {self.TABLE}),
+            ({"no_ple": True}, {self.SCALE}),
+        ):
+            with self.subTest(**kwargs):
+                result = self.convert(**kwargs)
+                self.assertEqual(set(result), names)
+                if self.TABLE in result:
+                    dtype, data = result[self.TABLE]
+                    self.assertEqual(dtype, gguf.GGMLQuantizationType.F8_E4M3)
+                    np.testing.assert_array_equal(data, raw)
+                if self.SCALE in result:
+                    dtype, data = result[self.SCALE]
+                    self.assertEqual(dtype, gguf.GGMLQuantizationType.F32)
+                    np.testing.assert_array_equal(data, [0.25])
+
+        result = self.convert(scaled=False)
+        self.assertEqual(set(result), {self.TABLE})
+        np.testing.assert_array_equal(result[self.TABLE][1], raw)
+
+    def test_scale_is_folded_into_other_types(self):
+        values = torch.cat(self.SHARDS).numpy()
+        for kwargs, qtype in (
+            ({"ftype": gguf.LlamaFileType.ALL_F32}, gguf.GGMLQuantizationType.F32),
+            ({"ftype": gguf.LlamaFileType.MOSTLY_F16}, gguf.GGMLQuantizationType.F16),
+            ({"fp8_as_q8": True}, gguf.GGMLQuantizationType.F16),
+        ):
+            for scaled in (False, True):
+                with self.subTest(scaled=scaled, **kwargs):
+                    result = self.convert(scaled=scaled, **kwargs)
+                    self.assertEqual(set(result), {self.TABLE})
+                    dtype, data = result[self.TABLE]
+                    self.assertEqual(dtype, qtype)
+                    np.testing.assert_array_equal(data, values * (0.25 if scaled else 1.))
 
 
 if __name__ == "__main__":

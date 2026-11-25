@@ -171,7 +171,7 @@ if (LLAMA_LLGUIDANCE)
         CONFIGURE_COMMAND ""
         BUILD_COMMAND cargo build --release --package llguidance
         INSTALL_COMMAND ""
-        BUILD_BYPRODUCTS ${LLGUIDANCE_PATH}/${LLGUIDANCE_LIB_NAME} ${LLGUIDANCE_PATH}/llguidance.h
+        BUILD_BYPRODUCTS ${LLGUIDANCE_PATH}/${LLGUIDANCE_LIB_NAME} ${LLGUIDANCE_SRC}/parser/llguidance.h
         UPDATE_COMMAND ""
     )
     target_compile_definitions(${TARGET} PUBLIC LLAMA_USE_LLGUIDANCE)
@@ -180,7 +180,7 @@ if (LLAMA_LLGUIDANCE)
     set_target_properties(llguidance PROPERTIES IMPORTED_LOCATION ${LLGUIDANCE_PATH}/${LLGUIDANCE_LIB_NAME})
     add_dependencies(llguidance llguidance_ext)
 
-    target_include_directories(${TARGET} PRIVATE ${LLGUIDANCE_PATH})
+    target_include_directories(${TARGET} PRIVATE ${LLGUIDANCE_SRC}/parser)
     target_link_libraries(${TARGET} PRIVATE llguidance)
     if (WIN32)
         target_link_libraries(${TARGET} PRIVATE ws2_32 userenv ntdll bcrypt)
