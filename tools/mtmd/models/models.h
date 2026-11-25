@@ -356,6 +356,8 @@ struct mtmd_graph_hy_v4 : mtmd_graph {
     ggml_cgraph * build() override;
 };
 
+std::string hy_v4_lookup_token_text_prefix(const llama_vocab * vocab, const std::string & prefix);
+
 struct mtmd_graph_mobilenetv5 : mtmd_graph {
     mtmd_graph_mobilenetv5(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;

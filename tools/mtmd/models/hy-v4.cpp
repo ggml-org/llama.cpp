@@ -1,5 +1,34 @@
 #include "models.h"
 
+static std::string hy_v4_token_to_piece(const llama_vocab * vocab, llama_token token, bool special) {
+    std::string piece;
+    piece.resize(piece.capacity());
+    const int n_chars = llama_token_to_piece(vocab, token, &piece[0], piece.size(), 0, special);
+    if (n_chars < 0) {
+        piece.resize(-n_chars);
+        int check = llama_token_to_piece(vocab, token, &piece[0], piece.size(), 0, special);
+        GGML_ASSERT(check == -n_chars);
+    } else {
+        piece.resize(n_chars);
+    }
+    return piece;
+}
+
+std::string hy_v4_lookup_token_text_prefix(const llama_vocab * vocab, const std::string & prefix) {
+    if (vocab == nullptr) {
+        return "";
+    }
+    const int n_vocab = llama_vocab_n_tokens(vocab);
+    for (int i = 0; i < n_vocab; i++) {
+        std::string piece = hy_v4_token_to_piece(vocab, i, true);
+        if (piece.rfind(prefix, 0) == 0) {
+            return piece;
+        }
+    }
+    LOG_WRN("%s: no token starts with '%s', images will have no marker around them\n", __func__, prefix.c_str());
+    return "";
+}
+
 ggml_cgraph * mtmd_graph_hy_v4::build() {
     const int merge = hparams.n_merge;
     const int pw    = n_patches_x;
