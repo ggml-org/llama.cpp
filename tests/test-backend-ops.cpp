@@ -13802,7 +13802,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     // small-batch decode with q8_0 and q4_0 KV: power-of-two and non-power-of-two GQA
-    // (on a native tile launch, HIP gfx1201 today, the latter is padded to the next ncols2)
+    // (on a native tile launch, HIP RDNA4 today, the latter is padded to the next ncols2)
     for (int hs : { 128, 256, }) {
         for (int nr2 : { 4, 6, 8, }) {
             for (int nb : { 1, 2, }) {

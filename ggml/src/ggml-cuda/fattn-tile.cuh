@@ -341,7 +341,8 @@ static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_tile_get_config(co
 #endif // GGML_USE_HIP
 }
 
-// Native q4_0/q8_0 K/V on gfx1201, keyed by block shape (ncols1 Q columns x ncols2 Q heads).
+// Native q4_0/q8_0 K/V on RDNA4, keyed by block shape (ncols1 Q columns x ncols2 Q heads).
+// The rows were tuned on gfx1201.
 // One table for every native type. A shape with no row converts K and V to f16.
 // ncols == 2 has no row: the vec kernel is faster for it.
 #define GGML_CUDA_FATTN_TILE_CONFIG_CASE_BLOCK(DKQ_, DV_, ncols1_, ncols2_, nthreads, occupancy, nbatch_fa, nbatch_K) \
@@ -353,7 +354,7 @@ static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_tile_get_config(co
         return ((nthreads) << 0) | ((occupancy) << 10) | ((nbatch_fa) << 14) | ((nbatch_K) << 23);                   \
     }                                                                                                                \
 
-static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_tile_get_config_quant_gfx1201(
+static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_tile_get_config_quant_rdna4(
         const int DKQ, const int DV, const int ncols1, const int ncols2) {
     GGML_CUDA_FATTN_TILE_CONFIG_CASE_BLOCK( 64,  64,  1,  4, 128, 6, 128,  64)
 
@@ -387,8 +388,8 @@ static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_tile_get_config_qu
 
 static __host__ uint32_t ggml_cuda_fattn_tile_get_config_quant(
         const int DKQ, const int DV, const int ncols1, const int ncols2, const int cc) {
-    if (cc == GGML_CUDA_CC_OFFSET_AMD + 0x1201) { // gfx1201
-        return ggml_cuda_fattn_tile_get_config_quant_gfx1201(DKQ, DV, ncols1, ncols2);
+    if (GGML_CUDA_CC_IS_RDNA4(cc)) {
+        return ggml_cuda_fattn_tile_get_config_quant_rdna4(DKQ, DV, ncols1, ncols2);
     }
     if (GGML_CUDA_CC_IS_NVIDIA(cc) && fp16_available(cc)) {
         return ggml_cuda_fattn_tile_get_config_quant_nvidia(
@@ -401,12 +402,12 @@ static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_tile_get_config_qu
         const int DKQ, const int DV, const int ncols1, const int ncols2) {
 #if defined(GGML_USE_HIP)
     // vendors/hip.h defines __CUDA_ARCH__ on every HIP pass, so the NVIDIA branch must not be reached here.
-#if defined(__gfx1201__)
-    return ggml_cuda_fattn_tile_get_config_quant_gfx1201(DKQ, DV, ncols1, ncols2);
+#if defined(RDNA4)
+    return ggml_cuda_fattn_tile_get_config_quant_rdna4(DKQ, DV, ncols1, ncols2);
 #else
     GGML_UNUSED_VARS(DKQ, DV, ncols1, ncols2);
     return 0;
-#endif // defined(__gfx1201__)
+#endif // defined(RDNA4)
 #elif !defined(GGML_USE_MUSA)
     // nvcc's host pass leaves __CUDA_ARCH__ unset. Call nvidia() with the highest
     // compiled arch so the host pass sees the same rows as that arch.
@@ -426,7 +427,7 @@ static constexpr __host__ __device__ uint32_t ggml_cuda_fattn_tile_get_config_qu
 }
 
 static inline bool ggml_cuda_fattn_tile_has_quant_config(const int cc) {
-    return cc == GGML_CUDA_CC_OFFSET_AMD + 0x1201;
+    return GGML_CUDA_CC_IS_RDNA4(cc);
 }
 
 static constexpr __host__ __device__ int ggml_cuda_fattn_tile_get_nthreads(const uint32_t config) {
