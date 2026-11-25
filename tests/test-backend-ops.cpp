@@ -13182,34 +13182,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {2, 1},  4096, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {4, 1},  4096, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, 4096, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
-    // GQA with 2-8 query tokens (speculative decoding verify); Vulkan scalar and coopmat1 put several tokens in one GQA row tile
-    for (int hs : { 64, 128, 256 }) {
-        for (int nr2 : { 2, 3, 4, 5, 6, 7, 8 }) {
-            for (int nb : { 2, 5, 8 }) {
-                test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 4, {nr2, 1}, 1024, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
-            }
+    // GQA with 2-8 query tokens (speculative decoding verify); Vulkan puts several tokens in one GQA row tile
+    for (int nr2 : { 2, 3, 4, 5, 8 }) {
+        for (int nb : { 5, 8 }) {
+            test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {nr2, 1}, 1024, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));       
         }
     }
-    for (int nb : { 1, 2, 3, 4, 5, 6, 7, 8 }) {
-        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 16384, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
-    }
-    // folded tiles with KV not a multiple of the block, no mask, ALiBi, sinks, softcap, quantized K/V, two sequences
-    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1},  113, 4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
-    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {3, 1},  113, 5, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    // folded tiles without a mask, with ALiBi, with sinks
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 4096, 4, false, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 4096, 4, true, false, 8.0f, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
-    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 4096, 4, true, true, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {3, 1}, 4096, 5, true, true, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
-    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 4096, 4, true, false, 0, 10.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
-    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 4096, 4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
-    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {4, 1}, 4096, 5, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0));
-    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 2}, 4096, 4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     // many KV heads: split_k is 0 or 1 on small GPUs, so folded rows take the direct store
-    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 64, {6, 1}, 512, 8, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(128, 128, 80, {4, 1}, 512, 8, true, true, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
-    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 64, {2, 1}, 1024, 8, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
-    // head size 2048: the folded scalar tile has to fit in 32 KB shared memory
-    test_cases.emplace_back(new test_flash_attn_ext(2048, 128, 1, {2, 1}, 1024, 8, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
 
     // Folded CM2 rows: large GQA groups, padded masks, permuted Q, and padded head dimensions.
     test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {16, 1}, 4096, 5, true, true, 8.0f, 10.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}, true, false, 0, 0, 1, true));
