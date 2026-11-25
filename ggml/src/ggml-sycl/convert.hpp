@@ -36,13 +36,46 @@ using to_t_nc_sycl_t = void (*)(const void * x, T * y, int64_t ne00, int64_t ne0
 typedef to_t_nc_sycl_t<sycl::half> to_fp16_nc_sycl_t;
 to_fp16_nc_sycl_t ggml_get_to_fp16_nc_sycl(ggml_type type);
 
+// ggml_fp32_to_f8_e4m3 for device code: the same steps, with the frexpf of a normal value read from its bits.
+// AOT device images have no frexpf, and the kernels that call it share an image with every ADD and REPEAT kernel
+// (binbcast.cpp), so none of those could load.
+static inline uint8_t ggml_sycl_fp32_to_f8_e4m3(float x) {
+    const uint8_t sign = sycl::signbit(x) ? 0x80 : 0;
+    x                  = sycl::fabs(x);
+    if (sycl::isnan(x)) {
+        return 0x7F;
+    }
+    if (x == 0.0f) {
+        return sign;
+    }
+    if (sycl::isinf(x) || x >= 448.0f) {
+        return sign | 0x7E;
+    }
+    if (x < 0.015625f) {
+        return sign | (uint8_t) ggml_round_to_nearest_even(x * 512.0f);
+    }
+    // x >= 2^-6 is normal: frexpf gives exponent (biased - 126) and twice its mantissa is x with exponent 0
+    const uint32_t bits        = sycl::bit_cast<uint32_t>(x);
+    const float    mantissa    = sycl::bit_cast<float>((bits & 0x7FFFFFu) | 0x3F800000u);
+    int            encoded_exp = (int) ((bits >> 23) & 0xFF) - 126 + 6;
+    int            encoded_man = ggml_round_to_nearest_even((mantissa - 1.0f) * 8.0f);
+    if (encoded_man == 8) {
+        encoded_man = 0;
+        encoded_exp++;
+    }
+    if (encoded_exp > 15 || (encoded_exp == 15 && encoded_man > 6)) {
+        return sign | 0x7E;
+    }
+    return sign | (uint8_t) (encoded_exp << 3) | (uint8_t) encoded_man;
+}
+
 template<typename dst_t, typename src_t>
  inline dst_t ggml_sycl_cast(src_t x) {
     if constexpr (std::is_same_v<dst_t, src_t>) {
         return x;
     } else if constexpr (std::is_same_v<dst_t, ggml_fp8_e4m3_t>) {
         // ggml_fp8_e4m3_t is a struct, so this branch comes before the float(x) paths
-        return { ggml_fp32_to_f8_e4m3(float(x)) };
+        return { ggml_sycl_fp32_to_f8_e4m3(float(x)) };
     } else if constexpr (std::is_same_v<src_t, ggml_fp8_e4m3_t>) {
         return dst_t(ggml_f8_e4m3_to_fp32(x.bits));
 #ifdef GGML_SYCL_HAS_BF16
