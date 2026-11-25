@@ -3993,6 +3993,53 @@ static bool ggml_cuda_topk_moe_fusion(const struct ggml_cgraph * cgraph, int nod
     return true;
 }
 
+// node offsets from the first node of a top-k MoE chain, -1 if not in the chain
+struct ggml_cuda_topk_moe_nodes {
+    int ids     = -1; // VIEW of the selected experts
+    int weights = -1; // last node
+    int bias    = -1; // ADD of the selection bias
+    int denom   = -1; // CLAMP or SCALE of the weight sum
+    int scale   = -1; // SCALE of the routed weights
+};
+
+// appends the ops of the chain matched by ggml_cuda_topk_moe_fusion, without delayed softmax
+static ggml_cuda_topk_moe_nodes ggml_cuda_topk_moe_ops(const ggml_cuda_topk_moe_args & args, std::vector<ggml_op> & ops) {
+    ggml_cuda_topk_moe_nodes pos;
+
+    if (args.sigmoid) {
+        ops.insert(ops.end(), { GGML_OP_UNARY });
+    } else if (args.sqrt_softplus) {
+        ops.insert(ops.end(), { GGML_OP_UNARY, GGML_OP_SQRT });
+    } else {
+        ops.insert(ops.end(), { GGML_OP_SOFT_MAX });
+    }
+    ops.push_back(GGML_OP_RESHAPE);
+    if (args.prob_bias) {
+        ops.push_back(GGML_OP_ADD);
+        pos.bias = (int) ops.size() - 1;
+    }
+    if (args.n_groups > 0) {
+        for (const auto & p : topk_moe_group_pattern) {
+            ops.push_back(p.op);
+        }
+    }
+    ops.insert(ops.end(), { GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS });
+    pos.ids = (int) ops.size() - 2;
+
+    if (args.norm) {
+        ops.insert(ops.end(), { GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, args.norm_bias ? GGML_OP_SCALE : GGML_OP_CLAMP,
+                                GGML_OP_DIV, GGML_OP_RESHAPE });
+        pos.denom = (int) ops.size() - 3;
+    }
+    if (args.scale) {
+        ops.push_back(GGML_OP_SCALE);
+        pos.scale = (int) ops.size() - 1;
+    }
+
+    pos.weights = (int) ops.size() - 1;
+    return pos;
+}
+
 // returns whether the write (out) nodes overwrite the read nodes in operation
 static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
                                                  const int           node_idx,
@@ -4604,41 +4651,14 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
             const ggml_tensor * scale   = nullptr;
 
             if (!args.delayed_softmax) {
-                int out_nodes[2];  // nodes which can't be elided
+                const ggml_cuda_topk_moe_nodes pos = ggml_cuda_topk_moe_ops(args, ops);
 
-                if (args.sigmoid) {
-                    ops.insert(ops.end(), { GGML_OP_UNARY });
-                } else if (args.sqrt_softplus) {
-                    ops.insert(ops.end(), { GGML_OP_UNARY, GGML_OP_SQRT });
-                } else {
-                    ops.insert(ops.end(), { GGML_OP_SOFT_MAX });
-                }
-                ops.push_back(GGML_OP_RESHAPE);
-                if (args.prob_bias) {
-                    ops.push_back(GGML_OP_ADD);
-                    bias = cgraph->nodes[i + ops.size() - 1]->src[1];
-                }
-                if (args.n_groups > 0) {
-                    for (const auto & p : topk_moe_group_pattern) {
-                        ops.push_back(p.op);
-                    }
-                }
-                ops.insert(ops.end(), { GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS });
-                out_nodes[0] = i + ops.size() - 2;
-                ids = cgraph->nodes[out_nodes[0]];
-
-                if (args.norm) {
-                    ops.insert(ops.end(), { GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, args.norm_bias ? GGML_OP_SCALE : GGML_OP_CLAMP,
-                                            GGML_OP_DIV, GGML_OP_RESHAPE });
-                    denom = cgraph->nodes[i + ops.size() - 3];
-                }
-                if (args.scale) {
-                    ops.insert(ops.end(), { GGML_OP_SCALE });
-                    scale = cgraph->nodes[i + ops.size() - 1];
-                }
-
-                weights      = cgraph->nodes[i + ops.size() - 1];
-                out_nodes[1] = i + ops.size() - 1;
+                int out_nodes[2] = { i + pos.ids, i + pos.weights };  // nodes which can't be elided
+                ids     = cgraph->nodes[out_nodes[0]];
+                weights = cgraph->nodes[out_nodes[1]];
+                bias    = pos.bias  >= 0 ? cgraph->nodes[i + pos.bias]->src[1] : nullptr;
+                denom   = pos.denom >= 0 ? cgraph->nodes[i + pos.denom] : nullptr;
+                scale   = pos.scale >= 0 ? cgraph->nodes[i + pos.scale] : nullptr;
 
                 if (ggml_can_fuse_subgraph(cgraph, i, ops.size(), ops.data(), out_nodes, 2) &&
                         ggml_cuda_should_use_topk_moe(node, logits, weights, ids) &&
@@ -5808,38 +5828,11 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
                     ggml_tensor *       ids     = nullptr;
 
                     if (!args.delayed_softmax) {
-                        int out_nodes[2];  // nodes which can't be elided
+                        const ggml_cuda_topk_moe_nodes pos = ggml_cuda_topk_moe_ops(args, ops);
 
-                        if (args.sigmoid) {
-                            ops.insert(ops.end(), { GGML_OP_UNARY });
-                        } else if (args.sqrt_softplus) {
-                            ops.insert(ops.end(), { GGML_OP_UNARY, GGML_OP_SQRT });
-                        } else {
-                            ops.insert(ops.end(), { GGML_OP_SOFT_MAX });
-                        }
-                        const int i_probs = i + (int) ops.size() - 1;  // last node of the gating activation
-
-                        if (args.prob_bias) {
-                            ops.insert(ops.end(), { GGML_OP_RESHAPE, GGML_OP_ADD, GGML_OP_ARGSORT, GGML_OP_VIEW,
-                                                    GGML_OP_GET_ROWS });
-                            out_nodes[0] = i_probs + 4;
-                        } else {
-                            ops.insert(ops.end(), { GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS });
-                            out_nodes[0] = i_probs + 3;
-                        }
-                        ids = cgraph->nodes[out_nodes[0]];
-
-                        if (args.norm) {
-                            ops.insert(ops.end(), { GGML_OP_RESHAPE, GGML_OP_SUM_ROWS,
-                                                    args.norm_bias ? GGML_OP_SCALE : GGML_OP_CLAMP, GGML_OP_DIV,
-                                                    GGML_OP_RESHAPE });
-                        }
-                        if (args.scale) {
-                            ops.insert(ops.end(), { GGML_OP_SCALE });
-                        }
-
-                        weights      = cgraph->nodes[i + ops.size() - 1];
-                        out_nodes[1] = i + ops.size() - 1;
+                        int out_nodes[2] = { i + pos.ids, i + pos.weights };  // nodes which can't be elided
+                        ids     = cgraph->nodes[out_nodes[0]];
+                        weights = cgraph->nodes[out_nodes[1]];
 
                         if (ggml_can_fuse_subgraph(cgraph, i, ops.size(), ops.data(), out_nodes, 2) &&
                                 ggml_cuda_should_use_topk_moe(node, logits, weights, ids)) {
