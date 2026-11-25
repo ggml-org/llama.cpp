@@ -1187,7 +1187,6 @@ void kernel_mul_mv_t_t_short_impl(
         device       char * dst,
         uint3  tgpig,
         ushort tiisg) {
-    // the 32 lanes cover nr0 src0 rows of 32/nr0 src1 rows, so that few src0 rows do not leave lanes idle
     const int n0 = args.nr0;
     const int n1 = 32/n0;
 
