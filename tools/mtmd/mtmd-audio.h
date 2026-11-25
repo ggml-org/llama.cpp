@@ -10,6 +10,10 @@
 
 #define MTMD_INTERNAL_HEADER
 
+// zero-pad each row of embd from n_embd_row to n_embd_out values. No-op when equal.
+// e.g. the audio rows of Qwen3-Omni are padded to the deepstack vision width.
+void mtmd_audio_embd_pad_rows(std::vector<float> & embd, size_t n_tokens, size_t n_embd_row, size_t n_embd_out);
+
 struct mtmd_audio_mel {
     int64_t n_len;
     int64_t n_len_org;
