@@ -405,6 +405,191 @@ static void load_cl_kernels_coopmat(ggml_backend_opencl_context * backend_ctx) {
             GGML_LOG_CONT(".");
         }
     }
+
+    // gemm_moe_mxfp4_f32_ns_coopmat
+    // built only on A850 (see the check above), a failed build is not fatal.
+    backend_ctx->mul_mat_id.kernel_gemm_moe_mxfp4_f32_ns_coopmat = nullptr;
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_moe_mxfp4_f32_ns_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_moe_mxfp4_f32_ns_coopmat.cl");
+#endif
+        // the router buffers are sub-buffers; read through texture promotion they give wrong values
+        std::string coopmat_opts =
+            " -cl-std=CL3.0 "
+            " -qcom-ray-tracing-kernel "
+            " -qcom-disable-promote-pointer-to-texture ";
+
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), coopmat_opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->mul_mat_id.kernel_gemm_moe_mxfp4_f32_ns_coopmat = clCreateKernel(prog, "kernel_gemm_moe_mxfp4_f32_ns_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+    // gemm_moe_q4_0_f32_ns_coopmat, same options as the mxfp4 one
+    backend_ctx->mul_mat_id.kernel_gemm_moe_q4_0_f32_ns_coopmat = nullptr;
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_moe_q4_0_f32_ns_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_moe_q4_0_f32_ns_coopmat.cl");
+#endif
+        std::string q4_0_coopmat_opts =
+            " -cl-std=CL3.0 "
+            " -qcom-ray-tracing-kernel "
+            " -qcom-disable-promote-pointer-to-texture ";
+
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), q4_0_coopmat_opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->mul_mat_id.kernel_gemm_moe_q4_0_f32_ns_coopmat = clCreateKernel(prog, "kernel_gemm_moe_q4_0_f32_ns_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+
+    // gemm_moe_q4_1_f32_ns_coopmat, same options as the mxfp4 one
+    backend_ctx->mul_mat_id.kernel_gemm_moe_q4_1_f32_ns_coopmat = nullptr;
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_moe_q4_1_f32_ns_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_moe_q4_1_f32_ns_coopmat.cl");
+#endif
+        std::string q4_1_coopmat_opts =
+            " -cl-std=CL3.0 "
+            " -qcom-ray-tracing-kernel "
+            " -qcom-disable-promote-pointer-to-texture ";
+
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), q4_1_coopmat_opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->mul_mat_id.kernel_gemm_moe_q4_1_f32_ns_coopmat = clCreateKernel(prog, "kernel_gemm_moe_q4_1_f32_ns_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+
+    // gemm_moe_q5_0_f32_ns_coopmat, same options as the mxfp4 one
+    backend_ctx->mul_mat_id.kernel_gemm_moe_q5_0_f32_ns_coopmat = nullptr;
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_moe_q5_0_f32_ns_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_moe_q5_0_f32_ns_coopmat.cl");
+#endif
+        std::string q5_0_coopmat_opts =
+            " -cl-std=CL3.0 "
+            " -qcom-ray-tracing-kernel "
+            " -qcom-disable-promote-pointer-to-texture ";
+
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), q5_0_coopmat_opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->mul_mat_id.kernel_gemm_moe_q5_0_f32_ns_coopmat = clCreateKernel(prog, "kernel_gemm_moe_q5_0_f32_ns_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+
+    // gemm_moe_q5_1_f32_ns_coopmat, same options as the mxfp4 one
+    backend_ctx->mul_mat_id.kernel_gemm_moe_q5_1_f32_ns_coopmat = nullptr;
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_moe_q5_1_f32_ns_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_moe_q5_1_f32_ns_coopmat.cl");
+#endif
+        std::string q5_1_coopmat_opts =
+            " -cl-std=CL3.0 "
+            " -qcom-ray-tracing-kernel "
+            " -qcom-disable-promote-pointer-to-texture ";
+
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), q5_1_coopmat_opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->mul_mat_id.kernel_gemm_moe_q5_1_f32_ns_coopmat = clCreateKernel(prog, "kernel_gemm_moe_q5_1_f32_ns_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+
+    // gemm_moe_q4_k_f32_ns_coopmat, same options as the mxfp4 one
+    backend_ctx->mul_mat_id.kernel_gemm_moe_q4_k_f32_ns_coopmat = nullptr;
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_moe_q4_k_f32_ns_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_moe_q4_k_f32_ns_coopmat.cl");
+#endif
+        std::string q4_k_coopmat_opts =
+            " -cl-std=CL3.0 "
+            " -qcom-ray-tracing-kernel "
+            " -qcom-disable-promote-pointer-to-texture ";
+
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), q4_k_coopmat_opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->mul_mat_id.kernel_gemm_moe_q4_k_f32_ns_coopmat = clCreateKernel(prog, "kernel_gemm_moe_q4_k_f32_ns_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+
+    // gemm_moe_q5_k_f32_ns_coopmat, same options as the mxfp4 one
+    backend_ctx->mul_mat_id.kernel_gemm_moe_q5_k_f32_ns_coopmat = nullptr;
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_moe_q5_k_f32_ns_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_moe_q5_k_f32_ns_coopmat.cl");
+#endif
+        std::string q5_k_coopmat_opts =
+            " -cl-std=CL3.0 "
+            " -qcom-ray-tracing-kernel "
+            " -qcom-disable-promote-pointer-to-texture ";
+
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), q5_k_coopmat_opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->mul_mat_id.kernel_gemm_moe_q5_k_f32_ns_coopmat = clCreateKernel(prog, "kernel_gemm_moe_q5_k_f32_ns_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
+
+    // gemm_moe_q6_k_f32_ns_coopmat, same options as the mxfp4 one
+    backend_ctx->mul_mat_id.kernel_gemm_moe_q6_k_f32_ns_coopmat = nullptr;
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "gemm_moe_q6_k_f32_ns_coopmat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("gemm_moe_q6_k_f32_ns_coopmat.cl");
+#endif
+        std::string q6_k_coopmat_opts =
+            " -cl-std=CL3.0 "
+            " -qcom-ray-tracing-kernel "
+            " -qcom-disable-promote-pointer-to-texture ";
+
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), q6_k_coopmat_opts, false);
+        if (prog) {
+            CL_CHECK((backend_ctx->mul_mat_id.kernel_gemm_moe_q6_k_f32_ns_coopmat = clCreateKernel(prog, "kernel_gemm_moe_q6_k_f32_ns_coopmat", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
+            GGML_LOG_CONT(".");
+        }
+    }
 }
 #endif
 
@@ -2783,6 +2968,7 @@ void ggml_cl_load_kernels_mul_mat_adreno(ggml_backend_opencl_context * backend_c
             build_program_from_source(backend_ctx, kernel_src.c_str(), CL_moe_compile_opts);
 
         CL_CHECK((backend_ctx->mul_mat_id.kernel_moe_reorder_b = clCreateKernel(prog, "kernel_moe_reorder_b", &err), err));
+        CL_CHECK((backend_ctx->mul_mat_id.kernel_moe_reorder_b_f16 = clCreateKernel(prog, "kernel_moe_reorder_b_f16", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }

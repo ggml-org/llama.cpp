@@ -856,6 +856,15 @@ struct ggml_opencl_mul_mat_id_kernels {
     cl_kernel kernel_gemm_moe_q4_0_q8_1_dp4a_bin;
     cl_kernel kernel_transpose_activation_q8;
     cl_kernel kernel_moe_reorder_b;
+    cl_kernel kernel_moe_reorder_b_f16 = nullptr;
+    cl_kernel kernel_gemm_moe_mxfp4_f32_ns_coopmat = nullptr;
+    cl_kernel kernel_gemm_moe_q4_0_f32_ns_coopmat = nullptr;
+    cl_kernel kernel_gemm_moe_q4_1_f32_ns_coopmat = nullptr;
+    cl_kernel kernel_gemm_moe_q5_0_f32_ns_coopmat = nullptr;
+    cl_kernel kernel_gemm_moe_q5_1_f32_ns_coopmat = nullptr;
+    cl_kernel kernel_gemm_moe_q4_k_f32_ns_coopmat = nullptr;
+    cl_kernel kernel_gemm_moe_q5_k_f32_ns_coopmat = nullptr;
+    cl_kernel kernel_gemm_moe_q6_k_f32_ns_coopmat = nullptr;
     cl_kernel kernel_moe_histogram;
     cl_kernel kernel_moe_zero_dst;
     cl_kernel kernel_moe_scan;
