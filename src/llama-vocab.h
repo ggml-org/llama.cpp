@@ -169,6 +169,7 @@ struct llama_vocab {
     bool get_remove_extra_whitespaces  () const;
     bool get_escape_whitespaces        () const;
     bool get_treat_whitespace_as_suffix() const;
+    enum llama_metaspace_prepend_scheme get_metaspace_prepend_scheme() const;
     const normalizer_options & get_normalizer_opts() const;
 
     const std::vector<llama_token> & get_suppress_tokens() const;
