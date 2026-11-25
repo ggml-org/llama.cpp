@@ -24,7 +24,6 @@
 		INITIAL_FILE_SIZE,
 		PROMPT_CONTENT_SEPARATOR,
 		SETTING_CONFIG_DEFAULT,
-		SETTINGS_KEYS,
 		SYSTEM_MESSAGE_PLACEHOLDER,
 		VOICE_EDITOR_SELECTOR
 	} from '#lib/constants/index.ts';
@@ -157,12 +156,11 @@
 		conversationsStore.activeConversation?.cwd ?? conversationsStore.preferences.pendingCwd
 	);
 
-	let showSystemMessage = $derived(settingsStore.config[SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE] ?? true);
 	let systemMessage = $derived(
 		conversationsStore.activeMessages.find((m) => m.role === MessageRole.SYSTEM)
 	);
 	// A new chat shows the system message written for it as an attachment, until the first
-	// message sends it. A conversation that hides its own offers it in a chip under the form.
+	// message sends it. A conversation with one offers it in a chip under the form.
 	// A placeholder is one nobody has written yet
 	let systemMessageAttachment = $derived.by(() => {
 		if (conversationsStore.activeConversation) return null;
@@ -172,7 +170,7 @@
 		return content && content.trim() && content !== SYSTEM_MESSAGE_PLACEHOLDER ? content : null;
 	});
 	let systemMessageChip = $derived(
-		conversationsStore.activeConversation && !showSystemMessage ? systemMessage?.content : undefined
+		conversationsStore.activeConversation ? systemMessage?.content : undefined
 	);
 
 	let showWorkingDirectory = $derived(conversationsStore.preferences.hasEnabledCwdTools());

@@ -724,6 +724,6 @@ export { default as ChatFormSystemMessageAttachment } from './ChatForm/ChatFormS
 
 /**
  * Chip under the chat form that opens the conversation's system message for editing.
- * Shown when system messages are hidden in the conversation.
+ * Shown whenever the conversation has one.
  */
 export { default as ChatFormSystemMessageChip } from './ChatForm/ChatFormSystemMessageChip.svelte';
