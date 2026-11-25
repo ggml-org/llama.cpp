@@ -375,6 +375,13 @@ llama_context::llama_context(
 
     cparams.op_offload     = params.op_offload;
     cparams.kv_unified     = params.kv_unified;
+
+    // the Hy4 flash pools gather their members from a single KV stream
+    if (model.arch == LLM_ARCH_HY_V4_FLASH && !cparams.kv_unified && cparams.n_seq_max > 1) {
+        LLAMA_LOG_WARN("%s: %s needs a unified KV cache, the sequences share n_ctx\n", __func__, llm_arch_name(model.arch));
+        cparams.kv_unified = true;
+    }
+
     cparams.moe_cache_size      = params.moe_cache_size;
     cparams.moe_cache_cpu_share = params.moe_cache_cpu_share;
 
