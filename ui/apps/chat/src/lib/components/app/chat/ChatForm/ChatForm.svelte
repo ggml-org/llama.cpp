@@ -14,6 +14,7 @@
 		ChatFormMcpResourcesList,
 		ChatFormPickers,
 		ChatFormSystemMessageAttachment,
+		ChatFormSystemMessageChip,
 		DialogMcpResourcesBrowser
 	} from '#lib/components/app/index.ts';
 	import {
@@ -160,17 +161,19 @@
 	let systemMessage = $derived(
 		conversationsStore.activeMessages.find((m) => m.role === MessageRole.SYSTEM)
 	);
-	// A new chat shows the system message written for it; a conversation shows its own while
-	// the conversation hides it. A placeholder is one nobody has written yet
+	// A new chat shows the system message written for it as an attachment, until the first
+	// message sends it. A conversation that hides its own offers it in a chip under the form.
+	// A placeholder is one nobody has written yet
 	let systemMessageAttachment = $derived.by(() => {
-		const content = conversationsStore.activeConversation
-			? showSystemMessage
-				? null
-				: systemMessage?.content
-			: chatStore.pendingSystemMessage;
+		if (conversationsStore.activeConversation) return null;
+
+		const content = chatStore.pendingSystemMessage;
 
 		return content && content.trim() && content !== SYSTEM_MESSAGE_PLACEHOLDER ? content : null;
 	});
+	let systemMessageChip = $derived(
+		conversationsStore.activeConversation && !showSystemMessage ? systemMessage?.content : undefined
+	);
 
 	let showWorkingDirectory = $derived(conversationsStore.preferences.hasEnabledCwdTools());
 	// On a desktop the chip under the form shows a directory once one is set, and the + menu
@@ -930,21 +933,27 @@
 		></div>
 	{/if}
 
-	{#if showWorkingDirectory}
-		<!-- opened from the chip, the + menu, a phone chat's header or `/cwd` -->
-		<ChatFormCurrentWorkingDirectory
-			bind:query={pickers.workingDirectoryQuery}
-			class="self-start"
-			customAnchor={activePickerAnchor}
-			directory={cwd}
-			{disabled}
-			isOpen={pickers.isWorkingDirectoryPickerOpen}
-			onChange={handleWorkingDirectoryChange}
-			onClose={pickers.handleWorkingDirectoryClose}
-			onOpen={pickers.handleWorkingDirectoryOpen}
-			showChip={showWorkingDirectoryChip}
-		/>
-	{/if}
+	<div class="flex flex-wrap items-center gap-x-1 self-start">
+		{#if showWorkingDirectory}
+			<!-- opened from the chip, the + menu, a phone chat's header or `/cwd` -->
+			<ChatFormCurrentWorkingDirectory
+				bind:query={pickers.workingDirectoryQuery}
+				class="self-start"
+				customAnchor={activePickerAnchor}
+				directory={cwd}
+				{disabled}
+				isOpen={pickers.isWorkingDirectoryPickerOpen}
+				onChange={handleWorkingDirectoryChange}
+				onClose={pickers.handleWorkingDirectoryClose}
+				onOpen={pickers.handleWorkingDirectoryOpen}
+				showChip={showWorkingDirectoryChip}
+			/>
+		{/if}
+
+		{#if systemMessageChip}
+			<ChatFormSystemMessageChip content={systemMessageChip} {disabled} />
+		{/if}
+	</div>
 </form>
 
 <DialogMcpResourcesBrowser
