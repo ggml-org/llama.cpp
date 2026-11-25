@@ -6186,9 +6186,11 @@ struct ggml_tensor * ggml_custom_4d(
     struct ggml_tensor * result = ggml_new_tensor_4d(ctx, type, ne0, ne1, ne2, ne3);
 
     struct ggml_custom_op_params params = {
-        /*.fun      =*/ fun,
-        /*.n_tasks  =*/ n_tasks,
-        /*.userdata =*/ userdata
+        /*.fun         =*/ fun,
+        /*.n_tasks     =*/ n_tasks,
+        /*.userdata    =*/ userdata,
+        /*.op          =*/ NULL,
+        /*.params_size =*/ 0,
     };
     ggml_set_op_params(result, &params, sizeof(params));
 
@@ -6198,6 +6200,197 @@ struct ggml_tensor * ggml_custom_4d(
     }
 
     return result;
+}
+
+static char * ggml_custom_op_strdup(const char * str) {
+    const size_t size = strlen(str) + 1;
+    char * res = GGML_MALLOC(size);
+    memcpy(res, str, size);
+    return res;
+}
+
+struct ggml_custom_op * ggml_custom_op_init(const char * name) {
+    struct ggml_custom_op * op = GGML_CALLOC(1, sizeof(struct ggml_custom_op));
+    op->name = ggml_custom_op_strdup(name);
+    return op;
+}
+
+void ggml_custom_op_free(struct ggml_custom_op * op) {
+    if (op == NULL) {
+        return;
+    }
+
+    for (int i = 0; i < op->n_kernels; i++) {
+        GGML_FREE(op->kernels[i]->backend);
+        GGML_FREE(op->kernels[i]->code);
+        GGML_FREE(op->kernels[i]->name);
+        GGML_FREE(op->kernels[i]);
+    }
+    GGML_FREE(op->kernels);
+    GGML_FREE(op->name);
+    GGML_FREE(op);
+}
+
+const char * ggml_custom_op_name(const struct ggml_custom_op * op) {
+    return op->name;
+}
+
+struct ggml_custom_kernel * ggml_custom_op_add_kernel(struct ggml_custom_op * op, const char * backend) {
+    for (int i = 0; i < op->n_kernels; i++) {
+        GGML_ASSERT(strcmp(op->kernels[i]->backend, backend) != 0 && "the op has a kernel for this backend");
+    }
+
+    struct ggml_custom_kernel * kernel = GGML_CALLOC(1, sizeof(struct ggml_custom_kernel));
+    kernel->backend = ggml_custom_op_strdup(backend);
+
+    // the kernels do not move
+    struct ggml_custom_kernel ** kernels = GGML_MALLOC((op->n_kernels + 1)*sizeof(kernels[0]));
+    for (int i = 0; i < op->n_kernels; i++) {
+        kernels[i] = op->kernels[i];
+    }
+    kernels[op->n_kernels] = kernel;
+    GGML_FREE(op->kernels);
+    op->kernels = kernels;
+    op->n_kernels++;
+
+    return kernel;
+}
+
+void ggml_custom_kernel_set_fun(struct ggml_custom_kernel * kernel, ggml_custom_op_t fun) {
+    kernel->fun = fun;
+}
+
+void ggml_custom_kernel_set_code(struct ggml_custom_kernel * kernel, const void * code, size_t code_size, const char * name) {
+    GGML_ASSERT(code != NULL && name != NULL);
+
+    if (code_size == 0) {
+        code_size = strlen((const char *) code);
+    }
+
+    GGML_FREE(kernel->code);
+    GGML_FREE(kernel->name);
+
+    kernel->code = GGML_CALLOC(1, code_size + 1);
+    memcpy(kernel->code, code, code_size);
+    kernel->code_size = code_size;
+    kernel->name      = ggml_custom_op_strdup(name);
+
+    // a new code is not what a backend loaded before
+    static uint64_t uid = 0;
+    ggml_critical_section_start();
+    kernel->uid = ++uid;
+    ggml_critical_section_end();
+}
+
+void ggml_custom_kernel_set_sched(struct ggml_custom_kernel * kernel, ggml_custom_sched_t sched) {
+    kernel->sched = sched;
+}
+
+void ggml_custom_sched_set_n_tasks(struct ggml_custom_sched * sched, int n_tasks) {
+    sched->n_tasks = n_tasks;
+}
+
+void ggml_custom_sched_set_n_groups(struct ggml_custom_sched * sched, int n0, int n1, int n2) {
+    sched->n_groups[0] = n0;
+    sched->n_groups[1] = n1;
+    sched->n_groups[2] = n2;
+}
+
+void ggml_custom_sched_set_group_size(struct ggml_custom_sched * sched, int n0, int n1, int n2) {
+    sched->group_size[0] = n0;
+    sched->group_size[1] = n1;
+    sched->group_size[2] = n2;
+}
+
+struct ggml_tensor * ggml_custom_op_4d(
+        struct ggml_context         * ctx,
+        enum ggml_type                type,
+        int64_t                       ne0,
+        int64_t                       ne1,
+        int64_t                       ne2,
+        int64_t                       ne3,
+        struct ggml_tensor         ** args,
+        int                           n_args,
+        const struct ggml_custom_op * op,
+        const void                  * params,
+        size_t                        params_size) {
+
+    GGML_ASSERT(n_args < GGML_MAX_SRC);
+    GGML_ASSERT(op != NULL);
+
+    const struct ggml_custom_kernel * cpu = NULL;
+    for (int i = 0; i < op->n_kernels; i++) {
+        if (strcmp(op->kernels[i]->backend, "CPU") == 0) {
+            cpu = op->kernels[i];
+        }
+    }
+    GGML_ASSERT(cpu != NULL && cpu->fun != NULL && "a custom op needs a CPU kernel");
+
+    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, type, ne0, ne1, ne2, ne3);
+
+    // the params live as long as the node
+    void * params_copy = NULL;
+    if (params_size > 0) {
+        params_copy = ggml_new_buffer(ctx, params_size);
+        memcpy(params_copy, params, params_size);
+    }
+
+    struct ggml_custom_op_params p;
+    memset(&p, 0, sizeof(p));
+    p.fun         = cpu->fun;
+    p.n_tasks     = 1; // the CPU backend asks the kernel, see ggml_custom_op_sched()
+    p.userdata    = params_copy;
+    p.op          = op;
+    p.params_size = (uint32_t) params_size;
+    ggml_set_op_params(result, &p, sizeof(p));
+
+    result->op = GGML_OP_CUSTOM;
+    for (int i = 0; i < n_args; i++) {
+        result->src[i] = args[i];
+    }
+
+    return result;
+}
+
+const struct ggml_custom_kernel * ggml_custom_op_kernel(const struct ggml_tensor * node, const char * backend) {
+    if (node->op != GGML_OP_CUSTOM) {
+        return NULL;
+    }
+
+    struct ggml_custom_op_params p;
+    memcpy(&p, node->op_params, sizeof(p));
+    if (p.op == NULL) {
+        return NULL;
+    }
+
+    for (int i = 0; i < p.op->n_kernels; i++) {
+        if (strcmp(p.op->kernels[i]->backend, backend) == 0) {
+            return p.op->kernels[i];
+        }
+    }
+
+    return NULL;
+}
+
+struct ggml_custom_sched ggml_custom_op_sched(const struct ggml_tensor * node, const struct ggml_custom_kernel * kernel) {
+    struct ggml_custom_op_params p;
+    memcpy(&p, node->op_params, sizeof(p));
+
+    struct ggml_custom_sched sched;
+    memset(&sched, 0, sizeof(sched));
+    if (kernel->sched != NULL) {
+        kernel->sched(node, p.userdata, &sched);
+    }
+
+    if (sched.n_tasks == 0) {
+        sched.n_tasks = 1;
+    }
+    for (int i = 0; i < 3; i++) {
+        sched.n_groups[i]   = MAX(1, sched.n_groups[i]);
+        sched.group_size[i] = MAX(1, sched.group_size[i]);
+    }
+
+    return sched;
 }
 
 struct ggml_tensor * ggml_custom_inplace(
@@ -6214,9 +6407,11 @@ struct ggml_tensor * ggml_custom_inplace(
     struct ggml_tensor * result = ggml_view_tensor(ctx, a);
 
     struct ggml_custom_op_params params = {
-        /*.fun      =*/ fun,
-        /*.n_tasks  =*/ n_tasks,
-        /*.userdata =*/ userdata
+        /*.fun         =*/ fun,
+        /*.n_tasks     =*/ n_tasks,
+        /*.userdata    =*/ userdata,
+        /*.op          =*/ NULL,
+        /*.params_size =*/ 0,
     };
     ggml_set_op_params(result, &params, sizeof(params));
 

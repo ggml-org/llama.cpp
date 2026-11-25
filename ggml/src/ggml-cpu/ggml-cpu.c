@@ -2524,6 +2524,10 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             {
                 struct ggml_custom_op_params p;
                 memcpy(&p, node->op_params, sizeof(p));
+                if (p.op != NULL) {
+                    // ggml_custom_op_4d(): the CPU kernel of the op tells its number of threads
+                    p.n_tasks = ggml_custom_op_sched(node, ggml_custom_op_kernel(node, "CPU")).n_tasks;
+                }
                 if (p.n_tasks == GGML_N_TASKS_MAX) {
                     n_tasks = n_threads;
                 } else {
