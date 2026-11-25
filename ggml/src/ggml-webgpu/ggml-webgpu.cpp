@@ -5373,8 +5373,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
         case GGML_OP_CONV_TRANSPOSE_1D:
             supports_op = (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16) && src1->type == GGML_TYPE_F32 &&
                           op->type == GGML_TYPE_F32 && ggml_is_contiguous(src0) && ggml_is_contiguous(src1) &&
-                          ggml_is_contiguous(op) && ggml_get_op_params_i32(op, 0) > 0 &&
-                          ggml_get_op_params_i32(op, 1) == 0 && ggml_get_op_params_i32(op, 2) == 1;
+                          ggml_get_op_params_i32(op, 0) > 0;
             break;
         case GGML_OP_COL2IM_1D:
             supports_op = op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32 && ggml_is_contiguous(src0) &&

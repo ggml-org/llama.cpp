@@ -49,37 +49,35 @@ fn main(@builtin(workgroup_id) group: vec3<u32>,
     if (phase < params.kernel_size) {
         let first = time_base + 1u - min(time_base + 1u, params.input_length);
         let last = min(time_base + TILE - 1u, (params.kernel_size - 1u - phase) / params.stride);
-        if (first <= last) {
-            // Visit overlapping input positions in ascending order.
-            for (var step = last + 1u; step > first; ) {
-                step -= 1u;
-                let tap = phase + step * params.stride;
-                let valid_time = time >= step && time - step < params.input_length;
-                var dot = 0.0;
-                for (var base = 0u; base < params.input_channels; base += TILE) {
-                    let col = base + lane.y;
-                    var value = 0.0;
-                    var weight = 0.0;
-                    if (col < params.input_channels) {
-                        if (valid_time) {
-                            value = input[params.input_offset + col * params.input_length + time - step];
-                        }
-                        if (weight_row < params.output_channels) {
-                            let index = (col * params.output_channels + weight_row) * params.kernel_size + tap;
-                            weight = f32(kernel[params.kernel_offset + index]);
-                        }
+        // Visit overlapping input positions in ascending order.
+        for (var step = last + 1u; step > first; ) {
+            step -= 1u;
+            let tap = phase + step * params.stride;
+            let valid_time = time >= step && time - step < params.input_length;
+            var dot = 0.0;
+            for (var base = 0u; base < params.input_channels; base += TILE) {
+                let col = base + lane.y;
+                var value = 0.0;
+                var weight = 0.0;
+                if (col < params.input_channels) {
+                    if (valid_time) {
+                        value = input[params.input_offset + col * params.input_length + time - step];
                     }
-                    input_tile[lane.y][lane.x] = value;
-                    kernel_tile[lane.y][lane.x] = weight;
-                    workgroupBarrier();
-                    for (var k = 0u; k < TILE; k++) {
-                        dot = fma(input_tile[k][lane.x], kernel_tile[k][lane.y], dot);
+                    if (weight_row < params.output_channels) {
+                        let index = (col * params.output_channels + weight_row) * params.kernel_size + tap;
+                        weight = f32(kernel[params.kernel_offset + index]);
                     }
-                    workgroupBarrier();
                 }
-                if (valid_time) {
-                    sum += dot;
+                input_tile[lane.y][lane.x] = value;
+                kernel_tile[lane.y][lane.x] = weight;
+                workgroupBarrier();
+                for (var k = 0u; k < TILE; k++) {
+                    dot = fma(input_tile[k][lane.x], kernel_tile[k][lane.y], dot);
                 }
+                workgroupBarrier();
+            }
+            if (valid_time) {
+                sum += dot;
             }
         }
     }
