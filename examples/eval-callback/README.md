@@ -20,12 +20,12 @@ Will print:
 ```shell
 llm_load_tensors: offloaded 33/33 layers to GPU
 ...
-llama_new_context_with_model: n_ctx      = 512
+llama_init_from_model: n_ctx      = 512
 ...
-llama_new_context_with_model:      CUDA0 compute buffer size =   105.00 MiB
-llama_new_context_with_model:  CUDA_Host compute buffer size =     6.01 MiB
-llama_new_context_with_model: graph nodes  = 1225
-llama_new_context_with_model: graph splits = 2
+llama_init_from_model:      CUDA0 compute buffer size =   105.00 MiB
+llama_init_from_model:  CUDA_Host compute buffer size =     6.01 MiB
+llama_init_from_model: graph nodes  = 1225
+llama_init_from_model: graph splits = 2
 ggml_debug:                 inp_embd = (f32)   GET_ROWS(token_embd.weight{2560, 51200, 1, 1}, inp_tokens{1, 1, 1, 1}}) = {2560, 1, 1, 1}
                                      [
                                       [

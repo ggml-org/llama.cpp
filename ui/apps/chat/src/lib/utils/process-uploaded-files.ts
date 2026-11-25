@@ -1,0 +1,165 @@
+import { isServerDecodableAudio } from './audio-format';
+import { convertToWav, createAudioFile } from './audio-recording';
+import { heicFileToJpegDataURL, isHeicMimeType } from './heic-to-jpeg';
+import { convertPDFToText } from './pdf-processing';
+import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
+import { readFileAsText } from './text-files';
+import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
+import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+import { FileExtensionAudio, FileTypeCategory, MimeTypeAudio } from '#lib/enums/index.ts';
+import { modelsStore } from '#lib/stores/models/index.svelte.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
+import { getFileTypeCategory } from '#lib/utils/index.ts';
+import { toast } from 'svelte-sonner';
+
+/**
+ * Read a file as a data URL (base64 encoded)
+ * @param file - The file to read
+ * @returns Promise resolving to the data URL string
+ */
+function readFileAsDataURL(file: File): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+
+		reader.onload = () => resolve(reader.result as string);
+		reader.onerror = () => reject(reader.error);
+		reader.onabort = () => reject(new DOMException('File read aborted', 'AbortError'));
+		reader.readAsDataURL(file);
+	});
+}
+
+/** A missing preview can be retried from the file without asking for another upload. */
+export async function prepareImagePreview(file: File, preview?: string): Promise<string> {
+	if (!preview && isHeicMimeType(file.type)) return heicFileToJpegDataURL(file);
+
+	const dataUrl = preview ?? (await readFileAsDataURL(file));
+
+	try {
+		if (isSvgMimeType(file.type)) return await svgBase64UrlToPngDataURL(dataUrl);
+
+		if (isWebpMimeType(file.type)) return await webpBase64UrlToPngDataURL(dataUrl);
+	} catch (error) {
+		console.warn('Using original image after PNG conversion failed:', error);
+	}
+
+	return dataUrl;
+}
+
+/**
+ * Process uploaded files into ChatUploadedFile format with previews and content
+ *
+ * This function processes various file types and generates appropriate previews:
+ * - Images: Base64 data URLs with format normalization (SVG/WebP → PNG)
+ * - Text files: UTF-8 content extraction
+ * - PDFs: Metadata only (processed later in conversion pipeline)
+ * - Audio: Base64 data URLs for preview
+ *
+ * @param files - Array of File objects to process
+ * @returns Promise resolving to array of ChatUploadedFile objects
+ */
+export async function processFilesToChatUploaded(
+	files: File[],
+	activeModelId?: string
+): Promise<ChatUploadedFile[]> {
+	const results: ChatUploadedFile[] = [];
+
+	for (const file of files) {
+		const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+		const base: ChatUploadedFile = {
+			file,
+			id,
+			name: file.name,
+			size: file.size,
+			type: file.type
+		};
+
+		try {
+			if (getFileTypeCategory(file.type) === FileTypeCategory.IMAGE) {
+				const preview = await prepareImagePreview(file);
+
+				results.push({ ...base, preview });
+			} else if (getFileTypeCategory(file.type) === FileTypeCategory.PDF) {
+				// Extract text content from PDF for preview
+				try {
+					const textContent = await convertPDFToText(file);
+
+					results.push({ ...base, textContent });
+				} catch (err) {
+					console.warn('Failed to extract text from PDF, adding without content:', err);
+					results.push(base);
+				}
+
+				// Show suggestion toast if vision model is available but PDF as image is disabled
+				const hasVisionSupport = activeModelId
+					? modelsStore.props.modelSupportsVision(activeModelId)
+					: false;
+				const currentConfig = settingsStore.config;
+
+				if (hasVisionSupport && !currentConfig.pdfAsImage) {
+					toast.info(`You can enable parsing PDF as images with vision models.`, {
+						action: {
+							label: 'Enable PDF as Images',
+							onClick: () => {
+								settingsStore.updateConfig(SETTINGS_KEYS.PDF_AS_IMAGE, true);
+								toast.success('PDF parsing as images enabled!', {
+									duration: 3000
+								});
+							}
+						},
+						duration: 8000
+					});
+				}
+			} else if (getFileTypeCategory(file.type) === FileTypeCategory.AUDIO) {
+				let audioFile = file;
+
+				// Server only decodes WAV and MP3, so convert other audio (OGG, WEBM, MP4) to WAV in the browser
+				if (!isServerDecodableAudio(file.type)) {
+					const wavBlob = await convertToWav(file);
+
+					if (wavBlob.type !== MimeTypeAudio.WAV) {
+						toast.error(`Failed to decode audio file ${file.name}`);
+
+						continue;
+					}
+
+					audioFile = createAudioFile(
+						wavBlob,
+						file.name.replace(/\.[^.]*$/, '') + FileExtensionAudio.WAV
+					);
+				}
+
+				// Generate preview URL for audio files
+				const preview = await readFileAsDataURL(audioFile);
+
+				results.push({
+					...base,
+					file: audioFile,
+					name: audioFile.name,
+					preview,
+					size: audioFile.size,
+					type: audioFile.type
+				});
+			} else if (getFileTypeCategory(file.type) === FileTypeCategory.VIDEO) {
+				// Generate preview URL for video files
+				const preview = await readFileAsDataURL(file);
+
+				results.push({ ...base, preview });
+			} else {
+				// Fallback: treat unknown files as text
+				try {
+					const textContent = await readFileAsText(file);
+
+					results.push({ ...base, textContent });
+				} catch (err) {
+					console.warn('Failed to read file as text, adding without content:', err);
+					results.push(base);
+				}
+			}
+		} catch (error) {
+			console.error('Error processing file', file.name, error);
+			results.push(base);
+		}
+	}
+
+	return results;
+}

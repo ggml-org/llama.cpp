@@ -265,6 +265,23 @@ private:
 // delete). distinct from params.timeout_read/write which only applies to the generation proxy
 static constexpr int STREAM_LOOKUP_TIMEOUT_MS = 250;
 
+// router already checked the origin; child sees a loopback Host, so do not forward origin headers
+static bool is_browser_origin_header(const std::string & key) {
+    std::string lower = key;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    return lower == "origin" || lower.compare(0, 10, "sec-fetch-") == 0;
+}
+
+static std::map<std::string, std::string> child_request_headers(const std::map<std::string, std::string> & headers) {
+    std::map<std::string, std::string> out;
+    for (const auto & [key, value] : headers) {
+        if (!is_browser_origin_header(key)) {
+            out.emplace(key, value);
+        }
+    }
+    return out;
+}
+
 static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_SSL_KEY_FILE");
     preset.unset_option("LLAMA_ARG_SSL_CERT_FILE");
@@ -277,8 +294,11 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_MODELS_AUTOLOAD");
     preset.unset_option("LLAMA_ARG_CONNECT");
     preset.unset_option("LLAMA_ARG_CONNECT_CODE");
+    preset.unset_option("LLAMA_ARG_MCP_SERVERS_CONFIG");
+    preset.unset_option("LLAMA_ARG_MCP_SERVERS_JSON");
     if (unset_model_args) {
         preset.unset_option("LLAMA_ARG_MODEL");
+        preset.unset_option("LLAMA_ARG_SHARD");
         preset.unset_option("LLAMA_ARG_MMPROJ");
         preset.unset_option("LLAMA_ARG_ALIAS");
         preset.unset_option("LLAMA_ARG_HF_REPO");
@@ -597,7 +617,7 @@ void server_unfinished_downloads::save() {
         data["downloads"].push_back({ {"model", d.model}, {"sidecars", d.sidecars}, {"partials", partials} });
     }
     try {
-        fs_write_atomic(std::filesystem::u8path(unfinished_downloads_path()), data.dump());
+        fs_write_atomic(unfinished_downloads_path(), data.dump());
     } catch (const std::exception & e) {
         LOG_WRN("failed to record unfinished downloads: %s\n", e.what());
     }
@@ -614,7 +634,7 @@ void server_unfinished_downloads::delete_partials(const std::vector<common_downl
             continue;
         }
         std::error_code ec;
-        std::filesystem::remove(std::filesystem::u8path(p.path), ec);
+        std::filesystem::remove(p.path, ec);
     }
 }
 
@@ -696,6 +716,8 @@ void server_models::unfinished_downloads_remove(const std::string & name) {
     }
     bool ok = common_download_remove(name);
     SRV_INF("removing unfinished download name=%s (%s)\n", name.c_str(), ok ? "succeeded" : "nothing cached");
+    // other clients still list it as a paused download
+    notify_sse("model_remove", name, {});
 }
 
 bool server_models::remove_sidecar(const std::string & name, const std::string & kind) {
@@ -712,16 +734,7 @@ bool server_models::remove_sidecar(const std::string & name, const std::string &
 }
 
 void server_models::notify_sse(const std::string & event, const std::string & model_id, const json & data) {
-    std::unique_ptr<server_task_result_router> result = std::make_unique<server_task_result_router>();
-    result->data = {
-        {"model", model_id},
-        {"event", event},
-    };
-    if (!data.is_null()) {
-        result->data["data"] = data;
-    }
-    SRV_DBG("notifying SSE clients about event '%s' for model '%s': %s\n", event.c_str(), model_id.c_str(), safe_json_to_str(result->data).c_str());
-    sse.broadcast(std::move(result));
+    sse.notify(event, model_id, data);
 }
 
 void server_models::load_models() {
@@ -1343,6 +1356,7 @@ void server_models::unload(const std::string & name) {
     if (it != mapping.end()) {
         if (it->second.meta.status == SERVER_MODEL_STATUS_DOWNLOADING) {
             SRV_INF("cancelling download for model name=%s\n", name.c_str());
+            it->second.download_stop_requested = true;
             it->second.request_exit();
             // for convenience, we wait the status change here
             wait(lk, name, [](const server_model_meta & new_meta) {
@@ -1370,6 +1384,7 @@ void server_models::unload_all() {
     for (auto & [name, inst] : mapping) {
         if (inst.meta.status == SERVER_MODEL_STATUS_DOWNLOADING) {
             SRV_INF("cancelling download for model name=%s\n", name.c_str());
+            inst.download_stop_requested = true;
             inst.request_exit();
         } else if (inst.meta.is_running()) {
             SRV_INF("stopping model instance name=%s\n", name.c_str());
@@ -1465,6 +1480,7 @@ void server_models::update_status(const std::string & name, const update_status_
 
 void server_models::update_download_progress(const std::string & name, const common_download_progress & progress, bool done, bool ok) {
     json curr;
+    bool stopped = false;
     {
         std::lock_guard<std::mutex> lk(mutex);
         auto it = mapping.find(name);
@@ -1473,6 +1489,7 @@ void server_models::update_download_progress(const std::string & name, const com
                 // mark the instance to be erased on next load_models() call
                 it->second.meta.status = SERVER_MODEL_STATUS_DOWNLOADED;
                 need_reload = true;
+                stopped = it->second.download_stop_requested;
 
                 // a download that failed keeps its tag: its partial files are still
                 // there and re-posting the tag resumes them
@@ -1494,7 +1511,13 @@ void server_models::update_download_progress(const std::string & name, const com
     }
     if (done) {
         cv.notify_all(); // notify in case unload() is waiting for download to be cancelled
-        notify_sse(ok ? "download_finished" : "download_failed", name, {});
+        // a stop a client asked for (pause or cancel) is no error: say so, so that every
+        // client, not only the one that asked, can tell it from a failed download
+        if (ok) {
+            notify_sse("download_finished", name, {});
+        } else {
+            notify_sse("download_failed", name, stopped ? json{{"stopped", true}} : json{});
+        }
     } else {
         notify_sse("download_progress", name, curr);
     }
@@ -1517,6 +1540,7 @@ bool server_models::remove(const std::string & name) {
     if (it->second.meta.status == SERVER_MODEL_STATUS_DOWNLOADING) {
         // cancel in-flight download
         SRV_INF("cancelling download for model name=%s\n", name.c_str());
+        it->second.download_stop_requested = true;
         it->second.request_exit();
     } else if (it->second.meta.is_running()) {
         // stop running instance
@@ -1702,7 +1726,7 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
         // sleep after req_count++, so the model counts as busy while we wait here
         std::this_thread::sleep_for(std::chrono::seconds(2));
     }
-    SRV_INF("proxying request to model %s on port %d\n", name.c_str(), meta->port);
+    SRV_TRC("proxying request to model %s on port %d\n", name.c_str(), meta->port);
     std::string proxy_path = req.path;
     if (!req.query_string.empty()) {
         proxy_path += '?' + req.query_string;
@@ -1713,7 +1737,7 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
             CHILD_ADDR,
             meta->port,
             proxy_path,
-            req.headers,
+            child_request_headers(req.headers),
             req.body,
             req.files,
             // a detached request belongs to a replay session
@@ -1757,7 +1781,7 @@ void server_models::proxy_ws(const server_http_req & req, server_http_context::w
         mapping[name].meta.last_used = ggml_time_ms();
         mapping[name].req_count++;
     }
-    SRV_INF("proxying websocket to model %s on port %d\n", name.c_str(), meta->port);
+    SRV_TRC("proxying websocket to model %s on port %d\n", name.c_str(), meta->port);
 
     std::string url = std::string("ws://") + CHILD_ADDR + ":" + std::to_string(meta->port) + req.path;
     if (!req.query_string.empty()) {
@@ -1768,7 +1792,8 @@ void server_models::proxy_ws(const server_http_req & req, server_http_context::w
     for (const auto & [key, value] : req.headers) {
         std::string lower = key;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-        if (lower == "host" || lower == "connection" || lower == "upgrade" || lower.compare(0, 14, "sec-websocket-") == 0) {
+        if (lower == "host" || lower == "connection" || lower == "upgrade" || lower.compare(0, 14, "sec-websocket-") == 0
+                || is_browser_origin_header(key)) {
             continue;
         }
         headers.emplace(key, value);
@@ -1897,7 +1922,7 @@ void server_models::handle_child_state(const std::string & name, const std::stri
 }
 
 //
-// server_models_routes
+// server_models_sse
 //
 
 // RAII wrapper similar to server_response_reader, but doesn't use server_queue
@@ -1935,6 +1960,61 @@ struct server_models_sse_client {
         // should not reach here
     }
 };
+
+void server_models_sse::notify(const std::string & event, const std::string & model_id, const json & data) {
+    std::unique_ptr<server_task_result_router> result = std::make_unique<server_task_result_router>();
+    result->data = {
+        {"model", model_id},
+        {"event", event},
+    };
+    if (!data.is_null()) {
+        result->data["data"] = data;
+    }
+    SRV_DBG("notifying SSE clients about event '%s' for model '%s': %s\n", event.c_str(), model_id.c_str(), safe_json_to_str(result->data).c_str());
+    // under the lock, so that a client connecting meanwhile gets this event either replayed or queued, not both
+    std::lock_guard<std::mutex> lk(mutex);
+    if (replay_last) {
+        last_event = result->data;
+    }
+    queue.broadcast(std::move(result));
+}
+
+server_http_context::handler_t server_models_sse::make_handler(std::function<bool()> should_stop) {
+    return [this, should_stop = std::move(should_stop)](const server_http_req & req) {
+        auto res = std::make_unique<server_http_res>();
+        res->status = 200;
+        res->content_type = "text/event-stream";
+        std::shared_ptr<server_models_sse_client> sse_client;
+        std::string pending; // the replayed event, sent first
+        {
+            std::lock_guard<std::mutex> lk(mutex);
+            sse_client = std::make_shared<server_models_sse_client>(queue);
+            if (replay_last && !last_event.is_null()) {
+                pending = "data: " + safe_json_to_str(last_event) + "\n\n";
+            }
+        }
+        res->next = [should_stop, sse_client, pending = std::move(pending), &req](std::string & output) mutable -> bool {
+            if (!pending.empty()) {
+                output = std::move(pending);
+                pending.clear();
+                return true;
+            }
+            auto result = sse_client->next([&]() {
+                return should_stop() || req.should_stop();
+            });
+            if (result == nullptr) {
+                return false; // client disconnected or should_stop
+            }
+            output = "data: " + safe_json_to_str(result->to_json()) + "\n\n";
+            return true; // listen for the next event
+        };
+        return res;
+    };
+}
+
+//
+// server_models_routes
+//
 
 static void res_ok(std::unique_ptr<server_http_res> & res, const json & response_data) {
     res->status = 200;
@@ -2024,7 +2104,7 @@ void server_models_routes::init_routes() {
             // main instance
             auto res = std::make_unique<server_http_res>();
             json props = {
-                // TODO: add support for this on web UI
+                // TODO: add support for this in Llama Chat
                 {"role",                 "router"},
                 {"max_instances",        params.models_max},
                 {"models_autoload",      params.models_autoload},
@@ -2039,6 +2119,7 @@ void server_models_routes::init_routes() {
                 {"ui_settings",          ui_settings},
                 {"build_info",           std::string(llama_build_info())},
                 {"cors_proxy_enabled",   params.ui_mcp_proxy},
+                {"ui_agent",             params.ui_agent},
             };
             if (!params.server_connect_code.empty()) {
                 props["connect_code"] = params.server_connect_code;
@@ -2278,23 +2359,9 @@ void server_models_routes::init_routes() {
         return res;
     };
 
-    this->get_router_models_sse = [this](const server_http_req & req) {
-        auto res = std::make_unique<server_http_res>();
-        res->status = 200;
-        res->content_type = "text/event-stream";
-        auto sse_client = std::make_shared<server_models_sse_client>(models.sse);
-        res->next = [this, sse_client, &req](std::string & output) -> bool {
-            auto result = sse_client->next([&]() {
-                return stopping.load(std::memory_order_relaxed) || req.should_stop();
-            });
-            if (result == nullptr) {
-                return false; // client disconnected or should_stop
-            }
-            output = "data: " + safe_json_to_str(result->to_json()) + "\n\n";
-            return true; // listen for the next event
-        };
-        return res;
-    };
+    this->get_router_models_sse = models.sse.make_handler([this]() {
+        return stopping.load(std::memory_order_relaxed);
+    });
 
     this->post_router_models = [this](const server_http_req & req) {
         auto res = std::make_unique<server_http_res>();
@@ -2409,7 +2476,7 @@ void server_models_routes::init_routes() {
                 CHILD_ADDR,
                 owner->port,
                 child_path,
-                req.headers,
+                child_request_headers(req.headers),
                 req.body,
                 req.files,
                 req.should_stop,
@@ -2624,7 +2691,8 @@ server_http_proxy::server_http_proxy(
         const std::map<std::string, uploaded_file> & files,
         const std::function<bool()> should_stop,
         int32_t timeout_read,
-        int32_t timeout_write
+        int32_t timeout_write,
+        const std::string & resolved_addr
         ) {
     // shared between reader and writer threads
     auto cli  = std::make_shared<httplib::ClientImpl>(host, port);
@@ -2639,7 +2707,11 @@ server_http_proxy::server_http_proxy(
     }
 
     // setup Client
-    cli->set_follow_location(true);
+    if (!resolved_addr.empty()) {
+        // pin the checked address; a redirect could lead to an unchecked one
+        cli->set_direct_hostname_addr_map({{host, resolved_addr}});
+    }
+    cli->set_follow_location(resolved_addr.empty());
     cli->set_connection_timeout(timeout_read, 0); // use --timeout value instead of hardcoded 5 s
     cli->set_write_timeout(timeout_read, 0); // reversed for cli (client) vs srv (server)
     cli->set_read_timeout(timeout_write, 0);

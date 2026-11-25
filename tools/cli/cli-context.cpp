@@ -362,7 +362,7 @@ bool cli_context::generate_completion(generated_content & content_out, cli_timin
 
     ui::assistant_turn a;
 
-    std::string err = client.post_sse("/v1/chat/completions", body.dump(), should_stop, [&](const std::string & payload) {
+    std::string err = client.post_sse("/v1/chat/completions", body.dump_safe(), should_stop, [&](const std::string & payload) {
         json chunk = json::parse_no_throw(payload);
         if (chunk.is_discarded()) {
             return;

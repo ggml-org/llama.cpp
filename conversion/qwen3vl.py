@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from pathlib import Path
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -208,7 +209,7 @@ class Qwen3OmniMmprojModel(Qwen3VLVisionModel, Qwen25AudioModel):
             if not self.has_vision_encoder:
                 raise ValueError(f"Model does not have vision encoder, but found tensor {name}")
             # need to transform vision tensor naming, so that modify_tensors() logic can be used correctly
-            name = name.replace("thinker.visual.", "model.visual.")
+            name = name.replace("thinker.visual.", "visual.")
             if ".merger_list." in name:
                 name = name.replace(".merger_list.", ".deepstack_merger_list.")
                 name = name.replace(".ln_q", ".norm")
@@ -393,8 +394,10 @@ class Qwen3ASRTextModel(Qwen3VLTextModel):
 
     def set_vocab(self):
         super().set_vocab()
-        # fix chat template, use correct chatml format
-        self.gguf_writer.add_chat_template("{% for message in messages %}{{'<|im_start|>' + message['role'] + '\\n' + message['content'] + '<|im_end|>' + '\\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\\n' }}{% endif %}")
+        # the model outputs "language <lang><asr_text><transcript>", the template renders the language prefix as reasoning_content
+        # so that the chat parser can separate it from the transcript
+        template_path = Path(__file__).parent.parent / "models" / "templates" / "Qwen3-ASR.jinja"
+        self.gguf_writer.add_chat_template(template_path.read_text(encoding="utf-8"))
         # correct BOS/EOS tokens
         with open(self.dir_model / "tokenizer_config.json", "r", encoding="utf-8") as f:
             tokenizer_config = json.load(f)

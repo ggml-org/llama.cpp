@@ -166,7 +166,7 @@ void llama_model_metis16::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_metis16::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // streams are kept stream-innermost: [n_stream, n_embd, n_tokens]
@@ -258,8 +258,10 @@ ggml_tensor * llama_model_metis16::graph::route_features(const llama_model_metis
     return ggml_tanh(ctx0, ggml_add(ctx0, f, model.depth_mem_route_b));
 }
 
-llama_model_metis16::graph::graph(const llama_model_metis16 & model, const llm_graph_params & params) :
+llama_model_metis16::graph::graph(const llm_graph_params & params) :
     llm_build_mamba_base(params) {
+    const auto & model = static_cast<const llama_model_metis16 &>(this->model);
+
     const int64_t n_s      = model.n_stream;
     const int     n_p      = model.n_pass;
     const int     n_phys   = model.n_layer_phys;
@@ -311,7 +313,7 @@ llama_model_metis16::graph::graph(const llama_model_metis16 & model, const llm_g
 
                 cur = build_attn(inp->get_attn(), layer.wo, nullptr, nullptr, Q, K, V, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_hd)), il);
             } else {
-                cur = build_mamba2_layer(inp->get_recr(), cur, model, ubatch, il);
+                cur = build_mamba2_layer(inp->get_recr(), cur, ubatch, il);
             }
             cb(cur, "mixer_out", il);
             x = hc_write(mixed, layer.hc_attn_write, cur, p);
@@ -327,7 +329,7 @@ llama_model_metis16::graph::graph(const llama_model_metis16 & model, const llm_g
 
                 ggml_tensor * moe_out = build_moe_ffn(latent, nullptr, nullptr, nullptr, layer.ffn_down_exps, nullptr,
                         n_exp, n_used, LLM_FFN_SILU, false, 0.0f, LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT, il_p,
-                        logits, layer.ffn_gate_up_exps, nullptr, nullptr, nullptr, selected);
+                        logits, layer.ffn_gate_up_exps, selected);
                 ggml_tensor * shexp = build_ffn(latent,
                         layer.ffn_up_shexp,   NULL, NULL,
                         layer.ffn_gate_shexp, NULL, NULL,

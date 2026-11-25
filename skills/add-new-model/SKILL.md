@@ -50,7 +50,7 @@ Skill-specific addition: before writing `src/models/<name>.cpp`, read at least 1
 
 ## Step 4 - Optional: multimodal encoder
 
-Only do this if the contributor flagged a vision/audio encoder in Step 0. Follow HOWTO-add-model.md section 4 and `docs/multimodal.md` for the actual touch points (`MmprojModel` subclass, `clip.cpp`, `mtmd.cpp`, encoder graph in `tools/mtmd/models`, etc.).
+Only do this if the contributor flagged a vision/audio encoder in Step 0. Follow HOWTO-add-model.md section 4 and `docs/multimodal.md` for the actual touch points (`MmprojModel` subclass, `mtmd-model.cpp`, `mtmd-subcontext.cpp`, `mtmd.cpp`, encoder graph in `tools/mtmd/models`, etc.).
 
 Skill-specific addition, and read this carefully: **whether the multimodal encoder can be bundled into the same PR as the base text-model support depends on how conventional the change is.** It's OK to bundle it if the encoder support is conventional - i.e. no new infra or logic is needed, it's just a new cgraph reusing existing preprocessing/projector machinery (e.g. siglip/pixtral/qwen with just a new projector). If it requires anything beyond that - a new preprocessor, non-standard projector logic, or changes to shared `libmtmd` infra/logic - STOP, tell the contributor this is non-conventional, and have them land the text model first with the encoder as a dedicated follow-up PR. Do not let this decision pass silently - call it out explicitly to the contributor before writing any `clip.cpp`/`mtmd.cpp` code.
 
@@ -69,6 +69,7 @@ These recur often enough in review comments on past add-model PRs that they're w
 - Before writing a dedicated tool-call/output parser, check whether the existing autoparser already handles the template (`test-chat-auto-parser <jinja>` shows what it detects).
 - Marking a custom EOS/closing-tag token as `eot` at conversion time isn't always sufficient - in long/agentic generations a model can emit the closing sequence as literal text instead of the token, so generation never stops on EOG and raw text leaks past the parser. Verify this case, not just the token path.
 - If reusing or aliasing an existing pre-tokenizer for convenience, justify and test that choice explicitly - silent reuse is an easy source of subtle tokenizer bugs.
+- The GGUF only stores the pre-tokenizer name (`tokenizer.pre`), the behavior flags are hard-coded per name in `src/llama-vocab.cpp`. When adding a new name, set each flag from the HF `tokenizer.json`, not from the case you copied. Examples: `model.ignore_merges` -> `ignore_merges`, the BOS/EOS of the post-processor -> `special_bos_id` / `add_bos`, prefix space and space cleanup -> `add_space_prefix` / `clean_spaces`. The `chkhsh` check in the converter only identifies the pre-tokenizer on a short text, it may not catch a wrong flag.
 - Watch for excessive graph splits caused by building per-layer view/index tensors inside the layer loop - hoist tensors that don't vary per layer out of the loop (relevant if you hit `GGML_SCHED_MAX_SPLIT_INPUTS`).
 - A custom KQ mask fed into flash attention must match FA's expected dtype - cast it to F16 before passing it to `build_attn_mha` when FA is enabled.
 - When padding a custom KV-cache size to an alignment (e.g. `GGML_PAD(..., 256)`), apply the padding after all other size adjustments, not before - otherwise later logic can un-align it again.
@@ -83,12 +84,13 @@ These recur often enough in review comments on past add-model PRs that they're w
 Reference: `examples/model-conversion/README.md`.
 
 1. Convert to GGUF, then inspect/run both the original and converted tensors.
-2. Run logits verification (original vs converted). If this model is a new version of an already-supported family, verify the *previous* version still passes logits verification first - numerical differences may be pre-existing, not caused by the new work. The tools to perform full logits validation are available in `examples/model-conversion`.
-3. Quantize (including QAT variants if relevant) and re-verify.
-4. Run perplexity evaluation (simple and full).
-5. Sanity-check across `tools/cli`, `tools/completion`, `tools/imatrix`, `tools/quantize`, and `tools/server`.
-6. CPU backend first; other backends (CUDA, Metal, ...) can be separate follow-up PRs per `CONTRIBUTING.md`.
-7. Re-review every changed file against the coding/naming guidelines in `AGENTS.md` (and `CONTRIBUTING.md`'s "Coding guidelines"/"Naming guidelines" sections) - this is a separate pass from functional testing and is just as important: no forced line-wrapping, no unicode punctuation, minimal/non-redundant comments, `snake_case` naming (`kebab-case` for file names), matching indentation/brace style, etc.
+2. If the model adds a new pre-tokenizer, compare the token ids of `llama-tokenize -f <file> --ids --no-escape` with the HF tokenizer on whole files of prose, code and multilingual text (e.g. wikitext-2 and a few source files).
+3. Run logits verification (original vs converted). If this model is a new version of an already-supported family, verify the *previous* version still passes logits verification first - numerical differences may be pre-existing, not caused by the new work. The tools to perform full logits validation are available in `examples/model-conversion`.
+4. Quantize (including QAT variants if relevant) and re-verify.
+5. Run perplexity evaluation (simple and full).
+6. Sanity-check across `tools/cli`, `tools/completion`, `tools/imatrix`, `tools/quantize`, and `tools/server`.
+7. CPU backend first; other backends (CUDA, Metal, ...) can be separate follow-up PRs per `CONTRIBUTING.md`.
+8. Re-review every changed file against the coding/naming guidelines in `AGENTS.md` (and `CONTRIBUTING.md`'s "Coding guidelines"/"Naming guidelines" sections) - this is a separate pass from functional testing and is just as important: no forced line-wrapping, no unicode punctuation, minimal/non-redundant comments, `snake_case` naming (`kebab-case` for file names), matching indentation/brace style, etc.
 
 ## Before opening a PR
 

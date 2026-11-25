@@ -124,6 +124,83 @@ static void ggml_graph_compute_helper(std::vector<uint8_t> & buf, ggml_cgraph * 
     ggml_graph_compute(graph, &plan);
 }
 
+static void test_yarn(ggml_type type, int mode, bool truncate, bool forward, bool inplace) {
+    const int n_dims = 128;
+    const int n_offs = 8;
+    const int ne0 = n_dims + 2*n_offs;
+    const int32_t positions[] = {0, 1, 4096, 8192, -67};
+    const int n_pos = sizeof(positions)/sizeof(positions[0]);
+    const double base = 1000000.0;
+    const double factor = 256.0;
+    const double pi = std::acos(-1.0);
+    double low  = n_dims/2 * std::log(4096.0/(32.0*2*pi))/std::log(base);
+    double high = n_dims/2 * std::log(4096.0/( 1.0*2*pi))/std::log(base);
+    if (truncate) {
+        low  = std::floor(low);
+        high = std::ceil(high);
+    }
+    const double mscale = 1.0 + 0.1*std::log(factor);
+
+    ggml_init_params params = {1024*1024, nullptr, false};
+    ggml_context * ctx = ggml_init(params);
+    ggml_tensor * x = ggml_new_tensor_3d(ctx, type, ne0, 2, n_pos);
+    ggml_tensor * pos = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n_pos);
+    std::vector<float> input(ggml_nelements(x));
+    for (size_t i = 0; i < input.size(); ++i) {
+        input[i] = (int(i % 31) - 15)/16.0f;
+        if (type == GGML_TYPE_F32) {
+            ((float *) x->data)[i] = input[i];
+        } else {
+            ((ggml_fp16_t *) x->data)[i] = ggml_fp32_to_fp16(input[i]);
+        }
+    }
+    for (int i = 0; i < n_pos; ++i) {
+        ((int32_t *) pos->data)[i] = positions[i];
+    }
+    ggml_tensor * out;
+    if (!forward) {
+        out = ggml_rope_ext_back(ctx, x, pos, nullptr, n_dims, mode, 4096, base, 1.0/factor, 1.0f, 1.0f, 32.0f, 1.0f);
+    } else if (inplace) {
+        out = ggml_rope_ext_inplace(ctx, x, pos, nullptr, n_dims, mode, 4096, base, 1.0/factor, 1.0f, 1.0f, 32.0f, 1.0f);
+    } else {
+        out = ggml_rope_ext(ctx, x, pos, nullptr, n_dims, mode, 4096, base, 1.0/factor, 1.0f, 1.0f, 32.0f, 1.0f);
+    }
+    ggml_rope_set_truncate(out, truncate);
+    ggml_rope_set_offset(out, n_offs);
+    ggml_cgraph * graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, out);
+    std::vector<uint8_t> work;
+    ggml_graph_compute_helper(work, graph, 2);
+
+    std::vector<float> expected = input;
+    for (int p = 0; p < n_pos; ++p) {
+        for (int h = 0; h < 2; ++h) {
+            const int row = (p*2 + h)*ne0 + n_offs;
+            for (int i = 0; i < n_dims/2; ++i) {
+                const double ramp = 1.0 - MIN(1.0, MAX(0.0, (i - low)/(high - low)));
+                const double freq = std::pow(base, -2.0*i/n_dims);
+                const double theta = positions[p]*freq*((1.0 - ramp)/factor + ramp);
+                const double c = std::cos(theta)*mscale;
+                const double s = std::sin(theta)*mscale*(forward ? 1.0 : -1.0);
+                const int i0 = row + (mode == GGML_ROPE_TYPE_NORMAL ? 2*i : i);
+                const int i1 = i0 + (mode == GGML_ROPE_TYPE_NORMAL ? 1 : n_dims/2);
+                expected[i0] = input[i0]*c - input[i1]*s;
+                expected[i1] = input[i0]*s + input[i1]*c;
+            }
+        }
+    }
+    float max_error = 0.0f;
+    for (size_t i = 0; i < expected.size(); ++i) {
+        const float actual = type == GGML_TYPE_F32 ? ((float *) out->data)[i] : ggml_fp16_to_fp32(((ggml_fp16_t *) out->data)[i]);
+        GGML_ASSERT(std::isfinite(actual));
+        max_error = MAX(max_error, std::fabs(actual - expected[i]));
+    }
+    printf("yarn type=%s mode=%d truncate=%d forward=%d inplace=%d max_error=%g\n",
+            ggml_type_name(type), mode, truncate, forward, inplace, max_error);
+    GGML_ASSERT(max_error < (type == GGML_TYPE_F32 ? 0.003f : 0.005f));
+    ggml_free(ctx);
+}
+
 int main(int /*argc*/, const char ** /*argv*/) {
     struct ggml_init_params params = {
         /* .mem_size   = */ 128*1024*1024,
@@ -258,6 +335,16 @@ int main(int /*argc*/, const char ** /*argv*/) {
     }
 
     ggml_free(ctx0);
+
+    for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+        for (int mode : {GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX}) {
+            for (bool truncate : {false, true}) {
+                test_yarn(type, mode, truncate, true, false);
+                test_yarn(type, mode, truncate, true, true);
+                test_yarn(type, mode, truncate, false, false);
+            }
+        }
+    }
 
     return 0;
 }

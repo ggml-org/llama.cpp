@@ -18,10 +18,10 @@ enum htp_dsv4_hc_pre_kernel_type {
 
 struct htp_dsv4_hc_pre_kernel_params {
     uint32_t kernel_type;
-    uint32_t n_threads;
+    uint32_t n_hvx;
     uint32_t n_chunks;
     uint32_t total_jobs;
-    uint32_t jobs_per_thread;
+    uint32_t jobs_per_hvx;
 
     uint32_t dma_block_chunks;
     uint32_t dma_row_stride;
@@ -29,7 +29,7 @@ struct htp_dsv4_hc_pre_kernel_params {
     uint32_t vtcm_size;
 
     struct fastdiv_values div_n_chunks;
-    struct fastdiv_values div_n_threads;
+    struct fastdiv_values div_n_hvx;
 };
 
 #if defined(__cplusplus)
@@ -48,10 +48,10 @@ enum htp_dsv4_hc_post_kernel_type {
 
 struct htp_dsv4_hc_post_kernel_params {
     uint32_t kernel_type;
-    uint32_t n_threads;
+    uint32_t n_hvx;
     uint32_t n_chunks;
     uint32_t total_jobs;
-    uint32_t jobs_per_thread;
+    uint32_t jobs_per_hvx;
     uint32_t has_comb;
 
     uint32_t dma_block_chunks;
@@ -60,7 +60,7 @@ struct htp_dsv4_hc_post_kernel_params {
     uint32_t vtcm_size;
 
     struct fastdiv_values div_n_chunks;
-    struct fastdiv_values div_n_threads;
+    struct fastdiv_values div_n_hvx;
 };
 
 #if defined(__cplusplus)

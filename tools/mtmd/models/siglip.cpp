@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_siglip::build() {
+ggml_cgraph * mtmd_graph_siglip::build() {
     ggml_tensor * inp = build_inp();
 
     ggml_tensor * learned_pos_embd = model.position_embeddings;

@@ -32,4 +32,6 @@ struct ggml_cuda_gdn_mma_args {
     bool    eligible;
 };
 
+// true when ggml_cuda_gdn_mma_launch would run the chunked kernel for these args
+bool ggml_cuda_gdn_mma_supported(int device, const ggml_cuda_gdn_mma_args & args);
 bool ggml_cuda_gdn_mma_launch(int device, const ggml_cuda_gdn_mma_args & args, cudaStream_t stream);

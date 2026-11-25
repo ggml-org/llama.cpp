@@ -3,6 +3,7 @@
 #include "llama.h"
 
 #include <string>
+#include <string_view>
 #include <vector>
 #include <memory>
 
@@ -75,6 +76,7 @@ enum llama_vocab_pre_type {
     LLAMA_VOCAB_PRE_TYPE_NEMOTRON_3_5_EMBD = 64,
     LLAMA_VOCAB_PRE_TYPE_SOPRANO           = 65,
     LLAMA_VOCAB_PRE_TYPE_TEKKEN_NUM3       = 66,
+    LLAMA_VOCAB_PRE_TYPE_ZONOS3            = 67,
 };
 
 // HF Metaspace pre-tokenizer prepend_scheme
@@ -173,7 +175,7 @@ struct llama_vocab {
 
     int max_token_len() const;
 
-    int find_bpe_rank(const std::string & token_left, const std::string & token_right) const;
+    int find_bpe_rank(std::string_view token_left, std::string_view token_right) const;
     std::vector<std::string> get_bpe_merges() const;
 
     std::vector<char> get_precompiled_charsmap() const;

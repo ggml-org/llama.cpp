@@ -9,6 +9,8 @@
 #include "ggml-metal-ops.h"
 #include "ggml-metal-tuning.h"
 
+#include <TargetConditionals.h>
+
 #include <mutex>
 #include <string>
 
@@ -309,7 +311,11 @@ static size_t ggml_backend_metal_buffer_type_get_alloc_size(ggml_backend_buffer_
             } break;
         case GGML_OP_TOP_K:
             {
-                res = 2*sizeof(int32_t)*ggml_nelements(tensor->src[0]);
+                res += ggml_metal_op_top_k_extra(tensor);
+            } break;
+        case GGML_OP_CONV_2D:
+            {
+                res += ggml_metal_op_conv_2d_extra_tmp(tensor);
             } break;
         case GGML_OP_ARGMAX:
             {
@@ -649,6 +655,13 @@ static void ggml_backend_metal_graph_optimize(ggml_backend_t backend, ggml_cgrap
     ggml_metal_graph_optimize(ctx, cgraph);
 }
 
+// iOS can stop a command buffer that runs for more than a few seconds, so split the graph into shorter ones there
+#if TARGET_OS_IPHONE
+#define GGML_METAL_DEFAULT_N_CB 8
+#else
+#define GGML_METAL_DEFAULT_N_CB 1
+#endif // TARGET_OS_IPHONE
+
 static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
     GGML_ASSERT(ggml_backend_is_metal(backend));
 
@@ -700,7 +713,7 @@ ggml_backend_t ggml_backend_metal_init(void) {
         /* .context   = */ ctx,
     };
 
-    ggml_backend_metal_set_n_cb(backend, 1);
+    ggml_backend_metal_set_n_cb(backend, GGML_METAL_DEFAULT_N_CB);
 
     return backend;
 }
@@ -769,11 +782,12 @@ static void ggml_backend_metal_device_get_props(ggml_backend_dev_t dev, ggml_bac
     ggml_backend_metal_device_get_memory(dev, &props->memory_free, &props->memory_total);
 
     props->caps = {
-        /* .async                = */ true,
-        /* .host_buffer          = */ false,
-        /* .buffer_from_host_ptr = */ true,
-        /* .events               = */ true,
-        /* .mmap_support         = */ true,
+        /* .async                 = */ true,
+        /* .host_buffer           = */ false,
+        /* .buffer_from_host_ptr  = */ true,
+        /* .events                = */ true,
+        /* .mmap_support          = */ true,
+        /* .fast_async_host_input = */ false,
     };
 }
 
@@ -795,7 +809,7 @@ static ggml_backend_t ggml_backend_metal_device_init_backend(ggml_backend_dev_t 
         /* .context   = */ ctx,
     };
 
-    ggml_backend_metal_set_n_cb(backend, 1);
+    ggml_backend_metal_set_n_cb(backend, GGML_METAL_DEFAULT_N_CB);
 
     return backend;
 

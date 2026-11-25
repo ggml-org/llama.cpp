@@ -141,6 +141,71 @@ static inline void hvx_fast_rms_norm_mul_f32(const uint8_t * restrict src,
     }
 }
 
+static inline void hvx_fast_rms_norm_mul_add_f32(const uint8_t * restrict src,
+                                                 const uint8_t * restrict weight,
+                                                 const uint8_t * restrict add,
+                                                 uint8_t * restrict dst,
+                                                 const int num_elems,
+                                                 float     epsilon,
+                                                 float     scale) {
+    const HVX_Vector * restrict v_src    = (const HVX_Vector *) src;
+    const HVX_Vector * restrict v_weight = (const HVX_Vector *) weight;
+    const HVX_Vector * restrict v_add    = (const HVX_Vector *) add;
+    HVX_Vector * restrict v_dst          = (HVX_Vector *) dst;
+
+    const int nvec = num_elems / VLEN_FP32;
+    const int nloe = num_elems % VLEN_FP32;
+
+    HVX_Vector sum_v     = Q6_V_vsplat_R(0x00000000);
+    HVX_Vector epsilon_v = hvx_vec_splat_f32(epsilon);
+
+    #pragma unroll(4)
+    for (int i = 0; i < nvec; i++) {
+        HVX_Vector v1 = v_src[i];
+        HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(v1, v1);
+        sum_v = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, v2);
+    }
+
+    if (nloe > 0) {
+        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 4);
+        HVX_Vector v1 = Q6_V_vand_QV(bmask, v_src[nvec]);
+        HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(v1, v1);
+        sum_v = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, v2);
+    }
+
+    sum_v = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_v));
+
+    HVX_Vector t_v            = hvx_vec_splat_f32((float) num_elems);
+    HVX_Vector denom_v        = hvx_vec_inverse_f32(t_v);
+    HVX_Vector mean_v         = Q6_Vqf32_vmpy_VsfVsf(sum_v, denom_v);
+    HVX_Vector mean_epsilon_v = Q6_Vqf32_vadd_Vqf32Vsf(mean_v, epsilon_v);
+
+    HVX_Vector scale_v = hvx_vec_rsqrt_f32(Q6_Vsf_equals_Vqf32(mean_epsilon_v));
+    if (scale != 0.0f) {
+        scale_v = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(scale_v, hvx_vec_splat_f32(scale)));
+    }
+
+    #pragma unroll(4)
+    for (int i = 0; i < nvec; i++) {
+        HVX_Vector v1 = v_src[i];
+        HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(v1, scale_v);
+        HVX_Vector v3 = Q6_Vsf_equals_Vqf32(v2);
+        HVX_Vector v4 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(v3, v_weight[i]));
+        v_dst[i] = hvx_vec_add_f32_f32(v4, v_add[i]);
+    }
+
+    if (nloe > 0) {
+        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 4);
+        HVX_Vector v1 = Q6_V_vand_QV(bmask, v_src[nvec]);
+        HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(v1, scale_v);
+        HVX_Vector v3 = Q6_Vsf_equals_Vqf32(v2);
+        HVX_Vector v4 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(v3, v_weight[nvec]));
+        HVX_Vector res_v = hvx_vec_add_f32_f32(v4, v_add[nvec]);
+
+        hvx_vec_store_a(&v_dst[nvec], nloe * 4, res_v);
+    }
+}
+
 static inline void hvx_fast_norm_f32(const uint8_t * restrict src,
                                      uint8_t * restrict dst,
                                      const int num_elems,
