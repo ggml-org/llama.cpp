@@ -95,9 +95,6 @@ static bool ggml_hrx_fill(ggml_hrx_device_context * dev, const ggml_hrx_fill_arg
 
 static void ggml_backend_hrx_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value,
                                                   size_t offset, size_t size) {
-    if (size == 0) {
-        return;
-    }
     auto *       ctx = (ggml_hrx_buffer_context *) buffer->context;
     const size_t dst = ggml_hrx_tensor_offset(tensor) + offset;
     GGML_ASSERT(dst <= buffer->size && size <= buffer->size - dst);
