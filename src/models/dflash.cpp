@@ -399,7 +399,7 @@ void llama_model_dflash::graph_base::build_inject_ctx_mix() {
     cb(feats, "inp_target_features", -1);
 
     const auto build_mix = [&](ggml_tensor * mix, ggml_tensor * norm, int il) {
-        ggml_tensor * cur = ggml_reshape_2d(ctx0, ggml_mul_mat(ctx0, mix, feats), n_embd, n_tokens);
+        ggml_tensor * cur = ggml_reshape_2d(ctx0, build_lora_mm(mix, feats), n_embd, n_tokens);
         return build_norm(cur, norm, nullptr, LLM_NORM_RMS, il);
     };
 

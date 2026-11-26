@@ -552,7 +552,7 @@ llama_model_hy_v4_flash::graph::build_hc_pre(
 
     ggml_tensor * flat = ggml_reshape_2d(ctx0, x, hc * n_embd, nt);
     ggml_tensor * flat_norm = ggml_rms_norm(ctx0, flat, hparams.f_norm_rms_eps);
-    ggml_tensor * mixes = ggml_mul_mat(ctx0, hc_fn, flat_norm);
+    ggml_tensor * mixes = build_lora_mm(hc_fn, flat_norm);
     cb(mixes, "hc_mixes", il);
 
     ggml_tensor * scale_pre  = hy_v4_flash_view_1d(ctx0, hc_scale, 1, 0);
@@ -617,7 +617,7 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_hc_head(
 
     ggml_tensor * flat = ggml_reshape_2d(ctx0, x, hc * n_embd, nt);
     ggml_tensor * flat_norm = ggml_rms_norm(ctx0, flat, hparams.f_norm_rms_eps);
-    ggml_tensor * mixes = ggml_mul_mat(ctx0, hc_fn, flat_norm);
+    ggml_tensor * mixes = build_lora_mm(hc_fn, flat_norm);
     cb(mixes, "hc_head_mixes", -1);
 
     ggml_tensor * pre = ggml_mul(ctx0, mixes, hc_scale);
@@ -861,7 +861,7 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_attention(
     cb(kv_cmpr, "kv_cmpr", il);
 
     q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
-    ggml_tensor * q_nope_absorbed = ggml_mul_mat(ctx0, layer.wk_b, q_nope);
+    ggml_tensor * q_nope_absorbed = build_lora_mm(layer.wk_b, q_nope);
     q_nope_absorbed = ggml_permute(ctx0, q_nope_absorbed, 0, 2, 1, 3);
 
     // rope goes last so build_rope_shift() can shift the cache in place
@@ -875,7 +875,7 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_attention(
 
     if (hparams.is_swa(il)) {
         attn = build_attn(inp_attn->get_swa(),
-                nullptr, nullptr, nullptr,
+                nullptr, nullptr,
                 Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, layer.wv_b, kq_scale, il);
     } else {
         // as build_attn of the DSA input, with the cells of the picked pools instead of a top-k of cells
@@ -945,9 +945,9 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_latent_moe(
     }
 
     ggml_tensor * shexp = build_ffn(cur,
-            layer.ffn_up_shexp,   NULL, NULL,
-            layer.ffn_gate_shexp, NULL, NULL,
-            layer.ffn_down_shexp, NULL, NULL,
+            layer.ffn_up_shexp,   NULL,
+            layer.ffn_gate_shexp, NULL,
+            layer.ffn_down_shexp, NULL,
             NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
     cb(shexp, "ffn_shexp", il);
 
@@ -1037,9 +1037,9 @@ llama_model_hy_v4_flash::graph::graph(const llama_model & model, const llm_graph
 
         if ((uint32_t) il < hparams.n_layer_dense_lead) {
             cur = build_ffn(cur,
-                    layer.ffn_up,   NULL, NULL,
-                    layer.ffn_gate, NULL, NULL,
-                    layer.ffn_down, NULL, NULL,
+                    layer.ffn_up,   NULL,
+                    layer.ffn_gate, NULL,
+                    layer.ffn_down, NULL,
                     NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
         } else {
             cur = build_latent_moe(model, cur, il);

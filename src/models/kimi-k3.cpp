@@ -361,11 +361,11 @@ ggml_tensor * llama_model_kimi_k3::graph::build_kda_layer(
     ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
     ggml_tensor * conv_state_all  = build_rs(inp_rs, conv_states_all, conv_states_all->ne[0], n_seqs);
 
-    ggml_tensor * Qcur = build_kda_conv1d(inp_rs, conv_states_all, conv_state_all, 0, ggml_mul_mat(ctx0, layer.wq, cur),
+    ggml_tensor * Qcur = build_kda_conv1d(inp_rs, conv_states_all, conv_state_all, 0, build_lora_mm(layer.wq, cur),
             layer.ssm_q_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, il);
-    ggml_tensor * Kcur = build_kda_conv1d(inp_rs, conv_states_all, conv_state_all, 1, ggml_mul_mat(ctx0, layer.wk, cur),
+    ggml_tensor * Kcur = build_kda_conv1d(inp_rs, conv_states_all, conv_state_all, 1, build_lora_mm(layer.wk, cur),
             layer.ssm_k_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, il);
-    ggml_tensor * Vcur = build_kda_conv1d(inp_rs, conv_states_all, conv_state_all, 2, ggml_mul_mat(ctx0, layer.wv, cur),
+    ggml_tensor * Vcur = build_kda_conv1d(inp_rs, conv_states_all, conv_state_all, 2, build_lora_mm(layer.wv, cur),
             layer.ssm_v_conv, d_conv, head_dim, n_head_kda, n_seq_tokens, n_seqs, il);
     cb(Qcur, "kda_q_conv", il);
     cb(Kcur, "kda_k_conv", il);
