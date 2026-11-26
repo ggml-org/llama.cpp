@@ -3,9 +3,9 @@
 	few models in reach (loaded, favorite, recent), each marked when it is the chat's or the
 	dictation's, and a row that opens all models as a page, in groups of the
 	same rows. Tapping a model switches the chat to it, loading it if need be, as on a desktop;
-	holding it opens its menu, as a held chat row does: unload it, or open its details over the
-	sheet. A search shows its results in place; it stays at the sheet's foot, under the reasoning
-	effort as the desktop picker has it.
+	holding it opens its menu, as a held chat row does: unload it, use it for dictation when it
+	hears, or open its details over the sheet. A search shows its results in place; it stays at
+	the sheet's foot, under the reasoning effort as the desktop picker has it.
 -->
 <script lang="ts">
 	import ModelAvatar from '../ModelAvatar.svelte';
@@ -22,7 +22,7 @@
 	} from '@ggml-org/llama-ui/app/sheets';
 	import { SHEET_CONTENT_CLASS } from '@ggml-org/llama-ui/constants';
 	import * as Drawer from '@ggml-org/llama-ui/ui/drawer';
-	import { Check, Info, Loader2, Mic, MoreHorizontal, PowerOff } from '@lucide/svelte';
+	import { Check, Info, Loader2, Mic, MicOff, MoreHorizontal, PowerOff } from '@lucide/svelte';
 	import DropdownMenuActions from '#lib/components/app/navigation/DropdownMenuActions.svelte';
 	import {
 		MODELS_SHEET_GROUP_KEYS,
@@ -30,7 +30,8 @@
 		ROW_LONG_PRESS_MS,
 		SETTINGS_KEYS,
 		SHEET_AUTO_HEIGHT_CLASS,
-		SHEET_FULL_HEIGHT_CLASS
+		SHEET_FULL_HEIGHT_CLASS,
+		VOICE_DICTATION_MODEL_LABEL
 	} from '#lib/constants/index.ts';
 	import { ModelsSheetPage } from '#lib/enums/index.ts';
 	import { useLongPress } from '#lib/hooks/use-long-press.svelte.ts';
@@ -196,6 +197,21 @@
 					onclick: () => void modelsStore.status.unload(model)
 				});
 			}
+		}
+
+		// as the desktop row's microphone: a router model that hears can be chosen to transcribe
+		// dictation (the one Automatic picked is kept so), and the chosen one can hand the choice
+		// back to Automatic
+		if (serverStore.isRouterMode && voiceStore.roleOf(model) !== null) {
+			const chosen = voiceStore.isDictationModel(model) && !voiceStore.dictationIsAutomatic;
+
+			actions.push({
+				icon: chosen ? MicOff : Mic,
+				label: chosen
+					? VOICE_DICTATION_MODEL_LABEL.pickAutomatically
+					: VOICE_DICTATION_MODEL_LABEL.use,
+				onclick: () => voiceStore.toggleDictation(model)
+			});
 		}
 
 		actions.push({
