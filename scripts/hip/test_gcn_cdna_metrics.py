@@ -111,6 +111,13 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn('Kernels compared: 0', output)
 
+    def test_vgpr_only_records_are_not_compared(self):
+        write_records(self.base, 'a.opt.yaml', {'vgpr_only': {'NumVGPR': 64}, 'same': {'Occupancy': 4}})
+        write_records(self.pr, 'a.opt.yaml', {'vgpr_only': {'NumVGPR': 128}, 'same': {'Occupancy': 4}})
+        code, output = self.compare()
+        self.assertEqual(code, 0)
+        self.assertIn('Kernels compared: 1 (baseline 1, PR 1)', output)
+
     def test_missing_or_invalid_records_fail(self):
         with self.assertRaisesRegex(ValueError, 'No optimization records'):
             metrics.parse_remarks(self.pr)
