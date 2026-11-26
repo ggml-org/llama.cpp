@@ -39,6 +39,7 @@ const timelines = new WeakMap<Page, PolishEvent[]>();
 /**
  * Draws a fake cursor and click ripples, since recorded videos don't include
  * the OS pointer, and a fingertip per touch, so a pinch shows as two fingers.
+ * A touch device has no cursor: a click shows as a tap of a fingertip.
  * Runs in the page via addInitScript.
  */
 function installCursorOverlay(): void {
@@ -76,6 +77,11 @@ function installCursorOverlay(): void {
 		caption.id = 'demo-caption';
 		document.documentElement.appendChild(caption);
 
+		const touch = navigator.maxTouchPoints > 0;
+		const tap = Object.assign(document.createElement('div'), { className: 'demo-finger' });
+
+		if (touch) cursor.style.display = 'none';
+
 		document.addEventListener(
 			'mousemove',
 			(e) => (cursor.style.translate = `${e.clientX}px ${e.clientY}px`),
@@ -85,6 +91,15 @@ function installCursorOverlay(): void {
 			'mousedown',
 			(e) => {
 				cursor.classList.add('down');
+
+				if (touch) {
+					tap.style.left = `${e.clientX}px`;
+					tap.style.top = `${e.clientY}px`;
+					tap.style.opacity = '1';
+					document.documentElement.appendChild(tap);
+					setTimeout(() => (tap.style.opacity = '0'), 250);
+				}
+
 				const ripple = document.createElement('div');
 
 				ripple.className = 'demo-ripple';
@@ -740,7 +755,7 @@ export const test = base.extend<DemoOptions & { demo: Demo }>({
 	mockServer: [null, { option: true }],
 
 	page: async (
-		{ browser, chats, colorScheme, mockServer, page, settings, startPath, story, traces },
+		{ chats, colorScheme, mockServer, page, settings, startPath, story, traces },
 		use,
 		testInfo
 	) => {
@@ -791,14 +806,7 @@ export const test = base.extend<DemoOptions & { demo: Demo }>({
 		mkdirSync(VIDEOS_DIR, { recursive: true });
 
 		if (timeline && viewport) {
-			await renderPolished(
-				browser,
-				recorder.footage,
-				timeline,
-				viewport,
-				colorScheme === 'dark',
-				mp4
-			);
+			await renderPolished(recorder.footage, timeline, viewport, colorScheme === 'dark', mp4);
 			recorder.discard();
 		} else {
 			recorder.encode(mp4);

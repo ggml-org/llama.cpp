@@ -116,11 +116,11 @@ Records every `scripts/docs/*.demo.ts` from the storage target and uploads `vide
 
 ## Writing a demo
 
-Scripts get `test` and `expect` from `helpers.ts` without importing them. `demo.click`, `demo.hover` and `demo.type` glide a visible cursor to the target before acting, with timing varied like a person's (seeded per demo, so re-takes match); `demo.scroll` turns the mouse wheel over a target; `demo.zoom` moves the camera in on a control or a point to show a detail too small to read in the frame, holds, and moves back out; `demo.zoomIn` and `demo.zoomOut` do the two halves, to keep the camera on a detail while the demo goes on; `demo.caption` shows a caption under the window. For voice input, `demo.microphone()` gives the page a microphone that hears nothing but `demo.speak(text)`, which reads the text in a synthetic voice (macOS `say`) and shows it as a caption, since the video has no sound. Use `test.use({ settings, startPath })` to seed other settings or start on another route.
+Scripts get `test` and `expect` from `helpers.ts` without importing them. `demo.click`, `demo.hover` and `demo.type` glide a visible cursor to the target before acting, with timing varied like a person's (seeded per demo, so re-takes match); on a touch device (`hasTouch`) there is no cursor, and a click shows as a tap of a fingertip; `demo.scroll` turns the mouse wheel over a target; `demo.zoom` moves the camera in on a control or a point to show a detail too small to read in the frame, holds, and moves back out; `demo.zoomIn` and `demo.zoomOut` do the two halves, to keep the camera on a detail while the demo goes on; `demo.caption` shows a caption under the window. For voice input, `demo.microphone()` gives the page a microphone that hears nothing but `demo.speak(text)`, which reads the text in a synthetic voice (macOS `say`) and shows it as a caption, since the video has no sound. Use `test.use({ settings, startPath })` to seed other settings or start on another route.
 
 ## The render
 
-A video is not the raw screencast. The app sits in a rounded window on a ground of the Llama brand (the day sky, or the night sky for a dark recording), a phone's viewport gets a phone's rounder corners, and captions are chips under the window, in Llama Sans. `demo.zoom` moves a camera with eased moves and motion blur. The grounds, the fonts and the lockup come from `@ggml-org/llama-brand`, which the app already depends on, and sizes follow the brand's grid (u = the short side / 24, a margin of 2u).
+A video is not the raw screencast. The app sits in a rounded window on a ground of the Llama brand (the day sky, or the night sky for a dark recording), a phone's viewport gets a phone's rounder corners, and captions are chips under the window, in Llama Sans. `demo.zoom` moves a camera over the whole stage, with eased moves and motion blur: the window itself comes closer, with its corners and the ground round it, and the app is not cropped inside a fixed window. The grounds, the fonts and the lockup come from `@ggml-org/llama-brand`, which the app already depends on, and sizes follow the brand's grid (u = the short side / 24, a margin of 2u).
 
 To keep the camera on a detail across several actions:
 
@@ -138,7 +138,7 @@ await demo.zoomOut();
 
 With `DEMO_POLISH=0` the video is the screencast as recorded: `demo.zoom` pinches the page (with the fingertips drawn on a touch device), captions show over the app, and `demo.zoomIn` and `demo.zoomOut` do nothing, as the cursor cannot act on a pinched page.
 
-The render needs no extra tool: a page in the demo's Chromium lays out each frame from the recorded frames and the script's timeline, and `ffmpeg` encodes them. It takes about three times as long as the video.
+The render needs no extra tool: a page in the demo's Chromium lays out each frame from the recorded frames and the script's timeline, and `ffmpeg` encodes them. It takes a few times as long as the video, and longer with many camera moves (about 2 minutes for 18 s of video with six moves).
 
 ## A mocked llama-server
 

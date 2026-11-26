@@ -1,7 +1,7 @@
 /**
  * Polish mode, on unless DEMO_POLISH=0: renders a demo as a branded video instead of the plain screencast.
- * The app sits in a rounded window on a ground of the Llama brand, `demo.zoom` moves a camera with
- * eased, motion-blurred moves, and captions sit under the window. A Chromium page styled by
+ * The app sits in a rounded window on a ground of the Llama brand, `demo.zoom` moves a camera over
+ * the whole stage with eased, motion-blurred moves, and captions sit under the window. A Chromium page styled by
  * @ggml-org/llama-brand lays out each frame, and ffmpeg encodes its screenshots.
  *
  * Env:
@@ -10,7 +10,7 @@
  */
 
 import { type Footage, FPS, H264_ARGS } from './recorder.ts';
-import type { Browser } from '@playwright/test';
+import { chromium } from '@playwright/test';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { join, resolve } from 'node:path';
@@ -45,8 +45,6 @@ const LOGO_FADE_S = 0.5;
 /** Camera positions averaged into one frame while the camera moves. */
 const BLUR_SAMPLES = 12;
 const JPEG_QUALITY = 95;
-/** Headless Chromium captures at the device scale it was launched with, whatever the page is set to. */
-const CAPTURE_SCALE = Number(process.env.DEMO_SCALE ?? 2);
 /** The stage page, the brand's files and the recorded frames are served from here. */
 const STAGE_ORIGIN = 'http://demo.invalid';
 const BRAND_DIR = resolve(import.meta.dirname, '../node_modules/@ggml-org/llama-brand');
@@ -61,15 +59,28 @@ interface Size {
 	width: number;
 }
 
-/** The part of a recorded frame that fills the window, in fractions of the frame. */
-interface Crop extends Size {
+/** Where the stage is drawn in a frame: scaled about its top left corner, then moved. */
+interface Camera {
+	scale: number;
 	x: number;
 	y: number;
 }
 
+/** Where the window sits on the stage, and how much larger it is than the page. */
+interface Layout {
+	fit: number;
+	height: number;
+	left: number;
+	maxWidth: number;
+	size: Size;
+	top: number;
+	u: number;
+	width: number;
+}
+
 interface Shot {
 	caption: null | { opacity: number; text: string };
-	crops: Crop[];
+	cameras: Camera[];
 	frame: string;
 	/** How much of the logo card shows over the scene, 0 to 1. */
 	logo: number;
@@ -81,48 +92,54 @@ const smootherstep = (t: number) => {
 	return x * x * x * (x * (x * 6 - 15) + 10);
 };
 
-/** The camera's crop at any time: each move eases from where the camera was to its target. */
-function cameraPath(events: PolishEvent[], viewport: Size): (time: number) => Crop {
-	interface Camera {
-		/** Natural log of the scale, so a zoom looks as fast at 2x as at 1x. */
+/**
+ * The camera at any time: each move eases from where the camera was to its target. It looks at the
+ * whole stage, so a zoom brings the window itself closer, with its corners and the ground round it.
+ */
+function cameraPath(events: PolishEvent[], layout: Layout): (time: number) => Camera {
+	/** The point of the stage at the middle of the frame, and the natural log of the scale. */
+	interface View {
 		zoom: number;
 		x: number;
 		y: number;
 	}
 
-	const rest: Camera = { x: viewport.width / 2, y: viewport.height / 2, zoom: 0 };
-	const moves: { from: Camera; start: number; to: Camera }[] = [];
+	const { height, width } = layout.size;
+	const rest: View = { x: width / 2, y: height / 2, zoom: 0 };
+	const moves: { from: View; start: number; to: View }[] = [];
 	const at = (time: number) => {
-		let camera = rest;
+		let view = rest;
 
 		for (const { from, start, to } of moves) {
 			if (time < start) break;
 
 			const k = smootherstep(((time - start) * 1000) / CAMERA_MOVE_MS);
 
-			camera = {
+			view = {
 				x: from.x + (to.x - from.x) * k,
 				y: from.y + (to.y - from.y) * k,
 				zoom: from.zoom + (to.zoom - from.zoom) * k
 			};
 		}
 
-		return camera;
+		return view;
 	};
 
 	for (const event of events) {
 		if (event.type !== 'camera') continue;
 
-		// the camera stays inside the page
-		const halfWidth = viewport.width / 2 / event.scale;
-		const halfHeight = viewport.height / 2 / event.scale;
+		// the frame stays inside the stage
+		const halfWidth = width / 2 / event.scale;
+		const halfHeight = height / 2 / event.scale;
+		const x = layout.left + event.x * layout.fit;
+		const y = layout.top + event.y * layout.fit;
 
 		moves.push({
 			from: at(event.time),
 			start: event.time,
 			to: {
-				x: Math.min(Math.max(event.x, halfWidth), viewport.width - halfWidth),
-				y: Math.min(Math.max(event.y, halfHeight), viewport.height - halfHeight),
+				x: Math.min(Math.max(x, halfWidth), width - halfWidth),
+				y: Math.min(Math.max(y, halfHeight), height - halfHeight),
 				zoom: Math.log(event.scale)
 			}
 		});
@@ -130,14 +147,9 @@ function cameraPath(events: PolishEvent[], viewport: Size): (time: number) => Cr
 
 	return (time) => {
 		const { x, y, zoom } = at(time);
-		const size = 1 / Math.exp(zoom);
+		const scale = Math.exp(zoom);
 
-		return {
-			height: size,
-			width: size,
-			x: x / viewport.width - size / 2,
-			y: y / viewport.height - size / 2
-		};
+		return { scale, x: width / 2 - x * scale, y: height / 2 - y * scale };
 	};
 }
 
@@ -166,14 +178,10 @@ function captionTrack(events: PolishEvent[], end: number): (time: number) => Sho
 	};
 }
 
-/** The stage: a ground of the brand with the window, the caption chip and the logo card on it. */
-function stageHtml(viewport: Size, dark: boolean, captions: boolean): string {
+/** The window is the page's viewport, as large as fits inside the margin. */
+function stageLayout(viewport: Size, captions: boolean): Layout {
 	const size = viewport.height > viewport.width ? PORTRAIT : LANDSCAPE;
 	const u = Math.min(size.height, size.width) / UNITS_PER_SHORT_SIDE;
-	const ground = process.env.DEMO_POLISH_GROUND ?? (dark ? 'night' : 'day');
-
-	if (!(ground in GROUNDS)) throw new Error(`demo: no ground "${ground}" in the brand`);
-
 	// the caption row is kept free under the window only when the demo has captions
 	const maxWidth = size.width - 2 * MARGIN_U * u;
 	const maxHeight =
@@ -181,9 +189,27 @@ function stageHtml(viewport: Size, dark: boolean, captions: boolean): string {
 	const fit = Math.min(maxWidth / viewport.width, maxHeight / viewport.height);
 	const width = Math.round(viewport.width * fit);
 	const height = Math.round(viewport.height * fit);
-	const left = Math.round((size.width - width) / 2);
-	const top = Math.round(MARGIN_U * u + (maxHeight - height) / 2);
-	const phone = viewport.height > viewport.width;
+
+	return {
+		fit,
+		height,
+		left: Math.round((size.width - width) / 2),
+		maxWidth,
+		size,
+		top: Math.round(MARGIN_U * u + (maxHeight - height) / 2),
+		u,
+		width
+	};
+}
+
+/** The stage: a ground of the brand with the window, the caption chip and the logo card on it. */
+function stageHtml(layout: Layout, dark: boolean): string {
+	const { height, left, maxWidth, size, top, u, width } = layout;
+	const ground = process.env.DEMO_POLISH_GROUND ?? (dark ? 'night' : 'day');
+
+	if (!(ground in GROUNDS)) throw new Error(`demo: no ground "${ground}" in the brand`);
+
+	const phone = size.height > size.width;
 	const corners = phone
 		? `border-radius: calc(var(--u) * ${PHONE_RADIUS_U}); corner-shape: squircle;`
 		: `border-radius: calc(var(--u) * ${WINDOW_RADIUS_U});`;
@@ -195,8 +221,8 @@ function stageHtml(viewport: Size, dark: boolean, captions: boolean): string {
 		<link rel="stylesheet" href="/brand/css/communications.css" />
 		<style>
 			body { position: relative; overflow: hidden; margin: 0; width: ${size.width}px; height: ${size.height}px; --u: ${u}px; }
-			#scene, #logo { position: absolute; inset: 0; }
-			#view { position: absolute; left: ${left}px; top: ${top}px; width: ${width}px; height: ${height}px; ${corners}
+			#scene, #logo, #layers > div { position: absolute; inset: 0; transform-origin: 0 0; }
+			#layers canvas { position: absolute; left: ${left}px; top: ${top}px; width: ${width}px; height: ${height}px; ${corners}
 				box-shadow: 0 calc(var(--u) * 0.5) calc(var(--u) * 1.6) rgb(0 0 0 / 0.18); }
 			#caption { position: absolute; left: 50%; bottom: calc(var(--u) * ${MARGIN_U}); display: flex; align-items: center;
 				box-sizing: border-box; height: calc(var(--u) * ${CAPTION_HEIGHT_U}); padding: 0 calc(var(--u) * ${CAPTION_PAD_U});
@@ -207,7 +233,7 @@ function stageHtml(viewport: Size, dark: boolean, captions: boolean): string {
 		</style>
 		<body class="ground ground-${ground}">
 			<div id="scene">
-				<canvas id="view" width="${width}" height="${height}"></canvas>
+				<div id="layers">${'<div><canvas></canvas></div>'.repeat(BLUR_SAMPLES)}</div>
 				<div id="caption" data-font="${CAPTION_FONT_U * u}" data-min-font="${CAPTION_MIN_FONT_U * u}"
 					data-rise="${CAPTION_RISE_U * u}"></div>
 			</div>
@@ -218,7 +244,6 @@ function stageHtml(viewport: Size, dark: boolean, captions: boolean): string {
 /** Lays out one output frame on the stage. Runs in the page. */
 async function drawFrame(shot: Shot): Promise<void> {
 	const stage = window as unknown as { demoFrame?: string; demoImage?: ImageBitmap };
-	const canvas = document.querySelector<HTMLCanvasElement>('#view')!;
 	const caption = document.querySelector<HTMLElement>('#caption')!;
 
 	if (stage.demoFrame !== shot.frame) {
@@ -232,23 +257,28 @@ async function drawFrame(shot: Shot): Promise<void> {
 	}
 
 	const image = stage.demoImage!;
-	const view = canvas.getContext('2d')!;
 
-	view.imageSmoothingQuality = 'high';
-	// each crop drawn at 1/n over the ones before leaves their mean: the motion blur
-	shot.crops.forEach((crop, i) => {
-		view.globalAlpha = 1 / (i + 1);
-		view.drawImage(
-			image,
-			crop.x * image.width,
-			crop.y * image.height,
-			crop.width * image.width,
-			crop.height * image.height,
-			0,
-			0,
-			canvas.width,
-			canvas.height
-		);
+	// one copy of the window per camera position, each at 1/n over the ones before, which leaves
+	// their mean: the motion blur. A still frame shows one copy
+	document.querySelectorAll<HTMLElement>('#layers > div').forEach((layer, i) => {
+		const camera = shot.cameras[i];
+		const canvas = layer.querySelector('canvas')!;
+
+		layer.style.display = camera ? '' : 'none';
+
+		if (!camera) return;
+
+		// drawn at the size it was recorded at, so a zoom stays sharp
+		if (canvas.dataset.frame !== shot.frame) {
+			if (canvas.width !== image.width)
+				Object.assign(canvas, { height: image.height, width: image.width });
+
+			canvas.getContext('2d')!.drawImage(image, 0, 0);
+			canvas.dataset.frame = shot.frame;
+		}
+
+		layer.style.opacity = String(1 / (i + 1));
+		layer.style.transform = `translate(${camera.x}px, ${camera.y}px) scale(${camera.scale})`;
 	});
 
 	if (shot.caption && caption.textContent !== shot.caption.text) {
@@ -275,7 +305,6 @@ async function drawFrame(shot: Shot): Promise<void> {
 
 /** Renders the recorded frames and the demo's timeline into `mp4`. */
 export async function renderPolished(
-	browser: Browser,
 	footage: Footage,
 	timeline: PolishEvent[],
 	viewport: Size,
@@ -286,12 +315,18 @@ export async function renderPolished(
 
 	if (card && !LOGO_CARDS.includes(card)) throw new Error(`demo: DEMO_POLISH_LOGO is "${card}"`);
 
-	const html = stageHtml(
+	const layout = stageLayout(
 		viewport,
-		dark,
 		timeline.some((event) => event.type === 'caption')
 	);
-	const size = viewport.height > viewport.width ? PORTRAIT : LANDSCAPE;
+	const html = stageHtml(layout, dark);
+	const { size } = layout;
+	// a browser of its own: the demo's is launched at the recording's device scale, and draws
+	// every frame of this page that many times larger
+	const browser = await chromium.launch({
+		args: ['--force-device-scale-factor=1'],
+		chromiumSandbox: true
+	});
 	const page = await browser.newPage({ deviceScaleFactor: 1, viewport: size });
 
 	await page.route(`${STAGE_ORIGIN}/**`, (route) => {
@@ -328,8 +363,6 @@ export async function renderPolished(
 			String(FPS),
 			'-i',
 			'-',
-			'-vf',
-			`scale=${size.width}:${size.height}:flags=lanczos`,
 			...H264_ARGS,
 			mp4
 		],
@@ -339,10 +372,10 @@ export async function renderPolished(
 	const seconds = footage.end - start;
 	const intro = card === 'start' || card === 'both' ? LOGO_CARD_S : 0;
 	const outro = card === 'end' || card === 'both' ? LOGO_CARD_S : 0;
-	const cropAt = cameraPath(timeline, viewport);
+	const cameraAt = cameraPath(timeline, layout);
 	const captionAt = captionTrack(timeline, footage.end);
-	const moved = (a: Crop, b: Crop) =>
-		Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y), Math.abs(a.width - b.width)) > 1e-6;
+	const moved = (a: Camera, b: Camera) =>
+		Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y), Math.abs(a.scale - b.scale)) > 1e-3;
 
 	let source = 0;
 	let drawn = '';
@@ -356,10 +389,10 @@ export async function renderPolished(
 		while ((footage.frames[source + 1]?.time ?? Infinity) <= time) source++;
 
 		const shot: Shot = {
+			cameras: moved(cameraAt(time), cameraAt(time + 1 / FPS))
+				? Array.from({ length: BLUR_SAMPLES }, (_, s) => cameraAt(time + s / BLUR_SAMPLES / FPS))
+				: [cameraAt(time)],
 			caption: captionAt(time),
-			crops: moved(cropAt(time), cropAt(time + 1 / FPS))
-				? Array.from({ length: BLUR_SAMPLES }, (_, s) => cropAt(time + s / BLUR_SAMPLES / FPS))
-				: [cropAt(time)],
 			frame: `${STAGE_ORIGIN}/frames/${source}`,
 			logo:
 				elapsed < 0
@@ -374,7 +407,6 @@ export async function renderPolished(
 
 			// straight from Chromium: Playwright's own screenshot is several times slower
 			const { data } = await cdp.send('Page.captureScreenshot', {
-				clip: { ...size, scale: 1 / CAPTURE_SCALE, x: 0, y: 0 },
 				format: 'jpeg',
 				optimizeForSpeed: true,
 				quality: JPEG_QUALITY
@@ -391,7 +423,7 @@ export async function renderPolished(
 
 	const [code] = await once(ffmpeg, 'close');
 
-	await page.context().close();
+	await browser.close();
 
 	if (code !== 0) throw new Error(`demo: ffmpeg exited with ${code} on the polished render`);
 }
