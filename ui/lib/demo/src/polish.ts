@@ -11,9 +11,11 @@
 
 import { type Footage, FPS, H264_ARGS } from "./recorder.ts";
 import type { BrowserType } from "@playwright/test";
-import { spawn } from "node:child_process";
+import { type ChildProcessByStdio, spawn } from "node:child_process";
+import { rmSync } from "node:fs";
 import { once } from "node:events";
-import { join, resolve } from "node:path";
+import type { Writable } from "node:stream";
+import { join, resolve, sep } from "node:path";
 
 export const POLISH = process.env.DEMO_POLISH !== "0";
 export const CAMERA_MOVE_MS = 650;
@@ -444,112 +446,127 @@ export async function renderPolished(
     args: ["--force-device-scale-factor=1"],
     chromiumSandbox: true,
   });
-  const page = await browser.newPage({ deviceScaleFactor: 1, viewport: size });
+  let ffmpeg: ChildProcessByStdio<Writable, null, null> | undefined;
 
-  await page.route(`${STAGE_ORIGIN}/**`, (route) => {
-    const path = decodeURIComponent(new URL(route.request().url()).pathname);
-    const file = join(brandDir, path.replace(/^\/brand\//, ""));
+  try {
+    const page = await browser.newPage({
+      deviceScaleFactor: 1,
+      viewport: size,
+    });
 
-    if (path.startsWith("/frames/")) {
-      return route.fulfill({
-        path: footage.frames[Number(path.split("/")[2])].file,
-      });
+    await page.route(`${STAGE_ORIGIN}/**`, (route) => {
+      const path = decodeURIComponent(new URL(route.request().url()).pathname);
+      const file = join(brandDir, path.replace(/^\/brand\//, ""));
+
+      if (path.startsWith("/frames/")) {
+        return route.fulfill({
+          path: footage.frames[Number(path.split("/")[2])].file,
+        });
+      }
+
+      return path.startsWith("/brand/") && file.startsWith(brandDir + sep)
+        ? route.fulfill({ path: file })
+        : route.fulfill({ body: html, contentType: "text/html" });
+    });
+    await page.goto(STAGE_ORIGIN);
+
+    const cdp = await page.context().newCDPSession(page);
+
+    await page.evaluate(async () => {
+      await Promise.all([...document.fonts].map((font) => font.load()));
+      await document.querySelector("img")!.decode();
+    });
+    ffmpeg = spawn(
+      "ffmpeg",
+      [
+        "-y",
+        "-loglevel",
+        "error",
+        "-f",
+        "image2pipe",
+        "-c:v",
+        "mjpeg",
+        "-framerate",
+        String(FPS),
+        "-i",
+        "-",
+        ...H264_ARGS,
+        mp4,
+      ],
+      { stdio: ["pipe", "inherit", "inherit"] },
+    );
+    const start = footage.frames[0].time;
+    const seconds = footage.end - start;
+    const intro = card === "start" || card === "both" ? LOGO_CARD_S : 0;
+    const outro = card === "end" || card === "both" ? LOGO_CARD_S : 0;
+    const cameraAt = cameraPath(timeline, layout);
+    const captionAt = captionTrack(timeline, footage.end);
+    const moved = (a: Camera, b: Camera) =>
+      Math.max(
+        Math.abs(a.x - b.x),
+        Math.abs(a.y - b.y),
+        Math.abs(a.scale - b.scale),
+      ) > 1e-3;
+
+    let source = 0;
+    let drawn = "";
+    let jpeg = Buffer.alloc(0);
+
+    for (let i = 0; i < Math.round((intro + seconds + outro) * FPS); i++) {
+      // the footage holds its first frame under the opening card and its last under the closing one
+      const elapsed = i / FPS - intro;
+      const time = start + Math.min(Math.max(elapsed, 0), seconds);
+
+      while ((footage.frames[source + 1]?.time ?? Infinity) <= time) source++;
+
+      const shot: Shot = {
+        cameras: moved(cameraAt(time), cameraAt(time + 1 / FPS))
+          ? Array.from({ length: BLUR_SAMPLES }, (_, s) =>
+              cameraAt(time + (s / BLUR_SAMPLES) * (SHUTTER / FPS)),
+            )
+          : [cameraAt(time)],
+        caption: captionAt(time),
+        frame: `${STAGE_ORIGIN}/frames/${source}`,
+        logo:
+          elapsed < 0
+            ? 1 - smootherstep(1 + elapsed / LOGO_FADE_S)
+            : smootherstep((elapsed - seconds) / LOGO_FADE_S),
+      };
+      const key = JSON.stringify(shot);
+
+      // a still frame is drawn once
+      if (key !== drawn) {
+        await page.evaluate(drawFrame, shot);
+
+        // straight from Chromium: Playwright's own screenshot is several times slower
+        const { data } = await cdp.send("Page.captureScreenshot", {
+          format: "jpeg",
+          optimizeForSpeed: true,
+          quality: JPEG_QUALITY,
+        });
+
+        jpeg = Buffer.from(data, "base64");
+        drawn = key;
+      }
+
+      if (!ffmpeg.stdin.write(jpeg)) await once(ffmpeg.stdin, "drain");
     }
 
-    return path.startsWith("/brand/") && file.startsWith(brandDir)
-      ? route.fulfill({ path: file })
-      : route.fulfill({ body: html, contentType: "text/html" });
-  });
-  await page.goto(STAGE_ORIGIN);
+    ffmpeg.stdin.end();
 
-  const cdp = await page.context().newCDPSession(page);
+    const [code] = await once(ffmpeg, "close");
 
-  await page.evaluate(async () => {
-    await Promise.all([...document.fonts].map((font) => font.load()));
-    await document.querySelector("img")!.decode();
-  });
-  const ffmpeg = spawn(
-    "ffmpeg",
-    [
-      "-y",
-      "-loglevel",
-      "error",
-      "-f",
-      "image2pipe",
-      "-c:v",
-      "mjpeg",
-      "-framerate",
-      String(FPS),
-      "-i",
-      "-",
-      ...H264_ARGS,
-      mp4,
-    ],
-    { stdio: ["pipe", "inherit", "inherit"] },
-  );
-  const start = footage.frames[0].time;
-  const seconds = footage.end - start;
-  const intro = card === "start" || card === "both" ? LOGO_CARD_S : 0;
-  const outro = card === "end" || card === "both" ? LOGO_CARD_S : 0;
-  const cameraAt = cameraPath(timeline, layout);
-  const captionAt = captionTrack(timeline, footage.end);
-  const moved = (a: Camera, b: Camera) =>
-    Math.max(
-      Math.abs(a.x - b.x),
-      Math.abs(a.y - b.y),
-      Math.abs(a.scale - b.scale),
-    ) > 1e-3;
+    if (code !== 0)
+      throw new Error(
+        `demo: ffmpeg exited with ${code} on the polished render`,
+      );
+  } catch (error) {
+    // a part-rendered mp4 would play as a shorter, valid video
+    ffmpeg?.kill("SIGKILL");
+    rmSync(mp4, { force: true });
 
-  let source = 0;
-  let drawn = "";
-  let jpeg = Buffer.alloc(0);
-
-  for (let i = 0; i < Math.round((intro + seconds + outro) * FPS); i++) {
-    // the footage holds its first frame under the opening card and its last under the closing one
-    const elapsed = i / FPS - intro;
-    const time = start + Math.min(Math.max(elapsed, 0), seconds);
-
-    while ((footage.frames[source + 1]?.time ?? Infinity) <= time) source++;
-
-    const shot: Shot = {
-      cameras: moved(cameraAt(time), cameraAt(time + 1 / FPS))
-        ? Array.from({ length: BLUR_SAMPLES }, (_, s) =>
-            cameraAt(time + (s / BLUR_SAMPLES) * (SHUTTER / FPS)),
-          )
-        : [cameraAt(time)],
-      caption: captionAt(time),
-      frame: `${STAGE_ORIGIN}/frames/${source}`,
-      logo:
-        elapsed < 0
-          ? 1 - smootherstep(1 + elapsed / LOGO_FADE_S)
-          : smootherstep((elapsed - seconds) / LOGO_FADE_S),
-    };
-    const key = JSON.stringify(shot);
-
-    // a still frame is drawn once
-    if (key !== drawn) {
-      await page.evaluate(drawFrame, shot);
-
-      // straight from Chromium: Playwright's own screenshot is several times slower
-      const { data } = await cdp.send("Page.captureScreenshot", {
-        format: "jpeg",
-        optimizeForSpeed: true,
-        quality: JPEG_QUALITY,
-      });
-
-      jpeg = Buffer.from(data, "base64");
-      drawn = key;
-    }
-
-    if (!ffmpeg.stdin.write(jpeg)) await once(ffmpeg.stdin, "drain");
+    throw error;
+  } finally {
+    await browser.close();
   }
-
-  ffmpeg.stdin.end();
-
-  const [code] = await once(ffmpeg, "close");
-
-  await browser.close();
-
-  if (code !== 0)
-    throw new Error(`demo: ffmpeg exited with ${code} on the polished render`);
 }

@@ -61,6 +61,7 @@ export function installCursorOverlay(): void {
     const tap = Object.assign(document.createElement("div"), {
       className: "demo-finger",
     });
+    let lift: ReturnType<typeof setTimeout> | undefined;
 
     if (touch) cursor.style.display = "none";
 
@@ -79,7 +80,9 @@ export function installCursorOverlay(): void {
           tap.style.top = `${e.clientY}px`;
           tap.style.opacity = "1";
           document.documentElement.appendChild(tap);
-          setTimeout(() => (tap.style.opacity = "0"), 250);
+          // a quick second tap restarts the fade, so the first one's timer does not hide it
+          clearTimeout(lift);
+          lift = setTimeout(() => (tap.style.opacity = "0"), 250);
         }
 
         const ripple = document.createElement("div");
@@ -369,7 +372,7 @@ export class Demo {
   async speak(text: string, voice = "Samantha", ms = 400): Promise<void> {
     const wav = synthesizeSpeech(text, voice);
 
-    await this.showCaption(`“${text}”`);
+    await this.showCaption(`"${text}"`);
     await this.page.evaluate(
       (base64) =>
         (
@@ -464,6 +467,8 @@ export class Demo {
     scale = 2.5,
   ): Promise<void> {
     if (!this.timeline) return;
+
+    if (!("x" in target)) await target.scrollIntoViewIfNeeded();
 
     const point = "x" in target ? target : await this.center(target);
 

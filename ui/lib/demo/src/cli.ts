@@ -219,7 +219,9 @@ function demoSection(
 ): string {
   const preview = ({ gif, mp4, title }: (typeof links)[number]) =>
     `[![${title.replace(/[[\]|]/g, "")}](${gif})](${mp4})`;
-  const cell = (text: string) => text.replace(/\|/g, "\\|");
+  // a line break would end the table row, so it becomes one inside the cell
+  const cell = (text: string) =>
+    text.replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>");
   const rows = Array.from(
     { length: Math.ceil(links.length / columns) },
     (_, i) => links.slice(i * columns, (i + 1) * columns),
@@ -333,9 +335,10 @@ async function recordPr(number: string, trustedSha?: string): Promise<void> {
   rmSync(worktree, { force: true, recursive: true });
   run("git", ["worktree", "prune"]);
   run("git", ["worktree", "add", "--detach", worktree, sha]);
+  // git's own path from the top to the app, so a symlinked checkout path cannot skew it
   const appInWorktree = join(
     worktree,
-    relative(run("git", ["rev-parse", "--show-toplevel"]), app.dir),
+    run("git", ["rev-parse", "--show-prefix"], { cwd: app.dir }),
   );
 
   for (const dir of [".", ...(app.linkNodeModules ?? [])]) {

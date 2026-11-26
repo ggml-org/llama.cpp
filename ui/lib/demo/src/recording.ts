@@ -27,15 +27,25 @@ export interface RecordingOptions {
   videosDir: string;
 }
 
-/** Draws the cursor in `page` and starts the timeline the render plays. Call it before the page loads. */
+/**
+ * Draws the cursor in `page` and, for the render, starts the timeline it plays. Call it before
+ * the page loads. A page the render cannot frame (no fixed viewport) records plainly, with
+ * captions and zooms in the page, rather than losing them.
+ */
 export async function prepareDemoPage(
   page: Page,
   testInfo: TestInfo,
 ): Promise<void> {
-  if (POLISH) {
-    timelines.set(page, []);
-    testInfo.setTimeout(testInfo.timeout + POLISH_RENDER_TIMEOUT_MS);
+  // the screencast and the render both run on the Chrome DevTools Protocol
+  const browserName = page.context().browser()?.browserType().name();
+
+  if (browserName !== "chromium") {
+    throw new Error(
+      `demo: ${testInfo.title} runs in ${browserName ?? "a browser Playwright did not launch"}, and demos record in Chromium only`,
+    );
   }
+
+  if (POLISH && page.viewportSize()) timelines.set(page, []);
 
   await page.addInitScript(installCursorOverlay);
 }
@@ -61,6 +71,10 @@ export async function recordDemo(
   await recorder.start(page);
   await run();
   await recorder.stop();
+
+  // added once the demo is done, so a test.setTimeout() in it cannot take the render's time away
+  if (timeline)
+    testInfo.setTimeout(testInfo.timeout + POLISH_RENDER_TIMEOUT_MS);
   await page.close();
 
   if (testInfo.status !== testInfo.expectedStatus) return;
@@ -72,7 +86,13 @@ export async function recordDemo(
 
   mkdirSync(options.videosDir, { recursive: true });
 
-  if (timeline && viewport && browserType) {
+  if (timeline) {
+    if (!viewport || !browserType) {
+      throw new Error(
+        `demo: ${testInfo.title} lost its viewport or browser before the render`,
+      );
+    }
+
     await renderPolished(
       browserType,
       options.brandDir,
