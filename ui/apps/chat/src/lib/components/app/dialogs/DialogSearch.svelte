@@ -463,7 +463,7 @@
 
 		<!-- the details pane leaves its right edge to its host, as Discover pads it -->
 		<div class="min-h-0 flex-1 overflow-y-auto pr-6">
-			<ModelsDiscoverDetailsContainer modelId={selectedModel.label} />
+			<ModelsDiscoverDetailsContainer compact modelId={selectedModel.label} />
 		</div>
 	{:else}
 		<div class="min-h-0 flex-1 overflow-y-auto p-2" id="search-results" role="listbox">
@@ -515,7 +515,7 @@
 <!-- like every dialog, a phone shows it full screen -->
 <Dialog.Root onOpenChange={handleOpenChange} {open}>
 	<Dialog.Content
-		class="top-[12%] flex h-[min(36rem,76dvh)]! w-full max-w-2xl! md:w-[calc(100%-2rem)] translate-y-0 flex-col gap-0 overflow-hidden rounded-xl p-0"
+		class="top-[12%] flex h-[min(36rem,76dvh)]! w-full max-w-3xl! md:w-[calc(100%-2rem)] translate-y-0 flex-col gap-0 overflow-hidden rounded-xl p-0"
 		onEscapeKeydown={(event) => {
 			// Esc steps back from a picked repo before it closes the search
 			if (!selectedModel) return;

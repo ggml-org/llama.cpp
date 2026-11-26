@@ -1,5 +1,12 @@
 <script lang="ts">
 	import { Skeleton } from '@ggml-org/llama-ui/ui/skeleton';
+
+	interface Props {
+		/** Leaner pane for a narrow host such as Search: no Hugging Face link, no description. */
+		compact?: boolean;
+	}
+
+	let { compact = false }: Props = $props();
 </script>
 
 <!-- Static skeleton of ModelsDiscoverDetails: header, metadata chips, download options and readme. -->
@@ -17,7 +24,9 @@
 				</div>
 			</div>
 
-			<Skeleton class="h-7.5 w-44 shrink-0 rounded-md" />
+			{#if !compact}
+				<Skeleton class="h-7.5 w-44 shrink-0 rounded-md" />
+			{/if}
 		</div>
 
 		<!-- downloads / likes / last updated -->
@@ -31,11 +40,13 @@
 
 		<!-- catalog family description, else the HF card description: it wraps to a
 		     second line in a narrow host -->
-		<div class="space-y-2 py-0.75">
-			<Skeleton class="h-3.5 w-full" />
+		{#if !compact}
+			<div class="space-y-2 py-0.75">
+				<Skeleton class="h-3.5 w-full" />
 
-			<Skeleton class="hidden h-3.5 w-2/5 @max-2xl:block" />
-		</div>
+				<Skeleton class="hidden h-3.5 w-2/5 @max-2xl:block" />
+			</div>
+		{/if}
 
 		<!-- metadata chips, as wide as the usual four so they wrap where those do -->
 		<div class="space-y-3">
