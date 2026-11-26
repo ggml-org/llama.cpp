@@ -1,4 +1,4 @@
-// Settings > Tools must edit the active conversation policy, not the defaults for future chats.
+// Settings > Agent must edit the active conversation policy, not the defaults for future chats.
 
 import SettingsChatToolsTab from '#lib/components/app/settings/SettingsChat/SettingsChatToolsTab.svelte';
 import { DatabaseService } from '#lib/services/database.service.ts';

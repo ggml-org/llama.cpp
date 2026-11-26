@@ -25,6 +25,10 @@ export interface SettingsEntry {
 	label: string;
 	help: string;
 	defaultValue: SettingsConfigValue;
+	/** Subgroup title the field is listed under within its section. */
+	group?: string;
+	/** When true, the field is listed in the section's collapsed Advanced block. */
+	advanced?: boolean;
 	/** Where the setting applies, and so where it is listed; every device when not set. */
 	platform?: SettingsPlatform;
 	type: SettingsFieldType;
@@ -65,7 +69,9 @@ export interface SettingsFieldConfig {
 	placeholder?: string;
 	min?: number;
 	max?: number;
+	advanced?: boolean;
 	dependsOn?: string;
+	group?: string;
 	platform?: SettingsPlatform;
 	help?: string;
 	options?: Array<{ value: string; label: string; icon?: typeof Icon }>;

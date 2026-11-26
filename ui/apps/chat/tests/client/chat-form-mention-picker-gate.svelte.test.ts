@@ -57,7 +57,7 @@ describe('ChatFormPickerMention file_glob_search gate', () => {
 		await tick();
 
 		expect(document.body.textContent).toContain(
-			'File search is disabled - enable "Search files" in Settings > Tools to use @-mentions'
+			'File search is disabled - enable "Search files" in Settings > Agent to use @-mentions'
 		);
 	});
 });

@@ -55,6 +55,8 @@ export {
 	setConfigValue,
 	getConfigValue,
 	configToParameterRecord,
+	groupSettingsFields,
+	isApiKeyFieldShown,
 	isSettingShownOn
 } from './config-helpers';
 

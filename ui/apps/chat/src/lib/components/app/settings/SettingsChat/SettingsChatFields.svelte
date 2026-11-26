@@ -125,7 +125,7 @@
 				{#if field.key === SETTINGS_KEYS.SYSTEM_MESSAGE}
 					<div class="mt-3 flex items-center gap-2">
 						<Checkbox
-							checked={Boolean(localConfig.showSystemMessage ?? true)}
+							checked={Boolean(localConfig.showSystemMessage)}
 							id="showSystemMessage"
 							onCheckedChange={(checked) =>
 								onConfigChange(SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE, Boolean(checked))}

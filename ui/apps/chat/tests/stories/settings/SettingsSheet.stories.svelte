@@ -9,7 +9,8 @@
 	import { screen } from 'storybook/test';
 
 	// a phone's settings: a full-height sheet. Its first page has the theme tiles and a row per
-	// section; a row pushes that section's page, and every change applies as it is made
+	// section; a row pushes that section's page, whose Advanced row pushes the settings few people
+	// need, and every change applies as it is made
 	const { Story } = defineMeta({
 		component: SettingsSheet,
 		globals: { viewport: { isRotated: false, value: 'mobile2' } },
@@ -37,10 +38,18 @@
 
 <Story args={{ open: true }} name="Voice" play={openSection(SETTINGS_SECTION_SLUGS.VOICE)} />
 
+<Story args={{ open: true }} name="Data" play={openSection(SETTINGS_SECTION_SLUGS.DATA)} />
+
 <Story
 	args={{ open: true }}
-	name="Import and export"
-	play={openSection(SETTINGS_SECTION_SLUGS.IMPORT_EXPORT)}
+	name="Advanced page"
+	play={async (context) => {
+		await openSection(SETTINGS_SECTION_SLUGS.CHAT)(context);
+		await context.userEvent.click(
+			await screen.findByRole('button', { name: SETTINGS_SHEET_TEXT.ADVANCED })
+		);
+		await screen.findByRole('heading', { name: SETTINGS_SHEET_TEXT.ADVANCED });
+	}}
 />
 
 <Story

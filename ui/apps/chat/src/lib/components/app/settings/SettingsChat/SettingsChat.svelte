@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button } from '@ggml-org/llama-ui/ui/button';
-	import { RefreshCw } from '@lucide/svelte';
+	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
+	import { ChevronDown, ChevronRight, RefreshCw } from '@lucide/svelte';
 	import {
 		SettingsChatDesktopSidebar,
 		SettingsChatFields,
@@ -9,6 +10,7 @@
 		SettingsChatToolsTab,
 		SettingsChatVoiceTab,
 		SettingsFooter,
+		SettingsGroup,
 		SettingsResetButton
 	} from '#lib/components/app/settings/index.ts';
 	import {
@@ -22,9 +24,11 @@
 	import { agenticMode } from '#lib/stores/agentic-mode.svelte.ts';
 	import { deviceStore, modelsStore, serverStore, settingsStore } from '#lib/stores/index.ts';
 	import type { SettingsSection, SettingsSectionTitle } from '#lib/types/index.ts';
-	import { isSettingShownOn } from '#lib/utils/index.ts';
+	import { groupSettingsFields, isApiKeyFieldShown, isSettingShownOn } from '#lib/utils/index.ts';
+	import { page } from '$app/state';
 	import { setMode } from 'mode-watcher';
 	import { tick } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { fade } from 'svelte/transition';
 	interface Props {
 		initialSection?: string;
@@ -69,16 +73,40 @@
 		onSectionChange?.(section);
 	}
 
+	let localConfig: SettingsConfigType = $state({ ...settingsStore.config });
+
 	let currentSection = $derived(
 		sections.find((section) => section.slug === activeSlug) || sections[0]
 	);
 
-	let localConfig: SettingsConfigType = $state({ ...settingsStore.config });
-
-	// a setting for another kind of device is left out
-	let sectionFields = $derived(
-		(currentSection.fields ?? []).filter((field) => isSettingShownOn(field, deviceStore.isMobile))
+	let showApiKey = $derived(
+		isApiKeyFieldShown({
+			draftKey: localConfig[SETTINGS_KEYS.API_KEY],
+			status: page.status,
+			storedKey: settingsStore.config[SETTINGS_KEYS.API_KEY]
+		})
 	);
+
+	let sectionFields = $derived(
+		(currentSection.fields ?? []).filter(
+			(field) =>
+				(field.key !== SETTINGS_KEYS.API_KEY || showApiKey) &&
+				isSettingShownOn(field, deviceStore.isMobile)
+		)
+	);
+	let basicFields = $derived(sectionFields.filter((field) => !field.advanced));
+	let fieldGroups = $derived(groupSettingsFields(basicFields));
+	let advancedGroups = $derived(
+		groupSettingsFields(sectionFields.filter((field) => field.advanced))
+	);
+
+	// sections whose Advanced block is open, kept while the settings stay open
+	let advancedOpen = new SvelteSet<string>();
+
+	function toggleAdvanced(slug: string) {
+		if (advancedOpen.has(slug)) advancedOpen.delete(slug);
+		else advancedOpen.add(slug);
+	}
 
 	// inputs hand back strings for numeric fields, so compare stringified values
 	let hasChanges = $derived.by(() => {
@@ -186,6 +214,21 @@
 	}
 </script>
 
+{#snippet groups(list: ReturnType<typeof groupSettingsFields>)}
+	{#each list as group (group.title)}
+		<SettingsGroup title={group.title}>
+			<div class="space-y-6">
+				<SettingsChatFields
+					fields={group.fields}
+					{localConfig}
+					onConfigChange={handleConfigChange}
+					onThemeChange={handleThemeChange}
+				/>
+			</div>
+		</SettingsGroup>
+	{/each}
+{/snippet}
+
 <div in:fade={{ duration: 150 }} class="mx-auto flex size-full flex-col">
 	<div class="flex flex-1 flex-col md:flex-row md:gap-4">
 		<SettingsChatDesktopSidebar
@@ -205,27 +248,12 @@
 		<div bind:this={contentEl} class="mx-auto max-w-2xl px-4 flex-1 md:mt-4">
 			<div class="space-y-6 pt-3">
 				<div class="grid">
-					{#if currentSection.slug === SETTINGS_SECTION_SLUGS.TOOLS}
-						<SettingsChatToolsTab />
-					{:else if currentSection.slug === SETTINGS_SECTION_SLUGS.IMPORT_EXPORT}
-						<SettingsChatImportExportTab />
-					{:else if currentSection.slug === SETTINGS_SECTION_SLUGS.VOICE && currentSection.fields}
-						<SettingsChatVoiceTab
-							fields={sectionFields}
-							{localConfig}
-							onConfigChange={handleConfigChange}
-						/>
-					{:else if currentSection.fields}
-						<div class="space-y-6">
-							<SettingsChatFields
-								fields={sectionFields}
-								{localConfig}
-								onConfigChange={handleConfigChange}
-								onThemeChange={handleThemeChange}
-							/>
+					{#if currentSection.slug === SETTINGS_SECTION_SLUGS.DATA}
+						<div class="space-y-12">
+							<SettingsChatImportExportTab />
 
-							{#if currentSection.slug === SETTINGS_SECTION_SLUGS.GENERAL}
-								<div class="flex justify-end gap-2">
+							<SettingsGroup title="App">
+								<div class="flex flex-wrap gap-2">
 									<SettingsResetButton onReset={handleReset} />
 
 									<Button onclick={() => window.location.reload()} variant="outline">
@@ -233,6 +261,51 @@
 										Reload app
 									</Button>
 								</div>
+							</SettingsGroup>
+						</div>
+					{:else}
+						<div class="space-y-12">
+							{#if currentSection.slug === SETTINGS_SECTION_SLUGS.VOICE}
+								<SettingsChatVoiceTab
+									fields={basicFields}
+									{localConfig}
+									onConfigChange={handleConfigChange}
+								/>
+							{:else}
+								{#if currentSection.slug === SETTINGS_SECTION_SLUGS.AGENT}
+									<SettingsGroup title="Tools">
+										<SettingsChatToolsTab />
+									</SettingsGroup>
+								{/if}
+
+								{@render groups(fieldGroups)}
+							{/if}
+
+							{#if advancedGroups.length > 0}
+								{@const isOpen = advancedOpen.has(currentSection.slug)}
+
+								<Collapsible.Root
+									onOpenChange={() => toggleAdvanced(currentSection.slug)}
+									open={isOpen}
+								>
+									<Collapsible.Trigger
+										class="flex w-full cursor-pointer items-center gap-2 border-t border-border/30 pt-6 text-body font-semibold"
+									>
+										{#if isOpen}
+											<ChevronDown class="size-icon-sm shrink-0" />
+										{:else}
+											<ChevronRight class="size-icon-sm shrink-0" />
+										{/if}
+
+										Advanced settings
+									</Collapsible.Trigger>
+
+									<Collapsible.Content>
+										<div class="space-y-12 pt-8">
+											{@render groups(advancedGroups)}
+										</div>
+									</Collapsible.Content>
+								</Collapsible.Root>
 							{/if}
 						</div>
 					{/if}

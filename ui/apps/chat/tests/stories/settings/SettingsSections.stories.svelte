@@ -15,22 +15,12 @@
 
 <Story args={{ initialSection: SETTINGS_SECTIONS.GENERAL.slug, open: true }} name="General" />
 
-<Story args={{ initialSection: SETTINGS_SECTIONS.DISPLAY.slug, open: true }} name="Display" />
+<Story args={{ initialSection: SETTINGS_SECTIONS.CHAT.slug, open: true }} name="Chat" />
+
+<Story args={{ initialSection: SETTINGS_SECTIONS.MODEL.slug, open: true }} name="Model" />
+
+<Story args={{ initialSection: SETTINGS_SECTIONS.AGENT.slug, open: true }} name="Agent" />
 
 <Story args={{ initialSection: SETTINGS_SECTIONS.VOICE.slug, open: true }} name="Voice" />
 
-<Story args={{ initialSection: SETTINGS_SECTIONS.TOOLS.slug, open: true }} name="Tools" />
-
-<Story args={{ initialSection: SETTINGS_SECTIONS.AGENTIC.slug, open: true }} name="Agentic" />
-
-<Story
-	args={{ initialSection: SETTINGS_SECTIONS.IMPORT_EXPORT.slug, open: true }}
-	name="Import/Export"
-/>
-
-<Story
-	args={{ initialSection: SETTINGS_SECTIONS.SAMPLING_PENALTIES.slug, open: true }}
-	name="Sampling & Penalties"
-/>
-
-<Story args={{ initialSection: SETTINGS_SECTIONS.DEVELOPER.slug, open: true }} name="Developer" />
+<Story args={{ initialSection: SETTINGS_SECTIONS.DATA.slug, open: true }} name="Data" />
