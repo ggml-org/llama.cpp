@@ -122,3 +122,55 @@ describe('runGlobSearchWithChildren', () => {
 		expect(mockExecute).toHaveBeenCalledTimes(1);
 	});
 });
+
+describe('runGlobSearchWithChildren with a relative path', () => {
+	it('lists the folder at the top of the scope before its deeper namesakes', async () => {
+		const scope = '/Users/rootF';
+
+		mockExecute.mockImplementation(async (_tool, params) => {
+			const { path } = params as { path: string };
+
+			// the direct lookup navigates to the parent; the glob only sees deeper copies
+			return path === `${scope}/ui/lib`
+				? { base: path, entries: [{ path: 'voice', type: 'dir' }] }
+				: { base: scope, entries: [{ path: '.worktrees/a/ui/lib/voice', type: 'dir' }] };
+		});
+
+		const res = await runGlobSearchWithChildren(
+			'ui/lib/voi',
+			scope,
+			3,
+			50,
+			new AbortController().signal,
+			{ descendOnTrailingSeparator: true, type: GlobSearchType.ALL }
+		);
+
+		expect(res.entries.map((e) => e.path)).toEqual([
+			`${scope}/ui/lib/voice`,
+			`${scope}/.worktrees/a/ui/lib/voice`
+		]);
+	});
+
+	it('keeps the deeper matches when the path does not exist at the top', async () => {
+		const scope = '/Users/rootG';
+
+		mockExecute.mockImplementation(async (_tool, params) => {
+			const { path } = params as { path: string };
+
+			return path === scope
+				? { base: scope, entries: [{ path: 'apps/ui/lib/voice', type: 'dir' }] }
+				: { error: 'path does not exist or is not a directory' };
+		});
+
+		const res = await runGlobSearchWithChildren(
+			'ui/lib/voi',
+			scope,
+			3,
+			50,
+			new AbortController().signal
+		);
+
+		expect(res.error).toBeUndefined();
+		expect(res.entries.map((e) => e.path)).toEqual([`${scope}/apps/ui/lib/voice`]);
+	});
+});

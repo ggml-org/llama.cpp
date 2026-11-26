@@ -94,6 +94,31 @@ export async function runGlobSearchWithChildren(
 	signal: AbortSignal,
 	options: GlobSearchChildOptions = {}
 ): Promise<GlobSearchChildResult> {
+	const search = (q: string) =>
+		searchWithChildren(q, scopePath, searchDepth, limit, signal, options);
+
+	if (splitPathQuery(query) || !query.includes(PATH_SEPARATOR)) return search(query);
+
+	// A relative path (`ui/lib/voi`) is also followed from the scope itself: the
+	// server's glob matches it only below some other folder, never at the top.
+	const [direct, deep] = await Promise.all([search(joinPath(scopePath, query)), search(query)]);
+
+	if (direct.error) return deep;
+
+	const directPaths = new Set(direct.entries.map((entry) => entry.path));
+	const below = deep.entries.filter((entry) => !directPaths.has(entry.path));
+
+	return { ...direct, entries: [...direct.entries, ...below] };
+}
+
+async function searchWithChildren(
+	query: string,
+	scopePath: string,
+	searchDepth: number,
+	limit: number,
+	signal: AbortSignal,
+	options: GlobSearchChildOptions
+): Promise<GlobSearchChildResult> {
 	const {
 		childMaxDepth = SEARCH.PATH_NAV_MAX_DEPTH,
 		descendOnTrailingSeparator = false,
