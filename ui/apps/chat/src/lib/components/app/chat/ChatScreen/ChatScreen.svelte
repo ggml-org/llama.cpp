@@ -380,8 +380,10 @@
 				class="pointer-events-auto conversation-chat-form"
 				disabled={hasPropsError || chatStore.isEditing()}
 				isLoading={isCurrentConversationLoading}
+				onFileMention={fileUpload.handleFileMention}
 				onFileRemove={fileUpload.handleFileRemove}
 				onFileUpload={fileUpload.handleFileUpload}
+				onMessageChange={fileUpload.syncFileMentions}
 				onSend={handleSendMessage}
 				onStop={() => chatStore.stopGeneration()}
 			/>

@@ -107,6 +107,7 @@ export {
 	getFileTypeCategory,
 	getFileTypeCategoryByExtension,
 	getFileTypeByExtension,
+	getMediaMimeTypeByExtension,
 	isFileTypeSupported
 } from './file-type';
 

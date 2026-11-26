@@ -50,6 +50,8 @@ export interface ChatUploadedFile {
 	loadError?: string;
 	/** A voice message recorded in the chat form. */
 	voice?: ChatUploadedVoice;
+	/** Path of the server file an `@` mention attached: the attachment lives as long as the mention. */
+	mentionPath?: string;
 }
 
 /** What a voice message recorded in the chat form carries besides its WAV file. */

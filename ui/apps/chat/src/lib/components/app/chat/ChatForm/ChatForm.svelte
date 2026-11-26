@@ -31,6 +31,7 @@
 	import {
 		ContentPartType,
 		FileExtensionText,
+		FileMentionEntryType,
 		KeyboardKey,
 		MessageRole,
 		MimeTypeText,
@@ -96,6 +97,8 @@
 
 		// Event Handlers
 		onAttachmentRemove?: (index: number) => void;
+		/** A file was picked with an `@` mention, by its path on the server. */
+		onFileMention?: (path: string) => void;
 		onFilesAdd?: (files: File[]) => void;
 		onStop?: () => void;
 		onSubmit?: () => void;
@@ -115,6 +118,7 @@
 		expandable = false,
 		isLoading = false,
 		onAttachmentRemove,
+		onFileMention,
 		onFilesAdd,
 		onStop,
 		onSubmit,
@@ -672,6 +676,8 @@
 
 		// one undoable edit; the input reports the new value like typing
 		inputRef?.replaceText(built.newValue, built.caretOffset);
+
+		if (entry.type === FileMentionEntryType.FILE) onFileMention?.(entry.path);
 	}
 
 	function handleMicClick() {

@@ -222,6 +222,19 @@ export function getFileTypeByExtension(filename: string): string | null {
 	return null;
 }
 
+/** MIME type of an image, audio or video file, told by its extension. Null for anything else. */
+export function getMediaMimeTypeByExtension(filename: string): string | null {
+	const extension = filename.toLowerCase().substring(filename.lastIndexOf('.'));
+
+	for (const types of [IMAGE_FILE_TYPES, AUDIO_FILE_TYPES, VIDEO_FILE_TYPES]) {
+		for (const type of Object.values(types)) {
+			if ((type.extensions as readonly string[]).includes(extension)) return type.mimeTypes[0];
+		}
+	}
+
+	return null;
+}
+
 export function isFileTypeSupported(filename: string, mimeType?: string): boolean {
 	// Images are detected and handled separately for vision models
 	if (mimeType) {

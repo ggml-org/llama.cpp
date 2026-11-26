@@ -116,4 +116,29 @@ export class ReadMediaService {
 
 		return { content, isError: false };
 	}
+
+	/**
+	 * Read a file on the server into a browser `File`, for attaching one the user picked
+	 * by path (an `@` mention). Throws with the server's reason when it cannot be read.
+	 */
+	static async readFile(path: string, mimeType: string, signal?: AbortSignal): Promise<File> {
+		const raw = await ToolsService.executeToolRaw(
+			BuiltInTool.SERVER_READ_FILE,
+			{ path },
+			signal,
+			undefined,
+			RESP_TYPE_BASE64
+		);
+
+		if (ToolResponseField.ERROR in raw) throw new Error(String(raw[ToolResponseField.ERROR]));
+
+		if (typeof raw.base64 !== 'string' || !raw.base64) {
+			throw new Error(`no data returned for ${path}`);
+		}
+
+		const bytes = Uint8Array.from(atob(raw.base64), (char) => char.charCodeAt(0));
+		const name = path.split(FILE_PATH_SEPARATOR_REGEX).pop() ?? path;
+
+		return new File([bytes], name, { type: mimeType });
+	}
 }
