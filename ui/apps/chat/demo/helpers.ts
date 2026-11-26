@@ -1,5 +1,12 @@
 import { demoMcpServerSettings } from './fixtures/demo-config.ts';
 import { generateTrace } from './fixtures/traces.ts';
+import {
+	CAMERA_MOVE_MS,
+	POLISH,
+	POLISH_RENDER_TIMEOUT_MS,
+	type PolishEvent,
+	renderPolished
+} from './polish.ts';
 import { ScreencastRecorder } from './recorder.ts';
 import { type CDPSession, type Locator, type Page, test as base } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
@@ -19,6 +26,8 @@ const VIDEOS_DIR = resolve(import.meta.dirname, 'videos');
 const APP_READY_TIMEOUT_MS = 90000;
 /** How far below the viewport's top a pinch has to start for Chromium to zoom at all. */
 const ZOOM_TOP_INSET_PX = 64;
+/** In polish mode, the timeline of each page's demo: what the render plays over the footage. */
+const timelines = new WeakMap<Page, PolishEvent[]>();
 
 /**
  * Draws a fake cursor and click ripples, since recorded videos don't include
@@ -208,6 +217,7 @@ export class Demo {
 	private cdp: CDPSession | undefined;
 	private readonly page: Page;
 	private readonly random: () => number;
+	private readonly timeline: PolishEvent[] | undefined;
 	private x = 0;
 	private y = 0;
 
@@ -230,6 +240,7 @@ export class Demo {
 	constructor(page: Page, seed: string) {
 		this.page = page;
 		this.random = createRandom(seed);
+		this.timeline = timelines.get(page);
 
 		const viewport = page.viewportSize();
 
@@ -368,9 +379,17 @@ export class Demo {
 	/**
 	 * Pinches in on `target`, a control or a point in the viewport, holds about `ms`, and pinches
 	 * back out to 1x: a two-finger zoom onto a detail too small to read in the frame. On a touch
-	 * device the fingertips show.
+	 * device the fingertips show. In polish mode the camera moves in and out instead.
 	 */
 	async zoom(target: Locator | { x: number; y: number }, scale = 2.5, ms = 1400): Promise<void> {
+		if (this.timeline) {
+			await this.zoomIn(target, scale);
+			await this.pause(ms);
+			await this.zoomOut();
+
+			return;
+		}
+
 		const point = 'x' in target ? target : await this.center(target);
 		// a pinch anchored in the viewport's top band does not zoom at all
 		const at = { x: point.x, y: Math.max(point.y, ZOOM_TOP_INSET_PX) };
@@ -404,6 +423,28 @@ export class Demo {
 		await this.pause(200);
 	}
 
+	/**
+	 * Polish mode only: moves the camera in on `target` and keeps it there while the demo goes on,
+	 * until `zoomOut` or the next `zoomIn`. A plain recording ignores it, as the cursor cannot act
+	 * on a pinched page.
+	 */
+	async zoomIn(target: Locator | { x: number; y: number }, scale = 2.5): Promise<void> {
+		if (!this.timeline) return;
+
+		const point = 'x' in target ? target : await this.center(target);
+
+		this.timeline.push({ scale, time: Date.now() / 1000, type: 'camera', ...point });
+		await this.page.waitForTimeout(CAMERA_MOVE_MS);
+	}
+
+	/** Polish mode only: moves the camera back out to the whole page. */
+	async zoomOut(): Promise<void> {
+		if (!this.timeline) return;
+
+		this.timeline.push({ scale: 1, time: Date.now() / 1000, type: 'camera', x: 0, y: 0 });
+		await this.page.waitForTimeout(CAMERA_MOVE_MS);
+	}
+
 	private between(min: number, max: number): number {
 		return min + (max - min) * this.random();
 	}
@@ -417,6 +458,7 @@ export class Demo {
 	}
 
 	private async hideCaption(): Promise<void> {
+		this.timeline?.push({ text: null, time: Date.now() / 1000, type: 'caption' });
 		await this.page.evaluate(() =>
 			document.getElementById('demo-caption')?.classList.remove('visible')
 		);
@@ -460,6 +502,12 @@ export class Demo {
 	}
 
 	private async showCaption(text: string): Promise<void> {
+		if (this.timeline) {
+			this.timeline.push({ text, time: Date.now() / 1000, type: 'caption' });
+
+			return;
+		}
+
 		await this.page.evaluate((t) => {
 			const el = document.getElementById('demo-caption');
 
@@ -635,7 +683,18 @@ export const test = base.extend<DemoOptions & { demo: Demo }>({
 		await use(new Demo(page, `${testInfo.file}:${testInfo.title}`));
 	},
 
-	page: async ({ chats, page, settings, startPath, traces }, use, testInfo) => {
+	page: async (
+		{ browser, chats, colorScheme, page, settings, startPath, traces },
+		use,
+		testInfo
+	) => {
+		const timeline: PolishEvent[] | undefined = POLISH ? [] : undefined;
+
+		if (timeline) {
+			timelines.set(page, timeline);
+			testInfo.setTimeout(testInfo.timeout + POLISH_RENDER_TIMEOUT_MS);
+		}
+
 		await page.addInitScript(installCursorOverlay);
 		await page.addInitScript(seedSettings, {
 			mcpServers: JSON.stringify(demoMcpServerSettings()),
@@ -689,7 +748,21 @@ export const test = base.extend<DemoOptions & { demo: Demo }>({
 		const mp4 = resolve(VIDEOS_DIR, `${name}.mp4`);
 
 		mkdirSync(VIDEOS_DIR, { recursive: true });
-		recorder.encode(mp4);
+
+		if (timeline && viewport) {
+			await renderPolished(
+				browser,
+				recorder.footage,
+				timeline,
+				viewport,
+				colorScheme === 'dark',
+				mp4
+			);
+			recorder.discard();
+		} else {
+			recorder.encode(mp4);
+		}
+
 		// the CLI reads which videos a script made, in order, with their titles
 		appendFileSync(
 			resolve(VIDEOS_DIR, `${file}.videos.jsonl`),

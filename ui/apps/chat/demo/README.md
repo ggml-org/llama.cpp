@@ -11,6 +11,7 @@ demo/
 ├── storage.ts  storage targets (hf://, file://)
 ├── helpers.ts  `test` with a `demo` fixture: cursor, captions, human-like timing
 ├── recorder.ts screencast recording and mp4 export
+├── polish.ts   polish mode: the promo render
 ├── fixtures/   fixture MCP servers, seeded settings and demo conversations
 └── videos/     output (git-ignored)
 ```
@@ -116,6 +117,26 @@ Records every `scripts/docs/*.demo.ts` from the storage target and uploads `vide
 ## Writing a demo
 
 Scripts get `test` and `expect` from `helpers.ts` without importing them. `demo.click`, `demo.hover` and `demo.type` glide a visible cursor to the target before acting, with timing varied like a person's (seeded per demo, so re-takes match); `demo.scroll` turns the mouse wheel over a target; `demo.zoom` pinches in on a control or a point to show a detail too small to read in the frame, holds, and pinches back out (with the fingertips drawn on a touch device); `demo.caption` shows a caption at the top of the frame. For voice input, `demo.microphone()` gives the page a microphone that hears nothing but `demo.speak(text)`, which reads the text in a synthetic voice (macOS `say`) and shows it as a caption, since the video has no sound. Use `test.use({ settings, startPath })` to seed other settings or start on another route.
+
+## Polish mode
+
+For a video that has to look good on its own, e.g. in a post, record with `DEMO_POLISH=1`:
+
+```bash
+DEMO_POLISH=1 npm run demo:record -- demo/<name>
+```
+
+The same script then gives a 1920x1080 video with the app in a rounded window on a gradient. `demo.zoom` moves a camera instead of pinching the page, with eased moves and motion blur, and `demo.caption` and `demo.speak` put their captions under the window instead of over the app. It is off by default, so PR and docs demos stay plain; `demo:pr` and `demo:docs` take the same variable.
+
+A camera can also stay on a detail while the demo goes on: `await demo.zoomIn(target, scale)` moves in, and `await demo.zoomOut()` moves back out. A plain recording ignores both, as the cursor cannot act on a pinched page.
+
+```ts
+await demo.zoomIn(page.getByRole('dialog'), 1.5);
+await demo.type(search, 'Inkling-2-Mini');
+await demo.zoomOut();
+```
+
+The render needs nothing more than the plain one: the demo's Chromium draws each frame on a canvas from the recorded frames and the script's timeline, and `ffmpeg` encodes them. It takes a few times as long as the video.
 
 ## Conversations
 

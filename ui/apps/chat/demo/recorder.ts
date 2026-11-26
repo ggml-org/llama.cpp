@@ -11,13 +11,31 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-const FPS = 60;
+export const FPS = 60;
+export const H264_ARGS = [
+	'-c:v',
+	'libx264',
+	'-preset',
+	'slow',
+	'-crf',
+	'18',
+	'-pix_fmt',
+	'yuv420p',
+	'-movflags',
+	'+faststart'
+];
 const JPEG_QUALITY = 92;
 
 interface Frame {
 	file: string;
 	/** Seconds, on the same clock as Date.now(). */
 	time: number;
+}
+
+/** The frames as recorded, each shown until the next one's time, the last one until `end`. */
+export interface Footage {
+	end: number;
+	frames: Frame[];
 }
 
 export class ScreencastRecorder {
@@ -27,8 +45,19 @@ export class ScreencastRecorder {
 	private session: CDPSession | undefined;
 	private stoppedAt = 0;
 
+	/** For a render other than `encode`, which has to `discard` the frames after it. */
+	get footage(): Footage {
+		if (this.frames.length === 0) throw new Error('demo: the screencast captured no frames');
+
+		return { end: this.stoppedAt, frames: this.frames };
+	}
+
 	constructor(dir: string) {
 		this.dir = dir;
+	}
+
+	discard(): void {
+		rmSync(this.dir, { force: true, recursive: true });
 	}
 
 	/** Encodes the frames, each held until the next one arrived (the screencast only sends changes). */
@@ -58,21 +87,12 @@ export class ScreencastRecorder {
 				listFile,
 				'-vf',
 				`fps=${FPS},scale=trunc(iw/2)*2:trunc(ih/2)*2`,
-				'-c:v',
-				'libx264',
-				'-preset',
-				'slow',
-				'-crf',
-				'18',
-				'-pix_fmt',
-				'yuv420p',
-				'-movflags',
-				'+faststart',
+				...H264_ARGS,
 				mp4
 			],
 			{ stdio: 'inherit' }
 		);
-		rmSync(this.dir, { force: true, recursive: true });
+		this.discard();
 	}
 
 	async start(page: Page): Promise<void> {
