@@ -515,9 +515,7 @@
 <!-- like every dialog, a phone shows it full screen -->
 <Dialog.Root onOpenChange={handleOpenChange} {open}>
 	<Dialog.Content
-		class="top-[12%] flex w-full md:w-[calc(100%-2rem)] translate-y-0 flex-col gap-0 overflow-hidden rounded-xl p-0 {selectedModel
-			? 'h-[min(52rem,82dvh)]! max-w-4xl! md:top-[6%]'
-			: 'h-[min(36rem,76dvh)]! max-w-2xl!'}"
+		class="top-[12%] flex h-[min(36rem,76dvh)]! w-full max-w-2xl! md:w-[calc(100%-2rem)] translate-y-0 flex-col gap-0 overflow-hidden rounded-xl p-0"
 		onEscapeKeydown={(event) => {
 			// Esc steps back from a picked repo before it closes the search
 			if (!selectedModel) return;
