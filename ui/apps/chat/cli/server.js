@@ -25,7 +25,9 @@ export const DEFAULTS = Object.freeze({
 	// the folder `build` writes to, in the current directory
 	out: 'llama-chat',
 	// fixed, so the origin, and the chats the browser stores under it, stay the same between runs
-	port: 3000
+	port: 3000,
+	// llama-server's own default port, on the host the app is opened from, when no --server
+	serverPort: 9931
 });
 
 // The same caching llama-server applies to the UI it embeds (tools/server/server-http.cpp):
@@ -77,7 +79,8 @@ when it restricts origins.
 
 Options:
   --server <url>   the llama-server the app talks to, e.g. http://localhost:8080
-                   (also for build; default: the address the app is served on)
+                   (default: port ${DEFAULTS.serverPort} of the host the page is opened on;
+                   for build: the address the app is served on)
   --port <n>       port to listen on (default: ${DEFAULTS.port})
   --host <addr>    address to listen on, 0.0.0.0 for the LAN (default: ${DEFAULTS.host})
   --open           open the browser once it listens (default)
@@ -90,6 +93,7 @@ Build options:
   --force          write into a folder that is not empty
 
 Examples:
+  npx @ggml-org/llama-chat
   npx @ggml-org/llama-chat --server http://localhost:8080
   npx @ggml-org/llama-chat --host 0.0.0.0 --port 3000 --no-open
   npx @ggml-org/llama-chat build --out ./public --server https://llm.example.com`;
@@ -258,8 +262,19 @@ function configJson(server) {
 }
 
 /**
- * The HTTP server: the files of `dist`, read-only. With `server`, it answers config.json
- * itself, so the app talks to that llama-server instead of this address.
+ * The llama-server on its default port, on the host a request was made to: localhost when
+ * opened here, the same LAN or Tailscale address when opened from another device.
+ * @param {http.IncomingMessage} req
+ */
+function defaultServer(req) {
+	const { hostname } = new URL(`http://${req.headers.host ?? 'localhost'}`);
+
+	return `http://${hostname}:${DEFAULTS.serverPort}`;
+}
+
+/**
+ * The HTTP server: the files of `dist`, read-only. It answers config.json itself, so the app
+ * talks to `server`, or by default to llama-server's default port, instead of this address.
  * @param {{ distDir?: string, server?: string }} [options]
  */
 export function createChatServer({ distDir = DIST_DIR, server = '' } = {}) {
@@ -275,8 +290,8 @@ export function createChatServer({ distDir = DIST_DIR, server = '' } = {}) {
 			return;
 		}
 
-		if (server && pathname === CONFIG_PATH) {
-			const body = configJson(server);
+		if (pathname === CONFIG_PATH) {
+			const body = configJson(server || defaultServer(req));
 
 			res.writeHead(200, {
 				'Cache-Control': CACHE_REVALIDATE,
@@ -429,7 +444,9 @@ export async function main(argv) {
 
 			console.log(`Llama Chat ${packageVersion()} on ${url}`);
 
-			if (options.server) console.log(`Talking to llama-server on ${options.server}`);
+			console.log(
+				`Talking to llama-server on ${options.server || `port ${DEFAULTS.serverPort}, pick another with --server`}`
+			);
 
 			console.log(
 				`If llama-server restricts origins (tools or MCP on), start it with --cors-origins ${url.slice(0, -1)}`

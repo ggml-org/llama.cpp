@@ -203,9 +203,13 @@ describe('llama-chat server', () => {
 		expect(worker.headers.get('cache-control')).toBe('no-cache');
 	});
 
-	it('answers config.json with the llama-server it was given, revalidated', async () => {
-		expect((await fetch(`${chatUrl}/config.json`)).status).toBe(404);
+	it('answers config.json with llama-server on its default port when given none', async () => {
+		expect(await (await fetch(`${chatUrl}/config.json`)).json()).toEqual({
+			server: `http://127.0.0.1:${DEFAULTS.serverPort}`
+		});
+	});
 
+	it('answers config.json with the llama-server it was given, revalidated', async () => {
 		const pointed = createChatServer({ distDir: dist, server: 'http://localhost:8080' });
 		const pointedUrl = await listen(pointed);
 
