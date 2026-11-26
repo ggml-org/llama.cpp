@@ -944,7 +944,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
         const int i0_stop = i0_start + 2*nbatch_V2;
 
         if constexpr (nstages <= 1) {
-            const int i0_diff = min(i0_stop, DV) - i0_start; // Only load the real head size from global memory.
+            const int i0_diff = DVp == DV ? 2*nbatch_V2 : min(i0_stop, DV) - i0_start; // Only load the real head size from global memory.
             if (!V_is_K_view || i0_stop > 2*nbatch_K2) {
                 constexpr bool use_cp_async = nstages == 1;
                 flash_attn_load_tile<warp_size, nwarps, nbatch_fa, 2*nbatch_V2, stride_tile_V, use_cp_async, oob_check, use_sparse, KV_indirection, swz, T_V, half2>
