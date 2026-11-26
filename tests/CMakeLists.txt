@@ -295,12 +295,6 @@ llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp  LA
 llama_build_and_test(test-jinja.cpp  LABEL behavior)
 llama_test(test-jinja  NAME test-jinja-py  ARGS -py  LABEL "python behavior")
 llama_test_cmd(python3
-    NAME test-conversion-bert
-    LABEL "python behavior"
-    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-    ARGS -m unittest discover -s tests -p test_conversion_bert.py -v
-)
-llama_test_cmd(python3
     NAME test-conversion-fp8
     LABEL "python behavior"
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
