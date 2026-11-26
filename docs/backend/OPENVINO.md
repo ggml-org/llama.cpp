@@ -921,11 +921,11 @@ export GGML_OPENVINO_SELF_CONTAINED_MMAP=1
 | Variable | Device | Type | Default | Description |
 |---|---|---|---|---|
 | `GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY` | CPU, GPU | Boolean | `0` | Require an existing cached model and skip the weight upload and the compilation. Needs mmap model loading (the default on Linux and Windows) and a model that runs fully on OpenVINO. |
-| `GGML_OPENVINO_SELF_CONTAINED_MMAP` | NPU | Boolean | `0` | Later runs only. Requires `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR` with an existing cache. Use the memory-mapped GGUF file as the model buffer, which lowers the host memory peak. Fails if a cached model is missing; run once without it to build the cache. |
+| `GGML_OPENVINO_SELF_CONTAINED_MMAP` | NPU | Boolean | `0` | Later runs only. Requires `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR` with an existing cache. Use the memory-mapped GGUF file as the model buffer, which lowers the host memory peak. Fails if a cached model is missing, for example after a change of the model, `-c` or another setting; run once without it to build the cache. |
 | `GGML_OPENVINO_CACHE_DIR` | all | String | `not set` | Directory for the cache of the OpenVINO plugin itself. `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR` is the recommended cache. |
 
 - One directory can hold the cached models of different models and settings.
-- NPU: each prefill length enters the cache in a run without `GGML_OPENVINO_SELF_CONTAINED_MMAP`.
+- NPU, with the default settings: the first prompt writes the prefill model of every KV window up to `-c`, so later runs with the same `-c` find a cached model for any prompt length.
 - See [Compiled model cache](../../ggml/src/ggml-openvino/README.md#compiled-model-cache) for the workflow and the restrictions.
 
 </details>
