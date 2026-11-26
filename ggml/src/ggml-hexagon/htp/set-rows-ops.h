@@ -25,11 +25,12 @@ struct htp_set_rows_vtcm_layout {
 
 static inline void htp_set_rows_vtcm_layout_build(
     struct htp_set_rows_vtcm_layout * L,
+    int src0_type,
     int dst_type,
     uint32_t ne00,
     uint32_t n_hvx) {
 
-    size_t src0_row_size = ne00 * sizeof(float);
+    size_t src0_row_size = htp_tensor_get_row_size(src0_type, ne00);
     size_t dst_row_size  = htp_tensor_get_row_size(dst_type, ne00);
 
     size_t src0_row_size_aligned = (src0_row_size + 255) & ~255;

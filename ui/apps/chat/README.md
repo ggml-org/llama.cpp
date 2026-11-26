@@ -19,14 +19,15 @@ It works with a llama-server in either mode: **MODEL** (one model) or **ROUTER**
 Llama Chat is published to npm as [`@ggml-org/llama-chat`](https://www.npmjs.com/package/@ggml-org/llama-chat), with [`llama-chat`](https://www.npmjs.com/package/llama-chat) as its short name. It serves the prebuilt app as static files on localhost, or writes them to a folder for any static file server (see [Self-hosting](#self-hosting)); it brings no server and no models of its own. It needs Node.js 20 or later.
 
 ```bash
-npx @ggml-org/llama-chat --server http://localhost:8080  # serve it on http://127.0.0.1:3000 for that llama-server
+npx @ggml-org/llama-chat                                 # serve it on http://127.0.0.1:3000 for llama-server on :9931
+npx @ggml-org/llama-chat --server http://localhost:8080  # for a llama-server elsewhere
 npx llama-chat --host 0.0.0.0 --no-open                  # by its short name, reachable from other devices
 npx llama-chat build                                     # write the static app to ./llama-chat instead
 ```
 
 | Flag                              | Default     | What it does                                                                                |
 | --------------------------------- | ----------- | ------------------------------------------------------------------------------------------- |
-| `--server <url>`                  |             | The llama-server the app talks to, e.g. `http://localhost:8080`; also for `build`           |
+| `--server <url>`                  | `:9931`     | The llama-server the app talks to, e.g. `http://localhost:8080`; also for `build`           |
 | `--port <n>`                      | `3000`      | Fixed, so the origin, and the chats the browser stores under it, stay the same between runs |
 | `--host <addr>`                   | `127.0.0.1` | `0.0.0.0` to open it to the LAN                                                             |
 | `--open` / `--no-open`            | open        | Opens the default browser once it listens                                                   |
@@ -46,7 +47,7 @@ The app reaches the llama-server on its own origin by default (llama-server serv
 { "server": "http://localhost:8080" }
 ```
 
-`npx llama-chat build --server <url>` writes that file, and `npx llama-chat --server <url>` answers it without one. The app reads it on every start, past its caches, so a host can change it without a new build. That llama-server needs `--cors-origins` for the app's address when it restricts origins.
+`npx llama-chat build --server <url>` writes that file, and `npx llama-chat` answers it without one, with `--server <url>` or else llama-server's default port on the host the page is opened from. The app reads it on every start, past its caches, so a host can change it without a new build. That llama-server needs `--cors-origins` for the app's address when it restricts origins.
 
 ## Features
 
@@ -55,7 +56,7 @@ The app reaches the llama-server on its own origin by default (llama-server serv
 - **Rendering** - Markdown (GFM), code highlighting, KaTeX math and Mermaid diagrams
 - **Models** - in ROUTER mode, a selector and a models manager: load and unload, downloads, Discover from the Hugging Face Hub, favorites and hidden models
 - **Tools** - built-in browser tools, llama-server's tools and MCP servers, each behind a permission prompt
-- **Everywhere** - light and dark themes, phone layouts, installable as a PWA, keyboard shortcuts (`Ctrl/Cmd+K` search, `Shift+Ctrl/Cmd+O` new chat, `Ctrl/Cmd+B` sidebar)
+- **Everywhere** - light and dark themes, phone layouts, installable as a PWA, keyboard shortcuts (`Ctrl/Cmd+K` search, `Shift+Ctrl/Cmd+O` new chat, `Ctrl/Cmd+B` sidebar, `Esc` stop the reply)
 
 ## Development
 

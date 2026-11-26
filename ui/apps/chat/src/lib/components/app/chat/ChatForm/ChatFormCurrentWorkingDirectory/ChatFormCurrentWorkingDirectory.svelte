@@ -19,7 +19,11 @@
 	import { useScrollActiveRow } from '#lib/hooks/use-scroll-active-row.svelte.ts';
 	import { ToolsService } from '#lib/services/tools.service.ts';
 	import { conversationsStore, deviceStore, toolsStore } from '#lib/stores/index.ts';
-	import { abbreviateHome, runGlobSearchWithChildren } from '#lib/utils/index.ts';
+	import {
+		abbreviateHome,
+		runGlobSearchWithChildren,
+		toHomeRelativeQuery
+	} from '#lib/utils/index.ts';
 	import { page } from '$app/state';
 	import { cubicInOut } from 'svelte/easing';
 
@@ -159,8 +163,10 @@
 			try {
 				// Generous limit: ranking is client-side, only the top
 				// MAX_RESULTS_SHOWN are shown.
+				// A plain query navigates home as if typed after `~/`; a query
+				// starting from a root or `~` navigates the absolute tree.
 				const res = await runGlobSearchWithChildren(
-					trimmed,
+					toHomeRelativeQuery(trimmed, homeBase),
 					homeBase ?? HOME_TILDE,
 					SEARCH.MAX_DEPTH,
 					SEARCH.LIMIT,
@@ -251,7 +257,7 @@
 			return;
 		}
 
-		setDirectory(value);
+		setDirectory(toHomeRelativeQuery(value, homeBase));
 		closePicker();
 	}
 

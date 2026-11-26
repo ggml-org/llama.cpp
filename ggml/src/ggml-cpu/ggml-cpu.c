@@ -1287,6 +1287,25 @@ static void ggml_compute_forward_mul_mat_one_chunk(
     }
 }
 
+// converts n BF16 values (whole blocks of vec_dot_type) to vec_dot_type: widened directly to F32, otherwise via F32 in chunks
+static void ggml_cpu_bf16_to_vec_dot_type(const ggml_bf16_t * x, void * y, int64_t n, enum ggml_type vec_dot_type) {
+    if (vec_dot_type == GGML_TYPE_F32) {
+        ggml_cpu_bf16_to_fp32(x, (float *) y, n);
+        return;
+    }
+
+    ggml_from_float_t const from_float = type_traits_cpu[vec_dot_type].from_float;
+    const int64_t bs = ggml_blck_size(vec_dot_type);
+
+    float tmp[1024];
+    const int64_t chunk = (1024/bs)*bs;
+    for (int64_t i = 0; i < n; i += chunk) {
+        const int64_t nc = MIN(chunk, n - i);
+        ggml_cpu_bf16_to_fp32(x + i, tmp, nc);
+        from_float(tmp, (char *) y + (i/bs)*ggml_type_size(vec_dot_type), nc);
+    }
+}
+
 void ggml_compute_forward_mul_mat(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
@@ -1372,11 +1391,9 @@ UseGgmlGemm1:;
         const size_t nbw3 = nbw2*ne12;
 
         assert(params->wsize >= ne13*nbw3);
-        // src1 is either packed from F32 into vec_dot_type, or widened from F16 or BF16 into the F32 work buffer
-        const bool widen = src1->type != GGML_TYPE_F32;
-
-        GGML_ASSERT(!widen || vec_dot_type == GGML_TYPE_F32);
-        GGML_ASSERT(!widen || src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_BF16);
+        // src1 is either packed from F32 or BF16 into vec_dot_type, or widened from F16 or BF16 into the F32 work buffer
+        GGML_ASSERT(src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16 ||
+                    (src1->type == GGML_TYPE_F16 && vec_dot_type == GGML_TYPE_F32));
 
     #if 0
         for (int64_t i13 = 0; i13 < ne13; ++i13) {
@@ -1404,7 +1421,7 @@ UseGgmlGemm1:;
                     if (src1->type == GGML_TYPE_F16) {
                         ggml_cpu_fp16_to_fp32((const ggml_fp16_t *) src1_row, (float *) wdata_row, ne10_block_size);
                     } else if (src1->type == GGML_TYPE_BF16) {
-                        ggml_cpu_bf16_to_fp32((const ggml_bf16_t *) src1_row, (float *) wdata_row, ne10_block_size);
+                        ggml_cpu_bf16_to_vec_dot_type((const ggml_bf16_t *) src1_row, wdata_row, ne10_block_size, vec_dot_type);
                     } else {
                         from_float((const float *) src1_row, wdata_row, ne10_block_size);
                     }
@@ -1656,7 +1673,7 @@ static void ggml_compute_forward_mul_mat_id(
         const size_t nbw3 = nbw2*ne12;
 
         assert(params->wsize >= ne13*nbw3);
-        GGML_ASSERT(src1->type == GGML_TYPE_F32);
+        GGML_ASSERT(src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16);
 
 #if 0
         for (int64_t i13 = 0; i13 < ne13; ++i13) {
@@ -1675,9 +1692,13 @@ static void ggml_compute_forward_mul_mat_id(
                     size_t bs = ggml_blck_size(vec_dot_type);
                     int64_t ne10_block_start = (ith * ne10/bs) / nth;
                     int64_t ne10_block_end   = ((ith + 1) * ne10/bs) / nth;
-                    from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11 + ne10_block_start*bs*nb10),
-                               (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1 + ne10_block_start*nbw0),
-                               (ne10_block_end - ne10_block_start) * bs);
+                    const void * src1_row  = (const char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11 + ne10_block_start*bs*nb10;
+                    void       * wdata_row =                    wdata  + i13*nbw3 + i12*nbw2 + i11*nbw1 + ne10_block_start*nbw0;
+                    if (src1->type == GGML_TYPE_BF16) {
+                        ggml_cpu_bf16_to_vec_dot_type((const ggml_bf16_t *) src1_row, wdata_row, (ne10_block_end - ne10_block_start) * bs, vec_dot_type);
+                    } else {
+                        from_float((const float *) src1_row, wdata_row, (ne10_block_end - ne10_block_start) * bs);
+                    }
                 }
             }
         }

@@ -163,6 +163,23 @@ describe("createHarness", () => {
     });
   });
 
+  it("times each call by its id with its wall-clock start and end", async () => {
+    const { client } = scriptedClient([[callEvent("first", "second")], []]);
+    const before = Date.now();
+    const events = await collect(client, [tool("first"), tool("second")]);
+    const toolCalls = (last(events) as { timings: { agentic: { toolCalls: unknown[] } } }).timings
+      .agentic.toolCalls as Array<{ id: string; startedAt: number; endedAt: number }>;
+
+    expect(toolCalls.map((timing) => timing.id)).toEqual(["call_0", "call_1"]);
+
+    for (const timing of toolCalls) {
+      expect(timing.startedAt).toBeGreaterThanOrEqual(before);
+      expect(timing.endedAt).toBeGreaterThanOrEqual(timing.startedAt);
+    }
+
+    expect(toolCalls[1].startedAt).toBeGreaterThanOrEqual(toolCalls[0].endedAt);
+  });
+
   it("emits a streaming tool's updates before its result", async () => {
     const { client } = scriptedClient([[callEvent("shell")], []]);
     const events = await collect(client, [

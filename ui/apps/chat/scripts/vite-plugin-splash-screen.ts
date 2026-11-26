@@ -3,10 +3,10 @@ import {
 	BUILD_CONFIG,
 	REGEX_PATTERNS,
 	SPLASH_LINK
-} from '../src/lib/constants/pwa.constants';
-import { NEWLINE, TAB } from '../src/lib/constants/special-characters.constants';
-import { SplashOrientation } from '../src/lib/enums/splash.enums';
-import type { SplashDimensions } from '../src/lib/types';
+} from '../src/lib/constants/pwa.constants.ts';
+import { NEWLINE, TAB } from '../src/lib/constants/special-characters.constants.ts';
+import { SplashOrientation } from '../src/lib/enums/splash.enums.ts';
+import type { SplashDimensions } from '../src/lib/types/index.ts';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'path';
 import type { Plugin } from 'vite';

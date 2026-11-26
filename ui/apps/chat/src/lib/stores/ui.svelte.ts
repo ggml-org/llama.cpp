@@ -80,7 +80,6 @@ class UiStore {
 
 	/** Open state of the Discover dialog. */
 	discoverModelsOpen = $state(false);
-
 	/** Sidebar sections showing all their chats past the preview, for this session. */
 	expandedSidebarSections = new SvelteSet<string>();
 
@@ -95,6 +94,9 @@ class UiStore {
 
 	/** Set while the user drags the sidebar edge, so width transitions can step aside. */
 	isSidebarResizing = $state(false);
+
+	/** Open state of the MCP servers dialog. */
+	mcpServersOpen = $state(false);
 
 	/** Model the details drawer shows, a qualified id or a raw model name. */
 	modelDetailsFocus = $state<string | null>(null);
@@ -113,15 +115,6 @@ class UiStore {
 	/** Whether Discover is turned on; every Discover entry point hides without it. */
 	get isDiscoverEnabled(): boolean {
 		return Boolean(settingsStore.getConfig(SETTINGS_KEYS.ENABLE_DISCOVER_MODELS));
-	}
-
-	/**
-	 * Whether MCP shows in the sidebar. Off by default: most people have never heard of MCP,
-	 * so it waits behind its setting. Hiding it only hides the entry point: servers already
-	 * added keep working.
-	 */
-	get isMcpShown(): boolean {
-		return Boolean(settingsStore.getConfig(SETTINGS_KEYS.SHOW_MCP));
 	}
 
 	/** Whether the model details drawer is open. */
@@ -185,11 +178,9 @@ class UiStore {
 		if (this.collapsedSidebarSections.has(id)) this.toggleSidebarSection(id);
 	}
 
-	/** Whether a sidebar action shows: Models and MCP wait behind their settings. */
+	/** Whether a sidebar action shows: Models waits behind its setting. */
 	isSidebarActionShown(action: SidebarAction | undefined): boolean {
 		if (action === SidebarAction.MANAGE_MODELS) return this.isModelsManagerShown;
-
-		if (action === SidebarAction.MCP) return this.isMcpShown;
 
 		return true;
 	}
@@ -210,6 +201,11 @@ class UiStore {
 	/** Open the group picker, which calls `onSelect` with the picked group. */
 	openGroupPicker(options: GroupPickerOptions): void {
 		this.groupPicker = options;
+	}
+
+	/** Open the MCP servers dialog. */
+	openMcpServers(): void {
+		this.mcpServersOpen = true;
 	}
 
 	/** Open the model details drawer over the current page, without leaving it. */

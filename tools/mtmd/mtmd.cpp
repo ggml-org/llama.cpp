@@ -1392,6 +1392,15 @@ struct mtmd_context {
                     img_end = "<｜hy_place▁holder▁no▁101｜>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(models.v.get());
                 } break;
+            case PROJECTOR_TYPE_HY_V4_FLASH:
+                {
+                    if (text_model && pos_type != MTMD_POS_TYPE_MROPE) {
+                        throw std::runtime_error("the hy_v4_flash projector needs a text model with M-RoPE rope sections");
+                    }
+                    img_beg = "<｜hy_image▁start:opensource｜>";
+                    img_end = "<｜hy_image▁end:opensource｜>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(models.v.get());
+                } break;
             case PROJECTOR_TYPE_EXAONE4_5:
                 {
                     // <vision> ... (image embeddings) ... </vision>

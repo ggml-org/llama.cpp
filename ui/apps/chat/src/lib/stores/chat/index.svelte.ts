@@ -1176,19 +1176,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 					await DatabaseService.updateCurrentNode(convId, currentMessageId);
 				}
 			},
-			onAttachments: (messageId: string, extras: DatabaseMessageExtra[]) => {
-				if (!extras.length) return;
-
-				const idx = conversationsStore.findMessageIndex(messageId);
-
-				if (idx === -1) return;
-
-				const msg = conversationsStore.activeMessages[idx];
-				const updatedExtras = [...(msg.extra || []), ...extras];
-
-				conversationsStore.updateMessageAtIndex(idx, { extra: updatedExtras });
-				DatabaseService.updateMessage(messageId, { extra: updatedExtras }).catch(console.error);
-			},
 			onChunk: (chunk: string) => {
 				streamedContent += chunk;
 				updateStreamingUI();

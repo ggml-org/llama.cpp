@@ -7,7 +7,8 @@ ui/
 ├── lib/
 │   ├── ui/       @ggml-org/llama-ui: design tokens, fonts, surfaces and components
 │   ├── voice/    @ggml-org/llama-voice: microphone capture, transcription and dictation
-│   └── harness/  @ggml-org/llama-harness: the agentic loop, headless
+│   ├── harness/  @ggml-org/llama-harness: the agentic loop, headless
+│   └── demo/     @ggml-org/llama-demo: scripted demo videos for PRs and docs
 └── apps/
     └── chat/       Llama Chat, the chat app that llama-server serves
 ```
@@ -20,12 +21,15 @@ ui/
   (`@ggml-org/llama-voice/svelte`). Apps in this repo compile its sources too. It is not published to npm yet.
 - [`lib/harness`](lib/harness/README.md) is the agentic loop: plain TypeScript with no UI and no dependencies. An app
   gives it an inference client and tools, and reads its events.
+- [`lib/demo`](lib/demo/README.md) records scripted demo videos of the apps for PRs and docs, and renders them on the
+  Llama brand. It is Node TypeScript that an app adds as a local `file:` dependency and imports by name, with the app's own
+  Playwright; it is private, not published to npm.
 - [`apps/chat`](apps/chat/README.md) talks to llama-server, stores conversations and runs the agentic loop through the
   harness. CMake builds it into llama-server (see `scripts/ui-assets.cmake`), and it is published to npm as
   `@ggml-org/llama-chat` (with `llama-chat` as its short name), so `npx llama-chat` runs it against any llama-server.
 
 Each folder is its own npm package with its own `package-lock.json`: run `npm ci` in the one you work on. Building,
-checking and testing `apps/chat` needs no install in `lib/ui`, `lib/voice` or `lib/harness`.
+checking and testing `apps/chat` needs no install in `lib/ui`, `lib/voice`, `lib/harness` or `lib/demo`.
 
 The split between library and app is not finished. Llama Chat takes its tokens, fonts, surfaces and base components
 from `lib/ui`, but still has its own versions of what the library holds above those (ActionIcon, SearchInput, Logo,

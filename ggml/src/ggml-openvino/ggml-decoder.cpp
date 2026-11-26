@@ -1411,12 +1411,12 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             ggml_openvino_static_kv_window(compute_params.attention_size, model_params.ctx_per_seq);
     }
     // The GPU plugin keeps device memory for each KV length it sees, and llama.cpp grows the KV length in steps of
-    // 256. Round it up to a power of two the same way, so that a long context uses a few lengths and not one per
-    // step. The KQ mask input is padded to this length with -inf (convert_ggml_input_to_ov).
+    // 256. Round it up (ggml_openvino_gpu_kv_window), so that a long context uses a few lengths and not one per step.
+    // The KQ mask input is padded to this length with -inf (convert_ggml_input_to_ov).
     if (!is_static && ggml_openvino_is_gpu() && !ggml_openvino_getenv_int("GGML_OPENVINO_STATEFUL_EXECUTION") &&
         !compute_params.mask_name.empty() && compute_params.attention_size > 0 && model_params.ctx_per_seq > 0) {
-        compute_params.attention_size =
-            ggml_openvino_static_kv_window(compute_params.attention_size, model_params.ctx_per_seq);
+        compute_params.attention_size = ggml_openvino_gpu_kv_window(compute_params.attention_size,
+                                                                    model_params.ctx_per_seq, compute_params.input_len);
     }
     model_params.ctx = model_params.ctx_per_seq * model_params.n_seq;
     return {model_params, compute_params};
@@ -1445,6 +1445,7 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
     }
     const std::string name = input != nullptr ? std::string(input->name) : std::string();
     ov::PartialShape input_shape;
+    bool kv_layout_4d = false;
 
     if (is_inp_tok(input, op) || is_inp_pos(input, op)) {
         // tokens or positions
@@ -1539,6 +1540,7 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
             const int64_t combined_dim = input_shape[3].get_length();  // n_heads_kv * head_size
             const int64_t head_size = combined_dim / n_heads_kv;
             input_shape = {input_shape[0], ov::Dimension::dynamic(), n_heads_kv, head_size};
+            kv_layout_4d = true;
         }
 
     } else if (is_kv_idx(input, op)) {
@@ -1563,7 +1565,8 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
     // A static graph (NPU) keeps the fixed token count set above; only a split static graph, whose parts are
     // fed by other backends, marks the dimension dynamic. Without this the token dimension of inp_tokens becomes
     // dynamic in the NPU graph (and, for example, the GATED_DELTA_NET pad masking fails).
-    if (dynamic_dim_index != -1 && (!m_is_static || m_model_is_splitted)) {
+    // the 4-D KV layout already has its ctx axis (1) dynamic; 3 - dynamic_dim_index would hit the head axis
+    if (dynamic_dim_index != -1 && (!m_is_static || m_model_is_splitted) && !kv_layout_4d) {
         input_shape[3 - dynamic_dim_index] = -1;
     }
     if (op->op == GGML_OP_SOFT_MAX && op->src[1] != nullptr && op->src[1]->op == GGML_OP_NONE &&
@@ -1976,9 +1979,15 @@ void GgmlOvDecoder::compute_model_outputs() {
                 }
             }
             // op tests (the naive path) can read any node of the graph, e.g. the intermediate sum of a fused
-            // ADD + RMS_NORM + MUL, so every non-in-place node is a model output there
-            if (input_use_count == cur_node_use_count && (!m_naive || ::is_inplace_op(cur_node))) {
-                cur_node = nullptr;
+            // ADD + RMS_NORM + MUL, so every node is a model output there. An in-place node is written back
+            // through its view_src, as when it has no consumer.
+            if (input_use_count == cur_node_use_count) {
+                if (!m_naive) {
+                    cur_node = nullptr;
+                } else if (::is_inplace_op(cur_node)) {
+                    cur_node =
+                        cur_node->view_src != nullptr && ggml_nbytes(cur_node) > 0 ? cur_node->view_src : nullptr;
+                }
             }
         }
         if (cur_node != nullptr) {

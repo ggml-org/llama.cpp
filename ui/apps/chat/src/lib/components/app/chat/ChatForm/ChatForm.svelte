@@ -18,10 +18,11 @@
 		DialogMcpResourcesBrowser
 	} from '#lib/components/app/index.ts';
 	import {
-		CHAT_FORM_SINGLE_ROW_MAX_TEXT_PX,
+		CHAT_FORM_SINGLE_ROW_MAX_TEXT_LINES,
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
 		ICON_CLASS_DEFAULT,
 		INITIAL_FILE_SIZE,
+		OPEN_OVERLAY_SELECTOR,
 		PROMPT_CONTENT_SEPARATOR,
 		SETTING_CONFIG_DEFAULT,
 		SYSTEM_MESSAGE_PLACEHOLDER,
@@ -197,7 +198,7 @@
 		hasPrompts: () => {
 			const prefs = conversationsStore.preferences;
 
-			if (!prefs.isCategoryEnabled(ToolSource.MCP)) return false;
+			if (!mcpStore.isFeatureEnabled || !prefs.isCategoryEnabled(ToolSource.MCP)) return false;
 
 			return mcpStore
 				.getServers()
@@ -313,6 +314,7 @@
 	// wrapped, as the wider row of its own would fit it again and flip it straight back
 	let textHeight = $state<number | null>(null);
 	let wrappedAtLength = Infinity;
+	let lastLength = 0;
 	let canBeSingleRow = $derived(
 		singleRow &&
 			!deviceStore.isMobile &&
@@ -331,11 +333,16 @@
 	$effect(() => {
 		void textHeight;
 
-		const height = inputRef?.getContentDOM()?.offsetHeight ?? 0;
-		const fitsOneLine = height < CHAT_FORM_SINGLE_ROW_MAX_TEXT_PX;
+		const content = inputRef?.getContentDOM();
+		const lineHeight = content ? parseFloat(getComputedStyle(content).lineHeight) : 0;
+		const lines = content && lineHeight ? content.offsetHeight / lineHeight : 0;
+		const fitsOneLine = lines < CHAT_FORM_SINGLE_ROW_MAX_TEXT_LINES;
 		const length = value.length;
 
-		if (!length) wrappedAtLength = Infinity;
+		// an emptied form tries the one row again; one that wraps while empty keeps the two rows
+		if (!length && lastLength) wrappedAtLength = Infinity;
+
+		lastLength = length;
 
 		if (!canBeSingleRow) {
 			isSingleRow = false;
@@ -694,16 +701,29 @@
 		await submit();
 	}
 
-	// Escape drops a recording, wherever the focus is
-	function handleWindowKeydown(event: KeyboardEvent) {
-		if (event.key !== KeyboardKey.ESCAPE || !voice.isActive || event.defaultPrevented) return;
+	// Escape drops a recording, or else stops the reply, wherever the focus is. On the body, so it
+	// runs before the overlays' document listeners: a tooltip closing on Escape does not take the key
+	function handleBodyKeydown(event: KeyboardEvent) {
+		if (event.key !== KeyboardKey.ESCAPE || event.defaultPrevented) return;
+
+		if (document.querySelector(OPEN_OVERLAY_SELECTOR)) return;
+
+		if (voice.isActive) {
+			event.preventDefault();
+			voice.cancel();
+
+			return;
+		}
+
+		// the system message editor and a message edit take Escape in their own window listeners
+		if (!isLoading || systemMode || chatStore.isEditing() || isIMEComposing(event)) return;
 
 		event.preventDefault();
-		voice.cancel();
+		onStop?.();
 	}
 </script>
 
-<svelte:window onkeydown={handleWindowKeydown} />
+<svelte:body onkeydown={handleBodyKeydown} />
 
 {#snippet systemMessageLeading()}
 	{#if systemMessageAttachment}
@@ -891,6 +911,7 @@
 						isVoiceRefining={voice.isRefining}
 						micWarning={micUnavailableReason ?? micError}
 						onFileUpload={handleFileUpload}
+						onFilesSelect={handleFileSelect}
 						onMicClick={handleMicClick}
 						{onStop}
 						onSystemPromptClick={() =>
@@ -903,7 +924,7 @@
 						voice={{
 							action: voice.label,
 							hint: voice.hint,
-							prepare: () => void voice.prepare(),
+							prepare: voice.prepare,
 							show: voice.showButton,
 							unavailableReason: voice.unavailableReason,
 							unprepare: voice.unprepare

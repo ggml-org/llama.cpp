@@ -29,8 +29,6 @@ struct htp_get_rows_kernel_params {
 
 struct htp_get_rows_vtcm_layout {
     size_t total_bytes;
-    size_t off_src1;
-    size_t src1_bytes;
     size_t off_src0;
     size_t off_dst;
 
@@ -44,39 +42,35 @@ struct htp_get_rows_vtcm_layout {
 static inline void htp_get_rows_vtcm_layout_build(
     struct htp_get_rows_vtcm_layout * L,
     int kernel_type,
-    int type,
+    int src0_type,
+    int dst_type,
     uint32_t ne00,
-    uint32_t total_tasks,
-    int idx_type,
     uint32_t n_hvx) {
 
     memset(L, 0, sizeof(*L));
 
-    const size_t elem_size = (idx_type == HTP_TYPE_I64) ? sizeof(int64_t) : sizeof(int32_t);
-    const size_t src1_raw_bytes = total_tasks * elem_size;
-    const size_t src1_bytes = ((src1_raw_bytes + 127) & ~127) + 128;
-
-    L->src1_bytes = src1_bytes;
-    const size_t src1_alloc_bytes = (src1_bytes + 255) & ~255;
-
     if (kernel_type != HTP_GET_ROWS_KERNEL_SAMETYPE) {
         size_t src0_row_size = 0;
         if (kernel_type == HTP_GET_ROWS_KERNEL_TILED) {
-            const size_t tile_stride = htp_tensor_get_tile_padded_size(type);
-            const uint32_t n_k_tiles = ne00 / htp_tensor_get_tile_k(type);
+            const size_t tile_stride = htp_tensor_get_tile_padded_size(src0_type);
+            const uint32_t n_k_tiles = ne00 / htp_tensor_get_tile_k(src0_type);
             src0_row_size = n_k_tiles > 0 ? (n_k_tiles * tile_stride) : tile_stride;
         } else {
-            src0_row_size = htp_tensor_get_row_size(type, ne00);
+            src0_row_size = htp_tensor_get_row_size(src0_type, ne00);
         }
 
+        const bool direct_f16_spad =
+            (kernel_type == HTP_GET_ROWS_KERNEL_TILED && src0_type == HTP_TYPE_F16 && dst_type == HTP_TYPE_F16) ||
+            (kernel_type == HTP_GET_ROWS_KERNEL_FLAT  && src0_type == HTP_TYPE_F32 && dst_type == HTP_TYPE_F16);
+        const size_t dst_spad_row_size = htp_tensor_get_row_size(direct_f16_spad ? dst_type : HTP_TYPE_F32, ne00);
+
         L->src0_spad_half_size   = (src0_row_size + 255) & ~255;
-        L->dst_spad_half_size    = (ne00 * sizeof(float) + 255) & ~255;
+        L->dst_spad_half_size    = (dst_spad_row_size + 255) & ~255;
         L->src0_bytes_per_hvx    = 2 * L->src0_spad_half_size;
         L->dst_bytes_per_hvx     = 2 * L->dst_spad_half_size;
     }
 
     size_t off = 0;
-    VTCM_LAYOUT_ALLOC(off, off_src1, src1_alloc_bytes);
     VTCM_LAYOUT_ALLOC(off, off_src0, L->src0_bytes_per_hvx * n_hvx);
     VTCM_LAYOUT_ALLOC(off, off_dst,  L->dst_bytes_per_hvx  * n_hvx);
     L->total_bytes = off;

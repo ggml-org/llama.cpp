@@ -167,6 +167,14 @@ int ggml_openvino_npu_decode_bucket();
 // clamped to ctx.
 int ggml_openvino_static_kv_window(int rows, int ctx);
 
+// Rows the dynamic GPU graph attends for a batch of n_tokens tokens per sequence, clamped to ctx. The GPU plugin keeps
+// memory for each attended length, so a long context should use a few lengths:
+//   prompt batches (more than 16 tokens): the next power of two, as ggml_openvino_static_kv_window(). The memory kept
+//   per length grows with the batch size.
+//   decode batches: the next multiple of 2^k / 4 (2^k <= rows < 2^(k+1)) and of 256, four lengths per power of two.
+//   Decode reads every attended row, so it keeps the masked rows to at most 25% instead of up to 100%.
+int ggml_openvino_gpu_kv_window(int rows, int ctx, int n_tokens);
+
 // On-demand NPU KV cache (GGML_OPENVINO_NPU_KV_ON_DEMAND): the ggml KV buffer stays non-resident and the
 // NPU binds per-tensor L0 storage that grows (base*2^k rows, base = decode bucket or 1024) with the rows in use.
 bool ggml_openvino_npu_kv_on_demand_enabled();
