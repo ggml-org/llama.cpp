@@ -4,23 +4,6 @@
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
 
-static bool has_spark_tag(const gguf_context * metadata) {
-    const int tags_key = gguf_find_key(metadata, "general.tags");
-    if (tags_key < 0) {
-        return false;
-    }
-    if (gguf_get_kv_type(metadata, tags_key) != GGUF_TYPE_ARRAY ||
-        gguf_get_arr_type(metadata, tags_key) != GGUF_TYPE_STRING) {
-        throw std::runtime_error("general.tags must be a string array");
-    }
-    for (size_t i = 0; i < gguf_get_arr_n(metadata, tags_key); ++i) {
-        if (std::strcmp(gguf_get_arr_str(metadata, tags_key, i), "sparkx2_5") == 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
 void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key(LLM_KV_EMBEDDING_SCALE, hparams.f_embedding_scale, false);
@@ -65,6 +48,10 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         load_hparams_lilicorr(ml);
     }
 
+    std::string backbone_name;
+    ml.get_key(LLM_KV_DFLASH_BACKBONE, backbone_name, false);
+    hparams.is_spark_dspark = variant == VARIANT_DSPARK && backbone_name == "spark2_5";
+
     if (!ml.get_arr(LLM_KV_TARGET_LAYERS, target_layer_ids, false)) {
         throw std::runtime_error("DFlash model requires 'target_layers' in GGUF metadata");
     }
@@ -89,7 +76,6 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         backbone = BACKBONE_MISTRAL_LARGE4;
     } else if (ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false) && hparams.n_swa > 0) {
         // optional interleaved sliding-window attention with per-layer pattern array.
-        hparams.is_spark_dspark = variant == VARIANT_DSPARK && has_spark_tag(ml.metadata);
         // DFlash has a single rope, so the SWA rope == main rope.
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
         ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
