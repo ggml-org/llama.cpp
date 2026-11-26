@@ -8,7 +8,7 @@
 		SIDEBAR_ACTIONS_ITEMS
 	} from '#lib/constants/index.ts';
 	import { SidebarAction } from '#lib/enums/index.ts';
-	import { deviceStore } from '#lib/stores/index.ts';
+	import { deviceStore, uiStore } from '#lib/stores/index.ts';
 	import type { DesktopIconStripItem } from '#lib/types/index.ts';
 	import { hapticTap } from '#lib/utils/index.ts';
 	import { goto } from '$app/navigation';
@@ -30,12 +30,14 @@
 	let { class: className, items = SIDEBAR_ACTIONS_ITEMS, onAction, onNavigate }: Props = $props();
 
 	// the models manager stays desktop-only: a phone picks its models in the selector; a phone
-	// reaches search from the round key at the top of the sidebar instead
+	// reaches search from the round key at the top of the sidebar instead. Models and MCP
+	// wait behind their settings
 	const actions = $derived(
 		items.filter(
 			(item) =>
-				!deviceStore.isMobile ||
-				(item.action !== SidebarAction.MANAGE_MODELS && item.action !== SidebarAction.SEARCH)
+				uiStore.isSidebarActionShown(item.action) &&
+				(!deviceStore.isMobile ||
+					(item.action !== SidebarAction.MANAGE_MODELS && item.action !== SidebarAction.SEARCH))
 		)
 	);
 	let initialized = $state(false);
@@ -103,7 +105,7 @@
 		{#if showIcons}
 			<div transition:fade={itemTransition}>
 				<Button
-					class="w-full min-w-9 justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 rounded-(--surface-row-radius) max-md:h-12 max-md:rounded-2xl max-md:px-3 max-md:text-[17px] {isActive
+					class="w-full min-w-9 justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 rounded-(--surface-row-radius) max-md:h-12 max-md:rounded-2xl max-md:px-3 max-md:text-body {isActive
 						? 'selected-row-surface text-accent-foreground'
 						: ''}"
 					href={item.route}

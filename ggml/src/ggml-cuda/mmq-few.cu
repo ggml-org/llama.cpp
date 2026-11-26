@@ -584,7 +584,7 @@ static __global__ void mul_mat_q_few(
         ggml_cuda_pdl_sync();
     }
 
-#if __CUDA_ARCH__ == GGML_CUDA_CC_DGX_SPARK
+#if __CUDA_ARCH__ == GGML_CUDA_CC_GB10
     // DGX Spark DRAM serves the short row pieces of the stage copies slowly, so the rows of the block are first prefetched into L2 in address order.
     {
         const int     tid       = threadIdx.y*warp_size + threadIdx.x;
@@ -599,7 +599,7 @@ static __global__ void mul_mat_q_few(
             }
         }
     }
-#endif // __CUDA_ARCH__ == GGML_CUDA_CC_DGX_SPARK
+#endif // __CUDA_ARCH__ == GGML_CUDA_CC_GB10
 
 #pragma unroll
     for (int stage = 0; stage < nstages - 1; ++stage) {
@@ -880,14 +880,14 @@ static int ggml_cuda_mmq_few_min_ncols(const ggml_type type, const int cc, const
         return 0;
     }
     // on DGX Spark the kernel needs its L2 prefetch, which is only in the DGX Spark device code
-    if (cc == GGML_CUDA_CC_DGX_SPARK && ggml_cuda_highest_compiled_arch(cc) != GGML_CUDA_CC_DGX_SPARK) {
+    if (cc == GGML_CUDA_CC_GB10 && ggml_cuda_highest_compiled_arch(cc) != GGML_CUDA_CC_GB10) {
         return 0;
     }
     // with fewer than 8 units of 256 values per row the warps idle, MMVQ and MMQ are better there (MUL_MAT_ID splits the rows instead)
     if (mmq_few_unit_size(type) == 0 || (!has_ids && ne00 < 8*QK_K)) {
         return 0;
     }
-    if (cc == GGML_CUDA_CC_DGX_SPARK) { // tuned on DGX Spark GB10, also for MUL_MAT_ID
+    if (cc == GGML_CUDA_CC_GB10) { // tuned on DGX Spark GB10, also for MUL_MAT_ID
         return type == GGML_TYPE_IQ4_XS || type == GGML_TYPE_IQ4_NL ? 8 : 2;
     }
     if (has_ids) { // after MMVQ, which is faster up to its max. batch size

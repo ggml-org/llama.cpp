@@ -13,7 +13,8 @@
 	import {
 		LOCAL_BACKEND_ID,
 		type ModalityKey,
-		MODELS_TABLE_GROUP_LABELS
+		MODELS_TABLE_GROUP_LABELS,
+		OPEN_OVERLAY_SELECTOR
 	} from '#lib/constants/index.ts';
 	import { ModelCapability, ModelsTableGroupKind } from '#lib/enums/index.ts';
 	import { modelsStore, uiStore } from '#lib/stores/index.ts';
@@ -168,14 +169,6 @@
 		uiStore.requestComposerFocus();
 		void uiStore.closeModelsManager();
 	}
-
-	/** Overlays that handle their own Escape, so the page leaves them alone. */
-	const OPEN_OVERLAY_SELECTOR = [
-		'[role="dialog"][data-state="open"]',
-		'[role="alertdialog"][data-state="open"]',
-		'[role="menu"][data-state="open"]',
-		'[role="listbox"][data-state="open"]'
-	].join(', ');
 
 	// Escape steps back the way the dialog's did: the pane's drawer closes itself, then
 	// the next Escape leaves the page

@@ -1,11 +1,11 @@
-// Guards the lazy-body behaviour of the shared collapsible wrappers.
+// Guards the lazy-body behaviour of Llama UI's Collapsible.Content, through the
+// chat's collapsible blocks.
 //
-// bits-ui's Collapsible.Content renders its children unconditionally and only
-// sets `hidden`, so before this was gated a collapsed tool result kept its whole
-// body in the DOM and re-rendered it on every streamed token (measured at
-// ~41ms/section/token for a 200KB result). These tests pin the fix: closed means
-// not rendered, and opening still mounts the body. The collapse is animated, so
-// "not rendered" happens when the transition ends rather than when it starts.
+// A collapsed tool result that kept its body in the DOM re-rendered it on every
+// streamed token (measured at ~41ms/section/token for a 200KB result). These
+// tests pin the fix: closed means not rendered, and opening still mounts the
+// body. The collapse is animated, so "not rendered" happens when the transition
+// ends rather than when it starts.
 
 import CollapsibleLazyBodyHarness from './components/CollapsibleLazyBodyHarness.svelte';
 import { tick } from 'svelte';

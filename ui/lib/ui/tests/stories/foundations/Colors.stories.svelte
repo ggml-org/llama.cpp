@@ -15,7 +15,7 @@
 <Story asChild name="Primitives">
 	<TokenTier
 		groups={primitiveGroups}
-		intro="Raw values named by what they are. Only semantic tokens point at these; components never use them directly."
+		intro="Raw colours named by what they are. Only semantic tokens point at these; components never use them directly."
 		showReference={false}
 	/>
 </Story>
@@ -23,7 +23,7 @@
 <Story asChild name="Semantic">
 	<TokenTier
 		groups={semanticGroups}
-		intro="Named by purpose. Each points at a primitive, and this is the only tier that changes between light and dark. Switch the theme to see the dark values."
+		intro="Named by purpose. Each picks a primitive per theme or is mixed from another semantic token by a fixed rule, and this is the only tier that changes between light and dark. Switch the theme to see the dark values."
 		showReference={true}
 	/>
 </Story>
@@ -31,7 +31,7 @@
 <Story asChild name="Components">
 	<TokenTier
 		groups={componentGroups}
-		intro="One group per component. They point at semantic tokens, so both themes follow automatically."
+		intro="Only what a component decides itself: a value no semantic token has, or one that only this component changes between themes."
 		showReference={true}
 	/>
 </Story>

@@ -54,6 +54,7 @@ add_library(mtmd
             models/granite-speech.cpp
             models/granite4-vision.cpp
             models/hunyuanvl.cpp
+            models/hy-v4.cpp
             models/inkling2v.cpp
             models/internvl.cpp
             models/kimivl.cpp
@@ -88,12 +89,15 @@ add_library(mtmd
             models/fish-s2-spkenc.cpp
             models/zonos3-gen.cpp
             models/yue2-gen.cpp
+            models/voxcpm2-gen.cpp
+            models/voxcpm2-spkenc.cpp
             models/snake-vae.cpp
             models/music3-gen.cpp
             models/zonos3-spkenc.cpp
             models/pockettts-seanet.cpp
             models/pockettts-spkenc.cpp
             models/pockettts-gen.cpp
+            models/moshi.cpp
             models/soprano.cpp
             models/kokoro.cpp
             models/tiny-voca.cpp

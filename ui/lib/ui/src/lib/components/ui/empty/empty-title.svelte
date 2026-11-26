@@ -12,7 +12,7 @@
 
 <div
 	bind:this={ref}
-	class={cn('text-sm font-medium tracking-tight', className)}
+	class={cn('text-body-sm font-medium tracking-tight', className)}
 	data-slot="empty-title"
 	{...restProps}
 >

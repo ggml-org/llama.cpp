@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <openvino/core/type/element_type.hpp>
@@ -99,14 +100,20 @@ struct ggml_backend_openvino_buffer_context {
 
     // Used for re-allocation on device for kvcache
     void * data_prev = nullptr;
+    // data is in the weight buffer registry
+    bool weight_registered = false;
+
+    // One counter for both constructors: the id is part of the weight identity in the graph key, so a host-pointer
+    // buffer and an allocated buffer must never share one.
+    static size_t next_buffer_id() {
+        static std::atomic<size_t> next_id{1};
+        return next_id.fetch_add(1);
+    }
 
     ggml_backend_openvino_buffer_context(int device, void * external_data, size_t size) :
         device(device),
         name(std::string(GGML_OPENVINO_NAME) + std::to_string(device)),
-        id([]() {
-            static std::atomic<size_t> next_id{1};
-            return next_id.fetch_add(1);
-        }()),
+        id(next_buffer_id()),
         data(external_data),
         size(size),
         is_remote(false),
@@ -117,10 +124,7 @@ struct ggml_backend_openvino_buffer_context {
     ggml_backend_openvino_buffer_context(int device, size_t size, bool is_remote = false, bool lazy = false) :
         device(device),
         name(std::string(GGML_OPENVINO_NAME) + std::to_string(device)),
-        id([]() {
-            static std::atomic<size_t> next_id{1};
-            return next_id.fetch_add(1);
-        }()),
+        id(next_buffer_id()),
         data(nullptr),
         size(size),
         is_remote(is_remote) {
@@ -260,6 +264,10 @@ struct ggml_backend_openvino_buffer_context {
             delete pair.second;
         }
         tensor_extras.clear();
+        // a later release must not madvise memory this buffer no longer owns
+        if (weight_registered) {
+            ggml_openvino_unregister_weight_buffer(data);
+        }
         if (kv_on_demand) {
             ggml_openvino_kv_storage_unregister(data, size);
         }
@@ -321,6 +329,17 @@ void ggml_openvino_register_weight_buffer(void * data, size_t size) {
     reg.buffers.emplace_back(data, size);
 }
 
+void ggml_openvino_unregister_weight_buffer(const void * data) {
+    if (data == nullptr) {
+        return;
+    }
+    auto & reg = ov_weight_registry();
+    std::lock_guard<std::mutex> lock(reg.mutex);
+    reg.buffers.erase(std::remove_if(reg.buffers.begin(), reg.buffers.end(),
+                                     [data](const std::pair<void *, size_t> & b) { return b.first == data; }),
+                      reg.buffers.end());
+}
+
 bool ggml_openvino_weight_buffers_released() {
     auto & reg = ov_weight_registry();
     std::lock_guard<std::mutex> lock(reg.mutex);
@@ -378,21 +397,53 @@ static bool is_self_contained_mmap_enabled() {
            ggml_openvino_getenv_str("GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR");
 }
 
+// Stores extra as the tensor's extra, deleting the one it replaces
+static void ggml_openvino_set_extra(ggml_backend_openvino_buffer_context * ctx,
+                                    ggml_tensor * tensor,
+                                    ggml_openvino_extra_base * extra) {
+    auto it = ctx->tensor_extras.find(tensor);
+    if (it != ctx->tensor_extras.end() && it->second != extra) {
+        delete it->second;
+    }
+    ctx->tensor_extras[tensor] = extra;
+    tensor->extra = extra;
+}
+
+// Replaces the buffer's context with a new allocation of the same size and moves tensor->data to it. The old
+// allocation is freed first, so the two never take memory at the same time. Returns false when the new
+// allocation fails.
+static bool ggml_openvino_swap_buffer_context(ggml_backend_buffer_t buffer,
+                                              ggml_backend_openvino_buffer_context *& ctx,
+                                              ggml_tensor * tensor,
+                                              bool is_remote,
+                                              bool lazy) {
+    const int device = ctx->device;
+    const size_t size = ctx->size;
+    const size_t offset = (char *) tensor->data - (char *) ctx->data;
+    delete ctx;
+    ctx = new ggml_backend_openvino_buffer_context(device, size, is_remote, lazy);
+    buffer->context = ctx;
+    if (ctx->data == nullptr) {
+        return false;
+    }
+    tensor->data = (char *) ctx->data + offset;
+    return true;
+}
+
 static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     // GGML_LOG_DEBUG("%s: buffer usage=%d, tensor name=%s\n", __func__, buffer->usage, tensor->name);
     ggml_backend_openvino_buffer_context * ctx = (ggml_backend_openvino_buffer_context *) buffer->context;
 
-    // Put kvcache on device memory for GPU (NPU memory is too small even for kvcache)
-    if (strncmp(tensor->name, "cache_", 6) == 0 && !ctx->is_remote && ggml_openvino_is_gpu() &&
-        !is_stateful_enabled()) {
+    // Put kvcache on device memory for GPU (NPU memory is too small even for kvcache). Same for the speculative
+    // decoding feature buffers (llama_context::layer_inp_dev / h_nextn_dev): every graph reads or writes the whole
+    // buffer, so in host memory the plugin copies it to the device and back on every inference.
+    const bool is_device_state = strncmp(tensor->name, "cache_", 6) == 0 ||
+                                 strcmp(tensor->name, "layer_inp_dev") == 0 || strcmp(tensor->name, "h_nextn_dev") == 0;
+    if (is_device_state && !ctx->is_remote && ggml_openvino_is_gpu() && !is_stateful_enabled()) {
         GGML_ASSERT(ctx->tensor_extras.empty());
-        auto device = ctx->device;
-        auto size = ctx->size;
-        auto * data_prev = ctx->data;
-        delete ctx;
-        ctx = new ggml_backend_openvino_buffer_context(device, size, true);
-        buffer->context = ctx;
-        tensor->data = (char *) ctx->data + ((char *) tensor->data - (char *) data_prev);
+        if (!ggml_openvino_swap_buffer_context(buffer, ctx, tensor, true, false)) {
+            return GGML_STATUS_ALLOC_FAILED;
+        }
     }
 
     // On-demand NPU KV: swap the eagerly committed buffer for demand-zero memory at its first KV tensor
@@ -401,14 +452,10 @@ static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_bu
     if (is_kv_tensor && tensor->view_src == nullptr && !ctx->is_remote && ggml_openvino_npu_kv_on_demand_enabled() &&
         tensor->ne[2] == 1 && tensor->ne[3] == 1 && tensor->nb[1] == ggml_row_size(tensor->type, tensor->ne[0])) {
         if (!ctx->kv_on_demand && ctx->tensor_extras.empty() && tensor->data == ctx->data) {
-            auto device = ctx->device;
-            auto size = ctx->size;
-            auto * data_prev = ctx->data;
-            delete ctx;
-            ctx = new ggml_backend_openvino_buffer_context(device, size, false, true);
+            if (!ggml_openvino_swap_buffer_context(buffer, ctx, tensor, false, true)) {
+                return GGML_STATUS_ALLOC_FAILED;
+            }
             ctx->kv_on_demand = true;
-            buffer->context = ctx;
-            tensor->data = (char *) ctx->data + ((char *) tensor->data - (char *) data_prev);
         }
         if (ctx->kv_on_demand) {
             ggml_openvino_kv_storage_register(tensor->data, tensor->nb[1], tensor->ne[1]);
@@ -431,12 +478,7 @@ static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_bu
                 if (ggml_openvino_tensor_extra * extra =
                         ggml_openvino_create_tensor_extra(tensor, ctx->is_remote,
                                                           ggml_openvino_get_available_devices()[ctx->device])) {
-                    auto it = ctx->tensor_extras.find(tensor);
-                    if (it != ctx->tensor_extras.end()) {
-                        delete it->second;
-                    }
-                    ctx->tensor_extras[tensor] = extra;
-                    tensor->extra = extra;
+                    ggml_openvino_set_extra(ctx, tensor, extra);
                     return GGML_STATUS_SUCCESS;
                 }
             }
@@ -451,12 +493,7 @@ static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_bu
         ggml_openvino_tensor_extra * extra = ggml_openvino_create_tensor_extra(
             tensor, ctx->is_remote, ggml_openvino_get_available_devices()[ctx->device]);
         if (extra != nullptr) {
-            auto it = ctx->tensor_extras.find(tensor);
-            if (it != ctx->tensor_extras.end()) {
-                delete it->second;
-            }
-            ctx->tensor_extras[tensor] = extra;
-            tensor->extra = extra;
+            ggml_openvino_set_extra(ctx, tensor, extra);
         }
     }
 
@@ -644,8 +681,7 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
                 // }
             }
 
-            ctx->tensor_extras[tensor] = extra;
-            tensor->extra = extra;
+            ggml_openvino_set_extra(ctx, tensor, extra);
 
             // Register the host buffer so its pages can be dropped after the GPU
             // plugin has its own device copy (GGML_OPENVINO_RELEASE_WEIGHTS).
@@ -661,6 +697,7 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
                         "multi-model runs.");
                 }
                 ggml_openvino_register_weight_buffer(ctx->data, ctx->size);
+                ctx->weight_registered = true;
             }
 
             if (!ctx->external_memory) {
@@ -700,12 +737,7 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
             return;
         }
 
-        auto it = ctx->tensor_extras.find(tensor);
-        if (it != ctx->tensor_extras.end()) {
-            delete it->second;
-        }
-        ctx->tensor_extras[tensor] = extra;
-        tensor->extra = extra;
+        ggml_openvino_set_extra(ctx, tensor, extra);
     }
 }
 
@@ -1087,15 +1119,8 @@ void ggml_openvino_buffer_register_extra(ggml_tensor * tensor, ggml_openvino_ext
     GGML_ASSERT(tensor->buffer != nullptr);
     GGML_ASSERT(ggml_backend_buffer_is_openvino(tensor->buffer));
 
-    auto * ctx = static_cast<ggml_backend_openvino_buffer_context *>(tensor->buffer->context);
-
-    auto it = ctx->tensor_extras.find(tensor);
-    if (it != ctx->tensor_extras.end()) {
-        delete it->second;
-    }
-
-    ctx->tensor_extras[tensor] = extra;
-    tensor->extra = extra;
+    ggml_openvino_set_extra(static_cast<ggml_backend_openvino_buffer_context *>(tensor->buffer->context), tensor,
+                            extra);
 }
 
 bool ggml_backend_buft_is_openvino(ggml_backend_buffer_type_t buft) {
@@ -1433,6 +1458,7 @@ static void ggml_backend_openvino_device_get_props(ggml_backend_dev_t dev, ggml_
         /* .buffer_from_host_ptr  = */ is_self_contained_mmap_enabled(),
         /* .events                = */ false,
         /* .mmap_support          = */ true,
+        /* .fast_async_host_input = */ false,
     };
 }
 
@@ -1502,6 +1528,38 @@ static bool has_strides_on_element_grid(const ggml_tensor * t) {
         }
     }
     return true;
+}
+
+// A VIEW that regroups one contiguous span of every row of its contiguous source, e.g. the z/x/B/C
+// splits of the fused mamba projections. The strides do not nest on an element grid, but
+// process_view_input_new resolves it as a Slice of the source's innermost axis plus a Reshape.
+// Keep in sync with the matching branch there; dynamic execution only.
+static bool is_row_span_view(const ggml_tensor * t) {
+    if (ggml_openvino_is_static() || is_stateful_enabled()) {
+        return false;
+    }
+    const ggml_tensor * src = t->op == GGML_OP_VIEW ? t->src[0] : nullptr;
+    // a RESHAPE source is fine (the translation reads its value); a chained VIEW is not, because
+    // the view metadata then describes the intermediate view instead of the resolved input
+    if (src == nullptr || src->op == GGML_OP_VIEW || !ggml_is_contiguous(src) || t->type != src->type) {
+        return false;
+    }
+    const size_t es = ggml_type_size(t->type);
+    int d = 0;
+    size_t span = 1;
+    while (d < GGML_MAX_DIMS && t->nb[d] == span * es) {
+        span *= t->ne[d];
+        d++;
+    }
+    if (d < 2) {
+        return false;
+    }
+    for (int s = 1; d < GGML_MAX_DIMS; ++d, ++s) {
+        if (t->ne[d] != src->ne[s] || t->nb[d] != src->nb[s]) {
+            return false;
+        }
+    }
+    return t->view_offs % es == 0 && t->view_offs / es + span <= (size_t) src->ne[0];
 }
 
 static bool has_non_contiguous_view_input(const ggml_tensor * op) {
@@ -1624,7 +1682,7 @@ static bool cpy_output_view_is_supported(const ggml_tensor * op) {
     }
 
     return ggml_nbytes(op) == 0 || ggml_is_contiguous(op) || GgmlOvDecoder::is_conv_state_writeback(op) ||
-           GgmlOvDecoder::is_gdn_snapshot_writeback(op);
+           GgmlOvDecoder::is_gdn_snapshot_writeback(op) || GgmlOvDecoder::is_ssm_state_writeback(op);
 }
 
 static bool mul_mat_id_requires_large_tmp(const ggml_tensor * op) {
@@ -1727,13 +1785,15 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
     }
     case GGML_OP_GET_ROWS:
     case GGML_OP_SET_ROWS: {
-        if (GgmlOvDecoder::is_conv_state_snapshot_writeback(op) &&
-            (ggml_openvino_is_npu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC"))) {
+        if (GgmlOvDecoder::is_conv_state_snapshot_writeback(op) && ggml_openvino_is_static()) {
             return {false, "convolution snapshots require dynamic execution"};
         }
         if (op->ne[3] != 1 && !GgmlOvDecoder::is_get_rows_batched_4d(op) &&
             !GgmlOvDecoder::is_conv_state_snapshot_writeback(op)) {
             return {false, "GET_ROWS/SET_ROWS with ne[3] != 1 (ne[3]=" + std::to_string(op->ne[3]) + ") is not supported"};
+        }
+        if (op->op == GGML_OP_SET_ROWS && op->src[0]->type == GGML_TYPE_BF16) {
+            return {false, "SET_ROWS with BF16 src0 is not supported"};
         }
         if (op->ne[0] == 256 && (op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q5_K ||
                                  op->src[0]->type == GGML_TYPE_Q4_1 || op->src[0]->type == GGML_TYPE_Q5_1)) {
@@ -1803,7 +1863,7 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
     case GGML_OP_DIV: {
         // The GPU plugin can fuse broadcast DIV into the preceding FFN GEMM path
         // and produce infs for per-channel scale vectors. Keep those DIVs on CPU
-        // until the fused GPU kernel is reliable. (falied case llama-arch-test mpt)
+        // until the fused GPU kernel is reliable (failing case: test-llama-archs, mpt).
         // Only a weight divisor is such a scale; at one token an activation divisor has the same shape
         // (qwen2moe's shared-expert sigmoid, silu(x) / x).
         if (ggml_openvino_is_gpu() && op->src[1]->ne[0] == op->ne[0] &&
@@ -1864,11 +1924,14 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         memcpy(&max_bias, (const float *) op_params + 1, sizeof(float));
         memcpy(&logit_softcap, (const float *) op_params + 2, sizeof(float));
 
-        // Keep gemma3n flash-attn pattern on CPU for GPU runs to avoid
-        // accuracy drift in the OpenVINO path. Restrict by scale=1.0 to avoid
-        // affecting non-gemma3n models such as Llama-3.2.
+        // Keep gemma3n flash-attn pattern on CPU to avoid accuracy drift in the OpenVINO path.
+        // Restrict by scale=1.0 to avoid affecting non-gemma3n models such as Llama-3.2.
         if (fabsf(scale - 1.0f) < 1e-6f && is_gemma3n_flash_attn_pattern(op)) {
-            return {false, "FLASH_ATTN_EXT gemma3n pattern on GPU is not supported"};
+            return {false, "FLASH_ATTN_EXT gemma3n pattern is not supported"};
+        }
+
+        if (ggml_flash_attn_ext_has_indexed_bias(op)) {
+            return {false, "FLASH_ATTN_EXT with indexed bias is not supported"};
         }
 
         // K/V row lists (ggml_flash_attn_ext_rows) are not supported
@@ -1914,7 +1977,7 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
             return {false, "CPY with BF16 src[1] type is not supported"};
         }
         if (ggml_openvino_is_npu() && (op->src[0]->type == GGML_TYPE_BF16 || op->src[1]->type == GGML_TYPE_BF16)) {
-            return {false, "CPY with BF16 is not supported is not supported on NPU"};
+            return {false, "CPY with BF16 is not supported on NPU"};
         }
         // CPY to a quantized destination (e.g. f32 -> q4_0) is numerically unstable with OpenVINO backend.
         if (ggml_is_quantized(op->type)) {
@@ -2004,6 +2067,9 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         if (op->view_src != nullptr && !ggml_is_contiguous(op->src[0])) {
             return {false, "ROPE on VIEW / non-contiguous input is not supported"};
         }
+        if (op->type == GGML_TYPE_BF16) {
+            return {false, "ROPE with BF16 type is not supported"};
+        }
         break;
     }
     case GGML_OP_TRANSPOSE: {
@@ -2026,15 +2092,18 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         //     return true;
         // }
         const char * reason = nullptr;
-        if (op->src[2]->op == GGML_OP_PERMUTE) {
+        // a VIEW of the PERMUTE (v with padded heads) is still a permuted v
+        const ggml_tensor * v_src = op->src[2]->op == GGML_OP_VIEW ? op->src[2]->src[0] : op->src[2];
+        if (v_src->op == GGML_OP_PERMUTE) {
             reason = "GATED_DELTA_NET with PERMUTE src2 is not supported";
         }
-        else if (op->src[3]->ne[0] != 1) {
-            // kda (per-key-dimension gating) not supported by fused GatedDeltaNet op
-            reason = "GATED_DELTA_NET with kda (per-key-dimension gating) is not supported";
+        else if (op->src[3]->ne[0] != 1 && (op->op_params[0] > 1 || ggml_openvino_gdn_native_state_enabled()) &&
+                 !ov::frontend::ggml::op::gdn_per_key_gate_supported()) {
+            reason = "GATED_DELTA_NET with a per-key gate needs an OpenVINO GatedDeltaNet with a rank-4 gate for state "
+                     "snapshots or the native state layout";
         }
         else if (op->op_params[0] > 1) {
-            if (ggml_openvino_is_npu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC")) {
+            if (ggml_openvino_is_static()) {
                 reason = "GATED_DELTA_NET snapshots require dynamic execution";
             }
         }
@@ -2045,12 +2114,22 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
             }
             return {false, reason};
         }
+        if (((const int32_t *) op->op_params)[1] != 0) {
+            return {false, "GATED_DELTA_NET with replay of pending tokens is not supported"};
+        }
         break;
     }
-    case GGML_OP_SSM_CONV: {
-        // qwen3next is numerically unstable with OpenVINO SSM_CONV.
-        // Keep this op on CPU until the OpenVINO implementation is fixed.
-        // return true;
+    case GGML_OP_SSM_SCAN: {
+        // SelectiveSSM implements the Mamba-2 recurrence: scalar decay per head, one final state
+        if (op->src[3]->ne[0] != 1) {
+            return {false, "SSM_SCAN with Mamba-1 state-wise decay is not supported"};
+        }
+        if (op->op_params[0] > 1) {
+            return {false, "SSM_SCAN with rollback snapshots (K > 1) is not supported"};
+        }
+        if (ggml_openvino_is_static()) {
+            return {false, "SSM_SCAN requires dynamic execution"};
+        }
         break;
     }
     case GGML_OP_VIEW: {
@@ -2242,9 +2321,6 @@ static ggml_openvino_op_support ggml_backend_openvino_device_supports_op_impl(gg
         if (!supported) {
             return {false, "GLU op " + std::string(ggml_glu_op_name(ggml_get_glu_op(op))) + " has no op translator"};
         }
-        // if (has_view_op_input(op)) {
-        //     return {false, "GLU op " + std::string(ggml_glu_op_name(ggml_get_glu_op(op))) + " with view input is not supported"};
-        // }
         if (op->src[1] == nullptr && op->src[0]->ne[0] % 2 != 0) {
             // triggers bug in ov gpu
             return {false, "GLU op with odd src0 ne[0] and null src1 is not supported"};
@@ -2274,7 +2350,8 @@ static ggml_openvino_op_support ggml_backend_openvino_device_supports_op_impl(gg
         if (supported_types.find(src->type) == supported_types.end()) {
             return {false, "src[" + std::to_string(i) + "] type " + std::string(ggml_type_name(src->type)) + " is not supported"};
         }
-        if (!has_strides_on_element_grid(src) && !(i == 1 && GgmlOvDecoder::is_gdn_snapshot_writeback(op)) &&
+        if (!has_strides_on_element_grid(src) && !is_row_span_view(src) &&
+            !(i == 1 && GgmlOvDecoder::is_gdn_snapshot_writeback(op)) &&
             !(i == 2 && GgmlOvDecoder::is_conv_state_snapshot_writeback(op))) {
             return {false, "src[" + std::to_string(i) + "] strides are not multiples of each other"};
         }
@@ -2296,16 +2373,114 @@ static ggml_openvino_op_support ggml_backend_openvino_device_supports_op_impl(gg
     return {true, ""};
 }
 
+// Report what supports_op() accepts and rejects, so a graph that silently falls back to another
+// backend can be diagnosed. Every op rejected here becomes a graph split; if nothing is rejected,
+// the whole graph runs on OpenVINO.
+//
+// Gated by GGML_OPENVINO_LOG_SUPPORTS_OP:
+//   1  one summary at exit listing every distinct op kind and verdict -- start here
+//   2  additionally log every individual call, with the tensor name and shape
+//
+// This wraps the decision function instead of instrumenting it, so all of its return paths are
+// covered -- including the several that reject without logging a reason of their own, and any
+// added later.
+//
+// The summary is reported at exit rather than on each op's first occurrence, because the earliest
+// calls happen before the log handler emits anything: with level 2 the first line to actually
+// appear already reads "call 1244". A first-occurrence line would therefore be silently dropped
+// for exactly the ops that are only ever seen early. Counting is unaffected, so the summary is the
+// reliable view; treat the level-2 stream as a sample, not a complete trace.
+namespace {
+
+struct supports_op_tally {
+    std::mutex mutex;
+    // key: "<op>:ok" / "<op>:no" -> number of calls
+    std::map<std::string, size_t> counts;
+
+    // Report totals once, at exit. Registered lazily so a run with the knob off costs nothing.
+    // atexit runs while the ggml log callback is still valid, which static destruction does not
+    // guarantee.
+    void arm_summary() {
+        static std::once_flag armed;
+        std::call_once(armed, [] {
+            std::atexit([] {
+                auto & self = instance();
+                std::lock_guard<std::mutex> lock(self.mutex);
+
+                size_t n_accept_kinds = 0;
+                size_t n_reject_kinds = 0;
+                GGML_LOG_WARN("ov-supports-op: ---- summary (distinct op kinds, with call counts) ----\n");
+                for (const auto & [key, count] : self.counts) {
+                    const bool ok = key.size() > 3 && key.compare(key.size() - 3, 3, ":ok") == 0;
+                    ok ? ++n_accept_kinds : ++n_reject_kinds;
+                    GGML_LOG_WARN("ov-supports-op:   %-8s %-24s %zu call(s)\n", ok ? "ACCEPT" : "REJECT",
+                                  key.substr(0, key.size() - 3).c_str(), count);
+                }
+                if (n_reject_kinds == 0) {
+                    GGML_LOG_WARN("ov-supports-op: %zu op kind(s) accepted, 0 rejected"
+                                  " -- every op was supported, so no split originated here\n",
+                                  n_accept_kinds);
+                } else {
+                    GGML_LOG_WARN("ov-supports-op: %zu op kind(s) accepted, %zu REJECTED"
+                                  " -- each rejected kind forces a graph split\n",
+                                  n_accept_kinds, n_reject_kinds);
+                }
+            });
+        });
+    }
+
+    static supports_op_tally & instance() {
+        static supports_op_tally tally;
+        return tally;
+    }
+};
+
+}  // namespace
+
 static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     auto res = ggml_backend_openvino_device_supports_op_impl(dev, op);
-    if (!res.is_supported) {
+    const bool supported = res.is_supported;
+    if (!supported) {
         static const bool log_unsupported = ggml_openvino_getenv_int("GGML_OPENVINO_LOG_UNSUPPORTED_OPS") != 0;
         if (log_unsupported) {
             GGML_LOG_WARN("OpenVINO op unsupported: op '%s' (%s), type %s: %s\n",
                           op->name, ggml_op_name(op->op), ggml_type_name(op->type), res.reason.c_str());
         }
     }
-    return res.is_supported;
+
+    static const int log_level = ggml_openvino_getenv_int("GGML_OPENVINO_LOG_SUPPORTS_OP");
+    if (log_level <= 0) {
+        return supported;
+    }
+
+    // Name the op the way ggml does: UNARY and GLU carry their real identity in a sub-enum, so
+    // logging only "UNARY" would merge SILU with everything else.
+    std::string op_desc = ggml_op_name(op->op);
+    if (op->op == GGML_OP_UNARY) {
+        op_desc += std::string("/") + ggml_unary_op_name(ggml_get_unary_op(op));
+    } else if (op->op == GGML_OP_GLU) {
+        op_desc += std::string("/") + ggml_glu_op_name(ggml_get_glu_op(op));
+    }
+
+    // The scheduler calls supports_op() on every graph build and may do so from several threads,
+    // so the tally needs a lock. Keyed on op identity *and* verdict, because the same op can be
+    // accepted at one shape and rejected at another (e.g. a quantized 3-D src).
+    auto & tally = supports_op_tally::instance();
+    tally.arm_summary();
+
+    size_t count;
+    {
+        std::lock_guard<std::mutex> lock(tally.mutex);
+        count = ++tally.counts[op_desc + (supported ? ":ok" : ":no")];
+    }
+
+    if (log_level >= 2) {
+        GGML_LOG_WARN("ov-supports-op: %-6s %-22s name='%s' type=%s ne=[%ld,%ld,%ld,%ld] (call %zu)\n",
+                      supported ? "ACCEPT" : "REJECT", op_desc.c_str(), op->name, ggml_type_name(op->type),
+                      (long) op->ne[0], (long) op->ne[1], (long) op->ne[2], (long) op->ne[3], count);
+    }
+
+    return supported;
 }
 
 static bool ggml_backend_openvino_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {

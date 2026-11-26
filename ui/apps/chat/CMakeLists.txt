@@ -25,6 +25,32 @@ elseif(DEFINED ENV{HF_UI_VERSION})
     set(HF_UI_VERSION "$ENV{HF_UI_VERSION}")
 elseif(DEFINED LLAMA_BUILD_NUMBER)
     set(HF_UI_VERSION "b${LLAMA_BUILD_NUMBER}")
+    # a shallow clone has no history, so the build number from git is wrong:
+    # use the release tag on HEAD if it was fetched, else 'latest'
+    if(Git_FOUND AND "${LLAMA_BUILD_NUMBER}" STREQUAL "${BUILD_NUMBER}")
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} rev-parse --is-shallow-repository
+            WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+            OUTPUT_VARIABLE UI_GIT_SHALLOW
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        if(UI_GIT_SHALLOW STREQUAL "true")
+            set(HF_UI_VERSION "latest")
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} describe --tags --exact-match --match "b[0-9]*" HEAD
+                WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+                OUTPUT_VARIABLE UI_GIT_TAG
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                RESULT_VARIABLE UI_GIT_TAG_RES
+                ERROR_QUIET
+            )
+            if(UI_GIT_TAG_RES EQUAL 0 AND UI_GIT_TAG MATCHES "^b[0-9]+$")
+                set(HF_UI_VERSION "${UI_GIT_TAG}")
+            endif()
+            message(STATUS "UI: shallow clone, prebuilt UI version: ${HF_UI_VERSION}")
+        endif()
+    endif()
 else()
     set(HF_UI_VERSION "")
 endif()

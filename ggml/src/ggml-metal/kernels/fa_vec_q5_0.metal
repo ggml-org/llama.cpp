@@ -3,20 +3,20 @@
 #include "fa_vec_common.metal"
 
 #define FA_TYPES \
-           half4,  \
-           half4,  \
-           half4,  \
-    float,         \
-    float, float4, \
-           float4
+    half, \
+    half, \
+    half, \
+    float, \
+    float, \
+    float
 
 #define FA_TYPES_F32 \
-           half4,  \
-           float4, \
-           float4, \
-    float,         \
-    float, float4, \
-           float4
+    half, \
+    float, \
+    float, \
+    float, \
+    float, \
+    float
 
 typedef decltype(kernel_flash_attn_ext_vec<FA_TYPES, half4, 1, dequantize_f16_t4, half4, 1, dequantize_f16_t4, 128, 128, 4>) flash_attn_ext_vec_t;
 

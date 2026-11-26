@@ -25,13 +25,13 @@
 <!-- the compact draft line lives inside its main item, under the id line; the
      main model's controls pause, resume and cancel its quant-matched drafts, so
      the line only reports its state -->
-<div class="flex items-center gap-2 py-1 pr-2 text-sm">
+<div class="flex items-center gap-2 py-1 pr-2 text-body-sm">
 	<span
 		aria-hidden="true"
 		class="h-2.5 w-3.5 shrink-0 self-center rounded-bl-sm border-b border-l border-border/70 {connectorClass}"
 	></span>
 
-	<span class="shrink-0 text-xs text-muted-foreground">Draft model</span>
+	<span class="shrink-0 text-caption text-muted-foreground">Draft model</span>
 
 	<span class={MODEL_VARIANT_BADGE_CLASS}>{kind}</span>
 
@@ -44,9 +44,9 @@
 	{:else}
 		<span class="ml-auto flex shrink-0 items-center">
 			{#if percent !== null}
-				<span class="font-mono text-xs tabular-nums text-muted-foreground">{percent}%</span>
+				<span class="font-mono text-caption tabular-nums text-muted-foreground">{percent}%</span>
 			{:else if state === ModelRowDownloadState.PAUSED}
-				<span class="text-xs text-muted-foreground">Paused</span>
+				<span class="text-caption text-muted-foreground">Paused</span>
 			{/if}
 		</span>
 	{/if}

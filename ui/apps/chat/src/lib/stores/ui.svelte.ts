@@ -17,6 +17,7 @@ import {
 	SIDEBAR_SECTION_ORDER_LOCALSTORAGE_KEY,
 	SIDEBAR_WIDTH_LOCALSTORAGE_KEY
 } from '#lib/constants/index.ts';
+import { SidebarAction } from '#lib/enums/index.ts';
 import { deviceStore } from '#lib/stores/device.svelte.ts';
 import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
 import type { Group } from '#lib/types/groups.js';
@@ -79,7 +80,6 @@ class UiStore {
 
 	/** Open state of the Discover dialog. */
 	discoverModelsOpen = $state(false);
-
 	/** Sidebar sections showing all their chats past the preview, for this session. */
 	expandedSidebarSections = new SvelteSet<string>();
 
@@ -94,6 +94,9 @@ class UiStore {
 
 	/** Set while the user drags the sidebar edge, so width transitions can step aside. */
 	isSidebarResizing = $state(false);
+
+	/** Open state of the MCP servers dialog. */
+	mcpServersOpen = $state(false);
 
 	/** Model the details drawer shows, a qualified id or a raw model name. */
 	modelDetailsFocus = $state<string | null>(null);
@@ -114,9 +117,23 @@ class UiStore {
 		return Boolean(settingsStore.getConfig(SETTINGS_KEYS.ENABLE_DISCOVER_MODELS));
 	}
 
+	/** Whether MCP is on. Off by default; while off, no MCP server is connected. */
+	get isMcpEnabled(): boolean {
+		return Boolean(settingsStore.getConfig(SETTINGS_KEYS.ENABLE_MCP));
+	}
+
 	/** Whether the model details drawer is open. */
 	get isModelDetailsOpen(): boolean {
 		return this.modelDetailsFocus !== null;
+	}
+
+	/**
+	 * Whether the models manager has its entry points: Models in the sidebar, "Manage models"
+	 * in the selector, its shortcut. Off by default, for the same reason as MCP: the selector
+	 * already picks and loads models. The page itself stays reachable by its URL.
+	 */
+	get isModelsManagerShown(): boolean {
+		return Boolean(settingsStore.getConfig(SETTINGS_KEYS.SHOW_MODELS_MANAGER));
 	}
 
 	/** Whether the models manager route is the current page. */
@@ -166,6 +183,13 @@ class UiStore {
 		if (this.collapsedSidebarSections.has(id)) this.toggleSidebarSection(id);
 	}
 
+	/** Whether a sidebar action shows: Models waits behind its setting. */
+	isSidebarActionShown(action: SidebarAction | undefined): boolean {
+		if (action === SidebarAction.MANAGE_MODELS) return this.isModelsManagerShown;
+
+		return true;
+	}
+
 	isSidebarSectionExpanded(id: string): boolean {
 		return this.expandedSidebarSections.has(id);
 	}
@@ -184,6 +208,11 @@ class UiStore {
 		this.groupPicker = options;
 	}
 
+	/** Open the MCP servers dialog. */
+	openMcpServers(): void {
+		this.mcpServersOpen = true;
+	}
+
 	/** Open the model details drawer over the current page, without leaving it. */
 	openModelDetails(focus: string): void {
 		this.modelDetailsFocus = focus;
@@ -197,9 +226,9 @@ class UiStore {
 		this.discoverModelsOpen = true;
 	}
 
-	/** Navigate to the models manager. */
+	/** Navigate to the models manager; a no-op while it is hidden. */
 	openModelsManager(): void {
-		if (this.isModelsPageOpen) return;
+		if (!this.isModelsManagerShown || this.isModelsPageOpen) return;
 
 		void goto(ROUTES.MODELS);
 	}

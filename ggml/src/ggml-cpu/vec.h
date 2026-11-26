@@ -962,12 +962,6 @@ inline static void ggml_vec_relu_f16 (const int n, ggml_fp16_t * y, const ggml_f
     }
 }
 inline static void ggml_vec_leaky_relu_f32 (const int n, float * y, const float * x, const float ns) { for (int i = 0; i < n; ++i) y[i] = ((x[i] > 0.f) ? x[i] : 0.f) + ns * ((x[i] < 0.0f) ? x[i] : 0.f); }
-inline static void ggml_vec_leaky_relu_f16 (const int n, ggml_fp16_t * y, const ggml_fp16_t * x, const float ns) {
-    for (int i = 0; i < n; ++i) {
-        float v = GGML_CPU_FP16_TO_FP32(x[i]);
-        y[i] = GGML_CPU_FP32_TO_FP16(((v > 0.f) ? v : 0.f) + ns * ((v < 0.0f) ? v : 0.f));
-    }
-}
 inline static void ggml_vec_sigmoid_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = 1.f / (1.f + expf(-x[i])); }
 inline static void ggml_vec_sigmoid_f16 (const int n, ggml_fp16_t * y, const ggml_fp16_t * x) {
     for (int i = 0; i < n; ++i) {
@@ -1539,6 +1533,29 @@ inline static void ggml_vec_silu_backward_f32(const int n, float * dx, const flo
 inline static void ggml_vec_silu_backward_f16(const int n, ggml_fp16_t * dx, const ggml_fp16_t * x, const ggml_fp16_t * dy) {
     for (int i = 0; i < n; ++i) {
         dx[i] = ggml_silu_backward_f16(x[i], dy[i]);
+    }
+}
+
+inline static float ggml_sigmoid_backward_f32(float x, float dy) {
+    const float s = 1.0f/(1.0f + expf(-x));
+    return dy*s*(1.0f - s);
+}
+
+inline static ggml_fp16_t ggml_sigmoid_backward_f16(ggml_fp16_t x, ggml_fp16_t dy) {
+    const float v = GGML_CPU_FP16_TO_FP32(x);
+    const float s = 1.0f/(1.0f + expf(-v));
+    return GGML_CPU_FP32_TO_FP16(GGML_CPU_FP16_TO_FP32(dy)*s*(1.0f - s));
+}
+
+inline static void ggml_vec_sigmoid_backward_f32(const int n, float * dx, const float * x, const float * dy) {
+    for (int i = 0; i < n; ++i) {
+        dx[i] = ggml_sigmoid_backward_f32(x[i], dy[i]);
+    }
+}
+
+inline static void ggml_vec_sigmoid_backward_f16(const int n, ggml_fp16_t * dx, const ggml_fp16_t * x, const ggml_fp16_t * dy) {
+    for (int i = 0; i < n; ++i) {
+        dx[i] = ggml_sigmoid_backward_f16(x[i], dy[i]);
     }
 }
 

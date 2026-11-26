@@ -1,10 +1,15 @@
 <script lang="ts">
-	import { parseEditFileMeta, parseEditFileTitleMeta } from './parsers/edit-file';
+	import {
+		editFileDiffStats,
+		parseEditFileMeta,
+		parseEditFileTitleMeta
+	} from './parsers/edit-file';
 	import ToolCallBlock from './ToolCallBlock.svelte';
+	import ToolCallTitle from './ToolCallTitle.svelte';
 	import { XCircle } from '@lucide/svelte';
 	import { SyntaxHighlightedCode } from '#lib/components/app/index.ts';
 	import { MAX_HEIGHT_CODE_BLOCK, RESULT_STAT_SEPARATOR } from '#lib/constants/index.ts';
-	import { FileTypeText } from '#lib/enums/index.ts';
+	import { AgenticSectionType, FileTypeText } from '#lib/enums/index.ts';
 	import { toolsStore } from '#lib/stores/index.ts';
 	import type { AgenticSection } from '#lib/types/index.ts';
 	import {
@@ -24,7 +29,7 @@
 	let { isStreaming, onToggle, open, section }: Props = $props();
 
 	const editFileMeta = $derived(parseEditFileTitleMeta(section));
-	// body-only: the full meta parses the embedded edit strings, and these
+	// body-only: the full meta parses the embedded edit strings, and these two
 	// deriveds are read solely from the children snippet, which renders only
 	// while the block is expanded
 	const editFileBody = $derived(parseEditFileMeta(section));
@@ -32,29 +37,42 @@
 	const editDiffs = $derived(
 		(editFileBody?.edits ?? []).map((edit) => computeLineDiff(edit.oldText, edit.newText))
 	);
+
+	// Lines added and removed, for the title once the edit has applied. The
+	// title always renders and sections are rebuilt on every streamed chunk,
+	// so the parse and diff are remembered per call instead of re-run each time.
+	const diffStats = $derived(
+		section.type === AgenticSectionType.TOOL_CALL && section.toolResult
+			? editFileDiffStats(section)
+			: null
+	);
 </script>
 
 <ToolCallBlock {isStreaming} meta={editFileMeta} {onToggle} {open} {section}>
-	{#snippet titleSnippet()}
-		<span class="flex min-w-0 flex-wrap items-baseline gap-x-1">
-			<span class="shrink-0 text-muted-foreground">Edit file</span>
+	{#snippet titleSnippet(phrase)}
+		<ToolCallTitle
+			label={phrase.label}
+			target={abbreviateHome(editFileMeta?.filePath ?? '', home)}
+			targetTitle={editFileMeta?.filePath}
+		>
+			{#if diffStats}
+				<span class="shrink-0 font-mono text-caption">
+					<span class="text-fg-success">+{diffStats.added}</span>
 
-			<span class="flex min-w-0 items-baseline gap-1.5">
-				<span class="min-w-0 overflow-x-auto font-mono" title={editFileMeta?.filePath}>
-					{abbreviateHome(editFileMeta?.filePath ?? '', home)}
+					<span class="text-fg-danger">-{diffStats.removed}</span>
 				</span>
+			{/if}
 
-				{#if editFileMeta?.errorMessage}
-					<span class="shrink-0 text-xs italic text-muted-foreground/70">(failed)</span>
-				{/if}
-			</span>
-		</span>
+			{#if editFileMeta?.errorMessage}
+				<span class="shrink-0 text-caption italic text-muted-foreground/70">(failed)</span>
+			{/if}
+		</ToolCallTitle>
 	{/snippet}
 
 	{#snippet children(_meta, ctx)}
 		{#if editFileBody?.errorMessage}
 			<div
-				class="flex items-start gap-2 rounded bg-surface-danger p-2 text-xs text-fg-danger italic"
+				class="flex items-start gap-2 rounded bg-surface-danger p-2 text-caption text-fg-danger italic"
 			>
 				<XCircle class="mt-0.5 size-icon-xs shrink-0" />
 
@@ -63,7 +81,7 @@
 		{:else if editFileBody?.edits.length}
 			{#each editDiffs as diffLines, ei (ei)}
 				<div class={ei === 0 ? '' : 'mt-3'}>
-					<div class="mb-1.5 text-xs text-muted-foreground/70 italic">
+					<div class="mb-1.5 text-caption text-muted-foreground/70 italic">
 						Edit {ei + 1}&nbsp;of&nbsp;{editFileBody.edits.length}
 					</div>
 
@@ -85,7 +103,7 @@
 				</div>
 			{/each}
 
-			<div class="mt-1.5 text-xs text-muted-foreground/70 italic">
+			<div class="mt-1.5 text-caption text-muted-foreground/70 italic">
 				{#if editFileBody.resultMessage}
 					{editFileBody.resultMessage}{editFileBody.editsApplied != null
 						? RESULT_STAT_SEPARATOR
@@ -105,11 +123,13 @@
 				streaming={ctx.isCodeStreaming}
 			/>
 		{:else if ctx.isStreaming}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
+			<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">
 				Receiving arguments...
 			</div>
 		{:else}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">No edits</div>
+			<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">
+				No edits
+			</div>
 		{/if}
 	{/snippet}
 </ToolCallBlock>
@@ -119,13 +139,13 @@
 		overflow: auto;
 		border-radius: 0.75rem;
 		border-width: 1px;
-		border-color: color-mix(in oklch, var(--border) 30%, transparent);
-		background: var(--code-background);
+		border-color: color-mix(in oklch, var(--line-default) 30%, transparent);
+		background: var(--surface-code);
 		box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
 	}
 
 	:global(.dark) .diff-block {
-		border-color: color-mix(in oklch, var(--border) 20%, transparent);
+		border-color: color-mix(in oklch, var(--line-default) 20%, transparent);
 	}
 
 	/* Each row is a 4-column grid: old-line#, marker, new-line#, text.
@@ -144,13 +164,13 @@
 		text-align: right;
 		padding-right: 0.5rem;
 		user-select: none;
-		color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+		color: color-mix(in oklch, var(--fg-muted) 70%, transparent);
 		font-variant-numeric: tabular-nums;
 	}
 
 	.diff-marker {
 		text-align: center;
-		color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+		color: color-mix(in oklch, var(--fg-muted) 70%, transparent);
 		user-select: none;
 	}
 

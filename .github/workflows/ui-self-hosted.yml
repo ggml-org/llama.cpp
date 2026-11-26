@@ -19,6 +19,8 @@ on:
       '.github/workflows/ui-build-self-hosted.yml',
       'ui/apps/chat/**.*',
       'ui/lib/ui/**.*',
+      'ui/lib/voice/**.*',
+      'ui/lib/harness/**.*',
       'tools/server/tests/**.*'
     ]
   pull_request:
@@ -28,6 +30,8 @@ on:
       '.github/workflows/ui-build-self-hosted.yml',
       'ui/apps/chat/**.*',
       'ui/lib/ui/**.*',
+      'ui/lib/voice/**.*',
+      'ui/lib/harness/**.*',
       'tools/server/tests/**.*'
     ]
 

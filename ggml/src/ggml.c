@@ -54,6 +54,8 @@
 
 #define UNUSED GGML_UNUSED
 
+static_assert(GGML_VERSION_MAJOR == 1, "major version update requires attending to all [TAG_GGML_VERSION_MAJOR_UPDATE] tags");
+
 uint64_t ggml_graph_next_uid(void) {
 #ifdef _MSC_VER
 #if defined(_WIN32)
@@ -1112,9 +1114,13 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_SGD",
 
     "GLU",
+
+    "SLEEP",
+
+    "SIGMOID_BACK",
 };
 
-static_assert(GGML_OP_COUNT == 99, "GGML_OP_COUNT != 99");
+static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1225,9 +1231,13 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "sgd(x)",
 
     "glu(x)",
+
+    "sleep(x)",
+
+    "sigmoid_back(x)",
 };
 
-static_assert(GGML_OP_COUNT == 99, "GGML_OP_COUNT != 99");
+static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -2860,6 +2870,21 @@ struct ggml_tensor * ggml_silu_back(
     return result;
 }
 
+// ggml_sigmoid_back
+
+struct ggml_tensor * ggml_sigmoid_back(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b) {
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    result->op     = GGML_OP_SIGMOID_BACK;
+    result->src[0] = a;
+    result->src[1] = b;
+
+    return result;
+}
+
 // ggml hardswish
 
 struct ggml_tensor * ggml_hardswish(
@@ -4015,7 +4040,7 @@ struct ggml_tensor * ggml_set_rows(
     GGML_ASSERT(b->ne[2] % c->ne[1] == 0);
     GGML_ASSERT(b->ne[3] % c->ne[2] == 0);
     GGML_ASSERT(c->ne[3] == 1);
-    GGML_ASSERT(b->type == GGML_TYPE_F32 || b->type == GGML_TYPE_F16);
+    GGML_ASSERT(b->type == GGML_TYPE_F32 || b->type == GGML_TYPE_F16 || b->type == GGML_TYPE_BF16);
     GGML_ASSERT(c->type == GGML_TYPE_I64 || c->type == GGML_TYPE_I32);
 
     GGML_ASSERT(ggml_is_contiguous_rows(a));
@@ -5280,7 +5305,7 @@ struct ggml_tensor * ggml_tri(
     struct ggml_context * ctx,
     struct ggml_tensor  * a,
     enum ggml_tri_type    type) {
-    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(a->type == GGML_TYPE_F32 || a->type == GGML_TYPE_F16 || a->type == GGML_TYPE_BF16);
 
     GGML_ASSERT(ggml_is_contiguous(a));
     GGML_ASSERT(a->ne[0] == a->ne[1]);
@@ -5518,6 +5543,33 @@ void ggml_flash_attn_ext_add_sinks(
     GGML_ASSERT(sinks->type == GGML_TYPE_F32);
 
     a->src[4] = sinks;
+}
+
+bool ggml_flash_attn_ext_has_indexed_bias(const struct ggml_tensor * a) {
+    return a->op == GGML_OP_FLASH_ATTN_EXT && ggml_get_op_params_i32(a, 5) != 0;
+}
+
+void ggml_flash_attn_ext_add_indexed_bias(
+        struct ggml_tensor * a,
+        struct ggml_tensor * table,
+        struct ggml_tensor * indices) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+    GGML_ASSERT((table == NULL) == (indices == NULL));
+    a->src[6] = table;
+    a->src[7] = indices;
+    ggml_set_op_params_i32(a, 5, table != NULL);
+    if (!table) {
+        return;
+    }
+
+    const struct ggml_tensor * q = a->src[0];
+    const struct ggml_tensor * mask = a->src[3];
+    GGML_ASSERT(mask && mask->ne[0] == (a->src[5] ? a->src[5]->ne[0] : a->src[1]->ne[1]) && mask->ne[1] == q->ne[1]);
+    GGML_ASSERT(mask->ne[2] == 1 && mask->ne[3] == q->ne[3]);
+    GGML_ASSERT(table->type == GGML_TYPE_F32 && ggml_is_contiguous(table));
+    GGML_ASSERT(table->ne[1] == q->ne[2] && table->ne[0] > 0 && table->ne[2] == q->ne[1]*q->ne[3] && table->ne[3] == 1);
+    GGML_ASSERT(indices->type == GGML_TYPE_I32 && ggml_is_contiguous(indices) && ggml_is_matrix(indices));
+    GGML_ASSERT(indices->ne[0] == mask->ne[0] && indices->ne[1] == table->ne[2]);
 }
 
 // ggml_flash_attn_back
@@ -6176,6 +6228,27 @@ struct ggml_tensor * ggml_custom_inplace(
 
     return result;
 }
+
+// ggml_sleep
+
+// the result aliases a, the op only delays and never touches the data
+struct ggml_tensor * ggml_sleep(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int32_t               us) {
+    GGML_ASSERT(us >= 0);
+
+    struct ggml_tensor * result = ggml_view_tensor(ctx, a);
+    ggml_format_name(result, "%s (sleep)", a->name);
+
+    ggml_set_op_params_i32(result, 0, us);
+
+    result->op     = GGML_OP_SLEEP;
+    result->src[0] = a;
+
+    return result;
+}
+
 // ggml_cross_entropy_loss
 
 struct ggml_tensor * ggml_cross_entropy_loss(
@@ -6300,7 +6373,7 @@ struct ggml_tensor * ggml_solve_tri(
 
 // ggml_gated_delta_net
 
-struct ggml_tensor * ggml_gated_delta_net(
+static struct ggml_tensor * ggml_gated_delta_net_impl(
         struct ggml_context * ctx,
         struct ggml_tensor  * q,
         struct ggml_tensor  * k,
@@ -6308,7 +6381,12 @@ struct ggml_tensor * ggml_gated_delta_net(
         struct ggml_tensor  * g,
         struct ggml_tensor  * beta,
         struct ggml_tensor  * state,
-        int64_t               K) {
+        struct ggml_tensor  * pend_k,
+        struct ggml_tensor  * pend_v,
+        struct ggml_tensor  * pend_gb,
+        struct ggml_tensor  * n_rep,
+        int64_t               K,
+        bool                  keep) {
     GGML_ASSERT(ggml_is_contiguous_rows(q));
     GGML_ASSERT(ggml_is_contiguous_rows(k));
     GGML_ASSERT(ggml_is_contiguous_rows(v));
@@ -6352,7 +6430,59 @@ struct ggml_tensor * ggml_gated_delta_net(
     result->src[4] = beta;
     result->src[5] = state;
 
+    const bool replay = pend_k != NULL;
+    GGML_ASSERT((pend_v != NULL) == replay && (pend_gb != NULL) == replay && (n_rep != NULL) == replay);
+    GGML_ASSERT(replay || !keep);
+    if (replay) {
+        const int64_t n_pend = pend_k->ne[2];
+
+        GGML_ASSERT(K == 1);
+        GGML_ASSERT(pend_k->type == GGML_TYPE_F32 && pend_v->type == GGML_TYPE_F32 && pend_gb->type == GGML_TYPE_F32);
+        GGML_ASSERT(n_rep->type == GGML_TYPE_I32);
+        GGML_ASSERT(pend_k->nb[0] == sizeof(float) && pend_v->nb[0] == sizeof(float) && pend_gb->nb[0] == sizeof(float));
+        GGML_ASSERT(pend_k->ne[0]  == k->ne[0] && pend_k->ne[1]  == k->ne[1] && pend_k->ne[3]  == n_seqs);
+        GGML_ASSERT(pend_v->ne[0]  == S_v      && pend_v->ne[1]  == H        && pend_v->ne[2]  == n_pend   && pend_v->ne[3]  == n_seqs);
+        GGML_ASSERT(pend_gb->ne[0] == g->ne[0] && pend_gb->ne[1] == H        && pend_gb->ne[2] == 2*n_pend && pend_gb->ne[3] == n_seqs);
+        GGML_ASSERT(ggml_is_contiguous(n_rep) && ggml_nelements(n_rep) == n_seqs);
+
+        ggml_set_op_params_i32(result, 1, (int32_t) n_pend);
+        ggml_set_op_params_i32(result, 2, keep ? 1 : 0);
+
+        result->src[6] = pend_k;
+        result->src[7] = pend_v;
+        result->src[8] = pend_gb;
+        result->src[9] = n_rep;
+    }
+
     return result;
+}
+
+struct ggml_tensor * ggml_gated_delta_net_ext(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * g,
+        struct ggml_tensor  * beta,
+        struct ggml_tensor  * state,
+        struct ggml_tensor  * pend_k,
+        struct ggml_tensor  * pend_v,
+        struct ggml_tensor  * pend_gb,
+        struct ggml_tensor  * n_rep,
+        bool                  keep) {
+    return ggml_gated_delta_net_impl(ctx, q, k, v, g, beta, state, pend_k, pend_v, pend_gb, n_rep, 1, keep);
+}
+
+struct ggml_tensor * ggml_gated_delta_net(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * g,
+        struct ggml_tensor  * beta,
+        struct ggml_tensor  * state,
+        int64_t               K) {
+    return ggml_gated_delta_net_impl(ctx, q, k, v, g, beta, state, NULL, NULL, NULL, NULL, K, false);
 }
 
 // ggml_lightning_indexer
@@ -7119,6 +7249,11 @@ static void ggml_compute_backward(
                 case GGML_UNARY_OP_SILU: {
                     if (src0_needs_grads) {
                         ggml_add_or_set(ctx, cgraph, isrc0, ggml_silu_back(ctx, grad, src0));
+                    }
+                } break;
+                case GGML_UNARY_OP_SIGMOID: {
+                    if (src0_needs_grads) {
+                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_sigmoid_back(ctx, grad, src0));
                     }
                 } break;
                 case GGML_UNARY_OP_EXP: {

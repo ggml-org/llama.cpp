@@ -21,7 +21,7 @@
 	} from './fixtures';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatScreenForm from '#lib/components/app/chat/ChatScreen/ChatScreenForm.svelte';
-	import { ATTACHMENT_TOOLTIP_TEXT } from '#lib/constants/index.ts';
+	import { attachmentTooltipText } from '#lib/constants/index.ts';
 	import { expect, screen } from 'storybook/test';
 
 	const { Story } = defineMeta({
@@ -170,7 +170,7 @@
 	args={{ class: FORM_CLASS }}
 	name="AddMenuOpen"
 	play={async ({ canvas, userEvent }) => {
-		await userEvent.click(await canvas.findByRole('button', { name: ATTACHMENT_TOOLTIP_TEXT }));
+		await userEvent.click(await canvas.findByRole('button', { name: attachmentTooltipText(true) }));
 		await screen.findByRole('menu');
 	}}
 />

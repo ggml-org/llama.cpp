@@ -16,6 +16,6 @@ void main() {
         return;
     }
 
-    // p.param1 = fill value
-    data_d[i] = D_TYPE(p.param1);
+    // p.param1 = fill value, p.KY = element offset of dst in the bound buffer
+    data_d[p.KY + i] = D_TYPE(p.param1);
 }

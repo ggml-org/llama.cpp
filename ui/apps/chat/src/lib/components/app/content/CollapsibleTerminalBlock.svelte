@@ -46,7 +46,7 @@
 		onToggle?.();
 	}}
 	{open}
-	style="background: var(--code-background); border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);"
+	style="background: var(--surface-code); border: 1px solid color-mix(in oklch, var(--line-default) 30%, transparent);"
 >
 	<Collapsible.Trigger
 		class={cn(
@@ -68,7 +68,7 @@
 
 			<span
 				class={cn(
-					'min-w-0 overflow-x-auto text-sm font-medium',
+					'min-w-0 overflow-x-auto text-body-sm font-medium',
 					shimmerTitle ? 'shimmer-text' : 'text-foreground/80'
 				)}
 			>
@@ -80,7 +80,7 @@
 			</span>
 
 			{#if subtitle}
-				<span class="text-xs italic text-muted-foreground/70">{subtitle}</span>
+				<span class="text-caption italic text-muted-foreground/70">{subtitle}</span>
 			{/if}
 		</div>
 
@@ -95,13 +95,9 @@
 	</Collapsible.Trigger>
 
 	<Collapsible.Content>
-		<!-- See CollapsibleContentBlock: bits-ui keeps closed content mounted, which
-		     makes a collapsed tool result re-render on every streamed token. -->
-		{#if open}
-			<div class="terminal-body p-3 pt-1">
-				{@render children()}
-			</div>
-		{/if}
+		<div class="terminal-body p-3 pt-1">
+			{@render children()}
+		</div>
 	</Collapsible.Content>
 </Collapsible.Root>
 

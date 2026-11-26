@@ -7,9 +7,15 @@ import {
 	DIAGRAM_VIEW_RENDERED,
 	DIAGRAM_VIEW_SOURCE,
 	MERMAID_BLOCK_CLASS,
+	MERMAID_ERROR_CLASS,
+	MERMAID_ID_ATTR,
 	MERMAID_RENDERED_ATTR,
+	MERMAID_SCROLL_CONTAINER_CLASS,
+	MERMAID_SVG_PADDING_X_REM,
 	MERMAID_SYNTAX_ATTR,
 	MERMAID_WRAPPER_CLASS,
+	PELE_SVG_CLASS,
+	PELE_THEME_VARIABLES,
 	SVG,
 	TOGGLE_SOURCE_BTN_CLASS
 } from '#lib/constants/index.ts';
@@ -19,11 +25,37 @@ import { mountSvgShadow } from '#lib/utils/svg-shadow.ts';
 
 export type DiagramAction = { copy: string } | { previewSvg: string };
 
+// The width a diagram can take in its block: the scroll container's content box, less the
+// svg's own horizontal padding. Undefined when the block isn't laid out (detached, hidden).
+function diagramWidth(node: HTMLElement): number | undefined {
+	const scroll = node.closest<HTMLElement>(`.${MERMAID_SCROLL_CONTAINER_CLASS}`);
+
+	if (!scroll?.clientWidth) return undefined;
+
+	const box = getComputedStyle(scroll);
+	const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+	const width =
+		scroll.clientWidth -
+		parseFloat(box.paddingLeft) -
+		parseFloat(box.paddingRight) -
+		MERMAID_SVG_PADDING_X_REM * rem;
+
+	return width > 0 ? width : undefined;
+}
+
+// Pele wraps a node with a `click ... href` directive in a link. Diagrams come from model
+// output, so they stay inert, as they were under Mermaid's strict security level: each link
+// gives way to its children. The preview dialog and the downloaded file copy this svg.
+function unwrapLinks(root: HTMLElement) {
+	for (const link of root.querySelectorAll('a')) link.replaceWith(...link.childNodes);
+}
+
 /**
- * Renders the mermaid diagrams in `container` that haven't been rendered yet.
- * Marks nodes immediately to prevent duplicate renders during streaming.
+ * Renders the mermaid diagrams in `container` that haven't been rendered yet, with Pele.
+ * Marks nodes immediately to prevent duplicate renders during streaming. Colors come
+ * from the `--pele-*` variables in app.css, so a diagram follows the theme without a redraw.
  */
-export async function renderMermaidDiagrams(container: HTMLElement, isDark: boolean) {
+export async function renderMermaidDiagrams(container: HTMLElement) {
 	const nodes = container.querySelectorAll<HTMLElement>(
 		`pre.${MERMAID_BLOCK_CLASS}:not([${MERMAID_RENDERED_ATTR}])`
 	);
@@ -34,30 +66,55 @@ export async function renderMermaidDiagrams(container: HTMLElement, isDark: bool
 	// This avoids needing a guard that would block node discovery.
 	nodes.forEach((node) => node.setAttribute(MERMAID_RENDERED_ATTR, BooleanString.TRUE));
 
-	// lazy load the mermaid dependecy only when needed to reduce bundle size.
-	const { default: mermaid } = await import('mermaid');
+	const { render } = await import('pele');
 
-	mermaid.initialize({
-		flowchart: {
-			htmlLabels: true,
-			useMaxWidth: false
-		},
-		gantt: {
-			useMaxWidth: false
-		},
-		securityLevel: 'strict',
-		sequence: {
-			useMaxWidth: false
-		},
-		startOnLoad: false,
-		theme: isDark ? 'dark' : 'default'
-	});
+	// Pele measures labels with the font it is given, so wait until the page font is in
+	await document.fonts?.ready;
 
-	try {
-		await mermaid.run({ nodes: Array.from(nodes) as unknown as NodeListOf<HTMLElement> });
-	} catch (error) {
-		console.error('Failed to render mermaid diagram:', error);
+	for (const node of nodes) {
+		const source = node.getAttribute(MERMAID_SYNTAX_ATTR) ?? node.textContent ?? '';
+		const id = node.getAttribute(MERMAID_ID_ATTR);
+
+		try {
+			const { svg } = render(source, {
+				fontFamily: getComputedStyle(node).fontFamily,
+				idPrefix: id ? id.replace(/[^\w-]/g, '_') : undefined,
+				// narrow blocks (phones) may turn a left-to-right diagram top-to-bottom
+				maxWidth: diagramWidth(node)
+			});
+
+			node.innerHTML = svg;
+			unwrapLinks(node);
+		} catch (error) {
+			// the message quotes the diagram source, so it goes in as text
+			const message = document.createElement('div');
+
+			message.className = MERMAID_ERROR_CLASS;
+			message.textContent = error instanceof Error ? error.message : String(error);
+			node.replaceChildren(message);
+		}
 	}
+}
+
+/**
+ * A Pele diagram takes its colors from the page's `--pele-*` variables. Writes their current
+ * values into the svg, so a downloaded file keeps the colors it had on screen. Any other svg
+ * comes back unchanged.
+ */
+export function withThemeColors(svgHtml: string): string {
+	const svg = new DOMParser().parseFromString(svgHtml, 'image/svg+xml').documentElement;
+
+	if (!(svg instanceof SVGElement) || !svg.classList.contains(PELE_SVG_CLASS)) return svgHtml;
+
+	const theme = getComputedStyle(document.documentElement);
+
+	for (const name of PELE_THEME_VARIABLES) {
+		const value = theme.getPropertyValue(name).trim();
+
+		if (value) svg.style.setProperty(name, value);
+	}
+
+	return new XMLSerializer().serializeToString(svg);
 }
 
 /**

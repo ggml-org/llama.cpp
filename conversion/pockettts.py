@@ -271,25 +271,83 @@ class PocketTTSModel(TextModel):
         return torch.cat(rows, dim=0)
 
 
+# mimi tensors (shared with moshi): the transformers of the encoder and the decoder, and the SEANet stacks
+MIMI_TFM_MAP = {
+    "norm1":              (gguf.MODEL_TENSOR.A_ENC_INPUT_NORM,  gguf.MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_NORM),
+    "norm2":              (gguf.MODEL_TENSOR.A_ENC_OUTPUT_NORM, gguf.MODEL_TENSOR.A_GEN_WAV_TFM_FFN_NORM),
+    "self_attn.out_proj": (gguf.MODEL_TENSOR.A_ENC_OUTPUT,      gguf.MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_OUT),
+    "linear1":            (gguf.MODEL_TENSOR.A_ENC_FFN_UP,      gguf.MODEL_TENSOR.A_GEN_WAV_TFM_FFN_UP),
+    "linear2":            (gguf.MODEL_TENSOR.A_ENC_FFN_DOWN,    gguf.MODEL_TENSOR.A_GEN_WAV_TFM_FFN_DOWN),
+    "layer_scale_1.scale": (gguf.MODEL_TENSOR.A_ENC_ATTN_SCALE, gguf.MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_SCALE),
+    "layer_scale_2.scale": (gguf.MODEL_TENSOR.A_ENC_FFN_SCALE_LS, gguf.MODEL_TENSOR.A_GEN_WAV_TFM_FFN_SCALE),
+}
+MIMI_TFM_QKV = (
+    (gguf.MODEL_TENSOR.A_ENC_ATTN_Q, gguf.MODEL_TENSOR.A_ENC_ATTN_K, gguf.MODEL_TENSOR.A_ENC_ATTN_V),
+    (gguf.MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_Q, gguf.MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_K, gguf.MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_V),
+)
+
+
+def mimi_tfm_tensors(model: MmprojModel, name: str, data_torch: Tensor) -> Iterable[tuple[str, Tensor]]:
+    is_decoder = name.startswith("mimi.decoder_transformer.")
+    bid = int(name.split("_transformer.transformer.layers.", 1)[1].split(".")[0])
+    key_with_suffix = name.split(f".layers.{bid}.", 1)[1]
+
+    if key_with_suffix == "self_attn.in_proj.weight":
+        q, k, v = data_torch.chunk(3, dim=0)
+        names = MIMI_TFM_QKV[1 if is_decoder else 0]
+        for tensor, part in zip(names, (q, k, v)):
+            yield (model.format_tensor_name(tensor, bid), part)
+        return
+
+    key, suffix = key_with_suffix.rsplit(".", 1)
+    entry = MIMI_TFM_MAP.get(key) or MIMI_TFM_MAP.get(key_with_suffix)
+    if entry is None:
+        return
+    tensor = entry[1 if is_decoder else 0]
+    suffix = ".weight" if key_with_suffix.endswith(".scale") else "." + suffix
+    yield (model.format_tensor_name(tensor, bid, suffix=suffix), data_torch)
+
+
+def mimi_seanet_tensors(model: MmprojModel, name: str, data_torch: Tensor, n_stages: int) -> Iterable[tuple[str, Tensor]]:
+    T = gguf.MODEL_TENSOR
+    is_decoder = name.startswith("mimi.decoder.")
+    idx = int(name.split(".model.", 1)[1].split(".")[0])
+    suffix = "." + name.rsplit(".", 1)[1]
+
+    conv_in, conv_out, res1, res2, scale = (
+        (T.A_GEN_WAV_SEANET_CONV_IN, T.A_GEN_WAV_SEANET_CONV_OUT, T.A_GEN_WAV_SEANET_RES_CONV1,
+         T.A_GEN_WAV_SEANET_RES_CONV2, T.A_GEN_WAV_SEANET_SCALE_CONV)
+        if is_decoder else
+        (T.A_ENC_SEANET_CONV_IN, T.A_ENC_SEANET_CONV_OUT, T.A_ENC_SEANET_RES_CONV1,
+         T.A_ENC_SEANET_RES_CONV2, T.A_ENC_SEANET_SCALE_CONV)
+    )
+
+    if idx == 0:
+        yield (model.format_tensor_name(conv_in, suffix=suffix), data_torch)
+        return
+    if idx == 3 * n_stages + 2:
+        yield (model.format_tensor_name(conv_out, suffix=suffix), data_torch)
+        return
+
+    for stage in range(n_stages):
+        res_idx = _DEC_RES_IDX(stage) if is_decoder else _ENC_RES_IDX(stage)
+        scale_idx = _DEC_SCALE_IDX(stage) if is_decoder else _ENC_SCALE_IDX(stage)
+        if idx == scale_idx:
+            yield (model.format_tensor_name(scale, stage, suffix=suffix), data_torch)
+            return
+        if idx == res_idx:
+            # block.1 is the dilated conv, block.3 the pointwise one (0 and 2 are ELU)
+            inner = int(name.split(".block.", 1)[1].split(".")[0])
+            tensor = res1 if inner == 1 else res2
+            yield (model.format_tensor_name(tensor, stage, suffix=suffix), data_torch)
+            return
+
+
 @ModelBase.register("PocketTTSModel")
 # [TAG_HF_EXAMPLE_MISSING] model is gated, and the checkpoint requires cd to subdir, not supported here
 class PocketTTSMmprojModel(MmprojModel):
     has_audio_encoder = True
     has_vision_encoder = False
-
-    _MIMI_TFM_MAP = {
-        "norm1":              (gguf.MODEL_TENSOR.A_ENC_INPUT_NORM,  gguf.MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_NORM),
-        "norm2":              (gguf.MODEL_TENSOR.A_ENC_OUTPUT_NORM, gguf.MODEL_TENSOR.A_GEN_WAV_TFM_FFN_NORM),
-        "self_attn.out_proj": (gguf.MODEL_TENSOR.A_ENC_OUTPUT,      gguf.MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_OUT),
-        "linear1":            (gguf.MODEL_TENSOR.A_ENC_FFN_UP,      gguf.MODEL_TENSOR.A_GEN_WAV_TFM_FFN_UP),
-        "linear2":            (gguf.MODEL_TENSOR.A_ENC_FFN_DOWN,    gguf.MODEL_TENSOR.A_GEN_WAV_TFM_FFN_DOWN),
-        "layer_scale_1.scale": (gguf.MODEL_TENSOR.A_ENC_ATTN_SCALE, gguf.MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_SCALE),
-        "layer_scale_2.scale": (gguf.MODEL_TENSOR.A_ENC_FFN_SCALE_LS, gguf.MODEL_TENSOR.A_GEN_WAV_TFM_FFN_SCALE),
-    }
-    _MIMI_TFM_QKV = (
-        (gguf.MODEL_TENSOR.A_ENC_ATTN_Q, gguf.MODEL_TENSOR.A_ENC_ATTN_K, gguf.MODEL_TENSOR.A_ENC_ATTN_V),
-        (gguf.MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_Q, gguf.MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_K, gguf.MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_V),
-    )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -419,11 +477,11 @@ class PocketTTSMmprojModel(MmprojModel):
             return
 
         if "_transformer.transformer.layers." in name:
-            yield from self._mimi_tfm_tensor(name, data_torch)
+            yield from mimi_tfm_tensors(self, name, data_torch)
             return
 
         if name.startswith("mimi.encoder.model.") or name.startswith("mimi.decoder.model."):
-            yield from self._seanet_tensor(name, data_torch)
+            yield from mimi_seanet_tensors(self, name, data_torch, _N_SEANET_STAGES)
             return
 
         return
@@ -471,57 +529,3 @@ class PocketTTSMmprojModel(MmprojModel):
             if tensor is not None:
                 yield (self.format_tensor_name(tensor, bid, suffix=suffix), data_torch)
             return
-
-    def _mimi_tfm_tensor(self, name: str, data_torch: Tensor) -> Iterable[tuple[str, Tensor]]:
-        is_decoder = name.startswith("mimi.decoder_transformer.")
-        bid = int(name.split("_transformer.transformer.layers.", 1)[1].split(".")[0])
-        key_with_suffix = name.split(f".layers.{bid}.", 1)[1]
-
-        if key_with_suffix == "self_attn.in_proj.weight":
-            q, k, v = data_torch.chunk(3, dim=0)
-            names = self._MIMI_TFM_QKV[1 if is_decoder else 0]
-            for tensor, part in zip(names, (q, k, v)):
-                yield (self.format_tensor_name(tensor, bid), part)
-            return
-
-        key, suffix = key_with_suffix.rsplit(".", 1)
-        entry = self._MIMI_TFM_MAP.get(key) or self._MIMI_TFM_MAP.get(key_with_suffix)
-        if entry is None:
-            return
-        tensor = entry[1 if is_decoder else 0]
-        suffix = ".weight" if key_with_suffix.endswith(".scale") else "." + suffix
-        yield (self.format_tensor_name(tensor, bid, suffix=suffix), data_torch)
-
-    def _seanet_tensor(self, name: str, data_torch: Tensor) -> Iterable[tuple[str, Tensor]]:
-        T = gguf.MODEL_TENSOR
-        is_decoder = name.startswith("mimi.decoder.")
-        idx = int(name.split(".model.", 1)[1].split(".")[0])
-        suffix = "." + name.rsplit(".", 1)[1]
-
-        conv_in, conv_out, res1, res2, scale = (
-            (T.A_GEN_WAV_SEANET_CONV_IN, T.A_GEN_WAV_SEANET_CONV_OUT, T.A_GEN_WAV_SEANET_RES_CONV1,
-             T.A_GEN_WAV_SEANET_RES_CONV2, T.A_GEN_WAV_SEANET_SCALE_CONV)
-            if is_decoder else
-            (T.A_ENC_SEANET_CONV_IN, T.A_ENC_SEANET_CONV_OUT, T.A_ENC_SEANET_RES_CONV1,
-             T.A_ENC_SEANET_RES_CONV2, T.A_ENC_SEANET_SCALE_CONV)
-        )
-
-        if idx == 0:
-            yield (self.format_tensor_name(conv_in, suffix=suffix), data_torch)
-            return
-        if idx == 3 * _N_SEANET_STAGES + 2:
-            yield (self.format_tensor_name(conv_out, suffix=suffix), data_torch)
-            return
-
-        for stage in range(_N_SEANET_STAGES):
-            res_idx = _DEC_RES_IDX(stage) if is_decoder else _ENC_RES_IDX(stage)
-            scale_idx = _DEC_SCALE_IDX(stage) if is_decoder else _ENC_SCALE_IDX(stage)
-            if idx == scale_idx:
-                yield (self.format_tensor_name(scale, stage, suffix=suffix), data_torch)
-                return
-            if idx == res_idx:
-                # block.1 is the dilated conv, block.3 the pointwise one (0 and 2 are ELU)
-                inner = int(name.split(".block.", 1)[1].split(".")[0])
-                tensor = res1 if inner == 1 else res2
-                yield (self.format_tensor_name(tensor, stage, suffix=suffix), data_torch)
-                return

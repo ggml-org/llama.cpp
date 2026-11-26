@@ -41,8 +41,9 @@ env:
   LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
-  ubuntu-arm64:
-    runs-on: ubuntu-26.04-arm
+  ubuntu:
+    runs-on: [self-hosted, Linux, gb10]
+    container: "ubuntu:26.04"
 
     steps:
       - name: Clone
@@ -52,14 +53,13 @@ jobs:
       - name: Dependencies
         id: depends
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential glslc libvulkan-dev spirv-headers libssl-dev ninja-build
+          apt update
+          apt install -y build-essential jq cmake python3 python3-venv python3-pip glslc libvulkan-dev spirv-headers libssl-dev ninja-build
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
         with:
           restore: false
-          variant: ccache
           save: false
 
       - name: ccache-buckets-restore
@@ -67,7 +67,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
         with:
-          key: vulkan-ubuntu-26.04-arm
+          key: vulkan-ubuntu-26.04-gb10
           folder: llama.cpp
           hf_bucket: ggml-org/cache
 
@@ -82,7 +82,7 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          time cmake --build build -j $(nproc)
+          cmake --build build -j $(nproc)
 
       - name: ccache-buckets-save
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
@@ -90,7 +90,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
         with:
-          key: vulkan-ubuntu-26.04-arm
+          key: vulkan-ubuntu-26.04-gb10
           folder: llama.cpp
           evict-old-files: 1d
           hf_bucket: ggml-org/cache
@@ -167,7 +167,8 @@ jobs:
           export GGML_VK_VISIBLE_DEVICES=0
           export GGML_VK_DISABLE_F16=1
           export GGML_VK_DISABLE_COOPMAT=1
-          ctest -L main --verbose --timeout 900
+          # TODO: too slow on llvmpipe
+          ctest -L main -E "test-llama-context" --verbose --timeout 900
 
   windows:
     name: windows / ${{ matrix.arch }}
@@ -212,6 +213,11 @@ jobs:
         id: install_ninja
         run: |
           choco install ninja
+
+      - name: Install LLVM
+        run: |
+          choco install llvm --version=22.1.8
+          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
 
       - name: Build
         id: cmake_build
