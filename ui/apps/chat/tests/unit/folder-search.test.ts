@@ -94,3 +94,49 @@ describe('runFolderSearch', () => {
 		expect(res.error).toBeUndefined();
 	});
 });
+
+describe('runFolderSearch across platforms', () => {
+	it('navigates a backslash path under a Windows home', async () => {
+		const home = 'C:/Users/win';
+
+		mockExecute.mockResolvedValueOnce({
+			base: `${home}/git`,
+			entries: [{ path: 'llama.cpp', type: 'dir' }]
+		});
+
+		const res = await runFolderSearch('git\\llama', home, signal());
+
+		expect(mockExecute.mock.calls[0][1]).toMatchObject({ path: `${home}/git` });
+		expect(res.entries.map((e) => e.path)).toEqual([`${home}/git/llama.cpp`]);
+	});
+
+	it('keeps the near results when the deeper search fails', async () => {
+		const home = '/Users/flaky';
+
+		mockExecute.mockImplementation(async (_tool, params) => {
+			const { max_depth: depth, path } = params as Record<string, string | number>;
+
+			if (depth === SEARCH.MAX_DEPTH) throw new Error('network');
+
+			return { base: String(path), entries: [{ path: 'git/llama.cpp', type: 'dir' }] };
+		});
+
+		const res = await runFolderSearch('llama', home, signal());
+
+		expect(res.entries.map((e) => e.path)).toEqual([`${home}/git/llama.cpp`]);
+	});
+
+	it('stops the typo search at the nearest depth that finds something', async () => {
+		const home = '/Users/near';
+
+		serve(home, '[lL][lL]*[aA]', { [SEARCH.SHALLOW_DEPTH]: ['git/llama.cpp'] });
+
+		await runFolderSearch('llana', home, signal());
+
+		const depths = mockExecute.mock.calls.map(
+			([, params]) => (params as { max_depth: number }).max_depth
+		);
+
+		expect(depths).not.toContain(SEARCH.FUZZY_MAX_DEPTH);
+	});
+});

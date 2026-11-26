@@ -222,4 +222,19 @@ describe('/cwd line in the chat input', () => {
 		expect(screen.component.getValue()).toBe('/cwd docs\nfix the build');
 		expect(pickers.workingDirectoryQuery).toBe('docs');
 	});
+
+	it('tells the /cwd line from the message below it by the caret', async () => {
+		const screen = render(ChatFormPickersHarness);
+
+		await tick();
+
+		const pickers = screen.component.getPickers();
+
+		// typing leaves the caret at the end: in the message
+		screen.component.type('/cwd docs\nfix the build');
+		expect(pickers.isCaretOnCwdLine()).toBe(false);
+
+		screen.component.type('/cwd docs');
+		expect(pickers.isCaretOnCwdLine()).toBe(true);
+	});
 });

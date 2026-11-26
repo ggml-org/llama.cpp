@@ -21,7 +21,12 @@
 	import { ToolsService } from '#lib/services/tools.service.ts';
 	import { conversationsStore, deviceStore, toolsStore } from '#lib/stores/index.ts';
 	import type { GlobSearchChildResult } from '#lib/types/glob.js';
-	import { abbreviateHome, runFolderSearch, toHomeRelativeQuery } from '#lib/utils/index.ts';
+	import {
+		abbreviateHome,
+		isIMEComposing,
+		runFolderSearch,
+		toHomeRelativeQuery
+	} from '#lib/utils/index.ts';
 	import { page } from '$app/state';
 	import { cubicInOut } from 'svelte/easing';
 
@@ -163,14 +168,25 @@
 			}
 
 			// A stale search must not touch the list: the next one is already running.
+			let hasShown = false;
+
 			const show = (res: GlobSearchChildResult) => {
 				if (!isCurrent()) return;
 
+				// the deeper results join a list already on screen: the highlighted folder
+				// stays highlighted, wherever it lands
+				const highlighted = hasShown ? queryResults[nav.hoveredIndex] : undefined;
+
+				hasShown = true;
 				searchScope = res.exactDir ?? res.args.path;
 				queryResults = res.entries.map((e) => e.path).slice(0, SEARCH.MAX_RESULTS_SHOWN);
 				searchError = res.error ?? null;
 
-				if (queryResults.length > 0) {
+				const kept = highlighted === undefined ? -1 : queryResults.indexOf(highlighted);
+
+				if (kept >= 0) {
+					nav.reset(kept);
+				} else if (queryResults.length > 0) {
 					nav.reset(0);
 					nav.bumpScroll(); // scroll the list back to the top (first item is hovered)
 				} else {
@@ -248,6 +264,9 @@
 
 	/** True when the key was the picker's: the chat input then leaves it alone. */
 	function handlePickerKeydown(event: KeyboardEvent): boolean {
+		// a key that confirms or moves within an IME composition belongs to the text
+		if (isIMEComposing(event)) return false;
+
 		// Enter picks a suggestion, never the typed text: before the results arrive it does
 		// nothing. Only without file search, where nothing is suggested, does it take the path
 		// as typed

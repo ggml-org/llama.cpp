@@ -174,3 +174,47 @@ describe('runGlobSearchWithChildren with a relative path', () => {
 		expect(res.entries.map((e) => e.path)).toEqual([`${scope}/apps/ui/lib/voice`]);
 	});
 });
+
+describe('runGlobSearchWithChildren edge cases', () => {
+	it('follows a backslash path from a Windows scope', async () => {
+		const scope = 'C:/rootH';
+
+		mockExecute.mockImplementation(async (_tool, params) => {
+			const { path } = params as { path: string };
+
+			return path === `${scope}/ui/lib`
+				? { base: path, entries: [{ path: 'voice', type: 'dir' }] }
+				: { base: scope, entries: [] };
+		});
+
+		const res = await runGlobSearchWithChildren(
+			'ui\\lib\\voi',
+			scope,
+			3,
+			50,
+			new AbortController().signal
+		);
+
+		expect(res.entries.map((e) => e.path)).toEqual([`${scope}/ui/lib/voice`]);
+	});
+
+	it('surfaces the deep search error when the direct lookup finds nothing', async () => {
+		const scope = '/Users/rootI';
+
+		mockExecute.mockImplementation(async (_tool, params) => {
+			const { path } = params as { path: string };
+
+			return path === scope ? { error: 'boom' } : { base: path, entries: [] };
+		});
+
+		const res = await runGlobSearchWithChildren(
+			'ui/lib/zzz',
+			scope,
+			3,
+			50,
+			new AbortController().signal
+		);
+
+		expect(res.error).toBe('boom');
+	});
+});

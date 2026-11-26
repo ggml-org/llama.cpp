@@ -13,7 +13,8 @@ import {
 	joinPath,
 	rankEntries,
 	splitPathQuery,
-	toHomeRelativeQuery
+	toHomeRelativeQuery,
+	toScopeSeparators
 } from './working-directory';
 import {
 	GLOB,
@@ -97,13 +98,16 @@ export async function runGlobSearchWithChildren(
 	const search = (q: string) =>
 		searchWithChildren(q, scopePath, searchDepth, limit, signal, options);
 
+	query = toScopeSeparators(query, scopePath);
+
 	if (splitPathQuery(query) || !query.includes(PATH_SEPARATOR)) return search(query);
 
 	// A relative path (`ui/lib/voi`) is also followed from the scope itself: the
 	// server's glob matches it only below some other folder, never at the top.
 	const [direct, deep] = await Promise.all([search(joinPath(scopePath, query)), search(query)]);
 
-	if (direct.error) return deep;
+	// nothing found directly: the deep search speaks, its error included
+	if (direct.error || (direct.entries.length === 0 && deep.error)) return deep;
 
 	const directPaths = new Set(direct.entries.map((entry) => entry.path));
 	const below = deep.entries.filter((entry) => !directPaths.has(entry.path));
@@ -179,8 +183,9 @@ async function withExactDirChildren(
 
 /**
  * Folders within a typo of the query's name, for when the exact search finds
- * nothing. Each depth is walked on its own, as the server's result cap could
- * otherwise crowd the nearest folders out of a deeper walk.
+ * nothing. The depths are walked in turn, nearest first, and the walk stops at
+ * the first one that finds something: every glob is a walk of its own on the
+ * server, and its result cap could crowd the nearest folders out of a deeper one.
  */
 async function runFuzzyFolderSearch(
 	args: GlobSearchArgs,
@@ -188,20 +193,26 @@ async function runFuzzyFolderSearch(
 	signal: AbortSignal
 ): Promise<GlobSearchChildResult> {
 	const globs = buildFuzzyGlobs(args.rankQuery);
-	const results = await Promise.all(
-		depths.flatMap((maxDepth) =>
+	const close = new Map<string, GlobEntry>();
+
+	let base = '';
+
+	for (const maxDepth of depths) {
+		const results = await Promise.all(
 			globs.map((include) =>
 				runGlobSearch({ ...args, include, maxDepth }, GlobSearchType.DIR, SEARCH.LIMIT, signal)
 			)
-		)
-	);
-	const base = results.find((res) => !res.error)?.base ?? '';
-	const close = new Map<string, GlobEntry>();
+		);
 
-	for (const entry of results.flatMap((res) => res.entries)) {
-		if (fuzzyDistance(lastPathSegment(entry.path), args.rankQuery) <= SEARCH.FUZZY_MAX_EDITS) {
-			close.set(entry.path, entry);
+		base = results.find((res) => !res.error)?.base ?? base;
+
+		for (const entry of results.flatMap((res) => res.entries)) {
+			if (fuzzyDistance(lastPathSegment(entry.path), args.rankQuery) <= SEARCH.FUZZY_MAX_EDITS) {
+				close.set(entry.path, entry);
+			}
 		}
+
+		if (close.size > 0) break;
 	}
 
 	const entries = rankEntries([...close.values()], args.rankQuery);
@@ -225,6 +236,8 @@ export async function runFolderSearch(
 	const scope = home ?? HOME_TILDE;
 	const type = GlobSearchType.DIR;
 
+	query = toScopeSeparators(query, scope);
+
 	if (splitPathQuery(query) || query.includes(PATH_SEPARATOR)) {
 		const res = await runGlobSearchWithChildren(
 			toHomeRelativeQuery(query, home),
@@ -241,12 +254,14 @@ export async function runFolderSearch(
 	}
 
 	const args = buildGlobSearchArgs(query, scope, SEARCH.SHALLOW_DEPTH);
+	// started alongside the shallow search and read after it: a failure here (the search
+	// being cancelled, say) must not go unhandled, and costs only the deeper results
 	const deepSearch = runGlobSearch(
 		{ ...args, maxDepth: SEARCH.MAX_DEPTH },
 		type,
 		SEARCH.LIMIT,
 		signal
-	);
+	).catch((): GlobSearchResult => ({ base: '', entries: [] }));
 	const shallow = await runGlobSearch(args, type, SEARCH.LIMIT, signal);
 
 	if (shallow.error) return { args, base: shallow.base, entries: [], error: shallow.error };

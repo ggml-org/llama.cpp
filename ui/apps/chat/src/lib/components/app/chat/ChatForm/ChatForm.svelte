@@ -461,7 +461,14 @@
 	function handleKeydown(event: KeyboardEvent) {
 		// Pickers consume navigation/escape keys first; when consumed, skip
 		// the enter-to-submit logic below and keep the key from the editor.
-		if (workingDirectoryRef?.handleKeydown(event) || pickers.handleKeydown(event)) {
+		// The directory picker takes the keys typed on its `/cwd` line; in the message below
+		// it only Escape, so Enter and the arrows there stay the message's
+		const isDirectoryKey = pickers.isCaretOnCwdLine() || event.key === KeyboardKey.ESCAPE;
+
+		if (
+			(isDirectoryKey && workingDirectoryRef?.handleKeydown(event)) ||
+			pickers.handleKeydown(event)
+		) {
 			event.preventDefault();
 
 			return;
@@ -690,6 +697,9 @@
 
 	/** Sends the message; dictated text that is still being refined is sent refined. */
 	async function submit() {
+		// sending closes the directory picker first, so its `/cwd` line is not sent as text
+		if (pickers.isWorkingDirectoryPickerOpen) pickers.handleWorkingDirectoryClose();
+
 		if (!canSubmit || disabled || hasLoadingAttachments || isSendWaiting) return;
 
 		if (voice.isRefining) {

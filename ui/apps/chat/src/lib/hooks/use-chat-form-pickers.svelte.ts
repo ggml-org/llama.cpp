@@ -313,6 +313,14 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		}
 	}
 
+	/** True while the caret is on the `/cwd` line, not in the message below it. */
+	function isCaretOnCwdLine(): boolean {
+		const lineEnd = opts.getValue().indexOf(CWD_COMMAND_LINE_BREAK);
+		const caret = opts.getCaretOffset();
+
+		return lineEnd === -1 || caret === undefined || caret <= lineEnd;
+	}
+
 	/** Drops the `/cwd` line, leaving the message written below it. */
 	function consumeCwdCommand() {
 		const cwdLine = parseCwdCommandLine(opts.getValue());
@@ -391,6 +399,7 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		handlePromptPickerClose,
 		handleWorkingDirectoryClose,
 		handleWorkingDirectoryOpen,
+		isCaretOnCwdLine,
 		get isCommandPickerOpen() {
 			return isCommandPickerOpen;
 		},

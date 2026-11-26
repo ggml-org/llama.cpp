@@ -9,7 +9,8 @@ import {
 	joinPath,
 	rankEntries,
 	splitPathQuery,
-	toHomeRelativeQuery
+	toHomeRelativeQuery,
+	toScopeSeparators
 } from '#lib/utils/index.ts';
 import { describe, expect, it } from 'vitest';
 
@@ -266,5 +267,17 @@ describe('rankEntries with hidden folders', () => {
 	it('tells a hidden path by any of its segments', () => {
 		expect(isHiddenPath('git/.cache/x')).toBe(true);
 		expect(isHiddenPath('git/llama.cpp')).toBe(false);
+	});
+});
+
+describe('toScopeSeparators', () => {
+	it('reads a backslash as a separator under a Windows scope', () => {
+		expect(toScopeSeparators('git\\llama', 'C:/Users/al')).toBe('git/llama');
+		expect(toScopeSeparators('git\\llama', '//host/share/al')).toBe('git/llama');
+	});
+
+	it('leaves the backslash alone under a POSIX scope, where it is a filename character', () => {
+		expect(toScopeSeparators('git\\llama', '/home/al')).toBe('git\\llama');
+		expect(toScopeSeparators('git\\llama', '~')).toBe('git\\llama');
 	});
 });

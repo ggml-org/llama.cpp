@@ -35,6 +35,19 @@ function toPosixSeparators(query: string): string {
 	return query.split(GLOB.WINDOWS_SEPARATOR).join(PATH_SEPARATOR);
 }
 
+/**
+ * The query with `\\` rewritten into `/` when the scope it is searched in is a
+ * Windows path (`C:/Users/al`, `//host/share`), so `git\\llama` is a path there
+ * too. Under a POSIX scope the backslash stays: it is a legal filename character.
+ */
+export function toScopeSeparators(query: string, scope: string): string {
+	const isWindowsScope = GLOB.DRIVE_PREFIX_REGEX.test(scope) || GLOB.UNC_ROOT_REGEX.test(scope);
+
+	if (!isWindowsScope) return query;
+
+	return query.split(GLOB.WINDOWS_SEPARATOR).join(PATH_SEPARATOR);
+}
+
 export function rootPrefixLength(path: string): number {
 	const unc = path.match(GLOB.UNC_ROOT_REGEX);
 

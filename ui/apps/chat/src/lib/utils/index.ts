@@ -235,6 +235,7 @@ export {
 export {
 	splitPathQuery,
 	toHomeRelativeQuery,
+	toScopeSeparators,
 	buildCaseInsensitiveGlob,
 	buildFuzzyGlobs,
 	fuzzyDistance,
