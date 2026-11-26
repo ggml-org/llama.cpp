@@ -2,7 +2,7 @@
  * deviceStore - Browser environment signals
  *
  * Device capabilities, OS theme and viewport in one class store:
- * deviceStore.isMobile, deviceStore.isIOSDevice / isIOSSafari / isWKWebView /
+ * deviceStore.isMobile, deviceStore.isApplePlatform / isIOSDevice / isIOSSafari / isWKWebView /
  * isStandalone, deviceStore.systemTheme.isDark.
  *
  * UA-derived flags are static for the session; isStandalone and systemTheme
@@ -30,6 +30,8 @@ const UA_PATTERNS = {
 } as const;
 
 class DeviceStore {
+	/** macOS, iOS or iPadOS, where shortcuts take Cmd instead of Ctrl. */
+	readonly isApplePlatform: boolean = false;
 	/** Any iOS/iPadOS device, regardless of which app or browser embeds the page. */
 	readonly isIOSDevice: boolean = false;
 	/** The Safari browser app on iOS, excluding other iOS browsers and WKWebViews. */
@@ -63,6 +65,7 @@ class DeviceStore {
 
 		this.isIOSDevice =
 			UA_PATTERNS.IOS_PHONE.test(ua) || (UA_PATTERNS.MACINTOSH.test(ua) && isTouch);
+		this.isApplePlatform = this.isIOSDevice || UA_PATTERNS.MACINTOSH.test(ua);
 		// Safari keeps 'Safari/' in the UA; non-Safari iOS browsers emit their own
 		// token instead. WKWebView typically omits 'Safari/' entirely.
 		const hasSafariToken = UA_PATTERNS.SAFARI.test(ua) && !UA_PATTERNS.WEBVIEW_IOS.test(ua);

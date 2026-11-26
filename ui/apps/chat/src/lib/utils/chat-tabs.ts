@@ -36,3 +36,13 @@ export function resolveTabView(page: TabRoute, openTabs: string[]): TabView {
 		ids: openTabs
 	};
 }
+
+/**
+ * Tab the browser's close shortcut closes in place of the window: the active
+ * one, while other tabs stay open. Null leaves the shortcut to the browser.
+ */
+export function resolveWindowCloseTab(page: TabRoute, openTabs: string[]): string | null {
+	const { activeId, ids } = resolveTabView(page, openTabs);
+
+	return activeId && ids.length > 1 && ids.includes(activeId) ? activeId : null;
+}

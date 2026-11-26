@@ -1,6 +1,6 @@
-import { NEW_CHAT_TAB_ID } from '#lib/constants/index.ts';
 import { KeyboardKey } from '#lib/enums/index.ts';
-import { conversationsStore, settingsStore, tabsStore } from '#lib/stores/index.ts';
+import { conversationsStore, deviceStore, settingsStore, tabsStore } from '#lib/stores/index.ts';
+import { resolveTabTarget, resolveWindowCloseTab } from '#lib/utils/index.ts';
 import { page } from '$app/state';
 
 interface KeyboardShortcutsCallbacks {
@@ -73,11 +73,30 @@ export function useKeyboardShortcuts(callbacks: KeyboardShortcutsCallbacks) {
 
 			event.preventDefault();
 
-			const activeId =
-				page.params.id ?? (page.route.id === '/(chat)' ? NEW_CHAT_TAB_ID : undefined);
+			const activeId = resolveTabTarget(page);
 
 			if (activeId) {
 				void tabsStore.close(activeId, true);
+			}
+		}
+
+		// the browser's own close shortcut: Cmd+W on Apple platforms, where Ctrl+W
+		// deletes a word in text fields, and Ctrl+W elsewhere
+		const isWindowClose =
+			(deviceStore.isApplePlatform ? event.metaKey && !event.ctrlKey : event.ctrlKey) &&
+			!event.shiftKey &&
+			!event.altKey &&
+			event.key === KeyboardKey.W_LOWER;
+
+		// the tab strip is hidden on mobile, where the shortcut keeps closing the window
+		if (isWindowClose && settingsStore.config.conversationTabs && !deviceStore.isMobile) {
+			if (event.defaultPrevented) return;
+
+			const tabId = resolveWindowCloseTab(page, tabsStore.openTabs);
+
+			if (tabId) {
+				event.preventDefault();
+				void tabsStore.close(tabId, true);
 			}
 		}
 
