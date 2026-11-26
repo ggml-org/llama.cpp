@@ -18,6 +18,7 @@
 		DialogMcpResourcesBrowser
 	} from '#lib/components/app/index.ts';
 	import {
+		CHAT_FORM_ATTACHMENT_IMAGE_HEIGHT_CLASS,
 		CHAT_FORM_SINGLE_ROW_MAX_TEXT_LINES,
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
 		ICON_CLASS_DEFAULT,
@@ -915,17 +916,6 @@
 			/>
 		{/if}
 
-		<ChatAttachmentsList
-			bind:uploadedFiles
-			activeModelId={activeModelId ?? undefined}
-			{attachments}
-			class={isExpanded ? 'py-5 max-md:px-(--chat-form-side-inset)' : 'py-5'}
-			leading={systemMessageAttachment ? systemMessageLeading : undefined}
-			limitToSingleRow
-			onFileRemove={handleFileRemove}
-			style="scroll-padding: 1rem;"
-		/>
-
 		<div
 			class={[
 				'relative flex flex-1 shadow-(--elevation-control) transition-shadow focus-within:shadow-(--elevation-surface)',
@@ -968,6 +958,20 @@
 					}}
 				/>
 			{/if}
+
+			<!-- under the text, above the actions: the message reads first, what goes with it after.
+			     Never in a single row, which the form leaves while anything is attached -->
+			<ChatAttachmentsList
+				bind:uploadedFiles
+				activeModelId={activeModelId ?? undefined}
+				{attachments}
+				class="pt-2 pb-3"
+				imageHeight={CHAT_FORM_ATTACHMENT_IMAGE_HEIGHT_CLASS}
+				leading={systemMessageAttachment ? systemMessageLeading : undefined}
+				limitToSingleRow
+				onFileRemove={handleFileRemove}
+				style="scroll-padding: 1rem;"
+			/>
 
 			<!-- its own box, so the phone sheet can hold it by the bottom edge while it moves -->
 			<div bind:this={actionsEl} class={isSingleRow ? 'contents' : 'relative mt-auto'}>

@@ -20,6 +20,8 @@ export const CHAT_FORM_PICKER_WIDTH_CLASS =
  */
 export const CHAT_FORM_PATH_PICKER_WIDTH_CLASS = 'w-[min(36rem,var(--bits-popover-anchor-width))]';
 export const NEW_CHAT_DRAFT_KEY = '__new_chat__';
+/** Height of an image or PDF thumbnail attached in the chat form: small, under the text. */
+export const CHAT_FORM_ATTACHMENT_IMAGE_HEIGHT_CLASS = 'h-12';
 /** Lines of text from which the main chat form expands into its large editor. */
 export const CHAT_FORM_EXPAND_MIN_LINES = 4;
 /** Below this text height (a line and change) the main chat form keeps to one row. */
