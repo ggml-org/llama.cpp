@@ -159,6 +159,10 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_ONEDNN;
     }
 
+    if (!ggml_sycl_fattn_kv_type_supported(K->type) || !ggml_sycl_fattn_kv_type_supported(V->type)) {
+        return BEST_FATTN_KERNEL_NONE;
+    }
+
     // MKL path: XMX-accelerated GEMM for prompt processing (all KV cache types).
     // The MKL kernel converts non-F16 K/V to F16 via to_fp16_sycl before GEMM,
     // so quantized, F16, BF16, and F32 caches all benefit from XMX acceleration.
@@ -243,10 +247,6 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_NONE;
     }
 #endif // GGML_SYCL_FA_ALL_QUANTS
-
-    if (!ggml_sycl_fattn_kv_type_supported(K->type) || !ggml_sycl_fattn_kv_type_supported(V->type)) {
-        return BEST_FATTN_KERNEL_NONE;
-    }
 
     if (mask && mask->ne[2] != 1) {
         return BEST_FATTN_KERNEL_NONE;
