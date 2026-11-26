@@ -1,0 +1,45 @@
+# A transient apt/network failure in one image build leg blocks all release image tags.
+# Re-run only the failed jobs (with backoff) so the cached layers of the good legs are reused.
+name: Retry Docker publish
+
+on:
+  workflow_run:
+    workflows:
+      - Publish Docker image
+    types:
+      - completed
+
+cache-mode: none
+permissions:
+  actions: read
+
+concurrency:
+  group: retry-docker-publish-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  retry:
+    if: >-
+      ${{ github.repository == 'ggml-org/llama.cpp'
+      && github.event.workflow_run.conclusion == 'failure'
+      && github.event.workflow_run.run_attempt < 4 }}
+
+    permissions:
+      actions: write # for re-running failed jobs
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Re-run failed jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          delay=$((300 * (1 << (RUN_ATTEMPT - 1))))
+          echo "Run $RUN_ID failed on attempt $RUN_ATTEMPT, re-running failed jobs in ${delay}s"
+          sleep "$delay"
+          gh run rerun "$RUN_ID" --failed
