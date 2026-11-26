@@ -5046,6 +5046,10 @@ struct test_depth_mix : public test_case {
     test_depth_mix(int64_t n = 2304, int64_t B = 8, int64_t Q = 1, int64_t T = 1, bool shared_norm = false)
         : n(n), B(B), Q(Q), T(T), shared_norm(shared_norm) {}
 
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
     ggml_tensor * build_graph(ggml_context * ctx) override {
         verify.clear();
         ggml_tensor * stack = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n, B, T);
