@@ -771,7 +771,6 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .blck_size                = QK_NVFP4,
         .type_size                = sizeof(block_nvfp4),
         .is_quantized             = true,
-        .needs_scale              = true,
         .to_float                 = (ggml_to_float_t) dequantize_row_nvfp4,
         .from_float_ref           = (ggml_from_float_t)quantize_row_nvfp4_ref,
     },
@@ -780,7 +779,6 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .blck_size                = 1,
         .type_size                = sizeof(ggml_fp8_e4m3_t),
         .is_quantized             = false,
-        .needs_scale              = true,
         .to_float                 = (ggml_to_float_t) dequantize_row_f8_e4m3,
         .from_float_ref           = (ggml_from_float_t) quantize_row_f8_e4m3_ref,
     },
@@ -1381,7 +1379,13 @@ bool ggml_is_quantized(enum ggml_type type) {
 bool ggml_needs_scale(enum ggml_type type) {
     assert(type >= 0);
     assert(type < GGML_TYPE_COUNT);
-    return type_traits[type].needs_scale;
+    switch (type) {
+        case GGML_TYPE_NVFP4:
+        case GGML_TYPE_F8_E4M3:
+            return true;
+        default:
+            return false;
+    }
 }
 
 const char * ggml_op_name(enum ggml_op op) {

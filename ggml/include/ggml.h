@@ -2834,13 +2834,14 @@ extern "C" {
     typedef void (*ggml_to_float_t)  (const void  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
     typedef void (*ggml_from_float_t)(const float * GGML_RESTRICT x, void  * GGML_RESTRICT y, int64_t k);
 
+    // TODO: deprecate struct definition from the public API, replace with functions [TAG_GGML_AVOID_PUBLIC_STRUCTS]
     struct ggml_type_traits {
         const char             * type_name;
         int64_t                  blck_size;
         int64_t                  blck_size_interleave; // interleave elements in blocks
         size_t                   type_size;
         bool                     is_quantized; // whether it's a block-quantized data-type
-        bool                     needs_scale; // whether the type is only valid with an external scale tensor (see ggml_mul_mat_ext)
+        //bool                     needs_scale; // add this flag in the next update [TAG_GGML_VERSION_MAJOR_UPDATE]
         ggml_to_float_t          to_float;
         ggml_from_float_t        from_float_ref;
     };
@@ -2862,6 +2863,7 @@ extern "C" {
 
     // threadpool params
     // Use ggml_threadpool_params_default() or ggml_threadpool_params_init() to populate the defaults
+    // TODO: deprecate struct definition from the public API, replace with functions [TAG_GGML_AVOID_PUBLIC_STRUCTS]
     struct ggml_threadpool_params {
         bool                cpumask[GGML_MAX_N_THREADS]; // mask of cpu cores (all-zeros means use default affinity settings)
         int                 n_threads;                   // number of threads
