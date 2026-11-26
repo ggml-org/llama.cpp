@@ -3989,7 +3989,6 @@ static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t *
 static enum ggml_backend_dev_type ggml_backend_cuda_device_get_type(ggml_backend_dev_t dev) {
     ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *) dev->context;
 
-    // cached at init: cudaGetDeviceProperties can take ~1 ms per call with the CUDA 12 runtime
     return ggml_cuda_info().devices[ctx->device].type;
 }
 
