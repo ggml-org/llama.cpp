@@ -911,7 +911,7 @@ static void rms_norm_mul_rope_cuda(
     };
 
     // Keep the wider launch and compile out multi-axis indexing for single-token NEOX.
-    if (is_neox && !is_mrope && nchannels == 1 && nsamples == 1 && ncols <= 8 * WARP_SIZE) {
+    if (is_neox && !is_mrope && nsamples == 1 && ncols <= 8 * WARP_SIZE) {
         launch_block(std::integral_constant<int, 256>{}, std::false_type{});
     } else if (ncols <= 2 * WARP_SIZE) {
         launch_block(std::integral_constant<int, WARP_SIZE>{}, std::true_type{});
