@@ -79,6 +79,7 @@ extern int g_ggml_sycl_enable_xmx_esimd;
 extern int g_ggml_sycl_xmx_max_cols;
 extern int g_ggml_sycl_xmx_glu_max_cols;
 extern int g_ggml_sycl_prioritize_dmmv;
+extern int g_ggml_sycl_force_mmq;
 
 // Which quantized weight formats may take the XMX dequant-GEMM paths. A bitmask rather than one
 // flag per path, so a format can be enabled or measured on its own and adding a format is one bit.

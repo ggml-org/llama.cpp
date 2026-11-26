@@ -118,6 +118,7 @@ int g_ggml_sycl_enable_xmx_esimd = 1;
 int g_ggml_sycl_xmx_max_cols = GGML_SYCL_XMX_MAX_COLS_DEFAULT;
 int g_ggml_sycl_xmx_glu_max_cols = GGML_SYCL_XMX_GLU_MAX_COLS;
 int g_ggml_sycl_prioritize_dmmv = 0;
+int g_ggml_sycl_force_mmq = 0;
 int g_ggml_sycl_xmx_gather_types = GGML_SYCL_XMX_GATHER_TYPES_DEFAULT;
 int g_ggml_sycl_xmx_gather_shapes = GGML_SYCL_XMX_GATHER_SHAPES_DEFAULT;
 int g_ggml_sycl_mmid_sched = GGML_SYCL_MMID_SCHED_DEVICE;
@@ -454,6 +455,11 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_xmx_glu_max_cols =
             std::clamp(ggml_sycl_get_env("GGML_SYCL_XMX_GLU_MAX_COLS", GGML_SYCL_XMX_GLU_MAX_COLS), 0, GGML_SYCL_XMX_GLU_MAX_COLS);
         g_ggml_sycl_prioritize_dmmv = ggml_sycl_get_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
+#ifdef GGML_SYCL_FORCE_MMQ
+        g_ggml_sycl_force_mmq = ggml_sycl_get_env("GGML_SYCL_FORCE_MMQ", 1);
+#else
+        g_ggml_sycl_force_mmq = ggml_sycl_get_env("GGML_SYCL_FORCE_MMQ", 0);
+#endif
         g_ggml_sycl_graph_eviction_timeout = ggml_sycl_get_env("GGML_SYCL_GRAPH_EVICTION_TIMEOUT", 10);
         g_ggml_sycl_xmx_gather_types = ggml_sycl_get_env("GGML_SYCL_XMX_GATHER_TYPES", GGML_SYCL_XMX_GATHER_TYPES_DEFAULT);
         g_ggml_sycl_mmid_sched = ggml_sycl_get_env("GGML_SYCL_MMID_SCHED", GGML_SYCL_MMID_SCHED_DEVICE) & 3;
@@ -612,6 +618,7 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_XMX_GLU_MAX_COLS: %d\n", g_ggml_sycl_xmx_glu_max_cols);
 
         GGML_LOG_INFO("  GGML_SYCL_PRIORITIZE_DMMV: %d\n", g_ggml_sycl_prioritize_dmmv);
+        GGML_LOG_INFO("  GGML_SYCL_FORCE_MMQ (env): %d\n", g_ggml_sycl_force_mmq);
 
         g_ggml_sycl_use_async_mem_op_requested = ggml_sycl_get_env("GGML_SYCL_USE_ASYNC_MEM_OP", 1);
         GGML_LOG_INFO("  GGML_SYCL_USE_ASYNC_MEM_OP: %d\n", g_ggml_sycl_use_async_mem_op_requested);
@@ -4341,9 +4348,21 @@ enum class mul_mat_algo {
 };
 
 inline bool ggml_sycl_supports_mmq(enum ggml_type type) {
-    // TODO: accuracy issues in MMQ
-    GGML_UNUSED(type);
-    return false;
+    switch (type) {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+            return true;
+        default:
+            return false;
+    }
 }
 
 inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
@@ -5152,17 +5171,38 @@ static bool can_use_mul_mat_vec_q(int device, const ggml_tensor * src0, const gg
            (src1->ne[1] <= MMVQ_MAX_BATCH_SIZE || can_use_xmx_batch(device, src0, src1));
 }
 
+inline bool ggml_sycl_supports_reorder_mmq(enum ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static bool can_use_mul_mat_q(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     // mmvq and mmq need the __dp4a instruction which is available for gen12+
     // Workaround in https://github.com/ggml-org/llama.cpp/commit/95f84d5ce8b449a9b16009434aca800df504a02e
     if (!ggml_sycl_supports_mmq(src0->type) || src0->type == GGML_TYPE_IQ2_XXS) {
         return false;
     }
-#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
-    if (src1->ne[1] > MMQ_MAX_BATCH_SIZE) {
+    const ggml_tensor_extra_gpu * extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
+    if (extra && extra->optimized_feature.reorder) {
+        if (ggml_backend_buffer_is_sycl_split(src0->buffer) || !ggml_sycl_supports_reorder_mmq(src0->type)) {
+            return false;
+        }
+    }
+#if defined(GGML_SYCL_SUPPORT_XMX)
+    if (!g_ggml_sycl_force_mmq && src1->ne[1] > MMQ_MAX_BATCH_SIZE) {
         return false;
     }
-#endif // GGML_SYCL_SUPPORT_XMX && !GGML_SYCL_FORCE_MMQ
+#endif // GGML_SYCL_SUPPORT_XMX
     return src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 }
 

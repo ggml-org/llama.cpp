@@ -908,8 +908,8 @@ static __dpct_inline__ float vec_dot_q4_0_q8_1_impl(const int * v, const int * u
         const int vi1 = (v[i] >> 4) & 0x0F0F0F0F;
 
         // SIMD dot product of quantized values
-        sumi = dpct::dp4a(vi0, u[2 * i + 0], sumi);
-        sumi = dpct::dp4a(vi1, u[2 * i + 1], sumi);
+        sumi = ggml_sycl_dp4a(vi0, u[2 * i + 0], sumi);
+        sumi = ggml_sycl_dp4a(vi1, u[2 * i + 1], sumi);
     }
 
     const sycl::float2 ds8f = ds8.convert<float, sycl::rounding_mode::automatic>();
@@ -934,8 +934,8 @@ static __dpct_inline__ float vec_dot_q4_1_q8_1_impl(const int *v, const int *u,
         const int vi1 = (v[i] >> 4) & 0x0F0F0F0F;
 
         // SIMD dot product of quantized values
-        sumi = dpct::dp4a(vi0, u[2 * i + 0], sumi);
-        sumi = dpct::dp4a(vi1, u[2 * i + 1], sumi);
+        sumi = ggml_sycl_dp4a(vi0, u[2 * i + 0], sumi);
+        sumi = ggml_sycl_dp4a(vi1, u[2 * i + 1], sumi);
     }
 
 #ifdef GGML_SYCL_F16
@@ -1053,7 +1053,7 @@ static __dpct_inline__ float vec_dot_q8_0_q8_1_impl(const int *v, const int *u,
 #pragma unroll
     for (int i = 0; i < vdr; ++i) {
         // SIMD dot product of quantized values
-        sumi = dpct::dp4a(v[i], u[i], sumi);
+        sumi = ggml_sycl_dp4a(v[i], u[i], sumi);
     }
 
     return d8_0*d8_1 * sumi;
@@ -1082,7 +1082,7 @@ static __dpct_inline__ float vec_dot_q8_1_q8_1_impl(const int *v, const int *u,
 #pragma unroll
     for (int i = 0; i < vdr; ++i) {
         // SIMD dot product of quantized values
-        sumi = dpct::dp4a(v[i], u[i], sumi);
+        sumi = ggml_sycl_dp4a(v[i], u[i], sumi);
     }
 
 #ifdef GGML_SYCL_F16
