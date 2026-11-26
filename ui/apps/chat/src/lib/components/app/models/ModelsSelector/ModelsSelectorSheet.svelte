@@ -114,7 +114,8 @@
 	// the full list: its own page or a search's results; the sheet opens on the short view even
 	// when no model is in reach, with the way to all of them
 	let showFull = $derived(page.id === ModelsSheetPage.ALL || isSearching);
-	let hasEffort = $derived(showReasoning && reasoning.levels.length > 0);
+	// a search gives the sheet to its results: the reasoning row steps aside until it is cleared
+	let hasEffort = $derived(showReasoning && !isSearching && reasoning.levels.length > 0);
 
 	// the models past the loaded and favorite ones: a group per family, or one for them all
 	let otherGroups = $derived.by(() => {

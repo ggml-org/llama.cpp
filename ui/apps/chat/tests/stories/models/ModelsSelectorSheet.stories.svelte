@@ -3,7 +3,7 @@
 	import ModelsSelectorSheet from '#lib/components/app/models/ModelsSelector/ModelsSelectorSheet.svelte';
 	import { MODELS_SHEET_TEXT } from '#lib/constants/index.ts';
 	import type { GroupedModelOptions, ModelItem } from '#lib/utils/index.ts';
-	import { screen } from 'storybook/test';
+	import { expect, screen } from 'storybook/test';
 
 	// a phone's model picker: a short sheet with the models in reach (the chat's, the loaded,
 	// favorite and recent ones) and a row to all of them, a page of groups. The search stays at
@@ -74,7 +74,15 @@
 	}}
 />
 
-<Story args={{ ...args, searchTerm: 'phi' }} name="Search results" />
+<!-- a search hides the reasoning row until it is cleared -->
+<Story
+	args={{ ...args, searchTerm: 'phi' }}
+	name="Search results"
+	play={async () => {
+		await screen.findByRole('heading', { name: MODELS_SHEET_TEXT.LOADED });
+		await expect(screen.queryByRole('button', { name: REASONING_ROW_NAME })).toBeNull();
+	}}
+/>
 
 <Story
 	args={{ ...args, activeId: null, quickItems: [GEMMA], unavailableModel: REMOVED_MODEL }}
