@@ -54,6 +54,13 @@
 		pickers.handleInput();
 	}
 
+	// The same, with the caret at `|` in `text`: an edit somewhere in the middle.
+	export function typeAt(text: string) {
+		value = text.replace('|', '');
+		caretOffset = text.indexOf('|');
+		pickers.handleInput();
+	}
+
 	export function getCaretOffset() {
 		return caretOffset;
 	}

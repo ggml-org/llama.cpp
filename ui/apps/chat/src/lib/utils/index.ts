@@ -262,13 +262,15 @@ export {
 
 // Slash-command token detection (for the `/`-triggered command picker)
 export {
-	composeCwdCommandLine,
-	cwdCommandCaretOffset,
+	type CommandToken,
 	findCommandToken,
-	parseCwdCommandLine,
+	insertCwdCommand,
+	isCommandDismissed,
+	locateCwdCommand,
+	removeCommandToken,
+	replaceWithCwdCommand,
 	takeCommandDismissSnapshot,
-	type CommandDismissSnapshot,
-	type CwdCommandLine
+	type CommandDismissSnapshot
 } from './command-token';
 
 // Mention-badge visual contract (used by the chat form input / rehype

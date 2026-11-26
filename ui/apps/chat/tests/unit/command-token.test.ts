@@ -1,95 +1,140 @@
 import {
-	composeCwdCommandLine,
-	cwdCommandCaretOffset,
 	findCommandToken,
-	parseCwdCommandLine,
+	insertCwdCommand,
+	isCommandDismissed,
+	locateCwdCommand,
+	removeCommandToken,
+	replaceWithCwdCommand,
 	takeCommandDismissSnapshot
 } from '#lib/utils/index.ts';
 import { describe, expect, it } from 'vitest';
 
+const COMMANDS = ['prompt', 'cwd', 'model', 'compact', 'system-message'];
+
+/** The token with the caret at `|` in `text`. */
+function tokenAt(text: string, commands: readonly string[] = COMMANDS) {
+	const cursor = text.indexOf('|');
+
+	return findCommandToken(text.replace('|', ''), cursor, commands);
+}
+
 describe('findCommandToken', () => {
-	it('returns null when the value does not start with a slash', () => {
-		expect(findCommandToken('hello /prompt')).toBeNull();
-		expect(findCommandToken('')).toBeNull();
-		expect(findCommandToken('prompt')).toBeNull();
+	it('returns null where no command is typed', () => {
+		expect(tokenAt('|')).toBeNull();
+		expect(tokenAt('prompt|')).toBeNull();
+		expect(tokenAt('and/or|')).toBeNull();
+		expect(tokenAt('see ~/git|')).toBeNull();
 	});
 
-	it('parses a bare slash', () => {
-		expect(findCommandToken('/')).toEqual({ args: '', end: 1, name: '' });
+	it('finds a command at the start of the input', () => {
+		expect(tokenAt('/|')).toEqual({ args: '', end: 1, name: '', start: 0 });
+		expect(tokenAt('/prompt|')).toEqual({ args: '', end: 7, name: 'prompt', start: 0 });
 	});
 
-	it('parses a command name with no args', () => {
-		expect(findCommandToken('/prompt')).toEqual({ args: '', end: 7, name: 'prompt' });
+	it('finds a command anywhere in the message', () => {
+		expect(tokenAt('fix the build /cw|')).toEqual({ args: '', end: 17, name: 'cw', start: 14 });
+		expect(tokenAt('first line\n/mod|')).toEqual({ args: '', end: 15, name: 'mod', start: 11 });
+		expect(tokenAt('fix /cw| the build')).toEqual({ args: '', end: 7, name: 'cw', start: 4 });
 	});
 
-	it('parses a command name followed by a space', () => {
-		expect(findCommandToken('/prompt ')).toEqual({ args: '', end: 8, name: 'prompt' });
+	it('runs to the end of the word the caret is in', () => {
+		expect(tokenAt('/pro|mpt and more')).toEqual({ args: '', end: 7, name: 'prompt', start: 0 });
 	});
 
-	it('parses args after the command name', () => {
-		expect(findCommandToken('/prompt rev')).toEqual({ args: 'rev', end: 11, name: 'prompt' });
-	});
-
-	it('parses multi-word args', () => {
-		expect(findCommandToken('/prompt  review  code ')).toEqual({
-			args: ' review  code ',
-			end: 22,
-			name: 'prompt'
+	it('takes the argument of a known command, single spaces included', () => {
+		expect(tokenAt('/prompt rev|')).toEqual({ args: 'rev', end: 11, name: 'prompt', start: 0 });
+		expect(tokenAt('fix /cwd ~/My Docs|')).toEqual({
+			args: '~/My Docs',
+			end: 18,
+			name: 'cwd',
+			start: 4
 		});
 	});
 
-	it('treats the whole run as the name when there is no space', () => {
-		expect(findCommandToken('/promptx')).toEqual({ args: '', end: 8, name: 'promptx' });
+	it('reads a path in the argument as the argument, not a command of its own', () => {
+		expect(tokenAt('/cwd /usr/lo|')?.name).toBe('cwd');
+		expect(tokenAt('/cwd /usr|')?.name).toBe('cwd');
+	});
+
+	it('ends the argument at two spaces or a new line', () => {
+		expect(tokenAt('/cwd docs  more|')).toBeNull();
+		expect(tokenAt('/cwd docs\nmore|')).toBeNull();
+	});
+
+	it('takes no argument for an unknown name', () => {
+		expect(tokenAt('/promptx|')).toEqual({ args: '', end: 8, name: 'promptx', start: 0 });
+		expect(tokenAt('/foo bar|')).toBeNull();
+		expect(tokenAt('/cw docs|')).toEqual({ args: 'docs', end: 8, name: 'cw', start: 0 });
 	});
 });
 
-describe('takeCommandDismissSnapshot', () => {
-	it('returns null when there is no command token', () => {
-		expect(takeCommandDismissSnapshot('hello')).toBeNull();
-	});
+describe('command dismissal', () => {
+	it('holds for the same token only', () => {
+		const snapshot = takeCommandDismissSnapshot('hi /prompt rev', 14, COMMANDS);
 
-	it('captures the name and args', () => {
-		expect(takeCommandDismissSnapshot('/prompt rev')).toEqual({
-			args: 'rev',
-			name: 'prompt'
-		});
-	});
-});
+		expect(snapshot).toEqual({ args: 'rev', name: 'prompt', start: 3 });
 
-describe('parseCwdCommandLine', () => {
-	it('returns null without a /cwd command', () => {
-		expect(parseCwdCommandLine('hello')).toBeNull();
-		expect(parseCwdCommandLine('/cwdx docs')).toBeNull();
-		expect(parseCwdCommandLine('/prompt docs')).toBeNull();
-	});
-
-	it('splits the path on the first line from the message below it', () => {
-		expect(parseCwdCommandLine('/cwd ~/docs\nfix the\nbuild')).toEqual({
-			message: 'fix the\nbuild',
-			query: '~/docs'
-		});
-	});
-
-	it('reads a bare command as an empty path', () => {
-		expect(parseCwdCommandLine('/cwd')).toEqual({ message: '', query: '' });
-		expect(parseCwdCommandLine('/cwd\nhi')).toEqual({ message: 'hi', query: '' });
+		expect(isCommandDismissed(snapshot, { args: 'rev', end: 14, name: 'prompt', start: 3 })).toBe(
+			true
+		);
+		expect(isCommandDismissed(snapshot, { args: 'revi', end: 15, name: 'prompt', start: 3 })).toBe(
+			false
+		);
+		expect(takeCommandDismissSnapshot('hello', 5, COMMANDS)).toBeNull();
 	});
 });
 
-describe('composeCwdCommandLine', () => {
-	it('puts the /cwd line above the message', () => {
-		expect(composeCwdCommandLine('docs', 'hi')).toBe('/cwd docs\nhi');
-		expect(composeCwdCommandLine('docs', '')).toBe('/cwd docs');
+describe('removeCommandToken', () => {
+	it('leaves one space between the words around it', () => {
+		expect(removeCommandToken('fix /model the build', { end: 10, start: 4 })).toEqual({
+			caret: 4,
+			value: 'fix the build'
+		});
+		expect(removeCommandToken('fix the build /model', { end: 20, start: 14 })).toEqual({
+			caret: 13,
+			value: 'fix the build'
+		});
+		expect(removeCommandToken('/model fix it', { end: 6, start: 0 })).toEqual({
+			caret: 0,
+			value: 'fix it'
+		});
+		expect(removeCommandToken('/model', { end: 6, start: 0 })).toEqual({ caret: 0, value: '' });
+	});
+});
+
+describe('the /cwd command', () => {
+	it('is written at the caret, set apart by spaces', () => {
+		expect(insertCwdCommand('fix the build', 3, '~/git')).toEqual({
+			caret: 14,
+			start: 4,
+			value: 'fix /cwd ~/git the build'
+		});
+		expect(insertCwdCommand('', 0, '')).toEqual({ caret: 5, start: 0, value: '/cwd ' });
 	});
 
-	it('round-trips through parseCwdCommandLine', () => {
-		expect(parseCwdCommandLine(composeCwdCommandLine('a b', 'c\nd'))).toEqual({
-			message: 'c\nd',
-			query: 'a b'
+	it('completes a partial token in place', () => {
+		expect(replaceWithCwdCommand('fix /cw docs now', { end: 12, start: 4 }, 'docs')).toEqual({
+			caret: 13,
+			start: 4,
+			value: 'fix /cwd docs now'
 		});
 	});
 
-	it('places the caret at the end of the path', () => {
-		expect(cwdCommandCaretOffset('docs')).toBe('/cwd docs'.length);
+	it('is found again after an edit elsewhere', () => {
+		expect(locateCwdCommand('so, fix /cwd docs now', 4, 'docs')).toEqual({
+			end: 17,
+			query: 'docs',
+			start: 8
+		});
+		expect(locateCwdCommand('fix the build', 4, 'docs')).toBeNull();
+	});
+
+	it('reads its path to two spaces or the end of the line when it changed', () => {
+		expect(locateCwdCommand('/cwd ~/My Docs  more', 0, 'x')).toEqual({
+			end: 14,
+			query: '~/My Docs',
+			start: 0
+		});
+		expect(locateCwdCommand('/cwd', 0, '')).toEqual({ end: 4, query: '', start: 0 });
 	});
 });

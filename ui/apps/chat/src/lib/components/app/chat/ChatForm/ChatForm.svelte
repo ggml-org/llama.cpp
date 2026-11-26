@@ -467,7 +467,7 @@
 		// the enter-to-submit logic below and keep the key from the editor.
 		// The directory picker takes the keys typed on its `/cwd` line; in the message below
 		// it only Escape, so Enter and the arrows there stay the message's
-		const isDirectoryKey = pickers.isCaretOnCwdLine() || event.key === KeyboardKey.ESCAPE;
+		const isDirectoryKey = pickers.isCaretInCwdCommand() || event.key === KeyboardKey.ESCAPE;
 
 		if (
 			(isDirectoryKey && workingDirectoryRef?.handleKeydown(event)) ||

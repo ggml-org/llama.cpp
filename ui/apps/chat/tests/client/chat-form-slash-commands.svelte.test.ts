@@ -159,8 +159,57 @@ describe('slash command dispatch', () => {
 	});
 });
 
-describe('/cwd line in the chat input', () => {
-	it('puts the current directory on a /cwd line above the message', async () => {
+describe('commands anywhere in the message', () => {
+	it('opens the command picker for a command typed after other words', async () => {
+		const screen = render(ChatFormPickersHarness);
+
+		await tick();
+
+		screen.component.typeAt('fix the build /mod|');
+		await tick();
+
+		const pickers = screen.component.getPickers();
+
+		expect(pickers.isCommandPickerOpen).toBe(true);
+		expect(pickers.commandQuery).toBe('mod');
+	});
+
+	it('takes only the command out of the message on selection', async () => {
+		const screen = render(ChatFormPickersHarness);
+
+		await tick();
+
+		screen.component.typeAt('fix /model| the build');
+		await tick();
+
+		const pickers = screen.component.getPickers();
+		const model = pickers.availableCommands.find((c) => c.name === 'model');
+
+		if (!model) throw new Error('model command missing');
+
+		pickers.handleCommandSelect(model);
+		await tick();
+		await Promise.resolve();
+
+		expect(screen.component.getValue()).toBe('fix the build');
+		expect(screen.component.getCaretOffset()).toBe('fix '.length);
+		expect(screen.component.getCalls()).toContain('openModelSelector');
+	});
+
+	it('leaves a path in the message alone', async () => {
+		const screen = render(ChatFormPickersHarness);
+
+		await tick();
+
+		screen.component.typeAt('look in src/lib|');
+		await tick();
+
+		expect(screen.component.getPickers().isCommandPickerOpen).toBe(false);
+	});
+});
+
+describe('/cwd command in the chat input', () => {
+	it('writes the current directory on a /cwd command at the caret', async () => {
 		const screen = render(ChatFormPickersHarness, {
 			cwd: '/home/me/projects/app',
 			serverHome: '/home/me'
@@ -168,7 +217,7 @@ describe('/cwd line in the chat input', () => {
 
 		await tick();
 
-		screen.component.type('fix the build');
+		screen.component.typeAt('fix| the build');
 
 		const pickers = screen.component.getPickers();
 
@@ -176,33 +225,39 @@ describe('/cwd line in the chat input', () => {
 		await tick();
 		await Promise.resolve();
 
-		expect(screen.component.getValue()).toBe('/cwd ~/projects/app\nfix the build');
-		expect(screen.component.getCaretOffset()).toBe('/cwd ~/projects/app'.length);
+		expect(screen.component.getValue()).toBe('fix /cwd ~/projects/app the build');
+		expect(screen.component.getCaretOffset()).toBe('fix /cwd ~/projects/app'.length);
 		expect(pickers.isWorkingDirectoryPickerOpen).toBe(true);
 		expect(pickers.isWorkingDirectoryInline).toBe(true);
 		expect(pickers.workingDirectoryQuery).toBe('~/projects/app');
 	});
 
-	it('searches what is typed on the /cwd line, not the message', async () => {
+	it('searches the path after /cwd, not the words around it', async () => {
 		const screen = render(ChatFormPickersHarness);
 
 		await tick();
 
-		screen.component.type('fix the build');
+		screen.component.typeAt('fix the build|');
 
 		const pickers = screen.component.getPickers();
 
 		pickers.handleWorkingDirectoryOpen();
 		await tick();
 
-		expect(screen.component.getValue()).toBe('/cwd \nfix the build');
+		expect(screen.component.getValue()).toBe('fix the build /cwd ');
 
-		screen.component.type('/cwd docs\nfix the build');
+		screen.component.typeAt('fix the build /cwd docs|');
 		await tick();
 
 		expect(pickers.workingDirectoryQuery).toBe('docs');
 		expect(pickers.isWorkingDirectoryPickerOpen).toBe(true);
-		expect(screen.component.getValue()).toBe('/cwd docs\nfix the build');
+
+		// an edit elsewhere in the message keeps the picker and its path
+		screen.component.typeAt('so,| fix the build /cwd docs');
+		await tick();
+
+		expect(pickers.workingDirectoryQuery).toBe('docs');
+		expect(pickers.isWorkingDirectoryPickerOpen).toBe(true);
 	});
 
 	it('gives the message back when the picker closes', async () => {
@@ -210,13 +265,13 @@ describe('/cwd line in the chat input', () => {
 
 		await tick();
 
-		screen.component.type('fix the build');
+		screen.component.typeAt('fix| the build');
 
 		const pickers = screen.component.getPickers();
 
 		pickers.handleWorkingDirectoryOpen();
 		await tick();
-		screen.component.type('/cwd docs\nfix the build');
+		screen.component.typeAt('fix /cwd docs| the build');
 		pickers.handleWorkingDirectoryClose();
 		await tick();
 
@@ -224,12 +279,12 @@ describe('/cwd line in the chat input', () => {
 		expect(pickers.isWorkingDirectoryPickerOpen).toBe(false);
 	});
 
-	it('keeps the message below a typed /cwd command on selection', async () => {
+	it('completes a typed /cw command where it is, on selection', async () => {
 		const screen = render(ChatFormPickersHarness);
 
 		await tick();
 
-		screen.component.type('/cw docs\nfix the build');
+		screen.component.typeAt('fix the build /cw docs|');
 		await tick();
 
 		const pickers = screen.component.getPickers();
@@ -240,22 +295,25 @@ describe('/cwd line in the chat input', () => {
 		pickers.handleCommandSelect(cwd);
 		await tick();
 
-		expect(screen.component.getValue()).toBe('/cwd docs\nfix the build');
+		expect(screen.component.getValue()).toBe('fix the build /cwd docs');
 		expect(pickers.workingDirectoryQuery).toBe('docs');
 	});
 
-	it('tells the /cwd line from the message below it by the caret', async () => {
+	it('tells the /cwd command from the message around it by the caret', async () => {
 		const screen = render(ChatFormPickersHarness);
 
 		await tick();
 
 		const pickers = screen.component.getPickers();
 
-		// typing leaves the caret at the end: in the message
-		screen.component.type('/cwd docs\nfix the build');
-		expect(pickers.isCaretOnCwdLine()).toBe(false);
+		screen.component.typeAt('fix the build|');
+		pickers.handleWorkingDirectoryOpen();
+		await tick();
 
-		screen.component.type('/cwd docs');
-		expect(pickers.isCaretOnCwdLine()).toBe(true);
+		screen.component.typeAt('fix the build /cwd docs|');
+		expect(pickers.isCaretInCwdCommand()).toBe(true);
+
+		screen.component.typeAt('fix| the build /cwd docs');
+		expect(pickers.isCaretInCwdCommand()).toBe(false);
 	});
 });
