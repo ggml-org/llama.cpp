@@ -36,186 +36,324 @@ uint n_experts = nexperts_use_push ? n_experts_push : n_experts_spec;
 
 #define CEIL_DIV(a, b) (((a) + (b) - 1) / (b))
 
-const uint experts_per_thread = CEIL_DIV(n_experts_spec, WARP_SIZE);
+const uint n_tiles = CEIL_DIV(n_experts_spec, WARP_SIZE);
 
-layout (binding = 0, std430) readonly buffer Logits {float logits[];};
-layout (binding = 1, std430) readonly buffer BiasProbs {float bias[];};
-layout (binding = 2, std430) writeonly buffer Weights {float weights[];};
-layout (binding = 3, std430) writeonly buffer Ids {uint ids[];};
+layout (binding = 0, std430) readonly buffer Logits { float logits[]; };
+layout (binding = 1, std430) readonly buffer BiasProbs { float bias[]; };
+layout (binding = 2, std430) writeonly buffer Weights { float weights[]; };
+layout (binding = 3, std430) writeonly buffer Ids { uint ids[]; };
 
 const float INFINITY = 1.0 / 0.0;
 
-// Warp-local softmax used for both the pre-top-k logits and the post-top-k delayed path.
-void softmax_warp_inplace(inout float vals[experts_per_thread], const uint limit, const uint lane, const bool use_limit) {
+void softmax_warp_inplace
+    (
+    inout float vals[n_tiles],
+    const uint limit,
+    const uint lane,
+    const bool use_limit
+    )
+
+{
     float max_val = -INFINITY;
 
     [[unroll]]
-    for (int i = 0; i < experts_per_thread; i++) {
-        const uint idx       = lane + i * WARP_SIZE;
-        const bool is_active = !use_limit || (idx < limit);
-        if (is_active) {
-            max_val = max(max_val, vals[i]);
-        }
+    for (uint i = 0; i < n_tiles; ++i)
+    {
+        const uint idx = lane + i * WARP_SIZE;
+        if (!use_limit || idx < limit) {max_val = max(max_val, vals[i]);}
     }
 
     max_val = subgroupMax(max_val);
-
-    float sum = 0.f;
+    float sum = 0.0f;
 
     [[unroll]]
-    for (int i = 0; i < experts_per_thread; i++) {
-        const uint idx       = lane + i * WARP_SIZE;
-        const bool is_active = !use_limit || (idx < limit);
-        if (is_active) {
+    for (uint i = 0; i < n_tiles; ++i)
+    {
+        const uint idx = lane + i * WARP_SIZE;
+        if (!use_limit || idx < limit) {
             const float val = exp(vals[i] - max_val);
-            vals[i]         = val;
+            vals[i] = val;
             sum += val;
         } else {
-            vals[i] = 0.f;
+            vals[i] = 0.0f;
         }
     }
 
     sum = subgroupAdd(sum);
-
     const float inv_sum = 1.0f / sum;
 
     [[unroll]]
-    for (int i = 0; i < experts_per_thread; i++) {
-        const uint idx       = lane + i * WARP_SIZE;
-        const bool is_active = !use_limit || (idx < limit);
-        if (is_active) {
+    for (uint i = 0; i < n_tiles; ++i)
+    {
+        const uint idx = lane + i * WARP_SIZE;
+        if (!use_limit || idx < limit) {
             vals[i] *= inv_sum;
         }
     }
 }
 
-void main() {
-    const uint row = gl_WorkGroupID.x * gl_WorkGroupSize.y + gl_SubgroupID;
-    if (row >= n_rows) {
-        return;
+bool expert_precedes(const uvec3 a, const uvec3 b) {
+    const float score_a = uintBitsToFloat(a.x);
+    const float score_b = uintBitsToFloat(b.x);
+    return score_a > score_b || (score_a == score_b && a.z < b.z);
+}
+
+uvec3 merge_expert_lanes(uvec3 a, const uint stride, const bool descending, const uint lane) {
+    [[unroll]] for (uint mask = stride; mask > 0; mask /= 2) {
+        const uvec3 b = subgroupShuffleXor(a, mask);
+        const bool keep_first = descending == ((lane & mask) == 0);
+        a = expert_precedes(b, a) == keep_first ? b : a;
+    }
+    return a;
+}
+
+bool sort_all_experts(
+    const float scores[n_tiles],
+    const float probs[n_tiles],
+    const uint lane,
+    const uint ids_offset,
+    out float out_weights[n_tiles]) {
+    // Each entry holds the selection score, weight and expert ID.
+    uvec3 experts[n_tiles];
+    uint nonfinite = 0;
+    [[unroll]] for (uint i = 0; i < n_tiles; ++i) {
+        const float score = scores[i];
+        nonfinite |= uint(isnan(score) || isinf(score));
+        experts[i] = uvec3(floatBitsToUint(score), floatBitsToUint(probs[i]), i * WARP_SIZE + lane);
+    }
+    if (subgroupOr(nonfinite) != 0) {
+        return false;
     }
 
+    if (WARP_SIZE == 32) {
+        // Keep each tile in registers across the lane exchanges.
+        [[unroll]] for (uint i = 0; i < n_tiles; ++i) {
+            const uint pos = i * WARP_SIZE + lane;
+            uvec3 a = experts[i];
+            [[unroll]] for (uint size = 2; size <= WARP_SIZE; size *= 2) {
+                a = merge_expert_lanes(a, size / 2, (pos & size) == 0, lane);
+            }
+            experts[i] = a;
+        }
+
+        [[unroll]] for (uint size = WARP_SIZE * 2; size <= n_experts_spec; size *= 2) {
+            [[unroll]] for (uint tile_mask = size / (2 * WARP_SIZE); tile_mask > 0; tile_mask /= 2) {
+                [[unroll]] for (uint i = 0; i < n_tiles; ++i) {
+                    if ((i & tile_mask) != 0) {
+                        continue;
+                    }
+                    const uint peer = i ^ tile_mask;
+                    const uvec3 a = experts[i];
+                    const uvec3 b = experts[peer];
+                    const bool descending = ((i * WARP_SIZE) & size) == 0;
+                    if (expert_precedes(b, a) == descending) {
+                        experts[i] = b;
+                        experts[peer] = a;
+                    }
+                }
+            }
+
+            [[unroll]] for (uint i = 0; i < n_tiles; ++i)
+            {
+                const bool descending = ((i * WARP_SIZE) & size) == 0;
+                experts[i] = merge_expert_lanes(experts[i], WARP_SIZE / 2, descending, lane);
+            }
+
+        }
+    } else {
+        for (uint size = 2; size <= n_experts_spec; size *= 2) {
+            for (uint stride = size / 2; stride > 0; stride /= 2) {
+                const uint tile_mask = stride / WARP_SIZE;
+                [[unroll]] for (uint i = 0; i < n_tiles; ++i) {
+                    if ((i & tile_mask) != 0) { continue; }
+
+                    const uint peer = i ^ tile_mask;
+                    const uvec3 a = experts[i];
+                    uvec3 b;
+                    if (tile_mask != 0) {
+                        b = experts[peer];
+                    } else if (n_experts_spec <= 256 && has_bias == 0) {
+                        // Without bias the score also carries the weight.
+                        const uvec2 key = subgroupShuffleXor(a.xz, stride);
+                        b = uvec3(key.x, key.x, key.y);
+                    } else {
+                        b = subgroupShuffleXor(a, stride);
+                    }
+                    const bool b_first = expert_precedes(b, a);
+                    const uint pos = i * WARP_SIZE + lane;
+                    const bool keep_first = ((pos & size) == 0) == ((pos & stride) == 0);
+
+                    if (b_first == keep_first) {
+                        experts[i] = b;
+                        if (tile_mask != 0) { experts[peer] = a; }
+                    }
+                }
+            }
+        }
+    }
+
+    [[unroll]] for (uint i = 0; i < n_tiles; ++i)
+    {
+        out_weights[i] = uintBitsToFloat(experts[i].y);
+        ids[ids_offset + i * WARP_SIZE + lane] = experts[i].z;
+    }
+    return true;
+}
+
+void main()
+{
+    const uint row = gl_WorkGroupID.x * gl_WorkGroupSize.y + gl_SubgroupID;
+    if (row >= n_rows) {return;}
+
     const uint logits_offset = n_experts * row;
-    const uint bias_offset = 0; // 1D
     const uint weights_offset = n_expert_used * row;
+    // Preserve the original IDs layout: n_experts elements per row, not Top-K per row.
     const uint ids_offset = n_experts * row;
     const uint lane = gl_SubgroupInvocationID;
 
-    float probs[experts_per_thread];
-    [[unroll]]
-    for (int i = 0; i < experts_per_thread; i++) {
-        probs[i] = -INFINITY;
-    }
+    float probs[n_tiles];
 
     [[unroll]]
-    for (uint i = 0; i < n_experts; i += WARP_SIZE) {
-        const uint expert = i + lane;
-        probs[i / WARP_SIZE] = (n_experts % WARP_SIZE == 0 || expert < n_experts) ? logits[logits_offset + expert] : -INFINITY;
+    for (uint tile = 0; tile < n_tiles; ++tile)
+    {
+        const uint expert = tile * WARP_SIZE + lane;
+        probs[tile] = expert < n_experts
+            ? logits[logits_offset + expert]
+            : -INFINITY;
     }
 
-    if (gating_func == GATING_FUNC_SOFTMAX) {
+    if (gating_func == GATING_FUNC_SOFTMAX)
+    {
         softmax_warp_inplace(probs, n_experts, lane, nexperts_use_push);
+
     } else if (gating_func == GATING_FUNC_SIGMOID) {
         [[unroll]]
-        for (uint i = 0; i < n_experts; i += WARP_SIZE) {
-            const uint expert = i + lane;
-            probs[i / WARP_SIZE] = (n_experts % WARP_SIZE == 0 || expert < n_experts) ? 1.f / (1.f + exp(-probs[i / WARP_SIZE])) : -INFINITY;
+        for (uint tile = 0; tile < n_tiles; ++tile)
+        {
+            const uint expert = tile * WARP_SIZE + lane;
+            if (expert < n_experts) {
+                probs[tile] = 1.0f / (1.0f + exp(-probs[tile]));
+            }
         }
     } else if (gating_func == GATING_FUNC_SQRT_SOFTPLUS) {
         [[unroll]]
-        for (uint i = 0; i < n_experts; i += WARP_SIZE) {
-            const uint expert = i + lane;
-            const float val = probs[i / WARP_SIZE];
-            probs[i / WARP_SIZE] = (n_experts % WARP_SIZE == 0 || expert < n_experts) ? sqrt(val > 20.0f ? val : log(1.0f + exp(val))) : -INFINITY;
+        for (uint tile = 0; tile < n_tiles; ++tile)
+        {
+            const uint expert = tile * WARP_SIZE + lane;
+            if (expert < n_experts) {
+                const float val = probs[tile];
+                probs[tile] = sqrt(val > 20.0f ? val : log(1.0f + exp(val)));
+            }
         }
     }
 
-    float selection_probs[experts_per_thread];
+    float scores[n_tiles];
+
     if (has_bias != 0) {
         [[unroll]]
-        for (uint i = 0; i < n_experts; i += WARP_SIZE) {
-            const uint expert = i + lane;
-            selection_probs[i / WARP_SIZE] = (n_experts % WARP_SIZE == 0 || expert < n_experts) ? probs[i / WARP_SIZE] + bias[bias_offset + expert] : -INFINITY;
+        for (uint tile = 0; tile < n_tiles; ++tile) {
+            const uint expert = tile * WARP_SIZE + lane;
+            scores[tile] = expert < n_experts
+                ? probs[tile] + bias[expert]
+                : -INFINITY;
         }
     } else {
         [[unroll]]
-        for (int i = 0; i < experts_per_thread; i++) {
-            selection_probs[i] = probs[i];
+        for (uint tile = 0; tile < n_tiles; ++tile) {
+            scores[tile] = probs[tile];
         }
     }
 
-    // at this point, each thread holds a portion of softmax,
-    // we do the argmax reduce over n_expert_used, each time marking
-    // the expert weight as -inf to exclude from the next iteration
+    float weight_sum = 0.0f;
+    float out_weights[n_tiles];
 
-    float wt_sum = 0.f;
-
-    float output_weights[experts_per_thread];
-
-    [[unroll]]
-    for (int i = 0; i < experts_per_thread; i++) {
-        output_weights[i] = 0.f;
+    const bool sorted = !nexperts_use_push && n_expert_used == n_experts_spec &&
+                        n_experts_spec >= WARP_SIZE && with_norm == 0 &&
+                        sort_all_experts(scores, probs, lane, ids_offset, out_weights);
+    if (!sorted) {
+        [[unroll]] for (uint i = 0; i < n_tiles; ++i) {
+            out_weights[i] = 0.0f;
+        }
     }
 
-    for (int k = 0; k < n_expert_used; k++) {
-        float max_val    = probs[0];
-        float max_val_s  = selection_probs[0];
-        uint   max_expert = lane;
+    const uint n_rounds = sorted ? 0u : n_expert_used;
+    for (uint k = 0; k < n_rounds; ++k) {
+        // Per-lane winner. Static array indices keep these values in registers.
+        float best_weight = probs[0];
+        float best_score = scores[0];
+        uint best_id = lane;
 
         [[unroll]]
-        for (uint i = WARP_SIZE; i < n_experts; i += WARP_SIZE) {
-            const uint expert = i + lane;
-            if ((n_experts % WARP_SIZE == 0 || expert < n_experts) && selection_probs[i / WARP_SIZE] > max_val_s) {
-                max_val    = probs[i / WARP_SIZE];
-                max_val_s  = selection_probs[i / WARP_SIZE];
-                max_expert = expert;
+        for (uint tile = 1; tile < n_tiles; ++tile) {
+            const uint expert = tile * WARP_SIZE + lane;
+            if (expert < n_experts && scores[tile] > best_score) {
+                best_weight = probs[tile];
+                best_score = scores[tile];
+                best_id = expert;
             }
         }
 
+        // Reduce the score and ID before fetching the winner's weight.
+        float score = best_score;
+        uint id = best_id;
+
         [[unroll]]
-        for (uint mask = WARP_SIZE / 2; mask > 0; mask /= 2) {
-            const float val    = subgroupShuffleXor(max_val, mask);
-            const float val_s  = subgroupShuffleXor(max_val_s, mask);
-            const uint  expert = subgroupShuffleXor(max_expert, mask);
-            if (val_s > max_val_s || (val_s == max_val_s && expert < max_expert)) {
-                max_val    = val;
-                max_val_s  = val_s;
-                max_expert = expert;
+        for (uint mask = WARP_SIZE / 2u; mask > 0u; mask /= 2u) {
+            const float other_score = subgroupShuffleXor(score, mask);
+            const uint other_id = subgroupShuffleXor(id, mask);
+            if (other_score > score || (other_score == score && other_id < id)) {
+                score = other_score;
+                id = other_id;
             }
         }
 
-        if ((k & (WARP_SIZE - 1)) == lane) {
-            output_weights[k / WARP_SIZE] = max_val;
+        const uint winner_lane = id & (WARP_SIZE - 1u);
+        const float weight = subgroupShuffle(best_weight, winner_lane);
+
+        // k is a runtime value, so use predicated static writes instead of
+        // dynamically indexing a register array.
+        [[unroll]]
+        for (uint i = 0; i < n_tiles; ++i) {
+            if (k / WARP_SIZE == i && (k & (WARP_SIZE - 1u)) == lane) {
+                out_weights[i] = weight;
+            }
         }
 
-        if ((max_expert & (WARP_SIZE - 1)) == lane) {
-            selection_probs[max_expert / WARP_SIZE] = -INFINITY;
+        if (lane == winner_lane) {
+            ids[ids_offset + k] = id;
+            weight_sum += weight;
 
-            ids[ids_offset + k] = max_expert;
-            wt_sum += max_val;
+            // Static indices avoid spilling scores to local memory.
+            [[unroll]]
+            for (uint tile = 0; tile < n_tiles; ++tile) {
+                if (id == tile * WARP_SIZE + lane) {
+                    scores[tile] = -INFINITY;
+                }
+            }
         }
     }
 
     if (with_norm != 0) {
-        wt_sum              = subgroupAdd(wt_sum);
-        wt_sum              = clamp(wt_sum, clamp_min, clamp_max);
-        const float inv_sum = 1.0f / wt_sum;
+        weight_sum = subgroupAdd(weight_sum);
+        weight_sum = clamp(weight_sum, clamp_min, clamp_max);
+        const float inv_sum = 1.0f / weight_sum;
 
         [[unroll]]
-        for (uint i = 0; i < experts_per_thread; ++i) {
-            output_weights[i] *= inv_sum;
+        for (uint i = 0; i < n_tiles; ++i) {
+            out_weights[i] *= inv_sum;
         }
     }
 
     if (gating_func == GATING_FUNC_SOFTMAX_WEIGHT) {
-        softmax_warp_inplace(output_weights, n_expert_used, lane, true);
+        softmax_warp_inplace(out_weights, n_expert_used, lane, true);
     }
 
+    // Coalesced stores for the expert weights.
     [[unroll]]
-    for (uint i = 0; i < experts_per_thread; ++i) {
-        uint idx = i * WARP_SIZE + lane;
+    for (uint i = 0; i < n_tiles; ++i) {
+        const uint idx = i * WARP_SIZE + lane;
         if (idx < n_expert_used) {
-            weights[weights_offset + idx] = output_scale * output_weights[i] + output_bias;
+            weights[weights_offset + idx] = output_scale * out_weights[i] + output_bias;
         }
     }
 }
