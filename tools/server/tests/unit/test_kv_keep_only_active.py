@@ -151,3 +151,27 @@ def test_disabled_with_flag():
     })
     assert res.status_code == 200
     assert "__TEST_TAG_CACHE_IDLE_SLOT__" not in log.drain()
+
+
+# an idle slot is saved to the prompt cache, if there is one, before a purge frees its cells
+@pytest.mark.parametrize("cache_ram,n_restored", [(100, 300), (0, 0)])
+def test_purge_saves_idle_slot(cache_ram, n_restored):
+    global server
+    server.no_cache_idle_slots = True  # idle slots keep their cells
+    server.cache_ram = cache_ram
+    server.start()
+    log = LogReader(server.log_path)
+
+    def cache_n(prompt, id_slot):
+        res = server.make_request("POST", "/completion", data={"prompt": prompt, "id_slot": id_slot, "n_predict": 1})
+        assert res.status_code == 200
+        return res.body["timings"]["cache_n"]
+
+    cache_n([100] * 300, 0)
+
+    # 300 more tokens do not fit next to slot 0, so it is purged
+    cache_n([200] * 300, 1)
+    assert "purging slot 0" in log.drain()
+
+    # with a prompt cache, the purged prompt is restored instead of recomputed
+    assert cache_n([100] * 310, 1) >= n_restored
